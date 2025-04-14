@@ -62,7 +62,8 @@ proc wait_for_countkeysinslot {node_idx slot value} {
     wait_for_condition 100 100 {
         [R $node_idx CLUSTER COUNTKEYSINSLOT $slot] eq "$value"
     } else {
-        fail "Node $node_idx did not have $value keys in slot $slot within 10000 ms"
+        set curr_count [R $node_idx CLUSTER COUNTKEYSINSLOT $slot]
+        fail "Node $node_idx did not have $value keys in slot $slot within 10000 ms (current $curr_count)"
     }
 }
 
@@ -71,28 +72,11 @@ proc wait_for_migration {node_idx slot} {
     wait_for_condition 100 100 {
         [is_slot_migrated $node_idx $slot]
     } else {
-        fail "Cluster node $target_id did not get slot $slot within 10000 ms"
+        set nodes [get_cluster_nodes $node_idx]
+        fail "Cluster node $target_id did not get slot $slot within 10000 ms (current $nodes)"
     }
     wait_for_cluster_propagation
 }
-
-proc write_data {idx prefix num size} {
-    [Rn $idx] deferred 1
-    if {$num > 16} {set pipeline 16} else {set pipeline $num}
-    set val [string repeat A $size]
-    for {set j 0} {$j < $pipeline} {incr j} {
-        [Rn $idx] set $prefix$j $val
-    }
-    for {} {$j < $num} {incr j} {
-        [Rn $idx] set $prefix$j $val
-        [Rn $idx] read
-    }
-    for {set j 0} {$j < $pipeline} {incr j} {
-        [Rn $idx] read
-    }
-    [Rn $idx] deferred 0
-}
-
 
 proc get_cluster_total_syncs_count {} {
     set total 0
@@ -131,7 +115,6 @@ proc assert_causes_conn_drop {node_idx args} {
     $client close
     assert_match "*I/O error reading reply*" $result
 }
-
 
 test "Test command interface" {
     foreach command {"IMPORT" "IMPORT-PREPARE"} {
@@ -278,7 +261,7 @@ set 16383_slot_tag "{6ZJ}"
 test "Single source import - one shot" {
     assert_does_not_resync {
         # Populate data before migration
-        write_data 2 "$16383_slot_tag:" 1000 1000
+        populate 1000 "$16383_slot_tag:" 1000 -2
 
         # Perform one-shot import
         assert_match "OK" [R 0 CLUSTER IMPORT SLOTSRANGE 16383 16383]
@@ -305,16 +288,16 @@ test "Single source import - one shot" {
 test "Single source import - two phase" {
     assert_does_not_resync {
         # Load data before the snapshot
-        write_data 0 "$16383_slot_tag:1:" 333 1000
+        populate 333 "$16383_slot_tag:1:" 1000 -0
 
         # Load data while the snapshot is ongoing
         assert_match "OK" [R 2 CLUSTER IMPORT-PREPARE SLOTSRANGE 16383 16383]
         set linkname [get_link_name 2 16383]
-        write_data 0 "$16383_slot_tag:2:" 333 1000
+        populate 333 "$16383_slot_tag:2:" 1000 -0
 
         # Load data after the snapshot
         wait_for_migration_field 2 $linkname state replicating
-        write_data 0 "$16383_slot_tag:3:" 334 1000
+        populate 334 "$16383_slot_tag:3:" 1000 -0
 
         # Commit and verify
         assert_match "OK" [R 2 CLUSTER IMPORT-COMMIT LINK $linkname]
@@ -338,20 +321,20 @@ test "Single source import - two phase" {
 test "Simultaneous imports" {
     assert_does_not_resync {
         # Populate data before migration
-        write_data 1 "$5462_slot_tag:1:" 100 1000
-        write_data 2 "$16383_slot_tag:1:" 100 1000
+        populate 100 "$5462_slot_tag:1:" 1000 -1
+        populate 100 "$16383_slot_tag:1:" 1000 -2
 
         # Prepare imports
         assert_match "OK" [R 0 CLUSTER IMPORT-PREPARE SLOTSRANGE 5462 5462]
         assert_match "OK" [R 0 CLUSTER IMPORT-PREPARE SLOTSRANGE 16383 16383]
         set linkname1 [get_link_name 0 5462]
         set linkname2 [get_link_name 0 16383]
-        write_data 1 "$5462_slot_tag:2:" 100 1000
-        write_data 2 "$16383_slot_tag:2:" 100 1000
+        populate 100 "$5462_slot_tag:2:" 1000 -1
+        populate 100 "$16383_slot_tag:2:" 1000 -2
         wait_for_migration_field 0 $linkname1 state replicating
         wait_for_migration_field 0 $linkname2 state replicating
-        write_data 1 "$5462_slot_tag:3:" 100 1000
-        write_data 2 "$16383_slot_tag:3:" 100 1000
+        populate 100 "$5462_slot_tag:3:" 1000 -1
+        populate 100 "$16383_slot_tag:3:" 1000 -2
 
         # Do the imports
         assert_match "OK" [R 0 CLUSTER IMPORT-COMMIT LINK $linkname1]
@@ -382,20 +365,20 @@ test "Simultaneous imports" {
 test "Simultaneous exports" {
     assert_does_not_resync {
         # Populate data before migration
-        write_data 0 "$5462_slot_tag:1:" 100 1000
-        write_data 0 "$16383_slot_tag:1:" 100 1000
+        populate 100 "$5462_slot_tag:1:" 1000 -0
+        populate 100 "$16383_slot_tag:1:" 1000 -0
 
         # Prepare imports
         assert_match "OK" [R 1 CLUSTER IMPORT-PREPARE SLOTSRANGE 5462 5462]
         assert_match "OK" [R 2 CLUSTER IMPORT-PREPARE SLOTSRANGE 16383 16383]
         set linkname1 [get_link_name 1 5462]
         set linkname2 [get_link_name 2 16383]
-        write_data 0 "$5462_slot_tag:2:" 100 1000
-        write_data 0 "$16383_slot_tag:2:" 100 1000
+        populate 100 "$5462_slot_tag:2:" 1000 -0
+        populate 100 "$16383_slot_tag:2:" 1000 -0
         wait_for_migration_field 1 $linkname1 state replicating
         wait_for_migration_field 2 $linkname2 state replicating
-        write_data 0 "$5462_slot_tag:3:" 100 1000
-        write_data 0 "$16383_slot_tag:3:" 100 1000
+        populate 100 "$5462_slot_tag:3:" 1000 -0
+        populate 100 "$16383_slot_tag:3:" 1000 -0
 
         # Do the imports
         assert_match "OK" [R 1 CLUSTER IMPORT-COMMIT LINK $linkname1]
@@ -428,20 +411,20 @@ test "Simultaneous exports" {
 test "Multiple slot ranges from same source" {
     assert_does_not_resync {
         # Populate data before migration
-        write_data 2 "$16382_slot_tag:1:" 100 1000
-        write_data 2 "$16383_slot_tag:1:" 100 1000
+        populate 100 "$16382_slot_tag:1:" 1000 -2
+        populate 100 "$16383_slot_tag:1:" 1000 -2
 
         # Prepare imports
         assert_match "OK" [R 0 CLUSTER IMPORT-PREPARE SLOTSRANGE 16382 16382]
         assert_match "OK" [R 0 CLUSTER IMPORT-PREPARE SLOTSRANGE 16383 16383]
         set linkname1 [get_link_name 0 16382]
         set linkname2 [get_link_name 0 16383]
-        write_data 2 "$16382_slot_tag:2:" 100 1000
-        write_data 2 "$16383_slot_tag:2:" 100 1000
+        populate 100 "$16382_slot_tag:2:" 1000 -2
+        populate 100 "$16383_slot_tag:2:" 1000 -2
         wait_for_migration_field 0 $linkname1 state replicating
         wait_for_migration_field 0 $linkname2 state replicating
-        write_data 2 "$16382_slot_tag:3:" 100 1000
-        write_data 2 "$16383_slot_tag:3:" 100 1000
+        populate 100 "$16382_slot_tag:3:" 1000 -2
+        populate 100 "$16383_slot_tag:3:" 1000 -2
 
         # Do the imports
         assert_match "OK" [R 0 CLUSTER IMPORT-COMMIT LINK $linkname1]
@@ -472,8 +455,8 @@ test "Multiple slot ranges from same source" {
 test "Import slot range with multiple slots" {
     assert_does_not_resync {
         # Populate data before migration
-        write_data 0 "$16382_slot_tag:" 500 1000
-        write_data 0 "$16383_slot_tag:" 500 1000
+        populate 500 "$16382_slot_tag:" 1000 -0
+        populate 500 "$16383_slot_tag:" 1000 -0
 
         # Perform one-shot import
         assert_match "OK" [R 2 CLUSTER IMPORT SLOTSRANGE 16382 16383]
@@ -504,10 +487,10 @@ test "Import slot range with multiple slots" {
 test "Import multiple slot ranges with multiple slots" {
     assert_does_not_resync {
         # Populate data before migration
-        write_data 2 "$16379_slot_tag:" 250 1000
-        write_data 2 "$16380_slot_tag:" 250 1000
-        write_data 2 "$16382_slot_tag:" 250 1000
-        write_data 2 "$16383_slot_tag:" 250 1000
+        populate 250 "$16379_slot_tag:" 1000 -2
+        populate 250 "$16380_slot_tag:" 1000 -2
+        populate 250 "$16382_slot_tag:" 1000 -2
+        populate 250 "$16383_slot_tag:" 1000 -2
 
         # Perform one-shot import
         assert_match "OK" [R 0 CLUSTER IMPORT SLOTSRANGE 16379 16380 16382 16383]
@@ -534,7 +517,7 @@ test "Import multiple slot ranges with multiple slots" {
 test "Export all slots from node" {
     assert_does_not_resync {
         # Populate data before migration
-        write_data 0 "$16383_slot_tag:" 1000 1000
+        populate 1000 "$16383_slot_tag:" 1000 -0
 
         # Perform one-shot import
         assert_match "OK" [R 2 CLUSTER IMPORT SLOTSRANGE 0 5461 16379 16380 16382 16383]
@@ -561,7 +544,7 @@ test "Export all slots from node" {
 test "Import slots to node with no slots" {
     assert_does_not_resync {
         # Populate data before migration
-        write_data 2 "$0_slot_tag:" 1000 1000
+        populate 1000 "$0_slot_tag:" 1000 -2
 
         # Perform one-shot import
         assert_match "OK" [R 0 CLUSTER IMPORT SLOTSRANGE 0 5461]
@@ -588,16 +571,16 @@ test "Import slots to node with no slots" {
 test "Partial data removed on cancel" {
     assert_does_not_resync {
         # Load data before the snapshot
-        write_data 2 "$16383_slot_tag:1:" 333 1000
+        populate 333 "$16383_slot_tag:1:" 1000 -2
 
         # Load data while the snapshot is ongoing
         assert_match "OK" [R 0 CLUSTER IMPORT-PREPARE SLOTSRANGE 16383 16383]
         set linkname [get_link_name 0 16383]
-        write_data 2 "$16383_slot_tag:2:" 333 1000
+        populate 333 "$16383_slot_tag:2:" 1000 -2
 
         # Load data after the snapshot
         wait_for_migration_field 2 $linkname state replicating
-        write_data 2 "$16383_slot_tag:3:" 334 1000
+        populate 334 "$16383_slot_tag:3:" 1000 -2
 
         # Cancel and the data should be dropped
         assert_match "OK" [R 0 CLUSTER IMPORT-CANCEL LINK $linkname]
@@ -620,7 +603,7 @@ test "Partial data removed on cancel" {
 test "OOM on target aborts migration" {
     assert_does_not_resync {
         # Load some data before the snapshot
-        write_data 2 "$16383_slot_tag:1:" 500 1000
+        populate 500 "$16383_slot_tag:1:" 1000 -2
         assert_match "OK" [R 0 CLUSTER IMPORT-PREPARE SLOTSRANGE 16383 16383]
         set linkname [get_link_name 0 16383]
         wait_for_migration_field 0 $linkname state replicating
@@ -629,7 +612,7 @@ test "OOM on target aborts migration" {
         assert_match "OK" [R 0 CONFIG SET maxmemory 1]
 
         # Loading more data should cause a failure
-        write_data 2 "$16383_slot_tag:3:" 500 1000
+        populate 500 "$16383_slot_tag:3:" 1000 -2
         wait_for_migration_field 0 $linkname state failed
         wait_for_migration_field 2 $linkname state failed
 
@@ -653,7 +636,7 @@ test "OOM on target aborts migration" {
 
 test "Partial data in replica removed on failover" {
     # Load some data before the snapshot
-    write_data 2 "$16383_slot_tag:1:" 500 1000
+    populate 500 "$16383_slot_tag:1:" 1000 -2
 
     # Prepare and wait for ready
     assert_match "OK" [R 0 CLUSTER IMPORT-PREPARE SLOTSRANGE 16383 16383]
@@ -688,7 +671,7 @@ test "Partial data in replica removed on failover" {
 
 test "Slot export failed on failover" {
     # Load some data before the snapshot
-    write_data 3 "$0_slot_tag:1:" 500 1000
+    populate 500 "$0_slot_tag:1:" 1000 -3
 
     # Prepare and wait for ready
     assert_match "OK" [R 2 CLUSTER IMPORT-PREPARE SLOTSRANGE 0 0]
@@ -721,7 +704,7 @@ test "Slot export failed on failover" {
 test "Slots split across shards during import" {
     assert_does_not_resync {
         # Load some data before the snapshot
-        write_data 0 "$0_slot_tag:1:" 500 1000
+        populate 500 "$0_slot_tag:1:" 1000 -0
 
         # Prepare and wait for ready
         assert_match "OK" [R 1 CLUSTER IMPORT-PREPARE SLOTSRANGE 0 0]
@@ -844,7 +827,7 @@ test "Export unpauses itself even if failover doesn't occur" {
         assert {[string match {*Unpaused before migration completed*} [dict get [get_migration_by_linkname 0 $fake_linkname] message]]}
 
         # Validate no longer paused
-        write_data 0 "$0_slot_tag:" 1 1000
+        populate 1 "$0_slot_tag:" 1000 -0
 
         # Reset manual failover timeout
         R 0 CONFIG SET cluster-manual-failover-timeout $mf_timeout_old
@@ -909,23 +892,23 @@ test "CLUSTER SYNCSLOTS SNAPSHOT command interface" {
 test "FLUSHDB on target with partially imported slot" {
     assert_does_not_resync {
         # Load data before the snapshot
-        write_data 2 "$16383_slot_tag:1:" 333 1000
+        populate 333 "$16383_slot_tag:1:" 1000 -2
 
         # Load data while the snapshot is ongoing
         assert_match "OK" [R 0 CLUSTER IMPORT-PREPARE SLOTSRANGE 16383 16383]
         set linkname [get_link_name 0 16383]
-        write_data 2 "$16383_slot_tag:2:" 333 1000
+        populate 333 "$16383_slot_tag:2:" 1000 -2
 
         # Load data after the snapshot
         wait_for_migration_field 0 $linkname state replicating
-        write_data 2 "$16383_slot_tag:3:" 334 1000
+        populate 334 "$16383_slot_tag:3:" 1000 -2
 
         # Keys should be on both source and destination
         assert_match "1000" [R 2 CLUSTER COUNTKEYSINSLOT 16383]
         wait_for_countkeysinslot 0 16383 1000
 
         # Also write some keys to target outside of slot range
-        write_data 0 "$0_slot_tag:1:" 1000 1000
+        populate 1000 "$0_slot_tag:1:" 1000 -0
 
         # Now run FLUSHDB SYNC on the target
         assert_match "OK" [R 0 FLUSHDB SYNC]
@@ -939,7 +922,7 @@ test "FLUSHDB on target with partially imported slot" {
         wait_for_countkeysinslot 3 0 0
         
         # Same for FLUSHDB ASYNC
-        write_data 0 "$0_slot_tag:1:" 1000 1000
+        populate 1000 "$0_slot_tag:1:" 1000 -0
         assert_match "OK" [R 0 FLUSHDB ASYNC]
         assert_match "1000" [R 0 CLUSTER COUNTKEYSINSLOT 16383]
         assert_match "1000" [R 3 CLUSTER COUNTKEYSINSLOT 16383]
@@ -955,16 +938,16 @@ test "FLUSHDB on target with partially imported slot" {
 test "FLUSHDB on source during export" {
     assert_does_not_resync {
         # Load data before the snapshot
-        write_data 2 "$16383_slot_tag:1:" 333 1000
+        populate 333 "$16383_slot_tag:1:" 1000 -2
 
         # Load data while the snapshot is ongoing
         assert_match "OK" [R 0 CLUSTER IMPORT-PREPARE SLOTSRANGE 16383 16383]
         set linkname [get_link_name 0 16383]
-        write_data 2 "$16383_slot_tag:2:" 333 1000
+        populate 333 "$16383_slot_tag:2:" 1000 -2
 
         # Load data after the snapshot
         wait_for_migration_field 0 $linkname state replicating
-        write_data 2 "$16383_slot_tag:3:" 334 1000
+        populate 334 "$16383_slot_tag:3:" 1000 -2
 
         # Keys should be on both source and destination
         assert_match "1000" [R 2 CLUSTER COUNTKEYSINSLOT 16383]
@@ -977,7 +960,7 @@ test "FLUSHDB on source during export" {
         wait_for_countkeysinslot 3 16383 0
 
         # Same for FLUSHDB ASYNC
-        write_data 2 "$16383_slot_tag:1:" 1000 1000
+        populate 1000 "$16383_slot_tag:1:" 1000 -2
         assert_match "1000" [R 2 CLUSTER COUNTKEYSINSLOT 16383]
         wait_for_countkeysinslot 0 16383 1000
         assert_match "OK" [R 2 FLUSHDB ASYNC]
@@ -995,16 +978,16 @@ test "Import cancelled when source hangs" {
         R 2 CONFIG SET repl-timeout 1
 
         # Load data before the snapshot
-        write_data 0 "$0_slot_tag:1:" 333 1000
+        populate 333 "$0_slot_tag:1:" 1000 -0
 
         # Load data while the snapshot is ongoing
         assert_match "OK" [R 2 CLUSTER IMPORT-PREPARE SLOTSRANGE 0 0]
         set linkname [get_link_name 2 0]
-        write_data 0 "$0_slot_tag:2:" 333 1000
+        populate 333 "$0_slot_tag:2:" 1000 -0
 
         # Load data after the snapshot
         wait_for_migration_field 2 $linkname state replicating
-        write_data 0 "$0_slot_tag:3:" 334 1000
+        populate 334 "$0_slot_tag:3:" 1000 -0
 
         # Now pause source
         set node0_pid  [srv 0 pid]
@@ -1030,16 +1013,16 @@ test "Export cancelled when target hangs" {
         R 0 CONFIG SET repl-timeout 1
 
         # Load data before the snapshot
-        write_data 0 "$0_slot_tag:1:" 333 1000
+        populate 333 "$0_slot_tag:1:" 1000 -0
 
         # Load data while the snapshot is ongoing
         assert_match "OK" [R 2 CLUSTER IMPORT-PREPARE SLOTSRANGE 0 0]
         set linkname [get_link_name 2 0]
-        write_data 0 "$0_slot_tag:2:" 333 1000
+        populate 333 "$0_slot_tag:2:" 1000 -0
 
         # Load data after the snapshot
         wait_for_migration_field 2 $linkname state replicating
-        write_data 0 "$0_slot_tag:3:" 334 1000
+        populate 334 "$0_slot_tag:3:" 1000 -0
 
         # Now pause target
         set node2_pid [srv -2 pid]
@@ -1073,7 +1056,7 @@ test "Import with AUTH on" {
         R 2 CONFIG SET primaryauth "mypassword"
 
         # Populate data before migration
-        write_data 2 "$16383_slot_tag:" 1000 1000
+        populate 1000 "$16383_slot_tag:" 1000 -2
 
         # Perform one-shot import
         assert_match "OK" [R 0 CLUSTER IMPORT SLOTSRANGE 16383 16383]

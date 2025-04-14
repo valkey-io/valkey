@@ -7578,4 +7578,3 @@ int clusterDecodeOpenSlotsAuxField(int rdbflags, sds s) {
     }
     return C_OK;
 }
-

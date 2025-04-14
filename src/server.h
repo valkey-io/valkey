@@ -1799,7 +1799,7 @@ struct valkeyServer {
                                                  invocation of the event loop. */
     unsigned int max_new_conns_per_cycle;     /* The maximum number of tcp connections that will be accepted during each
                                                  invocation of the event loop. */
-    int write_throttling;                     /* 1 if write throttling is enabled: prevents output buffer overflow (and
+    int write_throttling;                     /* 1 if write throttling is enabled: prevents replication buffer overflow (and
                                                  client disconnection) by throttling write commands. */
     /* AOF persistence */
     int aof_enabled;                    /* AOF configuration */

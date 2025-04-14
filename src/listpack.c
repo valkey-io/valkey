@@ -43,7 +43,6 @@
 #include "listpack_malloc.h"
 #include "serverassert.h"
 #include "util.h"
-#include "config.h"
 
 #define LP_HDR_SIZE 6 /* 32 bit total len + 16 bit number of elements. */
 #define LP_HDR_NUMELE_UNKNOWN UINT16_MAX
@@ -147,222 +146,6 @@ int lpSafeToAdd(unsigned char *lp, size_t add) {
     return 1;
 }
 
-#ifdef HAVE_AVX512
-#include <immintrin.h>
-
-#define MULTIPLIER_10E8 100000000
-#define MULTIPLIER_10E16 10000000000000000ULL
-
-/**
- * Convert a string into an unsigned 64-bit integer using AVX-512 instructions.
- *
- * This function parses a string of digits and converts it into an unsigned
- * 64-bit integer. It leverages AVX-512 SIMD instructions for optimized
- * processing and performs strict validation to ensure the input string
- * represents a valid unsigned integer.
- *
- * Notes:
- * - The input string must not contain leading zeros unless it is "0".
- * - The function checks for overflow and returns 0 if the result exceeds
- *   the maximum value of a uint64_t.
- * - This function requires AVX-512 support and will only be compiled if
- *   `HAVE_AVX512` is defined.
- *
- * Example:
- * Input: s = "1234567890", slen = 10
- * Steps:
- * 1. Load the string into SIMD registers and subtract '0' from each character
- *    to convert ASCII digits to integers.
- *    Format (32 bytes, 8 bits each):
- *      0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1 2 3 4 5 6 7 8 9 0
- * 2. Validate that all characters are digits (0-9).
- * 3. Multiply by 10 and horizontally add adjacent pairs of intermediate values.
- *    Format (16 bytes, 8 bits each):
- *      00 00 00 00 00 00 00 00 00 00 00 12 34 56 78 90
- * 4. Multiply by 100 and horizontally add adjacent pairs of intermediate values.
- *    Format (8 bytes, 16 bits each):
- *      0000 0000 0000 0000 0000 0012 3456 7890
- * 5. Multiply by 10000 and horizontally add adjacent pairs of intermediate values.
- *    Format (4 bytes, 32 bits each):
- *      00000000 00000000 00000012 34567890
- * 6. Extract the final value.
- * Output: *value = 1234567890
-*/
-ATTRIBUTE_TARGET_AVX512
-int string2llAVX512(const char *s, unsigned long slen, int64_t *value) {
-    const char *p = s;
-    unsigned long plen = 0;
-    int negative = 0;
-
-    /* Abort if length indicates this cannot possibly be an int */
-    if (slen == 0 || slen >= LONG_STR_SIZE) return 0;
-
-    /* Special case: first and only digit is 0. */
-    if (slen == 1 && p[0] == '0') {
-        if (value != NULL) *value = 0;
-        return 1;
-    }
-
-    if (p[0] == '-') {
-        negative = 1;
-        p++;
-        plen++;
-
-        /* Abort on only a negative sign. */
-        if (plen == slen) return 0;
-    }
-
-    /* If first digit is 0, the string should just be 0. */
-    if (p[0] == '0') {
-        return 0;
-    }
-
-    const __m256i ascii0 = _mm256_set1_epi8('0');
-    const __m256i nine = _mm256_set1_epi8(9);
-    uint32_t mask = (uint32_t)(0xFFFFFFFF << (32 - slen + plen));
-    __m256i input = _mm256_maskz_loadu_epi8(mask, s + slen - 32);
-    /* Load the string into SIMD registers and subtract '0' to convert ASCII to integers */
-    __m256i ascii_digits = _mm256_maskz_sub_epi8(mask, input, ascii0);
-    /* Validate that all characters are digits (0-9) */
-    uint32_t nondigits = _mm256_mask_cmpgt_epu8_mask(mask, ascii_digits, nine);
-    if (nondigits) {
-        return 0;
-    }
-
-    const __m256i mul_1_10 = _mm256_set_epi8(1, 10, 1, 10, 1, 10, 1, 10, 1, 10, 1, 10, 1, 10, 1, 10, 1, 10, 1, 10, 1, 10, 1, 10, 1, 10, 1, 10, 1, 10, 1, 10);
-    /* Multiply by 10 and horizontally add adjacent pairs of intermediate values. */
-    __m256i multiplied_by_10 = _mm256_maddubs_epi16(ascii_digits, mul_1_10);
-    __m128i reduced_to_16bit = _mm256_cvtepi16_epi8(multiplied_by_10);
-
-    const __m128i mul_1_100 = _mm_set_epi8(1, 100, 1, 100, 1, 100, 1, 100, 1, 100, 1, 100, 1, 100, 1, 100);
-    /* Multiply by 100 and horizontally add adjacent pairs of intermediate values. */
-    __m128i multiplied_by_100 = _mm_maddubs_epi16(reduced_to_16bit, mul_1_100);
-
-    const __m128i mul_1_10000 = _mm_set_epi16(1, 10000, 1, 10000, 1, 10000, 1, 10000);
-    /* Multiply by 10000 and horizontally add adjacent pairs of intermediate values. */
-    __m128i multiplied_by_10000 = _mm_madd_epi16(multiplied_by_100, mul_1_10000);
-
-    uint64_t low = (uint64_t)_mm_extract_epi32(multiplied_by_10000, 3);
-    if ((mask & 0xFFFFFF) == 0) {
-        *value = negative ? -low : low;
-        return 1;
-    }
-
-    uint64_t middle = (uint64_t)_mm_extract_epi32(multiplied_by_10000, 2);
-    uint64_t middle_low = low + MULTIPLIER_10E8 * middle;
-    if ((mask & 0xFFFF) == 0) {
-        *value = negative ? -middle_low : middle_low;
-        return 1;
-    }
-
-    uint64_t high = (uint64_t)_mm_extract_epi32(multiplied_by_10000, 1);
-    uint64_t result = middle_low + MULTIPLIER_10E16 * high;
-
-    if (negative) {
-        if (result > ((uint64_t)(-(INT64_MIN + 1)) + 1)) /* Overflow. */
-            return 0;
-        if (value != NULL) *value = -result;
-    } else {
-        if (result > INT64_MAX) /* Overflow. */
-            return 0;
-        if (value != NULL) *value = result;
-    }
-    return 1;
-}
-#endif
-
-/* Convert a string into a signed 64 bit integer.
- * The function returns 1 if the string could be parsed into a (non-overflowing)
- * signed 64 bit int, 0 otherwise. The 'value' will be set to the parsed value
- * when the function returns success.
- *
- * Note that this function demands that the string strictly represents
- * a int64 value: no spaces or other characters before or after the string
- * representing the number are accepted, nor zeroes at the start if not
- * for the string "0" representing the zero number.
- *
- * Because of its strictness, it is safe to use this function to check if
- * you can convert a string into a long long, and obtain back the string
- * from the number without any loss in the string representation. *
- *
- * -----------------------------------------------------------------------------
- *
- * Credits: this function was adapted from the Redis OSS source code, file
- * "utils.c", function string2ll(), and is copyright:
- *
- * Copyright(C) 2011, Pieter Noordhuis
- * Copyright(C) 2011, Redis Ltd.
- *
- * The function is released under the BSD 3-clause license.
- */
-int string2llScalar(const char *s, unsigned long slen, int64_t *value) {
-    const char *p = s;
-    unsigned long plen = 0;
-    int negative = 0;
-    uint64_t v;
-
-    /* Abort if length indicates this cannot possibly be an int */
-    if (slen == 0 || slen >= LONG_STR_SIZE) return 0;
-
-    /* Special case: first and only digit is 0. */
-    if (slen == 1 && p[0] == '0') {
-        if (value != NULL) *value = 0;
-        return 1;
-    }
-
-    if (p[0] == '-') {
-        negative = 1;
-        p++;
-        plen++;
-
-        /* Abort on only a negative sign. */
-        if (plen == slen) return 0;
-    }
-
-    /* First digit should be 1-9, otherwise the string should just be 0. */
-    if (p[0] >= '1' && p[0] <= '9') {
-        v = p[0] - '0';
-        p++;
-        plen++;
-    } else {
-        return 0;
-    }
-
-    while (plen < slen && p[0] >= '0' && p[0] <= '9') {
-        if (v > (UINT64_MAX / 10)) /* Overflow. */
-            return 0;
-        v *= 10;
-
-        if (v > (UINT64_MAX - (p[0] - '0'))) /* Overflow. */
-            return 0;
-        v += p[0] - '0';
-
-        p++;
-        plen++;
-    }
-
-    /* Return if not all bytes were used. */
-    if (plen < slen) return 0;
-
-    if (negative) {
-        if (v > ((uint64_t)(-(INT64_MIN + 1)) + 1)) /* Overflow. */
-            return 0;
-        if (value != NULL) *value = -v;
-    } else {
-        if (v > INT64_MAX) /* Overflow. */
-            return 0;
-        if (value != NULL) *value = v;
-    }
-    return 1;
-}
-
-int lpStringToInt64(const char *s, unsigned long slen, int64_t *value) {
-#ifdef HAVE_AVX512
-    return string2llAVX512(s, slen, value);
-#endif
-    return string2llScalar(s, slen, value);
-}
-
 /* Create a new, empty listpack.
  * On success the new listpack is returned, otherwise an error is returned.
  * Pre-allocate at least `capacity` bytes of memory,
@@ -463,7 +246,7 @@ static inline void lpEncodeIntegerGetType(int64_t v, unsigned char *intenc, uint
  * in order to be represented. */
 static inline int lpEncodeGetType(unsigned char *ele, uint32_t size, unsigned char *intenc, uint64_t *enclen) {
     int64_t v;
-    if (lpStringToInt64((const char *)ele, size, &v)) {
+    if (string2ll((const char *)ele, size, (long long *)&v)) {
         lpEncodeIntegerGetType(v, intenc, enclen);
         return LP_ENCODING_INT;
     } else {
@@ -836,7 +619,7 @@ unsigned char *lpFind(unsigned char *lp, unsigned char *p, unsigned char *s, uin
                     /* If the entry can be encoded as integer we set it to
                      * 1, else set it to UCHAR_MAX, so that we don't retry
                      * again the next time. */
-                    if (slen >= 32 || slen == 0 || !lpStringToInt64((const char *)s, slen, &vll)) {
+                    if (slen >= 32 || slen == 0 || !string2ll((const char *)s, slen, (long long *)&vll)) {
                         vencoding = UCHAR_MAX;
                     } else {
                         vencoding = 1;
@@ -1505,11 +1288,11 @@ unsigned int lpCompare(unsigned char *p, unsigned char *s, uint32_t slen) {
     if (value) {
         return (slen == sz) && memcmp(value, s, slen) == 0;
     } else {
-        /* We use lpStringToInt64() to get an integer representation of the
+        /* We use string2ll() to get an integer representation of the
          * string 's' and compare it to 'sval', it's much faster than convert
          * integer to string and comparing. */
         int64_t sval;
-        if (lpStringToInt64((const char *)s, slen, &sval)) return sz == sval;
+        if (string2ll((const char *)s, slen, (long long *)&sval)) return sz == sval;
     }
 
     return 0;

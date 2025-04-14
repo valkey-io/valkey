@@ -32,12 +32,18 @@
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  * POSSIBILITY OF SUCH DAMAGE.
  */
+/*
+ * Copyright (c) Valkey Contributors
+ * All rights reserved.
+ * SPDX-License-Identifier: BSD-3-Clause
+ */
 
 #include "server.h"
 #include "hashtable.h"
 #include "eval.h"
 #include "script.h"
 #include "module.h"
+#include <stdbool.h>
 #include <stddef.h>
 
 #ifdef HAVE_DEFRAG
@@ -346,7 +352,7 @@ static void activeDefragSdsDict(dict *d, int val_type) {
     } while (cursor != 0);
 }
 
-void activeDefragSdsHashtableCallback(void *privdata, void *entry_ref) {
+static void activeDefragSdsHashtableCallback(void *privdata, void *entry_ref) {
     UNUSED(privdata);
     sds *sds_ref = (sds *)entry_ref;
     sds new_sds = activeDefragSds(*sds_ref);
@@ -398,7 +404,7 @@ static long scanLaterList(robj *ob, unsigned long *cursor, monotime endtime) {
     quicklistNode *node;
     long iterations = 0;
     int bookmark_failed = 0;
-    if (ob->type != OBJ_LIST || ob->encoding != OBJ_ENCODING_QUICKLIST) return 0;
+    serverAssert(ob->type == OBJ_LIST && ob->encoding == OBJ_ENCODING_QUICKLIST);
 
     if (*cursor == 0) {
         /* if cursor is 0, we start new iteration */
@@ -441,7 +447,7 @@ static void scanLaterZsetCallback(void *privdata, void *element_ref) {
 }
 
 static void scanLaterZset(robj *ob, unsigned long *cursor) {
-    if (ob->type != OBJ_ZSET || ob->encoding != OBJ_ENCODING_SKIPLIST) return;
+    serverAssert(ob->type == OBJ_ZSET && ob->encoding == OBJ_ENCODING_SKIPLIST);
     zset *zs = (zset *)ob->ptr;
     *cursor = hashtableScanDefrag(zs->ht, *cursor, scanLaterZsetCallback, zs->zsl, activeDefragAlloc, HASHTABLE_SCAN_EMIT_REF);
 }
@@ -455,7 +461,7 @@ static void scanHashtableCallbackCountScanned(void *privdata, void *elemref) {
 }
 
 static void scanLaterSet(robj *ob, unsigned long *cursor) {
-    if (ob->type != OBJ_SET || ob->encoding != OBJ_ENCODING_HASHTABLE) return;
+    serverAssert(ob->type == OBJ_SET && ob->encoding == OBJ_ENCODING_HASHTABLE);
     hashtable *ht = ob->ptr;
     *cursor = hashtableScanDefrag(ht, *cursor, activeDefragSdsHashtableCallback, NULL, activeDefragAlloc, HASHTABLE_SCAN_EMIT_REF);
 }
@@ -470,7 +476,7 @@ static void activeDefragHashTypeEntry(void *privdata, void *element_ref) {
 }
 
 static void scanLaterHash(robj *ob, unsigned long *cursor) {
-    if (ob->type != OBJ_HASH || ob->encoding != OBJ_ENCODING_HASHTABLE) return;
+    serverAssert(ob->type == OBJ_HASH && ob->encoding == OBJ_ENCODING_HASHTABLE);
     hashtable *ht = ob->ptr;
     *cursor = hashtableScanDefrag(ht, *cursor, activeDefragHashTypeEntry, NULL, activeDefragAlloc, HASHTABLE_SCAN_EMIT_REF);
 }
@@ -557,10 +563,7 @@ static int scanLaterStreamListpacks(robj *ob, unsigned long *cursor, monotime en
     static unsigned char last[sizeof(streamID)];
     raxIterator ri;
     long iterations = 0;
-    if (ob->type != OBJ_STREAM || ob->encoding != OBJ_ENCODING_STREAM) {
-        *cursor = 0;
-        return 0;
-    }
+    serverAssert(ob->type == OBJ_STREAM && ob->encoding == OBJ_ENCODING_STREAM);
 
     stream *s = ob->ptr;
     raxStart(&ri, s->rax);
@@ -822,15 +825,15 @@ static void defragPubsubScanCallback(void *privdata, void *elemref) {
  * and 1 if time is up and more work is needed. */
 static int defragLaterItem(robj *ob, unsigned long *cursor, monotime endtime, int dbid) {
     if (ob) {
-        if (ob->type == OBJ_LIST) {
+        if (ob->type == OBJ_LIST && ob->encoding == OBJ_ENCODING_QUICKLIST) {
             return scanLaterList(ob, cursor, endtime);
-        } else if (ob->type == OBJ_SET) {
+        } else if (ob->type == OBJ_SET && ob->encoding == OBJ_ENCODING_HASHTABLE) {
             scanLaterSet(ob, cursor);
-        } else if (ob->type == OBJ_ZSET) {
+        } else if (ob->type == OBJ_ZSET && ob->encoding == OBJ_ENCODING_SKIPLIST) {
             scanLaterZset(ob, cursor);
-        } else if (ob->type == OBJ_HASH) {
+        } else if (ob->type == OBJ_HASH && ob->encoding == OBJ_ENCODING_HASHTABLE) {
             scanLaterHash(ob, cursor);
-        } else if (ob->type == OBJ_STREAM) {
+        } else if (ob->type == OBJ_STREAM && ob->encoding == OBJ_ENCODING_STREAM) {
             return scanLaterStreamListpacks(ob, cursor, endtime);
         } else if (ob->type == OBJ_MODULE) {
             /* Fun fact (and a bug since forever): The key is passed to
@@ -839,10 +842,9 @@ static int defragLaterItem(robj *ob, unsigned long *cursor, monotime endtime, in
              * callbacks. Nobody can ever have used this, i.e. accessed the key
              * name in the defrag module type callback. */
             void *sds_key_passed_as_robj = objectGetKey(ob);
-            long long endtimeWallClock = ustime() + (endtime - getMonotonicUs());
-            return moduleLateDefrag(sds_key_passed_as_robj, ob, cursor, endtimeWallClock, dbid);
+            return moduleLateDefrag(sds_key_passed_as_robj, ob, cursor, endtime, dbid);
         } else {
-            *cursor = 0; /* object type may have changed since we schedule it for later */
+            *cursor = 0; /* object type/encoding may have changed since we schedule it for later */
         }
     } else {
         *cursor = 0; /* object may have been deleted already */
@@ -1042,7 +1044,6 @@ static void endDefragCycle(bool normal_termination) {
         // For normal termination, we expect...
         serverAssert(!defrag.current_stage);
         serverAssert(listLength(defrag.remaining_stages) == 0);
-        serverAssert(!defrag_later || listLength(defrag_later) == 0);
     } else {
         // Defrag is being terminated abnormally
         aeDeleteTimeEvent(server.el, defrag.timeproc_id);
@@ -1058,6 +1059,8 @@ static void endDefragCycle(bool normal_termination) {
     listRelease(defrag.remaining_stages);
     defrag.remaining_stages = NULL;
 
+    /* For a normal termination, this list is usually empty, but it might contain elements
+     *  if a stage was aborted due to a flushall or some other DB swap. */
     if (defrag_later) {
         listRelease(defrag_later);
         defrag_later = NULL;

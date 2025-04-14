@@ -27,7 +27,11 @@
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  * POSSIBILITY OF SUCH DAMAGE.
  */
-
+/*
+ * Copyright (c) Valkey Contributors
+ * All rights reserved.
+ * SPDX-License-Identifier: BSD-3-Clause
+ */
 #include "fmacros.h"
 
 #include <stdio.h>
@@ -1631,9 +1635,9 @@ static int cliConnect(int flags) {
 
         /* Do not use hostsocket when we got redirected in cluster mode */
         if (config.hostsocket == NULL || (config.cluster_mode && config.cluster_reissue_command)) {
-            context = redisConnectWrapper(config.conn_info.hostip, config.conn_info.hostport, config.connect_timeout);
+            context = redisConnectWrapper(config.conn_info.hostip, config.conn_info.hostport, config.connect_timeout, 0);
         } else {
-            context = redisConnectUnixWrapper(config.hostsocket, config.connect_timeout);
+            context = redisConnectUnixWrapper(config.hostsocket, config.connect_timeout, 0);
         }
 
         if (!context->err && config.tls) {
@@ -2356,6 +2360,9 @@ static int cliSendCommand(int argc, char **argv, long repeat) {
         output_raw = 1;
     }
 
+    /* In a multi block, commands will return status strings instead of verbatim strings. */
+    if (config.in_multi) output_raw = 0;
+
     if (!strcasecmp(command, "shutdown")) config.shutdown = 1;
     if (!strcasecmp(command, "monitor")) config.monitor_mode = 1;
     int is_subscribe =
@@ -2518,7 +2525,7 @@ static redisReply *reconnectingRedisCommand(redisContext *c, const char *fmt, ..
             fflush(stdout);
 
             redisFree(c);
-            c = redisConnectWrapper(config.conn_info.hostip, config.conn_info.hostport, config.connect_timeout);
+            c = redisConnectWrapper(config.conn_info.hostip, config.conn_info.hostport, config.connect_timeout, 0);
             if (!c->err && config.tls) {
                 const char *err = NULL;
                 if (cliSecureConnection(c, config.sslconfig, &err) == REDIS_ERR && err) {
@@ -2569,7 +2576,7 @@ static int parseOptions(int argc, char **argv) {
             config.stdin_tag_name = argv[++i];
         } else if (!strcmp(argv[i], "-p") && !lastarg) {
             config.conn_info.hostport = atoi(argv[++i]);
-            if (config.conn_info.hostport < 0 || config.conn_info.hostport > 65535) {
+            if ((config.conn_info.hostport == 0 && !(strlen(argv[i]) == 1 && argv[i][0] == '0')) || config.conn_info.hostport < 0 || config.conn_info.hostport > 65535) {
                 fprintf(stderr, "Invalid server port.\n");
                 exit(1);
             }
@@ -2601,7 +2608,7 @@ static int parseOptions(int argc, char **argv) {
         } else if (!strcmp(argv[i], "--user") && !lastarg) {
             config.conn_info.user = sdsnew(argv[++i]);
         } else if (!strcmp(argv[i], "-u") && !lastarg) {
-            parseRedisUri(argv[++i], "valkey-cli", &config.conn_info, &config.tls);
+            parseUri(argv[++i], "valkey-cli", &config.conn_info, &config.tls);
             if (config.conn_info.hostport < 0 || config.conn_info.hostport > 65535) {
                 fprintf(stderr, "Invalid server port.\n");
                 exit(1);
@@ -3949,7 +3956,7 @@ cleanup:
 
 static int clusterManagerNodeConnect(clusterManagerNode *node) {
     if (node->context) redisFree(node->context);
-    node->context = redisConnectWrapper(node->ip, node->port, config.connect_timeout);
+    node->context = redisConnectWrapper(node->ip, node->port, config.connect_timeout, 0);
     if (!node->context->err && config.tls) {
         const char *err = NULL;
         if (cliSecureConnection(node->context, config.sslconfig, &err) == REDIS_ERR && err) {
@@ -7666,7 +7673,7 @@ static int clusterManagerCommandImport(int argc, char **argv) {
     char *reply_err = NULL;
     redisReply *src_reply = NULL;
     // Connect to the source node.
-    redisContext *src_ctx = redisConnectWrapper(src_ip, src_port, config.connect_timeout);
+    redisContext *src_ctx = redisConnectWrapper(src_ip, src_port, config.connect_timeout, 0);
     if (src_ctx->err) {
         success = 0;
         fprintf(stderr, "Could not connect to Valkey at %s:%d: %s.\n", src_ip, src_port, src_ctx->errstr);

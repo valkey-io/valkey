@@ -2294,6 +2294,7 @@ int test_quicklistCompressAndDecomressQuicklistPlainNodeLargeThanUINT32MAX(int a
     zfree(node->next);
     zfree(node->entry);
     zfree(node);
+    zfree(s);
 
 #endif
     return 0;

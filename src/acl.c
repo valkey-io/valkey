@@ -2377,6 +2377,9 @@ static sds ACLLoadFromFile(const char *filename) {
         listRewind(server.clients, &li);
         while ((ln = listNext(&li)) != NULL) {
             client *c = listNodeValue(ln);
+            /* Some clients, e.g. the one from the primary to replica, don't have a user
+             * associated with them. */
+            if (!c->user) continue;
             user *original = c->user;
             list *channels = NULL;
             user *new_user = ACLGetUserByName(c->user->name, sdslen(c->user->name));
@@ -3091,8 +3094,8 @@ void aclCommand(client *c) {
             "    Show the ACL log entries.",
             "SAVE",
             "    Save the current config to the ACL file.",
-            "SETUSER <username> <attribute> [<attribute> ...]",
-            "    Create or modify a user with the specified attributes.",
+            "SETUSER <username> <rule> [<rule> ...]",
+            "    Create or modify a user with the specified rules.",
             "USERS",
             "    List all the registered usernames.",
             "WHOAMI",

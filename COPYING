@@ -1,5 +1,7 @@
 # License 1
 
+SPDX-License-Identifier: BSD-3-Clause
+
 BSD 3-Clause License
 
 Copyright (c) 2024-present, Valkey contributors

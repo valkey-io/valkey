@@ -26,7 +26,11 @@
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  * POSSIBILITY OF SUCH DAMAGE.
  */
-
+/*
+ * Copyright (c) Valkey Contributors
+ * All rights reserved.
+ * SPDX-License-Identifier: BSD-3-Clause
+ */
 #include "server.h"
 #include "monotonic.h"
 #include "cluster.h"
@@ -663,26 +667,6 @@ hashtableType hashHashtableType = {
     .entryGetKey = hashHashtableTypeGetKey,
     .keyCompare = hashtableSdsKeyCompare,
     .entryDestructor = hashHashtableTypeDestructor,
-};
-
-/* Hash type hash table (note that small hashes are represented with listpacks) */
-dictType hashDictType = {
-    dictSdsHash,       /* hash function */
-    NULL,              /* key dup */
-    dictSdsKeyCompare, /* key compare */
-    dictSdsDestructor, /* key destructor */
-    dictSdsDestructor, /* val destructor */
-    NULL,              /* allow to expand */
-};
-
-/* Dict type without destructor */
-dictType sdsReplyDictType = {
-    dictSdsHash,       /* hash function */
-    NULL,              /* key dup */
-    dictSdsKeyCompare, /* key compare */
-    NULL,              /* key destructor */
-    NULL,              /* val destructor */
-    NULL               /* allow to expand */
 };
 
 /* Hashtable type without destructor */
@@ -4646,15 +4630,15 @@ int finishShutdown(void) {
         unlink(server.pidfile);
     }
 
+    /* Handle cluster-related matters when shutdown. */
+    if (server.cluster_enabled) clusterHandleServerShutdown();
+
     /* Best effort flush of replica output buffers, so that we hopefully
      * send them pending writes. */
     flushReplicasOutputBuffers();
 
     /* Close the listening sockets. Apparently this allows faster restarts. */
     closeListeningSockets(1);
-
-    /* Handle cluster-related matters when shutdown. */
-    if (server.cluster_enabled) clusterHandleServerShutdown();
 
     serverLog(LL_WARNING, "%s is now ready to exit, bye bye...", server.sentinel_mode ? "Sentinel" : "Valkey");
     return C_OK;
@@ -5690,6 +5674,7 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                 "redis_version:%s\r\n", REDIS_VERSION,
                 "server_name:%s\r\n", SERVER_NAME,
                 "valkey_version:%s\r\n", VALKEY_VERSION,
+                "valkey_release_stage:%s\r\n", VALKEY_RELEASE_STAGE,
                 "redis_git_sha1:%s\r\n", serverGitSHA1(),
                 "redis_git_dirty:%i\r\n", strtol(serverGitDirty(), NULL, 10) > 0,
                 "redis_build_id:%s\r\n", serverBuildIdString(),

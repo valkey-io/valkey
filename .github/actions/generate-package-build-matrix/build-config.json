@@ -21,15 +21,15 @@
         },
         {
           "arch": "arm64",
-          "target": "ubuntu20.04",
+          "target": "ubuntu-22.04-arm",
           "type": "deb",
-          "platform": "focal"
+          "platform": "jammy"
         },
         {
           "arch": "arm64",
-          "target": "ubuntu22.04",
+          "target": "ubuntu-24.04-arm",
           "type": "deb",
-          "platform": "jammy"
+          "platform": "noble"
         }
       ]
 }

@@ -445,7 +445,7 @@ robj *dbRandomKey(serverDb *db) {
         sds key = objectGetKey(valkey);
         robj *keyobj = createStringObject(key, sdslen(key));
         if (objectIsExpired(valkey)) {
-            if (allvolatile && (server.primary_host || server.import_mode) && --maxtries == 0) {
+            if (allvolatile && (server.primary_host || server.import_mode || isPausedActions(PAUSE_ACTION_EXPIRE)) && --maxtries == 0) {
                 /* If the DB is composed only of keys with an expire set,
                  * it could happen that all the keys are already logically
                  * expired in the replica, so the function cannot stop because
@@ -895,9 +895,9 @@ void keysCommand(client *c) {
     kvstoreHashtableIterator *kvs_di = NULL;
     kvstoreIterator *kvs_it = NULL;
     if (pslot != -1) {
-        kvs_di = kvstoreGetHashtableSafeIterator(c->db->keys, pslot);
+        kvs_di = kvstoreGetHashtableIterator(c->db->keys, pslot, HASHTABLE_ITER_SAFE);
     } else {
-        kvs_it = kvstoreIteratorInit(c->db->keys);
+        kvs_it = kvstoreIteratorInit(c->db->keys, HASHTABLE_ITER_SAFE);
     }
     void *next;
     while (kvs_di ? kvstoreHashtableIteratorNext(kvs_di, &next) : kvstoreIteratorNext(kvs_it, &next)) {

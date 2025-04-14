@@ -207,7 +207,7 @@ void xorObjectDigest(serverDb *db, robj *keyobj, unsigned char *digest, robj *o)
         } else if (o->encoding == OBJ_ENCODING_SKIPLIST) {
             zset *zs = o->ptr;
             hashtableIterator iter;
-            hashtableInitIterator(&iter, zs->ht);
+            hashtableInitIterator(&iter, zs->ht, 0);
 
             void *next;
             while (hashtableNext(&iter, &next)) {
@@ -291,7 +291,7 @@ void computeDatasetDigest(unsigned char *final) {
     for (int j = 0; j < server.dbnum; j++) {
         serverDb *db = server.db + j;
         if (kvstoreSize(db->keys) == 0) continue;
-        kvstoreIterator *kvs_it = kvstoreIteratorInit(db->keys);
+        kvstoreIterator *kvs_it = kvstoreIteratorInit(db->keys, HASHTABLE_ITER_SAFE | HASHTABLE_ITER_PREFETCH_VALUES);
 
         /* hash the DB id, so the same dataset moved in a different DB will lead to a different digest */
         aux = htonl(j);
@@ -684,12 +684,16 @@ void debugCommand(client *c) {
         if (val->type != OBJ_STRING || !sdsEncodedObject(val)) {
             addReplyError(c, "Not an sds encoded string.");
         } else {
+            /* Report the complete robj allocation size as the key's allocation
+             * size. Report 0 as allocation size for embedded values. */
+            size_t obj_alloc = zmalloc_usable_size(val);
+            size_t val_alloc = val->encoding == OBJ_ENCODING_RAW ? sdsAllocSize(val->ptr) : 0;
             addReplyStatusFormat(c,
-                                 "key_sds_len:%lld, key_sds_avail:%lld, key_zmalloc: %lld, "
-                                 "val_sds_len:%lld, val_sds_avail:%lld, val_zmalloc: %lld",
-                                 (long long)sdslen(key), (long long)sdsavail(key), (long long)sdsAllocSize(key),
+                                 "key_sds_len:%lld key_sds_avail:%lld obj_alloc:%lld "
+                                 "val_sds_len:%lld val_sds_avail:%lld val_alloc:%lld",
+                                 (long long)sdslen(key), (long long)sdsavail(key), (long long)obj_alloc,
                                  (long long)sdslen(val->ptr), (long long)sdsavail(val->ptr),
-                                 (long long)getStringObjectSdsUsedMemory(val));
+                                 (long long)val_alloc);
         }
     } else if (!strcasecmp(c->argv[1]->ptr, "listpack") && c->argc == 3) {
         robj *o;

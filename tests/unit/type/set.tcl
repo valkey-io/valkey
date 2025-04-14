@@ -1169,7 +1169,7 @@ foreach type {single multiple single_multiple} {
 }
 
 run_solo {set-large-memory} {
-start_server [list overrides [list save ""] ] {
+start_server [list overrides [list save ""] tags {"large-memory"}] {
 
 # test if the server supports such large configs (avoid 32 bit builds)
 catch {

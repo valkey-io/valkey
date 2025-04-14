@@ -26,12 +26,16 @@
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  * POSSIBILITY OF SUCH DAMAGE.
  */
-
+/*
+ * Copyright (c) Valkey Contributors
+ * All rights reserved.
+ * SPDX-License-Identifier: BSD-3-Clause
+ */
 #include "server.h"
 #include "monotonic.h"
 #include "cluster.h"
 #include "cluster_slot_stats.h"
-#include "slowlog.h"
+#include "commandlog.h"
 #include "bio.h"
 #include "latency.h"
 #include "mt19937-64.h"
@@ -44,6 +48,9 @@
 #include "sds.h"
 #include "module.h"
 #include "scripting_engine.h"
+#include "lua/engine_lua.h"
+#include "lua/debug_lua.h"
+#include "eval.h"
 
 #include <time.h>
 #include <signal.h>
@@ -389,10 +396,6 @@ int hashtableSdsKeyCompare(const void *key1, const void *key2) {
     return sdslen(sds1) != sdslen(sds2) || sdscmp(sds1, sds2);
 }
 
-size_t dictSdsEmbedKey(unsigned char *buf, size_t buf_len, const void *key, uint8_t *key_offset) {
-    return sdscopytobuffer(buf, buf_len, (sds)key, key_offset);
-}
-
 /* A case insensitive version used for the command lookup table and other
  * places where case insensitive non binary-safe comparison is needed. */
 int dictSdsKeyCaseCompare(const void *key1, const void *key2) {
@@ -519,7 +522,12 @@ int hashtableResizeAllowed(size_t moreMem, double usedRatio) {
     return !overMaxmemoryAfterAlloc(moreMem);
 }
 
-const void *hashtableCommandGetKey(const void *element) {
+const void *hashtableCommandGetCurrentName(const void *element) {
+    struct serverCommand *command = (struct serverCommand *)element;
+    return command->current_name;
+}
+
+const void *hashtableCommandGetOriginalName(const void *element) {
     struct serverCommand *command = (struct serverCommand *)element;
     return command->fullname;
 }
@@ -577,6 +585,15 @@ const void *hashtableObjectGetKey(const void *entry) {
     return objectGetKey(entry);
 }
 
+/* Prefetch the value if it's not embedded. */
+void hashtableObjectPrefetchValue(const void *entry) {
+    const robj *obj = entry;
+    if (obj->encoding != OBJ_ENCODING_EMBSTR &&
+        obj->encoding != OBJ_ENCODING_INT) {
+        valkey_prefetch(obj->ptr);
+    }
+}
+
 int hashtableObjKeyCompare(const void *key1, const void *key2) {
     const robj *o1 = key1, *o2 = key2;
     return hashtableSdsKeyCompare(o1->ptr, o2->ptr);
@@ -589,6 +606,7 @@ void hashtableObjectDestructor(void *val) {
 
 /* Kvstore->keys, keys are sds strings, vals are Objects. */
 hashtableType kvstoreKeysHashtableType = {
+    .entryPrefetchValue = hashtableObjectPrefetchValue,
     .entryGetKey = hashtableObjectGetKey,
     .hashFunction = hashtableSdsHash,
     .keyCompare = hashtableSdsKeyCompare,
@@ -602,6 +620,7 @@ hashtableType kvstoreKeysHashtableType = {
 
 /* Kvstore->expires */
 hashtableType kvstoreExpiresHashtableType = {
+    .entryPrefetchValue = hashtableObjectPrefetchValue,
     .entryGetKey = hashtableObjectGetKey,
     .hashFunction = hashtableSdsHash,
     .keyCompare = hashtableSdsKeyCompare,
@@ -613,11 +632,17 @@ hashtableType kvstoreExpiresHashtableType = {
     .getMetadataSize = kvstoreHashtableMetadataSize,
 };
 
-/* Command set, hashed by sds string, stores serverCommand structs. */
-hashtableType commandSetType = {.entryGetKey = hashtableCommandGetKey,
+/* Command set, hashed by current command name, stores serverCommand structs. */
+hashtableType commandSetType = {.entryGetKey = hashtableCommandGetCurrentName,
                                 .hashFunction = dictSdsCaseHash,
                                 .keyCompare = hashtableStringKeyCaseCompare,
                                 .instant_rehashing = 1};
+
+/* Command set, hashed by original command name, stores serverCommand structs. */
+hashtableType originalCommandSetType = {.entryGetKey = hashtableCommandGetOriginalName,
+                                        .hashFunction = dictSdsCaseHash,
+                                        .keyCompare = hashtableStringKeyCaseCompare,
+                                        .instant_rehashing = 1};
 
 /* Sub-command set, hashed by char* string, stores serverCommand structs. */
 hashtableType subcommandSetType = {.entryGetKey = hashtableSubcommandGetKey,
@@ -641,26 +666,6 @@ hashtableType hashHashtableType = {
     .entryGetKey = hashHashtableTypeGetKey,
     .keyCompare = hashtableSdsKeyCompare,
     .entryDestructor = hashHashtableTypeDestructor,
-};
-
-/* Hash type hash table (note that small hashes are represented with listpacks) */
-dictType hashDictType = {
-    dictSdsHash,       /* hash function */
-    NULL,              /* key dup */
-    dictSdsKeyCompare, /* key compare */
-    dictSdsDestructor, /* key destructor */
-    dictSdsDestructor, /* val destructor */
-    NULL,              /* allow to expand */
-};
-
-/* Dict type without destructor */
-dictType sdsReplyDictType = {
-    dictSdsHash,       /* hash function */
-    NULL,              /* key dup */
-    dictSdsKeyCompare, /* key compare */
-    NULL,              /* key destructor */
-    NULL,              /* val destructor */
-    NULL               /* allow to expand */
 };
 
 /* Hashtable type without destructor */
@@ -997,7 +1002,7 @@ int clientsCronResizeOutputBuffer(client *c, mstime_t now_ms) {
 size_t ClientsPeakMemInput[CLIENTS_PEAK_MEM_USAGE_SLOTS] = {0};
 size_t ClientsPeakMemOutput[CLIENTS_PEAK_MEM_USAGE_SLOTS] = {0};
 
-int clientsCronTrackExpansiveClients(client *c, int time_idx) {
+int clientsCronTrackExpensiveClients(client *c, int time_idx) {
     size_t qb_size = c->querybuf ? sdsAllocSize(c->querybuf) : 0;
     size_t argv_size = c->argv ? zmalloc_size(c->argv) : 0;
     size_t in_usage = qb_size + c->argv_len_sum + argv_size;
@@ -1119,8 +1124,8 @@ int updateClientMemUsageAndBucket(client *c) {
 }
 
 /* Return the max samples in the memory usage of clients tracked by
- * the function clientsCronTrackExpansiveClients(). */
-void getExpansiveClientsInfo(size_t *in_usage, size_t *out_usage) {
+ * the function clientsCronTrackExpensiveClients(). */
+void getExpensiveClientsInfo(size_t *in_usage, size_t *out_usage) {
     size_t i = 0, o = 0;
     for (int j = 0; j < CLIENTS_PEAK_MEM_USAGE_SLOTS; j++) {
         if (ClientsPeakMemInput[j] > i) i = ClientsPeakMemInput[j];
@@ -1130,37 +1135,25 @@ void getExpansiveClientsInfo(size_t *in_usage, size_t *out_usage) {
     *out_usage = o;
 }
 
-/* This function is called by serverCron() and is used in order to perform
+/* This function is called by clientsTimeProc() and is used in order to perform
  * operations on clients that are important to perform constantly. For instance
  * we use this function in order to disconnect clients after a timeout, including
  * clients blocked in some blocking command with a non-zero timeout.
  *
  * The function makes some effort to process all the clients every second, even
- * if this cannot be strictly guaranteed, since serverCron() may be called with
- * an actual frequency lower than server.hz in case of latency events like slow
+ * if this cannot be strictly guaranteed, since clientsTimeProc() may be called with
+ * an actual frequency lower than the intended rate in case of latency events like slow
  * commands.
  *
  * It is very important for this function, and the functions it calls, to be
- * very fast: sometimes the server has tens of hundreds of connected clients, and the
- * default server.hz value is 10, so sometimes here we need to process thousands
- * of clients per second, turning this function into a source of latency.
+ * very fast. Sometimes the server has tens of thousands of connected clients, and all
+ * of them need to be processed every second.
  */
-#define CLIENTS_CRON_MIN_ITERATIONS 5
-void clientsCron(void) {
-    /* Try to process at least numclients/server.hz of clients
-     * per call. Since normally (if there are no big latency events) this
-     * function is called server.hz times per second, in the average case we
-     * process all the clients in 1 second. */
-    int numclients = listLength(server.clients);
-    int iterations = numclients / server.hz;
+static void clientsCron(int clients_this_cycle) {
+    /* for debug purposes: skip actual cron work if pause_cron is on */
+    if (server.pause_cron) return;
+
     mstime_t now = mstime();
-
-    /* Process at least a few clients while we are at it, even if we need
-     * to process less than CLIENTS_CRON_MIN_ITERATIONS to meet our contract
-     * of processing each client once per second. */
-    if (iterations < CLIENTS_CRON_MIN_ITERATIONS)
-        iterations = (numclients < CLIENTS_CRON_MIN_ITERATIONS) ? numclients : CLIENTS_CRON_MIN_ITERATIONS;
-
 
     int curr_peak_mem_usage_slot = server.unixtime % CLIENTS_PEAK_MEM_USAGE_SLOTS;
     /* Always zero the next sample, so that when we switch to that second, we'll
@@ -1172,14 +1165,13 @@ void clientsCron(void) {
      * some slow command is called taking multiple seconds to execute. In that
      * case our array may end containing data which is potentially older
      * than CLIENTS_PEAK_MEM_USAGE_SLOTS seconds: however this is not a problem
-     * since here we want just to track if "recently" there were very expansive
+     * since here we want just to track if "recently" there were very expensive
      * clients from the POV of memory usage. */
     int zeroidx = (curr_peak_mem_usage_slot + 1) % CLIENTS_PEAK_MEM_USAGE_SLOTS;
     ClientsPeakMemInput[zeroidx] = 0;
     ClientsPeakMemOutput[zeroidx] = 0;
 
-
-    while (listLength(server.clients) && iterations--) {
+    while (listLength(server.clients) && clients_this_cycle--) {
         client *c;
         listNode *head;
 
@@ -1189,14 +1181,14 @@ void clientsCron(void) {
         c = listNodeValue(head);
         listRotateHeadToTail(server.clients);
         if (c->io_read_state != CLIENT_IDLE || c->io_write_state != CLIENT_IDLE) continue;
+
         /* The following functions do different service checks on the client.
          * The protocol is that they return non-zero if the client was
          * terminated. */
         if (clientsCronHandleTimeout(c, now)) continue;
         if (clientsCronResizeQueryBuffer(c)) continue;
         if (clientsCronResizeOutputBuffer(c, now)) continue;
-
-        if (clientsCronTrackExpansiveClients(c, curr_peak_mem_usage_slot)) continue;
+        if (clientsCronTrackExpensiveClients(c, curr_peak_mem_usage_slot)) continue;
 
         /* Iterating all the clients in getMemoryOverheadData() is too slow and
          * in turn would make the INFO command too slow. So we perform this
@@ -1208,6 +1200,49 @@ void clientsCron(void) {
 
         if (closeClientOnOutputBufferLimitReached(c, 0)) continue;
     }
+}
+
+/* A periodic timer that performs client maintenance.
+ * This cron task follows the following rules:
+ *  - To manage latency, we don't check more than MAX_CLIENTS_PER_CLOCK_TICK at a time
+ *  - The minimum rate will be defined by server.hz
+ *  - The maximum rate will be defined by CONFIG_MAX_HZ
+ *  - At least CLIENTS_CRON_MIN_ITERATIONS will be performed each cycle
+ *  - All clients need to be checked (at least) once per second (if possible given other constraints)
+ */
+long long clientsTimeProc(struct aeEventLoop *eventLoop, long long id, void *clientData) {
+    UNUSED(eventLoop);
+    UNUSED(id);
+    UNUSED(clientData);
+
+    const int MIN_CLIENTS_PER_CYCLE = 5;
+    const int MAX_CLIENTS_PER_CYCLE = 200;
+
+    monotime start_time;
+    elapsedStart(&start_time);
+
+    int numclients = listLength(server.clients);
+    int clients_this_cycle = numclients / server.hz; /* Initial computation based on standard hz */
+    int delay_ms;
+
+    if (clients_this_cycle < MIN_CLIENTS_PER_CYCLE) {
+        clients_this_cycle = min(numclients, MIN_CLIENTS_PER_CYCLE);
+    }
+
+    if (clients_this_cycle > MAX_CLIENTS_PER_CYCLE) {
+        clients_this_cycle = MAX_CLIENTS_PER_CYCLE;
+        float required_hz = (float)numclients / MAX_CLIENTS_PER_CYCLE;
+        if (required_hz > CONFIG_MAX_HZ) required_hz = CONFIG_MAX_HZ;
+        delay_ms = 1000.0 / required_hz;
+    } else {
+        delay_ms = 1000 / server.hz;
+    }
+
+    clientsCron(clients_this_cycle);
+
+    server.clients_hz = 1000 / delay_ms;
+    server.el_cron_duration += elapsedUs(start_time);
+    return delay_ms;
 }
 
 /* This function handles 'background' operations we are required to do
@@ -1366,6 +1401,12 @@ void checkChildrenDone(void) {
     }
 }
 
+static void sumEngineUsedMemory(scriptingEngine *engine, void *context) {
+    size_t *total_memory = (size_t *)context;
+    engineMemoryInfo mem_info = scriptingEngineCallGetMemoryInfo(engine, VMSE_ALL);
+    *total_memory += mem_info.used_memory;
+}
+
 /* Called from serverCron and cronUpdateMemoryStats to update cached memory metrics. */
 void cronUpdateMemoryStats(void) {
     /* Record the max memory used since the server was started. */
@@ -1391,8 +1432,9 @@ void cronUpdateMemoryStats(void) {
             /* LUA memory isn't part of zmalloc_used, but it is part of the process RSS,
              * so we must deduct it in order to be able to calculate correct
              * "allocator fragmentation" ratio */
-            size_t lua_memory = evalMemory();
-            server.cron_malloc_stats.allocator_resident = server.cron_malloc_stats.process_rss - lua_memory;
+            size_t engines_memory = 0;
+            scriptingEngineManagerForEachEngine(sumEngineUsedMemory, &engines_memory);
+            server.cron_malloc_stats.allocator_resident = server.cron_malloc_stats.process_rss - engines_memory;
         }
         if (!server.cron_malloc_stats.allocator_active)
             server.cron_malloc_stats.allocator_active = server.cron_malloc_stats.allocator_resident;
@@ -1429,19 +1471,6 @@ long long serverCron(struct aeEventLoop *eventLoop, long long id, void *clientDa
     /* Software watchdog: deliver the SIGALRM that will reach the signal
      * handler if we don't return here fast enough. */
     if (server.watchdog_period) watchdogScheduleSignal(server.watchdog_period);
-
-    server.hz = server.config_hz;
-    /* Adapt the server.hz value to the number of configured clients. If we have
-     * many clients, we want to call serverCron() with an higher frequency. */
-    if (server.dynamic_hz) {
-        while (listLength(server.clients) / server.hz > MAX_CLIENTS_PER_CLOCK_TICK) {
-            server.hz *= 2;
-            if (server.hz > CONFIG_MAX_HZ) {
-                server.hz = CONFIG_MAX_HZ;
-                break;
-            }
-        }
-    }
 
     /* for debug purposes: skip actual cron work if pause_cron is on */
     if (server.pause_cron) return 1000 / server.hz;
@@ -1509,7 +1538,7 @@ long long serverCron(struct aeEventLoop *eventLoop, long long id, void *clientDa
             for (j = 0; j < server.dbnum; j++) {
                 long long size, used, vkeys;
 
-                size = kvstoreBuckets(server.db[j].keys);
+                size = kvstoreBuckets(server.db[j].keys) * hashtableEntriesPerBucket();
                 used = kvstoreSize(server.db[j].keys);
                 vkeys = kvstoreSize(server.db[j].expires);
                 if (used || vkeys) {
@@ -1531,9 +1560,6 @@ long long serverCron(struct aeEventLoop *eventLoop, long long id, void *clientDa
                       zmalloc_used, hmem);
         }
     }
-
-    /* We need to do a few operations on clients asynchronously. */
-    clientsCron();
 
     /* Handle background operations on databases. */
     databasesCron();
@@ -1659,7 +1685,7 @@ long long serverCron(struct aeEventLoop *eventLoop, long long id, void *clientDa
 
     server.cronloops++;
 
-    server.el_cron_duration = getMonotonicUs() - cron_start;
+    server.el_cron_duration += elapsedUs(cron_start);
 
     return 1000 / server.hz;
 }
@@ -2273,7 +2299,7 @@ void initServerConfig(void) {
      * initial configuration, since command names may be changed via
      * valkey.conf using the rename-command directive. */
     server.commands = hashtableCreate(&commandSetType);
-    server.orig_commands = hashtableCreate(&commandSetType);
+    server.orig_commands = hashtableCreate(&originalCommandSetType);
     populateCommandTable();
 
     /* Debugging */
@@ -2727,7 +2753,6 @@ void initServer(void) {
     /* Initialization after setting defaults from the config system. */
     server.aof_state = server.aof_enabled ? AOF_ON : AOF_OFF;
     server.fsynced_reploff = server.aof_enabled ? 0 : -1;
-    server.hz = server.config_hz;
     server.in_fork_child = CHILD_TYPE_NONE;
     server.rdb_pipe_read = -1;
     server.rdb_child_exit_pipe = -1;
@@ -2873,10 +2898,15 @@ void initServer(void) {
     server.acl_info.invalid_channel_accesses = 0;
 
     /* Create the timer callback, this is our way to process many background
-     * operations incrementally, like clients timeout, eviction of unaccessed
-     * expired keys and so forth. */
+     * operations incrementally, like eviction of unaccessed expired keys, etc. */
     if (aeCreateTimeEvent(server.el, 1, serverCron, NULL, NULL) == AE_ERR) {
-        serverPanic("Can't create event loop timers.");
+        serverPanic("Can't create serverCron timer.");
+        exit(1);
+    }
+    /* A separate timer for client maintenance.  Runs at a variable speed depending
+     * on the client count. */
+    if (aeCreateTimeEvent(server.el, 1, clientsTimeProc, NULL, NULL) == AE_ERR) {
+        serverPanic("Can't create event clientsTimeProc timer.");
         exit(1);
     }
 
@@ -2906,13 +2936,25 @@ void initServer(void) {
         serverPanic("Scripting engine manager initialization failed, check the server logs.");
     }
 
+    /* Since we initialized the scripting engine manager, we need to ensure that
+     * commands with `CMD_NOSCRIPT` flag are not allowed to run in scripts. */
+    server.script_disable_deny_script = 0;
+
     /* Initialize the LUA scripting engine. */
-    scriptingInit(1);
+    if (luaEngineInitEngine() != C_OK) {
+        serverPanic("Lua engine initialization failed, check the server logs.");
+        exit(1);
+    }
+
     /* Initialize the functions engine based off of LUA initialization. */
     if (functionsInit() == C_ERR) {
         serverPanic("Functions initialization failed, check the server logs.");
     }
-    slowlogInit();
+
+    /* Initialize the EVAL scripting component. */
+    evalInit();
+
+    commandlogInit();
     latencyMonitorInit();
     initSharedQueryBuf();
 
@@ -3198,6 +3240,7 @@ void populateCommandTable(void) {
         int retval1, retval2;
 
         c->fullname = sdsnew(c->declared_name);
+        c->current_name = c->fullname;
         if (populateCommandStructure(c) == C_ERR) continue;
 
         retval1 = hashtableAdd(server.commands, c);
@@ -3211,7 +3254,7 @@ void populateCommandTable(void) {
 void resetCommandTableStats(hashtable *commands) {
     hashtableIterator iter;
     void *next;
-    hashtableInitSafeIterator(&iter, commands);
+    hashtableInitIterator(&iter, commands, HASHTABLE_ITER_SAFE);
     while (hashtableNext(&iter, &next)) {
         struct serverCommand *c = next;
         c->microseconds = 0;
@@ -3496,25 +3539,6 @@ void preventCommandReplication(client *c) {
     c->flag.prevent_repl_prop = 1;
 }
 
-/* Log the last command a client executed into the slowlog. */
-void slowlogPushCurrentCommand(client *c, struct serverCommand *cmd, ustime_t duration) {
-    /* Some commands may contain sensitive data that should not be available in the slowlog. */
-    if (cmd->flags & CMD_SKIP_SLOWLOG) return;
-
-    /* If command argument vector was rewritten, use the original
-     * arguments. */
-    robj **argv = c->original_argv ? c->original_argv : c->argv;
-    int argc = c->original_argv ? c->original_argc : c->argc;
-
-    /* If a script is currently running, the client passed in is a
-     * fake client. Or the client passed in is the original client
-     * if this is a EVAL or alike, doesn't matter. In this case,
-     * use the original client to get the client information. */
-    c = scriptIsRunning() ? scriptGetCaller() : c;
-
-    slowlogPushEntryIfNeeded(c, argv, argc, duration);
-}
-
 /* This function is called in order to update the total command histogram duration.
  * The latency unit is nano-seconds.
  * If needed it will allocate the histogram memory and trim the duration to the upper/lower tracking limits*/
@@ -3668,7 +3692,7 @@ void call(client *c, int flags) {
     server.executing_client = c;
 
     /* When call() is issued during loading the AOF we don't want commands called
-     * from module, exec or LUA to go into the slowlog or to populate statistics. */
+     * from module, exec or LUA to go into the commandlog or to populate statistics. */
     int update_command_stats = !isAOFLoadingContext();
 
     /* We want to be aware of a client which is making a first time attempt to execute this command
@@ -3765,9 +3789,9 @@ void call(client *c, int flags) {
         if (server.execution_nesting == 0) durationAddSample(EL_DURATION_TYPE_CMD, duration);
     }
 
-    /* Log the command into the Slow log if needed.
-     * If the client is blocked we will handle slowlog when it is unblocked. */
-    if (update_command_stats && !c->flag.blocked) slowlogPushCurrentCommand(c, real_cmd, c->duration);
+    /* Log the command into the commandlog if needed.
+     * If the client is blocked we will handle commandlog when it is unblocked. */
+    if (update_command_stats && !c->flag.blocked) commandlogPushCurrentCommand(c, real_cmd);
 
     /* Send the command to clients in MONITOR mode if applicable,
      * since some administrative commands are considered too dangerous to be shown.
@@ -3939,7 +3963,7 @@ void afterCommand(client *c) {
 int commandCheckExistence(client *c, sds *err) {
     if (c->cmd) return 1;
     if (!err) return 0;
-    if (isContainerCommandBySds(c->argv[0]->ptr)) {
+    if (isContainerCommandBySds(c->argv[0]->ptr) && c->argc >= 2) {
         /* If we can't find the command but argv[0] by itself is a command
          * it means we're dealing with an invalid subcommand. Print Help. */
         sds cmd = sdsnew((char *)c->argv[0]->ptr);
@@ -4052,7 +4076,6 @@ int processCommand(client *c) {
             rejectCommandSds(c, err);
             return C_OK;
         }
-
 
         /* Check if the command is marked as protected and the relevant configuration allows it */
         if (c->cmd->flags & CMD_PROTECTED) {
@@ -4609,15 +4632,15 @@ int finishShutdown(void) {
         unlink(server.pidfile);
     }
 
+    /* Handle cluster-related matters when shutdown. */
+    if (server.cluster_enabled) clusterHandleServerShutdown();
+
     /* Best effort flush of replica output buffers, so that we hopefully
      * send them pending writes. */
     flushReplicasOutputBuffers();
 
     /* Close the listening sockets. Apparently this allows faster restarts. */
     closeListeningSockets(1);
-
-    /* Handle cluster-related matters when shutdown. */
-    if (server.cluster_enabled) clusterHandleServerShutdown();
 
     serverLog(LL_WARNING, "%s is now ready to exit, bye bye...", server.sentinel_mode ? "Sentinel" : "Valkey");
     return C_OK;
@@ -4738,7 +4761,7 @@ void addReplyFlagsForCommand(client *c, struct serverCommand *cmd) {
                                   {CMD_LOADING, "loading"},
                                   {CMD_STALE, "stale"},
                                   {CMD_SKIP_MONITOR, "skip_monitor"},
-                                  {CMD_SKIP_SLOWLOG, "skip_slowlog"},
+                                  {CMD_SKIP_COMMANDLOG, "skip_commandlog"},
                                   {CMD_ASKING, "asking"},
                                   {CMD_FAST, "fast"},
                                   {CMD_NO_AUTH, "no_auth"},
@@ -5012,7 +5035,7 @@ void addReplyCommandSubCommands(client *c,
 
     void *next;
     hashtableIterator iter;
-    hashtableInitSafeIterator(&iter, cmd->subcommands_ht);
+    hashtableInitIterator(&iter, cmd->subcommands_ht, HASHTABLE_ITER_SAFE);
     while (hashtableNext(&iter, &next)) {
         struct serverCommand *sub = next;
         if (use_map) addReplyBulkCBuffer(c, sub->fullname, sdslen(sub->fullname));
@@ -5174,7 +5197,7 @@ void commandCommand(client *c) {
     hashtableIterator iter;
     void *next;
     addReplyArrayLen(c, hashtableSize(server.commands));
-    hashtableInitIterator(&iter, server.commands);
+    hashtableInitIterator(&iter, server.commands, 0);
     while (hashtableNext(&iter, &next)) {
         struct serverCommand *cmd = next;
         addReplyCommandInfo(c, cmd);
@@ -5233,7 +5256,7 @@ int shouldFilterFromCommandList(struct serverCommand *cmd, commandListFilter *fi
 void commandListWithFilter(client *c, hashtable *commands, commandListFilter filter, int *numcmds) {
     hashtableIterator iter;
     void *next;
-    hashtableInitIterator(&iter, commands);
+    hashtableInitIterator(&iter, commands, 0);
     while (hashtableNext(&iter, &next)) {
         struct serverCommand *cmd = next;
         if (!shouldFilterFromCommandList(cmd, &filter)) {
@@ -5252,7 +5275,7 @@ void commandListWithFilter(client *c, hashtable *commands, commandListFilter fil
 void commandListWithoutFilter(client *c, hashtable *commands, int *numcmds) {
     hashtableIterator iter;
     void *next;
-    hashtableInitIterator(&iter, commands);
+    hashtableInitIterator(&iter, commands, 0);
     while (hashtableNext(&iter, &next)) {
         struct serverCommand *cmd = next;
         addReplyBulkCBuffer(c, cmd->fullname, sdslen(cmd->fullname));
@@ -5314,7 +5337,7 @@ void commandInfoCommand(client *c) {
         hashtableIterator iter;
         void *next;
         addReplyArrayLen(c, hashtableSize(server.commands));
-        hashtableInitIterator(&iter, server.commands);
+        hashtableInitIterator(&iter, server.commands, 0);
         while (hashtableNext(&iter, &next)) {
             struct serverCommand *cmd = next;
             addReplyCommandInfo(c, cmd);
@@ -5336,7 +5359,7 @@ void commandDocsCommand(client *c) {
         hashtableIterator iter;
         void *next;
         addReplyMapLen(c, hashtableSize(server.commands));
-        hashtableInitIterator(&iter, server.commands);
+        hashtableInitIterator(&iter, server.commands, 0);
         while (hashtableNext(&iter, &next)) {
             struct serverCommand *cmd = next;
             addReplyBulkCBuffer(c, cmd->fullname, sdslen(cmd->fullname));
@@ -5465,7 +5488,7 @@ const char *getSafeInfoString(const char *s, size_t len, char **tmp) {
 sds genValkeyInfoStringCommandStats(sds info, hashtable *commands) {
     hashtableIterator iter;
     void *next;
-    hashtableInitSafeIterator(&iter, commands);
+    hashtableInitIterator(&iter, commands, HASHTABLE_ITER_SAFE);
     while (hashtableNext(&iter, &next)) {
         struct serverCommand *c = next;
         char *tmpsafe;
@@ -5502,7 +5525,7 @@ sds genValkeyInfoStringACLStats(sds info) {
 sds genValkeyInfoStringLatencyStats(sds info, hashtable *commands) {
     hashtableIterator iter;
     void *next;
-    hashtableInitSafeIterator(&iter, commands);
+    hashtableInitIterator(&iter, commands, HASHTABLE_ITER_SAFE);
     while (hashtableNext(&iter, &next)) {
         struct serverCommand *c = next;
         char *tmpsafe;
@@ -5653,6 +5676,7 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                 "redis_version:%s\r\n", REDIS_VERSION,
                 "server_name:%s\r\n", SERVER_NAME,
                 "valkey_version:%s\r\n", VALKEY_VERSION,
+                "valkey_release_stage:%s\r\n", VALKEY_RELEASE_STAGE,
                 "redis_git_sha1:%s\r\n", serverGitSHA1(),
                 "redis_git_dirty:%i\r\n", strtol(serverGitDirty(), NULL, 10) > 0,
                 "redis_build_id:%s\r\n", serverBuildIdString(),
@@ -5673,7 +5697,8 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                 "uptime_in_seconds:%I\r\n", (int64_t)uptime,
                 "uptime_in_days:%I\r\n", (int64_t)(uptime / (3600 * 24)),
                 "hz:%i\r\n", server.hz,
-                "configured_hz:%i\r\n", server.config_hz,
+                "configured_hz:%i\r\n", server.hz,
+                "clients_hz:%i\r\n", server.clients_hz,
                 "lru_clock:%u\r\n", server.lruclock,
                 "executable:%s\r\n", server.executable ? server.executable : "",
                 "config_file:%s\r\n", server.configfile ? server.configfile : "",
@@ -5694,17 +5719,21 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
     if (all_sections || (dictFind(section_dict, "clients") != NULL)) {
         size_t maxin, maxout;
         unsigned long blocking_keys, blocking_keys_on_nokey, watched_keys;
-        getExpansiveClientsInfo(&maxin, &maxout);
+        getExpensiveClientsInfo(&maxin, &maxout);
         totalNumberOfStatefulKeys(&blocking_keys, &blocking_keys_on_nokey, &watched_keys);
 
+        pause_purpose purpose;
+        char *paused_reason = "none";
         char *paused_actions = "none";
         long long paused_timeout = 0;
         if (server.paused_actions & PAUSE_ACTION_CLIENT_ALL) {
             paused_actions = "all";
-            paused_timeout = getPausedActionTimeout(PAUSE_ACTION_CLIENT_ALL);
+            paused_timeout = getPausedActionTimeout(PAUSE_ACTION_CLIENT_ALL, &purpose);
+            paused_reason = getPausedReason(purpose);
         } else if (server.paused_actions & PAUSE_ACTION_CLIENT_WRITE) {
             paused_actions = "write";
-            paused_timeout = getPausedActionTimeout(PAUSE_ACTION_CLIENT_WRITE);
+            paused_timeout = getPausedActionTimeout(PAUSE_ACTION_CLIENT_WRITE, &purpose);
+            paused_reason = getPausedReason(purpose);
         }
 
         if (sections++) info = sdscat(info, "\r\n");
@@ -5724,6 +5753,7 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                 "total_watched_keys:%lu\r\n", watched_keys,
                 "total_blocking_keys:%lu\r\n", blocking_keys,
                 "total_blocking_keys_on_nokey:%lu\r\n", blocking_keys_on_nokey,
+                "paused_reason:%s\r\n", paused_reason,
                 "paused_actions:%s\r\n", paused_actions,
                 "paused_timeout_milliseconds:%lld\r\n", paused_timeout));
     }

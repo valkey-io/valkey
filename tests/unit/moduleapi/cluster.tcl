@@ -5,6 +5,36 @@ source tests/support/cli.tcl
 # cluster creation is complicated with TLS, and the current tests don't really need that coverage
 tags {tls:skip external:skip cluster modules} {
 
+set testmodule [file normalize tests/modules/cluster.so]
+set modules [list loadmodule $testmodule]
+start_cluster 3 0 [list config_lines $modules] {
+    set node1 [srv 0 client]
+    set node2 [srv -1 client]
+    set node3 [srv -2 client]
+
+    test "Cluster module send message API - VM_SendClusterMessage" {
+        assert_equal OK [$node1 test.pingall]
+        assert_equal 2 [CI 0 cluster_stats_messages_module_sent]
+        wait_for_condition 50 100 {
+            [CI 1 cluster_stats_messages_module_received] eq 1 &&
+            [CI 2 cluster_stats_messages_module_received] eq 1
+        } else {
+            fail "node 2 or node 3 didn't receive cluster module message"
+        }
+        verify_log_message -1 "*DING (type 1) RECEIVED*Hey*" 0
+        verify_log_message -2 "*DING (type 1) RECEIVED*Hey*" 0
+    }
+
+    test "Cluster module receive message API - VM_RegisterClusterMessageReceiver" {
+        wait_for_condition 50 100 {
+            [CI 0 cluster_stats_messages_module_received] eq 2
+        } else {
+            fail "node 1 didn't receive DONG messages"
+        }
+        assert_equal 2 [count_log_message 0 "* <cluster> DONG (type 2) RECEIVED*"]
+    }
+}
+
 set testmodule_nokey [file normalize tests/modules/blockonbackground.so]
 set testmodule_blockedclient [file normalize tests/modules/blockedclient.so]
 set testmodule [file normalize tests/modules/blockonkeys.so]

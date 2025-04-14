@@ -284,18 +284,11 @@ kvstore *kvstoreCreate(hashtableType *type, int num_hashtables_bits, int flags) 
     kvs->num_hashtables_bits = num_hashtables_bits;
     kvs->num_hashtables = 1 << kvs->num_hashtables_bits;
     kvs->hashtables = zcalloc(sizeof(hashtable *) * kvs->num_hashtables);
+    kvs->rehashing = listCreate();
+    kvs->hashtable_size_index = kvs->num_hashtables > 1 ? zcalloc(sizeof(unsigned long long) * (kvs->num_hashtables + 1)) : NULL;
     if (!(kvs->flags & KVSTORE_ALLOCATE_HASHTABLES_ON_DEMAND)) {
         for (int i = 0; i < kvs->num_hashtables; i++) createHashtableIfNeeded(kvs, i);
     }
-
-    kvs->rehashing = listCreate();
-    kvs->key_count = 0;
-    kvs->non_empty_hashtables = 0;
-    kvs->resize_cursor = 0;
-    kvs->hashtable_size_index = kvs->num_hashtables > 1 ? zcalloc(sizeof(unsigned long long) * (kvs->num_hashtables + 1)) : NULL;
-    kvs->bucket_count = 0;
-    kvs->overhead_hashtable_lut = 0;
-    kvs->overhead_hashtable_rehashing = 0;
 
     return kvs;
 }
@@ -469,7 +462,7 @@ void kvstoreGetStats(kvstore *kvs, char *buf, size_t bufsize, int full) {
     hashtableStats *mainHtStats = NULL;
     hashtableStats *rehashHtStats = NULL;
     hashtable *ht;
-    kvstoreIterator *kvs_it = kvstoreIteratorInit(kvs);
+    kvstoreIterator *kvs_it = kvstoreIteratorInit(kvs, HASHTABLE_ITER_SAFE);
     while ((ht = kvstoreIteratorNextHashtable(kvs_it))) {
         hashtableStats *stats = hashtableGetStatsHt(ht, 0, full);
         if (!mainHtStats) {
@@ -578,12 +571,12 @@ int kvstoreNumHashtables(kvstore *kvs) {
 /* Returns kvstore iterator that can be used to iterate through sub-hash tables.
  *
  * The caller should free the resulting kvs_it with kvstoreIteratorRelease. */
-kvstoreIterator *kvstoreIteratorInit(kvstore *kvs) {
-    return kvstoreFilteredIteratorInit(kvs, NULL, NULL);
+kvstoreIterator *kvstoreIteratorInit(kvstore *kvs, uint8_t flags) {
+    return kvstoreFilteredIteratorInit(kvs, flags, NULL, NULL);
 }
 
 /* Returns kvstore iterator that filters out hash tables based on the predicate.*/
-kvstoreIterator *kvstoreFilteredIteratorInit(kvstore *kvs, kvstoreIteratorPredicate *predicate, void *privdata) {
+kvstoreIterator *kvstoreFilteredIteratorInit(kvstore *kvs, uint8_t flags, kvstoreIteratorPredicate *predicate, void *privdata) {
     kvstoreIterator *kvs_it = zmalloc(sizeof(*kvs_it));
     kvs_it->kvs = kvs;
     kvs_it->didx = -1;
@@ -593,7 +586,7 @@ kvstoreIterator *kvstoreFilteredIteratorInit(kvstore *kvs, kvstoreIteratorPredic
     }
     kvs_it->predicate = predicate;
     kvs_it->predicate_privdata = privdata;
-    hashtableInitSafeIterator(&kvs_it->di, NULL);
+    hashtableInitIterator(&kvs_it->di, NULL, flags);
     return kvs_it;
 }
 
@@ -639,7 +632,7 @@ int kvstoreIteratorNext(kvstoreIterator *kvs_it, void **next) {
         /* No current hashtable or reached the end of the hash table. */
         hashtable *ht = kvstoreIteratorNextHashtable(kvs_it);
         if (!ht) return 0;
-        hashtableInitSafeIterator(&kvs_it->di, ht);
+        hashtableReinitIterator(&kvs_it->di, ht);
         return hashtableNext(&kvs_it->di, next);
     }
 }
@@ -705,23 +698,15 @@ unsigned long kvstoreHashtableSize(kvstore *kvs, int didx) {
     return hashtableSize(ht);
 }
 
-kvstoreHashtableIterator *kvstoreGetHashtableIterator(kvstore *kvs, int didx) {
+kvstoreHashtableIterator *kvstoreGetHashtableIterator(kvstore *kvs, int didx, uint8_t flags) {
     kvstoreHashtableIterator *kvs_di = zmalloc(sizeof(*kvs_di));
     kvs_di->kvs = kvs;
     kvs_di->didx = didx;
-    hashtableInitIterator(&kvs_di->di, kvstoreGetHashtable(kvs, didx));
+    hashtableInitIterator(&kvs_di->di, kvstoreGetHashtable(kvs, didx), flags);
     return kvs_di;
 }
 
-kvstoreHashtableIterator *kvstoreGetHashtableSafeIterator(kvstore *kvs, int didx) {
-    kvstoreHashtableIterator *kvs_di = zmalloc(sizeof(*kvs_di));
-    kvs_di->kvs = kvs;
-    kvs_di->didx = didx;
-    hashtableInitSafeIterator(&kvs_di->di, kvstoreGetHashtable(kvs, didx));
-    return kvs_di;
-}
-
-/* Free the kvs_di returned by kvstoreGetHashtableIterator and kvstoreGetHashtableSafeIterator. */
+/* Free the kvs_di returned by kvstoreGetHashtableIterator. */
 void kvstoreReleaseHashtableIterator(kvstoreHashtableIterator *kvs_di) {
     /* The hashtable may be deleted during the iteration process, so here need to check for NULL. */
     if (kvstoreGetHashtable(kvs_di->kvs, kvs_di->didx)) {

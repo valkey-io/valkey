@@ -26,6 +26,11 @@
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  * POSSIBILITY OF SUCH DAMAGE.
  */
+/*
+ * Copyright (c) Valkey Contributors
+ * All rights reserved.
+ * SPDX-License-Identifier: BSD-3-Clause
+ */
 
 /* --------------------------------------------------------------------------
  * Modules API documentation information
@@ -53,7 +58,7 @@
 
 #include "server.h"
 #include "cluster.h"
-#include "slowlog.h"
+#include "commandlog.h"
 #include "rdb.h"
 #include "monotonic.h"
 #include "script.h"
@@ -61,8 +66,8 @@
 #include "hdr_histogram.h"
 #include "crc16_slottable.h"
 #include "valkeymodule.h"
-#include "io_threads.h"
 #include "module.h"
+#include "io_threads.h"
 #include "scripting_engine.h"
 #include <dlfcn.h>
 #include <sys/stat.h>
@@ -1221,7 +1226,8 @@ int64_t commandFlagsFromString(char *s) {
         else if (!strcasecmp(t,"blocking")) flags |= CMD_BLOCKING;
         else if (!strcasecmp(t,"allow-stale")) flags |= CMD_STALE;
         else if (!strcasecmp(t,"no-monitor")) flags |= CMD_SKIP_MONITOR;
-        else if (!strcasecmp(t,"no-slowlog")) flags |= CMD_SKIP_SLOWLOG;
+        else if (!strcasecmp(t,"no-slowlog")) flags |= CMD_SKIP_COMMANDLOG;
+        else if (!strcasecmp(t,"no-commandlog")) flags |= CMD_SKIP_COMMANDLOG;
         else if (!strcasecmp(t,"fast")) flags |= CMD_FAST;
         else if (!strcasecmp(t,"no-auth")) flags |= CMD_NO_AUTH;
         else if (!strcasecmp(t,"may-replicate")) flags |= CMD_MAY_REPLICATE;
@@ -1296,7 +1302,8 @@ ValkeyModuleCommand *moduleCreateCommandProxy(struct ValkeyModule *module,
  *                      this means.
  * * **"no-monitor"**: Don't propagate the command on monitor. Use this if
  *                     the command has sensitive data among the arguments.
- * * **"no-slowlog"**: Don't log this command in the slowlog. Use this if
+ * * **"no-slowlog"**: Deprecated, please use "no-commandlog".
+ * * **"no-commandlog"**: Don't log this command in the commandlog. Use this if
  *                     the command has sensitive data among the arguments.
  * * **"fast"**:      The command time complexity is not greater
  *                    than O(log(N)) where N is the size of the collection or
@@ -1401,6 +1408,7 @@ ValkeyModuleCommand *moduleCreateCommandProxy(struct ValkeyModule *module,
     cp->serverCmd = zcalloc(sizeof(*serverCmd));
     cp->serverCmd->declared_name = declared_name; /* SDS for module commands */
     cp->serverCmd->fullname = fullname;
+    cp->serverCmd->current_name = fullname;
     cp->serverCmd->group = COMMAND_GROUP_MODULE;
     cp->serverCmd->proc = ValkeyModuleCommandDispatcher;
     cp->serverCmd->flags = flags | CMD_MODULE;
@@ -2563,7 +2571,16 @@ void VM_Yield(ValkeyModuleCtx *ctx, int flags, const char *busy_reply) {
  * By default, the server will not fire key-space notifications that happened inside
  * a key-space notification callback. This flag allows to change this behavior
  * and fire nested key-space notifications. Notice: if enabled, the module
- * should protected itself from infinite recursion. */
+ * should protected itself from infinite recursion.
+ *
+ * VALKEYMODULE_OPTIONS_SKIP_COMMAND_VALIDATION:
+ * When set, this option allows the module to skip command validation.
+ * This is useful in scenarios where the module needs to bypass
+ * command validation for specific operations
+ * to reduce overhead or handle trusted custom command logic.
+ * ValkeyModule_Replicate and ValkeyModule_EmitAOF
+ * are affected by this option, allowing them to operate without
+ * command validation check. */
 void VM_SetModuleOptions(ValkeyModuleCtx *ctx, int options) {
     ctx->module->options = options;
 }
@@ -3627,8 +3644,10 @@ int VM_Replicate(ValkeyModuleCtx *ctx, const char *cmdname, const char *fmt, ...
     int argc = 0, flags = 0, j;
     va_list ap;
 
-    cmd = lookupCommandByCString((char *)cmdname);
-    if (!cmd) return VALKEYMODULE_ERR;
+    if (!ctx->module || !(ctx->module->options & VALKEYMODULE_OPTIONS_SKIP_COMMAND_VALIDATION)) {
+        cmd = lookupCommandByCString((char *)cmdname);
+        if (!cmd) return VALKEYMODULE_ERR;
+    }
 
     /* Create the client and dispatch the command. */
     va_start(ap, fmt);
@@ -3717,6 +3736,16 @@ ValkeyModuleString *VM_GetClientUserNameById(ValkeyModuleCtx *ctx, uint64_t id) 
     robj *str = createObject(OBJ_STRING, name);
     autoMemoryAdd(ctx, VALKEYMODULE_AM_STRING, str);
     return str;
+}
+
+/* Returns 1 if commands are arriving from the primary client or AOF client
+ * and should never be rejected.
+ * This check can be used in places such as skipping validation of commands
+ * on replicas (to not diverge from primary) or from AOF files.
+ * Returns 0 otherwise (and also if ctx or if the client is NULL). */
+int VM_MustObeyClient(ValkeyModuleCtx *ctx) {
+    if (!ctx || !ctx->client) return 0;
+    return mustObeyClient(ctx->client);
 }
 
 /* This is a helper for VM_GetClientInfoById() and other functions: given
@@ -4170,7 +4199,7 @@ static void moduleCloseKey(ValkeyModuleKey *key) {
     decrRefCount(key->key);
 }
 
-/* Close a key handle. */
+/* Close a key handle. The key handle is freed and should not be accessed anymore. */
 void VM_CloseKey(ValkeyModuleKey *key) {
     if (key == NULL) return;
     moduleCloseKey(key);
@@ -7522,15 +7551,17 @@ void VM_EmitAOF(ValkeyModuleIO *io, const char *cmdname, const char *fmt, ...) {
     int argc = 0, flags = 0, j;
     va_list ap;
 
-    cmd = lookupCommandByCString((char *)cmdname);
-    if (!cmd) {
-        serverLog(LL_WARNING,
-                  "Fatal: AOF method for module data type '%s' tried to "
-                  "emit unknown command '%s'",
-                  io->type->name, cmdname);
-        io->error = 1;
-        errno = EINVAL;
-        return;
+    if (!io->ctx || !io->ctx->module || !(io->ctx->module->options & VALKEYMODULE_OPTIONS_SKIP_COMMAND_VALIDATION)) {
+        cmd = lookupCommandByCString((char *)cmdname);
+        if (!cmd) {
+            serverLog(LL_WARNING,
+                      "Fatal: AOF method for module data type '%s' tried to "
+                      "emit unknown command '%s'",
+                      io->type->name, cmdname);
+            io->error = 1;
+            errno = EINVAL;
+            return;
+        }
     }
 
     /* Emit the arguments into the AOF in RESP format. */
@@ -8937,7 +8968,13 @@ void moduleCallClusterReceivers(const char *sender_id,
  * was already a registered callback, this will replace the callback function
  * with the one provided, otherwise if the callback is set to NULL and there
  * is already a callback for this function, the callback is unregistered
- * (so this API call is also used in order to delete the receiver). */
+ * (so this API call is also used in order to delete the receiver).
+ *
+ * When a message of this type is received, the registered callback function
+ * will be invoked with details, including the 40-byte node ID of the sender.
+ *
+ * In Valkey 8.1 and later, the node ID is null-terminated. Prior to 8.1, it was
+ * not null-terminated */
 void VM_RegisterClusterMessageReceiver(ValkeyModuleCtx *ctx,
                                        uint8_t type,
                                        ValkeyModuleClusterMessageReceiver callback) {
@@ -8980,6 +9017,9 @@ void VM_RegisterClusterMessageReceiver(ValkeyModuleCtx *ctx,
 /* Send a message to all the nodes in the cluster if `target` is NULL, otherwise
  * at the specified target, which is a VALKEYMODULE_NODE_ID_LEN bytes node ID, as
  * returned by the receiver callback or by the nodes iteration functions.
+ *
+ * In Valkey 8.1 and later, the cluster protocol overhead for this message is
+ * ~30B, to compare with earlier versions where it's ~2KB.
  *
  * The function returns VALKEYMODULE_OK if the message was successfully sent,
  * otherwise if the node is not connected or such node ID does not map to any
@@ -9721,8 +9761,15 @@ ValkeyModuleString *VM_GetModuleUserACLString(ValkeyModuleUser *user) {
  * See more information in VM_GetModuleUserFromUserName.
  *
  * The returned string must be released with ValkeyModule_FreeString() or by
- * enabling automatic memory management. */
+ * enabling automatic memory management.
+ *
+ * If the context is not associated with a client connection, NULL is returned
+ * and errno is set to EINVAL. */
 ValkeyModuleString *VM_GetCurrentUserName(ValkeyModuleCtx *ctx) {
+    if (ctx == NULL || ctx->client == NULL || ctx->client->user == NULL || ctx->client->user->name == NULL) {
+        errno = EINVAL;
+        return NULL;
+    }
     return VM_CreateString(ctx, ctx->client->user->name, sdslen(ctx->client->user->name));
 }
 
@@ -12162,7 +12209,7 @@ int moduleFreeCommand(struct ValkeyModule *module, struct serverCommand *cmd) {
     if (cmd->subcommands_ht) {
         hashtableIterator iter;
         void *next;
-        hashtableInitSafeIterator(&iter, cmd->subcommands_ht);
+        hashtableInitIterator(&iter, cmd->subcommands_ht, HASHTABLE_ITER_SAFE);
         while (hashtableNext(&iter, &next)) {
             struct serverCommand *sub = next;
             if (moduleFreeCommand(module, sub) != C_OK) continue;
@@ -12185,7 +12232,7 @@ void moduleUnregisterCommands(struct ValkeyModule *module) {
     /* Unregister all the commands registered by this module. */
     hashtableIterator iter;
     void *next;
-    hashtableInitSafeIterator(&iter, server.commands);
+    hashtableInitIterator(&iter, server.commands, HASHTABLE_ITER_SAFE);
     while (hashtableNext(&iter, &next)) {
         struct serverCommand *cmd = next;
         if (moduleFreeCommand(module, cmd) != C_OK) continue;
@@ -12268,7 +12315,18 @@ int moduleLoad(const char *path, void **module_argv, int module_argc, int is_loa
         }
     }
 
-    handle = dlopen(path, RTLD_NOW | RTLD_LOCAL);
+    int dlopen_flags = RTLD_NOW | RTLD_LOCAL;
+#if (defined(__GLIBC__) || defined(__FreeBSD__)) && !defined(VALKEY_ADDRESS_SANITIZER) && __has_include(<dlfcn.h>)
+    /* RTLD_DEEPBIND, which is required for loading modules that contains the
+     * same symbols, does not work with ASAN. Therefore, we exclude
+     * RTLD_DEEPBIND when doing test builds with ASAN.
+     * See https://github.com/google/sanitizers/issues/611 for more details.
+     *
+     * This flag is also currently only available in Linux and FreeBSD. */
+    dlopen_flags |= RTLD_DEEPBIND;
+#endif
+
+    handle = dlopen(path, dlopen_flags);
     if (handle == NULL) {
         serverLog(LL_WARNING, "Module %s failed to load: %s", path, dlerror());
         return C_ERR;
@@ -13190,6 +13248,21 @@ int VM_UnregisterScriptingEngine(ValkeyModuleCtx *ctx, const char *engine_name) 
     return VALKEYMODULE_OK;
 }
 
+/* Returns the state of the current function being executed by the scripting
+ * engine.
+ *
+ * `server_ctx` is the server runtime context.
+ *
+ * It will return VMSE_STATE_KILLED if the function was already killed either by
+ * a `SCRIPT KILL`, or `FUNCTION KILL`.
+ */
+ValkeyModuleScriptingEngineExecutionState VM_GetFunctionExecutionState(
+    ValkeyModuleScriptingEngineServerRuntimeCtx *server_ctx) {
+    int ret = scriptInterrupt(server_ctx);
+    serverAssert(ret == SCRIPT_CONTINUE || ret == SCRIPT_KILL);
+    return ret == SCRIPT_CONTINUE ? VMSE_STATE_EXECUTING : VMSE_STATE_KILLED;
+}
+
 /* MODULE command.
  *
  * MODULE LIST
@@ -13839,6 +13912,7 @@ void moduleRegisterCoreAPI(void) {
     REGISTER_API(ChannelAtPosWithFlags);
     REGISTER_API(GetClientId);
     REGISTER_API(GetClientUserNameById);
+    REGISTER_API(MustObeyClient);
     REGISTER_API(GetContextFlags);
     REGISTER_API(AvoidReplicaTraffic);
     REGISTER_API(PoolAlloc);
@@ -14062,4 +14136,5 @@ void moduleRegisterCoreAPI(void) {
     REGISTER_API(RdbSave);
     REGISTER_API(RegisterScriptingEngine);
     REGISTER_API(UnregisterScriptingEngine);
+    REGISTER_API(GetFunctionExecutionState);
 }

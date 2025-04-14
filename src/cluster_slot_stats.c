@@ -1,9 +1,8 @@
 /*
- * Copyright Valkey Contributors.
+ * Copyright (c) Valkey Contributors
  * All rights reserved.
- * SPDX-License-Identifier: BSD 3-Clause
+ * SPDX-License-Identifier: BSD-3-Clause
  */
-
 #include "cluster_slot_stats.h"
 
 #define UNASSIGNED_SLOT 0

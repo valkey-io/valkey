@@ -121,6 +121,9 @@ typedef struct ConnectionType {
 
     /* TLS specified methods */
     sds (*get_peer_cert)(struct connection *conn);
+
+    /* Miscellaneous */
+    int (*connIntegrityChecked)(void); // return 1 if connection type has built-in integrity checks
 } ConnectionType;
 
 struct connection {
@@ -377,8 +380,6 @@ static inline const char *connGetInfo(connection *conn, char *buf, size_t buf_le
 /* anet-style wrappers to conns */
 int connBlock(connection *conn);
 int connNonBlock(connection *conn);
-int connEnableTcpNoDelay(connection *conn);
-int connDisableTcpNoDelay(connection *conn);
 int connKeepAlive(connection *conn, int interval);
 int connSendTimeout(connection *conn, long long ms);
 int connRecvTimeout(connection *conn, long long ms);
@@ -481,6 +482,10 @@ static inline void connSetPostponeUpdateState(connection *conn, int on) {
     if (conn->type->postpone_update_state) {
         conn->type->postpone_update_state(conn, on);
     }
+}
+
+static inline int connIsIntegrityChecked(connection *conn) {
+    return conn->type->connIntegrityChecked && conn->type->connIntegrityChecked();
 }
 
 #endif /* __REDIS_CONNECTION_H */

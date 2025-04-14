@@ -26,7 +26,11 @@
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  * POSSIBILITY OF SUCH DAMAGE.
  */
-
+/*
+ * Copyright (c) Valkey Contributors
+ * All rights reserved.
+ * SPDX-License-Identifier: BSD-3-Clause
+ */
 /*
  * cluster.c contains the common parts of a clustering
  * implementation, the parts that are shared between
@@ -162,7 +166,10 @@ int verifyDumpPayload(unsigned char *p, size_t len, uint16_t *rdbver_ptr) {
     if (rdbver_ptr) {
         *rdbver_ptr = rdbver;
     }
-    if (rdbver > RDB_VERSION) return C_ERR;
+    if ((rdbver >= RDB_FOREIGN_VERSION_MIN && rdbver <= RDB_FOREIGN_VERSION_MAX) ||
+        (rdbver > RDB_VERSION && server.rdb_version_check == RDB_VERSION_CHECK_STRICT)) {
+        return C_ERR;
+    }
 
     if (server.skip_checksum_validation) return C_OK;
 
@@ -354,7 +361,6 @@ migrateCachedSocket *migrateGetSocket(client *c, robj *host, robj *port, long ti
         sdsfree(name);
         return NULL;
     }
-    connEnableTcpNoDelay(conn);
 
     /* Add to the cache and return it to the caller. */
     cs = zmalloc(sizeof(*cs));
@@ -910,7 +916,7 @@ void clusterCommand(client *c) {
         unsigned int numkeys = maxkeys > keys_in_slot ? keys_in_slot : maxkeys;
         addReplyArrayLen(c, numkeys);
         kvstoreHashtableIterator *kvs_di = NULL;
-        kvs_di = kvstoreGetHashtableIterator(server.db->keys, slot);
+        kvs_di = kvstoreGetHashtableIterator(server.db->keys, slot, 0);
         for (unsigned int i = 0; i < numkeys; i++) {
             void *next;
             serverAssert(kvstoreHashtableIteratorNext(kvs_di, &next));
@@ -1338,16 +1344,15 @@ void addNodeToNodeReply(client *c, clusterNode *node) {
  * not finished their initial sync, in failed state, or are
  * otherwise considered not available to serve read commands. */
 int isNodeAvailable(clusterNode *node) {
+    /* We don't consider PFAIL here because it's not a reliable indicator
+     * for node available and we don't want clients to use it. */
     if (clusterNodeIsFailing(node)) {
         return 0;
     }
-    long long repl_offset = clusterNodeReplOffset(node);
-    if (clusterNodeIsMyself(node)) {
-        /* Nodes do not update their own information
-         * in the cluster node list. */
-        repl_offset = getNodeReplicationOffset(node);
-    }
-    return (repl_offset != 0);
+
+    /* Hide empty replicas in here, from a data-path POV, an empty replica
+     * is not available. */
+    return getNodeReplicationOffset(node) != 0;
 }
 
 void addNodeReplyForClusterSlot(client *c, clusterNode *node, int start_slot, int end_slot) {

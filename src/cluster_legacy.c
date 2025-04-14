@@ -26,7 +26,11 @@
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  * POSSIBILITY OF SUCH DAMAGE.
  */
-
+/*
+ * Copyright (c) Valkey Contributors
+ * All rights reserved.
+ * SPDX-License-Identifier: BSD-3-Clause
+ */
 /*
  * cluster_legacy.c contains the implementation of the cluster API that is
  * specific to the standard, cluster-bus based clustering mechanism.
@@ -192,11 +196,13 @@ dictType clusterSdsToListType = {
 typedef struct {
     enum {
         ITER_DICT,
-        ITER_LIST
+        ITER_LIST,
+        ITER_NODE,
     } type;
     union {
         dictIterator di;
         listIter li;
+        clusterNode *node;
     };
 } ClusterNodeIterator;
 
@@ -210,6 +216,11 @@ static void clusterNodeIterInitMyShard(ClusterNodeIterator *iter) {
     serverAssert(nodes != NULL);
     iter->type = ITER_LIST;
     listRewind(nodes, &iter->li);
+}
+
+static void clusterNodeIterNode(ClusterNodeIterator *iter, clusterNode *node) {
+    iter->type = ITER_NODE;
+    iter->node = node;
 }
 
 static clusterNode *clusterNodeIterNext(ClusterNodeIterator *iter) {
@@ -226,6 +237,15 @@ static clusterNode *clusterNodeIterNext(ClusterNodeIterator *iter) {
         /* Return the value associated with the node, or NULL if no more nodes */
         return ln ? listNodeValue(ln) : NULL;
     }
+
+    case ITER_NODE: {
+        if (iter->node) {
+            clusterNode *node = iter->node;
+            iter->node = NULL;
+            return node;
+        }
+        return NULL;
+    }
     }
     serverPanic("Unknown iterator type %d", iter->type);
 }
@@ -233,6 +253,8 @@ static clusterNode *clusterNodeIterNext(ClusterNodeIterator *iter) {
 static void clusterNodeIterReset(ClusterNodeIterator *iter) {
     if (iter->type == ITER_DICT) {
         dictResetIterator(&iter->di);
+    } else if (iter->type == ITER_NODE) {
+        iter->node = NULL;
     }
 }
 
@@ -985,7 +1007,7 @@ void clusterUpdateMyselfFlags(void) {
     int nofailover = server.cluster_replica_no_failover ? CLUSTER_NODE_NOFAILOVER : 0;
     myself->flags &= ~CLUSTER_NODE_NOFAILOVER;
     myself->flags |= nofailover;
-    myself->flags |= CLUSTER_NODE_LIGHT_HDR_SUPPORTED;
+    myself->flags |= CLUSTER_NODE_LIGHT_HDR_PUBLISH_SUPPORTED | CLUSTER_NODE_LIGHT_HDR_MODULE_SUPPORTED;
     if (myself->flags != oldflags) {
         clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_UPDATE_STATE);
     }
@@ -1127,6 +1149,7 @@ void clusterInit(void) {
     server.cluster->failover_auth_time = 0;
     server.cluster->failover_auth_count = 0;
     server.cluster->failover_auth_rank = 0;
+    server.cluster->failover_auth_sent = 0;
     server.cluster->failover_failed_primary_rank = 0;
     server.cluster->failover_auth_epoch = 0;
     server.cluster->cant_failover_reason = CLUSTER_CANT_FAILOVER_NONE;
@@ -1232,8 +1255,68 @@ void clusterInitLast(void) {
     }
 }
 
+void clusterAutoFailoverOnShutdown(void) {
+    if (!nodeIsPrimary(myself) || !server.auto_failover_on_shutdown) return;
+
+    /* Find the first best replica, that is, the replica with the largest offset. */
+    int legacy_replica = 0;
+    client *best_replica = NULL;
+    listIter replicas_iter;
+    listNode *replicas_list_node;
+    listRewind(server.replicas, &replicas_iter);
+    while ((replicas_list_node = listNext(&replicas_iter)) != NULL) {
+        client *replica = listNodeValue(replicas_list_node);
+        /* This is done only when the replica offset is caught up, to avoid data loss.
+         * And 0x90000 is 9.0.0, we only support this feature in this version. */
+        if (replica->repl_data->replica_version < 0x90000) {
+            legacy_replica = 1;
+            best_replica = NULL;
+            break;
+        }
+        if (replica->repl_data->repl_state == REPLICA_STATE_ONLINE &&
+            replica->repl_data->repl_ack_off == server.primary_repl_offset &&
+            replica->repl_data->replica_nodeid && sdslen(replica->repl_data->replica_nodeid) == CLUSTER_NAMELEN) {
+            best_replica = replica;
+        }
+    }
+
+    /* We are not able to find the replica to do the auto failover. */
+    if (best_replica == NULL) {
+        if (legacy_replica) {
+            serverLog(LL_NOTICE, "Unable to perform auto failover on shutdown since there are legacy replicas.");
+        } else {
+            serverLog(LL_NOTICE, "Unable to find a replica to perform the auto failover on shutdown.");
+        }
+        return;
+    }
+
+    /* Send the CLUSTER FAILOVER FORCE REPLICAID node-id to all replicas since
+     * it is a shared replication buffer, but only the replica with the matching
+     * node-id will execute it. The caller will call flushReplicasOutputBuffers,
+     * so in here it is a best effort. */
+    char buf[128];
+    size_t buflen = snprintf(buf, sizeof(buf),
+                             "*5\r\n$7\r\nCLUSTER\r\n"
+                             "$8\r\nFAILOVER\r\n"
+                             "$5\r\nFORCE\r\n"
+                             "$9\r\nREPLICAID\r\n"
+                             "$%d\r\n%.*s\r\n",
+                             CLUSTER_NAMELEN,
+                             CLUSTER_NAMELEN,
+                             best_replica->repl_data->replica_nodeid);
+    serverAssert(buflen <= 128);
+    /* Must install write handler for all replicas first before feeding
+     * replication stream. */
+    prepareReplicasToWrite();
+    feedReplicationBuffer(buf, buflen);
+    serverLog(LL_NOTICE, "Perform auto failover to replica %s on shutdown.", best_replica->repl_data->replica_nodeid);
+}
+
 /* Called when a cluster node receives SHUTDOWN. */
 void clusterHandleServerShutdown(void) {
+    /* Check if we are able to do the auto failover on shutdown. */
+    clusterAutoFailoverOnShutdown();
+
     /* The error logs have been logged in the save function if the save fails. */
     serverLog(LL_NOTICE, "Saving the cluster configuration file before exiting.");
     clusterSaveConfig(1);
@@ -1272,7 +1355,7 @@ void clusterReset(int hard) {
     if (nodeIsReplica(myself)) {
         clusterSetNodeAsPrimary(myself);
         replicationUnsetPrimary();
-        emptyData(-1, server.lazyfree_lazy_user_flush ? EMPTYDB_ASYNC : EMPTYDB_NO_FLAGS, NULL);
+        flushAllDataAndResetRDB(server.repl_replica_lazy_flush ? EMPTYDB_ASYNC : EMPTYDB_NO_FLAGS);
     }
 
     /* Close slots, reset manual failover state. */
@@ -1479,7 +1562,7 @@ void clusterAcceptHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
             connClose(conn);
             return;
         }
-        connEnableTcpNoDelay(conn);
+
         connKeepAlive(conn, server.cluster_node_timeout / 1000 * 2);
 
         /* Use non-blocking I/O for cluster messages. */
@@ -1725,14 +1808,16 @@ void freeClusterNode(clusterNode *n) {
     nodename = sdsnewlen(n->name, CLUSTER_NAMELEN);
     serverAssert(dictDelete(server.cluster->nodes, nodename) == DICT_OK);
     sdsfree(nodename);
-    sdsfree(n->hostname);
-    sdsfree(n->human_nodename);
-    sdsfree(n->announce_client_ipv4);
-    sdsfree(n->announce_client_ipv6);
 
     /* Release links and associated data structures. */
     if (n->link) freeClusterLink(n->link);
     if (n->inbound_link) freeClusterLink(n->inbound_link);
+
+    /* Free these members after links are freed, as freeClusterLink may access them. */
+    sdsfree(n->hostname);
+    sdsfree(n->human_nodename);
+    sdsfree(n->announce_client_ipv4);
+    sdsfree(n->announce_client_ipv6);
     listRelease(n->fail_reports);
     zfree(n->replicas);
     zfree(n);
@@ -1918,7 +2003,7 @@ int clusterBumpConfigEpochWithoutConsensus(void) {
     if (myself->configEpoch == 0 || myself->configEpoch != maxEpoch) {
         server.cluster->currentEpoch++;
         myself->configEpoch = server.cluster->currentEpoch;
-        clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_FSYNC_CONFIG);
+        clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_FSYNC_CONFIG | CLUSTER_TODO_BROADCAST_ALL);
         serverLog(LL_NOTICE, "New configEpoch set to %llu", (unsigned long long)myself->configEpoch);
         return C_OK;
     } else {
@@ -1981,7 +2066,7 @@ void clusterHandleConfigEpochCollision(clusterNode *sender) {
     /* Get the next ID available at the best of this node knowledge. */
     server.cluster->currentEpoch++;
     myself->configEpoch = server.cluster->currentEpoch;
-    clusterSaveConfigOrDie(1);
+    clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_FSYNC_CONFIG | CLUSTER_TODO_BROADCAST_ALL);
     serverLog(LL_NOTICE, "configEpoch collision with node %.40s (%s). configEpoch set to %llu", sender->name,
               sender->human_nodename, (unsigned long long)myself->configEpoch);
 }
@@ -2177,12 +2262,6 @@ static int clusterStartHandshake(char *ip, int port, int cport) {
     } else if (inet_pton(AF_INET6, ip, &(((struct sockaddr_in6 *)&sa)->sin6_addr))) {
         sa.ss_family = AF_INET6;
     } else {
-        errno = EINVAL;
-        return 0;
-    }
-
-    /* Port sanity check */
-    if (port <= 0 || port > 65535 || cport <= 0 || cport > 65535) {
         errno = EINVAL;
         return 0;
     }
@@ -3033,11 +3112,29 @@ static void clusterProcessPublishPacket(clusterMsgDataPublish *publish_data, uin
     }
 }
 
-static void clusterProcessLightPacket(clusterLink *link, uint16_t type) {
-    clusterMsgLight *hdr = (clusterMsgLight *)link->rcvbuf;
+static void clusterProcessModulePacket(clusterMsgModule *module_data, clusterNode *sender) {
+    if (!sender) return; /* Protect the module from unknown nodes. */
+    /* We need to route this message back to the right module subscribed
+     * for the right message type. */
+    uint64_t module_id = module_data->module_id; /* Endian-safe ID */
+    uint32_t len = ntohl(module_data->len);
+    uint8_t type = module_data->type;
+    unsigned char *payload = module_data->bulk_data;
 
+    sds sender_name = sdsnewlen(sender->name, CLUSTER_NAMELEN);
+    moduleCallClusterReceivers(sender_name, module_id, type, payload, len);
+    sdsfree(sender_name);
+}
+
+static void clusterProcessLightPacket(clusterNode *sender, clusterLink *link, uint16_t type) {
+    clusterMsgLight *hdr = (clusterMsgLight *)link->rcvbuf;
+    serverLog(LL_DEBUG, "Processing light packet of type: %s", clusterGetMessageTypeString(type));
     if (type == CLUSTERMSG_TYPE_PUBLISH || type == CLUSTERMSG_TYPE_PUBLISHSHARD) {
         clusterProcessPublishPacket(&hdr->data.publish.msg, type);
+    } else if (type == CLUSTERMSG_TYPE_MODULE) {
+        clusterProcessModulePacket(&hdr->data.module.msg, sender);
+    } else {
+        serverAssert(0);
     }
 }
 
@@ -3045,6 +3142,7 @@ static inline int messageTypeSupportsLightHdr(uint16_t type) {
     switch (type) {
     case CLUSTERMSG_TYPE_PUBLISH: return 1;
     case CLUSTERMSG_TYPE_PUBLISHSHARD: return 1;
+    case CLUSTERMSG_TYPE_MODULE: return 1;
     }
     return 0;
 }
@@ -3137,8 +3235,14 @@ int clusterIsValidPacket(clusterLink *link) {
         explen = sizeof(clusterMsg) - sizeof(union clusterMsgData);
         explen += sizeof(clusterMsgDataUpdate);
     } else if (type == CLUSTERMSG_TYPE_MODULE) {
-        explen = sizeof(clusterMsg) - sizeof(union clusterMsgData);
-        explen += sizeof(clusterMsgModule) - 3 + ntohl(hdr->data.module.msg.len);
+        if (is_light) {
+            clusterMsgLight *hdr_light = (clusterMsgLight *)link->rcvbuf;
+            explen = sizeof(clusterMsgLight) - sizeof(union clusterMsgData);
+            explen += sizeof(clusterMsgModule) - 3 + ntohl(hdr_light->data.module.msg.len);
+        } else {
+            explen = sizeof(clusterMsg) - sizeof(union clusterMsgData);
+            explen += sizeof(clusterMsgModule) - 3 + ntohl(hdr->data.module.msg.len);
+        }
     } else {
         /* We don't know this type of packet, so we assume it's well formed. */
         explen = totlen;
@@ -3186,13 +3290,14 @@ int clusterProcessPacket(clusterLink *link) {
             freeClusterLink(link);
             serverLog(
                 LL_NOTICE,
-                "Closing link for node that sent a lightweight message of type %s as its first message on the link",
+                "Closing link for node %.40s that sent a lightweight message of type %s as its first message on the link",
+                hdr->sender,
                 clusterGetMessageTypeString(type));
             return 0;
         }
         clusterNode *sender = link->node;
         sender->data_received = now;
-        clusterProcessLightPacket(link, type);
+        clusterProcessLightPacket(sender, link, type);
         return 1;
     }
 
@@ -3209,10 +3314,16 @@ int clusterProcessPacket(clusterLink *link) {
 
     /* Checks if the node supports light message hdr */
     if (sender) {
-        if (flags & CLUSTER_NODE_LIGHT_HDR_SUPPORTED) {
-            sender->flags |= CLUSTER_NODE_LIGHT_HDR_SUPPORTED;
+        if (flags & CLUSTER_NODE_LIGHT_HDR_PUBLISH_SUPPORTED) {
+            sender->flags |= CLUSTER_NODE_LIGHT_HDR_PUBLISH_SUPPORTED;
         } else {
-            sender->flags &= ~CLUSTER_NODE_LIGHT_HDR_SUPPORTED;
+            sender->flags &= ~CLUSTER_NODE_LIGHT_HDR_PUBLISH_SUPPORTED;
+        }
+
+        if (flags & CLUSTER_NODE_LIGHT_HDR_MODULE_SUPPORTED) {
+            sender->flags |= CLUSTER_NODE_LIGHT_HDR_MODULE_SUPPORTED;
+        } else {
+            sender->flags &= ~CLUSTER_NODE_LIGHT_HDR_MODULE_SUPPORTED;
         }
     }
 
@@ -3393,7 +3504,7 @@ int clusterProcessPacket(clusterLink *link) {
                 /* First thing to do is replacing the random name with the
                  * right node name if this was a handshake stage. */
                 clusterRenameNode(link->node, hdr->sender);
-                serverLog(LL_DEBUG, "Handshake with node %.40s completed.", link->node->name);
+                serverLog(LL_DEBUG, "Handshake with node %.40s (%s) completed.", link->node->name, link->node->human_nodename);
                 link->node->flags &= ~CLUSTER_NODE_HANDSHAKE;
                 link->node->flags |= flags & (CLUSTER_NODE_PRIMARY | CLUSTER_NODE_REPLICA);
                 clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG);
@@ -3684,9 +3795,9 @@ int clusterProcessPacket(clusterLink *link) {
         /* Manual failover requested from replicas. Initialize the state
          * accordingly. */
         resetManualFailover();
-        server.cluster->mf_end = now + CLUSTER_MF_TIMEOUT;
+        server.cluster->mf_end = now + server.cluster_mf_timeout;
         server.cluster->mf_replica = sender;
-        pauseActions(PAUSE_DURING_FAILOVER, now + (CLUSTER_MF_TIMEOUT * CLUSTER_MF_PAUSE_MULT),
+        pauseActions(PAUSE_DURING_FAILOVER, now + (server.cluster_mf_timeout * CLUSTER_MF_PAUSE_MULT),
                      PAUSE_ACTIONS_CLIENT_WRITE_SET);
         serverLog(LL_NOTICE, "Manual failover requested by replica %.40s (%s).", sender->name, sender->human_nodename);
         /* We need to send a ping message to the replica, as it would carry
@@ -3715,14 +3826,7 @@ int clusterProcessPacket(clusterLink *link) {
          * config accordingly. */
         clusterUpdateSlotsConfigWith(n, reportedConfigEpoch, hdr->data.update.nodecfg.slots);
     } else if (type == CLUSTERMSG_TYPE_MODULE) {
-        if (!sender) return 1; /* Protect the module from unknown nodes. */
-        /* We need to route this message back to the right module subscribed
-         * for the right message type. */
-        uint64_t module_id = hdr->data.module.msg.module_id; /* Endian-safe ID */
-        uint32_t len = ntohl(hdr->data.module.msg.len);
-        uint8_t type = hdr->data.module.msg.type;
-        unsigned char *payload = hdr->data.module.msg.bulk_data;
-        moduleCallClusterReceivers(sender->name, module_id, type, payload, len);
+        clusterProcessModulePacket(&hdr->data.module.msg, sender);
     } else {
         serverLog(LL_WARNING, "Received unknown packet type: %d", type);
     }
@@ -4336,26 +4440,69 @@ void clusterSendUpdate(clusterLink *link, clusterNode *node) {
     clusterMsgSendBlockDecrRefCount(msgblock);
 }
 
+/* Create a MODULE message block.
+ *
+ * If is_light is 1, then build a message block with `clusterMsgLight` struct else `clusterMsg`. */
+static clusterMsgSendBlock *createModuleMsgBlock(int64_t module_id, uint8_t type, const char *payload, uint32_t len, int is_light) {
+    uint32_t msglen;
+    int msgtype;
+    clusterMsgSendBlock *msgblock;
+    clusterMsgModule *module_data;
+
+    if (is_light) {
+        msglen = sizeof(clusterMsgLight) - sizeof(union clusterMsgData);
+        msgtype = CLUSTERMSG_TYPE_MODULE | CLUSTERMSG_LIGHT;
+    } else {
+        msglen = sizeof(clusterMsg) - sizeof(union clusterMsgData);
+        msgtype = CLUSTERMSG_TYPE_MODULE;
+    }
+    msglen += sizeof(clusterMsgModule) - 3 + len;
+    msgblock = createClusterMsgSendBlock(msgtype, msglen);
+
+    if (is_light) {
+        clusterMsgLight *hdr = getLightMessageFromSendBlock(msgblock);
+        module_data = &hdr->data.module.msg;
+    } else {
+        clusterMsg *hdr = getMessageFromSendBlock(msgblock);
+        module_data = &hdr->data.module.msg;
+    }
+
+    module_data->module_id = module_id; /* Already endian adjusted */
+    module_data->type = type;
+    module_data->len = htonl(len);
+    memcpy(module_data->bulk_data, payload, len);
+
+    return msgblock;
+}
+
 /* Send a MODULE message.
  *
  * If link is NULL, then the message is broadcasted to the whole cluster. */
 void clusterSendModule(clusterLink *link, uint64_t module_id, uint8_t type, const char *payload, uint32_t len) {
-    uint32_t msglen = sizeof(clusterMsg) - sizeof(union clusterMsgData);
-    msglen += sizeof(clusterMsgModule) - 3 + len;
-    clusterMsgSendBlock *msgblock = createClusterMsgSendBlock(CLUSTERMSG_TYPE_MODULE, msglen);
+    clusterMsgSendBlock *msgblock[CLUSTERMSG_HDR_NUM] = {0};
+    ClusterNodeIterator iter;
 
-    clusterMsg *hdr = getMessageFromSendBlock(msgblock);
-    hdr->data.module.msg.module_id = module_id; /* Already endian adjusted. */
-    hdr->data.module.msg.type = type;
-    hdr->data.module.msg.len = htonl(len);
-    memcpy(hdr->data.module.msg.bulk_data, payload, len);
-
-    if (link)
-        clusterSendMessage(link, msgblock);
-    else
-        clusterBroadcastMessage(msgblock);
-
-    clusterMsgSendBlockDecrRefCount(msgblock);
+    if (link) {
+        clusterNodeIterNode(&iter, link->node);
+    } else {
+        /* Broadcast to all the nodes. */
+        clusterNodeIterInitAllNodes(&iter);
+    }
+    clusterNode *node;
+    while ((node = clusterNodeIterNext(&iter)) != NULL) {
+        if (node->flags & (CLUSTER_NODE_MYSELF | CLUSTER_NODE_HANDSHAKE)) continue;
+        int is_light = nodeSupportsLightMsgHdrForModule(node) ? CLUSTERMSG_HDR_LIGHT : CLUSTERMSG_HDR_NORMAL;
+        if (msgblock[is_light] == NULL) {
+            msgblock[is_light] = createModuleMsgBlock(module_id, type, payload, len, is_light);
+        }
+        clusterSendMessage(node->link, msgblock[is_light]);
+    }
+    clusterNodeIterReset(&iter);
+    for (int hdr_type = CLUSTERMSG_HDR_NORMAL; hdr_type < CLUSTERMSG_HDR_NUM; hdr_type++) {
+        if (msgblock[hdr_type]) {
+            clusterMsgSendBlockDecrRefCount(msgblock[hdr_type]);
+        }
+    }
 }
 
 /* This function gets a cluster node ID string as target, the same way the nodes
@@ -4405,7 +4552,7 @@ void clusterPropagatePublish(robj *channel, robj *message, int sharded) {
     clusterNode *node;
     while ((node = clusterNodeIterNext(&iter)) != NULL) {
         if (node->flags & (CLUSTER_NODE_MYSELF | CLUSTER_NODE_HANDSHAKE)) continue;
-        if (nodeSupportsLightMsgHdr(node)) {
+        if (nodeSupportsLightMsgHdrForPubSub(node)) {
             clusterSendMessage(node->link, msgblock_light);
         } else {
             if (msgblock == NULL) {
@@ -4705,19 +4852,23 @@ void clusterFailoverReplaceYourPrimary(void) {
         }
     }
 
-    /* 3) Update state and save config. */
+    /* 3) Update state, note that we do not use CLUSTER_TODO_UPDATE_STATE since we want the node
+     * to update the cluster state ASAP after failover. */
     clusterUpdateState();
-    clusterSaveConfigOrDie(1);
 
-    /* 4) Pong all the other nodes so that they can update the state
+    /* 4) Save and fsync the config, and pong all the other nodes so that they can update the state
      *    accordingly and detect that we switched to primary role. */
-    clusterDoBeforeSleep(CLUSTER_TODO_BROADCAST_ALL);
+    clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_FSYNC_CONFIG | CLUSTER_TODO_BROADCAST_ALL);
 
     /* 5) If there was a manual failover in progress, clear the state. */
     resetManualFailover();
 
     /* 6) Upon becoming primary, we need to ensure that data is deleted in unowned slots. */
     verifyClusterConfigWithData();
+
+    /* Since we have became a new primary node, we may rely on auth_time to
+     * determine whether a failover is in progress, so it is best to reset it. */
+    server.cluster->failover_auth_time = 0;
 }
 
 /* This function is called if we are a replica node and our primary serving
@@ -4893,6 +5044,7 @@ void clusterHandleReplicaFailover(void) {
         /* Update my configEpoch to the epoch of the election. */
         if (myself->configEpoch < server.cluster->failover_auth_epoch) {
             myself->configEpoch = server.cluster->failover_auth_epoch;
+            clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_FSYNC_CONFIG | CLUSTER_TODO_BROADCAST_ALL);
             serverLog(LL_NOTICE, "configEpoch set to %llu after successful failover",
                       (unsigned long long)myself->configEpoch);
         }
@@ -5020,7 +5172,7 @@ void clusterHandleReplicaMigration(int max_replicas) {
  *    setting mf_end to the millisecond unix time at which we'll abort the
  *    attempt.
  * 2) Replica sends a MFSTART message to the primary requesting to pause clients
- *    for two times the manual failover timeout CLUSTER_MF_TIMEOUT.
+ *    for CLUSTER_MF_PAUSE_MULT times the server.cluster_mf_timeout.
  *    When primary is paused for manual failover, it also starts to flag
  *    packets with CLUSTERMSG_FLAG0_PAUSED.
  * 3) Replica waits for primary to send its replication offset flagged as PAUSED.
@@ -5259,7 +5411,7 @@ void clusterCron(void) {
             }
         }
         if (min_pong_node) {
-            serverLog(LL_DEBUG, "Pinging node %.40s", min_pong_node->name);
+            serverLog(LL_DEBUG, "Pinging node %.40s (%s)", min_pong_node->name, min_pong_node->human_nodename);
             clusterSendPing(min_pong_node->link, CLUSTERMSG_TYPE_PING);
         }
     }
@@ -5968,8 +6120,8 @@ sds clusterGenNodeDescription(client *c, clusterNode *node, int tls_primary) {
     return ci;
 }
 
-/* Generate the slot topology for all nodes and store the string representation
- * in the slots_info struct on the node. This is used to improve the efficiency
+/* Generate the slot topology for all nodes and store the slot range information
+ * in the slot_info_pairs array on the node. This is used to improve the efficiency
  * of clusterGenNodesDescription() because it removes looping of the slot space
  * for generating the slot info for each node individually. */
 void clusterGenNodesSlotsInfo(int filter) {
@@ -6168,7 +6320,7 @@ int checkSlotAssignmentsOrReply(client *c, unsigned char *slots, int del, int st
             return C_ERR;
         }
         if (slots[slot]++ == 1) {
-            addReplyErrorFormat(c, "Slot %d specified multiple times", (int)slot);
+            addReplyErrorFormat(c, "Slot %d specified multiple times", slot);
             return C_ERR;
         }
     }
@@ -6191,6 +6343,10 @@ void clusterUpdateSlots(client *c, unsigned char *slots, int del) {
     }
 }
 
+/* Get the replication offset of a node.
+ *
+ * Nodes do not update their own information in the cluster state,
+ * so for self node, we cannot use `node->repl_offset` directly. */
 long long getNodeReplicationOffset(clusterNode *node) {
     if (node->flags & CLUSTER_NODE_MYSELF) {
         return nodeIsReplica(node) ? replicationGetReplicaOffset() : server.primary_repl_offset;
@@ -6413,7 +6569,7 @@ unsigned int delKeysInSlot(unsigned int hashslot) {
 
     kvstoreHashtableIterator *kvs_di = NULL;
     void *next;
-    kvs_di = kvstoreGetHashtableSafeIterator(server.db->keys, hashslot);
+    kvs_di = kvstoreGetHashtableIterator(server.db->keys, hashslot, HASHTABLE_ITER_SAFE);
     while (kvstoreHashtableIteratorNext(kvs_di, &next)) {
         robj *valkey = next;
         enterExecutionUnit(1, 0);
@@ -6448,7 +6604,7 @@ clusterNode *getMyClusterNode(void) {
     return server.cluster->myself;
 }
 
-int clusterManualFailoverTimeLimit(void) {
+mstime_t clusterManualFailoverTimeLimit(void) {
     return server.cluster->mf_end;
 }
 
@@ -6880,6 +7036,10 @@ int clusterCommandSpecial(client *c) {
             addReplyErrorFormat(c, "Invalid base port specified: %s", (char *)c->argv[3]->ptr);
             return 1;
         }
+        if (port <= 0 || port > 65535) {
+            addReplyErrorFormat(c, "Port number is out of range");
+            return 1;
+        }
 
         if (c->argc == 5) {
             if (getLongLongFromObject(c->argv[4], &cport) != C_OK) {
@@ -6888,6 +7048,11 @@ int clusterCommandSpecial(client *c) {
             }
         } else {
             cport = port + CLUSTER_PORT_INCR;
+        }
+
+        if (cport <= 0 || cport > 65535) {
+            addReplyErrorFormat(c, "Cluster bus port number is out of range");
+            return 1;
         }
 
         if (clusterStartHandshake(c->argv[2]->ptr, port, cport) == 0 && errno == EINVAL) {
@@ -7019,7 +7184,36 @@ int clusterCommandSpecial(client *c) {
         clusterDelNode(n);
         clusterDoBeforeSleep(CLUSTER_TODO_UPDATE_STATE | CLUSTER_TODO_SAVE_CONFIG);
         addReply(c, shared.ok);
-    } else if (!strcasecmp(c->argv[1]->ptr, "replicate") && c->argc == 3) {
+    } else if (!strcasecmp(c->argv[1]->ptr, "replicate") && (c->argc == 3 || c->argc == 4)) {
+        /* CLUSTER REPLICATE (<NODE ID> | NO ONE)*/
+        if (c->argc == 4) {
+            /* CLUSTER REPLICATE NO ONE */
+            if (strcasecmp(c->argv[2]->ptr, "NO") != 0 || strcasecmp(c->argv[3]->ptr, "ONE") != 0) {
+                addReplySubcommandSyntaxError(c);
+                return 1;
+            }
+            if (nodeIsPrimary(myself)) {
+                addReply(c, shared.ok);
+                return 1;
+            }
+            sds client = catClientInfoShortString(sdsempty(), c, server.hide_user_data_from_log);
+            serverLog(LL_NOTICE, "Stop replication and turning myself into empty primary (request from '%s').", client);
+            sdsfree(client);
+            clusterSetNodeAsPrimary(myself);
+            clusterPromoteSelfToPrimary();
+            flushAllDataAndResetRDB(server.repl_replica_lazy_flush ? EMPTYDB_ASYNC : EMPTYDB_NO_FLAGS);
+            clusterCloseAllSlots();
+            resetManualFailover();
+
+            /* Moving new primary to its own shard. */
+            char new_shard_id[CLUSTER_NAMELEN];
+            getRandomHexChars(new_shard_id, CLUSTER_NAMELEN);
+            updateShardId(myself, new_shard_id);
+
+            clusterDoBeforeSleep(CLUSTER_TODO_UPDATE_STATE | CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_BROADCAST_ALL);
+            addReply(c, shared.ok);
+            return 1;
+        }
         /* CLUSTER REPLICATE <NODE ID> */
         /* Lookup the specified node in our table. */
         clusterNode *n = clusterLookupNode(c->argv[2]->ptr, sdslen(c->argv[2]->ptr));
@@ -7073,20 +7267,35 @@ int clusterCommandSpecial(client *c) {
         } else {
             addReplyLongLong(c, clusterNodeFailureReportsCount(n));
         }
-    } else if (!strcasecmp(c->argv[1]->ptr, "failover") && (c->argc == 2 || c->argc == 3)) {
-        /* CLUSTER FAILOVER [FORCE|TAKEOVER] */
+    } else if (!strcasecmp(c->argv[1]->ptr, "failover") && (c->argc >= 2)) {
+        /* CLUSTER FAILOVER [FORCE|TAKEOVER] [REPLICAID <NODE ID>]
+         * REPLICAID is currently available only for internal so we won't
+         * put it into the JSON file. */
         int force = 0, takeover = 0;
+        robj *replicaid = NULL;
 
-        if (c->argc == 3) {
-            if (!strcasecmp(c->argv[2]->ptr, "force")) {
+        for (int j = 2; j < c->argc; j++) {
+            int moreargs = (c->argc - 1) - j;
+            if (!strcasecmp(c->argv[j]->ptr, "force")) {
                 force = 1;
-            } else if (!strcasecmp(c->argv[2]->ptr, "takeover")) {
+            } else if (!strcasecmp(c->argv[j]->ptr, "takeover")) {
                 takeover = 1;
                 force = 1; /* Takeover also implies force. */
+            } else if (c == server.primary && !strcasecmp(c->argv[j]->ptr, "replicaid") && moreargs) {
+                /* This option is currently available only for primary. */
+                j++;
+                replicaid = c->argv[j];
             } else {
                 addReplyErrorObject(c, shared.syntaxerr);
                 return 1;
             }
+        }
+
+        /* Check if it should be executed by myself. */
+        if (replicaid != NULL && memcmp(replicaid->ptr, myself->name, CLUSTER_NAMELEN) != 0) {
+            /* Ignore this command, including the sanity check and the process. */
+            addReply(c, shared.ok);
+            return 1;
         }
 
         /* Check preconditions. */
@@ -7097,12 +7306,11 @@ int clusterCommandSpecial(client *c) {
             addReplyError(c, "I'm a replica but my master is unknown to me");
             return 1;
         } else if (!force && (nodeFailed(myself->replicaof) || myself->replicaof->link == NULL)) {
-            addReplyError(c, "Master is down or failed, "
-                             "please use CLUSTER FAILOVER FORCE");
+            addReplyError(c, "Master is down or failed, please use CLUSTER FAILOVER FORCE");
             return 1;
         }
         resetManualFailover();
-        server.cluster->mf_end = mstime() + CLUSTER_MF_TIMEOUT;
+        server.cluster->mf_end = mstime() + server.cluster_mf_timeout;
         sds client = catClientInfoShortString(sdsempty(), c, server.hide_user_data_from_log);
 
         if (takeover) {
@@ -7117,7 +7325,11 @@ int clusterCommandSpecial(client *c) {
             /* If this is a forced failover, we don't need to talk with our
              * primary to agree about the offset. We just failover taking over
              * it without coordination. */
-            serverLog(LL_NOTICE, "Forced failover user request accepted (user request from '%s').", client);
+            if (c == server.primary) {
+                serverLog(LL_NOTICE, "Forced failover primary request accepted (primary request from '%s').", client);
+            } else {
+                serverLog(LL_NOTICE, "Forced failover user request accepted (user request from '%s').", client);
+            }
             manualFailoverCanStart();
             /* We can start a manual failover as soon as possible, setting a flag
              * here so that we don't need to waiting for the cron to kick in. */
@@ -7289,10 +7501,6 @@ clusterNode *getNodeBySlot(int slot) {
 
 char *clusterNodeHostname(clusterNode *node) {
     return node->hostname;
-}
-
-long long clusterNodeReplOffset(clusterNode *node) {
-    return node->repl_offset;
 }
 
 const char *clusterNodePreferredEndpoint(clusterNode *n, client *c) {

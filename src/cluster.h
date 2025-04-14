@@ -5,12 +5,11 @@
  * Cluster exported API.
  *----------------------------------------------------------------------------*/
 
-#define CLUSTER_SLOT_MASK_BITS 14                                   /* Number of bits used for slot id. */
-#define CLUSTER_SLOTS (1 << CLUSTER_SLOT_MASK_BITS)                 /* Total number of slots in cluster mode, which is 16384. */
-#define CLUSTER_SLOT_MASK ((unsigned long long)(CLUSTER_SLOTS - 1)) /* Bit mask for slot id stored in LSB. */
-#define CLUSTER_OK 0                                                /* Everything looks ok */
-#define CLUSTER_FAIL 1                                              /* The cluster can't work */
-#define CLUSTER_NAMELEN 40                                          /* sha1 hex length */
+#define CLUSTER_SLOT_MASK_BITS 14                   /* Number of bits used for slot id. */
+#define CLUSTER_SLOTS (1 << CLUSTER_SLOT_MASK_BITS) /* Total number of slots in cluster mode, which is 16384. */
+#define CLUSTER_OK 0                                /* Everything looks ok */
+#define CLUSTER_FAIL 1                              /* The cluster can't work */
+#define CLUSTER_NAMELEN 40                          /* sha1 hex length */
 
 /* Reason why the cluster state changes to fail. When adding new reasons,
  * make sure to update clusterLogFailReason. */
@@ -85,7 +84,7 @@ const char **clusterCommandExtendedHelp(void);
 
 int clusterAllowFailoverCmd(client *c);
 void clusterPromoteSelfToPrimary(void);
-int clusterManualFailoverTimeLimit(void);
+mstime_t clusterManualFailoverTimeLimit(void);
 
 void clusterCommandSlots(client *c);
 void clusterCommandMyId(client *c);
@@ -117,7 +116,6 @@ clusterNode *getNodeBySlot(int slot);
 int clusterNodeClientPort(clusterNode *n, int use_tls);
 char *clusterNodeHostname(clusterNode *node);
 const char *clusterNodePreferredEndpoint(clusterNode *n, client *c);
-long long clusterNodeReplOffset(clusterNode *node);
 clusterNode *clusterLookupNode(const char *name, int length);
 int detectAndUpdateCachedNodeHealth(void);
 client *createCachedResponseClient(int resp);

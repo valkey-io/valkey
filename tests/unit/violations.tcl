@@ -1,7 +1,7 @@
 # One XADD with one huge 5GB field
 # Expected to fail resulting in an empty stream
 run_solo {violations} {
-start_server [list overrides [list save ""] ] {
+start_server [list overrides [list save ""] tags {"large-memory"}] {
     test {XADD one huge field} {
         r config set proto-max-bulk-len 10000000000 ;#10gb
         r config set client-query-buffer-limit 10000000000 ;#10gb
@@ -18,7 +18,7 @@ start_server [list overrides [list save ""] ] {
 # One XADD with one huge (exactly nearly) 4GB field
 # This uncovers the overflow in lpEncodeGetType
 # Expected to fail resulting in an empty stream
-start_server [list overrides [list save ""] ] {
+start_server [list overrides [list save ""] tags {"large-memory"}] {
     test {XADD one huge field - 1} {
         r config set proto-max-bulk-len 10000000000 ;#10gb
         r config set client-query-buffer-limit 10000000000 ;#10gb
@@ -33,7 +33,7 @@ start_server [list overrides [list save ""] ] {
 }
 
 # Gradually add big stream fields using repeated XADD calls
-start_server [list overrides [list save ""] ] {
+start_server [list overrides [list save ""] tags {"large-memory"}] {
     test {several XADD big fields} {
         r config set stream-node-max-bytes 0
         for {set j 0} {$j<10} {incr j} {
@@ -46,7 +46,7 @@ start_server [list overrides [list save ""] ] {
 
 # Add over 4GB to a single stream listpack (one XADD command)
 # Expected to fail resulting in an empty stream
-start_server [list overrides [list save ""] ] {
+start_server [list overrides [list save ""] tags {"large-memory"}] {
     test {single XADD big fields} {
         r write "*23\r\n\$4\r\nXADD\r\n\$1\r\nS\r\n\$1\r\n*\r\n"
         for {set j 0} {$j<10} {incr j} {
@@ -63,7 +63,7 @@ start_server [list overrides [list save ""] ] {
 # Gradually add big hash fields using repeated HSET calls
 # This reproduces the overflow in the call to ziplistResize
 # Object will be converted to hashtable encoding
-start_server [list overrides [list save ""] ] {
+start_server [list overrides [list save ""] tags {"large-memory"}] {
     r config set hash-max-ziplist-value 1000000000 ;#1gb
     test {hash with many big fields} {
         for {set j 0} {$j<10} {incr j} {
@@ -75,7 +75,7 @@ start_server [list overrides [list save ""] ] {
 
 # Add over 4GB to a single hash field (one HSET command)
 # Object will be converted to hashtable encoding
-start_server [list overrides [list save ""] ] {
+start_server [list overrides [list save ""] tags {"large-memory"}] {
     test {hash with one huge field} {
         catch {r config set hash-max-ziplist-value 10000000000} ;#10gb
         r config set proto-max-bulk-len 10000000000 ;#10gb

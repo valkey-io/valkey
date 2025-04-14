@@ -26,6 +26,11 @@
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  * POSSIBILITY OF SUCH DAMAGE.
  */
+/*
+ * Copyright (c) Valkey Contributors
+ * All rights reserved.
+ * SPDX-License-Identifier: BSD-3-Clause
+ */
 
 #include "server.h"
 #include "hashtable.h"
@@ -317,7 +322,7 @@ setTypeIterator *setTypeInitIterator(robj *subject) {
     si->subject = subject;
     si->encoding = subject->encoding;
     if (si->encoding == OBJ_ENCODING_HASHTABLE) {
-        si->hashtable_iterator = hashtableCreateIterator(subject->ptr);
+        si->hashtable_iterator = hashtableCreateIterator(subject->ptr, 0);
     } else if (si->encoding == OBJ_ENCODING_INTSET) {
         si->ii = 0;
     } else if (si->encoding == OBJ_ENCODING_LISTPACK) {
@@ -1179,7 +1184,7 @@ void srandmemberWithCountCommand(client *c) {
     /* CASE 3 & 4: send the result to the user. */
     {
         hashtableIterator iter;
-        hashtableInitIterator(&iter, ht);
+        hashtableInitIterator(&iter, ht, 0);
 
         addReplyArrayLen(c, count);
         serverAssert(count == hashtableSize(ht));

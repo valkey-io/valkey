@@ -4087,7 +4087,7 @@ void clientListCommand(client *c) {
     sds response = NULL;
 
     if (c->argc > 3) {
-        clientFilter filter = {.ids = NULL, .max_age = 0, .addr = NULL, .laddr = NULL, .user = NULL, .type = -1, .skipme = 0, .db_number = -1};
+        clientFilter filter = {.ids = NULL, .max_age = 0, .idle = 0, .addr = NULL, .laddr = NULL, .user = NULL, .type = -1, .skipme = 0, .db_number = -1};
         int i = 2;
 
         if (parseClientFiltersOrReply(c, i, &filter) != C_OK) {
@@ -4147,6 +4147,7 @@ void clientKillCommand(client *c) {
 
     clientFilter client_filter = {.ids = NULL,
                                   .max_age = 0,
+                                  .idle = 0,
                                   .addr = NULL,
                                   .laddr = NULL,
                                   .user = NULL,

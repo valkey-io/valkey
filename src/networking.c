@@ -3997,7 +3997,7 @@ void clientHelpCommand(client *c) {
         "    * NAME <client-name>",
         "      Kill connections with the specified name.",
         "    * IDLE <idle>",
-        "      Return clients with idle time greater than or equal to <idle> seconds.",
+        "      Kill connections with idle time greater than or equal to <idle> seconds.",
         "    * LIB-NAME <library-name>",
         "      Kill connections with the specified library name.",
         "    * LIB-VER <library-version>",

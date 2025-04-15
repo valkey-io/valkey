@@ -237,7 +237,7 @@ test "Shutting down primary wait for replica after previous block" {
     start_server {overrides {save "" repl-backlog-size 1MB}} {
         start_server {overrides {save "" repl-backlog-size 1MB}} {
             set primary [srv -1 client]
-            set primary_deferring [valkey_deferring_client -1]
+            set primary_deferring [redis_deferring_client -1]
             set primary_host [srv -1 host]
             set primary_port [srv -1 port]
             set primary_pid [srv -1 pid]
@@ -257,9 +257,12 @@ test "Shutting down primary wait for replica after previous block" {
             # Call shutdown.
             $primary_deferring shutdown
 
-            set info_clients [$primary info clients]
-            assert_match "*connected_clients:2*" $info_clients
-            assert_match "*blocked_clients:1*" $info_clients
+            wait_for_condition 100 100 {
+                [string match "*connected_clients:2*" [$primary info clients]] && [string match "*blocked_clients:1*" [$primary info clients]]
+            } else {
+                set client_info [$primary info clients]
+                fail "Shutdown did not trigger block. Current INFO CLIENTS output: $client_info"
+            }
 
             # Wake up replica, causing primary to continue shutting down.
             resume_process $replica_pid

@@ -630,6 +630,7 @@ void blockPostponeClient(client *c) {
 
 /* Block client due to shutdown command */
 void blockClientShutdown(client *c) {
+    c->bstate.timeout = 0;
     blockClient(c, BLOCKED_SHUTDOWN);
 }
 

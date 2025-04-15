@@ -112,11 +112,17 @@ int extractLongLatOrReply(client *c, robj **argv, double *xy) {
 /* Input Argument Helper */
 /* Decode lat/long from a zset member's score.
  * Returns C_OK on successful decoding, otherwise C_ERR is returned. */
-int longLatFromMember(robj *zobj, robj *member, double *xy) {
+int longLatFromMember(robj *zobj, robj *member, double *xy, sds* err) {
     double score = 0;
 
-    if (zsetScore(zobj, member->ptr, &score) == C_ERR) return C_ERR;
-    if (!decodeGeohash(score, xy)) return C_ERR;
+    if (zsetScore(zobj, member->ptr, &score) == C_ERR){
+        *err = sdsnew("member des not exist");
+        return C_ERR;
+    } 
+    if (!decodeGeohash(score, xy)) {
+        *err = sdsnew("failed to decode");
+        return C_ERR;
+    }
     return C_OK;
 }
 
@@ -535,10 +541,12 @@ void georadiusGeneric(client *c, int srcKeyIndex, int flags) {
         base_args = 5;
         shape.type = CIRCULAR_TYPE;
         robj *member = c->argv[2];
-        if (longLatFromMember(zobj, member, shape.xy) == C_ERR) {
-            addReplyErrorSds(c, sdscatfmt(sdsempty(), "member %s does not exist", member->ptr));
+        sds err;
+        if (longLatFromMember(zobj, member, shape.xy, &err) == C_ERR) {
+            addReplyErrorSds(c, sdscatfmt(sdsempty(), "member %s %s", member->ptr, err));
             return;
         }
+        sdsfree(err);
         if (extractDistanceOrReply(c, c->argv + base_args - 2, &shape.conversion, &shape.t.radius) != C_OK) return;
     } else if (flags & GEOSEARCH) {
         /* GEOSEARCH or GEOSEARCHSTORE */
@@ -601,10 +609,12 @@ void georadiusGeneric(client *c, int srcKeyIndex, int flags) {
                     continue;
                 }
                 robj *member = c->argv[base_args + i + 1];
-                if (longLatFromMember(zobj, member, shape.xy) == C_ERR) {
+                sds err;
+                if (longLatFromMember(zobj, member, shape.xy, &err) == C_ERR) {
                     addReplyErrorSds(c, sdscatfmt(sdsempty(), "member %s does not exist", member->ptr));
                     return;
                 }
+                sdsfree(err);
                 frommember = 1;
                 i++;
             } else if (!strcasecmp(arg, "fromlonlat") && (i + 2) < remaining && flags & GEOSEARCH && !frommember) {

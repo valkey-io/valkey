@@ -129,6 +129,9 @@ proc wait_for_cluster_propagation {} {
     wait_for_condition 1000 50 {
         [cluster_config_consistent] eq 1
     } else {
+        for {set j 0} {$j < [llength $::servers]} {incr j} {
+            puts "R $j cluster slots output: [R $j cluster slots]"
+        }
         fail "cluster config did not reach a consistent state"
     }
 }

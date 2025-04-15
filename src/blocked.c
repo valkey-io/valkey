@@ -251,7 +251,6 @@ void unblockClient(client *c, int queue_for_reprocessing) {
     c->bstate->btype = BLOCKED_NONE;
     c->bstate->unblock_on_nokey = 0;
     removeClientFromTimeoutTable(c);
-    c->bstate->timeout = 0; /* murphyjacob4 - this should be a dedicated PR with a test */
     if (queue_for_reprocessing) queueClientForReprocessing(c);
 }
 

@@ -1184,10 +1184,16 @@ static int connRdmaConnect(connection *conn,
                            const char *addr,
                            int port,
                            const char *src_addr,
+                           int multipath,
                            ConnectionCallbackFunc connect_handler) {
     rdma_connection *rdma_conn = (rdma_connection *)conn;
     struct rdma_cm_id *cm_id;
     RdmaContext *ctx;
+
+    if (multipath) {
+        serverLog(LL_NOTICE, "RDMA: multipath not supported");
+        return C_ERR;
+    }
 
     if (rdmaResolveAddr(rdma_conn, addr, port, src_addr) == C_ERR) {
         return C_ERR;

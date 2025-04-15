@@ -3862,7 +3862,7 @@ void syncWithPrimary(connection *conn) {
         /* Create RDB connection */
         server.repl_rdb_transfer_s = connCreate(connTypeOfReplication());
         if (connConnect(server.repl_rdb_transfer_s, server.primary_host, server.primary_port, server.bind_source_addr,
-                        dualChannelFullSyncWithPrimary) == C_ERR) {
+                        server.repl_mptcp, dualChannelFullSyncWithPrimary) == C_ERR) {
             dualChannelServerLog(LL_WARNING, "Unable to connect to Primary: %s",
                                  connGetLastError(server.repl_transfer_s));
             connClose(server.repl_rdb_transfer_s);
@@ -3917,7 +3917,7 @@ write_error: /* Handle sendCommand() errors. */
 int connectWithPrimary(void) {
     server.repl_transfer_s = connCreate(connTypeOfReplication());
     if (connConnect(server.repl_transfer_s, server.primary_host, server.primary_port, server.bind_source_addr,
-                    syncWithPrimary) == C_ERR) {
+                    server.repl_mptcp, syncWithPrimary) == C_ERR) {
         serverLog(LL_WARNING, "Unable to connect to PRIMARY: %s", connGetLastError(server.repl_transfer_s));
         connClose(server.repl_transfer_s);
         server.repl_transfer_s = NULL;

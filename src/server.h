@@ -1970,6 +1970,7 @@ struct valkeyServer {
     int repl_replica_ignore_maxmemory;  /* If true replicas do not evict. */
     time_t repl_down_since;             /* Unix time at which link with primary went down */
     int repl_disable_tcp_nodelay;       /* Disable TCP_NODELAY after SYNC? */
+    int repl_mptcp;                     /* Use Multipath TCP for replica on client side */
     int replica_priority;               /* Reported in INFO and used by Sentinel. */
     int replica_announced;              /* If true, replica is announced by Sentinel */
     int replica_announce_port;          /* Give the primary this listening port. */

@@ -484,7 +484,6 @@ static int string2llAVX512(const char *s, unsigned long slen, long long *value) 
     if (p[0] == '0') {
         return 0;
     }
-
     const __m256i ascii0 = _mm256_set1_epi8('0');
     const __m256i nine = _mm256_set1_epi8(9);
     uint32_t mask = (uint32_t)(0xFFFFFFFF << (32 - slen + plen));
@@ -509,22 +508,25 @@ static int string2llAVX512(const char *s, unsigned long slen, long long *value) 
     const __m128i mul_1_10000 = _mm_set_epi16(1, 10000, 1, 10000, 1, 10000, 1, 10000);
     /* Multiply by 10000 and horizontally add adjacent pairs of intermediate values. */
     __m128i multiplied_by_10000 = _mm_madd_epi16(multiplied_by_100, mul_1_10000);
-
     uint64_t low = (uint64_t)_mm_extract_epi32(multiplied_by_10000, 3);
     if ((mask & 0xFFFFFF) == 0) {
-        *value = negative ? -low : low;
+        if (value != NULL) *value = negative ? -low : low;
         return 1;
     }
 
     uint64_t middle = (uint64_t)_mm_extract_epi32(multiplied_by_10000, 2);
     uint64_t middle_low = low + MULTIPLIER_10E8 * middle;
     if ((mask & 0xFFFF) == 0) {
-        *value = negative ? -middle_low : middle_low;
+        if (value != NULL) *value = negative ? -middle_low : middle_low;
         return 1;
     }
 
     uint64_t high = (uint64_t)_mm_extract_epi32(multiplied_by_10000, 1);
     uint64_t result = middle_low + MULTIPLIER_10E16 * high;
+    /* ULONG_MAX = 18446744073709551615 */
+    if (high > 1844 || result < middle_low) { /* Overflow. */
+        return 0;
+    }
     /* Convert to negative if needed, and do the final overflow check when
      * converting from unsigned long long to long long. */
     if (negative) {

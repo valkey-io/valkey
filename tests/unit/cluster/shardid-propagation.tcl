@@ -30,6 +30,7 @@ tags {tls:skip external:skip cluster} {
             cluster_allocate_slots 1 1
         }
 
+
         test "Restart of node in cluster mode doesn't cause nodes.conf corruption due to shard id mismatch" {
             set primary_id [R 0 CLUSTER MYID]
             R 1 CLUSTER MEET 127.0.0.1 [srv 0 port]

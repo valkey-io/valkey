@@ -123,9 +123,7 @@ void notifyKeyspaceEvent(int type, char *event, robj *key, int dbid) {
     moduleNotifyKeyspaceEvent(type, event, key, dbid);
     if (c) {
         c->flag.keyspace_notified = 1;
-        if (c->bstate == NULL && c->deferred_reply) {
-            commitDeferredReplyBuffer(c);
-        }
+        commitDeferredReplyBuffer(c, 1);
     }
 
     /* If notifications for this class of events are off, return ASAP. */

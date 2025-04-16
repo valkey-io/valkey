@@ -578,7 +578,7 @@ void afterErrorReply(client *c, const char *s, size_t len, int flags) {
         return;
     }
 
-    commitDeferredReplyBuffer(c);
+    commitDeferredReplyBuffer(c, 1);
     if (!(flags & ERR_REPLY_FLAG_NO_STATS_UPDATE)) {
         /* Increment the global error counter */
         server.stat_total_error_replies++;
@@ -1306,7 +1306,9 @@ void initDeferredReplyBuffer(client *c) {
 
 /* Move the client deferred reply buffer into the client reply buffer and put the client
  * in the pending write queue. */
-void commitDeferredReplyBuffer(client *c) {
+void commitDeferredReplyBuffer(client *c, int skip_if_blocked) {
+    if (skip_if_blocked && c->flag.blocked) return;
+
     if (c->deferred_reply == NULL || listLength(c->deferred_reply) == 0) {
         resetDeferredReplyBuffer(c);
         return;
@@ -1352,7 +1354,6 @@ void AddReplyFromClient(client *dst, client *src) {
      * checks in it. */
     if (dst->flag.close_after_reply) return;
 
-    commitDeferredReplyBuffer(src);
     /* Concatenate the reply list into the dest */
     if (listLength(src->reply)) listJoin(dst->reply, src->reply);
     dst->reply_bytes += src->reply_bytes;
@@ -2635,7 +2636,7 @@ void resetClient(client *c) {
 
     if (c->deferred_reply_errors) listRelease(c->deferred_reply_errors);
     c->deferred_reply_errors = NULL;
-    commitDeferredReplyBuffer(c);
+    commitDeferredReplyBuffer(c, 1);
 
     /* We clear the ASKING flag as well if we are not inside a MULTI, and
      * if what we just executed is not the ASKING command itself. */

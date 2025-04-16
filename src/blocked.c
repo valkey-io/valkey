@@ -98,7 +98,9 @@ void freeClientBlockingState(client *c) {
     dictRelease(c->bstate->keys);
     zfree(c->bstate);
     c->bstate = NULL;
-    if (c->deferred_reply) commitDeferredReplyBuffer(c);
+
+    serverAssert(!c->deferred_reply);
+    commitDeferredReplyBuffer(c, 0);
 }
 
 /* Block a client for the specific operation type. Once the CLIENT_BLOCKED

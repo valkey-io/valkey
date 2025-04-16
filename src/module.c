@@ -8448,7 +8448,7 @@ void moduleHandleBlockedClients(void) {
             /* Replies which were added after the client is blocked by a module
              * are accumulated separately. We need to transmit those replies
              * to the client. */
-            commitDeferredReplyBuffer(c);
+            commitDeferredReplyBuffer(c, 0);
             /* It is possible that this blocked client object accumulated
              * replies to send to the client in a thread safe context.
              * We need to glue such replies to the client output buffer and

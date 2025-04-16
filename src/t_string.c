@@ -198,7 +198,7 @@ void setGenericCommand(client *c,
     }
 
 cleanup:
-    commitDeferredReplyBuffer(c);
+    commitDeferredReplyBuffer(c, 1);
 }
 
 /*
@@ -474,7 +474,7 @@ void getexCommand(client *c) {
             server.dirty++;
         }
     }
-    commitDeferredReplyBuffer(c);
+    commitDeferredReplyBuffer(c, 1);
 }
 
 void getdelCommand(client *c) {
@@ -487,7 +487,7 @@ void getdelCommand(client *c) {
         notifyKeyspaceEvent(NOTIFY_GENERIC, "del", c->argv[1], c->db->id);
         server.dirty++;
     }
-    commitDeferredReplyBuffer(c);
+    commitDeferredReplyBuffer(c, 1);
 }
 
 void getsetCommand(client *c) {
@@ -499,7 +499,7 @@ void getsetCommand(client *c) {
     notifyKeyspaceEvent(NOTIFY_STRING, "set", c->argv[1], c->db->id);
     server.dirty++;
 
-    commitDeferredReplyBuffer(c);
+    commitDeferredReplyBuffer(c, 1);
     /* Propagate as SET command */
     rewriteClientCommandArgument(c, 0, shared.set);
 }

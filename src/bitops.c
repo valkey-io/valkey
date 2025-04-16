@@ -1365,7 +1365,7 @@ void bitfieldGeneric(client *c, int flags) {
         notifyKeyspaceEvent(NOTIFY_STRING, "setbit", c->argv[1], c->db->id);
         server.dirty += changes;
     }
-    commitDeferredReplyBuffer(c);
+    commitDeferredReplyBuffer(c, 1);
     zfree(ops);
 }
 

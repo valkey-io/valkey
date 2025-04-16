@@ -645,7 +645,7 @@ void listPopRangeAndReplyWithKey(client *c, robj *o, robj *key, int where, long 
     listTypeDelRange(o, rangestart, rangelen);
     /* Maintain the notifications and dirty. */
     listElementsRemoved(c, key, where, o, rangelen, deleted);
-    commitDeferredReplyBuffer(c);
+    commitDeferredReplyBuffer(c, 1);
 }
 
 /* Extracted from `addListRangeReply()` to reply with a quicklist list.
@@ -795,7 +795,7 @@ void popGenericCommand(client *c, int where) {
         addListRangeReply(c, o, rangestart, rangeend, reverse);
         listTypeDelRange(o, rangestart, rangelen);
         listElementsRemoved(c, c->argv[1], where, o, rangelen, NULL);
-        commitDeferredReplyBuffer(c);
+        commitDeferredReplyBuffer(c, 1);
     }
 }
 

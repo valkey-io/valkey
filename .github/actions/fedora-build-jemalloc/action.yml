@@ -4,9 +4,10 @@ runs:
   using: "composite"
   steps:
     - run: |
-        dnf -y install git autoconf make gcc awk
-        git clone --branch 5.3.0 --single-branch https://github.com/jemalloc/jemalloc.git
-        cd jemalloc
+        dnf -y install autoconf make gcc awk curl
+        curl -L -o jemalloc-5.3.0.zip https://github.com/jemalloc/jemalloc/archive/refs/tags/5.3.0.zip
+        unzip jemalloc-5.3.0.zip
+        cd jemalloc-5.3.0
         ./autogen.sh
         ./configure --prefix=/opt/jemalloc --enable-jemalloc-prefix
         make -j$(nproc)

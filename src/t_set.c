@@ -597,6 +597,8 @@ robj *setTypeDup(robj *o) {
 void saddCommand(client *c) {
     robj *set;
     int j, added = 0;
+    long previous_element_number;
+    long current_element_number;
 
     set = lookupKeyWrite(c->db, c->argv[1]);
     if (checkType(c, set, OBJ_SET)) return;
@@ -604,8 +606,11 @@ void saddCommand(client *c) {
     if (set == NULL) {
         set = setTypeCreate(c->argv[2]->ptr, c->argc - 2);
         dbAdd(c->db, c->argv[1], &set);
+        previous_element_number = 0;
+        c->db->sets_number_of_elements++;
     } else {
         setTypeMaybeConvert(set, c->argc - 2);
+        previous_element_number = setTypeSize(set);
     }
 
     for (j = 2; j < c->argc; j++) {
@@ -615,6 +620,9 @@ void saddCommand(client *c) {
         signalModifiedKey(c, c->db, c->argv[1]);
         notifyKeyspaceEvent(NOTIFY_SET, "sadd", c->argv[1], c->db->id);
         server.dirty += added;
+        current_element_number = previous_element_number + added;
+        /* TO DO: update INFO KEYSIZES  */
+        updateSetKeySizeArray(c, previous_element_number, current_element_number);
     }
     addReplyLongLong(c, added);
 }
@@ -622,9 +630,12 @@ void saddCommand(client *c) {
 void sremCommand(client *c) {
     robj *set;
     int j, deleted = 0, keyremoved = 0;
+    long previous_element_number;
+    long current_element_number;
 
     if ((set = lookupKeyWriteOrReply(c, c->argv[1], shared.czero)) == NULL || checkType(c, set, OBJ_SET)) return;
 
+    previous_element_number = setTypeSize(set);
     for (j = 2; j < c->argc; j++) {
         if (setTypeRemove(set, c->argv[j]->ptr)) {
             deleted++;
@@ -641,6 +652,9 @@ void sremCommand(client *c) {
         if (keyremoved) notifyKeyspaceEvent(NOTIFY_GENERIC, "del", c->argv[1], c->db->id);
         server.dirty += deleted;
     }
+    current_element_number = previous_element_number - deleted;
+    /* TO DO: update INFO KEYSIZES  */
+    updateSetKeySizeArray(c, previous_element_number, current_element_number);
     addReplyLongLong(c, deleted);
 }
 
@@ -649,6 +663,10 @@ void smoveCommand(client *c) {
     srcset = lookupKeyWrite(c->db, c->argv[1]);
     dstset = lookupKeyWrite(c->db, c->argv[2]);
     ele = c->argv[3];
+    long src_previous_element_number;
+    long src_current_element_number;
+    long dst_previous_element_number;
+    long dst_current_element_number;
 
     /* If the source key does not exist return 0 */
     if (srcset == NULL) {
@@ -667,10 +685,15 @@ void smoveCommand(client *c) {
     }
 
     /* If the element cannot be removed from the src set, return 0. */
+    src_previous_element_number = setTypeSize(srcset);
     if (!setTypeRemove(srcset, ele->ptr)) {
         addReply(c, shared.czero);
         return;
+    } else {
+        src_current_element_number = setTypeSize(srcset);
     }
+
+    updateSetKeySizeArray(c, src_previous_element_number, src_current_element_number);
     notifyKeyspaceEvent(NOTIFY_SET, "srem", c->argv[1], c->db->id);
 
     /* Remove the src set from the database when empty */
@@ -681,8 +704,11 @@ void smoveCommand(client *c) {
 
     /* Create the destination set when it doesn't exist */
     if (!dstset) {
+        dst_previous_element_number = 0;
         dstset = setTypeCreate(ele->ptr, 1);
         dbAdd(c->db, c->argv[2], &dstset);
+    } else {
+        dst_previous_element_number = setTypeSize(dstset);
     }
 
     signalModifiedKey(c, c->db, c->argv[1]);
@@ -693,6 +719,8 @@ void smoveCommand(client *c) {
         server.dirty++;
         signalModifiedKey(c, c->db, c->argv[2]);
         notifyKeyspaceEvent(NOTIFY_SET, "sadd", c->argv[2], c->db->id);
+        dst_current_element_number = setTypeSize(dstset);
+        updateSetKeySizeArray(c, dst_previous_element_number, dst_current_element_number);
     }
     addReply(c, shared.cone);
 }
@@ -747,6 +775,8 @@ void spopWithCountCommand(client *c) {
     long l;
     unsigned long count, size;
     robj *set;
+    long previous_element_number;
+    long current_element_number;
 
     /* Get the count argument */
     if (getPositiveLongFromObjectOrReply(c, c->argv[2], &l, NULL) != C_OK) return;
@@ -765,6 +795,7 @@ void spopWithCountCommand(client *c) {
     }
 
     size = setTypeSize(set);
+    previous_element_number = size;
 
     /* Generate an SPOP keyspace notification */
     notifyKeyspaceEvent(NOTIFY_SET, "spop", c->argv[1], c->db->id);
@@ -787,6 +818,8 @@ void spopWithCountCommand(client *c) {
         robj *aux = server.lazyfree_lazy_server_del ? shared.unlink : shared.del;
         rewriteClientCommandVector(c, 2, aux, c->argv[1]);
         signalModifiedKey(c, c->db, c->argv[1]);
+        current_element_number = 0;
+        updateSetKeySizeArray(c, previous_element_number, current_element_number);
         return;
     }
 
@@ -805,6 +838,9 @@ void spopWithCountCommand(client *c) {
     size_t len;
     int64_t llele;
     unsigned long remaining = size - count; /* Elements left after SPOP. */
+    current_element_number = remaining;
+    updateSetKeySizeArray(c, previous_element_number, current_element_number);
+
 
     /* If we are here, the number of requested elements is less than the
      * number of elements inside the set. Also we are sure that count < size.
@@ -949,6 +985,8 @@ void spopWithCountCommand(client *c) {
 
 void spopCommand(client *c) {
     robj *set, *ele;
+    long previous_element_number;
+    long current_element_number;
 
     if (c->argc == 3) {
         spopWithCountCommand(c);
@@ -963,8 +1001,12 @@ void spopCommand(client *c) {
     if ((set = lookupKeyWriteOrReply(c, c->argv[1], shared.null[c->resp])) == NULL || checkType(c, set, OBJ_SET))
         return;
 
+    previous_element_number = setTypeSize(set);
     /* Pop a random element from the set */
     ele = setTypePopRandom(set);
+    current_element_number = setTypeSize(set);
+    /* TO DO: update INFO KEYSIZES  */
+    updateSetKeySizeArray(c, previous_element_number, current_element_number);
 
     notifyKeyspaceEvent(NOTIFY_SET, "spop", c->argv[1], c->db->id);
 
@@ -1238,6 +1280,29 @@ int qsortCompareSetsByRevCardinality(const void *s1, const void *s2) {
     return 0;
 }
 
+void updateKeySizeArray(client *c, robj *dstkey) {
+    robj *t_obj = lookupKeyWrite(c->db, dstkey);
+    if (t_obj) {
+        if (t_obj->type == OBJ_STRING) {
+            updateStringKeySizeArray(c, stringObjectLen(t_obj), 0);
+            c->db->strings_number_of_elements--;
+        } else if (t_obj->type == OBJ_LIST) {
+            updateListKeySizeArray(c, listTypeLength(t_obj), 0);
+            c->db->lists_number_of_elements--;
+        } else if (t_obj->type == OBJ_SET) {
+            updateSetKeySizeArray(c, setTypeSize(t_obj), 0);
+            c->db->sets_number_of_elements--;
+        } else if (t_obj->type == OBJ_ZSET) {
+            updateZsetKeySizeArray(c, zsetLength(t_obj), 0);
+            c->db->zsets_number_of_elements--;
+        } else if (t_obj->type == OBJ_HASH) {
+            updateHashKeySizeArray(c, hashTypeLength(t_obj), 0);
+            c->db->hashes_number_of_elements--;
+        } else if (t_obj->type == OBJ_STREAM) {
+        }
+    }
+}
+
 /* SINTER / SMEMBERS / SINTERSTORE / SINTERCARD
  *
  * 'cardinality_only' work for SINTERCARD, only return the cardinality
@@ -1282,6 +1347,7 @@ void sinterGenericCommand(client *c,
     if (empty > 0) {
         zfree(sets);
         if (dstkey) {
+            updateKeySizeArray(c, dstkey);
             if (dbDelete(c->db, dstkey)) {
                 signalModifiedKey(c, c->db, dstkey);
                 notifyKeyspaceEvent(NOTIFY_GENERIC, "del", dstkey, c->db->id);
@@ -1295,6 +1361,8 @@ void sinterGenericCommand(client *c,
         }
         return;
     }
+    if (dstkey)
+        updateKeySizeArray(c, dstkey);
 
     /* Sort sets from the smallest to largest, this will improve our
      * algorithm's performance */
@@ -1389,6 +1457,7 @@ void sinterGenericCommand(client *c,
             notifyKeyspaceEvent(NOTIFY_SET, "sinterstore", dstkey, c->db->id);
             server.dirty++;
             addReplyLongLong(c, setTypeSize(dstset));
+            updateSetKeySizeArray(c, 0, setTypeSize(dstset));
         } else {
             if (dbDelete(c->db, dstkey)) {
                 server.dirty++;
@@ -1606,6 +1675,27 @@ void sunionDiffGenericCommand(client *c, robj **setkeys, int setnum, robj *dstke
         setTypeReleaseIterator(si);
         server.lazyfree_lazy_server_del ? freeObjAsync(NULL, dstset, -1) : decrRefCount(dstset);
     } else {
+        robj *t_obj = lookupKeyWrite(c->db, dstkey);
+        if (t_obj) {
+            if (t_obj->type == OBJ_STRING) {
+                updateStringKeySizeArray(c, stringObjectLen(t_obj), 0);
+                c->db->strings_number_of_elements--;
+            } else if (t_obj->type == OBJ_LIST) {
+                updateListKeySizeArray(c, listTypeLength(t_obj), 0);
+                c->db->lists_number_of_elements--;
+            } else if (t_obj->type == OBJ_SET) {
+                updateSetKeySizeArray(c, setTypeSize(t_obj), 0);
+                c->db->sets_number_of_elements--;
+            } else if (t_obj->type == OBJ_ZSET) {
+                updateZsetKeySizeArray(c, zsetLength(t_obj), 0);
+                c->db->zsets_number_of_elements--;
+            } else if (t_obj->type == OBJ_HASH) {
+                updateHashKeySizeArray(c, hashTypeLength(t_obj), 0);
+                c->db->hashes_number_of_elements--;
+            } else if (t_obj->type == OBJ_STREAM) {
+            }
+        }
+
         /* If we have a target key where to store the resulting set
          * create this key with the result set inside */
         if (setTypeSize(dstset) > 0) {
@@ -1613,6 +1703,8 @@ void sunionDiffGenericCommand(client *c, robj **setkeys, int setnum, robj *dstke
             notifyKeyspaceEvent(NOTIFY_SET, op == SET_OP_UNION ? "sunionstore" : "sdiffstore", dstkey, c->db->id);
             server.dirty++;
             addReplyLongLong(c, setTypeSize(dstset));
+            updateSetKeySizeArray(c, 0, setTypeSize(dstset));
+            c->db->sets_number_of_elements++;
         } else {
             if (dbDelete(c->db, dstkey)) {
                 server.dirty++;

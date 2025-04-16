@@ -835,9 +835,17 @@ typedef struct replBufBlock {
     char buf[];
 } replBufBlock;
 
+typedef struct keysizeInfo {
+    long long element_size;
+    long long num;
+} keysizeInfo;
+
 /* Database representation. There are multiple databases identified
  * by integers from 0 (the default database) up to the max configured
  * database. The database number is the 'id' field in the structure. */
+
+#define KEYSIZE_ARRAY_SIZE 32
+
 typedef struct serverDb {
     kvstore *keys;                        /* The keyspace for this DB */
     kvstore *expires;                     /* Timeout of keys with a timeout set */
@@ -850,6 +858,21 @@ typedef struct serverDb {
     int id;                               /* Database ID */
     long long avg_ttl;                    /* Average TTL, just for stats */
     unsigned long expires_cursor;         /* Cursor of the active expire cycle. */
+    keysizeInfo lists_array[KEYSIZE_ARRAY_SIZE];
+    int lists_array_length;
+    unsigned long long lists_number_of_elements;
+    keysizeInfo sets_array[KEYSIZE_ARRAY_SIZE];
+    int sets_array_length;
+    unsigned long long sets_number_of_elements;
+    keysizeInfo hashes_array[KEYSIZE_ARRAY_SIZE];
+    int hashes_array_length;
+    unsigned long long hashes_number_of_elements;
+    keysizeInfo zsets_array[KEYSIZE_ARRAY_SIZE];
+    int zsets_array_length;
+    unsigned long long zsets_number_of_elements;
+    keysizeInfo strings_array[KEYSIZE_ARRAY_SIZE];
+    int strings_array_length;
+    unsigned long long strings_number_of_elements;
 } serverDb;
 
 /* forward declaration for functions ctx */
@@ -3275,6 +3298,15 @@ void *activeDefragAlloc(void *ptr);
 robj *activeDefragStringOb(robj *ob);
 void dismissSds(sds s);
 void dismissMemoryInChild(void);
+void displayUpdate(int pre_value, int current_value);
+void displayDataTypeArray(keysizeInfo *keysize_array, int length);
+void decreaseDataTypeArrayPreviousValue(keysizeInfo *keysize_array, int low, int high, int value);
+void increaseDataTypeArrayCurrentValue(keysizeInfo *keysize_array, int low, int high, int value);
+void updateHashKeySizeArray(client *c, long previous, long curr);
+void updateStringKeySizeArray(client *c, long previous, long curr);
+void updateListKeySizeArray(client *c, long previous, long curr);
+void updateZsetKeySizeArray(client *c, long previous, long curr);
+void updateSetKeySizeArray(client *c, long previous, long curr);
 
 #define RESTART_SERVER_NONE 0
 #define RESTART_SERVER_GRACEFULLY (1 << 0)     /* Do proper shutdown. */

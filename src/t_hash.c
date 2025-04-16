@@ -788,14 +788,25 @@ static void hashTypeRandomElement(robj *hashobj, unsigned long hashsize, listpac
     }
 }
 
-
 /*-----------------------------------------------------------------------------
  * Hash type commands
  *----------------------------------------------------------------------------*/
 
 void hsetnxCommand(client *c) {
     robj *o;
-    if ((o = hashTypeLookupWriteOrCreate(c, c->argv[1])) == NULL) return;
+    long previous_element_number;
+    long current_element_number;
+
+    o = lookupKeyWrite(c->db, c->argv[1]);
+    if (checkType(c, o, OBJ_HASH)) return;
+    if (o == NULL) {
+        o = createHashObject();
+        dbAdd(c->db, c->argv[1], &o);
+        previous_element_number = 0;
+        c->db->lists_number_of_elements++;
+    } else {
+        previous_element_number = hashTypeLength(o);
+    }
 
     if (hashTypeExists(o, c->argv[2]->ptr)) {
         addReply(c, shared.czero);
@@ -806,19 +817,33 @@ void hsetnxCommand(client *c) {
         notifyKeyspaceEvent(NOTIFY_HASH, "hset", c->argv[1], c->db->id);
         server.dirty++;
         addReply(c, shared.cone);
+        current_element_number = previous_element_number + 1;
+        /* TO DO: update INFO KEYSIZES  */
+        updateHashKeySizeArray(c, previous_element_number, current_element_number);
     }
 }
 
 void hsetCommand(client *c) {
     int i, created = 0;
     robj *o;
+    long previous_element_number;
+    long current_element_number;
 
     if ((c->argc % 2) == 1) {
         addReplyErrorArity(c);
         return;
     }
 
-    if ((o = hashTypeLookupWriteOrCreate(c, c->argv[1])) == NULL) return;
+    o = lookupKeyWrite(c->db, c->argv[1]);
+    if (checkType(c, o, OBJ_HASH)) return;
+    if (o == NULL) {
+        o = createHashObject();
+        dbAdd(c->db, c->argv[1], &o);
+        previous_element_number = 0;
+        c->db->hashes_number_of_elements++;
+    } else {
+        previous_element_number = hashTypeLength(o);
+    }
     hashTypeTryConversion(o, c->argv, 2, c->argc - 1);
 
     for (i = 2; i < c->argc; i += 2) created += !hashTypeSet(o, c->argv[i]->ptr, c->argv[i + 1]->ptr, HASH_SET_COPY);
@@ -827,6 +852,10 @@ void hsetCommand(client *c) {
     notifyKeyspaceEvent(NOTIFY_HASH, "hset", c->argv[1], c->db->id);
     server.dirty += (c->argc - 2) / 2;
 
+    if (created > 0) {
+        current_element_number = previous_element_number + created;
+        updateHashKeySizeArray(c, previous_element_number, current_element_number);
+    }
     /* HMSET (deprecated) and HSET return value is different. */
     char *cmdname = c->argv[0]->ptr;
     if (cmdname[1] == 's' || cmdname[1] == 'S') {
@@ -844,9 +873,20 @@ void hincrbyCommand(client *c) {
     sds new;
     unsigned char *vstr;
     unsigned int vlen;
+    long previous_element_number;
+    long current_element_number;
 
     if (getLongLongFromObjectOrReply(c, c->argv[3], &incr, NULL) != C_OK) return;
-    if ((o = hashTypeLookupWriteOrCreate(c, c->argv[1])) == NULL) return;
+    o = lookupKeyWrite(c->db, c->argv[1]);
+    if (checkType(c, o, OBJ_HASH)) return;
+    if (o == NULL) {
+        o = createHashObject();
+        dbAdd(c->db, c->argv[1], &o);
+        previous_element_number = 0;
+        c->db->hashes_number_of_elements++;
+    } else {
+        previous_element_number = hashTypeLength(o);
+    }
     if (hashTypeGetValue(o, c->argv[2]->ptr, &vstr, &vlen, &value) == C_OK) {
         if (vstr) {
             if (string2ll((char *)vstr, vlen, &value) == 0) {
@@ -871,6 +911,9 @@ void hincrbyCommand(client *c) {
     notifyKeyspaceEvent(NOTIFY_HASH, "hincrby", c->argv[1], c->db->id);
     server.dirty++;
     addReplyLongLong(c, value);
+    current_element_number = hashTypeLength(o);
+    /* TO DO: update INFO KEYSIZES  */
+    updateHashKeySizeArray(c, previous_element_number, current_element_number);
 }
 
 void hincrbyfloatCommand(client *c) {
@@ -880,13 +923,25 @@ void hincrbyfloatCommand(client *c) {
     sds new;
     unsigned char *vstr;
     unsigned int vlen;
+    long previous_element_number;
+    long current_element_number;
 
     if (getLongDoubleFromObjectOrReply(c, c->argv[3], &incr, NULL) != C_OK) return;
     if (isnan(incr) || isinf(incr)) {
         addReplyError(c, "value is NaN or Infinity");
         return;
     }
-    if ((o = hashTypeLookupWriteOrCreate(c, c->argv[1])) == NULL) return;
+
+    o = lookupKeyWrite(c->db, c->argv[1]);
+    if (checkType(c, o, OBJ_HASH)) return;
+    if (o == NULL) {
+        o = createHashObject();
+        dbAdd(c->db, c->argv[1], &o);
+        previous_element_number = 0;
+        c->db->hashes_number_of_elements++;
+    } else {
+        previous_element_number = hashTypeLength(o);
+    }
     if (hashTypeGetValue(o, c->argv[2]->ptr, &vstr, &vlen, &ll) == C_OK) {
         if (vstr) {
             if (string2ld((char *)vstr, vlen, &value) == 0) {
@@ -914,6 +969,9 @@ void hincrbyfloatCommand(client *c) {
     notifyKeyspaceEvent(NOTIFY_HASH, "hincrbyfloat", c->argv[1], c->db->id);
     server.dirty++;
     addReplyBulkCBuffer(c, buf, len);
+    current_element_number = hashTypeLength(o);
+    /* TO DO: update INFO KEYSIZES  */
+    updateHashKeySizeArray(c, previous_element_number, current_element_number);
 
     /* Always replicate HINCRBYFLOAT as an HSET command with the final value
      * in order to make sure that differences in float precision or formatting
@@ -972,9 +1030,12 @@ void hmgetCommand(client *c) {
 void hdelCommand(client *c) {
     robj *o;
     int j, deleted = 0, keyremoved = 0;
+    long previous_element_number;
+    long current_element_number;
 
     if ((o = lookupKeyWriteOrReply(c, c->argv[1], shared.czero)) == NULL || checkType(c, o, OBJ_HASH)) return;
 
+    previous_element_number = hashTypeLength(o);
     for (j = 2; j < c->argc; j++) {
         if (hashTypeDelete(o, c->argv[j]->ptr)) {
             deleted++;
@@ -988,7 +1049,13 @@ void hdelCommand(client *c) {
     if (deleted) {
         signalModifiedKey(c, c->db, c->argv[1]);
         notifyKeyspaceEvent(NOTIFY_HASH, "hdel", c->argv[1], c->db->id);
-        if (keyremoved) notifyKeyspaceEvent(NOTIFY_GENERIC, "del", c->argv[1], c->db->id);
+        if (keyremoved) {
+            notifyKeyspaceEvent(NOTIFY_GENERIC, "del", c->argv[1], c->db->id);
+            c->db->hashes_number_of_elements--;
+        }
+        current_element_number = previous_element_number - deleted;
+        /* TO DO: update INFO KEYSIZES  */
+        updateHashKeySizeArray(c, previous_element_number, current_element_number);
         server.dirty += deleted;
     }
     addReplyLongLong(c, deleted);

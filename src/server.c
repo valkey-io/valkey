@@ -889,6 +889,116 @@ void trackInstantaneousMetric(int metric, long long current_value, long long cur
     server.inst_metric[metric].last_sample_value = current_value;
 }
 
+void displayUpdate(int pre_value, int current_value) {
+    serverLog(LL_WARNING, "This is for testing, previous item number is %d, and current item number is %d", pre_value, current_value);
+}
+
+void displayDataTypeArray(keysizeInfo *keysize_array, int length) {
+    serverLog(LL_WARNING, "Current array length is %d", length);
+    for (int i = 0; i < length; i++) {
+        serverLog(LL_WARNING, "Item %lld and value is %lld", keysize_array[i].element_size, keysize_array[i].num);
+    }
+}
+
+void decreaseDataTypeArrayPreviousValue(keysizeInfo *keysize_array, int low, int high, int value) {
+    if (keysize_array[low].element_size == value) {
+        keysize_array[low].num--;
+    } else if (keysize_array[high].element_size == value) {
+        keysize_array[high].num--;
+    } else {
+        while (low + 1 < high) {
+            int mid = low + (high - low) / 2;
+            if (value > keysize_array[mid].element_size) {
+                low = mid;
+            } else {
+                high = mid;
+            }
+        }
+        if (value == keysize_array[high].element_size) {
+            keysize_array[high].num--;
+        } else {
+            keysize_array[low].num--;
+        }
+    }
+}
+
+void increaseDataTypeArrayCurrentValue(keysizeInfo *keysize_array, int low, int high, int value) {
+    if (keysize_array[low].element_size == value) {
+        keysize_array[low].num++;
+    } else if (keysize_array[high].element_size == value) {
+        keysize_array[high].num++;
+    } else {
+        while (low + 1 < high) {
+            int mid = low + (high - low) / 2;
+            if (value > keysize_array[mid].element_size) {
+                low = mid;
+            } else {
+                high = mid;
+            }
+        }
+        if (value == keysize_array[high].element_size) {
+            keysize_array[high].num++;
+        } else {
+            keysize_array[low].num++;
+        }
+    }
+}
+
+void updateHashKeySizeArray(client *c, long previous, long curr) {
+    int low = 0;
+    int high = c->db->hashes_array_length - 1;
+    if (previous != 0) {
+        decreaseDataTypeArrayPreviousValue(c->db->hashes_array, low, high, previous);
+    }
+    if (curr != 0) {
+        increaseDataTypeArrayCurrentValue(c->db->hashes_array, low, high, curr);
+    }
+}
+
+void updateListKeySizeArray(client *c, long previous, long curr) {
+    int low = 0;
+    int high = c->db->lists_array_length - 1;
+    if (previous != 0) {
+        decreaseDataTypeArrayPreviousValue(c->db->lists_array, low, high, previous);
+    }
+    if (curr != 0) {
+        increaseDataTypeArrayCurrentValue(c->db->lists_array, low, high, curr);
+    }
+}
+
+void updateSetKeySizeArray(client *c, long previous, long curr) {
+    int low = 0;
+    int high = c->db->sets_array_length - 1;
+    if (previous != 0) {
+        decreaseDataTypeArrayPreviousValue(c->db->sets_array, low, high, previous);
+    }
+    if (curr != 0) {
+        increaseDataTypeArrayCurrentValue(c->db->sets_array, low, high, curr);
+    }
+}
+
+void updateStringKeySizeArray(client *c, long previous, long curr) {
+    int low = 0;
+    int high = c->db->strings_array_length - 1;
+    if (previous != 0) {
+        decreaseDataTypeArrayPreviousValue(c->db->strings_array, low, high, previous);
+    }
+    if (curr != 0) {
+        increaseDataTypeArrayCurrentValue(c->db->strings_array, low, high, curr);
+    }
+}
+
+void updateZsetKeySizeArray(client *c, long previous, long curr) {
+    int low = 0;
+    int high = c->db->zsets_array_length - 1;
+    if (previous != 0) {
+        decreaseDataTypeArrayPreviousValue(c->db->zsets_array, low, high, previous);
+    }
+    if (curr != 0) {
+        increaseDataTypeArrayCurrentValue(c->db->zsets_array, low, high, curr);
+    }
+}
+
 /* Return the mean of all the samples. */
 long long getInstantaneousMetric(int metric) {
     int j;
@@ -2791,6 +2901,30 @@ serverDb *createDatabase(int id) {
     db->watched_keys = dictCreate(&keylistDictType);
     db->id = id;
     db->avg_ttl = 0;
+    db->lists_number_of_elements = 0;
+    db->lists_array_length = KEYSIZE_ARRAY_SIZE;
+    db->sets_number_of_elements = 0;
+    db->sets_array_length = KEYSIZE_ARRAY_SIZE;
+    db->hashes_number_of_elements = 0;
+    db->hashes_array_length = KEYSIZE_ARRAY_SIZE;
+    db->zsets_number_of_elements = 0;
+    db->zsets_array_length = KEYSIZE_ARRAY_SIZE;
+    db->strings_number_of_elements = 0;
+    db->strings_array_length = KEYSIZE_ARRAY_SIZE;
+    long long i = 1;
+    for (int count = 0; count < KEYSIZE_ARRAY_SIZE; count++) {
+        db->lists_array[count].element_size = i;
+        db->lists_array[count].num = 0;
+        db->sets_array[count].element_size = i;
+        db->sets_array[count].num = 0;
+        db->hashes_array[count].element_size = i;
+        db->hashes_array[count].num = 0;
+        db->zsets_array[count].element_size = i;
+        db->zsets_array[count].num = 0;
+        db->strings_array[count].element_size = i;
+        db->strings_array[count].num = 0;
+        i *= 2;
+    }
     return db;
 }
 
@@ -5666,6 +5800,7 @@ dict *genInfoSectionDict(robj **argv, int argc, char **defaults, int *out_all, i
         "errorstats",
         "cluster",
         "keyspace",
+        "keysizes",
         NULL,
     };
     if (!defaults) defaults = default_sections;
@@ -6322,6 +6457,42 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
             }
         }
     }
+
+    /* Key size distribution*/
+
+    if (all_sections || (dictFind(section_dict, "keysizes") != NULL)) {
+        if (sections++) info = sdscat(info, "\r\n");
+        info = sdscatprintf(info, "# Keysizes\r\n");
+        for (j = 0; j < server.dbnum; j++) {
+            if (server.db[j] == NULL) continue;
+            info = sdscatprintf(info, "db%d_distrib_strings_sizes:", j);
+            for (int l = 0; l < server.db[j]->strings_array_length; l++) {
+                info = sdscatprintf(info, "%lld=%lld,", server.db[j]->strings_array[l].element_size, server.db[j]->strings_array[l].num);
+            }
+            info = sdscatprintf(info, "\r\n");
+            info = sdscatprintf(info, "db%d_distrib_lists_items:", j);
+            for (int l = 0; l < server.db[j]->lists_array_length; l++) {
+                info = sdscatprintf(info, "%lld=%lld,", server.db[j]->lists_array[l].element_size, server.db[j]->lists_array[l].num);
+            }
+            info = sdscatprintf(info, "\r\n");
+            info = sdscatprintf(info, "db%d_distrib_sets_items:", j);
+            for (int l = 0; l < server.db[j]->sets_array_length; l++) {
+                info = sdscatprintf(info, "%lld=%lld,", server.db[j]->sets_array[l].element_size, server.db[j]->sets_array[l].num);
+            }
+            info = sdscatprintf(info, "\r\n");
+            info = sdscatprintf(info, "db%d_distrib_hashes_items:", j);
+            for (int l = 0; l < server.db[j]->hashes_array_length; l++) {
+                info = sdscatprintf(info, "%lld=%lld,", server.db[j]->hashes_array[l].element_size, server.db[j]->hashes_array[l].num);
+            }
+            info = sdscatprintf(info, "\r\n");
+            info = sdscatprintf(info, "db%d_distrib_zsets_items:", j);
+            for (int l = 0; l < server.db[j]->zsets_array_length; l++) {
+                info = sdscatprintf(info, "%lld=%lld,", server.db[j]->zsets_array[l].element_size, server.db[j]->zsets_array[l].num);
+            }
+            info = sdscatprintf(info, "\r\n");
+        }
+    }
+
 
     /* Get info from modules.
      * Returned when the user asked for "everything", "modules", or a specific module section.

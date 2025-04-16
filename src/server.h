@@ -3806,6 +3806,7 @@ void clientTrackingInfoCommand(client *c);
 void clientNoTouchCommand(client *c);
 void clientCapaCommand(client *c);
 void clientImportSourceCommand(client *c);
+void clientCountCommand(client *c);
 void helloCommand(client *c);
 void clientSetinfoCommand(client *c);
 void evalCommand(client *c);

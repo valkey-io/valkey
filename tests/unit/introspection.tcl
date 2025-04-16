@@ -398,6 +398,176 @@ start_server {tags {"introspection"}} {
         assert_error "ERR *greater than 0*" {r client list maxage -1}
     }
 
+    test {CLIENT COUNT: Count all clients} {
+        # Connect multiple clients
+        set c1 [valkey_client]
+        set c2 [valkey_client]
+        set c3 [valkey_client]
+
+        # Assert the count matches the number of connected clients
+        assert {[r client count] == 4}
+
+        # Close all clients
+        $c1 close
+        $c2 close
+        $c3 close
+    }
+
+    test {CLIENT COUNT: Filter by specific ID} {
+        # Create two clients and name them
+        set c1 [valkey_client]
+        set c2 [valkey_client]
+
+        $c1 client setname test-client-1
+        $c2 client setname test-client-2
+
+        # Extract the ID of test-client-1
+        set id1 {}
+        set client_list [r client list]
+        foreach line [split $client_list "\n"] {
+            if {[string match *name=test-client-1* $line]} {
+                regexp {id=(\d+)} $line -> id1
+            }
+        }
+
+        # Make sure we found the ID
+        assert {$id1 ne {}}
+
+        # Check client count by ID (must be LAST argument for compatibility)
+        set result [r client count id $id1]
+        assert {$result == 1}
+
+        # Clean up
+        $c1 close
+        $c2 close
+    }
+
+    test {CLIENT COUNT: Filter by maximum age} {
+        # Create two clients
+        set c1 [valkey_client]
+        set c2 [valkey_client]
+
+        # Wait 2 seconds
+        after 2000
+
+        # Assert no clients younger than 1 second are counted
+        assert {[r client count maxage 1] == 3}
+
+        # Close the clients
+        $c1 close
+        $c2 close
+    }
+
+    test {CLIENT COUNT: Filter by client address} {
+        # Create a client
+        set c1 [valkey_client]
+
+        # Get the client's address
+        set client_list [r client list]
+        regexp {addr=([^ ]+)} $client_list -> addr
+
+        # Assert only the client with the matching address is counted
+        assert {[r client count addr $addr] == 1}
+
+        # Close the client
+        $c1 close
+    }
+
+    test {CLIENT COUNT: Filter by local address} {
+        # Create a client
+        set c1 [valkey_client]
+
+        # Get the client's local address
+        set client_list [r client list]
+        regexp {laddr=([^ ]+)} $client_list -> laddr
+
+        # Assert only the client with the matching local address is counted
+        assert {[r client count laddr $laddr] == 2}
+
+        # Close the client
+        $c1 close
+    }
+
+    test {CLIENT COUNT: Exclude current client} {
+        # Create two clients
+        set c1 [valkey_client]
+        set c2 [valkey_client]
+
+        # Assert the correct number of clients is returned for both cases
+        assert {[r client count skipme no] == 3}
+        assert {[r client count skipme yes] == 2}
+
+        # Close the clients
+        $c1 close
+        $c2 close
+    }
+
+    test {CLIENT COUNT: Filter by user} {
+        # Create a user and assign it to a client
+        r acl setuser user1 on +@all >password
+        set c1 [valkey_client]
+        $c1 auth user1 password
+        set c2 [valkey_client]
+
+        # Assert only the client associated with the user is counted
+        assert {[r client count user user1] == 1}
+
+        # Close the clients
+        $c1 close
+        $c2 close
+
+        # Delete the user
+        r acl deluser user1
+    }
+
+    test {CLIENT COUNT: Filter by type} {
+        # Create clients of different types
+        set c1 [valkey_client]
+        set c2 [valkey_client]
+        $c2 subscribe test_channel
+
+        # Assert only normal clients are counted
+        assert {[r client count type normal] == 2}
+        assert {[r client count type pubsub] == 1}
+
+        # Close the clients
+        $c1 close
+        $c2 close
+    }
+
+
+    test {CLIENT COUNT: Filter by client name} {
+        # Create a client and set its name
+        set c1 [valkey_client]
+        $c1 client setname test_client
+
+        # Assert only the client with the matching name is counted
+        assert {[r client count name test_client] == 1}
+
+        # Close the client
+        $c1 close
+    }
+
+    test {CLIENT COUNT: Combine filters for name and flags} {
+        # Create multiple clients with different attributes
+        set c1 [valkey_client]
+        set c2 [valkey_client]
+        $c1 client setname client1
+        $c2 client setname client2
+        $c2 multi
+
+        # Assert only clients matching both filters are counted
+        assert {[r client count name client1 flags x] == 0}
+
+
+        # Assert only clients matching both filters are counted
+        assert {[r client count name client2 flags x] == 1}
+
+        # Close the clients
+        $c1 close
+        $c2 close
+    }
+
     proc get_field_in_client_info {info field} {
         set info [string trim $info]
         foreach item [split $info " "] {
@@ -764,19 +934,19 @@ start_server {tags {"introspection"}} {
         set rd [valkey_deferring_client]
         $rd monitor
         $rd read ; # Discard the OK
-    
+
         # Execute multi-exec block with SET EX commands
         r multi
         r set "{slot}key1" value1 ex 3600
         r set "{slot}key2" value2 ex 1800
         r exec
-    
+
         # Verify monitor output shows the original commands:
         assert_match {*"multi"*} [$rd read]
         assert_match {*"set"*"{slot}key1"*"value1"*"ex"*"3600"*} [$rd read]
         assert_match {*"set"*"{slot}key2"*"value2"*"ex"*"1800"*} [$rd read]
         assert_match {*"exec"*} [$rd read]
-    
+
         # Clean up monitoring client
         $rd close
     }

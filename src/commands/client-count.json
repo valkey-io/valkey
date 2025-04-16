@@ -1,0 +1,188 @@
+{
+    "COUNT": {
+        "summary": "Counts open connections.",
+        "complexity": "O(N) where N is the number of client connections",
+        "group": "connection",
+        "since": "9.0.0",
+        "arity": -2,
+        "container": "CLIENT",
+        "function": "clientCountCommand",
+        "history": [
+            [
+                "9.0.0",
+                "Introducing client count command with filters"
+            ]
+        ],
+        "command_flags": [
+            "ADMIN",
+            "NOSCRIPT",
+            "LOADING",
+            "STALE",
+            "SENTINEL"
+        ],
+        "acl_categories": [
+            "CONNECTION"
+        ],
+        "command_tips": [
+            "NONDETERMINISTIC_OUTPUT"
+        ],
+        "reply_schema": {
+            "type": "string",
+            "description": "Information and statistics about client connections"
+        },
+        "arguments": [
+            {
+                "token": "ID",
+                "name": "id",
+                "type": "integer",
+                "optional": true,
+                "multiple": true,
+                "since": "9.0.0"
+            },
+            {
+                "token": "TYPE",
+                "name": "type",
+                "type": "oneof",
+                "optional": true,
+                "since": "9.0.0",
+                "arguments": [
+                    {
+                        "name": "normal",
+                        "type": "pure-token",
+                        "token": "normal"
+                    },
+                    {
+                        "name": "master",
+                        "type": "pure-token",
+                        "token": "master"
+                    },
+                    {
+                        "name": "primary",
+                        "type": "pure-token",
+                        "token": "primary"
+                    },
+                    {
+                        "name": "slave",
+                        "type": "pure-token",
+                        "token": "slave"
+                    },
+                    {
+                        "name": "replica",
+                        "type": "pure-token",
+                        "token": "replica"
+                    },
+                    {
+                        "name": "pubsub",
+                        "type": "pure-token",
+                        "token": "pubsub"
+                    }
+                ]
+            },
+            {
+                "token": "USER",
+                "name": "username",
+                "type": "string",
+                "optional": true,
+                "since": "9.0.0"
+            },
+            {
+                "token": "ADDR",
+                "name": "addr",
+                "display": "ip:port",
+                "type": "string",
+                "optional": true,
+                "since": "9.0.0"
+            },
+            {
+                "token": "LADDR",
+                "name": "laddr",
+                "display": "ip:port",
+                "type": "string",
+                "optional": true,
+                "since": "9.0.0"
+            },
+            {
+                "token": "SKIPME",
+                "name": "skipme",
+                "type": "oneof",
+                "optional": true,
+                "since": "9.0.0",
+                "arguments": [
+                    {
+                        "name": "yes",
+                        "type": "pure-token",
+                        "token": "YES"
+                    },
+                    {
+                        "name": "no",
+                        "type": "pure-token",
+                        "token": "NO"
+                    }
+                ]
+            },
+            {
+                "token": "MAXAGE",
+                "name": "maxage",
+                "type": "integer",
+                "optional": true,
+                "since": "9.0.0"
+            },
+            {
+                "token": "NAME",
+                "name": "name",
+                "type": "string",
+                "optional": true,
+                "since": "9.0.0"
+            },
+            {
+                "token": "IDLE",
+                "name": "idle",
+                "type": "integer",
+                "optional": true,
+                "since": "9.0.0"
+            },
+            {
+                "token": "FLAGS",
+                "name": "flags",
+                "type": "string",
+                "optional": true,
+                "since": "9.0.0"
+            },
+            {
+                "token": "LIB-NAME",
+                "name": "lib-name",
+                "type": "string",
+                "optional": true,
+                "since": "9.0.0"
+            },
+            {
+                "token": "LIB-VER",
+                "name": "lib-ver",
+                "type": "string",
+                "optional": true,
+                "since": "9.0.0"
+            },
+            {
+                "token": "DB",
+                "name": "db",
+                "type": "integer",
+                "optional": true,
+                "since": "9.0.0"
+            },
+            {
+                "token": "CAPA",
+                "name": "capa",
+                "type": "string",
+                "optional": true,
+                "since": "9.0.0"
+            },
+            {
+                "token": "IP",
+                "name": "ip",
+                "type": "string",
+                "optional": true,
+                "since": "9.0.0"
+            }
+        ]
+    }
+}

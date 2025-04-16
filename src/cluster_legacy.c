@@ -4154,21 +4154,21 @@ void clusterSetGossipEntry(clusterMsg *hdr, int i, clusterNode *n) {
     gossip->notused1 = 0;
 }
 
-static void addNodeToGossip(clusterMsg *hdr, clusterNode *this, clusterLink *link, int* freshnodes, int* gossipcount, unsigned long long cluster_pings_sent) {
+static void addNodeToGossip(clusterMsg *hdr, clusterNode *this, clusterLink *link, int *freshnodes, int *gossipcount, unsigned long long cluster_pings_sent) {
     /* Don't include this node: the whole packet header is about us
-    * already, so we just gossip about other nodes.
-    * Also, don't include the receiver. Receiver will not update its state
-    * based on gossips about itself. */
+     * already, so we just gossip about other nodes.
+     * Also, don't include the receiver. Receiver will not update its state
+     * based on gossips about itself. */
     if (this == myself || this == link->node) return;
 
     /* PFAIL nodes will be added later. */
     if (this->flags & CLUSTER_NODE_PFAIL) return;
 
     /* In the gossip section don't include:
-    * 1) Nodes in HANDSHAKE state.
-    * 3) Nodes with the NOADDR flag set.
-    * 4) Disconnected nodes if they don't have configured slots.
-    */
+     * 1) Nodes in HANDSHAKE state.
+     * 3) Nodes with the NOADDR flag set.
+     * 4) Disconnected nodes if they don't have configured slots.
+     */
     if (this->flags & (CLUSTER_NODE_HANDSHAKE | CLUSTER_NODE_NOADDR) ||
         (this->link == NULL && this->numslots == 0)) {
         (*freshnodes)--; /* Technically not correct, but saves CPU. */
@@ -4266,7 +4266,7 @@ void clusterSendPing(clusterLink *link, int type) {
         dictEntry *de;
         dictIterator *di;
         di = dictGetSafeIterator(server.cluster->nodes);
-        while((de = dictNext(di)) != NULL) {
+        while ((de = dictNext(di)) != NULL) {
             clusterNode *this = dictGetVal(de);
             addNodeToGossip(hdr, this, link, &freshnodes, &gossipcount, cluster_pings_sent);
         }
@@ -5394,11 +5394,11 @@ void clusterCron(void) {
         if (server.cluster_non_random_gossip) {
             /* Ping all nodes. */
             di = dictGetSafeIterator(server.cluster->nodes);
-            while((de = dictNext(di)) != NULL) {
+            while ((de = dictNext(di)) != NULL) {
                 clusterNode *this = dictGetVal(de);
                 /* Don't ping nodes disconnected or with a ping currently active. */
                 if (this->link == NULL || this->ping_sent != 0) continue;
-                if (this->flags & (CLUSTER_NODE_MYSELF|CLUSTER_NODE_HANDSHAKE)) continue;
+                if (this->flags & (CLUSTER_NODE_MYSELF | CLUSTER_NODE_HANDSHAKE)) continue;
 
                 serverLog(LL_DEBUG, "Pinging node %.40s (%s)", this->name, this->human_nodename);
                 clusterSendPing(this->link, CLUSTERMSG_TYPE_PING);
@@ -5408,7 +5408,7 @@ void clusterCron(void) {
             int j;
 
             /* Check a few random nodes and ping the one with the oldest
-            * pong_received time. */
+             * pong_received time. */
             for (j = 0; j < 5; j++) {
                 de = dictGetRandomKey(server.cluster->nodes);
                 clusterNode *this = dictGetVal(de);

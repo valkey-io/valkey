@@ -1307,12 +1307,13 @@ tags {acl external:skip} {
     }
 }
 
-set server_path [tmpdir "acl"]
+set server_path [tmpdir "server.acl"]
 exec cp -f tests/assets/user.acl $server_path
 start_server [list overrides [list "dir" $server_path "aclfile" "user.acl"] tags {"repl external:skip"}] {
     set primary [srv 0 client]
     set primary_host [srv 0 host]
     set primary_port [srv 0 port]
+
     test "Test ACL LOAD works on primary" {
         exec cp -f tests/assets/user.acl $server_path
         $primary ACL setuser harry on nopass resetchannels &test +@all ~*
@@ -1320,6 +1321,7 @@ start_server [list overrides [list "dir" $server_path "aclfile" "user.acl"] tags
         $primary ACL load
         $primary AUTH harry anything
     }
+
     start_server [list overrides [list "dir" $server_path "aclfile" "user.acl"]] {
         set replica [srv 0 client]
         $replica replicaof $primary_host $primary_port
@@ -1342,4 +1344,3 @@ start_server [list overrides [list "dir" $server_path "aclfile" "user.acl"] tags
         }
     }
 }
-

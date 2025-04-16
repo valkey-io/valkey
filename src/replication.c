@@ -1302,6 +1302,7 @@ void freeClientReplicationData(client *c) {
     }
     if (c->flag.primary) replicationHandlePrimaryDisconnection();
     sdsfree(c->repl_data->replica_addr);
+    sdsfree(c->repl_data->replica_nodeid);
     zfree(c->repl_data);
     c->repl_data = NULL;
 }
@@ -1351,6 +1352,13 @@ void freeClientReplicationData(client *c) {
  * - rdb-channel <1|0>
  * Used to identify the client as a replica's rdb connection in an dual channel
  * sync session.
+ *
+ * - set-rdb-client-id <client-id>
+ * Used to identify the current replica main channel with existing rdb-connection
+ * with the given id.
+ *
+ * - set-cluster-node-id <node-id>
+ * Used to inform the primary of the node-id of the replica in cluster mode.
  * */
 void replconfCommand(client *c) {
     int j;
@@ -1500,6 +1508,21 @@ void replconfCommand(client *c) {
                 return;
             }
             c->repl_data->associated_rdb_client_id = (uint64_t)client_id;
+        } else if (!strcasecmp(c->argv[j]->ptr, "set-cluster-node-id")) {
+            /* REPLCONF SET-CLUSTER-NODE-ID <node-id> */
+            if (!server.cluster_enabled) {
+                addReplyError(c, "This instance has cluster support disabled");
+                return;
+            }
+
+            clusterNode *n = clusterLookupNode(c->argv[j + 1]->ptr, sdslen(c->argv[j + 1]->ptr));
+            if (!n) {
+                addReplyErrorFormat(c, "Unknown node %s", (char *)c->argv[j + 1]->ptr);
+                return;
+            }
+
+            if (c->repl_data->replica_nodeid) sdsfree(c->repl_data->replica_nodeid);
+            c->repl_data->replica_nodeid = sdsdup(c->argv[j + 1]->ptr);
         } else {
             addReplyErrorFormat(c, "Unrecognized REPLCONF option: %s", (char *)c->argv[j]->ptr);
             return;
@@ -3621,6 +3644,14 @@ void syncWithPrimary(connection *conn) {
         err = sendCommand(conn, "REPLCONF", "version", VALKEY_VERSION, NULL);
         if (err) goto write_error;
 
+        /* Inform the primary of our (replica) node name. */
+        if (server.cluster_enabled) {
+            char *argv[] = {"REPLCONF", "SET-CLUSTER-NODE-ID", server.cluster->myself->name};
+            size_t lens[] = {strlen(argv[0]), strlen(argv[1]), CLUSTER_NAMELEN};
+            err = sendCommandArgv(conn, 3, argv, lens);
+            if (err) goto write_error;
+        }
+
         server.repl_state = REPL_STATE_RECEIVE_AUTH_REPLY;
         return;
     }
@@ -3707,6 +3738,27 @@ void syncWithPrimary(connection *conn) {
             serverLog(LL_NOTICE,
                       "(Non critical) Primary does not understand "
                       "REPLCONF VERSION: %s",
+                      err);
+        }
+        sdsfree(err);
+        err = NULL;
+        if (server.cluster_enabled) {
+            server.repl_state = REPL_STATE_RECEIVE_NODEID_REPLY;
+            return;
+        } else {
+            server.repl_state = REPL_STATE_SEND_PSYNC;
+        }
+    }
+
+    /* Receive REPLCONF SET-CLUSTER-NODE-ID reply. */
+    if (server.repl_state == REPL_STATE_RECEIVE_NODEID_REPLY) {
+        err = receiveSynchronousResponse(conn);
+        if (err == NULL) goto no_response_error;
+        /* Ignore the error if any, we don't care if it failed, it is best effort. */
+        if (err[0] == '-') {
+            serverLog(LL_NOTICE,
+                      "(Non critical) Primary does not understand "
+                      "REPLCONF SET-CLUSTER-NODE-ID: %s",
                       err);
         }
         sdsfree(err);

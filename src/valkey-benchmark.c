@@ -100,8 +100,9 @@ static struct config {
     long long previous_tick;
     int keysize;
     int datasize;
-    int randomkeys;
-    int randomkeys_keyspacelen;
+    int replacekeys;
+    int keyspacelen;
+    int sequential_replacement;
     int keepalive;
     int pipeline;
     long long start;
@@ -393,18 +394,23 @@ static void resetClient(client c) {
     c->pending = config.pipeline;
 }
 
-static void randomizeClientKey(client c) {
-    size_t i;
-
-    for (i = 0; i < c->randlen; i++) {
+static void generateClientKey(client c) {
+    static _Atomic size_t seq_key = 0;
+    for (size_t i = 0; i < c->randlen; i++) {
         char *p = c->randptr[i] + 11;
-        size_t r = 0;
-        if (config.randomkeys_keyspacelen != 0) r = random() % config.randomkeys_keyspacelen;
-        size_t j;
+        size_t key = 0;
+        if (config.keyspacelen != 0) {
+            if (config.sequential_replacement) {
+                key = atomic_fetch_add_explicit(&seq_key, 1, memory_order_relaxed);
+            } else {
+                key = random();
+            }
+            key %= config.keyspacelen;
+        }
 
-        for (j = 0; j < 12; j++) {
-            *p = '0' + r % 10;
-            r /= 10;
+        for (size_t j = 0; j < 12; j++) {
+            *p = '0' + key % 10;
+            key /= 10;
             p--;
         }
     }
@@ -577,8 +583,8 @@ static void writeHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
             return;
         }
 
-        /* Really initialize: randomize keys and set start time. */
-        if (config.randomkeys) randomizeClientKey(c);
+        /* Really initialize: replace keys and set start time. */
+        if (config.replacekeys) generateClientKey(c);
         if (config.cluster_mode && c->staglen > 0) setClusterKeyHashTag(c);
         c->slots_last_update = atomic_load_explicit(&config.slots_last_update, memory_order_relaxed);
         c->start = ustime();
@@ -749,8 +755,8 @@ static client createClient(char *cmd, size_t len, client from, int thread_id) {
     c->stagptr = NULL;
     c->staglen = 0;
 
-    /* Find substrings in the output buffer that need to be randomized. */
-    if (config.randomkeys) {
+    /* Find substrings in the output buffer that need to be replaced. */
+    if (config.replacekeys) {
         if (from) {
             c->randlen = from->randlen;
             c->randfree = 0;
@@ -1366,9 +1372,11 @@ int parseOptions(int argc, char **argv) {
                 p++;
                 if (*p < '0' || *p > '9') goto invalid;
             }
-            config.randomkeys = 1;
-            config.randomkeys_keyspacelen = atoi(next);
-            if (config.randomkeys_keyspacelen < 0) config.randomkeys_keyspacelen = 0;
+            config.replacekeys = 1;
+            config.keyspacelen = atoi(next);
+            if (config.keyspacelen < 0) config.keyspacelen = 0;
+        } else if (!strcmp(argv[i], "--sequential")) {
+            config.sequential_replacement = 1;
         } else if (!strcmp(argv[i], "-q")) {
             config.quiet = 1;
         } else if (!strcmp(argv[i], "--csv")) {
@@ -1541,14 +1549,16 @@ usage:
         " -k <boolean>       1=keep alive 0=reconnect (default 1)\n"
         " -r <keyspacelen>   Use random keys for SET/GET/INCR, random values for SADD,\n"
         "                    random members and scores for ZADD.\n"
-        "                    Using this option the benchmark will expand the string\n"
-        "                    __rand_int__ inside an argument with a 12 digits number in\n"
-        "                    the specified range from 0 to keyspacelen-1. The\n"
+        "                    Using this option the benchmark will replace the string\n"
+        "                    __rand_int__ inside an argument with a random 12 digit\n"
+        "                    number in the specified range from 0 to keyspacelen-1. The\n"
         "                    substitution changes every time a command is executed.\n"
         "                    Default tests use this to hit random keys in the specified\n"
         "                    range.\n"
         "                    Note: If -r is omitted, all commands in a benchmark will\n"
         "                    use the same key.\n"
+        " --sequential       Modifies the -r argument to replace the string __rand_int__\n"
+        "                    with 12 digit numbers sequentially instead of randomly.\n"
         " -P <numreq>        Pipeline <numreq> requests. Default 1 (no pipeline).\n"
         " -q                 Quiet. Just show query/sec values\n"
         " --precision        Number of decimal places to display in latency output (default 0)\n"
@@ -1703,8 +1713,9 @@ int main(int argc, char **argv) {
     config.keepalive = 1;
     config.datasize = 3;
     config.pipeline = 1;
-    config.randomkeys = 0;
-    config.randomkeys_keyspacelen = 0;
+    config.replacekeys = 0;
+    config.keyspacelen = 0;
+    config.sequential_replacement = 0;
     config.quiet = 0;
     config.csv = 0;
     config.loop = 0;
@@ -1948,7 +1959,7 @@ int main(int argc, char **argv) {
 
         if (test_is_selected("zadd")) {
             char *score = "0";
-            if (config.randomkeys) score = "__rand_int__";
+            if (config.replacekeys) score = "__rand_int__";
             len = redisFormatCommand(&cmd, "ZADD myzset%s %s element:__rand_int__", tag, score);
             benchmark("ZADD", cmd, len);
             free(cmd);

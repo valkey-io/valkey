@@ -54,8 +54,8 @@
 int anetTcpNonBlockConnect(char *err, const char *addr, int port);
 int anetTcpNonBlockBestEffortBindConnect(char *err, const char *addr, int port, const char *source_addr);
 int anetResolve(char *err, char *host, char *ipbuf, size_t ipbuf_len, int flags);
-int anetTcpServer(char *err, int port, char *bindaddr, int backlog);
-int anetTcp6Server(char *err, int port, char *bindaddr, int backlog);
+int anetTcpServer(char *err, int port, char *bindaddr, int backlog, int mptcp);
+int anetTcp6Server(char *err, int port, char *bindaddr, int backlog, int mptcp);
 int anetUnixServer(char *err, char *path, mode_t perm, int backlog, char *group);
 int anetTcpAccept(char *err, int serversock, char *ip, size_t ip_len, int *port);
 int anetUnixAccept(char *err, int serversock);
@@ -74,5 +74,13 @@ int anetPipe(int fds[2], int read_flags, int write_flags);
 int anetSetSockMarkId(char *err, int fd, uint32_t id);
 int anetGetError(int fd);
 int anetIsFifo(char *filepath);
+
+static inline int anetHasMptcp(void) {
+#ifdef IPPROTO_MPTCP
+    return 1;
+#else
+    return 0;
+#endif
+}
 
 #endif

@@ -4180,7 +4180,7 @@ void zrandmemberWithCountCommand(client *c, long l, int withscores) {
     /* CASE 3:
      * The number of elements inside the zset is not greater than
      * ZRANDMEMBER_SUB_STRATEGY_MUL times the number of requested elements.
-     * In this case we create a dict from scratch with all the elements, and
+     * In this case we create a hashtable from scratch with all the elements, and
      * subtract random elements to reach the requested number of elements.
      *
      * This is done because if the number of requested elements is just
@@ -4188,39 +4188,41 @@ void zrandmemberWithCountCommand(client *c, long l, int withscores) {
      * used into CASE 4 is highly inefficient. */
     if (count * ZRANDMEMBER_SUB_STRATEGY_MUL > size) {
         /* Hashtable encoding (generic implementation) */
-        dict *d = dictCreate(&sdsReplyDictType);
-        dictExpand(d, size);
-        /* Add all the elements into the temporary dictionary. */
-        while (zuiNext(&src, &zval)) {
-            sds key = zuiNewSdsFromValue(&zval);
-            dictEntry *de = dictAddRaw(d, key, NULL);
-            serverAssert(de);
-            if (withscores) dictSetDoubleVal(de, zval.score);
+        hashtable *ht = hashtableCreate(&zsetHashtableType);
+        hashtableExpand(ht, size);
+        zset *zs = src.subject->ptr;
+        hashtableIterator iter;
+        hashtableInitIterator(&iter, zs->ht, 0);
+        void *entry;
+        /* Add all the elements into the temporary hashtable. */
+        while (hashtableNext(&iter, &entry)) {
+            int res = hashtableAdd(ht, entry);
+            serverAssert(res);
         }
-        serverAssert(dictSize(d) == size);
+        serverAssert(hashtableSize(ht) == size);
 
         /* Remove random elements to reach the right count. */
         while (size > count) {
-            dictEntry *de;
-            de = dictGetFairRandomKey(d);
-            dictUnlink(d, dictGetKey(de));
-            sdsfree(dictGetKey(de));
-            dictFreeUnlinkedEntry(d, de);
+            void *element;
+            hashtableFairRandomEntry(ht, &element);
+            hashtableDelete(ht, ((zskiplistNode *)element)->ele);
             size--;
         }
+        hashtableResetIterator(&iter);
 
-        /* Reply with what's in the dict and release memory */
-        dictIterator *di;
-        dictEntry *de;
-        di = dictGetIterator(d);
-        while ((de = dictNext(di)) != NULL) {
+        /* Reply with what's in the temporary hashtable and release memory */
+        hashtableInitIterator(&iter, ht, 0);
+        void *next;
+        while (hashtableNext(&iter, &next)) {
+            zskiplistNode *node = (zskiplistNode *)next;
+            sds key = node->ele;
             if (withscores && c->resp > 2) addReplyArrayLen(c, 2);
-            addReplyBulkSds(c, dictGetKey(de));
-            if (withscores) addReplyDouble(c, dictGetDoubleVal(de));
+            addReplyBulkCBuffer(c, key, sdslen(key));
+            if (withscores) addReplyDouble(c, node->score);
         }
 
-        dictReleaseIterator(di);
-        dictRelease(d);
+        hashtableResetIterator(&iter);
+        hashtableRelease(ht);
     }
 
     /* CASE 4: We have a big zset compared to the requested number of elements.
@@ -4230,19 +4232,19 @@ void zrandmemberWithCountCommand(client *c, long l, int withscores) {
     else {
         /* Hashtable encoding (generic implementation) */
         unsigned long added = 0;
-        dict *d = dictCreate(&hashDictType);
-        dictExpand(d, count);
+        hashtable *ht = hashtableCreate(&setHashtableType);
+        hashtableExpand(ht, count);
 
         while (added < count) {
             listpackEntry key;
             double score;
             zsetTypeRandomElement(zsetobj, size, &key, withscores ? &score : NULL);
 
-            /* Try to add the object to the dictionary. If it already exists
+            /* Try to add the object to the hashtable. If it already exists
              * free it, otherwise increment the number of objects we have
-             * in the result dictionary. */
+             * in the result hashtable. */
             sds skey = zsetSdsFromListpackEntry(&key);
-            if (dictAdd(d, skey, NULL) != DICT_OK) {
+            if (!hashtableAdd(ht, skey)) {
                 sdsfree(skey);
                 continue;
             }
@@ -4254,7 +4256,7 @@ void zrandmemberWithCountCommand(client *c, long l, int withscores) {
         }
 
         /* Release memory */
-        dictRelease(d);
+        hashtableRelease(ht);
     }
     zuiClearIterator(&src);
 }

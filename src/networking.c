@@ -149,12 +149,6 @@ static inline int isReplicaReadyForReplData(client *replica) {
            !(replica->flag.close_asap);
 }
 
-static void resetDeferredReplyBuffer(client *c) {
-    listRelease(c->deferred_reply);
-    c->deferred_reply = NULL;
-    c->deferred_reply_bytes = 0;
-}
-
 client *createClient(connection *conn) {
     client *c = zmalloc(sizeof(client));
 
@@ -212,7 +206,7 @@ client *createClient(connection *conn) {
     c->deferred_reply = NULL;
     c->deferred_reply_errors = NULL;
     c->reply_bytes = 0;
-    c->deferred_reply_bytes = 0;
+    c->deferred_reply_bytes = ULLONG_MAX;
     c->obuf_soft_limit_reached_time = 0;
     listSetFreeMethod(c->reply, freeClientReplyValue);
     listSetDupMethod(c->reply, dupClientReplyValue);
@@ -333,7 +327,7 @@ int prepareClientToWrite(client *c) {
      * it should already be setup to do so (it has already pending data). */
     if (!clientHasPendingReplies(c)) putClientInPendingWriteQueue(c);
 
-    if (c->deferred_reply == NULL) c->flag.buffered_reply = 1;
+    if (!isDeferredReplyEnabled(c)) c->flag.buffered_reply = 1;
     /* Authorize the caller to queue in the output buffer of this client. */
     return C_OK;
 }
@@ -433,14 +427,14 @@ void _addReplyProtoToList(client *c, list *reply_list, const char *s, size_t len
          * least PROTO_REPLY_CHUNK_BYTES */
         size_t usable_size;
         size_t size = len < PROTO_REPLY_CHUNK_BYTES ? PROTO_REPLY_CHUNK_BYTES : len;
-        if (c->deferred_reply) size = len;
+        if (isDeferredReplyEnabled(c)) size = len;
         tail = zmalloc_usable(size + sizeof(clientReplyBlock), &usable_size);
         /* take over the allocation's internal fragmentation */
         tail->size = usable_size - sizeof(clientReplyBlock);
         tail->used = len;
         memcpy(tail->buf, s, len);
         listAddNodeTail(reply_list, tail);
-        unsigned long long *reply_bytes = (c->deferred_reply) ? &c->deferred_reply_bytes : &c->reply_bytes;
+        unsigned long long *reply_bytes = (isDeferredReplyEnabled(c)) ? &c->deferred_reply_bytes : &c->reply_bytes;
         *reply_bytes += tail->size;
 
         closeClientOnOutputBufferLimitReached(c, 1);
@@ -472,7 +466,7 @@ void _addReplyToBufferOrList(client *c, const char *s, size_t len) {
 
     c->net_output_bytes_curr_cmd += len;
 
-    if (c->deferred_reply) {
+    if (isDeferredReplyEnabled(c)) {
         _addReplyProtoToList(c, c->deferred_reply, s, len);
         return;
     }
@@ -1298,10 +1292,18 @@ void addReplySubcommandSyntaxError(client *c) {
     sdsfree(cmd);
 }
 
+inline int isDeferredReplyEnabled(client *c) {
+    return c->deferred_reply_bytes != ULLONG_MAX;
+}
+
 void initDeferredReplyBuffer(client *c) {
-    if (c->deferred_reply == NULL) {
-        c->deferred_reply = listCreate();
-    }
+    if (c->deferred_reply == NULL) c->deferred_reply = listCreate();
+    if (!isDeferredReplyEnabled(c)) c->deferred_reply_bytes = 0;
+}
+
+static void resetDeferredReplyBuffer(client *c) {
+    listEmpty(c->deferred_reply);
+    c->deferred_reply_bytes = ULLONG_MAX;
 }
 
 /* Move the client deferred reply buffer into the client reply buffer and put the client
@@ -1309,7 +1311,7 @@ void initDeferredReplyBuffer(client *c) {
 void commitDeferredReplyBuffer(client *c, int skip_if_blocked) {
     if (skip_if_blocked && c->flag.blocked) return;
 
-    if (c->deferred_reply == NULL || listLength(c->deferred_reply) == 0) {
+    if (!isDeferredReplyEnabled(c) || (c->deferred_reply && listLength(c->deferred_reply) == 0)) {
         resetDeferredReplyBuffer(c);
         return;
     }
@@ -4587,7 +4589,7 @@ size_t getClientOutputBufferMemoryUsage(client *c) {
 
     size_t list_item_size = sizeof(listNode) + sizeof(clientReplyBlock);
     size_t usage = c->reply_bytes + (list_item_size * listLength(c->reply));
-    if (c->deferred_reply) {
+    if (isDeferredReplyEnabled(c)) {
         usage += c->deferred_reply_bytes +
                  (list_item_size * listLength(c->deferred_reply));
     }

@@ -1342,7 +1342,6 @@ void AddReplyFromClient(client *dst, client *src) {
         return;
     }
 
-
     /* First add the static buffer (either into the static buffer or reply list) */
     addReplyProto(dst, src->buf, src->bufpos);
 

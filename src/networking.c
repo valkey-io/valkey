@@ -4569,7 +4569,7 @@ void clientImportSourceCommand(client *c) {
 void clientCountCommand(client *c) {
     /* If there are additional arguments */
     if (c->argc > 2) {
-        clientFilter filter = {.ids = NULL, .max_age = 0, .addr = NULL, .laddr = NULL, .user = NULL, .type = -1, .skipme = 0};
+        clientFilter filter = {.ids = NULL, .max_age = 0, .idle = 0, .addr = NULL, .laddr = NULL, .user = NULL, .type = -1, .skipme = 0, .db_number = -1};
         const int i = 2; // Start parsing filters from the third argument
 
         if (parseClientFiltersOrReply(c, i, &filter) != C_OK) {

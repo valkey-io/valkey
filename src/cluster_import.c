@@ -30,18 +30,9 @@ void freeSlotRangeValue(void *o) {
     zfree(o);
 }
 
-void *dupSlotRangeValue(void *o) {
-    slotRange *in = o;
-    slotRange *out = zmalloc(sizeof(slotRange));
-    out->start_slot = in->start_slot;
-    out->end_slot = in->end_slot;
-    return out;
-}
-
 list *createSlotRangeList(void) {
     list *slot_ranges = listCreate();
     listSetFreeMethod(slot_ranges, freeSlotRangeValue);
-    listSetDupMethod(slot_ranges, dupSlotRangeValue);
     return slot_ranges;
 }
 

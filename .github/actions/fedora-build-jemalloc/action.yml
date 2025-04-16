@@ -1,0 +1,19 @@
+name: 'Build jemalloc (Fedora only)'
+description: 'Build jemalloc on Fedora with enable-jemalloc-prefix'
+runs:
+  using: "composite"
+  steps:
+    - run: |
+        dnf -y install git autoconf make gcc awk
+        git clone --branch 5.3.0 --single-branch https://github.com/jemalloc/jemalloc.git
+        cd jemalloc
+        ./autogen.sh
+        ./configure --prefix=/opt/jemalloc --enable-jemalloc-prefix
+        make -j$(nproc)
+        make install
+      shell: bash
+    - run: |
+        echo "LD_LIBRARY_PATH=/opt/jemalloc/lib:$LD_LIBRARY_PATH" >> $GITHUB_ENV
+        echo "LDFLAGS=-L/opt/jemalloc/lib" >> $GITHUB_ENV
+        echo "CPPFLAGS=-I/opt/jemalloc/include" >> $GITHUB_ENV
+      shell: bash

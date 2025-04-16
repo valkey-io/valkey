@@ -877,7 +877,7 @@ jobs:
 
       - name: Build jemalloc(only on Fedora)
         if: matrix.name == 'test-fedoralatest-jemalloc'
-        uses: ./.github/workflows/fedora-build-jemalloc.yml
+        uses: ./.github/actions/fedora-build-jemalloc
       - name: make
         run: |
           dnf -y install gcc make procps-ng which /usr/bin/kill
@@ -946,7 +946,7 @@ jobs:
         run: dnf -y install epel-release
       - name: Build jemalloc(only on Fedora)
         if: matrix.name == 'test-fedoralatest-tls-module'
-        uses: ./.github/workflows/fedora-build-jemalloc.yml
+        uses: ./.github/actions/fedora-build-jemalloc
       - name: make
         run: |
           dnf -y install make gcc openssl-devel openssl procps-ng which /usr/bin/kill
@@ -1021,7 +1021,7 @@ jobs:
         run: dnf -y install epel-release
       - name: Build jemalloc(only on Fedora)
         if: matrix.name == 'test-fedoralatest-tls-module-no-tls'
-        uses: ./.github/workflows/fedora-build-jemalloc.yml
+        uses: ./.github/actions/fedora-build-jemalloc
       - name: make
         run: |
           dnf -y install make gcc openssl-devel openssl procps-ng which /usr/bin/kill

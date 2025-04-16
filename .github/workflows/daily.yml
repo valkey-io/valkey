@@ -877,21 +877,7 @@ jobs:
 
       - name: Build jemalloc(only on Fedora)
         if: matrix.name == 'test-fedoralatest-jemalloc'
-        run: |
-          dnf -y install git autoconf make gcc awk
-          git clone --branch 5.3.0 --single-branch https://github.com/jemalloc/jemalloc.git
-          cd jemalloc
-          ./autogen.sh
-          ./configure --prefix=/opt/jemalloc --enable-jemalloc-prefix
-          make -j$(nproc)
-          make install
-
-      - name: Set jemalloc env (Fedora only)
-        if: matrix.name == 'test-fedoralatest-jemalloc'
-        run: |
-          echo "LD_LIBRARY_PATH=/opt/jemalloc/lib:$LD_LIBRARY_PATH" >> $GITHUB_ENV
-          echo "LDFLAGS=-L/opt/jemalloc/lib" >> $GITHUB_ENV
-          echo "CPPFLAGS=-I/opt/jemalloc/include" >> $GITHUB_ENV
+        uses: ./.github/workflows/fedora-build-jemalloc.yml
       - name: make
         run: |
           dnf -y install gcc make procps-ng which /usr/bin/kill

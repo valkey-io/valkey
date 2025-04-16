@@ -1143,16 +1143,23 @@ test "Export client buffer enforcement" {
         set old_cob [lindex [R 2 config get client-output-buffer-limit] 1]
         R 2 config set client-output-buffer-limit "replica 10k 0 0"
 
-        set load_handle [start_one_key_write_load [srv -2 host] [srv -2 port] 60 "$16383_slot_tag:my_key"]
-
         # Pause the target
         set node0_pid [srv -0 pid]
         pause_process $node0_pid
 
+        set migration [get_migration_by_linkname 2 $linkname]
         # Accumulate a large backlog on the source, it should eventually kill the client
-        wait_for_migration_field 2 $linkname state failed
+        for {set i 0} {$i < 100} {incr i} {
+            populate 1000 "$16383_slot_tag:" 1000 -2
+            set migration [get_migration_by_linkname 2 $linkname]
+            if {[dict get $migration state] eq "failed"} {
+                break
+            }
+        }
+        if {[dict get $migration state] ne "failed"} {
+            fail "Export was not failed after writing 100 MiB of changes, current state: $migration"
+        }
 
-        stop_write_load $load_handle
         resume_process $node0_pid
 
         # Import should be retried

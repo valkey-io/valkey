@@ -77,7 +77,7 @@ typedef struct sentinelAddr {
 #define SRI_FORCE_FAILOVER (1 << 11)      /* Force failover with primary up. */
 #define SRI_SCRIPT_KILL_SENT (1 << 12)    /* SCRIPT KILL already sent on -BUSY */
 #define SRI_PRIMARY_REBOOT (1 << 13)      /* Primary was detected as rebooting */
-#define SRI_SAFE_FAILOVER (1<<14)         /* Force failover in a more safe way. */
+#define SRI_SAFE_FAILOVER (1 << 14)         /* Force failover in a more safe way. */
 /* Note: when adding new flags, please check the flags section in addReplySentinelValkeyInstance. */
 
 /* Note: times are in milliseconds. */
@@ -3856,7 +3856,7 @@ void sentinelCommand(client *c) {
                 return;
             }
             safeMode = 1;
-            if (c->argc == 5 && (getLongLongFromObject(c->argv[4],&safeFailOverTimeout) == C_ERR
+            if (c->argc == 5 && (getLongLongFromObject(c->argv[4], &safeFailOverTimeout) == C_ERR
                                  || safeFailOverTimeout < 0)) {
                 addReplyError(c,"Invalid failover timeout specified");
                 return;
@@ -4738,7 +4738,7 @@ int sentinelSendFailover(sentinelValkeyInstance *primary, const sentinelAddr *ad
     int retval;
 
     host = announceSentinelAddr(addr);
-    ll2string(portstr,sizeof(portstr),addr->port);
+    ll2string(portstr,sizeof(portstr), addr->port);
 
     retval = redisAsyncCommand(primary->link->cc, sentinelDiscardReplyCallback, primary,
                                "%s TO %s %s FORCE TIMEOUT %d", sentinelInstanceMapCommand(primary, "FAILOVER"),
@@ -4948,7 +4948,7 @@ void sentinelFailoverSelectReplica(sentinelValkeyInstance *ri) {
         ri->failover_state_change_time = mstime();
         if (ri->flags & SRI_SAFE_FAILOVER) {
             ri->failover_state = SENTINEL_FAILOVER_STATE_SEND_FAILOVER;
-            sentinelEvent(LL_NOTICE,"+failover-state-send-failover", ri,"%@");
+            sentinelEvent(LL_NOTICE, "+failover-state-send-failover", ri, "%@");
         } else {
             ri->failover_state = SENTINEL_FAILOVER_STATE_SEND_REPLICAOF_NOONE;
             sentinelEvent(LL_NOTICE, "+failover-state-send-slaveof-noone", replica, "%@");
@@ -4989,7 +4989,7 @@ void sentinelFailoverSendFailover(sentinelValkeyInstance *ri) {
      * is reached, then abort the failover. */
     if (ri->promoted_replica->link->disconnected) {
         if (mstime() - ri->failover_state_change_time > ri->failover_timeout) {
-            sentinelEvent(LL_WARNING,"-failover-abort-slave-timeout",ri,"%@");
+            sentinelEvent(LL_WARNING, "-failover-abort-slave-timeout", ri, "%@");
             sentinelAbortFailover(ri);
         }
         return;
@@ -5002,7 +5002,7 @@ void sentinelFailoverSendFailover(sentinelValkeyInstance *ri) {
     retval = sentinelSendFailover(ri, ri->promoted_replica->addr, ri->safe_failover_timeout);
     if (retval != C_OK) return;
     sentinelEvent(LL_NOTICE, "+failover-state-wait-promotion",
-                  ri->promoted_replica,"%@");
+                  ri->promoted_replica, "%@");
     ri->failover_state = SENTINEL_FAILOVER_STATE_WAIT_PROMOTION;
     ri->failover_state_change_time = mstime();
 }

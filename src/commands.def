@@ -5624,7 +5624,7 @@ struct COMMAND_ARG SENTINEL_DEBUG_Args[] = {
 #ifndef SKIP_CMD_HISTORY_TABLE
 /* SENTINEL FAILOVER history */
 commandHistory SENTINEL_FAILOVER_History[] = {
-    {"8.1.0","Add safe failover option."},
+{"8.1.0","Add safe failover option."},
 };
 #endif
 

@@ -236,6 +236,47 @@ static int getExpireMillisecondsOrReply(client *c, robj *expire, int flags, int 
     return C_OK;
 }
 
+void scaleStringKeySizeArray(client *c, long value) {
+    int length = c->db->strings_array_length;
+    int high_bound = c->db->strings_array[length - 1].element_size;
+    int base = high_bound;
+    int count = 0;
+    while (high_bound < value) {
+        count++;
+        high_bound = high_bound * 2;
+    }
+    keysizeInfo *new_array = zmalloc(sizeof(keysizeInfo) * (count + length));
+    for (int i = 0; i < length; i++) {
+        new_array[i].element_size = c->db->strings_array[i].element_size;
+        new_array[i].num = c->db->strings_array[i].num;
+    }
+    for (int i = length; i < (count + length); i++) {
+        base *= 2;
+        new_array[i].element_size = base;
+        new_array[i].num = 0;
+    }
+    keysizeInfo *old_array = c->db->strings_array;
+    zfree(old_array);
+    c->db->strings_array = new_array;
+    c->db->strings_array_length = count + length;
+}
+
+void updateStringKeySizeArray(client *c, long previous, long curr) {
+    int low = 0;
+    int high = c->db->strings_array_length - 1;
+    if (curr > c->db->strings_array[high].element_size) {
+        scaleStringKeySizeArray(c, curr);
+    }
+
+    high = c->db->strings_array_length - 1;
+    if (previous != 0) {
+        decreaseDataTypeArrayPreviousValue(c->db->strings_array, low, high, previous);
+    }
+    if (curr != 0) {
+        increaseDataTypeArrayCurrentValue(c->db->strings_array, low, high, curr);
+    }
+}
+
 #define COMMAND_GET 0
 #define COMMAND_SET 1
 /*
@@ -498,6 +539,8 @@ void setrangeCommand(client *c) {
     robj *o;
     long offset;
     sds value = c->argv[3]->ptr;
+    long previous_str_len;
+    long curr_str_len;
 
     if (getLongFromObjectOrReply(c, c->argv[2], &offset, NULL) != C_OK)
         return;
@@ -519,6 +562,7 @@ void setrangeCommand(client *c) {
         if (checkStringLength(c, offset, sdslen(value)) != C_OK)
             return;
 
+        previous_str_len = 0;
         o = createObject(OBJ_STRING, sdsnewlen(NULL, offset + sdslen(value)));
         dbAdd(c->db, c->argv[1], &o);
     } else {
@@ -534,6 +578,7 @@ void setrangeCommand(client *c) {
             addReplyLongLong(c, olen);
             return;
         }
+        previous_str_len = olen;
 
         /* Return when the resulting string exceeds allowed size */
         if (checkStringLength(c, offset, sdslen(value)) != C_OK)
@@ -551,6 +596,9 @@ void setrangeCommand(client *c) {
                             "setrange", c->argv[1], c->db->id);
         server.dirty++;
     }
+    curr_str_len = sdslen(o->ptr);
+    /* TO DO: update INFO KEYSIZES */
+    updateStringKeySizeArray(c, previous_str_len,  curr_str_len);
     addReplyLongLong(c, sdslen(o->ptr));
 }
 
@@ -752,6 +800,8 @@ void incrbyfloatCommand(client *c) {
 void appendCommand(client *c) {
     size_t totlen;
     robj *o, *append;
+    long previous_str_len;
+    long curr_str_len;
 
     o = lookupKeyWrite(c->db, c->argv[1]);
     if (o == NULL) {
@@ -760,6 +810,7 @@ void appendCommand(client *c) {
         dbAdd(c->db, c->argv[1], &c->argv[2]);
         incrRefCount(c->argv[2]);
         totlen = stringObjectLen(c->argv[2]);
+        previous_str_len = 0;
     } else {
         /* Key exists, check type */
         if (checkType(c, o, OBJ_STRING))
@@ -770,6 +821,7 @@ void appendCommand(client *c) {
         if (checkStringLength(c, stringObjectLen(o), sdslen(append->ptr)) != C_OK)
             return;
 
+        previous_str_len = stringObjectLen(o);
         /* Append the value */
         o = dbUnshareStringValue(c->db, c->argv[1], o);
         o->ptr = sdscatlen(o->ptr, append->ptr, sdslen(append->ptr));
@@ -778,6 +830,9 @@ void appendCommand(client *c) {
     signalModifiedKey(c, c->db, c->argv[1]);
     notifyKeyspaceEvent(NOTIFY_STRING, "append", c->argv[1], c->db->id);
     server.dirty++;
+    curr_str_len = totlen;
+    /* TO DO: update INFO KEYSIZES  */
+    updateStringKeySizeArray(c, previous_str_len, curr_str_len);
     addReplyLongLong(c, totlen);
 }
 

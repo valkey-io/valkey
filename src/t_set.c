@@ -110,6 +110,47 @@ static void maybeConvertToIntset(robj *set) {
     set->encoding = OBJ_ENCODING_INTSET;
 }
 
+void scaleSetKeySizeArray(client *c, long value) {
+    int length = c->db->lists_array_length;
+    int high_bound = c->db->sets_array[length - 1].element_size;
+    int base = high_bound;
+    int count = 0;
+    while (high_bound < value) {
+        count++;
+        high_bound = high_bound * 2;
+    }
+    keysizeInfo *new_array = zmalloc(sizeof(keysizeInfo) * (count + length));
+    for (int i = 0; i < length; i++) {
+        new_array[i].element_size = c->db->sets_array[i].element_size;
+        new_array[i].num = c->db->sets_array[i].num;
+    }
+    for (int i = length; i < (count + length); i++) {
+        base *= 2;
+        new_array[i].element_size = base;
+        new_array[i].num = 0;
+    }
+    keysizeInfo *old_array = c->db->sets_array;
+    zfree(old_array);
+    c->db->sets_array = new_array;
+    c->db->sets_array_length = count + length;
+}
+
+void updateSetKeySizeArray(client *c, long previous, long curr) {
+    int low = 0;
+    int high = c->db->sets_array_length - 1;
+    if (curr > c->db->sets_array[high].element_size) {
+        scaleSetKeySizeArray(c, curr);
+    }
+
+    high = c->db->sets_array_length - 1;
+    if (previous != 0) {
+        decreaseDataTypeArrayPreviousValue(c->db->sets_array, low, high, previous);
+    }
+    if (curr != 0) {
+        increaseDataTypeArrayCurrentValue(c->db->sets_array, low, high, curr);
+    }
+}
+
 /* Add the specified sds value into a set.
  *
  * If the value was already member of the set, nothing is done and 0 is
@@ -622,9 +663,12 @@ void saddCommand(client *c) {
 void sremCommand(client *c) {
     robj *set;
     int j, deleted = 0, keyremoved = 0;
+    long previous_element_number;
+    long current_element_number;
 
     if ((set = lookupKeyWriteOrReply(c, c->argv[1], shared.czero)) == NULL || checkType(c, set, OBJ_SET)) return;
 
+    previous_element_number = setTypeSize(set);
     for (j = 2; j < c->argc; j++) {
         if (setTypeRemove(set, c->argv[j]->ptr)) {
             deleted++;
@@ -641,6 +685,9 @@ void sremCommand(client *c) {
         if (keyremoved) notifyKeyspaceEvent(NOTIFY_GENERIC, "del", c->argv[1], c->db->id);
         server.dirty += deleted;
     }
+    current_element_number = previous_element_number - deleted;
+    /* TO DO: update INFO KEYSIZES  */
+    updateSetKeySizeArray(c, previous_element_number, current_element_number);
     addReplyLongLong(c, deleted);
 }
 
@@ -747,6 +794,8 @@ void spopWithCountCommand(client *c) {
     long l;
     unsigned long count, size;
     robj *set;
+    long previous_element_number;
+    long current_element_number;
 
     /* Get the count argument */
     if (getPositiveLongFromObjectOrReply(c, c->argv[2], &l, NULL) != C_OK) return;
@@ -765,6 +814,7 @@ void spopWithCountCommand(client *c) {
     }
 
     size = setTypeSize(set);
+    previous_element_number = size;
 
     /* Generate an SPOP keyspace notification */
     notifyKeyspaceEvent(NOTIFY_SET, "spop", c->argv[1], c->db->id);
@@ -787,6 +837,9 @@ void spopWithCountCommand(client *c) {
         robj *aux = server.lazyfree_lazy_server_del ? shared.unlink : shared.del;
         rewriteClientCommandVector(c, 2, aux, c->argv[1]);
         signalModifiedKey(c, c->db, c->argv[1]);
+        current_element_number = 0;
+        /* TO DO: update INFO KEYSIZES  */
+	updateSetKeySizeArray(c, previous_element_number, current_element_number);
         return;
     }
 
@@ -805,6 +858,9 @@ void spopWithCountCommand(client *c) {
     size_t len;
     int64_t llele;
     unsigned long remaining = size - count; /* Elements left after SPOP. */
+    current_element_number = remaining;
+    /* TO DO: update INFO KEYSIZES  */
+    updateSetKeySizeArray(c, previous_element_number, current_element_number);
 
     /* If we are here, the number of requested elements is less than the
      * number of elements inside the set. Also we are sure that count < size.
@@ -950,6 +1006,8 @@ void spopWithCountCommand(client *c) {
 
 void spopCommand(client *c) {
     robj *set, *ele;
+    long previous_element_number;
+    long current_element_number;
 
     if (c->argc == 3) {
         spopWithCountCommand(c);
@@ -964,8 +1022,12 @@ void spopCommand(client *c) {
     if ((set = lookupKeyWriteOrReply(c, c->argv[1], shared.null[c->resp])) == NULL || checkType(c, set, OBJ_SET))
         return;
 
+    previous_element_number = setTypeSize(set);
     /* Pop a random element from the set */
     ele = setTypePopRandom(set);
+    current_element_number = setTypeSize(set);
+    /* TO DO: update INFO KEYSIZES  */
+    updateSetKeySizeArray(c, previous_element_number, current_element_number);
 
     notifyKeyspaceEvent(NOTIFY_SET, "spop", c->argv[1], c->db->id);
 
@@ -977,7 +1039,7 @@ void spopCommand(client *c) {
     decrRefCount(ele);
 
     /* Delete the set if it's empty */
-    if (setTypeSize(set) == 0) {
+    if (current_element_number == 0) {
         dbDelete(c->db, c->argv[1]);
         notifyKeyspaceEvent(NOTIFY_GENERIC, "del", c->argv[1], c->db->id);
     }

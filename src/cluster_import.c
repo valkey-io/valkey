@@ -579,8 +579,8 @@ void connectSlotImportLink(slotMigrationLink *link, char *ip, int port) {
               link->linkname, link->nodename, link->slot_ranges_str, ip, port);
 
     link->conn = connCreate(connTypeOfCluster());
-    if (connConnect(link->conn, ip, port, server.bind_source_addr, slotImportConnectHandler) ==
-        C_ERR) {
+    if (connConnect(link->conn, ip, port,
+                    server.bind_source_addr, slotImportConnectHandler) == C_ERR) {
         serverLog(LL_WARNING, "Failed to connect slot import link %.40s to %.40s: %s",
                   link->linkname, link->nodename, connGetLastError(link->conn));
         status_msg = sdscatfmt(sdsempty(), "Unable to connect to source node: %s",

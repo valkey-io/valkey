@@ -1193,10 +1193,8 @@ test "Export cancelled when target hangs" {
 
 test "Import with AUTH on" {
     assert_does_not_resync {
-        R 0 CONFIG SET requirepass "mypassword"
         R 2 CONFIG SET requirepass "mypassword"
         R 0 CONFIG SET primaryauth "mypassword"
-        R 2 CONFIG SET primaryauth "mypassword"
 
         # Populate data before migration
         populate 1000 "$16383_slot_tag:" 1000 -2
@@ -1222,10 +1220,27 @@ test "Import with AUTH on" {
         assert_match "OK" [R 0 FLUSHDB SYNC]
         assert_match "OK" [R 2 CLUSTER IMPORT SLOTSRANGE 16383 16383]
         wait_for_migration 2 16383
-        R 0 CONFIG SET requirepass ""
         R 2 CONFIG SET requirepass ""
         R 0 CONFIG SET primaryauth ""
-        R 2 CONFIG SET primaryauth ""
+    }
+}
+
+test "Import AUTH with WRONGPASS" {
+    assert_does_not_resync {
+        R 2 CONFIG SET requirepass "mypassword"
+        R 0 CONFIG SET primaryauth "mypassword-different"
+
+        # Perform one-shot import
+        assert_match "OK" [R 0 CLUSTER IMPORT SLOTSRANGE 16383 16383]
+        set linkname [get_link_name 0 16383]
+
+        # Should be denied
+        wait_for_migration_field 0 $linkname state failed
+        assert {[string match {*Failed to AUTH to source node: -WRONGPASS*} [dict get [get_migration_by_linkname 0 $linkname] message]]}
+
+        # Cleanup for next test
+        R 2 CONFIG SET requirepass ""
+        R 0 CONFIG SET primaryauth ""
     }
 }
 

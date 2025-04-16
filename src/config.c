@@ -3141,6 +3141,15 @@ static int applyClientMaxMemoryUsage(const char **err) {
     return 1;
 }
 
+static int applyClusterSlotMigrationLogConfig(const char **err) {
+    if (server.cluster_enabled) {
+        clusterCleanupSlotMigrationLog();
+        return 1;
+    }
+    *err = "Cluster mode is not enabled";
+    return 0;
+}
+
 standardConfig static_configs[] = {
     /* Bool configs */
     createBoolConfig("rdbchecksum", NULL, IMMUTABLE_CONFIG, server.rdb_checksum, 1, NULL, NULL),
@@ -3314,6 +3323,7 @@ standardConfig static_configs[] = {
     createULongConfig("commandlog-large-reply-max-len", NULL, MODIFIABLE_CONFIG, 0, LONG_MAX, server.commandlog[COMMANDLOG_TYPE_LARGE_REPLY].max_len, 128, INTEGER_CONFIG, NULL, NULL),
     createULongConfig("acllog-max-len", NULL, MODIFIABLE_CONFIG, 0, LONG_MAX, server.acllog_max_len, 128, INTEGER_CONFIG, NULL, NULL),
     createULongConfig("cluster-blacklist-ttl", NULL, MODIFIABLE_CONFIG, 0, ULONG_MAX, server.cluster_blacklist_ttl, 60, INTEGER_CONFIG, NULL, NULL),
+    createULongConfig("cluster-slot-migration-log-max-len", NULL, MODIFIABLE_CONFIG, 0, LONG_MAX, server.cluster_slot_migration_log_max_len, 1000, INTEGER_CONFIG, NULL, applyClusterSlotMigrationLogConfig),
 
     /* Long Long configs */
     createLongLongConfig("busy-reply-threshold", "lua-time-limit", MODIFIABLE_CONFIG, 0, LONG_MAX, server.busy_reply_threshold, 5000, INTEGER_CONFIG, NULL, NULL), /* milliseconds */
@@ -3351,6 +3361,7 @@ standardConfig static_configs[] = {
     createTimeTConfig("repl-backlog-ttl", NULL, MODIFIABLE_CONFIG, 0, LONG_MAX, server.repl_backlog_time_limit, 60 * 60, INTEGER_CONFIG, NULL, NULL), /* Default: 1 hour */
     createOffTConfig("auto-aof-rewrite-min-size", NULL, MODIFIABLE_CONFIG, 0, LLONG_MAX, server.aof_rewrite_min_size, 64 * 1024 * 1024, MEMORY_CONFIG, NULL, NULL),
     createOffTConfig("loading-process-events-interval-bytes", NULL, MODIFIABLE_CONFIG | HIDDEN_CONFIG, 1024, INT_MAX, server.loading_process_events_interval_bytes, 1024 * 1024 * 2, INTEGER_CONFIG, NULL, NULL),
+    createTimeTConfig("cluster-slot-migration-log-ttl", NULL, MODIFIABLE_CONFIG, 0, LONG_MAX, server.cluster_slot_migration_log_ttl, 60 * 60, INTEGER_CONFIG, NULL, applyClusterSlotMigrationLogConfig),
 
     /* Tls configs */
     createIntConfig("tls-port", NULL, MODIFIABLE_CONFIG, 0, 65535, server.tls_port, 0, INTEGER_CONFIG, NULL, applyTLSPort), /* TCP port. */

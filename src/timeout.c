@@ -142,7 +142,6 @@ void handleBlockedClientsTimeout(void) {
         if (timeout >= now) break; /* All the timeouts are in the future. */
         c->flag.in_to_table = 0;
         checkBlockedClientTimeout(c, now);
-        serverLog(LL_NOTICE, "handleBlockedClientsTimeout raxRemove %ld", c->id);
         raxRemove(server.clients_timeout_table, ri.key, ri.key_len, NULL);
         raxSeek(&ri, "^", NULL, 0);
     }

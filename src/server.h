@@ -2100,6 +2100,11 @@ struct valkeyServer {
     int cluster_slot_stats_enabled;                        /* Cluster slot usage statistics tracking enabled. */
     int auto_failover_on_shutdown;                         /* Trigger manual failover on shutdown to primary. */
     mstime_t cluster_mf_timeout;                           /* Milliseconds to do a manual failover. */
+    unsigned long cluster_slot_migration_log_max_len;      /* Maximum count of migrations to display in the
+                                                            * migration log, after which we will clear finished
+                                                            * migrations. */
+    time_t cluster_slot_migration_log_ttl;                 /* Seconds before we remove finished migrations
+                                                            * from the migration log. */
     /* Debug config that goes along with cluster_drop_packet_filter. When set, the link is closed on packet drop. */
     uint32_t debug_cluster_close_link_on_packet_drop : 1;
     /* Debug config to control the random ping. When set, we will disable the random ping in clusterCron. */

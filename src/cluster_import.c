@@ -404,9 +404,9 @@ void clusterCommandImportCancel(client *c) {
 void clusterCommandSyncSlotsSnapshotEof(client *c) {
     if (!c->flag.slot_import_source || !c->slot_migration_link) {
         serverLog(LL_WARNING,
-                  "Received CLUSTER SYNCSLOTS SNAPSHOT-EOF from client %ld, but the "
+                  "Received CLUSTER SYNCSLOTS SNAPSHOT-EOF from client %llu, but the "
                   "client is not a slot import source. Closing link.",
-                  c->id);
+                  (unsigned long long)c->id);
         freeClientAsync(c);
         return;
     }
@@ -441,9 +441,9 @@ void clusterCommandSyncSlotsSnapshotEof(client *c) {
 void clusterCommandSyncSlotsPaused(client *c) {
     if (!c->flag.slot_import_source || !c->slot_migration_link) {
         serverLog(LL_WARNING,
-                  "Received CLUSTER SYNCSLOTS PAUSED from client %ld, but the client is "
+                  "Received CLUSTER SYNCSLOTS PAUSED from client %llu, but the client is "
                   "not a slot import source. Closing link.",
-                  c->id);
+                  (unsigned long long)c->id);
         freeClientAsync(c);
         return;
     }
@@ -469,9 +469,9 @@ void clusterCommandSyncSlotsPaused(client *c) {
 void clusterCommandSyncSlotsFailoverGranted(client *c) {
     if (!c->flag.slot_import_source || !c->slot_migration_link) {
         serverLog(LL_WARNING,
-                  "Received CLUSTER SYNCSLOTS FAILOVER-GRANTED from client %ld, but the "
+                  "Received CLUSTER SYNCSLOTS FAILOVER-GRANTED from client %llu, but the "
                   "client is not a slot import source. Closing link.",
-                  c->id);
+                  (unsigned long long)c->id);
         freeClientAsync(c);
         return;
     }
@@ -497,9 +497,9 @@ void clusterCommandSyncSlotsFailoverGranted(client *c) {
 void clusterCommandSyncSlotsFailoverDenied(client *c) {
     if (!c->flag.slot_import_source || !c->slot_migration_link) {
         serverLog(LL_WARNING,
-                  "Received CLUSTER SYNCSLOTS FAILOVER-DENIED from client %ld, but the "
+                  "Received CLUSTER SYNCSLOTS FAILOVER-DENIED from client %llu, but the "
                   "client is not a slot import source. Closing link.",
-                  c->id);
+                  (unsigned long long)c->id);
         freeClientAsync(c);
         return;
     }
@@ -536,9 +536,9 @@ void clusterCommandSyncSlotsFailoverDenied(client *c) {
 void clusterCommandSyncSlotsFail(client *c) {
     if (!c->flag.slot_import_source || !c->slot_migration_link) {
         serverLog(LL_WARNING,
-                  "Received CLUSTER SYNCSLOTS FAIL from client %ld, but the client is "
+                  "Received CLUSTER SYNCSLOTS FAIL from client %llu, but the client is "
                   "not a slot import source. Closing link.",
-                  c->id);
+                  (unsigned long long)c->id);
         freeClientAsync(c);
         return;
     }
@@ -553,6 +553,7 @@ slotMigrationLink *createSlotImportLink(clusterNode *source_node, list *slot_ran
     slotMigrationLink *link = zcalloc(sizeof(slotMigrationLink));
     link->ctime = server.unixtime;
     link->last_update = link->ctime;
+    link->last_ack = link->ctime;
     link->type = SLOT_MIGRATION_IMPORT;
     link->slot_ranges = slot_ranges;
     link->slot_ranges_str = representSlotRangeList(slot_ranges, '-');
@@ -885,9 +886,9 @@ void clusterCommandSyncSlotsSnapshot(client *c) {
 
     if (!nodeIsPrimary(server.cluster->myself)) {
         serverLog(LL_WARNING,
-                  "Received CLUSTER SYNCSLOTS SNAPSHOT from client %ld, but I am not a primary. "
+                  "Received CLUSTER SYNCSLOTS SNAPSHOT from client %llu, but I am not a primary. "
                   "Failing link.",
-                  c->id);
+                  (unsigned long long)c->id);
         sendFailAndCloseAfterReply(c);
         return;
     }
@@ -902,9 +903,9 @@ void clusterCommandSyncSlotsSnapshot(client *c) {
     if (c->flag.slot_import_source || c->flag.slot_export_target) {
         serverLog(
             LL_WARNING,
-            "Received CLUSTER SYNCSLOTS SNAPSHOT from client %ld which is already a slot link. "
+            "Received CLUSTER SYNCSLOTS SNAPSHOT from client %llu which is already a slot link. "
             "Failing link.",
-            c->id);
+            (unsigned long long)c->id);
         sendFailAndCloseAfterReply(c);
         return;
     }
@@ -916,8 +917,8 @@ void clusterCommandSyncSlotsSnapshot(client *c) {
             if (target_node || i + 1 >= c->argc || sdslen(c->argv[i + 1]->ptr) != CLUSTER_NAMELEN) {
                 serverLog(LL_WARNING,
                           "Malformatted or missing node ID in CLUSTER SYNCSLOTS SNAPSHOT from "
-                          "client %ld. Failing link.",
-                          c->id);
+                          "client %llu. Failing link.",
+                          (unsigned long long)c->id);
                 error = 1;
                 break;
             }
@@ -925,9 +926,9 @@ void clusterCommandSyncSlotsSnapshot(client *c) {
             if (!target_node) {
                 serverLog(
                     LL_WARNING,
-                    "Received CLUSTER SYNCSLOTS SNAPSHOT from client %ld with an unknown node ID. "
+                    "Received CLUSTER SYNCSLOTS SNAPSHOT from client %llu with an unknown node ID. "
                     "Failing link.",
-                    c->id);
+                    (unsigned long long)c->id);
                 error = 1;
                 break;
             }
@@ -937,8 +938,8 @@ void clusterCommandSyncSlotsSnapshot(client *c) {
                 serverLog(
                     LL_WARNING,
                     "Malformatted or missing link name in CLUSTER SYNCSLOTS SNAPSHOT from client "
-                    "%ld. Failing link.",
-                    c->id);
+                    "%llu. Failing link.",
+                    (unsigned long long)c->id);
                 error = 1;
                 break;
             }
@@ -950,17 +951,17 @@ void clusterCommandSyncSlotsSnapshot(client *c) {
                 serverLog(
                     LL_WARNING,
                     "Failed to parse slot range provided by CLUSTER SYNCSLOTS SNAPSHOT from client "
-                    "%ld: %s. Failing link.",
-                    c->id, err);
+                    "%llu: %s. Failing link.",
+                    (unsigned long long)c->id, err);
                 sdsfree(err);
                 error = 1;
                 break;
             }
             if (source_node != server.cluster->myself) {
                 serverLog(LL_WARNING,
-                          "Received CLUSTER SYNCSLOTS SNAPSHOT from client %ld, but I am not the "
+                          "Received CLUSTER SYNCSLOTS SNAPSHOT from client %llu, but I am not the "
                           "owner of the requested slots. Failing link.",
-                          c->id);
+                          (unsigned long long)c->id);
                 error = 1;
                 break;
             }
@@ -970,9 +971,9 @@ void clusterCommandSyncSlotsSnapshot(client *c) {
     }
     if (!error && (!target_node || !link_name || !slot_ranges)) {
         serverLog(LL_WARNING,
-                  "Missing >= 1 required argument in CLUSTER SYNCSLOTS SNAPSHOT from client %ld. "
+                  "Missing >= 1 required argument in CLUSTER SYNCSLOTS SNAPSHOT from client %llu. "
                   "Failing link.",
-                  c->id);
+                  (unsigned long long)c->id);
         error = 1;
     }
     if (error) {
@@ -1016,9 +1017,9 @@ void slotExportBeginStreaming(slotMigrationLink *link) {
 void clusterCommandSyncSlotsStream(client *c) {
     if (!c->flag.slot_export_target || !c->slot_migration_link) {
         serverLog(LL_WARNING,
-                  "Received CLUSTER SYNCSLOTS PAUSE from client %ld, but the client is not a slot "
+                  "Received CLUSTER SYNCSLOTS PAUSE from client %llu, but the client is not a slot "
                   "export target. Closing link.",
-                  c->id);
+                  (unsigned long long)c->id);
         sendFailAndCloseAfterReply(c);
         return;
     }
@@ -1047,9 +1048,9 @@ void clusterCommandSyncSlotsStream(client *c) {
 void clusterCommandSyncSlotsPause(client *c) {
     if (!c->flag.slot_export_target || !c->slot_migration_link) {
         serverLog(LL_WARNING,
-                  "Received CLUSTER SYNCSLOTS PAUSE from client %ld, but the client is not a slot "
+                  "Received CLUSTER SYNCSLOTS PAUSE from client %llu, but the client is not a slot "
                   "export target. Closing link.",
-                  c->id);
+                  (unsigned long long)c->id);
         sendFailAndCloseAfterReply(c);
         return;
     }
@@ -1091,9 +1092,9 @@ void clusterCommandSyncSlotsRequestFailover(client *c) {
     if (!c->flag.slot_export_target || !c->slot_migration_link) {
         serverLog(
             LL_WARNING,
-            "Received CLUSTER SYNCSLOTS REQUEST-FAILOVER from client %ld, but the client is not "
+            "Received CLUSTER SYNCSLOTS REQUEST-FAILOVER from client %llu, but the client is not "
             "a slot export target. Closing link.",
-            c->id);
+            (unsigned long long)c->id);
         sendFailAndCloseAfterReply(c);
         return;
     }
@@ -1155,9 +1156,9 @@ void clusterCommandSyncSlotsRequestFailover(client *c) {
 void clusterCommandSyncSlotsCancel(client *c) {
     if (!c->flag.slot_export_target || !c->slot_migration_link) {
         serverLog(LL_WARNING,
-                  "Received CLUSTER SYNCSLOTS CANCEL from client %ld, but the client is not a slot "
+                  "Received CLUSTER SYNCSLOTS CANCEL from client %llu, but the client is not a slot "
                   "export target. Closing link.",
-                  c->id);
+                  (unsigned long long)c->id);
         freeClientAsync(c);
         return;
     }
@@ -1390,11 +1391,11 @@ slotMigrationLink *
 createSlotExportLink(client *c, char *nodename, char *linkname, list *slot_ranges) {
     slotMigrationLink *link = zcalloc(sizeof(slotMigrationLink));
 
-    link->last_ack = server.unixtime;
     memcpy(link->nodename, nodename, CLUSTER_NAMELEN);
     memcpy(link->linkname, linkname, CLUSTER_NAMELEN);
     link->ctime = server.unixtime;
     link->last_update = link->ctime;
+    link->last_ack = link->ctime;
     link->client = c;
     link->type = SLOT_MIGRATION_EXPORT;
     link->state = SLOT_EXPORT_WAITING_TO_SNAPSHOT;
@@ -1595,12 +1596,13 @@ void initClusterSlotMigrationLinkList(void) {
     listSetFreeMethod(server.cluster->slot_migration_links, freeSlotMigrationLink);
 }
 
-int shouldCleanupSlotMigrationLink(slotMigrationLink *link, int idx) {
+int shouldCleanupSlotMigrationLink(slotMigrationLink *link, unsigned long idx) {
     return (link->state == SLOT_MIGRATION_LINK_CANCELLED ||
             link->state == SLOT_MIGRATION_LINK_FAILED ||
             link->state == SLOT_MIGRATION_LINK_SUCCESS) &&
-           (server.unixtime - link->last_update > CLUSTER_SLOT_MIGRATION_LOG_TTL_MILLIS ||
-            idx >= CLUSTER_SLOT_MIGRATION_LOG_MAX);
+           ((server.cluster_slot_migration_log_ttl &&
+             server.unixtime - link->last_update >= server.cluster_slot_migration_log_ttl) ||
+            idx >= server.cluster_slot_migration_log_max_len);
 }
 
 const char *slotMigrationLinkStateToString(slotMigrationLinkState state) {
@@ -1682,11 +1684,11 @@ void clusterCommandMigrations(client *c) {
         addReplyBulkCString(c, link->slot_ranges_str);
         addReplyBulkCString(c, "node");
         addReplyBulkCBuffer(c, link->nodename, CLUSTER_NAMELEN);
-        addReplyBulkCString(c, "create_time_ms");
+        addReplyBulkCString(c, "create_time");
         addReplyLongLong(c, link->ctime);
-        addReplyBulkCString(c, "last_update_time_ms");
+        addReplyBulkCString(c, "last_update_time");
         addReplyLongLong(c, link->last_update);
-        addReplyBulkCString(c, "last_ack_time_ms");
+        addReplyBulkCString(c, "last_ack_time");
         addReplyLongLong(c, link->last_ack);
         addReplyBulkCString(c, "state");
         addReplyBulkCString(c, slotMigrationLinkStateToString(link->state));
@@ -1714,11 +1716,26 @@ void sendSyncSlotsMessageOnLink(slotMigrationLink *link, const char *subcommand)
     if (!old_flags.pushing) link->client->flag.pushing = 0;
 }
 
+void clusterCleanupSlotMigrationLog(void) {
+    listNode *ln;
+    listIter li;
+    unsigned long idx = 0;
+    listRewind(server.cluster->slot_migration_links, &li);
+    while ((ln = listNext(&li)) != NULL) {
+        slotMigrationLink *link = ln->value;
+        if (shouldCleanupSlotMigrationLink(link, idx)) {
+            listDelNode(server.cluster->slot_migration_links, ln);
+            continue;
+        }
+    }
+    idx++;
+}
+
 void clusterSlotMigrationCron(void) {
     slotMigrationLink *link;
     listNode *ln;
     listIter li;
-    int idx = 0;
+    unsigned long idx = 0;
     int paused = 0;
     listRewind(server.cluster->slot_migration_links, &li);
     while ((ln = listNext(&li)) != NULL) {
@@ -1735,6 +1752,7 @@ void clusterSlotMigrationCron(void) {
                 /* Only enforce the ACK timeout when not in failover granted
                  * state. Instead, rely on the pause timeout in such cases. */
                 if (link->state != SLOT_EXPORT_FAILOVER_GRANTED &&
+                    last_interaction &&
                     server.unixtime - last_interaction > server.repl_timeout) {
                     serverLog(LL_WARNING,
                               "Timing out slot link %.40s to node %.40s for slots (%s) "
@@ -1772,9 +1790,9 @@ void clusterCommandSyncSlotsAck(client *c) {
     if (!c->flag.slot_export_target && !c->flag.slot_import_source) {
         serverLog(
             LL_WARNING,
-            "Received CLUSTER SYNCSLOTS ACK from client %ld, but the client is not a slot import "
+            "Received CLUSTER SYNCSLOTS ACK from client %llu, but the client is not a slot import "
             "source or export target. Closing link.",
-            c->id);
+            (unsigned long long)c->id);
         freeClientAsync(c);
         return;
     }

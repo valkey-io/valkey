@@ -116,7 +116,7 @@ proc assert_causes_conn_drop {node_idx args} {
     assert_match "*I/O error reading reply*" $result
 }
 
-test "Test command interface" {
+test "General command interface" {
     foreach command {"IMPORT" "IMPORT-PREPARE"} {
         assert_error "*wrong number of arguments*" {R 0 CLUSTER $command}
         assert_error "*syntax error*" {R 0 CLUSTER $command INVALID 0 1}
@@ -159,7 +159,7 @@ test "Test command interface" {
     assert_error "*syntax error*" {R 0 CLUSTER IMPORT-COMMIT INVALID abcdef}
 }
 
-test "Test CLUSTER IMPORT already importing" {
+test "CLUSTER IMPORT already importing" {
     assert_match "OK" [R 0 CLUSTER IMPORT-PREPARE SLOTSRANGE 16383 16383]
     assert_error "*I am already importing slot 16383*" {R 0 CLUSTER IMPORT-PREPARE SLOTSRANGE 16383 16383}
     assert_error "*I am already importing slot 16383*" {R 0 CLUSTER IMPORT SLOTSRANGE 16383 16383}
@@ -174,6 +174,121 @@ test "Test CLUSTER IMPORT already importing" {
     assert_error "*I am already importing slot 16382*" {R 0 CLUSTER IMPORT-PREPARE SLOTSRANGE 16381 16383}
     assert_error "*I am already importing slot 16382*" {R 0 CLUSTER IMPORT SLOTSRANGE 16381 16383}
     R 0 CLUSTER IMPORT-CANCEL ALL
+}
+
+test "CLUSTER MIGRATIONS command config enforced on update" {
+    # Clear the migrations and ensure there are none
+    assert_match "OK" [R 0 CONFIG SET cluster-slot-migration-log-max-len 0]
+    assert_match "" [R 0 CLUSTER MIGRATIONS]
+    assert_match "OK" [R 2 CONFIG SET cluster-slot-migration-log-max-len 0]
+    assert_match "" [R 2 CLUSTER MIGRATIONS]
+}
+
+test "CLUSTER MIGRATIONS command reported fields" {
+    assert_match "OK" [R 0 CONFIG SET cluster-slot-migration-log-max-len 1]
+    assert_match "OK" [R 2 CONFIG SET cluster-slot-migration-log-max-len 1]
+    assert_match "OK" [R 0 CLUSTER IMPORT-PREPARE SLOTSRANGE 16383 16383]
+    set linkname [get_link_name 0 16383]
+    wait_for_migration_field 0 $linkname state replicating
+
+    set import_migration [get_migration_by_linkname 0 $linkname]
+    set export_migration [get_migration_by_linkname 2 $linkname]
+
+    assert_equal [dict get $import_migration operation] IMPORT
+    assert_equal [dict get $export_migration operation] EXPORT
+
+    assert_equal [dict get $import_migration slot_ranges] 16383-16383
+    assert_equal [dict get $export_migration slot_ranges] 16383-16383
+
+    assert_equal [dict get $import_migration node] [R 2 CLUSTER MYID]
+    assert_equal [dict get $export_migration node] [R 0 CLUSTER MYID]
+
+    set import_create_time [dict get $import_migration create_time]
+    assert {$import_create_time ne ""}
+    set export_create_time [dict get $export_migration create_time]
+    assert {$export_create_time ne ""}
+
+    set import_last_update_time [dict get $import_migration last_update_time]
+    assert {$import_last_update_time ne ""}
+    set export_last_update_time [dict get $import_migration last_update_time]
+    assert {$export_last_update_time ne ""}
+
+    set import_last_ack_time [dict get $import_migration last_ack_time]
+    assert {$import_last_ack_time ne ""}
+    set export_last_ack_time [dict get $export_migration last_ack_time]
+    assert {$export_last_ack_time ne ""}
+    
+    wait_for_condition 100 50 {
+        [dict get [get_migration_by_linkname 0 $linkname] last_ack_time] ne $import_last_ack_time
+    } else {
+        fail "Import operation last ack time was not updated within 5 seconds"
+    }
+    wait_for_condition 100 50 {
+        [dict get [get_migration_by_linkname 2 $linkname] last_ack_time] ne $export_last_ack_time
+    } else {
+        fail "Export operation last ack time was not updated within 5 seconds"
+    }
+
+    # Wait for some time to make sure update time will change (since it is in seconds)
+    after 2000
+    assert_match "OK" [R 0 CLUSTER IMPORT-CANCEL ALL]
+    wait_for_migration_field 2 $linkname state cancelled
+
+    set import_migration [get_migration_by_linkname 0 $linkname]
+    set export_migration [get_migration_by_linkname 2 $linkname]
+
+    assert {[dict get $import_migration last_update_time] ne $import_last_update_time}
+    assert {[dict get $export_migration last_update_time] ne $export_last_update_time}
+
+    assert_equal [dict get $import_migration create_time] $import_create_time
+    assert_equal [dict get $export_migration create_time] $export_create_time
+}
+
+test "CLUSTER MIGRATIONS command log removed over max len" {
+    # Add a new entry and the old should get popped
+    assert_match "OK" [R 0 CLUSTER IMPORT-PREPARE SLOTSRANGE 16383 16383]
+    set linkname2 [get_link_name 0 16383]
+    wait_for_migration_field 0 $linkname2 state replicating
+    assert_match "OK" [R 0 CLUSTER IMPORT-CANCEL ALL]
+
+    set import_migration [get_migration_by_linkname 0 $linkname2]
+    set export_migration [get_migration_by_linkname 2 $linkname2]
+    assert {$import_migration ne ""}
+    assert {$export_migration ne ""}
+
+    # We enforce limits only in serverCron
+    wait_for_condition 100 50 {
+        [get_migration_by_linkname 0 $linkname] eq "" && [get_migration_by_linkname 2 $linkname] eq ""
+    } else {
+        fail "Old CLUSTER MIGRATIONS entry not removed after 5 seconds of max-len reached"
+    }
+}
+
+test "CLUSTER MIGRATIONS command log removed over TTL" {
+    assert_match "OK" [R 0 CONFIG SET cluster-slot-migration-log-ttl 1]
+    assert_match "OK" [R 2 CONFIG SET cluster-slot-migration-log-ttl 1]
+    assert_match "OK" [R 0 CLUSTER IMPORT-PREPARE SLOTSRANGE 16383 16383]
+    set linkname [get_link_name 0 16383]
+
+    # Entry should not be removed despite TTL when active
+    after 100
+    set import_migration [get_migration_by_linkname 0 $linkname]
+    set export_migration [get_migration_by_linkname 2 $linkname]
+    assert {$import_migration ne ""}
+    assert {$export_migration ne ""}
+    assert_match "OK" [R 0 CLUSTER IMPORT-CANCEL LINK $linkname]
+
+    wait_for_condition 100 50 {
+        [get_migration_by_linkname 0 $linkname] eq "" && [get_migration_by_linkname 2 $linkname] eq ""
+    } else {
+        fail "Old CLUSTER MIGRATIONS entry not removed after 5 seconds of ttl reached"
+    }
+
+    # Cleanup for subsequent tests
+    assert_match "OK" [R 0 CONFIG SET cluster-slot-migration-log-max-len 1000]
+    assert_match "OK" [R 2 CONFIG SET cluster-slot-migration-log-max-len 1000]
+    assert_match "OK" [R 0 CONFIG SET cluster-slot-migration-log-ttl 3600]
+    assert_match "OK" [R 2 CONFIG SET cluster-slot-migration-log-ttl 3600]
 }
 
 test "Manual and atomic slot migration are mutually exclusive" {

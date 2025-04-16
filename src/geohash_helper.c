@@ -216,7 +216,7 @@ GeoHashRadius geohashCalculateAreasByShapeWGS84(GeoShape *shape) {
         // For rectangles, calculate the diagonal as the radius.
         radius_meters = sqrt((shape->t.r.width / 2) * (shape->t.r.width / 2) + (shape->t.r.height / 2) * (shape->t.r.height / 2));
     } else if (shape->type == POLYGON_TYPE) {
-        // For polygons, use max distance from the bounding box and the centroid.
+        // For polygons, use max distance from the centroid to the bounding box.
         double dist_top_left = geohashGetDistance(longitude, latitude, min_lon, max_lat);
         double dist_top_right = geohashGetDistance(longitude, latitude, max_lon, max_lat);
         double dist_bottom_left = geohashGetDistance(longitude, latitude, min_lon, min_lat);
@@ -366,20 +366,106 @@ int geohashGetDistanceIfInRectangle(double width_m,
     return 1;
 }
 
-/* Check if a point is in a polygon using ray casting. */
-int geohashGetDistanceIfInPolygon(double x1, double y1, double *xy, double (*vertices)[2], int num_vertices, double *distance) {
-    printf("geohashIsWithinPolygon - coordinates: %f %f\r\n", xy[0], xy[1]);
-    int i, j, nvert = num_vertices;
+/* Check if a point is in a polygon using ray casting.
+ * *xy is centroid in lon lat.
+ * x1 and y1 are point's lon lat respectively.
+ * vertices are polygon's coordinates as lon lat. */
+// int geohashGetDistanceIfInPolygon(double x1, double y1, double *xy, double (*vertices)[2], int num_vertices, double *distance) {
+//     printf("geohashIsWithinPolygon - coordinates: %f %f\r\n", xy[0], xy[1]);
+//     int i, j, nvert = num_vertices;
+//     int inside = 0;
+//     for (i = 0, j = nvert - 1; i < nvert; j = i++) {
+//         // Check if the point (xy) is within the polygon
+//         if ((vertices[i][1] > xy[1]) != (vertices[j][1] > xy[1]) &&
+//             (xy[0] < (vertices[j][0] - vertices[i][0]) * (xy[1] - vertices[i][1]) / (vertices[j][1] - vertices[i][1]) + vertices[i][0])) {
+//             inside = !inside;
+//         }
+//     }
+//     if (inside) {
+//         *distance = geohashGetDistance(x1, y1, xy[0], xy[1]);
+//     }
+//     return inside;
+// }
+
+/* PNPOLY - Point Inclusion in Polygon Test by W. Randolph Franklin (WRF)
+ * Based on https://wrfranklin.org/Research/Short_Notes/pnpoly.html
+ * Returns:
+ * 2 - Point is on a vertex or line/segment.
+ * 1 - Point is on the left side of a line/segment
+ * 0 - Point is outside the Polygon */
+int pointInPolygon(double *vertexA, double *vertexB, double pointLon, double pointLat) {
+    // Based on https://github.com/tair-opensource/TairGis/blob/main/src/spatial/polyraycast.c#L156
+    if (vertexA[0] == vertexB[0] && vertexA[1] == vertexB[1]) {
+        if (pointLon == vertexA[0] && pointLat == vertexA[1]) {
+            return 2;
+        }
+        return 0;
+    }
+    // try to check if p is on line ab and p is on segment ab.
+    if (((vertexA[0] <= pointLon && pointLon <= vertexB[0]) || (vertexB[0] <= pointLon && pointLon <= vertexA[0])) && ((vertexA[1] <= pointLat && pointLat <= vertexB[1]) || (vertexB[1] <= pointLat && pointLat <= vertexA[1])) && (pointLat - vertexA[1]) * (vertexB[0] - vertexA[0]) == (pointLon - vertexA[0]) * (vertexB[1] - vertexA[1])) {
+        return 2;
+    } else {
+        // below tries to check:
+        // min(vertexA[1], vertexB[1]) <= pointLat < max(vertexA[1], vertexB[1]); when ab is parallel with y=pointLat, it is always false;
+        // assume Q is the crosspoint of line y=pointLat and line ab, check if pointLon < Q.x;
+        if (((vertexA[1] > pointLat) != (vertexB[1] > pointLat)) && (pointLon < (vertexB[0] - vertexA[0]) * (pointLat - vertexA[1]) / (vertexB[1] - vertexA[1]) + vertexA[0])) {
+            return 1;
+        } else {
+            return 0;
+        }
+    }
+    // if (((vertexA[1] > pointLat) != (vertexB[1] > pointLat)) && (pointLon < (vertexB[0] - vertexA[0]) * (pointLat - vertexA[1]) / (vertexB[1] - vertexA[1]) + vertexA[0])) {
+    //     return 1;
+    // } else {
+    //     return 0;
+    // }
+}
+
+/* Check if `point` is inside a polygon (defined by `vertices` where each vertex's index 0 is lon & 1 is lat) using
+ * ray casting and calculate the distance from the centroid to the point.
+ * `centroidLon` and `centroidLat` are the centroid's lon lat coordinates.
+ * Returns 1 if inside the polyon and returns 0 otherwise. */
+int geohashGetDistanceIfInPolygon(double centroidLon, double centroidLat, double *point, double (*vertices)[2], int num_vertices, double *distance) {
+    printf("geohashIsWithinPolygon - point coordinates: %f %f\r\n", point[0], point[1]);
+    int i, j;
     int inside = 0;
-    for (i = 0, j = nvert - 1; i < nvert; j = i++) {
-        // Check if the point (xy) is within the polygon
-        if ((vertices[i][1] > xy[1]) != (vertices[j][1] > xy[1]) &&
-            (xy[0] < (vertices[j][0] - vertices[i][0]) * (xy[1] - vertices[i][1]) / (vertices[j][1] - vertices[i][1]) + vertices[i][0])) {
+    for (i = 0, j = num_vertices - 1; i < num_vertices; j = i++) {
+        // double *vertexA = vertices[i];
+        // double vertexA_lon_rad = deg_rad(vertexA[0]);
+        // double vertexA_lat_rad = deg_rad(vertexA[1]);
+        // double vertexA_cur_x = EARTH_RADIUS_IN_METERS * cos(vertexA_lat_rad) * cos(vertexA_lon_rad);
+        // double vertexA_cur_y = EARTH_RADIUS_IN_METERS * cos(vertexA_lat_rad) * sin(vertexA_lon_rad);
+        // double vertexA_cur_z = EARTH_RADIUS_IN_METERS * sin(vertexA_lat_rad);
+        // vertexA[0] = vertexA_cur_x;
+        // vertexA[1] = vertexA_cur_y;
+
+        // double *vertexB = vertices[j];
+        // double vertexB_lon_rad = deg_rad(vertexB[0]);
+        // double vertexB_lat_rad = deg_rad(vertexB[1]);
+        // double vertexB_cur_x = EARTH_RADIUS_IN_METERS * cos(vertexB_lat_rad) * cos(vertexB_lon_rad);
+        // double vertexB_cur_y = EARTH_RADIUS_IN_METERS * cos(vertexB_lat_rad) * sin(vertexB_lon_rad);
+        // double vertexB_cur_z = EARTH_RADIUS_IN_METERS * sin(vertexB_lat_rad);
+        // vertexB[0] = vertexB_cur_x;
+        // vertexB[1] = vertexB_cur_y;
+
+        // double point_lon_rad = deg_rad(point[0]);
+        // double point_lat_rad = deg_rad(point[1]);
+        // double point_x = EARTH_RADIUS_IN_METERS * cos(point_lat_rad) * cos(point_lon_rad);
+        // double point_y = EARTH_RADIUS_IN_METERS * cos(point_lat_rad) * sin(point_lon_rad);
+        // double point_z = EARTH_RADIUS_IN_METERS * sin(point_lat_rad);
+        // int res = pointInPolygon(vertexA, vertexB, point_x, point_y);
+        // if (res) {
+        //     inside = !inside;
+        // }
+        double *vertexA = vertices[i];
+        double *vertexB = vertices[j];
+        int res = pointInPolygon(vertexA, vertexB, point[0], point[1]);
+        if (res) {
             inside = !inside;
         }
     }
     if (inside) {
-        *distance = geohashGetDistance(x1, y1, xy[0], xy[1]);
+        *distance = geohashGetDistance(centroidLon, centroidLat, point[0], point[1]);
     }
     return inside;
 }

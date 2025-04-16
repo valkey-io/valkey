@@ -568,6 +568,47 @@ start_server {tags {"introspection"}} {
         $c2 close
     }
 
+
+    test {CLIENT COUNT with IP filter} {
+        set client_info [r client info]
+        regexp {addr=([^:]+):} $client_info -> iponly
+
+        # Use the extracted IP for filtering.
+        set result [r client count ip $iponly]
+        assert_match $result 1
+    } {}
+
+    start_server {tags {"ipv6"} overrides {bind {127.0.0.1 ::1}}} {
+        test {CLIENT COUNT with IPv6 filter} {
+            set c [valkey ::1 [srv 0 port] 0 $::tls]
+            set client_info [$c client info]
+
+            regexp {addr=\[([a-fA-F0-9:]+)\]:\d+} $client_info -> ipv6only
+            set result [$c client count ip $ipv6only]
+            assert_match $result 1
+
+            $c close
+        }
+    }
+
+    test {CLIENT COUNT: Filter by Capa} {
+        # Connect multiple clients
+        set c1 [valkey_client]
+        set c2 [valkey_client]
+        set c3 [valkey_client]
+
+        # Assert the count matches the number of connected clients
+        assert {[r client count] == 4}
+        r client capa redirect
+
+        assert {[r client count capa r] == 1}
+
+        # Close all clients
+        $c1 close
+        $c2 close
+        $c3 close
+    }
+
     proc get_field_in_client_info {info field} {
         set info [string trim $info]
         foreach item [split $info " "] {

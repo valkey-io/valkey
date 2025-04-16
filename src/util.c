@@ -622,7 +622,11 @@ static int string2llScalar(const char *s, size_t slen, long long *value) {
 
 int string2ll(const char *s, size_t slen, long long *value) {
 #ifdef HAVE_AVX512
-    return string2llAVX512(s, slen, value);
+    /* TODO: Cache the cpu info when server startup */
+    if (__builtin_cpu_supports("avx512f") &&
+        __builtin_cpu_supports("avx512vl") &&
+        __builtin_cpu_supports("avx512bw"))
+        return string2llAVX512(s, slen, value);
 #endif
     return string2llScalar(s, slen, value);
 }

@@ -4,8 +4,10 @@ on:
   workflow_call:
 
 jobs:
-  build:
+  build-jemalloc:
     runs-on: fedora:latest
+    container:
+      image: fedora:latest
     steps:
       - name: Install dependencies
         run: dnf -y install git autoconf make gcc awk

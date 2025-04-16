@@ -77,7 +77,7 @@ typedef struct sentinelAddr {
 #define SRI_FORCE_FAILOVER (1 << 11)      /* Force failover with primary up. */
 #define SRI_SCRIPT_KILL_SENT (1 << 12)    /* SCRIPT KILL already sent on -BUSY */
 #define SRI_PRIMARY_REBOOT (1 << 13)      /* Primary was detected as rebooting */
-#define SRI_SAFE_FAILOVER (1 << 14)         /* Force failover in a more safe way. */
+#define SRI_SAFE_FAILOVER (1 << 14)       /* Force failover in a more safe way. */
 /* Note: when adding new flags, please check the flags section in addReplySentinelValkeyInstance. */
 
 /* Note: times are in milliseconds. */
@@ -3856,9 +3856,8 @@ void sentinelCommand(client *c) {
                 return;
             }
             safeMode = 1;
-            if (c->argc == 5 && (getLongLongFromObject(c->argv[4], &safeFailOverTimeout) == C_ERR
-                                 || safeFailOverTimeout < 0)) {
-                addReplyError(c,"Invalid failover timeout specified");
+            if (c->argc == 5 && (getLongLongFromObject(c->argv[4], &safeFailOverTimeout) == C_ERR || safeFailOverTimeout < 0)) {
+                addReplyError(c, "Invalid failover timeout specified");
                 return;
             }
         }
@@ -4738,7 +4737,7 @@ int sentinelSendFailover(sentinelValkeyInstance *primary, const sentinelAddr *ad
     int retval;
 
     host = announceSentinelAddr(addr);
-    ll2string(portstr,sizeof(portstr), addr->port);
+    ll2string(portstr, sizeof(portstr), addr->port);
 
     retval = redisAsyncCommand(primary->link->cc, sentinelDiscardReplyCallback, primary,
                                "%s TO %s %s FORCE TIMEOUT %d", sentinelInstanceMapCommand(primary, "FAILOVER"),

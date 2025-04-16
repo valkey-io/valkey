@@ -31,7 +31,15 @@
                 "name": "safe",
                 "type": "pure-token",
                 "optional": true,
-                "since": "8.1.0"
+                "since": "8.1.0",
+                "arguments": [
+                    {
+                        "token": "TIMEOUT",
+                        "name": "milliseconds",
+                        "type": "integer",
+                        "optional": true
+                    }
+                ]
             }
         ]
     }

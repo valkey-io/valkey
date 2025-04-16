@@ -99,7 +99,7 @@ void freeClientBlockingState(client *c) {
     zfree(c->bstate);
     c->bstate = NULL;
 
-    serverAssert(!c->deferred_reply);
+    debugServerAssert(!c->deferred_reply);
     commitDeferredReplyBuffer(c, 0);
 }
 

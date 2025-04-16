@@ -1782,7 +1782,7 @@ void freeClient(client *c) {
     c->reply = NULL;
     zfree_with_size(c->buf, c->buf_usable_size);
     c->buf = NULL;
-    resetDeferredReplyBuffer(c);
+    listRelease(c->deferred_reply);
 
     freeClientArgv(c);
     freeClientOriginalArgv(c);

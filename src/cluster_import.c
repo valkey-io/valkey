@@ -413,7 +413,7 @@ void clusterCommandImportCancel(client *c) {
 void clusterCommandSyncSlotsSnapshotEof(client *c) {
     if (!c->flag.slot_import_source || !c->slot_migration_link) {
         serverLog(LL_WARNING,
-                  "Received CLUSTER SYNCSLOTS SNAPSHOT-EOF from client %lu, but the "
+                  "Received CLUSTER SYNCSLOTS SNAPSHOT-EOF from client %ld, but the "
                   "client is not a slot import source. Closing link.",
                   c->id);
         freeClientAsync(c);
@@ -450,7 +450,7 @@ void clusterCommandSyncSlotsSnapshotEof(client *c) {
 void clusterCommandSyncSlotsPaused(client *c) {
     if (!c->flag.slot_import_source || !c->slot_migration_link) {
         serverLog(LL_WARNING,
-                  "Received CLUSTER SYNCSLOTS PAUSED from client %lu, but the client is "
+                  "Received CLUSTER SYNCSLOTS PAUSED from client %ld, but the client is "
                   "not a slot import source. Closing link.",
                   c->id);
         freeClientAsync(c);
@@ -478,7 +478,7 @@ void clusterCommandSyncSlotsPaused(client *c) {
 void clusterCommandSyncSlotsFailoverGranted(client *c) {
     if (!c->flag.slot_import_source || !c->slot_migration_link) {
         serverLog(LL_WARNING,
-                  "Received CLUSTER SYNCSLOTS FAILOVER-GRANTED from client %lu, but the "
+                  "Received CLUSTER SYNCSLOTS FAILOVER-GRANTED from client %ld, but the "
                   "client is not a slot import source. Closing link.",
                   c->id);
         freeClientAsync(c);
@@ -506,7 +506,7 @@ void clusterCommandSyncSlotsFailoverGranted(client *c) {
 void clusterCommandSyncSlotsFailoverDenied(client *c) {
     if (!c->flag.slot_import_source || !c->slot_migration_link) {
         serverLog(LL_WARNING,
-                  "Received CLUSTER SYNCSLOTS FAILOVER-DENIED from client %lu, but the "
+                  "Received CLUSTER SYNCSLOTS FAILOVER-DENIED from client %ld, but the "
                   "client is not a slot import source. Closing link.",
                   c->id);
         freeClientAsync(c);
@@ -545,7 +545,7 @@ void clusterCommandSyncSlotsFailoverDenied(client *c) {
 void clusterCommandSyncSlotsFail(client *c) {
     if (!c->flag.slot_import_source || !c->slot_migration_link) {
         serverLog(LL_WARNING,
-                  "Received CLUSTER SYNCSLOTS FAIL from client %lu, but the client is "
+                  "Received CLUSTER SYNCSLOTS FAIL from client %ld, but the client is "
                   "not a slot import source. Closing link.",
                   c->id);
         freeClientAsync(c);
@@ -894,7 +894,7 @@ void clusterCommandSyncSlotsSnapshot(client *c) {
 
     if (!nodeIsPrimary(server.cluster->myself)) {
         serverLog(LL_WARNING,
-                  "Received CLUSTER SYNCSLOTS SNAPSHOT from client %lu, but I am not a primary. "
+                  "Received CLUSTER SYNCSLOTS SNAPSHOT from client %ld, but I am not a primary. "
                   "Failing link.",
                   c->id);
         sendFailAndCloseAfterReply(c);
@@ -911,7 +911,7 @@ void clusterCommandSyncSlotsSnapshot(client *c) {
     if (c->flag.slot_import_source || c->flag.slot_export_target) {
         serverLog(
             LL_WARNING,
-            "Received CLUSTER SYNCSLOTS SNAPSHOT from client %lu which is already a slot link. "
+            "Received CLUSTER SYNCSLOTS SNAPSHOT from client %ld which is already a slot link. "
             "Failing link.",
             c->id);
         sendFailAndCloseAfterReply(c);
@@ -925,8 +925,7 @@ void clusterCommandSyncSlotsSnapshot(client *c) {
             if (target_node || i + 1 >= c->argc || sdslen(c->argv[i + 1]->ptr) != CLUSTER_NAMELEN) {
                 serverLog(LL_WARNING,
                           "Malformatted or missing node ID in CLUSTER SYNCSLOTS SNAPSHOT from "
-                          "client %lu. "
-                          "Failing link.",
+                          "client %ld. Failing link.",
                           c->id);
                 error = 1;
                 break;
@@ -935,7 +934,7 @@ void clusterCommandSyncSlotsSnapshot(client *c) {
             if (!target_node) {
                 serverLog(
                     LL_WARNING,
-                    "Received CLUSTER SYNCSLOTS SNAPSHOT from client %lu with an unknown node ID. "
+                    "Received CLUSTER SYNCSLOTS SNAPSHOT from client %ld with an unknown node ID. "
                     "Failing link.",
                     c->id);
                 error = 1;
@@ -947,7 +946,7 @@ void clusterCommandSyncSlotsSnapshot(client *c) {
                 serverLog(
                     LL_WARNING,
                     "Malformatted or missing link name in CLUSTER SYNCSLOTS SNAPSHOT from client "
-                    "%lu. Failing link.",
+                    "%ld. Failing link.",
                     c->id);
                 error = 1;
                 break;
@@ -960,7 +959,7 @@ void clusterCommandSyncSlotsSnapshot(client *c) {
                 serverLog(
                     LL_WARNING,
                     "Failed to parse slot range provided by CLUSTER SYNCSLOTS SNAPSHOT from client "
-                    "%lu: %s. Failing link.",
+                    "%ld: %s. Failing link.",
                     c->id, err);
                 sdsfree(err);
                 error = 1;
@@ -968,9 +967,8 @@ void clusterCommandSyncSlotsSnapshot(client *c) {
             }
             if (source_node != server.cluster->myself) {
                 serverLog(LL_WARNING,
-                          "Received CLUSTER SYNCSLOTS SNAPSHOT from client %lu, but I am not the "
-                          "owner of "
-                          "the requested slots. Failing link.",
+                          "Received CLUSTER SYNCSLOTS SNAPSHOT from client %ld, but I am not the "
+                          "owner of the requested slots. Failing link.",
                           c->id);
                 error = 1;
                 break;
@@ -981,7 +979,7 @@ void clusterCommandSyncSlotsSnapshot(client *c) {
     }
     if (!error && (!target_node || !link_name || !slot_ranges)) {
         serverLog(LL_WARNING,
-                  "Missing >= 1 required argument in CLUSTER SYNCSLOTS SNAPSHOT from client %lu. "
+                  "Missing >= 1 required argument in CLUSTER SYNCSLOTS SNAPSHOT from client %ld. "
                   "Failing link.",
                   c->id);
         error = 1;
@@ -1027,7 +1025,7 @@ void slotExportBeginStreaming(slotMigrationLink *link) {
 void clusterCommandSyncSlotsStream(client *c) {
     if (!c->flag.slot_export_target || !c->slot_migration_link) {
         serverLog(LL_WARNING,
-                  "Received CLUSTER SYNCSLOTS PAUSE from client %lu, but the client is not a slot "
+                  "Received CLUSTER SYNCSLOTS PAUSE from client %ld, but the client is not a slot "
                   "export target. Closing link.",
                   c->id);
         sendFailAndCloseAfterReply(c);
@@ -1058,7 +1056,7 @@ void clusterCommandSyncSlotsStream(client *c) {
 void clusterCommandSyncSlotsPause(client *c) {
     if (!c->flag.slot_export_target || !c->slot_migration_link) {
         serverLog(LL_WARNING,
-                  "Received CLUSTER SYNCSLOTS PAUSE from client %lu, but the client is not a slot "
+                  "Received CLUSTER SYNCSLOTS PAUSE from client %ld, but the client is not a slot "
                   "export target. Closing link.",
                   c->id);
         sendFailAndCloseAfterReply(c);
@@ -1102,7 +1100,7 @@ void clusterCommandSyncSlotsRequestFailover(client *c) {
     if (!c->flag.slot_export_target || !c->slot_migration_link) {
         serverLog(
             LL_WARNING,
-            "Received CLUSTER SYNCSLOTS REQUEST-FAILOVER from client %lu, but the client is not "
+            "Received CLUSTER SYNCSLOTS REQUEST-FAILOVER from client %ld, but the client is not "
             "a slot export target. Closing link.",
             c->id);
         sendFailAndCloseAfterReply(c);
@@ -1166,7 +1164,7 @@ void clusterCommandSyncSlotsRequestFailover(client *c) {
 void clusterCommandSyncSlotsCancel(client *c) {
     if (!c->flag.slot_export_target || !c->slot_migration_link) {
         serverLog(LL_WARNING,
-                  "Received CLUSTER SYNCSLOTS CANCEL from client %lu, but the client is not a slot "
+                  "Received CLUSTER SYNCSLOTS CANCEL from client %ld, but the client is not a slot "
                   "export target. Closing link.",
                   c->id);
         freeClientAsync(c);
@@ -1783,7 +1781,7 @@ void clusterCommandSyncSlotsAck(client *c) {
     if (!c->flag.slot_export_target && !c->flag.slot_import_source) {
         serverLog(
             LL_WARNING,
-            "Received CLUSTER SYNCSLOTS ACK from client %lu, but the client is not a slot import "
+            "Received CLUSTER SYNCSLOTS ACK from client %ld, but the client is not a slot import "
             "source or export target. Closing link.",
             c->id);
         freeClientAsync(c);

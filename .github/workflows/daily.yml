@@ -1020,7 +1020,7 @@ jobs:
         run: dnf -y install epel-release
       - name: make
         run: |
-          if [[ "${{ matrix.name }}" == "test-fedoralatest-jemalloc" ]]; then
+          if [[ "${{ matrix.name }}" == "test-fedoralatest-tls-module-no-tls" ]]; then
             dnf -y install awk
           fi
           dnf -y install make gcc openssl-devel openssl procps-ng which /usr/bin/kill

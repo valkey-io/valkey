@@ -756,6 +756,27 @@ if {[string match {*jemalloc*} [s mem_allocator]]} {
         lappend res [r get bar]
     } {12 12}
 
+    test {DELIFEQ non-existing key} {
+        r del foo
+        assert_equal 0 [r delifeq foo "test"]
+    }
+
+    test {DELIFEQ existing key, matching value} {
+        r set foo "test"
+        assert_equal 1 [r delifeq foo "test"]
+    }
+
+    test {DELIFEQ existing key, non-matching value} {
+        r set foo "nope"
+        assert_equal 0 [r delifeq foo "test"]
+    }
+
+    test {DELIFEQ existing key, non-string value} {
+        r del foo
+        r sadd foo "test"
+        assert_error "WRONGTYPE*" {r delifeq foo "test"}
+    }
+
 if {[string match {*jemalloc*} [s mem_allocator]]} {
     test {Memory usage of embedded string value} {
         # Check that we can fit 9 bytes of key + value into a 32 byte

@@ -3628,6 +3628,7 @@ void setCommand(client *c);
 void setnxCommand(client *c);
 void setexCommand(client *c);
 void psetexCommand(client *c);
+void delifeqCommand(client *c);
 void getCommand(client *c);
 void getexCommand(client *c);
 void getdelCommand(client *c);

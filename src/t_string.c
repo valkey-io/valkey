@@ -384,6 +384,32 @@ void psetexCommand(client *c) {
     setGenericCommand(c, OBJ_PX | OBJ_ARGV3, c->argv[1], c->argv[3], c->argv[2], UNIT_MILLISECONDS, NULL, NULL, NULL);
 }
 
+void delifeqCommand(client *c) {
+    robj *existing_value = lookupKeyWrite(c->db, c->argv[1]);
+
+    if (existing_value == NULL) {
+        addReplyLongLong(c, 0);
+        return;
+    }
+
+    if (checkType(c, existing_value, OBJ_STRING)) {
+        /* Error reply already sent */
+        return;
+    }
+
+    if (compareStringObjects(existing_value, c->argv[2]) != 0) {
+        addReplyLongLong(c, 0);
+        return;
+    }
+
+    if (!dbSyncDelete(c->db, c->argv[1])) {
+        addReplyLongLong(c, 0);
+        return;
+    }
+
+    addReplyLongLong(c, 1);
+}
+
 int getGenericCommand(client *c) {
     robj *o;
 

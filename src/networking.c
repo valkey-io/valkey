@@ -466,23 +466,23 @@ void _addReplyToBufferOrList(client *c, const char *s, size_t len) {
 
     c->net_output_bytes_curr_cmd += len;
 
-    if (isDeferredReplyEnabled(c)) {
-        _addReplyProtoToList(c, c->deferred_reply, s, len);
-        return;
-    }
-
-    /* We call it here because this function may affect the reply
-     * buffer offset (see function comment) */
-    reqresSaveClientReplyOffset(c);
-
     /* If we're processing a push message into the current client (i.e. executing PUBLISH
      * to a channel which we are subscribed to, then we wanna postpone that message to be added
      * after the command's reply (specifically important during multi-exec). the exception is
      * the SUBSCRIBE command family, which (currently) have a push message instead of a proper reply.
      * The check for executing_client also avoids affecting push messages that are part of eviction.
      * Check CLIENT_PUSHING first to avoid race conditions, as it's absent in module's fake client. */
-    if (c->flag.pushing && c == server.current_client && server.executing_client &&
-        !cmdHasPushAsReply(server.executing_client->cmd)) {
+    int defer_push_message = c->flag.pushing && c == server.current_client && server.executing_client &&
+        !cmdHasPushAsReply(server.executing_client->cmd);
+    if (defer_push_message == 0 && isDeferredReplyEnabled(c)) {
+        _addReplyProtoToList(c, c->deferred_reply, s, len);
+        return;
+    }
+    /* We call it here because this function may affect the reply
+     * buffer offset (see function comment) */
+    reqresSaveClientReplyOffset(c);
+
+    if (defer_push_message) {
         _addReplyProtoToList(c, server.pending_push_messages, s, len);
         return;
     }

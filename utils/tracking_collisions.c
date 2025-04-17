@@ -17,7 +17,7 @@
  *
  * --------------------------------------------------------------------------
  *
- * Copyright (C) 2019 Salvatore Sanfilippo
+ * Copyright (C) 2019 Redis Ltd.
  * This code is released under the BSD 2 clause license.
  */
 

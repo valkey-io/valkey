@@ -1,4 +1,4 @@
-# redis-sha1.rb - Copyright (C) 2009 Salvatore Sanfilippo
+# redis-sha1.rb - Copyright (C) 2009 Redis Ltd.
 # BSD license, See the COPYING file for more information.
 #
 # Performs the SHA1 sum of the whole dataset.

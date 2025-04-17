@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009-2012, Salvatore Sanfilippo <antirez at gmail dot com>
+ * Copyright (c) 2009-2012, Redis Ltd.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -33,6 +33,6 @@
 int32_t serverLrand48(void);
 void serverSrand48(int32_t seedval);
 
-#define REDIS_LRAND48_MAX INT32_MAX
+#define SERVER_LRAND48_MAX INT32_MAX
 
 #endif

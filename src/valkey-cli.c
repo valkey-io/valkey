@@ -1,6 +1,6 @@
 /* Server CLI (command line interface)
  *
- * Copyright (c) 2009-2012, Salvatore Sanfilippo <antirez at gmail dot com>
+ * Copyright (c) 2009-2012, Redis Ltd.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -27,7 +27,11 @@
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  * POSSIBILITY OF SUCH DAMAGE.
  */
-
+/*
+ * Copyright (c) Valkey Contributors
+ * All rights reserved.
+ * SPDX-License-Identifier: BSD-3-Clause
+ */
 #include "fmacros.h"
 
 #include <stdio.h>
@@ -65,6 +69,8 @@
 #include "mt19937-64.h"
 #include "cli_commands.h"
 
+#include "valkey_strtod.h"
+
 #define UNUSED(V) ((void)V)
 
 #define OUTPUT_STANDARD 0
@@ -87,9 +93,9 @@
 #define CLUSTER_MANAGER_MIGRATE_PIPELINE 10
 #define CLUSTER_MANAGER_REBALANCE_THRESHOLD 2
 
-#define CLUSTER_MANAGER_INVALID_HOST_ARG                                                                               \
-    "[ERR] Invalid arguments: you need to pass either a valid "                                                        \
-    "address (ie. 120.0.0.1:7000) or space separated IP "                                                              \
+#define CLUSTER_MANAGER_INVALID_HOST_ARG                        \
+    "[ERR] Invalid arguments: you need to pass either a valid " \
+    "address (ie. 120.0.0.1:7000) or space separated IP "       \
     "and port (ie. 120.0.0.1 7000)\n"
 #define CLUSTER_MANAGER_MODE() (config.cluster_manager_command.name != NULL)
 #define CLUSTER_MANAGER_PRIMARIES_COUNT(nodes, replicas) ((nodes) / ((replicas) + 1))
@@ -97,7 +103,7 @@
 
 #define CLUSTER_MANAGER_NODE_ARRAY_FREE(array) zfree((array)->alloc)
 
-#define CLUSTER_MANAGER_PRINT_REPLY_ERROR(n, err)                                                                      \
+#define CLUSTER_MANAGER_PRINT_REPLY_ERROR(n, err) \
     clusterManagerLogErr("Node %s:%d replied with error:\n%s\n", (n)->ip, (n)->port, (err));
 
 #define clusterManagerLogInfo(...) clusterManagerLog(CLUSTER_MANAGER_LOG_LVL_INFO, __VA_ARGS__)
@@ -157,7 +163,7 @@
 
 /* --latency-dist palettes. */
 int spectrum_palette_color_size = 19;
-int spectrum_palette_color[] = {0,   233, 234, 235, 237, 239, 241, 243, 245, 247,
+int spectrum_palette_color[] = {0, 233, 234, 235, 237, 239, 241, 243, 245, 247,
                                 144, 143, 142, 184, 226, 214, 208, 202, 196};
 
 int spectrum_palette_mono_size = 13;
@@ -172,9 +178,9 @@ static struct termios orig_termios; /* To restore terminal at exit.*/
 
 /* Dict Helpers */
 static uint64_t dictSdsHash(const void *key);
-static int dictSdsKeyCompare(dict *d, const void *key1, const void *key2);
-static void dictSdsDestructor(dict *d, void *val);
-static void dictListDestructor(dict *d, void *val);
+static int dictSdsKeyCompare(const void *key1, const void *key2);
+static void dictSdsDestructor(void *val);
+static void dictListDestructor(void *val);
 
 /* Cluster Manager Command Info */
 typedef struct clusterManagerCommand {
@@ -216,6 +222,8 @@ static struct config {
     int shutdown;
     int monitor_mode;
     int pubsub_mode;
+    int pubsub_unsharded_count; /* channels and patterns */
+    int pubsub_sharded_count;   /* shard channels */
     int blocking_state_aborted; /* used to abort monitor_mode and pubsub_mode. */
     int latency_mode;
     int latency_dist_mode;
@@ -371,23 +379,19 @@ static uint64_t dictSdsHash(const void *key) {
     return dictGenHashFunction((unsigned char *)key, sdslen((char *)key));
 }
 
-static int dictSdsKeyCompare(dict *d, const void *key1, const void *key2) {
+static int dictSdsKeyCompare(const void *key1, const void *key2) {
     int l1, l2;
-    UNUSED(d);
-
     l1 = sdslen((sds)key1);
     l2 = sdslen((sds)key2);
     if (l1 != l2) return 0;
     return memcmp(key1, key2, l1) == 0;
 }
 
-static void dictSdsDestructor(dict *d, void *val) {
-    UNUSED(d);
+static void dictSdsDestructor(void *val) {
     sdsfree(val);
 }
 
-void dictListDestructor(dict *d, void *val) {
-    UNUSED(d);
+void dictListDestructor(void *val) {
     listRelease((list *)val);
 }
 
@@ -1610,25 +1614,30 @@ static int cliSwitchProto(void) {
     return result;
 }
 
+static void resetConfig(void) {
+    config.dbnum = 0;
+    config.in_multi = 0;
+    config.pubsub_mode = 0;
+}
+
 /* Connect to the server. It is possible to pass certain flags to the function:
  *      CC_FORCE: The connection is performed even if there is already
  *                a connected socket.
  *      CC_QUIET: Don't print errors if connection fails. */
 static int cliConnect(int flags) {
     if (context == NULL || flags & CC_FORCE) {
+        resetConfig();
         if (context != NULL) {
             redisFree(context);
-            config.dbnum = 0;
-            config.in_multi = 0;
-            config.pubsub_mode = 0;
+            resetConfig();
             cliRefreshPrompt();
         }
 
         /* Do not use hostsocket when we got redirected in cluster mode */
         if (config.hostsocket == NULL || (config.cluster_mode && config.cluster_reissue_command)) {
-            context = redisConnectWrapper(config.conn_info.hostip, config.conn_info.hostport, config.connect_timeout);
+            context = redisConnectWrapper(config.conn_info.hostip, config.conn_info.hostport, config.connect_timeout, 0);
         } else {
-            context = redisConnectUnixWrapper(config.hostsocket, config.connect_timeout);
+            context = redisConnectUnixWrapper(config.hostsocket, config.connect_timeout, 0);
         }
 
         if (!context->err && config.tls) {
@@ -2042,6 +2051,8 @@ static sds jsonStringOutput(sds out, const char *p, int len, int mode) {
     } else {
         assert(0);
     }
+    /* Silence compiler warning */
+    return NULL;
 }
 
 static sds cliFormatReplyJson(sds out, redisReply *r, int mode) {
@@ -2229,6 +2240,28 @@ static int cliReadReply(int output_raw_strings) {
     return REDIS_OK;
 }
 
+/* Helper method to handle pubsub subscription/unsubscription. */
+static void handlePubSubMode(redisReply *reply) {
+    char *cmd = reply->element[0]->str;
+    int count = reply->element[2]->integer;
+
+    /* Update counts based on the command type */
+    if (strcmp(cmd, "subscribe") == 0 || strcmp(cmd, "psubscribe") == 0 || strcmp(cmd, "unsubscribe") == 0 || strcmp(cmd, "punsubscribe") == 0) {
+        config.pubsub_unsharded_count = count;
+    } else if (strcmp(cmd, "ssubscribe") == 0 || strcmp(cmd, "sunsubscribe") == 0) {
+        config.pubsub_sharded_count = count;
+    }
+
+    /* Update pubsub mode based on the current counts */
+    if (config.pubsub_unsharded_count + config.pubsub_sharded_count == 0 && config.pubsub_mode) {
+        config.pubsub_mode = 0;
+        cliRefreshPrompt();
+    } else if (config.pubsub_unsharded_count + config.pubsub_sharded_count > 0 && !config.pubsub_mode) {
+        config.pubsub_mode = 1;
+        cliRefreshPrompt();
+    }
+}
+
 /* Simultaneously wait for pubsub messages from the server and input on stdin. */
 static void cliWaitForMessagesOrStdin(void) {
     int show_info = config.output != OUTPUT_RAW && (isatty(STDOUT_FILENO) || getenv("FAKETTY"));
@@ -2246,7 +2279,13 @@ static void cliWaitForMessagesOrStdin(void) {
                 sds out = cliFormatReply(reply, config.output, 0);
                 fwrite(out, sdslen(out), 1, stdout);
                 fflush(stdout);
+
+                if (isPubsubPush(reply)) {
+                    handlePubSubMode(reply);
+                }
+
                 sdsfree(out);
+                freeReplyObject(reply);
             }
         } while (reply);
 
@@ -2320,6 +2359,9 @@ static int cliSendCommand(int argc, char **argv, long repeat) {
         (argc >= 2 && !strcasecmp(command, "proxy") && !strcasecmp(argv[1], "info"))) {
         output_raw = 1;
     }
+
+    /* In a multi block, commands will return status strings instead of verbatim strings. */
+    if (config.in_multi) output_raw = 0;
 
     if (!strcasecmp(command, "shutdown")) config.shutdown = 1;
     if (!strcasecmp(command, "monitor")) config.monitor_mode = 1;
@@ -2397,13 +2439,11 @@ static int cliSendCommand(int argc, char **argv, long repeat) {
             fflush(stdout);
             if (config.pubsub_mode || num_expected_pubsub_push > 0) {
                 if (isPubsubPush(config.last_reply)) {
+                    handlePubSubMode(config.last_reply);
+
                     if (num_expected_pubsub_push > 0 && !strcasecmp(config.last_reply->element[0]->str, command)) {
                         /* This pushed message confirms the
                          * [p|s][un]subscribe command. */
-                        if (is_subscribe && !config.pubsub_mode) {
-                            config.pubsub_mode = 1;
-                            cliRefreshPrompt();
-                        }
                         if (--num_expected_pubsub_push > 0) {
                             continue; /* We need more of these. */
                         }
@@ -2485,7 +2525,7 @@ static redisReply *reconnectingRedisCommand(redisContext *c, const char *fmt, ..
             fflush(stdout);
 
             redisFree(c);
-            c = redisConnectWrapper(config.conn_info.hostip, config.conn_info.hostport, config.connect_timeout);
+            c = redisConnectWrapper(config.conn_info.hostip, config.conn_info.hostport, config.connect_timeout, 0);
             if (!c->err && config.tls) {
                 const char *err = NULL;
                 if (cliSecureConnection(c, config.sslconfig, &err) == REDIS_ERR && err) {
@@ -2536,14 +2576,15 @@ static int parseOptions(int argc, char **argv) {
             config.stdin_tag_name = argv[++i];
         } else if (!strcmp(argv[i], "-p") && !lastarg) {
             config.conn_info.hostport = atoi(argv[++i]);
-            if (config.conn_info.hostport < 0 || config.conn_info.hostport > 65535) {
+            if ((config.conn_info.hostport == 0 && !(strlen(argv[i]) == 1 && argv[i][0] == '0')) || config.conn_info.hostport < 0 || config.conn_info.hostport > 65535) {
                 fprintf(stderr, "Invalid server port.\n");
                 exit(1);
             }
         } else if (!strcmp(argv[i], "-t") && !lastarg) {
+            errno = 0;
             char *eptr;
-            double seconds = strtod(argv[++i], &eptr);
-            if (eptr[0] != '\0' || isnan(seconds) || seconds < 0.0) {
+            double seconds = valkey_strtod(argv[++i], &eptr);
+            if (eptr[0] != '\0' || isnan(seconds) || seconds < 0.0 || errno == EINVAL || errno == ERANGE) {
                 fprintf(stderr, "Invalid connection timeout for -t.\n");
                 exit(1);
             }
@@ -2567,7 +2608,7 @@ static int parseOptions(int argc, char **argv) {
         } else if (!strcmp(argv[i], "--user") && !lastarg) {
             config.conn_info.user = sdsnew(argv[++i]);
         } else if (!strcmp(argv[i], "-u") && !lastarg) {
-            parseRedisUri(argv[++i], "valkey-cli", &config.conn_info, &config.tls);
+            parseUri(argv[++i], "valkey-cli", &config.conn_info, &config.tls);
             if (config.conn_info.hostport < 0 || config.conn_info.hostport > 65535) {
                 fprintf(stderr, "Invalid server port.\n");
                 exit(1);
@@ -2872,155 +2913,153 @@ static void parseEnv(void) {
 static void usage(int err) {
     sds version = cliVersion();
     FILE *target = err ? stderr : stdout;
-    /* clang-format off */
     const char *tls_usage =
 #ifdef USE_OPENSSL
-"  --tls              Establish a secure TLS connection.\n"
-"  --sni <host>       Server name indication for TLS.\n"
-"  --cacert <file>    CA Certificate file to verify with.\n"
-"  --cacertdir <dir>  Directory where trusted CA certificates are stored.\n"
-"                     If neither cacert nor cacertdir are specified, the default\n"
-"                     system-wide trusted root certs configuration will apply.\n"
-"  --insecure         Allow insecure TLS connection by skipping cert validation.\n"
-"  --cert <file>      Client certificate to authenticate with.\n"
-"  --key <file>       Private key file to authenticate with.\n"
-"  --tls-ciphers <list> Sets the list of preferred ciphers (TLSv1.2 and below)\n"
-"                     in order of preference from highest to lowest separated by colon (\":\").\n"
-"                     See the ciphers(1ssl) manpage for more information about the syntax of this string.\n"
+        "  --tls              Establish a secure TLS connection.\n"
+        "  --sni <host>       Server name indication for TLS.\n"
+        "  --cacert <file>    CA Certificate file to verify with.\n"
+        "  --cacertdir <dir>  Directory where trusted CA certificates are stored.\n"
+        "                     If neither cacert nor cacertdir are specified, the default\n"
+        "                     system-wide trusted root certs configuration will apply.\n"
+        "  --insecure         Allow insecure TLS connection by skipping cert validation.\n"
+        "  --cert <file>      Client certificate to authenticate with.\n"
+        "  --key <file>       Private key file to authenticate with.\n"
+        "  --tls-ciphers <list> Sets the list of preferred ciphers (TLSv1.2 and below)\n"
+        "                     in order of preference from highest to lowest separated by colon (\":\").\n"
+        "                     See the ciphers(1ssl) manpage for more information about the syntax of this string.\n"
 #ifdef TLS1_3_VERSION
-"  --tls-ciphersuites <list> Sets the list of preferred ciphersuites (TLSv1.3)\n"
-"                     in order of preference from highest to lowest separated by colon (\":\").\n"
-"                     See the ciphers(1ssl) manpage for more information about the syntax of this string,\n"
-"                     and specifically for TLSv1.3 ciphersuites.\n"
+        "  --tls-ciphersuites <list> Sets the list of preferred ciphersuites (TLSv1.3)\n"
+        "                     in order of preference from highest to lowest separated by colon (\":\").\n"
+        "                     See the ciphers(1ssl) manpage for more information about the syntax of this string,\n"
+        "                     and specifically for TLSv1.3 ciphersuites.\n"
 #endif
 #endif
-"";
+        "";
 
     fprintf(target,
-"valkey-cli %s\n"
-"\n"
-"Usage: valkey-cli [OPTIONS] [cmd [arg [arg ...]]]\n"
-"  -h <hostname>      Server hostname (default: 127.0.0.1).\n"
-"  -p <port>          Server port (default: 6379).\n"
-"  -t <timeout>       Server connection timeout in seconds (decimals allowed).\n"
-"                     Default timeout is 0, meaning no limit, depending on the OS.\n"
-"  -s <socket>        Server socket (overrides hostname and port).\n"
-"  -a <password>      Password to use when connecting to the server.\n"
-"                     You can also use the " CLI_AUTH_ENV " environment\n"
-"                     variable to pass this password more safely\n"
-"                     (if both are used, this argument takes precedence).\n"
-"  --user <username>  Used to send ACL style 'AUTH username pass'. Needs -a.\n"
-"  --pass <password>  Alias of -a for consistency with the new --user option.\n"
-"  --askpass          Force user to input password with mask from STDIN.\n"
-"                     If this argument is used, '-a' and " CLI_AUTH_ENV "\n"
-"                     environment variable will be ignored.\n"
-"  -u <uri>           Server URI on format valkey://user:password@host:port/dbnum\n"
-"                     User, password and dbnum are optional. For authentication\n"
-"                     without a username, use username 'default'. For TLS, use\n"
-"                     the scheme 'valkeys'.\n"
-"  -r <repeat>        Execute specified command N times.\n"
-"  -i <interval>      When -r is used, waits <interval> seconds per command.\n"
-"                     It is possible to specify sub-second times like -i 0.1.\n"
-"                     This interval is also used in --scan and --stat per cycle.\n"
-"                     and in --bigkeys, --memkeys, and --hotkeys per 100 cycles.\n"
-"  -n <db>            Database number.\n"
-"  -2                 Start session in RESP2 protocol mode.\n"
-"  -3                 Start session in RESP3 protocol mode.\n"
-"  -x                 Read last argument from STDIN (see example below).\n"
-"  -X                 Read <tag> argument from STDIN (see example below).\n"
-"  -d <delimiter>     Delimiter between response bulks for raw formatting (default: \\n).\n"
-"  -D <delimiter>     Delimiter between responses for raw formatting (default: \\n).\n"
-"  -c                 Enable cluster mode (follow -ASK and -MOVED redirections).\n"
-"  -e                 Return exit error code when command execution fails.\n"
-"  -4                 Prefer IPv4 over IPv6 on DNS lookup.\n"
-"  -6                 Prefer IPv6 over IPv4 on DNS lookup.\n"
-"%s"
-"  --raw              Use raw formatting for replies (default when STDOUT is\n"
-"                     not a tty).\n"
-"  --no-raw           Force formatted output even when STDOUT is not a tty.\n"
-"  --quoted-input     Force input to be handled as quoted strings.\n"
-"  --csv              Output in CSV format.\n"
-"  --json             Output in JSON format (default RESP3, use -2 if you want to use with RESP2).\n"
-"  --quoted-json      Same as --json, but produce ASCII-safe quoted strings, not Unicode.\n"
-"  --show-pushes <yn> Whether to print RESP3 PUSH messages.  Enabled by default when\n"
-"                     STDOUT is a tty but can be overridden with --show-pushes no.\n"
-"  --stat             Print rolling stats about server: mem, clients, ...\n",
-version,tls_usage);
+            "valkey-cli %s\n"
+            "\n"
+            "Usage: valkey-cli [OPTIONS] [cmd [arg [arg ...]]]\n"
+            "  -h <hostname>      Server hostname (default: 127.0.0.1).\n"
+            "  -p <port>          Server port (default: 6379).\n"
+            "  -t <timeout>       Server connection timeout in seconds (decimals allowed).\n"
+            "                     Default timeout is 0, meaning no limit, depending on the OS.\n"
+            "  -s <socket>        Server socket (overrides hostname and port).\n"
+            "  -a <password>      Password to use when connecting to the server.\n"
+            "                     You can also use the " CLI_AUTH_ENV " environment\n"
+            "                     variable to pass this password more safely\n"
+            "                     (if both are used, this argument takes precedence).\n"
+            "  --user <username>  Used to send ACL style 'AUTH username pass'. Needs -a.\n"
+            "  --pass <password>  Alias of -a for consistency with the new --user option.\n"
+            "  --askpass          Force user to input password with mask from STDIN.\n"
+            "                     If this argument is used, '-a' and " CLI_AUTH_ENV "\n"
+            "                     environment variable will be ignored.\n"
+            "  -u <uri>           Server URI on format valkey://user:password@host:port/dbnum\n"
+            "                     User, password and dbnum are optional. For authentication\n"
+            "                     without a username, use username 'default'. For TLS, use\n"
+            "                     the scheme 'valkeys'.\n"
+            "  -r <repeat>        Execute specified command N times.\n"
+            "  -i <interval>      When -r is used, waits <interval> seconds per command.\n"
+            "                     It is possible to specify sub-second times like -i 0.1.\n"
+            "                     This interval is also used in --scan and --stat per cycle.\n"
+            "                     and in --bigkeys, --memkeys, and --hotkeys per 100 cycles.\n"
+            "  -n <db>            Database number.\n"
+            "  -2                 Start session in RESP2 protocol mode.\n"
+            "  -3                 Start session in RESP3 protocol mode.\n"
+            "  -x                 Read last argument from STDIN (see example below).\n"
+            "  -X                 Read <tag> argument from STDIN (see example below).\n"
+            "  -d <delimiter>     Delimiter between response bulks for raw formatting (default: \\n).\n"
+            "  -D <delimiter>     Delimiter between responses for raw formatting (default: \\n).\n"
+            "  -c                 Enable cluster mode (follow -ASK and -MOVED redirections).\n"
+            "  -e                 Return exit error code when command execution fails.\n"
+            "  -4                 Prefer IPv4 over IPv6 on DNS lookup.\n"
+            "  -6                 Prefer IPv6 over IPv4 on DNS lookup.\n"
+            "%s"
+            "  --raw              Use raw formatting for replies (default when STDOUT is\n"
+            "                     not a tty).\n"
+            "  --no-raw           Force formatted output even when STDOUT is not a tty.\n"
+            "  --quoted-input     Force input to be handled as quoted strings.\n"
+            "  --csv              Output in CSV format.\n"
+            "  --json             Output in JSON format (default RESP3, use -2 if you want to use with RESP2).\n"
+            "  --quoted-json      Same as --json, but produce ASCII-safe quoted strings, not Unicode.\n"
+            "  --show-pushes <yn> Whether to print RESP3 PUSH messages.  Enabled by default when\n"
+            "                     STDOUT is a tty but can be overridden with --show-pushes no.\n"
+            "  --stat             Print rolling stats about server: mem, clients, ...\n",
+            version, tls_usage);
 
     fprintf(target,
-"  --latency          Enter a special mode continuously sampling latency.\n"
-"                     If you use this mode in an interactive session it runs\n"
-"                     forever displaying real-time stats. Otherwise if --raw or\n"
-"                     --csv is specified, or if you redirect the output to a non\n"
-"                     TTY, it samples the latency for 1 second (you can use\n"
-"                     -i to change the interval), then produces a single output\n"
-"                     and exits.\n"
-"  --latency-history  Like --latency but tracking latency changes over time.\n"
-"                     Default time interval is 15 sec. Change it using -i.\n"
-"  --latency-dist     Shows latency as a spectrum, requires xterm 256 colors.\n"
-"                     Default time interval is 1 sec. Change it using -i.\n"
-"  --lru-test <keys>  Simulate a cache workload with an 80-20 distribution.\n"
-"  --replica          Simulate a replica showing commands received from the primaries.\n"
-"  --rdb <filename>   Transfer an RDB dump from remote server to local file.\n"
-"                     Use filename of \"-\" to write to stdout.\n"
-"  --functions-rdb <filename> Like --rdb but only get the functions (not the keys)\n"
-"                     when getting the RDB dump file.\n"
-"  --pipe             Transfer raw RESP protocol from stdin to server.\n"
-"  --pipe-timeout <n> In --pipe mode, abort with error if after sending all data.\n"
-"                     no reply is received within <n> seconds.\n"
-"                     Default timeout: %d. Use 0 to wait forever.\n",
-    CLI_DEFAULT_PIPE_TIMEOUT);
+            "  --latency          Enter a special mode continuously sampling latency.\n"
+            "                     If you use this mode in an interactive session it runs\n"
+            "                     forever displaying real-time stats. Otherwise if --raw or\n"
+            "                     --csv is specified, or if you redirect the output to a non\n"
+            "                     TTY, it samples the latency for 1 second (you can use\n"
+            "                     -i to change the interval), then produces a single output\n"
+            "                     and exits.\n"
+            "  --latency-history  Like --latency but tracking latency changes over time.\n"
+            "                     Default time interval is 15 sec. Change it using -i.\n"
+            "  --latency-dist     Shows latency as a spectrum, requires xterm 256 colors.\n"
+            "                     Default time interval is 1 sec. Change it using -i.\n"
+            "  --lru-test <keys>  Simulate a cache workload with an 80-20 distribution.\n"
+            "  --replica          Simulate a replica showing commands received from the primaries.\n"
+            "  --rdb <filename>   Transfer an RDB dump from remote server to local file.\n"
+            "                     Use filename of \"-\" to write to stdout.\n"
+            "  --functions-rdb <filename> Like --rdb but only get the functions (not the keys)\n"
+            "                     when getting the RDB dump file.\n"
+            "  --pipe             Transfer raw RESP protocol from stdin to server.\n"
+            "  --pipe-timeout <n> In --pipe mode, abort with error if after sending all data.\n"
+            "                     no reply is received within <n> seconds.\n"
+            "                     Default timeout: %d. Use 0 to wait forever.\n",
+            CLI_DEFAULT_PIPE_TIMEOUT);
     fprintf(target,
-"  --bigkeys          Sample keys looking for keys with many elements (complexity).\n"
-"  --memkeys          Sample keys looking for keys consuming a lot of memory.\n"
-"  --memkeys-samples <n> Sample keys looking for keys consuming a lot of memory.\n"
-"                     And define number of key elements to sample\n"
-"  --hotkeys          Sample keys looking for hot keys.\n"
-"                     only works when maxmemory-policy is *lfu.\n"
-"  --scan             List all keys using the SCAN command.\n"
-"  --pattern <pat>    Keys pattern when using the --scan, --bigkeys or --hotkeys\n"
-"                     options (default: *).\n"
-"  --count <count>    Count option when using the --scan, --bigkeys or --hotkeys (default: 10).\n"
-"  --quoted-pattern <pat> Same as --pattern, but the specified string can be\n"
-"                         quoted, in order to pass an otherwise non binary-safe string.\n"
-"  --intrinsic-latency <sec> Run a test to measure intrinsic system latency.\n"
-"                     The test will run for the specified amount of seconds.\n"
-"  --eval <file>      Send an EVAL command using the Lua script at <file>.\n"
-"  --ldb              Used with --eval enable the Server Lua debugger.\n"
-"  --ldb-sync-mode    Like --ldb but uses the synchronous Lua debugger, in\n"
-"                     this mode the server is blocked and script changes are\n"
-"                     not rolled back from the server memory.\n"
-"  --cluster <command> [args...] [opts...]\n"
-"                     Cluster Manager command and arguments (see below).\n"
-"  --verbose          Verbose mode.\n"
-"  --no-auth-warning  Don't show warning message when using password on command\n"
-"                     line interface.\n"
-"  --help             Output this help and exit.\n"
-"  --version          Output version and exit.\n"
-"\n");
+            "  --bigkeys          Sample keys looking for keys with many elements (complexity).\n"
+            "  --memkeys          Sample keys looking for keys consuming a lot of memory.\n"
+            "  --memkeys-samples <n> Sample keys looking for keys consuming a lot of memory.\n"
+            "                     And define number of key elements to sample\n"
+            "  --hotkeys          Sample keys looking for hot keys.\n"
+            "                     only works when maxmemory-policy is *lfu.\n"
+            "  --scan             List all keys using the SCAN command.\n"
+            "  --pattern <pat>    Keys pattern when using the --scan, --bigkeys or --hotkeys\n"
+            "                     options (default: *).\n"
+            "  --count <count>    Count option when using the --scan, --bigkeys or --hotkeys (default: 10).\n"
+            "  --quoted-pattern <pat> Same as --pattern, but the specified string can be\n"
+            "                         quoted, in order to pass an otherwise non binary-safe string.\n"
+            "  --intrinsic-latency <sec> Run a test to measure intrinsic system latency.\n"
+            "                     The test will run for the specified amount of seconds.\n"
+            "  --eval <file>      Send an EVAL command using the Lua script at <file>.\n"
+            "  --ldb              Used with --eval enable the Server Lua debugger.\n"
+            "  --ldb-sync-mode    Like --ldb but uses the synchronous Lua debugger, in\n"
+            "                     this mode the server is blocked and script changes are\n"
+            "                     not rolled back from the server memory.\n"
+            "  --cluster <command> [args...] [opts...]\n"
+            "                     Cluster Manager command and arguments (see below).\n"
+            "  --verbose          Verbose mode.\n"
+            "  --no-auth-warning  Don't show warning message when using password on command\n"
+            "                     line interface.\n"
+            "  --help             Output this help and exit.\n"
+            "  --version          Output version and exit.\n"
+            "\n");
     /* Using another fprintf call to avoid -Woverlength-strings compile warning */
     fprintf(target,
-"Cluster Manager Commands:\n"
-"  Use --cluster help to list all available cluster manager commands.\n"
-"\n"
-"Examples:\n"
-"  valkey-cli -u valkey://default:PASSWORD@localhost:6379/0\n"
-"  cat /etc/passwd | valkey-cli -x set mypasswd\n"
-"  valkey-cli -D \"\" --raw dump key > key.dump && valkey-cli -X dump_tag restore key2 0 dump_tag replace < key.dump\n"
-"  valkey-cli -r 100 lpush mylist x\n"
-"  valkey-cli -r 100 -i 1 info | grep used_memory_human:\n"
-"  valkey-cli --quoted-input set '\"null-\\x00-separated\"' value\n"
-"  valkey-cli --eval myscript.lua key1 key2 , arg1 arg2 arg3\n"
-"  valkey-cli --scan --pattern '*:12345*'\n"
-"  valkey-cli --scan --pattern '*:12345*' --count 100\n"
-"\n"
-"  (Note: when using --eval the comma separates KEYS[] from ARGV[] items)\n"
-"\n"
-"When no command is given, valkey-cli starts in interactive mode.\n"
-"Type \"help\" in interactive mode for information on available commands\n"
-"and settings.\n"
-"\n");
-    /* clang-format on */
+            "Cluster Manager Commands:\n"
+            "  Use --cluster help to list all available cluster manager commands.\n"
+            "\n"
+            "Examples:\n"
+            "  valkey-cli -u valkey://default:PASSWORD@localhost:6379/0\n"
+            "  cat /etc/passwd | valkey-cli -x set mypasswd\n"
+            "  valkey-cli -D \"\" --raw dump key > key.dump && valkey-cli -X dump_tag restore key2 0 dump_tag replace < key.dump\n"
+            "  valkey-cli -r 100 lpush mylist x\n"
+            "  valkey-cli -r 100 -i 1 info | grep used_memory_human:\n"
+            "  valkey-cli --quoted-input set '\"null-\\x00-separated\"' value\n"
+            "  valkey-cli --eval myscript.lua key1 key2 , arg1 arg2 arg3\n"
+            "  valkey-cli --scan --pattern '*:12345*'\n"
+            "  valkey-cli --scan --pattern '*:12345*' --count 100\n"
+            "\n"
+            "  (Note: when using --eval the comma separates KEYS[] from ARGV[] items)\n"
+            "\n"
+            "When no command is given, valkey-cli starts in interactive mode.\n"
+            "Type \"help\" in interactive mode for information on available commands\n"
+            "and settings.\n"
+            "\n");
     sdsfree(version);
     exit(err);
 }
@@ -3118,6 +3157,13 @@ void cliSetPreferences(char **argv, int argc, int interactive) {
         else {
             printf("%sunknown valkey-cli preference '%s'\n", interactive ? "" : ".valkeyclirc: ", argv[1]);
         }
+    } else if (!strcasecmp(argv[0], ":get") && argc >= 2) {
+        if (!strcasecmp(argv[1], "pubsub")) {
+            printf("%d\n", config.pubsub_mode);
+        } else {
+            printf("%sunknown valkey-cli get option '%s'\n", interactive ? "" : ".valkeyclirc: ", argv[1]);
+        }
+        fflush(stdout);
     } else {
         printf("%sunknown valkey-cli internal command '%s'\n", interactive ? "" : ".valkeyclirc: ", argv[0]);
     }
@@ -3910,7 +3956,7 @@ cleanup:
 
 static int clusterManagerNodeConnect(clusterManagerNode *node) {
     if (node->context) redisFree(node->context);
-    node->context = redisConnectWrapper(node->ip, node->port, config.connect_timeout);
+    node->context = redisConnectWrapper(node->ip, node->port, config.connect_timeout, 0);
     if (!node->context->err && config.tls) {
         const char *err = NULL;
         if (cliSecureConnection(node->context, config.sslconfig, &err) == REDIS_ERR && err) {
@@ -4219,7 +4265,7 @@ static void clusterManagerOptimizeAntiAffinity(clusterManagerNodeArray *ipnodes,
     if (perfect)
         msg = "[OK] Perfect anti-affinity obtained!";
     else if (score >= 10000)
-        msg = ("[WARNING] Some replicsa are in the same host as their primary");
+        msg = ("[WARNING] Some replicas are in the same host as their primary");
     else
         msg = ("[WARNING] Some replicas of the same primary are in the same host");
     clusterManagerLog(log_level, "%s\n", msg);
@@ -4397,7 +4443,7 @@ static sds clusterManagerNodeInfo(clusterManagerNode *node, int indent) {
     if (node->replicate != NULL)
         info = sdscatfmt(info, "\n%s   replicates %S", spaces, node->replicate);
     else if (node->replicas_count)
-        info = sdscatfmt(info, "\n%s   %U additional replica(s)", spaces, node->replicas_count);
+        info = sdscatfmt(info, "\n%s   %i additional replica(s)", spaces, node->replicas_count);
     sdsfree(spaces);
     return info;
 }
@@ -4655,10 +4701,19 @@ static int clusterManagerSetSlotOwner(clusterManagerNode *owner, int slot, int d
 /* Get the hash for the values of the specified keys in *keys_reply for the
  * specified nodes *n1 and *n2, by calling DEBUG DIGEST-VALUE command
  * on both nodes. Every key with same name on both nodes but having different
- * values will be added to the *diffs list. Return 0 in case of reply
- * error. */
-static int
-clusterManagerCompareKeysValues(clusterManagerNode *n1, clusterManagerNode *n2, redisReply *keys_reply, list *diffs) {
+ * values will be added to the *diffs list.
+ *
+ * DEBUG DIGEST-VALUE currently will only return two errors:
+ * 1. Unknown subcommand. This happened in older server versions.
+ * 2. DEBUG command not allowed. This happened when we disable enable-debug-command.
+ *
+ * Return 0 and set the error message in case of reply error. */
+static int clusterManagerCompareKeysValues(clusterManagerNode *n1,
+                                           clusterManagerNode *n2,
+                                           redisReply *keys_reply,
+                                           list *diffs,
+                                           char **n1_err,
+                                           char **n2_err) {
     size_t i, argc = keys_reply->elements + 2;
     static const char *hash_zero = "0000000000000000000000000000000000000000";
     char **argv = zcalloc(argc * sizeof(char *));
@@ -4678,18 +4733,32 @@ clusterManagerCompareKeysValues(clusterManagerNode *n1, clusterManagerNode *n2, 
     redisReply *r1 = NULL, *r2 = NULL;
     redisAppendCommandArgv(n1->context, argc, (const char **)argv, argv_len);
     success = (redisGetReply(n1->context, &_reply1) == REDIS_OK);
-    if (!success) goto cleanup;
+    if (!success) {
+        fprintf(stderr, "Error getting DIGEST-VALUE from %s:%d, error: %s\n", n1->ip, n1->port, n1->context->errstr);
+        exit(1);
+    }
     r1 = (redisReply *)_reply1;
     redisAppendCommandArgv(n2->context, argc, (const char **)argv, argv_len);
     success = (redisGetReply(n2->context, &_reply2) == REDIS_OK);
-    if (!success) goto cleanup;
+    if (!success) {
+        fprintf(stderr, "Error getting DIGEST-VALUE from %s:%d, error: %s\n", n2->ip, n2->port, n2->context->errstr);
+        exit(1);
+    }
     r2 = (redisReply *)_reply2;
     success = (r1->type != REDIS_REPLY_ERROR && r2->type != REDIS_REPLY_ERROR);
     if (r1->type == REDIS_REPLY_ERROR) {
+        if (n1_err != NULL) {
+            *n1_err = zmalloc((r1->len + 1) * sizeof(char));
+            valkey_strlcpy(*n1_err, r1->str, r1->len + 1);
+        }
         CLUSTER_MANAGER_PRINT_REPLY_ERROR(n1, r1->str);
         success = 0;
     }
     if (r2->type == REDIS_REPLY_ERROR) {
+        if (n2_err != NULL) {
+            *n2_err = zmalloc((r2->len + 1) * sizeof(char));
+            valkey_strlcpy(*n2_err, r2->str, r2->len + 1);
+        }
         CLUSTER_MANAGER_PRINT_REPLY_ERROR(n2, r2->str);
         success = 0;
     }
@@ -4865,20 +4934,37 @@ static int clusterManagerMigrateKeysInSlot(clusterManagerNode *source,
                  * check whether its value is the same in both nodes.
                  * In case of equal values, retry migration with the
                  * REPLACE option.
+                 *
                  * In case of different values:
-                 *  - If the migration is requested by the fix command, stop
+                 *  - If --cluster-replace option is not provided, stop
                  *    and warn the user.
-                 *  - In other cases (ie. reshard), proceed only if the user
-                 *    launched the command with the --cluster-replace option.*/
+                 *  - If --cluster-replace option is provided, proceed it. */
                 if (is_busy) {
                     clusterManagerLogWarn("\n*** Target key exists\n");
                     if (!do_replace) {
                         clusterManagerLogWarn("*** Checking key values on "
                                               "both nodes...\n");
+                        char *source_err = NULL;
+                        char *target_err = NULL;
                         list *diffs = listCreate();
-                        success = clusterManagerCompareKeysValues(source, target, reply, diffs);
+                        success =
+                            clusterManagerCompareKeysValues(source, target, reply, diffs, &source_err, &target_err);
                         if (!success) {
                             clusterManagerLogErr("*** Value check failed!\n");
+                            const char *debug_not_allowed = "ERR DEBUG command not allowed.";
+                            if ((source_err && !strncmp(source_err, debug_not_allowed, 30)) ||
+                                (target_err && !strncmp(target_err, debug_not_allowed, 30))) {
+                                clusterManagerLogErr("DEBUG command is not allowed.\n"
+                                                     "You can turn on the enable-debug-command option.\n"
+                                                     "Or you can relaunch the command with --cluster-replace "
+                                                     "option to force key overriding.\n");
+                            } else if (source_err || target_err) {
+                                clusterManagerLogErr("DEBUG DIGEST-VALUE command is not supported.\n"
+                                                     "You can relaunch the command with --cluster-replace "
+                                                     "option to force key overriding.\n");
+                            }
+                            if (source_err) zfree(source_err);
+                            if (target_err) zfree(target_err);
                             listRelease(diffs);
                             goto next;
                         }
@@ -4990,11 +5076,18 @@ clusterManagerMoveSlot(clusterManagerNode *source, clusterManagerNode *target, i
          * the face of primary failures. However, while our client is blocked on
          * the primary awaiting replication, the primary might become a replica
          * for the same reason as mentioned above, resulting in the client being
-         * unblocked with the role change error. */
+         * unblocked with the role change error.
+         *
+         * Another acceptable error can arise now that the primary pre-replicates
+         * `cluster setslot` commands to replicas while blocking the client on the
+         * primary. And during the block, the replicas might automatically migrate
+         * to another primary, resulting in the client being unblocked with the
+         * NOREPLICAS error. In this case, since the configuration will eventually
+         * propagate itself, we can safely ignore this error on the source node. */
         success = clusterManagerSetSlot(source, target, slot, "node", err);
         if (!success && err) {
             const char *acceptable[] = {"ERR Please use SETSLOT only with masters.",
-                                        "ERR Please use SETSLOT only with primaries.", "UNBLOCKED"};
+                                        "ERR Please use SETSLOT only with primaries.", "UNBLOCKED", "NOREPLICAS"};
             for (size_t i = 0; i < sizeof(acceptable) / sizeof(acceptable[0]); i++) {
                 if (!strncmp(*err, acceptable[i], strlen(acceptable[i]))) {
                     zfree(*err);
@@ -6361,10 +6454,7 @@ static int clusterManagerCheckCluster(int quiet) {
         clusterManagerOnError(err);
         result = 0;
         if (do_fix /* && result*/) {
-            dictType dtype = clusterManagerDictType;
-            dtype.keyDestructor = dictSdsDestructor;
-            dtype.valDestructor = dictListDestructor;
-            clusterManagerUncoveredSlots = dictCreate(&dtype);
+            clusterManagerUncoveredSlots = dictCreate(&clusterManagerLinkDictType);
             int fixed = clusterManagerFixSlotsCoverage(slots);
             if (fixed > 0) result = 1;
         }
@@ -6644,15 +6734,17 @@ static int clusterManagerCommandCreate(int argc, char **argv) {
     int replicas = config.cluster_manager_command.replicas;
     int primaries_count = CLUSTER_MANAGER_PRIMARIES_COUNT(node_len, replicas);
     if (primaries_count < 3) {
-        clusterManagerLogErr("*** ERROR: Invalid configuration for cluster creation.\n"
-                             "*** Valkey Cluster requires at least 3 primary nodes.\n"
-                             "*** This is not possible with %d nodes and %d replicas per node.",
-                             node_len, replicas);
-        clusterManagerLogErr("\n*** At least %d nodes are required.\n", 3 * (replicas + 1));
-        return 0;
+        int ignore_force = 0;
+        clusterManagerLogInfo("Requested to create a cluster with %d primaries and "
+                              "%d replicas per primary.\n",
+                              primaries_count, replicas);
+        if (!confirmWithYes("Valkey cluster requires at least 3 primary nodes for "
+                            "automatic failover. Are you sure?",
+                            ignore_force))
+            return 0;
     }
     clusterManagerLogInfo(">>> Performing hash slots allocation "
-                          "on %d nodes...\n",
+                          "on %d node(s)...\n",
                           node_len);
     int interleaved_len = 0, ip_count = 0;
     clusterManagerNode **interleaved = zcalloc(node_len * sizeof(**interleaved));
@@ -7581,7 +7673,7 @@ static int clusterManagerCommandImport(int argc, char **argv) {
     char *reply_err = NULL;
     redisReply *src_reply = NULL;
     // Connect to the source node.
-    redisContext *src_ctx = redisConnectWrapper(src_ip, src_port, config.connect_timeout);
+    redisContext *src_ctx = redisConnectWrapper(src_ip, src_port, config.connect_timeout, 0);
     if (src_ctx->err) {
         success = 0;
         fprintf(stderr, "Could not connect to Valkey at %s:%d: %s.\n", src_ip, src_port, src_ctx->errstr);
@@ -8619,9 +8711,8 @@ static typeinfo *typeinfo_add(dict *types, char *name, typeinfo *type_template) 
     return info;
 }
 
-void type_free(dict *d, void *val) {
+void type_free(void *val) {
     typeinfo *info = val;
-    UNUSED(d);
     if (info->biggest_key) sdsfree(info->biggest_key);
     sdsfree(info->name);
     zfree(info);
@@ -9451,6 +9542,8 @@ int main(int argc, char **argv) {
     config.shutdown = 0;
     config.monitor_mode = 0;
     config.pubsub_mode = 0;
+    config.pubsub_unsharded_count = 0;
+    config.pubsub_sharded_count = 0;
     config.blocking_state_aborted = 0;
     config.latency_mode = 0;
     config.latency_dist_mode = 0;

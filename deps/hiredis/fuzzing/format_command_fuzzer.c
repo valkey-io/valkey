@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, Salvatore Sanfilippo <antirez at gmail dot com>
+ * Copyright (c) 2020, Redis Ltd.
  * Copyright (c) 2020, Pieter Noordhuis <pcnoordhuis at gmail dot com>
  * Copyright (c) 2020, Matt Stancliff <matt at genges dot com>,
  *                     Jan-Erik Rediger <janerik at fnordig dot com>

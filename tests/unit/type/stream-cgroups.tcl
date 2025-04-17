@@ -944,7 +944,7 @@ start_server {
 
         # Simulate loading from RDB
 
-        set reply [r XINFO STREAM x FULL]
+        set reply [r XINFO STREAM mystream FULL]
         set group [lindex [dict get $reply groups] 0]
         set consumer [lindex [dict get $group consumers] 0]
         set prev_seen [dict get $consumer seen-time]
@@ -954,7 +954,7 @@ start_server {
         r DEL mystream
         r RESTORE mystream 0 $dump
 
-        set reply [r XINFO STREAM x FULL]
+        set reply [r XINFO STREAM mystream FULL]
         set group [lindex [dict get $reply groups] 0]
         set consumer [lindex [dict get $group consumers] 0]
         assert_equal $prev_seen [dict get $consumer seen-time]

@@ -2,7 +2,6 @@ set testmodule [file normalize tests/modules/defragtest.so]
 
 start_server {tags {"modules"} overrides {{save ""}}} {
     r module load $testmodule 10000
-    r config set hz 100
     r config set active-defrag-ignore-bytes 1
     r config set active-defrag-threshold-lower 0
     r config set active-defrag-cycle-min 99

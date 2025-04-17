@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, Redis Labs
+ * Copyright (c) 2019, Redis Ltd.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -29,6 +29,7 @@
 
 #include "server.h"
 #include "connhelpers.h"
+#include "io_threads.h"
 
 /* The connections module provides a lean abstraction of network connections
  * to avoid direct socket and async event management across the server code base.
@@ -154,6 +155,10 @@ static void connSocketClose(connection *conn) {
 }
 
 static int connSocketWrite(connection *conn, const void *data, size_t data_len) {
+    /* Assert the main thread is not writing to a connection that is currently offloaded. */
+    debugServerAssert(!(conn->flags & CONN_FLAG_ALLOW_ACCEPT_OFFLOAD) || !inMainThread() ||
+                      ((client *)connGetPrivateData(conn))->io_write_state != CLIENT_PENDING_IO);
+
     int ret = write(conn->fd, data, data_len);
     if (ret < 0 && errno != EAGAIN) {
         conn->last_errno = errno;
@@ -182,6 +187,11 @@ static int connSocketWritev(connection *conn, const struct iovec *iov, int iovcn
 }
 
 static int connSocketRead(connection *conn, void *buf, size_t buf_len) {
+    /* Assert the main thread is not reading from a connection that is currently offloaded. */
+    debugServerAssert(!(conn->flags & CONN_FLAG_ALLOW_ACCEPT_OFFLOAD) || !inMainThread() ||
+                      ((client *)connGetPrivateData(conn))->io_read_state != CLIENT_PENDING_IO);
+
+
     int ret = read(conn->fd, buf, buf_len);
     if (!ret) {
         conn->state = CONN_STATE_CLOSED;
@@ -203,9 +213,7 @@ static int connSocketAccept(connection *conn, ConnectionCallbackFunc accept_hand
     if (conn->state != CONN_STATE_ACCEPTING) return C_ERR;
     conn->state = CONN_STATE_CONNECTED;
 
-    connIncrRefs(conn);
     if (!callHandler(conn, accept_handler)) ret = C_ERR;
-    connDecrRefs(conn);
 
     return ret;
 }
@@ -318,6 +326,8 @@ static void connSocketAcceptHandler(aeEventLoop *el, int fd, void *privdata, int
             return;
         }
         serverLog(LL_VERBOSE, "Accepted %s:%d", cip, cport);
+
+        if (server.tcpkeepalive) anetKeepAlive(NULL, cfd, server.tcpkeepalive);
         acceptCommonHandler(connCreateAcceptedSocket(cfd, NULL), flags, cip);
     }
 }
@@ -339,6 +349,19 @@ static int connSocketIsLocal(connection *conn) {
 
 static int connSocketListen(connListener *listener) {
     return listenToPort(listener);
+}
+
+static void connSocketCloseListener(connListener *listener) {
+    int j;
+
+    for (j = 0; j < listener->count; j++) {
+        if (listener->fd[j] == -1) continue;
+
+        aeDeleteFileEvent(server.el, listener->fd[j], AE_READABLE);
+        close(listener->fd[j]);
+    }
+
+    listener->count = 0;
 }
 
 static int connSocketBlockingConnect(connection *conn, const char *addr, int port, long long timeout) {
@@ -397,6 +420,7 @@ static ConnectionType CT_Socket = {
     .addr = connSocketAddr,
     .is_local = connSocketIsLocal,
     .listen = connSocketListen,
+    .closeListener = connSocketCloseListener,
 
     /* create/shutdown/close connection */
     .conn_create = connCreateSocket,
@@ -425,6 +449,9 @@ static ConnectionType CT_Socket = {
     .process_pending_data = NULL,
     .postpone_update_state = NULL,
     .update_state = NULL,
+
+    /* Miscellaneous */
+    .connIntegrityChecked = NULL,
 };
 
 int connBlock(connection *conn) {
@@ -435,16 +462,6 @@ int connBlock(connection *conn) {
 int connNonBlock(connection *conn) {
     if (conn->fd == -1) return C_ERR;
     return anetNonBlock(NULL, conn->fd);
-}
-
-int connEnableTcpNoDelay(connection *conn) {
-    if (conn->fd == -1) return C_ERR;
-    return anetEnableTcpNoDelay(NULL, conn->fd);
-}
-
-int connDisableTcpNoDelay(connection *conn) {
-    if (conn->fd == -1) return C_ERR;
-    return anetDisableTcpNoDelay(NULL, conn->fd);
 }
 
 int connKeepAlive(connection *conn, int interval) {

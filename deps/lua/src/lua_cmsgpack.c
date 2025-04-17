@@ -10,7 +10,7 @@
 #define LUACMSGPACK_NAME        "cmsgpack"
 #define LUACMSGPACK_SAFE_NAME   "cmsgpack_safe"
 #define LUACMSGPACK_VERSION     "lua-cmsgpack 0.4.0"
-#define LUACMSGPACK_COPYRIGHT   "Copyright (C) 2012, Salvatore Sanfilippo"
+#define LUACMSGPACK_COPYRIGHT   "Copyright (C) 2012, Redis Ltd."
 #define LUACMSGPACK_DESCRIPTION "MessagePack C implementation for Lua"
 
 /* Allows a preprocessor directive to override MAX_NESTING */
@@ -39,7 +39,7 @@
 
 /* =============================================================================
  * MessagePack implementation and bindings for Lua 5.1/5.2.
- * Copyright(C) 2012 Salvatore Sanfilippo <antirez@gmail.com>
+ * Copyright(C) 2012 Redis Ltd.
  *
  * http://github.com/antirez/lua-cmsgpack
  *
@@ -958,7 +958,7 @@ LUALIB_API int luaopen_cmsgpack_safe(lua_State *L) {
 }
 
 /******************************************************************************
-* Copyright (C) 2012 Salvatore Sanfilippo.  All rights reserved.
+* Copyright (C) 2012 Redis Ltd.  All rights reserved.
 *
 * Permission is hereby granted, free of charge, to any person obtaining
 * a copy of this software and associated documentation files (the

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009-2012, Salvatore Sanfilippo <antirez at gmail dot com>
+ * Copyright (c) 2009-2012, Redis Ltd.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -99,5 +99,9 @@ int snprintf_async_signal_safe(char *to, size_t n, const char *fmt, ...);
 #endif
 size_t valkey_strlcpy(char *dst, const char *src, size_t dsize);
 size_t valkey_strlcat(char *dst, const char *src, size_t dsize);
+void getRandomSeedCString(char *buff, size_t len);
+void setRandomSeedCString(char *seed_str, size_t len);
+void getRandomHexChars(char *p, size_t len);
+void getRandomBytes(unsigned char *p, size_t len);
 
 #endif

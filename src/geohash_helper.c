@@ -1,7 +1,7 @@
 /*
  * Copyright (c) 2013-2014, yinqiwen <yinqiwen@gmail.com>
  * Copyright (c) 2014, Matt Stancliff <matt@genges.com>.
- * Copyright (c) 2015-2016, Salvatore Sanfilippo <antirez@gmail.com>.
+ * Copyright (c) 2015-2016, Redis Ltd.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -48,7 +48,7 @@
 
 /// @brief The usual PI/180 constant
 const double DEG_TO_RAD = 0.017453292519943295769236907684886;
-/// @brief Earth's quatratic mean radius for WGS-84
+/// @brief Earth's quadratic mean radius for WGS-84
 const double EARTH_RADIUS_IN_METERS = 6372797.560856;
 
 const double MERCATOR_MAX = 20037726.37;

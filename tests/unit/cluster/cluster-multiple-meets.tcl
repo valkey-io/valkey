@@ -58,7 +58,7 @@ tags {tls:skip external:skip cluster} {
             } else {
                 fail "Node 1 recognizes node 0 even though it drops PONGs from node 0"
             }
-            assert {[llength [get_cluster_nodes 0 connected]] == 2}
+            assert {[llength [get_cluster_nodes 0]] == 2}
 
             # Drop incoming and outgoing links from/to 1
             R 0 DEBUG CLUSTERLINK KILL ALL [R 1 CLUSTER MYID]
@@ -77,6 +77,8 @@ tags {tls:skip external:skip cluster} {
             # Both a and b will turn to cluster state ok
             wait_for_condition 1000 50 {
                 [CI 1 cluster_state] eq {ok} && [CI 0 cluster_state] eq {ok} &&
+                [llength [get_cluster_nodes 0 connected]] == 2 &&
+                [llength [get_cluster_nodes 1 connected]] == 2 &&
                 [CI 1 cluster_stats_messages_meet_sent] == [CI 0 cluster_stats_messages_meet_received]
             } else {
                 fail "1 cluster_state:[CI 1 cluster_state], 0 cluster_state: [CI 0 cluster_state]"

@@ -4,7 +4,7 @@ source "../tests/includes/init-tests.tcl"
 
 test "We can failover with Sentinel 1 crashed" {
     set old_port [RPort $master_id]
-    set addr [S 0 SENTINEL GET-MASTER-ADDR-BY-NAME mymaster]
+    set addr [S 0 SENTINEL GET-PRIMARY-ADDR-BY-NAME mymaster]
     assert {[lindex $addr 1] == $old_port}
 
     # Crash Sentinel 1
@@ -14,21 +14,21 @@ test "We can failover with Sentinel 1 crashed" {
     foreach_sentinel_id id {
         if {$id != 1} {
             wait_for_condition 1000 50 {
-                [lindex [S $id SENTINEL GET-MASTER-ADDR-BY-NAME mymaster] 1] != $old_port
+                [lindex [S $id SENTINEL GET-PRIMARY-ADDR-BY-NAME mymaster] 1] != $old_port
             } else {
                 fail "Sentinel $id did not receive failover info"
             }
         }
     }
     restart_instance valkey $master_id
-    set addr [S 0 SENTINEL GET-MASTER-ADDR-BY-NAME mymaster]
+    set addr [S 0 SENTINEL GET-PRIMARY-ADDR-BY-NAME mymaster]
     set master_id [get_instance_id_by_port valkey [lindex $addr 1]]
 }
 
 test "After Sentinel 1 is restarted, its config gets updated" {
     restart_instance sentinel 1
     wait_for_condition 1000 50 {
-        [lindex [S 1 SENTINEL GET-MASTER-ADDR-BY-NAME mymaster] 1] != $old_port
+        [lindex [S 1 SENTINEL GET-PRIMARY-ADDR-BY-NAME mymaster] 1] != $old_port
     } else {
         fail "Restarted Sentinel did not receive failover info"
     }

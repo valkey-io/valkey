@@ -75,17 +75,6 @@ start_server {tags {"incr"}} {
         assert_equal {-1} [r decrby key_not_exist 1]
     }
 
-    test {INCR uses shared objects in the 0-9999 range} {
-        r set foo -1
-        r incr foo
-        assert_refcount_morethan foo 1
-        r set foo 9998
-        r incr foo
-        assert_refcount_morethan foo 1
-        r incr foo
-        assert_refcount 1 foo
-    }
-
     test {INCR can modify objects in-place} {
         r set foo 20000
         r incr foo

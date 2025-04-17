@@ -88,4 +88,12 @@ start_cluster 1 0 {tags {external:skip cluster}} {
         
         assert_match {*Can not run script on cluster, 'no-cluster' flag is set*} $e
     }
+
+    test "Calling cluster slots in scripts is OK" {
+        assert_equal [lsort [r 0 cluster slots]] [lsort [r 0 eval "return redis.call('cluster', 'slots')" 0]]
+    }
+
+    test "Calling cluster shards in scripts is OK" {
+        assert_equal [lsort [r 0 cluster shards]] [lsort [r 0 eval "return redis.call('cluster', 'shards')" 0]]
+    }
 }

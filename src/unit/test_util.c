@@ -6,6 +6,11 @@
 #include "../util.h"
 #include "test_help.h"
 
+#if defined(__linux__)
+#include <sys/statfs.h>
+#include <linux/magic.h>
+#endif
+
 int test_string2ll(int argc, char **argv, int flags) {
     UNUSED(argc);
     UNUSED(argv);
@@ -286,9 +291,20 @@ static int cache_exist(int fd) {
 int test_reclaimFilePageCache(int argc, char **argv, int flags) {
     UNUSED(argc);
     UNUSED(argv);
-    UNUSED(flags);
+
+    /* The test is incompatible with valgrind, skip it. */
+    if (flags & UNIT_TEST_VALGRIND) return 0;
 
 #if defined(__linux__)
+    struct statfs stats;
+
+    /* Check if /tmp is memory-backed (e.g., tmpfs) */
+    if (statfs("/tmp", &stats) == 0) {
+        if (stats.f_type != TMPFS_MAGIC) { // Not tmpfs, use /tmp
+            return 0;
+        }
+    }
+
     char *tmpfile = "/tmp/redis-reclaim-cache-test";
     int fd = open(tmpfile, O_RDWR | O_CREAT, 0644);
     TEST_ASSERT(fd >= 0);

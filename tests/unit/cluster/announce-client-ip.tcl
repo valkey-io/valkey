@@ -147,3 +147,17 @@ start_cluster 2 2 {tags {external:skip cluster ipv6} overrides {cluster-replica-
         [lindex $clients $j] close
     }
 }
+
+start_cluster 1 0 {tags {external:skip cluster} overrides {cluster-replica-no-failover yes bind {127.0.0.1 ::1}}} {
+    test "Load cluster announced IPv4 config on server start" {
+        R 0 config set cluster-announce-client-ipv4 "1.1.1.1"
+        restart_server 0 true false
+    }
+}
+
+start_cluster 1 0 {tags {external:skip cluster ipv6} overrides {cluster-replica-no-failover yes bind {127.0.0.1 ::1}}} {
+    test "Load cluster announced IPv6 config on server start" {
+        R 0 config set cluster-announce-client-ipv6 "cafe:1234::0"
+        restart_server 0 true false
+    }
+}

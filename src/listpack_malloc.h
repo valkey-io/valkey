@@ -1,7 +1,7 @@
 /* Listpack -- A lists of strings serialization format
  * https://github.com/antirez/listpack
  *
- * Copyright (c) 2017, Salvatore Sanfilippo <antirez at gmail dot com>
+ * Copyright (c) 2017, Redis Ltd.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without

@@ -33,9 +33,7 @@ foreach id $replica_ids {
 
 test "Cluster should eventually be down" {
     for {set j 0} {$j < [llength $::servers]} {incr j} {
-        if {[process_is_paused $paused_pid]} continue
-        if {[process_is_paused $paused_pid1]} continue
-        if {[process_is_paused $paused_pid2]} continue
+        if {[process_is_paused [srv -$j pid]]} continue
         wait_for_condition 1000 50 {
             [CI $j cluster_state] eq "fail"
         } else {
@@ -52,9 +50,7 @@ test "Use takeover to bring slaves back" {
 
 test "Cluster should eventually be up again" {
     for {set j 0} {$j < [llength $::servers]} {incr j} {
-        if {[process_is_paused $paused_pid]} continue
-        if {[process_is_paused $paused_pid1]} continue
-        if {[process_is_paused $paused_pid2]} continue
+        if {[process_is_paused [srv -$j pid]]} continue
         wait_for_condition 1000 50 {
             [CI $j cluster_state] eq "ok"
         } else {

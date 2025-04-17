@@ -1,0 +1,35 @@
+{
+    "linux_targets": [
+
+        {
+          "arch": "x86_64",
+          "target": "ubuntu-20.04",
+          "type": "deb",
+          "platform": "focal"
+        },
+        {
+          "arch": "x86_64",
+          "target": "ubuntu-22.04",
+          "type": "deb",
+          "platform": "jammy"
+        },
+        {
+          "arch": "x86_64",
+          "target": "ubuntu-24.04",
+          "type": "deb",
+          "platform": "noble"
+        },
+        {
+          "arch": "arm64",
+          "target": "ubuntu-22.04-arm",
+          "type": "deb",
+          "platform": "jammy"
+        },
+        {
+          "arch": "arm64",
+          "target": "ubuntu-24.04-arm",
+          "type": "deb",
+          "platform": "noble"
+        }
+      ]
+}

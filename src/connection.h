@@ -1,6 +1,6 @@
 
 /*
- * Copyright (c) 2019, Redis Labs
+ * Copyright (c) 2019, Redis Ltd.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -54,12 +54,14 @@ typedef enum {
     CONN_STATE_ERROR
 } ConnectionState;
 
-#define CONN_FLAG_CLOSE_SCHEDULED (1 << 0) /* Closed scheduled by a handler */
-#define CONN_FLAG_WRITE_BARRIER (1 << 1)   /* Write barrier requested */
+#define CONN_FLAG_CLOSE_SCHEDULED (1 << 0)      /* Closed scheduled by a handler */
+#define CONN_FLAG_WRITE_BARRIER (1 << 1)        /* Write barrier requested */
+#define CONN_FLAG_ALLOW_ACCEPT_OFFLOAD (1 << 2) /* Connection accept can be offloaded to IO threads. */
 
 #define CONN_TYPE_SOCKET "tcp"
 #define CONN_TYPE_UNIX "unix"
 #define CONN_TYPE_TLS "tls"
+#define CONN_TYPE_RDMA "rdma"
 #define CONN_TYPE_MAX 8 /* 8 is enough to be extendable */
 
 typedef void (*ConnectionCallbackFunc)(struct connection *conn);
@@ -79,6 +81,7 @@ typedef struct ConnectionType {
     int (*addr)(connection *conn, char *ip, size_t ip_len, int *port, int remote);
     int (*is_local)(connection *conn);
     int (*listen)(connListener *listener);
+    void (*closeListener)(connListener *listener);
 
     /* create/shutdown/close connection */
     connection *(*conn_create)(void);
@@ -118,6 +121,9 @@ typedef struct ConnectionType {
 
     /* TLS specified methods */
     sds (*get_peer_cert)(struct connection *conn);
+
+    /* Miscellaneous */
+    int (*connIntegrityChecked)(void); // return 1 if connection type has built-in integrity checks
 } ConnectionType;
 
 struct connection {
@@ -374,8 +380,6 @@ static inline const char *connGetInfo(connection *conn, char *buf, size_t buf_le
 /* anet-style wrappers to conns */
 int connBlock(connection *conn);
 int connNonBlock(connection *conn);
-int connEnableTcpNoDelay(connection *conn);
-int connDisableTcpNoDelay(connection *conn);
 int connKeepAlive(connection *conn, int interval);
 int connSendTimeout(connection *conn, long long ms);
 int connRecvTimeout(connection *conn, long long ms);
@@ -442,6 +446,13 @@ static inline int connListen(connListener *listener) {
     return listener->ct->listen(listener);
 }
 
+/* Close a listened listener */
+static inline void connCloseListener(connListener *listener) {
+    if (listener->count) {
+        listener->ct->closeListener(listener);
+    }
+}
+
 /* Get accept_handler of a connection type */
 static inline aeFileProc *connAcceptHandler(ConnectionType *ct) {
     if (ct) return ct->accept_handler;
@@ -454,6 +465,7 @@ sds getListensInfoString(sds info);
 int RedisRegisterConnectionTypeSocket(void);
 int RedisRegisterConnectionTypeUnix(void);
 int RedisRegisterConnectionTypeTLS(void);
+int RegisterConnectionTypeRdma(void);
 
 /* Return 1 if connection is using TLS protocol, 0 if otherwise. */
 static inline int connIsTLS(connection *conn) {
@@ -470,6 +482,10 @@ static inline void connSetPostponeUpdateState(connection *conn, int on) {
     if (conn->type->postpone_update_state) {
         conn->type->postpone_update_state(conn, on);
     }
+}
+
+static inline int connIsIntegrityChecked(connection *conn) {
+    return conn->type->connIntegrityChecked && conn->type->connIntegrityChecked();
 }
 
 #endif /* __REDIS_CONNECTION_H */

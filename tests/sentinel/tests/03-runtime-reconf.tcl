@@ -50,7 +50,7 @@ proc verify_sentinel_connect_replicas {id} {
 proc wait_for_sentinels_connect_servers { {is_connect 1} } {
     foreach_sentinel_id id {
         wait_for_condition 1000 50 {
-            [string match "*disconnected*" [dict get [S $id SENTINEL MASTER mymaster] flags]] != $is_connect
+            [string match "*disconnected*" [dict get [S $id SENTINEL PRIMARY mymaster] flags]] != $is_connect
         } else {
             fail "At least some sentinel can't connect to master"
         }
@@ -80,7 +80,7 @@ test "Sentinels (re)connection following SENTINEL SET myprimary auth-pass" {
 
     # Verify sentinel that restarted failed to connect master
     wait_for_condition 100 50 {
-        [string match "*disconnected*" [dict get [S $sent2re SENTINEL MASTER mymaster] flags]] != 0
+        [string match "*disconnected*" [dict get [S $sent2re SENTINEL PRIMARY mymaster] flags]] != 0
     } else {
         fail "Expected to be disconnected from master due to wrong password"
     }
@@ -124,21 +124,21 @@ test "Sentinels (re)connection following primary ACL change" {
 
     # Verify sentinel that restarted failed to reconnect master
     wait_for_condition 100 50 {
-        [string match "*disconnected*" [dict get [S $sent2re SENTINEL MASTER mymaster] flags]] != 0
+        [string match "*disconnected*" [dict get [S $sent2re SENTINEL PRIMARY mymaster] flags]] != 0
     } else {
         fail "Expected: Restarted sentinel to be disconnected from master due to obsolete password"
     }
 
     # Verify sentinel with updated password managed to connect (wait for sentinelTimer to reconnect)
     wait_for_condition 100 50 {
-        [string match "*disconnected*" [dict get [S $sent2up SENTINEL MASTER mymaster] flags]] == 0
+        [string match "*disconnected*" [dict get [S $sent2up SENTINEL PRIMARY mymaster] flags]] == 0
     } else {
         fail "Expected: Sentinel to be connected to master"
     }
 
     # Verify sentinel untouched gets failed to connect master
     wait_for_condition 100 50 {
-        [string match "*disconnected*" [dict get [S $sent2un SENTINEL MASTER mymaster] flags]] != 0
+        [string match "*disconnected*" [dict get [S $sent2un SENTINEL PRIMARY mymaster] flags]] != 0
     } else {
         fail "Expected: Sentinel to be disconnected from master due to obsolete password"
     }
@@ -164,7 +164,7 @@ test "Sentinels (re)connection following primary ACL change" {
 
 test "Set parameters in normal case" {
 
-    set info [S 0 SENTINEL master mymaster]
+    set info [S 0 SENTINEL primary mymaster]
     set origin_quorum [dict get $info quorum]
     set origin_down_after_milliseconds [dict get $info down-after-milliseconds]
     set update_quorum [expr $origin_quorum+1]
@@ -173,7 +173,7 @@ test "Set parameters in normal case" {
     assert_equal [S 0 SENTINEL SET mymaster quorum $update_quorum] "OK"
     assert_equal [S 0 SENTINEL SET mymaster down-after-milliseconds $update_down_after_milliseconds] "OK"
 
-    set update_info [S 0 SENTINEL master mymaster]
+    set update_info [S 0 SENTINEL primary mymaster]
     assert {[dict get $update_info quorum] != $origin_quorum}
     assert {[dict get $update_info down-after-milliseconds] != $origin_down_after_milliseconds}
 
@@ -184,13 +184,13 @@ test "Set parameters in normal case" {
 
 test "Set parameters in normal case with bad format" {
 
-    set info [S 0 SENTINEL master mymaster]
+    set info [S 0 SENTINEL primary mymaster]
     set origin_down_after_milliseconds [dict get $info down-after-milliseconds]
 
     assert_error "ERR Invalid argument '-20' for SENTINEL SET 'down-after-milliseconds'*" {S 0 SENTINEL SET mymaster down-after-milliseconds -20}
     assert_error "ERR Invalid argument 'abc' for SENTINEL SET 'down-after-milliseconds'*" {S 0 SENTINEL SET mymaster down-after-milliseconds "abc"}
 
-    set current_info [S 0 SENTINEL master mymaster]
+    set current_info [S 0 SENTINEL primary mymaster]
     assert {[dict get $current_info down-after-milliseconds] == $origin_down_after_milliseconds}
 }
 
@@ -206,7 +206,7 @@ test "Sentinel Set with other error situations" {
    assert_error "ERR Unknown option or number of arguments for SENTINEL SET 'fakeoption'" {S 0 SENTINEL SET mymaster fakeoption fakevalue}
 
    # save new config to disk failed
-   set info [S 0 SENTINEL master mymaster]
+   set info [S 0 SENTINEL primary mymaster]
    set origin_quorum [dict get $info quorum]
    set update_quorum [expr $origin_quorum+1]
    set sentinel_id 0

@@ -7,6 +7,11 @@
         "arity": 2,
         "container": "SENTINEL",
         "function": "sentinelCommand",
+        "deprecated_since": "8.0.0",
+        "replaced_by": "`SENTINEL PRIMARIES`",
+        "doc_flags": [
+            "DEPRECATED"
+        ],
         "command_flags": [
             "ADMIN",
             "SENTINEL",
@@ -14,7 +19,7 @@
         ],
         "reply_schema": {
             "type": "array",
-            "description": "List of monitored primaries, and their state.",
+            "description": "List of monitored primaries, and their states.",
             "items": {
                 "type": "object",
                 "additionalProperties": {

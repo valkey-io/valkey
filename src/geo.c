@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2014, Matt Stancliff <matt@genges.com>.
- * Copyright (c) 2015-2016, Salvatore Sanfilippo <antirez@gmail.com>.
+ * Copyright (c) 2015-2016, Redis Ltd.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -774,14 +774,13 @@ void georadiusGeneric(client *c, int srcKeyIndex, int flags) {
             if (maxelelen < elelen) maxelelen = elelen;
             totelelen += elelen;
             znode = zslInsert(zs->zsl, score, gp->member);
-            serverAssert(dictAdd(zs->dict, gp->member, &znode->score) == DICT_OK);
+            serverAssert(hashtableAdd(zs->ht, znode));
             gp->member = NULL;
         }
 
         if (returned_items) {
             zsetConvertToListpackIfNeeded(zobj, maxelelen, totelelen);
-            setKey(c, c->db, storekey, zobj, 0);
-            decrRefCount(zobj);
+            setKey(c, c->db, storekey, &zobj, 0);
             notifyKeyspaceEvent(NOTIFY_ZSET, flags & GEOSEARCH ? "geosearchstore" : "georadiusstore", storekey,
                                 c->db->id);
             server.dirty += returned_items;

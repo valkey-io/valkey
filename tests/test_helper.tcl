@@ -1,4 +1,4 @@
-# Server test suite. Copyright (C) 2009 Salvatore Sanfilippo antirez@gmail.com
+# Server test suite. Copyright (C) 2009 Redis Ltd.
 # This software is released under the BSD License. See the COPYING file for
 # more information.
 
@@ -15,6 +15,8 @@ source tests/support/util.tcl
 
 set dir [pwd]
 set ::all_tests []
+set ::cluster_all_test []
+set ::module_api_all_tests []
 
 set test_dirs {
     unit
@@ -30,6 +32,17 @@ foreach test_dir $test_dirs {
         lappend ::all_tests $test_dir/[file root [file tail $file]]
     }
 }
+
+set cluster_test_dir unit/cluster
+foreach file [glob -nocomplain $dir/tests/$cluster_test_dir/*.tcl] {
+    lappend ::cluster_all_tests $cluster_test_dir/[file root [file tail $file]]
+}
+
+set moduleapi_test_dir unit/moduleapi
+foreach file [glob -nocomplain $dir/tests/$moduleapi_test_dir/*.tcl] {
+    lappend ::module_api_all_tests $moduleapi_test_dir/[file root [file tail $file]]
+}
+
 # Index to the next test to run in the ::all_tests list.
 set ::next_test 0
 
@@ -41,6 +54,7 @@ set ::traceleaks 0
 set ::valgrind 0
 set ::durable 0
 set ::tls 0
+set ::io_threads 0
 set ::tls_module 0
 set ::stack_logging 0
 set ::verbose 0
@@ -55,6 +69,7 @@ set ::single_tests {}
 set ::run_solo_tests {}
 set ::skip_till ""
 set ::external 0; # If "1" this means, we are running against external instance
+set ::other_server_path {}; # Used in upgrade and inter-version tests
 set ::file ""; # If set, runs only the tests in this comma separated list
 set ::curfile ""; # Hold the filename of the current suite
 set ::accurate 0; # If true runs fuzz tests with more iterations
@@ -77,6 +92,8 @@ set ::ignoredigest 0
 set ::large_memory 0
 set ::log_req_res 0
 set ::force_resp3 0
+set ::solo_tests_count 0
+set ::debug_defrag 0
 
 # Set to 1 when we are running in client mode. The server test uses a
 # server-client model to run tests simultaneously. The server instance
@@ -359,9 +376,10 @@ proc read_from_test_client fd {
         signal_idle_client $fd
     } elseif {$status eq {done}} {
         set elapsed [expr {[clock seconds]-$::clients_start_time($fd)}]
-        set all_tests_count [llength $::all_tests]
+        set all_tests_count [expr {[llength $::all_tests]+$::solo_tests_count}]
         set running_tests_count [expr {[llength $::active_clients]-1}]
-        set completed_tests_count [expr {$::next_test-$running_tests_count}]
+        set completed_solo_tests_count [expr {$::solo_tests_count-[llength $::run_solo_tests]}]
+        set completed_tests_count [expr {$::next_test-$running_tests_count+$completed_solo_tests_count}]
         puts "\[$completed_tests_count/$all_tests_count [colorstr yellow $status]\]: $data ($elapsed seconds)"
         lappend ::clients_time_history $elapsed $data
         signal_idle_client $fd
@@ -404,7 +422,8 @@ proc read_from_test_client fd {
     } elseif {$status eq {server-spawning}} {
         set ::active_clients_task($fd) "(SPAWNING SERVER) $data"
     } elseif {$status eq {server-spawned}} {
-        lappend ::active_servers $data
+        set pid [string trim [lindex [split $data "-"] 0]]
+        lappend ::active_servers $pid
         set ::active_clients_task($fd) "(SPAWNED SERVER) pid:$data"
     } elseif {$status eq {server-killing}} {
         set ::active_clients_task($fd) "(KILLING SERVER) pid:$data"
@@ -413,6 +432,7 @@ proc read_from_test_client fd {
         set ::active_clients_task($fd) "(KILLED SERVER) pid:$data"
     } elseif {$status eq {run_solo}} {
         lappend ::run_solo_tests $data
+        incr ::solo_tests_count
     } else {
         if {!$::quiet} {
             puts "\[$status\]: $data"
@@ -519,7 +539,7 @@ proc the_end {} {
     }
 }
 
-# The client is not even driven (the test server is instead) as we just need
+# The client is not event driven (the test server is instead) as we just need
 # to read the command, execute, reply... all this in a loop.
 proc test_client_main server_port {
     set ::test_server_fd [socket localhost $server_port]
@@ -549,24 +569,36 @@ proc send_data_packet {fd status data {elapsed 0}} {
 
 proc print_help_screen {} {
     puts [join {
+        # This is for terminal output, so assume default term width of 80 columns. -----|
+        "--cluster          Run the cluster tests, by default cluster tests run along"
+        "                   with all tests."
+        "--moduleapi        Run the module API tests, this option should only be used in"
+        "                   runtest-moduleapi which will build the test module."
         "--valgrind         Run the test over valgrind."
         "--durable          suppress test crashes and keep running"
         "--stack-logging    Enable OSX leaks/malloc stack logging."
         "--accurate         Run slow randomized tests for more iterations."
         "--quiet            Don't show individual tests."
-        "--single <unit>    Just execute the specified unit (see next option). This option can be repeated."
+        "--single <unit>    Just execute the specified unit (see next option). This"
+        "                   option can be repeated."
         "--verbose          Increases verbosity."
         "--list-tests       List all the available test units."
-        "--only <test>      Just execute the specified test by test name or tests that match <test> regexp (if <test> starts with '/'). This option can be repeated."
+        "--only <test>      Just execute the specified test by test name or tests that"
+        "                   match <test> regexp (if <test> starts with '/'). This option"
+        "                   can be repeated."
         "--skip-till <unit> Skip all units until (and including) the specified one."
         "--skipunit <unit>  Skip one unit."
         "--clients <num>    Number of test clients (default 16)."
         "--timeout <sec>    Test timeout in seconds (default 20 min)."
         "--force-failure    Force the execution of a test that always fails."
         "--config <k> <v>   Extra config file argument."
-        "--skipfile <file>  Name of a file containing test names or regexp patterns (if <test> starts with '/') that should be skipped (one per line). This option can be repeated."
-        "--skiptest <test>  Test name or regexp pattern (if <test> starts with '/') to skip. This option can be repeated."
-        "--tags <tags>      Run only tests having specified tags or not having '-' prefixed tags."
+        "--skipfile <file>  Name of a file containing test names or regexp patterns (if"
+        "                   <test> starts with '/') that should be skipped (one per"
+        "                   line). This option can be repeated."
+        "--skiptest <test>  Test name or regexp pattern (if <test> starts with '/') to"
+        "                   skip. This option can be repeated."
+        "--tags <tags>      Run only tests having specified tags or not having '-'"
+        "                   prefixed tags."
         "--dont-clean       Don't delete valkey log files after the run."
         "--dont-pre-clean   Don't delete existing valkey log files before the run."
         "--no-latency       Skip latency measurements and validation by some tests."
@@ -574,12 +606,17 @@ proc print_help_screen {} {
         "--stop             Blocks once the first test fails."
         "--loop             Execute the specified set of tests forever."
         "--loops <count>    Execute the specified set of tests several times."
-        "--wait-server      Wait after server is started (so that you can attach a debugger)."
+        "--wait-server      Wait after server is started (so that you can attach a"
+        "                   debugger)."
         "--dump-logs        Dump server log on test failure."
+        "--io-threads       Run tests with IO threads."
         "--tls              Run tests in TLS mode."
         "--tls-module       Run tests in TLS mode with Valkey module."
         "--host <addr>      Run tests against an external host."
         "--port <port>      TCP port to use against external host."
+        "--other-server-path <path>"
+        "                   Path to another version of valkey-server, used for inter-"
+        "                   version compatibility testing."
         "--baseport <port>  Initial port number for spawned valkey servers."
         "--portcount <num>  Port range for spawned valkey servers."
         "--singledb         Use a single database, avoid SELECT."
@@ -587,6 +624,7 @@ proc print_help_screen {} {
         "--ignore-encoding  Don't validate object encoding."
         "--ignore-digest    Don't use debug digest validations."
         "--large-memory     Run tests using over 100mb."
+        "--debug-defrag     Indicate the test is running against server compiled with DEBUG_FORCE_DEFRAG option"
         "--help             Print this help screen."
     } "\n"]
 }
@@ -604,6 +642,10 @@ for {set j 0} {$j < [llength $argv]} {incr j} {
             }
         }
         incr j
+    } elseif {$opt eq {--cluster}} {
+        set ::all_tests $::cluster_all_tests
+    } elseif {$opt eq {--moduleapi}} {
+        set ::all_tests $::module_api_all_tests
     } elseif {$opt eq {--config}} {
         set arg2 [lindex $argv [expr $j+2]]
         lappend ::global_overrides $arg
@@ -630,6 +672,8 @@ for {set j 0} {$j < [llength $argv]} {incr j} {
         }
     } elseif {$opt eq {--quiet}} {
         set ::quiet 1
+    } elseif {$opt eq {--io-threads}} {
+        set ::io_threads 1
     } elseif {$opt eq {--tls} || $opt eq {--tls-module}} {
         package require tls 1.6
         set ::tls 1
@@ -646,6 +690,9 @@ for {set j 0} {$j < [llength $argv]} {incr j} {
         incr j
     } elseif {$opt eq {--port}} {
         set ::port $arg
+        incr j
+    } elseif {$opt eq {--other-server-path}} {
+        set ::other_server_path $arg
         incr j
     } elseif {$opt eq {--baseport}} {
         set ::baseport $arg
@@ -722,6 +769,8 @@ for {set j 0} {$j < [llength $argv]} {incr j} {
         set ::ignoreencoding 1
     } elseif {$opt eq {--ignore-digest}} {
         set ::ignoredigest 1
+    } elseif {$opt eq {--debug-defrag}} {
+        set ::debug_defrag 1
     } elseif {$opt eq {--help}} {
         print_help_screen
         exit 0

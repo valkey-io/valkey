@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, Salvatore Sanfilippo <antirez at gmail dot com>
+ * Copyright (c) 2017, Redis Ltd.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -54,6 +54,7 @@
 #define STREAM_LISTPACK_MAX_SIZE (1 << 30)
 
 void streamFreeCG(streamCG *cg);
+void streamFreeCGVoid(void *cg);
 void streamFreeNACK(streamNACK *na);
 size_t streamReplyWithRangeFromConsumerPEL(client *c,
                                            stream *s,
@@ -86,8 +87,8 @@ stream *streamNew(void) {
 
 /* Free a stream, including the listpacks stored inside the radix tree. */
 void freeStream(stream *s) {
-    raxFreeWithCallback(s->rax, (void (*)(void *))lpFree);
-    if (s->cgroups) raxFreeWithCallback(s->cgroups, (void (*)(void *))streamFreeCG);
+    raxFreeWithCallback(s->rax, lpFreeVoid);
+    if (s->cgroups) raxFreeWithCallback(s->cgroups, streamFreeCGVoid);
     zfree(s);
 }
 
@@ -769,7 +770,7 @@ int64_t streamTrim(stream *s, streamAddTrimArgs *args) {
         int64_t primary_fields_count = lpGetInteger(p);
         p = lpNext(lp, p);                                                    /* Skip the first field. */
         for (int64_t j = 0; j < primary_fields_count; j++) p = lpNext(lp, p); /* Skip all primary fields. */
-        p = lpNext(lp, p); /* Skip the zero primary entry terminator. */
+        p = lpNext(lp, p);                                                    /* Skip the zero primary entry terminator. */
 
         /* 'p' is now pointing to the first entry inside the listpack.
          * We have to run entry after entry, marking entries as deleted
@@ -1641,8 +1642,8 @@ void streamPropagateConsumerCreation(client *c, robj *key, robj *groupname, sds 
  * flag.
  */
 #define STREAM_RWR_NOACK (1 << 0) /* Do not create entries in the PEL. */
-#define STREAM_RWR_RAWENTRIES                                                                                          \
-    (1 << 1)                        /* Do not emit protocol for array                                                  \
+#define STREAM_RWR_RAWENTRIES                                         \
+    (1 << 1)                        /* Do not emit protocol for array \
                                        boundaries, just the entries. */
 #define STREAM_RWR_HISTORY (1 << 2) /* Only serve consumer local PEL. */
 size_t streamReplyWithRange(client *c,
@@ -1839,7 +1840,7 @@ robj *streamTypeLookupWriteOrCreate(client *c, robj *key, int no_create) {
             return NULL;
         }
         o = createStreamObject();
-        dbAdd(c->db, key, o);
+        dbAdd(c->db, key, &o);
     }
     return o;
 }
@@ -2454,6 +2455,11 @@ void streamFreeConsumer(streamConsumer *sc) {
     zfree(sc);
 }
 
+/* Used for generic free functions. */
+static void streamFreeConsumerVoid(void *sc) {
+    streamFreeConsumer((streamConsumer *)sc);
+}
+
 /* Create a new consumer group in the context of the stream 's', having the
  * specified name, last server ID and reads counter. If a consumer group with
  * the same name already exists NULL is returned, otherwise the pointer to the
@@ -2473,9 +2479,14 @@ streamCG *streamCreateCG(stream *s, char *name, size_t namelen, streamID *id, lo
 
 /* Free a consumer group and all its associated data. */
 void streamFreeCG(streamCG *cg) {
-    raxFreeWithCallback(cg->pel, (void (*)(void *))streamFreeNACK);
-    raxFreeWithCallback(cg->consumers, (void (*)(void *))streamFreeConsumer);
+    raxFreeWithCallback(cg->pel, zfree);
+    raxFreeWithCallback(cg->consumers, streamFreeConsumerVoid);
     zfree(cg);
+}
+
+/* Used for generic free functions. */
+void streamFreeCGVoid(void *cg) {
+    streamFreeCG((streamCG *)cg);
 }
 
 /* Lookup the consumer group in the specified stream and returns its
@@ -2610,25 +2621,23 @@ void xgroupCommand(client *c) {
 
     /* Dispatch the different subcommands. */
     if (c->argc == 2 && !strcasecmp(opt, "HELP")) {
-        /* clang-format off */
         const char *help[] = {
-"CREATE <key> <groupname> <id|$> [option]",
-"    Create a new consumer group. Options are:",
-"    * MKSTREAM",
-"      Create the empty stream if it does not exist.",
-"    * ENTRIESREAD entries_read",
-"      Set the group's entries_read counter (internal use).",
-"CREATECONSUMER <key> <groupname> <consumer>",
-"    Create a new consumer in the specified group.",
-"DELCONSUMER <key> <groupname> <consumer>",
-"    Remove the specified consumer.",
-"DESTROY <key> <groupname>",
-"    Remove the specified group.",
-"SETID <key> <groupname> <id|$> [ENTRIESREAD entries_read]",
-"    Set the current group ID and entries_read counter.",
-NULL
+            "CREATE <key> <groupname> <id|$> [option]",
+            "    Create a new consumer group. Options are:",
+            "    * MKSTREAM",
+            "      Create the empty stream if it does not exist.",
+            "    * ENTRIESREAD entries_read",
+            "      Set the group's entries_read counter (internal use).",
+            "CREATECONSUMER <key> <groupname> <consumer>",
+            "    Create a new consumer in the specified group.",
+            "DELCONSUMER <key> <groupname> <consumer>",
+            "    Remove the specified consumer.",
+            "DESTROY <key> <groupname>",
+            "    Remove the specified group.",
+            "SETID <key> <groupname> <id|$> [ENTRIESREAD entries_read]",
+            "    Set the current group ID and entries_read counter.",
+            NULL,
         };
-        /* clang-format on */
         addReplyHelp(c, help);
     } else if (!strcasecmp(opt, "CREATE") && (c->argc >= 5 && c->argc <= 8)) {
         streamID id;
@@ -2647,7 +2656,7 @@ NULL
         if (s == NULL) {
             serverAssert(mkstream);
             o = createStreamObject();
-            dbAdd(c->db, c->argv[2], o);
+            dbAdd(c->db, c->argv[2], &o);
             s = o->ptr;
             signalModifiedKey(c, c->db, c->argv[2]);
         }
@@ -3798,17 +3807,15 @@ void xinfoCommand(client *c) {
 
     /* HELP is special. Handle it ASAP. */
     if (!strcasecmp(c->argv[1]->ptr, "HELP")) {
-        /* clang-format off */
         const char *help[] = {
-"CONSUMERS <key> <groupname>",
-"    Show consumers of <groupname>.",
-"GROUPS <key>",
-"    Show the stream consumer groups.",
-"STREAM <key> [FULL [COUNT <count>]",
-"    Show information about the stream.",
-NULL
+            "CONSUMERS <key> <groupname>",
+            "    Show consumers of <groupname>.",
+            "GROUPS <key>",
+            "    Show the stream consumer groups.",
+            "STREAM <key> [FULL [COUNT <count>]",
+            "    Show information about the stream.",
+            NULL,
         };
-        /* clang-format on */
         addReplyHelp(c, help);
         return;
     }

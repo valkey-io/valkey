@@ -35,7 +35,7 @@ source "../tests/includes/init-tests.tcl"
 proc verify_hostname_announced {hostname} {
     foreach_sentinel_id id {
         # Master is reported with its hostname
-        if {![string equal [lindex [S $id SENTINEL GET-MASTER-ADDR-BY-NAME mymaster] 0] $hostname]} {
+        if {![string equal [lindex [S $id SENTINEL GET-PRIMARY-ADDR-BY-NAME mymaster] 0] $hostname]} {
             return 0
         }
 

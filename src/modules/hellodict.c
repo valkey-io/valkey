@@ -5,7 +5,7 @@
  *
  * -----------------------------------------------------------------------------
  *
- * Copyright (c) 2018, Salvatore Sanfilippo <antirez at gmail dot com>
+ * Copyright (c) 2018, Redis Ltd.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -109,13 +109,13 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
 
     if (ValkeyModule_Init(ctx, "hellodict", 1, VALKEYMODULE_APIVER_1) == VALKEYMODULE_ERR) return VALKEYMODULE_ERR;
 
-    if (ValkeyModule_CreateCommand(ctx, "hellodict.set", cmd_SET, "write deny-oom", 1, 1, 0) == VALKEYMODULE_ERR)
+    if (ValkeyModule_CreateCommand(ctx, "hellodict.set", cmd_SET, "write deny-oom", 1, 1, 1) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
 
-    if (ValkeyModule_CreateCommand(ctx, "hellodict.get", cmd_GET, "readonly", 1, 1, 0) == VALKEYMODULE_ERR)
+    if (ValkeyModule_CreateCommand(ctx, "hellodict.get", cmd_GET, "readonly", 1, 1, 1) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
 
-    if (ValkeyModule_CreateCommand(ctx, "hellodict.keyrange", cmd_KEYRANGE, "readonly", 1, 1, 0) == VALKEYMODULE_ERR)
+    if (ValkeyModule_CreateCommand(ctx, "hellodict.keyrange", cmd_KEYRANGE, "readonly", 1, 1, 1) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
 
     /* Create our global dictionary. Here we'll set our keys and values. */

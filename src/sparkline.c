@@ -5,7 +5,7 @@
  *
  * ---------------------------------------------------------------------------
  *
- * Copyright(C) 2011-2014 Salvatore Sanfilippo <antirez@gmail.com>
+ * Copyright(C) 2011-2014 Redis Ltd.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without

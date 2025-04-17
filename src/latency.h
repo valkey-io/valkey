@@ -3,7 +3,7 @@
  *
  * ----------------------------------------------------------------------------
  *
- * Copyright (c) 2014, Salvatore Sanfilippo <antirez at gmail dot com>
+ * Copyright (c) 2014, Redis Ltd.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -47,6 +47,8 @@ struct latencySample {
 struct latencyTimeSeries {
     int idx;                                      /* Index of the next sample to store. */
     uint32_t max;                                 /* Max latency observed for this event. */
+    uint32_t sum;                                 /* Sum latency observed for this event. */
+    uint32_t cnt;                                 /* Count observed for this event. */
     struct latencySample samples[LATENCY_TS_LEN]; /* Latest history. */
 };
 
@@ -67,22 +69,22 @@ void latencyAddSample(const char *event, mstime_t latency);
 /* Latency monitoring macros. */
 
 /* Start monitoring an event. We just set the current time. */
-#define latencyStartMonitor(var)                                                                                       \
-    if (server.latency_monitor_threshold) {                                                                            \
-        var = mstime();                                                                                                \
-    } else {                                                                                                           \
-        var = 0;                                                                                                       \
+#define latencyStartMonitor(var)            \
+    if (server.latency_monitor_threshold) { \
+        var = mstime();                     \
+    } else {                                \
+        var = 0;                            \
     }
 
 /* End monitoring an event, compute the difference with the current time
  * to check the amount of time elapsed. */
-#define latencyEndMonitor(var)                                                                                         \
-    if (server.latency_monitor_threshold) {                                                                            \
-        var = mstime() - var;                                                                                          \
+#define latencyEndMonitor(var)              \
+    if (server.latency_monitor_threshold) { \
+        var = mstime() - var;               \
     }
 
 /* Add the sample only if the elapsed time is >= to the configured threshold. */
-#define latencyAddSampleIfNeeded(event, var)                                                                           \
+#define latencyAddSampleIfNeeded(event, var) \
     if (server.latency_monitor_threshold && (var) >= server.latency_monitor_threshold) latencyAddSample((event), (var));
 
 /* Remove time from a nested event. */
@@ -98,8 +100,8 @@ typedef enum {
     EL_DURATION_TYPE_EL = 0, // cumulative time duration metric of the whole eventloop
     EL_DURATION_TYPE_CMD,    // cumulative time duration metric of executing commands
     EL_DURATION_TYPE_AOF,    // cumulative time duration metric of flushing AOF in eventloop
-    EL_DURATION_TYPE_CRON, // cumulative time duration metric of cron (serverCron and beforeSleep, but excluding IO and
-                           // AOF)
+    EL_DURATION_TYPE_CRON,   // cumulative time duration metric of cron (serverCron and beforeSleep, but excluding IO and
+                             // AOF)
     EL_DURATION_TYPE_NUM
 } DurationType;
 

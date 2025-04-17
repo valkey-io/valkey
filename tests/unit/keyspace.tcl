@@ -47,6 +47,10 @@ start_server {tags {"keyspace"}} {
         r dbsize
     } {0}
 
+    test {KEYS with empty DB} {
+        assert_equal {} [r keys *]
+    }
+
     test "DEL against expired key" {
         r debug set-active-expire 0
         r setex keyExpire 1 valExpire
@@ -547,4 +551,21 @@ foreach {type large} [array get largevalue] {
        assert_no_match "*db2:keys=*" [r info keyspace]
        r flushall
     } {OK} {singledb:skip}
+
+    test {Regression for pattern matching very long nested loops} {
+        r flushdb
+        r SET [string repeat "a" 50000] 1
+        r KEYS [string repeat "*?" 50000]
+    } {}
+}
+
+start_cluster 1 0 {tags {"keyspace external:skip cluster"}} {
+    test {KEYS with empty DB in cluster mode} {
+        assert_equal {} [r keys *]
+        assert_equal {} [r keys foo*]
+    }
+
+    test {KEYS with empty slot in cluster mode} {
+        assert_equal {} [r keys foo]
+    }
 }

@@ -1,7 +1,7 @@
 /* Trivia program to corrupt an RDB file in order to check the RDB check
  * program behavior and effectiveness.
  *
- * Copyright (C) 2016 Salvatore Sanfilippo.
+ * Copyright (C) 2016 Redis ltd.
  * This software is released in the 3-clause BSD license. */
 
 #include <stdio.h>

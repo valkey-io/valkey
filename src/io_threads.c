@@ -1,3 +1,9 @@
+/*
+ * Copyright (c) Valkey Contributors
+ * All rights reserved.
+ * SPDX-License-Identifier: BSD-3-Clause
+ */
+
 #include "io_threads.h"
 
 static __thread int thread_id = 0; /* Thread local var */
@@ -124,6 +130,22 @@ int inMainThread(void) {
     return thread_id == 0;
 }
 
+int getIOThreadID(void) {
+    return thread_id;
+}
+
+/* Drains the I/O threads queue by waiting for all jobs to be processed.
+ * This function must be called from the main thread. */
+void drainIOThreadsQueue(void) {
+    serverAssert(inMainThread());
+    for (int i = 1; i < IO_THREADS_MAX_NUM; i++) { /* No need to drain thread 0, which is the main thread. */
+        while (!IOJobQueue_isEmpty(&io_jobs[i])) {
+            /* memory barrier acquire to get the latest job queue state */
+            atomic_thread_fence(memory_order_acquire);
+        }
+    }
+}
+
 /* Wait until the IO-thread is done with the client */
 void waitForClientIO(client *c) {
     /* No need to wait if the client was not offloaded to the IO thread. */
@@ -148,9 +170,9 @@ void waitForClientIO(client *c) {
 void adjustIOThreadsByEventLoad(int numevents, int increase_only) {
     if (server.io_threads_num == 1) return; /* All I/O is being done by the main thread. */
     debugServerAssertWithInfo(NULL, NULL, server.io_threads_num > 1);
-
-    int target_threads =
-        server.events_per_io_thread == 0 ? server.io_threads_num : numevents / server.events_per_io_thread;
+    /* When events_per_io_thread is set to 0, we offload all events to the IO threads.
+     * This is used mainly for testing purposes. */
+    int target_threads = server.events_per_io_thread == 0 ? (numevents + 1) : numevents / server.events_per_io_thread;
 
     target_threads = max(1, min(target_threads, server.io_threads_num));
 
@@ -175,6 +197,17 @@ void adjustIOThreadsByEventLoad(int numevents, int increase_only) {
             server.active_io_threads_num++;
         }
     }
+}
+
+/* This function performs polling on the given event loop and updates the server's
+ * IO fired events count and poll state. */
+void IOThreadPoll(void *data) {
+    aeEventLoop *el = (aeEventLoop *)data;
+    struct timeval tvp = {0, 0};
+    int num_events = aePoll(el, &tvp);
+
+    server.io_ae_fired_events = num_events;
+    atomic_store_explicit(&server.io_poll_state, AE_IO_STATE_DONE, memory_order_release);
 }
 
 static void *IOThreadMain(void *myid) {
@@ -267,12 +300,16 @@ void killIOThreads(void) {
 /* Initialize the data structures needed for I/O threads. */
 void initIOThreads(void) {
     server.active_io_threads_num = 1; /* We start with threads not active. */
+    server.io_poll_state = AE_IO_STATE_NONE;
+    server.io_ae_fired_events = 0;
 
     /* Don't spawn any thread if the user selected a single thread:
      * we'll handle I/O directly from the main thread. */
     if (server.io_threads_num == 1) return;
 
     serverAssert(server.io_threads_num <= IO_THREADS_MAX_NUM);
+
+    prefetchCommandsBatchInit();
 
     /* Spawn and initialize the I/O threads. */
     for (int i = 1; i < server.io_threads_num; i++) {
@@ -282,11 +319,10 @@ void initIOThreads(void) {
 
 int trySendReadToIOThreads(client *c) {
     if (server.active_io_threads_num <= 1) return C_ERR;
-    if (!server.io_threads_do_reads) return C_ERR;
-    /* If IO thread is areadty reading, return C_OK to make sure the main thread will not handle it. */
+    /* If IO thread is already reading, return C_OK to make sure the main thread will not handle it. */
     if (c->io_read_state != CLIENT_IDLE) return C_OK;
-    /* Currently, replica/master writes are not offloaded and are processed synchronously. */
-    if (c->flag.primary || getClientType(c) == CLIENT_TYPE_REPLICA) return C_ERR;
+    /* For simplicity, don't offload replica clients reads as read traffic from replica is negligible */
+    if (getClientType(c) == CLIENT_TYPE_REPLICA) return C_ERR;
     /* With Lua debug client we may call connWrite directly in the main thread */
     if (c->flag.lua_debug) return C_ERR;
     /* For simplicity let the main-thread handle the blocked clients */
@@ -309,6 +345,7 @@ int trySendReadToIOThreads(client *c) {
     c->cur_tid = tid;
     c->read_flags = canParseCommand(c) ? 0 : READ_FLAGS_DONT_PARSE;
     c->read_flags |= authRequired(c) ? READ_FLAGS_AUTH_REQUIRED : 0;
+    c->read_flags |= c->flag.primary ? READ_FLAGS_PRIMARY : 0;
 
     c->io_read_state = CLIENT_PENDING_IO;
     connSetPostponeUpdateState(c->conn, 1);
@@ -327,8 +364,8 @@ int trySendWriteToIOThreads(client *c) {
     if (c->io_write_state != CLIENT_IDLE) return C_OK;
     /* Nothing to write */
     if (!clientHasPendingReplies(c)) return C_ERR;
-    /* Currently, replica/master writes are not offloaded and are processed synchronously. */
-    if (c->flag.primary || getClientType(c) == CLIENT_TYPE_REPLICA) return C_ERR;
+    /* For simplicity, avoid offloading non-online replicas */
+    if (getClientType(c) == CLIENT_TYPE_REPLICA && c->repl_data->repl_state != REPLICA_STATE_ONLINE) return C_ERR;
     /* We can't offload debugged clients as the main-thread may read at the same time  */
     if (c->flag.lua_debug) return C_ERR;
 
@@ -355,23 +392,234 @@ int trySendWriteToIOThreads(client *c) {
     serverAssert(c->clients_pending_write_node.prev == NULL && c->clients_pending_write_node.next == NULL);
     listLinkNodeTail(server.clients_pending_io_write, &c->clients_pending_write_node);
 
-    /* Save the last block of the reply list to io_last_reply_block and the used
-     * position to io_last_bufpos. The I/O thread will write only up to
-     * io_last_bufpos, regardless of the c->bufpos value. This is to prevent I/O
-     * threads from reading data that might be invalid in their local CPU cache. */
-    c->io_last_reply_block = listLast(c->reply);
-    if (c->io_last_reply_block) {
-        c->io_last_bufpos = ((clientReplyBlock *)listNodeValue(c->io_last_reply_block))->used;
+    int is_replica = getClientType(c) == CLIENT_TYPE_REPLICA;
+    if (is_replica) {
+        c->io_last_reply_block = listLast(server.repl_buffer_blocks);
+        replBufBlock *o = listNodeValue(c->io_last_reply_block);
+        c->io_last_bufpos = o->used;
     } else {
-        c->io_last_bufpos = (size_t)c->bufpos;
+        /* Save the last block of the reply list to io_last_reply_block and the used
+         * position to io_last_bufpos. The I/O thread will write only up to
+         * io_last_bufpos, regardless of the c->bufpos value. This is to prevent I/O
+         * threads from reading data that might be invalid in their local CPU cache. */
+        c->io_last_reply_block = listLast(c->reply);
+        if (c->io_last_reply_block) {
+            c->io_last_bufpos = ((clientReplyBlock *)listNodeValue(c->io_last_reply_block))->used;
+        } else {
+            c->io_last_bufpos = (size_t)c->bufpos;
+        }
     }
-    serverAssert(c->bufpos > 0 || c->io_last_bufpos > 0);
+
+    serverAssert(c->bufpos > 0 || c->io_last_bufpos > 0 || is_replica);
 
     /* The main-thread will update the client state after the I/O thread completes the write. */
     connSetPostponeUpdateState(c->conn, 1);
-    c->write_flags = 0;
+    c->write_flags = is_replica ? WRITE_FLAGS_IS_REPLICA : 0;
     c->io_write_state = CLIENT_PENDING_IO;
 
     IOJobQueue_push(jq, ioThreadWriteToClient, c);
+    return C_OK;
+}
+
+/* Internal function to free the client's argv in an IO thread. */
+void IOThreadFreeArgv(void *data) {
+    robj **argv = (robj **)data;
+    int last_arg = 0;
+    for (int i = 0;; i++) {
+        robj *o = argv[i];
+        if (o == NULL) {
+            continue;
+        }
+
+        /* The main-thread set the refcount to 0 to indicate that this is the last argument to free */
+        if (o->refcount == 0) {
+            last_arg = 1;
+            o->refcount = 1;
+        }
+
+        decrRefCount(o);
+
+        if (last_arg) {
+            break;
+        }
+    }
+
+    zfree(argv);
+}
+
+/* This function attempts to offload the client's argv to an IO thread.
+ * Returns C_OK if the client's argv were successfully offloaded to an IO thread,
+ * C_ERR otherwise. */
+int tryOffloadFreeArgvToIOThreads(client *c, int argc, robj **argv) {
+    if (server.active_io_threads_num <= 1 || argc == 0) {
+        return C_ERR;
+    }
+
+    size_t tid = (c->id % (server.active_io_threads_num - 1)) + 1;
+
+    IOJobQueue *jq = &io_jobs[tid];
+    if (IOJobQueue_isFull(jq)) {
+        return C_ERR;
+    }
+
+    int last_arg_to_free = -1;
+
+    /* Prepare the argv */
+    for (int j = 0; j < argc; j++) {
+        if (argv[j]->refcount > 1) {
+            decrRefCount(argv[j]);
+            /* Set argv[j] to NULL to avoid double free */
+            argv[j] = NULL;
+        } else {
+            last_arg_to_free = j;
+        }
+    }
+
+    /* If no argv to free, free the argv array at the main thread */
+    if (last_arg_to_free == -1) {
+        zfree(argv);
+        return C_OK;
+    }
+
+    /* We set the refcount of the last arg to free to 0 to indicate that
+     * this is the last argument to free. With this approach, we don't need to
+     * send the argc to the IO thread and we can send just the argv ptr. */
+    argv[last_arg_to_free]->refcount = 0;
+
+    /* Must succeed as we checked the free space before. */
+    IOJobQueue_push(jq, IOThreadFreeArgv, argv);
+
+    return C_OK;
+}
+
+/* This function attempts to offload the free of an object to an IO thread.
+ * Returns C_OK if the object was successfully offloaded to an IO thread,
+ * C_ERR otherwise.*/
+int tryOffloadFreeObjToIOThreads(robj *obj) {
+    if (server.active_io_threads_num <= 1) {
+        return C_ERR;
+    }
+
+    if (obj->refcount > 1) return C_ERR;
+
+    if (obj->encoding != OBJ_ENCODING_RAW || obj->type != OBJ_STRING) return C_ERR;
+
+    /* We select the thread ID in a round-robin fashion. */
+    size_t tid = (server.stat_io_freed_objects % (server.active_io_threads_num - 1)) + 1;
+
+    IOJobQueue *jq = &io_jobs[tid];
+    if (IOJobQueue_isFull(jq)) {
+        return C_ERR;
+    }
+
+    /* We offload only the free of the ptr that may be allocated by the I/O thread.
+     * The object itself was allocated by the main thread and will be freed by the main thread. */
+    IOJobQueue_push(jq, sdsfreeVoid, obj->ptr);
+    obj->ptr = NULL;
+    decrRefCount(obj);
+
+    server.stat_io_freed_objects++;
+    return C_OK;
+}
+
+/* This function retrieves the results of the IO Thread poll.
+ * returns the number of fired events if the IO thread has finished processing poll events, 0 otherwise. */
+static int getIOThreadPollResults(aeEventLoop *eventLoop) {
+    int io_state;
+    io_state = atomic_load_explicit(&server.io_poll_state, memory_order_acquire);
+    if (io_state == AE_IO_STATE_POLL) {
+        /* IO thread is still processing poll events. */
+        return 0;
+    }
+
+    /* IO thread is done processing poll events. */
+    serverAssert(io_state == AE_IO_STATE_DONE);
+    server.stat_poll_processed_by_io_threads++;
+    server.io_poll_state = AE_IO_STATE_NONE;
+
+    /* Remove the custom poll proc. */
+    aeSetCustomPollProc(eventLoop, NULL);
+    aeSetPollProtect(eventLoop, 0);
+    return server.io_ae_fired_events;
+}
+
+void trySendPollJobToIOThreads(void) {
+    if (server.active_io_threads_num <= 1) {
+        return;
+    }
+
+    /* If there are no pending jobs, let the main thread do the poll-wait by itself. */
+    if (listLength(server.clients_pending_io_write) + listLength(server.clients_pending_io_read) == 0) {
+        return;
+    }
+
+    /* If the IO thread is already processing poll events, don't send another job. */
+    if (server.io_poll_state != AE_IO_STATE_NONE) {
+        return;
+    }
+
+    /* The poll is sent to the last thread. While a random thread could have been selected,
+     * the last thread has a slightly better chance of being less loaded compared to other threads,
+     * As we activate the lowest threads first. */
+    int tid = server.active_io_threads_num - 1;
+    IOJobQueue *jq = &io_jobs[tid];
+    if (IOJobQueue_isFull(jq)) return; /* The main thread will handle the poll itself. */
+
+    server.io_poll_state = AE_IO_STATE_POLL;
+    aeSetCustomPollProc(server.el, getIOThreadPollResults);
+    aeSetPollProtect(server.el, 1);
+    IOJobQueue_push(jq, IOThreadPoll, server.el);
+}
+
+static void ioThreadAccept(void *data) {
+    client *c = (client *)data;
+    connAccept(c->conn, NULL);
+    atomic_thread_fence(memory_order_release);
+    c->io_read_state = CLIENT_COMPLETED_IO;
+}
+
+/*
+ * Attempts to offload an Accept operation (currently used for TLS accept) for a client
+ * connection to I/O threads.
+ *
+ * Returns:
+ *   C_OK  - If the accept operation was successfully queued for processing
+ *   C_ERR - If the connection is not eligible for offloading
+ *
+ * Parameters:
+ *   conn - The connection object to perform the accept operation on
+ */
+int trySendAcceptToIOThreads(connection *conn) {
+    if (server.io_threads_num <= 1) {
+        return C_ERR;
+    }
+
+    if (!(conn->flags & CONN_FLAG_ALLOW_ACCEPT_OFFLOAD)) {
+        return C_ERR;
+    }
+
+    client *c = connGetPrivateData(conn);
+    if (c->io_read_state != CLIENT_IDLE) {
+        return C_OK;
+    }
+
+    if (server.active_io_threads_num <= 1) {
+        return C_ERR;
+    }
+
+    size_t thread_id = (c->id % (server.active_io_threads_num - 1)) + 1;
+    IOJobQueue *job_queue = &io_jobs[thread_id];
+
+    if (IOJobQueue_isFull(job_queue)) {
+        return C_ERR;
+    }
+
+    c->io_read_state = CLIENT_PENDING_IO;
+    c->flag.pending_read = 1;
+    listLinkNodeTail(server.clients_pending_io_read, &c->pending_read_list_node);
+    connSetPostponeUpdateState(c->conn, 1);
+    server.stat_io_accept_offloaded++;
+    IOJobQueue_push(job_queue, ioThreadAccept, c);
+
     return C_OK;
 }

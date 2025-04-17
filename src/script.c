@@ -30,6 +30,8 @@
 #include "server.h"
 #include "script.h"
 #include "cluster.h"
+#include "cluster_slot_stats.h"
+#include "module.h"
 
 scriptFlag scripts_flags_def[] = {
     {.flag = SCRIPT_FLAG_NO_WRITES, .str = "no-writes"},
@@ -226,6 +228,7 @@ int scriptPrepareForRun(scriptRunCtx *run_ctx,
     /* If we are in MULTI context, flag Lua client as CLIENT_MULTI. */
     if (curr_client->flag.multi) {
         script_client->flag.multi = 1;
+        initClientMultiState(script_client);
     }
 
     run_ctx->start_time = getMonotonicUs();
@@ -545,7 +548,7 @@ void scriptCall(scriptRunCtx *run_ctx, sds *err) {
 
     /* There are commands that are not allowed inside scripts. */
     if (!server.script_disable_deny_script && (cmd->flags & CMD_NOSCRIPT)) {
-        *err = sdsnew("This Redis command is not allowed from script");
+        *err = sdscatprintf(sdsempty(), "This %s command is not allowed from script", server.extended_redis_compat ? "Redis" : "Valkey");
         goto error;
     }
 
@@ -583,6 +586,7 @@ void scriptCall(scriptRunCtx *run_ctx, sds *err) {
     }
     call(c, call_flags);
     serverAssert(c->flag.blocked == 0);
+    clusterSlotStatsInvalidateSlotIfApplicable(run_ctx);
     return;
 
 error:

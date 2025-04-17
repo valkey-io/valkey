@@ -90,9 +90,8 @@ typedef struct quicklistBookmark {
 /* 64-bit */
 #define QL_FILL_BITS 16
 #define QL_COMP_BITS 16
-#define QL_BM_BITS                                                                                                     \
-    4 /* we can encode more, but we rather limit the user                                                              \
-         since they cause performance degradation. */
+#define QL_BM_BITS 4 /* we can encode more, but we rather limit the user \
+                        since they cause performance degradation. */
 #else
 #error unknown arch bits count
 #endif
@@ -198,10 +197,6 @@ int quicklistBookmarkDelete(quicklist *ql, const char *name);
 quicklistNode *quicklistBookmarkFind(quicklist *ql, const char *name);
 void quicklistBookmarksClear(quicklist *ql);
 int quicklistSetPackedThreshold(size_t sz);
-
-#ifdef SERVER_TEST
-int quicklistTest(int argc, char *argv[], int flags);
-#endif
 
 /* Directions for iterators */
 #define AL_START_HEAD 0

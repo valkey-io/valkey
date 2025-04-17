@@ -8,7 +8,7 @@
 # If reconnect is > 0, the test actually try to break the connection and
 # reconnect with the master, otherwise just the initial synchronization is
 # checked for consistency.
-proc test_psync {descr duration backlog_size backlog_ttl delay cond mdl sdl reconnect} {
+proc test_psync {descr duration backlog_size backlog_ttl delay cond mdl sdl dualchannel reconnect} {
     start_server {tags {"repl"} overrides {save {}}} {
         start_server {overrides {save {}}} {
 
@@ -21,7 +21,9 @@ proc test_psync {descr duration backlog_size backlog_ttl delay cond mdl sdl reco
             $master config set repl-backlog-ttl $backlog_ttl
             $master config set repl-diskless-sync $mdl
             $master config set repl-diskless-sync-delay 1
+            $master config set dual-channel-replication-enabled $dualchannel
             $slave config set repl-diskless-load $sdl
+            $slave config set dual-channel-replication-enabled $dualchannel
 
             set load_handle0 [start_bg_complex_data $master_host $master_port 9 100000]
             set load_handle1 [start_bg_complex_data $master_host $master_port 11 100000]
@@ -46,8 +48,8 @@ proc test_psync {descr duration backlog_size backlog_ttl delay cond mdl sdl reco
                 }
             }
 
-            test "Test replication partial resync: $descr (diskless: $mdl, $sdl, reconnect: $reconnect)" {
-                # Now while the clients are writing data, break the maste-slave
+            test "Test replication partial resync: $descr (diskless: $mdl, $sdl, dual-channel: $dualchannel, reconnect: $reconnect)" {
+                # Now while the clients are writing data, break the master-slave
                 # link multiple times.
                 if ($reconnect) {
                     for {set j 0} {$j < $duration*10} {incr j} {
@@ -74,19 +76,7 @@ proc test_psync {descr duration backlog_size backlog_ttl delay cond mdl sdl reco
 
                 # Wait for the slave to reach the "online"
                 # state from the POV of the master.
-                set retry 5000
-                while {$retry} {
-                    set info [$master info]
-                    if {[string match {*slave0:*state=online*} $info]} {
-                        break
-                    } else {
-                        incr retry -1
-                        after 100
-                    }
-                }
-                if {$retry == 0} {
-                    error "assertion:Slave not correctly synchronized"
-                }
+                verify_replica_online $master 0 5000
 
                 # Wait that slave acknowledge it is online so
                 # we are sure that DBSIZE and DEBUG DIGEST will not
@@ -111,6 +101,10 @@ proc test_psync {descr duration backlog_size backlog_ttl delay cond mdl sdl reco
                     fail "Master - Replica inconsistency, Run diff -u against /tmp/repldump*.txt for more info"
                 }
                 assert {[$master dbsize] > 0}
+                # if {$descr == "no backlog" && $mdl == "yes" && $sdl == "disabled"} {
+                #     puts "Master port: $master_port"
+                #     after 100000000
+                # }
                 eval $cond
             }
         }
@@ -120,24 +114,30 @@ proc test_psync {descr duration backlog_size backlog_ttl delay cond mdl sdl reco
 tags {"external:skip"} {
 foreach mdl {no yes} {
     foreach sdl {disabled swapdb} {
-        test_psync {no reconnection, just sync} 6 1000000 3600 0 {
-        } $mdl $sdl 0
+        foreach dualchannel {yes no} {
+            # Skip dual channel test with master diskless disabled
+            if {$dualchannel == "yes" && $mdl == "no"} {
+                continue
+            }
+            test_psync {no reconnection, just sync} 6 1000000 3600 0 {
+            } $mdl $sdl $dualchannel 0
 
-        test_psync {ok psync} 6 100000000 3600 0 {
-        assert {[s -1 sync_partial_ok] > 0}
-        } $mdl $sdl 1
+            test_psync {ok psync} 6 100000000 3600 0 {
+            assert {[s -1 sync_partial_ok] > 0}
+            } $mdl $sdl $dualchannel 1
 
-        test_psync {no backlog} 6 100 3600 0.5 {
-        assert {[s -1 sync_partial_err] > 0}
-        } $mdl $sdl 1
+            test_psync {no backlog} 6 100 3600 0.5 {
+            assert {[s -1 sync_partial_err] > 0}
+            } $mdl $sdl $dualchannel 1
 
-        test_psync {ok after delay} 3 100000000 3600 3 {
-        assert {[s -1 sync_partial_ok] > 0}
-        } $mdl $sdl 1
+            test_psync {ok after delay} 3 100000000 3600 3 {
+            assert {[s -1 sync_partial_ok] > 0}
+            } $mdl $sdl $dualchannel 1
 
-        test_psync {backlog expired} 3 100000000 1 3 {
-        assert {[s -1 sync_partial_err] > 0}
-        } $mdl $sdl 1
+            test_psync {backlog expired} 3 100000000 1 3 {
+            assert {[s -1 sync_partial_err] > 0}
+            } $mdl $sdl $dualchannel 1
+        }
     }
 }
 }

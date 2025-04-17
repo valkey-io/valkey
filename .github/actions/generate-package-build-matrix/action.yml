@@ -24,11 +24,11 @@ runs:
 
     - name: Get targets
       run: |
-        x86_arch=$(jq -c '[.linux_targets[] | select(.arch=="x86_64")]' utils/releasetools/build-config.json)
+        x86_arch=$(jq -c '[.linux_targets[] | select(.arch=="x86_64")]' .github/actions/generate-package-build-matrix/build-config.json)
         x86_matrix=$(echo "{ \"distro\" : $x86_arch }" | jq -c .)
         echo "X86_MATRIX=$x86_matrix" >> $GITHUB_ENV
 
-        arm_arch=$(jq -c '[.linux_targets[] | select(.arch=="arm64")]' utils/releasetools/build-config.json)
+        arm_arch=$(jq -c '[.linux_targets[] | select(.arch=="arm64")]' .github/actions/generate-package-build-matrix/build-config.json)
         arm_matrix=$(echo "{ \"distro\" : $arm_arch }" | jq -c .)
         echo "ARM_MATRIX=$arm_matrix" >> $GITHUB_ENV
       shell: bash

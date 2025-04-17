@@ -12,6 +12,7 @@ Tests flags:
 * UNIT_TEST_ACCURATE: Corresponds to the --accurate flag. This flag indicates the test should use extra computation to more accurately validate the tests.
 * UNIT_TEST_LARGE_MEMORY: Corresponds to the --large-memory flag. This flag indicates whether or not tests should use more than 100mb of memory.
 * UNIT_TEST_SINGLE: Corresponds to the --single flag. This flag indicates that a single test is being executed.
+* UNIT_TEST_VALGRIND: Corresponds to the --valgrind flag. This flag is just a hint passed to the test to indicate that we are running it under valgrind.
 
 Tests are allowed to be passed in additional arbitrary argv/argc, which they can access from the argc and argv arguments of the test.
 

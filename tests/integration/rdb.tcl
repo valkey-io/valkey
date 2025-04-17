@@ -1,9 +1,21 @@
 tags {"rdb external:skip"} {
 
+# Helper function to start a server and kill it, just to check the error
+# logged.
+set defaults {}
+proc start_server_and_kill_it {overrides code} {
+    upvar defaults defaults srv srv server_path server_path
+    set config [concat $defaults $overrides]
+    set srv [start_server [list overrides $config keep_persistence true]]
+    uplevel 1 $code
+    kill_server $srv
+}
+
 set server_path [tmpdir "server.rdb-encoding-test"]
 
 # Copy RDB with different encodings in server path
 exec cp tests/assets/encodings.rdb $server_path
+exec cp tests/assets/encodings-rdb987.rdb $server_path
 exec cp tests/assets/list-quicklist.rdb $server_path
 
 start_server [list overrides [list "dir" $server_path "dbfilename" "list-quicklist.rdb" save ""]] {
@@ -15,11 +27,7 @@ start_server [list overrides [list "dir" $server_path "dbfilename" "list-quickli
     } {7}
 }
 
-start_server [list overrides [list "dir" $server_path "dbfilename" "encodings.rdb"]] {
-  test "RDB encoding loading test" {
-    r select 0
-    csvdump r
-  } {"0","compressible","string","aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+set csv_dump {"0","compressible","string","aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 "0","hash","hash","a","1","aa","10","aaa","100","b","2","bb","20","bbb","200","c","3","cc","30","ccc","300","ddd","400","eee","5000000000",
 "0","hash_zipped","hash","a","1","b","2","c","3",
 "0","list","list","1","2","3","a","b","c","100000","6000000000","1","2","3","a","b","c","100000","6000000000","1","2","3","a","b","c","100000","6000000000",
@@ -33,6 +41,32 @@ start_server [list overrides [list "dir" $server_path "dbfilename" "encodings.rd
 "0","zset","zset","a","1","b","2","c","3","aa","10","bb","20","cc","30","aaa","100","bbb","200","ccc","300","aaaa","1000","cccc","123456789","bbbb","5000000000",
 "0","zset_zipped","zset","a","1","b","2","c","3",
 }
+
+start_server [list overrides [list "dir" $server_path "dbfilename" "encodings.rdb"]] {
+  test "RDB encoding loading test" {
+    r select 0
+    csvdump r
+  } $csv_dump
+}
+
+start_server_and_kill_it [list "dir" $server_path "dbfilename" "encodings-rdb987.rdb"] {
+    test "RDB future version loading, strict version check" {
+        wait_for_condition 50 100 {
+            [string match {*Fatal error loading*} \
+                 [exec tail -1 < [dict get $srv stdout]]]
+        } else {
+            fail "Server started even if RDB version check failed"
+        }
+    }
+}
+
+start_server [list overrides [list "dir" $server_path \
+                                  "dbfilename" "encodings-rdb987.rdb" \
+                                  "rdb-version-check" "relaxed"]] {
+    test "RDB future version loading, relaxed version check" {
+        r select 0
+        csvdump r
+    } $csv_dump
 }
 
 set server_path [tmpdir "server.rdb-startup-test"]
@@ -78,17 +112,6 @@ start_server [list overrides [list "dir" $server_path] keep_persistence true] {
     }
     # delete the stream, maybe valgrind will find something
     r del stream
-}
-
-# Helper function to start a server and kill it, just to check the error
-# logged.
-set defaults {}
-proc start_server_and_kill_it {overrides code} {
-    upvar defaults defaults srv srv server_path server_path
-    set config [concat $defaults $overrides]
-    set srv [start_server [list overrides $config keep_persistence true]]
-    uplevel 1 $code
-    kill_server $srv
 }
 
 # Make the RDB file unreadable
@@ -170,6 +193,64 @@ start_server {} {
         }
         assert_equal [s rdb_changes_since_last_save] 0
     }
+
+    test {bgsave cancel aborts save} {
+        r config set save ""
+        # Generating RDB will take some 100 seconds
+        r config set rdb-key-save-delay 1000000
+        populate 100 "" 16
+
+        r bgsave
+        wait_for_condition 50 100 {
+            [s rdb_bgsave_in_progress] == 1
+        } else {
+            fail "bgsave did not start in time"
+        }
+        set fork_child_pid [get_child_pid 0]
+        
+        assert {[r bgsave cancel] eq {Background saving cancelled}}
+        set temp_rdb [file join [lindex [r config get dir] 1] temp-${fork_child_pid}.rdb]
+        # Temp rdb must be deleted
+        wait_for_condition 50 100 {
+            ![file exists $temp_rdb]
+        } else {
+            fail "bgsave temp file was not deleted after cancel"
+        }
+
+         # Make sure no save is running and that bgsave return an error
+         wait_for_condition 50 100 {
+            [s rdb_bgsave_in_progress] == 0
+        } else {
+            fail "bgsave is currently running"
+        }
+        assert_error "ERR Background saving is currently not in progress or scheduled" {r bgsave cancel}
+    }
+
+    test {bgsave cancel schedulled request} {
+        r config set save ""
+        # Generating RDB will take some 100 seconds
+        r config set rdb-key-save-delay 1000000
+        populate 100 "" 16
+
+        # start a long AOF child
+        r bgrewriteaof
+        wait_for_condition 50 100 {
+            [s aof_rewrite_in_progress] == 1
+        } else {
+            fail "aof not started"
+        }
+        
+        # Make sure cancel return valid status
+        assert {[r bgsave schedule] eq {Background saving scheduled}}
+
+        # Cancel the scheduled save
+        assert {[r bgsave cancel] eq {Scheduled background saving cancelled}}
+
+        # Make sure a second call to bgsave cancel return an error
+        assert_error "ERR Background saving is currently not in progress or scheduled" {r bgsave cancel}
+    }
+
+
 }
 
 test {client freed during loading} {

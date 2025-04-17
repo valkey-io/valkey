@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009-2012, Salvatore Sanfilippo <antirez at gmail dot com>
+ * Copyright (c) 2009-2012, Redis Ltd.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -471,7 +471,7 @@ void pushGenericCommand(client *c, int where, int xx) {
         }
 
         lobj = createListListpackObject();
-        dbAdd(c->db, c->argv[1], lobj);
+        dbAdd(c->db, c->argv[1], &lobj);
     }
 
     listTypeTryConversionAppend(lobj, c->argv, 2, c->argc - 1, NULL, NULL);
@@ -650,8 +650,10 @@ void listPopRangeAndReplyWithKey(client *c, robj *o, robj *key, int where, long 
  * Note that the purpose is to make the methods small so that the
  * code in the loop can be inlined better to improve performance. */
 void addListQuicklistRangeReply(client *c, robj *o, int from, int rangelen, int reverse) {
+    writePreparedClient *wpc = prepareClientForFutureWrites(c);
+    if (!wpc) return;
     /* Return the result in form of a multi-bulk reply */
-    addReplyArrayLen(c, rangelen);
+    addWritePreparedReplyArrayLen(wpc, rangelen);
 
     int direction = reverse ? AL_START_TAIL : AL_START_HEAD;
     quicklistIter *iter = quicklistGetIteratorAtIdx(o->ptr, direction, from);
@@ -659,9 +661,9 @@ void addListQuicklistRangeReply(client *c, robj *o, int from, int rangelen, int 
         quicklistEntry qe;
         serverAssert(quicklistNext(iter, &qe)); /* fail on corrupt data */
         if (qe.value) {
-            addReplyBulkCBuffer(c, qe.value, qe.sz);
+            addWritePreparedReplyBulkCBuffer(wpc, qe.value, qe.sz);
         } else {
-            addReplyBulkLongLong(c, qe.longval);
+            addWritePreparedReplyBulkLongLong(wpc, qe.longval);
         }
     }
     quicklistReleaseIterator(iter);
@@ -671,21 +673,22 @@ void addListQuicklistRangeReply(client *c, robj *o, int from, int rangelen, int 
  * Note that the purpose is to make the methods small so that the
  * code in the loop can be inlined better to improve performance. */
 void addListListpackRangeReply(client *c, robj *o, int from, int rangelen, int reverse) {
+    writePreparedClient *wpc = prepareClientForFutureWrites(c);
+    if (!wpc) return;
+    /* Return the result in form of a multi-bulk reply */
+    addWritePreparedReplyArrayLen(wpc, rangelen);
     unsigned char *p = lpSeek(o->ptr, from);
     unsigned char *vstr;
     unsigned int vlen;
     long long lval;
 
-    /* Return the result in form of a multi-bulk reply */
-    addReplyArrayLen(c, rangelen);
-
     while (rangelen--) {
         serverAssert(p); /* fail on corrupt data */
         vstr = lpGetValue(p, &vlen, &lval);
         if (vstr) {
-            addReplyBulkCBuffer(c, vstr, vlen);
+            addWritePreparedReplyBulkCBuffer(wpc, vstr, vlen);
         } else {
-            addReplyBulkLongLong(c, lval);
+            addWritePreparedReplyBulkLongLong(wpc, lval);
         }
         p = reverse ? lpPrev(o->ptr, p) : lpNext(o->ptr, p);
     }
@@ -1065,7 +1068,7 @@ void lmoveHandlePush(client *c, robj *dstkey, robj *dstobj, robj *value, int whe
     /* Create the list if the key does not exist */
     if (!dstobj) {
         dstobj = createListListpackObject();
-        dbAdd(c->db, dstkey, dstobj);
+        dbAdd(c->db, dstkey, &dstobj);
     }
     listTypeTryConversionAppend(dstobj, &value, 0, 0, NULL, NULL);
     listTypePush(dstobj, value, where);

@@ -11,6 +11,9 @@
             "REQUEST_POLICY:ALL_SHARDS",
             "RESPONSE_POLICY:ALL_SUCCEEDED"
         ],
+        "command_flags": [
+            "LOADING"
+        ],
         "reply_schema": {
             "const": "OK"
         }

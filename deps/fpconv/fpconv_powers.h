@@ -6,7 +6,7 @@
  * [1] https://www.cs.tufts.edu/~nr/cs257/archive/florian-loitsch/printf.pdf
  * ----------------------------------------------------------------------------
  *
- * Copyright (c) 2021, Redis Labs
+ * Copyright (c) 2021, Redis Ltd.
  * Copyright (c) 2013-2019, night-shift <as.smljk at gmail dot com>
  * Copyright (c) 2009, Florian Loitsch < florian.loitsch at inria dot fr >
  * All rights reserved.

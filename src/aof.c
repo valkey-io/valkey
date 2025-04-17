@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009-2012, Salvatore Sanfilippo <antirez at gmail dot com>
+ * Copyright (c) 2009-2012, Redis Ltd.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -31,6 +31,7 @@
 #include "bio.h"
 #include "rio.h"
 #include "functions.h"
+#include "module.h"
 
 #include <signal.h>
 #include <fcntl.h>
@@ -423,7 +424,7 @@ void aofManifestFreeAndUpdate(aofManifest *am) {
  *  appendonly.aof.1.base.aof  (server.aof_use_rdb_preamble is no)
  *  appendonly.aof.1.base.rdb  (server.aof_use_rdb_preamble is yes)
  */
-sds getNewBaseFileNameAndMarkPreAsHistory(aofManifest *am) {
+sds getNewBaseFileNameAndMarkPreAsHistory(aofManifest *am, int aof_use_rdb_preamble) {
     serverAssert(am != NULL);
     if (am->base_aof_info) {
         serverAssert(am->base_aof_info->file_type == AOF_FILE_TYPE_BASE);
@@ -431,7 +432,7 @@ sds getNewBaseFileNameAndMarkPreAsHistory(aofManifest *am) {
         listAddNodeHead(am->history_aof_list, am->base_aof_info);
     }
 
-    char *format_suffix = server.aof_use_rdb_preamble ? RDB_FORMAT_SUFFIX : AOF_FORMAT_SUFFIX;
+    char *format_suffix = aof_use_rdb_preamble ? RDB_FORMAT_SUFFIX : AOF_FORMAT_SUFFIX;
 
     aofInfo *ai = aofInfoCreate();
     ai->file_name = sdscatprintf(sdsempty(), "%s.%lld%s%s", server.aof_filename, ++am->curr_base_file_seq,
@@ -476,7 +477,7 @@ sds getLastIncrAofName(aofManifest *am) {
     }
 
     /* Or return the last one. */
-    listNode *lastnode = listIndex(am->incr_aof_list, -1);
+    listNode *lastnode = listLast(am->incr_aof_list);
     aofInfo *ai = listNodeValue(lastnode);
     return ai->file_name;
 }
@@ -712,7 +713,7 @@ void aofOpenIfNeededOnServerStart(void) {
     /* If we start with an empty dataset, we will force create a BASE file. */
     size_t incr_aof_len = listLength(server.aof_manifest->incr_aof_list);
     if (!server.aof_manifest->base_aof_info && !incr_aof_len) {
-        sds base_name = getNewBaseFileNameAndMarkPreAsHistory(server.aof_manifest);
+        sds base_name = getNewBaseFileNameAndMarkPreAsHistory(server.aof_manifest, server.aof_use_rdb_preamble);
         sds base_filepath = makePath(server.aof_dirname, base_name);
         if (rewriteAppendOnlyFile(base_filepath) != C_OK) {
             exit(1);
@@ -931,18 +932,23 @@ void killAppendOnlyChild(void) {
  * at runtime using the CONFIG command. */
 void stopAppendOnly(void) {
     serverAssert(server.aof_state != AOF_OFF);
-    flushAppendOnlyFile(1);
-    if (valkey_fsync(server.aof_fd) == -1) {
-        serverLog(LL_WARNING, "Fail to fsync the AOF file: %s", strerror(errno));
-    } else {
-        server.aof_last_fsync = server.mstime;
+    if (server.aof_fd != -1) {
+        flushAppendOnlyFile(1);
+        if (valkey_fsync(server.aof_fd) == -1) {
+            serverLog(LL_WARNING, "Fail to fsync the AOF file: %s", strerror(errno));
+        } else {
+            server.aof_last_fsync = server.mstime;
+        }
+        close(server.aof_fd);
     }
-    close(server.aof_fd);
 
     server.aof_fd = -1;
     server.aof_selected_db = -1;
     server.aof_state = AOF_OFF;
-    server.aof_rewrite_scheduled = 0;
+    if (server.aof_rewrite_scheduled) {
+        server.aof_rewrite_scheduled = 0;
+        serverLog(LL_NOTICE, "AOF was disabled but there is a scheduled AOF background, cancel it.");
+    }
     server.aof_last_incr_size = 0;
     server.aof_last_incr_fsync_offset = 0;
     server.fsynced_reploff = -1;
@@ -1366,10 +1372,12 @@ struct client *createAOFClient(void) {
      */
     c->raw_flag = 0;
     c->flag.deny_blocking = 1;
+    c->flag.fake = 1;
 
     /* We set the fake client as a replica waiting for the synchronization
      * so that the server will not try to send replies to this client. */
-    c->repl_state = REPLICA_STATE_WAIT_BGSAVE_START;
+    initClientReplicationData(c);
+    c->repl_data->repl_state = REPLICA_STATE_WAIT_BGSAVE_START;
     return c;
 }
 
@@ -1524,10 +1532,11 @@ int loadSingleAppendOnlyFile(char *filename) {
         }
 
         /* Command lookup */
-        cmd = lookupCommand(argv, argc);
-        if (!cmd) {
-            serverLog(LL_WARNING, "Unknown command '%s' reading the append only file %s", (char *)argv[0]->ptr,
-                      filename);
+        sds err = NULL;
+        fakeClient->cmd = fakeClient->lastcmd = cmd = lookupCommand(argv, argc);
+        if ((!cmd && !commandCheckExistence(fakeClient, &err)) || (cmd && !commandCheckArity(cmd, argc, &err))) {
+            serverLog(LL_WARNING, "Error reading the append only file %s, error: %s", filename, err);
+            sdsfree(err);
             freeClientArgv(fakeClient);
             ret = AOF_FAILED;
             goto cleanup;
@@ -1536,7 +1545,6 @@ int loadSingleAppendOnlyFile(char *filename) {
         if (cmd->proc == multiCommand) valid_before_multi = valid_up_to;
 
         /* Run the command in the context of a fake client */
-        fakeClient->cmd = fakeClient->lastcmd = cmd;
         if (fakeClient->flag.multi && fakeClient->cmd->proc != execCommand) {
             /* Note: we don't have to attempt calling evalGetCommandFlags,
              * since this is AOF, the checks in processCommand are not made
@@ -1882,30 +1890,29 @@ int rewriteSortedSetObject(rio *r, robj *key, robj *o) {
         }
     } else if (o->encoding == OBJ_ENCODING_SKIPLIST) {
         zset *zs = o->ptr;
-        dictIterator *di = dictGetIterator(zs->dict);
-        dictEntry *de;
-
-        while ((de = dictNext(di)) != NULL) {
-            sds ele = dictGetKey(de);
-            double *score = dictGetVal(de);
-
+        hashtableIterator iter;
+        hashtableInitIterator(&iter, zs->ht, 0);
+        void *next;
+        while (hashtableNext(&iter, &next)) {
+            zskiplistNode *node = next;
             if (count == 0) {
                 int cmd_items = (items > AOF_REWRITE_ITEMS_PER_CMD) ? AOF_REWRITE_ITEMS_PER_CMD : items;
 
                 if (!rioWriteBulkCount(r, '*', 2 + cmd_items * 2) || !rioWriteBulkString(r, "ZADD", 4) ||
                     !rioWriteBulkObject(r, key)) {
-                    dictReleaseIterator(di);
+                    hashtableResetIterator(&iter);
                     return 0;
                 }
             }
-            if (!rioWriteBulkDouble(r, *score) || !rioWriteBulkString(r, ele, sdslen(ele))) {
-                dictReleaseIterator(di);
+            sds ele = node->ele;
+            if (!rioWriteBulkDouble(r, node->score) || !rioWriteBulkString(r, ele, sdslen(ele))) {
+                hashtableResetIterator(&iter);
                 return 0;
             }
             if (++count == AOF_REWRITE_ITEMS_PER_CMD) count = 0;
             items--;
         }
-        dictReleaseIterator(di);
+        hashtableResetIterator(&iter);
     } else {
         serverPanic("Unknown sorted zset encoding");
     }
@@ -1915,7 +1922,7 @@ int rewriteSortedSetObject(rio *r, robj *key, robj *o) {
 /* Write either the key or the value of the currently selected item of a hash.
  * The 'hi' argument passes a valid hash iterator.
  * The 'what' filed specifies if to write a key or a value and can be
- * either OBJ_HASH_KEY or OBJ_HASH_VALUE.
+ * either OBJ_HASH_FIELD or OBJ_HASH_VALUE.
  *
  * The function returns 0 on error, non-zero on success. */
 static int rioWriteHashIteratorCursor(rio *r, hashTypeIterator *hi, int what) {
@@ -1929,7 +1936,7 @@ static int rioWriteHashIteratorCursor(rio *r, hashTypeIterator *hi, int what) {
             return rioWriteBulkString(r, (char *)vstr, vlen);
         else
             return rioWriteBulkLongLong(r, vll);
-    } else if (hi->encoding == OBJ_ENCODING_HT) {
+    } else if (hi->encoding == OBJ_ENCODING_HASHTABLE) {
         sds value = hashTypeCurrentFromHashTable(hi, what);
         return rioWriteBulkString(r, value, sdslen(value));
     }
@@ -1941,30 +1948,30 @@ static int rioWriteHashIteratorCursor(rio *r, hashTypeIterator *hi, int what) {
 /* Emit the commands needed to rebuild a hash object.
  * The function returns 0 on error, 1 on success. */
 int rewriteHashObject(rio *r, robj *key, robj *o) {
-    hashTypeIterator *hi;
+    hashTypeIterator hi;
     long long count = 0, items = hashTypeLength(o);
 
-    hi = hashTypeInitIterator(o);
-    while (hashTypeNext(hi) != C_ERR) {
+    hashTypeInitIterator(o, &hi);
+    while (hashTypeNext(&hi) != C_ERR) {
         if (count == 0) {
             int cmd_items = (items > AOF_REWRITE_ITEMS_PER_CMD) ? AOF_REWRITE_ITEMS_PER_CMD : items;
 
             if (!rioWriteBulkCount(r, '*', 2 + cmd_items * 2) || !rioWriteBulkString(r, "HMSET", 5) ||
                 !rioWriteBulkObject(r, key)) {
-                hashTypeReleaseIterator(hi);
+                hashTypeResetIterator(&hi);
                 return 0;
             }
         }
 
-        if (!rioWriteHashIteratorCursor(r, hi, OBJ_HASH_KEY) || !rioWriteHashIteratorCursor(r, hi, OBJ_HASH_VALUE)) {
-            hashTypeReleaseIterator(hi);
+        if (!rioWriteHashIteratorCursor(r, &hi, OBJ_HASH_FIELD) || !rioWriteHashIteratorCursor(r, &hi, OBJ_HASH_VALUE)) {
+            hashTypeResetIterator(&hi);
             return 0;
         }
         if (++count == AOF_REWRITE_ITEMS_PER_CMD) count = 0;
         items--;
     }
 
-    hashTypeReleaseIterator(hi);
+    hashTypeResetIterator(&hi);
 
     return 1;
 }
@@ -2155,7 +2162,7 @@ int rewriteModuleObject(rio *r, robj *key, robj *o, int dbid) {
     ValkeyModuleIO io;
     moduleValue *mv = o->ptr;
     moduleType *mt = mv->type;
-    moduleInitIOContext(io, mt, r, key, dbid);
+    moduleInitIOContext(&io, mt, r, key, dbid);
     mt->aof_rewrite(&io, key, mv->value);
     if (io.ctx) {
         moduleFreeContext(io.ctx);
@@ -2184,7 +2191,6 @@ werr:
 }
 
 int rewriteAppendOnlyFileRio(rio *aof) {
-    dictEntry *de;
     int j;
     long key_count = 0;
     long long updated_time = 0;
@@ -2211,19 +2217,20 @@ int rewriteAppendOnlyFileRio(rio *aof) {
         if (rioWrite(aof, selectcmd, sizeof(selectcmd) - 1) == 0) goto werr;
         if (rioWriteBulkLongLong(aof, j) == 0) goto werr;
 
-        kvs_it = kvstoreIteratorInit(db->keys);
+        kvs_it = kvstoreIteratorInit(db->keys, HASHTABLE_ITER_SAFE | HASHTABLE_ITER_PREFETCH_VALUES);
         /* Iterate this DB writing every entry */
-        while ((de = kvstoreIteratorNext(kvs_it)) != NULL) {
+        void *next;
+        while (kvstoreIteratorNext(kvs_it, &next)) {
+            robj *o = next;
             sds keystr;
-            robj key, *o;
+            robj key;
             long long expiretime;
             size_t aof_bytes_before_key = aof->processed_bytes;
 
-            keystr = dictGetKey(de);
-            o = dictGetVal(de);
+            keystr = objectGetKey(o);
             initStaticStringObject(key, keystr);
 
-            expiretime = getExpire(db, &key);
+            expiretime = objectGetExpire(o);
 
             /* Save the key and associated value */
             if (o->type == OBJ_STRING) {
@@ -2440,6 +2447,7 @@ int rewriteAppendOnlyFileBackground(void) {
         serverLog(LL_NOTICE, "Background append only file rewriting started by pid %ld", (long)childpid);
         server.aof_rewrite_scheduled = 0;
         server.aof_rewrite_time_start = time(NULL);
+        server.aof_rewrite_use_rdb_preamble = server.aof_use_rdb_preamble;
         return C_OK;
     }
     return C_OK; /* unreached */
@@ -2453,6 +2461,7 @@ void bgrewriteaofCommand(client *c) {
         /* When manually triggering AOFRW we reset the count
          * so that it can be executed immediately. */
         server.stat_aofrw_consecutive_failures = 0;
+        serverLog(LL_NOTICE, "Background append only file rewriting scheduled.");
         addReplyStatus(c, "Background append only file rewriting scheduled");
     } else if (rewriteAppendOnlyFileBackground() == C_OK) {
         addReplyStatus(c, "Background append only file rewriting started");
@@ -2551,7 +2560,7 @@ void backgroundRewriteDoneHandler(int exitcode, int bysignal) {
 
         /* Get a new BASE file name and mark the previous (if we have)
          * as the HISTORY type. */
-        sds new_base_filename = getNewBaseFileNameAndMarkPreAsHistory(temp_am);
+        sds new_base_filename = getNewBaseFileNameAndMarkPreAsHistory(temp_am, server.aof_rewrite_use_rdb_preamble);
         serverAssert(new_base_filename != NULL);
         new_base_filepath = makePath(server.aof_dirname, new_base_filename);
 

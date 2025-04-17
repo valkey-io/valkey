@@ -112,7 +112,7 @@ jobs:
         run: $GITHUB_WORKSPACE/test.sh
 
   freebsd:
-    runs-on: macos-12
+    runs-on: macos-13
     name:  FreeBSD
     steps:
       - uses: actions/checkout@v3

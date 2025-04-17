@@ -1,5 +1,5 @@
 # Valkey Makefile
-# Copyright (C) 2009 Salvatore Sanfilippo <antirez at gmail dot com>
+# Copyright (C) 2009 Redis Ltd.
 # This file is released under the BSD license, see the COPYING file
 #
 # The Makefile composes the final FINAL_CFLAGS and FINAL_LDFLAGS using
@@ -25,7 +25,7 @@ ifeq ($(OPTIMIZATION),-O3)
 	ifeq (clang,$(CLANG))
 		OPTIMIZATION+=-flto
 	else
-		OPTIMIZATION+=-flto=auto
+		OPTIMIZATION+=-flto=auto -ffat-lto-objects
 	endif
 endif
 ifneq ($(OPTIMIZATION),-O0)
@@ -98,15 +98,6 @@ ifeq ($(USE_JEMALLOC),no)
 	MALLOC=libc
 endif
 
-# Some unit tests compile files a second time to get access to static functions, the "--allow-multiple-definition" flag
-# allows us to do that without an error, by using the first instance of function. This behavior can also be used
-# to tweak behavior of code just for unit tests. The version of ld on MacOS apparently always does this.
-ifneq ($(uname_S),Darwin)
-	ALLOW_DUPLICATE_FLAG=-Wl,--allow-multiple-definition
-else
-	ALLOW_DUPLICATE_FLAG=
-endif
-
 ifdef SANITIZER
 ifeq ($(SANITIZER),address)
 	MALLOC=libc
@@ -139,10 +130,12 @@ ifdef REDIS_LDFLAGS
     SERVER_LDFLAGS := $(REDIS_LDFLAGS)
 endif
 
-FINAL_CFLAGS=$(STD) $(WARN) $(OPT) $(DEBUG) $(CFLAGS) $(SERVER_CFLAGS)
-ifeq ($(SERVER_TEST),yes)
-	FINAL_CFLAGS +=-DSERVER_TEST=1
+# Special case of forcing defrag to run even though we have no Jemlloc support
+ifeq ($(DEBUG_FORCE_DEFRAG), yes)
+	SERVER_CFLAGS +=-DHAVE_DEFRAG -DDEBUG_FORCE_DEFRAG
 endif
+
+FINAL_CFLAGS=$(STD) $(WARN) $(OPT) $(DEBUG) $(CFLAGS) $(SERVER_CFLAGS)
 FINAL_LDFLAGS=$(LDFLAGS) $(OPT) $(SERVER_LDFLAGS) $(DEBUG)
 FINAL_LIBS=-lm
 DEBUG=-g -ggdb
@@ -337,26 +330,26 @@ ifeq ($(BUILD_TLS),module)
 	TLS_MODULE_CFLAGS+=-DUSE_OPENSSL=$(BUILD_MODULE) $(OPENSSL_CFLAGS) -DBUILD_TLS_MODULE=$(BUILD_MODULE)
 endif
 
-BUILD_RDMA:=no
-RDMA_MODULE=
-RDMA_MODULE_NAME:=valkey-rdma$(PROG_SUFFIX).so
-RDMA_MODULE_CFLAGS:=$(FINAL_CFLAGS)
-ifeq ($(BUILD_RDMA),module)
-	FINAL_CFLAGS+=-DUSE_RDMA=$(BUILD_MODULE)
-	RDMA_PKGCONFIG := $(shell $(PKG_CONFIG) --exists librdmacm libibverbs && echo $$?)
+RDMA_LIBS=
+RDMA_PKGCONFIG := $(shell $(PKG_CONFIG) --exists librdmacm libibverbs && echo $$?)
 ifeq ($(RDMA_PKGCONFIG),0)
 	RDMA_LIBS=$(shell $(PKG_CONFIG) --libs librdmacm libibverbs)
 else
 	RDMA_LIBS=-lrdmacm -libverbs
 endif
-	RDMA_MODULE=$(RDMA_MODULE_NAME)
-	RDMA_MODULE_CFLAGS+=-DUSE_RDMA=$(BUILD_YES) -DBUILD_RDMA_MODULE $(RDMA_LIBS)
-else
-ifeq ($(BUILD_RDMA),no)
-    # disable RDMA, do nothing
-else
-    $(error "RDMA is only supported as module (BUILD_RDMA=module), or disabled (BUILD_RDMA=no)")
+
+ifeq ($(BUILD_RDMA),yes)
+	FINAL_CFLAGS+=-DUSE_RDMA=$(BUILD_YES) -DBUILD_RDMA_MODULE=$(BUILD_NO)
+	FINAL_LIBS += $(RDMA_LIBS)
 endif
+
+RDMA_MODULE=
+RDMA_MODULE_NAME:=valkey-rdma$(PROG_SUFFIX).so
+RDMA_MODULE_CFLAGS:=$(FINAL_CFLAGS)
+ifeq ($(BUILD_RDMA),module)
+	FINAL_CFLAGS+=-DUSE_RDMA=$(BUILD_MODULE)
+	RDMA_MODULE=$(RDMA_MODULE_NAME)
+	RDMA_MODULE_CFLAGS+=-DUSE_RDMA=$(BUILD_MODULE) -DBUILD_RDMA_MODULE=$(BUILD_MODULE) $(RDMA_LIBS)
 endif
 
 ifndef V
@@ -381,7 +374,7 @@ else
     endef
 endif
 
-# Determine install/uninstall Redis symlinks for compatibility when 
+# Determine install/uninstall Redis symlinks for compatibility when
 # installing/uninstalling Valkey binaries (defaulting to `yes`)
 USE_REDIS_SYMLINKS?=yes
 ifeq ($(USE_REDIS_SYMLINKS),yes)
@@ -423,7 +416,7 @@ endif
 ENGINE_NAME=valkey
 SERVER_NAME=$(ENGINE_NAME)-server$(PROG_SUFFIX)
 ENGINE_SENTINEL_NAME=$(ENGINE_NAME)-sentinel$(PROG_SUFFIX)
-ENGINE_SERVER_OBJ=threads_mngr.o adlist.o quicklist.o ae.o anet.o dict.o kvstore.o server.o sds.o zmalloc.o lzf_c.o lzf_d.o pqsort.o zipmap.o sha1.o ziplist.o release.o io_threads.o networking.o util.o object.o db.o replication.o rdb.o t_string.o t_list.o t_set.o t_zset.o t_hash.o config.o aof.o pubsub.o multi.o debug.o sort.o intset.o syncio.o cluster.o cluster_legacy.o cluster_slot_stats.o crc16.o endianconv.o slowlog.o eval.o bio.o rio.o rand.o memtest.o syscheck.o crcspeed.o crccombine.o crc64.o bitops.o sentinel.o notify.o setproctitle.o blocked.o hyperloglog.o latency.o sparkline.o valkey-check-rdb.o valkey-check-aof.o geo.o lazyfree.o module.o evict.o expire.o geohash.o geohash_helper.o childinfo.o defrag.o siphash.o rax.o t_stream.o listpack.o localtime.o lolwut.o lolwut5.o lolwut6.o acl.o tracking.o socket.o tls.o sha256.o timeout.o setcpuaffinity.o monotonic.o mt19937-64.o resp_parser.o call_reply.o script_lua.o script.o functions.o function_lua.o commands.o strl.o connection.o unix.o logreqres.o
+ENGINE_SERVER_OBJ=threads_mngr.o adlist.o quicklist.o ae.o anet.o dict.o hashtable.o kvstore.o server.o sds.o zmalloc.o lzf_c.o lzf_d.o pqsort.o zipmap.o sha1.o ziplist.o release.o memory_prefetch.o io_threads.o networking.o util.o object.o db.o replication.o rdb.o t_string.o t_list.o t_set.o t_zset.o t_hash.o config.o aof.o pubsub.o multi.o debug.o sort.o intset.o syncio.o cluster.o cluster_legacy.o cluster_slot_stats.o crc16.o endianconv.o commandlog.o eval.o bio.o rio.o rand.o memtest.o syscheck.o crcspeed.o crccombine.o crc64.o bitops.o sentinel.o notify.o setproctitle.o blocked.o hyperloglog.o latency.o sparkline.o valkey-check-rdb.o valkey-check-aof.o geo.o lazyfree.o module.o evict.o expire.o geohash.o geohash_helper.o childinfo.o allocator_defrag.o defrag.o siphash.o rax.o t_stream.o listpack.o localtime.o lolwut.o lolwut5.o lolwut6.o acl.o tracking.o socket.o tls.o sha256.o timeout.o setcpuaffinity.o monotonic.o mt19937-64.o resp_parser.o call_reply.o script.o functions.o commands.o strl.o connection.o unix.o logreqres.o rdma.o scripting_engine.o lua/script_lua.o lua/function_lua.o lua/engine_lua.o lua/debug_lua.o
 ENGINE_CLI_NAME=$(ENGINE_NAME)-cli$(PROG_SUFFIX)
 ENGINE_CLI_OBJ=anet.o adlist.o dict.o valkey-cli.o zmalloc.o release.o ae.o serverassert.o crcspeed.o crccombine.o crc64.o siphash.o crc16.o monotonic.o cli_common.o mt19937-64.o strl.o cli_commands.o
 ENGINE_BENCHMARK_NAME=$(ENGINE_NAME)-benchmark$(PROG_SUFFIX)
@@ -435,6 +428,17 @@ ENGINE_TEST_FILES:=$(wildcard unit/*.c)
 ENGINE_TEST_OBJ:=$(sort $(patsubst unit/%.c,unit/%.o,$(ENGINE_TEST_FILES)))
 ENGINE_UNIT_TESTS:=$(ENGINE_NAME)-unit-tests$(PROG_SUFFIX)
 ALL_SOURCES=$(sort $(patsubst %.o,%.c,$(ENGINE_SERVER_OBJ) $(ENGINE_CLI_OBJ) $(ENGINE_BENCHMARK_OBJ)))
+
+USE_FAST_FLOAT?=no
+ifeq ($(USE_FAST_FLOAT),yes)
+	# valkey_strtod.h uses this flag to switch valkey_strtod function to fast_float_strtod,
+	# therefore let's pass it to compiler for preprocessing.
+	FINAL_CFLAGS += -D USE_FAST_FLOAT
+	# next, let's build and add actual library containing fast_float_strtod function for linking.
+	DEPENDENCY_TARGETS += fast_float_c_interface
+	FAST_FLOAT_STRTOD_OBJECT := ../deps/fast_float_c_interface/fast_float_strtod.o
+	FINAL_LIBS += $(FAST_FLOAT_STRTOD_OBJECT)
+endif
 
 all: $(SERVER_NAME) $(ENGINE_SENTINEL_NAME) $(ENGINE_CLI_NAME) $(ENGINE_BENCHMARK_NAME) $(ENGINE_CHECK_RDB_NAME) $(ENGINE_CHECK_AOF_NAME) $(TLS_MODULE) $(RDMA_MODULE)
 	@echo ""
@@ -494,7 +498,7 @@ $(ENGINE_LIB_NAME): $(ENGINE_SERVER_OBJ)
 
 # valkey-unit-tests
 $(ENGINE_UNIT_TESTS): $(ENGINE_TEST_OBJ) $(ENGINE_LIB_NAME)
-	$(SERVER_LD) $(ALLOW_DUPLICATE_FLAG) -o $@ $^ ../deps/hiredis/libhiredis.a ../deps/lua/src/liblua.a ../deps/hdr_histogram/libhdrhistogram.a ../deps/fpconv/libfpconv.a $(FINAL_LIBS)
+	$(SERVER_LD) -o $@ $^ ../deps/hiredis/libhiredis.a ../deps/lua/src/liblua.a ../deps/hdr_histogram/libhdrhistogram.a ../deps/fpconv/libfpconv.a $(FINAL_LIBS)
 
 # valkey-sentinel
 $(ENGINE_SENTINEL_NAME): $(SERVER_NAME)
@@ -513,7 +517,7 @@ $(TLS_MODULE_NAME): $(SERVER_NAME)
 	$(QUIET_CC)$(CC) -o $@ tls.c -shared -fPIC $(TLS_MODULE_CFLAGS) $(TLS_CLIENT_LIBS)
 
 # valkey-rdma.so
-$(RDMA_MODULE_NAME): $(REDIS_SERVER_NAME)
+$(RDMA_MODULE_NAME): $(SERVER_NAME)
 	$(QUIET_CC)$(CC) -o $@ rdma.c -shared -fPIC $(RDMA_MODULE_CFLAGS)
 
 # valkey-cli
@@ -531,6 +535,9 @@ DEP = $(ENGINE_SERVER_OBJ:%.o=%.d) $(ENGINE_CLI_OBJ:%.o=%.d) $(ENGINE_BENCHMARK_
 # building it should complete before building any other object. Instead of
 # depending on a single artifact, build all dependencies first.
 %.o: %.c .make-prerequisites
+	$(SERVER_CC) -MMD -o $@ -c $<
+
+lua/%.o: lua/%.c .make-prerequisites
 	$(SERVER_CC) -MMD -o $@ -c $<
 
 unit/%.o: unit/%.c .make-prerequisites
@@ -556,7 +563,7 @@ endif
 commands.c: $(COMMANDS_DEF_FILENAME).def
 
 clean:
-	rm -rf $(SERVER_NAME) $(ENGINE_SENTINEL_NAME) $(ENGINE_CLI_NAME) $(ENGINE_BENCHMARK_NAME) $(ENGINE_CHECK_RDB_NAME) $(ENGINE_CHECK_AOF_NAME) $(ENGINE_UNIT_TESTS) $(ENGINE_LIB_NAME) unit/*.o unit/*.d *.o *.gcda *.gcno *.gcov valkey.info lcov-html Makefile.dep *.so
+	rm -rf $(SERVER_NAME) $(ENGINE_SENTINEL_NAME) $(ENGINE_CLI_NAME) $(ENGINE_BENCHMARK_NAME) $(ENGINE_CHECK_RDB_NAME) $(ENGINE_CHECK_AOF_NAME) $(ENGINE_UNIT_TESTS) $(ENGINE_LIB_NAME) unit/*.o unit/*.d lua/*.o lua/*.d *.o *.gcda *.gcno *.gcov valkey.info lcov-html Makefile.dep *.so
 	rm -f $(DEP)
 
 .PHONY: clean
@@ -600,7 +607,7 @@ bench: $(ENGINE_BENCHMARK_NAME)
 
 32bit:
 	@echo ""
-	@echo "WARNING: if it fails under Linux you probably need to install libc6-dev-i386"
+	@echo "WARNING: if it fails under Linux you probably need to install libc6-dev-i386 and libstdc++-11-dev-i386-cross"
 	@echo ""
 	$(MAKE) all-with-unit-tests CFLAGS="-m32" LDFLAGS="-m32"
 

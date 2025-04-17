@@ -6,6 +6,7 @@ should be provided by the operating system.
 * **linenoise** is a readline replacement. It is developed by the same authors of Valkey but is managed as a separated project and updated as needed.
 * **lua** is Lua 5.1 with minor changes for security and additional libraries.
 * **hdr_histogram** Used for per-command latency tracking histograms.
+* **fast_float** is a replacement for strtod to convert strings to floats efficiently. 
 
 How to upgrade the above dependencies
 ===
@@ -94,6 +95,7 @@ and our version:
 1. Makefile is modified to allow a different compiler than GCC.
 2. We have the implementation source code, and directly link to the following external libraries: `lua_cjson.o`, `lua_struct.o`, `lua_cmsgpack.o` and `lua_bit.o`.
 3. There is a security fix in `ldo.c`, line 498: The check for `LUA_SIGNATURE[0]` is removed in order to avoid direct bytecode execution.
+4. In `lstring.c`, the luaS_newlstr function's hash calculation has been upgraded from a simple hash function to MurmurHash3, implemented within the same file, to enhance performance, particularly for operations involving large strings.
 
 Hdr_Histogram
 ---
@@ -104,3 +106,17 @@ We use a customized version based on master branch commit e4448cf6d1cd08fff51981
 2. Copy updated files from newer version onto files in /hdr_histogram.
 3. Apply the changes from 1 above to the updated files.
 
+fast_float
+---
+The fast_float library provides fast header-only implementations for the C++ from_chars functions for `float` and `double` types as well as integer types.  These functions convert ASCII strings representing decimal values (e.g., `1.3e10`) into binary types. The functions are much faster than comparable number-parsing functions from existing C++ standard libraries.
+
+Specifically, `fast_float` provides the following function to parse floating-point numbers with a C++17-like syntax (the library itself only requires C++11):
+
+    template <typename T, typename UC = char, typename = FASTFLOAT_ENABLE_IF(is_supported_float_type<T>())>
+    from_chars_result_t<UC> from_chars(UC const *first, UC const *last, T &value, chars_format fmt = chars_format::general);
+
+To upgrade the library,
+1. Check out https://github.com/fastfloat/fast_float/tree/main
+2. cd fast_float
+3. Invoke "python3 ./script/amalgamate.py --output fast_float.h"
+4. Copy fast_float.h file to "deps/fast_float/".

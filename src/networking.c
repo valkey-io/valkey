@@ -473,7 +473,7 @@ void _addReplyToBufferOrList(client *c, const char *s, size_t len) {
      * The check for executing_client also avoids affecting push messages that are part of eviction.
      * Check CLIENT_PUSHING first to avoid race conditions, as it's absent in module's fake client. */
     int defer_push_message = c->flag.pushing && c == server.current_client && server.executing_client &&
-        !cmdHasPushAsReply(server.executing_client->cmd);
+                             !cmdHasPushAsReply(server.executing_client->cmd);
     if (defer_push_message == 0 && isDeferredReplyEnabled(c)) {
         _addReplyProtoToList(c, c->deferred_reply, s, len);
         return;

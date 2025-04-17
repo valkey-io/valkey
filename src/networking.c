@@ -3275,7 +3275,7 @@ void readToQueryBuf(client *c) {
  */
 int shouldRepeatRead(client *c, int iteration) {
     // If the client is not a primary replica, is closing, or flow control is disabled, no more reads.
-    if (!(c->flag.primary) || c->flag.close_asap || !server.repl_flow_control_enabled) {
+    if (!(c->flag.primary) || c->flag.close_asap || server.repl_max_reads_per_io_event == 1) {
         return 0;
     }
 

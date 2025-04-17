@@ -124,8 +124,10 @@ start_cluster 1 1 {tags {external:skip cluster} } {
 
         # Make sure slot-stats counts keys in all databases
         set slotstats [R $primary_id CLUSTER SLOT-STATS  SLOTSRANGE  $slot $slot]    
+        regexp {^\{(\d+)\s+\{key-count\s+(\d+)} $slotstats _ parsed_slot parsed_count
         set total_items [expr $keys_per_db * 16]
-        assert_equal $slotstats "{$slot {key-count $total_items}}"    
+        assert_equal $parsed_slot $slot
+        assert_equal $parsed_count $total_items
 
         # Verify key retrieval by slot for each database
         for {set db 0} {$db < 16} {incr db} {

@@ -136,8 +136,7 @@ struct hdr_histogram;
 #define CONFIG_BGSAVE_RETRY_DELAY 5              /* Wait a few secs before trying again. */
 #define CONFIG_DEFAULT_PID_FILE "/var/run/valkey.pid"
 #define CONFIG_DEFAULT_BINDADDR_COUNT 2
-#define CONFIG_DEFAULT_BINDADDR \
-    { "*", "-::*" }
+#define CONFIG_DEFAULT_BINDADDR {"*", "-::*"}
 #define NET_HOST_STR_LEN 256                          /* Longest valid hostname */
 #define NET_IP_STR_LEN 46                             /* INET6_ADDRSTRLEN is 46, but we need to be sure */
 #define NET_ADDR_STR_LEN (NET_IP_STR_LEN + 32)        /* Must be enough for ip:port */
@@ -1446,8 +1445,7 @@ typedef struct rdbSaveInfo {
     long long repl_offset;                /* Replication offset. */
 } rdbSaveInfo;
 
-#define RDB_SAVE_INFO_INIT \
-    { -1, 0, "0000000000000000000000000000000000000000", -1 }
+#define RDB_SAVE_INFO_INIT {-1, 0, "0000000000000000000000000000000000000000", -1}
 
 struct malloc_stats {
     size_t zmalloc_used;

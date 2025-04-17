@@ -8899,12 +8899,16 @@ int VM_NotifyKeyspaceEvent(ValkeyModuleCtx *ctx, int type, const char *event, Va
     return VALKEYMODULE_OK;
 }
 
+unsigned long moduleNotifyKeyspaceSubscribersCnt(void) {
+    return listLength(moduleKeyspaceSubscribers);
+}
+
 /* Dispatcher for keyspace notifications to module subscriber functions.
  * This gets called  only if at least one module requested to be notified on
  * keyspace notifications */
 void moduleNotifyKeyspaceEvent(int type, const char *event, robj *key, int dbid) {
     /* Don't do anything if there aren't any subscribers */
-    if (listLength(moduleKeyspaceSubscribers) == 0) return;
+    if (moduleNotifyKeyspaceSubscribersCnt() == 0) return;
 
     /* Ugly hack to handle modules which use write commands from within
      * notify_callback, which they should NOT do!

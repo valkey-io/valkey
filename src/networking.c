@@ -426,8 +426,8 @@ void _addReplyProtoToList(client *c, list *reply_list, const char *s, size_t len
         /* Create a new node, make sure it is allocated to at
          * least PROTO_REPLY_CHUNK_BYTES */
         size_t usable_size;
-        size_t size = len < PROTO_REPLY_CHUNK_BYTES ? PROTO_REPLY_CHUNK_BYTES : len;
-        if (isDeferredReplyEnabled(c)) size = len;
+        size_t min_reply_size = isDeferredReplyEnabled(c) ? PROTO_REPLY_MIN_BYTES : PROTO_REPLY_CHUNK_BYTES;
+        size_t size = len < min_reply_size ? min_reply_size : len;
         tail = zmalloc_usable(size + sizeof(clientReplyBlock), &usable_size);
         /* take over the allocation's internal fragmentation */
         tail->size = usable_size - sizeof(clientReplyBlock);
@@ -1297,6 +1297,7 @@ inline int isDeferredReplyEnabled(client *c) {
 }
 
 void initDeferredReplyBuffer(client *c) {
+    if (moduleNotifyKeyspaceSubscribersCnt() == 0) return;
     if (c->deferred_reply == NULL) c->deferred_reply = listCreate();
     if (!isDeferredReplyEnabled(c)) c->deferred_reply_bytes = 0;
 }

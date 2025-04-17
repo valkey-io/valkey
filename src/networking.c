@@ -1296,6 +1296,12 @@ inline int isDeferredReplyEnabled(client *c) {
     return c->deferred_reply_bytes != ULLONG_MAX;
 }
 
+/* Commands that generate replies before triggering keyspace notifications must
+ * use a deferred reply buffer. This allows postponing the actual transmission
+ * of the reply until after the client is unblocked, in case it was blocked by
+ * a keyspace notification. This is necessary because modules subscribed to
+ * keyspace notifications can block the client from within the notification
+ * callback. */
 void initDeferredReplyBuffer(client *c) {
     if (moduleNotifyKeyspaceSubscribersCnt() == 0) return;
     if (c->deferred_reply == NULL) c->deferred_reply = listCreate();

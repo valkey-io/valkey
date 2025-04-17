@@ -874,13 +874,9 @@ jobs:
       - name: Install EPEL
         if: matrix.install_epel
         run: dnf -y install epel-release
-
-      - name: Build jemalloc(only on Fedora)
-        if: matrix.name == 'test-fedoralatest-jemalloc'
-        uses: ./.github/actions/fedora-build-jemalloc
       - name: make
         run: |
-          dnf -y install gcc make procps-ng which /usr/bin/kill
+          dnf -y install gcc make procps-ng which /usr/bin/kill awk
           make -j SERVER_CFLAGS='-Werror'
       - name: testprep
         run: dnf -y install tcl tcltls
@@ -944,12 +940,9 @@ jobs:
       - name: Install EPEL
         if: matrix.install_epel
         run: dnf -y install epel-release
-      - name: Build jemalloc(only on Fedora)
-        if: matrix.name == 'test-fedoralatest-tls-module'
-        uses: ./.github/actions/fedora-build-jemalloc
       - name: make
         run: |
-          dnf -y install make gcc openssl-devel openssl procps-ng which /usr/bin/kill
+          dnf -y install make gcc openssl-devel openssl procps-ng which /usr/bin/kill awk
           make -j BUILD_TLS=module SERVER_CFLAGS='-Werror'
       - name: testprep
         run: |
@@ -1019,12 +1012,9 @@ jobs:
       - name: Install EPEL
         if: matrix.install_epel
         run: dnf -y install epel-release
-      - name: Build jemalloc(only on Fedora)
-        if: matrix.name == 'test-fedoralatest-tls-module-no-tls'
-        uses: ./.github/actions/fedora-build-jemalloc
       - name: make
         run: |
-          dnf -y install make gcc openssl-devel openssl procps-ng which /usr/bin/kill
+          dnf -y install make gcc openssl-devel openssl procps-ng which /usr/bin/kill awk
           make -j BUILD_TLS=module SERVER_CFLAGS='-Werror'
       - name: testprep
         run: |

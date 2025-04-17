@@ -3745,7 +3745,6 @@ void call(client *c, int flags) {
 
     exitExecutionUnit();
 
-    commitDeferredReplyBuffer(c, 1);
     /* In case client is blocked after trying to execute the command,
      * it means the execution is not yet completed and we MIGHT reprocess the command in the future. */
     if (!c->flag.blocked) c->flag.executing_command = 0;

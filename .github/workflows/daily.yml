@@ -876,7 +876,10 @@ jobs:
         run: dnf -y install epel-release
       - name: make
         run: |
-          dnf -y install gcc make procps-ng which /usr/bin/kill awk
+          if [[ "${{ matrix.name }}" == "test-fedoralatest-jemalloc" ]]; then
+            dnf -y install awk
+          fi
+          dnf -y install gcc make procps-ng which /usr/bin/kill
           make -j SERVER_CFLAGS='-Werror'
       - name: testprep
         run: dnf -y install tcl tcltls
@@ -942,7 +945,10 @@ jobs:
         run: dnf -y install epel-release
       - name: make
         run: |
-          dnf -y install make gcc openssl-devel openssl procps-ng which /usr/bin/kill awk
+          if [[ "${{ matrix.name }}" == "test-fedoralatest-tls-module" ]]; then
+            dnf -y install awk
+          fi
+          dnf -y install make gcc openssl-devel openssl procps-ng which /usr/bin/kill
           make -j BUILD_TLS=module SERVER_CFLAGS='-Werror'
       - name: testprep
         run: |
@@ -1014,7 +1020,10 @@ jobs:
         run: dnf -y install epel-release
       - name: make
         run: |
-          dnf -y install make gcc openssl-devel openssl procps-ng which /usr/bin/kill awk
+          if [[ "${{ matrix.name }}" == "test-fedoralatest-jemalloc" ]]; then
+            dnf -y install awk
+          fi
+          dnf -y install make gcc openssl-devel openssl procps-ng which /usr/bin/kill
           make -j BUILD_TLS=module SERVER_CFLAGS='-Werror'
       - name: testprep
         run: |

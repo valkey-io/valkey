@@ -1,0 +1,26 @@
+name: 'Install TCL8'
+description: 'Fedora 42'
+
+inputs:
+  matrix_name:
+    description: 'The name of the matrix to check for fedora'
+    required: true
+
+runs:
+  using: "composite"
+  steps:
+    - run: |
+        if [[ "${{ inputs.matrix_name }}" =~ "fedoralatest" ]]; then
+            curl -L -o tcl8.6.16-src.tar.gz https://zenlayer.dl.sourceforge.net/project/tcl/Tcl/8.6.16/tcl8.6.16-src.tar.gz
+            tar -xzvf tcl8.6.16-src.tar.gz
+            cd tcl8.6.16/unix
+            ./configure --prefix=/opt/tcl8.6
+            make -j$(nproc)
+            make install
+        else
+            sudo dnf -y install tcl
+        fi
+        sudo dnf -y install tcltls
+        ./utils/gen-test-certs.sh
+      shell: bash
+

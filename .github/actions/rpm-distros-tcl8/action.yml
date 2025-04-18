@@ -10,7 +10,7 @@ runs:
   using: "composite"
   steps:
     - run: |
-        if [[ "${{ inputs.matrix_name }}" =~ "fedoralatest" ]]; then
+        if [[ "${{ inputs.matrix_name }}" =~ "fedora" ]]; then
             curl -L -o tcl8.6.16-src.tar.gz https://zenlayer.dl.sourceforge.net/project/tcl/Tcl/8.6.16/tcl8.6.16-src.tar.gz
             tar -xzvf tcl8.6.16-src.tar.gz
             pushd tcl8.6.16/unix

@@ -848,8 +848,8 @@ jobs:
             install_epel: true
           - name: test-fedoralatest-jemalloc
             container: fedora:latest
-            # - name: test-fedorarawhide-jemalloc
-            #   container: fedora:rawhide
+          - name: test-fedorarawhide-jemalloc
+            container: fedora:rawhide
 
     name: ${{ matrix.name }}
     runs-on: ubuntu-latest
@@ -916,8 +916,8 @@ jobs:
             install_epel: true
           - name: test-fedoralatest-tls-module
             container: fedora:latest
-            # - name: test-fedorarawhide-tls-module
-            #   container: fedora:rawhide
+          - name: test-fedorarawhide-tls-module
+            container: fedora:rawhide
 
     name: ${{ matrix.name }}
     runs-on: ubuntu-latest
@@ -988,8 +988,8 @@ jobs:
             install_epel: true
           - name: test-fedoralatest-tls-module-no-tls
             container: fedora:latest
-            # - name: test-fedorarawhide-tls-module-no-tls
-            #   container: fedora:rawhide
+          - name: test-fedorarawhide-tls-module-no-tls
+            container: fedora:rawhide
 
     name: ${{ matrix.name }}
     runs-on: ubuntu-latest

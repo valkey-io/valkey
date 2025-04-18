@@ -2028,10 +2028,10 @@ void xaddCommand(client *c) {
         return;
     }
     sds replyid = createStreamIDString(&id);
-    addReplyBulkCBuffer(c, replyid, sdslen(replyid));
 
     notifyKeyspaceEvent(NOTIFY_STREAM, "xadd", c->argv[1], c->db->id);
     server.dirty++;
+    addReplyBulkCBuffer(c, replyid, sdslen(replyid));
 
     /* Trim if needed. */
     if (parsed_args.trim_strategy != TRIM_STRATEGY_NONE) {
@@ -2664,9 +2664,9 @@ void xgroupCommand(client *c) {
 
         streamCG *cg = streamCreateCG(s, grpname, sdslen(grpname), &id, entries_read);
         if (cg) {
-            addReply(c, shared.ok);
             server.dirty++;
             notifyKeyspaceEvent(NOTIFY_STREAM, "xgroup-create", c->argv[2], c->db->id);
+            addReply(c, shared.ok);
         } else {
             addReplyError(c, "-BUSYGROUP Consumer Group name already exists");
         }
@@ -2679,16 +2679,16 @@ void xgroupCommand(client *c) {
         }
         cg->last_id = id;
         cg->entries_read = entries_read;
-        addReply(c, shared.ok);
         server.dirty++;
         notifyKeyspaceEvent(NOTIFY_STREAM, "xgroup-setid", c->argv[2], c->db->id);
+        addReply(c, shared.ok);
     } else if (!strcasecmp(opt, "DESTROY") && c->argc == 4) {
         if (cg) {
             raxRemove(s->cgroups, (unsigned char *)grpname, sdslen(grpname), NULL);
             streamFreeCG(cg);
-            addReply(c, shared.cone);
             server.dirty++;
             notifyKeyspaceEvent(NOTIFY_STREAM, "xgroup-destroy", c->argv[2], c->db->id);
+            addReply(c, shared.cone);
             /* We want to unblock any XREADGROUP consumers with -NOGROUP. */
             signalKeyAsReady(c->db, c->argv[2], OBJ_STREAM);
         } else {
@@ -2781,9 +2781,9 @@ void xsetidCommand(client *c) {
     s->last_id = id;
     if (entries_added != -1) s->entries_added = entries_added;
     if (!streamIDEqZero(&max_xdel_id)) s->max_deleted_entry_id = max_xdel_id;
-    addReply(c, shared.ok);
     server.dirty++;
     notifyKeyspaceEvent(NOTIFY_STREAM, "xsetid", c->argv[1], c->db->id);
+    addReply(c, shared.ok);
 }
 
 /* XACK <key> <group> <id> <id> ... <id>

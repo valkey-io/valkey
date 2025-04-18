@@ -4190,7 +4190,7 @@ void sentinelSetCommand(client *c) {
             changes++;
         } else if (!strcasecmp(option, "notification-script") && moreargs > 0) {
             /* notification-script <path> */
-            char *value = c->argv[++j]->ptr;
+            sds value = c->argv[++j]->ptr;
             if (sentinel.deny_scripts_reconfig) {
                 addReplyError(c, "Reconfiguration of scripts path is denied for "
                                  "security reasons. Check the deny-scripts-reconfig "
@@ -4198,16 +4198,16 @@ void sentinelSetCommand(client *c) {
                 goto seterr;
             }
 
-            if (strlen(value) && access(value, X_OK) == -1) {
+            if (sdslen(value) && access(value, X_OK) == -1) {
                 addReplyError(c, "Notification script seems non existing or non executable");
                 goto seterr;
             }
             sdsfree(ri->notification_script);
-            ri->notification_script = strlen(value) ? sdsnew(value) : NULL;
+            ri->notification_script = sdslen(value) ? sdsdup(value) : NULL;
             changes++;
         } else if (!strcasecmp(option, "client-reconfig-script") && moreargs > 0) {
             /* client-reconfig-script <path> */
-            char *value = c->argv[++j]->ptr;
+            sds value = c->argv[++j]->ptr;
             if (sentinel.deny_scripts_reconfig) {
                 addReplyError(c, "Reconfiguration of scripts path is denied for "
                                  "security reasons. Check the deny-scripts-reconfig "
@@ -4215,27 +4215,27 @@ void sentinelSetCommand(client *c) {
                 goto seterr;
             }
 
-            if (strlen(value) && access(value, X_OK) == -1) {
+            if (sdslen(value) && access(value, X_OK) == -1) {
                 addReplyError(c, "Client reconfiguration script seems non existing or "
                                  "non executable");
                 goto seterr;
             }
             sdsfree(ri->client_reconfig_script);
-            ri->client_reconfig_script = strlen(value) ? sdsnew(value) : NULL;
+            ri->client_reconfig_script = sdslen(value) ? sdsdup(value) : NULL;
             changes++;
         } else if (!strcasecmp(option, "auth-pass") && moreargs > 0) {
             /* auth-pass <password> */
-            char *value = c->argv[++j]->ptr;
+            sds value = c->argv[++j]->ptr;
             sdsfree(ri->auth_pass);
-            ri->auth_pass = strlen(value) ? sdsnew(value) : NULL;
+            ri->auth_pass = sdslen(value) ? sdsdup(value) : NULL;
             dropInstanceConnections(ri);
             changes++;
             redacted = 1;
         } else if (!strcasecmp(option, "auth-user") && moreargs > 0) {
             /* auth-user <username> */
-            char *value = c->argv[++j]->ptr;
+            sds value = c->argv[++j]->ptr;
             sdsfree(ri->auth_user);
-            ri->auth_user = strlen(value) ? sdsnew(value) : NULL;
+            ri->auth_user = sdslen(value) ? sdsdup(value) : NULL;
             dropInstanceConnections(ri);
             changes++;
         } else if (!strcasecmp(option, "quorum") && moreargs > 0) {

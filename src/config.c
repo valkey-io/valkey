@@ -438,7 +438,7 @@ static int updateClientOutputBufferLimit(sds *args, int arg_len, const char **er
  * abnormal aggregate `save T C` functionality. Remove in the future. */
 static int reading_config_file;
 
-void loadServerConfigFromString(char *config) {
+void loadServerConfigFromString(sds config) {
     deprecatedConfig deprecated_configs[] = {
         {"list-max-ziplist-entries", 2, 2},
         {"list-max-ziplist-value", 2, 2},
@@ -455,7 +455,7 @@ void loadServerConfigFromString(char *config) {
     int argc;
 
     reading_config_file = 1;
-    lines = sdssplitlen(config, strlen(config), "\n", 1, &totlines);
+    lines = sdssplitlen(config, sdslen(config), "\n", 1, &totlines);
 
     for (i = 0; i < totlines; i++) {
         linenum = i + 1;

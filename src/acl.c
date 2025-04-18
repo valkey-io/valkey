@@ -1500,7 +1500,7 @@ unsigned long ACLGetCommandID(sds cmdname) {
         sdsfree(lowername);
         return (unsigned long)id;
     }
-    raxInsert(commandId, (unsigned char *)lowername, strlen(lowername), (void *)nextid, NULL);
+    raxInsert(commandId, (unsigned char *)lowername, sdslen(lowername), (void *)nextid, NULL);
     sdsfree(lowername);
     unsigned long thisid = nextid;
     nextid++;
@@ -2244,7 +2244,7 @@ static sds ACLLoadFromFile(const char *filename) {
     /* Split the file into lines and attempt to load each line. */
     int totlines;
     sds *lines, errors = sdsempty();
-    lines = sdssplitlen(acls, strlen(acls), "\n", 1, &totlines);
+    lines = sdssplitlen(acls, sdslen(acls), "\n", 1, &totlines);
     sdsfree(acls);
 
     /* We do all the loading in a fresh instance of the Users radix tree,

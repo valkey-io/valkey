@@ -876,7 +876,7 @@ jobs:
         run: dnf -y install epel-release
       - name: make
         run: |
-          dnf -y install gcc make procps-ng which /usr/bin/kill /usr/bin/awk
+          dnf -y install gcc make procps-ng openssl-devel openssl which /usr/bin/kill /usr/bin/awk
           make -j SERVER_CFLAGS='-Werror'
       - name: testprep
         uses: ./.github/actions/rpm-distros-tcl8

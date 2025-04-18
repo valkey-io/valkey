@@ -13,10 +13,11 @@ runs:
         if [[ "${{ inputs.matrix_name }}" =~ "fedoralatest" ]]; then
             curl -L -o tcl8.6.16-src.tar.gz https://zenlayer.dl.sourceforge.net/project/tcl/Tcl/8.6.16/tcl8.6.16-src.tar.gz
             tar -xzvf tcl8.6.16-src.tar.gz
-            cd tcl8.6.16/unix
+            pushd tcl8.6.16/unix
             ./configure --prefix=/opt/tcl8.6
             make -j$(nproc)
             make install
+            popd
         else
             dnf -y install tcl
         fi

@@ -18,9 +18,9 @@ runs:
             make -j$(nproc)
             make install
         else
-            sudo dnf -y install tcl
+            dnf -y install tcl
         fi
-        sudo dnf -y install tcltls
+        dnf -y install tcltls
         ./utils/gen-test-certs.sh
       shell: bash
 

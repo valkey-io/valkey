@@ -2982,7 +2982,7 @@ int VM_StringToLongLong(const ValkeyModuleString *str, long long *ll) {
  * as a valid, strict `unsigned long long` (no spaces before/after), VALKEYMODULE_ERR
  * is returned. */
 int VM_StringToULongLong(const ValkeyModuleString *str, unsigned long long *ull) {
-    return string2ull(str->ptr, ull) ? VALKEYMODULE_OK : VALKEYMODULE_ERR;
+    return string2ull(str->ptr, sdslen(str->ptr), ull) ? VALKEYMODULE_OK : VALKEYMODULE_ERR;
 }
 
 /* Convert the string into a double, storing it at `*d`.
@@ -10642,7 +10642,7 @@ unsigned long long VM_ServerInfoGetFieldUnsigned(ValkeyModuleServerInfoData *dat
         return 0;
     }
     sds val = result;
-    if (!string2ull(val, &ll)) {
+    if (!string2ull(val, sdslen(val), &ll)) {
         if (out_err) *out_err = VALKEYMODULE_ERR;
         return 0;
     }

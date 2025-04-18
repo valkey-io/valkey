@@ -1,5 +1,5 @@
 name: 'Install TCL8'
-description: 'Fedora 42'
+description: 'Installs TCL 8.6.16 from source on Fedora-based or uses the system package on others.'
 
 inputs:
   matrix_name:

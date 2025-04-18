@@ -459,7 +459,7 @@ static int anetTcpGetProtocol(int is_mptcp_enabled) {
 #define ANET_CONNECT_NONE 0
 #define ANET_CONNECT_NONBLOCK 1
 #define ANET_CONNECT_BE_BINDING 2 /* Best effort binding. */
-#define ANET_CONNECT_MULTIPATH 4
+#define ANET_CONNECT_MPTCP 4
 static int anetTcpGenericConnect(char *err, const char *addr, int port, const char *source_addr, int flags) {
     int s = ANET_ERR, rv;
     char portstr[6]; /* strlen("65535") + 1; */
@@ -482,7 +482,7 @@ static int anetTcpGenericConnect(char *err, const char *addr, int port, const ch
          * Make sure connection-intensive things like the benchmark tool
          * will be able to close/open sockets a zillion of times.
          */
-        int ai_protocol = anetTcpGetProtocol(flags & ANET_CONNECT_MULTIPATH);
+        int ai_protocol = anetTcpGetProtocol(flags & ANET_CONNECT_MPTCP);
         int sockflags = ANET_SOCKET_CLOEXEC | ANET_SOCKET_REUSEADDR;
         if (flags & ANET_CONNECT_NONBLOCK) sockflags |= ANET_SOCKET_NONBLOCK;
         if ((s = anetCreateSocket(err, p->ai_family, p->ai_socktype, ai_protocol, sockflags)) == ANET_ERR) continue;
@@ -545,9 +545,9 @@ int anetTcpNonBlockConnect(char *err, const char *addr, int port) {
     return anetTcpGenericConnect(err, addr, port, NULL, ANET_CONNECT_NONBLOCK);
 }
 
-int anetTcpNonBlockBestEffortBindConnect(char *err, const char *addr, int port, const char *source_addr, int multipath) {
+int anetTcpNonBlockBestEffortBindConnect(char *err, const char *addr, int port, const char *source_addr, int mptcp) {
     int flags = ANET_CONNECT_NONBLOCK | ANET_CONNECT_BE_BINDING;
-    if (multipath) flags |= ANET_CONNECT_MULTIPATH;
+    if (mptcp) flags |= ANET_CONNECT_MPTCP;
     return anetTcpGenericConnect(err, addr, port, source_addr, flags);
 }
 

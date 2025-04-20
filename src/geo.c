@@ -115,14 +115,11 @@ int extractLongLatOrReply(client *c, robj **argv, double *xy) {
 int longLatFromMemberOrReply(client *c, robj *zobj, robj *member, double *xy) {
     double score = 0;
 
-    if (zsetScore(zobj, member->ptr, &score) == C_ERR){
+    if (zsetScore(zobj, member->ptr, &score) == C_ERR) {
         addReplyErrorFormat(c, "member %s does not exist", (char *)member->ptr);
         return C_ERR;
-    } 
-    if (!decodeGeohash(score, xy)) {
-        addReplyErrorFormat(c, "failed to decode, member %s is not a valid geohash", (char *)member->ptr);
-        return C_ERR;
     }
+    decodeGeohash(score, xy);
     return C_OK;
 }
 

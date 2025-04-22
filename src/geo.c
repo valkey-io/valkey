@@ -648,9 +648,6 @@ void georadiusGeneric(client *c, int srcKeyIndex, int flags) {
                     return;
                 }
                 /* Extract polygon vertices */
-                // TODO: Check if we need to do any sanitization of vertices.
-                // Example: Checking if not closed or if overlapping/crossing over eachother.
-                // TODO: Check if there should be a limit on number of vertices.
                 shape.conversion = 1;
                 shape.t.polygon.num_vertices = num_vertices;
                 shape.t.polygon.points = zmalloc(num_vertices * sizeof(double[2]));

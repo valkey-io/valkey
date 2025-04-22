@@ -3,7 +3,7 @@
         "summary": "Remove all keys from the target slot.",
         "complexity": "O(N) where N is the number of keys in the target slot",
         "group": "cluster",
-        "since": "8.1.0",
+        "since": "9.0.0",
         "arity": -3,
         "container": "CLUSTER",
         "function": "clusterCommand",

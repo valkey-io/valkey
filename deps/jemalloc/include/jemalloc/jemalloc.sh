@@ -8,7 +8,7 @@ cat <<EOF
 
 /* A macro that is used to indicate that this the jemalloc vendored with the project
  * and has been tested with active defragmentation. */
-#define VALKEY_VENDORED_JEMALLOC yes
+#define VALKEY_VENDORED_JEMALLOC 1
 
 #ifdef __cplusplus
 extern "C" {

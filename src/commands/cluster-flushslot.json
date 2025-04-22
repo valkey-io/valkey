@@ -8,11 +8,12 @@
         "container": "CLUSTER",
         "function": "clusterCommand",
         "command_flags": [
-            "WRITE"
+            "WRITE",
+            "NO_ASYNC_LOADING",
+            "ADMIN"
         ],
         "acl_categories": [
-            "KEYSPACE",
-            "DANGEROUS"
+            "KEYSPACE"
         ],
         "reply_schema": {
             "const": "OK"

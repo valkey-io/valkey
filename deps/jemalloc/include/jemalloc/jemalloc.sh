@@ -5,6 +5,9 @@ objroot=$1
 cat <<EOF
 #ifndef JEMALLOC_H_
 #define JEMALLOC_H_
+
+#define VALKEY_VENDORED_JEMALLOC yes
+
 #ifdef __cplusplus
 extern "C" {
 #endif

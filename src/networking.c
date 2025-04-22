@@ -489,6 +489,9 @@ void _addReplyToBufferOrList(client *c, const char *s, size_t len) {
     }
 
     c->net_output_bytes_curr_cmd += len;
+    /* We call it here because this function may affect the reply
+     * buffer offset (see function comment) */
+    reqresSaveClientReplyOffset(c);
 
     /* If we're processing a push message into the current client (i.e. executing PUBLISH
      * to a channel which we are subscribed to, then we wanna postpone that message to be added
@@ -502,9 +505,6 @@ void _addReplyToBufferOrList(client *c, const char *s, size_t len) {
         _addReplyProtoToList(c, c->deferred_reply, s, len);
         return;
     }
-    /* We call it here because this function may affect the reply
-     * buffer offset (see function comment) */
-    reqresSaveClientReplyOffset(c);
 
     if (defer_push_message) {
         _addReplyProtoToList(c, server.pending_push_messages, s, len);

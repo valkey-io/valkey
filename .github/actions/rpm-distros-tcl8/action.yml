@@ -11,17 +11,19 @@ runs:
   steps:
     - run: |
         if [[ "${{ inputs.matrix_name }}" =~ "fedora" ]]; then
-            curl -L -o tcl8.6.16-src.tar.gz https://zenlayer.dl.sourceforge.net/project/tcl/Tcl/8.6.16/tcl8.6.16-src.tar.gz
-            tar -xzvf tcl8.6.16-src.tar.gz
-            pushd tcl8.6.16/unix
-            ./configure --prefix=/opt/tcl8.6
-            make -j$(nproc)
-            make install
-            popd
+          dnf -y install tcl8 tcl8-devel gcc make awk openssl openssl-devel
+          ln -s /usr/bin/tclsh8.6 /usr/bin/tclsh
+          curl -LO https://core.tcl-lang.org/tcltls/uv/tcltls-1.7.22.tar.gz
+          tar -xzf tcltls-1.7.22.tar.gz
+          pushd tcltls-1.7.22
+          ./configure --with-tcl=/usr/lib64/tcl8.6
+          make
+          mkdir -p /usr/lib64/tcl8.6/tls1.7.22
+          cp tcltls.so pkgIndex.tcl /usr/lib64/tcl8.6/tls1.7.22/
+          popd
         else
-            dnf -y install tcl
+            dnf -y install tcl tcltls
         fi
-        dnf -y install tcltls
         ./utils/gen-test-certs.sh
       shell: bash
 

@@ -900,8 +900,8 @@ typedef ValkeyModuleScriptingEngineCompiledFunction **(*ValkeyModuleScriptingEng
     size_t *out_num_compiled_functions,
     ValkeyModuleString **err);
 
-/* Version one of code compilation, which may not safely handle
- * binary data. */
+/* Version one of source code compilation interface. This API does not allow the compiler to
+ * safely handle binary data. You should use a newer version of the API if possible.
 typedef ValkeyModuleScriptingEngineCompiledFunctionV1 **(*ValkeyModuleScriptingEngineCompileCodeFuncV1)(
     ValkeyModuleCtx *module_ctx,
     ValkeyModuleScriptingEngineCtx *engine_ctx,

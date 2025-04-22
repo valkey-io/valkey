@@ -1028,9 +1028,9 @@ typedef struct ValkeyModuleScriptingEngineMethods {
     /* Function callback to get the used memory by the engine. */
     ValkeyModuleScriptingEngineGetMemoryInfoFunc get_memory_info;
 
-} ValkeyModuleScriptingEngineMethodsV2;
+} ValkeyModuleScriptingEngineMethodsV1;
 
-#define ValkeyModuleScriptingEngineMethods ValkeyModuleScriptingEngineMethodsV2
+#define ValkeyModuleScriptingEngineMethods ValkeyModuleScriptingEngineMethodsV1
 
 /* ------------------------- End of common defines ------------------------ */
 

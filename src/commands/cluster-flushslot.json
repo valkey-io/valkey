@@ -31,7 +31,7 @@
                         "name": "async",
                         "type": "pure-token",
                         "token": "ASYNC",
-                        "since": "8.1.0"
+                        "since": "9.0.0"
                     },
                     {
                         "name": "sync",

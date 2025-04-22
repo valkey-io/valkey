@@ -1,5 +1,5 @@
 name: 'Install TCL8'
-description: 'Installs TCL 8.6.16 from source on Fedora-based or uses the system package on others.'
+description: 'Installs tcl8 and  install tcltls from source on Fedora-based or uses the system package on others.'
 
 inputs:
   matrix_name:
@@ -10,6 +10,9 @@ runs:
   using: "composite"
   steps:
     - run: |
+      # Fedora 42 comes with Tcl 9 by default, but tcltls is currently incompatible with Tcl 9.
+      # As a workaround, we install Tcl 8 and manually build tcltls 1.7.22 from source.
+      # Once tcltls adds support for Tcl 9, this logic can be removed and system packages used instead.
         if [[ "${{ inputs.matrix_name }}" =~ "fedora" ]]; then
           dnf -y install tcl8 tcl8-devel gcc make awk openssl openssl-devel
           ln -s /usr/bin/tclsh8.6 /usr/bin/tclsh

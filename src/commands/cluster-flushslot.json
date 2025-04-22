@@ -38,7 +38,7 @@
                         "name": "sync",
                         "type": "pure-token",
                         "token": "SYNC",
-                        "since": "8.1.0"
+                        "since": "9.0.0"
                     }
                 ]
             }

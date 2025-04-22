@@ -901,7 +901,7 @@ typedef ValkeyModuleScriptingEngineCompiledFunction **(*ValkeyModuleScriptingEng
     ValkeyModuleString **err);
 
 /* Version one of source code compilation interface. This API does not allow the compiler to
- * safely handle binary data. You should use a newer version of the API if possible.
+ * safely handle binary data. You should use a newer version of the API if possible. */
 typedef ValkeyModuleScriptingEngineCompiledFunctionV1 **(*ValkeyModuleScriptingEngineCompileCodeFuncV1)(
     ValkeyModuleCtx *module_ctx,
     ValkeyModuleScriptingEngineCtx *engine_ctx,

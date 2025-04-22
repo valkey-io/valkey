@@ -222,7 +222,7 @@ compiledFunction **scriptingEngineCallCompileCode(scriptingEngine *engine,
                                                   size_t *out_num_compiled_functions,
                                                   robj **err) {
     serverAssert(type == VMSE_EVAL || type == VMSE_FUNCTION);
-    compiledFunction **functions= NULL;
+    compiledFunction **functions = NULL;
     engineSetupModuleCtx(engine, NULL);
     if (engine->impl.methods.version == 1) {
         functions = engine->impl.methods.compile_code_v1(

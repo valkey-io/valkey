@@ -893,6 +893,7 @@ typedef ValkeyModuleScriptingEngineCompiledFunction **(*ValkeyModuleScriptingEng
     ValkeyModuleScriptingEngineCtx *engine_ctx,
     ValkeyModuleScriptingEngineSubsystemType type,
     const char *code,
+    size_t code_len,
     size_t timeout,
     size_t *out_num_compiled_functions,
     ValkeyModuleString **err);

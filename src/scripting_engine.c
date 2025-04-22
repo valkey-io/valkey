@@ -217,6 +217,7 @@ static void engineTeardownModuleCtx(scriptingEngine *e) {
 compiledFunction **scriptingEngineCallCompileCode(scriptingEngine *engine,
                                                   subsystemType type,
                                                   const char *code,
+                                                  size_t code_len,
                                                   size_t timeout,
                                                   size_t *out_num_compiled_functions,
                                                   robj **err) {
@@ -229,6 +230,7 @@ compiledFunction **scriptingEngineCallCompileCode(scriptingEngine *engine,
         engine->impl.ctx,
         type,
         code,
+        code_len,
         timeout,
         out_num_compiled_functions,
         err);

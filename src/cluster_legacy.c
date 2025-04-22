@@ -6561,7 +6561,7 @@ unsigned int delKeysInSlot(unsigned int hashslot, int lazy, bool is_cmd) {
         if (!is_cmd) propagateDeletion(&server.db[0], key, lazy);
         signalModifiedKey(NULL, &server.db[0], key);
         if (is_cmd) {
-            /* In cluster flushslot scene, the keys are actually deleted. */
+            /* In the `cluster flushslot` scenario, the keys are actually deleted so notify everyone. */
             notifyKeyspaceEvent(NOTIFY_GENERIC, "del", key, server.db[0].id);
         } else {
             /* The keys are not actually logically deleted from the database, just moved to another node.

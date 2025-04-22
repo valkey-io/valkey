@@ -6,6 +6,8 @@ cat <<EOF
 #ifndef JEMALLOC_H_
 #define JEMALLOC_H_
 
+/* A macro that is used to indicate that this the jemalloc vendored with the project
+ * and has been tested with active defragmentation. */
 #define VALKEY_VENDORED_JEMALLOC yes
 
 #ifdef __cplusplus

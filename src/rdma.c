@@ -1190,9 +1190,8 @@ static int connRdmaConnect(connection *conn,
     struct rdma_cm_id *cm_id;
     RdmaContext *ctx;
 
-    if (multipath) {
-        serverLog(LL_NOTICE, "RDMA: multipath not supported, ignore");
-    }
+    /* RDMA does not support multipath, and there is no outgoing RDMA connection at the current stage */
+    assert(!multipath);
 
     if (rdmaResolveAddr(rdma_conn, addr, port, src_addr) == C_ERR) {
         return C_ERR;

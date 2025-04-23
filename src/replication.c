@@ -2014,7 +2014,7 @@ void replicationCreatePrimaryClientWithHandler(connection *conn, int dbid, Conne
      * execution is done. This is the reason why we allow blocking the replication
      * connection. */
     server.primary->flag.primary = 1;
-    server.primary->flag.authenticated = 1;
+    clientSetUser(server.primary, NULL, 1);
 
     /* Allocate a private query buffer for the primary client instead of using the shared query buffer.
      * This is done because the primary's query buffer data needs to be preserved for my sub-replicas to use. */
@@ -4389,7 +4389,7 @@ void establishPrimaryConnection(void) {
     connSetPrivateData(server.primary->conn, server.primary);
     server.primary->flag.close_after_reply = 0;
     server.primary->flag.close_asap = 0;
-    server.primary->flag.authenticated = 1;
+    clientSetUser(server.primary, NULL, 1);
     server.primary->last_interaction = server.unixtime;
     server.repl_state = REPL_STATE_CONNECTED;
     server.repl_down_since = 0;

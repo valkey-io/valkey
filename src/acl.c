@@ -456,8 +456,7 @@ void ACLFreeUserAndKillClients(user *u) {
              * this may result in some security hole: it's much
              * more defensive to set the default user and put
              * it in non authenticated mode. */
-            c->user = DefaultUser;
-            c->authenticated = 0;
+            clientSetUser(c, DefaultUser, 0);
             /* We will write replies to this client later, so we can't
              * close it directly even if async. */
             if (c == server.current_client) {
@@ -1466,10 +1465,10 @@ void addAuthErrReply(client *c, robj *err) {
  * connection user reference is populated.
  *
  * The return value is AUTH_OK on success (valid username / password pair) & AUTH_ERR otherwise. */
-int checkPasswordBasedAuth(client *c, robj *username, robj *password) {
-    if (ACLCheckUserCredentials(username,password) == C_OK) {
-        c->authenticated = 1;
-        c->user = ACLGetUserByName(username->ptr,sdslen(username->ptr));
+static int checkPasswordBasedAuth(client *c, robj *username, robj *password) {
+    if (ACLCheckUserCredentials(username, password) == C_OK) {
+        user *user = ACLGetUserByName(username->ptr, sdslen(username->ptr));
+        clientSetUser(c, user, 1);
         moduleNotifyUserChanged(c);
         return AUTH_OK;
     } else {

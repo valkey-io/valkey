@@ -498,6 +498,9 @@ void debugCommand(client *c) {
 "    Enable or disable the reply buffer resize cron job",
 "CLUSTERLINK KILL <to|from|all> <node-id>",
 "    Kills the link based on the direction to/from (both) with the provided node." ,
+"CLIENT-ENFORCE-REPLY-LIST <0|1>",
+            "When set to 1, it enforces the use of the client reply list directly",
+            "    and avoids using the client's static buffer.",
 NULL
         };
         addReplyHelp(c, help);
@@ -1048,6 +1051,9 @@ NULL
             addReplyErrorFormat(c, "Unknown direction %s", (char*) c->argv[3]->ptr);
         }
         addReply(c,shared.ok);
+    } else if (!strcasecmp(c->argv[1]->ptr, "client-enforce-reply-list") && c->argc == 3) {
+        server.debug_client_enforce_reply_list = atoi(c->argv[2]->ptr);
+        addReply(c, shared.ok);
     } else {
         addReplySubcommandSyntaxError(c);
         return;

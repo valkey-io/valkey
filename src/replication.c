@@ -1777,7 +1777,7 @@ void replicationCreateMasterClient(connection *conn, int dbid) {
      * connection. */
     server.master->flags |= CLIENT_MASTER;
 
-    server.master->authenticated = 1;
+    clientSetUser(server.master, NULL, 1);
     server.master->reploff = server.master_initial_offset;
     server.master->read_reploff = server.master->reploff;
     server.master->user = NULL; /* This client can do everything. */
@@ -3397,7 +3397,7 @@ void replicationResurrectCachedMaster(connection *conn) {
     server.master->conn = conn;
     connSetPrivateData(server.master->conn, server.master);
     server.master->flags &= ~(CLIENT_CLOSE_AFTER_REPLY|CLIENT_CLOSE_ASAP);
-    server.master->authenticated = 1;
+    clientSetUser(server.master, NULL, 1);
     server.master->lastinteraction = server.unixtime;
     server.repl_state = REPL_STATE_CONNECTED;
     server.repl_down_since = 0;

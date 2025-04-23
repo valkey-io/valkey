@@ -499,8 +499,8 @@ void debugCommand(client *c) {
 "CLUSTERLINK KILL <to|from|all> <node-id>",
 "    Kills the link based on the direction to/from (both) with the provided node." ,
 "CLIENT-ENFORCE-REPLY-LIST <0|1>",
-            "When set to 1, it enforces the use of the client reply list directly",
-            "    and avoids using the client's static buffer.",
+"    When set to 1, it enforces the use of the client reply list directly",
+"    and avoids using the client's static buffer.",
 NULL
         };
         addReplyHelp(c, help);

@@ -10,6 +10,30 @@ HIGH:     There is a critical bug that may affect a subset of users. Upgrade!
 CRITICAL: There is a critical bug affecting MOST USERS. Upgrade ASAP.
 SECURITY: There are security fixes in the release.
 --------------------------------------------------------------------------------
+
+================================================================================
+Valkey 7.2.9  -  Released Wed 23 Apr 2025
+================================================================================
+
+Upgrade urgency SECURITY: This release includes security fixes we recommend you
+apply as soon as possible.
+
+Bug fixes
+=========
+* Fix defrag crash when using FLUSHDB ASYNC in cluster mode (#1873)
+* Fix memory leak in forgotten node ping ext code path (#1576)
+* Fix module LatencyAddSample still work when latency-monitor-threshold is 0 (#1541)
+* Fix potential crash in radix tree recompression of huge keys (#1722)
+* Fix error "SSL routines::bad length" when connTLSWrite is called second time with smaller buffer (#1737)
+* Fix RANDOMKEY infinite loop during CLIENT PAUSE (#1850)
+* fix: add samples to stream object consumer trees (#1825)
+* Fix panic in primary when blocking shutdown after previous block with timeout (#1948)
+* Fix incorrect lag reported in XINFO GROUPS (#1952)
+
+Security fixes
+==============
+* CVE-2025-21605 Limit output buffer for unauthenticated clients (#1992)
+
 ================================================================================
 Valkey 7.2.8  -  Released Mon 07 Jan 2025
 ================================================================================

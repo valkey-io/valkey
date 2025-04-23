@@ -106,7 +106,8 @@ void setGenericCommand(client *c,
     }
 
     if (flags & OBJ_SET_GET) {
-        if (getGenericCommand(c) == C_ERR) return;
+        initDeferredReplyBuffer(c);
+        if (getGenericCommand(c) == C_ERR) goto cleanup;
     }
 
     robj *existing_value = lookupKeyWrite(c->db, key);
@@ -115,27 +116,27 @@ void setGenericCommand(client *c,
     /* Handle the IFEQ conditional check */
     if (flags & OBJ_SET_IFEQ && found) {
         if (!(flags & OBJ_SET_GET) && checkType(c, existing_value, OBJ_STRING)) {
-            return;
+            goto cleanup;
         }
 
         if (compareStringObjects(existing_value, comparison) != 0) {
             if (!(flags & OBJ_SET_GET)) {
                 addReply(c, abort_reply ? abort_reply : shared.null[c->resp]);
             }
-            return;
+            goto cleanup;
         }
     } else if (flags & OBJ_SET_IFEQ && !found) {
         if (!(flags & OBJ_SET_GET)) {
             addReply(c, abort_reply ? abort_reply : shared.null[c->resp]);
         }
-        return;
+        goto cleanup;
     }
 
     if ((flags & OBJ_SET_NX && found) || (flags & OBJ_SET_XX && !found)) {
         if (!(flags & OBJ_SET_GET)) {
             addReply(c, abort_reply ? abort_reply : shared.null[c->resp]);
         }
-        return;
+        goto cleanup;
     }
 
     /* If the `milliseconds` have expired, then we don't need to set it into the
@@ -144,7 +145,7 @@ void setGenericCommand(client *c,
     if (expire && checkAlreadyExpired(milliseconds)) {
         if (found) deleteExpiredKeyFromOverwriteAndPropagate(c, key);
         if (!(flags & OBJ_SET_GET)) addReply(c, shared.ok);
-        return;
+        goto cleanup;
     }
 
     /* When expire is not NULL, we avoid deleting the TTL so it can be updated later instead of being deleted and then
@@ -195,6 +196,9 @@ void setGenericCommand(client *c,
         }
         replaceClientCommandVector(c, argc, argv);
     }
+
+cleanup:
+    commitDeferredReplyBuffer(c, 1);
 }
 
 /*
@@ -442,6 +446,7 @@ void getexCommand(client *c) {
         return;
     }
 
+    initDeferredReplyBuffer(c);
     /* We need to do this before we expire the key or delete it */
     addReplyBulk(c, o);
 
@@ -469,9 +474,11 @@ void getexCommand(client *c) {
             server.dirty++;
         }
     }
+    commitDeferredReplyBuffer(c, 1);
 }
 
 void getdelCommand(client *c) {
+    initDeferredReplyBuffer(c);
     if (getGenericCommand(c) == C_ERR) return;
     if (dbSyncDelete(c->db, c->argv[1])) {
         /* Propagate as DEL command */
@@ -480,9 +487,11 @@ void getdelCommand(client *c) {
         notifyKeyspaceEvent(NOTIFY_GENERIC, "del", c->argv[1], c->db->id);
         server.dirty++;
     }
+    commitDeferredReplyBuffer(c, 1);
 }
 
 void getsetCommand(client *c) {
+    initDeferredReplyBuffer(c);
     if (getGenericCommand(c) == C_ERR) return;
     c->argv[2] = tryObjectEncoding(c->argv[2]);
     setKey(c, c->db, c->argv[1], &c->argv[2], 0);
@@ -490,6 +499,7 @@ void getsetCommand(client *c) {
     notifyKeyspaceEvent(NOTIFY_STRING, "set", c->argv[1], c->db->id);
     server.dirty++;
 
+    commitDeferredReplyBuffer(c, 1);
     /* Propagate as SET command */
     rewriteClientCommandArgument(c, 0, shared.set);
 }

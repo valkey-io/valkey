@@ -815,10 +815,7 @@ int clusterLoadConfig(char *filename) {
     return C_OK;
 
 fmterr:
-    serverLog(LL_WARNING, "Unrecoverable error: corrupted cluster config file \"%s\".", line);
-    zfree(line);
-    if (fp) fclose(fp);
-    exit(1);
+    serverPanic("Unrecoverable error: corrupted cluster config file \"%s\".", line);
 }
 
 /* Cluster node configuration is exactly the same as CLUSTER NODES output.
@@ -1089,6 +1086,27 @@ static void updateAnnouncedClientIpV6(clusterNode *node, char *value) {
 }
 
 static void updateShardId(clusterNode *node, const char *shard_id) {
+    /* Ensure replica shard IDs match their primary's to maintain cluster consistency.
+     *
+     * Shard ID updates must prioritize the primary, then propagate to replicas.
+     * This is critical due to the eventual consistency of shard IDs during cluster
+     * expansion. New replicas might replicate from a primary before fully
+     * synchronizing shard IDs with the rest of the cluster.
+     *
+     * Without this enforcement, a temporary inconsistency can arise where a
+     * replica's shard ID diverges from its primary's. This inconsistency is
+     * persisted in the primary's nodes.conf file. While this divergence will
+     * eventually resolve, if the primary crashes beforehand, it will enter a
+     * crash-restart loop due to the mismatch in its nodes.conf. */
+    if (shard_id && nodeIsReplica(node) &&
+        memcmp(clusterNodeGetPrimary(node)->shard_id, shard_id, CLUSTER_NAMELEN) != 0) {
+        serverLog(
+            LL_NOTICE,
+            "Shard id %.40s update request for node id %.40s diverges from existing primary shard id %.40s, rejecting!",
+            shard_id, node->name, clusterNodeGetPrimary(node)->shard_id);
+        return;
+    }
+
     if (shard_id && memcmp(node->shard_id, shard_id, CLUSTER_NAMELEN) != 0) {
         clusterRemoveNodeFromShard(node);
         memcpy(node->shard_id, shard_id, CLUSTER_NAMELEN);
@@ -3517,14 +3535,17 @@ int clusterProcessPacket(clusterLink *link) {
                     /* Primary turned into a replica! Reconfigure the node. */
                     if (sender_claimed_primary && areInSameShard(sender_claimed_primary, sender)) {
                         /* `sender` was a primary and was in the same shard as its new primary */
-                        if (sender->configEpoch > sender_claimed_config_epoch) {
+                        if (nodeEpoch(sender_claimed_primary) > sender_claimed_config_epoch) {
                             serverLog(LL_NOTICE,
                                       "Ignore stale message from %.40s (%s) in shard %.40s;"
                                       " gossip config epoch: %llu, current config epoch: %llu",
                                       sender->name, sender->human_nodename, sender->shard_id,
                                       (unsigned long long)sender_claimed_config_epoch,
-                                      (unsigned long long)sender->configEpoch);
-                        } else {
+                                      (unsigned long long)nodeEpoch(sender_claimed_primary));
+                            /* This packet is stale so we avoid processing it anymore. Otherwise
+                             * this may cause a primary-replica chain issue. */
+                            return 1;
+                        } else if (nodeIsReplica(sender_claimed_primary)) {
                             /* `primary` is still a `replica` in this observer node's view;
                              * update its role and configEpoch */
                             clusterSetNodeAsPrimary(sender_claimed_primary);

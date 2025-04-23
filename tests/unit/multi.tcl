@@ -917,6 +917,43 @@ start_server {tags {"multi"}} {
 
         r client reply on
     }
+
+    test "CLIENT REPLY OFF/SKIP: multi command" {
+        set rd [valkey_deferring_client]
+
+        # Turning the reply off
+        $rd client reply off
+
+        $rd multi
+        # These replies were silenced.
+        $rd ping pong2
+        $rd ping pong3
+        $rd exec
+
+        $rd client reply on
+        $rd ping
+        assert_equal {OK} [$rd read]
+        assert_equal {PONG} [$rd read]
+
+        $rd client reply skip
+
+        $rd multi
+        # These replies were silenced.
+        $rd ping pong2
+        $rd ping pong3
+        $rd exec
+
+        $rd client reply on
+        $rd ping
+        assert_equal {QUEUED} [$rd read]
+        assert_equal {QUEUED} [$rd read]
+        assert_equal {pong2 pong3} [$rd read]
+        assert_equal {OK} [$rd read]
+        assert_equal {PONG} [$rd read]
+
+        $rd close
+    }
+
 }
 
 start_server {overrides {appendonly {yes} appendfilename {appendonly.aof} appendfsync always} tags {external:skip}} {

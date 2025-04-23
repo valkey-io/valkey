@@ -128,12 +128,6 @@ void flagTransaction(client *c) {
 }
 
 void multiCommand(client *c) {
-    /* If the client has disabled replies, we disallow starting a transaction. */
-    if (c->flag.reply_off == 1 || c->flag.reply_skip == 1) {
-        addReplyError(c, "MULTI not allowed when CLIENT REPLY is off or skip.");
-        return;
-    }
-
     if (!c->mstate) initClientMultiState(c);
     c->flag.multi = 1;
     addReply(c, shared.ok);

@@ -183,6 +183,7 @@ client *createClient(connection *conn) {
     c->ctime = c->lastinteraction = server.unixtime;
     c->duration = 0;
     clientSetDefaultAuth(c);
+    c->ever_authenticated = 0;
     c->replstate = REPL_STATE_NONE;
     c->repl_start_cmd_stream_on_ack = 0;
     c->reploff = 0;

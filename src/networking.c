@@ -4639,7 +4639,7 @@ int checkClientOutputBufferLimits(client *c) {
 
     /* For unauthenticated clients which were also never authenticated before the output buffer is limited to prevent
      * them from abusing it by not reading the replies */
-    if (used_mem > REPLY_BUFFER_SIZE_UNAUTHENTICATED_CLIENT  && authRequired(c) && !clientEverAuthenticated(c))
+    if (used_mem > REPLY_BUFFER_SIZE_UNAUTHENTICATED_CLIENT && authRequired(c) && !clientEverAuthenticated(c))
         return 1;
 
     class = getClientType(c);

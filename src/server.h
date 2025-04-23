@@ -199,7 +199,7 @@ struct hdr_histogram;
 #define PROTO_REPLY_MIN_BYTES (1024)           /* the lower limit on reply buffer size */
 #define REDIS_AUTOSYNC_BYTES (1024 * 1024 * 4) /* Sync file every 4MB. */
 
-#define REPLY_BUFFER_DEFAULT_PEAK_RESET_TIME 5000 /* 5 seconds */
+#define REPLY_BUFFER_DEFAULT_PEAK_RESET_TIME 5000     /* 5 seconds */
 #define REPLY_BUFFER_SIZE_UNAUTHENTICATED_CLIENT 1024 /* 1024 bytes */
 
 /* When configuring the server eventloop, we setup it so that the total number

@@ -84,7 +84,8 @@
 #define CLI_HISTFILE_DEFAULT ".valkeycli_history"
 #define CLI_RCFILE_ENV "REDISCLI_RCFILE"
 #define CLI_RCFILE_DEFAULT ".valkeyclirc"
-#define CLI_AUTH_ENV "REDISCLI_AUTH"
+#define CLI_AUTH_ENV "VALKEYCLI_AUTH"
+#define OLD_CLI_AUTH_ENV "REDISCLI_AUTH"
 #define CLI_CLUSTER_YES_ENV "REDISCLI_CLUSTER_YES"
 
 #define CLUSTER_MANAGER_SLOTS 16384
@@ -2900,6 +2901,9 @@ static int parseOptions(int argc, char **argv) {
 static void parseEnv(void) {
     /* Set auth from env, but do not overwrite CLI arguments if passed */
     char *auth = getenv(CLI_AUTH_ENV);
+    if (auth != NULL) {
+        auth = getenv(OLD_CLI_AUTH_ENV);
+    }
     if (auth != NULL && config.conn_info.auth == NULL) {
         config.conn_info.auth = auth;
     }

@@ -1166,6 +1166,7 @@ int raxRemove(rax *rax, unsigned char *s, size_t len, void **old) {
                 rax_free(tofree);
                 rax->numnodes--;
                 if (h->iskey || (!h->iscompr && h->size != 1)) break;
+                if (comprsize + h->size > RAX_NODE_MAX_SIZE) break;
             }
             debugnode("New node", new);
 

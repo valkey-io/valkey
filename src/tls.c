@@ -450,6 +450,10 @@ typedef struct tls_connection {
     SSL *ssl;
     char *ssl_error;
     listNode *pending_list_node;
+    /* Per https://docs.openssl.org/master/man3/SSL_write, after a write call with partially written data,
+     * we must make subsequent write calls with the same length. We use this field to keep track of
+     * the previous write length. */
+    size_t last_failed_write_data_len;
 } tls_connection;
 
 static connection *createTLSConnection(int client_side) {
@@ -890,11 +894,23 @@ static int connTLSWrite(connection *conn_, const void *data, size_t data_len) {
 
     if (conn->c.state != CONN_STATE_CONNECTED) return -1;
     ERR_clear_error();
+    /* In case when last write failed due to some internal reason, retry has to provide
+     * at least the same amount of bytes (https://docs.openssl.org/master/man3/SSL_write).
+     * If that condition is not met, OpenSSL will return "SSL routines::bad length".
+     * Currently we only suspect this can happen during primary cron sending '\n'
+     * indication to the replica, so we silently return from this function without
+     * impacting the connection state. */
+    if (data_len < conn->last_failed_write_data_len) {
+        // TODO: place debugAssert for this case once the known issue described is resolved
+        return -1;
+    }
     ret = SSL_write(conn->ssl, data, data_len);
+    conn->last_failed_write_data_len = ret <= 0 ? data_len : 0;
     return updateStateAfterSSLIO(conn, ret, 1);
 }
 
 static int connTLSWritev(connection *conn_, const struct iovec *iov, int iovcnt) {
+    tls_connection *conn = (tls_connection *)conn_;
     if (iovcnt == 1) return connTLSWrite(conn_, iov[0].iov_base, iov[0].iov_len);
 
     /* Accumulate the amount of bytes of each buffer and check if it exceeds NET_MAX_WRITES_PER_EVENT. */
@@ -904,10 +920,15 @@ static int connTLSWritev(connection *conn_, const struct iovec *iov, int iovcnt)
         if (iov_bytes_len > NET_MAX_WRITES_PER_EVENT) break;
     }
 
-    /* The amount of all buffers is greater than NET_MAX_WRITES_PER_EVENT,
-     * which is not worth doing so much memory copying to reduce system calls,
-     * therefore, invoke connTLSWrite() multiple times to avoid memory copies. */
-    if (iov_bytes_len > NET_MAX_WRITES_PER_EVENT) {
+    /* In case the amount of all buffers is greater than NET_MAX_WRITES_PER_EVENT,
+     * it might not worth doing so much memory copying to reduce system calls,
+     * therefore, invoke connTLSWrite() multiple times to avoid memory copies.
+     * However, in case when last write failed we still have to repeat sending last_failed_write_data_len
+     * bytes. Because of openssl implementation we cannot repeat sending writes with length smaller than
+     * the last failed write (https://docs.openssl.org/master/man3/SSL_write) so in case the first io buffer
+     * does not provide at least the same amount of bytes as previous failed write, we will have to fallback to
+     * memory copy to a static buffer before calling SSL_write. */
+    if (iov_bytes_len > NET_MAX_WRITES_PER_EVENT && iovcnt > 0 && iov[0].iov_len >= conn->last_failed_write_data_len) {
         ssize_t tot_sent = 0;
         for (int i = 0; i < iovcnt; i++) {
             ssize_t sent = connTLSWrite(conn_, iov[i].iov_base, iov[i].iov_len);
@@ -921,10 +942,14 @@ static int connTLSWritev(connection *conn_, const struct iovec *iov, int iovcnt)
     /* The amount of all buffers is less than NET_MAX_WRITES_PER_EVENT,
      * which is worth doing more memory copies in exchange for fewer system calls,
      * so concatenate these scattered buffers into a contiguous piece of memory
-     * and send it away by one call to connTLSWrite(). */
+     * and send it away by one call to connTLSWrite().
+     * However, code can fallback here in case when last write failed and first
+     * element of io is buffer not big enough to provide required amount of bytes
+     * to retry, so iov_bytes_len may exceed NET_MAX_WRITES_PER_EVENT by the amount
+     * of remaining bytes from last taken io. */
     char buf[iov_bytes_len];
     size_t offset = 0;
-    for (int i = 0; i < iovcnt; i++) {
+    for (int i = 0; i < iovcnt && offset < iov_bytes_len; i++) {
         memcpy(buf + offset, iov[i].iov_base, iov[i].iov_len);
         offset += iov[i].iov_len;
     }

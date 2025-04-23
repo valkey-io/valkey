@@ -685,6 +685,7 @@ void moduleReleaseTempClient(client *c) {
     c->bufpos = 0;
     c->raw_flag = 0;
     c->flag.module = 1;
+    c->flag.fake = 1;
     c->user = NULL; /* Root user */
     c->cmd = c->lastcmd = c->realcmd = c->io_parsed_cmd = NULL;
     if (c->bstate.async_rm_call_handle) {
@@ -7593,7 +7594,7 @@ void VM__Assert(const char *estr, const char *file, int line) {
  * command. The call is skipped if the latency is smaller than the configured
  * latency-monitor-threshold. */
 void VM_LatencyAddSample(const char *event, mstime_t latency) {
-    if (latency >= server.latency_monitor_threshold) latencyAddSample(event, latency);
+    latencyAddSampleIfNeeded(event, latency);
 }
 
 /* --------------------------------------------------------------------------

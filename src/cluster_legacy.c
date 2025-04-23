@@ -425,8 +425,18 @@ typedef struct {
     union {
         clusterMsg msg;
         clusterMsgLight msg_light;
-    };
+    } data[];
 } clusterMsgSendBlock;
+
+/* Helper function to extract a normal message from a send block. */
+static clusterMsgLight *getLightMessageFromSendBlock(clusterMsgSendBlock *msgblock) {
+    return &msgblock->data[0].msg_light;
+}
+
+/* Helper function to extract a light message from a send block. */
+static clusterMsg *getMessageFromSendBlock(clusterMsgSendBlock *msgblock) {
+    return &msgblock->data[0].msg;
+}
 
 /* -----------------------------------------------------------------------------
  * Initialization
@@ -781,10 +791,7 @@ int clusterLoadConfig(char *filename) {
     return C_OK;
 
 fmterr:
-    serverLog(LL_WARNING, "Unrecoverable error: corrupted cluster config file \"%s\".", line);
-    zfree(line);
-    if (fp) fclose(fp);
-    exit(1);
+    serverPanic("Unrecoverable error: corrupted cluster config file \"%s\".", line);
 }
 
 /* Cluster node configuration is exactly the same as CLUSTER NODES output.
@@ -1029,6 +1036,27 @@ static void updateAnnouncedClientIpV6(clusterNode *node, char *value) {
 }
 
 static void updateShardId(clusterNode *node, const char *shard_id) {
+    /* Ensure replica shard IDs match their primary's to maintain cluster consistency.
+     *
+     * Shard ID updates must prioritize the primary, then propagate to replicas.
+     * This is critical due to the eventual consistency of shard IDs during cluster
+     * expansion. New replicas might replicate from a primary before fully
+     * synchronizing shard IDs with the rest of the cluster.
+     *
+     * Without this enforcement, a temporary inconsistency can arise where a
+     * replica's shard ID diverges from its primary's. This inconsistency is
+     * persisted in the primary's nodes.conf file. While this divergence will
+     * eventually resolve, if the primary crashes beforehand, it will enter a
+     * crash-restart loop due to the mismatch in its nodes.conf. */
+    if (shard_id && nodeIsReplica(node) &&
+        memcmp(clusterNodeGetPrimary(node)->shard_id, shard_id, CLUSTER_NAMELEN) != 0) {
+        serverLog(
+            LL_NOTICE,
+            "Shard id %.40s update request for node id %.40s diverges from existing primary shard id %.40s, rejecting!",
+            shard_id, node->name, clusterNodeGetPrimary(node)->shard_id);
+        return;
+    }
+
     if (shard_id && memcmp(node->shard_id, shard_id, CLUSTER_NAMELEN) != 0) {
         clusterRemoveNodeFromShard(node);
         memcpy(node->shard_id, shard_id, CLUSTER_NAMELEN);
@@ -1288,15 +1316,15 @@ void clusterReset(int hard) {
  * CLUSTER communication link
  * -------------------------------------------------------------------------- */
 clusterMsgSendBlock *createClusterMsgSendBlock(int type, uint32_t msglen) {
-    uint32_t blocklen = msglen + offsetof(clusterMsgSendBlock, msg);
+    uint32_t blocklen = msglen + offsetof(clusterMsgSendBlock, data);
     clusterMsgSendBlock *msgblock = zcalloc(blocklen);
     msgblock->refcount = 1;
     msgblock->totlen = blocklen;
     server.stat_cluster_links_memory += blocklen;
     if (IS_LIGHT_MESSAGE(type)) {
-        clusterBuildMessageHdrLight(&msgblock->msg_light, type, msglen);
+        clusterBuildMessageHdrLight(getLightMessageFromSendBlock(msgblock), type, msglen);
     } else {
-        clusterBuildMessageHdr(&msgblock->msg, type, msglen);
+        clusterBuildMessageHdr(getMessageFromSendBlock(msgblock), type, msglen);
     }
     return msgblock;
 }
@@ -3318,14 +3346,17 @@ int clusterProcessPacket(clusterLink *link) {
                     /* Primary turned into a replica! Reconfigure the node. */
                     if (sender_claimed_primary && areInSameShard(sender_claimed_primary, sender)) {
                         /* `sender` was a primary and was in the same shard as its new primary */
-                        if (sender->configEpoch > sender_claimed_config_epoch) {
+                        if (nodeEpoch(sender_claimed_primary) > sender_claimed_config_epoch) {
                             serverLog(LL_NOTICE,
                                       "Ignore stale message from %.40s (%s) in shard %.40s;"
                                       " gossip config epoch: %llu, current config epoch: %llu",
                                       sender->name, sender->human_nodename, sender->shard_id,
                                       (unsigned long long)sender_claimed_config_epoch,
-                                      (unsigned long long)sender->configEpoch);
-                        } else {
+                                      (unsigned long long)nodeEpoch(sender_claimed_primary));
+                            /* This packet is stale so we avoid processing it anymore. Otherwise
+                             * this may cause a primary-replica chain issue. */
+                            return 1;
+                        } else if (nodeIsReplica(sender_claimed_primary)) {
                             /* `primary` is still a `replica` in this observer node's view;
                              * update its role and configEpoch */
                             clusterSetNodeAsPrimary(sender_claimed_primary);
@@ -3583,7 +3614,7 @@ void clusterWriteHandler(connection *conn) {
     while (totwritten < NET_MAX_WRITES_PER_EVENT && listLength(link->send_msg_queue) > 0) {
         listNode *head = listFirst(link->send_msg_queue);
         clusterMsgSendBlock *msgblock = (clusterMsgSendBlock *)head->value;
-        clusterMsg *msg = &msgblock->msg;
+        clusterMsg *msg = getMessageFromSendBlock(msgblock);
         size_t msg_offset = link->head_msg_send_offset;
         size_t msg_len = ntohl(msg->totlen);
 
@@ -3766,7 +3797,7 @@ void clusterSendMessage(clusterLink *link, clusterMsgSendBlock *msgblock) {
     if (!link) {
         return;
     }
-    if (listLength(link->send_msg_queue) == 0 && msgblock->msg.totlen != 0)
+    if (listLength(link->send_msg_queue) == 0 && getMessageFromSendBlock(msgblock)->totlen != 0)
         connSetWriteHandlerWithBarrier(link->conn, clusterWriteHandler, 1);
 
     listAddNodeTail(link->send_msg_queue, msgblock);
@@ -3777,7 +3808,7 @@ void clusterSendMessage(clusterLink *link, clusterMsgSendBlock *msgblock) {
     server.stat_cluster_links_memory += sizeof(listNode);
 
     /* Populate sent messages stats. */
-    uint16_t type = ntohs(msgblock->msg.type) & ~CLUSTERMSG_MODIFIER_MASK;
+    uint16_t type = ntohs(getMessageFromSendBlock(msgblock)->type) & ~CLUSTERMSG_MODIFIER_MASK;
     if (type < CLUSTERMSG_TYPE_COUNT) server.cluster->stats_bus_messages_sent[type]++;
 }
 
@@ -3957,7 +3988,7 @@ void clusterSendPing(clusterLink *link, int type) {
      * sizeof(clusterMsg) or more. */
     if (estlen < (int)sizeof(clusterMsg)) estlen = sizeof(clusterMsg);
     clusterMsgSendBlock *msgblock = createClusterMsgSendBlock(type, estlen);
-    clusterMsg *hdr = &msgblock->msg;
+    clusterMsg *hdr = getMessageFromSendBlock(msgblock);
 
     if (!link->inbound && type == CLUSTERMSG_TYPE_PING) link->node->ping_sent = mstime();
 
@@ -4102,10 +4133,10 @@ clusterMsgSendBlock *clusterCreatePublishMsgBlock(robj *channel, robj *message, 
     clusterMsgSendBlock *msgblock = createClusterMsgSendBlock(type, msglen);
     clusterMsgDataPublish *hdr_data_msg;
     if (is_light) {
-        clusterMsgLight *hdr_light = &msgblock->msg_light;
+        clusterMsgLight *hdr_light = getLightMessageFromSendBlock(msgblock);
         hdr_data_msg = &hdr_light->data.publish.msg;
     } else {
-        clusterMsg *hdr = &msgblock->msg;
+        clusterMsg *hdr = getMessageFromSendBlock(msgblock);
         hdr_data_msg = &hdr->data.publish.msg;
     }
     hdr_data_msg->channel_len = htonl(channel_len);
@@ -4128,7 +4159,7 @@ void clusterSendFail(char *nodename) {
     uint32_t msglen = sizeof(clusterMsg) - sizeof(union clusterMsgData) + sizeof(clusterMsgDataFail);
     clusterMsgSendBlock *msgblock = createClusterMsgSendBlock(CLUSTERMSG_TYPE_FAIL, msglen);
 
-    clusterMsg *hdr = &msgblock->msg;
+    clusterMsg *hdr = getMessageFromSendBlock(msgblock);
     memcpy(hdr->data.fail.about.nodename, nodename, CLUSTER_NAMELEN);
 
     clusterBroadcastMessage(msgblock);
@@ -4144,7 +4175,7 @@ void clusterSendUpdate(clusterLink *link, clusterNode *node) {
     uint32_t msglen = sizeof(clusterMsg) - sizeof(union clusterMsgData) + sizeof(clusterMsgDataUpdate);
     clusterMsgSendBlock *msgblock = createClusterMsgSendBlock(CLUSTERMSG_TYPE_UPDATE, msglen);
 
-    clusterMsg *hdr = &msgblock->msg;
+    clusterMsg *hdr = getMessageFromSendBlock(msgblock);
     memcpy(hdr->data.update.nodecfg.nodename, node->name, CLUSTER_NAMELEN);
     hdr->data.update.nodecfg.configEpoch = htonu64(node->configEpoch);
     memcpy(hdr->data.update.nodecfg.slots, node->slots, sizeof(node->slots));
@@ -4166,7 +4197,7 @@ void clusterSendModule(clusterLink *link, uint64_t module_id, uint8_t type, cons
     msglen += sizeof(clusterMsgModule) - 3 + len;
     clusterMsgSendBlock *msgblock = createClusterMsgSendBlock(CLUSTERMSG_TYPE_MODULE, msglen);
 
-    clusterMsg *hdr = &msgblock->msg;
+    clusterMsg *hdr = getMessageFromSendBlock(msgblock);
     hdr->data.module.msg.module_id = module_id; /* Already endian adjusted. */
     hdr->data.module.msg.type = type;
     hdr->data.module.msg.len = htonl(len);
@@ -4255,11 +4286,10 @@ void clusterRequestFailoverAuth(void) {
     uint32_t msglen = sizeof(clusterMsg) - sizeof(union clusterMsgData);
     clusterMsgSendBlock *msgblock = createClusterMsgSendBlock(CLUSTERMSG_TYPE_FAILOVER_AUTH_REQUEST, msglen);
 
-    clusterMsg *hdr = &msgblock->msg;
     /* If this is a manual failover, set the CLUSTERMSG_FLAG0_FORCEACK bit
      * in the header to communicate the nodes receiving the message that
      * they should authorized the failover even if the primary is working. */
-    if (server.cluster->mf_end) hdr->mflags[0] |= CLUSTERMSG_FLAG0_FORCEACK;
+    if (server.cluster->mf_end) msgblock->data[0].msg.mflags[0] |= CLUSTERMSG_FLAG0_FORCEACK;
     clusterBroadcastMessage(msgblock);
     clusterMsgSendBlockDecrRefCount(msgblock);
 }

@@ -10,6 +10,31 @@ SECURITY: There are security fixes in the release.
 --------------------------------------------------------------------------------
 
 ================================================================================
+Valkey 8.1.1  -  Released Wed 23 Apr 2025
+================================================================================
+
+Upgrade urgency SECURITY: This release includes security fixes we recommend you
+apply as soon as possible.
+
+Bug fixes
+=========
+* Fix the build on less common platforms in zmalloc.c (#1922)
+* fix: add samples to stream object consumer trees (#1825)
+* Fix crash during TLS handshake with I/O threads (#1955)
+* Fix cluster slot stats assertion during promotion of replica (#1950)
+* Fix panic in primary when blocking shutdown after previous block with timeout (#1948)
+* Ignore stale gossip packets that arrive out of order (#1777)
+* Fix incorrect lag reported in XINFO GROUPS (#1952)
+* Fix engine crash on module client blocking during keyspace events (#1819)
+* Avoid shard id update of replica if not matching with primary shard id (#573)
+* Only enable defrag for vendored jemalloc (#1985)
+* Allow scripts to support null characters again (#1984)
+
+Security fixes
+==============
+* CVE-2025-21605 Limit output buffer for unauthenticated clients (#1994)
+
+================================================================================
 Valkey 8.1.0 GA  -  Released Mon 31 March 2025
 ================================================================================
 Upgrade urgency LOW: This is the first release of Valkey 8.1, 

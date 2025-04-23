@@ -504,7 +504,7 @@ void debugCommand(client *c) {
             "DICT-RESIZING <0|1>",
             "    Enable or disable the main dict and expire dict resizing.",
             "CLIENT-ENFORCE-REPLY-LIST <0|1>",
-            "When set to 1, it enforces the use of the client reply list directly",
+            "    When set to 1, it enforces the use of the client reply list directly",
             "    and avoids using the client's static buffer.",
             NULL};
         addExtendedReplyHelp(c, help, clusterDebugCommandExtendedHelp());

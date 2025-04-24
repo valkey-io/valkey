@@ -847,59 +847,6 @@ void *dictFetchValue(dict *d, const void *key) {
     return he ? dictGetVal(he) : NULL;
 }
 
-/* Find an element from the table, also get the plink of the entry. The entry
- * is returned if the element is found, and the user should later call
- * `dictTwoPhaseUnlinkFree` with it in order to unlink and release it. Otherwise if
- * the key is not found, NULL is returned. These two functions should be used in pair.
- * `dictTwoPhaseUnlinkFind` pauses rehash and `dictTwoPhaseUnlinkFree` resumes rehash.
- *
- * We can use like this:
- *
- * dictEntry *de = dictTwoPhaseUnlinkFind(db->dict,key->ptr,&plink, &table);
- * // Do something, but we can't modify the dict
- * dictTwoPhaseUnlinkFree(db->dict,de,plink,table); // We don't need to lookup again
- *
- * If we want to find an entry before delete this entry, this an optimization to avoid
- * dictFind followed by dictDelete. i.e. the first API is a find, and it gives some info
- * to the second one to avoid repeating the lookup
- */
-dictEntry *dictTwoPhaseUnlinkFind(dict *d, const void *key, dictEntry ***plink, int *table_index) {
-    uint64_t h, idx, table;
-
-    if (dictSize(d) == 0) return NULL; /* dict is empty */
-    if (dictIsRehashing(d)) dictRehashStep(d);
-    h = dictHashKey(d, key);
-
-    for (table = 0; table <= 1; table++) {
-        idx = h & DICTHT_SIZE_MASK(d->ht_size_exp[table]);
-        if (table == 0 && (long)idx < d->rehashidx) continue;
-        dictEntry **ref = &d->ht_table[table][idx];
-        while (ref && *ref) {
-            void *de_key = dictGetKey(*ref);
-            if (key == de_key || dictCompareKeys(d, key, de_key)) {
-                *table_index = table;
-                *plink = ref;
-                dictPauseRehashing(d);
-                return *ref;
-            }
-            ref = dictGetNextRef(*ref);
-        }
-        if (!dictIsRehashing(d)) return NULL;
-    }
-    return NULL;
-}
-
-void dictTwoPhaseUnlinkFree(dict *d, dictEntry *he, dictEntry **plink, int table_index) {
-    if (he == NULL) return;
-    d->ht_used[table_index]--;
-    *plink = dictGetNext(he);
-    dictFreeKey(d, he);
-    dictFreeVal(d, he);
-    if (!entryIsKey(he)) zfree(decodeMaskedPtr(he));
-    dictShrinkIfAutoResizeAllowed(d);
-    dictResumeRehashing(d);
-}
-
 /* In the macros below, `de` stands for dict entry. */
 #define DICT_SET_VALUE(de, field, val)                        \
     {                                                         \

@@ -614,8 +614,8 @@ void saddCommand(client *c) {
     if (added) {
         signalModifiedKey(c, c->db, c->argv[1]);
         notifyKeyspaceEvent(NOTIFY_SET, "sadd", c->argv[1], c->db->id);
+        server.dirty += added;
     }
-    server.dirty += added;
     addReplyLongLong(c, added);
 }
 

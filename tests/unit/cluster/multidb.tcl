@@ -290,7 +290,7 @@ start_cluster 1 1 {tags {external:skip cluster} } {
             assert_equal [R $primary_id dbsize] $keys_per_db
         }
 
-        # Run BGSAVE to save the RDB
+        # Run save to save the RDB
         R $primary_id save
         
         # Restart instance

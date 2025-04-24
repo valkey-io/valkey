@@ -124,7 +124,7 @@ robj *lookupKey(serverDb *db, robj *key, int flags) {
         /* Update the access time for the ageing algorithm.
          * Don't do it if we have a saving child, as this will trigger
          * a copy on write madness. */
-        if (server.current_client && server.current_client->flag.no_touch &&
+        if (server.current_client && server.current_client->io_data->flag.no_touch &&
             server.executing_client->cmd->proc != touchCommand)
             flags |= LOOKUP_NOTOUCH;
         if (!hasActiveChildProcess() && !(flags & LOOKUP_NOTOUCH)) {
@@ -257,18 +257,18 @@ int getKeySlot(sds key) {
      * Modules and scripts executed on the primary may get replicated as multi-execs that operate on multiple slots,
      * so we must always recompute the slot for commands coming from the primary.
      */
-    if (server.current_client && server.current_client->slot >= 0 && server.current_client->flag.executing_command &&
-        !server.current_client->flag.primary) {
-        debugServerAssertWithInfo(server.current_client, NULL,
-                                  (int)keyHashSlot(key, (int)sdslen(key)) == server.current_client->slot);
-        return server.current_client->slot;
+    if (server.current_client && server.current_client->io_data->slot >= 0 && server.current_client->io_data->flag.executing_command &&
+        !server.current_client->io_data->flag.primary) {
+        debugServerAssertWithInfo(server.current_client->io_data, NULL,
+                                  (int)keyHashSlot(key, (int)sdslen(key)) == server.current_client->io_data->slot);
+        return server.current_client->io_data->slot;
     }
     int slot = keyHashSlot(key, (int)sdslen(key));
     /* For the case of replicated commands from primary, getNodeByQuery() never gets called,
      * and thus c->slot never gets populated. That said, if this command ends up accessing a key,
      * we are able to backfill c->slot here, where the key's hash calculation is made. */
-    if (server.current_client && server.current_client->flag.primary) {
-        server.current_client->slot = slot;
+    if (server.current_client && server.current_client->io_data->flag.primary) {
+        server.current_client->io_data->slot = slot;
     }
     return slot;
 }
@@ -747,11 +747,11 @@ void signalFlushedDb(int dbid, int async) {
  * C_ERR is returned and the function sends an error to the client. */
 int getFlushCommandFlags(client *c, int *flags) {
     /* Parse the optional ASYNC option. */
-    if (c->argc == 2 && !strcasecmp(c->argv[1]->ptr, "sync")) {
+    if (c->io_data->argc == 2 && !strcasecmp(c->io_data->argv[1]->ptr, "sync")) {
         *flags = EMPTYDB_NO_FLAGS;
-    } else if (c->argc == 2 && !strcasecmp(c->argv[1]->ptr, "async")) {
+    } else if (c->io_data->argc == 2 && !strcasecmp(c->io_data->argv[1]->ptr, "async")) {
         *flags = EMPTYDB_ASYNC;
-    } else if (c->argc == 1) {
+    } else if (c->io_data->argc == 1) {
         *flags = server.lazyfree_lazy_user_flush ? EMPTYDB_ASYNC : EMPTYDB_NO_FLAGS;
     } else {
         addReplyErrorObject(c, shared.syntaxerr);
@@ -822,12 +822,12 @@ void flushallCommand(client *c) {
 void delGenericCommand(client *c, int lazy) {
     int numdel = 0, j;
 
-    for (j = 1; j < c->argc; j++) {
-        if (expireIfNeeded(c->db, c->argv[j], NULL, 0) == KEY_DELETED) continue;
-        int deleted = lazy ? dbAsyncDelete(c->db, c->argv[j]) : dbSyncDelete(c->db, c->argv[j]);
+    for (j = 1; j < c->io_data->argc; j++) {
+        if (expireIfNeeded(c->db, c->io_data->argv[j], NULL, 0) == KEY_DELETED) continue;
+        int deleted = lazy ? dbAsyncDelete(c->db, c->io_data->argv[j]) : dbSyncDelete(c->db, c->io_data->argv[j]);
         if (deleted) {
-            signalModifiedKey(c, c->db, c->argv[j]);
-            notifyKeyspaceEvent(NOTIFY_GENERIC, "del", c->argv[j], c->db->id);
+            signalModifiedKey(c, c->db, c->io_data->argv[j]);
+            notifyKeyspaceEvent(NOTIFY_GENERIC, "del", c->io_data->argv[j], c->db->id);
             server.dirty++;
             numdel++;
         }
@@ -849,8 +849,8 @@ void existsCommand(client *c) {
     long long count = 0;
     int j;
 
-    for (j = 1; j < c->argc; j++) {
-        if (lookupKeyReadWithFlags(c->db, c->argv[j], LOOKUP_NOTOUCH)) count++;
+    for (j = 1; j < c->io_data->argc; j++) {
+        if (lookupKeyReadWithFlags(c->db, c->io_data->argv[j], LOOKUP_NOTOUCH)) count++;
     }
     addReplyLongLong(c, count);
 }
@@ -858,7 +858,7 @@ void existsCommand(client *c) {
 void selectCommand(client *c) {
     int id;
 
-    if (getIntFromObjectOrReply(c, c->argv[1], &id, NULL) != C_OK) return;
+    if (getIntFromObjectOrReply(c, c->io_data->argv[1], &id, NULL) != C_OK) return;
 
     if (server.cluster_enabled && id != 0) {
         addReplyError(c, "SELECT is not allowed in cluster mode");
@@ -884,7 +884,7 @@ void randomkeyCommand(client *c) {
 }
 
 void keysCommand(client *c) {
-    sds pattern = c->argv[1]->ptr;
+    sds pattern = c->io_data->argv[1]->ptr;
     int plen = sdslen(pattern), allkeys, pslot = -1;
     unsigned long numkeys = 0;
     void *replylen = addReplyDeferredLen(c);
@@ -909,7 +909,7 @@ void keysCommand(client *c) {
                 numkeys++;
             }
         }
-        if (c->flag.close_asap) break;
+        if (c->io_data->flag.close_asap) break;
     }
     if (kvs_di) kvstoreReleaseHashtableIterator(kvs_di);
     if (kvs_it) kvstoreIteratorRelease(kvs_it);
@@ -1104,10 +1104,10 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {
     i = (o == NULL) ? 2 : 3; /* Skip the key argument if needed. */
 
     /* Step 1: Parse options. */
-    while (i < c->argc) {
-        j = c->argc - i;
-        if (!strcasecmp(c->argv[i]->ptr, "count") && j >= 2) {
-            if (getLongFromObjectOrReply(c, c->argv[i + 1], &count, NULL) != C_OK) {
+    while (i < c->io_data->argc) {
+        j = c->io_data->argc - i;
+        if (!strcasecmp(c->io_data->argv[i]->ptr, "count") && j >= 2) {
+            if (getLongFromObjectOrReply(c, c->io_data->argv[i + 1], &count, NULL) != C_OK) {
                 return;
             }
 
@@ -1117,8 +1117,8 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {
             }
 
             i += 2;
-        } else if (!strcasecmp(c->argv[i]->ptr, "match") && j >= 2) {
-            pat = c->argv[i + 1]->ptr;
+        } else if (!strcasecmp(c->io_data->argv[i]->ptr, "match") && j >= 2) {
+            pat = c->io_data->argv[i + 1]->ptr;
             patlen = sdslen(pat);
 
             /* The pattern always matches if it is exactly "*", so it is
@@ -1126,23 +1126,23 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {
             use_pattern = !(patlen == 1 && pat[0] == '*');
 
             i += 2;
-        } else if (!strcasecmp(c->argv[i]->ptr, "type") && o == NULL && j >= 2) {
+        } else if (!strcasecmp(c->io_data->argv[i]->ptr, "type") && o == NULL && j >= 2) {
             /* SCAN for a particular type only applies to the db dict */
-            typename = c->argv[i + 1]->ptr;
+            typename = c->io_data->argv[i + 1]->ptr;
             type = getObjectTypeByName(typename);
             if (type == LLONG_MAX) {
                 addReplyErrorFormat(c, "unknown type name '%s'", typename);
                 return;
             }
             i += 2;
-        } else if (!strcasecmp(c->argv[i]->ptr, "novalues")) {
+        } else if (!strcasecmp(c->io_data->argv[i]->ptr, "novalues")) {
             if (!o || o->type != OBJ_HASH) {
                 addReplyError(c, "NOVALUES option can only be used in HSCAN");
                 return;
             }
             only_keys = 1;
             i++;
-        } else if (!strcasecmp(c->argv[i]->ptr, "noscores")) {
+        } else if (!strcasecmp(c->io_data->argv[i]->ptr, "noscores")) {
             if (!o || o->type != OBJ_ZSET) {
                 addReplyError(c, "NOSCORES option can only be used in ZSCAN");
                 return;
@@ -1298,7 +1298,7 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {
 /* The SCAN command completely relies on scanGenericCommand. */
 void scanCommand(client *c) {
     unsigned long long cursor;
-    if (parseScanCursorOrReply(c, c->argv[1]->ptr, &cursor) == C_ERR) return;
+    if (parseScanCursorOrReply(c, c->io_data->argv[1]->ptr, &cursor) == C_ERR) return;
     scanGenericCommand(c, NULL, cursor);
 }
 
@@ -1312,7 +1312,7 @@ void lastsaveCommand(client *c) {
 
 void typeCommand(client *c) {
     robj *o;
-    o = lookupKeyReadWithFlags(c->db, c->argv[1], LOOKUP_NOTOUCH);
+    o = lookupKeyReadWithFlags(c->db, c->io_data->argv[1], LOOKUP_NOTOUCH);
     addReplyStatus(c, getObjectTypeName(o));
 }
 
@@ -1320,16 +1320,16 @@ void typeCommand(client *c) {
 void shutdownCommand(client *c) {
     int flags = SHUTDOWN_NOFLAGS;
     int abort = 0;
-    for (int i = 1; i < c->argc; i++) {
-        if (!strcasecmp(c->argv[i]->ptr, "nosave")) {
+    for (int i = 1; i < c->io_data->argc; i++) {
+        if (!strcasecmp(c->io_data->argv[i]->ptr, "nosave")) {
             flags |= SHUTDOWN_NOSAVE;
-        } else if (!strcasecmp(c->argv[i]->ptr, "save")) {
+        } else if (!strcasecmp(c->io_data->argv[i]->ptr, "save")) {
             flags |= SHUTDOWN_SAVE;
-        } else if (!strcasecmp(c->argv[i]->ptr, "now")) {
+        } else if (!strcasecmp(c->io_data->argv[i]->ptr, "now")) {
             flags |= SHUTDOWN_NOW;
-        } else if (!strcasecmp(c->argv[i]->ptr, "force")) {
+        } else if (!strcasecmp(c->io_data->argv[i]->ptr, "force")) {
             flags |= SHUTDOWN_FORCE;
-        } else if (!strcasecmp(c->argv[i]->ptr, "abort")) {
+        } else if (!strcasecmp(c->io_data->argv[i]->ptr, "abort")) {
             abort = 1;
         } else {
             addReplyErrorObject(c, shared.syntaxerr);
@@ -1350,7 +1350,7 @@ void shutdownCommand(client *c) {
         return;
     }
 
-    if (!(flags & SHUTDOWN_NOW) && c->flag.deny_blocking) {
+    if (!(flags & SHUTDOWN_NOW) && c->io_data->flag.deny_blocking) {
         addReplyError(c, "SHUTDOWN without NOW or ABORT isn't allowed for DENY BLOCKING client");
         return;
     }
@@ -1383,9 +1383,9 @@ void renameGenericCommand(client *c, int nx) {
 
     /* When source and dest key is the same, no operation is performed,
      * if the key exists, however we still return an error on unexisting key. */
-    if (sdscmp(c->argv[1]->ptr, c->argv[2]->ptr) == 0) samekey = 1;
+    if (sdscmp(c->io_data->argv[1]->ptr, c->io_data->argv[2]->ptr) == 0) samekey = 1;
 
-    if ((o = lookupKeyWriteOrReply(c, c->argv[1], shared.nokeyerr)) == NULL) return;
+    if ((o = lookupKeyWriteOrReply(c, c->io_data->argv[1], shared.nokeyerr)) == NULL) return;
 
     if (samekey) {
         addReply(c, nx ? shared.czero : shared.ok);
@@ -1393,8 +1393,8 @@ void renameGenericCommand(client *c, int nx) {
     }
 
     incrRefCount(o);
-    expire = getExpire(c->db, c->argv[1]);
-    if (lookupKeyWrite(c->db, c->argv[2]) != NULL) {
+    expire = getExpire(c->db, c->io_data->argv[1]);
+    if (lookupKeyWrite(c->db, c->io_data->argv[2]) != NULL) {
         if (nx) {
             decrRefCount(o);
             addReply(c, shared.czero);
@@ -1402,15 +1402,15 @@ void renameGenericCommand(client *c, int nx) {
         }
         /* Overwrite: delete the old key before creating the new one
          * with the same name. */
-        dbDelete(c->db, c->argv[2]);
+        dbDelete(c->db, c->io_data->argv[2]);
     }
-    dbDelete(c->db, c->argv[1]);
-    dbAdd(c->db, c->argv[2], &o);
-    if (expire != -1) o = setExpire(c, c->db, c->argv[2], expire);
-    signalModifiedKey(c, c->db, c->argv[1]);
-    signalModifiedKey(c, c->db, c->argv[2]);
-    notifyKeyspaceEvent(NOTIFY_GENERIC, "rename_from", c->argv[1], c->db->id);
-    notifyKeyspaceEvent(NOTIFY_GENERIC, "rename_to", c->argv[2], c->db->id);
+    dbDelete(c->db, c->io_data->argv[1]);
+    dbAdd(c->db, c->io_data->argv[2], &o);
+    if (expire != -1) o = setExpire(c, c->db, c->io_data->argv[2], expire);
+    signalModifiedKey(c, c->db, c->io_data->argv[1]);
+    signalModifiedKey(c, c->db, c->io_data->argv[2]);
+    notifyKeyspaceEvent(NOTIFY_GENERIC, "rename_from", c->io_data->argv[1], c->db->id);
+    notifyKeyspaceEvent(NOTIFY_GENERIC, "rename_to", c->io_data->argv[2], c->db->id);
     server.dirty++;
     addReply(c, nx ? shared.cone : shared.ok);
 }
@@ -1438,7 +1438,7 @@ void moveCommand(client *c) {
     src = c->db;
     srcid = c->db->id;
 
-    if (getIntFromObjectOrReply(c, c->argv[2], &dbid, NULL) != C_OK) return;
+    if (getIntFromObjectOrReply(c, c->io_data->argv[2], &dbid, NULL) != C_OK) return;
 
     if (selectDb(c, dbid) == C_ERR) {
         addReplyError(c, "DB index is out of range");
@@ -1455,30 +1455,30 @@ void moveCommand(client *c) {
     }
 
     /* Check if the element exists and get a reference */
-    o = lookupKeyWrite(c->db, c->argv[1]);
+    o = lookupKeyWrite(c->db, c->io_data->argv[1]);
     if (!o) {
         addReply(c, shared.czero);
         return;
     }
-    expire = getExpire(c->db, c->argv[1]);
+    expire = getExpire(c->db, c->io_data->argv[1]);
 
     /* Return zero if the key already exists in the target DB */
-    if (lookupKeyWrite(dst, c->argv[1]) != NULL) {
+    if (lookupKeyWrite(dst, c->io_data->argv[1]) != NULL) {
         addReply(c, shared.czero);
         return;
     }
 
-    incrRefCount(o);           /* ref counter = 2 */
-    dbDelete(src, c->argv[1]); /* ref counter = 1 */
+    incrRefCount(o);                    /* ref counter = 2 */
+    dbDelete(src, c->io_data->argv[1]); /* ref counter = 1 */
 
-    dbAdd(dst, c->argv[1], &o);
-    if (expire != -1) o = setExpire(c, dst, c->argv[1], expire);
+    dbAdd(dst, c->io_data->argv[1], &o);
+    if (expire != -1) o = setExpire(c, dst, c->io_data->argv[1], expire);
 
     /* OK! key moved */
-    signalModifiedKey(c, src, c->argv[1]);
-    signalModifiedKey(c, dst, c->argv[1]);
-    notifyKeyspaceEvent(NOTIFY_GENERIC, "move_from", c->argv[1], src->id);
-    notifyKeyspaceEvent(NOTIFY_GENERIC, "move_to", c->argv[1], dst->id);
+    signalModifiedKey(c, src, c->io_data->argv[1]);
+    signalModifiedKey(c, dst, c->io_data->argv[1]);
+    notifyKeyspaceEvent(NOTIFY_GENERIC, "move_from", c->io_data->argv[1], src->id);
+    notifyKeyspaceEvent(NOTIFY_GENERIC, "move_to", c->io_data->argv[1], dst->id);
 
     server.dirty++;
     addReply(c, shared.cone);
@@ -1498,12 +1498,12 @@ void copyCommand(client *c) {
     dst = c->db;
     srcid = c->db->id;
     dbid = c->db->id;
-    for (j = 3; j < c->argc; j++) {
-        int additional = c->argc - j - 1;
-        if (!strcasecmp(c->argv[j]->ptr, "replace")) {
+    for (j = 3; j < c->io_data->argc; j++) {
+        int additional = c->io_data->argc - j - 1;
+        if (!strcasecmp(c->io_data->argv[j]->ptr, "replace")) {
             replace = 1;
-        } else if (!strcasecmp(c->argv[j]->ptr, "db") && additional >= 1) {
-            if (getIntFromObjectOrReply(c, c->argv[j + 1], &dbid, NULL) != C_OK) return;
+        } else if (!strcasecmp(c->io_data->argv[j]->ptr, "db") && additional >= 1) {
+            if (getIntFromObjectOrReply(c, c->io_data->argv[j + 1], &dbid, NULL) != C_OK) return;
 
             if (selectDb(c, dbid) == C_ERR) {
                 addReplyError(c, "DB index is out of range");
@@ -1526,8 +1526,8 @@ void copyCommand(client *c) {
     /* If the user select the same DB as
      * the source DB and using newkey as the same key
      * it is probably an error. */
-    robj *key = c->argv[1];
-    robj *newkey = c->argv[2];
+    robj *key = c->io_data->argv[1];
+    robj *newkey = c->io_data->argv[2];
     if (src == dst && (sdscmp(key->ptr, newkey->ptr) == 0)) {
         addReplyErrorObject(c, shared.sameobjecterr);
         return;
@@ -1576,8 +1576,8 @@ void copyCommand(client *c) {
     if (expire != -1) newobj = setExpire(c, dst, newkey, expire);
 
     /* OK! key copied */
-    signalModifiedKey(c, dst, c->argv[2]);
-    notifyKeyspaceEvent(NOTIFY_GENERIC, "copy_to", c->argv[2], dst->id);
+    signalModifiedKey(c, dst, c->io_data->argv[2]);
+    notifyKeyspaceEvent(NOTIFY_GENERIC, "copy_to", c->io_data->argv[2], dst->id);
 
     server.dirty++;
     addReply(c, shared.cone);
@@ -1735,9 +1735,9 @@ void swapdbCommand(client *c) {
     }
 
     /* Get the two DBs indexes. */
-    if (getIntFromObjectOrReply(c, c->argv[1], &id1, "invalid first DB index") != C_OK) return;
+    if (getIntFromObjectOrReply(c, c->io_data->argv[1], &id1, "invalid first DB index") != C_OK) return;
 
-    if (getIntFromObjectOrReply(c, c->argv[2], &id2, "invalid second DB index") != C_OK) return;
+    if (getIntFromObjectOrReply(c, c->io_data->argv[2], &id2, "invalid second DB index") != C_OK) return;
 
     /* Swap... */
     if (dbSwapDatabases(id1, id2) == C_ERR) {
@@ -1801,7 +1801,7 @@ robj *setExpire(client *c, serverDb *db, robj *key, long long when) {
     }
 
     int writable_replica = server.primary_host && server.repl_replica_ro == 0;
-    if (c && writable_replica && !c->flag.primary) rememberReplicaKeyWithExpire(db, key);
+    if (c && writable_replica && !c->io_data->flag.primary) rememberReplicaKeyWithExpire(db, key);
     return val;
 }
 
@@ -1843,7 +1843,7 @@ void deleteExpiredKeyAndPropagate(serverDb *db, robj *keyobj) {
 /* Delete the specified expired key from overwriting and propagate the DEL or UNLINK. */
 void deleteExpiredKeyFromOverwriteAndPropagate(client *c, robj *keyobj) {
     int deleted = dbGenericDelete(c->db, keyobj, server.lazyfree_lazy_expire, DB_FLAG_KEY_EXPIRED);
-    serverAssertWithInfo(c, keyobj, deleted);
+    serverAssertWithInfo(c->io_data, keyobj, deleted);
     server.dirty++;
 
     /* Replicate/AOF this as an explicit DEL or UNLINK. */
@@ -1908,7 +1908,7 @@ static int objectIsExpired(robj *val) {
     if (server.loading) return 0;
     if (!timestampIsExpired(objectGetExpire(val))) return 0;
     if (server.primary_host == NULL && server.import_mode) {
-        if (server.current_client && server.current_client->flag.import_source) return 0;
+        if (server.current_client && server.current_client->io_data->flag.import_source) return 0;
     }
     return 1;
 }
@@ -1926,7 +1926,7 @@ static int keyIsExpiredWithDictIndex(serverDb *db, robj *key, int dict_index) {
 
     /* See expireIfNeededWithDictIndex for more details. */
     if (server.primary_host == NULL && server.import_mode) {
-        if (server.current_client && server.current_client->flag.import_source) return 0;
+        if (server.current_client && server.current_client->io_data->flag.import_source) return 0;
     }
     return 1;
 }
@@ -1960,7 +1960,7 @@ static keyStatus expireIfNeededWithDictIndex(serverDb *db, robj *key, robj *val,
      * When replicating commands from the primary, keys are never considered
      * expired. */
     if (server.primary_host != NULL) {
-        if (server.current_client && (server.current_client->flag.primary)) return KEY_VALID;
+        if (server.current_client && (server.current_client->io_data->flag.primary)) return KEY_VALID;
         if (!(flags & EXPIRE_FORCE_DELETE_EXPIRED)) return KEY_EXPIRED;
     } else if (server.import_mode) {
         /* If we are running in the import mode on a primary, instead of
@@ -1979,7 +1979,7 @@ static keyStatus expireIfNeededWithDictIndex(serverDb *db, robj *key, robj *val,
          *
          * When receiving commands from the import source, keys are never considered
          * expired. */
-        if (server.current_client && (server.current_client->flag.import_source)) return KEY_VALID;
+        if (server.current_client && (server.current_client->io_data->flag.import_source)) return KEY_VALID;
         if (!(flags & EXPIRE_FORCE_DELETE_EXPIRED)) return KEY_EXPIRED;
     }
 

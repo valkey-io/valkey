@@ -165,9 +165,9 @@ void lolwut6Command(client *c) {
     long rows = 20;
 
     /* Parse the optional arguments if any. */
-    if (c->argc > 1 && getLongFromObjectOrReply(c, c->argv[1], &cols, NULL) != C_OK) return;
+    if (c->io_data->argc > 1 && getLongFromObjectOrReply(c, c->io_data->argv[1], &cols, NULL) != C_OK) return;
 
-    if (c->argc > 2 && getLongFromObjectOrReply(c, c->argv[2], &rows, NULL) != C_OK) return;
+    if (c->io_data->argc > 2 && getLongFromObjectOrReply(c, c->io_data->argv[2], &rows, NULL) != C_OK) return;
 
     /* Limits. We want LOLWUT to be always reasonably fast and cheap to execute
      * so we have maximum number of columns, rows, and output resolution. */

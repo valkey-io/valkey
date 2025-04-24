@@ -158,7 +158,7 @@ void setGenericCommand(client *c,
 
     /* By setting the reallocated value back into argv, we can avoid duplicating
      * a large string value when adding it to the db. */
-    c->argv[(flags & OBJ_ARGV3) ? 3 : 2] = val;
+    c->io_data->argv[(flags & OBJ_ARGV3) ? 3 : 2] = val;
     incrRefCount(val);
 
     server.dirty++;
@@ -184,15 +184,15 @@ void setGenericCommand(client *c,
     if ((flags & OBJ_SET_GET) && !expire) {
         int argc = 0;
         int j;
-        robj **argv = zmalloc((c->argc - 1) * sizeof(robj *));
-        for (j = 0; j < c->argc; j++) {
-            char *a = c->argv[j]->ptr;
+        robj **argv = zmalloc((c->io_data->argc - 1) * sizeof(robj *));
+        for (j = 0; j < c->io_data->argc; j++) {
+            char *a = c->io_data->argv[j]->ptr;
             /* Skip GET which may be repeated multiple times. */
             if (j >= 3 && (a[0] == 'g' || a[0] == 'G') && (a[1] == 'e' || a[1] == 'E') &&
                 (a[2] == 't' || a[2] == 'T') && a[3] == '\0')
                 continue;
-            argv[argc++] = c->argv[j];
-            incrRefCount(c->argv[j]);
+            argv[argc++] = c->io_data->argv[j];
+            incrRefCount(c->io_data->argv[j]);
         }
         replaceClientCommandVector(c, argc, argv);
     }
@@ -260,9 +260,9 @@ static int getExpireMillisecondsOrReply(client *c, robj *expire, int flags, int 
  */
 int parseExtendedStringArgumentsOrReply(client *c, int *flags, int *unit, robj **expire, robj **compare_val, int command_type) {
     int j = command_type == COMMAND_GET ? 2 : 3;
-    for (; j < c->argc; j++) {
-        char *opt = c->argv[j]->ptr;
-        robj *next = (j == c->argc - 1) ? NULL : c->argv[j + 1];
+    for (; j < c->io_data->argc; j++) {
+        char *opt = c->io_data->argv[j]->ptr;
+        robj *next = (j == c->io_data->argc - 1) ? NULL : c->io_data->argv[j + 1];
 
         /* clang-format off */
         if ((opt[0] == 'n' || opt[0] == 'N') &&
@@ -365,29 +365,29 @@ void setCommand(client *c) {
         return;
     }
 
-    c->argv[2] = tryObjectEncoding(c->argv[2]);
-    setGenericCommand(c, flags, c->argv[1], c->argv[2], expire, unit, NULL, NULL, comparison);
+    c->io_data->argv[2] = tryObjectEncoding(c->io_data->argv[2]);
+    setGenericCommand(c, flags, c->io_data->argv[1], c->io_data->argv[2], expire, unit, NULL, NULL, comparison);
 }
 
 void setnxCommand(client *c) {
-    c->argv[2] = tryObjectEncoding(c->argv[2]);
-    setGenericCommand(c, OBJ_SET_NX, c->argv[1], c->argv[2], NULL, 0, shared.cone, shared.czero, NULL);
+    c->io_data->argv[2] = tryObjectEncoding(c->io_data->argv[2]);
+    setGenericCommand(c, OBJ_SET_NX, c->io_data->argv[1], c->io_data->argv[2], NULL, 0, shared.cone, shared.czero, NULL);
 }
 
 void setexCommand(client *c) {
-    c->argv[3] = tryObjectEncoding(c->argv[3]);
-    setGenericCommand(c, OBJ_EX | OBJ_ARGV3, c->argv[1], c->argv[3], c->argv[2], UNIT_SECONDS, NULL, NULL, NULL);
+    c->io_data->argv[3] = tryObjectEncoding(c->io_data->argv[3]);
+    setGenericCommand(c, OBJ_EX | OBJ_ARGV3, c->io_data->argv[1], c->io_data->argv[3], c->io_data->argv[2], UNIT_SECONDS, NULL, NULL, NULL);
 }
 
 void psetexCommand(client *c) {
-    c->argv[3] = tryObjectEncoding(c->argv[3]);
-    setGenericCommand(c, OBJ_PX | OBJ_ARGV3, c->argv[1], c->argv[3], c->argv[2], UNIT_MILLISECONDS, NULL, NULL, NULL);
+    c->io_data->argv[3] = tryObjectEncoding(c->io_data->argv[3]);
+    setGenericCommand(c, OBJ_PX | OBJ_ARGV3, c->io_data->argv[1], c->io_data->argv[3], c->io_data->argv[2], UNIT_MILLISECONDS, NULL, NULL, NULL);
 }
 
 int getGenericCommand(client *c) {
     robj *o;
 
-    if ((o = lookupKeyReadOrReply(c, c->argv[1], shared.null[c->resp])) == NULL)
+    if ((o = lookupKeyReadOrReply(c, c->io_data->argv[1], shared.null[c->resp])) == NULL)
         return C_OK;
 
     if (checkType(c, o, OBJ_STRING)) {
@@ -433,7 +433,7 @@ void getexCommand(client *c) {
 
     robj *o;
 
-    if ((o = lookupKeyReadOrReply(c, c->argv[1], shared.null[c->resp])) == NULL)
+    if ((o = lookupKeyReadOrReply(c, c->io_data->argv[1], shared.null[c->resp])) == NULL)
         return;
 
     if (checkType(c, o, OBJ_STRING)) {
@@ -455,22 +455,22 @@ void getexCommand(client *c) {
     if (((flags & OBJ_PXAT) || (flags & OBJ_EXAT)) && checkAlreadyExpired(milliseconds)) {
         /* When PXAT/EXAT absolute timestamp is specified, there can be a chance that timestamp
          * has already elapsed so delete the key in that case. */
-        deleteExpiredKeyFromOverwriteAndPropagate(c, c->argv[1]);
+        deleteExpiredKeyFromOverwriteAndPropagate(c, c->io_data->argv[1]);
     } else if (expire) {
-        o = setExpire(c, c->db, c->argv[1], milliseconds);
+        o = setExpire(c, c->db, c->io_data->argv[1], milliseconds);
         /* Propagate as PXEXPIREAT millisecond-timestamp if there is
          * EX/PX/EXAT/PXAT flag and the key has not expired. */
         robj *milliseconds_obj = createStringObjectFromLongLong(milliseconds);
-        rewriteClientCommandVector(c, 3, shared.pexpireat, c->argv[1], milliseconds_obj);
+        rewriteClientCommandVector(c, 3, shared.pexpireat, c->io_data->argv[1], milliseconds_obj);
         decrRefCount(milliseconds_obj);
-        signalModifiedKey(c, c->db, c->argv[1]);
-        notifyKeyspaceEvent(NOTIFY_GENERIC, "expire", c->argv[1], c->db->id);
+        signalModifiedKey(c, c->db, c->io_data->argv[1]);
+        notifyKeyspaceEvent(NOTIFY_GENERIC, "expire", c->io_data->argv[1], c->db->id);
         server.dirty++;
     } else if (flags & OBJ_PERSIST) {
-        if (removeExpire(c->db, c->argv[1])) {
-            signalModifiedKey(c, c->db, c->argv[1]);
-            rewriteClientCommandVector(c, 2, shared.persist, c->argv[1]);
-            notifyKeyspaceEvent(NOTIFY_GENERIC, "persist", c->argv[1], c->db->id);
+        if (removeExpire(c->db, c->io_data->argv[1])) {
+            signalModifiedKey(c, c->db, c->io_data->argv[1]);
+            rewriteClientCommandVector(c, 2, shared.persist, c->io_data->argv[1]);
+            notifyKeyspaceEvent(NOTIFY_GENERIC, "persist", c->io_data->argv[1], c->db->id);
             server.dirty++;
         }
     }
@@ -480,11 +480,11 @@ void getexCommand(client *c) {
 void getdelCommand(client *c) {
     initDeferredReplyBuffer(c);
     if (getGenericCommand(c) == C_ERR) return;
-    if (dbSyncDelete(c->db, c->argv[1])) {
+    if (dbSyncDelete(c->db, c->io_data->argv[1])) {
         /* Propagate as DEL command */
-        rewriteClientCommandVector(c, 2, shared.del, c->argv[1]);
-        signalModifiedKey(c, c->db, c->argv[1]);
-        notifyKeyspaceEvent(NOTIFY_GENERIC, "del", c->argv[1], c->db->id);
+        rewriteClientCommandVector(c, 2, shared.del, c->io_data->argv[1]);
+        signalModifiedKey(c, c->db, c->io_data->argv[1]);
+        notifyKeyspaceEvent(NOTIFY_GENERIC, "del", c->io_data->argv[1], c->db->id);
         server.dirty++;
     }
     commitDeferredReplyBuffer(c, 1);
@@ -493,10 +493,10 @@ void getdelCommand(client *c) {
 void getsetCommand(client *c) {
     initDeferredReplyBuffer(c);
     if (getGenericCommand(c) == C_ERR) return;
-    c->argv[2] = tryObjectEncoding(c->argv[2]);
-    setKey(c, c->db, c->argv[1], &c->argv[2], 0);
-    incrRefCount(c->argv[2]);
-    notifyKeyspaceEvent(NOTIFY_STRING, "set", c->argv[1], c->db->id);
+    c->io_data->argv[2] = tryObjectEncoding(c->io_data->argv[2]);
+    setKey(c, c->db, c->io_data->argv[1], &c->io_data->argv[2], 0);
+    incrRefCount(c->io_data->argv[2]);
+    notifyKeyspaceEvent(NOTIFY_STRING, "set", c->io_data->argv[1], c->db->id);
     server.dirty++;
 
     commitDeferredReplyBuffer(c, 1);
@@ -507,9 +507,9 @@ void getsetCommand(client *c) {
 void setrangeCommand(client *c) {
     robj *o;
     long offset;
-    sds value = c->argv[3]->ptr;
+    sds value = c->io_data->argv[3]->ptr;
 
-    if (getLongFromObjectOrReply(c, c->argv[2], &offset, NULL) != C_OK)
+    if (getLongFromObjectOrReply(c, c->io_data->argv[2], &offset, NULL) != C_OK)
         return;
 
     if (offset < 0) {
@@ -517,7 +517,7 @@ void setrangeCommand(client *c) {
         return;
     }
 
-    o = lookupKeyWrite(c->db, c->argv[1]);
+    o = lookupKeyWrite(c->db, c->io_data->argv[1]);
     if (o == NULL) {
         /* Return 0 when setting nothing on a non-existing string */
         if (sdslen(value) == 0) {
@@ -530,7 +530,7 @@ void setrangeCommand(client *c) {
             return;
 
         o = createObject(OBJ_STRING, sdsnewlen(NULL, offset + sdslen(value)));
-        dbAdd(c->db, c->argv[1], &o);
+        dbAdd(c->db, c->io_data->argv[1], &o);
     } else {
         size_t olen;
 
@@ -550,15 +550,15 @@ void setrangeCommand(client *c) {
             return;
 
         /* Create a copy when the object is shared or encoded. */
-        o = dbUnshareStringValue(c->db, c->argv[1], o);
+        o = dbUnshareStringValue(c->db, c->io_data->argv[1], o);
     }
 
     if (sdslen(value) > 0) {
         o->ptr = sdsgrowzero(o->ptr, offset + sdslen(value));
         memcpy((char *)o->ptr + offset, value, sdslen(value));
-        signalModifiedKey(c, c->db, c->argv[1]);
+        signalModifiedKey(c, c->db, c->io_data->argv[1]);
         notifyKeyspaceEvent(NOTIFY_STRING,
-                            "setrange", c->argv[1], c->db->id);
+                            "setrange", c->io_data->argv[1], c->db->id);
         server.dirty++;
     }
     addReplyLongLong(c, sdslen(o->ptr));
@@ -570,11 +570,11 @@ void getrangeCommand(client *c) {
     char *str, llbuf[32];
     size_t strlen;
 
-    if (getLongLongFromObjectOrReply(c, c->argv[2], &start, NULL) != C_OK)
+    if (getLongLongFromObjectOrReply(c, c->io_data->argv[2], &start, NULL) != C_OK)
         return;
-    if (getLongLongFromObjectOrReply(c, c->argv[3], &end, NULL) != C_OK)
+    if (getLongLongFromObjectOrReply(c, c->io_data->argv[3], &end, NULL) != C_OK)
         return;
-    if ((o = lookupKeyReadOrReply(c, c->argv[1], shared.emptybulk)) == NULL ||
+    if ((o = lookupKeyReadOrReply(c, c->io_data->argv[1], shared.emptybulk)) == NULL ||
         checkType(c, o, OBJ_STRING)) return;
 
     if (o->encoding == OBJ_ENCODING_INT) {
@@ -608,9 +608,9 @@ void getrangeCommand(client *c) {
 void mgetCommand(client *c) {
     int j;
 
-    addReplyArrayLen(c, c->argc - 1);
-    for (j = 1; j < c->argc; j++) {
-        robj *o = lookupKeyRead(c->db, c->argv[j]);
+    addReplyArrayLen(c, c->io_data->argc - 1);
+    for (j = 1; j < c->io_data->argc; j++) {
+        robj *o = lookupKeyRead(c->db, c->io_data->argv[j]);
         if (o == NULL) {
             addReplyNull(c);
         } else {
@@ -626,7 +626,7 @@ void mgetCommand(client *c) {
 void msetGenericCommand(client *c, int nx) {
     int j;
 
-    if ((c->argc % 2) == 0) {
+    if ((c->io_data->argc % 2) == 0) {
         addReplyErrorArity(c);
         return;
     }
@@ -634,8 +634,8 @@ void msetGenericCommand(client *c, int nx) {
     /* Handle the NX flag. The MSETNX semantic is to return zero and don't
      * set anything if at least one key already exists. */
     if (nx) {
-        for (j = 1; j < c->argc; j += 2) {
-            if (lookupKeyWrite(c->db, c->argv[j]) != NULL) {
+        for (j = 1; j < c->io_data->argc; j += 2) {
+            if (lookupKeyWrite(c->db, c->io_data->argv[j]) != NULL) {
                 addReply(c, shared.czero);
                 return;
             }
@@ -643,17 +643,17 @@ void msetGenericCommand(client *c, int nx) {
     }
 
     int setkey_flags = nx ? SETKEY_DOESNT_EXIST : 0;
-    for (j = 1; j < c->argc; j += 2) {
-        robj *val = tryObjectEncoding(c->argv[j + 1]);
-        setKey(c, c->db, c->argv[j], &val, setkey_flags);
+    for (j = 1; j < c->io_data->argc; j += 2) {
+        robj *val = tryObjectEncoding(c->io_data->argv[j + 1]);
+        setKey(c, c->db, c->io_data->argv[j], &val, setkey_flags);
         incrRefCount(val);
-        c->argv[j + 1] = val;
-        notifyKeyspaceEvent(NOTIFY_STRING, "set", c->argv[j], c->db->id);
+        c->io_data->argv[j + 1] = val;
+        notifyKeyspaceEvent(NOTIFY_STRING, "set", c->io_data->argv[j], c->db->id);
         /* In MSETNX, It could be that we're overriding the same key, we can't be sure it doesn't exist. */
         if (nx)
             setkey_flags = SETKEY_ADD_OR_UPDATE;
     }
-    server.dirty += (c->argc - 1) / 2;
+    server.dirty += (c->io_data->argc - 1) / 2;
     addReply(c, nx ? shared.cone : shared.ok);
 }
 
@@ -669,7 +669,7 @@ void incrDecrCommand(client *c, long long incr) {
     long long value, oldvalue;
     robj *o, *new;
 
-    o = lookupKeyWrite(c->db, c->argv[1]);
+    o = lookupKeyWrite(c->db, c->io_data->argv[1]);
     if (checkType(c, o, OBJ_STRING)) return;
     if (getLongLongFromObjectOrReply(c, o, &value, NULL) != C_OK) return;
 
@@ -688,13 +688,13 @@ void incrDecrCommand(client *c, long long incr) {
     } else {
         new = createStringObjectFromLongLongForValue(value);
         if (o) {
-            dbReplaceValue(c->db, c->argv[1], &new);
+            dbReplaceValue(c->db, c->io_data->argv[1], &new);
         } else {
-            dbAdd(c->db, c->argv[1], &new);
+            dbAdd(c->db, c->io_data->argv[1], &new);
         }
     }
-    signalModifiedKey(c, c->db, c->argv[1]);
-    notifyKeyspaceEvent(NOTIFY_STRING, "incrby", c->argv[1], c->db->id);
+    signalModifiedKey(c, c->db, c->io_data->argv[1]);
+    notifyKeyspaceEvent(NOTIFY_STRING, "incrby", c->io_data->argv[1], c->db->id);
     server.dirty++;
     addReplyLongLong(c, value);
 }
@@ -710,14 +710,14 @@ void decrCommand(client *c) {
 void incrbyCommand(client *c) {
     long long incr;
 
-    if (getLongLongFromObjectOrReply(c, c->argv[2], &incr, NULL) != C_OK) return;
+    if (getLongLongFromObjectOrReply(c, c->io_data->argv[2], &incr, NULL) != C_OK) return;
     incrDecrCommand(c, incr);
 }
 
 void decrbyCommand(client *c) {
     long long incr;
 
-    if (getLongLongFromObjectOrReply(c, c->argv[2], &incr, NULL) != C_OK) return;
+    if (getLongLongFromObjectOrReply(c, c->io_data->argv[2], &incr, NULL) != C_OK) return;
     /* Overflow check: negating LLONG_MIN will cause an overflow */
     if (incr == LLONG_MIN) {
         addReplyError(c, "decrement would overflow");
@@ -730,10 +730,10 @@ void incrbyfloatCommand(client *c) {
     long double incr, value;
     robj *o, *new;
 
-    o = lookupKeyWrite(c->db, c->argv[1]);
+    o = lookupKeyWrite(c->db, c->io_data->argv[1]);
     if (checkType(c, o, OBJ_STRING)) return;
     if (getLongDoubleFromObjectOrReply(c, o, &value, NULL) != C_OK ||
-        getLongDoubleFromObjectOrReply(c, c->argv[2], &incr, NULL) != C_OK)
+        getLongDoubleFromObjectOrReply(c, c->io_data->argv[2], &incr, NULL) != C_OK)
         return;
 
     value += incr;
@@ -743,11 +743,11 @@ void incrbyfloatCommand(client *c) {
     }
     new = createStringObjectFromLongDouble(value, 1);
     if (o)
-        dbReplaceValue(c->db, c->argv[1], &new);
+        dbReplaceValue(c->db, c->io_data->argv[1], &new);
     else
-        dbAdd(c->db, c->argv[1], &new);
-    signalModifiedKey(c, c->db, c->argv[1]);
-    notifyKeyspaceEvent(NOTIFY_STRING, "incrbyfloat", c->argv[1], c->db->id);
+        dbAdd(c->db, c->io_data->argv[1], &new);
+    signalModifiedKey(c, c->db, c->io_data->argv[1]);
+    notifyKeyspaceEvent(NOTIFY_STRING, "incrbyfloat", c->io_data->argv[1], c->db->id);
     server.dirty++;
     addReplyBulk(c, new);
 
@@ -763,37 +763,37 @@ void appendCommand(client *c) {
     size_t totlen;
     robj *o, *append;
 
-    o = lookupKeyWrite(c->db, c->argv[1]);
+    o = lookupKeyWrite(c->db, c->io_data->argv[1]);
     if (o == NULL) {
         /* Create the key */
-        c->argv[2] = tryObjectEncoding(c->argv[2]);
-        dbAdd(c->db, c->argv[1], &c->argv[2]);
-        incrRefCount(c->argv[2]);
-        totlen = stringObjectLen(c->argv[2]);
+        c->io_data->argv[2] = tryObjectEncoding(c->io_data->argv[2]);
+        dbAdd(c->db, c->io_data->argv[1], &c->io_data->argv[2]);
+        incrRefCount(c->io_data->argv[2]);
+        totlen = stringObjectLen(c->io_data->argv[2]);
     } else {
         /* Key exists, check type */
         if (checkType(c, o, OBJ_STRING))
             return;
 
         /* "append" is an argument, so always an sds */
-        append = c->argv[2];
+        append = c->io_data->argv[2];
         if (checkStringLength(c, stringObjectLen(o), sdslen(append->ptr)) != C_OK)
             return;
 
         /* Append the value */
-        o = dbUnshareStringValue(c->db, c->argv[1], o);
+        o = dbUnshareStringValue(c->db, c->io_data->argv[1], o);
         o->ptr = sdscatlen(o->ptr, append->ptr, sdslen(append->ptr));
         totlen = sdslen(o->ptr);
     }
-    signalModifiedKey(c, c->db, c->argv[1]);
-    notifyKeyspaceEvent(NOTIFY_STRING, "append", c->argv[1], c->db->id);
+    signalModifiedKey(c, c->db, c->io_data->argv[1]);
+    notifyKeyspaceEvent(NOTIFY_STRING, "append", c->io_data->argv[1], c->db->id);
     server.dirty++;
     addReplyLongLong(c, totlen);
 }
 
 void strlenCommand(client *c) {
     robj *o;
-    if ((o = lookupKeyReadOrReply(c, c->argv[1], shared.czero)) == NULL ||
+    if ((o = lookupKeyReadOrReply(c, c->io_data->argv[1], shared.czero)) == NULL ||
         checkType(c, o, OBJ_STRING)) return;
     addReplyLongLong(c, stringObjectLen(o));
 }
@@ -806,8 +806,8 @@ void lcsCommand(client *c) {
     int getlen = 0, getidx = 0, withmatchlen = 0;
     robj *obja = NULL, *objb = NULL;
 
-    obja = lookupKeyRead(c->db, c->argv[1]);
-    objb = lookupKeyRead(c->db, c->argv[2]);
+    obja = lookupKeyRead(c->db, c->io_data->argv[1]);
+    objb = lookupKeyRead(c->db, c->io_data->argv[2]);
     if ((obja && obja->type != OBJ_STRING) ||
         (objb && objb->type != OBJ_STRING)) {
         addReplyError(c,
@@ -823,9 +823,9 @@ void lcsCommand(client *c) {
     a = obja->ptr;
     b = objb->ptr;
 
-    for (j = 3; j < (uint32_t)c->argc; j++) {
-        char *opt = c->argv[j]->ptr;
-        int moreargs = (c->argc - 1) - j;
+    for (j = 3; j < (uint32_t)c->io_data->argc; j++) {
+        char *opt = c->io_data->argv[j]->ptr;
+        int moreargs = (c->io_data->argc - 1) - j;
 
         if (!strcasecmp(opt, "IDX")) {
             getidx = 1;
@@ -834,7 +834,7 @@ void lcsCommand(client *c) {
         } else if (!strcasecmp(opt, "WITHMATCHLEN")) {
             withmatchlen = 1;
         } else if (!strcasecmp(opt, "MINMATCHLEN") && moreargs) {
-            if (getLongLongFromObjectOrReply(c, c->argv[j + 1], &minmatchlen, NULL) != C_OK) goto cleanup;
+            if (getLongLongFromObjectOrReply(c, c->io_data->argv[j + 1], &minmatchlen, NULL) != C_OK) goto cleanup;
             if (minmatchlen < 0) minmatchlen = 0;
             j++;
         } else {

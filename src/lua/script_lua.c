@@ -910,8 +910,8 @@ static int luaServerGenericCommand(lua_State *lua, int raise_error) {
     client *c = rctx->c;
     sds reply;
 
-    c->argv = luaArgsToServerArgv(lua, &c->argc, &c->argv_len);
-    if (c->argv == NULL) {
+    c->io_data->argv = luaArgsToServerArgv(lua, &c->io_data->argc, &c->io_data->argv_len);
+    if (c->io_data->argv == NULL) {
         return raise_error ? luaError(lua) : 1;
     }
 
@@ -933,13 +933,13 @@ static int luaServerGenericCommand(lua_State *lua, int raise_error) {
     /* Log the command if debugging is active. */
     if (ldbIsEnabled()) {
         sds cmdlog = sdsnew("<command>");
-        for (j = 0; j < c->argc; j++) {
+        for (j = 0; j < c->io_data->argc; j++) {
             if (j == 10) {
-                cmdlog = sdscatprintf(cmdlog, " ... (%d more)", c->argc - j - 1);
+                cmdlog = sdscatprintf(cmdlog, " ... (%d more)", c->io_data->argc - j - 1);
                 break;
             } else {
                 cmdlog = sdscatlen(cmdlog, " ", 1);
-                cmdlog = sdscatsds(cmdlog, c->argv[j]->ptr);
+                cmdlog = sdscatsds(cmdlog, c->io_data->argv[j]->ptr);
             }
         }
         ldbLog(cmdlog);
@@ -990,10 +990,10 @@ static int luaServerGenericCommand(lua_State *lua, int raise_error) {
 cleanup:
     /* Clean up. Command code may have changed argv/argc so we use the
      * argv/argc of the client instead of the local variables. */
-    freeLuaServerArgv(c->argv, c->argc, c->argv_len);
-    c->argc = c->argv_len = 0;
+    freeLuaServerArgv(c->io_data->argv, c->io_data->argc, c->io_data->argv_len);
+    c->io_data->argc = c->io_data->argv_len = 0;
     c->user = NULL;
-    c->argv = NULL;
+    c->io_data->argv = NULL;
     resetClient(c);
     inuse--;
 

@@ -100,9 +100,9 @@ int scriptingEngineManagerRegister(const char *engine_name,
     }
 
     client *c = createClient(NULL);
-    c->flag.deny_blocking = 1;
-    c->flag.script = 1;
-    c->flag.fake = 1;
+    c->io_data->flag.deny_blocking = 1;
+    c->io_data->flag.script = 1;
+    c->io_data->flag.fake = 1;
 
     scriptingEngine *e = zmalloc(sizeof(*e));
     *e = (scriptingEngine){

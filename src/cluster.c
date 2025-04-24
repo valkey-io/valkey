@@ -187,13 +187,13 @@ void dumpCommand(client *c) {
     rio payload;
 
     /* Check if the key is here. */
-    if ((o = lookupKeyRead(c->db, c->argv[1])) == NULL) {
+    if ((o = lookupKeyRead(c->db, c->io_data->argv[1])) == NULL) {
         addReplyNull(c);
         return;
     }
 
     /* Create the DUMP encoded representation. */
-    createDumpPayload(&payload, o, c->argv[1], c->db->id);
+    createDumpPayload(&payload, o, c->io_data->argv[1], c->db->id);
 
     /* Transfer to the client */
     addReplyBulkSds(c, payload.io.buffer.ptr);
@@ -208,22 +208,22 @@ void restoreCommand(client *c) {
     robj *obj;
 
     /* Parse additional options */
-    for (j = 4; j < c->argc; j++) {
-        int additional = c->argc - j - 1;
-        if (!strcasecmp(c->argv[j]->ptr, "replace")) {
+    for (j = 4; j < c->io_data->argc; j++) {
+        int additional = c->io_data->argc - j - 1;
+        if (!strcasecmp(c->io_data->argv[j]->ptr, "replace")) {
             replace = 1;
-        } else if (!strcasecmp(c->argv[j]->ptr, "absttl")) {
+        } else if (!strcasecmp(c->io_data->argv[j]->ptr, "absttl")) {
             absttl = 1;
-        } else if (!strcasecmp(c->argv[j]->ptr, "idletime") && additional >= 1 && lfu_freq == -1) {
-            if (getLongLongFromObjectOrReply(c, c->argv[j + 1], &lru_idle, NULL) != C_OK) return;
+        } else if (!strcasecmp(c->io_data->argv[j]->ptr, "idletime") && additional >= 1 && lfu_freq == -1) {
+            if (getLongLongFromObjectOrReply(c, c->io_data->argv[j + 1], &lru_idle, NULL) != C_OK) return;
             if (lru_idle < 0) {
                 addReplyError(c, "Invalid IDLETIME value, must be >= 0");
                 return;
             }
             lru_clock = LRU_CLOCK();
             j++; /* Consume additional arg. */
-        } else if (!strcasecmp(c->argv[j]->ptr, "freq") && additional >= 1 && lru_idle == -1) {
-            if (getLongLongFromObjectOrReply(c, c->argv[j + 1], &lfu_freq, NULL) != C_OK) return;
+        } else if (!strcasecmp(c->io_data->argv[j]->ptr, "freq") && additional >= 1 && lru_idle == -1) {
+            if (getLongLongFromObjectOrReply(c, c->io_data->argv[j + 1], &lfu_freq, NULL) != C_OK) return;
             if (lfu_freq < 0 || lfu_freq > 255) {
                 addReplyError(c, "Invalid FREQ value, must be >= 0 and <= 255");
                 return;
@@ -236,14 +236,14 @@ void restoreCommand(client *c) {
     }
 
     /* Make sure this key does not already exist here... */
-    robj *key = c->argv[1];
+    robj *key = c->io_data->argv[1];
     if (!replace && lookupKeyWrite(c->db, key) != NULL) {
         addReplyErrorObject(c, shared.busykeyerr);
         return;
     }
 
     /* Check if the TTL value makes sense */
-    if (getLongLongFromObjectOrReply(c, c->argv[2], &ttl, NULL) != C_OK) {
+    if (getLongLongFromObjectOrReply(c, c->io_data->argv[2], &ttl, NULL) != C_OK) {
         return;
     } else if (ttl < 0) {
         addReplyError(c, "Invalid TTL value, must be >= 0");
@@ -251,12 +251,12 @@ void restoreCommand(client *c) {
     }
 
     /* Verify RDB version and data checksum. */
-    if (verifyDumpPayload(c->argv[3]->ptr, sdslen(c->argv[3]->ptr), NULL) == C_ERR) {
+    if (verifyDumpPayload(c->io_data->argv[3]->ptr, sdslen(c->io_data->argv[3]->ptr), NULL) == C_ERR) {
         addReplyError(c, "DUMP payload version or checksum are wrong");
         return;
     }
 
-    rioInitWithBuffer(&payload, c->argv[3]->ptr);
+    rioInitWithBuffer(&payload, c->io_data->argv[3]->ptr);
     if (((type = rdbLoadObjectType(&payload)) == -1) ||
         ((obj = rdbLoadObject(type, &payload, key->ptr, c->db->id, NULL)) == NULL)) {
         addReplyError(c, "Bad data format");
@@ -292,7 +292,7 @@ void restoreCommand(client *c) {
             robj *ttl_obj = createStringObjectFromLongLong(ttl);
             rewriteClientCommandArgument(c, 2, ttl_obj);
             decrRefCount(ttl_obj);
-            rewriteClientCommandArgument(c, c->argc, shared.absttl);
+            rewriteClientCommandArgument(c, c->io_data->argc, shared.absttl);
         }
     }
     objectSetLRUOrLFU(obj, lfu_freq, lru_idle, lru_clock, 1000);
@@ -436,37 +436,37 @@ void migrateCommand(client *c) {
     int num_keys = 1;  /* By default only migrate the 'key' argument. */
 
     /* Parse additional options */
-    for (j = 6; j < c->argc; j++) {
-        int moreargs = (c->argc - 1) - j;
-        if (!strcasecmp(c->argv[j]->ptr, "copy")) {
+    for (j = 6; j < c->io_data->argc; j++) {
+        int moreargs = (c->io_data->argc - 1) - j;
+        if (!strcasecmp(c->io_data->argv[j]->ptr, "copy")) {
             copy = 1;
-        } else if (!strcasecmp(c->argv[j]->ptr, "replace")) {
+        } else if (!strcasecmp(c->io_data->argv[j]->ptr, "replace")) {
             replace = 1;
-        } else if (!strcasecmp(c->argv[j]->ptr, "auth")) {
+        } else if (!strcasecmp(c->io_data->argv[j]->ptr, "auth")) {
             if (!moreargs) {
                 addReplyErrorObject(c, shared.syntaxerr);
                 return;
             }
             j++;
-            password = c->argv[j]->ptr;
+            password = c->io_data->argv[j]->ptr;
             redactClientCommandArgument(c, j);
-        } else if (!strcasecmp(c->argv[j]->ptr, "auth2")) {
+        } else if (!strcasecmp(c->io_data->argv[j]->ptr, "auth2")) {
             if (moreargs < 2) {
                 addReplyErrorObject(c, shared.syntaxerr);
                 return;
             }
-            username = c->argv[++j]->ptr;
+            username = c->io_data->argv[++j]->ptr;
             redactClientCommandArgument(c, j);
-            password = c->argv[++j]->ptr;
+            password = c->io_data->argv[++j]->ptr;
             redactClientCommandArgument(c, j);
-        } else if (!strcasecmp(c->argv[j]->ptr, "keys")) {
-            if (sdslen(c->argv[3]->ptr) != 0) {
+        } else if (!strcasecmp(c->io_data->argv[j]->ptr, "keys")) {
+            if (sdslen(c->io_data->argv[3]->ptr) != 0) {
                 addReplyError(c, "When using MIGRATE KEYS option, the key argument"
                                  " must be set to the empty string");
                 return;
             }
             first_key = j + 1;
-            num_keys = c->argc - j - 1;
+            num_keys = c->io_data->argc - j - 1;
             break; /* All the remaining args are keys. */
         } else {
             addReplyErrorObject(c, shared.syntaxerr);
@@ -475,8 +475,8 @@ void migrateCommand(client *c) {
     }
 
     /* Sanity check */
-    if (getLongFromObjectOrReply(c, c->argv[5], &timeout, NULL) != C_OK ||
-        getLongFromObjectOrReply(c, c->argv[4], &dbid, NULL) != C_OK) {
+    if (getLongFromObjectOrReply(c, c->io_data->argv[5], &timeout, NULL) != C_OK ||
+        getLongFromObjectOrReply(c, c->io_data->argv[4], &dbid, NULL) != C_OK) {
         return;
     }
     if (timeout <= 0) timeout = 1000;
@@ -491,8 +491,8 @@ void migrateCommand(client *c) {
     int oi = 0;
 
     for (j = 0; j < num_keys; j++) {
-        if ((ov[oi] = lookupKeyRead(c->db, c->argv[first_key + j])) != NULL) {
-            kv[oi] = c->argv[first_key + j];
+        if ((ov[oi] = lookupKeyRead(c->db, c->io_data->argv[first_key + j])) != NULL) {
+            kv[oi] = c->io_data->argv[first_key + j];
             oi++;
         }
     }
@@ -508,7 +508,7 @@ try_again:
     write_error = 0;
 
     /* Connect */
-    cs = migrateGetSocket(c, c->argv[1], c->argv[2], timeout);
+    cs = migrateGetSocket(c, c->io_data->argv[1], c->io_data->argv[2], timeout);
     if (cs == NULL) {
         zfree(ov);
         zfree(kv);
@@ -520,20 +520,20 @@ try_again:
     /* Authentication */
     if (password) {
         int arity = username ? 3 : 2;
-        serverAssertWithInfo(c, NULL, rioWriteBulkCount(&cmd, '*', arity));
-        serverAssertWithInfo(c, NULL, rioWriteBulkString(&cmd, "AUTH", 4));
+        serverAssertWithInfo(c->io_data, NULL, rioWriteBulkCount(&cmd, '*', arity));
+        serverAssertWithInfo(c->io_data, NULL, rioWriteBulkString(&cmd, "AUTH", 4));
         if (username) {
-            serverAssertWithInfo(c, NULL, rioWriteBulkString(&cmd, username, sdslen(username)));
+            serverAssertWithInfo(c->io_data, NULL, rioWriteBulkString(&cmd, username, sdslen(username)));
         }
-        serverAssertWithInfo(c, NULL, rioWriteBulkString(&cmd, password, sdslen(password)));
+        serverAssertWithInfo(c->io_data, NULL, rioWriteBulkString(&cmd, password, sdslen(password)));
     }
 
     /* Send the SELECT command if the current DB is not already selected. */
     int select = cs->last_dbid != dbid; /* Should we emit SELECT? */
     if (select) {
-        serverAssertWithInfo(c, NULL, rioWriteBulkCount(&cmd, '*', 2));
-        serverAssertWithInfo(c, NULL, rioWriteBulkString(&cmd, "SELECT", 6));
-        serverAssertWithInfo(c, NULL, rioWriteBulkLongLong(&cmd, dbid));
+        serverAssertWithInfo(c->io_data, NULL, rioWriteBulkCount(&cmd, '*', 2));
+        serverAssertWithInfo(c->io_data, NULL, rioWriteBulkString(&cmd, "SELECT", 6));
+        serverAssertWithInfo(c->io_data, NULL, rioWriteBulkLongLong(&cmd, dbid));
     }
 
     int non_expired = 0; /* Number of keys that we'll find non expired.
@@ -560,25 +560,25 @@ try_again:
         ov[non_expired] = ov[j];
         kv[non_expired++] = kv[j];
 
-        serverAssertWithInfo(c, NULL, rioWriteBulkCount(&cmd, '*', replace ? 5 : 4));
+        serverAssertWithInfo(c->io_data, NULL, rioWriteBulkCount(&cmd, '*', replace ? 5 : 4));
 
         if (server.cluster_enabled)
-            serverAssertWithInfo(c, NULL, rioWriteBulkString(&cmd, "RESTORE-ASKING", 14));
+            serverAssertWithInfo(c->io_data, NULL, rioWriteBulkString(&cmd, "RESTORE-ASKING", 14));
         else
-            serverAssertWithInfo(c, NULL, rioWriteBulkString(&cmd, "RESTORE", 7));
-        serverAssertWithInfo(c, NULL, sdsEncodedObject(kv[j]));
-        serverAssertWithInfo(c, NULL, rioWriteBulkString(&cmd, kv[j]->ptr, sdslen(kv[j]->ptr)));
-        serverAssertWithInfo(c, NULL, rioWriteBulkLongLong(&cmd, ttl));
+            serverAssertWithInfo(c->io_data, NULL, rioWriteBulkString(&cmd, "RESTORE", 7));
+        serverAssertWithInfo(c->io_data, NULL, sdsEncodedObject(kv[j]));
+        serverAssertWithInfo(c->io_data, NULL, rioWriteBulkString(&cmd, kv[j]->ptr, sdslen(kv[j]->ptr)));
+        serverAssertWithInfo(c->io_data, NULL, rioWriteBulkLongLong(&cmd, ttl));
 
         /* Emit the payload argument, that is the serialized object using
          * the DUMP format. */
         createDumpPayload(&payload, ov[j], kv[j], dbid);
-        serverAssertWithInfo(c, NULL, rioWriteBulkString(&cmd, payload.io.buffer.ptr, sdslen(payload.io.buffer.ptr)));
+        serverAssertWithInfo(c->io_data, NULL, rioWriteBulkString(&cmd, payload.io.buffer.ptr, sdslen(payload.io.buffer.ptr)));
         sdsfree(payload.io.buffer.ptr);
 
         /* Add the REPLACE option to the RESTORE command if it was specified
          * as a MIGRATE option. */
-        if (replace) serverAssertWithInfo(c, NULL, rioWriteBulkString(&cmd, "REPLACE", 7));
+        if (replace) serverAssertWithInfo(c->io_data, NULL, rioWriteBulkString(&cmd, "REPLACE", 7));
     }
 
     /* Fix the actual number of keys we are migrating. */
@@ -668,7 +668,7 @@ try_again:
     /* On socket errors, close the migration socket now that we still have
      * the original host/port in the ARGV. Later the original command may be
      * rewritten to DEL and will be too later. */
-    if (socket_error) migrateCloseSocket(c->argv[1], c->argv[2]);
+    if (socket_error) migrateCloseSocket(c->io_data->argv[1], c->io_data->argv[2]);
 
     if (!copy) {
         /* Translate MIGRATE as DEL for replication/AOF. Note that we do
@@ -730,7 +730,7 @@ socket_err:
      * we already closed the socket earlier. While migrateCloseSocket()
      * is idempotent, the host/port arguments are now gone, so don't do it
      * again. */
-    if (!argv_rewritten) migrateCloseSocket(c->argv[1], c->argv[2]);
+    if (!argv_rewritten) migrateCloseSocket(c->io_data->argv[1], c->io_data->argv[2]);
     zfree(newargv);
     newargv = NULL; /* This will get reallocated on retry. */
 
@@ -810,8 +810,8 @@ void clusterCommandMyShardId(client *c) {
  * available (modules may call commands without a real client), we return the default
  * info, which is determined by server.tls_cluster. */
 static int shouldReturnTlsInfo(void) {
-    if (server.current_client && server.current_client->conn) {
-        return connIsTLS(server.current_client->conn);
+    if (server.current_client && server.current_client->io_data->conn) {
+        return connIsTLS(server.current_client->io_data->conn);
     } else {
         return server.tls_cluster;
     }
@@ -858,27 +858,27 @@ void clusterCommand(client *c) {
         return;
     }
 
-    if (c->argc == 2 && !strcasecmp(c->argv[1]->ptr, "help")) {
+    if (c->io_data->argc == 2 && !strcasecmp(c->io_data->argv[1]->ptr, "help")) {
         clusterCommandHelp(c);
-    } else if (!strcasecmp(c->argv[1]->ptr, "nodes") && c->argc == 2) {
+    } else if (!strcasecmp(c->io_data->argv[1]->ptr, "nodes") && c->io_data->argc == 2) {
         /* CLUSTER NODES */
         /* Report TLS ports to TLS client, and report non-TLS port to non-TLS client. */
         sds nodes = clusterGenNodesDescription(c, 0, shouldReturnTlsInfo());
         addReplyVerbatim(c, nodes, sdslen(nodes), "txt");
         sdsfree(nodes);
-    } else if (!strcasecmp(c->argv[1]->ptr, "myid") && c->argc == 2) {
+    } else if (!strcasecmp(c->io_data->argv[1]->ptr, "myid") && c->io_data->argc == 2) {
         /* CLUSTER MYID */
         clusterCommandMyId(c);
-    } else if (!strcasecmp(c->argv[1]->ptr, "myshardid") && c->argc == 2) {
+    } else if (!strcasecmp(c->io_data->argv[1]->ptr, "myshardid") && c->io_data->argc == 2) {
         /* CLUSTER MYSHARDID */
         clusterCommandMyShardId(c);
-    } else if (!strcasecmp(c->argv[1]->ptr, "slots") && c->argc == 2) {
+    } else if (!strcasecmp(c->io_data->argv[1]->ptr, "slots") && c->io_data->argc == 2) {
         /* CLUSTER SLOTS */
         clusterCommandSlots(c);
-    } else if (!strcasecmp(c->argv[1]->ptr, "shards") && c->argc == 2) {
+    } else if (!strcasecmp(c->io_data->argv[1]->ptr, "shards") && c->io_data->argc == 2) {
         /* CLUSTER SHARDS */
         clusterCommandShards(c);
-    } else if (!strcasecmp(c->argv[1]->ptr, "info") && c->argc == 2) {
+    } else if (!strcasecmp(c->io_data->argv[1]->ptr, "info") && c->io_data->argc == 2) {
         /* CLUSTER INFO */
 
         sds info = genClusterInfoString();
@@ -886,27 +886,27 @@ void clusterCommand(client *c) {
         /* Produce the reply protocol. */
         addReplyVerbatim(c, info, sdslen(info), "txt");
         sdsfree(info);
-    } else if (!strcasecmp(c->argv[1]->ptr, "keyslot") && c->argc == 3) {
+    } else if (!strcasecmp(c->io_data->argv[1]->ptr, "keyslot") && c->io_data->argc == 3) {
         /* CLUSTER KEYSLOT <key> */
-        sds key = c->argv[2]->ptr;
+        sds key = c->io_data->argv[2]->ptr;
 
         addReplyLongLong(c, keyHashSlot(key, sdslen(key)));
-    } else if (!strcasecmp(c->argv[1]->ptr, "countkeysinslot") && c->argc == 3) {
+    } else if (!strcasecmp(c->io_data->argv[1]->ptr, "countkeysinslot") && c->io_data->argc == 3) {
         /* CLUSTER COUNTKEYSINSLOT <slot> */
         long long slot;
 
-        if (getLongLongFromObjectOrReply(c, c->argv[2], &slot, NULL) != C_OK) return;
+        if (getLongLongFromObjectOrReply(c, c->io_data->argv[2], &slot, NULL) != C_OK) return;
         if (slot < 0 || slot >= CLUSTER_SLOTS) {
             addReplyError(c, "Invalid slot");
             return;
         }
         addReplyLongLong(c, countKeysInSlot(slot));
-    } else if (!strcasecmp(c->argv[1]->ptr, "getkeysinslot") && c->argc == 4) {
+    } else if (!strcasecmp(c->io_data->argv[1]->ptr, "getkeysinslot") && c->io_data->argc == 4) {
         /* CLUSTER GETKEYSINSLOT <slot> <count> */
         long long maxkeys, slot;
 
-        if (getLongLongFromObjectOrReply(c, c->argv[2], &slot, NULL) != C_OK) return;
-        if (getLongLongFromObjectOrReply(c, c->argv[3], &maxkeys, NULL) != C_OK) return;
+        if (getLongLongFromObjectOrReply(c, c->io_data->argv[2], &slot, NULL) != C_OK) return;
+        if (getLongLongFromObjectOrReply(c, c->io_data->argv[3], &maxkeys, NULL) != C_OK) return;
         if (slot < 0 || slot >= CLUSTER_SLOTS || maxkeys < 0) {
             addReplyError(c, "Invalid slot or number of keys");
             return;
@@ -925,14 +925,14 @@ void clusterCommand(client *c) {
             addReplyBulkCBuffer(c, sdskey, sdslen(sdskey));
         }
         kvstoreReleaseHashtableIterator(kvs_di);
-    } else if ((!strcasecmp(c->argv[1]->ptr, "slaves") || !strcasecmp(c->argv[1]->ptr, "replicas")) && c->argc == 3) {
+    } else if ((!strcasecmp(c->io_data->argv[1]->ptr, "slaves") || !strcasecmp(c->io_data->argv[1]->ptr, "replicas")) && c->io_data->argc == 3) {
         /* CLUSTER REPLICAS <NODE ID> */
-        clusterNode *n = clusterLookupNode(c->argv[2]->ptr, sdslen(c->argv[2]->ptr));
+        clusterNode *n = clusterLookupNode(c->io_data->argv[2]->ptr, sdslen(c->io_data->argv[2]->ptr));
         int j;
 
         /* Lookup the specified node in our table. */
         if (!n) {
-            addReplyErrorFormat(c, "Unknown node %s", (char *)c->argv[2]->ptr);
+            addReplyErrorFormat(c, "Unknown node %s", (char *)c->io_data->argv[2]->ptr);
             return;
         }
 
@@ -1011,8 +1011,8 @@ getNodeByQuery(client *c, struct serverCommand *cmd, robj **argv, int argc, int 
     if (cmd->proc == execCommand) {
         /* If CLIENT_MULTI flag is not set EXEC is just going to return an
          * error. */
-        if (!c->flag.multi) return myself;
-        ms = c->mstate;
+        if (!c->io_data->flag.multi) return myself;
+        ms = c->io_data->mstate;
     } else {
         /* In order to have a single codepath create a fake Multi State
          * structure if the client is not in MULTI/EXEC state, this way
@@ -1029,7 +1029,7 @@ getNodeByQuery(client *c, struct serverCommand *cmd, robj **argv, int argc, int 
 
     /* Only valid for sharded pubsub as regular pubsub can operate on any node and bypasses this layer. */
     int pubsubshard_included =
-        (cmd_flags & CMD_PUBSUB) || (c->cmd->proc == execCommand && (c->mstate->cmd_flags & CMD_PUBSUB));
+        (cmd_flags & CMD_PUBSUB) || (c->cmd->proc == execCommand && (c->io_data->mstate->cmd_flags & CMD_PUBSUB));
 
     /* Check that all the keys are in the same hash slot, and obtain this
      * slot and the node associated. */
@@ -1074,7 +1074,7 @@ getNodeByQuery(client *c, struct serverCommand *cmd, robj **argv, int argc, int 
                  * can safely serve the request, otherwise we return a TRYAGAIN
                  * error). To do so we set the importing/migrating state and
                  * increment a counter for every missing key. */
-                if (clusterNodeIsPrimary(myself) || c->flag.readonly) {
+                if (clusterNodeIsPrimary(myself) || c->io_data->flag.readonly) {
                     if (n == clusterNodeGetPrimary(myself) && getMigratingSlotDest(slot) != NULL) {
                         migrating_slot = 1;
                     } else if (getImportingSlotSource(slot) != NULL) {
@@ -1169,7 +1169,7 @@ getNodeByQuery(client *c, struct serverCommand *cmd, robj **argv, int argc, int 
      * request as "ASKING", we can serve the request. However if the request
      * involves multiple keys and we don't have them all, the only option is
      * to send a TRYAGAIN error. */
-    if (importing_slot && (c->flag.asking || cmd_flags & CMD_ASKING)) {
+    if (importing_slot && (c->io_data->flag.asking || cmd_flags & CMD_ASKING)) {
         if (multiple_keys && missing_keys) {
             if (error_code) *error_code = CLUSTER_REDIR_UNSTABLE;
             return NULL;
@@ -1182,8 +1182,8 @@ getNodeByQuery(client *c, struct serverCommand *cmd, robj **argv, int argc, int 
      * node is a replica and the request is about a hash slot our primary
      * is serving, we can reply without redirection. */
     int is_write_command =
-        (cmd_flags & CMD_WRITE) || (c->cmd->proc == execCommand && (c->mstate->cmd_flags & CMD_WRITE));
-    if ((c->flag.readonly || pubsubshard_included) && !is_write_command && clusterNodeIsReplica(myself) &&
+        (cmd_flags & CMD_WRITE) || (c->cmd->proc == execCommand && (c->io_data->mstate->cmd_flags & CMD_WRITE));
+    if ((c->io_data->flag.readonly || pubsubshard_included) && !is_write_command && clusterNodeIsReplica(myself) &&
         clusterNodeGetPrimary(myself) == n) {
         return myself;
     }
@@ -1239,8 +1239,8 @@ void clusterRedirectClient(client *c, clusterNode *n, int hashslot, int error_co
  * returns 1. Otherwise 0 is returned and no operation is performed. */
 int clusterRedirectBlockedClientIfNeeded(client *c) {
     clusterNode *myself = getMyClusterNode();
-    if (c->flag.blocked && (c->bstate->btype == BLOCKED_LIST || c->bstate->btype == BLOCKED_ZSET ||
-                            c->bstate->btype == BLOCKED_STREAM || c->bstate->btype == BLOCKED_MODULE)) {
+    if (c->io_data->flag.blocked && (c->bstate->btype == BLOCKED_LIST || c->bstate->btype == BLOCKED_ZSET ||
+                                     c->bstate->btype == BLOCKED_STREAM || c->bstate->btype == BLOCKED_MODULE)) {
         dictEntry *de;
         dictIterator *di;
 
@@ -1266,7 +1266,7 @@ int clusterRedirectBlockedClientIfNeeded(client *c) {
 
             /* if the client is read-only and attempting to access key that our
              * replica can handle, allow it. */
-            if (c->flag.readonly && !(c->lastcmd->flags & CMD_WRITE) && clusterNodeIsReplica(myself) &&
+            if (c->io_data->flag.readonly && !(c->lastcmd->flags & CMD_WRITE) && clusterNodeIsReplica(myself) &&
                 clusterNodeGetPrimary(myself) == node) {
                 node = myself;
             }
@@ -1450,7 +1450,7 @@ void clusterCommandSlots(client *c) {
         cached_reply = generateClusterSlotResponse(c->resp);
         server.cached_cluster_slot_info[conn_type] = cached_reply;
     } else {
-        debugServerAssertWithInfo(c, NULL, verifyCachedClusterSlotsResponse(cached_reply, c->resp) == 1);
+        debugServerAssertWithInfo(c->io_data, NULL, verifyCachedClusterSlotsResponse(cached_reply, c->resp) == 1);
     }
 
     addReplyProto(c, cached_reply, sdslen(cached_reply));
@@ -1469,7 +1469,7 @@ void askingCommand(client *c) {
         addReplyError(c, "This instance has cluster support disabled");
         return;
     }
-    c->flag.asking = 1;
+    c->io_data->flag.asking = 1;
     addReply(c, shared.ok);
 }
 
@@ -1477,13 +1477,13 @@ void askingCommand(client *c) {
  * In this mode replica will not redirect clients as long as clients access
  * with read-only commands to keys that are served by the replica's primary. */
 void readonlyCommand(client *c) {
-    c->flag.readonly = 1;
+    c->io_data->flag.readonly = 1;
     addReply(c, shared.ok);
 }
 
 /* The READWRITE command just clears the READONLY command state. */
 void readwriteCommand(client *c) {
-    c->flag.readonly = 0;
+    c->io_data->flag.readonly = 0;
     addReply(c, shared.ok);
 }
 

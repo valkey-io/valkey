@@ -499,7 +499,7 @@ void ACLFreeUserAndKillClients(user *u) {
             /* We will write replies to this client later, so we can't
              * close it directly even if async. */
             if (c == server.current_client) {
-                c->flag.close_after_command = 1;
+                c->io_data->flag.close_after_command = 1;
             } else {
                 freeClientAsync(c);
             }
@@ -1459,7 +1459,7 @@ static int checkPasswordBasedAuth(client *c, robj *username, robj *password) {
         moduleNotifyUserChanged(c);
         return AUTH_OK;
     } else {
-        addACLLogEntry(c, ACL_DENIED_AUTH, (c->flag.multi) ? ACL_LOG_CTX_MULTI : ACL_LOG_CTX_TOPLEVEL, 0, username->ptr,
+        addACLLogEntry(c, ACL_DENIED_AUTH, (c->io_data->flag.multi) ? ACL_LOG_CTX_MULTI : ACL_LOG_CTX_TOPLEVEL, 0, username->ptr,
                        NULL);
         return AUTH_ERR;
     }
@@ -1836,7 +1836,7 @@ int ACLCheckAllUserCommandPerm(user *u, struct serverCommand *cmd, robj **argv, 
 
 /* High level API for checking if a client can execute the queued up command */
 int ACLCheckAllPerm(client *c, int *idxptr) {
-    return ACLCheckAllUserCommandPerm(c->user, c->cmd, c->argv, c->argc, idxptr);
+    return ACLCheckAllUserCommandPerm(c->user, c->cmd, c->io_data->argv, c->io_data->argc, idxptr);
 }
 
 /* If 'new' can access all channels 'original' could then return NULL;
@@ -2627,9 +2627,9 @@ void addACLLogEntry(client *c, int reason, int context, int argpos, sds username
     } else {
         switch (reason) {
         case ACL_DENIED_CMD: le->object = sdsdup(c->cmd->fullname); break;
-        case ACL_DENIED_KEY: le->object = sdsdup(c->argv[argpos]->ptr); break;
-        case ACL_DENIED_CHANNEL: le->object = sdsdup(c->argv[argpos]->ptr); break;
-        case ACL_DENIED_AUTH: le->object = sdsdup(c->argv[0]->ptr); break;
+        case ACL_DENIED_KEY: le->object = sdsdup(c->io_data->argv[argpos]->ptr); break;
+        case ACL_DENIED_CHANNEL: le->object = sdsdup(c->io_data->argv[argpos]->ptr); break;
+        case ACL_DENIED_AUTH: le->object = sdsdup(c->io_data->argv[0]->ptr); break;
         default: le->object = sdsempty();
         }
     }
@@ -2793,15 +2793,15 @@ static int aclAddReplySelectorDescription(client *c, aclSelector *s) {
  * ACL LOG [<count> | RESET]
  */
 void aclCommand(client *c) {
-    char *sub = c->argv[1]->ptr;
-    if (!strcasecmp(sub, "setuser") && c->argc >= 3) {
+    char *sub = c->io_data->argv[1]->ptr;
+    if (!strcasecmp(sub, "setuser") && c->io_data->argc >= 3) {
         /* Initially redact all of the arguments to not leak any information
          * about the user. */
-        for (int j = 2; j < c->argc; j++) {
+        for (int j = 2; j < c->io_data->argc; j++) {
             redactClientCommandArgument(c, j);
         }
 
-        sds username = c->argv[2]->ptr;
+        sds username = c->io_data->argv[2]->ptr;
         /* Check username validity. */
         if (ACLStringHasSpaces(username, sdslen(username))) {
             addReplyError(c, "Usernames can't contain spaces or null characters");
@@ -2810,10 +2810,10 @@ void aclCommand(client *c) {
 
         user *u = ACLGetUserByName(username, sdslen(username));
 
-        sds *temp_argv = zmalloc(c->argc * sizeof(sds));
-        for (int i = 3; i < c->argc; i++) temp_argv[i - 3] = c->argv[i]->ptr;
+        sds *temp_argv = zmalloc(c->io_data->argc * sizeof(sds));
+        for (int i = 3; i < c->io_data->argc; i++) temp_argv[i - 3] = c->io_data->argv[i]->ptr;
 
-        sds error = ACLStringSetUser(u, username, temp_argv, c->argc - 3);
+        sds error = ACLStringSetUser(u, username, temp_argv, c->io_data->argc - 3);
         zfree(temp_argv);
         if (error == NULL) {
             addReply(c, shared.ok);
@@ -2821,22 +2821,22 @@ void aclCommand(client *c) {
             addReplyErrorSdsSafe(c, error);
         }
         return;
-    } else if (!strcasecmp(sub, "deluser") && c->argc >= 3) {
+    } else if (!strcasecmp(sub, "deluser") && c->io_data->argc >= 3) {
         /* Initially redact all the arguments to not leak any information
          * about the users. */
-        for (int j = 2; j < c->argc; j++) redactClientCommandArgument(c, j);
+        for (int j = 2; j < c->io_data->argc; j++) redactClientCommandArgument(c, j);
 
         int deleted = 0;
-        for (int j = 2; j < c->argc; j++) {
-            sds username = c->argv[j]->ptr;
+        for (int j = 2; j < c->io_data->argc; j++) {
+            sds username = c->io_data->argv[j]->ptr;
             if (!strcmp(username, "default")) {
                 addReplyError(c, "The 'default' user cannot be removed");
                 return;
             }
         }
 
-        for (int j = 2; j < c->argc; j++) {
-            sds username = c->argv[j]->ptr;
+        for (int j = 2; j < c->io_data->argc; j++) {
+            sds username = c->io_data->argv[j]->ptr;
             user *u;
             if (raxRemove(Users, (unsigned char *)username, sdslen(username), (void **)&u)) {
                 ACLFreeUserAndKillClients(u);
@@ -2844,11 +2844,11 @@ void aclCommand(client *c) {
             }
         }
         addReplyLongLong(c, deleted);
-    } else if (!strcasecmp(sub, "getuser") && c->argc == 3) {
+    } else if (!strcasecmp(sub, "getuser") && c->io_data->argc == 3) {
         /* Redact the username to not leak any information about the user. */
         redactClientCommandArgument(c, 2);
 
-        user *u = ACLGetUserByName(c->argv[2]->ptr, sdslen(c->argv[2]->ptr));
+        user *u = ACLGetUserByName(c->io_data->argv[2]->ptr, sdslen(c->io_data->argv[2]->ptr));
         if (u == NULL) {
             addReplyNull(c);
             return;
@@ -2893,7 +2893,7 @@ void aclCommand(client *c) {
             setDeferredMapLen(c, slen, sfields);
         }
         setDeferredMapLen(c, ufields, fields);
-    } else if ((!strcasecmp(sub, "list") || !strcasecmp(sub, "users")) && c->argc == 2) {
+    } else if ((!strcasecmp(sub, "list") || !strcasecmp(sub, "users")) && c->io_data->argc == 2) {
         int justnames = !strcasecmp(sub, "users");
         addReplyArrayLen(c, raxSize(Users));
         raxIterator ri;
@@ -2915,7 +2915,7 @@ void aclCommand(client *c) {
             }
         }
         raxStop(&ri);
-    } else if (!strcasecmp(sub, "whoami") && c->argc == 2) {
+    } else if (!strcasecmp(sub, "whoami") && c->io_data->argc == 2) {
         if (c->user != NULL) {
             addReplyBulkCBuffer(c, c->user->name, sdslen(c->user->name));
         } else {
@@ -2926,7 +2926,7 @@ void aclCommand(client *c) {
                          "ACL SETUSER command and then issue a CONFIG REWRITE (assuming you have a configuration file "
                          "set) in order to store users in the configuration.");
         return;
-    } else if (!strcasecmp(sub, "load") && c->argc == 2) {
+    } else if (!strcasecmp(sub, "load") && c->io_data->argc == 2) {
         sds errors = ACLLoadFromFile(server.acl_filename);
         if (errors == NULL) {
             addReply(c, shared.ok);
@@ -2934,7 +2934,7 @@ void aclCommand(client *c) {
             addReplyError(c, errors);
             sdsfree(errors);
         }
-    } else if (!strcasecmp(sub, "save") && c->argc == 2) {
+    } else if (!strcasecmp(sub, "save") && c->io_data->argc == 2) {
         if (ACLSaveToFile(server.acl_filename) == C_OK) {
             addReply(c, shared.ok);
         } else {
@@ -2942,27 +2942,27 @@ void aclCommand(client *c) {
                              "Please check the server logs for more "
                              "information");
         }
-    } else if (!strcasecmp(sub, "cat") && c->argc == 2) {
+    } else if (!strcasecmp(sub, "cat") && c->io_data->argc == 2) {
         void *dl = addReplyDeferredLen(c);
         int j;
         for (j = 0; ACLCommandCategories[j].flag != 0; j++) addReplyBulkCString(c, ACLCommandCategories[j].name);
         setDeferredArrayLen(c, dl, j);
-    } else if (!strcasecmp(sub, "cat") && c->argc == 3) {
-        uint64_t cflag = ACLGetCommandCategoryFlagByName(c->argv[2]->ptr);
+    } else if (!strcasecmp(sub, "cat") && c->io_data->argc == 3) {
+        uint64_t cflag = ACLGetCommandCategoryFlagByName(c->io_data->argv[2]->ptr);
         if (cflag == 0) {
-            addReplyErrorFormat(c, "Unknown category '%.128s'", (char *)c->argv[2]->ptr);
+            addReplyErrorFormat(c, "Unknown category '%.128s'", (char *)c->io_data->argv[2]->ptr);
             return;
         }
         int arraylen = 0;
         void *dl = addReplyDeferredLen(c);
         aclCatWithFlags(c, server.orig_commands, cflag, &arraylen);
         setDeferredArrayLen(c, dl, arraylen);
-    } else if (!strcasecmp(sub, "genpass") && (c->argc == 2 || c->argc == 3)) {
+    } else if (!strcasecmp(sub, "genpass") && (c->io_data->argc == 2 || c->io_data->argc == 3)) {
 #define GENPASS_MAX_BITS 4096
         char pass[GENPASS_MAX_BITS / 8 * 2]; /* Hex representation. */
         long bits = 256;                     /* By default generate 256 bits passwords. */
 
-        if (c->argc == 3 && getLongFromObjectOrReply(c, c->argv[2], &bits, NULL) != C_OK) return;
+        if (c->io_data->argc == 3 && getLongFromObjectOrReply(c, c->io_data->argv[2], &bits, NULL) != C_OK) return;
 
         if (bits <= 0 || bits > GENPASS_MAX_BITS) {
             addReplyErrorFormat(c,
@@ -2976,20 +2976,20 @@ void aclCommand(client *c) {
         long chars = (bits + 3) / 4; /* Round to number of characters to emit. */
         getRandomHexChars(pass, chars);
         addReplyBulkCBuffer(c, pass, chars);
-    } else if (!strcasecmp(sub, "log") && (c->argc == 2 || c->argc == 3)) {
+    } else if (!strcasecmp(sub, "log") && (c->io_data->argc == 2 || c->io_data->argc == 3)) {
         long count = 10; /* Number of entries to emit by default. */
 
         /* Parse the only argument that LOG may have: it could be either
          * the number of entries the user wants to display, or alternatively
          * the "RESET" command in order to flush the old entries. */
-        if (c->argc == 3) {
-            if (!strcasecmp(c->argv[2]->ptr, "reset")) {
+        if (c->io_data->argc == 3) {
+            if (!strcasecmp(c->io_data->argv[2]->ptr, "reset")) {
                 listSetFreeMethod(ACLLog, ACLFreeLogEntry);
                 listEmpty(ACLLog);
                 listSetFreeMethod(ACLLog, NULL);
                 addReply(c, shared.ok);
                 return;
-            } else if (getLongFromObjectOrReply(c, c->argv[2], &count, NULL) != C_OK) {
+            } else if (getLongFromObjectOrReply(c, c->io_data->argv[2], &count, NULL) != C_OK) {
                 return;
             }
             if (count < 0) count = 0;
@@ -3047,34 +3047,34 @@ void aclCommand(client *c) {
             addReplyBulkCString(c, "timestamp-last-updated");
             addReplyLongLong(c, le->ctime);
         }
-    } else if (!strcasecmp(sub, "dryrun") && c->argc >= 4) {
+    } else if (!strcasecmp(sub, "dryrun") && c->io_data->argc >= 4) {
         struct serverCommand *cmd;
-        user *u = ACLGetUserByName(c->argv[2]->ptr, sdslen(c->argv[2]->ptr));
+        user *u = ACLGetUserByName(c->io_data->argv[2]->ptr, sdslen(c->io_data->argv[2]->ptr));
         if (u == NULL) {
-            addReplyErrorFormat(c, "User '%s' not found", (char *)c->argv[2]->ptr);
+            addReplyErrorFormat(c, "User '%s' not found", (char *)c->io_data->argv[2]->ptr);
             return;
         }
 
-        if ((cmd = lookupCommand(c->argv + 3, c->argc - 3)) == NULL) {
-            addReplyErrorFormat(c, "Command '%s' not found", (char *)c->argv[3]->ptr);
+        if ((cmd = lookupCommand(c->io_data->argv + 3, c->io_data->argc - 3)) == NULL) {
+            addReplyErrorFormat(c, "Command '%s' not found", (char *)c->io_data->argv[3]->ptr);
             return;
         }
 
-        if ((cmd->arity > 0 && cmd->arity != c->argc - 3) || (c->argc - 3 < -cmd->arity)) {
+        if ((cmd->arity > 0 && cmd->arity != c->io_data->argc - 3) || (c->io_data->argc - 3 < -cmd->arity)) {
             addReplyErrorFormat(c, "wrong number of arguments for '%s' command", cmd->fullname);
             return;
         }
 
         int idx;
-        int result = ACLCheckAllUserCommandPerm(u, cmd, c->argv + 3, c->argc - 3, &idx);
+        int result = ACLCheckAllUserCommandPerm(u, cmd, c->io_data->argv + 3, c->io_data->argc - 3, &idx);
         if (result != ACL_OK) {
-            sds err = getAclErrorMessage(result, u, cmd, c->argv[idx + 3]->ptr, 1);
+            sds err = getAclErrorMessage(result, u, cmd, c->io_data->argv[idx + 3]->ptr, 1);
             addReplyBulkSds(c, err);
             return;
         }
 
         addReply(c, shared.ok);
-    } else if (c->argc == 2 && !strcasecmp(sub, "help")) {
+    } else if (c->io_data->argc == 2 && !strcasecmp(sub, "help")) {
         const char *help[] = {
             "CAT [<category>]",
             "    List all commands that belong to <category>, or all command categories",
@@ -3129,7 +3129,7 @@ void addReplyCommandCategories(client *c, struct serverCommand *cmd) {
  * against the default user. */
 void authCommand(client *c) {
     /* Only two or three argument forms are allowed. */
-    if (c->argc > 3) {
+    if (c->io_data->argc > 3) {
         addReplyErrorObject(c, shared.syntaxerr);
         return;
     }
@@ -3139,7 +3139,7 @@ void authCommand(client *c) {
     /* Handle the two different forms here. The form with two arguments
      * will just use "default" as username. */
     robj *username, *password;
-    if (c->argc == 2) {
+    if (c->io_data->argc == 2) {
         /* Mimic the old behavior of giving an error for the two argument
          * form if no password is configured. */
         if (DefaultUser->flags & USER_FLAG_NOPASS) {
@@ -3150,10 +3150,10 @@ void authCommand(client *c) {
         }
 
         username = shared.default_username;
-        password = c->argv[1];
+        password = c->io_data->argv[1];
     } else {
-        username = c->argv[1];
-        password = c->argv[2];
+        username = c->io_data->argv[1];
+        password = c->io_data->argv[2];
         redactClientCommandArgument(c, 2);
     }
 

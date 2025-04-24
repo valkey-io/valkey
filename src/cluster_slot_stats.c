@@ -132,15 +132,15 @@ static void addReplySortedSlotStats(client *c, slotStatForSort slot_stats[], lon
 }
 
 static int canAddNetworkBytesOut(client *c) {
-    return server.cluster_slot_stats_enabled && server.cluster_enabled && c->slot != -1;
+    return server.cluster_slot_stats_enabled && server.cluster_enabled && c->io_data->slot != -1;
 }
 
 /* Accumulates egress bytes upon sending RESP responses back to user clients. */
 void clusterSlotStatsAddNetworkBytesOutForUserClient(client *c) {
     if (!canAddNetworkBytesOut(c)) return;
 
-    serverAssert(c->slot >= 0 && c->slot < CLUSTER_SLOTS);
-    server.cluster->slot_stats[c->slot].network_bytes_out += c->net_output_bytes_curr_cmd;
+    serverAssert(c->io_data->slot >= 0 && c->io_data->slot < CLUSTER_SLOTS);
+    server.cluster->slot_stats[c->io_data->slot].network_bytes_out += c->net_output_bytes_curr_cmd;
 }
 
 /* Accumulates egress bytes upon sending replication stream. This only applies for primary nodes. */
@@ -150,12 +150,12 @@ static void clusterSlotStatsUpdateNetworkBytesOutForReplication(long long len) {
 
     /* We multiply the bytes len by the number of replicas to account for us broadcasting to multiple replicas at once. */
     len *= (long long)listLength(server.replicas);
-    serverAssert(c->slot >= 0 && c->slot < CLUSTER_SLOTS);
+    serverAssert(c->io_data->slot >= 0 && c->io_data->slot < CLUSTER_SLOTS);
     serverAssert(nodeIsPrimary(server.cluster->myself));
     /* We sometimes want to adjust the counter downwards (for example when we want to undo accounting for
      * SELECT commands that don't belong to any slot) so let's make sure we don't underflow the counter. */
-    serverAssert(len >= 0 || server.cluster->slot_stats[c->slot].network_bytes_out >= (uint64_t)-len);
-    server.cluster->slot_stats[c->slot].network_bytes_out += len;
+    serverAssert(len >= 0 || server.cluster->slot_stats[c->io_data->slot].network_bytes_out >= (uint64_t)-len);
+    server.cluster->slot_stats[c->io_data->slot].network_bytes_out += len;
 }
 
 /* Increment network bytes out for replication stream. This method will increment `len` value times the active replica
@@ -177,24 +177,24 @@ void clusterSlotStatsDecrNetworkBytesOutForReplication(long long len) {
  *    This type is not aggregated, to stay consistent with server.stat_net_output_bytes aggregation.
  * This function covers the internal propagation component. */
 void clusterSlotStatsAddNetworkBytesOutForShardedPubSubInternalPropagation(client *c, int slot) {
-    /* For a blocked client, c->slot could be pre-filled.
-     * Thus c->slot is backed-up for restoration after aggregation is completed. */
-    int _slot = c->slot;
-    c->slot = slot;
+    /* For a blocked client, c->io_data->slot could be pre-filled.
+     * Thus c->io_data->slot is backed-up for restoration after aggregation is completed. */
+    int _slot = c->io_data->slot;
+    c->io_data->slot = slot;
     if (!canAddNetworkBytesOut(c)) {
-        /* c->slot should not change as a side effect of this function,
+        /* c->io_data->slot should not change as a side effect of this function,
          * regardless of the function's early return condition. */
-        c->slot = _slot;
+        c->io_data->slot = _slot;
         return;
     }
 
-    serverAssert(c->slot >= 0 && c->slot < CLUSTER_SLOTS);
-    server.cluster->slot_stats[c->slot].network_bytes_out += c->net_output_bytes_curr_cmd;
+    serverAssert(c->io_data->slot >= 0 && c->io_data->slot < CLUSTER_SLOTS);
+    server.cluster->slot_stats[c->io_data->slot].network_bytes_out += c->net_output_bytes_curr_cmd;
 
     /* For sharded pubsub, the client's network bytes metrics must be reset here,
      * as resetClient() is not called until subscription ends. */
     c->net_output_bytes_curr_cmd = 0;
-    c->slot = _slot;
+    c->io_data->slot = _slot;
 }
 
 /* Adds reply for the ORDERBY variant.
@@ -224,7 +224,7 @@ void clusterSlotStatResetAll(void) {
 static int canAddCpuDuration(client *c) {
     return server.cluster_slot_stats_enabled &&  /* Config should be enabled. */
            server.cluster_enabled &&             /* Cluster mode should be enabled. */
-           c->slot != -1 &&                      /* Command should be slot specific. */
+           c->io_data->slot != -1 &&             /* Command should be slot specific. */
            (!server.execution_nesting ||         /* Either; */
             (server.execution_nesting &&         /* 1) Command should not be nested, or */
              c->realcmd->flags & CMD_BLOCKING)); /* 2) If command is nested, it must be due to unblocking. */
@@ -233,8 +233,8 @@ static int canAddCpuDuration(client *c) {
 void clusterSlotStatsAddCpuDuration(client *c, ustime_t duration) {
     if (!canAddCpuDuration(c)) return;
 
-    serverAssert(c->slot >= 0 && c->slot < CLUSTER_SLOTS);
-    server.cluster->slot_stats[c->slot].cpu_usec += duration;
+    serverAssert(c->io_data->slot >= 0 && c->io_data->slot < CLUSTER_SLOTS);
+    server.cluster->slot_stats[c->io_data->slot].cpu_usec += duration;
 }
 
 /* For cross-slot scripting, its caller client's slot must be invalidated,
@@ -242,7 +242,7 @@ void clusterSlotStatsAddCpuDuration(client *c, ustime_t duration) {
 void clusterSlotStatsInvalidateSlotIfApplicable(scriptRunCtx *ctx) {
     if (!(ctx->flags & SCRIPT_ALLOW_CROSS_SLOT)) return;
 
-    ctx->original_client->slot = -1;
+    ctx->original_client->io_data->slot = -1;
 }
 
 static int canAddNetworkBytesIn(client *c) {
@@ -251,14 +251,14 @@ static int canAddNetworkBytesIn(client *c) {
      * Third, blocked client is not aggregated, to avoid duplicate aggregation upon unblocking.
      * Fourth, the server is not under a MULTI/EXEC transaction, to avoid duplicate aggregation of
      * EXEC's 14 bytes RESP upon nested call()'s afterCommand(). */
-    return server.cluster_enabled && server.cluster_slot_stats_enabled && c->slot != -1 && !(c->flag.blocked) &&
+    return server.cluster_enabled && server.cluster_slot_stats_enabled && c->io_data->slot != -1 && !(c->io_data->flag.blocked) &&
            !server.in_exec;
 }
 
 /* Adds network ingress bytes of the current command in execution,
  * calculated earlier within networking.c layer.
  *
- * Note: Below function should only be called once c->slot is parsed.
+ * Note: Below function should only be called once c->io_data->slot is parsed.
  * Otherwise, the aggregation will be skipped due to canAddNetworkBytesIn() check failure.
  * */
 void clusterSlotStatsAddNetworkBytesInForUserClient(client *c) {
@@ -266,10 +266,10 @@ void clusterSlotStatsAddNetworkBytesInForUserClient(client *c) {
 
     if (c->cmd->proc == execCommand) {
         /* Accumulate its corresponding MULTI RESP; *1\r\n$5\r\nmulti\r\n */
-        c->net_input_bytes_curr_cmd += 15;
+        c->io_data->net_input_bytes_curr_cmd += 15;
     }
 
-    server.cluster->slot_stats[c->slot].network_bytes_in += c->net_input_bytes_curr_cmd;
+    server.cluster->slot_stats[c->io_data->slot].network_bytes_in += c->io_data->net_input_bytes_curr_cmd;
 }
 
 void clusterSlotStatsCommand(client *c) {
@@ -279,11 +279,11 @@ void clusterSlotStatsCommand(client *c) {
     }
 
     /* Parse additional arguments. */
-    if (c->argc == 5 && !strcasecmp(c->argv[2]->ptr, "slotsrange")) {
+    if (c->io_data->argc == 5 && !strcasecmp(c->io_data->argv[2]->ptr, "slotsrange")) {
         /* CLUSTER SLOT-STATS SLOTSRANGE start-slot end-slot */
         int startslot, endslot;
-        if ((startslot = getSlotOrReply(c, c->argv[3])) == -1 ||
-            (endslot = getSlotOrReply(c, c->argv[4])) == -1) {
+        if ((startslot = getSlotOrReply(c, c->io_data->argv[3])) == -1 ||
+            (endslot = getSlotOrReply(c, c->io_data->argv[4])) == -1) {
             return;
         }
         if (startslot > endslot) {
@@ -295,17 +295,17 @@ void clusterSlotStatsCommand(client *c) {
         int assigned_slots_count = markSlotsAssignedToMyShard(assigned_slots, startslot, endslot);
         addReplySlotsRange(c, assigned_slots, startslot, endslot, assigned_slots_count);
 
-    } else if (c->argc >= 4 && !strcasecmp(c->argv[2]->ptr, "orderby")) {
+    } else if (c->io_data->argc >= 4 && !strcasecmp(c->io_data->argv[2]->ptr, "orderby")) {
         /* CLUSTER SLOT-STATS ORDERBY metric [LIMIT limit] [ASC | DESC] */
         int desc = 1;
         slotStatType order_by = INVALID;
-        if (!strcasecmp(c->argv[3]->ptr, "key-count")) {
+        if (!strcasecmp(c->io_data->argv[3]->ptr, "key-count")) {
             order_by = KEY_COUNT;
-        } else if (!strcasecmp(c->argv[3]->ptr, "cpu-usec") && server.cluster_slot_stats_enabled) {
+        } else if (!strcasecmp(c->io_data->argv[3]->ptr, "cpu-usec") && server.cluster_slot_stats_enabled) {
             order_by = CPU_USEC;
-        } else if (!strcasecmp(c->argv[3]->ptr, "network-bytes-in") && server.cluster_slot_stats_enabled) {
+        } else if (!strcasecmp(c->io_data->argv[3]->ptr, "network-bytes-in") && server.cluster_slot_stats_enabled) {
             order_by = NETWORK_BYTES_IN;
-        } else if (!strcasecmp(c->argv[3]->ptr, "network-bytes-out") && server.cluster_slot_stats_enabled) {
+        } else if (!strcasecmp(c->io_data->argv[3]->ptr, "network-bytes-out") && server.cluster_slot_stats_enabled) {
             order_by = NETWORK_BYTES_OUT;
         } else {
             addReplyError(c, "Unrecognized sort metric for ORDERBY.");
@@ -314,20 +314,20 @@ void clusterSlotStatsCommand(client *c) {
         int i = 4; /* Next argument index, following ORDERBY */
         int limit_counter = 0, asc_desc_counter = 0;
         long limit = CLUSTER_SLOTS;
-        while (i < c->argc) {
-            int moreargs = c->argc > i + 1;
-            if (!strcasecmp(c->argv[i]->ptr, "limit") && moreargs) {
+        while (i < c->io_data->argc) {
+            int moreargs = c->io_data->argc > i + 1;
+            if (!strcasecmp(c->io_data->argv[i]->ptr, "limit") && moreargs) {
                 if (getRangeLongFromObjectOrReply(
-                        c, c->argv[i + 1], 1, CLUSTER_SLOTS, &limit,
+                        c, c->io_data->argv[i + 1], 1, CLUSTER_SLOTS, &limit,
                         "Limit has to lie in between 1 and 16384 (maximum number of slots).") != C_OK) {
                     return;
                 }
                 i++;
                 limit_counter++;
-            } else if (!strcasecmp(c->argv[i]->ptr, "asc")) {
+            } else if (!strcasecmp(c->io_data->argv[i]->ptr, "asc")) {
                 desc = 0;
                 asc_desc_counter++;
-            } else if (!strcasecmp(c->argv[i]->ptr, "desc")) {
+            } else if (!strcasecmp(c->io_data->argv[i]->ptr, "desc")) {
                 desc = 1;
                 asc_desc_counter++;
             } else {

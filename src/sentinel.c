@@ -3058,8 +3058,8 @@ void sentinelConfigSetCommand(client *c) {
     dict *set_configs = dictCreate(&stringSetDictType);
 
     /* Validate arguments are valid */
-    for (int i = 3; i < c->argc; i++) {
-        option = c->argv[i]->ptr;
+    for (int i = 3; i < c->io_data->argc; i++) {
+        option = c->io_data->argv[i]->ptr;
 
         /* Validate option is valid */
         if (dictFind(options_dict, option) == NULL) {
@@ -3076,11 +3076,11 @@ void sentinelConfigSetCommand(client *c) {
         serverAssert(dictAdd(set_configs, sdsnew(option), NULL) == C_OK);
 
         /* Validate argument */
-        if (i + 1 == c->argc) {
+        if (i + 1 == c->io_data->argc) {
             addReplyErrorFormat(c, "Missing argument '%s' value", option);
             goto exit;
         }
-        val = c->argv[++i];
+        val = c->io_data->argv[++i];
 
         if (!strcasecmp(option, "resolve-hostnames")) {
             if ((yesnotoi(val->ptr)) == -1) goto badfmt;
@@ -3097,11 +3097,11 @@ void sentinelConfigSetCommand(client *c) {
     }
 
     /* Apply changes */
-    for (int i = 3; i < c->argc; i++) {
-        int moreargs = (c->argc - 1) - i;
-        option = c->argv[i]->ptr;
+    for (int i = 3; i < c->io_data->argc; i++) {
+        int moreargs = (c->io_data->argc - 1) - i;
+        option = c->io_data->argv[i]->ptr;
         if (!strcasecmp(option, "loglevel") && moreargs > 0) {
-            val = c->argv[++i];
+            val = c->io_data->argv[++i];
             if (!strcasecmp(val->ptr, "debug"))
                 server.verbosity = LL_DEBUG;
             else if (!strcasecmp(val->ptr, "verbose"))
@@ -3113,28 +3113,28 @@ void sentinelConfigSetCommand(client *c) {
             else if (!strcasecmp(val->ptr, "nothing"))
                 server.verbosity = LL_NOTHING;
         } else if (!strcasecmp(option, "resolve-hostnames") && moreargs > 0) {
-            val = c->argv[++i];
+            val = c->io_data->argv[++i];
             numval = yesnotoi(val->ptr);
             sentinel.resolve_hostnames = numval;
         } else if (!strcasecmp(option, "announce-hostnames") && moreargs > 0) {
-            val = c->argv[++i];
+            val = c->io_data->argv[++i];
             numval = yesnotoi(val->ptr);
             sentinel.announce_hostnames = numval;
         } else if (!strcasecmp(option, "announce-ip") && moreargs > 0) {
-            val = c->argv[++i];
+            val = c->io_data->argv[++i];
             if (sentinel.announce_ip) sdsfree(sentinel.announce_ip);
             sentinel.announce_ip = sdsnew(val->ptr);
         } else if (!strcasecmp(option, "announce-port") && moreargs > 0) {
-            val = c->argv[++i];
+            val = c->io_data->argv[++i];
             getLongLongFromObject(val, &numval);
             sentinel.announce_port = numval;
         } else if (!strcasecmp(option, "sentinel-user") && moreargs > 0) {
-            val = c->argv[++i];
+            val = c->io_data->argv[++i];
             sdsfree(sentinel.sentinel_auth_user);
             sentinel.sentinel_auth_user = sdslen(val->ptr) == 0 ? NULL : sdsdup(val->ptr);
             drop_conns = 1;
         } else if (!strcasecmp(option, "sentinel-pass") && moreargs > 0) {
-            val = c->argv[++i];
+            val = c->io_data->argv[++i];
             sdsfree(sentinel.sentinel_auth_pass);
             sentinel.sentinel_auth_pass = sdslen(val->ptr) == 0 ? NULL : sdsdup(val->ptr);
             drop_conns = 1;
@@ -3165,8 +3165,8 @@ void sentinelConfigGetCommand(client *c) {
     int matches = 0;
     /* Create a dictionary to store the input configs,to avoid adding duplicate twice */
     dict *d = dictCreate(&externalStringType);
-    for (int i = 3; i < c->argc; i++) {
-        pattern = c->argv[i]->ptr;
+    for (int i = 3; i < c->io_data->argc; i++) {
+        pattern = c->io_data->argv[i]->ptr;
         /* If the string doesn't contain glob patterns and available in dictionary, don't look further, just continue. */
         if (!strpbrk(pattern, "[*?") && dictFind(d, pattern)) continue;
         /* we want to print all the matched patterns and avoid printing duplicates twice */
@@ -3427,14 +3427,14 @@ void sentinelSetDebugConfigParameters(client *c) {
     char *option;
 
     /* Process option - value pairs. */
-    for (j = 2; j < c->argc; j++) {
-        int moreargs = (c->argc - 1) - j;
-        option = c->argv[j]->ptr;
+    for (j = 2; j < c->io_data->argc; j++) {
+        int moreargs = (c->io_data->argc - 1) - j;
+        option = c->io_data->argv[j]->ptr;
         long long ll;
 
         if (!strcasecmp(option, "info-period") && moreargs > 0) {
             /* info-period <milliseconds> */
-            robj *o = c->argv[++j];
+            robj *o = c->io_data->argv[++j];
             if (getLongLongFromObject(o, &ll) == C_ERR || ll <= 0) {
                 badarg = j;
                 goto badfmt;
@@ -3443,7 +3443,7 @@ void sentinelSetDebugConfigParameters(client *c) {
 
         } else if (!strcasecmp(option, "ping-period") && moreargs > 0) {
             /* ping-period <milliseconds> */
-            robj *o = c->argv[++j];
+            robj *o = c->io_data->argv[++j];
             if (getLongLongFromObject(o, &ll) == C_ERR || ll <= 0) {
                 badarg = j;
                 goto badfmt;
@@ -3452,7 +3452,7 @@ void sentinelSetDebugConfigParameters(client *c) {
 
         } else if (!strcasecmp(option, "ask-period") && moreargs > 0) {
             /* ask-period <milliseconds> */
-            robj *o = c->argv[++j];
+            robj *o = c->io_data->argv[++j];
             if (getLongLongFromObject(o, &ll) == C_ERR || ll <= 0) {
                 badarg = j;
                 goto badfmt;
@@ -3461,7 +3461,7 @@ void sentinelSetDebugConfigParameters(client *c) {
 
         } else if (!strcasecmp(option, "publish-period") && moreargs > 0) {
             /* publish-period <milliseconds> */
-            robj *o = c->argv[++j];
+            robj *o = c->io_data->argv[++j];
             if (getLongLongFromObject(o, &ll) == C_ERR || ll <= 0) {
                 badarg = j;
                 goto badfmt;
@@ -3470,7 +3470,7 @@ void sentinelSetDebugConfigParameters(client *c) {
 
         } else if (!strcasecmp(option, "default-down-after") && moreargs > 0) {
             /* default-down-after <milliseconds> */
-            robj *o = c->argv[++j];
+            robj *o = c->io_data->argv[++j];
             if (getLongLongFromObject(o, &ll) == C_ERR || ll <= 0) {
                 badarg = j;
                 goto badfmt;
@@ -3479,7 +3479,7 @@ void sentinelSetDebugConfigParameters(client *c) {
 
         } else if (!strcasecmp(option, "tilt-trigger") && moreargs > 0) {
             /* tilt-trigger <milliseconds> */
-            robj *o = c->argv[++j];
+            robj *o = c->io_data->argv[++j];
             if (getLongLongFromObject(o, &ll) == C_ERR || ll <= 0) {
                 badarg = j;
                 goto badfmt;
@@ -3488,7 +3488,7 @@ void sentinelSetDebugConfigParameters(client *c) {
 
         } else if (!strcasecmp(option, "tilt-period") && moreargs > 0) {
             /* tilt-period <milliseconds> */
-            robj *o = c->argv[++j];
+            robj *o = c->io_data->argv[++j];
             if (getLongLongFromObject(o, &ll) == C_ERR || ll <= 0) {
                 badarg = j;
                 goto badfmt;
@@ -3497,7 +3497,7 @@ void sentinelSetDebugConfigParameters(client *c) {
 
         } else if (!strcasecmp(option, "slave-reconf-timeout") && moreargs > 0) {
             /* slave-reconf-timeout <milliseconds> */
-            robj *o = c->argv[++j];
+            robj *o = c->io_data->argv[++j];
             if (getLongLongFromObject(o, &ll) == C_ERR || ll <= 0) {
                 badarg = j;
                 goto badfmt;
@@ -3506,7 +3506,7 @@ void sentinelSetDebugConfigParameters(client *c) {
 
         } else if (!strcasecmp(option, "min-link-reconnect-period") && moreargs > 0) {
             /* min-link-reconnect-period <milliseconds> */
-            robj *o = c->argv[++j];
+            robj *o = c->io_data->argv[++j];
             if (getLongLongFromObject(o, &ll) == C_ERR || ll <= 0) {
                 badarg = j;
                 goto badfmt;
@@ -3515,7 +3515,7 @@ void sentinelSetDebugConfigParameters(client *c) {
 
         } else if (!strcasecmp(option, "default-failover-timeout") && moreargs > 0) {
             /* default-failover-timeout <milliseconds> */
-            robj *o = c->argv[++j];
+            robj *o = c->io_data->argv[++j];
             if (getLongLongFromObject(o, &ll) == C_ERR || ll <= 0) {
                 badarg = j;
                 goto badfmt;
@@ -3524,7 +3524,7 @@ void sentinelSetDebugConfigParameters(client *c) {
 
         } else if (!strcasecmp(option, "election-timeout") && moreargs > 0) {
             /* election-timeout <milliseconds> */
-            robj *o = c->argv[++j];
+            robj *o = c->io_data->argv[++j];
             if (getLongLongFromObject(o, &ll) == C_ERR || ll <= 0) {
                 badarg = j;
                 goto badfmt;
@@ -3533,7 +3533,7 @@ void sentinelSetDebugConfigParameters(client *c) {
 
         } else if (!strcasecmp(option, "script-max-runtime") && moreargs > 0) {
             /* script-max-runtime <milliseconds> */
-            robj *o = c->argv[++j];
+            robj *o = c->io_data->argv[++j];
             if (getLongLongFromObject(o, &ll) == C_ERR || ll <= 0) {
                 badarg = j;
                 goto badfmt;
@@ -3542,7 +3542,7 @@ void sentinelSetDebugConfigParameters(client *c) {
 
         } else if (!strcasecmp(option, "script-retry-delay") && moreargs > 0) {
             /* script-retry-delay <milliseconds> */
-            robj *o = c->argv[++j];
+            robj *o = c->io_data->argv[++j];
             if (getLongLongFromObject(o, &ll) == C_ERR || ll <= 0) {
                 badarg = j;
                 goto badfmt;
@@ -3562,7 +3562,7 @@ void sentinelSetDebugConfigParameters(client *c) {
     return;
 
 badfmt: /* Bad format errors */
-    addReplyErrorFormat(c, "Invalid argument '%s' for SENTINEL DEBUG '%s'", (char *)c->argv[badarg]->ptr, option);
+    addReplyErrorFormat(c, "Invalid argument '%s' for SENTINEL DEBUG '%s'", (char *)c->io_data->argv[badarg]->ptr, option);
 
     return;
 }
@@ -3689,7 +3689,7 @@ int sentinelIsQuorumReachable(sentinelValkeyInstance *primary, int *usableptr) {
 }
 
 void sentinelCommand(client *c) {
-    if (c->argc == 2 && !strcasecmp(c->argv[1]->ptr, "help")) {
+    if (c->io_data->argc == 2 && !strcasecmp(c->io_data->argv[1]->ptr, "help")) {
         const char *help[] = {
             "CKQUORUM <primary-name>",
             "    Check if the current Sentinel configuration is able to reach the quorum",
@@ -3740,36 +3740,36 @@ void sentinelCommand(client *c) {
             NULL,
         };
         addReplyHelp(c, help);
-    } else if (!strcasecmp(c->argv[1]->ptr, "primaries") || !strcasecmp(c->argv[1]->ptr, "masters")) {
+    } else if (!strcasecmp(c->io_data->argv[1]->ptr, "primaries") || !strcasecmp(c->io_data->argv[1]->ptr, "masters")) {
         /* SENTINEL PRIMARIES */
-        if (c->argc != 2) goto numargserr;
+        if (c->io_data->argc != 2) goto numargserr;
         addReplyDictOfValkeyInstances(c, sentinel.primaries);
-    } else if (!strcasecmp(c->argv[1]->ptr, "primary") || !strcasecmp(c->argv[1]->ptr, "master")) {
+    } else if (!strcasecmp(c->io_data->argv[1]->ptr, "primary") || !strcasecmp(c->io_data->argv[1]->ptr, "master")) {
         /* SENTINEL PRIMARY <name> */
         sentinelValkeyInstance *ri;
 
-        if (c->argc != 3) goto numargserr;
-        if ((ri = sentinelGetPrimaryByNameOrReplyError(c, c->argv[2])) == NULL) return;
+        if (c->io_data->argc != 3) goto numargserr;
+        if ((ri = sentinelGetPrimaryByNameOrReplyError(c, c->io_data->argv[2])) == NULL) return;
         addReplySentinelValkeyInstance(c, ri);
-    } else if (!strcasecmp(c->argv[1]->ptr, "slaves") || !strcasecmp(c->argv[1]->ptr, "replicas")) {
+    } else if (!strcasecmp(c->io_data->argv[1]->ptr, "slaves") || !strcasecmp(c->io_data->argv[1]->ptr, "replicas")) {
         /* SENTINEL REPLICAS <primary-name> */
         sentinelValkeyInstance *ri;
 
-        if (c->argc != 3) goto numargserr;
-        if ((ri = sentinelGetPrimaryByNameOrReplyError(c, c->argv[2])) == NULL) return;
+        if (c->io_data->argc != 3) goto numargserr;
+        if ((ri = sentinelGetPrimaryByNameOrReplyError(c, c->io_data->argv[2])) == NULL) return;
         addReplyDictOfValkeyInstances(c, ri->replicas);
-    } else if (!strcasecmp(c->argv[1]->ptr, "sentinels")) {
+    } else if (!strcasecmp(c->io_data->argv[1]->ptr, "sentinels")) {
         /* SENTINEL SENTINELS <primary-name> */
         sentinelValkeyInstance *ri;
 
-        if (c->argc != 3) goto numargserr;
-        if ((ri = sentinelGetPrimaryByNameOrReplyError(c, c->argv[2])) == NULL) return;
+        if (c->io_data->argc != 3) goto numargserr;
+        if ((ri = sentinelGetPrimaryByNameOrReplyError(c, c->io_data->argv[2])) == NULL) return;
         addReplyDictOfValkeyInstances(c, ri->sentinels);
-    } else if (!strcasecmp(c->argv[1]->ptr, "myid") && c->argc == 2) {
+    } else if (!strcasecmp(c->io_data->argv[1]->ptr, "myid") && c->io_data->argc == 2) {
         /* SENTINEL MYID */
         addReplyBulkCBuffer(c, sentinel.myid, CONFIG_RUN_ID_SIZE);
-    } else if (!strcasecmp(c->argv[1]->ptr, "is-primary-down-by-addr") ||
-               !strcasecmp(c->argv[1]->ptr, "is-master-down-by-addr")) {
+    } else if (!strcasecmp(c->io_data->argv[1]->ptr, "is-primary-down-by-addr") ||
+               !strcasecmp(c->io_data->argv[1]->ptr, "is-master-down-by-addr")) {
         /* SENTINEL IS-PRIMARY-DOWN-BY-ADDR <ip> <port> <current-epoch> <runid>
          *
          * Arguments:
@@ -3794,11 +3794,11 @@ void sentinelCommand(client *c) {
         long port;
         int isdown = 0;
 
-        if (c->argc != 6) goto numargserr;
-        if (getLongFromObjectOrReply(c, c->argv[3], &port, NULL) != C_OK ||
-            getLongLongFromObjectOrReply(c, c->argv[4], &req_epoch, NULL) != C_OK)
+        if (c->io_data->argc != 6) goto numargserr;
+        if (getLongFromObjectOrReply(c, c->io_data->argv[3], &port, NULL) != C_OK ||
+            getLongLongFromObjectOrReply(c, c->io_data->argv[4], &req_epoch, NULL) != C_OK)
             return;
-        ri = getSentinelValkeyInstanceByAddrAndRunID(sentinel.primaries, c->argv[2]->ptr, port, NULL);
+        ri = getSentinelValkeyInstanceByAddrAndRunID(sentinel.primaries, c->io_data->argv[2]->ptr, port, NULL);
 
         /* It exists? Is actually a primary? Is subjectively down? It's down.
          * Note: if we are in tilt mode we always reply with "0". */
@@ -3806,8 +3806,8 @@ void sentinelCommand(client *c) {
 
         /* Vote for the primary (or fetch the previous vote) if the request
          * includes a runid, otherwise the sender is not seeking for a vote. */
-        if (ri && ri->flags & SRI_PRIMARY && strcasecmp(c->argv[5]->ptr, "*")) {
-            leader = sentinelVoteLeader(ri, (uint64_t)req_epoch, c->argv[5]->ptr, &leader_epoch);
+        if (ri && ri->flags & SRI_PRIMARY && strcasecmp(c->io_data->argv[5]->ptr, "*")) {
+            leader = sentinelVoteLeader(ri, (uint64_t)req_epoch, c->io_data->argv[5]->ptr, &leader_epoch);
         }
 
         /* Reply with a three-elements multi-bulk reply:
@@ -3817,17 +3817,17 @@ void sentinelCommand(client *c) {
         addReplyBulkCString(c, leader ? leader : "*");
         addReplyLongLong(c, (long long)leader_epoch);
         if (leader) sdsfree(leader);
-    } else if (!strcasecmp(c->argv[1]->ptr, "reset")) {
+    } else if (!strcasecmp(c->io_data->argv[1]->ptr, "reset")) {
         /* SENTINEL RESET <pattern> */
-        if (c->argc != 3) goto numargserr;
-        addReplyLongLong(c, sentinelResetPrimariesByPattern(c->argv[2]->ptr, SENTINEL_GENERATE_EVENT));
-    } else if (!strcasecmp(c->argv[1]->ptr, "get-primary-addr-by-name") ||
-               !strcasecmp(c->argv[1]->ptr, "get-master-addr-by-name")) {
+        if (c->io_data->argc != 3) goto numargserr;
+        addReplyLongLong(c, sentinelResetPrimariesByPattern(c->io_data->argv[2]->ptr, SENTINEL_GENERATE_EVENT));
+    } else if (!strcasecmp(c->io_data->argv[1]->ptr, "get-primary-addr-by-name") ||
+               !strcasecmp(c->io_data->argv[1]->ptr, "get-master-addr-by-name")) {
         /* SENTINEL GET-PRIMARY-ADDR-BY-NAME <primary-name> */
         sentinelValkeyInstance *ri;
 
-        if (c->argc != 3) goto numargserr;
-        ri = sentinelGetPrimaryByName(c->argv[2]->ptr);
+        if (c->io_data->argc != 3) goto numargserr;
+        ri = sentinelGetPrimaryByName(c->io_data->argv[2]->ptr);
         if (ri == NULL) {
             addReplyNullArray(c);
         } else {
@@ -3837,12 +3837,12 @@ void sentinelCommand(client *c) {
             addReplyBulkCString(c, announceSentinelAddr(addr));
             addReplyBulkLongLong(c, addr->port);
         }
-    } else if (!strcasecmp(c->argv[1]->ptr, "failover")) {
+    } else if (!strcasecmp(c->io_data->argv[1]->ptr, "failover")) {
         /* SENTINEL FAILOVER <primary-name> */
         sentinelValkeyInstance *ri;
 
-        if (c->argc != 3) goto numargserr;
-        if ((ri = sentinelGetPrimaryByNameOrReplyError(c, c->argv[2])) == NULL) return;
+        if (c->io_data->argc != 3) goto numargserr;
+        if ((ri = sentinelGetPrimaryByNameOrReplyError(c, c->io_data->argv[2])) == NULL) return;
         if (ri->flags & SRI_FAILOVER_IN_PROGRESS) {
             addReplyError(c, "-INPROG Failover already in progress");
             return;
@@ -3855,20 +3855,20 @@ void sentinelCommand(client *c) {
         sentinelStartFailover(ri);
         ri->flags |= SRI_FORCE_FAILOVER;
         addReply(c, shared.ok);
-    } else if (!strcasecmp(c->argv[1]->ptr, "pending-scripts")) {
+    } else if (!strcasecmp(c->io_data->argv[1]->ptr, "pending-scripts")) {
         /* SENTINEL PENDING-SCRIPTS */
 
-        if (c->argc != 2) goto numargserr;
+        if (c->io_data->argc != 2) goto numargserr;
         sentinelPendingScriptsCommand(c);
-    } else if (!strcasecmp(c->argv[1]->ptr, "monitor")) {
+    } else if (!strcasecmp(c->io_data->argv[1]->ptr, "monitor")) {
         /* SENTINEL MONITOR <name> <ip> <port> <quorum> */
         sentinelValkeyInstance *ri;
         long quorum, port;
         char ip[NET_IP_STR_LEN];
 
-        if (c->argc != 6) goto numargserr;
-        if (getLongFromObjectOrReply(c, c->argv[5], &quorum, "Invalid quorum") != C_OK) return;
-        if (getLongFromObjectOrReply(c, c->argv[4], &port, "Invalid port") != C_OK) return;
+        if (c->io_data->argc != 6) goto numargserr;
+        if (getLongFromObjectOrReply(c, c->io_data->argv[5], &quorum, "Invalid quorum") != C_OK) return;
+        if (getLongFromObjectOrReply(c, c->io_data->argv[4], &port, "Invalid port") != C_OK) return;
 
         if (quorum <= 0) {
             addReplyError(c, "Quorum must be 1 or greater.");
@@ -3878,40 +3878,40 @@ void sentinelCommand(client *c) {
         /* If resolve-hostnames is used, actual DNS resolution may take place.
          * Otherwise just validate address.
          */
-        if (anetResolve(NULL, c->argv[3]->ptr, ip, sizeof(ip), sentinel.resolve_hostnames ? ANET_NONE : ANET_IP_ONLY) ==
+        if (anetResolve(NULL, c->io_data->argv[3]->ptr, ip, sizeof(ip), sentinel.resolve_hostnames ? ANET_NONE : ANET_IP_ONLY) ==
             ANET_ERR) {
             addReplyError(c, "Invalid IP address or hostname specified");
             return;
         }
 
         /* Parameters are valid. Try to create the primary instance. */
-        ri = createSentinelValkeyInstance(c->argv[2]->ptr, SRI_PRIMARY, c->argv[3]->ptr, port, quorum, NULL);
+        ri = createSentinelValkeyInstance(c->io_data->argv[2]->ptr, SRI_PRIMARY, c->io_data->argv[3]->ptr, port, quorum, NULL);
         if (ri == NULL) {
             addReplyError(c, sentinelCheckCreateInstanceErrors(SRI_PRIMARY));
         } else {
             sentinelFlushConfigAndReply(c);
             sentinelEvent(LL_WARNING, "+monitor", ri, "%@ quorum %d", ri->quorum);
         }
-    } else if (!strcasecmp(c->argv[1]->ptr, "flushconfig")) {
-        if (c->argc != 2) goto numargserr;
+    } else if (!strcasecmp(c->io_data->argv[1]->ptr, "flushconfig")) {
+        if (c->io_data->argc != 2) goto numargserr;
         sentinelFlushConfigAndReply(c);
         return;
-    } else if (!strcasecmp(c->argv[1]->ptr, "remove")) {
+    } else if (!strcasecmp(c->io_data->argv[1]->ptr, "remove")) {
         /* SENTINEL REMOVE <name> */
         sentinelValkeyInstance *ri;
 
-        if (c->argc != 3) goto numargserr;
-        if ((ri = sentinelGetPrimaryByNameOrReplyError(c, c->argv[2])) == NULL) return;
+        if (c->io_data->argc != 3) goto numargserr;
+        if ((ri = sentinelGetPrimaryByNameOrReplyError(c, c->io_data->argv[2])) == NULL) return;
         sentinelEvent(LL_WARNING, "-monitor", ri, "%@");
-        dictDelete(sentinel.primaries, c->argv[2]->ptr);
+        dictDelete(sentinel.primaries, c->io_data->argv[2]->ptr);
         sentinelFlushConfigAndReply(c);
-    } else if (!strcasecmp(c->argv[1]->ptr, "ckquorum")) {
+    } else if (!strcasecmp(c->io_data->argv[1]->ptr, "ckquorum")) {
         /* SENTINEL CKQUORUM <name> */
         sentinelValkeyInstance *ri;
         int usable;
 
-        if (c->argc != 3) goto numargserr;
-        if ((ri = sentinelGetPrimaryByNameOrReplyError(c, c->argv[2])) == NULL) return;
+        if (c->io_data->argc != 3) goto numargserr;
+        if ((ri = sentinelGetPrimaryByNameOrReplyError(c, c->io_data->argv[2])) == NULL) return;
         int result = sentinelIsQuorumReachable(ri, &usable);
         if (result == SENTINEL_ISQR_OK) {
             addReplySds(c, sdscatfmt(sdsempty(),
@@ -3930,20 +3930,20 @@ void sentinelCommand(client *c) {
             }
             addReplyErrorSds(c, e);
         }
-    } else if (!strcasecmp(c->argv[1]->ptr, "set")) {
+    } else if (!strcasecmp(c->io_data->argv[1]->ptr, "set")) {
         sentinelSetCommand(c);
-    } else if (!strcasecmp(c->argv[1]->ptr, "config")) {
-        if (c->argc < 4) goto numargserr;
-        if (!strcasecmp(c->argv[2]->ptr, "set") && c->argc >= 5)
+    } else if (!strcasecmp(c->io_data->argv[1]->ptr, "config")) {
+        if (c->io_data->argc < 4) goto numargserr;
+        if (!strcasecmp(c->io_data->argv[2]->ptr, "set") && c->io_data->argc >= 5)
             sentinelConfigSetCommand(c);
-        else if (!strcasecmp(c->argv[2]->ptr, "get") && c->argc >= 4)
+        else if (!strcasecmp(c->io_data->argv[2]->ptr, "get") && c->io_data->argc >= 4)
             sentinelConfigGetCommand(c);
         else
             addReplyError(c, "Only SENTINEL CONFIG GET <param> [<param> <param> ...] / SET <param> <value> [<param> "
                              "<value> ...] are supported.");
-    } else if (!strcasecmp(c->argv[1]->ptr, "info-cache")) {
+    } else if (!strcasecmp(c->io_data->argv[1]->ptr, "info-cache")) {
         /* SENTINEL INFO-CACHE <name> */
-        if (c->argc < 2) goto numargserr;
+        if (c->io_data->argc < 2) goto numargserr;
         mstime_t now = mstime();
 
         /* Create an ad-hoc dictionary type so that we can iterate
@@ -3952,12 +3952,12 @@ void sentinelCommand(client *c) {
         dictType copy_keeper = instancesDictType;
         copy_keeper.valDestructor = NULL;
         dict *primaries_local = sentinel.primaries;
-        if (c->argc > 2) {
+        if (c->io_data->argc > 2) {
             primaries_local = dictCreate(&copy_keeper);
 
-            for (int i = 2; i < c->argc; i++) {
+            for (int i = 2; i < c->io_data->argc; i++) {
                 sentinelValkeyInstance *ri;
-                ri = sentinelGetPrimaryByName(c->argv[i]->ptr);
+                ri = sentinelGetPrimaryByName(c->io_data->argv[i]->ptr);
                 if (!ri) continue; /* ignore non-existing names */
                 dictAdd(primaries_local, ri->name, ri);
             }
@@ -4006,22 +4006,22 @@ void sentinelCommand(client *c) {
         }
         dictReleaseIterator(di);
         if (primaries_local != sentinel.primaries) dictRelease(primaries_local);
-    } else if (!strcasecmp(c->argv[1]->ptr, "simulate-failure")) {
+    } else if (!strcasecmp(c->io_data->argv[1]->ptr, "simulate-failure")) {
         /* SENTINEL SIMULATE-FAILURE [CRASH-AFTER-ELECTION] [CRASH-AFTER-PROMOTION] [HELP] */
         int j;
 
         sentinel.simfailure_flags = SENTINEL_SIMFAILURE_NONE;
-        for (j = 2; j < c->argc; j++) {
-            if (!strcasecmp(c->argv[j]->ptr, "crash-after-election")) {
+        for (j = 2; j < c->io_data->argc; j++) {
+            if (!strcasecmp(c->io_data->argv[j]->ptr, "crash-after-election")) {
                 sentinel.simfailure_flags |= SENTINEL_SIMFAILURE_CRASH_AFTER_ELECTION;
                 serverLog(LL_WARNING, "Failure simulation: this Sentinel "
                                       "will crash after being successfully elected as failover "
                                       "leader");
-            } else if (!strcasecmp(c->argv[j]->ptr, "crash-after-promotion")) {
+            } else if (!strcasecmp(c->io_data->argv[j]->ptr, "crash-after-promotion")) {
                 sentinel.simfailure_flags |= SENTINEL_SIMFAILURE_CRASH_AFTER_PROMOTION;
                 serverLog(LL_WARNING, "Failure simulation: this Sentinel "
                                       "will crash after promoting the selected replica to master");
-            } else if (!strcasecmp(c->argv[j]->ptr, "help")) {
+            } else if (!strcasecmp(c->io_data->argv[j]->ptr, "help")) {
                 addReplyArrayLen(c, 2);
                 addReplyBulkCString(c, "crash-after-election");
                 addReplyBulkCString(c, "crash-after-promotion");
@@ -4032,8 +4032,8 @@ void sentinelCommand(client *c) {
             }
         }
         addReply(c, shared.ok);
-    } else if (!strcasecmp(c->argv[1]->ptr, "debug")) {
-        if (c->argc == 2)
+    } else if (!strcasecmp(c->io_data->argv[1]->ptr, "debug")) {
+        if (c->io_data->argc == 2)
             addReplySentinelDebugInfo(c);
         else
             sentinelSetDebugConfigParameters(c);
@@ -4055,7 +4055,7 @@ void sentinelInfoCommand(client *c) {
     static dict *cached_all_info_sections = NULL;
 
     /* Get requested section list. */
-    dict *sections_dict = genInfoSectionDict(c->argv + 1, c->argc - 1, sentinel_sections, &sec_all, &sec_everything);
+    dict *sections_dict = genInfoSectionDict(c->io_data->argv + 1, c->io_data->argc - 1, sentinel_sections, &sec_all, &sec_everything);
 
     /* Purge unsupported sections from the requested ones. */
     dictEntry *de;
@@ -4150,19 +4150,19 @@ void sentinelSetCommand(client *c) {
     char *option;
     int redacted;
 
-    if ((ri = sentinelGetPrimaryByNameOrReplyError(c, c->argv[2])) == NULL) return;
+    if ((ri = sentinelGetPrimaryByNameOrReplyError(c, c->io_data->argv[2])) == NULL) return;
 
     /* Process option - value pairs. */
-    for (j = 3; j < c->argc; j++) {
-        int moreargs = (c->argc - 1) - j;
-        option = c->argv[j]->ptr;
+    for (j = 3; j < c->io_data->argc; j++) {
+        int moreargs = (c->io_data->argc - 1) - j;
+        option = c->io_data->argv[j]->ptr;
         long long ll;
         int old_j = j; /* Used to know what to log as an event. */
         redacted = 0;
 
         if (!strcasecmp(option, "down-after-milliseconds") && moreargs > 0) {
             /* down-after-milliseconds <milliseconds> */
-            robj *o = c->argv[++j];
+            robj *o = c->io_data->argv[++j];
             if (getLongLongFromObject(o, &ll) == C_ERR || ll <= 0) {
                 badarg = j;
                 goto badfmt;
@@ -4172,7 +4172,7 @@ void sentinelSetCommand(client *c) {
             changes++;
         } else if (!strcasecmp(option, "failover-timeout") && moreargs > 0) {
             /* failover-timeout <milliseconds> */
-            robj *o = c->argv[++j];
+            robj *o = c->io_data->argv[++j];
             if (getLongLongFromObject(o, &ll) == C_ERR || ll <= 0) {
                 badarg = j;
                 goto badfmt;
@@ -4181,7 +4181,7 @@ void sentinelSetCommand(client *c) {
             changes++;
         } else if (!strcasecmp(option, "parallel-syncs") && moreargs > 0) {
             /* parallel-syncs <milliseconds> */
-            robj *o = c->argv[++j];
+            robj *o = c->io_data->argv[++j];
             if (getLongLongFromObject(o, &ll) == C_ERR || ll <= 0) {
                 badarg = j;
                 goto badfmt;
@@ -4190,7 +4190,7 @@ void sentinelSetCommand(client *c) {
             changes++;
         } else if (!strcasecmp(option, "notification-script") && moreargs > 0) {
             /* notification-script <path> */
-            sds value = c->argv[++j]->ptr;
+            char *value = c->io_data->argv[++j]->ptr;
             if (sentinel.deny_scripts_reconfig) {
                 addReplyError(c, "Reconfiguration of scripts path is denied for "
                                  "security reasons. Check the deny-scripts-reconfig "
@@ -4207,7 +4207,7 @@ void sentinelSetCommand(client *c) {
             changes++;
         } else if (!strcasecmp(option, "client-reconfig-script") && moreargs > 0) {
             /* client-reconfig-script <path> */
-            sds value = c->argv[++j]->ptr;
+            char *value = c->io_data->argv[++j]->ptr;
             if (sentinel.deny_scripts_reconfig) {
                 addReplyError(c, "Reconfiguration of scripts path is denied for "
                                  "security reasons. Check the deny-scripts-reconfig "
@@ -4225,7 +4225,7 @@ void sentinelSetCommand(client *c) {
             changes++;
         } else if (!strcasecmp(option, "auth-pass") && moreargs > 0) {
             /* auth-pass <password> */
-            sds value = c->argv[++j]->ptr;
+            char *value = c->io_data->argv[++j]->ptr;
             sdsfree(ri->auth_pass);
             ri->auth_pass = sdslen(value) ? sdsdup(value) : NULL;
             dropInstanceConnections(ri);
@@ -4233,14 +4233,14 @@ void sentinelSetCommand(client *c) {
             redacted = 1;
         } else if (!strcasecmp(option, "auth-user") && moreargs > 0) {
             /* auth-user <username> */
-            sds value = c->argv[++j]->ptr;
+            char *value = c->io_data->argv[++j]->ptr;
             sdsfree(ri->auth_user);
             ri->auth_user = sdslen(value) ? sdsdup(value) : NULL;
             dropInstanceConnections(ri);
             changes++;
         } else if (!strcasecmp(option, "quorum") && moreargs > 0) {
             /* quorum <count> */
-            robj *o = c->argv[++j];
+            robj *o = c->io_data->argv[++j];
             if (getLongLongFromObject(o, &ll) == C_ERR || ll <= 0) {
                 badarg = j;
                 goto badfmt;
@@ -4249,8 +4249,8 @@ void sentinelSetCommand(client *c) {
             changes++;
         } else if (!strcasecmp(option, "rename-command") && moreargs > 1) {
             /* rename-command <oldname> <newname> */
-            sds oldname = c->argv[++j]->ptr;
-            sds newname = c->argv[++j]->ptr;
+            sds oldname = c->io_data->argv[++j]->ptr;
+            sds newname = c->io_data->argv[++j]->ptr;
 
             if ((sdslen(oldname) == 0) || (sdslen(newname) == 0)) {
                 badarg = sdslen(newname) ? j - 1 : j;
@@ -4272,7 +4272,7 @@ void sentinelSetCommand(client *c) {
                     !strcasecmp(option, "master-reboot-down-after-period")) &&
                    moreargs > 0) {
             /* primary-reboot-down-after-period <milliseconds> */
-            robj *o = c->argv[++j];
+            robj *o = c->io_data->argv[++j];
             if (getLongLongFromObject(o, &ll) == C_ERR || ll < 0) {
                 badarg = j;
                 goto badfmt;
@@ -4291,21 +4291,21 @@ void sentinelSetCommand(client *c) {
         int numargs = j - old_j + 1;
         switch (numargs) {
         case 2:
-            sentinelEvent(LL_WARNING, "+set", ri, "%@ %s %s", (char *)c->argv[old_j]->ptr,
-                          redacted ? "******" : (char *)c->argv[old_j + 1]->ptr);
+            sentinelEvent(LL_WARNING, "+set", ri, "%@ %s %s", (char *)c->io_data->argv[old_j]->ptr,
+                          redacted ? "******" : (char *)c->io_data->argv[old_j + 1]->ptr);
             break;
         case 3:
-            sentinelEvent(LL_WARNING, "+set", ri, "%@ %s %s %s", (char *)c->argv[old_j]->ptr,
-                          (char *)c->argv[old_j + 1]->ptr, (char *)c->argv[old_j + 2]->ptr);
+            sentinelEvent(LL_WARNING, "+set", ri, "%@ %s %s %s", (char *)c->io_data->argv[old_j]->ptr,
+                          (char *)c->io_data->argv[old_j + 1]->ptr, (char *)c->io_data->argv[old_j + 2]->ptr);
             break;
-        default: sentinelEvent(LL_WARNING, "+set", ri, "%@ %s", (char *)c->argv[old_j]->ptr); break;
+        default: sentinelEvent(LL_WARNING, "+set", ri, "%@ %s", (char *)c->io_data->argv[old_j]->ptr); break;
         }
     }
     if (changes) sentinelFlushConfigAndReply(c);
     return;
 
 badfmt: /* Bad format errors */
-    addReplyErrorFormat(c, "Invalid argument '%s' for SENTINEL SET '%s'", (char *)c->argv[badarg]->ptr, option);
+    addReplyErrorFormat(c, "Invalid argument '%s' for SENTINEL SET '%s'", (char *)c->io_data->argv[badarg]->ptr, option);
 seterr:
     /* TODO: Handle the case of both bad input and save error, possibly handling
      * SENTINEL SET atomically. */
@@ -4319,11 +4319,11 @@ seterr:
  * Because we have a Sentinel PUBLISH, the code to send hello messages is the same
  * for all the three kind of instances: primaries, replicas, sentinels. */
 void sentinelPublishCommand(client *c) {
-    if (strcmp(c->argv[1]->ptr, SENTINEL_HELLO_CHANNEL)) {
+    if (strcmp(c->io_data->argv[1]->ptr, SENTINEL_HELLO_CHANNEL)) {
         addReplyError(c, "Only HELLO messages are accepted by Sentinel instances.");
         return;
     }
-    sentinelProcessHelloMessage(c->argv[2]->ptr, sdslen(c->argv[2]->ptr));
+    sentinelProcessHelloMessage(c->io_data->argv[2]->ptr, sdslen(c->io_data->argv[2]->ptr));
     addReplyLongLong(c, 1);
 }
 

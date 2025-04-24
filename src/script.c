@@ -134,7 +134,7 @@ int scriptPrepareForRun(scriptRunCtx *run_ctx,
                         uint64_t script_flags,
                         int ro) {
     serverAssert(!curr_run_ctx);
-    int client_allow_oom = !!(caller->flag.allow_oom);
+    int client_allow_oom = !!(caller->io_data->flag.allow_oom);
 
     int running_stale =
         server.primary_host && server.repl_state != REPL_STATE_CONNECTED && server.repl_serve_stale_data == 0;
@@ -216,7 +216,7 @@ int scriptPrepareForRun(scriptRunCtx *run_ctx,
     run_ctx->c = engine_client;
     run_ctx->original_client = caller;
     run_ctx->funcname = funcname;
-    run_ctx->slot = caller->slot;
+    run_ctx->slot = caller->io_data->slot;
 
     client *script_client = run_ctx->c;
     client *curr_client = run_ctx->original_client;
@@ -226,8 +226,8 @@ int scriptPrepareForRun(scriptRunCtx *run_ctx,
     script_client->resp = 2; /* Default is RESP2, scripts can change it. */
 
     /* If we are in MULTI context, flag Lua client as CLIENT_MULTI. */
-    if (curr_client->flag.multi) {
-        script_client->flag.multi = 1;
+    if (curr_client->io_data->flag.multi) {
+        script_client->io_data->flag.multi = 1;
         initClientMultiState(script_client);
     }
 
@@ -263,7 +263,7 @@ void scriptResetRun(scriptRunCtx *run_ctx) {
     serverAssert(curr_run_ctx);
 
     /* After the script done, remove the MULTI state. */
-    run_ctx->c->flag.multi = 0;
+    run_ctx->c->io_data->flag.multi = 0;
 
     if (scriptIsTimedout()) {
         exitScriptTimedoutMode(run_ctx);
@@ -344,7 +344,7 @@ static int scriptVerifyACL(client *c, sds *err) {
     int acl_retval = ACLCheckAllPerm(c, &acl_errpos);
     if (acl_retval != ACL_OK) {
         addACLLogEntry(c, acl_retval, ACL_LOG_CTX_LUA, acl_errpos, NULL, NULL);
-        sds msg = getAclErrorMessage(acl_retval, c->user, c->cmd, c->argv[acl_errpos]->ptr, 0);
+        sds msg = getAclErrorMessage(acl_retval, c->user, c->cmd, c->io_data->argv[acl_errpos]->ptr, 0);
         *err = sdscatsds(sdsnew("ACL failure in script: "), msg);
         sdsfree(msg);
         return C_ERR;
@@ -429,10 +429,10 @@ static int scriptVerifyClusterState(scriptRunCtx *run_ctx, client *c, client *or
      * received from our primary or when loading the AOF back in memory. */
     int error_code;
     /* Duplicate relevant flags in the script client. */
-    c->flag.readonly = original_c->flag.readonly;
-    c->flag.asking = original_c->flag.asking;
+    c->io_data->flag.readonly = original_c->io_data->flag.readonly;
+    c->io_data->flag.asking = original_c->io_data->flag.asking;
     int hashslot = -1;
-    if (getNodeByQuery(c, c->cmd, c->argv, c->argc, &hashslot, &error_code) != getMyClusterNode()) {
+    if (getNodeByQuery(c, c->cmd, c->io_data->argv, c->io_data->argc, &hashslot, &error_code) != getMyClusterNode()) {
         if (error_code == CLUSTER_REDIR_DOWN_RO_STATE) {
             *err = sdsnew("Script attempted to execute a write command while the "
                           "cluster is down and readonly");
@@ -474,8 +474,8 @@ static int scriptVerifyClusterState(scriptRunCtx *run_ctx, client *c, client *or
         }
     }
 
-    c->slot = hashslot;
-    original_c->slot = hashslot;
+    c->io_data->slot = hashslot;
+    original_c->io_data->slot = hashslot;
 
     return C_OK;
 }
@@ -540,9 +540,9 @@ void scriptCall(scriptRunCtx *run_ctx, sds *err) {
     /* Process module hooks */
     moduleCallCommandFilters(c);
 
-    struct serverCommand *cmd = lookupCommand(c->argv, c->argc);
+    struct serverCommand *cmd = lookupCommand(c->io_data->argv, c->io_data->argc);
     c->cmd = c->lastcmd = c->realcmd = cmd;
-    if (scriptVerifyCommandArity(cmd, c->argc, err) != C_OK) {
+    if (scriptVerifyCommandArity(cmd, c->io_data->argc, err) != C_OK) {
         goto error;
     }
 
@@ -585,7 +585,7 @@ void scriptCall(scriptRunCtx *run_ctx, sds *err) {
         call_flags |= CMD_CALL_PROPAGATE_REPL;
     }
     call(c, call_flags);
-    serverAssert(c->flag.blocked == 0);
+    serverAssert(c->io_data->flag.blocked == 0);
     clusterSlotStatsInvalidateSlotIfApplicable(run_ctx);
     return;
 

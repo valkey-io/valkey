@@ -727,8 +727,8 @@ void dismissObject(robj *o, size_t size_hint) {
     /* madvise(MADV_DONTNEED) may not work if Transparent Huge Pages is enabled. */
     if (server.thp_enabled) return;
 
-        /* Currently we use zmadvise_dontneed only when we use jemalloc with Linux.
-         * so we avoid these pointless loops when they're not going to do anything. */
+    /* Currently we use zmadvise_dontneed only when we use jemalloc with Linux.
+     * so we avoid these pointless loops when they're not going to do anything. */
 #if defined(USE_JEMALLOC) && defined(__linux__)
     if (o->refcount != 1) return;
     switch (o->type) {
@@ -779,7 +779,7 @@ void trimStringObjectIfNeeded(robj *o, int trim_small_values) {
      * 3. When calling from RM_TrimStringAllocation (trim_small_values is true). */
     size_t len = sdslen(o->ptr);
     if (len >= PROTO_MBULK_BIG_ARG || trim_small_values ||
-        (server.executing_client && server.executing_client->flag.script && len < LUA_CMD_OBJCACHE_MAX_LEN)) {
+        (server.executing_client && server.executing_client->io_data->flag.script && len < LUA_CMD_OBJCACHE_MAX_LEN)) {
         if (sdsavail(o->ptr) > len / 10) {
             o->ptr = sdsRemoveFreeSpace(o->ptr, 0);
         }
@@ -1610,7 +1610,7 @@ robj *objectCommandLookupOrReply(client *c, robj *key, robj *reply) {
 void objectCommand(client *c) {
     robj *o;
 
-    if (c->argc == 2 && !strcasecmp(c->argv[1]->ptr, "help")) {
+    if (c->io_data->argc == 2 && !strcasecmp(c->io_data->argv[1]->ptr, "help")) {
         const char *help[] = {"ENCODING <key>",
                               "    Return the kind of internal representation used in order to store the value",
                               "    associated with a <key>.",
@@ -1625,22 +1625,22 @@ void objectCommand(client *c) {
                               "    <key>.",
                               NULL};
         addReplyHelp(c, help);
-    } else if (!strcasecmp(c->argv[1]->ptr, "refcount") && c->argc == 3) {
-        if ((o = objectCommandLookupOrReply(c, c->argv[2], shared.null[c->resp])) == NULL) return;
+    } else if (!strcasecmp(c->io_data->argv[1]->ptr, "refcount") && c->io_data->argc == 3) {
+        if ((o = objectCommandLookupOrReply(c, c->io_data->argv[2], shared.null[c->resp])) == NULL) return;
         addReplyLongLong(c, o->refcount);
-    } else if (!strcasecmp(c->argv[1]->ptr, "encoding") && c->argc == 3) {
-        if ((o = objectCommandLookupOrReply(c, c->argv[2], shared.null[c->resp])) == NULL) return;
+    } else if (!strcasecmp(c->io_data->argv[1]->ptr, "encoding") && c->io_data->argc == 3) {
+        if ((o = objectCommandLookupOrReply(c, c->io_data->argv[2], shared.null[c->resp])) == NULL) return;
         addReplyBulkCString(c, strEncoding(o->encoding));
-    } else if (!strcasecmp(c->argv[1]->ptr, "idletime") && c->argc == 3) {
-        if ((o = objectCommandLookupOrReply(c, c->argv[2], shared.null[c->resp])) == NULL) return;
+    } else if (!strcasecmp(c->io_data->argv[1]->ptr, "idletime") && c->io_data->argc == 3) {
+        if ((o = objectCommandLookupOrReply(c, c->io_data->argv[2], shared.null[c->resp])) == NULL) return;
         if (server.maxmemory_policy & MAXMEMORY_FLAG_LFU) {
             addReplyError(c, "An LFU maxmemory policy is selected, idle time not tracked. Please note that when "
                              "switching between policies at runtime LRU and LFU data will take some time to adjust.");
             return;
         }
         addReplyLongLong(c, estimateObjectIdleTime(o) / 1000);
-    } else if (!strcasecmp(c->argv[1]->ptr, "freq") && c->argc == 3) {
-        if ((o = objectCommandLookupOrReply(c, c->argv[2], shared.null[c->resp])) == NULL) return;
+    } else if (!strcasecmp(c->io_data->argv[1]->ptr, "freq") && c->io_data->argc == 3) {
+        if ((o = objectCommandLookupOrReply(c, c->io_data->argv[2], shared.null[c->resp])) == NULL) return;
         if (!(server.maxmemory_policy & MAXMEMORY_FLAG_LFU)) {
             addReplyError(c,
                           "An LFU maxmemory policy is not selected, access frequency not tracked. Please note that "
@@ -1662,7 +1662,7 @@ void objectCommand(client *c) {
  *
  * Usage: MEMORY usage <key> */
 void memoryCommand(client *c) {
-    if (!strcasecmp(c->argv[1]->ptr, "help") && c->argc == 2) {
+    if (!strcasecmp(c->io_data->argv[1]->ptr, "help") && c->io_data->argc == 2) {
         const char *help[] = {
             "DOCTOR",
             "    Return memory problems reports.",
@@ -1678,11 +1678,11 @@ void memoryCommand(client *c) {
             NULL,
         };
         addReplyHelp(c, help);
-    } else if (!strcasecmp(c->argv[1]->ptr, "usage") && c->argc >= 3) {
+    } else if (!strcasecmp(c->io_data->argv[1]->ptr, "usage") && c->io_data->argc >= 3) {
         long long samples = OBJ_COMPUTE_SIZE_DEF_SAMPLES;
-        for (int j = 3; j < c->argc; j++) {
-            if (!strcasecmp(c->argv[j]->ptr, "samples") && j + 1 < c->argc) {
-                if (getLongLongFromObjectOrReply(c, c->argv[j + 1], &samples, NULL) == C_ERR) return;
+        for (int j = 3; j < c->io_data->argc; j++) {
+            if (!strcasecmp(c->io_data->argv[j]->ptr, "samples") && j + 1 < c->io_data->argc) {
+                if (getLongLongFromObjectOrReply(c, c->io_data->argv[j + 1], &samples, NULL) == C_ERR) return;
                 if (samples < 0) {
                     addReplyErrorObject(c, shared.syntaxerr);
                     return;
@@ -1694,14 +1694,14 @@ void memoryCommand(client *c) {
                 return;
             }
         }
-        robj *obj = dbFind(c->db, c->argv[2]->ptr);
+        robj *obj = dbFind(c->db, c->io_data->argv[2]->ptr);
         if (obj == NULL) {
             addReplyNull(c);
             return;
         }
-        size_t usage = objectComputeSize(c->argv[2], obj, samples, c->db->id);
+        size_t usage = objectComputeSize(c->io_data->argv[2], obj, samples, c->db->id);
         addReplyLongLong(c, usage);
-    } else if (!strcasecmp(c->argv[1]->ptr, "stats") && c->argc == 2) {
+    } else if (!strcasecmp(c->io_data->argv[1]->ptr, "stats") && c->io_data->argc == 2) {
         struct serverMemOverhead *mh = getMemoryOverheadData();
 
         addReplyMapLen(c, 31 + mh->num_dbs);
@@ -1813,7 +1813,7 @@ void memoryCommand(client *c) {
         addReplyLongLong(c, mh->total_frag_bytes);
 
         freeMemoryOverheadData(mh);
-    } else if (!strcasecmp(c->argv[1]->ptr, "malloc-stats") && c->argc == 2) {
+    } else if (!strcasecmp(c->io_data->argv[1]->ptr, "malloc-stats") && c->io_data->argc == 2) {
 #if defined(USE_JEMALLOC)
         sds info = sdsempty();
         je_malloc_stats_print(inputCatSds, &info, NULL);
@@ -1822,11 +1822,11 @@ void memoryCommand(client *c) {
 #else
         addReplyBulkCString(c, "Stats not supported for the current allocator");
 #endif
-    } else if (!strcasecmp(c->argv[1]->ptr, "doctor") && c->argc == 2) {
+    } else if (!strcasecmp(c->io_data->argv[1]->ptr, "doctor") && c->io_data->argc == 2) {
         sds report = getMemoryDoctorReport();
         addReplyVerbatim(c, report, sdslen(report), "txt");
         sdsfree(report);
-    } else if (!strcasecmp(c->argv[1]->ptr, "purge") && c->argc == 2) {
+    } else if (!strcasecmp(c->io_data->argv[1]->ptr, "purge") && c->io_data->argc == 2) {
         if (jemalloc_purge() == 0)
             addReply(c, shared.ok);
         else

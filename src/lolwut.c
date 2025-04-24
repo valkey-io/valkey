@@ -55,17 +55,17 @@ void lolwutCommand(client *c) {
     char *v = VALKEY_VERSION;
     char verstr[64];
 
-    if (c->argc >= 3 && !strcasecmp(c->argv[1]->ptr, "version")) {
+    if (c->io_data->argc >= 3 && !strcasecmp(c->io_data->argv[1]->ptr, "version")) {
         long ver;
-        if (getLongFromObjectOrReply(c, c->argv[2], &ver, NULL) != C_OK) return;
+        if (getLongFromObjectOrReply(c, c->io_data->argv[2], &ver, NULL) != C_OK) return;
         snprintf(verstr, sizeof(verstr), "%u.0.0", (unsigned int)ver);
         v = verstr;
 
         /* Adjust argv/argc to filter the "VERSION ..." option, since the
          * specific LOLWUT version implementations don't know about it
          * and expect their arguments. */
-        c->argv += 2;
-        c->argc -= 2;
+        c->io_data->argv += 2;
+        c->io_data->argc -= 2;
     }
 
     if ((v[0] == '5' && v[1] == '.' && v[2] != '9') || (v[0] == '4' && v[1] == '.' && v[2] == '9'))
@@ -77,8 +77,8 @@ void lolwutCommand(client *c) {
 
     /* Fix back argc/argv in case of VERSION argument. */
     if (v == verstr) {
-        c->argv -= 2;
-        c->argc += 2;
+        c->io_data->argv -= 2;
+        c->io_data->argc += 2;
     }
 }
 

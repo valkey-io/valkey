@@ -390,7 +390,7 @@ void mallctl_string(client *c, robj **argv, int argc) {
 #endif
 
 void debugCommand(client *c) {
-    if (c->argc == 2 && !strcasecmp(c->argv[1]->ptr, "help")) {
+    if (c->io_data->argc == 2 && !strcasecmp(c->io_data->argv[1]->ptr, "help")) {
         const char *help[] = {
             "AOF-FLUSH-SLEEP <microsec>",
             "    Server will sleep before flushing the AOF, this is used for testing.",
@@ -513,45 +513,45 @@ void debugCommand(client *c) {
             "    and avoids using the client's static buffer.",
             NULL};
         addExtendedReplyHelp(c, help, clusterDebugCommandExtendedHelp());
-    } else if (!strcasecmp(c->argv[1]->ptr, "segfault")) {
+    } else if (!strcasecmp(c->io_data->argv[1]->ptr, "segfault")) {
         /* Compiler gives warnings about writing to a random address
          * e.g "*((char*)-1) = 'x';". As a workaround, we map a read-only area
          * and try to write there to trigger segmentation fault. */
         char *p = mmap(NULL, 4096, PROT_READ, MAP_PRIVATE | MAP_ANON, -1, 0);
         *p = 'x';
-    } else if (!strcasecmp(c->argv[1]->ptr, "panic")) {
+    } else if (!strcasecmp(c->io_data->argv[1]->ptr, "panic")) {
         serverPanic("DEBUG PANIC called at Unix time %lld", (long long)time(NULL));
-    } else if (!strcasecmp(c->argv[1]->ptr, "restart") || !strcasecmp(c->argv[1]->ptr, "crash-and-recover")) {
+    } else if (!strcasecmp(c->io_data->argv[1]->ptr, "restart") || !strcasecmp(c->io_data->argv[1]->ptr, "crash-and-recover")) {
         long long delay = 0;
-        if (c->argc >= 3) {
-            if (getLongLongFromObjectOrReply(c, c->argv[2], &delay, NULL) != C_OK) return;
+        if (c->io_data->argc >= 3) {
+            if (getLongLongFromObjectOrReply(c, c->io_data->argv[2], &delay, NULL) != C_OK) return;
             if (delay < 0) delay = 0;
         }
-        int flags = !strcasecmp(c->argv[1]->ptr, "restart")
+        int flags = !strcasecmp(c->io_data->argv[1]->ptr, "restart")
                         ? (RESTART_SERVER_GRACEFULLY | RESTART_SERVER_CONFIG_REWRITE)
                         : RESTART_SERVER_NONE;
         restartServer(c, flags, delay);
         addReplyError(c, "failed to restart the server. Check server logs.");
-    } else if (!strcasecmp(c->argv[1]->ptr, "oom")) {
+    } else if (!strcasecmp(c->io_data->argv[1]->ptr, "oom")) {
         void *ptr = zmalloc(SIZE_MAX / 2); /* Should trigger an out of memory. */
         zfree(ptr);
         addReply(c, shared.ok);
-    } else if (!strcasecmp(c->argv[1]->ptr, "assert")) {
-        serverAssertWithInfo(c, c->argv[0], 1 == 2);
-    } else if (!strcasecmp(c->argv[1]->ptr, "log") && c->argc == 3) {
-        serverLog(LL_WARNING, "DEBUG LOG: %s", (char *)c->argv[2]->ptr);
+    } else if (!strcasecmp(c->io_data->argv[1]->ptr, "assert")) {
+        serverAssertWithInfo(c->io_data, c->io_data->argv[0], 1 == 2);
+    } else if (!strcasecmp(c->io_data->argv[1]->ptr, "log") && c->io_data->argc == 3) {
+        serverLog(LL_WARNING, "DEBUG LOG: %s", (char *)c->io_data->argv[2]->ptr);
         addReply(c, shared.ok);
-    } else if (!strcasecmp(c->argv[1]->ptr, "leak") && c->argc == 3) {
-        sdsdup(c->argv[2]->ptr);
+    } else if (!strcasecmp(c->io_data->argv[1]->ptr, "leak") && c->io_data->argc == 3) {
+        sdsdup(c->io_data->argv[2]->ptr);
         addReply(c, shared.ok);
-    } else if (!strcasecmp(c->argv[1]->ptr, "reload")) {
+    } else if (!strcasecmp(c->io_data->argv[1]->ptr, "reload")) {
         int flush = 1, save = 1;
         int flags = RDBFLAGS_NONE;
 
         /* Parse the additional options that modify the RELOAD
          * behavior. */
-        for (int j = 2; j < c->argc; j++) {
-            char *opt = c->argv[j]->ptr;
+        for (int j = 2; j < c->io_data->argc; j++) {
+            char *opt = c->io_data->argv[j]->ptr;
             if (!strcasecmp(opt, "MERGE")) {
                 flags |= RDBFLAGS_ALLOW_DUP;
             } else if (!strcasecmp(opt, "NOFLUSH")) {
@@ -590,7 +590,7 @@ void debugCommand(client *c) {
         }
         serverLog(LL_NOTICE, "DB reloaded by DEBUG RELOAD");
         addReply(c, shared.ok);
-    } else if (!strcasecmp(c->argv[1]->ptr, "loadaof")) {
+    } else if (!strcasecmp(c->io_data->argv[1]->ptr, "loadaof")) {
         if (server.aof_state != AOF_OFF) flushAppendOnlyFile(1);
         emptyData(-1, EMPTYDB_NO_FLAGS, NULL);
         protectClient(c);
@@ -606,25 +606,25 @@ void debugCommand(client *c) {
         server.dirty = 0; /* Prevent AOF / replication */
         serverLog(LL_NOTICE, "Append Only File loaded by DEBUG LOADAOF");
         addReply(c, shared.ok);
-    } else if (!strcasecmp(c->argv[1]->ptr, "drop-cluster-packet-filter") && c->argc == 3) {
+    } else if (!strcasecmp(c->io_data->argv[1]->ptr, "drop-cluster-packet-filter") && c->io_data->argc == 3) {
         long packet_type;
-        if (getLongFromObjectOrReply(c, c->argv[2], &packet_type, NULL) != C_OK) return;
+        if (getLongFromObjectOrReply(c, c->io_data->argv[2], &packet_type, NULL) != C_OK) return;
         server.cluster_drop_packet_filter = packet_type;
         addReply(c, shared.ok);
-    } else if (!strcasecmp(c->argv[1]->ptr, "close-cluster-link-on-packet-drop") && c->argc == 3) {
-        server.debug_cluster_close_link_on_packet_drop = atoi(c->argv[2]->ptr);
+    } else if (!strcasecmp(c->io_data->argv[1]->ptr, "close-cluster-link-on-packet-drop") && c->io_data->argc == 3) {
+        server.debug_cluster_close_link_on_packet_drop = atoi(c->io_data->argv[2]->ptr);
         addReply(c, shared.ok);
-    } else if (!strcasecmp(c->argv[1]->ptr, "disable-cluster-random-ping") && c->argc == 3) {
-        server.debug_cluster_disable_random_ping = atoi(c->argv[2]->ptr);
+    } else if (!strcasecmp(c->io_data->argv[1]->ptr, "disable-cluster-random-ping") && c->io_data->argc == 3) {
+        server.debug_cluster_disable_random_ping = atoi(c->io_data->argv[2]->ptr);
         addReply(c, shared.ok);
-    } else if (!strcasecmp(c->argv[1]->ptr, "object") && (c->argc == 3 || c->argc == 4)) {
+    } else if (!strcasecmp(c->io_data->argv[1]->ptr, "object") && (c->io_data->argc == 3 || c->io_data->argc == 4)) {
         robj *val;
         char *strenc;
 
         int fast = 0;
-        if (c->argc == 4 && !strcasecmp(c->argv[3]->ptr, "fast")) fast = 1;
+        if (c->io_data->argc == 4 && !strcasecmp(c->io_data->argv[3]->ptr, "fast")) fast = 1;
 
-        if ((val = dbFind(c->db, c->argv[2]->ptr)) == NULL) {
+        if ((val = dbFind(c->db, c->io_data->argv[2]->ptr)) == NULL) {
             addReplyErrorObject(c, shared.nokeyerr);
             return;
         }
@@ -667,18 +667,18 @@ void debugCommand(client *c) {
 
         sds s = sdsempty();
         s = sdscatprintf(s, "Value at:%p refcount:%d encoding:%s", (void *)val, val->refcount, strenc);
-        if (!fast) s = sdscatprintf(s, " serializedlength:%zu", rdbSavedObjectLen(val, c->argv[2], c->db->id));
+        if (!fast) s = sdscatprintf(s, " serializedlength:%zu", rdbSavedObjectLen(val, c->io_data->argv[2], c->db->id));
         /* Either lru or lfu field could work correctly which depends on server.maxmemory_policy. */
         s = sdscatprintf(s, " lru:%d lru_seconds_idle:%llu", val->lru, estimateObjectIdleTime(val) / 1000);
         s = sdscatprintf(s, " lfu_freq:%lu lfu_access_time_minutes:%u", LFUDecrAndReturn(val), val->lru >> 8);
         s = sdscatprintf(s, "%s", extra);
         addReplyStatusLength(c, s, sdslen(s));
         sdsfree(s);
-    } else if (!strcasecmp(c->argv[1]->ptr, "sdslen") && c->argc == 3) {
+    } else if (!strcasecmp(c->io_data->argv[1]->ptr, "sdslen") && c->io_data->argc == 3) {
         robj *val;
         sds key;
 
-        if ((val = dbFind(c->db, c->argv[2]->ptr)) == NULL) {
+        if ((val = dbFind(c->db, c->io_data->argv[2]->ptr)) == NULL) {
             addReplyErrorObject(c, shared.nokeyerr);
             return;
         }
@@ -698,10 +698,10 @@ void debugCommand(client *c) {
                                  (long long)sdslen(val->ptr), (long long)sdsavail(val->ptr),
                                  (long long)val_alloc);
         }
-    } else if (!strcasecmp(c->argv[1]->ptr, "listpack") && c->argc == 3) {
+    } else if (!strcasecmp(c->io_data->argv[1]->ptr, "listpack") && c->io_data->argc == 3) {
         robj *o;
 
-        if ((o = objectCommandLookupOrReply(c, c->argv[2], shared.nokeyerr)) == NULL) return;
+        if ((o = objectCommandLookupOrReply(c, c->io_data->argv[2], shared.nokeyerr)) == NULL) return;
 
         if (o->encoding != OBJ_ENCODING_LISTPACK) {
             addReplyError(c, "Not a listpack encoded object.");
@@ -709,25 +709,25 @@ void debugCommand(client *c) {
             lpRepr(o->ptr);
             addReplyStatus(c, "Listpack structure printed on stdout");
         }
-    } else if (!strcasecmp(c->argv[1]->ptr, "quicklist") && (c->argc == 3 || c->argc == 4)) {
+    } else if (!strcasecmp(c->io_data->argv[1]->ptr, "quicklist") && (c->io_data->argc == 3 || c->io_data->argc == 4)) {
         robj *o;
 
-        if ((o = objectCommandLookupOrReply(c, c->argv[2], shared.nokeyerr)) == NULL) return;
+        if ((o = objectCommandLookupOrReply(c, c->io_data->argv[2], shared.nokeyerr)) == NULL) return;
 
         int full = 0;
-        if (c->argc == 4) full = atoi(c->argv[3]->ptr);
+        if (c->io_data->argc == 4) full = atoi(c->io_data->argv[3]->ptr);
         if (o->encoding != OBJ_ENCODING_QUICKLIST) {
             addReplyError(c, "Not a quicklist encoded object.");
         } else {
             quicklistRepr(o->ptr, full);
             addReplyStatus(c, "Quicklist structure printed on stdout");
         }
-    } else if (!strcasecmp(c->argv[1]->ptr, "populate") && c->argc >= 3 && c->argc <= 5) {
+    } else if (!strcasecmp(c->io_data->argv[1]->ptr, "populate") && c->io_data->argc >= 3 && c->io_data->argc <= 5) {
         long keys, j;
         robj *key, *val;
         char buf[128];
 
-        if (getPositiveLongFromObjectOrReply(c, c->argv[2], &keys, NULL) != C_OK) return;
+        if (getPositiveLongFromObjectOrReply(c, c->io_data->argv[2], &keys, NULL) != C_OK) return;
 
         if (server.loading || server.async_loading) {
             addReplyErrorObject(c, shared.loadingerr);
@@ -739,10 +739,10 @@ void debugCommand(client *c) {
             return;
         }
         long valsize = 0;
-        if (c->argc == 5 && getPositiveLongFromObjectOrReply(c, c->argv[4], &valsize, NULL) != C_OK) return;
+        if (c->io_data->argc == 5 && getPositiveLongFromObjectOrReply(c, c->io_data->argv[4], &valsize, NULL) != C_OK) return;
 
         for (j = 0; j < keys; j++) {
-            snprintf(buf, sizeof(buf), "%s:%lu", (c->argc == 3) ? "key" : (char *)c->argv[3]->ptr, j);
+            snprintf(buf, sizeof(buf), "%s:%lu", (c->io_data->argc == 3) ? "key" : (char *)c->io_data->argv[3]->ptr, j);
             key = createStringObject(buf, strlen(buf));
             if (lookupKeyWrite(c->db, key) != NULL) {
                 decrRefCount(key);
@@ -761,7 +761,7 @@ void debugCommand(client *c) {
             decrRefCount(key);
         }
         addReply(c, shared.ok);
-    } else if (!strcasecmp(c->argv[1]->ptr, "digest") && c->argc == 2) {
+    } else if (!strcasecmp(c->io_data->argv[1]->ptr, "digest") && c->io_data->argc == 2) {
         /* DEBUG DIGEST (form without keys specified) */
         unsigned char digest[20];
         sds d = sdsempty();
@@ -770,27 +770,27 @@ void debugCommand(client *c) {
         for (int i = 0; i < 20; i++) d = sdscatprintf(d, "%02x", digest[i]);
         addReplyStatus(c, d);
         sdsfree(d);
-    } else if (!strcasecmp(c->argv[1]->ptr, "digest-value") && c->argc >= 2) {
+    } else if (!strcasecmp(c->io_data->argv[1]->ptr, "digest-value") && c->io_data->argc >= 2) {
         /* DEBUG DIGEST-VALUE key key key ... key. */
-        addReplyArrayLen(c, c->argc - 2);
-        for (int j = 2; j < c->argc; j++) {
+        addReplyArrayLen(c, c->io_data->argc - 2);
+        for (int j = 2; j < c->io_data->argc; j++) {
             unsigned char digest[20];
             memset(digest, 0, 20); /* Start with a clean result */
 
             /* We don't use lookupKey because a debug command should
              * work on logically expired keys */
-            robj *o = dbFind(c->db, c->argv[j]->ptr);
-            if (o) xorObjectDigest(c->db, c->argv[j], digest, o);
+            robj *o = dbFind(c->db, c->io_data->argv[j]->ptr);
+            if (o) xorObjectDigest(c->db, c->io_data->argv[j], digest, o);
 
             sds d = sdsempty();
             for (int i = 0; i < 20; i++) d = sdscatprintf(d, "%02x", digest[i]);
             addReplyStatus(c, d);
             sdsfree(d);
         }
-    } else if (!strcasecmp(c->argv[1]->ptr, "protocol") && c->argc == 3) {
+    } else if (!strcasecmp(c->io_data->argv[1]->ptr, "protocol") && c->io_data->argc == 3) {
         /* DEBUG PROTOCOL [string|integer|double|bignum|null|array|set|map|
          *                 attrib|push|verbatim|true|false] */
-        char *name = c->argv[2]->ptr;
+        char *name = c->io_data->argv[2]->ptr;
         if (!strcasecmp(name, "string")) {
             addReplyBulkCString(c, "Hello World");
         } else if (!strcasecmp(name, "integer")) {
@@ -829,12 +829,12 @@ void debugCommand(client *c) {
                 addReplyError(c, "RESP2 is not supported by this command");
                 return;
             }
-            struct ClientFlags old_flags = c->flag;
-            c->flag.pushing = 1;
+            struct ClientFlags old_flags = c->io_data->flag;
+            c->io_data->flag.pushing = 1;
             addReplyPushLen(c, 2);
             addReplyBulkCString(c, "server-cpu-usage");
             addReplyLongLong(c, 42);
-            if (!old_flags.pushing) c->flag.pushing = 0;
+            if (!old_flags.pushing) c->io_data->flag.pushing = 0;
             /* Push replies are not synchronous replies, so we emit also a
              * normal reply in order for blocking clients just discarding the
              * push reply, to actually consume the reply and continue. */
@@ -849,8 +849,8 @@ void debugCommand(client *c) {
             addReplyError(c, "Wrong protocol type name. Please use one of the following: "
                              "string|integer|double|bignum|null|array|set|map|attrib|push|verbatim|true|false");
         }
-    } else if (!strcasecmp(c->argv[1]->ptr, "sleep") && c->argc == 3) {
-        double dtime = valkey_strtod(c->argv[2]->ptr, NULL);
+    } else if (!strcasecmp(c->io_data->argv[1]->ptr, "sleep") && c->io_data->argc == 3) {
+        double dtime = valkey_strtod(c->io_data->argv[2]->ptr, NULL);
         long long utime = dtime * 1000000;
         struct timespec tv;
 
@@ -858,34 +858,34 @@ void debugCommand(client *c) {
         tv.tv_nsec = (utime % 1000000) * 1000;
         nanosleep(&tv, NULL);
         addReply(c, shared.ok);
-    } else if (!strcasecmp(c->argv[1]->ptr, "set-active-expire") && c->argc == 3) {
-        server.active_expire_enabled = atoi(c->argv[2]->ptr);
+    } else if (!strcasecmp(c->io_data->argv[1]->ptr, "set-active-expire") && c->io_data->argc == 3) {
+        server.active_expire_enabled = atoi(c->io_data->argv[2]->ptr);
         addReply(c, shared.ok);
-    } else if (!strcasecmp(c->argv[1]->ptr, "quicklist-packed-threshold") && c->argc == 3) {
+    } else if (!strcasecmp(c->io_data->argv[1]->ptr, "quicklist-packed-threshold") && c->io_data->argc == 3) {
         int memerr;
-        unsigned long long sz = memtoull((const char *)c->argv[2]->ptr, &memerr);
+        unsigned long long sz = memtoull((const char *)c->io_data->argv[2]->ptr, &memerr);
         if (memerr || !quicklistSetPackedThreshold(sz)) {
             addReplyError(c, "argument must be a memory value bigger than 1 and smaller than 4gb");
         } else {
             addReply(c, shared.ok);
         }
-    } else if (!strcasecmp(c->argv[1]->ptr, "set-skip-checksum-validation") && c->argc == 3) {
-        server.skip_checksum_validation = atoi(c->argv[2]->ptr);
+    } else if (!strcasecmp(c->io_data->argv[1]->ptr, "set-skip-checksum-validation") && c->io_data->argc == 3) {
+        server.skip_checksum_validation = atoi(c->io_data->argv[2]->ptr);
         addReply(c, shared.ok);
-    } else if (!strcasecmp(c->argv[1]->ptr, "aof-flush-sleep") && c->argc == 3) {
-        server.aof_flush_sleep = atoi(c->argv[2]->ptr);
+    } else if (!strcasecmp(c->io_data->argv[1]->ptr, "aof-flush-sleep") && c->io_data->argc == 3) {
+        server.aof_flush_sleep = atoi(c->io_data->argv[2]->ptr);
         addReply(c, shared.ok);
-    } else if (!strcasecmp(c->argv[1]->ptr, "replicate") && c->argc >= 3) {
-        replicationFeedReplicas(-1, c->argv + 2, c->argc - 2);
+    } else if (!strcasecmp(c->io_data->argv[1]->ptr, "replicate") && c->io_data->argc >= 3) {
+        replicationFeedReplicas(-1, c->io_data->argv + 2, c->io_data->argc - 2);
         addReply(c, shared.ok);
-    } else if (!strcasecmp(c->argv[1]->ptr, "error") && c->argc == 3) {
+    } else if (!strcasecmp(c->io_data->argv[1]->ptr, "error") && c->io_data->argc == 3) {
         sds errstr = sdsnewlen("-", 1);
 
-        errstr = sdscatsds(errstr, c->argv[2]->ptr);
+        errstr = sdscatsds(errstr, c->io_data->argv[2]->ptr);
         errstr = sdsmapchars(errstr, "\n\r", "  ", 2); /* no newlines in errors. */
         errstr = sdscatlen(errstr, "\r\n", 2);
         addReplySds(c, errstr);
-    } else if (!strcasecmp(c->argv[1]->ptr, "structsize") && c->argc == 2) {
+    } else if (!strcasecmp(c->io_data->argv[1]->ptr, "structsize") && c->io_data->argc == 2) {
         sds sizes = sdsempty();
         sizes = sdscatprintf(sizes, "bits:%d ", (sizeof(void *) == 8) ? 64 : 32);
         sizes = sdscatprintf(sizes, "robj:%d ", (int)sizeof(robj));
@@ -896,13 +896,13 @@ void debugCommand(client *c) {
         sizes = sdscatprintf(sizes, "sdshdr32:%d ", (int)sizeof(struct sdshdr32));
         sizes = sdscatprintf(sizes, "sdshdr64:%d ", (int)sizeof(struct sdshdr64));
         addReplyBulkSds(c, sizes);
-    } else if (!strcasecmp(c->argv[1]->ptr, "htstats") && c->argc >= 3) {
+    } else if (!strcasecmp(c->io_data->argv[1]->ptr, "htstats") && c->io_data->argc >= 3) {
         long dbid;
         sds stats = sdsempty();
         char buf[4096];
         int full = 0;
 
-        if (getLongFromObjectOrReply(c, c->argv[2], &dbid, NULL) != C_OK) {
+        if (getLongFromObjectOrReply(c, c->io_data->argv[2], &dbid, NULL) != C_OK) {
             sdsfree(stats);
             return;
         }
@@ -911,7 +911,7 @@ void debugCommand(client *c) {
             addReplyError(c, "Out of range database");
             return;
         }
-        if (c->argc >= 4 && !strcasecmp(c->argv[3]->ptr, "full")) full = 1;
+        if (c->io_data->argc >= 4 && !strcasecmp(c->io_data->argv[3]->ptr, "full")) full = 1;
 
         stats = sdscatprintf(stats, "[Dictionary HT]\n");
         kvstoreGetStats(server.db[dbid].keys, buf, sizeof(buf), full);
@@ -923,11 +923,11 @@ void debugCommand(client *c) {
 
         addReplyVerbatim(c, stats, sdslen(stats), "txt");
         sdsfree(stats);
-    } else if (!strcasecmp(c->argv[1]->ptr, "htstats-key") && c->argc >= 3) {
+    } else if (!strcasecmp(c->io_data->argv[1]->ptr, "htstats-key") && c->io_data->argc >= 3) {
         int full = 0;
-        if (c->argc >= 4 && !strcasecmp(c->argv[3]->ptr, "full")) full = 1;
+        if (c->io_data->argc >= 4 && !strcasecmp(c->io_data->argv[3]->ptr, "full")) full = 1;
 
-        robj *o = objectCommandLookupOrReply(c, c->argv[2], shared.nokeyerr);
+        robj *o = objectCommandLookupOrReply(c, c->io_data->argv[2], shared.nokeyerr);
         if (o == NULL) return;
 
         /* Get the hashtable reference from the object, if possible. */
@@ -948,23 +948,23 @@ void debugCommand(client *c) {
             addReplyError(c, "The value stored at the specified key is not "
                              "represented using an hash table");
         }
-    } else if (!strcasecmp(c->argv[1]->ptr, "change-repl-id") && c->argc == 2) {
+    } else if (!strcasecmp(c->io_data->argv[1]->ptr, "change-repl-id") && c->io_data->argc == 2) {
         serverLog(LL_NOTICE, "Changing replication IDs after receiving DEBUG change-repl-id");
         changeReplicationId();
         clearReplicationId2();
         addReply(c, shared.ok);
-    } else if (!strcasecmp(c->argv[1]->ptr, "stringmatch-test") && c->argc == 2) {
+    } else if (!strcasecmp(c->io_data->argv[1]->ptr, "stringmatch-test") && c->io_data->argc == 2) {
         stringmatchlen_fuzz_test();
         addReplyStatus(c, "Apparently the server did not crash: test passed");
-    } else if (!strcasecmp(c->argv[1]->ptr, "set-disable-deny-scripts") && c->argc == 3) {
-        server.script_disable_deny_script = atoi(c->argv[2]->ptr);
+    } else if (!strcasecmp(c->io_data->argv[1]->ptr, "set-disable-deny-scripts") && c->io_data->argc == 3) {
+        server.script_disable_deny_script = atoi(c->io_data->argv[2]->ptr);
         addReply(c, shared.ok);
-    } else if (!strcasecmp(c->argv[1]->ptr, "config-rewrite-force-all") && c->argc == 2) {
+    } else if (!strcasecmp(c->io_data->argv[1]->ptr, "config-rewrite-force-all") && c->io_data->argc == 2) {
         if (rewriteConfig(server.configfile, 1) == -1)
             addReplyErrorFormat(c, "CONFIG-REWRITE-FORCE-ALL failed: %s", strerror(errno));
         else
             addReply(c, shared.ok);
-    } else if (!strcasecmp(c->argv[1]->ptr, "client-eviction") && c->argc == 2) {
+    } else if (!strcasecmp(c->io_data->argv[1]->ptr, "client-eviction") && c->io_data->argc == 2) {
         if (!server.client_mem_usage_buckets) {
             addReplyError(c, "maxmemory-clients is disabled.");
             return;
@@ -988,43 +988,43 @@ void debugCommand(client *c) {
         addReplyVerbatim(c, bucket_info, sdslen(bucket_info), "txt");
         sdsfree(bucket_info);
 #ifdef USE_JEMALLOC
-    } else if (!strcasecmp(c->argv[1]->ptr, "mallctl") && c->argc >= 3) {
-        mallctl_int(c, c->argv + 2, c->argc - 2);
+    } else if (!strcasecmp(c->io_data->argv[1]->ptr, "mallctl") && c->io_data->argc >= 3) {
+        mallctl_int(c, c->io_data->argv + 2, c->io_data->argc - 2);
         return;
-    } else if (!strcasecmp(c->argv[1]->ptr, "mallctl-str") && c->argc >= 3) {
-        mallctl_string(c, c->argv + 2, c->argc - 2);
+    } else if (!strcasecmp(c->io_data->argv[1]->ptr, "mallctl-str") && c->io_data->argc >= 3) {
+        mallctl_string(c, c->io_data->argv + 2, c->io_data->argc - 2);
         return;
 #endif
-    } else if (!strcasecmp(c->argv[1]->ptr, "pause-cron") && c->argc == 3) {
-        server.pause_cron = atoi(c->argv[2]->ptr);
+    } else if (!strcasecmp(c->io_data->argv[1]->ptr, "pause-cron") && c->io_data->argc == 3) {
+        server.pause_cron = atoi(c->io_data->argv[2]->ptr);
         addReply(c, shared.ok);
-    } else if (!strcasecmp(c->argv[1]->ptr, "replybuffer") && c->argc == 4) {
-        if (!strcasecmp(c->argv[2]->ptr, "peak-reset-time")) {
-            if (!strcasecmp(c->argv[3]->ptr, "never")) {
+    } else if (!strcasecmp(c->io_data->argv[1]->ptr, "replybuffer") && c->io_data->argc == 4) {
+        if (!strcasecmp(c->io_data->argv[2]->ptr, "peak-reset-time")) {
+            if (!strcasecmp(c->io_data->argv[3]->ptr, "never")) {
                 server.reply_buffer_peak_reset_time = -1;
-            } else if (!strcasecmp(c->argv[3]->ptr, "reset")) {
+            } else if (!strcasecmp(c->io_data->argv[3]->ptr, "reset")) {
                 server.reply_buffer_peak_reset_time = REPLY_BUFFER_DEFAULT_PEAK_RESET_TIME;
             } else {
-                if (getLongFromObjectOrReply(c, c->argv[3], &server.reply_buffer_peak_reset_time, NULL) != C_OK) return;
+                if (getLongFromObjectOrReply(c, c->io_data->argv[3], &server.reply_buffer_peak_reset_time, NULL) != C_OK) return;
             }
-        } else if (!strcasecmp(c->argv[2]->ptr, "resizing")) {
-            server.reply_buffer_resizing_enabled = atoi(c->argv[3]->ptr);
+        } else if (!strcasecmp(c->io_data->argv[2]->ptr, "resizing")) {
+            server.reply_buffer_resizing_enabled = atoi(c->io_data->argv[3]->ptr);
         } else {
             addReplySubcommandSyntaxError(c);
             return;
         }
         addReply(c, shared.ok);
-    } else if (!strcasecmp(c->argv[1]->ptr, "pause-after-fork") && c->argc == 3) {
-        server.debug_pause_after_fork = atoi(c->argv[2]->ptr);
+    } else if (!strcasecmp(c->io_data->argv[1]->ptr, "pause-after-fork") && c->io_data->argc == 3) {
+        server.debug_pause_after_fork = atoi(c->io_data->argv[2]->ptr);
         addReply(c, shared.ok);
-    } else if (!strcasecmp(c->argv[1]->ptr, "delay-rdb-client-free-seconds") && c->argc == 3) {
-        server.wait_before_rdb_client_free = atoi(c->argv[2]->ptr);
+    } else if (!strcasecmp(c->io_data->argv[1]->ptr, "delay-rdb-client-free-seconds") && c->io_data->argc == 3) {
+        server.wait_before_rdb_client_free = atoi(c->io_data->argv[2]->ptr);
         addReply(c, shared.ok);
-    } else if (!strcasecmp(c->argv[1]->ptr, "dict-resizing") && c->argc == 3) {
-        server.dict_resizing = atoi(c->argv[2]->ptr);
+    } else if (!strcasecmp(c->io_data->argv[1]->ptr, "dict-resizing") && c->io_data->argc == 3) {
+        server.dict_resizing = atoi(c->io_data->argv[2]->ptr);
         addReply(c, shared.ok);
-    } else if (!strcasecmp(c->argv[1]->ptr, "client-enforce-reply-list") && c->argc == 3) {
-        server.debug_client_enforce_reply_list = atoi(c->argv[2]->ptr);
+    } else if (!strcasecmp(c->io_data->argv[1]->ptr, "client-enforce-reply-list") && c->io_data->argc == 3) {
+        server.debug_client_enforce_reply_list = atoi(c->io_data->argv[2]->ptr);
         addReply(c, shared.ok);
     } else if (!handleDebugClusterCommand(c)) {
         addReplySubcommandSyntaxError(c);
@@ -1062,8 +1062,8 @@ sds getArgvReprString(robj *argv) {
 }
 
 /* Checks if the argument at the given index should be redacted from logs. */
-int shouldRedactArg(const client *c, int idx) {
-    serverAssert(idx < c->argc);
+int shouldRedactArg(const ClientIOData *io_data, int idx) {
+    serverAssert(idx < io_data->argc);
     /* Don't redact if the config is disabled */
     if (!server.hide_user_data_from_log) return 0;
     /* first_sensitive_arg_idx value should be changed based on the command type. */
@@ -1071,24 +1071,24 @@ int shouldRedactArg(const client *c, int idx) {
     return idx >= first_sensitive_arg_idx;
 }
 
-void _serverAssertPrintClientInfo(const client *c) {
+void _serverAssertPrintClientInfo(const ClientIOData *io_data) {
     int j;
     char conninfo[CONN_INFO_LEN];
 
     bugReportStart();
     serverLog(LL_WARNING, "=== ASSERTION FAILED CLIENT CONTEXT ===");
-    serverLog(LL_WARNING, "client->flags = %llu", (unsigned long long)c->raw_flag);
-    serverLog(LL_WARNING, "client->conn = %s", connGetInfo(c->conn, conninfo, sizeof(conninfo)));
-    serverLog(LL_WARNING, "client->argc = %d", c->argc);
-    for (j = 0; j < c->argc; j++) {
-        if (shouldRedactArg(c, j)) {
-            serverLog(LL_WARNING, "client->argv[%d]: %zu bytes", j, sdslen((sds)c->argv[j]->ptr));
+    serverLog(LL_WARNING, "client->flags = %llu", (unsigned long long)io_data->raw_flag);
+    serverLog(LL_WARNING, "client->conn = %s", connGetInfo(io_data->conn, conninfo, sizeof(conninfo)));
+    serverLog(LL_WARNING, "client->argc = %d", io_data->argc);
+    for (j = 0; j < io_data->argc; j++) {
+        if (shouldRedactArg(io_data, j)) {
+            serverLog(LL_WARNING, "client->argv[%d]: %zu bytes", j, sdslen((sds)io_data->argv[j]->ptr));
             continue;
         }
-        sds repr = getArgvReprString(c->argv[j]);
-        serverLog(LL_WARNING, "client->argv[%d] = %s (refcount: %d)", j, repr, c->argv[j]->refcount);
+        sds repr = getArgvReprString(io_data->argv[j]);
+        serverLog(LL_WARNING, "client->argv[%d] = %s (refcount: %d)", j, repr, io_data->argv[j]->refcount);
         sdsfree(repr);
-        if (!strcasecmp(c->argv[j]->ptr, "auth") || !strcasecmp(c->argv[j]->ptr, "auth2")) {
+        if (!strcasecmp(io_data->argv[j]->ptr, "auth") || !strcasecmp(io_data->argv[j]->ptr, "auth2")) {
             break;
         }
     }
@@ -1135,8 +1135,8 @@ void _serverAssertPrintObject(const robj *o) {
     serverLogObjectDebugInfo(o);
 }
 
-void _serverAssertWithInfo(const client *c, const robj *o, const char *estr, const char *file, int line) {
-    if (c) _serverAssertPrintClientInfo(c);
+void _serverAssertWithInfo(const ClientIOData *io_data, const robj *o, const char *estr, const char *file, int line) {
+    if (io_data) _serverAssertPrintClientInfo(io_data);
     if (o) _serverAssertPrintObject(o);
     _serverAssert(estr, file, line);
 }
@@ -1898,25 +1898,25 @@ void logCurrentClient(client *cc, const char *title) {
     client = catClientInfoString(sdsempty(), cc, server.hide_user_data_from_log);
     serverLog(LL_WARNING | LL_RAW, "%s\n", client);
     sdsfree(client);
-    serverLog(LL_WARNING | LL_RAW, "argc: %d\n", cc->argc);
-    for (j = 0; j < cc->argc; j++) {
-        if (shouldRedactArg(cc, j)) {
-            serverLog(LL_WARNING | LL_RAW, "argv[%d]: %zu bytes\n", j, sdslen((sds)cc->argv[j]->ptr));
+    serverLog(LL_WARNING | LL_RAW, "argc: %d\n", cc->io_data->argc);
+    for (j = 0; j < cc->io_data->argc; j++) {
+        if (shouldRedactArg(cc->io_data, j)) {
+            serverLog(LL_WARNING | LL_RAW, "argv[%d]: %zu bytes\n", j, sdslen((sds)cc->io_data->argv[j]->ptr));
             continue;
         }
-        sds repr = getArgvReprString(cc->argv[j]);
+        sds repr = getArgvReprString(cc->io_data->argv[j]);
         serverLog(LL_WARNING | LL_RAW, "argv[%d]: %s\n", j, repr);
         sdsfree(repr);
-        if (!strcasecmp(cc->argv[j]->ptr, "auth") || !strcasecmp(cc->argv[j]->ptr, "auth2")) {
+        if (!strcasecmp(cc->io_data->argv[j]->ptr, "auth") || !strcasecmp(cc->io_data->argv[j]->ptr, "auth2")) {
             break;
         }
     }
     /* Check if the first argument, usually a key, is found inside the
      * selected DB, and if so print info about the associated object. */
-    if (cc->argc > 1) {
+    if (cc->io_data->argc > 1) {
         robj *val, *key;
 
-        key = getDecodedObject(cc->argv[1]);
+        key = getDecodedObject(cc->io_data->argv[1]);
         val = dbFind(cc->db, key->ptr);
         if (val) {
             serverLog(LL_WARNING, "key '%s' found in DB containing the following object:", (char *)key->ptr);

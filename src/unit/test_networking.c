@@ -72,13 +72,14 @@ int test_writeToReplica(int argc, char **argv, int flags) {
     server.repl_buffer_blocks = listCreate();
     createReplicationBacklog();
     c->reply = listCreate();
+    c->io_data = zcalloc(sizeof(ClientIOData));
 
     /* Test 1: Single block write */
     {
         fakeConnection *fake_conn = connCreateFake();
         fake_conn->buffer = zmalloc(1024);
         fake_conn->buf_size = 1024;
-        c->conn = (connection *)fake_conn;
+        c->io_data->conn = (connection *)fake_conn;
 
         /* Create replication buffer block */
         replBufBlock *block = zmalloc(sizeof(replBufBlock) + 128);
@@ -94,10 +95,10 @@ int test_writeToReplica(int argc, char **argv, int flags) {
 
         writeToReplica(c);
 
-        TEST_ASSERT(c->nwritten == 64);
+        TEST_ASSERT(c->io_data->nwritten == 64);
         TEST_ASSERT(fake_conn->written == 64);
         TEST_ASSERT(memcmp(fake_conn->buffer, block->buf, 64) == 0);
-        TEST_ASSERT((c->write_flags & WRITE_FLAGS_WRITE_ERROR) == 0);
+        TEST_ASSERT((c->io_data->write_flags & WRITE_FLAGS_WRITE_ERROR) == 0);
 
         /* Cleanup */
         zfree(fake_conn->buffer);
@@ -113,7 +114,7 @@ int test_writeToReplica(int argc, char **argv, int flags) {
         fake_conn->written = 0;
         fake_conn->buffer = zmalloc(1024);
         fake_conn->buf_size = 1024;
-        c->conn = (connection *)fake_conn;
+        c->io_data->conn = (connection *)fake_conn;
 
         /* Create multiple replication buffer blocks */
         replBufBlock *block1 = zmalloc(sizeof(replBufBlock) + 128);
@@ -134,11 +135,11 @@ int test_writeToReplica(int argc, char **argv, int flags) {
 
         writeToReplica(c);
 
-        TEST_ASSERT(c->nwritten == 96); /* 64 + 32 */
+        TEST_ASSERT(c->io_data->nwritten == 96); /* 64 + 32 */
         TEST_ASSERT(fake_conn->written == 96);
         TEST_ASSERT(memcmp(fake_conn->buffer, block1->buf, 64) == 0);
         TEST_ASSERT(memcmp(fake_conn->buffer + 64, block2->buf, 32) == 0);
-        TEST_ASSERT((c->write_flags & WRITE_FLAGS_WRITE_ERROR) == 0);
+        TEST_ASSERT((c->io_data->write_flags & WRITE_FLAGS_WRITE_ERROR) == 0);
 
         /* Cleanup */
         zfree(fake_conn->buffer);
@@ -155,7 +156,7 @@ int test_writeToReplica(int argc, char **argv, int flags) {
         fake_conn->buffer = zmalloc(1024);
         fake_conn->buf_size = 1024;
         fake_conn->written = 0;
-        c->conn = (connection *)fake_conn;
+        c->io_data->conn = (connection *)fake_conn;
 
         /* Create replication buffer block */
         replBufBlock *block = zmalloc(sizeof(replBufBlock) + 128);
@@ -172,8 +173,8 @@ int test_writeToReplica(int argc, char **argv, int flags) {
 
         writeToReplica(c);
 
-        TEST_ASSERT(c->nwritten <= 0);
-        TEST_ASSERT((c->write_flags & WRITE_FLAGS_WRITE_ERROR) != 0);
+        TEST_ASSERT(c->io_data->nwritten <= 0);
+        TEST_ASSERT((c->io_data->write_flags & WRITE_FLAGS_WRITE_ERROR) != 0);
 
         /* Cleanup */
         listEmpty(server.repl_buffer_blocks);
@@ -187,6 +188,7 @@ int test_writeToReplica(int argc, char **argv, int flags) {
     listRelease(server.repl_buffer_blocks);
     listRelease(c->reply);
     freeClientReplicationData(c);
+    zfree(c->io_data);
     zfree(c);
 
     return 0;
@@ -199,12 +201,13 @@ int test_postWriteToReplica(int argc, char **argv, int flags) {
 
     client *c = zcalloc(sizeof(client));
     initClientReplicationData(c);
+    c->io_data = zcalloc(sizeof(ClientIOData));
     server.repl_buffer_blocks = listCreate();
     c->reply = listCreate();
 
     /* Test 1: No write case */
     {
-        c->nwritten = 0;
+        c->io_data->nwritten = 0;
         server.stat_net_repl_output_bytes = 0;
 
         postWriteToReplica(c);
@@ -222,7 +225,7 @@ int test_postWriteToReplica(int argc, char **argv, int flags) {
         listAddNodeTail(server.repl_buffer_blocks, block);
         c->repl_data->ref_repl_buf_node = listFirst(server.repl_buffer_blocks);
         c->repl_data->ref_block_pos = 20;
-        c->nwritten = 30;
+        c->io_data->nwritten = 30;
 
         server.stat_net_repl_output_bytes = 0;
 
@@ -253,7 +256,7 @@ int test_postWriteToReplica(int argc, char **argv, int flags) {
         listAddNodeTail(server.repl_buffer_blocks, block2);
         c->repl_data->ref_repl_buf_node = listFirst(server.repl_buffer_blocks);
         c->repl_data->ref_block_pos = 30;
-        c->nwritten = 50;
+        c->io_data->nwritten = 50;
 
         server.stat_net_repl_output_bytes = 0;
 
@@ -282,7 +285,7 @@ int test_postWriteToReplica(int argc, char **argv, int flags) {
         listAddNodeTail(server.repl_buffer_blocks, block);
         c->repl_data->ref_repl_buf_node = listFirst(server.repl_buffer_blocks);
         c->repl_data->ref_block_pos = 30;
-        c->nwritten = 34; /* Should reach exactly the end of block */
+        c->io_data->nwritten = 34; /* Should reach exactly the end of block */
 
         server.stat_net_repl_output_bytes = 0;
 
@@ -305,6 +308,7 @@ int test_postWriteToReplica(int argc, char **argv, int flags) {
     zfree(server.repl_backlog);
     listRelease(server.repl_buffer_blocks);
     listRelease(c->reply);
+    zfree(c->io_data);
     zfree(c);
 
     return 0;
@@ -316,25 +320,26 @@ int test_backupAndUpdateClientArgv(int argc, char **argv, int flags) {
     UNUSED(flags);
 
     client *c = zmalloc(sizeof(client));
+    c->io_data = zcalloc(sizeof(ClientIOData));
 
     /* Test 1: Initial backup of arguments */
-    c->argc = 2;
+    c->io_data->argc = 2;
     robj **initial_argv = zmalloc(sizeof(robj *) * 2);
-    c->argv = initial_argv;
-    c->argv[0] = createObject(OBJ_STRING, sdscatfmt(sdsempty(), "test"));
-    c->argv[1] = createObject(OBJ_STRING, sdscatfmt(sdsempty(), "test2"));
+    c->io_data->argv = initial_argv;
+    c->io_data->argv[0] = createObject(OBJ_STRING, sdscatfmt(sdsempty(), "test"));
+    c->io_data->argv[1] = createObject(OBJ_STRING, sdscatfmt(sdsempty(), "test2"));
     c->original_argv = NULL;
 
     backupAndUpdateClientArgv(c, 3, NULL);
 
-    TEST_ASSERT(c->argv != initial_argv);
+    TEST_ASSERT(c->io_data->argv != initial_argv);
     TEST_ASSERT(c->original_argv == initial_argv);
     TEST_ASSERT(c->original_argc == 2);
-    TEST_ASSERT(c->argc == 3);
-    TEST_ASSERT(c->argv_len == 3);
-    TEST_ASSERT(c->argv[0]->refcount == 2);
-    TEST_ASSERT(c->argv[1]->refcount == 2);
-    TEST_ASSERT(c->argv[2] == NULL);
+    TEST_ASSERT(c->io_data->argc == 3);
+    TEST_ASSERT(c->io_data->argv_len == 3);
+    TEST_ASSERT(c->io_data->argv[0]->refcount == 2);
+    TEST_ASSERT(c->io_data->argv[1]->refcount == 2);
+    TEST_ASSERT(c->io_data->argv[2] == NULL);
 
     /* Test 2: Direct argv replacement */
     robj **new_argv = zmalloc(sizeof(robj *) * 2);
@@ -343,10 +348,10 @@ int test_backupAndUpdateClientArgv(int argc, char **argv, int flags) {
 
     backupAndUpdateClientArgv(c, 2, new_argv);
 
-    TEST_ASSERT(c->argv == new_argv);
-    TEST_ASSERT(c->argc == 2);
-    TEST_ASSERT(c->argv_len == 2);
-    TEST_ASSERT(c->original_argv != c->argv);
+    TEST_ASSERT(c->io_data->argv == new_argv);
+    TEST_ASSERT(c->io_data->argc == 2);
+    TEST_ASSERT(c->io_data->argv_len == 2);
+    TEST_ASSERT(c->original_argv != c->io_data->argv);
     TEST_ASSERT(c->original_argv == initial_argv);
     TEST_ASSERT(c->original_argc == 2);
     TEST_ASSERT(c->original_argv[0]->refcount == 1);
@@ -355,12 +360,12 @@ int test_backupAndUpdateClientArgv(int argc, char **argv, int flags) {
     /* Test 3: Expanding argc */
     backupAndUpdateClientArgv(c, 4, NULL);
 
-    TEST_ASSERT(c->argc == 4);
-    TEST_ASSERT(c->argv_len == 4);
-    TEST_ASSERT(c->argv[0] != NULL);
-    TEST_ASSERT(c->argv[1] != NULL);
-    TEST_ASSERT(c->argv[2] == NULL);
-    TEST_ASSERT(c->argv[3] == NULL);
+    TEST_ASSERT(c->io_data->argc == 4);
+    TEST_ASSERT(c->io_data->argv_len == 4);
+    TEST_ASSERT(c->io_data->argv[0] != NULL);
+    TEST_ASSERT(c->io_data->argv[1] != NULL);
+    TEST_ASSERT(c->io_data->argv[2] == NULL);
+    TEST_ASSERT(c->io_data->argv[3] == NULL);
     TEST_ASSERT(c->original_argv == initial_argv);
 
     /* Cleanup */
@@ -369,10 +374,11 @@ int test_backupAndUpdateClientArgv(int argc, char **argv, int flags) {
     }
     zfree(c->original_argv);
 
-    for (int i = 0; i < c->argc; i++) {
-        if (c->argv[i]) decrRefCount(c->argv[i]);
+    for (int i = 0; i < c->io_data->argc; i++) {
+        if (c->io_data->argv[i]) decrRefCount(c->io_data->argv[i]);
     }
-    zfree(c->argv);
+    zfree(c->io_data->argv);
+    zfree(c->io_data);
     zfree(c);
 
     return 0;
@@ -384,26 +390,27 @@ int test_rewriteClientCommandArgument(int argc, char **argv, int flags) {
     UNUSED(flags);
 
     client *c = zmalloc(sizeof(client));
-    c->argc = 3;
+    c->io_data = zcalloc(sizeof(ClientIOData));
+    c->io_data->argc = 3;
     robj **initial_argv = zmalloc(sizeof(robj *) * 3);
-    c->argv = initial_argv;
+    c->io_data->argv = initial_argv;
     c->original_argv = NULL;
-    c->argv_len_sum = 0;
+    c->io_data->argv_len_sum = 0;
 
     /* Initialize client with command "SET key value" */
-    c->argv[0] = createStringObject("SET", 3);
+    c->io_data->argv[0] = createStringObject("SET", 3);
     robj *original_key = createStringObject("key", 3);
-    c->argv[1] = original_key;
-    c->argv[2] = createStringObject("value", 5);
-    c->argv_len_sum = 11; // 3 + 3 + 5
+    c->io_data->argv[1] = original_key;
+    c->io_data->argv[2] = createStringObject("value", 5);
+    c->io_data->argv_len_sum = 11; // 3 + 3 + 5
 
     /* Test 1: Rewrite existing argument */
     robj *newval = createStringObject("newkey", 6);
     rewriteClientCommandArgument(c, 1, newval);
 
-    TEST_ASSERT(c->argv[1] == newval);
-    TEST_ASSERT(c->argv[1]->refcount == 2);
-    TEST_ASSERT(c->argv_len_sum == 14); // 3 + 6 + 5
+    TEST_ASSERT(c->io_data->argv[1] == newval);
+    TEST_ASSERT(c->io_data->argv[1]->refcount == 2);
+    TEST_ASSERT(c->io_data->argv_len_sum == 14); // 3 + 6 + 5
     TEST_ASSERT(c->original_argv == initial_argv);
     TEST_ASSERT(c->original_argv[1] == original_key);
     TEST_ASSERT(c->original_argv[1]->refcount == 1);
@@ -412,16 +419,16 @@ int test_rewriteClientCommandArgument(int argc, char **argv, int flags) {
     robj *extraval = createStringObject("extra", 5);
     rewriteClientCommandArgument(c, 3, extraval);
 
-    TEST_ASSERT(c->argc == 4);
-    TEST_ASSERT(c->argv[3] == extraval);
-    TEST_ASSERT(c->argv_len_sum == 19); // 3 + 6 + 5 + 5
+    TEST_ASSERT(c->io_data->argc == 4);
+    TEST_ASSERT(c->io_data->argv[3] == extraval);
+    TEST_ASSERT(c->io_data->argv_len_sum == 19); // 3 + 6 + 5 + 5
     TEST_ASSERT(c->original_argv == initial_argv);
 
     /* Cleanup */
-    for (int i = 0; i < c->argc; i++) {
-        if (c->argv[i]) decrRefCount(c->argv[i]);
+    for (int i = 0; i < c->io_data->argc; i++) {
+        if (c->io_data->argv[i]) decrRefCount(c->io_data->argv[i]);
     }
-    zfree(c->argv);
+    zfree(c->io_data->argv);
 
     for (int i = 0; i < c->original_argc; i++) {
         if (c->original_argv[i]) decrRefCount(c->original_argv[i]);
@@ -431,6 +438,7 @@ int test_rewriteClientCommandArgument(int argc, char **argv, int flags) {
     decrRefCount(newval);
     decrRefCount(extraval);
 
+    zfree(c->io_data);
     zfree(c);
 
     return 0;

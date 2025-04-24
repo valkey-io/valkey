@@ -67,9 +67,9 @@ int ldbIsEnabled(void) {
 
 /* Enable debug mode of Lua scripts for this client. */
 void ldbEnable(client *c) {
-    c->flag.lua_debug = 1;
+    c->io_data->flag.lua_debug = 1;
     ldbFlushLog(ldb.logs);
-    ldb.conn = c->conn;
+    ldb.conn = c->io_data->conn;
     ldb.step = 1;
     ldb.bpcount = 0;
     ldb.luabp = 0;
@@ -83,8 +83,8 @@ void ldbEnable(client *c) {
  * to properly shut down a client debugging session, see ldbEndSession()
  * for more information. */
 void ldbDisable(client *c) {
-    c->flag.lua_debug = 0;
-    c->flag.lua_debug_sync = 0;
+    c->io_data->flag.lua_debug = 0;
+    c->io_data->flag.lua_debug_sync = 0;
 }
 
 /* Append a log entry to the specified LDB log. */
@@ -145,7 +145,7 @@ void ldbSendLogs(void) {
  * The caller should call ldbEndSession() only if ldbStartSession()
  * returned 1. */
 int ldbStartSession(client *c) {
-    ldb.forked = !c->flag.lua_debug_sync;
+    ldb.forked = !c->io_data->flag.lua_debug_sync;
     if (ldb.forked) {
         pid_t cp = serverFork(CHILD_TYPE_LDB);
         if (cp == -1) {
@@ -181,7 +181,7 @@ int ldbStartSession(client *c) {
 
     /* First argument of EVAL is the script itself. We split it into different
      * lines since this is the way the debugger accesses the source code. */
-    sds srcstring = sdsdup(c->argv[1]->ptr);
+    sds srcstring = sdsdup(c->io_data->argv[1]->ptr);
     size_t srclen = sdslen(srcstring);
     while (srclen && (srcstring[srclen - 1] == '\n' || srcstring[srclen - 1] == '\r')) {
         srcstring[--srclen] = '\0';
@@ -214,7 +214,7 @@ void ldbEndSession(client *c) {
 
     /* Close the client connection after sending the final EVAL reply
      * in order to signal the end of the debugging session. */
-    c->flag.close_after_reply = 1;
+    c->io_data->flag.close_after_reply = 1;
 
     /* Cleanup. */
     sdsfreesplitres(ldb.src, ldb.lines);

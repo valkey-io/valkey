@@ -105,13 +105,13 @@ void freeClientBlockingState(client *c) {
  * and will be processed when the client is unblocked. */
 void blockClient(client *c, int btype) {
     /* Primary client should never be blocked unless pause or module */
-    serverAssert(!(c->flag.primary && btype != BLOCKED_MODULE && btype != BLOCKED_POSTPONE));
+    serverAssert(!(c->io_data->flag.primary && btype != BLOCKED_MODULE && btype != BLOCKED_POSTPONE));
 
     initClientBlockingState(c);
 
-    c->flag.blocked = 1;
+    c->io_data->flag.blocked = 1;
     c->bstate->btype = btype;
-    if (!c->flag.module)
+    if (!c->io_data->flag.module)
         server.blocked_clients++; /* We count blocked client stats on regular clients and not on module clients */
     server.blocked_clients_by_type[btype]++;
     addClientToTimeoutTable(c);
@@ -133,14 +133,14 @@ void updateStatsOnUnblock(client *c, long blocked_us, long reply_us, int failed_
     c->lastcmd->calls++;
     c->commands_processed++;
     server.stat_numcommands++;
-    debugServerAssertWithInfo(c, NULL, failed_or_rejected >= 0 && failed_or_rejected <= ERROR_COMMAND_FAILED);
+    debugServerAssertWithInfo(c->io_data, NULL, failed_or_rejected >= 0 && failed_or_rejected <= ERROR_COMMAND_FAILED);
     if (failed_or_rejected) {
         if (failed_or_rejected & ERROR_COMMAND_FAILED)
             c->lastcmd->failed_calls++;
         else if (failed_or_rejected & ERROR_COMMAND_REJECTED)
             c->lastcmd->rejected_calls++;
         else
-            debugServerAssertWithInfo(c, NULL, 0);
+            debugServerAssertWithInfo(c->io_data, NULL, 0);
     }
     if (server.latency_tracking_enabled)
         updateCommandLatencyHistogram(&(c->lastcmd->latency_histogram), c->duration * 1000);
@@ -163,10 +163,10 @@ void processUnblockedClients(void) {
         serverAssert(ln != NULL);
         c = ln->value;
         listDelNode(server.unblocked_clients, ln);
-        c->flag.unblocked = 0;
+        c->io_data->flag.unblocked = 0;
 
-        if (c->flag.module) {
-            if (!c->flag.blocked) {
+        if (c->io_data->flag.module) {
+            if (!c->io_data->flag.blocked) {
                 moduleCallCommandUnblockedHandler(c);
             }
             continue;
@@ -176,7 +176,7 @@ void processUnblockedClients(void) {
          * is blocked again. Actually processInputBuffer() checks that the
          * client is not blocked before to proceed, but things may change and
          * the code is conceptually more correct this way. */
-        if (!c->flag.blocked) {
+        if (!c->io_data->flag.blocked) {
             /* If we have a queued command, execute it now. */
             if (processPendingCommandAndInputBuffer(c) == C_ERR) {
                 continue;
@@ -205,8 +205,8 @@ void processUnblockedClients(void) {
 void queueClientForReprocessing(client *c) {
     /* The client may already be into the unblocked list because of a previous
      * blocking operation, don't add back it into the list multiple times. */
-    if (!c->flag.unblocked) {
-        c->flag.unblocked = 1;
+    if (!c->io_data->flag.unblocked) {
+        c->io_data->flag.unblocked = 1;
         listAddNodeTail(server.unblocked_clients, c);
     }
 }
@@ -233,7 +233,7 @@ void unblockClient(client *c, int queue_for_reprocessing) {
 
     /* Reset the client for a new query, unless the client has pending command to process
      * or in case a shutdown operation was canceled and we are still in the processCommand sequence  */
-    if (!c->flag.pending_command && c->bstate->btype != BLOCKED_SHUTDOWN) {
+    if (!c->io_data->flag.pending_command && c->bstate->btype != BLOCKED_SHUTDOWN) {
         /* Clients that are not blocked on keys are not reprocessed so we must
          * call reqresAppendResponse here (for clients blocked on key,
          * unblockClientOnKey is called, which eventually calls processCommand,
@@ -243,11 +243,11 @@ void unblockClient(client *c, int queue_for_reprocessing) {
     }
 
     /* We count blocked client stats on regular clients and not on module clients */
-    if (!c->flag.module) server.blocked_clients--;
+    if (!c->io_data->flag.module) server.blocked_clients--;
     server.blocked_clients_by_type[c->bstate->btype]--;
     /* Clear the flags, and put the client in the unblocked list so that
      * we'll process new commands in its query buffer ASAP. */
-    c->flag.blocked = 0;
+    c->io_data->flag.blocked = 0;
     c->bstate->btype = BLOCKED_NONE;
     c->bstate->unblock_on_nokey = 0;
     removeClientFromTimeoutTable(c);
@@ -289,7 +289,7 @@ void replyToClientsBlockedOnShutdown(void) {
     listRewind(server.clients, &li);
     while ((ln = listNext(&li))) {
         client *c = listNodeValue(ln);
-        if (c->flag.blocked && c->bstate->btype == BLOCKED_SHUTDOWN) {
+        if (c->io_data->flag.blocked && c->bstate->btype == BLOCKED_SHUTDOWN) {
             addReplyError(c, "Errors trying to SHUTDOWN. Check logs.");
             unblockClient(c, 1);
         }
@@ -311,7 +311,7 @@ void disconnectAllBlockedClients(void) {
     while ((ln = listNext(&li))) {
         client *c = listNodeValue(ln);
 
-        if (c->flag.blocked) {
+        if (c->io_data->flag.blocked) {
             /* POSTPONEd clients are an exception, when they'll be unblocked, the
              * command processing will start from scratch, and the command will
              * be either executed or rejected. (unlike LIST blocked clients for
@@ -320,7 +320,7 @@ void disconnectAllBlockedClients(void) {
 
             unblockClientOnError(c, "-UNBLOCKED force unblock from blocking operation, "
                                     "instance state changed (master -> replica?)");
-            c->flag.close_after_reply = 1;
+            c->io_data->flag.close_after_reply = 1;
         }
     }
 }
@@ -403,7 +403,7 @@ void blockForKeys(client *c, int btype, robj **keys, int numkeys, mstime_t timeo
 
     initClientBlockingState(c);
 
-    if (!c->flag.reprocessing_command) {
+    if (!c->io_data->flag.reprocessing_command) {
         /* If the client is re-processing the command, we do not set the timeout
          * because we need to retain the client's original timeout. */
         c->bstate->timeout = timeout;
@@ -446,7 +446,7 @@ void blockForKeys(client *c, int btype, robj **keys, int numkeys, mstime_t timeo
     /* Currently we assume key blocking will require reprocessing the command.
      * However in case of modules, they have a different way to handle the reprocessing
      * which does not require setting the pending command flag */
-    if (btype != BLOCKED_MODULE) c->flag.pending_command = 1;
+    if (btype != BLOCKED_MODULE) c->io_data->flag.pending_command = 1;
     blockClient(c, btype);
 }
 
@@ -551,7 +551,7 @@ static void releaseBlockedEntry(client *c, dictEntry *de, int remove_key) {
     pos = dictGetVal(de);
     /* Remove this client from the list of clients waiting for this key. */
     l = dictFetchValue(c->db->blocking_keys, key);
-    serverAssertWithInfo(c, key, l != NULL);
+    serverAssertWithInfo(c->io_data, key, l != NULL);
     listUnlinkNode(l, pos);
     /* If the list is empty we need to remove it to avoid wasting memory
      * We will also remove the key (if exists) from the blocking_keys_unblock_on_nokey dict.
@@ -566,7 +566,7 @@ static void releaseBlockedEntry(client *c, dictEntry *de, int remove_key) {
     } else if (c->bstate->unblock_on_nokey) {
         unblock_on_nokey_entry = dictFind(c->db->blocking_keys_unblock_on_nokey, key);
         /* it is not possible to have a client blocked on nokey with no matching entry */
-        serverAssertWithInfo(c, key, unblock_on_nokey_entry != NULL);
+        serverAssertWithInfo(c->io_data, key, unblock_on_nokey_entry != NULL);
         if (!dictIncrUnsignedIntegerVal(unblock_on_nokey_entry, -1)) {
             /* in case the count is zero, we can delete the entry */
             dictDelete(c->db->blocking_keys_unblock_on_nokey, key);
@@ -648,7 +648,7 @@ void blockPostponeClient(client *c) {
     serverAssert(c->bstate->postponed_list_node == NULL);
     c->bstate->postponed_list_node = listLast(server.postponed_clients);
     /* Mark this client to execute its command */
-    c->flag.pending_command = 1;
+    c->io_data->flag.pending_command = 1;
 }
 
 /* Block client due to shutdown command */
@@ -678,8 +678,8 @@ static void unblockClientOnKey(client *c, robj *key) {
     unblockClient(c, 0);
     /* In case this client was blocked on keys during command
      * we need to re process the command again */
-    if (c->flag.pending_command) {
-        c->flag.pending_command = 0;
+    if (c->io_data->flag.pending_command) {
+        c->io_data->flag.pending_command = 0;
         /* We want the command processing and the unblock handler (see RM_Call 'K' option)
          * to run atomically, this is why we must enter the execution unit here before
          * running the command, and exit the execution unit after calling the unblock handler (if exists).
@@ -689,8 +689,8 @@ static void unblockClientOnKey(client *c, robj *key) {
         server.current_client = c;
         enterExecutionUnit(1, 0);
         processCommandAndResetClient(c);
-        if (!c->flag.blocked) {
-            if (c->flag.module) {
+        if (!c->io_data->flag.blocked) {
+            if (c->io_data->flag.module) {
                 moduleCallCommandUnblockedHandler(c);
             } else {
                 queueClientForReprocessing(c);
@@ -736,7 +736,7 @@ void unblockClientOnTimeout(client *c) {
     if (c->bstate->btype == BLOCKED_MODULE && isModuleClientUnblocked(c)) return;
 
     replyToBlockedClientTimedOut(c);
-    if (c->flag.pending_command) c->flag.pending_command = 0;
+    if (c->io_data->flag.pending_command) c->io_data->flag.pending_command = 0;
     unblockClient(c, 1);
 }
 
@@ -745,7 +745,7 @@ void unblockClientOnTimeout(client *c) {
 void unblockClientOnError(client *c, const char *err_str) {
     if (err_str) addReplyError(c, err_str);
     updateStatsOnUnblock(c, 0, 0, ERROR_COMMAND_REJECTED);
-    if (c->flag.pending_command) c->flag.pending_command = 0;
+    if (c->io_data->flag.pending_command) c->io_data->flag.pending_command = 0;
     unblockClient(c, 1);
 }
 

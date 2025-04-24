@@ -1876,7 +1876,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error) {
     if (server.sanitize_dump_payload == SANITIZE_DUMP_CLIENTS) {
         /* Skip sanitization when loading (an RDB), or getting a RESTORE command
          * from either the primary or a client using an ACL user with the skip-sanitize-payload flag. */
-        int skip = server.loading || (server.current_client && (server.current_client->flag.primary));
+        int skip = server.loading || (server.current_client && (server.current_client->io_data->flag.primary));
         if (!skip && server.current_client && server.current_client->user)
             skip = !!(server.current_client->user->flags & USER_FLAG_SANITIZE_PAYLOAD_SKIP);
         deep_integrity_validation = !skip;
@@ -3599,16 +3599,16 @@ int rdbSaveToReplicasSockets(int req, rdbSaveInfo *rsi) {
             /* Check replica has the exact requirements */
             if (replica->repl_data->replica_req != req) continue;
 
-            conns[connsnum++] = replica->conn;
+            conns[connsnum++] = replica->io_data->conn;
             if (dual_channel) {
-                connSendTimeout(replica->conn, server.repl_timeout * 1000);
+                connSendTimeout(replica->io_data->conn, server.repl_timeout * 1000);
                 /* This replica uses diskless dual channel sync, hence we need
                  * to inform it with the save end offset.*/
                 sendCurrentOffsetToReplica(replica);
                 /* Make sure repl traffic is appended to the replication backlog */
                 addRdbReplicaToPsyncWait(replica);
                 /* Put the socket in blocking mode to simplify RDB transfer. */
-                connBlock(replica->conn);
+                connBlock(replica->io_data->conn);
             } else {
                 server.rdb_pipe_numconns++;
             }
@@ -3616,7 +3616,7 @@ int rdbSaveToReplicasSockets(int req, rdbSaveInfo *rsi) {
         }
 
         // do not skip RDB checksum on the primary if connection doesn't have integrity check or if the replica doesn't support it
-        if (!connIsIntegrityChecked(replica->conn) || !(replica->repl_data->replica_capa & REPLICA_CAPA_SKIP_RDB_CHECKSUM))
+        if (!connIsIntegrityChecked(replica->io_data->conn) || !(replica->repl_data->replica_capa & REPLICA_CAPA_SKIP_RDB_CHECKSUM))
             skip_rdb_checksum = 0;
     }
 
@@ -3738,10 +3738,10 @@ void bgsaveCommand(client *c) {
 
     /* The SCHEDULE option changes the behavior of BGSAVE when an AOF rewrite
      * is in progress. Instead of returning an error a BGSAVE gets scheduled. */
-    if (c->argc > 1) {
-        if (c->argc == 2 && !strcasecmp(c->argv[1]->ptr, "schedule")) {
+    if (c->io_data->argc > 1) {
+        if (c->io_data->argc == 2 && !strcasecmp(c->io_data->argv[1]->ptr, "schedule")) {
             schedule = 1;
-        } else if (c->argc == 2 && !strcasecmp(c->argv[1]->ptr, "cancel")) {
+        } else if (c->io_data->argc == 2 && !strcasecmp(c->io_data->argv[1]->ptr, "cancel")) {
             /* Terminates an in progress BGSAVE */
             if (server.child_type == CHILD_TYPE_RDB) {
                 /* There is an ongoing bgsave */

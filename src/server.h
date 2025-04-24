@@ -1181,57 +1181,66 @@ typedef struct ClientModuleData {
                                                 * unloaded for cleanup. Opaque for the Server Core.*/
 } ClientModuleData;
 
+typedef struct ClientIOData {
+    connection *conn;                            /* Client connection */
+    sds querybuf;                                /* Buffer we use to accumulate client queries. */
+    size_t querybuf_peak;                        /* Recent (100ms or more) peak of querybuf size. */
+    robj **argv;                                 /* Arguments of current command. */
+    int argc;                                    /* Num of arguments of current command. */
+    int argv_len;                                /* Size of argv array (may be more than argc) */
+    size_t argv_len_sum;                         /* Sum of lengths of objects in argv list. */
+    size_t qb_pos;                               /* The position we have read in querybuf. */
+    int reqtype;                                 /* Request protocol type: PROTO_REQ_* */
+    int multibulklen;                            /* Number of multi bulk arguments left to read. */
+    long bulklen;                                /* Length of bulk argument in multi bulk request. */
+    volatile uint8_t io_read_state;              /* Indicate the IO read state of the client */
+    volatile uint8_t io_write_state;             /* Indicate the IO write state of the client */
+    struct serverCommand *io_parsed_cmd;         /* The command that was parsed by the IO thread. */
+    int nread;                                   /* Number of bytes of the last read. */
+    int nwritten;                                /* Number of bytes of the last write. */
+    int read_flags;                              /* Client Read flags - used to communicate the client read state. */
+    uint16_t write_flags;                        /* Client Write flags - used to communicate the client write state. */
+    listNode *io_last_reply_block;               /* Last client reply block when sent to IO thread */
+    size_t io_last_bufpos;                       /* The client's bufpos at the time it was sent to the IO thread */
+    multiState *mstate;                          /* MULTI/EXEC state, lazily initialized when first needed */
+    unsigned long long net_input_bytes_curr_cmd; /* Total network input bytes read for the* execution of this client's current command. */
+    int slot;                                    /* The slot the client is executing against. Set to -1 if no slot is being used */
+    /* Client flags and state indicators */
+    union {
+        uint64_t raw_flag;
+        struct ClientFlags flag;
+    };
+} ClientIOData;
+
 typedef struct client {
-    /* Basic client information and connection. */
-    uint64_t id; /* Client incremental unique ID. */
-    connection *conn;
-    /* Input buffer and command parsing fields */
-    sds querybuf;        /* Buffer we use to accumulate client queries. */
-    size_t qb_pos;       /* The position we have read in querybuf. */
-    robj **argv;         /* Arguments of current command. */
-    int argc;            /* Num of arguments of current command. */
-    int argv_len;        /* Size of argv array (may be more than argc) */
-    size_t argv_len_sum; /* Sum of lengths of objects in argv list. */
-    int reqtype;         /* Request protocol type: PROTO_REQ_* */
-    int multibulklen;    /* Number of multi bulk arguments left to read. */
-    long bulklen;        /* Length of bulk argument in multi bulk request. */
-    long long woff;      /* Last write global replication offset. */
+    /* Basic client information. */
+    uint64_t id;    /* Client incremental unique ID. */
+    long long woff; /* Last write global replication offset. */
     /* Command execution state and command information */
-    struct serverCommand *cmd;           /* Current command. */
-    struct serverCommand *lastcmd;       /* Last command executed. */
-    struct serverCommand *realcmd;       /* The original command that was executed by the client */
-    struct serverCommand *io_parsed_cmd; /* The command that was parsed by the IO thread. */
-    time_t last_interaction;             /* Time of the last interaction, used for timeout */
-    serverDb *db;                        /* Pointer to currently SELECTed DB. */
+    struct serverCommand *cmd;     /* Current command. */
+    struct serverCommand *lastcmd; /* Last command executed. */
+    struct serverCommand *realcmd; /* The original command that was executed by the client */
+    time_t last_interaction;       /* Time of the last interaction, used for timeout */
+    serverDb *db;                  /* Pointer to currently SELECTed DB. */
     /* Client state structs. */
     ClientPubSubData *pubsub_data;    /* Required for: pubsub commands and tracking. lazily initialized when first needed */
     ClientReplicationData *repl_data; /* Required for Replication operations. lazily initialized when first needed */
     ClientModuleData *module_data;    /* Required for Module operations. lazily initialized when first needed */
-    multiState *mstate;               /* MULTI/EXEC state, lazily initialized when first needed */
+    ClientIOData *io_data;            /* Required for IO operations. Initialized in createClient() */
     blockingState *bstate;            /* Blocking state, lazily initialized when first needed */
     /* Output buffer and reply handling */
     long duration;                       /* Current command duration. Used for measuring latency of blocking/non-blocking cmds */
     char *buf;                           /* Output buffer */
     size_t buf_usable_size;              /* Usable size of buffer. */
     list *reply;                         /* List of reply objects to send to the client. */
-    listNode *io_last_reply_block;       /* Last client reply block when sent to IO thread */
-    size_t io_last_bufpos;               /* The client's bufpos at the time it was sent to the IO thread */
     unsigned long long reply_bytes;      /* Tot bytes of objects in reply list. */
     size_t sentlen;                      /* Amount of bytes already sent in the current buffer or object being sent. */
     listNode clients_pending_write_node; /* list node in clients_pending_write or in clients_pending_io_write list */
     int bufpos;
     int original_argc;    /* Num of arguments of original command if arguments were rewritten. */
     robj **original_argv; /* Arguments of original command if arguments were rewritten. */
-    /* Client flags and state indicators */
-    union {
-        uint64_t raw_flag;
-        struct ClientFlags flag;
-    };
-    uint16_t write_flags;            /* Client Write flags - used to communicate the client write state. */
-    volatile uint8_t io_read_state;  /* Indicate the IO read state of the client */
-    volatile uint8_t io_write_state; /* Indicate the IO write state of the client */
-    uint8_t resp;                    /* RESP protocol version. Can be 2 or 3. */
-    uint8_t cur_tid;                 /* ID of IO thread currently performing IO for this client */
+    uint8_t resp;         /* RESP protocol version. Can be 2 or 3. */
+    uint8_t cur_tid;      /* ID of IO thread currently performing IO for this client */
     /* In updateClientMemoryUsage() we track the memory usage of
      * each client and add it to the sum of all the clients of a given type,
      * however we need to remember what was the old contribution of each
@@ -1242,15 +1251,10 @@ typedef struct client {
     listNode pending_read_list_node; /* IO thread only ?*/
     /* Statistics and metrics */
     unsigned long long net_input_bytes;           /* Total network input bytes read from this client. */
-    unsigned long long net_input_bytes_curr_cmd;  /* Total network input bytes read for the* execution of this client's current command. */
     unsigned long long net_output_bytes;          /* Total network output bytes sent to this client. */
     unsigned long long commands_processed;        /* Total count of commands this client executed. */
     unsigned long long net_output_bytes_curr_cmd; /* Total network output bytes sent to this client, by the current command. */
     size_t buf_peak;                              /* Peak used size of buffer in last 5 sec interval. */
-    int nwritten;                                 /* Number of bytes of the last write. */
-    int nread;                                    /* Number of bytes of the last read. */
-    int read_flags;                               /* Client Read flags - used to communicate the client read state. */
-    int slot;                                     /* The slot the client is executing against. Set to -1 if no slot is being used */
     listNode *mem_usage_bucket_node;
     clientMemUsageBucket *mem_usage_bucket;
     /* In updateClientMemoryUsage() we track the memory usage of
@@ -1262,7 +1266,6 @@ typedef struct client {
     /* Fields after this point are less frequently used */
     listNode *client_list_node;        /* list node in client list */
     mstime_t buf_peak_last_reset_time; /* keeps the last time the buffer peak value was reset */
-    size_t querybuf_peak;              /* Recent (100ms or more) peak of querybuf size. */
     dictEntry *cur_script;             /* Cached pointer to the dictEntry of the script being executed. */
     user *user;                        /* User associated with this connection */
     time_t obuf_soft_limit_reached_time;
@@ -3895,7 +3898,7 @@ void *realloc(void *ptr, size_t size) __attribute__((deprecated));
 #endif
 
 /* Debugging stuff */
-void _serverAssertWithInfo(const client *c, const robj *o, const char *estr, const char *file, int line);
+void _serverAssertWithInfo(const ClientIOData *io_data, const robj *o, const char *estr, const char *file, int line);
 void _serverAssert(const char *estr, const char *file, int line);
 #ifdef __GNUC__
 void _serverPanic(const char *file, int line, const char *msg, ...) __attribute__((format(printf, 3, 4)));

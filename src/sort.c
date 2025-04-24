@@ -213,39 +213,39 @@ void sortCommandGeneric(client *c, int readonly) {
     j = 2; /* options start at argv[2] */
 
     user_has_full_key_access =
-        ACLUserCheckCmdWithUnrestrictedKeyAccess(c->user, c->cmd, c->argv, c->argc, CMD_KEY_ACCESS);
+        ACLUserCheckCmdWithUnrestrictedKeyAccess(c->user, c->cmd, c->io_data->argv, c->io_data->argc, CMD_KEY_ACCESS);
 
     /* The SORT command has an SQL-alike syntax, parse it */
-    while (j < c->argc) {
-        int leftargs = c->argc - j - 1;
-        if (!strcasecmp(c->argv[j]->ptr, "asc")) {
+    while (j < c->io_data->argc) {
+        int leftargs = c->io_data->argc - j - 1;
+        if (!strcasecmp(c->io_data->argv[j]->ptr, "asc")) {
             desc = 0;
-        } else if (!strcasecmp(c->argv[j]->ptr, "desc")) {
+        } else if (!strcasecmp(c->io_data->argv[j]->ptr, "desc")) {
             desc = 1;
-        } else if (!strcasecmp(c->argv[j]->ptr, "alpha")) {
+        } else if (!strcasecmp(c->io_data->argv[j]->ptr, "alpha")) {
             alpha = 1;
-        } else if (!strcasecmp(c->argv[j]->ptr, "limit") && leftargs >= 2) {
-            if ((getLongFromObjectOrReply(c, c->argv[j + 1], &limit_start, NULL) != C_OK) ||
-                (getLongFromObjectOrReply(c, c->argv[j + 2], &limit_count, NULL) != C_OK)) {
+        } else if (!strcasecmp(c->io_data->argv[j]->ptr, "limit") && leftargs >= 2) {
+            if ((getLongFromObjectOrReply(c, c->io_data->argv[j + 1], &limit_start, NULL) != C_OK) ||
+                (getLongFromObjectOrReply(c, c->io_data->argv[j + 2], &limit_count, NULL) != C_OK)) {
                 syntax_error++;
                 break;
             }
             j += 2;
-        } else if (readonly == 0 && !strcasecmp(c->argv[j]->ptr, "store") && leftargs >= 1) {
-            storekey = c->argv[j + 1];
+        } else if (readonly == 0 && !strcasecmp(c->io_data->argv[j]->ptr, "store") && leftargs >= 1) {
+            storekey = c->io_data->argv[j + 1];
             j++;
-        } else if (!strcasecmp(c->argv[j]->ptr, "by") && leftargs >= 1) {
-            sortby = c->argv[j + 1];
+        } else if (!strcasecmp(c->io_data->argv[j]->ptr, "by") && leftargs >= 1) {
+            sortby = c->io_data->argv[j + 1];
             /* If the BY pattern does not contain '*', i.e. it is constant,
              * we don't need to sort nor to lookup the weight keys. */
-            if (strchr(c->argv[j + 1]->ptr, '*') == NULL) {
+            if (strchr(c->io_data->argv[j + 1]->ptr, '*') == NULL) {
                 dontsort = 1;
             } else {
                 /* If BY is specified with a real pattern, we can't accept it in cluster mode,
                  * unless we can make sure the keys formed by the pattern are in the same slot
                  * as the key to sort. */
                 if (server.cluster_enabled &&
-                    patternHashSlot(sortby->ptr, sdslen(sortby->ptr)) != getKeySlot(c->argv[1]->ptr)) {
+                    patternHashSlot(sortby->ptr, sdslen(sortby->ptr)) != getKeySlot(c->io_data->argv[1]->ptr)) {
                     addReplyError(c, "BY option of SORT denied in Cluster mode when "
                                      "keys formed by the pattern may be in different slots.");
                     syntax_error++;
@@ -260,13 +260,13 @@ void sortCommandGeneric(client *c, int readonly) {
                 }
             }
             j++;
-        } else if (!strcasecmp(c->argv[j]->ptr, "get") && leftargs >= 1) {
+        } else if (!strcasecmp(c->io_data->argv[j]->ptr, "get") && leftargs >= 1) {
             /* If GET is specified with a real pattern, we can't accept it in cluster mode,
              * unless we can make sure the keys formed by the pattern are in the same slot
              * as the key to sort. */
             if (server.cluster_enabled &&
-                !isReturnSubstPattern(c->argv[j + 1]->ptr) &&
-                patternHashSlot(c->argv[j + 1]->ptr, sdslen(c->argv[j + 1]->ptr)) != getKeySlot(c->argv[1]->ptr)) {
+                !isReturnSubstPattern(c->io_data->argv[j + 1]->ptr) &&
+                patternHashSlot(c->io_data->argv[j + 1]->ptr, sdslen(c->io_data->argv[j + 1]->ptr)) != getKeySlot(c->io_data->argv[1]->ptr)) {
                 addReplyError(c, "GET option of SORT denied in Cluster mode when "
                                  "keys formed by the pattern may be in different slots.");
                 syntax_error++;
@@ -277,7 +277,7 @@ void sortCommandGeneric(client *c, int readonly) {
                 syntax_error++;
                 break;
             }
-            listAddNodeTail(operations, createSortOperation(SORT_OP_GET, c->argv[j + 1]));
+            listAddNodeTail(operations, createSortOperation(SORT_OP_GET, c->io_data->argv[j + 1]));
             getop++;
             j++;
         } else {
@@ -295,7 +295,7 @@ void sortCommandGeneric(client *c, int readonly) {
     }
 
     /* Lookup the key to sort. It must be of the right types */
-    sortval = lookupKeyRead(c->db, c->argv[1]);
+    sortval = lookupKeyRead(c->db, c->io_data->argv[1]);
     if (sortval && sortval->type != OBJ_SET && sortval->type != OBJ_LIST && sortval->type != OBJ_ZSET) {
         listRelease(operations);
         addReplyErrorObject(c, shared.wrongtypeerr);
@@ -316,7 +316,7 @@ void sortCommandGeneric(client *c, int readonly) {
      * The other types (list, sorted set) will retain their native order
      * even if no sort order is requested, so they remain stable across
      * scripting and replication. */
-    if (dontsort && sortval->type == OBJ_SET && (storekey || c->flag.script)) {
+    if (dontsort && sortval->type == OBJ_SET && (storekey || c->io_data->flag.script)) {
         /* Force ALPHA sorting */
         dontsort = 0;
         alpha = 1;
@@ -433,7 +433,7 @@ void sortCommandGeneric(client *c, int readonly) {
         }
 
         while (rangelen--) {
-            serverAssertWithInfo(c, sortval, ln != NULL);
+            serverAssertWithInfo(c->io_data, sortval, ln != NULL);
             sdsele = ln->ele;
             vector[j].obj = createStringObject(sdsele, sdslen(sdsele));
             vector[j].u.score = 0;
@@ -460,7 +460,7 @@ void sortCommandGeneric(client *c, int readonly) {
     } else {
         serverPanic("Unknown type");
     }
-    serverAssertWithInfo(c, sortval, j == vectorlen);
+    serverAssertWithInfo(c->io_data, sortval, j == vectorlen);
 
     /* Now it's time to load the right scores in the sorting vector */
     if (!dontsort) {
@@ -491,7 +491,7 @@ void sortCommandGeneric(client *c, int readonly) {
                      * far. We can just cast it */
                     vector[j].u.score = (long)byval->ptr;
                 } else {
-                    serverAssertWithInfo(c, sortval, 1 != 1);
+                    serverAssertWithInfo(c->io_data, sortval, 1 != 1);
                 }
             }
 
@@ -539,7 +539,7 @@ void sortCommandGeneric(client *c, int readonly) {
                     }
                 } else {
                     /* Always fails */
-                    serverAssertWithInfo(c, sortval, sop->type == SORT_OP_GET);
+                    serverAssertWithInfo(c->io_data, sortval, sop->type == SORT_OP_GET);
                 }
             }
         }
@@ -571,7 +571,7 @@ void sortCommandGeneric(client *c, int readonly) {
                         decrRefCount(val);
                     } else {
                         /* Always fails */
-                        serverAssertWithInfo(c, sortval, sop->type == SORT_OP_GET);
+                        serverAssertWithInfo(c->io_data, sortval, sop->type == SORT_OP_GET);
                     }
                 }
             }

@@ -149,8 +149,8 @@ void commandlogPushCurrentCommand(client *c, struct serverCommand *cmd) {
 
     /* If command argument vector was rewritten, use the original
      * arguments. */
-    robj **argv = c->original_argv ? c->original_argv : c->argv;
-    int argc = c->original_argv ? c->original_argc : c->argc;
+    robj **argv = c->original_argv ? c->original_argv : c->io_data->argv;
+    int argc = c->original_argv ? c->original_argc : c->io_data->argc;
 
     /* If a script is currently running, the client passed in is a
      * fake client. Or the client passed in is the original client
@@ -159,14 +159,14 @@ void commandlogPushCurrentCommand(client *c, struct serverCommand *cmd) {
     c = scriptIsRunning() ? scriptGetCaller() : c;
 
     commandlogPushEntryIfNeeded(c, argv, argc, c->duration, COMMANDLOG_TYPE_SLOW);
-    commandlogPushEntryIfNeeded(c, argv, argc, c->net_input_bytes_curr_cmd, COMMANDLOG_TYPE_LARGE_REQUEST);
+    commandlogPushEntryIfNeeded(c, argv, argc, c->io_data->net_input_bytes_curr_cmd, COMMANDLOG_TYPE_LARGE_REQUEST);
     commandlogPushEntryIfNeeded(c, argv, argc, c->net_output_bytes_curr_cmd, COMMANDLOG_TYPE_LARGE_REPLY);
 }
 
 /* The SLOWLOG command. Implements all the subcommands needed to handle the
  * slow log. */
 void slowlogCommand(client *c) {
-    if (c->argc == 2 && !strcasecmp(c->argv[1]->ptr, "help")) {
+    if (c->io_data->argc == 2 && !strcasecmp(c->io_data->argv[1]->ptr, "help")) {
         const char *help[] = {
             "GET [<count>]",
             "    Return top <count> entries from the slowlog (default: 10, -1 mean all).",
@@ -180,17 +180,17 @@ void slowlogCommand(client *c) {
             NULL,
         };
         addReplyHelp(c, help);
-    } else if (c->argc == 2 && !strcasecmp(c->argv[1]->ptr, "reset")) {
+    } else if (c->io_data->argc == 2 && !strcasecmp(c->io_data->argv[1]->ptr, "reset")) {
         commandlogReset(COMMANDLOG_TYPE_SLOW);
         addReply(c, shared.ok);
-    } else if (c->argc == 2 && !strcasecmp(c->argv[1]->ptr, "len")) {
+    } else if (c->io_data->argc == 2 && !strcasecmp(c->io_data->argv[1]->ptr, "len")) {
         addReplyLongLong(c, listLength(server.commandlog[COMMANDLOG_TYPE_SLOW].entries));
-    } else if ((c->argc == 2 || c->argc == 3) && !strcasecmp(c->argv[1]->ptr, "get")) {
+    } else if ((c->io_data->argc == 2 || c->io_data->argc == 3) && !strcasecmp(c->io_data->argv[1]->ptr, "get")) {
         long count = 10;
 
-        if (c->argc == 3) {
+        if (c->io_data->argc == 3) {
             /* Consume count arg. */
-            if (getRangeLongFromObjectOrReply(c, c->argv[2], -1, LONG_MAX, &count,
+            if (getRangeLongFromObjectOrReply(c, c->io_data->argv[2], -1, LONG_MAX, &count,
                                               "count should be greater than or equal to -1") != C_OK)
                 return;
 
@@ -219,7 +219,7 @@ static int commandlogGetTypeOrReply(client *c, robj *o) {
  * command log. */
 void commandlogCommand(client *c) {
     int type;
-    if (c->argc == 2 && !strcasecmp(c->argv[1]->ptr, "help")) {
+    if (c->io_data->argc == 2 && !strcasecmp(c->io_data->argv[1]->ptr, "help")) {
         const char *help[] = {
             "GET <count> <type>",
             "    Return top <count> entries of the specified <type> from the commandlog (-1 mean all).",
@@ -237,22 +237,22 @@ void commandlogCommand(client *c) {
             NULL,
         };
         addReplyHelp(c, help);
-    } else if (c->argc == 3 && !strcasecmp(c->argv[1]->ptr, "reset")) {
-        if ((type = commandlogGetTypeOrReply(c, c->argv[2])) == -1) return;
+    } else if (c->io_data->argc == 3 && !strcasecmp(c->io_data->argv[1]->ptr, "reset")) {
+        if ((type = commandlogGetTypeOrReply(c, c->io_data->argv[2])) == -1) return;
         commandlogReset(type);
         addReply(c, shared.ok);
-    } else if (c->argc == 3 && !strcasecmp(c->argv[1]->ptr, "len")) {
-        if ((type = commandlogGetTypeOrReply(c, c->argv[2])) == -1) return;
+    } else if (c->io_data->argc == 3 && !strcasecmp(c->io_data->argv[1]->ptr, "len")) {
+        if ((type = commandlogGetTypeOrReply(c, c->io_data->argv[2])) == -1) return;
         addReplyLongLong(c, listLength(server.commandlog[type].entries));
-    } else if (c->argc == 4 && !strcasecmp(c->argv[1]->ptr, "get")) {
+    } else if (c->io_data->argc == 4 && !strcasecmp(c->io_data->argv[1]->ptr, "get")) {
         long count;
 
         /* Consume count arg. */
-        if (getRangeLongFromObjectOrReply(c, c->argv[2], -1, LONG_MAX, &count,
+        if (getRangeLongFromObjectOrReply(c, c->io_data->argv[2], -1, LONG_MAX, &count,
                                           "count should be greater than or equal to -1") != C_OK)
             return;
 
-        if ((type = commandlogGetTypeOrReply(c, c->argv[3])) == -1) return;
+        if ((type = commandlogGetTypeOrReply(c, c->io_data->argv[3])) == -1) return;
 
         if (count == -1) {
             /* We treat -1 as a special value, which means to get all command logs.

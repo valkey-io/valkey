@@ -548,8 +548,8 @@ int parseExtendedExpireArgumentsOrReply(client *c, int *flags) {
     int nx = 0, xx = 0, gt = 0, lt = 0;
 
     int j = 3;
-    while (j < c->argc) {
-        char *opt = c->argv[j]->ptr;
+    while (j < c->io_data->argc) {
+        char *opt = c->io_data->argv[j]->ptr;
         if (!strcasecmp(opt, "nx")) {
             *flags |= EXPIRE_NX;
             nx = 1;
@@ -596,7 +596,7 @@ int parseExtendedExpireArgumentsOrReply(client *c, int *flags) {
  *
  * Additional flags are supported and parsed via parseExtendedExpireArguments */
 void expireGenericCommand(client *c, long long basetime, int unit) {
-    robj *key = c->argv[1], *param = c->argv[2];
+    robj *key = c->io_data->argv[1], *param = c->io_data->argv[2];
     long long when; /* unix time in milliseconds when the key will expire. */
     long long current_expire = -1;
     int flag = 0;
@@ -727,14 +727,14 @@ void ttlGenericCommand(client *c, int output_ms, int output_abs) {
     long long expire, ttl = -1;
 
     /* If the key does not exist at all, return -2 */
-    if (lookupKeyReadWithFlags(c->db, c->argv[1], LOOKUP_NOTOUCH) == NULL) {
+    if (lookupKeyReadWithFlags(c->db, c->io_data->argv[1], LOOKUP_NOTOUCH) == NULL) {
         addReplyLongLong(c, -2);
         return;
     }
 
     /* The key exists. Return -1 if it has no expire, or the actual
      * TTL value otherwise. */
-    expire = getExpire(c->db, c->argv[1]);
+    expire = getExpire(c->db, c->io_data->argv[1]);
     if (expire != -1) {
         ttl = output_abs ? expire : expire - commandTimeSnapshot();
         if (ttl < 0) ttl = 0;
@@ -768,10 +768,10 @@ void pexpiretimeCommand(client *c) {
 
 /* PERSIST key */
 void persistCommand(client *c) {
-    if (lookupKeyWrite(c->db, c->argv[1])) {
-        if (removeExpire(c->db, c->argv[1])) {
-            signalModifiedKey(c, c->db, c->argv[1]);
-            notifyKeyspaceEvent(NOTIFY_GENERIC, "persist", c->argv[1], c->db->id);
+    if (lookupKeyWrite(c->db, c->io_data->argv[1])) {
+        if (removeExpire(c->db, c->io_data->argv[1])) {
+            signalModifiedKey(c, c->db, c->io_data->argv[1]);
+            notifyKeyspaceEvent(NOTIFY_GENERIC, "persist", c->io_data->argv[1], c->db->id);
             addReply(c, shared.cone);
             server.dirty++;
         } else {
@@ -785,7 +785,7 @@ void persistCommand(client *c) {
 /* TOUCH key1 [key2 key3 ... keyN] */
 void touchCommand(client *c) {
     int touched = 0;
-    for (int j = 1; j < c->argc; j++)
-        if (lookupKeyRead(c->db, c->argv[j]) != NULL) touched++;
+    for (int j = 1; j < c->io_data->argc; j++)
+        if (lookupKeyRead(c->db, c->io_data->argv[j]) != NULL) touched++;
     addReplyLongLong(c, touched);
 }

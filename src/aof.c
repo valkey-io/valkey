@@ -1370,9 +1370,9 @@ struct client *createAOFClient(void) {
      * background processing there is a chance that the
      * command execution order will be violated.
      */
-    c->raw_flag = 0;
-    c->flag.deny_blocking = 1;
-    c->flag.fake = 1;
+    c->io_data->raw_flag = 0;
+    c->io_data->flag.deny_blocking = 1;
+    c->io_data->flag.fake = 1;
 
     /* We set the fake client as a replica waiting for the synchronization
      * so that the server will not try to send replies to this client. */
@@ -1496,15 +1496,15 @@ int loadSingleAppendOnlyFile(char *filename) {
         /* Load the next command in the AOF as our fake client
          * argv. */
         argv = zmalloc(sizeof(robj *) * argc);
-        fakeClient->argc = argc;
-        fakeClient->argv = argv;
-        fakeClient->argv_len = argc;
+        fakeClient->io_data->argc = argc;
+        fakeClient->io_data->argv = argv;
+        fakeClient->io_data->argv_len = argc;
 
         for (j = 0; j < argc; j++) {
             /* Parse the argument len. */
             char *readres = fgets(buf, sizeof(buf), fp);
             if (readres == NULL || buf[0] != '$') {
-                fakeClient->argc = j; /* Free up to j-1. */
+                fakeClient->io_data->argc = j; /* Free up to j-1. */
                 freeClientArgv(fakeClient);
                 if (readres == NULL)
                     goto readerr;
@@ -1517,7 +1517,7 @@ int loadSingleAppendOnlyFile(char *filename) {
             argsds = sdsnewlen(SDS_NOINIT, len);
             if (len && fread(argsds, len, 1, fp) == 0) {
                 sdsfree(argsds);
-                fakeClient->argc = j; /* Free up to j-1. */
+                fakeClient->io_data->argc = j; /* Free up to j-1. */
                 freeClientArgv(fakeClient);
                 goto readerr;
             }
@@ -1525,7 +1525,7 @@ int loadSingleAppendOnlyFile(char *filename) {
 
             /* Discard CRLF. */
             if (fread(buf, 2, 1, fp) == 0) {
-                fakeClient->argc = j + 1; /* Free up to j. */
+                fakeClient->io_data->argc = j + 1; /* Free up to j. */
                 freeClientArgv(fakeClient);
                 goto readerr;
             }
@@ -1545,7 +1545,7 @@ int loadSingleAppendOnlyFile(char *filename) {
         if (cmd->proc == multiCommand) valid_before_multi = valid_up_to;
 
         /* Run the command in the context of a fake client */
-        if (fakeClient->flag.multi && fakeClient->cmd->proc != execCommand) {
+        if (fakeClient->io_data->flag.multi && fakeClient->cmd->proc != execCommand) {
             /* Note: we don't have to attempt calling evalGetCommandFlags,
              * since this is AOF, the checks in processCommand are not made
              * anyway.*/
@@ -1558,7 +1558,7 @@ int loadSingleAppendOnlyFile(char *filename) {
         serverAssert(fakeClient->bufpos == 0 && listLength(fakeClient->reply) == 0);
 
         /* The fake client should never get blocked */
-        serverAssert(fakeClient->flag.blocked == 0);
+        serverAssert(fakeClient->io_data->flag.blocked == 0);
 
         /* Clean up. Command code may have changed argv/argc so we use the
          * argv/argc of the client instead of the local variables. */
@@ -1571,7 +1571,7 @@ int loadSingleAppendOnlyFile(char *filename) {
      * If the client is in the middle of a MULTI/EXEC, handle it as it was
      * a short read, even if technically the protocol is correct: we want
      * to remove the unprocessed tail and continue. */
-    if (fakeClient->flag.multi) {
+    if (fakeClient->io_data->flag.multi) {
         serverLog(LL_WARNING, "Revert incomplete MULTI/EXEC transaction in AOF file %s", filename);
         valid_up_to = valid_before_multi;
         goto uxeof;

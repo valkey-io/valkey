@@ -143,11 +143,11 @@ void lolwut5Command(client *c) {
     long squares_per_col = 12;
 
     /* Parse the optional arguments if any. */
-    if (c->argc > 1 && getLongFromObjectOrReply(c, c->argv[1], &cols, NULL) != C_OK) return;
+    if (c->io_data->argc > 1 && getLongFromObjectOrReply(c, c->io_data->argv[1], &cols, NULL) != C_OK) return;
 
-    if (c->argc > 2 && getLongFromObjectOrReply(c, c->argv[2], &squares_per_row, NULL) != C_OK) return;
+    if (c->io_data->argc > 2 && getLongFromObjectOrReply(c, c->io_data->argv[2], &squares_per_row, NULL) != C_OK) return;
 
-    if (c->argc > 3 && getLongFromObjectOrReply(c, c->argv[3], &squares_per_col, NULL) != C_OK) return;
+    if (c->io_data->argc > 3 && getLongFromObjectOrReply(c, c->io_data->argv[3], &squares_per_col, NULL) != C_OK) return;
 
     /* Limits. We want LOLWUT to be always reasonably fast and cheap to execute
      * so we have maximum number of columns, rows, and output resolution. */

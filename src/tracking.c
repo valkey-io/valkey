@@ -67,7 +67,7 @@ typedef struct bcastState {
 void disableTracking(client *c) {
     /* If this client is in broadcasting mode, we need to unsubscribe it
      * from all the prefixes it is registered to. */
-    if (c->flag.tracking_bcast) {
+    if (c->io_data->flag.tracking_bcast) {
         raxIterator ri;
         raxStart(&ri, c->pubsub_data->client_tracking_prefixes);
         raxSeek(&ri, "^", NULL, 0);
@@ -92,15 +92,15 @@ void disableTracking(client *c) {
     }
 
     /* Clear flags and adjust the count. */
-    if (c->flag.tracking) {
+    if (c->io_data->flag.tracking) {
         server.tracking_clients--;
-        c->flag.tracking = 0;
-        c->flag.tracking_broken_redir = 0;
-        c->flag.tracking_bcast = 0;
-        c->flag.tracking_optin = 0;
-        c->flag.tracking_optout = 0;
-        c->flag.tracking_caching = 0;
-        c->flag.tracking_noloop = 0;
+        c->io_data->flag.tracking = 0;
+        c->io_data->flag.tracking_broken_redir = 0;
+        c->io_data->flag.tracking_bcast = 0;
+        c->io_data->flag.tracking_optin = 0;
+        c->io_data->flag.tracking_optout = 0;
+        c->io_data->flag.tracking_caching = 0;
+        c->io_data->flag.tracking_noloop = 0;
     }
 }
 
@@ -179,13 +179,13 @@ void enableBcastTrackingForPrefix(client *c, char *prefix, size_t plen) {
  * inform it of the condition. Multiple clients can redirect the invalidation
  * messages to the same client ID. */
 void enableTracking(client *c, uint64_t redirect_to, struct ClientFlags options, robj **prefix, size_t numprefix) {
-    if (!c->flag.tracking) server.tracking_clients++;
-    c->flag.tracking = 1;
-    c->flag.tracking_broken_redir = 0;
-    c->flag.tracking_bcast = 0;
-    c->flag.tracking_optin = 0;
-    c->flag.tracking_optout = 0;
-    c->flag.tracking_noloop = 0;
+    if (!c->io_data->flag.tracking) server.tracking_clients++;
+    c->io_data->flag.tracking = 1;
+    c->io_data->flag.tracking_broken_redir = 0;
+    c->io_data->flag.tracking_bcast = 0;
+    c->io_data->flag.tracking_optin = 0;
+    c->io_data->flag.tracking_optout = 0;
+    c->io_data->flag.tracking_noloop = 0;
     initClientPubSubData(c);
     c->pubsub_data->client_tracking_redirection = redirect_to;
 
@@ -199,7 +199,7 @@ void enableTracking(client *c, uint64_t redirect_to, struct ClientFlags options,
 
     /* For broadcasting, set the list of prefixes in the client. */
     if (options.tracking_bcast) {
-        c->flag.tracking_bcast = 1;
+        c->io_data->flag.tracking_bcast = 1;
         if (numprefix == 0) enableBcastTrackingForPrefix(c, "", 0);
         for (size_t j = 0; j < numprefix; j++) {
             sds sdsprefix = prefix[j]->ptr;
@@ -208,9 +208,9 @@ void enableTracking(client *c, uint64_t redirect_to, struct ClientFlags options,
     }
 
     /* Set the remaining flags that don't need any special handling. */
-    c->flag.tracking_optin = options.tracking_optin;
-    c->flag.tracking_optout = options.tracking_optout;
-    c->flag.tracking_noloop = options.tracking_noloop;
+    c->io_data->flag.tracking_optin = options.tracking_optin;
+    c->io_data->flag.tracking_optout = options.tracking_optout;
+    c->io_data->flag.tracking_noloop = options.tracking_noloop;
 }
 
 /* This function is called after the execution of a readonly command in the
@@ -222,14 +222,14 @@ void enableTracking(client *c, uint64_t redirect_to, struct ClientFlags options,
 void trackingRememberKeys(client *tracking, client *executing) {
     /* Return if we are in optin/out mode and the right CACHING command
      * was/wasn't given in order to modify the default behavior. */
-    uint64_t optin = tracking->flag.tracking_optin;
-    uint64_t optout = tracking->flag.tracking_optout;
-    uint64_t caching_given = tracking->flag.tracking_caching;
+    uint64_t optin = tracking->io_data->flag.tracking_optin;
+    uint64_t optout = tracking->io_data->flag.tracking_optout;
+    uint64_t caching_given = tracking->io_data->flag.tracking_caching;
     if ((optin && !caching_given) || (optout && caching_given)) return;
 
     getKeysResult result;
     initGetKeysResult(&result);
-    int numkeys = getKeysFromCommand(executing->cmd, executing->argv, executing->argc, &result);
+    int numkeys = getKeysFromCommand(executing->cmd, executing->io_data->argv, executing->io_data->argc, &result);
     if (!numkeys) {
         getKeysFreeResult(&result);
         return;
@@ -245,7 +245,7 @@ void trackingRememberKeys(client *tracking, client *executing) {
 
     for (int j = 0; j < numkeys; j++) {
         int idx = keys[j].pos;
-        sds sdskey = executing->argv[idx]->ptr;
+        sds sdskey = executing->io_data->argv[idx]->ptr;
         void *result;
         rax *ids;
         if (!raxFind(TrackingTable, (unsigned char *)sdskey, sdslen(sdskey), &result)) {
@@ -274,14 +274,14 @@ void trackingRememberKeys(client *tracking, client *executing) {
  * - Following a flush command, to send a single RESP NULL to indicate
  *   that all keys are now invalid. */
 void sendTrackingMessage(client *c, char *keyname, size_t keylen, int proto) {
-    struct ClientFlags old_flags = c->flag;
-    c->flag.pushing = 1;
+    struct ClientFlags old_flags = c->io_data->flag;
+    c->io_data->flag.pushing = 1;
 
     int using_redirection = 0;
     if (c->pubsub_data->client_tracking_redirection) {
         client *redir = lookupClientByID(c->pubsub_data->client_tracking_redirection);
-        if (!redir || redir->flag.close_after_reply || redir->flag.close_asap) {
-            c->flag.tracking_broken_redir = 1;
+        if (!redir || redir->io_data->flag.close_after_reply || redir->io_data->flag.close_asap) {
+            c->io_data->flag.tracking_broken_redir = 1;
             /* We need to signal to the original connection that we
              * are unable to send invalidation messages to the redirected
              * connection, because the client no longer exist. */
@@ -290,14 +290,14 @@ void sendTrackingMessage(client *c, char *keyname, size_t keylen, int proto) {
                 addReplyBulkCBuffer(c, "tracking-redir-broken", 21);
                 addReplyLongLong(c, c->pubsub_data->client_tracking_redirection);
             }
-            if (!old_flags.pushing) c->flag.pushing = 0;
+            if (!old_flags.pushing) c->io_data->flag.pushing = 0;
             return;
         }
-        if (!old_flags.pushing) c->flag.pushing = 0;
+        if (!old_flags.pushing) c->io_data->flag.pushing = 0;
         c = redir;
         using_redirection = 1;
-        old_flags = c->flag;
-        c->flag.pushing = 1;
+        old_flags = c->io_data->flag;
+        c->io_data->flag.pushing = 1;
     }
 
     /* Only send such info for clients in RESP version 3 or more. However
@@ -307,7 +307,7 @@ void sendTrackingMessage(client *c, char *keyname, size_t keylen, int proto) {
     if (c->resp > 2) {
         addReplyPushLen(c, 2);
         addReplyBulkCBuffer(c, "invalidate", 10);
-    } else if (using_redirection && c->flag.pubsub) {
+    } else if (using_redirection && c->io_data->flag.pubsub) {
         /* We use a static object to speedup things, however we assume
          * that addReplyPubsubMessage() will not take a reference. */
         addReplyPubsubMessage(c, TrackingChannelName, NULL, shared.messagebulk);
@@ -316,7 +316,7 @@ void sendTrackingMessage(client *c, char *keyname, size_t keylen, int proto) {
          * redirecting to another client. We can't send anything to
          * it since RESP2 does not support push messages in the same
          * connection. */
-        if (!old_flags.pushing) c->flag.pushing = 0;
+        if (!old_flags.pushing) c->io_data->flag.pushing = 0;
         return;
     }
 
@@ -328,7 +328,7 @@ void sendTrackingMessage(client *c, char *keyname, size_t keylen, int proto) {
         addReplyBulkCBuffer(c, keyname, keylen);
     }
     updateClientMemUsageAndBucket(c);
-    if (!old_flags.pushing) c->flag.pushing = 0;
+    if (!old_flags.pushing) c->io_data->flag.pushing = 0;
 }
 
 /* This function is called when a key is modified in the server and in the case
@@ -394,20 +394,20 @@ void trackingInvalidateKey(client *c, robj *keyobj, int bcast) {
          * previously the client was not in BCAST mode. This can happen if
          * TRACKING is enabled normally, and then the client switches to
          * BCAST mode. */
-        if (target == NULL || !(target->flag.tracking) || target->flag.tracking_bcast) {
+        if (target == NULL || !(target->io_data->flag.tracking) || target->io_data->flag.tracking_bcast) {
             continue;
         }
 
         /* If the client enabled the NOLOOP mode, don't send notifications
          * about keys changed by the client itself. */
-        if (target->flag.tracking_noloop && target == server.current_client) {
+        if (target->io_data->flag.tracking_noloop && target == server.current_client) {
             continue;
         }
 
         /* If target is current client and it's executing a command, we need schedule key invalidation.
          * As the invalidation messages may be interleaved with command
          * response and should after command response. */
-        if (target == server.current_client && (server.current_client->flag.executing_command)) {
+        if (target == server.current_client && (server.current_client->io_data->flag.executing_command)) {
             incrRefCount(keyobj);
             listAddNodeTail(server.tracking_pending_keys, keyobj);
         } else {
@@ -474,7 +474,7 @@ void trackingInvalidateKeysOnFlush(int async) {
         listRewind(server.clients, &li);
         while ((ln = listNext(&li)) != NULL) {
             client *c = listNodeValue(ln);
-            if (c->flag.tracking) {
+            if (c->io_data->flag.tracking) {
                 if (c == server.current_client) {
                     /* We use a special NULL to indicate that we should send null */
                     listAddNodeTail(server.tracking_pending_keys, NULL);
@@ -621,7 +621,7 @@ void trackingBroadcastInvalidationMessages(void) {
             while (raxNext(&ri2)) {
                 client *c;
                 memcpy(&c, ri2.key, sizeof(c));
-                if (c->flag.tracking_noloop) {
+                if (c->io_data->flag.tracking_noloop) {
                     /* This client may have certain keys excluded. */
                     sds adhoc = trackingBuildBroadcastReply(c, bs->keys);
                     if (adhoc) {

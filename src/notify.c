@@ -113,8 +113,8 @@ void notifyKeyspaceEvent(int type, char *event, robj *key, int dbid) {
                       c == NULL ||
                       c->cmd == NULL ||
                       (c->cmd->flags & CMD_WRITE) == 0 ||
-                      c->flag.buffered_reply == 0 ||
-                      c->flag.keyspace_notified == 1 ||
+                      c->io_data->flag.buffered_reply == 0 ||
+                      c->io_data->flag.keyspace_notified == 1 ||
                       c->id == UINT64_MAX || // AOF client
                       getClientType(c) != CLIENT_TYPE_NORMAL);
     /* If any modules are interested in events, notify the module system now.
@@ -123,7 +123,7 @@ void notifyKeyspaceEvent(int type, char *event, robj *key, int dbid) {
      * they are interested in. */
     moduleNotifyKeyspaceEvent(type, event, key, dbid);
     if (c) {
-        c->flag.keyspace_notified = 1;
+        c->io_data->flag.keyspace_notified = 1;
         commitDeferredReplyBuffer(c, 1);
     }
 

@@ -149,15 +149,15 @@ void drainIOThreadsQueue(void) {
 /* Wait until the IO-thread is done with the client */
 void waitForClientIO(client *c) {
     /* No need to wait if the client was not offloaded to the IO thread. */
-    if (c->io_read_state == CLIENT_IDLE && c->io_write_state == CLIENT_IDLE) return;
+    if (c->io_data->io_read_state == CLIENT_IDLE && c->io_data->io_write_state == CLIENT_IDLE) return;
 
     /* Wait for read operation to complete if pending. */
-    while (c->io_read_state == CLIENT_PENDING_IO) {
+    while (c->io_data->io_read_state == CLIENT_PENDING_IO) {
         atomic_thread_fence(memory_order_acquire);
     }
 
     /* Wait for write operation to complete if pending. */
-    while (c->io_write_state == CLIENT_PENDING_IO) {
+    while (c->io_data->io_write_state == CLIENT_PENDING_IO) {
         atomic_thread_fence(memory_order_acquire);
     }
 
@@ -320,14 +320,14 @@ void initIOThreads(void) {
 int trySendReadToIOThreads(client *c) {
     if (server.active_io_threads_num <= 1) return C_ERR;
     /* If IO thread is already reading, return C_OK to make sure the main thread will not handle it. */
-    if (c->io_read_state != CLIENT_IDLE) return C_OK;
+    if (c->io_data->io_read_state != CLIENT_IDLE) return C_OK;
     /* For simplicity, don't offload replica clients reads as read traffic from replica is negligible */
     if (getClientType(c) == CLIENT_TYPE_REPLICA) return C_ERR;
     /* With Lua debug client we may call connWrite directly in the main thread */
-    if (c->flag.lua_debug) return C_ERR;
+    if (c->io_data->flag.lua_debug) return C_ERR;
     /* For simplicity let the main-thread handle the blocked clients */
-    if (c->flag.blocked || c->flag.unblocked) return C_ERR;
-    if (c->flag.close_asap) return C_ERR;
+    if (c->io_data->flag.blocked || c->io_data->flag.unblocked) return C_ERR;
+    if (c->io_data->flag.close_asap) return C_ERR;
     size_t tid = (c->id % (server.active_io_threads_num - 1)) + 1;
 
     /* Handle case where client has a pending IO write job on a different thread:
@@ -337,20 +337,20 @@ int trySendReadToIOThreads(client *c) {
      * This situation can occur if active_io_threads_num increased since the
      * original job assignment. In this case, we keep the job on its current
      * thread to ensure the same thread handles the client's I/O operations. */
-    if (c->io_write_state == CLIENT_PENDING_IO && c->cur_tid != (uint8_t)tid) tid = c->cur_tid;
+    if (c->io_data->io_write_state == CLIENT_PENDING_IO && c->cur_tid != (uint8_t)tid) tid = c->cur_tid;
 
     IOJobQueue *jq = &io_jobs[tid];
     if (IOJobQueue_isFull(jq)) return C_ERR;
 
     c->cur_tid = tid;
-    c->read_flags = canParseCommand(c) ? 0 : READ_FLAGS_DONT_PARSE;
-    c->read_flags |= authRequired(c) ? READ_FLAGS_AUTH_REQUIRED : 0;
-    c->read_flags |= c->flag.primary ? READ_FLAGS_PRIMARY : 0;
+    c->io_data->read_flags = canParseCommand(c) ? 0 : READ_FLAGS_DONT_PARSE;
+    c->io_data->read_flags |= authRequired(c) ? READ_FLAGS_AUTH_REQUIRED : 0;
+    c->io_data->read_flags |= c->io_data->flag.primary ? READ_FLAGS_PRIMARY : 0;
 
-    c->io_read_state = CLIENT_PENDING_IO;
-    connSetPostponeUpdateState(c->conn, 1);
-    IOJobQueue_push(jq, ioThreadReadQueryFromClient, c);
-    c->flag.pending_read = 1;
+    c->io_data->io_read_state = CLIENT_PENDING_IO;
+    connSetPostponeUpdateState(c->io_data->conn, 1);
+    IOJobQueue_push(jq, ioThreadReadQueryFromClient, c->io_data);
+    c->io_data->flag.pending_read = 1;
     listLinkNodeTail(server.clients_pending_io_read, &c->pending_read_list_node);
     return C_OK;
 }
@@ -361,13 +361,13 @@ int trySendReadToIOThreads(client *c) {
 int trySendWriteToIOThreads(client *c) {
     if (server.active_io_threads_num <= 1) return C_ERR;
     /* The I/O thread is already writing for this client. */
-    if (c->io_write_state != CLIENT_IDLE) return C_OK;
+    if (c->io_data->io_write_state != CLIENT_IDLE) return C_OK;
     /* Nothing to write */
     if (!clientHasPendingReplies(c)) return C_ERR;
     /* For simplicity, avoid offloading non-online replicas */
     if (getClientType(c) == CLIENT_TYPE_REPLICA && c->repl_data->repl_state != REPLICA_STATE_ONLINE) return C_ERR;
     /* We can't offload debugged clients as the main-thread may read at the same time  */
-    if (c->flag.lua_debug) return C_ERR;
+    if (c->io_data->flag.lua_debug) return C_ERR;
 
     size_t tid = (c->id % (server.active_io_threads_num - 1)) + 1;
     /* Handle case where client has a pending IO read job on a different thread:
@@ -377,45 +377,45 @@ int trySendWriteToIOThreads(client *c) {
      * This situation can occur if active_io_threads_num increased since the
      * original job assignment. In this case, we keep the job on its current
      * thread to ensure the same thread handles the client's I/O operations. */
-    if (c->io_read_state == CLIENT_PENDING_IO && c->cur_tid != (uint8_t)tid) tid = c->cur_tid;
+    if (c->io_data->io_read_state == CLIENT_PENDING_IO && c->cur_tid != (uint8_t)tid) tid = c->cur_tid;
 
     IOJobQueue *jq = &io_jobs[tid];
     if (IOJobQueue_isFull(jq)) return C_ERR;
 
     c->cur_tid = tid;
-    if (c->flag.pending_write) {
+    if (c->io_data->flag.pending_write) {
         /* We move the client to the io pending write queue */
         listUnlinkNode(server.clients_pending_write, &c->clients_pending_write_node);
     } else {
-        c->flag.pending_write = 1;
+        c->io_data->flag.pending_write = 1;
     }
     serverAssert(c->clients_pending_write_node.prev == NULL && c->clients_pending_write_node.next == NULL);
     listLinkNodeTail(server.clients_pending_io_write, &c->clients_pending_write_node);
 
     int is_replica = getClientType(c) == CLIENT_TYPE_REPLICA;
     if (is_replica) {
-        c->io_last_reply_block = listLast(server.repl_buffer_blocks);
-        replBufBlock *o = listNodeValue(c->io_last_reply_block);
-        c->io_last_bufpos = o->used;
+        c->io_data->io_last_reply_block = listLast(server.repl_buffer_blocks);
+        replBufBlock *o = listNodeValue(c->io_data->io_last_reply_block);
+        c->io_data->io_last_bufpos = o->used;
     } else {
         /* Save the last block of the reply list to io_last_reply_block and the used
          * position to io_last_bufpos. The I/O thread will write only up to
          * io_last_bufpos, regardless of the c->bufpos value. This is to prevent I/O
          * threads from reading data that might be invalid in their local CPU cache. */
-        c->io_last_reply_block = listLast(c->reply);
-        if (c->io_last_reply_block) {
-            c->io_last_bufpos = ((clientReplyBlock *)listNodeValue(c->io_last_reply_block))->used;
+        c->io_data->io_last_reply_block = listLast(c->reply);
+        if (c->io_data->io_last_reply_block) {
+            c->io_data->io_last_bufpos = ((clientReplyBlock *)listNodeValue(c->io_data->io_last_reply_block))->used;
         } else {
-            c->io_last_bufpos = (size_t)c->bufpos;
+            c->io_data->io_last_bufpos = (size_t)c->bufpos;
         }
     }
 
-    serverAssert(c->bufpos > 0 || c->io_last_bufpos > 0 || is_replica);
+    serverAssert(c->bufpos > 0 || c->io_data->io_last_bufpos > 0 || is_replica);
 
     /* The main-thread will update the client state after the I/O thread completes the write. */
-    connSetPostponeUpdateState(c->conn, 1);
-    c->write_flags = is_replica ? WRITE_FLAGS_IS_REPLICA : 0;
-    c->io_write_state = CLIENT_PENDING_IO;
+    connSetPostponeUpdateState(c->io_data->conn, 1);
+    c->io_data->write_flags = is_replica ? WRITE_FLAGS_IS_REPLICA : 0;
+    c->io_data->io_write_state = CLIENT_PENDING_IO;
 
     IOJobQueue_push(jq, ioThreadWriteToClient, c);
     return C_OK;
@@ -573,9 +573,9 @@ void trySendPollJobToIOThreads(void) {
 
 static void ioThreadAccept(void *data) {
     client *c = (client *)data;
-    connAccept(c->conn, NULL);
+    connAccept(c->io_data->conn, NULL);
     atomic_thread_fence(memory_order_release);
-    c->io_read_state = CLIENT_COMPLETED_IO;
+    c->io_data->io_read_state = CLIENT_COMPLETED_IO;
 }
 
 /*
@@ -599,7 +599,7 @@ int trySendAcceptToIOThreads(connection *conn) {
     }
 
     client *c = connGetPrivateData(conn);
-    if (c->io_read_state != CLIENT_IDLE) {
+    if (c->io_data->io_read_state != CLIENT_IDLE) {
         return C_OK;
     }
 
@@ -614,10 +614,10 @@ int trySendAcceptToIOThreads(connection *conn) {
         return C_ERR;
     }
 
-    c->io_read_state = CLIENT_PENDING_IO;
-    c->flag.pending_read = 1;
+    c->io_data->io_read_state = CLIENT_PENDING_IO;
+    c->io_data->flag.pending_read = 1;
     listLinkNodeTail(server.clients_pending_io_read, &c->pending_read_list_node);
-    connSetPostponeUpdateState(c->conn, 1);
+    connSetPostponeUpdateState(c->io_data->conn, 1);
     server.stat_io_accept_offloaded++;
     IOJobQueue_push(job_queue, ioThreadAccept, c);
 

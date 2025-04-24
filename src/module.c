@@ -706,8 +706,8 @@ client *moduleAllocTempClient(void) {
         if (moduleTempClientCount < moduleTempClientMinCount) moduleTempClientMinCount = moduleTempClientCount;
     } else {
         c = createClient(NULL);
-        c->flag.module = 1;
-        c->flag.fake = 1;
+        c->io_data->flag.module = 1;
+        c->io_data->flag.fake = 1;
         c->user = NULL; /* Root user */
     }
     return c;
@@ -734,11 +734,11 @@ void moduleReleaseTempClient(client *c) {
     c->duration = 0;
     resetClient(c);
     c->bufpos = 0;
-    c->raw_flag = 0;
-    c->flag.module = 1;
-    c->flag.fake = 1;
+    c->io_data->raw_flag = 0;
+    c->io_data->flag.module = 1;
+    c->io_data->flag.fake = 1;
     c->user = NULL; /* Root user */
-    c->cmd = c->lastcmd = c->realcmd = c->io_parsed_cmd = NULL;
+    c->cmd = c->lastcmd = c->realcmd = c->io_data->io_parsed_cmd = NULL;
     if (c->bstate && c->bstate->async_rm_call_handle) {
         ValkeyModuleAsyncRMCallPromise *promise = c->bstate->async_rm_call_handle;
         promise->c = NULL; /* Remove the client from the promise so it will no longer be possible to abort it. */
@@ -958,7 +958,7 @@ void moduleCreateContext(ValkeyModuleCtx *out_ctx, ValkeyModule *module, int ctx
         out_ctx->client = moduleAllocTempClient();
     else if (ctx_flags & VALKEYMODULE_CTX_NEW_CLIENT) {
         out_ctx->client = createClient(NULL);
-        out_ctx->client->flag.fake = 1;
+        out_ctx->client->io_data->flag.fake = 1;
     }
 
     /* Calculate the initial yield time for long blocked contexts.
@@ -1003,7 +1003,7 @@ void ValkeyModuleCommandDispatcher(client *c) {
     moduleCreateContext(&ctx, cp->module, VALKEYMODULE_CTX_COMMAND);
 
     ctx.client = c;
-    cp->func(&ctx, (void **)c->argv, c->argc);
+    cp->func(&ctx, (void **)c->io_data->argv, c->io_data->argc);
     moduleFreeContext(&ctx);
 
     /* In some cases processMultibulkBuffer uses sdsMakeRoomFor to
@@ -1015,10 +1015,10 @@ void ValkeyModuleCommandDispatcher(client *c) {
      * server core this is not a problem because tryObjectEncoding() is called
      * before storing strings in the key space. Here we need to do it
      * for the module. */
-    for (int i = 0; i < c->argc; i++) {
+    for (int i = 0; i < c->io_data->argc; i++) {
         /* Only do the work if the module took ownership of the object:
          * in that case the refcount is no longer 1. */
-        if (c->argv[i]->refcount > 1) trimStringObjectIfNeeded(c->argv[i], 0);
+        if (c->io_data->argv[i]->refcount > 1) trimStringObjectIfNeeded(c->io_data->argv[i], 0);
     }
 }
 
@@ -3683,7 +3683,7 @@ int VM_Replicate(ValkeyModuleCtx *ctx, const char *cmdname, const char *fmt, ...
  *
  * The function always returns VALKEYMODULE_OK. */
 int VM_ReplicateVerbatim(ValkeyModuleCtx *ctx) {
-    alsoPropagate(ctx->client->db->id, ctx->client->argv, ctx->client->argc, PROPAGATE_AOF | PROPAGATE_REPL);
+    alsoPropagate(ctx->client->db->id, ctx->client->io_data->argv, ctx->client->io_data->argc, PROPAGATE_AOF | PROPAGATE_REPL);
     server.dirty++;
     return VALKEYMODULE_OK;
 }
@@ -3760,15 +3760,15 @@ int modulePopulateClientInfoStructure(void *ci, client *client, int structver) {
     ValkeyModuleClientInfoV1 *ci1 = ci;
     memset(ci1, 0, sizeof(*ci1));
     ci1->version = structver;
-    if (client->flag.multi) ci1->flags |= VALKEYMODULE_CLIENTINFO_FLAG_MULTI;
-    if (client->flag.pubsub) ci1->flags |= VALKEYMODULE_CLIENTINFO_FLAG_PUBSUB;
-    if (client->flag.unix_socket) ci1->flags |= VALKEYMODULE_CLIENTINFO_FLAG_UNIXSOCKET;
-    if (client->flag.tracking) ci1->flags |= VALKEYMODULE_CLIENTINFO_FLAG_TRACKING;
-    if (client->flag.blocked) ci1->flags |= VALKEYMODULE_CLIENTINFO_FLAG_BLOCKED;
-    if (client->conn->type == connectionTypeTls()) ci1->flags |= VALKEYMODULE_CLIENTINFO_FLAG_SSL;
+    if (client->io_data->flag.multi) ci1->flags |= VALKEYMODULE_CLIENTINFO_FLAG_MULTI;
+    if (client->io_data->flag.pubsub) ci1->flags |= VALKEYMODULE_CLIENTINFO_FLAG_PUBSUB;
+    if (client->io_data->flag.unix_socket) ci1->flags |= VALKEYMODULE_CLIENTINFO_FLAG_UNIXSOCKET;
+    if (client->io_data->flag.tracking) ci1->flags |= VALKEYMODULE_CLIENTINFO_FLAG_TRACKING;
+    if (client->io_data->flag.blocked) ci1->flags |= VALKEYMODULE_CLIENTINFO_FLAG_BLOCKED;
+    if (client->io_data->conn->type == connectionTypeTls()) ci1->flags |= VALKEYMODULE_CLIENTINFO_FLAG_SSL;
 
     int port;
-    connAddrPeerName(client->conn, ci1->addr, sizeof(ci1->addr), &port);
+    connAddrPeerName(client->io_data->conn, ci1->addr, sizeof(ci1->addr), &port);
     ci1->port = port;
     ci1->db = client->db->id;
     ci1->id = client->id;
@@ -3975,9 +3975,9 @@ int VM_GetContextFlags(ValkeyModuleCtx *ctx) {
     /* Client specific flags */
     if (ctx) {
         if (ctx->client) {
-            if (ctx->client->flag.deny_blocking) flags |= VALKEYMODULE_CTX_FLAGS_DENY_BLOCKING;
+            if (ctx->client->io_data->flag.deny_blocking) flags |= VALKEYMODULE_CTX_FLAGS_DENY_BLOCKING;
             /* Module command received from PRIMARY, is replicated. */
-            if (ctx->client->flag.primary) flags |= VALKEYMODULE_CTX_FLAGS_REPLICATED;
+            if (ctx->client->io_data->flag.primary) flags |= VALKEYMODULE_CTX_FLAGS_REPLICATED;
             if (ctx->client->resp == 3) {
                 flags |= VALKEYMODULE_CTX_FLAGS_RESP3;
             }
@@ -3985,7 +3985,7 @@ int VM_GetContextFlags(ValkeyModuleCtx *ctx) {
 
         /* For DIRTY flags, we need the blocked client if used */
         client *c = ctx->blocked_client ? ctx->blocked_client->client : ctx->client;
-        if (c && (c->flag.dirty_cas || c->flag.dirty_exec)) {
+        if (c && (c->io_data->flag.dirty_cas || c->io_data->flag.dirty_exec)) {
             flags |= VALKEYMODULE_CTX_FLAGS_MULTI_DIRTY;
         }
     }
@@ -6077,8 +6077,8 @@ void VM_CallReplyPromiseSetUnblockHandler(ValkeyModuleCallReply *reply,
 int VM_CallReplyPromiseAbort(ValkeyModuleCallReply *reply, void **private_data) {
     ValkeyModuleAsyncRMCallPromise *promise = callReplyGetPrivateData(reply);
     if (!promise->c)
-        return VALKEYMODULE_ERR;                              /* Promise can not be aborted, either already aborted or already finished. */
-    if (!(promise->c->flag.blocked)) return VALKEYMODULE_ERR; /* Client is not blocked anymore, can not abort it. */
+        return VALKEYMODULE_ERR;                                       /* Promise can not be aborted, either already aborted or already finished. */
+    if (!(promise->c->io_data->flag.blocked)) return VALKEYMODULE_ERR; /* Client is not blocked anymore, can not abort it. */
 
     /* Client is still blocked, remove it from any blocking state and release it. */
     if (private_data) *private_data = promise->private_data;
@@ -6349,13 +6349,13 @@ ValkeyModuleCallReply *VM_Call(ValkeyModuleCtx *ctx, const char *cmdname, const 
 
     if (!(flags & VALKEYMODULE_ARGV_ALLOW_BLOCK)) {
         /* We do not want to allow block, the module do not expect it */
-        c->flag.deny_blocking = 1;
+        c->io_data->flag.deny_blocking = 1;
     }
     c->db = ctx->client->db;
-    c->argv = argv;
+    c->io_data->argv = argv;
     /* We have to assign argv_len, which is equal to argc in that case (VM_Call)
      * because we may be calling a command that uses rewriteClientCommandArgument */
-    c->argc = c->argv_len = argc;
+    c->io_data->argc = c->io_data->argv_len = argc;
     c->resp = 2;
     if (flags & VALKEYMODULE_ARGV_RESP_3) {
         c->resp = 3;
@@ -6396,14 +6396,14 @@ ValkeyModuleCallReply *VM_Call(ValkeyModuleCtx *ctx, const char *cmdname, const 
     /* Lookup command now, after filters had a chance to make modifications
      * if necessary.
      */
-    c->cmd = c->lastcmd = c->realcmd = lookupCommand(c->argv, c->argc);
+    c->cmd = c->lastcmd = c->realcmd = lookupCommand(c->io_data->argv, c->io_data->argc);
     sds err;
     if (!commandCheckExistence(c, error_as_call_replies ? &err : NULL)) {
         errno = ENOENT;
         if (error_as_call_replies) reply = callReplyCreateError(err, ctx);
         goto cleanup;
     }
-    if (!commandCheckArity(c->cmd, c->argc, error_as_call_replies ? &err : NULL)) {
+    if (!commandCheckArity(c->cmd, c->io_data->argc, error_as_call_replies ? &err : NULL)) {
         errno = EINVAL;
         if (error_as_call_replies) reply = callReplyCreateError(err, ctx);
         goto cleanup;
@@ -6446,7 +6446,7 @@ ValkeyModuleCallReply *VM_Call(ValkeyModuleCtx *ctx, const char *cmdname, const 
         }
     } else {
         /* if we aren't OOM checking in VM_Call, we want further executions from this client to also not fail on OOM */
-        c->flag.allow_oom = 1;
+        c->io_data->flag.allow_oom = 1;
     }
 
     if (flags & VALKEYMODULE_ARGV_NO_WRITES) {
@@ -6522,13 +6522,13 @@ ValkeyModuleCallReply *VM_Call(ValkeyModuleCtx *ctx, const char *cmdname, const 
         int acl_errpos;
         int acl_retval;
 
-        acl_retval = ACLCheckAllUserCommandPerm(user, c->cmd, c->argv, c->argc, &acl_errpos);
+        acl_retval = ACLCheckAllUserCommandPerm(user, c->cmd, c->io_data->argv, c->io_data->argc, &acl_errpos);
         if (acl_retval != ACL_OK) {
-            sds object = (acl_retval == ACL_DENIED_CMD) ? sdsdup(c->cmd->fullname) : sdsdup(c->argv[acl_errpos]->ptr);
+            sds object = (acl_retval == ACL_DENIED_CMD) ? sdsdup(c->cmd->fullname) : sdsdup(c->io_data->argv[acl_errpos]->ptr);
             addACLLogEntry(ctx->client, acl_retval, ACL_LOG_CTX_MODULE, -1, c->user->name, object);
             if (error_as_call_replies) {
                 /* verbosity should be same as processCommand() in server.c */
-                sds acl_msg = getAclErrorMessage(acl_retval, c->user, c->cmd, c->argv[acl_errpos]->ptr, 0);
+                sds acl_msg = getAclErrorMessage(acl_retval, c->user, c->cmd, c->io_data->argv[acl_errpos]->ptr, 0);
                 sds msg = sdscatfmt(sdsempty(), "-NOPERM %S\r\n", acl_msg);
                 sdsfree(acl_msg);
                 reply = callReplyCreateError(msg, ctx);
@@ -6544,9 +6544,9 @@ ValkeyModuleCallReply *VM_Call(ValkeyModuleCtx *ctx, const char *cmdname, const 
     if (server.cluster_enabled && !mustObeyClient(ctx->client)) {
         int error_code;
         /* Duplicate relevant flags in the module client. */
-        c->flag.readonly = ctx->client->flag.readonly;
-        c->flag.asking = ctx->client->flag.asking;
-        if (getNodeByQuery(c, c->cmd, c->argv, c->argc, NULL, &error_code) != getMyClusterNode()) {
+        c->io_data->flag.readonly = ctx->client->io_data->flag.readonly;
+        c->io_data->flag.asking = ctx->client->io_data->flag.asking;
+        if (getNodeByQuery(c, c->cmd, c->io_data->argv, c->io_data->argc, NULL, &error_code) != getMyClusterNode()) {
             sds msg = NULL;
             if (error_code == CLUSTER_REDIR_DOWN_RO_STATE) {
                 if (error_as_call_replies) {
@@ -6596,7 +6596,7 @@ ValkeyModuleCallReply *VM_Call(ValkeyModuleCtx *ctx, const char *cmdname, const 
     call(c, call_flags);
     server.replication_allowed = prev_replication_allowed;
 
-    if (c->flag.blocked) {
+    if (c->io_data->flag.blocked) {
         serverAssert(flags & VALKEYMODULE_ARGV_ALLOW_BLOCK);
         serverAssert(ctx->module);
         ValkeyModuleAsyncRMCallPromise *promise = zmalloc(sizeof(ValkeyModuleAsyncRMCallPromise));
@@ -6614,11 +6614,11 @@ ValkeyModuleCallReply *VM_Call(ValkeyModuleCtx *ctx, const char *cmdname, const 
         c->bstate->async_rm_call_handle = promise;
         if (!(call_flags & CMD_CALL_PROPAGATE_AOF)) {
             /* No need for AOF propagation, set the relevant flags of the client */
-            c->flag.module_prevent_aof_prop = 1;
+            c->io_data->flag.module_prevent_aof_prop = 1;
         }
         if (!(call_flags & CMD_CALL_PROPAGATE_REPL)) {
             /* No need for replication propagation, set the relevant flags of the client */
-            c->flag.module_prevent_repl_prop = 1;
+            c->io_data->flag.module_prevent_repl_prop = 1;
         }
         c = NULL; /* Make sure not to free the client */
     } else {
@@ -7809,7 +7809,7 @@ ValkeyModuleBlockedClient *moduleBlockClient(ValkeyModuleCtx *ctx,
                                              void *privdata,
                                              int flags) {
     client *c = ctx->client;
-    if (c->flag.blocked || getClientType(c) != CLIENT_TYPE_NORMAL || c->flag.deny_blocking) {
+    if (c->io_data->flag.blocked || getClientType(c) != CLIENT_TYPE_NORMAL || c->io_data->flag.deny_blocking) {
         /* Early return if duplicate block attempt or client is not normal or
          * client is set to deny blocking. */
         errno = ENOTSUP;
@@ -7997,7 +7997,7 @@ int attemptNextAuthCb(client *c, robj *username, robj *password, robj **err) {
             continue;
         }
         /* Remove the module auth complete flag before we attempt the next cb. */
-        c->flag.module_auth_has_result = 0;
+        c->io_data->flag.module_auth_has_result = 0;
         ValkeyModuleCtx ctx;
         moduleCreateContext(&ctx, cur_auth_ctx->module, VALKEYMODULE_CTX_NONE);
         ctx.client = c;
@@ -8056,20 +8056,20 @@ int checkModuleAuthentication(client *c, robj *username, robj *password, robj **
     if (result == VALKEYMODULE_AUTH_NOT_HANDLED) {
         result = attemptNextAuthCb(c, username, password, err);
     }
-    if (c->flag.blocked) {
+    if (c->io_data->flag.blocked) {
         /* Modules are expected to return VALKEYMODULE_AUTH_HANDLED when blocking clients. */
         serverAssert(result == VALKEYMODULE_AUTH_HANDLED);
         return AUTH_BLOCKED;
     }
     if (c->module_data) c->module_data->module_auth_ctx = NULL;
     if (result == VALKEYMODULE_AUTH_NOT_HANDLED) {
-        c->flag.module_auth_has_result = 0;
+        c->io_data->flag.module_auth_has_result = 0;
         return AUTH_NOT_HANDLED;
     }
 
-    if (c->flag.module_auth_has_result) {
-        c->flag.module_auth_has_result = 0;
-        if (c->flag.authenticated) return AUTH_OK;
+    if (c->io_data->flag.module_auth_has_result) {
+        c->io_data->flag.module_auth_has_result = 0;
+        if (c->io_data->flag.authenticated) return AUTH_OK;
     }
     return AUTH_ERR;
 }
@@ -8096,7 +8096,7 @@ int moduleTryServeClientBlockedOnKey(client *c, robj *key) {
     ctx.blocked_privdata = bc->privdata;
     ctx.client = bc->client;
     ctx.blocked_client = bc;
-    if (bc->reply_callback(&ctx, (void **)c->argv, c->argc) == VALKEYMODULE_OK) served = 1;
+    if (bc->reply_callback(&ctx, (void **)c->io_data->argv, c->io_data->argc) == VALKEYMODULE_OK) served = 1;
     moduleFreeContext(&ctx);
     return served;
 }
@@ -8175,8 +8175,8 @@ ValkeyModuleBlockedClient *VM_BlockClientOnAuth(ValkeyModuleCtx *ctx,
     }
     ValkeyModuleBlockedClient *bc =
         moduleBlockClient(ctx, NULL, reply_callback, NULL, free_privdata, 0, NULL, 0, NULL, 0);
-    if (ctx->client->flag.blocked) {
-        ctx->client->flag.pending_command = 1;
+    if (ctx->client->io_data->flag.blocked) {
+        ctx->client->io_data->flag.pending_command = 1;
     }
     return bc;
 }
@@ -8431,7 +8431,7 @@ void moduleHandleBlockedClients(void) {
             ctx.blocked_client = bc;
             monotime replyTimer;
             elapsedStart(&replyTimer);
-            bc->reply_callback(&ctx, (void **)c->argv, c->argc);
+            bc->reply_callback(&ctx, (void **)c->io_data->argv, c->io_data->argc);
             reply_us = elapsedUs(replyTimer);
             moduleFreeContext(&ctx);
         }
@@ -8482,8 +8482,8 @@ void moduleHandleBlockedClients(void) {
             /* Put the client in the list of clients that need to write
              * if there are pending replies here. This is needed since
              * during a non blocking command the client may receive output. */
-            if (!clientHasModuleAuthInProgress(c) && clientHasPendingReplies(c) && !c->flag.pending_write && c->conn) {
-                c->flag.pending_write = 1;
+            if (!clientHasModuleAuthInProgress(c) && clientHasPendingReplies(c) && !c->io_data->flag.pending_write && c->io_data->conn) {
+                c->io_data->flag.pending_write = 1;
                 listLinkNodeHead(server.clients_pending_write, &c->clients_pending_write_node);
             }
         }
@@ -8545,7 +8545,7 @@ void moduleBlockedClientTimedOut(client *c, int from_module) {
     if (bc->timeout_callback) {
         /* In theory, the user should always pass the timeout handler as an
          * argument, but better to be safe than sorry. */
-        bc->timeout_callback(&ctx, (void **)c->argv, c->argc);
+        bc->timeout_callback(&ctx, (void **)c->io_data->argv, c->io_data->argc);
     }
 
     moduleFreeContext(&ctx);
@@ -9707,7 +9707,7 @@ void revokeClientAuthentication(client *c) {
     /* We will write replies to this client later, so we can't close it
      * directly even if async. */
     if (c == server.current_client) {
-        c->flag.close_after_command = 1;
+        c->io_data->flag.close_after_command = 1;
     } else {
         freeClientAsync(c);
     }
@@ -10025,7 +10025,7 @@ static int authenticateClientWithUser(ValkeyModuleCtx *ctx,
     }
 
     /* Avoid settings which are meaningless and will be lost */
-    if (!ctx->client || (ctx->client->flag.module)) {
+    if (!ctx->client || (ctx->client->io_data->flag.module)) {
         return VALKEYMODULE_ERR;
     }
 
@@ -10034,7 +10034,7 @@ static int authenticateClientWithUser(ValkeyModuleCtx *ctx,
     clientSetUser(ctx->client, user, 1);
 
     if (clientHasModuleAuthInProgress(ctx->client)) {
-        ctx->client->flag.module_auth_has_result = 1;
+        ctx->client->io_data->flag.module_auth_has_result = 1;
     }
 
     if (callback) {
@@ -10117,7 +10117,7 @@ int VM_DeauthenticateAndCloseClient(ValkeyModuleCtx *ctx, uint64_t client_id) {
  * was an invalid parameter passed in or the position is outside the client
  * argument range. */
 int VM_RedactClientCommandArgument(ValkeyModuleCtx *ctx, int pos) {
-    if (!ctx || !ctx->client || pos <= 0 || ctx->client->argc <= pos) {
+    if (!ctx || !ctx->client || pos <= 0 || ctx->client->io_data->argc <= pos) {
         return VALKEYMODULE_ERR;
     }
     redactClientCommandArgument(ctx->client, pos);
@@ -10140,7 +10140,7 @@ ValkeyModuleString *VM_GetClientCertificate(ValkeyModuleCtx *ctx, uint64_t clien
     client *c = lookupClientByID(client_id);
     if (c == NULL) return NULL;
 
-    sds cert = connGetPeerCert(c->conn);
+    sds cert = connGetPeerCert(c->io_data->conn);
     if (!cert) return NULL;
 
     ValkeyModuleString *s = createObject(OBJ_STRING, cert);
@@ -10918,9 +10918,9 @@ void moduleCallCommandFilters(client *c) {
     listNode *ln;
     listRewind(moduleCommandFilters, &li);
 
-    ValkeyModuleCommandFilterCtx filter = {.argv = c->argv, .argv_len = c->argv_len, .argc = c->argc, .c = c};
+    ValkeyModuleCommandFilterCtx filter = {.argv = c->io_data->argv, .argv_len = c->io_data->argv_len, .argc = c->io_data->argc, .c = c};
 
-    robj *tmp = c->argv[0];
+    robj *tmp = c->io_data->argv[0];
     incrRefCount(tmp);
     while ((ln = listNext(&li))) {
         ValkeyModuleCommandFilter *f = ln->value;
@@ -10934,13 +10934,13 @@ void moduleCallCommandFilters(client *c) {
         f->callback(&filter);
     }
 
-    c->argv = filter.argv;
-    c->argv_len = filter.argv_len;
-    c->argc = filter.argc;
-    if (tmp != c->argv[0]) {
-        /* With I/O thread command-lookup offload, we set c->io_parsed_cmd to the command corresponding to c->argv[0].
-         * Since the command filter just changed it, we need to reset c->io_parsed_cmd to null. */
-        c->io_parsed_cmd = NULL;
+    c->io_data->argv = filter.argv;
+    c->io_data->argv_len = filter.argv_len;
+    c->io_data->argc = filter.argc;
+    if (tmp != c->io_data->argv[0]) {
+        /* With I/O thread command-lookup offload, we set c->io_data->io_parsed_cmd to the command corresponding to c->io_data->argv[0].
+         * Since the command filter just changed it, we need to reset c->io_data->io_parsed_cmd to null. */
+        c->io_data->io_parsed_cmd = NULL;
     }
     decrRefCount(tmp);
 }
@@ -13338,9 +13338,9 @@ ValkeyModuleScriptingEngineExecutionState VM_GetFunctionExecutionState(
  * MODULE UNLOAD <name>
  */
 void moduleCommand(client *c) {
-    char *subcmd = c->argv[1]->ptr;
+    char *subcmd = c->io_data->argv[1]->ptr;
 
-    if (c->argc == 2 && !strcasecmp(subcmd, "help")) {
+    if (c->io_data->argc == 2 && !strcasecmp(subcmd, "help")) {
         const char *help[] = {
             "LIST",
             "    Return a list of loaded modules.",
@@ -13352,47 +13352,47 @@ void moduleCommand(client *c) {
             "    Unload a module.",
             NULL};
         addReplyHelp(c, help);
-    } else if (!strcasecmp(subcmd, "load") && c->argc >= 3) {
+    } else if (!strcasecmp(subcmd, "load") && c->io_data->argc >= 3) {
         robj **argv = NULL;
         int argc = 0;
 
-        if (c->argc > 3) {
-            argc = c->argc - 3;
-            argv = &c->argv[3];
+        if (c->io_data->argc > 3) {
+            argc = c->io_data->argc - 3;
+            argv = &c->io_data->argv[3];
         }
 
-        if (moduleLoad(c->argv[2]->ptr, (void **)argv, argc, 0) == C_OK)
+        if (moduleLoad(c->io_data->argv[2]->ptr, (void **)argv, argc, 0) == C_OK)
             addReply(c, shared.ok);
         else
             addReplyError(c, "Error loading the extension. Please check the server logs.");
-    } else if (!strcasecmp(subcmd, "loadex") && c->argc >= 3) {
+    } else if (!strcasecmp(subcmd, "loadex") && c->io_data->argc >= 3) {
         robj **argv = NULL;
         int argc = 0;
 
-        if (c->argc > 3) {
-            argc = c->argc - 3;
-            argv = &c->argv[3];
+        if (c->io_data->argc > 3) {
+            argc = c->io_data->argc - 3;
+            argv = &c->io_data->argv[3];
         }
         /* If this is a loadex command we want to populate server.module_configs_queue with
          * sds NAME VALUE pairs. We also want to increment argv to just after ARGS, if supplied. */
         if (parseLoadexArguments((ValkeyModuleString ***)&argv, &argc) == VALKEYMODULE_OK &&
-            moduleLoad(c->argv[2]->ptr, (void **)argv, argc, 1) == C_OK)
+            moduleLoad(c->io_data->argv[2]->ptr, (void **)argv, argc, 1) == C_OK)
             addReply(c, shared.ok);
         else {
             dictEmpty(server.module_configs_queue, NULL);
             addReplyError(c, "Error loading the extension. Please check the server logs.");
         }
 
-    } else if (!strcasecmp(subcmd, "unload") && c->argc == 3) {
+    } else if (!strcasecmp(subcmd, "unload") && c->io_data->argc == 3) {
         const char *errmsg = NULL;
-        if (moduleUnload(c->argv[2]->ptr, &errmsg) == C_OK)
+        if (moduleUnload(c->io_data->argv[2]->ptr, &errmsg) == C_OK)
             addReply(c, shared.ok);
         else {
             if (errmsg == NULL) errmsg = "operation not possible.";
             addReplyErrorFormat(c, "Error unloading module: %s", errmsg);
-            serverLog(LL_WARNING, "Error unloading module %s: %s", (sds)c->argv[2]->ptr, errmsg);
+            serverLog(LL_WARNING, "Error unloading module %s: %s", (sds)c->io_data->argv[2]->ptr, errmsg);
         }
-    } else if (!strcasecmp(subcmd, "list") && c->argc == 2) {
+    } else if (!strcasecmp(subcmd, "list") && c->io_data->argc == 2) {
         addReplyLoadedModules(c);
     } else {
         addReplySubcommandSyntaxError(c);

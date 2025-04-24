@@ -904,47 +904,47 @@ long long getInstantaneousMetric(int metric) {
  * The function always returns 0 as it never terminates the client. */
 int clientsCronResizeQueryBuffer(client *c) {
     /* If the client query buffer is NULL, it is using the shared query buffer and there is nothing to do. */
-    if (c->querybuf == NULL) return 0;
-    size_t querybuf_size = sdsalloc(c->querybuf);
+    if (c->io_data->querybuf == NULL) return 0;
+    size_t querybuf_size = sdsalloc(c->io_data->querybuf);
     time_t idletime = server.unixtime - c->last_interaction;
 
     /* Only resize the query buffer if the buffer is actually wasting at least a
      * few kbytes */
-    if (sdsavail(c->querybuf) > 1024 * 4) {
+    if (sdsavail(c->io_data->querybuf) > 1024 * 4) {
         /* There are two conditions to resize the query buffer: */
         if (idletime > 2) {
             /* 1) Query is idle for a long time. */
-            size_t remaining = sdslen(c->querybuf) - c->qb_pos;
-            if (!c->flag.primary && !remaining) {
+            size_t remaining = sdslen(c->io_data->querybuf) - c->io_data->qb_pos;
+            if (!c->io_data->flag.primary && !remaining) {
                 /* If the client is not a primary and no data is pending,
                  * The client can safely use the shared query buffer in the next read - free the client's querybuf. */
-                sdsfree(c->querybuf);
+                sdsfree(c->io_data->querybuf);
                 /* By setting the querybuf to NULL, the client will use the shared query buffer in the next read.
                  * We don't move the client to the shared query buffer immediately, because if we allocated a private
                  * query buffer for the client, it's likely that the client will use it again soon. */
-                c->querybuf = NULL;
+                c->io_data->querybuf = NULL;
             } else {
-                c->querybuf = sdsRemoveFreeSpace(c->querybuf, 1);
+                c->io_data->querybuf = sdsRemoveFreeSpace(c->io_data->querybuf, 1);
             }
-        } else if (querybuf_size > PROTO_RESIZE_THRESHOLD && querybuf_size / 2 > c->querybuf_peak) {
+        } else if (querybuf_size > PROTO_RESIZE_THRESHOLD && querybuf_size / 2 > c->io_data->querybuf_peak) {
             /* 2) Query buffer is too big for latest peak and is larger than
              *    resize threshold. Trim excess space but only up to a limit,
-             *    not below the recent peak and current c->querybuf (which will
+             *    not below the recent peak and current c->io_data->querybuf (which will
              *    be soon get used). If we're in the middle of a bulk then make
              *    sure not to resize to less than the bulk length. */
-            size_t resize = sdslen(c->querybuf);
-            if (resize < c->querybuf_peak) resize = c->querybuf_peak;
-            if (c->bulklen != -1 && resize < (size_t)c->bulklen + 2) resize = c->bulklen + 2;
-            c->querybuf = sdsResize(c->querybuf, resize, 1);
+            size_t resize = sdslen(c->io_data->querybuf);
+            if (resize < c->io_data->querybuf_peak) resize = c->io_data->querybuf_peak;
+            if (c->io_data->bulklen != -1 && resize < (size_t)c->io_data->bulklen + 2) resize = c->io_data->bulklen + 2;
+            c->io_data->querybuf = sdsResize(c->io_data->querybuf, resize, 1);
         }
     }
 
     /* Reset the peak again to capture the peak memory usage in the next
      * cycle. */
-    c->querybuf_peak = c->querybuf ? sdslen(c->querybuf) : 0;
+    c->io_data->querybuf_peak = c->io_data->querybuf ? sdslen(c->io_data->querybuf) : 0;
     /* We reset to either the current used, or currently processed bulk size,
      * which ever is bigger. */
-    if (c->bulklen != -1 && (size_t)c->bulklen + 2 > c->querybuf_peak) c->querybuf_peak = c->bulklen + 2;
+    if (c->io_data->bulklen != -1 && (size_t)c->io_data->bulklen + 2 > c->io_data->querybuf_peak) c->io_data->querybuf_peak = c->io_data->bulklen + 2;
     return 0;
 }
 
@@ -956,7 +956,7 @@ int clientsCronResizeQueryBuffer(client *c) {
  * The buffer peak will be reset back to the buffer position every server.reply_buffer_peak_reset_time milliseconds
  * The function always returns 0 as it never terminates the client. */
 int clientsCronResizeOutputBuffer(client *c, mstime_t now_ms) {
-    if (c->io_write_state != CLIENT_IDLE) return 0;
+    if (c->io_data->io_write_state != CLIENT_IDLE) return 0;
 
     size_t new_buffer_size = 0;
     char *oldbuf = NULL;
@@ -974,7 +974,7 @@ int clientsCronResizeOutputBuffer(client *c, mstime_t now_ms) {
         server.stat_reply_buffer_expands++;
     }
 
-    serverAssertWithInfo(c, NULL, (!new_buffer_size) || (new_buffer_size >= (size_t)c->bufpos));
+    serverAssertWithInfo(c->io_data, NULL, (!new_buffer_size) || (new_buffer_size >= (size_t)c->bufpos));
 
     /* reset the peak value each server.reply_buffer_peak_reset_time seconds. in case the client will be idle
      * it will start to shrink.
@@ -1012,9 +1012,9 @@ size_t ClientsPeakMemInput[CLIENTS_PEAK_MEM_USAGE_SLOTS] = {0};
 size_t ClientsPeakMemOutput[CLIENTS_PEAK_MEM_USAGE_SLOTS] = {0};
 
 int clientsCronTrackExpensiveClients(client *c, int time_idx) {
-    size_t qb_size = c->querybuf ? sdsAllocSize(c->querybuf) : 0;
-    size_t argv_size = c->argv ? zmalloc_size(c->argv) : 0;
-    size_t in_usage = qb_size + c->argv_len_sum + argv_size;
+    size_t qb_size = c->io_data->querybuf ? sdsAllocSize(c->io_data->querybuf) : 0;
+    size_t argv_size = c->io_data->argv ? zmalloc_size(c->io_data->argv) : 0;
+    size_t in_usage = qb_size + c->io_data->argv_len_sum + argv_size;
     size_t out_usage = getClientOutputBufferMemoryUsage(c);
 
     /* Track the biggest values observed so far in this slot. */
@@ -1056,7 +1056,7 @@ static inline clientMemUsageBucket *getMemUsageBucket(size_t mem) {
  * usage bucket.
  */
 void updateClientMemoryUsage(client *c) {
-    serverAssert(c->conn);
+    serverAssert(c->io_data->conn);
     size_t mem = getClientMemoryUsage(c, NULL);
     int type = getClientType(c);
     /* Now that we have the memory used by the client, remove the old
@@ -1069,10 +1069,10 @@ void updateClientMemoryUsage(client *c) {
 }
 
 int clientEvictionAllowed(client *c) {
-    if (server.maxmemory_clients == 0 || c->flag.no_evict || c->flag.fake) {
+    if (server.maxmemory_clients == 0 || c->io_data->flag.no_evict || c->io_data->flag.fake) {
         return 0;
     }
-    serverAssert(c->conn);
+    serverAssert(c->io_data->conn);
     int type = getClientType(c);
     return (type == CLIENT_TYPE_NORMAL || type == CLIENT_TYPE_PUBSUB);
 }
@@ -1189,7 +1189,7 @@ static void clientsCron(int clients_this_cycle) {
         head = listFirst(server.clients);
         c = listNodeValue(head);
         listRotateHeadToTail(server.clients);
-        if (c->io_read_state != CLIENT_IDLE || c->io_write_state != CLIENT_IDLE) continue;
+        if (c->io_data->io_read_state != CLIENT_IDLE || c->io_data->io_write_state != CLIENT_IDLE) continue;
 
         /* The following functions do different service checks on the client.
          * The protocol is that they return non-zero if the client was
@@ -3416,7 +3416,7 @@ struct serverCommand *lookupCommandOrOriginal(robj **argv, int argc) {
 
 /* Commands arriving from the primary client or AOF client, should never be rejected. */
 int mustObeyClient(client *c) {
-    return c->id == CLIENT_ID_AOF || c->flag.primary;
+    return c->id == CLIENT_ID_AOF || c->io_data->flag.primary;
 }
 
 static int shouldPropagate(int target) {
@@ -3508,25 +3508,25 @@ void alsoPropagate(int dbid, robj **argv, int argc, int target) {
  * specific command execution into AOF / Replication. */
 void forceCommandPropagation(client *c, int flags) {
     serverAssert(c->cmd->flags & (CMD_WRITE | CMD_MAY_REPLICATE));
-    if (flags & PROPAGATE_REPL) c->flag.force_repl = 1;
-    if (flags & PROPAGATE_AOF) c->flag.force_aof = 1;
+    if (flags & PROPAGATE_REPL) c->io_data->flag.force_repl = 1;
+    if (flags & PROPAGATE_AOF) c->io_data->flag.force_aof = 1;
 }
 
 /* Avoid that the executed command is propagated at all. This way we
  * are free to just propagate what we want using the alsoPropagate()
  * API. */
 void preventCommandPropagation(client *c) {
-    c->flag.prevent_prop = 1;
+    c->io_data->flag.prevent_prop = 1;
 }
 
 /* AOF specific version of preventCommandPropagation(). */
 void preventCommandAOF(client *c) {
-    c->flag.prevent_aof_prop = 1;
+    c->io_data->flag.prevent_aof_prop = 1;
 }
 
 /* Replication specific version of preventCommandPropagation(). */
 void preventCommandReplication(client *c) {
-    c->flag.prevent_repl_prop = 1;
+    c->io_data->flag.prevent_repl_prop = 1;
 }
 
 /* This function is called in order to update the total command histogram duration.
@@ -3675,7 +3675,7 @@ int incrCommandStatsOnError(struct serverCommand *cmd, int flags) {
  */
 void call(client *c, int flags) {
     long long dirty;
-    struct ClientFlags client_old_flags = c->flag;
+    struct ClientFlags client_old_flags = c->io_data->flag;
 
     struct serverCommand *real_cmd = c->realcmd;
     client *prev_client = server.executing_client;
@@ -3693,9 +3693,9 @@ void call(client *c, int flags) {
 
     /* Initialization: clear the flags that must be set by the command on
      * demand, and initialize the array for additional commands propagation. */
-    c->flag.force_aof = 0;
-    c->flag.force_repl = 0;
-    c->flag.prevent_prop = 0;
+    c->io_data->flag.force_aof = 0;
+    c->io_data->flag.force_repl = 0;
+    c->io_data->flag.prevent_prop = 0;
 
     /* The server core is in charge of propagation when the first entry point
      * of call() is processCommand().
@@ -3716,14 +3716,14 @@ void call(client *c, int flags) {
      * sending client side caching message in the middle of a command reply.
      * In case of blocking commands, the flag will be un-set only after successfully
      * re-processing and unblock the client.*/
-    c->flag.executing_command = 1;
+    c->io_data->flag.executing_command = 1;
 
-    c->flag.buffered_reply = 0;
-    c->flag.keyspace_notified = 0;
+    c->io_data->flag.buffered_reply = 0;
+    c->io_data->flag.keyspace_notified = 0;
     /* Setting the CLIENT_REPROCESSING_COMMAND flag so that during the actual
      * processing of the command proc, the client is aware that it is being
      * re-processed. */
-    if (reprocessing_command) c->flag.reprocessing_command = 1;
+    if (reprocessing_command) c->io_data->flag.reprocessing_command = 1;
 
     monotime monotonic_start = 0;
     if (monotonicGetType() == MONOTONIC_CLOCK_HW) monotonic_start = getMonotonicUs();
@@ -3731,13 +3731,13 @@ void call(client *c, int flags) {
     c->cmd->proc(c);
 
     /* Clear the CLIENT_REPROCESSING_COMMAND flag after the proc is executed. */
-    if (reprocessing_command) c->flag.reprocessing_command = 0;
+    if (reprocessing_command) c->io_data->flag.reprocessing_command = 0;
 
     exitExecutionUnit();
 
     /* In case client is blocked after trying to execute the command,
      * it means the execution is not yet completed and we MIGHT reprocess the command in the future. */
-    if (!c->flag.blocked) c->flag.executing_command = 0;
+    if (!c->io_data->flag.blocked) c->io_data->flag.executing_command = 0;
 
     /* In order to avoid performance implication due to querying the clock using a system call 3 times,
      * we use a monotonic clock, when we are sure its cost is very low, and fall back to non-monotonic call otherwise. */
@@ -3763,9 +3763,9 @@ void call(client *c, int flags) {
 
     /* After executing command, we will close the client after writing entire
      * reply if it is set 'CLIENT_CLOSE_AFTER_COMMAND' flag. */
-    if (c->flag.close_after_command) {
-        c->flag.close_after_command = 0;
-        c->flag.close_after_reply = 1;
+    if (c->io_data->flag.close_after_command) {
+        c->io_data->flag.close_after_command = 0;
+        c->io_data->flag.close_after_reply = 1;
     }
 
     /* Note: the code below uses the real command that was executed
@@ -3783,31 +3783,31 @@ void call(client *c, int flags) {
 
     /* Log the command into the commandlog if needed.
      * If the client is blocked we will handle commandlog when it is unblocked. */
-    if (update_command_stats && !c->flag.blocked) commandlogPushCurrentCommand(c, real_cmd);
+    if (update_command_stats && !c->io_data->flag.blocked) commandlogPushCurrentCommand(c, real_cmd);
 
     /* Send the command to clients in MONITOR mode if applicable,
      * since some administrative commands are considered too dangerous to be shown.
      * Other exceptions is a client which is unblocked and retrying to process the command
      * or we are currently in the process of loading AOF. */
     if (update_command_stats && !reprocessing_command && !(c->cmd->flags & (CMD_SKIP_MONITOR | CMD_ADMIN))) {
-        robj **argv = c->original_argv ? c->original_argv : c->argv;
-        int argc = c->original_argv ? c->original_argc : c->argc;
+        robj **argv = c->original_argv ? c->original_argv : c->io_data->argv;
+        int argc = c->original_argv ? c->original_argc : c->io_data->argc;
         replicationFeedMonitors(c, server.monitors, c->db->id, argv, argc);
     }
 
     /* Populate the per-command and per-slot statistics that we show in INFO commandstats and CLUSTER SLOT-STATS,
      * respectively. If the client is blocked we will handle latency stats and duration when it is unblocked. */
-    if (update_command_stats && !c->flag.blocked) {
+    if (update_command_stats && !c->io_data->flag.blocked) {
         real_cmd->calls++;
         real_cmd->microseconds += c->duration;
-        if (server.latency_tracking_enabled && !c->flag.blocked)
+        if (server.latency_tracking_enabled && !c->io_data->flag.blocked)
             updateCommandLatencyHistogram(&(real_cmd->latency_histogram), c->duration * 1000);
         clusterSlotStatsAddCpuDuration(c, c->duration);
     }
 
     /* The duration needs to be reset after each call except for a blocked command,
      * which is expected to record and reset the duration after unblocking. */
-    if (!c->flag.blocked) {
+    if (!c->io_data->flag.blocked) {
         c->duration = 0;
     }
 
@@ -3815,7 +3815,7 @@ void call(client *c, int flags) {
      * We never propagate EXEC explicitly, it will be implicitly
      * propagated if needed (see propagatePendingCommands).
      * Also, module commands take care of themselves */
-    if (flags & CMD_CALL_PROPAGATE && !c->flag.prevent_prop && c->cmd->proc != execCommand &&
+    if (flags & CMD_CALL_PROPAGATE && !c->io_data->flag.prevent_prop && c->cmd->proc != execCommand &&
         !(c->cmd->flags & CMD_MODULE)) {
         int propagate_flags = PROPAGATE_NONE;
 
@@ -3825,27 +3825,27 @@ void call(client *c, int flags) {
 
         /* If the client forced AOF / replication of the command, set
          * the flags regardless of the command effects on the data set. */
-        if (c->flag.force_repl) propagate_flags |= PROPAGATE_REPL;
-        if (c->flag.force_aof) propagate_flags |= PROPAGATE_AOF;
+        if (c->io_data->flag.force_repl) propagate_flags |= PROPAGATE_REPL;
+        if (c->io_data->flag.force_aof) propagate_flags |= PROPAGATE_AOF;
 
         /* However prevent AOF / replication propagation if the command
          * implementation called preventCommandPropagation() or similar,
          * or if we don't have the call() flags to do so. */
-        if (c->flag.prevent_repl_prop || c->flag.module_prevent_repl_prop || !(flags & CMD_CALL_PROPAGATE_REPL))
+        if (c->io_data->flag.prevent_repl_prop || c->io_data->flag.module_prevent_repl_prop || !(flags & CMD_CALL_PROPAGATE_REPL))
             propagate_flags &= ~PROPAGATE_REPL;
-        if (c->flag.prevent_aof_prop || c->flag.module_prevent_aof_prop || !(flags & CMD_CALL_PROPAGATE_AOF))
+        if (c->io_data->flag.prevent_aof_prop || c->io_data->flag.module_prevent_aof_prop || !(flags & CMD_CALL_PROPAGATE_AOF))
             propagate_flags &= ~PROPAGATE_AOF;
 
         /* Call alsoPropagate() only if at least one of AOF / replication
          * propagation is needed. */
-        if (propagate_flags != PROPAGATE_NONE) alsoPropagate(c->db->id, c->argv, c->argc, propagate_flags);
+        if (propagate_flags != PROPAGATE_NONE) alsoPropagate(c->db->id, c->io_data->argv, c->io_data->argc, propagate_flags);
     }
 
     /* Restore the old replication flags, since call() can be executed
      * recursively. */
-    c->flag.force_aof = client_old_flags.force_aof;
-    c->flag.force_repl = client_old_flags.force_repl;
-    c->flag.prevent_prop = client_old_flags.prevent_prop;
+    c->io_data->flag.force_aof = client_old_flags.force_aof;
+    c->io_data->flag.force_repl = client_old_flags.force_repl;
+    c->io_data->flag.prevent_prop = client_old_flags.prevent_prop;
 
     /* If the client has keys tracking enabled for client side caching,
      * make sure to remember the keys it fetched via this command. For read-only
@@ -3855,13 +3855,13 @@ void call(client *c, int flags) {
         /* We use the tracking flag of the original external client that
          * triggered the command, but we take the keys from the actual command
          * being executed. */
-        if (server.current_client && (server.current_client->flag.tracking) &&
-            !(server.current_client->flag.tracking_bcast)) {
+        if (server.current_client && (server.current_client->io_data->flag.tracking) &&
+            !(server.current_client->io_data->flag.tracking_bcast)) {
             trackingRememberKeys(server.current_client, c);
         }
     }
 
-    if (!c->flag.blocked) {
+    if (!c->io_data->flag.blocked) {
         /* Modules may call commands in cron, in which case server.current_client
          * is not set. */
         if (server.current_client) {
@@ -3955,22 +3955,22 @@ void afterCommand(client *c) {
 int commandCheckExistence(client *c, sds *err) {
     if (c->cmd) return 1;
     if (!err) return 0;
-    if (isContainerCommandBySds(c->argv[0]->ptr) && c->argc >= 2) {
+    if (isContainerCommandBySds(c->io_data->argv[0]->ptr) && c->io_data->argc >= 2) {
         /* If we can't find the command but argv[0] by itself is a command
          * it means we're dealing with an invalid subcommand. Print Help. */
-        sds cmd = sdsnew((char *)c->argv[0]->ptr);
+        sds cmd = sdsnew((char *)c->io_data->argv[0]->ptr);
         sdstoupper(cmd);
         *err = sdsnew(NULL);
-        *err = sdscatprintf(*err, "unknown subcommand '%.128s'. Try %s HELP.", (char *)c->argv[1]->ptr, cmd);
+        *err = sdscatprintf(*err, "unknown subcommand '%.128s'. Try %s HELP.", (char *)c->io_data->argv[1]->ptr, cmd);
         sdsfree(cmd);
     } else {
         sds args = sdsempty();
         int i;
-        for (i = 1; i < c->argc && sdslen(args) < 128; i++)
-            args = sdscatprintf(args, "'%.*s' ", 128 - (int)sdslen(args), (char *)c->argv[i]->ptr);
+        for (i = 1; i < c->io_data->argc && sdslen(args) < 128; i++)
+            args = sdscatprintf(args, "'%.*s' ", 128 - (int)sdslen(args), (char *)c->io_data->argv[i]->ptr);
         *err = sdsnew(NULL);
         *err =
-            sdscatprintf(*err, "unknown command '%.128s', with args beginning with: %s", (char *)c->argv[0]->ptr, args);
+            sdscatprintf(*err, "unknown command '%.128s', with args beginning with: %s", (char *)c->io_data->argv[0]->ptr, args);
         sdsfree(args);
     }
     /* Make sure there are no newlines in the string, otherwise invalid protocol
@@ -3979,7 +3979,7 @@ int commandCheckExistence(client *c, sds *err) {
     return 0;
 }
 
-/* Check if c->argc is valid for c->cmd, fills `err` with details in case it isn't.
+/* Check if c->io_data->argc is valid for c->cmd, fills `err` with details in case it isn't.
  * Return 1 if valid. */
 int commandCheckArity(struct serverCommand *cmd, int argc, sds *err) {
     if ((cmd->arity > 0 && cmd->arity != argc) || (argc < -cmd->arity)) {
@@ -4050,22 +4050,22 @@ int processCommand(client *c) {
      * In case we are reprocessing a command after it was blocked,
      * we do not have to repeat the same checks */
     if (!client_reprocessing_command) {
-        struct serverCommand *cmd = c->io_parsed_cmd ? c->io_parsed_cmd : lookupCommand(c->argv, c->argc);
+        struct serverCommand *cmd = c->io_data->io_parsed_cmd ? c->io_data->io_parsed_cmd : lookupCommand(c->io_data->argv, c->io_data->argc);
         if (!cmd) {
             /* Handle possible security attacks. */
-            if (!strcasecmp(c->argv[0]->ptr, "host:") || !strcasecmp(c->argv[0]->ptr, "post")) {
+            if (!strcasecmp(c->io_data->argv[0]->ptr, "host:") || !strcasecmp(c->io_data->argv[0]->ptr, "post")) {
                 securityWarningCommand(c);
                 return C_ERR;
             }
         }
         c->cmd = c->lastcmd = c->realcmd = cmd;
-        c->flag.buffered_reply = 0;
+        c->io_data->flag.buffered_reply = 0;
         sds err;
         if (!commandCheckExistence(c, &err)) {
             rejectCommandSds(c, err);
             return C_OK;
         }
-        if (!commandCheckArity(c->cmd, c->argc, &err)) {
+        if (!commandCheckArity(c->cmd, c->io_data->argc, &err)) {
             rejectCommandSds(c, err);
             return C_OK;
         }
@@ -4087,9 +4087,9 @@ int processCommand(client *c) {
 
     uint64_t cmd_flags = getCommandFlags(c);
 
-    int is_exec = (c->mstate && c->cmd->proc == execCommand);
-    int ms_flags = is_exec ? c->mstate->cmd_flags : 0;
-    int ms_inv_flags = is_exec ? c->mstate->cmd_inv_flags : 0;
+    int is_exec = (c->io_data->mstate && c->cmd->proc == execCommand);
+    int ms_flags = is_exec ? c->io_data->mstate->cmd_flags : 0;
+    int ms_inv_flags = is_exec ? c->io_data->mstate->cmd_inv_flags : 0;
     int combined_flags = cmd_flags | ms_flags;
     int combined_inv_flags = (~cmd_flags | ms_inv_flags);
 
@@ -4112,7 +4112,7 @@ int processCommand(client *c) {
         }
     }
 
-    if (c->flag.multi && c->cmd->flags & CMD_NO_MULTI) {
+    if (c->io_data->flag.multi && c->cmd->flags & CMD_NO_MULTI) {
         rejectCommandFormat(c, "Command not allowed inside a transaction");
         return C_OK;
     }
@@ -4122,9 +4122,9 @@ int processCommand(client *c) {
     int acl_errpos;
     int acl_retval = ACLCheckAllPerm(c, &acl_errpos);
     if (acl_retval != ACL_OK) {
-        addACLLogEntry(c, acl_retval, (c->flag.multi) ? ACL_LOG_CTX_MULTI : ACL_LOG_CTX_TOPLEVEL, acl_errpos, NULL,
+        addACLLogEntry(c, acl_retval, (c->io_data->flag.multi) ? ACL_LOG_CTX_MULTI : ACL_LOG_CTX_TOPLEVEL, acl_errpos, NULL,
                        NULL);
-        sds msg = getAclErrorMessage(acl_retval, c->user, c->cmd, c->argv[acl_errpos]->ptr, 0);
+        sds msg = getAclErrorMessage(acl_retval, c->user, c->cmd, c->io_data->argv[acl_errpos]->ptr, 0);
         rejectCommandFormat(c, "-NOPERM %s", msg);
         sdsfree(msg);
         return C_OK;
@@ -4137,14 +4137,14 @@ int processCommand(client *c) {
     if (server.cluster_enabled && !obey_client &&
         !(!(c->cmd->flags & CMD_MOVABLE_KEYS) && c->cmd->key_specs_num == 0 && c->cmd->proc != execCommand)) {
         int error_code;
-        clusterNode *n = getNodeByQuery(c, c->cmd, c->argv, c->argc, &c->slot, &error_code);
+        clusterNode *n = getNodeByQuery(c, c->cmd, c->io_data->argv, c->io_data->argc, &c->io_data->slot, &error_code);
         if (n == NULL || !clusterNodeIsMyself(n)) {
             if (c->cmd->proc == execCommand) {
                 discardTransaction(c);
             } else {
                 flagTransaction(c);
             }
-            clusterRedirectClient(c, n, c->slot, error_code);
+            clusterRedirectClient(c, n, c->io_data->slot, error_code);
             c->duration = 0;
             c->cmd->rejected_calls++;
             return C_OK;
@@ -4152,7 +4152,7 @@ int processCommand(client *c) {
     }
 
     if (!server.cluster_enabled && c->capa & CLIENT_CAPA_REDIRECT && server.primary_host && !obey_client &&
-        (is_write_command || (is_read_command && !c->flag.readonly))) {
+        (is_write_command || (is_read_command && !c->io_data->flag.readonly))) {
         if (server.failover_state == FAILOVER_IN_PROGRESS) {
             /* During the FAILOVER process, when conditions are met (such as
              * when the force time is reached or the primary and replica offsets
@@ -4274,7 +4274,7 @@ int processCommand(client *c) {
 
     /* Only allow a subset of commands in the context of Pub/Sub if the
      * connection is in RESP2 mode. With RESP3 there are no limits. */
-    if ((c->flag.pubsub && c->resp == 2) && c->cmd->proc != pingCommand && c->cmd->proc != subscribeCommand &&
+    if ((c->io_data->flag.pubsub && c->resp == 2) && c->cmd->proc != pingCommand && c->cmd->proc != subscribeCommand &&
         c->cmd->proc != ssubscribeCommand && c->cmd->proc != unsubscribeCommand &&
         c->cmd->proc != sunsubscribeCommand && c->cmd->proc != psubscribeCommand &&
         c->cmd->proc != punsubscribeCommand && c->cmd->proc != quitCommand && c->cmd->proc != resetCommand) {
@@ -4330,21 +4330,21 @@ int processCommand(client *c) {
     /* Prevent a replica from sending commands that access the keyspace.
      * The main objective here is to prevent abuse of client pause check
      * from which replicas are exempt. */
-    if (c->flag.replica && (is_may_replicate_command || is_write_command || is_read_command)) {
+    if (c->io_data->flag.replica && (is_may_replicate_command || is_write_command || is_read_command)) {
         rejectCommandFormat(c, "Replica can't interact with the keyspace");
         return C_OK;
     }
 
     /* If the server is paused, block the client until
      * the pause has ended. Replicas are never paused. */
-    if (!c->flag.replica && ((isPausedActions(PAUSE_ACTION_CLIENT_ALL)) ||
-                             ((isPausedActions(PAUSE_ACTION_CLIENT_WRITE)) && is_may_replicate_command))) {
+    if (!c->io_data->flag.replica && ((isPausedActions(PAUSE_ACTION_CLIENT_ALL)) ||
+                                      ((isPausedActions(PAUSE_ACTION_CLIENT_WRITE)) && is_may_replicate_command))) {
         blockPostponeClient(c);
         return C_OK;
     }
 
     /* Exec the command */
-    if (c->flag.multi && c->cmd->proc != execCommand && c->cmd->proc != discardCommand &&
+    if (c->io_data->flag.multi && c->cmd->proc != execCommand && c->cmd->proc != discardCommand &&
         c->cmd->proc != multiCommand && c->cmd->proc != watchCommand && c->cmd->proc != quitCommand &&
         c->cmd->proc != resetCommand) {
         queueMultiCommand(c, cmd_flags);
@@ -4686,28 +4686,28 @@ sds writeCommandsGetDiskErrorMessage(int error_code) {
  * in Pub/Sub mode. */
 void pingCommand(client *c) {
     /* The command takes zero or one arguments. */
-    if (c->argc > 2) {
+    if (c->io_data->argc > 2) {
         addReplyErrorArity(c);
         return;
     }
 
-    if (c->flag.pubsub && c->resp == 2) {
+    if (c->io_data->flag.pubsub && c->resp == 2) {
         addReply(c, shared.mbulkhdr[2]);
         addReplyBulkCBuffer(c, "pong", 4);
-        if (c->argc == 1)
+        if (c->io_data->argc == 1)
             addReplyBulkCBuffer(c, "", 0);
         else
-            addReplyBulk(c, c->argv[1]);
+            addReplyBulk(c, c->io_data->argv[1]);
     } else {
-        if (c->argc == 1)
+        if (c->io_data->argc == 1)
             addReply(c, shared.pong);
         else
-            addReplyBulk(c, c->argv[1]);
+            addReplyBulk(c, c->io_data->argv[1]);
     }
 }
 
 void echoCommand(client *c) {
-    addReplyBulk(c, c->argv[1]);
+    addReplyBulk(c, c->io_data->argv[1]);
 }
 
 void timeCommand(client *c) {
@@ -5134,7 +5134,7 @@ void addReplyCommandDocs(client *c, struct serverCommand *cmd) {
 
 /* Helper for COMMAND GETKEYS and GETKEYSANDFLAGS */
 void getKeysSubcommandImpl(client *c, int with_flags) {
-    struct serverCommand *cmd = lookupCommand(c->argv + 2, c->argc - 2);
+    struct serverCommand *cmd = lookupCommand(c->io_data->argv + 2, c->io_data->argc - 2);
     getKeysResult result;
     initGetKeysResult(&result);
     int j;
@@ -5145,12 +5145,12 @@ void getKeysSubcommandImpl(client *c, int with_flags) {
     } else if (!doesCommandHaveKeys(cmd)) {
         addReplyError(c, "The command has no key arguments");
         return;
-    } else if ((cmd->arity > 0 && cmd->arity != c->argc - 2) || ((c->argc - 2) < -cmd->arity)) {
+    } else if ((cmd->arity > 0 && cmd->arity != c->io_data->argc - 2) || ((c->io_data->argc - 2) < -cmd->arity)) {
         addReplyError(c, "Invalid number of arguments specified for command");
         return;
     }
 
-    if (!getKeysFromCommandWithSpecs(cmd, c->argv + 2, c->argc - 2, GET_KEYSPEC_DEFAULT, &result)) {
+    if (!getKeysFromCommandWithSpecs(cmd, c->io_data->argv + 2, c->io_data->argc - 2, GET_KEYSPEC_DEFAULT, &result)) {
         if (cmd->flags & CMD_NO_MANDATORY_KEYS) {
             addReplyArrayLen(c, 0);
         } else {
@@ -5160,10 +5160,10 @@ void getKeysSubcommandImpl(client *c, int with_flags) {
         addReplyArrayLen(c, result.numkeys);
         for (j = 0; j < result.numkeys; j++) {
             if (!with_flags) {
-                addReplyBulk(c, c->argv[result.keys[j].pos + 2]);
+                addReplyBulk(c, c->io_data->argv[result.keys[j].pos + 2]);
             } else {
                 addReplyArrayLen(c, 2);
-                addReplyBulk(c, c->argv[result.keys[j].pos + 2]);
+                addReplyBulk(c, c->io_data->argv[result.keys[j].pos + 2]);
                 addReplyFlagsForKeyArgs(c, result.keys[j].flags);
             }
         }
@@ -5282,11 +5282,11 @@ void commandListCommand(client *c) {
     /* Parse options. */
     int i = 2, got_filter = 0;
     commandListFilter filter = {0};
-    for (; i < c->argc; i++) {
-        int moreargs = (c->argc - 1) - i; /* Number of additional arguments. */
-        char *opt = c->argv[i]->ptr;
+    for (; i < c->io_data->argc; i++) {
+        int moreargs = (c->io_data->argc - 1) - i; /* Number of additional arguments. */
+        char *opt = c->io_data->argv[i]->ptr;
         if (!strcasecmp(opt, "filterby") && moreargs == 2) {
-            char *filtertype = c->argv[i + 1]->ptr;
+            char *filtertype = c->io_data->argv[i + 1]->ptr;
             if (!strcasecmp(filtertype, "module")) {
                 filter.type = COMMAND_LIST_FILTER_MODULE;
             } else if (!strcasecmp(filtertype, "aclcat")) {
@@ -5298,7 +5298,7 @@ void commandListCommand(client *c) {
                 return;
             }
             got_filter = 1;
-            filter.arg = c->argv[i + 2]->ptr;
+            filter.arg = c->io_data->argv[i + 2]->ptr;
             i += 2;
         } else {
             addReplyErrorObject(c, shared.syntaxerr);
@@ -5322,7 +5322,7 @@ void commandListCommand(client *c) {
 void commandInfoCommand(client *c) {
     int i;
 
-    if (c->argc == 2) {
+    if (c->io_data->argc == 2) {
         hashtableIterator iter;
         void *next;
         addReplyArrayLen(c, hashtableSize(server.commands));
@@ -5333,9 +5333,9 @@ void commandInfoCommand(client *c) {
         }
         hashtableResetIterator(&iter);
     } else {
-        addReplyArrayLen(c, c->argc - 2);
-        for (i = 2; i < c->argc; i++) {
-            addReplyCommandInfo(c, lookupCommandBySds(c->argv[i]->ptr));
+        addReplyArrayLen(c, c->io_data->argc - 2);
+        for (i = 2; i < c->io_data->argc; i++) {
+            addReplyCommandInfo(c, lookupCommandBySds(c->io_data->argv[i]->ptr));
         }
     }
 }
@@ -5343,7 +5343,7 @@ void commandInfoCommand(client *c) {
 /* COMMAND DOCS [command-name [command-name ...]] */
 void commandDocsCommand(client *c) {
     int i;
-    if (c->argc == 2) {
+    if (c->io_data->argc == 2) {
         /* Reply with an array of all commands */
         hashtableIterator iter;
         void *next;
@@ -5359,8 +5359,8 @@ void commandDocsCommand(client *c) {
         /* Reply with an array of the requested commands (if we find them) */
         int numcmds = 0;
         void *replylen = addReplyDeferredLen(c);
-        for (i = 2; i < c->argc; i++) {
-            struct serverCommand *cmd = lookupCommandBySds(c->argv[i]->ptr);
+        for (i = 2; i < c->io_data->argc; i++) {
+            struct serverCommand *cmd = lookupCommandBySds(c->io_data->argv[i]->ptr);
             if (!cmd) continue;
             addReplyBulkCBuffer(c, cmd->fullname, sdslen(cmd->fullname));
             addReplyCommandDocs(c, cmd);
@@ -6093,7 +6093,7 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                 long lag = 0;
 
                 if (!replica_ip) {
-                    if (connAddrPeerName(replica->conn, ip, sizeof(ip), &port) == -1) continue;
+                    if (connAddrPeerName(replica->io_data->conn, ip, sizeof(ip), &port) == -1) continue;
                     replica_ip = ip;
                 }
                 const char *state = replstateToString(replica->repl_data->repl_state);
@@ -6105,7 +6105,7 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                                     "offset=%lld,lag=%ld,type=%s\r\n",
                                     replica_id, replica_ip, replica->repl_data->replica_listening_port, state,
                                     replica->repl_data->repl_ack_off, lag,
-                                    replica->flag.repl_rdb_channel                                ? "rdb-channel"
+                                    replica->io_data->flag.repl_rdb_channel                       ? "rdb-channel"
                                     : replica->repl_data->repl_state == REPLICA_STATE_BG_RDB_LOAD ? "main-channel"
                                                                                                   : "replica");
                 replica_id++;
@@ -6254,7 +6254,7 @@ void infoCommand(client *c) {
     }
     int all_sections = 0;
     int everything = 0;
-    dict *sections_dict = genInfoSectionDict(c->argv + 1, c->argc - 1, NULL, &all_sections, &everything);
+    dict *sections_dict = genInfoSectionDict(c->io_data->argv + 1, c->io_data->argc - 1, NULL, &all_sections, &everything);
     sds info = genValkeyInfoString(sections_dict, all_sections, everything);
     addReplyVerbatim(c, info, sdslen(info), "txt");
     sdsfree(info);
@@ -6263,7 +6263,7 @@ void infoCommand(client *c) {
 }
 
 void monitorCommand(client *c) {
-    if (c->flag.deny_blocking) {
+    if (c->io_data->flag.deny_blocking) {
         /**
          * A client that has CLIENT_DENY_BLOCKING flag on
          * expects a reply per command and so can't execute MONITOR. */
@@ -6272,12 +6272,12 @@ void monitorCommand(client *c) {
     }
 
     /* ignore MONITOR if already replica or in monitor mode */
-    if (c->flag.replica) return;
+    if (c->io_data->flag.replica) return;
 
     initClientReplicationData(c);
 
-    c->flag.replica = 1;
-    c->flag.monitor = 1;
+    c->io_data->flag.replica = 1;
+    c->io_data->flag.monitor = 1;
     listAddNodeTail(server.monitors, c);
     addReply(c, shared.ok);
 }
@@ -6611,14 +6611,14 @@ void sendChildInfo(childInfoType info_type, size_t keys, char *pname) {
 void dismissClientMemory(client *c) {
     /* Dismiss client query buffer and static reply buffer. */
     dismissMemory(c->buf, c->buf_usable_size);
-    if (c->querybuf) dismissSds(c->querybuf);
+    if (c->io_data->querybuf) dismissSds(c->io_data->querybuf);
     /* Dismiss argv array only if we estimate it contains a big buffer. */
-    if (c->argc && c->argv_len_sum / c->argc >= server.page_size) {
-        for (int i = 0; i < c->argc; i++) {
-            dismissObject(c->argv[i], 0);
+    if (c->io_data->argc && c->io_data->argv_len_sum / c->io_data->argc >= server.page_size) {
+        for (int i = 0; i < c->io_data->argc; i++) {
+            dismissObject(c->io_data->argv[i], 0);
         }
     }
-    if (c->argc) dismissMemory(c->argv, c->argc * sizeof(robj *));
+    if (c->io_data->argc) dismissMemory(c->io_data->argv, c->io_data->argc * sizeof(robj *));
 
     /* Dismiss the reply array only if the average buffer size is bigger
      * than a page. */
@@ -6643,8 +6643,8 @@ void dismissMemoryInChild(void) {
     /* madvise(MADV_DONTNEED) may not work if Transparent Huge Pages is enabled. */
     if (server.thp_enabled) return;
 
-        /* Currently we use zmadvise_dontneed only when we use jemalloc with Linux.
-         * so we avoid these pointless loops when they're not going to do anything. */
+    /* Currently we use zmadvise_dontneed only when we use jemalloc with Linux.
+     * so we avoid these pointless loops when they're not going to do anything. */
 #if defined(USE_JEMALLOC) && defined(__linux__)
     listIter li;
     listNode *ln;
@@ -7089,7 +7089,7 @@ __attribute__((weak)) int main(int argc, char **argv) {
     }
     if (server.sentinel_mode) sentinelCheckConfigFile();
 
-        /* Do system checks */
+    /* Do system checks */
 #ifdef __linux__
     linuxMemoryWarnings();
     sds err_msg = NULL;

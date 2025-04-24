@@ -797,11 +797,11 @@ void configSetCommand(client *c) {
     int *config_map_fns;
 
     /* Make sure we have an even number of arguments: conf-val pairs */
-    if (c->argc & 1) {
+    if (c->io_data->argc & 1) {
         addReplyErrorObject(c, shared.syntaxerr);
         return;
     }
-    config_count = (c->argc - 2) / 2;
+    config_count = (c->io_data->argc - 2) / 2;
 
     module_configs_apply = listCreate();
     set_configs = zcalloc(sizeof(standardConfig *) * config_count);
@@ -813,11 +813,11 @@ void configSetCommand(client *c) {
 
     /* Find all relevant configs */
     for (i = 0; i < config_count; i++) {
-        standardConfig *config = lookupConfig(c->argv[2 + i * 2]->ptr);
+        standardConfig *config = lookupConfig(c->io_data->argv[2 + i * 2]->ptr);
         /* Fail if we couldn't find this config */
         if (!config) {
             if (!invalid_args) {
-                invalid_arg_name = c->argv[2 + i * 2]->ptr;
+                invalid_arg_name = c->io_data->argv[2 + i * 2]->ptr;
                 invalid_args = 1;
             }
             continue;
@@ -838,7 +838,7 @@ void configSetCommand(client *c) {
             (config->flags & PROTECTED_CONFIG && !allowProtectedAction(server.enable_protected_configs, c))) {
             /* Note: we don't abort the loop since we still want to handle redacting sensitive configs (above) */
             errstr = (config->flags & IMMUTABLE_CONFIG) ? "can't set immutable config" : "can't set protected config";
-            err_arg_name = c->argv[2 + i * 2]->ptr;
+            err_arg_name = c->io_data->argv[2 + i * 2]->ptr;
             invalid_args = 1;
             continue;
         }
@@ -855,14 +855,14 @@ void configSetCommand(client *c) {
             if (set_configs[j] == config) {
                 /* Note: we don't abort the loop since we still want to handle redacting sensitive configs (above) */
                 errstr = "duplicate parameter";
-                err_arg_name = c->argv[2 + i * 2]->ptr;
+                err_arg_name = c->io_data->argv[2 + i * 2]->ptr;
                 invalid_args = 1;
                 break;
             }
         }
         set_configs[i] = config;
         config_names[i] = config->name;
-        new_values[i] = c->argv[2 + i * 2 + 1]->ptr;
+        new_values[i] = c->io_data->argv[2 + i * 2 + 1]->ptr;
     }
 
     if (invalid_args) goto err;
@@ -955,8 +955,8 @@ void configGetCommand(client *c) {
     dictIterator *di;
     /* Create a dictionary to store the matched configs */
     dict *matches = dictCreate(&externalStringType);
-    for (i = 0; i < c->argc - 2; i++) {
-        robj *o = c->argv[2 + i];
+    for (i = 0; i < c->io_data->argc - 2; i++) {
+        robj *o = c->io_data->argv[2 + i];
         sds name = o->ptr;
 
         /* If the string doesn't contain glob patterns, just directly
@@ -3048,7 +3048,7 @@ static sds getConfigReplicaOfOption(standardConfig *config) {
 
 int allowProtectedAction(int config, client *c) {
     return (config == PROTECTED_ACTION_ALLOWED_YES) ||
-           (config == PROTECTED_ACTION_ALLOWED_LOCAL && (connIsLocal(c->conn) == 1));
+           (config == PROTECTED_ACTION_ALLOWED_LOCAL && (connIsLocal(c->io_data->conn) == 1));
 }
 
 

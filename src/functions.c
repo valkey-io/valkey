@@ -458,9 +458,9 @@ void functionStatsCommand(client *c) {
         addReplyBulkCString(c, scriptCurrFunction());
         addReplyBulkCString(c, "command");
         client *script_client = scriptGetCaller();
-        addReplyArrayLen(c, script_client->argc);
-        for (int i = 0; i < script_client->argc; ++i) {
-            addReplyBulkCBuffer(c, script_client->argv[i]->ptr, sdslen(script_client->argv[i]->ptr));
+        addReplyArrayLen(c, script_client->io_data->argc);
+        for (int i = 0; i < script_client->io_data->argc; ++i) {
+            addReplyBulkCBuffer(c, script_client->io_data->argv[i]->ptr, sdslen(script_client->io_data->argv[i]->ptr));
         }
         addReplyBulkCString(c, "duration_ms");
         addReplyLongLong(c, scriptRunDuration());
@@ -505,18 +505,18 @@ static void functionListReplyFlags(client *c, functionInfo *fi) {
 void functionListCommand(client *c) {
     int with_code = 0;
     sds library_name = NULL;
-    for (int i = 2; i < c->argc; ++i) {
-        robj *next_arg = c->argv[i];
+    for (int i = 2; i < c->io_data->argc; ++i) {
+        robj *next_arg = c->io_data->argv[i];
         if (!with_code && !strcasecmp(next_arg->ptr, "withcode")) {
             with_code = 1;
             continue;
         }
         if (!library_name && !strcasecmp(next_arg->ptr, "libraryname")) {
-            if (i >= c->argc - 1) {
+            if (i >= c->io_data->argc - 1) {
                 addReplyError(c, "library name argument was not given");
                 return;
             }
-            library_name = c->argv[++i]->ptr;
+            library_name = c->io_data->argv[++i]->ptr;
             continue;
         }
         addReplyErrorSds(c, sdscatfmt(sdsempty(), "Unknown argument %s", next_arg->ptr));
@@ -582,7 +582,7 @@ void functionListCommand(client *c) {
  * FUNCTION DELETE <LIBRARY NAME>
  */
 void functionDeleteCommand(client *c) {
-    robj *function_name = c->argv[2];
+    robj *function_name = c->io_data->argv[2];
     functionLibInfo *li = dictFetchValue(curr_functions_lib_ctx->libraries, function_name->ptr);
     if (!li) {
         addReplyError(c, "Library not found");
@@ -605,7 +605,7 @@ void functionKillCommand(client *c) {
 /* Try to extract command flags if we can, returns the modified flags.
  * Note that it does not guarantee the command arguments are right. */
 uint64_t fcallGetCommandFlags(client *c, uint64_t cmd_flags) {
-    robj *function_name = c->argv[1];
+    robj *function_name = c->io_data->argv[1];
     c->cur_script = dictFind(curr_functions_lib_ctx->functions, function_name->ptr);
     if (!c->cur_script) return cmd_flags;
     functionInfo *fi = dictGetVal(c->cur_script);
@@ -615,9 +615,9 @@ uint64_t fcallGetCommandFlags(client *c, uint64_t cmd_flags) {
 
 static void fcallCommandGeneric(client *c, int ro) {
     /* Functions need to be fed to monitors before the commands they execute. */
-    replicationFeedMonitors(c, server.monitors, c->db->id, c->argv, c->argc);
+    replicationFeedMonitors(c, server.monitors, c->db->id, c->io_data->argv, c->io_data->argc);
 
-    robj *function_name = c->argv[1];
+    robj *function_name = c->io_data->argv[1];
     dictEntry *de = c->cur_script;
     if (!de) de = dictFind(curr_functions_lib_ctx->functions, function_name->ptr);
     if (!de) {
@@ -629,11 +629,11 @@ static void fcallCommandGeneric(client *c, int ro) {
 
     long long numkeys;
     /* Get the number of arguments that are keys */
-    if (getLongLongFromObject(c->argv[2], &numkeys) != C_OK) {
+    if (getLongLongFromObject(c->io_data->argv[2], &numkeys) != C_OK) {
         addReplyError(c, "Bad number of keys provided");
         return;
     }
-    if (numkeys > (c->argc - 3)) {
+    if (numkeys > (c->io_data->argc - 3)) {
         addReplyError(c, "Number of keys can't be greater than number of args");
         return;
     } else if (numkeys < 0) {
@@ -654,10 +654,10 @@ static void fcallCommandGeneric(client *c, int ro) {
                                 run_ctx.original_client,
                                 fi->compiled_function,
                                 VMSE_FUNCTION,
-                                c->argv + 3,
+                                c->io_data->argv + 3,
                                 numkeys,
-                                c->argv + 3 + numkeys,
-                                c->argc - 3 - numkeys);
+                                c->io_data->argv + 3 + numkeys,
+                                c->io_data->argc - 3 - numkeys);
     scriptResetRun(&run_ctx);
 }
 
@@ -724,19 +724,19 @@ void functionDumpCommand(client *c) {
  *   On collision, replace the old libraries with the new libraries.
  */
 void functionRestoreCommand(client *c) {
-    if (c->argc > 4) {
+    if (c->io_data->argc > 4) {
         addReplySubcommandSyntaxError(c);
         return;
     }
 
     restorePolicy restore_replicy = restorePolicy_Append; /* default policy: APPEND */
-    sds data = c->argv[2]->ptr;
+    sds data = c->io_data->argv[2]->ptr;
     size_t data_len = sdslen(data);
     rio payload;
     sds err = NULL;
 
-    if (c->argc == 4) {
-        const char *restore_policy_str = c->argv[3]->ptr;
+    if (c->io_data->argc == 4) {
+        const char *restore_policy_str = c->io_data->argv[3]->ptr;
         if (!strcasecmp(restore_policy_str, "append")) {
             restore_replicy = restorePolicy_Append;
         } else if (!strcasecmp(restore_policy_str, "replace")) {
@@ -808,16 +808,16 @@ load_error:
 
 /* FUNCTION FLUSH [ASYNC | SYNC] */
 void functionFlushCommand(client *c) {
-    if (c->argc > 3) {
+    if (c->io_data->argc > 3) {
         addReplySubcommandSyntaxError(c);
         return;
     }
     int async = 0;
-    if (c->argc == 3 && !strcasecmp(c->argv[2]->ptr, "sync")) {
+    if (c->io_data->argc == 3 && !strcasecmp(c->io_data->argv[2]->ptr, "sync")) {
         async = 0;
-    } else if (c->argc == 3 && !strcasecmp(c->argv[2]->ptr, "async")) {
+    } else if (c->io_data->argc == 3 && !strcasecmp(c->io_data->argv[2]->ptr, "async")) {
         async = 1;
-    } else if (c->argc == 2) {
+    } else if (c->io_data->argc == 2) {
         async = server.lazyfree_lazy_user_flush ? 1 : 0;
     } else {
         addReplyError(c, "FUNCTION FLUSH only supports SYNC|ASYNC option");
@@ -1086,8 +1086,8 @@ error:
 void functionLoadCommand(client *c) {
     int replace = 0;
     int argc_pos = 2;
-    while (argc_pos < c->argc - 1) {
-        robj *next_arg = c->argv[argc_pos++];
+    while (argc_pos < c->io_data->argc - 1) {
+        robj *next_arg = c->io_data->argv[argc_pos++];
         if (!strcasecmp(next_arg->ptr, "replace")) {
             replace = 1;
             continue;
@@ -1096,12 +1096,12 @@ void functionLoadCommand(client *c) {
         return;
     }
 
-    if (argc_pos >= c->argc) {
+    if (argc_pos >= c->io_data->argc) {
         addReplyError(c, "Function code is missing");
         return;
     }
 
-    robj *code = c->argv[argc_pos];
+    robj *code = c->io_data->argv[argc_pos];
     sds err = NULL;
     sds library_name = NULL;
     size_t timeout = LOAD_TIMEOUT_MS;

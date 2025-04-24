@@ -175,20 +175,20 @@ static void prefetchCommands(void) {
     /* Prefetch argv's for all clients */
     for (size_t i = 0; i < batch->client_count; i++) {
         client *c = batch->clients[i];
-        if (!c || c->argc <= 1) continue;
+        if (!c || c->io_data->argc <= 1) continue;
         /* Skip prefetching first argv (cmd name) it was already looked up by the I/O thread. */
-        for (int j = 1; j < c->argc; j++) {
-            valkey_prefetch(c->argv[j]);
+        for (int j = 1; j < c->io_data->argc; j++) {
+            valkey_prefetch(c->io_data->argv[j]);
         }
     }
 
     /* Prefetch the argv->ptr if required */
     for (size_t i = 0; i < batch->client_count; i++) {
         client *c = batch->clients[i];
-        if (!c || c->argc <= 1) continue;
-        for (int j = 1; j < c->argc; j++) {
-            if (c->argv[j]->encoding == OBJ_ENCODING_RAW) {
-                valkey_prefetch(c->argv[j]->ptr);
+        if (!c || c->io_data->argc <= 1) continue;
+        for (int j = 1; j < c->io_data->argc; j++) {
+            if (c->io_data->argv[j]->encoding == OBJ_ENCODING_RAW) {
+                valkey_prefetch(c->io_data->argv[j]->ptr);
             }
         }
     }
@@ -245,13 +245,13 @@ int addCommandToBatchAndProcessIfFull(client *c) {
     batch->clients[batch->client_count++] = c;
 
     /* Get command's keys positions */
-    if (c->io_parsed_cmd) {
+    if (c->io_data->io_parsed_cmd) {
         getKeysResult result;
         initGetKeysResult(&result);
-        int num_keys = getKeysFromCommand(c->io_parsed_cmd, c->argv, c->argc, &result);
+        int num_keys = getKeysFromCommand(c->io_data->io_parsed_cmd, c->io_data->argv, c->io_data->argc, &result);
         for (int i = 0; i < num_keys && batch->key_count < batch->max_prefetch_size; i++) {
-            batch->keys[batch->key_count] = c->argv[result.keys[i].pos];
-            batch->slots[batch->key_count] = c->slot > 0 ? c->slot : 0;
+            batch->keys[batch->key_count] = c->io_data->argv[result.keys[i].pos];
+            batch->slots[batch->key_count] = c->io_data->slot > 0 ? c->io_data->slot : 0;
             batch->keys_tables[batch->key_count] = kvstoreGetHashtable(c->db->keys, batch->slots[batch->key_count]);
             batch->key_count++;
         }

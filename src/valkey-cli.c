@@ -9029,15 +9029,7 @@ static void findHotKeys(void) {
     double pct;
 
     counters = zrealloc(counters, sizeof(unsigned long long) * config.hotkeys_count);
-    if (!counters) {
-        fprintf(stderr, "Memory allocated failed!\n");
-        exit(1);
-    }
     hotkeys = zrealloc(hotkeys, sizeof(sds) * config.hotkeys_count);
-    if (!hotkeys) {
-        fprintf(stderr, "Memory allocated failed!\n");
-        exit(1);
-    }
     unsigned long long nums;
     for (nums = 0; nums < config.hotkeys_count; nums++) {
         counters[nums] = 0;

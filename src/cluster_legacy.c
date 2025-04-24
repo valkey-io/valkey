@@ -815,10 +815,7 @@ int clusterLoadConfig(char *filename) {
     return C_OK;
 
 fmterr:
-    serverLog(LL_WARNING, "Unrecoverable error: corrupted cluster config file \"%s\".", line);
-    zfree(line);
-    if (fp) fclose(fp);
-    exit(1);
+    serverPanic("Unrecoverable error: corrupted cluster config file \"%s\".", line);
 }
 
 /* Cluster node configuration is exactly the same as CLUSTER NODES output.
@@ -1089,6 +1086,27 @@ static void updateAnnouncedClientIpV6(clusterNode *node, char *value) {
 }
 
 static void updateShardId(clusterNode *node, const char *shard_id) {
+    /* Ensure replica shard IDs match their primary's to maintain cluster consistency.
+     *
+     * Shard ID updates must prioritize the primary, then propagate to replicas.
+     * This is critical due to the eventual consistency of shard IDs during cluster
+     * expansion. New replicas might replicate from a primary before fully
+     * synchronizing shard IDs with the rest of the cluster.
+     *
+     * Without this enforcement, a temporary inconsistency can arise where a
+     * replica's shard ID diverges from its primary's. This inconsistency is
+     * persisted in the primary's nodes.conf file. While this divergence will
+     * eventually resolve, if the primary crashes beforehand, it will enter a
+     * crash-restart loop due to the mismatch in its nodes.conf. */
+    if (shard_id && nodeIsReplica(node) &&
+        memcmp(clusterNodeGetPrimary(node)->shard_id, shard_id, CLUSTER_NAMELEN) != 0) {
+        serverLog(
+            LL_NOTICE,
+            "Shard id %.40s update request for node id %.40s diverges from existing primary shard id %.40s, rejecting!",
+            shard_id, node->name, clusterNodeGetPrimary(node)->shard_id);
+        return;
+    }
+
     if (shard_id && memcmp(node->shard_id, shard_id, CLUSTER_NAMELEN) != 0) {
         clusterRemoveNodeFromShard(node);
         memcpy(node->shard_id, shard_id, CLUSTER_NAMELEN);
@@ -1354,7 +1372,7 @@ void clusterReset(int hard) {
     if (nodeIsReplica(myself)) {
         clusterSetNodeAsPrimary(myself);
         replicationUnsetPrimary();
-        flushAllDataAndResetRDB(server.repl_replica_lazy_flush ? EMPTYDB_ASYNC : EMPTYDB_NO_FLAGS);
+        flushAllDataAndResetRDB(server.lazyfree_lazy_user_flush ? EMPTYDB_ASYNC : EMPTYDB_NO_FLAGS);
     }
 
     /* Close slots, reset manual failover state. */
@@ -3577,14 +3595,17 @@ int clusterProcessPacket(clusterLink *link) {
                     /* Primary turned into a replica! Reconfigure the node. */
                     if (sender_claimed_primary && areInSameShard(sender_claimed_primary, sender)) {
                         /* `sender` was a primary and was in the same shard as its new primary */
-                        if (sender->configEpoch > sender_claimed_config_epoch) {
+                        if (nodeEpoch(sender_claimed_primary) > sender_claimed_config_epoch) {
                             serverLog(LL_NOTICE,
                                       "Ignore stale message from %.40s (%s) in shard %.40s;"
                                       " gossip config epoch: %llu, current config epoch: %llu",
                                       sender->name, sender->human_nodename, sender->shard_id,
                                       (unsigned long long)sender_claimed_config_epoch,
-                                      (unsigned long long)sender->configEpoch);
-                        } else {
+                                      (unsigned long long)nodeEpoch(sender_claimed_primary));
+                            /* This packet is stale so we avoid processing it anymore. Otherwise
+                             * this may cause a primary-replica chain issue. */
+                            return 1;
+                        } else if (nodeIsReplica(sender_claimed_primary)) {
                             /* `primary` is still a `replica` in this observer node's view;
                              * update its role and configEpoch */
                             clusterSetNodeAsPrimary(sender_claimed_primary);
@@ -6441,18 +6462,42 @@ sds genClusterInfoString(void) {
         }
     }
 
+    dictIterator *di = dictGetIterator(server.cluster->nodes);
+    dictEntry *de;
+    unsigned nodes_pfail = 0, nodes_fail = 0, voting_nodes_pfail = 0, voting_nodes_fail = 0;
+    while ((de = dictNext(di)) != NULL) {
+        clusterNode *node = dictGetVal(de);
+        if (nodeTimedOut(node)) {
+            nodes_pfail++;
+            if (clusterNodeIsVotingPrimary(node)) {
+                voting_nodes_pfail++;
+            }
+        }
+        if (nodeFailed(node)) {
+            nodes_fail++;
+            if (clusterNodeIsVotingPrimary(node)) {
+                voting_nodes_fail++;
+            }
+        }
+    }
+    dictReleaseIterator(di);
+
     info = sdscatprintf(info,
                         "cluster_state:%s\r\n"
                         "cluster_slots_assigned:%d\r\n"
                         "cluster_slots_ok:%d\r\n"
                         "cluster_slots_pfail:%d\r\n"
                         "cluster_slots_fail:%d\r\n"
+                        "cluster_nodes_pfail:%u\r\n"
+                        "cluster_nodes_fail:%u\r\n"
+                        "cluster_voting_nodes_pfail:%u\r\n"
+                        "cluster_voting_nodes_fail:%u\r\n"
                         "cluster_known_nodes:%lu\r\n"
                         "cluster_size:%d\r\n"
                         "cluster_current_epoch:%llu\r\n"
                         "cluster_my_epoch:%llu\r\n",
                         statestr[server.cluster->state], slots_assigned, slots_ok, slots_pfail, slots_fail,
-                        dictSize(server.cluster->nodes), server.cluster->size,
+                        nodes_pfail, nodes_fail, voting_nodes_pfail, voting_nodes_fail, dictSize(server.cluster->nodes), server.cluster->size,
                         (unsigned long long)server.cluster->currentEpoch, (unsigned long long)nodeEpoch(myself));
 
     /* Show stats about messages sent and received. */

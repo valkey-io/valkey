@@ -2631,10 +2631,10 @@ int listenToPort(connListener *sfd) {
         if (optional) addr++;
         if (strchr(addr, ':')) {
             /* Bind IPv6 address. */
-            sfd->fd[sfd->count] = anetTcp6Server(server.neterr, port, addr, server.tcp_backlog);
+            sfd->fd[sfd->count] = anetTcp6Server(server.neterr, port, addr, server.tcp_backlog, server.mptcp);
         } else {
             /* Bind IPv4 address. */
-            sfd->fd[sfd->count] = anetTcpServer(server.neterr, port, addr, server.tcp_backlog);
+            sfd->fd[sfd->count] = anetTcpServer(server.neterr, port, addr, server.tcp_backlog, server.mptcp);
         }
         if (sfd->fd[sfd->count] == ANET_ERR) {
             int net_errno = errno;
@@ -3708,6 +3708,8 @@ void call(client *c, int flags) {
      * re-processing and unblock the client.*/
     c->flag.executing_command = 1;
 
+    c->flag.buffered_reply = 0;
+    c->flag.keyspace_notified = 0;
     /* Setting the CLIENT_REPROCESSING_COMMAND flag so that during the actual
      * processing of the command proc, the client is aware that it is being
      * re-processed. */
@@ -4047,6 +4049,7 @@ int processCommand(client *c) {
             }
         }
         c->cmd = c->lastcmd = c->realcmd = cmd;
+        c->flag.buffered_reply = 0;
         sds err;
         if (!commandCheckExistence(c, &err)) {
             rejectCommandSds(c, err);

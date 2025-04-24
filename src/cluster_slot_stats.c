@@ -148,10 +148,14 @@ static void clusterSlotStatsUpdateNetworkBytesOutForReplication(long long len) {
     client *c = server.current_client;
     if (c == NULL || !canAddNetworkBytesOut(c)) return;
 
+    /* We multiply the bytes len by the number of replicas to account for us broadcasting to multiple replicas at once. */
+    len *= (long long)listLength(server.replicas);
     serverAssert(c->slot >= 0 && c->slot < CLUSTER_SLOTS);
     serverAssert(nodeIsPrimary(server.cluster->myself));
-    if (len < 0) serverAssert(server.cluster->slot_stats[c->slot].network_bytes_out >= (uint64_t)llabs(len));
-    server.cluster->slot_stats[c->slot].network_bytes_out += (len * listLength(server.replicas));
+    /* We sometimes want to adjust the counter downwards (for example when we want to undo accounting for
+     * SELECT commands that don't belong to any slot) so let's make sure we don't underflow the counter. */
+    serverAssert(len >= 0 || server.cluster->slot_stats[c->slot].network_bytes_out >= (uint64_t)-len);
+    server.cluster->slot_stats[c->slot].network_bytes_out += len;
 }
 
 /* Increment network bytes out for replication stream. This method will increment `len` value times the active replica

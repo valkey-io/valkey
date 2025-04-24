@@ -937,8 +937,9 @@ start_server {tags {"multi"}} {
 
         $rd client reply skip
 
+        # Just this command was silenced
         $rd multi
-        # These replies were silenced.
+
         $rd ping pong2
         $rd ping pong3
         $rd exec

@@ -99,16 +99,6 @@ typedef struct dictIterator {
     unsigned long long fingerprint;
 } dictIterator;
 
-typedef struct dictStats {
-    int htidx;
-    unsigned long buckets;
-    unsigned long maxChainLen;
-    unsigned long totalChainLen;
-    unsigned long htSize;
-    unsigned long htUsed;
-    unsigned long *clvector;
-} dictStats;
-
 typedef void(dictScanFunction)(void *privdata, const dictEntry *de);
 typedef void *(dictDefragAllocFunction)(void *ptr);
 typedef void(dictDefragEntryCb)(void *privdata, void *ptr);
@@ -218,10 +208,5 @@ unsigned long
 dictScanDefrag(dict *d, unsigned long v, dictScanFunction *fn, const dictDefragFunctions *defragfns, void *privdata);
 uint64_t dictGetHash(dict *d, const void *key);
 void dictRehashingInfo(dict *d, unsigned long long *from_size, unsigned long long *to_size);
-
-size_t dictGetStatsMsg(char *buf, size_t bufsize, dictStats *stats, int full);
-dictStats *dictGetStatsHt(dict *d, int htidx, int full);
-void dictCombineStats(dictStats *from, dictStats *into);
-void dictFreeStats(dictStats *stats);
 
 #endif /* __DICT_H */

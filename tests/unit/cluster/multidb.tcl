@@ -1,6 +1,5 @@
 # Tests multi-databases in cluster mode
 
-# source "../tests/includes/init-tests.tcl"
 
 
 proc get_my_replica {cluster_nodes} {

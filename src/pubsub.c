@@ -288,7 +288,7 @@ void freeClientPubSubData(client *c) {
 /* Subscribe a client to a channel. Returns 1 if the operation succeeded, or
  * 0 if the client was already subscribed to that channel. */
 int pubsubSubscribeChannel(client *c, robj *channel, pubsubtype type) {
-    dict *clients = NULL;
+    hashtable *clients = NULL;
     int retval = 0;
     unsigned int slot = 0;
 
@@ -308,17 +308,17 @@ int pubsubSubscribeChannel(client *c, robj *channel, pubsubtype type) {
         void *existing;
         if (!kvstoreHashtableFindPositionForInsert(*type.serverPubSubChannels, slot, channel, &pos, &existing)) {
             clients = existing;
-            channel = *(robj **)dictMetadata(clients);
+            channel = *(robj **)hashtableMetadata(clients);
         } else {
             /* Store pointer to channel name in the dict's metadata. */
-            clients = dictCreate(&clientDictType);
-            *(robj **)dictMetadata(clients) = channel;
+            clients = hashtableCreate(&clientHashtableType);
+            *(robj **)hashtableMetadata(clients) = channel;
             incrRefCount(channel);
             /* Insert this dict in the kvstore at the position returned above. */
             kvstoreHashtableInsertAtPosition(*type.serverPubSubChannels, slot, clients, &pos);
         }
 
-        serverAssert(dictAdd(clients, c, NULL) != DICT_ERR);
+        serverAssert(hashtableAdd(clients, c));
         hashtableInsertAtPosition(type.clientPubSubChannels(c), channel, &position);
         incrRefCount(channel);
     }
@@ -330,7 +330,7 @@ int pubsubSubscribeChannel(client *c, robj *channel, pubsubtype type) {
 /* Unsubscribe a client from a channel. Returns 1 if the operation succeeded, or
  * 0 if the client was not subscribed to the specified channel. */
 int pubsubUnsubscribeChannel(client *c, robj *channel, int notify, pubsubtype type) {
-    dict *clients;
+    hashtable *clients;
     int retval = 0;
     int slot = 0;
 
@@ -347,8 +347,8 @@ int pubsubUnsubscribeChannel(client *c, robj *channel, int notify, pubsubtype ty
         kvstoreHashtableFind(*type.serverPubSubChannels, slot, channel, &found);
         serverAssertWithInfo(c, NULL, found);
         clients = found;
-        serverAssertWithInfo(c, NULL, dictDelete(clients, c) == DICT_OK);
-        if (dictSize(clients) == 0) {
+        serverAssertWithInfo(c, NULL, hashtableDelete(clients, c));
+        if (hashtableSize(clients) == 0) {
             /* Free the dict and associated hash entry at all if this was
              * the latest client, so that it will be possible to abuse
              * PUBSUB creating millions of channels. */
@@ -370,13 +370,14 @@ void pubsubShardUnsubscribeAllChannelsInSlot(unsigned int slot) {
     kvstoreHashtableIterator *kvs_di = kvstoreGetHashtableIterator(server.pubsubshard_channels, slot, HASHTABLE_ITER_SAFE);
     void *element;
     while (kvstoreHashtableIteratorNext(kvs_di, &element)) {
-        dict *clients = element;
-        robj *channel = *(robj **)dictMetadata(clients);
+        hashtable *clients = element;
+        robj *channel = *(robj **)hashtableMetadata(clients);
         /* For each client subscribed to the channel, unsubscribe it. */
-        dictIterator *iter = dictGetIterator(clients);
-        dictEntry *entry;
-        while ((entry = dictNext(iter)) != NULL) {
-            client *c = dictGetKey(entry);
+        hashtableIterator client_iter;
+        hashtableInitIterator(&client_iter, clients, 0);
+        void *next_client;
+        while (hashtableNext(&client_iter, &next_client)) {
+            client *c = next_client;
             int retval = hashtableDelete(c->pubsub_data->pubsubshard_channels, channel);
             serverAssertWithInfo(c, channel, retval);
             addReplyPubsubUnsubscribed(c, channel, pubSubShardType);
@@ -386,7 +387,7 @@ void pubsubShardUnsubscribeAllChannelsInSlot(unsigned int slot) {
                 unmarkClientAsPubSub(c);
             }
         }
-        dictReleaseIterator(iter);
+        hashtableResetIterator(&client_iter);
         kvstoreHashtableDelete(server.pubsubshard_channels, slot, channel);
     }
     kvstoreReleaseHashtableIterator(kvs_di);
@@ -400,16 +401,16 @@ int pubsubSubscribePattern(client *c, robj *pattern) {
     if (pattern_added) {
         incrRefCount(pattern);
         /* Add the client to the pattern -> list of clients hash table */
-        dict *clients;
+        hashtable *clients;
         dictEntry *de = dictFind(server.pubsub_patterns, pattern);
         if (de == NULL) {
-            clients = dictCreate(&clientDictType);
+            clients = hashtableCreate(&clientHashtableType);
             dictAdd(server.pubsub_patterns, pattern, clients);
             incrRefCount(pattern);
         } else {
             clients = dictGetVal(de);
         }
-        serverAssert(dictAdd(clients, c, NULL) != DICT_ERR);
+        serverAssert(hashtableAdd(clients, c));
     }
     /* Notify the client */
     addReplyPubsubPatSubscribed(c, pattern);
@@ -427,11 +428,10 @@ int pubsubUnsubscribePattern(client *c, robj *pattern, int notify) {
         /* Remove the client from the pattern -> clients list hash table */
         dictEntry *de = dictFind(server.pubsub_patterns, pattern);
         serverAssertWithInfo(c, NULL, de != NULL);
-        dict *clients = dictGetVal(de);
-        serverAssertWithInfo(c, NULL, dictDelete(clients, c) == DICT_OK);
-        if (dictSize(clients) == 0) {
-            /* Free the dict and associated hash entry at all if this was
-             * the latest client. */
+        hashtable *clients = dictGetVal(de);
+        serverAssertWithInfo(c, NULL, hashtableDelete(clients, c));
+        if (hashtableSize(clients) == 0) {
+            /* Free the clients hashtable if this was the last client. */
             dictDelete(server.pubsub_patterns, pattern);
         }
     }
@@ -515,17 +515,17 @@ int pubsubPublishMessageInternal(robj *channel, robj *message, pubsubtype type) 
         slot = keyHashSlot(channel->ptr, sdslen(channel->ptr));
     }
     if (kvstoreHashtableFind(*type.serverPubSubChannels, (slot == -1) ? 0 : slot, channel, &element)) {
-        dict *clients = element;
-        dictEntry *entry;
-        dictIterator *iter = dictGetIterator(clients);
-        while ((entry = dictNext(iter)) != NULL) {
-            client *c = dictGetKey(entry);
+        hashtable *clients = element;
+        hashtableIterator iter;
+        hashtableInitIterator(&iter, clients, 0);
+        void *c;
+        while (hashtableNext(&iter, &c)) {
             addReplyPubsubMessage(c, channel, message, *type.messageBulk);
             clusterSlotStatsAddNetworkBytesOutForShardedPubSubInternalPropagation(c, slot);
             updateClientMemUsageAndBucket(c);
             receivers++;
         }
-        dictReleaseIterator(iter);
+        hashtableResetIterator(&iter);
     }
 
     if (type.shard) {
@@ -539,20 +539,20 @@ int pubsubPublishMessageInternal(robj *channel, robj *message, pubsubtype type) 
         channel = getDecodedObject(channel);
         while ((de = dictNext(di)) != NULL) {
             robj *pattern = dictGetKey(de);
-            dict *clients = dictGetVal(de);
-            if (!stringmatchlen((char *)pattern->ptr, sdslen(pattern->ptr), (char *)channel->ptr, sdslen(channel->ptr),
-                                0))
+            hashtable *clients = dictGetVal(de);
+            if (!stringmatchlen((char *)pattern->ptr, sdslen(pattern->ptr),
+                                (char *)channel->ptr, sdslen(channel->ptr), 0))
                 continue;
 
-            dictEntry *entry;
-            dictIterator *iter = dictGetIterator(clients);
-            while ((entry = dictNext(iter)) != NULL) {
-                client *c = dictGetKey(entry);
+            hashtableIterator iter;
+            hashtableInitIterator(&iter, clients, 0);
+            void *c;
+            while (hashtableNext(&iter, &c)) {
                 addReplyPubsubPatMessage(c, pattern, channel, message);
                 updateClientMemUsageAndBucket(c);
                 receivers++;
             }
-            dictReleaseIterator(iter);
+            hashtableResetIterator(&iter);
         }
         decrRefCount(channel);
         dictReleaseIterator(di);
@@ -705,9 +705,9 @@ void pubsubCommand(client *c) {
             unsigned int slot = server.cluster_enabled ? keyHashSlot(key, (int)sdslen(key)) : 0;
             void *found = NULL;
             kvstoreHashtableFind(server.pubsubshard_channels, slot, c->argv[j], &found);
-            dict *clients = found;
+            hashtable *clients = found;
             addReplyBulk(c, c->argv[j]);
-            addReplyLongLong(c, clients ? dictSize(clients) : 0);
+            addReplyLongLong(c, clients ? hashtableSize(clients) : 0);
         }
     } else {
         addReplySubcommandSyntaxError(c);
@@ -725,8 +725,8 @@ void channelList(client *c, sds pat, kvstore *pubsub_channels) {
         kvstoreHashtableIterator *kvs_di = kvstoreGetHashtableIterator(pubsub_channels, i, 0);
         void *next;
         while (kvstoreHashtableIteratorNext(kvs_di, &next)) {
-            dict *clients = next;
-            robj *cobj = *(robj **)dictMetadata(clients);
+            hashtable *clients = next;
+            robj *cobj = *(robj **)hashtableMetadata(clients);
             sds channel = cobj->ptr;
 
             if (!pat || stringmatchlen(pat, sdslen(pat), channel, sdslen(channel), 0)) {

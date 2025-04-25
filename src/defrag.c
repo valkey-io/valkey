@@ -242,30 +242,6 @@ robj *activeDefragStringOb(robj *ob) {
     return new_robj;
 }
 
-/* Defrag helper for dict main allocations (dict struct, and hash tables).
- * Receives a pointer to the dict* and return a new dict* when the dict
- * struct itself was moved.
- *
- * Returns NULL in case the allocation wasn't moved.
- * When it returns a non-null value, the old pointer was already released
- * and should NOT be accessed. */
-static dict *dictDefragTables(dict *d) {
-    dict *ret = NULL;
-    dictEntry **newtable;
-    /* handle the dict struct */
-    if ((ret = activeDefragAlloc(d))) d = ret;
-    /* handle the first hash table */
-    if (!d->ht_table[0]) return ret; /* created but unused */
-    newtable = activeDefragAlloc(d->ht_table[0]);
-    if (newtable) d->ht_table[0] = newtable;
-    /* handle the second hash table */
-    if (d->ht_table[1]) {
-        newtable = activeDefragAlloc(d->ht_table[1]);
-        if (newtable) d->ht_table[1] = newtable;
-    }
-    return ret;
-}
-
 /* Internal function used by zslDefrag */
 static void zslUpdateNode(zskiplist *zsl, zskiplistNode *oldnode, zskiplistNode *newnode, zskiplistNode **update) {
     int i;
@@ -785,33 +761,33 @@ static void dbKeysScanCallback(void *privdata, void *elemref) {
 /* Defrag scan callback for a pubsub channels hashtable. */
 static void defragPubsubScanCallback(void *privdata, void *elemref) {
     defragPubSubCtx *ctx = privdata;
-    void **channel_dict_ref = (void **)elemref;
-    dict *newclients, *clients = *channel_dict_ref;
-    robj *newchannel, *channel = *(robj **)dictMetadata(clients);
+    void **clients_ref = (void **)elemref;
+    hashtable *newclients, *clients = *clients_ref;
+    robj *newchannel, *channel = *(robj **)hashtableMetadata(clients);
 
     /* Try to defrag the channel name. */
-    serverAssert(channel->refcount == (int)dictSize(clients) + 1);
+    serverAssert(channel->refcount == (int)hashtableSize(clients) + 1);
     newchannel = activeDefragStringOb(channel);
     if (newchannel) {
-        *(robj **)dictMetadata(clients) = newchannel;
+        *(robj **)hashtableMetadata(clients) = newchannel;
 
         /* The channel name is shared by the client's pubsub(shard) and server's
          * pubsub(shard), after defraging the channel name, we need to update
          * the reference in the clients' dictionary. */
-        dictIterator *di = dictGetIterator(clients);
-        dictEntry *clientde;
-        while ((clientde = dictNext(di)) != NULL) {
-            client *c = dictGetKey(clientde);
+        hashtableIterator iter;
+        hashtableInitIterator(&iter, clients, 0);
+        void *c;
+        while (hashtableNext(&iter, &c)) {
             hashtable *client_channels = ctx->getPubSubChannels(c);
             int replaced = hashtableReplaceReallocatedEntry(client_channels, channel, newchannel);
             serverAssert(replaced);
         }
-        dictReleaseIterator(di);
+        hashtableResetIterator(&iter);
     }
 
     /* Try to defrag the dictionary of clients that is stored as the value part. */
-    if ((newclients = dictDefragTables(clients)))
-        *channel_dict_ref = newclients;
+    if ((newclients = hashtableDefragTables(clients, activeDefragAlloc)))
+        *clients_ref = newclients;
 
     server.stat_active_defrag_scanned++;
 }

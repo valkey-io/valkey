@@ -607,7 +607,7 @@ void getrangeCommand(client *c) {
 
 void mgetCommand(client *c) {
     int j;
-
+    prefetchKeys(c, 1, 1);
     addReplyArrayLen(c, c->argc - 1);
     for (j = 1; j < c->argc; j++) {
         robj *o = lookupKeyRead(c->db, c->argv[j]);
@@ -630,6 +630,9 @@ void msetGenericCommand(client *c, int nx) {
         addReplyErrorArity(c);
         return;
     }
+
+    /* Prefetch the keys from memory in parallel. */
+    prefetchKeys(c, 1, 2);
 
     /* Handle the NX flag. The MSETNX semantic is to return zero and don't
      * set anything if at least one key already exists. */

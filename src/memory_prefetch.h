@@ -8,4 +8,6 @@ void processClientsCommandsBatch(void);
 int addCommandToBatchAndProcessIfFull(struct client *c);
 void removeClientFromPendingCommandsBatch(struct client *c);
 
+void prefetchKeys(struct client *c, int first, int step);
+
 #endif /* MEMORY_PREFETCH_H */

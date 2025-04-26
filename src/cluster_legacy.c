@@ -3534,6 +3534,7 @@ int clusterProcessPacket(clusterLink *link) {
                  * the clients, and the replica will never initiate a failover since the
                  * node is not actually in FAIL state. */
                 if (!nodeFailed(noaddr_node)) {
+                    noaddr_node->flags &= ~CLUSTER_NODE_PFAIL;
                     noaddr_node->flags |= CLUSTER_NODE_FAIL;
                     noaddr_node->fail_time = now;
                     clusterSendFail(noaddr_node->name);

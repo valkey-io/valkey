@@ -186,7 +186,7 @@ start_cluster 1 1 {tags {external:skip cluster} } {
         }
 
         # Wait for deletion to replicate
-        after 500
+        assert_equal 1 [R $primary_id wait 1 5000]
 
         # Ensure replica is also empty
         for {set db 0} {$db < 16} {incr db} {

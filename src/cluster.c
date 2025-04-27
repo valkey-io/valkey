@@ -1059,12 +1059,16 @@ getNodeByQuery(client *c, struct serverCommand *cmd, robj **argv, int argc, int 
         keyindex = result.keys;
 
         if (mcmd->proc == selectCommand) {
+            serverDb *origDb = currentDb;
             long long id;
-            if (getLongLongFromObject(margv[i], &id) != C_OK || (id < 0 || id >= server.dbnum)) {
+            if (getLongLongFromObject(margv[i], &id) != C_OK || selectDb(c, (int)id) != C_OK) {
                 if (error_code) *error_code = CLUSTER_REDIR_UNSTABLE;
                 return NULL;
             }
-            currentDb = server.db + (int)id;
+
+
+            currentDb = c->db;
+            selectDb(c, origDb->id);
         }
 
         for (j = 0; j < numkeys; j++) {

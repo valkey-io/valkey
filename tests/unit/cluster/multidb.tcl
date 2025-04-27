@@ -3,34 +3,17 @@
 
 
 proc get_my_replica {cluster_nodes} {
-    set my_node_id ""
-    
-    # Split the string into lines
-    set lines [split $cluster_nodes "\n"]
-    
-    # Find "myself" node ID
-    foreach line $lines {
-        if {[string match {*myself,master*} $line]} {
-            set my_node_id [lindex $line 0]
-            break
-        }
+    if {[llength $cluster_nodes] == 0} {
+        assert_failed "No replica found!"
     }
-
-    # Find the slave of "myself"
-    if {$my_node_id != ""} {
-        foreach line $lines {
-            if {[string match {*slave*} $line]} {
-                if {[lindex $line 3] == $my_node_id} {
-                    set slave_info [split [lindex $line 1] ":@"]
-                    set ip [lindex $slave_info 0]
-                    set port [lindex $slave_info 1]
-                    return [valkey_client_by_addr $ip $port]
-                    
-                }
-            }
-        }
+    set line [lindex $cluster_nodes 0]
+    if {[lindex $line 2] ne "slave"} {
+        assert_failed "First node is not a replica!"
     }
-    assert_failed "No replica found!"
+    set slave_info [split [lindex $line 1] ":@"]
+    set ip [lindex $slave_info 0]
+    set port [lindex $slave_info 1]
+    return [valkey_client_by_addr $ip $port]
 }
 
 start_cluster 1 1 {tags {external:skip cluster} } {
@@ -160,12 +143,9 @@ start_cluster 1 1 {tags {external:skip cluster} } {
 
 
     test "Replication: Write to multiple databases and verify replica" {
-        set primary_id 0    
-
-        set replica [get_my_replica [R $primary_id cluster replicas]]    
-
+        set primary_id 0
+        set replica [get_my_replica [R $primary_id cluster replicas [R $primary_id CLUSTER MYID]]]
         $replica READONLY
-        
         set keys_per_db 50
 
         # Set keys in all DBs on the primary node
@@ -217,8 +197,9 @@ start_cluster 1 1 {tags {external:skip cluster} } {
 
 
     test "SWAPDB is not supported in cluster mode" {
-        set primary_id 0    
-        set replica [get_my_replica [R $primary_id cluster nodes]]    
+        set primary_id 0
+
+        set replica [get_my_replica [R $primary_id cluster replicas [R $primary_id CLUSTER MYID]]]
 
         $replica READONLY
 
@@ -251,7 +232,7 @@ start_cluster 1 1 {tags {external:skip cluster} } {
 
     test "Cross-DB Expiry Handling" {
         set primary_id 0   
-        set replica [get_my_replica [R $primary_id cluster nodes]]    
+        set replica [get_my_replica [R $primary_id cluster replicas [R $primary_id CLUSTER MYID]]]
         $replica READONLY
         
         set key "key1"

@@ -1059,15 +1059,14 @@ getNodeByQuery(client *c, struct serverCommand *cmd, robj **argv, int argc, int 
         keyindex = result.keys;
 
         if (mcmd->proc == selectCommand) {
+            /* SELECT inside MULTI/EXEC is detected here. If it fails, we ignore it since it has no real impact at
+             * execution time. Even if a command fails, the remaining commands will still execute. */
             serverDb *origDb = currentDb;
             long long id;
-            if (getLongLongFromObject(margv[1], &id) != C_OK || selectDb(c, id) != C_OK) {
-                if (error_code) *error_code = CLUSTER_REDIR_UNSTABLE;
-                return NULL;
+            if (getLongLongFromObject(margv[1], &id) == C_OK && selectDb(c, id) == C_OK) {
+                currentDb = c->db;
+                selectDb(c, origDb->id);
             }
-
-            currentDb = c->db;
-            selectDb(c, origDb->id);
         }
 
         for (j = 0; j < numkeys; j++) {

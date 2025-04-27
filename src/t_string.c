@@ -606,10 +606,14 @@ void getrangeCommand(client *c) {
 }
 
 void mgetCommand(client *c) {
+    const int batch_size = 16;
     int j;
-    prefetchKeys(c, 1, 1);
     addReplyArrayLen(c, c->argc - 1);
     for (j = 1; j < c->argc; j++) {
+        if (j % batch_size == 1) {
+            /* Prefetch the next batch of keys */
+            prefetchKeys(c, j, 1, batch_size);
+        }
         robj *o = lookupKeyRead(c->db, c->argv[j]);
         if (o == NULL) {
             addReplyNull(c);
@@ -624,6 +628,7 @@ void mgetCommand(client *c) {
 }
 
 void msetGenericCommand(client *c, int nx) {
+    const int batch_size = 16;
     int j;
 
     if ((c->argc % 2) == 0) {
@@ -631,13 +636,14 @@ void msetGenericCommand(client *c, int nx) {
         return;
     }
 
-    /* Prefetch the keys from memory in parallel. */
-    prefetchKeys(c, 1, 2);
-
     /* Handle the NX flag. The MSETNX semantic is to return zero and don't
      * set anything if at least one key already exists. */
     if (nx) {
         for (j = 1; j < c->argc; j += 2) {
+            if (j % (batch_size * 2) == 1) {
+                /* Prefetch the next batch of keys */
+                prefetchKeys(c, j, 2, batch_size);
+            }
             if (lookupKeyWrite(c->db, c->argv[j]) != NULL) {
                 addReply(c, shared.czero);
                 return;
@@ -647,6 +653,10 @@ void msetGenericCommand(client *c, int nx) {
 
     int setkey_flags = nx ? SETKEY_DOESNT_EXIST : 0;
     for (j = 1; j < c->argc; j += 2) {
+        if (!nx && j % (batch_size * 2) == 1) {
+            /* Prefetch the next batch of keys */
+            prefetchKeys(c, j, 2, batch_size);
+        }
         robj *val = tryObjectEncoding(c->argv[j + 1]);
         setKey(c, c->db, c->argv[j], &val, setkey_flags);
         incrRefCount(val);

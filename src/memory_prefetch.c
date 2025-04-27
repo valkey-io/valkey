@@ -282,13 +282,13 @@ void removeClientFromPendingCommandsBatch(client *c) {
 
 /* A simple way to prefetch the keys for a client command execution. This can be
  * used for optimizing multi-key commands like mget, mset, etc. */
-void prefetchKeys(client *c, int first, int step) {
+void prefetchKeys(client *c, int first, int step, int count) {
     /* Skip this for IO threads. Keys are already batch-prefetched. */
     if (c->io_parsed_cmd) return;
 
     int n = (c->argc - first) / step;
-    if (n < 2) return;  /* There's no benefit in prefetcing only one key. */
-    if (n > 32) n = 32; /* Prefetching too many keys doesn't help the cache. */
+    if (count < n) n = count;
+    if (n < 2) return; /* There's no benefit in prefetcing only one key. */
     hashtableIncrementalFindState states[n];
     int i, arg;
     for (i = 0, arg = first; i < n && arg < c->argc; i++, arg += step) {

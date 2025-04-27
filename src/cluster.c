@@ -1064,7 +1064,7 @@ getNodeByQuery(client *c, struct serverCommand *cmd, robj **argv, int argc, int 
                 if (error_code) *error_code = CLUSTER_REDIR_UNSTABLE;
                 return NULL;
             }
-            currentDb = server.db[(int) id];
+            currentDb = server.db + (int)id;
         }
 
         for (j = 0; j < numkeys; j++) {

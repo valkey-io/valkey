@@ -162,7 +162,7 @@ start_cluster 1 1 {tags {external:skip cluster} } {
     test "Replication: Write to multiple databases and verify replica" {
         set primary_id 0    
 
-        set replica [get_my_replica [R $primary_id cluster nodes]]    
+        set replica [get_my_replica [R $primary_id cluster replicas]]    
 
         $replica READONLY
         

@@ -276,8 +276,6 @@ start_cluster 1 1 {tags {external:skip cluster} } {
         # Restart instance
         
         restart_server $primary_id true false
-        # kill_instance valkey $primary_id
-        # restart_instance valkey $primary_id
 
         wait_for_cluster_state ok
 

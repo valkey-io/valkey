@@ -508,6 +508,9 @@ void debugCommand(client *c) {
             "    Grace period in seconds for replica main channel to establish psync.",
             "DICT-RESIZING <0|1>",
             "    Enable or disable the main dict and expire dict resizing.",
+            "CLIENT-ENFORCE-REPLY-LIST <0|1>",
+            "When set to 1, it enforces the use of the client reply list directly",
+            "    and avoids using the client's static buffer.",
             NULL};
         addExtendedReplyHelp(c, help, clusterDebugCommandExtendedHelp());
     } else if (!strcasecmp(c->argv[1]->ptr, "segfault")) {
@@ -1019,6 +1022,9 @@ void debugCommand(client *c) {
         addReply(c, shared.ok);
     } else if (!strcasecmp(c->argv[1]->ptr, "dict-resizing") && c->argc == 3) {
         server.dict_resizing = atoi(c->argv[2]->ptr);
+        addReply(c, shared.ok);
+    } else if (!strcasecmp(c->argv[1]->ptr, "client-enforce-reply-list") && c->argc == 3) {
+        server.debug_client_enforce_reply_list = atoi(c->argv[2]->ptr);
         addReply(c, shared.ok);
     } else if (!handleDebugClusterCommand(c)) {
         addReplySubcommandSyntaxError(c);

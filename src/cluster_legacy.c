@@ -5315,7 +5315,7 @@ static int clusterNodeCronHandleReconnect(clusterNode *node, mstime_t now) {
         clusterLink *link = createClusterLink(node);
         link->conn = connCreate(connTypeOfCluster());
         connSetPrivateData(link->conn, link);
-        if (connConnect(link->conn, node->ip, node->cport, server.bind_source_addr, clusterLinkConnectHandler) ==
+        if (connConnect(link->conn, node->ip, node->cport, server.bind_source_addr, 0, clusterLinkConnectHandler) ==
             C_ERR) {
             /* We got a synchronous error from connect before
              * clusterSendPing() had a chance to be called.

@@ -156,8 +156,22 @@ void linkClient(client *c) {
 static void clientSetDefaultAuth(client *c) {
     /* If the default user does not require authentication, the user is
      * directly authenticated. */
-    c->user = DefaultUser;
-    c->flag.authenticated = (c->user->flags & USER_FLAG_NOPASS) && !(c->user->flags & USER_FLAG_DISABLED);
+    clientSetUser(c, DefaultUser, (DefaultUser->flags & USER_FLAG_NOPASS) && !(DefaultUser->flags & USER_FLAG_DISABLED));
+}
+
+/* Attach the user u to this client.
+ * Also, mark the client authentication state. In case the client is marked as authenticated,
+ * it will also set the ever_authenticated flag on the client in order to avoid low level
+ * limiting of the client output buffer.*/
+void clientSetUser(client *c, user *u, int authenticated) {
+    c->user = u;
+    c->flag.authenticated = authenticated;
+    if (authenticated)
+        c->flag.ever_authenticated = authenticated;
+}
+
+static int clientEverAuthenticated(client *c) {
+    return c->flag.ever_authenticated;
 }
 
 int authRequired(client *c) {
@@ -412,7 +426,8 @@ void deleteCachedResponseClient(client *recording_client) {
 VALKEY_NO_SANITIZE("bounds")
 size_t _addReplyToBuffer(client *c, const char *s, size_t len) {
     size_t available = c->buf_usable_size - c->bufpos;
-
+    /* If the debug enforcing to use the reply list is enabled.*/
+    if (server.debug_client_enforce_reply_list) return 0;
     /* If there already are entries in the reply list, we cannot
      * add anything more to the static buffer. */
     if (listLength(c->reply) > 0) return 0;
@@ -489,6 +504,9 @@ void _addReplyToBufferOrList(client *c, const char *s, size_t len) {
     }
 
     c->net_output_bytes_curr_cmd += len;
+    /* We call it here because this function may affect the reply
+     * buffer offset (see function comment) */
+    reqresSaveClientReplyOffset(c);
 
     /* If we're processing a push message into the current client (i.e. executing PUBLISH
      * to a channel which we are subscribed to, then we wanna postpone that message to be added
@@ -502,9 +520,6 @@ void _addReplyToBufferOrList(client *c, const char *s, size_t len) {
         _addReplyProtoToList(c, c->deferred_reply, s, len);
         return;
     }
-    /* We call it here because this function may affect the reply
-     * buffer offset (see function comment) */
-    reqresSaveClientReplyOffset(c);
 
     if (defer_push_message) {
         _addReplyProtoToList(c, server.pending_push_messages, s, len);
@@ -3489,9 +3504,9 @@ sds catClientInfoString(sds s, client *client, int hide_user_data) {
             " flags=%s", flags,
             " capa=%s", capa,
             " db=%i", client->db->id,
-            " sub=%i", client->pubsub_data ? (int)dictSize(client->pubsub_data->pubsub_channels) : 0,
-            " psub=%i", client->pubsub_data ? (int)dictSize(client->pubsub_data->pubsub_patterns) : 0,
-            " ssub=%i", client->pubsub_data ? (int)dictSize(client->pubsub_data->pubsubshard_channels) : 0,
+            " sub=%i", client->pubsub_data ? (int)hashtableSize(client->pubsub_data->pubsub_channels) : 0,
+            " psub=%i", client->pubsub_data ? (int)hashtableSize(client->pubsub_data->pubsub_patterns) : 0,
+            " ssub=%i", client->pubsub_data ? (int)hashtableSize(client->pubsub_data->pubsubshard_channels) : 0,
             " multi=%i", client->mstate ? client->mstate->count : -1,
             " watch=%i", client->mstate ? (int)listLength(&client->mstate->watched_keys) : 0,
             " qbuf=%U", client->querybuf ? (unsigned long long)sdslen(client->querybuf) : 0,
@@ -5002,6 +5017,11 @@ char *getClientTypeName(int class) {
 int checkClientOutputBufferLimits(client *c) {
     int soft = 0, hard = 0, class;
     unsigned long used_mem = getClientOutputBufferMemoryUsage(c);
+
+    /* For unauthenticated clients which were also never authenticated before the output buffer is limited to prevent
+     * them from abusing it by not reading the replies */
+    if (used_mem > REPLY_BUFFER_SIZE_UNAUTHENTICATED_CLIENT && authRequired(c) && !clientEverAuthenticated(c))
+        return 1;
 
     class = getClientType(c);
     /* For the purpose of output buffer limiting, primaries are handled

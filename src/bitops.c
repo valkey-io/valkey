@@ -522,7 +522,7 @@ void printBits(unsigned char *p, unsigned long count) {
 int getBitOffsetFromArgument(client *c, robj *o, uint64_t *offset, int hash, int bits) {
     long long loffset;
     char *err = "bit offset is not an integer or out of range";
-    char *p = o->ptr;
+    sds p = o->ptr;
     size_t plen = sdslen(p);
     int usehash = 0;
 
@@ -555,7 +555,8 @@ int getBitOffsetFromArgument(client *c, robj *o, uint64_t *offset, int hash, int
  *
  * On error C_ERR is returned and an error is sent to the client. */
 int getBitfieldTypeFromArgument(client *c, robj *o, int *sign, int *bits) {
-    char *p = o->ptr;
+    sds p = o->ptr;
+    size_t plen = sdslen(p);
     char *err = "Invalid bitfield type. Use something like i16 u8. Note that u64 is not supported but i64 is.";
     long long llbits;
 
@@ -568,7 +569,7 @@ int getBitfieldTypeFromArgument(client *c, robj *o, int *sign, int *bits) {
         return C_ERR;
     }
 
-    if ((string2ll(p + 1, strlen(p + 1), &llbits)) == 0 || llbits < 1 || (*sign == 1 && llbits > 64) ||
+    if ((string2ll(p + 1, plen - 1, &llbits)) == 0 || llbits < 1 || (*sign == 1 && llbits > 64) ||
         (*sign == 0 && llbits > 63)) {
         addReplyError(c, err);
         return C_ERR;

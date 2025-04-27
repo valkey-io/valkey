@@ -200,7 +200,8 @@ struct hdr_histogram;
 #define PROTO_REPLY_MIN_BYTES (1024)           /* the lower limit on reply buffer size */
 #define REDIS_AUTOSYNC_BYTES (1024 * 1024 * 4) /* Sync file every 4MB. */
 
-#define REPLY_BUFFER_DEFAULT_PEAK_RESET_TIME 5000 /* 5 seconds */
+#define REPLY_BUFFER_DEFAULT_PEAK_RESET_TIME 5000     /* 5 seconds */
+#define REPLY_BUFFER_SIZE_UNAUTHENTICATED_CLIENT 1024 /* 1024 bytes */
 
 /* When configuring the server eventloop, we setup it so that the total number
  * of file descriptors we can handle are server.maxclients + RESERVED_FDS +
@@ -1089,6 +1090,7 @@ typedef struct ClientFlags {
     uint64_t reprocessing_command : 1;     /* The client is re-processing the command. */
     uint64_t replication_done : 1;         /* Indicate that replication has been done on the client */
     uint64_t authenticated : 1;            /* Indicate a client has successfully authenticated */
+    uint64_t ever_authenticated : 1;       /* Indicate a client was ever successfully authenticated during it's lifetime */
     uint64_t protected_rdb_channel : 1;    /* Dual channel replication sync: Protects the RDB client from premature \
                                             * release during full sync. This flag is used to ensure that the RDB client, which \
                                             * references the first replication data block required by the replica, is not \
@@ -1113,13 +1115,13 @@ typedef struct ClientFlags {
                                               or client::buf. */
     uint64_t keyspace_notified : 1;        /* Indicates that a keyspace notification was triggered during the execution of the
                                               current command. */
-    uint64_t reserved : 2;                 /* Reserved for future use */
+    uint64_t reserved : 1;                 /* Reserved for future use */
 } ClientFlags;
 
 typedef struct ClientPubSubData {
-    dict *pubsub_channels;      /* channels a client is interested in (SUBSCRIBE) */
-    dict *pubsub_patterns;      /* patterns a client is interested in (PSUBSCRIBE) */
-    dict *pubsubshard_channels; /* shard level channels a client is interested in (SSUBSCRIBE) */
+    hashtable *pubsub_channels;      /* channels a client is interested in (SUBSCRIBE) */
+    hashtable *pubsub_patterns;      /* patterns a client is interested in (PSUBSCRIBE) */
+    hashtable *pubsubshard_channels; /* shard level channels a client is interested in (SSUBSCRIBE) */
     /* If this client is in tracking mode and this field is non zero,
      * invalidation messages for keys fetched by this client will be sent to
      * the specified client ID. */
@@ -1673,7 +1675,7 @@ struct valkeyServer {
     int enable_debug_cmd;                     /* Enable DEBUG commands, see PROTECTED_ACTION_ALLOWED_* */
     int enable_module_cmd;                    /* Enable MODULE commands, see PROTECTED_ACTION_ALLOWED_* */
     int enable_debug_assert;                  /* Enable debug asserts */
-
+    int debug_client_enforce_reply_list;      /* Force client to always use the reply list */
     /* RDB / AOF loading information */
     volatile sig_atomic_t loading;       /* We are loading data from disk if true */
     volatile sig_atomic_t async_loading; /* We are loading data without blocking the db being served */
@@ -1980,6 +1982,7 @@ struct valkeyServer {
     int repl_replica_ignore_maxmemory;  /* If true replicas do not evict. */
     time_t repl_down_since;             /* Unix time at which link with primary went down */
     int repl_disable_tcp_nodelay;       /* Disable TCP_NODELAY after SYNC? */
+    int repl_mptcp;                     /* Use Multipath TCP for replica on client side */
     int replica_priority;               /* Reported in INFO and used by Sentinel. */
     int replica_announced;              /* If true, replica is announced by Sentinel */
     int replica_announce_port;          /* Give the primary this listening port. */
@@ -2566,6 +2569,7 @@ typedef struct {
 extern struct valkeyServer server;
 extern struct sharedObjectsStruct shared;
 extern dictType objectKeyPointerValueDictType;
+extern hashtableType objectHashtableType;
 extern dictType objectKeyHeapPointerValueDictType;
 extern hashtableType setHashtableType;
 extern dictType BenchmarkDictType;
@@ -2577,7 +2581,7 @@ extern hashtableType hashHashtableType;
 extern dictType stringSetDictType;
 extern dictType externalStringType;
 extern dictType sdsHashDictType;
-extern dictType clientDictType;
+extern hashtableType clientHashtableType;
 extern dictType objToDictDictType;
 extern hashtableType kvstoreChannelHashtableType;
 extern dictType modulesDictType;
@@ -2768,6 +2772,7 @@ void initSharedQueryBuf(void);
 void freeSharedQueryBuf(void);
 client *lookupClientByID(uint64_t id);
 int authRequired(client *c);
+void clientSetUser(client *c, user *u, int authenticated);
 void putClientInPendingWriteQueue(client *c);
 client *createCachedResponseClient(int resp);
 void deleteCachedResponseClient(client *recording_client);
@@ -3306,8 +3311,8 @@ int serverPubsubShardSubscriptionCount(void);
 size_t pubsubMemOverhead(client *c);
 void unmarkClientAsPubSub(client *c);
 int pubsubTotalSubscriptions(void);
-dict *getClientPubSubChannels(client *c);
-dict *getClientPubSubShardChannels(client *c);
+hashtable *getClientPubSubChannels(client *c);
+hashtable *getClientPubSubShardChannels(client *c);
 void initClientPubSubData(client *c);
 void freeClientPubSubData(client *c);
 
@@ -3457,7 +3462,7 @@ int selectDb(client *c, int id);
 void signalModifiedKey(client *c, serverDb *db, robj *key);
 void signalFlushedDb(int dbid, int async);
 void scanGenericCommand(client *c, robj *o, unsigned long long cursor);
-int parseScanCursorOrReply(client *c, robj *o, unsigned long long *cursor);
+int parseScanCursorOrReply(client *c, sds buf, unsigned long long *cursor);
 int dbAsyncDelete(serverDb *db, robj *key);
 void emptyDbAsync(serverDb *db);
 size_t lazyfreeGetPendingObjectsCount(void);

@@ -921,6 +921,7 @@ start_server {tags {"introspection"}} {
             daemonize
             tcp-backlog
             mptcp
+            repl-mptcp
             always-show-logo
             syslog-enabled
             cluster-enabled

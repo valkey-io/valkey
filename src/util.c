@@ -465,9 +465,9 @@ static int string2llAVX512(const char *s, unsigned long slen, long long *value) 
     /* Abort if length indicates this cannot possibly be an int */
     if (slen == 0 || slen >= LONG_STR_SIZE) return 0;
 
-    /* Special case: first and only digit is 0. */
-    if (slen == 1 && p[0] == '0') {
-        if (value != NULL) *value = 0;
+    /* Special case: first and only digit is 0. Also handle single-digit 1-9 here. */
+    if (slen == 1 && p[0] >= '0' && p[0] <= '9') {
+        if (value != NULL) *value = p[0] - '0';
         return 1;
     }
 

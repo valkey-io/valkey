@@ -1129,17 +1129,16 @@ getNodeByQuery(client *c, struct serverCommand *cmd, robj **argv, int argc, int 
             /* Block the COPY command if it's cross-DB to keep the code simple.
              * Allowing cross-DB COPY is possible, but it would require looking up the second key in the target DB.
              * The command should only be allowed if the key exists. We may revisit this decision in the future. */
-            if ((migrating_slot || importing_slot) && mcmd->proc == copyCommand) {
-                if (margc >= 4 && !strcasecmp(margv[3]->ptr, "db")) {
-                    long long value;
-                    if (getLongLongFromObject(margv[4], &value) != C_OK || value != currentDb->id) {
-                        if (error_code) *error_code = CLUSTER_REDIR_UNSTABLE;
-                        getKeysFreeResult(&result);
-                        return NULL;
-                    }
+            if ((migrating_slot || importing_slot) &&
+                mcmd->proc == copyCommand &&
+                margc >= 4 && !strcasecmp(margv[3]->ptr, "db")) {
+                long long value;
+                if (getLongLongFromObject(margv[4], &value) != C_OK || value != currentDb->id) {
+                    if (error_code) *error_code = CLUSTER_REDIR_UNSTABLE;
+                    getKeysFreeResult(&result);
+                    return NULL;
                 }
             }
-
 
             /* Migrating / Importing slot? Count keys we don't have.
              * If it is pubsubshard command, it isn't required to check

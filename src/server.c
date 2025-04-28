@@ -36,6 +36,7 @@
 #include "cluster.h"
 #include "cluster_slot_stats.h"
 #include "commandlog.h"
+#include "keyinfo.h"
 #include "bio.h"
 #include "latency.h"
 #include "mt19937-64.h"
@@ -2949,6 +2950,7 @@ void initServer(void) {
     evalInit();
 
     commandlogInit();
+    keyinfoInit();
     latencyMonitorInit();
     initSharedQueryBuf();
 

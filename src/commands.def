@@ -7146,6 +7146,126 @@ struct COMMAND_ARG INFO_Args[] = {
 {MAKE_ARG("section",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_OPTIONAL|CMD_ARG_MULTIPLE,0,NULL)},
 };
 
+/********** KEYINFO GET ********************/
+
+#ifndef SKIP_CMD_HISTORY_TABLE
+/* KEYINFO GET history */
+#define KEYINFO_GET_History NULL
+#endif
+
+#ifndef SKIP_CMD_TIPS_TABLE
+/* KEYINFO GET tips */
+const char *KEYINFO_GET_Tips[] = {
+"request_policy:all_nodes",
+"nondeterministic_output",
+};
+#endif
+
+#ifndef SKIP_CMD_KEY_SPECS_TABLE
+/* KEYINFO GET key specs */
+#define KEYINFO_GET_Keyspecs NULL
+#endif
+
+/* KEYINFO GET argument table */
+struct COMMAND_ARG KEYINFO_GET_Args[] = {
+{MAKE_ARG("count",ARG_TYPE_INTEGER,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("type",ARG_TYPE_PURE_TOKEN,-1,"MANY-ELEMENTS",NULL,NULL,CMD_ARG_NONE,0,NULL)},
+};
+
+/********** KEYINFO HELP ********************/
+
+#ifndef SKIP_CMD_HISTORY_TABLE
+/* KEYINFO HELP history */
+#define KEYINFO_HELP_History NULL
+#endif
+
+#ifndef SKIP_CMD_TIPS_TABLE
+/* KEYINFO HELP tips */
+#define KEYINFO_HELP_Tips NULL
+#endif
+
+#ifndef SKIP_CMD_KEY_SPECS_TABLE
+/* KEYINFO HELP key specs */
+#define KEYINFO_HELP_Keyspecs NULL
+#endif
+
+/********** KEYINFO LEN ********************/
+
+#ifndef SKIP_CMD_HISTORY_TABLE
+/* KEYINFO LEN history */
+#define KEYINFO_LEN_History NULL
+#endif
+
+#ifndef SKIP_CMD_TIPS_TABLE
+/* KEYINFO LEN tips */
+const char *KEYINFO_LEN_Tips[] = {
+"request_policy:all_nodes",
+"response_policy:agg_sum",
+"nondeterministic_output",
+};
+#endif
+
+#ifndef SKIP_CMD_KEY_SPECS_TABLE
+/* KEYINFO LEN key specs */
+#define KEYINFO_LEN_Keyspecs NULL
+#endif
+
+/* KEYINFO LEN argument table */
+struct COMMAND_ARG KEYINFO_LEN_Args[] = {
+{MAKE_ARG("type",ARG_TYPE_PURE_TOKEN,-1,"MANY-ELEMENTS",NULL,NULL,CMD_ARG_NONE,0,NULL)},
+};
+
+/********** KEYINFO RESET ********************/
+
+#ifndef SKIP_CMD_HISTORY_TABLE
+/* KEYINFO RESET history */
+#define KEYINFO_RESET_History NULL
+#endif
+
+#ifndef SKIP_CMD_TIPS_TABLE
+/* KEYINFO RESET tips */
+const char *KEYINFO_RESET_Tips[] = {
+"request_policy:all_nodes",
+"response_policy:all_succeeded",
+};
+#endif
+
+#ifndef SKIP_CMD_KEY_SPECS_TABLE
+/* KEYINFO RESET key specs */
+#define KEYINFO_RESET_Keyspecs NULL
+#endif
+
+/* KEYINFO RESET argument table */
+struct COMMAND_ARG KEYINFO_RESET_Args[] = {
+{MAKE_ARG("type",ARG_TYPE_PURE_TOKEN,-1,"MANY-ELEMENTS",NULL,NULL,CMD_ARG_NONE,0,NULL)},
+};
+
+/* KEYINFO command table */
+struct COMMAND_STRUCT KEYINFO_Subcommands[] = {
+{MAKE_CMD("get","Returns the specified keyinfo entries.","O(N) where N is the number of entries returned","8.1.0",CMD_DOC_NONE,NULL,NULL,"server",COMMAND_GROUP_SERVER,KEYINFO_GET_History,0,KEYINFO_GET_Tips,2,keyinfoCommand,4,CMD_ADMIN|CMD_LOADING|CMD_STALE,0,KEYINFO_GET_Keyspecs,0,NULL,2),.args=KEYINFO_GET_Args},
+{MAKE_CMD("help","Show helpful text about the different subcommands","O(1)","8.1.0",CMD_DOC_NONE,NULL,NULL,"server",COMMAND_GROUP_SERVER,KEYINFO_HELP_History,0,KEYINFO_HELP_Tips,0,keyinfoCommand,2,CMD_LOADING|CMD_STALE,0,KEYINFO_HELP_Keyspecs,0,NULL,0)},
+{MAKE_CMD("len","Returns the number of entries in the specified type of keyinfo.","O(1)","8.1.0",CMD_DOC_NONE,NULL,NULL,"server",COMMAND_GROUP_SERVER,KEYINFO_LEN_History,0,KEYINFO_LEN_Tips,3,keyinfoCommand,3,CMD_ADMIN|CMD_LOADING|CMD_STALE,0,KEYINFO_LEN_Keyspecs,0,NULL,1),.args=KEYINFO_LEN_Args},
+{MAKE_CMD("reset","Clears all entries from the specified type of keyinfo.","O(N) where N is the number of entries in the keyinfo","8.1.0",CMD_DOC_NONE,NULL,NULL,"server",COMMAND_GROUP_SERVER,KEYINFO_RESET_History,0,KEYINFO_RESET_Tips,2,keyinfoCommand,3,CMD_ADMIN|CMD_LOADING|CMD_STALE,0,KEYINFO_RESET_Keyspecs,0,NULL,1),.args=KEYINFO_RESET_Args},
+{0}
+};
+
+/********** KEYINFO ********************/
+
+#ifndef SKIP_CMD_HISTORY_TABLE
+/* KEYINFO history */
+#define KEYINFO_History NULL
+#endif
+
+#ifndef SKIP_CMD_TIPS_TABLE
+/* KEYINFO tips */
+#define KEYINFO_Tips NULL
+#endif
+
+#ifndef SKIP_CMD_KEY_SPECS_TABLE
+/* KEYINFO key specs */
+#define KEYINFO_Keyspecs NULL
+#endif
+
 /********** LASTSAVE ********************/
 
 #ifndef SKIP_CMD_HISTORY_TABLE
@@ -11224,6 +11344,7 @@ struct COMMAND_STRUCT serverCommandTable[] = {
 {MAKE_CMD("flushall","Removes all keys from all databases.","O(N) where N is the total number of keys in all databases","1.0.0",CMD_DOC_NONE,NULL,NULL,"server",COMMAND_GROUP_SERVER,FLUSHALL_History,2,FLUSHALL_Tips,2,flushallCommand,-1,CMD_WRITE,ACL_CATEGORY_KEYSPACE|ACL_CATEGORY_DANGEROUS,FLUSHALL_Keyspecs,0,NULL,1),.args=FLUSHALL_Args},
 {MAKE_CMD("flushdb","Remove all keys from the current database.","O(N) where N is the number of keys in the selected database","1.0.0",CMD_DOC_NONE,NULL,NULL,"server",COMMAND_GROUP_SERVER,FLUSHDB_History,2,FLUSHDB_Tips,2,flushdbCommand,-1,CMD_WRITE,ACL_CATEGORY_KEYSPACE|ACL_CATEGORY_DANGEROUS,FLUSHDB_Keyspecs,0,NULL,1),.args=FLUSHDB_Args},
 {MAKE_CMD("info","Returns information and statistics about the server.","O(1)","1.0.0",CMD_DOC_NONE,NULL,NULL,"server",COMMAND_GROUP_SERVER,INFO_History,1,INFO_Tips,3,infoCommand,-1,CMD_LOADING|CMD_STALE|CMD_SENTINEL,ACL_CATEGORY_DANGEROUS,INFO_Keyspecs,0,NULL,1),.args=INFO_Args},
+{MAKE_CMD("keyinfo","A container for keyinfo commands.","Depends on subcommand.","8.1.0",CMD_DOC_NONE,NULL,NULL,"server",COMMAND_GROUP_SERVER,KEYINFO_History,0,KEYINFO_Tips,0,NULL,-2,0,0,KEYINFO_Keyspecs,0,NULL,0),.subcommands=KEYINFO_Subcommands},
 {MAKE_CMD("lastsave","Returns the Unix timestamp of the last successful save to disk.","O(1)","1.0.0",CMD_DOC_NONE,NULL,NULL,"server",COMMAND_GROUP_SERVER,LASTSAVE_History,0,LASTSAVE_Tips,1,lastsaveCommand,1,CMD_LOADING|CMD_STALE|CMD_FAST,ACL_CATEGORY_ADMIN|ACL_CATEGORY_DANGEROUS,LASTSAVE_Keyspecs,0,NULL,0)},
 {MAKE_CMD("latency","A container for latency diagnostics commands.","Depends on subcommand.","2.8.13",CMD_DOC_NONE,NULL,NULL,"server",COMMAND_GROUP_SERVER,LATENCY_History,0,LATENCY_Tips,0,NULL,-2,0,0,LATENCY_Keyspecs,0,NULL,0),.subcommands=LATENCY_Subcommands},
 {MAKE_CMD("lolwut","Displays computer art and the server version",NULL,"5.0.0",CMD_DOC_NONE,NULL,NULL,"server",COMMAND_GROUP_SERVER,LOLWUT_History,0,LOLWUT_Tips,0,lolwutCommand,-1,CMD_READONLY|CMD_FAST,0,LOLWUT_Keyspecs,0,NULL,1),.args=LOLWUT_Args},

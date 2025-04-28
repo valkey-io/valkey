@@ -1,0 +1,9 @@
+{
+    "KEYINFO": {
+        "summary": "A container for keyinfo commands.",
+        "complexity": "Depends on subcommand.",
+        "group": "server",
+        "since": "8.1.0",
+        "arity": -2
+    }
+}

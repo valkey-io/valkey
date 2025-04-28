@@ -1,7 +1,7 @@
 /*
- * Copyright Valkey Contributors.
+ * Copyright (c) Valkey Contributors
  * All rights reserved.
- * SPDX-License-Identifier: BSD 3-Clause
+ * SPDX-License-Identifier: BSD-3-Clause
  */
 
 #include "io_threads.h"
@@ -579,6 +579,7 @@ void trySendPollJobToIOThreads(void) {
 static void ioThreadAccept(void *data) {
     client *c = (client *)data;
     connAccept(c->conn, NULL);
+    atomic_thread_fence(memory_order_release);
     c->io_read_state = CLIENT_COMPLETED_IO;
 }
 

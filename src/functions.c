@@ -26,6 +26,11 @@
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  * POSSIBILITY OF SUCH DAMAGE.
  */
+/*
+ * Copyright (c) Valkey Contributors
+ * All rights reserved.
+ * SPDX-License-Identifier: BSD-3-Clause
+ */
 
 #include "functions.h"
 #include "sds.h"
@@ -1007,6 +1012,7 @@ sds functionsCreateWithLibraryCtx(sds code, int replace, sds *err, functionsLibC
         scriptingEngineCallCompileCode(engine,
                                        VMSE_FUNCTION,
                                        md.code,
+                                       sdslen(md.code),
                                        timeout,
                                        &num_compiled_functions,
                                        &compile_error);

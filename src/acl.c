@@ -495,8 +495,7 @@ void ACLFreeUserAndKillClients(user *u) {
              * this may result in some security hole: it's much
              * more defensive to set the default user and put
              * it in non authenticated mode. */
-            c->user = DefaultUser;
-            c->flag.authenticated = 0;
+            clientSetUser(c, DefaultUser, 0);
             /* We will write replies to this client later, so we can't
              * close it directly even if async. */
             if (c == server.current_client) {
@@ -1455,8 +1454,8 @@ void addAuthErrReply(client *c, robj *err) {
  * The return value is AUTH_OK on success (valid username / password pair) & AUTH_ERR otherwise. */
 static int checkPasswordBasedAuth(client *c, robj *username, robj *password) {
     if (ACLCheckUserCredentials(username, password) == C_OK) {
-        c->flag.authenticated = 1;
-        c->user = ACLGetUserByName(username->ptr, sdslen(username->ptr));
+        user *user = ACLGetUserByName(username->ptr, sdslen(username->ptr));
+        clientSetUser(c, user, 1);
         moduleNotifyUserChanged(c);
         return AUTH_OK;
     } else {
@@ -1500,7 +1499,7 @@ unsigned long ACLGetCommandID(sds cmdname) {
         sdsfree(lowername);
         return (unsigned long)id;
     }
-    raxInsert(commandId, (unsigned char *)lowername, strlen(lowername), (void *)nextid, NULL);
+    raxInsert(commandId, (unsigned char *)lowername, sdslen(lowername), (void *)nextid, NULL);
     sdsfree(lowername);
     unsigned long thisid = nextid;
     nextid++;
@@ -1900,41 +1899,44 @@ static list *getUpcomingChannelList(user *new, user *original) {
 /* Check if the client should be killed because it is subscribed to channels that were
  * permitted in the past, are not in the `upcoming` channel list. */
 static int ACLShouldKillPubsubClient(client *c, list *upcoming) {
-    robj *o;
-    int kill = 0;
-
     if (getClientType(c) == CLIENT_TYPE_PUBSUB) {
+        int kill = 0;
+
         /* Check for pattern violations. */
-        dictIterator *di = dictGetIterator(c->pubsub_data->pubsub_patterns);
-        dictEntry *de;
-        while (!kill && ((de = dictNext(di)) != NULL)) {
-            o = dictGetKey(de);
+        hashtableIterator iter;
+        hashtableInitIterator(&iter, c->pubsub_data->pubsub_patterns, 0);
+        void *next;
+        while (!kill && hashtableNext(&iter, &next)) {
+            robj *o = next;
             int res = ACLCheckChannelAgainstList(upcoming, o->ptr, sdslen(o->ptr), 1);
             kill = (res == ACL_DENIED_CHANNEL);
         }
-        dictReleaseIterator(di);
+        hashtableResetIterator(&iter);
 
         /* Check for channel violations. */
         if (!kill) {
             /* Check for global channels violation. */
-            di = dictGetIterator(c->pubsub_data->pubsub_channels);
-
-            while (!kill && ((de = dictNext(di)) != NULL)) {
-                o = dictGetKey(de);
+            hashtableIterator iter;
+            hashtableInitIterator(&iter, c->pubsub_data->pubsub_channels, 0);
+            void *next;
+            while (!kill && hashtableNext(&iter, &next)) {
+                robj *o = next;
                 int res = ACLCheckChannelAgainstList(upcoming, o->ptr, sdslen(o->ptr), 0);
                 kill = (res == ACL_DENIED_CHANNEL);
             }
-            dictReleaseIterator(di);
+            hashtableResetIterator(&iter);
         }
         if (!kill) {
             /* Check for shard channels violation. */
-            di = dictGetIterator(c->pubsub_data->pubsubshard_channels);
-            while (!kill && ((de = dictNext(di)) != NULL)) {
-                o = dictGetKey(de);
+            hashtableIterator iter;
+            hashtableInitIterator(&iter, c->pubsub_data->pubsubshard_channels, 0);
+            void *next;
+            while (!kill && hashtableNext(&iter, &next)) {
+                robj *o = next;
                 int res = ACLCheckChannelAgainstList(upcoming, o->ptr, sdslen(o->ptr), 0);
                 kill = (res == ACL_DENIED_CHANNEL);
             }
-            dictReleaseIterator(di);
+            hashtableResetIterator(&iter);
         }
 
         if (kill) {
@@ -2244,7 +2246,7 @@ static sds ACLLoadFromFile(const char *filename) {
     /* Split the file into lines and attempt to load each line. */
     int totlines;
     sds *lines, errors = sdsempty();
-    lines = sdssplitlen(acls, strlen(acls), "\n", 1, &totlines);
+    lines = sdssplitlen(acls, sdslen(acls), "\n", 1, &totlines);
     sdsfree(acls);
 
     /* We do all the loading in a fresh instance of the Users radix tree,
@@ -2377,6 +2379,9 @@ static sds ACLLoadFromFile(const char *filename) {
         listRewind(server.clients, &li);
         while ((ln = listNext(&li)) != NULL) {
             client *c = listNodeValue(ln);
+            /* Some clients, e.g. the one from the primary to replica, don't have a user
+             * associated with them. */
+            if (!c->user) continue;
             user *original = c->user;
             list *channels = NULL;
             user *new_user = ACLGetUserByName(c->user->name, sdslen(c->user->name));
@@ -3091,8 +3096,8 @@ void aclCommand(client *c) {
             "    Show the ACL log entries.",
             "SAVE",
             "    Save the current config to the ACL file.",
-            "SETUSER <username> <attribute> [<attribute> ...]",
-            "    Create or modify a user with the specified attributes.",
+            "SETUSER <username> <rule> [<rule> ...]",
+            "    Create or modify a user with the specified rules.",
             "USERS",
             "    List all the registered usernames.",
             "WHOAMI",

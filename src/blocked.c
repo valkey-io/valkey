@@ -26,9 +26,13 @@
  * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  * POSSIBILITY OF SUCH DAMAGE.
- *
- * ---------------------------------------------------------------------------
- *
+ */
+/*
+ * Copyright (c) Valkey Contributors
+ * All rights reserved.
+ * SPDX-License-Identifier: BSD-3-Clause
+ */
+/*
  * API:
  *
  * blockClient() set the CLIENT_BLOCKED flag in the client, and set the
@@ -649,6 +653,8 @@ void blockPostponeClient(client *c) {
 
 /* Block client due to shutdown command */
 void blockClientShutdown(client *c) {
+    initClientBlockingState(c);
+    c->bstate->timeout = 0;
     blockClient(c, BLOCKED_SHUTDOWN);
 }
 

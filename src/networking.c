@@ -64,6 +64,24 @@ typedef struct {
     int type;
     /* Boolean flag to determine if the current client (`me`) should be filtered. 1 means "skip me", 0 means otherwise. */
     int skipme;
+    /* Client name to filter. If NULL, no name filtering is applied. */
+    char *name;
+    /* Idle time (in seconds) of a client connection for filtering.
+     * Connections with idle time more than this value will match.
+     * A value of 0 means no idle time filtering. */
+    long long idle;
+    /* Client flags for filtering. If NULL, no filtering is applied. */
+    sds flags;
+    /* Library name to filter. If NULL, no library name filtering is applied. */
+    robj *lib_name;
+    /* Library version to filter. If NULL, no library version filtering is applied. */
+    robj *lib_ver;
+    /* Database index to filter. If set to -1, no DB number filtering is applied. */
+    int db_number;
+    /* Client capa for filtering. If NULL, no filtering is applied. */
+    sds capa;
+    /* Client ip for filtering. If NULL, no filtering is applied. */
+    sds ip;
 } clientFilter;
 
 /* Types of payloads in reply buffers (c->buf and c->reply)
@@ -99,7 +117,13 @@ int postponeClientRead(client *c);
 char *getClientSockname(client *c);
 static int parseClientFiltersOrReply(client *c, int index, clientFilter *filter);
 static int clientMatchesFilter(client *client, clientFilter *client_filter);
+static int validateClientFlagFilter(sds flag_filter);
+static int validateClientCapaFilter(sds capa);
 static sds getAllFilteredClientsInfoString(clientFilter *client_filter, int hide_user_data);
+static int clientMatchesFlagFilter(client *c, sds flag_filter);
+static int clientMatchesIpFilter(client *c, sds ip);
+static int clientMatchesCapaFilter(client *c, sds capa_filter);
+static void freeClientFilter(clientFilter *filter);
 
 int ProcessingEventsWhileBlocked = 0; /* See processEventsWhileBlocked(). */
 __thread sds thread_shared_qb = NULL;
@@ -159,8 +183,22 @@ void linkClient(client *c) {
 static void clientSetDefaultAuth(client *c) {
     /* If the default user does not require authentication, the user is
      * directly authenticated. */
-    c->user = DefaultUser;
-    c->flag.authenticated = (c->user->flags & USER_FLAG_NOPASS) && !(c->user->flags & USER_FLAG_DISABLED);
+    clientSetUser(c, DefaultUser, (DefaultUser->flags & USER_FLAG_NOPASS) && !(DefaultUser->flags & USER_FLAG_DISABLED));
+}
+
+/* Attach the user u to this client.
+ * Also, mark the client authentication state. In case the client is marked as authenticated,
+ * it will also set the ever_authenticated flag on the client in order to avoid low level
+ * limiting of the client output buffer.*/
+void clientSetUser(client *c, user *u, int authenticated) {
+    c->user = u;
+    c->flag.authenticated = authenticated;
+    if (authenticated)
+        c->flag.ever_authenticated = authenticated;
+}
+
+static int clientEverAuthenticated(client *c) {
+    return c->flag.ever_authenticated;
 }
 
 int authRequired(client *c) {
@@ -181,7 +219,7 @@ static inline int isReplicaReadyForReplData(client *replica) {
  * Copy avoidance can be allowed only for regular Valkey clients
  * that use _writeToClient handler to write replies to client connection */
 static int isCopyAvoidPreferred(client *c, robj *obj) {
-    if (c->flag.fake) return 0;
+    if (c->flag.fake || isDeferredReplyEnabled(c)) return 0;
 
     int type = getClientType(c);
     if (type != CLIENT_TYPE_NORMAL && type != CLIENT_TYPE_PUBSUB) return 0;
@@ -213,8 +251,6 @@ client *createClient(connection *conn) {
      * in the context of a client. When commands are executed in other
      * contexts (for instance a Lua script) we need a non connected client. */
     if (conn) {
-        connEnableTcpNoDelay(conn);
-        if (server.tcpkeepalive) connKeepAlive(conn, server.tcpkeepalive);
         connSetReadHandler(conn, readQueryFromClient);
         connSetPrivateData(conn, c);
         conn->flags |= CONN_FLAG_ALLOW_ACCEPT_OFFLOAD;
@@ -261,8 +297,10 @@ client *createClient(connection *conn) {
     c->duration = 0;
     clientSetDefaultAuth(c);
     c->reply = listCreate();
+    c->deferred_reply = NULL;
     c->deferred_reply_errors = NULL;
     c->reply_bytes = 0;
+    c->deferred_reply_bytes = ULLONG_MAX;
     c->obuf_soft_limit_reached_time = 0;
     listSetFreeMethod(c->reply, freeClientReplyValue);
     listSetDupMethod(c->reply, dupClientReplyValue);
@@ -338,7 +376,6 @@ void putClientInPendingWriteQueue(client *c) {
         listLinkNodeHead(server.clients_pending_write, &c->clients_pending_write_node);
     }
 }
-
 /* This function is called every time we are going to transmit new data
  * to the client. The behavior is the following:
  *
@@ -387,6 +424,7 @@ int prepareClientToWrite(client *c) {
      * it should already be setup to do so (it has already pending data). */
     if (!clientHasPendingReplies(c)) putClientInPendingWriteQueue(c);
 
+    if (!isDeferredReplyEnabled(c)) c->flag.buffered_reply = 1;
     /* Authorize the caller to queue in the output buffer of this client. */
     return C_OK;
 }
@@ -480,7 +518,8 @@ static size_t upsertPayloadHeader(char *buf, size_t *bufpos, payloadHeader **las
  * zmalloc_usable_size() call. Writing beyond client->buf boundaries confuses
  * sanitizer and generates a false positive out-of-bounds error */
 VALKEY_NO_SANITIZE("bounds")
-static size_t _addReplyPayloadToBuffer(client *c, const void *payload, size_t len, uint8_t payload_type) {
+static size_t _addReplyPayloadToBuffer(client *c, const void *payload, size_t len, uint8_t payload_type) {    /* If the debug enforcing to use the reply list is enabled.*/
+    if (server.debug_client_enforce_reply_list) return 0;
     /* If there already are entries in the reply list, we cannot
      * add anything more to the static buffer. */
     if (listLength(c->reply) > 0) return 0;
@@ -556,8 +595,9 @@ static void _addReplyPayloadToList(client *c, list *reply_list, const char *payl
         /* Create a new node, make sure it is allocated to at
          * least PROTO_REPLY_CHUNK_BYTES */
         size_t usable_size;
+        size_t min_reply_size = isDeferredReplyEnabled(c) ? PROTO_REPLY_MIN_BYTES : PROTO_REPLY_CHUNK_BYTES;
         size_t required_size = encoded ? len + sizeof(payloadHeader) : len;
-        size_t size = required_size < PROTO_REPLY_CHUNK_BYTES ? PROTO_REPLY_CHUNK_BYTES : required_size;
+        size_t size = required_size < min_reply_size ? min_reply_size : required_size;
         tail = zmalloc_usable(size + sizeof(clientReplyBlock), &usable_size);
         /* take over the allocation's internal fragmentation */
         tail->size = usable_size - sizeof(clientReplyBlock);
@@ -570,7 +610,8 @@ static void _addReplyPayloadToList(client *c, list *reply_list, const char *payl
         memcpy(tail->buf + tail->used, payload, len);
         tail->used += len;
         listAddNodeTail(reply_list, tail);
-        c->reply_bytes += tail->size;
+        unsigned long long *reply_bytes = (isDeferredReplyEnabled(c)) ? &c->deferred_reply_bytes : &c->reply_bytes;
+        *reply_bytes += tail->size;
 
         closeClientOnOutputBufferLimitReached(c, 1);
     }
@@ -610,7 +651,6 @@ void _addReplyToBufferOrList(client *c, const char *s, size_t len) {
     }
 
     c->net_output_bytes_curr_cmd += len;
-
     /* We call it here because this function may affect the reply
      * buffer offset (see function comment) */
     reqresSaveClientReplyOffset(c);
@@ -621,12 +661,17 @@ void _addReplyToBufferOrList(client *c, const char *s, size_t len) {
      * the SUBSCRIBE command family, which (currently) have a push message instead of a proper reply.
      * The check for executing_client also avoids affecting push messages that are part of eviction.
      * Check CLIENT_PUSHING first to avoid race conditions, as it's absent in module's fake client. */
-    if (c->flag.pushing && c == server.current_client && server.executing_client &&
-        !cmdHasPushAsReply(server.executing_client->cmd)) {
-        _addReplyProtoToList(c, server.pending_push_messages, s, len);
+    int defer_push_message = c->flag.pushing && c == server.current_client && server.executing_client &&
+                             !cmdHasPushAsReply(server.executing_client->cmd);
+    if (defer_push_message == 0 && isDeferredReplyEnabled(c)) {
+        _addReplyProtoToList(c, c->deferred_reply, s, len);
         return;
     }
 
+    if (defer_push_message) {
+        _addReplyProtoToList(c, server.pending_push_messages, s, len);
+        return;
+    }
     size_t reply_len = _addReplyToBuffer(c, s, len);
     if (len > reply_len) _addReplyProtoToList(c, c->reply, s + reply_len, len - reply_len);
 }
@@ -727,6 +772,7 @@ void afterErrorReply(client *c, const char *s, size_t len, int flags) {
         return;
     }
 
+    commitDeferredReplyBuffer(c, 1);
     if (!(flags & ERR_REPLY_FLAG_NO_STATS_UPDATE)) {
         /* Increment the global error counter */
         server.stat_total_error_replies++;
@@ -1003,6 +1049,7 @@ void setDeferredReply(client *c, void *node, const char *s, size_t length) {
         size_t len_to_copy = prev->size - prev->used;
         if (len_to_copy > length) len_to_copy = length;
         memcpy(prev->buf + prev->used, s, len_to_copy);
+        c->net_output_bytes_curr_cmd += len_to_copy;
         prev->used += len_to_copy;
         length -= len_to_copy;
         if (length == 0) {
@@ -1016,6 +1063,7 @@ void setDeferredReply(client *c, void *node, const char *s, size_t length) {
         next->used < PROTO_REPLY_CHUNK_BYTES * 4 && c->io_write_state != CLIENT_PENDING_IO && !next->flag.buf_encoded) {
         memmove(next->buf + length, next->buf, next->used);
         memcpy(next->buf, s, length);
+        c->net_output_bytes_curr_cmd += length;
         next->used += length;
         listDelNode(c->reply, ln);
     } else {
@@ -1027,6 +1075,7 @@ void setDeferredReply(client *c, void *node, const char *s, size_t length) {
         buf->used = length;
         buf->flag.buf_encoded = 0;
         memcpy(buf->buf, s, length);
+        c->net_output_bytes_curr_cmd += length;
         listNodeValue(ln) = buf;
         c->reply_bytes += buf->size;
 
@@ -1456,6 +1505,49 @@ void addReplySubcommandSyntaxError(client *c) {
     sdsfree(cmd);
 }
 
+inline int isDeferredReplyEnabled(client *c) {
+    return c->deferred_reply_bytes != ULLONG_MAX;
+}
+
+/* Commands that generate replies before triggering keyspace notifications must
+ * use a deferred reply buffer. This allows postponing the actual transmission
+ * of the reply until after the client is unblocked, in case it was blocked by
+ * a keyspace notification. This is necessary because modules subscribed to
+ * keyspace notifications can block the client from within the notification
+ * callback. */
+void initDeferredReplyBuffer(client *c) {
+    if (moduleNotifyKeyspaceSubscribersCnt() == 0) return;
+    if (c->deferred_reply == NULL) c->deferred_reply = listCreate();
+    if (!isDeferredReplyEnabled(c)) c->deferred_reply_bytes = 0;
+}
+
+static void resetDeferredReplyBuffer(client *c) {
+    listEmpty(c->deferred_reply);
+    c->deferred_reply_bytes = ULLONG_MAX;
+}
+
+/* Move the client deferred reply buffer into the client reply buffer and put the client
+ * in the pending write queue. */
+void commitDeferredReplyBuffer(client *c, int skip_if_blocked) {
+    if (skip_if_blocked && c->flag.blocked) return;
+
+    if (!isDeferredReplyEnabled(c) || (c->deferred_reply && listLength(c->deferred_reply) == 0)) {
+        resetDeferredReplyBuffer(c);
+        return;
+    }
+
+    listJoin(c->reply, c->deferred_reply);
+    c->reply_bytes += c->deferred_reply_bytes;
+
+    resetDeferredReplyBuffer(c);
+    if (prepareClientToWrite(c) != C_OK) {
+        return;
+    }
+    /* We call it here because this function may affect the reply
+     * buffer offset (see function comment) */
+    reqresSaveClientReplyOffset(c);
+}
+
 /* Append 'src' client output buffers into 'dst' client output buffers.
  * This function clears the output buffers of 'src' */
 void AddReplyFromClient(client *dst, client *src) {
@@ -1757,7 +1849,6 @@ void unlinkClient(client *c) {
 
     /* Remove from the list of pending writes if needed. */
     if (c->flag.pending_write) {
-        serverAssert(&c->clients_pending_write_node.next != NULL || &c->clients_pending_write_node.prev != NULL);
         if (c->io_write_state == CLIENT_IDLE) {
             listUnlinkNode(server.clients_pending_write, &c->clients_pending_write_node);
         } else {
@@ -1912,6 +2003,7 @@ void freeClient(client *c) {
     c->reply = NULL;
     zfree_with_size(c->buf, c->buf_usable_size);
     c->buf = NULL;
+    listRelease(c->deferred_reply);
 
     freeClientArgv(c);
     freeClientOriginalArgv(c);
@@ -2986,6 +3078,8 @@ void resetClient(client *c) {
     c->slot = -1;
     c->flag.executing_command = 0;
     c->flag.replication_done = 0;
+    c->flag.buffered_reply = 0;
+    c->flag.keyspace_notified = 0;
     c->net_output_bytes_curr_cmd = 0;
 
     /* Make sure the duration has been recorded to some command. */
@@ -2996,6 +3090,7 @@ void resetClient(client *c) {
 
     if (c->deferred_reply_errors) listRelease(c->deferred_reply_errors);
     c->deferred_reply_errors = NULL;
+    commitDeferredReplyBuffer(c, 1);
 
     /* We clear the ASKING flag as well if we are not inside a MULTI, and
      * if what we just executed is not the ASKING command itself. */
@@ -3172,24 +3267,27 @@ static void setProtocolError(const char *errstr, client *c) {
         /* Sample some protocol to given an idea about what was inside. */
         char buf[256];
         buf[0] = '\0';
-        if (c->querybuf && sdslen(c->querybuf) - c->qb_pos < PROTO_DUMP_LEN) {
-            snprintf(buf, sizeof(buf), "Query buffer during protocol error: '%s'", c->querybuf + c->qb_pos);
-        } else if (c->querybuf) {
-            snprintf(buf, sizeof(buf), "Query buffer during protocol error: '%.*s' (... more %zu bytes ...) '%.*s'",
-                     PROTO_DUMP_LEN / 2, c->querybuf + c->qb_pos, sdslen(c->querybuf) - c->qb_pos - PROTO_DUMP_LEN,
-                     PROTO_DUMP_LEN / 2, c->querybuf + sdslen(c->querybuf) - PROTO_DUMP_LEN / 2);
-        }
+        if (server.hide_user_data_from_log) {
+            snprintf(buf, sizeof(buf), "*redacted*");
+        } else {
+            if (c->querybuf && sdslen(c->querybuf) - c->qb_pos < PROTO_DUMP_LEN) {
+                snprintf(buf, sizeof(buf), "'%s'", c->querybuf + c->qb_pos);
+            } else if (c->querybuf) {
+                snprintf(buf, sizeof(buf), "'%.*s' (... more %zu bytes ...) '%.*s'",
+                         PROTO_DUMP_LEN / 2, c->querybuf + c->qb_pos, sdslen(c->querybuf) - c->qb_pos - PROTO_DUMP_LEN,
+                         PROTO_DUMP_LEN / 2, c->querybuf + sdslen(c->querybuf) - PROTO_DUMP_LEN / 2);
+            }
 
-        /* Remove non printable chars. */
-        char *p = buf;
-        while (*p != '\0') {
-            if (!isprint(*p)) *p = '.';
-            p++;
+            /* Remove non printable chars. */
+            char *p = buf;
+            while (*p != '\0') {
+                if (!isprint(*p)) *p = '.';
+                p++;
+            }
         }
-
         /* Log all the client and protocol info. */
         int loglevel = (c->flag.primary) ? LL_WARNING : LL_VERBOSE;
-        serverLog(loglevel, "Protocol error (%s) from client: %s. %s", errstr, client, buf);
+        serverLog(loglevel, "Protocol error (%s) from client: %s. Query buffer: %s", errstr, client, buf);
         sdsfree(client);
     }
     c->flag.close_after_reply = 1;
@@ -3262,30 +3360,30 @@ void processMultibulkBuffer(client *c) {
          *
          * Calculation: For multi bulk buffer, we accumulate four factors, namely;
          *
-         * 1) multibulklen_slen + 1
+         * 1) multibulklen_slen + 3
          *    Cumulative string length (and not the value of) of multibulklen,
-         *    including +1 from RESP first byte.
-         * 2) bulklen_slen + c->argc
+         *    including the first "*" byte and last "\r\n" 2 bytes from RESP.
+         * 2) bulklen_slen + 3
          *    Cumulative string length (and not the value of) of bulklen,
-         *    including +1 from RESP first byte per argument count.
+         *    including +3 from RESP first "$" byte and last "\r\n" 2 bytes per argument count.
          * 3) c->argv_len_sum
          *    Cumulative string length of all argument vectors.
-         * 4) c->argc * 4 + 2
-         *    Cumulative string length of all white-spaces, for which there exists a total of
-         *    4 bytes per argument, plus 2 bytes from the leading '\r\n' from multibulklen.
+         * 4) c->argc * 2
+         *    Cumulative string length of the arguments' white-spaces, for which there exists a total of
+         *    "\r\n" 2 bytes per argument.
          *
          * For example;
          * Command) SET key value
          * RESP) *3\r\n$3\r\nSET\r\n$3\r\nkey\r\n$5\r\nvalue\r\n
          *
-         * 1) String length of "*3" is 2, obtained from (multibulklen_slen + 1).
-         * 2) String length of "$3" "$3" "$5" is 6, obtained from (bulklen_slen + c->argc).
+         * 1) String length of "*3\r\n" is 4, obtained from (multibulklen_slen + 3).
+         * 2) String length of "$3\r\n" "$3\r\n" "$5\r\n" is 12, obtained from (bulklen_slen + 3).
          * 3) String length of "SET" "key" "value" is 11, obtained from (c->argv_len_sum).
-         * 4) String length of all white-spaces "\r\n" is 14, obtained from (c->argc * 4 + 2).
+         * 4) String length of the 3 arguments' white-spaces "\r\n" is 6, obtained from (c->argc * 2).
          *
          * The 1st component is calculated within the below line.
          * */
-        c->net_input_bytes_curr_cmd += (multibulklen_slen + 1);
+        c->net_input_bytes_curr_cmd += (multibulklen_slen + 3);
     }
 
     serverAssertWithInfo(c, NULL, c->multibulklen > 0);
@@ -3350,9 +3448,8 @@ void processMultibulkBuffer(client *c) {
                 }
             }
             c->bulklen = ll;
-            /* Per-slot network bytes-in calculation, 2nd component.
-             * c->argc portion is deferred, as it may not have been fully populated at this point. */
-            c->net_input_bytes_curr_cmd += bulklen_slen;
+            /* Per-slot network bytes-in calculation, 2nd component. */
+            c->net_input_bytes_curr_cmd += (bulklen_slen + 3);
         }
 
         /* Read bulk argument */
@@ -3390,9 +3487,8 @@ void processMultibulkBuffer(client *c) {
 
     /* We're done when c->multibulk == 0 */
     if (c->multibulklen == 0) {
-        /* Per-slot network bytes-in calculation, 3rd and 4th components.
-         * Here, the deferred c->argc from 2nd component is added, resulting in c->argc * 5 instead of * 4. */
-        c->net_input_bytes_curr_cmd += (c->argv_len_sum + (c->argc * 5 + 2));
+        /* Per-slot network bytes-in calculation, 3rd and 4th components. */
+        c->net_input_bytes_curr_cmd += (c->argv_len_sum + (c->argc * 2));
         c->read_flags |= READ_FLAGS_PARSING_COMPLETED;
     }
 }
@@ -3816,9 +3912,9 @@ sds catClientInfoString(sds s, client *client, int hide_user_data) {
             " flags=%s", flags,
             " capa=%s", capa,
             " db=%i", client->db->id,
-            " sub=%i", client->pubsub_data ? (int)dictSize(client->pubsub_data->pubsub_channels) : 0,
-            " psub=%i", client->pubsub_data ? (int)dictSize(client->pubsub_data->pubsub_patterns) : 0,
-            " ssub=%i", client->pubsub_data ? (int)dictSize(client->pubsub_data->pubsubshard_channels) : 0,
+            " sub=%i", client->pubsub_data ? (int)hashtableSize(client->pubsub_data->pubsub_channels) : 0,
+            " psub=%i", client->pubsub_data ? (int)hashtableSize(client->pubsub_data->pubsub_patterns) : 0,
+            " ssub=%i", client->pubsub_data ? (int)hashtableSize(client->pubsub_data->pubsubshard_channels) : 0,
             " multi=%i", client->mstate ? client->mstate->count : -1,
             " watch=%i", client->mstate ? (int)listLength(&client->mstate->watched_keys) : 0,
             " qbuf=%U", client->querybuf ? (unsigned long long)sdslen(client->querybuf) : 0,
@@ -4045,17 +4141,17 @@ static int parseClientFiltersOrReply(client *c, int index, clientFilter *filter)
                 index++; /* Move to the next argument */
             }
         } else if (!strcasecmp(c->argv[index]->ptr, "maxage") && moreargs) {
-            long long tmp;
+            long long maxage;
 
-            if (getLongLongFromObjectOrReply(c, c->argv[index + 1], &tmp,
+            if (getLongLongFromObjectOrReply(c, c->argv[index + 1], &maxage,
                                              "maxage is not an integer or out of range") != C_OK)
                 return C_ERR;
-            if (tmp <= 0) {
+            if (maxage <= 0) {
                 addReplyError(c, "maxage should be greater than 0");
                 return C_ERR;
             }
 
-            filter->max_age = tmp;
+            filter->max_age = maxage;
             index += 2;
         } else if (!strcasecmp(c->argv[index]->ptr, "type") && moreargs) {
             filter->type = getClientTypeByName(c->argv[index + 1]->ptr);
@@ -4087,6 +4183,58 @@ static int parseClientFiltersOrReply(client *c, int index, clientFilter *filter)
                 return C_ERR;
             }
             index += 2;
+        } else if (!strcasecmp(c->argv[index]->ptr, "idle") && moreargs) {
+            long long idle_time;
+
+            if (getLongLongFromObjectOrReply(c, c->argv[index + 1], &idle_time,
+                                             "idle is not an integer or out of range") != C_OK)
+                return C_ERR;
+            if (idle_time <= 0) {
+                addReplyError(c, "idle should be greater than 0");
+                return C_ERR;
+            }
+
+            filter->idle = idle_time;
+            index += 2;
+        } else if (!strcasecmp(c->argv[index]->ptr, "flags") && moreargs) {
+            filter->flags = sdsnew(c->argv[index + 1]->ptr);
+            if (validateClientFlagFilter(filter->flags) == C_ERR) {
+                addReplyErrorFormat(c, "Unknown flags found in the provided filter: %s", filter->flags);
+                return C_ERR;
+            }
+            index += 2;
+        } else if (!strcasecmp(c->argv[index]->ptr, "name") && moreargs) {
+            filter->name = c->argv[index + 1]->ptr;
+            index += 2;
+        } else if (!strcasecmp(c->argv[index]->ptr, "lib-name") && moreargs) {
+            filter->lib_name = c->argv[index + 1];
+            incrRefCount(filter->lib_name);
+            index += 2;
+        } else if (!strcasecmp(c->argv[index]->ptr, "lib-ver") && moreargs) {
+            filter->lib_ver = c->argv[index + 1];
+            incrRefCount(filter->lib_ver);
+            index += 2;
+        } else if (!strcasecmp(c->argv[index]->ptr, "db") && moreargs) {
+            int db_id;
+            if (getIntFromObjectOrReply(c, c->argv[index + 1], &db_id,
+                                        "DB is not an integer or out of range") != C_OK)
+                return C_ERR;
+            if (db_id < 0 || db_id >= server.dbnum) {
+                addReplyErrorFormat(c, "DB number should be between 0 and %d", server.dbnum - 1);
+                return C_ERR;
+            }
+            filter->db_number = db_id;
+            index += 2;
+        } else if (!strcasecmp(c->argv[index]->ptr, "capa") && moreargs) {
+            filter->capa = sdsnew(c->argv[index + 1]->ptr);
+            if (validateClientCapaFilter(filter->capa) == C_ERR) {
+                addReplyErrorFormat(c, "Unknown capa found in the provided filter: %s", filter->capa);
+                return C_ERR;
+            }
+            index += 2;
+        } else if (!strcasecmp(c->argv[index]->ptr, "ip") && moreargs) {
+            filter->ip = sdsnew(c->argv[index + 1]->ptr);
+            index += 2;
         } else {
             addReplyErrorObject(c, shared.syntaxerr);
             return C_ERR;
@@ -4094,6 +4242,53 @@ static int parseClientFiltersOrReply(client *c, int index, clientFilter *filter)
     }
     return C_OK;
 }
+
+static int validateClientCapaFilter(sds capa) {
+    for (size_t i = 0; i < sdslen(capa); i++) {
+        const char capability = capa[i];
+        switch (capability) {
+        case 'r':
+            /* Valid capability, do nothing. */
+            break;
+        default:
+            return C_ERR;
+        }
+    }
+    return C_OK;
+}
+
+static int validateClientFlagFilter(sds flag_filter) {
+    for (size_t i = 0; i < sdslen(flag_filter); i++) {
+        const char flag = flag_filter[i];
+        switch (flag) {
+        case 'O':
+        case 'S':
+        case 'M':
+        case 'P':
+        case 'x':
+        case 'b':
+        case 't':
+        case 'R':
+        case 'B':
+        case 'd':
+        case 'c':
+        case 'u':
+        case 'A':
+        case 'U':
+        case 'r':
+        case 'e':
+        case 'T':
+        case 'I':
+        case 'N':
+            /* Valid flag, do nothing. */
+            break;
+        default:
+            return C_ERR;
+        }
+    }
+    return C_OK;
+}
+
 
 static int clientMatchesFilter(client *client, clientFilter *client_filter) {
     /* Check each filter condition and return false if the client does not match. */
@@ -4104,10 +4299,143 @@ static int clientMatchesFilter(client *client, clientFilter *client_filter) {
     if (client_filter->user && client->user != client_filter->user) return 0;
     if (client_filter->skipme && client == server.current_client) return 0;
     if (client_filter->max_age != 0 && (long long)(commandTimeSnapshot() / 1000 - client->ctime) < client_filter->max_age) return 0;
+    if (client_filter->idle != 0 && (long long)(commandTimeSnapshot() / 1000 - client->last_interaction) < client_filter->idle) return 0;
+    if (client_filter->flags && clientMatchesFlagFilter(client, client_filter->flags) == 0) return 0;
+    if (client_filter->name) {
+        if (!client->name || !client->name->ptr || strcmp(client->name->ptr, client_filter->name) != 0) {
+            return 0;
+        }
+    }
+    if (client_filter->lib_name && (!client->lib_name || compareStringObjects(client->lib_name, client_filter->lib_name) != 0)) return 0;
+    if (client_filter->lib_ver && (!client->lib_ver || compareStringObjects(client->lib_ver, client_filter->lib_ver) != 0)) return 0;
+    if (client_filter->db_number != -1 && client->db->id != client_filter->db_number) return 0;
+    if (client_filter->capa && clientMatchesCapaFilter(client, client_filter->capa) == 0) return 0;
+    if (client_filter->ip && clientMatchesIpFilter(client, client_filter->ip) == 0) return 0;
 
     /* If all conditions are satisfied, the client matches the filter. */
     return 1;
 }
+
+static int clientMatchesIpFilter(client *c, sds ip) {
+    const char *peerid = getClientPeerId(c);
+    if (!peerid) return 0;
+
+    if (peerid[0] == '[') peerid++; /* IPv6 wrapped in square brackets */
+    size_t len = sdslen(ip);
+    if (strncmp(peerid, ip, len) != 0) return 0;
+
+    peerid += len;
+    if (peerid[0] == ']') peerid++; /* Skip trailing ] for IPv6 */
+
+    if (peerid[0] != ':') return 0; /* IP:port colon check */
+    peerid++;
+
+    if (peerid[0] == '0') return 0; /* Disallow port=0 */
+    return 1;
+}
+
+static int clientMatchesCapaFilter(client *c, sds capa_filter) {
+    /* Iterate through the provided capa filter string */
+    for (size_t i = 0; i < sdslen(capa_filter); i++) {
+        const char capability = capa_filter[i];
+
+        /* Check each capability */
+        switch (capability) {
+        case 'r': /* client supports redirection */
+            if (!(c->capa & CLIENT_CAPA_REDIRECT)) return 0;
+            break;
+        default:
+            /* Invalid capa, return false */
+            return 0;
+        }
+    }
+    /* If the loop completes, the client matches the capa filter */
+    return 1;
+}
+
+
+static int clientMatchesFlagFilter(client *c, sds flag_filter) {
+    /* Iterate through the provided flag filter string */
+    for (size_t i = 0; i < sdslen(flag_filter); i++) {
+        const char flag = flag_filter[i];
+
+        /* Check each flag */
+        switch (flag) {
+        case 'O': /* client in MONITOR mode */
+            if (!(c->flag.replica && c->flag.monitor)) return 0;
+            break;
+        case 'S': /* client is a replica node connection to this instance */
+            if (!c->flag.replica) return 0;
+            break;
+        case 'M': /* client is a primary */
+            if (!c->flag.primary) return 0;
+            break;
+        case 'P': /* client is a Pub/Sub subscriber */
+            if (!c->flag.pubsub) return 0;
+            break;
+        case 'x': /* client is in a MULTI/EXEC context */
+            if (!c->flag.multi) return 0;
+            break;
+        case 'b': /* client is waiting in a blocking operation */
+            if (!c->flag.blocked) return 0;
+            break;
+        case 't': /* client enabled keys tracking in order to perform client side caching */
+            if (!c->flag.tracking) return 0;
+            break;
+        case 'R': /* Client tracking target client is invalid */
+            if (!c->flag.tracking_broken_redir) return 0;
+            break;
+        case 'B': /* client enabled broadcast tracking mode */
+            if (!c->flag.tracking_bcast) return 0;
+            break;
+        case 'd': /* Dirty CAS */
+            if (!c->flag.dirty_cas) return 0;
+            break;
+        case 'c': /* Close after reply */
+            if (!c->flag.close_after_reply) return 0;
+            break;
+        case 'u': /* client is unblocked */
+            if (!c->flag.unblocked) return 0;
+            break;
+        case 'A': /* Close ASAP */
+            if (!c->flag.close_asap) return 0;
+            break;
+        case 'U': /* client is connected via a Unix domain socket */
+            if (!c->flag.unix_socket) return 0;
+            break;
+        case 'r': /* client is in readonly mode against a cluster node */
+            if (!c->flag.readonly) return 0;
+            break;
+        case 'e': /* client is excluded from the client eviction mechanism */
+            if (!c->flag.no_evict) return 0;
+            break;
+        case 'T': /* client will not touch the LRU/LFU of the keys it accesses */
+            if (!c->flag.no_touch) return 0;
+            break;
+        case 'I': /* Import source flag */
+            if (!c->flag.import_source) return 0;
+            break;
+        case 'N': /* Check for no flags */
+            if (!c->flag.replica && !c->flag.primary && !c->flag.pubsub &&
+                !c->flag.multi && !c->flag.blocked && !c->flag.tracking &&
+                !c->flag.tracking_broken_redir && !c->flag.tracking_bcast &&
+                !c->flag.dirty_cas && !c->flag.close_after_reply &&
+                !c->flag.unblocked && !c->flag.close_asap &&
+                !c->flag.unix_socket && !c->flag.readonly &&
+                !c->flag.no_evict && !c->flag.no_touch &&
+                !c->flag.import_source) {
+                return 1; /* Matches 'N' */
+            }
+            break;
+        default:
+            /* Invalid flag, return false */
+            return 0;
+        }
+    }
+    /* If the loop completes, the client matches the flag filter */
+    return 1;
+}
+
 
 void clientHelpCommand(client *c) {
     const char *help[] = {
@@ -4130,9 +4458,9 @@ void clientHelpCommand(client *c) {
         "KILL <option> <value> [<option> <value> [...]]",
         "    Kill connections. Options are:",
         "    * ADDR (<ip:port>|<unixsocket>:0)",
-        "      Kill connections made from the specified address",
+        "      Kill connections made from the specified address.",
         "    * LADDR (<ip:port>|<unixsocket>:0)",
-        "      Kill connections made to specified local address",
+        "      Kill connections made to the specified local address.",
         "    * TYPE (NORMAL|PRIMARY|REPLICA|PUBSUB)",
         "      Kill connections by type.",
         "    * USER <username>",
@@ -4140,9 +4468,25 @@ void clientHelpCommand(client *c) {
         "    * SKIPME (YES|NO)",
         "      Skip killing current connection (default: yes).",
         "    * ID <client-id> [<client-id>...]",
-        "      Kill connections by client ids.",
+        "      Kill connections by client IDs.",
         "    * MAXAGE <maxage>",
         "      Kill connections older than the specified age.",
+        "    * FLAGS <flags>",
+        "      Kill connections that include the specified flags.",
+        "    * NAME <client-name>",
+        "      Kill connections with the specified name.",
+        "    * IDLE <idle>",
+        "      Kill connections with idle time greater than or equal to <idle> seconds.",
+        "    * LIB-NAME <library-name>",
+        "      Kill connections with the specified library name.",
+        "    * LIB-VER <library-version>",
+        "      Kill connections with the specified library version.",
+        "    * DB <db-id>",
+        "      Kill connections currently operating on the specified database ID.",
+        "    * CAPA <capa>",
+        "      Kill connections currently with the specified capa.",
+        "    * IP <ip>",
+        "      Kill connections made from the specified ip.",
         "LIST [options ...]",
         "    Return information about client connections. Options:",
         "    * TYPE (NORMAL|PRIMARY|REPLICA|PUBSUB)",
@@ -4159,6 +4503,22 @@ void clientHelpCommand(client *c) {
         "      Exclude the current client from the list (default: no).",
         "    * MAXAGE <maxage>",
         "      List connections older than the specified age.",
+        "    * FLAGS <flags>",
+        "      Return clients with the specified flags.",
+        "    * NAME <client-name>",
+        "      Return clients with the specified name.",
+        "    * IDLE <idle>",
+        "      Return clients with idle time greater than or equal to <idle> seconds.",
+        "    * LIB-NAME <lib-name>",
+        "      Return clients with the specified lib name.",
+        "    * LIB-VER <lib-version>",
+        "      Return clients with the specified lib version.",
+        "    * DB <db-id>",
+        "      Return clients currently operating on the specified database ID.",
+        "    * CAPA <capa>",
+        "      Return connections currently with the specified capa.",
+        "    * IP <ip>",
+        "      Return connections made from the specified ip.",
         "UNPAUSE",
         "    Stop the current client pause, resuming traffic.",
         "PAUSE <timeout> [WRITE|ALL]",
@@ -4206,15 +4566,15 @@ void clientListCommand(client *c) {
     sds response = NULL;
 
     if (c->argc > 3) {
-        clientFilter filter = {.ids = NULL, .max_age = 0, .addr = NULL, .laddr = NULL, .user = NULL, .type = -1, .skipme = 0};
+        clientFilter filter = {.ids = NULL, .max_age = 0, .idle = 0, .addr = NULL, .laddr = NULL, .user = NULL, .type = -1, .skipme = 0, .db_number = -1};
         int i = 2;
 
         if (parseClientFiltersOrReply(c, i, &filter) != C_OK) {
-            zfree(filter.ids);
+            freeClientFilter(&filter);
             return;
         }
         response = getAllFilteredClientsInfoString(&filter, 0);
-        zfree(filter.ids);
+        freeClientFilter(&filter);
     } else if (c->argc != 2) {
         addReplyErrorObject(c, shared.syntaxerr);
         return;
@@ -4266,11 +4626,13 @@ void clientKillCommand(client *c) {
 
     clientFilter client_filter = {.ids = NULL,
                                   .max_age = 0,
+                                  .idle = 0,
                                   .addr = NULL,
                                   .laddr = NULL,
                                   .user = NULL,
                                   .type = -1,
-                                  .skipme = 1};
+                                  .skipme = 1,
+                                  .db_number = -1};
 
     int killed = 0, close_this_client = 0;
 
@@ -4321,7 +4683,34 @@ void clientKillCommand(client *c) {
      * only after we queued the reply to its output buffers. */
     if (close_this_client) c->flag.close_after_reply = 1;
 client_kill_done:
-    zfree(client_filter.ids);
+    freeClientFilter(&client_filter);
+}
+
+static void freeClientFilter(clientFilter *filter) {
+    if (filter->ids != NULL) {
+        zfree(filter->ids);
+        filter->ids = NULL;
+    }
+    if (filter->flags != NULL) {
+        sdsfree(filter->flags);
+        filter->flags = NULL;
+    }
+    if (filter->capa != NULL) {
+        sdsfree(filter->capa);
+        filter->capa = NULL;
+    }
+    if (filter->ip != NULL) {
+        sdsfree(filter->ip);
+        filter->ip = NULL;
+    }
+    if (filter->lib_name) {
+        decrRefCount(filter->lib_name);
+        filter->lib_name = NULL;
+    }
+    if (filter->lib_ver) {
+        decrRefCount(filter->lib_ver);
+        filter->lib_ver = NULL;
+    }
 }
 
 
@@ -4784,15 +5173,17 @@ void securityWarningCommand(client *c) {
         char ip[NET_IP_STR_LEN];
         int port;
         if (connAddrPeerName(c->conn, ip, sizeof(ip), &port) == -1) {
-            serverLog(LL_WARNING, "Possible SECURITY ATTACK detected. It looks like somebody is sending POST or Host: "
-                                  "commands to Redis. This is likely due to an attacker attempting to use Cross "
-                                  "Protocol Scripting to compromise your Redis instance. Connection aborted.");
+            serverLog(LL_WARNING,
+                      "Possible SECURITY ATTACK detected. It looks like somebody is sending POST or Host: "
+                      "commands to %s. This is likely due to an attacker attempting to use Cross "
+                      "Protocol Scripting to compromise your %s instance. Connection aborted.",
+                      SERVER_TITLE, SERVER_TITLE);
         } else {
             serverLog(LL_WARNING,
                       "Possible SECURITY ATTACK detected. It looks like somebody is sending POST or Host: commands to "
-                      "Redis. This is likely due to an attacker attempting to use Cross Protocol Scripting to "
-                      "compromise your Redis instance. Connection from %s:%d aborted.",
-                      ip, port);
+                      "%s. This is likely due to an attacker attempting to use Cross Protocol Scripting to "
+                      "compromise your %s instance. Connection from %s:%d aborted.",
+                      SERVER_TITLE, SERVER_TITLE, ip, port);
         }
         logged_time = now;
     }
@@ -4885,10 +5276,10 @@ void rewriteClientCommandVector(client *c, int argc, ...) {
 
 /* Completely replace the client command vector with the provided one. */
 void replaceClientCommandVector(client *c, int argc, robj **argv) {
-    int j;
     backupAndUpdateClientArgv(c, argc, argv);
     c->argv_len_sum = 0;
-    for (j = 0; j < c->argc; j++)
+    c->flag.buffered_reply = 0;
+    for (int j = 0; j < c->argc; j++)
         if (c->argv[j]) c->argv_len_sum += getStringObjectLen(c->argv[j]);
     c->cmd = lookupCommandOrOriginal(c->argv, c->argc);
     serverAssertWithInfo(c, NULL, c->cmd != NULL);
@@ -4919,6 +5310,7 @@ void rewriteClientCommandArgument(client *c, int i, robj *newval) {
 
     /* If this is the command name make sure to fix c->cmd. */
     if (i == 0) {
+        c->flag.buffered_reply = 0;
         c->cmd = lookupCommandOrOriginal(c->argv, c->argc);
         serverAssertWithInfo(c, NULL, c->cmd != NULL);
     }
@@ -4942,10 +5334,15 @@ size_t getClientOutputBufferMemoryUsage(client *c) {
             repl_node_num = last->id - cur->id + 1;
         }
         return repl_buf_size + (repl_node_size * repl_node_num);
-    } else {
-        size_t list_item_size = sizeof(listNode) + sizeof(clientReplyBlock);
-        return c->reply_bytes + (list_item_size * listLength(c->reply));
     }
+
+    size_t list_item_size = sizeof(listNode) + sizeof(clientReplyBlock);
+    size_t usage = c->reply_bytes + (list_item_size * listLength(c->reply));
+    if (isDeferredReplyEnabled(c)) {
+        usage += c->deferred_reply_bytes +
+                 (list_item_size * listLength(c->deferred_reply));
+    }
+    return usage;
 }
 
 /* Returns the total client's memory usage.
@@ -5028,6 +5425,11 @@ char *getClientTypeName(int class) {
 int checkClientOutputBufferLimits(client *c) {
     int soft = 0, hard = 0, class;
     unsigned long used_mem = getClientOutputBufferMemoryUsage(c);
+
+    /* For unauthenticated clients which were also never authenticated before the output buffer is limited to prevent
+     * them from abusing it by not reading the replies */
+    if (used_mem > REPLY_BUFFER_SIZE_UNAUTHENTICATED_CLIENT && authRequired(c) && !clientEverAuthenticated(c))
+        return 1;
 
     class = getClientType(c);
     /* For the purpose of output buffer limiting, primaries are handled

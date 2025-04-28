@@ -1,8 +1,9 @@
 /*
- * Copyright Valkey Contributors.
+ * Copyright (c) Valkey Contributors
  * All rights reserved.
- * SPDX-License-Identifier: BSD 3-Clause
- *
+ * SPDX-License-Identifier: BSD-3-Clause
+ */
+/*
  * This file utilizes prefetching keys and data for multiple commands in a batch,
  * to improve performance by amortizing memory access costs across multiple operations.
  */

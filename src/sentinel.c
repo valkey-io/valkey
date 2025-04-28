@@ -259,6 +259,7 @@ struct sentinelState {
                                         Key is the instance name, value is the
                                         sentinelValkeyInstance structure pointer. */
     int tilt;                          /* Are we in TILT mode? */
+    int total_tilt;                    /* Number of tilt. */
     int running_scripts;               /* Number of scripts in execution right now. */
     mstime_t tilt_start_time;          /* When TITL started. */
     mstime_t previous_time;            /* Last time we ran the time handler. */
@@ -492,6 +493,7 @@ void initSentinel(void) {
     sentinel.primaries = dictCreate(&instancesDictType);
     sentinel.tilt = 0;
     sentinel.tilt_start_time = 0;
+    sentinel.total_tilt = 0;
     sentinel.previous_time = mstime();
     sentinel.running_scripts = 0;
     sentinel.scripts_queue = listCreate();
@@ -4091,11 +4093,13 @@ void sentinelInfoCommand(client *c) {
                             "sentinel_masters:%lu\r\n"
                             "sentinel_tilt:%d\r\n"
                             "sentinel_tilt_since_seconds:%jd\r\n"
+                            "sentinel_total_tilt:%d\r\n"
                             "sentinel_running_scripts:%d\r\n"
                             "sentinel_scripts_queue_length:%ld\r\n"
                             "sentinel_simulate_failure_flags:%lu\r\n",
                             dictSize(sentinel.primaries), sentinel.tilt,
                             sentinel.tilt ? (intmax_t)((mstime() - sentinel.tilt_start_time) / 1000) : -1,
+                            sentinel.total_tilt,
                             sentinel.running_scripts, listLength(sentinel.scripts_queue), sentinel.simfailure_flags);
 
         di = dictGetIterator(sentinel.primaries);
@@ -4186,7 +4190,7 @@ void sentinelSetCommand(client *c) {
             changes++;
         } else if (!strcasecmp(option, "notification-script") && moreargs > 0) {
             /* notification-script <path> */
-            char *value = c->argv[++j]->ptr;
+            sds value = c->argv[++j]->ptr;
             if (sentinel.deny_scripts_reconfig) {
                 addReplyError(c, "Reconfiguration of scripts path is denied for "
                                  "security reasons. Check the deny-scripts-reconfig "
@@ -4194,16 +4198,16 @@ void sentinelSetCommand(client *c) {
                 goto seterr;
             }
 
-            if (strlen(value) && access(value, X_OK) == -1) {
+            if (sdslen(value) && access(value, X_OK) == -1) {
                 addReplyError(c, "Notification script seems non existing or non executable");
                 goto seterr;
             }
             sdsfree(ri->notification_script);
-            ri->notification_script = strlen(value) ? sdsnew(value) : NULL;
+            ri->notification_script = sdslen(value) ? sdsdup(value) : NULL;
             changes++;
         } else if (!strcasecmp(option, "client-reconfig-script") && moreargs > 0) {
             /* client-reconfig-script <path> */
-            char *value = c->argv[++j]->ptr;
+            sds value = c->argv[++j]->ptr;
             if (sentinel.deny_scripts_reconfig) {
                 addReplyError(c, "Reconfiguration of scripts path is denied for "
                                  "security reasons. Check the deny-scripts-reconfig "
@@ -4211,27 +4215,27 @@ void sentinelSetCommand(client *c) {
                 goto seterr;
             }
 
-            if (strlen(value) && access(value, X_OK) == -1) {
+            if (sdslen(value) && access(value, X_OK) == -1) {
                 addReplyError(c, "Client reconfiguration script seems non existing or "
                                  "non executable");
                 goto seterr;
             }
             sdsfree(ri->client_reconfig_script);
-            ri->client_reconfig_script = strlen(value) ? sdsnew(value) : NULL;
+            ri->client_reconfig_script = sdslen(value) ? sdsdup(value) : NULL;
             changes++;
         } else if (!strcasecmp(option, "auth-pass") && moreargs > 0) {
             /* auth-pass <password> */
-            char *value = c->argv[++j]->ptr;
+            sds value = c->argv[++j]->ptr;
             sdsfree(ri->auth_pass);
-            ri->auth_pass = strlen(value) ? sdsnew(value) : NULL;
+            ri->auth_pass = sdslen(value) ? sdsdup(value) : NULL;
             dropInstanceConnections(ri);
             changes++;
             redacted = 1;
         } else if (!strcasecmp(option, "auth-user") && moreargs > 0) {
             /* auth-user <username> */
-            char *value = c->argv[++j]->ptr;
+            sds value = c->argv[++j]->ptr;
             sdsfree(ri->auth_user);
-            ri->auth_user = strlen(value) ? sdsnew(value) : NULL;
+            ri->auth_user = sdslen(value) ? sdsdup(value) : NULL;
             dropInstanceConnections(ri);
             changes++;
         } else if (!strcasecmp(option, "quorum") && moreargs > 0) {
@@ -5186,6 +5190,7 @@ void sentinelCheckTiltCondition(void) {
     if (delta < 0 || delta > sentinel_tilt_trigger) {
         sentinel.tilt = 1;
         sentinel.tilt_start_time = mstime();
+        sentinel.total_tilt++;
         sentinelEvent(LL_WARNING, "+tilt", NULL, "#tilt mode entered");
     }
     sentinel.previous_time = mstime();

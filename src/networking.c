@@ -518,7 +518,8 @@ static size_t upsertPayloadHeader(char *buf, size_t *bufpos, payloadHeader **las
  * zmalloc_usable_size() call. Writing beyond client->buf boundaries confuses
  * sanitizer and generates a false positive out-of-bounds error */
 VALKEY_NO_SANITIZE("bounds")
-static size_t _addReplyPayloadToBuffer(client *c, const void *payload, size_t len, uint8_t payload_type) {    /* If the debug enforcing to use the reply list is enabled.*/
+static size_t _addReplyPayloadToBuffer(client *c, const void *payload, size_t len, uint8_t payload_type) {
+    /* If the debug enforcing to use the reply list is enabled.*/
     if (server.debug_client_enforce_reply_list) return 0;
     /* If there already are entries in the reply list, we cannot
      * add anything more to the static buffer. */

@@ -550,6 +550,62 @@ start_server {tags {"geo"}} {
         assert_equal {{1 0.0001} {2 9.8182}} [r GEORADIUS points -122.407107 37.794300 30 mi ASC WITHDIST]
     }
 
+    test {GEOSEARCH BYPOLYGON standard operations} {
+        r geoadd points 151.20932132005692 -33.877723137822436 "146, Elizabeth Street, Koreatown, Sydney, Sydney CBD, Sydney, Council of the City of Sydney, New South Wales, 2000, Australia"
+        r geoadd points 151.2119820713997 -33.87697539508043 "Connaught Centre, 187, Liverpool Street, Koreatown, Sydney, Sydney CBD, Sydney, Council of the City of Sydney, New South Wales, 2000, Australia"
+        r geoadd points 151.2119820713997 -33.87156123068408 "St James, Archibald Fountain Plaza/Area, Koreatown, Sydney, Sydney CBD, Sydney, Council of the City of Sydney, New South Wales, 2000, Australia"
+        r geoadd points 151.2229523062706 -33.883973760201364 "146, Oxford Street, Five Ways, Paddington, Eastern Suburbs, Sydney, Woollahra Municipal Council, New South Wales, 2021, Australia"
+        r geoadd points 151.22852593660355 -33.88116782387797 "Goodhope Street, Five Ways, Paddington, Eastern Suburbs, Sydney, Woollahra Municipal Council, New South Wales, 2021, Australia"
+        r geoadd points 151.2224105000496 -33.87544442350019 "Kings Cross Centre, 82-94, Darlinghurst Road, Potts Point, Sydney, Council of the City of Sydney, New South Wales, 2011, Australia"
+        r geoadd points 151.22953444719315 -33.874838625143106 "The Reg Bartley Oval, Waratah Street, Rushcutters Bay, Sydney, Council of the City of Sydney, New South Wales, 2011, Australia"
+        catch {r GEOSEARCH points BYPOLYGON 2 151.2039101016274 -33.87446472104431 151.2132606898065 -33.882942295615855} e
+        assert_match {*ERR GEOSEARCH BYPOLYGON must have at least 3 vertices*} $e
+        assert_equal {{Goodhope Street, Five Ways, Paddington, Eastern Suburbs, Sydney, Woollahra Municipal Council, New South Wales, 2021, Australia} {The Reg Bartley Oval, Waratah Street, Rushcutters Bay, Sydney, Council of the City of Sydney, New South Wales, 2011, Australia} {146, Elizabeth Street, Koreatown, Sydney, Sydney CBD, Sydney, Council of the City of Sydney, New South Wales, 2000, Australia}} [r GEOSEARCH points BYPOLYGON 11 151.21619137411474 -33.869643764947696 151.20408853981647 -33.87845382042545 151.2123775086366 -33.87864711938855 151.21046943124387 -33.87588862400425 151.21701035939626 -33.874286511854834 151.2239557405701 -33.8735722632175 151.22495056246407 -33.87893571656996 151.2274447496748 -33.882307713036354 151.23212935868654 -33.88136096120022 151.23097291274465 -33.87456240592362 151.22475424781445 -33.87099633192101]
+        assert_equal {{{146, Elizabeth Street, Koreatown, Sydney, Sydney CBD, Sydney, Council of the City of Sydney, New South Wales, 2000, Australia} 1035.7735 {151.20932132005691528 -33.87772313782243572}} {{Goodhope Street, Five Ways, Paddington, Eastern Suburbs, Sydney, Woollahra Municipal Council, New South Wales, 2021, Australia} 929.4979 {151.22852593660354614 -33.88116782387797343}} {{The Reg Bartley Oval, Waratah Street, Rushcutters Bay, Sydney, Council of the City of Sydney, New South Wales, 2011, Australia} 858.3013 {151.22953444719314575 -33.87483862514310573}}} [r GEOSEARCH points BYPOLYGON 11 151.21619137411474 -33.869643764947696 151.20408853981647 -33.87845382042545 151.2123775086366 -33.87864711938855 151.21046943124387 -33.87588862400425 151.21701035939626 -33.874286511854834 151.2239557405701 -33.8735722632175 151.22495056246407 -33.87893571656996 151.2274447496748 -33.882307713036354 151.23212935868654 -33.88136096120022 151.23097291274465 -33.87456240592362 151.22475424781445 -33.87099633192101 WITHDIST WITHCOORD DESC]
+        set res [r GEOSEARCH points BYPOLYGON 11 151.21619137411474 -33.869643764947696 151.20408853981647 -33.87845382042545 151.2123775086366 -33.87864711938855 151.21046943124387 -33.87588862400425 151.21701035939626 -33.874286511854834 151.2239557405701 -33.8735722632175 151.22495056246407 -33.87893571656996 151.2274447496748 -33.882307713036354 151.23212935868654 -33.88136096120022 151.23097291274465 -33.87456240592362 151.22475424781445 -33.87099633192101 WITHDIST WITHCOORD ASC]
+        assert_equal {{{The Reg Bartley Oval, Waratah Street, Rushcutters Bay, Sydney, Council of the City of Sydney, New South Wales, 2011, Australia} 858.3013 {151.22953444719314575 -33.87483862514310573}} {{Goodhope Street, Five Ways, Paddington, Eastern Suburbs, Sydney, Woollahra Municipal Council, New South Wales, 2021, Australia} 929.4979 {151.22852593660354614 -33.88116782387797343}} {{146, Elizabeth Street, Koreatown, Sydney, Sydney CBD, Sydney, Council of the City of Sydney, New South Wales, 2000, Australia} 1035.7735 {151.20932132005691528 -33.87772313782243572}}} $res
+        r geosearchstore destpoints points  BYPOLYGON 11 151.21619137411474 -33.869643764947696 151.20408853981647 -33.87845382042545 151.2123775086366 -33.87864711938855 151.21046943124387 -33.87588862400425 151.21701035939626 -33.874286511854834 151.2239557405701 -33.8735722632175 151.22495056246407 -33.87893571656996 151.2274447496748 -33.882307713036354 151.23212935868654 -33.88136096120022 151.23097291274465 -33.87456240592362 151.22475424781445 -33.87099633192101 ASC STOREDIST COUNT 2
+        assert_equal {{The Reg Bartley Oval, Waratah Street, Rushcutters Bay, Sydney, Council of the City of Sydney, New South Wales, 2011, Australia} {Goodhope Street, Five Ways, Paddington, Eastern Suburbs, Sydney, Woollahra Municipal Council, New South Wales, 2021, Australia}} [r zrange destpoints 0 -1]
+    }
+
+    test {GEOSEARCH BYPOLYGON across hemispheres} {
+        r del points destpoints
+        r geoadd points -68.8798275589943 -44.61362078872198 "Departamento Paso de Indios, Chubut Province, 9207, Argentina"
+        r geoadd points -63.42572718858719 -28.2735053489472 "Chañar Pozo, Departamento Avellaneda, Santiago del Estero, G4328, Argentina"
+        r geoadd points -100.691137611866 24.238865478290585 "La Noria de Jesús, Vanegas, San Luis Potosí, 78514, Mexico"
+        r geoadd points -118.6207178235054 43.85981245898269 "Harney County, Oregon, United States"
+        r geoadd points -121.43320173025131 51.857438167842574 "Area G (Lac La Hache/108 Mile Ranch), Cariboo Regional District, British Columbia, Canada"
+        r geoadd points -79.07508105039597 37.97053232436472 "Stuarts Draft, Augusta County, Virginia, 24477, United States"
+        r geoadd points -0.1308193802833557 51.652445128802185 "Trent Park Golf Course, Bramley Road, Cockfosters, London Borough of Enfield, London, Greater London, England, N14 4TN, United Kingdom"
+        r geoadd points -44.97371703386307 64.60993716062175 "Sermersooq, Greenland"
+        r geoadd points 17.252480685710907 -21.646808926327388 "Otjozondjupa, Namibia"
+        r geoadd points 35.04182428121567 -6.304554908397684 "Mwandila, Manyoni, Singida Region, Central Zone, Tanzania"
+        r geoadd points 120.61124950647354 -27.712320618990717 "Sir Samuel, Shire Of Leonora, Western Australia, 6437, Australia"
+        r geoadd points 145.04961222410202 -32.22031713143272 "Kulwin, Cobar Shire Council, New South Wales, 2835, Australia"
+        r geoadd points 3.5416236519813538 26.716565550429046 "In Salah, d'In Salah District, In Salah, Algeria"
+        r geoadd points 13.330726325511932 38.111391848631506 "Via Palchetto, Altarello, IV Circoscrizione, Palermo, Sicily, 90132, Italy"
+        r geoadd points 34.81671720743179 32.05908351848717 "Korazin, South Givatayim, Tel Ganim, Givatayim, Tel Aviv Subdistrict, Tel-Aviv District, 5223403, Israel"
+        r geoadd points 74.56694215536118 14.589623066168919 "Yana Caves, Yana Caves Road, Yana, Kumata taluk, Uttara Kannada, Karnataka, India"
+        r geoadd points 11.964205205440521 57.70702963854761 "3, Köpmansgatan, North Town, Inom Vallgraven, Centrum, Gothenburg, Göteborgs Stad, Västra Götaland County, 411 14, Sweden"
+        r geoadd points 106.83230191469193 15.117455935110826 "Ban Soak, Saysetha District, Attapeu, Laos"
+        r geoadd points 90.02549439668655 39.614491635004136 "Lopnur, Ruoqiang County, Bayingolin, Xinjiang, China"
+        r geoadd points 118.27697664499283 26.579067066419547 "Yanping District, Nanping City, Fujian, China"
+        r geoadd points 118.27697664499283 36.02277654389389 "S234, Yiyuan County, Zibo, Shandong, China"
+        assert_equal {{Via Palchetto, Altarello, IV Circoscrizione, Palermo, Sicily, 90132, Italy} {Yana Caves, Yana Caves Road, Yana, Kumata taluk, Uttara Kannada, Karnataka, India} {Ban Soak, Saysetha District, Attapeu, Laos} {Yanping District, Nanping City, Fujian, China} {Mwandila, Manyoni, Singida Region, Central Zone, Tanzania} {Harney County, Oregon, United States} {Trent Park Golf Course, Bramley Road, Cockfosters, London Borough of Enfield, London, Greater London, England, N14 4TN, United Kingdom}} [r geosearch points BYPOLYGON 33 -146.20062130262065 51.130912386593 -103.26379152330803 49.47193779943357 -63.315654670518995 50.93884489468163 -95.40642417874389 39.65534094349885 -77.4999298453865 26.73672845329922 -51.87745194229085 23.04646540450935 -8.42920299630615 41.60520661073045 -10.521785859954813 61.47846964761324 2.124111965940925 60.778434760758095 18.481092483619292 53.09061572914368 38.70573141092903 45.73303292470514 22.02205974562196 34.2426280008694 52.57520291900751 22.953137594767274 75.72278884992889 29.362381850764695 90.74676219754886 31.63413660453445 107.30623758289035 35.851039511158085 115.40629273520966 30.411873608761567 120.01593165018451 29.841092929180927 120.4535153988606 25.65037857240954 121.27924547967872 11.602225617909395 135.1015103851442 -16.60585394490754 129.87136213636785 -27.170064645188177 99.53888837265143 -26.498354216857965 37.56438677364021 -27.832463377991818 31.562753892887216 -13.63096249674378 20.629919303178035 9.515486567597444 11.209492263565085 32.02725659471969 5.4325413537034 35.55125756355285 -35.244014834951145 16.982781656720274 -75.35489645024853 11.812375133773651 -94.03343867618196 28.67577744862069 -124.16269338003593 36.64849855935148 -143.36084887326555 42.51835490888078]
+    }
+
+    test {GEOSEARCH BYPOLYGON overlapping edges} {
+        r del points
+        r geoadd points 151.20932132005692 -33.877723137822436 "146, Elizabeth Street, Koreatown, Sydney, Sydney CBD, Sydney, Council of the City of Sydney, New South Wales, 2000, Australia"
+        r geoadd points 151.2119820713997 -33.87697539508043 "Connaught Centre, 187, Liverpool Street, Koreatown, Sydney, Sydney CBD, Sydney, Council of the City of Sydney, New South Wales, 2000, Australia"
+        r geoadd points 151.2119820713997 -33.87156123068408 "St James, Archibald Fountain Plaza/Area, Koreatown, Sydney, Sydney CBD, Sydney, Council of the City of Sydney, New South Wales, 2000, Australia"
+        r geoadd points 151.2229523062706 -33.883973760201364 "146, Oxford Street, Five Ways, Paddington, Eastern Suburbs, Sydney, Woollahra Municipal Council, New South Wales, 2021, Australia"
+        r geoadd points 151.22852593660355 -33.88116782387797 "Goodhope Street, Five Ways, Paddington, Eastern Suburbs, Sydney, Woollahra Municipal Council, New South Wales, 2021, Australia"
+        r geoadd points 151.2224105000496 -33.87544442350019 "Kings Cross Centre, 82-94, Darlinghurst Road, Potts Point, Sydney, Council of the City of Sydney, New South Wales, 2011, Australia"
+        r geoadd points 151.22953444719315 -33.874838625143106 "The Reg Bartley Oval, Waratah Street, Rushcutters Bay, Sydney, Council of the City of Sydney, New South Wales, 2011, Australia"
+        assert_equal {{146, Elizabeth Street, Koreatown, Sydney, Sydney CBD, Sydney, Council of the City of Sydney, New South Wales, 2000, Australia} {St James, Archibald Fountain Plaza/Area, Koreatown, Sydney, Sydney CBD, Sydney, Council of the City of Sydney, New South Wales, 2000, Australia} {Kings Cross Centre, 82-94, Darlinghurst Road, Potts Point, Sydney, Council of the City of Sydney, New South Wales, 2011, Australia}} [r GEOSEARCH points BYPOLYGON  5 151.2154285314146 -33.867438205607186 151.20024487595015 -33.88138572784347 151.2374118848648 -33.87601765283626 151.19695829592922 -33.87272872054441 151.2278336546125 -33.88345323146266]
+    }
+
     foreach {type} {byradius bybox} {
     test "GEOSEARCH fuzzy test - $type" {
         if {$::accurate} { set attempt 300 } else { set attempt 30 }

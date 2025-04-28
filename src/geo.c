@@ -241,6 +241,7 @@ int geoWithinShape(GeoShape *shape, double score, double *xy, double *distance) 
     return C_OK;
 }
 
+/* Free the GEO BYPOLYGON array created with georadiusGeneric(). */
 void geoPolygonPointsFree(GeoShape *shape) {
     if (shape->type == POLYGON_TYPE && shape->t.polygon.points != NULL) {
         zfree(shape->t.polygon.points);
@@ -604,7 +605,7 @@ void georadiusGeneric(client *c, int srcKeyIndex, int flags) {
                 i++;
             } else if (!strcasecmp(arg, "storedist") && (flags & GEOSEARCH) && (flags & GEOSEARCHSTORE)) {
                 storedist = 1;
-            } else if (!strcasecmp(arg, "frommember") && (i + 1) < remaining && flags & GEOSEARCH && !fromloc) {
+            } else if (!strcasecmp(arg, "frommember") && (i + 1) < remaining && flags & GEOSEARCH && !fromloc && !bypolygon) {
                 /* No source key, proceed with argument parsing and return an error when done. */
                 if (zobj == NULL) {
                     frommember = 1;
@@ -618,7 +619,7 @@ void georadiusGeneric(client *c, int srcKeyIndex, int flags) {
                 }
                 frommember = 1;
                 i++;
-            } else if (!strcasecmp(arg, "fromlonlat") && (i + 2) < remaining && flags & GEOSEARCH && !frommember) {
+            } else if (!strcasecmp(arg, "fromlonlat") && (i + 2) < remaining && flags & GEOSEARCH && !frommember && !bypolygon) {
                 if (extractLongLatOrReply(c, c->argv + base_args + i + 1, shape.xy) == C_ERR) return;
                 fromloc = 1;
                 i += 2;
@@ -635,7 +636,7 @@ void georadiusGeneric(client *c, int srcKeyIndex, int flags) {
                 shape.type = RECTANGLE_TYPE;
                 bybox = 1;
                 i += 3;
-            } else if (!strcasecmp(arg, "bypolygon") && (i + 2) < remaining && flags & GEOSEARCH && !byradius && !bybox) {
+            } else if (!strcasecmp(arg, "bypolygon") && (i + 2) < remaining && flags & GEOSEARCH && !byradius && !bybox && !frommember && !frommember) {
                 // TODO: Update Key Specs for GEOSEARCH cmd.
                 int num_vertices = 0;
                 if (getIntFromObjectOrReply(c, c->argv[base_args + i + 1], &num_vertices, "invalid number of vertices") != C_OK) {

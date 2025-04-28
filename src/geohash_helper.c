@@ -103,11 +103,9 @@ int geohashBoundingBox(GeoShape *shape, double *bounds) {
     if (!bounds) return 0;
     double height = 0.0, width = 0.0;
     if (shape->type == CIRCULAR_TYPE) {
-        // For circular shapes, use the given radius directly.
         height = shape->conversion * shape->t.radius;
         width = shape->conversion * shape->t.radius;
     } else if (shape->type == RECTANGLE_TYPE) {
-        // For rectangles, calculate the diagonal as the radius.
         height = shape->conversion * shape->t.r.height / 2;
         width = shape->conversion * shape->t.r.width / 2;
     } else if (shape->type == POLYGON_TYPE) {

@@ -57,8 +57,8 @@ start_cluster 2 2 {tags {external:skip cluster}} {
 
         set info [R 2 info commandSTATS]
         # not del cmd
-        assert { ![string match "*cmdstat_del*" $info] }
+        assert_no_match "*cmdstat_del*" $info
         # has flushslot cmd
-        assert { [string match "*cmdstat_cluster|flushslot:calls=1*" $info] }
+        assert_match "*cmdstat_cluster|flushslot:calls=1*" $info
     }
 }

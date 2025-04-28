@@ -636,8 +636,7 @@ void georadiusGeneric(client *c, int srcKeyIndex, int flags) {
                 shape.type = RECTANGLE_TYPE;
                 bybox = 1;
                 i += 3;
-            } else if (!strcasecmp(arg, "bypolygon") && (i + 2) < remaining && flags & GEOSEARCH && !byradius && !bybox && !frommember && !frommember) {
-                // TODO: Update Key Specs for GEOSEARCH cmd.
+            } else if (!strcasecmp(arg, "bypolygon") && (i + 2) < remaining && flags & GEOSEARCH && !byradius && !bybox && !frommember && !fromloc) {
                 int num_vertices = 0;
                 if (getIntFromObjectOrReply(c, c->argv[base_args + i + 1], &num_vertices, "invalid number of vertices") != C_OK) {
                     return;
@@ -657,7 +656,6 @@ void georadiusGeneric(client *c, int srcKeyIndex, int flags) {
                         zfree(shape.t.polygon.points);
                         return;
                     }
-                    printf("Geo num_vertices lon lat: %d %f, %f\r\n", num_vertices, shape.t.polygon.points[j / 2][0], shape.t.polygon.points[j / 2][1]);
                 }
                 shape.type = POLYGON_TYPE;
                 bypolygon = 1;

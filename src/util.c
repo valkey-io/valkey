@@ -415,7 +415,7 @@ err:
     return 0;
 }
 
-#ifdef HAVE_AVX512
+#if HAVE_AVX512
 #include <immintrin.h>
 
 #define MULTIPLIER_10E8 100000000
@@ -484,6 +484,7 @@ static int string2llAVX512(const char *s, unsigned long slen, long long *value) 
     if (unlikely(p[0] == '0')) {
         return 0;
     }
+
     const __m256i ascii0 = _mm256_set1_epi8('0');
     const __m256i nine = _mm256_set1_epi8(9);
     uint32_t mask = (uint32_t)(0xFFFFFFFF << (32 - slen + plen));
@@ -563,9 +564,9 @@ static int string2llScalar(const char *s, size_t slen, long long *value) {
     /* A string of zero length or excessive length is not a valid number. */
     if (plen == slen || slen >= LONG_STR_SIZE) return 0;
 
-    /* Special case: first and only digit is 0. */
-    if (slen == 1 && p[0] == '0') {
-        if (value != NULL) *value = 0;
+    /* Special case: first and only digit is 0. Also handle single-digit 1-9 here. */
+    if (slen == 1 && p[0] >= '0' && p[0] <= '9') {
+        if (value != NULL) *value = p[0] - '0';
         return 1;
     }
 
@@ -621,7 +622,7 @@ static int string2llScalar(const char *s, size_t slen, long long *value) {
 }
 
 int string2ll(const char *s, size_t slen, long long *value) {
-#ifdef HAVE_AVX512
+#if HAVE_AVX512
     /* TODO: Cache the cpu info when server startup */
     if (__builtin_cpu_supports("avx512f") &&
         __builtin_cpu_supports("avx512vl") &&

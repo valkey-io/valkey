@@ -481,7 +481,7 @@ static int string2llAVX512(const char *s, unsigned long slen, long long *value) 
     }
 
     /* If first digit is 0, the string should just be 0. */
-    if (p[0] == '0') {
+    if (unlikely(p[0] == '0')) {
         return 0;
     }
     const __m256i ascii0 = _mm256_set1_epi8('0');

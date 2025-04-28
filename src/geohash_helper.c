@@ -149,7 +149,6 @@ int geohashBoundingBox(GeoShape *shape, double *bounds) {
         // Convert centroid back to degrees
         shape->xy[0] = rad_deg(central_lon);
         shape->xy[1] = rad_deg(central_lat);
-        printf("Geo centroid coordinates lon lat: %f, %f\r\n", shape->xy[0], shape->xy[1]);
         return 1;
     }
     double longitude = shape->xy[0];
@@ -184,11 +183,9 @@ GeoHashRadius geohashCalculateAreasByShapeWGS84(GeoShape *shape) {
     min_lat = shape->bounds[1];
     max_lon = shape->bounds[2];
     max_lat = shape->bounds[3];
-    printf("Geo bounding box min_lon min_lat max_lon max_lat: %f, %f, %f, %f\r\n", min_lon, min_lat, max_lon, max_lat);
 
     double longitude = shape->xy[0];
     double latitude = shape->xy[1];
-    printf("Geo shape->xy's longitude, latitude: %f, %f\r\n", longitude, latitude);
     /* radius_meters is calculated differently in different search types:
      * 1) CIRCULAR_TYPE, just use radius.
      * 2) RECTANGLE_TYPE, we use sqrt((width/2)^2 + (height/2)^2) to
@@ -208,10 +205,6 @@ GeoHashRadius geohashCalculateAreasByShapeWGS84(GeoShape *shape) {
         double dist_top_right = geohashGetDistance(longitude, latitude, max_lon, max_lat);
         double dist_bottom_left = geohashGetDistance(longitude, latitude, min_lon, min_lat);
         double dist_bottom_right = geohashGetDistance(longitude, latitude, max_lon, min_lat);
-        printf("dist_top_left (after conversion): %f\r\n", dist_top_left);
-        printf("dist_top_right (after conversion): %f\r\n", dist_top_right);
-        printf("dist_bottom_left (after conversion): %f\r\n", dist_bottom_left);
-        printf("dist_bottom_right (after conversion): %f\r\n", dist_bottom_right);
         // Find the maximum distance (which will be the radius that covers the whole bounding box)
         radius_meters = dist_top_left;
         if (dist_top_right > radius_meters) radius_meters = dist_top_right;
@@ -219,7 +212,6 @@ GeoHashRadius geohashCalculateAreasByShapeWGS84(GeoShape *shape) {
         if (dist_bottom_right > radius_meters) radius_meters = dist_bottom_right;
     }
     radius_meters *= shape->conversion;
-    printf("radius_meters (after conversion): %f\r\n", radius_meters);
 
     steps = geohashEstimateStepsByRadius(radius_meters, latitude);
 
@@ -370,7 +362,6 @@ int pointInPolygon(double *vertexA, double *vertexB, double pointLon, double poi
  * The Polygon's centroid's lon lat coordinates are `centroidLon` and `centroidLat`.
  * Returns 1 if inside the polyon and returns 0 otherwise. */
 int geohashGetDistanceIfInPolygon(double centroidLon, double centroidLat, double *point, double (*vertices)[2], int num_vertices, double *distance) {
-    printf("geohashIsWithinPolygon - point coordinates: %f %f\r\n", point[0], point[1]);
     int i, j;
     int inside = 0;
     for (i = 0, j = num_vertices - 1; i < num_vertices; j = i++) {

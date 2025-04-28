@@ -282,7 +282,7 @@ foreach type {listpack quicklist} {
 }
 
 run_solo {list-large-memory} {
-start_server [list overrides [list save ""] ] {
+start_server [list overrides [list save ""] tags {"large-memory"}] {
 
 # test if the server supports such large configs (avoid 32 bit builds)
 catch {

@@ -805,10 +805,10 @@ void hsetnxCommand(client *c) {
     } else {
         hashTypeTryConversion(o, c->argv, 2, 3);
         hashTypeSet(o, c->argv[2]->ptr, c->argv[3]->ptr, HASH_SET_COPY);
-        addReply(c, shared.cone);
         signalModifiedKey(c, c->db, c->argv[1]);
         notifyKeyspaceEvent(NOTIFY_HASH, "hset", c->argv[1], c->db->id);
         server.dirty++;
+        addReply(c, shared.cone);
     }
 }
 
@@ -826,6 +826,10 @@ void hsetCommand(client *c) {
 
     for (i = 2; i < c->argc; i += 2) created += !hashTypeSet(o, c->argv[i]->ptr, c->argv[i + 1]->ptr, HASH_SET_COPY);
 
+    signalModifiedKey(c, c->db, c->argv[1]);
+    notifyKeyspaceEvent(NOTIFY_HASH, "hset", c->argv[1], c->db->id);
+    server.dirty += (c->argc - 2) / 2;
+
     /* HMSET (deprecated) and HSET return value is different. */
     char *cmdname = c->argv[0]->ptr;
     if (cmdname[1] == 's' || cmdname[1] == 'S') {
@@ -835,9 +839,6 @@ void hsetCommand(client *c) {
         /* HMSET */
         addReply(c, shared.ok);
     }
-    signalModifiedKey(c, c->db, c->argv[1]);
-    notifyKeyspaceEvent(NOTIFY_HASH, "hset", c->argv[1], c->db->id);
-    server.dirty += (c->argc - 2) / 2;
 }
 
 void hincrbyCommand(client *c) {
@@ -869,10 +870,10 @@ void hincrbyCommand(client *c) {
     value += incr;
     new = sdsfromlonglong(value);
     hashTypeSet(o, c->argv[2]->ptr, new, HASH_SET_TAKE_VALUE);
-    addReplyLongLong(c, value);
     signalModifiedKey(c, c->db, c->argv[1]);
     notifyKeyspaceEvent(NOTIFY_HASH, "hincrby", c->argv[1], c->db->id);
     server.dirty++;
+    addReplyLongLong(c, value);
 }
 
 void hincrbyfloatCommand(client *c) {
@@ -912,10 +913,10 @@ void hincrbyfloatCommand(client *c) {
     int len = ld2string(buf, sizeof(buf), value, LD_STR_HUMAN);
     new = sdsnewlen(buf, len);
     hashTypeSet(o, c->argv[2]->ptr, new, HASH_SET_TAKE_VALUE);
-    addReplyBulkCBuffer(c, buf, len);
     signalModifiedKey(c, c->db, c->argv[1]);
     notifyKeyspaceEvent(NOTIFY_HASH, "hincrbyfloat", c->argv[1], c->db->id);
     server.dirty++;
+    addReplyBulkCBuffer(c, buf, len);
 
     /* Always replicate HINCRBYFLOAT as an HSET command with the final value
      * in order to make sure that differences in float precision or formatting
@@ -1091,7 +1092,7 @@ void hscanCommand(client *c) {
     robj *o;
     unsigned long long cursor;
 
-    if (parseScanCursorOrReply(c, c->argv[2], &cursor) == C_ERR) return;
+    if (parseScanCursorOrReply(c, c->argv[2]->ptr, &cursor) == C_ERR) return;
     if ((o = lookupKeyReadOrReply(c, c->argv[1], shared.emptyscan)) == NULL || checkType(c, o, OBJ_HASH)) return;
     scanGenericCommand(c, o, cursor);
 }
@@ -1239,50 +1240,41 @@ void hrandfieldWithCountCommand(client *c, long l, int withvalues) {
      * used into CASE 4 is highly inefficient. */
     if (count * HRANDFIELD_SUB_STRATEGY_MUL > size) {
         /* Hashtable encoding (generic implementation) */
-        dict *d = dictCreate(&sdsReplyDictType);
-        dictExpand(d, size);
-        hashTypeIterator hi;
-        hashTypeInitIterator(hash, &hi);
+        hashtable *ht = hashtableCreate(&sdsReplyHashtableType);
+        hashtableExpand(ht, size);
+        hashtableIterator iter;
+        hashtableInitIterator(&iter, hash->ptr, 0);
+        void *entry;
 
-        /* Add all the elements into the temporary dictionary. */
-        while ((hashTypeNext(&hi)) != C_ERR) {
-            int ret = DICT_ERR;
-            sds field, value = NULL;
-
-            field = hashTypeCurrentObjectNewSds(&hi, OBJ_HASH_FIELD);
-            if (withvalues) value = hashTypeCurrentObjectNewSds(&hi, OBJ_HASH_VALUE);
-            ret = dictAdd(d, field, value);
-
-            serverAssert(ret == DICT_OK);
+        /* Add all the elements into the temporary hashtable. */
+        while (hashtableNext(&iter, &entry)) {
+            int res = hashtableAdd(ht, entry);
+            serverAssert(res);
         }
-        serverAssert(dictSize(d) == size);
-        hashTypeResetIterator(&hi);
+        serverAssert(hashtableSize(ht) == size);
+        hashtableResetIterator(&iter);
 
         /* Remove random elements to reach the right count. */
         while (size > count) {
-            dictEntry *de;
-            de = dictGetFairRandomKey(d);
-            dictUnlink(d, dictGetKey(de));
-            sdsfree(dictGetKey(de));
-            sdsfree(dictGetVal(de));
-            dictFreeUnlinkedEntry(d, de);
+            void *element;
+            hashtableFairRandomEntry(ht, &element);
+            hashtableDelete(ht, element);
             size--;
         }
 
-        /* Reply with what's in the dict and release memory */
-        dictIterator *di;
-        dictEntry *de;
-        di = dictGetIterator(d);
-        while ((de = dictNext(di)) != NULL) {
-            sds field = dictGetKey(de);
-            sds value = dictGetVal(de);
+        /* Reply with what's in the temporary hashtable and release memory */
+        hashtableInitIterator(&iter, ht, 0);
+        void *next;
+        while (hashtableNext(&iter, &next)) {
+            sds field = hashTypeEntryGetField(next);
+            sds value = hashTypeEntryGetValue(next);
             if (withvalues && c->resp > 2) addWritePreparedReplyArrayLen(wpc, 2);
-            addWritePreparedReplyBulkSds(wpc, field);
-            if (withvalues) addWritePreparedReplyBulkSds(wpc, value);
+            addWritePreparedReplyBulkCBuffer(wpc, field, sdslen(field));
+            if (withvalues) addWritePreparedReplyBulkCBuffer(wpc, value, sdslen(value));
         }
 
-        dictReleaseIterator(di);
-        dictRelease(d);
+        hashtableResetIterator(&iter);
+        hashtableRelease(ht);
     }
 
     /* CASE 4: We have a big hash compared to the requested number of elements.
@@ -1293,16 +1285,16 @@ void hrandfieldWithCountCommand(client *c, long l, int withvalues) {
         /* Hashtable encoding (generic implementation) */
         unsigned long added = 0;
         listpackEntry field, value;
-        dict *d = dictCreate(&hashDictType);
-        dictExpand(d, count);
+        hashtable *ht = hashtableCreate(&setHashtableType);
+        hashtableExpand(ht, count);
         while (added < count) {
             hashTypeRandomElement(hash, size, &field, withvalues ? &value : NULL);
 
-            /* Try to add the object to the dictionary. If it already exists
+            /* Try to add the object to the hashtable. If it already exists
              * free it, otherwise increment the number of objects we have
-             * in the result dictionary. */
+             * in the result hashtable. */
             sds sfield = hashSdsFromListpackEntry(&field);
-            if (dictAdd(d, sfield, NULL) != DICT_OK) {
+            if (!hashtableAdd(ht, sfield)) {
                 sdsfree(sfield);
                 continue;
             }
@@ -1315,7 +1307,7 @@ void hrandfieldWithCountCommand(client *c, long l, int withvalues) {
         }
 
         /* Release memory */
-        dictRelease(d);
+        hashtableRelease(ht);
     }
 }
 

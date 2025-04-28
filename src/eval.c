@@ -411,6 +411,7 @@ static int evalRegisterNewScript(client *c, robj *body, char **sha) {
         scriptingEngineCallCompileCode(engine,
                                        VMSE_EVAL,
                                        (sds)body->ptr + shebang_len,
+                                       sdslen(body->ptr) - shebang_len,
                                        0,
                                        &num_compiled_functions,
                                        &_err);

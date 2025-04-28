@@ -2458,4 +2458,10 @@ start_server {tags {"scripting"}} {
             assert { [r memory usage foo] <= $expected_memory};
         }
     }
+
+    test {EVAL - Scripts support NULL byte} {
+        assert_equal [r eval "return \"\x00\";" 0] "\x00"
+        # Using a null byte never seemed to work with functions, so
+        # we don't have a test for that case.
+    }
 }

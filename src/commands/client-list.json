@@ -38,7 +38,11 @@
             ],
             [
                 "8.1.0",
-                "Added filters USER, ADDR, LADDR, SKIPME, and MAXAGE"
+                "Added filters USER, ADDR, LADDR, SKIPME, and MAXAGE."
+            ],
+            [
+                "9.0.0",
+                "Added filters NAME, IDLE, FLAGS, LIB-NAME, LIB-VER, DB, CAPA, and IP."
             ]
         ],
         "command_flags": [
@@ -144,6 +148,62 @@
                 "type": "integer",
                 "optional": true,
                 "since": "8.1.0"
+            },
+            {
+                "token": "NAME",
+                "name": "name",
+                "type": "string",
+                "optional": true,
+                "since": "9.0.0"
+            },
+            {
+                "token": "IDLE",
+                "name": "idle",
+                "type": "integer",
+                "optional": true,
+                "since": "9.0.0"
+            },
+            {
+                "token": "FLAGS",
+                "name": "flags",
+                "type": "string",
+                "optional": true,
+                "since": "9.0.0"
+            },
+            {
+                "token": "LIB-NAME",
+                "name": "lib-name",
+                "type": "string",
+                "optional": true,
+                "since": "9.0.0"
+            },
+            {
+                "token": "LIB-VER",
+                "name": "lib-ver",
+                "type": "string",
+                "optional": true,
+                "since": "9.0.0"
+            },
+            {
+                "token": "DB",
+                "name": "db",
+                "type": "integer",
+                "optional": true,
+                "since": "9.0.0"
+            },
+            {
+                "token": "CAPA",
+                "name": "capa",
+                "type": "string",
+                "optional": true,
+                "since": "9.0.0"
+            },
+            {
+                "token": "IP",
+                "name": "ip",
+                "type": "string",
+                "optional": true,
+                "since": "9.0.0"
             }
         ]
     }

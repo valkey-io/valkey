@@ -574,6 +574,7 @@ void trySendPollJobToIOThreads(void) {
 static void ioThreadAccept(void *data) {
     client *c = (client *)data;
     connAccept(c->conn, NULL);
+    atomic_thread_fence(memory_order_release);
     c->io_read_state = CLIENT_COMPLETED_IO;
 }
 

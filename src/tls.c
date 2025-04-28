@@ -415,12 +415,6 @@ error:
     return C_ERR;
 }
 
-#ifdef TLS_DEBUGGING
-#define TLSCONN_DEBUG(fmt, ...) serverLog(LL_DEBUG, "TLSCONN: " fmt, __VA_ARGS__)
-#else
-#define TLSCONN_DEBUG(fmt, ...)
-#endif
-
 static ConnectionType CT_TLS;
 
 /* Normal socket connections have a simple events/handler correlation.
@@ -697,9 +691,6 @@ static void TLSAccept(void *_conn) {
 static void tlsHandleEvent(tls_connection *conn, int mask) {
     int ret, conn_error;
 
-    TLSCONN_DEBUG("tlsEventHandler(): fd=%d, state=%d, mask=%d, r=%d, w=%d, flags=%d", fd, conn->c.state, mask,
-                  conn->c.read_handler != NULL, conn->c.write_handler != NULL, conn->flags);
-
     switch (conn->c.state) {
     case CONN_STATE_CONNECTING:
         conn_error = anetGetError(conn->c.fd);
@@ -889,6 +880,7 @@ static int connTLSConnect(connection *conn_,
                           const char *addr,
                           int port,
                           const char *src_addr,
+                          int multipath,
                           ConnectionCallbackFunc connect_handler) {
     tls_connection *conn = (tls_connection *)conn_;
     unsigned char addr_buf[sizeof(struct in6_addr)];
@@ -902,7 +894,7 @@ static int connTLSConnect(connection *conn_,
     }
 
     /* Initiate Socket connection first */
-    if (connectionTypeTcp()->connect(conn_, addr, port, src_addr, connect_handler) == C_ERR) return C_ERR;
+    if (connectionTypeTcp()->connect(conn_, addr, port, src_addr, multipath, connect_handler) == C_ERR) return C_ERR;
 
     /* Return now, once the socket is connected we'll initiate
      * TLS connection from the event handler.

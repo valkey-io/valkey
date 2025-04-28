@@ -12,6 +12,7 @@
 #include "../util.h"
 #include "../mt19937-64.h"
 #include "../hashtable.h"
+#include "../zmalloc.h"
 
 /* We override the default assertion mechanism, so that it prints out info and then dies. */
 void _serverAssert(const char *estr, const char *file, int line) {
@@ -34,6 +35,12 @@ int runTestSuite(struct unitTestSuite *test, int argc, char **argv, int flags) {
             printf("[" KRED "fail" KRESET "] - %s:%s\n", test->filename, test->tests[id].name);
             failed_tests++;
         }
+    }
+
+    /* Check if the test suite has cleaned up all the memory used. */
+    if (zmalloc_used_memory() > 0) {
+        printf("[" KRED "%s" KRESET "] Memory leak detected of %zu bytes\n", test->filename, zmalloc_used_memory());
+        failed_tests++;
     }
 
     printf("[" KBLUE "END" KRESET "] - %s: ", test->filename);

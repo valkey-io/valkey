@@ -148,6 +148,7 @@ typedef struct _client {
     size_t written;     /* Bytes of 'obuf' already written */
     long long start;    /* Start time of a request */
     long long latency;  /* Request latency */
+    int seqlen;         /* Number of commands in the command sequence */
     int pending;        /* Number of pending requests (replies to consume) */
     int prefix_pending; /* If non-zero, number of pending prefix commands. Commands
                            such as auth and select are prefixed to the pipeline of
@@ -390,7 +391,7 @@ static void resetClient(client c) {
     aeDeleteFileEvent(el, c->context->fd, AE_READABLE);
     aeCreateFileEvent(el, c->context->fd, AE_WRITABLE, writeHandler, c);
     c->written = 0;
-    c->pending = config.pipeline;
+    c->pending = config.pipeline * c->seqlen;
 }
 
 static void generateClientKey(client c) {
@@ -636,7 +637,7 @@ static void writeHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
  *    for arguments randomization.
  *
  * Even when cloning another client, prefix commands are applied if needed.*/
-static client createClient(char *cmd, size_t len, client from, int thread_id) {
+static client createClient(char *cmd, int len, int seqlen, client from, int thread_id) {
     int j;
     int is_cluster_client = (config.cluster_mode && thread_id >= 0);
     client c = zmalloc(sizeof(struct _client));
@@ -743,12 +744,14 @@ static client createClient(char *cmd, size_t len, client from, int thread_id) {
     /* Append the request itself. */
     if (from) {
         c->obuf = sdscatlen(c->obuf, from->obuf + from->prefixlen, sdslen(from->obuf) - from->prefixlen);
+        seqlen = from->seqlen;
     } else {
         for (j = 0; j < config.pipeline; j++) c->obuf = sdscatlen(c->obuf, cmd, len);
     }
 
     c->written = 0;
-    c->pending = config.pipeline + c->prefix_pending;
+    c->seqlen = seqlen;
+    c->pending = config.pipeline * seqlen + c->prefix_pending;
     c->randptr = NULL;
     c->randlen = 0;
     c->stagptr = NULL;
@@ -837,7 +840,7 @@ static void createMissingClients(client c) {
     while (config.liveclients < config.numclients) {
         int thread_id = -1;
         if (config.num_threads) thread_id = config.liveclients % config.num_threads;
-        createClient(NULL, 0, c, thread_id);
+        createClient(NULL, 0, 0, c, thread_id);
 
         /* Listen backlog is quite limited on most systems */
         if (++n > 64) {
@@ -962,7 +965,9 @@ static void startBenchmarkThreads(void) {
     for (i = 0; i < config.num_threads; i++) pthread_join(config.threads[i]->thread, NULL);
 }
 
-static void benchmark(const char *title, char *cmd, int len) {
+/* Benchmark a sequence of commands. The cmd is RESP encoded of length len and
+ * seqlen is the number of commands included in cmd. */
+static void benchmarkSequence(const char *title, char *cmd, int len, int seqlen) {
     client c;
 
     config.title = title;
@@ -982,7 +987,7 @@ static void benchmark(const char *title, char *cmd, int len) {
     if (config.num_threads) initBenchmarkThreads();
 
     int thread_id = config.num_threads > 0 ? 0 : -1;
-    c = createClient(cmd, len, NULL, thread_id);
+    c = createClient(cmd, len, seqlen, NULL, thread_id);
     createMissingClients(c);
 
     config.start = mstime();
@@ -997,6 +1002,11 @@ static void benchmark(const char *title, char *cmd, int len) {
     if (config.threads) freeBenchmarkThreads();
     if (config.current_sec_latency_histogram) hdr_close(config.current_sec_latency_histogram);
     if (config.latency_histogram) hdr_close(config.latency_histogram);
+}
+
+/* Benchmark a single RESP-encoded command of length len. */
+static void benchmark(const char *title, char *cmd, int len) {
+    benchmarkSequence(title, cmd, len, 1);
 }
 
 /* Thread functions. */
@@ -1473,6 +1483,9 @@ int parseOptions(int argc, char **argv) {
             config.sslconfig.ciphersuites = strdup(argv[++i]);
 #endif
 #endif
+        } else if (!strcmp(argv[i], "--")) {
+            /* End of options. */
+            return i + 1;
         } else {
             /* Assume the user meant to provide an option when the arg starts
              * with a dash. We're done otherwise and should use the remainder
@@ -1513,7 +1526,7 @@ usage:
 
     printf(
         "%s%s%s", /* Split to avoid strings longer than 4095 (-Woverlength-strings). */
-        "Usage: valkey-benchmark [OPTIONS] [COMMAND ARGS...]\n\n"
+        "Usage: valkey-benchmark [OPTIONS] [--] [COMMAND ARGS...]\n\n"
         "Options:\n"
         " -h <hostname>      Server hostname (default 127.0.0.1)\n"
         " -p <port>          Server port (default 6379)\n"
@@ -1592,6 +1605,8 @@ usage:
         "   $ valkey-benchmark -r 10000 -n 10000 eval 'return redis.call(\"ping\")' 0\n\n"
         " Fill a list with 10000 random elements:\n"
         "   $ valkey-benchmark -r 10000 -n 10000 lpush mylist __rand_int__\n\n"
+        " Run 20% SET and 80% GET commands (one SET and four GET):\n"
+        "   $ valkey-benchmark -- set aaa bbb ';' 4 get aaa\n\n"
         " On user specified command lines __rand_int__ is replaced with a random integer\n"
         " with a range of values selected by the -r option.\n");
     exit(exit_status);
@@ -1835,7 +1850,7 @@ int main(int argc, char **argv) {
             thread_id = 0;
             initBenchmarkThreads();
         }
-        c = createClient("", 0, NULL, thread_id); /* will never receive a reply */
+        c = createClient("", 0, 1, NULL, thread_id); /* will never receive a reply */
         createMissingClients(c);
         if (use_threads)
             startBenchmarkThreads();
@@ -1867,13 +1882,40 @@ int main(int argc, char **argv) {
         /* Setup argument length */
         size_t *argvlen = zmalloc(argc * sizeof(size_t));
         for (i = 0; i < argc; i++) argvlen[i] = sdslen(sds_args[i]);
+        /* RESP-encode the command(s) given on the syntax
+         *
+         *     [N] command args [ ";" [N] command args [...] ]
+         */
+        int start = 0;   /* Argument index where the current command starts. */
+        int repeat = 1;  /* Number of times to repeat the current command. */
+        int seq_len = 0; /* Total number of commands in the sequence. */
+        sds cmd_seq = sdsempty();
+        for (i = 0; i <= argc; i++) {
+            if (i == start && sds_args[i][0] >= '1' && sds_args[i][0] <= '9') {
+                /* Command prefixed by number means repeat command N times. */
+                repeat = atoi(sds_args[i]);
+                start++;
+            } else if (i == argc || strcmp(";", sds_args[i]) == 0) {
+                cmd = NULL;
+                if (i == start) continue;
+                /* End of command. RESP-encode and append to sequence. */
+                len = valkeyFormatCommandArgv(&cmd, i - start, (const char **)sds_args + start, argvlen + start);
+                for (int j = 0; j < repeat; j++) {
+                    cmd_seq = sdscatlen(cmd_seq, cmd, len);
+                }
+                seq_len += repeat;
+                free(cmd);
+                start = i + 1;
+                repeat = 1;
+            }
+        }
+        len = sdslen(cmd_seq);
+        /* adjust the datasize to the parsed command */
+        config.datasize = len;
         do {
-            len = valkeyFormatCommandArgv(&cmd, argc, (const char **)sds_args, argvlen);
-            // adjust the datasize to the parsed command
-            config.datasize = len;
-            benchmark(title, cmd, len);
-            free(cmd);
+            benchmarkSequence(title, cmd_seq, len, seq_len);
         } while (config.loop);
+        sdsfree(cmd_seq);
         sdsfreesplitres(sds_args, argc);
 
         sdsfree(title);

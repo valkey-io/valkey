@@ -107,6 +107,14 @@ tags {"benchmark network external:skip logreqres:skip"} {
             assert_match  {1} [scan [regexp -inline {keys\=([\d]*)} [r info keyspace]] keys=%d]
         }
 
+        test {benchmark: arbitrary command sequence} {
+            set cmd [valkeybenchmark $master_host $master_port "-n 3 -- incr foo ; 3 incr bar"]
+            common_bench_setup $cmd
+            assert_equal 3 [r get foo]
+            assert_equal 9 [r get bar]
+            assert_match  {*calls=12,*} [cmdstat incr]
+        }
+
         test {benchmark: keyspace length} {
             set cmd [valkeybenchmark $master_host $master_port "-r 50 -t set -n 1000"]
             common_bench_setup $cmd

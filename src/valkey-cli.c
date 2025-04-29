@@ -154,6 +154,8 @@
 #define LOG_COLOR_YELLOW "33;1m"
 #define LOG_COLOR_RESET "0m"
 
+#define HOTKEYS_COUNT 16
+
 /* cliConnect() flags. */
 #define CC_FORCE (1 << 0) /* Re-connect if already connected. */
 #define CC_QUIET (1 << 1) /* Don't log connecting errors. */
@@ -249,6 +251,7 @@ static struct config {
     int memkeys;
     unsigned memkeys_samples;
     int hotkeys;
+    unsigned hotkeys_count;
     int stdin_lastarg;    /* get last arg from stdin. (-x option) */
     int stdin_tag_arg;    /* get <tag> arg from stdin. (-X option) */
     char *stdin_tag_name; /* Placeholder(tag name) for user input. */
@@ -2687,6 +2690,10 @@ static int parseOptions(int argc, char **argv) {
             config.memkeys_samples = atoi(argv[++i]);
         } else if (!strcmp(argv[i], "--hotkeys")) {
             config.hotkeys = 1;
+            config.hotkeys_count = HOTKEYS_COUNT;
+        } else if (!strcmp(argv[i], "--hotkeys-count") && !lastarg) {
+            config.hotkeys = 1;
+            config.hotkeys_count = atoi(argv[++i]);
         } else if (!strcmp(argv[i], "--eval") && !lastarg) {
             config.eval = argv[++i];
         } else if (!strcmp(argv[i], "--ldb")) {
@@ -3016,7 +3023,10 @@ static void usage(int err) {
             "  --memkeys-samples <n> Sample keys looking for keys consuming a lot of memory.\n"
             "                     And define number of key elements to sample\n"
             "  --hotkeys          Sample keys looking for hot keys.\n"
-            "                     only works when maxmemory-policy is *lfu.\n"
+            "                     Only works when maxmemory-policy is *lfu.\n"
+            "                     This is equivalent to --hotkeys-count 16.\n"
+            "  --hotkeys-count <n> Sample keys looking for the n most hot keys.\n"
+            "                     Only works when maxmemory-policy is *lfu.\n"
             "  --scan             List all keys using the SCAN command.\n"
             "  --pattern <pat>    Keys pattern when using the --scan, --bigkeys or --hotkeys\n"
             "                     options (default: *).\n"
@@ -9010,14 +9020,21 @@ static void getKeyFreqs(redisReply *keys, unsigned long long *freqs) {
     }
 }
 
-#define HOTKEYS_SAMPLE 16
 static void findHotKeys(void) {
     redisReply *keys, *reply;
-    unsigned long long counters[HOTKEYS_SAMPLE] = {0};
-    sds hotkeys[HOTKEYS_SAMPLE] = {NULL};
+    unsigned long long *counters = NULL;
+    sds *hotkeys = NULL;
     unsigned long long sampled = 0, total_keys, *freqs = NULL, it = 0, scan_loops = 0;
     unsigned int arrsize = 0, i, k;
     double pct;
+
+    counters = zrealloc(counters, sizeof(unsigned long long) * config.hotkeys_count);
+    hotkeys = zrealloc(hotkeys, sizeof(sds) * config.hotkeys_count);
+    unsigned long long nums;
+    for (nums = 0; nums < config.hotkeys_count; nums++) {
+        counters[nums] = 0;
+        hotkeys[nums] = NULL;
+    }
 
     signal(SIGINT, longStatLoopModeStop);
     /* Total keys pre scanning */
@@ -9065,7 +9082,7 @@ static void findHotKeys(void) {
 
             /* Use eviction pool here */
             k = 0;
-            while (k < HOTKEYS_SAMPLE && freqs[i] > counters[k]) k++;
+            while (k < config.hotkeys_count && freqs[i] > counters[k]) k++;
             if (k == 0) continue;
             k--;
             if (k == 0 || counters[k] == 0) {
@@ -9095,13 +9112,15 @@ static void findHotKeys(void) {
     if (force_cancel_loop) printf("[%05.2f%%] ", pct);
     printf("Sampled %llu keys in the keyspace!\n", sampled);
 
-    for (i = 1; i <= HOTKEYS_SAMPLE; i++) {
-        k = HOTKEYS_SAMPLE - i;
+    for (i = 1; i <= config.hotkeys_count; i++) {
+        k = config.hotkeys_count - i;
         if (counters[k] > 0) {
             printf("hot key found with counter: %llu\tkeyname: %s\n", counters[k], hotkeys[k]);
             sdsfree(hotkeys[k]);
         }
     }
+    if (counters) zfree(counters);
+    if (hotkeys) zfree(hotkeys);
 
     exit(0);
 }

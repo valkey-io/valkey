@@ -377,8 +377,8 @@ void dictListDestructor(void *val) {
     listRelease((list *)val);
 }
 
-void dictDictDestructor(void *val) {
-    dictRelease((dict *)val);
+void dictHashtableDestructor(void *val) {
+    hashtableRelease((hashtable *)val);
 }
 
 /* Returns 1 when keys match */
@@ -448,14 +448,14 @@ uint64_t dictCStrCaseHash(const void *key) {
     return dictGenCaseHashFunction((unsigned char *)key, strlen((char *)key));
 }
 
-/* Dict hash function for client */
-uint64_t dictClientHash(const void *key) {
+/* Hash function for client */
+uint64_t hashtableClientHash(const void *key) {
     return ((client *)key)->id;
 }
 
-/* Dict compare function for client */
-int dictClientKeyCompare(const void *key1, const void *key2) {
-    return ((client *)key1)->id == ((client *)key2)->id;
+/* Hashtable compare function for client, 0 means equal. */
+int hashtableClientKeyCompare(const void *key1, const void *key2) {
+    return ((client *)key1)->id != ((client *)key2)->id;
 }
 
 /* Dict compare function for null terminated string */
@@ -488,6 +488,11 @@ int dictEncObjKeyCompare(const void *key1, const void *key2) {
     if (o1->refcount != OBJ_STATIC_REFCOUNT) decrRefCount(o1);
     if (o2->refcount != OBJ_STATIC_REFCOUNT) decrRefCount(o2);
     return cmp;
+}
+
+/* Returns 0 when keys match */
+int hashtableEncObjKeyCompare(const void *key1, const void *key2) {
+    return !dictEncObjKeyCompare(key1, key2);
 }
 
 uint64_t dictEncObjHash(const void *key) {
@@ -557,6 +562,13 @@ dictType objectKeyHeapPointerValueDictType = {
     dictObjectDestructor, /* key destructor */
     dictVanillaFree,      /* val destructor */
     NULL                  /* allow to expand */
+};
+
+/* Generic hashtable type: set of robj elements */
+hashtableType objectHashtableType = {
+    .hashFunction = dictEncObjHash,
+    .keyCompare = hashtableEncObjKeyCompare,
+    .entryDestructor = dictObjectDestructor,
 };
 
 /* Set hashtable type. Items are SDS strings */
@@ -685,29 +697,29 @@ dictType keylistDictType = {
     NULL                  /* allow to expand */
 };
 
-/* KeyDict hash table type has unencoded Objects as keys and
- * dicts as values. It's used for PUBSUB command to track clients subscribing the patterns. */
-dictType objToDictDictType = {
-    dictObjHash,          /* hash function */
-    NULL,                 /* key dup */
-    dictObjKeyCompare,    /* key compare */
-    dictObjectDestructor, /* key destructor */
-    dictDictDestructor,   /* val destructor */
-    NULL                  /* allow to expand */
+/* objToHashtableDictType has unencoded Objects as keys and
+ * hashtables as values. It's used for PUBSUB command to track clients subscribing the patterns. */
+dictType objToHashtableDictType = {
+    dictObjHash,             /* hash function */
+    NULL,                    /* key dup */
+    dictObjKeyCompare,       /* key compare */
+    dictObjectDestructor,    /* key destructor */
+    dictHashtableDestructor, /* val destructor */
+    NULL                     /* allow to expand */
 };
 
 /* Callback used for hash tables where the entries are dicts and the key
  * (channel name) is stored in each dict's metadata. */
-const void *hashtableChannelsDictGetKey(const void *entry) {
-    const dict *d = entry;
-    return *((const void **)dictMetadata(d));
+const void *hashtableChannelsGetKey(const void *entry) {
+    hashtable *ht = (hashtable *)entry;
+    return *((const void **)hashtableMetadata(ht));
 }
 
-void hashtableChannelsDictDestructor(void *entry) {
-    dict *d = entry;
-    robj *channel = *((void **)dictMetadata(d));
+void hashtableChannelsDestructor(void *entry) {
+    hashtable *ht = entry;
+    robj *channel = *((void **)hashtableMetadata(ht));
     decrRefCount(channel);
-    dictRelease(d);
+    hashtableRelease(ht);
 }
 
 /* Similar to objToDictDictType, but changed to hashtable and added some kvstore
@@ -715,10 +727,10 @@ void hashtableChannelsDictDestructor(void *entry) {
  * channels. The elements are dicts where the keys are clients. The metadata in
  * each dict stores a pointer to the channel name. */
 hashtableType kvstoreChannelHashtableType = {
-    .entryGetKey = hashtableChannelsDictGetKey,
+    .entryGetKey = hashtableChannelsGetKey,
     .hashFunction = dictObjHash,
     .keyCompare = hashtableObjKeyCompare,
-    .entryDestructor = hashtableChannelsDictDestructor,
+    .entryDestructor = hashtableChannelsDestructor,
     .rehashingStarted = kvstoreHashtableRehashingStarted,
     .rehashingCompleted = kvstoreHashtableRehashingCompleted,
     .trackMemUsage = kvstoreHashtableTrackMemUsage,
@@ -779,18 +791,15 @@ dictType sdsHashDictType = {
     NULL                   /* allow to expand */
 };
 
-size_t clientSetDictTypeMetadataBytes(dict *d) {
-    UNUSED(d);
+size_t clientHashtableTypeMetadataSize(void) {
     return sizeof(void *);
 }
 
-/* Client Set dictionary type. Keys are client, values are not used. */
-dictType clientDictType = {
-    dictClientHash,       /* hash function */
-    NULL,                 /* key dup */
-    dictClientKeyCompare, /* key compare */
-    .dictMetadataBytes = clientSetDictTypeMetadataBytes,
-    .no_value = 1 /* no values in this dict */
+/* Hashtable type: set of clients, with a metadata field to store one pointer. */
+hashtableType clientHashtableType = {
+    .hashFunction = hashtableClientHash,
+    .keyCompare = hashtableClientKeyCompare,
+    .getMetadataSize = clientHashtableTypeMetadataSize,
 };
 
 /* This function is called once a background process of some kind terminates,
@@ -2786,6 +2795,7 @@ void initServer(void) {
     server.reply_buffer_peak_reset_time = REPLY_BUFFER_DEFAULT_PEAK_RESET_TIME;
     server.reply_buffer_resizing_enabled = 1;
     server.client_mem_usage_buckets = NULL;
+    server.debug_client_enforce_reply_list = 0;
     resetReplicationBuffer();
 
     /* Make sure the locale is set on startup based on the config file. */
@@ -2828,7 +2838,7 @@ void initServer(void) {
      * seems odd) just to make the code cleaner by making it be the same type as server.pubsubshard_channels
      * (which has to be kvstore), see pubsubtype.serverPubSubChannels */
     server.pubsub_channels = kvstoreCreate(&kvstoreChannelHashtableType, 0, KVSTORE_ALLOCATE_HASHTABLES_ON_DEMAND);
-    server.pubsub_patterns = dictCreate(&objToDictDictType);
+    server.pubsub_patterns = dictCreate(&objToHashtableDictType);
     server.pubsubshard_channels = kvstoreCreate(&kvstoreChannelHashtableType, slot_count_bits,
                                                 KVSTORE_ALLOCATE_HASHTABLES_ON_DEMAND | KVSTORE_FREE_EMPTY_HASHTABLES);
     server.pubsub_clients = 0;

@@ -441,9 +441,25 @@ static int anetCreateSocket(char *err, int domain, int type, int protocol, int f
     return s;
 }
 
+/* XXX: Until glibc 2.41, getaddrinfo with hints.ai_protocol of IPPROTO_MPTCP leads error.
+ * Use hints.ai_protocol IPPROTO_IP (0) or IPPROTO_TCP (6) to resolve address and overwrite
+ * it when MPTCP is enabled.
+ * Ref: https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/tools/testing/selftests/net/mptcp/mptcp_connect.c
+ *      https://sourceware.org/git/?p=glibc.git;a=commit;h=a8e9022e0f829d44a818c642fc85b3bfbd26a514
+ */
+static int anetTcpGetProtocol(int is_mptcp_enabled) {
+#ifdef IPPROTO_MPTCP
+    return is_mptcp_enabled ? IPPROTO_MPTCP : IPPROTO_TCP;
+#else
+    assert(!is_mptcp_enabled);
+    return IPPROTO_TCP;
+#endif
+}
+
 #define ANET_CONNECT_NONE 0
 #define ANET_CONNECT_NONBLOCK 1
 #define ANET_CONNECT_BE_BINDING 2 /* Best effort binding. */
+#define ANET_CONNECT_MPTCP 4
 static int anetTcpGenericConnect(char *err, const char *addr, int port, const char *source_addr, int flags) {
     int s = ANET_ERR, rv;
     char portstr[6]; /* strlen("65535") + 1; */
@@ -466,9 +482,10 @@ static int anetTcpGenericConnect(char *err, const char *addr, int port, const ch
          * Make sure connection-intensive things like the benchmark tool
          * will be able to close/open sockets a zillion of times.
          */
+        int ai_protocol = anetTcpGetProtocol(flags & ANET_CONNECT_MPTCP);
         int sockflags = ANET_SOCKET_CLOEXEC | ANET_SOCKET_REUSEADDR;
         if (flags & ANET_CONNECT_NONBLOCK) sockflags |= ANET_SOCKET_NONBLOCK;
-        if ((s = anetCreateSocket(err, p->ai_family, p->ai_socktype, p->ai_protocol, sockflags)) == ANET_ERR) continue;
+        if ((s = anetCreateSocket(err, p->ai_family, p->ai_socktype, ai_protocol, sockflags)) == ANET_ERR) continue;
         if (source_addr) {
             int bound = 0;
             /* Using getaddrinfo saves us from self-determining IPv4 vs IPv6 */
@@ -528,8 +545,10 @@ int anetTcpNonBlockConnect(char *err, const char *addr, int port) {
     return anetTcpGenericConnect(err, addr, port, NULL, ANET_CONNECT_NONBLOCK);
 }
 
-int anetTcpNonBlockBestEffortBindConnect(char *err, const char *addr, int port, const char *source_addr) {
-    return anetTcpGenericConnect(err, addr, port, source_addr, ANET_CONNECT_NONBLOCK | ANET_CONNECT_BE_BINDING);
+int anetTcpNonBlockBestEffortBindConnect(char *err, const char *addr, int port, const char *source_addr, int mptcp) {
+    int flags = ANET_CONNECT_NONBLOCK | ANET_CONNECT_BE_BINDING;
+    if (mptcp) flags |= ANET_CONNECT_MPTCP;
+    return anetTcpGenericConnect(err, addr, port, source_addr, flags);
 }
 
 static int anetListen(char *err, int s, struct sockaddr *sa, socklen_t len, int backlog, mode_t perm, char *group) {
@@ -572,21 +591,6 @@ static int anetV6Only(char *err, int s) {
         return ANET_ERR;
     }
     return ANET_OK;
-}
-
-/* XXX: Until glibc 2.41, getaddrinfo with hints.ai_protocol of IPPROTO_MPTCP leads error.
- * Use hints.ai_protocol IPPROTO_IP (0) or IPPROTO_TCP (6) to resolve address and overwrite
- * it when MPTCP is enabled.
- * Ref: https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/tools/testing/selftests/net/mptcp/mptcp_connect.c
- *      https://sourceware.org/git/?p=glibc.git;a=commit;h=a8e9022e0f829d44a818c642fc85b3bfbd26a514
- */
-static int anetTcpGetProtocol(int is_mptcp_enabled) {
-#ifdef IPPROTO_MPTCP
-    return is_mptcp_enabled ? IPPROTO_MPTCP : IPPROTO_TCP;
-#else
-    assert(!is_mptcp_enabled);
-    return IPPROTO_TCP;
-#endif
 }
 
 static int _anetTcpServer(char *err, int port, char *bindaddr, int af, int backlog, int mptcp) {

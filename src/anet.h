@@ -52,7 +52,7 @@
 #endif
 
 int anetTcpNonBlockConnect(char *err, const char *addr, int port);
-int anetTcpNonBlockBestEffortBindConnect(char *err, const char *addr, int port, const char *source_addr);
+int anetTcpNonBlockBestEffortBindConnect(char *err, const char *addr, int port, const char *source_addr, int mptcp);
 int anetResolve(char *err, char *host, char *ipbuf, size_t ipbuf_len, int flags);
 int anetTcpServer(char *err, int port, char *bindaddr, int backlog, int mptcp);
 int anetTcp6Server(char *err, int port, char *bindaddr, int backlog, int mptcp);

@@ -47,7 +47,7 @@
 #include <immintrin.h>
 #endif
 
-#ifdef __ARM_NEON
+#ifdef __aarch64__
 #include <arm_neon.h>
 #endif
 
@@ -231,14 +231,14 @@ static int simd_enabled = 1;
 #define HLL_USE_AVX2 0
 #endif
 
-#ifdef __ARM_NEON
+#ifdef __aarch64__
 static int simd_enabled = 1;
 #define HLL_USE_NEON (simd_enabled)
 #else
 #define HLL_USE_NEON 0
 #endif
 
-#if defined(HAVE_AVX2) || defined(__ARM_NEON)
+#if defined(HAVE_AVX2) || defined(__aarch64__)
 #define SIMD_SUPPORTED 1
 #else
 #define SIMD_SUPPORTED 0
@@ -1210,7 +1210,7 @@ void hllMergeDenseAVX2(uint8_t *reg_raw, const uint8_t *reg_dense) {
 }
 #endif
 
-#if defined(__ARM_NEON)
+#if defined(__aarch64__)
 /*
  * hllMergeDenseNEON is an ARM optimized version of hllMergeDense using NEON
  *
@@ -1297,7 +1297,7 @@ void hllMergeDenseNEON(uint8_t *reg_raw, const uint8_t *reg_dense) {
         }
     }
 }
-#endif // __ARM_NEON__
+#endif // __aarch64__
 
 /* Merge dense-encoded registers to raw registers array. */
 void hllMergeDense(uint8_t *reg_raw, const uint8_t *reg_dense) {
@@ -1309,7 +1309,7 @@ void hllMergeDense(uint8_t *reg_raw, const uint8_t *reg_dense) {
         }
     }
 #endif
-#ifdef __ARM_NEON
+#ifdef __aarch64__
     if (HLL_REGISTERS == 16384 && HLL_BITS == 6) {
         if (HLL_USE_NEON) {
             hllMergeDenseNEON(reg_raw, reg_dense);
@@ -1471,7 +1471,7 @@ void hllDenseCompressAVX2(uint8_t *reg_dense, const uint8_t *reg_raw) {
 }
 #endif
 
-#if defined(__ARM_NEON)
+#if defined(__aarch64__)
 /*
  * hllDenseCompressNEON is ARM optimized version of hllDenseCompress using NEON.
  *
@@ -1537,7 +1537,7 @@ void hllDenseCompressNEON(uint8_t *reg_dense, const uint8_t *reg_raw) {
         HLL_DENSE_SET_REGISTER(reg_dense, i, reg_raw[i]);
     }
 }
-#endif // __ARM_NEON__
+#endif // __aarch64__
 
 /* Compress raw registers to dense representation. */
 void hllDenseCompress(uint8_t *reg_dense, const uint8_t *reg_raw) {

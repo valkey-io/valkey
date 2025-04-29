@@ -1140,7 +1140,7 @@ getNodeByQuery(client *c, struct serverCommand *cmd, robj **argv, int argc, int 
                 }
             }
 
-            /* Migrating / Importing slot? Count keys we don't have.
+            /* Migrating / Importing slot? During exec we count keys we don't have.
              * If it is pubsubshard command, it isn't required to check
              * the channel being present or not in the node during the
              * slot migration, the channel will be served from the source

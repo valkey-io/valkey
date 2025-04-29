@@ -131,7 +131,7 @@ static size_t rioFileWrite(rio *r, const void *buf, size_t len) {
             serverAssert(processed % r->io.file.autosync == 0);
             serverAssert(r->io.file.buffered == r->io.file.autosync);
 
-#if HAVE_SYNC_FILE_RANGE
+#if defined(HAVE_SYNC_FILE_RANGE) && HAVE_SYNC_FILE_RANGE
             /* Start writeout asynchronously. */
             if (sync_file_range(fileno(r->io.file.fp), processed - r->io.file.autosync, r->io.file.autosync,
                                 SYNC_FILE_RANGE_WRITE) == -1)

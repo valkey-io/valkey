@@ -40,7 +40,7 @@
 #include <stdint.h>
 #include <math.h>
 
-#ifdef HAVE_AVX2
+#if HAVE_X86_SIMD
 /* Define __MM_MALLOC_H to prevent importing the memory aligned
  * allocation functions, which we don't use. */
 #define __MM_MALLOC_H
@@ -220,7 +220,7 @@ struct hllhdr {
 
 static char *invalid_hll_err = "-INVALIDOBJ Corrupted HLL object detected";
 
-#ifdef HAVE_AVX2
+#if HAVE_X86_SIMD
 static int simd_enabled = 1;
 #define HLL_USE_AVX2 (simd_enabled && __builtin_cpu_supports("avx2"))
 #else
@@ -1083,7 +1083,7 @@ int hllAdd(robj *o, unsigned char *ele, size_t elesize) {
     }
 }
 
-#ifdef HAVE_AVX2
+#if HAVE_X86_SIMD
 /* A specialized version of hllMergeDense, optimized for default configurations.
  *
  * Requirements:
@@ -1195,7 +1195,7 @@ void hllMergeDenseAVX2(uint8_t *reg_raw, const uint8_t *reg_dense) {
 
 /* Merge dense-encoded registers to raw registers array. */
 void hllMergeDense(uint8_t *reg_raw, const uint8_t *reg_dense) {
-#ifdef HAVE_AVX2
+#if HAVE_X86_SIMD
     if (HLL_REGISTERS == 16384 && HLL_BITS == 6) {
         if (HLL_USE_AVX2) {
             hllMergeDenseAVX2(reg_raw, reg_dense);
@@ -1258,7 +1258,7 @@ int hllMerge(uint8_t *max, robj *hll) {
     return C_OK;
 }
 
-#ifdef HAVE_AVX2
+#if HAVE_X86_SIMD
 /* A specialized version of hllDenseCompress, optimized for default configurations.
  *
  * Requirements:
@@ -1359,7 +1359,7 @@ void hllDenseCompressAVX2(uint8_t *reg_dense, const uint8_t *reg_raw) {
 
 /* Compress raw registers to dense representation. */
 void hllDenseCompress(uint8_t *reg_dense, const uint8_t *reg_raw) {
-#ifdef HAVE_AVX2
+#if HAVE_X86_SIMD
     if (HLL_REGISTERS == 16384 && HLL_BITS == 6) {
         if (HLL_USE_AVX2) {
             hllDenseCompressAVX2(reg_dense, reg_raw);
@@ -1770,11 +1770,11 @@ void pfdebugCommand(client *c) {
         if (c->argc != 3) goto arityerr;
 
         if (!strcasecmp(c->argv[2]->ptr, "on")) {
-#ifdef HAVE_AVX2
+#if HAVE_X86_SIMD
             simd_enabled = 1;
 #endif
         } else if (!strcasecmp(c->argv[2]->ptr, "off")) {
-#ifdef HAVE_AVX2
+#if HAVE_X86_SIMD
             simd_enabled = 0;
 #endif
         } else {

@@ -29,7 +29,7 @@
  */
 
 #include "server.h"
-#ifdef HAVE_AVX2
+#if HAVE_X86_SIMD
 /* Define __MM_MALLOC_H to prevent importing the memory aligned
  * allocation functions, which we don't use. */
 #define __MM_MALLOC_H
@@ -48,7 +48,7 @@ static const unsigned char bitsinbyte[256] = {
     5, 5, 6, 5, 6, 6, 7, 2, 3, 3, 4, 3, 4, 4, 5, 3, 4, 4, 5, 4, 5, 5, 6, 3, 4, 4, 5, 4, 5, 5, 6, 4, 5, 5, 6, 5, 6,
     6, 7, 3, 4, 4, 5, 4, 5, 5, 6, 4, 5, 5, 6, 5, 6, 6, 7, 4, 5, 5, 6, 5, 6, 6, 7, 5, 6, 6, 7, 6, 7, 7, 8};
 
-#ifdef HAVE_AVX2
+#if HAVE_X86_SIMD
 /* The SIMD version of popcount enhances performance through parallel lookup tables which is based on the following article:
  * https://arxiv.org/pdf/1611.07612 */
 ATTRIBUTE_TARGET_AVX2
@@ -191,7 +191,7 @@ long long popcountScalar(void *s, long count) {
  * 'count' bytes. The implementation of this function is required to
  * work with an input string length up to 512 MB or more (server.proto_max_bulk_len) */
 long long serverPopcount(void *s, long count) {
-#ifdef HAVE_AVX2
+#if HAVE_X86_SIMD
     /* If length of s >= 256 bits and the CPU supports AVX2,
      * we prefer to use the SIMD version */
     if (count >= 32) {

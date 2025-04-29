@@ -1951,6 +1951,12 @@ int main(int argc, char **argv) {
             free(cmd);
         }
 
+        if (test_is_selected("hget")) {
+            len = redisFormatCommand(&cmd, "HGET myhash%s element:__rand_int__", tag);
+            benchmark("HGET", cmd, len);
+            free(cmd);
+        }
+
         if (test_is_selected("spop")) {
             len = redisFormatCommand(&cmd, "SPOP myset%s", tag);
             benchmark("SPOP", cmd, len);

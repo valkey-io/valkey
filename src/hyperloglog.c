@@ -238,7 +238,7 @@ static int simd_enabled = 1;
 #define HLL_USE_NEON 0
 #endif
 
-#if defined(HAVE_X86_SIMD) || defined(__aarch64__)
+#if HAVE_X86_SIMD || defined(__aarch64__)
 #define SIMD_SUPPORTED 1
 #else
 #define SIMD_SUPPORTED 0

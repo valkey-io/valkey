@@ -1032,12 +1032,12 @@ void hashtableScanCallback(void *privdata, void *entry) {
     if (val) listAddNodeTail(keys, val);
 }
 
-/* Try to parse a SCAN cursor stored at object 'o':
+/* Try to parse a SCAN cursor stored at buffer 'buf':
  * if the cursor is valid, store it as unsigned integer into *cursor and
  * returns C_OK. Otherwise return C_ERR and send an error to the
  * client. */
-int parseScanCursorOrReply(client *c, robj *o, unsigned long long *cursor) {
-    if (!string2ull(o->ptr, cursor)) {
+int parseScanCursorOrReply(client *c, sds buf, unsigned long long *cursor) {
+    if (!string2ull(buf, sdslen(buf), cursor)) {
         addReplyError(c, "invalid cursor");
         return C_ERR;
     }
@@ -1298,7 +1298,7 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {
 /* The SCAN command completely relies on scanGenericCommand. */
 void scanCommand(client *c) {
     unsigned long long cursor;
-    if (parseScanCursorOrReply(c, c->argv[1], &cursor) == C_ERR) return;
+    if (parseScanCursorOrReply(c, c->argv[1]->ptr, &cursor) == C_ERR) return;
     scanGenericCommand(c, NULL, cursor);
 }
 

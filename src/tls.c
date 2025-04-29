@@ -880,6 +880,7 @@ static int connTLSConnect(connection *conn_,
                           const char *addr,
                           int port,
                           const char *src_addr,
+                          int multipath,
                           ConnectionCallbackFunc connect_handler) {
     tls_connection *conn = (tls_connection *)conn_;
     unsigned char addr_buf[sizeof(struct in6_addr)];
@@ -893,7 +894,7 @@ static int connTLSConnect(connection *conn_,
     }
 
     /* Initiate Socket connection first */
-    if (connectionTypeTcp()->connect(conn_, addr, port, src_addr, connect_handler) == C_ERR) return C_ERR;
+    if (connectionTypeTcp()->connect(conn_, addr, port, src_addr, multipath, connect_handler) == C_ERR) return C_ERR;
 
     /* Return now, once the socket is connected we'll initiate
      * TLS connection from the event handler.

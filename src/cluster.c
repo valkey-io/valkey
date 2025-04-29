@@ -1147,8 +1147,10 @@ getNodeByQuery(client *c, struct serverCommand *cmd, robj **argv, int argc, int 
              * node until the migration completes with CLUSTER SETSLOT <slot>
              * NODE <node-id>. */
             int flags = LOOKUP_NOTOUCH | LOOKUP_NOSTATS | LOOKUP_NONOTIFY | LOOKUP_NOEXPIRE;
-            if ((migrating_slot || importing_slot) && !pubsubshard_included) &&
-            (!c->flag.multi || (c->flag.multi && cmd->proc == execCommand))) {
+            if ((migrating_slot || importing_slot) &&
+                !pubsubshard_included &&
+                (!c->flag.multi || (c->flag.multi && cmd->proc == execCommand)) // Multi/Exec validation happens on exec
+            ) {
                 if (lookupKeyReadWithFlags(currentDb, thiskey, flags) == NULL)
                     missing_keys++;
                 else

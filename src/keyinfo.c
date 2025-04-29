@@ -128,7 +128,6 @@ void keyinfoCommand(client *c) {
              * Simply set count to the length of server.keyinfo. */
             count = keyinfoLength(type);
         } else {
-            /* TODO : long/unsigned long */
             count = min(count, keyinfoLength(type));
         }
 

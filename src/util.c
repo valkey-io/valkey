@@ -415,7 +415,7 @@ err:
     return 0;
 }
 
-#if HAVE_AVX512
+#if HAVE_X86_SIMD
 #include <immintrin.h>
 
 #define MULTIPLIER_10E8 100000000
@@ -434,7 +434,7 @@ err:
  * - The function checks for overflow and returns 0 if the result exceeds
  *   the maximum value of LLONG_MAX.
  * - This function requires AVX-512 support and will only be compiled if
- *   `HAVE_AVX512` is defined.
+ *   `HAVE_X86_SIMD` is defined.
  *
  * Example:
  * Input: s = "1234567890", slen = 10
@@ -622,8 +622,7 @@ static int string2llScalar(const char *s, size_t slen, long long *value) {
 }
 
 int string2ll(const char *s, size_t slen, long long *value) {
-#if HAVE_AVX512
-    /* TODO: Cache the cpu info when server startup */
+#if HAVE_X86_SIMD
     if (__builtin_cpu_supports("avx512f") &&
         __builtin_cpu_supports("avx512vl") &&
         __builtin_cpu_supports("avx512bw"))

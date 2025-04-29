@@ -375,10 +375,10 @@ void setcpuaffinity(const char *cpulist);
 #endif
 
 /* Check if we can compile SIMD code */
-#if defined(__x86_64__) && ((defined(__GNUC__) && __GNUC__ >= 5) || (defined(__clang__) && __clang_major__ >= 4))
-#if defined(__has_attribute) && __has_attribute(target)
+#if defined(__x86_64__) && ((defined(__GNUC__) && __GNUC__ >= 5) || (defined(__clang__) && __clang_major__ >= 4)) && defined(__has_attribute) && __has_attribute(target)
 #define HAVE_X86_SIMD 1
-#endif
+#else
+#define HAVE_X86_SIMD 0
 #endif
 
 #if HAVE_X86_SIMD

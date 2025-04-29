@@ -43,6 +43,7 @@
 #include "listpack_malloc.h"
 #include "serverassert.h"
 #include "util.h"
+#include "config.h"
 
 #define LP_HDR_SIZE 6 /* 32 bit total len + 16 bit number of elements. */
 #define LP_HDR_NUMELE_UNKNOWN UINT16_MAX
@@ -395,8 +396,13 @@ unsigned char *lpSkip(unsigned char *p) {
 unsigned char *lpNext(unsigned char *lp, unsigned char *p) {
     assert(p);
     p = lpSkip(p);
-    if (p[0] == LP_EOF) return NULL;
-    lpAssertValidEntry(lp, lpBytes(lp), p);
+    size_t bytes = lpBytes(lp);
+    if (unlikely(p[0] == LP_EOF)) {
+        /* EOF must only appear at the end of a listpack. */
+        assert(p + 1 == lp + bytes);
+        return NULL;
+    }
+    lpAssertValidEntry(lp, bytes, p);
     return p;
 }
 
@@ -418,8 +424,13 @@ unsigned char *lpPrev(unsigned char *lp, unsigned char *p) {
  * listpack has no elements. */
 unsigned char *lpFirst(unsigned char *lp) {
     unsigned char *p = lp + LP_HDR_SIZE; /* Skip the header. */
-    if (p[0] == LP_EOF) return NULL;
-    lpAssertValidEntry(lp, lpBytes(lp), p);
+    size_t bytes = lpBytes(lp);
+    if (unlikely(p[0] == LP_EOF)) {
+        /* EOF must only appear at the end of a listpack. */
+        assert(p + 1 == lp + bytes);
+        return NULL;
+    }
+    lpAssertValidEntry(lp, bytes, p);
     return p;
 }
 
@@ -482,13 +493,8 @@ unsigned long lpLength(unsigned char *lp) {
  * bytes, the element data itself, and the backlen bytes.
  *
  * If the function is called against a badly encoded ziplist, so that there
- * is no valid way to parse it, the function returns like if there was an
- * integer encoded with value 12345678900000000 + <unrecognized byte>, this may
- * be an hint to understand that something is wrong. To crash in this case is
- * not sensible because of the different requirements of the application using
- * this lib.
- *
- * Similarly, there is no error returned since the listpack normally can be
+ * is no valid way to parse it, the function panics.
+ * There is no error returned since the listpack normally can be
  * assumed to be valid, so that would be a very high API cost. */
 static inline unsigned char *
 lpGetWithSize(unsigned char *p, int64_t *count, unsigned char *intbuf, uint64_t *entry_size) {
@@ -540,9 +546,7 @@ lpGetWithSize(unsigned char *p, int64_t *count, unsigned char *intbuf, uint64_t 
         if (entry_size) *entry_size = 5 + *count + lpEncodeBacklen(NULL, *count + 5);
         return p + 5;
     } else {
-        uval = 12345678900000000ULL + p[0];
-        negstart = UINT64_MAX;
-        negmax = 0;
+        panic("Invalid listpack encoding. Byte %02hhx is not a valid encoding.", p[0]);
     }
 
     /* We reach this code path only for integer encodings.
@@ -652,7 +656,11 @@ unsigned char *lpFind(unsigned char *lp, unsigned char *p, unsigned char *s, uin
             lpAssertValidEntry(lp, lp_bytes, p);
         else
             assert(p >= lp + LP_HDR_SIZE && p < lp + lp_bytes);
-        if (p[0] == LP_EOF) break;
+        if (unlikely(p[0] == LP_EOF)) {
+            /* EOF must only appear at the end of a listpack. */
+            assert(p + 1 == lp + lp_bytes);
+            break;
+        }
     }
 
     return NULL;
@@ -920,7 +928,11 @@ unsigned char *lpDeleteRangeWithEntry(unsigned char *lp, unsigned char **p, unsi
     while (num--) {
         deleted++;
         tail = lpSkip(tail);
-        if (tail[0] == LP_EOF) break;
+        if (unlikely(tail[0] == LP_EOF)) {
+            /* EOF must only appear at the end of a listpack. */
+            assert(tail + 1 == lp + bytes);
+            break;
+        }
         lpAssertValidEntry(lp, bytes, tail);
     }
 
@@ -1198,7 +1210,9 @@ int lpValidateNext(unsigned char *lp, unsigned char **pp, size_t lpbytes) {
     /* Before accessing p, make sure it's valid. */
     if (OUT_OF_RANGE(p)) return 0;
 
-    if (*p == LP_EOF) {
+    if (unlikely(*p == LP_EOF)) {
+        /* EOF must only appear at the end of a listpack. */
+        if (p + 1 != lp + lpbytes) return 0;
         *pp = NULL;
         return 1;
     }

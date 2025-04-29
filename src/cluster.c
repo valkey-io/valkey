@@ -1059,8 +1059,7 @@ getNodeByQuery(client *c, struct serverCommand *cmd, robj **argv, int argc, int 
         keyindex = result.keys;
 
         if (mcmd->proc == selectCommand) {
-            /* SELECT inside MULTI/EXEC is detected here. If it fails, we ignore it since it has no real impact at
-             * execution time. Even if a command fails, the remaining commands will still execute. */
+            /* Failed SELECT is ignored since it doesn't modify the database. */
             serverDb *origDb = currentDb;
             long long id;
             if (getLongLongFromObject(margv[1], &id) == C_OK && selectDb(c, id) == C_OK) {

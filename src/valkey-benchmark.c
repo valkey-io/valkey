@@ -2016,6 +2016,19 @@ int main(int argc, char **argv) {
             sdsfree(key_placeholder);
         }
 
+        if (test_is_selected("mget")) {
+            const char *cmd_argv[11];
+            cmd_argv[0] = "MGET";
+            sds key_placeholder = sdscatprintf(sdsnew(""), "key%s:__rand_int__", tag);
+            for (i = 1; i < 11; i++) {
+                cmd_argv[i] = key_placeholder;
+            }
+            len = redisFormatCommandArgv(&cmd, 11, cmd_argv, NULL);
+            benchmark("MGET (10 keys)", cmd, len);
+            free(cmd);
+            sdsfree(key_placeholder);
+        }
+
         if (test_is_selected("xadd")) {
             len = redisFormatCommand(&cmd, "XADD mystream%s * myfield %s", tag, data);
             benchmark("XADD", cmd, len);

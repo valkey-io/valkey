@@ -943,12 +943,12 @@ start_server {tags {"multi"}} {
         $rd ping pong2
         $rd ping pong3
         $rd exec
-
-        $rd client reply on
-        $rd ping
         assert_equal {QUEUED} [$rd read]
         assert_equal {QUEUED} [$rd read]
         assert_equal {pong2 pong3} [$rd read]
+
+        $rd client reply on
+        $rd ping
         assert_equal {OK} [$rd read]
         assert_equal {PONG} [$rd read]
 

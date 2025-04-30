@@ -18,7 +18,9 @@
 #include "connection.h"
 
 #if defined __linux__ /* currently RDMA is only supported on Linux */
-#if (USE_RDMA == 1 /* BUILD_YES */) || ((USE_RDMA == 2 /* BUILD_MODULE */) && (BUILD_RDMA_MODULE == 2))
+#if (defined(USE_RDMA) && USE_RDMA == 1 /* BUILD_YES */) ||     \
+    ((defined(USE_RDMA) && USE_RDMA == 2 /* BUILD_MODULE */) && \
+     (defined(BUILD_RDMA_MODULE) && BUILD_RDMA_MODULE == 2))
 #include "connhelpers.h"
 
 #include <assert.h>
@@ -1884,7 +1886,7 @@ int RegisterConnectionTypeRdma(void) {
 
 #endif
 
-#if BUILD_RDMA_MODULE == 2 /* BUILD_MODULE */
+#if defined(BUILD_RDMA_MODULE) && BUILD_RDMA_MODULE == 2 /* BUILD_MODULE */
 
 #include "release.h"
 

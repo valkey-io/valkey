@@ -30,7 +30,7 @@
 
 #include "server.h"
 #include "hiredis.h"
-#if USE_OPENSSL == 1 /* BUILD_YES */
+#if defined(USE_OPENSSL) && USE_OPENSSL == 1 /* BUILD_YES */
 #include "openssl/ssl.h"
 #include "hiredis_ssl.h"
 #endif
@@ -44,7 +44,7 @@
 
 extern char **environ;
 
-#if USE_OPENSSL == 1 /* BUILD_YES */
+#if defined(USE_OPENSSL) && USE_OPENSSL == 1 /* BUILD_YES */
 extern SSL_CTX *valkey_tls_ctx;
 extern SSL_CTX *valkey_tls_client_ctx;
 #endif
@@ -2296,7 +2296,7 @@ void sentinelSetClientName(sentinelValkeyInstance *ri, redisAsyncContext *c, cha
 }
 
 static int instanceLinkNegotiateTLS(redisAsyncContext *context) {
-#if USE_OPENSSL == 1 /* BUILD_YES */
+#if defined(USE_OPENSSL) && USE_OPENSSL == 1 /* BUILD_YES */
     if (!valkey_tls_ctx) return C_ERR;
     SSL *ssl = SSL_new(valkey_tls_client_ctx ? valkey_tls_client_ctx : valkey_tls_ctx);
     if (!ssl) return C_ERR;

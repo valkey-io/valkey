@@ -1884,7 +1884,7 @@ int RegisterConnectionTypeRdma(void) {
 
 #endif
 
-#if BUILD_RDMA_MODULE == 2 /* BUILD_MODULE */
+#if defined(BUILD_RDMA_MODULE) && BUILD_RDMA_MODULE == 2 /* BUILD_MODULE */
 
 #include "release.h"
 

@@ -119,7 +119,10 @@ int longLatFromMemberOrReply(client *c, robj *zobj, robj *member, double *xy) {
         addReplyErrorFormat(c, "member %s does not exist", (char *)member->ptr);
         return C_ERR;
     }
-    decodeGeohash(score, xy);
+    if (!decodeGeohash(score, xy)) {
+        addReplyErrorFormat(c, "failed to decode, member %s is not a valid geohash", (char *)member->ptr);
+        return C_ERR;
+    }
     return C_OK;
 }
 

@@ -675,6 +675,10 @@ static int expand(hashtable *ht, size_t size, int *malloc_failed) {
  *
  * If 'table_index' is provided, it is set to the index of the table (0 or 1)
  * the returned bucket belongs to. */
+#ifdef HAVE_X86_SIMD
+#include <immintrin.h>
+ATTRIBUTE_TARGET_SSE2
+#endif
 static bucket *findBucket(hashtable *ht, uint64_t hash, const void *key, int *pos_in_bucket, int *table_index) {
     if (hashtableSize(ht) == 0) return 0;
     uint8_t h2 = highBits(hash);
@@ -693,6 +697,39 @@ static bucket *findBucket(hashtable *ht, uint64_t hash, const void *key, int *po
         }
         bucket *b = &ht->tables[table][bucket_idx];
         do {
+#if HAVE_X86_SIMD
+            if (__builtin_cpu_supports("sse2")) {
+                /* Get the bucket's presence mask - indicates which positions are filled. */
+                BUCKET_BITS_TYPE presence_mask = b->presence & ((1 << ENTRIES_PER_BUCKET) - 1);
+                __m128i hash_vector = _mm_loadu_si128((__m128i *)b->hashes);
+                __m128i h2_vector = _mm_set1_epi8(h2);
+                /* Compare all hash values against the target hash simultaneously.
+                 * The result is a vector of 16 bytes, where each byte is 0xFF if
+                 * the corresponding hash matches the target hash, and 0x00 if it
+                 * doesn't. */
+                __m128i result = _mm_cmpeq_epi8(hash_vector, h2_vector);
+                BUCKET_BITS_TYPE newmask = _mm_movemask_epi8(result);
+                /* Only consider positions that are both filled (presence) and match the hash (newmask). */
+                newmask &= presence_mask;
+                while (newmask > 0) {
+                    int pos = __builtin_ctz(newmask);
+                    /* It's a candidate. */
+                    void *entry = b->entries[pos];
+                    const void *elem_key = entryGetKey(ht, entry);
+                    if (compareKeys(ht, key, elem_key) == 0) {
+                        /* It's a match. */
+                        assert(pos_in_bucket != NULL);
+                        *pos_in_bucket = pos;
+                        if (table_index) *table_index = table;
+                        return b;
+                    }
+                    /* Clear the processed bit and continue with next match. */
+                    newmask &= ~(1 << pos);
+                }
+                b = getChildBucket(b);
+                continue;
+            }
+#endif
             /* Find candidate entries with presence flag set and matching h2 hash. */
             for (int pos = 0; pos < numBucketPositions(b); pos++) {
                 if (isPositionFilled(b, pos) && b->hashes[pos] == h2) {

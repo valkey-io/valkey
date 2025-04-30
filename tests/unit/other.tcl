@@ -574,6 +574,25 @@ start_server {tags {"other external:skip"}} {
     }
 }
 
+start_server {tags {"other external:skip"}} {
+    test "test io-threads are runtime modifiable" {
+        # Test set
+        r config set io-threads 5
+        set thread_num [lindex [r config get io-threads] 1]
+        assert_equal 5 $thread_num
+
+        # Test decrease
+        r config set io-threads 1
+        set thread_num [lindex [r config get io-threads] 1]
+        assert_equal 1 $thread_num
+
+        # Test increase
+        r config set io-threads 4
+        set thread_num [lindex [r config get io-threads] 1]
+        assert_equal 4 $thread_num
+    }
+}
+
 set tempFileName [file join [pwd] [pid]]
 if {$::verbose} {
     puts "Creating temp file $tempFileName"

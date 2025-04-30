@@ -1,0 +1,20 @@
+# See https://github.com/crate-ci/typos/blob/master/docs/reference.md to configure typos.
+
+[files]
+extend-exclude = [
+    "src/cmddef.h", # Generated file.
+]
+
+# Source files
+[type.c.extend-identifiers]
+clen = "clen"
+[type.c.extend-words]
+fo = "fo" # Used in sds.c testcase.
+
+# Header files (sv = *.h)
+[type.sv.extend-identifiers]
+clen = "clen"
+
+# Scripts
+[type.sh.extend-identifiers]
+ue = "ue" # Used in tests/test.sh

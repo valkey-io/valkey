@@ -224,25 +224,25 @@ struct hllhdr {
 
 static char *invalid_hll_err = "-INVALIDOBJ Corrupted HLL object detected";
 
-#if HAVE_X86_SIMD
+#if HAVE_X86_SIMD || defined(__aarch64__)
+#define SIMD_SUPPORTED 1
 static int simd_enabled = 1;
+#else
+#define SIMD_SUPPORTED 0
+#endif
+
+#if HAVE_X86_SIMD
 #define HLL_USE_AVX2 (simd_enabled && __builtin_cpu_supports("avx2"))
 #else
 #define HLL_USE_AVX2 0
 #endif
 
 #ifdef __aarch64__
-static int simd_enabled = 1;
 #define HLL_USE_NEON (simd_enabled)
 #else
 #define HLL_USE_NEON 0
 #endif
 
-#if HAVE_X86_SIMD || defined(__aarch64__)
-#define SIMD_SUPPORTED 1
-#else
-#define SIMD_SUPPORTED 0
-#endif
 
 /* =========================== Low level bit macros ========================= */
 

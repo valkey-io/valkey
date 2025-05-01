@@ -675,7 +675,7 @@ static int expand(hashtable *ht, size_t size, int *malloc_failed) {
  *
  * If 'table_index' is provided, it is set to the index of the table (0 or 1)
  * the returned bucket belongs to. */
-#ifdef HAVE_X86_SIMD
+#if HAVE_X86_SIMD
 #include <immintrin.h>
 ATTRIBUTE_TARGET_SSE2
 #endif

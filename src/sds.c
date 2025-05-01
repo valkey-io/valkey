@@ -952,6 +952,9 @@ sds sdscatrepr(sds s, const char *p, size_t len) {
     s = sdsMakeRoomFor(s, len + 2);
     s = sdscatlen(s, "\"", 1);
     while (len) {
+        /* The condition here in combination with the loop inside ensures we're calling sdscatlen only once for an
+         * entire string chunk rather than calling it for every character. This reduces the amount of memcpy calls.
+         * \ and " are valid isprint characters but we need to handle them in the else block below to escape them. */
         if (isprint(*p) && *p != '\\' && *p != '"') {
             const char *start = p;
             while (len && isprint(*p) && *p != '\\' && *p != '"') {

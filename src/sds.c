@@ -952,9 +952,9 @@ sds sdscatrepr(sds s, const char *p, size_t len) {
     s = sdsMakeRoomFor(s, len + 2);
     s = sdscatlen(s, "\"", 1);
     while (len) {
-        if (isprint(*p)) {
+        if (isprint(*p) && *p != '\\' && *p != '"') {
             const char *start = p;
-            while (len && isprint(*p)) {
+            while (len && isprint(*p) && *p != '\\' && *p != '"') {
                 len--;
                 p++;
             }

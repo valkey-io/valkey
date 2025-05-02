@@ -419,6 +419,15 @@ start_server {tags {"introspection"}} {
         set _ $res
     } {*"set" "foo"*"get" "foo"*}
 
+    test {MONITOR properly escapes special characters through sdscatrepr} {
+        set rd [valkey_deferring_client]
+        $rd monitor
+        assert_match {*OK*} [$rd read]
+        r echo "backslash\\quotes\"newline\ncarriagereturn\rtab\talert\abackspace\bhexnormal\x7Ahexspecial\x7F"
+        assert_match {*"echo" "backslash\\\\quotes\\"newline\\ncarriagereturn\\rtab\\talert\\abackspace\\bhexnormalzhexspecial\\x7f"*} [$rd read]
+        $rd close
+    }
+
     test {MONITOR can log commands issued by the scripting engine} {
         set rd [valkey_deferring_client]
         $rd monitor

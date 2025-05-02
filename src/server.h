@@ -2976,6 +2976,7 @@ void initClientReplicationData(client *c);
 void freeClientReplicationData(client *c);
 char *replicationSendAuth(connection *conn);
 char *receiveSynchronousResponse(connection *conn);
+ConnectionType *connTypeOfReplication(void);
 
 /* Generic persistence functions */
 void startLoadingFile(size_t size, char *filename, int rdbflags);

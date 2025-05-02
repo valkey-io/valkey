@@ -594,7 +594,7 @@ void connectSlotImportLink(slotMigrationLink *link, char *ip, int port) {
               ip,
               port);
 
-    link->conn = connCreate(connTypeOfCluster());
+    link->conn = connCreate(connTypeOfReplication());
     if (connConnect(link->conn, ip, port,
                     server.bind_source_addr, slotImportConnectHandler) == C_ERR) {
         serverLog(LL_WARNING,
@@ -1685,8 +1685,8 @@ const char *slotMigrationLinkStateToString(slotMigrationLinkState state) {
     case SLOT_MIGRATION_LINK_SUCCESS: return "success";
     case SLOT_MIGRATION_LINK_CANCELLED: return "cancelled";
     case SLOT_MIGRATION_LINK_FAILED: return "failed";
-    default: return "unknown";
     }
+    return "unknown";
 }
 
 void updateSlotMigrationLinkState(slotMigrationLink *link, slotMigrationLinkState state) {

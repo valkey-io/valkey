@@ -2908,7 +2908,7 @@ static int parseOptions(int argc, char **argv) {
 static void parseEnv(void) {
     /* Set auth from env, but do not overwrite CLI arguments if passed */
     char *auth = getenv(CLI_AUTH_ENV);
-    if (auth != NULL) {
+    if (auth == NULL) {
         auth = getenv(OLD_CLI_AUTH_ENV);
     }
     if (auth != NULL && config.conn_info.auth == NULL) {

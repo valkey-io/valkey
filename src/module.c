@@ -26,6 +26,11 @@
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  * POSSIBILITY OF SUCH DAMAGE.
  */
+/*
+ * Copyright (c) Valkey Contributors
+ * All rights reserved.
+ * SPDX-License-Identifier: BSD-3-Clause
+ */
 
 /* --------------------------------------------------------------------------
  * Modules API documentation information
@@ -61,8 +66,8 @@
 #include "hdr_histogram.h"
 #include "crc16_slottable.h"
 #include "valkeymodule.h"
-#include "io_threads.h"
 #include "module.h"
+#include "io_threads.h"
 #include "scripting_engine.h"
 #include <dlfcn.h>
 #include <sys/stat.h>
@@ -193,8 +198,8 @@ typedef struct ValkeyModuleCtx ValkeyModuleCtx;
 #define VALKEYMODULE_CTX_NEW_CLIENT (1 << 7)  /* Free client object when the \
                                                  context is destroyed */
 #define VALKEYMODULE_CTX_CHANNELS_POS_REQUEST (1 << 8)
-#define VALKEYMODULE_CTX_COMMAND (1 << 9) /* Context created to serve a command from call() or AOF (which calls cmd->proc directly) */
-
+#define VALKEYMODULE_CTX_COMMAND (1 << 9)                /* Context created to serve a command from call() or AOF (which calls cmd->proc directly) */
+#define VALKEYMODULE_CTX_KEYSPACE_NOTIFICATION (1 << 10) /* Context created a keyspace notification event */
 
 /* This represents a key opened with VM_OpenKey(). */
 struct ValkeyModuleKey {
@@ -1403,6 +1408,7 @@ ValkeyModuleCommand *moduleCreateCommandProxy(struct ValkeyModule *module,
     cp->serverCmd = zcalloc(sizeof(*serverCmd));
     cp->serverCmd->declared_name = declared_name; /* SDS for module commands */
     cp->serverCmd->fullname = fullname;
+    cp->serverCmd->current_name = fullname;
     cp->serverCmd->group = COMMAND_GROUP_MODULE;
     cp->serverCmd->proc = ValkeyModuleCommandDispatcher;
     cp->serverCmd->flags = flags | CMD_MODULE;
@@ -2565,7 +2571,16 @@ void VM_Yield(ValkeyModuleCtx *ctx, int flags, const char *busy_reply) {
  * By default, the server will not fire key-space notifications that happened inside
  * a key-space notification callback. This flag allows to change this behavior
  * and fire nested key-space notifications. Notice: if enabled, the module
- * should protected itself from infinite recursion. */
+ * should protected itself from infinite recursion.
+ *
+ * VALKEYMODULE_OPTIONS_SKIP_COMMAND_VALIDATION:
+ * When set, this option allows the module to skip command validation.
+ * This is useful in scenarios where the module needs to bypass
+ * command validation for specific operations
+ * to reduce overhead or handle trusted custom command logic.
+ * ValkeyModule_Replicate and ValkeyModule_EmitAOF
+ * are affected by this option, allowing them to operate without
+ * command validation check. */
 void VM_SetModuleOptions(ValkeyModuleCtx *ctx, int options) {
     ctx->module->options = options;
 }
@@ -2967,7 +2982,7 @@ int VM_StringToLongLong(const ValkeyModuleString *str, long long *ll) {
  * as a valid, strict `unsigned long long` (no spaces before/after), VALKEYMODULE_ERR
  * is returned. */
 int VM_StringToULongLong(const ValkeyModuleString *str, unsigned long long *ull) {
-    return string2ull(str->ptr, ull) ? VALKEYMODULE_OK : VALKEYMODULE_ERR;
+    return string2ull(str->ptr, sdslen(str->ptr), ull) ? VALKEYMODULE_OK : VALKEYMODULE_ERR;
 }
 
 /* Convert the string into a double, storing it at `*d`.
@@ -3629,8 +3644,10 @@ int VM_Replicate(ValkeyModuleCtx *ctx, const char *cmdname, const char *fmt, ...
     int argc = 0, flags = 0, j;
     va_list ap;
 
-    cmd = lookupCommandByCString((char *)cmdname);
-    if (!cmd) return VALKEYMODULE_ERR;
+    if (!ctx->module || !(ctx->module->options & VALKEYMODULE_OPTIONS_SKIP_COMMAND_VALIDATION)) {
+        cmd = lookupCommandByCString((char *)cmdname);
+        if (!cmd) return VALKEYMODULE_ERR;
+    }
 
     /* Create the client and dispatch the command. */
     va_start(ap, fmt);
@@ -3719,6 +3736,16 @@ ValkeyModuleString *VM_GetClientUserNameById(ValkeyModuleCtx *ctx, uint64_t id) 
     robj *str = createObject(OBJ_STRING, name);
     autoMemoryAdd(ctx, VALKEYMODULE_AM_STRING, str);
     return str;
+}
+
+/* Returns 1 if commands are arriving from the primary client or AOF client
+ * and should never be rejected.
+ * This check can be used in places such as skipping validation of commands
+ * on replicas (to not diverge from primary) or from AOF files.
+ * Returns 0 otherwise (and also if ctx or if the client is NULL). */
+int VM_MustObeyClient(ValkeyModuleCtx *ctx) {
+    if (!ctx || !ctx->client) return 0;
+    return mustObeyClient(ctx->client);
 }
 
 /* This is a helper for VM_GetClientInfoById() and other functions: given
@@ -4172,7 +4199,7 @@ static void moduleCloseKey(ValkeyModuleKey *key) {
     decrRefCount(key->key);
 }
 
-/* Close a key handle. */
+/* Close a key handle. The key handle is freed and should not be accessed anymore. */
 void VM_CloseKey(ValkeyModuleKey *key) {
     if (key == NULL) return;
     moduleCloseKey(key);
@@ -7524,15 +7551,17 @@ void VM_EmitAOF(ValkeyModuleIO *io, const char *cmdname, const char *fmt, ...) {
     int argc = 0, flags = 0, j;
     va_list ap;
 
-    cmd = lookupCommandByCString((char *)cmdname);
-    if (!cmd) {
-        serverLog(LL_WARNING,
-                  "Fatal: AOF method for module data type '%s' tried to "
-                  "emit unknown command '%s'",
-                  io->type->name, cmdname);
-        io->error = 1;
-        errno = EINVAL;
-        return;
+    if (!io->ctx || !io->ctx->module || !(io->ctx->module->options & VALKEYMODULE_OPTIONS_SKIP_COMMAND_VALIDATION)) {
+        cmd = lookupCommandByCString((char *)cmdname);
+        if (!cmd) {
+            serverLog(LL_WARNING,
+                      "Fatal: AOF method for module data type '%s' tried to "
+                      "emit unknown command '%s'",
+                      io->type->name, cmdname);
+            io->error = 1;
+            errno = EINVAL;
+            return;
+        }
     }
 
     /* Emit the arguments into the AOF in RESP format. */
@@ -7766,6 +7795,8 @@ void unblockClientFromModule(client *c) {
  * in that case the privdata argument is disregarded, because we pass the
  * reply callback the privdata that is set here while blocking.
  *
+ * For details on return values and error codes, see the comment block for
+ * VM_BlockClient.
  */
 ValkeyModuleBlockedClient *moduleBlockClient(ValkeyModuleCtx *ctx,
                                              ValkeyModuleCmdFunc reply_callback,
@@ -7778,8 +7809,27 @@ ValkeyModuleBlockedClient *moduleBlockClient(ValkeyModuleCtx *ctx,
                                              void *privdata,
                                              int flags) {
     client *c = ctx->client;
+    if (c->flag.blocked || getClientType(c) != CLIENT_TYPE_NORMAL || c->flag.deny_blocking) {
+        /* Early return if duplicate block attempt or client is not normal or
+         * client is set to deny blocking. */
+        errno = ENOTSUP;
+        return NULL;
+    }
+
+    if (ctx->flags & (VALKEYMODULE_CTX_TEMP_CLIENT | VALKEYMODULE_CTX_NEW_CLIENT)) {
+        /* Temporary clients can't be blocked */
+        errno = EINVAL;
+        return NULL;
+    }
+    int is_keyspace_notification = ctx->flags & (VALKEYMODULE_CTX_KEYSPACE_NOTIFICATION);
     int islua = scriptIsRunning();
     int ismulti = server.in_exec;
+    if ((islua || ismulti) && is_keyspace_notification) {
+        /* Avoid blocking within transactions when context initiated by
+         * keyspace notification. */
+        errno = EINVAL;
+        return NULL;
+    }
     initClientBlockingState(c);
 
     c->bstate->module_blocked_handle = zmalloc(sizeof(ValkeyModuleBlockedClient));
@@ -7834,6 +7884,11 @@ ValkeyModuleBlockedClient *moduleBlockClient(ValkeyModuleCtx *ctx,
         } else {
             c->bstate->timeout = timeout;
             blockClient(c, BLOCKED_MODULE);
+        }
+        /* Defer response until after being unblocked for a context originated from
+         * keyspace notification events */
+        if (is_keyspace_notification) {
+            initDeferredReplyBuffer(c);
         }
     }
     return bc;
@@ -8062,14 +8117,27 @@ int moduleTryServeClientBlockedOnKey(client *c, robj *key) {
  *     free_privdata:    called in order to free the private data that is passed
  *                       by ValkeyModule_UnblockClient() call.
  *
- * Note: ValkeyModule_UnblockClient should be called for every blocked client,
- *       even if client was killed, timed-out or disconnected. Failing to do so
- *       will result in memory leaks.
+ * Notes:
+ * 1. ValkeyModule_UnblockClient should be called for every blocked client,
+ * even if client was killed, timed-out or disconnected. Failing to do so
+ * will result in memory leaks.
+ * 2. Attempting to block the client on keyspace event notification in versions
+ *    prior to 8.1.1 leads to a crash.
  *
  * There are some cases where ValkeyModule_BlockClient() cannot be used:
  *
  * 1. If the client is a Lua script.
  * 2. If the client is executing a MULTI block.
+ * 3. If the client is a temporary module client.
+ * 4. If the client is already blocked.
+ *
+ * In cases 1 and 2, a call to ValkeyModule_BlockClient() will **not** block the
+ * client, but instead produce a specific error reply. Note that if the
+ * BlockClient call originated from within a keyspace notification, no error
+ * reply is generated but nullptr is returned while the errno is set to EINVAL.
+ *
+ * In case 3 and 4, a call to ValkeyModule_BlockClient() are no-op, returning
+ * nullptr. errno is set to EINVAL for case 3 while ENOTSUP for case 4.
  *
  * In these cases, a call to ValkeyModule_BlockClient() will **not** block the
  * client, but instead produce a specific error reply.
@@ -8261,6 +8329,12 @@ int moduleClientIsBlockedOnKeys(client *c) {
  * needs to be passed to the client, included but not limited some slow
  * to compute reply or some reply obtained via networking.
  *
+ * Returns VALKEYMODULE_OK on success. On failure, VALKEYMODULE_ERR is returned
+ * and `errno` is set as follows:
+ *
+ * - EINVAL if bc is NULL.
+ * - ENOTSUP if bc contains `blocked on keys` but its timeout callback is NULL.
+ *
  * Note 1: this function can be called from threads spawned by the module.
  *
  * Note 2: when we unblock a client that is blocked for keys using the API
@@ -8271,10 +8345,17 @@ int moduleClientIsBlockedOnKeys(client *c) {
  * ValkeyModule_BlockClientOnKeys() is accessible from the timeout
  * callback via VM_GetBlockedClientPrivateData). */
 int VM_UnblockClient(ValkeyModuleBlockedClient *bc, void *privdata) {
+    if (!bc) {
+        errno = EINVAL;
+        return VALKEYMODULE_ERR;
+    }
     if (bc->blocked_on_keys) {
         /* In theory the user should always pass the timeout handler as an
          * argument, but better to be safe than sorry. */
-        if (bc->timeout_callback == NULL) return VALKEYMODULE_ERR;
+        if (bc->timeout_callback == NULL) {
+            errno = ENOTSUP;
+            return VALKEYMODULE_ERR;
+        }
         if (bc->unblocked) return VALKEYMODULE_OK;
         if (bc->client) moduleBlockedClientTimedOut(bc->client, 1);
     }
@@ -8363,11 +8444,17 @@ void moduleHandleBlockedClients(void) {
             moduleInvokeFreePrivDataCallback(c, bc);
         }
 
-        /* It is possible that this blocked client object accumulated
-         * replies to send to the client in a thread safe context.
-         * We need to glue such replies to the client output buffer and
-         * free the temporary client we just used for the replies. */
-        if (c) AddReplyFromClient(c, bc->reply_client);
+        if (c) {
+            /* Replies which were added after the client is blocked by a module
+             * are accumulated separately. We need to transmit those replies
+             * to the client. */
+            commitDeferredReplyBuffer(c, 0);
+            /* It is possible that this blocked client object accumulated
+             * replies to send to the client in a thread safe context.
+             * We need to glue such replies to the client output buffer and
+             * free the temporary client we just used for the replies. */
+            AddReplyFromClient(c, bc->reply_client);
+        }
         moduleReleaseTempClient(bc->reply_client);
         moduleReleaseTempClient(bc->thread_safe_ctx_client);
 
@@ -8463,9 +8550,10 @@ void moduleBlockedClientTimedOut(client *c, int from_module) {
 
     moduleFreeContext(&ctx);
 
-    if (!from_module)
+    if (!from_module) {
         updateStatsOnUnblock(c, bc->background_duration, 0,
                              ((server.stat_total_error_replies != prev_error_replies) ? ERROR_COMMAND_FAILED : 0));
+    }
 
     /* For timeout events, we do not want to call the disconnect callback,
      * because the blocked client will be automatically disconnected in
@@ -8811,12 +8899,16 @@ int VM_NotifyKeyspaceEvent(ValkeyModuleCtx *ctx, int type, const char *event, Va
     return VALKEYMODULE_OK;
 }
 
+unsigned long moduleNotifyKeyspaceSubscribersCnt(void) {
+    return listLength(moduleKeyspaceSubscribers);
+}
+
 /* Dispatcher for keyspace notifications to module subscriber functions.
  * This gets called  only if at least one module requested to be notified on
  * keyspace notifications */
 void moduleNotifyKeyspaceEvent(int type, const char *event, robj *key, int dbid) {
     /* Don't do anything if there aren't any subscribers */
-    if (listLength(moduleKeyspaceSubscribers) == 0) return;
+    if (moduleNotifyKeyspaceSubscribersCnt() == 0) return;
 
     /* Ugly hack to handle modules which use write commands from within
      * notify_callback, which they should NOT do!
@@ -8851,8 +8943,14 @@ void moduleNotifyKeyspaceEvent(int type, const char *event, robj *key, int dbid)
         if ((sub->event_mask & type) &&
             (sub->active == 0 || (sub->module->options & VALKEYMODULE_OPTIONS_ALLOW_NESTED_KEYSPACE_NOTIFICATIONS))) {
             ValkeyModuleCtx ctx;
-            moduleCreateContext(&ctx, sub->module, VALKEYMODULE_CTX_TEMP_CLIENT);
+            if (server.executing_client == NULL) {
+                moduleCreateContext(&ctx, sub->module, VALKEYMODULE_CTX_TEMP_CLIENT);
+            } else {
+                moduleCreateContext(&ctx, sub->module, VALKEYMODULE_CTX_NONE);
+                ctx.client = server.executing_client;
+            }
             selectDb(ctx.client, dbid);
+            ctx.flags |= VALKEYMODULE_CTX_KEYSPACE_NOTIFICATION;
 
             /* mark the handler as active to avoid reentrant loops.
              * If the subscriber performs an action triggering itself,
@@ -8939,7 +9037,13 @@ void moduleCallClusterReceivers(const char *sender_id,
  * was already a registered callback, this will replace the callback function
  * with the one provided, otherwise if the callback is set to NULL and there
  * is already a callback for this function, the callback is unregistered
- * (so this API call is also used in order to delete the receiver). */
+ * (so this API call is also used in order to delete the receiver).
+ *
+ * When a message of this type is received, the registered callback function
+ * will be invoked with details, including the 40-byte node ID of the sender.
+ *
+ * In Valkey 8.1 and later, the node ID is null-terminated. Prior to 8.1, it was
+ * not null-terminated */
 void VM_RegisterClusterMessageReceiver(ValkeyModuleCtx *ctx,
                                        uint8_t type,
                                        ValkeyModuleClusterMessageReceiver callback) {
@@ -8982,6 +9086,9 @@ void VM_RegisterClusterMessageReceiver(ValkeyModuleCtx *ctx,
 /* Send a message to all the nodes in the cluster if `target` is NULL, otherwise
  * at the specified target, which is a VALKEYMODULE_NODE_ID_LEN bytes node ID, as
  * returned by the receiver callback or by the nodes iteration functions.
+ *
+ * In Valkey 8.1 and later, the cluster protocol overhead for this message is
+ * ~30B, to compare with earlier versions where it's ~2KB.
  *
  * The function returns VALKEYMODULE_OK if the message was successfully sent,
  * otherwise if the node is not connected or such node ID does not map to any
@@ -9596,8 +9703,7 @@ void revokeClientAuthentication(client *c) {
      * is eventually freed we don't rely on the module to still exist. */
     moduleNotifyUserChanged(c);
 
-    c->user = DefaultUser;
-    c->flag.authenticated = 0;
+    clientSetUser(c, DefaultUser, 0);
     /* We will write replies to this client later, so we can't close it
      * directly even if async. */
     if (c == server.current_client) {
@@ -9723,8 +9829,15 @@ ValkeyModuleString *VM_GetModuleUserACLString(ValkeyModuleUser *user) {
  * See more information in VM_GetModuleUserFromUserName.
  *
  * The returned string must be released with ValkeyModule_FreeString() or by
- * enabling automatic memory management. */
+ * enabling automatic memory management.
+ *
+ * If the context is not associated with a client connection, NULL is returned
+ * and errno is set to EINVAL. */
 ValkeyModuleString *VM_GetCurrentUserName(ValkeyModuleCtx *ctx) {
+    if (ctx == NULL || ctx->client == NULL || ctx->client->user == NULL || ctx->client->user->name == NULL) {
+        errno = EINVAL;
+        return NULL;
+    }
     return VM_CreateString(ctx, ctx->client->user->name, sdslen(ctx->client->user->name));
 }
 
@@ -9918,8 +10031,7 @@ static int authenticateClientWithUser(ValkeyModuleCtx *ctx,
 
     moduleNotifyUserChanged(ctx->client);
 
-    ctx->client->user = user;
-    ctx->client->flag.authenticated = 1;
+    clientSetUser(ctx->client, user, 1);
 
     if (clientHasModuleAuthInProgress(ctx->client)) {
         ctx->client->flag.module_auth_has_result = 1;
@@ -10528,7 +10640,7 @@ unsigned long long VM_ServerInfoGetFieldUnsigned(ValkeyModuleServerInfoData *dat
         return 0;
     }
     sds val = result;
-    if (!string2ull(val, &ll)) {
+    if (!string2ull(val, sdslen(val), &ll)) {
         if (out_err) *out_err = VALKEYMODULE_ERR;
         return 0;
     }
@@ -12270,7 +12382,18 @@ int moduleLoad(const char *path, void **module_argv, int module_argc, int is_loa
         }
     }
 
-    handle = dlopen(path, RTLD_NOW | RTLD_LOCAL);
+    int dlopen_flags = RTLD_NOW | RTLD_LOCAL;
+#if (defined(__GLIBC__) || defined(__FreeBSD__)) && !defined(VALKEY_ADDRESS_SANITIZER) && __has_include(<dlfcn.h>)
+    /* RTLD_DEEPBIND, which is required for loading modules that contains the
+     * same symbols, does not work with ASAN. Therefore, we exclude
+     * RTLD_DEEPBIND when doing test builds with ASAN.
+     * See https://github.com/google/sanitizers/issues/611 for more details.
+     *
+     * This flag is also currently only available in Linux and FreeBSD. */
+    dlopen_flags |= RTLD_DEEPBIND;
+#endif
+
+    handle = dlopen(path, dlopen_flags);
     if (handle == NULL) {
         serverLog(LL_WARNING, "Module %s failed to load: %s", path, dlerror());
         return C_ERR;
@@ -13192,6 +13315,21 @@ int VM_UnregisterScriptingEngine(ValkeyModuleCtx *ctx, const char *engine_name) 
     return VALKEYMODULE_OK;
 }
 
+/* Returns the state of the current function being executed by the scripting
+ * engine.
+ *
+ * `server_ctx` is the server runtime context.
+ *
+ * It will return VMSE_STATE_KILLED if the function was already killed either by
+ * a `SCRIPT KILL`, or `FUNCTION KILL`.
+ */
+ValkeyModuleScriptingEngineExecutionState VM_GetFunctionExecutionState(
+    ValkeyModuleScriptingEngineServerRuntimeCtx *server_ctx) {
+    int ret = scriptInterrupt(server_ctx);
+    serverAssert(ret == SCRIPT_CONTINUE || ret == SCRIPT_KILL);
+    return ret == SCRIPT_CONTINUE ? VMSE_STATE_EXECUTING : VMSE_STATE_KILLED;
+}
+
 /* MODULE command.
  *
  * MODULE LIST
@@ -13841,6 +13979,7 @@ void moduleRegisterCoreAPI(void) {
     REGISTER_API(ChannelAtPosWithFlags);
     REGISTER_API(GetClientId);
     REGISTER_API(GetClientUserNameById);
+    REGISTER_API(MustObeyClient);
     REGISTER_API(GetContextFlags);
     REGISTER_API(AvoidReplicaTraffic);
     REGISTER_API(PoolAlloc);
@@ -14064,4 +14203,5 @@ void moduleRegisterCoreAPI(void) {
     REGISTER_API(RdbSave);
     REGISTER_API(RegisterScriptingEngine);
     REGISTER_API(UnregisterScriptingEngine);
+    REGISTER_API(GetFunctionExecutionState);
 }

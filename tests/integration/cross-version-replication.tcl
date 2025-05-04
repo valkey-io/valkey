@@ -18,7 +18,7 @@ start_server {tags {"repl needs:other-server external:skip"} start-other-server 
     start_server {} {
         test "Start replication from $primary_name_and_version" {
             r replicaof [srv -1 host] [srv -1 port]
-            wait_for_sync r
+            wait_for_sync r 500 100
             # The key has been transferred.
             assert_equal bar [r get foo]
             assert_equal up [s master_link_status]

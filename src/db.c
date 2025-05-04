@@ -445,7 +445,7 @@ robj *dbRandomKey(serverDb *db) {
         sds key = objectGetKey(valkey);
         robj *keyobj = createStringObject(key, sdslen(key));
         if (objectIsExpired(valkey)) {
-            if (allvolatile && (server.primary_host || server.import_mode) && --maxtries == 0) {
+            if (allvolatile && (server.primary_host || server.import_mode || isPausedActions(PAUSE_ACTION_EXPIRE)) && --maxtries == 0) {
                 /* If the DB is composed only of keys with an expire set,
                  * it could happen that all the keys are already logically
                  * expired in the replica, so the function cannot stop because
@@ -859,10 +859,6 @@ void selectCommand(client *c) {
 
     if (getIntFromObjectOrReply(c, c->argv[1], &id, NULL) != C_OK) return;
 
-    if (server.cluster_enabled && id != 0) {
-        addReplyError(c, "SELECT is not allowed in cluster mode");
-        return;
-    }
     if (selectDb(c, id) == C_ERR) {
         addReplyError(c, "DB index is out of range");
     } else {
@@ -1031,12 +1027,12 @@ void hashtableScanCallback(void *privdata, void *entry) {
     if (val) listAddNodeTail(keys, val);
 }
 
-/* Try to parse a SCAN cursor stored at object 'o':
+/* Try to parse a SCAN cursor stored at buffer 'buf':
  * if the cursor is valid, store it as unsigned integer into *cursor and
  * returns C_OK. Otherwise return C_ERR and send an error to the
  * client. */
-int parseScanCursorOrReply(client *c, robj *o, unsigned long long *cursor) {
-    if (!string2ull(o->ptr, cursor)) {
+int parseScanCursorOrReply(client *c, sds buf, unsigned long long *cursor) {
+    if (!string2ull(buf, sdslen(buf), cursor)) {
         addReplyError(c, "invalid cursor");
         return C_ERR;
     }
@@ -1297,7 +1293,7 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {
 /* The SCAN command completely relies on scanGenericCommand. */
 void scanCommand(client *c) {
     unsigned long long cursor;
-    if (parseScanCursorOrReply(c, c->argv[1], &cursor) == C_ERR) return;
+    if (parseScanCursorOrReply(c, c->argv[1]->ptr, &cursor) == C_ERR) return;
     scanGenericCommand(c, NULL, cursor);
 }
 
@@ -1428,11 +1424,6 @@ void moveCommand(client *c) {
     int srcid, dbid;
     long long expire;
 
-    if (server.cluster_enabled) {
-        addReplyError(c, "MOVE is not allowed in cluster mode");
-        return;
-    }
-
     /* Obtain source and target DB pointers */
     src = c->db;
     srcid = c->db->id;
@@ -1515,11 +1506,6 @@ void copyCommand(client *c) {
             addReplyErrorObject(c, shared.syntaxerr);
             return;
         }
-    }
-
-    if ((server.cluster_enabled == 1) && (srcid != 0 || dbid != 0)) {
-        addReplyError(c, "Copying to another database is not allowed in cluster mode");
-        return;
     }
 
     /* If the user select the same DB as
@@ -2853,4 +2839,13 @@ int bitfieldGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysRes
         keys[0].flags = CMD_KEY_RW | CMD_KEY_ACCESS | CMD_KEY_UPDATE;
     }
     return 1;
+}
+
+bool dbHasNoKeys(void) {
+    for (int i = 0; i < server.dbnum; i++) {
+        if (kvstoreSize(server.db[i].keys) != 0) {
+            return false;
+        }
+    }
+    return true;
 }

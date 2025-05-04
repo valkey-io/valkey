@@ -27,7 +27,11 @@
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  * POSSIBILITY OF SUCH DAMAGE.
  */
-
+/*
+ * Copyright (c) Valkey Contributors
+ * All rights reserved.
+ * SPDX-License-Identifier: BSD-3-Clause
+ */
 #include "fmacros.h"
 
 #include <stdio.h>
@@ -80,7 +84,8 @@
 #define CLI_HISTFILE_DEFAULT ".valkeycli_history"
 #define CLI_RCFILE_ENV "REDISCLI_RCFILE"
 #define CLI_RCFILE_DEFAULT ".valkeyclirc"
-#define CLI_AUTH_ENV "REDISCLI_AUTH"
+#define CLI_AUTH_ENV "VALKEYCLI_AUTH"
+#define OLD_CLI_AUTH_ENV "REDISCLI_AUTH"
 #define CLI_CLUSTER_YES_ENV "REDISCLI_CLUSTER_YES"
 
 #define CLUSTER_MANAGER_SLOTS 16384
@@ -149,6 +154,8 @@
 #define LOG_COLOR_GREEN "32;1m"
 #define LOG_COLOR_YELLOW "33;1m"
 #define LOG_COLOR_RESET "0m"
+
+#define HOTKEYS_COUNT 16
 
 /* cliConnect() flags. */
 #define CC_FORCE (1 << 0) /* Re-connect if already connected. */
@@ -245,6 +252,7 @@ static struct config {
     int memkeys;
     unsigned memkeys_samples;
     int hotkeys;
+    unsigned hotkeys_count;
     int stdin_lastarg;    /* get last arg from stdin. (-x option) */
     int stdin_tag_arg;    /* get <tag> arg from stdin. (-X option) */
     char *stdin_tag_name; /* Placeholder(tag name) for user input. */
@@ -1553,11 +1561,11 @@ static int cliAuth(redisContext *ctx, char *user, char *auth) {
 }
 
 /* Send SELECT input_dbnum to the server */
-static int cliSelect(void) {
+static int cliSelect(struct config *config, redisContext *ctx) {
     redisReply *reply;
-    if (config.conn_info.input_dbnum == config.dbnum) return REDIS_OK;
+    if (config->conn_info.input_dbnum == config->dbnum) return REDIS_OK;
 
-    reply = redisCommand(context, "SELECT %d", config.conn_info.input_dbnum);
+    reply = redisCommand(ctx, "SELECT %d", config->conn_info.input_dbnum);
     if (reply == NULL) {
         fprintf(stderr, "\nI/O error\n");
         return REDIS_ERR;
@@ -1566,9 +1574,9 @@ static int cliSelect(void) {
     int result = REDIS_OK;
     if (reply->type == REDIS_REPLY_ERROR) {
         result = REDIS_ERR;
-        fprintf(stderr, "SELECT %d failed: %s\n", config.conn_info.input_dbnum, reply->str);
+        fprintf(stderr, "SELECT %d failed: %s\n", config->conn_info.input_dbnum, reply->str);
     } else {
-        config.dbnum = config.conn_info.input_dbnum;
+        config->dbnum = config->conn_info.input_dbnum;
         cliRefreshPrompt();
     }
     freeReplyObject(reply);
@@ -1610,25 +1618,30 @@ static int cliSwitchProto(void) {
     return result;
 }
 
+static void resetConfig(void) {
+    config.dbnum = 0;
+    config.in_multi = 0;
+    config.pubsub_mode = 0;
+}
+
 /* Connect to the server. It is possible to pass certain flags to the function:
  *      CC_FORCE: The connection is performed even if there is already
  *                a connected socket.
  *      CC_QUIET: Don't print errors if connection fails. */
 static int cliConnect(int flags) {
     if (context == NULL || flags & CC_FORCE) {
+        resetConfig();
         if (context != NULL) {
             redisFree(context);
-            config.dbnum = 0;
-            config.in_multi = 0;
-            config.pubsub_mode = 0;
+            resetConfig();
             cliRefreshPrompt();
         }
 
         /* Do not use hostsocket when we got redirected in cluster mode */
         if (config.hostsocket == NULL || (config.cluster_mode && config.cluster_reissue_command)) {
-            context = redisConnectWrapper(config.conn_info.hostip, config.conn_info.hostport, config.connect_timeout);
+            context = redisConnectWrapper(config.conn_info.hostip, config.conn_info.hostport, config.connect_timeout, 0);
         } else {
-            context = redisConnectUnixWrapper(config.hostsocket, config.connect_timeout);
+            context = redisConnectUnixWrapper(config.hostsocket, config.connect_timeout, 0);
         }
 
         if (!context->err && config.tls) {
@@ -1667,7 +1680,7 @@ static int cliConnect(int flags) {
 
         /* Do AUTH, select the right DB, switch to RESP3 if needed. */
         if (cliAuth(context, config.conn_info.user, config.conn_info.auth) != REDIS_OK) return REDIS_ERR;
-        if (cliSelect() != REDIS_OK) return REDIS_ERR;
+        if (cliSelect(&config, context) != REDIS_OK) return REDIS_ERR;
         if (cliSwitchProto() != REDIS_OK) return REDIS_ERR;
     }
 
@@ -2351,6 +2364,9 @@ static int cliSendCommand(int argc, char **argv, long repeat) {
         output_raw = 1;
     }
 
+    /* In a multi block, commands will return status strings instead of verbatim strings. */
+    if (config.in_multi) output_raw = 0;
+
     if (!strcasecmp(command, "shutdown")) config.shutdown = 1;
     if (!strcasecmp(command, "monitor")) config.monitor_mode = 1;
     int is_subscribe =
@@ -2448,7 +2464,7 @@ static int cliSendCommand(int argc, char **argv, long repeat) {
                 config.conn_info.input_dbnum = config.dbnum = atoi(argv[1]);
                 cliRefreshPrompt();
             } else if (!strcasecmp(command, "auth") && (argc == 2 || argc == 3)) {
-                cliSelect();
+                cliSelect(&config, context);
             } else if (!strcasecmp(command, "multi") && argc == 1 && config.last_cmd_type != REDIS_REPLY_ERROR) {
                 config.in_multi = 1;
                 config.pre_multi_dbnum = config.dbnum;
@@ -2513,7 +2529,7 @@ static redisReply *reconnectingRedisCommand(redisContext *c, const char *fmt, ..
             fflush(stdout);
 
             redisFree(c);
-            c = redisConnectWrapper(config.conn_info.hostip, config.conn_info.hostport, config.connect_timeout);
+            c = redisConnectWrapper(config.conn_info.hostip, config.conn_info.hostport, config.connect_timeout, 0);
             if (!c->err && config.tls) {
                 const char *err = NULL;
                 if (cliSecureConnection(c, config.sslconfig, &err) == REDIS_ERR && err) {
@@ -2564,7 +2580,7 @@ static int parseOptions(int argc, char **argv) {
             config.stdin_tag_name = argv[++i];
         } else if (!strcmp(argv[i], "-p") && !lastarg) {
             config.conn_info.hostport = atoi(argv[++i]);
-            if (config.conn_info.hostport < 0 || config.conn_info.hostport > 65535) {
+            if ((config.conn_info.hostport == 0 && !(strlen(argv[i]) == 1 && argv[i][0] == '0')) || config.conn_info.hostport < 0 || config.conn_info.hostport > 65535) {
                 fprintf(stderr, "Invalid server port.\n");
                 exit(1);
             }
@@ -2596,7 +2612,7 @@ static int parseOptions(int argc, char **argv) {
         } else if (!strcmp(argv[i], "--user") && !lastarg) {
             config.conn_info.user = sdsnew(argv[++i]);
         } else if (!strcmp(argv[i], "-u") && !lastarg) {
-            parseRedisUri(argv[++i], "valkey-cli", &config.conn_info, &config.tls);
+            parseUri(argv[++i], "valkey-cli", &config.conn_info, &config.tls);
             if (config.conn_info.hostport < 0 || config.conn_info.hostport > 65535) {
                 fprintf(stderr, "Invalid server port.\n");
                 exit(1);
@@ -2675,6 +2691,10 @@ static int parseOptions(int argc, char **argv) {
             config.memkeys_samples = atoi(argv[++i]);
         } else if (!strcmp(argv[i], "--hotkeys")) {
             config.hotkeys = 1;
+            config.hotkeys_count = HOTKEYS_COUNT;
+        } else if (!strcmp(argv[i], "--hotkeys-count") && !lastarg) {
+            config.hotkeys = 1;
+            config.hotkeys_count = atoi(argv[++i]);
         } else if (!strcmp(argv[i], "--eval") && !lastarg) {
             config.eval = argv[++i];
         } else if (!strcmp(argv[i], "--ldb")) {
@@ -2888,6 +2908,9 @@ static int parseOptions(int argc, char **argv) {
 static void parseEnv(void) {
     /* Set auth from env, but do not overwrite CLI arguments if passed */
     char *auth = getenv(CLI_AUTH_ENV);
+    if (auth != NULL) {
+        auth = getenv(OLD_CLI_AUTH_ENV);
+    }
     if (auth != NULL && config.conn_info.auth == NULL) {
         config.conn_info.auth = auth;
     }
@@ -3004,7 +3027,10 @@ static void usage(int err) {
             "  --memkeys-samples <n> Sample keys looking for keys consuming a lot of memory.\n"
             "                     And define number of key elements to sample\n"
             "  --hotkeys          Sample keys looking for hot keys.\n"
-            "                     only works when maxmemory-policy is *lfu.\n"
+            "                     Only works when maxmemory-policy is *lfu.\n"
+            "                     This is equivalent to --hotkeys-count 16.\n"
+            "  --hotkeys-count <n> Sample keys looking for the n most hot keys.\n"
+            "                     Only works when maxmemory-policy is *lfu.\n"
             "  --scan             List all keys using the SCAN command.\n"
             "  --pattern <pat>    Keys pattern when using the --scan, --bigkeys or --hotkeys\n"
             "                     options (default: *).\n"
@@ -3944,7 +3970,7 @@ cleanup:
 
 static int clusterManagerNodeConnect(clusterManagerNode *node) {
     if (node->context) redisFree(node->context);
-    node->context = redisConnectWrapper(node->ip, node->port, config.connect_timeout);
+    node->context = redisConnectWrapper(node->ip, node->port, config.connect_timeout, 0);
     if (!node->context->err && config.tls) {
         const char *err = NULL;
         if (cliSecureConnection(node->context, config.sslconfig, &err) == REDIS_ERR && err) {
@@ -4787,10 +4813,12 @@ static redisReply *clusterManagerMigrateKeysInReply(clusterManagerNode *source,
     size_t i, offset = 6; // Keys Offset
     argv = zcalloc(argc * sizeof(char *));
     argv_len = zcalloc(argc * sizeof(size_t));
-    char portstr[255];
-    char timeoutstr[255];
-    snprintf(portstr, 10, "%d", target->port);
-    snprintf(timeoutstr, 10, "%d", timeout);
+    char portstr[10];
+    char timeoutstr[10];
+    char dbnum[10];
+    snprintf(portstr, sizeof(portstr), "%d", target->port);
+    snprintf(timeoutstr, sizeof(timeoutstr), "%d", timeout);
+    snprintf(dbnum, sizeof(dbnum), "%d", config.dbnum);
     argv[0] = "MIGRATE";
     argv_len[0] = 7;
     argv[1] = target->ip;
@@ -4799,8 +4827,8 @@ static redisReply *clusterManagerMigrateKeysInReply(clusterManagerNode *source,
     argv_len[2] = strlen(portstr);
     argv[3] = "";
     argv_len[3] = 0;
-    argv[4] = "0";
-    argv_len[4] = 1;
+    argv[4] = dbnum;
+    argv_len[4] = strlen(dbnum);
     argv[5] = timeoutstr;
     argv_len[5] = strlen(timeoutstr);
     if (replace) {
@@ -4852,6 +4880,8 @@ cleanup:
     return migrate_reply;
 }
 
+static int getDatabases(redisContext *ctx);
+
 /* Migrate all keys in the given slot from source to target.*/
 static int clusterManagerMigrateKeysInSlot(clusterManagerNode *source,
                                            clusterManagerNode *target,
@@ -4863,7 +4893,19 @@ static int clusterManagerMigrateKeysInSlot(clusterManagerNode *source,
     int success = 1;
     int do_fix = config.cluster_manager_command.flags & CLUSTER_MANAGER_CMD_FLAG_FIX;
     int do_replace = config.cluster_manager_command.flags & CLUSTER_MANAGER_CMD_FLAG_REPLACE;
+
+    int dbnum = getDatabases(source->context);
+    int orig_db = config.conn_info.input_dbnum;
+    config.conn_info.input_dbnum = 0;
+
     while (1) {
+        if (config.conn_info.input_dbnum == dbnum) {
+            break;
+        }
+        if (cliSelect(&config, source->context) == REDIS_ERR) {
+            success = 0;
+            goto next;
+        }
         char *dots = NULL;
         redisReply *reply = NULL, *migrate_reply = NULL;
         reply = CLUSTER_MANAGER_COMMAND(source,
@@ -4871,7 +4913,9 @@ static int clusterManagerMigrateKeysInSlot(clusterManagerNode *source,
                                         "GETKEYSINSLOT %d %d",
                                         slot, pipeline);
         success = (reply != NULL);
-        if (!success) return 0;
+        if (!success) {
+            goto next;
+        }
         if (reply->type == REDIS_REPLY_ERROR) {
             success = 0;
             if (err != NULL) {
@@ -4885,7 +4929,9 @@ static int clusterManagerMigrateKeysInSlot(clusterManagerNode *source,
         size_t count = reply->elements;
         if (count == 0) {
             freeReplyObject(reply);
-            break;
+            reply = NULL;
+            config.conn_info.input_dbnum++;
+            continue;
         }
         if (verbose) dots = zmalloc((count + 1) * sizeof(char));
         /* Calling MIGRATE command. */
@@ -5009,8 +5055,13 @@ static int clusterManagerMigrateKeysInSlot(clusterManagerNode *source,
         if (reply != NULL) freeReplyObject(reply);
         if (migrate_reply != NULL) freeReplyObject(migrate_reply);
         if (dots) zfree(dots);
+        reply = NULL;
+        migrate_reply = NULL;
+        dots = NULL;
         if (!success) break;
     }
+    config.conn_info.input_dbnum = orig_db;
+    cliSelect(&config, source->context);
     return success;
 }
 
@@ -7661,7 +7712,7 @@ static int clusterManagerCommandImport(int argc, char **argv) {
     char *reply_err = NULL;
     redisReply *src_reply = NULL;
     // Connect to the source node.
-    redisContext *src_ctx = redisConnectWrapper(src_ip, src_port, config.connect_timeout);
+    redisContext *src_ctx = redisConnectWrapper(src_ip, src_port, config.connect_timeout, 0);
     if (src_ctx->err) {
         success = 0;
         fprintf(stderr, "Could not connect to Valkey at %s:%d: %s.\n", src_ip, src_port, src_ctx->errstr);
@@ -8651,18 +8702,24 @@ static int getDbSize(void) {
     return size;
 }
 
-static int getDatabases(void) {
+static int getDatabases(redisContext *ctx) {
     redisReply *reply;
     int dbnum;
 
-    reply = redisCommand(context, "CONFIG GET databases");
+    char *standalone = "CONFIG GET databases";
+    char *cluster = "CONFIG GET cluster-databases";
+
+    reply = redisCommand(ctx, config.cluster_mode ? cluster : standalone);
 
     if (reply == NULL) {
         fprintf(stderr, "\nI/O error\n");
         exit(1);
-    } else if (reply->type == REDIS_REPLY_ERROR) {
-        dbnum = 16;
-        fprintf(stderr, "CONFIG GET databases fails: %s, use default value 16 instead\n", reply->str);
+    }
+
+    if (reply->type == REDIS_REPLY_ERROR) {
+        dbnum = config.cluster_mode ? 1 : 16;
+        fprintf(stderr, "%s fails: %s, use default value %d instead\n",
+                config.cluster_mode ? cluster : standalone, reply->str, dbnum);
     } else {
         assert(reply->type == (config.current_resp3 ? REDIS_REPLY_MAP : REDIS_REPLY_ARRAY));
         assert(reply->elements == 2);
@@ -8998,14 +9055,21 @@ static void getKeyFreqs(redisReply *keys, unsigned long long *freqs) {
     }
 }
 
-#define HOTKEYS_SAMPLE 16
 static void findHotKeys(void) {
     redisReply *keys, *reply;
-    unsigned long long counters[HOTKEYS_SAMPLE] = {0};
-    sds hotkeys[HOTKEYS_SAMPLE] = {NULL};
+    unsigned long long *counters = NULL;
+    sds *hotkeys = NULL;
     unsigned long long sampled = 0, total_keys, *freqs = NULL, it = 0, scan_loops = 0;
     unsigned int arrsize = 0, i, k;
     double pct;
+
+    counters = zrealloc(counters, sizeof(unsigned long long) * config.hotkeys_count);
+    hotkeys = zrealloc(hotkeys, sizeof(sds) * config.hotkeys_count);
+    unsigned long long nums;
+    for (nums = 0; nums < config.hotkeys_count; nums++) {
+        counters[nums] = 0;
+        hotkeys[nums] = NULL;
+    }
 
     signal(SIGINT, longStatLoopModeStop);
     /* Total keys pre scanning */
@@ -9053,7 +9117,7 @@ static void findHotKeys(void) {
 
             /* Use eviction pool here */
             k = 0;
-            while (k < HOTKEYS_SAMPLE && freqs[i] > counters[k]) k++;
+            while (k < config.hotkeys_count && freqs[i] > counters[k]) k++;
             if (k == 0) continue;
             k--;
             if (k == 0 || counters[k] == 0) {
@@ -9083,13 +9147,15 @@ static void findHotKeys(void) {
     if (force_cancel_loop) printf("[%05.2f%%] ", pct);
     printf("Sampled %llu keys in the keyspace!\n", sampled);
 
-    for (i = 1; i <= HOTKEYS_SAMPLE; i++) {
-        k = HOTKEYS_SAMPLE - i;
+    for (i = 1; i <= config.hotkeys_count; i++) {
+        k = config.hotkeys_count - i;
         if (counters[k] > 0) {
             printf("hot key found with counter: %llu\tkeyname: %s\n", counters[k], hotkeys[k]);
             sdsfree(hotkeys[k]);
         }
     }
+    if (counters) zfree(counters);
+    if (hotkeys) zfree(hotkeys);
 
     exit(0);
 }
@@ -9158,7 +9224,7 @@ void bytesToHuman(char *s, size_t size, long long n) {
 static void statMode(void) {
     redisReply *reply;
     long aux, requests = 0;
-    int dbnum = getDatabases();
+    int dbnum = getDatabases(context);
     int i = 0;
 
     while (1) {

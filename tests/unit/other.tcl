@@ -385,6 +385,12 @@ start_server {tags {"other"}} {
             set info [r info server]
             assert_match "*redis_mode:*" $info
             assert_no_match "*server_mode:*" $info
+            set lolwut_output [r lolwut 5]
+            assert_match {*Redis ver.*} $lolwut_output
+            set lolwut_output [r lolwut 6]
+            assert_match {*Redis ver.*} $lolwut_output
+            set lolwut_output [r lolwut]
+            assert_match {*Redis ver.*} $lolwut_output
             r config set extended-redis-compatibility no
             set hello [r hello 3]
             assert_equal "valkey" [dict get $hello server]
@@ -392,6 +398,12 @@ start_server {tags {"other"}} {
             set info [r info server]
             assert_no_match "*redis_mode:*" $info
             assert_match "*server_mode:*" $info
+            set lolwut_output [r lolwut]
+            assert_match {*Valkey ver.*} $lolwut_output
+            set lolwut_output [r lolwut 5]
+            assert_match {*Valkey ver.*} $lolwut_output
+            set lolwut_output [r lolwut 6]
+            assert_match {*Valkey ver.*} $lolwut_output
         }
     }
 }
@@ -480,7 +492,7 @@ start_server {tags {"other external:skip"}} {
 }
 
 start_cluster 1 0 {tags {"other external:skip cluster slow"}} {
-    r config set dynamic-hz no hz 500
+    r config set hz 500
     test "Server can trigger resizing" {
         r flushall
         # hashslot(foo) is 12182

@@ -46,12 +46,12 @@
 #include <limits.h>
 #include <unistd.h>
 #include <errno.h>
+#include <stdbool.h>
 #include <inttypes.h>
 #include <pthread.h>
 #include <syslog.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
-#include <lua.h>
 #include <signal.h>
 
 #ifdef HAVE_LIBSYSTEMD
@@ -120,7 +120,6 @@ struct hdr_histogram;
 #define CONFIG_DEFAULT_HZ 10 /* Time interrupt calls/sec. */
 #define CONFIG_MIN_HZ 1
 #define CONFIG_MAX_HZ 500
-#define MAX_CLIENTS_PER_CLOCK_TICK 200 /* HZ is adapted based on that. */
 #define CRON_DBS_PER_CALL 16
 #define CRON_DICTS_PER_DB 16
 #define NET_MAX_WRITES_PER_EVENT (1024 * 64)
@@ -201,7 +200,8 @@ struct hdr_histogram;
 #define PROTO_REPLY_MIN_BYTES (1024)           /* the lower limit on reply buffer size */
 #define REDIS_AUTOSYNC_BYTES (1024 * 1024 * 4) /* Sync file every 4MB. */
 
-#define REPLY_BUFFER_DEFAULT_PEAK_RESET_TIME 5000 /* 5 seconds */
+#define REPLY_BUFFER_DEFAULT_PEAK_RESET_TIME 5000     /* 5 seconds */
+#define REPLY_BUFFER_SIZE_UNAUTHENTICATED_CLIENT 1024 /* 1024 bytes */
 
 /* When configuring the server eventloop, we setup it so that the total number
  * of file descriptors we can handle are server.maxclients + RESERVED_FDS +
@@ -412,6 +412,7 @@ typedef enum {
     REPL_STATE_RECEIVE_IP_REPLY,      /* Wait for REPLCONF reply */
     REPL_STATE_RECEIVE_CAPA_REPLY,    /* Wait for REPLCONF reply */
     REPL_STATE_RECEIVE_VERSION_REPLY, /* Wait for REPLCONF reply */
+    REPL_STATE_RECEIVE_NODEID_REPLY,  /* Wait for REPLCONF reply */
     REPL_STATE_SEND_PSYNC,            /* Send PSYNC */
     REPL_STATE_RECEIVE_PSYNC_REPLY,   /* Wait for PSYNC reply */
     /* --- End of handshake states --- */
@@ -451,11 +452,15 @@ typedef enum {
                                            * a replica that only wants RDB without replication buffer  */
 #define REPLICA_STATE_BG_RDB_LOAD 11      /* Main channel of a replica which uses dual channel replication. */
 
-/* Replica capabilities. */
+/* Replica capability flags */
 #define REPLICA_CAPA_NONE 0
-#define REPLICA_CAPA_EOF (1 << 0)          /* Can parse the RDB EOF streaming format. */
-#define REPLICA_CAPA_PSYNC2 (1 << 1)       /* Supports PSYNC2 protocol. */
-#define REPLICA_CAPA_DUAL_CHANNEL (1 << 2) /* Supports dual channel replication sync */
+#define REPLICA_CAPA_EOF (1 << 0)               /* Can parse the RDB EOF streaming format. */
+#define REPLICA_CAPA_PSYNC2 (1 << 1)            /* Supports PSYNC2 protocol. */
+#define REPLICA_CAPA_DUAL_CHANNEL (1 << 2)      /* Supports dual channel replication sync */
+#define REPLICA_CAPA_SKIP_RDB_CHECKSUM (1 << 3) /* Supports skipping RDB checksum for sync requests. */
+
+/* Replica capability strings */
+#define REPLICA_CAPA_SKIP_RDB_CHECKSUM_STR "skip-rdb-checksum" /* Supports skipping RDB checksum for sync requests. */
 
 /* Replica requirements */
 #define REPLICA_REQ_NONE 0
@@ -547,7 +552,6 @@ typedef enum {
 #define MAXMEMORY_FLAG_LRU (1 << 0)
 #define MAXMEMORY_FLAG_LFU (1 << 1)
 #define MAXMEMORY_FLAG_ALLKEYS (1 << 2)
-#define MAXMEMORY_FLAG_NO_SHARED_INTEGERS (MAXMEMORY_FLAG_LRU | MAXMEMORY_FLAG_LFU)
 
 #define MAXMEMORY_VOLATILE_LRU ((0 << 8) | MAXMEMORY_FLAG_LRU)
 #define MAXMEMORY_VOLATILE_LFU ((1 << 8) | MAXMEMORY_FLAG_LFU)
@@ -599,6 +603,9 @@ typedef enum { LOG_FORMAT_LEGACY = 0,
 typedef enum { LOG_TIMESTAMP_LEGACY = 0,
                LOG_TIMESTAMP_ISO8601,
                LOG_TIMESTAMP_MILLISECONDS } log_timestamp_type;
+
+typedef enum { RDB_VERSION_CHECK_STRICT = 0,
+               RDB_VERSION_CHECK_RELAXED } rdb_version_check_type;
 
 /* common sets of actions to pause/unpause */
 #define PAUSE_ACTIONS_CLIENT_WRITE_SET \
@@ -1083,6 +1090,7 @@ typedef struct ClientFlags {
     uint64_t reprocessing_command : 1;     /* The client is re-processing the command. */
     uint64_t replication_done : 1;         /* Indicate that replication has been done on the client */
     uint64_t authenticated : 1;            /* Indicate a client has successfully authenticated */
+    uint64_t ever_authenticated : 1;       /* Indicate a client was ever successfully authenticated during it's lifetime */
     uint64_t protected_rdb_channel : 1;    /* Dual channel replication sync: Protects the RDB client from premature \
                                             * release during full sync. This flag is used to ensure that the RDB client, which \
                                             * references the first replication data block required by the replica, is not \
@@ -1103,13 +1111,17 @@ typedef struct ClientFlags {
                                             * flag, we won't cache the primary in freeClient. */
     uint64_t fake : 1;                     /* This is a fake client without a real connection. */
     uint64_t import_source : 1;            /* This client is importing data to server and can visit expired key. */
-    uint64_t reserved : 4;                 /* Reserved for future use */
+    uint64_t buffered_reply : 1;           /* Indicates the reply for the current command was buffered, either in client::reply
+                                              or client::buf. */
+    uint64_t keyspace_notified : 1;        /* Indicates that a keyspace notification was triggered during the execution of the
+                                              current command. */
+    uint64_t reserved : 1;                 /* Reserved for future use */
 } ClientFlags;
 
 typedef struct ClientPubSubData {
-    dict *pubsub_channels;      /* channels a client is interested in (SUBSCRIBE) */
-    dict *pubsub_patterns;      /* patterns a client is interested in (PSUBSCRIBE) */
-    dict *pubsubshard_channels; /* shard level channels a client is interested in (SSUBSCRIBE) */
+    hashtable *pubsub_channels;      /* channels a client is interested in (SUBSCRIBE) */
+    hashtable *pubsub_patterns;      /* patterns a client is interested in (PSUBSCRIBE) */
+    hashtable *pubsubshard_channels; /* shard level channels a client is interested in (SSUBSCRIBE) */
     /* If this client is in tracking mode and this field is non zero,
      * invalidation messages for keys fetched by this client will be sent to
      * the specified client ID. */
@@ -1149,6 +1161,7 @@ typedef struct ClientReplicationData {
                                            see the definition of replBufBlock. */
     size_t ref_block_pos;                /* Access position of referenced buffer block,
                                            i.e. the next offset to send. */
+    sds replica_nodeid;                  /* Node id in cluster mode. */
 } ClientReplicationData;
 
 typedef struct ClientModuleData {
@@ -1254,13 +1267,16 @@ typedef struct client {
     dictEntry *cur_script;             /* Cached pointer to the dictEntry of the script being executed. */
     user *user;                        /* User associated with this connection */
     time_t obuf_soft_limit_reached_time;
-    list *deferred_reply_errors; /* Used for module thread safe contexts. */
-    robj *name;                  /* As set by CLIENT SETNAME. */
-    robj *lib_name;              /* The client library name as set by CLIENT SETINFO. */
-    robj *lib_ver;               /* The client library version as set by CLIENT SETINFO. */
-    sds peerid;                  /* Cached peer ID. */
-    sds sockname;                /* Cached connection target address. */
-    time_t ctime;                /* Client creation time. */
+    list *deferred_reply_errors;             /* Used for module thread safe contexts. */
+    robj *name;                              /* As set by CLIENT SETNAME. */
+    robj *lib_name;                          /* The client library name as set by CLIENT SETINFO. */
+    robj *lib_ver;                           /* The client library version as set by CLIENT SETINFO. */
+    sds peerid;                              /* Cached peer ID. */
+    sds sockname;                            /* Cached connection target address. */
+    time_t ctime;                            /* Client creation time. */
+    list *deferred_reply;                    /* List of reply objects to be sent to the client, typically after
+                                                the client has been unblocked. */
+    unsigned long long deferred_reply_bytes; /* Total bytes of objects in the blocked client pending list.*/
 #ifdef LOG_REQ_RES
     clientReqResInfo reqres;
 #endif
@@ -1559,12 +1575,9 @@ struct valkeyServer {
     char *configfile;         /* Absolute config file path, or NULL */
     char *executable;         /* Absolute executable file path. */
     char **exec_argv;         /* Executable argv vector (copy). */
-    int dynamic_hz;           /* Change hz value depending on # of clients. */
-    int config_hz;            /* Configured HZ value. May be different than
-                                 the actual 'hz' field value if dynamic-hz
-                                 is enabled. */
     mode_t umask;             /* The umask value of the process on startup */
     int hz;                   /* serverCron() calls frequency in hertz */
+    int clients_hz;           /* clientsTimeProc() frequency in hertz */
     int in_fork_child;        /* indication that this is a fork child */
     serverDb **db;
     hashtable *commands;      /* Command table */
@@ -1610,6 +1623,7 @@ struct valkeyServer {
     int port;                              /* TCP listening port */
     int tls_port;                          /* TLS listening port */
     int tcp_backlog;                       /* TCP listen() backlog */
+    int mptcp;                             /* Use Multipath TCP */
     char *bindaddr[CONFIG_BINDADDR_MAX];   /* Addresses we should bind to */
     int bindaddr_count;                    /* Number of addresses in server.bindaddr[] */
     char *bind_source_addr;                /* Source address to bind on for outgoing connections */
@@ -1661,7 +1675,7 @@ struct valkeyServer {
     int enable_debug_cmd;                     /* Enable DEBUG commands, see PROTECTED_ACTION_ALLOWED_* */
     int enable_module_cmd;                    /* Enable MODULE commands, see PROTECTED_ACTION_ALLOWED_* */
     int enable_debug_assert;                  /* Enable debug asserts */
-
+    int debug_client_enforce_reply_list;      /* Force client to always use the reply list */
     /* RDB / AOF loading information */
     volatile sig_atomic_t loading;       /* We are loading data from disk if true */
     volatile sig_atomic_t async_loading; /* We are loading data without blocking the db being served */
@@ -1768,6 +1782,7 @@ struct valkeyServer {
     int active_defrag_enabled;
     int sanitize_dump_payload;                   /* Enables deep sanitization for ziplist and listpack in RDB and RESTORE. */
     int skip_checksum_validation;                /* Disable checksum validation for RDB and RESTORE payload. */
+    int rdb_version_check;                       /* Try to load RDB produced by a future version. */
     int jemalloc_bg_thread;                      /* Enable jemalloc background thread */
     int active_defrag_configuration_changed;     /* Config changed; need to recompute active_defrag_cpu_percent. */
     size_t active_defrag_ignore_bytes;           /* minimum amount of fragmentation waste to start active defrag */
@@ -1779,7 +1794,9 @@ struct valkeyServer {
     unsigned long active_defrag_max_scan_fields; /* maximum number of fields of set/hash/zset/list to process from
                                                     within the main dict scan */
     size_t client_max_querybuf_len;              /* Limit for client query buffer length */
-    int dbnum;                                   /* Total number of configured DBs */
+    int config_databases;                        /* Total number of configured DBs in standalone */
+    int config_databases_cluster;                /* Total number of configured DBs in cluster mode */
+    int dbnum;                                   /* Total number of initialized DBs */
     int supervised;                              /* 1 if supervised, 0 otherwise. */
     int supervised_mode;                         /* See SUPERVISED_* */
     int daemonize;                               /* True if running as a daemon */
@@ -1965,6 +1982,7 @@ struct valkeyServer {
     int repl_replica_ignore_maxmemory;  /* If true replicas do not evict. */
     time_t repl_down_since;             /* Unix time at which link with primary went down */
     int repl_disable_tcp_nodelay;       /* Disable TCP_NODELAY after SYNC? */
+    int repl_mptcp;                     /* Use Multipath TCP for replica on client side */
     int replica_priority;               /* Reported in INFO and used by Sentinel. */
     int replica_announced;              /* If true, replica is announced by Sentinel */
     int replica_announce_port;          /* Give the primary this listening port. */
@@ -1973,6 +1991,7 @@ struct valkeyServer {
                                          * when it receives an error on the replication stream */
     int repl_ignore_disk_write_error;   /* Configures whether replicas panic when unable to
                                          * persist writes to AOF. */
+
     /* The following two fields is where we store primary PSYNC replid/offset
      * while the PSYNC is in progress. At the end we'll copy the fields into
      * the server->primary client structure. */
@@ -2080,6 +2099,8 @@ struct valkeyServer {
     unsigned long cluster_blacklist_ttl;                   /* Duration in seconds that a node is denied re-entry into
                                                             * the cluster after it is forgotten with CLUSTER FORGET. */
     int cluster_slot_stats_enabled;                        /* Cluster slot usage statistics tracking enabled. */
+    int auto_failover_on_shutdown;                         /* Trigger manual failover on shutdown to primary. */
+    mstime_t cluster_mf_timeout;                           /* Milliseconds to do a manual failover. */
     /* Debug config that goes along with cluster_drop_packet_filter. When set, the link is closed on packet drop. */
     uint32_t debug_cluster_close_link_on_packet_drop : 1;
     /* Debug config to control the random ping. When set, we will disable the random ping in clusterCron. */
@@ -2455,12 +2476,13 @@ struct serverCommand {
 
     /* Runtime populated data */
     long long microseconds, calls, rejected_calls, failed_calls;
-    int id;       /* Command ID. This is a progressive ID starting from 0 that
-                     is assigned at runtime, and is used in order to check
-                     ACLs. A connection is able to execute a given command if
-                     the user associated to the connection has this command
-                     bit set in the bitmap of allowed commands. */
-    sds fullname; /* A SDS string representing the command fullname. */
+    int id;           /* Command ID. This is a progressive ID starting from 0 that
+                         is assigned at runtime, and is used in order to check
+                         ACLs. A connection is able to execute a given command if
+                         the user associated to the connection has this command
+                         bit set in the bitmap of allowed commands. */
+    sds fullname;     /* Includes parent name if any: "parentcmd|childcmd". Unchanged if command is renamed. */
+    sds current_name; /* Same as fullname, becomes a separate string if command is renamed. */
     struct hdr_histogram
         *latency_histogram;        /* Points to the command latency command histogram (unit of time nanosecond). */
     keySpec legacy_range_key_spec; /* The legacy (first,last,step) key spec is
@@ -2547,6 +2569,7 @@ typedef struct {
 extern struct valkeyServer server;
 extern struct sharedObjectsStruct shared;
 extern dictType objectKeyPointerValueDictType;
+extern hashtableType objectHashtableType;
 extern dictType objectKeyHeapPointerValueDictType;
 extern hashtableType setHashtableType;
 extern dictType BenchmarkDictType;
@@ -2554,16 +2577,14 @@ extern hashtableType zsetHashtableType;
 extern hashtableType kvstoreKeysHashtableType;
 extern hashtableType kvstoreExpiresHashtableType;
 extern double R_Zero, R_PosInf, R_NegInf, R_Nan;
-extern dictType hashDictType;
 extern hashtableType hashHashtableType;
 extern dictType stringSetDictType;
 extern dictType externalStringType;
 extern dictType sdsHashDictType;
-extern dictType clientDictType;
+extern hashtableType clientHashtableType;
 extern dictType objToDictDictType;
 extern hashtableType kvstoreChannelHashtableType;
 extern dictType modulesDictType;
-extern dictType sdsReplyDictType;
 extern hashtableType sdsReplyHashtableType;
 extern dictType keylistDictType;
 extern dict *modules;
@@ -2579,8 +2600,6 @@ void populateCommandLegacyRangeSpec(struct serverCommand *c);
 long long ustime(void);
 mstime_t mstime(void);
 mstime_t commandTimeSnapshot(void);
-void getRandomHexChars(char *p, size_t len);
-void getRandomBytes(unsigned char *p, size_t len);
 uint64_t crc64(uint64_t crc, const unsigned char *s, uint64_t l);
 void exitFromChild(int retcode);
 long long serverPopcount(void *s, long count);
@@ -2627,7 +2646,7 @@ void dictVanillaFree(void *val);
 
 /* Write flags for various write errors and states */
 #define WRITE_FLAGS_WRITE_ERROR (1 << 0)
-
+#define WRITE_FLAGS_IS_REPLICA (1 << 1)
 
 client *createClient(connection *conn);
 void freeClient(client *c);
@@ -2640,6 +2659,8 @@ void resetClientIOState(client *c);
 void freeClientOriginalArgv(client *c);
 void freeClientArgv(client *c);
 void sendReplyToClient(connection *conn);
+int isDeferredReplyEnabled(client *c);
+void initDeferredReplyBuffer(client *c);
 void *addReplyDeferredLen(client *c);
 void setDeferredArrayLen(client *c, void *node, long length);
 void setDeferredMapLen(client *c, void *node, long length);
@@ -2657,6 +2678,7 @@ void addReplyBool(client *c, int b);
 void addReplyVerbatim(client *c, const char *s, size_t len, const char *ext);
 void addReplyProto(client *c, const char *s, size_t len);
 void AddReplyFromClient(client *c, client *src);
+void commitDeferredReplyBuffer(client *c, int skip_if_blocked);
 void addReplyBulk(client *c, robj *obj);
 void addReplyBulkCString(client *c, const char *s);
 void addReplyBulkCBuffer(client *c, const void *p, size_t len);
@@ -2727,7 +2749,8 @@ void pauseActions(pause_purpose purpose, mstime_t end, uint32_t actions);
 void unpauseActions(pause_purpose purpose);
 uint32_t isPausedActions(uint32_t action_bitmask);
 uint32_t isPausedActionsWithUpdate(uint32_t action_bitmask);
-mstime_t getPausedActionTimeout(uint32_t action);
+char *getPausedReason(pause_purpose purpose);
+mstime_t getPausedActionTimeout(uint32_t action, pause_purpose *purpose);
 void updatePausedActions(void);
 void unblockPostponedClients(void);
 void processEventsWhileBlocked(void);
@@ -2749,6 +2772,7 @@ void initSharedQueryBuf(void);
 void freeSharedQueryBuf(void);
 client *lookupClientByID(uint64_t id);
 int authRequired(client *c);
+void clientSetUser(client *c, user *u, int authenticated);
 void putClientInPendingWriteQueue(client *c);
 client *createCachedResponseClient(int resp);
 void deleteCachedResponseClient(client *recording_client);
@@ -2810,7 +2834,7 @@ void listTypeDelete(listTypeIterator *iter, listTypeEntry *entry);
 robj *listTypeDup(robj *o);
 void listTypeDelRange(robj *o, long start, long stop);
 void popGenericCommand(client *c, int where);
-void listElementsRemoved(client *c, robj *key, int where, robj *o, long count, int signal, int *deleted);
+void listElementsRemoved(client *c, robj *key, int where, robj *o, long count, int *deleted);
 typedef enum {
     LIST_CONV_AUTO,
     LIST_CONV_GROWING,
@@ -2902,6 +2926,7 @@ ssize_t syncRead(int fd, char *ptr, ssize_t size, long long timeout);
 ssize_t syncReadLine(int fd, char *ptr, ssize_t size, long long timeout);
 
 /* Replication */
+int prepareReplicasToWrite(void);
 void replicationFeedReplicas(int dictid, robj **argv, int argc);
 void replicationFeedStreamFromPrimaryStream(char *buf, size_t buflen);
 void resetReplicationBuffer(void);
@@ -3037,7 +3062,6 @@ int ACLAuthenticateUser(client *c, robj *username, robj *password, robj **err);
 int checkModuleAuthentication(client *c, robj *username, robj *password, robj **err);
 void addAuthErrReply(client *c, robj *err);
 unsigned long ACLGetCommandID(sds cmdname);
-void ACLClearCommandID(void);
 user *ACLGetUserByName(const char *name, size_t namelen);
 int ACLUserCheckKeyPerm(user *u, const char *key, int keylen, int flags);
 int ACLUserCheckChannelPerm(user *u, sds channel, int literal);
@@ -3051,7 +3075,6 @@ int ACLAddCommandCategory(const char *name, uint64_t flag);
 void ACLCleanupCategoriesOnFailure(size_t num_acl_categories_added);
 int ACLAppendUserForLoading(sds *argv, int argc, int *argc_err);
 const char *ACLSetUserStringError(void);
-int ACLLoadConfiguredUsers(void);
 robj *ACLDescribeUser(user *u);
 void ACLLoadUsersAtStartup(void);
 void addReplyCommandCategories(client *c, struct serverCommand *cmd);
@@ -3246,11 +3269,11 @@ robj *setTypeDup(robj *o);
 #define HASH_SET_TAKE_VALUE (1 << 1)
 #define HASH_SET_COPY 0
 
-typedef struct hashTypeEntry hashTypeEntry;
+typedef void hashTypeEntry;
 hashTypeEntry *hashTypeCreateEntry(sds field, sds value);
 sds hashTypeEntryGetField(const hashTypeEntry *entry);
 sds hashTypeEntryGetValue(const hashTypeEntry *entry);
-size_t hashTypeEntryAllocSize(hashTypeEntry *entry);
+size_t hashTypeEntryMemUsage(hashTypeEntry *entry);
 hashTypeEntry *hashTypeEntryDefrag(hashTypeEntry *entry, void *(*defragfn)(void *), sds (*sdsdefragfn)(sds));
 void dismissHashTypeEntry(hashTypeEntry *entry);
 void freeHashTypeEntry(hashTypeEntry *entry);
@@ -3288,8 +3311,8 @@ int serverPubsubShardSubscriptionCount(void);
 size_t pubsubMemOverhead(client *c);
 void unmarkClientAsPubSub(client *c);
 int pubsubTotalSubscriptions(void);
-dict *getClientPubSubChannels(client *c);
-dict *getClientPubSubShardChannels(client *c);
+hashtable *getClientPubSubChannels(client *c);
+hashtable *getClientPubSubShardChannels(client *c);
 void initClientPubSubData(client *c);
 void freeClientPubSubData(client *c);
 
@@ -3439,7 +3462,7 @@ int selectDb(client *c, int id);
 void signalModifiedKey(client *c, serverDb *db, robj *key);
 void signalFlushedDb(int dbid, int async);
 void scanGenericCommand(client *c, robj *o, unsigned long long cursor);
-int parseScanCursorOrReply(client *c, robj *o, unsigned long long *cursor);
+int parseScanCursorOrReply(client *c, sds buf, unsigned long long *cursor);
 int dbAsyncDelete(serverDb *db, robj *key);
 void emptyDbAsync(serverDb *db);
 size_t lazyfreeGetPendingObjectsCount(void);
@@ -3480,6 +3503,7 @@ int zmpopGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysResult
 int bzmpopGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysResult *result);
 int setGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysResult *result);
 int bitfieldGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysResult *result);
+bool dbHasNoKeys(void);
 
 unsigned short crc16(const char *buf, int len);
 
@@ -3503,17 +3527,9 @@ int redis_check_rdb_main(int argc, char **argv, FILE *fp);
 int redis_check_aof_main(int argc, char **argv);
 
 /* Scripting */
-void scriptingInit(int setup);
-int ldbRemoveChild(pid_t pid);
-void ldbKillForkedSessions(void);
-int ldbPendingChildren(void);
-void luaLdbLineHook(lua_State *lua, lua_Debug *ar);
-void freeLuaScriptsSync(dict *lua_scripts, list *lua_scripts_lru_list, lua_State *lua);
-void freeLuaScriptsAsync(dict *lua_scripts, list *lua_scripts_lru_list, lua_State *lua);
+void freeEvalScripts(dict *scripts, list *scripts_lru_list, list *engine_callbacks);
+void freeEvalScriptsAsync(dict *scripts, list *scripts_lru_list, list *engine_callbacks);
 void freeFunctionsAsync(functionsLibCtx *lib_ctx);
-int ldbIsEnabled(void);
-void ldbLog(sds entry);
-void ldbLogRespReply(char *reply);
 void sha1hex(char *digest, char *script, size_t len);
 unsigned long evalMemory(void);
 dict *evalScriptsDict(void);
@@ -3522,11 +3538,6 @@ uint64_t evalGetCommandFlags(client *c, uint64_t orig_flags);
 uint64_t fcallGetCommandFlags(client *c, uint64_t orig_flags);
 int isInsideYieldingLongCommand(void);
 
-typedef struct luaScript {
-    uint64_t flags;
-    robj *body;
-    listNode *node; /* list node in lua_scripts_lru_list list. */
-} luaScript;
 /* Cache of recently used small arguments to avoid malloc calls. */
 #define LUA_CMD_OBJCACHE_SIZE 32
 #define LUA_CMD_OBJCACHE_MAX_LEN 64
@@ -3535,6 +3546,7 @@ typedef struct luaScript {
 void processUnblockedClients(void);
 void initClientBlockingState(client *c);
 void freeClientBlockingState(client *c);
+void resetBlockedClientPendingReply(client *c);
 void blockClient(client *c, int btype);
 void unblockClient(client *c, int queue_for_reprocessing);
 void unblockClientOnTimeout(client *c);

@@ -508,6 +508,9 @@ void debugCommand(client *c) {
             "    Grace period in seconds for replica main channel to establish psync.",
             "DICT-RESIZING <0|1>",
             "    Enable or disable the main dict and expire dict resizing.",
+            "CLIENT-ENFORCE-REPLY-LIST <0|1>",
+            "When set to 1, it enforces the use of the client reply list directly",
+            "    and avoids using the client's static buffer.",
             NULL};
         addExtendedReplyHelp(c, help, clusterDebugCommandExtendedHelp());
     } else if (!strcasecmp(c->argv[1]->ptr, "segfault")) {
@@ -684,12 +687,16 @@ void debugCommand(client *c) {
         if (val->type != OBJ_STRING || !sdsEncodedObject(val)) {
             addReplyError(c, "Not an sds encoded string.");
         } else {
+            /* Report the complete robj allocation size as the key's allocation
+             * size. Report 0 as allocation size for embedded values. */
+            size_t obj_alloc = zmalloc_usable_size(val);
+            size_t val_alloc = val->encoding == OBJ_ENCODING_RAW ? sdsAllocSize(val->ptr) : 0;
             addReplyStatusFormat(c,
-                                 "key_sds_len:%lld, key_sds_avail:%lld, key_zmalloc: %lld, "
-                                 "val_sds_len:%lld, val_sds_avail:%lld, val_zmalloc: %lld",
-                                 (long long)sdslen(key), (long long)sdsavail(key), (long long)sdsAllocSize(key),
+                                 "key_sds_len:%lld key_sds_avail:%lld obj_alloc:%lld "
+                                 "val_sds_len:%lld val_sds_avail:%lld val_alloc:%lld",
+                                 (long long)sdslen(key), (long long)sdsavail(key), (long long)obj_alloc,
                                  (long long)sdslen(val->ptr), (long long)sdsavail(val->ptr),
-                                 (long long)getStringObjectSdsUsedMemory(val));
+                                 (long long)val_alloc);
         }
     } else if (!strcasecmp(c->argv[1]->ptr, "listpack") && c->argc == 3) {
         robj *o;
@@ -1021,6 +1028,9 @@ void debugCommand(client *c) {
         addReply(c, shared.ok);
     } else if (!strcasecmp(c->argv[1]->ptr, "dict-resizing") && c->argc == 3) {
         server.dict_resizing = atoi(c->argv[2]->ptr);
+        addReply(c, shared.ok);
+    } else if (!strcasecmp(c->argv[1]->ptr, "client-enforce-reply-list") && c->argc == 3) {
+        server.debug_client_enforce_reply_list = atoi(c->argv[2]->ptr);
         addReply(c, shared.ok);
     } else if (!handleDebugClusterCommand(c)) {
         addReplySubcommandSyntaxError(c);

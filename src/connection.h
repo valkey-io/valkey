@@ -94,6 +94,7 @@ typedef struct ConnectionType {
                    const char *addr,
                    int port,
                    const char *source_addr,
+                   int multipath,
                    ConnectionCallbackFunc connect_handler);
     int (*blocking_connect)(struct connection *conn, const char *addr, int port, long long timeout);
     int (*accept)(struct connection *conn, ConnectionCallbackFunc accept_handler);
@@ -121,6 +122,9 @@ typedef struct ConnectionType {
 
     /* TLS specified methods */
     sds (*get_peer_cert)(struct connection *conn);
+
+    /* Miscellaneous */
+    int (*connIntegrityChecked)(void); // return 1 if connection type has built-in integrity checks
 } ConnectionType;
 
 struct connection {
@@ -185,8 +189,9 @@ static inline int connConnect(connection *conn,
                               const char *addr,
                               int port,
                               const char *src_addr,
+                              int multipath,
                               ConnectionCallbackFunc connect_handler) {
-    return conn->type->connect(conn, addr, port, src_addr, connect_handler);
+    return conn->type->connect(conn, addr, port, src_addr, multipath, connect_handler);
 }
 
 /* Blocking connect.
@@ -377,8 +382,6 @@ static inline const char *connGetInfo(connection *conn, char *buf, size_t buf_le
 /* anet-style wrappers to conns */
 int connBlock(connection *conn);
 int connNonBlock(connection *conn);
-int connEnableTcpNoDelay(connection *conn);
-int connDisableTcpNoDelay(connection *conn);
 int connKeepAlive(connection *conn, int interval);
 int connSendTimeout(connection *conn, long long ms);
 int connRecvTimeout(connection *conn, long long ms);
@@ -481,6 +484,10 @@ static inline void connSetPostponeUpdateState(connection *conn, int on) {
     if (conn->type->postpone_update_state) {
         conn->type->postpone_update_state(conn, on);
     }
+}
+
+static inline int connIsIntegrityChecked(connection *conn) {
+    return conn->type->connIntegrityChecked && conn->type->connIntegrityChecked();
 }
 
 #endif /* __REDIS_CONNECTION_H */

@@ -1,12 +1,18 @@
 {
     "REPLICATE": {
-        "summary": "Configure a node as replica of a primary node.",
+        "summary": "Configure a node as replica of a primary node or detach a replica from its primary.",
         "complexity": "O(1)",
         "group": "cluster",
         "since": "3.0.0",
-        "arity": 3,
+        "arity": -3,
         "container": "CLUSTER",
         "function": "clusterCommand",
+        "history": [
+            [
+                "9.0.0",
+                "Added support of 'NO ONE' arg instead of <node-id> resulting into detaching replica from primary node."
+            ]
+        ],
         "command_flags": [
             "NO_ASYNC_LOADING",
             "ADMIN",
@@ -14,8 +20,31 @@
         ],
         "arguments": [
             {
-                "name": "node-id",
-                "type": "string"
+                "name": "args",
+                "type": "oneof",
+                "arguments": [
+                    {
+                        "name": "node-id",
+                        "type": "string"
+                    },
+                    {
+                        "name": "no-one",
+                        "type": "block",
+                        "since": "9.0.0",
+                        "arguments": [
+                            {
+                                "name": "no",
+                                "type": "pure-token",
+                                "token": "NO"
+                            },
+                            {
+                                "name": "one",
+                                "type": "pure-token",
+                                "token": "ONE"
+                            }
+                        ]
+                    }
+                ]
             }
         ],
         "reply_schema": {

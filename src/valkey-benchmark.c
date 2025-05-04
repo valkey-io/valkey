@@ -100,8 +100,9 @@ static struct config {
     long long previous_tick;
     int keysize;
     int datasize;
-    int randomkeys;
-    int randomkeys_keyspacelen;
+    int replacekeys;
+    int keyspacelen;
+    int sequential_replacement;
     int keepalive;
     int pipeline;
     long long start;
@@ -129,6 +130,8 @@ static struct config {
     _Atomic int is_updating_slots;
     _Atomic int slots_last_update;
     int enable_tracking;
+    int num_functions;
+    int num_keys_in_fcall;
     pthread_mutex_t liveclients_mutex;
     pthread_mutex_t is_updating_slots_mutex;
     int resp3; /* use RESP3 */
@@ -242,10 +245,11 @@ static dictType dtype = {
 static redisContext *getRedisContext(const char *ip, int port, const char *hostsocket) {
     redisContext *ctx = NULL;
     redisReply *reply = NULL;
+    struct timeval tv = {0};
     if (hostsocket == NULL)
-        ctx = redisConnect(ip, port);
+        ctx = redisConnectWrapper(ip, port, tv, 0);
     else
-        ctx = redisConnectUnix(hostsocket);
+        ctx = redisConnectUnixWrapper(hostsocket, tv, 0);
     if (ctx == NULL || ctx->err) {
         fprintf(stderr, "Could not connect to server at ");
         char *err = (ctx != NULL ? ctx->errstr : "");
@@ -390,18 +394,23 @@ static void resetClient(client c) {
     c->pending = config.pipeline;
 }
 
-static void randomizeClientKey(client c) {
-    size_t i;
-
-    for (i = 0; i < c->randlen; i++) {
+static void generateClientKey(client c) {
+    static _Atomic size_t seq_key = 0;
+    for (size_t i = 0; i < c->randlen; i++) {
         char *p = c->randptr[i] + 11;
-        size_t r = 0;
-        if (config.randomkeys_keyspacelen != 0) r = random() % config.randomkeys_keyspacelen;
-        size_t j;
+        size_t key = 0;
+        if (config.keyspacelen != 0) {
+            if (config.sequential_replacement) {
+                key = atomic_fetch_add_explicit(&seq_key, 1, memory_order_relaxed);
+            } else {
+                key = random();
+            }
+            key %= config.keyspacelen;
+        }
 
-        for (j = 0; j < 12; j++) {
-            *p = '0' + r % 10;
-            r /= 10;
+        for (size_t j = 0; j < 12; j++) {
+            *p = '0' + key % 10;
+            key /= 10;
             p--;
         }
     }
@@ -574,8 +583,8 @@ static void writeHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
             return;
         }
 
-        /* Really initialize: randomize keys and set start time. */
-        if (config.randomkeys) randomizeClientKey(c);
+        /* Really initialize: replace keys and set start time. */
+        if (config.replacekeys) generateClientKey(c);
         if (config.cluster_mode && c->staglen > 0) setClusterKeyHashTag(c);
         c->slots_last_update = atomic_load_explicit(&config.slots_last_update, memory_order_relaxed);
         c->start = ustime();
@@ -635,6 +644,7 @@ static client createClient(char *cmd, size_t len, client from, int thread_id) {
 
     const char *ip = NULL;
     int port = 0;
+    struct timeval tv = {0};
     c->cluster_node = NULL;
     if (config.hostsocket == NULL || is_cluster_client) {
         if (!is_cluster_client) {
@@ -652,9 +662,9 @@ static client createClient(char *cmd, size_t len, client from, int thread_id) {
             port = node->port;
             c->cluster_node = node;
         }
-        c->context = redisConnectNonBlock(ip, port);
+        c->context = redisConnectWrapper(ip, port, tv, 1);
     } else {
-        c->context = redisConnectUnixNonBlock(config.hostsocket);
+        c->context = redisConnectUnixWrapper(config.hostsocket, tv, 1);
     }
     if (c->context->err) {
         fprintf(stderr, "Could not connect to server at ");
@@ -707,7 +717,7 @@ static client createClient(char *cmd, size_t len, client from, int thread_id) {
      * buffer with the SELECT command, that will be discarded the first
      * time the replies are received, so if the client is reused the
      * SELECT command will not be used again. */
-    if (config.conn_info.input_dbnum != 0 && !is_cluster_client) {
+    if (config.conn_info.input_dbnum) {
         c->obuf = sdscatprintf(c->obuf, "*2\r\n$6\r\nSELECT\r\n$%d\r\n%s\r\n", (int)sdslen(config.input_dbnumstr),
                                config.input_dbnumstr);
         c->prefix_pending++;
@@ -745,8 +755,8 @@ static client createClient(char *cmd, size_t len, client from, int thread_id) {
     c->stagptr = NULL;
     c->staglen = 0;
 
-    /* Find substrings in the output buffer that need to be randomized. */
-    if (config.randomkeys) {
+    /* Find substrings in the output buffer that need to be replaced. */
+    if (config.replacekeys) {
         if (from) {
             c->randlen = from->randlen;
             c->randfree = 0;
@@ -1338,7 +1348,7 @@ int parseOptions(int argc, char **argv) {
             if (lastarg) goto invalid;
             config.conn_info.user = sdsnew(argv[++i]);
         } else if (!strcmp(argv[i], "-u") && !lastarg) {
-            parseRedisUri(argv[++i], "redis-benchmark", &config.conn_info, &config.tls);
+            parseUri(argv[++i], "valkey-benchmark", &config.conn_info, &config.tls);
             if (config.conn_info.hostport < 0 || config.conn_info.hostport > 65535) {
                 fprintf(stderr, "Invalid server port.\n");
                 exit(1);
@@ -1362,9 +1372,11 @@ int parseOptions(int argc, char **argv) {
                 p++;
                 if (*p < '0' || *p > '9') goto invalid;
             }
-            config.randomkeys = 1;
-            config.randomkeys_keyspacelen = atoi(next);
-            if (config.randomkeys_keyspacelen < 0) config.randomkeys_keyspacelen = 0;
+            config.replacekeys = 1;
+            config.keyspacelen = atoi(next);
+            if (config.keyspacelen < 0) config.keyspacelen = 0;
+        } else if (!strcmp(argv[i], "--sequential")) {
+            config.sequential_replacement = 1;
         } else if (!strcmp(argv[i], "-q")) {
             config.quiet = 1;
         } else if (!strcmp(argv[i], "--csv")) {
@@ -1426,6 +1438,10 @@ int parseOptions(int argc, char **argv) {
                 goto invalid;
         } else if (!strcmp(argv[i], "--enable-tracking")) {
             config.enable_tracking = 1;
+        } else if (!strcmp(argv[i], "--num-functions")) {
+            config.num_functions = atoi(argv[++i]);
+        } else if (!strcmp(argv[i], "--num-keys-in-fcall")) {
+            config.num_keys_in_fcall = atoi(argv[++i]);
         } else if (!strcmp(argv[i], "--help")) {
             exit_status = 0;
             goto usage;
@@ -1533,14 +1549,16 @@ usage:
         " -k <boolean>       1=keep alive 0=reconnect (default 1)\n"
         " -r <keyspacelen>   Use random keys for SET/GET/INCR, random values for SADD,\n"
         "                    random members and scores for ZADD.\n"
-        "                    Using this option the benchmark will expand the string\n"
-        "                    __rand_int__ inside an argument with a 12 digits number in\n"
-        "                    the specified range from 0 to keyspacelen-1. The\n"
+        "                    Using this option the benchmark will replace the string\n"
+        "                    __rand_int__ inside an argument with a random 12 digit\n"
+        "                    number in the specified range from 0 to keyspacelen-1. The\n"
         "                    substitution changes every time a command is executed.\n"
         "                    Default tests use this to hit random keys in the specified\n"
         "                    range.\n"
         "                    Note: If -r is omitted, all commands in a benchmark will\n"
         "                    use the same key.\n"
+        " --sequential       Modifies the -r argument to replace the string __rand_int__\n"
+        "                    with 12 digit numbers sequentially instead of randomly.\n"
         " -P <numreq>        Pipeline <numreq> requests. Default 1 (no pipeline).\n"
         " -q                 Quiet. Just show query/sec values\n"
         " --precision        Number of decimal places to display in latency output (default 0)\n"
@@ -1552,7 +1570,13 @@ usage:
         "                    on the command line.\n"
         " -I                 Idle mode. Just open N idle connections and wait.\n"
         " -x                 Read last argument from STDIN.\n"
-        " --seed <num>       Set the seed for random number generator. Default seed is based on time.\n",
+        " --seed <num>       Set the seed for random number generator. Default seed is based on time.\n"
+        " --num-functions <num>\n"
+        "                    Sets the number of functions present in the Lua lib that is\n"
+        "                    loaded when running the 'function_load' test. (default 10).\n"
+        " --num-keys-in-fcall <num>\n"
+        "                    Sets the number of keys passed to FCALL command when running\n"
+        "                    the 'fcall' test. (default 1)\n",
         tls_usage,
         " --help             Output this help and exit.\n"
         " --version          Output version and exit.\n\n"
@@ -1617,6 +1641,43 @@ long long showThroughput(struct aeEventLoop *eventLoop, long long id, void *clie
     return SHOW_THROUGHPUT_INTERVAL;
 }
 
+char *generateFunctionScript(uint32_t num_functions, int with_keys) {
+    /* 64K buffer to hold script code */
+    const size_t buffer_len = 64 * 1024;
+    char *buffer = zmalloc(buffer_len);
+    memset(buffer, 0, buffer_len);
+
+    int written = snprintf(buffer, buffer_len, "#!lua name=benchlib\n");
+    while (num_functions > 0 && (buffer_len - written) > 0) {
+        assert(buffer_len - written > 0);
+        int n = 0;
+        if (with_keys) {
+            n = snprintf(buffer + written, buffer_len - written,
+                         "local function foo%u(keys, args)\nreturn keys[0]\nend\n",
+                         num_functions);
+        } else {
+            n = snprintf(buffer + written, buffer_len - written,
+                         "local function foo%u()\nreturn 0\nend\n",
+                         num_functions);
+        }
+
+        if (n < 0 || (size_t)n >= buffer_len - written) {
+            break;
+        }
+        written += n;
+
+        n = snprintf(buffer + written, buffer_len - written,
+                     "server.register_function('foo%u', foo%u)\n",
+                     num_functions,
+                     num_functions);
+        written += n;
+
+        num_functions--;
+    }
+
+    return buffer;
+}
+
 /* Return true if the named test was selected using the -t command line
  * switch, or if all the tests are selected (no -t passed by user). */
 int test_is_selected(const char *name) {
@@ -1652,8 +1713,9 @@ int main(int argc, char **argv) {
     config.keepalive = 1;
     config.datasize = 3;
     config.pipeline = 1;
-    config.randomkeys = 0;
-    config.randomkeys_keyspacelen = 0;
+    config.replacekeys = 0;
+    config.keyspacelen = 0;
+    config.sequential_replacement = 0;
     config.quiet = 0;
     config.csv = 0;
     config.loop = 0;
@@ -1678,6 +1740,8 @@ int main(int argc, char **argv) {
     config.is_updating_slots = 0;
     config.slots_last_update = 0;
     config.enable_tracking = 0;
+    config.num_functions = 10;
+    config.num_keys_in_fcall = 1;
     config.resp3 = 0;
 
     i = parseOptions(argc, argv);
@@ -1895,7 +1959,7 @@ int main(int argc, char **argv) {
 
         if (test_is_selected("zadd")) {
             char *score = "0";
-            if (config.randomkeys) score = "__rand_int__";
+            if (config.replacekeys) score = "__rand_int__";
             len = redisFormatCommand(&cmd, "ZADD myzset%s %s element:__rand_int__", tag, score);
             benchmark("ZADD", cmd, len);
             free(cmd);
@@ -1952,9 +2016,67 @@ int main(int argc, char **argv) {
             sdsfree(key_placeholder);
         }
 
+        if (test_is_selected("mget")) {
+            const char *cmd_argv[11];
+            cmd_argv[0] = "MGET";
+            sds key_placeholder = sdscatprintf(sdsnew(""), "key%s:__rand_int__", tag);
+            for (i = 1; i < 11; i++) {
+                cmd_argv[i] = key_placeholder;
+            }
+            len = redisFormatCommandArgv(&cmd, 11, cmd_argv, NULL);
+            benchmark("MGET (10 keys)", cmd, len);
+            free(cmd);
+            sdsfree(key_placeholder);
+        }
+
         if (test_is_selected("xadd")) {
             len = redisFormatCommand(&cmd, "XADD mystream%s * myfield %s", tag, data);
             benchmark("XADD", cmd, len);
+            free(cmd);
+        }
+
+        if (test_is_selected("function_load")) {
+            char *script = generateFunctionScript(config.num_functions, 0);
+            len = redisFormatCommand(&cmd, "function load replace %s", script);
+            benchmark("FUNCTION LOAD", cmd, len);
+            zfree(script);
+            free(cmd);
+        }
+
+        if (test_is_selected("fcall")) {
+            char *script = generateFunctionScript(1, config.num_keys_in_fcall > 0);
+
+            redisContext *ctx = getRedisContext(config.conn_info.hostip, config.conn_info.hostport, NULL);
+            if (ctx == NULL) {
+                exit(1);
+            }
+
+            assert(ctx != NULL && ctx->err == 0);
+            void *reply = redisCommand(ctx, "FUNCTION LOAD REPLACE %s", script);
+
+            assert(reply != NULL);
+            freeReplyObject(reply);
+            redisFree(ctx);
+            zfree(script);
+
+            char **cmd_argv = zmalloc(sizeof(char *) * (config.num_keys_in_fcall + 3));
+            int ret = asprintf(&(cmd_argv[0]), "fcall");
+            UNUSED(ret);
+            ret = asprintf(&(cmd_argv[1]), "foo1");
+            UNUSED(ret);
+            ret = asprintf(&(cmd_argv[2]), "%d", config.num_keys_in_fcall);
+            UNUSED(ret);
+            for (int i = 0; i < config.num_keys_in_fcall; i++) {
+                ret = asprintf(&(cmd_argv[3 + i]), "key%d", i + 1);
+                UNUSED(ret);
+            }
+            len = redisFormatCommandArgv(&cmd, config.num_keys_in_fcall + 3, (const char **)cmd_argv, NULL);
+            for (int i = 0; i < config.num_keys_in_fcall + 3; i++) {
+                free(cmd_argv[i]);
+            }
+            zfree(cmd_argv);
+
+            benchmark("FCALL", cmd, len);
             free(cmd);
         }
 

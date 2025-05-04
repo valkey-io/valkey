@@ -69,6 +69,9 @@ int test_string2ll(int argc, char **argv, int flags) {
     valkey_strlcpy(buf, "9223372036854775808", sizeof(buf)); /* overflow */
     TEST_ASSERT(string2ll(buf, strlen(buf), &v) == 0);
 
+    valkey_strlcpy(buf, "18446744073709551615", sizeof(buf)); /* overflow */
+    TEST_ASSERT(string2ll(buf, strlen(buf), &v) == 0);
+
     return 0;
 }
 

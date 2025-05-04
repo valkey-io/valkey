@@ -45,7 +45,7 @@ sds *getSdsArrayFromArgv(int argc, char **argv, int quoted);
 
 sds unquoteCString(char *str);
 
-void parseRedisUri(const char *uri, const char *tool_name, cliConnInfo *connInfo, int *tls_flag);
+void parseUri(const char *uri, const char *tool_name, cliConnInfo *connInfo, int *tls_flag);
 
 void freeCliConnInfo(cliConnInfo connInfo);
 
@@ -53,7 +53,7 @@ sds escapeJsonString(sds s, const char *p, size_t len);
 
 sds cliVersion(void);
 
-redisContext *redisConnectWrapper(const char *ip, int port, const struct timeval tv);
-redisContext *redisConnectUnixWrapper(const char *path, const struct timeval tv);
+redisContext *redisConnectWrapper(const char *ip, int port, const struct timeval tv, int nonblock);
+redisContext *redisConnectUnixWrapper(const char *path, const struct timeval tv, int nonblock);
 
 #endif /* __CLICOMMON_H */

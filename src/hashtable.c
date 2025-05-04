@@ -1032,7 +1032,7 @@ void hashtableEmpty(hashtable *ht, void(callback)(hashtable *)) {
         if (ht->bucket_exp[table_index] < 0) {
             continue;
         }
-        if (ht->used[table_index] > 0) {
+        if (ht->used[table_index] > 0 || ht->child_buckets[table_index] > 0) {
             for (size_t idx = 0; idx < numBuckets(ht->bucket_exp[table_index]); idx++) {
                 if (callback && (idx & 65535) == 0) callback(ht);
                 bucket *b = &ht->tables[table_index][idx];
@@ -1058,6 +1058,7 @@ void hashtableEmpty(hashtable *ht, void(callback)(hashtable *)) {
                 } while (b != NULL);
             }
         }
+
         zfree(ht->tables[table_index]);
         if (ht->type->trackMemUsage) {
             ht->type->trackMemUsage(ht, -sizeof(bucket) * numBuckets(ht->bucket_exp[table_index]));
@@ -1102,6 +1103,11 @@ size_t hashtableBuckets(hashtable *ht) {
  * number of allocated buckets, outside of the hash table itself. */
 size_t hashtableChainedBuckets(hashtable *ht, int table) {
     return ht->child_buckets[table];
+}
+
+/* Returns the number of entry positions per bucket. */
+unsigned hashtableEntriesPerBucket(void) {
+    return ENTRIES_PER_BUCKET;
 }
 
 /* Returns the size of the hashtable structures, in bytes (not including the sizes
@@ -1518,7 +1524,6 @@ void hashtableTwoPhasePopDelete(hashtable *ht, hashtablePosition *pos) {
     assert(isPositionFilled(b, pos_in_bucket));
     b->presence &= ~(1 << pos_in_bucket);
     ht->used[table_index]--;
-    hashtableShrinkIfNeeded(ht);
     hashtableResumeRehashing(ht);
     if (b->chained && !hashtableIsRehashingPaused(ht)) {
         /* Rehashing paused also means bucket chain compaction paused. It is
@@ -1527,6 +1532,7 @@ void hashtableTwoPhasePopDelete(hashtable *ht, hashtablePosition *pos) {
          * we do the compaction in the scan and iterator code instead. */
         fillBucketHole(ht, b, pos_in_bucket, table_index);
     }
+    hashtableShrinkIfNeeded(ht);
 }
 
 /* Initializes the state for an incremental find operation.
@@ -2213,10 +2219,11 @@ int hashtableLongestBucketChain(hashtable *ht) {
             int chainlen = 0;
             bucket *b = &ht->tables[table][i];
             while (b->chained) {
-                if (++chainlen > maxlen) {
-                    maxlen = chainlen;
-                }
+                ++chainlen;
                 b = getChildBucket(b);
+            }
+            if (chainlen > maxlen) {
+                maxlen = chainlen;
             }
         }
     }

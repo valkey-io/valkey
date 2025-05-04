@@ -27,7 +27,11 @@
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  * POSSIBILITY OF SUCH DAMAGE.
  */
-
+/*
+ * Copyright (c) Valkey Contributors
+ * All rights reserved.
+ * SPDX-License-Identifier: BSD-3-Clause
+ */
 /*-----------------------------------------------------------------------------
  * Sorted set API
  *----------------------------------------------------------------------------*/
@@ -1754,6 +1758,8 @@ static void zaddGenericCommand(client *c, int flags) {
     int j, elements, ch = 0;
     size_t maxelelen = 0;
     int scoreidx = 0;
+    int reply_err = 0;
+
     /* The following vars are used in order to track what the command actually
      * did during the execution, to reply to the client and to trigger the
      * notification of keyspace change. */
@@ -1847,18 +1853,26 @@ static void zaddGenericCommand(client *c, int flags) {
         ele = c->argv[scoreidx + 1 + j * 2]->ptr;
         int retval = zsetAdd(zobj, score, ele, flags, &retflags, &newscore);
         if (retval == 0) {
-            addReplyError(c, nanerr);
-            goto cleanup;
+            reply_err = 1;
+            break;
         }
         if (retflags & ZADD_OUT_ADDED) added++;
         if (retflags & ZADD_OUT_UPDATED) updated++;
         if (!(retflags & ZADD_OUT_NOP)) processed++;
         score = newscore;
     }
-    server.dirty += (added + updated);
+    if (!reply_err) {
+        server.dirty += (added + updated);
+    }
+    if (added || updated) {
+        signalModifiedKey(c, c->db, key);
+        notifyKeyspaceEvent(NOTIFY_ZSET, incr ? "zincr" : "zadd", key, c->db->id);
+    }
 
 reply_to_client:
-    if (incr) { /* ZINCRBY or INCR option. */
+    if (reply_err) {
+        addReplyError(c, nanerr);
+    } else if (incr) { /* ZINCRBY or INCR option. */
         if (processed)
             addReplyDouble(c, score);
         else
@@ -1866,13 +1880,8 @@ reply_to_client:
     } else { /* ZADD. */
         addReplyLongLong(c, ch ? added + updated : added);
     }
-
 cleanup:
     zfree(scores);
-    if (added || updated) {
-        signalModifiedKey(c, c->db, key);
-        notifyKeyspaceEvent(NOTIFY_ZSET, incr ? "zincr" : "zadd", key, c->db->id);
-    }
 }
 
 void zaddCommand(client *c) {
@@ -2767,18 +2776,17 @@ static void zunionInterDiffGenericCommand(client *c, robj *dstkey, int numkeysIn
         if (dstzset->zsl->length) {
             zsetConvertToListpackIfNeeded(dstobj, maxelelen, totelelen);
             setKey(c, c->db, dstkey, &dstobj, 0);
+            notifyKeyspaceEvent(NOTIFY_ZSET, (op == SET_OP_UNION) ? "zunionstore" : (op == SET_OP_INTER ? "zinterstore" : "zdiffstore"),
+                                dstkey, c->db->id);
             addReplyLongLong(c, zsetLength(dstobj));
-            notifyKeyspaceEvent(
-                NOTIFY_ZSET, (op == SET_OP_UNION) ? "zunionstore" : (op == SET_OP_INTER ? "zinterstore" : "zdiffstore"),
-                dstkey, c->db->id);
             server.dirty++;
         } else {
-            addReply(c, shared.czero);
             if (dbDelete(c->db, dstkey)) {
                 signalModifiedKey(c, c->db, dstkey);
                 notifyKeyspaceEvent(NOTIFY_GENERIC, "del", dstkey, c->db->id);
                 server.dirty++;
             }
+            addReply(c, shared.czero);
             decrRefCount(dstobj);
         }
     } else if (cardinality_only) {
@@ -2970,16 +2978,16 @@ static void zrangeResultEmitLongLongForStore(zrange_result_handler *handler, lon
 static void zrangeResultFinalizeStore(zrange_result_handler *handler, size_t result_count) {
     if (result_count) {
         setKey(handler->client, handler->client->db, handler->dstkey, &handler->dstobj, 0);
-        addReplyLongLong(handler->client, result_count);
         notifyKeyspaceEvent(NOTIFY_ZSET, "zrangestore", handler->dstkey, handler->client->db->id);
         server.dirty++;
+        addReplyLongLong(handler->client, result_count);
     } else {
-        addReply(handler->client, shared.czero);
         if (dbDelete(handler->client->db, handler->dstkey)) {
             signalModifiedKey(handler->client, handler->client->db, handler->dstkey);
             notifyKeyspaceEvent(NOTIFY_GENERIC, "del", handler->dstkey, handler->client->db->id);
             server.dirty++;
         }
+        addReply(handler->client, shared.czero);
         decrRefCount(handler->dstobj);
     }
 }
@@ -3767,11 +3775,29 @@ void zscanCommand(client *c) {
     robj *o;
     unsigned long long cursor;
 
-    if (parseScanCursorOrReply(c, c->argv[2], &cursor) == C_ERR) return;
+    if (parseScanCursorOrReply(c, c->argv[2]->ptr, &cursor) == C_ERR) return;
     if ((o = lookupKeyReadOrReply(c, c->argv[1], shared.emptyscan)) == NULL || checkType(c, o, OBJ_ZSET)) return;
     scanGenericCommand(c, o, cursor);
 }
 
+void addZpopInitialReply(client *c, int emitkey, int use_nested_array, long rangelen, robj *key) {
+    if (!use_nested_array && !emitkey) {
+        /* ZPOPMIN/ZPOPMAX with or without COUNT option in RESP2. */
+        addReplyArrayLen(c, rangelen * 2);
+    } else if (use_nested_array && !emitkey) {
+        /* ZPOPMIN/ZPOPMAX with COUNT option in RESP3. */
+        addReplyArrayLen(c, rangelen);
+    } else if (!use_nested_array && emitkey) {
+        /* BZPOPMIN/BZPOPMAX in RESP2 and RESP3. */
+        addReplyArrayLen(c, rangelen * 2 + 1);
+        addReplyBulk(c, key);
+    } else if (use_nested_array && emitkey) {
+        /* ZMPOP/BZMPOP in RESP2 and RESP3. */
+        addReplyArrayLen(c, 2);
+        addReplyBulk(c, key);
+        addReplyArrayLen(c, rangelen);
+    }
+}
 /* This command implements the generic zpop operation, used by:
  * ZPOPMIN, ZPOPMAX, BZPOPMIN, BZPOPMAX and ZMPOP. This function is also used
  * inside blocked.c in the unblocking stage of BZPOPMIN, BZPOPMAX and BZMPOP.
@@ -3844,23 +3870,6 @@ void genericZpopCommand(client *c,
     long llen = zsetLength(zobj);
     long rangelen = (count > llen) ? llen : count;
 
-    if (!use_nested_array && !emitkey) {
-        /* ZPOPMIN/ZPOPMAX with or without COUNT option in RESP2. */
-        addReplyArrayLen(c, rangelen * 2);
-    } else if (use_nested_array && !emitkey) {
-        /* ZPOPMIN/ZPOPMAX with COUNT option in RESP3. */
-        addReplyArrayLen(c, rangelen);
-    } else if (!use_nested_array && emitkey) {
-        /* BZPOPMIN/BZPOPMAX in RESP2 and RESP3. */
-        addReplyArrayLen(c, rangelen * 2 + 1);
-        addReplyBulk(c, key);
-    } else if (use_nested_array && emitkey) {
-        /* ZMPOP/BZMPOP in RESP2 and RESP3. */
-        addReplyArrayLen(c, 2);
-        addReplyBulk(c, key);
-        addReplyArrayLen(c, rangelen);
-    }
-
     /* Remove the element. */
     do {
         if (zobj->encoding == OBJ_ENCODING_LISTPACK) {
@@ -3905,6 +3914,7 @@ void genericZpopCommand(client *c,
         if (result_count == 0) { /* Do this only for the first iteration. */
             char *events[2] = {"zpopmin", "zpopmax"};
             notifyKeyspaceEvent(NOTIFY_ZSET, events[where], key, c->db->id);
+            addZpopInitialReply(c, emitkey, use_nested_array, rangelen, key);
         }
 
         if (use_nested_array) {
@@ -4176,7 +4186,7 @@ void zrandmemberWithCountCommand(client *c, long l, int withscores) {
     /* CASE 3:
      * The number of elements inside the zset is not greater than
      * ZRANDMEMBER_SUB_STRATEGY_MUL times the number of requested elements.
-     * In this case we create a dict from scratch with all the elements, and
+     * In this case we create a hashtable from scratch with all the elements, and
      * subtract random elements to reach the requested number of elements.
      *
      * This is done because if the number of requested elements is just
@@ -4184,39 +4194,41 @@ void zrandmemberWithCountCommand(client *c, long l, int withscores) {
      * used into CASE 4 is highly inefficient. */
     if (count * ZRANDMEMBER_SUB_STRATEGY_MUL > size) {
         /* Hashtable encoding (generic implementation) */
-        dict *d = dictCreate(&sdsReplyDictType);
-        dictExpand(d, size);
-        /* Add all the elements into the temporary dictionary. */
-        while (zuiNext(&src, &zval)) {
-            sds key = zuiNewSdsFromValue(&zval);
-            dictEntry *de = dictAddRaw(d, key, NULL);
-            serverAssert(de);
-            if (withscores) dictSetDoubleVal(de, zval.score);
+        hashtable *ht = hashtableCreate(&zsetHashtableType);
+        hashtableExpand(ht, size);
+        zset *zs = src.subject->ptr;
+        hashtableIterator iter;
+        hashtableInitIterator(&iter, zs->ht, 0);
+        void *entry;
+        /* Add all the elements into the temporary hashtable. */
+        while (hashtableNext(&iter, &entry)) {
+            int res = hashtableAdd(ht, entry);
+            serverAssert(res);
         }
-        serverAssert(dictSize(d) == size);
+        serverAssert(hashtableSize(ht) == size);
 
         /* Remove random elements to reach the right count. */
         while (size > count) {
-            dictEntry *de;
-            de = dictGetFairRandomKey(d);
-            dictUnlink(d, dictGetKey(de));
-            sdsfree(dictGetKey(de));
-            dictFreeUnlinkedEntry(d, de);
+            void *element;
+            hashtableFairRandomEntry(ht, &element);
+            hashtableDelete(ht, ((zskiplistNode *)element)->ele);
             size--;
         }
+        hashtableResetIterator(&iter);
 
-        /* Reply with what's in the dict and release memory */
-        dictIterator *di;
-        dictEntry *de;
-        di = dictGetIterator(d);
-        while ((de = dictNext(di)) != NULL) {
+        /* Reply with what's in the temporary hashtable and release memory */
+        hashtableInitIterator(&iter, ht, 0);
+        void *next;
+        while (hashtableNext(&iter, &next)) {
+            zskiplistNode *node = (zskiplistNode *)next;
+            sds key = node->ele;
             if (withscores && c->resp > 2) addReplyArrayLen(c, 2);
-            addReplyBulkSds(c, dictGetKey(de));
-            if (withscores) addReplyDouble(c, dictGetDoubleVal(de));
+            addReplyBulkCBuffer(c, key, sdslen(key));
+            if (withscores) addReplyDouble(c, node->score);
         }
 
-        dictReleaseIterator(di);
-        dictRelease(d);
+        hashtableResetIterator(&iter);
+        hashtableRelease(ht);
     }
 
     /* CASE 4: We have a big zset compared to the requested number of elements.
@@ -4226,19 +4238,19 @@ void zrandmemberWithCountCommand(client *c, long l, int withscores) {
     else {
         /* Hashtable encoding (generic implementation) */
         unsigned long added = 0;
-        dict *d = dictCreate(&hashDictType);
-        dictExpand(d, count);
+        hashtable *ht = hashtableCreate(&setHashtableType);
+        hashtableExpand(ht, count);
 
         while (added < count) {
             listpackEntry key;
             double score;
             zsetTypeRandomElement(zsetobj, size, &key, withscores ? &score : NULL);
 
-            /* Try to add the object to the dictionary. If it already exists
+            /* Try to add the object to the hashtable. If it already exists
              * free it, otherwise increment the number of objects we have
-             * in the result dictionary. */
+             * in the result hashtable. */
             sds skey = zsetSdsFromListpackEntry(&key);
-            if (dictAdd(d, skey, NULL) != DICT_OK) {
+            if (!hashtableAdd(ht, skey)) {
                 sdsfree(skey);
                 continue;
             }
@@ -4250,7 +4262,7 @@ void zrandmemberWithCountCommand(client *c, long l, int withscores) {
         }
 
         /* Release memory */
-        dictRelease(d);
+        hashtableRelease(ht);
     }
     zuiClearIterator(&src);
 }

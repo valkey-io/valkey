@@ -26,7 +26,11 @@
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  * POSSIBILITY OF SUCH DAMAGE.
  */
-
+/*
+ * Copyright (c) Valkey Contributors
+ * All rights reserved.
+ * SPDX-License-Identifier: BSD-3-Clause
+ */
 /*
  * cluster.c contains the common parts of a clustering
  * implementation, the parts that are shared between
@@ -162,7 +166,10 @@ int verifyDumpPayload(unsigned char *p, size_t len, uint16_t *rdbver_ptr) {
     if (rdbver_ptr) {
         *rdbver_ptr = rdbver;
     }
-    if (rdbver > RDB_VERSION) return C_ERR;
+    if ((rdbver >= RDB_FOREIGN_VERSION_MIN && rdbver <= RDB_FOREIGN_VERSION_MAX) ||
+        (rdbver > RDB_VERSION && server.rdb_version_check == RDB_VERSION_CHECK_STRICT)) {
+        return C_ERR;
+    }
 
     if (server.skip_checksum_validation) return C_OK;
 
@@ -354,7 +361,6 @@ migrateCachedSocket *migrateGetSocket(client *c, robj *host, robj *port, long ti
         sdsfree(name);
         return NULL;
     }
-    connEnableTcpNoDelay(conn);
 
     /* Add to the cache and return it to the caller. */
     cs = zmalloc(sizeof(*cs));
@@ -811,8 +817,16 @@ static int shouldReturnTlsInfo(void) {
     }
 }
 
+unsigned int countKeysInSlotForDb(unsigned int hashslot, serverDb *db) {
+    return kvstoreHashtableSize(db->keys, hashslot);
+}
+
 unsigned int countKeysInSlot(unsigned int slot) {
-    return kvstoreHashtableSize(server.db[0]->keys, slot);
+    unsigned int result = 0;
+    for (int i = 0; i < server.dbnum; i++) {
+        result += countKeysInSlotForDb(slot, server.db + i);
+    }
+    return result;
 }
 
 void clusterCommandHelp(client *c) {
@@ -894,7 +908,7 @@ void clusterCommand(client *c) {
             addReplyError(c, "Invalid slot");
             return;
         }
-        addReplyLongLong(c, countKeysInSlot(slot));
+        addReplyLongLong(c, countKeysInSlotForDb(slot, c->db));
     } else if (!strcasecmp(c->argv[1]->ptr, "getkeysinslot") && c->argc == 4) {
         /* CLUSTER GETKEYSINSLOT <slot> <count> */
         long long maxkeys, slot;
@@ -906,11 +920,11 @@ void clusterCommand(client *c) {
             return;
         }
 
-        unsigned int keys_in_slot = countKeysInSlot(slot);
+        unsigned int keys_in_slot = countKeysInSlotForDb(slot, c->db);
         unsigned int numkeys = maxkeys > keys_in_slot ? keys_in_slot : maxkeys;
         addReplyArrayLen(c, numkeys);
         kvstoreHashtableIterator *kvs_di = NULL;
-        kvs_di = kvstoreGetHashtableIterator(server.db[0]->keys, slot, 0);
+        kvs_di = kvstoreGetHashtableIterator(c->db->keys, slot, 0);
         for (unsigned int i = 0; i < numkeys; i++) {
             void *next;
             serverAssert(kvstoreHashtableIteratorNext(kvs_di, &next));
@@ -1025,6 +1039,8 @@ getNodeByQuery(client *c, struct serverCommand *cmd, robj **argv, int argc, int 
     int pubsubshard_included =
         (cmd_flags & CMD_PUBSUB) || (c->cmd->proc == execCommand && (c->mstate->cmd_flags & CMD_PUBSUB));
 
+    serverDb *currentDb = c->db;
+
     /* Check that all the keys are in the same hash slot, and obtain this
      * slot and the node associated. */
     for (i = 0; i < ms->count; i++) {
@@ -1041,6 +1057,16 @@ getNodeByQuery(client *c, struct serverCommand *cmd, robj **argv, int argc, int 
         initGetKeysResult(&result);
         numkeys = getKeysFromCommand(mcmd, margv, margc, &result);
         keyindex = result.keys;
+
+        if (mcmd->proc == selectCommand) {
+            /* Failed SELECT is ignored since it doesn't modify the database. */
+            serverDb *origDb = currentDb;
+            long long id;
+            if (getLongLongFromObject(margv[1], &id) == C_OK && selectDb(c, id) == C_OK) {
+                currentDb = c->db;
+                selectDb(c, origDb->id);
+            }
+        }
 
         for (j = 0; j < numkeys; j++) {
             robj *thiskey = margv[keyindex[j].pos];
@@ -1075,6 +1101,7 @@ getNodeByQuery(client *c, struct serverCommand *cmd, robj **argv, int argc, int 
                         importing_slot = 1;
                     }
                 }
+
             } else {
                 /* If it is not the first key/channel, make sure it is exactly
                  * the same key/channel as the first we saw. */
@@ -1091,15 +1118,39 @@ getNodeByQuery(client *c, struct serverCommand *cmd, robj **argv, int argc, int 
                 }
             }
 
-            /* Migrating / Importing slot? Count keys we don't have.
+            /* Block MOVE command as the destination key is not expected to exist, and we don't know if it was migrated */
+            if ((migrating_slot || importing_slot) && mcmd->proc == moveCommand) {
+                if (error_code) *error_code = CLUSTER_REDIR_UNSTABLE;
+                getKeysFreeResult(&result);
+                return NULL;
+            }
+
+            /* Block the COPY command if it's cross-DB to keep the code simple.
+             * Allowing cross-DB COPY is possible, but it would require looking up the second key in the target DB.
+             * The command should only be allowed if the key exists. We may revisit this decision in the future. */
+            if ((migrating_slot || importing_slot) &&
+                mcmd->proc == copyCommand &&
+                margc >= 4 && !strcasecmp(margv[3]->ptr, "db")) {
+                long long value;
+                if (getLongLongFromObject(margv[4], &value) != C_OK || value != currentDb->id) {
+                    if (error_code) *error_code = CLUSTER_REDIR_UNSTABLE;
+                    getKeysFreeResult(&result);
+                    return NULL;
+                }
+            }
+
+            /* Migrating / Importing slot? During exec we count keys we don't have.
              * If it is pubsubshard command, it isn't required to check
              * the channel being present or not in the node during the
              * slot migration, the channel will be served from the source
              * node until the migration completes with CLUSTER SETSLOT <slot>
              * NODE <node-id>. */
             int flags = LOOKUP_NOTOUCH | LOOKUP_NOSTATS | LOOKUP_NONOTIFY | LOOKUP_NOEXPIRE;
-            if ((migrating_slot || importing_slot) && !pubsubshard_included) {
-                if (lookupKeyReadWithFlags(server.db[0], thiskey, flags) == NULL)
+            if ((migrating_slot || importing_slot) &&
+                !pubsubshard_included &&
+                (!c->flag.multi || (c->flag.multi && cmd->proc == execCommand)) // Multi/Exec validation happens on exec
+            ) {
+                if (lookupKeyReadWithFlags(currentDb, thiskey, flags) == NULL)
                     missing_keys++;
                 else
                     existing_keys++;
@@ -1338,16 +1389,15 @@ void addNodeToNodeReply(client *c, clusterNode *node) {
  * not finished their initial sync, in failed state, or are
  * otherwise considered not available to serve read commands. */
 int isNodeAvailable(clusterNode *node) {
+    /* We don't consider PFAIL here because it's not a reliable indicator
+     * for node available and we don't want clients to use it. */
     if (clusterNodeIsFailing(node)) {
         return 0;
     }
-    long long repl_offset = clusterNodeReplOffset(node);
-    if (clusterNodeIsMyself(node)) {
-        /* Nodes do not update their own information
-         * in the cluster node list. */
-        repl_offset = getNodeReplicationOffset(node);
-    }
-    return (repl_offset != 0);
+
+    /* Hide empty replicas in here, from a data-path POV, an empty replica
+     * is not available. */
+    return getNodeReplicationOffset(node) != 0;
 }
 
 void addNodeReplyForClusterSlot(client *c, clusterNode *node, int start_slot, int end_slot) {

@@ -3503,7 +3503,6 @@ int zmpopGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysResult
 int bzmpopGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysResult *result);
 int setGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysResult *result);
 int bitfieldGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysResult *result);
-bool dbHasNoKeys(void);
 
 unsigned short crc16(const char *buf, int len);
 
@@ -3928,6 +3927,7 @@ void killThreads(void);
 void makeThreadKillable(void);
 serverDb *createDatabase(int id);
 int dbHasNoKeys(int dbid);
+bool dbsHaveNoKeys(void);
 serverDb *createDatabaseIfNeeded(int id);
 void swapMainDbWithTempDb(serverDb **tempDb);
 sds getVersion(void);

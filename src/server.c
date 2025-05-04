@@ -2851,8 +2851,6 @@ void initServer(void) {
     }
 
     server.dbnum = server.cluster_enabled ? server.config_databases_cluster : server.config_databases;
-    server.db = zmalloc(sizeof(serverDb*) * server.dbnum);
-
     server.db = zcalloc(sizeof(serverDb *) * server.dbnum);
     createDatabaseIfNeeded(0); /* The default database should always exist */
 
@@ -2862,7 +2860,7 @@ void initServer(void) {
      * (which has to be kvstore), see pubsubtype.serverPubSubChannels */
     server.pubsub_channels = kvstoreCreate(&kvstoreChannelHashtableType, 0, KVSTORE_ALLOCATE_HASHTABLES_ON_DEMAND);
     server.pubsub_patterns = dictCreate(&objToHashtableDictType);
-    server.pubsubshard_channels = kvstoreCreate(&kvstoreChannelHashtableType, server.cluster_enabled ? slot_count_bits:0,
+    server.pubsubshard_channels = kvstoreCreate(&kvstoreChannelHashtableType, server.cluster_enabled ? CLUSTER_SLOT_MASK_BITS:0,
                                                 KVSTORE_ALLOCATE_HASHTABLES_ON_DEMAND | KVSTORE_FREE_EMPTY_HASHTABLES);
     server.pubsub_clients = 0;
     server.watching_clients = 0;

@@ -2841,9 +2841,9 @@ int bitfieldGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysRes
     return 1;
 }
 
-bool dbHasNoKeys(void) {
+bool dbsHaveNoKeys(void) {
     for (int i = 0; i < server.dbnum; i++) {
-        if (kvstoreSize(server.db[i].keys) != 0) {
+        if (kvstoreSize(server.db[i]->keys) != 0) {
             return false;
         }
     }

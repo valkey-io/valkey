@@ -5878,11 +5878,6 @@ int verifyClusterConfigWithData(void) {
      * completely depend on the replication stream. */
     if (nodeIsReplica(myself)) return C_OK;
 
-    /* Make sure we only have keys in DB0. */
-    for (j = 1; j < server.dbnum; j++) {
-        if (!dbHasNoKeys(j)) return C_ERR;
-    }
-
     /* Check that all the slots we see populated memory have a corresponding
      * entry in the cluster table. Otherwise fix the table. */
     for (j = 0; j < CLUSTER_SLOTS; j++) {
@@ -7035,7 +7030,7 @@ int clusterCommandSpecial(client *c) {
         }
     } else if (!strcasecmp(c->argv[1]->ptr, "flushslots") && c->argc == 2) {
         /* CLUSTER FLUSHSLOTS */
-        if (!dbHasNoKeys()) {
+        if (!dbsHaveNoKeys()) {
             addReplyError(c, "DB must be empty to perform CLUSTER FLUSHSLOTS.");
             return 1;
         }
@@ -7205,7 +7200,7 @@ int clusterCommandSpecial(client *c) {
         /* If the instance is currently a primary, it should have no assigned
          * slots nor keys to accept to replicate some other node.
          * Replicas can switch to another primary without issues. */
-        if (clusterNodeIsPrimary(myself) && (myself->numslots != 0 || !dbHasNoKeys())) {
+        if (clusterNodeIsPrimary(myself) && (myself->numslots != 0 || !dbsHaveNoKeys())) {
             addReplyError(c, "To set a master the node must be empty and "
                              "without assigned slots.");
             return 1;
@@ -7357,7 +7352,7 @@ int clusterCommandSpecial(client *c) {
 
         /* Replicas can be reset while containing data, but not primary nodes
          * that must be empty. */
-        if (clusterNodeIsPrimary(myself) && !dbHasNoKeys()) {
+        if (clusterNodeIsPrimary(myself) && !dbsHaveNoKeys()) {
             addReplyError(c, "CLUSTER RESET can't be called with "
                              "master nodes containing keys");
             return 1;

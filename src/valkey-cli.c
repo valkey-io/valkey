@@ -83,7 +83,8 @@
 #define CLI_HISTFILE_DEFAULT ".valkeycli_history"
 #define CLI_RCFILE_ENV "REDISCLI_RCFILE"
 #define CLI_RCFILE_DEFAULT ".valkeyclirc"
-#define CLI_AUTH_ENV "REDISCLI_AUTH"
+#define CLI_AUTH_ENV "VALKEYCLI_AUTH"
+#define OLD_CLI_AUTH_ENV "REDISCLI_AUTH"
 #define CLI_CLUSTER_YES_ENV "REDISCLI_CLUSTER_YES"
 
 #define CLUSTER_MANAGER_SLOTS 16384
@@ -1559,11 +1560,11 @@ static int cliAuth(valkeyContext *ctx, char *user, char *auth) {
 }
 
 /* Send SELECT input_dbnum to the server */
-static int cliSelect(void) {
+static int cliSelect(struct config *config, valkeyContext *ctx) {
     valkeyReply *reply;
-    if (config.conn_info.input_dbnum == config.dbnum) return VALKEY_OK;
+    if (config->conn_info.input_dbnum == config->dbnum) return VALKEY_OK;
 
-    reply = valkeyCommand(context, "SELECT %d", config.conn_info.input_dbnum);
+    reply = valkeyCommand(ctx, "SELECT %d", config->conn_info.input_dbnum);
     if (reply == NULL) {
         fprintf(stderr, "\nI/O error\n");
         return VALKEY_ERR;
@@ -1572,9 +1573,9 @@ static int cliSelect(void) {
     int result = VALKEY_OK;
     if (reply->type == VALKEY_REPLY_ERROR) {
         result = VALKEY_ERR;
-        fprintf(stderr, "SELECT %d failed: %s\n", config.conn_info.input_dbnum, reply->str);
+        fprintf(stderr, "SELECT %d failed: %s\n", config->conn_info.input_dbnum, reply->str);
     } else {
-        config.dbnum = config.conn_info.input_dbnum;
+        config->dbnum = config->conn_info.input_dbnum;
         cliRefreshPrompt();
     }
     freeReplyObject(reply);
@@ -1678,7 +1679,7 @@ static int cliConnect(int flags) {
 
         /* Do AUTH, select the right DB, switch to RESP3 if needed. */
         if (cliAuth(context, config.conn_info.user, config.conn_info.auth) != VALKEY_OK) return VALKEY_ERR;
-        if (cliSelect() != VALKEY_OK) return VALKEY_ERR;
+        if (cliSelect(&config, context) != VALKEY_OK) return VALKEY_ERR;
         if (cliSwitchProto() != VALKEY_OK) return VALKEY_ERR;
     }
 
@@ -2462,7 +2463,7 @@ static int cliSendCommand(int argc, char **argv, long repeat) {
                 config.conn_info.input_dbnum = config.dbnum = atoi(argv[1]);
                 cliRefreshPrompt();
             } else if (!strcasecmp(command, "auth") && (argc == 2 || argc == 3)) {
-                cliSelect();
+                cliSelect(&config, context);
             } else if (!strcasecmp(command, "multi") && argc == 1 && config.last_cmd_type != VALKEY_REPLY_ERROR) {
                 config.in_multi = 1;
                 config.pre_multi_dbnum = config.dbnum;
@@ -2906,6 +2907,9 @@ static int parseOptions(int argc, char **argv) {
 static void parseEnv(void) {
     /* Set auth from env, but do not overwrite CLI arguments if passed */
     char *auth = getenv(CLI_AUTH_ENV);
+    if (auth != NULL) {
+        auth = getenv(OLD_CLI_AUTH_ENV);
+    }
     if (auth != NULL && config.conn_info.auth == NULL) {
         config.conn_info.auth = auth;
     }
@@ -4808,10 +4812,12 @@ static valkeyReply *clusterManagerMigrateKeysInReply(clusterManagerNode *source,
     size_t i, offset = 6; // Keys Offset
     argv = zcalloc(argc * sizeof(char *));
     argv_len = zcalloc(argc * sizeof(size_t));
-    char portstr[255];
-    char timeoutstr[255];
-    snprintf(portstr, 10, "%d", target->port);
-    snprintf(timeoutstr, 10, "%d", timeout);
+    char portstr[10];
+    char timeoutstr[10];
+    char dbnum[10];
+    snprintf(portstr, sizeof(portstr), "%d", target->port);
+    snprintf(timeoutstr, sizeof(timeoutstr), "%d", timeout);
+    snprintf(dbnum, sizeof(dbnum), "%d", config.dbnum);
     argv[0] = "MIGRATE";
     argv_len[0] = 7;
     argv[1] = target->ip;
@@ -4820,8 +4826,8 @@ static valkeyReply *clusterManagerMigrateKeysInReply(clusterManagerNode *source,
     argv_len[2] = strlen(portstr);
     argv[3] = "";
     argv_len[3] = 0;
-    argv[4] = "0";
-    argv_len[4] = 1;
+    argv[4] = dbnum;
+    argv_len[4] = strlen(dbnum);
     argv[5] = timeoutstr;
     argv_len[5] = strlen(timeoutstr);
     if (replace) {
@@ -4873,6 +4879,8 @@ cleanup:
     return migrate_reply;
 }
 
+static int getDatabases(valkeyContext *ctx);
+
 /* Migrate all keys in the given slot from source to target.*/
 static int clusterManagerMigrateKeysInSlot(clusterManagerNode *source,
                                            clusterManagerNode *target,
@@ -4884,7 +4892,19 @@ static int clusterManagerMigrateKeysInSlot(clusterManagerNode *source,
     int success = 1;
     int do_fix = config.cluster_manager_command.flags & CLUSTER_MANAGER_CMD_FLAG_FIX;
     int do_replace = config.cluster_manager_command.flags & CLUSTER_MANAGER_CMD_FLAG_REPLACE;
+
+    int dbnum = getDatabases(source->context);
+    int orig_db = config.conn_info.input_dbnum;
+    config.conn_info.input_dbnum = 0;
+
     while (1) {
+        if (config.conn_info.input_dbnum == dbnum) {
+            break;
+        }
+        if (cliSelect(&config, source->context) == VALKEY_ERR) {
+            success = 0;
+            goto next;
+        }
         char *dots = NULL;
         valkeyReply *reply = NULL, *migrate_reply = NULL;
         reply = CLUSTER_MANAGER_COMMAND(source,
@@ -4892,7 +4912,9 @@ static int clusterManagerMigrateKeysInSlot(clusterManagerNode *source,
                                         "GETKEYSINSLOT %d %d",
                                         slot, pipeline);
         success = (reply != NULL);
-        if (!success) return 0;
+        if (!success) {
+            goto next;
+        }
         if (reply->type == VALKEY_REPLY_ERROR) {
             success = 0;
             if (err != NULL) {
@@ -4906,7 +4928,9 @@ static int clusterManagerMigrateKeysInSlot(clusterManagerNode *source,
         size_t count = reply->elements;
         if (count == 0) {
             freeReplyObject(reply);
-            break;
+            reply = NULL;
+            config.conn_info.input_dbnum++;
+            continue;
         }
         if (verbose) dots = zmalloc((count + 1) * sizeof(char));
         /* Calling MIGRATE command. */
@@ -5030,8 +5054,13 @@ static int clusterManagerMigrateKeysInSlot(clusterManagerNode *source,
         if (reply != NULL) freeReplyObject(reply);
         if (migrate_reply != NULL) freeReplyObject(migrate_reply);
         if (dots) zfree(dots);
+        reply = NULL;
+        migrate_reply = NULL;
+        dots = NULL;
         if (!success) break;
     }
+    config.conn_info.input_dbnum = orig_db;
+    cliSelect(&config, source->context);
     return success;
 }
 
@@ -8672,18 +8701,24 @@ static int getDbSize(void) {
     return size;
 }
 
-static int getDatabases(void) {
+static int getDatabases(valkeyContext *ctx) {
     valkeyReply *reply;
     int dbnum;
 
-    reply = valkeyCommand(context, "CONFIG GET databases");
+    char *standalone = "CONFIG GET databases";
+    char *cluster = "CONFIG GET cluster-databases";
+
+    reply = valkeyCommand(ctx, config.cluster_mode ? cluster : standalone);
 
     if (reply == NULL) {
         fprintf(stderr, "\nI/O error\n");
         exit(1);
-    } else if (reply->type == VALKEY_REPLY_ERROR) {
-        dbnum = 16;
-        fprintf(stderr, "CONFIG GET databases fails: %s, use default value 16 instead\n", reply->str);
+    }
+
+    if (reply->type == VALKEY_REPLY_ERROR) {
+        dbnum = config.cluster_mode ? 1 : 16;
+        fprintf(stderr, "%s fails: %s, use default value %d instead\n",
+                config.cluster_mode ? cluster : standalone, reply->str, dbnum);
     } else {
         assert(reply->type == (config.current_resp3 ? VALKEY_REPLY_MAP : VALKEY_REPLY_ARRAY));
         assert(reply->elements == 2);
@@ -9188,7 +9223,7 @@ void bytesToHuman(char *s, size_t size, long long n) {
 static void statMode(void) {
     valkeyReply *reply;
     long aux, requests = 0;
-    int dbnum = getDatabases();
+    int dbnum = getDatabases(context);
     int i = 0;
 
     while (1) {

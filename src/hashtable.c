@@ -672,6 +672,12 @@ static int expand(hashtable *ht, size_t size, int *malloc_failed) {
     return resize(ht, size, malloc_failed);
 }
 
+/* Checks if a candidate entry in a bucket matches the given key.
+ *
+ * This function examines a specific position in a bucket to determine if the
+ * entry at that position matches the provided key. If a match is found, it
+ * updates the position and table index pointers and returns 1. Otherwise,
+ * it returns 0. */
 static inline int checkCandidateInBucket(hashtable *ht, bucket *b, int pos, const void *key, int *pos_in_bucket, int *table_index, int table) {
     /* It's a candidate. */
     void *entry = b->entries[pos];
@@ -687,7 +693,8 @@ static inline int checkCandidateInBucket(hashtable *ht, bucket *b, int pos, cons
 }
 
 #if HAVE_X86_SIMD
-ATTRIBUTE_TARGET_SSE2 static int findKeyInBucketSSE2(hashtable *ht, bucket *b, uint8_t h2, const void *key, int *pos_in_bucket, int *table_index, int table) {
+ATTRIBUTE_TARGET_SSE2
+static int findKeyInBucketSSE2(hashtable *ht, bucket *b, uint8_t h2, const void *key, int *pos_in_bucket, int *table_index, int table) {
     /* Get the bucket's presence mask - indicates which positions are filled. */
     BUCKET_BITS_TYPE presence_mask = b->presence & ((1 << ENTRIES_PER_BUCKET) - 1);
     __m128i hash_vector = _mm_loadu_si128((__m128i *)b->hashes);
@@ -740,9 +747,8 @@ static bucket *findBucket(hashtable *ht, uint64_t hash, const void *key, int *po
 #else
             /* Find candidate entries with presence flag set and matching h2 hash. */
             for (int pos = 0; pos < numBucketPositions(b); pos++) {
-                if (isPositionFilled(b, pos) && b->hashes[pos] == h2) {
-                    if (checkCandidateInBucket(ht, b, pos, key, pos_in_bucket, table_index, table)) return b;
-                }
+                if (isPositionFilled(b, pos) && b->hashes[pos] == h2 &&
+                    checkCandidateInBucket(ht, b, pos, key, pos_in_bucket, table_index, table)) return b;
             }
 #endif
             b = getChildBucket(b);

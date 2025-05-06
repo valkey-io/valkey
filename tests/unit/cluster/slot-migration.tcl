@@ -25,7 +25,7 @@ proc get_myself_primary_linkstate {srv_idx} {
 }
 
 proc get_port {instance_id} {
-    if {::tls} {
+    if {$::tls} {
         set port [lindex [R $instance_id CONFIG GET tls-port] 1]
     } else {
         set port [lindex [R $instance_id CONFIG GET port] 1]

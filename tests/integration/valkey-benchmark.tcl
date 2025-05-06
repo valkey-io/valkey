@@ -115,6 +115,13 @@ tags {"benchmark network external:skip logreqres:skip"} {
             assert_match  {*calls=12,*} [cmdstat incr]
         }
 
+        test {benchmark: arbitrary command with data placeholder} {
+            set cmd [valkeybenchmark $master_host $master_port "-n 1 -d 42 -- set k value:__data__"]
+            common_bench_setup $cmd
+            puts [r get k]
+            assert_equal 48 [r strlen k]
+        }
+
         test {benchmark: keyspace length} {
             set cmd [valkeybenchmark $master_host $master_port "-r 50 -t set -n 1000"]
             common_bench_setup $cmd

@@ -1907,6 +1907,24 @@ int main(int argc, char **argv) {
                 free(cmd);
                 start = i + 1;
                 repeat = 1;
+            } else if (strstr(sds_args[i], "__data__")) {
+                /* Replace data placeholders with data of length given by -d. */
+                int num_parts;
+                sds *parts = sdssplitlen(sds_args[i], sdslen(sds_args[i]),
+                                         "__data__", strlen("__data__"),
+                                         &num_parts);
+                sds newarg = parts[0];
+                parts[0] = NULL; /* prevent it from being freed below */
+                for (int j = 1; j < num_parts; j++) {
+                    char data[config.datasize];
+                    genBenchmarkRandomData(data, config.datasize);
+                    newarg = sdscatlen(newarg, data, config.datasize);
+                    newarg = sdscatlen(newarg, parts[j], sdslen(parts[j]));
+                }
+                sdsfreesplitres(parts, num_parts);
+                sdsfree(sds_args[i]);
+                sds_args[i] = newarg;
+                argvlen[i] = sdslen(sds_args[i]);
             }
         }
         len = sdslen(cmd_seq);

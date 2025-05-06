@@ -678,7 +678,7 @@ static int expand(hashtable *ht, size_t size, int *malloc_failed) {
  * entry at that position matches the provided key. If a match is found, it
  * updates the position and table index pointers and returns 1. Otherwise,
  * it returns 0. */
-static inline int checkCandidateInBucket(hashtable *ht, bucket *b, int pos, const void *key, int *pos_in_bucket, int *table_index, int table) {
+static inline int checkCandidateInBucket(hashtable *ht, bucket *b, int pos, const void *key, int table, int *pos_in_bucket, int *table_index) {
     /* It's a candidate. */
     void *entry = b->entries[pos];
     const void *elem_key = entryGetKey(ht, entry);
@@ -694,7 +694,7 @@ static inline int checkCandidateInBucket(hashtable *ht, bucket *b, int pos, cons
 
 #if HAVE_X86_SIMD
 ATTRIBUTE_TARGET_SSE2
-static int findKeyInBucketSSE2(hashtable *ht, bucket *b, uint8_t h2, const void *key, int *pos_in_bucket, int *table_index, int table) {
+static int findKeyInBucketSSE2(hashtable *ht, bucket *b, uint8_t h2, const void *key, int table, int *pos_in_bucket, int *table_index) {
     /* Get the bucket's presence mask - indicates which positions are filled. */
     BUCKET_BITS_TYPE presence_mask = b->presence & ((1 << ENTRIES_PER_BUCKET) - 1);
     __m128i hash_vector = _mm_loadu_si128((__m128i *)b->hashes);
@@ -709,7 +709,7 @@ static int findKeyInBucketSSE2(hashtable *ht, bucket *b, uint8_t h2, const void 
     newmask &= presence_mask;
     while (newmask > 0) {
         int pos = __builtin_ctz(newmask);
-        if (checkCandidateInBucket(ht, b, pos, key, pos_in_bucket, table_index, table)) return 1;
+        if (checkCandidateInBucket(ht, b, pos, key, table, pos_in_bucket, table_index)) return 1;
         /* Clear the processed bit and continue with next match. */
         newmask &= ~(1 << pos);
     }
@@ -743,12 +743,12 @@ static bucket *findBucket(hashtable *ht, uint64_t hash, const void *key, int *po
         do {
 #if HAVE_X86_SIMD
             /* All x86-64 CPUs have SSE2. */
-            if (findKeyInBucketSSE2(ht, b, h2, key, pos_in_bucket, table_index, table)) return b;
+            if (findKeyInBucketSSE2(ht, b, h2, key, table, pos_in_bucket, table_index)) return b;
 #else
             /* Find candidate entries with presence flag set and matching h2 hash. */
             for (int pos = 0; pos < numBucketPositions(b); pos++) {
                 if (isPositionFilled(b, pos) && b->hashes[pos] == h2 &&
-                    checkCandidateInBucket(ht, b, pos, key, pos_in_bucket, table_index, table)) return b;
+                    checkCandidateInBucket(ht, b, pos, key, table, pos_in_bucket, table_index)) return b;
             }
 #endif
             b = getChildBucket(b);

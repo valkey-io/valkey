@@ -208,11 +208,12 @@ proc valkey_deferring_client {args} {
     set client [valkey [srv $level "host"] [srv $level "port"] 1 $::tls]
 
     # select the right db and read the response (OK)
-    if {!$::singledb} {
+    puts "zzzz singledb $::singledb"
+    if {!$::singledb} {        
         $client select 9
         $client read
     } else {
-        # For timing/symmetry with the above select
+        # For timing/symmetry with the above select        
         $client ping
         $client read
     }

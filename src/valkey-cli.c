@@ -2729,6 +2729,7 @@ static int parseOptions(int argc, char **argv) {
             int err = createClusterManagerCommand(cmd, j - i, argv + i + 1);
             if (err) exit(err);
             i = j;
+            config.cluster_mode = 1;
         } else if (!strcmp(argv[i], "--cluster") && lastarg) {
             usage(1);
         } else if (!strcmp(argv[i], "--cluster-only-masters") || !strcmp(argv[i], "--cluster-only-primaries")) {

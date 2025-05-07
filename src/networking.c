@@ -2886,14 +2886,24 @@ static void setProtocolError(const char *errstr, client *c) {
     c->flag.protocol_error = 1;
 }
 
-/* Process the query buffer for client 'c', setting up the client argument
- * vector for command execution.
- * Sets the client's read_flags to indicate the parsing outcome.
+/* Incremental parsing of a command in the client's input buffer.
  *
- * This function is called if processInputBuffer() detects that the next
- * command is in RESP format, so the first byte in the command is found
- * to be '*'. Otherwise for inline commands processInlineBuffer() is called. */
-void processMultibulkBuffer(client *c) {
+ * Parser state related to the input buffer are per client and stored in the
+ * client struct: querybuf, qb_len, multibulklen, bulklen, querybuf_peak.
+ *
+ * Parser state for the command structures is supplied using pointer arguments,
+ * which are also used for returning the parsed command or error: argv,
+ * argv_len, argc, read_flag.
+ *
+ * Returns a non-zero if parsing is complete (wither error or success) and zero
+ * if the input buffer doesn't contain a enough data to parse a complete
+ * command. If non-zero is returned, the returned value is a read flag, either
+ * READ_FLAGS_PARSING_COMPLETED on success or one of the READ_FLAGS_ERROR_(...)
+ * values on parse error.
+ */
+static int parseMultibulk(client *c, int *argc, robj ***argv, int *argv_len,
+                          size_t *argv_len_sum,
+                          unsigned long long *net_input_bytes_curr_cmd) {
     char *newline = NULL;
     int ok;
     long long ll;
@@ -2901,20 +2911,20 @@ void processMultibulkBuffer(client *c) {
     int auth_required = c->read_flags & READ_FLAGS_AUTH_REQUIRED;
 
     if (c->multibulklen == 0) {
-        /* The client should have been reset */
-        serverAssertWithInfo(c, NULL, c->argc == 0);
+        /* The client (argc) should have been reset */
+        serverAssertWithInfo(c, NULL, *argc == 0);
 
         /* Multi bulk length cannot be read without a \r\n */
         newline = memchr(c->querybuf + c->qb_pos, '\r', sdslen(c->querybuf) - c->qb_pos);
         if (newline == NULL) {
             if (sdslen(c->querybuf) - c->qb_pos > PROTO_INLINE_MAX_SIZE) {
-                c->read_flags |= READ_FLAGS_ERROR_BIG_MULTIBULK;
+                return READ_FLAGS_ERROR_BIG_MULTIBULK;
             }
-            return;
+            return 0;
         }
 
         /* Buffer should also contain \n */
-        if (newline - (c->querybuf + c->qb_pos) > (ssize_t)(sdslen(c->querybuf) - c->qb_pos - 2)) return;
+        if (newline - (c->querybuf + c->qb_pos) > (ssize_t)(sdslen(c->querybuf) - c->qb_pos - 2)) return 0;
 
         /* We know for sure there is a whole line since newline != NULL,
          * so go ahead and find out the multi bulk length. */
@@ -2922,27 +2932,24 @@ void processMultibulkBuffer(client *c) {
         size_t multibulklen_slen = newline - (c->querybuf + 1 + c->qb_pos);
         ok = string2ll(c->querybuf + 1 + c->qb_pos, multibulklen_slen, &ll);
         if (!ok || ll > INT_MAX) {
-            c->read_flags |= READ_FLAGS_ERROR_INVALID_MULTIBULK_LEN;
-            return;
+            return READ_FLAGS_ERROR_INVALID_MULTIBULK_LEN;
         } else if (ll > 10 && auth_required) {
-            c->read_flags |= READ_FLAGS_ERROR_UNAUTHENTICATED_MULTIBULK_LEN;
-            return;
+            return READ_FLAGS_ERROR_UNAUTHENTICATED_MULTIBULK_LEN;
         }
 
         c->qb_pos = (newline - c->querybuf) + 2;
 
         if (ll <= 0) {
-            c->read_flags |= READ_FLAGS_PARSING_NEGATIVE_MBULK_LEN;
-            return;
+            return READ_FLAGS_PARSING_NEGATIVE_MBULK_LEN;
         }
 
         c->multibulklen = ll;
 
-        /* Setup argv array on client structure */
-        if (c->argv) zfree(c->argv);
-        c->argv_len = min(c->multibulklen, 1024);
-        c->argv = zmalloc(sizeof(robj *) * c->argv_len);
-        c->argv_len_sum = 0;
+        /* Setup argv array */
+        if (*argv) zfree(*argv);
+        *argv_len = min(c->multibulklen, 1024);
+        *argv = zmalloc(sizeof(robj *) * *argv_len);
+        *argv_len_sum = 0;
 
         /* Per-slot network bytes-in calculation.
          *
@@ -2975,7 +2982,7 @@ void processMultibulkBuffer(client *c) {
          *
          * The 1st component is calculated within the below line.
          * */
-        c->net_input_bytes_curr_cmd += (multibulklen_slen + 3);
+        *net_input_bytes_curr_cmd += (multibulklen_slen + 3);
     }
 
     serverAssertWithInfo(c, NULL, c->multibulklen > 0);
@@ -2985,28 +2992,24 @@ void processMultibulkBuffer(client *c) {
             newline = memchr(c->querybuf + c->qb_pos, '\r', sdslen(c->querybuf) - c->qb_pos);
             if (newline == NULL) {
                 if (sdslen(c->querybuf) - c->qb_pos > PROTO_INLINE_MAX_SIZE) {
-                    c->read_flags |= READ_FLAGS_ERROR_BIG_BULK_COUNT;
-                    return;
+                    return READ_FLAGS_ERROR_BIG_BULK_COUNT;
                 }
                 break;
             }
 
             /* Buffer should also contain \n */
-            if (newline - (c->querybuf + c->qb_pos) > (ssize_t)(sdslen(c->querybuf) - c->qb_pos - 2)) break;
+            if (newline - (c->querybuf + c->qb_pos) > (ssize_t)(sdslen(c->querybuf) - c->qb_pos - 2)) return 0;
 
             if (c->querybuf[c->qb_pos] != '$') {
-                c->read_flags |= READ_FLAGS_ERROR_MBULK_UNEXPECTED_CHARACTER;
-                return;
+                return READ_FLAGS_ERROR_MBULK_UNEXPECTED_CHARACTER;
             }
 
             size_t bulklen_slen = newline - (c->querybuf + c->qb_pos + 1);
             ok = string2ll(c->querybuf + c->qb_pos + 1, bulklen_slen, &ll);
             if (!ok || ll < 0 || (!(is_primary) && ll > server.proto_max_bulk_len)) {
-                c->read_flags |= READ_FLAGS_ERROR_MBULK_INVALID_BULK_LEN;
-                return;
+                return READ_FLAGS_ERROR_MBULK_INVALID_BULK_LEN;
             } else if (ll > 16384 && auth_required) {
-                c->read_flags |= READ_FLAGS_ERROR_UNAUTHENTICATED_BULK_LEN;
-                return;
+                return READ_FLAGS_ERROR_UNAUTHENTICATED_BULK_LEN;
             }
 
             c->qb_pos = newline - c->querybuf + 2;
@@ -3041,7 +3044,7 @@ void processMultibulkBuffer(client *c) {
             }
             c->bulklen = ll;
             /* Per-slot network bytes-in calculation, 2nd component. */
-            c->net_input_bytes_curr_cmd += (bulklen_slen + 3);
+            *net_input_bytes_curr_cmd += (bulklen_slen + 3);
         }
 
         /* Read bulk argument */
@@ -3050,9 +3053,10 @@ void processMultibulkBuffer(client *c) {
             break;
         } else {
             /* Check if we have space in argv, grow if needed */
-            if (c->argc >= c->argv_len) {
-                c->argv_len = min(c->argv_len < INT_MAX / 2 ? c->argv_len * 2 : INT_MAX, c->argc + c->multibulklen);
-                c->argv = zrealloc(c->argv, sizeof(robj *) * c->argv_len);
+            if (*argc >= *argv_len) {
+                *argv_len = min(*argv_len < INT_MAX / 2 ? (*argv_len) * 2 : INT_MAX,
+                                *argc + c->multibulklen);
+                *argv = zrealloc(*argv, sizeof(robj *) * (*argv_len));
             }
 
             /* Optimization: if a non-primary client's buffer contains JUST our bulk element
@@ -3060,16 +3064,16 @@ void processMultibulkBuffer(client *c) {
              * just use the current sds string. */
             if (!is_primary && c->qb_pos == 0 && c->bulklen >= PROTO_MBULK_BIG_ARG &&
                 sdslen(c->querybuf) == (size_t)(c->bulklen + 2)) {
-                c->argv[c->argc++] = createObject(OBJ_STRING, c->querybuf);
-                c->argv_len_sum += c->bulklen;
+                (*argv)[(*argc)++] = createObject(OBJ_STRING, c->querybuf);
+                *argv_len_sum += c->bulklen;
                 sdsIncrLen(c->querybuf, -2); /* remove CRLF */
                 /* Assume that if we saw a fat argument we'll see another one
                  * likely... */
                 c->querybuf = sdsnewlen(SDS_NOINIT, c->bulklen + 2);
                 sdsclear(c->querybuf);
             } else {
-                c->argv[c->argc++] = createStringObject(c->querybuf + c->qb_pos, c->bulklen);
-                c->argv_len_sum += c->bulklen;
+                (*argv)[(*argc)++] = createStringObject(c->querybuf + c->qb_pos, c->bulklen);
+                *argv_len_sum += c->bulklen;
                 c->qb_pos += c->bulklen + 2;
             }
             c->bulklen = -1;
@@ -3080,9 +3084,23 @@ void processMultibulkBuffer(client *c) {
     /* We're done when c->multibulk == 0 */
     if (c->multibulklen == 0) {
         /* Per-slot network bytes-in calculation, 3rd and 4th components. */
-        c->net_input_bytes_curr_cmd += (c->argv_len_sum + (c->argc * 2));
-        c->read_flags |= READ_FLAGS_PARSING_COMPLETED;
+        *net_input_bytes_curr_cmd += (*argv_len_sum + (*argc * 2));
+        return READ_FLAGS_PARSING_COMPLETED;
     }
+    return 0;
+}
+
+/* Process the query buffer for client 'c', setting up the client argument
+ * vector for command execution.
+ * Sets the client's read_flags to indicate the parsing outcome.
+ *
+ * This function is called if processInputBuffer() detects that the next
+ * command is in RESP format, so the first byte in the command is found
+ * to be '*'. Otherwise for inline commands processInlineBuffer() is called. */
+void processMultibulkBuffer(client *c) {
+    int flag = parseMultibulk(c, &c->argc, &c->argv, &c->argv_len,
+                              &c->argv_len_sum, &c->net_input_bytes_curr_cmd);
+    c->read_flags |= flag;
 }
 
 /* Perform necessary tasks after a command was executed:

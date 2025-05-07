@@ -51,6 +51,9 @@
 #include <openssl/err.h>
 #include <valkey/tls.h>
 #endif
+#ifdef USE_RDMA
+#include <valkey/rdma.h>
+#endif
 #include "adlist.h"
 #include "dict.h"
 #include "zmalloc.h"
@@ -88,6 +91,7 @@ static struct config {
     cliConnInfo conn_info;
     const char *hostsocket;
     int tls;
+    int rdma;
     struct cliSSLconfig sslconfig;
     int numclients;
     _Atomic int liveclients;
@@ -194,8 +198,8 @@ static void freeBenchmarkThread(benchmarkThread *thread);
 static void freeBenchmarkThreads(void);
 static void *execBenchmarkThread(void *ptr);
 static clusterNode *createClusterNode(char *ip, int port);
-static serverConfig *getServerConfig(const char *ip, int port, const char *hostsocket);
-static valkeyContext *getValkeyContext(const char *ip, int port, const char *hostsocket);
+static serverConfig *getServerConfig(const char *ip, int port, const char *hostsocket, int rdma);
+static valkeyContext *getValkeyContext(const char *ip, int port, const char *hostsocket, int rdma);
 static void freeServerConfig(serverConfig *cfg);
 static int fetchClusterSlotsConfiguration(client c);
 static void updateClusterSlotsConfiguration(void);
@@ -241,12 +245,12 @@ static dictType dtype = {
     NULL               /* allow to expand */
 };
 
-static valkeyContext *getValkeyContext(const char *ip, int port, const char *hostsocket) {
+static valkeyContext *getValkeyContext(const char *ip, int port, const char *hostsocket, int rdma) {
     valkeyContext *ctx = NULL;
     valkeyReply *reply = NULL;
     struct timeval tv = {0};
     if (hostsocket == NULL)
-        ctx = valkeyConnectWrapper(ip, port, tv, 0);
+        ctx = valkeyConnectWrapper(ip, port, tv, 0, rdma);
     else
         ctx = valkeyConnectUnixWrapper(hostsocket, tv, 0);
     if (ctx == NULL || ctx->err) {
@@ -295,12 +299,12 @@ cleanup:
 }
 
 
-static serverConfig *getServerConfig(const char *ip, int port, const char *hostsocket) {
+static serverConfig *getServerConfig(const char *ip, int port, const char *hostsocket, int rdma) {
     serverConfig *cfg = zcalloc(sizeof(*cfg));
     if (!cfg) return NULL;
     valkeyContext *c = NULL;
     valkeyReply *reply = NULL, *sub_reply = NULL;
-    c = getValkeyContext(ip, port, hostsocket);
+    c = getValkeyContext(ip, port, hostsocket, rdma);
     if (c == NULL) {
         freeServerConfig(cfg);
         exit(1);
@@ -388,7 +392,11 @@ static void resetClient(client c) {
     aeEventLoop *el = CLIENT_GET_EVENTLOOP(c);
     aeDeleteFileEvent(el, c->context->fd, AE_WRITABLE);
     aeDeleteFileEvent(el, c->context->fd, AE_READABLE);
-    aeCreateFileEvent(el, c->context->fd, AE_WRITABLE, writeHandler, c);
+    if (config.rdma) {
+        writeHandler(el, c->context->fd, c, 0); /* RDMA context always writable, but it can't be invoked by AE_WRITABLE */
+    } else {
+        aeCreateFileEvent(el, c->context->fd, AE_WRITABLE, writeHandler, c);
+    }
     c->written = 0;
     c->pending = config.pipeline;
 }
@@ -643,12 +651,14 @@ static client createClient(char *cmd, size_t len, client from, int thread_id) {
 
     const char *ip = NULL;
     int port = 0;
+    int rdma = 0;
     struct timeval tv = {0};
     c->cluster_node = NULL;
     if (config.hostsocket == NULL || is_cluster_client) {
         if (!is_cluster_client) {
             ip = config.conn_info.hostip;
             port = config.conn_info.hostport;
+            rdma = config.rdma;
         } else {
             int node_idx = 0;
             if (config.num_threads < config.cluster_node_count)
@@ -661,7 +671,7 @@ static client createClient(char *cmd, size_t len, client from, int thread_id) {
             port = node->port;
             c->cluster_node = node;
         }
-        c->context = valkeyConnectWrapper(ip, port, tv, 1);
+        c->context = valkeyConnectWrapper(ip, port, tv, 1, rdma);
     } else {
         c->context = valkeyConnectUnixWrapper(config.hostsocket, tv, 1);
     }
@@ -819,9 +829,13 @@ static client createClient(char *cmd, size_t len, client from, int thread_id) {
         benchmarkThread *thread = config.threads[thread_id];
         el = thread->el;
     }
-    if (config.idlemode == 0)
-        aeCreateFileEvent(el, c->context->fd, AE_WRITABLE, writeHandler, c);
-    else
+    if (config.idlemode == 0) {
+        if (config.rdma) {
+            writeHandler(el, c->context->fd, c, 0);
+        } else {
+            aeCreateFileEvent(el, c->context->fd, AE_WRITABLE, writeHandler, c);
+        }
+    } else
         /* In idle mode, clients still need to register readHandler for catching errors */
         aeCreateFileEvent(el, c->context->fd, AE_READABLE, readHandler, c);
 
@@ -1087,7 +1101,7 @@ static int fetchClusterConfiguration(void) {
     dict *nodes = NULL;
     const char *errmsg = "Failed to fetch cluster configuration";
     size_t i, j;
-    ctx = getValkeyContext(config.conn_info.hostip, config.conn_info.hostport, config.hostsocket);
+    ctx = getValkeyContext(config.conn_info.hostip, config.conn_info.hostport, config.hostsocket, 0);
     if (ctx == NULL) {
         exit(1);
     }
@@ -1200,7 +1214,7 @@ static int fetchClusterSlotsConfiguration(client c) {
         assert(node->port);
         /* Use first node as entry point to connect to. */
         if (ctx == NULL) {
-            ctx = getValkeyContext(node->ip, node->port, NULL);
+            ctx = getValkeyContext(node->ip, node->port, NULL, 0);
             if (!ctx) {
                 success = 0;
                 goto cleanup;
@@ -1306,6 +1320,7 @@ int parseOptions(int argc, char **argv) {
     int lastarg;
     int exit_status = 1;
     char *tls_usage;
+    char *rdma_usage;
 
     for (i = 1; i < argc; i++) {
         lastarg = (i == (argc - 1));
@@ -1473,6 +1488,14 @@ int parseOptions(int argc, char **argv) {
             config.sslconfig.ciphersuites = strdup(argv[++i]);
 #endif
 #endif
+#ifdef USE_RDMA
+        } else if (!strcmp(argv[i], "--rdma")) {
+            if (valkeyInitiateRdma() != VALKEY_OK) {
+                fprintf(stderr, "Failed to initialize RDMA support from libvalkey\n");
+                exit(1);
+            }
+            config.rdma = 1;
+#endif
         } else {
             /* Assume the user meant to provide an option when the arg starts
              * with a dash. We're done otherwise and should use the remainder
@@ -1511,8 +1534,15 @@ usage:
 #endif
         "";
 
+    rdma_usage =
+#ifdef USE_RDMA
+        " --rdma             Establish a RDMA connection.\n"
+#endif
+        "";
+
+
     printf(
-        "%s%s%s", /* Split to avoid strings longer than 4095 (-Woverlength-strings). */
+        "%s%s%s%s", /* Split to avoid strings longer than 4095 (-Woverlength-strings). */
         "Usage: valkey-benchmark [OPTIONS] [COMMAND ARGS...]\n\n"
         "Options:\n"
         " -h <hostname>      Server hostname (default 127.0.0.1)\n"
@@ -1577,6 +1607,7 @@ usage:
         "                    Sets the number of keys passed to FCALL command when running\n"
         "                    the 'fcall' test. (default 1)\n",
         tls_usage,
+        rdma_usage,
         " --help             Output this help and exit.\n"
         " --version          Output version and exit.\n\n"
         "Examples:\n\n"
@@ -1798,7 +1829,7 @@ int main(int argc, char **argv) {
             printf("Node %d(%s): ", i, node_type);
             if (node->name) printf("%s ", node->name);
             printf("%s:%d\n", node->ip, node->port);
-            node->redis_config = getServerConfig(node->ip, node->port, NULL);
+            node->redis_config = getServerConfig(node->ip, node->port, NULL, 0);
             if (node->redis_config == NULL) {
                 fprintf(stderr, "WARNING: Could not fetch node CONFIG %s:%d\n", node->ip, node->port);
             }
@@ -1808,7 +1839,7 @@ int main(int argc, char **argv) {
          * by the user. */
         if (config.num_threads == 0) config.num_threads = config.cluster_node_count;
     } else {
-        config.redis_config = getServerConfig(config.conn_info.hostip, config.conn_info.hostport, config.hostsocket);
+        config.redis_config = getServerConfig(config.conn_info.hostip, config.conn_info.hostport, config.hostsocket, config.rdma);
         if (config.redis_config == NULL) {
             fprintf(stderr, "WARNING: Could not fetch server CONFIG\n");
         }
@@ -2045,7 +2076,7 @@ int main(int argc, char **argv) {
         if (test_is_selected("fcall")) {
             char *script = generateFunctionScript(1, config.num_keys_in_fcall > 0);
 
-            valkeyContext *ctx = getValkeyContext(config.conn_info.hostip, config.conn_info.hostport, NULL);
+            valkeyContext *ctx = getValkeyContext(config.conn_info.hostip, config.conn_info.hostport, NULL, 0);
             if (ctx == NULL) {
                 exit(1);
             }

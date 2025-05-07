@@ -53,7 +53,7 @@ sds escapeJsonString(sds s, const char *p, size_t len);
 
 sds cliVersion(void);
 
-valkeyContext *valkeyConnectWrapper(const char *ip, int port, const struct timeval tv, int nonblock);
+valkeyContext *valkeyConnectWrapper(const char *ip, int port, const struct timeval tv, int nonblock, int rdma);
 valkeyContext *valkeyConnectUnixWrapper(const char *path, const struct timeval tv, int nonblock);
 
 #endif /* __CLICOMMON_H */

@@ -89,6 +89,11 @@ macro (valkey_build_and_install_bin target sources ld_flags libs link_name)
         target_link_libraries(${target} OpenSSL::SSL valkey::valkey_tls)
     endif ()
 
+    if (USE_RDMA)
+        # Add required libraries needed for RDMA
+        target_link_libraries(${target} valkey::valkey_rdma valkey::valkey)
+    endif ()
+
     if (IS_FREEBSD)
         target_link_libraries(${target} execinfo)
     endif ()
@@ -115,6 +120,11 @@ macro (valkey_build_and_install_module target sources ld_flags libs)
     if (USE_TLS)
         # Add required libraries needed for TLS
         target_link_libraries(${target} OpenSSL::SSL valkey::valkey_tls)
+    endif ()
+
+    if (USE_RDMA)
+        # Add required libraries needed for RDMA
+        target_link_libraries(${target} valkey::valkey_rdma valkey::valkey)
     endif ()
 
     if (IS_FREEBSD)

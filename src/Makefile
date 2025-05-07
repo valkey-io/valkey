@@ -341,6 +341,7 @@ endif
 ifeq ($(BUILD_RDMA),yes)
 	FINAL_CFLAGS+=-DUSE_RDMA=$(BUILD_YES) -DBUILD_RDMA_MODULE=$(BUILD_NO)
 	FINAL_LIBS += $(RDMA_LIBS)
+	FINAL_LIBS += ../deps/libvalkey/lib/libvalkey_rdma.a $(RDMA_LIBS)
 endif
 
 RDMA_MODULE=
@@ -348,6 +349,7 @@ RDMA_MODULE_NAME:=valkey-rdma$(PROG_SUFFIX).so
 RDMA_MODULE_CFLAGS:=$(FINAL_CFLAGS)
 ifeq ($(BUILD_RDMA),module)
 	FINAL_CFLAGS+=-DUSE_RDMA=$(BUILD_MODULE)
+	RDMA_CLIENT_LIBS = ../deps/libvalkey/lib/libvalkey_rdma.a $(RDMA_LIBS)
 	RDMA_MODULE=$(RDMA_MODULE_NAME)
 	RDMA_MODULE_CFLAGS+=-DUSE_RDMA=$(BUILD_MODULE) -DBUILD_RDMA_MODULE=$(BUILD_MODULE) $(RDMA_LIBS)
 endif
@@ -514,7 +516,7 @@ $(ENGINE_CHECK_AOF_NAME): $(SERVER_NAME)
 
 # valkey-tls.so
 $(TLS_MODULE_NAME): $(SERVER_NAME)
-	$(QUIET_CC)$(CC) -o $@ tls.c -shared -fPIC $(TLS_MODULE_CFLAGS) $(TLS_CLIENT_LIBS)
+	$(QUIET_CC)$(CC) -o $@ tls.c -shared -fPIC $(TLS_MODULE_CFLAGS) $(TLS_CLIENT_LIBS) $(RDMA_CLIENT_LIBS)
 
 # valkey-rdma.so
 $(RDMA_MODULE_NAME): $(SERVER_NAME)
@@ -522,11 +524,11 @@ $(RDMA_MODULE_NAME): $(SERVER_NAME)
 
 # valkey-cli
 $(ENGINE_CLI_NAME): $(ENGINE_CLI_OBJ)
-	$(SERVER_LD) -o $@ $^ ../deps/libvalkey/lib/libvalkey.a ../deps/linenoise/linenoise.o ../deps/fpconv/libfpconv.a $(FINAL_LIBS) $(TLS_CLIENT_LIBS)
+	$(SERVER_LD) -o $@ $^ ../deps/libvalkey/lib/libvalkey.a ../deps/linenoise/linenoise.o ../deps/fpconv/libfpconv.a $(FINAL_LIBS) $(TLS_CLIENT_LIBS) $(RDMA_CLIENT_LIBS)
 
 # valkey-benchmark
 $(ENGINE_BENCHMARK_NAME): $(ENGINE_BENCHMARK_OBJ)
-	$(SERVER_LD) -o $@ $^ ../deps/libvalkey/lib/libvalkey.a ../deps/hdr_histogram/libhdrhistogram.a ../deps/fpconv/libfpconv.a $(FINAL_LIBS) $(TLS_CLIENT_LIBS)
+	$(SERVER_LD) -o $@ $^ ../deps/libvalkey/lib/libvalkey.a ../deps/hdr_histogram/libhdrhistogram.a ../deps/fpconv/libfpconv.a $(FINAL_LIBS) $(TLS_CLIENT_LIBS) $(RDMA_CLIENT_LIBS)
 
 DEP = $(ENGINE_SERVER_OBJ:%.o=%.d) $(ENGINE_CLI_OBJ:%.o=%.d) $(ENGINE_BENCHMARK_OBJ:%.o=%.d)
 -include $(DEP)

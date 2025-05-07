@@ -56,6 +56,9 @@
 #include <openssl/err.h>
 #include <valkey/tls.h>
 #endif
+#ifdef USE_RDMA
+#include <valkey/rdma.h>
+#endif
 #include "sds.h"
 #include "dict.h"
 #include "adlist.h"
@@ -216,6 +219,7 @@ static struct config {
     struct timeval connect_timeout;
     char *hostsocket;
     int tls;
+    int rdma;
     cliSSLconfig sslconfig;
     long repeat;
     long interval;
@@ -1638,7 +1642,7 @@ static int cliConnect(int flags) {
 
         /* Do not use hostsocket when we got redirected in cluster mode */
         if (config.hostsocket == NULL || (config.cluster_mode && config.cluster_reissue_command)) {
-            context = valkeyConnectWrapper(config.conn_info.hostip, config.conn_info.hostport, config.connect_timeout, 0);
+            context = valkeyConnectWrapper(config.conn_info.hostip, config.conn_info.hostport, config.connect_timeout, 0, config.rdma);
         } else {
             context = valkeyConnectUnixWrapper(config.hostsocket, config.connect_timeout, 0);
         }
@@ -2528,7 +2532,7 @@ static valkeyReply *reconnectingValkeyCommand(valkeyContext *c, const char *fmt,
             fflush(stdout);
 
             valkeyFree(c);
-            c = valkeyConnectWrapper(config.conn_info.hostip, config.conn_info.hostport, config.connect_timeout, 0);
+            c = valkeyConnectWrapper(config.conn_info.hostip, config.conn_info.hostport, config.connect_timeout, 0, config.rdma);
             if (!c->err && config.tls) {
                 const char *err = NULL;
                 if (cliSecureConnection(c, config.sslconfig, &err) == VALKEY_ERR && err) {
@@ -2823,6 +2827,14 @@ static int parseOptions(int argc, char **argv) {
             config.sslconfig.ciphersuites = argv[++i];
 #endif
 #endif
+#ifdef USE_RDMA
+        } else if (!strcmp(argv[i], "--rdma")) {
+            if (valkeyInitiateRdma() != VALKEY_OK) {
+                fprintf(stderr, "Failed to initialize RDMA support from libvalkey\n");
+                exit(1);
+            }
+            config.rdma = 1;
+#endif
         } else if (!strcmp(argv[i], "-v") || !strcmp(argv[i], "--version")) {
             sds version = cliVersion();
             printf("valkey-cli %s\n", version);
@@ -2946,6 +2958,12 @@ static void usage(int err) {
 #endif
 #endif
         "";
+    const char *rdma_usage =
+#ifdef USE_RDMA
+        "  --rdma             Establish a RDMA connection.\n"
+#endif
+        "";
+
 
     fprintf(target,
             "valkey-cli %s\n"
@@ -2986,6 +3004,7 @@ static void usage(int err) {
             "  -4                 Prefer IPv4 over IPv6 on DNS lookup.\n"
             "  -6                 Prefer IPv6 over IPv4 on DNS lookup.\n"
             "%s"
+            "%s"
             "  --raw              Use raw formatting for replies (default when STDOUT is\n"
             "                     not a tty).\n"
             "  --no-raw           Force formatted output even when STDOUT is not a tty.\n"
@@ -2996,7 +3015,7 @@ static void usage(int err) {
             "  --show-pushes <yn> Whether to print RESP3 PUSH messages.  Enabled by default when\n"
             "                     STDOUT is a tty but can be overridden with --show-pushes no.\n"
             "  --stat             Print rolling stats about server: mem, clients, ...\n",
-            version, tls_usage);
+            version, tls_usage, rdma_usage);
 
     fprintf(target,
             "  --latency          Enter a special mode continuously sampling latency.\n"
@@ -3970,7 +3989,7 @@ cleanup:
 
 static int clusterManagerNodeConnect(clusterManagerNode *node) {
     if (node->context) valkeyFree(node->context);
-    node->context = valkeyConnectWrapper(node->ip, node->port, config.connect_timeout, 0);
+    node->context = valkeyConnectWrapper(node->ip, node->port, config.connect_timeout, 0, config.rdma);
     if (!node->context->err && config.tls) {
         const char *err = NULL;
         if (cliSecureConnection(node->context, config.sslconfig, &err) == VALKEY_ERR && err) {
@@ -7712,7 +7731,7 @@ static int clusterManagerCommandImport(int argc, char **argv) {
     char *reply_err = NULL;
     valkeyReply *src_reply = NULL;
     // Connect to the source node.
-    valkeyContext *src_ctx = valkeyConnectWrapper(src_ip, src_port, config.connect_timeout, 0);
+    valkeyContext *src_ctx = valkeyConnectWrapper(src_ip, src_port, config.connect_timeout, 0, config.rdma);
     if (src_ctx->err) {
         success = 0;
         fprintf(stderr, "Could not connect to Valkey at %s:%d: %s.\n", src_ip, src_port, src_ctx->errstr);

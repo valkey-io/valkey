@@ -52,6 +52,10 @@ ifneq (,$(filter $(BUILD_TLS),yes module))
     LIBVALKEY_MAKE_FLAGS += USE_TLS=1
 endif
 
+ifneq (,$(filter $(BUILD_RDMA),yes module))
+    LIBVALKEY_MAKE_FLAGS += USE_RDMA=1
+endif
+
 libvalkey: .make-prerequisites
 	@printf '%b %b\n' $(MAKECOLOR)MAKE$(ENDCOLOR) $(BINCOLOR)$@$(ENDCOLOR)
 	cd libvalkey && $(MAKE) static $(LIBVALKEY_MAKE_FLAGS)

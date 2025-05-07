@@ -46,6 +46,9 @@
 #include <openssl/err.h>
 #include <valkey/tls.h>
 #endif
+#ifdef USE_RDMA
+#include <valkey/rdma.h>
+#endif
 
 #define UNUSED(V) ((void)V)
 
@@ -427,9 +430,15 @@ sds cliVersion(void) {
 }
 
 /* This is a wrapper to call valkeyConnect or valkeyConnectWithTimeout. */
-valkeyContext *valkeyConnectWrapper(const char *ip, int port, const struct timeval tv, int nonblock) {
+valkeyContext *valkeyConnectWrapper(const char *ip, int port, const struct timeval tv, int nonblock, int rdma) {
     valkeyOptions options = {0};
-    VALKEY_OPTIONS_SET_TCP(&options, ip, port);
+    if (rdma) {
+#ifdef USE_RDMA
+        VALKEY_OPTIONS_SET_RDMA(&options, ip, port);
+#endif
+    } else {
+        VALKEY_OPTIONS_SET_TCP(&options, ip, port);
+    }
 
     if (tv.tv_sec || tv.tv_usec) {
         options.connect_timeout = &tv;

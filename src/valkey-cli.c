@@ -2592,7 +2592,8 @@ static int parseOptions(int argc, char **argv) {
             config.connect_timeout.tv_sec = (long long)seconds;
             config.connect_timeout.tv_usec = ((long long)(seconds * 1000000)) % 1000000;
         } else if (!strcmp(argv[i], "-s") && !lastarg) {
-            config.conn_info.hostip = argv[++i];
+            sdsfree(config.conn_info.hostip);
+            config.conn_info.hostip = sdsnew(argv[++i]);
             config.ct = VALKEY_CONN_UNIX;
         } else if (!strcmp(argv[i], "-r") && !lastarg) {
             config.repeat = strtoll(argv[++i], NULL, 10);

@@ -1344,7 +1344,8 @@ int parseOptions(int argc, char **argv) {
             }
         } else if (!strcmp(argv[i], "-s")) {
             if (lastarg) goto invalid;
-            config.conn_info.hostip = strdup(argv[++i]);
+            sdsfree(config.conn_info.hostip);
+            config.conn_info.hostip = sdsnew(argv[++i]);
             config.ct = VALKEY_CONN_UNIX;
         } else if (!strcmp(argv[i], "-x")) {
             config.stdinarg = 1;

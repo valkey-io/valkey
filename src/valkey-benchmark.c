@@ -578,7 +578,9 @@ static void writeHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
     /* Initialize request when nothing was written. */
     if (c->written == 0) {
         /* Enforce upper bound to number of requests. */
-        int requests_issued = atomic_fetch_add_explicit(&config.requests_issued, config.pipeline, memory_order_relaxed);
+        int requests_issued = atomic_fetch_add_explicit(&config.requests_issued,
+                                                        config.pipeline * c->seqlen,
+                                                        memory_order_relaxed);
         if (requests_issued >= config.requests) {
             return;
         }

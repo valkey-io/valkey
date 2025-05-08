@@ -830,6 +830,7 @@ void delGenericCommand(client *c, int lazy) {
             notifyKeyspaceEvent(NOTIFY_GENERIC, "del", c->argv[j], c->db->id);
             server.dirty++;
             numdel++;
+            keyinfoUpdateEntryIfNeeded(c->argv[1], 0, KEYINFO_TYPE_MANY_ELEMENTS);
         }
     }
     addReplyLongLong(c, numdel);

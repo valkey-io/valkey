@@ -614,6 +614,7 @@ void saddCommand(client *c) {
     if (added) {
         signalModifiedKey(c, c->db, c->argv[1]);
         notifyKeyspaceEvent(NOTIFY_SET, "sadd", c->argv[1], c->db->id);
+        keyinfoUpdateEntryIfNeeded(c->argv[1], setTypeSize(set), KEYINFO_TYPE_MANY_ELEMENTS);
         server.dirty += added;
     }
     addReplyLongLong(c, added);
@@ -638,7 +639,12 @@ void sremCommand(client *c) {
     if (deleted) {
         signalModifiedKey(c, c->db, c->argv[1]);
         notifyKeyspaceEvent(NOTIFY_SET, "srem", c->argv[1], c->db->id);
-        if (keyremoved) notifyKeyspaceEvent(NOTIFY_GENERIC, "del", c->argv[1], c->db->id);
+        if (keyremoved) {
+            keyinfoUpdateEntryIfNeeded(c->argv[1], 0, KEYINFO_TYPE_MANY_ELEMENTS);
+            notifyKeyspaceEvent(NOTIFY_GENERIC, "del", c->argv[1], c->db->id);
+        } else {
+            keyinfoUpdateEntryIfNeeded(c->argv[1], setTypeSize(set), KEYINFO_TYPE_MANY_ELEMENTS);
+        }
         server.dirty += deleted;
     }
     addReplyLongLong(c, deleted);
@@ -787,6 +793,7 @@ void spopWithCountCommand(client *c) {
         robj *aux = server.lazyfree_lazy_server_del ? shared.unlink : shared.del;
         rewriteClientCommandVector(c, 2, aux, c->argv[1]);
         signalModifiedKey(c, c->db, c->argv[1]);
+        keyinfoUpdateEntryIfNeeded(c->argv[1], 0, KEYINFO_TYPE_MANY_ELEMENTS);
         return;
     }
 
@@ -945,6 +952,7 @@ void spopWithCountCommand(client *c) {
      * the alsoPropagate() API. */
     preventCommandPropagation(c);
     signalModifiedKey(c, c->db, c->argv[1]);
+    keyinfoUpdateEntryIfNeeded(c->argv[1], setTypeSize(set), KEYINFO_TYPE_MANY_ELEMENTS);
 }
 
 void spopCommand(client *c) {
@@ -974,6 +982,8 @@ void spopCommand(client *c) {
     /* Add the element to the reply */
     addReplyBulk(c, ele);
     decrRefCount(ele);
+
+    keyinfoUpdateEntryIfNeeded(c->argv[1], setTypeSize(set), KEYINFO_TYPE_MANY_ELEMENTS);
 
     /* Delete the set if it's empty */
     if (setTypeSize(set) == 0) {

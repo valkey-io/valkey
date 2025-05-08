@@ -163,6 +163,7 @@ void setGenericCommand(client *c,
 
     server.dirty++;
     notifyKeyspaceEvent(NOTIFY_STRING, "set", key, c->db->id);
+    keyinfoUpdateEntryIfNeeded(c->argv[1], stringObjectLen(val), KEYINFO_TYPE_MANY_ELEMENTS);
 
     if (expire) {
         /* Propagate as SET Key Value PXAT millisecond-timestamp if there is
@@ -646,6 +647,7 @@ void msetGenericCommand(client *c, int nx) {
         incrRefCount(val);
         c->argv[j + 1] = val;
         notifyKeyspaceEvent(NOTIFY_STRING, "set", c->argv[j], c->db->id);
+        keyinfoUpdateEntryIfNeeded(c->argv[j], stringObjectLen(val), KEYINFO_TYPE_MANY_ELEMENTS);
         /* In MSETNX, It could be that we're overriding the same key, we can't be sure it doesn't exist. */
         if (nx)
             setkey_flags = SETKEY_ADD_OR_UPDATE;
@@ -785,6 +787,7 @@ void appendCommand(client *c) {
     signalModifiedKey(c, c->db, c->argv[1]);
     notifyKeyspaceEvent(NOTIFY_STRING, "append", c->argv[1], c->db->id);
     server.dirty++;
+    keyinfoUpdateEntryIfNeeded(c->argv[1], totlen, KEYINFO_TYPE_MANY_ELEMENTS);
     addReplyLongLong(c, totlen);
 }
 

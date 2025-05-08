@@ -1,0 +1,62 @@
+{
+    "GET": {
+        "summary": "Returns the specified keyinfo entries.",
+        "complexity": "O(N) where N is the number of entries returned",
+        "group": "server",
+        "since": "8.1.0",
+        "arity": 4,
+        "container": "KEYINFO",
+        "function": "keyinfoCommand",
+        "command_flags": [
+            "ADMIN",
+            "LOADING",
+            "STALE"
+        ],
+        "command_tips": [
+            "REQUEST_POLICY:ALL_NODES",
+            "NONDETERMINISTIC_OUTPUT"
+        ],
+        "reply_schema": {
+            "type": "array",
+            "description": "Entries from the keyinfo.",
+            "uniqueItems": true,
+            "items": {
+                "type": "array",
+                "minItems": 4,
+                "maxItems": 4,
+                "items": [
+                    {
+                        "type": "integer",
+                        "description": "keyinfo entry ID."
+                    },
+                    {
+                        "type": "string",
+                        "description": "key name."
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Determined by the type parameter.",
+                        "minimum": 0
+                    },
+                    {
+                        "type": "integer",
+                        "description": "The unix timestamp at which the keyinfo was processed.",
+                        "minimum": 0
+                    }
+                ]
+            }
+        },
+        "arguments": [
+            {
+                "name": "count",
+                "type": "integer"
+            },
+            {
+                "name": "type",
+                "token": "many-elements",
+                "type": "pure-token"
+            }
+        ]
+    }
+}
+

@@ -1,0 +1,33 @@
+{
+    "LEN": {
+        "summary": "Returns the number of entries in the specified type of keyinfo.",
+        "complexity": "O(1)",
+        "group": "server",
+        "since": "8.1.0",
+        "arity": 3,
+        "container": "KEYINFO",
+        "function": "keyinfoCommand",
+        "command_flags": [
+            "ADMIN",
+            "LOADING",
+            "STALE"
+        ],
+        "command_tips": [
+            "REQUEST_POLICY:ALL_NODES",
+            "RESPONSE_POLICY:AGG_SUM",
+            "NONDETERMINISTIC_OUTPUT"
+        ],
+        "reply_schema": {
+            "type": "integer",
+            "description": "Number of entries in the keyinfo.",
+            "minimum": 0
+        },
+        "arguments": [
+            {
+                "name": "type",
+                "token": "many-elements",
+                "type": "pure-token"
+            }
+        ]
+    }
+}

@@ -3143,6 +3143,12 @@ static int applyClientMaxMemoryUsage(const char **err) {
     return 1;
 }
 
+int updateKeyinfoLargeNumElementsMaxLen(const char **err) {
+    UNUSED(err);
+    keyinfoResize(KEYINFO_TYPE_MANY_ELEMENTS);
+    return 1;
+}
+
 standardConfig static_configs[] = {
     /* Bool configs */
     createBoolConfig("rdbchecksum", NULL, IMMUTABLE_CONFIG, server.rdb_checksum, 1, NULL, NULL),
@@ -3327,6 +3333,8 @@ standardConfig static_configs[] = {
     createLongLongConfig("commandlog-execution-slower-than", "slowlog-log-slower-than", MODIFIABLE_CONFIG, -1, LLONG_MAX, server.commandlog[COMMANDLOG_TYPE_SLOW].threshold, 10000, INTEGER_CONFIG, NULL, NULL),
     createLongLongConfig("commandlog-request-larger-than", NULL, MODIFIABLE_CONFIG, -1, LLONG_MAX, server.commandlog[COMMANDLOG_TYPE_LARGE_REQUEST].threshold, 1024 * 1024, INTEGER_CONFIG, NULL, NULL),
     createLongLongConfig("commandlog-reply-larger-than", NULL, MODIFIABLE_CONFIG, -1, LLONG_MAX, server.commandlog[COMMANDLOG_TYPE_LARGE_REPLY].threshold, 1024 * 1024, INTEGER_CONFIG, NULL, NULL),
+    createLongLongConfig("keyinfo-num-elements-larger-than", NULL, MODIFIABLE_CONFIG, -1, LLONG_MAX, server.keyinfo[KEYINFO_TYPE_MANY_ELEMENTS].threshold, 1024, INTEGER_CONFIG, NULL, NULL),
+    createLongLongConfig("keyinfo-large-num-elements-max-len", NULL, MODIFIABLE_CONFIG, 0, LLONG_MAX, server.keyinfo[KEYINFO_TYPE_MANY_ELEMENTS].max_len, 128, INTEGER_CONFIG, NULL, updateKeyinfoLargeNumElementsMaxLen),
     createLongLongConfig("latency-monitor-threshold", NULL, MODIFIABLE_CONFIG, 0, LLONG_MAX, server.latency_monitor_threshold, 0, INTEGER_CONFIG, NULL, NULL),
     createLongLongConfig("proto-max-bulk-len", NULL, DEBUG_CONFIG | MODIFIABLE_CONFIG, 1024 * 1024, LONG_MAX, server.proto_max_bulk_len, 512ll * 1024 * 1024, MEMORY_CONFIG, NULL, NULL), /* Bulk request max size */
     createLongLongConfig("stream-node-max-entries", NULL, MODIFIABLE_CONFIG, 0, LLONG_MAX, server.stream_node_max_entries, 100, INTEGER_CONFIG, NULL, NULL),

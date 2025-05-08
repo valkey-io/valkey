@@ -479,6 +479,7 @@ void pushGenericCommand(client *c, int where, int xx) {
         listTypePush(lobj, c->argv[j], where);
         server.dirty++;
     }
+    keyinfoUpdateEntryIfNeeded(c->argv[1], listTypeLength(lobj), KEYINFO_TYPE_MANY_ELEMENTS);
 
     signalModifiedKey(c, c->db, c->argv[1]);
     char *event = (where == LIST_HEAD) ? "lpush" : "rpush";
@@ -549,6 +550,7 @@ void linsertCommand(client *c) {
         signalModifiedKey(c, c->db, c->argv[1]);
         notifyKeyspaceEvent(NOTIFY_LIST, "linsert", c->argv[1], c->db->id);
         server.dirty++;
+        keyinfoUpdateEntryIfNeeded(c->argv[1], listTypeLength(subject), KEYINFO_TYPE_MANY_ELEMENTS);
     } else {
         /* Notify client of a failed insert */
         addReplyLongLong(c, -1);
@@ -735,7 +737,9 @@ void listElementsRemoved(client *c, robj *key, int where, robj *o, long count, i
     char *event = (where == LIST_HEAD) ? "lpop" : "rpop";
 
     notifyKeyspaceEvent(NOTIFY_LIST, event, key, c->db->id);
-    if (listTypeLength(o) == 0) {
+    long llen = listTypeLength(o);
+    keyinfoUpdateEntryIfNeeded(c->argv[1], llen, KEYINFO_TYPE_MANY_ELEMENTS);
+    if (llen == 0) {
         if (deleted) *deleted = 1;
 
         dbDelete(c->db, key);
@@ -903,7 +907,9 @@ void ltrimCommand(client *c) {
     }
 
     notifyKeyspaceEvent(NOTIFY_LIST, "ltrim", c->argv[1], c->db->id);
-    if (listTypeLength(o) == 0) {
+    llen = listTypeLength(o);
+    keyinfoUpdateEntryIfNeeded(c->argv[1], llen, KEYINFO_TYPE_MANY_ELEMENTS);
+    if (llen == 0) {
         dbDelete(c->db, c->argv[1]);
         notifyKeyspaceEvent(NOTIFY_GENERIC, "del", c->argv[1], c->db->id);
     } else {
@@ -1054,7 +1060,9 @@ void lremCommand(client *c) {
 
     if (removed) {
         notifyKeyspaceEvent(NOTIFY_LIST, "lrem", c->argv[1], c->db->id);
-        if (listTypeLength(subject) == 0) {
+        long llen = listTypeLength(subject);
+        keyinfoUpdateEntryIfNeeded(c->argv[1], llen, KEYINFO_TYPE_MANY_ELEMENTS);
+        if (llen == 0) {
             dbDelete(c->db, c->argv[1]);
             notifyKeyspaceEvent(NOTIFY_GENERIC, "del", c->argv[1], c->db->id);
         } else {

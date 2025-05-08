@@ -340,7 +340,6 @@ endif
 
 ifeq ($(BUILD_RDMA),yes)
 	FINAL_CFLAGS+=-DUSE_RDMA=$(BUILD_YES) -DBUILD_RDMA_MODULE=$(BUILD_NO)
-	FINAL_LIBS += $(RDMA_LIBS)
 	FINAL_LIBS += ../deps/libvalkey/lib/libvalkey_rdma.a $(RDMA_LIBS)
 endif
 

@@ -1704,16 +1704,13 @@ void clusterNodeCleanupFailureReports(clusterNode *node) {
 
     listNode *ln;
     listIter li;
-    clusterNodeFailReport *fr;
     mstime_t maxtime = server.cluster_node_timeout * CLUSTER_FAIL_REPORT_VALIDITY_MULT;
-    mstime_t now = mstime();
+    const mstime_t now = mstime();
 
     listRewind(l, &li);
     while ((ln = listNext(&li)) != NULL) {
-        fr = ln->value;
-        if (now - fr->time > maxtime) {
-            listDelNode(l, ln);
-        } else if (!clusterNodeIsVotingPrimary(fr->node)) {
+        const clusterNodeFailReport *fr = ln->value;
+        if (now - fr->time > maxtime || !clusterNodeIsVotingPrimary(fr->node)) {
             listDelNode(l, ln);
         }
     }

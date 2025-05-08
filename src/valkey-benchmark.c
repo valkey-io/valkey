@@ -88,10 +88,9 @@ typedef enum readFromReplica {
 
 static struct config {
     aeEventLoop *el;
+    enum valkeyConnectionType ct;
     cliConnInfo conn_info;
-    const char *hostsocket;
     int tls;
-    int rdma;
     struct cliSSLconfig sslconfig;
     int numclients;
     _Atomic int liveclients;
@@ -198,8 +197,8 @@ static void freeBenchmarkThread(benchmarkThread *thread);
 static void freeBenchmarkThreads(void);
 static void *execBenchmarkThread(void *ptr);
 static clusterNode *createClusterNode(char *ip, int port);
-static serverConfig *getServerConfig(const char *ip, int port, const char *hostsocket, int rdma);
-static valkeyContext *getValkeyContext(const char *ip, int port, const char *hostsocket, int rdma);
+static serverConfig *getServerConfig(enum valkeyConnectionType ct, const char *ip_or_path, int port);
+static valkeyContext *getValkeyContext(enum valkeyConnectionType ct, const char *ip_or_path, int port);
 static void freeServerConfig(serverConfig *cfg);
 static int fetchClusterSlotsConfiguration(client c);
 static void updateClusterSlotsConfiguration(void);
@@ -245,21 +244,18 @@ static dictType dtype = {
     NULL               /* allow to expand */
 };
 
-static valkeyContext *getValkeyContext(const char *ip, int port, const char *hostsocket, int rdma) {
+static valkeyContext *getValkeyContext(enum valkeyConnectionType ct, const char *ip_or_path, int port) {
     valkeyContext *ctx = NULL;
     valkeyReply *reply = NULL;
     struct timeval tv = {0};
-    if (hostsocket == NULL)
-        ctx = valkeyConnectWrapper(ip, port, tv, 0, rdma);
-    else
-        ctx = valkeyConnectUnixWrapper(hostsocket, tv, 0);
+    ctx = valkeyConnectWrapper(ct, ip_or_path, port, tv, 0);
     if (ctx == NULL || ctx->err) {
         fprintf(stderr, "Could not connect to server at ");
         char *err = (ctx != NULL ? ctx->errstr : "");
-        if (hostsocket == NULL)
-            fprintf(stderr, "%s:%d: %s\n", ip, port, err);
+        if (ct != VALKEY_CONN_UNIX)
+            fprintf(stderr, "%s:%d: %s\n", ip_or_path, port, err);
         else
-            fprintf(stderr, "%s: %s\n", hostsocket, err);
+            fprintf(stderr, "%s: %s\n", ip_or_path, err);
         goto cleanup;
     }
     if (config.tls == 1) {
@@ -276,10 +272,10 @@ static valkeyContext *getValkeyContext(const char *ip, int port, const char *hos
         reply = valkeyCommand(ctx, "AUTH %s %s", config.conn_info.user, config.conn_info.auth);
     if (reply != NULL) {
         if (reply->type == VALKEY_REPLY_ERROR) {
-            if (hostsocket == NULL)
-                fprintf(stderr, "Node %s:%d replied with error:\n%s\n", ip, port, reply->str);
+            if (ct != VALKEY_CONN_UNIX)
+                fprintf(stderr, "Node %s:%d replied with error:\n%s\n", ip_or_path, port, reply->str);
             else
-                fprintf(stderr, "Node %s replied with error:\n%s\n", hostsocket, reply->str);
+                fprintf(stderr, "Node %s replied with error:\n%s\n", ip_or_path, reply->str);
             freeReplyObject(reply);
             valkeyFree(ctx);
             exit(1);
@@ -288,10 +284,10 @@ static valkeyContext *getValkeyContext(const char *ip, int port, const char *hos
         return ctx;
     }
     fprintf(stderr, "ERROR: failed to fetch reply from ");
-    if (hostsocket == NULL)
-        fprintf(stderr, "%s:%d\n", ip, port);
+    if (ct != VALKEY_CONN_UNIX)
+        fprintf(stderr, "%s:%d\n", ip_or_path, port);
     else
-        fprintf(stderr, "%s\n", hostsocket);
+        fprintf(stderr, "%s\n", ip_or_path);
 cleanup:
     freeReplyObject(reply);
     valkeyFree(ctx);
@@ -299,12 +295,12 @@ cleanup:
 }
 
 
-static serverConfig *getServerConfig(const char *ip, int port, const char *hostsocket, int rdma) {
+static serverConfig *getServerConfig(enum valkeyConnectionType ct, const char *ip_or_path, int port) {
     serverConfig *cfg = zcalloc(sizeof(*cfg));
     if (!cfg) return NULL;
     valkeyContext *c = NULL;
     valkeyReply *reply = NULL, *sub_reply = NULL;
-    c = getValkeyContext(ip, port, hostsocket, rdma);
+    c = getValkeyContext(ct, ip_or_path, port);
     if (c == NULL) {
         freeServerConfig(cfg);
         exit(1);
@@ -336,10 +332,10 @@ static serverConfig *getServerConfig(const char *ip, int port, const char *hosts
     return cfg;
 fail:
     if (reply && reply->type == VALKEY_REPLY_ERROR && !strncmp(reply->str, "NOAUTH", 6)) {
-        if (hostsocket == NULL)
-            fprintf(stderr, "Node %s:%d replied with error:\n%s\n", ip, port, reply->str);
+        if (ct != VALKEY_CONN_UNIX)
+            fprintf(stderr, "Node %s:%d replied with error:\n%s\n", ip_or_path, port, reply->str);
         else
-            fprintf(stderr, "Node %s replied with error:\n%s\n", hostsocket, reply->str);
+            fprintf(stderr, "Node %s replied with error:\n%s\n", ip_or_path, reply->str);
         abort_test = 1;
     }
     freeReplyObject(reply);
@@ -392,7 +388,7 @@ static void resetClient(client c) {
     aeEventLoop *el = CLIENT_GET_EVENTLOOP(c);
     aeDeleteFileEvent(el, c->context->fd, AE_WRITABLE);
     aeDeleteFileEvent(el, c->context->fd, AE_READABLE);
-    if (config.rdma) {
+    if (config.ct == VALKEY_CONN_RDMA) {
         writeHandler(el, c->context->fd, c, 0); /* RDMA context always writable, but it can't be invoked by AE_WRITABLE */
     } else {
         aeCreateFileEvent(el, c->context->fd, AE_WRITABLE, writeHandler, c);
@@ -651,36 +647,32 @@ static client createClient(char *cmd, size_t len, client from, int thread_id) {
 
     const char *ip = NULL;
     int port = 0;
-    int rdma = 0;
     struct timeval tv = {0};
     c->cluster_node = NULL;
-    if (config.hostsocket == NULL || is_cluster_client) {
-        if (!is_cluster_client) {
-            ip = config.conn_info.hostip;
-            port = config.conn_info.hostport;
-            rdma = config.rdma;
-        } else {
-            int node_idx = 0;
-            if (config.num_threads < config.cluster_node_count)
-                node_idx = config.liveclients % config.cluster_node_count;
-            else
-                node_idx = thread_id % config.cluster_node_count;
-            clusterNode *node = config.cluster_nodes[node_idx];
-            assert(node != NULL);
-            ip = (const char *)node->ip;
-            port = node->port;
-            c->cluster_node = node;
-        }
-        c->context = valkeyConnectWrapper(ip, port, tv, 1, rdma);
+
+    if (!is_cluster_client) {
+        ip = config.conn_info.hostip;
+        port = config.conn_info.hostport;
     } else {
-        c->context = valkeyConnectUnixWrapper(config.hostsocket, tv, 1);
+        int node_idx = 0;
+        if (config.num_threads < config.cluster_node_count)
+            node_idx = config.liveclients % config.cluster_node_count;
+        else
+            node_idx = thread_id % config.cluster_node_count;
+        clusterNode *node = config.cluster_nodes[node_idx];
+        assert(node != NULL);
+        ip = (const char *)node->ip;
+        port = node->port;
+        c->cluster_node = node;
     }
+
+    c->context = valkeyConnectWrapper(config.ct, ip, port, tv, 1);
     if (c->context->err) {
         fprintf(stderr, "Could not connect to server at ");
-        if (config.hostsocket == NULL || is_cluster_client)
+        if (config.ct != VALKEY_CONN_UNIX || is_cluster_client)
             fprintf(stderr, "%s:%d: %s\n", ip, port, c->context->errstr);
         else
-            fprintf(stderr, "%s: %s\n", config.hostsocket, c->context->errstr);
+            fprintf(stderr, "%s: %s\n", ip, c->context->errstr);
         exit(1);
     }
     if (config.tls == 1) {
@@ -830,7 +822,7 @@ static client createClient(char *cmd, size_t len, client from, int thread_id) {
         el = thread->el;
     }
     if (config.idlemode == 0) {
-        if (config.rdma) {
+        if (config.ct == VALKEY_CONN_RDMA) {
             writeHandler(el, c->context->fd, c, 0);
         } else {
             aeCreateFileEvent(el, c->context->fd, AE_WRITABLE, writeHandler, c);
@@ -1101,7 +1093,7 @@ static int fetchClusterConfiguration(void) {
     dict *nodes = NULL;
     const char *errmsg = "Failed to fetch cluster configuration";
     size_t i, j;
-    ctx = getValkeyContext(config.conn_info.hostip, config.conn_info.hostport, config.hostsocket, 0);
+    ctx = getValkeyContext(config.ct, config.conn_info.hostip, config.conn_info.hostport);
     if (ctx == NULL) {
         exit(1);
     }
@@ -1214,7 +1206,7 @@ static int fetchClusterSlotsConfiguration(client c) {
         assert(node->port);
         /* Use first node as entry point to connect to. */
         if (ctx == NULL) {
-            ctx = getValkeyContext(node->ip, node->port, NULL, 0);
+            ctx = getValkeyContext(config.ct, node->ip, node->port);
             if (!ctx) {
                 success = 0;
                 goto cleanup;
@@ -1352,7 +1344,8 @@ int parseOptions(int argc, char **argv) {
             }
         } else if (!strcmp(argv[i], "-s")) {
             if (lastarg) goto invalid;
-            config.hostsocket = strdup(argv[++i]);
+            config.conn_info.hostip = strdup(argv[++i]);
+            config.ct = VALKEY_CONN_UNIX;
         } else if (!strcmp(argv[i], "-x")) {
             config.stdinarg = 1;
         } else if (!strcmp(argv[i], "-a")) {
@@ -1494,7 +1487,7 @@ int parseOptions(int argc, char **argv) {
                 fprintf(stderr, "Failed to initialize RDMA support from libvalkey\n");
                 exit(1);
             }
-            config.rdma = 1;
+            config.ct = VALKEY_CONN_RDMA;
 #endif
         } else {
             /* Assume the user meant to provide an option when the arg starts
@@ -1735,6 +1728,7 @@ int main(int argc, char **argv) {
     signal(SIGPIPE, SIG_IGN);
 
     memset(&config.sslconfig, 0, sizeof(config.sslconfig));
+    config.ct = VALKEY_CONN_TCP;
     config.numclients = 50;
     config.requests = 100000;
     config.liveclients = 0;
@@ -1753,7 +1747,6 @@ int main(int argc, char **argv) {
     config.clients = listCreate();
     config.conn_info.hostip = sdsnew("127.0.0.1");
     config.conn_info.hostport = 6379;
-    config.hostsocket = NULL;
     config.tests = NULL;
     config.conn_info.input_dbnum = 0;
     config.stdinarg = 0;
@@ -1792,7 +1785,7 @@ int main(int argc, char **argv) {
 
         /* Fetch cluster configuration. */
         if (!fetchClusterConfiguration() || !config.cluster_nodes) {
-            if (!config.hostsocket) {
+            if (config.ct != VALKEY_CONN_UNIX) {
                 fprintf(stderr,
                         "Failed to fetch cluster configuration from "
                         "%s:%d\n",
@@ -1801,7 +1794,7 @@ int main(int argc, char **argv) {
                 fprintf(stderr,
                         "Failed to fetch cluster configuration from "
                         "%s\n",
-                        config.hostsocket);
+                        config.conn_info.hostip);
             }
             exit(1);
         }
@@ -1829,7 +1822,7 @@ int main(int argc, char **argv) {
             printf("Node %d(%s): ", i, node_type);
             if (node->name) printf("%s ", node->name);
             printf("%s:%d\n", node->ip, node->port);
-            node->redis_config = getServerConfig(node->ip, node->port, NULL, 0);
+            node->redis_config = getServerConfig(config.ct, node->ip, node->port);
             if (node->redis_config == NULL) {
                 fprintf(stderr, "WARNING: Could not fetch node CONFIG %s:%d\n", node->ip, node->port);
             }
@@ -1839,7 +1832,7 @@ int main(int argc, char **argv) {
          * by the user. */
         if (config.num_threads == 0) config.num_threads = config.cluster_node_count;
     } else {
-        config.redis_config = getServerConfig(config.conn_info.hostip, config.conn_info.hostport, config.hostsocket, config.rdma);
+        config.redis_config = getServerConfig(config.ct, config.conn_info.hostip, config.conn_info.hostport);
         if (config.redis_config == NULL) {
             fprintf(stderr, "WARNING: Could not fetch server CONFIG\n");
         }
@@ -2076,7 +2069,7 @@ int main(int argc, char **argv) {
         if (test_is_selected("fcall")) {
             char *script = generateFunctionScript(1, config.num_keys_in_fcall > 0);
 
-            valkeyContext *ctx = getValkeyContext(config.conn_info.hostip, config.conn_info.hostport, NULL, 0);
+            valkeyContext *ctx = getValkeyContext(config.ct, config.conn_info.hostip, config.conn_info.hostport);
             if (ctx == NULL) {
                 exit(1);
             }

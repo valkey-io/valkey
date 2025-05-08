@@ -215,11 +215,10 @@ static int createClusterManagerCommand(char *cmdname, int argc, char **argv);
 
 static valkeyContext *context;
 static struct config {
-    cliConnInfo conn_info;
+    enum valkeyConnectionType ct;
+    cliConnInfo conn_info; /* conn_info.hostip is used as unix socket path on ct == VALKEY_CONN_UNIX */
     struct timeval connect_timeout;
-    char *hostsocket;
     int tls;
-    int rdma;
     cliSSLconfig sslconfig;
     long repeat;
     long interval;
@@ -329,8 +328,8 @@ static void cliRefreshPrompt(void) {
     if (config.eval_ldb) return;
 
     sds prompt = sdsempty();
-    if (config.hostsocket != NULL) {
-        prompt = sdscatfmt(prompt, "valkey %s", config.hostsocket);
+    if (config.ct == VALKEY_CONN_UNIX) {
+        prompt = sdscatfmt(prompt, "valkey %s", config.conn_info.hostip);
     } else {
         char addr[256];
         formatAddr(addr, sizeof(addr), config.conn_info.hostip, config.conn_info.hostport);
@@ -1640,12 +1639,7 @@ static int cliConnect(int flags) {
             cliRefreshPrompt();
         }
 
-        /* Do not use hostsocket when we got redirected in cluster mode */
-        if (config.hostsocket == NULL || (config.cluster_mode && config.cluster_reissue_command)) {
-            context = valkeyConnectWrapper(config.conn_info.hostip, config.conn_info.hostport, config.connect_timeout, 0, config.rdma);
-        } else {
-            context = valkeyConnectUnixWrapper(config.hostsocket, config.connect_timeout, 0);
-        }
+        context = valkeyConnectWrapper(config.ct, config.conn_info.hostip, config.conn_info.hostport, config.connect_timeout, 0);
 
         if (!context->err && config.tls) {
             const char *err = NULL;
@@ -1660,10 +1654,10 @@ static int cliConnect(int flags) {
         if (context->err) {
             if (!(flags & CC_QUIET)) {
                 fprintf(stderr, "Could not connect to Valkey at ");
-                if (config.hostsocket == NULL || (config.cluster_mode && config.cluster_reissue_command)) {
+                if (config.ct != VALKEY_CONN_UNIX || (config.cluster_mode && config.cluster_reissue_command)) {
                     fprintf(stderr, "%s:%d: %s\n", config.conn_info.hostip, config.conn_info.hostport, context->errstr);
                 } else {
-                    fprintf(stderr, "%s: %s\n", config.hostsocket, context->errstr);
+                    fprintf(stderr, "%s: %s\n", config.conn_info.hostip, context->errstr);
                 }
             }
             valkeyFree(context);
@@ -2532,7 +2526,7 @@ static valkeyReply *reconnectingValkeyCommand(valkeyContext *c, const char *fmt,
             fflush(stdout);
 
             valkeyFree(c);
-            c = valkeyConnectWrapper(config.conn_info.hostip, config.conn_info.hostport, config.connect_timeout, 0, config.rdma);
+            c = valkeyConnectWrapper(config.ct, config.conn_info.hostip, config.conn_info.hostport, config.connect_timeout, 0);
             if (!c->err && config.tls) {
                 const char *err = NULL;
                 if (cliSecureConnection(c, config.sslconfig, &err) == VALKEY_ERR && err) {
@@ -2598,7 +2592,8 @@ static int parseOptions(int argc, char **argv) {
             config.connect_timeout.tv_sec = (long long)seconds;
             config.connect_timeout.tv_usec = ((long long)(seconds * 1000000)) % 1000000;
         } else if (!strcmp(argv[i], "-s") && !lastarg) {
-            config.hostsocket = argv[++i];
+            config.conn_info.hostip = argv[++i];
+            config.ct = VALKEY_CONN_UNIX;
         } else if (!strcmp(argv[i], "-r") && !lastarg) {
             config.repeat = strtoll(argv[++i], NULL, 10);
         } else if (!strcmp(argv[i], "-i") && !lastarg) {
@@ -2833,7 +2828,7 @@ static int parseOptions(int argc, char **argv) {
                 fprintf(stderr, "Failed to initialize RDMA support from libvalkey\n");
                 exit(1);
             }
-            config.rdma = 1;
+            config.ct = VALKEY_CONN_RDMA;
 #endif
         } else if (!strcmp(argv[i], "-v") || !strcmp(argv[i], "--version")) {
             sds version = cliVersion();
@@ -2876,7 +2871,7 @@ static int parseOptions(int argc, char **argv) {
         }
     }
 
-    if (config.hostsocket && config.cluster_mode) {
+    if (config.ct == VALKEY_CONN_UNIX && config.cluster_mode) {
         fprintf(stderr, "Options -c and -s are mutually exclusive.\n");
         exit(1);
     }
@@ -3989,7 +3984,7 @@ cleanup:
 
 static int clusterManagerNodeConnect(clusterManagerNode *node) {
     if (node->context) valkeyFree(node->context);
-    node->context = valkeyConnectWrapper(node->ip, node->port, config.connect_timeout, 0, config.rdma);
+    node->context = valkeyConnectWrapper(config.ct, node->ip, node->port, config.connect_timeout, 0);
     if (!node->context->err && config.tls) {
         const char *err = NULL;
         if (cliSecureConnection(node->context, config.sslconfig, &err) == VALKEY_ERR && err) {
@@ -7731,7 +7726,7 @@ static int clusterManagerCommandImport(int argc, char **argv) {
     char *reply_err = NULL;
     valkeyReply *src_reply = NULL;
     // Connect to the source node.
-    valkeyContext *src_ctx = valkeyConnectWrapper(src_ip, src_port, config.connect_timeout, 0, config.rdma);
+    valkeyContext *src_ctx = valkeyConnectWrapper(config.ct, src_ip, src_port, config.connect_timeout, 0);
     if (src_ctx->err) {
         success = 0;
         fprintf(stderr, "Could not connect to Valkey at %s:%d: %s.\n", src_ip, src_port, src_ctx->errstr);
@@ -9602,11 +9597,11 @@ int main(int argc, char **argv) {
     struct timeval tv;
 
     memset(&config.sslconfig, 0, sizeof(config.sslconfig));
+    config.ct = VALKEY_CONN_TCP;
     config.conn_info.hostip = sdsnew("127.0.0.1");
     config.conn_info.hostport = 6379;
     config.connect_timeout.tv_sec = 0;
     config.connect_timeout.tv_usec = 0;
-    config.hostsocket = NULL;
     config.repeat = 1;
     config.interval = 0;
     config.dbnum = 0;

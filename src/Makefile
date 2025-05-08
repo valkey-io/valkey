@@ -516,7 +516,7 @@ $(ENGINE_CHECK_AOF_NAME): $(SERVER_NAME)
 
 # valkey-tls.so
 $(TLS_MODULE_NAME): $(SERVER_NAME)
-	$(QUIET_CC)$(CC) -o $@ tls.c -shared -fPIC $(TLS_MODULE_CFLAGS) $(TLS_CLIENT_LIBS) $(RDMA_CLIENT_LIBS)
+	$(QUIET_CC)$(CC) -o $@ tls.c -shared -fPIC $(TLS_MODULE_CFLAGS) $(TLS_CLIENT_LIBS)
 
 # valkey-rdma.so
 $(RDMA_MODULE_NAME): $(SERVER_NAME)

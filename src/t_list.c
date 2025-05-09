@@ -453,6 +453,25 @@ void listTypeDelRange(robj *subject, long start, long count) {
     }
 }
 
+size_t getListKeyMemoryUsage(robj *lobj) {
+    size_t asize = 0, elesize = 0;
+    if (lobj->encoding == OBJ_ENCODING_QUICKLIST) {
+        quicklist *ql = lobj->ptr;
+        quicklistNode *node = ql->head;
+        asize = sizeof(*lobj) + sizeof(quicklist);
+        elesize += sizeof(quicklistNode) + zmalloc_size(node->entry);
+        node = node->next;
+        while (node) {
+            elesize += sizeof(quicklistNode) + zmalloc_size(node->entry);
+            node = node->next;
+        }
+        asize += elesize;
+    } else {
+        asize = sizeof(*lobj) + zmalloc_size(lobj->ptr);
+    }
+    return asize;
+}
+
 /*-----------------------------------------------------------------------------
  * List Commands
  *----------------------------------------------------------------------------*/
@@ -461,6 +480,7 @@ void listTypeDelRange(robj *subject, long start, long count) {
  * 'xx': push if key exists. */
 void pushGenericCommand(client *c, int where, int xx) {
     int j;
+    bool newkey = 0;
 
     robj *lobj = lookupKeyWrite(c->db, c->argv[1]);
     if (checkType(c, lobj, OBJ_LIST)) return;
@@ -469,16 +489,23 @@ void pushGenericCommand(client *c, int where, int xx) {
             addReply(c, shared.czero);
             return;
         }
-
+        newkey = 1;
         lobj = createListListpackObject();
         dbAdd(c->db, c->argv[1], &lobj);
+        c->db->lists_count++;
     }
 
     listTypeTryConversionAppend(lobj, c->argv, 2, c->argc - 1, NULL, NULL);
+    if (!newkey) {
+        c->db->lists_memory -= getListKeyMemoryUsage(lobj);
+    }
+
     for (j = 2; j < c->argc; j++) {
         listTypePush(lobj, c->argv[j], where);
         server.dirty++;
     }
+
+    c->db->lists_memory += getListKeyMemoryUsage(lobj);
 
     signalModifiedKey(c, c->db, c->argv[1]);
     char *event = (where == LIST_HEAD) ? "lpush" : "rpush";
@@ -533,6 +560,7 @@ void linsertCommand(client *c) {
      * to do the actual insert), so we assume this value can be inserted
      * and convert the listpack to a regular list if necessary. */
     listTypeTryConversionAppend(subject, c->argv, 4, 4, NULL, NULL);
+    size_t previous_memory = getListKeyMemoryUsage(subject);
 
     /* Seek pivot from head to tail */
     iter = listTypeInitIterator(subject, 0, LIST_TAIL);
@@ -549,6 +577,7 @@ void linsertCommand(client *c) {
         signalModifiedKey(c, c->db, c->argv[1]);
         notifyKeyspaceEvent(NOTIFY_LIST, "linsert", c->argv[1], c->db->id);
         server.dirty++;
+        c->db->lists_memory += getListKeyMemoryUsage(subject) - previous_memory;
     } else {
         /* Notify client of a failed insert */
         addReplyLongLong(c, -1);

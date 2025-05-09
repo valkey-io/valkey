@@ -2834,6 +2834,8 @@ void initServer(void) {
         server.db[j].watched_keys = dictCreate(&keylistDictType);
         server.db[j].id = j;
         server.db[j].avg_ttl = 0;
+        server.db[j].lists_count = 0;
+        server.db[j].lists_memory = 0;
     }
     evictionPoolAlloc(); /* Initialize the LRU keys pool. */
     /* Note that server.pubsub_channels was chosen to be a kvstore (with only one dict, which
@@ -5568,6 +5570,7 @@ dict *genInfoSectionDict(robj **argv, int argc, char **defaults, int *out_all, i
         "errorstats",
         "cluster",
         "keyspace",
+        "keystats",
         NULL,
     };
     if (!defaults) defaults = default_sections;
@@ -6221,6 +6224,15 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
             }
         }
     }
+
+    /* Key stats */
+    if (all_sections || (dictFind(section_dict, "keystats") != NULL)) {
+        if (sections++) info = sdscat(info, "\r\n");
+        info = sdscatprintf(info, "# Keystats\r\n");
+        info = sdscatprintf(info, "list_count:%lld\r\n", server.db[0].lists_count);
+        info = sdscatprintf(info, "list_tot_memory:%lld\r\n", server.db[0].lists_memory);
+    }
+
 
     /* Get info from modules.
      * Returned when the user asked for "everything", "modules", or a specific module section.

@@ -835,6 +835,8 @@ typedef struct serverDb {
     int id;                               /* Database ID */
     long long avg_ttl;                    /* Average TTL, just for stats */
     unsigned long expires_cursor;         /* Cursor of the active expire cycle. */
+    unsigned long long lists_count;
+    unsigned long long lists_memory;
 } serverDb;
 
 /* forward declaration for functions ctx */

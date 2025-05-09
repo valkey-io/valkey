@@ -108,7 +108,7 @@ tags {"benchmark network external:skip logreqres:skip"} {
         }
 
         test {benchmark: arbitrary command sequence} {
-            set cmd [valkeybenchmark $master_host $master_port "-n 3 -- incr foo ; 3 incr bar"]
+            set cmd [valkeybenchmark $master_host $master_port "-n 12 -- incr foo ; 3 incr bar"]
             common_bench_setup $cmd
             assert_equal 3 [r get foo]
             assert_equal 9 [r get bar]

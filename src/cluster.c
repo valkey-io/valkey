@@ -824,7 +824,7 @@ unsigned int countKeysInSlotForDb(unsigned int hashslot, serverDb *db) {
 unsigned int countKeysInSlot(unsigned int slot) {
     unsigned int result = 0;
     for (int i = 0; i < server.dbnum; i++) {
-        result += countKeysInSlotForDb(slot, server.db[i]);
+        result +=  server.db[i] ? countKeysInSlotForDb(slot, server.db[i]):0;
     }
     return result;
 }

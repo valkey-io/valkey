@@ -674,11 +674,7 @@ tags {"aof external:skip"} {
     }
 }
 
-# make sure the test infra won't use SELECT
-set old_singledb $::singledb
-set ::singledb 1
-
-tags {"aof cluster external:skip"} {
+tags {"aof cluster external:skip singledb"} {
     test {Test cluster slots / cluster shards in aof won't crash} {
         create_aof $aof_dirpath $aof_file {
             append_to_aof [formatCommand cluster slots]
@@ -735,5 +731,3 @@ tags {"aof cluster external:skip"} {
         clean_aof_persistence $aof_dirpath
     }
 }
-
-set ::singledb $old_singledb

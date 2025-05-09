@@ -4346,9 +4346,11 @@ int processCommand(client *c) {
     }
 
     /* Exec the command */
-    if (c->flag.multi && c->cmd->proc != execCommand && c->cmd->proc != discardCommand &&
-        c->cmd->proc != multiCommand && c->cmd->proc != watchCommand && c->cmd->proc != quitCommand &&
-        c->cmd->proc != resetCommand) {
+    if (c->flag.multi && c->cmd->proc == clientReplyCommand) {
+        addReplyError(c, "CLIENT REPLY not allowed during MULTI/EXEC transaction.");
+    } else if (c->flag.multi && c->cmd->proc != execCommand && c->cmd->proc != discardCommand &&
+               c->cmd->proc != multiCommand && c->cmd->proc != watchCommand && c->cmd->proc != quitCommand &&
+               c->cmd->proc != resetCommand) {
         queueMultiCommand(c, cmd_flags);
         addReply(c, shared.queued);
     } else {

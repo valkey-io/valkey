@@ -14,7 +14,13 @@ if (USE_TLS) # Module or no module
     message(STATUS "Building valkey_tls")
     set(ENABLE_TLS
         ON
-        CACHE BOOL "Should we test SSL connections")
+        CACHE BOOL "If TLS support should be compiled or not")
+endif ()
+if (USE_RDMA) # Module or no module
+    message(STATUS "Building valkey_rdma")
+    set(ENABLE_RDMA
+        ON
+        CACHE BOOL "If RDMA support should be compiled or not")
 endif ()
 # Let libvalkey use sds and dict provided by valkey.
 set(DICT_INCLUDE_DIR ${CMAKE_SOURCE_DIR}/src)
@@ -29,3 +35,4 @@ add_subdirectory(hdr_histogram)
 unset(BUILD_SHARED_LIBS CACHE)
 unset(DISABLE_TESTS CACHE)
 unset(ENABLE_TLS CACHE)
+unset(ENABLE_RDMA CACHE)

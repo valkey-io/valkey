@@ -57,6 +57,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#if HAVE_X86_SIMD
+#include <immintrin.h>
+#endif
 
 /* The default hashing function uses the SipHash implementation in siphash.c. */
 
@@ -669,6 +672,51 @@ static int expand(hashtable *ht, size_t size, int *malloc_failed) {
     return resize(ht, size, malloc_failed);
 }
 
+/* Checks if a candidate entry in a bucket matches the given key.
+ *
+ * This function examines a specific position in a bucket to determine if the
+ * entry at that position matches the provided key. If a match is found, it
+ * updates the position and table index pointers and returns 1. Otherwise,
+ * it returns 0. */
+static inline int checkCandidateInBucket(hashtable *ht, bucket *b, int pos, const void *key, int table, int *pos_in_bucket, int *table_index) {
+    /* It's a candidate. */
+    void *entry = b->entries[pos];
+    const void *elem_key = entryGetKey(ht, entry);
+    if (compareKeys(ht, key, elem_key) == 0) {
+        /* It's a match. */
+        assert(pos_in_bucket != NULL);
+        *pos_in_bucket = pos;
+        if (table_index) *table_index = table;
+        return 1;
+    }
+    return 0;
+}
+
+#if HAVE_X86_SIMD
+ATTRIBUTE_TARGET_SSE2
+static int findKeyInBucketSSE2(hashtable *ht, bucket *b, uint8_t h2, const void *key, int table, int *pos_in_bucket, int *table_index) {
+    /* Get the bucket's presence mask - indicates which positions are filled. */
+    BUCKET_BITS_TYPE presence_mask = b->presence & ((1 << ENTRIES_PER_BUCKET) - 1);
+    __m128i hash_vector = _mm_loadu_si128((__m128i *)b->hashes);
+    __m128i h2_vector = _mm_set1_epi8(h2);
+    /* Compare all hash values against the target hash simultaneously.
+     * The result is a vector of 16 bytes, where each byte is 0xFF if
+     * the corresponding hash matches the target hash, and 0x00 if it
+     * doesn't. */
+    __m128i result = _mm_cmpeq_epi8(hash_vector, h2_vector);
+    BUCKET_BITS_TYPE newmask = _mm_movemask_epi8(result);
+    /* Only consider positions that are both filled (presence) and match the hash (newmask). */
+    newmask &= presence_mask;
+    while (newmask > 0) {
+        int pos = __builtin_ctz(newmask);
+        if (checkCandidateInBucket(ht, b, pos, key, table, pos_in_bucket, table_index)) return 1;
+        /* Clear the processed bit and continue with next match. */
+        newmask &= ~(1 << pos);
+    }
+    return 0;
+}
+#endif
+
 /* Finds an entry matching the key. If a match is found, returns a pointer to
  * the bucket containing the matching entry and points 'pos_in_bucket' to the
  * index within the bucket. Returns NULL if no matching entry was found.
@@ -693,21 +741,16 @@ static bucket *findBucket(hashtable *ht, uint64_t hash, const void *key, int *po
         }
         bucket *b = &ht->tables[table][bucket_idx];
         do {
+#if HAVE_X86_SIMD
+            /* All x86-64 CPUs have SSE2. */
+            if (findKeyInBucketSSE2(ht, b, h2, key, table, pos_in_bucket, table_index)) return b;
+#else
             /* Find candidate entries with presence flag set and matching h2 hash. */
             for (int pos = 0; pos < numBucketPositions(b); pos++) {
-                if (isPositionFilled(b, pos) && b->hashes[pos] == h2) {
-                    /* It's a candidate. */
-                    void *entry = b->entries[pos];
-                    const void *elem_key = entryGetKey(ht, entry);
-                    if (compareKeys(ht, key, elem_key) == 0) {
-                        /* It's a match. */
-                        assert(pos_in_bucket != NULL);
-                        *pos_in_bucket = pos;
-                        if (table_index) *table_index = table;
-                        return b;
-                    }
-                }
+                if (isPositionFilled(b, pos) && b->hashes[pos] == h2 &&
+                    checkCandidateInBucket(ht, b, pos, key, table, pos_in_bucket, table_index)) return b;
             }
+#endif
             b = getChildBucket(b);
         } while (b != NULL);
     }

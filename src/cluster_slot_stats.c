@@ -9,6 +9,7 @@
 
 typedef enum {
     KEY_COUNT,
+    SLOT_MEMORY_USAGE,
     CPU_USEC,
     NETWORK_BYTES_IN,
     NETWORK_BYTES_OUT,
@@ -51,6 +52,7 @@ static uint64_t getSlotStat(int slot, slotStatType stat_type) {
     case CPU_USEC: slot_stat = server.cluster->slot_stats[slot].cpu_usec; break;
     case NETWORK_BYTES_IN: slot_stat = server.cluster->slot_stats[slot].network_bytes_in; break;
     case NETWORK_BYTES_OUT: slot_stat = server.cluster->slot_stats[slot].network_bytes_out; break;
+    case SLOT_MEMORY_USAGE:
     case SLOT_STAT_COUNT:
     case INVALID: serverPanic("Invalid slot stat type %d was found.", stat_type);
     }
@@ -95,9 +97,12 @@ static void addReplySlotStat(client *c, int slot) {
                              * and 1st index represents (map) usage statistics. */
     addReplyLongLong(c, slot);
     addReplyMapLen(c, (server.cluster_slot_stats_enabled) ? SLOT_STAT_COUNT
-                                                          : 1); /* Nested map representing slot usage statistics. */
+                                                          : 2); /* Nested map representing slot usage statistics. */
     addReplyBulkCString(c, "key-count");
     addReplyLongLong(c, countKeysInSlot(slot));
+
+    addReplyBulkCString(c, "memory-usage");
+    addReplyLongLong(c, server.cluster->myself->memory_usage[slot]);
 
     /* Any additional metrics aside from key-count come with a performance trade-off,
      * and are aggregated and returned based on its server config. */

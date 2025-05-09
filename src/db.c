@@ -770,6 +770,16 @@ void flushAllDataAndResetRDB(int flags) {
         rsiptr = rdbPopulateSaveInfo(&rsi);
         rdbSave(REPLICA_REQ_NONE, server.rdb_filename, rsiptr, RDBFLAGS_NONE);
     }
+    server.strings_count = 0;
+    server.strings_memory = 0;
+    server.lists_count = 0;
+    server.lists_memory = 0;
+    server.hashes_count = 0;
+    server.hashes_count = 0;
+    server.sets_count = 0;
+    server.sets_memory = 0;
+    server.zsets_memory = 0;
+    server.zsets_memory = 0;
 
 #if defined(USE_JEMALLOC)
     /* jemalloc 5 doesn't release pages back to the OS when there's no traffic.

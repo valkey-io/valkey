@@ -373,6 +373,7 @@ struct _clusterNode {
     list *fail_reports;                     /* List of nodes signaling this as failing */
     int is_node_healthy;                    /* Boolean indicating the cached node health.
                                                Update with updateAndCountChangedNodeHealth(). */
+    unsigned long long memory_usage[CLUSTER_SLOTS];
 };
 
 /* Struct used for storing slot statistics. */

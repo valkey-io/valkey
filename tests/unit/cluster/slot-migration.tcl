@@ -25,7 +25,11 @@ proc get_myself_primary_linkstate {srv_idx} {
 }
 
 proc get_port {instance_id} {
-    return [lindex [R $instance_id CONFIG GET port] 1]
+    if {$::tls} {
+        set port [lindex [R $instance_id CONFIG GET tls-port] 1]
+    } else {
+        set port [lindex [R $instance_id CONFIG GET port] 1]
+    }
 }
 
 proc wait_for_role {srv_idx role} {
@@ -570,7 +574,6 @@ start_cluster 3 3 {tags {external:skip cluster} } {
         set primary_id_src 0
         set primary_id_src_nodeid [R $primary_id_src CLUSTER MYID]    
         set primary_id_target 1
-        set primary_id_target_port [get_port $primary_id_target]
         set primary_id_target_nodeid [R $primary_id_target CLUSTER MYID]
 
         R $primary_id_src select 0
@@ -598,7 +601,6 @@ start_cluster 3 3 {tags {external:skip cluster} } {
         set primary_id_src 0
         set primary_id_src_nodeid [R $primary_id_src CLUSTER MYID]    
         set primary_id_target 1
-        set primary_id_target_port [get_port $primary_id_target]
         set primary_id_target_nodeid [R $primary_id_target CLUSTER MYID]
 
         R $primary_id_src select 0

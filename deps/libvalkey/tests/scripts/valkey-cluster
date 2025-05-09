@@ -1,0 +1,40 @@
+#!/bin/bash
+
+# Settings
+VALKEY_VERSION=${VALKEY_VERSION:-"7.2.5"}
+CLUSTER_HOST=${CLUSTER_HOST:-127.0.0.1}
+PORT=${PORT:-30000}
+TIMEOUT=${TIMEOUT:-2000}
+NODES=${NODES:-6}
+REPLICAS=${REPLICAS:-1}
+ADDITIONAL_OPTIONS=${ADDITIONAL_OPTIONS:-""}
+ADDITIONAL_CLI_OPTIONS=${ADDITIONAL_CLI_OPTIONS:-""}
+
+if [ "$1" == "start" ]; then
+    FIRST_PORT=${PORT}
+    HOSTS=""
+    for i in $(seq $NODES); do
+        echo "Starting valkey ${VALKEY_VERSION} on port $PORT..."
+        docker run --name valkey-${PORT} --net=host -d valkey/valkey:${VALKEY_VERSION} valkey-server --cluster-enabled yes --enable-debug-command yes --port ${PORT} --cluster-node-timeout ${TIMEOUT} ${ADDITIONAL_OPTIONS}
+        HOSTS="$HOSTS $CLUSTER_HOST:$PORT"
+        PORT=$((PORT+1))
+    done
+
+    sleep 20
+
+    echo 'yes' | docker run --name valkey-cli --net=host -i --rm valkey/valkey:${VALKEY_VERSION} valkey-cli -p ${FIRST_PORT} ${ADDITIONAL_CLI_OPTIONS} --cluster create ${HOSTS} --cluster-replicas ${REPLICAS}
+    exit 0
+fi
+
+if [ "$1" == "stop" ]; then
+    for i in $(seq $NODES); do
+        echo "Stopping valkey on port $PORT..."
+        docker rm -f valkey-${PORT} &> /dev/null
+        PORT=$((PORT+1))
+    done
+    exit 0
+fi
+
+echo "Usage: $0 [start|stop]"
+echo "start       -- Start Valkey Cluster instances."
+echo "stop        -- Stop Valkey Cluster instances."

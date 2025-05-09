@@ -1,0 +1,29 @@
+matrix:
+- name: Markdown
+  expect_match: false
+  apsell:
+    lang: en
+    d: en_US
+    ignore-case: true
+  dictionary:
+    wordlists:
+    - .github/wordlist.txt
+    output: wordlist.dic
+  pipeline:
+  - pyspelling.filters.markdown:
+      markdown_extensions:
+      - markdown.extensions.extra:
+  - pyspelling.filters.html:
+      comments: false
+      attributes:
+      - alt
+      ignores:
+      - ':matches(code, pre)'
+      - code
+      - pre
+      - blockquote
+      - img
+  sources:
+  - 'README.md'
+  - 'FAQ.md'
+  - 'docs/**'

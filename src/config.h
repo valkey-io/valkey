@@ -283,7 +283,7 @@ void setproctitle(const char *fmt, ...);
 #endif /* __aarch64__ && __APPLE__ */
 #endif /* CACHE_LINE_SIZE */
 
-#if (__i386 || __amd64 || __powerpc__) && __GNUC__
+#if (defined(__i386) || defined(__amd64) || defined(__powerpc__)) && defined(__GNUC__)
 #define GNUC_VERSION (__GNUC__ * 10000 + __GNUC_MINOR__ * 100 + __GNUC_PATCHLEVEL__)
 #if defined(__clang__)
 #define HAVE_ATOMIC
@@ -382,9 +382,11 @@ void setcpuaffinity(const char *cpulist);
 #endif
 
 #if HAVE_X86_SIMD
+#define ATTRIBUTE_TARGET_SSE2 __attribute__((target("sse2")))
 #define ATTRIBUTE_TARGET_AVX2 __attribute__((target("avx2")))
 #define ATTRIBUTE_TARGET_AVX512 __attribute__((target("avx512f,avx512bw,avx512vl")))
 #else
+#define ATTRIBUTE_TARGET_SSE2
 #define ATTRIBUTE_TARGET_AVX2
 #define ATTRIBUTE_TARGET_AVX512
 #endif

@@ -91,6 +91,7 @@ static struct config {
     enum valkeyConnectionType ct;
     cliConnInfo conn_info;
     int tls;
+    int mptcp;
     struct cliSSLconfig sslconfig;
     int numclients;
     _Atomic int liveclients;
@@ -248,7 +249,7 @@ static valkeyContext *getValkeyContext(enum valkeyConnectionType ct, const char 
     valkeyContext *ctx = NULL;
     valkeyReply *reply = NULL;
     struct timeval tv = {0};
-    ctx = valkeyConnectWrapper(ct, ip_or_path, port, tv, 0);
+    ctx = valkeyConnectWrapper(ct, ip_or_path, port, tv, 0, config.mptcp);
     if (ctx == NULL || ctx->err) {
         fprintf(stderr, "Could not connect to server at ");
         char *err = (ctx != NULL ? ctx->errstr : "");
@@ -666,7 +667,7 @@ static client createClient(char *cmd, size_t len, client from, int thread_id) {
         c->cluster_node = node;
     }
 
-    c->context = valkeyConnectWrapper(config.ct, ip, port, tv, 1);
+    c->context = valkeyConnectWrapper(config.ct, ip, port, tv, 1, config.mptcp);
     if (c->context->err) {
         fprintf(stderr, "Could not connect to server at ");
         if (config.ct != VALKEY_CONN_UNIX || is_cluster_client)
@@ -1490,6 +1491,8 @@ int parseOptions(int argc, char **argv) {
             }
             config.ct = VALKEY_CONN_RDMA;
 #endif
+        } else if (!strcmp(argv[i], "--mptcp")) {
+            config.mptcp = 1;
         } else {
             /* Assume the user meant to provide an option when the arg starts
              * with a dash. We're done otherwise and should use the remainder
@@ -1602,6 +1605,7 @@ usage:
         "                    the 'fcall' test. (default 1)\n",
         tls_usage,
         rdma_usage,
+        " --mptcp            Enable an MPTCP connection.\n"
         " --help             Output this help and exit.\n"
         " --version          Output version and exit.\n\n"
         "Examples:\n\n"
@@ -1779,6 +1783,11 @@ int main(int argc, char **argv) {
         cliSecureInit();
     }
 #endif
+
+    if (config.mptcp && (config.ct != VALKEY_CONN_TCP)) {
+        fprintf(stderr, "Options --mptcp is only supported by TCP\n");
+        exit(1);
+    }
 
     if (config.cluster_mode) {
         // We only include the slot placeholder {tag} if cluster mode is enabled

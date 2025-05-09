@@ -219,6 +219,7 @@ static struct config {
     cliConnInfo conn_info; /* conn_info.hostip is used as unix socket path on ct == VALKEY_CONN_UNIX */
     struct timeval connect_timeout;
     int tls;
+    int mptcp;
     cliSSLconfig sslconfig;
     long repeat;
     long interval;
@@ -1639,7 +1640,7 @@ static int cliConnect(int flags) {
             cliRefreshPrompt();
         }
 
-        context = valkeyConnectWrapper(config.ct, config.conn_info.hostip, config.conn_info.hostport, config.connect_timeout, 0);
+        context = valkeyConnectWrapper(config.ct, config.conn_info.hostip, config.conn_info.hostport, config.connect_timeout, 0, config.mptcp);
 
         if (!context->err && config.tls) {
             const char *err = NULL;
@@ -2526,7 +2527,7 @@ static valkeyReply *reconnectingValkeyCommand(valkeyContext *c, const char *fmt,
             fflush(stdout);
 
             valkeyFree(c);
-            c = valkeyConnectWrapper(config.ct, config.conn_info.hostip, config.conn_info.hostport, config.connect_timeout, 0);
+            c = valkeyConnectWrapper(config.ct, config.conn_info.hostip, config.conn_info.hostport, config.connect_timeout, 0, config.mptcp);
             if (!c->err && config.tls) {
                 const char *err = NULL;
                 if (cliSecureConnection(c, config.sslconfig, &err) == VALKEY_ERR && err) {
@@ -2831,6 +2832,8 @@ static int parseOptions(int argc, char **argv) {
             }
             config.ct = VALKEY_CONN_RDMA;
 #endif
+        } else if (!strcmp(argv[i], "--mptcp")) {
+            config.mptcp = 1;
         } else if (!strcmp(argv[i], "-v") || !strcmp(argv[i], "--version")) {
             sds version = cliVersion();
             printf("valkey-cli %s\n", version);
@@ -2907,6 +2910,11 @@ static int parseOptions(int argc, char **argv) {
 
     if (config.prefer_ipv4 && config.prefer_ipv6) {
         fprintf(stderr, "Options -4 and -6 are mutually exclusive.\n");
+        exit(1);
+    }
+
+    if (config.mptcp && (config.ct != VALKEY_CONN_TCP)) {
+        fprintf(stderr, "Options --mptcp is only supported by TCP.\n");
         exit(1);
     }
 
@@ -3001,6 +3009,7 @@ static void usage(int err) {
             "  -6                 Prefer IPv6 over IPv4 on DNS lookup.\n"
             "%s"
             "%s"
+            "  --mptcp            Enable an MPTCP connection.\n"
             "  --raw              Use raw formatting for replies (default when STDOUT is\n"
             "                     not a tty).\n"
             "  --no-raw           Force formatted output even when STDOUT is not a tty.\n"
@@ -3985,7 +3994,7 @@ cleanup:
 
 static int clusterManagerNodeConnect(clusterManagerNode *node) {
     if (node->context) valkeyFree(node->context);
-    node->context = valkeyConnectWrapper(config.ct, node->ip, node->port, config.connect_timeout, 0);
+    node->context = valkeyConnectWrapper(config.ct, node->ip, node->port, config.connect_timeout, 0, config.mptcp);
     if (!node->context->err && config.tls) {
         const char *err = NULL;
         if (cliSecureConnection(node->context, config.sslconfig, &err) == VALKEY_ERR && err) {
@@ -7727,7 +7736,7 @@ static int clusterManagerCommandImport(int argc, char **argv) {
     char *reply_err = NULL;
     valkeyReply *src_reply = NULL;
     // Connect to the source node.
-    valkeyContext *src_ctx = valkeyConnectWrapper(config.ct, src_ip, src_port, config.connect_timeout, 0);
+    valkeyContext *src_ctx = valkeyConnectWrapper(config.ct, src_ip, src_port, config.connect_timeout, 0, config.mptcp);
     if (src_ctx->err) {
         success = 0;
         fprintf(stderr, "Could not connect to Valkey at %s:%d: %s.\n", src_ip, src_port, src_ctx->errstr);

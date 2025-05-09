@@ -430,7 +430,7 @@ sds cliVersion(void) {
 }
 
 /* This is a wrapper to call valkeyConnect or valkeyConnectWithTimeout. */
-valkeyContext *valkeyConnectWrapper(enum valkeyConnectionType ct, const char *ip_or_path, int port, const struct timeval tv, int nonblock) {
+valkeyContext *valkeyConnectWrapper(enum valkeyConnectionType ct, const char *ip_or_path, int port, const struct timeval tv, int nonblock, int multipath) {
     valkeyOptions options = {0};
 
     switch (ct) {
@@ -460,6 +460,11 @@ valkeyContext *valkeyConnectWrapper(enum valkeyConnectionType ct, const char *ip
 
     if (nonblock) {
         options.options |= VALKEY_OPT_NONBLOCK;
+    }
+
+    if (multipath) {
+        assert(ct == VALKEY_CONN_TCP); /* caller should make sure multipath is available for TCP only */
+        options.options |= VALKEY_OPT_MPTCP;
     }
 
     return valkeyConnectWithOptions(&options);

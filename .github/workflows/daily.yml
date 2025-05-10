@@ -1343,7 +1343,7 @@ jobs:
       - test-macos-latest
       - test-macos-latest-sentinel
       - test-macos-latest-cluster
-      - build-macos
+      - build-old-macos-versions
       - test-freebsd
       - test-alpine-jemalloc
       - test-alpine-libc-malloc

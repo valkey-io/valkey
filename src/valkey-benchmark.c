@@ -1554,13 +1554,8 @@ usage:
 
 
     printf(
-<<<<<<< HEAD
-        "%s%s%s", /* Split to avoid strings longer than 4095 (-Woverlength-strings). */
-        "Usage: valkey-benchmark [OPTIONS] [--] [COMMAND ARGS...]\n\n"
-=======
         "%s%s%s%s", /* Split to avoid strings longer than 4095 (-Woverlength-strings). */
-        "Usage: valkey-benchmark [OPTIONS] [COMMAND ARGS...]\n\n"
->>>>>>> valkey/unstable
+        "Usage: valkey-benchmark [OPTIONS] [--] [COMMAND ARGS...]\n\n"
         "Options:\n"
         " -h <hostname>      Server hostname (default 127.0.0.1)\n"
         " -p <port>          Server port (default 6379)\n"

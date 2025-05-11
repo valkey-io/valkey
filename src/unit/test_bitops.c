@@ -10,6 +10,9 @@ extern long long popcountScalar(void *s, long count);
 #if HAVE_X86_SIMD
 extern long long popcountAVX2(void *s, long count);
 #endif
+#if defined(__aarch64__)
+extern long long popcountNEON(void *s, long count);
+#endif
 
 static long long bitcount(void *s, long count) {
     long long bits = 0;
@@ -39,6 +42,10 @@ static int test_case(const char *msg, int size) {
 #if HAVE_X86_SIMD
         long long ret_avx2 = popcountAVX2(buf, size);
         TEST_ASSERT_MESSAGE(msg, expect == ret_avx2);
+#endif
+#if defined(__aarch64__)
+        long long ret_neon = popcountNEON(buf, size);
+        TEST_ASSERT_MESSAGE(msg, expect == ret_neon);
 #endif
     }
 

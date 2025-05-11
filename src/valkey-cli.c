@@ -8745,7 +8745,6 @@ static int getDatabases(valkeyContext *ctx) {
         fprintf(stderr, "%s fails: %s, use default value %d instead\n",
                 config.cluster_mode ? cluster : standalone, reply->str, dbnum);
     } else {
-        assert(reply->type == (config.current_resp3 ? VALKEY_REPLY_MAP : VALKEY_REPLY_ARRAY));
         assert(reply->elements == 2);
         dbnum = atoi(reply->element[1]->str);
     }

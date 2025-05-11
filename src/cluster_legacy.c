@@ -6540,7 +6540,8 @@ unsigned int delKeysInSlot(unsigned int hashslot) {
     for (int i = 0; i < server.dbnum; i++) {
         kvstoreHashtableIterator *kvs_di = NULL;
         void *next;
-        serverDb *db = server.db[0];
+        serverDb *db = server.db[i];
+        if (db == NULL) continue;
         kvs_di = kvstoreGetHashtableIterator(db->keys, hashslot, HASHTABLE_ITER_SAFE);
         while (kvstoreHashtableIteratorNext(kvs_di, &next)) {
             robj *valkey = next;

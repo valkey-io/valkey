@@ -2750,6 +2750,15 @@ int dbHasNoKeys(int dbid) {
     return dbid < 0 || dbid >= server.dbnum || !server.db[dbid] || kvstoreSize(server.db[dbid]->keys) == 0;
 }
 
+bool dbsHaveNoKeys(void) {
+    for (int i = 0; i < server.dbnum; i++) {
+        if (server.db[i] && kvstoreSize(server.db[i]->keys) != 0) {
+            return false;
+        }
+    }
+    return true;
+}
+
 serverDb *createDatabase(int id) {
     int slot_count_bits = 0;
     int flags = KVSTORE_ALLOCATE_HASHTABLES_ON_DEMAND;

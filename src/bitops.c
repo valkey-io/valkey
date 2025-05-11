@@ -199,7 +199,8 @@ long long popcountScalar(void *s, long count) {
  */
 long long popcountNEON(void *s, long n) {
     long long t = 0;
-    uint8_t *p = (uint8_t *)s;;
+    uint8_t *p = (uint8_t *)s;
+    ;
     const uint8_t *e = p + n;
 
     /* Process 64-byte blocks using unrolled loop (4 x 16-byte vectors) */
@@ -216,7 +217,7 @@ long long popcountNEON(void *s, long n) {
         uint8x16_t s0 = vaddq_u8(s1, s2);
 
         /* Sum all bytes in the final vector */
-        uint16x8_t sc = vpaddlq_u8(s0);     // 16x u8 → 8x u16 (pairwise add)
+        uint16x8_t sc = vpaddlq_u8(s0); // 16x u8 -> 8x u16 (pairwise add)
         uint32_t t1 = vaddvq_u16(sc);
         t += t1;
     }
@@ -229,7 +230,7 @@ long long popcountNEON(void *s, long n) {
     /* Handle remaining bytes with scalar fallback */
     if (p < e) {
         size_t r = e - p;
-        t += popcountScalar((void*)p, r);
+        t += popcountScalar((void *)p, r);
     }
 
     return t;

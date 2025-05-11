@@ -246,7 +246,7 @@ long long serverPopcount(void *s, long count) {
         return popcountAVX2(s, count);
     }
 #endif
-#ifdef __ARM_NEON
+#ifdef __aarch64__
     if (count >= 16) {
         return popcountNEON(s, count);
     }

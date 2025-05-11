@@ -1554,9 +1554,20 @@ usage:
 
 
     printf(
-        "%s%s%s%s", /* Split to avoid strings longer than 4095 (-Woverlength-strings). */
+        "%s%s%s%s%s%s", /* Split to avoid strings longer than 4095 (-Woverlength-strings). */
         "Usage: valkey-benchmark [OPTIONS] [--] [COMMAND ARGS...]\n\n"
+        "Simulates sending commands using multiple clients. The utility provides a\n"
+        "default set of tests. You can run a subset of the tests using the -t option or\n"
+        "supply one or more custom commands on the command line.\n\n"
+        "To supply a multiple commands on the command line, separate them with ';'. You\n"
+        "can prefix a command in the sequence with a number N to repeat the command N\n"
+        "times. In command arguments, the following placeholders are substituted:\n\n"
+        " __rand_int__       Replaced with a zero-padded random integer in the range\n"
+        "                    selected using the -r option.\n"
+        " __data__           Replaced with data of the size specified by the -d option.\n"
+        "\n",
         "Options:\n"
+        "\n"
         " -h <hostname>      Server hostname (default 127.0.0.1)\n"
         " -p <port>          Server port (default 6379)\n"
         " -s <socket>        Server socket (overrides host and port)\n"
@@ -1585,7 +1596,8 @@ usage:
         "                    'yes' - sends read requests to replicas only.\n"
         "                    'all' - sends read requests to all nodes.\n"
         "                    Since write commands will not be accepted by replicas,\n"
-        "                    it is recommended to enable read from replicas only for read command tests.\n"
+        "                    it is recommended to enable read from replicas only for read\n"
+        "                    command tests.\n"
         " --enable-tracking  Send CLIENT TRACKING on before starting benchmark.\n"
         " -k <boolean>       1=keep alive 0=reconnect (default 1)\n"
         " -r <keyspacelen>   Use random keys for SET/GET/INCR, random values for SADD,\n"
@@ -1600,7 +1612,12 @@ usage:
         "                    use the same key.\n"
         " --sequential       Modifies the -r argument to replace the string __rand_int__\n"
         "                    with 12 digit numbers sequentially instead of randomly.\n"
-        " -P <numreq>        Pipeline <numreq> requests. Default 1 (no pipeline).\n"
+        " -P <numreq>        Pipeline <numreq> requests. That is, send multiple requests\n"
+        "                    before waiting for the replies. Default 1 (no pipeline).\n"
+        "                    When multiple commands are specified on the command line,\n"
+        "                    then the full command sequence counts as one and -P controls\n"
+        "                    the number of times the command sequence is sent in each\n"
+        "                    pipeline.\n",
         " -q                 Quiet. Just show query/sec values\n"
         " --precision        Number of decimal places to display in latency output (default 0)\n"
         " --csv              Output in CSV format\n"
@@ -1637,9 +1654,7 @@ usage:
         " Fill a list with 10000 random elements:\n"
         "   $ valkey-benchmark -r 10000 -n 10000 lpush mylist __rand_int__\n\n"
         " Run 20% SET and 80% GET commands (one SET and four GET):\n"
-        "   $ valkey-benchmark -- set aaa bbb ';' 4 get aaa\n\n"
-        " On user specified command lines __rand_int__ is replaced with a random integer\n"
-        " with a range of values selected by the -r option.\n");
+        "   $ valkey-benchmark -- set aaa bbb ';' 4 get aaa\n\n");
     exit(exit_status);
 }
 
@@ -1935,7 +1950,9 @@ int main(int argc, char **argv) {
                 cmd = NULL;
                 if (i == start) continue;
                 /* End of command. RESP-encode and append to sequence. */
-                len = valkeyFormatCommandArgv(&cmd, i - start, (const char **)sds_args + start, argvlen + start);
+                len = valkeyFormatCommandArgv(&cmd, i - start,
+                                              (const char **)sds_args + start,
+                                              argvlen + start);
                 for (int j = 0; j < repeat; j++) {
                     cmd_seq = sdscatlen(cmd_seq, cmd, len);
                 }

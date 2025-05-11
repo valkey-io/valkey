@@ -47,7 +47,6 @@ static int test_case(const char *msg, int size) {
         long long ret_neon = popcountNEON(buf, size);
         TEST_ASSERT_MESSAGE(msg, expect == ret_neon);
 #endif
-
     }
 
     return 0;

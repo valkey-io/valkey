@@ -193,10 +193,8 @@ long long popcountScalar(void *s, long count) {
 #if defined(__aarch64__)
 #include <arm_neon.h>
 
-/**
- *  SIMD version of popcount for ARM NEON.
- *  Processes data in 64-byte NEON batches, falls back to scalar for tail.
- */
+/*  SIMD version of popcount for ARM NEON.
+ *  Processes data in 64-byte NEON batches, falls back to scalar for tail. */
 long long popcountNEON(void *s, long n) {
     long long t = 0;
     uint8_t *p = (uint8_t *)s;

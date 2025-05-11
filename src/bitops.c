@@ -29,7 +29,7 @@
  */
 
 #include "server.h"
-#ifdef HAVE_AVX2
+#if HAVE_X86_SIMD
 /* Define __MM_MALLOC_H to prevent importing the memory aligned
  * allocation functions, which we don't use. */
 #define __MM_MALLOC_H
@@ -51,7 +51,7 @@ static const unsigned char bitsinbyte[256] = {
     5, 5, 6, 5, 6, 6, 7, 2, 3, 3, 4, 3, 4, 4, 5, 3, 4, 4, 5, 4, 5, 5, 6, 3, 4, 4, 5, 4, 5, 5, 6, 4, 5, 5, 6, 5, 6,
     6, 7, 3, 4, 4, 5, 4, 5, 5, 6, 4, 5, 5, 6, 5, 6, 6, 7, 4, 5, 5, 6, 5, 6, 6, 7, 5, 6, 6, 7, 6, 7, 7, 8};
 
-#ifdef HAVE_AVX2
+#if HAVE_X86_SIMD
 /* The SIMD version of popcount enhances performance through parallel lookup tables which is based on the following article:
  * https://arxiv.org/pdf/1611.07612 */
 ATTRIBUTE_TARGET_AVX2
@@ -260,7 +260,7 @@ long long popcountNEON_(void *s, long count) {
  * 'count' bytes. The implementation of this function is required to
  * work with an input string length up to 512 MB or more (server.proto_max_bulk_len) */
 long long serverPopcount(void *s, long count) {
-#ifdef HAVE_AVX2
+#if HAVE_X86_SIMD
     /* If length of s >= 256 bits and the CPU supports AVX2,
      * we prefer to use the SIMD version */
     if (count >= 32) {
@@ -597,7 +597,7 @@ void printBits(unsigned char *p, unsigned long count) {
 int getBitOffsetFromArgument(client *c, robj *o, uint64_t *offset, int hash, int bits) {
     long long loffset;
     char *err = "bit offset is not an integer or out of range";
-    char *p = o->ptr;
+    sds p = o->ptr;
     size_t plen = sdslen(p);
     int usehash = 0;
 
@@ -630,7 +630,8 @@ int getBitOffsetFromArgument(client *c, robj *o, uint64_t *offset, int hash, int
  *
  * On error C_ERR is returned and an error is sent to the client. */
 int getBitfieldTypeFromArgument(client *c, robj *o, int *sign, int *bits) {
-    char *p = o->ptr;
+    sds p = o->ptr;
+    size_t plen = sdslen(p);
     char *err = "Invalid bitfield type. Use something like i16 u8. Note that u64 is not supported but i64 is.";
     long long llbits;
 
@@ -643,7 +644,7 @@ int getBitfieldTypeFromArgument(client *c, robj *o, int *sign, int *bits) {
         return C_ERR;
     }
 
-    if ((string2ll(p + 1, strlen(p + 1), &llbits)) == 0 || llbits < 1 || (*sign == 1 && llbits > 64) ||
+    if ((string2ll(p + 1, plen - 1, &llbits)) == 0 || llbits < 1 || (*sign == 1 && llbits > 64) ||
         (*sign == 0 && llbits > 63)) {
         addReplyError(c, err);
         return C_ERR;
@@ -1328,6 +1329,7 @@ void bitfieldGeneric(client *c, int flags) {
         }
     }
 
+    initDeferredReplyBuffer(c);
     addReplyArrayLen(c, numops);
 
     /* Actually process the operations. */
@@ -1439,6 +1441,7 @@ void bitfieldGeneric(client *c, int flags) {
         notifyKeyspaceEvent(NOTIFY_STRING, "setbit", c->argv[1], c->db->id);
         server.dirty += changes;
     }
+    commitDeferredReplyBuffer(c, 1);
     zfree(ops);
 }
 

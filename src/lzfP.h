@@ -133,6 +133,11 @@
  * not being able to store offset above UINT32_MAX in 64bit. */
 #define LZF_USE_OFFSETS 0
 
+/* Use assembly "rep movsb". Small win on amd, big loss on intel. */
+#ifndef USE_REP_MOVSB
+# define USE_REP_MOVSB 0
+#endif
+
 /*****************************************************************************/
 /* nothing should be changed below */
 

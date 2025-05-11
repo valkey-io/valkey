@@ -48,10 +48,10 @@ target_link_libraries(
     fpconv
     lualib
     hdr_histogram
-    hiredis
+    valkey::valkey
     ${VALKEY_SERVER_LDFLAGS})
 
 if (USE_TLS)
     # Add required libraries needed for TLS
-    target_link_libraries(valkey-unit-tests OpenSSL::SSL hiredis_ssl)
+    target_link_libraries(valkey-unit-tests OpenSSL::SSL valkey::valkey_tls)
 endif ()

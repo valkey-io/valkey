@@ -7,7 +7,7 @@
 #include "../zmalloc.h"
 
 extern long long popcountScalar(void *s, long count);
-#ifdef HAVE_AVX2
+#if HAVE_X86_SIMD
 extern long long popcountAVX2(void *s, long count);
 #endif
 
@@ -36,7 +36,7 @@ static int test_case(const char *msg, int size) {
         long long expect = bitcount(buf, size);
         long long ret_scalar = popcountScalar(buf, size);
         TEST_ASSERT_MESSAGE(msg, expect == ret_scalar);
-#ifdef HAVE_AVX2
+#if HAVE_X86_SIMD
         long long ret_avx2 = popcountAVX2(buf, size);
         TEST_ASSERT_MESSAGE(msg, expect == ret_avx2);
 #endif

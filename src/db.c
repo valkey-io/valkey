@@ -651,7 +651,7 @@ long long emptyData(int dbnum, int flags, void(callback)(hashtable *)) {
     return removed;
 }
 
-/* Discard tempDb, it's always async. */
+/* Empty and release all databases in the temp db array and set them to NULL. */
 void discardTempDb(serverDb **tempDb) {
     /* Release temp DBs. */
     emptyDbStructure(tempDb, -1, 1, NULL);

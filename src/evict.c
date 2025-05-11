@@ -570,7 +570,6 @@ int performEvictions(void) {
                 for (i = 0; i < server.dbnum; i++) {
                     db = server.db[i];
                     if (db == NULL) continue;
-                    ;
                     kvstore *kvs;
                     if (server.maxmemory_policy & MAXMEMORY_FLAG_ALLKEYS) {
                         kvs = db->keys;

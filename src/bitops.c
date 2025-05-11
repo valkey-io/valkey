@@ -35,7 +35,7 @@
 #define __MM_MALLOC_H
 #include <immintrin.h>
 #endif
-#ifdef __ARM_NEON
+#if defined(__aarch64__)
 #include <arm_neon.h>
 #endif
 /* -----------------------------------------------------------------------------
@@ -190,8 +190,7 @@ long long popcountScalar(void *s, long count) {
     return bits;
 }
 
-#ifdef __ARM_NEON
-
+#if defined(__aarch64__)
 #include <arm_neon.h>
 
 /**
@@ -234,25 +233,6 @@ long long popcountNEON(void *s, long n) {
     }
 
     return t;
-}
-
-
-long long popcountNEON_(void *s, long count) {
-    uint8_t *ptr = (uint8_t *)s;
-    long long total = 0;
-    long i = 0;
-
-    /* Process 16 bytes at a time using NEON */
-    for (; i + 16 <= count; i += 16) {
-        uint8x16_t vec = vld1q_u8(ptr + i);  // Load 16 bytes
-        uint8x16_t popcnt = vcntq_u8(vec);   // Count bits per byte
-        total += vaddvq_u8(popcnt);          // Sum across vector
-    }
-
-    /* Process remaining bytes (scalar fallback) */
-    total += popcountScalar(ptr+i,count-i);
-
-    return total;
 }
 #endif
 

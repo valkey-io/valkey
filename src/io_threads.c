@@ -24,6 +24,7 @@ typedef struct IOJobQueue {
     _Atomic size_t tail __attribute__((aligned(CACHE_LINE_SIZE))); /* Next read index for consumer  (IO-thread) */
 } IOJobQueue;
 IOJobQueue io_jobs[IO_THREADS_MAX_NUM] = {0};
+_Atomic long long io_thread_active_cpu_time_us[IO_THREADS_MAX_NUM] = {0};
 
 /* Initialize the job queue with a specified number of items. */
 static void IOJobQueue_init(IOJobQueue *jq, size_t item_count) {
@@ -239,6 +240,8 @@ static void *IOThreadMain(void *myid) {
             pthread_mutex_unlock(&io_threads_mutex[id]);
             continue;
         }
+        struct timespec work_start_time, work_end_time;
+        clock_gettime(CLOCK_THREAD_CPUTIME_ID, &work_start_time);
 
         for (size_t j = 0; j < jobs_to_process; j++) {
             job_handler handler;
@@ -250,6 +253,10 @@ static void *IOThreadMain(void *myid) {
             /* Remove the job after it was processed */
             IOJobQueue_removeJob(jq);
         }
+        clock_gettime(CLOCK_THREAD_CPUTIME_ID, &work_end_time);
+        long long elapsed_us = (work_end_time.tv_sec - work_start_time.tv_sec) * 1000000LL +
+                               (work_end_time.tv_nsec - work_start_time.tv_nsec) / 1000L;
+        atomic_fetch_add_explicit(&io_thread_active_cpu_time_us[id], elapsed_us, memory_order_relaxed);
         /* Memory barrier to make sure the main thread sees the updated tail index.
          * We do it once per loop and not per tail-update for optimization reasons.
          * As the main-thread main concern is to check if the queue is empty, it's enough to do it once at the end. */
@@ -257,6 +264,10 @@ static void *IOThreadMain(void *myid) {
     }
     freeSharedQueryBuf();
     return NULL;
+}
+
+double getIOThreadActiveTimeMilliseconds(int id) {
+    return (double)atomic_load_explicit(&io_thread_active_cpu_time_us[id], memory_order_relaxed)/1000.0;
 }
 
 #define IO_JOB_QUEUE_SIZE 2048

@@ -14,5 +14,6 @@ void adjustIOThreadsByEventLoad(int numevents, int increase_only);
 void drainIOThreadsQueue(void);
 void trySendPollJobToIOThreads(void);
 int trySendAcceptToIOThreads(connection *conn);
+double getIOThreadActiveTimeMilliseconds(int id);
 
 #endif /* IO_THREADS_H */

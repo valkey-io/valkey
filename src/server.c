@@ -6014,6 +6014,10 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                 "eventloop_duration_cmd_sum:%llu\r\n", server.duration_stats[EL_DURATION_TYPE_CMD].sum,
                 "instantaneous_eventloop_cycles_per_sec:%llu\r\n", getInstantaneousMetric(STATS_METRIC_EL_CYCLE),
                 "instantaneous_eventloop_duration_usec:%llu\r\n", getInstantaneousMetric(STATS_METRIC_EL_DURATION)));
+        /* Print active usage metrics for the top 4 IO threads. */
+        for (int i=0; i<5; i++) {
+            info = sdscatprintf(info, "io_thread_active_usage_ms_%d:%.3f\r\n", i, getIOThreadActiveTimeMilliseconds(i));
+        }
         info = genValkeyInfoStringACLStats(info);
     }
 

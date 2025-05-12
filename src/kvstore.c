@@ -94,7 +94,8 @@ typedef struct {
 /*** Helpers **********************/
 /**********************************/
 
-/* Get the hash table pointer based on hashtable-index. */
+/* Get the hash table pointer based on hashtable-index.
+ * May be NULL if no keys have been added. */
 hashtable *kvstoreGetHashtable(kvstore *kvs, int didx) {
     return kvs->hashtables[didx];
 }

@@ -66,25 +66,6 @@ typedef struct dictType {
     /* Allow a dict to carry extra caller-defined metadata. The
      * extra memory is initialized to 0 when a dict is allocated. */
     size_t (*dictMetadataBytes)(dict *d);
-    /* Method for copying a given key into a buffer of buf_len. Also used for
-     * computing the length of the key + header when buf is NULL. */
-    size_t (*embedKey)(unsigned char *buf, size_t buf_len, const void *key, unsigned char *header_size);
-
-    /* Flags */
-    /* The 'no_value' flag, if set, indicates that values are not used, i.e. the
-     * dict is a set. When this flag is set, it's not possible to access the
-     * value of a dictEntry and it's also impossible to use dictSetKey(). Entry
-     * metadata can also not be used. */
-    unsigned int no_value : 1;
-    /* If no_value = 1 and all keys are odd (LSB=1), setting keys_are_odd = 1
-     * enables one more optimization: to store a key without an allocated
-     * dictEntry. */
-    unsigned int keys_are_odd : 1;
-    /* If embedded_entry flag is set, it indicates that a copy of the key is created and the key is embedded
-     * as part of the dict entry. */
-    unsigned int embedded_entry : 1;
-    /* Perform rehashing during resizing instead of incrementally rehashing across multiple steps */
-    unsigned int no_incremental_rehash : 1;
 } dictType;
 
 #define DICTHT_SIZE(exp) ((exp) == -1 ? 0 : (unsigned long)1 << (exp))
@@ -118,25 +99,13 @@ typedef struct dictIterator {
     unsigned long long fingerprint;
 } dictIterator;
 
-typedef struct dictStats {
-    int htidx;
-    unsigned long buckets;
-    unsigned long maxChainLen;
-    unsigned long totalChainLen;
-    unsigned long htSize;
-    unsigned long htUsed;
-    unsigned long *clvector;
-} dictStats;
-
 typedef void(dictScanFunction)(void *privdata, const dictEntry *de);
 typedef void *(dictDefragAllocFunction)(void *ptr);
 typedef void(dictDefragEntryCb)(void *privdata, void *ptr);
 typedef struct {
-    dictDefragAllocFunction *defragAlloc;   /* Used for entries etc. */
-    dictDefragAllocFunction *defragKey;     /* Defrag-realloc keys (optional) */
-    dictDefragAllocFunction *defragVal;     /* Defrag-realloc values (optional) */
-    dictDefragEntryCb *defragEntryStartCb;  /* Callback invoked prior to the start of defrag of dictEntry. */
-    dictDefragEntryCb *defragEntryFinishCb; /* Callback invoked after the defrag of dictEntry is tried. */
+    dictDefragAllocFunction *defragAlloc; /* Used for entries etc. */
+    dictDefragAllocFunction *defragKey;   /* Defrag-realloc keys (optional) */
+    dictDefragAllocFunction *defragVal;   /* Defrag-realloc values (optional) */
 } dictDefragFunctions;
 
 /* This is the initial size of every hash table */
@@ -193,8 +162,6 @@ int dictReplace(dict *d, void *key, void *val);
 int dictDelete(dict *d, const void *key);
 dictEntry *dictUnlink(dict *d, const void *key);
 void dictFreeUnlinkedEntry(dict *d, dictEntry *he);
-dictEntry *dictTwoPhaseUnlinkFind(dict *d, const void *key, dictEntry ***plink, int *table_index);
-void dictTwoPhaseUnlinkFree(dict *d, dictEntry *he, dictEntry **plink, int table_index);
 void dictRelease(dict *d);
 dictEntry *dictFind(dict *d, const void *key);
 void *dictFetchValue(dict *d, const void *key);
@@ -241,10 +208,5 @@ unsigned long
 dictScanDefrag(dict *d, unsigned long v, dictScanFunction *fn, const dictDefragFunctions *defragfns, void *privdata);
 uint64_t dictGetHash(dict *d, const void *key);
 void dictRehashingInfo(dict *d, unsigned long long *from_size, unsigned long long *to_size);
-
-size_t dictGetStatsMsg(char *buf, size_t bufsize, dictStats *stats, int full);
-dictStats *dictGetStatsHt(dict *d, int htidx, int full);
-void dictCombineStats(dictStats *from, dictStats *into);
-void dictFreeStats(dictStats *stats);
 
 #endif /* __DICT_H */

@@ -1,0 +1,25 @@
+BasedOnStyle: LLVM
+ColumnLimit: 0
+IndentWidth: 4
+BreakBeforeTernaryOperators: false
+ReflowComments: false
+AllowAllArgumentsOnNextLine: true
+AlignTrailingComments: Always
+IncludeBlocks: Regroup
+IncludeCategories:
+  # Headers that must always be first since they define macros that affect the
+  # other includes are listed with priority = -1
+  - Regex: '^"(fmacros|win32).h"'
+    Priority: -1
+  - Regex: '^"'
+    Priority: 1
+  - Regex: '^<(sds|dict).h>'
+    Priority: 2
+  - Regex: '^<valkey/adapters/'
+    Priority: 3
+  - Regex: '^<valkey/'
+    Priority: 2
+  - Regex: '^<'
+    Priority: 4
+  - Regex: '.*'
+    Priority: 5

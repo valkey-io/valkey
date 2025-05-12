@@ -34,7 +34,10 @@
 #include "adlist.h"
 #include "io_threads.h"
 
-#if (USE_OPENSSL == 1 /* BUILD_YES */) || ((USE_OPENSSL == 2 /* BUILD_MODULE */) && (BUILD_TLS_MODULE == 2))
+#if defined(USE_OPENSSL) &&                    \
+    ((USE_OPENSSL == 1 /* BUILD_YES */) ||     \
+     ((USE_OPENSSL == 2 /* BUILD_MODULE */) && \
+      (defined(BUILD_TLS_MODULE) && BUILD_TLS_MODULE == 2)))
 
 #include <openssl/conf.h>
 #include <openssl/ssl.h>
@@ -1227,7 +1230,7 @@ int RedisRegisterConnectionTypeTLS(void) {
 
 #endif
 
-#if BUILD_TLS_MODULE == 2 /* BUILD_MODULE */
+#if defined(BUILD_TLS_MODULE) && BUILD_TLS_MODULE == 2 /* BUILD_MODULE */
 
 #include "release.h"
 

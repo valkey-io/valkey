@@ -623,6 +623,14 @@ start_server {tags {"geo"}} {
         assert_equal {{146, Elizabeth Street, Koreatown, Sydney, Sydney CBD, Sydney, Council of the City of Sydney, New South Wales, 2000, Australia} {St James, Archibald Fountain Plaza/Area, Koreatown, Sydney, Sydney CBD, Sydney, Council of the City of Sydney, New South Wales, 2000, Australia} {Kings Cross Centre, 82-94, Darlinghurst Road, Potts Point, Sydney, Council of the City of Sydney, New South Wales, 2011, Australia}} [r GEOSEARCH points BYPOLYGON  5 151.2154285314146 -33.867438205607186 151.20024487595015 -33.88138572784347 151.2374118848648 -33.87601765283626 151.19695829592922 -33.87272872054441 151.2278336546125 -33.88345323146266]
     }
 
+    test {GEOSEARCH with exact zero distances} {
+        r del points
+        # These are full precision coordinates, so the distance should 0.0000
+        r geoadd points -122.40710645914077759 37.79430076631935975 position
+        assert_equal {{position 0.0000}} [r GEOSEARCH points FROMMEMBER position BYRADIUS 0 mi ASC WITHDIST]
+        assert_equal {{position 0.0000}} [r GEOSEARCH points FROMLONLAT -122.40710645914077759 37.79430076631935975 BYRADIUS 0 mi ASC WITHDIST]
+    }
+
     foreach {type} {byradius bybox} {
     test "GEOSEARCH fuzzy test - $type" {
         if {$::accurate} { set attempt 300 } else { set attempt 30 }

@@ -1098,7 +1098,7 @@ void serverLogObjectDebugInfo(const robj *o) {
     serverLog(LL_WARNING, "Object type: %u", o->type);
     serverLog(LL_WARNING, "Object encoding: %u", o->encoding);
     serverLog(LL_WARNING, "Object refcount: %d", o->refcount);
-#if UNSAFE_CRASH_REPORT
+#if defined(UNSAFE_CRASH_REPORT) && UNSAFE_CRASH_REPORT
     /* This code is now disabled. o->ptr may be unreliable to print. in some
      * cases a ziplist could have already been freed by realloc, but not yet
      * updated to o->ptr. in other cases the call to ziplistLen may need to

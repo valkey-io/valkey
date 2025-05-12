@@ -860,10 +860,6 @@ void selectCommand(client *c) {
 
     if (getIntFromObjectOrReply(c, c->argv[1], &id, NULL) != C_OK) return;
 
-    if (server.cluster_enabled && id != 0) {
-        addReplyError(c, "SELECT is not allowed in cluster mode");
-        return;
-    }
     if (selectDb(c, id) == C_ERR) {
         addReplyError(c, "DB index is out of range");
     } else {
@@ -1429,11 +1425,6 @@ void moveCommand(client *c) {
     int srcid, dbid;
     long long expire;
 
-    if (server.cluster_enabled) {
-        addReplyError(c, "MOVE is not allowed in cluster mode");
-        return;
-    }
-
     /* Obtain source and target DB pointers */
     src = c->db;
     srcid = c->db->id;
@@ -1516,11 +1507,6 @@ void copyCommand(client *c) {
             addReplyErrorObject(c, shared.syntaxerr);
             return;
         }
-    }
-
-    if ((server.cluster_enabled == 1) && (srcid != 0 || dbid != 0)) {
-        addReplyError(c, "Copying to another database is not allowed in cluster mode");
-        return;
     }
 
     /* If the user select the same DB as
@@ -2850,4 +2836,13 @@ int bitfieldGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysRes
         keys[0].flags = CMD_KEY_RW | CMD_KEY_ACCESS | CMD_KEY_UPDATE;
     }
     return 1;
+}
+
+bool dbHasNoKeys(void) {
+    for (int i = 0; i < server.dbnum; i++) {
+        if (kvstoreSize(server.db[i].keys) != 0) {
+            return false;
+        }
+    }
+    return true;
 }

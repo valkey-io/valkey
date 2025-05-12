@@ -447,6 +447,7 @@ proc start_server {options {code undefined}} {
     set keep_persistence false
     set config_lines {}
     set start_other_server 0
+    set old_singledb $::singledb
 
     # Wait for the server to be ready and check for server liveness/client connectivity before starting the test.
     set wait_ready true
@@ -494,8 +495,14 @@ proc start_server {options {code undefined}} {
     if {![tags_acceptable $::tags err]} {
         incr ::num_aborted
         send_data_packet $::test_server_fd ignore $err
+        set ::singledb $old_singledb
         set ::tags [lrange $::tags 0 end-[llength $tags]]
         return
+    }
+
+    # Tags that override global options
+    if {[lsearch $::tags singledb] >= 0} {
+        set ::singledb 1
     }
 
     # If we are running against an external server, we just push the
@@ -503,6 +510,7 @@ proc start_server {options {code undefined}} {
     if {$::external} {
         run_external_server_test $code $overrides
 
+        set ::singledb $old_singledb
         set ::tags [lrange $::tags 0 end-[llength $tags]]
         return
     }
@@ -773,6 +781,7 @@ proc start_server {options {code undefined}} {
         # pop the server object
         set ::servers [lrange $::servers 0 end-1]
 
+        set ::singledb $old_singledb
         set ::tags [lrange $::tags 0 end-[llength $tags]]
         kill_server $srv
         if {!$keep_persistence} {
@@ -780,6 +789,7 @@ proc start_server {options {code undefined}} {
         }
         set _ ""
     } else {
+        set ::singledb $old_singledb
         set ::tags [lrange $::tags 0 end-[llength $tags]]
         set _ $srv
     }

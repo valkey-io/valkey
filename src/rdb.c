@@ -1900,8 +1900,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error) {
                 return NULL;
             }
             dec = getDecodedObject(ele);
-            size_t len = sdslen(dec->ptr);
-            quicklistPushTail(o->ptr, dec->ptr, len);
+            quicklistPushTail(o->ptr, dec->ptr, sdslen(dec->ptr));
             decrRefCount(dec);
             decrRefCount(ele);
         }

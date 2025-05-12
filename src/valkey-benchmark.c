@@ -43,14 +43,16 @@
 #include <pthread.h>
 #include <stdatomic.h>
 
-#include <sdscompat.h> /* Use hiredis' sds compat header that maps sds calls to their hi_ variants */
-#include <sds.h>       /* Use hiredis sds. */
+#include "sds.h"
 #include "ae.h"
-#include <hiredis.h>
+#include <valkey/valkey.h>
 #ifdef USE_OPENSSL
 #include <openssl/ssl.h>
 #include <openssl/err.h>
-#include <hiredis_ssl.h>
+#include <valkey/tls.h>
+#endif
+#ifdef USE_RDMA
+#include <valkey/rdma.h>
 #endif
 #include "adlist.h"
 #include "dict.h"
@@ -86,9 +88,10 @@ typedef enum readFromReplica {
 
 static struct config {
     aeEventLoop *el;
+    enum valkeyConnectionType ct;
     cliConnInfo conn_info;
-    const char *hostsocket;
     int tls;
+    int mptcp;
     struct cliSSLconfig sslconfig;
     int numclients;
     _Atomic int liveclients;
@@ -138,7 +141,7 @@ static struct config {
 } config;
 
 typedef struct _client {
-    redisContext *context;
+    valkeyContext *context;
     sds obuf;
     char **randptr;     /* Pointers to :rand: strings inside the command buf */
     size_t randlen;     /* Number of pointers in client->randptr */
@@ -195,8 +198,8 @@ static void freeBenchmarkThread(benchmarkThread *thread);
 static void freeBenchmarkThreads(void);
 static void *execBenchmarkThread(void *ptr);
 static clusterNode *createClusterNode(char *ip, int port);
-static serverConfig *getServerConfig(const char *ip, int port, const char *hostsocket);
-static redisContext *getRedisContext(const char *ip, int port, const char *hostsocket);
+static serverConfig *getServerConfig(enum valkeyConnectionType ct, const char *ip_or_path, int port);
+static valkeyContext *getValkeyContext(enum valkeyConnectionType ct, const char *ip_or_path, int port);
 static void freeServerConfig(serverConfig *cfg);
 static int fetchClusterSlotsConfiguration(client c);
 static void updateClusterSlotsConfiguration(void);
@@ -242,84 +245,81 @@ static dictType dtype = {
     NULL               /* allow to expand */
 };
 
-static redisContext *getRedisContext(const char *ip, int port, const char *hostsocket) {
-    redisContext *ctx = NULL;
-    redisReply *reply = NULL;
+static valkeyContext *getValkeyContext(enum valkeyConnectionType ct, const char *ip_or_path, int port) {
+    valkeyContext *ctx = NULL;
+    valkeyReply *reply = NULL;
     struct timeval tv = {0};
-    if (hostsocket == NULL)
-        ctx = redisConnectWrapper(ip, port, tv, 0);
-    else
-        ctx = redisConnectUnixWrapper(hostsocket, tv, 0);
+    ctx = valkeyConnectWrapper(ct, ip_or_path, port, tv, 0, config.mptcp);
     if (ctx == NULL || ctx->err) {
         fprintf(stderr, "Could not connect to server at ");
         char *err = (ctx != NULL ? ctx->errstr : "");
-        if (hostsocket == NULL)
-            fprintf(stderr, "%s:%d: %s\n", ip, port, err);
+        if (ct != VALKEY_CONN_UNIX)
+            fprintf(stderr, "%s:%d: %s\n", ip_or_path, port, err);
         else
-            fprintf(stderr, "%s: %s\n", hostsocket, err);
+            fprintf(stderr, "%s: %s\n", ip_or_path, err);
         goto cleanup;
     }
     if (config.tls == 1) {
         const char *err = NULL;
-        if (cliSecureConnection(ctx, config.sslconfig, &err) == REDIS_ERR && err) {
+        if (cliSecureConnection(ctx, config.sslconfig, &err) == VALKEY_ERR && err) {
             fprintf(stderr, "Could not negotiate a TLS connection: %s\n", err);
             goto cleanup;
         }
     }
     if (config.conn_info.auth == NULL) return ctx;
     if (config.conn_info.user == NULL)
-        reply = redisCommand(ctx, "AUTH %s", config.conn_info.auth);
+        reply = valkeyCommand(ctx, "AUTH %s", config.conn_info.auth);
     else
-        reply = redisCommand(ctx, "AUTH %s %s", config.conn_info.user, config.conn_info.auth);
+        reply = valkeyCommand(ctx, "AUTH %s %s", config.conn_info.user, config.conn_info.auth);
     if (reply != NULL) {
-        if (reply->type == REDIS_REPLY_ERROR) {
-            if (hostsocket == NULL)
-                fprintf(stderr, "Node %s:%d replied with error:\n%s\n", ip, port, reply->str);
+        if (reply->type == VALKEY_REPLY_ERROR) {
+            if (ct != VALKEY_CONN_UNIX)
+                fprintf(stderr, "Node %s:%d replied with error:\n%s\n", ip_or_path, port, reply->str);
             else
-                fprintf(stderr, "Node %s replied with error:\n%s\n", hostsocket, reply->str);
+                fprintf(stderr, "Node %s replied with error:\n%s\n", ip_or_path, reply->str);
             freeReplyObject(reply);
-            redisFree(ctx);
+            valkeyFree(ctx);
             exit(1);
         }
         freeReplyObject(reply);
         return ctx;
     }
     fprintf(stderr, "ERROR: failed to fetch reply from ");
-    if (hostsocket == NULL)
-        fprintf(stderr, "%s:%d\n", ip, port);
+    if (ct != VALKEY_CONN_UNIX)
+        fprintf(stderr, "%s:%d\n", ip_or_path, port);
     else
-        fprintf(stderr, "%s\n", hostsocket);
+        fprintf(stderr, "%s\n", ip_or_path);
 cleanup:
     freeReplyObject(reply);
-    redisFree(ctx);
+    valkeyFree(ctx);
     return NULL;
 }
 
 
-static serverConfig *getServerConfig(const char *ip, int port, const char *hostsocket) {
+static serverConfig *getServerConfig(enum valkeyConnectionType ct, const char *ip_or_path, int port) {
     serverConfig *cfg = zcalloc(sizeof(*cfg));
     if (!cfg) return NULL;
-    redisContext *c = NULL;
-    redisReply *reply = NULL, *sub_reply = NULL;
-    c = getRedisContext(ip, port, hostsocket);
+    valkeyContext *c = NULL;
+    valkeyReply *reply = NULL, *sub_reply = NULL;
+    c = getValkeyContext(ct, ip_or_path, port);
     if (c == NULL) {
         freeServerConfig(cfg);
         exit(1);
     }
-    redisAppendCommand(c, "CONFIG GET %s", "save");
-    redisAppendCommand(c, "CONFIG GET %s", "appendonly");
+    valkeyAppendCommand(c, "CONFIG GET %s", "save");
+    valkeyAppendCommand(c, "CONFIG GET %s", "appendonly");
     int abort_test = 0;
     int i = 0;
     void *r = NULL;
     for (; i < 2; i++) {
-        int res = redisGetReply(c, &r);
+        int res = valkeyGetReply(c, &r);
         if (reply) freeReplyObject(reply);
-        reply = res == REDIS_OK ? ((redisReply *)r) : NULL;
-        if (res != REDIS_OK || !r) goto fail;
-        if (reply->type == REDIS_REPLY_ERROR) {
+        reply = res == VALKEY_OK ? ((valkeyReply *)r) : NULL;
+        if (res != VALKEY_OK || !r) goto fail;
+        if (reply->type == VALKEY_REPLY_ERROR) {
             goto fail;
         }
-        if (reply->type != REDIS_REPLY_ARRAY || reply->elements < 2) goto fail;
+        if (reply->type != VALKEY_REPLY_ARRAY || reply->elements < 2) goto fail;
         sub_reply = reply->element[1];
         char *value = sub_reply->str;
         if (!value) value = "";
@@ -329,18 +329,18 @@ static serverConfig *getServerConfig(const char *ip, int port, const char *hosts
         }
     }
     freeReplyObject(reply);
-    redisFree(c);
+    valkeyFree(c);
     return cfg;
 fail:
-    if (reply && reply->type == REDIS_REPLY_ERROR && !strncmp(reply->str, "NOAUTH", 6)) {
-        if (hostsocket == NULL)
-            fprintf(stderr, "Node %s:%d replied with error:\n%s\n", ip, port, reply->str);
+    if (reply && reply->type == VALKEY_REPLY_ERROR && !strncmp(reply->str, "NOAUTH", 6)) {
+        if (ct != VALKEY_CONN_UNIX)
+            fprintf(stderr, "Node %s:%d replied with error:\n%s\n", ip_or_path, port, reply->str);
         else
-            fprintf(stderr, "Node %s replied with error:\n%s\n", hostsocket, reply->str);
+            fprintf(stderr, "Node %s replied with error:\n%s\n", ip_or_path, reply->str);
         abort_test = 1;
     }
     freeReplyObject(reply);
-    redisFree(c);
+    valkeyFree(c);
     freeServerConfig(cfg);
     if (abort_test) exit(1);
     return NULL;
@@ -362,7 +362,7 @@ static void freeClient(client c) {
             aeStop(el);
         }
     }
-    redisFree(c->context);
+    valkeyFree(c->context);
     sdsfree(c->obuf);
     zfree(c->randptr);
     zfree(c->stagptr);
@@ -389,7 +389,11 @@ static void resetClient(client c) {
     aeEventLoop *el = CLIENT_GET_EVENTLOOP(c);
     aeDeleteFileEvent(el, c->context->fd, AE_WRITABLE);
     aeDeleteFileEvent(el, c->context->fd, AE_READABLE);
-    aeCreateFileEvent(el, c->context->fd, AE_WRITABLE, writeHandler, c);
+    if (config.ct == VALKEY_CONN_RDMA) {
+        writeHandler(el, c->context->fd, c, 0); /* RDMA context always writable, but it can't be invoked by AE_WRITABLE */
+    } else {
+        aeCreateFileEvent(el, c->context->fd, AE_WRITABLE, writeHandler, c);
+    }
     c->written = 0;
     c->pending = config.pipeline;
 }
@@ -471,22 +475,22 @@ static void readHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
      * is not part of the latency, so calculate it only once, here. */
     if (c->latency < 0) c->latency = ustime() - (c->start);
 
-    if (redisBufferRead(c->context) != REDIS_OK) {
+    if (valkeyBufferRead(c->context) != VALKEY_OK) {
         fprintf(stderr, "Error: %s\n", c->context->errstr);
         exit(1);
     } else {
         while (c->pending) {
-            if (redisGetReply(c->context, &reply) != REDIS_OK) {
+            if (valkeyGetReply(c->context, &reply) != VALKEY_OK) {
                 fprintf(stderr, "Error: %s\n", c->context->errstr);
                 exit(1);
             }
             if (reply != NULL) {
-                if (reply == (void *)REDIS_REPLY_ERROR) {
+                if (reply == (void *)VALKEY_REPLY_ERROR) {
                     fprintf(stderr, "Unexpected error reply, exiting...\n");
                     exit(1);
                 }
-                redisReply *r = reply;
-                if (r->type == REDIS_REPLY_ERROR) {
+                valkeyReply *r = reply;
+                if (r->type == VALKEY_REPLY_ERROR) {
                     /* Try to update slots configuration if reply error is
                      * MOVED/ASK/CLUSTERDOWN and the key(s) used by the command
                      * contain(s) the slot hash tag.
@@ -646,43 +650,41 @@ static client createClient(char *cmd, size_t len, client from, int thread_id) {
     int port = 0;
     struct timeval tv = {0};
     c->cluster_node = NULL;
-    if (config.hostsocket == NULL || is_cluster_client) {
-        if (!is_cluster_client) {
-            ip = config.conn_info.hostip;
-            port = config.conn_info.hostport;
-        } else {
-            int node_idx = 0;
-            if (config.num_threads < config.cluster_node_count)
-                node_idx = config.liveclients % config.cluster_node_count;
-            else
-                node_idx = thread_id % config.cluster_node_count;
-            clusterNode *node = config.cluster_nodes[node_idx];
-            assert(node != NULL);
-            ip = (const char *)node->ip;
-            port = node->port;
-            c->cluster_node = node;
-        }
-        c->context = redisConnectWrapper(ip, port, tv, 1);
+
+    if (!is_cluster_client) {
+        ip = config.conn_info.hostip;
+        port = config.conn_info.hostport;
     } else {
-        c->context = redisConnectUnixWrapper(config.hostsocket, tv, 1);
+        int node_idx = 0;
+        if (config.num_threads < config.cluster_node_count)
+            node_idx = config.liveclients % config.cluster_node_count;
+        else
+            node_idx = thread_id % config.cluster_node_count;
+        clusterNode *node = config.cluster_nodes[node_idx];
+        assert(node != NULL);
+        ip = (const char *)node->ip;
+        port = node->port;
+        c->cluster_node = node;
     }
+
+    c->context = valkeyConnectWrapper(config.ct, ip, port, tv, 1, config.mptcp);
     if (c->context->err) {
         fprintf(stderr, "Could not connect to server at ");
-        if (config.hostsocket == NULL || is_cluster_client)
+        if (config.ct != VALKEY_CONN_UNIX || is_cluster_client)
             fprintf(stderr, "%s:%d: %s\n", ip, port, c->context->errstr);
         else
-            fprintf(stderr, "%s: %s\n", config.hostsocket, c->context->errstr);
+            fprintf(stderr, "%s: %s\n", ip, c->context->errstr);
         exit(1);
     }
     if (config.tls == 1) {
         const char *err = NULL;
-        if (cliSecureConnection(c->context, config.sslconfig, &err) == REDIS_ERR && err) {
+        if (cliSecureConnection(c->context, config.sslconfig, &err) == VALKEY_ERR && err) {
             fprintf(stderr, "Could not negotiate a TLS connection: %s\n", err);
             exit(1);
         }
     }
     c->thread_id = thread_id;
-    /* Suppress hiredis cleanup of unused buffers for max speed. */
+    /* Suppress libvalkey cleanup of unused buffers for max speed. */
     c->context->reader->maxbuf = 0;
 
     /* Build the request buffer:
@@ -697,9 +699,9 @@ static client createClient(char *cmd, size_t len, client from, int thread_id) {
         char *buf = NULL;
         int len;
         if (config.conn_info.user == NULL)
-            len = redisFormatCommand(&buf, "AUTH %s", config.conn_info.auth);
+            len = valkeyFormatCommand(&buf, "AUTH %s", config.conn_info.auth);
         else
-            len = redisFormatCommand(&buf, "AUTH %s %s", config.conn_info.user, config.conn_info.auth);
+            len = valkeyFormatCommand(&buf, "AUTH %s %s", config.conn_info.user, config.conn_info.auth);
         c->obuf = sdscatlen(c->obuf, buf, len);
         free(buf);
         c->prefix_pending++;
@@ -707,7 +709,7 @@ static client createClient(char *cmd, size_t len, client from, int thread_id) {
 
     if (config.enable_tracking) {
         char *buf = NULL;
-        int len = redisFormatCommand(&buf, "CLIENT TRACKING on");
+        int len = valkeyFormatCommand(&buf, "CLIENT TRACKING on");
         c->obuf = sdscatlen(c->obuf, buf, len);
         free(buf);
         c->prefix_pending++;
@@ -717,7 +719,7 @@ static client createClient(char *cmd, size_t len, client from, int thread_id) {
      * buffer with the SELECT command, that will be discarded the first
      * time the replies are received, so if the client is reused the
      * SELECT command will not be used again. */
-    if (config.conn_info.input_dbnum != 0 && !is_cluster_client) {
+    if (config.conn_info.input_dbnum) {
         c->obuf = sdscatprintf(c->obuf, "*2\r\n$6\r\nSELECT\r\n$%d\r\n%s\r\n", (int)sdslen(config.input_dbnumstr),
                                config.input_dbnumstr);
         c->prefix_pending++;
@@ -725,7 +727,7 @@ static client createClient(char *cmd, size_t len, client from, int thread_id) {
 
     if (config.resp3) {
         char *buf = NULL;
-        int len = redisFormatCommand(&buf, "HELLO 3");
+        int len = valkeyFormatCommand(&buf, "HELLO 3");
         c->obuf = sdscatlen(c->obuf, buf, len);
         free(buf);
         c->prefix_pending++;
@@ -734,7 +736,7 @@ static client createClient(char *cmd, size_t len, client from, int thread_id) {
     if (config.cluster_mode && (config.read_from_replica == FROM_REPLICA_ONLY || config.read_from_replica == FROM_ALL)) {
         char *buf = NULL;
         int len;
-        len = redisFormatCommand(&buf, "READONLY");
+        len = valkeyFormatCommand(&buf, "READONLY");
         c->obuf = sdscatlen(c->obuf, buf, len);
         free(buf);
         c->prefix_pending++;
@@ -820,9 +822,13 @@ static client createClient(char *cmd, size_t len, client from, int thread_id) {
         benchmarkThread *thread = config.threads[thread_id];
         el = thread->el;
     }
-    if (config.idlemode == 0)
-        aeCreateFileEvent(el, c->context->fd, AE_WRITABLE, writeHandler, c);
-    else
+    if (config.idlemode == 0) {
+        if (config.ct == VALKEY_CONN_RDMA) {
+            writeHandler(el, c->context->fd, c, 0);
+        } else {
+            aeCreateFileEvent(el, c->context->fd, AE_WRITABLE, writeHandler, c);
+        }
+    } else
         /* In idle mode, clients still need to register readHandler for catching errors */
         aeCreateFileEvent(el, c->context->fd, AE_READABLE, readHandler, c);
 
@@ -1083,34 +1089,34 @@ static clusterNode **addClusterNode(clusterNode *node) {
 
 static int fetchClusterConfiguration(void) {
     int success = 1;
-    redisContext *ctx = NULL;
-    redisReply *reply = NULL;
+    valkeyContext *ctx = NULL;
+    valkeyReply *reply = NULL;
     dict *nodes = NULL;
     const char *errmsg = "Failed to fetch cluster configuration";
     size_t i, j;
-    ctx = getRedisContext(config.conn_info.hostip, config.conn_info.hostport, config.hostsocket);
+    ctx = getValkeyContext(config.ct, config.conn_info.hostip, config.conn_info.hostport);
     if (ctx == NULL) {
         exit(1);
     }
 
-    reply = redisCommand(ctx, "CLUSTER SLOTS");
-    if (reply == NULL || reply->type == REDIS_REPLY_ERROR) {
+    reply = valkeyCommand(ctx, "CLUSTER SLOTS");
+    if (reply == NULL || reply->type == VALKEY_REPLY_ERROR) {
         success = 0;
         if (reply) fprintf(stderr, "%s\nCLUSTER SLOTS ERROR: %s\n", errmsg, reply->str);
         goto cleanup;
     }
-    assert(reply->type == REDIS_REPLY_ARRAY);
+    assert(reply->type == VALKEY_REPLY_ARRAY);
     nodes = dictCreate(&dtype);
     for (i = 0; i < reply->elements; i++) {
-        redisReply *r = reply->element[i];
-        assert(r->type == REDIS_REPLY_ARRAY);
+        valkeyReply *r = reply->element[i];
+        assert(r->type == VALKEY_REPLY_ARRAY);
         assert(r->elements >= 3);
         int from = r->element[0]->integer;
         int to = r->element[1]->integer;
         sds primary = NULL;
         for (j = 2; j < r->elements; j++) {
-            redisReply *nr = r->element[j];
-            assert(nr->type == REDIS_REPLY_ARRAY && nr->elements >= 3);
+            valkeyReply *nr = r->element[j];
+            assert(nr->type == VALKEY_REPLY_ARRAY && nr->elements >= 3);
             assert(nr->element[0]->str != NULL);
             assert(nr->element[2]->str != NULL);
 
@@ -1162,7 +1168,7 @@ static int fetchClusterConfiguration(void) {
         sdsfree(primary);
     }
 cleanup:
-    if (ctx) redisFree(ctx);
+    if (ctx) valkeyFree(ctx);
     if (!success) {
         if (config.cluster_nodes) freeClusterNodes();
     }
@@ -1183,7 +1189,7 @@ static int fetchClusterSlotsConfiguration(client c) {
         c->slots_last_update = last_update;
         return -1;
     }
-    redisReply *reply = NULL;
+    valkeyReply *reply = NULL;
 
     is_fetching_slots = atomic_fetch_add_explicit(&config.is_fetching_slots, 1, memory_order_relaxed);
     if (is_fetching_slots) return -1; // TODO: use other codes || errno ?
@@ -1193,7 +1199,7 @@ static int fetchClusterSlotsConfiguration(client c) {
 
     /* printf("[%d] fetchClusterSlotsConfiguration\n", c->thread_id); */
     dict *nodes = dictCreate(&dtype);
-    redisContext *ctx = NULL;
+    valkeyContext *ctx = NULL;
     for (i = 0; i < (size_t)config.cluster_node_count; i++) {
         clusterNode *node = config.cluster_nodes[i];
         assert(node->ip != NULL);
@@ -1201,7 +1207,7 @@ static int fetchClusterSlotsConfiguration(client c) {
         assert(node->port);
         /* Use first node as entry point to connect to. */
         if (ctx == NULL) {
-            ctx = getRedisContext(node->ip, node->port, NULL);
+            ctx = getValkeyContext(config.ct, node->ip, node->port);
             if (!ctx) {
                 success = 0;
                 goto cleanup;
@@ -1212,16 +1218,16 @@ static int fetchClusterSlotsConfiguration(client c) {
         node->updated_slots_count = 0;
         dictReplace(nodes, node->name, node);
     }
-    reply = redisCommand(ctx, "CLUSTER SLOTS");
-    if (reply == NULL || reply->type == REDIS_REPLY_ERROR) {
+    reply = valkeyCommand(ctx, "CLUSTER SLOTS");
+    if (reply == NULL || reply->type == VALKEY_REPLY_ERROR) {
         success = 0;
         if (reply) fprintf(stderr, "%s\nCLUSTER SLOTS ERROR: %s\n", errmsg, reply->str);
         goto cleanup;
     }
-    assert(reply->type == REDIS_REPLY_ARRAY);
+    assert(reply->type == VALKEY_REPLY_ARRAY);
     for (i = 0; i < reply->elements; i++) {
-        redisReply *r = reply->element[i];
-        assert(r->type == REDIS_REPLY_ARRAY);
+        valkeyReply *r = reply->element[i];
+        assert(r->type == VALKEY_REPLY_ARRAY);
         assert(r->elements >= 3);
         int from, to, slot;
         from = r->element[0]->integer;
@@ -1239,8 +1245,8 @@ static int fetchClusterSlotsConfiguration(client c) {
         }
 
         for (j = start; j < end; j++) {
-            redisReply *nr = r->element[j];
-            assert(nr->type == REDIS_REPLY_ARRAY && nr->elements >= 3);
+            valkeyReply *nr = r->element[j];
+            assert(nr->type == VALKEY_REPLY_ARRAY && nr->elements >= 3);
             assert(nr->element[2]->str != NULL);
             sds name = sdsnew(nr->element[2]->str);
             dictEntry *entry = dictFind(nodes, name);
@@ -1262,7 +1268,7 @@ static int fetchClusterSlotsConfiguration(client c) {
     updateClusterSlotsConfiguration();
 cleanup:
     freeReplyObject(reply);
-    redisFree(ctx);
+    valkeyFree(ctx);
     dictRelease(nodes);
     atomic_store_explicit(&config.is_fetching_slots, 0, memory_order_relaxed);
     return success;
@@ -1307,6 +1313,7 @@ int parseOptions(int argc, char **argv) {
     int lastarg;
     int exit_status = 1;
     char *tls_usage;
+    char *rdma_usage;
 
     for (i = 1; i < argc; i++) {
         lastarg = (i == (argc - 1));
@@ -1338,7 +1345,9 @@ int parseOptions(int argc, char **argv) {
             }
         } else if (!strcmp(argv[i], "-s")) {
             if (lastarg) goto invalid;
-            config.hostsocket = strdup(argv[++i]);
+            sdsfree(config.conn_info.hostip);
+            config.conn_info.hostip = sdsnew(argv[++i]);
+            config.ct = VALKEY_CONN_UNIX;
         } else if (!strcmp(argv[i], "-x")) {
             config.stdinarg = 1;
         } else if (!strcmp(argv[i], "-a")) {
@@ -1474,6 +1483,16 @@ int parseOptions(int argc, char **argv) {
             config.sslconfig.ciphersuites = strdup(argv[++i]);
 #endif
 #endif
+#ifdef USE_RDMA
+        } else if (!strcmp(argv[i], "--rdma")) {
+            if (valkeyInitiateRdma() != VALKEY_OK) {
+                fprintf(stderr, "Failed to initialize RDMA support from libvalkey\n");
+                exit(1);
+            }
+            config.ct = VALKEY_CONN_RDMA;
+#endif
+        } else if (!strcmp(argv[i], "--mptcp")) {
+            config.mptcp = 1;
         } else {
             /* Assume the user meant to provide an option when the arg starts
              * with a dash. We're done otherwise and should use the remainder
@@ -1512,8 +1531,15 @@ usage:
 #endif
         "";
 
+    rdma_usage =
+#ifdef USE_RDMA
+        " --rdma             Establish a RDMA connection.\n"
+#endif
+        "";
+
+
     printf(
-        "%s%s%s", /* Split to avoid strings longer than 4095 (-Woverlength-strings). */
+        "%s%s%s%s", /* Split to avoid strings longer than 4095 (-Woverlength-strings). */
         "Usage: valkey-benchmark [OPTIONS] [COMMAND ARGS...]\n\n"
         "Options:\n"
         " -h <hostname>      Server hostname (default 127.0.0.1)\n"
@@ -1578,6 +1604,8 @@ usage:
         "                    Sets the number of keys passed to FCALL command when running\n"
         "                    the 'fcall' test. (default 1)\n",
         tls_usage,
+        rdma_usage,
+        " --mptcp            Enable an MPTCP connection.\n"
         " --help             Output this help and exit.\n"
         " --version          Output version and exit.\n\n"
         "Examples:\n\n"
@@ -1705,6 +1733,7 @@ int main(int argc, char **argv) {
     signal(SIGPIPE, SIG_IGN);
 
     memset(&config.sslconfig, 0, sizeof(config.sslconfig));
+    config.ct = VALKEY_CONN_TCP;
     config.numclients = 50;
     config.requests = 100000;
     config.liveclients = 0;
@@ -1723,7 +1752,6 @@ int main(int argc, char **argv) {
     config.clients = listCreate();
     config.conn_info.hostip = sdsnew("127.0.0.1");
     config.conn_info.hostport = 6379;
-    config.hostsocket = NULL;
     config.tests = NULL;
     config.conn_info.input_dbnum = 0;
     config.stdinarg = 0;
@@ -1756,13 +1784,18 @@ int main(int argc, char **argv) {
     }
 #endif
 
+    if (config.mptcp && (config.ct != VALKEY_CONN_TCP)) {
+        fprintf(stderr, "Options --mptcp is only supported by TCP\n");
+        exit(1);
+    }
+
     if (config.cluster_mode) {
         // We only include the slot placeholder {tag} if cluster mode is enabled
         tag = ":{tag}";
 
         /* Fetch cluster configuration. */
         if (!fetchClusterConfiguration() || !config.cluster_nodes) {
-            if (!config.hostsocket) {
+            if (config.ct != VALKEY_CONN_UNIX) {
                 fprintf(stderr,
                         "Failed to fetch cluster configuration from "
                         "%s:%d\n",
@@ -1771,7 +1804,7 @@ int main(int argc, char **argv) {
                 fprintf(stderr,
                         "Failed to fetch cluster configuration from "
                         "%s\n",
-                        config.hostsocket);
+                        config.conn_info.hostip);
             }
             exit(1);
         }
@@ -1799,7 +1832,7 @@ int main(int argc, char **argv) {
             printf("Node %d(%s): ", i, node_type);
             if (node->name) printf("%s ", node->name);
             printf("%s:%d\n", node->ip, node->port);
-            node->redis_config = getServerConfig(node->ip, node->port, NULL);
+            node->redis_config = getServerConfig(config.ct, node->ip, node->port);
             if (node->redis_config == NULL) {
                 fprintf(stderr, "WARNING: Could not fetch node CONFIG %s:%d\n", node->ip, node->port);
             }
@@ -1809,7 +1842,7 @@ int main(int argc, char **argv) {
          * by the user. */
         if (config.num_threads == 0) config.num_threads = config.cluster_node_count;
     } else {
-        config.redis_config = getServerConfig(config.conn_info.hostip, config.conn_info.hostport, config.hostsocket);
+        config.redis_config = getServerConfig(config.ct, config.conn_info.hostip, config.conn_info.hostport);
         if (config.redis_config == NULL) {
             fprintf(stderr, "WARNING: Could not fetch server CONFIG\n");
         }
@@ -1869,7 +1902,7 @@ int main(int argc, char **argv) {
         size_t *argvlen = zmalloc(argc * sizeof(size_t));
         for (i = 0; i < argc; i++) argvlen[i] = sdslen(sds_args[i]);
         do {
-            len = redisFormatCommandArgv(&cmd, argc, (const char **)sds_args, argvlen);
+            len = valkeyFormatCommandArgv(&cmd, argc, (const char **)sds_args, argvlen);
             // adjust the datasize to the parsed command
             config.datasize = len;
             benchmark(title, cmd, len);
@@ -1892,67 +1925,67 @@ int main(int argc, char **argv) {
         if (test_is_selected("ping_inline") || test_is_selected("ping")) benchmark("PING_INLINE", "PING\r\n", 6);
 
         if (test_is_selected("ping_mbulk") || test_is_selected("ping")) {
-            len = redisFormatCommand(&cmd, "PING");
+            len = valkeyFormatCommand(&cmd, "PING");
             benchmark("PING_MBULK", cmd, len);
             free(cmd);
         }
 
         if (test_is_selected("set")) {
-            len = redisFormatCommand(&cmd, "SET key%s:__rand_int__ %s", tag, data);
+            len = valkeyFormatCommand(&cmd, "SET key%s:__rand_int__ %s", tag, data);
             benchmark("SET", cmd, len);
             free(cmd);
         }
 
         if (test_is_selected("get")) {
-            len = redisFormatCommand(&cmd, "GET key%s:__rand_int__", tag);
+            len = valkeyFormatCommand(&cmd, "GET key%s:__rand_int__", tag);
             benchmark("GET", cmd, len);
             free(cmd);
         }
 
         if (test_is_selected("incr")) {
-            len = redisFormatCommand(&cmd, "INCR counter%s:__rand_int__", tag);
+            len = valkeyFormatCommand(&cmd, "INCR counter%s:__rand_int__", tag);
             benchmark("INCR", cmd, len);
             free(cmd);
         }
 
         if (test_is_selected("lpush")) {
-            len = redisFormatCommand(&cmd, "LPUSH mylist%s %s", tag, data);
+            len = valkeyFormatCommand(&cmd, "LPUSH mylist%s %s", tag, data);
             benchmark("LPUSH", cmd, len);
             free(cmd);
         }
 
         if (test_is_selected("rpush")) {
-            len = redisFormatCommand(&cmd, "RPUSH mylist%s %s", tag, data);
+            len = valkeyFormatCommand(&cmd, "RPUSH mylist%s %s", tag, data);
             benchmark("RPUSH", cmd, len);
             free(cmd);
         }
 
         if (test_is_selected("lpop")) {
-            len = redisFormatCommand(&cmd, "LPOP mylist%s", tag);
+            len = valkeyFormatCommand(&cmd, "LPOP mylist%s", tag);
             benchmark("LPOP", cmd, len);
             free(cmd);
         }
 
         if (test_is_selected("rpop")) {
-            len = redisFormatCommand(&cmd, "RPOP mylist%s", tag);
+            len = valkeyFormatCommand(&cmd, "RPOP mylist%s", tag);
             benchmark("RPOP", cmd, len);
             free(cmd);
         }
 
         if (test_is_selected("sadd")) {
-            len = redisFormatCommand(&cmd, "SADD myset%s element:__rand_int__", tag);
+            len = valkeyFormatCommand(&cmd, "SADD myset%s element:__rand_int__", tag);
             benchmark("SADD", cmd, len);
             free(cmd);
         }
 
         if (test_is_selected("hset")) {
-            len = redisFormatCommand(&cmd, "HSET myhash%s element:__rand_int__ %s", tag, data);
+            len = valkeyFormatCommand(&cmd, "HSET myhash%s element:__rand_int__ %s", tag, data);
             benchmark("HSET", cmd, len);
             free(cmd);
         }
 
         if (test_is_selected("spop")) {
-            len = redisFormatCommand(&cmd, "SPOP myset%s", tag);
+            len = valkeyFormatCommand(&cmd, "SPOP myset%s", tag);
             benchmark("SPOP", cmd, len);
             free(cmd);
         }
@@ -1960,44 +1993,44 @@ int main(int argc, char **argv) {
         if (test_is_selected("zadd")) {
             char *score = "0";
             if (config.replacekeys) score = "__rand_int__";
-            len = redisFormatCommand(&cmd, "ZADD myzset%s %s element:__rand_int__", tag, score);
+            len = valkeyFormatCommand(&cmd, "ZADD myzset%s %s element:__rand_int__", tag, score);
             benchmark("ZADD", cmd, len);
             free(cmd);
         }
 
         if (test_is_selected("zpopmin")) {
-            len = redisFormatCommand(&cmd, "ZPOPMIN myzset%s", tag);
+            len = valkeyFormatCommand(&cmd, "ZPOPMIN myzset%s", tag);
             benchmark("ZPOPMIN", cmd, len);
             free(cmd);
         }
 
         if (test_is_selected("lrange") || test_is_selected("lrange_100") || test_is_selected("lrange_300") ||
             test_is_selected("lrange_500") || test_is_selected("lrange_600")) {
-            len = redisFormatCommand(&cmd, "LPUSH mylist%s %s", tag, data);
+            len = valkeyFormatCommand(&cmd, "LPUSH mylist%s %s", tag, data);
             benchmark("LPUSH (needed to benchmark LRANGE)", cmd, len);
             free(cmd);
         }
 
         if (test_is_selected("lrange") || test_is_selected("lrange_100")) {
-            len = redisFormatCommand(&cmd, "LRANGE mylist%s 0 99", tag);
+            len = valkeyFormatCommand(&cmd, "LRANGE mylist%s 0 99", tag);
             benchmark("LRANGE_100 (first 100 elements)", cmd, len);
             free(cmd);
         }
 
         if (test_is_selected("lrange") || test_is_selected("lrange_300")) {
-            len = redisFormatCommand(&cmd, "LRANGE mylist%s 0 299", tag);
+            len = valkeyFormatCommand(&cmd, "LRANGE mylist%s 0 299", tag);
             benchmark("LRANGE_300 (first 300 elements)", cmd, len);
             free(cmd);
         }
 
         if (test_is_selected("lrange") || test_is_selected("lrange_500")) {
-            len = redisFormatCommand(&cmd, "LRANGE mylist%s 0 499", tag);
+            len = valkeyFormatCommand(&cmd, "LRANGE mylist%s 0 499", tag);
             benchmark("LRANGE_500 (first 500 elements)", cmd, len);
             free(cmd);
         }
 
         if (test_is_selected("lrange") || test_is_selected("lrange_600")) {
-            len = redisFormatCommand(&cmd, "LRANGE mylist%s 0 599", tag);
+            len = valkeyFormatCommand(&cmd, "LRANGE mylist%s 0 599", tag);
             benchmark("LRANGE_600 (first 600 elements)", cmd, len);
             free(cmd);
         }
@@ -2010,21 +2043,34 @@ int main(int argc, char **argv) {
                 cmd_argv[i] = key_placeholder;
                 cmd_argv[i + 1] = data;
             }
-            len = redisFormatCommandArgv(&cmd, 21, cmd_argv, NULL);
+            len = valkeyFormatCommandArgv(&cmd, 21, cmd_argv, NULL);
             benchmark("MSET (10 keys)", cmd, len);
             free(cmd);
             sdsfree(key_placeholder);
         }
 
+        if (test_is_selected("mget")) {
+            const char *cmd_argv[11];
+            cmd_argv[0] = "MGET";
+            sds key_placeholder = sdscatprintf(sdsnew(""), "key%s:__rand_int__", tag);
+            for (i = 1; i < 11; i++) {
+                cmd_argv[i] = key_placeholder;
+            }
+            len = valkeyFormatCommandArgv(&cmd, 11, cmd_argv, NULL);
+            benchmark("MGET (10 keys)", cmd, len);
+            free(cmd);
+            sdsfree(key_placeholder);
+        }
+
         if (test_is_selected("xadd")) {
-            len = redisFormatCommand(&cmd, "XADD mystream%s * myfield %s", tag, data);
+            len = valkeyFormatCommand(&cmd, "XADD mystream%s * myfield %s", tag, data);
             benchmark("XADD", cmd, len);
             free(cmd);
         }
 
         if (test_is_selected("function_load")) {
             char *script = generateFunctionScript(config.num_functions, 0);
-            len = redisFormatCommand(&cmd, "function load replace %s", script);
+            len = valkeyFormatCommand(&cmd, "function load replace %s", script);
             benchmark("FUNCTION LOAD", cmd, len);
             zfree(script);
             free(cmd);
@@ -2033,17 +2079,17 @@ int main(int argc, char **argv) {
         if (test_is_selected("fcall")) {
             char *script = generateFunctionScript(1, config.num_keys_in_fcall > 0);
 
-            redisContext *ctx = getRedisContext(config.conn_info.hostip, config.conn_info.hostport, NULL);
+            valkeyContext *ctx = getValkeyContext(config.ct, config.conn_info.hostip, config.conn_info.hostport);
             if (ctx == NULL) {
                 exit(1);
             }
 
             assert(ctx != NULL && ctx->err == 0);
-            void *reply = redisCommand(ctx, "FUNCTION LOAD REPLACE %s", script);
+            void *reply = valkeyCommand(ctx, "FUNCTION LOAD REPLACE %s", script);
 
             assert(reply != NULL);
             freeReplyObject(reply);
-            redisFree(ctx);
+            valkeyFree(ctx);
             zfree(script);
 
             char **cmd_argv = zmalloc(sizeof(char *) * (config.num_keys_in_fcall + 3));
@@ -2057,7 +2103,7 @@ int main(int argc, char **argv) {
                 ret = asprintf(&(cmd_argv[3 + i]), "key%d", i + 1);
                 UNUSED(ret);
             }
-            len = redisFormatCommandArgv(&cmd, config.num_keys_in_fcall + 3, (const char **)cmd_argv, NULL);
+            len = valkeyFormatCommandArgv(&cmd, config.num_keys_in_fcall + 3, (const char **)cmd_argv, NULL);
             for (int i = 0; i < config.num_keys_in_fcall + 3; i++) {
                 free(cmd_argv[i]);
             }

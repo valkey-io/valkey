@@ -1545,10 +1545,9 @@ static void clusterConnAcceptHandler(connection *conn) {
     connSetReadHandler(conn, clusterReadHandler);
 }
 
-#define MAX_CLUSTER_ACCEPTS_PER_CALL 1000
 void clusterAcceptHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
     int cport, cfd;
-    int max = MAX_CLUSTER_ACCEPTS_PER_CALL;
+    int max = server.tls_cluster ? server.max_new_tls_conns_per_cycle : server.max_new_conns_per_cycle;
     char cip[NET_IP_STR_LEN];
     int require_auth = TLS_CLIENT_AUTH_YES;
     UNUSED(el);
@@ -5879,11 +5878,6 @@ int verifyClusterConfigWithData(void) {
      * completely depend on the replication stream. */
     if (nodeIsReplica(myself)) return C_OK;
 
-    /* Make sure we only have keys in DB0. */
-    for (j = 1; j < server.dbnum; j++) {
-        if (kvstoreSize(server.db[j].keys)) return C_ERR;
-    }
-
     /* Check that all the slots we see populated memory have a corresponding
      * entry in the cluster table. Otherwise fix the table. */
     for (j = 0; j < CLUSTER_SLOTS; j++) {
@@ -6544,39 +6538,41 @@ unsigned int delKeysInSlot(unsigned int hashslot, int lazy, bool is_cmd) {
     unsigned int j = 0;
     int before_execution_nesting = server.execution_nesting;
 
-    kvstoreHashtableIterator *kvs_di = NULL;
-    void *next;
-    kvs_di = kvstoreGetHashtableIterator(server.db->keys, hashslot, HASHTABLE_ITER_SAFE);
-    while (kvstoreHashtableIteratorNext(kvs_di, &next)) {
-        robj *valkey = next;
-        enterExecutionUnit(1, 0);
-        sds sdskey = objectGetKey(valkey);
-        robj *key = createStringObject(sdskey, sdslen(sdskey));
-        if (lazy) {
-            dbAsyncDelete(&server.db[0], key);
-        } else {
-            dbSyncDelete(&server.db[0], key);
+    for (int i = 0; i < server.dbnum; i++) {
+        kvstoreHashtableIterator *kvs_di = NULL;
+        void *next;
+        serverDb db = server.db[i];
+        kvs_di = kvstoreGetHashtableIterator(db.keys, hashslot, HASHTABLE_ITER_SAFE);
+        while (kvstoreHashtableIteratorNext(kvs_di, &next)) {
+            robj *valkey = next;
+            enterExecutionUnit(1, 0);
+            sds sdskey = objectGetKey(valkey);
+            robj *key = createStringObject(sdskey, sdslen(sdskey));
+            if (lazy) {
+                dbAsyncDelete(&db, key);
+            } else {
+                dbSyncDelete(&db, key);
+            }
+            // if is command, skip del propagate
+            if (!is_cmd) propagateDeletion(&db, key, lazy);
+            signalModifiedKey(NULL, &db, key);
+            if (is_cmd) {
+                /* In the `cluster flushslot` scenario, the keys are actually deleted so notify everyone. */
+                notifyKeyspaceEvent(NOTIFY_GENERIC, "del", key, db.id);
+            } else {
+                /* The keys are not actually logically deleted from the database, just moved to another node.
+                * The modules needs to know that these keys are no longer available locally, so just send the
+                * keyspace notification to the modules, but not to clients. */
+                moduleNotifyKeyspaceEvent(NOTIFY_GENERIC, "del", key, db.id);
+            }
+            exitExecutionUnit();
+            postExecutionUnitOperations();
+            decrRefCount(key);
+            j++;
+            server.dirty++;
         }
-        // if is command, skip del propagate
-        if (!is_cmd) propagateDeletion(&server.db[0], key, lazy);
-        signalModifiedKey(NULL, &server.db[0], key);
-        if (is_cmd) {
-            /* In the `cluster flushslot` scenario, the keys are actually deleted so notify everyone. */
-            notifyKeyspaceEvent(NOTIFY_GENERIC, "del", key, server.db[0].id);
-        } else {
-            /* The keys are not actually logically deleted from the database, just moved to another node.
-             * The modules needs to know that these keys are no longer available locally, so just send the
-             * keyspace notification to the modules, but not to clients. */
-            moduleNotifyKeyspaceEvent(NOTIFY_GENERIC, "del", key, server.db[0].id);
-        }
-        exitExecutionUnit();
-        postExecutionUnitOperations();
-        decrRefCount(key);
-        j++;
-        server.dirty++;
+        kvstoreReleaseHashtableIterator(kvs_di);
     }
-    kvstoreReleaseHashtableIterator(kvs_di);
-
     server.server_del_keys_in_slot = 0;
     serverAssert(server.execution_nesting == before_execution_nesting);
     return j;
@@ -7045,7 +7041,7 @@ int clusterCommandSpecial(client *c) {
         }
     } else if (!strcasecmp(c->argv[1]->ptr, "flushslots") && c->argc == 2) {
         /* CLUSTER FLUSHSLOTS */
-        if (kvstoreSize(server.db[0].keys) != 0) {
+        if (!dbHasNoKeys()) {
             addReplyError(c, "DB must be empty to perform CLUSTER FLUSHSLOTS.");
             return 1;
         }
@@ -7215,7 +7211,7 @@ int clusterCommandSpecial(client *c) {
         /* If the instance is currently a primary, it should have no assigned
          * slots nor keys to accept to replicate some other node.
          * Replicas can switch to another primary without issues. */
-        if (clusterNodeIsPrimary(myself) && (myself->numslots != 0 || kvstoreSize(server.db[0].keys) != 0)) {
+        if (clusterNodeIsPrimary(myself) && (myself->numslots != 0 || !dbHasNoKeys())) {
             addReplyError(c, "To set a master the node must be empty and "
                              "without assigned slots.");
             return 1;
@@ -7367,7 +7363,7 @@ int clusterCommandSpecial(client *c) {
 
         /* Replicas can be reset while containing data, but not primary nodes
          * that must be empty. */
-        if (clusterNodeIsPrimary(myself) && kvstoreSize(c->db->keys) != 0) {
+        if (clusterNodeIsPrimary(myself) && !dbHasNoKeys()) {
             addReplyError(c, "CLUSTER RESET can't be called with "
                              "master nodes containing keys");
             return 1;

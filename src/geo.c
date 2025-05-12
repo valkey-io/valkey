@@ -84,6 +84,13 @@ void geoArrayFree(geoArray *ga) {
     zfree(ga);
 }
 
+/* Free the GEO BYPOLYGON array created with georadiusGeneric(). */
+void geoPolygonPointsFree(GeoShape *shape) {
+    if (shape->type == POLYGON_TYPE && shape->t.polygon.points != NULL) {
+        zfree(shape->t.polygon.points);
+    }
+}
+
 /* ====================================================================
  * Helpers
  * ==================================================================== */
@@ -239,13 +246,6 @@ int geoWithinShape(GeoShape *shape, double score, double *xy, double *distance) 
         }
     }
     return C_OK;
-}
-
-/* Free the GEO BYPOLYGON array created with georadiusGeneric(). */
-void geoPolygonPointsFree(GeoShape *shape) {
-    if (shape->type == POLYGON_TYPE && shape->t.polygon.points != NULL) {
-        zfree(shape->t.polygon.points);
-    }
 }
 
 /* Query a sorted set to extract all the elements between 'min' and
@@ -642,7 +642,7 @@ void georadiusGeneric(client *c, int srcKeyIndex, int flags) {
                     return;
                 }
                 // Check how many args are remaining. Divide by 2 to see the possible number of vertices.
-                int possible_vertices = (remaining - i - 1 - 1) / 2;
+                int possible_vertices = (remaining - i - 2) / 2;
                 if (num_vertices < 3 || possible_vertices < num_vertices) {
                     addReplyError(c, "GEOSEARCH BYPOLYGON must have at least 3 vertices");
                     return;
@@ -652,7 +652,7 @@ void georadiusGeneric(client *c, int srcKeyIndex, int flags) {
                 shape.t.polygon.num_vertices = num_vertices;
                 shape.t.polygon.points = zmalloc(num_vertices * sizeof(double[2]));
                 for (int j = 0; j < num_vertices * 2; j += 2) {
-                    if (extractLongLatOrReply(c, c->argv + base_args + i + 1 + 1 + j, shape.t.polygon.points[j / 2]) == C_ERR) {
+                    if (extractLongLatOrReply(c, c->argv + base_args + i + 2 + j, shape.t.polygon.points[j / 2]) == C_ERR) {
                         zfree(shape.t.polygon.points);
                         return;
                     }

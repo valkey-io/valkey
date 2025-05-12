@@ -345,27 +345,19 @@ int geohashGetDistanceIfInRectangle(double width_m,
     return 1;
 }
 
-/* PNPOLY - Point Inclusion in Polygon Test by W. Randolph Franklin (WRF)
- * Based on https://wrfranklin.org/Research/Short_Notes/pnpoly.html
- * Returns:
- * 1 - Point is on the left side of a line/segment
- * 0 - Point is on the right side of a line/segment */
-int pointInPolygon(double *vertexA, double *vertexB, double pointLon, double pointLat) {
-    if (((vertexA[1] > pointLat) != (vertexB[1] > pointLat)) && (pointLon < (vertexB[0] - vertexA[0]) * (pointLat - vertexA[1]) / (vertexB[1] - vertexA[1]) + vertexA[0])) {
-        return 1;
-    }
-    return 0;
-}
-
 /* Check if `point` is inside a polygon (defined by `vertices` where each vertex's index 0 is lon & 1 is lat) using
  * ray casting and calculate the distance from the centroid to the point.
  * The Polygon's centroid's lon lat coordinates are `centroidLon` and `centroidLat`.
+ * The algorithm is based on PNPOLY - Point Inclusion in Polygon Test by W. Randolph Franklin (WRF).
+ * See: https://wrfranklin.org/Research/Short_Notes/pnpoly.html
  * Returns 1 if inside the polyon and returns 0 otherwise. */
 int geohashGetDistanceIfInPolygon(double centroidLon, double centroidLat, double *point, double (*vertices)[2], int num_vertices, double *distance) {
     int i, j;
     int inside = 0;
     for (i = 0, j = num_vertices - 1; i < num_vertices; j = i++) {
-        if (pointInPolygon(vertices[i], vertices[j], point[0], point[1])) {
+        double *vertexA = vertices[i];
+        double *vertexB = vertices[j];
+        if (((vertexA[1] > point[1]) != (vertexB[1] > point[1])) && (point[0] < (vertexB[0] - vertexA[0]) * (point[1] - vertexA[1]) / (vertexB[1] - vertexA[1]) + vertexA[0])) {
             inside = !inside;
         }
     }

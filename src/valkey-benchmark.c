@@ -1565,6 +1565,9 @@ usage:
         " __rand_int__       Replaced with a zero-padded random integer in the range\n"
         "                    selected using the -r option.\n"
         " __data__           Replaced with data of the size specified by the -d option.\n"
+        " {tag}              Replaced with a tag that routes the command to each node in\n"
+        "                    a cluster. Include this in key names when running in cluster\n"
+        "                    mode.\n"
         "\n",
         "Options:\n"
         "\n"
@@ -1650,11 +1653,12 @@ usage:
         " Benchmark 127.0.0.1:6379 for a few commands producing CSV output:\n"
         "   $ valkey-benchmark -t ping,set,get -n 100000 --csv\n\n"
         " Benchmark a specific command line:\n"
-        "   $ valkey-benchmark -r 10000 -n 10000 eval 'return redis.call(\"ping\")' 0\n\n"
+        "   $ valkey-benchmark -r 10000 -n 10000 eval 'return server.call(\"ping\")' 0\n\n"
         " Fill a list with 10000 random elements:\n"
         "   $ valkey-benchmark -r 10000 -n 10000 lpush mylist __rand_int__\n\n"
-        " Run 20% SET and 80% GET commands (one SET and four GET):\n"
-        "   $ valkey-benchmark -- set aaa bbb ';' 4 get aaa\n\n");
+        " Benchmark a specific transaction:\n"
+        "   $ valkey-benchmark -- multi ';' set key:__rand_int__ __data__ ';' \\\n"
+        "                         incr counter ';' exec\n\n");
     exit(exit_status);
 }
 

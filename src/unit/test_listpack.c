@@ -859,7 +859,7 @@ int test_listpackLpNextRandomCC(int argc, char **argv, int flags) {
 
     /* Don't crash even for bad index. */
     for (int j = 0; j < 100; j++) {
-        unsigned char *p;
+        unsigned char *p = NULL;
         switch (j % 4) {
         case 0: p = p0; break;
         case 1: p = p1; break;

@@ -445,6 +445,7 @@ static client *createTestClient(void) {
     listSetDupMethod(c->reply, dupClientReplyValue);
     /* dummy connection to bypass assert in closeClientOnOutputBufferLimitReached */
     c->conn = (connection *)c;
+    c->deferred_reply_bytes = ULLONG_MAX;
 
     return c;
 }
@@ -539,6 +540,11 @@ int test_addRepliesWithOffloadsToList(int argc, char **argv, int flags) {
     server.min_io_threads_copy_avoid = 1;
 
     client *c = createTestClient();
+
+    // Mock ACL
+    user u;
+    DefaultUser = &u;
+    DefaultUser->flags = USER_FLAG_NOPASS;
 
     /* Test 1:  Add bulk offloads to the reply list */
 

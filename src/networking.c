@@ -2513,7 +2513,7 @@ static int writevToClient(client *c) {
      * and one partial bulk reply */
     char prefixes[iovmax / NUM_OF_IOV_PER_BULK_STR + 1][BULK_STR_LEN_PREFIX_MAX_SIZE];
     char crlf[2] = {'\r', '\n'};
-    int bufcnt = 0;
+    size_t bufcnt = 0;
 
     size_t bufpos = 0;
     listNode *lastblock;
@@ -2527,10 +2527,11 @@ static int writevToClient(client *c) {
 
     int reply_blocks = (lastblock ? listLength(c->reply) : 0);
     /* +1 is for c->buf */
-    bufWriteMetadata buf_metadata[min(reply_blocks + 1, iovmax)];
+    size_t replyLen = min(reply_blocks + 1, iovmax);
+    bufWriteMetadata buf_metadata[replyLen];
 
     replyIOV reply;
-    initReplyIOV(c, iovmax, iov_arr, prefixes, crlf, &reply);
+    initReplyIOV(c, replyLen, iov_arr, prefixes, crlf, &reply);
 
     /* If the static reply buffer is not empty,
      * add it to the iov array for writev() as well. */
@@ -2562,6 +2563,10 @@ static int writevToClient(client *c) {
             bufcnt++;
 
             if (next == lastblock) break;
+
+            if (reply.iovcnt == reply.iovsize) {
+                reply.limit_reached = 1;
+            }
         }
     }
 
@@ -2599,6 +2604,7 @@ static int writevToClient(client *c) {
     if (totwritten > 0) {
         saveLastWrittenBuf(c, buf_metadata, bufcnt, reply.iov_len_total, totwritten);
     }
+    // zfree(buf_metadata);
     return totwritten > 0 ? C_OK : C_ERR;
 }
 

@@ -2011,8 +2011,8 @@ void zremrangeGenericCommand(client *c, zrange_type rangetype) {
         signalModifiedKey(c, c->db, key);
         notifyKeyspaceEvent(NOTIFY_ZSET, notify_type, key, c->db->id);
         if (keyremoved) notifyKeyspaceEvent(NOTIFY_GENERIC, "del", key, c->db->id);
+        server.dirty += deleted;
     }
-    server.dirty += deleted;
     addReplyLongLong(c, deleted);
 
 cleanup:

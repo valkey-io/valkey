@@ -2,11 +2,7 @@
 #
 # Use minimal.conf to make sure we don't use any configs not supported on the old version.
 
-# make sure the test infra won't use SELECT
-set old_singledb $::singledb
-set ::singledb 1
-
-tags {external:skip needs:other-server cluster modules} {
+tags {external:skip needs:other-server cluster modules singledb} {
     # To run this test use the `--other-server-path` parameter and pass in a compatible server path supporting
     # SendClusterMessage module API.
     #
@@ -59,5 +55,3 @@ tags {external:skip needs:other-server cluster modules} {
         }
     }
 }
-
-set ::singledb $old_singledb

@@ -46,8 +46,6 @@
 #define ECCENT (sqrt(1.0 - (RATIO * RATIO)))
 #define COM (0.5 * ECCENT)
 
-/// @brief The usual PI/180 constant
-const double DEG_TO_RAD = 0.017453292519943295769236907684886;
 /// @brief Earth's quadratic mean radius for WGS-84
 const double EARTH_RADIUS_IN_METERS = 6372797.560856;
 
@@ -233,8 +231,10 @@ double geohashGetDistance(double lon1d, double lat1d, double lon2d, double lat2d
     lon1r = deg_rad(lon1d);
     lon2r = deg_rad(lon2d);
     v = sin((lon2r - lon1r) / 2);
-    /* if v == 0 we can avoid doing expensive math when lons are practically the same */
-    if (v == 0.0) return geohashGetLatDistance(lat1d, lat2d);
+    /* Reflects about 6nm on earth for comparing longitudes. */
+    const double GEO_EPSILON = 1e-15;
+    /* if v == 0, or practically 0, we can avoid doing expensive math when lons are practically the same */
+    if (fabs(v) <= GEO_EPSILON) return geohashGetLatDistance(lat1d, lat2d);
     lat1r = deg_rad(lat1d);
     lat2r = deg_rad(lat2d);
     u = sin((lat2r - lat1r) / 2);

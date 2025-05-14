@@ -229,9 +229,12 @@ robj *createStringObjectWithKeyAndExpire(const char *ptr, size_t len, const sds 
      * heuristics, e.g. we can look at the jemalloc sizes (16-byte intervals up
      * to 128 bytes). */
     size_t size = sizeof(robj);
-    size += (key != NULL) * (sdslen(key) + 3); /* hdr size (1) + hdr (1) + nullterm (1) */
+    if (key) {
+        size_t key_len = sdslen(key);
+        size += sdsReqSize(key_len, sdsReqType(key_len)) + 1; /* 1 byte for prefixed sds hdr size */
+    }
     size += (expire != -1) * sizeof(long long);
-    size += 4 + len; /* embstr header (3) + nullterm (1) */
+    size += sdsReqSize(len, SDS_TYPE_8);
     if (size <= 64) {
         return createEmbeddedStringObjectWithKeyAndExpire(ptr, len, key, expire);
     } else {

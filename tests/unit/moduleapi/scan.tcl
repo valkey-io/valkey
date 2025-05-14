@@ -26,9 +26,9 @@ start_server {tags {"modules"}} {
 
     test {Module scan hash dict} {
         r config set hash-max-ziplist-entries 2
-        r hmset hh f3 v3
-        assert_encoding hashtable hh
-        lsort [r scan.scan_key hh]
+        r hmset hh3 f1 v1 f2 v2 f3 v3
+        assert_encoding hashtable hh3
+        lsort [r scan.scan_key hh3]
     } {{f1 v1} {f2 v2} {f3 v3}}
 
     test {Module scan zset listpack} {

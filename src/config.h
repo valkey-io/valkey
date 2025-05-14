@@ -384,7 +384,7 @@ void setcpuaffinity(const char *cpulist);
 #if HAVE_X86_SIMD
 #define ATTRIBUTE_TARGET_SSE2 __attribute__((target("sse2")))
 #define ATTRIBUTE_TARGET_AVX2 __attribute__((target("avx2")))
-#define ATTRIBUTE_TARGET_AVX512 __attribute__((target("avx512f,avx512bw,avx512vl")))
+#define ATTRIBUTE_TARGET_AVX512 __attribute__((target("avx512f,avx512bw,avx512vl,avx512vpopcntdq")))
 #else
 #define ATTRIBUTE_TARGET_SSE2
 #define ATTRIBUTE_TARGET_AVX2

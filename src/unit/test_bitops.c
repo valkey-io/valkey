@@ -8,6 +8,7 @@
 
 extern long long popcountScalar(void *s, long count);
 #if HAVE_X86_SIMD
+extern long long popcountAVX512(void *s, long count);
 extern long long popcountAVX2(void *s, long count);
 #endif
 #if defined(__aarch64__)
@@ -40,8 +41,13 @@ static int test_case(const char *msg, int size) {
         long long ret_scalar = popcountScalar(buf, size);
         TEST_ASSERT_MESSAGE(msg, expect == ret_scalar);
 #if HAVE_X86_SIMD
-        long long ret_avx2 = popcountAVX2(buf, size);
-        TEST_ASSERT_MESSAGE(msg, expect == ret_avx2);
+        if (__builtin_cpu_supports("avx512f") && __builtin_cpu_supports("avx512vpopcntdq") && __builtin_cpu_supports("avx512bw")) {
+            long long ret_avx512 = popcountAVX512(buf, size);
+            TEST_ASSERT_MESSAGE(msg, expect == ret_avx512);
+        } else {
+            long long ret_avx2 = popcountAVX2(buf, size);
+            TEST_ASSERT_MESSAGE(msg, expect == ret_avx2);
+        }
 #endif
 #if defined(__aarch64__)
         long long ret_neon = popcountNEON(buf, size);
@@ -76,6 +82,10 @@ int test_popcount(int argc, char **argv, int flags) {
     TEST_CASE("Popcount(Part A + Part C)", 8 * 32 * 11 + 7);
     TEST_CASE("Popcount(Part A + Part B + Part C)", 8 * 32 * 3 + 3 * 32 + 5);
     TEST_CASE("Popcount(Corner case)", 0);
+
+    TEST_CASE("Popcountavx512(Part A)", 64 * 2);
+    TEST_CASE("Popcountavx512(Part B)", 2);
+    TEST_CASE("Popcountavx512(Part A + Part B)", 64 * 2 + 2);
 #undef TEST_CASE
 
     return 0;

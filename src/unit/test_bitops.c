@@ -41,7 +41,7 @@ static int test_case(const char *msg, int size) {
         long long ret_scalar = popcountScalar(buf, size);
         TEST_ASSERT_MESSAGE(msg, expect == ret_scalar);
 #if HAVE_X86_SIMD
-        if (__builtin_cpu_supports("avx512f") && __builtin_cpu_supports("avx512vpopcntdq") && __builtin_cpu_supports("avx512bw")) {
+        if (__builtin_cpu_supports("avx512f") && __builtin_cpu_supports("avx512bw") && __builtin_cpu_supports("avx512vpopcntdq")) {
             long long ret_avx512 = popcountAVX512(buf, size);
             TEST_ASSERT_MESSAGE(msg, expect == ret_avx512);
         } else {

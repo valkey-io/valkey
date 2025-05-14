@@ -269,7 +269,7 @@ long long popcountNEON(void *s, long n) {
  * work with an input string length up to 512 MB or more (server.proto_max_bulk_len) */
 long long serverPopcount(void *s, long count) {
 #if HAVE_X86_SIMD
-    if (__builtin_cpu_supports("avx512f") && __builtin_cpu_supports("avx512vpopcntdq") && __builtin_cpu_supports("avx512bw")) {
+    if (__builtin_cpu_supports("avx512f") && __builtin_cpu_supports("avx512bw") && __builtin_cpu_supports("avx512vpopcntdq")) {
         return popcountAVX512(s, count);
     } else {
         return popcountAVX2(s, count);

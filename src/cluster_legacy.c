@@ -6045,7 +6045,7 @@ sds clusterGenNodeDescription(client *c, clusterNode *node, int tls_primary) {
                 continue;
             }
             if (auxFieldHandlers[i].isPresent(node)) {
-                ci = sdscatprintf(ci, ",%s=", auxFieldHandlers[i].field);
+                ci = sdscatfmt(ci, ",%s=", auxFieldHandlers[i].field);
                 ci = auxFieldHandlers[i].getter(node, ci);
             }
         }
@@ -6095,11 +6095,17 @@ sds clusterGenNodeDescription(client *c, clusterNode *node, int tls_primary) {
      * we are migrating to other instances or importing from other
      * instances. */
     if (node->flags & CLUSTER_NODE_MYSELF) {
+        char nodename[CLUSTER_NAMELEN + 1];
+
         for (j = 0; j < CLUSTER_SLOTS; j++) {
             if (server.cluster->migrating_slots_to[j]) {
-                ci = sdscatprintf(ci, " [%d->-%.40s]", j, server.cluster->migrating_slots_to[j]->name);
+                memcpy(nodename, server.cluster->migrating_slots_to[j]->name, CLUSTER_NAMELEN);
+                nodename[CLUSTER_NAMELEN] = '\0';
+                ci = sdscatfmt(ci, " [%i->-%s]", j, nodename);
             } else if (server.cluster->importing_slots_from[j]) {
-                ci = sdscatprintf(ci, " [%d-<-%.40s]", j, server.cluster->importing_slots_from[j]->name);
+                memcpy(nodename, server.cluster->importing_slots_from[j]->name, CLUSTER_NAMELEN);
+                nodename[CLUSTER_NAMELEN] = '\0';
+                ci = sdscatfmt(ci, " [%i-<-%s]", j, nodename);
             }
         }
     }

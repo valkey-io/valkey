@@ -3282,9 +3282,7 @@ int processInputBuffer(client *c) {
 /* This function can be called from the main-thread or from the IO-thread.
  * The function allocates query-buf for the client if required and reads to it from the network.
  * It will set c->nread to the bytes read from the network.
- * Returns non-zero if the buffer was filled (more data may be available).
- */
-
+ * Returns true if the buffer was filled (more data may be available). */
 static bool readToQueryBuf(client *c) {
     int big_arg = 0;
     size_t qblen, readlen;

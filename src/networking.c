@@ -3387,7 +3387,7 @@ void readQueryFromClient(connection *conn) {
 
     if (c->io_write_state != CLIENT_IDLE || c->io_read_state != CLIENT_IDLE) return;
 
-    bool shouldRepeat = false;
+    bool repeat = false;
     int iter = 0;
     do {
         readToQueryBuf(c);
@@ -3396,9 +3396,9 @@ void readQueryFromClient(connection *conn) {
             if (processInputBuffer(c) == C_ERR) return;
         }
         iter++;
-        shouldRepeat = shouldRepeatReadFromPrimary(c, iter);
+        repeat = shouldRepeatReadFromPrimary(c, iter);
         beforeNextClient(c);
-    } while (shouldRepeat);
+    } while (repeat);
 }
 
 /* An "Address String" is a colon separated ip:port pair.

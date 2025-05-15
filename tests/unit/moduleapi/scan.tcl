@@ -52,7 +52,8 @@ start_server {tags {"modules"}} {
 
     test {Module scan set dict} {
         r config set set-max-intset-entries 2
-        r sadd ssa 1 2 3
+        r sadd ssa 1 2 ; # Created as intset
+        r sadd ssa 3   ; # Converted to hashtable
         assert_encoding hashtable ssa
         lsort [r scan.scan_key ssa]
     } {{1 {}} {2 {}} {3 {}}}

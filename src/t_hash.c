@@ -522,7 +522,7 @@ hashtableElementAccessState hashHashtableTypeAccess(hashtable *ht, void *entry) 
 
     if (!delete_expired) return ELEMENT_INVALID;
 
-    if (server.access_context.flags & OBJ_ACCESS_NONE) return ELEMENT_INVALID;
+    if (server.access_context.flags == OBJ_ACCESS_NONE) return ELEMENT_INVALID;
 
     robj *o = server.access_context.key;
     serverDb *db = server.access_context.db;
@@ -547,8 +547,8 @@ void hashTypeResetAccessContext(void) {
     if (o) {
         if (hashTypeLength(o) == 0) {
             initStaticStringObject(keyobj, objectGetKey(o));
-            dbDelete(db, &keyobj);
             notifyKeyspaceEvent(NOTIFY_GENERIC, "del", &keyobj, db->id);
+            dbDelete(db, &keyobj);
         }
     }
 }
@@ -1615,7 +1615,8 @@ void hexpireGenericCommand(client *c, long long basetime, int unit) {
         if (!strcasecmp(c->argv[fields_index]->ptr, "fields")) {
             /* checking optional flags */
             if (parseExtendedExpireArgumentsOrReply(c, &flag, fields_index++) != C_OK) return;
-            if (getLongLongFromObjectOrReply(c, c->argv[fields_index++]->ptr, &num_fields, NULL) != C_OK) return;
+            if (getLongLongFromObjectOrReply(c, c->argv[fields_index++], &num_fields, NULL) != C_OK) return;
+            break;
         }
     }
 
@@ -1679,7 +1680,7 @@ void hpersistCommand(client *c) {
     int fields_index = 4, result = 0;
     long long num_fields = 0;
 
-    if (getLongLongFromObjectOrReply(c, c->argv[fields_index - 1]->ptr, &num_fields, NULL) != C_OK) return;
+    if (getLongLongFromObjectOrReply(c, c->argv[fields_index - 1], &num_fields, NULL) != C_OK) return;
 
     if (num_fields > c->argc - 4) num_fields = c->argc - 4; // Potential user error, but we would like to make effort to comply with the request.
 
@@ -1688,54 +1689,61 @@ void hpersistCommand(client *c) {
 
     robj *hash = lookupKeyWrite(c->db, c->argv[1]);
 
-    for (; fields_index < num_fields; fields_index++) {
-        result = hashTypePersist(hash, c->argv[2]->ptr);
+    hashTypeSetAccessContext(hash, c->db);
+
+    for (; fields_index < 4 + num_fields; fields_index++) {
+        result = hashTypePersist(hash, c->argv[fields_index]->ptr);
         server.dirty += (result > 0 ? 1 : 0); // in case there was a change increment the dirty
         addReplyLongLong(c, result);
     }
+
+    hashTypeResetAccessContext();
 }
 
 void httlGenericCommand(client *c, long long basetime, int unit) {
     int fields_index = 4;
     long long num_fields = 0, result = -2;
 
-    if (getLongLongFromObjectOrReply(c, c->argv[fields_index - 1]->ptr, &num_fields, NULL) != C_OK) return;
+    if (getLongLongFromObjectOrReply(c, c->argv[fields_index - 1], &num_fields, NULL) != C_OK) return;
 
     if (num_fields > c->argc - 4) num_fields = c->argc - 4; // Potential user error, but we would like to make effort to comply with the request.
+
+    robj *hash = lookupKeyRead(c->db, c->argv[1]);
 
     /* From this point we would retunr array reply */
     addReplyArrayLen(c, num_fields);
 
-    robj *hash = lookupKeyRead(c->db, c->argv[1]);
+    hashTypeSetAccessContext(hash, c->db);
 
-    for (; fields_index < num_fields; fields_index++) {
-        if (!hash || hashTypeGetExpiry(hash, c->argv[2]->ptr, &result) == C_ERR) {
-            result = -2;
+    for (; fields_index < 4 + num_fields; fields_index++) {
+        if (!hash || hashTypeGetExpiry(hash, c->argv[fields_index]->ptr, &result) == C_ERR) {
+            addReplyLongLong(c, -2);
         } else if (result == EXPIRY_NONE) {
-            result = -1;
+            addReplyLongLong(c, -1);
         } else {
             result = result - basetime;
             if (result < 0) result = 0;
             addReplyLongLong(c, unit == UNIT_MILLISECONDS ? result : ((result + 500) / 1000));
         }
     }
-    addReplyLongLong(c, result);
+
+    hashTypeResetAccessContext();
 }
 
 void httlCommand(client *c) {
-    hexpireGenericCommand(c, commandTimeSnapshot(), UNIT_SECONDS);
+    httlGenericCommand(c, commandTimeSnapshot(), UNIT_SECONDS);
 }
 
 void hpttlCommand(client *c) {
-    hexpireGenericCommand(c, commandTimeSnapshot(), UNIT_MILLISECONDS);
+    httlGenericCommand(c, commandTimeSnapshot(), UNIT_MILLISECONDS);
 }
 
 void hexpiretimeCommand(client *c) {
-    hexpireGenericCommand(c, 0, UNIT_SECONDS);
+    httlGenericCommand(c, 0, UNIT_SECONDS);
 }
 
 void hpexpiretimeCommand(client *c) {
-    hexpireGenericCommand(c, 0, UNIT_MILLISECONDS);
+    httlGenericCommand(c, 0, UNIT_MILLISECONDS);
 }
 
 /* How many times bigger should be the hash compared to the requested size

@@ -3493,15 +3493,15 @@ struct COMMAND_ARG HEXPIRE_condition_Subargs[] = {
 
 /* HEXPIRE fields argument table */
 struct COMMAND_ARG HEXPIRE_fields_Subargs[] = {
-{MAKE_ARG("numfields",ARG_TYPE_INTEGER,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("numfields",ARG_TYPE_INTEGER,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
 {MAKE_ARG("field",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_MULTIPLE,0,NULL)},
 };
 
 /* HEXPIRE argument table */
 struct COMMAND_ARG HEXPIRE_Args[] = {
 {MAKE_ARG("key",ARG_TYPE_KEY,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
-{MAKE_ARG("seconds",ARG_TYPE_INTEGER,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
-{MAKE_ARG("condition",ARG_TYPE_ONEOF,-1,NULL,NULL,"9.0.0",CMD_ARG_OPTIONAL,4,NULL),.subargs=HEXPIRE_condition_Subargs},
+{MAKE_ARG("seconds",ARG_TYPE_INTEGER,-1,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("condition",ARG_TYPE_ONEOF,-1,NULL,NULL,NULL,CMD_ARG_OPTIONAL,4,NULL),.subargs=HEXPIRE_condition_Subargs},
 {MAKE_ARG("fields",ARG_TYPE_BLOCK,-1,"FIELDS",NULL,NULL,CMD_ARG_NONE,2,NULL),.subargs=HEXPIRE_fields_Subargs},
 };
 
@@ -11466,7 +11466,7 @@ struct COMMAND_STRUCT serverCommandTable[] = {
 /* hash */
 {MAKE_CMD("hdel","Deletes one or more fields and their values from a hash. Deletes the hash if no fields remain.","O(N) where N is the number of fields to be removed.","2.0.0",CMD_DOC_NONE,NULL,NULL,"hash",COMMAND_GROUP_HASH,HDEL_History,1,HDEL_Tips,0,hdelCommand,-3,CMD_WRITE|CMD_FAST,ACL_CATEGORY_HASH,HDEL_Keyspecs,1,NULL,2),.args=HDEL_Args},
 {MAKE_CMD("hexists","Determines whether a field exists in a hash.","O(1)","2.0.0",CMD_DOC_NONE,NULL,NULL,"hash",COMMAND_GROUP_HASH,HEXISTS_History,0,HEXISTS_Tips,0,hexistsCommand,3,CMD_READONLY|CMD_FAST,ACL_CATEGORY_HASH,HEXISTS_Keyspecs,1,NULL,2),.args=HEXISTS_Args},
-{MAKE_CMD("hexpire","Set expiry time on hash object.","O(1) for each field assigned with TTL, so O(N) to add N TTLs when the command is called with multiple fields.","9.0.0",CMD_DOC_NONE,NULL,NULL,"hash",COMMAND_GROUP_HASH,HEXPIRE_History,0,HEXPIRE_Tips,0,hexpireCommand,-5,CMD_WRITE|CMD_DENYOOM|CMD_FAST,ACL_CATEGORY_HASH,HEXPIRE_Keyspecs,1,NULL,4),.args=HEXPIRE_Args},
+{MAKE_CMD("hexpire","Set expiry time on hash object.","O(1) for each field assigned with TTL, so O(N) to add N TTLs when the command is called with multiple fields.","7.2.4",CMD_DOC_NONE,NULL,NULL,"hash",COMMAND_GROUP_HASH,HEXPIRE_History,0,HEXPIRE_Tips,0,hexpireCommand,-5,CMD_WRITE|CMD_DENYOOM|CMD_FAST,ACL_CATEGORY_HASH,HEXPIRE_Keyspecs,1,NULL,4),.args=HEXPIRE_Args},
 {MAKE_CMD("hexpireat","Set expiry time on hash object.","O(1) for each field assigned with TTL, so O(N) to add N TTLs when the command is called with multiple fields.","9.0.0",CMD_DOC_NONE,NULL,NULL,"hash",COMMAND_GROUP_HASH,HEXPIREAT_History,0,HEXPIREAT_Tips,0,hexpireAtCommand,-5,CMD_WRITE|CMD_DENYOOM|CMD_FAST,ACL_CATEGORY_HASH,HEXPIREAT_Keyspecs,1,NULL,4),.args=HEXPIREAT_Args},
 {MAKE_CMD("hexpiretime","Returns the Unix timestamp in seconds since Unix epoch at which the given key's field(s) will expire","O(1) for each field, so O(N) for N items when the command is called with multiple fields.","9.0.0",CMD_DOC_NONE,NULL,NULL,"hash",COMMAND_GROUP_HASH,HEXPIRETIME_History,0,HEXPIRETIME_Tips,0,hexpiretimeCommand,-3,CMD_READONLY|CMD_FAST,ACL_CATEGORY_HASH,HEXPIRETIME_Keyspecs,1,NULL,2),.args=HEXPIRETIME_Args},
 {MAKE_CMD("hget","Returns the value of a field in a hash.","O(1)","2.0.0",CMD_DOC_NONE,NULL,NULL,"hash",COMMAND_GROUP_HASH,HGET_History,0,HGET_Tips,0,hgetCommand,3,CMD_READONLY|CMD_FAST,ACL_CATEGORY_HASH,HGET_Keyspecs,1,NULL,2),.args=HGET_Args},

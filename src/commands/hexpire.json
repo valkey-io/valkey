@@ -3,7 +3,7 @@
         "summary": "Set expiry time on hash object.",
         "complexity": "O(1) for each field assigned with TTL, so O(N) to add N TTLs when the command is called with multiple fields.",
         "group": "hash",
-        "since": "9.0.0",
+        "since": "7.2.4",
         "arity": -5,
         "function": "hexpireCommand",
         "command_flags": [
@@ -67,14 +67,12 @@
             },
             {
                 "name": "seconds",
-                "type": "integer",
-                "key_spec_index": 0
+                "type": "integer"
             },
             {
                 "name": "condition",
                 "type": "oneof",
                 "optional": true,
-                "since": "9.0.0",
                 "arguments": [
                     {
                         "name": "nx",
@@ -106,7 +104,6 @@
                     {
                         "name": "numfields",
                         "type": "integer",
-                        "key_spec_index": 0,
                         "multiple": false
                     },
                     {

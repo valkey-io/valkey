@@ -5,12 +5,11 @@
  * Cluster exported API.
  *----------------------------------------------------------------------------*/
 
-#define CLUSTER_SLOT_MASK_BITS 14                                   /* Number of bits used for slot id. */
-#define CLUSTER_SLOTS (1 << CLUSTER_SLOT_MASK_BITS)                 /* Total number of slots in cluster mode, which is 16384. */
-#define CLUSTER_SLOT_MASK ((unsigned long long)(CLUSTER_SLOTS - 1)) /* Bit mask for slot id stored in LSB. */
-#define CLUSTER_OK 0                                                /* Everything looks ok */
-#define CLUSTER_FAIL 1                                              /* The cluster can't work */
-#define CLUSTER_NAMELEN 40                                          /* sha1 hex length */
+#define CLUSTER_SLOT_MASK_BITS 14                   /* Number of bits used for slot id. */
+#define CLUSTER_SLOTS (1 << CLUSTER_SLOT_MASK_BITS) /* Total number of slots in cluster mode, which is 16384. */
+#define CLUSTER_OK 0                                /* Everything looks ok */
+#define CLUSTER_FAIL 1                              /* The cluster can't work */
+#define CLUSTER_NAMELEN 40                          /* sha1 hex length */
 
 /* Reason why the cluster state changes to fail. When adding new reasons,
  * make sure to update clusterLogFailReason. */
@@ -114,6 +113,7 @@ int detectAndUpdateCachedNodeHealth(void);
 client *createCachedResponseClient(int resp);
 void deleteCachedResponseClient(client *recording_client);
 void clearCachedClusterSlotsResponse(void);
+unsigned int countKeysInSlotForDb(unsigned int hashslot, serverDb *db);
 unsigned int countKeysInSlot(unsigned int hashslot);
 int getSlotOrReply(client *c, robj *o);
 

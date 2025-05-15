@@ -416,11 +416,14 @@ start_server {tags {"pause network"}} {
         # first, clear the database to avoid interference from existing keys on the test results 
         r flushall
 
+        r multi
         # then set a key with expire time
         r set key value px 3
 
         # set pause-write model and wait key expired
         r client pause 10000 write
+        r exec
+
         after 5
 
         wait_for_condition 50 100 {

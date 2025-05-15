@@ -17,8 +17,9 @@
 #include "server.h"
 #include "connection.h"
 
-#if defined __linux__ /* currently RDMA is only supported on Linux */
-#if (USE_RDMA == 1 /* BUILD_YES */) || ((USE_RDMA == 2 /* BUILD_MODULE */) && (BUILD_RDMA_MODULE == 2))
+#if defined __linux__ && defined USE_RDMA /* currently RDMA is only supported on Linux */
+#if (USE_RDMA == 1 /* BUILD_YES */) || \
+    ((USE_RDMA == 2 /* BUILD_MODULE */) && defined(BUILD_RDMA_MODULE) && (BUILD_RDMA_MODULE == 2))
 #include "connhelpers.h"
 
 #include <assert.h>
@@ -1184,10 +1185,14 @@ static int connRdmaConnect(connection *conn,
                            const char *addr,
                            int port,
                            const char *src_addr,
+                           int multipath,
                            ConnectionCallbackFunc connect_handler) {
     rdma_connection *rdma_conn = (rdma_connection *)conn;
     struct rdma_cm_id *cm_id;
     RdmaContext *ctx;
+
+    /* RDMA does not support multipath, and there is no outgoing RDMA connection at the current stage */
+    assert(!multipath);
 
     if (rdmaResolveAddr(rdma_conn, addr, port, src_addr) == C_ERR) {
         return C_ERR;
@@ -1880,7 +1885,7 @@ int RegisterConnectionTypeRdma(void) {
 
 #endif
 
-#if BUILD_RDMA_MODULE == 2 /* BUILD_MODULE */
+#if defined(BUILD_RDMA_MODULE) && BUILD_RDMA_MODULE == 2 /* BUILD_MODULE */
 
 #include "release.h"
 

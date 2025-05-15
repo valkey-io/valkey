@@ -229,9 +229,12 @@ robj *createStringObjectWithKeyAndExpire(const char *ptr, size_t len, const sds 
      * heuristics, e.g. we can look at the jemalloc sizes (16-byte intervals up
      * to 128 bytes). */
     size_t size = sizeof(robj);
-    size += (key != NULL) * (sdslen(key) + 3); /* hdr size (1) + hdr (1) + nullterm (1) */
+    if (key) {
+        size_t key_len = sdslen(key);
+        size += sdsReqSize(key_len, sdsReqType(key_len)) + 1; /* 1 byte for prefixed sds hdr size */
+    }
     size += (expire != -1) * sizeof(long long);
-    size += 4 + len; /* embstr header (3) + nullterm (1) */
+    size += sdsReqSize(len, SDS_TYPE_8);
     if (size <= 64) {
         return createEmbeddedStringObjectWithKeyAndExpire(ptr, len, key, expire);
     } else {
@@ -1242,28 +1245,36 @@ size_t objectComputeSize(robj *key, robj *o, size_t sample_size, int dbid) {
         if (s->cgroups) {
             raxStart(&ri, s->cgroups);
             raxSeek(&ri, "^", NULL, 0);
-            while (raxNext(&ri)) {
+            samples = 0;
+            elesize = 0;
+            while (samples < sample_size && raxNext(&ri)) {
                 streamCG *cg = ri.data;
-                asize += sizeof(*cg);
-                asize += raxAllocSize(cg->pel);
-                asize += sizeof(streamNACK) * raxSize(cg->pel);
+                elesize += sizeof(*cg);
+                elesize += raxAllocSize(cg->pel);
+                elesize += sizeof(streamNACK) * raxSize(cg->pel);
 
                 /* For each consumer we also need to add the basic data
                  * structures and the PEL memory usage. */
                 raxIterator cri;
                 raxStart(&cri, cg->consumers);
                 raxSeek(&cri, "^", NULL, 0);
-                while (raxNext(&cri)) {
+                size_t inner_samples = 0;
+                size_t inner_elesize = 0;
+                while (inner_samples < sample_size && raxNext(&cri)) {
                     streamConsumer *consumer = cri.data;
-                    asize += sizeof(*consumer);
-                    asize += sdslen(consumer->name);
-                    asize += raxAllocSize(consumer->pel);
+                    inner_elesize += sizeof(*consumer);
+                    inner_elesize += sdslen(consumer->name);
+                    inner_elesize += raxAllocSize(consumer->pel);
                     /* Don't count NACKs again, they are shared with the
                      * consumer group PEL. */
+                    inner_samples++;
                 }
                 raxStop(&cri);
+                if (inner_samples) elesize += (double)inner_elesize / inner_samples * raxSize(cg->consumers);
+                samples++;
             }
             raxStop(&ri);
+            if (samples) asize += (double)elesize / samples * raxSize(s->cgroups);
         }
     } else if (o->type == OBJ_MODULE) {
         asize = moduleGetMemUsage(key, o, sample_size, dbid);

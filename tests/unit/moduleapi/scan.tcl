@@ -45,12 +45,14 @@ start_server {tags {"modules"}} {
     } {{f1 1} {f2 2} {f3 3}}
 
     test {Module scan set intset} {
+        r del ss
         r sadd ss 1 2
         assert_encoding intset ss
         lsort [r scan.scan_key ss]
     } {{1 {}} {2 {}}}
 
     test {Module scan set dict} {
+        r del ssa
         r config set set-max-intset-entries 2
         r sadd ssa 1 2 ; # Created as intset
         r sadd ssa 3   ; # Converted to hashtable
@@ -59,6 +61,7 @@ start_server {tags {"modules"}} {
     } {{1 {}} {2 {}} {3 {}}}
 
     test {Module scan set listpack} {
+        r del ss1
         r sadd ss1 a b c
         assert_encoding listpack ss1
         lsort [r scan.scan_key ss1]

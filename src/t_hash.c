@@ -502,6 +502,7 @@ int hashTypeExpireEntry(void *entry) {
     serverAssert(key);
     initStaticStringObject(keyobj, key);
     notifyKeyspaceEvent(NOTIFY_EXPIRED, "hexpired", &keyobj, server.access_context.db->id);
+    serverLog(LL_NOTICE, "expiring entry %s of key %s", (sds)entry, key);
     hashTypePropagateDeletion(server.access_context.db, key, entry);
     return 1;
 }

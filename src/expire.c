@@ -542,7 +542,7 @@ int checkAlreadyExpired(long long when) {
  * - LT: set expiry only when the new expiry is less than current one */
 int parseExtendedExpireArgumentsOrReply(client *c, int *flags, int max_index) {
     int nx = 0, xx = 0, gt = 0, lt = 0;
-    if (max_index < 0) max_index = c->argc - 1;
+    if (max_index < 0) max_index = c->argc;
 
     int j = 3;
     while (j < max_index) {

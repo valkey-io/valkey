@@ -7224,7 +7224,7 @@ __attribute__((weak)) int main(int argc, char **argv) {
 }
 
 void setAccessContext(robj *o, serverDb *db) {
-    setAccessContextWithFlags(o, db, OBJ_ACCESS_NONE);
+    setAccessContextWithFlags(o, db, OBJ_ACCESS_NORMAL);
 }
 
 void setAccessContextWithFlags(robj *o, serverDb *db, int flags) {

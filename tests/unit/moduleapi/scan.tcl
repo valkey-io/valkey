@@ -39,9 +39,9 @@ start_server {tags {"modules"}} {
 
     test {Module scan zset skiplist} {
         r config set zset-max-ziplist-entries 2
-        r zadd zz 3 f3
-        assert_encoding skiplist zz
-        lsort [r scan.scan_key zz]
+        r zadd zz1 1 f1 2 f2 3 f3
+        assert_encoding skiplist zz1
+        lsort [r scan.scan_key zz1]
     } {{f1 1} {f2 2} {f3 3}}
 
     test {Module scan set intset} {
@@ -52,9 +52,9 @@ start_server {tags {"modules"}} {
 
     test {Module scan set dict} {
         r config set set-max-intset-entries 2
-        r sadd ss 3
-        assert_encoding hashtable ss
-        lsort [r scan.scan_key ss]
+        r sadd ssa 1 2 3
+        assert_encoding hashtable ssa
+        lsort [r scan.scan_key ssa]
     } {{1 {}} {2 {}} {3 {}}}
 
     test {Module scan set listpack} {

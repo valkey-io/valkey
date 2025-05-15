@@ -2147,9 +2147,6 @@ struct valkeyServer {
     /* Local environment */
     char *locale_collate;
     char *debug_context; /* A free-form string that has no impact on server except being included in a crash report. */
-
-    /* Replication flow control */
-    int repl_max_reads_per_io_event; /* Maximum allowed reads from the primary file descriptor per I/O event */
 };
 
 #define MAX_KEYS_BUFFER 256

@@ -3286,10 +3286,9 @@ int processInputBuffer(client *c) {
 static bool readToQueryBuf(client *c) {
     int big_arg = 0;
     size_t qblen, readlen;
-    int ret = 0;
 
     /* If the replica RDB client is marked as closed ASAP, do not try to read from it */
-    if (c->flag.close_asap) return ret;
+    if (c->flag.close_asap) return false;
 
     int is_primary = c->read_flags & READ_FLAGS_PRIMARY;
 
@@ -3346,9 +3345,9 @@ static bool readToQueryBuf(client *c) {
 
     c->nread = connRead(c->conn, c->querybuf + qblen, readlen);
     if (c->nread <= 0) {
-        return ret;
+        return false;
     }
-    ret = (size_t)c->nread == readlen;
+
     sdsIncrLen(c->querybuf, c->nread);
     qblen = sdslen(c->querybuf);
     if (c->querybuf_peak < qblen) c->querybuf_peak = qblen;
@@ -3363,7 +3362,7 @@ static bool readToQueryBuf(client *c) {
             c->read_flags |= READ_FLAGS_QB_LIMIT_REACHED;
         }
     }
-    return ret;
+    return (size_t)c->nread == readlen;
 }
 
 #define REPL_MAX_READS_PER_IO_EVENT 25

@@ -3281,13 +3281,17 @@ int processInputBuffer(client *c) {
 
 /* This function can be called from the main-thread or from the IO-thread.
  * The function allocates query-buf for the client if required and reads to it from the network.
- * It will set c->nread to the bytes read from the network. */
-void readToQueryBuf(client *c) {
+ * It will set c->nread to the bytes read from the network.
+ * Returns non-zero if the buffer was filled (more data may be available).
+ */
+
+static bool readToQueryBuf(client *c) {
     int big_arg = 0;
     size_t qblen, readlen;
+    int ret = 0;
 
     /* If the replica RDB client is marked as closed ASAP, do not try to read from it */
-    if (c->flag.close_asap) return;
+    if (c->flag.close_asap) return ret;
 
     int is_primary = c->read_flags & READ_FLAGS_PRIMARY;
 
@@ -3344,9 +3348,9 @@ void readToQueryBuf(client *c) {
 
     c->nread = connRead(c->conn, c->querybuf + qblen, readlen);
     if (c->nread <= 0) {
-        return;
+        return ret;
     }
-    c->is_qb_full_read = (size_t)c->nread == readlen;
+    ret = (size_t)c->nread == readlen;
     sdsIncrLen(c->querybuf, c->nread);
     qblen = sdslen(c->querybuf);
     if (c->querybuf_peak < qblen) c->querybuf_peak = qblen;
@@ -3361,25 +3365,10 @@ void readToQueryBuf(client *c) {
             c->read_flags |= READ_FLAGS_QB_LIMIT_REACHED;
         }
     }
+    return ret;
 }
 
 #define REPL_MAX_READS_PER_IO_EVENT 25
-/** Keeps replica reading from the primary if recvq has data. */
-static bool shouldRepeatReadFromPrimary(client *c, int iteration) {
-    // If the client is not a primary replica, is closing, or flow control is disabled, no more reads.
-    if (!(c->flag.primary) || c->flag.close_asap) {
-        return 0;
-    }
-
-    if (iteration < REPL_MAX_READS_PER_IO_EVENT &&
-        c->is_qb_full_read) {
-        return 1;
-    }
-
-    return 0;
-}
-
-
 void readQueryFromClient(connection *conn) {
     client *c = connGetPrivateData(conn);
     /* Check if we can send the client to be handled by the IO-thread */
@@ -3390,13 +3379,14 @@ void readQueryFromClient(connection *conn) {
     bool repeat = false;
     int iter = 0;
     do {
-        readToQueryBuf(c);
-
+        bool full_read = readToQueryBuf(c);
         if (handleReadResult(c) == C_OK) {
             if (processInputBuffer(c) == C_ERR) return;
         }
-        iter++;
-        repeat = shouldRepeatReadFromPrimary(c, iter);
+        repeat = (c->flag.primary &&
+                  !c->flag.close_asap &&
+                  ++iter < REPL_MAX_READS_PER_IO_EVENT &&
+                  full_read);
         beforeNextClient(c);
     } while (repeat);
 }

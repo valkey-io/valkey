@@ -38,7 +38,7 @@ start_server {tags {"commandlog"} overrides {commandlog-execution-slower-than 10
 
         # Restore min-io-threads-avoid-copy-reply value
         r config set min-io-threads-avoid-copy-reply $copy_avoid
-    } {OK}
+    } {OK} {needs:debug}
 
     test {COMMANDLOG - zero max length is correctly handled} {
         r commandlog reset slow

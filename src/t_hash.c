@@ -301,7 +301,7 @@ size_t hashTypeEntryMemUsage(hashTypeEntry *entry) {
 
     if (entryHasValuePtr(entry)) {
         /* In case the value is not embedded we might not be able to sum all the allocation sizes since the field
-         * header could be too small for holding the reall allocation size. */
+         * header could be too small for holding the real allocation size. */
         mem += zmalloc_usable_size(hashTypeEntryAllocPtr(entry));
     } else {
         mem += sdsReqSize(sdslen(entry), sdsType(entry));

@@ -824,7 +824,7 @@ int hashTypeSet(robj *o, sds field, sds value, long long expiry, int flags) {
  * returns 2 when 'expire' indicate a past Unix time. In this case, if the item exists in the HASH, it will also be expired.
  */
 int hashTypeSetExpire(robj *o, sds field, long long expiry, int flag) {
-    /* If no object we will retunr -2 */
+    /* If no object we will return -2 */
     if (o == NULL) return -2;
 
     if (timestampIsExpired(expiry)) {
@@ -1647,7 +1647,7 @@ void hexpireGenericCommand(client *c, long long basetime, int unit) {
 
     hashTypeSetAccessContext(obj, c->db);
 
-    /* From this point we would retunr array reply */
+    /* From this point we would return array reply */
     addReplyArrayLen(c, num_fields);
 
     for (i = fields_index; i < c->argc; i++) {
@@ -1684,7 +1684,7 @@ void hpersistCommand(client *c) {
 
     if (num_fields > c->argc - 4) num_fields = c->argc - 4; // Potential user error, but we would like to make effort to comply with the request.
 
-    /* From this point we would retunr array reply */
+    /* From this point we would return array reply */
     addReplyArrayLen(c, num_fields);
 
     robj *hash = lookupKeyWrite(c->db, c->argv[1]);
@@ -1710,7 +1710,7 @@ void httlGenericCommand(client *c, long long basetime, int unit) {
 
     robj *hash = lookupKeyRead(c->db, c->argv[1]);
 
-    /* From this point we would retunr array reply */
+    /* From this point we would return array reply */
     addReplyArrayLen(c, num_fields);
 
     hashTypeSetAccessContext(hash, c->db);

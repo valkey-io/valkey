@@ -713,7 +713,7 @@ typedef enum {
  * Data types
  *----------------------------------------------------------------------------*/
 
- /* Generic set command string object set flags */
+/* Generic set command string object set flags */
 #define OBJ_NO_FLAGS 0
 #define OBJ_SET_NX (1 << 0)   /* Set if key not exists. */
 #define OBJ_SET_XX (1 << 1)   /* Set if key exists. */
@@ -1596,8 +1596,8 @@ typedef enum childInfoType {
     CHILD_INFO_TYPE_MODULE_COW_SIZE
 } childInfoType;
 
-#define OBJ_ACCESS_NONE 0          /* Will not actively delete expired accessed elements */
-#define OBJ_ACCESS_NORMAL (1 << 0) /* Deleting lazy expired fields. */
+#define OBJ_ACCESS_NONE 0              /* Will not actively delete expired accessed elements */
+#define OBJ_ACCESS_NORMAL (1 << 0)     /* Deleting lazy expired fields. */
 #define OBJ_ACCESS_IGNORE_TTL (1 << 1) /* treat any accessed field as valid regardless of it's TTL */
 
 typedef struct keyAccessContext {
@@ -1688,7 +1688,7 @@ struct valkeyServer {
                                             * Value: RDB client object
                                             * This structure holds dual-channel sync replicas from the start of their
                                             * RDB transfer until their main channel establishes partial synchronization. */
-    keyAccessContext access_context;        /* The current key access context */
+    keyAccessContext access_context;       /* The current key access context */
     
     client *current_client;                /* The client that triggered the command execution (External or AOF). */
     client *executing_client;              /* The client executing the current command (possibly script or module). */
@@ -2611,7 +2611,6 @@ typedef struct {
 
 #define OBJ_HASH_FIELD 1
 #define OBJ_HASH_VALUE 2
-#define OBJ_HASH_EXPIRY 
 
 /*-----------------------------------------------------------------------------
  * Extern declarations

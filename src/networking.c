@@ -3346,7 +3346,7 @@ void readToQueryBuf(client *c) {
     if (c->nread <= 0) {
         return;
     }
-    c->is_qb_full_read = (size_t)c->nread == readlen ? 1 : 0;
+    c->is_qb_full_read = (size_t)c->nread == readlen;
 
     sdsIncrLen(c->querybuf, c->nread);
     qblen = sdslen(c->querybuf);

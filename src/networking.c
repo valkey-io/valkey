@@ -3396,7 +3396,7 @@ void readQueryFromClient(connection *conn) {
             if (processInputBuffer(c) == C_ERR) return;
         }
         iter++;
-        shouldRepeat = shouldRepeatRead(c, iter);
+        shouldRepeat = shouldRepeatReadFromPrimary(c, iter);
         beforeNextClient(c);
     } while (shouldRepeat);
 }

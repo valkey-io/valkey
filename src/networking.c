@@ -3347,7 +3347,6 @@ void readToQueryBuf(client *c) {
         return;
     }
     c->is_qb_full_read = (size_t)c->nread == readlen;
-
     sdsIncrLen(c->querybuf, c->nread);
     qblen = sdslen(c->querybuf);
     if (c->querybuf_peak < qblen) c->querybuf_peak = qblen;
@@ -3364,14 +3363,8 @@ void readToQueryBuf(client *c) {
     }
 }
 
-/**
- * This function is designed to prioritize replication flow.
- * Determines whether the replica should continue reading from the primary.
- * It dynamically adjusts the read rate based on buffer utilization
- *
- * @return          1 if another read should be attempted, 0 otherwise.
- */
 #define REPL_MAX_READS_PER_IO_EVENT 25
+/** Keeps replica reading from the primary if recvq has data. */
 static bool shouldRepeatReadFromPrimary(client *c, int iteration) {
     // If the client is not a primary replica, is closing, or flow control is disabled, no more reads.
     if (!(c->flag.primary) || c->flag.close_asap) {

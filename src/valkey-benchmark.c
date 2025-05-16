@@ -75,6 +75,12 @@
 
 #define CLIENT_GET_EVENTLOOP(c) (c->thread_id >= 0 ? config.threads[c->thread_id]->el : config.el)
 
+#define PLACEHOLDER_COUNT 10
+static const size_t KEY_PLACEHOLDER_LEN = 12; // length of VALKEY_BENCHMARK_PLACEHOLDERS strings
+static const char *BENCHMARK_PLACEHOLDERS[PLACEHOLDER_COUNT] = {
+    "__rand_int__", "__rand_int1_", "__rand_int2_", "__rand_int3_", "__rand_int4_",
+    "__rand_int5_", "__rand_int6_", "__rand_int7_", "__rand_int8_", "__rand_int9_"};
+
 struct benchmarkThread;
 struct clusterNode;
 struct serverConfig;
@@ -148,9 +154,9 @@ static struct config {
 typedef struct _client {
     valkeyContext *context;
     sds obuf;
-    char **randptr;     /* Pointers to :rand: strings inside the command buf */
-    size_t randlen;     /* Number of pointers in client->randptr */
-    size_t randfree;    /* Number of unused pointers in client->randptr */
+    char **randptr[PLACEHOLDER_COUNT];  /* Pointers to __rand_int__ strings inside the command buf */
+    size_t randlen[PLACEHOLDER_COUNT];  /* Number of pointers in client->randptr */
+    size_t randfree[PLACEHOLDER_COUNT]; /* Number of unused pointers in client->randptr */
     char **stagptr;     /* Pointers to slot hashtags (cluster mode only) */
     size_t staglen;     /* Number of pointers in client->stagptr */
     size_t stagfree;    /* Number of unused pointers in client->stagptr */
@@ -395,7 +401,8 @@ static void freeClient(client c) {
     valkeyFree(c->context);
     if (c->paused) releasePausedClient(c);
     sdsfree(c->obuf);
-    zfree(c->randptr);
+    for (size_t placeholder = 0; placeholder < PLACEHOLDER_COUNT; placeholder++)
+        zfree(c->randptr[placeholder]);
     zfree(c->stagptr);
     zfree(c);
     if (config.num_threads) pthread_mutex_lock(&(config.liveclients_mutex));
@@ -430,23 +437,25 @@ static void resetClient(client c) {
 }
 
 static void generateClientKey(client c) {
-    static _Atomic size_t seq_key = 0;
-    for (size_t i = 0; i < c->randlen; i++) {
-        char *p = c->randptr[i] + 11;
-        size_t key = 0;
-        if (config.keyspacelen != 0) {
-            if (config.sequential_replacement) {
-                key = atomic_fetch_add_explicit(&seq_key, 1, memory_order_relaxed);
-            } else {
-                key = random();
+    static _Atomic uint64_t seq_key[PLACEHOLDER_COUNT] = {0};
+    for (size_t placeholder = 0; placeholder < PLACEHOLDER_COUNT; placeholder++) {
+        for (size_t instance = 0; instance < c->randlen[placeholder]; instance++) {
+            uint64_t key = 0;
+            if (config.keyspacelen != 0) {
+                if (config.sequential_replacement) {
+                    key = atomic_fetch_add_explicit(&seq_key[placeholder], 1, memory_order_relaxed);
+                } else {
+                    key = random();
+                }
+                key %= config.keyspacelen;
             }
-            key %= config.keyspacelen;
-        }
 
-        for (size_t j = 0; j < 12; j++) {
-            *p = '0' + key % 10;
-            key /= 10;
-            p--;
+            char *p = c->randptr[placeholder][instance] + KEY_PLACEHOLDER_LEN - 1;
+            for (size_t j = 0; j < KEY_PLACEHOLDER_LEN; j++) {
+                *p = '0' + key % 10;
+                key /= 10;
+                p--;
+            }
         }
     }
 }
@@ -621,7 +630,9 @@ static void readHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
                         sdsrange(c->obuf, c->prefixlen, -1);
                         /* We also need to fix the pointers to the strings
                          * we need to randomize. */
-                        for (j = 0; j < c->randlen; j++) c->randptr[j] -= c->prefixlen;
+                        for (size_t placeholder = 0; placeholder < PLACEHOLDER_COUNT; placeholder++) {
+                            for (j = 0; j < c->randlen[placeholder]; j++) c->randptr[placeholder][j] -= c->prefixlen;
+                        }
                         /* Fix the pointers to the slot hash tags */
                         for (j = 0; j < c->staglen; j++) c->stagptr[j] -= c->prefixlen;
                         c->prefixlen = 0;
@@ -806,7 +817,6 @@ static void writeHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
  *
  * Even when cloning another client, prefix commands are applied if needed.*/
 static client createClient(char *cmd, int len, int seqlen, client from, int thread_id) {
-    int j;
     int is_cluster_client = (config.cluster_mode && thread_id >= 0);
     client c = zmalloc(sizeof(struct _client));
 
@@ -914,43 +924,48 @@ static client createClient(char *cmd, int len, int seqlen, client from, int thre
         c->obuf = sdscatlen(c->obuf, from->obuf + from->prefixlen, sdslen(from->obuf) - from->prefixlen);
         seqlen = from->seqlen;
     } else {
-        for (j = 0; j < config.pipeline; j++) c->obuf = sdscatlen(c->obuf, cmd, len);
+        for (int j = 0; j < config.pipeline; j++) c->obuf = sdscatlen(c->obuf, cmd, len);
     }
 
     c->written = 0;
     c->seqlen = seqlen;
     c->pending = config.pipeline * seqlen + c->prefix_pending;
-    c->randptr = NULL;
-    c->randlen = 0;
+    memset(c->randptr, (uintptr_t)NULL, PLACEHOLDER_COUNT * sizeof(char **));
+    memset(c->randlen, 0, PLACEHOLDER_COUNT * sizeof(size_t));
     c->stagptr = NULL;
     c->staglen = 0;
 
     /* Find substrings in the output buffer that need to be replaced. */
     if (config.replacekeys) {
         if (from) {
-            c->randlen = from->randlen;
-            c->randfree = 0;
-            c->randptr = zmalloc(sizeof(char *) * c->randlen);
-            /* copy the offsets. */
-            for (j = 0; j < (int)c->randlen; j++) {
-                c->randptr[j] = c->obuf + (from->randptr[j] - from->obuf);
-                /* Adjust for the different select prefix length. */
-                c->randptr[j] += c->prefixlen - from->prefixlen;
+            memcpy(c->randlen, from->randlen, PLACEHOLDER_COUNT * sizeof(size_t));
+            memset(c->randfree, 0, PLACEHOLDER_COUNT * sizeof(size_t));
+
+            for (size_t placeholder = 0; placeholder < PLACEHOLDER_COUNT; placeholder++) {
+                c->randptr[placeholder] = zmalloc(sizeof(char *) * c->randlen[placeholder]);
+                /* copy the tags to be replaced. */
+                for (size_t instance = 0; instance < c->randlen[placeholder]; instance++) {
+                    ptrdiff_t offset = from->randptr[placeholder][instance] - from->obuf;
+                    /* Adjust for the different select prefix length. */
+                    offset += c->prefixlen - from->prefixlen;
+                    c->randptr[placeholder][instance] = c->obuf + offset;
+                }
             }
         } else {
-            char *p = c->obuf;
-
-            c->randlen = 0;
-            c->randfree = RANDPTR_INITIAL_SIZE;
-            c->randptr = zmalloc(sizeof(char *) * c->randfree);
-            while ((p = strstr(p, "__rand_int__")) != NULL) {
-                if (c->randfree == 0) {
-                    c->randptr = zrealloc(c->randptr, sizeof(char *) * c->randlen * 2);
-                    c->randfree += c->randlen;
+            for (size_t placeholder = 0; placeholder < PLACEHOLDER_COUNT; placeholder++) {
+                c->randlen[placeholder] = 0;
+                c->randfree[placeholder] = RANDPTR_INITIAL_SIZE;
+                c->randptr[placeholder] = zmalloc(sizeof(char *) * c->randfree[placeholder]);
+                char *p = c->obuf;
+                while ((p = strstr(p, BENCHMARK_PLACEHOLDERS[placeholder])) != NULL) {
+                    if (c->randfree[placeholder] == 0) {
+                        c->randptr[placeholder] = zrealloc(c->randptr[placeholder], sizeof(char *) * c->randlen[placeholder] * 2);
+                        c->randfree[placeholder] += c->randlen[placeholder];
+                    }
+                    c->randptr[placeholder][c->randlen[placeholder]++] = p;
+                    c->randfree[placeholder]--;
+                    p += KEY_PLACEHOLDER_LEN;
                 }
-                c->randptr[c->randlen++] = p;
-                c->randfree--;
-                p += 12; /* 12 is strlen("__rand_int__). */
             }
         }
     }
@@ -961,7 +976,7 @@ static client createClient(char *cmd, int len, int seqlen, client from, int thre
             c->stagfree = 0;
             c->stagptr = zmalloc(sizeof(char *) * c->staglen);
             /* copy the offsets. */
-            for (j = 0; j < (int)c->staglen; j++) {
+            for (size_t j = 0; j < c->staglen; j++) {
                 c->stagptr[j] = c->obuf + (from->stagptr[j] - from->obuf);
                 /* Adjust for the different select prefix length. */
                 c->stagptr[j] += c->prefixlen - from->prefixlen;
@@ -1790,6 +1805,9 @@ usage:
         "                    use the same key.\n"
         " --sequential       Modifies the -r argument to replace the string __rand_int__\n"
         "                    with 12 digit numbers sequentially instead of randomly.\n"
+        "                    __rand_int1_ through __rand_int9_ are available with independent counters.\n"
+        "                    Used to create expected number of elements with multiple replacements.\n"
+        "                    example: ZADD myzset __rand_int__ element:__rand_int1_\n"
         " -P <numreq>        Pipeline <numreq> requests. That is, send multiple requests\n"
         "                    before waiting for the replies. Default 1 (no pipeline).\n"
         "                    When multiple commands are specified on the command line,\n"
@@ -2192,19 +2210,19 @@ int main(int argc, char **argv) {
         }
 
         if (test_is_selected("set")) {
-            len = valkeyFormatCommand(&cmd, "SET key%s:__rand_int__ %s", tag, data);
+            len = valkeyFormatCommand(&cmd, "SET key%s:%s %s", tag, BENCHMARK_PLACEHOLDERS[0], data);
             benchmark("SET", cmd, len);
             free(cmd);
         }
 
         if (test_is_selected("get")) {
-            len = valkeyFormatCommand(&cmd, "GET key%s:__rand_int__", tag);
+            len = valkeyFormatCommand(&cmd, "GET key%s:%s", tag, BENCHMARK_PLACEHOLDERS[0]);
             benchmark("GET", cmd, len);
             free(cmd);
         }
 
         if (test_is_selected("incr")) {
-            len = valkeyFormatCommand(&cmd, "INCR counter%s:__rand_int__", tag);
+            len = valkeyFormatCommand(&cmd, "INCR counter%s:%s", tag, BENCHMARK_PLACEHOLDERS[0]);
             benchmark("INCR", cmd, len);
             free(cmd);
         }
@@ -2234,13 +2252,13 @@ int main(int argc, char **argv) {
         }
 
         if (test_is_selected("sadd")) {
-            len = valkeyFormatCommand(&cmd, "SADD myset%s element:__rand_int__", tag);
+            len = valkeyFormatCommand(&cmd, "SADD myset%s element:%s", tag, BENCHMARK_PLACEHOLDERS[0]);
             benchmark("SADD", cmd, len);
             free(cmd);
         }
 
         if (test_is_selected("hset")) {
-            len = valkeyFormatCommand(&cmd, "HSET myhash%s element:__rand_int__ %s", tag, data);
+            len = valkeyFormatCommand(&cmd, "HSET myhash%s element:%s %s", tag, BENCHMARK_PLACEHOLDERS[0], data);
             benchmark("HSET", cmd, len);
             free(cmd);
         }
@@ -2253,8 +2271,8 @@ int main(int argc, char **argv) {
 
         if (test_is_selected("zadd")) {
             char *score = "0";
-            if (config.replacekeys) score = "__rand_int__";
-            len = valkeyFormatCommand(&cmd, "ZADD myzset%s %s element:__rand_int__", tag, score);
+            if (config.replacekeys) score = (char *)BENCHMARK_PLACEHOLDERS[0];
+            len = valkeyFormatCommand(&cmd, "ZADD myzset%s %s element:%s", tag, score, BENCHMARK_PLACEHOLDERS[1]);
             benchmark("ZADD", cmd, len);
             free(cmd);
         }
@@ -2299,7 +2317,7 @@ int main(int argc, char **argv) {
         if (test_is_selected("mset")) {
             const char *cmd_argv[21];
             cmd_argv[0] = "MSET";
-            sds key_placeholder = sdscatprintf(sdsnew(""), "key%s:__rand_int__", tag);
+            sds key_placeholder = sdscatprintf(sdsnew(""), "key%s:%s", tag, BENCHMARK_PLACEHOLDERS[0]);
             for (i = 1; i < 21; i += 2) {
                 cmd_argv[i] = key_placeholder;
                 cmd_argv[i + 1] = data;
@@ -2313,7 +2331,7 @@ int main(int argc, char **argv) {
         if (test_is_selected("mget")) {
             const char *cmd_argv[11];
             cmd_argv[0] = "MGET";
-            sds key_placeholder = sdscatprintf(sdsnew(""), "key%s:__rand_int__", tag);
+            sds key_placeholder = sdscatprintf(sdsnew(""), "key%s:%s", tag, BENCHMARK_PLACEHOLDERS[0]);
             for (i = 1; i < 11; i++) {
                 cmd_argv[i] = key_placeholder;
             }

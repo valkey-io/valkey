@@ -246,12 +246,31 @@ int addCommandToBatchAndProcessIfFull(client *c) {
 
     /* Get command's keys positions */
     if (c->io_parsed_cmd) {
+        c->read_flags |= READ_FLAGS_PREFETCHED;
         getKeysResult result;
         initGetKeysResult(&result);
         int num_keys = getKeysFromCommand(c->io_parsed_cmd, c->argv, c->argc, &result);
         for (int i = 0; i < num_keys && batch->key_count < batch->max_prefetch_size; i++) {
             batch->keys[batch->key_count] = c->argv[result.keys[i].pos];
             batch->slots[batch->key_count] = c->slot > 0 ? c->slot : 0;
+            batch->keys_tables[batch->key_count] = kvstoreGetHashtable(c->db->keys, batch->slots[batch->key_count]);
+            batch->key_count++;
+        }
+        getKeysFreeResult(&result);
+    }
+
+    /* Prefetch keys in command queue. */
+    for (int j = c->cmd_queue_off; j < c->cmd_queue_len && batch->key_count < batch->max_prefetch_size; j++) {
+        commandParserState *st = &c->cmd_queue[j];
+        if (!(st->read_flags & READ_FLAGS_PARSING_COMPLETED) || c->argc == 0) continue;
+        if (!st->cmd) continue; /* Looked up by I/O thead. */
+        st->read_flags |= READ_FLAGS_PREFETCHED;
+        getKeysResult result;
+        initGetKeysResult(&result);
+        int num_keys = getKeysFromCommand(st->cmd, st->argv, st->argc, &result);
+        for (int i = 0; i < num_keys && batch->key_count < batch->max_prefetch_size; i++) {
+            batch->keys[batch->key_count] = st->argv[result.keys[i].pos];
+            batch->slots[batch->key_count] = st->slot >= 0 ? st->slot : 0;
             batch->keys_tables[batch->key_count] = kvstoreGetHashtable(c->db->keys, batch->slots[batch->key_count]);
             batch->key_count++;
         }

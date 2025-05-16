@@ -109,17 +109,6 @@ typedef enum {
     PARSE_NEEDMORE = -2,
 } parseResult;
 
-/* State and result for parsing a command from a client's input buffer. */
-struct commandParserState {
-    int flag; /* 0 if parsing is not complete */
-    int argc;
-    robj **argv;
-    int argv_len;
-    size_t argv_len_sum;
-    unsigned long long input_bytes;
-    struct serverCommand *cmd;
-};
-
 /* Return the amount of memory used by the sds string at object->ptr
  * for a string object. This includes internal fragmentation. */
 size_t getStringObjectSdsUsedMemory(robj *o) {
@@ -3131,7 +3120,7 @@ void processMultibulkBuffer(client *c) {
     debugServerAssert(c->cmd_queue_len == 0);
     while (flag != 0 &&
            c->cmd_queue_len < 16 &&
-           sdslen(c->querybuf) - c->qb_pos > 0 &&
+           sdslen(c->querybuf) > c->qb_pos &&
            c->querybuf[c->qb_pos] == '*') {
         c->reqtype = PROTO_REQ_MULTIBULK;
         /* Push a new parser state to the command queue */
@@ -3143,7 +3132,8 @@ void processMultibulkBuffer(client *c) {
         memset(st, 0, sizeof(*st));
         flag = parseMultibulk(c, &st->argc, &st->argv, &st->argv_len,
                               &st->argv_len_sum, &st->input_bytes);
-        st->flag = flag;
+        st->read_flags = flag;
+        st->slot = -1;
     }
 }
 
@@ -3309,13 +3299,14 @@ int canParseCommand(client *c) {
 static bool consumeCommandQueue(client *c) {
     if (c->cmd_queue_off >= c->cmd_queue_len) return false;
     commandParserState *st = &c->cmd_queue[c->cmd_queue_off++];
-    c->read_flags |= st->flag;
+    c->read_flags |= st->read_flags;
     c->argc = st->argc;
     c->argv = st->argv;
     c->argv_len = st->argv_len;
     c->argv_len_sum = st->argv_len_sum;
     c->net_input_bytes_curr_cmd = st->input_bytes;
     c->io_parsed_cmd = st->cmd;
+    c->slot = st->slot;
     if (c->cmd_queue_off == c->cmd_queue_len) {
         c->cmd_queue_off = c->cmd_queue_len = 0;
     }
@@ -3367,7 +3358,7 @@ static int addKeysToIncrFindBatch(client *c,
 
 /* Prefetches the keys for the commands queued up in the client. */
 static void prefetchCommandQueueKeys(client *c) {
-    if (c->cmd_queue_len == 0) return;
+    if (c->read_flags & READ_FLAGS_PREFETCHED) return;
 
     /* Prefetching states */
     const int max_keys = 32;
@@ -3378,30 +3369,33 @@ static void prefetchCommandQueueKeys(client *c) {
 
     /* Lookup commands and add keys to incremental find batch. */
     if (c->read_flags & READ_FLAGS_PARSING_COMPLETED && c->argc != 0) {
-        c->io_parsed_cmd = lookupCommand(c->argv, c->argc);
-        if (c->io_parsed_cmd && !commandCheckArity(c->io_parsed_cmd, c->argc, NULL)) {
-            /* Wrong arity. Reset command so it will be handled later. */
-            c->io_parsed_cmd = NULL;
+        c->read_flags |= READ_FLAGS_PREFETCHED;
+        if (!c->io_parsed_cmd) {
+            struct serverCommand *cmd = lookupCommand(c->argv, c->argc);
+            if (!cmd || !commandCheckArity(cmd, c->argc, NULL)) {
+                /* Wrong arity. This case is handled later. */
+            } else {
+                c->io_parsed_cmd = cmd;
+            }
         }
         if (c->io_parsed_cmd) {
             num_keys = addKeysToIncrFindBatch(c, c->io_parsed_cmd, c->argv, c->argc,
                                               key_incr_states, num_keys, max_keys);
         }
     }
-    for (int i = 0; i < c->cmd_queue_len; i++) {
+    for (int i = c->cmd_queue_off; i < c->cmd_queue_len; i++) {
         commandParserState *st = &c->cmd_queue[i];
-        if (st->flag != READ_FLAGS_PARSING_COMPLETED || c->argc == 0) continue;
+        if (!(st->read_flags & READ_FLAGS_PARSING_COMPLETED) || c->argc == 0) continue;
         if (num_keys >= soft_max_keys) break;
-        st->cmd = lookupCommand(st->argv, st->argc);
-        if (st->cmd) {
-            if (!commandCheckArity(st->cmd, st->argc, NULL)) {
-                /* Wrong arity. Reset command so it will be handled later. */
-                st->cmd = NULL;
-                continue;
-            }
-            num_keys = addKeysToIncrFindBatch(c, st->cmd, st->argv, st->argc,
-                                              key_incr_states, num_keys, max_keys);
+        st->read_flags |= READ_FLAGS_PREFETCHED;
+        if (!st->cmd) {
+            struct serverCommand *cmd = lookupCommand(st->argv, st->argc);
+            /* Wrong arity. Reset command so it will be handled later. */
+            if (!cmd || !commandCheckArity(cmd, st->argc, NULL)) continue;
+            st->cmd = cmd;
         }
+        num_keys = addKeysToIncrFindBatch(c, st->cmd, st->argv, st->argc,
+                                          key_incr_states, num_keys, max_keys);
     }
     if (num_keys <= 1) return; /* No point to batch-lookup a single key */
 
@@ -3442,8 +3436,10 @@ int processInputBuffer(client *c) {
         /* If commands are queued up, pop from the queue first */
         if (!consumeCommandQueue(c)) {
             parseCommand(c);
-            prefetchCommandQueueKeys(c);
         }
+
+        /* Prefetch keys for the next commands in queue, if not already done. */
+        prefetchCommandQueueKeys(c);
 
         if (handleParseResults(c) != PARSE_OK) {
             break;
@@ -5719,7 +5715,25 @@ void ioThreadReadQueryFromClient(void *data) {
         getKeysFreeResult(&result);
     }
 
-    /* TODO: Lookup commands in c->cmd_queue */
+    /* Lookup commands in command queue. */
+    for (int i = c->cmd_queue_off; i < c->cmd_queue_len; i++) {
+        commandParserState *st = &c->cmd_queue[i];
+        if (!(st->read_flags & READ_FLAGS_PARSING_COMPLETED) || c->argc == 0) continue;
+        struct serverCommand *cmd = lookupCommand(st->argv, st->argc);
+        if (!cmd || !commandCheckArity(c->io_parsed_cmd, c->argc, NULL)) continue;
+        st->cmd = cmd;
+        if (server.cluster_enabled) {
+            /* Offload slot calculation to I/O thread */
+            getKeysResult result;
+            initGetKeysResult(&result);
+            int numkeys = getKeysFromCommand(st->cmd, st->argv, st->argc, &result);
+            if (numkeys) {
+                robj *first_key = st->argv[result.keys[0].pos];
+                st->slot = (int)keyHashSlot(first_key->ptr, sdslen(first_key->ptr));
+            }
+            getKeysFreeResult(&result);
+        }
+    }
 
 done:
     /* Only trim query buffer for non-primary clients

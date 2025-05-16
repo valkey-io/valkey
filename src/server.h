@@ -1182,8 +1182,17 @@ typedef struct ClientModuleData {
                                                 * unloaded for cleanup. Opaque for the Server Core.*/
 } ClientModuleData;
 
-/* Opaque, defined in networking.c */
-typedef struct commandParserState commandParserState;
+/* Parser state and parse result of a command from a client's input buffer. */
+typedef struct commandParserState {
+    int read_flags; /* complete, error or 0 (parsing not complete) */
+    int argc;
+    robj **argv;
+    int argv_len;
+    int slot;
+    size_t argv_len_sum;
+    unsigned long long input_bytes;
+    struct serverCommand *cmd;
+} commandParserState;
 
 typedef struct client {
     /* Basic client information and connection. */
@@ -2651,6 +2660,7 @@ void dictVanillaFree(void *val);
 #define READ_FLAGS_PRIMARY (1 << 14)
 #define READ_FLAGS_DONT_PARSE (1 << 15)
 #define READ_FLAGS_AUTH_REQUIRED (1 << 16)
+#define READ_FLAGS_PREFETCHED (1 << 17)
 
 /* Write flags for various write errors and states */
 #define WRITE_FLAGS_WRITE_ERROR (1 << 0)

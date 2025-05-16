@@ -2915,7 +2915,10 @@ static void setProtocolError(const char *errstr, client *c) {
  * READ_FLAGS_PARSING_COMPLETED on success or one of the READ_FLAGS_ERROR_(...)
  * values on parse error.
  */
-static int parseMultibulk(client *c, int *argc, robj ***argv, int *argv_len,
+static int parseMultibulk(client *c,
+                          int *argc,
+                          robj ***argv,
+                          int *argv_len,
                           size_t *argv_len_sum,
                           unsigned long long *net_input_bytes_curr_cmd) {
     char *newline = NULL;
@@ -3333,8 +3336,13 @@ static void discardCommandQueue(client *c) {
 }
 
 /* Returns the number of keys in the the incr_states array after adding keys. */
-static int addKeysToIncrFindBatch(client *c, struct serverCommand *cmd, robj **argv, int argc,
-                                  hashtableIncrementalFindState *incr_states, int num, int max) {
+static int addKeysToIncrFindBatch(client *c,
+                                  struct serverCommand *cmd,
+                                  robj **argv,
+                                  int argc,
+                                  hashtableIncrementalFindState *incr_states,
+                                  int num,
+                                  int max) {
     getKeysResult result;
     initGetKeysResult(&result);
     int numkeys = getKeysFromCommand(cmd, argv, argc, &result);

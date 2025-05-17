@@ -1143,7 +1143,8 @@ static int sdsparsearg(const char *arg, unsigned int *len, char *dst) {
  */
 sds *sdssplitargs(const char *line, int *argc) {
     const char *p = line;
-    char **vector = NULL;
+    size_t cap = 0;
+    sds *vector = NULL;
 
     *argc = 0;
     while (*p) {
@@ -1158,9 +1159,11 @@ sds *sdssplitargs(const char *line, int *argc) {
             p += parsedlen;
 
             /* add the token to the vector */
-            vector = s_realloc(vector, ((*argc) + 1) * sizeof(char *));
-            vector[*argc] = current;
-            (*argc)++;
+            if ((size_t)*argc == cap) {
+                cap = cap == 0 ? 8 : (cap * 2);
+                vector = s_realloc(vector, sizeof(sds) * cap);
+            }
+            vector[(*argc)++] = current;
             current = NULL;
         } else {
             while ((*argc)--) sdsfree(vector[*argc]);

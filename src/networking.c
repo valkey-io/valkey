@@ -99,6 +99,12 @@ static int clientMatchesCapaFilter(client *c, sds capa_filter);
 static void freeClientFilter(clientFilter *filter);
 static bool consumeCommandQueue(client *c);
 static void discardCommandQueue(client *c);
+static int parseMultibulk(client *c,
+                          int *argc,
+                          robj ***argv,
+                          int *argv_len,
+                          size_t *argv_len_sum,
+                          unsigned long long *net_input_bytes_curr_cmd);
 
 int ProcessingEventsWhileBlocked = 0; /* See processEventsWhileBlocked(). */
 __thread sds thread_shared_qb = NULL;
@@ -2889,7 +2895,46 @@ static void setProtocolError(const char *errstr, client *c) {
     c->flag.protocol_error = 1;
 }
 
-/* Incremental parsing of a command in the client's input buffer.
+/* Process the query buffer for client 'c', setting up the client argument
+ * vector for command execution and parses additional commands into a queue.
+ * Sets the client's read_flags to indicate the parsing outcome.
+ *
+ * This function is called if processInputBuffer() detects that the next
+ * command is in RESP format, so the first byte in the command is found
+ * to be '*'. Otherwise for inline commands processInlineBuffer() is called. */
+void processMultibulkBuffer(client *c) {
+    int flag = parseMultibulk(c, &c->argc, &c->argv, &c->argv_len,
+                              &c->argv_len_sum, &c->net_input_bytes_curr_cmd);
+    c->read_flags |= flag;
+
+    if (c->read_flags & READ_FLAGS_AUTH_REQUIRED) {
+        /* Execute client's AUTH command before parsing more, because it affects
+         * parser limits for max allowed bulk and multibulk lengths. */
+        return;
+    }
+
+    /* Try parsing pipelined commands. */
+    debugServerAssert(c->cmd_queue_len == 0);
+    while (flag != 0 &&
+           c->cmd_queue_len < 16 &&
+           sdslen(c->querybuf) > c->qb_pos &&
+           c->querybuf[c->qb_pos] == '*') {
+        c->reqtype = PROTO_REQ_MULTIBULK;
+        /* Push a new parser state to the command queue */
+        if (c->cmd_queue_len == c->cmd_queue_cap) {
+            c->cmd_queue_cap = c->cmd_queue_cap == 0 ? 1 : c->cmd_queue_cap * 2;
+            c->cmd_queue = zrealloc(c->cmd_queue, c->cmd_queue_cap * sizeof(commandParserState));
+        }
+        commandParserState *st = &c->cmd_queue[c->cmd_queue_len++];
+        memset(st, 0, sizeof(*st));
+        flag = parseMultibulk(c, &st->argc, &st->argv, &st->argv_len,
+                              &st->argv_len_sum, &st->input_bytes);
+        st->read_flags = flag;
+        st->slot = -1;
+    }
+}
+
+/* Incremental parsing of a command in the client's query buffer.
  *
  * Parser state related to the input buffer are per client and stored in the
  * client struct: querybuf, qb_len, multibulklen, bulklen, querybuf_peak.
@@ -2902,8 +2947,7 @@ static void setProtocolError(const char *errstr, client *c) {
  * if the input buffer doesn't contain a enough data to parse a complete
  * command. If non-zero is returned, the returned value is a read flag, either
  * READ_FLAGS_PARSING_COMPLETED on success or one of the READ_FLAGS_ERROR_(...)
- * values on parse error.
- */
+ * values on parse error. */
 static int parseMultibulk(client *c,
                           int *argc,
                           robj ***argv,
@@ -3096,45 +3140,6 @@ static int parseMultibulk(client *c,
         return READ_FLAGS_PARSING_COMPLETED;
     }
     return 0;
-}
-
-/* Process the query buffer for client 'c', setting up the client argument
- * vector for command execution.
- * Sets the client's read_flags to indicate the parsing outcome.
- *
- * This function is called if processInputBuffer() detects that the next
- * command is in RESP format, so the first byte in the command is found
- * to be '*'. Otherwise for inline commands processInlineBuffer() is called. */
-void processMultibulkBuffer(client *c) {
-    int flag = parseMultibulk(c, &c->argc, &c->argv, &c->argv_len,
-                              &c->argv_len_sum, &c->net_input_bytes_curr_cmd);
-    c->read_flags |= flag;
-
-    if (c->read_flags & READ_FLAGS_AUTH_REQUIRED) {
-        /* Execute client's AUTH command before parsing more, because it affects
-         * parser limits for max allowed bulk and multibulk lengths. */
-        return;
-    }
-
-    /* Try parsing pipelined commands. */
-    debugServerAssert(c->cmd_queue_len == 0);
-    while (flag != 0 &&
-           c->cmd_queue_len < 16 &&
-           sdslen(c->querybuf) > c->qb_pos &&
-           c->querybuf[c->qb_pos] == '*') {
-        c->reqtype = PROTO_REQ_MULTIBULK;
-        /* Push a new parser state to the command queue */
-        if (c->cmd_queue_len == c->cmd_queue_cap) {
-            c->cmd_queue_cap = c->cmd_queue_cap == 0 ? 1 : c->cmd_queue_cap * 2;
-            c->cmd_queue = zrealloc(c->cmd_queue, c->cmd_queue_cap * sizeof(commandParserState));
-        }
-        commandParserState *st = &c->cmd_queue[c->cmd_queue_len++];
-        memset(st, 0, sizeof(*st));
-        flag = parseMultibulk(c, &st->argc, &st->argv, &st->argv_len,
-                              &st->argv_len_sum, &st->input_bytes);
-        st->read_flags = flag;
-        st->slot = -1;
-    }
 }
 
 /* Perform necessary tasks after a command was executed:

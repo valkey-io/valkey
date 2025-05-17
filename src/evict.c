@@ -419,7 +419,7 @@ int getMaxmemoryState(size_t *total, size_t *logical, size_t *tofree, float *lev
  * return 0 if not. The server may reject user's requests or evict some keys if used
  * memory exceeds maxmemory, especially, when we allocate huge memory at once. */
 int overMaxmemoryAfterAlloc(size_t moremem) {
-    if (!server.maxmemory) return 0; /* No limit. */
+    if (!server.maxmemory || moremem == 0) return 0; /* No limit. */
 
     /* Check quickly. */
     size_t mem_used = zmalloc_used_memory();

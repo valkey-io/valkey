@@ -614,14 +614,6 @@ static int resize(hashtable *ht, size_t min_capacity, int *malloc_failed) {
         return 0;
     }
 
-    if (ht->type->resizeAllowed) {
-        double fill_factor = (double)min_capacity / ((double)numBuckets(old_exp) * ENTRIES_PER_BUCKET);
-        if (fill_factor * 100 < MAX_FILL_PERCENT_HARD && !ht->type->resizeAllowed(alloc_size, fill_factor)) {
-            /* Resize callback says no. */
-            return 0;
-        }
-    }
-
     /* We can't resize if rehashing is already ongoing. Fast-forward ongoing
      * rehashing before we continue. This can happen only in exceptional
      * scenarios, such as when many insertions are made while rehashing is
@@ -630,6 +622,14 @@ static int resize(hashtable *ht, size_t min_capacity, int *malloc_failed) {
         if (hashtableIsRehashingPaused(ht)) return 0;
         while (hashtableIsRehashing(ht)) {
             rehashStep(ht);
+        }
+    }
+
+    if (ht->type->resizeAllowed) {
+        double fill_factor = (double)min_capacity / ((double)numBuckets(old_exp) * ENTRIES_PER_BUCKET);
+        if (fill_factor * 100 < MAX_FILL_PERCENT_HARD && !ht->type->resizeAllowed(exp > old_exp ? alloc_size : 0, fill_factor)) {
+            /* Resize callback says no. */
+            return 0;
         }
     }
 

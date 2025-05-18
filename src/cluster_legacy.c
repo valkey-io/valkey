@@ -1674,10 +1674,11 @@ int clusterNodeAddFailureReport(clusterNode *failing, clusterNode *sender) {
     /* If a failure report from the same sender already exists, just update
      * the timestamp. */
     listRewind(l, &li);
+    mstime_t now = mstime();
     while ((ln = listNext(&li)) != NULL) {
         fr = ln->value;
         if (fr->node == sender) {
-            fr->time = mstime();
+            fr->time = now;
             return 0;
         }
     }
@@ -1685,7 +1686,7 @@ int clusterNodeAddFailureReport(clusterNode *failing, clusterNode *sender) {
     /* Otherwise create a new report. */
     fr = zmalloc(sizeof(*fr));
     fr->node = sender;
-    fr->time = mstime();
+    fr->time = now;
     listAddNodeTail(l, fr);
     return 1;
 }

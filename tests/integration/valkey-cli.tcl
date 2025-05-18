@@ -879,4 +879,19 @@ if {!$::tls} { ;# fake_redis_node doesn't support TLS
             assert_equal {PONG} [exec {*}$cmdline PING]
         }
     }
+
+    test "valkey-cli command table hint will not leak memory when COMMAND fails due to auth" {
+        # Enable auth of server.
+        set fd [open_cli]
+        assert_equal "OK" [run_command $fd "CONFIG SET requirepass 12345"]
+
+        # Using another client to send a command (non-AUTH command), then closing the client.
+        set fd2 [open_cli]
+        assert_match "NOAUTH*" [run_command $fd2 "PING"]
+        close_cli $fd2
+
+        # Disable auth of server.
+        assert_equal "OK" [run_command $fd "CONFIG SET requirepass \"\""]
+        close_cli $fd
+    }
 }

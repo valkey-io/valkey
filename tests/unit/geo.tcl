@@ -550,6 +550,14 @@ start_server {tags {"geo"}} {
         assert_equal {{1 0.0001} {2 9.8182}} [r GEORADIUS points -122.407107 37.794300 30 mi ASC WITHDIST]
     }
 
+    test {GEOSEARCH with exact zero distances} {
+        r del points
+        # These are full precision coordinates, so the distance should 0.0000
+        r geoadd points -122.40710645914077759 37.79430076631935975 position
+        assert_equal {{position 0.0000}} [r GEOSEARCH points FROMMEMBER position BYRADIUS 0 mi ASC WITHDIST]
+        assert_equal {{position 0.0000}} [r GEOSEARCH points FROMLONLAT -122.40710645914077759 37.79430076631935975 BYRADIUS 0 mi ASC WITHDIST]
+    }
+
     foreach {type} {byradius bybox} {
     test "GEOSEARCH fuzzy test - $type" {
         if {$::accurate} { set attempt 300 } else { set attempt 30 }

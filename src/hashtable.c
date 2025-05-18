@@ -887,7 +887,6 @@ static inline hashtableElementAccessState accessElementIfNeeded(hashtable *ht, v
     if (ht->type->accessElement == NULL) return ELEMENT_VALID;
 
     hashtableElementAccessState element_status = ht->type->accessElement(ht, elem);
-    serverLog(LL_NOTICE, "hashtable access returned: %d", element_status);
     if (element_status == ELEMENT_DELETE) {
         b->presence &= ~(1 << pos_in_bucket);
         ht->used[table_index]--;

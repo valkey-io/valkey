@@ -187,6 +187,177 @@ static inline int isReplicaReadyForReplData(client *replica) {
            !(replica->flag.close_asap);
 }
 
+/*
+ * Add a recently parsed command to the client's parsed command queue.
+ *
+ * This helps reduce the burden on the main thread by allowing the I/O thread to
+ * parse all the commands and store them in a queue. The new command can be added
+ * to the end of the queue or, alternatively, to the beginning.
+ *
+ * The queue is automatically enlarged if it is full and a command is being
+ * added to the end.
+ *
+ * Parameters:
+ *
+ * - c: The client structure whose `parsed_cmd_queue` will be modified.
+ *      After the command information (argc, argv, etc.) is copied,
+ *      these fields on `c` are cleared.
+ *
+ * - append_to_tail: If true, the command is directed to the end (tail) of the queue.
+ *                   If false, it is directed to the start (head). When adding
+ *                   to the head, it is required that `c->parsed_cmd_queue.head` be > 0.
+ *
+ * Notes:
+ * - The `c->argv` pointer (and its associated data) is moved into the queue.
+ * - If cluster mode is active, the first key's slot is computed within this function.
+ */
+static void enqueueParsedCommand(client *c, bool append_to_tail) {
+    /* If the tail is at 0, this indicate an empty queue.
+     * Initialization with a starting size is performed if this is the case. */
+    if (c->parsed_cmd_queue.tail == 0) {
+        serverAssert(c->parsed_cmd_queue.head == 0);
+        zfree(c->parsed_cmd_queue.parsed_cmds);
+        c->parsed_cmd_queue.capacity = 16;
+        c->parsed_cmd_queue.parsed_cmds = zmalloc(sizeof(parsedCommand) * c->parsed_cmd_queue.capacity);
+    }
+
+    /* If space at the tail is nearly exhausted, the queue is enlarged.
+     * This resizing logic is triggered only when adding to the tail. */
+    if (append_to_tail && c->parsed_cmd_queue.capacity == c->parsed_cmd_queue.tail) {
+        /* Double the size of the parsed command queue if it won't go beyond 256;
+         * otherwise, just add another 32 entries. */
+        if (c->parsed_cmd_queue.capacity > 256) {
+            c->parsed_cmd_queue.capacity += 32;
+        } else {
+            c->parsed_cmd_queue.capacity *= 2;
+        }
+        serverAssert(c->parsed_cmd_queue.capacity > 0);
+        c->parsed_cmd_queue.parsed_cmds =
+            zrealloc(c->parsed_cmd_queue.parsed_cmds,
+                     sizeof(parsedCommand) * c->parsed_cmd_queue.capacity);
+    }
+
+    serverAssert(append_to_tail || c->parsed_cmd_queue.head > 0);
+    parsedCommand *parsed_cmd;
+    if (append_to_tail) {
+        parsed_cmd = &c->parsed_cmd_queue.parsed_cmds[c->parsed_cmd_queue.tail++];
+    } else {
+        parsed_cmd = &c->parsed_cmd_queue.parsed_cmds[--c->parsed_cmd_queue.head];
+    }
+
+    /* Copy the command information to the parsed command structure. */
+    parsed_cmd->argc = c->argc;
+    parsed_cmd->argv = c->argv;
+    parsed_cmd->argv_len = c->argv_len;
+    parsed_cmd->argv_len_sum = c->argv_len_sum;
+
+    parsed_cmd->server_cmd = lookupCommand(c->argv, c->argc);
+    parsed_cmd->valid_arity = parsed_cmd->server_cmd && commandCheckArity(parsed_cmd->server_cmd, c->argc, NULL);
+    parsed_cmd->slot = -1;
+    parsed_cmd->duration = c->duration;
+
+    /* Offload slot calculations to the I/O thread to reduce main-thread load. */
+    if (parsed_cmd->valid_arity && server.cluster_enabled) {
+        getKeysResult result;
+        initGetKeysResult(&result);
+        int numkeys = getKeysFromCommand(parsed_cmd->server_cmd, parsed_cmd->argv, parsed_cmd->argc, &result);
+        if (numkeys) {
+            robj *first_key = parsed_cmd->argv[result.keys[0].pos];
+            parsed_cmd->slot = keyHashSlot(first_key->ptr, sdslen(first_key->ptr));
+        }
+        getKeysFreeResult(&result);
+    }
+
+    /* Reset the client's command information. */
+    c->argc = 0;
+    c->argv = NULL;
+    c->argv_len = 0;
+    c->argv_len_sum = 0;
+    c->slot = -1;
+    c->duration = 0;
+}
+
+/*
+ * Retrieve a command the front of the client's parsed command queue.
+ *
+ * When a command is available (meaning the queue's head is before its tail),
+ * it is taken from the head. The command's details, such as arguments and slot
+ * information, are then loaded into the client's active command fields.
+ * The queue's head pointer is advanced as part of this operation.
+ *
+ * Parameters:
+ * - c: The client structure from which a command is to be dequeued.
+ *      The client's active command fields (like `c->argc`, `c->argv`)
+ *      will be populated with data from the dequeued command.
+ *
+ * Returns:
+ * - `true` if a command was successfully taken from the queue.
+ * - `false` if the queue was found to be empty.
+ *
+ * Notes:
+ * - Ownership of the `argv` array and its contents is transferred from
+ *   the queue to the client's active fields.
+ * - To reflect this transfer, the `argv` pointer in the now-empty queue
+ *   slot is set to NULL.
+ */
+static bool dequeueParsedCommand(client *c) {
+    if (c->parsed_cmd_queue.head >= c->parsed_cmd_queue.tail) return false;
+
+    parsedCommand *parsed_cmd = &c->parsed_cmd_queue.parsed_cmds[c->parsed_cmd_queue.head++];
+
+    /* Command details are copied from the queue slot to the client's active fields. */
+    if (parsed_cmd->valid_arity) c->io_parsed_cmd = parsed_cmd->server_cmd;
+    c->argc = parsed_cmd->argc;
+    c->argv = parsed_cmd->argv;
+    c->argv_len = parsed_cmd->argv_len;
+    c->argv_len_sum = parsed_cmd->argv_len_sum;
+    c->slot = parsed_cmd->slot;
+    c->duration = parsed_cmd->duration;
+
+    /* Zero out the queued command's argv pointer and its length
+     * to indicate that the command has been moved out of the queue. */
+    parsed_cmd->argv = NULL;
+    parsed_cmd->argc = 0;
+
+    return true;
+}
+
+/*
+ * Reset the client's parsed command queue
+ *
+ * Commands residing in the queue, specifically those from index 0 up to
+ * the current `tail` position, are processed. For each such command, its
+ * associated arguments (`argv`) are freed. An attempt is made to offload
+ * this deallocation to I/O threads; if this is not successful, the
+ * deallocation occurs synchronously. This involves decrementing reference
+ * counts and freeing the `argv` array.
+ *
+ * Once all relevant command slots have been handled, the queue's head and
+ * tail indices are reset to 0, signifying an empty queue.
+ *
+ * Parameters:
+ * - c: The client structure whose `parsed_cmd_queue` is to be reset.
+ *
+ * Notes:
+ * - Iteration for freeing commands occurs from queue index 0 up to
+ *   `c->parsed_cmd_queue.tail - 1`. Slots where `argv` is already NULL
+ *   (e.g., due to prior dequeuing) are skipped.
+ * - The primary mechanism for freeing `argv` attempts to use I/O threads;
+ *   direct freeing by the calling thread is a fallback.
+ */
+static void resetParsedCommandQueue(client *c) {
+    if (c->parsed_cmd_queue.tail == 0) return;
+    for (int i = 0; i < c->parsed_cmd_queue.tail; i++) {
+        parsedCommand *parsed_cmd = &c->parsed_cmd_queue.parsed_cmds[i];
+        if (tryOffloadFreeArgvToIOThreads(c, parsed_cmd->argc, parsed_cmd->argv) == C_OK) continue;
+        for (int j = 0; j < parsed_cmd->argc; j++) decrRefCount(parsed_cmd->argv[j]);
+        zfree(parsed_cmd->argv);
+        memset(parsed_cmd, 0, sizeof(parsedCommand));
+    }
+    c->parsed_cmd_queue.head = 0;
+    c->parsed_cmd_queue.tail = 0;
+}
+
 client *createClient(connection *conn) {
     client *c = zmalloc(sizeof(client));
 
@@ -224,6 +395,7 @@ client *createClient(connection *conn) {
     c->argv = NULL;
     c->argv_len = 0;
     c->argv_len_sum = 0;
+    memset(&c->parsed_cmd_queue, 0, sizeof(c->parsed_cmd_queue));
     c->original_argc = 0;
     c->original_argv = NULL;
     c->nread = 0;
@@ -1606,6 +1778,7 @@ void freeClientArgv(client *c) {
     c->argv_len_sum = 0;
     c->argv_len = 0;
     c->argv = NULL;
+    resetParsedCommandQueue(c);
 }
 
 /* Close all the replicas connections. This is useful in chained replication
@@ -1836,6 +2009,11 @@ void freeClient(client *c) {
 #ifdef LOG_REQ_RES
     reqresReset(c, 1);
 #endif
+
+    if (c->parsed_cmd_queue.parsed_cmds) {
+        zfree(c->parsed_cmd_queue.parsed_cmds);
+        memset(&c->parsed_cmd_queue, 0, sizeof(c->parsed_cmd_queue));
+    }
 
     /* Remove the contribution that this client gave to our
      * incrementally computed memory usage. */
@@ -2829,6 +3007,7 @@ void processInlineBuffer(client *c) {
         c->argc++;
         c->argv_len_sum += sdslen(argv[j]);
     }
+
     zfree(argv);
 
     /* Per-slot network bytes-in calculation.
@@ -2846,6 +3025,8 @@ void processInlineBuffer(client *c) {
      * */
     c->net_input_bytes_curr_cmd = (c->argv_len_sum + (c->argc - 1) + 2);
     c->read_flags |= READ_FLAGS_PARSING_COMPLETED;
+
+    if (argc) enqueueParsedCommand(c, true);
 }
 
 /* Helper function. Record protocol error details in server log,
@@ -3081,6 +3262,9 @@ void processMultibulkBuffer(client *c) {
     if (c->multibulklen == 0) {
         /* Per-slot network bytes-in calculation, 3rd and 4th components. */
         c->net_input_bytes_curr_cmd += (c->argv_len_sum + (c->argc * 2));
+
+        enqueueParsedCommand(c, true);
+
         c->read_flags |= READ_FLAGS_PARSING_COMPLETED;
     }
 }
@@ -3098,7 +3282,12 @@ void commandProcessed(client *c) {
      *    The client will be reset in unblockClient().
      * 2. Don't update replication offset or propagate commands to replicas,
      *    since we have not applied the command. */
-    if (c->flag.blocked) return;
+    if (c->flag.blocked) {
+        /* If the client is paused, we need to re-queue the command
+         * to be executed so that it can be processed later. */
+        enqueueParsedCommand(c, false);
+        return;
+    }
 
     reqresAppendResponse(c);
     clusterSlotStatsAddNetworkBytesInForUserClient(c);
@@ -3138,8 +3327,15 @@ void commandProcessed(client *c) {
 int processCommandAndResetClient(client *c) {
     int deadclient = 0;
     client *old_client = server.current_client;
+    int ret = C_OK;
+
     server.current_client = c;
-    if (processCommand(c) == C_OK) {
+    while (!c->flag.blocked && ret == C_OK) {
+        if (!dequeueParsedCommand(c)) break;
+        ret = processCommand(c);
+    }
+
+    if (ret == C_OK) {
         commandProcessed(c);
         /* Update the client's memory to include output buffer growth following the
          * processed command. */
@@ -3161,7 +3357,6 @@ int processCommandAndResetClient(client *c) {
     return deadclient ? C_ERR : C_OK;
 }
 
-
 /* This function will execute any fully parsed commands pending on
  * the client. Returns C_ERR if the client is no longer valid after executing
  * the command, and C_OK for all other cases. */
@@ -3177,14 +3372,6 @@ int processPendingCommandAndInputBuffer(client *c) {
         }
     }
 
-    /* Now process client if it has more data in it's buffer.
-     *
-     * Note: when a primary client steps into this function,
-     * it can always satisfy this condition, because its querybuf
-     * contains data not applied. */
-    if (c->querybuf && sdslen(c->querybuf) > 0) {
-        return processInputBuffer(c);
-    }
     return C_OK;
 }
 
@@ -3254,7 +3441,7 @@ int processInputBuffer(client *c) {
             break;
         }
 
-        if (c->argc == 0) {
+        if (c->parsed_cmd_queue.tail == 0) {
             /* No command to process - continue parsing the query buf. */
             continue;
         }
@@ -3266,7 +3453,10 @@ int processInputBuffer(client *c) {
             resetSharedQueryBuf(c);
         }
 
-        /* We are finally ready to execute the command. */
+        /* If we are in the IO thread, we continue to parse the next command in querybuf. */
+        if (!inMainThread()) continue;
+
+        /* If we are in the main thread, we are finally ready to execute the command. */
         if (processCommandAndResetClient(c) == C_ERR) {
             /* If the client is no longer valid, we avoid exiting this
              * loop and trimming the client buffer later. So we return
@@ -5395,7 +5585,7 @@ int processIOThreadsReadDone(void) {
             }
         }
 
-        if (c->argc > 0) {
+        if (c->parsed_cmd_queue.tail > 0) {
             c->flag.pending_command = 1;
         }
 
@@ -5492,7 +5682,7 @@ void ioThreadReadQueryFromClient(void *data) {
         goto done;
     }
 
-    parseCommand(c);
+    processInputBuffer(c);
 
     /* Parsing was not completed - let the main-thread handle it. */
     if (!(c->read_flags & READ_FLAGS_PARSING_COMPLETED)) {
@@ -5502,26 +5692,6 @@ void ioThreadReadQueryFromClient(void *data) {
     /* Empty command - Multibulk processing could see a <= 0 length. */
     if (c->argc == 0) {
         goto done;
-    }
-
-    /* Lookup command offload */
-    c->io_parsed_cmd = lookupCommand(c->argv, c->argc);
-    if (c->io_parsed_cmd && commandCheckArity(c->io_parsed_cmd, c->argc, NULL) == 0) {
-        /* The command was found, but the arity is invalid.
-         * In this case, we reset the parsed_cmd and will let the main thread handle it. */
-        c->io_parsed_cmd = NULL;
-    }
-
-    /* Offload slot calculations to the I/O thread to reduce main-thread load. */
-    if (c->io_parsed_cmd && server.cluster_enabled) {
-        getKeysResult result;
-        initGetKeysResult(&result);
-        int numkeys = getKeysFromCommand(c->io_parsed_cmd, c->argv, c->argc, &result);
-        if (numkeys) {
-            robj *first_key = c->argv[result.keys[0].pos];
-            c->slot = keyHashSlot(first_key->ptr, sdslen(first_key->ptr));
-        }
-        getKeysFreeResult(&result);
     }
 
 done:

@@ -1070,7 +1070,12 @@ getNodeByQuery(client *c, struct serverCommand *cmd, robj **argv, int argc, int 
 
         for (j = 0; j < numkeys; j++) {
             robj *thiskey = margv[keyindex[j].pos];
-            int thisslot = keyHashSlot((char *)thiskey->ptr, sdslen(thiskey->ptr));
+            /* Use the cached slot to avoid the expensive hash slot calcluation for the first key.
+             * Note that slot is not computed for the first key when the io-threads are inactive. */
+            int thisslot = (j == 0) ? c->slot : -1;
+
+            /* Compute the hash slot for this key if its slot is not computed yet. */
+            if (thisslot < 0) thisslot = (int) keyHashSlot((char *)thiskey->ptr, sdslen(thiskey->ptr));
 
             if (firstkey == NULL) {
                 /* This is the first key we see. Check what is the slot

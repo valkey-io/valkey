@@ -149,6 +149,7 @@ typedef struct _client {
     char **stagptr;     /* Pointers to slot hashtags (cluster mode only) */
     size_t staglen;     /* Number of pointers in client->stagptr */
     size_t stagfree;    /* Number of unused pointers in client->stagptr */
+    int *key_ids;        /* Array of key IDs dynanmically replaced/generated in the command buf */
     size_t written;     /* Bytes of 'obuf' already written */
     long long start;    /* Start time of a request */
     long long latency;  /* Request latency */
@@ -403,6 +404,7 @@ static void generateClientKey(client c) {
     for (size_t i = 0; i < c->randlen; i++) {
         char *p = c->randptr[i] + 11;
         size_t key = 0;
+        c->key_ids[i] = -1;
         if (config.keyspacelen != 0) {
             if (config.sequential_replacement) {
                 key = atomic_fetch_add_explicit(&seq_key, 1, memory_order_relaxed);
@@ -410,6 +412,7 @@ static void generateClientKey(client c) {
                 key = random();
             }
             key %= config.keyspacelen;
+            c->key_ids[i] = key;
         }
 
         for (size_t j = 0; j < 12; j++) {
@@ -432,11 +435,10 @@ static void setClusterKeyHashTag(client c) {
      * updateClusterSlotsConfiguration won't actually do anything, since
      * the updated_slots_count array will be already NULL. */
     if (is_updating_slots) updateClusterSlotsConfiguration();
-    int slot = node->slots[rand() % node->slots_count];
-    const char *tag = crc16_slot_table[slot];
-    int taglen = strlen(tag);
-    size_t i;
-    for (i = 0; i < c->staglen; i++) {
+    int first_slot = node->slots[(c->key_ids[0] < 0 ? rand() : c->key_ids[0]) % node->slots_count];
+    for (size_t i = 0; i < c->staglen; i++) {
+        const char *tag = crc16_slot_table[first_slot];
+        int taglen = strlen(tag);
         char *p = c->stagptr[i] + 1;
         p[0] = tag[0];
         p[1] = (taglen >= 2 ? tag[1] : '}');
@@ -763,6 +765,7 @@ static client createClient(char *cmd, size_t len, client from, int thread_id) {
             c->randlen = from->randlen;
             c->randfree = 0;
             c->randptr = zmalloc(sizeof(char *) * c->randlen);
+            c->key_ids = zmalloc(sizeof(size_t) * c->randlen);
             /* copy the offsets. */
             for (j = 0; j < (int)c->randlen; j++) {
                 c->randptr[j] = c->obuf + (from->randptr[j] - from->obuf);
@@ -775,9 +778,11 @@ static client createClient(char *cmd, size_t len, client from, int thread_id) {
             c->randlen = 0;
             c->randfree = RANDPTR_INITIAL_SIZE;
             c->randptr = zmalloc(sizeof(char *) * c->randfree);
+            c->key_ids = zmalloc(sizeof(size_t) * c->randfree);
             while ((p = strstr(p, "__rand_int__")) != NULL) {
                 if (c->randfree == 0) {
                     c->randptr = zrealloc(c->randptr, sizeof(char *) * c->randlen * 2);
+                    c->key_ids = zrealloc(c->key_ids, sizeof(size_t) * c->randlen * 2);
                     c->randfree += c->randlen;
                 }
                 c->randptr[c->randlen++] = p;
@@ -870,6 +875,7 @@ static void showLatencyReport(void) {
         printf("  %d parallel clients\n", config.numclients);
         printf("  %d bytes payload\n", config.datasize);
         printf("  keep alive: %d\n", config.keepalive);
+        printf("    pipeline: %d\n", config.pipeline);
         if (config.cluster_mode) {
             const char *node_roles = NULL;
             if (config.read_from_replica == FROM_ALL) {

@@ -1182,21 +1182,40 @@ typedef struct ClientModuleData {
                                                 * unloaded for cleanup. Opaque for the Server Core.*/
 } ClientModuleData;
 
+typedef struct parsedCommand {
+    struct serverCommand *server_cmd; /* Command to execute */
+    robj **argv;                      /* Arguments */
+    int argc;                         /* Number of arguments */
+    int argv_len;                     /* Size of argv array (may be more than argc) */
+    size_t argv_len_sum;              /* Sum of lengths of objects in argv list. */
+    long duration;                    /* Cached latency of blocking cmds */
+    short slot;                       /* Slot for the command */
+    bool valid_arity;                 /* Indicates if the command has valid arity */
+} parsedCommand;
+
+typedef struct parsedCommandQueue {
+    int capacity;                  /* Number of parsed commands */
+    int tail;                   /* Index of the next command being parsed */
+    int head;                   /* Index of the next command to be executed */
+    parsedCommand *parsed_cmds; /* Parsed commands for this client. */
+} parsedCommandQueue;
+
 typedef struct client {
     /* Basic client information and connection. */
     uint64_t id; /* Client incremental unique ID. */
     connection *conn;
     /* Input buffer and command parsing fields */
-    sds querybuf;        /* Buffer we use to accumulate client queries. */
-    size_t qb_pos;       /* The position we have read in querybuf. */
-    robj **argv;         /* Arguments of current command. */
-    int argc;            /* Num of arguments of current command. */
-    int argv_len;        /* Size of argv array (may be more than argc) */
-    size_t argv_len_sum; /* Sum of lengths of objects in argv list. */
-    int reqtype;         /* Request protocol type: PROTO_REQ_* */
-    int multibulklen;    /* Number of multi bulk arguments left to read. */
-    long bulklen;        /* Length of bulk argument in multi bulk request. */
-    long long woff;      /* Last write global replication offset. */
+    sds querybuf;                        /* Buffer we use to accumulate client queries. */
+    size_t qb_pos;                       /* The position we have read in querybuf. */
+    robj **argv;                         /* Arguments of current command. */
+    int argc;                            /* Num of arguments of current command. */
+    int argv_len;                        /* Size of argv array (may be more than argc) */
+    size_t argv_len_sum;                 /* Sum of lengths of objects in argv list. */
+    int reqtype;                         /* Request protocol type: PROTO_REQ_* */
+    int multibulklen;                    /* Number of multi bulk arguments left to read. */
+    long bulklen;                        /* Length of bulk argument in multi bulk request. */
+    long long woff;                      /* Last write global replication offset. */
+    parsedCommandQueue parsed_cmd_queue; /* Parsed commands for this client. */
     /* Command execution state and command information */
     struct serverCommand *cmd;           /* Current command. */
     struct serverCommand *lastcmd;       /* Last command executed. */

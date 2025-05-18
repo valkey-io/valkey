@@ -172,23 +172,32 @@ static void resetCommandsBatch(void) {
  * 1. Prefetch the command arguments allocated by the I/O thread to bring them closer to the L1 cache.
  * 2. Prefetch the keys and values for all commands in the current batch from the main hashtable. */
 static void prefetchCommands(void) {
-    /* Prefetch argv's for all clients */
+    /* Prefetch argvs for all clients */
     for (size_t i = 0; i < batch->client_count; i++) {
         client *c = batch->clients[i];
-        if (!c || c->argc <= 1) continue;
-        /* Skip prefetching first argv (cmd name) it was already looked up by the I/O thread. */
-        for (int j = 1; j < c->argc; j++) {
-            valkey_prefetch(c->argv[j]);
+        /* Prefetch argvs for all commands in the client's parsed_cmd_queue */
+        for (int j = c->parsed_cmd_queue.head; j < c->parsed_cmd_queue.tail; j++) {
+            parsedCommand *parsed_cmd = &c->parsed_cmd_queue.parsed_cmds[j];
+            if (parsed_cmd->argc <= 1) continue;
+
+            /* Skip prefetching first argv (cmd name) it was already looked up by the I/O thread. */
+            for (int k = 1; k < parsed_cmd->argc; k++) {
+                valkey_prefetch(parsed_cmd->argv[k]);
+            }
         }
     }
 
     /* Prefetch the argv->ptr if required */
     for (size_t i = 0; i < batch->client_count; i++) {
         client *c = batch->clients[i];
-        if (!c || c->argc <= 1) continue;
-        for (int j = 1; j < c->argc; j++) {
-            if (c->argv[j]->encoding == OBJ_ENCODING_RAW) {
-                valkey_prefetch(c->argv[j]->ptr);
+        /* Prefetch argv->ptr for all commands in the client's parsed_cmd_queue */
+        for (int j = 0; j < c->parsed_cmd_queue.tail; j++) {
+            parsedCommand *parsed_cmd = &c->parsed_cmd_queue.parsed_cmds[j];
+            if (parsed_cmd->argc <= 1) continue;
+
+            /* Skip prefetching first argv (cmd name) it was already looked up by the I/O thread. */
+            for (int k = 1; k < parsed_cmd->argc; k++) {
+                valkey_prefetch(parsed_cmd->argv[k]->ptr);
             }
         }
     }
@@ -244,14 +253,19 @@ int addCommandToBatchAndProcessIfFull(client *c) {
 
     batch->clients[batch->client_count++] = c;
 
-    /* Get command's keys positions */
-    if (c->io_parsed_cmd) {
+    /* Iterate all commands parsed by the io threads in the client's parsed command queue
+     * and add the keys to the batch. */
+    for (int i = c->parsed_cmd_queue.head; batch->key_count < batch->max_prefetch_size && i < c->parsed_cmd_queue.tail; i++) {
+        parsedCommand *parsed_cmd = &c->parsed_cmd_queue.parsed_cmds[i];
+        if (!parsed_cmd->valid_arity) continue;
+
         getKeysResult result;
         initGetKeysResult(&result);
-        int num_keys = getKeysFromCommand(c->io_parsed_cmd, c->argv, c->argc, &result);
-        for (int i = 0; i < num_keys && batch->key_count < batch->max_prefetch_size; i++) {
-            batch->keys[batch->key_count] = c->argv[result.keys[i].pos];
-            batch->slots[batch->key_count] = c->slot > 0 ? c->slot : 0;
+        int num_keys = getKeysFromCommand(parsed_cmd->server_cmd, parsed_cmd->argv, parsed_cmd->argc, &result);
+        for (int j = 0; j < num_keys && batch->key_count < batch->max_prefetch_size; j++) {
+            batch->keys[batch->key_count] = parsed_cmd->argv[result.keys[j].pos];
+            /* Make sure we reference the correct dictionary */
+            batch->slots[batch->key_count] = parsed_cmd->slot > 0 ? parsed_cmd->slot : 0;
             batch->keys_tables[batch->key_count] = kvstoreGetHashtable(c->db->keys, batch->slots[batch->key_count]);
             batch->key_count++;
         }

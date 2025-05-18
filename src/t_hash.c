@@ -947,6 +947,7 @@ int hashTypeDelete(robj *o, sds field) {
         deleted = hashtablePop(ht, field, &entry);
         if (deleted) {
             hashTypeUntrackEntry(o, entry);
+            freeHashTypeEntry(entry);
         }
     } else {
         serverPanic("Unknown hash encoding");

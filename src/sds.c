@@ -1068,10 +1068,7 @@ static int sdsparsearg(const char *arg, unsigned int *len, char *dst) {
                 default: new_char = *p; break;
                 }
             } else if (*p == '"') {
-                /* closing quote must be followed by a space or
-                 * nothing at all. */
-                if (*(p + 1) && !isspace(*(p + 1))) return 0;
-                done = 1;
+                inq = 0;
             } else if (!*p) {
                 /* unterminated quotes */
                 return 0;
@@ -1083,10 +1080,7 @@ static int sdsparsearg(const char *arg, unsigned int *len, char *dst) {
                 p++;
                 new_char = *p;
             } else if (*p == '\'') {
-                /* closing quote must be followed by a space or
-                 * nothing at all. */
-                if (*(p + 1) && !isspace(*(p + 1))) return 0;
-                done = 1;
+                insq = 0;
             } else if (!*p) {
                 /* unterminated quotes */
                 return 0;

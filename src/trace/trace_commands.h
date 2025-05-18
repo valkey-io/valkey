@@ -37,7 +37,8 @@ LTTNG_UST_TRACEPOINT_EVENT(
 	/* Input arguments */
 	LTTNG_UST_TP_ARGS(
 		const char *, prot,
-		const char *, conn,
+		const char *, saddr,
+		const char *, daddr,
 		const char *, name,
 		uint64_t, duration
 	),
@@ -45,7 +46,8 @@ LTTNG_UST_TRACEPOINT_EVENT(
 	/* Output event fields */
 	LTTNG_UST_TP_FIELDS(
 		lttng_ust_field_string(prot, prot)
-		lttng_ust_field_string(conn, conn)
+		lttng_ust_field_string(saddr, saddr)
+		lttng_ust_field_string(daddr, daddr)
 		lttng_ust_field_string(name, name)
 		lttng_ust_field_integer(uint64_t, duration, duration)
 	)

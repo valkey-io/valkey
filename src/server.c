@@ -2794,6 +2794,7 @@ void initServer(void) {
     server.reply_buffer_peak_reset_time = REPLY_BUFFER_DEFAULT_PEAK_RESET_TIME;
     server.reply_buffer_resizing_enabled = 1;
     server.client_mem_usage_buckets = NULL;
+    server.trace_events = 0;
     resetReplicationBuffer();
 
     /* Make sure the locale is set on startup based on the config file. */
@@ -3746,7 +3747,7 @@ void call(client *c, int flags) {
         duration = ustime() - call_timer;
 
     if (trace_events.commands) {
-        valkey_commands_trace(valkey_commands, command_call, connGetType(c->conn), c->conn->fmtname, real_cmd->declared_name, duration);
+        valkey_commands_trace(valkey_commands, command_call, connGetType(c->conn), c->conn->saddr, c->conn->daddr, real_cmd->declared_name, duration);
     }
     c->duration += duration;
     dirty = server.dirty - dirty;

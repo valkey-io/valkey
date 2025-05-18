@@ -22,7 +22,7 @@ Enable lttng trace events dynamically:
 ```
 ~# lttng destroy valkey
 ~# lttng create valkey
-~# lttng enable-event -u "valkey*"
+~# lttng enable-event -u 'valkey*'
 ~# lttng track -u -p `pidof valkey-server`
 ~# lttng start
 ~# lttng stop
@@ -64,6 +64,7 @@ Generally valkey-server would not run in full utilization, the overhead is accep
 
 | event                    | provider |
 | -------------------------- | ---------- |
+| command-call             | commands  |
 | rdb-unlink-temp-file     | sys      |
 | fork                     | sys      |
 | command-unblocking       | server   |
@@ -88,5 +89,4 @@ Generally valkey-server would not run in full utilization, the overhead is accep
 | aof-write                | aof      |
 | aof-fsync-always         | aof      |
 | aof-fstat                | aof      |
-| aof-rename               | aof      |
 | aof-rename               | aof      |

@@ -480,8 +480,6 @@ void hashTypePropagateDeletion(serverDb *db, sds key, void *entry) {
     argv[1] = createStringObject(key, sdslen(key));
     argv[2] = createStringObject(field, sdslen(field));
     incrRefCount(argv[0]);
-    incrRefCount(argv[1]);
-    incrRefCount(argv[2]);
 
     /* If the primary decided to delete a key we must propagate it to replicas no matter what.
      * Even if module executed a command without asking for propagation. */

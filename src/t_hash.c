@@ -657,9 +657,11 @@ int hashTypeGetValue(robj *o, sds field, unsigned char **vstr, unsigned int *vle
  * The matching item expiration time is assigned to `expiry` memory location, if specified.
  * In case the item has no assigned expiration time, -1 is returned. */
 int hashTypeGetExpiry(robj *o, sds field, long long *expiry) {
-    if (o->encoding == OBJ_ENCODING_LISTPACK && hashTypeExists(o, field)) {
-        if (expiry) *expiry = -1;
-        return C_OK;
+    if (o->encoding == OBJ_ENCODING_LISTPACK) {
+        if (hashTypeExists(o, field)) {
+            if (expiry) *expiry = -1;
+            return C_OK;
+        }
     } else if (o->encoding == OBJ_ENCODING_HASHTABLE) {
         void *found_element = NULL;
         if (hashtableFind(o->ptr, field, &found_element)) {

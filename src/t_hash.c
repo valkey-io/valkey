@@ -1280,7 +1280,7 @@ void hincrbyCommand(client *c) {
     }
     value += incr;
     new = sdsfromlonglong(value);
-    hashTypeSet(o, c->argv[2]->ptr, new, EXPIRY_NONE, HASH_SET_TAKE_VALUE | HASH_SET_KEEP_EXPIRY);
+    hashTypeSet(o, c->argv[2]->ptr, new, EXPIRY_NONE, HASH_SET_TAKE_VALUE);
     signalModifiedKey(c, c->db, c->argv[1]);
     notifyKeyspaceEvent(NOTIFY_HASH, "hincrby", c->argv[1], c->db->id);
     server.dirty++;
@@ -1329,7 +1329,7 @@ void hincrbyfloatCommand(client *c) {
     char buf[MAX_LONG_DOUBLE_CHARS];
     int len = ld2string(buf, sizeof(buf), value, LD_STR_HUMAN);
     new = sdsnewlen(buf, len);
-    hashTypeSet(o, c->argv[2]->ptr, new, EXPIRY_NONE, HASH_SET_TAKE_VALUE | HASH_SET_KEEP_EXPIRY);
+    hashTypeSet(o, c->argv[2]->ptr, new, EXPIRY_NONE, HASH_SET_TAKE_VALUE);
     signalModifiedKey(c, c->db, c->argv[1]);
     notifyKeyspaceEvent(NOTIFY_HASH, "hincrbyfloat", c->argv[1], c->db->id);
     server.dirty++;
@@ -1490,7 +1490,7 @@ void hsetCommand(client *c) {
     hashTypeTryConversion(o, c->argv, 2, c->argc - 1);
 
     hashTypeSetAccessContext(o, c->db);
-    for (i = 2; i < c->argc; i += 2) created += !hashTypeSet(o, c->argv[i]->ptr, c->argv[i + 1]->ptr, EXPIRY_NONE, HASH_SET_COPY | HASH_SET_KEEP_EXPIRY);
+    for (i = 2; i < c->argc; i += 2) created += !hashTypeSet(o, c->argv[i]->ptr, c->argv[i + 1]->ptr, EXPIRY_NONE, HASH_SET_COPY);
 
     signalModifiedKey(c, c->db, c->argv[1]);
     notifyKeyspaceEvent(NOTIFY_HASH, "hset", c->argv[1], c->db->id);
@@ -1865,7 +1865,7 @@ void hexpireGenericCommand(client *c, long long basetime, int unit) {
         /* Propagate as HPEXPIREAT millisecond-timestamp
          * Only rewrite the command arg if not already HPEXPIREAT */
         if (c->cmd->proc != hpexpireAtCommand) {
-            rewriteClientCommandArgument(c, 0, shared.pexpireat);
+            rewriteClientCommandArgument(c, 0, shared.hpexpireat);
         }
 
         /* Avoid creating a string object when it's the same as argv[2] parameter  */

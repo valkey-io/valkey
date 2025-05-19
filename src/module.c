@@ -5345,7 +5345,7 @@ int VM_HashSet(ValkeyModuleKey *key, int flags, ...) {
         /* If CFIELDS is active, we can pass the ownership of the
          * SDS object to the low level function that sets the field
          * to avoid a useless copy. */
-        if (flags & VALKEYMODULE_HASH_CFIELDS) low_flags |= (HASH_SET_TAKE_FIELD | HASH_SET_KEEP_EXPIRY);
+        if (flags & VALKEYMODULE_HASH_CFIELDS) low_flags |= (HASH_SET_TAKE_FIELD);
 
         robj *argv[2] = {field, value};
         hashTypeTryConversion(key->value, argv, 0, 1);

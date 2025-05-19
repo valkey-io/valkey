@@ -630,9 +630,7 @@ start_server {tags {"expire"}} {
             } else {
                 fail "field not added to replica"
             } 
-
-            # bp 1
-
+            
             $primary hpexpire myhash 1000 fields 1 f2
 
 

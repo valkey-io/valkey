@@ -540,12 +540,11 @@ int checkAlreadyExpired(long long when) {
  * - XX: set expiry only when the key has an existing expiry
  * - GT: set expiry only when the new expiry is greater than current one
  * - LT: set expiry only when the new expiry is less than current one */
-int parseExtendedExpireArgumentsOrReply(client *c, int *flags, int max_index) {
+int parseExtendedExpireArgumentsOrReply(client *c, int *flags, int max_args) {
     int nx = 0, xx = 0, gt = 0, lt = 0;
-    if (max_index < 0) max_index = c->argc;
 
     int j = 3;
-    while (j < max_index) {
+    while (j < max_args) {
         char *opt = c->argv[j]->ptr;
         if (!strcasecmp(opt, "nx")) {
             *flags |= EXPIRE_NX;
@@ -599,7 +598,7 @@ void expireGenericCommand(client *c, long long basetime, int unit) {
     int flag = 0;
 
     /* checking optional flags */
-    if (parseExtendedExpireArgumentsOrReply(c, &flag, -1) != C_OK) {
+    if (parseExtendedExpireArgumentsOrReply(c, &flag, c->argc) != C_OK) {
         return;
     }
 

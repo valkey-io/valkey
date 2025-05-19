@@ -826,17 +826,7 @@ int hashTypeSetExpire(robj *o, sds field, long long expiry, int flag) {
     /* If no object we will return -2 */
     if (o == NULL) return -2;
 
-    if (timestampIsExpired(expiry)) {
-        /* It is possible that the assigned expiration is set in the past (or zero).
-         * In such case we cannot count on the hash object representation to be hashtable, so
-         * we operate this on before we check for the encoding. */
-        if (hashTypeDelete(o, field)) {
-            hashTypeExpireEntry(field);
-            return 2;
-        } else {
-            return -2;
-        }
-    }
+    int expired = timestampIsExpired(expiry);
 
     if (o->encoding == OBJ_ENCODING_LISTPACK) {
         /* When listpack representation is used, we consider it as infinite TTL,
@@ -845,6 +835,16 @@ int hashTypeSetExpire(robj *o, sds field, long long expiry, int flag) {
         if (flag & EXPIRE_XX || flag & EXPIRE_GT) {
             return 0;
         } else {
+            if (expired) {
+                /* It is possible that the assigned expiration is set in the past (or zero).
+                 * In such case we cannot count on the hash object representation to be hashtable. */
+                if (hashTypeDelete(o, field)) {
+                    hashTypeExpireEntry(field);
+                    return 2;
+                } else {
+                    return -2;
+                }
+            }
             hashTypeConvert(o, OBJ_ENCODING_HASHTABLE);
         }
     }
@@ -885,6 +885,12 @@ int hashTypeSetExpire(robj *o, sds field, long long expiry, int flag) {
                 if (current_expire != EXPIRY_NONE && expiry >= current_expire) {
                     return 0;
                 }
+            }
+        }
+        if (expired) {
+            if (hashTypeDelete(o, field)) {
+                hashTypeExpireEntry(field);
+                return 2;
             }
         }
         *entry_ref = hashTypeEntrySetExpiry(current_entry, expiry);
@@ -1259,55 +1265,6 @@ static void hashTypeRandomElement(robj *hashobj, unsigned long hashsize, listpac
  * Hash type commands
  *----------------------------------------------------------------------------*/
 
-void hsetnxCommand(client *c) {
-    robj *o;
-    if ((o = hashTypeLookupWriteOrCreate(c, c->argv[1])) == NULL) return;
-    hashTypeSetAccessContext(o, c->db);
-    if (hashTypeExists(o, c->argv[2]->ptr)) {
-        addReply(c, shared.czero);
-    } else {
-        hashTypeTryConversion(o, c->argv, 2, 3);
-        hashTypeSet(o, c->argv[2]->ptr, c->argv[3]->ptr, EXPIRY_NONE, HASH_SET_COPY | HASH_SET_KEEP_EXPIRY);
-        signalModifiedKey(c, c->db, c->argv[1]);
-        notifyKeyspaceEvent(NOTIFY_HASH, "hset", c->argv[1], c->db->id);
-        server.dirty++;
-        addReply(c, shared.cone);
-    }
-    hashTypeResetAccessContext();
-}
-
-void hsetCommand(client *c) {
-    int i, created = 0;
-    robj *o;
-
-    if ((c->argc % 2) == 1) {
-        addReplyErrorArity(c);
-        return;
-    }
-
-    if ((o = hashTypeLookupWriteOrCreate(c, c->argv[1])) == NULL) return;
-    hashTypeTryConversion(o, c->argv, 2, c->argc - 1);
-
-    hashTypeSetAccessContext(o, c->db);
-    for (i = 2; i < c->argc; i += 2) created += !hashTypeSet(o, c->argv[i]->ptr, c->argv[i + 1]->ptr, EXPIRY_NONE, HASH_SET_COPY | HASH_SET_KEEP_EXPIRY);
-
-    signalModifiedKey(c, c->db, c->argv[1]);
-    notifyKeyspaceEvent(NOTIFY_HASH, "hset", c->argv[1], c->db->id);
-    server.dirty += (c->argc - 2) / 2;
-
-    /* HMSET (deprecated) and HSET return value is different. */
-    char *cmdname = c->argv[0]->ptr;
-    if (cmdname[1] == 's' || cmdname[1] == 'S') {
-        /* HSET */
-        addReplyLongLong(c, created);
-    } else {
-        /* HMSET */
-        addReply(c, shared.ok);
-    }
-
-    hashTypeResetAccessContext();
-}
-
 void hincrbyCommand(client *c) {
     long long value, incr, oldvalue;
     robj *o;
@@ -1431,11 +1388,9 @@ void hgetCommand(client *c) {
 
     if ((o = lookupKeyReadOrReply(c, c->argv[1], shared.null[c->resp])) == NULL || checkType(c, o, OBJ_HASH)) return;
     hashTypeSetAccessContext(o, c->db);
+
     addHashFieldToReply(c, o, c->argv[2]->ptr);
 
-    if (hashTypeLength(o) == 0) {
-        dbDelete(c->db, c->argv[1]);
-    }
     hashTypeResetAccessContext();
 }
 
@@ -1519,6 +1474,281 @@ static void addHashIteratorCursorToReply(writePreparedClient *wpc, hashTypeItera
     } else {
         serverPanic("Unknown hash encoding");
     }
+}
+
+void hsetnxCommand(client *c) {
+    robj *o;
+    if ((o = hashTypeLookupWriteOrCreate(c, c->argv[1])) == NULL) return;
+    hashTypeSetAccessContext(o, c->db);
+    if (hashTypeExists(o, c->argv[2]->ptr)) {
+        addReply(c, shared.czero);
+    } else {
+        hashTypeTryConversion(o, c->argv, 2, 3);
+        hashTypeSet(o, c->argv[2]->ptr, c->argv[3]->ptr, EXPIRY_NONE, HASH_SET_COPY | HASH_SET_KEEP_EXPIRY);
+        signalModifiedKey(c, c->db, c->argv[1]);
+        notifyKeyspaceEvent(NOTIFY_HASH, "hset", c->argv[1], c->db->id);
+        server.dirty++;
+        addReply(c, shared.cone);
+    }
+    hashTypeResetAccessContext();
+}
+
+void hsetCommand(client *c) {
+    int i, created = 0;
+    robj *o;
+
+    if ((c->argc % 2) == 1) {
+        addReplyErrorArity(c);
+        return;
+    }
+
+    if ((o = hashTypeLookupWriteOrCreate(c, c->argv[1])) == NULL) return;
+    hashTypeTryConversion(o, c->argv, 2, c->argc - 1);
+
+    hashTypeSetAccessContext(o, c->db);
+    for (i = 2; i < c->argc; i += 2) created += !hashTypeSet(o, c->argv[i]->ptr, c->argv[i + 1]->ptr, EXPIRY_NONE, HASH_SET_COPY | HASH_SET_KEEP_EXPIRY);
+
+    signalModifiedKey(c, c->db, c->argv[1]);
+    notifyKeyspaceEvent(NOTIFY_HASH, "hset", c->argv[1], c->db->id);
+    server.dirty += (c->argc - 2) / 2;
+
+    /* HMSET (deprecated) and HSET return value is different. */
+    char *cmdname = c->argv[0]->ptr;
+    if (cmdname[1] == 's' || cmdname[1] == 'S') {
+        /* HSET */
+        addReplyLongLong(c, created);
+    } else {
+        /* HMSET */
+        addReply(c, shared.ok);
+    }
+
+    hashTypeResetAccessContext();
+}
+
+void hsetexCommand(client *c) {
+    robj *o;
+    robj *expire = NULL;
+    robj *comparison = NULL;
+    int unit = UNIT_SECONDS;
+    int flags = OBJ_NO_FLAGS;
+    int fields_index = 0;
+    long long num_fields = 0;
+    long long when = EXPIRY_NONE;
+    int i = 0;
+    int set_flags = HASH_SET_COPY, set_expired = 0;
+    int changes = 0;
+
+    for (; fields_index < c->argc; fields_index++) {
+        if (!strcasecmp(c->argv[fields_index]->ptr, "fields")) {
+            /* checking optional flags */
+            if (parseExtendedStringArgumentsOrReply(c, &flags, &unit, &expire, &comparison, COMMAND_HSET, fields_index++) != C_OK) return;
+            if (getLongLongFromObjectOrReply(c, c->argv[fields_index++], &num_fields, NULL) != C_OK) return;
+            break;
+        }
+    }
+
+    if (num_fields > (c->argc - fields_index) / 2) num_fields = (c->argc - fields_index) / 2; // Potential user error, but we would like to make effort to comply with the request.
+
+    o = lookupKeyWrite(c->db, c->argv[1]);
+    if (checkType(c, o, OBJ_HASH))
+        return;
+
+    /* Check for object existence condition */
+    if ((flags & OBJ_SET_NX && o) || (flags & OBJ_SET_XX && !o)) {
+        addReply(c, shared.czero);
+        return;
+    }
+
+    if (o == NULL) {
+        o = createHashObject();
+        dbAdd(c->db, c->argv[1], &o);
+    }
+
+    /* Handle parsing and calculating the expiration time. */
+    if (flags & OBJ_KEEPTTL)
+        set_flags |= HASH_SET_KEEP_EXPIRY;
+    else if (expire) {
+        if (getLongLongFromObjectOrReply(c, expire, &when, NULL) != C_OK) return;
+        if (unit == UNIT_SECONDS) {
+            if (when > LLONG_MAX / 1000 || when < LLONG_MIN / 1000) {
+                addReplyErrorExpireTime(c);
+                return;
+            }
+            when *= 1000;
+        }
+        if ((flags & (OBJ_EXAT | OBJ_PXAT)) && when > LLONG_MAX - commandTimeSnapshot()) {
+            addReplyErrorExpireTime(c);
+            return;
+        }
+        when += commandTimeSnapshot();
+
+        if (((flags & OBJ_PXAT) || (flags & OBJ_EXAT)) && checkAlreadyExpired(when)) {
+            set_expired = 1;
+            when = 0;
+        }
+    }
+
+    /* Check for all fields condition */
+    if (flags & (OBJ_SET_FNX | OBJ_SET_FXX)) {
+        for (i = fields_index; i < c->argc; i += 2) {
+            if (((flags & OBJ_SET_FNX) && hashTypeExists(o, c->argv[i]->ptr)) ||
+                ((flags & OBJ_SET_FXX) && !hashTypeExists(o, c->argv[i]->ptr))) {
+                addReply(c, shared.czero);
+                return;
+            }
+        }
+    }
+
+    hashTypeSetAccessContext(o, c->db);
+
+    for (i = fields_index; i < c->argc; i += 2) {
+        if (set_expired) {
+            changes += hashTypeDelete(o, c->argv[i]->ptr);
+        } else {
+            hashTypeSet(o, c->argv[i]->ptr, c->argv[i + 1]->ptr, when, set_flags);
+            changes++;
+        }
+    }
+    if (expire) {
+        /* Propagate as HSETEX Key Value PXAT millisecond-timestamp if there is
+         * EX/PX/EXAT flag. */
+        if (!(flags & OBJ_PXAT)) {
+            for (int i = 2; i < fields_index; i++) {
+                if (c->argv[i + 1] == expire) {
+                    robj *milliseconds_obj = createStringObjectFromLongLong(when);
+                    rewriteClientCommandArgument(c, i, shared.pxat);
+                    rewriteClientCommandArgument(c, i + 1, milliseconds_obj);
+                    decrRefCount(milliseconds_obj);
+                    break;
+                }
+            }
+        }
+        notifyKeyspaceEvent(NOTIFY_HASH, "hexpire", o, c->db->id);
+        if (set_expired && changes)
+            notifyKeyspaceEvent(NOTIFY_HASH, "hexpired", o, c->db->id);
+    }
+    signalModifiedKey(c, c->db, c->argv[1]);
+    notifyKeyspaceEvent(NOTIFY_HASH, "hset", c->argv[1], c->db->id);
+    server.dirty += changes;
+    addReplyLongLong(c, changes == num_fields ? 1 : 0);
+
+    hashTypeResetAccessContext();
+}
+
+void hgetexCommand(client *c) {
+    robj *o;
+    robj *expire = NULL;
+    robj *comparison = NULL;
+    int unit = UNIT_SECONDS;
+    int flags = OBJ_NO_FLAGS;
+    int fields_index = 0;
+    long long num_fields = 0;
+    long long when = EXPIRY_NONE;
+    int i = 0;
+    int set_expiry = 0, set_expired = 0, persist = 0;
+    int changes = 0;
+    robj **new_argv = NULL;
+    robj *milliseconds_obj = NULL, *numitems_obj = NULL;
+    int new_argc = 0;
+    int milliseconds_index = -1, numitems_index = -1;
+
+    for (; fields_index < c->argc; fields_index++) {
+        if (!strcasecmp(c->argv[fields_index]->ptr, "fields")) {
+            /* checking optional flags */
+            if (parseExtendedStringArgumentsOrReply(c, &flags, &unit, &expire, &comparison, COMMAND_HGET, fields_index + 1) != C_OK) return;
+            fields_index++;
+            if (getLongLongFromObjectOrReply(c, c->argv[fields_index++], &num_fields, NULL) != C_OK) return;
+            break;
+        }
+    }
+
+    if (num_fields > c->argc - fields_index) num_fields = c->argc - fields_index; // Potential user error, but we would like to make effort to comply with the request.
+
+    o = lookupKeyRead(c->db, c->argv[1]);
+    if (checkType(c, o, OBJ_HASH))
+        return;
+
+    if (o == NULL) {
+        o = createHashObject();
+        dbAdd(c->db, c->argv[1], &o);
+    }
+
+    /* Handle parsing and calculating the expiration time. */
+    if (flags & OBJ_PERSIST) {
+        persist = 1;
+    } else if (expire) {
+        if (getLongLongFromObjectOrReply(c, expire, &when, NULL) != C_OK) return;
+        if (unit == UNIT_SECONDS) {
+            if (when > LLONG_MAX / 1000 || when < LLONG_MIN / 1000) {
+                addReplyErrorExpireTime(c);
+                return;
+            }
+            when *= 1000;
+        }
+        if ((flags & (OBJ_EXAT | OBJ_PXAT)) && when > LLONG_MAX - commandTimeSnapshot()) {
+            addReplyErrorExpireTime(c);
+            return;
+        }
+        when += commandTimeSnapshot();
+        if (((flags & OBJ_PXAT) || (flags & OBJ_EXAT)) && checkAlreadyExpired(when)) {
+            set_expired = 1;
+        } else {
+            set_expiry = 1;
+        }
+    }
+
+    initDeferredReplyBuffer(c);
+
+    addReplyArrayLen(c, num_fields);
+    /* This command is never propagated as is. It is either propagated as HPEXPIREAT or PERSIST.
+     * This why it doesn't need special handling in feedAppendOnlyFile to convert relative expire time to absolute one. */
+    if (set_expiry || set_expired || persist) {
+        /* allocate a new client argv for replicating the command. */
+        new_argv = zmalloc(sizeof(robj *) * (num_fields + 5));
+        new_argv[new_argc++] = shared.hpexpireat;
+        new_argv[new_argc++] = c->argv[1];
+        if (set_expiry) {
+            new_argv[new_argc++] = NULL; // placeholder for the expiration time
+            milliseconds_index = new_argc - 1;
+        }
+        new_argv[new_argc++] = shared.fields;
+        new_argv[new_argc++] = NULL; // placeholder for the number of objects
+        numitems_index = new_argc - 1;
+    }
+    for (i = fields_index; i < c->argc; i++) {
+        int changed = 0;
+        addHashFieldToReply(c, o, c->argv[i]->ptr);
+        if (set_expired) {
+            changed = hashTypeDelete(o, c->argv[i]->ptr);
+        } else if (set_expiry) {
+            changed = (hashTypeSetExpire(o, c->argv[i]->ptr, when, flags) == 1) ? 1 : 0;
+        } else if (persist) {
+            changed = hashTypePersist(o, c->argv[i]->ptr);
+        }
+        if (changed) {
+            changes++;
+            new_argv[new_argc++] = c->argv[i];
+        }
+    }
+    if (changes) {
+        if (set_expiry) {
+            milliseconds_obj = createStringObjectFromLongLong(when);
+            new_argv[milliseconds_index] = milliseconds_obj;
+        }
+        numitems_obj = createStringObjectFromLongLong(changes);
+        new_argv[numitems_index] = numitems_obj;
+        replaceClientCommandVector(c, new_argc, new_argv);
+        server.dirty += changes;
+        signalModifiedKey(c, c->db, c->argv[1]);
+        if (set_expired)
+            notifyKeyspaceEvent(NOTIFY_HASH, "hexpired", c->argv[1], c->db->id);
+        notifyKeyspaceEvent(NOTIFY_HASH, set_expiry ? "hexpire" : "hpersist", c->argv[1], c->db->id);
+        if (milliseconds_obj) decrRefCount(milliseconds_obj);
+        if (numitems_obj) decrRefCount(numitems_obj);
+    }
+    if (new_argv) zfree(new_argv);
+
+    commitDeferredReplyBuffer(c, 1);
 }
 
 void genericHgetallCommand(client *c, int flags) {
@@ -1609,16 +1839,19 @@ void hexpireGenericCommand(client *c, long long basetime, int unit) {
     int flag = 0;
     int fields_index = 3;
     long long num_fields = 0;
-    int i, result = 0;
+    int i, result = 0, changes = 0;
 
     for (; fields_index < c->argc; fields_index++) {
         if (!strcasecmp(c->argv[fields_index]->ptr, "fields")) {
             /* checking optional flags */
-            if (parseExtendedExpireArgumentsOrReply(c, &flag, fields_index++) != C_OK) return;
+            if (parseExtendedExpireArgumentsOrReply(c, &flag, fields_index + 1) != C_OK) return;
+            fields_index++;
             if (getLongLongFromObjectOrReply(c, c->argv[fields_index++], &num_fields, NULL) != C_OK) return;
             break;
         }
     }
+
+    if (num_fields > c->argc - fields_index) num_fields = c->argc - fields_index; // Potential user error, but we would like to make effort to comply with the request.
 
     if (getLongLongFromObjectOrReply(c, param, &when, NULL) != C_OK) return;
 
@@ -1650,13 +1883,28 @@ void hexpireGenericCommand(client *c, long long basetime, int unit) {
     /* From this point we would return array reply */
     addReplyArrayLen(c, num_fields);
 
-    for (i = fields_index; i < c->argc; i++) {
+    for (i = fields_index; i < num_fields; i++) {
         result = hashTypeSetExpire(obj, c->argv[i]->ptr, when, flag);
         server.dirty += (result > 0 ? 1 : 0); // in case there was a change increment the dirty
+        changes += (result > 0 ? 1 : 0);
         addReplyLongLong(c, result);
     }
-    notifyKeyspaceEvent(NOTIFY_HASH, "hexpire", c->argv[1], c->db->id);
+    /* Propagate as HPEXPIREAT millisecond-timestamp
+     * Only rewrite the command arg if not already HPEXPIREAT */
+    if (c->cmd->proc != hpexpireAtCommand) {
+        rewriteClientCommandArgument(c, 0, shared.pexpireat);
+    }
 
+    /* Avoid creating a string object when it's the same as argv[2] parameter  */
+    if (basetime != 0 || unit == UNIT_SECONDS) {
+        robj *when_obj = createStringObjectFromLongLong(when);
+        rewriteClientCommandArgument(c, 2, when_obj);
+        decrRefCount(when_obj);
+    }
+    if (changes) {
+        notifyKeyspaceEvent(NOTIFY_HASH, "hexpire", c->argv[1], c->db->id);
+        signalModifiedKey(c, c->db, obj);
+    }
     hashTypeResetAccessContext();
 }
 
@@ -1677,12 +1925,12 @@ void hpexpireAtCommand(client *c) {
 }
 
 void hpersistCommand(client *c) {
-    int fields_index = 4, result = 0;
+    int fields_index = 4, result = 0, changes = 0;
     long long num_fields = 0;
 
     if (getLongLongFromObjectOrReply(c, c->argv[fields_index - 1], &num_fields, NULL) != C_OK) return;
 
-    if (num_fields > c->argc - 4) num_fields = c->argc - 4; // Potential user error, but we would like to make effort to comply with the request.
+    if (num_fields > c->argc - fields_index) num_fields = c->argc - fields_index; // Potential user error, but we would like to make effort to comply with the request.
 
     /* From this point we would return array reply */
     addReplyArrayLen(c, num_fields);
@@ -1691,12 +1939,16 @@ void hpersistCommand(client *c) {
 
     hashTypeSetAccessContext(hash, c->db);
 
-    for (; fields_index < 4 + num_fields; fields_index++) {
+    for (; fields_index < num_fields; fields_index++) {
         result = hashTypePersist(hash, c->argv[fields_index]->ptr);
         server.dirty += (result > 0 ? 1 : 0); // in case there was a change increment the dirty
+        changes += (result > 0 ? 1 : 0);
         addReplyLongLong(c, result);
     }
-
+    if (changes) {
+        notifyKeyspaceEvent(NOTIFY_HASH, "hpersist", c->argv[1], c->db->id);
+        signalModifiedKey(c, c->db, hash);
+    }
     hashTypeResetAccessContext();
 }
 
@@ -1706,7 +1958,7 @@ void httlGenericCommand(client *c, long long basetime, int unit) {
 
     if (getLongLongFromObjectOrReply(c, c->argv[fields_index - 1], &num_fields, NULL) != C_OK) return;
 
-    if (num_fields > c->argc - 4) num_fields = c->argc - 4; // Potential user error, but we would like to make effort to comply with the request.
+    if (num_fields > c->argc - fields_index) num_fields = c->argc - fields_index; // Potential user error, but we would like to make effort to comply with the request.
 
     robj *hash = lookupKeyRead(c->db, c->argv[1]);
 
@@ -1715,8 +1967,8 @@ void httlGenericCommand(client *c, long long basetime, int unit) {
 
     hashTypeSetAccessContext(hash, c->db);
 
-    for (; fields_index < 4 + num_fields; fields_index++) {
-        if (!hash || hashTypeGetExpiry(hash, c->argv[fields_index]->ptr, &result) == C_ERR) {
+    for (int i = 0; i < num_fields; i++) {
+        if (!hash || hashTypeGetExpiry(hash, c->argv[fields_index + i]->ptr, &result) == C_ERR) {
             addReplyLongLong(c, -2);
         } else if (result == EXPIRY_NONE) {
             addReplyLongLong(c, -1);

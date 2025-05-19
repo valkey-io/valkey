@@ -1855,11 +1855,11 @@ void memoryCommand(client *c) {
  * Input flags are updated upon parsing the arguments. Unit and expire are updated if there are any
  * EX/EXAT/PX/PXAT arguments. Unit is updated to millisecond if PX/PXAT is set.
  */
-int parseExtendedStringArgumentsOrReply(client *c, int *flags, int *unit, robj **expire, robj **compare_val, int command_type) {
-    int j = command_type == COMMAND_GET ? 2 : 3;
-    for (; j < c->argc; j++) {
+int parseExtendedStringArgumentsOrReply(client *c, int *flags, int *unit, robj **expire, robj **compare_val, int command_type, int max_args) {
+    int j = command_type == COMMAND_SET ? 3 : 2;
+    for (; j < max_args; j++) {
         char *opt = c->argv[j]->ptr;
-        robj *next = (j == c->argc - 1) ? NULL : c->argv[j + 1];
+        robj *next = (j == max_args - 1) ? NULL : c->argv[j + 1];
 
         /* clang-format off */
         if ((opt[0] == 'n' || opt[0] == 'N') &&
@@ -1872,11 +1872,25 @@ int parseExtendedStringArgumentsOrReply(client *c, int *flags, int *unit, robj *
                    !(*flags & OBJ_SET_NX || *flags & OBJ_SET_IFEQ) && (command_type == COMMAND_SET))
         {
             *flags |= OBJ_SET_XX;
+        } else if ((opt[0] == 'f' || opt[0] == 'F') &&
+            (opt[1] == 'n' || opt[1] == 'N') && opt[2] == '\0' &&
+            (opt[2] == 'x' || opt[2] == 'X') && opt[3] == '\0' &&
+            !(*flags & OBJ_SET_FXX || *flags & OBJ_SET_IFEQ) && (command_type == COMMAND_HSET))
+        {
+            *flags |= OBJ_SET_FNX;
+        } else if ((opt[0] == 'f' || opt[0] == 'F') &&
+                   (opt[1] == 'x' || opt[1] == 'X') && opt[2] == '\0' &&
+                   (opt[2] == 'x' || opt[2] == 'X') && opt[3] == '\0' &&
+                   !(*flags & OBJ_SET_FNX || *flags & OBJ_SET_IFEQ) && (command_type == COMMAND_HSET))
+        {
+            *flags |= OBJ_SET_FXX;
         } else if ((opt[0] == 'i' || opt[0] == 'I') &&
             (opt[1] == 'f' || opt[1] == 'F') &&
             (opt[2] == 'e' || opt[2] == 'E') &&
             (opt[3] == 'q' || opt[3] == 'Q') && opt[4] == '\0' &&
-            next && !(*flags & OBJ_SET_NX || *flags & OBJ_SET_XX || *flags & OBJ_SET_IFEQ) && (command_type == COMMAND_SET))
+            next && 
+            !(*flags & OBJ_SET_NX || *flags & OBJ_SET_XX || *flags & OBJ_SET_IFEQ) && (command_type == COMMAND_SET) &&
+            !(*flags & OBJ_SET_FNX || *flags & OBJ_SET_FXX || *flags & OBJ_SET_IFEQ) && (command_type == COMMAND_HSET))
         {
             *flags |= OBJ_SET_IFEQ;
             *compare_val = next;
@@ -1884,15 +1898,15 @@ int parseExtendedStringArgumentsOrReply(client *c, int *flags, int *unit, robj *
         } else if ((opt[0] == 'g' || opt[0] == 'G') &&
                    (opt[1] == 'e' || opt[1] == 'E') &&
                    (opt[2] == 't' || opt[2] == 'T') && opt[3] == '\0' &&
-                   (command_type == COMMAND_SET))
+                   (command_type == COMMAND_SET || command_type == COMMAND_HSET))
         {
             *flags |= OBJ_SET_GET;
         } else if (!strcasecmp(opt, "KEEPTTL") && !(*flags & OBJ_PERSIST) &&
             !(*flags & OBJ_EX) && !(*flags & OBJ_EXAT) &&
-            !(*flags & OBJ_PX) && !(*flags & OBJ_PXAT) && (command_type == COMMAND_SET))
+            !(*flags & OBJ_PX) && !(*flags & OBJ_PXAT) && (command_type == COMMAND_SET || command_type == COMMAND_HSET))
         {
             *flags |= OBJ_KEEPTTL;
-        } else if (!strcasecmp(opt,"PERSIST") && (command_type == COMMAND_GET) &&
+        } else if (!strcasecmp(opt,"PERSIST") && (command_type == COMMAND_GET || command_type == COMMAND_HGET) &&
                !(*flags & OBJ_EX) && !(*flags & OBJ_EXAT) &&
                !(*flags & OBJ_PX) && !(*flags & OBJ_PXAT) &&
                !(*flags & OBJ_KEEPTTL))

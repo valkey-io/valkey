@@ -234,7 +234,7 @@ void setCommand(client *c) {
     int unit = UNIT_SECONDS;
     int flags = OBJ_NO_FLAGS;
 
-    if (parseExtendedStringArgumentsOrReply(c, &flags, &unit, &expire, &comparison, COMMAND_SET) != C_OK) {
+    if (parseExtendedStringArgumentsOrReply(c, &flags, &unit, &expire, &comparison, COMMAND_SET, c->argc) != C_OK) {
         return;
     }
 
@@ -300,7 +300,7 @@ void getexCommand(client *c) {
     int unit = UNIT_SECONDS;
     int flags = OBJ_NO_FLAGS;
 
-    if (parseExtendedStringArgumentsOrReply(c, &flags, &unit, &expire, NULL, COMMAND_GET) != C_OK) {
+    if (parseExtendedStringArgumentsOrReply(c, &flags, &unit, &expire, NULL, COMMAND_GET, c->argc) != C_OK) {
         return;
     }
 

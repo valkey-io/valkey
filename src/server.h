@@ -220,6 +220,8 @@ extern int configOOMScoreAdjValuesDefaults[CONFIG_OOM_COUNT];
 
 #define COMMAND_GET 0
 #define COMMAND_SET 1
+#define COMMAND_HGET 2
+#define COMMAND_HSET 3
 
 
 /* Command flags. Please check the definition of struct serverCommand in this file
@@ -727,6 +729,8 @@ typedef enum {
 #define OBJ_SET_IFEQ (1 << 9) /* Set if we need compare and set */
 #define OBJ_ARGV3 (1 << 10)   /* Set if the value is at argv[3]; otherwise it's \
                                * at argv[2]. */
+#define OBJ_SET_FNX (1 << 11)   /* Set if key item not exists. */
+#define OBJ_SET_FXX (1 << 12)   /* Set if key item exists. */
 
 /* An Object, that is a type able to hold a string / list / set */
 
@@ -1348,10 +1352,10 @@ struct sharedObjectsStruct {
         *loadingerr, *slowevalerr, *slowscripterr, *slowmoduleerr, *bgsaveerr, *primarydownerr, *roreplicaerr,
         *execaborterr, *noautherr, *noreplicaserr, *busykeyerr, *oomerr, *plus, *messagebulk, *pmessagebulk,
         *subscribebulk, *unsubscribebulk, *psubscribebulk, *punsubscribebulk, *del, *unlink, *rpop, *lpop, *lpush,
-        *rpoplpush, *lmove, *blmove, *zpopmin, *zpopmax, *emptyscan, *multi, *exec, *left, *right, *hset, *hdel, *srem,
+        *rpoplpush, *lmove, *blmove, *zpopmin, *zpopmax, *emptyscan, *multi, *exec, *left, *right, *hset, *hdel, *hpexpireat, *srem,
         *xgroup, *xclaim, *script, *replconf, *eval, *persist, *set, *pexpireat, *pexpire, *time, *pxat, *absttl,
         *retrycount, *force, *justid, *entriesread, *lastid, *ping, *setid, *keepttl, *load, *createconsumer, *getack,
-        *special_asterisk, *special_equals, *default_username, *redacted, *ssubscribebulk, *sunsubscribebulk,
+        *special_asterisk, *special_equals, *default_username, *redacted, *ssubscribebulk, *sunsubscribebulk, *fields,
         *smessagebulk, *select[PROTO_SHARED_SELECT_CMDS], *integers[OBJ_SHARED_INTEGERS],
         *mbulkhdr[OBJ_SHARED_BULKHDR_LEN], /* "*<value>\r\n" */
         *bulkhdr[OBJ_SHARED_BULKHDR_LEN],  /* "$<value>\r\n" */
@@ -2833,8 +2837,8 @@ int canParseCommand(client *c);
 int processIOThreadsReadDone(void);
 int processIOThreadsWriteDone(void);
 int canExpireWithFlags(int flags, int *can_delete);
-int parseExtendedExpireArgumentsOrReply(client *c, int *flags, int max_index);
-int parseExtendedStringArgumentsOrReply(client *c, int *flags, int *unit, robj **expire, robj **compare_val, int command_type);
+int parseExtendedExpireArgumentsOrReply(client *c, int *flags, int max_args);
+int parseExtendedStringArgumentsOrReply(client *c, int *flags, int *unit, robj **expire, robj **compare_val, int command_type, int max_args);
 
 /* logreqres.c - logging of requests and responses */
 void reqresReset(client *c, int free_buf);
@@ -3820,6 +3824,8 @@ void zrankCommand(client *c);
 void zrevrankCommand(client *c);
 void hsetCommand(client *c);
 void hsetnxCommand(client *c);
+void hsetexCommand(client *c);
+void hgetexCommand(client *c);
 void hgetCommand(client *c);
 void hmgetCommand(client *c);
 void hdelCommand(client *c);

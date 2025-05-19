@@ -2125,6 +2125,7 @@ void createSharedObjects(void) {
     shared.exec = createStringObject("EXEC", 4);
     shared.hset = createStringObject("HSET", 4);
     shared.hdel = createStringObject("HDEL", 4);
+    shared.hpexpireat = createStringObject("HPEXPIREAT", 10);
     shared.srem = createStringObject("SREM", 4);
     shared.xgroup = createStringObject("XGROUP", 6);
     shared.xclaim = createStringObject("XCLAIM", 6);
@@ -2157,6 +2158,7 @@ void createSharedObjects(void) {
     shared.special_asterisk = createStringObject("*", 1);
     shared.special_equals = createStringObject("=", 1);
     shared.redacted = makeObjectShared(createStringObject("(redacted)", 10));
+    shared.fields = createStringObject("FIELDS", 6);
 
     for (j = 0; j < OBJ_SHARED_INTEGERS; j++) {
         shared.integers[j] = makeObjectShared(createObject(OBJ_STRING, (void *)(long)j));

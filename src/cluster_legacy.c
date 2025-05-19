@@ -327,7 +327,7 @@ int auxShardIdSetter(clusterNode *n, void *value, size_t length) {
 }
 
 sds auxShardIdGetter(clusterNode *n, sds s) {
-    return sdscatprintf(s, "%.40s", n->shard_id);
+    return sdscatlen(s, n->shard_id, CLUSTER_NAMELEN);
 }
 
 int auxShardIdPresent(clusterNode *n) {
@@ -344,7 +344,7 @@ int auxHumanNodenameSetter(clusterNode *n, void *value, size_t length) {
 }
 
 sds auxHumanNodenameGetter(clusterNode *n, sds s) {
-    return sdscatprintf(s, "%s", n->human_nodename);
+    return sdscatfmt(s, "%s", n->human_nodename);
 }
 
 int auxHumanNodenamePresent(clusterNode *n) {
@@ -370,7 +370,7 @@ int auxAnnounceClientIpV4Setter(clusterNode *n, void *value, size_t length) {
 }
 
 sds auxAnnounceClientIpV4Getter(clusterNode *n, sds s) {
-    return sdscatprintf(s, "%s", n->announce_client_ipv4);
+    return sdscatfmt(s, "%s", n->announce_client_ipv4);
 }
 
 int auxAnnounceClientIpV4Present(clusterNode *n) {
@@ -396,7 +396,7 @@ int auxAnnounceClientIpV6Setter(clusterNode *n, void *value, size_t length) {
 }
 
 sds auxAnnounceClientIpV6Getter(clusterNode *n, sds s) {
-    return sdscatprintf(s, "%s", n->announce_client_ipv6);
+    return sdscatfmt(s, "%s", n->announce_client_ipv6);
 }
 
 int auxAnnounceClientIpV6Present(clusterNode *n) {
@@ -415,7 +415,7 @@ int auxTcpPortSetter(clusterNode *n, void *value, size_t length) {
 }
 
 sds auxTcpPortGetter(clusterNode *n, sds s) {
-    return sdscatprintf(s, "%d", n->tcp_port);
+    return sdscatfmt(s, "%i", n->tcp_port);
 }
 
 int auxTcpPortPresent(clusterNode *n) {
@@ -434,7 +434,7 @@ int auxTlsPortSetter(clusterNode *n, void *value, size_t length) {
 }
 
 sds auxTlsPortGetter(clusterNode *n, sds s) {
-    return sdscatprintf(s, "%d", n->tls_port);
+    return sdscatfmt(s, "%i", n->tls_port);
 }
 
 int auxTlsPortPresent(clusterNode *n) {
@@ -6095,17 +6095,15 @@ sds clusterGenNodeDescription(client *c, clusterNode *node, int tls_primary) {
      * we are migrating to other instances or importing from other
      * instances. */
     if (node->flags & CLUSTER_NODE_MYSELF) {
-        char nodename[CLUSTER_NAMELEN + 1];
-
         for (j = 0; j < CLUSTER_SLOTS; j++) {
             if (server.cluster->migrating_slots_to[j]) {
-                memcpy(nodename, server.cluster->migrating_slots_to[j]->name, CLUSTER_NAMELEN);
-                nodename[CLUSTER_NAMELEN] = '\0';
-                ci = sdscatfmt(ci, " [%i->-%s]", j, nodename);
+                ci = sdscatfmt(ci, " [%i->-", j);
+                ci = sdscatlen(ci, server.cluster->migrating_slots_to[j]->name, CLUSTER_NAMELEN);
+                ci = sdscat(ci, "]");
             } else if (server.cluster->importing_slots_from[j]) {
-                memcpy(nodename, server.cluster->importing_slots_from[j]->name, CLUSTER_NAMELEN);
-                nodename[CLUSTER_NAMELEN] = '\0';
-                ci = sdscatfmt(ci, " [%i-<-%s]", j, nodename);
+                ci = sdscatfmt(ci, " [%i-<-", j);
+                ci = sdscatlen(ci, server.cluster->importing_slots_from[j]->name, CLUSTER_NAMELEN);
+                ci = sdscat(ci, "]");
             }
         }
     }

@@ -132,7 +132,35 @@ tags {"benchmark network external:skip logreqres:skip"} {
             # ensure the keyspace has the desired size
             assert_match  {50} [scan [regexp -inline {keys\=([\d]*)} [r info keyspace]] keys=%d]
         }
-        
+
+        test {benchmark: keyspace covered by sequential option} {
+            set cmd [valkeybenchmark $master_host $master_port "-r 50 -t set -n 50 --sequential"]
+            common_bench_setup $cmd
+            assert_match  {*calls=50,*} [cmdstat set]
+
+            # ensure the keyspace has the desired size
+            assert_match  {50} [scan [regexp -inline {keys\=([\d]*)} [r info keyspace]] keys=%d]
+        }
+
+        test {benchmark: multiple independent sequential replacements} {
+            set cmd [valkeybenchmark $master_host $master_port "-r 50 -n 1000 --sequential -- set j__rand_int__ rain ; set k__rand_int1_ rain"]
+            common_bench_setup $cmd
+            assert_match  {*calls=1000,*} [cmdstat set]
+            
+            # ensure the keyspace has the desired size
+            assert_match  {100} [scan [regexp -inline {keys\=([\d]*)} [r info keyspace]] keys=%d]
+        }
+
+        test {benchmark: sequential zadd results in expected number of keys} {
+            set cmd [valkeybenchmark $master_host $master_port "-r 50 -n 50 --sequential -t zadd"]
+            common_bench_setup $cmd
+            assert_match  {*calls=50,*} [cmdstat zadd]
+
+            # ensure the keyspace has the desired size
+            assert_match  {1} [scan [regexp -inline {keys\=([\d]*)} [r info keyspace]] keys=%d]
+            assert_match  {50} [r zcard myzset]
+        }
+
         test {benchmark: clients idle mode should return error when reached maxclients limit} {
             set cmd [valkeybenchmark $master_host $master_port "-c 10 -I"]
             set original_maxclients [lindex [r config get maxclients] 1]

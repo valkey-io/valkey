@@ -469,7 +469,7 @@ static void hashTypeTrackUpdateEntry(robj *o, void *old_entry, void *new_entry, 
     else {
         volatile_set *set = hashTypeGetVolatileSet(o);
         debugServerAssert(set);
-        serverAssert(volatileSetUpdateEntry(set, old_entry, new_entry, old_expiry, new_expiry) == C_OK);
+        serverAssert(volatileSetUpdateEntry(set, old_entry, new_entry, old_expiry, new_expiry) == 1);
     }
 }
 

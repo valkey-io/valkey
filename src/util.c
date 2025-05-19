@@ -55,6 +55,11 @@
 
 #include "valkey_strtod.h"
 
+#if HAVE_X86_SIMD
+#include <immintrin.h>
+#include <cpuid.h>
+#endif
+
 #define UNUSED(x) ((void)(x))
 
 /* Glob-style pattern matching. */
@@ -416,7 +421,6 @@ err:
 }
 
 #if HAVE_X86_SIMD
-#include <immintrin.h>
 
 #define MULTIPLIER_10E8 100000000
 #define MULTIPLIER_10E16 10000000000000000ULL
@@ -457,7 +461,7 @@ err:
  * Output: *value = 1234567890
  */
 ATTRIBUTE_TARGET_AVX512
-static int string2llAVX512(const char *s, unsigned long slen, long long *value) {
+static int string2llAVX512(const char *s, size_t slen, long long *value) {
     const char *p = s;
     unsigned long plen = 0;
     int negative = 0;
@@ -621,6 +625,56 @@ static int string2llScalar(const char *s, size_t slen, long long *value) {
     return 1;
 }
 
+#if HAVE_IFUNC && HAVE_X86_SIMD
+/* This function detects if the CPU supports the AVX-512 instruction set extensions
+ * required.
+ *
+ * Execution timing:
+ * - Called ONCE at program load time by the dynamic linker
+ * - Executes before main() during the IFUNC resolution phase
+ * - Not called during normal program execution, eliminating runtime overhead
+ *
+ * Note on implementation choice:
+ * We use direct CPUID calls instead of __builtin_cpu_supports() because:
+ * 1. IFUNC resolvers run before C runtime initialization
+ * 2. __builtin_cpu_supports() relies on runtime initialization
+ * 3. This approach ensures correct feature detection at load time
+ * */
+static int cpu_has_avx512_features(void) {
+    unsigned int eax, ebx, ecx, edx;
+    unsigned int max_level;
+
+    /* Get the maximum supported CPUID level,
+     * checks if the CPU supports CPUID leaf 7,
+     * which is where AVX-512 features are reported. */
+    max_level = __get_cpuid_max(0, NULL);
+    if (max_level < 7) {
+        return 0; /* CPUID leaf 7 not supported, return 0. */
+    }
+
+    /* Call CPUID with leaf 7, subleaf 0 to get advanced feature flags */
+    if (!__get_cpuid_count(7, 0, &eax, &ebx, &ecx, &edx)) {
+        return 0; /* CPUID failed */
+    }
+
+    /* The AVX-512 feature bits are in the EBX register.*/
+    int has_avx512f = (ebx & bit_AVX512F) != 0;
+    int has_avx512vl = (ebx & bit_AVX512VL) != 0;
+    int has_avx512bw = (ebx & bit_AVX512BW) != 0;
+    return has_avx512f && has_avx512vl && has_avx512bw;
+}
+
+static int (*string2ll_ifunc(void))(const char *, size_t, long long *) {
+    if (cpu_has_avx512_features()) {
+        return string2llAVX512;
+    }
+    return string2llScalar;
+}
+
+int string2ll(const char *s, size_t slen, long long *value)
+    __attribute__((ifunc("string2ll_ifunc")));
+#else
+/* Fallback for platforms without IFUNC support */
 int string2ll(const char *s, size_t slen, long long *value) {
 #if HAVE_X86_SIMD
     if (__builtin_cpu_supports("avx512f") &&
@@ -630,6 +684,7 @@ int string2ll(const char *s, size_t slen, long long *value) {
 #endif
     return string2llScalar(s, slen, value);
 }
+#endif
 
 /* Helper function to convert a string to an unsigned long long value.
  * The function attempts to use the faster string2ll() function inside

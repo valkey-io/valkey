@@ -1850,8 +1850,7 @@ void hexpireGenericCommand(client *c, long long basetime, int unit) {
     for (; fields_index < c->argc; fields_index++) {
         if (!strcasecmp(c->argv[fields_index]->ptr, "fields")) {
             /* checking optional flags */
-            if (parseExtendedExpireArgumentsOrReply(c, &flag, fields_index + 1) != C_OK) return;
-            fields_index++;
+            if (parseExtendedExpireArgumentsOrReply(c, &flag, fields_index++) != C_OK) return;
             if (getLongLongFromObjectOrReply(c, c->argv[fields_index++], &num_fields, NULL) != C_OK) return;
             break;
         }
@@ -1889,8 +1888,8 @@ void hexpireGenericCommand(client *c, long long basetime, int unit) {
     /* From this point we would return array reply */
     addReplyArrayLen(c, num_fields);
 
-    for (i = fields_index; i < num_fields; i++) {
-        result = hashTypeSetExpire(obj, c->argv[i]->ptr, when, flag);
+    for (i = 0; i < num_fields; i++) {
+        result = hashTypeSetExpire(obj, c->argv[fields_index + i]->ptr, when, flag);
         server.dirty += (result > 0 ? 1 : 0); // in case there was a change increment the dirty
         changes += (result > 0 ? 1 : 0);
         addReplyLongLong(c, result);

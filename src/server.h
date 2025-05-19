@@ -1607,6 +1607,7 @@ typedef enum childInfoType {
 typedef struct keyAccessContext {
     int flags;
     robj *key;
+    robj *val;
     serverDb *db;
 } keyAccessContext;
 
@@ -3288,8 +3289,8 @@ void *activeDefragAlloc(void *ptr);
 robj *activeDefragStringOb(robj *ob);
 void dismissSds(sds s);
 void dismissMemoryInChild(void);
-void setAccessContext(robj *o, serverDb *db);
-void setAccessContextWithFlags(robj *o, serverDb *db, int flags);
+void setAccessContext(robj *key, robj *val,serverDb *db);
+void setAccessContextWithFlags(robj *key, robj *val, serverDb *db, int flags);
 void resetAccessContext(void);
 
 #define RESTART_SERVER_NONE 0

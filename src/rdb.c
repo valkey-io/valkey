@@ -967,7 +967,7 @@ ssize_t rdbSaveObject(rio *rdb, robj *o, robj *key, int dbid) {
             nwritten += n;
             /* check if need to add expired time for the hash elements */
             int add_expiry = hashTypeHasVolatileElements(o);
-            setAccessContextWithFlags(o, &server.db[dbid], OBJ_ACCESS_IGNORE_TTL);
+            setAccessContextWithFlags(key, o, &server.db[dbid], OBJ_ACCESS_IGNORE_TTL);
 
             hashtableIterator iter;
             hashtableInitIterator(&iter, ht, 0);

@@ -883,7 +883,7 @@ void setDeferredReply(client *c, void *node, const char *s, size_t length) {
      * - It has enough room already allocated
      * - And not too large (avoid large memmove)
      * - And the client is not in a pending I/O state */
-    if (ln->prev != NULL && (prev = listNodeValue(ln->prev)) && prev->size - prev->used > 0 &&
+    if (ln->prev != NULL && (prev = listNodeValue(ln->prev)) && prev->used < prev->size &&
         c->io_write_state != CLIENT_PENDING_IO) {
         size_t len_to_copy = prev->size - prev->used;
         if (len_to_copy > length) len_to_copy = length;

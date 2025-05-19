@@ -76,7 +76,7 @@
 #define CLIENT_GET_EVENTLOOP(c) (c->thread_id >= 0 ? config.threads[c->thread_id]->el : config.el)
 
 #define PLACEHOLDER_COUNT 10
-static const size_t KEY_PLACEHOLDER_LEN = 12; // length of VALKEY_BENCHMARK_PLACEHOLDERS strings
+static const size_t KEY_PLACEHOLDER_LEN = 12; // length of BENCHMARK_PLACEHOLDERS strings
 static const char *BENCHMARK_PLACEHOLDERS[PLACEHOLDER_COUNT] = {
     "__rand_int__", "__rand_int1_", "__rand_int2_", "__rand_int3_", "__rand_int4_",
     "__rand_int5_", "__rand_int6_", "__rand_int7_", "__rand_int8_", "__rand_int9_"};
@@ -157,18 +157,18 @@ typedef struct _client {
     char **randptr[PLACEHOLDER_COUNT];  /* Pointers to __rand_int__ strings inside the command buf */
     size_t randlen[PLACEHOLDER_COUNT];  /* Number of pointers in client->randptr */
     size_t randfree[PLACEHOLDER_COUNT]; /* Number of unused pointers in client->randptr */
-    char **stagptr;     /* Pointers to slot hashtags (cluster mode only) */
-    size_t staglen;     /* Number of pointers in client->stagptr */
-    size_t stagfree;    /* Number of unused pointers in client->stagptr */
-    size_t written;     /* Bytes of 'obuf' already written */
-    long long start;    /* Start time of a request */
-    long long latency;  /* Request latency */
-    int seqlen;         /* Number of commands in the command sequence */
-    int pending;        /* Number of pending requests (replies to consume) */
-    int prefix_pending; /* If non-zero, number of pending prefix commands. Commands
-                           such as auth and select are prefixed to the pipeline of
-                           benchmark commands and discarded after the first send. */
-    int prefixlen;      /* Size in bytes of the pending prefix commands */
+    char **stagptr;                     /* Pointers to slot hashtags (cluster mode only) */
+    size_t staglen;                     /* Number of pointers in client->stagptr */
+    size_t stagfree;                    /* Number of unused pointers in client->stagptr */
+    size_t written;                     /* Bytes of 'obuf' already written */
+    long long start;                    /* Start time of a request */
+    long long latency;                  /* Request latency */
+    int seqlen;                         /* Number of commands in the command sequence */
+    int pending;                        /* Number of pending requests (replies to consume) */
+    int prefix_pending;                 /* If non-zero, number of pending prefix commands. Commands
+                                           such as auth and select are prefixed to the pipeline of
+                                           benchmark commands and discarded after the first send. */
+    int prefixlen;                      /* Size in bytes of the pending prefix commands */
     int thread_id;
     struct clusterNode *cluster_node;
     int slots_last_update;
@@ -943,7 +943,7 @@ static client createClient(char *cmd, int len, int seqlen, client from, int thre
 
             for (size_t placeholder = 0; placeholder < PLACEHOLDER_COUNT; placeholder++) {
                 c->randptr[placeholder] = zmalloc(sizeof(char *) * c->randlen[placeholder]);
-                /* copy the tags to be replaced. */
+                /* copy the locations to be replaced. */
                 for (size_t instance = 0; instance < c->randlen[placeholder]; instance++) {
                     ptrdiff_t offset = from->randptr[placeholder][instance] - from->obuf;
                     /* Adjust for the different select prefix length. */

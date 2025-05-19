@@ -500,9 +500,12 @@ int hashTypeExpireEntry(void *entry) {
     sds key = objectGetKey(o);
     if (!keyobj) {
         keyobj = createStringObject(key, sdslen(key));
+    } else {
+        incrRefCount(keyobj);
     }
     notifyKeyspaceEvent(NOTIFY_EXPIRED, "hexpired", keyobj, server.access_context.db->id);
     hashTypePropagateDeletion(server.access_context.db, key, entry);
+    decrRefCount(keyobj);
     return 1;
 }
 
@@ -524,7 +527,7 @@ hashtableElementAccessState hashHashtableTypeAccess(hashtable *ht, void *entry) 
 
     if (server.access_context.flags == OBJ_ACCESS_NONE) return ELEMENT_INVALID;
 
-    robj *o = server.access_context.key;
+    robj *o = server.access_context.val;
     serverDb *db = server.access_context.db;
     serverAssert(o && db);
 
@@ -549,9 +552,12 @@ void hashTypeResetAccessContext(void) {
             if (!keyobj) {
                 sds key = objectGetKey(o);
                 keyobj = createStringObject(key, sdslen(key));
+            } else {
+                incrRefCount(keyobj);
             }
             notifyKeyspaceEvent(NOTIFY_GENERIC, "del", keyobj, db->id);
-            dbDelete(db, &keyobj);
+            dbDelete(db, keyobj);
+            decrRefCount(keyobj);
         }
     }
 }

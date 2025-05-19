@@ -344,7 +344,7 @@ int auxHumanNodenameSetter(clusterNode *n, void *value, size_t length) {
 }
 
 sds auxHumanNodenameGetter(clusterNode *n, sds s) {
-    return sdscatfmt(s, "%s", n->human_nodename);
+    return sdscat(s, n->human_nodename);
 }
 
 int auxHumanNodenamePresent(clusterNode *n) {
@@ -370,7 +370,7 @@ int auxAnnounceClientIpV4Setter(clusterNode *n, void *value, size_t length) {
 }
 
 sds auxAnnounceClientIpV4Getter(clusterNode *n, sds s) {
-    return sdscatfmt(s, "%s", n->announce_client_ipv4);
+    return sdscat(s, n->announce_client_ipv4);
 }
 
 int auxAnnounceClientIpV4Present(clusterNode *n) {
@@ -396,7 +396,7 @@ int auxAnnounceClientIpV6Setter(clusterNode *n, void *value, size_t length) {
 }
 
 sds auxAnnounceClientIpV6Getter(clusterNode *n, sds s) {
-    return sdscatfmt(s, "%s", n->announce_client_ipv6);
+    return sdscat(s, n->announce_client_ipv6);
 }
 
 int auxAnnounceClientIpV6Present(clusterNode *n) {

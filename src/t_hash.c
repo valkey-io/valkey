@@ -1969,6 +1969,8 @@ void httlGenericCommand(client *c, long long basetime, int unit) {
 
     robj *hash = lookupKeyRead(c->db, c->argv[1]);
 
+    if (checkType(c, hash, OBJ_HASH)) return;
+
     /* From this point we would return array reply */
     addReplyArrayLen(c, num_fields);
 

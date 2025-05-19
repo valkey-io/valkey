@@ -1569,6 +1569,8 @@ void hsetexCommand(client *c) {
         set_flags |= HASH_SET_KEEP_EXPIRY;
     else if (expire) {
         if (getLongLongFromObjectOrReply(c, expire, &when, NULL) != C_OK) return;
+        long long basetime = (flags & (OBJ_EXAT | OBJ_PXAT)) ? 0 : commandTimeSnapshot();
+
         if (unit == UNIT_SECONDS) {
             if (when > LLONG_MAX / 1000 || when < LLONG_MIN / 1000) {
                 addReplyErrorExpireTime(c);
@@ -1576,11 +1578,11 @@ void hsetexCommand(client *c) {
             }
             when *= 1000;
         }
-        if ((flags & (OBJ_EXAT | OBJ_PXAT)) && when > LLONG_MAX - commandTimeSnapshot()) {
+        if (when > LLONG_MAX - basetime) {
             addReplyErrorExpireTime(c);
             return;
         }
-        when += commandTimeSnapshot();
+        when += basetime;
 
         if (((flags & OBJ_PXAT) || (flags & OBJ_EXAT)) && checkAlreadyExpired(when)) {
             set_expired = 1;
@@ -1678,6 +1680,8 @@ void hgetexCommand(client *c) {
         persist = 1;
     } else if (expire) {
         if (getLongLongFromObjectOrReply(c, expire, &when, NULL) != C_OK) return;
+        long long basetime = (flags & (OBJ_EXAT | OBJ_PXAT)) ? 0 : commandTimeSnapshot();
+
         if (unit == UNIT_SECONDS) {
             if (when > LLONG_MAX / 1000 || when < LLONG_MIN / 1000) {
                 addReplyErrorExpireTime(c);
@@ -1685,13 +1689,15 @@ void hgetexCommand(client *c) {
             }
             when *= 1000;
         }
-        if ((flags & (OBJ_EXAT | OBJ_PXAT)) && when > LLONG_MAX - commandTimeSnapshot()) {
+        if (when > LLONG_MAX - basetime) {
             addReplyErrorExpireTime(c);
             return;
         }
-        when += commandTimeSnapshot();
+        when += basetime;
+
         if (((flags & OBJ_PXAT) || (flags & OBJ_EXAT)) && checkAlreadyExpired(when)) {
             set_expired = 1;
+            when = 0;
         } else {
             set_expiry = 1;
         }

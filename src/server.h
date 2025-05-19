@@ -729,8 +729,8 @@ typedef enum {
 #define OBJ_SET_IFEQ (1 << 9) /* Set if we need compare and set */
 #define OBJ_ARGV3 (1 << 10)   /* Set if the value is at argv[3]; otherwise it's \
                                * at argv[2]. */
-#define OBJ_SET_FNX (1 << 11)   /* Set if key item not exists. */
-#define OBJ_SET_FXX (1 << 12)   /* Set if key item exists. */
+#define OBJ_SET_FNX (1 << 11) /* Set if key item not exists. */
+#define OBJ_SET_FXX (1 << 12) /* Set if key item exists. */
 
 /* An Object, that is a type able to hold a string / list / set */
 

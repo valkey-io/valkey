@@ -380,10 +380,10 @@ int test_sdssplitargs(int argc, char **argv, int flags) {
     TEST_ASSERT(!strcmp("", sargv[2]));
     sdsfreesplitres(sargv, len);
 
-    sargv = sdssplitargs("\"deeply\\\"quoted\" string", &len);
+    sargv = sdssplitargs("\"deeply\\\"quoted\" 's\\'t\\\"r'ing", &len);
     TEST_ASSERT(2 == len);
     TEST_ASSERT(!strcmp("deeply\"quoted", sargv[0]));
-    TEST_ASSERT(!strcmp("string", sargv[1]));
+    TEST_ASSERT(!strcmp("s't\\\"ring", sargv[1]));
     sdsfreesplitres(sargv, len);
 
     sargv = sdssplitargs("unquoted\" \"with' 'quotes string", &len);

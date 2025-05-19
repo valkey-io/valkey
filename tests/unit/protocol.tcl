@@ -69,6 +69,22 @@ start_server {tags {"protocol network"}} {
         assert_equal "test-value" [r read]
     }
 
+    test "Unbalanced single quotes" {
+        reconnect
+        r write "set foo 'b'a'r\r\n"
+        r write "ping\r\n"
+        r flush
+        assert_error "*unbalanced*" {r read}
+    }
+
+    test "Unbalanced double quotes" {
+        reconnect
+        r write "set foo \"b\"a\"r\r\n"
+        r write "ping\r\n"
+        r flush
+        assert_error "*unbalanced*" {r read}
+    }
+
     set c 0
     foreach seq [list "\x00" "*\x00" "$\x00" "*1\r\n$\x00"] {
         incr c

@@ -114,10 +114,10 @@ start_server [list overrides [list "dir" $server_path] keep_persistence true] {
     r del stream
 }
 
+# Prepare custom umask test scenario
 package require Tclx
 set old_umask [umask]
-set old_perm 666
-incr old_perm -$old_umask
+set old_perm [expr {666 - $old_umask}]
 set dump_path [file join $server_path dump.rdb]
 assert_equal [file attributes $dump_path -permissions] 00$old_perm
 
@@ -126,14 +126,14 @@ if {$old_umask == 22} {
 } else {
     set new_umask 22
 }
-set new_perm 666
-incr new_perm -$new_umask
+set new_perm [expr {666 - $new_umask}]
 
 umask $new_umask
 start_server [list overrides [list "dir" $server_path] keep_persistence true] {
     test {Test nondefault umask applied} {
         r save
-        assert_equal [file attributes $dump_path -permissions] 00$new_perm
+        # Use numeric comparison for compatibility with Tcl 8 and 9.
+        assert_range [file attributes $dump_path -permissions] 00$new_perm 00$new_perm
     }
 }
 umask $old_umask

@@ -828,8 +828,6 @@ int hashTypeSetExpire(robj *o, sds field, long long expiry, int flag) {
     /* If no object we will return -2 */
     if (o == NULL) return -2;
 
-    int expired = timestampIsExpired(expiry);
-
     if (o->encoding == OBJ_ENCODING_LISTPACK) {
         /* When listpack representation is used, we consider it as infinite TTL,
          * so expire command with gt always fail the GT as well as existence(XX).
@@ -837,16 +835,6 @@ int hashTypeSetExpire(robj *o, sds field, long long expiry, int flag) {
         if (flag & EXPIRE_XX || flag & EXPIRE_GT) {
             return 0;
         } else {
-            if (expired) {
-                /* It is possible that the assigned expiration is set in the past (or zero).
-                 * In such case we cannot count on the hash object representation to be hashtable. */
-                if (hashTypeDelete(o, field)) {
-                    hashTypeExpireEntry(field);
-                    return 2;
-                } else {
-                    return -2;
-                }
-            }
             hashTypeConvert(o, OBJ_ENCODING_HASHTABLE);
         }
     }
@@ -887,12 +875,6 @@ int hashTypeSetExpire(robj *o, sds field, long long expiry, int flag) {
                 if (current_expire != EXPIRY_NONE && expiry >= current_expire) {
                     return 0;
                 }
-            }
-        }
-        if (expired) {
-            if (hashTypeDelete(o, field)) {
-                hashTypeExpireEntry(field);
-                return 2;
             }
         }
         *entry_ref = hashTypeEntrySetExpiry(current_entry, expiry);
@@ -1570,21 +1552,10 @@ void hsetexCommand(client *c) {
     if (flags & OBJ_KEEPTTL)
         set_flags |= HASH_SET_KEEP_EXPIRY;
     else if (expire) {
-        if (getLongLongFromObjectOrReply(c, expire, &when, NULL) != C_OK) return;
         long long basetime = (flags & (OBJ_EXAT | OBJ_PXAT)) ? 0 : commandTimeSnapshot();
 
-        if (unit == UNIT_SECONDS) {
-            if (when > LLONG_MAX / 1000 || when < LLONG_MIN / 1000) {
-                addReplyErrorExpireTime(c);
-                return;
-            }
-            when *= 1000;
-        }
-        if (when > LLONG_MAX - basetime) {
-            addReplyErrorExpireTime(c);
+        if (convertExpireArgumentToUnixTime(c, expire, basetime, unit, &when) == C_ERR)
             return;
-        }
-        when += basetime;
 
         if (((flags & OBJ_PXAT) || (flags & OBJ_EXAT)) && checkAlreadyExpired(when)) {
             set_expired = 1;
@@ -1659,8 +1630,7 @@ void hgetexCommand(client *c) {
     for (; fields_index < c->argc; fields_index++) {
         if (!strcasecmp(c->argv[fields_index]->ptr, "fields")) {
             /* checking optional flags */
-            if (parseExtendedStringArgumentsOrReply(c, &flags, &unit, &expire, &comparison, COMMAND_HGET, fields_index + 1) != C_OK) return;
-            fields_index++;
+            if (parseExtendedStringArgumentsOrReply(c, &flags, &unit, &expire, &comparison, COMMAND_HGET, fields_index++) != C_OK) return;
             if (getLongLongFromObjectOrReply(c, c->argv[fields_index++], &num_fields, NULL) != C_OK) return;
             break;
         }
@@ -1681,21 +1651,10 @@ void hgetexCommand(client *c) {
     if (flags & OBJ_PERSIST) {
         persist = 1;
     } else if (expire) {
-        if (getLongLongFromObjectOrReply(c, expire, &when, NULL) != C_OK) return;
         long long basetime = (flags & (OBJ_EXAT | OBJ_PXAT)) ? 0 : commandTimeSnapshot();
 
-        if (unit == UNIT_SECONDS) {
-            if (when > LLONG_MAX / 1000 || when < LLONG_MIN / 1000) {
-                addReplyErrorExpireTime(c);
-                return;
-            }
-            when *= 1000;
-        }
-        if (when > LLONG_MAX - basetime) {
-            addReplyErrorExpireTime(c);
+        if (convertExpireArgumentToUnixTime(c, expire, basetime, unit, &when) == C_ERR)
             return;
-        }
-        when += basetime;
 
         if (((flags & OBJ_PXAT) || (flags & OBJ_EXAT)) && checkAlreadyExpired(when)) {
             set_expired = 1;
@@ -1713,9 +1672,13 @@ void hgetexCommand(client *c) {
     if (set_expiry || set_expired || persist) {
         /* allocate a new client argv for replicating the command. */
         new_argv = zmalloc(sizeof(robj *) * (num_fields + 5));
-        new_argv[new_argc++] = shared.hpexpireat;
+        if (persist)
+            new_argv[new_argc++] = shared.hpersist;
+        else
+            new_argv[new_argc++] = shared.hpexpireat;
+
         new_argv[new_argc++] = c->argv[1];
-        if (set_expiry) {
+        if (set_expiry || set_expired) {
             new_argv[new_argc++] = NULL; // placeholder for the expiration time
             milliseconds_index = new_argc - 1;
         }
@@ -1729,7 +1692,7 @@ void hgetexCommand(client *c) {
         if (set_expired) {
             changed = hashTypeDelete(o, c->argv[i]->ptr);
         } else if (set_expiry) {
-            changed = (hashTypeSetExpire(o, c->argv[i]->ptr, when, flags) == 1) ? 1 : 0;
+            changed = (hashTypeSetExpire(o, c->argv[i]->ptr, when, 0) == 1) ? 1 : 0;
         } else if (persist) {
             changed = hashTypePersist(o, c->argv[i]->ptr);
         }
@@ -1745,6 +1708,10 @@ void hgetexCommand(client *c) {
         }
         numitems_obj = createStringObjectFromLongLong(changes);
         new_argv[numitems_index] = numitems_obj;
+
+        for (i = 0; i < new_argc; i++)
+            if (new_argv[i])
+                incrRefCount(new_argv[i]);
         replaceClientCommandVector(c, new_argc, new_argv);
         server.dirty += changes;
         signalModifiedKey(c, c->db, c->argv[1]);
@@ -1753,8 +1720,9 @@ void hgetexCommand(client *c) {
         notifyKeyspaceEvent(NOTIFY_HASH, set_expiry ? "hexpire" : "hpersist", c->argv[1], c->db->id);
         if (milliseconds_obj) decrRefCount(milliseconds_obj);
         if (numitems_obj) decrRefCount(numitems_obj);
+    } else {
+        if (new_argv) zfree(new_argv);
     }
-    if (new_argv) zfree(new_argv);
 
     commitDeferredReplyBuffer(c, 1);
 }
@@ -1847,7 +1815,7 @@ void hexpireGenericCommand(client *c, long long basetime, int unit) {
     int flag = 0;
     int fields_index = 3;
     long long num_fields = 0;
-    int i, result = 0, changes = 0;
+    int i, result = 0, expired = 0, updated = 0;
 
     for (; fields_index < c->argc; fields_index++) {
         if (!strcasecmp(c->argv[fields_index]->ptr, "fields")) {
@@ -1860,23 +1828,11 @@ void hexpireGenericCommand(client *c, long long basetime, int unit) {
 
     if (num_fields > c->argc - fields_index) num_fields = c->argc - fields_index; // Potential user error, but we would like to make effort to comply with the request.
 
-    if (getLongLongFromObjectOrReply(c, param, &when, NULL) != C_OK) return;
-
-    /* HEXPIRE allows negative numbers, but we can at least detect an
-     * overflow by either unit conversion or basetime addition. */
-    if (unit == UNIT_SECONDS) {
-        if (when > LLONG_MAX / 1000 || when < LLONG_MIN / 1000) {
-            addReplyErrorExpireTime(c);
-            return;
-        }
-        when *= 1000;
-    }
-
-    if (when > LLONG_MAX - basetime) {
-        addReplyErrorExpireTime(c);
+    if (convertExpireArgumentToUnixTime(c, param, basetime, unit, &when) == C_ERR)
         return;
-    }
-    when += basetime;
+
+    if (checkAlreadyExpired(when))
+        when = 0;
 
     robj *obj = lookupKeyWrite(c->db, key);
 
@@ -1891,24 +1847,35 @@ void hexpireGenericCommand(client *c, long long basetime, int unit) {
     addReplyArrayLen(c, num_fields);
 
     for (i = 0; i < num_fields; i++) {
-        result = hashTypeSetExpire(obj, c->argv[fields_index + i]->ptr, when, flag);
+        if (when == 0) {
+            result = -2;
+            if (hashTypeDelete(obj, c->argv[fields_index + i]->ptr)) {
+                result = 2;
+                expired++;
+            }
+        } else {
+            result = hashTypeSetExpire(obj, c->argv[fields_index + i]->ptr, when, flag);
+            updated++;
+        }
         server.dirty += (result > 0 ? 1 : 0); // in case there was a change increment the dirty
-        changes += (result > 0 ? 1 : 0);
         addReplyLongLong(c, result);
     }
-    /* Propagate as HPEXPIREAT millisecond-timestamp
-     * Only rewrite the command arg if not already HPEXPIREAT */
-    if (c->cmd->proc != hpexpireAtCommand) {
-        rewriteClientCommandArgument(c, 0, shared.pexpireat);
-    }
 
-    /* Avoid creating a string object when it's the same as argv[2] parameter  */
-    if (basetime != 0 || unit == UNIT_SECONDS) {
-        robj *when_obj = createStringObjectFromLongLong(when);
-        rewriteClientCommandArgument(c, 2, when_obj);
-        decrRefCount(when_obj);
-    }
-    if (changes) {
+    if (expired || updated) {
+        /* Propagate as HPEXPIREAT millisecond-timestamp
+         * Only rewrite the command arg if not already HPEXPIREAT */
+        if (c->cmd->proc != hpexpireAtCommand) {
+            rewriteClientCommandArgument(c, 0, shared.pexpireat);
+        }
+
+        /* Avoid creating a string object when it's the same as argv[2] parameter  */
+        if (basetime != 0 || unit == UNIT_SECONDS) {
+            robj *when_obj = createStringObjectFromLongLong(when);
+            rewriteClientCommandArgument(c, 2, when_obj);
+            decrRefCount(when_obj);
+        }
+        if (expired)
+            notifyKeyspaceEvent(NOTIFY_HASH, "hexpired", c->argv[1], c->db->id);
         notifyKeyspaceEvent(NOTIFY_HASH, "hexpire", c->argv[1], c->db->id);
         signalModifiedKey(c, c->db, obj);
     }

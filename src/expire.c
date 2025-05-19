@@ -578,6 +578,30 @@ int parseExtendedExpireArgumentsOrReply(client *c, int *flags, int max_args) {
     return C_OK;
 }
 
+int convertExpireArgumentToUnixTime(client *c, robj *arg, long long basetime, int unit, long long *unixtime) {
+    long long when;
+    if (getLongLongFromObjectOrReply(c, arg, &when, NULL) != C_OK) return C_ERR;
+
+    if (when < 0) {
+        addReplyErrorExpireTime(c);
+    }
+
+    if (unit == UNIT_SECONDS) {
+        if (when > LLONG_MAX / 1000 || when < LLONG_MIN / 1000) {
+            addReplyErrorExpireTime(c);
+            return C_ERR;
+        }
+        when *= 1000;
+    }
+    if (when > LLONG_MAX - basetime) {
+        addReplyErrorExpireTime(c);
+        return C_ERR;
+    }
+    when += basetime;
+    if (unixtime) *unixtime = when;
+    return C_OK;
+}
+
 /*-----------------------------------------------------------------------------
  * Expires Commands
  *----------------------------------------------------------------------------*/

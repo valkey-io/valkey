@@ -2126,6 +2126,7 @@ void createSharedObjects(void) {
     shared.hset = createStringObject("HSET", 4);
     shared.hdel = createStringObject("HDEL", 4);
     shared.hpexpireat = createStringObject("HPEXPIREAT", 10);
+    shared.hpersist = createStringObject("HPERSIST", 8);
     shared.srem = createStringObject("SREM", 4);
     shared.xgroup = createStringObject("XGROUP", 6);
     shared.xclaim = createStringObject("XCLAIM", 6);

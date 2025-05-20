@@ -201,7 +201,7 @@ static_assert(MAX_FILL_PERCENT_SOFT <= MAX_FILL_PERCENT_HARD, "Soft vs hard fill
 
 /* --- Random entry --- */
 
-#define FAIR_RANDOM_SAMPLE_SIZE (ENTRIES_PER_BUCKET * 40)
+#define FAIR_RANDOM_SAMPLE_SIZE (ENTRIES_PER_BUCKET * 10)
 #define WEAK_RANDOM_SAMPLE_SIZE ENTRIES_PER_BUCKET
 
 /* --- Types --- */
@@ -2046,8 +2046,10 @@ int hashtableRandomEntry(hashtable *ht, void **found) {
 /* Points 'found' to a random entry in the hash table and returns 1. Returns 0
  * if the table is empty. This one is more fair than hashtableRandomEntry(). */
 int hashtableFairRandomEntry(hashtable *ht, void **found) {
-    void *samples[FAIR_RANDOM_SAMPLE_SIZE];
-    unsigned count = hashtableSampleEntries(ht, &samples[0], FAIR_RANDOM_SAMPLE_SIZE);
+    /* Sample less if it's very sparse. */
+    size_t num_samples = hashtableSize(ht) >= hashtableBuckets(ht) ? FAIR_RANDOM_SAMPLE_SIZE : WEAK_RANDOM_SAMPLE_SIZE;
+    void *samples[num_samples];
+    unsigned count = hashtableSampleEntries(ht, &samples[0], num_samples);
     if (count == 0) return 0;
     unsigned idx = random() % count;
     *found = samples[idx];
@@ -2069,9 +2071,8 @@ unsigned hashtableSampleEntries(hashtable *ht, void **dst, unsigned count) {
     samples.size = count;
     samples.seen = 0;
     samples.entries = dst;
-    size_t cursor = randomSizeT();
     while (samples.seen < count) {
-        cursor = hashtableScan(ht, cursor, sampleEntriesScanFn, &samples);
+        hashtableScan(ht, randomSizeT(), sampleEntriesScanFn, &samples);
     }
     rehashStepOnReadIfNeeded(ht);
     /* samples.seen is the number of entries scanned. It may be greater than

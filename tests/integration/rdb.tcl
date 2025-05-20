@@ -114,13 +114,37 @@ start_server [list overrides [list "dir" $server_path] keep_persistence true] {
     r del stream
 }
 
+# Prepare custom umask test scenario
+package require Tclx
+set old_umask [umask]
+set old_perm [expr {666 - $old_umask}]
+set dump_path [file join $server_path dump.rdb]
+assert_equal [file attributes $dump_path -permissions] 00$old_perm
+
+if {$old_umask == 22} {
+    set new_umask 2
+} else {
+    set new_umask 22
+}
+set new_perm [expr {666 - $new_umask}]
+
+umask $new_umask
+start_server [list overrides [list "dir" $server_path] keep_persistence true] {
+    test {Test nondefault umask applied} {
+        r save
+        # Use numeric comparison for compatibility with Tcl 8 and 9.
+        assert_range [file attributes $dump_path -permissions] 00$new_perm 00$new_perm
+    }
+}
+umask $old_umask
+
 # Make the RDB file unreadable
-file attributes [file join $server_path dump.rdb] -permissions 0222
+file attributes $dump_path -permissions 0222
 
 # Detect root account (it is able to read the file even with 002 perm)
 set isroot 0
 catch {
-    open [file join $server_path dump.rdb]
+    open $dump_path
     set isroot 1
 }
 
@@ -139,11 +163,11 @@ if {!$isroot} {
 }
 
 # Fix permissions of the RDB file.
-file attributes [file join $server_path dump.rdb] -permissions 0666
+file attributes $dump_path -permissions 0666
 
 # Corrupt its CRC64 checksum.
-set filesize [file size [file join $server_path dump.rdb]]
-set fd [open [file join $server_path dump.rdb] r+]
+set filesize [file size $dump_path]
+set fd [open $dump_path r+]
 fconfigure $fd -translation binary
 seek $fd -8 end
 puts -nonewline $fd "foobar00"; # Corrupt the checksum

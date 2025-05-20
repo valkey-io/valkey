@@ -1126,11 +1126,11 @@ jobs:
         if: true && !contains(github.event.inputs.skiptests, 'cluster')
         run: ./runtest-cluster ${{github.event.inputs.cluster_test_args}}
 
-  build-macos:
+  build-old-macos-versions:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-13, macos-14, macos-15]
+        os: [macos-13, macos-14]
     runs-on: ${{ matrix.os }}
     if: |
       (github.event_name == 'workflow_dispatch' ||
@@ -1343,7 +1343,7 @@ jobs:
       - test-macos-latest
       - test-macos-latest-sentinel
       - test-macos-latest-cluster
-      - build-macos
+      - build-old-macos-versions
       - test-freebsd
       - test-alpine-jemalloc
       - test-alpine-libc-malloc

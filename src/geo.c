@@ -641,13 +641,13 @@ void georadiusGeneric(client *c, int srcKeyIndex, int flags) {
                 if (getIntFromObjectOrReply(c, c->argv[base_args + i + 1], &num_vertices, "invalid number of vertices") != C_OK) {
                     return;
                 }
-                // Check how many args are remaining. Divide by 2 to see the possible number of vertices.
+                /* Check how many args are remaining. Divide by 2 to see the possible number of vertices. */
                 int possible_vertices = (remaining - i - 2) / 2;
                 if (num_vertices < 3 || possible_vertices < num_vertices) {
                     addReplyError(c, "GEOSEARCH BYPOLYGON must have at least 3 vertices");
                     return;
                 }
-                /* Extract polygon vertices */
+                /* Extract polygon vertices. */
                 shape.conversion = 1;
                 shape.t.polygon.num_vertices = num_vertices;
                 shape.t.polygon.points = zmalloc(num_vertices * sizeof(double[2]));

@@ -526,26 +526,19 @@ static unsigned long zslDeleteRangeByRank(zskiplist *zsl, unsigned int start, un
     return removed;
 }
 
-/* Find the rank for a specific skiplist node.
- * Returns 0 when the element cannot be found, rank otherwise.
- * Note that the rank is 1-based due to the span of zsl->header to the
- * first element. */
+/* Find the rank for a specific skiplist member node. Counts nodes after the one
+ * specified and subtracts from list length. Note that rank is 1-based.  */
 static unsigned long zslGetRank(zskiplist *zsl, const zskiplistNode *node) {
-    unsigned long rank = 0;
-
-    /* Count up nodes that come before */
-    zskiplistNode *x = zsl->header;
-    for (int i = zsl->level - 1; i >= 0; i--) {
-        while (zslCompareNodes(x->level[i].forward, node) <= 0) {
-            rank += zslGetNodeSpanAtLevel(x, i);
-            x = x->level[i].forward;
-        }
-
-        if (x == node) {
-            return rank;
-        }
+    int highest_node_span = zslGetNodeHeight(node) - 1;
+    unsigned long count_after_node = zslGetNodeSpanAtLevel(node, highest_node_span);
+    while (node->level[highest_node_span].forward) {
+        node = node->level[highest_node_span].forward;
+        highest_node_span = zslGetNodeHeight(node) - 1;
+        count_after_node += zslGetNodeSpanAtLevel(node, highest_node_span);
     }
-    return 0;
+
+    unsigned long rank = zsl->length - count_after_node;
+    return rank;
 }
 
 /* Finds an element by its rank from start node. The rank argument needs to be 1-based. */

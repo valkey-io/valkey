@@ -80,7 +80,6 @@ robj *createObjectWithKeyAndExpire(int type, void *ptr, const sds key, long long
      * don't need it now. Then we don't need to realloc if it's needed later. */
     if (has_embkey && !has_expire && bufsize >= min_size + sizeof(long long)) {
         has_expire = 1;
-        min_size += sizeof(long long);
     }
     o->hasexpire = has_expire;
 
@@ -176,7 +175,6 @@ static robj *createEmbeddedStringObjectWithKeyAndExpire(const char *val_ptr,
      * don't need it now. Then we don't need to realloc if it's needed later. */
     if (!o->hasexpire && bufsize >= min_size + sizeof(long long)) {
         o->hasexpire = 1;
-        min_size += sizeof(long long);
     }
 
     /* The memory after the struct where we embedded data. */
@@ -257,8 +255,8 @@ sds objectGetKey(const robj *val) {
 }
 
 long long objectGetExpire(const robj *val) {
-    unsigned char *data = (void *)(val + 1);
     if (val->hasexpire) {
+        unsigned char *data = (void *) (val + 1);
         return *(long long *)data;
     } else {
         return -1;

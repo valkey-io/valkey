@@ -7131,7 +7131,10 @@ int clusterCommandSpecial(client *c) {
         /* CLUSTER FORGET <NODE ID> */
         clusterNode *n = clusterLookupNode(c->argv[2]->ptr, sdslen(c->argv[2]->ptr));
         if (!n) {
-            if (clusterBlacklistExists((char *)c->argv[2]->ptr))
+            if (sdslen(c->argv[2]->ptr) != CLUSTER_NAMELEN) {
+                /* Sanity check for the provided node ID length*/
+                addReplyErrorFormat(c, "Bad node name %s", (char *)c->argv[2]->ptr);
+            } else if (clusterBlacklistExists((char *)c->argv[2]->ptr))
                 /* Already forgotten. The deletion may have been gossipped by
                  * another node, so we pretend it succeeded. */
                 addReply(c, shared.ok);

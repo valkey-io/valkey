@@ -406,7 +406,7 @@ robj *dupStringObject(const robj *o) {
         d->encoding = OBJ_ENCODING_INT;
         d->ptr = o->ptr;
         return d;
-    default: serverPanic("Wrong encoding."); break;
+    default: serverPanic("Wrong encoding.");
     }
 }
 
@@ -564,7 +564,7 @@ void decrRefCount(robj *o) {
             case OBJ_HASH: freeHashObject(o); break;
             case OBJ_MODULE: freeModuleObject(o); break;
             case OBJ_STREAM: freeStreamObject(o); break;
-            default: serverPanic("Unknown object type"); break;
+            default: serverPanic("Unknown object type");
             }
         }
         zfree(o);

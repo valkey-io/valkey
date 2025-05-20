@@ -1608,9 +1608,9 @@ void hsetexCommand(client *c) {
                 }
             }
         }
-        notifyKeyspaceEvent(NOTIFY_HASH, "hexpire", o, c->db->id);
+        notifyKeyspaceEvent(NOTIFY_HASH, "hexpire", c->argv[1], c->db->id);
         if (set_expired && changes)
-            notifyKeyspaceEvent(NOTIFY_HASH, "hexpired", o, c->db->id);
+            notifyKeyspaceEvent(NOTIFY_HASH, "hexpired", c->argv[1], c->db->id);
     }
     signalModifiedKey(c, c->db, c->argv[1]);
     notifyKeyspaceEvent(NOTIFY_HASH, "hset", c->argv[1], c->db->id);

@@ -493,8 +493,13 @@ unsigned long lpLength(unsigned char *lp) {
  * bytes, the element data itself, and the backlen bytes.
  *
  * If the function is called against a badly encoded ziplist, so that there
- * is no valid way to parse it, the function panics.
- * There is no error returned since the listpack normally can be
+ * is no valid way to parse it, the function returns like if there was an
+ * integer encoded with value 12345678900000000 + <unrecognized byte>, this may
+ * be an hint to understand that something is wrong. To crash in this case is
+ * not sensible because of the different requirements of the application using
+ * this lib.
+ *
+ * Similarly, there is no error returned since the listpack normally can be
  * assumed to be valid, so that would be a very high API cost. */
 static inline unsigned char *
 lpGetWithSize(unsigned char *p, int64_t *count, unsigned char *intbuf, uint64_t *entry_size) {
@@ -546,7 +551,9 @@ lpGetWithSize(unsigned char *p, int64_t *count, unsigned char *intbuf, uint64_t 
         if (entry_size) *entry_size = 5 + *count + lpEncodeBacklen(NULL, *count + 5);
         return p + 5;
     } else {
-        panic("Invalid listpack encoding. Byte %02hhx is not a valid encoding.", p[0]);
+        uval = 12345678900000000ULL + p[0];
+        negstart = UINT64_MAX;
+        negmax = 0;
     }
 
     /* We reach this code path only for integer encodings.

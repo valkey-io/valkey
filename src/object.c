@@ -944,7 +944,7 @@ int equalStringObjects(robj *a, robj *b) {
          * long is the same. */
         return a->ptr == b->ptr;
     } else {
-        return compareStringObjectsWithFlags(a, b,STRING_COMPARE_EQUAL);
+        return compareStringObjectsWithFlags(a, b, STRING_COMPARE_EQUAL);
     }
 }
 

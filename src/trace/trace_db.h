@@ -27,24 +27,82 @@
 
 #include <lttng/tracepoint.h>
 
-LTTNG_UST_TRACEPOINT_EVENT(
-	/* Tracepoint provider name */
-	valkey_db,
+LTTNG_UST_TRACEPOINT_EVENT_CLASS(
+    /* Tracepoint class provider name */
+    valkey_db,
 
-	/* Tracepoint name */
-	latency,
+    /* Tracepoint class name */
+    valkey_db_class,
 
-	/* Input arguments */
-	LTTNG_UST_TP_ARGS(
-		const char *, event,
-		uint64_t, duration
-	),
+    /* List of tracepoint arguments (input) */
+    LTTNG_UST_TP_ARGS(
+      uint64_t, duration
+    ),
 
-	/* Output event fields */
-	LTTNG_UST_TP_FIELDS(
-		lttng_ust_field_string(event, event)
-		lttng_ust_field_integer(uint64_t, duration, duration)
-	)
+    /* List of fields of eventual event (output) */
+    LTTNG_UST_TP_FIELDS(
+        lttng_ust_field_integer(uint64_t, duration, duration)
+    )
+)
+
+LTTNG_UST_TRACEPOINT_EVENT_INSTANCE(
+    /* Name of the tracepoint class provider */
+    valkey_db, valkey_db_class, valkey_db, expire_del,
+
+    /* List of tracepoint arguments (input) */
+    LTTNG_UST_TP_ARGS(
+      uint64_t, duration
+    )
+)
+
+LTTNG_UST_TRACEPOINT_EVENT_INSTANCE(
+    /* Name of the tracepoint class provider */
+    valkey_db, valkey_db_class, valkey_db, active_defrag_cycle,
+
+    /* List of tracepoint arguments (input) */
+    LTTNG_UST_TP_ARGS(
+      uint64_t, duration
+    )
+)
+
+LTTNG_UST_TRACEPOINT_EVENT_INSTANCE(
+    /* Name of the tracepoint class provider */
+    valkey_db, valkey_db_class, valkey_db, eviction_del,
+
+    /* List of tracepoint arguments (input) */
+    LTTNG_UST_TP_ARGS(
+      uint64_t, duration
+    )
+)
+
+LTTNG_UST_TRACEPOINT_EVENT_INSTANCE(
+    /* Name of the tracepoint class provider */
+    valkey_db, valkey_db_class, valkey_db, eviction_lazyfree,
+
+    /* List of tracepoint arguments (input) */
+    LTTNG_UST_TP_ARGS(
+      uint64_t, duration
+    )
+)
+
+LTTNG_UST_TRACEPOINT_EVENT_INSTANCE(
+    /* Name of the tracepoint class provider */
+    valkey_db, valkey_db_class, valkey_db, eviction_cycle,
+
+    /* List of tracepoint arguments (input) */
+    LTTNG_UST_TP_ARGS(
+      uint64_t, duration
+    )
+)
+
+LTTNG_UST_TRACEPOINT_EVENT_INSTANCE(
+    /* Name of the tracepoint class provider */
+    valkey_db, valkey_db_class, valkey_db, expire_cycle,
+
+    /* List of tracepoint arguments (input) */
+    LTTNG_UST_TP_ARGS(
+      uint64_t, duration
+    )
 )
 
 #define valkey_db_trace(...) lttng_ust_tracepoint(__VA_ARGS__)

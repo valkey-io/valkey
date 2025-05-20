@@ -360,7 +360,7 @@ void activeExpireCycle(int type) {
     elapsed = ustime() - start;
     server.stat_expire_cycle_time_used += elapsed;
     latencyAddSampleIfNeeded("expire-cycle", elapsed);
-    latencyTraceIfNeeded(db, "expire-cycle", elapsed);
+    latencyTraceIfNeeded(db, expire_cycle, elapsed);
 
     /* Update our estimate of keys existing but yet to be expired.
      * Running average with this sample accounting for 5%. */

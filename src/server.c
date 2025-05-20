@@ -1736,7 +1736,7 @@ void whileBlockedCron(void) {
 
     latencyEndMonitor(latency);
     latencyAddSampleIfNeeded("while-blocked-cron", latency);
-    latencyTraceIfNeeded(server, "while-blocked-cron", latency);
+    latencyTraceIfNeeded(server, while_blocked_cron, latency);
 
     /* We received a SIGTERM during loading, shutting down here in a safe way,
      * as it isn't ok doing so inside the signal handler. */
@@ -1881,7 +1881,7 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
     /* Record time consumption of AOF writing. */
     monotime aof_duration = getMonotonicUs() - aof_start_time;
     durationAddSample(EL_DURATION_TYPE_AOF, aof_duration);
-    latencyTraceIfNeeded(aof, "aof-flush", aof_duration);
+    latencyTraceIfNeeded(aof, aof_flush, aof_duration);
 
     /* Update the fsynced replica offset.
      * If an initial rewrite is in progress then not all data is guaranteed to have actually been
@@ -1925,11 +1925,11 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
     if (server.el_start > 0) {
         monotime el_duration = getMonotonicUs() - server.el_start;
         durationAddSample(EL_DURATION_TYPE_EL, el_duration);
-        latencyTraceIfNeeded(server, "eventloop", el_duration);
+        latencyTraceIfNeeded(server, eventloop, el_duration);
     }
     server.el_cron_duration += duration_before_aof + duration_after_write;
     durationAddSample(EL_DURATION_TYPE_CRON, server.el_cron_duration);
-    latencyTraceIfNeeded(server, "eventloop-cron", server.el_cron_duration);
+    latencyTraceIfNeeded(server, eventloop_cron, server.el_cron_duration);
     server.el_cron_duration = 0;
     /* Record max command count per cycle. */
     if (server.stat_numcommands > server.el_cmd_cnt_start) {
@@ -1971,7 +1971,7 @@ void afterSleep(struct aeEventLoop *eventLoop, int numevents) {
             moduleFireServerEvent(VALKEYMODULE_EVENT_EVENTLOOP, VALKEYMODULE_SUBEVENT_EVENTLOOP_AFTER_SLEEP, NULL);
             latencyEndMonitor(latency);
             latencyAddSampleIfNeeded("module-acquire-GIL", latency);
-            latencyTraceIfNeeded(server, "module-acquire-GIL", latency);
+            latencyTraceIfNeeded(server, module_acquire_gil, latency);
         }
         /* Set the eventloop start time. */
         server.el_start = getMonotonicUs();
@@ -2794,7 +2794,6 @@ void initServer(void) {
     server.reply_buffer_peak_reset_time = REPLY_BUFFER_DEFAULT_PEAK_RESET_TIME;
     server.reply_buffer_resizing_enabled = 1;
     server.client_mem_usage_buckets = NULL;
-    server.trace_events = 0;
     resetReplicationBuffer();
 
     /* Make sure the locale is set on startup based on the config file. */
@@ -3746,7 +3745,7 @@ void call(client *c, int flags) {
     else
         duration = ustime() - call_timer;
 
-    if (trace_events.commands) {
+    if (trace_enabled) {
         valkey_commands_trace(valkey_commands, command_call, connGetType(c->conn), c->conn->saddr, c->conn->daddr, real_cmd->declared_name, duration);
     }
     c->duration += duration;
@@ -3780,7 +3779,11 @@ void call(client *c, int flags) {
     if (update_command_stats) {
         char *latency_event = (real_cmd->flags & CMD_FAST) ? "fast-command" : "command";
         latencyAddSampleIfNeeded(latency_event, duration);
-        latencyTraceIfNeeded(server, latency_event, duration);
+        if (real_cmd->flags & CMD_FAST) {
+            latencyTraceIfNeeded(server, fast_command, duration);
+        } else {
+            latencyTraceIfNeeded(server, command, duration);
+        }
         if (server.execution_nesting == 0) durationAddSample(EL_DURATION_TYPE_CMD, duration);
     }
 
@@ -6577,7 +6580,7 @@ int serverFork(int purpose) {
         server.stat_fork_rate =
             (double)zmalloc_used_memory() * 1000000 / server.stat_fork_time / (1024 * 1024 * 1024); /* GB per second. */
         latencyAddSampleIfNeeded("fork", server.stat_fork_time);
-        latencyTraceIfNeeded(sys, "fork", server.stat_fork_time);
+        latencyTraceIfNeeded(sys, fork, server.stat_fork_time);
 
         /* The child_pid and child_type are only for mutually exclusive children.
          * other child types should handle and store their pid's in dedicated variables.

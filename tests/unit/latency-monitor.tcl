@@ -193,16 +193,6 @@ tags {"needs:debug"} {
         catch {r LATENCY help xxx} e
         assert_match "*wrong number of arguments for 'latency|help' command" $e
     }
-
-    test {LATENCY trace events configuration} {
-        r config set trace-events ""
-        r config set trace-events "aof server cluster sys db commands"
-        assert_equal [lindex [r config get trace-events] 1] "aof server cluster sys db commands"
-        catch {r config set trace-events "test"} e
-        assert_match "*trace events should between*" $e
-        r config set trace-events ""
-        assert_equal [lindex [r config get trace-events] 1] ""
-    }
 }
 
 start_cluster 1 1 {tags {"latency-monitor cluster external:skip needs:latency"} overrides {latency-monitor-threshold 1}} {

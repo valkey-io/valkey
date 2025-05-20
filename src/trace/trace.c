@@ -16,4 +16,4 @@
 
 #include "trace.h"
 
-struct valkeyTraceEvents trace_events = {0};
+int trace_enabled = 0;

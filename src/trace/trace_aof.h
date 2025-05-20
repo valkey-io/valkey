@@ -27,24 +27,102 @@
 
 #include <lttng/tracepoint.h>
 
-LTTNG_UST_TRACEPOINT_EVENT(
-	/* Tracepoint provider name */
-	valkey_aof,
+LTTNG_UST_TRACEPOINT_EVENT_CLASS(
+    /* Tracepoint class provider name */
+    valkey_aof,
 
-	/* Tracepoint name */
-	latency,
+    /* Tracepoint class name */
+    valkey_aof_class,
 
-	/* Input arguments */
-	LTTNG_UST_TP_ARGS(
-		const char *, event,
-		uint64_t, duration
-	),
+    /* List of tracepoint arguments (input) */
+    LTTNG_UST_TP_ARGS(
+      uint64_t, duration
+    ),
 
-	/* Output event fields */
-	LTTNG_UST_TP_FIELDS(
-		lttng_ust_field_string(event, event)
-		lttng_ust_field_integer(uint64_t, duration, duration)
-	)
+    /* List of fields of eventual event (output) */
+    LTTNG_UST_TP_FIELDS(
+        lttng_ust_field_integer(uint64_t, duration, duration)
+    )
+)
+
+LTTNG_UST_TRACEPOINT_EVENT_INSTANCE(
+    /* Name of the tracepoint class provider */
+    valkey_aof, valkey_aof_class, valkey_aof, aof_write_pending_fsync,
+
+    /* List of tracepoint arguments (input) */
+    LTTNG_UST_TP_ARGS(
+      uint64_t, duration
+    )
+)
+
+LTTNG_UST_TRACEPOINT_EVENT_INSTANCE(
+    /* Name of the tracepoint class provider */
+    valkey_aof, valkey_aof_class, valkey_aof, aof_write_active_child,
+
+    /* List of tracepoint arguments (input) */
+    LTTNG_UST_TP_ARGS(
+      uint64_t, duration
+    )
+)
+
+LTTNG_UST_TRACEPOINT_EVENT_INSTANCE(
+    /* Name of the tracepoint class provider */
+    valkey_aof, valkey_aof_class, valkey_aof, aof_write_alone,
+
+    /* List of tracepoint arguments (input) */
+    LTTNG_UST_TP_ARGS(
+      uint64_t, duration
+    )
+)
+
+LTTNG_UST_TRACEPOINT_EVENT_INSTANCE(
+    /* Name of the tracepoint class provider */
+    valkey_aof, valkey_aof_class, valkey_aof, aof_write,
+
+    /* List of tracepoint arguments (input) */
+    LTTNG_UST_TP_ARGS(
+      uint64_t, duration
+    )
+)
+
+LTTNG_UST_TRACEPOINT_EVENT_INSTANCE(
+    /* Name of the tracepoint class provider */
+    valkey_aof, valkey_aof_class, valkey_aof, aof_fsync_always,
+
+    /* List of tracepoint arguments (input) */
+    LTTNG_UST_TP_ARGS(
+      uint64_t, duration
+    )
+)
+
+LTTNG_UST_TRACEPOINT_EVENT_INSTANCE(
+    /* Name of the tracepoint class provider */
+    valkey_aof, valkey_aof_class, valkey_aof, aof_fstat,
+
+    /* List of tracepoint arguments (input) */
+    LTTNG_UST_TP_ARGS(
+      uint64_t, duration
+    )
+)
+
+LTTNG_UST_TRACEPOINT_EVENT_INSTANCE(
+    /* Name of the tracepoint class provider */
+    valkey_aof, valkey_aof_class, valkey_aof, aof_rename,
+
+    /* List of tracepoint arguments (input) */
+    LTTNG_UST_TP_ARGS(
+      uint64_t, duration
+    )
+)
+
+LTTNG_UST_TRACEPOINT_EVENT_INSTANCE(
+    /* Name of the tracepoint class provider */
+    valkey_aof, valkey_aof_class, valkey_aof, aof_flush,
+
+    /* List of tracepoint arguments (input) */
+    LTTNG_UST_TP_ARGS(
+      uint64_t, duration
+    )
 )
 
 #define valkey_aof_trace(...) lttng_ust_tracepoint(__VA_ARGS__)

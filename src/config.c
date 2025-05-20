@@ -3150,57 +3150,6 @@ static int applyClientMaxMemoryUsage(const char **err) {
     return 1;
 }
 
-static int setTraceEvents(standardConfig *config, sds *argv, int argc, const char **err) {
-    UNUSED(config);
-
-    struct valkeyTraceEvents events = {0};
-    for (int i = 0; i < argc; i++) {
-        if (!strcasecmp(argv[i], "aof")) {
-            events.aof = 1;
-        } else if (!strcasecmp(argv[i], "server")) {
-            events.server = 1;
-        } else if (!strcasecmp(argv[i], "cluster")) {
-            events.cluster = 1;
-        } else if (!strcasecmp(argv[i], "sys")) {
-            events.sys = 1;
-        } else if (!strcasecmp(argv[i], "db")) {
-            events.db = 1;
-        } else if (!strcasecmp(argv[i], "commands")) {
-            events.commands = 1;
-        } else {
-            *err = "trace events should between [server,aof,cluster,sys,db,commands]";
-            goto configerr;
-        }
-    }
-    trace_events = events;
-    sdsclear(server.trace_events);
-    for (int i = 0; i < argc; i++) {
-        server.trace_events = sdscatprintf(server.trace_events, "%s", argv[i]);
-        if (i != argc - 1) {
-            server.trace_events = sdscatlen(server.trace_events, " ", 1);
-        }
-    }
-    return 1;
-configerr:
-    return 0;
-}
-
-static sds getTraceEvents(standardConfig *config) {
-    UNUSED(config);
-    return sdsdup(server.trace_events);
-}
-
-void rewriteTraceEvents(standardConfig *config,
-                        const char *name,
-                        struct rewriteConfigState *state) {
-    UNUSED(config);
-    if (sdslen(server.trace_events) == 0) {
-        rewriteConfigMarkAsProcessed(state, name);
-        return;
-    }
-    rewriteConfigRewriteLine(state, name, sdsdup(server.trace_events), 1);
-}
-
 standardConfig static_configs[] = {
     /* Bool configs */
     createBoolConfig("rdbchecksum", NULL, IMMUTABLE_CONFIG, server.rdb_checksum, 1, NULL, NULL),
@@ -3254,6 +3203,7 @@ standardConfig static_configs[] = {
     createBoolConfig("hide-user-data-from-log", NULL, MODIFIABLE_CONFIG, server.hide_user_data_from_log, 1, NULL, NULL),
     createBoolConfig("import-mode", NULL, DEBUG_CONFIG | MODIFIABLE_CONFIG, server.import_mode, 0, NULL, NULL),
     createBoolConfig("auto-failover-on-shutdown", NULL, MODIFIABLE_CONFIG, server.auto_failover_on_shutdown, 0, NULL, NULL),
+    createBoolConfig("trace-enabled", NULL, MODIFIABLE_CONFIG, trace_enabled, 0, NULL, NULL),
 
     /* String Configs */
     createStringConfig("aclfile", NULL, IMMUTABLE_CONFIG, ALLOW_EMPTY_STRING, server.acl_filename, "", NULL, NULL),
@@ -3445,7 +3395,6 @@ standardConfig static_configs[] = {
     createSpecialConfig("rdma-bind", NULL, MODIFIABLE_CONFIG | MULTI_ARG_CONFIG, setConfigRdmaBindOption, getConfigRdmaBindOption, rewriteConfigRdmaBindOption, applyRdmaBind),
     createSpecialConfig("replicaof", "slaveof", IMMUTABLE_CONFIG | MULTI_ARG_CONFIG, setConfigReplicaOfOption, getConfigReplicaOfOption, rewriteConfigReplicaOfOption, NULL),
     createSpecialConfig("latency-tracking-info-percentiles", NULL, MODIFIABLE_CONFIG | MULTI_ARG_CONFIG, setConfigLatencyTrackingInfoPercentilesOutputOption, getConfigLatencyTrackingInfoPercentilesOutputOption, rewriteConfigLatencyTrackingInfoPercentilesOutputOption, NULL),
-    createSpecialConfig("trace-events", NULL, MODIFIABLE_CONFIG | MULTI_ARG_CONFIG, setTraceEvents, getTraceEvents, rewriteTraceEvents, NULL),
 
     /* NULL Terminator, this is dropped when we convert to the runtime array. */
     {NULL},

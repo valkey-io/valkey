@@ -7712,7 +7712,6 @@ void VM__Assert(const char *estr, const char *file, int line) {
  * latency-monitor-threshold. */
 void VM_LatencyAddSample(const char *event, mstime_t latency) {
     latencyAddSampleIfNeeded(event, latency * 1000);
-    latencyTraceIfNeeded(server, event, latency * 1000);
 }
 
 /* --------------------------------------------------------------------------

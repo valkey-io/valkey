@@ -256,7 +256,7 @@ sds objectGetKey(const robj *val) {
 
 long long objectGetExpire(const robj *val) {
     if (val->hasexpire) {
-        unsigned char *data = (void *) (val + 1);
+        unsigned char *data = (void *)(val + 1);
         return *(long long *)data;
     } else {
         return -1;

@@ -3258,8 +3258,8 @@ struct COMMAND_ARG GEOSEARCH_from_fromlonlat_Subargs[] = {
 
 /* GEOSEARCH from argument table */
 struct COMMAND_ARG GEOSEARCH_from_Subargs[] = {
-{MAKE_ARG("member",ARG_TYPE_STRING,-1,"FROMMEMBER",NULL,NULL,CMD_ARG_OPTIONAL,0,NULL)},
-{MAKE_ARG("fromlonlat",ARG_TYPE_BLOCK,-1,"FROMLONLAT",NULL,NULL,CMD_ARG_OPTIONAL,2,NULL),.subargs=GEOSEARCH_from_fromlonlat_Subargs},
+{MAKE_ARG("member",ARG_TYPE_STRING,-1,"FROMMEMBER",NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("fromlonlat",ARG_TYPE_BLOCK,-1,"FROMLONLAT",NULL,NULL,CMD_ARG_NONE,2,NULL),.subargs=GEOSEARCH_from_fromlonlat_Subargs},
 };
 
 /* GEOSEARCH by circle unit argument table */
@@ -3325,7 +3325,7 @@ struct COMMAND_ARG GEOSEARCH_count_block_Subargs[] = {
 /* GEOSEARCH argument table */
 struct COMMAND_ARG GEOSEARCH_Args[] = {
 {MAKE_ARG("key",ARG_TYPE_KEY,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
-{MAKE_ARG("from",ARG_TYPE_ONEOF,-1,NULL,NULL,NULL,CMD_ARG_NONE,2,NULL),.subargs=GEOSEARCH_from_Subargs},
+{MAKE_ARG("from",ARG_TYPE_ONEOF,-1,NULL,NULL,NULL,CMD_ARG_OPTIONAL,2,NULL),.subargs=GEOSEARCH_from_Subargs},
 {MAKE_ARG("by",ARG_TYPE_ONEOF,-1,NULL,NULL,NULL,CMD_ARG_NONE,3,NULL),.subargs=GEOSEARCH_by_Subargs},
 {MAKE_ARG("order",ARG_TYPE_ONEOF,-1,NULL,NULL,NULL,CMD_ARG_OPTIONAL,2,NULL),.subargs=GEOSEARCH_order_Subargs},
 {MAKE_ARG("count-block",ARG_TYPE_BLOCK,-1,NULL,NULL,NULL,CMD_ARG_OPTIONAL,2,NULL),.subargs=GEOSEARCH_count_block_Subargs},

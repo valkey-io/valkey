@@ -71,18 +71,17 @@
             {
                 "name": "from",
                 "type": "oneof",
+                "optional": true,
                 "arguments": [
                     {
                         "token": "FROMMEMBER",
                         "name": "member",
                         "type": "string",
-                        "optional": true
                     },
                     {
                         "token": "FROMLONLAT",
                         "name": "fromlonlat",
                         "type": "block",
-                        "optional": true,
                         "arguments": [
                             {
                                 "name": "longitude",

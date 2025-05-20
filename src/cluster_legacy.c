@@ -2861,7 +2861,7 @@ void clusterUpdateSlotsConfigWith(clusterNode *sender, uint64_t senderConfigEpoc
         for (int j = 0; j < dirty_slots_count; j++) {
             serverLog(LL_NOTICE, "Deleting keys in dirty slot %d on node %.40s (%s) in shard %.40s", dirty_slots[j],
                       myself->name, myself->human_nodename, myself->shard_id);
-            delKeysInSlot(dirty_slots[j], server.lazyfree_lazy_server_del, false);
+            delKeysInSlot(dirty_slots[j], server.lazyfree_lazy_server_del, true, false);
         }
     }
 }
@@ -5915,7 +5915,7 @@ int verifyClusterConfigWithData(void) {
                           server.cluster->importing_slots_from[j]->shard_id, j, server.cluster->slots[j]->name,
                           server.cluster->slots[j]->human_nodename, server.cluster->slots[j]->shard_id);
             }
-            delKeysInSlot(j, server.lazyfree_lazy_server_del, false);
+            delKeysInSlot(j, server.lazyfree_lazy_server_del, true, false);
         }
     }
     if (update_config) clusterSaveConfigOrDie(1);
@@ -6534,7 +6534,7 @@ void removeChannelsInSlot(unsigned int slot) {
 
 /* Remove all the keys in the specified hash slot.
  * The number of removed items is returned. */
-unsigned int delKeysInSlot(unsigned int hashslot, int lazy, bool is_cmd) {
+unsigned int delKeysInSlot(unsigned int hashslot, int lazy,  bool propagate_del, bool send_del_event) {
     if (!countKeysInSlot(hashslot)) return 0;
 
     /* We may lose a slot during the pause. We need to track this
@@ -6559,15 +6559,15 @@ unsigned int delKeysInSlot(unsigned int hashslot, int lazy, bool is_cmd) {
                 dbSyncDelete(&db, key);
             }
             // if is command, skip del propagate
-            if (!is_cmd) propagateDeletion(&db, key, lazy);
+            if (propagate_del) propagateDeletion(&db, key, lazy);
             signalModifiedKey(NULL, &db, key);
-            if (is_cmd) {
+            if (send_del_event) {
                 /* In the `cluster flushslot` scenario, the keys are actually deleted so notify everyone. */
                 notifyKeyspaceEvent(NOTIFY_GENERIC, "del", key, db.id);
             } else {
                 /* The keys are not actually logically deleted from the database, just moved to another node.
-                * The modules needs to know that these keys are no longer available locally, so just send the
-                * keyspace notification to the modules, but not to clients. */
+                 * The modules needs to know that these keys are no longer available locally, so just send the
+                 * keyspace notification to the modules, but not to clients. */
                 moduleNotifyKeyspaceEvent(NOTIFY_GENERIC, "del", key, db.id);
             }
             exitExecutionUnit();

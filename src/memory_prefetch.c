@@ -260,8 +260,8 @@ int addCommandToBatchAndProcessIfFull(client *c) {
     }
 
     /* Prefetch keys in command queue. */
-    for (int j = c->cmd_queue_off; j < c->cmd_queue_len && batch->key_count < batch->max_prefetch_size; j++) {
-        commandParserState *st = &c->cmd_queue[j];
+    for (int j = c->cmd_queue.off; j < c->cmd_queue.len && batch->key_count < batch->max_prefetch_size; j++) {
+        commandParserState *st = &c->cmd_queue.cmds[j];
         if (!(st->read_flags & READ_FLAGS_PARSING_COMPLETED) || c->argc == 0) continue;
         if (!st->cmd) continue; /* Looked up by I/O thead. */
         st->read_flags |= READ_FLAGS_PREFETCHED;

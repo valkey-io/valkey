@@ -1194,6 +1194,14 @@ typedef struct commandParserState {
     struct serverCommand *cmd;
 } commandParserState;
 
+/* Queue of parsed commands. */
+typedef struct {
+    commandParserState *cmds;
+    short len; /* Number of elements in the queue. */
+    short off; /* Offset to the next element to execute. */
+    short cap; /* Allocation size (capacity) of the ps array. */
+} cmdQueue;
+
 typedef struct client {
     /* Basic client information and connection. */
     uint64_t id; /* Client incremental unique ID. */
@@ -1209,11 +1217,7 @@ typedef struct client {
     int multibulklen;    /* Number of multi bulk arguments left to read. */
     long bulklen;        /* Length of bulk argument in multi bulk request. */
     long long woff;      /* Last write global replication offset. */
-    /* Parsed commands queue */
-    commandParserState *cmd_queue; /* Queue of parsed commands. */
-    short cmd_queue_len;           /* Number of elements in the queue. */
-    short cmd_queue_off;           /* Offset to the next element to execute. */
-    short cmd_queue_cap;           /* Allocation size (capacity) of the cmd_queue array. */
+    cmdQueue cmd_queue;  /* Parsed commands queue */
     /* Command execution state and command information */
     struct serverCommand *cmd;           /* Current command. */
     struct serverCommand *lastcmd;       /* Last command executed. */

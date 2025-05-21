@@ -237,8 +237,8 @@ client *createClient(connection *conn) {
     c->nread = 0;
     c->read_flags = 0;
     c->write_flags = 0;
-    c->cmd_queue = NULL;
-    c->cmd_queue_len = c->cmd_queue_off = c->cmd_queue_cap = 0;
+    c->cmd_queue.cmds = NULL;
+    c->cmd_queue.len = c->cmd_queue.off = c->cmd_queue.cap = 0;
     c->cmd = c->lastcmd = c->realcmd = c->io_parsed_cmd = NULL;
     c->cur_script = NULL;
     c->multibulklen = 0;
@@ -2914,18 +2914,19 @@ void processMultibulkBuffer(client *c) {
     }
 
     /* Try parsing pipelined commands. */
-    debugServerAssert(c->cmd_queue_len == 0);
+    cmdQueue *queue = &c->cmd_queue;
+    debugServerAssert(queue->len == 0);
     while (flag != 0 &&
-           c->cmd_queue_len < 16 &&
+           queue->len < 16 &&
            sdslen(c->querybuf) > c->qb_pos &&
            c->querybuf[c->qb_pos] == '*') {
         c->reqtype = PROTO_REQ_MULTIBULK;
         /* Push a new parser state to the command queue */
-        if (c->cmd_queue_len == c->cmd_queue_cap) {
-            c->cmd_queue_cap = c->cmd_queue_cap == 0 ? 1 : c->cmd_queue_cap * 2;
-            c->cmd_queue = zrealloc(c->cmd_queue, c->cmd_queue_cap * sizeof(commandParserState));
+        if (queue->len == queue->cap) {
+            queue->cap = queue->cap == 0 ? 1 : queue->cap * 2;
+            queue->cmds = zrealloc(queue->cmds, queue->cap * sizeof(commandParserState));
         }
-        commandParserState *st = &c->cmd_queue[c->cmd_queue_len++];
+        commandParserState *st = &queue->cmds[queue->len++];
         memset(st, 0, sizeof(*st));
         flag = parseMultibulk(c, &st->argc, &st->argv, &st->argv_len,
                               &st->argv_len_sum, &st->input_bytes);
@@ -3240,7 +3241,7 @@ int processPendingCommandAndInputBuffer(client *c) {
      * Note: when a primary client steps into this function,
      * it can always satisfy this condition, because its querybuf
      * contains data not applied. */
-    if ((c->querybuf && sdslen(c->querybuf) > 0) || c->cmd_queue_off < c->cmd_queue_len) {
+    if ((c->querybuf && sdslen(c->querybuf) > 0) || c->cmd_queue.off < c->cmd_queue.len) {
         return processInputBuffer(c);
     }
     return C_OK;
@@ -3302,8 +3303,9 @@ int canParseCommand(client *c) {
 /* Pops a commands from the command queue and sets it as the client's current
  * command. Returns true on success and false if the queue was empty. */
 static bool consumeCommandQueue(client *c) {
-    if (c->cmd_queue_off >= c->cmd_queue_len) return false;
-    commandParserState *st = &c->cmd_queue[c->cmd_queue_off++];
+    cmdQueue *queue = &c->cmd_queue;
+    if (queue->off >= queue->len) return false;
+    commandParserState *st = &queue->cmds[queue->off++];
     c->read_flags |= st->read_flags;
     c->argc = st->argc;
     c->argv = st->argv;
@@ -3312,23 +3314,24 @@ static bool consumeCommandQueue(client *c) {
     c->net_input_bytes_curr_cmd = st->input_bytes;
     c->io_parsed_cmd = st->cmd;
     c->slot = st->slot;
-    if (c->cmd_queue_off == c->cmd_queue_len) {
-        c->cmd_queue_off = c->cmd_queue_len = 0;
+    if (queue->off == queue->len) {
+        queue->off = queue->len = 0;
     }
     return true;
 }
 
 static void discardCommandQueue(client *c) {
-    while (c->cmd_queue_off < c->cmd_queue_len) {
-        commandParserState *st = &c->cmd_queue[c->cmd_queue_off++];
+    cmdQueue *queue = &c->cmd_queue;
+    while (queue->off < queue->len) {
+        commandParserState *st = &queue->cmds[queue->off++];
         for (int j = 0; j < st->argc; j++) {
             decrRefCount(st->argv[j]);
         }
         zfree(st->argv);
     }
-    zfree(c->cmd_queue);
-    c->cmd_queue = NULL;
-    c->cmd_queue_off = c->cmd_queue_len = c->cmd_queue_cap = 0;
+    zfree(queue->cmds);
+    queue->cmds = NULL;
+    queue->off = queue->len = queue->cap = 0;
 }
 
 /* Returns the number of keys in the the incr_states array after adding keys. */
@@ -3388,8 +3391,10 @@ static void prefetchCommandQueueKeys(client *c) {
                                               key_incr_states, num_keys, max_keys);
         }
     }
-    for (int i = c->cmd_queue_off; i < c->cmd_queue_len; i++) {
-        commandParserState *st = &c->cmd_queue[i];
+
+    cmdQueue *queue = &c->cmd_queue;
+    for (int i = queue->off; i < queue->len; i++) {
+        commandParserState *st = &queue->cmds[i];
         if (!(st->read_flags & READ_FLAGS_PARSING_COMPLETED) || c->argc == 0) continue;
         if (num_keys >= soft_max_keys) break;
         st->read_flags |= READ_FLAGS_PREFETCHED;
@@ -3430,7 +3435,7 @@ static void prefetchCommandQueueKeys(client *c) {
 int processInputBuffer(client *c) {
     /* Parse the query buffer. */
     while ((c->querybuf && c->qb_pos < sdslen(c->querybuf)) ||
-           c->cmd_queue_off < c->cmd_queue_len) {
+           c->cmd_queue.off < c->cmd_queue.len) {
         if (!canParseCommand(c)) {
             break;
         }
@@ -5721,8 +5726,8 @@ void ioThreadReadQueryFromClient(void *data) {
     }
 
     /* Lookup commands in command queue. */
-    for (int i = c->cmd_queue_off; i < c->cmd_queue_len; i++) {
-        commandParserState *st = &c->cmd_queue[i];
+    for (int i = c->cmd_queue.off; i < c->cmd_queue.len; i++) {
+        commandParserState *st = &c->cmd_queue.cmds[i];
         if (!(st->read_flags & READ_FLAGS_PARSING_COMPLETED) || c->argc == 0) continue;
         struct serverCommand *cmd = lookupCommand(st->argv, st->argc);
         if (!cmd || !commandCheckArity(c->io_parsed_cmd, c->argc, NULL)) continue;

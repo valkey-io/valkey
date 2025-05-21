@@ -460,16 +460,28 @@ void hashTypeUntrackEntry(robj *o, void *entry) {
 }
 
 static void hashTypeTrackUpdateEntry(robj *o, void *old_entry, void *new_entry, long long old_expiry, long long new_expiry) {
-    if (old_expiry == EXPIRY_NONE && new_expiry == EXPIRY_NONE)
+    int old_tracked = old_entry && old_expiry != EXPIRY_NONE;
+    int new_tracked = new_entry && new_expiry != EXPIRY_NONE;
+    /* If entry was not tracked before and not going to be tracked now, we can simply return */
+    if (!old_tracked && !new_tracked)
         return;
-    else if (!new_entry || new_expiry == EXPIRY_NONE)
-        hashTypeUntrackEntry(o, old_entry);
-    else if (!old_entry || old_expiry == EXPIRY_NONE)
-        hashTypeTrackEntry(o, new_entry);
+
+    volatile_set *set = hashTypeGetOrcreateVolatileSet(o);
+    debugServerAssert(set);
+
+    if (old_tracked && !new_tracked)
+        serverAssert(volatileSetRemoveEntry(set, old_entry, old_expiry));
+    else if (new_tracked && !old_tracked)
+        serverAssert(volatileSetAddEntry(set, new_entry, new_expiry));
     else {
         volatile_set *set = hashTypeGetVolatileSet(o);
         debugServerAssert(set);
         serverAssert(volatileSetUpdateEntry(set, old_entry, new_entry, old_expiry, new_expiry) == 1);
+    }
+    if (volatileSetNumEntries(set) == 0) {
+        freeVolatileSet(set);
+        volatile_set **volatile_set_ref = hashtableMetadata(o->ptr);
+        *volatile_set_ref = NULL;
     }
 }
 

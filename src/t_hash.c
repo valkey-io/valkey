@@ -503,7 +503,6 @@ int hashTypeExpireEntry(void *entry) {
     } else {
         incrRefCount(keyobj);
     }
-    notifyKeyspaceEvent(NOTIFY_EXPIRED, "hexpired", keyobj, server.access_context.db->id);
     hashTypePropagateDeletion(server.access_context.db, key, entry);
     decrRefCount(keyobj);
     return 1;
@@ -527,8 +526,11 @@ hashtableElementAccessState hashHashtableTypeAccess(hashtable *ht, void *entry) 
 
     if (server.access_context.flags == OBJ_ACCESS_NONE) return ELEMENT_INVALID;
 
+    /* From this point we will be deleting the entry */
+    server.access_context.expired++;
     robj *o = server.access_context.val;
     serverDb *db = server.access_context.db;
+
     serverAssert(o && db);
 
     hashTypeUntrackEntry(o, entry);
@@ -546,18 +548,28 @@ void hashTypeResetAccessContext(void) {
     robj *o = server.access_context.val;
     serverDb *db = server.access_context.db;
     serverAssert(!o || o->type == OBJ_HASH);
+    uint64_t num_expired = server.access_context.expired;
     resetAccessContext();
     if (o) {
-        if (hashTypeLength(o) == 0) {
+        int is_empty = hashTypeLength(o) == 0;
+        if (is_empty || num_expired) {
+            /* We need to report key changes and notifications. for that we need to make sure we have the key object */
             if (!keyobj) {
                 sds key = objectGetKey(o);
                 keyobj = createStringObject(key, sdslen(key));
             } else {
                 incrRefCount(keyobj);
             }
-            notifyKeyspaceEvent(NOTIFY_GENERIC, "del", keyobj, db->id);
-            dbDelete(db, keyobj);
-            decrRefCount(keyobj);
+            /* In case we have some entries which are expired we need to report it */
+            if (num_expired)
+                notifyKeyspaceEvent(NOTIFY_EXPIRED, "hexpired", keyobj, db->id);
+            /* In casethe object was left empty, we need to make sure to delete it (we do not support zero size hashes) */
+            if (is_empty) {
+                notifyKeyspaceEvent(NOTIFY_GENERIC, "del", keyobj, db->id);
+                dbDelete(db, keyobj);
+                decrRefCount(keyobj);
+            }
+            signalModifiedKey(server.current_client, db, keyobj);
         }
     }
 }

@@ -1609,6 +1609,7 @@ typedef struct keyAccessContext {
     robj *key;
     robj *val;
     serverDb *db;
+    uint64_t expired;
 } keyAccessContext;
 
 

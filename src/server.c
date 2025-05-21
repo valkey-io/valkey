@@ -7235,6 +7235,7 @@ void setAccessContextWithFlags(robj *key, robj *val, serverDb *db, int flags) {
     server.access_context.val = val;
     server.access_context.db = db;
     server.access_context.flags = flags;
+    server.access_context.expired = 0;
 }
 
 void resetAccessContext(void) {
@@ -7242,6 +7243,7 @@ void resetAccessContext(void) {
     server.access_context.val = NULL;
     server.access_context.db = NULL;
     server.access_context.flags = OBJ_ACCESS_NONE;
+    server.access_context.expired = 0;
 }
 
 /* The End */

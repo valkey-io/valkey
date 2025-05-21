@@ -422,6 +422,12 @@ static volatile_set *hashTypeGetVolatileSet(robj *o) {
     return *(volatile_set **)hashtableMetadata(o->ptr);
 }
 
+void hashTypeFreeVolatileSet(robj *o) {
+    volatile_set *set = hashTypeGetVolatileSet(o);
+    if (set)
+        freeVolatileSet(set);
+}
+
 int hashTypeHasVolatileElements(robj *o) {
     return o->encoding == OBJ_ENCODING_HASHTABLE && hashTypeGetVolatileSet(o);
 }
@@ -578,9 +584,9 @@ void hashTypeResetAccessContext(void) {
             if (is_empty) {
                 notifyKeyspaceEvent(NOTIFY_GENERIC, "del", keyobj, db->id);
                 dbDelete(db, keyobj);
-                decrRefCount(keyobj);
             }
             signalModifiedKey(server.current_client, db, keyobj);
+            decrRefCount(keyobj);
         }
     }
 }

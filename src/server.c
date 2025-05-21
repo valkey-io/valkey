@@ -4025,9 +4025,6 @@ int processCommand(client *c) {
     /* in case we are starting to ProcessCommand and we already have a command we assume
      * this is a reprocessing of this command, so we do not want to perform some of the actions again. */
     int client_reprocessing_command = c->flag.reprocessing_command ? 1 : 0;
-    /* we should clear this flag, since it is possible the processing will bail out due to some error
-     * and we do not want to keep this flag on for the next commands */
-    c->flag.reprocessing_command = 0;
 
     /* only run command filter if not reprocessing command */
     if (!client_reprocessing_command) {
@@ -4351,9 +4348,6 @@ int processCommand(client *c) {
         addReply(c, shared.queued);
     } else {
         int flags = CMD_CALL_FULL;
-        /* we should re-tag the client as reprocessing in case it was reprocessing the same command */
-        if (client_reprocessing_command)
-            c->flag.reprocessing_command = 1;
         call(c, flags);
         if (listLength(server.ready_keys) && !isInsideYieldingLongCommand()) handleClientsBlockedOnKeys();
     }

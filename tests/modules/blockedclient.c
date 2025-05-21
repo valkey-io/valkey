@@ -133,7 +133,7 @@ void *bg_call_worker(void *arg) {
     }
     const char *format = ValkeyModule_StringPtrLen(format_valkey_str, NULL);
     const char *cmd = ValkeyModule_StringPtrLen(bg->argv[cmd_pos], NULL);
-    ValkeyModuleCallReply *rep = ValkeyModule_Call(ctx, cmd, format, bg->argv + cmd_pos + 1, bg->argc - cmd_pos - 1);
+    ValkeyModuleCallReply *rep = ValkeyModule_Call(ctx, cmd, format, bg->argv + cmd_pos + 1, (size_t)bg->argc - cmd_pos - 1);
     ValkeyModule_FreeString(NULL, format_valkey_str);
 
     /* Free the arguments within GIL to prevent simultaneous freeing in main thread. */
@@ -209,7 +209,7 @@ int do_rm_call(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc){
 
     const char* cmd = ValkeyModule_StringPtrLen(argv[1], NULL);
 
-    ValkeyModuleCallReply* rep = ValkeyModule_Call(ctx, cmd, "Ev", argv + 2, argc - 2);
+    ValkeyModuleCallReply* rep = ValkeyModule_Call(ctx, cmd, "Ev", argv + 2, (size_t)argc - 2);
     if(!rep){
         ValkeyModule_ReplyWithError(ctx, "NULL reply returned");
     }else{
@@ -245,7 +245,7 @@ int do_rm_call_async_fire_and_forget(ValkeyModuleCtx *ctx, ValkeyModuleString **
     }
     const char* cmd = ValkeyModule_StringPtrLen(argv[1], NULL);
 
-    ValkeyModuleCallReply* rep = ValkeyModule_Call(ctx, cmd, "!KEv", argv + 2, argc - 2);
+    ValkeyModuleCallReply* rep = ValkeyModule_Call(ctx, cmd, "!KEv", argv + 2, (size_t)argc - 2);
 
     if(ValkeyModule_CallReplyType(rep) != VALKEYMODULE_REPLY_PROMISE) {
         ValkeyModule_ReplyWithCallReply(ctx, rep);
@@ -308,7 +308,7 @@ int do_rm_call_async(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc){
 
     const char* cmd = ValkeyModule_StringPtrLen(argv[1], NULL);
 
-    ValkeyModuleCallReply* rep = ValkeyModule_Call(ctx, cmd, format, argv + 2, argc - 2);
+    ValkeyModuleCallReply* rep = ValkeyModule_Call(ctx, cmd, format, argv + 2, (size_t)argc - 2);
 
     if(ValkeyModule_CallReplyType(rep) != VALKEYMODULE_REPLY_PROMISE) {
         rm_call_async_send_reply(ctx, rep);
@@ -365,7 +365,7 @@ int do_rm_call_async_on_thread(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, 
 
     const char* cmd = ValkeyModule_StringPtrLen(argv[1], NULL);
 
-    ValkeyModuleCallReply* rep = ValkeyModule_Call(ctx, cmd, "KEv", argv + 2, argc - 2);
+    ValkeyModuleCallReply* rep = ValkeyModule_Call(ctx, cmd, "KEv", argv + 2, (size_t)argc - 2);
 
     if(ValkeyModule_CallReplyType(rep) != VALKEYMODULE_REPLY_PROMISE) {
         rm_call_async_send_reply(ctx, rep);
@@ -405,7 +405,7 @@ static void wait_and_do_rm_call_async_on_unblocked(ValkeyModuleCtx *ctx, ValkeyM
     reply = NULL;
 
     const char* cmd = ValkeyModule_StringPtrLen(wctx->argv[0], NULL);
-    reply = ValkeyModule_Call(ctx, cmd, "!EKv", wctx->argv + 1, wctx->argc - 1);
+    reply = ValkeyModule_Call(ctx, cmd, "!EKv", wctx->argv + 1, (size_t)wctx->argc - 1);
 
 done:
     if(ValkeyModule_CallReplyType(reply) != VALKEYMODULE_REPLY_PROMISE) {

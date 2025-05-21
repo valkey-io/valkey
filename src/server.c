@@ -3691,7 +3691,7 @@ void call(client *c, int flags) {
      * and a client which is reprocessing command again (after being unblocked).
      * Blocked clients can be blocked in different places and not always it means the call() function has been
      * called. For example this is required for avoiding double logging to monitors.*/
-    int reprocessing_command = flags & CMD_CALL_REPROCESSING;
+    int reprocessing_command = c->flag.reprocessing_command ? 1 : 0;
 
     /* Initialization: clear the flags that must be set by the command on
      * demand, and initialize the array for additional commands propagation. */
@@ -3722,24 +3722,21 @@ void call(client *c, int flags) {
 
     c->flag.buffered_reply = 0;
     c->flag.keyspace_notified = 0;
-    /* Setting the CLIENT_REPROCESSING_COMMAND flag so that during the actual
-     * processing of the command proc, the client is aware that it is being
-     * re-processed. */
-    if (reprocessing_command) c->flag.reprocessing_command = 1;
 
     monotime monotonic_start = 0;
     if (monotonicGetType() == MONOTONIC_CLOCK_HW) monotonic_start = getMonotonicUs();
 
     c->cmd->proc(c);
 
-    /* Clear the CLIENT_REPROCESSING_COMMAND flag after the proc is executed. */
-    if (reprocessing_command) c->flag.reprocessing_command = 0;
-
     exitExecutionUnit();
 
     /* In case client is blocked after trying to execute the command,
      * it means the execution is not yet completed and we MIGHT reprocess the command in the future. */
-    if (!c->flag.blocked) c->flag.executing_command = 0;
+    if (!c->flag.blocked) {
+        c->flag.executing_command = 0;
+    }
+    /* Clear the CLIENT_REPROCESSING_COMMAND flag after the proc is executed. */
+    c->flag.reprocessing_command = 0;
 
     /* In order to avoid performance implication due to querying the clock using a system call 3 times,
      * we use a monotonic clock, when we are sure its cost is very low, and fall back to non-monotonic call otherwise. */
@@ -4031,7 +4028,10 @@ int processCommand(client *c) {
 
     /* in case we are starting to ProcessCommand and we already have a command we assume
      * this is a reprocessing of this command, so we do not want to perform some of the actions again. */
-    int client_reprocessing_command = c->cmd ? 1 : 0;
+    int client_reprocessing_command = c->flag.reprocessing_command;
+    /* we should clear this flag, since it is possible the processing will bail out due to some error
+     * and we do not want to keep this flag on for the next commands */
+    c->flag.reprocessing_command = 0;
 
     /* only run command filter if not reprocessing command */
     if (!client_reprocessing_command) {
@@ -4355,7 +4355,9 @@ int processCommand(client *c) {
         addReply(c, shared.queued);
     } else {
         int flags = CMD_CALL_FULL;
-        if (client_reprocessing_command) flags |= CMD_CALL_REPROCESSING;
+        /* we should re-tag the client as reprocessing in case it was reprocessing the same command */
+        if (client_reprocessing_command)
+            c->flag.reprocessing_command = 1;
         call(c, flags);
         if (listLength(server.ready_keys) && !isInsideYieldingLongCommand()) handleClientsBlockedOnKeys();
     }

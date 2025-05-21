@@ -137,10 +137,7 @@ int geohashBoundingBox(GeoShape *shape, double *bounds) {
         bounds[1] = min_lat;
         bounds[2] = max_lon;
         bounds[3] = max_lat;
-        /* Compute centroid radians from average Cartesian coords. */
-        x /= num_vertices;
-        y /= num_vertices;
-        z /= num_vertices;
+        /* Compute centroid radians from average Cartesian coords. The centroid is used as the shape->xy starting coord. */
         double central_lon = atan2(y, x);
         double central_hyp = sqrt(x * x + y * y);
         double central_lat = atan2(z, central_hyp);

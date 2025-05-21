@@ -584,6 +584,7 @@ int convertExpireArgumentToUnixTime(client *c, robj *arg, long long basetime, in
 
     if (when < 0) {
         addReplyErrorExpireTime(c);
+        return C_ERR;
     }
 
     if (unit == UNIT_SECONDS) {

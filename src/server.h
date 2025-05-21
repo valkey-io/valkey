@@ -3339,11 +3339,12 @@ sds hashTypeEntryGetField(const hashTypeEntry *entry);
 sds hashTypeEntryGetValue(const hashTypeEntry *entry);
 long long hashTypeEntryGetExpiry(const hashTypeEntry *entry);
 int hashTypeEntryHasExpire(const hashTypeEntry *entry);
-void hashTypeTrackEntry(robj *o, void *entry);
 size_t hashTypeEntryMemUsage(hashTypeEntry *entry);
 hashTypeEntry *hashTypeEntryDefrag(hashTypeEntry *entry, void *(*defragfn)(void *), sds (*sdsdefragfn)(sds));
 void dismissHashTypeEntry(hashTypeEntry *entry);
 void freeHashTypeEntry(hashTypeEntry *entry);
+void hashTypeTrackEntry(robj *o, void *entry);
+void hashTypeUntrackEntry(robj *o, void *entry);
 
 void hashTypeConvert(robj *o, int enc);
 void hashTypeTryConversion(robj *subject, robj **argv, int start, int end);

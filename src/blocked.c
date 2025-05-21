@@ -699,6 +699,8 @@ static void unblockClientOnKey(client *c, robj *key) {
         }
         exitExecutionUnit();
         afterCommand(c);
+        /* Clear the reprocessing_command flag after the proc is executed. */
+        c->flag.reprocessing_command = 0;
         server.current_client = old_client;
     }
 }

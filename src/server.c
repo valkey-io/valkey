@@ -3733,8 +3733,6 @@ void call(client *c, int flags) {
     /* In case client is blocked after trying to execute the command,
      * it means the execution is not yet completed and we MIGHT reprocess the command in the future. */
     if (!c->flag.blocked) c->flag.executing_command = 0;
-    /* Clear the reprocessing_command flag after the proc is executed. */
-    c->flag.reprocessing_command = 0;
 
     /* In order to avoid performance implication due to querying the clock using a system call 3 times,
      * we use a monotonic clock, when we are sure its cost is very low, and fall back to non-monotonic call otherwise. */

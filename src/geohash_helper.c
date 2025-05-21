@@ -96,6 +96,8 @@ uint8_t geohashEstimateStepsByRadius(double range_meters, double lat) {
  *       \           /         /              \             /             \
  *         ---------          /----------------\           /---------------\
  *  Northern Hemisphere       Southern Hemisphere         Around the equator
+ *
+ * Note: In case of the BYPOLYGON search, this fuction also sets the centroid coordinates in the shape.
  */
 int geohashBoundingBox(GeoShape *shape, double *bounds) {
     if (!bounds) return 0;
@@ -354,7 +356,8 @@ int geohashGetDistanceIfInPolygon(double centroidLon, double centroidLat, double
     for (i = 0, j = num_vertices - 1; i < num_vertices; j = i++) {
         double *vertexA = vertices[i];
         double *vertexB = vertices[j];
-        if (((vertexA[1] > point[1]) != (vertexB[1] > point[1])) && (point[0] < (vertexB[0] - vertexA[0]) * (point[1] - vertexA[1]) / (vertexB[1] - vertexA[1]) + vertexA[0])) {
+        if (((vertexA[1] > point[1]) != (vertexB[1] > point[1])) &&
+            (point[0] < (vertexB[0] - vertexA[0]) * (point[1] - vertexA[1]) / (vertexB[1] - vertexA[1]) + vertexA[0])) {
             inside = !inside;
         }
     }

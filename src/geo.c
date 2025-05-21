@@ -531,7 +531,6 @@ void georadiusGeneric(client *c, int srcKeyIndex, int flags) {
     /* Find long/lat to use for radius or box search based on inquiry type */
     int base_args;
     GeoShape shape = {0};
-    shape.t.polygon.points = NULL;
     if (flags & RADIUS_COORDS) {
         /* GEORADIUS or GEORADIUS_RO */
         base_args = 6;

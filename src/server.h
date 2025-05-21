@@ -1086,7 +1086,7 @@ typedef struct ClientFlags {
                                               from the Module. */
     uint64_t module_prevent_aof_prop : 1;  /* Module client do not want to propagate to AOF */
     uint64_t module_prevent_repl_prop : 1; /* Module client do not want to propagate to replica */
-    uint64_t reexecuting_command : 1;     /* The client is re-executing the command. */
+    uint64_t reexecuting_command : 1;      /* The client is re-executing the command. */
     uint64_t replication_done : 1;         /* Indicate that replication has been done on the client */
     uint64_t authenticated : 1;            /* Indicate a client has successfully authenticated */
     uint64_t ever_authenticated : 1;       /* Indicate a client was ever successfully authenticated during it's lifetime */

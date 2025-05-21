@@ -97,7 +97,7 @@ uint8_t geohashEstimateStepsByRadius(double range_meters, double lat) {
  *         ---------          /----------------\           /---------------\
  *  Northern Hemisphere       Southern Hemisphere         Around the equator
  *
- * Note: In case of the BYPOLYGON search, this fuction also sets the centroid coordinates in the shape.
+ * Note: In case of the BYPOLYGON search, this function also sets the centroid coordinates in the shape.
  */
 int geohashBoundingBox(GeoShape *shape, double *bounds) {
     if (!bounds) return 0;
@@ -125,9 +125,9 @@ int geohashBoundingBox(GeoShape *shape, double *bounds) {
             /* Convert to Cartesian coordinates and accumulate for centroid. */
             double lon_rad = deg_rad(longitude);
             double lat_rad = deg_rad(latitude);
-            double cur_x = EARTH_RADIUS_IN_METERS * cos(lat_rad) * cos(lon_rad);
-            double cur_y = EARTH_RADIUS_IN_METERS * cos(lat_rad) * sin(lon_rad);
-            double cur_z = EARTH_RADIUS_IN_METERS * sin(lat_rad);
+            double cur_x = cos(lat_rad) * cos(lon_rad);
+            double cur_y = cos(lat_rad) * sin(lon_rad);
+            double cur_z = sin(lat_rad);
             x += cur_x;
             y += cur_y;
             z += cur_z;

@@ -2437,9 +2437,6 @@ foreach {pop} {BLPOP BLMPOP_RIGHT} {
         # create a test client
         set rd [valkey_deferring_client]
         
-        # reset the server stats
-        r config resetstat
-        
         # first PAUSE all writes for a very long time
         r client pause 10000000000000 write
 

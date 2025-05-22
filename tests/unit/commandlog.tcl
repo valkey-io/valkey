@@ -26,19 +26,12 @@ start_server {tags {"commandlog"} overrides {commandlog-execution-slower-than 10
         r set testkey $value
         assert_equal [r commandlog len large-request] 1
 
-        # for large-reply
-        set copy_avoid [lindex [r config get min-io-threads-avoid-copy-reply] 1]
-        r config set min-io-threads-avoid-copy-reply 0
-
         r config set commandlog-reply-larger-than 1024
-        r ping
+        r ping        
         assert_equal [r commandlog len large-reply] 0
         r get testkey
         assert_equal [r commandlog len large-reply] 1
-
-        # Restore min-io-threads-avoid-copy-reply value
-        r config set min-io-threads-avoid-copy-reply $copy_avoid
-    } {OK} {needs:debug}
+    }
 
     test {COMMANDLOG - zero max length is correctly handled} {
         r commandlog reset slow

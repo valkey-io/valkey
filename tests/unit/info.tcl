@@ -385,12 +385,8 @@ start_server {tags {"info" "external:skip" "debug_defrag:skip"}} {
 
         test {stats: client input and output buffer limit disconnections} {
             # Disable copy avoidance
-            set min_threads [lindex [r config get min-io-threads-avoid-copy-reply] 1]
             set min_size [lindex [r config get min-string-size-avoid-copy-reply] 1]
-            set min_size_threaded [lindex [r config get min-string-size-avoid-copy-reply-threaded] 1]
-            r config set min-io-threads-avoid-copy-reply 0
             r config set min-string-size-avoid-copy-reply 0
-            r config set min-string-size-avoid-copy-reply-threaded 0
 
             r config resetstat
             set info [r info stats]
@@ -417,9 +413,7 @@ start_server {tags {"info" "external:skip" "debug_defrag:skip"}} {
             r config set client-output-buffer-limit $org_outbuf_limit
 
             # Restore copy avoidance configs
-            r config set min-io-threads-avoid-copy-reply $min_threads
             r config set min-string-size-avoid-copy-reply $min_size
-            r config set min-string-size-avoid-copy-reply-threaded $min_size_threaded
 
             set info [r info stats]
             assert_equal [getInfoProperty $info client_output_buffer_limit_disconnections] {1}

@@ -52,7 +52,7 @@ proc kb {v} {
 start_server {} {
     set maxmemory_clients 3000000
     r config set maxmemory-clients $maxmemory_clients
-    # Disable copy avoidance
+    # Disable copy avoidance because it affects memory usage
     r config set min-io-threads-avoid-copy-reply 0
     r config set min-string-size-avoid-copy-reply 0
     r config set min-string-size-avoid-copy-reply-threaded 0

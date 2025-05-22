@@ -2,7 +2,7 @@ start_server {tags {"maxmemory external:skip"}} {
     r config set maxmemory 11mb
     r config set maxmemory-policy allkeys-lru
     set server_pid [s process_id]
-    # Disable copy avoidance
+    # Disable copy avoidance because it affects memory usage
     r config set min-io-threads-avoid-copy-reply 0
     r config set min-string-size-avoid-copy-reply 0
     r config set min-string-size-avoid-copy-reply-threaded 0

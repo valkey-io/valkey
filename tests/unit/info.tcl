@@ -384,7 +384,7 @@ start_server {tags {"info" "external:skip" "debug_defrag:skip"}} {
         }
 
         test {stats: client input and output buffer limit disconnections} {
-            # Disable copy avoidance
+            # Disable copy avoidance because it affects memory usage
             set min_size [lindex [r config get min-string-size-avoid-copy-reply] 1]
             r config set min-string-size-avoid-copy-reply 0
 

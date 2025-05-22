@@ -119,7 +119,7 @@ set dump_path [file join $server_path dump.rdb]
 # Prepare custom umask test scenario
 if {[catch {package require Tclx}]} {
     if {$::verbose} {
-        puts "Skipping umask test. Package Tclx not available."
+        puts "Skipping umask test. Package Tclx not installed."
     }
 } else {
     # We have umask from the Tclx package.

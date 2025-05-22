@@ -63,7 +63,7 @@ geoPoint *geoArrayAppend(geoArray *ga, double *xy, double dist, double score, ch
         ga->buckets = ga->buckets * 2;
         if (ga->array == ga->arraybuf) {
             ga->array = zmalloc(sizeof(geoPoint) * ga->buckets);
-            memcpy(ga->array, ga->arraybuf, sizeof(geoPoint) * MAX_GEO_ARRAY_BUFFER);
+            memcpy(ga->array, ga->arraybuf, sizeof(ga->arraybuf));
         } else {
             ga->array = zrealloc(ga->array, sizeof(geoPoint) * ga->buckets);
         }
@@ -79,7 +79,7 @@ geoPoint *geoArrayAppend(geoArray *ga, double *xy, double dist, double score, ch
 }
 
 /* Destroy a geoArray created with geoArrayCreate(). */
-void geoArrayFree(geoArray *ga) {
+void geoArrayCleanup(geoArray *ga) {
     size_t i;
     for (i = 0; i < ga->used; i++) sdsfree(ga->array[i].member);
     if (ga->array != ga->arraybuf) {
@@ -691,7 +691,7 @@ void georadiusGeneric(client *c, int srcKeyIndex, int flags) {
     /* If no matching results, the user gets an empty reply. */
     if (ga.used == 0 && storekey == NULL) {
         addReply(c, shared.emptyarray);
-        geoArrayFree(&ga);
+        geoArrayCleanup(&ga);
         return;
     }
 
@@ -795,7 +795,7 @@ void georadiusGeneric(client *c, int srcKeyIndex, int flags) {
         }
         addReplyLongLong(c, returned_items);
     }
-    geoArrayFree(&ga);
+    geoArrayCleanup(&ga);
 }
 
 /* GEORADIUS wrapper function. */

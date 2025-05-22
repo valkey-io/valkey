@@ -777,6 +777,18 @@ if {[string match {*jemalloc*} [s mem_allocator]]} {
         assert_error "WRONGTYPE*" {r delifeq foo "test"}
     }
 
+    test {DELIFEQ propagate as DEL command to replica} {
+        set repl [attach_to_replication_stream]
+        r set foo bar
+        r delifeq foo bar
+        assert_replication_stream $repl {
+            {select *}
+            {set foo bar}
+            {del foo}
+        }
+        close_replication_stream $repl
+    } {} {needs:repl}
+
 if {[string match {*jemalloc*} [s mem_allocator]]} {
     test {Memory usage of embedded string value} {
         # Check that we can fit 9 bytes of key + value into a 32 byte

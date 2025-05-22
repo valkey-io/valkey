@@ -935,12 +935,11 @@ int equalStringObjects(robj *a, robj *b) {
         /* If both strings are integer encoded just check if the stored
          * long is the same. */
         return a->ptr == b->ptr;
+    } else if (a->encoding != OBJ_ENCODING_INT &&
+               b->encoding != OBJ_ENCODING_INT &&
+               sdslen(a->ptr) != sdslen(b->ptr)) {
+        return 0;
     } else {
-        if (a->encoding != OBJ_ENCODING_INT &&
-            b->encoding != OBJ_ENCODING_INT &&
-            sdslen(a->ptr) != sdslen(b->ptr)) {
-            return 0;
-        }
         return compareStringObjects(a, b) == 0;
     }
 }

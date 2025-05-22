@@ -78,7 +78,7 @@ geoPoint *geoArrayAppend(geoArray *ga, double *xy, double dist, double score, ch
     return gp;
 }
 
-/* Destroy a geoArray created with geoArrayCreate(). */
+/* Clean a geoArray inited with geoArrayInit(). */
 void geoArrayCleanup(geoArray *ga) {
     size_t i;
     for (i = 0; i < ga->used; i++) sdsfree(ga->array[i].member);

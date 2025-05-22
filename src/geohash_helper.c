@@ -117,12 +117,15 @@ int geohashBoundingBox(GeoShape *shape, double *bounds) {
         for (int i = 0; i < num_vertices; i++) {
             double longitude = shape->t.polygon.points[i][0];
             double latitude = shape->t.polygon.points[i][1];
-            /* Update bounding box (in degrees). */
+            /* Calculate the bounding box (in LON/LAT). */
             if (longitude < min_lon) min_lon = longitude;
             if (longitude > max_lon) max_lon = longitude;
             if (latitude < min_lat) min_lat = latitude;
             if (latitude > max_lat) max_lat = latitude;
-            /* Convert to Cartesian coordinates and accumulate for centroid. */
+            /* Convert to cartesian coordinates and accumulate for centroid.
+             * Note: We do not need to divide the x, y & z values by num_vertices because the magnitude is not needed
+             * for centroid calculation. Summing the cartesian coordinates is all that is needed for computing the angle
+             * which can be converted back into the LON/LAT format. */
             double lon_rad = deg_rad(longitude);
             double lat_rad = deg_rad(latitude);
             double cur_x = cos(lat_rad) * cos(lon_rad);
@@ -132,12 +135,12 @@ int geohashBoundingBox(GeoShape *shape, double *bounds) {
             y += cur_y;
             z += cur_z;
         }
-        /* Set bounding box in degrees. */
+        /* Set bounding box. */
         bounds[0] = min_lon;
         bounds[1] = min_lat;
         bounds[2] = max_lon;
         bounds[3] = max_lat;
-        /* Compute centroid radians from average Cartesian coords. The centroid is used as the shape->xy starting coord. */
+        /* Compute centroid radians from the summed cartesian coords. The centroid is used as the starting coord. */
         double central_lon = atan2(y, x);
         double central_hyp = sqrt(x * x + y * y);
         double central_lat = atan2(z, central_hyp);

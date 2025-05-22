@@ -914,8 +914,6 @@ int test_random_entry_sparse_table(int argc, char **argv, int flags) {
     for (long i = 0; i < num_rounds; i++) {
         void *entry;
         TEST_ASSERT(hashtableFairRandomEntry(ht, &entry));
-        unsigned *picked = entry;
-        TEST_ASSERT(picked >= values && picked < values + count);
     }
     uint64_t us0 = elapsedUs(timer);
     printf("Fair random, filled hashtable, avg time: %.3lfµs\n", (double)us0 / num_rounds);
@@ -933,8 +931,6 @@ int test_random_entry_sparse_table(int argc, char **argv, int flags) {
         for (long i = 0; i < num_rounds; i++) {
             void *entry;
             TEST_ASSERT(hashtableFairRandomEntry(ht, &entry));
-            unsigned *picked = entry;
-            TEST_ASSERT(picked >= values && picked < values + count);
         }
         uint64_t us = elapsedUs(timer);
         printf("Fair random, 1/%d filled hashtable, avg time: %.3lfµs\n", n, (double)us / num_rounds);

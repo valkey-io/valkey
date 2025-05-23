@@ -943,6 +943,20 @@ ValkeyModuleCtx *moduleAllocateContext(void) {
     return (ValkeyModuleCtx *)zcalloc(sizeof(ValkeyModuleCtx));
 }
 
+static void computeNextYieldTime(ValkeyModuleCtx *ctx) {
+    /* in loading we depend on the server hz, but in other cases we also wait
+     * for busy_reply_threshold.
+     * Note that in theory we could have started processing BUSY_MODULE_YIELD_EVENTS
+     * sooner, and only delay the processing for clients till the busy_reply_threshold,
+     * but this carries some overheads of frequently marking clients with BLOCKED_POSTPONE
+     * and releasing them, i.e. if modules only block for short periods. */
+    if (server.loading) {
+        ctx->next_yield_time = getMonotonicUs() + 1000000 / server.hz;
+    } else {
+        ctx->next_yield_time = getMonotonicUs() + server.busy_reply_threshold * 1000;
+    }
+}
+
 /* Create a module ctx and keep track of the nesting level.
  *
  * Note: When creating ctx for threads (VM_GetThreadSafeContext and
@@ -961,17 +975,8 @@ void moduleCreateContext(ValkeyModuleCtx *out_ctx, ValkeyModule *module, int ctx
         out_ctx->client->flag.fake = 1;
     }
 
-    /* Calculate the initial yield time for long blocked contexts.
-     * in loading we depend on the server hz, but in other cases we also wait
-     * for busy_reply_threshold.
-     * Note that in theory we could have started processing BUSY_MODULE_YIELD_EVENTS
-     * sooner, and only delay the processing for clients till the busy_reply_threshold,
-     * but this carries some overheads of frequently marking clients with BLOCKED_POSTPONE
-     * and releasing them, i.e. if modules only block for short periods. */
-    if (server.loading)
-        out_ctx->next_yield_time = getMonotonicUs() + 1000000 / server.hz;
-    else
-        out_ctx->next_yield_time = getMonotonicUs() + server.busy_reply_threshold * 1000;
+    /* Calculate the initial yield time for long blocked contexts. */
+    computeNextYieldTime(out_ctx);
 
     /* Increment the execution_nesting counter (module is about to execute some code),
      * except in the following cases:
@@ -2544,7 +2549,7 @@ void VM_Yield(ValkeyModuleCtx *ctx, int flags, const char *busy_reply) {
         }
 
         /* decide when the next event should fire. */
-        ctx->next_yield_time = now + 1000000 / server.hz;
+        computeNextYieldTime(ctx);
     }
     yield_nesting--;
 }

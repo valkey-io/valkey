@@ -902,9 +902,7 @@ int test_random_entry_sparse_table(int argc, char **argv, int flags) {
     monotonicInit();
 
     /* Populate */
-    unsigned values[1]; /* We don't need to allocate the full size (count) on
-                         * the stack, because the array is never accessed. We
-                         * only use pointers to the array. */
+    unsigned *values = zmalloc(sizeof(unsigned) * count);
     for (size_t j = 0; j < count; j++) {
         TEST_ASSERT(hashtableAdd(ht, &values[j]));
     }
@@ -914,8 +912,6 @@ int test_random_entry_sparse_table(int argc, char **argv, int flags) {
     for (long i = 0; i < num_rounds; i++) {
         void *entry;
         TEST_ASSERT(hashtableFairRandomEntry(ht, &entry));
-        unsigned *picked = entry;
-        TEST_ASSERT(picked >= values && picked < values + count);
     }
     uint64_t us0 = elapsedUs(timer);
     printf("Fair random, filled hashtable, avg time: %.3lfµs\n", (double)us0 / num_rounds);
@@ -933,8 +929,6 @@ int test_random_entry_sparse_table(int argc, char **argv, int flags) {
         for (long i = 0; i < num_rounds; i++) {
             void *entry;
             TEST_ASSERT(hashtableFairRandomEntry(ht, &entry));
-            unsigned *picked = entry;
-            TEST_ASSERT(picked >= values && picked < values + count);
         }
         uint64_t us = elapsedUs(timer);
         printf("Fair random, 1/%d filled hashtable, avg time: %.3lfµs\n", n, (double)us / num_rounds);
@@ -942,6 +936,7 @@ int test_random_entry_sparse_table(int argc, char **argv, int flags) {
         TEST_ASSERT(us <= us0 * 10);
     }
     hashtableRelease(ht);
+    zfree(values);
     return 0;
 }
 

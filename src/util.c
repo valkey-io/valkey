@@ -625,7 +625,7 @@ static int string2llScalar(const char *s, size_t slen, long long *value) {
 }
 
 #if HAVE_IFUNC && HAVE_X86_SIMD
-static int (*string2ll_resolver(void))(const char *, size_t, long long *) {
+__attribute__((no_sanitize_address)) static int (*string2ll_resolver(void))(const char *, size_t, long long *) {
     __builtin_cpu_init();
     if (__builtin_cpu_supports("avx512f") &&
         __builtin_cpu_supports("avx512vl") &&

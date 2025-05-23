@@ -17,7 +17,6 @@
             {
                 "flags": [
                     "RM",
-                    "ACCESS",
                     "DELETE"
                 ],
                 "begin_search": {

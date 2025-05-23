@@ -31,7 +31,7 @@ start_server {tags {"commandlog"} overrides {commandlog-execution-slower-than 10
         assert_equal [r commandlog len large-reply] 0
         r get testkey
         assert_equal [r commandlog len large-reply] 1
-    }
+    } {} {needs:debug}
 
     test {COMMANDLOG - zero max length is correctly handled} {
         r commandlog reset slow

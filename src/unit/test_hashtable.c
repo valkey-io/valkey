@@ -902,9 +902,7 @@ int test_random_entry_sparse_table(int argc, char **argv, int flags) {
     monotonicInit();
 
     /* Populate */
-    unsigned values[1]; /* We don't need to allocate the full size (count) on
-                         * the stack, because the array is never accessed. We
-                         * only use pointers to the array. */
+    unsigned *values = zmalloc(sizeof(unsigned) * count);
     for (size_t j = 0; j < count; j++) {
         TEST_ASSERT(hashtableAdd(ht, &values[j]));
     }
@@ -942,6 +940,7 @@ int test_random_entry_sparse_table(int argc, char **argv, int flags) {
         TEST_ASSERT(us <= us0 * 10);
     }
     hashtableRelease(ht);
+    zfree(values);
     return 0;
 }
 

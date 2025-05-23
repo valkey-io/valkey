@@ -625,7 +625,7 @@ static int string2llScalar(const char *s, size_t slen, long long *value) {
 }
 
 #if HAVE_IFUNC && HAVE_X86_SIMD
-__attribute__((no_sanitize_address)) static int (*string2ll_resolver(void))(const char *, size_t, long long *) {
+__attribute__((no_sanitize_address, used)) static int (*string2ll_resolver(void))(const char *, size_t, long long *) {
     /* Ifunc resolvers run before ASan initialization and before CPU detection
      * is initialized, so disable ASan and init CPU detection here. */
     __builtin_cpu_init();

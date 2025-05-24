@@ -150,6 +150,21 @@ ifneq (,$(findstring ppc,$(uname_M)))
 endif
 endif
 
+# Only enable ifunc on Linux x86_64 with glibc
+ifeq ($(uname_S),Linux)
+ifeq ($(uname_M),x86_64)
+HAS_IFUNC := $(shell sh -c "echo \"$(NUMBER_SIGN_CHAR)include <stdio.h>\" > foo.c && \
+    echo \"int foo() __attribute__((ifunc(\\\"resolver\\\")));\" >> foo.c && \
+    echo \"static void* resolver(void) { return NULL; }\" >> foo.c && \
+    echo \"int main() { return 0; }\" >> foo.c && \
+    $(CC) -o foo.o -c foo.c > /dev/null 2>&1 && echo yes || echo no && \
+    rm -f foo.c foo.o 2>/dev/null")
+ifeq ($(HAS_IFUNC),yes)
+    FINAL_CFLAGS+= -DHAVE_IFUNC
+endif
+endif
+endif
+
 ifeq ($(uname_S),SunOS)
 	# SunOS
 	ifeq ($(findstring -m32,$(FINAL_CFLAGS)),)

@@ -57,33 +57,25 @@ start_cluster 1 1 {tags {external:skip cluster}} {
     test "SSUBSCRIBE client killed during transaction" {
         # Create two clients
         set rd1 [valkey_deferring_client $primary_id]
-        set rd2 [valkey_deferring_client $primary_id]
         
         # Get client 1 ID
         $rd1 client id
         set rd1_id [$rd1 read]
-        puts "rd1_id $rd1_id"
         # Client1 subscribes to a shard channel
         $rd1 ssubscribe channel0
         
         # Wait for the subscription to be acknowledged
         assert_equal {ssubscribe channel0 1} [$rd1 read]
-        # Client2 starts a transaction, sets a key
-        $rd2 multi
-        set multi_result [$rd2 read]
-        assert_equal {OK} $multi_result
 
-        $rd2 set k v
-        set result [$rd2 read]
-        assert_equal {QUEUED} $result
+        # Client2 starts a transaction
+        assert_equal {OK} [$primary multi]
+
+        # sets a key so that its slot will be set to the slot of that key.
+        assert_equal {QUEUED} [$primary set k v]
         # Kill client1 inside client2's transaction
-        $rd2 client kill id $rd1_id
-        set result [$rd2 read]
-        assert_equal {QUEUED} $result
-
+        assert_equal {QUEUED} [$primary client kill id $rd1_id]
+    
         # Execute the transaction
-        $rd2 exec
-        set exec_result [$rd2 read]
-        assert_equal {OK 1} $exec_result "Transaction execution should return OK and kill count"
+        assert_equal {OK 1} [$primary exec] "Transaction execution should return OK and kill count"
     }
 }

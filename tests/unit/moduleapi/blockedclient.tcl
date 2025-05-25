@@ -164,7 +164,7 @@ foreach call_type {nested normal} {
 }
 
     test {RM_Call from blocked client} {
-        set busy_time_limit 50
+        set busy_time_limit 5
         set old_time_limit [lindex [r config get busy-reply-threshold] 1]
         r config set busy-reply-threshold $busy_time_limit
 

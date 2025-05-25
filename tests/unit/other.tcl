@@ -552,10 +552,10 @@ start_cluster 1 0 {tags {"other external:skip cluster slow"}} {
         }
     } {} {needs:debug}
 
-    test "CLUSTER FORGET with invalid node ID skips blacklist check" {
+    test "CLUSTER FORGET with invalid node ID" {
          catch {r cluster forget 1} err
          set _ $err
-    } {*ERR Bad node name*} 
+    } {*ERR Unknown node*} 
 }
 
 start_server {tags {"other external:skip"}} {

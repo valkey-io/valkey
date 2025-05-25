@@ -3745,9 +3745,7 @@ void call(client *c, int flags) {
     else
         duration = ustime() - call_timer;
 
-    if (trace_enabled) {
-        valkey_commands_trace(valkey_commands, command_call, connGetType(c->conn), c->conn->saddr, c->conn->daddr, real_cmd->declared_name, duration);
-    }
+    valkey_commands_trace(valkey_commands, command_call, connGetType(c->conn), c->conn->saddr, c->conn->daddr, real_cmd->declared_name, duration);
     c->duration += duration;
     dirty = server.dirty - dirty;
     if (dirty < 0) dirty = 0;
@@ -6355,8 +6353,8 @@ void createPidFile(void) {
 void daemonize(void) {
     int fd;
 
-    if (fork() != 0) exit(0); /* parent exits */
-    setsid();                 /* create a new session */
+    if (zfork() != 0) exit(0); /* parent exits */
+    setsid();                  /* create a new session */
 
     /* Every output goes to /dev/null. If the server is daemonized but
      * the 'logfile' is set to 'stdout' in the configuration file
@@ -6549,7 +6547,7 @@ int serverFork(int purpose) {
 
     int childpid;
     long long start = ustime();
-    if ((childpid = fork()) == 0) {
+    if ((childpid = zfork()) == 0) {
         /* Child.
          *
          * The order of setting things up follows some reasoning:

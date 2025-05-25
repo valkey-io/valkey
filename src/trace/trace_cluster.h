@@ -1,17 +1,17 @@
+/*
+ * Copyright (c) Valkey Contributors
+ * All rights reserved.
+ * SPDX-License-Identifier: BSD-3-Clause
+ */
 /* ==========================================================================
  * trace_cluster.h - support lttng tracing for cluster events.
  * --------------------------------------------------------------------------
- * Copyright (C) 2025  zhenwei pi <pizhenwei@bytedance.com>
+ * Copyright (C) 2025  zhenwei pi <zhenwei.pi@linux.dev>
  * Copyright (C) 2025  zhiqiang li <lizhiqiang.sf@bytedance.com>
  *
  * This work is licensed under BSD 3-Clause, License 1 of the COPYING file in
  * the top-level directory.
  * ==========================================================================
- */
-/*
- * Copyright (c) Valkey Contributors
- * All rights reserved.
- * SPDX-License-Identifier: BSD-3-Clause
  */
 
 #ifdef USE_LTTNG

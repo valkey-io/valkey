@@ -83,6 +83,12 @@ typedef long long ustime_t; /* microsecond time type. */
 #include "memory_prefetch.h"
 #include "trace/trace.h"
 
+#ifdef USE_LTTNG
+#define zfork() do_fork()
+#else
+#define zfork() fork()
+#endif
+
 #define dismissMemory zmadvise_dontneed
 
 #define VALKEYMODULE_CORE 1

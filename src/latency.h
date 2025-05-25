@@ -38,6 +38,10 @@
 
 #define LATENCY_TS_LEN 160 /* History length for every monitored event. */
 
+#ifndef LATENCY_TRACE_SWITCH
+#define LATENCY_TRACE_SWITCH 0
+#endif
+
 /* Representation of a latency sample: the sampling time and the latency
  * observed in milliseconds. */
 struct latencySample {
@@ -71,18 +75,18 @@ void latencyAddSample(const char *event, mstime_t latency);
 /* Latency monitoring macros. */
 
 /* Start monitoring an event. We just set the current time. */
-#define latencyStartMonitor(var)                             \
-    if (server.latency_monitor_threshold || trace_enabled) { \
-        var = ustime();                                      \
-    } else {                                                 \
-        var = 0;                                             \
+#define latencyStartMonitor(var)                                    \
+    if (server.latency_monitor_threshold || LATENCY_TRACE_SWITCH) { \
+        var = ustime();                                             \
+    } else {                                                        \
+        var = 0;                                                    \
     }
 
 /* End monitoring an event, compute the difference with the current time
  * to check the amount of time elapsed. */
-#define latencyEndMonitor(var)                               \
-    if (server.latency_monitor_threshold || trace_enabled) { \
-        var = ustime() - var;                                \
+#define latencyEndMonitor(var)                                      \
+    if (server.latency_monitor_threshold || LATENCY_TRACE_SWITCH) { \
+        var = ustime() - var;                                       \
     }
 
 /* Add the sample only if the elapsed time is >= to the configured threshold. */

@@ -41,10 +41,12 @@
 
 void createSharedObjects(void);
 void rdbLoadProgressCallback(rio *r, const void *buf, size_t len);
-void computeDatasetProfile(int dbid, robj *keyobj, robj *o);
+void computeDatasetProfile(int dbid, robj *keyobj, robj *o, long long expiretime);
 
 int rdbCheckMode = 0;
 int rdbCheckStats = 0;
+int rdbCheckOutput = 0;
+long long now;
 
 #define LOW_TRACKE_VALUE 1
 #define MAX_ELEMENTS_TRACKE 200 * 1024
@@ -87,6 +89,7 @@ struct {
     /* stats */
     rdbStats **stats; /* stats group by datatype,encoding,isexpired */
     int stats_num;
+    char stats_output[1024];
 } rdbstate;
 
 /* At every loading step try to remember what we were about to do, so that
@@ -237,7 +240,7 @@ void freeRdbProfile(rdbStats **statss, size_t num) {
     zfree(statss);
 }
 
-void computeDatasetProfile(int dbid, robj *keyobj, robj *o) {
+void computeDatasetProfile(int dbid, robj *keyobj, robj *o, long long expiretime) {
     UNUSED(dbid);
     UNUSED(keyobj);
     char buf[128];
@@ -246,6 +249,13 @@ void computeDatasetProfile(int dbid, robj *keyobj, robj *o) {
 
     stats->all_key_size += sdslen(keyobj->ptr);
     stats->keys++;
+
+    /* Check if the key already expired. */
+    if (expiretime != -1 && expiretime < now)
+        stats->already_expired++;
+    if (expiretime != -1)
+        stats->expires++;
+
     /* Save the key and associated value */
     if (o->type == OBJ_STRING) {
         stats_record_simple(stringObjectLen(o), 1, stats);
@@ -434,7 +444,16 @@ void rdbShowGenericInfo(void) {
     }
 
     char buffer[64];
+    FILE *stats_fp = NULL;
     if (rdbCheckStats) {
+        if (rdbCheckOutput) {
+            stats_fp = freopen(rdbstate.stats_output, "w", stdout);
+            if (stats_fp == NULL) {
+                printf("Cannot open output file: %s\n", rdbstate.stats_output);
+                exit(0);
+            }
+        }
+
         char field_string[80];
         for (int dbid = 0; dbid <= rdbstate.databases; dbid++) {
             for (size_t i = 0; stats_field_string[i] != NULL; i++) {
@@ -473,6 +492,10 @@ void rdbShowGenericInfo(void) {
                 if (rdbstate.format == OUTPUT_FORMAT_TABLE || rdbstate.format == OUTPUT_FORMAT_CSV)
                     printf("\n");
             }
+        }
+        if (rdbCheckOutput) {
+            fclose(stats_fp);
+            stdout = fdopen(1, "w");
         }
     }
 }
@@ -556,10 +579,11 @@ int redis_check_rdb(char *rdbfilename, FILE *fp) {
     int selected_dbid = -1;
     int type, rdbver;
     char buf[1024];
-    long long expiretime, now = mstime();
+    long long expiretime;
     static rio rdb; /* Pointed by global struct riostate. */
     struct stat sb;
 
+    now = mstime();
     int closefile = (fp == NULL);
     if (fp == NULL && (fp = fopen(rdbfilename, "r")) == NULL) return 1;
 
@@ -716,7 +740,7 @@ int redis_check_rdb(char *rdbfilename, FILE *fp) {
                 rdbstate.stats_num = max_stats_num;
             }
 
-            computeDatasetProfile(selected_dbid, key, val);
+            computeDatasetProfile(selected_dbid, key, val, expiretime);
         }
         /* Check if the key already expired. */
         if (expiretime != -1 && expiretime < now) rdbstate.already_expired++;
@@ -779,6 +803,10 @@ void parseCheckRdbOptions(int argc, char **argv, FILE *fp) {
             exit(0);
         } else if (!strcmp(argv[i], "--stats")) {
             rdbCheckStats = 1;
+        } else if (!strcmp(argv[i], "--output")) {
+            valkey_strlcpy(rdbstate.stats_output, argv[i + 1], strlen(argv[i + 1]));
+            rdbCheckOutput = 1;
+            i++;
         } else if (!strcmp(argv[i], "--format")) {
             if (lastarg) goto checkRdbUsage;
             char *format = argv[i + 1];
@@ -800,7 +828,7 @@ void parseCheckRdbOptions(int argc, char **argv, FILE *fp) {
     return;
 
 checkRdbUsage:
-    fprintf(stderr, "Usage: %s <rdb-file-name> [--format form|info|yaml] [--stats]\n", argv[0]);
+    fprintf(stderr, "Usage: %s <rdb-file-name> [--format table|info|csv] [--stats]\n", argv[0]);
     exit(1);
 }
 

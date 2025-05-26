@@ -89,6 +89,15 @@ macro (valkey_build_and_install_bin target sources ld_flags libs link_name)
         target_link_libraries(${target} OpenSSL::SSL valkey::valkey_tls)
     endif ()
 
+    if (USE_RDMA)
+        # Add required libraries needed for RDMA
+        # Bug in libvalkey 0.1.0: The order is important and we need to link
+        # valkey::valkey after valkey::valkey_rdma. This will be fixed upstream.
+        # TODO: Next time we lift libvalkey, remove valkey::valkey from
+        # the next line.
+        target_link_libraries(${target} valkey::valkey_rdma valkey::valkey)
+    endif ()
+
     if (IS_FREEBSD)
         target_link_libraries(${target} execinfo)
     endif ()
@@ -99,30 +108,6 @@ macro (valkey_build_and_install_bin target sources ld_flags libs link_name)
     # Install cli tool and create a redis symbolic link
     valkey_install_bin(${target})
     valkey_create_symlink(${target} ${link_name})
-endmacro ()
-
-# Helper function that defines, builds and installs `target` module.
-macro (valkey_build_and_install_module target sources ld_flags libs)
-    add_library(${target} SHARED ${sources})
-
-    if (USE_JEMALLOC)
-        # Using jemalloc
-        target_link_libraries(${target} jemalloc)
-    endif ()
-
-    # Place this line last to ensure that ${ld_flags} is placed last on the linker line
-    target_link_libraries(${target} ${libs} ${ld_flags})
-    if (USE_TLS)
-        # Add required libraries needed for TLS
-        target_link_libraries(${target} OpenSSL::SSL valkey::valkey_tls)
-    endif ()
-
-    if (IS_FREEBSD)
-        target_link_libraries(${target} execinfo)
-    endif ()
-
-    # Install cli tool and create a redis symbolic link
-    valkey_install_bin(${target})
 endmacro ()
 
 # Determine if we are building in Release or Debug mode

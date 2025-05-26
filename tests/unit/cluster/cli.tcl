@@ -2,12 +2,8 @@
 
 source tests/support/cli.tcl
 
-# make sure the test infra won't use SELECT
-set old_singledb $::singledb
-set ::singledb 1
-
 # cluster creation is complicated with TLS, and the current tests don't really need that coverage
-tags {tls:skip external:skip cluster} {
+tags {tls:skip external:skip cluster singledb} {
 
 set base_conf [list cluster-enabled yes cluster-node-timeout 1000]
 start_multiple_servers 3 [list overrides $base_conf] {
@@ -535,5 +531,3 @@ start_multiple_servers 3 [list overrides $base_conf] {
 }
 
 }
-
-set ::singledb $old_singledb

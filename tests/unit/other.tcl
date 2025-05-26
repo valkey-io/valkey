@@ -551,6 +551,11 @@ start_cluster 1 0 {tags {"other external:skip cluster slow"}} {
             fail "hash tables weren't resize."
         }
     } {} {needs:debug}
+
+    test "CLUSTER FORGET with invalid node ID" {
+         catch {r cluster forget 1} err
+         set _ $err
+    } {*ERR Unknown node*} 
 }
 
 start_server {tags {"other external:skip"}} {

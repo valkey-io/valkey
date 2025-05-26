@@ -50,21 +50,23 @@ int zslValueLteMax(double value, zrangespec *spec);
  * geoArray implementation
  * ==================================================================== */
 
-/* Create a new array of geoPoints. */
-geoArray *geoArrayCreate(void) {
-    geoArray *ga = zmalloc(sizeof(*ga));
-    /* It gets allocated on first geoArrayAppend() call. */
-    ga->array = NULL;
-    ga->buckets = 0;
+/* Init a new array of geoPoints. */
+void geoArrayInit(geoArray *ga) {
+    ga->buckets = MAX_GEO_ARRAY_BUFFER;
     ga->used = 0;
-    return ga;
+    ga->array = ga->arraybuf;
 }
 
 /* Add and populate with data a new entry to the geoArray. */
 geoPoint *geoArrayAppend(geoArray *ga, double *xy, double dist, double score, char *member) {
     if (ga->used == ga->buckets) {
-        ga->buckets = (ga->buckets == 0) ? 8 : ga->buckets * 2;
-        ga->array = zrealloc(ga->array, sizeof(geoPoint) * ga->buckets);
+        ga->buckets = ga->buckets * 2;
+        if (ga->array == ga->arraybuf) {
+            ga->array = zmalloc(sizeof(geoPoint) * ga->buckets);
+            memcpy(ga->array, ga->arraybuf, sizeof(ga->arraybuf));
+        } else {
+            ga->array = zrealloc(ga->array, sizeof(geoPoint) * ga->buckets);
+        }
     }
     geoPoint *gp = ga->array + ga->used;
     gp->longitude = xy[0];
@@ -76,12 +78,13 @@ geoPoint *geoArrayAppend(geoArray *ga, double *xy, double dist, double score, ch
     return gp;
 }
 
-/* Destroy a geoArray created with geoArrayCreate(). */
-void geoArrayFree(geoArray *ga) {
+/* Clean a geoArray inited with geoArrayInit(). */
+void geoArrayCleanup(geoArray *ga) {
     size_t i;
     for (i = 0; i < ga->used; i++) sdsfree(ga->array[i].member);
-    zfree(ga->array);
-    zfree(ga);
+    if (ga->array != ga->arraybuf) {
+        zfree(ga->array);
+    }
 }
 
 /* ====================================================================
@@ -681,17 +684,18 @@ void georadiusGeneric(client *c, int srcKeyIndex, int flags) {
     GeoHashRadius georadius = geohashCalculateAreasByShapeWGS84(&shape);
 
     /* Search the zset for all matching points */
-    geoArray *ga = geoArrayCreate();
-    membersOfAllNeighbors(zobj, &georadius, &shape, ga, any ? count : 0);
+    geoArray ga;
+    geoArrayInit(&ga);
+    membersOfAllNeighbors(zobj, &georadius, &shape, &ga, any ? count : 0);
 
     /* If no matching results, the user gets an empty reply. */
-    if (ga->used == 0 && storekey == NULL) {
+    if (ga.used == 0 && storekey == NULL) {
         addReply(c, shared.emptyarray);
-        geoArrayFree(ga);
+        geoArrayCleanup(&ga);
         return;
     }
 
-    long result_length = ga->used;
+    long result_length = ga.used;
     long returned_items = (count == 0 || result_length < count) ? result_length : count;
     long option_length = 0;
 
@@ -705,9 +709,9 @@ void georadiusGeneric(client *c, int srcKeyIndex, int flags) {
         }
 
         if (returned_items == result_length) {
-            qsort(ga->array, result_length, sizeof(geoPoint), sort_gp_callback);
+            qsort(ga.array, result_length, sizeof(geoPoint), sort_gp_callback);
         } else {
-            pqsort(ga->array, result_length, sizeof(geoPoint), sort_gp_callback, 0, (returned_items - 1));
+            pqsort(ga.array, result_length, sizeof(geoPoint), sort_gp_callback, 0, (returned_items - 1));
         }
     }
 
@@ -731,7 +735,7 @@ void georadiusGeneric(client *c, int srcKeyIndex, int flags) {
         /* Finally send results back to the caller */
         int i;
         for (i = 0; i < returned_items; i++) {
-            geoPoint *gp = ga->array + i;
+            geoPoint *gp = ga.array + i;
             gp->dist /= shape.conversion; /* Fix according to unit. */
 
             /* If we have options in option_length, return each sub-result
@@ -766,7 +770,7 @@ void georadiusGeneric(client *c, int srcKeyIndex, int flags) {
 
         for (i = 0; i < returned_items; i++) {
             zskiplistNode *znode;
-            geoPoint *gp = ga->array + i;
+            geoPoint *gp = ga.array + i;
             gp->dist /= shape.conversion; /* Fix according to unit. */
             double score = storedist ? gp->dist : gp->score;
             size_t elelen = sdslen(gp->member);
@@ -791,7 +795,7 @@ void georadiusGeneric(client *c, int srcKeyIndex, int flags) {
         }
         addReplyLongLong(c, returned_items);
     }
-    geoArrayFree(ga);
+    geoArrayCleanup(&ga);
 }
 
 /* GEORADIUS wrapper function. */

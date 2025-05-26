@@ -51,6 +51,9 @@
 #include <openssl/err.h>
 #include <valkey/tls.h>
 #endif
+#ifdef USE_RDMA
+#include <valkey/rdma.h>
+#endif
 #include "adlist.h"
 #include "dict.h"
 #include "zmalloc.h"
@@ -85,9 +88,10 @@ typedef enum readFromReplica {
 
 static struct config {
     aeEventLoop *el;
+    enum valkeyConnectionType ct;
     cliConnInfo conn_info;
-    const char *hostsocket;
     int tls;
+    int mptcp;
     struct cliSSLconfig sslconfig;
     int numclients;
     _Atomic int liveclients;
@@ -148,6 +152,7 @@ typedef struct _client {
     size_t written;     /* Bytes of 'obuf' already written */
     long long start;    /* Start time of a request */
     long long latency;  /* Request latency */
+    int seqlen;         /* Number of commands in the command sequence */
     int pending;        /* Number of pending requests (replies to consume) */
     int prefix_pending; /* If non-zero, number of pending prefix commands. Commands
                            such as auth and select are prefixed to the pipeline of
@@ -194,8 +199,8 @@ static void freeBenchmarkThread(benchmarkThread *thread);
 static void freeBenchmarkThreads(void);
 static void *execBenchmarkThread(void *ptr);
 static clusterNode *createClusterNode(char *ip, int port);
-static serverConfig *getServerConfig(const char *ip, int port, const char *hostsocket);
-static valkeyContext *getValkeyContext(const char *ip, int port, const char *hostsocket);
+static serverConfig *getServerConfig(enum valkeyConnectionType ct, const char *ip_or_path, int port);
+static valkeyContext *getValkeyContext(enum valkeyConnectionType ct, const char *ip_or_path, int port);
 static void freeServerConfig(serverConfig *cfg);
 static int fetchClusterSlotsConfiguration(client c);
 static void updateClusterSlotsConfiguration(void);
@@ -241,21 +246,18 @@ static dictType dtype = {
     NULL               /* allow to expand */
 };
 
-static valkeyContext *getValkeyContext(const char *ip, int port, const char *hostsocket) {
+static valkeyContext *getValkeyContext(enum valkeyConnectionType ct, const char *ip_or_path, int port) {
     valkeyContext *ctx = NULL;
     valkeyReply *reply = NULL;
     struct timeval tv = {0};
-    if (hostsocket == NULL)
-        ctx = valkeyConnectWrapper(ip, port, tv, 0);
-    else
-        ctx = valkeyConnectUnixWrapper(hostsocket, tv, 0);
+    ctx = valkeyConnectWrapper(ct, ip_or_path, port, tv, 0, config.mptcp);
     if (ctx == NULL || ctx->err) {
         fprintf(stderr, "Could not connect to server at ");
         char *err = (ctx != NULL ? ctx->errstr : "");
-        if (hostsocket == NULL)
-            fprintf(stderr, "%s:%d: %s\n", ip, port, err);
+        if (ct != VALKEY_CONN_UNIX)
+            fprintf(stderr, "%s:%d: %s\n", ip_or_path, port, err);
         else
-            fprintf(stderr, "%s: %s\n", hostsocket, err);
+            fprintf(stderr, "%s: %s\n", ip_or_path, err);
         goto cleanup;
     }
     if (config.tls == 1) {
@@ -272,10 +274,10 @@ static valkeyContext *getValkeyContext(const char *ip, int port, const char *hos
         reply = valkeyCommand(ctx, "AUTH %s %s", config.conn_info.user, config.conn_info.auth);
     if (reply != NULL) {
         if (reply->type == VALKEY_REPLY_ERROR) {
-            if (hostsocket == NULL)
-                fprintf(stderr, "Node %s:%d replied with error:\n%s\n", ip, port, reply->str);
+            if (ct != VALKEY_CONN_UNIX)
+                fprintf(stderr, "Node %s:%d replied with error:\n%s\n", ip_or_path, port, reply->str);
             else
-                fprintf(stderr, "Node %s replied with error:\n%s\n", hostsocket, reply->str);
+                fprintf(stderr, "Node %s replied with error:\n%s\n", ip_or_path, reply->str);
             freeReplyObject(reply);
             valkeyFree(ctx);
             exit(1);
@@ -284,10 +286,10 @@ static valkeyContext *getValkeyContext(const char *ip, int port, const char *hos
         return ctx;
     }
     fprintf(stderr, "ERROR: failed to fetch reply from ");
-    if (hostsocket == NULL)
-        fprintf(stderr, "%s:%d\n", ip, port);
+    if (ct != VALKEY_CONN_UNIX)
+        fprintf(stderr, "%s:%d\n", ip_or_path, port);
     else
-        fprintf(stderr, "%s\n", hostsocket);
+        fprintf(stderr, "%s\n", ip_or_path);
 cleanup:
     freeReplyObject(reply);
     valkeyFree(ctx);
@@ -295,12 +297,12 @@ cleanup:
 }
 
 
-static serverConfig *getServerConfig(const char *ip, int port, const char *hostsocket) {
+static serverConfig *getServerConfig(enum valkeyConnectionType ct, const char *ip_or_path, int port) {
     serverConfig *cfg = zcalloc(sizeof(*cfg));
     if (!cfg) return NULL;
     valkeyContext *c = NULL;
     valkeyReply *reply = NULL, *sub_reply = NULL;
-    c = getValkeyContext(ip, port, hostsocket);
+    c = getValkeyContext(ct, ip_or_path, port);
     if (c == NULL) {
         freeServerConfig(cfg);
         exit(1);
@@ -332,10 +334,10 @@ static serverConfig *getServerConfig(const char *ip, int port, const char *hosts
     return cfg;
 fail:
     if (reply && reply->type == VALKEY_REPLY_ERROR && !strncmp(reply->str, "NOAUTH", 6)) {
-        if (hostsocket == NULL)
-            fprintf(stderr, "Node %s:%d replied with error:\n%s\n", ip, port, reply->str);
+        if (ct != VALKEY_CONN_UNIX)
+            fprintf(stderr, "Node %s:%d replied with error:\n%s\n", ip_or_path, port, reply->str);
         else
-            fprintf(stderr, "Node %s replied with error:\n%s\n", hostsocket, reply->str);
+            fprintf(stderr, "Node %s replied with error:\n%s\n", ip_or_path, reply->str);
         abort_test = 1;
     }
     freeReplyObject(reply);
@@ -388,9 +390,13 @@ static void resetClient(client c) {
     aeEventLoop *el = CLIENT_GET_EVENTLOOP(c);
     aeDeleteFileEvent(el, c->context->fd, AE_WRITABLE);
     aeDeleteFileEvent(el, c->context->fd, AE_READABLE);
-    aeCreateFileEvent(el, c->context->fd, AE_WRITABLE, writeHandler, c);
+    if (config.ct == VALKEY_CONN_RDMA) {
+        writeHandler(el, c->context->fd, c, 0); /* RDMA context always writable, but it can't be invoked by AE_WRITABLE */
+    } else {
+        aeCreateFileEvent(el, c->context->fd, AE_WRITABLE, writeHandler, c);
+    }
     c->written = 0;
-    c->pending = config.pipeline;
+    c->pending = config.pipeline * c->seqlen;
 }
 
 static void generateClientKey(client c) {
@@ -577,7 +583,9 @@ static void writeHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
     /* Initialize request when nothing was written. */
     if (c->written == 0) {
         /* Enforce upper bound to number of requests. */
-        int requests_issued = atomic_fetch_add_explicit(&config.requests_issued, config.pipeline, memory_order_relaxed);
+        int requests_issued = atomic_fetch_add_explicit(&config.requests_issued,
+                                                        config.pipeline * c->seqlen,
+                                                        memory_order_relaxed);
         if (requests_issued >= config.requests) {
             return;
         }
@@ -636,7 +644,7 @@ static void writeHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
  *    for arguments randomization.
  *
  * Even when cloning another client, prefix commands are applied if needed.*/
-static client createClient(char *cmd, size_t len, client from, int thread_id) {
+static client createClient(char *cmd, int len, int seqlen, client from, int thread_id) {
     int j;
     int is_cluster_client = (config.cluster_mode && thread_id >= 0);
     client c = zmalloc(sizeof(struct _client));
@@ -645,32 +653,30 @@ static client createClient(char *cmd, size_t len, client from, int thread_id) {
     int port = 0;
     struct timeval tv = {0};
     c->cluster_node = NULL;
-    if (config.hostsocket == NULL || is_cluster_client) {
-        if (!is_cluster_client) {
-            ip = config.conn_info.hostip;
-            port = config.conn_info.hostport;
-        } else {
-            int node_idx = 0;
-            if (config.num_threads < config.cluster_node_count)
-                node_idx = config.liveclients % config.cluster_node_count;
-            else
-                node_idx = thread_id % config.cluster_node_count;
-            clusterNode *node = config.cluster_nodes[node_idx];
-            assert(node != NULL);
-            ip = (const char *)node->ip;
-            port = node->port;
-            c->cluster_node = node;
-        }
-        c->context = valkeyConnectWrapper(ip, port, tv, 1);
+
+    if (!is_cluster_client) {
+        ip = config.conn_info.hostip;
+        port = config.conn_info.hostport;
     } else {
-        c->context = valkeyConnectUnixWrapper(config.hostsocket, tv, 1);
+        int node_idx = 0;
+        if (config.num_threads < config.cluster_node_count)
+            node_idx = config.liveclients % config.cluster_node_count;
+        else
+            node_idx = thread_id % config.cluster_node_count;
+        clusterNode *node = config.cluster_nodes[node_idx];
+        assert(node != NULL);
+        ip = (const char *)node->ip;
+        port = node->port;
+        c->cluster_node = node;
     }
+
+    c->context = valkeyConnectWrapper(config.ct, ip, port, tv, 1, config.mptcp);
     if (c->context->err) {
         fprintf(stderr, "Could not connect to server at ");
-        if (config.hostsocket == NULL || is_cluster_client)
+        if (config.ct != VALKEY_CONN_UNIX || is_cluster_client)
             fprintf(stderr, "%s:%d: %s\n", ip, port, c->context->errstr);
         else
-            fprintf(stderr, "%s: %s\n", config.hostsocket, c->context->errstr);
+            fprintf(stderr, "%s: %s\n", ip, c->context->errstr);
         exit(1);
     }
     if (config.tls == 1) {
@@ -743,12 +749,14 @@ static client createClient(char *cmd, size_t len, client from, int thread_id) {
     /* Append the request itself. */
     if (from) {
         c->obuf = sdscatlen(c->obuf, from->obuf + from->prefixlen, sdslen(from->obuf) - from->prefixlen);
+        seqlen = from->seqlen;
     } else {
         for (j = 0; j < config.pipeline; j++) c->obuf = sdscatlen(c->obuf, cmd, len);
     }
 
     c->written = 0;
-    c->pending = config.pipeline + c->prefix_pending;
+    c->seqlen = seqlen;
+    c->pending = config.pipeline * seqlen + c->prefix_pending;
     c->randptr = NULL;
     c->randlen = 0;
     c->stagptr = NULL;
@@ -819,9 +827,13 @@ static client createClient(char *cmd, size_t len, client from, int thread_id) {
         benchmarkThread *thread = config.threads[thread_id];
         el = thread->el;
     }
-    if (config.idlemode == 0)
-        aeCreateFileEvent(el, c->context->fd, AE_WRITABLE, writeHandler, c);
-    else
+    if (config.idlemode == 0) {
+        if (config.ct == VALKEY_CONN_RDMA) {
+            writeHandler(el, c->context->fd, c, 0);
+        } else {
+            aeCreateFileEvent(el, c->context->fd, AE_WRITABLE, writeHandler, c);
+        }
+    } else
         /* In idle mode, clients still need to register readHandler for catching errors */
         aeCreateFileEvent(el, c->context->fd, AE_READABLE, readHandler, c);
 
@@ -837,7 +849,7 @@ static void createMissingClients(client c) {
     while (config.liveclients < config.numclients) {
         int thread_id = -1;
         if (config.num_threads) thread_id = config.liveclients % config.num_threads;
-        createClient(NULL, 0, c, thread_id);
+        createClient(NULL, 0, 0, c, thread_id);
 
         /* Listen backlog is quite limited on most systems */
         if (++n > 64) {
@@ -962,7 +974,9 @@ static void startBenchmarkThreads(void) {
     for (i = 0; i < config.num_threads; i++) pthread_join(config.threads[i]->thread, NULL);
 }
 
-static void benchmark(const char *title, char *cmd, int len) {
+/* Benchmark a sequence of commands. The cmd is RESP encoded of length len and
+ * seqlen is the number of commands included in cmd. */
+static void benchmarkSequence(const char *title, char *cmd, int len, int seqlen) {
     client c;
 
     config.title = title;
@@ -982,7 +996,7 @@ static void benchmark(const char *title, char *cmd, int len) {
     if (config.num_threads) initBenchmarkThreads();
 
     int thread_id = config.num_threads > 0 ? 0 : -1;
-    c = createClient(cmd, len, NULL, thread_id);
+    c = createClient(cmd, len, seqlen, NULL, thread_id);
     createMissingClients(c);
 
     config.start = mstime();
@@ -997,6 +1011,11 @@ static void benchmark(const char *title, char *cmd, int len) {
     if (config.threads) freeBenchmarkThreads();
     if (config.current_sec_latency_histogram) hdr_close(config.current_sec_latency_histogram);
     if (config.latency_histogram) hdr_close(config.latency_histogram);
+}
+
+/* Benchmark a single RESP-encoded command of length len. */
+static void benchmark(const char *title, char *cmd, int len) {
+    benchmarkSequence(title, cmd, len, 1);
 }
 
 /* Thread functions. */
@@ -1087,7 +1106,7 @@ static int fetchClusterConfiguration(void) {
     dict *nodes = NULL;
     const char *errmsg = "Failed to fetch cluster configuration";
     size_t i, j;
-    ctx = getValkeyContext(config.conn_info.hostip, config.conn_info.hostport, config.hostsocket);
+    ctx = getValkeyContext(config.ct, config.conn_info.hostip, config.conn_info.hostport);
     if (ctx == NULL) {
         exit(1);
     }
@@ -1200,7 +1219,7 @@ static int fetchClusterSlotsConfiguration(client c) {
         assert(node->port);
         /* Use first node as entry point to connect to. */
         if (ctx == NULL) {
-            ctx = getValkeyContext(node->ip, node->port, NULL);
+            ctx = getValkeyContext(config.ct, node->ip, node->port);
             if (!ctx) {
                 success = 0;
                 goto cleanup;
@@ -1306,6 +1325,7 @@ int parseOptions(int argc, char **argv) {
     int lastarg;
     int exit_status = 1;
     char *tls_usage;
+    char *rdma_usage;
 
     for (i = 1; i < argc; i++) {
         lastarg = (i == (argc - 1));
@@ -1337,7 +1357,9 @@ int parseOptions(int argc, char **argv) {
             }
         } else if (!strcmp(argv[i], "-s")) {
             if (lastarg) goto invalid;
-            config.hostsocket = strdup(argv[++i]);
+            sdsfree(config.conn_info.hostip);
+            config.conn_info.hostip = sdsnew(argv[++i]);
+            config.ct = VALKEY_CONN_UNIX;
         } else if (!strcmp(argv[i], "-x")) {
             config.stdinarg = 1;
         } else if (!strcmp(argv[i], "-a")) {
@@ -1473,6 +1495,19 @@ int parseOptions(int argc, char **argv) {
             config.sslconfig.ciphersuites = strdup(argv[++i]);
 #endif
 #endif
+#ifdef USE_RDMA
+        } else if (!strcmp(argv[i], "--rdma")) {
+            if (valkeyInitiateRdma() != VALKEY_OK) {
+                fprintf(stderr, "Failed to initialize RDMA support from libvalkey\n");
+                exit(1);
+            }
+            config.ct = VALKEY_CONN_RDMA;
+#endif
+        } else if (!strcmp(argv[i], "--mptcp")) {
+            config.mptcp = 1;
+        } else if (!strcmp(argv[i], "--")) {
+            /* End of options. */
+            return i + 1;
         } else {
             /* Assume the user meant to provide an option when the arg starts
              * with a dash. We're done otherwise and should use the remainder
@@ -1511,10 +1546,32 @@ usage:
 #endif
         "";
 
+    rdma_usage =
+#ifdef USE_RDMA
+        " --rdma             Establish a RDMA connection.\n"
+#endif
+        "";
+
+
     printf(
-        "%s%s%s", /* Split to avoid strings longer than 4095 (-Woverlength-strings). */
-        "Usage: valkey-benchmark [OPTIONS] [COMMAND ARGS...]\n\n"
+        "%s%s%s%s%s%s", /* Split to avoid strings longer than 4095 (-Woverlength-strings). */
+        "Usage: valkey-benchmark [OPTIONS] [--] [COMMAND ARGS...]\n\n"
+        "Simulates sending commands using multiple clients. The utility provides a\n"
+        "default set of tests. You can run a subset of the tests using the -t option or\n"
+        "supply one or more custom commands on the command line.\n\n"
+        "To supply multiple commands on the command line, separate them with ';' as in\n"
+        "`SET foo bar ';' GET foo`. You can also prefix a command in the sequence with\n"
+        "a number N to repeat the command N times. In command arguments, the following\n"
+        "placeholders are substituted:\n\n"
+        " __rand_int__       Replaced with a zero-padded random integer in the range\n"
+        "                    selected using the -r option.\n"
+        " __data__           Replaced with data of the size specified by the -d option.\n"
+        " {tag}              Replaced with a tag that routes the command to each node in\n"
+        "                    a cluster. Include this in key names when running in cluster\n"
+        "                    mode.\n"
+        "\n",
         "Options:\n"
+        "\n"
         " -h <hostname>      Server hostname (default 127.0.0.1)\n"
         " -p <port>          Server port (default 6379)\n"
         " -s <socket>        Server socket (overrides host and port)\n"
@@ -1543,7 +1600,8 @@ usage:
         "                    'yes' - sends read requests to replicas only.\n"
         "                    'all' - sends read requests to all nodes.\n"
         "                    Since write commands will not be accepted by replicas,\n"
-        "                    it is recommended to enable read from replicas only for read command tests.\n"
+        "                    it is recommended to enable read from replicas only for read\n"
+        "                    command tests.\n"
         " --enable-tracking  Send CLIENT TRACKING on before starting benchmark.\n"
         " -k <boolean>       1=keep alive 0=reconnect (default 1)\n"
         " -r <keyspacelen>   Use random keys for SET/GET/INCR, random values for SADD,\n"
@@ -1558,7 +1616,12 @@ usage:
         "                    use the same key.\n"
         " --sequential       Modifies the -r argument to replace the string __rand_int__\n"
         "                    with 12 digit numbers sequentially instead of randomly.\n"
-        " -P <numreq>        Pipeline <numreq> requests. Default 1 (no pipeline).\n"
+        " -P <numreq>        Pipeline <numreq> requests. That is, send multiple requests\n"
+        "                    before waiting for the replies. Default 1 (no pipeline).\n"
+        "                    When multiple commands are specified on the command line,\n"
+        "                    then the full command sequence counts as one and -P controls\n"
+        "                    the number of times the command sequence is sent in each\n"
+        "                    pipeline.\n",
         " -q                 Quiet. Just show query/sec values\n"
         " --precision        Number of decimal places to display in latency output (default 0)\n"
         " --csv              Output in CSV format\n"
@@ -1577,6 +1640,8 @@ usage:
         "                    Sets the number of keys passed to FCALL command when running\n"
         "                    the 'fcall' test. (default 1)\n",
         tls_usage,
+        rdma_usage,
+        " --mptcp            Enable an MPTCP connection.\n"
         " --help             Output this help and exit.\n"
         " --version          Output version and exit.\n\n"
         "Examples:\n\n"
@@ -1589,11 +1654,12 @@ usage:
         " Benchmark 127.0.0.1:6379 for a few commands producing CSV output:\n"
         "   $ valkey-benchmark -t ping,set,get -n 100000 --csv\n\n"
         " Benchmark a specific command line:\n"
-        "   $ valkey-benchmark -r 10000 -n 10000 eval 'return redis.call(\"ping\")' 0\n\n"
+        "   $ valkey-benchmark -r 10000 -n 10000 eval 'return server.call(\"ping\")' 0\n\n"
         " Fill a list with 10000 random elements:\n"
         "   $ valkey-benchmark -r 10000 -n 10000 lpush mylist __rand_int__\n\n"
-        " On user specified command lines __rand_int__ is replaced with a random integer\n"
-        " with a range of values selected by the -r option.\n");
+        " Benchmark a specific transaction:\n"
+        "   $ valkey-benchmark -- multi ';' set key:__rand_int__ __data__ ';' \\\n"
+        "                         incr counter ';' exec\n\n");
     exit(exit_status);
 }
 
@@ -1704,6 +1770,7 @@ int main(int argc, char **argv) {
     signal(SIGPIPE, SIG_IGN);
 
     memset(&config.sslconfig, 0, sizeof(config.sslconfig));
+    config.ct = VALKEY_CONN_TCP;
     config.numclients = 50;
     config.requests = 100000;
     config.liveclients = 0;
@@ -1722,7 +1789,6 @@ int main(int argc, char **argv) {
     config.clients = listCreate();
     config.conn_info.hostip = sdsnew("127.0.0.1");
     config.conn_info.hostport = 6379;
-    config.hostsocket = NULL;
     config.tests = NULL;
     config.conn_info.input_dbnum = 0;
     config.stdinarg = 0;
@@ -1755,13 +1821,18 @@ int main(int argc, char **argv) {
     }
 #endif
 
+    if (config.mptcp && (config.ct != VALKEY_CONN_TCP)) {
+        fprintf(stderr, "Options --mptcp is only supported by TCP\n");
+        exit(1);
+    }
+
     if (config.cluster_mode) {
         // We only include the slot placeholder {tag} if cluster mode is enabled
         tag = ":{tag}";
 
         /* Fetch cluster configuration. */
         if (!fetchClusterConfiguration() || !config.cluster_nodes) {
-            if (!config.hostsocket) {
+            if (config.ct != VALKEY_CONN_UNIX) {
                 fprintf(stderr,
                         "Failed to fetch cluster configuration from "
                         "%s:%d\n",
@@ -1770,7 +1841,7 @@ int main(int argc, char **argv) {
                 fprintf(stderr,
                         "Failed to fetch cluster configuration from "
                         "%s\n",
-                        config.hostsocket);
+                        config.conn_info.hostip);
             }
             exit(1);
         }
@@ -1798,7 +1869,7 @@ int main(int argc, char **argv) {
             printf("Node %d(%s): ", i, node_type);
             if (node->name) printf("%s ", node->name);
             printf("%s:%d\n", node->ip, node->port);
-            node->redis_config = getServerConfig(node->ip, node->port, NULL);
+            node->redis_config = getServerConfig(config.ct, node->ip, node->port);
             if (node->redis_config == NULL) {
                 fprintf(stderr, "WARNING: Could not fetch node CONFIG %s:%d\n", node->ip, node->port);
             }
@@ -1808,7 +1879,7 @@ int main(int argc, char **argv) {
          * by the user. */
         if (config.num_threads == 0) config.num_threads = config.cluster_node_count;
     } else {
-        config.redis_config = getServerConfig(config.conn_info.hostip, config.conn_info.hostport, config.hostsocket);
+        config.redis_config = getServerConfig(config.ct, config.conn_info.hostip, config.conn_info.hostport);
         if (config.redis_config == NULL) {
             fprintf(stderr, "WARNING: Could not fetch server CONFIG\n");
         }
@@ -1835,7 +1906,7 @@ int main(int argc, char **argv) {
             thread_id = 0;
             initBenchmarkThreads();
         }
-        c = createClient("", 0, NULL, thread_id); /* will never receive a reply */
+        c = createClient("", 0, 1, NULL, thread_id); /* will never receive a reply */
         createMissingClients(c);
         if (use_threads)
             startBenchmarkThreads();
@@ -1867,13 +1938,60 @@ int main(int argc, char **argv) {
         /* Setup argument length */
         size_t *argvlen = zmalloc(argc * sizeof(size_t));
         for (i = 0; i < argc; i++) argvlen[i] = sdslen(sds_args[i]);
+        /* RESP-encode the command(s) given on the syntax
+         *
+         *     [N] command args [ ";" [N] command args [...] ]
+         */
+        int start = 0;   /* Argument index where the current command starts. */
+        int repeat = 1;  /* Number of times to repeat the current command. */
+        int seq_len = 0; /* Total number of commands in the sequence. */
+        sds cmd_seq = sdsempty();
+        for (i = 0; i <= argc; i++) {
+            if (i == start && sds_args[i][0] >= '1' && sds_args[i][0] <= '9') {
+                /* Command prefixed by number means repeat command N times. */
+                repeat = atoi(sds_args[i]);
+                start++;
+            } else if (i == argc || strcmp(";", sds_args[i]) == 0) {
+                cmd = NULL;
+                if (i == start) continue;
+                /* End of command. RESP-encode and append to sequence. */
+                len = valkeyFormatCommandArgv(&cmd, i - start,
+                                              (const char **)sds_args + start,
+                                              argvlen + start);
+                for (int j = 0; j < repeat; j++) {
+                    cmd_seq = sdscatlen(cmd_seq, cmd, len);
+                }
+                seq_len += repeat;
+                free(cmd);
+                start = i + 1;
+                repeat = 1;
+            } else if (strstr(sds_args[i], "__data__")) {
+                /* Replace data placeholders with data of length given by -d. */
+                int num_parts;
+                sds *parts = sdssplitlen(sds_args[i], sdslen(sds_args[i]),
+                                         "__data__", strlen("__data__"),
+                                         &num_parts);
+                sds newarg = parts[0];
+                parts[0] = NULL; /* prevent it from being freed below */
+                for (int j = 1; j < num_parts; j++) {
+                    char data[config.datasize];
+                    genBenchmarkRandomData(data, config.datasize);
+                    newarg = sdscatlen(newarg, data, config.datasize);
+                    newarg = sdscatlen(newarg, parts[j], sdslen(parts[j]));
+                }
+                sdsfreesplitres(parts, num_parts);
+                sdsfree(sds_args[i]);
+                sds_args[i] = newarg;
+                argvlen[i] = sdslen(sds_args[i]);
+            }
+        }
+        len = sdslen(cmd_seq);
+        /* adjust the datasize to the parsed command */
+        config.datasize = len;
         do {
-            len = valkeyFormatCommandArgv(&cmd, argc, (const char **)sds_args, argvlen);
-            // adjust the datasize to the parsed command
-            config.datasize = len;
-            benchmark(title, cmd, len);
-            free(cmd);
+            benchmarkSequence(title, cmd_seq, len, seq_len);
         } while (config.loop);
+        sdsfree(cmd_seq);
         sdsfreesplitres(sds_args, argc);
 
         sdsfree(title);
@@ -2045,7 +2163,7 @@ int main(int argc, char **argv) {
         if (test_is_selected("fcall")) {
             char *script = generateFunctionScript(1, config.num_keys_in_fcall > 0);
 
-            valkeyContext *ctx = getValkeyContext(config.conn_info.hostip, config.conn_info.hostport, NULL);
+            valkeyContext *ctx = getValkeyContext(config.ct, config.conn_info.hostip, config.conn_info.hostport);
             if (ctx == NULL) {
                 exit(1);
             }

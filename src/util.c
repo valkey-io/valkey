@@ -55,6 +55,10 @@
 
 #include "valkey_strtod.h"
 
+#if HAVE_X86_SIMD
+#include <immintrin.h>
+#endif
+
 #define UNUSED(x) ((void)(x))
 
 /* Glob-style pattern matching. */
@@ -416,7 +420,6 @@ err:
 }
 
 #if HAVE_X86_SIMD
-#include <immintrin.h>
 
 #define MULTIPLIER_10E8 100000000
 #define MULTIPLIER_10E16 10000000000000000ULL
@@ -457,7 +460,7 @@ err:
  * Output: *value = 1234567890
  */
 ATTRIBUTE_TARGET_AVX512
-static int string2llAVX512(const char *s, unsigned long slen, long long *value) {
+static int string2llAVX512(const char *s, size_t slen, long long *value) {
     const char *p = s;
     unsigned long plen = 0;
     int negative = 0;
@@ -621,6 +624,21 @@ static int string2llScalar(const char *s, size_t slen, long long *value) {
     return 1;
 }
 
+#if HAVE_IFUNC && HAVE_X86_SIMD
+__attribute__((no_sanitize_address, used)) static int (*string2ll_resolver(void))(const char *, size_t, long long *) {
+    /* Ifunc resolvers run before ASan initialization and before CPU detection
+     * is initialized, so disable ASan and init CPU detection here. */
+    __builtin_cpu_init();
+    if (__builtin_cpu_supports("avx512f") &&
+        __builtin_cpu_supports("avx512vl") &&
+        __builtin_cpu_supports("avx512bw"))
+        return string2llAVX512;
+    return string2llScalar;
+}
+
+int string2ll(const char *s, size_t slen, long long *value)
+    __attribute__((ifunc("string2ll_resolver")));
+#else
 int string2ll(const char *s, size_t slen, long long *value) {
 #if HAVE_X86_SIMD
     if (__builtin_cpu_supports("avx512f") &&
@@ -630,6 +648,7 @@ int string2ll(const char *s, size_t slen, long long *value) {
 #endif
     return string2llScalar(s, slen, value);
 }
+#endif /* HAVE_IFUNC && HAVE_X86_SIMD */
 
 /* Helper function to convert a string to an unsigned long long value.
  * The function attempts to use the faster string2ll() function inside

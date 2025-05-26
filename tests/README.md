@@ -103,6 +103,7 @@ The following compatibility and capability tags are currently used:
 | `needs:reset`             | Uses `RESET` to reset client connections. |
 | `needs:save`              | Uses `SAVE` or `BGSAVE` to create an RDB file. |
 | `needs:other-server`      | Requires `--other-server-path`. |
+| `singledb`                | Test runs as if `--singledb` was given. |
 
 When using an external server (`--host` and `--port`), filtering using the
 `external:skip` tags is done automatically.

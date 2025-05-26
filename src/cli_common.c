@@ -32,11 +32,11 @@
 #include "cli_common.h"
 #include "version.h"
 
+#include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <fcntl.h>
 #include <errno.h>
-#include <valkey/valkey.h>
 #include "sds.h"
 #include <unistd.h>
 #include <string.h>
@@ -45,6 +45,9 @@
 #include <openssl/ssl.h>
 #include <openssl/err.h>
 #include <valkey/tls.h>
+#endif
+#ifdef USE_RDMA
+#include <valkey/rdma.h>
 #endif
 
 #define UNUSED(V) ((void)V)
@@ -427,9 +430,29 @@ sds cliVersion(void) {
 }
 
 /* This is a wrapper to call valkeyConnect or valkeyConnectWithTimeout. */
-valkeyContext *valkeyConnectWrapper(const char *ip, int port, const struct timeval tv, int nonblock) {
+valkeyContext *valkeyConnectWrapper(enum valkeyConnectionType ct, const char *ip_or_path, int port, const struct timeval tv, int nonblock, int multipath) {
     valkeyOptions options = {0};
-    VALKEY_OPTIONS_SET_TCP(&options, ip, port);
+
+    switch (ct) {
+    case VALKEY_CONN_TCP:
+        VALKEY_OPTIONS_SET_TCP(&options, ip_or_path, port);
+        break;
+
+    case VALKEY_CONN_UNIX:
+        VALKEY_OPTIONS_SET_UNIX(&options, ip_or_path);
+        break;
+
+    case VALKEY_CONN_RDMA:
+#ifdef USE_RDMA
+        VALKEY_OPTIONS_SET_RDMA(&options, ip_or_path, port);
+        break;
+#else
+        assert(0); /* requesting RDMA connection without RDMA support??? */
+#endif
+
+    default:
+        assert(0); /* this should not happen */
+    }
 
     if (tv.tv_sec || tv.tv_usec) {
         options.connect_timeout = &tv;
@@ -439,20 +462,9 @@ valkeyContext *valkeyConnectWrapper(const char *ip, int port, const struct timev
         options.options |= VALKEY_OPT_NONBLOCK;
     }
 
-    return valkeyConnectWithOptions(&options);
-}
-
-/* This is a wrapper to call valkeyConnectUnix or valkeyConnectUnixWithTimeout. */
-valkeyContext *valkeyConnectUnixWrapper(const char *path, const struct timeval tv, int nonblock) {
-    valkeyOptions options = {0};
-    VALKEY_OPTIONS_SET_UNIX(&options, path);
-
-    if (tv.tv_sec || tv.tv_usec) {
-        options.connect_timeout = &tv;
-    }
-
-    if (nonblock) {
-        options.options |= VALKEY_OPT_NONBLOCK;
+    if (multipath) {
+        assert(ct == VALKEY_CONN_TCP); /* caller should make sure multipath is available for TCP only */
+        options.options |= VALKEY_OPT_MPTCP;
     }
 
     return valkeyConnectWithOptions(&options);

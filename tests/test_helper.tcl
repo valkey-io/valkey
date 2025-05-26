@@ -213,7 +213,8 @@ proc valkey_deferring_client {args} {
         $client read
     } else {
         # For timing/symmetry with the above select
-        $client ping
+        # that doesn't return error while loading.
+        $client echo goodday
         $client read
     }
     return $client
@@ -232,7 +233,7 @@ proc valkey_client {args} {
     # select the right db and read the response (OK), or at least ping
     # the server if we're in a singledb mode.
     if {$::singledb} {
-        $client ping
+        $client echo hey
     } else {
         $client select 9
     }

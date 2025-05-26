@@ -15,6 +15,7 @@
  */
 
 #include "trace.h"
+#include <errno.h>
 
 #ifdef USE_LTTNG
 pid_t do_fork(void) {

@@ -2145,14 +2145,10 @@ void clusterBlacklistAddNode(clusterNode *node) {
  * You don't need to pass an sds string here, any pointer to 40 bytes
  * will work. */
 int clusterBlacklistExists(char *nodeid, size_t len) {
-    clusterBlacklistCleanup();
-
-    /* Sanity check. In case the provided node ID length is wrong we can bail early. */
-    if (len != CLUSTER_NAMELEN)
-        return 0;
-
-    sds id = sdsnewlen(nodeid, CLUSTER_NAMELEN);
+    sds id = sdsnewlen(nodeid, len);
     int retval;
+
+    clusterBlacklistCleanup();
 
     retval = dictFind(server.cluster->nodes_black_list, id) != NULL;
     sdsfree(id);

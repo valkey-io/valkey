@@ -19,13 +19,16 @@
 #ifdef USE_LTTNG
 pid_t do_fork(void) {
     sigset_t sigset;
+    int saved_errno;
     lttng_ust_before_fork(&sigset);
     int childpid = fork();
+    saved_errno = errno;
     if (childpid != 0) {
         lttng_ust_after_fork_parent(&sigset);
     } else {
         lttng_ust_after_fork_child(&sigset);
     }
+    errno = saved_errno;
     return childpid;
 }
 #endif

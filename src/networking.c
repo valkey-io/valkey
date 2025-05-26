@@ -2917,13 +2917,20 @@ void processMultibulkBuffer(client *c) {
     cmdQueue *queue = &c->cmd_queue;
     debugServerAssert(queue->len == 0);
     while (flag != 0 &&
-           queue->len < 16 &&
            sdslen(c->querybuf) > c->qb_pos &&
            c->querybuf[c->qb_pos] == '*') {
         c->reqtype = PROTO_REQ_MULTIBULK;
         /* Push a new parser state to the command queue */
         if (queue->len == queue->cap) {
-            queue->cap = queue->cap == 0 ? 1 : queue->cap * 2;
+            if (queue->cap == 0) {
+                queue->cap = 16;
+            } else if (queue->cap <= 256) {
+                queue->cap *= 2;
+            } else if (queue->cap <= SHRT_MAX - 32) {
+                queue->cap += 32;
+            } else {
+                break; /* Growing the capacity more would overflow. */
+            }
             queue->cmds = zrealloc(queue->cmds, queue->cap * sizeof(commandParserState));
         }
         commandParserState *st = &queue->cmds[queue->len++];
@@ -3315,7 +3322,9 @@ static bool consumeCommandQueue(client *c) {
     c->io_parsed_cmd = st->cmd;
     c->slot = st->slot;
     if (queue->off == queue->len) {
-        queue->off = queue->len = 0;
+        zfree(queue->cmds);
+        queue->cmds = NULL;
+        queue->cap = queue->off = queue->len = 0;
     }
     return true;
 }

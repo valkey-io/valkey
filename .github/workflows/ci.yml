@@ -136,6 +136,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install libc6-dev-i386 libstdc++-11-dev-i386-cross gcc-multilib g++-multilib
           make -j4 SERVER_CFLAGS='-Werror' 32bit USE_FAST_FLOAT=yes
+      - name: unit tests
+        run: |
+          ./src/valkey-unit-tests
 
   build-libc-malloc:
     runs-on: ubuntu-latest

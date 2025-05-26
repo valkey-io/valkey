@@ -351,7 +351,7 @@ int test_sdssplitargs(int argc, char **argv, int flags) {
     TEST_ASSERT(sargv != NULL);
     sdsfreesplitres(sargv, len);
 
-    sargv = sdssplitargs("\"Testing split strings\" \'Another split string\'", &len);
+    sargv = sdssplitargs("\"Testing split strings\" 'Another split string'", &len);
     TEST_ASSERT(2 == len);
     TEST_ASSERT(!strcmp("Testing split strings", sargv[0]));
     TEST_ASSERT(!strcmp("Another split string", sargv[1]));
@@ -365,8 +365,51 @@ int test_sdssplitargs(int argc, char **argv, int flags) {
     char *binary_string = "\"\\x73\\x75\\x70\\x65\\x72\\x20\\x00\\x73\\x65\\x63\\x72\\x65\\x74\\x20\\x70\\x61\\x73\\x73\\x77\\x6f\\x72\\x64\"";
     sargv = sdssplitargs(binary_string, &len);
     TEST_ASSERT(1 == len);
-    TEST_ASSERT(22 == sdslen(sargv[0]));
+    TEST_ASSERT(!strcmp("super \x00secret password", sargv[0]));
     sdsfreesplitres(sargv, len);
+
+    sargv = sdssplitargs("unquoted", &len);
+    TEST_ASSERT(1 == len);
+    TEST_ASSERT(!strcmp("unquoted", sargv[0]));
+    sdsfreesplitres(sargv, len);
+
+    sargv = sdssplitargs("empty string \"\"", &len);
+    TEST_ASSERT(3 == len);
+    TEST_ASSERT(!strcmp("empty", sargv[0]));
+    TEST_ASSERT(!strcmp("string", sargv[1]));
+    TEST_ASSERT(!strcmp("", sargv[2]));
+    sdsfreesplitres(sargv, len);
+
+    sargv = sdssplitargs("\"deeply\\\"quoted\" 's\\'t\\\"r'ing", &len);
+    TEST_ASSERT(2 == len);
+    TEST_ASSERT(!strcmp("deeply\"quoted", sargv[0]));
+    TEST_ASSERT(!strcmp("s't\\\"ring", sargv[1]));
+    sdsfreesplitres(sargv, len);
+
+    sargv = sdssplitargs("unquoted\" \"with' 'quotes string", &len);
+    TEST_ASSERT(2 == len);
+    TEST_ASSERT(!strcmp("unquoted with quotes", sargv[0]));
+    TEST_ASSERT(!strcmp("string", sargv[1]));
+    sdsfreesplitres(sargv, len);
+
+    sargv = sdssplitargs("\"quoted\"' another 'quoted string", &len);
+    TEST_ASSERT(2 == len);
+    TEST_ASSERT(!strcmp("quoted another quoted", sargv[0]));
+    TEST_ASSERT(!strcmp("string", sargv[1]));
+    sdsfreesplitres(sargv, len);
+
+    sargv = sdssplitargs("\"shell-like \"'\"'\"'\"' quote-escaping '", &len);
+    TEST_ASSERT(1 == len);
+    TEST_ASSERT(!strcmp("shell-like \"' quote-escaping ", sargv[0]));
+    sdsfreesplitres(sargv, len);
+
+    sargv = sdssplitargs("\"unterminated \"'single quotes", &len);
+    TEST_ASSERT(0 == len);
+    TEST_ASSERT(sargv == NULL);
+
+    sargv = sdssplitargs("'unterminated '\"double quotes", &len);
+    TEST_ASSERT(0 == len);
+    TEST_ASSERT(sargv == NULL);
 
     return 0;
 }

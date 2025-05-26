@@ -3691,7 +3691,7 @@ void call(client *c, int flags) {
      * and a client which is reprocessing command again (after being unblocked).
      * Blocked clients can be blocked in different places and not always it means the call() function has been
      * called. For example this is required for avoiding double logging to monitors.*/
-    int reprocessing_command = flags & CMD_CALL_REPROCESSING;
+    int reprocessing_command = c->flag.reexecuting_command ? 1 : 0;
 
     /* Initialization: clear the flags that must be set by the command on
      * demand, and initialize the array for additional commands propagation. */
@@ -3722,18 +3722,11 @@ void call(client *c, int flags) {
 
     c->flag.buffered_reply = 0;
     c->flag.keyspace_notified = 0;
-    /* Setting the CLIENT_REPROCESSING_COMMAND flag so that during the actual
-     * processing of the command proc, the client is aware that it is being
-     * re-processed. */
-    if (reprocessing_command) c->flag.reprocessing_command = 1;
 
     monotime monotonic_start = 0;
     if (monotonicGetType() == MONOTONIC_CLOCK_HW) monotonic_start = getMonotonicUs();
 
     c->cmd->proc(c);
-
-    /* Clear the CLIENT_REPROCESSING_COMMAND flag after the proc is executed. */
-    if (reprocessing_command) c->flag.reprocessing_command = 0;
 
     exitExecutionUnit();
 
@@ -4355,7 +4348,6 @@ int processCommand(client *c) {
         addReply(c, shared.queued);
     } else {
         int flags = CMD_CALL_FULL;
-        if (client_reprocessing_command) flags |= CMD_CALL_REPROCESSING;
         call(c, flags);
         if (listLength(server.ready_keys) && !isInsideYieldingLongCommand()) handleClientsBlockedOnKeys();
     }

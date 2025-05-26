@@ -2151,7 +2151,7 @@ size_t hashtableGetStatsMsg(char *buf, size_t bufsize, hashtableStats *stats, in
                       " top-level buckets: %lu\n"
                       " child buckets: %lu\n"
                       " max chain length: %lu\n"
-                      " avg chain length: %.02f\n"
+                      " avg chain length: %f\n"
                       " chain length distribution:\n",
                       stats->toplevel_buckets,
                       stats->child_buckets,

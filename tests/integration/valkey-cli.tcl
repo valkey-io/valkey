@@ -184,12 +184,7 @@ start_server {tags {"cli logreqres:skip"}} {
         assert_equal "\"bar\"" [r get key]
         assert_equal "OK" [run_command $fd "set key \"\tbar\t\""]
         assert_equal "\tbar\t" [r get key]
-
-        # invalid quotation
-        assert_equal "Invalid argument(s)" [run_command $fd "get \"\"key"]
-        assert_equal "Invalid argument(s)" [run_command $fd "get \"key\"x"]
-
-        # quotes after the argument are weird, but should be allowed
+        assert_equal "\"\\tbar\\t\"" [run_command $fd "get \"\"k'e'\"y\""]
         assert_equal "OK" [run_command $fd "set key\"\" bar"]
         assert_equal "bar" [r get key]
     }

@@ -384,6 +384,26 @@ void psetexCommand(client *c) {
     setGenericCommand(c, OBJ_PX | OBJ_ARGV3, c->argv[1], c->argv[3], c->argv[2], UNIT_MILLISECONDS, NULL, NULL, NULL);
 }
 
+/* DELIFEQ key value */
+void delifeqCommand(client *c) {
+    robj *o;
+    if ((o = lookupKeyWriteOrReply(c, c->argv[1], shared.czero)) == NULL || checkType(c, o, OBJ_STRING)) return;
+
+    if (compareStringObjects(o, c->argv[2]) != 0) {
+        addReply(c, shared.czero);
+        return;
+    }
+
+    serverAssert(dbSyncDelete(c->db, c->argv[1]));
+
+    /* Propagate as DEL command */
+    rewriteClientCommandVector(c, 2, shared.del, c->argv[1]);
+    signalModifiedKey(c, c->db, c->argv[1]);
+    notifyKeyspaceEvent(NOTIFY_GENERIC, "del", c->argv[1], c->db->id);
+    server.dirty++;
+    addReply(c, shared.cone);
+}
+
 int getGenericCommand(client *c) {
     robj *o;
 

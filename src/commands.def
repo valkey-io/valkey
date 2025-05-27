@@ -3235,6 +3235,7 @@ struct COMMAND_ARG GEORADIUS_RO_Args[] = {
 /* GEOSEARCH history */
 commandHistory GEOSEARCH_History[] = {
 {"7.0.0","Added support for uppercase unit names."},
+{"9.0.0","Added support for the BYPOLYGON option."},
 };
 #endif
 
@@ -3340,6 +3341,7 @@ struct COMMAND_ARG GEOSEARCH_Args[] = {
 /* GEOSEARCHSTORE history */
 commandHistory GEOSEARCHSTORE_History[] = {
 {"7.0.0","Added support for uppercase unit names."},
+{"9.0.0","Added support for the BYPOLYGON option."},
 };
 #endif
 
@@ -11193,8 +11195,8 @@ struct COMMAND_STRUCT serverCommandTable[] = {
 {MAKE_CMD("georadiusbymember","Queries a geospatial index for members within a distance from a member, optionally stores the result.","O(N+log(M)) where N is the number of elements inside the bounding box of the circular area delimited by center and radius and M is the number of items inside the index.","3.2.0",CMD_DOC_DEPRECATED,"`GEOSEARCH` and `GEOSEARCHSTORE` with the `BYRADIUS` and `FROMMEMBER` arguments","6.2.0","geo",COMMAND_GROUP_GEO,GEORADIUSBYMEMBER_History,2,GEORADIUSBYMEMBER_Tips,0,georadiusbymemberCommand,-5,CMD_WRITE|CMD_DENYOOM,ACL_CATEGORY_GEO,GEORADIUSBYMEMBER_Keyspecs,3,georadiusGetKeys,10),.args=GEORADIUSBYMEMBER_Args},
 {MAKE_CMD("georadiusbymember_ro","Returns members from a geospatial index that are within a distance from a member.","O(N+log(M)) where N is the number of elements inside the bounding box of the circular area delimited by center and radius and M is the number of items inside the index.","3.2.10",CMD_DOC_DEPRECATED,"`GEOSEARCH` with the `BYRADIUS` and `FROMMEMBER` arguments","6.2.0","geo",COMMAND_GROUP_GEO,GEORADIUSBYMEMBER_RO_History,2,GEORADIUSBYMEMBER_RO_Tips,0,georadiusbymemberroCommand,-5,CMD_READONLY,ACL_CATEGORY_GEO,GEORADIUSBYMEMBER_RO_Keyspecs,1,NULL,9),.args=GEORADIUSBYMEMBER_RO_Args},
 {MAKE_CMD("georadius_ro","Returns members from a geospatial index that are within a distance from a coordinate.","O(N+log(M)) where N is the number of elements inside the bounding box of the circular area delimited by center and radius and M is the number of items inside the index.","3.2.10",CMD_DOC_DEPRECATED,"`GEOSEARCH` with the `BYRADIUS` argument","6.2.0","geo",COMMAND_GROUP_GEO,GEORADIUS_RO_History,2,GEORADIUS_RO_Tips,0,georadiusroCommand,-6,CMD_READONLY,ACL_CATEGORY_GEO,GEORADIUS_RO_Keyspecs,1,NULL,10),.args=GEORADIUS_RO_Args},
-{MAKE_CMD("geosearch","Queries a geospatial index for members inside an area of a box, circle, or a polygon.","O(N+log(M)) where N is the number of elements in the grid-aligned bounding box area around the shape provided as the filter and M is the number of items inside the shape","6.2.0",CMD_DOC_NONE,NULL,NULL,"geo",COMMAND_GROUP_GEO,GEOSEARCH_History,1,GEOSEARCH_Tips,0,geosearchCommand,-7,CMD_READONLY,ACL_CATEGORY_GEO,GEOSEARCH_Keyspecs,1,NULL,8),.args=GEOSEARCH_Args},
-{MAKE_CMD("geosearchstore","Queries a geospatial index for members inside an area of a box, a circle, or a polygon, optionally stores the result.","O(N+log(M)) where N is the number of elements in the grid-aligned bounding box area around the shape provided as the filter and M is the number of items inside the shape","6.2.0",CMD_DOC_NONE,NULL,NULL,"geo",COMMAND_GROUP_GEO,GEOSEARCHSTORE_History,1,GEOSEARCHSTORE_Tips,0,geosearchstoreCommand,-8,CMD_WRITE|CMD_DENYOOM,ACL_CATEGORY_GEO,GEOSEARCHSTORE_Keyspecs,2,NULL,7),.args=GEOSEARCHSTORE_Args},
+{MAKE_CMD("geosearch","Queries a geospatial index for members inside an area of a box, circle, or a polygon.","O(N+log(M)) where N is the number of elements in the grid-aligned bounding box area around the shape provided as the filter and M is the number of items inside the shape","6.2.0",CMD_DOC_NONE,NULL,NULL,"geo",COMMAND_GROUP_GEO,GEOSEARCH_History,2,GEOSEARCH_Tips,0,geosearchCommand,-7,CMD_READONLY,ACL_CATEGORY_GEO,GEOSEARCH_Keyspecs,1,NULL,8),.args=GEOSEARCH_Args},
+{MAKE_CMD("geosearchstore","Queries a geospatial index for members inside an area of a box, a circle, or a polygon, optionally stores the result.","O(N+log(M)) where N is the number of elements in the grid-aligned bounding box area around the shape provided as the filter and M is the number of items inside the shape","6.2.0",CMD_DOC_NONE,NULL,NULL,"geo",COMMAND_GROUP_GEO,GEOSEARCHSTORE_History,2,GEOSEARCHSTORE_Tips,0,geosearchstoreCommand,-8,CMD_WRITE|CMD_DENYOOM,ACL_CATEGORY_GEO,GEOSEARCHSTORE_Keyspecs,2,NULL,7),.args=GEOSEARCHSTORE_Args},
 /* hash */
 {MAKE_CMD("hdel","Deletes one or more fields and their values from a hash. Deletes the hash if no fields remain.","O(N) where N is the number of fields to be removed.","2.0.0",CMD_DOC_NONE,NULL,NULL,"hash",COMMAND_GROUP_HASH,HDEL_History,1,HDEL_Tips,0,hdelCommand,-3,CMD_WRITE|CMD_FAST,ACL_CATEGORY_HASH,HDEL_Keyspecs,1,NULL,2),.args=HDEL_Args},
 {MAKE_CMD("hexists","Determines whether a field exists in a hash.","O(1)","2.0.0",CMD_DOC_NONE,NULL,NULL,"hash",COMMAND_GROUP_HASH,HEXISTS_History,0,HEXISTS_Tips,0,hexistsCommand,3,CMD_READONLY|CMD_FAST,ACL_CATEGORY_HASH,HEXISTS_Keyspecs,1,NULL,2),.args=HEXISTS_Args},

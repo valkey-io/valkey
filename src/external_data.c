@@ -24,34 +24,34 @@ struct externalDataCtx {
 };
 
 typedef struct externalStorage {
-    sds name;                    /* Name of the storage */
-    ValkeyModule *module;        /* The module that implements the storage */
-    atomic_int used_count;       /* Counter for the storage usage */
-    storageMethods methods;      /* Callback functions implemented by the external storage module */
+    sds name;               /* Name of the storage */
+    ValkeyModule *module;   /* The module that implements the storage */
+    atomic_int used_count;  /* Counter for the storage usage */
+    storageMethods methods; /* Callback functions implemented by the external storage module */
 } externalStorage;
 
 typedef struct externalStorageInstance {
     externalStorage *storage;    /* Storage struct */
-    storageCtx *storage_ctx;             /* Storage specific context */
+    storageCtx *storage_ctx;     /* Storage specific context */
     ValkeyModuleCtx *module_ctx; /* Cache of the module context object */
 } externalStorageInstance;
 
 typedef struct externalFilter {
-    sds name;                    /* Name of the filter */
-    ValkeyModule *module;        /* The module that implements the filter */
-    atomic_int used_count;       /* Counter for the filter usage */
-    filterMethods methods;      /* Callback functions implemented by the external filter module */
+    sds name;              /* Name of the filter */
+    ValkeyModule *module;  /* The module that implements the filter */
+    atomic_int used_count; /* Counter for the filter usage */
+    filterMethods methods; /* Callback functions implemented by the external filter module */
 } externalFilter;
 
 typedef struct externalFilterInstance {
     externalFilter *filter;      /* Filter struct */
-    filterCtx *filter_ctx;             /* Filter specific context */
+    filterCtx *filter_ctx;       /* Filter specific context */
     ValkeyModuleCtx *module_ctx; /* Cache of the module context object */
 } externalFilterInstance;
 
 typedef struct externalDbData {
-    externalStorageInstance *storage_instance;     /* Storage instance used for a certain db */
-    externalFilterInstance *filter_instance;       /* Filter instance used for a certain db */
+    externalStorageInstance *storage_instance; /* Storage instance used for a certain db */
+    externalFilterInstance *filter_instance;   /* Filter instance used for a certain db */
 } externalDbData;
 
 typedef struct moduleStats {
@@ -80,17 +80,15 @@ dictType filterDictType = {
     dictSdsKeyCaseCompare, /* key compare */
     NULL,                  /* key destructor */
     NULL,                  /* val destructor */
-    NULL  
-};
+    NULL};
 
 dictType dbdataDictType = {
     dictStrCaseHash,       /* hash function */
     NULL,                  /* key dup */
     dictSdsKeyCaseCompare, /* key compare */
-    NULL,                  /* key destructor */
+    dictSdsDestructor,     /* key destructor */
     NULL,                  /* val destructor */
-    NULL  
-};
+    NULL};
 
 dictType moduleStatsDictType = {
     dictSdsCaseHash,       /* hash function */
@@ -126,9 +124,9 @@ static void moduleStatsDispose(void *obj) {
  *
  * Returns C_ERR in case of an error during registration.
  */
- int externalStorageRegister(const char *storage_name,
-    ValkeyModule *storage_module,
-    storageMethods *storage_methods) {
+int externalStorageRegister(const char *storage_name,
+                            ValkeyModule *storage_module,
+                            storageMethods *storage_methods) {
     sds storage_name_sds = sdsnew(storage_name);
 
     if (dictFind(curr_external_data_ctx->storages, storage_name_sds)) {
@@ -153,7 +151,7 @@ static void moduleStatsDispose(void *obj) {
  *
  * - `storage_name`: name of the storage to remove
  */
- int externalStorageUnregister(const char *storage_name) {
+int externalStorageUnregister(const char *storage_name) {
     dictEntry *entry = dictFind(curr_external_data_ctx->storages, storage_name);
     if (entry == NULL) {
         serverLog(LL_WARNING, "There's no storage registered with name %s", storage_name);
@@ -166,10 +164,9 @@ static void moduleStatsDispose(void *obj) {
         return C_ERR;
     }
 
+    dictDelete(curr_external_data_ctx->storages, storage_name);
     sdsfree(e->name);
     zfree(e);
-
-    dictDelete(curr_external_data_ctx->storages, storage_name);
 
     return C_OK;
 }
@@ -182,9 +179,9 @@ static void moduleStatsDispose(void *obj) {
  *
  * Returns C_ERR in case of an error during registration.
  */
- int externalFilterRegister(const char *filter_name,
-    ValkeyModule *filter_module,
-    filterMethods *filter_methods) {
+int externalFilterRegister(const char *filter_name,
+                           ValkeyModule *filter_module,
+                           filterMethods *filter_methods) {
     sds filter_name_sds = sdsnew(filter_name);
 
     if (dictFind(curr_external_data_ctx->filters, filter_name_sds)) {
@@ -209,7 +206,7 @@ static void moduleStatsDispose(void *obj) {
  *
  * - `filter_name`: name of the filter to remove
  */
- int externalFilterUnregister(const char *filter_name) {
+int externalFilterUnregister(const char *filter_name) {
     dictEntry *entry = dictFind(curr_external_data_ctx->filters, filter_name);
     if (entry == NULL) {
         serverLog(LL_WARNING, "There's no filter registered with name %s", filter_name);
@@ -222,10 +219,9 @@ static void moduleStatsDispose(void *obj) {
         return C_ERR;
     }
 
+    dictDelete(curr_external_data_ctx->filters, filter_name);
     sdsfree(e->name);
     zfree(e);
-
-    dictDelete(curr_external_data_ctx->filters, filter_name);
 
     return C_OK;
 }
@@ -247,7 +243,7 @@ void externalDataLoadedCommand(client *c) {
         return;
     }
 
-    assert(curr_external_data_ctx!=NULL);
+    assert(curr_external_data_ctx != NULL);
     int j = 2;
     if (!strcasecmp(objectGetVal(c->argv[j]), "storage")) {
         int size = dictSize(curr_external_data_ctx->storages);
@@ -306,13 +302,13 @@ void externalDataLoadedCommand(client *c) {
  * * Databases list
  *
  */
- void externalDataStatsCommand(client *c) {
+void externalDataStatsCommand(client *c) {
     if (!isExtDataOn()) {
         addReplyError(c, extDataOffErrStr);
         return;
     }
 
-    assert(curr_external_data_ctx!=NULL);
+    assert(curr_external_data_ctx != NULL);
     int j = 2;
 
     if (!strcasecmp(objectGetVal(c->argv[j]), "storage") && !strcasecmp(objectGetVal(c->argv[j]), "filter")) {
@@ -335,12 +331,12 @@ void externalDataLoadedCommand(client *c) {
         externalDbData *es = dictGetVal(dbdata_entry);
 
         if (!strcasecmp(objectGetVal(c->argv[j]), "storage")) {
-            char line[sizeof(name)+sizeof(es->storage_instance->storage->name)+2];
+            char line[sizeof(name) + sizeof(es->storage_instance->storage->name) + 2];
             snprintf(line, sizeof(line), "%s:%s", name, es->storage_instance->storage->name);
             lines[num_lines++] = sdsnew(line);
         }
         if (!strcasecmp(objectGetVal(c->argv[j]), "filter")) {
-            char line[sizeof(name)+sizeof(es->filter_instance->filter->name)+2];
+            char line[sizeof(name) + sizeof(es->filter_instance->filter->name) + 2];
             snprintf(line, sizeof(line), "%s:%s", name, es->filter_instance->filter->name);
             lines[num_lines++] = sdsnew(line);
         }
@@ -357,12 +353,12 @@ void externalDataLoadedCommand(client *c) {
 
 int checkDbNum(client *c, const sds db_name) {
     int db_num;
-    if (sscanf(db_name,"db%d",&db_num) != 1) {
+    if (sscanf(db_name, "db%d", &db_num) != 1) {
         addReplyErrorFormat(c, "failed to parse db number from %s, expect db0, db10, etc.", db_name);
         return -1;
     }
     if (db_num >= server.dbnum) {
-        addReplyErrorFormat(c, "db number %d exceeds used on server 0-%d", db_num, server.dbnum-1);
+        addReplyErrorFormat(c, "db number %d exceeds used on server 0-%d", db_num, server.dbnum - 1);
         return -1;
     }
     return db_num;
@@ -380,12 +376,12 @@ sds getDBName(int db_num) {
  * Init storage and filter modules for a certain db
  *
  */
- void externalDataInitCommand(client *c) {
+void externalDataInitCommand(client *c) {
     if (!isExtDataOn()) {
         addReplyError(c, extDataOffErrStr);
         return;
     }
-    assert(curr_external_data_ctx!=NULL);
+    assert(curr_external_data_ctx != NULL);
 
     robj *o = c->argv[2];
     sds db_name = objectGetVal(o);
@@ -400,7 +396,7 @@ sds getDBName(int db_num) {
 
     sds storage_name = NULL;
     sds filter_name = NULL;
-    for (int j = 3; j < c->argc; j+=2) {
+    for (int j = 3; j < c->argc; j += 2) {
         if (!strcasecmp(objectGetVal(c->argv[j]), "storage")) {
             o = c->argv[j + 1];
             storage_name = objectGetVal(o);
@@ -495,16 +491,19 @@ void externalDataDropCommand(client *c) {
     }
 
     externalDbData *dbData = dictGetVal(dbEntry);
-    
+
     zfree(dbData->storage_instance->storage_ctx);
     dbData->storage_instance->storage->used_count--;
+    zfree(dbData->storage_instance->module_ctx);
     zfree(dbData->storage_instance);
 
     zfree(dbData->filter_instance->filter_ctx);
     dbData->filter_instance->filter->used_count--;
+    zfree(dbData->filter_instance->module_ctx);
     zfree(dbData->filter_instance);
 
-    dictDelete(curr_external_data_ctx->dbdata, db_name);
+    zfree(dbData);
+    dictDelete(curr_external_data_ctx->dbdata, dictGetKey(dbEntry));
 
     addReply(c, shared.ok);
     return;
@@ -643,12 +642,12 @@ void externalFilterCallDropReadonlyFunc(externalFilterInstance *fi) {
  * Manipulate storage and filter data directly to debug a certain db
  *
  */
- void externalDataDebugCommand(client *c) {
+void externalDataDebugCommand(client *c) {
     if (!isExtDataOn()) {
         addReplyError(c, extDataOffErrStr);
         return;
     }
-    assert(curr_external_data_ctx!=NULL);
+    assert(curr_external_data_ctx != NULL);
 
     robj *o = c->argv[2];
     sds db_name = objectGetVal(o);
@@ -678,12 +677,14 @@ void externalFilterCallDropReadonlyFunc(externalFilterInstance *fi) {
             robj *value = NULL;
             int exists = externalStorageCallDelFunc(dbData->storage_instance, c->db->id, key, &value);
             if (exists && value != NULL) {
-                addReplyBulk(c, value);
-                return;
+                addReplyBulkCString(c, objectGetVal(value));
             } else {
                 addReplyBulkCString(c, "");
-                return;
             }
+            if (value != NULL) {
+                decrRefCount(value);
+            }
+            return;
         } else if (!strcasecmp(objectGetVal(c->argv[j]), "setro")) {
             externalStorageCallSetReadonlyFunc(dbData->storage_instance);
         } else if (!strcasecmp(objectGetVal(c->argv[j]), "dropro")) {
@@ -707,12 +708,14 @@ void externalFilterCallDropReadonlyFunc(externalFilterInstance *fi) {
             robj *value = NULL;
             int exists = externalFilterCallDelFunc(dbData->filter_instance, c->db->id, key, &value);
             if (exists && value != NULL) {
-                addReplyBulk(c, value);
-                return;
+                addReplyBulkCString(c, objectGetVal(value));
             } else {
                 addReplyBulkCString(c, "0");
-                return;
             }
+            if (value != NULL) {
+                decrRefCount(value);
+            }
+            return;
         } else if (!strcasecmp(objectGetVal(c->argv[j]), "setro")) {
             externalFilterCallSetReadonlyFunc(dbData->filter_instance);
         } else if (!strcasecmp(objectGetVal(c->argv[j]), "dropro")) {
@@ -735,6 +738,7 @@ void externalFilterCallDropReadonlyFunc(externalFilterInstance *fi) {
 int externalDataFind(int id, void *key, void **found) {
     sds db_name = getDBName(id);
     dictEntry *db = dictFind(curr_external_data_ctx->dbdata, db_name);
+    sdsfree(db_name);
     if (!db) return 0;
 
     externalDbData *dbData = dictGetVal(db);

@@ -1088,15 +1088,15 @@ int moduleGetCommandChannelsViaAPI(struct serverCommand *cmd, robj **argv, int a
  * functions.
  */
 void moduleExternalStorageInitContext(ValkeyModuleCtx *out_ctx,
-    ValkeyModule *module) {
+                                      ValkeyModule *module) {
     moduleCreateContext(out_ctx, module, VALKEYMODULE_CTX_NONE);
 }
 
 /* Initialize a module context to be used by external filter callback
  * functions.
  */
- void moduleExternalFilterInitContext(ValkeyModuleCtx *out_ctx,
-    ValkeyModule *module) {
+void moduleExternalFilterInitContext(ValkeyModuleCtx *out_ctx,
+                                     ValkeyModule *module) {
     moduleCreateContext(out_ctx, module, VALKEYMODULE_CTX_NONE);
 }
 
@@ -13846,9 +13846,9 @@ ValkeyModuleScriptingEngineExecutionState VM_GetFunctionExecutionState(
  * VALKEYMODULE_ERR in case some failure occurs. In case of a failure, an error
  * message is logged.
  */
- int VM_RegisterExternalStorage(ValkeyModuleCtx *module_ctx,
-    const char *storage_name,
-    ValkeyModuleExternalStorageMethods *storage_methods) {
+int VM_RegisterExternalStorage(ValkeyModuleCtx *module_ctx,
+                               const char *storage_name,
+                               ValkeyModuleExternalStorageMethods *storage_methods) {
     serverLog(LL_DEBUG, "Registering a new external storage: %s", storage_name);
 
 
@@ -13862,8 +13862,8 @@ ValkeyModuleScriptingEngineExecutionState VM_GetFunctionExecutionState(
     }
 
     if (externalStorageRegister(storage_name,
-                module_ctx->module,
-            storage_methods) != C_OK) {
+                                module_ctx->module,
+                                storage_methods) != C_OK) {
         return VALKEYMODULE_ERR;
     }
 
@@ -13871,12 +13871,12 @@ ValkeyModuleScriptingEngineExecutionState VM_GetFunctionExecutionState(
 }
 
 /* Removes the external storage from the server.
-*
-* `storage_name` is the name of the external storage.
-*
-* Returns VALKEYMODULE_OK.
-*
-*/
+ *
+ * `storage_name` is the name of the external storage.
+ *
+ * Returns VALKEYMODULE_OK.
+ *
+ */
 int VM_UnregisterExternalStorage(ValkeyModuleCtx *ctx, const char *storage_name) {
     UNUSED(ctx);
     if (externalStorageUnregister(storage_name) != C_OK) {
@@ -13890,7 +13890,7 @@ int VM_UnregisterExternalStorage(ValkeyModuleCtx *ctx, const char *storage_name)
  * `storage_ctx` is the storage context.
  *
  */
- ValkeyModuleExternalStorageState VM_GetExternalStorageState(
+ValkeyModuleExternalStorageState VM_GetExternalStorageState(
     ValkeyModuleExternalStorageCtx *storage_ctx) {
     return storage_ctx->state;
 }
@@ -13900,8 +13900,9 @@ int VM_UnregisterExternalStorage(ValkeyModuleCtx *ctx, const char *storage_name)
  * `storage_ctx` is the storage context.
  *
  */
- ValkeyModuleExternalStorageState VM_SetExternalStorageState(
-    ValkeyModuleExternalStorageCtx *storage_ctx, ValkeyModuleExternalStorageState state) {
+ValkeyModuleExternalStorageState VM_SetExternalStorageState(
+    ValkeyModuleExternalStorageCtx *storage_ctx,
+    ValkeyModuleExternalStorageState state) {
     ValkeyModuleExternalStorageState oldState = storage_ctx->state;
     storage_ctx->state = state;
     return oldState;
@@ -13912,7 +13913,7 @@ int VM_UnregisterExternalStorage(ValkeyModuleCtx *ctx, const char *storage_name)
  * `storage_ctx` is the storage context.
  *
  */
- unsigned int VM_GetExternalStorageTimeout(
+unsigned int VM_GetExternalStorageTimeout(
     ValkeyModuleExternalStorageCtx *storage_ctx) {
     return storage_ctx->ext_data_timeout;
 }
@@ -13928,22 +13929,22 @@ int VM_UnregisterExternalStorage(ValkeyModuleCtx *ctx, const char *storage_name)
  * VALKEYMODULE_ERR in case some failure occurs. In case of a failure, an error
  * message is logged.
  */
- int VM_RegisterExternalFilter(ValkeyModuleCtx *module_ctx,
-        const char *filter_name,
-        ValkeyModuleExternalFilterMethods *filter_methods) {
+int VM_RegisterExternalFilter(ValkeyModuleCtx *module_ctx,
+                              const char *filter_name,
+                              ValkeyModuleExternalFilterMethods *filter_methods) {
     serverLog(LL_DEBUG, "Registering a new external filter: %s", filter_name);
 
     if (filter_methods->version > VALKEYMODULE_EXTERNAL_STORAGE_ABI_VERSION) {
         serverLog(LL_WARNING, "The filter implementation version is greater "
-                                "than what this server supports. Server ABI "
-                                "Version: %lu, Filter ABI version: %lu",
-                    VALKEYMODULE_EXTERNAL_STORAGE_ABI_VERSION,
-                    (unsigned long)filter_methods->version);
+                              "than what this server supports. Server ABI "
+                              "Version: %lu, Filter ABI version: %lu",
+                  VALKEYMODULE_EXTERNAL_STORAGE_ABI_VERSION,
+                  (unsigned long)filter_methods->version);
         return VALKEYMODULE_ERR;
     }
 
     if (externalFilterRegister(filter_name,
-                 module_ctx->module,
+                               module_ctx->module,
                                filter_methods) != C_OK) {
         return VALKEYMODULE_ERR;
     }
@@ -13952,12 +13953,12 @@ int VM_UnregisterExternalStorage(ValkeyModuleCtx *ctx, const char *storage_name)
 }
 
 /* Removes the external filter from the server.
-*
-* `filter_name` is the name of the external filter.
-*
-* Returns VALKEYMODULE_OK.
-*
-*/
+ *
+ * `filter_name` is the name of the external filter.
+ *
+ * Returns VALKEYMODULE_OK.
+ *
+ */
 int VM_UnregisterExternalFilter(ValkeyModuleCtx *ctx, const char *filter_name) {
     UNUSED(ctx);
     if (externalFilterUnregister(filter_name) != C_OK) {
@@ -14097,7 +14098,7 @@ void moduleCommand(client *c) {
  * `filter_ctx` is the filter context.
  *
  */
- ValkeyModuleExternalFilterState VM_GetExternalFilterState(
+ValkeyModuleExternalFilterState VM_GetExternalFilterState(
     ValkeyModuleExternalFilterCtx *filter_ctx) {
     return filter_ctx->state;
 }
@@ -14107,8 +14108,9 @@ void moduleCommand(client *c) {
  * `filter_ctx` is the filter context.
  *
  */
- ValkeyModuleExternalFilterState VM_SetExternalFilterState(
-    ValkeyModuleExternalFilterCtx *filter_ctx, ValkeyModuleExternalFilterState state) {
+ValkeyModuleExternalFilterState VM_SetExternalFilterState(
+    ValkeyModuleExternalFilterCtx *filter_ctx,
+    ValkeyModuleExternalFilterState state) {
     ValkeyModuleExternalFilterState oldState = filter_ctx->state;
     filter_ctx->state = state;
     return oldState;
@@ -14119,7 +14121,7 @@ void moduleCommand(client *c) {
  * `filter_ctx` is the filter context.
  *
  */
- unsigned int VM_GetExternalFilterTimeout(
+unsigned int VM_GetExternalFilterTimeout(
     ValkeyModuleExternalFilterCtx *filter_ctx) {
     return filter_ctx->ext_data_timeout;
 }

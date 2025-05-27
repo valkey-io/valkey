@@ -7362,7 +7362,7 @@ int iAmPrimary(void) {
             (server.cluster_enabled && clusterNodeIsPrimary(getMyClusterNode())));
 }
 
-int isExtDataOn() {
+int isExtDataOn(void) {
     return server.ext_data_mode != EXT_DATA_NONE;
 }
 

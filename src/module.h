@@ -206,7 +206,7 @@ void moduleLoadFromQueue(void);
 int moduleGetCommandKeysViaAPI(struct serverCommand *cmd, robj **argv, int argc, getKeysResult *result);
 int moduleGetCommandChannelsViaAPI(struct serverCommand *cmd, robj **argv, int argc, getKeysResult *result);
 void moduleExternalStorageInitContext(ValkeyModuleCtx *out_ctx, ValkeyModule *module);
- void moduleExternalFilterInitContext(ValkeyModuleCtx *out_ctx, ValkeyModule *module);
+void moduleExternalFilterInitContext(ValkeyModuleCtx *out_ctx, ValkeyModule *module);
 moduleType *moduleTypeLookupModuleByID(uint64_t id);
 moduleType *moduleTypeLookupModuleByName(const char *name);
 moduleType *moduleTypeLookupModuleByNameIgnoreCase(const char *name);

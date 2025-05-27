@@ -1624,7 +1624,8 @@ typedef struct rdbSaveInfo {
     long long repl_offset;                /* Replication offset. */
 } rdbSaveInfo;
 
-#define RDB_SAVE_INFO_INIT {-1, 0, "0000000000000000000000000000000000000000", -1}
+#define RDB_SAVE_INFO_INIT \
+    {-1, 0, "0000000000000000000000000000000000000000", -1}
 
 struct malloc_stats {
     size_t zmalloc_used;
@@ -2086,7 +2087,7 @@ struct valkeyServer {
     size_t ext_min_object_size_to_move;   /* Min size of k/v pair to move to external storage */
     unsigned long long ext_max_disk_size; /* Maximum disk space allowed to be used by external storage */
     unsigned long long ext_max_mem_size;  /* Maximum memory allowed to be used by external storage */
-    unsigned int ext_data_timeout;        /* Timeout for acessing external storage */
+    unsigned int ext_data_timeout;        /* Timeout for accessing external storage */
     /* Pipe and data structures for child -> parent info sharing. */
     int child_info_pipe[2]; /* Pipe used to write the child_info_data. */
     int child_info_nread;   /* Num of bytes of the last read from pipe */

@@ -1,5 +1,5 @@
 # Valkey development guidelines
-This document provides an general overview for writing and designing code for Valkey.
+This document provides a general overview for writing and designing code for Valkey.
 During our long development history, we've made a lot of inconsistent decisions, but we strive to get incrementally better.
 
 ## General style guidelines

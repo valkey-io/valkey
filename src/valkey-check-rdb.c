@@ -89,7 +89,7 @@ struct {
     /* stats */
     rdbStats **stats; /* stats group by datatype,encoding,isexpired */
     int stats_num;
-    char stats_output[1024];
+    char* stats_output;
 } rdbstate;
 
 /* At every loading step try to remember what we were about to do, so that
@@ -804,7 +804,7 @@ void parseCheckRdbOptions(int argc, char **argv, FILE *fp) {
         } else if (!strcmp(argv[i], "--stats")) {
             rdbCheckStats = 1;
         } else if (!strcmp(argv[i], "--output")) {
-            valkey_strlcpy(rdbstate.stats_output, argv[i + 1], strlen(argv[i + 1]));
+            rdbstate.stats_output = zstrdup(argv[i + 1]);
             rdbCheckOutput = 1;
             i++;
         } else if (!strcmp(argv[i], "--format")) {
@@ -828,7 +828,7 @@ void parseCheckRdbOptions(int argc, char **argv, FILE *fp) {
     return;
 
 checkRdbUsage:
-    fprintf(stderr, "Usage: %s <rdb-file-name> [--format table|info|csv] [--stats]\n", argv[0]);
+    fprintf(stderr, "Usage: %s <rdb-file-name> [--format table|info|csv] [--stats] [--output <file>]\n", argv[0]);
     exit(1);
 }
 

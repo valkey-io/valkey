@@ -529,12 +529,11 @@ static unsigned long zslDeleteRangeByRank(zskiplist *zsl, unsigned int start, un
 /* Find the rank for a specific skiplist member node. Counts nodes after the one
  * specified and subtracts from list length. Note that rank is 1-based.  */
 static unsigned long zslGetRank(zskiplist *zsl, const zskiplistNode *node) {
-    int highest_node_span = zslGetNodeHeight(node) - 1;
-    unsigned long count_after_node = zslGetNodeSpanAtLevel(node, highest_node_span);
-    while (node->level[highest_node_span].forward) {
-        node = node->level[highest_node_span].forward;
-        highest_node_span = zslGetNodeHeight(node) - 1;
+    unsigned long count_after_node = 0;
+    while (node) { /* note this is never null the first time */
+        int highest_node_span = zslGetNodeHeight(node) - 1;
         count_after_node += zslGetNodeSpanAtLevel(node, highest_node_span);
+        node = node->level[highest_node_span].forward;
     }
 
     unsigned long rank = zsl->length - count_after_node;

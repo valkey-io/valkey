@@ -1318,17 +1318,25 @@ int hashtableFind(hashtable *ht, const void *key, void **found) {
     }
 }
 
-/* Returns a pointer to where an entry is stored within the hash table, or
- * NULL if not found. To get the entry, dereference the returned pointer. The
- * pointer can be used to replace the entry with an equivalent entry (same
- * key, same hash value), but note that the pointer may be invalidated by future
- * accesses to the hash table due to incermental rehashing, so use with care. */
-void **hashtableFindRef(hashtable *ht, const void *key) {
-    if (hashtableSize(ht) == 0) return NULL;
+/* Returns 1 when found, 0 when not found. If found, the position of the entry
+ * is returned via the position argument, which can be used to access or replace
+ * the entry with one with same key and hash. The position is for immediate use
+ * and may be invalidated by the next hashtable operation that triggers
+ * incremental rehashing or modifies the table. This method does not pause
+ * rehashing. */
+int hashtableFindPosition(hashtable *ht, const void *key, hashtablePosition *pos) {
+    position *p = positionFromOpaque(pos);
+    if (hashtableSize(ht) == 0) return 0;
     uint64_t hash = hashKey(ht, key);
-    int pos_in_bucket = 0;
-    bucket *b = findBucket(ht, hash, key, &pos_in_bucket, NULL);
-    return b ? &b->entries[pos_in_bucket] : NULL;
+    int pos_in_bucket, table_index;
+    bucket *b = findBucket(ht, hash, key, &pos_in_bucket, &table_index);
+    if (b != NULL) {
+        p->bucket = b;
+        p->pos_in_bucket = pos_in_bucket;
+        p->table_index = table_index;
+    }
+    
+    return b != NULL;
 }
 
 /* Adds an entry. Returns 1 on success. Returns 0 if there was already an entry
@@ -1426,6 +1434,29 @@ void hashtableInsertAtPosition(hashtable *ht, void *entry, hashtablePosition *po
     /* Hash bits are already set by hashtableFindPositionForInsert. */
 }
 
+/* Returns the entry at the given position. The position must be valid */
+void *hashtableGetEntryAtPosition(hashtablePosition *pos) {
+    position *p = positionFromOpaque(pos);
+    bucket *b = p->bucket;
+    int pos_in_bucket = p->pos_in_bucket;
+    if (isPositionFilled(b, pos_in_bucket)) {
+        return b->entries[pos_in_bucket];
+    } else {
+        return NULL;
+    }
+}
+
+/* Replaces the existing entry at the given position with a new entry.
+ * It's the caller's responsibility to ensure that the new entry has the same
+ * key and hash, and that the position is valid. */
+void hashtableReplaceEntryAtPosition(hashtablePosition* pos, void *entry) {
+    position *p = positionFromOpaque(pos);
+    bucket *b = p->bucket;
+    int pos_in_bucket = p->pos_in_bucket;
+    assert(isPositionFilled(b, pos_in_bucket));
+    b->entries[pos_in_bucket] = entry;
+}
+
 /* Removes the entry with the matching key and returns it. The entry
  * destructor is not called. Returns 1 and points 'popped' to the entry if a
  * matching entry was found. Returns 0 if no matching entry was found. */
@@ -1499,19 +1530,18 @@ int hashtableReplaceReallocatedEntry(hashtable *ht, const void *old_entry, void 
 /* Two-phase pop: Look up an entry, do something with it, then delete it
  * without searching the hash table again.
  *
- * hashtableTwoPhasePopFindRef finds an entry in the table and also the position
- * of the entry within the table, so that it can be deleted without looking it
- * up in the table again. The function returns a pointer to the entry pointer
- * within the hash table, if an entry with a matching key is found, and NULL
- * otherwise.
+ * hashtableTwoPhasePopFindRef finds the position
+ * of an entry within the table, so that it can be deleted without looking it
+ * up in the table again. The function returns 1 if an entry with a
+ * matching key is found, and 0 otherwise.
  *
- * If non-NULL is returned, call 'hashtableTwoPhasePopDelete' with the returned
+ * If 1 is returned, call 'hashtableTwoPhasePopDelete' with the returned
  * 'position' afterwards to actually delete the entry from the table. These two
  * functions are designed be used in pair. `hashtableTwoPhasePopFindRef` pauses
  * rehashing and `hashtableTwoPhasePopDelete` resumes rehashing.
  *
  * While hashtablePop finds and returns an entry, the purpose of two-phase pop
- * is to provide an optimized equivalent of hashtableFindRef followed by
+ * is to provide an optimized equivalent of hashtableFindPosition followed by
  * hashtableDelete, where the first call finds the entry but doesn't delete it
  * from the hash table and the latter doesn't need to look up the entry in the
  * hash table again.
@@ -1519,22 +1549,20 @@ int hashtableReplaceReallocatedEntry(hashtable *ht, const void *old_entry, void 
  * Example:
  *
  *     hashtablePosition position;
- *     void **ref = hashtableTwoPhasePopFindRef(ht, key, &position)
- *     if (ref != NULL) {
- *         void *entry = *ref;
+ *     if (hashtableTwoPhasePopFindRef(ht, key, &position)) {
+ *         void *entry = hashtableGetEntryAtPosition(&position);
  *         // do something with the entry, then...
  *         hashtableTwoPhasePopDelete(ht, &position);
  *     }
  */
 
-/* Like hashtableTwoPhasePopFind, but returns a pointer to where the entry is
- * stored in the table, or NULL if no matching entry is found. The 'position'
- * argument is populated with a representation of where the entry is stored.
- * This must be provided to hashtableTwoPhasePopDelete to complete the
- * operation. */
-void **hashtableTwoPhasePopFindRef(hashtable *ht, const void *key, hashtablePosition *pos) {
+/* Like hashtableTwoPhasePopFind, but returns 1 when found and 0 if not found.
+ * The 'position' argument is populated with a representation of where the entry
+ * is stored. This must be provided to hashtableTwoPhasePopDelete to complete
+ * the operation. */
+int hashtableTwoPhasePopFindRef(hashtable *ht, const void *key, hashtablePosition *pos) {
     position *p = positionFromOpaque(pos);
-    if (hashtableSize(ht) == 0) return NULL;
+    if (hashtableSize(ht) == 0) return 0;
     uint64_t hash = hashKey(ht, key);
     int pos_in_bucket = 0;
     int table_index = 0;
@@ -1547,9 +1575,9 @@ void **hashtableTwoPhasePopFindRef(hashtable *ht, const void *key, hashtablePosi
         p->bucket = b;
         p->pos_in_bucket = pos_in_bucket;
         p->table_index = table_index;
-        return &b->entries[pos_in_bucket];
+        return 1;
     } else {
-        return NULL;
+        return 0;
     }
 }
 

@@ -57,7 +57,7 @@ static keyStatus expireIfNeededWithDictIndex(serverDb *db, robj *key, robj *val,
 static keyStatus expireIfNeeded(serverDb *db, robj *key, robj *val, int flags);
 static int keyIsExpiredWithDictIndex(serverDb *db, robj *key, int dict_index);
 static int objectIsExpired(robj *val);
-static void dbSetValue(serverDb *db, robj *key, robj **valref, int overwrite, void **oldref);
+static void dbSetValue(serverDb *db, robj *key, robj **valref, int overwrite, hashtablePosition *old_position);
 static int getKVStoreIndexForKey(sds key);
 static robj *dbFindWithDictIndex(serverDb *db, sds key, int dict_index);
 static robj *dbFindExpiresWithDictIndex(serverDb *db, sds key, int dict_index);
@@ -212,15 +212,14 @@ robj *lookupKeyWriteOrReply(client *c, robj *key, robj *reply) {
  * if the key already exists, otherwise, it can fall back to dbOverwrite. */
 static void dbAddInternal(serverDb *db, robj *key, robj **valref, int update_if_existing) {
     int dict_index = getKVStoreIndexForKey(key->ptr);
-    void **oldref = NULL;
+    hashtablePosition position;
     if (update_if_existing) {
-        oldref = kvstoreHashtableFindRef(db->keys, dict_index, key->ptr);
-        if (oldref != NULL) {
-            dbSetValue(db, key, valref, 1, oldref);
+        if (kvstoreHashtableFindRef(db->keys, dict_index, key->ptr, &position)) {
+            dbSetValue(db, key, valref, 1, &position);
             return;
         }
     } else {
-        debugServerAssertWithInfo(NULL, key, kvstoreHashtableFindRef(db->keys, dict_index, key->ptr) == NULL);
+        debugServerAssertWithInfo(NULL, key, kvstoreHashtableFindRef(db->keys, dict_index, key->ptr, &position) == 0);
     }
 
     /* Not existing. Convert val to valkey object and insert. */
@@ -320,14 +319,16 @@ int dbAddRDBLoad(serverDb *db, sds key, robj **valref) {
  * value should be stored.
  *
  * The program is aborted if the key was not already present. */
-static void dbSetValue(serverDb *db, robj *key, robj **valref, int overwrite, void **oldref) {
+static void dbSetValue(serverDb *db, robj *key, robj **valref, int overwrite, hashtablePosition *old_position) {
     robj *val = *valref;
-    if (oldref == NULL) {
+    hashtablePosition stackPosition;
+    if (old_position == NULL) {
         int dict_index = getKVStoreIndexForKey(key->ptr);
-        oldref = kvstoreHashtableFindRef(db->keys, dict_index, key->ptr);
+        old_position = &stackPosition;
+        int found = kvstoreHashtableFindRef(db->keys, dict_index, key->ptr, old_position);
+        serverAssertWithInfo(NULL, key, found);
     }
-    serverAssertWithInfo(NULL, key, oldref != NULL);
-    robj *old = *oldref;
+    robj *old = hashtableGetEntryAtPosition(old_position);
     robj *new;
 
     if (overwrite) {
@@ -342,7 +343,7 @@ static void dbSetValue(serverDb *db, robj *key, robj **valref, int overwrite, vo
         signalDeletedKeyAsReady(db, key, old->type);
         decrRefCount(old);
         /* Because of VM_StringDMA, old may be changed, so we need get old again */
-        old = *oldref;
+        old = hashtableGetEntryAtPosition(old_position);
     }
 
     if ((old->refcount == 1 && old->encoding != OBJ_ENCODING_EMBSTR) &&
@@ -366,13 +367,13 @@ static void dbSetValue(serverDb *db, robj *key, robj **valref, int overwrite, vo
         val->lru = old->lru;
         long long expire = objectGetExpire(old);
         new = objectSetKeyAndExpire(val, key->ptr, expire);
-        *oldref = new;
+        hashtableReplaceEntryAtPosition(old_position, new);
         /* Replace the old value at its location in the expire space. */
         if (expire >= 0) {
             int dict_index = getKVStoreIndexForKey(key->ptr);
-            void **expireref = kvstoreHashtableFindRef(db->expires, dict_index, key->ptr);
-            serverAssert(expireref != NULL);
-            *expireref = new;
+            hashtablePosition expire_position;
+            serverAssert(kvstoreHashtableFindRef(db->expires, dict_index, key->ptr, &expire_position));
+            hashtableReplaceEntryAtPosition(&expire_position, new);
         }
     }
     /* For efficiency, let the I/O thread that allocated an object also deallocate it. */
@@ -467,9 +468,8 @@ robj *dbRandomKey(serverDb *db) {
 
 int dbGenericDeleteWithDictIndex(serverDb *db, robj *key, int async, int flags, int dict_index) {
     hashtablePosition pos;
-    void **ref = kvstoreHashtableTwoPhasePopFindRef(db->keys, dict_index, key->ptr, &pos);
-    if (ref != NULL) {
-        robj *val = *ref;
+    if (kvstoreHashtableTwoPhasePopFindRef(db->keys, dict_index, key->ptr, &pos)) {
+        robj *val = hashtableGetEntryAtPosition(&pos);
         /* VM_StringDMA may call dbUnshareStringValue which may free val, so we
          * need to incr to retain val */
         incrRefCount(val);
@@ -480,7 +480,7 @@ int dbGenericDeleteWithDictIndex(serverDb *db, robj *key, int async, int flags, 
         /* Match the incrRefCount above. */
         decrRefCount(val);
         /* Because of dbUnshareStringValue, the val in de may change. */
-        val = *ref;
+        val = hashtableGetEntryAtPosition(&pos);
 
         /* Delete from keys and expires tables. This will not free the object.
          * (The expires table has no destructor callback.) */
@@ -1766,9 +1766,9 @@ robj *setExpire(client *c, serverDb *db, robj *key, long long when) {
      * expire in an robj, it's potentially reallocated. We need to updates the
      * pointer(s) to it. */
     int dict_index = getKVStoreIndexForKey(key->ptr);
-    void **valref = kvstoreHashtableFindRef(db->keys, dict_index, key->ptr);
-    serverAssertWithInfo(NULL, key, valref != NULL);
-    val = *valref;
+    hashtablePosition position;
+    serverAssertWithInfo(NULL, key, kvstoreHashtableFindRef(db->keys, dict_index, key->ptr, &position));
+    val = hashtableGetEntryAtPosition(&position);
     long long old_when = objectGetExpire(val);
     robj *newval = objectSetExpire(val, when);
     if (old_when != -1) {
@@ -1780,7 +1780,8 @@ robj *setExpire(client *c, serverDb *db, robj *key, long long when) {
         /* No old expire. Update the pointer in the keys hashtable, if needed,
          * and add it to the expires hashtable. */
         if (newval != val) {
-            val = *valref = newval;
+            hashtableReplaceEntryAtPosition(&position, newval);
+            val = newval;
         }
         int added = kvstoreHashtableAdd(db->expires, dict_index, newval);
         serverAssert(added);

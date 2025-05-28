@@ -1499,15 +1499,15 @@ int zsetAdd(robj *zobj, double score, sds ele, int in_flags, int *out_flags, dou
     if (zobj->encoding == OBJ_ENCODING_SKIPLIST) {
         zset *zs = zobj->ptr;
 
-        void **node_ref_in_hashtable = hashtableFindRef(zs->ht, ele);
-        if (node_ref_in_hashtable != NULL) {
+        hashtablePosition position;
+        if (hashtableFindPosition(zs->ht, ele, &position)) {
             /* NX? Return, same element already exists. */
             if (nx) {
                 *out_flags |= ZADD_OUT_NOP;
                 return 1;
             }
 
-            zskiplistNode *old_node = *node_ref_in_hashtable;
+            zskiplistNode *old_node = hashtableGetEntryAtPosition(&position);
             curscore = old_node->score;
 
             /* Prepare the score for the increment if needed. */
@@ -1530,9 +1530,7 @@ int zsetAdd(robj *zobj, double score, sds ele, int in_flags, int *out_flags, dou
             /* Remove and re-insert when score changes. */
             if (score != curscore) {
                 zskiplistNode *new_node = zslUpdateScore(zs->zsl, old_node, score);
-                /* Note that this assignment updates the node pointer stored in
-                 * the hashtable */
-                if (new_node) *node_ref_in_hashtable = new_node;
+                if (new_node) hashtableReplaceEntryAtPosition(&position, new_node);
                 *out_flags |= ZADD_OUT_UPDATED;
             }
             return 1;

@@ -134,14 +134,16 @@ void dismissHashtable(hashtable *ht);
 
 /* Entries */
 int hashtableFind(hashtable *ht, const void *key, void **found);
-void **hashtableFindRef(hashtable *ht, const void *key);
+int hashtableFindPosition(hashtable *ht, const void *key, hashtablePosition *position);
 int hashtableAdd(hashtable *ht, void *entry);
 int hashtableAddOrFind(hashtable *ht, void *entry, void **existing);
 int hashtableFindPositionForInsert(hashtable *ht, void *key, hashtablePosition *position, void **existing);
 void hashtableInsertAtPosition(hashtable *ht, void *entry, hashtablePosition *position);
+void *hashtableGetEntryAtPosition(hashtablePosition *position);
+void hashtableReplaceEntryAtPosition(hashtablePosition* position, void *entry);
 int hashtablePop(hashtable *ht, const void *key, void **popped);
 int hashtableDelete(hashtable *ht, const void *key);
-void **hashtableTwoPhasePopFindRef(hashtable *ht, const void *key, hashtablePosition *position);
+int hashtableTwoPhasePopFindRef(hashtable *ht, const void *key, hashtablePosition *position);
 void hashtableTwoPhasePopDelete(hashtable *ht, hashtablePosition *position);
 int hashtableReplaceReallocatedEntry(hashtable *ht, const void *old_entry, void *new_entry);
 void hashtableIncrementalFindInit(hashtableIncrementalFindState *state, hashtable *ht, const void *key);

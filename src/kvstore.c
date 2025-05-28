@@ -784,10 +784,10 @@ int kvstoreHashtableFind(kvstore *kvs, int didx, void *key, void **found) {
     return hashtableFind(ht, key, found);
 }
 
-void **kvstoreHashtableFindRef(kvstore *kvs, int didx, const void *key) {
+int kvstoreHashtableFindRef(kvstore *kvs, int didx, const void *key, hashtablePosition *position) {
     hashtable *ht = kvstoreGetHashtable(kvs, didx);
-    if (!ht) return NULL;
-    return hashtableFindRef(ht, key);
+    if (!ht) return 0;
+    return hashtableFindPosition(ht, key, position);
 }
 
 int kvstoreHashtableAddOrFind(kvstore *kvs, int didx, void *key, void **existing) {
@@ -811,15 +811,15 @@ int kvstoreHashtableFindPositionForInsert(kvstore *kvs, int didx, void *key, has
 
 /* Must be used together with kvstoreHashtableFindPositionForInsert, with returned
  * position and with the same didx. */
-void kvstoreHashtableInsertAtPosition(kvstore *kvs, int didx, void *entry, void *position) {
+void kvstoreHashtableInsertAtPosition(kvstore *kvs, int didx, void *entry, hashtablePosition *position) {
     hashtable *ht = kvstoreGetHashtable(kvs, didx);
     hashtableInsertAtPosition(ht, entry, position);
     cumulativeKeyCountAdd(kvs, didx, 1);
 }
 
-void **kvstoreHashtableTwoPhasePopFindRef(kvstore *kvs, int didx, const void *key, void *position) {
+int kvstoreHashtableTwoPhasePopFindRef(kvstore *kvs, int didx, const void *key, hashtablePosition *position) {
     hashtable *ht = kvstoreGetHashtable(kvs, didx);
-    if (!ht) return NULL;
+    if (!ht) return 0;
     return hashtableTwoPhasePopFindRef(ht, key, position);
 }
 

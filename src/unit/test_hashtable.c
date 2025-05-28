@@ -299,9 +299,8 @@ int test_two_phase_insert_and_pop(int argc, char **argv, int flags) {
         snprintf(val, sizeof(val), "%d", count - j + 42);
         hashtablePosition position;
         size_t size_before_find = hashtableSize(ht);
-        void **ref = hashtableTwoPhasePopFindRef(ht, key, &position);
-        TEST_ASSERT(ref != NULL);
-        keyval *e = *ref;
+        TEST_ASSERT(hashtableTwoPhasePopFindRef(ht, key, &position));
+        keyval *e = hashtableGetEntryAtPosition(&position);
         TEST_ASSERT(!strcmp(val, getval(e)));
         TEST_ASSERT(hashtableSize(ht) == size_before_find);
         hashtableTwoPhasePopDelete(ht, &position);

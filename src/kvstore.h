@@ -73,14 +73,14 @@ unsigned long kvstoreHashtableScanDefrag(kvstore *kvs,
                                          int flags);
 unsigned long kvstoreHashtableDefragTables(kvstore *kvs, unsigned long cursor, void *(*defragfn)(void *));
 int kvstoreHashtableFind(kvstore *kvs, int didx, void *key, void **found);
-void **kvstoreHashtableFindRef(kvstore *kvs, int didx, const void *key);
+int kvstoreHashtableFindRef(kvstore *kvs, int didx, const void *key, hashtablePosition *position);
 int kvstoreHashtableAddOrFind(kvstore *kvs, int didx, void *key, void **existing);
 int kvstoreHashtableAdd(kvstore *kvs, int didx, void *entry);
 
 int kvstoreHashtableFindPositionForInsert(kvstore *kvs, int didx, void *key, hashtablePosition *position, void **existing);
-void kvstoreHashtableInsertAtPosition(kvstore *kvs, int didx, void *entry, void *position);
+void kvstoreHashtableInsertAtPosition(kvstore *kvs, int didx, void *entry, hashtablePosition *position);
 
-void **kvstoreHashtableTwoPhasePopFindRef(kvstore *kvs, int didx, const void *key, void *position);
+int kvstoreHashtableTwoPhasePopFindRef(kvstore *kvs, int didx, const void *key, hashtablePosition *position);
 void kvstoreHashtableTwoPhasePopDelete(kvstore *kvs, int didx, void *position);
 int kvstoreHashtablePop(kvstore *kvs, int didx, const void *key, void **popped);
 int kvstoreHashtableDelete(kvstore *kvs, int didx, const void *key);

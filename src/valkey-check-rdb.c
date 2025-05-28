@@ -89,7 +89,7 @@ struct {
     /* stats */
     rdbStats **stats; /* stats group by datatype,encoding,isexpired */
     int stats_num;
-    char* stats_output;
+    char *stats_output;
 } rdbstate;
 
 /* At every loading step try to remember what we were about to do, so that

@@ -35,7 +35,7 @@ Valkey uses two types of tests: unit and integration tests.
 All contributions should include a test of some form. 
 
 Unit tests are present in the `src/unit` directory, and are intended to test individual structures or files.
-For example, most changes to datastructures should include corresponding unit tests.
+For example, most changes to data structures should include corresponding unit tests.
 
 Integration tests are located in the `tests/` directory, and are intended to test end-to-end functionality.
 Adding new commands should come with corresponding integration tests.

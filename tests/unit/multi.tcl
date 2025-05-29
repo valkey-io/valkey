@@ -904,16 +904,16 @@ start_server {tags {"multi"}} {
 
     test {MULTI is rejected when CLIENT REPLY is ON/OFF/SKIP} {
         r multi
-        assert_error "*ERR CLIENT REPLY not allowed during MULTI/EXEC transaction.*" {r client reply on}
-        r exec
+        assert_error "ERR Command not allowed inside a transaction" {r client reply on}
+        assert_error "EXECABORT *" {r exec}
 
         r multi
-        assert_error "*ERR CLIENT REPLY not allowed during MULTI/EXEC transaction.*" {r client reply skip}
-        r exec
+        assert_error "ERR Command not allowed inside a transaction" {r client reply skip}
+        assert_error "EXECABORT *" {r exec}
 
         r multi
-        assert_error "*ERR CLIENT REPLY not allowed during MULTI/EXEC transaction.*" {r client reply off}
-        r exec
+        assert_error "ERR Command not allowed inside a transaction" {r client reply off}
+        assert_error "EXECABORT *" {r exec}
 
         r client reply on
     }

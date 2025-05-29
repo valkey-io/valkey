@@ -1219,7 +1219,7 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {
     /* Set a free callback for the contents of the collected keys list if they
      * are deep copied temporary strings. We must not free them if they are just
      * a shallow copy - a pointer to the actual data in the data structure */
-    void (*free_callback)(void *) = NULL;
+    void (*free_callback)(void *) = sdsfreeVoid;
     if (o == NULL) {
         free_callback = NULL;
     } else if (o->type == OBJ_SET && o->encoding == OBJ_ENCODING_HASHTABLE) {

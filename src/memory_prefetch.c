@@ -54,7 +54,7 @@ void freePrefetchCommandsBatch(void) {
 }
 
 void prefetchCommandsBatchInit(void) {
-    serverAssert(!batch);
+    if (batch) return;
     size_t max_prefetch_size = server.prefetch_batch_max_size;
 
     if (max_prefetch_size == 0) {

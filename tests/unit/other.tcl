@@ -581,20 +581,13 @@ start_server {tags {"other external:skip"}} {
 
 start_server {tags {"other external:skip"}} {
     test "test io-threads are runtime modifiable" {
-        # Test set
-        r config set io-threads 5
-        set thread_num [lindex [r config get io-threads] 1]
-        assert_equal 5 $thread_num
-
-        # Test decrease
-        r config set io-threads 1
-        set thread_num [lindex [r config get io-threads] 1]
-        assert_equal 1 $thread_num
-
-        # Test increase
-        r config set io-threads 4
-        set thread_num [lindex [r config get io-threads] 1]
-        assert_equal 4 $thread_num
+        # Randomly set the number of threads between 1 and 5
+        for {set i 0} {$i < 100} {incr i} {
+            set random_num [expr {int(rand() * 5) + 1}]
+            r config set io-threads $random_num
+            set thread_num [lindex [r config get io-threads] 1]
+            assert_equal $random_num $thread_num
+        }
     }
 }
 

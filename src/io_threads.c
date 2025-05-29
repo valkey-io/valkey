@@ -7,6 +7,7 @@
 #include "io_threads.h"
 
 static __thread int thread_id = 0; /* Thread local var */
+static atomic_bool io_thread_running[IO_THREADS_MAX_NUM] = {false};
 static pthread_t io_threads[IO_THREADS_MAX_NUM] = {0};
 static pthread_mutex_t io_threads_mutex[IO_THREADS_MAX_NUM];
 
@@ -218,16 +219,12 @@ static void *IOThreadMain(void *myid) {
     snprintf(thdname, sizeof(thdname), "io_thd_%ld", id);
     valkey_set_thread_title(thdname);
     serverSetCpuAffinity(server.server_cpulist);
-    makeThreadKillable();
     initSharedQueryBuf();
-    pthread_cleanup_push(freeSharedQueryBuf, NULL);
 
     thread_id = (int)id;
     size_t jobs_to_process = 0;
     IOJobQueue *jq = &io_jobs[id];
-    while (1) {
-        /* Cancellation point so that pthread_cancel() from main thread is honored. */
-        pthread_testcancel();
+    while (io_thread_running[id]) {
         /* Wait for jobs */
         for (int j = 0; j < 1000000; j++) {
             jobs_to_process = IOJobQueue_availableJobs(jq);
@@ -256,7 +253,7 @@ static void *IOThreadMain(void *myid) {
          * As the main-thread main concern is to check if the queue is empty, it's enough to do it once at the end. */
         atomic_thread_fence(memory_order_release);
     }
-    pthread_cleanup_pop(0);
+    freeSharedQueryBuf(NULL);
     return NULL;
 }
 
@@ -269,6 +266,7 @@ static void createIOThread(int id) {
     pthread_mutex_init(&io_threads_mutex[id], NULL);
     IOJobQueue_init(&io_jobs[id], IO_JOB_QUEUE_SIZE);
     pthread_mutex_lock(&io_threads_mutex[id]); /* Thread will be stopped. */
+    io_thread_running[id] = true;
     if (pthread_create(&tid, NULL, IOThreadMain, (void *)(long)id) != 0) {
         serverLog(LL_WARNING, "Fatal: Can't initialize IO thread, pthread_create failed with: %s", strerror(errno));
         exit(1);
@@ -284,7 +282,8 @@ static void shutdownIOThread(int id) {
     if (tid == pthread_self()) return;
     if (tid == 0) return;
 
-    pthread_cancel(tid);
+    /* Setting io_thread_running[id] to 0 will eventually cause it to exit. */
+    io_thread_running[id] = false;
 
     if ((err = pthread_join(tid, NULL)) != 0) {
         serverLog(LL_WARNING, "IO thread(tid:%lu) can not be joined: %s", (unsigned long)tid, strerror(err));
@@ -323,6 +322,7 @@ int updateIOThreads(const char **err) {
 
     // Create new threads.
     if (server.io_threads_num > prev_threads_num) {
+        prefetchCommandsBatchInit();
         for (int i = prev_threads_num; i < server.io_threads_num; i++) {
             createIOThread(i);
         }

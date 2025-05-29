@@ -2531,7 +2531,7 @@ static int writevToClient(client *c) {
     bufWriteMetadata buf_metadata[replyLen];
 
     replyIOV reply;
-    initReplyIOV(c, replyLen, iov_arr, prefixes, crlf, &reply);
+    initReplyIOV(c, iovmax, iov_arr, prefixes, crlf, &reply);
 
     /* If the static reply buffer is not empty,
      * add it to the iov array for writev() as well. */
@@ -2604,7 +2604,6 @@ static int writevToClient(client *c) {
     if (totwritten > 0) {
         saveLastWrittenBuf(c, buf_metadata, bufcnt, reply.iov_len_total, totwritten);
     }
-    // zfree(buf_metadata);
     return totwritten > 0 ? C_OK : C_ERR;
 }
 

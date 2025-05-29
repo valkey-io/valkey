@@ -27,7 +27,7 @@ start_server {tags {"commandlog"} overrides {commandlog-execution-slower-than 10
         assert_equal [r commandlog len large-request] 1
 
         r config set commandlog-reply-larger-than 1024
-        r ping        
+        r ping
         assert_equal [r commandlog len large-reply] 0
         r get testkey
         assert_equal [r commandlog len large-reply] 1

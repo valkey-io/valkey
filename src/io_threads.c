@@ -12,7 +12,7 @@ static pthread_mutex_t io_threads_mutex[IO_THREADS_MAX_NUM];
 
 /* IO jobs queue functions - Used to send jobs from the main-thread to the IO thread. */
 typedef void (*job_handler)(void *);
-typedef struct iojob ƒ{
+typedef struct iojob {
     job_handler handler;
     void *data;
 } iojob;
@@ -218,13 +218,17 @@ static void *IOThreadMain(void *myid) {
     snprintf(thdname, sizeof(thdname), "io_thd_%ld", id);
     valkey_set_thread_title(thdname);
     serverSetCpuAffinity(server.server_cpulist);
-    makeThreadKillable(false);
+    pthread_setcancelstate(PTHREAD_CANCEL_ENABLE, NULL);
     initSharedQueryBuf();
     pthread_cleanup_push(freeSharedQueryBuf, NULL);
+
     thread_id = (int)id;
     size_t jobs_to_process = 0;
     IOJobQueue *jq = &io_jobs[id];
-    while (true) {
+    while (1) {
+        /* Cancellation point so that pthread_cancel() from main thread is honored. */
+        pthread_testcancel();
+
         /* Wait for jobs */
         for (int j = 0; j < 1000000; j++) {
             jobs_to_process = IOJobQueue_availableJobs(jq);

@@ -3925,7 +3925,7 @@ sds catSubCommandFullname(const char *parent_name, const char *sub_name);
 void commandAddSubcommand(struct serverCommand *parent, struct serverCommand *subcommand);
 void debugDelay(int usec);
 void killThreads(void);
-void makeThreadKillable(bool async);
+void makeThreadKillable(void);
 void swapMainDbWithTempDb(serverDb *tempDb);
 sds getVersion(void);
 void debugPauseProcess(void);

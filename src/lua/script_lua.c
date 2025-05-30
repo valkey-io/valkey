@@ -1611,7 +1611,9 @@ static void luaMaskCountHook(lua_State *lua, lua_Debug *ar) {
     serverAssert(rctx); /* Only supported inside script invocation */
     if (scriptInterrupt(rctx) == SCRIPT_KILL) {
         char *err = NULL;
-        if (rctx->flags & SCRIPT_EVAL_MODE) {
+        if (rctx->flags & SCRIPT_FAILOVER_KILLED) {
+            err = "Script killed due to cluster failover.";
+        } else if (rctx->flags & SCRIPT_EVAL_MODE) {
             err = "Script killed by user with SCRIPT KILL.";
         } else {
             err = "Script killed by user with FUNCTION KILL.";

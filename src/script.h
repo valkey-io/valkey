@@ -65,6 +65,7 @@
 #define SCRIPT_ALLOW_OOM (1ULL << 6)        /* indicate to allow any command even if OOM reached */
 #define SCRIPT_EVAL_MODE (1ULL << 7)        /* Indicate that the current script called from legacy Lua */
 #define SCRIPT_ALLOW_CROSS_SLOT (1ULL << 8) /* Indicate that the current script may access keys from multiple slots */
+#define SCRIPT_FAILOVER_KILLED (1ULL << 9)  /* Indicate that the current script was marked to be killed due to failover. */
 typedef struct scriptRunCtx scriptRunCtx;
 
 /* This struct stores the necessary information to manage the execution of
@@ -107,11 +108,13 @@ int scriptSetResp(scriptRunCtx *r_ctx, int resp);
 int scriptSetRepl(scriptRunCtx *r_ctx, int repl);
 void scriptCall(scriptRunCtx *r_ctx, sds *err);
 int scriptInterrupt(scriptRunCtx *r_ctx);
+void scriptMarkedKillByFailover(void);
 void scriptKill(client *c, int is_eval);
 int scriptIsRunning(void);
 const char *scriptCurrFunction(void);
 int scriptIsEval(void);
 int scriptIsTimedout(void);
+int scriptIsWriteDirty(void);
 client *scriptGetClient(void);
 client *scriptGetCaller(void);
 long long scriptRunDuration(void);

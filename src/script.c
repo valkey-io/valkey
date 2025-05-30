@@ -66,6 +66,10 @@ int scriptIsTimedout(void) {
     return scriptIsRunning() && (curr_run_ctx->flags & SCRIPT_TIMEDOUT);
 }
 
+int scriptIsWriteDirty(void) {
+    return scriptIsRunning() && (curr_run_ctx->flags & SCRIPT_WRITE_DIRTY);
+}
+
 client *scriptGetClient(void) {
     serverAssert(scriptIsRunning());
     return curr_run_ctx->c;
@@ -293,6 +297,11 @@ const char *scriptCurrFunction(void) {
 int scriptIsEval(void) {
     serverAssert(scriptIsRunning());
     return curr_run_ctx->flags & SCRIPT_EVAL_MODE;
+}
+
+void scriptMarkedKillByFailover(void) {
+    serverAssert(scriptIsRunning());
+    curr_run_ctx->flags |= (SCRIPT_KILLED | SCRIPT_FAILOVER_KILLED);
 }
 
 /* Kill the current running script */

@@ -2721,7 +2721,8 @@ void initSharedQueryBuf(void) {
     sdsclear(thread_shared_qb);
 }
 
-void freeSharedQueryBuf(void) {
+void freeSharedQueryBuf(void *dummy) {
+    UNUSED(dummy);
     sdsfree(thread_shared_qb);
     thread_shared_qb = NULL;
 }

@@ -215,7 +215,7 @@ void *bioProcessBackgroundJobs(void *arg) {
 
     serverSetCpuAffinity(server.bio_cpulist);
 
-    makeThreadKillable();
+    makeThreadKillable(true);
 
     pthread_mutex_lock(&bio_mutex[worker]);
     /* Block SIGALRM so we are sure that only the main thread will

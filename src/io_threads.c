@@ -253,7 +253,7 @@ static void *IOThreadMain(void *myid) {
          * As the main-thread main concern is to check if the queue is empty, it's enough to do it once at the end. */
         atomic_thread_fence(memory_order_release);
     }
-    freeSharedQueryBuf(NULL);
+    freeSharedQueryBuf();
     return NULL;
 }
 

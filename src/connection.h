@@ -65,7 +65,7 @@ typedef enum {
 #define CONN_FLAG_ALLOW_ACCEPT_OFFLOAD (1 << 2) /* Connection accept can be offloaded to IO threads. */
 
 typedef enum {
-    CONN_TYPE_ID_NONE = 0,
+    CONN_TYPE_ID_INVALID = 0,
     CONN_TYPE_ID_SOCKET,
     CONN_TYPE_ID_UNIX,
     CONN_TYPE_ID_TLS,
@@ -153,8 +153,8 @@ struct connection {
     ConnectionCallbackFunc conn_handler;
     ConnectionCallbackFunc write_handler;
     ConnectionCallbackFunc read_handler;
-    char *saddr;
-    char *daddr;
+    char addr[NET_ADDR_STR_LEN];
+    char laddr[NET_ADDR_STR_LEN];
 };
 
 #define CONFIG_BINDADDR_MAX 16
@@ -283,14 +283,6 @@ static inline void connShutdown(connection *conn) {
 }
 
 static inline void connClose(connection *conn) {
-    if (conn->saddr) {
-        free(conn->saddr);
-        conn->saddr = NULL;
-    }
-    if (conn->daddr) {
-        free(conn->daddr);
-        conn->daddr = NULL;
-    }
     conn->type->close(conn);
 }
 
@@ -320,7 +312,7 @@ static inline const char *connGetType(connection *conn) {
 
 static inline int connGetTypeId(connection *conn) {
     if (!conn || conn->type->get_type_id == NULL) {
-        return CONN_TYPE_ID_NONE;
+        return CONN_TYPE_ID_INVALID;
     }
     return conn->type->get_type_id(conn);
 }
@@ -365,25 +357,10 @@ static inline int connAddrSockName(connection *conn, char *ip, size_t ip_len, in
     return connAddr(conn, ip, ip_len, port, 0);
 }
 
-/* Format the connection address and store the result in daddr/saddr, except Unix socket */
+/* Format the connection address and store the result in addr/laddr, except Unix socket */
 static inline int connFmtName(connection *conn) {
-    char addr[NET_ADDR_STR_LEN];
-    int ret;
-
-    ret = connFormatAddr(conn, addr, sizeof(addr), 0);
-    if (ret) {
-        conn->daddr = strdup(addr);
-    } else {
-        conn->daddr = NULL;
-    }
-
-    ret = connFormatAddr(conn, addr, sizeof(addr), 1);
-    if (ret) {
-        conn->saddr = strdup(addr);
-    } else {
-        conn->saddr = NULL;
-    }
-
+    connFormatAddr(conn, conn->laddr, sizeof(conn->laddr), 0);
+    connFormatAddr(conn, conn->addr, sizeof(conn->addr), 1);
     return 0;
 }
 

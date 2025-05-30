@@ -1498,13 +1498,11 @@ void acceptCommonHandler(connection *conn, struct ClientFlags flags, char *ip) {
     client *c;
     UNUSED(ip);
 
+    connFmtName(conn);
+
     if (connGetState(conn) != CONN_STATE_ACCEPTING) {
-        char addr[NET_ADDR_STR_LEN] = {0};
-        char laddr[NET_ADDR_STR_LEN] = {0};
-        connFormatAddr(conn, addr, sizeof(addr), 1);
-        connFormatAddr(conn, laddr, sizeof(addr), 0);
         serverLog(LL_VERBOSE, "Accepted client connection in error state: %s (addr=%s laddr=%s)",
-                  connGetLastError(conn), addr, laddr);
+                  connGetLastError(conn), conn->addr, conn->laddr);
         connClose(conn);
         return;
     }
@@ -1535,12 +1533,8 @@ void acceptCommonHandler(connection *conn, struct ClientFlags flags, char *ip) {
 
     /* Create connection and client */
     if ((c = createClient(conn)) == NULL) {
-        char addr[NET_ADDR_STR_LEN] = {0};
-        char laddr[NET_ADDR_STR_LEN] = {0};
-        connFormatAddr(conn, addr, sizeof(addr), 1);
-        connFormatAddr(conn, laddr, sizeof(addr), 0);
         serverLog(LL_WARNING, "Error registering fd event for the new client connection: %s (addr=%s laddr=%s)",
-                  connGetLastError(conn), addr, laddr);
+                  connGetLastError(conn), conn->addr, conn->laddr);
         connClose(conn); /* May be already closed, just ignore errors */
         return;
     }
@@ -1563,8 +1557,6 @@ void acceptCommonHandler(connection *conn, struct ClientFlags flags, char *ip) {
         freeClient(connGetPrivateData(conn));
         return;
     }
-
-    connFmtName(conn);
 }
 
 void freeClientOriginalArgv(client *c) {
@@ -3381,7 +3373,11 @@ void genClientAddrString(client *client, char *addr, size_t addr_len, int remote
         snprintf(addr, addr_len, "%s:0", server.unixsocket);
     } else {
         /* TCP client. */
-        connFormatAddr(client->conn, addr, addr_len, remote);
+        if (remote) {
+            memcpy(addr, client->conn->addr, addr_len);
+        } else {
+            memcpy(addr, client->conn->laddr, addr_len);
+        }
     }
 }
 

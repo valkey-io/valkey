@@ -70,7 +70,7 @@ struct latencyStats {
 };
 
 void latencyMonitorInit(void);
-void latencyAddSample(const char *event, mstime_t latency);
+void latencyAddSample(const char *event, ustime_t latency);
 
 /* Latency monitoring macros. */
 
@@ -91,7 +91,7 @@ void latencyAddSample(const char *event, mstime_t latency);
 
 /* Add the sample only if the elapsed time is >= to the configured threshold. */
 #define latencyAddSampleIfNeeded(event, var) \
-    if (server.latency_monitor_threshold && (var) >= server.latency_monitor_threshold * 1000) latencyAddSample((event), ((var) / 1000));
+    if (server.latency_monitor_threshold && (var) >= server.latency_monitor_threshold * 1000) latencyAddSample((event), (var));
 
 /* Remove time from a nested event. */
 #define latencyRemoveNestedEvent(event_var, nested_var) event_var += nested_var;

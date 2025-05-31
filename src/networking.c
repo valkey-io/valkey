@@ -3373,11 +3373,7 @@ void genClientAddrString(client *client, char *addr, size_t addr_len, int remote
         snprintf(addr, addr_len, "%s:0", server.unixsocket);
     } else {
         /* TCP client. */
-        if (remote) {
-            memcpy(addr, client->conn->addr, addr_len);
-        } else {
-            memcpy(addr, client->conn->laddr, addr_len);
-        }
+        connFormatAddr(client->conn, addr, addr_len, remote);
     }
 }
 

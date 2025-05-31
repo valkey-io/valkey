@@ -84,9 +84,9 @@ typedef long long ustime_t; /* microsecond time type. */
 #include "trace/trace.h"
 
 #ifdef USE_LTTNG
-#define zfork() do_fork()
+#define valkey_fork() do_fork()
 #else
-#define zfork() fork()
+#define valkey_fork() fork()
 #endif
 
 #define dismissMemory zmadvise_dontneed

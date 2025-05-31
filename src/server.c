@@ -6353,7 +6353,7 @@ void createPidFile(void) {
 void daemonize(void) {
     int fd;
 
-    if (zfork() != 0) exit(0); /* parent exits */
+    if (valkey_fork() != 0) exit(0); /* parent exits */
     setsid();                  /* create a new session */
 
     /* Every output goes to /dev/null. If the server is daemonized but
@@ -6547,7 +6547,7 @@ int serverFork(int purpose) {
 
     int childpid;
     long long start = ustime();
-    if ((childpid = zfork()) == 0) {
+    if ((childpid = valkey_fork()) == 0) {
         /* Child.
          *
          * The order of setting things up follows some reasoning:

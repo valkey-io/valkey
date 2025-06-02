@@ -167,7 +167,7 @@ start_server [list overrides [list "ext-data-mode" test "loglevel" debug] tags [
         # init
         assert_equal {OK} [r module load $storagemodule1]
         assert_equal {OK} [r module load $filtermodule1]
-        assert_error {ERR db0 is not initialized} {r external_data debug db0 filter set k v}
+        assert_error {ERR db0 is not initialized} {r external_data debug db0 filter set k}
         assert_error {ERR db0 is not initialized} {r external_data debug db0 storage set k v}
         assert_equal {OK} [r external_data INIT db0 STORAGE hellostorage1 FILTER hellofilter1]
         assert_error {ERR unknown subcommand somecommand} {r external_data debug db0 somecommand set k v}
@@ -177,7 +177,7 @@ start_server [list overrides [list "ext-data-mode" test "loglevel" debug] tags [
         assert_equal {OK} [r external_data debug db0 storage setro]
         assert_equal {OK} [r external_data debug db0 filter setro]
         assert_error {ERR k set failed} {r external_data debug db0 storage set k v}
-        assert_error {ERR k set failed} {r external_data debug db0 filter set k v}
+        assert_error {ERR k set failed} {r external_data debug db0 filter set k}
         assert_equal {} [r get k]
         assert_equal {OK} [r select 1]
         assert_equal {} [r get k]
@@ -186,7 +186,7 @@ start_server [list overrides [list "ext-data-mode" test "loglevel" debug] tags [
         # filter RO, storage OK = nil
         assert_equal {OK} [r external_data debug db0 storage dropro]
         assert_equal {OK} [r external_data debug db0 storage set k v]
-        assert_error {ERR k set failed} {r external_data debug db0 filter set k v}
+        assert_error {ERR k set failed} {r external_data debug db0 filter set k}
         assert_equal {} [r get k]
         assert_equal {OK} [r select 1]
         assert_equal {} [r get k]
@@ -198,7 +198,7 @@ start_server [list overrides [list "ext-data-mode" test "loglevel" debug] tags [
         assert_equal {OK} [r external_data debug db0 storage setro]
         assert_equal {OK} [r external_data debug db0 filter dropro]
         assert_error {ERR k set failed} {r external_data debug db0 storage set k v}
-        assert_equal {OK} [r external_data debug db0 filter set k v]
+        assert_equal {OK} [r external_data debug db0 filter set k]
         assert_equal {} [r get k]
         assert_equal {OK} [r select 1]
         assert_equal {} [r get k]
@@ -208,7 +208,7 @@ start_server [list overrides [list "ext-data-mode" test "loglevel" debug] tags [
         assert_equal {OK} [r external_data debug db0 storage dropro]
         assert_equal {OK} [r external_data debug db0 storage set k v]
         assert_equal {OK} [r external_data debug db0 storage set k v]
-        assert_equal {OK} [r external_data debug db0 filter set k v]
+        assert_equal {OK} [r external_data debug db0 filter set k]
         assert_equal v [r get k]
         assert_equal {OK} [r select 1]
         assert_equal {} [r get k]
@@ -223,7 +223,7 @@ start_server [list overrides [list "ext-data-mode" test "loglevel" debug] tags [
         assert_equal {OK} [r select 0]
 
         # filter OK, storage not = nil
-        assert_equal {OK} [r external_data debug db0 filter set k v]
+        assert_equal {OK} [r external_data debug db0 filter set k]
         assert_equal v [r external_data debug db0 storage del k]
         assert_equal {} [r get k]
         assert_equal {OK} [r select 1]
@@ -238,6 +238,5 @@ start_server [list overrides [list "ext-data-mode" test "loglevel" debug] tags [
         assert_equal {OK} [r select 0]
 
         # ToDo: add sharded cluster test for key read (including several nodes with MOVE scenario)
-        # ToDo: remove v from filter add (storing only k)
     }
 }

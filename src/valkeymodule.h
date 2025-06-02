@@ -1428,8 +1428,7 @@ typedef struct ValkeyModuleExternalFilterCtx ValkeyModuleExternalFilterCtx;
 typedef int (*ValkeyModuleExternalFilterSetFunc)(
     ValkeyModuleCtx *module_ctx,
     ValkeyModuleExternalFilterCtx *filter_ctx,
-    ValkeyModuleKeyOptCtx *key_ctx,
-    ValkeyModuleString *value);
+    ValkeyModuleKeyOptCtx *key_ctx);
 
 /* The callback function called when `GET` command is called.
  *
@@ -1445,8 +1444,7 @@ typedef int (*ValkeyModuleExternalFilterSetFunc)(
 typedef int (*ValkeyModuleExternalFilterGetFunc)(
     ValkeyModuleCtx *module_ctx,
     ValkeyModuleExternalFilterCtx *filter_ctx,
-    ValkeyModuleKeyOptCtx *key_ctx,
-    void **found);
+    ValkeyModuleKeyOptCtx *key_ctx);
 
 /* The callback function called when `DEL` command is called.
  *

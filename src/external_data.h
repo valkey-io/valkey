@@ -30,8 +30,8 @@ void externalStorageCallSetReadonlyFunc(externalStorageInstance *si);
 int externalStorageRegister(const char *storage_name, ValkeyModule *storage_module, storageMethods *storage_methods);
 int externalStorageUnregister(const char *storage_name);
 
-int externalFilterCallSetFunc(externalFilterInstance *fi, int dbid, robj *key, robj *value);
-int externalFilterCallGetFunc(externalFilterInstance *fi, int dbid, robj *key, void **found);
+int externalFilterCallSetFunc(externalFilterInstance *fi, int dbid, robj *key);
+int externalFilterCallGetFunc(externalFilterInstance *fi, int dbid, robj *key);
 int externalFilterCallDelFunc(externalFilterInstance *fi, int dbid, robj *key, robj **value);
 void externalFilterCallSetReadonlyFunc(externalFilterInstance *fi);
 void externalFilterCallSetReadonlyFunc(externalFilterInstance *fi);

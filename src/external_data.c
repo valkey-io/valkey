@@ -586,23 +586,23 @@ static void filterTeardownModuleCtx(externalFilterInstance *fi) {
     }
 }
 
-int externalFilterCallSetFunc(externalFilterInstance *fi, int dbid, robj *key, robj *value) {
+int externalFilterCallSetFunc(externalFilterInstance *fi, int dbid, robj *key) {
     filterSetupModuleCtx(fi);
 
-    serverAssert(fi->filter != NULL && fi->filter_ctx != NULL && fi->module_ctx != NULL && key != NULL && value != NULL);
+    serverAssert(fi->filter != NULL && fi->filter_ctx != NULL && fi->module_ctx != NULL && key != NULL);
     ValkeyModuleKeyOptCtx key_ctx = {key, NULL, dbid, -1};
-    int success = fi->filter->methods.set(fi->module_ctx, fi->filter_ctx, &key_ctx, value);
+    int success = fi->filter->methods.set(fi->module_ctx, fi->filter_ctx, &key_ctx);
 
     filterTeardownModuleCtx(fi);
     return success;
 }
 
-int externalFilterCallGetFunc(externalFilterInstance *fi, int dbid, robj *key, void **found) {
+int externalFilterCallGetFunc(externalFilterInstance *fi, int dbid, robj *key) {
     filterSetupModuleCtx(fi);
 
     serverAssert(fi->filter != NULL && fi->filter_ctx != NULL && fi->module_ctx != NULL && key != NULL);
     ValkeyModuleKeyOptCtx key_ctx = {key, NULL, dbid, -1};
-    int exists = fi->filter->methods.get(fi->module_ctx, fi->filter_ctx, &key_ctx, found);
+    int exists = fi->filter->methods.get(fi->module_ctx, fi->filter_ctx, &key_ctx);
 
     filterTeardownModuleCtx(fi);
     return exists;
@@ -698,8 +698,7 @@ void externalDataDebugCommand(client *c) {
         j++;
         if (!strcasecmp(objectGetVal(c->argv[j]), "set")) {
             robj *key = c->argv[++j];
-            robj *value = c->argv[++j];
-            if (!externalFilterCallSetFunc(dbData->filter_instance, c->db->id, key, value)) {
+            if (!externalFilterCallSetFunc(dbData->filter_instance, c->db->id, key)) {
                 addReplyErrorFormat(c, "%s set failed", (char *)objectGetVal(key));
                 return;
             }
@@ -744,7 +743,7 @@ int externalDataFind(int id, void *key, void **found) {
     externalDbData *dbData = dictGetVal(db);
     externalFilterInstance *fi = dbData->filter_instance;
     if (!fi) return 0;
-    if (!externalFilterCallGetFunc(fi, id, key, found)) return 0;
+    if (!externalFilterCallGetFunc(fi, id, key)) return 0;
 
     externalStorageInstance *si = dbData->storage_instance;
     if (!si) return 0;

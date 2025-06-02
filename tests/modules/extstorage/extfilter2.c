@@ -39,8 +39,7 @@ waitExternalFilterReady(ValkeyModuleExternalFilterCtx *filter_ctx) {
 
 static int setFunction(ValkeyModuleCtx *module_ctx,
                        ValkeyModuleExternalFilterCtx *filter_ctx,
-                       ValkeyModuleKeyOptCtx *key_ctx,
-                       ValkeyModuleString *value) {
+                       ValkeyModuleKeyOptCtx *key_ctx) {
   ValkeyModule_AutoMemory(module_ctx);
   VALKEYMODULE_NOT_USED(filter_ctx);
   VALKEYMODULE_NOT_USED(key_ctx);
@@ -57,36 +56,26 @@ static int setFunction(ValkeyModuleCtx *module_ctx,
   const ValkeyModuleString *key = ValkeyModule_GetKeyNameFromOptCtx(key_ctx);
   ValkeyModuleString *previous_value =
       ValkeyModule_DictGet(mem_pool[dbid], (ValkeyModuleString *)key, NULL);
-  if (previous_value != NULL &&
-      ValkeyModule_StringCompare(previous_value, value) == 0) {
+  if (previous_value != NULL) {
     // nothing to do, already set
     ValkeyModule_ReplyWithSimpleString(module_ctx, "OK");
     return 1;
   }
 
-  ValkeyModule_DictReplace(mem_pool[dbid], (ValkeyModuleString *)key, value);
-
-  const ValkeyModuleString *resulting_value =
-      ValkeyModule_DictGet(mem_pool[dbid], (ValkeyModuleString *)key, NULL);
-  if (ValkeyModule_StringCompare(resulting_value, value) != 0) {
+  if (ValkeyModule_DictReplace(mem_pool[dbid], (ValkeyModuleString *)key, "") == VALKEYMODULE_ERR) {
     ValkeyModule_ReplyWithErrorFormat(module_ctx,
-                                      "ERR Failed to set key %s and value %s",
-                                      ValkeyModule_StringPtrLen(key, NULL),
-                                      ValkeyModule_StringPtrLen(value, NULL));
+                                      "ERR Failed to set key %s",
+                                      ValkeyModule_StringPtrLen(key, NULL));
     return 0;
   }
 
-  ValkeyModule_RetainString(module_ctx, value);
-  if (previous_value != NULL) {
-    ValkeyModule_FreeString(module_ctx, previous_value);
-  }
   ValkeyModule_ReplyWithSimpleString(module_ctx, "OK");
   return 1;
 }
 
 static int getFunction(ValkeyModuleCtx *module_ctx,
                        ValkeyModuleExternalFilterCtx *filter_ctx,
-                       ValkeyModuleKeyOptCtx *key_ctx, void **found) {
+                       ValkeyModuleKeyOptCtx *key_ctx) {
   ValkeyModule_AutoMemory(module_ctx);
   ValkeyModule_Assert(module_ctx != NULL && filter_ctx != NULL &&
                       key_ctx != NULL);
@@ -106,14 +95,8 @@ static int getFunction(ValkeyModuleCtx *module_ctx,
 
   void *value =
       ValkeyModule_DictGet(mem_pool[dbid], (ValkeyModuleString *)key, NULL);
-  if (!value) {
-    ValkeyModule_ReplyWithSimpleString(module_ctx, "OK");
-    return 0;
-  }
-  *found = value;
-
   ValkeyModule_ReplyWithSimpleString(module_ctx, "OK");
-  return 1;
+  return (value != NULL);
 }
 
 static int delFunction(ValkeyModuleCtx *module_ctx,

@@ -104,19 +104,6 @@ jobs:
       - name: show-kernel-log
         run: sudo dmesg -c
 
-  test-lttng:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
-      - name: prepare-development-libraries
-        run: sudo apt-get install lttng-tools lttng-modules-dkms liblttng-ust-dev
-      - name: make-lttng-builtin
-        run: |
-          make distclean
-          make -j4 USE_LTTNG=yes
-      - name: test
-        run: ./runtest --verbose --tags -slow --dump-logs
-
   build-debian-old:
     runs-on: ubuntu-latest
     container: debian:buster

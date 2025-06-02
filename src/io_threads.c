@@ -218,7 +218,6 @@ static void *IOThreadMain(void *myid) {
     snprintf(thdname, sizeof(thdname), "io_thd_%ld", id);
     valkey_set_thread_title(thdname);
     serverSetCpuAffinity(server.server_cpulist);
-    pthread_setcancelstate(PTHREAD_CANCEL_ENABLE, NULL);
     initSharedQueryBuf();
     pthread_cleanup_push(freeSharedQueryBuf, NULL);
 

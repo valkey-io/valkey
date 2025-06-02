@@ -9,6 +9,7 @@ To install LTTng on your Linux system, follow the instructions provided in the [
 > Dependency LTTNG version is greater than 2.12.
 
 ### Install from package manager
+
 #### [Ubuntu](https://lttng.org/docs/v2.13/#doc-ubuntu)
 
 LTTng 2.13 is available on Ubuntu 22.04 LTS ​*Jammy Jellyfish*​, Ubuntu 23.04 ​*Lunar Lobster*​, and Ubuntu 23.10 ​*Mantic Minotaur*​. For previous supported releases of Ubuntu, [use the LTTng Stable 2.13 PPA](https://lttng.org/docs/v2.13/#doc-ubuntu-ppa).
@@ -17,24 +18,6 @@ To install LTTng 2.13 on Ubuntu 22.04 LTS ​*Jammy Jellyfish*​:
 
 1. Install the main LTTng 2.13 packages:
    
-   ```
-   apt-get install lttng-tools
-   apt-get install lttng-modules-dkms
-   apt-get install liblttng-ust-dev
-   ```
-
-#### [Ubuntu: **LTTng** Stable 2.13 PPA](https://lttng.org/docs/v2.13/#doc-ubuntu-ppa)
-
-The [LTTng Stable 2.13 PPA](https://launchpad.net/~lttng/+archive/ubuntu/stable-2.13) offers the latest stable LTTng 2.13 packages for Ubuntu 18.04 LTS ​*Bionic Beaver*​, Ubuntu 20.04 LTS ​*Focal Fossa*​, and Ubuntu 22.04 LTS ​*Jammy Jellyfish*​.
-
-To install LTTng 2.13 from the LTTng Stable 2.13 PPA:
-
-1. Add the LTTng Stable 2.13 PPA repository and update the list of packages:
-   ```
-   apt-add-repository ppa:lttng/stable-2.13
-   apt-get update
-   ```
-2. Install the main LTTng 2.13 packages:
    ```
    apt-get install lttng-tools
    apt-get install lttng-modules-dkms
@@ -50,55 +33,6 @@ To install LTTng 2.13 on Debian 12 ​*bookworm*​:
    apt install lttng-modules-dkms
    apt install liblttng-ust-dev
    apt install lttng-tools
-   ```
-
-### Build from source
-To build and install LTTng 2.13 from source:
-
-1. Using the package manager of your distribution, or from source, install the following dependencies of LTTng-tools and LTTng-UST:
-   
-   * [libuuid](https://sourceforge.net/projects/libuuid/)
-   * [popt](https://directory.fsf.org/wiki/Popt)
-   * [Userspace RCU](https://liburcu.org/)
-   * [libxml2](http://www.xmlsoft.org/)
-   * ​**Optional**​: [numactl](https://github.com/numactl/numactl)
-
-2. Download, build, and install the latest LTTng-modules 2.13:
-
-   ```
-   cd $(mktemp -d) &&
-   wget https://lttng.org/files/lttng-modules/lttng-modules-latest-2.13.tar.bz2 &&
-   tar -xf lttng-modules-latest-2.13.tar.bz2 &&
-   cd lttng-modules-2.13.* &&
-   make &&
-   sudo make modules_install &&
-   sudo depmod -a
-   ```
-3. Download, build, and install the latest LTTng-UST 2.13:
-   
-   ```
-   cd $(mktemp -d) &&
-   wget https://lttng.org/files/lttng-ust/lttng-ust-latest-2.13.tar.bz2 &&
-   tar -xf lttng-ust-latest-2.13.tar.bz2 &&
-   cd lttng-ust-2.13.* &&
-   ./configure &&
-   make &&
-   sudo make install &&
-   sudo ldconfig
-   ```
-   
-   Add `--disable-numa` to `./configure` if you don’t have [numactl](https://github.com/numactl/numactl).
-
-4. Download, build, and install the latest LTTng-tools 2.13:
-   ```
-   cd $(mktemp -d) &&
-   wget https://lttng.org/files/lttng-tools/lttng-tools-latest-2.13.tar.bz2 &&
-   tar -xf lttng-tools-latest-2.13.tar.bz2 &&
-   cd lttng-tools-2.13.* &&
-   ./configure &&
-   make &&
-   sudo make install &&
-   sudo ldconfig
    ```
 
 ## LTTng QuickStart
@@ -125,9 +59,6 @@ Enable lttng trace events dynamically:
 Examples (a client run 'SET', another run 'keys'):
 ```
 ...
-[15:30:19.334463706] (+0.000001243) libai valkey:command_call: { cpu_id = 15 }, { name = "set", duration = 0 }
-[15:30:19.334465183] (+0.000001477) libai valkey:command_call: { cpu_id = 15 }, { name = "set", duration = 1 }
-[15:30:19.334466516] (+0.000001333) libai valkey:command_call: { cpu_id = 15 }, { name = "set", duration = 0 }
 [15:30:19.334467738] (+0.000001222) libai valkey:command_call: { cpu_id = 15 }, { name = "set", duration = 0 }
 [15:30:19.334469105] (+0.000001367) libai valkey:command_call: { cpu_id = 15 }, { name = "set", duration = 1 }
 [15:30:19.334470327] (+0.000001222) libai valkey:command_call: { cpu_id = 15 }, { name = "set", duration = 0 }
@@ -136,10 +67,6 @@ Examples (a client run 'SET', another run 'keys'):
 [15:30:19.369702327] (+0.000004005) libai valkey:command_call: { cpu_id = 15 }, { name = "set", duration = 2 }
 [15:30:19.369704098] (+0.000001771) libai valkey:command_call: { cpu_id = 15 }, { name = "set", duration = 1 }
 [15:30:19.369705884] (+0.000001786) libai valkey:command_call: { cpu_id = 15 }, { name = "set", duration = 0 }
-[15:30:19.369707501] (+0.000001617) libai valkey:command_call: { cpu_id = 15 }, { name = "set", duration = 1 }
-[15:30:19.369708743] (+0.000001242) libai valkey:command_call: { cpu_id = 15 }, { name = "set", duration = 0 }
-[15:30:19.369710052] (+0.000001309) libai valkey:command_call: { cpu_id = 15 }, { name = "set", duration = 1 }
-[15:30:19.369711619] (+0.000001567) libai valkey:command_call: { cpu_id = 15 }, { name = "set", duration = 0 }
 ...
 ```
 
@@ -158,11 +85,11 @@ Generally valkey-server would not run in full utilization, the overhead is accep
 | event                      | provider          |
 | -------------------------- | ----------------- |
 | command_call               | valkey_commands   |
-| command_unblocking         | valkey_server     |
 | rdb_unlink_temp_file       | valkey_bgsave     |
 | fork                       | valkey_bgsave     |
 | while_blocked_cron         | valkey_server     |
 | module_acquire_gil         | valkey_server     |
+| command_unblocking         | valkey_server     |
 | expire_del                 | valkey_db         |
 | active_defrag_cycle        | valkey_db         |
 | eviction_del               | valkey_db         |

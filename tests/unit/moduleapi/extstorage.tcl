@@ -236,7 +236,43 @@ start_server [list overrides [list "ext-data-mode" test "loglevel" debug] tags [
         assert_equal {OK} [r select 1]
         assert_equal {} [r get k]
         assert_equal {OK} [r select 0]
+    }
+}
 
-        # ToDo: add sharded cluster test for key read (including several nodes with MOVE scenario)
+start_cluster 1 0 [list overrides [list "ext-data-mode" test "loglevel" debug] tags [list "external:skip" "cluster"]] {
+    # we assume that all cross-requests to and from another nodes are made in a usual Valkey way
+    # that's why there are no tests with MOVED during set/get here
+    test "Cluster should start ok" {
+        wait_for_cluster_state ok
+    }
+
+    set storagemodule1 [file normalize tests/modules/extstorage/extstorage1.so]
+    set filtermodule1 [file normalize tests/modules/extstorage/extfilter1.so]
+
+    test "External storage works with single sharded" {
+        # init
+        assert_equal {OK} [r module load $storagemodule1]
+        assert_equal {OK} [r module load $filtermodule1]
+        assert_equal {OK} [r external_data INIT db0 STORAGE hellostorage1 FILTER hellofilter1]
+
+        # filter ok, storage ok = OK
+        assert_equal {OK} [r external_data debug db0 storage set k v]
+        assert_equal {OK} [r external_data debug db0 storage set k v]
+        assert_equal {OK} [r external_data debug db0 filter set k]
+        assert_equal v [r get k]
+
+        # filter not, storage ok = nil
+        assert_equal 1 [r external_data debug db0 filter del k]
+        assert_equal 0 [r external_data debug db0 filter del k]
+        assert_equal {} [r get k]
+
+        # filter OK, storage not = nil
+        assert_equal {OK} [r external_data debug db0 filter set k]
+        assert_equal v [r external_data debug db0 storage del k]
+        assert_equal {} [r get k]
+
+        # filter not, storage not = nil
+        assert_equal 1 [r external_data debug db0 filter del k]
+        assert_equal {} [r get k]
     }
 }

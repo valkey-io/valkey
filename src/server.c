@@ -3745,7 +3745,7 @@ void call(client *c, int flags) {
     else
         duration = ustime() - call_timer;
 
-    valkey_commands_trace(valkey_commands, command_call, connGetTypeId(c->conn), c->conn->addr, c->conn->laddr, real_cmd->declared_name, duration);
+    valkey_commands_trace(valkey_commands, command_call, connGetTypeId(c->conn), getClientPeerId(c), getClientPeerId(c), real_cmd->declared_name, duration);
     c->duration += duration;
     dirty = server.dirty - dirty;
     if (dirty < 0) dirty = 0;
@@ -6354,7 +6354,7 @@ void daemonize(void) {
     int fd;
 
     if (valkey_fork() != 0) exit(0); /* parent exits */
-    setsid();                  /* create a new session */
+    setsid();                        /* create a new session */
 
     /* Every output goes to /dev/null. If the server is daemonized but
      * the 'logfile' is set to 'stdout' in the configuration file
@@ -6578,7 +6578,7 @@ int serverFork(int purpose) {
         server.stat_fork_rate =
             (double)zmalloc_used_memory() * 1000000 / server.stat_fork_time / (1024 * 1024 * 1024); /* GB per second. */
         latencyAddSampleIfNeeded("fork", server.stat_fork_time);
-        latencyTraceIfNeeded(sys, fork, server.stat_fork_time);
+        latencyTraceIfNeeded(bgsave, fork, server.stat_fork_time);
 
         /* The child_pid and child_type are only for mutually exclusive children.
          * other child types should handle and store their pid's in dedicated variables.

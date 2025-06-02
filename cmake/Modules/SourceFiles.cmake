@@ -110,7 +110,7 @@ set(VALKEY_SERVER_SRCS
     ${CMAKE_SOURCE_DIR}/src/trace/trace_db.c
     ${CMAKE_SOURCE_DIR}/src/trace/trace_cluster.c
     ${CMAKE_SOURCE_DIR}/src/trace/trace_server.c
-    ${CMAKE_SOURCE_DIR}/src/trace/trace_sys.c
+    ${CMAKE_SOURCE_DIR}/src/trace/trace_bgsave.c
     ${CMAKE_SOURCE_DIR}/src/commands.c
     ${CMAKE_SOURCE_DIR}/src/strl.c
     ${CMAKE_SOURCE_DIR}/src/connection.c

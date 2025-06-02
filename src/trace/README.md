@@ -158,9 +158,9 @@ Generally valkey-server would not run in full utilization, the overhead is accep
 | event                      | provider          |
 | -------------------------- | ----------------- |
 | command_call               | valkey_commands   |
-| rdb_unlink_temp_file       | valkey_sys        |
-| fork                       | valkey_sys        |
 | command_unblocking         | valkey_server     |
+| rdb_unlink_temp_file       | valkey_bgsave     |
+| fork                       | valkey_bgsave     |
 | while_blocked_cron         | valkey_server     |
 | module_acquire_gil         | valkey_server     |
 | expire_del                 | valkey_db         |

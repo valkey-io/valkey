@@ -153,8 +153,6 @@ struct connection {
     ConnectionCallbackFunc conn_handler;
     ConnectionCallbackFunc write_handler;
     ConnectionCallbackFunc read_handler;
-    char addr[NET_ADDR_STR_LEN];
-    char laddr[NET_ADDR_STR_LEN];
 };
 
 #define CONFIG_BINDADDR_MAX 16
@@ -355,13 +353,6 @@ static inline int connAddrPeerName(connection *conn, char *ip, size_t ip_len, in
 
 static inline int connAddrSockName(connection *conn, char *ip, size_t ip_len, int *port) {
     return connAddr(conn, ip, ip_len, port, 0);
-}
-
-/* Format the connection address and store the result in addr/laddr, except Unix socket */
-static inline int connFmtName(connection *conn) {
-    connFormatAddr(conn, conn->laddr, sizeof(conn->laddr), 0);
-    connFormatAddr(conn, conn->addr, sizeof(conn->addr), 1);
-    return 0;
 }
 
 /* Test a connection is local or loopback.

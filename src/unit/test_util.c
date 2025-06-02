@@ -11,6 +11,27 @@
 #include <linux/magic.h>
 #endif
 
+/* Fuzz stringmatchlen() trying to crash it with bad input. */
+int test_stringmatchlen_fuzz(int argc, char **argv, int flags) {
+    UNUSED(argc);
+    UNUSED(argv);
+    UNUSED(flags);
+
+    char str[32];
+    char pat[32];
+    int cycles = 100000;
+    int total_matches = 0;
+    while (cycles--) {
+        int strlen = rand() % sizeof(str);
+        int patlen = rand() % sizeof(pat);
+        for (int j = 0; j < strlen; j++) str[j] = rand() % 128;
+        for (int j = 0; j < patlen; j++) pat[j] = rand() % 128;
+        total_matches += stringmatchlen(pat, patlen, str, strlen, 0);
+    }
+    TEST_ASSERT(total_matches <= 100000);
+    return 0;
+}
+
 int test_string2ll(int argc, char **argv, int flags) {
     UNUSED(argc);
     UNUSED(argv);

@@ -73,6 +73,9 @@
 #define CONFIG_LATENCY_HISTOGRAM_INSTANT_MAX_VALUE 3000000L /* <= 3 secs(us precision) */
 #define SHOW_THROUGHPUT_INTERVAL 250                        /* 250ms */
 
+#define CLIENT_PAUSED (1 << 0)
+#define CLIENT_REUSE (1 << 1)
+
 #define CLIENT_GET_EVENTLOOP(c) (c->thread_id >= 0 ? config.threads[c->thread_id]->el : config.el)
 
 struct benchmarkThread;
@@ -112,6 +115,7 @@ static struct config {
     long long totlatency;
     const char *title;
     list *clients;
+    list *pause_clients;
     int quiet;
     int csv;
     int loop;
@@ -138,7 +142,7 @@ static struct config {
     pthread_mutex_t liveclients_mutex;
     pthread_mutex_t is_updating_slots_mutex;
     int resp3; /* use RESP3 */
-    int qps;
+    int rps;
     pthread_mutex_t token_bucket_mutex;
     long long last_time;
     long long time_per_token;
@@ -163,6 +167,7 @@ typedef struct _client {
                            such as auth and select are prefixed to the pipeline of
                            benchmark commands and discarded after the first send. */
     int prefixlen;      /* Size in bytes of the pending prefix commands */
+    int flags;
     int thread_id;
     struct clusterNode *cluster_node;
     int slots_last_update;
@@ -174,6 +179,7 @@ typedef struct benchmarkThread {
     int index;
     pthread_t thread;
     aeEventLoop *el;
+    list *pause_clients;
 } benchmarkThread;
 
 /* Cluster. */
@@ -363,6 +369,19 @@ static void freeServerConfig(serverConfig *cfg) {
     zfree(cfg);
 }
 
+static void releasePauseClient(client c) {
+    if (c->thread_id >= 0) {
+        benchmarkThread *thread = config.threads[c->thread_id];
+        listNode *ln = listSearchKey(thread->pause_clients, c);
+        assert(ln != NULL);
+        listDelNode(thread->pause_clients, ln);
+    } else {
+        listNode *ln = listSearchKey(config.pause_clients, c);
+        assert(ln != NULL);
+        listDelNode(config.pause_clients, ln);
+    }
+}
+
 static void freeClient(client c) {
     aeEventLoop *el = CLIENT_GET_EVENTLOOP(c);
     listNode *ln;
@@ -375,6 +394,7 @@ static void freeClient(client c) {
         }
     }
     valkeyFree(c->context);
+    releasePauseClient(c);
     sdsfree(c->obuf);
     zfree(c->randptr);
     zfree(c->stagptr);
@@ -611,6 +631,41 @@ static void readHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
     }
 }
 
+static long long awakenPauseClient(struct aeEventLoop *eventLoop, long long id, void *clientData) {
+    UNUSED(id);
+    benchmarkThread *thread = (benchmarkThread *)clientData;
+
+    list *pause_clients;
+    if (thread == NULL) {
+        pause_clients = config.pause_clients;
+    } else {
+        pause_clients = thread->pause_clients;
+    }
+
+    listIter li;
+    listNode *ln;
+    long long delay_ns = 0;
+    listRewind(pause_clients, &li);
+    while ((ln = listNext(&li)) != NULL) {
+        client c = ln->value;
+        delay_ns = acquireTokenOrWait(config.pipeline);
+        if (delay_ns > 1000000) {
+            break;
+        } else {
+            c->flags &= ~CLIENT_PAUSED;
+            c->flags |= CLIENT_REUSE;
+            writeHandler(eventLoop, c->context->fd, c, AE_WRITABLE);
+            listDelNode(pause_clients, ln);
+        }
+    }
+
+    if (delay_ns > 0) {
+        return delay_ns / 1000000;
+    } else {
+        return AE_NOMORE;
+    }
+}
+
 static void writeHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
     client c = privdata;
     UNUSED(el);
@@ -618,16 +673,25 @@ static void writeHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
     UNUSED(mask);
 
     /* Acquire a token from the token bucket. */
-    if (config.qps > 0) {
-        do {
-            long long delay = acquireTokenOrWait(config.pipeline);
-            if (delay > 1000) {
-                usleep(delay / 1000);
+    if (config.rps > 0 && (c->flags & CLIENT_REUSE) == 0) {
+        long long delay_ns = acquireTokenOrWait(config.pipeline);
+        if (delay_ns > 1000000) {
+            int thread_id = c->thread_id;
+            c->flags |= CLIENT_PAUSED;
+            aeDeleteFileEvent(el, c->context->fd, AE_WRITABLE);
+
+            benchmarkThread *thread = NULL;
+            if (thread_id < 0) {
+                listAddNodeTail(config.pause_clients, c);
             } else {
-                break;
+                thread = config.threads[thread_id];
+                listAddNodeTail(thread->pause_clients, c);
             }
-        } while (1);
+            aeCreateTimeEvent(el, delay_ns / 1000000, awakenPauseClient, (void *)thread, NULL);
+            return;
+        }
     }
+    c->flags &= ~CLIENT_REUSE;
 
     /* Initialize request when nothing was written. */
     if (c->written == 0) {
@@ -735,6 +799,7 @@ static client createClient(char *cmd, int len, int seqlen, client from, int thre
             exit(1);
         }
     }
+    c->flags = 0;
     c->thread_id = thread_id;
     /* Suppress libvalkey cleanup of unused buffers for max speed. */
     c->context->reader->maxbuf = 0;
@@ -1044,9 +1109,9 @@ static void benchmarkSequence(const char *title, char *cmd, int len, int seqlen)
 
     if (config.num_threads) initBenchmarkThreads();
 
-    if (config.qps > 0) {
-        config.time_per_token = 1000000000 / config.qps;
-        config.time_per_burst = config.time_per_token * config.qps;
+    if (config.rps > 0) {
+        config.time_per_token = 1000000000 / config.rps;
+        config.time_per_burst = config.time_per_token * config.rps;
     }
 
     int thread_id = config.num_threads > 0 ? 0 : -1;
@@ -1079,12 +1144,14 @@ static benchmarkThread *createBenchmarkThread(int index) {
     if (thread == NULL) return NULL;
     thread->index = index;
     thread->el = aeCreateEventLoop(1024 * 10);
+    thread->pause_clients = listCreate();
     aeCreateTimeEvent(thread->el, 1, showThroughput, (void *)thread, NULL);
     return thread;
 }
 
 static void freeBenchmarkThread(benchmarkThread *thread) {
     if (thread->el) aeDeleteEventLoop(thread->el);
+    listRelease(thread->pause_clients);
     zfree(thread);
 }
 
@@ -1422,9 +1489,9 @@ int parseOptions(int argc, char **argv) {
         } else if (!strcmp(argv[i], "--user")) {
             if (lastarg) goto invalid;
             config.conn_info.user = sdsnew(argv[++i]);
-        } else if (!strcmp(argv[i], "--qps")) {
+        } else if (!strcmp(argv[i], "--rps")) {
             if (lastarg) goto invalid;
-            config.qps = atoi(argv[++i]);
+            config.rps = atoi(argv[++i]);
         } else if (!strcmp(argv[i], "-u") && !lastarg) {
             parseUri(argv[++i], "valkey-benchmark", &config.conn_info, &config.tls);
             if (config.conn_info.hostport < 0 || config.conn_info.hostport > 65535) {
@@ -1844,6 +1911,7 @@ int main(int argc, char **argv) {
     config.loop = 0;
     config.idlemode = 0;
     config.clients = listCreate();
+    config.pause_clients = listCreate();
     config.conn_info.hostip = sdsnew("127.0.0.1");
     config.conn_info.hostport = 6379;
     config.tests = NULL;
@@ -1854,7 +1922,7 @@ int main(int argc, char **argv) {
     config.num_threads = 0;
     config.threads = NULL;
     config.cluster_mode = 0;
-    config.qps = 0;
+    config.rps = 0;
     config.read_from_replica = FROM_PRIMARY_ONLY;
     config.cluster_node_count = 0;
     config.cluster_nodes = NULL;

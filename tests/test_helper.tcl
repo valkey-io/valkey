@@ -213,7 +213,8 @@ proc valkey_deferring_client {args} {
         $client read
     } else {
         # For timing/symmetry with the above select
-        $client ping
+        # that doesn't return error while loading.
+        $client echo goodday
         $client read
     }
     return $client
@@ -232,7 +233,7 @@ proc valkey_client {args} {
     # select the right db and read the response (OK), or at least ping
     # the server if we're in a singledb mode.
     if {$::singledb} {
-        $client ping
+        $client echo hey
     } else {
         $client select 9
     }
@@ -568,8 +569,8 @@ proc send_data_packet {fd status data {elapsed 0}} {
 }
 
 proc print_help_screen {} {
+    #   |-- This is for terminal output, so assume default term width of 80 columns. ---|
     puts [join {
-        # This is for terminal output, so assume default term width of 80 columns. -----|
         "--cluster          Run the cluster tests, by default cluster tests run along"
         "                   with all tests."
         "--moduleapi        Run the module API tests, this option should only be used in"
@@ -624,7 +625,8 @@ proc print_help_screen {} {
         "--ignore-encoding  Don't validate object encoding."
         "--ignore-digest    Don't use debug digest validations."
         "--large-memory     Run tests using over 100mb."
-        "--debug-defrag     Indicate the test is running against server compiled with DEBUG_FORCE_DEFRAG option"
+        "--debug-defrag     Indicate the test is running against server compiled with"
+        "                   DEBUG_FORCE_DEFRAG option."
         "--help             Print this help screen."
     } "\n"]
 }

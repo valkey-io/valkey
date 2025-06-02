@@ -210,6 +210,7 @@ proc test {name code {okpattern undefined} {tags {}}} {
         return
     }
 
+    set old_singledb $::singledb
     set tags [concat $::tags $tags]
     if {![tags_acceptable $tags err]} {
         incr ::num_aborted
@@ -217,6 +218,9 @@ proc test {name code {okpattern undefined} {tags {}}} {
         return
     }
 
+    if {[lsearch $tags singledb] >= 0} {
+        set ::singledb 1
+    }
     incr ::num_tests
     set details {}
     lappend details "$name in $::curfile"
@@ -300,5 +304,6 @@ proc test {name code {okpattern undefined} {tags {}}} {
             send_data_packet $::test_server_fd err "Detected a memory leak in test '$name': $output"
         }
     }
+    set ::singledb $old_singledb
     set ::cur_test $prev_test
 }

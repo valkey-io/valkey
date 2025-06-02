@@ -106,8 +106,9 @@ static int connSocketConnect(connection *conn,
                              const char *addr,
                              int port,
                              const char *src_addr,
+                             int multipath,
                              ConnectionCallbackFunc connect_handler) {
-    int fd = anetTcpNonBlockBestEffortBindConnect(NULL, addr, port, src_addr);
+    int fd = anetTcpNonBlockBestEffortBindConnect(NULL, addr, port, src_addr, multipath);
     if (fd == -1) {
         conn->state = CONN_STATE_ERROR;
         conn->last_errno = errno;

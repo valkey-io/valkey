@@ -1281,6 +1281,10 @@ ssize_t rdbSaveSingleModuleAux(rio *rdb, int when, moduleType *mt) {
              * to allow loading this RDB if the module is not present. */
             sdsfree(io.pre_flush_buffer);
             io.pre_flush_buffer = NULL;
+            if (io.ctx) {
+                moduleFreeContext(io.ctx);
+                zfree(io.ctx);
+            }
             return 0;
         }
     } else {
@@ -1901,8 +1905,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error) {
                 return NULL;
             }
             dec = getDecodedObject(ele);
-            size_t len = sdslen(dec->ptr);
-            quicklistPushTail(o->ptr, dec->ptr, len);
+            quicklistPushTail(o->ptr, dec->ptr, sdslen(dec->ptr));
             decrRefCount(dec);
             decrRefCount(ele);
         }

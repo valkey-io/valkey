@@ -184,12 +184,7 @@ start_server {tags {"cli logreqres:skip"}} {
         assert_equal "\"bar\"" [r get key]
         assert_equal "OK" [run_command $fd "set key \"\tbar\t\""]
         assert_equal "\tbar\t" [r get key]
-
-        # invalid quotation
-        assert_equal "Invalid argument(s)" [run_command $fd "get \"\"key"]
-        assert_equal "Invalid argument(s)" [run_command $fd "get \"key\"x"]
-
-        # quotes after the argument are weird, but should be allowed
+        assert_equal "\"\\tbar\\t\"" [run_command $fd "get \"\"k'e'\"y\""]
         assert_equal "OK" [run_command $fd "set key\"\" bar"]
         assert_equal "bar" [r get key]
     }
@@ -878,5 +873,20 @@ if {!$::tls} { ;# fake_redis_node doesn't support TLS
             set cmdline [valkeycliuri "valkeys://" [srv host] [srv port]]
             assert_equal {PONG} [exec {*}$cmdline PING]
         }
+    }
+
+    test "valkey-cli command table hint will not leak memory when COMMAND fails due to auth" {
+        # Enable auth of server.
+        set fd [open_cli]
+        assert_equal "OK" [run_command $fd "CONFIG SET requirepass 12345"]
+
+        # Using another client to send a command (non-AUTH command), then closing the client.
+        set fd2 [open_cli]
+        assert_match "NOAUTH*" [run_command $fd2 "PING"]
+        close_cli $fd2
+
+        # Disable auth of server.
+        assert_equal "OK" [run_command $fd "CONFIG SET requirepass \"\""]
+        close_cli $fd
     }
 }

@@ -34,7 +34,10 @@
 #include "adlist.h"
 #include "io_threads.h"
 
-#if (USE_OPENSSL == 1 /* BUILD_YES */) || ((USE_OPENSSL == 2 /* BUILD_MODULE */) && (BUILD_TLS_MODULE == 2))
+#if defined(USE_OPENSSL) &&                    \
+    ((USE_OPENSSL == 1 /* BUILD_YES */) ||     \
+     ((USE_OPENSSL == 2 /* BUILD_MODULE */) && \
+      (defined(BUILD_TLS_MODULE) && BUILD_TLS_MODULE == 2)))
 
 #include <openssl/conf.h>
 #include <openssl/ssl.h>
@@ -452,6 +455,14 @@ typedef struct tls_connection {
     size_t last_failed_write_data_len;
 } tls_connection;
 
+/* Fetch the latest OpenSSL error and store it in the connection */
+static void updateTLSError(tls_connection *conn) {
+    conn->c.last_errno = 0;
+    if (conn->ssl_error) zfree(conn->ssl_error);
+    conn->ssl_error = zmalloc(512);
+    ERR_error_string_n(ERR_get_error(), conn->ssl_error, 512);
+}
+
 static connection *createTLSConnection(int client_side) {
     SSL_CTX *ctx = valkey_tls_ctx;
     if (client_side && valkey_tls_client_ctx) ctx = valkey_tls_client_ctx;
@@ -460,19 +471,15 @@ static connection *createTLSConnection(int client_side) {
     conn->c.fd = -1;
     conn->c.iovcnt = IOV_MAX;
     conn->ssl = SSL_new(ctx);
+    if (!conn->ssl) {
+        updateTLSError(conn);
+        conn->c.state = CONN_STATE_ERROR;
+    }
     return (connection *)conn;
 }
 
 static connection *connCreateTLS(void) {
     return createTLSConnection(1);
-}
-
-/* Fetch the latest OpenSSL error and store it in the connection */
-static void updateTLSError(tls_connection *conn) {
-    conn->c.last_errno = 0;
-    if (conn->ssl_error) zfree(conn->ssl_error);
-    conn->ssl_error = zmalloc(512);
-    ERR_error_string_n(ERR_get_error(), conn->ssl_error, 512);
 }
 
 /* Create a new TLS connection that is already associated with
@@ -488,13 +495,8 @@ static connection *connCreateAcceptedTLS(int fd, void *priv) {
     int require_auth = *(int *)priv;
     tls_connection *conn = (tls_connection *)createTLSConnection(0);
     conn->c.fd = fd;
+    if (conn->c.state == CONN_STATE_ERROR) return (connection *)conn;
     conn->c.state = CONN_STATE_ACCEPTING;
-
-    if (!conn->ssl) {
-        updateTLSError(conn);
-        conn->c.state = CONN_STATE_ERROR;
-        return (connection *)conn;
-    }
 
     switch (require_auth) {
     case TLS_CLIENT_AUTH_NO: SSL_set_verify(conn->ssl, SSL_VERIFY_NONE, NULL); break;
@@ -880,6 +882,7 @@ static int connTLSConnect(connection *conn_,
                           const char *addr,
                           int port,
                           const char *src_addr,
+                          int multipath,
                           ConnectionCallbackFunc connect_handler) {
     tls_connection *conn = (tls_connection *)conn_;
     unsigned char addr_buf[sizeof(struct in6_addr)];
@@ -893,7 +896,7 @@ static int connTLSConnect(connection *conn_,
     }
 
     /* Initiate Socket connection first */
-    if (connectionTypeTcp()->connect(conn_, addr, port, src_addr, connect_handler) == C_ERR) return C_ERR;
+    if (connectionTypeTcp()->connect(conn_, addr, port, src_addr, multipath, connect_handler) == C_ERR) return C_ERR;
 
     /* Return now, once the socket is connected we'll initiate
      * TLS connection from the event handler.
@@ -1226,7 +1229,7 @@ int RedisRegisterConnectionTypeTLS(void) {
 
 #endif
 
-#if BUILD_TLS_MODULE == 2 /* BUILD_MODULE */
+#if defined(BUILD_TLS_MODULE) && BUILD_TLS_MODULE == 2 /* BUILD_MODULE */
 
 #include "release.h"
 

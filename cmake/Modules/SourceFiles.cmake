@@ -117,6 +117,9 @@ set(VALKEY_CLI_SRCS
     ${CMAKE_SOURCE_DIR}/src/anet.c
     ${CMAKE_SOURCE_DIR}/src/adlist.c
     ${CMAKE_SOURCE_DIR}/src/dict.c
+    ${CMAKE_SOURCE_DIR}/src/sds.c
+    ${CMAKE_SOURCE_DIR}/src/sha256.c
+    ${CMAKE_SOURCE_DIR}/src/util.c
     ${CMAKE_SOURCE_DIR}/src/valkey-cli.c
     ${CMAKE_SOURCE_DIR}/src/zmalloc.c
     ${CMAKE_SOURCE_DIR}/src/release.c
@@ -137,6 +140,9 @@ set(VALKEY_CLI_SRCS
 set(VALKEY_BENCHMARK_SRCS
     ${CMAKE_SOURCE_DIR}/src/ae.c
     ${CMAKE_SOURCE_DIR}/src/anet.c
+    ${CMAKE_SOURCE_DIR}/src/sds.c
+    ${CMAKE_SOURCE_DIR}/src/sha256.c
+    ${CMAKE_SOURCE_DIR}/src/util.c
     ${CMAKE_SOURCE_DIR}/src/valkey-benchmark.c
     ${CMAKE_SOURCE_DIR}/src/adlist.c
     ${CMAKE_SOURCE_DIR}/src/dict.c

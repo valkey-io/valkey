@@ -94,6 +94,7 @@ typedef struct ConnectionType {
                    const char *addr,
                    int port,
                    const char *source_addr,
+                   int multipath,
                    ConnectionCallbackFunc connect_handler);
     int (*blocking_connect)(struct connection *conn, const char *addr, int port, long long timeout);
     int (*accept)(struct connection *conn, ConnectionCallbackFunc accept_handler);
@@ -188,8 +189,9 @@ static inline int connConnect(connection *conn,
                               const char *addr,
                               int port,
                               const char *src_addr,
+                              int multipath,
                               ConnectionCallbackFunc connect_handler) {
-    return conn->type->connect(conn, addr, port, src_addr, connect_handler);
+    return conn->type->connect(conn, addr, port, src_addr, multipath, connect_handler);
 }
 
 /* Blocking connect.

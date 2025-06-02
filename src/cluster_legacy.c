@@ -72,7 +72,7 @@ int clusterNodeAddReplica(clusterNode *primary, clusterNode *replica);
 int clusterAddSlot(clusterNode *n, int slot);
 int clusterDelSlot(int slot);
 int clusterDelNodeSlots(clusterNode *node);
-int clusterNodeSetSlotBit(clusterNode *n, int slot);
+void clusterNodeSetSlotBit(clusterNode *n, int slot);
 static void clusterSetPrimary(clusterNode *n, int closeSlots, int full_sync_required);
 void clusterHandleReplicaFailover(void);
 void clusterHandleReplicaMigration(int max_replicas);
@@ -126,6 +126,7 @@ int verifyClusterNodeId(const char *name, int length);
 sds clusterEncodeOpenSlotsAuxField(int rdbflags);
 int clusterDecodeOpenSlotsAuxField(int rdbflags, sds s);
 static int nodeExceedsHandshakeTimeout(clusterNode *node, mstime_t now);
+void clusterCommandFlushslot(client *c);
 
 /* Only primaries that own slots have voting rights.
  * Returns 1 if the node has voting rights, otherwise returns 0. */
@@ -323,7 +324,7 @@ int auxShardIdSetter(clusterNode *n, void *value, size_t length) {
 }
 
 sds auxShardIdGetter(clusterNode *n, sds s) {
-    return sdscatprintf(s, "%.40s", n->shard_id);
+    return sdscatlen(s, n->shard_id, CLUSTER_NAMELEN);
 }
 
 int auxShardIdPresent(clusterNode *n) {
@@ -340,7 +341,7 @@ int auxHumanNodenameSetter(clusterNode *n, void *value, size_t length) {
 }
 
 sds auxHumanNodenameGetter(clusterNode *n, sds s) {
-    return sdscatprintf(s, "%s", n->human_nodename);
+    return sdscat(s, n->human_nodename);
 }
 
 int auxHumanNodenamePresent(clusterNode *n) {
@@ -366,7 +367,7 @@ int auxAnnounceClientIpV4Setter(clusterNode *n, void *value, size_t length) {
 }
 
 sds auxAnnounceClientIpV4Getter(clusterNode *n, sds s) {
-    return sdscatprintf(s, "%s", n->announce_client_ipv4);
+    return sdscat(s, n->announce_client_ipv4);
 }
 
 int auxAnnounceClientIpV4Present(clusterNode *n) {
@@ -392,7 +393,7 @@ int auxAnnounceClientIpV6Setter(clusterNode *n, void *value, size_t length) {
 }
 
 sds auxAnnounceClientIpV6Getter(clusterNode *n, sds s) {
-    return sdscatprintf(s, "%s", n->announce_client_ipv6);
+    return sdscat(s, n->announce_client_ipv6);
 }
 
 int auxAnnounceClientIpV6Present(clusterNode *n) {
@@ -411,7 +412,7 @@ int auxTcpPortSetter(clusterNode *n, void *value, size_t length) {
 }
 
 sds auxTcpPortGetter(clusterNode *n, sds s) {
-    return sdscatprintf(s, "%d", n->tcp_port);
+    return sdscatfmt(s, "%i", n->tcp_port);
 }
 
 int auxTcpPortPresent(clusterNode *n) {
@@ -430,7 +431,7 @@ int auxTlsPortSetter(clusterNode *n, void *value, size_t length) {
 }
 
 sds auxTlsPortGetter(clusterNode *n, sds s) {
-    return sdscatprintf(s, "%d", n->tls_port);
+    return sdscatfmt(s, "%i", n->tls_port);
 }
 
 int auxTlsPortPresent(clusterNode *n) {
@@ -811,10 +812,7 @@ int clusterLoadConfig(char *filename) {
     return C_OK;
 
 fmterr:
-    serverLog(LL_WARNING, "Unrecoverable error: corrupted cluster config file \"%s\".", line);
-    zfree(line);
-    if (fp) fclose(fp);
-    exit(1);
+    serverPanic("Unrecoverable error: corrupted cluster config file \"%s\".", line);
 }
 
 /* Cluster node configuration is exactly the same as CLUSTER NODES output.
@@ -1085,6 +1083,27 @@ static void updateAnnouncedClientIpV6(clusterNode *node, char *value) {
 }
 
 static void updateShardId(clusterNode *node, const char *shard_id) {
+    /* Ensure replica shard IDs match their primary's to maintain cluster consistency.
+     *
+     * Shard ID updates must prioritize the primary, then propagate to replicas.
+     * This is critical due to the eventual consistency of shard IDs during cluster
+     * expansion. New replicas might replicate from a primary before fully
+     * synchronizing shard IDs with the rest of the cluster.
+     *
+     * Without this enforcement, a temporary inconsistency can arise where a
+     * replica's shard ID diverges from its primary's. This inconsistency is
+     * persisted in the primary's nodes.conf file. While this divergence will
+     * eventually resolve, if the primary crashes beforehand, it will enter a
+     * crash-restart loop due to the mismatch in its nodes.conf. */
+    if (shard_id && nodeIsReplica(node) &&
+        memcmp(clusterNodeGetPrimary(node)->shard_id, shard_id, CLUSTER_NAMELEN) != 0) {
+        serverLog(
+            LL_NOTICE,
+            "Shard id %.40s update request for node id %.40s diverges from existing primary shard id %.40s, rejecting!",
+            shard_id, node->name, clusterNodeGetPrimary(node)->shard_id);
+        return;
+    }
+
     if (shard_id && memcmp(node->shard_id, shard_id, CLUSTER_NAMELEN) != 0) {
         clusterRemoveNodeFromShard(node);
         memcpy(node->shard_id, shard_id, CLUSTER_NAMELEN);
@@ -1353,7 +1372,7 @@ void clusterReset(int hard) {
     if (nodeIsReplica(myself)) {
         clusterSetNodeAsPrimary(myself);
         replicationUnsetPrimary();
-        flushAllDataAndResetRDB(server.repl_replica_lazy_flush ? EMPTYDB_ASYNC : EMPTYDB_NO_FLAGS);
+        flushAllDataAndResetRDB(server.lazyfree_lazy_user_flush ? EMPTYDB_ASYNC : EMPTYDB_NO_FLAGS);
     }
 
     /* Close slots, reset manual failover state. */
@@ -1530,10 +1549,9 @@ static void clusterConnAcceptHandler(connection *conn) {
     connSetReadHandler(conn, clusterReadHandler);
 }
 
-#define MAX_CLUSTER_ACCEPTS_PER_CALL 1000
 void clusterAcceptHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
     int cport, cfd;
-    int max = MAX_CLUSTER_ACCEPTS_PER_CALL;
+    int max = server.tls_cluster ? server.max_new_tls_conns_per_cycle : server.max_new_conns_per_cycle;
     char cip[NET_IP_STR_LEN];
     int require_auth = TLS_CLIENT_AUTH_YES;
     UNUSED(el);
@@ -1660,10 +1678,11 @@ int clusterNodeAddFailureReport(clusterNode *failing, clusterNode *sender) {
     /* If a failure report from the same sender already exists, just update
      * the timestamp. */
     listRewind(l, &li);
+    mstime_t now = mstime();
     while ((ln = listNext(&li)) != NULL) {
         fr = ln->value;
         if (fr->node == sender) {
-            fr->time = mstime();
+            fr->time = now;
             return 0;
         }
     }
@@ -1671,7 +1690,7 @@ int clusterNodeAddFailureReport(clusterNode *failing, clusterNode *sender) {
     /* Otherwise create a new report. */
     fr = zmalloc(sizeof(*fr));
     fr->node = sender;
-    fr->time = mstime();
+    fr->time = now;
     listAddNodeTail(l, fr);
     return 1;
 }
@@ -2129,11 +2148,12 @@ void clusterBlacklistAddNode(clusterNode *node) {
 /* Return non-zero if the specified node ID exists in the blacklist.
  * You don't need to pass an sds string here, any pointer to 40 bytes
  * will work. */
-int clusterBlacklistExists(char *nodeid) {
-    sds id = sdsnewlen(nodeid, CLUSTER_NAMELEN);
+int clusterBlacklistExists(char *nodeid, size_t len) {
+    sds id = sdsnewlen(nodeid, len);
     int retval;
 
     clusterBlacklistCleanup();
+
     retval = dictFind(server.cluster->nodes_black_list, id) != NULL;
     sdsfree(id);
     return retval;
@@ -2469,7 +2489,7 @@ void clusterProcessGossipSection(clusterMsg *hdr, clusterLink *link) {
              * Note that we require that the sender of this gossip message
              * is a well known node in our cluster, otherwise we risk
              * joining another cluster. */
-            if (sender && !(flags & CLUSTER_NODE_NOADDR) && !clusterBlacklistExists(g->nodename)) {
+            if (sender && !(flags & CLUSTER_NODE_NOADDR) && !clusterBlacklistExists(g->nodename, CLUSTER_NAMELEN)) {
                 clusterNode *node;
                 node = createClusterNode(g->nodename, flags);
                 memcpy(node->ip, g->ip, NET_IP_STR_LEN);
@@ -2858,7 +2878,7 @@ void clusterUpdateSlotsConfigWith(clusterNode *sender, uint64_t senderConfigEpoc
         for (int j = 0; j < dirty_slots_count; j++) {
             serverLog(LL_NOTICE, "Deleting keys in dirty slot %d on node %.40s (%s) in shard %.40s", dirty_slots[j],
                       myself->name, myself->human_nodename, myself->shard_id);
-            delKeysInSlot(dirty_slots[j]);
+            delKeysInSlot(dirty_slots[j], server.lazyfree_lazy_server_del, true, false);
         }
     }
     if (exporting_slots_count) {
@@ -3201,7 +3221,7 @@ int clusterIsValidPacket(clusterLink *link) {
         if (hdr->mflags[0] & CLUSTERMSG_FLAG0_EXT_DATA) {
             clusterMsgPingExt *ext = getInitialPingExt(hdr, count);
             while (extensions--) {
-                uint16_t extlen = getPingExtLength(ext);
+                uint32_t extlen = getPingExtLength(ext);
                 if (extlen % 8 != 0) {
                     serverLog(LL_WARNING, "Received a %s packet without proper padding (%d bytes)",
                               clusterGetMessageTypeString(type), (int)extlen);
@@ -3539,6 +3559,7 @@ int clusterProcessPacket(clusterLink *link) {
                  * the clients, and the replica will never initiate a failover since the
                  * node is not actually in FAIL state. */
                 if (!nodeFailed(noaddr_node)) {
+                    noaddr_node->flags &= ~CLUSTER_NODE_PFAIL;
                     noaddr_node->flags |= CLUSTER_NODE_FAIL;
                     noaddr_node->fail_time = now;
                     clusterSendFail(noaddr_node->name);
@@ -3600,14 +3621,17 @@ int clusterProcessPacket(clusterLink *link) {
                     /* Primary turned into a replica! Reconfigure the node. */
                     if (sender_claimed_primary && areInSameShard(sender_claimed_primary, sender)) {
                         /* `sender` was a primary and was in the same shard as its new primary */
-                        if (sender->configEpoch > sender_claimed_config_epoch) {
+                        if (nodeEpoch(sender_claimed_primary) > sender_claimed_config_epoch) {
                             serverLog(LL_NOTICE,
                                       "Ignore stale message from %.40s (%s) in shard %.40s;"
                                       " gossip config epoch: %llu, current config epoch: %llu",
                                       sender->name, sender->human_nodename, sender->shard_id,
                                       (unsigned long long)sender_claimed_config_epoch,
-                                      (unsigned long long)sender->configEpoch);
-                        } else {
+                                      (unsigned long long)nodeEpoch(sender_claimed_primary));
+                            /* This packet is stale so we avoid processing it anymore. Otherwise
+                             * this may cause a primary-replica chain issue. */
+                            return 1;
+                        } else if (nodeIsReplica(sender_claimed_primary)) {
                             /* `primary` is still a `replica` in this observer node's view;
                              * update its role and configEpoch */
                             clusterSetNodeAsPrimary(sender_claimed_primary);
@@ -5320,7 +5344,7 @@ static int clusterNodeCronHandleReconnect(clusterNode *node, mstime_t now) {
         clusterLink *link = createClusterLink(node);
         link->conn = connCreate(connTypeOfCluster());
         connSetPrivateData(link->conn, link);
-        if (connConnect(link->conn, node->ip, node->cport, server.bind_source_addr, clusterLinkConnectHandler) ==
+        if (connConnect(link->conn, node->ip, node->cport, server.bind_source_addr, 0, clusterLinkConnectHandler) ==
             C_ERR) {
             /* We got a synchronous error from connect before
              * clusterSendPing() had a chance to be called.
@@ -5639,10 +5663,8 @@ int clusterPrimariesHaveReplicas(void) {
     return replicas != 0;
 }
 
-/* Set the slot bit and return the old value. */
-int clusterNodeSetSlotBit(clusterNode *n, int slot) {
-    int old = bitmapTestBit(n->slots, slot);
-    if (!old) {
+void clusterNodeSetSlotBit(clusterNode *n, int slot) {
+    if (!bitmapTestBit(n->slots, slot)) {
         bitmapSetBit(n->slots, slot);
         n->numslots++;
         /* When a primary gets its first slot, even if it has no replicas,
@@ -5660,7 +5682,6 @@ int clusterNodeSetSlotBit(clusterNode *n, int slot) {
          * See https://github.com/redis/redis/issues/3043 for more info. */
         if (n->numslots == 1 && clusterPrimariesHaveReplicas()) n->flags |= CLUSTER_NODE_MIGRATE_TO;
     }
-    return old;
 }
 
 /* Clear the slot bit and return the old value. */
@@ -5894,11 +5915,6 @@ int verifyClusterConfigWithData(void) {
      * completely depend on the replication stream. */
     if (nodeIsReplica(myself)) return C_OK;
 
-    /* Make sure we only have keys in DB0. */
-    for (j = 1; j < server.dbnum; j++) {
-        if (kvstoreSize(server.db[j].keys)) return C_ERR;
-    }
-
     /* Check that all the slots we see populated memory have a corresponding
      * entry in the cluster table. Otherwise fix the table. */
     for (j = 0; j < CLUSTER_SLOTS; j++) {
@@ -5935,7 +5951,7 @@ int verifyClusterConfigWithData(void) {
                           server.cluster->importing_slots_from[j]->shard_id, j, server.cluster->slots[j]->name,
                           server.cluster->slots[j]->human_nodename, server.cluster->slots[j]->shard_id);
             }
-            delKeysInSlot(j);
+            delKeysInSlot(j, server.lazyfree_lazy_server_del, true, false);
         }
     }
     if (update_config) clusterSaveConfigOrDie(1);
@@ -6069,7 +6085,7 @@ sds clusterGenNodeDescription(client *c, clusterNode *node, int tls_primary) {
                 continue;
             }
             if (auxFieldHandlers[i].isPresent(node)) {
-                ci = sdscatprintf(ci, ",%s=", auxFieldHandlers[i].field);
+                ci = sdscatfmt(ci, ",%s=", auxFieldHandlers[i].field);
                 ci = auxFieldHandlers[i].getter(node, ci);
             }
         }
@@ -6121,9 +6137,13 @@ sds clusterGenNodeDescription(client *c, clusterNode *node, int tls_primary) {
     if (node->flags & CLUSTER_NODE_MYSELF) {
         for (j = 0; j < CLUSTER_SLOTS; j++) {
             if (server.cluster->migrating_slots_to[j]) {
-                ci = sdscatprintf(ci, " [%d->-%.40s]", j, server.cluster->migrating_slots_to[j]->name);
+                ci = sdscatfmt(ci, " [%i->-", j);
+                ci = sdscatlen(ci, server.cluster->migrating_slots_to[j]->name, CLUSTER_NAMELEN);
+                ci = sdscat(ci, "]");
             } else if (server.cluster->importing_slots_from[j]) {
-                ci = sdscatprintf(ci, " [%d-<-%.40s]", j, server.cluster->importing_slots_from[j]->name);
+                ci = sdscatfmt(ci, " [%i-<-", j);
+                ci = sdscatlen(ci, server.cluster->importing_slots_from[j]->name, CLUSTER_NAMELEN);
+                ci = sdscat(ci, "]");
             }
         }
     }
@@ -6492,18 +6512,42 @@ sds genClusterInfoString(void) {
         }
     }
 
+    dictIterator *di = dictGetIterator(server.cluster->nodes);
+    dictEntry *de;
+    unsigned nodes_pfail = 0, nodes_fail = 0, voting_nodes_pfail = 0, voting_nodes_fail = 0;
+    while ((de = dictNext(di)) != NULL) {
+        clusterNode *node = dictGetVal(de);
+        if (nodeTimedOut(node)) {
+            nodes_pfail++;
+            if (clusterNodeIsVotingPrimary(node)) {
+                voting_nodes_pfail++;
+            }
+        }
+        if (nodeFailed(node)) {
+            nodes_fail++;
+            if (clusterNodeIsVotingPrimary(node)) {
+                voting_nodes_fail++;
+            }
+        }
+    }
+    dictReleaseIterator(di);
+
     info = sdscatprintf(info,
                         "cluster_state:%s\r\n"
                         "cluster_slots_assigned:%d\r\n"
                         "cluster_slots_ok:%d\r\n"
                         "cluster_slots_pfail:%d\r\n"
                         "cluster_slots_fail:%d\r\n"
+                        "cluster_nodes_pfail:%u\r\n"
+                        "cluster_nodes_fail:%u\r\n"
+                        "cluster_voting_nodes_pfail:%u\r\n"
+                        "cluster_voting_nodes_fail:%u\r\n"
                         "cluster_known_nodes:%lu\r\n"
                         "cluster_size:%d\r\n"
                         "cluster_current_epoch:%llu\r\n"
                         "cluster_my_epoch:%llu\r\n",
                         statestr[server.cluster->state], slots_assigned, slots_ok, slots_pfail, slots_fail,
-                        dictSize(server.cluster->nodes), server.cluster->size,
+                        nodes_pfail, nodes_fail, voting_nodes_pfail, voting_nodes_fail, dictSize(server.cluster->nodes), server.cluster->size,
                         (unsigned long long)server.cluster->currentEpoch, (unsigned long long)nodeEpoch(myself));
 
     /* Show stats about messages sent and received. */
@@ -6563,39 +6607,52 @@ unsigned int propagateSlotDeletionByKeys(unsigned int hashslot) {
 
 /* Remove all the keys in the specified hash slot.
  * The number of removed items is returned. */
-unsigned int delKeysInSlot(unsigned int hashslot) {
+unsigned int delKeysInSlot(unsigned int hashslot, int lazy, bool propagate_del, bool send_del_event) {
     if (!countKeysInSlot(hashslot)) return 0;
 
     /* We may lose a slot during the pause. We need to track this
      * state so that we don't assert in propagateNow(). */
     server.server_del_keys_in_slot = 1;
     unsigned int j = 0;
+    int before_execution_nesting = server.execution_nesting;
 
-    kvstoreHashtableIterator *kvs_di = NULL;
-    void *next;
-    kvs_di = kvstoreGetHashtableIterator(server.db->keys, hashslot, HASHTABLE_ITER_SAFE);
-    while (kvstoreHashtableIteratorNext(kvs_di, &next)) {
-        robj *valkey = next;
-        enterExecutionUnit(1, 0);
-        sds sdskey = objectGetKey(valkey);
-        robj *key = createStringObject(sdskey, sdslen(sdskey));
-        dbDelete(&server.db[0], key);
-        propagateDeletion(&server.db[0], key, server.lazyfree_lazy_server_del);
-        signalModifiedKey(NULL, &server.db[0], key);
-        /* The keys are not actually logically deleted from the database, just moved to another node.
-         * The modules needs to know that these keys are no longer available locally, so just send the
-         * keyspace notification to the modules, but not to clients. */
-        moduleNotifyKeyspaceEvent(NOTIFY_GENERIC, "del", key, server.db[0].id);
-        exitExecutionUnit();
-        postExecutionUnitOperations();
-        decrRefCount(key);
-        j++;
-        server.dirty++;
+    for (int i = 0; i < server.dbnum; i++) {
+        kvstoreHashtableIterator *kvs_di = NULL;
+        void *next;
+        serverDb db = server.db[i];
+        kvs_di = kvstoreGetHashtableIterator(db.keys, hashslot, HASHTABLE_ITER_SAFE);
+        while (kvstoreHashtableIteratorNext(kvs_di, &next)) {
+            robj *valkey = next;
+            enterExecutionUnit(1, 0);
+            sds sdskey = objectGetKey(valkey);
+            robj *key = createStringObject(sdskey, sdslen(sdskey));
+            if (lazy) {
+                dbAsyncDelete(&db, key);
+            } else {
+                dbSyncDelete(&db, key);
+            }
+            // if is command, skip del propagate
+            if (propagate_del) propagateDeletion(&db, key, lazy);
+            signalModifiedKey(NULL, &db, key);
+            if (send_del_event) {
+                /* In the `cluster flushslot` scenario, the keys are actually deleted so notify everyone. */
+                notifyKeyspaceEvent(NOTIFY_GENERIC, "del", key, db.id);
+            } else {
+                /* The keys are not actually logically deleted from the database, just moved to another node.
+                 * The modules needs to know that these keys are no longer available locally, so just send the
+                 * keyspace notification to the modules, but not to clients. */
+                moduleNotifyKeyspaceEvent(NOTIFY_GENERIC, "del", key, db.id);
+            }
+            exitExecutionUnit();
+            postExecutionUnitOperations();
+            decrRefCount(key);
+            j++;
+            server.dirty++;
+        }
+        kvstoreReleaseHashtableIterator(kvs_di);
     }
-    kvstoreReleaseHashtableIterator(kvs_di);
-
     server.server_del_keys_in_slot = 0;
-    serverAssert(server.execution_nesting == 0);
+    serverAssert(server.execution_nesting == before_execution_nesting);
     return j;
 }
 
@@ -7071,7 +7128,7 @@ int clusterCommandSpecial(client *c) {
         }
     } else if (!strcasecmp(c->argv[1]->ptr, "flushslots") && c->argc == 2) {
         /* CLUSTER FLUSHSLOTS */
-        if (kvstoreSize(server.db[0].keys) != 0) {
+        if (!dbHasNoKeys()) {
             addReplyError(c, "DB must be empty to perform CLUSTER FLUSHSLOTS.");
             return 1;
         }
@@ -7167,7 +7224,7 @@ int clusterCommandSpecial(client *c) {
         /* CLUSTER FORGET <NODE ID> */
         clusterNode *n = clusterLookupNode(c->argv[2]->ptr, sdslen(c->argv[2]->ptr));
         if (!n) {
-            if (clusterBlacklistExists((char *)c->argv[2]->ptr))
+            if (clusterBlacklistExists((char *)c->argv[2]->ptr, sdslen(c->argv[2]->ptr)))
                 /* Already forgotten. The deletion may have been gossipped by
                  * another node, so we pretend it succeeded. */
                 addReply(c, shared.ok);
@@ -7241,7 +7298,7 @@ int clusterCommandSpecial(client *c) {
         /* If the instance is currently a primary, it should have no assigned
          * slots nor keys to accept to replicate some other node.
          * Replicas can switch to another primary without issues. */
-        if (clusterNodeIsPrimary(myself) && (myself->numslots != 0 || kvstoreSize(server.db[0].keys) != 0)) {
+        if (clusterNodeIsPrimary(myself) && (myself->numslots != 0 || !dbHasNoKeys())) {
             addReplyError(c, "To set a master the node must be empty and "
                              "without assigned slots.");
             return 1;
@@ -7393,7 +7450,7 @@ int clusterCommandSpecial(client *c) {
 
         /* Replicas can be reset while containing data, but not primary nodes
          * that must be empty. */
-        if (clusterNodeIsPrimary(myself) && kvstoreSize(c->db->keys) != 0) {
+        if (clusterNodeIsPrimary(myself) && !dbHasNoKeys()) {
             addReplyError(c, "CLUSTER RESET can't be called with "
                              "master nodes containing keys");
             return 1;
@@ -7406,6 +7463,9 @@ int clusterCommandSpecial(client *c) {
     } else if (!strcasecmp(c->argv[1]->ptr, "links") && c->argc == 2) {
         /* CLUSTER LINKS */
         addReplyClusterLinksDescription(c);
+    } else if (!strcasecmp(c->argv[1]->ptr, "flushslot") && (c->argc == 3 || c->argc == 4)) {
+        /* CLUSTER FLUSHSLOT <slot> [ASYNC|SYNC] */
+        clusterCommandFlushslot(c);
     } else if (!strcasecmp(c->argv[1]->ptr, "import") && c->argc > 3 && c->argc % 2 == 1) {
         /* CLUSTER IMPORT SLOTSRANGE <start slot> <end slot> [<start slot> <end slot> ...] */
         clusterCommandImport(c, /*one_shot=*/1);
@@ -7628,6 +7688,5 @@ int clusterDecodeOpenSlotsAuxField(int rdbflags, sds s) {
             server.cluster->migrating_slots_to[slot] = node;
         }
     }
-
     return C_OK;
 }

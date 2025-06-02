@@ -1,6 +1,7 @@
 #ifndef __CLUSTER_H
 #define __CLUSTER_H
 
+#include <stdbool.h>
 /*-----------------------------------------------------------------------------
  * Cluster exported API.
  *----------------------------------------------------------------------------*/
@@ -125,6 +126,7 @@ int detectAndUpdateCachedNodeHealth(void);
 client *createCachedResponseClient(int resp);
 void deleteCachedResponseClient(client *recording_client);
 void clearCachedClusterSlotsResponse(void);
+unsigned int countKeysInSlotForDb(unsigned int hashslot, serverDb *db);
 unsigned int countKeysInSlot(unsigned int hashslot);
 int getSlotOrReply(client *c, robj *o);
 int getSlotOrError(robj *o, sds *err);
@@ -146,8 +148,8 @@ int isNodeAvailable(clusterNode *node);
 long long getNodeReplicationOffset(clusterNode *node);
 sds aggregateClientOutputBuffer(client *c);
 void resetClusterStats(void);
+unsigned int delKeysInSlot(unsigned int hashslot, int lazy, bool propagate_del, bool send_del_event);
 
-unsigned int delKeysInSlot(unsigned int hashslot);
 unsigned int propagateSlotDeletionByKeys(unsigned int hashslot);
 void clusterUpdateState(void);
 void clusterSaveConfigOrDie(int do_fsync);
@@ -156,15 +158,15 @@ int clusterAddSlot(clusterNode *n, int slot);
 int clusterBumpConfigEpochWithoutConsensus(void);
 void clusterDoBeforeSleep(int flags);
 
-void clusterHandleSlotImportLinkClientClose(void *o);
-void clusterHandleSlotExportLinkClientClose(void *o);
-void clusterHandleSlotImportLinkClientOOM(void *o);
+int isImportSlotMigrationLink(void *o);
+void clusterHandleSlotMigrationLinkClientClose(void *o);
+void clusterHandleSlotMigrationLinkClientOOM(void *o);
 void clusterFeedSlotExportLinks(int dbid, robj **argv, int argc);
 int clusterIsSlotImporting(int slot);
 int clusterIsSlotExporting(int slot);
 int clusterIsAnySlotImporting(void);
 int clusterIsAnySlotExporting(void);
-int clusterIsSlotExportReadyForReplData(client *c);
+int clusterSlotMigrationShouldInstallWriteHandler(client *c);
 void initClusterSlotMigrationLinkList(void);
 void clusterSlotMigrationCron(void);
 void clusterCommandImport(client *c, int prepare_only);

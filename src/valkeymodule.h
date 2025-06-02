@@ -878,6 +878,8 @@ typedef struct ValkeyModuleScriptingEngineCallableLazyEvalReset {
  *
  * - `code`: string pointer to the source code.
  *
+ * - `code_len`: The length of the code string.
+ *
  * - `timeout`: timeout for the library creation (0 for no timeout).
  *
  * - `out_num_compiled_functions`: out param with the number of objects
@@ -889,6 +891,18 @@ typedef struct ValkeyModuleScriptingEngineCallableLazyEvalReset {
  * occurred.
  */
 typedef ValkeyModuleScriptingEngineCompiledFunction **(*ValkeyModuleScriptingEngineCompileCodeFunc)(
+    ValkeyModuleCtx *module_ctx,
+    ValkeyModuleScriptingEngineCtx *engine_ctx,
+    ValkeyModuleScriptingEngineSubsystemType type,
+    const char *code,
+    size_t code_len,
+    size_t timeout,
+    size_t *out_num_compiled_functions,
+    ValkeyModuleString **err);
+
+/* Version one of source code compilation interface. This API does not allow the compiler to
+ * safely handle binary data. You should use a newer version of the API if possible. */
+typedef ValkeyModuleScriptingEngineCompiledFunctionV1 **(*ValkeyModuleScriptingEngineCompileCodeFuncV1)(
     ValkeyModuleCtx *module_ctx,
     ValkeyModuleScriptingEngineCtx *engine_ctx,
     ValkeyModuleScriptingEngineSubsystemType type,
@@ -985,7 +999,7 @@ typedef ValkeyModuleScriptingEngineMemoryInfo (*ValkeyModuleScriptingEngineGetMe
     ValkeyModuleScriptingEngineSubsystemType type);
 
 /* Current ABI version for scripting engine modules. */
-#define VALKEYMODULE_SCRIPTING_ENGINE_ABI_VERSION 1UL
+#define VALKEYMODULE_SCRIPTING_ENGINE_ABI_VERSION 2UL
 
 typedef struct ValkeyModuleScriptingEngineMethods {
     uint64_t version; /* Version of this structure for ABI compat. */
@@ -993,8 +1007,10 @@ typedef struct ValkeyModuleScriptingEngineMethods {
     /* Compile code function callback. When a new script is loaded, this
      * callback will be called with the script code, compiles it, and returns a
      * list of `ValkeyModuleScriptingEngineCompiledFunc` objects. */
-    ValkeyModuleScriptingEngineCompileCodeFunc compile_code;
-
+    union {
+        ValkeyModuleScriptingEngineCompileCodeFuncV1 compile_code_v1;
+        ValkeyModuleScriptingEngineCompileCodeFunc compile_code;
+    };
     /* Function callback to free the memory of a registered engine function. */
     ValkeyModuleScriptingEngineFreeFunctionFunc free_function;
 

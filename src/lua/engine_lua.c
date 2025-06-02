@@ -195,6 +195,7 @@ static compiledFunction **luaEngineCompileCode(ValkeyModuleCtx *module_ctx,
                                                engineCtx *engine_ctx,
                                                subsystemType type,
                                                const char *code,
+                                               size_t code_len,
                                                size_t timeout,
                                                size_t *out_num_compiled_functions,
                                                robj **err) {
@@ -207,7 +208,7 @@ static compiledFunction **luaEngineCompileCode(ValkeyModuleCtx *module_ctx,
     if (type == VMSE_EVAL) {
         lua_State *lua = lua_engine_ctx->eval_lua;
 
-        if (luaL_loadbuffer(lua, code, strlen(code), "@user_script")) {
+        if (luaL_loadbuffer(lua, code, code_len, "@user_script")) {
             sds error = sdscatfmt(sdsempty(), "Error compiling script (new function): %s", lua_tostring(lua, -1));
             *err = createObject(OBJ_STRING, error);
             lua_pop(lua, 1);

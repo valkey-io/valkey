@@ -60,9 +60,26 @@ start_server {tags {"protocol network"}} {
         assert_error "*wrong*arguments*ping*" {r ping x y z}
     }
 
-    test "Unbalanced number of quotes" {
+    test "Mixing quoted and unquoted strings" {
         reconnect
-        r write "set \"\"\"test-key\"\"\" test-value\r\n"
+        r write "set \"\"\"tes\"t-'k'e\"y\" \"test\"'-'value\r\n"
+        r write "get test'-'key\r\n"
+        r flush
+        assert_equal "OK" [r read]
+        assert_equal "test-value" [r read]
+    }
+
+    test "Unbalanced single quotes" {
+        reconnect
+        r write "set foo 'b'a'r\r\n"
+        r write "ping\r\n"
+        r flush
+        assert_error "*unbalanced*" {r read}
+    }
+
+    test "Unbalanced double quotes" {
+        reconnect
+        r write "set foo \"b\"a\"r\r\n"
         r write "ping\r\n"
         r flush
         assert_error "*unbalanced*" {r read}

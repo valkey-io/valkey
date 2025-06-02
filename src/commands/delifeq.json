@@ -1,0 +1,60 @@
+{
+    "DELIFEQ": {
+        "summary": "Delete key if value matches string.",
+        "complexity": "O(1)",
+        "group": "string",
+        "since": "9.0.0",
+        "arity": 3,
+        "function": "delifeqCommand",
+        "command_flags": [
+            "FAST",
+            "WRITE"
+        ],
+        "acl_categories": [
+            "STRING"
+        ],
+        "key_specs": [
+            {
+                "flags": [
+                    "RM",
+                    "DELETE"
+                ],
+                "begin_search": {
+                    "index": {
+                        "pos": 1
+                    }
+                },
+                "find_keys": {
+                    "range": {
+                        "lastkey": 0,
+                        "step": 1,
+                        "limit": 0
+                    }
+                }
+            }
+        ],
+        "reply_schema": {
+            "oneOf": [
+                {
+                    "description": "The key was not deleted.",
+                    "const": 0
+                },
+                {
+                    "description": "The key was deleted.",
+                    "const": 1
+                }
+            ]
+        },
+        "arguments": [
+          {
+              "name": "key",
+              "type": "key",
+              "key_spec_index": 0
+          },
+          {
+              "name": "value",
+              "type": "string"
+          }
+        ]
+    }
+}

@@ -377,8 +377,8 @@ void dictListDestructor(void *val) {
     listRelease((list *)val);
 }
 
-void dictDictDestructor(void *val) {
-    dictRelease((dict *)val);
+void dictHashtableDestructor(void *val) {
+    hashtableRelease((hashtable *)val);
 }
 
 /* Returns 1 when keys match */
@@ -448,14 +448,14 @@ uint64_t dictCStrCaseHash(const void *key) {
     return dictGenCaseHashFunction((unsigned char *)key, strlen((char *)key));
 }
 
-/* Dict hash function for client */
-uint64_t dictClientHash(const void *key) {
+/* Hash function for client */
+uint64_t hashtableClientHash(const void *key) {
     return ((client *)key)->id;
 }
 
-/* Dict compare function for client */
-int dictClientKeyCompare(const void *key1, const void *key2) {
-    return ((client *)key1)->id == ((client *)key2)->id;
+/* Hashtable compare function for client, 0 means equal. */
+int hashtableClientKeyCompare(const void *key1, const void *key2) {
+    return ((client *)key1)->id != ((client *)key2)->id;
 }
 
 /* Dict compare function for null terminated string */
@@ -488,6 +488,11 @@ int dictEncObjKeyCompare(const void *key1, const void *key2) {
     if (o1->refcount != OBJ_STATIC_REFCOUNT) decrRefCount(o1);
     if (o2->refcount != OBJ_STATIC_REFCOUNT) decrRefCount(o2);
     return cmp;
+}
+
+/* Returns 0 when keys match */
+int hashtableEncObjKeyCompare(const void *key1, const void *key2) {
+    return !dictEncObjKeyCompare(key1, key2);
 }
 
 uint64_t dictEncObjHash(const void *key) {
@@ -557,6 +562,13 @@ dictType objectKeyHeapPointerValueDictType = {
     dictObjectDestructor, /* key destructor */
     dictVanillaFree,      /* val destructor */
     NULL                  /* allow to expand */
+};
+
+/* Generic hashtable type: set of robj elements */
+hashtableType objectHashtableType = {
+    .hashFunction = dictEncObjHash,
+    .keyCompare = hashtableEncObjKeyCompare,
+    .entryDestructor = dictObjectDestructor,
 };
 
 /* Set hashtable type. Items are SDS strings */
@@ -685,29 +697,29 @@ dictType keylistDictType = {
     NULL                  /* allow to expand */
 };
 
-/* KeyDict hash table type has unencoded Objects as keys and
- * dicts as values. It's used for PUBSUB command to track clients subscribing the patterns. */
-dictType objToDictDictType = {
-    dictObjHash,          /* hash function */
-    NULL,                 /* key dup */
-    dictObjKeyCompare,    /* key compare */
-    dictObjectDestructor, /* key destructor */
-    dictDictDestructor,   /* val destructor */
-    NULL                  /* allow to expand */
+/* objToHashtableDictType has unencoded Objects as keys and
+ * hashtables as values. It's used for PUBSUB command to track clients subscribing the patterns. */
+dictType objToHashtableDictType = {
+    dictObjHash,             /* hash function */
+    NULL,                    /* key dup */
+    dictObjKeyCompare,       /* key compare */
+    dictObjectDestructor,    /* key destructor */
+    dictHashtableDestructor, /* val destructor */
+    NULL                     /* allow to expand */
 };
 
 /* Callback used for hash tables where the entries are dicts and the key
  * (channel name) is stored in each dict's metadata. */
-const void *hashtableChannelsDictGetKey(const void *entry) {
-    const dict *d = entry;
-    return *((const void **)dictMetadata(d));
+const void *hashtableChannelsGetKey(const void *entry) {
+    hashtable *ht = (hashtable *)entry;
+    return *((const void **)hashtableMetadata(ht));
 }
 
-void hashtableChannelsDictDestructor(void *entry) {
-    dict *d = entry;
-    robj *channel = *((void **)dictMetadata(d));
+void hashtableChannelsDestructor(void *entry) {
+    hashtable *ht = entry;
+    robj *channel = *((void **)hashtableMetadata(ht));
     decrRefCount(channel);
-    dictRelease(d);
+    hashtableRelease(ht);
 }
 
 /* Similar to objToDictDictType, but changed to hashtable and added some kvstore
@@ -715,10 +727,10 @@ void hashtableChannelsDictDestructor(void *entry) {
  * channels. The elements are dicts where the keys are clients. The metadata in
  * each dict stores a pointer to the channel name. */
 hashtableType kvstoreChannelHashtableType = {
-    .entryGetKey = hashtableChannelsDictGetKey,
+    .entryGetKey = hashtableChannelsGetKey,
     .hashFunction = dictObjHash,
     .keyCompare = hashtableObjKeyCompare,
-    .entryDestructor = hashtableChannelsDictDestructor,
+    .entryDestructor = hashtableChannelsDestructor,
     .rehashingStarted = kvstoreHashtableRehashingStarted,
     .rehashingCompleted = kvstoreHashtableRehashingCompleted,
     .trackMemUsage = kvstoreHashtableTrackMemUsage,
@@ -779,18 +791,15 @@ dictType sdsHashDictType = {
     NULL                   /* allow to expand */
 };
 
-size_t clientSetDictTypeMetadataBytes(dict *d) {
-    UNUSED(d);
+size_t clientHashtableTypeMetadataSize(void) {
     return sizeof(void *);
 }
 
-/* Client Set dictionary type. Keys are client, values are not used. */
-dictType clientDictType = {
-    dictClientHash,       /* hash function */
-    NULL,                 /* key dup */
-    dictClientKeyCompare, /* key compare */
-    .dictMetadataBytes = clientSetDictTypeMetadataBytes,
-    .no_value = 1 /* no values in this dict */
+/* Hashtable type: set of clients, with a metadata field to store one pointer. */
+hashtableType clientHashtableType = {
+    .hashFunction = hashtableClientHash,
+    .keyCompare = hashtableClientKeyCompare,
+    .getMetadataSize = clientHashtableTypeMetadataSize,
 };
 
 /* This function is called once a background process of some kind terminates,
@@ -2635,10 +2644,10 @@ int listenToPort(connListener *sfd) {
         if (optional) addr++;
         if (strchr(addr, ':')) {
             /* Bind IPv6 address. */
-            sfd->fd[sfd->count] = anetTcp6Server(server.neterr, port, addr, server.tcp_backlog);
+            sfd->fd[sfd->count] = anetTcp6Server(server.neterr, port, addr, server.tcp_backlog, server.mptcp);
         } else {
             /* Bind IPv4 address. */
-            sfd->fd[sfd->count] = anetTcpServer(server.neterr, port, addr, server.tcp_backlog);
+            sfd->fd[sfd->count] = anetTcpServer(server.neterr, port, addr, server.tcp_backlog, server.mptcp);
         }
         if (sfd->fd[sfd->count] == ANET_ERR) {
             int net_errno = errno;
@@ -2792,6 +2801,7 @@ void initServer(void) {
     server.reply_buffer_peak_reset_time = REPLY_BUFFER_DEFAULT_PEAK_RESET_TIME;
     server.reply_buffer_resizing_enabled = 1;
     server.client_mem_usage_buckets = NULL;
+    server.debug_client_enforce_reply_list = 0;
     resetReplicationBuffer();
 
     /* Make sure the locale is set on startup based on the config file. */
@@ -2809,6 +2819,8 @@ void initServer(void) {
         serverLog(LL_WARNING, "Failed creating the event loop. Error message: '%s'", strerror(errno));
         exit(1);
     }
+
+    server.dbnum = server.cluster_enabled ? server.config_databases_cluster : server.config_databases;
     server.db = zmalloc(sizeof(serverDb) * server.dbnum);
 
     /* Create the databases, and initialize other internal state. */
@@ -2834,7 +2846,7 @@ void initServer(void) {
      * seems odd) just to make the code cleaner by making it be the same type as server.pubsubshard_channels
      * (which has to be kvstore), see pubsubtype.serverPubSubChannels */
     server.pubsub_channels = kvstoreCreate(&kvstoreChannelHashtableType, 0, KVSTORE_ALLOCATE_HASHTABLES_ON_DEMAND);
-    server.pubsub_patterns = dictCreate(&objToDictDictType);
+    server.pubsub_patterns = dictCreate(&objToHashtableDictType);
     server.pubsubshard_channels = kvstoreCreate(&kvstoreChannelHashtableType, slot_count_bits,
                                                 KVSTORE_ALLOCATE_HASHTABLES_ON_DEMAND | KVSTORE_FREE_EMPTY_HASHTABLES);
     server.pubsub_clients = 0;
@@ -3412,7 +3424,7 @@ struct serverCommand *lookupCommandOrOriginal(robj **argv, int argc) {
 
 /* Determines if commands on this client are replicated from some source */
 int isReplicatedClient(client *c) {
-    return c->flag.primary || c->flag.slot_import_source;
+    return c->flag.primary || (c->slot_migration_link && isImportSlotMigrationLink(c->slot_migration_link));
 }
 
 /* Commands arriving from the primary client or AOF client, should never be rejected. */
@@ -3501,10 +3513,10 @@ void alsoPropagate(int dbid, robj **argv, int argc, int target) {
 
     if (!shouldPropagate(target)) return;
 
-    /* Don't propagate slot import links, these will be proxied in
+    /* Don't propagate slot migration links, these will be proxied in
      * replicationFeedStreamFromPrimaryStream() */
-    if (server.current_client != NULL && server.current_client->flag.slot_import_source) return;
-
+    if (server.current_client != NULL && server.current_client->slot_migration_link) return;
+    
     argvcopy = zmalloc(sizeof(robj *) * argc);
     for (j = 0; j < argc; j++) {
         argvcopy[j] = argv[j];
@@ -3699,7 +3711,7 @@ void call(client *c, int flags) {
      * and a client which is reprocessing command again (after being unblocked).
      * Blocked clients can be blocked in different places and not always it means the call() function has been
      * called. For example this is required for avoiding double logging to monitors.*/
-    int reprocessing_command = flags & CMD_CALL_REPROCESSING;
+    int reprocessing_command = c->flag.reexecuting_command ? 1 : 0;
 
     /* Initialization: clear the flags that must be set by the command on
      * demand, and initialize the array for additional commands propagation. */
@@ -3728,18 +3740,13 @@ void call(client *c, int flags) {
      * re-processing and unblock the client.*/
     c->flag.executing_command = 1;
 
-    /* Setting the CLIENT_REPROCESSING_COMMAND flag so that during the actual
-     * processing of the command proc, the client is aware that it is being
-     * re-processed. */
-    if (reprocessing_command) c->flag.reprocessing_command = 1;
+    c->flag.buffered_reply = 0;
+    c->flag.keyspace_notified = 0;
 
     monotime monotonic_start = 0;
     if (monotonicGetType() == MONOTONIC_CLOCK_HW) monotonic_start = getMonotonicUs();
 
     c->cmd->proc(c);
-
-    /* Clear the CLIENT_REPROCESSING_COMMAND flag after the proc is executed. */
-    if (reprocessing_command) c->flag.reprocessing_command = 0;
 
     exitExecutionUnit();
 
@@ -4067,6 +4074,7 @@ int processCommand(client *c) {
             }
         }
         c->cmd = c->lastcmd = c->realcmd = cmd;
+        c->flag.buffered_reply = 0;
         sds err;
         if (!commandCheckExistence(c, &err)) {
             rejectCommandSds(c, err);
@@ -4223,8 +4231,8 @@ int processCommand(client *c) {
         if (server.current_client == NULL) return C_ERR;
 
         if (out_of_memory && is_denyoom_command) {
-            if (c->flag.slot_import_source && c->slot_migration_link != NULL) {
-                clusterHandleSlotImportLinkClientOOM(c->slot_migration_link);
+            if (c->slot_migration_link != NULL) {
+                clusterHandleSlotMigrationLinkClientOOM(c->slot_migration_link);
                 return C_ERR;
             }
 
@@ -4363,7 +4371,6 @@ int processCommand(client *c) {
         addReply(c, shared.queued);
     } else {
         int flags = CMD_CALL_FULL;
-        if (client_reprocessing_command) flags |= CMD_CALL_REPROCESSING;
         call(c, flags);
         if (listLength(server.ready_keys) && !isInsideYieldingLongCommand()) handleClientsBlockedOnKeys();
     }

@@ -1,10 +1,6 @@
 # Check the basic monitoring and failover capabilities.
 
-# make sure the test infra won't use SELECT
-set old_singledb $::singledb
-set ::singledb 1
-
-tags {tls:skip external:skip cluster} {
+tags {tls:skip external:skip cluster singledb} {
 
 set base_conf [list cluster-enabled yes]
 start_multiple_servers 5 [list overrides $base_conf] {
@@ -122,5 +118,3 @@ test "CLUSTER SLAVES and CLUSTER REPLICAS with zero replicas" {
 } ;# stop servers
 
 } ;# tags
-
-set ::singledb $old_singledb

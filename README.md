@@ -87,7 +87,7 @@ command in order to really clean everything and rebuild from scratch:
 
     % make distclean
 
-This will clean: jemalloc, lua, hiredis, linenoise and other dependencies.
+This will clean: jemalloc, lua, libvalkey, linenoise and other dependencies.
 
 Also if you force certain build options like 32bit target, no C compiler
 optimizations (for debugging purposes), and other similar build time options,

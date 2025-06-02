@@ -55,6 +55,7 @@ ValkeyModule *scriptingEngineGetModule(scriptingEngine *engine);
 compiledFunction **scriptingEngineCallCompileCode(scriptingEngine *engine,
                                                   subsystemType type,
                                                   const char *code,
+                                                  size_t code_len,
                                                   size_t timeout,
                                                   size_t *out_num_compiled_functions,
                                                   robj **err);

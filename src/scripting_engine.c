@@ -217,21 +217,35 @@ static void engineTeardownModuleCtx(scriptingEngine *e) {
 compiledFunction **scriptingEngineCallCompileCode(scriptingEngine *engine,
                                                   subsystemType type,
                                                   const char *code,
+                                                  size_t code_len,
                                                   size_t timeout,
                                                   size_t *out_num_compiled_functions,
                                                   robj **err) {
     serverAssert(type == VMSE_EVAL || type == VMSE_FUNCTION);
-
+    compiledFunction **functions = NULL;
     engineSetupModuleCtx(engine, NULL);
+    if (engine->impl.methods.version == 1) {
+        functions = engine->impl.methods.compile_code_v1(
+            engine->module_ctx,
+            engine->impl.ctx,
+            type,
+            code,
+            timeout,
+            out_num_compiled_functions,
+            err);
+    } else {
+        /* Assume versions greater than 1 use updated interface. */
+        functions = engine->impl.methods.compile_code(
+            engine->module_ctx,
+            engine->impl.ctx,
+            type,
+            code,
+            code_len,
+            timeout,
+            out_num_compiled_functions,
+            err);
+    }
 
-    compiledFunction **functions = engine->impl.methods.compile_code(
-        engine->module_ctx,
-        engine->impl.ctx,
-        type,
-        code,
-        timeout,
-        out_num_compiled_functions,
-        err);
 
     engineTeardownModuleCtx(engine);
 

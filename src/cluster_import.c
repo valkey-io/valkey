@@ -119,11 +119,12 @@ void delKeysNotOwnedByMyself(list *slot_ranges) {
     listNode *ln;
     listIter li;
     listRewind(slot_ranges, &li);
+
     while ((ln = listNext(&li)) != NULL) {
         slotRange *range = ln->value;
         for (int i = range->start_slot; i <= range->end_slot; i++) {
             if (server.cluster->slots[i] != server.cluster->myself) {
-                delKeysInSlot(i);
+                delKeysInSlot(i, /*lazy=*/1, /*propagate_del=*/1, /*send_del_event=*/0);
             }
         }
     }
@@ -405,7 +406,8 @@ void clusterCommandImportCancel(client *c) {
 /* Sent by the source to the target after dumping the snapshot in
  * AOF format. */
 void clusterCommandSyncSlotsSnapshotEof(client *c) {
-    if (!c->flag.slot_import_source || !c->slot_migration_link) {
+    slotMigrationLink *link = (slotMigrationLink *)c->slot_migration_link;
+    if (!link || link->type != SLOT_MIGRATION_IMPORT) {
         serverLog(LL_WARNING,
                   "Received CLUSTER SYNCSLOTS SNAPSHOT-EOF from client %llu, "
                   "but the client is not a slot import source. Closing link.",
@@ -413,7 +415,6 @@ void clusterCommandSyncSlotsSnapshotEof(client *c) {
         freeClientAsync(c);
         return;
     }
-    slotMigrationLink *link = (slotMigrationLink *)c->slot_migration_link;
     if (!isSlotMigrationLinkInProgress(link)) {
         return;
     }
@@ -444,7 +445,8 @@ void clusterCommandSyncSlotsSnapshotEof(client *c) {
 /* Sent by the source to the target as a marker of when the pause
  * began (therefore, target is caught up once read). */
 void clusterCommandSyncSlotsPaused(client *c) {
-    if (!c->flag.slot_import_source || !c->slot_migration_link) {
+    slotMigrationLink *link = (slotMigrationLink *)c->slot_migration_link;
+    if (!link || link->type != SLOT_MIGRATION_IMPORT) {
         serverLog(LL_WARNING,
                   "Received CLUSTER SYNCSLOTS PAUSED from client %llu, "
                   "but the client is not a slot import source. Closing link.",
@@ -452,7 +454,6 @@ void clusterCommandSyncSlotsPaused(client *c) {
         freeClientAsync(c);
         return;
     }
-    slotMigrationLink *link = (slotMigrationLink *)c->slot_migration_link;
     if (!isSlotMigrationLinkInProgress(link)) {
         return;
     }
@@ -472,7 +473,8 @@ void clusterCommandSyncSlotsPaused(client *c) {
 /* Sent by the source to the target to grant final authorization for
  * failover. */
 void clusterCommandSyncSlotsFailoverGranted(client *c) {
-    if (!c->flag.slot_import_source || !c->slot_migration_link) {
+    slotMigrationLink *link = (slotMigrationLink *)c->slot_migration_link;
+    if (!link || link->type != SLOT_MIGRATION_IMPORT) {
         serverLog(LL_WARNING,
                   "Received CLUSTER SYNCSLOTS FAILOVER-GRANTED from client %llu, "
                   "but the client is not a slot import source. Closing link.",
@@ -480,7 +482,6 @@ void clusterCommandSyncSlotsFailoverGranted(client *c) {
         freeClientAsync(c);
         return;
     }
-    slotMigrationLink *link = (slotMigrationLink *)c->slot_migration_link;
     if (!isSlotMigrationLinkInProgress(link)) {
         return;
     }
@@ -500,7 +501,8 @@ void clusterCommandSyncSlotsFailoverGranted(client *c) {
 /* Sent by the source to the target to deny final authorization for
  * failover. */
 void clusterCommandSyncSlotsFailoverDenied(client *c) {
-    if (!c->flag.slot_import_source || !c->slot_migration_link) {
+    slotMigrationLink *link = (slotMigrationLink *)c->slot_migration_link;
+    if (!link || link->type != SLOT_MIGRATION_IMPORT) {
         serverLog(LL_WARNING,
                   "Received CLUSTER SYNCSLOTS FAILOVER-DENIED from client %llu, "
                   "but the client is not a slot import source. Closing link.",
@@ -508,7 +510,6 @@ void clusterCommandSyncSlotsFailoverDenied(client *c) {
         freeClientAsync(c);
         return;
     }
-    slotMigrationLink *link = (slotMigrationLink *)c->slot_migration_link;
     if (!isSlotMigrationLinkInProgress(link)) {
         return;
     }
@@ -543,7 +544,8 @@ void clusterCommandSyncSlotsFailoverDenied(client *c) {
 
 /* Sent by the source to the target to notify of some unrecoverable error. */
 void clusterCommandSyncSlotsFail(client *c) {
-    if (!c->flag.slot_import_source || !c->slot_migration_link) {
+    slotMigrationLink *link = (slotMigrationLink *)c->slot_migration_link;
+    if (!link || link->type != SLOT_MIGRATION_IMPORT) {
         serverLog(LL_WARNING,
                   "Received CLUSTER SYNCSLOTS FAIL from client %llu, "
                   "but the client is not a slot import source. Closing link.",
@@ -551,7 +553,6 @@ void clusterCommandSyncSlotsFail(client *c) {
         freeClientAsync(c);
         return;
     }
-    slotMigrationLink *link = (slotMigrationLink *)c->slot_migration_link;
     if (!isSlotMigrationLinkInProgress(link)) {
         return;
     }
@@ -595,8 +596,8 @@ void connectSlotImportLink(slotMigrationLink *link, char *ip, int port) {
               port);
 
     link->conn = connCreate(connTypeOfReplication());
-    if (connConnect(link->conn, ip, port,
-                    server.bind_source_addr, slotImportConnectHandler) == C_ERR) {
+    if (connConnect(link->conn, ip, port, server.bind_source_addr,
+        /*multipath=*/ 0, slotImportConnectHandler) == C_ERR) {
         serverLog(LL_WARNING,
                   "Failed to connect slot import link %.40s to %.40s: %s",
                   link->linkname,
@@ -614,9 +615,7 @@ void connectSlotImportLink(slotMigrationLink *link, char *ip, int port) {
     updateSlotMigrationLinkState(link, SLOT_IMPORT_CONNECTING);
 }
 
-void clusterHandleSlotImportLinkClientClose(void *import) {
-    slotMigrationLink *link = (slotMigrationLink *)import;
-    serverAssert(link->type == SLOT_MIGRATION_IMPORT);
+void clusterHandleSlotImportLinkClientClose(slotMigrationLink *link) {
     link->client = NULL;
     if (!isSlotMigrationLinkInProgress(link)) return;
     if (link->state == SLOT_IMPORT_RECONNECT) return;
@@ -630,9 +629,9 @@ void clusterHandleSlotImportLinkClientClose(void *import) {
     updateSlotMigrationLinkState(link, SLOT_IMPORT_RECONNECT);
 }
 
-void clusterHandleSlotImportLinkClientOOM(void *import) {
-    slotMigrationLink *link = (slotMigrationLink *)import;
-    serverAssert(link->type == SLOT_MIGRATION_IMPORT);
+void clusterHandleSlotMigrationLinkClientOOM(void *o) {
+    slotMigrationLink *link = (slotMigrationLink *)o;
+    if (link->type != SLOT_MIGRATION_IMPORT) return;
     if (isSlotMigrationLinkInProgress(link)) {
         serverLog(LL_WARNING,
                   "Slot import link %.40s to node %.40s (owner of slots [%s]) "
@@ -817,7 +816,6 @@ void initSlotImportLinkClient(slotMigrationLink *link) {
     link->client->flag.authenticated = 1;
     link->client->flag.reply_off = 1;
     link->client->slot_migration_link = link;
-    link->client->flag.slot_import_source = 1;
 
     /* Use dedicated querybuf and replication data to proxy
      * replication stream to replicas directly. */
@@ -940,7 +938,7 @@ void clusterCommandSyncSlotsSnapshot(client *c) {
         return;
     }
 
-    if (c->flag.slot_import_source || c->flag.slot_export_target) {
+    if (c->slot_migration_link) {
         serverLog(
             LL_WARNING,
             "Received CLUSTER SYNCSLOTS SNAPSHOT from client %llu which is already a slot link. "
@@ -1058,7 +1056,8 @@ void slotExportBeginStreaming(slotMigrationLink *link) {
 /* Sent by the target to the source to begin streaming content after
  * snapshot. */
 void clusterCommandSyncSlotsStream(client *c) {
-    if (!c->flag.slot_export_target || !c->slot_migration_link) {
+    slotMigrationLink *link = (slotMigrationLink *)c->slot_migration_link;
+    if (!link || link->type != SLOT_MIGRATION_EXPORT) {
         serverLog(LL_WARNING,
                   "Received CLUSTER SYNCSLOTS PAUSE from client %llu, "
                   "but the client is not a slot export target. Closing link.",
@@ -1066,7 +1065,6 @@ void clusterCommandSyncSlotsStream(client *c) {
         sendFailAndCloseAfterReply(c);
         return;
     }
-    slotMigrationLink *link = (slotMigrationLink *)c->slot_migration_link;
     if (!isSlotMigrationLinkInProgress(link)) {
         return;
     }
@@ -1088,7 +1086,8 @@ void clusterCommandSyncSlotsStream(client *c) {
 /* Sent by the target to the source to pause writes to the slot for slot
  * failover. */
 void clusterCommandSyncSlotsPause(client *c) {
-    if (!c->flag.slot_export_target || !c->slot_migration_link) {
+    slotMigrationLink *link = (slotMigrationLink *)c->slot_migration_link;
+    if (!link || link->type != SLOT_MIGRATION_EXPORT) {
         serverLog(LL_WARNING,
                   "Received CLUSTER SYNCSLOTS PAUSE from client %llu, "
                   "but the client is not a slot export target. Closing link.",
@@ -1096,7 +1095,6 @@ void clusterCommandSyncSlotsPause(client *c) {
         sendFailAndCloseAfterReply(c);
         return;
     }
-    slotMigrationLink *link = (slotMigrationLink *)c->slot_migration_link;
     if (!isSlotMigrationLinkInProgress(link)) {
         return;
     }
@@ -1131,7 +1129,8 @@ void clusterCommandSyncSlotsPause(client *c) {
  * failover. Authorization could be denied if the source has unpaused itself by
  * now. */
 void clusterCommandSyncSlotsRequestFailover(client *c) {
-    if (!c->flag.slot_export_target || !c->slot_migration_link) {
+    slotMigrationLink *link = (slotMigrationLink *)c->slot_migration_link;
+    if (!link || link->type != SLOT_MIGRATION_EXPORT) {
         serverLog(LL_WARNING,
                   "Received CLUSTER SYNCSLOTS REQUEST-FAILOVER from client %llu, "
                   "but the client is not a slot export target. Closing link.",
@@ -1139,7 +1138,6 @@ void clusterCommandSyncSlotsRequestFailover(client *c) {
         sendFailAndCloseAfterReply(c);
         return;
     }
-    slotMigrationLink *link = (slotMigrationLink *)c->slot_migration_link;
     if (!isSlotMigrationLinkInProgress(link)) {
         return;
     }
@@ -1196,7 +1194,8 @@ void clusterCommandSyncSlotsRequestFailover(client *c) {
 
 /* Sent by the target to the source to notify of cancellation by user. */
 void clusterCommandSyncSlotsCancel(client *c) {
-    if (!c->flag.slot_export_target || !c->slot_migration_link) {
+    slotMigrationLink *link = (slotMigrationLink *)c->slot_migration_link;
+    if (!link || link->type != SLOT_MIGRATION_EXPORT) {
         serverLog(LL_WARNING,
                   "Received CLUSTER SYNCSLOTS CANCEL from client %llu, "
                   "but the client is not a slot export target. Closing link.",
@@ -1204,7 +1203,6 @@ void clusterCommandSyncSlotsCancel(client *c) {
         freeClientAsync(c);
         return;
     }
-    slotMigrationLink *link = (slotMigrationLink *)c->slot_migration_link;
     if (!isSlotMigrationLinkInProgress(link)) {
         return;
     }
@@ -1272,11 +1270,11 @@ void clusterHandleSlotExportBackgroundSaveDone(int bgsaveerr) {
     }
 }
 
-int clusterIsSlotExportReadyForReplData(client *c) {
-    if (!c->flag.slot_export_target || !c->slot_migration_link) {
+int clusterSlotMigrationShouldInstallWriteHandler(client *c) {
+    slotMigrationLink *link = (slotMigrationLink *)c->slot_migration_link;
+    if (!link || link->type != SLOT_MIGRATION_EXPORT) {
         return 1;
     }
-    slotMigrationLink *link = (slotMigrationLink *)c->slot_migration_link;
     return link->state != SLOT_EXPORT_SNAPSHOTTING &&
            link->state != SLOT_EXPORT_WAITING_TO_SNAPSHOT;
 }
@@ -1343,9 +1341,7 @@ void clusterFeedSlotExportLinks(int dbid, robj **argv, int argc) {
     }
 }
 
-void clusterHandleSlotExportLinkClientClose(void *export) {
-    slotMigrationLink *link = (slotMigrationLink *)export;
-    serverAssert(link->type == SLOT_MIGRATION_EXPORT);
+void clusterHandleSlotExportLinkClientClose(slotMigrationLink *link) {
     link->client = NULL;
     if (!isSlotMigrationLinkInProgress(link)) {
         return;
@@ -1455,7 +1451,6 @@ createSlotExportLink(client *c, char *nodename, char *linkname, list *slot_range
     link->state = SLOT_EXPORT_WAITING_TO_SNAPSHOT;
     link->slot_ranges = slot_ranges;
     link->slot_ranges_str = representSlotRangeList(slot_ranges, '-');
-    link->client->flag.slot_export_target = 1;
     link->client->slot_migration_link = link;
     initClientReplicationData(link->client);
 
@@ -1649,6 +1644,18 @@ void freeSlotMigrationLink(void *o) {
     zfree(o);
 }
 
+void clusterHandleSlotMigrationLinkClientClose(void *o) {
+    slotMigrationLink *link = (slotMigrationLink *)o;
+    switch (link->type) {
+    case SLOT_MIGRATION_IMPORT:
+        clusterHandleSlotImportLinkClientClose(link);
+        return;
+    case SLOT_MIGRATION_EXPORT:
+        clusterHandleSlotExportLinkClientClose(link);
+        return;
+    }
+}
+
 void initClusterSlotMigrationLinkList(void) {
     server.cluster->slot_migration_links = listCreate();
     listSetFreeMethod(server.cluster->slot_migration_links, freeSlotMigrationLink);
@@ -1729,6 +1736,11 @@ int isSlotMigrationLinkInProgress(slotMigrationLink *link) {
            link->state != SLOT_MIGRATION_LINK_SUCCESS &&
            link->state != SLOT_MIGRATION_LINK_CANCELLED &&
            link->state != SLOT_MIGRATION_LINK_FAILED;
+}
+
+int isImportSlotMigrationLink(void *o) {
+    slotMigrationLink *link = (slotMigrationLink *)o;
+    return link->type == SLOT_MIGRATION_IMPORT;
 }
 
 /* Synthesizes a view of ongoing and recently completed imports for an operator. */
@@ -1854,7 +1866,7 @@ void clusterSlotMigrationCron(void) {
 
 /* Sent by either the target or the source as a liveness check. */
 void clusterCommandSyncSlotsAck(client *c) {
-    if (!c->flag.slot_export_target && !c->flag.slot_import_source) {
+    if (!c->slot_migration_link) {
         serverLog(LL_WARNING,
                   "Received CLUSTER SYNCSLOTS ACK from client %llu, "
                   "but the client is not a slot import source or export target. "

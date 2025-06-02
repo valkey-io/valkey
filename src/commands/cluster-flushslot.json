@@ -6,7 +6,7 @@
         "since": "9.0.0",
         "arity": -3,
         "container": "CLUSTER",
-        "function": "clusterCommand",
+        "function": "clusterFlushslotCommand",
         "command_flags": [
             "WRITE",
             "NO_ASYNC_LOADING",

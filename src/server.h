@@ -1334,7 +1334,8 @@ struct sharedObjectsStruct {
         *mbulkhdr[OBJ_SHARED_BULKHDR_LEN], /* "*<value>\r\n" */
         *bulkhdr[OBJ_SHARED_BULKHDR_LEN],  /* "$<value>\r\n" */
         *maphdr[OBJ_SHARED_BULKHDR_LEN],   /* "%<value>\r\n" */
-        *sethdr[OBJ_SHARED_BULKHDR_LEN];   /* "~<value>\r\n" */
+        *sethdr[OBJ_SHARED_BULKHDR_LEN],
+        *cluster, *flushslot, *async, *sync;
     sds minstring, maxstring;
 };
 
@@ -3821,6 +3822,7 @@ void sunsubscribeCommand(client *c);
 void watchCommand(client *c);
 void unwatchCommand(client *c);
 void clusterCommand(client *c);
+void clusterFlushslotCommand(client *c);
 void clusterSlotStatsCommand(client *c);
 void restoreCommand(client *c);
 void migrateCommand(client *c);

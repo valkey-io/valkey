@@ -135,14 +135,14 @@ static int stringmatchlen_impl(const char *pattern,
                         start = end;
                         end = t;
                     }
-                    if (nocase) {
-                        start = tolower(start);
-                        end = tolower(end);
-                        c = tolower(c);
+                    if (c >= start && c <= end) {
+                        match = 1;
+                    } else if (nocase && isalpha(c)) {
+                        c = islower(c) ? toupper(c) : tolower(c);
+                        if (c >= start && c <= end) match = 1;
                     }
                     pattern += 3;
                     patternLen -= 3;
-                    if (c >= start && c <= end) match = 1;
                     continue;
                 }
                 if (!nocase) {

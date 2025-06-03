@@ -66,22 +66,16 @@ int test_stringmatch(int argc, char **argv, int flags) {
     TEST_STRINGMATCH("[-]", "-", 1, 1);
 
     /* Not special as range end (undocumented): */
-    TEST_STRINGMATCH("[+-]]", ",", 1, 1);  /* ASCII range + to ] includes , */
-    TEST_STRINGMATCH("[+-]]", "*", 0, 0);  /*   but not * (below) */
-    TEST_STRINGMATCH("[+-]]", "^", 0, 0);  /*   or ^ (above) */
-    TEST_STRINGMATCH("[+-\\]", ",", 1, 1); /* ASCII range + to \ includes , */
-    TEST_STRINGMATCH("[+-\\]", "*", 0, 0); /*   but not * (below) */
-    TEST_STRINGMATCH("[+-\\]", "]", 0, 0); /*   or ] (above) */
-    TEST_STRINGMATCH("[+--]", ",", 1, 1);  /* ASCII range + to - includes , */
-    TEST_STRINGMATCH("[+--]", "*", 0, 0);  /*   but not * (below) */
-    TEST_STRINGMATCH("[+--]", ".", 0, 0);  /*   or . (above) */
+    TEST_STRINGMATCH("[+-]]", ",", 1, 1); /* ASCII range + to ] includes , */
+    TEST_STRINGMATCH("[+-]]", "*", 0, 0); /*   but not * (below) */
+    TEST_STRINGMATCH("[+-]]", "^", 0, 0); /*   or ^ (above) */
+    TEST_STRINGMATCH("[+--]", ",", 1, 1); /* ASCII range + to - includes , */
+    TEST_STRINGMATCH("[+--]", "*", 0, 0); /*   but not * (below) */
+    TEST_STRINGMATCH("[+--]", ".", 0, 0); /*   or . (above) */
     /* And the same, but unclosed: */
     TEST_STRINGMATCH("[+-]", ",", 1, 1);
     TEST_STRINGMATCH("[+-]", "*", 0, 0);
     TEST_STRINGMATCH("[+-]", "^", 0, 0);
-    TEST_STRINGMATCH("[+-\\", ",", 1, 1);
-    TEST_STRINGMATCH("[+-\\", "*", 0, 0);
-    TEST_STRINGMATCH("[+-\\", "]", 0, 0);
     TEST_STRINGMATCH("[+--", ",", 1, 1);
     TEST_STRINGMATCH("[+--", "*", 0, 0);
     TEST_STRINGMATCH("[+--", ".", 0, 0);
@@ -90,14 +84,32 @@ int test_stringmatch(int argc, char **argv, int flags) {
     TEST_STRINGMATCH("[\\]a]", "]", 1, 1);
     TEST_STRINGMATCH("[\\]a]", "a", 1, 1);
 
-    /* Escapes at range start are literal (undocumented): */
-    TEST_STRINGMATCH("[\\]-_]", "^", 0, 0);
-    TEST_STRINGMATCH("[\\]-_]", "-", 1, 1);
+    /* Escapes at range start: */
+    TEST_STRINGMATCH("[\\]-_]", "^", 1, 1); /* ASCII range ] to _ includes ^ */
+    TEST_STRINGMATCH("[\\]-_]", "-", 0, 0); /*   but not - */
 
-    /* Escapes at range end are not processed (undocumented): */
-    TEST_STRINGMATCH("[+-\\\\]]", "\\]", 0, 0); /* BUG */
-    TEST_STRINGMATCH("[+-\\\\]", "]", 1, 1);    /* BUG */
-    TEST_STRINGMATCH("[+-\\]]", "\\]", 1, 1);   /* BUG */
+    /* Escapes at range end: */
+    TEST_STRINGMATCH("[+-\\\\]", ",", 1, 1); /* ASCII range + to \ includes , */
+    TEST_STRINGMATCH("[+-\\\\]", "*", 0, 0); /*   but not * (below) */
+    TEST_STRINGMATCH("[+-\\\\]", "]", 0, 0); /*   or ] (above) */
+    TEST_STRINGMATCH("[+-\\]]", ",", 1, 1);  /* ASCII range + to ] includes , */
+    TEST_STRINGMATCH("[+-\\]]", "*", 0, 0);  /*   but not * (below) */
+    TEST_STRINGMATCH("[+-\\]]", "^", 0, 0);  /*   or ^ (above) */
+    /* Unclosed is the same: */
+    TEST_STRINGMATCH("[+-\\\\", ",", 1, 1);
+    TEST_STRINGMATCH("[+-\\\\", "*", 0, 0);
+    TEST_STRINGMATCH("[+-\\\\", "]", 0, 0);
+    TEST_STRINGMATCH("[+-\\]", ",", 1, 1);
+    TEST_STRINGMATCH("[+-\\]", "*", 0, 0);
+    TEST_STRINGMATCH("[+-\\]", "^", 0, 0);
+    /* An incomplete escape is treated as literal backslash: */
+    TEST_STRINGMATCH("[+-\\", ",", 1, 1);
+    TEST_STRINGMATCH("[+-\\", "*", 0, 0);
+    TEST_STRINGMATCH("[+-\\", "]", 0, 0);
+    /* Regression tests: */
+    TEST_STRINGMATCH("[+-\\\\]]", "\\]", 1, 1);
+    TEST_STRINGMATCH("[+-\\\\]", "]", 0, 0);
+    TEST_STRINGMATCH("[+-\\]]", "\\]", 0, 0);
 
     /* Empty character class matches nothing: */
     TEST_STRINGMATCH("[]", "", 0, 0);

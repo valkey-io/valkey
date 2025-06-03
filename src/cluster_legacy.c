@@ -6594,7 +6594,7 @@ unsigned int delKeysInSlot(unsigned int hashslot, int lazy, bool propagate_del, 
         argv[0] = shared.cluster;
         argv[1] = shared.flushslot;
         argv[2] = createStringObjectFromLongLong(hashslot);
-        argv[3] = lazy ? shared.async : shared.sync; 
+        argv[3] = lazy ? shared.async : shared.sync;
         incrRefCount(argv[0]);
         incrRefCount(argv[1]);
         incrRefCount(argv[3]);

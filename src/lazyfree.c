@@ -185,7 +185,7 @@ void freeObjAsync(robj *key, robj *obj, int dbid) {
 /* Empty a DB asynchronously. What the function does actually is to
  * create a new empty set of hash tables and scheduling the old ones for
  * lazy freeing.
- * 
+ *
  * If hashslot is >= 0, then only hashslot will be removed asynchronously. */
 void emptyDbAsync(serverDb *db, int hashslot) {
     int slot_count_bits = 0;

@@ -570,10 +570,10 @@ robj *dbUnshareStringValue(serverDb *db, robj *key, robj *o) {
  *
  * The dbnum can be -1 if all the DBs should be emptied, or the specified
  * DB index if we want to empty only a single database.
- * 
+ *
  * The hashslot can be -1 if all the slots should be emptied, or the specified
  * slot if we want to empty only a single slot.
- * 
+ *
  * The function returns the number of keys removed from the database(s). */
 long long emptyDbStructure(serverDb *dbarray, int dbnum, int async, void(callback)(hashtable *), int hashslot) {
     long long removed = 0;
@@ -615,7 +615,7 @@ long long emptyDbStructure(serverDb *dbarray, int dbnum, int async, void(callbac
  *
  * The dbnum can be -1 if all the DBs should be flushed, or the specified
  * DB number if we want to flush only a single database number.
- * 
+ *
  * The hashslot can be -1 if all the slots should be flushed, or the specified
  * hashslot if we want to flush only a single slot.
  *

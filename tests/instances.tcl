@@ -499,8 +499,7 @@ while 1 {
             # letting the tests resume, so we'll eventually reach the cleanup and report crashes
 
             if {$::exit_on_failure} {
-                puts -nonewline "(Fast fail: test will exit now)"
-                flush stdout
+                puts "(Fast fail: test will exit now)"
                 exit 1
             }
             if {$::stop_on_failure} {

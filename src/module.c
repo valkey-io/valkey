@@ -13207,7 +13207,7 @@ int VM_RdbLoad(ValkeyModuleCtx *ctx, ValkeyModuleRdbStream *stream, int flags) {
      * will prevent COW memory issue. */
     if (server.child_type == CHILD_TYPE_RDB) killRDBChild();
 
-    emptyData(-1, EMPTYDB_NO_FLAGS, NULL);
+    emptyData(-1, EMPTYDB_NO_FLAGS, NULL, -1);
 
     /* rdbLoad() can go back to the networking and process network events. If
      * VM_RdbLoad() is called inside a command callback, we don't want to

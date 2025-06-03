@@ -194,6 +194,18 @@ static void freeHashtableIfNeeded(kvstore *kvs, int didx) {
     if (!(kvs->flags & KVSTORE_FREE_EMPTY_HASHTABLES) || !kvstoreGetHashtable(kvs, didx) || kvstoreHashtableSize(kvs, didx) != 0 ||
         kvstoreHashtableIsRehashingPaused(kvs, didx))
         return;
+    hashtable *ht = kvs->hashtables[didx];
+    kvstoreHashtableMetadata *metadata = (kvstoreHashtableMetadata *)hashtableMetadata(ht);
+    size_t bucket_count;
+    if (metadata->rehashing_node) {
+        size_t to, from;
+        hashtableRehashingInfo(ht, &from, &to);
+        bucket_count = to;
+        /* "from" will be subtracted during rehashing completed callback */
+    } else {
+        bucket_count = hashtableBuckets(ht);
+    }
+    kvs->bucket_count -= bucket_count;
     hashtableRelease(kvs->hashtables[didx]);
     kvs->hashtables[didx] = NULL;
     kvs->allocated_hashtables--;
@@ -291,14 +303,34 @@ kvstore *kvstoreCreate(hashtableType *type, int num_hashtables_bits, int flags) 
     return kvs;
 }
 
+void kvstoreEmptyHashtable(kvstore *kvs, int didx, void(callback)(hashtable *)) {
+    hashtable *ht = kvstoreGetHashtable(kvs, didx);
+    if (!ht) return;
+    kvstoreHashtableMetadata *metadata = (kvstoreHashtableMetadata *)hashtableMetadata(ht);
+    size_t bucket_count = hashtableBuckets(ht);
+    if (metadata->rehashing_node) {
+        listDelNode(kvs->rehashing, metadata->rehashing_node);
+        metadata->rehashing_node = NULL;
+
+        size_t from, to;
+        hashtableRehashingInfo(ht, &from, &to);
+        bucket_count = to;
+        /* "from" will be subtracted in the rehashing completed callback */
+    }
+    size_t size = hashtableSize(ht);
+    if (size > 0) {
+        cumulativeKeyCountAdd(kvs, didx, -1 * size);
+        kvs->non_empty_hashtables--;
+    }
+
+    kvs->bucket_count -= bucket_count;
+    hashtableEmpty(ht, callback);
+    freeHashtableIfNeeded(kvs, didx);
+}
+
 void kvstoreEmpty(kvstore *kvs, void(callback)(hashtable *)) {
     for (int didx = 0; didx < kvs->num_hashtables; didx++) {
-        hashtable *ht = kvstoreGetHashtable(kvs, didx);
-        if (!ht) continue;
-        kvstoreHashtableMetadata *metadata = (kvstoreHashtableMetadata *)hashtableMetadata(ht);
-        if (metadata->rehashing_node) metadata->rehashing_node = NULL;
-        hashtableEmpty(ht, callback);
-        freeHashtableIfNeeded(kvs, didx);
+        kvstoreEmptyHashtable(kvs, didx, callback);
     }
 
     listEmpty(kvs->rehashing);
@@ -621,6 +653,46 @@ int kvstoreIteratorNext(kvstoreIterator *kvs_it, void **next) {
         hashtableReinitIterator(&kvs_it->di, ht);
         return hashtableNext(&kvs_it->di, next);
     }
+}
+
+/* Move hashtable at didx from the source to destination. */
+void kvstoreMoveHashtable(kvstore *dst, kvstore *src, int didx) {
+    assert(dst->dtype == src->dtype && dst->num_hashtables_bits == src->num_hashtables_bits);
+    hashtable *ht = kvstoreGetHashtable(src, didx);
+    if (!ht) return;
+
+    dst->hashtables[didx] = ht;
+    dst->allocated_hashtables++;
+    src->allocated_hashtables--;
+    size_t bucket_count = hashtableBuckets(ht);
+    src->bucket_count -= bucket_count;
+    dst->bucket_count += bucket_count;
+    size_t size = hashtableSize(ht);
+    if (size > 0) {
+        cumulativeKeyCountAdd(dst, didx, size);
+        cumulativeKeyCountAdd(src, didx, -1 * size);
+        /* cumulativeKeyCountAdd increments dst->non_empty_hashtables */
+        src->non_empty_hashtables--;
+    }
+
+    kvstoreHashtableMetadata *metadata = (kvstoreHashtableMetadata *)hashtableMetadata(ht);
+    if (metadata->rehashing_node) {
+        listAddNodeTail(dst->rehashing, metadata->rehashing_node);
+        listDelNode(src->rehashing, metadata->rehashing_node);
+
+        size_t from, to;
+        hashtableRehashingInfo(ht, &from, &to);
+        dst->overhead_hashtable_rehashing += from * HASHTABLE_BUCKET_SIZE;
+        src->overhead_hashtable_rehashing -= from * HASHTABLE_BUCKET_SIZE;
+    }
+    metadata->kvs = dst;
+
+    size_t mem_usage = hashtableMemUsage(ht);
+    dst->overhead_hashtable_lut += mem_usage;
+    src->overhead_hashtable_lut -= mem_usage;
+
+    dst->hashtables[didx] = ht;
+    src->hashtables[didx] = NULL;
 }
 
 /* This method traverses through kvstore hash tables and triggers a resize.

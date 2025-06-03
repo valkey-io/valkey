@@ -1107,9 +1107,13 @@ clusterNode *getNodeByQuery(client *c, int *error_code) {
     int pubsubshard_included =
         (cmd_flags & CMD_PUBSUB) || (c->cmd->proc == execCommand && (c->mstate->cmd_flags & CMD_PUBSUB));
 
-    /* For migrating and importing slots, we need to go over all the keys to
-     * count existing keys and missing keys that we need for TRYAGAIN and ASK
-     * redirects. Skip this if we're not importing or migrating. */
+    /* If we're importing or migration the slot, we need to do some more checks:
+     *
+     *   1. Go over all the keys to count existing keys and missing keys that we
+     *      need for TRYAGAIN and ASK redirects.
+     *   2. Check for some commands that are forbiddedn during slot migration.
+     *
+     * Skip this if we're not importing or migrating this slot. */
     if (!migrating_slot && !importing_slot) goto after_checking_each_key;
 
     /* We handle all the cases as if they were EXEC commands, so we have

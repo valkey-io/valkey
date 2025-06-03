@@ -2443,8 +2443,7 @@ int getKeysUsingLegacyRangeSpec(struct serverCommand *cmd, robj **argv, int argc
             }
         }
         keys[i].pos = j;
-        /* Flags are omitted from legacy key specs */
-        keys[i++].flags = 0;
+        keys[i++].flags = cmd->legacy_range_key_spec.flags;
     }
     result->numkeys = i;
     return i;

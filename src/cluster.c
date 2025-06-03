@@ -1070,7 +1070,17 @@ getNodeByQuery(client *c, struct serverCommand *cmd, robj **argv, int argc, int 
 
         for (j = 0; j < numkeys; j++) {
             robj *thiskey = margv[keyindex[j].pos];
-            int thisslot = keyHashSlot((char *)thiskey->ptr, sdslen(thiskey->ptr));
+            int thisslot;
+            if (keyindex[j].flags & CMD_KEY_USES_SLOT) {
+                thisslot = getSlotOrError(thiskey, NULL);
+                if (thisslot < 0) {
+                    /* If we can't compute the slot, we will treat it like other key-less commands
+                     * and process locally, which will return an error during command processing. */
+                    continue;
+                }
+            } else {
+                thisslot = keyHashSlot((char *)thiskey->ptr, sdslen(thiskey->ptr));
+            }
 
             if (firstkey == NULL) {
                 /* This is the first key we see. Check what is the slot
@@ -1540,7 +1550,6 @@ void resetClusterStats(void) {
 
     clusterSlotStatResetAll();
 }
-
 
 void clusterCommandFlushslot(client *c) {
     int slot;

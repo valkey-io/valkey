@@ -6278,13 +6278,26 @@ const char *clusterGetMessageTypeString(int type) {
     return "unknown";
 }
 
-/* Get the slot from robj and return it. If the slot is not valid,
- * return -1 and send an error to the client. */
-int getSlotOrReply(client *c, robj *o) {
+int getSlotOrError(robj *o, sds *err_out) {
     long long slot;
 
     if (getLongLongFromObject(o, &slot) != C_OK || slot < 0 || slot >= CLUSTER_SLOTS) {
-        addReplyError(c, "Invalid or out of range slot");
+        if (err_out) {
+            *err_out = sdsnew("Invalid or out of range slot");
+        }
+        return -1;
+    }
+
+    return (int)slot;
+}
+
+/* Get the slot from robj and return it. If the slot is not valid,
+ * return -1 and send an error to the client. */
+int getSlotOrReply(client *c, robj *o) {
+    sds err = NULL;
+    int slot = getSlotOrError(o, &err);
+    if (err) {
+        addReplyErrorSds(c, err);
         return -1;
     }
     return (int)slot;

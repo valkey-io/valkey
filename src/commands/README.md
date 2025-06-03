@@ -175,6 +175,7 @@ Each element in this array is an object with the following keys:
   * `"RW"`
   * `"UPDATE"`
   * `"VARIABLE_FLAGS"`
+  * `"USES_SLOT"`
 * `"begin_search"`: How to find the first key used by this key spec. It's an
   object with only one key. The key determines the method for finding the first
   key. Here are the possible forms of the `"begin_search"` object:

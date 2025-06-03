@@ -40,6 +40,26 @@
                     }
                 ]
             }
+        ],
+        "key_specs": [
+            {
+                "flags": [
+                    "USES_SLOT",
+                    "NOT_KEY"
+                ],
+                "begin_search": {
+                    "index": {
+                        "pos": 2
+                    }
+                },
+                "find_keys": {
+                    "range": {
+                        "lastkey": 0,
+                        "step": 1,
+                        "limit": 0
+                    }
+                }
+            }
         ]
     }
 }

@@ -4779,6 +4779,7 @@ void addReplyFlagsForKeyArgs(client *c, uint64_t flags) {
                                      {CMD_KEY_NOT_KEY, "not_key"},
                                      {CMD_KEY_INCOMPLETE, "incomplete"},
                                      {CMD_KEY_VARIABLE_FLAGS, "variable_flags"},
+                                     {CMD_KEY_USES_SLOT, "uses_slot"},
                                      {0, NULL}};
     addReplyCommandFlags(c, flags, docFlagNames);
 }

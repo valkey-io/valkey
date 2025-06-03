@@ -30,6 +30,11 @@ start_cluster 2 2 {tags {external:skip cluster}} {
         R 0 CLUSTER FLUSHSLOT $key_slot ASYNC
         assert_equal [R 0 CLUSTER COUNTKEYSINSLOT $key_slot] 0
     }
+
+    test "FLUSHSLOT returns MOVED when unowned" {
+        set key_slot [R 0 CLUSTER KEYSLOT FC]
+        assert_error "MOVED $key_slot*" {R 1 CLUSTER FLUSHSLOT $key_slot}
+    }
 }
 
 start_cluster 2 2 {tags {external:skip cluster}} {

@@ -45,9 +45,6 @@ struct clusterState;
 #define CLUSTER_BROADCAST_ALL 0            /* All known instances. */
 #define CLUSTER_BROADCAST_LOCAL_REPLICAS 1 /* All replicas in my primary-replicas ring. */
 
-/* Slot migration log configurations */
-#define CLUSTER_SLOT_MIGRATION_LOG_MAX 1000
-#define CLUSTER_SLOT_MIGRATION_LOG_TTL_MILLIS 3600000 /* 1 hour */
 
 /* ---------------------- API exported outside cluster.c -------------------- */
 /* functions requiring mechanism specific implementations */
@@ -138,7 +135,6 @@ int clusterRedirectBlockedClientIfNeeded(client *c);
 void clusterRedirectClient(client *c, clusterNode *n, int hashslot, int error_code);
 void migrateCloseTimedoutSockets(void);
 unsigned int keyHashSlot(char *key, int keylen);
-int getSlotOrReply(client *c, robj *o);
 int patternHashSlot(char *pattern, int length);
 int isValidAuxString(char *s, unsigned int length);
 void migrateCommand(client *c);

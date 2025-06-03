@@ -4012,11 +4012,10 @@ void prepareCommand(client *c) {
     /* Make sure we don't do this twice. */
     debugServerAssert(c->parsed_cmd == NULL && !(c->read_flags & READ_FLAGS_COMMAND_NOT_FOUND));
     c->parsed_cmd = lookupCommand(c->argv, c->argc);
-    if (c->parsed_cmd && commandCheckArity(c->parsed_cmd, c->argc, NULL) == 0) {
+    if (c->parsed_cmd && !commandCheckArity(c->parsed_cmd, c->argc, NULL)) {
         /* The command was found, but the arity is invalid. */
         c->read_flags |= READ_FLAGS_BAD_ARITY;
     } else if (c->parsed_cmd && server.cluster_enabled) {
-        c->read_flags |= READ_FLAGS_BAD_ARITY;
         debugServerAssert(c->slot == -1 &&
                           !(c->read_flags & READ_FLAGS_CROSSSLOT) &&
                           !(c->read_flags & READ_FLAGS_NO_KEYS));
@@ -4094,7 +4093,9 @@ int processCommand(client *c) {
             rejectCommandSds(c, err);
             return C_OK;
         }
-        if (!commandCheckArity(c->cmd, c->argc, &err)) {
+        if (c->read_flags & READ_FLAGS_BAD_ARITY) {
+            /* Already detected this, but do it again just to get the error message. */
+            serverAssert(!commandCheckArity(c->cmd, c->argc, &err));
             rejectCommandSds(c, err);
             return C_OK;
         }

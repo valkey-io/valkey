@@ -569,8 +569,8 @@ proc send_data_packet {fd status data {elapsed 0}} {
 }
 
 proc print_help_screen {} {
+    #   |-- This is for terminal output, so assume default term width of 80 columns. ---|
     puts [join {
-        # This is for terminal output, so assume default term width of 80 columns. -----|
         "--cluster          Run the cluster tests, by default cluster tests run along"
         "                   with all tests."
         "--moduleapi        Run the module API tests, this option should only be used in"
@@ -625,7 +625,8 @@ proc print_help_screen {} {
         "--ignore-encoding  Don't validate object encoding."
         "--ignore-digest    Don't use debug digest validations."
         "--large-memory     Run tests using over 100mb."
-        "--debug-defrag     Indicate the test is running against server compiled with DEBUG_FORCE_DEFRAG option"
+        "--debug-defrag     Indicate the test is running against server compiled with"
+        "                   DEBUG_FORCE_DEFRAG option."
         "--help             Print this help screen."
     } "\n"]
 }

@@ -1540,3 +1540,22 @@ void resetClusterStats(void) {
 
     clusterSlotStatResetAll();
 }
+
+
+void clusterCommandFlushslot(client *c) {
+    int slot;
+    int lazy = server.lazyfree_lazy_user_flush;
+    if ((slot = getSlotOrReply(c, c->argv[2])) == -1) return;
+    if (c->argc == 4) {
+        if (!strcasecmp(c->argv[3]->ptr, "async")) {
+            lazy = 1;
+        } else if (!strcasecmp(c->argv[3]->ptr, "sync")) {
+            lazy = 0;
+        } else {
+            addReplyErrorObject(c, shared.syntaxerr);
+            return;
+        }
+    }
+    delKeysInSlot(slot, lazy, false, true);
+    addReply(c, shared.ok);
+}

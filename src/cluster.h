@@ -1,6 +1,7 @@
 #ifndef __CLUSTER_H
 #define __CLUSTER_H
 
+#include <stdbool.h>
 /*-----------------------------------------------------------------------------
  * Cluster exported API.
  *----------------------------------------------------------------------------*/
@@ -133,4 +134,5 @@ int isNodeAvailable(clusterNode *node);
 long long getNodeReplicationOffset(clusterNode *node);
 sds aggregateClientOutputBuffer(client *c);
 void resetClusterStats(void);
+unsigned int delKeysInSlot(unsigned int hashslot, int lazy, bool propagate_del, bool send_del_event);
 #endif /* __CLUSTER_H */

@@ -1620,6 +1620,7 @@ struct valkeyServer {
     _Atomic int module_gil_acquiring; /* Indicates whether the GIL is being acquiring by the main thread. */
     /* Networking */
     int port;                              /* TCP listening port */
+    int admin_port;                        /* TCP listening admin port */
     int tls_port;                          /* TLS listening port */
     int tcp_backlog;                       /* TCP listen() backlog */
     int mptcp;                             /* Use Multipath TCP */

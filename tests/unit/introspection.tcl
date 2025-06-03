@@ -979,6 +979,7 @@ start_server {tags {"introspection"}} {
             rdma-rx-size
             rdma-bind
             rdma-port
+            admin-port
         }
 
         if {!$::tls} {

@@ -511,17 +511,17 @@ uint64_t dictEncObjHash(const void *key) {
     }
 }
 
-/* Return 1 if we allow a hash table to expand. It may allocate a huge amount of
- * memory to contain hash buckets when it expands, that may lead the server to
- * reject user's requests or evict some keys. We can prevent expansion
- * provisionally if used memory will be over maxmemory after it expands,
- * but to guarantee the performance of the server, we still allow it to expand
- * if the load factor exceeds the hard limit defined in hashtable.c. */
-int hashtableResizeAllowed(size_t moreMem, double usedRatio) {
+/* Return true if we allow a hash table to expand. It may allocate a huge amount
+ * of memory to contain hash buckets when it expands, that may lead the server
+ * to reject user's requests or evict some keys. We can prevent expansion
+ * provisionally if used memory will be over maxmemory after it expands, but to
+ * guarantee the performance of the server, we still allow it to expand if the
+ * load factor exceeds the hard limit defined in hashtable.c. */
+bool hashtableResizeAllowed(size_t moreMem, double usedRatio) {
     UNUSED(usedRatio);
 
     /* For debug purposes, not allowed to be resized. */
-    if (!server.dict_resizing) return 0;
+    if (!server.dict_resizing) return false;
 
     /* Avoid resizing over max memory. */
     return !overMaxmemoryAfterAlloc(moreMem);
@@ -3243,7 +3243,7 @@ void populateCommandTable(void) {
         c = serverCommandTable + j;
         if (c->declared_name == NULL) break;
 
-        int retval1, retval2;
+        bool retval1, retval2;
 
         c->fullname = sdsnew(c->declared_name);
         c->current_name = c->fullname;
@@ -3319,11 +3319,11 @@ void serverOpArrayFree(serverOpArray *oa) {
 
 /* ====================== Commands lookup and execution ===================== */
 
-int isContainerCommandBySds(sds s) {
+bool isContainerCommandBySds(sds s) {
     void *entry;
-    int found_command = hashtableFind(server.commands, s, &entry);
+    bool found_command = hashtableFind(server.commands, s, &entry);
     struct serverCommand *base_cmd = entry;
-    int has_subcommands = found_command && base_cmd->subcommands_ht;
+    bool has_subcommands = found_command && base_cmd->subcommands_ht;
     return has_subcommands;
 }
 
@@ -3344,9 +3344,9 @@ struct serverCommand *lookupSubcommand(struct serverCommand *container, sds sub_
  */
 struct serverCommand *lookupCommandLogic(hashtable *commands, robj **argv, int argc, int strict) {
     void *entry = NULL;
-    int found_command = hashtableFind(commands, argv[0]->ptr, &entry);
+    bool found_command = hashtableFind(commands, argv[0]->ptr, &entry);
     struct serverCommand *base_cmd = entry;
-    int has_subcommands = found_command && base_cmd->subcommands_ht;
+    bool has_subcommands = found_command && base_cmd->subcommands_ht;
     if (argc == 1 || !has_subcommands) {
         if (strict && argc != 1) return NULL;
         /* Note: It is possible that base_cmd->proc==NULL (e.g. CONFIG) */

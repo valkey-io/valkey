@@ -378,7 +378,7 @@ void pubsubShardUnsubscribeAllChannelsInSlot(unsigned int slot) {
         void *next_client;
         while (hashtableNext(&client_iter, &next_client)) {
             client *c = next_client;
-            int retval = hashtableDelete(c->pubsub_data->pubsubshard_channels, channel);
+            bool retval = hashtableDelete(c->pubsub_data->pubsubshard_channels, channel);
             serverAssertWithInfo(c, channel, retval);
             addReplyPubsubUnsubscribed(c, channel, pubSubShardType);
             /* If the client has no other pubsub subscription,
@@ -393,11 +393,10 @@ void pubsubShardUnsubscribeAllChannelsInSlot(unsigned int slot) {
     kvstoreReleaseHashtableIterator(kvs_di);
 }
 
-/* Subscribe a client to a pattern. Returns 1 if the operation succeeded, or 0 if the client was already subscribed to
- * that pattern. */
-int pubsubSubscribePattern(client *c, robj *pattern) {
+/* Subscribe a client to a pattern. */
+static void pubsubSubscribePattern(client *c, robj *pattern) {
     if (!c->pubsub_data) initClientPubSubData(c);
-    int pattern_added = hashtableAdd(c->pubsub_data->pubsub_patterns, pattern);
+    bool pattern_added = hashtableAdd(c->pubsub_data->pubsub_patterns, pattern);
     if (pattern_added) {
         incrRefCount(pattern);
         /* Add the client to the pattern -> list of clients hash table */
@@ -414,16 +413,16 @@ int pubsubSubscribePattern(client *c, robj *pattern) {
     }
     /* Notify the client */
     addReplyPubsubPatSubscribed(c, pattern);
-    return pattern_added;
+    return;
 }
 
-/* Unsubscribe a client from a channel. Returns 1 if the operation succeeded, or
- * 0 if the client was not subscribed to the specified channel. */
-int pubsubUnsubscribePattern(client *c, robj *pattern, int notify) {
+/* Unsubscribe a client from a channel. Returns true if the operation succeeded,
+ * or false if the client was not subscribed to the specified channel. */
+static bool pubsubUnsubscribePattern(client *c, robj *pattern, int notify) {
     if (!c->pubsub_data) initClientPubSubData(c);
 
     incrRefCount(pattern); /* Protect the object. May be the same we remove */
-    int pattern_deleted = hashtableDelete(c->pubsub_data->pubsub_patterns, pattern);
+    bool pattern_deleted = hashtableDelete(c->pubsub_data->pubsub_patterns, pattern);
     if (pattern_deleted) {
         /* Remove the client from the pattern -> clients list hash table */
         dictEntry *de = dictFind(server.pubsub_patterns, pattern);

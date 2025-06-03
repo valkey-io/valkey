@@ -476,7 +476,7 @@ int hashTypeSet(robj *o, sds field, sds value, int flags) {
             void *new_entry = hashTypeEntryReplaceValue(existing, v);
             if (new_entry != existing) {
                 /* It has been reallocated. */
-                int replaced = hashtableReplaceReallocatedEntry(ht, existing, new_entry);
+                bool replaced = hashtableReplaceReallocatedEntry(ht, existing, new_entry);
                 serverAssert(replaced);
             }
             update = 1;
@@ -493,9 +493,9 @@ int hashTypeSet(robj *o, sds field, sds value, int flags) {
 }
 
 /* Delete an element from a hash.
- * Return 1 on deleted and 0 on not found. */
-int hashTypeDelete(robj *o, sds field) {
-    int deleted = 0;
+ * Return true on deleted, false if not found. */
+bool hashTypeDelete(robj *o, sds field) {
+    bool deleted = false;
 
     if (o->encoding == OBJ_ENCODING_LISTPACK) {
         unsigned char *zl, *fptr;
@@ -1245,7 +1245,7 @@ void hrandfieldWithCountCommand(client *c, long l, int withvalues) {
 
         /* Add all the elements into the temporary hashtable. */
         while (hashtableNext(&iter, &entry)) {
-            int res = hashtableAdd(ht, entry);
+            bool res = hashtableAdd(ht, entry);
             serverAssert(res);
         }
         serverAssert(hashtableSize(ht) == size);

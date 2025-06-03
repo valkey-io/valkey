@@ -309,7 +309,7 @@ int setTypeIsMemberAux(robj *set, char *str, size_t len, int64_t llval, int str_
         return hashtableFind(set->ptr, (sds)str, NULL);
     } else if (set->encoding == OBJ_ENCODING_HASHTABLE) {
         sds sdsval = sdsnewlen(str, len);
-        int result = hashtableFind(set->ptr, sdsval, NULL);
+        bool result = hashtableFind(set->ptr, sdsval, NULL);
         sdsfree(sdsval);
         return result;
     } else {

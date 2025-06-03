@@ -325,7 +325,7 @@ static void dbSetValue(serverDb *db, robj *key, robj **valref, int overwrite, ha
     if (old_position == NULL) {
         int dict_index = getKVStoreIndexForKey(key->ptr);
         old_position = &stackPosition;
-        int found = kvstoreHashtableFindRef(db->keys, dict_index, key->ptr, old_position);
+        bool found = kvstoreHashtableFindRef(db->keys, dict_index, key->ptr, old_position);
         serverAssertWithInfo(NULL, key, found);
     }
     robj *old = hashtableGetEntryAtPosition(old_position);
@@ -440,7 +440,7 @@ robj *dbRandomKey(serverDb *db) {
     while (1) {
         void *entry;
         int randomDictIndex = kvstoreGetFairRandomHashtableIndex(db->keys);
-        int ok = kvstoreHashtableFairRandomEntry(db->keys, randomDictIndex, &entry);
+        bool ok = kvstoreHashtableFairRandomEntry(db->keys, randomDictIndex, &entry);
         if (!ok) return NULL;
         robj *valkey = entry;
         sds key = objectGetKey(valkey);
@@ -486,10 +486,10 @@ int dbGenericDeleteWithDictIndex(serverDb *db, robj *key, int async, int flags, 
          * (The expires table has no destructor callback.) */
         kvstoreHashtableTwoPhasePopDelete(db->keys, dict_index, &pos);
         if (objectGetExpire(val) != -1) {
-            int deleted = kvstoreHashtableDelete(db->expires, dict_index, key->ptr);
+            bool deleted = kvstoreHashtableDelete(db->expires, dict_index, key->ptr);
             serverAssert(deleted);
         } else {
-            debugServerAssert(0 == kvstoreHashtableDelete(db->expires, dict_index, key->ptr));
+            debugServerAssert(false == kvstoreHashtableDelete(db->expires, dict_index, key->ptr));
         }
 
         if (async) {
@@ -1783,7 +1783,7 @@ robj *setExpire(client *c, serverDb *db, robj *key, long long when) {
             hashtableReplaceEntryAtPosition(&position, newval);
             val = newval;
         }
-        int added = kvstoreHashtableAdd(db->expires, dict_index, newval);
+        bool added = kvstoreHashtableAdd(db->expires, dict_index, newval);
         serverAssert(added);
     }
 

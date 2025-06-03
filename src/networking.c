@@ -230,7 +230,7 @@ client *createClient(connection *conn) {
     c->nread = 0;
     c->read_flags = 0;
     c->write_flags = 0;
-    c->cmd = c->lastcmd = c->realcmd = c->io_parsed_cmd = NULL;
+    c->cmd = c->lastcmd = c->realcmd = c->parsed_cmd = NULL;
     c->cur_script = NULL;
     c->multibulklen = 0;
     c->bulklen = -1;
@@ -1603,7 +1603,7 @@ void freeClientArgv(client *c) {
     }
     c->argc = 0;
     c->cmd = NULL;
-    c->io_parsed_cmd = NULL;
+    c->parsed_cmd = NULL;
     c->argv_len_sum = 0;
     c->argv_len = 0;
     c->argv = NULL;
@@ -2708,7 +2708,7 @@ void resetClientIOState(client *c) {
     c->nwritten = 0;
     c->nread = 0;
     c->io_read_state = c->io_write_state = CLIENT_IDLE;
-    c->io_parsed_cmd = NULL;
+    c->parsed_cmd = NULL;
     c->flag.pending_command = 0;
     c->io_last_bufpos = 0;
     c->io_last_reply_block = NULL;

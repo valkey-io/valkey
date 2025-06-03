@@ -4010,23 +4010,23 @@ uint64_t getCommandFlags(client *c) {
  * main-thread. */
 void prepareCommand(client *c) {
     /* Make sure we don't do this twice. */
-    debugServerAssert(c->io_parsed_cmd == NULL && !(c->read_flags & READ_FLAGS_COMMAND_NOT_FOUND));
-    c->io_parsed_cmd = lookupCommand(c->argv, c->argc);
-    if (c->io_parsed_cmd && commandCheckArity(c->io_parsed_cmd, c->argc, NULL) == 0) {
+    debugServerAssert(c->parsed_cmd == NULL && !(c->read_flags & READ_FLAGS_COMMAND_NOT_FOUND));
+    c->parsed_cmd = lookupCommand(c->argv, c->argc);
+    if (c->parsed_cmd && commandCheckArity(c->parsed_cmd, c->argc, NULL) == 0) {
         /* The command was found, but the arity is invalid. */
         c->read_flags |= READ_FLAGS_BAD_ARITY;
-    } else if (c->io_parsed_cmd && server.cluster_enabled) {
+    } else if (c->parsed_cmd && server.cluster_enabled) {
         c->read_flags |= READ_FLAGS_BAD_ARITY;
         debugServerAssert(c->slot == -1 &&
                           !(c->read_flags & READ_FLAGS_CROSSSLOT) &&
                           !(c->read_flags & READ_FLAGS_NO_KEYS));
-        c->slot = clusterSlotByCommand(c->io_parsed_cmd, c->argv, c->argc, &c->read_flags);
+        c->slot = clusterSlotByCommand(c->parsed_cmd, c->argv, c->argc, &c->read_flags);
     }
 }
 
 /* Undo prepareCommand(), to allow prepareCommand() again after applying command filters. */
 void unprepareCommand(client *c) {
-    c->io_parsed_cmd = NULL;
+    c->parsed_cmd = NULL;
     c->read_flags &= ~(READ_FLAGS_COMMAND_NOT_FOUND |
                        READ_FLAGS_BAD_ARITY |
                        READ_FLAGS_CROSSSLOT |
@@ -4075,7 +4075,7 @@ int processCommand(client *c) {
      * In case we are reprocessing a command after it was blocked,
      * we do not have to repeat the same checks */
     if (!client_reprocessing_command) {
-        struct serverCommand *cmd = c->io_parsed_cmd;
+        struct serverCommand *cmd = c->parsed_cmd;
         if (!cmd) {
             /* Handle possible security attacks. */
             if (!strcasecmp(c->argv[0]->ptr, "host:") || !strcasecmp(c->argv[0]->ptr, "post")) {

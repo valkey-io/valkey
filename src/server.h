@@ -1198,12 +1198,12 @@ typedef struct client {
     long bulklen;        /* Length of bulk argument in multi bulk request. */
     long long woff;      /* Last write global replication offset. */
     /* Command execution state and command information */
-    struct serverCommand *cmd;           /* Current command. */
-    struct serverCommand *lastcmd;       /* Last command executed. */
-    struct serverCommand *realcmd;       /* The original command that was executed by the client */
-    struct serverCommand *io_parsed_cmd; /* The command that was parsed e.g. by the IO thread. */
-    time_t last_interaction;             /* Time of the last interaction, used for timeout */
-    serverDb *db;                        /* Pointer to currently SELECTed DB. */
+    struct serverCommand *cmd;        /* Current command. */
+    struct serverCommand *lastcmd;    /* Last command executed. */
+    struct serverCommand *realcmd;    /* The original command that was executed by the client */
+    struct serverCommand *parsed_cmd; /* The command that was parsed. */
+    time_t last_interaction;          /* Time of the last interaction, used for timeout */
+    serverDb *db;                     /* Pointer to currently SELECTed DB. */
     /* Client state structs. */
     ClientPubSubData *pubsub_data;    /* Required for: pubsub commands and tracking. lazily initialized when first needed */
     ClientReplicationData *repl_data; /* Required for Replication operations. lazily initialized when first needed */

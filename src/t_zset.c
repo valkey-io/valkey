@@ -387,7 +387,6 @@ zskiplistNode *zslNthInRange(zskiplist *zsl, zrangespec *range, long n, long *ra
         }
         /* Check if zsl is long enough. */
         if ((unsigned long)(start_rank + n) >= zsl->length) return NULL;
-        if (rank) *rank = start_rank + n;
         if (n < ZSKIPLIST_MAX_SEARCH) {
             /* If offset is small, we can just jump node by node */
             /* rank+1 is the first element in range, so we need n+1 steps to reach target. */
@@ -401,6 +400,7 @@ zskiplistNode *zslNthInRange(zskiplist *zsl, zrangespec *range, long n, long *ra
         }
         /* Check if score <= max. */
         if (x && !zslValueLteMax(x->score, range)) return NULL;
+        if (rank) *rank = start_rank + n;
     } else {
         long end_rank = last_highest_level_rank;
         for (i = zsl->level - 1; i >= 0; i--) {
@@ -413,7 +413,6 @@ zskiplistNode *zslNthInRange(zskiplist *zsl, zrangespec *range, long n, long *ra
         }
         /* Check if the range is big enough. */
         if (end_rank < -n) return NULL;
-        if (rank) *rank = end_rank + n;
         if (n + 1 > -ZSKIPLIST_MAX_SEARCH) {
             /* If offset is small, we can just jump node by node */
             /* rank is the -1th element in range, so we need -n-1 steps to reach target. */
@@ -428,6 +427,7 @@ zskiplistNode *zslNthInRange(zskiplist *zsl, zrangespec *range, long n, long *ra
         }
         /* Check if score >= min. */
         if (x && !zslValueGteMin(x->score, range)) return NULL;
+        if (rank) *rank = end_rank + n;
     }
 
     return x;

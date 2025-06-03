@@ -11,6 +11,117 @@
 #include <linux/magic.h>
 #endif
 
+int test_stringmatch(int argc, char **argv, int flags) {
+    UNUSED(argc);
+    UNUSED(argv);
+    UNUSED(flags);
+
+    TEST_BEGIN();
+
+#define TEST_STRINGMATCH(p, s, expectCase, expectNocase)   \
+    do {                                                   \
+        TEST_EXPECT(stringmatch(p, s, 0) == expectCase);   \
+        TEST_EXPECT(stringmatch(p, s, 1) == expectNocase); \
+    } while (0)
+
+    /* Case sensitivity: */
+    TEST_STRINGMATCH("a", "a", 1, 1);
+    TEST_STRINGMATCH("a", "A", 0, 1);
+    TEST_STRINGMATCH("A", "A", 1, 1);
+    TEST_STRINGMATCH("A", "a", 0, 1);
+    TEST_STRINGMATCH("\\a", "a", 1, 1);
+    TEST_STRINGMATCH("\\a", "A", 0, 1);
+    TEST_STRINGMATCH("\\A", "A", 1, 1);
+    TEST_STRINGMATCH("\\A", "a", 0, 1);
+    TEST_STRINGMATCH("[\\a]", "a", 1, 1);
+    TEST_STRINGMATCH("[\\a]", "A", 0, 0); /* BUG */
+    TEST_STRINGMATCH("[\\A]", "A", 1, 1);
+    TEST_STRINGMATCH("[\\A]", "a", 0, 0); /* BUG */
+
+    /* Escaped metacharacters: */
+    TEST_STRINGMATCH("\\*", "*", 1, 1);
+    TEST_STRINGMATCH("\\?", "?", 1, 1);
+    TEST_STRINGMATCH("\\\\", "\\", 1, 1);
+    TEST_STRINGMATCH("\\[", "[", 1, 1);
+    TEST_STRINGMATCH("\\]", "]", 1, 1);
+    TEST_STRINGMATCH("\\^", "^", 1, 1);
+    TEST_STRINGMATCH("\\-", "-", 1, 1);
+    TEST_STRINGMATCH("[\\*]", "*", 1, 1);
+    TEST_STRINGMATCH("[\\?]", "?", 1, 1);
+    TEST_STRINGMATCH("[\\\\]", "\\", 1, 1);
+    TEST_STRINGMATCH("[\\[]", "[", 1, 1);
+    TEST_STRINGMATCH("[\\]]", "]", 1, 1);
+    TEST_STRINGMATCH("[\\^]", "^", 1, 1);
+    TEST_STRINGMATCH("[\\-]", "-", 1, 1);
+
+    /* Not special outside character classes: */
+    TEST_STRINGMATCH("]", "]", 1, 1);
+    TEST_STRINGMATCH("^", "^", 1, 1);
+    TEST_STRINGMATCH("-", "-", 1, 1);
+    /* Not special inside character classes: */
+    TEST_STRINGMATCH("[*]", "*", 1, 1);
+    TEST_STRINGMATCH("[?]", "?", 1, 1);
+    TEST_STRINGMATCH("[[]", "[", 1, 1);
+    /* Not special as the first character in a character class: */
+    TEST_STRINGMATCH("[-]", "-", 1, 1);
+
+    /* Not special as range end (undocumented): */
+    TEST_STRINGMATCH("[+-]]", ",", 1, 1);  /* ASCII range + to ] includes , */
+    TEST_STRINGMATCH("[+-]]", "*", 0, 0);  /*   but not * (below) */
+    TEST_STRINGMATCH("[+-]]", "^", 0, 0);  /*   or ^ (above) */
+    TEST_STRINGMATCH("[+-\\]", ",", 1, 1); /* ASCII range + to \ includes , */
+    TEST_STRINGMATCH("[+-\\]", "*", 0, 0); /*   but not * (below) */
+    TEST_STRINGMATCH("[+-\\]", "]", 0, 0); /*   or ] (above) */
+    TEST_STRINGMATCH("[+--]", ",", 1, 1);  /* ASCII range + to - includes , */
+    TEST_STRINGMATCH("[+--]", "*", 0, 0);  /*   but not * (below) */
+    TEST_STRINGMATCH("[+--]", ".", 0, 0);  /*   or . (above) */
+    /* And the same, but unclosed: */
+    TEST_STRINGMATCH("[+-]", ",", 1, 1);
+    TEST_STRINGMATCH("[+-]", "*", 0, 0);
+    TEST_STRINGMATCH("[+-]", "^", 0, 0);
+    TEST_STRINGMATCH("[+-\\", ",", 1, 1);
+    TEST_STRINGMATCH("[+-\\", "*", 0, 0);
+    TEST_STRINGMATCH("[+-\\", "]", 0, 0);
+    TEST_STRINGMATCH("[+--", ",", 1, 1);
+    TEST_STRINGMATCH("[+--", "*", 0, 0);
+    TEST_STRINGMATCH("[+--", ".", 0, 0);
+
+    /* Escaped ] alone is literal: */
+    TEST_STRINGMATCH("[\\]a]", "]", 1, 1);
+    TEST_STRINGMATCH("[\\]a]", "a", 1, 1);
+
+    /* Escapes at range start are literal (undocumented): */
+    TEST_STRINGMATCH("[\\]-_]", "^", 0, 0);
+    TEST_STRINGMATCH("[\\]-_]", "-", 1, 1);
+
+    /* Escapes at range end are not processed (undocumented): */
+    TEST_STRINGMATCH("[+-\\\\]]", "\\]", 0, 0); /* BUG */
+    TEST_STRINGMATCH("[+-\\\\]", "]", 1, 1);    /* BUG */
+    TEST_STRINGMATCH("[+-\\]]", "\\]", 1, 1);   /* BUG */
+
+    /* Empty character class matches nothing: */
+    TEST_STRINGMATCH("[]", "", 0, 0);
+    TEST_STRINGMATCH("[]", "a", 0, 0);
+    TEST_STRINGMATCH("[", "", 0, 0); /* Unclosed is the same */
+    TEST_STRINGMATCH("[", "a", 0, 0);
+    /* Empty negated character class is equivalent to pattern "?": */
+    TEST_STRINGMATCH("[^]", "", 0, 0);
+    TEST_STRINGMATCH("[^]", "a", 1, 1);
+    TEST_STRINGMATCH("[^]", "ab", 0, 0);
+    TEST_STRINGMATCH("[^", "", 0, 0); /* Unclosed is the same */
+    TEST_STRINGMATCH("[^", "a", 1, 1);
+    TEST_STRINGMATCH("[^", "ab", 0, 0);
+
+    /* Unclosed character classes are not an error (undocumented): */
+    TEST_STRINGMATCH("[A-", "B", 0, 0);
+
+    // TODO:
+    // - CVE tests
+    // - regression tests
+
+    TEST_END();
+}
+
 /* Fuzz stringmatchlen() trying to crash it with bad input. */
 int test_stringmatchlen_fuzz(int argc, char **argv, int flags) {
     UNUSED(argc);

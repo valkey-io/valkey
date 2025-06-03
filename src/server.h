@@ -309,7 +309,7 @@ extern int configOOMScoreAdjValuesDefaults[CONFIG_OOM_COUNT];
                                              * out to all keys it should cover */
 #define CMD_KEY_VARIABLE_FLAGS (1ULL << 10) /* Means that some keys might have \
                                              * different flags depending on arguments */
-#define CMD_KEY_USES_SLOT (1ULL << 11)      /* A special 'fake' key that is should be \
+#define CMD_KEY_USES_SLOT (1ULL << 11)      /* A special 'fake' key that should be \
                                              * treated as a slot number for routing. */
 
 /* Key flags for when access type is unknown */
@@ -3454,7 +3454,6 @@ robj *dbUnshareStringValue(serverDb *db, robj *key, robj *o);
 #define EMPTYDB_NO_FLAGS 0           /* No flags. */
 #define EMPTYDB_ASYNC (1 << 0)       /* Reclaim memory in another thread. */
 #define EMPTYDB_NOFUNCTIONS (1 << 1) /* Indicate not to flush the functions. */
-typedef int(emptyDataHashtableFilter)(int didx);
 long long emptyData(int dbnum, int flags, void(callback)(hashtable *), int hashslot);
 long long emptyDbStructure(serverDb *dbarray, int dbnum, int async, void(callback)(hashtable *), int hashslot);
 void flushAllDataAndResetRDB(int flags);

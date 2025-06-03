@@ -245,7 +245,7 @@ int addCommandToBatchAndProcessIfFull(client *c) {
     batch->clients[batch->client_count++] = c;
 
     /* Get command's keys positions */
-    if (c->io_parsed_cmd) {
+    if (c->io_parsed_cmd && !(c->read_flags & READ_FLAGS_BAD_ARITY)) {
         getKeysResult result;
         initGetKeysResult(&result);
         int num_keys = getKeysFromCommand(c->io_parsed_cmd, c->argv, c->argc, &result);

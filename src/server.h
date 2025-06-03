@@ -858,6 +858,7 @@ typedef struct multiCmd {
     int argv_len;
     int argc;
     struct serverCommand *cmd;
+    int slot;
 } multiCmd;
 
 typedef struct multiState {
@@ -1200,7 +1201,7 @@ typedef struct client {
     struct serverCommand *cmd;           /* Current command. */
     struct serverCommand *lastcmd;       /* Last command executed. */
     struct serverCommand *realcmd;       /* The original command that was executed by the client */
-    struct serverCommand *io_parsed_cmd; /* The command that was parsed by the IO thread. */
+    struct serverCommand *io_parsed_cmd; /* The command that was parsed e.g. by the IO thread. */
     time_t last_interaction;             /* Time of the last interaction, used for timeout */
     serverDb *db;                        /* Pointer to currently SELECTed DB. */
     /* Client state structs. */
@@ -2642,6 +2643,9 @@ void dictVanillaFree(void *val);
 #define READ_FLAGS_PRIMARY (1 << 14)
 #define READ_FLAGS_DONT_PARSE (1 << 15)
 #define READ_FLAGS_AUTH_REQUIRED (1 << 16)
+#define READ_FLAGS_BAD_ARITY (1 << 17)
+#define READ_FLAGS_NO_KEYS (1 << 18)
+#define READ_FLAGS_CROSSSLOT (1 << 19)
 
 /* Write flags for various write errors and states */
 #define WRITE_FLAGS_WRITE_ERROR (1 << 0)

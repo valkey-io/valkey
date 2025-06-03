@@ -6551,7 +6551,8 @@ ValkeyModuleCallReply *VM_Call(ValkeyModuleCtx *ctx, const char *cmdname, const 
         /* Duplicate relevant flags in the module client. */
         c->flag.readonly = ctx->client->flag.readonly;
         c->flag.asking = ctx->client->flag.asking;
-        if (getNodeByQuery(c, c->cmd, c->argv, c->argc, NULL, &error_code) != getMyClusterNode()) {
+        c->slot = clusterSlotByCommand(c->cmd, c->argv, c->argc, &c->read_flags);
+        if (getNodeByQuery(c, &error_code) != getMyClusterNode()) {
             sds msg = NULL;
             if (error_code == CLUSTER_REDIR_DOWN_RO_STATE) {
                 if (error_as_call_replies) {

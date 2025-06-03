@@ -962,7 +962,43 @@ void clusterCommand(client *c) {
     }
 }
 
+/* Compute cluster slot for the given command and arguments and detect cluster
+ * cross-slot errors. Returns the slot. If -1 is returned, one of the flags
+ * READ_FLAGS_NO_KEYS or READ_FLAGS_CROSSSLOT is set in `*read_flags` to
+ * indicate why the slot couldn't be determined. This function has no
+ * side-effects and can be called from I/O threads. */
+int clusterSlotByCommand(struct serverCommand *cmd, robj **argv, int argc, int *read_flags) {
+    getKeysResult result;
+    initGetKeysResult(&result);
+    int numkeys = getKeysFromCommand(cmd, argv, argc, &result);
+    int slot = -1;
+    if (numkeys == 0) *read_flags |= READ_FLAGS_NO_KEYS;
+    for (int i = 0; i < numkeys; i++) {
+        sds key = argv[result.keys[i].pos]->ptr;
+        int keyslot = keyHashSlot(key, sdslen(key));
+        if (slot == -1) {
+            slot = keyslot;
+        } else if (keyslot != slot) {
+            slot = -1;
+            *read_flags |= READ_FLAGS_CROSSSLOT;
+            break;
+        }
+    }
+    getKeysFreeResult(&result);
+    return slot;
+}
+
 /* Return the pointer to the cluster node that is able to serve the command.
+ *
+ * Note that this function doesn't compute the slot for each key. The client's
+ * slot needs to be set before calling this function. If it's set to -1, the
+ * client's read flags should indicate if it's a cross-slot command or if the
+ * command has no keys. This is computed by clusterSlotByCommand(). The commands
+ * can be called together like this:
+ *
+ *     c->slot = clusterSlotByCommand(c->cmd, c->argv, c->argc, &c->read_flags);
+ *     node = getNodeByQuery(c, &error_code);
+ *
  * For the function to succeed the command should only target either:
  *
  * 1) A single key (even multiple times like RPOPLPUSH mylist mylist).
@@ -994,15 +1030,17 @@ void clusterCommand(client *c) {
  *
  * CLUSTER_REDIR_DOWN_STATE and CLUSTER_REDIR_DOWN_RO_STATE if the cluster is
  * down but the user attempts to execute a command that addresses one or more keys. */
-clusterNode *
-getNodeByQuery(client *c, struct serverCommand *cmd, robj **argv, int argc, int *hashslot, int *error_code) {
+clusterNode *getNodeByQuery(client *c, int *error_code) {
     clusterNode *myself = getMyClusterNode();
     clusterNode *n = NULL;
     robj *firstkey = NULL;
     int multiple_keys = 0;
     multiState *ms, _ms;
     multiCmd mc;
-    int i, slot = 0, migrating_slot = 0, importing_slot = 0, missing_keys = 0, existing_keys = 0;
+    int i, migrating_slot = 0, importing_slot = 0, missing_keys = 0, existing_keys = 0;
+
+    /* Slot must be calculated in advance, or cross-slot or no keys detected. */
+    serverAssert(c->slot >= 0 || c->read_flags & (READ_FLAGS_NO_KEYS | READ_FLAGS_CROSSSLOT));
 
     /* Allow any key to be set if a module disabled cluster redirections. */
     if (server.cluster_module_flags & CLUSTER_MODULE_FLAG_NO_REDIRECTION) return myself;
@@ -1014,9 +1052,63 @@ getNodeByQuery(client *c, struct serverCommand *cmd, robj **argv, int argc, int 
      * when writing a module that implements a completely different
      * distributed system. */
 
+    /* Determine transaction slot and return early on cross-slot. */
+    if (c->cmd->proc == execCommand && c->flag.multi) {
+        int slot = -1;
+        for (i = 0; i < c->mstate->count; i++) {
+            if (slot == -1) {
+                slot = c->mstate->commands[i].slot;
+            } else if (c->mstate->commands[i].slot != -1 && c->mstate->commands[i].slot != slot) {
+                if (error_code) *error_code = CLUSTER_REDIR_CROSS_SLOT;
+                return NULL;
+            }
+        }
+        c->slot = slot;
+    } else if (c->read_flags & READ_FLAGS_CROSSSLOT) {
+        if (error_code) *error_code = CLUSTER_REDIR_CROSS_SLOT;
+        return NULL;
+    }
+
+    /* No key at all in command? then we can serve the request
+     * without redirections or errors in all the cases. */
+    if (c->slot == -1) return myself;
+
+    n = getNodeBySlot(c->slot);
+
+    /* If a slot is not served, we are in "cluster down" state.
+     * This check is done early to preserve historical behavior. */
+    if (n == NULL) {
+        if (error_code) *error_code = CLUSTER_REDIR_DOWN_UNBOUND;
+        return NULL;
+    }
+
+    /* If we are migrating or importing this slot, we need to check
+     * if we have all the keys in the request (the only way we
+     * can safely serve the request, otherwise we return a TRYAGAIN
+     * error). To do so we set the importing/migrating state and
+     * increment a counter for every missing key. */
+    if (clusterNodeIsPrimary(myself) || c->flag.readonly) {
+        if (n == clusterNodeGetPrimary(myself) && getMigratingSlotDest(c->slot) != NULL) {
+            migrating_slot = 1;
+        } else if (getImportingSlotSource(c->slot) != NULL) {
+            importing_slot = 1;
+        }
+    }
+
+    uint64_t cmd_flags = getCommandFlags(c);
+
+    /* Only valid for sharded pubsub as regular pubsub can operate on any node and bypasses this layer. */
+    int pubsubshard_included =
+        (cmd_flags & CMD_PUBSUB) || (c->cmd->proc == execCommand && (c->mstate->cmd_flags & CMD_PUBSUB));
+
+    /* For migrating and importing slots, we need to go over all the keys to
+     * count existing keys and missing keys that we need for TRYAGAIN and ASK
+     * redirects. Skip this if we're not importing or migrating. */
+    if (!migrating_slot && !importing_slot) goto after_checking_each_key;
+
     /* We handle all the cases as if they were EXEC commands, so we have
      * a common code path for everything */
-    if (cmd->proc == execCommand) {
+    if (c->cmd->proc == execCommand) {
         /* If CLIENT_MULTI flag is not set EXEC is just going to return an
          * error. */
         if (!c->flag.multi) return myself;
@@ -1028,21 +1120,14 @@ getNodeByQuery(client *c, struct serverCommand *cmd, robj **argv, int argc, int 
         ms = &_ms;
         _ms.commands = &mc;
         _ms.count = 1;
-        mc.argv = argv;
-        mc.argc = argc;
-        mc.cmd = cmd;
+        mc.argv = c->argv;
+        mc.argc = c->argc;
+        mc.cmd = c->cmd;
     }
-
-    uint64_t cmd_flags = getCommandFlags(c);
-
-    /* Only valid for sharded pubsub as regular pubsub can operate on any node and bypasses this layer. */
-    int pubsubshard_included =
-        (cmd_flags & CMD_PUBSUB) || (c->cmd->proc == execCommand && (c->mstate->cmd_flags & CMD_PUBSUB));
 
     serverDb *currentDb = c->db;
 
-    /* Check that all the keys are in the same hash slot, and obtain this
-     * slot and the node associated. */
+    /* Check for multiple keys, existing keys, missing keys. */
     for (i = 0; i < ms->count; i++) {
         struct serverCommand *mcmd;
         robj **margv;
@@ -1070,47 +1155,13 @@ getNodeByQuery(client *c, struct serverCommand *cmd, robj **argv, int argc, int 
 
         for (j = 0; j < numkeys; j++) {
             robj *thiskey = margv[keyindex[j].pos];
-            int thisslot = keyHashSlot((char *)thiskey->ptr, sdslen(thiskey->ptr));
 
             if (firstkey == NULL) {
-                /* This is the first key we see. Check what is the slot
-                 * and node. */
+                /* This is the first key we see. */
                 firstkey = thiskey;
-                slot = thisslot;
-                n = getNodeBySlot(slot);
-
-                /* Error: If a slot is not served, we are in "cluster down"
-                 * state. However the state is yet to be updated, so this was
-                 * not trapped earlier in processCommand(). Report the same
-                 * error to the client. */
-                if (n == NULL) {
-                    getKeysFreeResult(&result);
-                    if (error_code) *error_code = CLUSTER_REDIR_DOWN_UNBOUND;
-                    return NULL;
-                }
-
-                /* If we are migrating or importing this slot, we need to check
-                 * if we have all the keys in the request (the only way we
-                 * can safely serve the request, otherwise we return a TRYAGAIN
-                 * error). To do so we set the importing/migrating state and
-                 * increment a counter for every missing key. */
-                if (clusterNodeIsPrimary(myself) || c->flag.readonly) {
-                    if (n == clusterNodeGetPrimary(myself) && getMigratingSlotDest(slot) != NULL) {
-                        migrating_slot = 1;
-                    } else if (getImportingSlotSource(slot) != NULL) {
-                        importing_slot = 1;
-                    }
-                }
-
             } else {
                 /* If it is not the first key/channel, make sure it is exactly
                  * the same key/channel as the first we saw. */
-                if (slot != thisslot) {
-                    /* Error: multiple keys from different slots. */
-                    getKeysFreeResult(&result);
-                    if (error_code) *error_code = CLUSTER_REDIR_CROSS_SLOT;
-                    return NULL;
-                }
                 if (importing_slot && !multiple_keys && !equalStringObjects(firstkey, thiskey)) {
                     /* Flag this request as one with multiple different
                      * keys/channels when the slot is in importing state. */
@@ -1119,7 +1170,7 @@ getNodeByQuery(client *c, struct serverCommand *cmd, robj **argv, int argc, int 
             }
 
             /* Block MOVE command as the destination key is not expected to exist, and we don't know if it was migrated */
-            if ((migrating_slot || importing_slot) && mcmd->proc == moveCommand) {
+            if (mcmd->proc == moveCommand) {
                 if (error_code) *error_code = CLUSTER_REDIR_UNSTABLE;
                 getKeysFreeResult(&result);
                 return NULL;
@@ -1128,8 +1179,7 @@ getNodeByQuery(client *c, struct serverCommand *cmd, robj **argv, int argc, int 
             /* Block the COPY command if it's cross-DB to keep the code simple.
              * Allowing cross-DB COPY is possible, but it would require looking up the second key in the target DB.
              * The command should only be allowed if the key exists. We may revisit this decision in the future. */
-            if ((migrating_slot || importing_slot) &&
-                mcmd->proc == copyCommand &&
+            if (mcmd->proc == copyCommand &&
                 margc >= 4 && !strcasecmp(margv[3]->ptr, "db")) {
                 long long value;
                 if (getLongLongFromObject(margv[4], &value) != C_OK || value != currentDb->id) {
@@ -1146,10 +1196,9 @@ getNodeByQuery(client *c, struct serverCommand *cmd, robj **argv, int argc, int 
              * node until the migration completes with CLUSTER SETSLOT <slot>
              * NODE <node-id>. */
             int flags = LOOKUP_NOTOUCH | LOOKUP_NOSTATS | LOOKUP_NONOTIFY | LOOKUP_NOEXPIRE;
-            if ((migrating_slot || importing_slot) &&
-                !pubsubshard_included &&
-                (!c->flag.multi || (c->flag.multi && cmd->proc == execCommand)) // Multi/Exec validation happens on exec
-            ) {
+            if (!pubsubshard_included &&
+                (!c->flag.multi || (c->flag.multi && c->cmd->proc == execCommand))) {
+                /* Multi/Exec validation happens on exec */
                 if (lookupKeyReadWithFlags(currentDb, thiskey, flags) == NULL)
                     missing_keys++;
                 else
@@ -1159,9 +1208,7 @@ getNodeByQuery(client *c, struct serverCommand *cmd, robj **argv, int argc, int 
         getKeysFreeResult(&result);
     }
 
-    /* No key at all in command? then we can serve the request
-     * without redirections or errors in all the cases. */
-    if (n == NULL) return myself;
+after_checking_each_key:
 
     /* Cluster is globally down but we got keys? We only serve the request
      * if it is a read command and when allow_reads_when_down is enabled. */
@@ -1187,13 +1234,10 @@ getNodeByQuery(client *c, struct serverCommand *cmd, robj **argv, int argc, int 
         }
     }
 
-    /* Return the hashslot by reference. */
-    if (hashslot) *hashslot = slot;
-
     /* MIGRATE always works in the context of the local node if the slot
      * is open (migrating or importing state). We need to be able to freely
      * move keys among instances in this case. */
-    if ((migrating_slot || importing_slot) && cmd->proc == migrateCommand && clusterNodeIsPrimary(myself)) {
+    if ((migrating_slot || importing_slot) && c->cmd->proc == migrateCommand && clusterNodeIsPrimary(myself)) {
         return myself;
     }
 
@@ -1206,7 +1250,7 @@ getNodeByQuery(client *c, struct serverCommand *cmd, robj **argv, int argc, int 
             return NULL;
         } else {
             if (error_code) *error_code = CLUSTER_REDIR_ASK;
-            return getMigratingSlotDest(slot);
+            return getMigratingSlotDest(c->slot);
         }
     }
 
@@ -1307,6 +1351,7 @@ int clusterRedirectBlockedClientIfNeeded(client *c) {
         if ((de = dictNext(di)) != NULL) {
             robj *key = dictGetKey(de);
             int slot = keyHashSlot((char *)key->ptr, sdslen(key->ptr));
+            serverAssert(slot == c->slot);
             clusterNode *node = getNodeBySlot(slot);
 
             /* if the client is read-only and attempting to access key that our

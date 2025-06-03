@@ -4045,7 +4045,7 @@ int processCommand(client *c) {
      * In case we are reprocessing a command after it was blocked,
      * we do not have to repeat the same checks */
     if (!client_reprocessing_command) {
-        struct serverCommand *cmd = c->io_parsed_cmd ? c->io_parsed_cmd : lookupCommand(c->argv, c->argc);
+        struct serverCommand *cmd = c->io_parsed_cmd;
         if (!cmd) {
             /* Handle possible security attacks. */
             if (!strcasecmp(c->argv[0]->ptr, "host:") || !strcasecmp(c->argv[0]->ptr, "post")) {
@@ -4056,6 +4056,7 @@ int processCommand(client *c) {
         c->cmd = c->lastcmd = c->realcmd = cmd;
         c->flag.buffered_reply = 0;
         sds err;
+
         if (!commandCheckExistence(c, &err)) {
             rejectCommandSds(c, err);
             return C_OK;
@@ -4132,7 +4133,7 @@ int processCommand(client *c) {
     if (server.cluster_enabled && !obey_client &&
         !(!(c->cmd->flags & CMD_MOVABLE_KEYS) && c->cmd->key_specs_num == 0 && c->cmd->proc != execCommand)) {
         int error_code;
-        clusterNode *n = getNodeByQuery(c, c->cmd, c->argv, c->argc, &c->slot, &error_code);
+        clusterNode *n = getNodeByQuery(c, &error_code);
         if (n == NULL || !clusterNodeIsMyself(n)) {
             if (c->cmd->proc == execCommand) {
                 discardTransaction(c);

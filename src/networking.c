@@ -3240,6 +3240,23 @@ int canParseCommand(client *c) {
     return 1;
 }
 
+/* Prepare a parsed command for processing, including looking up the command,
+ * checking arity and calculating cluster slot. This can be done by I/O threads
+ * to offload the main-thread. */
+static void prepareCommand(client *c) {
+    c->io_parsed_cmd = lookupCommand(c->argv, c->argc);
+    if (c->io_parsed_cmd && commandCheckArity(c->io_parsed_cmd, c->argc, NULL) == 0) {
+        /* The command was found, but the arity is invalid. */
+        c->read_flags |= READ_FLAGS_BAD_ARITY;
+    } else if (c->io_parsed_cmd && server.cluster_enabled) {
+        /* Make sure we don't do this twice. This shouldn't be calculated yet. */
+        debugServerAssert(c->slot == -1 &&
+                          !(c->read_flags & READ_FLAGS_CROSSSLOT) &&
+                          !(c->read_flags & READ_FLAGS_NO_KEYS));
+        c->slot = clusterSlotByCommand(c->io_parsed_cmd, c->argv, c->argc, &c->read_flags);
+    }
+}
+
 int processInputBuffer(client *c) {
     /* Parse the query buffer. */
     while (c->querybuf && c->qb_pos < sdslen(c->querybuf)) {
@@ -3267,6 +3284,9 @@ int processInputBuffer(client *c) {
              * the shared qb for other clients during processEventsWhileBlocked */
             resetSharedQueryBuf(c);
         }
+
+        /* Lookup command, check arity, calculate cluster slot. */
+        prepareCommand(c);
 
         /* We are finally ready to execute the command. */
         if (processCommandAndResetClient(c) == C_ERR) {
@@ -5516,25 +5536,8 @@ void ioThreadReadQueryFromClient(void *data) {
         goto done;
     }
 
-    /* Lookup command offload */
-    c->io_parsed_cmd = lookupCommand(c->argv, c->argc);
-    if (c->io_parsed_cmd && commandCheckArity(c->io_parsed_cmd, c->argc, NULL) == 0) {
-        /* The command was found, but the arity is invalid.
-         * In this case, we reset the parsed_cmd and will let the main thread handle it. */
-        c->io_parsed_cmd = NULL;
-    }
-
-    /* Offload slot calculations to the I/O thread to reduce main-thread load. */
-    if (c->io_parsed_cmd && server.cluster_enabled) {
-        getKeysResult result;
-        initGetKeysResult(&result);
-        int numkeys = getKeysFromCommand(c->io_parsed_cmd, c->argv, c->argc, &result);
-        if (numkeys) {
-            robj *first_key = c->argv[result.keys[0].pos];
-            c->slot = keyHashSlot(first_key->ptr, sdslen(first_key->ptr));
-        }
-        getKeysFreeResult(&result);
-    }
+    /* Lookup command and cluster slot calculation. */
+    prepareCommand(c);
 
 done:
     /* Only trim query buffer for non-primary clients

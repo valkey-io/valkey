@@ -6,7 +6,7 @@
         "since": "9.0.0",
         "container": "CLUSTER",
         "function": "clusterCommand",
-        "arity": -2,
+        "arity": 3,
         "command_flags": [
             "NO_ASYNC_LOADING",
             "ADMIN",
@@ -29,6 +29,9 @@
                     }
                 ]
             }
-        ]
+        ],
+        "reply_schema": {
+            "const": "OK"
+        }
     }
 }

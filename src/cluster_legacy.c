@@ -7541,16 +7541,17 @@ const char **clusterCommandExtendedHelp(void) {
         "LINKS",
         "    Return information about all network links between this node and its peers.",
         "    Output format is an array where each array element is a map containing attributes of a link",
-        "IMPORT(-PREPARE) SLOTSRANGE <start slot> <end slot> [<start slot> <end slot> ...]",
-        "    Import the specified slot ranges from their owners.",
+        "IMPORT SLOTSRANGE <start slot> <end slot> [<start slot> <end slot> ...]",
+        "    Import the specified slot ranges from their owner.",
+        "IMPORT-PREPARE SLOTSRANGE <start slot> <end slot> [<start slot> <end slot> ...]",
+        "    Begin import of the specified slot ranges from their owner, but do not takeover "
+        "    ownership until IMPORT-COMMIT is run.",
         "IMPORT-COMMIT LINK <link-name>",
         "    Commit a previous import started with IMPORT-PREPARE.",
         "IMPORT-CANCEL ALL",
         "    Cancel all ongoing imports.",
         "MIGRATIONS",
         "    Get information about ongoing and recently finished slot imports and exports.",
-        "SYNCSLOTS <subcommand>",
-        "    Internal command used to perform state transitions in slot import and export.",
         NULL};
 
     return help;

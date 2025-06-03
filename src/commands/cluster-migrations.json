@@ -6,11 +6,59 @@
         "since": "9.0.0",
         "container": "CLUSTER",
         "function": "clusterCommand",
-        "arity": -2,
+        "arity": 2,
         "command_flags": [
             "NO_ASYNC_LOADING",
             "ADMIN",
             "STALE"
-        ]
+        ],
+        "reply_schema": {
+            "description": "A nested list of maps, one for each migration, with keys and values representing migration fields.",
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "link_name": {
+                        "type": "string"
+                    },
+                    "operation": {
+                        "oneOf": [
+                            {
+                                "const": "IMPORT"
+                            },
+                            {
+                                "const": "EXPORT"
+                            }
+                        ]
+                    },
+                    "slot_ranges": {
+                        "description": "Slot ranges in the format <start>-<end> inclusive, each range separated by a space.",
+                        "type": "string"
+                    },
+                    "node": {
+                        "type": "string"
+                    },
+                    "create_time": {
+                        "description": "Creation time, in seconds since the unix epoch.",
+                        "type": "integer"
+                    },
+                    "last_update_time": {
+                        "description": "Last update time, in seconds since the unix epoch.",
+                        "type": "integer"
+                    },
+                    "last_ack_time": {
+                        "description": "Last received ack time, in seconds since the unix epoch.",
+                        "type": "integer"
+                    },
+                    "state": {
+                        "type": "string"
+                    },
+                    "message": {
+                        "type": "string"
+                    }
+                }
+            }
+        }
     }
 }

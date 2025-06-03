@@ -4004,6 +4004,36 @@ uint64_t getCommandFlags(client *c) {
     return cmd_flags;
 }
 
+/* Prepare a parsed command for processing, including looking up the command,
+ * checking arity and calculating cluster slot. This should be done before
+ * calling processCommand() and can be done by I/O threads to offload the
+ * main-thread. */
+void prepareCommand(client *c) {
+    /* Make sure we don't do this twice. */
+    debugServerAssert(c->io_parsed_cmd == NULL && !(c->read_flags & READ_FLAGS_COMMAND_NOT_FOUND));
+    c->io_parsed_cmd = lookupCommand(c->argv, c->argc);
+    if (c->io_parsed_cmd && commandCheckArity(c->io_parsed_cmd, c->argc, NULL) == 0) {
+        /* The command was found, but the arity is invalid. */
+        c->read_flags |= READ_FLAGS_BAD_ARITY;
+    } else if (c->io_parsed_cmd && server.cluster_enabled) {
+        c->read_flags |= READ_FLAGS_BAD_ARITY;
+        debugServerAssert(c->slot == -1 &&
+                          !(c->read_flags & READ_FLAGS_CROSSSLOT) &&
+                          !(c->read_flags & READ_FLAGS_NO_KEYS));
+        c->slot = clusterSlotByCommand(c->io_parsed_cmd, c->argv, c->argc, &c->read_flags);
+    }
+}
+
+/* Undo prepareCommand(), to allow prepareCommand() again after applying command filters. */
+void unprepareCommand(client *c) {
+    c->io_parsed_cmd = NULL;
+    c->read_flags &= ~(READ_FLAGS_COMMAND_NOT_FOUND |
+                       READ_FLAGS_BAD_ARITY |
+                       READ_FLAGS_CROSSSLOT |
+                       READ_FLAGS_NO_KEYS);
+    c->slot = -1;
+}
+
 /* If this function gets called we already read a whole
  * command, arguments are in the client argv/argc fields.
  * processCommand() execute the command or prepare the
@@ -4052,6 +4082,9 @@ int processCommand(client *c) {
                 securityWarningCommand(c);
                 return C_ERR;
             }
+            /* Check that the command lookup should has been done before calling
+             * this function, by calling prepareCommand(). */
+            serverAssert(!(c->read_flags & READ_FLAGS_COMMAND_NOT_FOUND));
         }
         c->cmd = c->lastcmd = c->realcmd = cmd;
         c->flag.buffered_reply = 0;

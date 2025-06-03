@@ -3240,23 +3240,6 @@ int canParseCommand(client *c) {
     return 1;
 }
 
-/* Prepare a parsed command for processing, including looking up the command,
- * checking arity and calculating cluster slot. This can be done by I/O threads
- * to offload the main-thread. */
-static void prepareCommand(client *c) {
-    c->io_parsed_cmd = lookupCommand(c->argv, c->argc);
-    if (c->io_parsed_cmd && commandCheckArity(c->io_parsed_cmd, c->argc, NULL) == 0) {
-        /* The command was found, but the arity is invalid. */
-        c->read_flags |= READ_FLAGS_BAD_ARITY;
-    } else if (c->io_parsed_cmd && server.cluster_enabled) {
-        /* Make sure we don't do this twice. This shouldn't be calculated yet. */
-        debugServerAssert(c->slot == -1 &&
-                          !(c->read_flags & READ_FLAGS_CROSSSLOT) &&
-                          !(c->read_flags & READ_FLAGS_NO_KEYS));
-        c->slot = clusterSlotByCommand(c->io_parsed_cmd, c->argv, c->argc, &c->read_flags);
-    }
-}
-
 int processInputBuffer(client *c) {
     /* Parse the query buffer. */
     while (c->querybuf && c->qb_pos < sdslen(c->querybuf)) {

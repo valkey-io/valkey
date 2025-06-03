@@ -2643,9 +2643,10 @@ void dictVanillaFree(void *val);
 #define READ_FLAGS_PRIMARY (1 << 14)
 #define READ_FLAGS_DONT_PARSE (1 << 15)
 #define READ_FLAGS_AUTH_REQUIRED (1 << 16)
-#define READ_FLAGS_BAD_ARITY (1 << 17)
-#define READ_FLAGS_NO_KEYS (1 << 18)
-#define READ_FLAGS_CROSSSLOT (1 << 19)
+#define READ_FLAGS_COMMAND_NOT_FOUND (1 << 17)
+#define READ_FLAGS_BAD_ARITY (1 << 18)
+#define READ_FLAGS_NO_KEYS (1 << 19)
+#define READ_FLAGS_CROSSSLOT (1 << 20)
 
 /* Write flags for various write errors and states */
 #define WRITE_FLAGS_WRITE_ERROR (1 << 0)
@@ -3164,6 +3165,8 @@ int getMaxmemoryState(size_t *total, size_t *logical, size_t *tofree, float *lev
 size_t freeMemoryGetNotCountedMemory(void);
 int overMaxmemoryAfterAlloc(size_t moremem);
 uint64_t getCommandFlags(client *c);
+void prepareCommand(client *c);
+void unprepareCommand(client *c);
 int processCommand(client *c);
 int processPendingCommandAndInputBuffer(client *c);
 int processCommandAndResetClient(client *c);

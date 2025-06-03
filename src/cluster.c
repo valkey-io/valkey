@@ -1005,6 +1005,10 @@ int clusterSlotByCommand(struct serverCommand *cmd, robj **argv, int argc, int *
  * 2) Multiple keys in the same hash slot, while the slot is stable (no
  *    resharding in progress).
  *
+ * The EXEC command is a special case. It takes no keys so the slot for this
+ * command is -1, but this function updates the client's slot to be the slot of
+ * the complete MULTI-EXEC transaction.
+ *
  * On success the function returns the node that is able to serve the request.
  * If the node is not 'myself' a redirection must be performed. The kind of
  * redirection is specified setting the integer passed by reference
@@ -1063,6 +1067,8 @@ clusterNode *getNodeByQuery(client *c, int *error_code) {
                 return NULL;
             }
         }
+        /* EXEC will execute all queued commands in the transaction, so we
+         * overwrite the EXEC commands's slot with the transaction's slot. */
         c->slot = slot;
     } else if (c->read_flags & READ_FLAGS_CROSSSLOT) {
         if (error_code) *error_code = CLUSTER_REDIR_CROSS_SLOT;

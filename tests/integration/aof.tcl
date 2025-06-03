@@ -9,6 +9,8 @@ set aof_file "$server_path/$aof_dirname/${aof_basename}.1$::incr_aof_suffix$::ao
 set aof_manifest_file "$server_path/$aof_dirname/$aof_basename$::manifest_suffix"
 
 tags {"aof external:skip"} {
+    set db [expr {$::singledb ? 0 : 9}]
+
     # Server can start when aof-load-truncated is set to yes and AOF
     # is truncated, with an incomplete MULTI block.
     create_aof $aof_dirpath $aof_file {
@@ -435,7 +437,7 @@ tags {"aof external:skip"} {
             # generate a long running script that is propagated to the AOF as script
             # make sure that the script times out during loading
             create_aof $aof_dirpath $aof_file {
-                append_to_aof [formatCommand select 9]
+                append_to_aof [formatCommand select $db]
                 append_to_aof [formatCommand eval {redis.call('set',KEYS[1],'y'); for i=1,1500000 do redis.call('ping') end return 'ok'} 1 x]
             }
             set rd [valkey_deferring_client]
@@ -459,7 +461,7 @@ tags {"aof external:skip"} {
             append_to_manifest "file appendonly.aof.1.incr.aof seq 1 type i\n"
         }
         create_aof $aof_dirpath $aof_file {
-            append_to_aof [formatCommand select 9]
+            append_to_aof [formatCommand select $db]
             append_to_aof [formatCommand eval {redis.call("set",KEYS[1],"100")} 1 foo]
             append_to_aof [formatCommand eval {redis.call("incr",KEYS[1])} 1 foo]
             append_to_aof [formatCommand eval {redis.call("incr",KEYS[1])} 1 foo]

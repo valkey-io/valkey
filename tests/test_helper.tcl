@@ -620,7 +620,9 @@ proc print_help_screen {} {
         "--baseport <port>  Initial port number for spawned valkey servers."
         "--portcount <num>  Port range for spawned valkey servers."
         "--singledb         Use a single database, avoid SELECT."
-        "--cluster-mode     Run tests in cluster protocol compatible mode."
+        "--cluster-mode     Skip tests that are not compatible with cluster mode."
+        "                   When running tests against an external node in cluster"
+        "                   mode, it needs to be started with cluster-databases 16."
         "--ignore-encoding  Don't validate object encoding."
         "--ignore-digest    Don't use debug digest validations."
         "--large-memory     Run tests using over 100mb."
@@ -763,7 +765,6 @@ for {set j 0} {$j < [llength $argv]} {incr j} {
         set ::singledb 1
     } elseif {$opt eq {--cluster-mode}} {
         set ::cluster_mode 1
-        set ::singledb 1
     } elseif {$opt eq {--large-memory}} {
         set ::large_memory 1
     } elseif {$opt eq {--ignore-encoding}} {

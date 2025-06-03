@@ -270,7 +270,7 @@ start_server {tags {"multi"}} {
         r multi
         r ping
         r exec
-    } {} {singledb:skip}
+    } {} {cluster:skip}
 
     test {SWAPDB is able to touch the watched keys that do not exist} {
         r flushall
@@ -282,7 +282,7 @@ start_server {tags {"multi"}} {
         r multi
         r ping
         r exec
-    } {} {singledb:skip}
+    } {} {singledb:skip cluster:skip}
 
     test {SWAPDB does not touch watched stale keys} {
         r flushall
@@ -296,7 +296,7 @@ start_server {tags {"multi"}} {
         r ping
         assert_equal {PONG} [r exec]
         r debug set-active-expire 1
-    } {OK} {singledb:skip needs:debug}
+    } {OK} {singledb:skip cluster:skip needs:debug}
 
     test {SWAPDB does not touch non-existing key replaced with stale key} {
         r flushall
@@ -311,7 +311,7 @@ start_server {tags {"multi"}} {
         r ping
         assert_equal {PONG} [r exec]
         r debug set-active-expire 1
-    } {OK} {singledb:skip needs:debug}
+    } {OK} {singledb:skip cluster:skip needs:debug}
 
     test {SWAPDB does not touch stale key replaced with another stale key} {
         r flushall
@@ -328,7 +328,7 @@ start_server {tags {"multi"}} {
         r ping
         assert_equal {PONG} [r exec]
         r debug set-active-expire 1
-    } {OK} {singledb:skip needs:debug}
+    } {OK} {singledb:skip cluster:skip needs:debug}
 
     test {WATCH is able to remember the DB a key belongs to} {
         r select 5

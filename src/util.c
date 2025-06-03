@@ -183,12 +183,11 @@ static int stringmatchlen_impl(const char *pattern,
         }
         pattern++;
         patternLen--;
-        if (stringLen == 0) {
-            while (patternLen && *pattern == '*') {
-                pattern++;
-                patternLen--;
-            }
-            break;
+    }
+    if (stringLen == 0) {
+        while (patternLen && *pattern == '*') {
+            pattern++;
+            patternLen--;
         }
     }
     if (patternLen == 0 && stringLen == 0) return 1;

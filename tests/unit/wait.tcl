@@ -100,7 +100,7 @@ start_server {} {
     }
 
     start_server {} {
-        test {Setup a new replica} {
+        test {Set up a new replica} {
             r replicaof $master_host $master_port
             wait_for_ofs_sync $master r
             wait_for_ofs_sync $master $slave

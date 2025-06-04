@@ -2855,7 +2855,7 @@ emptykey:
     return NULL;
 }
 
-/* Mark that we are loading in the global state and setup the fields
+/* Mark that we are loading in the global state and set up the fields
  * needed to provide loading stats. */
 void startLoading(size_t size, int rdbflags, int async) {
     /* Load the DB */
@@ -2880,7 +2880,7 @@ void startLoading(size_t size, int rdbflags, int async) {
     moduleFireServerEvent(VALKEYMODULE_EVENT_LOADING, subevent, NULL);
 }
 
-/* Mark that we are loading in the global state and setup the fields
+/* Mark that we are loading in the global state and set up the fields
  * needed to provide loading stats.
  * 'filename' is optional and used for rdb-check on error */
 void startLoadingFile(size_t size, char *filename, int rdbflags) {

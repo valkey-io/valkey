@@ -4893,7 +4893,7 @@ int sentinelSendReplicaOf(sentinelValkeyInstance *ri, const sentinelAddr *addr) 
     return C_OK;
 }
 
-/* Setup the primary state to start a failover. */
+/* Set up the primary state to start a failover. */
 void sentinelStartFailover(sentinelValkeyInstance *primary) {
     serverAssert(primary->flags & SRI_PRIMARY);
 

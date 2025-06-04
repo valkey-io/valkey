@@ -157,7 +157,7 @@ struct connection {
 
 #define CONFIG_BINDADDR_MAX 16
 
-/* Setup a listener by a connection type */
+/* Set up a listener by a connection type */
 struct connListener {
     int fd[CONFIG_BINDADDR_MAX];
     int count;

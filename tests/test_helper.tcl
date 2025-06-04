@@ -125,7 +125,7 @@ proc execute_test_code {__testname filename code} {
     send_data_packet $::test_server_fd done "$__testname"
 }
 
-# Setup a list to hold a stack of server configs. When calls to start_server
+# Set up a list to hold a stack of server configs. When calls to start_server
 # are nested, use "srv 0 pid" to get the pid of the inner server. To access
 # outer servers, use "srv -1 pid" etcetera.
 set ::servers {}

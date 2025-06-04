@@ -335,7 +335,7 @@ raxNode *raxAddChild(raxNode *n, unsigned char c, raxNode **childptr, raxNode **
     /* Move the pointers to the left of the insertion position as well. Often
      * we don't need to do anything if there was already some padding to use. In
      * that case the final destination of the pointers will be the same, however
-     * in our example there was no pre-existing padding, so we added one byte
+     * in our example there was no preexisting padding, so we added one byte
      * plus three bytes of padding. After the next memmove() things will look
      * like that:
      *

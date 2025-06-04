@@ -1045,7 +1045,7 @@ int raxRemove(rax *rax, unsigned char *s, size_t len, void **old) {
             rax_free(child);
             rax->numnodes--;
             h = raxStackPop(&ts);
-            /* If this node has more then one child, or actually holds
+            /* If this node has more than one child, or actually holds
              * a key, stop here. */
             if (h->iskey || (!h->iscompr && h->size != 1)) break;
         }

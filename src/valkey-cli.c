@@ -3724,7 +3724,7 @@ clusterManagerCommandDef clusterManagerCommands[] = {
     {"add-node", clusterManagerCommandAddNode, 2, "new_host:new_port existing_host:existing_port",
      "replica,primaries-id <arg>"},
     {"del-node", clusterManagerCommandDeleteNode, 2, "host:port node_id", NULL},
-    {"call", clusterManagerCommandCall, -2, "host:port command arg arg .. arg", "only-primaries,only-replicas"},
+    {"call", clusterManagerCommandCall, -2, "host:port command arg arg ... arg", "only-primaries,only-replicas"},
     {"set-timeout", clusterManagerCommandSetTimeout, 2, "host:port milliseconds", NULL},
     {"import", clusterManagerCommandImport, 1, "host:port",
      "from <arg>,from-user <arg>,from-pass <arg>,from-askpass,copy,replace"},

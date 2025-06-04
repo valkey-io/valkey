@@ -3697,7 +3697,7 @@ void sentinelCommand(client *c) {
             "    failover.",
             "CONFIG SET param value [param value ...]",
             "    Set a global Sentinel configuration parameter.",
-            "CONFIG GET <param> [param param param ...]",
+            "CONFIG GET <param> [param param ... param]",
             "    Get global Sentinel configuration parameter.",
             "DEBUG [<param> <value> ...]",
             "    Show a list of configurable time parameters and their values (milliseconds).",

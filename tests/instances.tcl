@@ -538,7 +538,7 @@ proc end_tests {} {
 # The "S" command is used to interact with the N-th Sentinel.
 # The general form is:
 #
-# S <sentinel-id> command arg arg arg ...
+# S <sentinel-id> command arg arg ... arg
 #
 # Example to ping the Sentinel 0 (first instance): S 0 PING
 proc S {n args} {

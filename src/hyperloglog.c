@@ -1629,7 +1629,7 @@ invalid:
     return C_ERR;
 }
 
-/* PFADD var ele ele ele ... ele => :0 or :1 */
+/* PFADD var ele ele ... ele => :0 or :1 */
 void pfaddCommand(client *c) {
     robj *o = lookupKeyWrite(c->db, c->argv[1]);
     struct hllhdr *hdr;

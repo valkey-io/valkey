@@ -1105,7 +1105,7 @@ void removeClientFromMemUsageBucket(client *c, int allow_eviction) {
  *
  * Note: This function filters clients of type no-evict, primary or replica regardless
  * of whether the eviction is enabled or not, so the memory usage we get from these
- * types of clients via the INFO command may be out of date.
+ * types of clients via the INFO command may be out-of-date.
  *
  * returns 1 if client eviction for this client is allowed, 0 otherwise.
  */

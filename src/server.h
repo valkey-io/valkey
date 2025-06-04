@@ -3454,8 +3454,9 @@ robj *dbUnshareStringValue(serverDb *db, robj *key, robj *o);
 #define EMPTYDB_NO_FLAGS 0           /* No flags. */
 #define EMPTYDB_ASYNC (1 << 0)       /* Reclaim memory in another thread. */
 #define EMPTYDB_NOFUNCTIONS (1 << 1) /* Indicate not to flush the functions. */
-long long emptyData(int dbnum, int flags, void(callback)(hashtable *), int hashslot);
-long long emptyDbStructure(serverDb *dbarray, int dbnum, int async, void(callback)(hashtable *), int hashslot);
+long long emptyData(int dbnum, int flags, void(callback)(hashtable *));
+long long emptyDbStructure(serverDb *dbarray, int dbnum, int async, void(callback)(hashtable *));
+void unlinkHashtableFromDb(serverDb *db, int hashslot, kvstore **out_keys, kvstore **out_expires);
 void flushAllDataAndResetRDB(int flags);
 long long dbTotalServerKeyCount(void);
 serverDb *initTempDb(void);
@@ -3466,7 +3467,7 @@ void signalFlushedDb(int dbid, int async);
 void scanGenericCommand(client *c, robj *o, unsigned long long cursor);
 int parseScanCursorOrReply(client *c, sds buf, unsigned long long *cursor);
 int dbAsyncDelete(serverDb *db, robj *key);
-void emptyDbAsync(serverDb *db, int hashslot);
+void emptyDbAsync(serverDb *db);
 size_t lazyfreeGetPendingObjectsCount(void);
 size_t lazyfreeGetFreedObjectsCount(void);
 void lazyfreeResetStats(void);

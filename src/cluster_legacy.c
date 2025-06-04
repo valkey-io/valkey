@@ -6555,38 +6555,10 @@ unsigned int delKeysInSlot(unsigned int hashslot, int lazy, bool propagate_del, 
     /* We may lose a slot during the pause. We need to track this
      * state so that we don't assert in propagateNow(). */
     server.server_del_keys_in_slot = 1;
-    int before_execution_nesting = server.execution_nesting;
+    unsigned int j = 0;
     robj *argv[4];
-    int deleted = 0;
-
-    /* Before dropping, we need to trigger the proper events for deletion. */
-    for (int i = 0; i < server.dbnum; i++) {
-        kvstoreHashtableIterator *kvs_di = NULL;
-        void *next;
-        serverDb db = server.db[i];
-        kvs_di = kvstoreGetHashtableIterator(db.keys, hashslot, HASHTABLE_ITER_SAFE);
-        while (kvstoreHashtableIteratorNext(kvs_di, &next)) {
-            robj *valkey = next;
-            sds sdskey = objectGetKey(valkey);
-            robj *key = createStringObject(sdskey, sdslen(sdskey));
-            signalModifiedKey(NULL, &db, key);
-            if (send_del_event) {
-                /* In the `cluster flushslot` scenario, the keys are actually deleted so notify everyone. */
-                notifyKeyspaceEvent(NOTIFY_GENERIC, "del", key, db.id);
-            } else {
-                /* The keys are not actually logically deleted from the database, just moved to another node.
-                 * The modules needs to know that these keys are no longer available locally, so just send the
-                 * keyspace notification to the modules, but not to clients. */
-                moduleNotifyKeyspaceEvent(NOTIFY_GENERIC, "del", key, db.id);
-            }
-            decrRefCount(key);
-        }
-        kvstoreReleaseHashtableIterator(kvs_di);
-    }
-
-    /* Drop the hashslot */
-    deleted += emptyData(-1, lazy ? EMPTYDB_ASYNC : EMPTYDB_NO_FLAGS, NULL, hashslot);
-    server.dirty += deleted;
+    int before_execution_nesting = server.execution_nesting;
+    enterExecutionUnit(1, 0);
 
     /* Propagate as a single CLUSTER FLUSHSLOT <slot> ASYNC/SYNC. */
     if (propagate_del) {
@@ -6598,8 +6570,8 @@ unsigned int delKeysInSlot(unsigned int hashslot, int lazy, bool propagate_del, 
         incrRefCount(argv[0]);
         incrRefCount(argv[1]);
         incrRefCount(argv[3]);
-        /* DB number doesn't matter since FLUSHSLOT is a cross-DB operation, just hardcode
-         * zero. */
+        /* DB number doesn't matter since FLUSHSLOT is a cross-DB operation,
+         * just hardcode zero. */
         alsoPropagate(/*dbid=*/0, argv, 4, PROPAGATE_AOF | PROPAGATE_REPL);
         decrRefCount(argv[0]);
         decrRefCount(argv[1]);
@@ -6609,9 +6581,43 @@ unsigned int delKeysInSlot(unsigned int hashslot, int lazy, bool propagate_del, 
         postExecutionUnitOperations();
     }
 
+    for (int i = 0; i < server.dbnum; i++) {
+        kvstoreHashtableIterator *kvs_di = NULL;
+        void *next;
+        serverDb db = server.db[i];
+        kvs_di = kvstoreGetHashtableIterator(db.keys, hashslot, HASHTABLE_ITER_SAFE);
+        while (kvstoreHashtableIteratorNext(kvs_di, &next)) {
+            robj *valkey = next;
+            sds sdskey = objectGetKey(valkey);
+            robj *key = createStringObject(sdskey, sdslen(sdskey));
+            if (lazy) {
+                dbAsyncDelete(&db, key);
+            } else {
+                dbSyncDelete(&db, key);
+            }
+            signalModifiedKey(NULL, &db, key);
+            if (send_del_event) {
+                /* In the `cluster flushslot` scenario, the keys are actually deleted so notify everyone. */
+                notifyKeyspaceEvent(NOTIFY_GENERIC, "del", key, db.id);
+            } else {
+                /* The keys are not actually logically deleted from the database, just moved to another node.
+                 * The modules needs to know that these keys are no longer available locally, so just send the
+                 * keyspace notification to the modules, but not to clients. */
+                moduleNotifyKeyspaceEvent(NOTIFY_GENERIC, "del", key, db.id);
+            }
+            decrRefCount(key);
+            j++;
+            server.dirty++;
+        }
+        kvstoreReleaseHashtableIterator(kvs_di);
+    }
+
+    exitExecutionUnit();
+    postExecutionUnitOperations();
+
     server.server_del_keys_in_slot = 0;
     serverAssert(server.execution_nesting == before_execution_nesting);
-    return deleted;
+    return j;
 }
 
 /* Get the count of the channels for a given slot. */

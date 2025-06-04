@@ -14,7 +14,6 @@ typedef int(kvstoreExpandShouldSkipHashtableIndex)(int didx);
 #define KVSTORE_ALLOCATE_HASHTABLES_ON_DEMAND (1 << 0)
 #define KVSTORE_FREE_EMPTY_HASHTABLES (1 << 1)
 kvstore *kvstoreCreate(hashtableType *type, int num_hashtables_bits, int flags);
-void kvstoreEmptyHashtable(kvstore *kvs, int didx, void(callback)(hashtable *));
 void kvstoreEmpty(kvstore *kvs, void(callback)(hashtable *));
 void kvstoreRelease(kvstore *kvs);
 unsigned long long kvstoreSize(kvstore *kvs);
@@ -48,9 +47,6 @@ kvstoreIterator *kvstoreIteratorInit(kvstore *kvs, uint8_t flags);
 void kvstoreIteratorRelease(kvstoreIterator *kvs_it);
 int kvstoreIteratorGetCurrentHashtableIndex(kvstoreIterator *kvs_it);
 int kvstoreIteratorNext(kvstoreIterator *kvs_it, void **next);
-
-/* Moving */
-void kvstoreMoveHashtable(kvstore *dst, kvstore *src, int didx);
 
 /* Rehashing */
 void kvstoreTryResizeHashtables(kvstore *kvs, int limit);

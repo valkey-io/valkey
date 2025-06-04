@@ -570,12 +570,8 @@ robj *dbUnshareStringValue(serverDb *db, robj *key, robj *o) {
  *
  * The dbnum can be -1 if all the DBs should be emptied, or the specified
  * DB index if we want to empty only a single database.
- *
- * The hashslot can be -1 if all the slots should be emptied, or the specified
- * slot if we want to empty only a single slot.
- *
  * The function returns the number of keys removed from the database(s). */
-long long emptyDbStructure(serverDb *dbarray, int dbnum, int async, void(callback)(hashtable *), int hashslot) {
+long long emptyDbStructure(serverDb *dbarray, int dbnum, int async, void(callback)(hashtable *)) {
     long long removed = 0;
     int startdb, enddb;
 
@@ -591,15 +587,10 @@ long long emptyDbStructure(serverDb *dbarray, int dbnum, int async, void(callbac
 
         removed += kvstoreSize(dbarray[j].keys);
         if (async) {
-            emptyDbAsync(&dbarray[j], hashslot);
+            emptyDbAsync(&dbarray[j]);
         } else {
-            if (hashslot >= 0) {
-                kvstoreEmptyHashtable(dbarray[j].keys, hashslot, callback);
-                kvstoreEmptyHashtable(dbarray[j].expires, hashslot, callback);
-            } else {
-                kvstoreEmpty(dbarray[j].keys, callback);
-                kvstoreEmpty(dbarray[j].expires, callback);
-            }
+            kvstoreEmpty(dbarray[j].keys, callback);
+            kvstoreEmpty(dbarray[j].expires, callback);
         }
         /* Because all keys of database are removed, reset average ttl. */
         dbarray[j].avg_ttl = 0;
@@ -627,7 +618,7 @@ long long emptyDbStructure(serverDb *dbarray, int dbnum, int async, void(callbac
  * On success the function returns the number of keys removed from the
  * database(s). Otherwise -1 is returned in the specific case the
  * DB number is out of range, and errno is set to EINVAL. */
-long long emptyData(int dbnum, int flags, void(callback)(hashtable *), int hashslot) {
+long long emptyData(int dbnum, int flags, void(callback)(hashtable *)) {
     int async = (flags & EMPTYDB_ASYNC);
     int with_functions = !(flags & EMPTYDB_NOFUNCTIONS);
     ValkeyModuleFlushInfoV1 fi = {VALKEYMODULE_FLUSHINFO_VERSION, !async, dbnum};
@@ -647,7 +638,7 @@ long long emptyData(int dbnum, int flags, void(callback)(hashtable *), int hashs
     signalFlushedDb(dbnum, async);
 
     /* Empty the database structure. */
-    removed = emptyDbStructure(server.db, dbnum, async, callback, hashslot);
+    removed = emptyDbStructure(server.db, dbnum, async, callback);
 
     if (dbnum == -1) flushReplicaKeysWithExpireList();
 
@@ -685,7 +676,7 @@ serverDb *initTempDb(void) {
 /* Discard tempDb, it's always async. */
 void discardTempDb(serverDb *tempDb) {
     /* Release temp DBs. */
-    emptyDbStructure(tempDb, -1, 1, NULL, -1);
+    emptyDbStructure(tempDb, -1, 1, NULL);
     for (int i = 0; i < server.dbnum; i++) {
         kvstoreRelease(tempDb[i].keys);
         kvstoreRelease(tempDb[i].expires);
@@ -776,7 +767,7 @@ int getFlushCommandFlags(client *c, int *flags) {
 
 /* Flushes the whole server data set. */
 void flushAllDataAndResetRDB(int flags) {
-    server.dirty += emptyData(-1, flags, NULL, -1);
+    server.dirty += emptyData(-1, flags, NULL);
     if (server.child_type == CHILD_TYPE_RDB) killRDBChild();
     if (server.saveparamslen > 0) {
         rdbSaveInfo rsi, *rsiptr;
@@ -800,7 +791,7 @@ void flushdbCommand(client *c) {
 
     if (getFlushCommandFlags(c, &flags) == C_ERR) return;
     /* flushdb should not flush the functions */
-    server.dirty += emptyData(c->db->id, flags | EMPTYDB_NOFUNCTIONS, NULL, -1);
+    server.dirty += emptyData(c->db->id, flags | EMPTYDB_NOFUNCTIONS, NULL);
 
     /* Without the forceCommandPropagation, when DB was already empty,
      * FLUSHDB will not be replicated nor put into the AOF. */

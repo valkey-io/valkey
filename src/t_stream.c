@@ -389,7 +389,7 @@ int streamCompareID(streamID *a, streamID *b) {
 
 /* Retrieves the ID of the stream edge entry. An edge is either the first or
  * the last ID in the stream, and may be a tombstone. To filter out tombstones,
- * set the'skip_tombstones' argument to 1. */
+ * set the 'skip_tombstones' argument to 1. */
 void streamGetEdgeID(stream *s, int first, int skip_tombstones, streamID *edge_id) {
     streamIterator si;
     int64_t numfields;

@@ -1365,7 +1365,7 @@ int hashtableAddOrFind(hashtable *ht, void *entry, void **existing) {
  * argument, which can be stack-allocated. This position should then be used in
  * a call to hashtableInsertAtPosition.
  *
- * If the function returns 0, it means that an an entry with the given key
+ * If the function returns 0, it means that an entry with the given key
  * already exists in the table. If an 'existing' pointer is provided, it is
  * pointed to the existing entry with the matching key.
  *

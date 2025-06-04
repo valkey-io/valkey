@@ -396,8 +396,8 @@ int hashtableSdsKeyCompare(const void *key1, const void *key2) {
     return sdslen(sds1) != sdslen(sds2) || sdscmp(sds1, sds2);
 }
 
-/* A case insensitive version used for the command lookup table and other
- * places where case insensitive non binary-safe comparison is needed. */
+/* A case-insensitive version used for the command lookup table and other
+ * places where case-insensitive non binary-safe comparison is needed. */
 int dictSdsKeyCaseCompare(const void *key1, const void *key2) {
     return strcasecmp(key1, key2) == 0;
 }
@@ -467,7 +467,7 @@ int dictCStrKeyCompare(const void *key1, const void *key2) {
     return memcmp(key1, key2, l1) == 0;
 }
 
-/* Dict case insensitive compare function for null terminated string */
+/* Dict case-insensitive compare function for null terminated string */
 int dictCStrKeyCaseCompare(const void *key1, const void *key2) {
     return strcasecmp(key1, key2) == 0;
 }

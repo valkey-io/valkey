@@ -588,11 +588,11 @@ start_server {tags {"acl external:skip"}} {
         r ACL SETUSER adv-test -@string -@slow +@all
         assert_equal "+@all" [dict get [r ACL getuser adv-test] commands]
 
-        # Make sure categories are case insensitive
+        # Make sure categories are case-insensitive
         r ACL SETUSER adv-test -@all +@HASH +@hash +@HaSh
         assert_equal "-@all +@hash" [dict get [r ACL getuser adv-test] commands]
 
-        # Make sure commands are case insensitive
+        # Make sure commands are case-insensitive
         r ACL SETUSER adv-test -@all +HGET +hget +hGeT
         assert_equal "-@all +hget" [dict get [r ACL getuser adv-test] commands]
 
@@ -1284,11 +1284,11 @@ tags {acl external:skip} {
             r ACL SETUSER adv-test +@hash
             assert_equal "+@all -@slow +hget +@hash" [dict get [r ACL getuser adv-test] commands]
 
-            # Make sure categories are case insensitive
+            # Make sure categories are case-insensitive
             r ACL SETUSER adv-test -@all +@HASH +@hash +@HaSh
             assert_equal "-@all +@hash" [dict get [r ACL getuser adv-test] commands]
 
-            # Make sure commands are case insensitive
+            # Make sure commands are case-insensitive
             r ACL SETUSER adv-test -@all +HGET +hget +hGeT
             assert_equal "-@all +hget" [dict get [r ACL getuser adv-test] commands]
 

@@ -2260,10 +2260,10 @@ int test_quicklistCompressAndDecompressQuicklistListpackNode(int argc, char **ar
     return 0;
 }
 
-int test_quicklistCompressAndDecomressQuicklistPlainNodeLargeThanUINT32MAX(int argc, char **argv, int flags) {
+int test_quicklistCompressAndDecompressQuicklistPlainNodeLargeThanUINT32MAX(int argc, char **argv, int flags) {
     UNUSED(argc);
     UNUSED(argv);
-    TEST("compress and decomress quicklist plain node large than UINT32_MAX");
+    TEST("compress and decompress quicklist plain node large than UINT32_MAX");
 
     if (!(flags & UNIT_TEST_LARGE_MEMORY)) return 0;
 

@@ -3238,7 +3238,7 @@ void xclaimCommand(client *c) {
              * by the caller is satisfied by this entry.
              *
              * Note that the nack could be created by FORCE, in this
-             * case there was no pre-existing entry and minidle should
+             * case there was no preexisting entry and minidle should
              * be ignored, but in that case nack->consumer is NULL. */
             if (nack->consumer && minidle) {
                 mstime_t this_idle = now - nack->delivery_time;

@@ -827,7 +827,7 @@ fmterr:
  * of the POSIX filesystem semantics, so that if the server is stopped
  * or crashes during the write, we'll end with either the old file or the
  * new one. Since we have the full payload to write available we can use
- * a single write to write the whole file. If the pre-existing file was
+ * a single write to write the whole file. If the preexisting file was
  * bigger we pad our payload with newlines that are anyway ignored and truncate
  * the file afterward. */
 int clusterSaveConfig(int do_fsync) {

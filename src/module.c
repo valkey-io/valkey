@@ -7232,7 +7232,7 @@ moduleType *moduleTypeLookupModuleByName(const char *name) {
     return moduleTypeLookupModuleByNameInternal(name, 0);
 }
 
-/* Search all registered modules by name, but case insensitive */
+/* Search all registered modules by name, but case-insensitive */
 moduleType *moduleTypeLookupModuleByNameIgnoreCase(const char *name) {
     return moduleTypeLookupModuleByNameInternal(name, 1);
 }

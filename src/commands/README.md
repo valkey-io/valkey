@@ -77,7 +77,7 @@ following keys. To be safe, assume all of them are optional.
   * `"TOUCHES_ARBITRARY_KEYS"`
   * `"WRITE"`
 * `"acl_categories"`: A list of ACL categories in uppercase. Note that the
-  effective ACL categies include "implicit ACL categories" explained below.
+  effective ACL categories include "implicit ACL categories" explained below.
   * `"ADMIN"`
   * `"BITMAP"`
   * `"CONNECTION"`
@@ -211,7 +211,7 @@ doesn't have an `"arguments"` key.
 Appendix
 --------
 
-How to list all the `group`, `command_flags` and `acl_categries`, etc. used in all these files:
+How to list all the `group`, `command_flags` and `acl_categories`, etc. used in all these files:
 
     cat *.json | jq '.[].group'             | grep -F '"' | sed 's/^ *//;s/, *$//;s/^/  * `/;s/$/`/' | sort | uniq
     cat *.json | jq '.[].command_flags'     | grep -F '"' | sed 's/^ *//;s/, *$//;s/^/  * `/;s/$/`/' | sort | uniq

@@ -307,7 +307,7 @@ test "Replica client-output-buffer size is limited to backlog_limit/16 when no r
             $master config set client-output-buffer-limit "replica 32768 32768 60"
             $master config set dual-channel-replication-enabled $dualchannel
             $replica config set dual-channel-replication-enabled $dualchannel
-            # Key has has to be larger than replica client-output-buffer limit.
+            # Key has to be larger than replica client-output-buffer limit.
             set keysize [expr 256*1024]
 
             $replica replicaof $master_host $master_port

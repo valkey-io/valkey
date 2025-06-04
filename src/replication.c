@@ -2097,7 +2097,7 @@ void disklessLoadDiscardTempDb(serverDb *tempDb) {
     discardTempDb(tempDb);
 }
 
-/* Helper function for to initialize temp function lib context.
+/* Helper function to initialize temp function lib context.
  * The temp ctx may be populated by functionsLibCtxSwapWithCurrent or
  * freed by disklessLoadDiscardFunctionsLibCtx later. */
 functionsLibCtx *disklessLoadFunctionsLibCtxCreate(void) {

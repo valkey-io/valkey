@@ -1807,7 +1807,7 @@ static int _listZiplistEntryConvertAndValidate(unsigned char *p, unsigned int he
     return 1;
 }
 
-/* callback for to check the listpack doesn't have duplicate records */
+/* callback to check the listpack doesn't have duplicate records */
 static int _lpEntryValidation(unsigned char *p, unsigned int head_count, void *userdata) {
     struct {
         int pairs;

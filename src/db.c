@@ -34,6 +34,7 @@
 #include "functions.h"
 #include "io_threads.h"
 #include "module.h"
+#include "array.h"
 
 #include <signal.h>
 #include <ctype.h>
@@ -920,63 +921,15 @@ void keysCommand(client *c) {
  * Adding a 20% buffer (20 * 1.2) gives 24. */
 #define MAX_SCAN_ARRAY_BUFFER 24
 
-/* Used to store the iteration results from the SCAN/HSCAN/SSCAN/ZSCAN commands. */
-typedef struct {
-    sds *array;  /* Points to buf or heap */
-    size_t used; /* Used size of the array */
-    size_t size; /* Allocated size of the array */
-    void (*free)(void *);
-    sds buf[MAX_SCAN_ARRAY_BUFFER]; /* Pre-allocated buffer reduces heap allocation */
-} scanArray;
-
-/* Initialize a scanArray structure. */
-static void scanArrayInit(scanArray *result, void (*free)(void *)) {
-    /* The array is initialized with a pre-allocated buffer of size MAX_SCAN_ARRAY_BUFFER,
-     * which will be used until the number of elements exceeds this size. */
-    result->used = 0;
-    result->array = result->buf;
-    result->size = MAX_SCAN_ARRAY_BUFFER;
-
-    /* The free function is used to free the elements in the array,
-     * if NULL then no free will be performed. */
-    result->free = free;
-}
-
-/* Append a value to the scanArray. */
-static void scanArrayAppend(scanArray *result, sds v) {
-    if (result->used == result->size) {
-        result->size *= 2;
-        if (result->array == result->buf) {
-            result->array = zmalloc(sizeof(sds) * result->size);
-            memcpy(result->array, result->buf, sizeof(result->buf));
-        } else {
-            result->array = zrealloc(result->array, sizeof(sds) * result->size);
-        }
-    }
-    result->array[result->used++] = v;
-}
-
-/* Clean a scanArray inited with scanArrayInit(). */
-static void scanArrayCleanup(scanArray *result) {
-    if (result->free) {
-        for (size_t i = 0; i < result->used; i++) {
-            result->free(result->array[i]);
-        }
-    }
-    if (result->buf != result->array) {
-        zfree(result->array);
-    }
-}
-
 /* Data used by the dict scan callback. */
 typedef struct {
-    scanArray *result; /* elements that collect from dict */
-    robj *o;           /* o must be a hash/set/zset object, NULL means current db */
-    serverDb *db;      /* database currently being scanned */
-    long long type;    /* the particular type when scan the db */
-    sds pattern;       /* pattern string, NULL means no pattern */
-    long sampled;      /* cumulative number of keys sampled */
-    int only_keys;     /* set to 1 means to return keys only */
+    sds *result;    /* elements that collect from dict */
+    robj *o;        /* o must be a hash/set/zset object, NULL means current db */
+    serverDb *db;   /* database currently being scanned */
+    long long type; /* the particular type when scan the db */
+    sds pattern;    /* pattern string, NULL means no pattern */
+    long sampled;   /* cumulative number of keys sampled */
+    int only_keys;  /* set to 1 means to return keys only */
 } scanData;
 
 /* Helper function to compare key type in scan commands */
@@ -1025,7 +978,7 @@ void keysScanCallback(void *privdata, void *entry) {
     }
 
     /* Keep this key. */
-    scanArrayAppend(data->result, key);
+    arrayPush(data->result, key);
 }
 
 /* This callback is used by scanGenericCommand in order to collect elements
@@ -1036,7 +989,6 @@ void hashtableScanCallback(void *privdata, void *entry) {
     sds key = NULL;
 
     robj *o = data->o;
-    scanArray *result = data->result;
     data->sampled++;
 
     /* This callback is only used for scanning elements within a key (hash
@@ -1079,8 +1031,8 @@ void hashtableScanCallback(void *privdata, void *entry) {
         }
     }
 
-    scanArrayAppend(result, key);
-    if (val) scanArrayAppend(result, val);
+    arrayPush(data->result, key);
+    if (val) arrayPush(data->result, val);
 }
 
 /* Try to parse a SCAN cursor stored at buffer 'buf':
@@ -1145,7 +1097,7 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {
     sds typename = NULL;
     long long type = LLONG_MAX;
     int patlen = 0, use_pattern = 0, only_keys = 0;
-    scanArray result;
+    sds *result;
 
     /* Object must be NULL (to iterate keys names), or the type of the object
      * must be Set, Sorted Set, or Hash. */
@@ -1234,7 +1186,7 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {
         /* scanning ZSET allocates temporary strings even though it's a dict */
         free_callback = sdsfreeVoid;
     }
-    scanArrayInit(&result, free_callback);
+    arrayNew(result, MAX_SCAN_ARRAY_BUFFER, free_callback);
 
     /* For main hash table scan or scannable data structure. */
     if (!o || ht) {
@@ -1258,7 +1210,7 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {
          * 6. data.only_keys: to control whether values will be returned or
          * only keys are returned. */
         scanData data = {
-            .result = &result,
+            .result = result,
             .db = c->db,
             .o = o,
             .type = type,
@@ -1281,6 +1233,7 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {
                 cursor = hashtableScan(ht, cursor, hashtableScanCallback, &data);
             }
         } while (cursor && maxiterations-- && data.sampled < count);
+        result = data.result;
     } else if (o->type == OBJ_SET) {
         char *str;
         char buf[LONG_STR_SIZE];
@@ -1295,7 +1248,7 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {
             if (use_pattern && !stringmatchlen(pat, sdslen(pat), key, len, 0)) {
                 continue;
             }
-            scanArrayAppend(&result, sdsnewlen(key, len));
+            arrayPush(result, sdsnewlen(key, len));
         }
         setTypeReleaseIterator(si);
         cursor = 0;
@@ -1315,11 +1268,11 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {
                 continue;
             }
             /* add key object */
-            scanArrayAppend(&result, sdsnewlen(str, len));
+            arrayPush(result, sdsnewlen(str, len));
             /* add value object */
             if (!only_keys) {
                 str = lpGet(p, &len, intbuf);
-                scanArrayAppend(&result, sdsnewlen(str, len));
+                arrayPush(result, sdsnewlen(str, len));
             }
             p = lpNext(o->ptr, p);
         }
@@ -1332,13 +1285,13 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {
     addReplyArrayLen(c, 2);
     addReplyBulkLongLong(c, cursor);
 
-    addReplyArrayLen(c, result.used);
-    for (size_t i = 0; i < result.used; i++) {
-        sds key = result.array[i];
+    addReplyArrayLen(c, arrayLen(result));
+    for (unsigned long i = 0; i < arrayLen(result); i++) {
+        sds key = result[i];
         addReplyBulkCBuffer(c, key, sdslen(key));
     }
 
-    scanArrayCleanup(&result);
+    arrayFree(result);
 }
 
 /* The SCAN command completely relies on scanGenericCommand. */

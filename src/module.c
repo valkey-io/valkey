@@ -13154,7 +13154,7 @@ void moduleRemoveConfigs(ValkeyModule *module) {
 }
 
 /* Remove ACL categories added by the module when it fails to load. */
-void moduleRemoveCateogires(ValkeyModule *module) {
+void moduleRemoveCategories(ValkeyModule *module) {
     if (module->num_acl_categories_added) {
         ACLCleanupCategoriesOnFailure(module->num_acl_categories_added);
     }
@@ -13385,7 +13385,7 @@ static int moduleInitPostOnLoadResolved(ModuleLoadFunc onload,
             serverLog(LL_WARNING, "%sModule %s initialization failed. Module not loaded.",
                       is_static ? "Static " : "", display_name);
             moduleUnregisterCleanup(ctx.module);
-            moduleRemoveCateogires(ctx.module);
+            moduleRemoveCategories(ctx.module);
             moduleFreeModuleStructure(ctx.module);
             if (errmsg) *errmsg = "module initialization failed";
         } else {

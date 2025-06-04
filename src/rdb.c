@@ -2960,7 +2960,7 @@ void rdbLoadProgressCallback(rio *r, const void *buf, size_t len) {
  * message on failure.
  *
  * The lib_ctx argument is also optional. If NULL is given, only verify rdb
- * structure with out performing the actual functions loading. */
+ * structure without performing the actual functions loading. */
 int rdbFunctionLoad(rio *rdb, int ver, functionsLibCtx *lib_ctx, int rdbflags, sds *err) {
     UNUSED(ver);
     sds error = NULL;

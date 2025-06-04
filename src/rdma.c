@@ -334,7 +334,7 @@ static int rdmaCreateResource(RdmaContext *ctx, struct rdma_cm_id *cm_id) {
     int comp_vector = rdma_config->completion_vector;
 
     if (ibv_query_device(cm_id->verbs, &device_attr)) {
-        serverLog(LL_WARNING, "RDMA: ibv ibv query device failed");
+        serverLog(LL_WARNING, "RDMA: ibv query device failed");
         return C_ERR;
     }
 
@@ -682,7 +682,7 @@ static int connRdmaAccept(connection *conn, ConnectionCallbackFunc accept_handle
     connDecrRefs(conn);
 
     if (ibv_query_device(cm_id->verbs, &device_attr)) {
-        serverLog(LL_WARNING, "RDMA: ibv ibv query device failed");
+        serverLog(LL_WARNING, "RDMA: ibv query device failed");
         return C_ERR;
     }
 

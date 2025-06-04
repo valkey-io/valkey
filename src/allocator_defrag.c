@@ -236,7 +236,7 @@ static inline int binQueryHelperInitialization(jeBinInfoKeys *helper, unsigned b
 
 /* Initializes the defragmentation system for the jemalloc memory allocator.
  *
- * This function performs the necessary setup and initialization steps for the defragmentation system.
+ * This function performs the necessary set up and initialization steps for the defragmentation system.
  * It retrieves the configuration information for the jemalloc arenas and bins, and initializes the usage
  * statistics data structure.
  *

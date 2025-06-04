@@ -706,7 +706,7 @@ proc restart_instance {type id} {
     set cfgfile [file join $dirname $type.conf]
     set port [get_instance_attrib $type $id port]
 
-    # Execute the instance with its old setup and append the new pid
+    # Execute the instance with its old set up and append the new pid
     # file for cleanup.
     set pid [exec_instance $type $dirname $cfgfile]
     set_instance_attrib $type $id pid $pid

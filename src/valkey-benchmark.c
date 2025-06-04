@@ -1935,7 +1935,7 @@ int main(int argc, char **argv) {
             sds_args[argc] = readArgFromStdin();
             argc++;
         }
-        /* Setup argument length */
+        /* Set up argument length */
         size_t *argvlen = zmalloc(argc * sizeof(size_t));
         for (i = 0; i < argc; i++) argvlen[i] = sdslen(sds_args[i]);
         /* RESP-encode the command(s) given on the syntax

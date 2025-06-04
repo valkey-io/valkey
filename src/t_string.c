@@ -878,7 +878,7 @@ void lcsCommand(client *c) {
     uint32_t alen = sdslen(a);
     uint32_t blen = sdslen(b);
 
-/* Setup an uint32_t array to store at LCS[i,j] the length of the
+/* Set up an uint32_t array to store at LCS[i,j] the length of the
  * LCS A0..i-1, B0..j-1. Note that we have a linear array here, so
  * we index it as LCS[j+(blen+1)*i] */
 #define LCS(A, B) lcs[(B) + ((A) * (blen + 1))]

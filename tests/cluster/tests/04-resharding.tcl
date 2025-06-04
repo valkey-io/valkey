@@ -57,7 +57,7 @@ set numops 200000
 set start_node_port [get_instance_attrib valkey 0 port]
 set cluster [valkey_cluster 127.0.0.1:$start_node_port]
 if {$::tls} {
-    # setup a non-TLS cluster client to the TLS cluster
+    # set up a non-TLS cluster client to the TLS cluster
     set plaintext_port [get_instance_attrib valkey 0 plaintext-port]
     set cluster_plaintext [valkey_cluster 127.0.0.1:$plaintext_port 0]
     puts "Testing TLS cluster on start node 127.0.0.1:$start_node_port, plaintext port $plaintext_port"

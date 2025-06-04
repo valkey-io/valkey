@@ -2815,7 +2815,7 @@ void processInlineBuffer(client *c) {
     /* Move querybuffer position to the next query in the buffer. */
     c->qb_pos += querylen + linefeed_chars;
 
-    /* Setup argv array on client structure */
+    /* Set up argv array on client structure */
     if (argc) {
         if (c->argv) zfree(c->argv);
         c->argv_len = argc;
@@ -2940,7 +2940,7 @@ void processMultibulkBuffer(client *c) {
 
         c->multibulklen = ll;
 
-        /* Setup argv array on client structure */
+        /* Set up argv array on client structure */
         if (c->argv) zfree(c->argv);
         c->argv_len = min(c->multibulklen, 1024);
         c->argv = zmalloc(sizeof(robj *) * c->argv_len);

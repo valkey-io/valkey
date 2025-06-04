@@ -782,7 +782,7 @@ unsigned char *lpInsert(unsigned char *lp,
         dst = lp + poff;
     }
 
-    /* Setup the listpack relocating the elements to make the exact room
+    /* Set up the listpack relocating the elements to make the exact room
      * we need to store the new one. */
     if (where == LP_BEFORE) {
         memmove(dst + enclen + backlen_size, dst, old_listpack_bytes - poff);

@@ -405,12 +405,12 @@ int test_quicklistRotateEmpty(int argc, char **argv, int flags) {
     return 0;
 }
 
-int test_quicklistComprassionPlainNode(int argc, char **argv, int flags) {
+int test_quicklistCompressionPlainNode(int argc, char **argv, int flags) {
     UNUSED(argc);
     UNUSED(argv);
     UNUSED(flags);
     quicklistIter *iter;
-    TEST("Comprassion Plain node");
+    TEST("Compression Plain node");
     for (int _i = 0; _i < option_count; _i++) {
         long long start = mstime();
         for (int f = 0; f < fill_count; f++) {

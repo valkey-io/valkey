@@ -96,6 +96,7 @@ void queueMultiCommand(client *c, uint64_t cmd_flags) {
     mc->argc = c->argc;
     mc->argv = c->argv;
     mc->argv_len = c->argv_len;
+    mc->slot = c->slot;
 
     c->mstate->count++;
     c->mstate->cmd_flags |= cmd_flags;

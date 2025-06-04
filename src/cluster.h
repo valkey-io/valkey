@@ -121,7 +121,8 @@ int getSlotOrError(robj *o, char **err);
 
 /* functions with shared implementations */
 int clusterNodeIsMyself(clusterNode *n);
-clusterNode *getNodeByQuery(client *c, struct serverCommand *cmd, robj **argv, int argc, int *hashslot, int *ask);
+int clusterSlotByCommand(struct serverCommand *cmd, robj **argv, int argc, int *read_flags);
+clusterNode *getNodeByQuery(client *c, int *error_code);
 int clusterRedirectBlockedClientIfNeeded(client *c);
 void clusterRedirectClient(client *c, clusterNode *n, int hashslot, int error_code);
 void migrateCloseTimedoutSockets(void);

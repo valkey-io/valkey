@@ -4008,6 +4008,35 @@ uint64_t getCommandFlags(client *c) {
     return cmd_flags;
 }
 
+/* Prepare a parsed command for processing, including looking up the command,
+ * checking arity and calculating cluster slot. This should be done before
+ * calling processCommand() and can be done by I/O threads to offload the
+ * main-thread. */
+void prepareCommand(client *c) {
+    /* Make sure we don't do this twice. */
+    debugServerAssert(c->parsed_cmd == NULL && !(c->read_flags & READ_FLAGS_COMMAND_NOT_FOUND));
+    c->parsed_cmd = lookupCommand(c->argv, c->argc);
+    if (c->parsed_cmd && !commandCheckArity(c->parsed_cmd, c->argc, NULL)) {
+        /* The command was found, but the arity is invalid. */
+        c->read_flags |= READ_FLAGS_BAD_ARITY;
+    } else if (c->parsed_cmd && server.cluster_enabled) {
+        debugServerAssert(c->slot == -1 &&
+                          !(c->read_flags & READ_FLAGS_CROSSSLOT) &&
+                          !(c->read_flags & READ_FLAGS_NO_KEYS));
+        c->slot = clusterSlotByCommand(c->parsed_cmd, c->argv, c->argc, &c->read_flags);
+    }
+}
+
+/* Undo prepareCommand(), to allow prepareCommand() again after applying command filters. */
+void unprepareCommand(client *c) {
+    c->parsed_cmd = NULL;
+    c->read_flags &= ~(READ_FLAGS_COMMAND_NOT_FOUND |
+                       READ_FLAGS_BAD_ARITY |
+                       READ_FLAGS_CROSSSLOT |
+                       READ_FLAGS_NO_KEYS);
+    c->slot = -1;
+}
+
 /* If this function gets called we already read a whole
  * command, arguments are in the client argv/argc fields.
  * processCommand() execute the command or prepare the
@@ -4049,22 +4078,28 @@ int processCommand(client *c) {
      * In case we are reprocessing a command after it was blocked,
      * we do not have to repeat the same checks */
     if (!client_reprocessing_command) {
-        struct serverCommand *cmd = c->io_parsed_cmd ? c->io_parsed_cmd : lookupCommand(c->argv, c->argc);
+        struct serverCommand *cmd = c->parsed_cmd;
         if (!cmd) {
             /* Handle possible security attacks. */
             if (!strcasecmp(c->argv[0]->ptr, "host:") || !strcasecmp(c->argv[0]->ptr, "post")) {
                 securityWarningCommand(c);
                 return C_ERR;
             }
+            /* Check that the command lookup should has been done before calling
+             * this function, by calling prepareCommand(). */
+            serverAssert(!(c->read_flags & READ_FLAGS_COMMAND_NOT_FOUND));
         }
         c->cmd = c->lastcmd = c->realcmd = cmd;
         c->flag.buffered_reply = 0;
         sds err;
+
         if (!commandCheckExistence(c, &err)) {
             rejectCommandSds(c, err);
             return C_OK;
         }
-        if (!commandCheckArity(c->cmd, c->argc, &err)) {
+        if (c->read_flags & READ_FLAGS_BAD_ARITY) {
+            /* Already detected this, but do it again just to get the error message. */
+            serverAssert(!commandCheckArity(c->cmd, c->argc, &err));
             rejectCommandSds(c, err);
             return C_OK;
         }
@@ -4136,7 +4171,7 @@ int processCommand(client *c) {
     if (server.cluster_enabled && !obey_client &&
         !(!(c->cmd->flags & CMD_MOVABLE_KEYS) && c->cmd->key_specs_num == 0 && c->cmd->proc != execCommand)) {
         int error_code;
-        clusterNode *n = getNodeByQuery(c, c->cmd, c->argv, c->argc, &c->slot, &error_code);
+        clusterNode *n = getNodeByQuery(c, &error_code);
         if (n == NULL || !clusterNodeIsMyself(n)) {
             if (c->cmd->proc == execCommand) {
                 discardTransaction(c);

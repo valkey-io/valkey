@@ -380,7 +380,7 @@ start_server {tags {"dump"}} {
             assert {[$first dbsize] == 0}
             assert {[$second dbsize] == 15}
         }
-    } {} {cluster:skip}
+    } {} {external:skip}
 
     test {MIGRATE with multiple keys: delete just ack keys} {
         set first [srv 0 client]
@@ -400,7 +400,7 @@ start_server {tags {"dump"}} {
             assert {[$first exists c] == 1}
             assert {[$first exists d] == 1}
         }
-    } {} {cluster:skip}
+    } {} {external:skip}
 
     test {MIGRATE AUTH: correct and wrong password cases} {
         set first [srv 0 client]

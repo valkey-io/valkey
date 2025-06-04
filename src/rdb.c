@@ -2089,7 +2089,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error) {
         else if (deep_integrity_validation) {
             /* In this mode, we need to guarantee that the server won't crash
              * later when the ziplist is converted to a hashtable.
-             * Create a set (hashtable with no values) to for a dup search.
+             * Create a set (hashtable with no values) for a dup search.
              * We can dismiss it as soon as we convert the ziplist to a hash. */
             dupSearchHashtable = hashtableCreate(&setHashtableType);
         }

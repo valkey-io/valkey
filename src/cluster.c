@@ -978,7 +978,7 @@ int clusterSlotByCommand(struct serverCommand *cmd, robj **argv, int argc, int *
         robj *key_obj = argv[key_ref->pos];
         sds key = key_obj->ptr;
         int keyslot;
-        *read_flags &= !READ_FLAGS_NO_KEYS;
+        *read_flags &= ~READ_FLAGS_NO_KEYS;
         if (key_ref->flags & CMD_KEY_USES_SLOT) {
             keyslot = getSlotOrError(key_obj, NULL);
             if (slot == -1 && keyslot <= 0) {

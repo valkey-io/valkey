@@ -22,11 +22,11 @@ start_server {} {
     test {WAIT out of range timeout (milliseconds)} {
         # Timeout is parsed as milliseconds by getLongLongFromObjectOrReply().
         # Verify we get out of range message if value is behind LLONG_MAX
-        # (decimal value equals to 0x8000000000000000)
+        # (decimal value equals 0x8000000000000000)
          assert_error "*or out of range*" {$master wait 2 9223372036854775808}
 
          # expected to fail by later overflow condition after addition
-         # of mstime(). (decimal value equals to 0x7FFFFFFFFFFFFFFF)
+         # of mstime(). (decimal value equals 0x7FFFFFFFFFFFFFFF)
          assert_error "*timeout is out of range*" {$master wait 2 9223372036854775807}
 
          assert_error "*timeout is negative*" {$master wait 2 -1}

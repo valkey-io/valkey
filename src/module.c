@@ -750,7 +750,7 @@ void moduleReleaseTempClient(client *c) {
 
 /* Create an empty key of the specified type. `key` must point to a key object
  * opened for writing where the `.value` member is set to NULL because the
- * key was found to be non existing.
+ * key was found to be nonexistent.
  *
  * On success VALKEYMODULE_OK is returned and the key is populated with
  * the value of the specified type. The function fails and returns
@@ -763,7 +763,7 @@ void moduleReleaseTempClient(client *c) {
 int moduleCreateEmptyKey(ValkeyModuleKey *key, int type) {
     robj *obj;
 
-    /* The key must be open for writing and non existing to proceed. */
+    /* The key must be open for writing and nonexistent to proceed. */
     if (!(key->mode & VALKEYMODULE_WRITE) || key->value) return VALKEYMODULE_ERR;
 
     switch (type) {

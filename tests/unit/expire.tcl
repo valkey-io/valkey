@@ -67,7 +67,7 @@ start_server {tags {"expire"}} {
         list [r ttl x] [r persist x] [r ttl x] [r get x]
     } {50 1 -1 foo}
 
-    test {PERSIST returns 0 against non existing or non volatile keys} {
+    test {PERSIST returns 0 against nonexistent or non volatile keys} {
         r set x foo
         list [r persist foo] [r persist nokeyatall]
     } {0 0}

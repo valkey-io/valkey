@@ -40,7 +40,7 @@
             }
         ],
         "reply_schema": {
-            "description": "The number of members removed from the sorted set, not including non existing members.",
+            "description": "The number of members removed from the sorted set, not including nonexistent members.",
             "type": "integer",
             "minimum": 0
         },

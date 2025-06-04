@@ -197,7 +197,7 @@ test "Set parameters in normal case with bad format" {
 test "Sentinel Set with other error situations" {
 
    # non-existing script
-   assert_error "ERR Notification script seems non existing*" {S 0 SENTINEL SET mymaster notification-script test.txt}
+   assert_error "ERR Notification script seems nonexistent*" {S 0 SENTINEL SET mymaster notification-script test.txt}
 
    # wrong parameter number
    assert_error "ERR wrong number of arguments for 'sentinel|set' command" {S 0 SENTINEL SET mymaster fakeoption}

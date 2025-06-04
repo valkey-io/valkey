@@ -3070,7 +3070,7 @@ void xpendingCommand(client *c) {
  *      Creates the pending message entry in the PEL even if certain
  *      specified IDs are not already in the PEL assigned to a different
  *      client. However the message must be exist in the stream; otherwise,
- *      the IDs of non existing messages are ignored.
+ *      the IDs of nonexistent messages are ignored.
  *
  * 5. JUSTID:
  *      Return just an array of IDs of messages successfully claimed,

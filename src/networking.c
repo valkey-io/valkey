@@ -1964,7 +1964,7 @@ void beforeNextClient(client *c) {
     /* Handle async frees */
     /* Note: this doesn't make the server.clients_to_close list redundant because of
      * cases where we want an async free of a client other than myself. For example
-     * in ACL modifications we disconnect clients authenticated to non-existent
+     * in ACL modifications we disconnect clients authenticated to nonexistent
      * users (see ACL LOAD). */
     if (c->flag.close_asap) {
         freeClient(c);

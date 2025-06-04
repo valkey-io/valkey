@@ -147,7 +147,7 @@ start_server {tags {"string"}} {
 
     test "GETEX syntax errors" {
         set ex {}
-        catch {r getex foo non-existent-option} ex
+        catch {r getex foo nonexistent-option} ex
         set ex
     } {*syntax*}
 
@@ -204,7 +204,7 @@ start_server {tags {"string"}} {
         r mget foo{t} bar{t}
     } {BAR FOO}
 
-    test {MGET against non existing key} {
+    test {MGET against nonexistent key} {
         r mget foo{t} baazz{t} bar{t}
     } {BAR {} FOO}
 

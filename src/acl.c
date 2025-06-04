@@ -656,7 +656,7 @@ static void ACLChangeSelectorPerm(aclSelector *selector, struct serverCommand *c
 /* This is like ACLSetSelectorCommandBit(), but instead of setting the specified
  * ID, it will check all the commands in the category specified as argument,
  * and will set all the bits corresponding to such commands to the specified
- * value. Since the category passed by the user may be non existing, the
+ * value. Since the category passed by the user may be nonexistent, the
  * function returns C_ERR if the category was not found, or C_OK if it was
  * found and the operation was performed. */
 static void ACLSetSelectorCommandBitsForCategory(hashtable *commands, aclSelector *selector, uint64_t cflag, int value) {

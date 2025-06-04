@@ -35,7 +35,7 @@ test "Enable AOF in all the instances" {
 # Return non-zero if the specified PID is about a process still in execution,
 # otherwise 0 is returned.
 proc process_is_running {pid} {
-    # PS should return with an error if PID is non existing,
+    # PS should return with an error if PID is nonexistent,
     # and catch will return non-zero. We want to return non-zero if
     # the PID exists, so we invert the return value with expr not operator.
     expr {![catch {exec ps -p $pid}]}

@@ -848,12 +848,12 @@ start_cluster 1 0 {tags {external:skip cluster} overrides {cluster-slot-stats-en
     }
 
     test "CLUSTER SLOT-STATS ORDERBY arg sanity check." {
-        # Non-existent argument.
-        assert_error "ERR*" {R 0 CLUSTER SLOT-STATS ORDERBY key-count non-existent-arg}
+        # Nonexistent argument.
+        assert_error "ERR*" {R 0 CLUSTER SLOT-STATS ORDERBY key-count nonexistent-arg}
         # Negative LIMIT.
         assert_error "ERR*" {R 0 CLUSTER SLOT-STATS ORDERBY key-count DESC LIMIT -1}
-        # Non-existent ORDERBY metric.
-        assert_error "ERR*" {R 0 CLUSTER SLOT-STATS ORDERBY non-existent-metric}
+        # Nonexistent ORDERBY metric.
+        assert_error "ERR*" {R 0 CLUSTER SLOT-STATS ORDERBY nonexistent-metric}
         # When cluster-slot-stats-enabled config is disabled, you cannot sort using advanced metrics.
         R 0 CONFIG SET cluster-slot-stats-enabled no
         set orderby "cpu-usec"

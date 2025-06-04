@@ -514,7 +514,7 @@ foreach {type large} [array get largevalue] {
         assert {[r LPOS mylist c COUNT 2 RANK -1] == {7 6}}
     }
 
-    test {LPOS non existing key} {
+    test {LPOS nonexistent key} {
         assert {[r LPOS mylistxxx c COUNT 0 RANK 2] eq {}}
     }
 
@@ -608,14 +608,14 @@ foreach {type large} [array get largevalue] {
             assert_equal {*0} [r rpop listcount 0]
         }
 
-        test "LPOP/RPOP against non existing key in RESP$resp" {
+        test "LPOP/RPOP against nonexistent key in RESP$resp" {
             r del non_existing_key
 
             verify_resp_response $resp [r lpop non_existing_key] {$-1} {_}
             verify_resp_response $resp [r rpop non_existing_key] {$-1} {_}
         }
 
-        test "LPOP/RPOP with <count> against non existing key in RESP$resp" {
+        test "LPOP/RPOP with <count> against nonexistent key in RESP$resp" {
             r del non_existing_key
 
             verify_resp_response $resp [r lpop non_existing_key 0] {*-1} {_}
@@ -1492,7 +1492,7 @@ foreach {pop} {BLPOP BLMPOP_LEFT} {
         assert_error {WRONGTYPE Operation against a key holding the wrong kind of value*} {r linsert k1 after 0 0}
     }
 
-    test {LINSERT against non existing key} {
+    test {LINSERT against nonexistent key} {
         assert_equal 0 [r linsert not-a-key before 0 0]
     }
 
@@ -1552,7 +1552,7 @@ foreach type {listpack quicklist} {
         assert_error WRONGTYPE* {r llen mylist}
     }
 
-    test {LLEN against non existing key} {
+    test {LLEN against nonexistent key} {
         assert_equal 0 [r llen not-a-key]
     }
 
@@ -1560,7 +1560,7 @@ foreach type {listpack quicklist} {
         assert_error WRONGTYPE* {r lindex mylist 0}
     }
 
-    test {LINDEX against non existing key} {
+    test {LINDEX against nonexistent key} {
         assert_equal "" [r lindex not-a-key 10]
     }
 
@@ -1682,7 +1682,7 @@ foreach type {listpack quicklist} {
         }
     }
 
-    test {RPOPLPUSH against non existing key} {
+    test {RPOPLPUSH against nonexistent key} {
         r del srclist{t} dstlist{t}
         assert_equal {} [r rpoplpush srclist{t} dstlist{t}]
         assert_equal 0 [r exists srclist{t}]
@@ -1707,7 +1707,7 @@ foreach {type large} [array get largevalue] {
     }
 }
 
-    test {RPOPLPUSH against non existing src key} {
+    test {RPOPLPUSH against nonexistent src key} {
         r del srclist{t} dstlist{t}
         assert_equal {} [r rpoplpush srclist{t} dstlist{t}]
     } {}
@@ -1920,7 +1920,7 @@ foreach {type large} [array get largevalue] {
         }
     }
 
-    test {LRANGE against non existing key} {
+    test {LRANGE against nonexistent key} {
         assert_equal {} [r lrange nosuchkey 0 1]
     }
 
@@ -1971,7 +1971,7 @@ foreach {type large} [array get largevalue] {
         }
     }
 
-    test {LSET against non existing key} {
+    test {LSET against nonexistent key} {
         assert_error ERR*key* {r lset nosuchkey 10 foo}
     }
 
@@ -1992,7 +1992,7 @@ foreach {type large} [array get largevalue] {
             assert_equal "$e foobar foobared zap test foo" [r lrange mylist 0 -1]
         }
 
-        test "LREM remove non existing element - $type" {
+        test "LREM remove nonexistent element - $type" {
             assert_equal 0 [r lrem mylist 1 nosuchelement]
             assert_equal "$e foobar foobared zap test foo" [r lrange mylist 0 -1]
         }

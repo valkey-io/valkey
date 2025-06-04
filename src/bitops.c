@@ -1013,7 +1013,7 @@ void bitcountCommand(client *c) {
         return;
     }
 
-    /* Return 0 for non existing keys. */
+    /* Return 0 for nonexistent keys. */
     if (o == NULL) {
         addReply(c, shared.czero);
         return;

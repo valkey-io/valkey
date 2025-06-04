@@ -216,7 +216,7 @@ start_server {tags {"zset"}} {
             set err
         } {ERR*}
 
-        test "ZADD NX with non existing key - $encoding" {
+        test "ZADD NX with nonexistent key - $encoding" {
             r del ztmp
             r zadd ztmp nx 10 x 20 y 30 z
             assert {[r zcard ztmp] == 3}
@@ -346,7 +346,7 @@ start_server {tags {"zset"}} {
             r del ztmp
             r zadd ztmp 10 a 20 b 30 c
             assert_equal 3 [r zcard ztmp]
-            assert_equal 0 [r zcard zdoesntexist]
+            assert_equal 0 [r zcard znonexistent]
         }
 
         test "ZREM removes key after last element is removed - $encoding" {
@@ -1351,7 +1351,7 @@ start_server {tags {"zset"}} {
 
             r readraw 1
 
-            # ZPOP against non existing key.
+            # ZPOP against nonexistent key.
             assert_equal {*0} [r zpopmin zset{t}]
             assert_equal {*0} [r zpopmin zset{t} 1]
 
@@ -1419,7 +1419,7 @@ start_server {tags {"zset"}} {
 
             r readraw 1
 
-            # ZMPOP against non existing key.
+            # ZMPOP against nonexistent key.
             verify_nil_response $resp [r zmpop 1 zset{t} min]
             verify_nil_response $resp [r zmpop 1 zset{t} max count 1]
             verify_nil_response $resp [r zmpop 2 zset{t} zset2{t} min]
@@ -2452,7 +2452,7 @@ start_server {tags {"zset"}} {
         r zrandmember myzset 0
     } {}
 
-    test "ZRANDMEMBER with <count> against non existing key" {
+    test "ZRANDMEMBER with <count> against nonexistent key" {
         r zrandmember nonexisting_key 100
     } {}
 
@@ -2470,7 +2470,7 @@ start_server {tags {"zset"}} {
         r zrandmember myzset 0
     } {*0}
 
-    test "ZRANDMEMBER with <count> against non existing key - emptyarray" {
+    test "ZRANDMEMBER with <count> against nonexistent key - emptyarray" {
         r zrandmember nonexisting_key 100
     } {*0}
 

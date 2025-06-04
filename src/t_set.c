@@ -1534,7 +1534,7 @@ void sunionDiffGenericCommand(client *c, robj **setkeys, int setnum, robj *dstke
         /* Union is trivial, just add every element of every set to the
          * temporary set. */
         for (j = 0; j < setnum; j++) {
-            if (!sets[j]) continue; /* non existing keys are like empty sets */
+            if (!sets[j]) continue; /* nonexistent keys are like empty sets */
 
             si = setTypeInitIterator(sets[j]);
             while ((encoding = setTypeNext(si, &str, &len, &llval)) != -1) {
@@ -1575,7 +1575,7 @@ void sunionDiffGenericCommand(client *c, robj **setkeys, int setnum, robj *dstke
          * This is O(N) where N is the sum of all the elements in every
          * set. */
         for (j = 0; j < setnum; j++) {
-            if (!sets[j]) continue; /* non existing keys are like empty sets */
+            if (!sets[j]) continue; /* nonexistent keys are like empty sets */
 
             si = setTypeInitIterator(sets[j]);
             while ((encoding = setTypeNext(si, &str, &len, &llval)) != -1) {

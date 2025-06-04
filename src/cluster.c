@@ -77,7 +77,7 @@ unsigned int keyHashSlot(char *key, int keylen) {
 
 /* If it can be inferred that the given glob-style pattern, as implemented in
  * stringmatchlen() in util.c, only can match keys belonging to a single slot,
- * that slot is returned. Otherwise -1 is returned. */
+ * that slot is returned. Otherwise, -1 is returned. */
 int patternHashSlot(char *pattern, int length) {
     int s = -1; /* index of the first '{' */
 
@@ -321,7 +321,7 @@ typedef struct migrateCachedSocket {
  *
  * This function is responsible of sending errors to the client if a
  * connection can't be established. In this case -1 is returned.
- * Otherwise on success the socket is returned, and the caller should not
+ * Otherwise, on success the socket is returned, and the caller should not
  * attempt to free it after usage.
  *
  * If the caller detects an error while using the socket, migrateCloseSocket()
@@ -1335,7 +1335,7 @@ void clusterRedirectClient(client *c, clusterNode *n, int hashslot, int error_co
  *
  * If the client is found to be blocked into a hash slot this node no
  * longer handles, the client is sent a redirection error, and the function
- * returns 1. Otherwise 0 is returned and no operation is performed. */
+ * returns 1. Otherwise, 0 is returned and no operation is performed. */
 int clusterRedirectBlockedClientIfNeeded(client *c) {
     clusterNode *myself = getMyClusterNode();
     if (c->flag.blocked && (c->bstate->btype == BLOCKED_LIST || c->bstate->btype == BLOCKED_ZSET ||

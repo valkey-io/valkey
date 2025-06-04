@@ -3028,7 +3028,7 @@ static void usage(int err) {
     fprintf(target,
             "  --latency          Enter a special mode continuously sampling latency.\n"
             "                     If you use this mode in an interactive session it runs\n"
-            "                     forever displaying real-time stats. Otherwise if --raw or\n"
+            "                     forever displaying real-time stats. Otherwise, if --raw or\n"
             "                     --csv is specified, or if you redirect the output to a non\n"
             "                     TTY, it samples the latency for 1 second (you can use\n"
             "                     -i to change the interval), then produces a single output\n"

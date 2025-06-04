@@ -81,7 +81,7 @@ robj *lookupKeyByPattern(serverDb *db, robj *pattern, robj *subst) {
     }
 
     /* The substitution object may be specially encoded. If so we create
-     * a decoded object on the fly. Otherwise getDecodedObject will just
+     * a decoded object on the fly. Otherwise, getDecodedObject will just
      * increment the ref count, that we'll decrement later. */
     subst = getDecodedObject(subst);
     ssub = subst->ptr;

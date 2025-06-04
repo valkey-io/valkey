@@ -1039,7 +1039,7 @@ void genericHgetallCommand(client *c, int flags) {
     writePreparedClient *wpc = prepareClientForFutureWrites(c);
     if (!wpc) return;
     /* We return a map if the user requested fields and values, like in the
-     * HGETALL case. Otherwise to use a flat array makes more sense. */
+     * HGETALL case. Otherwise, to use a flat array makes more sense. */
     length = hashTypeLength(o);
     if (flags & OBJ_HASH_FIELD && flags & OBJ_HASH_VALUE) {
         addWritePreparedReplyMapLen(wpc, length);

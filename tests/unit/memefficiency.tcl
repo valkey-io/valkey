@@ -147,7 +147,7 @@ run_solo {defrag} {
         if {$allocated_bytes < 20 * 1024 * 1024} {
             # If allocated bytes is too small, the ratios get wonky.  Since we use 2MB for
             # active-defrag-ignore-bytes, let's make sure that we have at least 10x that amount
-            # allocated before trying to verify any fragmentation ratios.  Otherwise the tests
+            # allocated before trying to verify any fragmentation ratios.  Otherwise, the tests
             # are likely to get flaky.
             error "test error: trying to validate frag ratio with only $allocated_bytes allocated"
         }
@@ -602,7 +602,7 @@ run_solo {defrag} {
             if {$type == "cluster"} {
                 start_cluster 1 0 [list tags $cluster_tags overrides $overrides] {
                     # Note: `start_cluster` passes the code through to another level which requires us
-                    #  to do an uplevel here.  Otherwise `test_proc` isn't recognized.
+                    #  to do an uplevel here.  Otherwise, `test_proc` isn't recognized.
                     uplevel 1 {$test_proc $type}
                 }
             }

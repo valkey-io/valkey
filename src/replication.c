@@ -1022,7 +1022,7 @@ int startBgsaveForReplication(int mincapa, int req) {
     }
 
     /* If the target is socket, rdbSaveToReplicasSockets() already setup
-     * the replicas for a full resync. Otherwise for disk target do it now.*/
+     * the replicas for a full resync. Otherwise, for disk target do it now.*/
     if (!socket_target) {
         listRewind(server.replicas, &li);
         while ((ln = listNext(&li))) {
@@ -1586,7 +1586,7 @@ void replicaStartCommandStream(client *replica) {
  * environments. */
 void removeRDBUsedToSyncReplicas(void) {
     /* If the feature is disabled, return ASAP but also clear the
-     * RDBGeneratedByReplication flag in case it was set. Otherwise if the
+     * RDBGeneratedByReplication flag in case it was set. Otherwise, if the
      * feature was enabled, but gets disabled later with CONFIG SET, the
      * flag may remain set to one: then next time the feature is re-enabled
      * via CONFIG SET we have it set even if no RDB was generated
@@ -1855,7 +1855,7 @@ void updateReplicasWaitingBgsave(int bgsaveerr, int type) {
             }
 
             /* If this was an RDB on disk save, we have to prepare to send
-             * the RDB from disk to the replica socket. Otherwise if this was
+             * the RDB from disk to the replica socket. Otherwise, if this was
              * already an RDB -> Replicas socket transfer, used in the case of
              * diskless replication, our work is trivial, we can just put
              * the replica online. */
@@ -3900,7 +3900,7 @@ void syncWithPrimary(connection *conn) {
         return;
     }
 
-    /* Fall back to SYNC if needed. Otherwise psync_result == PSYNC_FULLRESYNC
+    /* Fall back to SYNC if needed. Otherwise, psync_result == PSYNC_FULLRESYNC
      * and the server.primary_replid and primary_initial_offset are
      * already populated. */
     if (psync_result == PSYNC_NOT_SUPPORTED) {
@@ -4038,7 +4038,7 @@ void replicationAbortSyncTransfer(void) {
  * If there was a replication handshake in progress 1 is returned and
  * the replication state (server.repl_state) set to REPL_STATE_CONNECT.
  *
- * Otherwise zero is returned and no operation is performed at all. */
+ * Otherwise, zero is returned and no operation is performed at all. */
 int cancelReplicationHandshake(int reconnect) {
     if (server.repl_rdb_channel_state != REPL_DUAL_CHANNEL_STATE_NONE) {
         replicationAbortDualChannelSyncTransfer();
@@ -4157,7 +4157,7 @@ void replicationUnsetPrimary(void) {
 
     /* Once we turn from replica to primary, we consider the starting time without
      * replicas (that is used to count the replication backlog time to live) as
-     * starting from now. Otherwise the backlog will be freed after a
+     * starting from now. Otherwise, the backlog will be freed after a
      * failover if replicas do not connect immediately. */
     server.repl_no_replicas_since = server.unixtime;
 
@@ -4209,7 +4209,7 @@ void replicaofCommand(client *c) {
     }
 
     /* The special host/port combination "NO" "ONE" turns the instance
-     * into a primary. Otherwise the new primary address is set. */
+     * into a primary. Otherwise, the new primary address is set. */
     if (!strcasecmp(c->argv[1]->ptr, "no") && !strcasecmp(c->argv[2]->ptr, "one")) {
         if (server.primary_host) {
             replicationUnsetPrimary();
@@ -4648,7 +4648,7 @@ void waitCommand(client *c) {
         return;
     }
 
-    /* Otherwise block the client and put it into our list of clients
+    /* Otherwise, block the client and put it into our list of clients
      * waiting for ack from replicas. */
     blockClientForReplicaAck(c, timeout, offset, numreplicas, 0);
 
@@ -4690,7 +4690,7 @@ void waitaofCommand(client *c) {
         return;
     }
 
-    /* Otherwise block the client and put it into our list of clients
+    /* Otherwise, block the client and put it into our list of clients
      * waiting for ack from replicas. */
     blockClientForReplicaAck(c, timeout, offset, numreplicas, numlocal);
 

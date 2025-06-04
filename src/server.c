@@ -1272,7 +1272,7 @@ void databasesCron(void) {
     monitorActiveDefrag();
 
     /* Perform hash tables rehashing if needed, but only if there are no
-     * other processes saving the DB on disk. Otherwise rehashing is bad
+     * other processes saving the DB on disk. Otherwise, rehashing is bad
      * as will cause a lot of copy-on-write of memory pages. */
     if (!hasActiveChildProcess()) {
         /* We use global counters so if we stop the computation at a given
@@ -3193,7 +3193,7 @@ void setImplicitACLCategories(struct serverCommand *c) {
 
 /* Recursively populate the command structure.
  *
- * On success, the function return C_OK. Otherwise C_ERR is returned and we won't
+ * On success, the function return C_OK. Otherwise, C_ERR is returned and we won't
  * add this command in the commands dict. */
 int populateCommandStructure(struct serverCommand *c) {
     /* If the command marks with CMD_SENTINEL, it exists in sentinel. */

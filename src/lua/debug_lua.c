@@ -208,7 +208,7 @@ void ldbEndSession(client *c) {
         serverLog(LL_NOTICE, "%s synchronous debugging eval session ended", SERVER_TITLE);
     }
 
-    /* Otherwise let's restore client's state. */
+    /* Otherwise, let's restore client's state. */
     connNonBlock(ldb.conn);
     connSendTimeout(ldb.conn, 0);
 

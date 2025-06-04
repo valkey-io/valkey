@@ -539,7 +539,7 @@ int dbDelete(serverDb *db, robj *key) {
  *
  * If the object is found in one of the above conditions (or both) by the
  * function, an unshared / not-encoded copy of the string object is stored
- * at 'key' in the specified 'db'. Otherwise the object 'o' itself is
+ * at 'key' in the specified 'db'. Otherwise, the object 'o' itself is
  * returned.
  *
  * USAGE:
@@ -613,7 +613,7 @@ long long emptyDbStructure(serverDb *dbarray, int dbnum, int async, void(callbac
  * to specify that we do not want to delete the functions.
  *
  * On success the function returns the number of keys removed from the
- * database(s). Otherwise -1 is returned in the specific case the
+ * database(s). Otherwise, -1 is returned in the specific case the
  * DB number is out of range, and errno is set to EINVAL. */
 long long emptyData(int dbnum, int flags, void(callback)(hashtable *)) {
     int async = (flags & EMPTYDB_ASYNC);
@@ -1032,7 +1032,7 @@ void hashtableScanCallback(void *privdata, void *entry) {
 
 /* Try to parse a SCAN cursor stored at buffer 'buf':
  * if the cursor is valid, store it as unsigned integer into *cursor and
- * returns C_OK. Otherwise return C_ERR and send an error to the
+ * returns C_OK. Otherwise, return C_ERR and send an error to the
  * client. */
 int parseScanCursorOrReply(client *c, sds buf, unsigned long long *cursor) {
     if (!string2ull(buf, sdslen(buf), cursor)) {
@@ -2043,7 +2043,7 @@ static int dbExpandSkipSlot(int slot) {
  * if try_expand is non-zero, `hashtableTryExpand` is used else `hashtableExpand`.
  *
  * Returns C_OK or C_ERR. C_OK response is for successful expansion. C_ERR
- * signifies failure in allocation if try_expand is non-zero. Otherwise it
+ * signifies failure in allocation if try_expand is non-zero. Otherwise, it
  * signifies that no expansion was performed.
  */
 static int dbExpandGeneric(kvstore *kvs, uint64_t db_size, int try_expand) {
@@ -2371,7 +2371,7 @@ int getChannelsFromCommand(struct serverCommand *cmd, robj **argv, int argc, get
     if (cmd->flags & CMD_MODULE_GETCHANNELS) {
         return moduleGetCommandChannelsViaAPI(cmd, argv, argc, result);
     }
-    /* Otherwise check the channel spec table */
+    /* Otherwise, check the channel spec table */
     for (ChannelSpecs *spec = commands_with_channels; spec != NULL; spec += 1) {
         if (cmd->proc == spec->proc) {
             int start = spec->start;

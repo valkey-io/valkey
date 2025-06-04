@@ -136,7 +136,7 @@ void aeSetDontWait(aeEventLoop *eventLoop, int noWait) {
  * set size minus one, AE_ERR is returned and the operation is not
  * performed at all.
  *
- * Otherwise AE_OK is returned and the operation is successful. */
+ * Otherwise, AE_OK is returned and the operation is successful. */
 int aeResizeSetSize(aeEventLoop *eventLoop, int setsize) {
     AE_LOCK(eventLoop);
     int ret = AE_OK;

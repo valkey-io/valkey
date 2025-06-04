@@ -375,7 +375,7 @@ robj *createStringObjectFromLongLongWithSds(long long value) {
 
 /* Create a string object from a long double. If humanfriendly is non-zero
  * it does not use exponential format and trims trailing zeroes at the end,
- * however this results in loss of precision. Otherwise exp format is used
+ * however this results in loss of precision. Otherwise, exp format is used
  * and the output of snprintf() is not modified.
  *
  * The 'humanfriendly' option is used for INCRBYFLOAT and HINCRBYFLOAT. */

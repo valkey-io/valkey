@@ -566,7 +566,7 @@ int dictDelete(dict *ht, const void *key) {
  * the key, value and dictionary entry. The dictionary entry is returned
  * if the element was found (and unlinked from the table), and the user
  * should later call `dictFreeUnlinkedEntry()` with it in order to release it.
- * Otherwise if the key is not found, NULL is returned.
+ * Otherwise, if the key is not found, NULL is returned.
  *
  * This function is useful when we want to remove something from the hash
  * table but want to use its value before actually deleting the entry.

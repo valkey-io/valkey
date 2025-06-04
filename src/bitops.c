@@ -635,7 +635,7 @@ int getBitfieldTypeFromArgument(client *c, robj *o, int *sign, int *bits) {
 /* This is a helper function for commands implementations that need to write
  * bits to a string object. The command creates or pad with zeroes the string
  * so that the 'maxbit' bit can be addressed. The object is finally
- * returned. Otherwise if the key holds a wrong type NULL is returned and
+ * returned. Otherwise, if the key holds a wrong type NULL is returned and
  * an error is sent to the client. */
 robj *lookupStringForBitCommand(client *c, uint64_t maxbit, int *dirty) {
     size_t byte = maxbit >> 3;

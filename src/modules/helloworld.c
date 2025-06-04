@@ -326,7 +326,7 @@ int HelloToggleCase_ValkeyCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **arg
 /* HELLO.MORE.EXPIRE key milliseconds.
  *
  * If the key has already an associated TTL, extends it by "milliseconds"
- * milliseconds. Otherwise no operation is performed. */
+ * milliseconds. Otherwise, no operation is performed. */
 int HelloMoreExpire_ValkeyCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     ValkeyModule_AutoMemory(ctx); /* Use automatic memory management. */
     if (argc != 3) return ValkeyModule_WrongArity(ctx);

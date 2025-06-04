@@ -419,7 +419,7 @@ raxNode *raxCompressNode(raxNode *n, unsigned char *s, size_t len, raxNode **chi
  * zero or if simply we stopped in the middle of a compressed node, so that
  * 'splitpos' is non zero).
  *
- * Otherwise if the returned integer is not the same as 'len', there was an
+ * Otherwise, if the returned integer is not the same as 'len', there was an
  * early stop during the tree walk because of a character mismatch.
  *
  * The node where the search ended (because the full string was processed
@@ -531,7 +531,7 @@ int raxGenericInsert(rax *rax, unsigned char *s, size_t len, void *data, void **
             return 0; /* Element already exists. */
         }
 
-        /* Otherwise set the node as a key. Note that raxSetData()
+        /* Otherwise, set the node as a key. Note that raxSetData()
          * will set h->iskey. */
         raxSetData(h, data);
         rax->numele++;
@@ -953,7 +953,7 @@ raxNode *raxRemoveChild(raxNode *parent, raxNode *child) {
         return parent;
     }
 
-    /* Otherwise we need to scan for the child pointer and memmove()
+    /* Otherwise, we need to scan for the child pointer and memmove()
      * accordingly.
      *
      * 1. To start we seek the first element in both the children
@@ -1678,7 +1678,7 @@ int raxPrev(raxIterator *it) {
 }
 
 /* Perform a random walk starting in the current position of the iterator.
- * Return 0 if the tree is empty or on out of memory. Otherwise 1 is returned
+ * Return 0 if the tree is empty or on out of memory. Otherwise, 1 is returned
  * and the iterator is set to the node reached after doing a random walk
  * of 'steps' steps. If the 'steps' argument is 0, the random walk is performed
  * using a random number of steps between 1 and two times the logarithm of

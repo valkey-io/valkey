@@ -976,7 +976,7 @@ void lcsCommand(client *c) {
             i--;
             j--;
         } else {
-            /* Otherwise reduce i and j depending on the largest
+            /* Otherwise, reduce i and j depending on the largest
              * LCS between, to understand what direction we need to go. */
             uint32_t lcs1 = LCS(i - 1, j);
             uint32_t lcs2 = LCS(i, j - 1);

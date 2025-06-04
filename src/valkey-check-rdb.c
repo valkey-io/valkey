@@ -384,7 +384,7 @@ err:
  *
  * When called with fp = NULL, the function never returns, but exits with the
  * status code according to success (RDB is sane) or error (RDB is corrupted).
- * Otherwise if called with a non NULL fp, the function returns C_OK or
+ * Otherwise, if called with a non NULL fp, the function returns C_OK or
  * C_ERR depending on the success or failure. */
 int redis_check_rdb_main(int argc, char **argv, FILE *fp) {
     struct timeval tv;

@@ -1218,11 +1218,11 @@ static int ACLSetSelector(aclSelector *selector, const char *op, size_t oplen) {
  * The 'op' string must be null terminated. The 'oplen' argument should
  * specify the length of the 'op' string in case the caller requires to pass
  * binary data (for instance the >password form may use a binary password).
- * Otherwise the field can be set to -1 and the function will use strlen()
+ * Otherwise, the field can be set to -1 and the function will use strlen()
  * to determine the length.
  *
  * The function returns C_OK if the action to perform was understood because
- * the 'op' string made sense. Otherwise C_ERR is returned if the operation
+ * the 'op' string made sense. Otherwise, C_ERR is returned if the operation
  * is unknown or has some syntax error.
  *
  * When an error is returned, errno is set to the following values:
@@ -1840,7 +1840,7 @@ int ACLCheckAllPerm(client *c, int *idxptr) {
 }
 
 /* If 'new' can access all channels 'original' could then return NULL;
-   Otherwise return a list of channels that the new user can access */
+   Otherwise, return a list of channels that the new user can access */
 static list *getUpcomingChannelList(user *new, user *original) {
     listIter li, lpi;
     listNode *ln, *lpn;
@@ -2226,7 +2226,7 @@ static int ACLLoadConfiguredUsers(void) {
  * and the rules will remain exactly as they were.
  *
  * At the end of the process, if no errors were found in the whole file then
- * NULL is returned. Otherwise an SDS string describing in a single line
+ * NULL is returned. Otherwise, an SDS string describing in a single line
  * a description of all the issues found is returned. */
 static sds ACLLoadFromFile(const char *filename) {
     FILE *fp;

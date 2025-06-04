@@ -589,7 +589,7 @@ void addReplyProto(client *c, const char *s, size_t len) {
  * Note that 's' must NOT end with \r\n. */
 void addReplyErrorLength(client *c, const char *s, size_t len) {
     /* If the string already starts with "-..." then the error code
-     * is provided by the caller. Otherwise we use "-ERR". */
+     * is provided by the caller. Otherwise, we use "-ERR". */
     if (!len || s[0] != '-') addReplyProto(c, "-ERR ", 5);
     addReplyProto(c, s, len);
     addReplyProto(c, "\r\n", 2);
@@ -618,7 +618,7 @@ void afterErrorReply(client *c, const char *s, size_t len, int flags) {
         server.stat_total_error_replies++;
         /* Increment the error stats
          * If the string already starts with "-..." then the error prefix
-         * is provided by the caller (we limit the search to 32 chars). Otherwise we use "-ERR". */
+         * is provided by the caller (we limit the search to 32 chars). Otherwise, we use "-ERR". */
         char *err_prefix = "ERR";
         size_t prefix_len = 3;
         if (s[0] == '-') {
@@ -2894,7 +2894,7 @@ static void setProtocolError(const char *errstr, client *c) {
  *
  * This function is called if processInputBuffer() detects that the next
  * command is in RESP format, so the first byte in the command is found
- * to be '*'. Otherwise for inline commands processInlineBuffer() is called. */
+ * to be '*'. Otherwise, for inline commands processInlineBuffer() is called. */
 void processMultibulkBuffer(client *c) {
     char *newline = NULL;
     int ok;
@@ -5028,7 +5028,7 @@ char *getClientTypeName(int class) {
  * a side effect.
  *
  * Return value: non-zero if the client reached the soft or the hard limit.
- *               Otherwise zero is returned. */
+ *               Otherwise, zero is returned. */
 int checkClientOutputBufferLimits(client *c) {
     int soft = 0, hard = 0, class;
     unsigned long used_mem = getClientOutputBufferMemoryUsage(c);

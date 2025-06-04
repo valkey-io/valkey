@@ -61,7 +61,7 @@ static int luaServerBreakpointCommand(lua_State *lua) {
  *
  * DEPRECATED: Now do nothing and always return true.
  * Turn on single commands replication if the script never called
- * a write command so far, and returns true. Otherwise if the script
+ * a write command so far, and returns true. Otherwise, if the script
  * already started to write, returns false and stick to whole scripts
  * replication, which is our default. */
 int luaServerReplicateCommandsCommand(lua_State *lua) {

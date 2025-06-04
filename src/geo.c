@@ -712,7 +712,7 @@ void georadiusGeneric(client *c, int srcKeyIndex, int flags) {
             }
             addReply(c, shared.czero);
         } else {
-            /* Otherwise we return an empty array. */
+            /* Otherwise, we return an empty array. */
             addReply(c, shared.emptyarray);
         }
         geoPolygonPointsFree(&shape);

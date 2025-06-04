@@ -286,7 +286,7 @@ int listTypeNext(listTypeIterator *li, listTypeEntry *entry) {
 
 /* Get entry value at the current position of the iterator.
  * When the function returns NULL, it populates the integer value by
- * reference in 'lval'. Otherwise a pointer to the string is returned,
+ * reference in 'lval'. Otherwise, a pointer to the string is returned,
  * and 'vlen' is set to the length of the string. */
 unsigned char *listTypeGetValue(listTypeEntry *entry, size_t *vlen, long long *lval) {
     unsigned char *vstr = NULL;

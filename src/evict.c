@@ -613,7 +613,7 @@ int performEvictions(void) {
                     pool[k].key = NULL;
                     pool[k].idle = 0;
 
-                    /* If the key exists, is our pick. Otherwise it is
+                    /* If the key exists, is our pick. Otherwise, it is
                      * a ghost and we need to try the next element. */
                     if (found) {
                         valkey = entry;

@@ -141,7 +141,7 @@ static mstime_t sentinel_default_failover_timeout = 60 * 3 * 1000;
 /* The link to a sentinelValkeyInstance. When we have the same set of Sentinels
  * monitoring many primaries, we have different instances representing the
  * same Sentinels, one per primary, and we need to share the libvalkey connections
- * among them. Otherwise if 5 Sentinels are monitoring 100 primaries we create
+ * among them. Otherwise, if 5 Sentinels are monitoring 100 primaries we create
  * 500 outgoing connections instead of 5.
  *
  * So this structure represents a reference counted link in terms of the two
@@ -892,7 +892,7 @@ void sentinelCollectTerminatedScripts(void) {
             sj->pid = 0;
             sj->start_time = mstime() + sentinelScriptRetryDelay(sj->retry_num);
         } else {
-            /* Otherwise let's remove the script, but log the event if the
+            /* Otherwise, let's remove the script, but log the event if the
              * execution did not terminated in the best of the ways. */
             if (bysignal || exitcode != 0) {
                 sentinelEvent(LL_WARNING, "-script-error", NULL, "%s %d %d", sj->argv[0], bysignal, exitcode);
@@ -1030,7 +1030,7 @@ void instanceLinkCloseConnection(instanceLink *link, valkeyAsyncContext *c) {
 }
 
 /* Decrement the refcount of a link object, if it drops to zero, actually
- * free it and return NULL. Otherwise don't do anything and return the pointer
+ * free it and return NULL. Otherwise, don't do anything and return the pointer
  * to the object.
  *
  * If we are not going to free the link and ri is not NULL, we rebind all the
@@ -1078,7 +1078,7 @@ instanceLink *releaseInstanceLink(instanceLink *link, sentinelValkeyInstance *ri
  * detection and so forth.
  *
  * Return C_OK if a matching Sentinel was found in the context of a
- * different primary and sharing was performed. Otherwise C_ERR
+ * different primary and sharing was performed. Otherwise, C_ERR
  * is returned. */
 int sentinelTryConnectionSharing(sentinelValkeyInstance *ri) {
     serverAssert(ri->flags & SRI_SENTINEL);
@@ -1568,7 +1568,7 @@ int sentinelResetPrimariesByPattern(char *pattern, int flags) {
  * This is used to handle the +switch-primary event.
  *
  * The function returns C_ERR if the address can't be resolved for some
- * reason. Otherwise C_OK is returned.  */
+ * reason. Otherwise, C_OK is returned.  */
 int sentinelResetPrimaryAndChangeAddress(sentinelValkeyInstance *primary, char *hostname, int port) {
     sentinelAddr *oldaddr, *newaddr;
     sentinelAddr **replicas = NULL;
@@ -3784,7 +3784,7 @@ void sentinelCommand(client *c) {
          * one time per epoch.
          *
          * runid is "*" if we are not seeking for a vote from the Sentinel
-         * in order to elect the failover leader. Otherwise it is set to the
+         * in order to elect the failover leader. Otherwise, it is set to the
          * runid we want the Sentinel to vote if it did not already voted.
          */
         sentinelValkeyInstance *ri;
@@ -3876,7 +3876,7 @@ void sentinelCommand(client *c) {
         }
 
         /* If resolve-hostnames is used, actual DNS resolution may take place.
-         * Otherwise just validate address.
+         * Otherwise, just validate address.
          */
         if (anetResolve(NULL, c->argv[3]->ptr, ip, sizeof(ip), sentinel.resolve_hostnames ? ANET_NONE : ANET_IP_ONLY) ==
             ANET_ERR) {
@@ -4841,7 +4841,7 @@ sentinelValkeyInstance *sentinelSelectReplica(sentinelValkeyInstance *primary) {
         if (replica->replica_priority == 0) continue;
 
         /* If the primary is in SDOWN state we get INFO for replicas every second.
-         * Otherwise we get it with the usual period so we need to account for
+         * Otherwise, we get it with the usual period so we need to account for
          * a larger delay. */
         if (primary->flags & SRI_S_DOWN)
             info_validity_time = sentinel_ping_period * 5;
@@ -5090,7 +5090,7 @@ void sentinelFailoverStateMachine(sentinelValkeyInstance *ri) {
 /* Abort a failover in progress:
  *
  * This function can only be called before the promoted replica acknowledged
- * the replica -> primary switch. Otherwise the failover can't be aborted and
+ * the replica -> primary switch. Otherwise, the failover can't be aborted and
  * will reach its end (possibly by timeout). */
 void sentinelAbortFailover(sentinelValkeyInstance *ri) {
     serverAssert(ri->flags & SRI_FAILOVER_IN_PROGRESS);

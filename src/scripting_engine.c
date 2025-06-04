@@ -161,7 +161,7 @@ int scriptingEngineManagerUnregister(const char *engine_name) {
 
 /*
  * Lookups the engine with `engine_name` in the engine manager and returns it if
- * it exists. Otherwise returns `NULL`.
+ * it exists. Otherwise, returns `NULL`.
  */
 scriptingEngine *scriptingEngineManagerFind(const char *engine_name) {
     dictEntry *entry = dictFind(engineMgr.engines, engine_name);

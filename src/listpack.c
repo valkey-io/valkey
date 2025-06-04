@@ -236,7 +236,7 @@ static inline void lpEncodeIntegerGetType(int64_t v, unsigned char *intenc, uint
 
 /* Given an element 'ele' of size 'size', determine if the element can be
  * represented inside the listpack encoded as integer, and returns
- * LP_ENCODING_INT if so. Otherwise returns LP_ENCODING_STR if no integer
+ * LP_ENCODING_INT if so. Otherwise, returns LP_ENCODING_STR if no integer
  * encoding is possible.
  *
  * If the LP_ENCODING_INT is returned, the function stores the integer encoded
@@ -471,7 +471,7 @@ unsigned long lpLength(unsigned char *lp) {
  * Specifically, if 'intbuf' is NULL:
  *
  * If the element is internally encoded as an integer, the function returns
- * NULL and populates the integer value by reference in 'count'. Otherwise if
+ * NULL and populates the integer value by reference in 'count'. Otherwise, if
  * the element is encoded as a string a pointer to the string (pointing inside
  * the listpack itself) is returned, and 'count' is set to the length of the
  * string.
@@ -586,7 +586,7 @@ unsigned char *lpGet(unsigned char *p, int64_t *count, unsigned char *intbuf) {
 
 /* This is just a wrapper to lpGet() that is able to get entry value directly.
  * When the function returns NULL, it populates the integer value by reference in 'lval'.
- * Otherwise if the element is encoded as a string a pointer to the string (pointing
+ * Otherwise, if the element is encoded as a string a pointer to the string (pointing
  * inside the listpack itself) is returned, and 'slen' is set to the length of the
  * string. */
 unsigned char *lpGetValue(unsigned char *p, unsigned int *slen, long long *lval) {
@@ -738,7 +738,7 @@ unsigned char *lpInsert(unsigned char *lp,
         /* Calling lpEncodeGetType() results into the encoded version of the
          * element to be stored into 'intenc' in case it is representable as
          * an integer: in that case, the function returns LP_ENCODING_INT.
-         * Otherwise if LP_ENCODING_STR is returned, we'll have to call
+         * Otherwise, if LP_ENCODING_STR is returned, we'll have to call
          * lpEncodeString() to actually write the encoded string on place later.
          *
          * Whatever the returned encoding is, 'enclen' is populated with the

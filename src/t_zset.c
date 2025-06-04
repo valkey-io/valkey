@@ -3267,7 +3267,7 @@ void genericZpopCommand(client *c,
 
     if (deleted) *deleted = 0;
 
-    /* Check type and break on the first error, otherwise identify candidate. */
+    /* Check type and break on the first error; otherwise, identify candidate. */
     idx = 0;
     while (idx < keyc) {
         key = keyv[idx++];
@@ -3686,7 +3686,7 @@ void zrandmemberWithCountCommand(client *c, long l, int withscores) {
             zsetTypeRandomElement(zsetobj, size, &key, withscores ? &score : NULL);
 
             /* Try to add the object to the hashtable. If it already exists
-             * free it, otherwise increment the number of objects we have
+             * free it; otherwise, increment the number of objects we have
              * in the result hashtable. */
             sds skey = zsetSdsFromListpackEntry(&key);
             if (!hashtableAdd(ht, skey)) {

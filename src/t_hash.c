@@ -221,7 +221,7 @@ int hashTypeGetFromListpack(robj *o, sds field, unsigned char **vstr, unsigned i
 
 /* Higher level function of hashTypeGet*() that returns the hash value
  * associated with the specified field. If the field is found C_OK
- * is returned, otherwise C_ERR. The returned object is returned by
+ * is returned; otherwise, C_ERR. The returned object is returned by
  * reference in either *vstr and *vlen if it's returned in string form,
  * or stored in *vll if it's returned as a number.
  *
@@ -2334,7 +2334,7 @@ void hrandfieldWithCountCommand(client *c, long l, int withvalues) {
                 break;
 
             /* Try to add the object to the hashtable. If expired, stop adding (there are probably non left).
-             * If it already exists free it, otherwise increment the number of objects we have
+             * If it already exists free it; otherwise, increment the number of objects we have
              * in the result hashtable. */
             sds sfield = hashSdsFromListpackEntry(&field);
             if (!hashtableAdd(ht, sfield)) {

@@ -112,7 +112,7 @@ static int stringCheckPrefix(unsigned char *s1, size_t s1_len, unsigned char *s2
 /* Check if any of the provided prefixes collide with one another or
  * with an existing prefix for the client. A collision is defined as two
  * prefixes that will emit an invalidation for the same key. If no prefix
- * collision is found, 1 is return, otherwise 0 is returned and the client
+ * collision is found, 1 is return; otherwise, 0 is returned and the client
  * has an error emitted describing the error. */
 int checkPrefixCollisionsOrReply(client *c, robj **prefixes, size_t numprefix) {
     for (size_t i = 0; i < numprefix; i++) {

@@ -590,7 +590,7 @@ tags {"external:skip"} {
         clean_aof_persistence $aof_dirpath
     }
 
-    test {Multi Part AOF can upgrade when when two servers share the same server dir} {
+    test {Multi Part AOF can upgrade when two servers share the same server dir} {
         create_aof $server_path $aof_old_name_old_path {
             append_to_aof [formatCommand set k1 v1]
             append_to_aof [formatCommand set k2 v2]
@@ -609,7 +609,7 @@ tags {"external:skip"} {
             start_server [list overrides [list dir $server_path appendonly yes appendfilename appendonly.aof2]] {
                 set valkey2 [valkey [srv host] [srv port] 0 $::tls]
 
-                test "Multi Part AOF can upgrade when when two servers share the same server dir (server1)" {
+                test "Multi Part AOF can upgrade when two servers share the same server dir (server1)" {
                     wait_done_loading $valkey1
                     assert_equal v1 [$valkey1 get k1]
                     assert_equal v2 [$valkey1 get k2]
@@ -640,7 +640,7 @@ tags {"external:skip"} {
                     assert {$d1 eq $d2}
                 }
 
-                test "Multi Part AOF can upgrade when when two servers share the same server dir (server2)" {
+                test "Multi Part AOF can upgrade when two servers share the same server dir (server2)" {
                     wait_done_loading $valkey2
 
                     assert_equal 0 [$valkey2 exists k1]

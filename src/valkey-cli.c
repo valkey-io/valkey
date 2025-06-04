@@ -6150,7 +6150,7 @@ static int clusterManagerFixOpenSlot(int slot) {
             }
         }
 
-        /* If the node is neither migrating nor importing and it's not
+        /* If the node is neither migrating nor importing and it isn't
          * the owner, then is added to the importing list in case
          * it has keys in the slot. */
         if (!is_migrating && !is_importing && n != owner) {

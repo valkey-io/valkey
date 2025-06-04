@@ -677,7 +677,7 @@ sds latencyCommandGenSparkeline(char *event, struct latencyTimeSeries *ts) {
  * LATENCY DOCTOR: returns a human readable analysis of instance latency.
  * LATENCY GRAPH: provide an ASCII graph of the latency of the specified event.
  * LATENCY RESET: reset data of a specified event or all the data if no event provided.
- * LATENCY HISTOGRAM: return a cumulative distribution of latencies in the format of an histogram for the specified
+ * LATENCY HISTOGRAM: return a cumulative distribution of latencies in the format of a histogram for the specified
  * command names.
  */
 void latencyCommand(client *c) {

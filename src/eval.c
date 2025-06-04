@@ -476,7 +476,7 @@ static void evalGenericCommand(client *c, int evalsha) {
     dictEntry *entry = dictFind(evalCtx.scripts, sha);
 
     if (evalsha && entry == NULL) {
-        /* Calling EVALSHA using an hash that was never added to the scripts
+        /* Calling EVALSHA using a hash that was never added to the scripts
          * cache. */
         addReplyErrorObject(c, shared.noscripterr);
         return;

@@ -11060,7 +11060,7 @@ size_t VM_MallocSizeDict(ValkeyModuleDict *dict) {
     return size;
 }
 
-/* Return the a number between 0 to 1 indicating the amount of memory
+/* Return a number between 0 to 1 indicating the amount of memory
  * currently used, relative to the server "maxmemory" configuration.
  *
  * * 0 - No memory limit configured.

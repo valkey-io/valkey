@@ -425,9 +425,9 @@ err:
 #define MULTIPLIER_10E16 10000000000000000ULL
 
 /**
- * Convert a string into an signed 64-bit integer using AVX-512 instructions.
+ * Convert a string into a signed 64-bit integer using AVX-512 instructions.
  *
- * This function parses a string of digits and converts it into an signed
+ * This function parses a string of digits and converts it into a signed
  * 64-bit integer. It leverages AVX-512 SIMD instructions for optimized
  * processing and performs strict validation to ensure the input string
  * represents a valid signed integer.

@@ -1464,7 +1464,7 @@ sentinelValkeyInstance *getSentinelValkeyInstanceByAddrAndRunID(dict *instances,
     serverAssert(addr || runid); /* User must pass at least one search param. */
     if (addr != NULL) {
         /* Try to resolve addr. If hostnames are used, we're accepting an ri_addr
-         * that contains an hostname only and can still be matched based on that.
+         * that contains a hostname only and can still be matched based on that.
          */
         ri_addr = createSentinelAddr(addr, port, 1);
         if (!ri_addr) return NULL;

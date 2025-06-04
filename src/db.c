@@ -741,7 +741,7 @@ void signalFlushedDb(int dbid, int async) {
 /* Return the set of flags to use for the emptyData() call for FLUSHALL
  * and FLUSHDB commands.
  *
- * sync: flushes the database in an sync manner.
+ * sync: flushes the database in a sync manner.
  * async: flushes the database in an async manner.
  * no option: determine sync or async according to the value of lazyfree-lazy-user-flush.
  *

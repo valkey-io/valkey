@@ -1351,7 +1351,7 @@ void freeClientReplicationData(client *c) {
  * The replica reports its version.
  *
  * - rdb-channel <1|0>
- * Used to identify the client as a replica's rdb connection in an dual channel
+ * Used to identify the client as a replica's rdb connection in a dual channel
  * sync session.
  *
  * - set-rdb-client-id <client-id>
@@ -3879,7 +3879,7 @@ void syncWithPrimary(connection *conn) {
         }
     }
 
-    /* If the primary is in an transient error, we should try to PSYNC
+    /* If the primary is in a transient error, we should try to PSYNC
      * from scratch later, so go to the error path. This happens when
      * the server is loading the dataset or is not connected with its
      * primary and so forth. */
@@ -4874,7 +4874,7 @@ void replicationCron(void) {
     /* Second, send a newline to all the replicas in pre-synchronization
      * stage, that is, replicas waiting for the primary to create the RDB file.
      *
-     * Also send the a newline to all the chained replicas we have, if we lost
+     * Also send a newline to all the chained replicas we have, if we lost
      * connection from our primary, to keep the replicas aware that their
      * primary is online. This is needed since sub-replicas only receive proxied
      * data from top-level primaries, so there is no explicit pinging in order

@@ -499,7 +499,7 @@ foreach {type large} [array get largevalue] {
         r randomkey
     } {}
 
-    test {KEYS * two times with long key, Github issue #1208} {
+    test {KEYS * two times with long key, GitHub issue #1208} {
         r flushdb
         r set dlskeriewrioeuwqoirueioqwrueoqwrueqw test
         r keys *

@@ -4343,7 +4343,7 @@ int processCommand(client *c) {
      * sending a transaction with pipelining without error checking, may have
      * the MULTI plus a few initial commands refused, then the timeout
      * condition resolves, and the bottom-half of the transaction gets
-     * executed, see Github PR #7022. */
+     * executed, see GitHub PR #7022. */
     if (isInsideYieldingLongCommand() && !(c->cmd->flags & CMD_ALLOW_BUSY)) {
         if (server.busy_module_yield_flags && server.busy_module_yield_reply) {
             rejectCommandFormat(c, "-BUSY %s", server.busy_module_yield_reply);

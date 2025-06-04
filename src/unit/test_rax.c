@@ -746,7 +746,7 @@ int test_raxRegressionTest3(int argc, char **argv, int flags) {
     return 0;
 }
 
-/* Regression test #4: Github issue #8, iterator does not populate the
+/* Regression test #4: GitHub issue #8, iterator does not populate the
  * data field after seek in case of exact match. The test case is looks odd
  * because it is quite indirect: Seeking "^" will result into seeking
  * the element >= "", and since we just added "" an exact match happens,

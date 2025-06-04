@@ -698,7 +698,7 @@ if {[string match {*jemalloc*} [s mem_allocator]]} {
         assert {$ttl <= 10 && $ttl > 5}
     }
 
-    test {GETRANGE with huge ranges, Github issue #1844} {
+    test {GETRANGE with huge ranges, GitHub issue #1844} {
         r set foo bar
         r getrange foo 0 4294967297
     } {bar}

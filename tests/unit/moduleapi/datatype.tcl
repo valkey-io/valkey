@@ -114,7 +114,7 @@ start_server {tags {"modules"}} {
         assert_equal 1 [llength $keys]    
     }
 
-    test {SCAN module datatype with case sensitive} {
+    test {SCAN module datatype with case-sensitive} {
         r flushdb
         populate 1000
         r datatype.set foo 111 bar

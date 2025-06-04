@@ -6278,12 +6278,12 @@ const char *clusterGetMessageTypeString(int type) {
     return "unknown";
 }
 
-int getSlotOrError(robj *o, sds *err_out) {
+int getSlotOrError(robj *o, char **err_out) {
     long long slot;
 
     if (getLongLongFromObject(o, &slot) != C_OK || slot < 0 || slot >= CLUSTER_SLOTS) {
         if (err_out) {
-            *err_out = sdsnew("Invalid or out of range slot");
+            *err_out = "Invalid or out of range slot";
         }
         return -1;
     }
@@ -6294,10 +6294,10 @@ int getSlotOrError(robj *o, sds *err_out) {
 /* Get the slot from robj and return it. If the slot is not valid,
  * return -1 and send an error to the client. */
 int getSlotOrReply(client *c, robj *o) {
-    sds err = NULL;
+    char *err = NULL;
     int slot = getSlotOrError(o, &err);
     if (err) {
-        addReplyErrorSds(c, err);
+        addReplyErrorSds(c, sdsnew(err));
         return -1;
     }
     return (int)slot;
@@ -6560,25 +6560,29 @@ unsigned int delKeysInSlot(unsigned int hashslot, int lazy, bool propagate_del, 
     int before_execution_nesting = server.execution_nesting;
     enterExecutionUnit(1, 0);
 
-    /* Propagate as a single CLUSTER FLUSHSLOT <slot> ASYNC/SYNC. */
-    if (propagate_del) {
-        enterExecutionUnit(1, 0);
+    /* Check if all replicas support CLUSTER FLUSHSLOT */
+    listIter replicas_iter;
+    listNode *replicas_list_node;
+    listRewind(server.replicas, &replicas_iter);
+    int legacy_replica = 0;
+    while ((replicas_list_node = listNext(&replicas_iter)) != NULL) {
+        client *replica = listNodeValue(replicas_list_node);
+        /* 0x90000 is 9.0.0, when CLUSTER FLUSHSLOT was added. */
+        if (replica->repl_data->replica_version < 0x90000) {
+            legacy_replica = 1;
+            break;
+        }
+    }
+
+    /* Propagate as a single CLUSTER FLUSHSLOT <slot> ASYNC/SYNC if replicas
+     * support it. */
+    if (propagate_del && !legacy_replica) {
         argv[0] = shared.cluster;
         argv[1] = shared.flushslot;
         argv[2] = createStringObjectFromLongLong(hashslot);
         argv[3] = lazy ? shared.async : shared.sync;
-        incrRefCount(argv[0]);
-        incrRefCount(argv[1]);
-        incrRefCount(argv[3]);
-        /* DB number doesn't matter since FLUSHSLOT is a cross-DB operation,
-         * just hardcode zero. */
-        alsoPropagate(/*dbid=*/0, argv, 4, PROPAGATE_AOF | PROPAGATE_REPL);
-        decrRefCount(argv[0]);
-        decrRefCount(argv[1]);
+        alsoPropagate(/*dbid=*/-1, argv, 4, PROPAGATE_AOF | PROPAGATE_REPL);
         decrRefCount(argv[2]);
-        decrRefCount(argv[3]);
-        exitExecutionUnit();
-        postExecutionUnitOperations();
     }
 
     for (int i = 0; i < server.dbnum; i++) {
@@ -6595,6 +6599,10 @@ unsigned int delKeysInSlot(unsigned int hashslot, int lazy, bool propagate_del, 
             } else {
                 dbSyncDelete(&db, key);
             }
+
+            /* Legacy replicas require individual key deletion. */
+            if (propagate_del && legacy_replica) propagateDeletion(&db, key, lazy);
+
             signalModifiedKey(NULL, &db, key);
             if (send_del_event) {
                 /* In the `cluster flushslot` scenario, the keys are actually deleted so notify everyone. */

@@ -1040,7 +1040,7 @@ static int streamParseAddOrTrimArgsOrReply(client *c, streamAddTrimArgs *args, i
  *  streamIteratorStop(&myiterator); */
 void streamIteratorStart(streamIterator *si, stream *s, streamID *start, streamID *end, int rev) {
     /* Initialize the iterator and translates the iteration start/stop
-     * elements into a 128 big big-endian number. */
+     * elements into a 128 bit big-endian number. */
     if (start) {
         streamEncodeID(si->start_key, start);
     } else {

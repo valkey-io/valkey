@@ -755,7 +755,7 @@ ssize_t rdbSaveStreamPEL(rio *rdb, rax *pel, int nacks) {
     raxStart(&ri, pel);
     raxSeek(&ri, "^", NULL, 0);
     while (raxNext(&ri)) {
-        /* We store IDs in raw form as 128 big big-endian numbers, like
+        /* We store IDs in raw form as 128 bit big-endian numbers, like
          * they are inside the radix tree key. */
         if ((n = rdbWriteRaw(rdb, ri.key, sizeof(streamID))) == -1) {
             raxStop(&ri);

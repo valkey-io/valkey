@@ -6,10 +6,10 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: Version of Valkey to build
+        description: Version of Valkey to Build
         required: true
       environment:
-        description: Environment to build
+        description: Environment to Build
         required: true
         type: choice
         options:
@@ -37,7 +37,7 @@ jobs:
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "environment=$ENVIRONMENT" >> $GITHUB_OUTPUT
 
-      - name: Trigger build
+      - name: Trigger Valkey Build
         uses: peter-evans/repository-dispatch@ff45666b9427631e3450c54a1bcbee4d9ff4d7c0 # Version 3
         with:
           token: ${{ secrets.AUTOMATION_PAT }}
@@ -47,4 +47,16 @@ jobs:
             {
               "version": "${{ steps.determine-vars.outputs.version }}",
               "environment": "${{ steps.determine-vars.outputs.environment }}"
+            }
+
+      - name: Trigger Valkey Extensions Update
+        uses: peter-evans/repository-dispatch@ff45666b9427631e3450c54a1bcbee4d9ff4d7c0 # Version 3
+        with:
+          token: ${{ secrets.AUTOMATION_PAT }}
+          repository: ${{ github.repository_owner }}/valkey-extensions
+          event-type: valkey-release
+          client-payload: >
+            {
+              "version": "${{ steps.determine-vars.outputs.version }}",
+              "module": "valkey"
             }

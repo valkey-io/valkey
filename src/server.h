@@ -3456,7 +3456,6 @@ robj *dbUnshareStringValue(serverDb *db, robj *key, robj *o);
 #define EMPTYDB_NOFUNCTIONS (1 << 1) /* Indicate not to flush the functions. */
 long long emptyData(int dbnum, int flags, void(callback)(hashtable *));
 long long emptyDbStructure(serverDb *dbarray, int dbnum, int async, void(callback)(hashtable *));
-void unlinkHashtableFromDb(serverDb *db, int hashslot, kvstore **out_keys, kvstore **out_expires);
 void flushAllDataAndResetRDB(int flags);
 long long dbTotalServerKeyCount(void);
 serverDb *initTempDb(void);

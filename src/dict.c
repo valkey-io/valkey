@@ -319,13 +319,13 @@ static int dictCheckRehashingCompleted(dict *d) {
 }
 
 /* Performs N steps of incremental rehashing. Returns 1 if there are still
- * keys to move from the old to the new hash table, otherwise 0 is returned.
+ * keys to move from the old to the new hash table; otherwise, 0 is returned.
  *
  * Note that a rehashing step consists in moving a bucket (that may have more
  * than one key as we use chaining) from the old to the new hash table, however
  * since part of the hash table may be composed of empty spaces, it is not
  * guaranteed that this function will rehash even a single bucket, since it
- * will visit at max N*10 empty buckets in total, otherwise the amount of
+ * will visit at max N*10 empty buckets in total; otherwise, the amount of
  * work it does would be unbound and the function may block for a long time. */
 int dictRehash(dict *d, int n) {
     int empty_visits = n * 10; /* Max number of empty buckets to visit. */
@@ -447,7 +447,7 @@ dictEntry *dictAddRaw(dict *d, void *key, dictEntry **existing) {
 dictEntry *dictInsertAtPosition(dict *d, void *key, void *position) {
     dictEntry **bucket = position; /* It's a bucket, but the API hides that. */
     dictEntry *entry;
-    /* If rehashing is ongoing, we insert in table 1, otherwise in table 0.
+    /* If rehashing is ongoing, we insert in table 1; otherwise, in table 0.
      * Assert that the provided bucket is the right table. */
     int htidx = dictIsRehashing(d) ? 1 : 0;
     assert(bucket >= &d->ht_table[htidx][0] && bucket <= &d->ht_table[htidx][DICTHT_SIZE_MASK(d->ht_size_exp[htidx])]);

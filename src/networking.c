@@ -584,7 +584,7 @@ void addReplyProto(client *c, const char *s, size_t len) {
  * -ERRORCODE Error Message<CR><LF>
  *
  * If the error code is already passed in the string 's', the error
- * code provided is used, otherwise the string "-ERR " for the generic
+ * code provided is used; otherwise, the string "-ERR " for the generic
  * error code is automatically added.
  * Note that 's' must NOT end with \r\n. */
 void addReplyErrorLength(client *c, const char *s, size_t len) {
@@ -756,7 +756,7 @@ void addReplyErrorFormatInternal(client *c, int flags, const char *fmt, va_list 
     va_end(cpy);
     /* Trim any newlines at the end (ones will be added by addReplyErrorLength) */
     s = sdstrim(s, "\r\n");
-    /* Make sure there are no newlines in the middle of the string, otherwise
+    /* Make sure there are no newlines in the middle of the string; otherwise,
      * invalid protocol is emitted. */
     s = sdsmapchars(s, "\r\n", "  ", 2);
     addReplyErrorLength(c, s, sdslen(s));
@@ -819,7 +819,7 @@ void trimReplyUnusedTailSpace(client *c) {
     if (!tail) return;
 
     /* We only try to trim the space is relatively high (more than a 1/4 of the
-     * allocation), otherwise there's a high chance realloc will NOP.
+     * allocation); otherwise, there's a high chance realloc will NOP.
      * Also, to avoid large memmove which happens as part of realloc, we only do
      * that if the used part is small.  */
     if (tail->size - tail->used > tail->size / 4 && tail->used < PROTO_REPLY_CHUNK_BYTES &&
@@ -2150,7 +2150,7 @@ static void writeToReplica(client *c) {
 
 /* This function should be called from _writeToClient when the reply list is not empty,
  * it gathers the scattered buffers from reply list and sends them away with connWritev.
- * If we write successfully, it returns C_OK, otherwise, C_ERR is returned.
+ * If we write successfully, it returns C_OK; otherwise, C_ERR is returned.
  * Sets the c->nwritten to the number of bytes the server wrote to the client.
  * Can be called from the main thread or an I/O thread */
 static int writevToClient(client *c) {
@@ -2255,7 +2255,7 @@ static int writevToClient(client *c) {
 }
 
 /* This function does actual writing output buffers to non-replica client, it is called by writeToClient.
- * If we write successfully, it returns C_OK, otherwise, C_ERR is returned,
+ * If we write successfully, it returns C_OK; otherwise, C_ERR is returned,
  * and 'c->nwritten' is set to the number of bytes the server wrote to the client. */
 int _writeToClient(client *c) {
     listNode *lastblock;
@@ -2331,7 +2331,7 @@ static void _postWriteToClient(client *c) {
 
 /* Updates the client's memory usage and bucket and server stats after writing.
  * If a write handler is installed , it will attempt to clear the write event.
- * If the client is no longer valid, it will return C_ERR, otherwise C_OK. */
+ * If the client is no longer valid, it will return C_ERR; otherwise, C_OK. */
 int postWriteToClient(client *c) {
     c->io_last_reply_block = NULL;
     c->io_last_bufpos = 0;
@@ -2508,7 +2508,7 @@ int isParsingError(client *c) {
 
 /* This function is called after the query-buffer was parsed.
  * It is used to handle parsing errors and to update the client state.
- * The function returns C_OK if a command can be executed, otherwise C_ERR. */
+ * The function returns C_OK if a command can be executed; otherwise, C_ERR. */
 parseResult handleParseResults(client *c) {
     if (isParsingError(c)) {
         handleParseError(c);
@@ -3136,7 +3136,7 @@ void commandProcessed(client *c) {
  * 2. calls commandProcessed() if the command was handled.
  *
  * The function returns C_ERR in case the client was freed as a side effect
- * of processing the command, otherwise C_OK is returned. */
+ * of processing the command; otherwise, C_OK is returned. */
 int processCommandAndResetClient(client *c) {
     int deadclient = 0;
     client *old_client = server.current_client;
@@ -3414,7 +3414,7 @@ void genClientAddrString(client *client, char *addr, size_t addr_len, int remote
 }
 
 /* This function returns the client peer id, by creating and caching it
- * if client->peerid is NULL, otherwise returning the cached value.
+ * if client->peerid is NULL; otherwise, returning the cached value.
  * The Peer ID never changes during the life of the client, however it
  * is expensive to compute. */
 char *getClientPeerId(client *c) {
@@ -3428,7 +3428,7 @@ char *getClientPeerId(client *c) {
 }
 
 /* This function returns the client bound socket name, by creating and caching
- * it if client->sockname is NULL, otherwise returning the cached value.
+ * it if client->sockname is NULL; otherwise, returning the cached value.
  * The Socket Name never changes during the life of the client, however it
  * is expensive to compute. */
 char *getClientSockname(client *c) {
@@ -4716,7 +4716,7 @@ void helloCommand(client *c) {
     /* At this point we need to be authenticated to continue. */
     if (!c->flag.authenticated) {
         addReplyError(c, "-NOAUTH HELLO must be called with the client already "
-                         "authenticated, otherwise the HELLO <proto> AUTH <user> <pass> "
+                         "authenticated; otherwise, the HELLO <proto> AUTH <user> <pass> "
                          "option can be used to authenticate the client and "
                          "select the RESP protocol version at the same time");
         return;

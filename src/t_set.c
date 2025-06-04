@@ -113,7 +113,7 @@ static void maybeConvertToIntset(robj *set) {
 /* Add the specified sds value into a set.
  *
  * If the value was already member of the set, nothing is done and 0 is
- * returned, otherwise the new element is added and 1 is returned. */
+ * returned; otherwise, the new element is added and 1 is returned. */
 int setTypeAdd(robj *subject, sds value) {
     return setTypeAddAux(subject, value, sdslen(value), 0, 1);
 }
@@ -1171,7 +1171,7 @@ void srandmemberWithCountCommand(client *c) {
                 sdsele = sdsnewlen(str, len);
             }
             /* Try to add the object to the dictionary. If it already exists
-             * free it, otherwise increment the number of objects we have
+             * free it; otherwise, increment the number of objects we have
              * in the result dictionary. */
             if (hashtableAdd(ht, sdsele))
                 added++;

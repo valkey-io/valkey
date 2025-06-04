@@ -432,7 +432,7 @@ int64_t getSignedBitfield(unsigned char *p, uint64_t offset, uint64_t bits) {
  * of storing it as an unsigned or signed integer with the specified
  * number of bits. The functions both take the value and a possible increment.
  * If no overflow could happen and the value+increment fit inside the limits,
- * then zero is returned, otherwise in case of overflow, 1 is returned,
+ * then zero is returned; otherwise, in case of overflow, 1 is returned,
  * otherwise in case of underflow, -1 is returned.
  *
  * When non-zero is returned (overflow or underflow), if not NULL, *limit is
@@ -1201,7 +1201,7 @@ struct bitfieldOp {
     int opcode;      /* Operation id. */
     int owtype;      /* Overflow type to use. */
     int bits;        /* Integer bitfield bits width. */
-    int sign;        /* True if signed, otherwise unsigned op. */
+    int sign;        /* True if signed; otherwise, unsigned op. */
 };
 
 /* This implements both the BITFIELD command and the BITFIELD_RO command

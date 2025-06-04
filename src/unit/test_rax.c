@@ -128,7 +128,7 @@ int htRem(hashtable *t, unsigned char *s, size_t len) {
 void *htNotFound = (void *)"ht-not-found";
 
 /* Find an element inside the hash table. Returns htNotFound if the
- * element is not there, otherwise returns the associated value. */
+ * element is not there; otherwise, returns the associated value. */
 void *htFind(hashtable *t, unsigned char *s, size_t len) {
     htNode *n = htRawLookup(t, s, len, NULL, NULL);
     if (!n) return htNotFound;

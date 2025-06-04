@@ -6,7 +6,7 @@
 # in seconds, and an additional condition to verify at the end.
 #
 # If reconnect is > 0, the test actually try to break the connection and
-# reconnect with the master, otherwise just the initial synchronization is
+# reconnect with the master; otherwise, just the initial synchronization is
 # checked for consistency.
 proc test_psync {descr duration backlog_size backlog_ttl delay cond mdl sdl dualchannel reconnect} {
     start_server {tags {"repl"} overrides {save {}}} {

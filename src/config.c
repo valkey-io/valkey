@@ -492,7 +492,7 @@ void loadServerConfigFromString(sds config) {
 
             if ((config->flags & MULTI_ARG_CONFIG) && argc == 2 && sdslen(argv[1])) {
                 /* For MULTI_ARG_CONFIGs, if we only have one argument, try to split it by spaces.
-                 * Only if the argument is not empty, otherwise something like --save "" will fail.
+                 * Only if the argument is not empty; otherwise, something like --save "" will fail.
                  * So that we can support something like --config "arg1 arg2 arg3". */
                 sds *new_argv;
                 int new_argc;
@@ -1659,7 +1659,7 @@ sds getConfigDebugInfo(void) {
 /* This function replaces the old configuration file with the new content
  * in an atomic manner.
  *
- * The function returns 0 on success, otherwise -1 is returned and errno
+ * The function returns 0 on success; otherwise, -1 is returned and errno
  * is set accordingly. */
 int rewriteConfigOverwriteFile(char *configfile, sds content) {
     int fd = -1;
@@ -1729,7 +1729,7 @@ cleanup:
  * The force_write flag overrides this behavior and forces everything to be
  * written. This is currently only used for testing purposes.
  *
- * On error -1 is returned and errno is set accordingly, otherwise 0. */
+ * On error -1 is returned and errno is set accordingly; otherwise, 0. */
 int rewriteConfig(char *path, int force_write) {
     struct rewriteConfigState *state;
     sds newcontent;

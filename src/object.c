@@ -211,7 +211,7 @@ robj *createEmbeddedStringObject(const char *ptr, size_t len) {
 }
 
 /* Create a string object with EMBSTR encoding if it is smaller than
- * OBJ_ENCODING_EMBSTR_SIZE_LIMIT, otherwise the RAW encoding is
+ * OBJ_ENCODING_EMBSTR_SIZE_LIMIT; otherwise, the RAW encoding is
  * used.
  *
  * The current limit of 44 is chosen so that the biggest string object
@@ -927,7 +927,7 @@ int collateStringObjects(const robj *a, const robj *b) {
 }
 
 /* Equal string objects return 1 if the two objects are the same from the
- * point of view of a string comparison, otherwise 0 is returned. Note that
+ * point of view of a string comparison; otherwise, 0 is returned. Note that
  * this function is faster than checking for (compareStringObject(a,b) == 0)
  * because it can perform some more optimization. */
 int equalStringObjects(robj *a, robj *b) {
@@ -1503,7 +1503,7 @@ sds getMemoryDoctorReport(void) {
                        "peak, and if the Valkey instance Resident Set Size (RSS) is currently bigger than expected, "
                        "the memory will be used as soon as you fill the Valkey instance with more data. If the memory "
                        "peak was only occasional and you want to try to reclaim memory, please try the MEMORY PURGE "
-                       "command, otherwise the only other option is to shutdown and restart the instance.\n\n");
+                       "command; otherwise, the only other option is to shutdown and restart the instance.\n\n");
         }
         if (high_frag) {
             s = sdscatprintf(

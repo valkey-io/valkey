@@ -224,7 +224,7 @@ size_t hashTypeEntryMemUsage(hashTypeEntry *entry) {
 
 /* Defragments a hashtable entry (field-value pair) if needed, using the
  * provided defrag functions. The defrag functions return NULL if the allocation
- * was not moved, otherwise they return a pointer to the new memory location.
+ * was not moved; otherwise, they return a pointer to the new memory location.
  * A separate sds defrag function is needed because of the unique memory layout
  * of sds strings.
  * If the location of the hashTypeEntry changed we return the new location,
@@ -323,7 +323,7 @@ int hashTypeGetFromListpack(robj *o, sds field, unsigned char **vstr, unsigned i
 }
 
 /* Get the value from a hash table encoded hash, identified by field.
- * Returns NULL when the field cannot be found, otherwise the SDS value
+ * Returns NULL when the field cannot be found; otherwise, the SDS value
  * is returned. */
 sds hashTypeGetFromHashTable(robj *o, sds field) {
     serverAssert(o->encoding == OBJ_ENCODING_HASHTABLE);
@@ -334,7 +334,7 @@ sds hashTypeGetFromHashTable(robj *o, sds field) {
 
 /* Higher level function of hashTypeGet*() that returns the hash value
  * associated with the specified field. If the field is found C_OK
- * is returned, otherwise C_ERR. The returned object is returned by
+ * is returned; otherwise, C_ERR. The returned object is returned by
  * reference in either *vstr and *vlen if it's returned in string form,
  * or stored in *vll if it's returned as a number.
  *
@@ -1288,7 +1288,7 @@ void hrandfieldWithCountCommand(client *c, long l, int withvalues) {
             hashTypeRandomElement(hash, size, &field, withvalues ? &value : NULL);
 
             /* Try to add the object to the hashtable. If it already exists
-             * free it, otherwise increment the number of objects we have
+             * free it; otherwise, increment the number of objects we have
              * in the result hashtable. */
             sds sfield = hashSdsFromListpackEntry(&field);
             if (!hashtableAdd(ht, sfield)) {

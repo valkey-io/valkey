@@ -1427,7 +1427,7 @@ const char *sentinelValkeyInstanceTypeStr(sentinelValkeyInstance *ri) {
  * remove our old entry and add a new one for the same ID but with the new
  * address.
  *
- * The function returns 1 if the matching Sentinel was removed, otherwise
+ * The function returns 1 if the matching Sentinel was removed; otherwise,
  * 0 if there was no Sentinel with this ID. */
 int removeMatchingSentinelFromPrimary(sentinelValkeyInstance *primary, char *runid) {
     dictIterator *di;
@@ -1450,7 +1450,7 @@ int removeMatchingSentinelFromPrimary(sentinelValkeyInstance *primary, char *run
 }
 
 /* Search an instance with the same runid, ip and port into a dictionary
- * of instances. Return NULL if not found, otherwise return the instance
+ * of instances. Return NULL if not found; otherwise, return the instance
  * pointer.
  *
  * runid or addr can be NULL. In such a case the search is performed only
@@ -2862,7 +2862,7 @@ void sentinelReceiveHelloMessages(valkeyAsyncContext *c, void *reply, void *priv
  * sentinel_ip,sentinel_port,sentinel_runid,current_epoch,
  * primary_name,primary_ip,primary_port,primary_config_epoch.
  *
- * Returns C_OK if the PUBLISH was queued correctly, otherwise
+ * Returns C_OK if the PUBLISH was queued correctly; otherwise,
  * C_ERR is returned. */
 int sentinelSendHello(sentinelValkeyInstance *ri) {
     char ip[NET_IP_STR_LEN];
@@ -2875,7 +2875,7 @@ int sentinelSendHello(sentinelValkeyInstance *ri) {
 
     if (ri->link->disconnected) return C_ERR;
 
-    /* Use the specified announce address if specified, otherwise try to
+    /* Use the specified announce address if specified; otherwise, try to
      * obtain our own IP address. */
     if (sentinel.announce_ip) {
         announce_ip = sentinel.announce_ip;
@@ -2948,7 +2948,7 @@ int sentinelSendPing(sentinelValkeyInstance *ri) {
         ri->link->pending_commands++;
         ri->link->last_ping_time = mstime();
         /* We update the active ping time only if we received the pong for
-         * the previous ping, otherwise we are technically waiting since the
+         * the previous ping; otherwise, we are technically waiting since the
          * first ping that did not receive a reply. */
         if (ri->link->act_ping_time == 0) ri->link->act_ping_time = ri->link->last_ping_time;
         return 1;
@@ -3805,7 +3805,7 @@ void sentinelCommand(client *c) {
         if (!sentinel.tilt && ri && (ri->flags & SRI_S_DOWN) && (ri->flags & SRI_PRIMARY)) isdown = 1;
 
         /* Vote for the primary (or fetch the previous vote) if the request
-         * includes a runid, otherwise the sender is not seeking for a vote. */
+         * includes a runid; otherwise, the sender is not seeking for a vote. */
         if (ri && ri->flags & SRI_PRIMARY && strcasecmp(c->argv[5]->ptr, "*")) {
             leader = sentinelVoteLeader(ri, (uint64_t)req_epoch, c->argv[5]->ptr, &leader_epoch);
         }
@@ -4519,7 +4519,7 @@ void sentinelSimFailureCrash(void) {
 /* Vote for the sentinel with 'req_runid' or return the old vote if already
  * voted for the specified 'req_epoch' or one greater.
  *
- * If a vote is not available returns NULL, otherwise return the Sentinel
+ * If a vote is not available returns NULL; otherwise, return the Sentinel
  * runid and populate the leader_epoch with the epoch of the vote. */
 char *sentinelVoteLeader(sentinelValkeyInstance *primary, uint64_t req_epoch, char *req_runid, uint64_t *leader_epoch) {
     if (req_epoch > sentinel.current_epoch) {
@@ -4770,7 +4770,7 @@ int sentinelStartFailoverIfNeeded(sentinelValkeyInstance *primary) {
  *    This is pretty much black magic but the idea is, the primary was not
  *    available so the replica may be lagging, but not over a certain time.
  *    Anyway we'll select the best replica according to replication offset.
- * 5) Replica priority can't be zero, otherwise the replica is discarded.
+ * 5) Replica priority can't be zero; otherwise, the replica is discarded.
  *
  * Among all the replicas matching the above conditions we select the replica
  * with, in order of sorting key:
@@ -4782,7 +4782,7 @@ int sentinelStartFailoverIfNeeded(sentinelValkeyInstance *primary) {
  * Basically if runid is the same, the replica that processed more commands
  * from the primary is selected.
  *
- * The function returns the pointer to the selected replica, otherwise
+ * The function returns the pointer to the selected replica; otherwise,
  * NULL if no suitable replica was found.
  */
 

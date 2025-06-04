@@ -405,7 +405,7 @@ static int scriptVerifyOOM(scriptRunCtx *run_ctx, char **err) {
 
     /* If we reached the memory limit configured via maxmemory, commands that
      * could enlarge the memory usage are not allowed, but only if this is the
-     * first write in the context of this script, otherwise we can't stop
+     * first write in the context of this script; otherwise, we can't stop
      * in the middle. */
 
     if (server.maxmemory &&                          /* Maxmemory is actually enabled. */

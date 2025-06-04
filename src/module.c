@@ -615,7 +615,7 @@ void poolAllocRelease(ValkeyModuleCtx *ctx) {
  * module callback function returns. Mostly suitable for small allocations
  * that are short living and must be released when the callback returns
  * anyway. The returned memory is aligned to the architecture word size
- * if at least word size bytes are requested, otherwise it is just
+ * if at least word size bytes are requested; otherwise, it is just
  * aligned to the next power of two, so for example a 3 bytes request is
  * 4 bytes aligned while a 2 bytes request is 2 bytes aligned.
  *
@@ -810,7 +810,7 @@ static void moduleFreeListIterator(void *data) {
  * possibly recreating the key if needed.
  *
  * The function returns 1 if the key value object is found empty and is
- * deleted, otherwise 0 is returned. */
+ * deleted; otherwise, 0 is returned. */
 int moduleDelKeyIfEmpty(ValkeyModuleKey *key) {
     if (!(key->mode & VALKEYMODULE_WRITE) || key->value == NULL) return 0;
     int isempty;
@@ -848,7 +848,7 @@ int moduleDelKeyIfEmpty(ValkeyModuleKey *key) {
 int VM_GetApi(const char *funcname, void **targetPtrPtr) {
     /* Lookup the requested module API and store the function pointer into the
      * target pointer. The function returns VALKEYMODULE_ERR if there is no such
-     * named API, otherwise VALKEYMODULE_OK.
+     * named API; otherwise, VALKEYMODULE_OK.
      *
      * This function is not meant to be used by modules developer, it is only
      * used implicitly by including valkeymodule.h. */
@@ -1190,7 +1190,7 @@ void VM_ChannelAtPosWithFlags(ValkeyModuleCtx *ctx, int pos, int flags) {
     res->numkeys++;
 }
 
-/* Returns 1 if name is valid, otherwise returns 0.
+/* Returns 1 if name is valid; otherwise, returns 0.
  *
  * We want to block some chars in module command names that we know can
  * mess things up.
@@ -2642,7 +2642,7 @@ void autoMemoryAdd(ValkeyModuleCtx *ctx, int type, void *ptr) {
  * free things manually if they want.
  *
  * The function returns 1 if the object was actually found in the auto memory
- * pool, otherwise 0 is returned. */
+ * pool; otherwise, 0 is returned. */
 int autoMemoryFreed(ValkeyModuleCtx *ctx, int type, void *ptr) {
     if (!(ctx->flags & VALKEYMODULE_CTX_AUTO_MEMORY)) return 0;
 
@@ -2674,7 +2674,7 @@ int autoMemoryFreed(ValkeyModuleCtx *ctx, int type, void *ptr) {
 /* Release all the objects in queue. */
 void autoMemoryCollect(ValkeyModuleCtx *ctx) {
     if (!(ctx->flags & VALKEYMODULE_CTX_AUTO_MEMORY)) return;
-    /* Clear the AUTO_MEMORY flag from the context, otherwise the functions
+    /* Clear the AUTO_MEMORY flag from the context; otherwise, the functions
      * we call to free the resources, will try to scan the auto release
      * queue to mark the entries as freed. */
     ctx->flags &= ~VALKEYMODULE_CTX_AUTO_MEMORY;
@@ -3030,7 +3030,7 @@ int VM_StringCompare(const ValkeyModuleString *a, const ValkeyModuleString *b) {
 }
 
 /* Return the (possibly modified in encoding) input 'str' object if
- * the string is unshared, otherwise NULL is returned. */
+ * the string is unshared; otherwise, NULL is returned. */
 ValkeyModuleString *moduleAssertUnsharedString(ValkeyModuleString *str) {
     if (str->refcount != 1) {
         serverLog(LL_WARNING, "Module attempted to use an in-place string modify operation "
@@ -3052,7 +3052,7 @@ ValkeyModuleString *moduleAssertUnsharedString(ValkeyModuleString *str) {
 }
 
 /* Append the specified buffer to the string 'str'. The string must be a
- * string created by the user that is referenced only a single time, otherwise
+ * string created by the user that is referenced only a single time; otherwise,
  * VALKEYMODULE_ERR is returned and the operation is not performed. */
 int VM_StringAppendBuffer(ValkeyModuleCtx *ctx, ValkeyModuleString *str, const char *buf, size_t len) {
     UNUSED(ctx);
@@ -3320,7 +3320,7 @@ int VM_ReplyWithSet(ValkeyModuleCtx *ctx, long len) {
  *
  * Use VM_ReplySetAttributeLength() to set deferred length.
  *
- * Not supported by RESP2 and will return VALKEYMODULE_ERR, otherwise
+ * Not supported by RESP2 and will return VALKEYMODULE_ERR; otherwise,
  * the function always returns VALKEYMODULE_OK. */
 int VM_ReplyWithAttribute(ValkeyModuleCtx *ctx, long len) {
     if (ctx->client->resp == 2) return VALKEYMODULE_ERR;
@@ -3702,7 +3702,7 @@ int VM_ReplicateVerbatim(ValkeyModuleCtx *ctx) {
  *
  * 1. The ID is different for each different client, so if the same client
  *    executes a module command multiple times, it can be recognized as
- *    having the same ID, otherwise the ID will be different.
+ *    having the same ID; otherwise, the ID will be different.
  * 2. The ID increases monotonically. Clients connecting to the server later
  *    are guaranteed to get IDs greater than any past ID previously seen.
  *
@@ -3803,7 +3803,7 @@ int modulePopulateReplicationInfoStructure(void *ri, int structver) {
 
 /* Return information about the client with the specified ID (that was
  * previously obtained via the ValkeyModule_GetClientId() API). If the
- * client exists, VALKEYMODULE_OK is returned, otherwise VALKEYMODULE_ERR
+ * client exists, VALKEYMODULE_OK is returned; otherwise, VALKEYMODULE_ERR
  * is returned.
  *
  * When the client exist and the `ci` pointer is not NULL, but points to
@@ -6275,7 +6275,7 @@ fmterr:
  *              This flag allows to get the error also as an error CallReply with
  *              relevant error message.
  *     * 'D' -- A "Dry Run" mode. Return before executing the underlying call().
- *              If everything succeeded, it will return with a NULL, otherwise it will
+ *              If everything succeeded, it will return with a NULL; otherwise, it will
  *              return with a CallReply object denoting the error, as if it was called with
  *              the 'E' code.
  *     * 'K' -- Allow running blocking commands. If enabled and the command gets blocked, a
@@ -6308,7 +6308,7 @@ fmterr:
  *
  * * **...**: The actual arguments to the command.
  *
- * On success a ValkeyModuleCallReply object is returned, otherwise
+ * On success a ValkeyModuleCallReply object is returned; otherwise,
  * NULL is returned and errno is set to the following values:
  *
  * * EBADF: wrong format specifier.
@@ -6520,7 +6520,7 @@ ValkeyModuleCallReply *VM_Call(ValkeyModuleCtx *ctx, const char *cmdname, const 
     /* Check if the user can run this command according to the current
      * ACLs.
      *
-     * If VM_SetContextUser has set a user, that user is used, otherwise
+     * If VM_SetContextUser has set a user, that user is used; otherwise,
      * use the attached client's user. If there is no attached client user and no manually
      * set user, an error will be returned */
     if (flags & VALKEYMODULE_ARGV_RUN_AS_USER) {
@@ -8224,7 +8224,7 @@ void VM_BlockClientSetPrivateData(ValkeyModuleBlockedClient *blocked_client, voi
  * ValkeyModule_BlockClientOnKeys() the reply callback is not called after
  * VM_UnblockClient() is called, but every time a key is signaled as ready:
  * if the reply callback can serve the client, it returns VALKEYMODULE_OK
- * and the client is unblocked, otherwise it will return VALKEYMODULE_ERR
+ * and the client is unblocked; otherwise, it will return VALKEYMODULE_ERR
  * and we'll try again later.
  *
  * The reply callback can access the key that was signaled as ready by
@@ -8382,7 +8382,7 @@ int VM_AbortBlock(ValkeyModuleBlockedClient *bc) {
  * before the module has a chance to call ValkeyModule_UnblockClient()
  *
  * Usually what you want to do there, is to cleanup your module state
- * so that you can call ValkeyModule_UnblockClient() safely, otherwise
+ * so that you can call ValkeyModule_UnblockClient() safely; otherwise,
  * the client will remain blocked forever if the timeout is large.
  *
  * Notes:
@@ -8623,7 +8623,7 @@ int VM_BlockedClientDisconnected(ValkeyModuleCtx *ctx) {
  *     ValkeyModule_ThreadSafeContextUnlock(ctx);
  *
  * This is not needed when using `ValkeyModule_Reply*` functions, assuming
- * that a blocked client was used when the context was created, otherwise
+ * that a blocked client was used when the context was created; otherwise,
  * no ValkeyModule_Reply* call should be made at all.
  *
  * NOTE: If you're creating a detached thread safe context (bc is NULL),
@@ -9041,7 +9041,7 @@ void moduleCallClusterReceivers(const char *sender_id,
 
 /* Register a callback receiver for cluster messages of type 'type'. If there
  * was already a registered callback, this will replace the callback function
- * with the one provided, otherwise if the callback is set to NULL and there
+ * with the one provided; otherwise, if the callback is set to NULL and there
  * is already a callback for this function, the callback is unregistered
  * (so this API call is also used in order to delete the receiver).
  *
@@ -9089,7 +9089,7 @@ void VM_RegisterClusterMessageReceiver(ValkeyModuleCtx *ctx,
     }
 }
 
-/* Send a message to all the nodes in the cluster if `target` is NULL, otherwise
+/* Send a message to all the nodes in the cluster if `target` is NULL; otherwise,
  * at the specified target, which is a VALKEYMODULE_NODE_ID_LEN bytes node ID, as
  * returned by the receiver callback or by the nodes iteration functions.
  *
@@ -9427,7 +9427,7 @@ ValkeyModuleTimerID VM_CreateTimer(ValkeyModuleCtx *ctx, mstime_t period, Valkey
 }
 
 /* Stop a timer, returns VALKEYMODULE_OK if the timer was found, belonged to the
- * calling module, and was stopped, otherwise VALKEYMODULE_ERR is returned.
+ * calling module, and was stopped; otherwise, VALKEYMODULE_ERR is returned.
  * If not NULL, the data pointer is set to the value of the data argument when
  * the timer was created. */
 int VM_StopTimer(ValkeyModuleCtx *ctx, ValkeyModuleTimerID id, void **data) {
@@ -9444,7 +9444,7 @@ int VM_StopTimer(ValkeyModuleCtx *ctx, ValkeyModuleTimerID id, void **data) {
 /* Obtain information about a timer: its remaining time before firing
  * (in milliseconds), and the private data pointer associated with the timer.
  * If the timer specified does not exist or belongs to a different module
- * no information is returned and the function returns VALKEYMODULE_ERR, otherwise
+ * no information is returned and the function returns VALKEYMODULE_ERR; otherwise,
  * VALKEYMODULE_OK is returned. The arguments remaining or data can be NULL if
  * the caller does not need certain information. */
 int VM_GetTimerInfo(ValkeyModuleCtx *ctx, ValkeyModuleTimerID id, uint64_t *remaining, void **data) {
@@ -9462,7 +9462,7 @@ int VM_GetTimerInfo(ValkeyModuleCtx *ctx, ValkeyModuleTimerID id, uint64_t *rema
 }
 
 /* Query timers to see if any timer belongs to the module.
- * Return 1 if any timer was found, otherwise 0 would be returned. */
+ * Return 1 if any timer was found; otherwise, 0 would be returned. */
 int moduleHoldsTimer(struct ValkeyModule *module) {
     raxIterator iter;
     int found = 0;
@@ -9531,7 +9531,7 @@ static void eventLoopCbWritable(struct aeEventLoop *ae, int fd, void *user_data,
  *     * `VALKEYMODULE_EVENTLOOP_WRITABLE`
  *     * `VALKEYMODULE_EVENTLOOP_READABLE | VALKEYMODULE_EVENTLOOP_WRITABLE`
  *
- * On success VALKEYMODULE_OK is returned, otherwise
+ * On success VALKEYMODULE_OK is returned; otherwise,
  * VALKEYMODULE_ERR is returned and errno is set to the following values:
  *
  * * ERANGE: `fd` is negative or higher than `maxclients` server config.
@@ -9601,7 +9601,7 @@ int VM_EventLoopAdd(int fd, int mask, ValkeyModuleEventLoopFunc func, void *user
  *     * `VALKEYMODULE_EVENTLOOP_WRITABLE`
  *     * `VALKEYMODULE_EVENTLOOP_READABLE | VALKEYMODULE_EVENTLOOP_WRITABLE`
  *
- * On success VALKEYMODULE_OK is returned, otherwise
+ * On success VALKEYMODULE_OK is returned; otherwise,
  * VALKEYMODULE_ERR is returned and errno is set to the following values:
  *
  * * ERANGE: `fd` is negative or higher than `maxclients` server config.
@@ -9873,7 +9873,7 @@ ValkeyModuleUser *VM_GetModuleUserFromUserName(ValkeyModuleString *name) {
 
 /* Checks if the command can be executed by the user, according to the ACLs associated with it.
  *
- * On success a VALKEYMODULE_OK is returned, otherwise
+ * On success a VALKEYMODULE_OK is returned; otherwise,
  * VALKEYMODULE_ERR is returned and errno is set to the following values:
  *
  * * ENOENT: Specified command does not exist.
@@ -9906,7 +9906,7 @@ int VM_ACLCheckCommandPermissions(ValkeyModuleUser *user, ValkeyModuleString **a
  * If no flags are supplied, the user is still required to have some access to the key for
  * this command to return successfully.
  *
- * If the user is able to access the key then VALKEYMODULE_OK is returned, otherwise
+ * If the user is able to access the key then VALKEYMODULE_OK is returned; otherwise,
  * VALKEYMODULE_ERR is returned and errno is set to one of the following values:
  *
  * * EINVAL: The provided flags are invalid.
@@ -9934,7 +9934,7 @@ int VM_ACLCheckKeyPermissions(ValkeyModuleUser *user, ValkeyModuleString *key, i
  * access flags. See VM_ChannelAtPosWithFlags for more information about the
  * possible flags that can be passed in.
  *
- * If the user is able to access the pubsub channel then VALKEYMODULE_OK is returned, otherwise
+ * If the user is able to access the pubsub channel then VALKEYMODULE_OK is returned; otherwise,
  * VALKEYMODULE_ERR is returned and errno is set to one of the following values:
  *
  * * EINVAL: The provided flags are invalid.
@@ -10275,7 +10275,7 @@ int VM_DictDel(ValkeyModuleDict *d, ValkeyModuleString *key, void *oldval) {
  *
  * If the element to start the iteration cannot be seeked based on the
  * key and operator passed, ValkeyModule_DictNext() / Prev() will just return
- * VALKEYMODULE_ERR at the first call, otherwise they'll produce elements.
+ * VALKEYMODULE_ERR at the first call; otherwise, they'll produce elements.
  */
 ValkeyModuleDictIter *VM_DictIteratorStartC(ValkeyModuleDict *d, const char *op, void *key, size_t keylen) {
     ValkeyModuleDictIter *di = zmalloc(sizeof(*di));
@@ -10317,7 +10317,7 @@ int VM_DictIteratorReseek(ValkeyModuleDictIter *di, const char *op, ValkeyModule
 
 /* Return the current item of the dictionary iterator `di` and steps to the
  * next element. If the iterator already yield the last element and there
- * are no other elements to return, NULL is returned, otherwise a pointer
+ * are no other elements to return, NULL is returned; otherwise, a pointer
  * to a string representing the key is provided, and the `*keylen` length
  * is set by reference (if keylen is not NULL). The `*dataptr`, if not NULL
  * is set to the value of the pointer stored at the returned key as auxiliary
@@ -12243,7 +12243,7 @@ void moduleFreeArgs(struct serverCommandArg *args, int num_args) {
 }
 
 /* Free the command registered with the specified module.
- * On success C_OK is returned, otherwise C_ERR is returned.
+ * On success C_OK is returned; otherwise, C_ERR is returned.
  *
  * Note that caller needs to handle the deletion of the command table dict,
  * and after that needs to free the command->fullname and the command itself.
@@ -12320,7 +12320,7 @@ void moduleUnregisterCommands(struct ValkeyModule *module) {
 }
 
 /* We parse argv to add sds "NAME VALUE" pairs to the server.module_configs_queue list of configs.
- * We also increment the module_argv pointer to just after ARGS if there are args, otherwise
+ * We also increment the module_argv pointer to just after ARGS if there are args; otherwise,
  * we set it to NULL */
 int parseLoadexArguments(ValkeyModuleString ***module_argv, int *module_argc) {
     int args_specified = 0;
@@ -12373,7 +12373,7 @@ void moduleUnregisterCleanup(ValkeyModule *module) {
     moduleUnregisterAuthCBs(module);
 }
 
-/* Load a module and initialize it. On success C_OK is returned, otherwise
+/* Load a module and initialize it. On success C_OK is returned; otherwise,
  * C_ERR is returned. */
 int moduleLoad(const char *path, void **module_argv, int module_argc, int is_loadex) {
     int (*onload)(void *, void **, int);
@@ -12490,7 +12490,7 @@ int moduleLoad(const char *path, void **module_argv, int module_argc, int is_loa
 }
 
 /* Unload the module registered with the specified name. On success
- * C_OK is returned, otherwise C_ERR is returned and errmsg is set
+ * C_OK is returned; otherwise, C_ERR is returned and errmsg is set
  * with an appropriate message. */
 int moduleUnload(sds name, const char **errmsg) {
     struct ValkeyModule *module = dictFetchValue(modules, name);
@@ -13172,7 +13172,7 @@ void VM_RdbStreamFree(ValkeyModuleRdbStream *stream) {
  *
  * `flags` must be zero. This parameter is for future use.
  *
- * On success VALKEYMODULE_OK is returned, otherwise VALKEYMODULE_ERR is returned
+ * On success VALKEYMODULE_OK is returned; otherwise, VALKEYMODULE_ERR is returned
  * and errno is set accordingly.
  *
  * Example:
@@ -13238,7 +13238,7 @@ int VM_RdbLoad(ValkeyModuleCtx *ctx, ValkeyModuleRdbStream *stream, int flags) {
  *
  * `flags` must be zero. This parameter is for future use.
  *
- * On success VALKEYMODULE_OK is returned, otherwise VALKEYMODULE_ERR is returned
+ * On success VALKEYMODULE_OK is returned; otherwise, VALKEYMODULE_ERR is returned
  * and errno is set accordingly.
  *
  * Example:

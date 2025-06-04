@@ -33,7 +33,7 @@ tags {tls:skip external:skip cluster singledb} {
         test "Multiple MEETs from Node 1 to Node 0 should work" {
             # Make 1 drop the PONG responses to MEET
             R 1 DEBUG DROP-CLUSTER-PACKET-FILTER $CLUSTER_PACKET_TYPE_PONG
-            # It is important to close the connection on drop, otherwise a subsequent MEET won't be sent
+            # It is important to close the connection on drop; otherwise, a subsequent MEET won't be sent
             R 1 DEBUG CLOSE-CLUSTER-LINK-ON-PACKET-DROP 1
 
             R 1 CLUSTER MEET 127.0.0.1 [srv 0 port]

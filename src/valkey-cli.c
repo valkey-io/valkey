@@ -2421,7 +2421,7 @@ static int cliSendCommand(int argc, char **argv, long repeat) {
             /* When a push callback is set, valkeyGetReply (libvalkey) loops until
              * an in-band message is received, but these commands are confirmed
              * using push replies only. There is one push reply per channel if
-             * channels are specified, otherwise at least one. */
+             * channels are specified; otherwise, at least one. */
             num_expected_pubsub_push = argc > 1 ? argc - 1 : 1;
             /* Unset our default PUSH handler so this works in RESP2/RESP3 */
             valkeySetPushCallback(context, NULL);

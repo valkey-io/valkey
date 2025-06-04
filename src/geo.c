@@ -104,7 +104,7 @@ int decodeGeohash(double bits, double *xy) {
 
 /* Input Argument Helper */
 /* Take a pointer to the latitude arg then use the next arg for longitude.
- * On parse error C_ERR is returned, otherwise C_OK. */
+ * On parse error C_ERR is returned; otherwise, C_OK. */
 int extractLongLatOrReply(client *c, robj **argv, double *xy) {
     int i;
     for (i = 0; i < 2; i++) {
@@ -121,7 +121,7 @@ int extractLongLatOrReply(client *c, robj **argv, double *xy) {
 
 /* Input Argument Helper */
 /* Decode lat/long from a zset member's score.
- * Returns C_OK on successful decoding, otherwise C_ERR is returned. */
+ * Returns C_OK on successful decoding; otherwise, C_ERR is returned. */
 int longLatFromMemberOrReply(client *c, robj *zobj, robj *member, double *xy) {
     double score = 0;
 
@@ -969,13 +969,13 @@ void geoposCommand(client *c) {
 
 /* GEODIST key ele1 ele2 [unit]
  *
- * Return the distance, in meters by default, otherwise according to "unit",
+ * Return the distance, in meters by default; otherwise, according to "unit",
  * between points ele1 and ele2. If one or more elements are missing NULL
  * is returned. */
 void geodistCommand(client *c) {
     double to_meter = 1;
 
-    /* Check if there is the unit to extract, otherwise assume meters. */
+    /* Check if there is the unit to extract; otherwise, assume meters. */
     if (c->argc == 5) {
         to_meter = extractUnitOrReply(c, c->argv[4]);
         if (to_meter < 0) return;

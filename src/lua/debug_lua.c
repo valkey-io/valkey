@@ -379,7 +379,7 @@ void ldbLogSourceLine(int lnum) {
 }
 
 /* Implement the "list" command of the Lua debugger. If around is 0
- * the whole file is listed, otherwise only a small portion of the file
+ * the whole file is listed; otherwise, only a small portion of the file
  * around the specified line is shown. When a line number is specified
  * the amount of context (lines before/after) is specified via the
  * 'context' argument. */
@@ -830,7 +830,7 @@ void ldbMaxlen(sds *argv, int argc) {
 }
 
 /* Read debugging commands from client.
- * Return C_OK if the debugging session is continuing, otherwise
+ * Return C_OK if the debugging session is continuing; otherwise,
  * C_ERR if the client closed the connection or is timing out. */
 int ldbRepl(lua_State *lua) {
     sds *argv;

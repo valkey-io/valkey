@@ -181,7 +181,7 @@ void rdbCheckSetupSignals(void) {
     sigaction(SIGABRT, &act, NULL);
 }
 
-/* Check the specified RDB file. Return 0 if the RDB looks sane, otherwise
+/* Check the specified RDB file. Return 0 if the RDB looks sane; otherwise,
  * 1 is returned.
  * The file is specified as a filename in 'rdbfilename' if 'fp' is NULL,
  * otherwise the already open file 'fp' is checked. */

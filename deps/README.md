@@ -40,7 +40,7 @@ the following additional steps:
 6. Implement the function `je_get_defrag_hint()` inside `src/jemalloc.c`. You
    can see how it is implemented in the current Jemalloc source tree shipped
    with Valkey, and rewrite it according to the new Jemalloc internals, if they
-   changed, otherwise you could just copy the old implementation if you are
+   changed; otherwise, you could just copy the old implementation if you are
    upgrading just to a similar version of Jemalloc.
 
 #### Updating/upgrading jemalloc

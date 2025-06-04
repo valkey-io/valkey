@@ -658,7 +658,7 @@ int rdbLoadDoubleValue(rio *rdb, double *val) {
 }
 
 /* Saves a double for RDB 8 or greater, where IE754 binary64 format is assumed.
- * We just make sure the integer is always stored in little endian, otherwise
+ * We just make sure the integer is always stored in little endian; otherwise,
  * the value is copied verbatim from memory to disk.
  *
  * Return -1 on error, the size of the serialized value on success. */
@@ -668,7 +668,7 @@ int rdbSaveBinaryDoubleValue(rio *rdb, double val) {
 }
 
 /* Loads a double from RDB 8 or greater. See rdbSaveBinaryDoubleValue() for
- * more info. On error -1 is returned, otherwise 0. */
+ * more info. On error -1 is returned; otherwise, 0. */
 int rdbLoadBinaryDoubleValue(rio *rdb, double *val) {
     if (rioRead(rdb, val, sizeof(*val)) == 0) return -1;
     memrev64ifbe(val);
@@ -1414,7 +1414,7 @@ werr:
 }
 
 /* Produces a dump of the database in RDB format sending it to the specified
- * I/O channel. On success C_OK is returned, otherwise C_ERR
+ * I/O channel. On success C_OK is returned; otherwise, C_ERR
  * is returned and part of the output, or all the output, can be
  * missing because of I/O errors.
  *
@@ -1865,7 +1865,7 @@ int lpValidateIntegrityAndDups(unsigned char *lp, size_t size, int deep, int pai
 }
 
 /* Load an Object of the specified type from the specified file.
- * On success a newly allocated object is returned, otherwise NULL.
+ * On success a newly allocated object is returned; otherwise, NULL.
  * When the function returns NULL and if 'error' is not NULL, the
  * integer pointed by 'error' is set to the type of error that occurred */
 robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error) {
@@ -3797,7 +3797,7 @@ void bgsaveCommand(client *c) {
  * if the rdbSave*() family functions receive a NULL rsi structure also
  * the Replication ID/offset is not saved. The function populates 'rsi'
  * that is normally stack-allocated in the caller, returns the populated
- * pointer if the instance has a valid primary client, otherwise NULL
+ * pointer if the instance has a valid primary client; otherwise, NULL
  * is returned, and the RDB saving will not persist any replication related
  * information. */
 rdbSaveInfo *rdbPopulateSaveInfo(rdbSaveInfo *rsi) {

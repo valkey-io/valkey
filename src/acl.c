@@ -1529,7 +1529,7 @@ user *ACLGetUserByName(const char *name, size_t namelen) {
 
 /* Check if the key can be accessed by the selector.
  *
- * If the selector can access the key, ACL_OK is returned, otherwise
+ * If the selector can access the key, ACL_OK is returned; otherwise,
  * ACL_DENIED_KEY is returned. */
 static int ACLSelectorCheckKey(aclSelector *selector, const char *key, int keylen, int keyspec_flags) {
     /* The selector can access any key */
@@ -1629,7 +1629,7 @@ static void cleanupACLKeyResultCache(aclKeyResultCache *cache) {
 /* Check if the command is ready to be executed according to the
  * ACLs associated with the specified selector.
  *
- * If the selector can execute the command ACL_OK is returned, otherwise
+ * If the selector can execute the command ACL_OK is returned; otherwise,
  * ACL_DENIED_CMD, ACL_DENIED_KEY, or ACL_DENIED_CHANNEL is returned: the first in case the
  * command cannot be executed because the selector is not allowed to run such
  * command, the second and third if the command is denied because the selector is trying
@@ -1711,7 +1711,7 @@ static int ACLSelectorCheckCmd(aclSelector *selector,
  * the ACLs associated with the specified user according to the
  * keyspec access flags.
  *
- * If the user can access the key, ACL_OK is returned, otherwise
+ * If the user can access the key, ACL_OK is returned; otherwise,
  * ACL_DENIED_KEY is returned. */
 int ACLUserCheckKeyPerm(user *u, const char *key, int keylen, int flags) {
     listIter li;
@@ -1767,7 +1767,7 @@ int ACLUserCheckCmdWithUnrestrictedKeyAccess(user *u, struct serverCommand *cmd,
 /* Check if the channel can be accessed by the client according to
  * the ACLs associated with the specified user.
  *
- * If the user can access the key, ACL_OK is returned, otherwise
+ * If the user can access the key, ACL_OK is returned; otherwise,
  * ACL_DENIED_CHANNEL is returned. */
 int ACLUserCheckChannelPerm(user *u, sds channel, int is_pattern) {
     listIter li;
@@ -2098,7 +2098,7 @@ cleanup:
  * the user definition to a list for later loading.
  *
  * The rules are tested for validity and if there obvious syntax errors
- * the function returns C_ERR and does nothing, otherwise C_OK is returned
+ * the function returns C_ERR and does nothing; otherwise, C_OK is returned
  * and the user is appended to the list.
  *
  * Note that this function cannot stop in case of commands that are not found
@@ -2158,7 +2158,7 @@ int ACLAppendUserForLoading(sds *argv, int argc, int *argc_err) {
 
 /* This function will load the configured users appended to the server
  * configuration via ACLAppendUserForLoading(). On loading errors it will
- * log an error and return C_ERR, otherwise C_OK will be returned. */
+ * log an error and return C_ERR; otherwise, C_OK will be returned. */
 static int ACLLoadConfiguredUsers(void) {
     listIter li;
     listNode *ln;
@@ -2340,7 +2340,7 @@ static sds ACLLoadFromFile(const char *filename) {
         zfree(acl_args);
 
         /* Apply the rule to the new users set only if so far there
-         * are no errors, otherwise it's useless since we are going
+         * are no errors; otherwise, it's useless since we are going
          * to discard the new users set anyway. */
         if (sdslen(errors) != 0) {
             sdsfreesplitres(argv, argc);
@@ -2657,7 +2657,7 @@ void addACLLogEntry(client *c, int reason, int context, int argpos, sds username
         }
     }
 
-    /* If there is a match update the entry, otherwise add it as a
+    /* If there is a match update the entry; otherwise, add it as a
      * new one. */
     if (match) {
         /* We update a few fields of the existing entry and bump the

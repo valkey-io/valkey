@@ -765,7 +765,7 @@ end:
 
 /* ----------------------------- Test framework ----------------------------- */
 
-/* Return 1 if the reply matches the specified string, otherwise log errors
+/* Return 1 if the reply matches the specified string; otherwise, log errors
  * in the server log and return 0. */
 int TestAssertErrorReply(ValkeyModuleCtx *ctx, ValkeyModuleCallReply *reply, char *str, size_t len) {
     ValkeyModuleString *mystr, *expected;
@@ -811,7 +811,7 @@ int TestAssertStringReply(ValkeyModuleCtx *ctx, ValkeyModuleCallReply *reply, ch
     return 1;
 }
 
-/* Return 1 if the reply matches the specified integer, otherwise log errors
+/* Return 1 if the reply matches the specified integer; otherwise, log errors
  * in the server log and return 0. */
 int TestAssertIntegerReply(ValkeyModuleCtx *ctx, ValkeyModuleCallReply *reply, long long expected) {
     if (ValkeyModule_CallReplyType(reply) == VALKEYMODULE_REPLY_ERROR) {

@@ -463,7 +463,7 @@ start_server {tags {"maxmemory external:skip io-threads:skip"}} {
         }
 
         # we need to wait one second for the client querybuf excess memory to be
-        # trimmed by cron, otherwise the INFO used_memory and CONFIG maxmemory
+        # trimmed by cron; otherwise, the INFO used_memory and CONFIG maxmemory
         # below (on slow machines) won't be "atomic" and won't trigger eviction.
         after 1100
 

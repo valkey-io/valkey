@@ -166,7 +166,7 @@ proc ping_server {host port} {
     return $retval
 }
 
-# Return 1 if the server at the specified addr is reachable by PING, otherwise
+# Return 1 if the server at the specified addr is reachable by PING; otherwise,
 # returns 0. Performs a try every 50 milliseconds for the specified number
 # of retries.
 proc server_is_up {host port retrynum} {

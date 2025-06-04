@@ -488,7 +488,7 @@ raxLowWalk(rax *rax, unsigned char *s, size_t len, raxNode **stopnode, raxNode *
  * the pointer 'data'. If the element is already present, the associated
  * data is updated (only if 'overwrite' is set to 1), and 0 is returned,
  * otherwise the element is inserted and 1 is returned. On out of memory the
- * function returns 0 as well but sets errno to ENOMEM, otherwise errno will
+ * function returns 0 as well but sets errno to ENOMEM; otherwise, errno will
  * be set to 0.
  */
 int raxGenericInsert(rax *rax, unsigned char *s, size_t len, void *data, void **old, int overwrite) {
@@ -624,7 +624,7 @@ int raxGenericInsert(rax *rax, unsigned char *s, size_t len, void *data, void **
      * 4a. IF the postfix len (the length of the remaining string of the
      *     original compressed node after the split character) is non zero,
      *     create a "postfix node". If the postfix node has just one character
-     *     set iscompr to 0, otherwise iscompr to 1. Set the postfix node
+     *     set iscompr to 0; otherwise, iscompr to 1. Set the postfix node
      *     child pointer to $NEXT.
      *
      * 4b. IF the postfix len is zero, just use $NEXT as postfix pointer.
@@ -877,7 +877,7 @@ int raxGenericInsert(rax *rax, unsigned char *s, size_t len, void *data, void **
 oom:
     /* This code path handles out of memory after part of the sub-tree was
      * already modified. Set the node as a key, and then remove it. However we
-     * do that only if the node is a terminal node, otherwise if the OOM
+     * do that only if the node is a terminal node; otherwise, if the OOM
      * happened reallocating a node in the middle, we don't need to free
      * anything. */
     if (h->size == 0) {
@@ -919,7 +919,7 @@ int raxFind(rax *rax, unsigned char *s, size_t len, void **value) {
 
 /* Return the memory address where the 'parent' node stores the specified
  * 'child' pointer, so that the caller can update the pointer with another
- * one if needed. The function assumes it will find a match, otherwise the
+ * one if needed. The function assumes it will find a match; otherwise, the
  * operation is an undefined behavior (it will continue scanning the
  * memory without any bound checking). */
 raxNode **raxFindParentLink(raxNode *parent, raxNode *child) {
@@ -1260,7 +1260,7 @@ void raxStart(raxIterator *it, rax *rt) {
 
 /* Append characters at the current key string of the iterator 'it'. This
  * is a low level function used to implement the iterator, not callable by
- * the user. Returns 0 on out of memory, otherwise 1 is returned. */
+ * the user. Returns 0 on out of memory; otherwise, 1 is returned. */
 int raxIteratorAddChars(raxIterator *it, unsigned char *s, size_t len) {
     if (len == 0) return 1;
     if (it->key_max < it->key_len + len) {
@@ -1398,7 +1398,7 @@ int raxIteratorNextStep(raxIterator *it, int noup) {
 }
 
 /* Seek the greatest key in the subtree at the current node. Return 0 on
- * out of memory, otherwise 1. This is a helper function for different
+ * out of memory; otherwise, 1. This is a helper function for different
  * iteration functions below. */
 int raxSeekGreatest(raxIterator *it) {
     while (it->node->size) {
@@ -1588,7 +1588,7 @@ int raxSeek(raxIterator *it, const char *op, unsigned char *ele, size_t len) {
             it->flags &= ~RAX_ITER_JUST_SEEKED;
             if (gt) {
                 /* If the key the compressed node represents is greater
-                 * than our seek element, continue forward, otherwise set the
+                 * than our seek element, continue forward; otherwise, set the
                  * state in order to go back to the next sub-tree. */
                 if (nodechar > keychar) {
                     if (!raxIteratorNextStep(it, 0)) return 0;
@@ -1600,7 +1600,7 @@ int raxSeek(raxIterator *it, const char *op, unsigned char *ele, size_t len) {
             if (lt) {
                 /* If the key the compressed node represents is smaller
                  * than our seek element, seek the greater key in this
-                 * subtree, otherwise set the state in order to go back to
+                 * subtree; otherwise, set the state in order to go back to
                  * the previous sub-tree. */
                 if (nodechar < keychar) {
                     if (!raxSeekGreatest(it)) return 0;
@@ -1648,7 +1648,7 @@ int raxSeek(raxIterator *it, const char *op, unsigned char *ele, size_t len) {
 }
 
 /* Go to the next element in the scope of the iterator 'it'.
- * If EOF (or out of memory) is reached, 0 is returned, otherwise 1 is
+ * If EOF (or out of memory) is reached, 0 is returned; otherwise, 1 is
  * returned. In case 0 is returned because of OOM, errno is set to ENOMEM. */
 int raxNext(raxIterator *it) {
     if (!raxIteratorNextStep(it, 0)) {
@@ -1663,7 +1663,7 @@ int raxNext(raxIterator *it) {
 }
 
 /* Go to the previous element in the scope of the iterator 'it'.
- * If EOF (or out of memory) is reached, 0 is returned, otherwise 1 is
+ * If EOF (or out of memory) is reached, 0 is returned; otherwise, 1 is
  * returned. In case 0 is returned because of OOM, errno is set to ENOMEM. */
 int raxPrev(raxIterator *it) {
     if (!raxIteratorPrevStep(it, 0)) {
@@ -1731,7 +1731,7 @@ int raxRandomWalk(raxIterator *it, size_t steps) {
 
 /* Compare the key currently pointed by the iterator to the specified
  * key according to the specified operator. Returns 1 if the comparison is
- * true, otherwise 0 is returned. */
+ * true; otherwise, 0 is returned. */
 int raxCompare(raxIterator *iter, const char *op, unsigned char *key, size_t key_len) {
     int eq = 0, lt = 0, gt = 0;
 

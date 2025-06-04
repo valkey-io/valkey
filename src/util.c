@@ -220,7 +220,7 @@ int stringmatchlen_fuzz_test(void) {
  * bytes, so for instance memtoull("1Gb") will return 1073741824 that is
  * (1024*1024*1024).
  *
- * On parsing error, if *err is not NULL, it's set to 1, otherwise it's
+ * On parsing error, if *err is not NULL, it's set to 1; otherwise, it's
  * set to 0. On error the function return value is 0, regardless of the
  * fact 'err' is NULL or not. */
 unsigned long long memtoull(const char *p, int *err) {
@@ -584,7 +584,7 @@ static int string2llScalar(const char *s, size_t slen, long long *value) {
         if (plen == slen) return 0;
     }
 
-    /* First digit should be 1-9, otherwise the string should just be 0. */
+    /* First digit should be 1-9; otherwise, the string should just be 0. */
     if (p[0] >= '1' && p[0] <= '9') {
         v = p[0] - '0';
         p++;

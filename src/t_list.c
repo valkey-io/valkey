@@ -60,7 +60,7 @@ static void listTypeTryConvertListpack(robj *o, robj **argv, int start, int end,
 
         quicklist *ql = quicklistNew(server.list_max_listpack_size, server.list_compress_depth);
 
-        /* Append listpack to quicklist if it's not empty, otherwise release it. */
+        /* Append listpack to quicklist if it's not empty; otherwise, release it. */
         if (lpLength(o->ptr))
             quicklistAppendListpack(ql, o->ptr);
         else

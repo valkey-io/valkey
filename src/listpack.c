@@ -148,7 +148,7 @@ int lpSafeToAdd(unsigned char *lp, size_t add) {
 }
 
 /* Create a new, empty listpack.
- * On success the new listpack is returned, otherwise an error is returned.
+ * On success the new listpack is returned; otherwise, an error is returned.
  * Pre-allocate at least `capacity` bytes of memory,
  * over-allocated memory can be shrunk by `lpShrinkToFit`.
  * */
@@ -442,7 +442,7 @@ unsigned char *lpLast(unsigned char *lp) {
 }
 
 /* Return the number of elements inside the listpack. This function attempts
- * to use the cached value when within range, otherwise a full scan is
+ * to use the cached value when within range; otherwise, a full scan is
  * needed. As a side effect of calling this function, the listpack header
  * could be modified, because if the count is found to be already within
  * the 'numele' header field range, the new value is set. */
@@ -690,7 +690,7 @@ unsigned char *lpFind(unsigned char *lp, unsigned char *p, unsigned char *s, uin
  * or replace with a string, which is stored in the 'elestr' buffer.
  *
  * Returns NULL on out of memory or when the listpack total length would exceed
- * the max allowed size of 2^32-1, otherwise the new pointer to the listpack
+ * the max allowed size of 2^32-1; otherwise, the new pointer to the listpack
  * holding the new element is returned (and the old pointer passed is no longer
  * considered valid)
  *

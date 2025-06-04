@@ -76,7 +76,7 @@ unsigned int getLRUClock(void) {
 /* This function is used to obtain the current LRU clock.
  * If the current resolution is lower than the frequency we refresh the
  * LRU clock (as it should be in production servers) we return the
- * precomputed value, otherwise we need to resort to a system call. */
+ * precomputed value; otherwise, we need to resort to a system call. */
 unsigned int LRU_CLOCK(void) {
     unsigned int lruclock;
     if (1000 / server.hz <= LRU_CLOCK_RESOLUTION) {

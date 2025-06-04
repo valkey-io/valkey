@@ -129,7 +129,7 @@ static int nodeExceedsHandshakeTimeout(clusterNode *node, mstime_t now);
 void clusterCommandFlushslot(client *c);
 
 /* Only primaries that own slots have voting rights.
- * Returns 1 if the node has voting rights, otherwise returns 0. */
+ * Returns 1 if the node has voting rights; otherwise, returns 0. */
 static inline int clusterNodeIsVotingPrimary(clusterNode *n) {
     return (n->flags & CLUSTER_NODE_PRIMARY) && n->numslots;
 }
@@ -934,7 +934,7 @@ void clusterSaveConfigOrDie(int do_fsync) {
  * in-place, reopening the file, and writing to it in place (later adjusting
  * the length with ftruncate()).
  *
- * On success C_OK is returned, otherwise an error is logged and
+ * On success C_OK is returned; otherwise, an error is logged and
  * the function returns C_ERR to signal a lock was not acquired. */
 int clusterLockConfig(char *filename) {
 /* flock() does not exist on Solaris
@@ -943,7 +943,7 @@ int clusterLockConfig(char *filename) {
  */
 #if !defined(__sun)
     /* To lock it, we need to open the file in a way it is created if
-     * it does not exist, otherwise there is a race condition with other
+     * it does not exist; otherwise, there is a race condition with other
      * processes. */
     int fd = open(filename, O_WRONLY | O_CREAT | O_CLOEXEC, 0644);
     if (fd == -1) {
@@ -2483,7 +2483,7 @@ void clusterProcessGossipSection(clusterMsg *hdr, clusterLink *link) {
              * otherwise we risk joining another cluster.
              *
              * Note that we require that the sender of this gossip message
-             * is a well known node in our cluster, otherwise we risk
+             * is a well known node in our cluster; otherwise, we risk
              * joining another cluster. */
             if (sender && !(flags & CLUSTER_NODE_NOADDR) && !clusterBlacklistExists(g->nodename, CLUSTER_NAMELEN)) {
                 clusterNode *node;
@@ -3265,7 +3265,7 @@ int clusterIsValidPacket(clusterLink *link) {
  * packet, modifying the cluster state if needed.
  *
  * The function returns 1 if the link is still valid after the packet
- * was processed, otherwise 0 if the link was freed since the packet
+ * was processed; otherwise, 0 if the link was freed since the packet
  * processing lead to some inconsistency error (for instance a PONG
  * received from the wrong sender ID). */
 int clusterProcessPacket(clusterLink *link) {
@@ -3918,7 +3918,7 @@ void clusterLinkConnectHandler(connection *conn) {
     clusterSendPing(link, nodeInMeetState(node) ? CLUSTERMSG_TYPE_MEET : CLUSTERMSG_TYPE_PING);
     if (old_ping_sent) {
         /* If there was an active ping before the link was
-         * disconnected, we want to restore the ping time, otherwise
+         * disconnected, we want to restore the ping time; otherwise,
          * replaced by the clusterSendPing() call. */
         node->ping_sent = old_ping_sent;
     }
@@ -4515,7 +4515,7 @@ void clusterSendModule(clusterLink *link, uint64_t module_id, uint8_t type, cons
  * addresses are represented in the modules side, resolves the node, and sends
  * the message. If the target is NULL the message is broadcasted.
  *
- * The function returns C_OK if the target is valid, otherwise C_ERR is
+ * The function returns C_OK if the target is valid; otherwise, C_ERR is
  * returned. */
 int clusterSendModuleMessageToTarget(const char *target,
                                      uint64_t module_id,
@@ -5679,7 +5679,7 @@ int clusterAddSlot(clusterNode *n, int slot) {
 }
 
 /* Delete the specified slot marking it as unassigned.
- * Returns C_OK if the slot was assigned, otherwise if the slot was
+ * Returns C_OK if the slot was assigned; otherwise, if the slot was
  * already unassigned C_ERR is returned. */
 int clusterDelSlot(int slot) {
     clusterNode *n = server.cluster->slots[slot];
@@ -6069,7 +6069,7 @@ sds clusterGenNodeDescription(client *c, clusterNode *node, int tls_primary) {
                    (node->link || node->flags & CLUSTER_NODE_MYSELF) ? "connected" : "disconnected");
 
     /* Slots served by this instance. If we already have slots info,
-     * append it directly, otherwise, generate slots only if it has. */
+     * append it directly; otherwise, generate slots only if it has. */
     if (node->slot_info_pairs) {
         ci = representSlotInfo(ci, node->slot_info_pairs, node->slot_info_pairs_count);
     } else if (node->numslots > 0) {

@@ -1048,7 +1048,7 @@ double hllTau(double x) {
  * representing the String object holding the HLL representation.
  *
  * If the sparse representation of the HLL object is not valid, the integer
- * pointed by 'invalid' is set to non-zero, otherwise it is left untouched.
+ * pointed by 'invalid' is set to non-zero; otherwise, it is left untouched.
  *
  * hllCount() supports a special internal-only encoding of HLL_RAW, that
  * is, hdr->registers will point to an uint8_t array of HLL_REGISTERS element.
@@ -1334,7 +1334,7 @@ void hllMergeDense(uint8_t *reg_raw, const uint8_t *reg_dense) {
  * or in some other way.
  *
  * If the HyperLogLog is sparse and is found to be invalid, C_ERR
- * is returned, otherwise the function always succeeds. */
+ * is returned; otherwise, the function always succeeds. */
 int hllMerge(uint8_t *max, robj *hll) {
     struct hllhdr *hdr = hll->ptr;
     int i;
@@ -1600,7 +1600,7 @@ robj *createHLLObject(void) {
 }
 
 /* Check if the object is a String with a valid HLL representation.
- * Return C_OK if this is true, otherwise reply to the client
+ * Return C_OK if this is true; otherwise, reply to the client
  * with an error and return C_ERR. */
 int isHLLObjectOrReply(client *c, robj *o) {
     struct hllhdr *hdr;
@@ -1715,7 +1715,7 @@ void pfcountCommand(client *c) {
      * expired, which is what matters here. */
     o = lookupKeyRead(c->db, c->argv[1]);
     if (o == NULL) {
-        /* No key? Cardinality is zero since no element was added, otherwise
+        /* No key? Cardinality is zero since no element was added; otherwise,
          * we would have a key as HLLADD creates it as a side effect. */
         addReply(c, shared.czero);
     } else {

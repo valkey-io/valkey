@@ -99,7 +99,7 @@ typedef struct quicklistBookmark {
 /* quicklist is a 40 byte struct (on 64-bit systems) describing a quicklist.
  * 'count' is the number of total entries.
  * 'len' is the number of quicklist nodes.
- * 'compress' is: 0 if compression disabled, otherwise it's the number
+ * 'compress' is: 0 if compression disabled; otherwise, it's the number
  *                of quicklistNodes to leave uncompressed at ends of quicklist.
  * 'fill' is the user-requested (or default) fill factor.
  * 'bookmarks are an optional feature that is used by realloc this struct,

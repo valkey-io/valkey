@@ -6724,7 +6724,7 @@ moduleType *moduleTypeLookupModuleByNameInternal(const char *name, int ignore_ca
     dictReleaseIterator(di);
     return NULL;
 }
-/* Search all registered modules by name, and name is case sensitive */
+/* Search all registered modules by name, and name is case-sensitive */
 moduleType *moduleTypeLookupModuleByName(const char *name) {
     return moduleTypeLookupModuleByNameInternal(name, 0);
 }

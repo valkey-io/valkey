@@ -130,7 +130,7 @@ start_server {tags {"keyspace"}} {
         append res [r get mykey2{t}]
     } {foobar}
 
-    test {RENAME against non existing source key} {
+    test {RENAME against nonexistent source key} {
         catch {r rename nokey{t} foobar{t}} err
         format $err
     } {ERR*}
@@ -145,7 +145,7 @@ start_server {tags {"keyspace"}} {
         r renamenx mykey mykey
     } {0}
 
-    test {RENAME where source and dest key are the same (non existing)} {
+    test {RENAME where source and dest key are the same (nonexistent)} {
         r del mykey
         catch {r rename mykey mykey} err
         format $err

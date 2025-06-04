@@ -790,7 +790,7 @@ void flushdbCommand(client *c) {
     server.dirty += emptyData(c->db->id, flags | EMPTYDB_NOFUNCTIONS, NULL);
 
     /* Without the forceCommandPropagation, when DB was already empty,
-     * FLUSHDB will not be replicated nor put into the AOF. */
+     * FLUSHDB will neither be replicated nor put into the AOF. */
     forceCommandPropagation(c, PROPAGATE_REPL | PROPAGATE_AOF);
 
     addReply(c, shared.ok);
@@ -813,7 +813,7 @@ void flushallCommand(client *c) {
     flushAllDataAndResetRDB(flags | EMPTYDB_NOFUNCTIONS);
 
     /* Without the forceCommandPropagation, when DBs were already empty,
-     * FLUSHALL will not be replicated nor put into the AOF. */
+     * FLUSHALL will neither be replicated nor put into the AOF. */
     forceCommandPropagation(c, PROPAGATE_REPL | PROPAGATE_AOF);
 
     addReply(c, shared.ok);

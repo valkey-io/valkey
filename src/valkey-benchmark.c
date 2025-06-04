@@ -78,8 +78,8 @@
 #define PLACEHOLDER_COUNT 10
 static const size_t KEY_PLACEHOLDER_LEN = 12; // length of BENCHMARK_PLACEHOLDERS strings
 static const char *BENCHMARK_PLACEHOLDERS[PLACEHOLDER_COUNT] = {
-    "__rand_int__", "__rand_int1_", "__rand_int2_", "__rand_int3_", "__rand_int4_",
-    "__rand_int5_", "__rand_int6_", "__rand_int7_", "__rand_int8_", "__rand_int9_"};
+    "__rand_int__", "__rand_1st__", "__rand_2nd__", "__rand_3rd__", "__rand_4th__",
+    "__rand_5th__", "__rand_6th__", "__rand_7th__", "__rand_8th__", "__rand_9th__"};
 
 struct benchmarkThread;
 struct clusterNode;
@@ -109,7 +109,7 @@ static struct config {
     long long previous_tick;
     int keysize;
     int datasize;
-    int replacekeys;
+    int replace_placeholders;
     int keyspacelen;
     int sequential_replacement;
     int keepalive;
@@ -151,12 +151,15 @@ static struct config {
     uint64_t time_per_burst;
 } config;
 
+static struct placeholders {
+    size_t cmd_len;                     /* length of the command */
+    size_t count[PLACEHOLDER_COUNT];    /* number of each placeholder in the command */
+    size_t *indices[PLACEHOLDER_COUNT]; /* placeholder indices in the command */
+} placeholders;
+
 typedef struct _client {
     valkeyContext *context;
     sds obuf;
-    char **randptr[PLACEHOLDER_COUNT];  /* Pointers to __rand_int__ strings inside the command buf */
-    size_t randlen[PLACEHOLDER_COUNT];  /* Number of pointers in client->randptr */
-    size_t randfree[PLACEHOLDER_COUNT]; /* Number of unused pointers in client->randptr */
     char **stagptr;                     /* Pointers to slot hashtags (cluster mode only) */
     size_t staglen;                     /* Number of pointers in client->stagptr */
     size_t stagfree;                    /* Number of unused pointers in client->stagptr */
@@ -372,6 +375,98 @@ static void freeServerConfig(serverConfig *cfg) {
     zfree(cfg);
 }
 
+void resetPlaceholders(void) {
+    if (placeholders.indices[0])
+        zfree(placeholders.indices[0]); /* indices are a single contiguous allocation */
+    memset(&placeholders, 0, sizeof(placeholders));
+}
+
+void initPlaceholders(const char *cmd, size_t cmd_len) {
+    resetPlaceholders();
+    placeholders.cmd_len = cmd_len;
+
+    /* store placeholder locations in temp arrays */
+    size_t total_count = 0;
+    size_t *temp_indices[PLACEHOLDER_COUNT];
+    for (size_t placeholder = 0; placeholder < PLACEHOLDER_COUNT; placeholder++) {
+        size_t *count = &placeholders.count[placeholder];
+        *count = 0;
+
+        size_t temp_size = RANDPTR_INITIAL_SIZE;
+        temp_indices[placeholder] = zmalloc(sizeof(size_t) * temp_size);
+        const char *p = cmd;
+        const char *end = cmd + cmd_len;
+        while ((p = strstr(p, BENCHMARK_PLACEHOLDERS[placeholder])) != NULL && p < end) {
+            if (*count == temp_size) {
+                temp_size *= 2;
+                temp_indices[placeholder] = zrealloc(temp_indices[placeholder], sizeof(size_t) * temp_size);
+            }
+            size_t index = p - cmd;
+            temp_indices[placeholder][*count] = index;
+            (*count)++;
+            total_count++;
+            p += KEY_PLACEHOLDER_LEN; // Move past the placeholder
+        }
+    }
+
+    /* consolidate temp data into contiguous allocation */
+    placeholders.indices[0] = zmalloc(sizeof(size_t) * total_count);
+    size_t overall_index = 0;
+    for (size_t placeholder = 0; placeholder < PLACEHOLDER_COUNT; placeholder++) {
+        placeholders.indices[placeholder] = placeholders.indices[0] + overall_index;
+
+        const size_t count = placeholders.count[placeholder];
+        memcpy(placeholders.indices[placeholder], temp_indices[placeholder],
+               sizeof(size_t) * count);
+        overall_index += count;
+
+        zfree(temp_indices[placeholder]);
+    }
+    return;
+}
+
+static void replacePlaceholder(const size_t *indices, const size_t count, char *cmd, uint64_t key) {
+    if (count == 0) return;
+
+    /* convert key to string at first location */
+    char *p = cmd + indices[0] + KEY_PLACEHOLDER_LEN - 1;
+    for (size_t j = 0; j < KEY_PLACEHOLDER_LEN; j++) {
+        *p = '0' + key % 10;
+        key /= 10;
+        p--;
+    }
+
+    /* copy the first instace to the other locations */
+    for (size_t i = 1; i < count; i++) {
+        char *placeholder = cmd + indices[i];
+        memcpy(placeholder, cmd + indices[0], KEY_PLACEHOLDER_LEN);
+    }
+}
+
+static void replacePlaceholders(char *cmd_data, int cmd_count) {
+    static _Atomic uint64_t seq_key[PLACEHOLDER_COUNT] = {0};
+
+    for (int cmd_index = 0; cmd_index < cmd_count; cmd_index++) {
+        char *cmd = cmd_data + cmd_index * placeholders.cmd_len;
+
+        for (size_t placeholder = 0; placeholder < PLACEHOLDER_COUNT; placeholder++) {
+            size_t count = placeholders.count[placeholder];
+            if (count == 0) continue;
+
+            uint64_t key = 0;
+            if (config.keyspacelen != 0) {
+                if (config.sequential_replacement) {
+                    key = atomic_fetch_add_explicit(&seq_key[placeholder], 1, memory_order_relaxed);
+                } else {
+                    key = random();
+                }
+                key %= config.keyspacelen;
+            }
+            replacePlaceholder(placeholders.indices[placeholder], count, cmd, key);
+        }
+    }
+}
+
 static void releasePausedClient(client c) {
     if (c->thread_id >= 0) {
         benchmarkThread *thread = config.threads[c->thread_id];
@@ -401,8 +496,6 @@ static void freeClient(client c) {
     valkeyFree(c->context);
     if (c->paused) releasePausedClient(c);
     sdsfree(c->obuf);
-    for (size_t placeholder = 0; placeholder < PLACEHOLDER_COUNT; placeholder++)
-        zfree(c->randptr[placeholder]);
     zfree(c->stagptr);
     zfree(c);
     if (config.num_threads) pthread_mutex_lock(&(config.liveclients_mutex));
@@ -434,30 +527,6 @@ static void resetClient(client c) {
     }
     c->written = 0;
     c->pending = config.pipeline * c->seqlen;
-}
-
-static void generateClientKey(client c) {
-    static _Atomic uint64_t seq_key[PLACEHOLDER_COUNT] = {0};
-    for (size_t placeholder = 0; placeholder < PLACEHOLDER_COUNT; placeholder++) {
-        for (size_t instance = 0; instance < c->randlen[placeholder]; instance++) {
-            uint64_t key = 0;
-            if (config.keyspacelen != 0) {
-                if (config.sequential_replacement) {
-                    key = atomic_fetch_add_explicit(&seq_key[placeholder], 1, memory_order_relaxed);
-                } else {
-                    key = random();
-                }
-                key %= config.keyspacelen;
-            }
-
-            char *p = c->randptr[placeholder][instance] + KEY_PLACEHOLDER_LEN - 1;
-            for (size_t j = 0; j < KEY_PLACEHOLDER_LEN; j++) {
-                *p = '0' + key % 10;
-                key /= 10;
-                p--;
-            }
-        }
-    }
 }
 
 static void setClusterKeyHashTag(client c) {
@@ -628,11 +697,6 @@ static void readHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
                     if (c->prefixlen > 0) {
                         size_t j;
                         sdsrange(c->obuf, c->prefixlen, -1);
-                        /* We also need to fix the pointers to the strings
-                         * we need to randomize. */
-                        for (size_t placeholder = 0; placeholder < PLACEHOLDER_COUNT; placeholder++) {
-                            for (j = 0; j < c->randlen[placeholder]; j++) c->randptr[placeholder][j] -= c->prefixlen;
-                        }
                         /* Fix the pointers to the slot hash tags */
                         for (j = 0; j < c->staglen; j++) c->stagptr[j] -= c->prefixlen;
                         c->prefixlen = 0;
@@ -763,7 +827,7 @@ static void writeHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
         }
 
         /* Really initialize: replace keys and set start time. */
-        if (config.replacekeys) generateClientKey(c);
+        if (config.replace_placeholders) replacePlaceholders(c->obuf + c->prefixlen, config.pipeline);
         if (config.cluster_mode && c->staglen > 0) setClusterKeyHashTag(c);
         c->slots_last_update = atomic_load_explicit(&config.slots_last_update, memory_order_relaxed);
         c->start = ustime();
@@ -930,45 +994,9 @@ static client createClient(char *cmd, int len, int seqlen, client from, int thre
     c->written = 0;
     c->seqlen = seqlen;
     c->pending = config.pipeline * seqlen + c->prefix_pending;
-    memset(c->randptr, (uintptr_t)NULL, PLACEHOLDER_COUNT * sizeof(char **));
-    memset(c->randlen, 0, PLACEHOLDER_COUNT * sizeof(size_t));
     c->stagptr = NULL;
     c->staglen = 0;
 
-    /* Find substrings in the output buffer that need to be replaced. */
-    if (config.replacekeys) {
-        if (from) {
-            memcpy(c->randlen, from->randlen, PLACEHOLDER_COUNT * sizeof(size_t));
-            memset(c->randfree, 0, PLACEHOLDER_COUNT * sizeof(size_t));
-
-            for (size_t placeholder = 0; placeholder < PLACEHOLDER_COUNT; placeholder++) {
-                c->randptr[placeholder] = zmalloc(sizeof(char *) * c->randlen[placeholder]);
-                /* copy the locations to be replaced. */
-                for (size_t instance = 0; instance < c->randlen[placeholder]; instance++) {
-                    ptrdiff_t offset = from->randptr[placeholder][instance] - from->obuf;
-                    /* Adjust for the different select prefix length. */
-                    offset += c->prefixlen - from->prefixlen;
-                    c->randptr[placeholder][instance] = c->obuf + offset;
-                }
-            }
-        } else {
-            for (size_t placeholder = 0; placeholder < PLACEHOLDER_COUNT; placeholder++) {
-                c->randlen[placeholder] = 0;
-                c->randfree[placeholder] = RANDPTR_INITIAL_SIZE;
-                c->randptr[placeholder] = zmalloc(sizeof(char *) * c->randfree[placeholder]);
-                char *p = c->obuf;
-                while ((p = strstr(p, BENCHMARK_PLACEHOLDERS[placeholder])) != NULL) {
-                    if (c->randfree[placeholder] == 0) {
-                        c->randptr[placeholder] = zrealloc(c->randptr[placeholder], sizeof(char *) * c->randlen[placeholder] * 2);
-                        c->randfree[placeholder] += c->randlen[placeholder];
-                    }
-                    c->randptr[placeholder][c->randlen[placeholder]++] = p;
-                    c->randfree[placeholder]--;
-                    p += KEY_PLACEHOLDER_LEN;
-                }
-            }
-        }
-    }
     /* If cluster mode is enabled, set slot hashtags pointers. */
     if (config.cluster_mode) {
         if (from) {
@@ -1171,6 +1199,7 @@ static void benchmarkSequence(const char *title, char *cmd, int len, int seqlen)
              config.precision,                           // Number of significant figures
              &config.current_sec_latency_histogram);     // Pointer to initialise
 
+    initPlaceholders(cmd, len);
     if (config.num_threads) initBenchmarkThreads();
 
     if (config.rps > 0) {
@@ -1582,7 +1611,7 @@ int parseOptions(int argc, char **argv) {
                 p++;
                 if (*p < '0' || *p > '9') goto invalid;
             }
-            config.replacekeys = 1;
+            config.replace_placeholders = 1;
             config.keyspacelen = atoi(next);
             if (config.keyspacelen < 0) config.keyspacelen = 0;
         } else if (!strcmp(argv[i], "--sequential")) {
@@ -1753,7 +1782,9 @@ usage:
         "a number N to repeat the command N times. In command arguments, the following\n"
         "placeholders are substituted:\n\n"
         " __rand_int__       Replaced with a zero-padded random integer in the range\n"
-        "                    selected using the -r option.\n"
+        "                    selected using the -r option. Multiple occurences will have\n"
+        "                    the same value. __rand_1st__ through __rand_9th__ are also\n"
+        "                    available if unique values are needed.\n"
         " __data__           Replaced with data of the size specified by the -d option.\n"
         " {tag}              Replaced with a tag that routes the command to each node in\n"
         "                    a cluster. Include this in key names when running in cluster\n"
@@ -1805,9 +1836,10 @@ usage:
         "                    use the same key.\n"
         " --sequential       Modifies the -r argument to replace the string __rand_int__\n"
         "                    with 12 digit numbers sequentially instead of randomly.\n"
-        "                    __rand_int1_ through __rand_int9_ are available with independent counters.\n"
-        "                    Used to create expected number of elements with multiple replacements.\n"
-        "                    example: ZADD myzset __rand_int__ element:__rand_int1_\n"
+        "                    __rand_1st__ through __rand_9th__ are available with independent\n"
+        "                    counters. Used to create expected number of elements with multiple\n"
+        "                    replacements.\n"
+        "                    example: ZADD myzset __rand_int__ element:__rand_1st__\n"
         " -P <numreq>        Pipeline <numreq> requests. That is, send multiple requests\n"
         "                    before waiting for the replies. Default 1 (no pipeline).\n"
         "                    When multiple commands are specified on the command line,\n"
@@ -1972,7 +2004,7 @@ int main(int argc, char **argv) {
     config.keepalive = 1;
     config.datasize = 3;
     config.pipeline = 1;
-    config.replacekeys = 0;
+    config.replace_placeholders = 0;
     config.keyspacelen = 0;
     config.sequential_replacement = 0;
     config.quiet = 0;
@@ -2003,6 +2035,7 @@ int main(int argc, char **argv) {
     config.num_functions = 10;
     config.num_keys_in_fcall = 1;
     config.resp3 = 0;
+    resetPlaceholders();
 
     i = parseOptions(argc, argv);
     argc -= i;
@@ -2271,7 +2304,7 @@ int main(int argc, char **argv) {
 
         if (test_is_selected("zadd")) {
             char *score = "0";
-            if (config.replacekeys) score = (char *)BENCHMARK_PLACEHOLDERS[0];
+            if (config.replace_placeholders) score = (char *)BENCHMARK_PLACEHOLDERS[0];
             len = valkeyFormatCommand(&cmd, "ZADD myzset%s %s element:%s", tag, score, BENCHMARK_PLACEHOLDERS[1]);
             benchmark("ZADD", cmd, len);
             free(cmd);
@@ -2398,6 +2431,7 @@ int main(int argc, char **argv) {
     zfree(data);
     freeCliConnInfo(config.conn_info);
     if (config.server_config != NULL) freeServerConfig(config.server_config);
+    resetPlaceholders();
 
     return 0;
 }

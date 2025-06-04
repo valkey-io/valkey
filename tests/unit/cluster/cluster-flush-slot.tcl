@@ -35,6 +35,10 @@ start_cluster 2 2 {tags {external:skip cluster}} {
         set key_slot [R 0 CLUSTER KEYSLOT FC]
         assert_error "MOVED $key_slot*" {R 1 CLUSTER FLUSHSLOT $key_slot}
     }
+
+    test "FLUSHSLOT invalid slot" {
+        assert_error "ERR Invalid or out of range slot" {R 0 CLUSTER FLUSHSLOT not_a_slot}
+    }
 }
 
 start_cluster 2 2 {tags {external:skip cluster}} {

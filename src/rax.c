@@ -838,7 +838,7 @@ int raxGenericInsert(rax *rax, unsigned char *s, size_t len, void *data, void **
         size_t oldalloc = rax_ptr_alloc_size(h);
 
         /* If this node is going to have a single child, and there
-         * are other characters, so that that would result in a chain
+         * are other characters, so that would result in a chain
          * of single-childed nodes, turn it into a compressed node. */
         if (h->size == 0 && len - i > 1) {
             debugf("Inserting compressed node\n");

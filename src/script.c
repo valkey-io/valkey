@@ -315,12 +315,12 @@ void scriptKill(client *c, int is_eval) {
     }
     if (is_eval && !(curr_run_ctx->flags & SCRIPT_EVAL_MODE)) {
         /* Kill a function with 'SCRIPT KILL' is not allow */
-        addReplyErrorObject(c, server.extended_redis_compat ? shared.slowscripterr_compat : shared.slowscripterr);
+        addReplyErrorObject(c, shared.slowscripterr);
         return;
     }
     if (!is_eval && (curr_run_ctx->flags & SCRIPT_EVAL_MODE)) {
         /* Kill an eval with 'FUNCTION KILL' is not allow */
-        addReplyErrorObject(c, server.extended_redis_compat ? shared.slowevalerr_compat : shared.slowevalerr);
+        addReplyErrorObject(c, shared.slowevalerr);
         return;
     }
     curr_run_ctx->flags |= SCRIPT_KILLED;

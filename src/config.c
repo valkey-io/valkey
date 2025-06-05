@@ -920,7 +920,7 @@ void configSetCommand(client *c) {
 err:
     if (deny_loading_error) {
         /* We give the loading error precedence because it may be handled by clients differently, unlike a plain -ERR. */
-        addReplyErrorObject(c, server.extended_redis_compat ? shared.loadingerr_compat : shared.loadingerr);
+        addReplyErrorObject(c, shared.loadingerr);
     } else if (invalid_arg_name) {
         addReplyErrorFormat(c, "Unknown option or number of arguments for CONFIG SET - '%s'", invalid_arg_name);
     } else if (errstr) {

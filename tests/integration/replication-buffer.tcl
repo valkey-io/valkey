@@ -215,7 +215,7 @@ start_server {} {
             fail "master didn't disconnect with replica2"
         }
 
-        # Since we trim replication backlog inrementally, replication backlog
+        # Since we trim replication backlog incrementally, replication backlog
         # memory may take time to be reclaimed.
         wait_for_condition 1000 100 {
             [s repl_backlog_histlen] < [expr 10000*10000]

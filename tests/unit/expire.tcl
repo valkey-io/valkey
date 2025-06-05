@@ -780,7 +780,7 @@ start_server {tags {"expire"}} {
         assert_equal [r TTL foo] -2
     } {}
 
-    test {EXPIRE with negative expiry on a non-valitale key} {
+    test {EXPIRE with negative expiry on a non-volatile key} {
         r SET foo bar
         assert_equal [r EXPIRE foo -10 LT] 1
         assert_equal [r TTL foo] -2

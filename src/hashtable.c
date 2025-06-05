@@ -1824,7 +1824,7 @@ size_t hashtableScanDefrag(hashtable *ht, size_t cursor, hashtableScanFunction f
          * index pointed to by the cursor in the smaller table. */
         do {
             /* Emit entries in the larger table at this cursor, if this index
-             * hash't already been rehashed. */
+             * hasn't already been rehashed. */
             idx = cursor & mask_large;
             if (table_large == 1 || ht->rehash_idx == -1 || idx >= (size_t)ht->rehash_idx) {
                 size_t used_before = ht->used[table_large];

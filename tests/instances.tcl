@@ -165,7 +165,7 @@ proc spawn_instance {type base_port count {conf {}} {base_conf_file ""}} {
         if {[server_is_up $::host $port 100] == 0} {
             set logfile [file join $dirname log.txt]
             puts [exec tail $logfile]
-            abort_sentinel_test "Problems starting $type #$j: ping timeout, maybe server start failed, check $logfile"
+            abort_sentinel_test "Problem starting $type #$j: ping timeout, maybe server start failed, check $logfile"
         }
 
         # Push the instance into the right list

@@ -35,7 +35,7 @@ start_server {tags {"scripting"}} {
 
     test {FUNCTION - Create a library with wrong name format} {
         catch {
-            r function load [get_function_code LUA {bad\0foramat} test {return 'hello1'}]
+            r function load [get_function_code LUA {bad\0format} test {return 'hello1'}]
         } e
         set _ $e
     } {*Library names can only contain letters, numbers, or underscores(_)*}

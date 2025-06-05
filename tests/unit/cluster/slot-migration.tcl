@@ -441,7 +441,7 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
         # Pause the replica to simulate a failure
         pause_process [srv -3 pid]
 
-        # Setslot with an explicit 1ms timeoout
+        # Setslot with an explicit 1ms timeout
         set start_time [clock milliseconds]
         catch {R 0 CLUSTER SETSLOT 609 MIGRATING $R1_id TIMEOUT 3000} e
         set end_time [clock milliseconds]

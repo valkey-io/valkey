@@ -797,7 +797,7 @@ int zmalloc_get_allocator_info(size_t *allocated, size_t *active, size_t *reside
         je_mallctl("stats.retained", retained, &sz, NULL, 0);
     }
 
-    /* Unlike retained, Muzzy representats memory released with `madvised(..., MADV_FREE)`.
+    /* Unlike retained, Muzzy represents memory released with `madvised(..., MADV_FREE)`.
      * These pages will show as RSS for the process, until the OS decides to re-use them. */
     if (muzzy) {
         size_t pmuzzy, page;

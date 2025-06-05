@@ -865,7 +865,7 @@ start_server {tags {"scripting"}} {
         # still this test isn't able to trigger the issue, but we keep it anyway.
         start_server {tags {"scripting"}} {
             set repl [attach_to_replication_stream]
-            # a command with 5 argsument
+            # a command with 5 arguments
             r eval {redis.call('hmget', KEYS[1], 1, 2, 3)} 1 key
             # then a command with 3 that is replicated as one with 4
             r eval {redis.call('incrbyfloat', KEYS[1], 1)} 1 key

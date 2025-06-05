@@ -394,7 +394,7 @@ void setcpuaffinity(const char *cpulist);
 #else
 #define ATTRIBUTE_TARGET_SSE2
 #define ATTRIBUTE_TARGET_AVX2
-#define ATTRIBUTE_TARGET_AVX512*/
-#endif
+#define ATTRIBUTE_TARGET_AVX512
+#endif*/
 
 #endif

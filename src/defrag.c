@@ -772,7 +772,7 @@ static void defragPubsubScanCallback(void *privdata, void *elemref) {
         *(robj **)hashtableMetadata(clients) = newchannel;
 
         /* The channel name is shared by the client's pubsub(shard) and server's
-         * pubsub(shard), after defraging the channel name, we need to update
+         * pubsub(shard), after defragging the channel name, we need to update
          * the reference in the clients' dictionary. */
         hashtableIterator iter;
         hashtableInitIterator(&iter, clients, 0);

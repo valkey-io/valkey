@@ -328,7 +328,7 @@ proc parse_options {} {
             puts "--tls                   Run tests in TLS mode."
             puts "--tls-module            Run tests in TLS mode with Valkey module."
             puts "--io-threads            Run tests with IO threads."
-            puts "--host <host>           Use hostname instead of 127.0.0.1."
+            puts "--host <hostname>       Use hostname instead of 127.0.0.1."
             puts "--config <k> <v>        Extra config argument(s)."
             puts "--fast-fail             Exit immediately once the first test fails."
             puts "--stop                  Blocks once the first test fails."

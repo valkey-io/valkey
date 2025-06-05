@@ -863,7 +863,7 @@ size_t zmalloc_get_memory_size(void) {
     int mib[2];
     mib[0] = CTL_HW;
 #if defined(HW_MEMSIZE)
-    mib[1] = HW_MEMSIZE; /* OSX. --------------------- */
+    mib[1] = HW_MEMSIZE; /* macOS. --------------------- */
 #elif defined(HW_PHYSMEM64)
     mib[1] = HW_PHYSMEM64; /* NetBSD, OpenBSD. --------- */
 #endif
@@ -877,7 +877,7 @@ size_t zmalloc_get_memory_size(void) {
     return (size_t)sysconf(_SC_PHYS_PAGES) * (size_t)sysconf(_SC_PAGESIZE);
 
 #elif defined(CTL_HW) && (defined(HW_PHYSMEM) || defined(HW_REALMEM))
-    /* DragonFly BSD, FreeBSD, NetBSD, OpenBSD, and OSX. -------- */
+    /* DragonFly BSD, FreeBSD, NetBSD, OpenBSD, and macOS. -------- */
     int mib[2];
     mib[0] = CTL_HW;
 #if defined(HW_REALMEM)

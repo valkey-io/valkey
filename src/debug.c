@@ -1225,7 +1225,7 @@ static void *getAndSetMcontextEip(ucontext_t *uc, void *eip) {
 #elif defined(__ppc__)
     GET_SET_RETURN(uc->uc_mcontext->__ss.__srr0, eip);
 #else
-    /* OSX ARM64 */
+    /* macOS ARM64 */
     void *old_val = (void *)arm_thread_state64_get_pc(uc->uc_mcontext->__ss);
     if (eip) {
         arm_thread_state64_set_pc_fptr(uc->uc_mcontext->__ss, eip);
@@ -1353,7 +1353,7 @@ void logRegisters(ucontext_t *uc) {
               (unsigned long)uc->uc_mcontext->__ss.__fs, (unsigned long)uc->uc_mcontext->__ss.__gs);
     logStackContent((void **)uc->uc_mcontext->__ss.__esp);
 #elif defined(__arm64__)
-    /* OSX ARM64 */
+    /* macOS ARM64 */
     serverLog(
         LL_WARNING,
         "\n"

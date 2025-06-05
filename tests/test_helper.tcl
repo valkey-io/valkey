@@ -576,7 +576,7 @@ proc print_help_screen {} {
         "                   runtest-moduleapi which will build the test module."
         "--valgrind         Run the test over valgrind."
         "--durable          suppress test crashes and keep running"
-        "--stack-logging    Enable OSX leaks/malloc stack logging."
+        "--stack-logging    Enable macOS leaks/malloc stack logging."
         "--accurate         Run slow randomized tests for more iterations."
         "--quiet            Don't show individual tests."
         "--single <unit>    Just execute the specified unit (see next option). This"

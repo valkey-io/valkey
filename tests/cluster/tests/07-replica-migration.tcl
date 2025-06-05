@@ -47,7 +47,7 @@ foreach_valkey_id id {
 }
 
 # Now test the migration to a master which used to be a slave, after
-# a failver.
+# a failover.
 
 source "../tests/includes/init-tests.tcl"
 

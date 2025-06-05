@@ -537,7 +537,7 @@ static size_t rioConnsetWrite(rio *r, const void *buf, size_t len) {
         len = sdslen(r->io.connset.buf);
     }
 
-    /* Write in little chunchs so that when there are big writes we
+    /* Write in little chunks so that when there are big writes we
      * parallelize while the kernel is sending data in background to
      * the TCP socket. */
     while (len) {

@@ -1,7 +1,7 @@
 /*
- * Copyright Valkey Contributors.
+ * Copyright (c) Valkey Contributors
  * All rights reserved.
- * SPDX-License-Identifier: BSD 3-Clause
+ * SPDX-License-Identifier: BSD-3-Clause
  */
 
 #include "io_threads.h"
@@ -215,18 +215,19 @@ static void *IOThreadMain(void *myid) {
     long id = (long)myid;
     char thdname[32];
 
-    serverAssert(server.io_threads_num > 0);
-    serverAssert(id > 0 && id < server.io_threads_num);
     snprintf(thdname, sizeof(thdname), "io_thd_%ld", id);
     valkey_set_thread_title(thdname);
     serverSetCpuAffinity(server.server_cpulist);
-    makeThreadKillable();
     initSharedQueryBuf();
+    pthread_cleanup_push(freeSharedQueryBuf, NULL);
 
     thread_id = (int)id;
     size_t jobs_to_process = 0;
     IOJobQueue *jq = &io_jobs[id];
     while (1) {
+        /* Cancellation point so that pthread_cancel() from main thread is honored. */
+        pthread_testcancel();
+
         /* Wait for jobs */
         for (int j = 0; j < 1000000; j++) {
             jobs_to_process = IOJobQueue_availableJobs(jq);
@@ -255,12 +256,15 @@ static void *IOThreadMain(void *myid) {
          * As the main-thread main concern is to check if the queue is empty, it's enough to do it once at the end. */
         atomic_thread_fence(memory_order_release);
     }
-    freeSharedQueryBuf();
+    pthread_cleanup_pop(0);
     return NULL;
 }
 
 #define IO_JOB_QUEUE_SIZE 2048
 static void createIOThread(int id) {
+    serverAssert(server.io_threads_num > 0);
+    serverAssert(id > 0 && id < server.io_threads_num);
+
     pthread_t tid;
     pthread_mutex_init(&io_threads_mutex[id], NULL);
     IOJobQueue_init(&io_jobs[id], IO_JOB_QUEUE_SIZE);
@@ -287,7 +291,7 @@ static void shutdownIOThread(int id) {
     } else {
         serverLog(LL_NOTICE, "IO thread(tid:%lu) terminated", (unsigned long)tid);
     }
-
+    pthread_mutex_destroy(&io_threads_mutex[id]);
     IOJobQueue_cleanup(&io_jobs[id]);
 }
 
@@ -295,6 +299,45 @@ void killIOThreads(void) {
     for (int j = 1; j < server.io_threads_num; j++) { /* We don't kill thread 0, which is the main thread. */
         shutdownIOThread(j);
     }
+}
+
+int updateIOThreads(const char **err) {
+    serverAssert(inMainThread());
+    UNUSED(err);
+    int prev_threads_num = 1;
+    for (int i = IO_THREADS_MAX_NUM - 1; i > 0; i--) {
+        if (io_threads[i]) {
+            prev_threads_num = i + 1;
+            break;
+        }
+    }
+    if (prev_threads_num == server.io_threads_num) return 1;
+
+    serverLog(LL_NOTICE, "Changing number of IO threads from %d to %d.", prev_threads_num, server.io_threads_num);
+    drainIOThreadsQueue();
+    /* Set active threads to 1, will be adjusted based on workload later. */
+    for (int i = 1; i < server.active_io_threads_num; i++) {
+        pthread_mutex_lock(&io_threads_mutex[i]);
+    }
+    server.active_io_threads_num = 1;
+
+    // Create new threads.
+    if (server.io_threads_num > prev_threads_num) {
+        prefetchCommandsBatchInit();
+        for (int i = prev_threads_num; i < server.io_threads_num; i++) {
+            createIOThread(i);
+        }
+    }
+    // Decrease the number of threads.
+    else {
+        for (int i = prev_threads_num - 1; i >= server.io_threads_num; i--) {
+            // Unblock inactive thread.
+            pthread_mutex_unlock(&io_threads_mutex[i]);
+            shutdownIOThread(i);
+            io_threads[i] = 0;
+        }
+    }
+    return 1;
 }
 
 /* Initialize the data structures needed for I/O threads. */
@@ -321,7 +364,7 @@ int trySendReadToIOThreads(client *c) {
     if (server.active_io_threads_num <= 1) return C_ERR;
     /* If IO thread is already reading, return C_OK to make sure the main thread will not handle it. */
     if (c->io_read_state != CLIENT_IDLE) return C_OK;
-    /* Currently, replica reads are not offloaded to IO threads. */
+    /* For simplicity, don't offload replica clients reads as read traffic from replica is negligible */
     if (getClientType(c) == CLIENT_TYPE_REPLICA) return C_ERR;
     /* With Lua debug client we may call connWrite directly in the main thread */
     if (c->flag.lua_debug) return C_ERR;
@@ -364,8 +407,8 @@ int trySendWriteToIOThreads(client *c) {
     if (c->io_write_state != CLIENT_IDLE) return C_OK;
     /* Nothing to write */
     if (!clientHasPendingReplies(c)) return C_ERR;
-    /* Currently, replica writes are not offloaded to IO threads. */
-    if (getClientType(c) == CLIENT_TYPE_REPLICA) return C_ERR;
+    /* For simplicity, avoid offloading non-online replicas */
+    if (getClientType(c) == CLIENT_TYPE_REPLICA && c->repl_data->repl_state != REPLICA_STATE_ONLINE) return C_ERR;
     /* We can't offload debugged clients as the main-thread may read at the same time  */
     if (c->flag.lua_debug) return C_ERR;
 
@@ -392,21 +435,29 @@ int trySendWriteToIOThreads(client *c) {
     serverAssert(c->clients_pending_write_node.prev == NULL && c->clients_pending_write_node.next == NULL);
     listLinkNodeTail(server.clients_pending_io_write, &c->clients_pending_write_node);
 
-    /* Save the last block of the reply list to io_last_reply_block and the used
-     * position to io_last_bufpos. The I/O thread will write only up to
-     * io_last_bufpos, regardless of the c->bufpos value. This is to prevent I/O
-     * threads from reading data that might be invalid in their local CPU cache. */
-    c->io_last_reply_block = listLast(c->reply);
-    if (c->io_last_reply_block) {
-        c->io_last_bufpos = ((clientReplyBlock *)listNodeValue(c->io_last_reply_block))->used;
+    int is_replica = getClientType(c) == CLIENT_TYPE_REPLICA;
+    if (is_replica) {
+        c->io_last_reply_block = listLast(server.repl_buffer_blocks);
+        replBufBlock *o = listNodeValue(c->io_last_reply_block);
+        c->io_last_bufpos = o->used;
     } else {
-        c->io_last_bufpos = (size_t)c->bufpos;
+        /* Save the last block of the reply list to io_last_reply_block and the used
+         * position to io_last_bufpos. The I/O thread will write only up to
+         * io_last_bufpos, regardless of the c->bufpos value. This is to prevent I/O
+         * threads from reading data that might be invalid in their local CPU cache. */
+        c->io_last_reply_block = listLast(c->reply);
+        if (c->io_last_reply_block) {
+            c->io_last_bufpos = ((clientReplyBlock *)listNodeValue(c->io_last_reply_block))->used;
+        } else {
+            c->io_last_bufpos = (size_t)c->bufpos;
+        }
     }
-    serverAssert(c->bufpos > 0 || c->io_last_bufpos > 0);
+
+    serverAssert(c->bufpos > 0 || c->io_last_bufpos > 0 || is_replica);
 
     /* The main-thread will update the client state after the I/O thread completes the write. */
     connSetPostponeUpdateState(c->conn, 1);
-    c->write_flags = 0;
+    c->write_flags = is_replica ? WRITE_FLAGS_IS_REPLICA : 0;
     c->io_write_state = CLIENT_PENDING_IO;
 
     IOJobQueue_push(jq, ioThreadWriteToClient, c);
@@ -566,6 +617,7 @@ void trySendPollJobToIOThreads(void) {
 static void ioThreadAccept(void *data) {
     client *c = (client *)data;
     connAccept(c->conn, NULL);
+    atomic_thread_fence(memory_order_release);
     c->io_read_state = CLIENT_COMPLETED_IO;
 }
 

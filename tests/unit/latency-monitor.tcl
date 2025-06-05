@@ -113,12 +113,17 @@ tags {"needs:debug"} {
             puts $res
         }
 
+        # See the previous "Test latency events logging" test for each call.
         foreach event $res {
-            lassign $event eventname time latency max
+            lassign $event eventname time latency max sum cnt
             assert {$eventname eq "command"}
             if {!$::no_latency} {
-                assert {$max >= 450 & $max <= 650}
-                assert {$time == $last_time}
+                # To avoid timing issues, each event decreases by 50 and
+                # increases by 150 to increase the range.
+                assert_equal $time $last_time
+                assert_range $max 450 650 ;# debug sleep 0.5
+                assert_range $sum 1050 1650 ;# debug sleep 0.3 + 0.4 + 0.5
+                assert_equal $cnt 3
             }
             break
         }
@@ -143,7 +148,7 @@ tags {"needs:debug"} {
 } ;# tag
 
     test {LATENCY of expire events are correctly collected} {
-        r config set latency-monitor-threshold 20
+        r config set latency-monitor-threshold 1
         r config set lazyfree-lazy-expire no
         r flushdb
         if {$::valgrind} {set count 100000} else {set count 1000000}

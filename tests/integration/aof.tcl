@@ -259,7 +259,7 @@ tags {"aof external:skip"} {
 
     start_server_aof_ex [list dir $server_path aof-load-truncated yes] [list wait_ready false] {
         test "Unknown command: Server should have logged an error" {
-            wait_for_log_messages 0 {"*Unknown command 'bla' reading the append only file*"} 0 10 1000
+            wait_for_log_messages 0 {"*unknown command 'bla'*"} 0 10 1000
         }
     }
 
@@ -674,11 +674,7 @@ tags {"aof external:skip"} {
     }
 }
 
-# make sure the test infra won't use SELECT
-set old_singledb $::singledb
-set ::singledb 1
-
-tags {"aof cluster external:skip"} {
+tags {"aof cluster external:skip singledb"} {
     test {Test cluster slots / cluster shards in aof won't crash} {
         create_aof $aof_dirpath $aof_file {
             append_to_aof [formatCommand cluster slots]
@@ -693,6 +689,45 @@ tags {"aof cluster external:skip"} {
             assert_equal [r ping] {PONG}
         }
     }
-}
 
-set ::singledb $old_singledb
+    test {Test command check in aof won't crash} {
+        # cluster, wrong number of arguments for 'cluster' command
+        create_aof $aof_dirpath $aof_file { append_to_aof [formatCommand cluster] }
+        create_aof_manifest $aof_dirpath $aof_manifest_file { append_to_manifest "file appendonly.aof.1.incr.aof seq 1 type i\n" }
+        start_server_aof_ex [list dir $server_path] [list wait_ready false] {
+            wait_for_condition 100 50 {
+                ! [is_alive [srv pid]]
+            } else {
+                fail "AOF loading didn't fail"
+            }
+            assert_equal 1 [count_message_lines $server_path/stdout "wrong number of arguments for 'cluster' command"]
+        }
+        clean_aof_persistence $aof_dirpath
+
+        # cluster slots-xxx, unknown subcommand 'slots-xxx'
+        create_aof $aof_dirpath $aof_file { append_to_aof [formatCommand cluster slots-xxx] }
+        create_aof_manifest $aof_dirpath $aof_manifest_file { append_to_manifest "file appendonly.aof.1.incr.aof seq 1 type i\n" }
+        start_server_aof_ex [list dir $server_path] [list wait_ready false] {
+            wait_for_condition 100 50 {
+                ! [is_alive [srv pid]]
+            } else {
+                fail "AOF loading didn't fail"
+            }
+            assert_equal 1 [count_message_lines $server_path/stdout "unknown subcommand 'slots-xxx'"]
+        }
+        clean_aof_persistence $aof_dirpath
+
+        # cluster slots xxx, wrong number of arguments for 'cluster|slots' command
+        create_aof $aof_dirpath $aof_file { append_to_aof [formatCommand cluster slots xxx] }
+        create_aof_manifest $aof_dirpath $aof_manifest_file { append_to_manifest "file appendonly.aof.1.incr.aof seq 1 type i\n" }
+        start_server_aof_ex [list dir $server_path] [list wait_ready false] {
+            wait_for_condition 100 50 {
+                ![is_alive [srv pid]]
+            } else {
+                fail "AOF loading didn't fail"
+            }
+            assert_equal 1 [count_message_lines $server_path/stdout "wrong number of arguments for 'cluster|slots' command"]
+        }
+        clean_aof_persistence $aof_dirpath
+    }
+}

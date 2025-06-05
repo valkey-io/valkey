@@ -13,7 +13,7 @@ int call_without_user(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc)
 
     const char *cmd = ValkeyModule_StringPtrLen(argv[1], NULL);
 
-    ValkeyModuleCallReply *rep = ValkeyModule_Call(ctx, cmd, "Ev", argv + 2, argc - 2);
+    ValkeyModuleCallReply *rep = ValkeyModule_Call(ctx, cmd, "Ev", argv + 2, (size_t)argc - 2);
     if (!rep) {
         ValkeyModule_ReplyWithError(ctx, "NULL reply returned");
     } else {
@@ -37,7 +37,7 @@ int call_with_user_flag(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
     const char* flg = ValkeyModule_StringPtrLen(flags, NULL);
     const char* cmd = ValkeyModule_StringPtrLen(argv[2], NULL);
 
-    ValkeyModuleCallReply* rep = ValkeyModule_Call(ctx, cmd, flg, argv + 3, argc - 3);
+    ValkeyModuleCallReply* rep = ValkeyModule_Call(ctx, cmd, flg, argv + 3, (size_t)argc - 3);
     if (!rep) {
         ValkeyModule_ReplyWithError(ctx, "NULL reply returned");
     } else {
@@ -134,7 +134,7 @@ void *bg_call_worker(void *arg) {
     ValkeyModule_StringAppendBuffer(NULL, format_valkey_str, "E", 1);
     format = ValkeyModule_StringPtrLen(format_valkey_str, NULL);
     const char *cmd = ValkeyModule_StringPtrLen(bg->argv[2], NULL);
-    ValkeyModuleCallReply *rep = ValkeyModule_Call(ctx, cmd, format, bg->argv + 3, bg->argc - 3);
+    ValkeyModuleCallReply *rep = ValkeyModule_Call(ctx, cmd, format, bg->argv + 3, (size_t)bg->argc - 3);
     ValkeyModule_FreeString(NULL, format_valkey_str);
 
     /* Free the arguments within GIL to prevent simultaneous freeing in main thread. */

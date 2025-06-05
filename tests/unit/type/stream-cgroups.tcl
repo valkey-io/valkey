@@ -1110,6 +1110,25 @@ start_server {
         set group [lindex [dict get $reply groups] 0]
         assert_equal [dict get $group entries-read] 5
         assert_equal [dict get $group lag] 1
+
+        r XADD x 7-0 data g
+        r XADD x 8-0 data h
+        r XADD x 9-0 data i
+        r XADD x 10-0 data j
+        r XREADGROUP GROUP g1 c11 COUNT 3 STREAMS x >
+        r XDEL x 9-0
+        # Now there is a tombstone in the stream after the consumer group last_id 
+        # so the lag can't be calculated
+        set reply [r XINFO STREAM x FULL]
+        set group [lindex [dict get $reply groups] 0]
+        assert_equal [dict get $group entries-read] 8
+        assert_equal [dict get $group lag] {}
+
+        r XREADGROUP GROUP g1 c12 COUNT 1 STREAMS x >
+        set reply [r XINFO STREAM x FULL]
+        set group [lindex [dict get $reply groups] 0]
+        assert_equal [dict get $group entries-read] 10
+        assert_equal [dict get $group lag] 0
     }
 
     test {Consumer group lag with XDELs} {
@@ -1175,6 +1194,132 @@ start_server {
         set group [lindex [dict get $reply groups] 1]
         assert_equal [dict get $group entries-read] {}
         assert_equal [dict get $group lag] 2
+    }
+
+    test {Consumer group lag with XTRIM} {
+        r DEL x
+        r XADD x 1-0 data a
+        r XADD x 2-0 data b
+        r XADD x 3-0 data c
+        r XADD x 4-0 data d
+        r XADD x 5-0 data e
+        r XDEL x 3-0
+        r XGROUP CREATE x g1 0
+        r XGROUP CREATE x g2 0
+
+        set reply [r XINFO STREAM x FULL]
+        set group [lindex [dict get $reply groups] 0]
+        assert_equal [dict get $group entries-read] {}
+        assert_equal [dict get $group lag] {}
+
+        r XREADGROUP GROUP g1 c11 COUNT 1 STREAMS x >
+        set reply [r XINFO STREAM x FULL]
+        set group [lindex [dict get $reply groups] 0]
+        assert_equal [dict get $group entries-read] {}
+        assert_equal [dict get $group lag] {}
+
+        r XREADGROUP GROUP g1 c11 COUNT 1 STREAMS x >
+        set reply [r XINFO STREAM x FULL]
+        set group [lindex [dict get $reply groups] 0]
+        assert_equal [dict get $group entries-read] {}
+        assert_equal [dict get $group lag] {}
+
+        r XREADGROUP GROUP g1 c11 COUNT 1 STREAMS x >
+        set reply [r XINFO STREAM x FULL]
+        set group [lindex [dict get $reply groups] 0]
+        assert_equal [dict get $group entries-read] {}
+        assert_equal [dict get $group lag] {}
+
+        r XREADGROUP GROUP g1 c11 COUNT 1 STREAMS x >
+        set reply [r XINFO STREAM x FULL]
+        set group [lindex [dict get $reply groups] 0]
+        assert_equal [dict get $group entries-read] 5
+        assert_equal [dict get $group lag] 0
+
+        r XADD x 6-0 data f
+        r XADD x 7-0 data g
+        set reply [r XINFO STREAM x FULL]
+        set group [lindex [dict get $reply groups] 0]
+        assert_equal [dict get $group entries-read] 5
+        assert_equal [dict get $group lag] 2
+
+        r XTRIM x MINID = 7-0
+        set reply [r XINFO STREAM x FULL]
+        set group [lindex [dict get $reply groups] 0]
+        assert_equal [dict get $group entries-read] 5
+        assert_equal [dict get $group lag] 2
+        set group [lindex [dict get $reply groups] 1]
+        assert_equal [dict get $group entries-read] {}
+        assert_equal [dict get $group lag] 1
+
+        r XREADGROUP GROUP g1 c11 STREAMS x >
+        set reply [r XINFO STREAM x FULL]
+        set group [lindex [dict get $reply groups] 0]
+        assert_equal [dict get $group entries-read] 7
+        assert_equal [dict get $group lag] 0
+    }
+
+     test {Consumer group lag with XADD trimming} {
+        r DEL x
+        r XADD x 1-0 data a
+        r XADD x 2-0 data b
+        r XADD x 3-0 data c
+        r XADD x 4-0 data d
+        r XADD x 5-0 data e
+        r XDEL x 3-0
+        r XGROUP CREATE x g1 0
+        r XGROUP CREATE x g2 0
+
+        set reply [r XINFO STREAM x FULL]
+        set group [lindex [dict get $reply groups] 0]
+        assert_equal [dict get $group entries-read] {}
+        assert_equal [dict get $group lag] {}
+
+        r XREADGROUP GROUP g1 c11 COUNT 1 STREAMS x >
+        set reply [r XINFO STREAM x FULL]
+        set group [lindex [dict get $reply groups] 0]
+        assert_equal [dict get $group entries-read] {}
+        assert_equal [dict get $group lag] {}
+
+        r XREADGROUP GROUP g1 c11 COUNT 1 STREAMS x >
+        set reply [r XINFO STREAM x FULL]
+        set group [lindex [dict get $reply groups] 0]
+        assert_equal [dict get $group entries-read] {}
+        assert_equal [dict get $group lag] {}
+
+        r XREADGROUP GROUP g1 c11 COUNT 1 STREAMS x >
+        set reply [r XINFO STREAM x FULL]
+        set group [lindex [dict get $reply groups] 0]
+        assert_equal [dict get $group entries-read] {}
+        assert_equal [dict get $group lag] {}
+
+        r XREADGROUP GROUP g1 c11 COUNT 1 STREAMS x >
+        set reply [r XINFO STREAM x FULL]
+        set group [lindex [dict get $reply groups] 0]
+        assert_equal [dict get $group entries-read] 5
+        assert_equal [dict get $group lag] 0
+
+        r XADD x 6-0 data f
+        r XADD x 7-0 data g
+        set reply [r XINFO STREAM x FULL]
+        set group [lindex [dict get $reply groups] 0]
+        assert_equal [dict get $group entries-read] 5
+        assert_equal [dict get $group lag] 2
+
+        r XADD x MINID = 7-0 8-0 data h
+        set reply [r XINFO STREAM x FULL]
+        set group [lindex [dict get $reply groups] 0]
+        assert_equal [dict get $group entries-read] 5
+        assert_equal [dict get $group lag] 3
+        set group [lindex [dict get $reply groups] 1]
+        assert_equal [dict get $group entries-read] {}
+        assert_equal [dict get $group lag] 2
+
+        r XREADGROUP GROUP g1 c11 STREAMS x >
+        set reply [r XINFO STREAM x FULL]
+        set group [lindex [dict get $reply groups] 0]
+        assert_equal [dict get $group entries-read] 8
+        assert_equal [dict get $group lag] 0
     }
 
     test {Loading from legacy (Redis <= v6.2.x, rdb_ver < 10) persistence} {

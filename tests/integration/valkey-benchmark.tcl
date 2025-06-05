@@ -11,7 +11,7 @@ proc common_bench_setup {cmd} {
     r flushall
     if {[catch { exec {*}$cmd } error]} {
         set first_line [lindex [split $error "\n"] 0]
-        puts [colorstr red "valkey-benchmark non zero code. first line: $first_line"]
+        puts [colorstr red "valkey-benchmark non zero code, the output is: $error"]
         fail "valkey-benchmark non zero code. first line: $first_line"
     }
 }
@@ -105,6 +105,21 @@ tags {"benchmark network external:skip logreqres:skip"} {
 
             # ensure only one key was populated
             assert_match  {1} [scan [regexp -inline {keys\=([\d]*)} [r info keyspace]] keys=%d]
+        }
+
+        test {benchmark: arbitrary command sequence} {
+            set cmd [valkeybenchmark $master_host $master_port "-n 12 -- incr foo ; 3 incr bar"]
+            common_bench_setup $cmd
+            assert_equal 3 [r get foo]
+            assert_equal 9 [r get bar]
+            assert_match  {*calls=12,*} [cmdstat incr]
+        }
+
+        test {benchmark: arbitrary command with data placeholder} {
+            set cmd [valkeybenchmark $master_host $master_port "-n 1 -d 42 -- set k value:__data__"]
+            common_bench_setup $cmd
+            puts [r get k]
+            assert_equal 48 [r strlen k]
         }
 
         test {benchmark: keyspace length} {

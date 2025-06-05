@@ -96,6 +96,7 @@ void queueMultiCommand(client *c, uint64_t cmd_flags) {
     mc->argc = c->argc;
     mc->argv = c->argv;
     mc->argv_len = c->argv_len;
+    mc->slot = c->slot;
 
     c->mstate->count++;
     c->mstate->cmd_flags |= cmd_flags;
@@ -250,7 +251,7 @@ void execCommand(client *c) {
         c->mstate->commands[j].argv_len = c->argv_len;
         c->mstate->commands[j].cmd = c->cmd;
 
-        /* The original argv has already been processed for slowlog and monitor,
+        /* The original argv has already been processed for commandlog and monitor,
          * so we can safely free it before proceeding to the next command. */
         freeClientOriginalArgv(c);
     }

@@ -1175,7 +1175,7 @@ int quicklistDelRange(quicklist *quicklist, const long start, const long count) 
     return 1;
 }
 
-/* compare between a two entries */
+/* Compares two entries */
 int quicklistCompare(quicklistEntry *entry, unsigned char *p2, const size_t p2_len) {
     if (unlikely(QL_NODE_IS_PLAIN(entry->node))) {
         return ((entry->sz == p2_len) && (memcmp(entry->value, p2, p2_len) == 0));

@@ -57,6 +57,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#if HAVE_X86_SIMD
+#include <immintrin.h>
+#endif
 
 /* The default hashing function uses the SipHash implementation in siphash.c. */
 
@@ -198,7 +201,7 @@ static_assert(MAX_FILL_PERCENT_SOFT <= MAX_FILL_PERCENT_HARD, "Soft vs hard fill
 
 /* --- Random entry --- */
 
-#define FAIR_RANDOM_SAMPLE_SIZE (ENTRIES_PER_BUCKET * 40)
+#define FAIR_RANDOM_SAMPLE_SIZE (ENTRIES_PER_BUCKET * 10)
 #define WEAK_RANDOM_SAMPLE_SIZE ENTRIES_PER_BUCKET
 
 /* --- Types --- */
@@ -300,7 +303,7 @@ typedef struct {
     long index;
     uint16_t pos_in_bucket;
     uint8_t table;
-    uint8_t safe;
+    uint8_t flags;
     union {
         /* Unsafe iterator fingerprint for misuse detection. */
         uint64_t fingerprint;
@@ -669,6 +672,51 @@ static int expand(hashtable *ht, size_t size, int *malloc_failed) {
     return resize(ht, size, malloc_failed);
 }
 
+/* Checks if a candidate entry in a bucket matches the given key.
+ *
+ * This function examines a specific position in a bucket to determine if the
+ * entry at that position matches the provided key. If a match is found, it
+ * updates the position and table index pointers and returns 1. Otherwise,
+ * it returns 0. */
+static inline int checkCandidateInBucket(hashtable *ht, bucket *b, int pos, const void *key, int table, int *pos_in_bucket, int *table_index) {
+    /* It's a candidate. */
+    void *entry = b->entries[pos];
+    const void *elem_key = entryGetKey(ht, entry);
+    if (compareKeys(ht, key, elem_key) == 0) {
+        /* It's a match. */
+        assert(pos_in_bucket != NULL);
+        *pos_in_bucket = pos;
+        if (table_index) *table_index = table;
+        return 1;
+    }
+    return 0;
+}
+
+#if HAVE_X86_SIMD
+ATTRIBUTE_TARGET_SSE2
+static int findKeyInBucketSSE2(hashtable *ht, bucket *b, uint8_t h2, const void *key, int table, int *pos_in_bucket, int *table_index) {
+    /* Get the bucket's presence mask - indicates which positions are filled. */
+    BUCKET_BITS_TYPE presence_mask = b->presence & ((1 << ENTRIES_PER_BUCKET) - 1);
+    __m128i hash_vector = _mm_loadu_si128((__m128i *)b->hashes);
+    __m128i h2_vector = _mm_set1_epi8(h2);
+    /* Compare all hash values against the target hash simultaneously.
+     * The result is a vector of 16 bytes, where each byte is 0xFF if
+     * the corresponding hash matches the target hash, and 0x00 if it
+     * doesn't. */
+    __m128i result = _mm_cmpeq_epi8(hash_vector, h2_vector);
+    BUCKET_BITS_TYPE newmask = _mm_movemask_epi8(result);
+    /* Only consider positions that are both filled (presence) and match the hash (newmask). */
+    newmask &= presence_mask;
+    while (newmask > 0) {
+        int pos = __builtin_ctz(newmask);
+        if (checkCandidateInBucket(ht, b, pos, key, table, pos_in_bucket, table_index)) return 1;
+        /* Clear the processed bit and continue with next match. */
+        newmask &= ~(1 << pos);
+    }
+    return 0;
+}
+#endif
+
 /* Finds an entry matching the key. If a match is found, returns a pointer to
  * the bucket containing the matching entry and points 'pos_in_bucket' to the
  * index within the bucket. Returns NULL if no matching entry was found.
@@ -693,21 +741,16 @@ static bucket *findBucket(hashtable *ht, uint64_t hash, const void *key, int *po
         }
         bucket *b = &ht->tables[table][bucket_idx];
         do {
+#if HAVE_X86_SIMD
+            /* All x86-64 CPUs have SSE2. */
+            if (findKeyInBucketSSE2(ht, b, h2, key, table, pos_in_bucket, table_index)) return b;
+#else
             /* Find candidate entries with presence flag set and matching h2 hash. */
             for (int pos = 0; pos < numBucketPositions(b); pos++) {
-                if (isPositionFilled(b, pos) && b->hashes[pos] == h2) {
-                    /* It's a candidate. */
-                    void *entry = b->entries[pos];
-                    const void *elem_key = entryGetKey(ht, entry);
-                    if (compareKeys(ht, key, elem_key) == 0) {
-                        /* It's a match. */
-                        assert(pos_in_bucket != NULL);
-                        *pos_in_bucket = pos;
-                        if (table_index) *table_index = table;
-                        return b;
-                    }
-                }
+                if (isPositionFilled(b, pos) && b->hashes[pos] == h2 &&
+                    checkCandidateInBucket(ht, b, pos, key, table, pos_in_bucket, table_index)) return b;
             }
+#endif
             b = getChildBucket(b);
         } while (b != NULL);
     }
@@ -936,6 +979,7 @@ static inline incrementalFind *incrementalFindFromOpaque(hashtableIncrementalFin
 
 /* Prefetches all filled entries in the given bucket to optimize future memory access. */
 static void prefetchBucketEntries(bucket *b) {
+    if (!b->presence) return;
     for (int pos = 0; pos < numBucketPositions(b); pos++) {
         if (isPositionFilled(b, pos)) {
             valkey_prefetch(b->entries[pos]);
@@ -979,6 +1023,26 @@ static void prefetchNextBucketEntries(iter *iter, bucket *current_bucket) {
     }
 }
 
+/* Prefetches the values associated with the entries in the given bucket by
+ * calling the entryPrefetchValue callback in the hashtableType */
+static void prefetchBucketValues(bucket *b, hashtable *ht) {
+    if (!b->presence) return;
+    assert(ht->type->entryPrefetchValue != NULL);
+    for (int pos = 0; pos < numBucketPositions(b); pos++) {
+        if (isPositionFilled(b, pos)) {
+            ht->type->entryPrefetchValue(b->entries[pos]);
+        }
+    }
+}
+
+static inline int isSafe(iter *iter) {
+    return (iter->flags & HASHTABLE_ITER_SAFE);
+}
+
+static inline int shouldPrefetchValues(iter *iter) {
+    return (iter->flags & HASHTABLE_ITER_PREFETCH_VALUES);
+}
+
 /* --- API functions --- */
 
 /* Allocates and initializes a new hashtable specified by the given type. */
@@ -1011,7 +1075,7 @@ void hashtableEmpty(hashtable *ht, void(callback)(hashtable *)) {
         if (ht->bucket_exp[table_index] < 0) {
             continue;
         }
-        if (ht->used[table_index] > 0) {
+        if (ht->used[table_index] > 0 || ht->child_buckets[table_index] > 0) {
             for (size_t idx = 0; idx < numBuckets(ht->bucket_exp[table_index]); idx++) {
                 if (callback && (idx & 65535) == 0) callback(ht);
                 bucket *b = &ht->tables[table_index][idx];
@@ -1037,6 +1101,7 @@ void hashtableEmpty(hashtable *ht, void(callback)(hashtable *)) {
                 } while (b != NULL);
             }
         }
+
         zfree(ht->tables[table_index]);
         if (ht->type->trackMemUsage) {
             ht->type->trackMemUsage(ht, -sizeof(bucket) * numBuckets(ht->bucket_exp[table_index]));
@@ -1081,6 +1146,11 @@ size_t hashtableBuckets(hashtable *ht) {
  * number of allocated buckets, outside of the hash table itself. */
 size_t hashtableChainedBuckets(hashtable *ht, int table) {
     return ht->child_buckets[table];
+}
+
+/* Returns the number of entry positions per bucket. */
+unsigned hashtableEntriesPerBucket(void) {
+    return ENTRIES_PER_BUCKET;
 }
 
 /* Returns the size of the hashtable structures, in bytes (not including the sizes
@@ -1497,7 +1567,6 @@ void hashtableTwoPhasePopDelete(hashtable *ht, hashtablePosition *pos) {
     assert(isPositionFilled(b, pos_in_bucket));
     b->presence &= ~(1 << pos_in_bucket);
     ht->used[table_index]--;
-    hashtableShrinkIfNeeded(ht);
     hashtableResumeRehashing(ht);
     if (b->chained && !hashtableIsRehashingPaused(ht)) {
         /* Rehashing paused also means bucket chain compaction paused. It is
@@ -1506,6 +1575,7 @@ void hashtableTwoPhasePopDelete(hashtable *ht, hashtablePosition *pos) {
          * we do the compaction in the scan and iterator code instead. */
         fillBucketHole(ht, b, pos_in_bucket, table_index);
     }
+    hashtableShrinkIfNeeded(ht);
 }
 
 /* Initializes the state for an incremental find operation.
@@ -1792,31 +1862,32 @@ size_t hashtableScanDefrag(hashtable *ht, size_t cursor, hashtableScanFunction f
 
 /* --- Iterator --- */
 
-/* Initialize a iterator, that is not allowed to insert, delete or even lookup
- * entries in the hashtable, because such operations can trigger incremental
- * rehashing which moves entries around and confuses the iterator. Only
- * hashtableNext is allowed. Each entry is returned exactly once. Call
- * hashtableResetIterator when you are done. See also
- * hashtableInitSafeIterator. */
-void hashtableInitIterator(hashtableIterator *iterator, hashtable *ht) {
-    iter *iter;
-    iter = iteratorFromOpaque(iterator);
-    iter->hashtable = ht;
-    iter->table = 0;
-    iter->index = -1;
-    iter->safe = 0;
-}
-
-/* Initialize a safe iterator, which is allowed to modify the hash table while
- * iterating. It pauses incremental rehashing to prevent entries from moving
- * around. Call hashtableNext to fetch each entry. You must call
- * hashtableResetIterator when you are done with a safe iterator.
+/* Initialize an iterator for a hashtable.
  *
- * It's allowed to insert and replace entries. Deleting entries is only allowed
- * for the entry that was just returned by hashtableNext. Deleting other entries
- * is possible, but doing so can cause internal fragmentation, so don't.
+ * The 'flags' argument can be used to tweak the behaviour. It's a bitwise-or
+ * (zero means no flags) of the following:
  *
- * Guarantees:
+ * - HASHTABLE_ITER_SAFE: Use a safe iterator that can handle
+ *   modifications to the hash table while iterating.
+ * - HASHTABLE_ITER_PREFETCH_VALUES: Enables prefetching of entries values,
+ *   which can improve performance in some scenarios. Because the hashtable is generic and
+ *   doesn't care which object we store, the callback entryPrefetchValue must be set to help
+ *   us prefetch necessary fields of specific object types stored in the hashtable.
+ *
+ * For a non-safe iterator (default, when HASHTABLE_ITER_SAFE is not set):
+ * It is not allowed to insert, delete or even lookup entries in the hashtable,
+ * because such operations can trigger incremental rehashing which moves entries
+ * around and confuses the iterator. Only hashtableNext is allowed. Each entry
+ * is returned exactly once.
+ *
+ * For a safe iterator (when HASHTABLE_ITER_SAFE is set):
+ * It is allowed to modify the hash table while iterating. It pauses incremental
+ * rehashing to prevent entries from moving around. It's allowed to insert and
+ * replace entries. Deleting entries is only allowed for the entry that was just
+ * returned by hashtableNext. Deleting other entries is possible, but doing so
+ * can cause internal fragmentation, so don't.
+ *
+ * Guarantees for safe iterators:
  *
  * - Entries that are in the hash table for the entire iteration are returned
  *   exactly once.
@@ -1829,18 +1900,31 @@ void hashtableInitIterator(hashtableIterator *iterator, hashtable *ht) {
  *
  * - Entries that are inserted during the iteration may or may not be returned
  *   by the iterator.
+ *
+ * Call hashtableNext to fetch each entry. You must call hashtableResetIterator
+ * when you are done with the iterator.
  */
-void hashtableInitSafeIterator(hashtableIterator *iterator, hashtable *ht) {
-    hashtableInitIterator(iterator, ht);
+void hashtableInitIterator(hashtableIterator *iterator, hashtable *ht, uint8_t flags) {
+    iter *iter;
+    iter = iteratorFromOpaque(iterator);
+    iter->hashtable = ht;
+    iter->table = 0;
+    iter->index = -1;
+    iter->flags = flags;
+}
+
+/* Reinitializes the iterator for the provided hashtable while
+ * preserving the flags from its previous initialization. */
+void hashtableReinitIterator(hashtableIterator *iterator, hashtable *ht) {
     iter *iter = iteratorFromOpaque(iterator);
-    iter->safe = 1;
+    hashtableInitIterator(iterator, ht, iter->flags);
 }
 
 /* Resets a stack-allocated iterator. */
 void hashtableResetIterator(hashtableIterator *iterator) {
     iter *iter = iteratorFromOpaque(iterator);
     if (!(iter->index == -1 && iter->table == 0)) {
-        if (iter->safe) {
+        if (isSafe(iter)) {
             hashtableResumeRehashing(iter->hashtable);
             assert(iter->hashtable->pause_rehash >= 0);
         } else {
@@ -1850,19 +1934,11 @@ void hashtableResetIterator(hashtableIterator *iterator) {
 }
 
 /* Allocates and initializes an iterator. */
-hashtableIterator *hashtableCreateIterator(hashtable *ht) {
+hashtableIterator *hashtableCreateIterator(hashtable *ht, uint8_t flags) {
     iter *iter = zmalloc(sizeof(*iter));
     hashtableIterator *opaque = iteratorToOpaque(iter);
-    hashtableInitIterator(opaque, ht);
+    hashtableInitIterator(opaque, ht, flags);
     return opaque;
-}
-
-/* Allocates and initializes a safe iterator. */
-hashtableIterator *hashtableCreateSafeIterator(hashtable *ht) {
-    hashtableIterator *iterator = hashtableCreateIterator(ht);
-    iter *iter = iteratorFromOpaque(iterator);
-    iter->safe = 1;
-    return iterator;
 }
 
 /* Resets and frees the memory of an allocated iterator, i.e. one created using
@@ -1880,7 +1956,7 @@ int hashtableNext(hashtableIterator *iterator, void **elemptr) {
     while (1) {
         if (iter->index == -1 && iter->table == 0) {
             /* It's the first call to next. */
-            if (iter->safe) {
+            if (isSafe(iter)) {
                 hashtablePauseRehashing(iter->hashtable);
                 iter->last_seen_size = iter->hashtable->used[iter->table];
             } else {
@@ -1907,7 +1983,7 @@ int hashtableNext(hashtableIterator *iterator, void **elemptr) {
                 iter->bucket = getChildBucket(iter->bucket);
             } else if (iter->pos_in_bucket >= ENTRIES_PER_BUCKET) {
                 /* Bucket index done. */
-                if (iter->safe) {
+                if (isSafe(iter)) {
                     /* If entries in this bucket chain have been deleted,
                      * they've left empty spaces in the buckets. The chain is
                      * not automatically compacted when rehashing is paused. If
@@ -1936,6 +2012,9 @@ int hashtableNext(hashtableIterator *iterator, void **elemptr) {
         }
         bucket *b = iter->bucket;
         if (iter->pos_in_bucket == 0) {
+            if (shouldPrefetchValues(iter)) {
+                prefetchBucketValues(b, iter->hashtable);
+            }
             prefetchNextBucketEntries(iter, b);
         }
         if (!isPositionFilled(b, iter->pos_in_bucket)) {
@@ -1967,8 +2046,10 @@ int hashtableRandomEntry(hashtable *ht, void **found) {
 /* Points 'found' to a random entry in the hash table and returns 1. Returns 0
  * if the table is empty. This one is more fair than hashtableRandomEntry(). */
 int hashtableFairRandomEntry(hashtable *ht, void **found) {
-    void *samples[FAIR_RANDOM_SAMPLE_SIZE];
-    unsigned count = hashtableSampleEntries(ht, &samples[0], FAIR_RANDOM_SAMPLE_SIZE);
+    /* Sample less if it's very sparse. */
+    size_t num_samples = hashtableSize(ht) >= hashtableBuckets(ht) ? FAIR_RANDOM_SAMPLE_SIZE : WEAK_RANDOM_SAMPLE_SIZE;
+    void *samples[num_samples];
+    unsigned count = hashtableSampleEntries(ht, &samples[0], num_samples);
     if (count == 0) return 0;
     unsigned idx = random() % count;
     *found = samples[idx];
@@ -1990,9 +2071,8 @@ unsigned hashtableSampleEntries(hashtable *ht, void **dst, unsigned count) {
     samples.size = count;
     samples.seen = 0;
     samples.entries = dst;
-    size_t cursor = randomSizeT();
     while (samples.seen < count) {
-        cursor = hashtableScan(ht, cursor, sampleEntriesScanFn, &samples);
+        hashtableScan(ht, randomSizeT(), sampleEntriesScanFn, &samples);
     }
     rehashStepOnReadIfNeeded(ht);
     /* samples.seen is the number of entries scanned. It may be greater than
@@ -2071,7 +2151,7 @@ size_t hashtableGetStatsMsg(char *buf, size_t bufsize, hashtableStats *stats, in
                       " top-level buckets: %lu\n"
                       " child buckets: %lu\n"
                       " max chain length: %lu\n"
-                      " avg chain length: %.02f\n"
+                      " avg chain length: %f\n"
                       " chain length distribution:\n",
                       stats->toplevel_buckets,
                       stats->child_buckets,
@@ -2183,10 +2263,11 @@ int hashtableLongestBucketChain(hashtable *ht) {
             int chainlen = 0;
             bucket *b = &ht->tables[table][i];
             while (b->chained) {
-                if (++chainlen > maxlen) {
-                    maxlen = chainlen;
-                }
+                ++chainlen;
                 b = getChildBucket(b);
+            }
+            if (chainlen > maxlen) {
+                maxlen = chainlen;
             }
         }
     }

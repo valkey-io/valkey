@@ -26,6 +26,11 @@
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  * POSSIBILITY OF SUCH DAMAGE.
  */
+/*
+ * Copyright (c) Valkey Contributors
+ * All rights reserved.
+ * SPDX-License-Identifier: BSD-3-Clause
+ */
 
 #include "server.h"
 #include "hashtable.h"
@@ -317,7 +322,7 @@ setTypeIterator *setTypeInitIterator(robj *subject) {
     si->subject = subject;
     si->encoding = subject->encoding;
     if (si->encoding == OBJ_ENCODING_HASHTABLE) {
-        si->hashtable_iterator = hashtableCreateIterator(subject->ptr);
+        si->hashtable_iterator = hashtableCreateIterator(subject->ptr, 0);
     } else if (si->encoding == OBJ_ENCODING_INTSET) {
         si->ii = 0;
     } else if (si->encoding == OBJ_ENCODING_LISTPACK) {
@@ -609,8 +614,8 @@ void saddCommand(client *c) {
     if (added) {
         signalModifiedKey(c, c->db, c->argv[1]);
         notifyKeyspaceEvent(NOTIFY_SET, "sadd", c->argv[1], c->db->id);
+        server.dirty += added;
     }
-    server.dirty += added;
     addReplyLongLong(c, added);
 }
 
@@ -898,7 +903,6 @@ void spopWithCountCommand(client *c) {
                 setTypeRemoveAux(set, str, len, llele, encoding == OBJ_ENCODING_HASHTABLE);
             }
         }
-
         /* Transfer the old set to the client. */
         setTypeIterator *si;
         si = setTypeInitIterator(set);
@@ -1179,7 +1183,7 @@ void srandmemberWithCountCommand(client *c) {
     /* CASE 3 & 4: send the result to the user. */
     {
         hashtableIterator iter;
-        hashtableInitIterator(&iter, ht);
+        hashtableInitIterator(&iter, ht, 0);
 
         addReplyArrayLen(c, count);
         serverAssert(count == hashtableSize(ht));
@@ -1382,16 +1386,16 @@ void sinterGenericCommand(client *c,
                 dstset->ptr = lpShrinkToFit(dstset->ptr);
             }
             setKey(c, c->db, dstkey, &dstset, 0);
-            addReplyLongLong(c, setTypeSize(dstset));
             notifyKeyspaceEvent(NOTIFY_SET, "sinterstore", dstkey, c->db->id);
             server.dirty++;
+            addReplyLongLong(c, setTypeSize(dstset));
         } else {
-            addReply(c, shared.czero);
             if (dbDelete(c->db, dstkey)) {
                 server.dirty++;
                 signalModifiedKey(c, c->db, dstkey);
                 notifyKeyspaceEvent(NOTIFY_GENERIC, "del", dstkey, c->db->id);
             }
+            addReply(c, shared.czero);
             decrRefCount(dstset);
         }
     } else {
@@ -1606,16 +1610,16 @@ void sunionDiffGenericCommand(client *c, robj **setkeys, int setnum, robj *dstke
          * create this key with the result set inside */
         if (setTypeSize(dstset) > 0) {
             setKey(c, c->db, dstkey, &dstset, 0);
-            addReplyLongLong(c, setTypeSize(dstset));
             notifyKeyspaceEvent(NOTIFY_SET, op == SET_OP_UNION ? "sunionstore" : "sdiffstore", dstkey, c->db->id);
             server.dirty++;
+            addReplyLongLong(c, setTypeSize(dstset));
         } else {
-            addReply(c, shared.czero);
             if (dbDelete(c->db, dstkey)) {
                 server.dirty++;
                 signalModifiedKey(c, c->db, dstkey);
                 notifyKeyspaceEvent(NOTIFY_GENERIC, "del", dstkey, c->db->id);
             }
+            addReply(c, shared.czero);
             decrRefCount(dstset);
         }
     }
@@ -1646,7 +1650,7 @@ void sscanCommand(client *c) {
     robj *set;
     unsigned long long cursor;
 
-    if (parseScanCursorOrReply(c, c->argv[2], &cursor) == C_ERR) return;
+    if (parseScanCursorOrReply(c, c->argv[2]->ptr, &cursor) == C_ERR) return;
     if ((set = lookupKeyReadOrReply(c, c->argv[1], shared.emptyscan)) == NULL || checkType(c, set, OBJ_SET)) return;
     scanGenericCommand(c, set, cursor);
 }

@@ -3,6 +3,7 @@
 #include <ctype.h>
 #include <errno.h>
 #include <string.h>
+#include <unistd.h>
 
 /*
  * This module implements a very simple stack based scripting language.
@@ -28,6 +29,15 @@
  * CONSTI 432    # pushes the value 432 to the top of the stack
  * RETURN        # returns the current value on the top of the stack and marks
  *               # the end of the function declaration.
+ *
+ * FUNCTION baz  # declaration of function 'baz'
+ * ARGS 0        # pushes the value in the first argument to the top of the
+ *               # stack
+ * SLEEP         # Pops the current value in the stack and sleeps for `value`
+ *               # seconds
+ * CONSTI 0      # pushes the value 0 to the top of the stack
+ * RETURN        # returns the current value on the top of the stack and marks
+ *               # the end of the function declaration.
  * ```
  */
 
@@ -38,6 +48,7 @@ typedef enum HelloInstKind {
     FUNCTION = 0,
     CONSTI,
     ARGS,
+    SLEEP,
     RETURN,
     _NUM_INSTRUCTIONS, // Not a real instruction.
 } HelloInstKind;
@@ -49,6 +60,7 @@ const char *HelloInstKindStr[] = {
     "FUNCTION",
     "CONSTI",
     "ARGS",
+    "SLEEP",
     "RETURN",
 };
 
@@ -72,6 +84,7 @@ typedef struct HelloFunc {
     char *name;
     HelloInst instructions[256];
     uint32_t num_instructions;
+    uint32_t index;
 } HelloFunc;
 
 /*
@@ -151,8 +164,9 @@ static void helloLangParseArgs(HelloFunc *func) {
 /*
  * Parses an HELLO program source code.
  */
-static HelloProgram *helloLangParseCode(const char *code,
-                                        HelloProgram *program) {
+static int helloLangParseCode(const char *code,
+                              HelloProgram *program,
+                              ValkeyModuleString **err) {
     char *_code = ValkeyModule_Alloc(sizeof(char) * strlen(code) + 1);
     strcpy(_code, code);
 
@@ -171,6 +185,7 @@ static HelloProgram *helloLangParseCode(const char *code,
             ValkeyModule_Assert(currentFunc == NULL);
             currentFunc = ValkeyModule_Alloc(sizeof(HelloFunc));
             memset(currentFunc, 0, sizeof(HelloFunc));
+            currentFunc->index = program->num_functions;
             program->functions[program->num_functions++] = currentFunc;
             helloLangParseFunction(currentFunc);
             break;
@@ -182,13 +197,19 @@ static HelloProgram *helloLangParseCode(const char *code,
             ValkeyModule_Assert(currentFunc != NULL);
             helloLangParseArgs(currentFunc);
             break;
+        case SLEEP:
+            ValkeyModule_Assert(currentFunc != NULL);
+            currentFunc->num_instructions++;
+            break;
         case RETURN:
             ValkeyModule_Assert(currentFunc != NULL);
             currentFunc->num_instructions++;
             currentFunc = NULL;
             break;
         default:
-            ValkeyModule_Assert(0);
+            *err = ValkeyModule_CreateStringPrintf(NULL, "Failed to parse instruction: '%s'", token);
+            ValkeyModule_Free(_code);
+            return -1;
         }
 
         token = strtok(NULL, " \n");
@@ -196,16 +217,43 @@ static HelloProgram *helloLangParseCode(const char *code,
 
     ValkeyModule_Free(_code);
 
-    return program;
+    return 0;
+}
+
+static ValkeyModuleScriptingEngineExecutionState executeSleepInst(ValkeyModuleScriptingEngineServerRuntimeCtx *server_ctx,
+                             uint32_t seconds) {
+    uint32_t elapsed_milliseconds = 0;
+    ValkeyModuleScriptingEngineExecutionState state = VMSE_STATE_EXECUTING;
+    while(1) {
+        state = ValkeyModule_GetFunctionExecutionState(server_ctx);
+        if (state != VMSE_STATE_EXECUTING) {
+            break;
+        }
+
+        if (elapsed_milliseconds >= (seconds * 1000)) {
+            break;
+        }
+
+        usleep(1000);
+        elapsed_milliseconds++;
+    }
+
+    return state;
 }
 
 /*
  * Executes an HELLO function.
  */
-static uint32_t executeHelloLangFunction(HelloFunc *func,
-                                         ValkeyModuleString **args, int nargs) {
+static ValkeyModuleScriptingEngineExecutionState executeHelloLangFunction(ValkeyModuleScriptingEngineServerRuntimeCtx *server_ctx,
+                                                                          HelloFunc *func,
+                                                                          ValkeyModuleString **args,
+                                                                          int nargs,
+                                                                          uint32_t *result) {
+    ValkeyModule_Assert(result != NULL);
     uint32_t stack[64];
+    uint32_t val = 0;
     int sp = 0;
+    ValkeyModuleScriptingEngineExecutionState state = VMSE_STATE_EXECUTING;
 
     for (uint32_t pc = 0; pc < func->num_instructions; pc++) {
         HelloInst instr = func->instructions[pc];
@@ -221,35 +269,48 @@ static uint32_t executeHelloLangFunction(HelloFunc *func,
             uint32_t arg = str2int(argStr);
             stack[sp++] = arg;
             break;
-        }
+	    }
+        case SLEEP: {
+            val = stack[--sp];
+            state = executeSleepInst(server_ctx, val);
+            break;
+	    }
         case RETURN: {
-            uint32_t val = stack[--sp];
+            ValkeyModule_Assert(sp > 0);
+            val = stack[--sp];
             ValkeyModule_Assert(sp == 0);
-            return val;
-        }
+            *result = val;
+            return state;
+	    }
         case FUNCTION:
-        default:
+        case _NUM_INSTRUCTIONS:
             ValkeyModule_Assert(0);
         }
     }
 
     ValkeyModule_Assert(0);
-    return 0;
+    return state;
 }
 
 static ValkeyModuleScriptingEngineMemoryInfo engineGetMemoryInfo(ValkeyModuleCtx *module_ctx,
-                                                                 ValkeyModuleScriptingEngineCtx *engine_ctx) {
+                                                                 ValkeyModuleScriptingEngineCtx *engine_ctx,
+                                                                 ValkeyModuleScriptingEngineSubsystemType type) {
     VALKEYMODULE_NOT_USED(module_ctx);
+    VALKEYMODULE_NOT_USED(type);
     HelloLangCtx *ctx = (HelloLangCtx *)engine_ctx;
-    ValkeyModuleScriptingEngineMemoryInfo mem_info = {0};
+    ValkeyModuleScriptingEngineMemoryInfo mem_info = {
+        .version = VALKEYMODULE_SCRIPTING_ENGINE_ABI_MEMORY_INFO_VERSION
+    };
 
     if (ctx->program != NULL) {
         mem_info.used_memory += ValkeyModule_MallocSize(ctx->program);
 
         for (uint32_t i = 0; i < ctx->program->num_functions; i++) {
             HelloFunc *func = ctx->program->functions[i];
-            mem_info.used_memory += ValkeyModule_MallocSize(func);
-            mem_info.used_memory += ValkeyModule_MallocSize(func->name);
+            if (func != NULL) {
+                mem_info.used_memory += ValkeyModule_MallocSize(func);
+                mem_info.used_memory += ValkeyModule_MallocSize(func->name);
+            }
         }
     }
 
@@ -262,30 +323,39 @@ static ValkeyModuleScriptingEngineMemoryInfo engineGetMemoryInfo(ValkeyModuleCtx
 }
 
 static size_t engineFunctionMemoryOverhead(ValkeyModuleCtx *module_ctx,
-                                           void *compiled_function) {
+                                           ValkeyModuleScriptingEngineCompiledFunction *compiled_function) {
     VALKEYMODULE_NOT_USED(module_ctx);
-    HelloFunc *func = (HelloFunc *)compiled_function;
+    HelloFunc *func = (HelloFunc *)compiled_function->function;
     return ValkeyModule_MallocSize(func->name);
 }
 
 static void engineFreeFunction(ValkeyModuleCtx *module_ctx,
-                               ValkeyModuleScriptingEngineCtx *engine_ctx,
-                               void *compiled_function) {
+			                   ValkeyModuleScriptingEngineCtx *engine_ctx,
+                               ValkeyModuleScriptingEngineSubsystemType type,
+                               ValkeyModuleScriptingEngineCompiledFunction *compiled_function) {
     VALKEYMODULE_NOT_USED(module_ctx);
-    VALKEYMODULE_NOT_USED(engine_ctx);
-    HelloFunc *func = (HelloFunc *)compiled_function;
+    VALKEYMODULE_NOT_USED(type);
+    HelloLangCtx *ctx = (HelloLangCtx *)engine_ctx;
+    HelloFunc *func = (HelloFunc *)compiled_function->function;
+    ctx->program->functions[func->index] = NULL;
     ValkeyModule_Free(func->name);
     func->name = NULL;
     ValkeyModule_Free(func);
+    ValkeyModule_Free(compiled_function->name);
+    ValkeyModule_Free(compiled_function);
 }
 
 static ValkeyModuleScriptingEngineCompiledFunction **createHelloLangEngine(ValkeyModuleCtx *module_ctx,
                                                                            ValkeyModuleScriptingEngineCtx *engine_ctx,
+                                                                           ValkeyModuleScriptingEngineSubsystemType type,
                                                                            const char *code,
+                                                                           size_t code_len,
                                                                            size_t timeout,
                                                                            size_t *out_num_compiled_functions,
-                                                                           char **err) {
+                                                                           ValkeyModuleString **err) {
     VALKEYMODULE_NOT_USED(module_ctx);
+    VALKEYMODULE_NOT_USED(code_len);
+    VALKEYMODULE_NOT_USED(type);
     VALKEYMODULE_NOT_USED(timeout);
     VALKEYMODULE_NOT_USED(err);
 
@@ -298,7 +368,17 @@ static ValkeyModuleScriptingEngineCompiledFunction **createHelloLangEngine(Valke
         ctx->program->num_functions = 0;
     }
 
-    ctx->program = helloLangParseCode(code, ctx->program);
+    int ret = helloLangParseCode(code, ctx->program, err);
+    if (ret < 0) {
+        for (uint32_t i = 0; i < ctx->program->num_functions; i++) {
+            HelloFunc *func = ctx->program->functions[i];
+            ValkeyModule_Free(func->name);
+            ValkeyModule_Free(func);
+            ctx->program->functions[i] = NULL;
+        }
+        ctx->program->num_functions = 0;
+        return NULL;
+    }
 
     ValkeyModuleScriptingEngineCompiledFunction **compiled_functions =
         ValkeyModule_Alloc(sizeof(ValkeyModuleScriptingEngineCompiledFunction *) * ctx->program->num_functions);
@@ -309,6 +389,7 @@ static ValkeyModuleScriptingEngineCompiledFunction **createHelloLangEngine(Valke
         ValkeyModuleScriptingEngineCompiledFunction *cfunc =
             ValkeyModule_Alloc(sizeof(ValkeyModuleScriptingEngineCompiledFunction));
         *cfunc = (ValkeyModuleScriptingEngineCompiledFunction) {
+            .version = VALKEYMODULE_SCRIPTING_ENGINE_ABI_COMPILED_FUNCTION_VERSION,
             .name = ValkeyModule_CreateString(NULL, func->name, strlen(func->name)),
             .function = func,
             .desc = NULL,
@@ -326,22 +407,47 @@ static ValkeyModuleScriptingEngineCompiledFunction **createHelloLangEngine(Valke
 static void
 callHelloLangFunction(ValkeyModuleCtx *module_ctx,
                       ValkeyModuleScriptingEngineCtx *engine_ctx,
-                      ValkeyModuleScriptingEngineFunctionCtx *func_ctx,
-                      void *compiled_function,
+                      ValkeyModuleScriptingEngineServerRuntimeCtx *server_ctx,
+                      ValkeyModuleScriptingEngineCompiledFunction *compiled_function,
+                      ValkeyModuleScriptingEngineSubsystemType type,
                       ValkeyModuleString **keys, size_t nkeys,
                       ValkeyModuleString **args, size_t nargs) {
     VALKEYMODULE_NOT_USED(engine_ctx);
-    VALKEYMODULE_NOT_USED(func_ctx);
     VALKEYMODULE_NOT_USED(keys);
     VALKEYMODULE_NOT_USED(nkeys);
 
-    HelloFunc *func = (HelloFunc *)compiled_function;
-    uint32_t result = executeHelloLangFunction(func, args, nargs);
+    ValkeyModule_Assert(type == VMSE_EVAL || type == VMSE_FUNCTION);
+
+    HelloFunc *func = (HelloFunc *)compiled_function->function;
+    uint32_t result;
+    ValkeyModuleScriptingEngineExecutionState state = executeHelloLangFunction(server_ctx, func, args, nargs, &result);
+    ValkeyModule_Assert(state == VMSE_STATE_KILLED || state == VMSE_STATE_EXECUTING);
+
+    if (state == VMSE_STATE_KILLED) {
+        if (type == VMSE_EVAL) {
+            ValkeyModule_ReplyWithError(module_ctx, "ERR Script killed by user with SCRIPT KILL.");
+            return;
+        }
+        if (type == VMSE_FUNCTION) {
+            ValkeyModule_ReplyWithError(module_ctx, "ERR Script killed by user with FUNCTION KILL");
+            return;
+        }
+    }
 
     ValkeyModule_ReplyWithLongLong(module_ctx, result);
 }
 
-int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
+static ValkeyModuleScriptingEngineCallableLazyEvalReset *helloResetEvalEnv(ValkeyModuleCtx *module_ctx,
+                                                                           ValkeyModuleScriptingEngineCtx *engine_ctx,
+                                                                           int async) {
+    VALKEYMODULE_NOT_USED(module_ctx);
+    VALKEYMODULE_NOT_USED(engine_ctx);
+    VALKEYMODULE_NOT_USED(async);
+    return NULL;
+}
+
+int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx,
+                        ValkeyModuleString **argv,
                         int argc) {
     VALKEYMODULE_NOT_USED(argv);
     VALKEYMODULE_NOT_USED(argc);
@@ -355,10 +461,11 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
 
     ValkeyModuleScriptingEngineMethods methods = {
         .version = VALKEYMODULE_SCRIPTING_ENGINE_ABI_VERSION,
-        .create_functions_library = createHelloLangEngine,
+        .compile_code = createHelloLangEngine,
+        .free_function = engineFreeFunction,
         .call_function = callHelloLangFunction,
         .get_function_memory_overhead = engineFunctionMemoryOverhead,
-        .free_function = engineFreeFunction,
+	    .reset_eval_env = helloResetEvalEnv,
         .get_memory_info = engineGetMemoryInfo,
     };
 
@@ -366,7 +473,6 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
                                          "HELLO",
                                          hello_ctx,
                                          &methods);
-
     return VALKEYMODULE_OK;
 }
 

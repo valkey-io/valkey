@@ -51,6 +51,10 @@ start_server {tags {"modules"}} {
         assert_error {ERR Function already exists in the library} {r function load "#!hello name=mylib2\nFUNCTION foo\nARGS 0\nRETURN\nFUNCTION foo\nARGS 0\nRETURN"}
     }
 
+    test {Load script with syntax error} {
+        assert_error {ERR Failed to parse instruction: 'SEND'} {r function load replace "#!hello name=mylib3\nFUNCTION foo\nARGS 0\nSEND"}
+    }
+
     test {Call scripting engine function: calling foo works} {
         r fcall foo 0 134
     } {134}
@@ -117,6 +121,59 @@ start_server {tags {"modules"}} {
 
         set result [r fcall bar 0]
         assert_equal $result 432
+    }
+
+    test {Test function kill} {
+        set rd [valkey_deferring_client]
+        r config set busy-reply-threshold 10
+        r function load REPLACE "#!hello name=mylib\nFUNCTION wait\nARGS 0\nSLEEP\nARGS 0\nRETURN"
+        $rd fcall wait 0 100
+        after 1000
+        catch {r ping} e
+        assert_match {BUSY*} $e
+        assert_match {running_script {name wait command {fcall wait 0 100} duration_ms *} engines {*}} [r FUNCTION STATS]
+        r function kill
+        after 1000 ;
+        assert_equal [r ping] "PONG"
+        assert_error {ERR Script killed by user with FUNCTION KILL*} {$rd read}
+        $rd ping
+        assert_equal [$rd read] "PONG"
+        $rd close
+    }
+
+    test {Test eval execution} {
+        set result [r eval "#!hello\nFUNCTION foo\nARGS 0\nRETURN" 0 145]
+        assert_equal $result 145
+    }
+
+    test {Test evalsha execution} {
+        set sha [r script load "#!hello\nFUNCTION foo\nARGS 0\nRETURN"]
+        set result [r evalsha $sha 0 167]
+        assert_equal $result 167
+    }
+
+    test {Test script exists} {
+        set sha [r script load "#!hello\nFUNCTION foo\nARGS 0\nRETURN"]
+        set result [r script exists $sha]
+        assert_equal $result 1
+    }
+
+    test {Test script flush sync} {
+        set sha [r script load "#!hello\nFUNCTION foo\nARGS 0\nRETURN"]
+        set result [r script exists $sha]
+        assert_equal $result 1
+        r script flush SYNC
+        set result [r script exists $sha]
+        assert_equal $result 0
+    }
+
+    test {Test script flush async} {
+        set sha [r script load "#!hello\nFUNCTION foo\nARGS 0\nRETURN"]
+        set result [r script exists $sha]
+        assert_equal $result 1
+        r script flush ASYNC
+        set result [r script exists $sha]
+        assert_equal $result 0
     }
 
     test {Unload scripting engine module} {

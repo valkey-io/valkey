@@ -515,6 +515,7 @@ start_server {tags {"multi"}} {
             {select *}
             {set foo bar}
         }
+        close_replication_stream $repl
         r replicaof no one
     } {OK} {needs:repl cluster:skip}
 
@@ -900,6 +901,60 @@ start_server {tags {"multi"}} {
         r flushall
         r ping
      }
+
+    test {MULTI is rejected when CLIENT REPLY is ON/OFF/SKIP} {
+        r multi
+        assert_error "ERR Command not allowed inside a transaction" {r client reply on}
+        assert_error "EXECABORT *" {r exec}
+
+        r multi
+        assert_error "ERR Command not allowed inside a transaction" {r client reply skip}
+        assert_error "EXECABORT *" {r exec}
+
+        r multi
+        assert_error "ERR Command not allowed inside a transaction" {r client reply off}
+        assert_error "EXECABORT *" {r exec}
+
+        r client reply on
+    }
+
+    test "CLIENT REPLY OFF/SKIP: multi command" {
+        set rd [valkey_deferring_client]
+
+        # Turning the reply off
+        $rd client reply off
+
+        $rd multi
+        # These replies were skipped.
+        $rd ping pong2
+        $rd ping pong3
+        $rd exec
+
+        $rd client reply on
+        $rd ping
+        assert_equal {OK} [$rd read]
+        assert_equal {PONG} [$rd read]
+
+        $rd client reply skip
+
+        # Just this command was skipped
+        $rd multi
+
+        $rd ping pong2
+        $rd ping pong3
+        $rd exec
+        assert_equal {QUEUED} [$rd read]
+        assert_equal {QUEUED} [$rd read]
+        assert_equal {pong2 pong3} [$rd read]
+
+        $rd client reply on
+        $rd ping
+        assert_equal {OK} [$rd read]
+        assert_equal {PONG} [$rd read]
+
+        $rd close
+    }
+
 }
 
 start_server {overrides {appendonly {yes} appendfilename {appendonly.aof} appendfsync always} tags {external:skip}} {

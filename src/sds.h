@@ -88,12 +88,38 @@ struct __attribute__((__packed__)) sdshdr64 {
 #define SDS_TYPE_BITS 3
 #define SDS_HDR_VAR(T, s) struct sdshdr##T *sh = (void *)((s) - (sizeof(struct sdshdr##T)));
 #define SDS_HDR(T, s) ((struct sdshdr##T *)((s) - (sizeof(struct sdshdr##T))))
-#define SDS_TYPE_5_LEN(f) ((f) >> SDS_TYPE_BITS)
+#define SDS_TYPE_5_LEN(f) ((unsigned char)(f) >> SDS_TYPE_BITS)
+
+static inline unsigned char sdsType(const_sds s) {
+    unsigned char flags = s[-1];
+    return flags & SDS_TYPE_MASK;
+}
+
+/* Returns a user data bit stored in the SDS header by sdsSetAuxBit. The bit
+ * index is 0-4. Returns 0 or 1. Always returns 0 for SDS_TYPE_5. */
+static inline int sdsGetAuxBit(const_sds s, int bit) {
+    unsigned char flags = s[-1];
+    return sdsType(s) == SDS_TYPE_5 ? 0 : (flags >> (SDS_TYPE_BITS + bit) & 1U);
+}
+
+/* Stores a bit in an unused area in the SDS header, except for SDS_TYPE_5. The
+ * bit index is 0-4. The value is 0 or 1. The aux bits are lost if the SDS is
+ * auto-resized. This is only for special uses like immutable SDS embedded in
+ * other structures. */
+static inline void sdsSetAuxBit(sds s, int bit, int value) {
+    if (sdsType(s) == SDS_TYPE_5) return;
+    unsigned char flags = s[-1];
+    if (value) {
+        flags |= 1 << (SDS_TYPE_BITS + bit);
+    } else {
+        flags &= ~(1 << (SDS_TYPE_BITS + bit));
+    }
+    s[-1] = (char)flags;
+}
 
 static inline size_t sdslen(const_sds s) {
-    unsigned char flags = s[-1];
-    switch (flags & SDS_TYPE_MASK) {
-    case SDS_TYPE_5: return SDS_TYPE_5_LEN(flags);
+    switch (sdsType(s)) {
+    case SDS_TYPE_5: return SDS_TYPE_5_LEN(s[-1]);
     case SDS_TYPE_8: return SDS_HDR(8, s)->len;
     case SDS_TYPE_16: return SDS_HDR(16, s)->len;
     case SDS_TYPE_32: return SDS_HDR(32, s)->len;
@@ -188,7 +214,7 @@ sds sdstrynewlen(const void *init, size_t initlen);
 sds sdsnew(const char *init);
 sds sdsempty(void);
 sds sdsdup(const_sds s);
-size_t sdscopytobuffer(unsigned char *buf, size_t buf_len, const_sds s, uint8_t *hdr_size);
+sds sdswrite(char *buf, size_t bufsize, char type, const char *init, size_t initlen);
 void sdsfree(sds s);
 void sdsfreeVoid(void *s);
 sds sdsgrowzero(sds s, size_t len);
@@ -233,6 +259,8 @@ typedef sds (*sdstemplate_callback_t)(const_sds variable, void *arg);
 sds sdstemplate(const char *template, sdstemplate_callback_t cb_func, void *cb_arg);
 
 /* Low level functions exposed to the user API */
+int sdsHdrSize(char type);
+char sdsReqType(size_t string_size);
 sds sdsMakeRoomFor(sds s, size_t addlen);
 sds sdsMakeRoomForNonGreedy(sds s, size_t addlen);
 void sdsIncrLen(sds s, ssize_t incr);
@@ -240,6 +268,12 @@ sds sdsRemoveFreeSpace(sds s, int would_regrow);
 sds sdsResize(sds s, size_t size, int would_regrow);
 size_t sdsAllocSize(const_sds s);
 void *sdsAllocPtr(const_sds s);
+
+/* Returns the minimum required size to store an sds string of the given length
+ * and type. */
+static inline size_t sdsReqSize(size_t len, char type) {
+    return len + sdsHdrSize(type) + 1;
+}
 
 /* Export the allocator used by SDS to the program using SDS.
  * Sometimes the program SDS is linked to, may use a different set of

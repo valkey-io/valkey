@@ -282,7 +282,7 @@ foreach type {listpack quicklist} {
 }
 
 run_solo {list-large-memory} {
-start_server [list overrides [list save ""] ] {
+start_server [list overrides [list save ""] tags {"large-memory"}] {
 
 # test if the server supports such large configs (avoid 32 bit builds)
 catch {
@@ -2429,5 +2429,28 @@ foreach {pop} {BLPOP BLMPOP_RIGHT} {
 
         close_replication_stream $repl
     } {} {needs:repl}
+
+    test "Blocking timeout following PAUSE should honor the timeout" {
+        # cleanup first
+        r del mylist
+        
+        # create a test client
+        set rd [valkey_deferring_client]
+        
+        # first PAUSE all writes for a very long time
+        r client pause 10000000000000 write
+
+        # block a client on the list
+        $rd BLPOP mylist 1
+        wait_for_blocked_clients_count 1
+        
+        # now unpause the writes
+        r client unpause
+
+        # client should time-out
+        wait_for_blocked_clients_count 0
+        
+        $rd close
+    }
 
 } ;# stop servers

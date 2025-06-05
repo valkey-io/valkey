@@ -26,53 +26,200 @@
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  * POSSIBILITY OF SUCH DAMAGE.
  */
+/*
+ * Copyright (c) Valkey Contributors
+ * All rights reserved.
+ * SPDX-License-Identifier: BSD-3-Clause
+ */
 
 #include "server.h"
 #include <math.h>
+#include <stdbool.h>
 
 /*-----------------------------------------------------------------------------
  * Hash Entry API
  *----------------------------------------------------------------------------*/
 
-struct hashTypeEntry {
-    sds value;
-    unsigned char field_offset;
-    unsigned char field_data[];
-};
+/* The hashTypeEntry pointer is the field sds. We encode the entry layout type
+ * in the field SDS header. Field type SDS_TYPE_5 doesn't have any spare bits to
+ * encode this so we use it only for the first layout type.
+ *
+ * Entry with embedded value, used for small sizes. The value is stored as
+ * SDS_TYPE_8. The field can use any SDS type.
+ *
+ *     +--------------+---------------+
+ *     | field        | value         |
+ *     | hdr "foo" \0 | hdr8 "bar" \0 |
+ *     +------^-------+---------------+
+ *            |
+ *            |
+ *          entry pointer = field sds
+ *
+ * Entry with value pointer, used for larger fields and values. The field is SDS
+ * type 8 or higher.
+ *
+ *     +-------+--------------+
+ *     | value | field        |
+ *     | ptr   | hdr "foo" \0 |
+ *     +-------+------^-------+
+ *                    |
+ *                    |
+ *                 entry pointer = field sds
+ */
+
+/* The maximum allocation size we want to use for entries with embedded
+ * values. */
+#define EMBED_VALUE_MAX_ALLOC_SIZE 128
+
+/* SDS aux flag. If set, it indicates that the entry has an embedded value
+ * pointer located in memory before the embedded field. If unset, the entry
+ * instead has an embedded value located after the embedded field. */
+#define FIELD_SDS_AUX_BIT_ENTRY_HAS_VALUE_PTR 0
+
+static inline bool entryHasValuePtr(const hashTypeEntry *entry) {
+    return sdsGetAuxBit(entry, FIELD_SDS_AUX_BIT_ENTRY_HAS_VALUE_PTR);
+}
+
+/* Returns the location of a pointer to a separately allocated value. Only for
+ * an entry without an embedded value. */
+static sds *hashTypeEntryGetValueRef(const hashTypeEntry *entry) {
+    serverAssert(entryHasValuePtr(entry));
+    char *field_data = sdsAllocPtr(entry);
+    field_data -= sizeof(sds *);
+    return (sds *)field_data;
+}
 
 /* takes ownership of value, does not take ownership of field */
 hashTypeEntry *hashTypeCreateEntry(sds field, sds value) {
-    size_t field_size = sdscopytobuffer(NULL, 0, field, NULL);
-
-    size_t total_size = sizeof(hashTypeEntry) + field_size;
-    hashTypeEntry *entry = zmalloc(total_size);
-
-    entry->value = value;
-    sdscopytobuffer(entry->field_data, field_size, field, &entry->field_offset);
-    return entry;
+    size_t field_len = sdslen(field);
+    int field_sds_type = sdsReqType(field_len);
+    size_t field_size = sdsReqSize(field_len, field_sds_type);
+    size_t value_len = sdslen(value);
+    size_t value_size = sdsReqSize(value_len, SDS_TYPE_8);
+    sds embedded_field_sds;
+    if (field_size + value_size <= EMBED_VALUE_MAX_ALLOC_SIZE) {
+        /* Embed field and value. Value is fixed to SDS_TYPE_8. Unused
+         * allocation space is recorded in the embedded value's SDS header.
+         *
+         *     +--------------+---------------+
+         *     | field        | value         |
+         *     | hdr "foo" \0 | hdr8 "bar" \0 |
+         *     +--------------+---------------+
+         */
+        size_t min_size = field_size + value_size;
+        size_t buf_size;
+        char *buf = zmalloc_usable(min_size, &buf_size);
+        embedded_field_sds = sdswrite(buf, field_size, field_sds_type, field, field_len);
+        sdswrite(buf + field_size, buf_size - field_size, SDS_TYPE_8, value, value_len);
+        /* Field sds aux bits are zero, which we use for this entry encoding. */
+        sdsSetAuxBit(embedded_field_sds, FIELD_SDS_AUX_BIT_ENTRY_HAS_VALUE_PTR, 0);
+        serverAssert(!entryHasValuePtr(embedded_field_sds));
+        sdsfree(value);
+    } else {
+        /* Embed field, but not value. Field must be >= SDS_TYPE_8 to encode to
+         * indicate this type of entry.
+         *
+         *     +-------+---------------+
+         *     | value | field         |
+         *     | ptr   | hdr8 "foo" \0 |
+         *     +-------+---------------+
+         */
+        char field_sds_type = sdsReqType(field_len);
+        if (field_sds_type == SDS_TYPE_5) field_sds_type = SDS_TYPE_8;
+        field_size = sdsReqSize(field_len, field_sds_type);
+        size_t alloc_size = sizeof(sds *) + field_size;
+        char *buf = zmalloc(alloc_size);
+        *(sds *)buf = value;
+        embedded_field_sds = sdswrite(buf + sizeof(sds *), field_size, field_sds_type, field, field_len);
+        /* Store the entry encoding type in sds aux bits. */
+        sdsSetAuxBit(embedded_field_sds, FIELD_SDS_AUX_BIT_ENTRY_HAS_VALUE_PTR, 1);
+        serverAssert(entryHasValuePtr(embedded_field_sds));
+    }
+    return (void *)embedded_field_sds;
 }
 
+/* The entry pointer is the field sds, but that's an implementation detail. */
 sds hashTypeEntryGetField(const hashTypeEntry *entry) {
-    const unsigned char *field = entry->field_data + entry->field_offset;
-    return (sds)field;
+    return (sds)entry;
 }
 
 sds hashTypeEntryGetValue(const hashTypeEntry *entry) {
-    return entry->value;
+    if (entryHasValuePtr(entry)) {
+        return *hashTypeEntryGetValueRef(entry);
+    } else {
+        /* Skip field content, field null terminator and value sds8 hdr. */
+        size_t offset = sdslen(entry) + 1 + sdsHdrSize(SDS_TYPE_8);
+        return (char *)entry + offset;
+    }
 }
 
-/* frees previous value, takes ownership of new value */
-static void hashTypeEntryReplaceValue(hashTypeEntry *entry, sds value) {
-    sdsfree(entry->value);
-    entry->value = value;
+/* Returns the address of the entry allocation. */
+static void *hashTypeEntryAllocPtr(hashTypeEntry *entry) {
+    char *buf = sdsAllocPtr(entry);
+    if (entryHasValuePtr(entry)) {
+        buf -= sizeof(sds *);
+    }
+    return buf;
 }
 
-/* Returns allocation size of hashTypeEntry and data owned by hashTypeEntry,
- * even if not embedded in the same allocation. */
-size_t hashTypeEntryAllocSize(hashTypeEntry *entry) {
-    size_t size = zmalloc_usable_size(entry);
-    size += sdsAllocSize(entry->value);
-    return size;
+/* Frees previous value, takes ownership of new value, returns entry (may be
+ * reallocated). */
+static hashTypeEntry *hashTypeEntryReplaceValue(hashTypeEntry *entry, sds value) {
+    sds field = (sds)entry;
+    size_t field_size = sdsHdrSize(sdsType(field)) + sdsalloc(field) + 1;
+    size_t value_len = sdslen(value);
+    size_t value_size = sdsReqSize(value_len, SDS_TYPE_8);
+    if (!entryHasValuePtr(entry)) {
+        /* Reuse the allocation if the new value fits and leaves no more than
+         * 25% unused space after replacing the value. */
+        char *alloc_ptr = sdsAllocPtr(entry);
+        size_t required_size = field_size + value_size;
+        size_t alloc_size;
+        if (required_size <= EMBED_VALUE_MAX_ALLOC_SIZE &&
+            required_size <= (alloc_size = hashTypeEntryMemUsage(entry)) &&
+            required_size >= alloc_size * 3 / 4) {
+            /* It fits in the allocation and leaves max 25% unused space. */
+            sdswrite(alloc_ptr + field_size, alloc_size - field_size, SDS_TYPE_8, value, value_len);
+            sdsfree(value);
+            return entry;
+        }
+        hashTypeEntry *new_entry = hashTypeCreateEntry(hashTypeEntryGetField(entry), value);
+        freeHashTypeEntry(entry);
+        return new_entry;
+    } else {
+        /* The value pointer is located before the embedded field. */
+        if (field_size + value_size <= EMBED_VALUE_MAX_ALLOC_SIZE) {
+            /* Convert to entry with embedded value. */
+            hashTypeEntry *new_entry = hashTypeCreateEntry(field, value);
+            freeHashTypeEntry(entry);
+            return new_entry;
+        } else {
+            /* Not embedded value. */
+            sds *value_ref = hashTypeEntryGetValueRef(entry);
+            sdsfree(*value_ref);
+            *value_ref = value;
+            return entry;
+        }
+    }
+}
+
+/* Returns memory usage of a hashTypeEntry, including all allocations owned by
+ * the hashTypeEntry. */
+size_t hashTypeEntryMemUsage(hashTypeEntry *entry) {
+    size_t mem = 0;
+    if (entryHasValuePtr(entry)) {
+        /* Alloc size is not stored in the embedded field. */
+        mem = zmalloc_usable_size(hashTypeEntryAllocPtr(entry));
+        mem += sdsAllocSize(*hashTypeEntryGetValueRef(entry));
+    } else {
+        /* Remaining alloc size is encoded in the embedded value SDS header. */
+        sds field = entry;
+        sds value = (char *)entry + sdslen(field) + 1 + sdsHdrSize(SDS_TYPE_8);
+        size_t field_size = sdsHdrSize(sdsType(field)) + sdslen(field) + 1;
+        size_t value_size = sdsHdrSize(SDS_TYPE_8) + sdsalloc(value) + 1;
+        mem = field_size + value_size;
+    }
+    return mem;
 }
 
 /* Defragments a hashtable entry (field-value pair) if needed, using the
@@ -83,25 +230,35 @@ size_t hashTypeEntryAllocSize(hashTypeEntry *entry) {
  * If the location of the hashTypeEntry changed we return the new location,
  * otherwise we return NULL. */
 hashTypeEntry *hashTypeEntryDefrag(hashTypeEntry *entry, void *(*defragfn)(void *), sds (*sdsdefragfn)(sds)) {
-    hashTypeEntry *new_entry = defragfn(entry);
-    if (new_entry) entry = new_entry;
-
-    sds new_value = sdsdefragfn(entry->value);
-    if (new_value) entry->value = new_value;
-
-    return new_entry;
+    if (entryHasValuePtr(entry)) {
+        sds *value_ref = hashTypeEntryGetValueRef(entry);
+        sds new_value = sdsdefragfn(*value_ref);
+        if (new_value) *value_ref = new_value;
+    }
+    char *allocation = hashTypeEntryAllocPtr(entry);
+    char *new_allocation = defragfn(allocation);
+    if (new_allocation != NULL) {
+        /* Return the same offset into the new allocation as the entry's offset
+         * in the old allocation. */
+        return new_allocation + ((char *)entry - allocation);
+    }
+    return NULL;
 }
 
 /* Used for releasing memory to OS to avoid unnecessary CoW. Called when we've
  * forked and memory won't be used again. See zmadvise_dontneed() */
 void dismissHashTypeEntry(hashTypeEntry *entry) {
     /* Only dismiss values memory since the field size usually is small. */
-    dismissSds(entry->value);
+    if (entryHasValuePtr(entry)) {
+        dismissSds(*hashTypeEntryGetValueRef(entry));
+    }
 }
 
 void freeHashTypeEntry(hashTypeEntry *entry) {
-    sdsfree(entry->value);
-    zfree(entry);
+    if (entryHasValuePtr(entry)) {
+        sdsfree(*hashTypeEntryGetValueRef(entry));
+    }
+    zfree(hashTypeEntryAllocPtr(entry));
 }
 
 /*-----------------------------------------------------------------------------
@@ -259,9 +416,6 @@ int hashTypeExists(robj *o, sds field) {
  * semantics of copying the values if needed.
  *
  */
-#define HASH_SET_TAKE_FIELD (1 << 0)
-#define HASH_SET_TAKE_VALUE (1 << 1)
-#define HASH_SET_COPY 0
 int hashTypeSet(robj *o, sds field, sds value, int flags) {
     int update = 0;
 
@@ -319,7 +473,12 @@ int hashTypeSet(robj *o, sds field, sds value, int flags) {
             hashtableInsertAtPosition(ht, entry, &position);
         } else {
             /* exists: replace value */
-            hashTypeEntryReplaceValue(existing, v);
+            void *new_entry = hashTypeEntryReplaceValue(existing, v);
+            if (new_entry != existing) {
+                /* It has been reallocated. */
+                int replaced = hashtableReplaceReallocatedEntry(ht, existing, new_entry);
+                serverAssert(replaced);
+            }
             update = 1;
         }
     } else {
@@ -382,7 +541,7 @@ void hashTypeInitIterator(robj *subject, hashTypeIterator *hi) {
         hi->fptr = NULL;
         hi->vptr = NULL;
     } else if (hi->encoding == OBJ_ENCODING_HASHTABLE) {
-        hashtableInitIterator(&hi->iter, subject->ptr);
+        hashtableInitIterator(&hi->iter, subject->ptr, 0);
     } else {
         serverPanic("Unknown hash encoding");
     }
@@ -643,10 +802,10 @@ void hsetnxCommand(client *c) {
     } else {
         hashTypeTryConversion(o, c->argv, 2, 3);
         hashTypeSet(o, c->argv[2]->ptr, c->argv[3]->ptr, HASH_SET_COPY);
-        addReply(c, shared.cone);
         signalModifiedKey(c, c->db, c->argv[1]);
         notifyKeyspaceEvent(NOTIFY_HASH, "hset", c->argv[1], c->db->id);
         server.dirty++;
+        addReply(c, shared.cone);
     }
 }
 
@@ -664,6 +823,10 @@ void hsetCommand(client *c) {
 
     for (i = 2; i < c->argc; i += 2) created += !hashTypeSet(o, c->argv[i]->ptr, c->argv[i + 1]->ptr, HASH_SET_COPY);
 
+    signalModifiedKey(c, c->db, c->argv[1]);
+    notifyKeyspaceEvent(NOTIFY_HASH, "hset", c->argv[1], c->db->id);
+    server.dirty += (c->argc - 2) / 2;
+
     /* HMSET (deprecated) and HSET return value is different. */
     char *cmdname = c->argv[0]->ptr;
     if (cmdname[1] == 's' || cmdname[1] == 'S') {
@@ -673,9 +836,6 @@ void hsetCommand(client *c) {
         /* HMSET */
         addReply(c, shared.ok);
     }
-    signalModifiedKey(c, c->db, c->argv[1]);
-    notifyKeyspaceEvent(NOTIFY_HASH, "hset", c->argv[1], c->db->id);
-    server.dirty += (c->argc - 2) / 2;
 }
 
 void hincrbyCommand(client *c) {
@@ -707,10 +867,10 @@ void hincrbyCommand(client *c) {
     value += incr;
     new = sdsfromlonglong(value);
     hashTypeSet(o, c->argv[2]->ptr, new, HASH_SET_TAKE_VALUE);
-    addReplyLongLong(c, value);
     signalModifiedKey(c, c->db, c->argv[1]);
     notifyKeyspaceEvent(NOTIFY_HASH, "hincrby", c->argv[1], c->db->id);
     server.dirty++;
+    addReplyLongLong(c, value);
 }
 
 void hincrbyfloatCommand(client *c) {
@@ -750,10 +910,10 @@ void hincrbyfloatCommand(client *c) {
     int len = ld2string(buf, sizeof(buf), value, LD_STR_HUMAN);
     new = sdsnewlen(buf, len);
     hashTypeSet(o, c->argv[2]->ptr, new, HASH_SET_TAKE_VALUE);
-    addReplyBulkCBuffer(c, buf, len);
     signalModifiedKey(c, c->db, c->argv[1]);
     notifyKeyspaceEvent(NOTIFY_HASH, "hincrbyfloat", c->argv[1], c->db->id);
     server.dirty++;
+    addReplyBulkCBuffer(c, buf, len);
 
     /* Always replicate HINCRBYFLOAT as an HSET command with the final value
      * in order to make sure that differences in float precision or formatting
@@ -929,7 +1089,7 @@ void hscanCommand(client *c) {
     robj *o;
     unsigned long long cursor;
 
-    if (parseScanCursorOrReply(c, c->argv[2], &cursor) == C_ERR) return;
+    if (parseScanCursorOrReply(c, c->argv[2]->ptr, &cursor) == C_ERR) return;
     if ((o = lookupKeyReadOrReply(c, c->argv[1], shared.emptyscan)) == NULL || checkType(c, o, OBJ_HASH)) return;
     scanGenericCommand(c, o, cursor);
 }
@@ -1077,50 +1237,41 @@ void hrandfieldWithCountCommand(client *c, long l, int withvalues) {
      * used into CASE 4 is highly inefficient. */
     if (count * HRANDFIELD_SUB_STRATEGY_MUL > size) {
         /* Hashtable encoding (generic implementation) */
-        dict *d = dictCreate(&sdsReplyDictType);
-        dictExpand(d, size);
-        hashTypeIterator hi;
-        hashTypeInitIterator(hash, &hi);
+        hashtable *ht = hashtableCreate(&sdsReplyHashtableType);
+        hashtableExpand(ht, size);
+        hashtableIterator iter;
+        hashtableInitIterator(&iter, hash->ptr, 0);
+        void *entry;
 
-        /* Add all the elements into the temporary dictionary. */
-        while ((hashTypeNext(&hi)) != C_ERR) {
-            int ret = DICT_ERR;
-            sds field, value = NULL;
-
-            field = hashTypeCurrentObjectNewSds(&hi, OBJ_HASH_FIELD);
-            if (withvalues) value = hashTypeCurrentObjectNewSds(&hi, OBJ_HASH_VALUE);
-            ret = dictAdd(d, field, value);
-
-            serverAssert(ret == DICT_OK);
+        /* Add all the elements into the temporary hashtable. */
+        while (hashtableNext(&iter, &entry)) {
+            int res = hashtableAdd(ht, entry);
+            serverAssert(res);
         }
-        serverAssert(dictSize(d) == size);
-        hashTypeResetIterator(&hi);
+        serverAssert(hashtableSize(ht) == size);
+        hashtableResetIterator(&iter);
 
         /* Remove random elements to reach the right count. */
         while (size > count) {
-            dictEntry *de;
-            de = dictGetFairRandomKey(d);
-            dictUnlink(d, dictGetKey(de));
-            sdsfree(dictGetKey(de));
-            sdsfree(dictGetVal(de));
-            dictFreeUnlinkedEntry(d, de);
+            void *element;
+            hashtableFairRandomEntry(ht, &element);
+            hashtableDelete(ht, element);
             size--;
         }
 
-        /* Reply with what's in the dict and release memory */
-        dictIterator *di;
-        dictEntry *de;
-        di = dictGetIterator(d);
-        while ((de = dictNext(di)) != NULL) {
-            sds field = dictGetKey(de);
-            sds value = dictGetVal(de);
+        /* Reply with what's in the temporary hashtable and release memory */
+        hashtableInitIterator(&iter, ht, 0);
+        void *next;
+        while (hashtableNext(&iter, &next)) {
+            sds field = hashTypeEntryGetField(next);
+            sds value = hashTypeEntryGetValue(next);
             if (withvalues && c->resp > 2) addWritePreparedReplyArrayLen(wpc, 2);
-            addWritePreparedReplyBulkSds(wpc, field);
-            if (withvalues) addWritePreparedReplyBulkSds(wpc, value);
+            addWritePreparedReplyBulkCBuffer(wpc, field, sdslen(field));
+            if (withvalues) addWritePreparedReplyBulkCBuffer(wpc, value, sdslen(value));
         }
 
-        dictReleaseIterator(di);
-        dictRelease(d);
+        hashtableResetIterator(&iter);
+        hashtableRelease(ht);
     }
 
     /* CASE 4: We have a big hash compared to the requested number of elements.
@@ -1131,16 +1282,16 @@ void hrandfieldWithCountCommand(client *c, long l, int withvalues) {
         /* Hashtable encoding (generic implementation) */
         unsigned long added = 0;
         listpackEntry field, value;
-        dict *d = dictCreate(&hashDictType);
-        dictExpand(d, count);
+        hashtable *ht = hashtableCreate(&setHashtableType);
+        hashtableExpand(ht, count);
         while (added < count) {
             hashTypeRandomElement(hash, size, &field, withvalues ? &value : NULL);
 
-            /* Try to add the object to the dictionary. If it already exists
+            /* Try to add the object to the hashtable. If it already exists
              * free it, otherwise increment the number of objects we have
-             * in the result dictionary. */
+             * in the result hashtable. */
             sds sfield = hashSdsFromListpackEntry(&field);
-            if (dictAdd(d, sfield, NULL) != DICT_OK) {
+            if (!hashtableAdd(ht, sfield)) {
                 sdsfree(sfield);
                 continue;
             }
@@ -1153,7 +1304,7 @@ void hrandfieldWithCountCommand(client *c, long l, int withvalues) {
         }
 
         /* Release memory */
-        dictRelease(d);
+        hashtableRelease(ht);
     }
 }
 

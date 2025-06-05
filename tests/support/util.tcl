@@ -110,8 +110,8 @@ proc waitForBgrewriteaof r {
     }
 }
 
-proc wait_for_sync r {
-    wait_for_condition 50 100 {
+proc wait_for_sync {r {maxtries 50} {delay 100}} {
+    wait_for_condition $maxtries $delay {
         [status $r master_link_status] eq "up"
     } else {
         fail "replica didn't sync in time"
@@ -124,6 +124,31 @@ proc wait_replica_online r {
     } else {
         fail "replica didn't online in time"
     }
+}
+
+proc check_replica_acked_ofs {primary replica_host replica_port} {
+    set infostr [$primary info replication]
+    set master_repl_offset [getInfoProperty $infostr master_repl_offset]
+    if {[regexp -lineanchor "^slave\\d+:ip=$replica_host,port=$replica_port,state=online,offset=(\\d+).*\r\n" $infostr _ offset]} {
+        if {$master_repl_offset == $offset} {
+            return 1
+        }
+        return 0
+    }
+    return 0
+}
+
+proc wait_replica_acked_ofs {primary replica replica_host replica_port} {
+    $primary config set repl-ping-replica-period 3600
+    $replica config set hz 500
+    wait_for_condition 1000 50 {
+        [check_replica_acked_ofs $primary $replica_host $replica_port] eq 1
+    } else {
+        puts "INFO REPLICATION: [$primary info replication]"
+        fail "replica $replica_host:$replica_port acked offset didn't match in time"
+    }
+    $primary config set repl-ping-replica-period 10
+    $replica config set hz 10
 }
 
 proc wait_for_ofs_sync {r1 r2} {

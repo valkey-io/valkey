@@ -487,7 +487,7 @@ start_server {tags {"dual-channel-replication external:skip"}} {
             }
             wait_for_value_to_propagate_to_replica $primary $replica "key1"
             # Confirm the occurrence of a race condition.
-            wait_for_log_messages -1 {"*<Dual Channel> Psync established after rdb load*"} 0 2000 1
+            wait_for_log_messages -1 {"*Dual channel replication: Psync established after rdb load*"} 0 2000 1
         }
     }
 }
@@ -773,6 +773,7 @@ start_server {tags {"dual-channel-replication external:skip"}} {
         set load_handle0 [start_write_load $primary_host $primary_port 60]
         set load_handle1 [start_write_load $primary_host $primary_port 60]
         set load_handle2 [start_write_load $primary_host $primary_port 60]
+        set replica_loglines [count_log_lines 0]
 
         $replica config set dual-channel-replication-enabled yes
         $replica config set loglevel debug
@@ -801,12 +802,14 @@ start_server {tags {"dual-channel-replication external:skip"}} {
             # In this way, in the subsequent replicaof no one, we won't get the LOADING error if the replica reconnects
             # too quickly and enters the loading state.
             $primary debug pause-after-fork 1
+            set replica_loglines [count_log_lines 0]
             resume_process $replica_pid
             set res [wait_for_log_messages -1 {"*Unable to partial resync with replica * for lack of backlog*"} $loglines 2000 10]
             set loglines [lindex $res 1]
         }
         # Waiting for the primary to enter the paused state, that is, make sure that bgsave is triggered.
         wait_process_paused -1
+        wait_for_log_messages 0 {"*Done loading RDB*"} $replica_loglines 1000 10
         $replica replicaof no one
         # Resume the primary and make sure the sync is dropped.
         resume_process [srv -1 pid]
@@ -848,7 +851,6 @@ start_server {tags {"dual-channel-replication external:skip"}} {
         $replica config set repl-timeout 60
         $primary config set repl-backlog-size 1mb
         
-        $replica debug pause-after-fork 1
         $primary debug populate 1000 primary 100000
         # Set primary with a slow rdb generation, so that we can easily intercept loading
         # 10ms per key, with 1000 keys is 10 seconds
@@ -856,6 +858,7 @@ start_server {tags {"dual-channel-replication external:skip"}} {
 
         test "Test dual-channel-replication primary gets cob overrun during replica rdb load" {
             set cur_client_closed_count [s -1 client_output_buffer_limit_disconnections]
+            $replica debug pause-after-fork 1
             $replica replicaof $primary_host $primary_port
             wait_for_condition 500 1000 {
                 [s -1 client_output_buffer_limit_disconnections] > $cur_client_closed_count
@@ -868,7 +871,12 @@ start_server {tags {"dual-channel-replication external:skip"}} {
             } else {
                 fail "Primary did not free repl buf block after sync failure"
             }
+
+            # Increase the delay to make sure the replica doesn't start another sync
+            # after it resumes after the first one.
+            $primary config set repl-diskless-sync-delay 100
             wait_and_resume_process 0
+            $replica debug pause-after-fork 0
             set res [wait_for_log_messages -1 {"*Unable to partial resync with replica * for lack of backlog*"} $loglines 20000 1]
             set loglines [lindex $res 0]
         }

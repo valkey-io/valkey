@@ -207,7 +207,7 @@ void xorObjectDigest(serverDb *db, robj *keyobj, unsigned char *digest, robj *o)
         } else if (o->encoding == OBJ_ENCODING_SKIPLIST) {
             zset *zs = o->ptr;
             hashtableIterator iter;
-            hashtableInitIterator(&iter, zs->ht);
+            hashtableInitIterator(&iter, zs->ht, 0);
 
             void *next;
             while (hashtableNext(&iter, &next)) {
@@ -291,7 +291,7 @@ void computeDatasetDigest(unsigned char *final) {
     for (int j = 0; j < server.dbnum; j++) {
         serverDb *db = server.db + j;
         if (kvstoreSize(db->keys) == 0) continue;
-        kvstoreIterator *kvs_it = kvstoreIteratorInit(db->keys);
+        kvstoreIterator *kvs_it = kvstoreIteratorInit(db->keys, HASHTABLE_ITER_SAFE | HASHTABLE_ITER_PREFETCH_VALUES);
 
         /* hash the DB id, so the same dataset moved in a different DB will lead to a different digest */
         aux = htonl(j);
@@ -508,6 +508,9 @@ void debugCommand(client *c) {
             "    Grace period in seconds for replica main channel to establish psync.",
             "DICT-RESIZING <0|1>",
             "    Enable or disable the main dict and expire dict resizing.",
+            "CLIENT-ENFORCE-REPLY-LIST <0|1>",
+            "When set to 1, it enforces the use of the client reply list directly",
+            "    and avoids using the client's static buffer.",
             NULL};
         addExtendedReplyHelp(c, help, clusterDebugCommandExtendedHelp());
     } else if (!strcasecmp(c->argv[1]->ptr, "segfault")) {
@@ -684,12 +687,16 @@ void debugCommand(client *c) {
         if (val->type != OBJ_STRING || !sdsEncodedObject(val)) {
             addReplyError(c, "Not an sds encoded string.");
         } else {
+            /* Report the complete robj allocation size as the key's allocation
+             * size. Report 0 as allocation size for embedded values. */
+            size_t obj_alloc = zmalloc_usable_size(val);
+            size_t val_alloc = val->encoding == OBJ_ENCODING_RAW ? sdsAllocSize(val->ptr) : 0;
             addReplyStatusFormat(c,
-                                 "key_sds_len:%lld, key_sds_avail:%lld, key_zmalloc: %lld, "
-                                 "val_sds_len:%lld, val_sds_avail:%lld, val_zmalloc: %lld",
-                                 (long long)sdslen(key), (long long)sdsavail(key), (long long)sdsAllocSize(key),
+                                 "key_sds_len:%lld key_sds_avail:%lld obj_alloc:%lld "
+                                 "val_sds_len:%lld val_sds_avail:%lld val_alloc:%lld",
+                                 (long long)sdslen(key), (long long)sdsavail(key), (long long)obj_alloc,
                                  (long long)sdslen(val->ptr), (long long)sdsavail(val->ptr),
-                                 (long long)getStringObjectSdsUsedMemory(val));
+                                 (long long)val_alloc);
         }
     } else if (!strcasecmp(c->argv[1]->ptr, "listpack") && c->argc == 3) {
         robj *o;
@@ -1016,6 +1023,9 @@ void debugCommand(client *c) {
     } else if (!strcasecmp(c->argv[1]->ptr, "dict-resizing") && c->argc == 3) {
         server.dict_resizing = atoi(c->argv[2]->ptr);
         addReply(c, shared.ok);
+    } else if (!strcasecmp(c->argv[1]->ptr, "client-enforce-reply-list") && c->argc == 3) {
+        server.debug_client_enforce_reply_list = atoi(c->argv[2]->ptr);
+        addReply(c, shared.ok);
     } else if (!handleDebugClusterCommand(c)) {
         addReplySubcommandSyntaxError(c);
         return;
@@ -1088,7 +1098,7 @@ void serverLogObjectDebugInfo(const robj *o) {
     serverLog(LL_WARNING, "Object type: %u", o->type);
     serverLog(LL_WARNING, "Object encoding: %u", o->encoding);
     serverLog(LL_WARNING, "Object refcount: %d", o->refcount);
-#if UNSAFE_CRASH_REPORT
+#if defined(UNSAFE_CRASH_REPORT) && UNSAFE_CRASH_REPORT
     /* This code is now disabled. o->ptr may be unreliable to print. in some
      * cases a ziplist could have already been freed by realloc, but not yet
      * updated to o->ptr. in other cases the call to ziplistLen may need to

@@ -1589,7 +1589,7 @@ int objectSetLRUOrLFU(robj *val, long long lfu_freq, long long lru_idle, long lo
         /* If the LRU field underflows (since lru_clock is a wrapping clock),
          * we need to make it positive again. This will be handled by the unwrapping
          * code in estimateObjectIdleTime. I.e. imagine a day when lru_clock
-         * wrap arounds (happens once in some 6 months), and becomes a low
+         * wraps around (happens once in some 6 months), and becomes a low
          * value, like 10, an lru_idle of 1000 should be near LRU_CLOCK_MAX. */
         if (lru_abs < 0) lru_abs += LRU_CLOCK_MAX;
         val->lru = lru_abs;

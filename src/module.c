@@ -6837,7 +6837,7 @@ robj *moduleTypeDupOrReply(client *c, robj *fromkey, robj *tokey, int todb, robj
 }
 
 /* Register a new data type exported by the module. The parameters are the
- * following. Please for in depth documentation check the modules API
+ * following. Please for in-depth documentation check the modules API
  * documentation, especially https://valkey.io/topics/modules-native-types.
  *
  * * **name**: A 9 characters data type name that MUST be unique in the

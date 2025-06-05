@@ -1105,7 +1105,7 @@ start_server {tags {"introspection"}} {
         set qbl_backup [lindex [r config get client-query-buffer-limit] 1]
         # Set some value to maxmemory
         assert_equal [r config set maxmemory 10000002] "OK"
-        # Set another value to maxmeory together with another invalid config
+        # Set another value to maxmemory together with another invalid config
         assert_error "ERR CONFIG SET failed (possibly related to argument 'maxmemory-clients') - percentage argument must be less or equal to 100" {
             r config set maxmemory 10000001 maxmemory-clients 200% client-query-buffer-limit invalid
         }

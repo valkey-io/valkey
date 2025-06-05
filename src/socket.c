@@ -289,7 +289,7 @@ static void connSocketEventHandler(struct aeEventLoop *el, int fd, void *clientD
      * asking us to do the reverse: never fire the writable event
      * after the readable. In such a case, we invert the calls.
      * This is useful when, for instance, we want to do things
-     * in the beforeSleep() hook, like fsync'ing a file to disk,
+     * in the beforeSleep() hook, like fsyncing a file to disk,
      * before replying to a client. */
     int invert = conn->flags & CONN_FLAG_WRITE_BARRIER;
 

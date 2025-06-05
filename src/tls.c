@@ -744,7 +744,7 @@ static void tlsHandleEvent(tls_connection *conn, int mask) {
          * asking us to do the reverse: never fire the writable event
          * after the readable. In such a case, we invert the calls.
          * This is useful when, for instance, we want to do things
-         * in the beforeSleep() hook, like fsynching a file to disk,
+         * in the beforeSleep() hook, like fsyncing a file to disk,
          * before replying to a client. */
         int invert = conn->c.flags & CONN_FLAG_WRITE_BARRIER;
 

@@ -1721,11 +1721,11 @@ void rdbPipeWriteHandlerConnRemoved(struct connection *conn) {
 /* Called in diskless primary during transfer of data from the rdb pipe, when
  * the replica becomes writable again. */
 void rdbPipeWriteHandler(struct connection *conn) {
-    serverAssert(server.rdb_pipe_bufflen > 0);
+    serverAssert(server.rdb_pipe_buflen > 0);
     client *replica = connGetPrivateData(conn);
     ssize_t nwritten;
     if ((nwritten = connWrite(conn, server.rdb_pipe_buff + replica->repl_data->repldboff,
-                              server.rdb_pipe_bufflen - replica->repl_data->repldboff)) == -1) {
+                              server.rdb_pipe_buflen - replica->repl_data->repldboff)) == -1) {
         if (connGetState(conn) == CONN_STATE_CONNECTED) return; /* equivalent to EAGAIN */
         serverLog(LL_WARNING, "Write error sending DB to replica: %s", connGetLastError(conn));
         freeClient(replica);
@@ -1733,7 +1733,7 @@ void rdbPipeWriteHandler(struct connection *conn) {
     } else {
         replica->repl_data->repldboff += nwritten;
         server.stat_net_repl_output_bytes += nwritten;
-        if (replica->repl_data->repldboff < server.rdb_pipe_bufflen) {
+        if (replica->repl_data->repldboff < server.rdb_pipe_buflen) {
             replica->repl_data->repl_last_partial_write = server.unixtime;
             return; /* more data to write.. */
         }
@@ -1751,8 +1751,8 @@ void rdbPipeReadHandler(struct aeEventLoop *eventLoop, int fd, void *clientData,
     serverAssert(server.rdb_pipe_numconns_writing == 0);
 
     while (1) {
-        server.rdb_pipe_bufflen = read(fd, server.rdb_pipe_buff, PROTO_IOBUF_LEN);
-        if (server.rdb_pipe_bufflen < 0) {
+        server.rdb_pipe_buflen = read(fd, server.rdb_pipe_buff, PROTO_IOBUF_LEN);
+        if (server.rdb_pipe_buflen < 0) {
             if (errno == EAGAIN || errno == EWOULDBLOCK) return;
             serverLog(LL_WARNING, "Diskless rdb transfer, read error sending DB to replicas: %s", strerror(errno));
             for (i = 0; i < server.rdb_pipe_numconns; i++) {
@@ -1766,7 +1766,7 @@ void rdbPipeReadHandler(struct aeEventLoop *eventLoop, int fd, void *clientData,
             return;
         }
 
-        if (server.rdb_pipe_bufflen == 0) {
+        if (server.rdb_pipe_buflen == 0) {
             /* EOF - write end was closed. */
             int stillUp = 0;
             aeDeleteFileEvent(server.el, server.rdb_pipe_read, AE_READABLE);
@@ -1792,7 +1792,7 @@ void rdbPipeReadHandler(struct aeEventLoop *eventLoop, int fd, void *clientData,
             if (!conn) continue;
 
             client *replica = connGetPrivateData(conn);
-            if ((nwritten = connWrite(conn, server.rdb_pipe_buff, server.rdb_pipe_bufflen)) == -1) {
+            if ((nwritten = connWrite(conn, server.rdb_pipe_buff, server.rdb_pipe_buflen)) == -1) {
                 if (connGetState(conn) != CONN_STATE_CONNECTED) {
                     serverLog(LL_WARNING, "Diskless rdb transfer, write error sending DB to replica: %s",
                               connGetLastError(conn));
@@ -1810,7 +1810,7 @@ void rdbPipeReadHandler(struct aeEventLoop *eventLoop, int fd, void *clientData,
             }
             /* If we were unable to write all the data to one of the replicas,
              * setup write handler (and disable pipe read handler, below) */
-            if (nwritten != server.rdb_pipe_bufflen) {
+            if (nwritten != server.rdb_pipe_buflen) {
                 replica->repl_data->repl_last_partial_write = server.unixtime;
                 server.rdb_pipe_numconns_writing++;
                 connSetWriteHandler(conn, rdbPipeWriteHandler);

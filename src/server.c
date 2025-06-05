@@ -2857,7 +2857,7 @@ void initServer(void) {
     server.rdb_pipe_numconns = 0;
     server.rdb_pipe_numconns_writing = 0;
     server.rdb_pipe_buff = NULL;
-    server.rdb_pipe_bufflen = 0;
+    server.rdb_pipe_buflen = 0;
     server.rdb_bgsave_scheduled = 0;
     server.child_info_pipe[0] = -1;
     server.child_info_pipe[1] = -1;

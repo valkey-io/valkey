@@ -3508,7 +3508,7 @@ static void backgroundSaveDoneHandlerSocket(int exitcode, int bysignal) {
     server.rdb_pipe_numconns_writing = 0;
     zfree(server.rdb_pipe_buff);
     server.rdb_pipe_buff = NULL;
-    server.rdb_pipe_bufflen = 0;
+    server.rdb_pipe_buflen = 0;
 }
 
 /* When a background RDB saving/transfer terminates, call the right handler. */

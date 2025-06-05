@@ -34,8 +34,8 @@ static monotime getMonotonicUs_x86(void) {
 }
 
 static void monotonicInit_x86linux(void) {
-    const int bufflen = 256;
-    char buf[bufflen];
+    const int buflen = 256;
+    char buf[buflen];
     regex_t cpuGhzRegex, constTscRegex;
     const size_t nmatch = 2;
     regmatch_t pmatch[nmatch];
@@ -56,7 +56,7 @@ static void monotonicInit_x86linux(void) {
 
     FILE *cpuinfo = fopen("/proc/cpuinfo", "r");
     if (cpuinfo != NULL) {
-        while (fgets(buf, bufflen, cpuinfo) != NULL) {
+        while (fgets(buf, buflen, cpuinfo) != NULL) {
             if (regexec(&cpuGhzRegex, buf, nmatch, pmatch, 0) == 0) {
                 buf[pmatch[1].rm_eo] = '\0';
                 double ghz = atof(&buf[pmatch[1].rm_so]);
@@ -64,7 +64,7 @@ static void monotonicInit_x86linux(void) {
                 break;
             }
         }
-        while (fgets(buf, bufflen, cpuinfo) != NULL) {
+        while (fgets(buf, buflen, cpuinfo) != NULL) {
             if (regexec(&constTscRegex, buf, nmatch, pmatch, 0) == 0) {
                 constantTsc = 1;
                 break;

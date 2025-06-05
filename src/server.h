@@ -1880,7 +1880,7 @@ struct valkeyServer {
     int rdb_pipe_numconns;                /* target of diskless rdb fork child. */
     int rdb_pipe_numconns_writing;        /* Number of rdb conns with pending writes. */
     char *rdb_pipe_buff;                  /* In diskless replication, this buffer holds data */
-    int rdb_pipe_bufflen;                 /* that was read from the rdb pipe. */
+    int rdb_pipe_buflen;                  /* that was read from the rdb pipe. */
     int rdb_key_save_delay;               /* Delay in microseconds between keys while
                                            * writing aof or rdb. (for testings). negative
                                            * value means fractions of microseconds (on average). */

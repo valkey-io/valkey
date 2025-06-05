@@ -52,7 +52,8 @@ static const unsigned char bitsinbyte[256] = {
     6, 7, 3, 4, 4, 5, 4, 5, 5, 6, 4, 5, 5, 6, 5, 6, 6, 7, 4, 5, 5, 6, 5, 6, 6, 7, 5, 6, 6, 7, 6, 7, 7, 8};
 
 #if HAVE_X86_SIMD
-ATTRIBUTE_TARGET_AVX512
+//ATTRIBUTE_TARGET_AVX512
+valkey_attribute_target("avx512f,avx512bw,avx512vpopcntdq")
 long long popcountAVX512(void *s, long count) {
     const size_t chunks = count / 64;
     uint8_t *ptr = (uint8_t *)s;
@@ -83,7 +84,8 @@ long long popcountAVX512(void *s, long count) {
 
 /* The SIMD version of popcount enhances performance through parallel lookup tables which is based on the following article:
  * https://arxiv.org/pdf/1611.07612 */
-ATTRIBUTE_TARGET_AVX2
+//ATTRIBUTE_TARGET_AVX2
+valkey_attribute_target("avx2")
 long long popcountAVX2(void *s, long count) {
     long i = 0;
     unsigned char *p = (unsigned char *)s;
@@ -269,14 +271,17 @@ long long popcountNEON(void *s, long n) {
  * work with an input string length up to 512 MB or more (server.proto_max_bulk_len) */
 long long serverPopcount(void *s, long count) {
 #if HAVE_X86_SIMD
+    __builtin_cpu_init();
     if (count >= 64) {
         if (__builtin_cpu_supports("avx512f") && __builtin_cpu_supports("avx512bw") && __builtin_cpu_supports("avx512vpopcntdq")) {
             return popcountAVX512(s, count);
-        } else {
+        } else if (__builtin_cpu_supports("avx2")) {
             return popcountAVX2(s, count);
         }
     } else if (count >= 32) {
-        return popcountAVX2(s, count);
+        if (__builtin_cpu_supports("avx2")) {
+            return popcountAVX2(s, count);
+        }
     }
 #endif
 #ifdef __aarch64__

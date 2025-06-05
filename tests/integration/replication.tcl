@@ -451,7 +451,7 @@ start_server {tags {"repl external:skip"} overrides {save {}}} {
             # to the slave.
             after 5000
 
-            # Stop the ability of the slave to process data by sendig
+            # Stop the ability of the slave to process data by sending
             # a script that will put it in BUSY state.
             $slave eval {for i=1,3000000000 do end} 0
 

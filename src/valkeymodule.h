@@ -170,7 +170,7 @@ typedef struct ValkeyModuleStreamID {
 #define VALKEYMODULE_CTX_FLAGS_MULTI (1 << 1)
 /* The instance is a primary */
 #define VALKEYMODULE_CTX_FLAGS_PRIMARY (1 << 2)
-/* The instance is a replic */
+/* The instance is a replica */
 #define VALKEYMODULE_CTX_FLAGS_REPLICA (1 << 3)
 /* The instance is read-only (usually meaning it's a replica as well) */
 #define VALKEYMODULE_CTX_FLAGS_READONLY (1 << 4)

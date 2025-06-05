@@ -6566,12 +6566,12 @@ unsigned int delKeysInSlot(unsigned int hashslot, int lazy, bool propagate_del, 
             signalModifiedKey(NULL, db, key);
             if (send_del_event) {
                 /* In the `cluster flushslot` scenario, the keys are actually deleted so notify everyone. */
-                notifyKeyspaceEvent(NOTIFY_GENERIC, "del", key, db.id);
+                notifyKeyspaceEvent(NOTIFY_GENERIC, "del", key, db->id);
             } else {
                 /* The keys are not actually logically deleted from the database, just moved to another node.
                  * The modules needs to know that these keys are no longer available locally, so just send the
                  * keyspace notification to the modules, but not to clients. */
-                moduleNotifyKeyspaceEvent(NOTIFY_GENERIC, "del", key, db.id);
+                moduleNotifyKeyspaceEvent(NOTIFY_GENERIC, "del", key, db->id);
             }
             exitExecutionUnit();
             postExecutionUnitOperations();

@@ -57,7 +57,7 @@
 #define SLAB_LEN(out, i) out[(i) * BATCH_QUERY_ARGS_OUT + 2]
 #define SLAB_NUM_REGS(out, i) out[(i) * BATCH_QUERY_ARGS_OUT + 1]
 
-#define UTILIZATION_THRESHOLD_FACTOR_MILI (125) // 12.5% additional utilization
+#define UTILIZATION_THRESHOLD_FACTOR_MILLI (125) // 12.5% additional utilization
 
 /*
  * Represents a precomputed key for querying jemalloc statistics.
@@ -349,14 +349,14 @@ unsigned long allocatorDefragGetFragSmallbins(void) {
  *    defragmentation is not necessary as moving regions is guaranteed not to change the fragmentation ratio.
  * 2. If the number of non-full slabs (bin_usage->curr_nonfull_slabs) is less than 2, defragmentation is not performed
  *    because there is no other slab to move regions to.
- * 3. If slab utilization < 'avg utilization'*1.125 [code 1.125 == (1000+UTILIZATION_THRESHOLD_FACTOR_MILI)/1000]
+ * 3. If slab utilization < 'avg utilization'*1.125 [code 1.125 == (1000+UTILIZATION_THRESHOLD_FACTOR_MILLI)/1000]
  *    than we should defrag. This is aligned with previous je_defrag_hint implementation.
  */
 static inline int makeDefragDecision(jeBinInfo *bin_info, jemallocBinUsageData *bin_usage, unsigned long nalloced) {
     unsigned long curr_full_slabs = bin_usage->curr_slabs - bin_usage->curr_nonfull_slabs;
     size_t allocated_nonfull = bin_usage->curr_regs - curr_full_slabs * bin_info->nregs;
     if (bin_info->nregs == nalloced || bin_usage->curr_nonfull_slabs < 2 ||
-        1000 * nalloced * bin_usage->curr_nonfull_slabs > (1000 + UTILIZATION_THRESHOLD_FACTOR_MILI) * allocated_nonfull) {
+        1000 * nalloced * bin_usage->curr_nonfull_slabs > (1000 + UTILIZATION_THRESHOLD_FACTOR_MILLI) * allocated_nonfull) {
         return 0;
     }
     return 1;

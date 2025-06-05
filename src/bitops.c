@@ -1124,8 +1124,8 @@ void bitposCommand(client *c) {
         return;
     }
 
-    /* For empty ranges (start > end) we return -1 as an empty range does
-     * not contain a 0 nor a 1. */
+    /* For empty ranges (start > end) we return -1 as an empty range contains
+     * neither 0 nor 1. */
     if (start > end) {
         addReplyLongLong(c, -1);
     } else {

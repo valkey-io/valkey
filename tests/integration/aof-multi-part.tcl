@@ -175,7 +175,7 @@ tags {"external:skip"} {
         }
 
         create_aof_manifest $aof_dirpath $aof_manifest_file {
-            append_to_manifest "filx appendonly.aof.1.base.aof seq 1 type b\n"
+            append_to_manifest "file_ appendonly.aof.1.base.aof seq 1 type b\n"
             append_to_manifest "file appendonly.aof.1.incr.aof seq 1 type i\n"
         }
 

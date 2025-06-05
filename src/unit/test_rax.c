@@ -47,7 +47,7 @@ long long _ustime(void);                  /* From test_crc64combine.c */
  * used in order to test the radix tree implementation against something that
  * will always "tell the truth" :-) */
 
-/* This is huge but we want it fast enough without reahshing needed. */
+/* This is huge but we want it fast enough without rehashing needed. */
 #define HT_TABLE_SIZE 100000
 typedef struct htNode {
     uint64_t keylen;

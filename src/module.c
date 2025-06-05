@@ -9534,7 +9534,7 @@ static void eventLoopCbWritable(struct aeEventLoop *ae, int fd, void *user_data,
  * On success VALKEYMODULE_OK is returned; otherwise,
  * VALKEYMODULE_ERR is returned and errno is set to the following values:
  *
- * * ERANGE: `fd` is negative or higher than `maxclients` server config.
+ * * ERANGE: `fd` is negative or greater than `maxclients` server config.
  * * EINVAL: `callback` is NULL or `mask` value is invalid.
  *
  * `errno` might take other values in case of an internal error.
@@ -9604,7 +9604,7 @@ int VM_EventLoopAdd(int fd, int mask, ValkeyModuleEventLoopFunc func, void *user
  * On success VALKEYMODULE_OK is returned; otherwise,
  * VALKEYMODULE_ERR is returned and errno is set to the following values:
  *
- * * ERANGE: `fd` is negative or higher than `maxclients` server config.
+ * * ERANGE: `fd` is negative or greater than `maxclients` server config.
  * * EINVAL: `mask` value is invalid.
  */
 int VM_EventLoopDel(int fd, int mask) {

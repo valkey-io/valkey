@@ -1438,25 +1438,25 @@ sds getMemoryDoctorReport(void) {
             num_reports++;
         }
 
-        /* Fragmentation is higher than 1.4 and 10MB ?*/
+        /* Fragmentation is greater than 1.4 and 10MB ?*/
         if (mh->total_frag > 1.4 && mh->total_frag_bytes > 10 << 20) {
             high_frag = 1;
             num_reports++;
         }
 
-        /* External fragmentation is higher than 1.1 and 10MB? */
+        /* External fragmentation is greater than 1.1 and 10MB? */
         if (mh->allocator_frag > 1.1 && mh->allocator_frag_bytes > 10 << 20) {
             high_alloc_frag = 1;
             num_reports++;
         }
 
-        /* Allocator rss is higher than 1.1 and 10MB ? */
+        /* Allocator rss is greater than 1.1 and 10MB ? */
         if (mh->allocator_rss > 1.1 && mh->allocator_rss_bytes > 10 << 20) {
             high_alloc_rss = 1;
             num_reports++;
         }
 
-        /* Non-Allocator rss is higher than 1.1 and 10MB ? */
+        /* Non-Allocator rss is greater than 1.1 and 10MB ? */
         if (mh->rss_extra > 1.1 && mh->rss_extra_bytes > 10 << 20) {
             high_proc_rss = 1;
             num_reports++;

@@ -408,7 +408,7 @@ proc pause_on_error {} {
         } elseif {$cmd eq {help}} {
             puts "ls                     List Sentinel and Valkey instances."
             puts "show-sentinel-logs \[N\] Show latest N lines of sentinel logs."
-            puts "show-valkey-logs \[N\]    Show latest N lines of logs."
+            puts "show-valkey-logs \[N\]   Show latest N lines of valkey logs."
             puts "S <id> cmd ... arg     Call command in Sentinel <id>."
             puts "R <id> cmd ... arg     Call command in Valkey <id>."
             puts "SI <id> <field>        Show Sentinel <id> INFO <field>."

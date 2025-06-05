@@ -2550,6 +2550,7 @@ static int updateAofAutoGCEnabled(const char **err) {
 
 static int updateExtendedRedisCompat(const char **err) {
     UNUSED(err);
+    createSharedObjectsWithCompat();
     return 1;
 }
 

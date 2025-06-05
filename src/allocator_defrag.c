@@ -310,7 +310,7 @@ int allocatorDefragInit(void) {
     return 0;
 }
 
-/* Total size of consumed meomry in unused regs in small bins (AKA external fragmentation).
+/* Total size of consumed memory in unused regs in small bins (AKA external fragmentation).
  * The function will refresh the epoch.
  *
  * return total fragmentation bytes

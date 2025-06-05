@@ -260,7 +260,7 @@ start_cluster 2 0 {tags {external:skip cluster} overrides {cluster-node-timeout 
             R 1 DEBUG DROP-CLUSTER-PACKET-FILTER $CLUSTER_PACKET_TYPE_NONE
             R 2 DEBUG DROP-CLUSTER-PACKET-FILTER $CLUSTER_PACKET_TYPE_NONE
 
-            # Now Node 0 will send a MEET packet to Node 1 & 2 since it has an outbound link to these nodes but no inblound link.
+            # Now Node 0 will send a MEET packet to Node 1 & 2 since it has an outbound link to these nodes but no inbound link.
             # Handshake should now complete successfully.
             wait_for_condition 50 200 {
                 [cluster_nodes_all_know_each_other 3]

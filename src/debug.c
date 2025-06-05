@@ -1201,17 +1201,17 @@ static void *getAndSetMcontextEip(ucontext_t *uc, void *eip) {
         return old_val;                         \
     } while (0)
 #if defined(__APPLE__) && !defined(MAC_OS_10_6_DETECTED)
-/* OSX < 10.6 */
+/* Mac OS X < 10.6 */
 #if defined(__x86_64__)
     GET_SET_RETURN(uc->uc_mcontext->__ss.__rip, eip);
 #elif defined(__i386__)
     GET_SET_RETURN(uc->uc_mcontext->__ss.__eip, eip);
 #else
-    /* OSX PowerPC */
+    /* Mac OS X PowerPC */
     GET_SET_RETURN(uc->uc_mcontext->__ss.__srr0, eip);
 #endif
 #elif defined(__APPLE__) && defined(MAC_OS_10_6_DETECTED)
-/* OSX >= 10.6 */
+/* Mac OS X >= 10.6 */
 #if defined(_STRUCT_X86_THREAD_STATE64) && !defined(__i386__)
     GET_SET_RETURN(uc->uc_mcontext->__ss.__rip, eip);
 #elif defined(__i386__)
@@ -1306,9 +1306,9 @@ void logRegisters(ucontext_t *uc) {
         serverLog(LL_WARNING, "  Dumping of registers not supported for this OS/arch"); \
     } while (0)
 
-/* OSX */
+/* Mac OS X */
 #if defined(__APPLE__) && defined(MAC_OS_10_6_DETECTED)
-    /* OSX AMD64 */
+    /* Mac OS X AMD64 */
 #if defined(_STRUCT_X86_THREAD_STATE64) && !defined(__i386__)
     serverLog(LL_WARNING,
               "\n"
@@ -1330,7 +1330,7 @@ void logRegisters(ucontext_t *uc) {
               (unsigned long)uc->uc_mcontext->__ss.__gs);
     logStackContent((void **)uc->uc_mcontext->__ss.__rsp);
 #elif defined(__i386__)
-    /* OSX x86 */
+    /* Mac OS X x86 */
     serverLog(LL_WARNING,
               "\n"
               "EAX:%08lx EBX:%08lx ECX:%08lx EDX:%08lx\n"

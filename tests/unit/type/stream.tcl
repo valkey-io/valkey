@@ -917,7 +917,7 @@ start_server {tags {"stream"}} {
         set _ $err
     } {ERR syntax error}
 
-    test {XSETID errors on negstive offset} {
+    test {XSETID errors on negative offset} {
         catch {r XSETID stream 1-1 ENTRIESADDED -1 MAXDELETEDID 0-0} err
         set _ $err
     } {ERR *must be positive}

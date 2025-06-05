@@ -943,8 +943,8 @@ dictEntry *dictGetRandomKey(dict *d) {
 /* This function samples the dictionary to return a few keys from random
  * locations.
  *
- * It does not guarantee to return all the keys specified in 'count', nor
- * it does guarantee to return non-duplicated elements, however it will make
+ * It neither guarantees it will return all the keys specified in 'count', nor
+ * does it guarantee to return non-duplicated elements, however it will make
  * some effort to do both things.
  *
  * Returned pointers to hash table entries are stored into 'des' that

@@ -397,7 +397,7 @@ void ldbList(int around, int context) {
  * The new SDS string with the represented value attached is returned.
  * Used in order to implement ldbLogStackValue().
  *
- * The element is not automatically removed from the stack, nor it is
+ * The element is neither automatically removed from the stack, nor
  * converted to a different type. */
 #define LDB_MAX_VALUES_DEPTH (LUA_MINSTACK / 2)
 static sds ldbCatStackValueRec(sds s, lua_State *lua, int idx, int level) {
@@ -477,7 +477,7 @@ sds ldbCatStackValue(sds s, lua_State *lua, int idx) {
 }
 
 /* Produce a debugger log entry representing the value of the Lua object
- * currently on the top of the stack. The element is not popped nor modified.
+ * currently on the top of the stack. The element is neither popped nor modified.
  * Check ldbCatStackValue() for the actual implementation. */
 void ldbLogStackValue(lua_State *lua, char *prefix) {
     sds s = sdsnew(prefix);

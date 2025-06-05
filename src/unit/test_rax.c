@@ -491,7 +491,7 @@ int iteratorFuzzTest(int keymode, size_t count) {
             if (array_res) seekidx--;
         }
 
-        /* Both the iteratos should agree about EOF. */
+        /* Both the iterators should agree about EOF. */
         if (array_res != rax_res) {
             printf("Iter fuzz: iterators do not agree about EOF "
                    "at iteration %d:  "

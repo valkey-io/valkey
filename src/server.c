@@ -1995,47 +1995,64 @@ void afterSleep(struct aeEventLoop *eventLoop, int numevents) {
 
 /* =========================== Server initialization ======================== */
 
+static inline robj *createSharedString(const char *string) {
+    return makeObjectShared(createStringObject(string, strlen(string)));
+}
+
+static inline robj *createSharedStringByPtr(void *ptr) {
+    return makeObjectShared(createObject(OBJ_STRING, ptr));
+}
+
 /* These shared strings depend on the extended-redis-compatibility config and is
  * called when the config changes. When the config is phased out, these
  * initializations can be moved back inside createSharedObjects() below. */
-void createSharedObjectsForCompat(int compat) {
-    const char *name = compat ? "Redis" : SERVER_TITLE;
-    shared.loadingerr =
-        createObject(OBJ_STRING, sdscatfmt(sdsempty(), "-LOADING %s is loading the dataset in memory\r\n", name));
-    shared.slowevalerr = createObject(
-        OBJ_STRING,
+void createSharedObjectsWithCompatNo(void) {
+    const char *name = SERVER_TITLE;
+    shared.loadingerr_valkey =
+        createSharedStringByPtr(sdscatfmt(sdsempty(), "-LOADING %s is loading the dataset in memory\r\n", name));
+    shared.slowevalerr_valkey = createSharedStringByPtr(
         sdscatfmt(sdsempty(),
                   "-BUSY %s is busy running a script. You can only call SCRIPT KILL or SHUTDOWN NOSAVE.\r\n", name));
-    shared.slowscripterr = createObject(
-        OBJ_STRING,
+    shared.slowscripterr_valkey = createSharedStringByPtr(
         sdscatfmt(sdsempty(),
                   "-BUSY %s is busy running a script. You can only call FUNCTION KILL or SHUTDOWN NOSAVE.\r\n", name));
-    shared.slowmoduleerr =
-        createObject(OBJ_STRING, sdscatfmt(sdsempty(), "-BUSY %s is busy running a module command.\r\n", name));
-    shared.bgsaveerr =
-        createObject(OBJ_STRING, sdscatfmt(sdsempty(),
-                                           "-MISCONF %s is configured to save RDB snapshots, but it's currently"
-                                           " unable to persist to disk. Commands that may modify the data set are"
-                                           " disabled, because this instance is configured to report errors during"
-                                           " writes if RDB snapshotting fails (stop-writes-on-bgsave-error option)."
-                                           " Please check the %s logs for details about the RDB error.\r\n",
-                                           name, name));
+    shared.slowmoduleerr_valkey =
+        createSharedStringByPtr(sdscatfmt(sdsempty(), "-BUSY %s is busy running a module command.\r\n", name));
+    shared.bgsaveerr_valkey =
+        createSharedStringByPtr(sdscatfmt(sdsempty(),
+                                          "-MISCONF %s is configured to save RDB snapshots, but it's currently"
+                                          " unable to persist to disk. Commands that may modify the data set are"
+                                          " disabled, because this instance is configured to report errors during"
+                                          " writes if RDB snapshotting fails (stop-writes-on-bgsave-error option)."
+                                          " Please check the %s logs for details about the RDB error.\r\n",
+                                          name, name));
+}
+
+void createSharedObjectsWithCompatYes(void) {
+    const char *name = "Redis";
+    shared.loadingerr_redis =
+        createSharedStringByPtr(sdscatfmt(sdsempty(), "-LOADING %s is loading the dataset in memory\r\n", name));
+    shared.slowevalerr_redis = createSharedStringByPtr(
+        sdscatfmt(sdsempty(),
+                  "-BUSY %s is busy running a script. You can only call SCRIPT KILL or SHUTDOWN NOSAVE.\r\n", name));
+    shared.slowscripterr_redis = createSharedStringByPtr(
+        sdscatfmt(sdsempty(),
+                  "-BUSY %s is busy running a script. You can only call FUNCTION KILL or SHUTDOWN NOSAVE.\r\n", name));
+    shared.slowmoduleerr_redis =
+        createSharedStringByPtr(sdscatfmt(sdsempty(), "-BUSY %s is busy running a module command.\r\n", name));
+    shared.bgsaveerr_redis =
+        createSharedStringByPtr(sdscatfmt(sdsempty(),
+                                          "-MISCONF %s is configured to save RDB snapshots, but it's currently"
+                                          " unable to persist to disk. Commands that may modify the data set are"
+                                          " disabled, because this instance is configured to report errors during"
+                                          " writes if RDB snapshotting fails (stop-writes-on-bgsave-error option)."
+                                          " Please check the %s logs for details about the RDB error.\r\n",
+                                          name, name));
 }
 
 void createSharedObjectsWithCompat(void) {
-    createSharedObjectsForCompat(0);
-    shared.loadingerr_valkey = shared.loadingerr;
-    shared.slowevalerr_valkey = shared.slowevalerr;
-    shared.slowscripterr_valkey = shared.slowscripterr;
-    shared.slowmoduleerr_valkey = shared.slowmoduleerr;
-    shared.bgsaveerr_valkey = shared.bgsaveerr;
-
-    createSharedObjectsForCompat(1);
-    shared.loadingerr_redis = shared.loadingerr;
-    shared.slowevalerr_redis = shared.slowevalerr;
-    shared.slowscripterr_redis = shared.slowscripterr;
-    shared.slowmoduleerr_redis = shared.slowmoduleerr;
-    shared.bgsaveerr_redis = shared.bgsaveerr;
+    createSharedObjectsWithCompatNo();
+    createSharedObjectsWithCompatYes();
 }
 
 void updateSharedObjectsWithCompat(void) {
@@ -2058,140 +2075,130 @@ void createSharedObjects(void) {
     int j;
 
     /* Shared command responses */
-    shared.ok = makeObjectShared(createObject(OBJ_STRING, sdsnew("+OK\r\n")));
-    shared.emptybulk = makeObjectShared(createObject(OBJ_STRING, sdsnew("$0\r\n\r\n")));
-    shared.czero = makeObjectShared(createObject(OBJ_STRING, sdsnew(":0\r\n")));
-    shared.cone = makeObjectShared(createObject(OBJ_STRING, sdsnew(":1\r\n")));
-    shared.emptyarray = makeObjectShared(createObject(OBJ_STRING, sdsnew("*0\r\n")));
-    shared.pong = makeObjectShared(createObject(OBJ_STRING, sdsnew("+PONG\r\n")));
-    shared.queued = makeObjectShared(createObject(OBJ_STRING, sdsnew("+QUEUED\r\n")));
-    shared.emptyscan = makeObjectShared(createObject(OBJ_STRING, sdsnew("*2\r\n$1\r\n0\r\n*0\r\n")));
-    shared.space = makeObjectShared(createObject(OBJ_STRING, sdsnew(" ")));
-    shared.plus = makeObjectShared(createObject(OBJ_STRING, sdsnew("+")));
+    shared.ok = createSharedString("+OK\r\n");
+    shared.emptybulk = createSharedString("$0\r\n\r\n");
+    shared.czero = createSharedString(":0\r\n");
+    shared.cone = createSharedString(":1\r\n");
+    shared.emptyarray = createSharedString("*0\r\n");
+    shared.pong = createSharedString("+PONG\r\n");
+    shared.queued = createSharedString("+QUEUED\r\n");
+    shared.emptyscan = createSharedString("*2\r\n$1\r\n0\r\n*0\r\n");
+    shared.space = createSharedString(" ");
+    shared.plus = createSharedString("+");
 
     /* Shared command error responses */
-    shared.wrongtypeerr = makeObjectShared(createObject(
-            OBJ_STRING, sdsnew("-WRONGTYPE Operation against a key holding the wrong kind of value\r\n")));
-    shared.err = makeObjectShared(createObject(OBJ_STRING, sdsnew("-ERR\r\n")));
-    shared.nokeyerr = makeObjectShared(createObject(OBJ_STRING, sdsnew("-ERR no such key\r\n")));
-    shared.syntaxerr = makeObjectShared(createObject(OBJ_STRING, sdsnew("-ERR syntax error\r\n")));
-    shared.sameobjecterr = makeObjectShared(createObject(
-            OBJ_STRING, sdsnew("-ERR source and destination objects are the same\r\n")));
-    shared.outofrangeerr = makeObjectShared(createObject(OBJ_STRING, sdsnew("-ERR index out of range\r\n")));
-    shared.noscripterr = makeObjectShared(createObject(OBJ_STRING, sdsnew("-NOSCRIPT No matching script.\r\n")));
+    shared.wrongtypeerr = createSharedString("-WRONGTYPE Operation against a key holding the wrong kind of value\r\n");
+    shared.err = createSharedString("-ERR\r\n");
+    shared.nokeyerr = createSharedString("-ERR no such key\r\n");
+    shared.syntaxerr = createSharedString("-ERR syntax error\r\n");
+    shared.sameobjecterr = createSharedString("-ERR source and destination objects are the same\r\n");
+    shared.outofrangeerr = createSharedString("-ERR index out of range\r\n");
+    shared.noscripterr = createSharedString("-NOSCRIPT No matching script.\r\n");
     createSharedObjectsWithCompat();
     updateSharedObjectsWithCompat();
-    shared.primarydownerr = makeObjectShared(createObject(
-            OBJ_STRING, sdsnew("-MASTERDOWN Link with MASTER is down and replica-serve-stale-data is set to 'no'.\r\n")));
-    shared.roreplicaerr = makeObjectShared((createObject(
-            OBJ_STRING, sdsnew("-READONLY You can't write against a read only replica.\r\n"))));
-    shared.noautherr = makeObjectShared(createObject(
-            OBJ_STRING, sdsnew("-NOAUTH Authentication required.\r\n")));
-    shared.oomerr = makeObjectShared(createObject(
-            OBJ_STRING, sdsnew("-OOM command not allowed when used memory > 'maxmemory'.\r\n")));
-    shared.execaborterr = makeObjectShared(createObject(
-            OBJ_STRING, sdsnew("-EXECABORT Transaction discarded because of previous errors.\r\n")));
-    shared.noreplicaserr = makeObjectShared(createObject(
-            OBJ_STRING, sdsnew("-NOREPLICAS Not enough good replicas to write.\r\n")));
-    shared.busykeyerr = makeObjectShared(createObject(
-            OBJ_STRING, sdsnew("-BUSYKEY Target key name already exists.\r\n")));
+    shared.primarydownerr = createSharedString("-MASTERDOWN Link with MASTER is down and replica-serve-stale-data is set to 'no'.\r\n");
+    shared.roreplicaerr = createSharedString("-READONLY You can't write against a read only replica.\r\n");
+    shared.noautherr = createSharedString("-NOAUTH Authentication required.\r\n");
+    shared.oomerr = createSharedString("-OOM command not allowed when used memory > 'maxmemory'.\r\n");
+    shared.execaborterr = createSharedString("-EXECABORT Transaction discarded because of previous errors.\r\n");
+    shared.noreplicaserr = createSharedString("-NOREPLICAS Not enough good replicas to write.\r\n");
+    shared.busykeyerr = createSharedString("-BUSYKEY Target key name already exists.\r\n");
 
     /* The shared NULL depends on the protocol version. */
     shared.null[0] = NULL;
     shared.null[1] = NULL;
-    shared.null[2] = makeObjectShared(createObject(OBJ_STRING, sdsnew("$-1\r\n")));
-    shared.null[3] = makeObjectShared(createObject(OBJ_STRING, sdsnew("_\r\n")));
+    shared.null[2] = createSharedString("$-1\r\n");
+    shared.null[3] = createSharedString("_\r\n");
 
     shared.nullarray[0] = NULL;
     shared.nullarray[1] = NULL;
-    shared.nullarray[2] = makeObjectShared(createObject(OBJ_STRING, sdsnew("*-1\r\n")));
-    shared.nullarray[3] = makeObjectShared(createObject(OBJ_STRING, sdsnew("_\r\n")));
+    shared.nullarray[2] = createSharedString("*-1\r\n");
+    shared.nullarray[3] = createSharedString("_\r\n");
 
     shared.emptymap[0] = NULL;
     shared.emptymap[1] = NULL;
-    shared.emptymap[2] = makeObjectShared(createObject(OBJ_STRING, sdsnew("*0\r\n")));
-    shared.emptymap[3] = makeObjectShared(createObject(OBJ_STRING, sdsnew("%0\r\n")));
+    shared.emptymap[2] = createSharedString("*0\r\n");
+    shared.emptymap[3] = createSharedString("%0\r\n");
 
     shared.emptyset[0] = NULL;
     shared.emptyset[1] = NULL;
-    shared.emptyset[2] = makeObjectShared(createObject(OBJ_STRING, sdsnew("*0\r\n")));
-    shared.emptyset[3] = makeObjectShared(createObject(OBJ_STRING, sdsnew("~0\r\n")));
+    shared.emptyset[2] = createSharedString("*0\r\n");
+    shared.emptyset[3] = createSharedString("~0\r\n");
 
     for (j = 0; j < PROTO_SHARED_SELECT_CMDS; j++) {
         char dictid_str[64];
         int dictid_len;
 
         dictid_len = ll2string(dictid_str, sizeof(dictid_str), j);
-        shared.select[j] = makeObjectShared(createObject(
-                OBJ_STRING, sdscatprintf(sdsempty(), "*2\r\n$6\r\nSELECT\r\n$%d\r\n%s\r\n", dictid_len, dictid_str)));
+        shared.select[j] = createSharedStringByPtr(sdscatprintf(sdsempty(), "*2\r\n$6\r\nSELECT\r\n$%d\r\n%s\r\n", dictid_len, dictid_str));
     }
-    shared.messagebulk = makeObjectShared(createStringObject("$7\r\nmessage\r\n", 13));
-    shared.pmessagebulk = makeObjectShared(createStringObject("$8\r\npmessage\r\n", 14));
-    shared.subscribebulk = makeObjectShared(createStringObject("$9\r\nsubscribe\r\n", 15));
-    shared.unsubscribebulk = makeObjectShared(createStringObject("$11\r\nunsubscribe\r\n", 18));
-    shared.ssubscribebulk = makeObjectShared(createStringObject("$10\r\nssubscribe\r\n", 17));
-    shared.sunsubscribebulk = makeObjectShared(createStringObject("$12\r\nsunsubscribe\r\n", 19));
-    shared.smessagebulk = makeObjectShared(createStringObject("$8\r\nsmessage\r\n", 14));
-    shared.psubscribebulk = makeObjectShared(createStringObject("$10\r\npsubscribe\r\n", 17));
-    shared.punsubscribebulk = makeObjectShared(createStringObject("$12\r\npunsubscribe\r\n", 19));
+    shared.messagebulk = createSharedString("$7\r\nmessage\r\n");
+    shared.pmessagebulk = createSharedString("$8\r\npmessage\r\n");
+    shared.subscribebulk = createSharedString("$9\r\nsubscribe\r\n");
+    shared.unsubscribebulk = createSharedString("$11\r\nunsubscribe\r\n");
+    shared.ssubscribebulk = createSharedString("$10\r\nssubscribe\r\n");
+    shared.sunsubscribebulk = createSharedString("$12\r\nsunsubscribe\r\n");
+    shared.smessagebulk = createSharedString("$8\r\nsmessage\r\n");
+    shared.psubscribebulk = createSharedString("$10\r\npsubscribe\r\n");
+    shared.punsubscribebulk = createSharedString("$12\r\npunsubscribe\r\n");
 
     /* Shared command names */
-    shared.del = makeObjectShared(createStringObject("DEL", 3));
-    shared.unlink = makeObjectShared(createStringObject("UNLINK", 6));
-    shared.rpop = makeObjectShared(createStringObject("RPOP", 4));
-    shared.lpop = makeObjectShared(createStringObject("LPOP", 4));
-    shared.lpush = makeObjectShared(createStringObject("LPUSH", 5));
-    shared.rpoplpush = makeObjectShared(createStringObject("RPOPLPUSH", 9));
-    shared.lmove = makeObjectShared(createStringObject("LMOVE", 5));
-    shared.blmove = makeObjectShared(createStringObject("BLMOVE", 6));
-    shared.zpopmin = makeObjectShared(createStringObject("ZPOPMIN", 7));
-    shared.zpopmax = makeObjectShared(createStringObject("ZPOPMAX", 7));
-    shared.multi = makeObjectShared(createStringObject("MULTI", 5));
-    shared.exec = makeObjectShared(createStringObject("EXEC", 4));
-    shared.hset = makeObjectShared(createStringObject("HSET", 4));
-    shared.srem = makeObjectShared(createStringObject("SREM", 4));
-    shared.xgroup = makeObjectShared(createStringObject("XGROUP", 6));
-    shared.xclaim = makeObjectShared(createStringObject("XCLAIM", 6));
-    shared.script = makeObjectShared(createStringObject("SCRIPT", 6));
-    shared.replconf = makeObjectShared(createStringObject("REPLCONF", 8));
-    shared.pexpireat = makeObjectShared(createStringObject("PEXPIREAT", 9));
-    shared.pexpire = makeObjectShared(createStringObject("PEXPIRE", 7));
-    shared.persist = makeObjectShared(createStringObject("PERSIST", 7));
-    shared.set = makeObjectShared(createStringObject("SET", 3));
-    shared.eval = makeObjectShared(createStringObject("EVAL", 4));
+    shared.del = createSharedString("DEL");
+    shared.unlink = createSharedString("UNLINK");
+    shared.rpop = createSharedString("RPOP");
+    shared.lpop = createSharedString("LPOP");
+    shared.lpush = createSharedString("LPUSH");
+    shared.rpoplpush = createSharedString("RPOPLPUSH");
+    shared.lmove = createSharedString("LMOVE");
+    shared.blmove = createSharedString("BLMOVE");
+    shared.zpopmin = createSharedString("ZPOPMIN");
+    shared.zpopmax = createSharedString("ZPOPMAX");
+    shared.multi = createSharedString("MULTI");
+    shared.exec = createSharedString("EXEC");
+    shared.hset = createSharedString("HSET");
+    shared.srem = createSharedString("SREM");
+    shared.xgroup = createSharedString("XGROUP");
+    shared.xclaim = createSharedString("XCLAIM");
+    shared.script = createSharedString("SCRIPT");
+    shared.replconf = createSharedString("REPLCONF");
+    shared.pexpireat = createSharedString("PEXPIREAT");
+    shared.pexpire = createSharedString("PEXPIRE");
+    shared.persist = createSharedString("PERSIST");
+    shared.set = createSharedString("SET");
+    shared.eval = createSharedString("EVAL");
 
     /* Shared command argument */
-    shared.left = makeObjectShared(createStringObject("left", 4));
-    shared.right = makeObjectShared(createStringObject("right", 5));
-    shared.pxat = makeObjectShared(createStringObject("PXAT", 4));
-    shared.time = makeObjectShared(createStringObject("TIME", 4));
-    shared.retrycount = makeObjectShared(createStringObject("RETRYCOUNT", 10));
-    shared.force = makeObjectShared(createStringObject("FORCE", 5));
-    shared.justid = makeObjectShared(createStringObject("JUSTID", 6));
-    shared.entriesread = makeObjectShared(createStringObject("ENTRIESREAD", 11));
-    shared.lastid = makeObjectShared(createStringObject("LASTID", 6));
-    shared.default_username = makeObjectShared(createStringObject("default", 7));
-    shared.ping = makeObjectShared(createStringObject("ping", 4));
-    shared.setid = makeObjectShared(createStringObject("SETID", 5));
-    shared.keepttl = makeObjectShared(createStringObject("KEEPTTL", 7));
-    shared.absttl = makeObjectShared(createStringObject("ABSTTL", 6));
-    shared.load = makeObjectShared(createStringObject("LOAD", 4));
-    shared.createconsumer = makeObjectShared(createStringObject("CREATECONSUMER", 14));
-    shared.getack = makeObjectShared(createStringObject("GETACK", 6));
-    shared.special_asterisk = makeObjectShared(createStringObject("*", 1));
-    shared.special_equals = makeObjectShared(createStringObject("=", 1));
-    shared.redacted = makeObjectShared(createStringObject("(redacted)", 10));
+    shared.left = createSharedString("left");
+    shared.right = createSharedString("right");
+    shared.pxat = createSharedString("PXAT");
+    shared.time = createSharedString("TIME");
+    shared.retrycount = createSharedString("RETRYCOUNT");
+    shared.force = createSharedString("FORCE");
+    shared.justid = createSharedString("JUSTID");
+    shared.entriesread = createSharedString("ENTRIESREAD");
+    shared.lastid = createSharedString("LASTID");
+    shared.default_username = createSharedString("default");
+    shared.ping = createSharedString("ping");
+    shared.setid = createSharedString("SETID");
+    shared.keepttl = createSharedString("KEEPTTL");
+    shared.absttl = createSharedString("ABSTTL");
+    shared.load = createSharedString("LOAD");
+    shared.createconsumer = createSharedString("CREATECONSUMER");
+    shared.getack = createSharedString("GETACK");
+    shared.special_asterisk = createSharedString("*");
+    shared.special_equals = createSharedString("=");
+    shared.redacted = createSharedString("(redacted)");
 
     for (j = 0; j < OBJ_SHARED_INTEGERS; j++) {
-        shared.integers[j] = makeObjectShared(createObject(OBJ_STRING, (void *)(long)j));
+        shared.integers[j] = createSharedStringByPtr((void *)(long)j);
         initObjectLRUOrLFU(shared.integers[j]);
         shared.integers[j]->encoding = OBJ_ENCODING_INT;
     }
     for (j = 0; j < OBJ_SHARED_BULKHDR_LEN; j++) {
-        shared.mbulkhdr[j] = makeObjectShared(createObject(OBJ_STRING, sdscatprintf(sdsempty(), "*%d\r\n", j)));
-        shared.bulkhdr[j] = makeObjectShared(createObject(OBJ_STRING, sdscatprintf(sdsempty(), "$%d\r\n", j)));
-        shared.maphdr[j] = makeObjectShared(createObject(OBJ_STRING, sdscatprintf(sdsempty(), "%%%d\r\n", j)));
-        shared.sethdr[j] = makeObjectShared(createObject(OBJ_STRING, sdscatprintf(sdsempty(), "~%d\r\n", j)));
+        shared.mbulkhdr[j] = createSharedStringByPtr(sdscatprintf(sdsempty(), "*%d\r\n", j));
+        shared.bulkhdr[j] = createSharedStringByPtr(sdscatprintf(sdsempty(), "$%d\r\n", j));
+        shared.maphdr[j] = createSharedStringByPtr(sdscatprintf(sdsempty(), "%%%d\r\n", j));
+        shared.sethdr[j] = createSharedStringByPtr(sdscatprintf(sdsempty(), "~%d\r\n", j));
     }
     /* The following two shared objects, minstring and maxstring, are not
      * actually used for their value but as a special object meaning

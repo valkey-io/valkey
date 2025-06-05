@@ -12098,7 +12098,7 @@ void moduleInitModulesSystem(void) {
 
     /* Create a pipe for module threads to be able to wake up the server main thread.
      * Make the pipe non blocking. This is just a best effort aware mechanism
-     * and we do not want to block not in the read nor in the write half.
+     * and we want to avoid blocking in both the read and write halves.
      * Enable close-on-exec flag on pipes in case of the fork-exec system calls in
      * sentinels or servers. */
     if (anetPipe(server.module_pipe, O_CLOEXEC | O_NONBLOCK, O_CLOEXEC | O_NONBLOCK) == -1) {

@@ -1318,6 +1318,8 @@ struct sharedObjectsStruct {
     robj *ok, *err, *emptybulk, *czero, *cone, *pong, *space, *queued, *null[4], *nullarray[4], *emptymap[4],
         *emptyset[4], *emptyarray, *wrongtypeerr, *nokeyerr, *syntaxerr, *sameobjecterr, *outofrangeerr, *noscripterr,
         *loadingerr, *slowevalerr, *slowscripterr, *slowmoduleerr, *bgsaveerr, *primarydownerr, *roreplicaerr,
+        *loadingerr_valkey, *slowevalerr_valkey, *slowscripterr_valkey, *slowmoduleerr_valkey, *bgsaveerr_valkey,
+        *loadingerr_redis, *slowevalerr_redis, *slowscripterr_redis, *slowmoduleerr_redis, *bgsaveerr_redis,
         *execaborterr, *noautherr, *noreplicaserr, *busykeyerr, *oomerr, *plus, *messagebulk, *pmessagebulk,
         *subscribebulk, *unsubscribebulk, *psubscribebulk, *punsubscribebulk, *del, *unlink, *rpop, *lpop, *lpush,
         *rpoplpush, *lmove, *blmove, *zpopmin, *zpopmax, *emptyscan, *multi, *exec, *left, *right, *hset, *srem,
@@ -3377,7 +3379,7 @@ void initConfigValues(void);
 void removeConfig(sds name);
 sds getConfigDebugInfo(void);
 int allowProtectedAction(int config, client *c);
-void createSharedObjectsWithCompat(void);
+void updateSharedObjectsWithCompat(void);
 void initServerClientMemUsageBuckets(void);
 void freeServerClientMemUsageBuckets(void);
 

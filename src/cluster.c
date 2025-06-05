@@ -1373,7 +1373,7 @@ int clusterRedirectBlockedClientIfNeeded(client *c) {
 
             /* We send an error and unblock the client if:
              * 1) The slot is unassigned, emitting a cluster down error.
-             * 2) The slot is not handled by this node, nor being imported. */
+             * 2) The slot is neither handled by this node, nor being imported. */
             if (node != myself && getImportingSlotSource(slot) == NULL) {
                 if (node == NULL) {
                     clusterRedirectClient(c, NULL, 0, CLUSTER_REDIR_DOWN_UNBOUND);

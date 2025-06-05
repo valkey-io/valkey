@@ -727,7 +727,7 @@ int test_random_entry(int argc, char **argv, int flags) {
      *
      * Selecting a single random entry: For any entry in the hash table, let
      * X=1 if the we selected the entry (success) and X=0 otherwise. With m
-     * entries, our entry is sepected with probability p = 1/m, the expected
+     * entries, our entry is selected with probability p = 1/m, the expected
      * value is E(X) = 1/m, E(X^2) = 1/m and the variance:
      *
      *     Var(X) = E(X^2) - (E(X))^2 = 1/m - 1/(m^2) = (1/m) * (1 - 1/m).

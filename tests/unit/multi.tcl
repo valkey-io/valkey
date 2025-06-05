@@ -657,7 +657,7 @@ start_server {tags {"multi"}} {
         # check that GET and PING are disallowed on stale replica, even if the replica becomes stale only after queuing.
         r multi
         r get xx
-        $r1 replicaof localhsot 0
+        $r1 replicaof localhost_ 0
         catch {r exec} e
         assert_match {*EXECABORT*MASTERDOWN*} $e
 
@@ -666,7 +666,7 @@ start_server {tags {"multi"}} {
 
         r multi
         r ping
-        $r1 replicaof localhsot 0
+        $r1 replicaof localhost_ 0
         catch {r exec} e
         assert_match {*EXECABORT*MASTERDOWN*} $e
 

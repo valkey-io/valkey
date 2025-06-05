@@ -1857,7 +1857,7 @@ void pfselftestCommand(client *c) {
      * structure are accessible and that setting their values both result in
      * the correct value to be retained and not affect adjacent values. */
     for (j = 0; j < HLL_TEST_CYCLES; j++) {
-        /* Set the HLL counters and an array of unsigned byes of the
+        /* Set the HLL counters and an array of unsigned bytes of the
          * same size to the same set of random values. */
         for (i = 0; i < HLL_REGISTERS; i++) {
             unsigned int r = rand() & HLL_REGISTER_MAX;

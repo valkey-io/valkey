@@ -455,6 +455,14 @@ typedef struct tls_connection {
     size_t last_failed_write_data_len;
 } tls_connection;
 
+/* Fetch the latest OpenSSL error and store it in the connection */
+static void updateTLSError(tls_connection *conn) {
+    conn->c.last_errno = 0;
+    if (conn->ssl_error) zfree(conn->ssl_error);
+    conn->ssl_error = zmalloc(512);
+    ERR_error_string_n(ERR_get_error(), conn->ssl_error, 512);
+}
+
 static connection *createTLSConnection(int client_side) {
     SSL_CTX *ctx = valkey_tls_ctx;
     if (client_side && valkey_tls_client_ctx) ctx = valkey_tls_client_ctx;
@@ -463,19 +471,15 @@ static connection *createTLSConnection(int client_side) {
     conn->c.fd = -1;
     conn->c.iovcnt = IOV_MAX;
     conn->ssl = SSL_new(ctx);
+    if (!conn->ssl) {
+        updateTLSError(conn);
+        conn->c.state = CONN_STATE_ERROR;
+    }
     return (connection *)conn;
 }
 
 static connection *connCreateTLS(void) {
     return createTLSConnection(1);
-}
-
-/* Fetch the latest OpenSSL error and store it in the connection */
-static void updateTLSError(tls_connection *conn) {
-    conn->c.last_errno = 0;
-    if (conn->ssl_error) zfree(conn->ssl_error);
-    conn->ssl_error = zmalloc(512);
-    ERR_error_string_n(ERR_get_error(), conn->ssl_error, 512);
 }
 
 /* Create a new TLS connection that is already associated with
@@ -491,13 +495,8 @@ static connection *connCreateAcceptedTLS(int fd, void *priv) {
     int require_auth = *(int *)priv;
     tls_connection *conn = (tls_connection *)createTLSConnection(0);
     conn->c.fd = fd;
+    if (conn->c.state == CONN_STATE_ERROR) return (connection *)conn;
     conn->c.state = CONN_STATE_ACCEPTING;
-
-    if (!conn->ssl) {
-        updateTLSError(conn);
-        conn->c.state = CONN_STATE_ERROR;
-        return (connection *)conn;
-    }
 
     switch (require_auth) {
     case TLS_CLIENT_AUTH_NO: SSL_set_verify(conn->ssl, SSL_VERIFY_NONE, NULL); break;

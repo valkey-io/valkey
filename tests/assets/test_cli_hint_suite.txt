@@ -99,7 +99,7 @@
 "GEORADIUS key 1 2 3 M COUNT 12 ASC " "[WITHCOORD] [WITHDIST] [WITHHASH] [STORE key|STOREDIST key]"
 
 # Incorrect argument type for double-valued token parameter.
-"GEOSEARCH k FROMLONLAT " "longitude latitude BYRADIUS radius M|KM|FT|MI|BYBOX width height M|KM|FT|MI [ASC|DESC] [COUNT count [ANY]] [WITHCOORD] [WITHDIST] [WITHHASH]"
+"GEOSEARCH k FROMLONLAT " "longitude latitude BYRADIUS radius M|KM|FT|MI|BYBOX width height M|KM|FT|MI|BYPOLYGON num-vertices longitude latitude [longitude latitude ...] [ASC|DESC] [COUNT count [ANY]] [WITHCOORD] [WITHDIST] [WITHHASH]"
 "GEOSEARCH k FROMLONLAT 2.34 4.45 BYRADIUS badvalue " ""
 
 # Optional parameters followed by mandatory params: ZADD key [NX|XX] [GT|LT] [CH] [INCR] score member [score member ...]

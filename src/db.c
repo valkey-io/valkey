@@ -583,7 +583,8 @@ long long emptyDbStructure(serverDb **dbarray, int dbnum, int async, void(callba
     }
 
     for (int j = startdb; j <= enddb; j++) {
-        if (dbarray[j] == NULL) continue;
+        if (dbarray[j] == NULL || kvstoreSize(dbarray[j]->keys) == 0) continue;
+
         removed += kvstoreSize(dbarray[j]->keys);
         if (async) {
             emptyDbAsync(dbarray[j]);

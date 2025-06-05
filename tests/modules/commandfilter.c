@@ -80,7 +80,7 @@ int CommandFilter_LogCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, in
 
     size_t cmdlen;
     const char *cmdname = ValkeyModule_StringPtrLen(argv[1], &cmdlen);
-    ValkeyModuleCallReply *reply = ValkeyModule_Call(ctx, cmdname, "v", &argv[2], argc - 2);
+    ValkeyModuleCallReply *reply = ValkeyModule_Call(ctx, cmdname, "v", &argv[2], (size_t)argc - 2);
     if (reply) {
         ValkeyModule_ReplyWithCallReply(ctx, reply);
         ValkeyModule_FreeCallReply(reply);

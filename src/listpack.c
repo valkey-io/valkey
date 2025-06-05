@@ -43,6 +43,7 @@
 #include "listpack_malloc.h"
 #include "serverassert.h"
 #include "util.h"
+#include "config.h"
 
 #define LP_HDR_SIZE 6 /* 32 bit total len + 16 bit number of elements. */
 #define LP_HDR_NUMELE_UNKNOWN UINT16_MAX
@@ -395,8 +396,13 @@ unsigned char *lpSkip(unsigned char *p) {
 unsigned char *lpNext(unsigned char *lp, unsigned char *p) {
     assert(p);
     p = lpSkip(p);
-    if (p[0] == LP_EOF) return NULL;
-    lpAssertValidEntry(lp, lpBytes(lp), p);
+    size_t bytes = lpBytes(lp);
+    if (unlikely(p[0] == LP_EOF)) {
+        /* EOF must only appear at the end of a listpack. */
+        assert(p + 1 == lp + bytes);
+        return NULL;
+    }
+    lpAssertValidEntry(lp, bytes, p);
     return p;
 }
 
@@ -418,8 +424,13 @@ unsigned char *lpPrev(unsigned char *lp, unsigned char *p) {
  * listpack has no elements. */
 unsigned char *lpFirst(unsigned char *lp) {
     unsigned char *p = lp + LP_HDR_SIZE; /* Skip the header. */
-    if (p[0] == LP_EOF) return NULL;
-    lpAssertValidEntry(lp, lpBytes(lp), p);
+    size_t bytes = lpBytes(lp);
+    if (unlikely(p[0] == LP_EOF)) {
+        /* EOF must only appear at the end of a listpack. */
+        assert(p + 1 == lp + bytes);
+        return NULL;
+    }
+    lpAssertValidEntry(lp, bytes, p);
     return p;
 }
 
@@ -652,7 +663,11 @@ unsigned char *lpFind(unsigned char *lp, unsigned char *p, unsigned char *s, uin
             lpAssertValidEntry(lp, lp_bytes, p);
         else
             assert(p >= lp + LP_HDR_SIZE && p < lp + lp_bytes);
-        if (p[0] == LP_EOF) break;
+        if (unlikely(p[0] == LP_EOF)) {
+            /* EOF must only appear at the end of a listpack. */
+            assert(p + 1 == lp + lp_bytes);
+            break;
+        }
     }
 
     return NULL;
@@ -920,7 +935,11 @@ unsigned char *lpDeleteRangeWithEntry(unsigned char *lp, unsigned char **p, unsi
     while (num--) {
         deleted++;
         tail = lpSkip(tail);
-        if (tail[0] == LP_EOF) break;
+        if (unlikely(tail[0] == LP_EOF)) {
+            /* EOF must only appear at the end of a listpack. */
+            assert(tail + 1 == lp + bytes);
+            break;
+        }
         lpAssertValidEntry(lp, bytes, tail);
     }
 
@@ -1198,7 +1217,9 @@ int lpValidateNext(unsigned char *lp, unsigned char **pp, size_t lpbytes) {
     /* Before accessing p, make sure it's valid. */
     if (OUT_OF_RANGE(p)) return 0;
 
-    if (*p == LP_EOF) {
+    if (unlikely(*p == LP_EOF)) {
+        /* EOF must only appear at the end of a listpack. */
+        if (p + 1 != lp + lpbytes) return 0;
         *pp = NULL;
         return 1;
     }

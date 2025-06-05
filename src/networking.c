@@ -43,6 +43,7 @@
 #include <math.h>
 #include <ctype.h>
 #include <stdatomic.h>
+#include <stdbool.h>
 
 /* This struct is used to encapsulate filtering criteria for operations on clients
  * such as identifying specific clients to kill or retrieve. Each field in the struct
@@ -229,7 +230,7 @@ client *createClient(connection *conn) {
     c->nread = 0;
     c->read_flags = 0;
     c->write_flags = 0;
-    c->cmd = c->lastcmd = c->realcmd = c->io_parsed_cmd = NULL;
+    c->cmd = c->lastcmd = c->realcmd = c->parsed_cmd = NULL;
     c->cur_script = NULL;
     c->multibulklen = 0;
     c->bulklen = -1;
@@ -883,7 +884,7 @@ void setDeferredReply(client *c, void *node, const char *s, size_t length) {
      * - It has enough room already allocated
      * - And not too large (avoid large memmove)
      * - And the client is not in a pending I/O state */
-    if (ln->prev != NULL && (prev = listNodeValue(ln->prev)) && prev->size - prev->used > 0 &&
+    if (ln->prev != NULL && (prev = listNodeValue(ln->prev)) && prev->used < prev->size &&
         c->io_write_state != CLIENT_PENDING_IO) {
         size_t len_to_copy = prev->size - prev->used;
         if (len_to_copy > length) len_to_copy = length;
@@ -1602,7 +1603,7 @@ void freeClientArgv(client *c) {
     }
     c->argc = 0;
     c->cmd = NULL;
-    c->io_parsed_cmd = NULL;
+    c->parsed_cmd = NULL;
     c->argv_len_sum = 0;
     c->argv_len = 0;
     c->argv = NULL;
@@ -2707,7 +2708,7 @@ void resetClientIOState(client *c) {
     c->nwritten = 0;
     c->nread = 0;
     c->io_read_state = c->io_write_state = CLIENT_IDLE;
-    c->io_parsed_cmd = NULL;
+    c->parsed_cmd = NULL;
     c->flag.pending_command = 0;
     c->io_last_bufpos = 0;
     c->io_last_reply_block = NULL;
@@ -2720,7 +2721,8 @@ void initSharedQueryBuf(void) {
     sdsclear(thread_shared_qb);
 }
 
-void freeSharedQueryBuf(void) {
+void freeSharedQueryBuf(void *dummy) {
+    UNUSED(dummy);
     sdsfree(thread_shared_qb);
     thread_shared_qb = NULL;
 }
@@ -3266,6 +3268,9 @@ int processInputBuffer(client *c) {
             resetSharedQueryBuf(c);
         }
 
+        /* Lookup command, check arity, calculate cluster slot. */
+        prepareCommand(c);
+
         /* We are finally ready to execute the command. */
         if (processCommandAndResetClient(c) == C_ERR) {
             /* If the client is no longer valid, we avoid exiting this
@@ -3280,13 +3285,14 @@ int processInputBuffer(client *c) {
 
 /* This function can be called from the main-thread or from the IO-thread.
  * The function allocates query-buf for the client if required and reads to it from the network.
- * It will set c->nread to the bytes read from the network. */
-void readToQueryBuf(client *c) {
+ * It will set c->nread to the bytes read from the network.
+ * Returns true if the buffer was filled (more data may be available). */
+static bool readToQueryBuf(client *c) {
     int big_arg = 0;
     size_t qblen, readlen;
 
     /* If the replica RDB client is marked as closed ASAP, do not try to read from it */
-    if (c->flag.close_asap) return;
+    if (c->flag.close_asap) return false;
 
     int is_primary = c->read_flags & READ_FLAGS_PRIMARY;
 
@@ -3343,7 +3349,7 @@ void readToQueryBuf(client *c) {
 
     c->nread = connRead(c->conn, c->querybuf + qblen, readlen);
     if (c->nread <= 0) {
-        return;
+        return false;
     }
 
     sdsIncrLen(c->querybuf, c->nread);
@@ -3360,8 +3366,10 @@ void readToQueryBuf(client *c) {
             c->read_flags |= READ_FLAGS_QB_LIMIT_REACHED;
         }
     }
+    return (size_t)c->nread == readlen;
 }
 
+#define REPL_MAX_READS_PER_IO_EVENT 25
 void readQueryFromClient(connection *conn) {
     client *c = connGetPrivateData(conn);
     /* Check if we can send the client to be handled by the IO-thread */
@@ -3369,12 +3377,19 @@ void readQueryFromClient(connection *conn) {
 
     if (c->io_write_state != CLIENT_IDLE || c->io_read_state != CLIENT_IDLE) return;
 
-    readToQueryBuf(c);
-
-    if (handleReadResult(c) == C_OK) {
-        if (processInputBuffer(c) == C_ERR) return;
-    }
-    beforeNextClient(c);
+    bool repeat = false;
+    int iter = 0;
+    do {
+        bool full_read = readToQueryBuf(c);
+        if (handleReadResult(c) == C_OK) {
+            if (processInputBuffer(c) == C_ERR) return;
+        }
+        repeat = (c->flag.primary &&
+                  !c->flag.close_asap &&
+                  ++iter < REPL_MAX_READS_PER_IO_EVENT &&
+                  full_read);
+        beforeNextClient(c);
+    } while (repeat);
 }
 
 /* An "Address String" is a colon separated ip:port pair.
@@ -5504,25 +5519,8 @@ void ioThreadReadQueryFromClient(void *data) {
         goto done;
     }
 
-    /* Lookup command offload */
-    c->io_parsed_cmd = lookupCommand(c->argv, c->argc);
-    if (c->io_parsed_cmd && commandCheckArity(c->io_parsed_cmd, c->argc, NULL) == 0) {
-        /* The command was found, but the arity is invalid.
-         * In this case, we reset the parsed_cmd and will let the main thread handle it. */
-        c->io_parsed_cmd = NULL;
-    }
-
-    /* Offload slot calculations to the I/O thread to reduce main-thread load. */
-    if (c->io_parsed_cmd && server.cluster_enabled) {
-        getKeysResult result;
-        initGetKeysResult(&result);
-        int numkeys = getKeysFromCommand(c->io_parsed_cmd, c->argv, c->argc, &result);
-        if (numkeys) {
-            robj *first_key = c->argv[result.keys[0].pos];
-            c->slot = keyHashSlot(first_key->ptr, sdslen(first_key->ptr));
-        }
-        getKeysFreeResult(&result);
-    }
+    /* Lookup command and cluster slot calculation. */
+    prepareCommand(c);
 
 done:
     /* Only trim query buffer for non-primary clients

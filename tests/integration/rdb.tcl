@@ -289,7 +289,7 @@ start_server {} {
         assert_error "ERR Background saving is currently not in progress or scheduled" {r bgsave cancel}
     }
 
-    test {bgsave cancel schedulled request} {
+    test {bgsave cancel scheduled request} {
         r config set save ""
         # Generating RDB will take some 100 seconds
         r config set rdb-key-save-delay 1000000

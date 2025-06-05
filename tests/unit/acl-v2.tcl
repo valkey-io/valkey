@@ -412,7 +412,7 @@ start_server {tags {"acl external:skip"}} {
     # Unlike existence test commands, intersection cardinality commands process the data
     # between keys and return an aggregated cardinality. therefore they have the access
     # requirement.
-    test {Intersection cardinaltiy commands are access commands} {
+    test {Intersection cardinality commands are access commands} {
         assert_equal "OK" [r ACL DRYRUN command-test SINTERCARD 2 read read]
         assert_match {*has no permissions to access the 'write' key*} [r ACL DRYRUN command-test SINTERCARD 2 write read]
         assert_match {*has no permissions to access the 'nothing' key*} [r ACL DRYRUN command-test SINTERCARD 2 nothing read]

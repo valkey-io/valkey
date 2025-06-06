@@ -113,7 +113,7 @@ void scriptKill(client *c, int is_eval);
 int scriptIsRunning(void);
 const char *scriptCurrFunction(void);
 int scriptIsEval(void);
-int scriptIsTimedout(void);
+int scriptIsTimedOut(void);
 client *scriptGetCaller(void);
 long long scriptRunDuration(void);
 

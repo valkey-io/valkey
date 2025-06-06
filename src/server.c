@@ -1999,48 +1999,26 @@ static inline robj *createSharedString(const char *string) {
     return makeObjectShared(createStringObject(string, strlen(string)));
 }
 
-static inline robj *createSharedStringByPtr(void *ptr) {
-    return makeObjectShared(createObject(OBJ_STRING, ptr));
+static inline robj *createSharedStringByPtr(sds s) {
+    return makeObjectShared(createObject(OBJ_STRING, s));
 }
 
 /* These shared strings depend on the extended-redis-compatibility config and is
  * called when the config changes. When the config is phased out, these
  * initializations can be moved back inside createSharedObjects() below. */
-void createSharedObjectsWithCompatNo(void) {
-    const char *name = SERVER_TITLE;
-    shared.loadingerr_valkey =
+void createSharedObjectsForCompat(int compat) {
+    const char *name = compat ? "Redis" : SERVER_TITLE;
+    shared.loadingerr_variants[compat] =
         createSharedStringByPtr(sdscatfmt(sdsempty(), "-LOADING %s is loading the dataset in memory\r\n", name));
-    shared.slowevalerr_valkey = createSharedStringByPtr(
+    shared.slowevalerr_variants[compat] = createSharedStringByPtr(
         sdscatfmt(sdsempty(),
                   "-BUSY %s is busy running a script. You can only call SCRIPT KILL or SHUTDOWN NOSAVE.\r\n", name));
-    shared.slowscripterr_valkey = createSharedStringByPtr(
+    shared.slowscripterr_variants[compat] = createSharedStringByPtr(
         sdscatfmt(sdsempty(),
                   "-BUSY %s is busy running a script. You can only call FUNCTION KILL or SHUTDOWN NOSAVE.\r\n", name));
-    shared.slowmoduleerr_valkey =
+    shared.slowmoduleerr_variants[compat] =
         createSharedStringByPtr(sdscatfmt(sdsempty(), "-BUSY %s is busy running a module command.\r\n", name));
-    shared.bgsaveerr_valkey =
-        createSharedStringByPtr(sdscatfmt(sdsempty(),
-                                          "-MISCONF %s is configured to save RDB snapshots, but it's currently"
-                                          " unable to persist to disk. Commands that may modify the data set are"
-                                          " disabled, because this instance is configured to report errors during"
-                                          " writes if RDB snapshotting fails (stop-writes-on-bgsave-error option)."
-                                          " Please check the %s logs for details about the RDB error.\r\n",
-                                          name, name));
-}
-
-void createSharedObjectsWithCompatYes(void) {
-    const char *name = "Redis";
-    shared.loadingerr_redis =
-        createSharedStringByPtr(sdscatfmt(sdsempty(), "-LOADING %s is loading the dataset in memory\r\n", name));
-    shared.slowevalerr_redis = createSharedStringByPtr(
-        sdscatfmt(sdsempty(),
-                  "-BUSY %s is busy running a script. You can only call SCRIPT KILL or SHUTDOWN NOSAVE.\r\n", name));
-    shared.slowscripterr_redis = createSharedStringByPtr(
-        sdscatfmt(sdsempty(),
-                  "-BUSY %s is busy running a script. You can only call FUNCTION KILL or SHUTDOWN NOSAVE.\r\n", name));
-    shared.slowmoduleerr_redis =
-        createSharedStringByPtr(sdscatfmt(sdsempty(), "-BUSY %s is busy running a module command.\r\n", name));
-    shared.bgsaveerr_redis =
+    shared.bgsaveerr_variants[compat] =
         createSharedStringByPtr(sdscatfmt(sdsempty(),
                                           "-MISCONF %s is configured to save RDB snapshots, but it's currently"
                                           " unable to persist to disk. Commands that may modify the data set are"
@@ -2051,24 +2029,16 @@ void createSharedObjectsWithCompatYes(void) {
 }
 
 void createSharedObjectsWithCompat(void) {
-    createSharedObjectsWithCompatNo();
-    createSharedObjectsWithCompatYes();
+    createSharedObjectsForCompat(0);
+    createSharedObjectsForCompat(1);
 }
 
 void updateSharedObjectsWithCompat(void) {
-    if (server.extended_redis_compat) {
-        shared.loadingerr = shared.loadingerr_redis;
-        shared.slowevalerr = shared.slowevalerr_redis;
-        shared.slowscripterr = shared.slowscripterr_redis;
-        shared.slowmoduleerr = shared.slowmoduleerr_redis;
-        shared.bgsaveerr = shared.bgsaveerr_redis;
-    } else {
-        shared.loadingerr = shared.loadingerr_valkey;
-        shared.slowevalerr = shared.slowevalerr_valkey;
-        shared.slowscripterr = shared.slowscripterr_valkey;
-        shared.slowmoduleerr = shared.slowmoduleerr_valkey;
-        shared.bgsaveerr = shared.bgsaveerr_valkey;
-    }
+    shared.loadingerr = shared.loadingerr_variants[server.extended_redis_compat];
+    shared.slowevalerr = shared.slowevalerr_variants[server.extended_redis_compat];
+    shared.slowscripterr = shared.slowscripterr_variants[server.extended_redis_compat];
+    shared.slowmoduleerr = shared.slowmoduleerr_variants[server.extended_redis_compat];
+    shared.bgsaveerr = shared.bgsaveerr_variants[server.extended_redis_compat];
 }
 
 void createSharedObjects(void) {

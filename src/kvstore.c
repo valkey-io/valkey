@@ -643,7 +643,7 @@ void kvstoreTryResizeHashtables(kvstore *kvs, int limit) {
  * table will use two tables for a long time. So we try to use threshold_us
  * of CPU time at every call of this function to perform some rehashing.
  *
- * The function returns the amount of microsecs spent if some rehashing was
+ * The function returns the amount of microseconds spent if some rehashing was
  * performed; otherwise, 0 is returned. */
 uint64_t kvstoreIncrementallyRehash(kvstore *kvs, uint64_t threshold_us) {
     if (listLength(kvs->rehashing) == 0) return 0;

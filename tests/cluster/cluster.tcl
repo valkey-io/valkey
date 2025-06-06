@@ -159,7 +159,7 @@ proc cluster_create_with_continuous_slots {masters slaves} {
 }
 
 
-# Set the cluster node-timeout to all the reachalbe nodes.
+# Set the cluster node-timeout to all the reachable nodes.
 proc set_cluster_node_timeout {to} {
     foreach_valkey_id id {
         catch {R $id CONFIG SET cluster-node-timeout $to}

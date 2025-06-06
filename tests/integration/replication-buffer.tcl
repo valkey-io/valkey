@@ -340,7 +340,7 @@ test "Replica client-output-buffer size is limited to backlog_limit/16 when no r
             wait_for_condition 50 100 {
                 [client_field $master replica tot-mem] < $keysize
             } else {
-                fail "replica client-output-buffer usage is higher than expected."
+                fail "replica client-output-buffer usage is more than expected."
             }
 
             # now we expect the replica to re-connect but fail partial sync (it doesn't have large

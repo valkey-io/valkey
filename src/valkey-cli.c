@@ -3547,7 +3547,7 @@ static int evalMode(int argc, char **argv) {
         retval = issueCommand(argc + 3 - got_comma, argv2);
 
         for (j = 0; j < argc + 3 - got_comma; j++) {
-            sdsfree(argv[j]);
+            sdsfree(argv2[j]);
         }
         free(argv2);
 

@@ -237,7 +237,7 @@ start_server {tags {"tracking network logreqres:skip"}} {
         assert_equal "PONG" [r ping]
     }
 
-    test {RESP3 Client gets tracking-redir-broken push message after cached key changed when rediretion client is terminated} {
+    test {RESP3 Client gets tracking-redir-broken push message after cached key changed when redirection client is terminated} {
         # make sure r is working resp 3
         r HELLO 3
         r CLIENT TRACKING on REDIRECT $redir_id

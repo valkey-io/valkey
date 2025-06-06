@@ -1376,7 +1376,7 @@ test {replica can handle EINTR if use diskless load} {
             set res [wait_for_log_messages -1 {"*Loading DB in memory*"} 0 200 10]
             set loglines [lindex $res 1]
 
-            # Wait till we see the watchgod log line AFTER the loading started
+            # Wait till we see the watchdog log line AFTER the loading started
             wait_for_log_messages -1 {"*WATCHDOG TIMER EXPIRED*"} $loglines 200 10
 
             # Make sure we're still loading, and that there was just one full sync attempt

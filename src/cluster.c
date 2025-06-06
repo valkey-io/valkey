@@ -1111,7 +1111,7 @@ clusterNode *getNodeByQuery(client *c, int *error_code) {
      *
      *   1. Go over all the keys to count existing keys and missing keys that we
      *      need for TRYAGAIN and ASK redirects.
-     *   2. Check for some commands that are forbiddedn during slot migration.
+     *   2. Check for some commands that are forbidden during slot migration.
      *
      * Skip this if we're not importing or migrating this slot. */
     if (!migrating_slot && !importing_slot) goto after_checking_each_key;

@@ -5,7 +5,7 @@
  * if the arch is already little endian.
  *
  * The server tries to encode everything as little endian (but a few things that need
- * to be backward compatible are still in big endian) because most of the
+ * to be backward compatible are still in big-endian) because most of the
  * production environments are little endian, and we have a lot of conversions
  * in a few places because ziplists, intsets, zipmaps, need to be endian-neutral
  * even in memory, since they are serialized on RDB files directly with a single
@@ -45,7 +45,7 @@
 #include <stdint.h>
 
 /* Toggle the 16 bit unsigned integer pointed by *p from little endian to
- * big endian */
+ * big-endian */
 void memrev16(void *p) {
     unsigned char *x = p, t;
 
@@ -55,7 +55,7 @@ void memrev16(void *p) {
 }
 
 /* Toggle the 32 bit unsigned integer pointed by *p from little endian to
- * big endian */
+ * big-endian */
 void memrev32(void *p) {
     unsigned char *x = p, t;
 
@@ -68,7 +68,7 @@ void memrev32(void *p) {
 }
 
 /* Toggle the 64 bit unsigned integer pointed by *p from little endian to
- * big endian */
+ * big-endian */
 void memrev64(void *p) {
     unsigned char *x = p, t;
 

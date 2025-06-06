@@ -76,7 +76,7 @@ int clientsCronHandleTimeout(client *c, mstime_t now_ms) {
 /* For blocked clients timeouts we populate a radix tree of 128 bit keys
  * composed as such:
  *
- *  [8 byte big endian expire time]+[8 byte client ID]
+ *  [8 byte big-endian expire time]+[8 byte client ID]
  *
  * We don't do any cleanup in the Radix tree: when we run the clients that
  * reached the timeout already, if they are no longer existing or no longer

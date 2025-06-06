@@ -306,7 +306,7 @@ long long serverBitpos(void *s, unsigned long count, int bit) {
     }
 
     /* Load bytes into "word" considering the first byte as the most significant
-     * (we basically consider it as written in big endian, since we consider the
+     * (we basically consider it as written in big-endian, since we consider the
      * string as a set of bits from left to right, with the first bit at position
      * zero.
      *
@@ -363,7 +363,7 @@ long long serverBitpos(void *s, unsigned long count, int bit) {
  * +--------+--------+
  *
  * When offsets and integer sizes are aligned to bytes boundaries, this is the
- * same as big endian, however when such alignment does not exist, its important
+ * same as big-endian, however when such alignment does not exist, its important
  * to also understand how the bits inside a byte are ordered.
  *
  * Note that this format follows the same convention as SETBIT and related

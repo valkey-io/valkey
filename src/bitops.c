@@ -271,10 +271,10 @@ long long serverPopcount(void *s, long count) {
     if (count >= 64) {
         if (__builtin_cpu_supports("avx512f") && __builtin_cpu_supports("avx512bw") && __builtin_cpu_supports("avx512vpopcntdq")) {
             return popcountAVX512(s, count);
-        } else if (__builtin_cpu_supports("avx2")) {
-            return popcountAVX2(s, count);
         }
-    } else if (count >= 32) {
+    }
+
+    if (count >= 32) {
         if (__builtin_cpu_supports("avx2")) {
             return popcountAVX2(s, count);
         }

@@ -371,7 +371,7 @@ sds createLatencyReport(void) {
         report = sdscat(report, "\nHere is some advice for you:\n\n");
         if (advise_better_vm) {
             report = sdscat(report, "- If you are using a virtual machine, consider upgrading it with a faster one "
-                                    "using a hypervisior that provides less latency during fork() calls. Xen is known "
+                                    "using a hypervisor that provides less latency during fork() calls. Xen is known "
                                     "to have poor fork() performance. Even in the context of the same VM provider, "
                                     "certain kinds of instances can execute fork faster than others.\n");
         }

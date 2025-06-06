@@ -58,6 +58,7 @@ static int setFunction(ValkeyModuleCtx *module_ctx,
   const ValkeyModuleString *key = ValkeyModule_GetKeyNameFromOptCtx(key_ctx);
   ValkeyModuleString *previous_value =
       ValkeyModule_DictGet(mem_pool[dbid], (ValkeyModuleString *)key, NULL);
+
   if (previous_value != NULL &&
       ValkeyModule_StringCompare(previous_value, value) == 0) {
     // nothing to do, already set
@@ -77,11 +78,12 @@ static int setFunction(ValkeyModuleCtx *module_ctx,
     return 0;
   }
 
-  ValkeyModule_RetainString(module_ctx, value);
+  ValkeyModule_RetainString(NULL, value);
   if (previous_value != NULL) {
-    ValkeyModule_FreeString(module_ctx, previous_value);
+    ValkeyModule_FreeString(NULL, previous_value);
   }
   ValkeyModule_ReplyWithSimpleString(module_ctx, "OK");
+
   return 1;
 }
 
@@ -111,7 +113,10 @@ static int getFunction(ValkeyModuleCtx *module_ctx,
     ValkeyModule_ReplyWithSimpleString(module_ctx, "OK");
     return 0;
   }
-  *found = value;
+
+  if (found != NULL) {
+    *found = value;
+  }
 
   ValkeyModule_ReplyWithSimpleString(module_ctx, "OK");
   return 1;
@@ -138,6 +143,7 @@ static int delFunction(ValkeyModuleCtx *module_ctx,
   int dbid = ValkeyModule_GetDbIdFromOptCtx(key_ctx);
   const ValkeyModuleString *key = ValkeyModule_GetKeyNameFromOptCtx(key_ctx);
 
+  ValkeyModule_Assert(key != NULL && mem_pool[dbid] != NULL);
   ValkeyModuleString *value =
       ValkeyModule_DictGet(mem_pool[dbid], (ValkeyModuleString *)key, NULL);
   if (!value) {
@@ -151,7 +157,10 @@ static int delFunction(ValkeyModuleCtx *module_ctx,
                                       ValkeyModule_StringPtrLen(key, NULL));
     return 0;
   }
-  *found = value;
+
+  if (found != NULL) {
+    *found = value;
+  }
 
   ValkeyModule_ReplyWithSimpleString(module_ctx, "OK");
   return 1;
@@ -177,6 +186,25 @@ static void dropReadonlyFunction(ValkeyModuleCtx *module_ctx,
   return;
 }
 
+static int iterateFunction(ValkeyModuleCtx *, int dbid, uint,
+                           ValkeyModuleString *, ValkeyModuleString *,
+                           ValkeyModuleString **next,
+                           ValkeyModuleDictIter **iter) {
+
+  if (!*iter) {
+    *iter = ValkeyModule_DictIteratorStartC(mem_pool[dbid], "^", NULL, 0);
+  }
+
+  void *key = ValkeyModule_DictNext(NULL, *iter, NULL);
+  if (!key) {
+    ValkeyModule_DictIteratorStop(*iter);
+    *iter = NULL;
+  }
+
+  *next = key;
+  return (key != NULL);
+}
+
 int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
                         int argc) {
   VALKEYMODULE_NOT_USED(argv);
@@ -193,6 +221,7 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
       .del = delFunction,
       .set_readonly = setReadonlyFunction,
       .drop_readonly = dropReadonlyFunction,
+      .iterate = iterateFunction,
   };
 
   for (int i = 0; i < MAX_DB; i++) {

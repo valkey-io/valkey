@@ -968,6 +968,25 @@ void keysCommand(client *c) {
     }
     if (kvs_di) kvstoreReleaseHashtableIterator(kvs_di);
     if (kvs_it) kvstoreIteratorRelease(kvs_it);
+
+    if (isExtDataOn() && c->argc >= 4 && !strcasecmp(objectGetVal(c->argv[2]), "storage") && !strcasecmp(objectGetVal(c->argv[3]), "ext")) {
+        robj *match = createStringObject(pattern, sdslen(pattern));
+        externalStorageInstanceIterator *esi_it = externalStorageInstanceIteratorInit(c->db->id, match, NULL);
+        if (esi_it != NULL) {
+            // there is external storage instance for this db
+            robj *next;
+            while (externalStorageInstanceIteratorNext(esi_it, &next)) {
+                if (externalFilterIsIn(c->db->id, next)) {
+                    addReplyBulkCBuffer(c, objectGetVal(next), sdslen(objectGetVal(next)));
+                    numkeys++;
+                }
+                decrRefCount(next);
+                if (c->flag.close_asap) break;
+            }
+            externalStorageInstanceIteratorRelease(esi_it);
+        }
+        decrRefCount(match);
+    }
     setDeferredArrayLen(c, replylen, numkeys);
 }
 

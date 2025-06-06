@@ -25,6 +25,7 @@
 
 typedef struct ValkeyModuleString ValkeyModuleString;
 typedef struct ValkeyModuleKey ValkeyModuleKey;
+typedef struct ValkeyModuleDictIter ValkeyModuleDictIter;
 
 /* -------------- Defines NOT common between core and modules ------------- */
 
@@ -1372,6 +1373,28 @@ typedef void (*ValkeyModuleExternalStorageDropReadonlyFunc)(
     ValkeyModuleCtx *module_ctx,
     ValkeyModuleExternalStorageCtx *storage_ctx);
 
+/* The callback function called when `Iterate` function is called.
+ *
+ * - `module_ctx`: the module runtime context.
+ *
+ * - `iterator_id`: current iterator id.
+ *
+ * - `match`: match pattern.
+ *
+ * - `type`: type of the key.
+ *
+ * - `next`: returning value.
+ *
+ */
+typedef int (*ValkeyModuleExternalStorageIterateFunc)(
+    ValkeyModuleCtx *module_ctx,
+    int dbid,
+    unsigned int iterator_id,
+    ValkeyModuleString *match,
+    ValkeyModuleString *type,
+    ValkeyModuleString **next,
+    ValkeyModuleDictIter **iter);
+
 /* The callback function called when `SETRO` command is called.
  *
  * - `module_ctx`: the module runtime context.
@@ -1403,6 +1426,9 @@ typedef struct ValkeyModuleExternalStorageMethods {
 
     /* The callback function called when `DROPRO` command is called in this storage. */
     ValkeyModuleExternalStorageDropReadonlyFunc drop_readonly;
+
+    /* The callback function called when `Iterate` function is called in this storage. */
+    ValkeyModuleExternalStorageIterateFunc iterate;
 } ValkeyModuleExternalStorageMethodsV1;
 
 #define ValkeyModuleExternalStorageMethods ValkeyModuleExternalStorageMethodsV1

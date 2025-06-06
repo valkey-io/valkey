@@ -101,6 +101,7 @@ start_server [list overrides [list "ext-data-mode" test] tags [list "external:sk
     }
 }
 
+### Non-sharded
 start_server [list overrides [list "ext-data-mode" test] tags [list "external:skip"]] {
     test {Initializing and dropping db affects STATS commands} {
         # STATS ok with modules non-loaded
@@ -162,8 +163,8 @@ start_server [list overrides [list "ext-data-mode" test] tags [list "external:sk
     }
 }
 
-start_server [list overrides [list "ext-data-mode" test "loglevel" debug] tags [list "external:skip"]] {
-    test {Reading keys from storage works} {
+start_server [list overrides [list "ext-data-mode" test "loglevel" debug "ext-data-timeout" 0] tags [list "external:skip"]] {
+    test {Reading data from storage works} {
         # init
         assert_equal {OK} [r module load $storagemodule1]
         assert_equal {OK} [r module load $filtermodule1]
@@ -178,6 +179,7 @@ start_server [list overrides [list "ext-data-mode" test "loglevel" debug] tags [
         assert_equal {OK} [r external_data debug db0 filter setro]
         assert_error {ERR k set failed} {r external_data debug db0 storage set k v}
         assert_error {ERR k set failed} {r external_data debug db0 filter set k}
+        assert_equal {OK} [r select 0]
         assert_equal {} [r get k]
         assert_equal {OK} [r select 1]
         assert_equal {} [r get k]
@@ -239,6 +241,37 @@ start_server [list overrides [list "ext-data-mode" test "loglevel" debug] tags [
     }
 }
 
+start_server [list overrides [list "ext-data-mode" test "loglevel" debug] tags [list "external:skip"]] {
+    test {Getting keys from storage works} {
+        # init
+        assert_equal {OK} [r module load $storagemodule1]
+        assert_equal {OK} [r module load $filtermodule1]
+        assert_equal {OK} [r external_data INIT db0 STORAGE hellostorage1 FILTER hellofilter1]
+        assert_equal {OK} [r external_data INIT db1 STORAGE hellostorage1 FILTER hellofilter1]
+
+        # filter ok, storage ok = OK
+        assert_equal {OK} [r external_data debug db0 storage set k v]
+        assert_equal {OK} [r external_data debug db0 storage set k2 v]
+        assert_equal {OK} [r external_data debug db0 filter set k]
+        assert_equal {OK} [r select 0]
+        assert_equal {} [r keys \*]
+
+        # no k2 as it's not in filter yet
+        assert_equal {k} [r keys \* storage ext]
+
+        # exists k2 is it's in filter now
+        assert_equal {OK} [r external_data debug db0 filter set k2]
+        assert_equal {k k2} [r keys \* storage ext]
+
+        # another db is not touched
+        assert_equal {OK} [r select 1]
+        assert_equal {} [r keys \*]
+        assert_equal {} [r keys \* storage ext]
+        assert_equal {OK} [r select 0]
+    }
+}
+
+### Sharded
 start_cluster 1 0 [list overrides [list "ext-data-mode" test "loglevel" debug] tags [list "external:skip" "cluster"]] {
     # we assume that all cross-requests to and from another nodes are made in a usual Valkey way
     # that's why there are no tests with MOVED during set/get here
@@ -274,5 +307,44 @@ start_cluster 1 0 [list overrides [list "ext-data-mode" test "loglevel" debug] t
         # filter not, storage not = nil
         assert_equal 1 [r external_data debug db0 filter del k]
         assert_equal {} [r get k]
+    }
+}
+
+start_cluster 1 0 [list overrides [list "ext-data-mode" test "loglevel" debug] tags [list "external:skip" "cluster"]] {
+    # we assume that all cross-requests to and from another nodes are made in a usual Valkey way
+    # that's why there are no tests with MOVED during set/get here
+    test "Cluster should start ok" {
+        wait_for_cluster_state ok
+    }
+
+    set storagemodule1 [file normalize tests/modules/extstorage/extstorage1.so]
+    set filtermodule1 [file normalize tests/modules/extstorage/extfilter1.so]
+
+    test {Getting keys from storage works} {
+        # init
+        assert_equal {OK} [r module load $storagemodule1]
+        assert_equal {OK} [r module load $filtermodule1]
+        assert_equal {OK} [r external_data INIT db0 STORAGE hellostorage1 FILTER hellofilter1]
+        assert_equal {OK} [r external_data INIT db1 STORAGE hellostorage1 FILTER hellofilter1]
+
+        # filter ok, storage ok = OK
+        assert_equal {OK} [r external_data debug db0 storage set k v]
+        assert_equal {OK} [r external_data debug db0 storage set k2 v]
+        assert_equal {OK} [r external_data debug db0 filter set k]
+        assert_equal {OK} [r select 0]
+        assert_equal {} [r keys \*]
+
+        # no k2 as it's not in filter yet
+        assert_equal {k} [r keys \* storage ext]
+
+        # exists k2 is it's in filter now
+        assert_equal {OK} [r external_data debug db0 filter set k2]
+        assert_equal {k k2} [r keys \* storage ext]
+
+        # another db is not touched
+        assert_equal {OK} [r select 1]
+        assert_equal {} [r keys \*]
+        assert_equal {} [r keys \* storage ext]
+        assert_equal {OK} [r select 0]
     }
 }

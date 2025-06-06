@@ -1723,6 +1723,7 @@ typedef struct {
 
 /* forward declaration for external data */
 typedef struct externalDataCtx externalDataCtx;
+typedef struct extStorageInstanceIterator externalStorageInstanceIterator;
 
 /*-----------------------------------------------------------------------------
  * Global server state

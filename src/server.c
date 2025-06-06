@@ -4622,7 +4622,7 @@ int finishShutdown(void) {
         rsiptr = rdbPopulateSaveInfo(&rsi);
         /* Keep the page cache since it's likely to restart soon */
         if (rdbSave(REPLICA_REQ_NONE, server.rdb_filename, rsiptr, RDBFLAGS_KEEP_CACHE) != C_OK) {
-            /* Ooops.. error saving! The best we can do is to continue
+            /* Oops.. error saving! The best we can do is to continue
              * operating. Note that if there was a background saving process,
              * in the next cron() the server will be notified that the background
              * saving aborted, handling special stuff like replicas pending for

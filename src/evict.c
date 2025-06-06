@@ -172,7 +172,7 @@ int evictionPoolPopulate(serverDb *db, kvstore *samplekvs, struct evictionPoolEn
         /* Try to reuse the cached SDS string allocated in the pool entry,
          * because allocating and deallocating this object is costly
          * (according to the profiler, not my fantasy. Remember:
-         * premature optimization bla bla bla. */
+         * premature optimization blah, blah, blah. */
         int klen = sdslen(key);
         if (klen > EVPOOL_CACHED_SDS_SIZE) {
             pool[k].key = sdsdup(key);

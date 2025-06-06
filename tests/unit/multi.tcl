@@ -800,12 +800,12 @@ start_server {tags {"multi"}} {
         set repl [attach_to_replication_stream]
 
         r multi
-        r publish bla bla
+        r publish blah blah
         r exec
 
         assert_replication_stream $repl {
             {select *}
-            {publish bla bla}
+            {publish blah blah}
         }
         close_replication_stream $repl
     } {} {needs:repl cluster:skip}
@@ -937,7 +937,7 @@ start_server {tags {"multi"}} {
     test "MULTI with config error" {
         r multi
         r set foo bar
-        r config set maxmemory bla
+        r config set maxmemory blah
 
         # letting the server parser read it, it'll throw an exception instead of
         # reply with an array that contains an error, so we switch to reading

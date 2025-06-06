@@ -392,7 +392,7 @@ void migrateCloseSocket(robj *host, robj *port) {
     sdsfree(name);
 }
 
-void migrateCloseTimedoutSockets(void) {
+void migrateCloseTimedOutSockets(void) {
     dictIterator *di = dictGetSafeIterator(server.migrate_cached_sockets);
     dictEntry *de;
 

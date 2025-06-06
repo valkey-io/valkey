@@ -906,7 +906,7 @@ void sentinelCollectTerminatedScripts(void) {
 
 /* Kill scripts in timeout, they'll be collected by the
  * sentinelCollectTerminatedScripts() function. */
-void sentinelKillTimedoutScripts(void) {
+void sentinelKillTimedOutScripts(void) {
     listNode *ln;
     listIter li;
     mstime_t now = mstime();
@@ -5201,7 +5201,7 @@ void sentinelTimer(void) {
     sentinelHandleDictOfValkeyInstances(sentinel.primaries);
     sentinelRunPendingScripts();
     sentinelCollectTerminatedScripts();
-    sentinelKillTimedoutScripts();
+    sentinelKillTimedOutScripts();
 
     /* We continuously change the frequency of the server "timer interrupt"
      * in order to desynchronize every Sentinel from every other.

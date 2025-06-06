@@ -1338,7 +1338,7 @@ start_server {tags {"scripting external:skip large-memory"}} {
 # Start a new server since the last test in this stanza will kill the
 # instance at all.
 start_server {tags {"scripting"}} {
-    test {Timedout read-only scripts can be killed by SCRIPT KILL} {
+    test {Timed out read-only scripts can be killed by SCRIPT KILL} {
         set rd [valkey_deferring_client]
         r config set lua-time-limit 10
         run_script_on_connection $rd {while true do end} 0
@@ -1351,7 +1351,7 @@ start_server {tags {"scripting"}} {
         $rd close
     }
 
-    test {Timedout read-only scripts can be killed by SCRIPT KILL even when use pcall} {
+    test {Timed out read-only scripts can be killed by SCRIPT KILL even when use pcall} {
         set rd [valkey_deferring_client]
         r config set lua-time-limit 10
         run_script_on_connection $rd {local f = function() while 1 do redis.call('ping') end end while 1 do pcall(f) end} 0
@@ -1379,7 +1379,7 @@ start_server {tags {"scripting"}} {
         assert_match {*killed by user*} $res
     }
 
-    test {Timedout script does not cause a false dead client} {
+    test {Timed out script does not cause a false dead client} {
         set rd [valkey_deferring_client]
         r config set lua-time-limit 10
 
@@ -1427,13 +1427,13 @@ start_server {tags {"scripting"}} {
         $rd close
     }
 
-    test {Timedout script link is still usable after Lua returns} {
+    test {Timed out script link is still usable after Lua returns} {
         r config set lua-time-limit 10
         run_script {for i=1,100000 do redis.call('ping') end return 'ok'} 0
         r ping
     } {PONG}
 
-    test {Timedout scripts and unblocked command} {
+    test {Timed out scripts and unblocked command} {
         # make sure a command that's allowed during BUSY doesn't trigger an unblocked command
 
         # enable AOF to also expose an assertion if the bug would happen
@@ -1481,7 +1481,7 @@ start_server {tags {"scripting"}} {
         r DEBUG set-disable-deny-scripts 0
     } {OK} {external:skip needs:debug}
 
-    test {Timedout scripts that modified data can't be killed by SCRIPT KILL} {
+    test {Timed out scripts that modified data can't be killed by SCRIPT KILL} {
         set rd [valkey_deferring_client]
         r config set lua-time-limit 10
         run_script_on_connection $rd {redis.call('set',KEYS[1],'y'); while true do end} 1 x
@@ -1496,7 +1496,7 @@ start_server {tags {"scripting"}} {
 
     # Note: keep this test at the end of this server stanza because it
     # kills the server.
-    test {SHUTDOWN NOSAVE can kill a timedout script anyway} {
+    test {SHUTDOWN NOSAVE can kill a timed out script anyway} {
         # The server should be still unresponding to normal commands.
         catch {r ping} e
         assert_match {BUSY*} $e

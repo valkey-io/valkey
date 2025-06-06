@@ -74,7 +74,7 @@ void latencyMonitorInit(void) {
 
 /* Add the specified sample to the specified time series "event".
  * This function is usually called via latencyAddSampleIfNeeded(), that
- * is a macro that only adds the sample if the latency is higher than
+ * is a macro that only adds the sample if the latency is above
  * server.latency_monitor_threshold. */
 void latencyAddSample(const char *event, mstime_t latency) {
     struct latencyTimeSeries *ts = dictFetchValue(server.latency_events, event);

@@ -75,7 +75,7 @@ start_server {tags {"modules"}} {
         }
 
         test "RESP$proto: RM_ReplyWithVerbatimString: a string reply" {
-            assert_equal "bla\nbla\nbla" [r rw.verbatim "bla\nbla\nbla"]
+            assert_equal "blah\nblah\nblah" [r rw.verbatim "blah\nblah\nblah"]
         }
 
         test "RESP$proto: RM_ReplyWithArray: an array reply" {

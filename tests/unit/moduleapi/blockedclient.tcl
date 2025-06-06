@@ -226,7 +226,7 @@ foreach call_type {nested normal} {
         assert_equal [errorrstat ERR r] {count=1}
 
         # simple module command that replies with string error
-        assert_error "ERR unknown subcommand 'bla'. Try CONFIG HELP." {r do_rm_call config bla}
+        assert_error "ERR unknown subcommand 'blah'. Try CONFIG HELP." {r do_rm_call config blah}
         assert_equal [errorrstat ERR r] {count=2}
 
         # module command that replies with string error from bg thread

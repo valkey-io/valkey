@@ -302,7 +302,7 @@ test {client freed during loading} {
             lappend clients [valkey_deferring_client]
         }
         foreach rd $clients {
-            $rd debug log bla
+            $rd debug log blah
         }
         foreach rd $clients {
             $rd read

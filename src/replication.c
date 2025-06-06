@@ -4898,7 +4898,7 @@ void replicationCron(void) {
         }
     }
 
-    /* Disconnect timedout replicas. */
+    /* Disconnect timed out replicas. */
     if (listLength(server.replicas)) {
         listIter li;
         listNode *ln;
@@ -4910,7 +4910,7 @@ void replicationCron(void) {
             if (replica->repl_data->repl_state == REPLICA_STATE_ONLINE) {
                 if (replica->flag.pre_psync) continue;
                 if ((server.unixtime - replica->repl_data->repl_ack_time) > server.repl_timeout) {
-                    serverLog(LL_WARNING, "Disconnecting timedout replica (streaming sync): %s",
+                    serverLog(LL_WARNING, "Disconnecting timed out replica (streaming sync): %s",
                               replicationGetReplicaName(replica));
                     freeClient(replica);
                     continue;
@@ -4923,7 +4923,7 @@ void replicationCron(void) {
                 server.rdb_child_type == RDB_CHILD_TYPE_SOCKET) {
                 if (replica->repl_data->repl_last_partial_write != 0 &&
                     (server.unixtime - replica->repl_data->repl_last_partial_write) > server.repl_timeout) {
-                    serverLog(LL_WARNING, "Disconnecting timedout replica (full sync): %s",
+                    serverLog(LL_WARNING, "Disconnecting timed out replica (full sync): %s",
                               replicationGetReplicaName(replica));
                     freeClient(replica);
                     continue;

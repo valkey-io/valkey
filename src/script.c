@@ -57,7 +57,7 @@ static void exitScriptTimedoutMode(scriptRunCtx *run_ctx) {
 static void enterScriptTimedoutMode(scriptRunCtx *run_ctx) {
     serverAssert(run_ctx == curr_run_ctx);
     serverAssert(!scriptIsTimedout());
-    /* Mark script as timedout */
+    /* Mark script as timed out */
     run_ctx->flags |= SCRIPT_TIMEDOUT;
     blockingOperationStarts();
 }
@@ -81,7 +81,7 @@ client *scriptGetCaller(void) {
  * and also check if the run should be terminated. */
 int scriptInterrupt(scriptRunCtx *run_ctx) {
     if (run_ctx->flags & SCRIPT_TIMEDOUT) {
-        /* script already timedout
+        /* script already timed out
            we just need to precess some events and return */
         processEventsWhileBlocked();
         return (run_ctx->flags & SCRIPT_KILLED) ? SCRIPT_KILL : SCRIPT_CONTINUE;

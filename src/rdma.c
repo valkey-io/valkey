@@ -729,7 +729,7 @@ static void connRdmaEventHandler(struct aeEventLoop *el, int fd, void *clientDat
         return;
     }
 
-    /* uplayer should read all */
+    /* up layer should read all */
     while (!(rdma_conn->flags & RDMA_CONN_FLAG_POSTPONE_UPDATE_STATE) && ctx->rx.pos < ctx->rx.offset) {
         if (conn->read_handler && (callHandler(conn, conn->read_handler) == C_ERR)) {
             return;

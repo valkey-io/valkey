@@ -2004,7 +2004,7 @@ static inline robj *createSharedStringFromSds(sds s) {
 }
 
 /* These shared strings depend on the extended-redis-compatibility config and is
- * called when the config changes. When the config is phased out, these
+ * called at initialization. When the config is phased out, these
  * initializations can be moved back inside createSharedObjects() below. */
 void createSharedObjectsForCompat(int compat) {
     const char *name = compat ? "Redis" : SERVER_TITLE;
@@ -2028,11 +2028,8 @@ void createSharedObjectsForCompat(int compat) {
                                             name, name));
 }
 
-void createSharedObjectsWithCompat(void) {
-    createSharedObjectsForCompat(0);
-    createSharedObjectsForCompat(1);
-}
-
+/* These shared strings depend on the extended-redis-compatibility config and are
+ * called at initialization and when the config changes. */
 void updateSharedObjectsWithCompat(void) {
     shared.loadingerr = shared.loadingerr_variants[server.extended_redis_compat];
     shared.slowevalerr = shared.slowevalerr_variants[server.extended_redis_compat];
@@ -2064,7 +2061,8 @@ void createSharedObjects(void) {
     shared.sameobjecterr = createSharedString("-ERR source and destination objects are the same\r\n");
     shared.outofrangeerr = createSharedString("-ERR index out of range\r\n");
     shared.noscripterr = createSharedString("-NOSCRIPT No matching script.\r\n");
-    createSharedObjectsWithCompat();
+    createSharedObjectsForCompat(0);
+    createSharedObjectsForCompat(1);
     updateSharedObjectsWithCompat();
     shared.primarydownerr = createSharedString("-MASTERDOWN Link with MASTER is down and replica-serve-stale-data is set to 'no'.\r\n");
     shared.roreplicaerr = createSharedString("-READONLY You can't write against a read only replica.\r\n");

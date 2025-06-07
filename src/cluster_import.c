@@ -4,39 +4,33 @@
  * SPDX-License-Identifier: BSD 3-Clause
  */
 
-#include "server.h"
-#include "cluster.h"
-#include "cluster_legacy.h"
+#include "cluster_import.h"
 #include "bio.h"
 #include "module.h"
 #include "functions.h"
 
-int isSlotMigrationLinkInProgress(slotMigrationLink *link);
-slotMigrationLink *createSlotImportLink(clusterNode *source_node, list *slot_ranges, int one_shot);
-void connectSlotImportLink(slotMigrationLink *link, char *ip, int port);
-const char *slotMigrationLinkStateToString(slotMigrationLinkState state);
-const char *slotExportStateToString(slotMigrationLinkState state);
-void updateSlotMigrationLinkState(slotMigrationLink *link, slotMigrationLinkState state);
-void sendSyncSlotsMessageOnClient(client *c, const char *subcommand);
-void sendSyncSlotsMessageOnLink(slotMigrationLink *link, const char *subcommand);
-void proceedWithSlotMigration(slotMigrationLink *link);
-slotMigrationLink *createSlotExportLink(client *c, char *nodename, char *linkname, list *slot_ranges);
-int isSlotExportPauseTimedOut(slotMigrationLink *link);
-void resetSlotMigrationLink(slotMigrationLink *link);
-void finishSlotMigrationLink(slotMigrationLink *link, slotMigrationLinkState state, char *message);
-void updateSlotMigrationLinkStatusMessage(slotMigrationLink *link, char *message);
+static int isSlotMigrationLinkInProgress(slotMigrationLink *link);
+static slotMigrationLink *createSlotImportLink(clusterNode *source_node, list *slot_ranges, int one_shot);
+static void connectSlotImportLink(slotMigrationLink *link);
+static const char *slotMigrationLinkStateToString(slotMigrationLinkState state);
+static void updateSlotMigrationLinkState(slotMigrationLink *link, slotMigrationLinkState state);
+static void sendSyncSlotsMessageOnClient(client *c, const char *subcommand);
+static void sendSyncSlotsMessageOnLink(slotMigrationLink *link, const char *subcommand);
+static void proceedWithSlotMigration(slotMigrationLink *link);
+static slotMigrationLink *createSlotExportLink(client *c, char *nodename, char *linkname, list *slot_ranges);
+static int isSlotExportPauseTimedOut(slotMigrationLink *link);
+static void resetSlotMigrationLink(slotMigrationLink *link);
+static void finishSlotMigrationLink(slotMigrationLink *link, slotMigrationLinkState state, char *message);
+static void updateSlotMigrationLinkStatusMessage(slotMigrationLink *link, char *message);
 
-void freeSlotRangeValue(void *o) {
-    zfree(o);
-}
 
 list *createSlotRangeList(void) {
     list *slot_ranges = listCreate();
-    listSetFreeMethod(slot_ranges, freeSlotRangeValue);
+    listSetFreeMethod(slot_ranges, zfree);
     return slot_ranges;
 }
 
-sds representSlotRangeList(list *slot_ranges, const char separator) {
+sds representSlotRangeList(list *slot_ranges) {
     sds res = sdsempty();
     listNode *ln;
     listIter li;
@@ -45,10 +39,10 @@ sds representSlotRangeList(list *slot_ranges, const char separator) {
     while ((ln = listNext(&li)) != NULL) {
         slotRange *range = ln->value;
         if (first) {
-            res = sdscatprintf(res, "%d%c%d", range->start_slot, separator, range->end_slot);
+            res = sdscatfmt(res, "%u-%u", range->start_slot, range->end_slot);
             first = 0;
         } else {
-            res = sdscatprintf(res, " %d%c%d", range->start_slot, separator, range->end_slot);
+            res = sdscatfmt(res, " %u-%u", range->start_slot, range->end_slot);
         }
     }
     return res;
@@ -302,8 +296,8 @@ void clusterCommandImport(client *c, int one_shot) {
     }
 
     slotMigrationLink *link = createSlotImportLink(source_node, slot_ranges, one_shot);
-    connectSlotImportLink(link, source_node->ip, getNodeDefaultClientPort(source_node));
     listAddNodeHead(server.cluster->slot_migration_links, link);
+    proceedWithSlotMigration(link);
     addReply(c, shared.ok);
 }
 
@@ -566,8 +560,9 @@ slotMigrationLink *createSlotImportLink(clusterNode *source_node, list *slot_ran
     link->last_ack = link->ctime;
     link->type = SLOT_MIGRATION_IMPORT;
     link->slot_ranges = slot_ranges;
-    link->slot_ranges_str = representSlotRangeList(slot_ranges, '-');
+    link->slot_ranges_str = representSlotRangeList(slot_ranges);
     link->one_shot = one_shot;
+    link->state = SLOT_IMPORT_CONNECTING;
     getRandomHexChars(link->linkname, sizeof(link->linkname));
     memcpy(link->nodename, source_node->name, CLUSTER_NAMELEN);
     serverLog(LL_NOTICE,
@@ -584,19 +579,21 @@ void slotImportConnectHandler(connection *conn) {
     proceedWithSlotMigration(link);
 }
 
-void connectSlotImportLink(slotMigrationLink *link, char *ip, int port) {
+void connectSlotImportLink(slotMigrationLink *link) {
     sds status_msg;
+    clusterNode *n = clusterLookupNode(link->nodename, CLUSTER_NAMELEN);
+    int port = getNodeDefaultClientPort(n);
     serverLog(LL_NOTICE,
               "Connecting slot import link %.40s to %.40s "
               "(owner of slots [%s]) at (ip: %s, port %d)",
               link->linkname,
               link->nodename,
               link->slot_ranges_str,
-              ip,
+              n->ip,
               port);
 
     link->conn = connCreate(connTypeOfReplication());
-    if (connConnect(link->conn, ip, port, server.bind_source_addr,
+    if (connConnect(link->conn, n->ip, port, server.bind_source_addr,
         /*multipath=*/ 0, slotImportConnectHandler) == C_ERR) {
         serverLog(LL_WARNING,
                   "Failed to connect slot import link %.40s to %.40s: %s",
@@ -610,15 +607,15 @@ void connectSlotImportLink(slotMigrationLink *link, char *ip, int port) {
         return;
     }
 
-    /* Store the link in connection private data, until we have a client to store it in. */
+    /* Store the slot migration link in connection private data, until we have a
+     * client to store it in. */
     connSetPrivateData(link->conn, link);
-    updateSlotMigrationLinkState(link, SLOT_IMPORT_CONNECTING);
 }
 
 void clusterHandleSlotImportLinkClientClose(slotMigrationLink *link) {
     link->client = NULL;
     if (!isSlotMigrationLinkInProgress(link)) return;
-    if (link->state == SLOT_IMPORT_RECONNECT) return;
+    if (link->state == SLOT_IMPORT_CONNECTING) return;
     clusterDoBeforeSleep(CLUSTER_TODO_HANDLE_SLOT_MIGRATION);
     serverLog(LL_WARNING,
               "Slot import link %.40s lost connection to node %.40s "
@@ -626,7 +623,12 @@ void clusterHandleSlotImportLinkClientClose(slotMigrationLink *link) {
               link->linkname,
               link->nodename,
               link->slot_ranges_str);
-    updateSlotMigrationLinkState(link, SLOT_IMPORT_RECONNECT);
+
+    /* Perform the reconnect. Leaving partially imported slots would result in
+     * corruption, so we flush those now. */
+    resetSlotMigrationLink(link);
+    delKeysNotOwnedByMyself(link->slot_ranges);
+    updateSlotMigrationLinkState(link, SLOT_IMPORT_CONNECTING);
 }
 
 void clusterHandleSlotMigrationLinkClientOOM(void *o) {
@@ -678,22 +680,8 @@ clusterNode *validateClusterNodeForImportIsUnchanged(slotMigrationLink *link) {
     return NULL;
 }
 
-void performSlotImportLinkReconnect(slotMigrationLink *link) {
-    serverAssert(link->type == SLOT_MIGRATION_IMPORT);
-    /* Leaving partially imported slots would result in corruption. */
-    resetSlotMigrationLink(link);
-    delKeysNotOwnedByMyself(link->slot_ranges);
-
-    clusterNode *n = validateClusterNodeForImportIsUnchanged(link);
-
-    if (n) {
-        /* Do the reconnect for this link. */
-        connectSlotImportLink(link, n->ip, getNodeDefaultClientPort(n));
-    }
-}
-
 /* This function implements the final part of manual slot failovers,
- * where the replica grabs all the import link's hash slots, and
+ * where the replica grabs all the slot migration link's hash slots, and
  * propagates the new configuration.
  *
  * Note that it's up to the caller to be sure that the node got a new
@@ -703,7 +691,7 @@ void performSlotImportLinkFailover(slotMigrationLink *link) {
     /* 1) Force bump the epoch to facilitate propagation. */
     clusterBumpConfigEpochWithoutConsensus();
 
-    /* 2) Claim all the slots in the slot import link to myself. */
+    /* 2) Claim all the slots in the slot migration link to myself. */
     listNode *ln;
     listIter li;
     listRewind(link->slot_ranges, &li);
@@ -724,7 +712,7 @@ void performSlotImportLinkFailover(slotMigrationLink *link) {
      *    and detect that we switched to master role. */
     clusterBroadcastPong(CLUSTER_BROADCAST_ALL);
 
-    /* 5) Reflect the failover in the slot import link state */
+    /* 5) Reflect the failover in the slot migration link state */
     serverLog(LL_NOTICE,
               "Slot import link %.40s completed import successfully. "
               "This node is now the owner of slots (%s)",
@@ -733,8 +721,8 @@ void performSlotImportLinkFailover(slotMigrationLink *link) {
     finishSlotMigrationLink(link, SLOT_MIGRATION_LINK_SUCCESS, NULL);
 }
 
-/* Determine if the link is connected, and return 1 if so. Handles state transition in the case of
- * success/failure. Returns if the connection is done. */
+/* Determine if the slot migration link is connected, and return 1 if so. Handles state transition
+ * in the case of success/failure. Returns if the connection is done. */
 int proceedWithSlotImportLinkConnecting(slotMigrationLink *link) {
     serverAssert(link->type == SLOT_MIGRATION_IMPORT && link->conn);
     switch (connGetState(link->conn)) {
@@ -879,6 +867,21 @@ void clusterUpdateSlotImportsOnOwnershipChange(void) {
             continue;
         }
         validateClusterNodeForImportIsUnchanged(link);
+    }
+}
+
+void clusterHandleFlushDuringSlotMigration(void) {
+    listNode *ln;
+    listIter li;
+    listRewind(server.cluster->slot_migration_links, &li);
+    while ((ln = listNext(&li))) {
+        slotMigrationLink *link = (slotMigrationLink *)ln->value;
+        if (!isSlotMigrationLinkInProgress(link)) continue;
+        /* Note that if we are exporting, we don't send a FAIL message, so the target should
+         * reconnect and complete the migration shortly after, since we now have no data.
+         *
+         * If we are importing, we fail the migration and expect the operator to retry. */
+        finishSlotMigrationLink(link, SLOT_MIGRATION_LINK_FAILED, "Data was flushed");
     }
 }
 
@@ -1286,6 +1289,22 @@ void clusterFeedSlotExportLinks(int dbid, robj **argv, int argc) {
     listIter li;
     listNode *ln;
 
+    if (server.server_del_keys_in_slot && !server.current_client) {
+        /* Three scenarios:
+         *
+         *  1. delKeysInSlot is triggered by user via CLUSTER FLUSHSLOT, in
+               which case current_client should be set.
+         *  2. delKeysInSlot is triggered by a topology update, in which case:
+         *     a. The topology update is related to this slot, and we would have
+         *        already cancelled/completed the migration via
+         *        clusterUpdateSlot(Imports|Exports)OnOwnershipChange
+         *     b. The topology update is unrelated to this slot, so we don't
+         *        care about the deleted keys.
+         *
+         * Because of this, we can simply return if it is scenario 2 */
+        return;
+    }
+
     /* This function may be called after the command is executed.
      * At this time, the arg in argv may be rewritten and the encoding
      * may be an INT. In this case, we need to decode it into a string
@@ -1377,7 +1396,7 @@ void updateSlotExportIfOwnershipChanged(slotMigrationLink *link) {
         if (n == server.cluster->myself) {
             return;
         } else if (!memcmp(n->name, link->nodename, CLUSTER_NAMELEN)) {
-            /* All slots are now claimed by the target of this link */
+            /* All slots are now claimed by the target of this slot migration link */
             serverLog(LL_NOTICE,
                       "Slot export link %.40s completed export successfully. "
                       "Slots (%s) are now owned by %.40s",
@@ -1404,7 +1423,8 @@ void updateSlotExportIfOwnershipChanged(slotMigrationLink *link) {
 }
 
 /* Called within topology updates to update any slot exports immediately
- * when the ownership changes. Will unpause if all paused links are now done. */
+ * when the ownership changes. Will unpause if all paused slot migration links
+ * are now done. */
 void clusterUpdateSlotExportsOnOwnershipChange(void) {
     listNode *ln;
     listIter li;
@@ -1450,7 +1470,7 @@ createSlotExportLink(client *c, char *nodename, char *linkname, list *slot_range
     link->type = SLOT_MIGRATION_EXPORT;
     link->state = SLOT_EXPORT_WAITING_TO_SNAPSHOT;
     link->slot_ranges = slot_ranges;
-    link->slot_ranges_str = representSlotRangeList(slot_ranges, '-');
+    link->slot_ranges_str = representSlotRangeList(slot_ranges);
     link->client->slot_migration_link = link;
     initClientReplicationData(link->client);
 
@@ -1532,10 +1552,10 @@ void proceedWithSlotMigration(slotMigrationLink *link) {
     while (1) {
         switch (link->state) {
         /* Importing states */
-        case SLOT_IMPORT_RECONNECT:
-            performSlotImportLinkReconnect(link);
-            return;
         case SLOT_IMPORT_CONNECTING:
+            if (!link->conn) {
+                connectSlotImportLink(link);
+            }
             if (proceedWithSlotImportLinkConnecting(link)) {
                 continue;
             }
@@ -1595,7 +1615,8 @@ void proceedWithSlotMigration(slotMigrationLink *link) {
                  * point, we expect the takeover of the slot and gossip to be relatively quick
                  * in steady state.
                  *
-                 * Regardless, we log a warning and proceed with cleaning up the export link. */
+                 * Regardless, we log a warning and proceed with cleaning up the slot migration
+                 * link. */
                 serverLog(LL_WARNING, "Write loss risk! During slot export, new owner did not "
                                       "broadcast ownership before we unpaused ourselves. Any "
                                       "writes we have recorded since unpausing will now be lost!");
@@ -1605,7 +1626,8 @@ void proceedWithSlotMigration(slotMigrationLink *link) {
                                         "succeeded with lost writes)");
                 return;
             }
-            /* updateSlotExportIfOwnershipChanged will close the link if it is done. */
+            /* updateSlotExportIfOwnershipChanged will close the slot migration link if it is
+             * done. */
             updateSlotExportIfOwnershipChanged(link);
             return;
 
@@ -1672,7 +1694,6 @@ int shouldCleanupSlotMigrationLink(slotMigrationLink *link, unsigned long idx) {
 
 const char *slotMigrationLinkStateToString(slotMigrationLinkState state) {
     switch (state) {
-    case SLOT_IMPORT_RECONNECT: return "reconnecting";
     case SLOT_IMPORT_CONNECTING: return "connecting";
     case SLOT_IMPORT_AUTHENTICATING: return "authenticating";
     case SLOT_IMPORT_START_SNAPSHOT:

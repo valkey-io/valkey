@@ -40,6 +40,7 @@
 #include "cluster.h"
 #include "cluster_legacy.h"
 #include "cluster_slot_stats.h"
+#include "cluster_import.h"
 #include "endianconv.h"
 #include "connection.h"
 #include "module.h"
@@ -2874,13 +2875,6 @@ void clusterUpdateSlotsConfigWith(clusterNode *sender, uint64_t senderConfigEpoc
         delete_dirty_slots = 1;
     }
 
-    if (delete_dirty_slots) {
-        for (int j = 0; j < dirty_slots_count; j++) {
-            serverLog(LL_NOTICE, "Deleting keys in dirty slot %d on node %.40s (%s) in shard %.40s", dirty_slots[j],
-                      myself->name, myself->human_nodename, myself->shard_id);
-            delKeysInSlot(dirty_slots[j], server.lazyfree_lazy_server_del, true, false);
-        }
-    }
     if (exporting_slots_count) {
         /* At least one slot we were exporting has a topology change. */
         clusterUpdateSlotExportsOnOwnershipChange();
@@ -2888,6 +2882,14 @@ void clusterUpdateSlotsConfigWith(clusterNode *sender, uint64_t senderConfigEpoc
     if (importing_slots_count) {
         /* At least one slot we were exporting has a topology change. */
         clusterUpdateSlotImportsOnOwnershipChange();
+    }
+
+    if (delete_dirty_slots) {
+        for (int j = 0; j < dirty_slots_count; j++) {
+            serverLog(LL_NOTICE, "Deleting keys in dirty slot %d on node %.40s (%s) in shard %.40s", dirty_slots[j],
+                      myself->name, myself->human_nodename, myself->shard_id);
+            delKeysInSlot(dirty_slots[j], server.lazyfree_lazy_server_del, true, false);
+        }
     }
 }
 
@@ -6583,28 +6585,6 @@ void removeChannelsInSlot(unsigned int slot) {
     pubsubShardUnsubscribeAllChannelsInSlot(slot);
 }
 
-/* Propagate deletion of all keys in slot (without doing the local deletion).
- * Assumed to be executed inside an execution context. */
-unsigned int propagateSlotDeletionByKeys(unsigned int hashslot) {
-    unsigned int j = 0;
-
-    if (!countKeysInSlot(hashslot)) return 0;
-
-    kvstoreHashtableIterator *kvs_di = NULL;
-    void *next;
-    kvs_di = kvstoreGetHashtableIterator(server.db->keys, hashslot, HASHTABLE_ITER_SAFE);
-    while (kvstoreHashtableIteratorNext(kvs_di, &next)) {
-        robj *valkey = next;
-        sds sdskey = objectGetKey(valkey);
-        robj *key = createStringObject(sdskey, sdslen(sdskey));
-        propagateDeletion(&server.db[0], key, server.lazyfree_lazy_server_del);
-        decrRefCount(key);
-        j++;
-    }
-    kvstoreReleaseHashtableIterator(kvs_di);
-    return j;
-}
-
 /* Remove all the keys in the specified hash slot.
  * The number of removed items is returned. */
 unsigned int delKeysInSlot(unsigned int hashslot, int lazy, bool propagate_del, bool send_del_event) {
@@ -6615,7 +6595,6 @@ unsigned int delKeysInSlot(unsigned int hashslot, int lazy, bool propagate_del, 
     server.server_del_keys_in_slot = 1;
     unsigned int j = 0;
     int before_execution_nesting = server.execution_nesting;
-    robj *argv[4];
 
     for (int i = 0; i < server.dbnum; i++) {
         kvstoreHashtableIterator *kvs_di = NULL;
@@ -6624,6 +6603,7 @@ unsigned int delKeysInSlot(unsigned int hashslot, int lazy, bool propagate_del, 
         kvs_di = kvstoreGetHashtableIterator(db.keys, hashslot, HASHTABLE_ITER_SAFE);
         while (kvstoreHashtableIteratorNext(kvs_di, &next)) {
             robj *valkey = next;
+            enterExecutionUnit(1, 0);
             sds sdskey = objectGetKey(valkey);
             robj *key = createStringObject(sdskey, sdslen(sdskey));
             if (lazy) {
@@ -6631,6 +6611,8 @@ unsigned int delKeysInSlot(unsigned int hashslot, int lazy, bool propagate_del, 
             } else {
                 dbSyncDelete(&db, key);
             }
+            // if is command, skip del propagate
+            if (propagate_del) propagateDeletion(&db, key, lazy);
             signalModifiedKey(NULL, &db, key);
             if (send_del_event) {
                 /* In the `cluster flushslot` scenario, the keys are actually deleted so notify everyone. */
@@ -6641,34 +6623,15 @@ unsigned int delKeysInSlot(unsigned int hashslot, int lazy, bool propagate_del, 
                  * keyspace notification to the modules, but not to clients. */
                 moduleNotifyKeyspaceEvent(NOTIFY_GENERIC, "del", key, db.id);
             }
+            exitExecutionUnit();
+            postExecutionUnitOperations();
             decrRefCount(key);
             j++;
             server.dirty++;
         }
         kvstoreReleaseHashtableIterator(kvs_di);
     }
-    
-    if (propagate_del) {
-        enterExecutionUnit(1, 0);
-        /* Propagate as a single CLUSTER FLUSHSLOT <slot> ASYNC for efficiency. */
-        argv[0] = shared.cluster;
-        argv[1] = shared.flushslot;
-        argv[2] = createStringObjectFromLongLong(hashslot);
-        argv[3] = lazy ? shared.async : shared.sync; 
-        incrRefCount(argv[0]);
-        incrRefCount(argv[1]);
-        incrRefCount(argv[2]);
-        incrRefCount(argv[3]);
-        /* DB number doesn't matter since FLUSHSLOT is a cross-DB operation, just hardcode
-         * zero. */
-        alsoPropagate(/*dbid=*/0, argv, 4, PROPAGATE_AOF | PROPAGATE_REPL);
-        decrRefCount(argv[0]);
-        decrRefCount(argv[1]);
-        decrRefCount(argv[2]);
-        decrRefCount(argv[3]);
-        exitExecutionUnit();
-        postExecutionUnitOperations();
-    }
+
     server.server_del_keys_in_slot = 0;
     serverAssert(server.execution_nesting == before_execution_nesting);
     return j;
@@ -7481,6 +7444,9 @@ int clusterCommandSpecial(client *c) {
     } else if (!strcasecmp(c->argv[1]->ptr, "links") && c->argc == 2) {
         /* CLUSTER LINKS */
         addReplyClusterLinksDescription(c);
+    } else if (!strcasecmp(c->argv[1]->ptr, "flushslot") && (c->argc == 3 || c->argc == 4)) {
+        /* CLUSTER FLUSHSLOT <slot> [ASYNC|SYNC] */
+        clusterCommandFlushslot(c);
     } else if (!strcasecmp(c->argv[1]->ptr, "import") && c->argc > 3 && c->argc % 2 == 1) {
         /* CLUSTER IMPORT SLOTSRANGE <start slot> <end slot> [<start slot> <end slot> ...] */
         clusterCommandImport(c, /*one_shot=*/1);

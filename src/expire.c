@@ -37,6 +37,7 @@
 
 #include "server.h"
 #include "cluster.h"
+#include "cluster_import.h"
 
 /*-----------------------------------------------------------------------------
  * Incremental collection of expired keys.

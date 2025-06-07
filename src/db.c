@@ -29,6 +29,7 @@
 
 #include "server.h"
 #include "cluster.h"
+#include "cluster_import.h"
 #include "latency.h"
 #include "script.h"
 #include "functions.h"
@@ -571,7 +572,7 @@ robj *dbUnshareStringValue(serverDb *db, robj *key, robj *o) {
  * The dbnum can be -1 if all the DBs should be emptied, or the specified
  * DB index if we want to empty only a single database.
  * The function returns the number of keys removed from the database(s). */
-long long emptyDbStructure(serverDb *dbarray, int dbnum, int async, void(callback)(hashtable *), emptyDataHashtableFilter filter) {
+long long emptyDbStructure(serverDb *dbarray, int dbnum, int async, void(callback)(hashtable *)) {
     long long removed = 0;
     int startdb, enddb;
 
@@ -587,10 +588,10 @@ long long emptyDbStructure(serverDb *dbarray, int dbnum, int async, void(callbac
 
         removed += kvstoreSize(dbarray[j].keys);
         if (async) {
-            emptyDbAsync(&dbarray[j], filter);
+            emptyDbAsync(&dbarray[j]);
         } else {
-            kvstoreEmpty(dbarray[j].keys, callback, filter);
-            kvstoreEmpty(dbarray[j].expires, callback, filter);
+            kvstoreEmpty(dbarray[j].keys, callback);
+            kvstoreEmpty(dbarray[j].expires, callback);
         }
         /* Because all keys of database are removed, reset average ttl. */
         dbarray[j].avg_ttl = 0;
@@ -615,7 +616,7 @@ long long emptyDbStructure(serverDb *dbarray, int dbnum, int async, void(callbac
  * On success the function returns the number of keys removed from the
  * database(s). Otherwise -1 is returned in the specific case the
  * DB number is out of range, and errno is set to EINVAL. */
-long long emptyData(int dbnum, int flags, void(callback)(hashtable *), emptyDataHashtableFilter filter) {
+long long emptyData(int dbnum, int flags, void(callback)(hashtable *)) {
     int async = (flags & EMPTYDB_ASYNC);
     int with_functions = !(flags & EMPTYDB_NOFUNCTIONS);
     ValkeyModuleFlushInfoV1 fi = {VALKEYMODULE_FLUSHINFO_VERSION, !async, dbnum};
@@ -635,7 +636,7 @@ long long emptyData(int dbnum, int flags, void(callback)(hashtable *), emptyData
     signalFlushedDb(dbnum, async);
 
     /* Empty the database structure. */
-    removed = emptyDbStructure(server.db, dbnum, async, callback, filter);
+    removed = emptyDbStructure(server.db, dbnum, async, callback);
 
     if (dbnum == -1) flushReplicaKeysWithExpireList();
 
@@ -673,7 +674,7 @@ serverDb *initTempDb(void) {
 /* Discard tempDb, it's always async. */
 void discardTempDb(serverDb *tempDb) {
     /* Release temp DBs. */
-    emptyDbStructure(tempDb, -1, 1, NULL, NULL);
+    emptyDbStructure(tempDb, -1, 1, NULL);
     for (int i = 0; i < server.dbnum; i++) {
         kvstoreRelease(tempDb[i].keys);
         kvstoreRelease(tempDb[i].expires);
@@ -764,7 +765,7 @@ int getFlushCommandFlags(client *c, int *flags) {
 
 /* Flushes the whole server data set. */
 void flushAllDataAndResetRDB(int flags) {
-    server.dirty += emptyData(-1, flags, NULL, NULL);
+    server.dirty += emptyData(-1, flags, NULL);
     if (server.child_type == CHILD_TYPE_RDB) killRDBChild();
     if (server.saveparamslen > 0) {
         rdbSaveInfo rsi, *rsiptr;
@@ -789,33 +790,17 @@ void flushdbCommand(client *c) {
     if (getFlushCommandFlags(c, &flags) == C_ERR) return;
 
     if (server.cluster_enabled && (clusterIsAnySlotImporting() || clusterIsAnySlotExporting())) {
-        /* Here, we handle two cases:
-         *   1. FLUSHDB should not flush importing slots. Right now, there is
-         *      no clean way to propagate this to replicas without propagating
-         *      a delete for each key in the slots we drop.
-         *   2. FLUSHDB needs to be broken into slot-level commands in order
-         *      for it to be replayed on the slot import targets.
-         *
-         * Eventually, a single command to flush a slot would improve the
-         * replication traffic.
-         */
-        for (int i = 0; i < CLUSTER_SLOTS; i++) {
-            if (clusterIsSlotImporting(i)) continue;
-            propagateSlotDeletionByKeys(i);
-        }
-        preventCommandPropagation(c);
-
-        /* After propagating the deletes, we can flush the DB. Note that we
-         * don't flush importing slots. */
-        server.dirty += emptyData(c->db->id, flags | EMPTYDB_NOFUNCTIONS, NULL, clusterIsSlotImporting);
-    } else {
-        /* flushdb should not flush the functions */
-        server.dirty += emptyData(c->db->id, flags | EMPTYDB_NOFUNCTIONS, NULL, NULL);
-
-        /* Without the forceCommandPropagation, when DB was already empty,
-         * FLUSHDB will not be replicated nor put into the AOF. */
-        forceCommandPropagation(c, PROPAGATE_REPL | PROPAGATE_AOF);
+        /* In progress migrations will be cancelled, and should be retried by
+         * operators. */
+        clusterHandleFlushDuringSlotMigration();
     }
+
+    /* flushdb should not flush the functions */
+    server.dirty += emptyData(c->db->id, flags | EMPTYDB_NOFUNCTIONS, NULL);
+
+    /* Without the forceCommandPropagation, when DB was already empty,
+        * FLUSHDB will not be replicated nor put into the AOF. */
+    forceCommandPropagation(c, PROPAGATE_REPL | PROPAGATE_AOF);
 
     addReply(c, shared.ok);
 

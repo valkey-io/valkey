@@ -579,7 +579,7 @@ void debugCommand(client *c) {
         /* The default behavior is to remove the current dataset from
          * memory before loading the RDB file, however when MERGE is
          * used together with NOFLUSH, we are able to merge two datasets. */
-        if (flush) emptyData(-1, EMPTYDB_NO_FLAGS, NULL, NULL);
+        if (flush) emptyData(-1, EMPTYDB_NO_FLAGS, NULL);
 
         protectClient(c);
         int ret = rdbLoad(server.rdb_filename, NULL, flags);
@@ -592,7 +592,7 @@ void debugCommand(client *c) {
         addReply(c, shared.ok);
     } else if (!strcasecmp(c->argv[1]->ptr, "loadaof")) {
         if (server.aof_state != AOF_OFF) flushAppendOnlyFile(1);
-        emptyData(-1, EMPTYDB_NO_FLAGS, NULL, NULL);
+        emptyData(-1, EMPTYDB_NO_FLAGS, NULL);
         protectClient(c);
         if (server.aof_manifest) aofManifestFree(server.aof_manifest);
         aofLoadManifestFromDisk();

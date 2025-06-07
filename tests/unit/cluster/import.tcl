@@ -830,9 +830,15 @@ test "Slot export failed on failover" {
     assert_match "500" [R 3 CLUSTER COUNTKEYSINSLOT 0]
     assert_match "500" [R 0 CLUSTER COUNTKEYSINSLOT 0]
 
-    # Expect error messages
-    # assert {[string match {*Slots are no longer owned by myself*} [dict get [get_migration_by_linkname 3 $linkname] message]]}
-    # assert {[string match {*Slots are no longer owned by source node*} [dict get [get_migration_by_linkname 2 $linkname] message]]}
+    # Expect error messages. There are two error messages we could see, depending on the order of events.
+    assert {
+        [string match {*Slots are no longer owned by myself*} [dict get [get_migration_by_linkname 3 $linkname] message]] ||
+        [string match {*Connection lost to target*} [dict get [get_migration_by_linkname 3 $linkname] message]]
+    }
+    assert {
+        [string match {*Slots are no longer owned by source node*} [dict get [get_migration_by_linkname 2 $linkname] message]] ||
+        [string match {*Source node terminated import*} [dict get [get_migration_by_linkname 2 $linkname] message]]
+    }
 
     # Cleanup for the next test
     assert_match "OK" [R 0 FLUSHDB SYNC]
@@ -1032,71 +1038,61 @@ test "CLUSTER SYNCSLOTS SNAPSHOT command interface" {
     }
 }
 
-test "FLUSHDB on target with partially imported slot" {
+test "FLUSHDB on target during import" {
     assert_does_not_resync {
         # Load data before the snapshot
-        populate 333 "$16383_slot_tag:1:" 1000 -2
+        populate 1000 "$16383_slot_tag:1:" 1000 -2
 
-        # Load data while the snapshot is ongoing
+        # Do the import
         assert_match "OK" [R 0 CLUSTER IMPORT-PREPARE SLOTSRANGE 16383 16383]
         set linkname [get_link_name 0 16383]
-        populate 333 "$16383_slot_tag:2:" 1000 -2
-
-        # Load data after the snapshot
-        wait_for_migration_field 0 $linkname state replicating
-        populate 334 "$16383_slot_tag:3:" 1000 -2
 
         # Keys should be on both source and destination
         assert_match "1000" [R 2 CLUSTER COUNTKEYSINSLOT 16383]
         wait_for_countkeysinslot 0 16383 1000
 
-        # Also write some keys to target outside of slot range
-        populate 1000 "$0_slot_tag:1:" 1000 -0
-
         # Now run FLUSHDB SYNC on the target
         assert_match "OK" [R 0 FLUSHDB SYNC]
 
-        # Import should still be there on target and its replica
-        assert_match "1000" [R 0 CLUSTER COUNTKEYSINSLOT 16383]
-        assert_match "1000" [R 3 CLUSTER COUNTKEYSINSLOT 16383]
-
-        # Other keys should be gone
-        assert_match "0" [R 0 CLUSTER COUNTKEYSINSLOT 0]
-        wait_for_countkeysinslot 3 0 0
+        # Target should fail the migration
+        wait_for_migration_field 0 $linkname state failed
+        wait_for_migration_field 2 $linkname state failed
+        assert {[string match {*Data was flushed*} [dict get [get_migration_by_linkname 0 $linkname] message]]}
+        assert {[string match {*Connection lost to target*} [dict get [get_migration_by_linkname 2 $linkname] message]]}
+        wait_for_countkeysinslot 0 16383 0
+        wait_for_countkeysinslot 3 16383 0
         
         # Same for FLUSHDB ASYNC
-        populate 1000 "$0_slot_tag:1:" 1000 -0
+        assert_match "OK" [R 0 CLUSTER IMPORT-PREPARE SLOTSRANGE 16383 16383]
+        assert_match "1000" [R 2 CLUSTER COUNTKEYSINSLOT 16383]
+        wait_for_countkeysinslot 0 16383 1000
         assert_match "OK" [R 0 FLUSHDB ASYNC]
-        assert_match "1000" [R 0 CLUSTER COUNTKEYSINSLOT 16383]
-        assert_match "1000" [R 3 CLUSTER COUNTKEYSINSLOT 16383]
-        wait_for_countkeysinslot 0 0 0
-        wait_for_countkeysinslot 3 0 0
+        wait_for_migration_field 0 $linkname state failed
+        wait_for_migration_field 2 $linkname state failed
+        assert {[string match {*Data was flushed*} [dict get [get_migration_by_linkname 0 $linkname] message]]}
+        assert {[string match {*Connection lost to target*} [dict get [get_migration_by_linkname 2 $linkname] message]]}
+        wait_for_countkeysinslot 0 16383 0
+        wait_for_countkeysinslot 3 16383 0
 
         # Cleanup
-        R 0 CLUSTER IMPORT-CANCEL all
-        wait_for_migration_field 0 $linkname state cancelled
+        assert_match "OK" [R 2 FLUSHDB SYNC]
     }
 }
 
 test "FLUSHDB on source during export" {
     assert_does_not_resync {
         # Load data before the snapshot
-        populate 333 "$16383_slot_tag:1:" 1000 -2
+        populate 1000 "$16383_slot_tag:1:" 1000 -2
 
-        # Load data while the snapshot is ongoing
+        # Do the import
         assert_match "OK" [R 0 CLUSTER IMPORT-PREPARE SLOTSRANGE 16383 16383]
         set linkname [get_link_name 0 16383]
-        populate 333 "$16383_slot_tag:2:" 1000 -2
-
-        # Load data after the snapshot
-        wait_for_migration_field 0 $linkname state replicating
-        populate 334 "$16383_slot_tag:3:" 1000 -2
 
         # Keys should be on both source and destination
         assert_match "1000" [R 2 CLUSTER COUNTKEYSINSLOT 16383]
         wait_for_countkeysinslot 0 16383 1000
 
-        # FLUSHDB on the source should propagate
+        # FLUSHDB on the source should trigger target to restart import
         assert_match "OK" [R 2 FLUSHDB SYNC]
         assert_match "0" [R 2 CLUSTER COUNTKEYSINSLOT 16383]
         wait_for_countkeysinslot 0 16383 0

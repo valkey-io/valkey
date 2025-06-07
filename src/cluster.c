@@ -962,25 +962,6 @@ void clusterCommand(client *c) {
     }
 }
 
-void clusterFlushslotCommand(client *c) {
-    /* CLUSTER FLUSHSLOT <slot> [ASYNC|SYNC] */
-    int slot;
-    int lazy = server.lazyfree_lazy_user_flush;
-    if ((slot = getSlotOrReply(c, c->argv[2])) == -1) return;
-    if (c->argc == 4) {
-        if (!strcasecmp(c->argv[3]->ptr, "async")) {
-            lazy = 1;
-        } else if (!strcasecmp(c->argv[3]->ptr, "sync")) {
-            lazy = 0;
-        } else {
-            addReplyErrorObject(c, shared.syntaxerr);
-            return;
-        }
-    }
-    delKeysInSlot(slot, lazy, false, true);
-    addReply(c, shared.ok);
-}
-
 /* Return the pointer to the cluster node that is able to serve the command.
  * For the function to succeed the command should only target either:
  *
@@ -1035,7 +1016,7 @@ getNodeByQuery(client *c, struct serverCommand *cmd, robj **argv, int argc, int 
 
     /* We handle all the cases as if they were EXEC commands, so we have
      * a common code path for everything */
-    if (c && cmd->proc == execCommand) {
+    if (cmd->proc == execCommand) {
         /* If CLIENT_MULTI flag is not set EXEC is just going to return an
          * error. */
         if (!c->flag.multi) return myself;
@@ -1052,13 +1033,13 @@ getNodeByQuery(client *c, struct serverCommand *cmd, robj **argv, int argc, int 
         mc.cmd = cmd;
     }
 
-    uint64_t cmd_flags = c ? getCommandFlags(c) : cmd->flags;
+    uint64_t cmd_flags = getCommandFlags(c);
 
     /* Only valid for sharded pubsub as regular pubsub can operate on any node and bypasses this layer. */
     int pubsubshard_included =
-        (cmd_flags & CMD_PUBSUB) || (c && c->cmd->proc == execCommand && (c->mstate->cmd_flags & CMD_PUBSUB));
+        (cmd_flags & CMD_PUBSUB) || (c->cmd->proc == execCommand && (c->mstate->cmd_flags & CMD_PUBSUB));
 
-    serverDb *currentDb = c ? c->db : &server.db[0];
+    serverDb *currentDb = c->db;
 
     /* Check that all the keys are in the same hash slot, and obtain this
      * slot and the node associated. */
@@ -1078,7 +1059,6 @@ getNodeByQuery(client *c, struct serverCommand *cmd, robj **argv, int argc, int 
         keyindex = result.keys;
 
         if (mcmd->proc == selectCommand) {
-            serverAssert(c != NULL);
             /* Failed SELECT is ignored since it doesn't modify the database. */
             serverDb *origDb = currentDb;
             long long id;
@@ -1088,30 +1068,9 @@ getNodeByQuery(client *c, struct serverCommand *cmd, robj **argv, int argc, int 
             }
         }
     
-        int using_slot = 0;
-
-        if (mcmd->proc == clusterFlushslotCommand) {
-            /* CLUSTER FLUSHSLOT is a special exception since it is a slot level command. */
-            keyindex = getKeysPrepareResult(&result, 1);
-            numkeys = 1;
-            keyindex[0].pos = 2;
-            using_slot = 1;
-        }
-
         for (j = 0; j < numkeys; j++) {
             robj *thiskey = margv[keyindex[j].pos];
-            int thisslot;
-            if (using_slot) {
-                sds err = NULL;
-                thisslot = getSlotOrError(thiskey, &err);
-                if (err != NULL) {
-                    /* If we can't compute the slot, we will treat it like other key-less commands
-                     * and process locally, which will return an error. */
-                    continue;
-                }
-            } else {
-                thisslot = keyHashSlot((char *)thiskey->ptr, sdslen(thiskey->ptr));
-            }
+            int thisslot = keyHashSlot((char *)thiskey->ptr, sdslen(thiskey->ptr));
 
             if (firstkey == NULL) {
                 /* This is the first key we see. Check what is the slot
@@ -1135,7 +1094,7 @@ getNodeByQuery(client *c, struct serverCommand *cmd, robj **argv, int argc, int 
                  * can safely serve the request, otherwise we return a TRYAGAIN
                  * error). To do so we set the importing/migrating state and
                  * increment a counter for every missing key. */
-                if (clusterNodeIsPrimary(myself) || (c && c->flag.readonly)) {
+                if (clusterNodeIsPrimary(myself) || c->flag.readonly) {
                     if (n == clusterNodeGetPrimary(myself) && getMigratingSlotDest(slot) != NULL) {
                         migrating_slot = 1;
                     } else if (getImportingSlotSource(slot) != NULL) {
@@ -1189,7 +1148,7 @@ getNodeByQuery(client *c, struct serverCommand *cmd, robj **argv, int argc, int 
             int flags = LOOKUP_NOTOUCH | LOOKUP_NOSTATS | LOOKUP_NONOTIFY | LOOKUP_NOEXPIRE;
             if ((migrating_slot || importing_slot) &&
                 !pubsubshard_included &&
-                (!c || !c->flag.multi || (c->flag.multi && cmd->proc == execCommand)) // Multi/Exec validation happens on exec
+                (!c->flag.multi || (c->flag.multi && cmd->proc == execCommand)) // Multi/Exec validation happens on exec
             ) {
                 if (lookupKeyReadWithFlags(currentDb, thiskey, flags) == NULL)
                     missing_keys++;
@@ -1255,7 +1214,7 @@ getNodeByQuery(client *c, struct serverCommand *cmd, robj **argv, int argc, int 
      * request as "ASKING", we can serve the request. However if the request
      * involves multiple keys and we don't have them all, the only option is
      * to send a TRYAGAIN error. */
-    if (importing_slot && (c && (c->flag.asking || cmd_flags & CMD_ASKING))) {
+    if (importing_slot && (c->flag.asking || cmd_flags & CMD_ASKING)) {
         if (multiple_keys && missing_keys) {
             if (error_code) *error_code = CLUSTER_REDIR_UNSTABLE;
             return NULL;
@@ -1268,8 +1227,8 @@ getNodeByQuery(client *c, struct serverCommand *cmd, robj **argv, int argc, int 
      * node is a replica and the request is about a hash slot our primary
      * is serving, we can reply without redirection. */
     int is_write_command =
-        (cmd_flags & CMD_WRITE) || (c && c->cmd->proc == execCommand && (c->mstate->cmd_flags & CMD_WRITE));
-    if (((c && c->flag.readonly) || pubsubshard_included) && !is_write_command && clusterNodeIsReplica(myself) &&
+        (cmd_flags & CMD_WRITE) || (c->cmd->proc == execCommand && (c->mstate->cmd_flags & CMD_WRITE));
+    if (((c->flag.readonly) || pubsubshard_included) && !is_write_command && clusterNodeIsReplica(myself) &&
         clusterNodeGetPrimary(myself) == n) {
         return myself;
     }
@@ -1580,4 +1539,22 @@ void resetClusterStats(void) {
     if (!server.cluster_enabled) return;
 
     clusterSlotStatResetAll();
+}
+
+void clusterCommandFlushslot(client *c) {
+    int slot;
+    int lazy = server.lazyfree_lazy_user_flush;
+    if ((slot = getSlotOrReply(c, c->argv[2])) == -1) return;
+    if (c->argc == 4) {
+        if (!strcasecmp(c->argv[3]->ptr, "async")) {
+            lazy = 1;
+        } else if (!strcasecmp(c->argv[3]->ptr, "sync")) {
+            lazy = 0;
+        } else {
+            addReplyErrorObject(c, shared.syntaxerr);
+            return;
+        }
+    }
+    delKeysInSlot(slot, lazy, false, true);
+    addReply(c, shared.ok);
 }

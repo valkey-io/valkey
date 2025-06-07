@@ -185,7 +185,7 @@ void freeObjAsync(robj *key, robj *obj, int dbid) {
 /* Empty a DB asynchronously. What the function does actually is to
  * create a new empty set of hash tables and scheduling the old ones for
  * lazy freeing. */
-void emptyDbAsync(serverDb *db, emptyDataHashtableFilter filter) {
+void emptyDbAsync(serverDb *db) {
     int slot_count_bits = 0;
     int flags = KVSTORE_ALLOCATE_HASHTABLES_ON_DEMAND;
     if (server.cluster_enabled) {
@@ -195,10 +195,6 @@ void emptyDbAsync(serverDb *db, emptyDataHashtableFilter filter) {
     kvstore *oldkeys = db->keys, *oldexpires = db->expires;
     db->keys = kvstoreCreate(&kvstoreKeysHashtableType, slot_count_bits, flags);
     db->expires = kvstoreCreate(&kvstoreExpiresHashtableType, slot_count_bits, flags);
-    if (filter) {
-        kvstoreMoveHashtables(db->keys, oldkeys, filter);
-        kvstoreMoveHashtables(db->expires, oldexpires, filter);
-    }
     atomic_fetch_add_explicit(&lazyfree_objects, kvstoreSize(oldkeys), memory_order_relaxed);
     bioCreateLazyFreeJob(lazyfreeFreeDatabase, 2, oldkeys, oldexpires);
 }

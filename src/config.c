@@ -34,6 +34,7 @@
 #include "connection.h"
 #include "bio.h"
 #include "module.h"
+#include "cluster_import.h"
 
 #include <fcntl.h>
 #include <sys/stat.h>

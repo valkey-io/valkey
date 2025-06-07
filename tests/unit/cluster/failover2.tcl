@@ -134,6 +134,7 @@ run_solo {cluster} {
     } ;# start_cluster
 } ;# run_solo
 
+# start_cluster 3 1 {tags {external:skip cluster} overrides {cluster-replica-validity-factor 0}}
 proc test_replica_config_epoch_failover {type} {
     test "Replica can update the config epoch when trigger the failover - $type" {
         set CLUSTER_PACKET_TYPE_NONE -1

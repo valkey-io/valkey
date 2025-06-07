@@ -1999,7 +1999,7 @@ static inline robj *createSharedString(const char *string) {
     return makeObjectShared(createStringObject(string, strlen(string)));
 }
 
-static inline robj *createSharedStringByPtr(sds s) {
+static inline robj *createSharedStringFromSds(sds s) {
     return makeObjectShared(createObject(OBJ_STRING, s));
 }
 
@@ -2009,23 +2009,23 @@ static inline robj *createSharedStringByPtr(sds s) {
 void createSharedObjectsForCompat(int compat) {
     const char *name = compat ? "Redis" : SERVER_TITLE;
     shared.loadingerr_variants[compat] =
-        createSharedStringByPtr(sdscatfmt(sdsempty(), "-LOADING %s is loading the dataset in memory\r\n", name));
-    shared.slowevalerr_variants[compat] = createSharedStringByPtr(
+        createSharedStringFromSds(sdscatfmt(sdsempty(), "-LOADING %s is loading the dataset in memory\r\n", name));
+    shared.slowevalerr_variants[compat] = createSharedStringFromSds(
         sdscatfmt(sdsempty(),
                   "-BUSY %s is busy running a script. You can only call SCRIPT KILL or SHUTDOWN NOSAVE.\r\n", name));
-    shared.slowscripterr_variants[compat] = createSharedStringByPtr(
+    shared.slowscripterr_variants[compat] = createSharedStringFromSds(
         sdscatfmt(sdsempty(),
                   "-BUSY %s is busy running a script. You can only call FUNCTION KILL or SHUTDOWN NOSAVE.\r\n", name));
     shared.slowmoduleerr_variants[compat] =
-        createSharedStringByPtr(sdscatfmt(sdsempty(), "-BUSY %s is busy running a module command.\r\n", name));
+        createSharedStringFromSds(sdscatfmt(sdsempty(), "-BUSY %s is busy running a module command.\r\n", name));
     shared.bgsaveerr_variants[compat] =
-        createSharedStringByPtr(sdscatfmt(sdsempty(),
-                                          "-MISCONF %s is configured to save RDB snapshots, but it's currently"
-                                          " unable to persist to disk. Commands that may modify the data set are"
-                                          " disabled, because this instance is configured to report errors during"
-                                          " writes if RDB snapshotting fails (stop-writes-on-bgsave-error option)."
-                                          " Please check the %s logs for details about the RDB error.\r\n",
-                                          name, name));
+        createSharedStringFromSds(sdscatfmt(sdsempty(),
+                                            "-MISCONF %s is configured to save RDB snapshots, but it's currently"
+                                            " unable to persist to disk. Commands that may modify the data set are"
+                                            " disabled, because this instance is configured to report errors during"
+                                            " writes if RDB snapshotting fails (stop-writes-on-bgsave-error option)."
+                                            " Please check the %s logs for details about the RDB error.\r\n",
+                                            name, name));
 }
 
 void createSharedObjectsWithCompat(void) {
@@ -2100,7 +2100,7 @@ void createSharedObjects(void) {
         int dictid_len;
 
         dictid_len = ll2string(dictid_str, sizeof(dictid_str), j);
-        shared.select[j] = createSharedStringByPtr(sdscatprintf(sdsempty(), "*2\r\n$6\r\nSELECT\r\n$%d\r\n%s\r\n", dictid_len, dictid_str));
+        shared.select[j] = createSharedStringFromSds(sdscatprintf(sdsempty(), "*2\r\n$6\r\nSELECT\r\n$%d\r\n%s\r\n", dictid_len, dictid_str));
     }
     shared.messagebulk = createSharedString("$7\r\nmessage\r\n");
     shared.pmessagebulk = createSharedString("$8\r\npmessage\r\n");
@@ -2160,15 +2160,15 @@ void createSharedObjects(void) {
     shared.redacted = createSharedString("(redacted)");
 
     for (j = 0; j < OBJ_SHARED_INTEGERS; j++) {
-        shared.integers[j] = createSharedStringByPtr((void *)(long)j);
-        initObjectLRUOrLFU(shared.integers[j]);
+        shared.integers[j] = makeObjectShared(createObject(OBJ_STRING, (void *)(long)j));
+        shared.integers[j]->encoding = OBJ_ENCODING_INT;
         shared.integers[j]->encoding = OBJ_ENCODING_INT;
     }
     for (j = 0; j < OBJ_SHARED_BULKHDR_LEN; j++) {
-        shared.mbulkhdr[j] = createSharedStringByPtr(sdscatprintf(sdsempty(), "*%d\r\n", j));
-        shared.bulkhdr[j] = createSharedStringByPtr(sdscatprintf(sdsempty(), "$%d\r\n", j));
-        shared.maphdr[j] = createSharedStringByPtr(sdscatprintf(sdsempty(), "%%%d\r\n", j));
-        shared.sethdr[j] = createSharedStringByPtr(sdscatprintf(sdsempty(), "~%d\r\n", j));
+        shared.mbulkhdr[j] = createSharedStringFromSds(sdscatprintf(sdsempty(), "*%d\r\n", j));
+        shared.bulkhdr[j] = createSharedStringFromSds(sdscatprintf(sdsempty(), "$%d\r\n", j));
+        shared.maphdr[j] = createSharedStringFromSds(sdscatprintf(sdsempty(), "%%%d\r\n", j));
+        shared.sethdr[j] = createSharedStringFromSds(sdscatprintf(sdsempty(), "~%d\r\n", j));
     }
     /* The following two shared objects, minstring and maxstring, are not
      * actually used for their value but as a special object meaning

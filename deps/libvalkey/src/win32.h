@@ -96,6 +96,10 @@ __inline int c99_snprintf(char *str, size_t size, const char *format, ...) {
 #define random rand
 #endif
 
+#ifndef SSIZE_MAX
+#define SSIZE_MAX MAXSSIZE_T
+#endif /* !SSIZE_MAX */
+
 #endif /* _WIN32 */
 
 #endif /* VALKEY_WIN32_H */

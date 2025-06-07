@@ -19,7 +19,9 @@ option(BUILD_EXAMPLE_MODULES "Build example modules" OFF)
 
 set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_SOURCE_DIR}/cmake/Modules/")
 project("valkey")
-add_compile_options(-Wundef)
+if (NOT WIN32)
+  add_compile_options(-Wundef)
+endif (NOT WIN32)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)

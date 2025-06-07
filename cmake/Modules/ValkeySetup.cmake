@@ -103,7 +103,9 @@ macro (valkey_build_and_install_bin target sources ld_flags libs link_name)
     endif ()
 
     # Enable all warnings + fail on warning
-    target_compile_options(${target} PRIVATE -Werror -Wall)
+    if (NOT WIN32)
+        target_compile_options(${target} PRIVATE -Werror -Wall)
+    endif (NOT WIN32)
 
     # Install cli tool and create a redis symbolic link
     valkey_install_bin(${target})
@@ -249,14 +251,15 @@ elseif (UNIX)
     add_valkey_server_linker_option("-lm")
 endif ()
 
-if (VALKEY_DEBUG_BUILD)
+if (VALKEY_DEBUG_BUILD AND NOT WIN32)
     # Debug build, use enable "-fno-omit-frame-pointer"
     add_valkey_server_compiler_options("-fno-omit-frame-pointer")
 endif ()
 
 # Check for Atomic
 check_include_files(stdatomic.h HAVE_C11_ATOMIC)
-if (HAVE_C11_ATOMIC)
+if (WIN32)
+elseif (HAVE_C11_ATOMIC)
     add_valkey_server_compiler_options("-std=gnu11")
 else ()
     add_valkey_server_compiler_options("-std=c99")
@@ -295,7 +298,9 @@ if (USE_JEMALLOC)
 endif ()
 
 # Common compiler flags
-add_valkey_server_compiler_options("-pedantic")
+if (NOT WIN32)
+    add_valkey_server_compiler_options("-pedantic")
+endif ()
 
 # ----------------------------------------------------
 # Build options (allocator, tls, rdma et al) - end

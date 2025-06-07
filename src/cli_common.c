@@ -38,9 +38,15 @@
 #include <fcntl.h>
 #include <errno.h>
 #include "sds.h"
-#include <unistd.h>
 #include <string.h>
 #include <ctype.h>
+
+#ifdef _MSC_VER
+#else
+#include <unistd.h>
+#endif
+
+
 #ifdef USE_OPENSSL
 #include <openssl/ssl.h>
 #include <openssl/err.h>

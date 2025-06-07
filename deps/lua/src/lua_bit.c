@@ -29,6 +29,8 @@
 #define LUA_BITOP_VERSION	"1.0.2"
 
 #define LUA_LIB
+#include <stdint.h>
+
 #include "lua.h"
 #include "lauxlib.h"
 

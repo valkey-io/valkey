@@ -105,8 +105,11 @@
 
 #define _DEFAULT_SOURCE /* For fchmod() */
 #define _BSD_SOURCE     /* For fchmod() */
+#ifdef _MSC_VER
+#else
 #include <termios.h>
 #include <unistd.h>
+#endif
 #include <stdlib.h>
 #include <stdio.h>
 #include <errno.h>

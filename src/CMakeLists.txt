@@ -15,7 +15,34 @@ valkey_build_and_install_bin(valkey-server "${VALKEY_SERVER_SRCS}" "${VALKEY_SER
                              "redis-server")
 add_dependencies(valkey-server generate_commands_def)
 add_dependencies(valkey-server generate_fmtargs_h)
-add_dependencies(valkey-server release_header)
+if (WIN32)
+    execute_process(COMMAND git log -1 --format=%H
+            WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+            OUTPUT_VARIABLE GIT_SHA1
+            ERROR_QUIET OUTPUT_STRIP_TRAILING_WHITESPACE)
+
+    execute_process(COMMAND git status --porcelain
+            WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+            OUTPUT_VARIABLE GIT_PORCELAIN
+            ERROR_QUIET OUTPUT_STRIP_TRAILING_WHITESPACE)
+    if (GIT_PORCELAIN)
+        set(GIT_DIRTY 0)
+    else ()
+        set(GIT_DIRTY 1)
+    endif ()
+    if (NOT DEFINED CMAKE_SYSTEM_NAME)
+        set(CMAKE_SYSTEM_NAME "${CMAKE_HOST_SYSTEM_NAME}")
+    endif (NOT DEFINED CMAKE_SYSTEM_NAME)
+    string(TIMESTAMP now "%s" UTC)
+    set(BUILD_ID "${CMAKE_SYSTEM_NAME}_${now}")
+    set(BUILD_ID_RAW "${BUILD_ID}") # is this right?
+    configure_file(
+            "${CMAKE_SOURCE_DIR}/src/release.h.in"
+            "${CMAKE_SOURCE_DIR}/src/release.h" @ONLY
+    )
+else ()
+    add_dependencies(valkey-server release_header)
+endif ()
 
 if (VALKEY_RELEASE_BUILD)
     # Enable LTO for Release build

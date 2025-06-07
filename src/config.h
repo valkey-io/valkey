@@ -30,7 +30,10 @@
 #ifndef CONFIG_H
 #define CONFIG_H
 
+#ifdef _MSC_VER
+#else
 #include <sys/param.h>
+#endif
 
 #ifdef __APPLE__
 #include <fcntl.h> // for fcntl(fd, F_FULLFSYNC)

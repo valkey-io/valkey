@@ -31,6 +31,8 @@
 #include "fmacros.h"
 
 #include <sys/types.h>
+#ifdef _MSC_VER
+#else
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/un.h>
@@ -39,13 +41,14 @@
 #include <netinet/tcp.h>
 #include <arpa/inet.h>
 #include <unistd.h>
+#include <netdb.h>
+#include <grp.h>
+#endif
 #include <fcntl.h>
 #include <string.h>
-#include <netdb.h>
 #include <errno.h>
 #include <stdarg.h>
 #include <stdio.h>
-#include <grp.h>
 
 #include "anet.h"
 #include "config.h"

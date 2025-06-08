@@ -2473,6 +2473,7 @@ static int updatePort(const char **err) {
     listener->bindaddr_count = server.bindaddr_count;
     listener->port = server.port;
     listener->ct = connectionByType(CONN_TYPE_SOCKET);
+    clusterUpdateMyselfAnnouncedPorts();
     if (changeListener(listener) == C_ERR) {
         *err = "Unable to listen on this port. Check server logs.";
         return 0;
@@ -2660,7 +2661,6 @@ int updateClusterFlags(const char **err) {
 static int updateClusterAnnouncedPort(const char **err) {
     UNUSED(err);
     clusterUpdateMyselfAnnouncedPorts();
-    clearCachedClusterSlotsResponse();
     return 1;
 }
 
@@ -2719,6 +2719,7 @@ static int applyTLSPort(const char **err) {
     listener->bindaddr_count = server.bindaddr_count;
     listener->port = server.tls_port;
     listener->ct = connectionByType(CONN_TYPE_TLS);
+    clusterUpdateMyselfAnnouncedPorts();
     if (changeListener(listener) == C_ERR) {
         *err = "Unable to listen on this port. Check server logs.";
         return 0;

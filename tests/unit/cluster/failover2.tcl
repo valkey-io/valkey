@@ -134,6 +134,7 @@ run_solo {cluster} {
     } ;# start_cluster
 } ;# run_solo
 
+# Needs to run in the body of
 # start_cluster 3 1 {tags {external:skip cluster} overrides {cluster-replica-validity-factor 0}}
 proc test_replica_config_epoch_failover {type} {
     test "Replica can update the config epoch when trigger the failover - $type" {
@@ -222,7 +223,7 @@ proc test_replica_config_epoch_failover {type} {
             fail "The old primary was not converted into replica"
         }
     }
-} ;# start_cluster
+}
 
 start_cluster 3 1 {tags {external:skip cluster} overrides {cluster-replica-validity-factor 0}} {
     test_replica_config_epoch_failover "automatic"

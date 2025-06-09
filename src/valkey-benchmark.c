@@ -73,9 +73,6 @@
 #define CONFIG_LATENCY_HISTOGRAM_INSTANT_MAX_VALUE 3000000L /* <= 3 secs(us precision) */
 #define SHOW_THROUGHPUT_INTERVAL 250                        /* 250ms */
 
-#define CLIENT_PAUSED (1 << 0)
-#define CLIENT_REUSE (1 << 1)
-
 #define CLIENT_GET_EVENTLOOP(c) (c->thread_id >= 0 ? config.threads[c->thread_id]->el : config.el)
 
 struct benchmarkThread;
@@ -370,16 +367,18 @@ static void freeServerConfig(serverConfig *cfg) {
     zfree(cfg);
 }
 
-static void releasePauseClient(client c) {
+static void releasePausedClient(client c) {
     if (c->thread_id >= 0) {
         benchmarkThread *thread = config.threads[c->thread_id];
         listNode *ln = listSearchKey(thread->paused_clients, c);
-        assert(ln != NULL);
-        listDelNode(thread->paused_clients, ln);
+        if (ln != NULL) {
+            listDelNode(thread->paused_clients, ln);
+        }
     } else {
         listNode *ln = listSearchKey(config.paused_clients, c);
-        assert(ln != NULL);
-        listDelNode(config.paused_clients, ln);
+        if (ln != NULL) {
+            listDelNode(config.paused_clients, ln);
+        }
     }
 }
 
@@ -395,7 +394,7 @@ static void freeClient(client c) {
         }
     }
     valkeyFree(c->context);
-    releasePauseClient(c);
+    releasePausedClient(c);
     sdsfree(c->obuf);
     zfree(c->randptr);
     zfree(c->stagptr);
@@ -477,6 +476,14 @@ static void setClusterKeyHashTag(client c) {
     }
 }
 
+/* Acquire a token from the token bucket.
+ *
+ * This function is used to throttle the number of requests per second.
+ *
+ * The function returns the number of milliseconds that the caller should
+ * wait before issuing the next request.
+ *
+ * The function is thread-safe. */
 static long long acquireTokenOrWait(int tokens) {
     if (config.num_threads) pthread_mutex_lock(&(config.token_bucket_mutex));
 
@@ -496,11 +503,18 @@ static long long acquireTokenOrWait(int tokens) {
     long long delay_time = 0;
     if (new_time > now_since_epoch) {
         delay_time = new_time - now_since_epoch;
+
+        // Due to the fact that the minimum time interval for event loops is in the millisecond range,
+        // when the delay is less than 1ms, we don't need to wait, 
+        if (delay_time <= 1000000) {
+            config.last_time = now_since_epoch + delay_time;
+            delay_time = 0;
+        }
     } else {
         config.last_time = new_time;
     }
     if (config.num_threads) pthread_mutex_unlock(&(config.token_bucket_mutex));
-    return delay_time;
+    return delay_time / 1000000;
 }
 
 static void clientDone(client c) {
@@ -632,11 +646,19 @@ static void readHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
     }
 }
 
+/*
+ * When a client is paused, the function is called by the event loop to
+ * awaken the client.
+ *
+ * Return the number of milliseconds to wait before calling the function again.
+ *
+ * If the function returns AE_NOMORE, the event is removed.
+ */
 static long long awakenPausedClient(struct aeEventLoop *eventLoop, long long id, void *clientData) {
     UNUSED(id);
     benchmarkThread *thread = (benchmarkThread *)clientData;
 
-    list *paused_clients;
+    list *paused_clients = NULL;
     if (thread == NULL) {
         paused_clients = config.paused_clients;
     } else {
@@ -645,26 +667,26 @@ static long long awakenPausedClient(struct aeEventLoop *eventLoop, long long id,
 
     listIter li;
     listNode *ln;
-    long long delay_ns = 0;
+    long long delay = 0;
     listRewind(paused_clients, &li);
     while ((ln = listNext(&li)) != NULL) {
         client c = ln->value;
-        delay_ns = acquireTokenOrWait(config.pipeline);
-        if (delay_ns > 1000000) {
+        delay = acquireTokenOrWait(config.pipeline);
+        if (delay) {
             break;
-        } else {
-            c->paused = 0;
-            c->reuse = 1;
-            writeHandler(eventLoop, c->context->fd, c, AE_WRITABLE);
-            listDelNode(paused_clients, ln);
         }
+        // When client acquires a token, try to write with `reuse`.
+        c->paused = 0;
+        c->reuse = 1;
+        writeHandler(eventLoop, c->context->fd, c, AE_WRITABLE);
+        listDelNode(paused_clients, ln);
     }
-
-    if (delay_ns > 0) {
-        return delay_ns / 1000000;
-    } else {
+    
+    // If there are no more paused clients, remove the event.
+    if (delay == 0) {
         return AE_NOMORE;
     }
+    return delay;
 }
 
 static void writeHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
@@ -673,10 +695,12 @@ static void writeHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
     UNUSED(fd);
     UNUSED(mask);
 
-    /* Acquire a token from the token bucket. */
-    if (config.rps > 0 && c->reuse) {
-        long long delay_ns = acquireTokenOrWait(config.pipeline);
-        if (delay_ns > 1000000) {
+    // When benchmark with rps control, and client is not reuse, try to acquire a token.
+    if (config.rps > 0 && c->reuse == 0) {
+        /* Acquire a token from the token bucket. */
+        long long delay = acquireTokenOrWait(config.pipeline);
+
+        if (delay) {
             int thread_id = c->thread_id;
             c->paused = 1;
             aeDeleteFileEvent(el, c->context->fd, AE_WRITABLE);
@@ -688,11 +712,12 @@ static void writeHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
                 thread = config.threads[thread_id];
                 listAddNodeTail(thread->paused_clients, c);
             }
-            aeCreateTimeEvent(el, delay_ns / 1000000, awakenPausedClient, (void *)thread, NULL);
+            /* Create a time event to awaken the client. */
+            aeCreateTimeEvent(el, delay, awakenPausedClient, (void *)thread, NULL);
             return;
         }
     }
-    c->paused = 0;
+    c->reuse = 0;
 
     /* Initialize request when nothing was written. */
     if (c->written == 0) {

@@ -2701,7 +2701,7 @@ int sendCurrentOffsetToReplica(client *replica) {
     char buf[128];
     int buflen;
     buflen = snprintf(buf, sizeof(buf), "$ENDOFF:%lld %s %d %llu\r\n", server.primary_repl_offset, server.replid,
-                      server.db[0]->id, (long long unsigned int)replica->id);
+                      server.replicas_eldb, (long long unsigned int)replica->id);
     dualChannelServerLog(LL_NOTICE, "Sending to replica %s RDB end offset %lld and client-id %llu",
                          replicationGetReplicaName(replica), server.primary_repl_offset,
                          (long long unsigned int)replica->id);

@@ -115,7 +115,7 @@ static struct config {
     long long totlatency;
     const char *title;
     list *clients;
-    list *pause_clients;
+    list *paused_clients;
     int quiet;
     int csv;
     int loop;
@@ -167,10 +167,11 @@ typedef struct _client {
                            such as auth and select are prefixed to the pipeline of
                            benchmark commands and discarded after the first send. */
     int prefixlen;      /* Size in bytes of the pending prefix commands */
-    int flags;
     int thread_id;
     struct clusterNode *cluster_node;
     int slots_last_update;
+    uint64_t paused : 1;
+    uint64_t reuse : 1;
 } *client;
 
 /* Threads. */
@@ -179,7 +180,7 @@ typedef struct benchmarkThread {
     int index;
     pthread_t thread;
     aeEventLoop *el;
-    list *pause_clients;
+    list *paused_clients;
 } benchmarkThread;
 
 /* Cluster. */
@@ -372,13 +373,13 @@ static void freeServerConfig(serverConfig *cfg) {
 static void releasePauseClient(client c) {
     if (c->thread_id >= 0) {
         benchmarkThread *thread = config.threads[c->thread_id];
-        listNode *ln = listSearchKey(thread->pause_clients, c);
+        listNode *ln = listSearchKey(thread->paused_clients, c);
         assert(ln != NULL);
-        listDelNode(thread->pause_clients, ln);
+        listDelNode(thread->paused_clients, ln);
     } else {
-        listNode *ln = listSearchKey(config.pause_clients, c);
+        listNode *ln = listSearchKey(config.paused_clients, c);
         assert(ln != NULL);
-        listDelNode(config.pause_clients, ln);
+        listDelNode(config.paused_clients, ln);
     }
 }
 
@@ -479,17 +480,17 @@ static void setClusterKeyHashTag(client c) {
 static long long acquireTokenOrWait(int tokens) {
     if (config.num_threads) pthread_mutex_lock(&(config.token_bucket_mutex));
 
-    long long last_time_ = config.last_time;
-    long long time_per_token_ = config.time_per_token;
-    long long time_per_burst_ = config.time_per_burst;
+    long long last_time = config.last_time;
+    long long time_per_token = config.time_per_token;
+    long long time_per_burst = config.time_per_burst;
     long long new_time = 0;
 
     long long now_since_epoch = nstime();
-    long long min_time = now_since_epoch - time_per_burst_;
-    if (min_time > last_time_) {
-        new_time = min_time + (time_per_token_ * tokens);
+    long long min_time = now_since_epoch - time_per_burst;
+    if (min_time > last_time) {
+        new_time = min_time + (time_per_token * tokens);
     } else {
-        new_time = last_time_ + (time_per_token_ * tokens);
+        new_time = last_time + (time_per_token * tokens);
     }
 
     long long delay_time = 0;
@@ -631,31 +632,31 @@ static void readHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
     }
 }
 
-static long long awakenPauseClient(struct aeEventLoop *eventLoop, long long id, void *clientData) {
+static long long awakenPausedClient(struct aeEventLoop *eventLoop, long long id, void *clientData) {
     UNUSED(id);
     benchmarkThread *thread = (benchmarkThread *)clientData;
 
-    list *pause_clients;
+    list *paused_clients;
     if (thread == NULL) {
-        pause_clients = config.pause_clients;
+        paused_clients = config.paused_clients;
     } else {
-        pause_clients = thread->pause_clients;
+        paused_clients = thread->paused_clients;
     }
 
     listIter li;
     listNode *ln;
     long long delay_ns = 0;
-    listRewind(pause_clients, &li);
+    listRewind(paused_clients, &li);
     while ((ln = listNext(&li)) != NULL) {
         client c = ln->value;
         delay_ns = acquireTokenOrWait(config.pipeline);
         if (delay_ns > 1000000) {
             break;
         } else {
-            c->flags &= ~CLIENT_PAUSED;
-            c->flags |= CLIENT_REUSE;
+            c->paused = 0;
+            c->reuse = 1;
             writeHandler(eventLoop, c->context->fd, c, AE_WRITABLE);
-            listDelNode(pause_clients, ln);
+            listDelNode(paused_clients, ln);
         }
     }
 
@@ -673,25 +674,25 @@ static void writeHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
     UNUSED(mask);
 
     /* Acquire a token from the token bucket. */
-    if (config.rps > 0 && (c->flags & CLIENT_REUSE) == 0) {
+    if (config.rps > 0 && c->reuse) {
         long long delay_ns = acquireTokenOrWait(config.pipeline);
         if (delay_ns > 1000000) {
             int thread_id = c->thread_id;
-            c->flags |= CLIENT_PAUSED;
+            c->paused = 1;
             aeDeleteFileEvent(el, c->context->fd, AE_WRITABLE);
 
             benchmarkThread *thread = NULL;
             if (thread_id < 0) {
-                listAddNodeTail(config.pause_clients, c);
+                listAddNodeTail(config.paused_clients, c);
             } else {
                 thread = config.threads[thread_id];
-                listAddNodeTail(thread->pause_clients, c);
+                listAddNodeTail(thread->paused_clients, c);
             }
-            aeCreateTimeEvent(el, delay_ns / 1000000, awakenPauseClient, (void *)thread, NULL);
+            aeCreateTimeEvent(el, delay_ns / 1000000, awakenPausedClient, (void *)thread, NULL);
             return;
         }
     }
-    c->flags &= ~CLIENT_REUSE;
+    c->paused = 0;
 
     /* Initialize request when nothing was written. */
     if (c->written == 0) {
@@ -799,7 +800,8 @@ static client createClient(char *cmd, int len, int seqlen, client from, int thre
             exit(1);
         }
     }
-    c->flags = 0;
+    c->paused = 0;
+    c->reuse = 0;
     c->thread_id = thread_id;
     /* Suppress libvalkey cleanup of unused buffers for max speed. */
     c->context->reader->maxbuf = 0;
@@ -1144,14 +1146,14 @@ static benchmarkThread *createBenchmarkThread(int index) {
     if (thread == NULL) return NULL;
     thread->index = index;
     thread->el = aeCreateEventLoop(1024 * 10);
-    thread->pause_clients = listCreate();
+    thread->paused_clients = listCreate();
     aeCreateTimeEvent(thread->el, 1, showThroughput, (void *)thread, NULL);
     return thread;
 }
 
 static void freeBenchmarkThread(benchmarkThread *thread) {
     if (thread->el) aeDeleteEventLoop(thread->el);
-    listRelease(thread->pause_clients);
+    listRelease(thread->paused_clients);
     zfree(thread);
 }
 
@@ -1911,7 +1913,7 @@ int main(int argc, char **argv) {
     config.loop = 0;
     config.idlemode = 0;
     config.clients = listCreate();
-    config.pause_clients = listCreate();
+    config.paused_clients = listCreate();
     config.conn_info.hostip = sdsnew("127.0.0.1");
     config.conn_info.hostport = 6379;
     config.tests = NULL;

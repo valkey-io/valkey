@@ -241,6 +241,23 @@ start_server [list overrides [list "ext-data-mode" test "loglevel" debug "ext-da
     }
 }
 
+proc scan_keys {cur type match {storage ""}} {
+    set keys {}
+    set k {}
+    while 1 {
+        if {$storage != ""} {
+            set res [r scan $cur type $type match $match storage $storage]
+        } else {
+            set res [r scan $cur type $type match $match]
+        }
+        set cur [lindex $res 0]
+        set k [lindex $res 1]
+        lappend keys {*}$k
+        if {$cur == 0} break
+    }
+    return $keys
+}
+
 start_server [list overrides [list "ext-data-mode" test "loglevel" debug] tags [list "external:skip"]] {
     test {Getting keys from storage works} {
         # init
@@ -255,18 +272,23 @@ start_server [list overrides [list "ext-data-mode" test "loglevel" debug] tags [
         assert_equal {OK} [r external_data debug db0 filter set k]
         assert_equal {OK} [r select 0]
         assert_equal {} [r keys \*]
+        assert_equal {0 {}} [r scan 0 type "string" match \*]
 
         # no k2 as it's not in filter yet
         assert_equal {k} [r keys \* storage ext]
+        assert_equal {0 k} [r scan 0 type "string" match \* storage ext]
 
         # exists k2 is it's in filter now
         assert_equal {OK} [r external_data debug db0 filter set k2]
         assert_equal {k k2} [r keys \* storage ext]
+        assert_equal {0 {k k2}} [r scan 0 type "string" match \* storage ext]
 
         # another db is not touched
         assert_equal {OK} [r select 1]
         assert_equal {} [r keys \*]
         assert_equal {} [r keys \* storage ext]
+        assert_equal {0 {}} [r scan 0 type "string" match \*]
+        assert_equal {0 {}} [r scan 0 type "string" match \* storage ext]
         assert_equal {OK} [r select 0]
     }
 }
@@ -333,18 +355,23 @@ start_cluster 1 0 [list overrides [list "ext-data-mode" test "loglevel" debug] t
         assert_equal {OK} [r external_data debug db0 filter set k]
         assert_equal {OK} [r select 0]
         assert_equal {} [r keys \*]
+        assert_equal {0 {}} [r scan 0 type "string" match \*]
 
         # no k2 as it's not in filter yet
         assert_equal {k} [r keys \* storage ext]
+        assert_equal {0 k} [r scan 0 type "string" match \* storage ext]
 
         # exists k2 is it's in filter now
         assert_equal {OK} [r external_data debug db0 filter set k2]
         assert_equal {k k2} [r keys \* storage ext]
+        assert_equal {0 {k k2}} [r scan 0 type "string" match \* storage ext]
 
         # another db is not touched
         assert_equal {OK} [r select 1]
         assert_equal {} [r keys \*]
         assert_equal {} [r keys \* storage ext]
+        assert_equal {0 {}} [r scan 0 type "string" match \*]
+        assert_equal {0 {}} [r scan 0 type "string" match \* storage ext]
         assert_equal {OK} [r select 0]
     }
 }

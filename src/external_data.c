@@ -12,8 +12,6 @@
 #include <stdatomic.h>
 #include <time.h>
 
-const char *extDataOffErrStr = "External data commands are unavailable with ext-data-mode off";
-
 /* Forward declaration */
 static void moduleStatsDispose(void *obj);
 
@@ -253,7 +251,7 @@ int qsortCompareNames(const void *n1, const void *n2) {
  */
 void externalDataLoadedCommand(client *c) {
     if (!isExtDataOn()) {
-        addReplyError(c, extDataOffErrStr);
+        addReplyError(c, EXTDATAOFFERRMSG);
         return;
     }
 
@@ -317,7 +315,7 @@ void externalDataLoadedCommand(client *c) {
  */
 void externalDataStatsCommand(client *c) {
     if (!isExtDataOn()) {
-        addReplyError(c, extDataOffErrStr);
+        addReplyError(c, EXTDATAOFFERRMSG);
         return;
     }
 
@@ -391,7 +389,7 @@ sds getDBName(int db_num) {
  */
 void externalDataInitCommand(client *c) {
     if (!isExtDataOn()) {
-        addReplyError(c, extDataOffErrStr);
+        addReplyError(c, EXTDATAOFFERRMSG);
         return;
     }
     assert(curr_external_data_ctx != NULL);
@@ -481,7 +479,7 @@ void externalDataInitCommand(client *c) {
  */
 void externalDataDropCommand(client *c) {
     if (!isExtDataOn()) {
-        addReplyError(c, extDataOffErrStr);
+        addReplyError(c, EXTDATAOFFERRMSG);
         return;
     }
     assert(curr_external_data_ctx != NULL);
@@ -653,13 +651,13 @@ void externalFilterCallDropReadonlyFunc(externalFilterInstance *fi) {
 struct extStorageInstanceIterator {
     externalDbData *dbdata;
     ValkeyModuleString *match;
-    ValkeyModuleString *type;
+    long long *type;
     uint id;
     int dbid;
     ValkeyModuleDictIter *iter;
 };
 
-externalStorageInstanceIterator *externalStorageInstanceIteratorInit(int dbid, robj *match, robj *type) {
+externalStorageInstanceIterator *externalStorageInstanceIteratorInit(int dbid, robj *match, long long *type) {
     sds db_name = getDBName(dbid);
     dictEntry *db = dictFind(curr_external_data_ctx->dbdata, db_name);
 
@@ -702,7 +700,7 @@ void externalStorageInstanceIteratorRelease(externalStorageInstanceIterator *esi
  */
 void externalDataDebugCommand(client *c) {
     if (!isExtDataOn()) {
-        addReplyError(c, extDataOffErrStr);
+        addReplyError(c, EXTDATAOFFERRMSG);
         return;
     }
     assert(curr_external_data_ctx != NULL);

@@ -187,10 +187,9 @@ static void dropReadonlyFunction(ValkeyModuleCtx *module_ctx,
 }
 
 static int iterateFunction(ValkeyModuleCtx *, int dbid, uint,
-                           ValkeyModuleString *, ValkeyModuleString *,
+                           ValkeyModuleString *, long long *,
                            ValkeyModuleString **next,
                            ValkeyModuleDictIter **iter) {
-
   if (!*iter) {
     *iter = ValkeyModule_DictIteratorStartC(mem_pool[dbid], "^", NULL, 0);
   }

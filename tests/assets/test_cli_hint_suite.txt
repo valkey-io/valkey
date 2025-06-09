@@ -52,8 +52,8 @@
 "MGET k k " "[key ...]"
 
 # Optional args can be in any order: SCAN cursor [MATCH pattern] [COUNT count] [TYPE type]
-"SCAN 2 MATCH " "pattern [COUNT count] [TYPE type]"
-"SCAN 2 COUNT " "count [MATCH pattern] [TYPE type]"
+"SCAN 2 MATCH " "pattern [COUNT count] [TYPE type] [STORAGE storage]"
+"SCAN 2 COUNT " "count [MATCH pattern] [TYPE type] [STORAGE storage]"
 
 # One-of choices: BLMOVE source destination LEFT|RIGHT LEFT|RIGHT timeout
 "BLMOVE src dst LEFT " "LEFT|RIGHT timeout"

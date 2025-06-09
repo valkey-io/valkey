@@ -4,6 +4,8 @@
 #include "server.h"
 #include "valkeymodule.h"
 
+#define EXTDATAOFFERRMSG "External data commands are unavailable with ext-data-mode off"
+
 // Forward declaration of the external storage structures.
 typedef struct externalStorage externalStorage;
 typedef struct externalStorageInstance externalStorageInstance;
@@ -30,7 +32,7 @@ void externalStorageCallDropReadonlyFunc(externalStorageInstance *si);
 int externalStorageRegister(const char *storage_name, ValkeyModule *storage_module, storageMethods *storage_methods);
 int externalStorageUnregister(const char *storage_name);
 
-externalStorageInstanceIterator *externalStorageInstanceIteratorInit(int dbid, robj *match, robj *type);
+externalStorageInstanceIterator *externalStorageInstanceIteratorInit(int dbid, robj *match, long long *type);
 int externalStorageInstanceIteratorNext(externalStorageInstanceIterator *esi_it, robj **next);
 void externalStorageInstanceIteratorRelease(externalStorageInstanceIterator *esi_it);
 

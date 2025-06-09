@@ -27,6 +27,7 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
+#include "adlist.h"
 #include "server.h"
 #include "cluster.h"
 #include "cluster_migrateslots.h"
@@ -1183,8 +1184,8 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {
     sds pat = NULL;
     sds typename = NULL;
     long long type = LLONG_MAX;
-    int patlen = 0, use_pattern = 0, only_keys = 0;
-    vector result;
+    int patlen = 0, use_pattern = 0, only_keys = 0, ext_storage = 0;
+    vector result, ext_result;
 
     /* Object must be NULL (to iterate keys names), or the type of the object
      * must be Set, Sorted Set, or Hash. */
@@ -1239,6 +1240,15 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {
             }
             only_keys = 1;
             i++;
+        } else if (!strcasecmp(objectGetVal(c->argv[i++]), "storage")) {
+            if (!isExtDataOn()) {
+                addReplyError(c, EXTDATAOFFERRMSG);
+                return;
+            }
+
+            if (!strcasecmp(objectGetVal(c->argv[i++]), "ext")) {
+                ext_storage = 1;
+            }
         } else {
             addReplyErrorObject(c, shared.syntaxerr);
             return;
@@ -1273,7 +1283,10 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {
         /* scanning ZSET allocates temporary strings even though it's a dict */
         free_callback = sdsfree;
     }
+    /* Set a free callback for the contents of the collected external keys */
+    void (*free_ext_callback)(sds) = sdsfree;
     vectorInit(&result, SCAN_VECTOR_INITIAL_ALLOC, sizeof(stringRef));
+    vectorInit(&ext_result, SCAN_VECTOR_INITIAL_ALLOC, sizeof(stringRef));
 
     /* For main hash table scan or scannable data structure. */
     if (!o || ht) {
@@ -1320,6 +1333,26 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {
                 cursor = hashtableScan(ht, cursor, hashtableScanCallback, &data);
             }
         } while (cursor && maxiterations-- && data.sampled < count);
+
+        int count_left = count - vectorLen(&ext_result);
+        if (ext_storage && count_left > 0) {
+            robj *match = createStringObject(pat, sdslen(pat));
+            externalStorageInstanceIterator *esi_it = externalStorageInstanceIteratorInit(c->db->id, match, &type);
+            if (esi_it != NULL) {
+                // there is external storage instance for this db
+                robj *next;
+                while (count_left-- && externalStorageInstanceIteratorNext(esi_it, &next)) {
+                    if (externalFilterIsIn(c->db->id, next)) {
+                        sds *item = vectorPush(&ext_result);
+                        *item = sdsnew(objectGetVal(next));
+                    }
+                    decrRefCount(next);
+                    if (c->flag.close_asap) break;
+                }
+                externalStorageInstanceIteratorRelease(esi_it);
+            }
+            decrRefCount(match);
+        }
     } else if (o->type == OBJ_SET) {
         char *str;
         char buf[LONG_STR_SIZE];
@@ -1374,7 +1407,7 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {
     addReplyArrayLen(c, 2);
     addReplyBulkLongLong(c, cursor);
 
-    addReplyArrayLen(c, vectorLen(&result));
+    addReplyArrayLen(c, vectorLen(&result) + vectorLen(&ext_result));
     for (uint32_t i = 0; i < vectorLen(&result); i++) {
         stringRef *key = vectorGet(&result, i);
         addReplyBulkCBuffer(c, key->buf, key->len);
@@ -1384,6 +1417,16 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {
     }
 
     vectorCleanup(&result);
+
+    for (uint32_t i = 0; i < vectorLen(&ext_result); i++) {
+        sds *key = vectorGet(&ext_result, i);
+        addReplyBulkCBuffer(c, *key, sdslen(*key));
+        if (free_ext_callback) {
+            free_ext_callback(*key);
+        }
+    }
+
+    vectorCleanup(&ext_result);
 }
 
 /* The SCAN command completely relies on scanGenericCommand. */

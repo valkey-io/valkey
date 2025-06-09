@@ -49,6 +49,12 @@
                 "type": "string",
                 "optional": true,
                 "since": "6.0.0"
+            },
+            {
+                "token": "STORAGE",
+                "name": "storage",
+                "type": "string",
+                "optional": true
             }
         ],
         "reply_schema": {

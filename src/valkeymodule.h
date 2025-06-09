@@ -1391,7 +1391,7 @@ typedef int (*ValkeyModuleExternalStorageIterateFunc)(
     int dbid,
     unsigned int iterator_id,
     ValkeyModuleString *match,
-    ValkeyModuleString *type,
+    long long *type,
     ValkeyModuleString **next,
     ValkeyModuleDictIter **iter);
 

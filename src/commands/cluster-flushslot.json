@@ -44,7 +44,7 @@
         "key_specs": [
             {
                 "flags": [
-                    "USES_SLOT",
+                    "IS_SLOT",
                     "NOT_KEY"
                 ],
                 "begin_search": {

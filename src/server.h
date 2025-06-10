@@ -309,7 +309,7 @@ extern int configOOMScoreAdjValuesDefaults[CONFIG_OOM_COUNT];
                                              * out to all keys it should cover */
 #define CMD_KEY_VARIABLE_FLAGS (1ULL << 10) /* Means that some keys might have \
                                              * different flags depending on arguments */
-#define CMD_KEY_USES_SLOT (1ULL << 11)      /* A special 'fake' key that should be \
+#define CMD_KEY_IS_SLOT (1ULL << 11)        /* A special 'fake' key that should be \
                                              * treated as a slot number for routing. */
 
 /* Key flags for when access type is unknown */

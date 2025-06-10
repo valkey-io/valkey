@@ -4553,6 +4553,7 @@ int finishShutdown(void) {
     int save = server.shutdown_flags & SHUTDOWN_SAVE;
     int nosave = server.shutdown_flags & SHUTDOWN_NOSAVE;
     int force = server.shutdown_flags & SHUTDOWN_FORCE;
+    int safe = server.shutdown_flags & SHUTDOWN_SAFE;
 
     /* Log a warning for each replica that is lagging. */
     listIter replicas_iter;
@@ -4573,6 +4574,17 @@ int finishShutdown(void) {
     if (num_replicas > 0) {
         serverLog(LL_NOTICE, "%d of %d replicas are in sync when shutting down.", num_replicas - num_lagging_replicas,
                   num_replicas);
+    }
+
+    if (safe && server.cluster_enabled && clusterNodeIsVotingPrimary(getMyClusterNode())) {
+        if (force) {
+            serverLog(LL_WARNING, "I am a voting primary, shutting down may cause the cluster to down. Exit anyway.");
+        } else {
+            serverLog(LL_WARNING, "I am a voting primary, shutting down may cause the cluster to down, can't exit.");
+            if (server.supervised_mode == SUPERVISED_SYSTEMD)
+                serverCommunicateSystemd("I am a voting primary, shutting down may cause the cluster to down, can't exit.\n");
+            goto error;
+        }
     }
 
     /* Kill all the Lua debugger forked sessions. */

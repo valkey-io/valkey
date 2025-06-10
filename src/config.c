@@ -98,11 +98,12 @@ configEnum aof_fsync_enum[] = {
     {NULL, 0}};
 
 configEnum shutdown_on_sig_enum[] = {
-    {"default", 0},
+    {"default", SHUTDOWN_NOFLAGS},
     {"save", SHUTDOWN_SAVE},
     {"nosave", SHUTDOWN_NOSAVE},
     {"now", SHUTDOWN_NOW},
     {"force", SHUTDOWN_FORCE},
+    {"safe", SHUTDOWN_SAFE},
     {NULL, 0}};
 
 configEnum repl_diskless_load_enum[] = {

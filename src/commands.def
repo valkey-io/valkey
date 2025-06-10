@@ -7917,11 +7917,17 @@ struct COMMAND_ARG SHUTDOWN_abort_selector_save_selector_block_save_selector_Sub
 {MAKE_ARG("save",ARG_TYPE_PURE_TOKEN,-1,"SAVE",NULL,NULL,CMD_ARG_NONE,0,NULL)},
 };
 
+/* SHUTDOWN abort_selector save_selector_block force_safe_selector argument table */
+struct COMMAND_ARG SHUTDOWN_abort_selector_save_selector_block_force_safe_selector_Subargs[] = {
+{MAKE_ARG("force",ARG_TYPE_PURE_TOKEN,-1,"FORCE",NULL,"7.0.0",CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("safe",ARG_TYPE_PURE_TOKEN,-1,"SAVE",NULL,"9.0.0",CMD_ARG_NONE,0,NULL)},
+};
+
 /* SHUTDOWN abort_selector save_selector_block argument table */
 struct COMMAND_ARG SHUTDOWN_abort_selector_save_selector_block_Subargs[] = {
 {MAKE_ARG("save-selector",ARG_TYPE_ONEOF,-1,NULL,NULL,NULL,CMD_ARG_OPTIONAL,2,NULL),.subargs=SHUTDOWN_abort_selector_save_selector_block_save_selector_Subargs},
 {MAKE_ARG("now",ARG_TYPE_PURE_TOKEN,-1,"NOW",NULL,"7.0.0",CMD_ARG_OPTIONAL,0,NULL)},
-{MAKE_ARG("force",ARG_TYPE_PURE_TOKEN,-1,"FORCE",NULL,"7.0.0",CMD_ARG_OPTIONAL,0,NULL)},
+{MAKE_ARG("force-safe-selector",ARG_TYPE_ONEOF,-1,NULL,NULL,NULL,CMD_ARG_OPTIONAL,2,NULL),.subargs=SHUTDOWN_abort_selector_save_selector_block_force_safe_selector_Subargs},
 };
 
 /* SHUTDOWN abort_selector argument table */

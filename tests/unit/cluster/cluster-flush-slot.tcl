@@ -34,6 +34,7 @@ start_cluster 2 2 {tags {external:skip cluster}} {
     test "FLUSHSLOT returns MOVED when unowned" {
         set key_slot [R 0 CLUSTER KEYSLOT FC]
         assert_error "MOVED $key_slot*" {R 1 CLUSTER FLUSHSLOT $key_slot}
+        assert_error "MOVED $key_slot*" {R 2 CLUSTER FLUSHSLOT $key_slot}
     }
 
     test "FLUSHSLOT invalid slot" {

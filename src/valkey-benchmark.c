@@ -494,6 +494,9 @@ static long long acquireTokenOrWait(int tokens) {
 
     long long now_since_epoch = nstime();
     long long min_time = now_since_epoch - time_per_burst;
+    if (last_time == 0) {
+        last_time = now_since_epoch;
+    }
     if (min_time > last_time) {
         new_time = min_time + (time_per_token * tokens);
     } else {
@@ -702,18 +705,24 @@ static void writeHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
 
         if (delay) {
             int thread_id = c->thread_id;
+            int paused_clients_count = 0;
+
             c->paused = 1;
             aeDeleteFileEvent(el, c->context->fd, AE_WRITABLE);
 
             benchmarkThread *thread = NULL;
             if (thread_id < 0) {
+                paused_clients_count = listLength(config.paused_clients);
                 listAddNodeTail(config.paused_clients, c);
             } else {
                 thread = config.threads[thread_id];
+                paused_clients_count = listLength(thread->paused_clients);
                 listAddNodeTail(thread->paused_clients, c);
             }
-            /* Create a time event to awaken the client. */
-            aeCreateTimeEvent(el, delay, awakenPausedClient, (void *)thread, NULL);
+            if (paused_clients_count == 0) {
+                /* Create a time event to awaken the client. */
+                aeCreateTimeEvent(el, delay, awakenPausedClient, (void *)thread, NULL);
+            }
             return;
         }
     }
@@ -1139,6 +1148,7 @@ static void benchmarkSequence(const char *title, char *cmd, int len, int seqlen)
     if (config.rps > 0) {
         config.time_per_token = 1000000000 / config.rps;
         config.time_per_burst = config.time_per_token * config.rps;
+        config.last_time = 0;
     }
 
     int thread_id = config.num_threads > 0 ? 0 : -1;
@@ -1519,6 +1529,11 @@ int parseOptions(int argc, char **argv) {
         } else if (!strcmp(argv[i], "--rps")) {
             if (lastarg) goto invalid;
             config.rps = atoi(argv[++i]);
+            if (config.rps <= 1000) {
+                // TODO: remove this check when we support --rps option < 1000.
+                fprintf(stderr, "WARNING: --rps option must be >= 1000.\n");
+                config.rps = 0;
+            }
         } else if (!strcmp(argv[i], "-u") && !lastarg) {
             parseUri(argv[++i], "valkey-benchmark", &config.conn_info, &config.tls);
             if (config.conn_info.hostport < 0 || config.conn_info.hostport > 65535) {

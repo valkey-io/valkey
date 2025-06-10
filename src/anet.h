@@ -51,6 +51,11 @@
 #undef ip_len
 #endif
 
+#ifdef _MSC_VER
+#include <basetsd.h>
+typedef SSIZE_T ssize_t;
+#endif
+
 int anetTcpNonBlockConnect(char *err, const char *addr, int port);
 int anetTcpNonBlockBestEffortBindConnect(char *err, const char *addr, int port, const char *source_addr, int mptcp);
 int anetResolve(char *err, char *host, char *ipbuf, size_t ipbuf_len, int flags);

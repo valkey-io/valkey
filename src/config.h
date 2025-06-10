@@ -219,7 +219,18 @@ void setproctitle(const char *fmt, ...);
 #include <sys/types.h> /* This will likely define BYTE_ORDER */
 
 #ifndef BYTE_ORDER
-#if (BSD >= 199103)
+#if defined(MSC_VER)
+/*#include <winsock2.h>
+#include <sys/param.h>*/
+#define IS_BIG_ENDIAN (*(uint16_t *)"\0\x1" == 0x1)
+#ifdef IS_BIG_ENDIAN
+#define BIG_ENDIAN
+#define BYTE_ORDER BIG_ENDIAN
+#else
+#define LITTLE_ENDIAN
+#define BYTE_ORDER LITTLE_ENDIAN
+#endif
+#elif (BSD >= 199103)
 #include <machine/endian.h>
 #else
 #if defined(linux) || defined(__linux__)
@@ -241,7 +252,6 @@ void setproctitle(const char *fmt, ...);
     defined(__hp9000s300) || defined(__hp9000s700) || defined(BIT_ZERO_ON_LEFT) || defined(m68k) ||                  \
     defined(__sparc) || (defined(__APPLE__) && defined(__POWERPC__))
 #define BYTE_ORDER BIG_ENDIAN
-#endif
 #endif /* linux */
 #endif /* BSD */
 #endif /* BYTE_ORDER */

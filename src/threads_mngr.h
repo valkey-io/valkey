@@ -32,7 +32,9 @@
 #include "fmacros.h"
 
 #include <sys/types.h>
+#ifndef _MSC_VER
 #include <unistd.h>
+#endif
 
 /** This is an API to invoke callback on a list of threads using a user defined signal handler.
  * NOTE: This is API is only supported only in linux systems.

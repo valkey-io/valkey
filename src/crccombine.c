@@ -1,6 +1,8 @@
 #include <stdint.h>
 #include <stdio.h>
+#ifndef _MSC_VER
 #include <strings.h>
+#endif
 #if defined(__i386__) || defined(__X86_64__)
 #include <immintrin.h>
 #endif

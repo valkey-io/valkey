@@ -52,6 +52,8 @@
 #include "lua/debug_lua.h"
 #include "eval.h"
 
+#include "trace/trace_commands.h"
+
 #include <time.h>
 #include <signal.h>
 #include <sys/wait.h>
@@ -956,15 +958,15 @@ int clientsCronResizeQueryBuffer(client *c) {
  * The buffer peak will be reset back to the buffer position every server.reply_buffer_peak_reset_time milliseconds
  * The function always returns 0 as it never terminates the client. */
 int clientsCronResizeOutputBuffer(client *c, mstime_t now_ms) {
-    if (c->io_write_state != CLIENT_IDLE) return 0;
+    /* in case the resizing is disabled return immediately */
+    if (!server.reply_buffer_resizing_enabled) return 0;
+
+    if (c->io_write_state != CLIENT_IDLE || c->flag.buf_encoded) return 0;
 
     size_t new_buffer_size = 0;
     char *oldbuf = NULL;
     const size_t buffer_target_shrink_size = c->buf_usable_size / 2;
     const size_t buffer_target_expand_size = c->buf_usable_size * 2;
-
-    /* in case the resizing is disabled return immediately */
-    if (!server.reply_buffer_resizing_enabled) return 0;
 
     if (buffer_target_shrink_size >= PROTO_REPLY_MIN_BYTES && c->buf_peak < buffer_target_shrink_size) {
         new_buffer_size = max(PROTO_REPLY_MIN_BYTES, c->buf_peak + 1);
@@ -1743,6 +1745,7 @@ void whileBlockedCron(void) {
 
     latencyEndMonitor(latency);
     latencyAddSampleIfNeeded("while-blocked-cron", latency);
+    latencyTraceIfNeeded(server, while_blocked_cron, latency);
 
     /* We received a SIGTERM during loading, shutting down here in a safe way,
      * as it isn't ok doing so inside the signal handler. */
@@ -1885,7 +1888,9 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
     if (server.aof_state == AOF_ON || server.aof_state == AOF_WAIT_REWRITE) flushAppendOnlyFile(0);
 
     /* Record time consumption of AOF writing. */
-    durationAddSample(EL_DURATION_TYPE_AOF, getMonotonicUs() - aof_start_time);
+    monotime aof_duration = getMonotonicUs() - aof_start_time;
+    durationAddSample(EL_DURATION_TYPE_AOF, aof_duration);
+    latencyTraceIfNeeded(aof, aof_flush, aof_duration);
 
     /* Update the fsynced replica offset.
      * If an initial rewrite is in progress then not all data is guaranteed to have actually been
@@ -1929,9 +1934,11 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
     if (server.el_start > 0) {
         monotime el_duration = getMonotonicUs() - server.el_start;
         durationAddSample(EL_DURATION_TYPE_EL, el_duration);
+        latencyTraceIfNeeded(server, eventloop, el_duration);
     }
     server.el_cron_duration += duration_before_aof + duration_after_write;
     durationAddSample(EL_DURATION_TYPE_CRON, server.el_cron_duration);
+    latencyTraceIfNeeded(server, eventloop_cron, server.el_cron_duration);
     server.el_cron_duration = 0;
     /* Record max command count per cycle. */
     if (server.stat_numcommands > server.el_cmd_cnt_start) {
@@ -1973,6 +1980,7 @@ void afterSleep(struct aeEventLoop *eventLoop, int numevents) {
             moduleFireServerEvent(VALKEYMODULE_EVENT_EVENTLOOP, VALKEYMODULE_SUBEVENT_EVENTLOOP_AFTER_SLEEP, NULL);
             latencyEndMonitor(latency);
             latencyAddSampleIfNeeded("module-acquire-GIL", latency);
+            latencyTraceIfNeeded(server, module_acquire_gil, latency);
         }
         /* Set the eventloop start time. */
         server.el_start = getMonotonicUs();
@@ -3742,6 +3750,7 @@ void call(client *c, int flags) {
     else
         duration = ustime() - call_timer;
 
+    valkey_commands_trace(valkey_commands, command_call, connGetTypeId(c->conn), getClientPeerId(c), getClientPeerId(c), real_cmd->declared_name, duration);
     c->duration += duration;
     dirty = server.dirty - dirty;
     if (dirty < 0) dirty = 0;
@@ -3772,7 +3781,12 @@ void call(client *c, int flags) {
      * a MULTI-EXEC from inside an AOF). */
     if (update_command_stats) {
         char *latency_event = (real_cmd->flags & CMD_FAST) ? "fast-command" : "command";
-        latencyAddSampleIfNeeded(latency_event, duration / 1000);
+        latencyAddSampleIfNeeded(latency_event, duration);
+        if (real_cmd->flags & CMD_FAST) {
+            latencyTraceIfNeeded(server, fast_command, duration);
+        } else {
+            latencyTraceIfNeeded(server, command, duration);
+        }
         if (server.execution_nesting == 0) durationAddSample(EL_DURATION_TYPE_CMD, duration);
     }
 
@@ -4375,7 +4389,7 @@ int processCommand(client *c) {
 
     /* Exec the command */
     if (c->flag.multi && c->cmd->proc != execCommand && c->cmd->proc != discardCommand &&
-        c->cmd->proc != multiCommand && c->cmd->proc != watchCommand && c->cmd->proc != quitCommand &&
+        c->cmd->proc != quitCommand &&
         c->cmd->proc != resetCommand) {
         queueMultiCommand(c, cmd_flags);
         addReply(c, shared.queued);
@@ -6378,8 +6392,8 @@ void createPidFile(void) {
 void daemonize(void) {
     int fd;
 
-    if (fork() != 0) exit(0); /* parent exits */
-    setsid();                 /* create a new session */
+    if (valkey_fork() != 0) exit(0); /* parent exits */
+    setsid();                        /* create a new session */
 
     /* Every output goes to /dev/null. If the server is daemonized but
      * the 'logfile' is set to 'stdout' in the configuration file
@@ -6572,7 +6586,7 @@ int serverFork(int purpose) {
 
     int childpid;
     long long start = ustime();
-    if ((childpid = fork()) == 0) {
+    if ((childpid = valkey_fork()) == 0) {
         /* Child.
          *
          * The order of setting things up follows some reasoning:
@@ -6602,7 +6616,8 @@ int serverFork(int purpose) {
         server.stat_fork_time = ustime() - start;
         server.stat_fork_rate =
             (double)zmalloc_used_memory() * 1000000 / server.stat_fork_time / (1024 * 1024 * 1024); /* GB per second. */
-        latencyAddSampleIfNeeded("fork", server.stat_fork_time / 1000);
+        latencyAddSampleIfNeeded("fork", server.stat_fork_time);
+        latencyTraceIfNeeded(bgsave, fork, server.stat_fork_time);
 
         /* The child_pid and child_type are only for mutually exclusive children.
          * other child types should handle and store their pid's in dedicated variables.

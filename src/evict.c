@@ -671,6 +671,7 @@ int performEvictions(void) {
             dbGenericDelete(db, keyobj, server.lazyfree_lazy_eviction, DB_FLAG_KEY_EVICTED);
             latencyEndMonitor(eviction_latency);
             latencyAddSampleIfNeeded("eviction-del", eviction_latency);
+            latencyTraceIfNeeded(db, eviction_del, eviction_latency);
             delta -= (long long)zmalloc_used_memory();
             mem_freed += delta;
             server.stat_evictedkeys++;
@@ -734,10 +735,12 @@ cant_free:
         }
         latencyEndMonitor(lazyfree_latency);
         latencyAddSampleIfNeeded("eviction-lazyfree", lazyfree_latency);
+        latencyTraceIfNeeded(db, eviction_lazyfree, lazyfree_latency);
     }
 
     latencyEndMonitor(latency);
     latencyAddSampleIfNeeded("eviction-cycle", latency);
+    latencyTraceIfNeeded(db, eviction_cycle, latency);
 
 update_metrics:
     if (result == EVICT_RUNNING || result == EVICT_FAIL) {

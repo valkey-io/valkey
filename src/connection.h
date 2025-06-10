@@ -34,12 +34,18 @@
 #include <errno.h>
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 #include <sys/uio.h>
 
 #include "ae.h"
 
 #define CONN_INFO_LEN 32
 #define CONN_ADDR_STR_LEN 128 /* Similar to INET6_ADDRSTRLEN, hoping to handle other protocols. */
+
+#define NET_HOST_STR_LEN 256                          /* Longest valid hostname */
+#define NET_IP_STR_LEN 46                             /* INET6_ADDRSTRLEN is 46, but we need to be sure */
+#define NET_ADDR_STR_LEN (NET_IP_STR_LEN + 32)        /* Must be enough for ip:port */
+#define NET_HOST_PORT_STR_LEN (NET_HOST_STR_LEN + 32) /* Must be enough for hostname:port */
 
 struct aeEventLoop;
 typedef struct connection connection;
@@ -58,6 +64,14 @@ typedef enum {
 #define CONN_FLAG_WRITE_BARRIER (1 << 1)        /* Write barrier requested */
 #define CONN_FLAG_ALLOW_ACCEPT_OFFLOAD (1 << 2) /* Connection accept can be offloaded to IO threads. */
 
+typedef enum {
+    CONN_TYPE_ID_INVALID = 0,
+    CONN_TYPE_ID_SOCKET,
+    CONN_TYPE_ID_UNIX,
+    CONN_TYPE_ID_TLS,
+    CONN_TYPE_ID_RDMA,
+} ConnectionTypeId;
+
 #define CONN_TYPE_SOCKET "tcp"
 #define CONN_TYPE_UNIX "unix"
 #define CONN_TYPE_TLS "tls"
@@ -68,6 +82,7 @@ typedef void (*ConnectionCallbackFunc)(struct connection *conn);
 
 typedef struct ConnectionType {
     /* connection type */
+    int (*get_type_id)(struct connection *conn);
     const char *(*get_type)(struct connection *conn);
 
     /* connection type initialize & finalize & configure */
@@ -293,6 +308,13 @@ static inline ssize_t connSyncReadLine(connection *conn, char *ptr, ssize_t size
 /* Return CONN_TYPE_* for the specified connection */
 static inline const char *connGetType(connection *conn) {
     return conn->type->get_type(conn);
+}
+
+static inline int connGetTypeId(connection *conn) {
+    if (!conn || conn->type->get_type_id == NULL) {
+        return CONN_TYPE_ID_INVALID;
+    }
+    return conn->type->get_type_id(conn);
 }
 
 static inline int connLastErrorRetryable(connection *conn) {

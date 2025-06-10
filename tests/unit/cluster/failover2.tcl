@@ -133,3 +133,102 @@ run_solo {cluster} {
         }
     } ;# start_cluster
 } ;# run_solo
+
+# Needs to run in the body of
+# start_cluster 3 1 {tags {external:skip cluster} overrides {cluster-replica-validity-factor 0}}
+proc test_replica_config_epoch_failover {type} {
+    test "Replica can update the config epoch when trigger the failover - $type" {
+        set CLUSTER_PACKET_TYPE_NONE -1
+        set CLUSTER_PACKET_TYPE_ALL -2
+
+        if {$type == "automatic"} {
+            R 3 CONFIG SET cluster-replica-no-failover no
+        } elseif {$type == "manual"} {
+            R 3 CONFIG SET cluster-replica-no-failover yes
+        }
+        R 3 DEBUG DROP-CLUSTER-PACKET-FILTER $CLUSTER_PACKET_TYPE_ALL
+
+        set R0_nodeid [R 0 cluster myid]
+
+        # R 0 is the first node, so we expect its epoch to be the smallest,
+        # so bumpepoch must succeed and it's config epoch will be changed.
+        set res [R 0 cluster bumpepoch]
+        assert_match {BUMPED *} $res
+        set R0_config_epoch [lindex $res 1]
+
+        # Wait for the config epoch to propagate across the cluster.
+        wait_for_condition 1000 10 {
+            $R0_config_epoch == [dict get [cluster_get_node_by_id 1 $R0_nodeid] config_epoch] &&
+            $R0_config_epoch == [dict get [cluster_get_node_by_id 2 $R0_nodeid] config_epoch]
+        } else {
+            fail "Other primaries does not update config epoch"
+        }
+        # Make sure that replica do not update config epoch.
+        assert_not_equal $R0_config_epoch [dict get [cluster_get_node_by_id 3 $R0_nodeid] config_epoch]
+
+        # Pause the R 0 and wait for the cluster to be down.
+        pause_process [srv 0 pid]
+        R 3 DEBUG DROP-CLUSTER-PACKET-FILTER $CLUSTER_PACKET_TYPE_NONE
+        wait_for_condition 1000 50 {
+            [CI 1 cluster_state] == "fail" &&
+            [CI 2 cluster_state] == "fail" &&
+            [CI 3 cluster_state] == "fail"
+        } else {
+            fail "Cluster does not fail"
+        }
+
+        # Make sure both the automatic and the manual failover will fail in the first time.
+        if {$type == "automatic"} {
+            wait_for_log_messages -3 {"*Failover attempt expired*"} 0 1000 10
+        } elseif {$type == "manual"} {
+            R 3 cluster failover force
+            wait_for_log_messages -3 {"*Manual failover timed out*"} 0 1000 10
+        }
+
+        # Make sure the primaries prints the relevant logs.
+        wait_for_log_messages -1 {"*Failover auth denied to* epoch * > reqConfigEpoch*"} 0 1000 10
+        wait_for_log_messages -1 {"*has old slots configuration, sending an UPDATE message about*"} 0 1000 10
+        wait_for_log_messages -2 {"*Failover auth denied to* epoch * > reqConfigEpoch*"} 0 1000 10
+        wait_for_log_messages -2 {"*has old slots configuration, sending an UPDATE message about*"} 0 1000 10
+
+        # Make sure the replica has updated the config epoch.
+        wait_for_condition 1000 10 {
+            $R0_config_epoch == [dict get [cluster_get_node_by_id 1 $R0_nodeid] config_epoch]
+        } else {
+            fail "The replica does not update the config epoch"
+        }
+
+        if {$type == "manual"} {
+            # The second manual failure will succeed because the config epoch
+            # has already propagated.
+            R 3 cluster failover force
+        }
+
+        # Wait for the failover to success.
+        wait_for_condition 1000 50 {
+            [s -3 role] == "master" &&
+            [CI 1 cluster_state] == "ok" &&
+            [CI 2 cluster_state] == "ok" &&
+            [CI 3 cluster_state] == "ok"
+        } else {
+            fail "Failover does not happen"
+        }
+
+        # Restore the old primary, make sure it can covert
+        resume_process [srv 0 pid]
+        wait_for_condition 1000 50 {
+            [s 0 role] == "slave" &&
+            [CI 0 cluster_state] == "ok"
+        } else {
+            fail "The old primary was not converted into replica"
+        }
+    }
+}
+
+start_cluster 3 1 {tags {external:skip cluster} overrides {cluster-replica-validity-factor 0}} {
+    test_replica_config_epoch_failover "automatic"
+}
+
+start_cluster 3 1 {tags {external:skip cluster} overrides {cluster-replica-validity-factor 0}} {
+    test_replica_config_epoch_failover "manual"
+}

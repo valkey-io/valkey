@@ -295,6 +295,11 @@ ifeq ($(MALLOC),jemalloc)
 	FINAL_LIBS := ../deps/jemalloc/lib/libjemalloc.a $(FINAL_LIBS)
 endif
 
+ifeq ($(USE_LTTNG),yes)
+	FINAL_CFLAGS+=-DUSE_LTTNG
+	FINAL_LIBS += -llttng-ust
+endif
+
 # LIBSSL & LIBCRYPTO
 LIBSSL_LIBS=
 LIBSSL_PKGCONFIG := $(shell $(PKG_CONFIG) --exists libssl && echo $$?)
@@ -386,7 +391,7 @@ else
 	MAYBE_UNINSTALL_REDIS_SYMLINK=
 endif
 
-SERVER_CC=$(QUIET_CC)$(CC) $(FINAL_CFLAGS)
+SERVER_CC=$(QUIET_CC)$(CC) $(FINAL_CFLAGS) -I.
 SERVER_AR=$(QUIET_AR)$(AR)
 SERVER_LD=$(QUIET_LINK)$(CC) $(FINAL_LDFLAGS)
 ENGINE_INSTALL=$(QUIET_INSTALL)$(INSTALL)
@@ -417,7 +422,9 @@ endif
 ENGINE_NAME=valkey
 SERVER_NAME=$(ENGINE_NAME)-server$(PROG_SUFFIX)
 ENGINE_SENTINEL_NAME=$(ENGINE_NAME)-sentinel$(PROG_SUFFIX)
+ENGINE_TRACE_OBJ=trace/trace.o trace/trace_commands.o trace/trace_db.o trace/trace_bgsave.o trace/trace_cluster.o trace/trace_server.o trace/trace_aof.o
 ENGINE_SERVER_OBJ=threads_mngr.o adlist.o quicklist.o ae.o anet.o dict.o hashtable.o kvstore.o server.o sds.o zmalloc.o lzf_c.o lzf_d.o pqsort.o zipmap.o sha1.o ziplist.o release.o memory_prefetch.o io_threads.o networking.o util.o object.o db.o replication.o rdb.o t_string.o t_list.o t_set.o t_zset.o t_hash.o config.o aof.o pubsub.o multi.o debug.o sort.o intset.o syncio.o cluster.o cluster_legacy.o cluster_slot_stats.o crc16.o endianconv.o commandlog.o eval.o bio.o rio.o rand.o memtest.o syscheck.o crcspeed.o crccombine.o crc64.o bitops.o sentinel.o notify.o setproctitle.o blocked.o hyperloglog.o latency.o sparkline.o valkey-check-rdb.o valkey-check-aof.o geo.o lazyfree.o module.o evict.o expire.o geohash.o geohash_helper.o childinfo.o allocator_defrag.o defrag.o siphash.o rax.o t_stream.o listpack.o localtime.o lolwut.o lolwut5.o lolwut6.o acl.o tracking.o socket.o tls.o sha256.o timeout.o setcpuaffinity.o monotonic.o mt19937-64.o resp_parser.o call_reply.o script.o functions.o commands.o strl.o connection.o unix.o logreqres.o rdma.o scripting_engine.o lua/script_lua.o lua/function_lua.o lua/engine_lua.o lua/debug_lua.o
+ENGINE_SERVER_OBJ+=$(ENGINE_TRACE_OBJ)
 ENGINE_CLI_NAME=$(ENGINE_NAME)-cli$(PROG_SUFFIX)
 ENGINE_CLI_OBJ=anet.o adlist.o dict.o valkey-cli.o zmalloc.o release.o ae.o serverassert.o crcspeed.o crccombine.o crc64.o siphash.o crc16.o monotonic.o cli_common.o mt19937-64.o strl.o cli_commands.o sds.o util.o sha256.o
 ENGINE_BENCHMARK_NAME=$(ENGINE_NAME)-benchmark$(PROG_SUFFIX)
@@ -541,6 +548,9 @@ DEP = $(ENGINE_SERVER_OBJ:%.o=%.d) $(ENGINE_CLI_OBJ:%.o=%.d) $(ENGINE_BENCHMARK_
 lua/%.o: lua/%.c .make-prerequisites
 	$(SERVER_CC) -MMD -o $@ -c $<
 
+trace/%.o: trace/%.c .make-prerequisites
+	$(SERVER_CC) -Itrace -MMD -o $@ -c $<
+
 unit/%.o: unit/%.c .make-prerequisites
 	$(SERVER_CC) -MMD -o $@ -c $<
 
@@ -564,7 +574,7 @@ endif
 commands.c: $(COMMANDS_DEF_FILENAME).def
 
 clean:
-	rm -rf $(SERVER_NAME) $(ENGINE_SENTINEL_NAME) $(ENGINE_CLI_NAME) $(ENGINE_BENCHMARK_NAME) $(ENGINE_CHECK_RDB_NAME) $(ENGINE_CHECK_AOF_NAME) $(ENGINE_UNIT_TESTS) $(ENGINE_LIB_NAME) unit/*.o unit/*.d lua/*.o lua/*.d *.o *.gcda *.gcno *.gcov valkey.info lcov-html Makefile.dep *.so
+	rm -rf $(SERVER_NAME) $(ENGINE_SENTINEL_NAME) $(ENGINE_CLI_NAME) $(ENGINE_BENCHMARK_NAME) $(ENGINE_CHECK_RDB_NAME) $(ENGINE_CHECK_AOF_NAME) $(ENGINE_UNIT_TESTS) $(ENGINE_LIB_NAME) unit/*.o unit/*.d lua/*.o lua/*.d trace/*.o trace/*.d *.o *.gcda *.gcno *.gcov valkey.info lcov-html Makefile.dep *.so
 	rm -f $(DEP)
 
 .PHONY: clean

@@ -3478,6 +3478,7 @@ static void backgroundSaveDoneHandlerDisk(int exitcode, int bysignal, time_t sav
         rdbRemoveTempFile(server.child_pid, 0);
         latencyEndMonitor(latency);
         latencyAddSampleIfNeeded("rdb-unlink-temp-file", latency);
+        latencyTraceIfNeeded(bgsave, rdb_unlink_temp_file, latency);
         /* SIGUSR1 is whitelisted, so we have a way to kill a child without
          * triggering an error condition. */
         if (bysignal != SIGUSR1) server.lastbgsave_status = C_ERR;

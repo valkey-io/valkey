@@ -1816,6 +1816,7 @@ void deleteExpiredKeyAndPropagateWithDictIndex(serverDb *db, robj *keyobj, int d
     dbGenericDeleteWithDictIndex(db, keyobj, server.lazyfree_lazy_expire, DB_FLAG_KEY_EXPIRED, dict_index);
     latencyEndMonitor(expire_latency);
     latencyAddSampleIfNeeded("expire-del", expire_latency);
+    latencyTraceIfNeeded(db, expire_del, expire_latency);
     notifyKeyspaceEvent(NOTIFY_EXPIRED, "expired", keyobj, db->id);
     signalModifiedKey(NULL, db, keyobj);
     propagateDeletion(db, keyobj, server.lazyfree_lazy_expire);
@@ -1866,8 +1867,6 @@ void propagateDeletion(serverDb *db, robj *key, int lazy) {
 
     argv[0] = lazy ? shared.unlink : shared.del;
     argv[1] = key;
-    incrRefCount(argv[0]);
-    incrRefCount(argv[1]);
 
     /* If the primary decided to delete a key we must propagate it to replicas no matter what.
      * Even if module executed a command without asking for propagation. */
@@ -1875,9 +1874,6 @@ void propagateDeletion(serverDb *db, robj *key, int lazy) {
     server.replication_allowed = 1;
     alsoPropagate(db->id, argv, 2, PROPAGATE_AOF | PROPAGATE_REPL);
     server.replication_allowed = prev_replication_allowed;
-
-    decrRefCount(argv[0]);
-    decrRefCount(argv[1]);
 }
 
 /* Returns 1 if the expire value is expired, 0 otherwise. */

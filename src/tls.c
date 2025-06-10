@@ -1120,6 +1120,12 @@ static const char *connTLSGetType(connection *conn_) {
     return CONN_TYPE_TLS;
 }
 
+static int connTLSGetTypeId(connection *conn_) {
+    (void)conn_;
+
+    return CONN_TYPE_ID_TLS;
+}
+
 static int tlsHasPendingData(void) {
     if (!pending_list) return 0;
     return listLength(pending_list) > 0;
@@ -1166,6 +1172,7 @@ static sds connTLSGetPeerCert(connection *conn_) {
 
 static ConnectionType CT_TLS = {
     /* connection type */
+    .get_type_id = connTLSGetTypeId,
     .get_type = connTLSGetType,
 
     /* connection type initialize & finalize & configure */

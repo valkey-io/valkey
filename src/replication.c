@@ -4371,8 +4371,9 @@ void replicationCachePrimary(client *c) {
     server.primary->repl_data->repl_applied = 0;
     server.primary->repl_data->read_reploff = server.primary->repl_data->reploff;
     if (c->flag.multi) discardTransaction(c);
+    releaseReplyReferences(c);
+    resetLastWrittenBuf(c);
     listEmpty(c->reply);
-    c->sentlen = 0;
     c->reply_bytes = 0;
     c->bufpos = 0;
     resetClient(c);

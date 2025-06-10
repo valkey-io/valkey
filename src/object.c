@@ -1068,6 +1068,14 @@ int getLongFromObjectOrReply(client *c, robj *o, long *target, const char *msg) 
     return C_OK;
 }
 
+int getIntFromObject(robj *o, int *target) {
+    long long value;
+    if (getLongLongFromObject(o, &value) != C_OK) return C_ERR;
+    if (value < INT_MIN || value > INT_MAX) return C_ERR;
+    *target = value;
+    return C_OK;
+}
+
 int getRangeLongFromObjectOrReply(client *c, robj *o, long min, long max, long *target, const char *msg) {
     if (getLongFromObjectOrReply(c, o, target, msg) != C_OK) return C_ERR;
     if (*target < min || *target > max) {

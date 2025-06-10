@@ -5299,3 +5299,20 @@ void updateFailoverStatus(void) {
         replicationSetPrimary(server.target_replica_host, server.target_replica_port, 0);
     }
 }
+
+/* Returns the numeric representation of the lowest version running across this
+ * primary's replicas.
+ * If no replicas are present, returns this node's version. */
+int primaryGetOldestReplicaVersion(void) {
+    listIter replicas_iter;
+    listNode *replicas_list_node;
+    listRewind(server.replicas, &replicas_iter);
+    int oldest_version = VALKEY_VERSION_NUM;
+    while ((replicas_list_node = listNext(&replicas_iter)) != NULL) {
+        client *replica = listNodeValue(replicas_list_node);
+        if (replica->repl_data->replica_version < oldest_version) {
+            oldest_version = replica->repl_data->replica_version;
+        }
+    }
+    return oldest_version;
+}

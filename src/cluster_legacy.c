@@ -6279,16 +6279,16 @@ const char *clusterGetMessageTypeString(int type) {
 }
 
 int getSlotOrError(robj *o, char **err_out) {
-    long long slot;
+    int slot;
 
-    if (getLongLongFromObject(o, &slot) != C_OK || slot < 0 || slot >= CLUSTER_SLOTS) {
+    if (getIntFromObject(o, &slot) != C_OK || slot < 0 || slot >= CLUSTER_SLOTS) {
         if (err_out) {
             *err_out = "Invalid or out of range slot";
         }
         return -1;
     }
 
-    return (int)slot;
+    return slot;
 }
 
 /* Get the slot from robj and return it. If the slot is not valid,
@@ -6297,10 +6297,10 @@ int getSlotOrReply(client *c, robj *o) {
     char *err = NULL;
     int slot = getSlotOrError(o, &err);
     if (err) {
-        addReplyErrorSds(c, sdsnew(err));
+        addReplyError(c, err);
         return -1;
     }
-    return (int)slot;
+    return slot;
 }
 
 int checkSlotAssignmentsOrReply(client *c, unsigned char *slots, int del, int start_slot, int end_slot) {
@@ -6560,28 +6560,17 @@ unsigned int delKeysInSlot(unsigned int hashslot, int lazy, bool propagate_del, 
     int before_execution_nesting = server.execution_nesting;
     enterExecutionUnit(1, 0);
 
-    /* Check if all replicas support CLUSTER FLUSHSLOT */
-    listIter replicas_iter;
-    listNode *replicas_list_node;
-    listRewind(server.replicas, &replicas_iter);
-    int legacy_replica = 0;
-    while ((replicas_list_node = listNext(&replicas_iter)) != NULL) {
-        client *replica = listNodeValue(replicas_list_node);
-        /* 0x90000 is 9.0.0, when CLUSTER FLUSHSLOT was added. */
-        if (replica->repl_data->replica_version < 0x90000) {
-            legacy_replica = 1;
-            break;
-        }
-    }
+    /* 0x90000 is 9.0.0, when CLUSTER FLUSHSLOT was added. */
+    int has_legacy_replica = primaryGetOldestReplicaVersion() < 0x90000;
 
     /* Propagate as a single CLUSTER FLUSHSLOT <slot> ASYNC/SYNC if replicas
      * support it. */
-    if (propagate_del && !legacy_replica) {
+    if (propagate_del && !has_legacy_replica) {
         argv[0] = shared.cluster;
         argv[1] = shared.flushslot;
         argv[2] = createStringObjectFromLongLong(hashslot);
         argv[3] = lazy ? shared.async : shared.sync;
-        alsoPropagate(/*dbid=*/-1, argv, 4, PROPAGATE_AOF | PROPAGATE_REPL);
+        alsoPropagate(-1, argv, 4, PROPAGATE_AOF | PROPAGATE_REPL);
         decrRefCount(argv[2]);
     }
 
@@ -6601,7 +6590,7 @@ unsigned int delKeysInSlot(unsigned int hashslot, int lazy, bool propagate_del, 
             }
 
             /* Legacy replicas require individual key deletion. */
-            if (propagate_del && legacy_replica) propagateDeletion(&db, key, lazy);
+            if (propagate_del && has_legacy_replica) propagateDeletion(&db, key, lazy);
 
             signalModifiedKey(NULL, &db, key);
             if (send_del_event) {

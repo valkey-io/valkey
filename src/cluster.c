@@ -894,6 +894,7 @@ void clusterUpdateMyselfFlags(void) {
 void clusterUpdateMyselfAnnouncedPorts(void) {
     if (!myself) return;
     deriveAnnouncedPorts(&myself->tcp_port,&myself->tls_port,&myself->cport);
+    clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG);
 }
 
 /* We want to take myself->ip in sync with the cluster-announce-ip option.
@@ -921,6 +922,7 @@ void clusterUpdateMyselfIp(void) {
         } else {
             myself->ip[0] = '\0'; /* Force autodetection. */
         }
+        clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG);
     }
 }
 

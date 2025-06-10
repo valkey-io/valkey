@@ -675,10 +675,7 @@ int redis_check_rdb(char *rdbfilename, FILE *fp) {
                 goto eoferr;
             }
             if (!strcasecmp(auxkey->ptr, "lua")) {
-                /* In older version before 7.0, we may save lua scripts in a replication RDB,
-                 * although it is not an actually aux field, we will still print it in here since
-                 * it's easy to filter using external grep. Use a counter so that at the end we
-                 * can print its number, if any. */
+                /* In older version before 7.0, we may save lua scripts in a replication RDB. */
                 rdbstate.lua_scripts++;
             }
             rdbCheckInfo("AUX FIELD %s = '%s'", (char *)auxkey->ptr, (char *)auxval->ptr);

@@ -3674,9 +3674,10 @@ int clusterProcessPacket(clusterLink *link) {
                     if (server.cluster->slots[j] == sender || isSlotUnclaimed(j)) continue;
                     if (server.cluster->slots[j]->configEpoch > sender_claimed_config_epoch) {
                         serverLog(LL_VERBOSE,
-                                  "Node %.40s has old slots configuration, sending "
-                                  "an UPDATE message about %.40s",
-                                  sender->name, server.cluster->slots[j]->name);
+                                  "Node %.40s (%s) has old slots configuration, sending "
+                                  "an UPDATE message about %.40s (%s)",
+                                  sender->name, sender->human_nodename,
+                                  server.cluster->slots[j]->name, server.cluster->slots[j]->human_nodename);
                         clusterSendUpdate(sender->link, server.cluster->slots[j]);
 
                         /* TODO: instead of exiting the loop send every other
@@ -4622,6 +4623,16 @@ void clusterSendFailoverAuthIfNeeded(clusterNode *node, clusterMsg *request) {
                   "slot %d epoch (%llu) > reqConfigEpoch (%llu)",
                   node->name, node->human_nodename, j, (unsigned long long)server.cluster->slots[j]->configEpoch,
                   (unsigned long long)requestConfigEpoch);
+
+        /* Send an UPDATE message to the replica. After receiving the UPDATE message,
+         * the replica will update the slots config so that it can initiate a failover
+         * again later. Otherwise the replica will never get votes if the primary is down. */
+        serverLog(LL_VERBOSE,
+                  "Node %.40s (%s) has old slots configuration, sending "
+                  "an UPDATE message about %.40s (%s)",
+                  node->name, node->human_nodename,
+                  server.cluster->slots[j]->name, server.cluster->slots[j]->human_nodename);
+        clusterSendUpdate(node->link, server.cluster->slots[j]);
         return;
     }
 

@@ -147,6 +147,7 @@ proc test_replica_config_epoch_failover {type} {
             R 3 CONFIG SET cluster-replica-no-failover yes
         }
         R 3 DEBUG DROP-CLUSTER-PACKET-FILTER $CLUSTER_PACKET_TYPE_ALL
+        R 3 DEBUG CLOSE-CLUSTER-LINK-ON-PACKET-DROP 1
 
         set R0_nodeid [R 0 cluster myid]
 
@@ -169,6 +170,7 @@ proc test_replica_config_epoch_failover {type} {
         # Pause the R 0 and wait for the cluster to be down.
         pause_process [srv 0 pid]
         R 3 DEBUG DROP-CLUSTER-PACKET-FILTER $CLUSTER_PACKET_TYPE_NONE
+        R 3 DEBUG CLOSE-CLUSTER-LINK-ON-PACKET-DROP 0
         wait_for_condition 1000 50 {
             [CI 1 cluster_state] == "fail" &&
             [CI 2 cluster_state] == "fail" &&

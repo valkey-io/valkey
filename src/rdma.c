@@ -1866,7 +1866,7 @@ ConnectionType *connectionTypeRdma(void) {
 
     if (ct_rdma != NULL) return ct_rdma;
 
-    ct_rdma = connectionByType(CONN_TYPE_RDMA);
+    ct_rdma = connectionByType(CONN_TYPE_ID_RDMA);
     serverAssert(ct_rdma != NULL);
 
     return ct_rdma;

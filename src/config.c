@@ -3002,6 +3002,12 @@ static int updateRdmaPort(const char **err) {
     return 1;
 }
 
+static int updateClusterReplicaPriority(const char **err) {
+    UNUSED(err);
+    clusterUpdateMyselfReplicaPriority();
+    return 1;
+}
+
 static int setConfigReplicaOfOption(standardConfig *config, sds *argv, int argc, const char **err) {
     UNUSED(config);
 
@@ -3316,6 +3322,7 @@ standardConfig static_configs[] = {
 #ifdef LOG_REQ_RES
     createUIntConfig("client-default-resp", NULL, IMMUTABLE_CONFIG | HIDDEN_CONFIG, 2, 3, server.client_default_resp, 2, INTEGER_CONFIG, NULL, NULL),
 #endif
+    createUIntConfig("cluster-replica-priority", NULL, MODIFIABLE_CONFIG, 0, INT_MAX, server.cluster_replica_priority, 0, INTEGER_CONFIG, NULL, updateClusterReplicaPriority),
 
     /* Unsigned Long configs */
     createULongConfig("active-defrag-max-scan-fields", NULL, MODIFIABLE_CONFIG, 1, LONG_MAX, server.active_defrag_max_scan_fields, 1000, INTEGER_CONFIG, NULL, NULL), /* Default: keys with more than 1000 fields will be processed separately */

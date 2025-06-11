@@ -160,6 +160,7 @@ typedef enum {
     CLUSTERMSG_EXT_TYPE_SHARDID,
     CLUSTERMSG_EXT_TYPE_CLIENT_IPV4,
     CLUSTERMSG_EXT_TYPE_CLIENT_IPV6,
+    CLUSTERMSG_EXT_TYPE_REPLICA_PRIORITY,
 } clusterMsgPingtypes;
 
 /* Helper function for making sure extensions are eight byte aligned. */
@@ -193,6 +194,10 @@ typedef struct {
 } clusterMsgPingExtClientIpV6;
 
 typedef struct {
+    unsigned int replica_priority; /* The replica priority. */
+} clusterMsgPingExtReplicaPriority;
+
+typedef struct {
     uint32_t length; /* Total length of this extension message (including this header) */
     uint16_t type;   /* Type of this extension message (see clusterMsgPingtypes) */
     uint16_t unused; /* 16 bits of padding to make this structure 8 byte aligned. */
@@ -203,6 +208,7 @@ typedef struct {
         clusterMsgPingExtShardId shard_id;
         clusterMsgPingExtClientIpV4 announce_client_ipv4;
         clusterMsgPingExtClientIpV6 announce_client_ipv6;
+        clusterMsgPingExtReplicaPriority replica_priority;
     } ext[]; /* Actual extension information, formatted so that the data is 8
               * byte aligned, regardless of its content. */
 } clusterMsgPingExt;
@@ -368,6 +374,7 @@ struct _clusterNode {
     list *fail_reports;                     /* List of nodes signaling this as failing */
     int is_node_healthy;                    /* Boolean indicating the cached node health.
                                                Update with updateAndCountChangedNodeHealth(). */
+    unsigned int replica_priority;          /* xxx */
 };
 
 /* Struct used for storing slot statistics. */

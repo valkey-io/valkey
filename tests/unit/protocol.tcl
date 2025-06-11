@@ -60,9 +60,26 @@ start_server {tags {"protocol network"}} {
         assert_error "*wrong*arguments*ping*" {r ping x y z}
     }
 
-    test "Unbalanced number of quotes" {
+    test "Mixing quoted and unquoted strings" {
         reconnect
-        r write "set \"\"\"test-key\"\"\" test-value\r\n"
+        r write "set \"\"\"tes\"t-'k'e\"y\" \"test\"'-'value\r\n"
+        r write "get test'-'key\r\n"
+        r flush
+        assert_equal "OK" [r read]
+        assert_equal "test-value" [r read]
+    }
+
+    test "Unbalanced single quotes" {
+        reconnect
+        r write "set foo 'b'a'r\r\n"
+        r write "ping\r\n"
+        r flush
+        assert_error "*unbalanced*" {r read}
+    }
+
+    test "Unbalanced double quotes" {
+        reconnect
+        r write "set foo \"b\"a\"r\r\n"
         r write "ping\r\n"
         r flush
         assert_error "*unbalanced*" {r read}
@@ -81,7 +98,7 @@ start_server {tags {"protocol network"}} {
             # PROTO_INLINE_MAX_SIZE is hardcoded in Valkey code to 64K. doing the same here 
             # since we would like to validate it is enforced. 
             set PROTO_INLINE_MAX_SIZE [expr 1024 * 64]
-            set payload [string repeat A 1024]"\n"
+            set payload [string repeat A 1024]
             set payload_size 0
             while {$payload_size <= $PROTO_INLINE_MAX_SIZE} {
                 if {[catch {

@@ -106,8 +106,9 @@ static int connSocketConnect(connection *conn,
                              const char *addr,
                              int port,
                              const char *src_addr,
+                             int multipath,
                              ConnectionCallbackFunc connect_handler) {
-    int fd = anetTcpNonBlockBestEffortBindConnect(NULL, addr, port, src_addr);
+    int fd = anetTcpNonBlockBestEffortBindConnect(NULL, addr, port, src_addr, multipath);
     if (fd == -1) {
         conn->state = CONN_STATE_ERROR;
         conn->last_errno = errno;
@@ -326,6 +327,8 @@ static void connSocketAcceptHandler(aeEventLoop *el, int fd, void *privdata, int
             return;
         }
         serverLog(LL_VERBOSE, "Accepted %s:%d", cip, cport);
+
+        if (server.tcpkeepalive) anetKeepAlive(NULL, cfd, server.tcpkeepalive);
         acceptCommonHandler(connCreateAcceptedSocket(cfd, NULL), flags, cip);
     }
 }
@@ -403,8 +406,15 @@ static const char *connSocketGetType(connection *conn) {
     return CONN_TYPE_SOCKET;
 }
 
+static int connSocketGetTypeId(connection *conn) {
+    (void)conn;
+
+    return CONN_TYPE_ID_SOCKET;
+}
+
 static ConnectionType CT_Socket = {
     /* connection type */
+    .get_type_id = connSocketGetTypeId,
     .get_type = connSocketGetType,
 
     /* connection type initialize & finalize & configure */
@@ -460,16 +470,6 @@ int connBlock(connection *conn) {
 int connNonBlock(connection *conn) {
     if (conn->fd == -1) return C_ERR;
     return anetNonBlock(NULL, conn->fd);
-}
-
-int connEnableTcpNoDelay(connection *conn) {
-    if (conn->fd == -1) return C_ERR;
-    return anetEnableTcpNoDelay(NULL, conn->fd);
-}
-
-int connDisableTcpNoDelay(connection *conn) {
-    if (conn->fd == -1) return C_ERR;
-    return anetDisableTcpNoDelay(NULL, conn->fd);
 }
 
 int connKeepAlive(connection *conn, int interval) {

@@ -289,8 +289,8 @@ void computeDatasetDigest(unsigned char *final) {
     memset(final, 0, 20); /* Start with a clean result */
 
     for (int j = 0; j < server.dbnum; j++) {
-        serverDb *db = server.db + j;
-        if (kvstoreSize(db->keys) == 0) continue;
+        serverDb *db = server.db[j];
+        if (db == NULL || kvstoreSize(db->keys) == 0) continue;
         kvstoreIterator *kvs_it = kvstoreIteratorInit(db->keys, HASHTABLE_ITER_SAFE | HASHTABLE_ITER_PREFETCH_VALUES);
 
         /* hash the DB id, so the same dataset moved in a different DB will lead to a different digest */
@@ -508,6 +508,9 @@ void debugCommand(client *c) {
             "    Grace period in seconds for replica main channel to establish psync.",
             "DICT-RESIZING <0|1>",
             "    Enable or disable the main dict and expire dict resizing.",
+            "CLIENT-ENFORCE-REPLY-LIST <0|1>",
+            "When set to 1, it enforces the use of the client reply list directly",
+            "    and avoids using the client's static buffer.",
             NULL};
         addExtendedReplyHelp(c, help, clusterDebugCommandExtendedHelp());
     } else if (!strcasecmp(c->argv[1]->ptr, "segfault")) {
@@ -911,14 +914,20 @@ void debugCommand(client *c) {
         if (c->argc >= 4 && !strcasecmp(c->argv[3]->ptr, "full")) full = 1;
 
         stats = sdscatprintf(stats, "[Dictionary HT]\n");
-        kvstoreGetStats(server.db[dbid].keys, buf, sizeof(buf), full);
-        stats = sdscat(stats, buf);
+        serverDb *db = server.db[dbid];
+        if (db) {
+            kvstoreGetStats(db->keys, buf, sizeof(buf), full);
+            stats = sdscat(stats, buf);
+        }
 
         stats = sdscatprintf(stats, "[Expires HT]\n");
-        kvstoreGetStats(server.db[dbid].expires, buf, sizeof(buf), full);
-        stats = sdscat(stats, buf);
+        if (db) {
+            kvstoreGetStats(db->expires, buf, sizeof(buf), full);
+            stats = sdscat(stats, buf);
+        }
 
         addReplyVerbatim(c, stats, sdslen(stats), "txt");
+
         sdsfree(stats);
     } else if (!strcasecmp(c->argv[1]->ptr, "htstats-key") && c->argc >= 3) {
         int full = 0;
@@ -1020,6 +1029,9 @@ void debugCommand(client *c) {
     } else if (!strcasecmp(c->argv[1]->ptr, "dict-resizing") && c->argc == 3) {
         server.dict_resizing = atoi(c->argv[2]->ptr);
         addReply(c, shared.ok);
+    } else if (!strcasecmp(c->argv[1]->ptr, "client-enforce-reply-list") && c->argc == 3) {
+        server.debug_client_enforce_reply_list = atoi(c->argv[2]->ptr);
+        addReply(c, shared.ok);
     } else if (!handleDebugClusterCommand(c)) {
         addReplySubcommandSyntaxError(c);
         return;
@@ -1092,7 +1104,7 @@ void serverLogObjectDebugInfo(const robj *o) {
     serverLog(LL_WARNING, "Object type: %u", o->type);
     serverLog(LL_WARNING, "Object encoding: %u", o->encoding);
     serverLog(LL_WARNING, "Object refcount: %d", o->refcount);
-#if UNSAFE_CRASH_REPORT
+#if defined(UNSAFE_CRASH_REPORT) && UNSAFE_CRASH_REPORT
     /* This code is now disabled. o->ptr may be unreliable to print. in some
      * cases a ziplist could have already been freed by realloc, but not yet
      * updated to o->ptr. in other cases the call to ziplistLen may need to

@@ -1,8 +1,4 @@
-# make sure the test infra won't use SELECT
-set old_singledb $::singledb
-set ::singledb 1
-
-tags {tls:skip external:skip cluster} {
+tags {tls:skip external:skip cluster singledb} {
     set CLUSTER_PACKET_TYPE_PING 0
     set CLUSTER_PACKET_TYPE_PONG 1
     set CLUSTER_PACKET_TYPE_MEET 2
@@ -75,8 +71,6 @@ tags {tls:skip external:skip cluster} {
         }
     } ;# stop servers
 } ;# tags
-
-set ::singledb $old_singledb
 
 proc cluster_get_first_node_in_handshake id {
     set nodes [get_cluster_nodes $id]

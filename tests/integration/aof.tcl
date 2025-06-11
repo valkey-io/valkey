@@ -8,7 +8,7 @@ set aof_base_file "$server_path/$aof_dirname/${aof_basename}.1$::base_aof_suffix
 set aof_file "$server_path/$aof_dirname/${aof_basename}.1$::incr_aof_suffix$::aof_format_suffix"
 set aof_manifest_file "$server_path/$aof_dirname/$aof_basename$::manifest_suffix"
 
-tags {"aof external:skip"} {
+tags {"aof external:skip logreqres:skip"} {
     # Server can start when aof-load-truncated is set to yes and AOF
     # is truncated, with an incomplete MULTI block.
     create_aof $aof_dirpath $aof_file {
@@ -674,11 +674,7 @@ tags {"aof external:skip"} {
     }
 }
 
-# make sure the test infra won't use SELECT
-set old_singledb $::singledb
-set ::singledb 1
-
-tags {"aof cluster external:skip"} {
+tags {"aof cluster external:skip singledb"} {
     test {Test cluster slots / cluster shards in aof won't crash} {
         create_aof $aof_dirpath $aof_file {
             append_to_aof [formatCommand cluster slots]
@@ -735,5 +731,3 @@ tags {"aof cluster external:skip"} {
         clean_aof_persistence $aof_dirpath
     }
 }
-
-set ::singledb $old_singledb

@@ -385,6 +385,12 @@ start_server {tags {"other"}} {
             set info [r info server]
             assert_match "*redis_mode:*" $info
             assert_no_match "*server_mode:*" $info
+            set lolwut_output [r lolwut 5]
+            assert_match {*Redis ver.*} $lolwut_output
+            set lolwut_output [r lolwut 6]
+            assert_match {*Redis ver.*} $lolwut_output
+            set lolwut_output [r lolwut]
+            assert_match {*Redis ver.*} $lolwut_output
             r config set extended-redis-compatibility no
             set hello [r hello 3]
             assert_equal "valkey" [dict get $hello server]
@@ -392,6 +398,12 @@ start_server {tags {"other"}} {
             set info [r info server]
             assert_no_match "*redis_mode:*" $info
             assert_match "*server_mode:*" $info
+            set lolwut_output [r lolwut]
+            assert_match {*Valkey ver.*} $lolwut_output
+            set lolwut_output [r lolwut 5]
+            assert_match {*Valkey ver.*} $lolwut_output
+            set lolwut_output [r lolwut 6]
+            assert_match {*Valkey ver.*} $lolwut_output
         }
     }
 }
@@ -539,6 +551,11 @@ start_cluster 1 0 {tags {"other external:skip cluster slow"}} {
             fail "hash tables weren't resize."
         }
     } {} {needs:debug}
+
+    test "CLUSTER FORGET with invalid node ID" {
+         catch {r cluster forget 1} err
+         set _ $err
+    } {*ERR Unknown node*} 
 }
 
 start_server {tags {"other external:skip"}} {
@@ -559,6 +576,18 @@ start_server {tags {"other external:skip"}} {
         } else {
             fail "dict did not resize in time"
         }   
+    }
+}
+
+start_server {tags {"other external:skip"}} {
+    test "test io-threads are runtime modifiable" {
+        # Randomly set the number of threads between 1 and 5
+        for {set i 0} {$i < 100} {incr i} {
+            set random_num [expr {int(rand() * 5) + 1}]
+            r config set io-threads $random_num
+            set thread_num [lindex [r config get io-threads] 1]
+            assert_equal $random_num $thread_num
+        }
     }
 }
 

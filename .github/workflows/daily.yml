@@ -12,10 +12,10 @@ on:
     inputs:
       skipjobs:
         description: "jobs to skip (delete the ones you wanna keep, do not leave empty)"
-        default: "valgrind,sanitizer,tls,freebsd,macos,alpine,32bit,iothreads,ubuntu,rpm-distros,malloc,specific,fortify,reply-schema"
+        default: "valgrind,sanitizer,tls,freebsd,macos,alpine,32bit,iothreads,ubuntu,rpm-distros,malloc,specific,fortify,reply-schema,arm"
       skiptests:
         description: "tests to skip (delete the ones you wanna keep, do not leave empty)"
-        default: "valkey,modules,sentinel,cluster,unittest"
+        default: "valkey,modules,sentinel,cluster,unittest,large-memory"
       test_args:
         description: "extra test arguments"
         default: ""
@@ -45,6 +45,48 @@ jobs:
         (github.event_name == 'pull_request' && (contains(github.event.pull_request.labels.*.name, 'run-extra-tests') || github.event.pull_request.base.ref != 'unstable'))) &&
       !contains(github.event.inputs.skipjobs, 'ubuntu')
     timeout-minutes: 1440
+    steps:
+      - name: prep
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          echo "GITHUB_REPOSITORY=${{github.event.inputs.use_repo}}" >> $GITHUB_ENV
+          echo "GITHUB_HEAD_REF=${{github.event.inputs.use_git_ref}}" >> $GITHUB_ENV
+          echo "skipjobs: ${{github.event.inputs.skipjobs}}"
+          echo "skiptests: ${{github.event.inputs.skiptests}}"
+          echo "test_args: ${{github.event.inputs.test_args}}"
+          echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
+      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+        with:
+          repository: ${{ env.GITHUB_REPOSITORY }}
+          ref: ${{ env.GITHUB_HEAD_REF }}
+      - name: make
+        run: make all-with-unit-tests SERVER_CFLAGS='-Werror'
+      - name: testprep
+        run: sudo apt-get install tcl8.6 tclx
+      - name: test
+        if: true && !contains(github.event.inputs.skiptests, 'valkey')
+        run: ./runtest ${{ github.event_name != 'pull_request' && '--accurate' || '' }} --verbose --dump-logs ${{github.event.inputs.test_args}}
+      - name: module api test
+        if: true && !contains(github.event.inputs.skiptests, 'modules')
+        run: CFLAGS='-Werror' ./runtest-moduleapi --verbose --dump-logs ${{github.event.inputs.test_args}}
+      - name: sentinel tests
+        if: true && !contains(github.event.inputs.skiptests, 'sentinel')
+        run: ./runtest-sentinel ${{github.event.inputs.cluster_test_args}}
+      - name: cluster tests
+        if: true && !contains(github.event.inputs.skiptests, 'cluster')
+        run: ./runtest-cluster ${{github.event.inputs.cluster_test_args}}
+      - name: unittest
+        if: true && !contains(github.event.inputs.skiptests, 'unittest')
+        run: ./src/valkey-unit-tests --accurate
+
+  test-ubuntu-arm:
+    runs-on: ubuntu-24.04-arm
+    if: |
+      (github.event_name == 'workflow_dispatch' ||
+        (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey') ||
+        (github.event_name == 'pull_request' && (contains(github.event.pull_request.labels.*.name, 'run-extra-tests') || github.event.pull_request.base.ref != 'unstable'))) &&
+      (!contains(github.event.inputs.skipjobs, 'ubuntu') || !contains(github.event.inputs.skipjobs, 'arm'))
+    timeout-minutes: 14400
     steps:
       - name: prep
         if: github.event_name == 'workflow_dispatch'
@@ -675,7 +717,13 @@ jobs:
         run: ./runtest-cluster ${{github.event.inputs.cluster_test_args}}
       - name: unittest
         if: true && !contains(github.event.inputs.skiptests, 'unittest')
-        run: ./src/valkey-unit-tests
+        run: ./src/valkey-unit-tests --large-memory
+      - name: large memory tests
+        if: true && !contains(github.event.inputs.skiptests, 'valkey') && !contains(github.event.inputs.skiptests, 'large-memory')
+        run: ./runtest --accurate --verbose --dump-logs --large-memory --tags large-memory ${{github.event.inputs.test_args}}
+      - name: large memory module api tests
+        if: true && !contains(github.event.inputs.skiptests, 'modules') && !contains(github.event.inputs.skiptests, 'large-memory')
+        run: CFLAGS='-Werror' ./runtest-moduleapi --verbose --dump-logs --large-memory --tags large-memory ${{github.event.inputs.test_args}}
 
   test-sanitizer-undefined:
     runs-on: ubuntu-latest
@@ -725,7 +773,13 @@ jobs:
         run: ./runtest-cluster ${{github.event.inputs.cluster_test_args}}
       - name: unittest
         if: true && !contains(github.event.inputs.skiptests, 'unittest')
-        run: ./src/valkey-unit-tests --accurate
+        run: ./src/valkey-unit-tests --accurate --large-memory
+      - name: large memory tests
+        if: true && !contains(github.event.inputs.skiptests, 'valkey') && !contains(github.event.inputs.skiptests, 'large-memory')
+        run: ./runtest --accurate --verbose --dump-logs --large-memory --tags large-memory ${{github.event.inputs.test_args}}
+      - name: large memory module api tests
+        if: true && !contains(github.event.inputs.skiptests, 'modules') && !contains(github.event.inputs.skiptests, 'large-memory')
+        run: CFLAGS='-Werror' ./runtest-moduleapi --verbose --dump-logs --large-memory --tags large-memory ${{github.event.inputs.test_args}}
 
   test-sanitizer-force-defrag:
     runs-on: ubuntu-latest
@@ -772,6 +826,47 @@ jobs:
       - name: unittest
         if: true && !contains(github.event.inputs.skiptests, 'unittest')
         run: ./src/valkey-unit-tests
+
+  test-ubuntu-lttng:
+    runs-on: ubuntu-latest
+    if: |
+      (github.event_name == 'workflow_dispatch' ||
+        (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey') ||
+        (github.event_name == 'pull_request' && (contains(github.event.pull_request.labels.*.name, 'run-extra-tests') || github.event.pull_request.base.ref != 'unstable'))) &&
+      !contains(github.event.inputs.skipjobs, 'lttng')
+    timeout-minutes: 1440
+    steps:
+      - name: prep
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          echo "GITHUB_REPOSITORY=${{github.event.inputs.use_repo}}" >> $GITHUB_ENV
+          echo "GITHUB_HEAD_REF=${{github.event.inputs.use_git_ref}}" >> $GITHUB_ENV
+          echo "skipjobs: ${{github.event.inputs.skipjobs}}"
+          echo "skiptests: ${{github.event.inputs.skiptests}}"
+          echo "test_args: ${{github.event.inputs.test_args}}"
+          echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
+      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+        with:
+          repository: ${{ env.GITHUB_REPOSITORY }}
+          ref: ${{ env.GITHUB_HEAD_REF }}
+      - name: make
+        run: |
+          sudo apt-get update && sudo apt-get install lttng-tools lttng-modules-dkms liblttng-ust-dev
+          make -j4 USE_LTTNG=yes
+      - name: testprep
+        run: sudo apt-get install tcl8.6 tclx
+      - name: test
+        if: true && !contains(github.event.inputs.skiptests, 'valkey')
+        run: ./runtest ${{ github.event_name != 'pull_request' && '--accurate' || '' }} --verbose --dump-logs ${{github.event.inputs.test_args}}
+      - name: module api test
+        if: true && !contains(github.event.inputs.skiptests, 'modules')
+        run: CFLAGS='-Werror' ./runtest-moduleapi --verbose --dump-logs ${{github.event.inputs.test_args}}
+      - name: sentinel tests
+        if: true && !contains(github.event.inputs.skiptests, 'sentinel')
+        run: ./runtest-sentinel ${{github.event.inputs.cluster_test_args}}
+      - name: cluster tests
+        if: true && !contains(github.event.inputs.skiptests, 'cluster')
+        run: ./runtest-cluster ${{github.event.inputs.cluster_test_args}}
 
   test-rpm-distros-jemalloc:
     if: |
@@ -822,10 +917,12 @@ jobs:
         run: dnf -y install epel-release
       - name: make
         run: |
-          dnf -y install gcc make procps-ng which /usr/bin/kill
+          dnf -y install gcc make procps-ng openssl-devel openssl which /usr/bin/kill /usr/bin/awk
           make -j SERVER_CFLAGS='-Werror'
       - name: testprep
-        run: dnf -y install tcl tcltls
+        uses: ./.github/actions/rpm-distros-tcl8
+        with:
+          matrix_name: ${{ matrix.name }}
       - name: test
         if: true && !contains(github.event.inputs.skiptests, 'valkey')
         run: ./runtest ${{ github.event_name != 'pull_request' && '--accurate' || '' }} --verbose --dump-logs ${{github.event.inputs.test_args}}
@@ -888,12 +985,12 @@ jobs:
         run: dnf -y install epel-release
       - name: make
         run: |
-          dnf -y install make gcc openssl-devel openssl procps-ng which /usr/bin/kill
+          dnf -y install make gcc openssl-devel openssl procps-ng which /usr/bin/kill /usr/bin/awk
           make -j BUILD_TLS=module SERVER_CFLAGS='-Werror'
       - name: testprep
-        run: |
-          dnf -y install tcl tcltls
-          ./utils/gen-test-certs.sh
+        uses: ./.github/actions/rpm-distros-tcl8
+        with:
+          matrix_name: ${{ matrix.name }}
       - name: test
         if: true && !contains(github.event.inputs.skiptests, 'valkey')
         run: |
@@ -960,12 +1057,12 @@ jobs:
         run: dnf -y install epel-release
       - name: make
         run: |
-          dnf -y install make gcc openssl-devel openssl procps-ng which /usr/bin/kill
+          dnf -y install make gcc openssl-devel openssl procps-ng which /usr/bin/kill /usr/bin/awk
           make -j BUILD_TLS=module SERVER_CFLAGS='-Werror'
       - name: testprep
-        run: |
-          dnf -y install tcl tcltls
-          ./utils/gen-test-certs.sh
+        uses: ./.github/actions/rpm-distros-tcl8
+        with:
+          matrix_name: ${{ matrix.name }}
       - name: test
         if: true && !contains(github.event.inputs.skiptests, 'valkey')
         run: |
@@ -1070,7 +1167,7 @@ jobs:
         if: true && !contains(github.event.inputs.skiptests, 'cluster')
         run: ./runtest-cluster ${{github.event.inputs.cluster_test_args}}
 
-  build-macos:
+  build-old-macos-versions:
     strategy:
       fail-fast: false
       matrix:
@@ -1262,7 +1359,36 @@ jobs:
   notify-about-job-results:
     runs-on: ubuntu-latest
     if: always() && github.event_name == 'schedule' && github.repository == 'valkey-io/valkey'
-    needs: [test-ubuntu-jemalloc, test-ubuntu-jemalloc-fortify, test-ubuntu-libc-malloc, test-ubuntu-no-malloc-usable-size, test-ubuntu-32bit, test-ubuntu-tls, test-ubuntu-tls-no-tls, test-ubuntu-io-threads, test-ubuntu-tls-io-threads, test-ubuntu-reclaim-cache, test-valgrind-test, test-valgrind-misc, test-valgrind-no-malloc-usable-size-test, test-valgrind-no-malloc-usable-size-misc, test-sanitizer-address, test-sanitizer-undefined, test-sanitizer-force-defrag, test-rpm-distros-jemalloc, test-rpm-distros-tls-module, test-rpm-distros-tls-module-no-tls, test-macos-latest, test-macos-latest-sentinel, test-macos-latest-cluster, build-macos, test-freebsd, test-alpine-jemalloc, test-alpine-libc-malloc, reply-schemas-validator]
+    needs:
+      - test-ubuntu-jemalloc
+      - test-ubuntu-arm
+      - test-ubuntu-jemalloc-fortify
+      - test-ubuntu-libc-malloc
+      - test-ubuntu-no-malloc-usable-size
+      - test-ubuntu-32bit
+      - test-ubuntu-tls
+      - test-ubuntu-tls-no-tls
+      - test-ubuntu-io-threads
+      - test-ubuntu-tls-io-threads
+      - test-ubuntu-reclaim-cache
+      - test-valgrind-test
+      - test-valgrind-misc
+      - test-valgrind-no-malloc-usable-size-test
+      - test-valgrind-no-malloc-usable-size-misc
+      - test-sanitizer-address
+      - test-sanitizer-undefined
+      - test-sanitizer-force-defrag
+      - test-rpm-distros-jemalloc
+      - test-rpm-distros-tls-module
+      - test-rpm-distros-tls-module-no-tls
+      - test-macos-latest
+      - test-macos-latest-sentinel
+      - test-macos-latest-cluster
+      - build-old-macos-versions
+      - test-freebsd
+      - test-alpine-jemalloc
+      - test-alpine-libc-malloc
+      - reply-schemas-validator
     steps:
       - name: Collect job status
         run: |

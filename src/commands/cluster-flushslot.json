@@ -1,0 +1,45 @@
+{
+    "FLUSHSLOT": {
+        "summary": "Remove all keys from the target slot.",
+        "complexity": "O(N) where N is the number of keys in the target slot",
+        "group": "cluster",
+        "since": "9.0.0",
+        "arity": -3,
+        "container": "CLUSTER",
+        "function": "clusterCommand",
+        "command_flags": [
+            "WRITE",
+            "NO_ASYNC_LOADING",
+            "ADMIN"
+        ],
+        "acl_categories": [
+            "KEYSPACE"
+        ],
+        "reply_schema": {
+            "const": "OK"
+        },
+        "arguments": [
+            {
+                "name": "slot",
+                "type": "integer"
+            },
+            {
+                "name": "flush-type",
+                "type": "oneof",
+                "optional": true,
+                "arguments": [
+                    {
+                        "name": "async",
+                        "type": "pure-token",
+                        "token": "ASYNC"
+                    },
+                    {
+                        "name": "sync",
+                        "type": "pure-token",
+                        "token": "SYNC"
+                    }
+                ]
+            }
+        ]
+    }
+}

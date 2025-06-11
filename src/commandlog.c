@@ -1,3 +1,9 @@
+/*
+ * Copyright (c) Valkey Contributors
+ * All rights reserved.
+ * SPDX-License-Identifier: BSD-3-Clause
+ */
+
 /* Commandlog implements a system that is able to remember the latest N
  * queries that took more than M microseconds to execute, or consumed
  * too much network bandwidth and memory for input/output buffers.
@@ -14,10 +20,6 @@
  * but is accessible thanks to the COMMANDLOG command.
  *
  * ----------------------------------------------------------------------------
- *
- * Copyright Valkey Contributors.
- * All rights reserved.
- * SPDX-License-Identifier: BSD 3-Clause
  */
 
 #include "commandlog.h"

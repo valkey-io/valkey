@@ -56,10 +56,7 @@ start_cluster 2 1 {tags {external:skip cluster}} {
     }
 }
 
-set old_singledb $::singledb
-set ::singledb 1
-
-tags {external:skip tls:skip cluster} {
+tags {external:skip tls:skip cluster singledb} {
     set base_conf [list cluster-enabled yes cluster-ping-interval 100 cluster-node-timeout 3000 save ""]
     start_multiple_servers 5 [list overrides $base_conf] {
         test "Only primary with slots has the right to mark a node as failed" {
@@ -117,5 +114,3 @@ tags {external:skip tls:skip cluster} {
         }
     }
 }
-
-set ::singledb $old_singledb

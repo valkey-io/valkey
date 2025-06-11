@@ -23,7 +23,9 @@ start_server {tags {"tracking network logreqres:skip"}} {
             # info which will not be consumed.
             r CLIENT TRACKING off
             $rd QUIT
+            $rd close
             $rd_redirection QUIT
+            $rd_redirection close
             set rd [valkey_deferring_client]
             set rd_redirection [valkey_deferring_client]
             $rd_redirection client id
@@ -239,10 +241,12 @@ start_server {tags {"tracking network logreqres:skip"}} {
         # make sure r is working resp 3
         r HELLO 3
         r CLIENT TRACKING on REDIRECT $redir_id
+        set redir_error "tracking-redir-broken $redir_id"
         $rd_sg SET key1 1
         r GET key1
         $rd_redirection QUIT
         assert_equal OK [$rd_redirection read]
+        $rd_redirection close
         $rd_sg SET key1 2
 
         # Reinstantiating after QUIT
@@ -254,11 +258,12 @@ start_server {tags {"tracking network logreqres:skip"}} {
 
         # Wait to read the tracking-redir-broken
         wait_for_condition 1000 50 {
-            [lsearch -exact [r PING] "tracking-redir-broken"]
+            [set response [r PING]] != "PONG"
         } else {
             fail "Failed to get redirect broken indication"
         }
-         # Consume PING reply
+        assert_equal $redir_error $response
+        # Consume PING reply
         assert_equal PONG [r read]
     }
 
@@ -865,6 +870,16 @@ start_server {tags {"tracking network logreqres:skip"}} {
 # Just some extra coverage for --log-req-res, because we do not
 # run the full tracking unit in that mode
 start_server {tags {"tracking network"}} {
+    test {CLIENT TRACKINGINFO when start} {
+        set res [r client trackinginfo]
+        set flags [dict get $res flags]
+        assert_equal {off} $flags
+        set redirect [dict get $res redirect]
+        assert_equal {-1} $redirect
+        set prefixes [dict get $res prefixes]
+        assert_equal {} $prefixes
+    }
+
     test {Coverage: Basic CLIENT CACHING} {
         set rd_redirection [valkey_deferring_client]
         $rd_redirection client id

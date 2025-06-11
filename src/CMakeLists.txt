@@ -39,12 +39,14 @@ endif ()
 unset(BUILD_SANITIZER CACHE)
 
 # Target: valkey-cli
+list(APPEND CLI_LIBS "fpconv")
 list(APPEND CLI_LIBS "linenoise")
 valkey_build_and_install_bin(valkey-cli "${VALKEY_CLI_SRCS}" "${VALKEY_SERVER_LDFLAGS}" "${CLI_LIBS}" "redis-cli")
 add_dependencies(valkey-cli generate_commands_def)
 add_dependencies(valkey-cli generate_fmtargs_h)
 
 # Target: valkey-benchmark
+list(APPEND BENCH_LIBS "fpconv")
 list(APPEND BENCH_LIBS "hdr_histogram")
 valkey_build_and_install_bin(valkey-benchmark "${VALKEY_BENCHMARK_SRCS}" "${VALKEY_SERVER_LDFLAGS}" "${BENCH_LIBS}"
                              "redis-benchmark")
@@ -78,7 +80,7 @@ if (BUILD_TLS_MODULE)
         # Some symbols can only be resolved during runtime (they exist in the executable)
         target_link_options(${MODULE_NAME} PRIVATE -undefined dynamic_lookup)
     endif ()
-    target_link_libraries(${MODULE_NAME} hiredis_ssl OpenSSL::SSL)
+    target_link_libraries(${MODULE_NAME} valkey::valkey_tls OpenSSL::SSL)
     set_target_properties(${MODULE_NAME} PROPERTIES PREFIX "")
 endif ()
 

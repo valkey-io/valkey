@@ -1,9 +1,11 @@
 start_server {tags {"pause network"}} {
-    test "Test check paused_actions in info stats" {
+    test "Test check paused info in info clients" {
+        assert_equal [s paused_reason] "none"
         assert_equal [s paused_actions] "none"
         assert_equal [s paused_timeout_milliseconds] 0
 
         r client PAUSE 10000 WRITE
+        assert_equal [s paused_reason] "client_pause"
         assert_equal [s paused_actions] "write"
         after 1000
         set timeout [s paused_timeout_milliseconds]
@@ -13,9 +15,14 @@ start_server {tags {"pause network"}} {
         r multi
         r client PAUSE 1000 ALL
         r info clients
-        assert_match "*paused_actions:all*" [r exec]
+        set res [r exec]
+        assert_match "*paused_reason:client_pause*" $res
+        assert_match "*paused_actions:all*" $res
 
         r client unpause
+        assert_equal [s paused_reason] "none"
+        assert_equal [s paused_actions] "none"
+        assert_equal [s paused_timeout_milliseconds] 0
     }
 
     test "Test read commands are not blocked by client pause" {
@@ -405,6 +412,95 @@ start_server {tags {"pause network"}} {
         } {bar2}
     }
 
+    test "Test the randomkey command will not cause the server to get into an infinite loop during the client pause write" {
+        # first, clear the database to avoid interference from existing keys on the test results 
+        r flushall
+
+        r multi
+        # then set a key with expire time
+        r set key value px 3
+
+        # set pause-write model and wait key expired
+        r client pause 10000 write
+        r exec
+
+        after 5
+
+        wait_for_condition 50 100 {
+            [r randomkey] == "key"
+        } else {
+            fail "execute randomkey failed, caused by the infinite loop"
+        }
+
+        r client unpause
+        assert_equal [r randomkey] {}
+    }
+
+    test "CLIENT UNBLOCK is not allow to unblock client blocked by CLIENT PAUSE" {
+        set rd1 [valkey_deferring_client]
+        set rd2 [valkey_deferring_client]
+        $rd1 client id
+        $rd2 client id
+        set client_id1 [$rd1 read]
+        set client_id2 [$rd2 read]
+
+        r del mylist
+        r client pause 100000 write
+        $rd1 blpop mylist 0
+        $rd2 blpop mylist 0
+        wait_for_blocked_clients_count 2 50 100
+
+        # This used to trigger a panic.
+        assert_equal 0 [r client unblock $client_id1 timeout]
+        # THis used to return a UNBLOCKED error.
+        assert_equal 0 [r client unblock $client_id2 error]
+
+        # After the unpause, it must be able to unblock the client.
+        r client unpause
+        assert_equal 1 [r client unblock $client_id1 timeout]
+        assert_equal 1 [r client unblock $client_id2 error]
+        assert_equal {} [$rd1 read]
+        assert_error "UNBLOCKED*" {$rd2 read}
+
+        $rd1 close
+        $rd2 close
+    }
+
     # Make sure we unpause at the end
     r client unpause
+}
+
+start_cluster 1 1 {tags {"external:skip cluster pause network"}} {
+    test "Test check paused info during the cluster failover in info clients" {
+        set CLUSTER_PACKET_TYPE_NONE -1
+        set CLUSTER_PACKET_TYPE_FAILOVER_AUTH_ACK 6
+
+        assert_equal [s 0 paused_reason] "none"
+        assert_equal [s 0 paused_actions] "none"
+        assert_equal [s 0 paused_timeout_milliseconds] 0
+
+        # Let replica drop FAILOVER_AUTH_ACK so that the election won't
+        # get the enough votes and the election will time out.
+        R 1 debug drop-cluster-packet-filter $CLUSTER_PACKET_TYPE_FAILOVER_AUTH_ACK
+        R 1 cluster failover
+        wait_for_log_messages 0 {"*Manual failover requested by replica*"} 0 10 1000
+
+        # Failover will definitely time out, so on the primary side we will pause for
+        # `CLUSTER_MF_TIMEOUT * CLUSTER_MF_PAUSE_MULT` this long.
+        assert_equal [s 0 paused_reason] "failover_in_progress"
+        assert_equal [s 0 paused_actions] "write"
+        assert_morethan [s 0 paused_timeout_milliseconds] 0
+
+        # Let the failover happen, make sure we will clear the paused state.
+        R 1 cluster failover takeover
+        wait_for_condition 1000 50 {
+            [s 0 role] eq {slave} &&
+            [s -1 role] eq {master}
+        } else {
+            fail "The failover does not happen"
+        }
+        assert_equal [s 0 paused_reason] "none"
+        assert_equal [s 0 paused_actions] "none"
+        assert_equal [s 0 paused_timeout_milliseconds] 0
+    }
 }

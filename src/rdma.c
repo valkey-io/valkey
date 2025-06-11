@@ -7,13 +7,19 @@
  * the top-level directory.
  * ==========================================================================
  */
+/*
+ * Copyright (c) Valkey Contributors
+ * All rights reserved.
+ * SPDX-License-Identifier: BSD-3-Clause
+ */
 
 #define VALKEYMODULE_CORE_MODULE
 #include "server.h"
 #include "connection.h"
 
-#if defined __linux__ /* currently RDMA is only supported on Linux */
-#if (USE_RDMA == 1 /* BUILD_YES */) || ((USE_RDMA == 2 /* BUILD_MODULE */) && (BUILD_RDMA_MODULE == 2))
+#if defined __linux__ && defined USE_RDMA /* currently RDMA is only supported on Linux */
+#if (USE_RDMA == 1 /* BUILD_YES */) || \
+    ((USE_RDMA == 2 /* BUILD_MODULE */) && defined(BUILD_RDMA_MODULE) && (BUILD_RDMA_MODULE == 2))
 #include "connhelpers.h"
 
 #include <assert.h>
@@ -1179,10 +1185,14 @@ static int connRdmaConnect(connection *conn,
                            const char *addr,
                            int port,
                            const char *src_addr,
+                           int multipath,
                            ConnectionCallbackFunc connect_handler) {
     rdma_connection *rdma_conn = (rdma_connection *)conn;
     struct rdma_cm_id *cm_id;
     RdmaContext *ctx;
+
+    /* RDMA does not support multipath, and there is no outgoing RDMA connection at the current stage */
+    assert(!multipath);
 
     if (rdmaResolveAddr(rdma_conn, addr, port, src_addr) == C_ERR) {
         return C_ERR;
@@ -1510,6 +1520,12 @@ static const char *connRdmaGetType(connection *conn) {
     return CONN_TYPE_RDMA;
 }
 
+static int connRdmaGetTypeId(connection *conn) {
+    UNUSED(conn);
+
+    return CONN_TYPE_ID_RDMA;
+}
+
 static int rdmaServer(char *err, int port, char *bindaddr, int af, rdma_listener *rdma_listener) {
     int ret = ANET_OK, rv, afonly = 1;
     char _port[6]; /* strlen("65535") */
@@ -1804,6 +1820,7 @@ static void updateRdmaState(struct connection *conn) {
 
 static ConnectionType CT_RDMA = {
     /* connection type */
+    .get_type_id = connRdmaGetTypeId,
     .get_type = connRdmaGetType,
 
     /* connection type initialize & finalize & configure */
@@ -1875,7 +1892,7 @@ int RegisterConnectionTypeRdma(void) {
 
 #endif
 
-#if BUILD_RDMA_MODULE == 2 /* BUILD_MODULE */
+#if defined(BUILD_RDMA_MODULE) && BUILD_RDMA_MODULE == 2 /* BUILD_MODULE */
 
 #include "release.h"
 

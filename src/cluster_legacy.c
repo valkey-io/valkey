@@ -1654,7 +1654,6 @@ clusterNode *createClusterNode(char *nodename, int flags) {
     node->tls_port = 0;
     node->fail_reports = listCreate();
     node->orphaned_time = 0;
-    node->repl_offset_time = 0;
     node->repl_offset = 0;
     listSetFreeMethod(node->fail_reports, zfree);
     node->is_node_healthy = 0;
@@ -3373,7 +3372,6 @@ int clusterProcessPacket(clusterLink *link) {
         }
         /* Update the replication offset info for this node. */
         sender->repl_offset = ntohu64(hdr->offset);
-        sender->repl_offset_time = now;
         /* If we are a replica performing a manual failover and our primary
          * sent its offset while already paused, populate the MF state. */
         if (server.cluster->mf_end && nodeIsReplica(myself) && myself->replicaof == sender &&

@@ -77,6 +77,7 @@ typedef struct sentinelAddr {
 #define SRI_FORCE_FAILOVER (1 << 11)      /* Force failover with primary up. */
 #define SRI_SCRIPT_KILL_SENT (1 << 12)    /* SCRIPT KILL already sent on -BUSY */
 #define SRI_PRIMARY_REBOOT (1 << 13)      /* Primary was detected as rebooting */
+#define SRI_SAFE_FAILOVER (1 << 14)       /* Force failover in a more safe way. */
 /* Note: when adding new flags, please check the flags section in addReplySentinelValkeyInstance. */
 
 /* Note: times are in milliseconds. */
@@ -95,6 +96,7 @@ static mstime_t sentinel_election_timeout = 10000;
 static mstime_t sentinel_script_max_runtime = 60000; /* 60 seconds max exec time. */
 static mstime_t sentinel_script_retry_delay = 30000; /* 30 seconds between retries. */
 static mstime_t sentinel_default_failover_timeout = 60 * 3 * 1000;
+static mstime_t sentinel_default_safe_failover_timeout = 60000; /* default 1 minute safe failover time. */
 
 #define SENTINEL_HELLO_CHANNEL "__sentinel__:hello"
 #define SENTINEL_DEFAULT_REPLICA_PRIORITY 100
@@ -111,9 +113,10 @@ static mstime_t sentinel_default_failover_timeout = 60 * 3 * 1000;
 #define SENTINEL_FAILOVER_STATE_WAIT_START 1           /* Wait for failover_start_time*/
 #define SENTINEL_FAILOVER_STATE_SELECT_REPLICA 2       /* Select replica to promote */
 #define SENTINEL_FAILOVER_STATE_SEND_REPLICAOF_NOONE 3 /* Replica -> Primary */
-#define SENTINEL_FAILOVER_STATE_WAIT_PROMOTION 4       /* Wait replica to change role */
-#define SENTINEL_FAILOVER_STATE_RECONF_REPLICAS 5      /* REPLICAOF newprimary */
-#define SENTINEL_FAILOVER_STATE_UPDATE_CONFIG 6        /* Monitor promoted replica. */
+#define SENTINEL_FAILOVER_STATE_SEND_FAILOVER 4        /* Send FAILOVER command to primary */
+#define SENTINEL_FAILOVER_STATE_WAIT_PROMOTION 5       /* Wait replica to change role */
+#define SENTINEL_FAILOVER_STATE_RECONF_REPLICAS 6      /* REPLICAOF newprimary */
+#define SENTINEL_FAILOVER_STATE_UPDATE_CONFIG 7        /* Monitor promoted replica. */
 
 #define SENTINEL_PRIMARY_LINK_STATUS_UP 0
 #define SENTINEL_PRIMARY_LINK_STATUS_DOWN 1
@@ -243,6 +246,7 @@ typedef struct sentinelValkeyInstance {
     mstime_t failover_timeout;                       /* Max time to refresh failover state. */
     mstime_t failover_delay_logged;                  /* For what failover_start_time value we
                                                       * logged the failover delay. */
+    mstime_t safe_failover_timeout;                  /* Max time to safe failover. */
     struct sentinelValkeyInstance *promoted_replica; /* Promoted replica instance. */
     /* Scripts executed to notify admin or reconfigure clients: when they
      * are set to NULL no script is executed. */
@@ -1337,6 +1341,7 @@ sentinelValkeyInstance *createSentinelValkeyInstance(char *name,
     ri->failover_state_change_time = 0;
     ri->failover_start_time = 0;
     ri->failover_timeout = sentinel_default_failover_timeout;
+    ri->safe_failover_timeout = sentinel_default_safe_failover_timeout;
     ri->failover_delay_logged = 0;
     ri->promoted_replica = NULL;
     ri->notification_script = NULL;
@@ -1527,6 +1532,7 @@ void sentinelResetPrimary(sentinelValkeyInstance *ri, int flags) {
     ri->failover_state_change_time = 0;
     ri->failover_start_time = 0; /* We can failover again ASAP. */
     ri->promoted_replica = NULL;
+    ri->safe_failover_timeout = sentinel_default_safe_failover_timeout;
     sdsfree(ri->runid);
     sdsfree(ri->replica_primary_host);
     ri->runid = NULL;
@@ -3223,6 +3229,7 @@ const char *sentinelFailoverStateStr(int state) {
     case SENTINEL_FAILOVER_STATE_WAIT_START: return "wait_start";
     case SENTINEL_FAILOVER_STATE_SELECT_REPLICA: return "select_slave";
     case SENTINEL_FAILOVER_STATE_SEND_REPLICAOF_NOONE: return "send_slaveof_noone";
+    case SENTINEL_FAILOVER_STATE_SEND_FAILOVER: return "send_failover";
     case SENTINEL_FAILOVER_STATE_WAIT_PROMOTION: return "wait_promotion";
     case SENTINEL_FAILOVER_STATE_RECONF_REPLICAS: return "reconf_slaves";
     case SENTINEL_FAILOVER_STATE_UPDATE_CONFIG: return "update_config";
@@ -3838,11 +3845,24 @@ void sentinelCommand(client *c) {
             addReplyBulkLongLong(c, addr->port);
         }
     } else if (!strcasecmp(c->argv[1]->ptr, "failover")) {
-        /* SENTINEL FAILOVER <primary-name> */
+        /* SENTINEL FAILOVER <primary-name> [SAFE [timeout]]*/
         sentinelValkeyInstance *ri;
+        int safeMode = 0;
+        long long safeFailOverTimeout = sentinel_default_safe_failover_timeout;
 
-        if (c->argc != 3) goto numargserr;
+        if (c->argc < 3 || c->argc > 5) goto numargserr;
         if ((ri = sentinelGetPrimaryByNameOrReplyError(c, c->argv[2])) == NULL) return;
+        if (c->argc > 3) {
+            if (strcasecmp(c->argv[3]->ptr, "safe") != 0) {
+                addReplyError(c, "Unknown failover option specified");
+                return;
+            }
+            safeMode = 1;
+            if (c->argc == 5 && (getLongLongFromObject(c->argv[4], &safeFailOverTimeout) == C_ERR || safeFailOverTimeout < 0)) {
+                addReplyError(c, "Invalid failover timeout specified");
+                return;
+            }
+        }
         if (ri->flags & SRI_FAILOVER_IN_PROGRESS) {
             addReplyError(c, "-INPROG Failover already in progress");
             return;
@@ -3854,6 +3874,10 @@ void sentinelCommand(client *c) {
         serverLog(LL_NOTICE, "Executing user requested FAILOVER of '%s'", ri->name);
         sentinelStartFailover(ri);
         ri->flags |= SRI_FORCE_FAILOVER;
+        if (safeMode) {
+            ri->flags |= SRI_SAFE_FAILOVER;
+            ri->safe_failover_timeout = safeFailOverTimeout;
+        }
         addReply(c, shared.ok);
     } else if (!strcasecmp(c->argv[1]->ptr, "pending-scripts")) {
         /* SENTINEL PENDING-SCRIPTS */
@@ -4708,6 +4732,26 @@ int sentinelSendReplicaOf(sentinelValkeyInstance *ri, const sentinelAddr *addr) 
     return C_OK;
 }
 
+/* Send FAILOVER to the specified instance using the specified timeout.
+ * The command returns C_OK if the FAILOVER command was accepted for
+ * (later) delivery otherwise C_ERR. */
+int sentinelSendFailover(sentinelValkeyInstance *primary, const sentinelAddr *addr, mstime_t timeout) {
+    char portstr[32];
+    const char *host;
+    int retval;
+
+    host = announceSentinelAddr(addr);
+    ll2string(portstr, sizeof(portstr), addr->port);
+
+    retval = redisAsyncCommand(primary->link->cc, sentinelDiscardReplyCallback, primary,
+                               "%s TO %s %s FORCE TIMEOUT %d", sentinelInstanceMapCommand(primary, "FAILOVER"),
+                               host, portstr, timeout);
+    if (retval == C_ERR) return retval;
+    primary->link->pending_commands++;
+
+    return C_OK;
+}
+
 /* Setup the primary state to start a failover. */
 void sentinelStartFailover(sentinelValkeyInstance *primary) {
     serverAssert(primary->flags & SRI_PRIMARY);
@@ -4904,9 +4948,14 @@ void sentinelFailoverSelectReplica(sentinelValkeyInstance *ri) {
         sentinelEvent(LL_WARNING, "+selected-slave", replica, "%@");
         replica->flags |= SRI_PROMOTED;
         ri->promoted_replica = replica;
-        ri->failover_state = SENTINEL_FAILOVER_STATE_SEND_REPLICAOF_NOONE;
         ri->failover_state_change_time = mstime();
-        sentinelEvent(LL_NOTICE, "+failover-state-send-slaveof-noone", replica, "%@");
+        if (ri->flags & SRI_SAFE_FAILOVER) {
+            ri->failover_state = SENTINEL_FAILOVER_STATE_SEND_FAILOVER;
+            sentinelEvent(LL_NOTICE, "+failover-state-send-failover", ri, "%@");
+        } else {
+            ri->failover_state = SENTINEL_FAILOVER_STATE_SEND_REPLICAOF_NOONE;
+            sentinelEvent(LL_NOTICE, "+failover-state-send-slaveof-noone", replica, "%@");
+        }
     }
 }
 
@@ -4931,6 +4980,32 @@ void sentinelFailoverSendReplicaOfNoOne(sentinelValkeyInstance *ri) {
     retval = sentinelSendReplicaOf(ri->promoted_replica, NULL);
     if (retval != C_OK) return;
     sentinelEvent(LL_NOTICE, "+failover-state-wait-promotion", ri->promoted_replica, "%@");
+    ri->failover_state = SENTINEL_FAILOVER_STATE_WAIT_PROMOTION;
+    ri->failover_state_change_time = mstime();
+}
+
+void sentinelFailoverSendFailover(sentinelValkeyInstance *ri) {
+    int retval;
+
+    /* We can't send the command to the promoted replica if it is now
+     * disconnected. Retry again and again with this state until the timeout
+     * is reached, then abort the failover. */
+    if (ri->promoted_replica->link->disconnected) {
+        if (mstime() - ri->failover_state_change_time > ri->failover_timeout) {
+            sentinelEvent(LL_WARNING, "-failover-abort-slave-timeout", ri, "%@");
+            sentinelAbortFailover(ri);
+        }
+        return;
+    }
+
+    /* Send FAILOVER command to turn the primary into a replica.
+     * We actually register a generic callback for this command as we don't
+     * really care about the reply. We check if it worked indirectly observing
+     * if INFO returns a different role (primary instead of replica). */
+    retval = sentinelSendFailover(ri, ri->promoted_replica->addr, ri->safe_failover_timeout);
+    if (retval != C_OK) return;
+    sentinelEvent(LL_NOTICE, "+failover-state-wait-promotion",
+                  ri->promoted_replica, "%@");
     ri->failover_state = SENTINEL_FAILOVER_STATE_WAIT_PROMOTION;
     ri->failover_state_change_time = mstime();
 }
@@ -5082,6 +5157,7 @@ void sentinelFailoverStateMachine(sentinelValkeyInstance *ri) {
     case SENTINEL_FAILOVER_STATE_WAIT_START: sentinelFailoverWaitStart(ri); break;
     case SENTINEL_FAILOVER_STATE_SELECT_REPLICA: sentinelFailoverSelectReplica(ri); break;
     case SENTINEL_FAILOVER_STATE_SEND_REPLICAOF_NOONE: sentinelFailoverSendReplicaOfNoOne(ri); break;
+    case SENTINEL_FAILOVER_STATE_SEND_FAILOVER: sentinelFailoverSendFailover(ri); break;
     case SENTINEL_FAILOVER_STATE_WAIT_PROMOTION: sentinelFailoverWaitPromotion(ri); break;
     case SENTINEL_FAILOVER_STATE_RECONF_REPLICAS: sentinelFailoverReconfNextReplica(ri); break;
     }
@@ -5096,7 +5172,7 @@ void sentinelAbortFailover(sentinelValkeyInstance *ri) {
     serverAssert(ri->flags & SRI_FAILOVER_IN_PROGRESS);
     serverAssert(ri->failover_state <= SENTINEL_FAILOVER_STATE_WAIT_PROMOTION);
 
-    ri->flags &= ~(SRI_FAILOVER_IN_PROGRESS | SRI_FORCE_FAILOVER);
+    ri->flags &= ~(SRI_FAILOVER_IN_PROGRESS | SRI_FORCE_FAILOVER | SRI_SAFE_FAILOVER);
     ri->failover_state = SENTINEL_FAILOVER_STATE_NONE;
     ri->failover_state_change_time = mstime();
     if (ri->promoted_replica) {

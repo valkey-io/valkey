@@ -30,7 +30,7 @@
 static ConnectionType *connTypes[CONN_TYPE_MAX];
 
 int connTypeRegister(ConnectionType *ct) {
-    const char *typename = ct->get_type(NULL);
+    int type_id = ct->get_type_id(NULL);
     ConnectionType *tmpct;
     int type;
 
@@ -39,14 +39,13 @@ int connTypeRegister(ConnectionType *ct) {
         tmpct = connTypes[type];
         if (!tmpct) break;
 
-        /* ignore case, we really don't care "tls"/"TLS" */
-        if (!strcasecmp(typename, tmpct->get_type(NULL))) {
-            serverLog(LL_WARNING, "Connection types %s already registered", typename);
+        if (tmpct->get_type_id(NULL) == type_id) {
+            serverLog(LL_WARNING, "Connection type %s already registered", getConnectionTypeName(type_id));
             return C_ERR;
         }
     }
 
-    serverLog(LL_VERBOSE, "Connection type %s registered", typename);
+    serverLog(LL_VERBOSE, "Connection type %s registered", getConnectionTypeName(type_id));
     connTypes[type] = ct;
 
     if (ct->init) {
@@ -72,17 +71,17 @@ int connTypeInitialize(void) {
     return C_OK;
 }
 
-ConnectionType *connectionByType(const char *typename) {
+ConnectionType *connectionByType(int type_id) {
     ConnectionType *ct;
 
     for (int type = 0; type < CONN_TYPE_MAX; type++) {
         ct = connTypes[type];
         if (!ct) break;
 
-        if (!strcasecmp(typename, ct->get_type(NULL))) return ct;
+        if (ct->get_type_id(NULL) == type_id) return ct;
     }
 
-    serverLog(LL_WARNING, "Missing implement of connection type %s", typename);
+    serverLog(LL_WARNING, "Missing implement of connection type %s", getConnectionTypeName(type_id));
 
     return NULL;
 }
@@ -93,7 +92,7 @@ ConnectionType *connectionTypeTcp(void) {
 
     if (ct_tcp != NULL) return ct_tcp;
 
-    ct_tcp = connectionByType(CONN_TYPE_SOCKET);
+    ct_tcp = connectionByType(CONN_TYPE_ID_SOCKET);
     serverAssert(ct_tcp != NULL);
 
     return ct_tcp;
@@ -108,7 +107,7 @@ ConnectionType *connectionTypeTls(void) {
      * So we need the cached pointer to handle NULL correctly too. */
     if (!cached) {
         cached = 1;
-        ct_tls = connectionByType(CONN_TYPE_TLS);
+        ct_tls = connectionByType(CONN_TYPE_ID_TLS);
     }
 
     return ct_tls;
@@ -120,18 +119,20 @@ ConnectionType *connectionTypeUnix(void) {
 
     if (ct_unix != NULL) return ct_unix;
 
-    ct_unix = connectionByType(CONN_TYPE_UNIX);
+    ct_unix = connectionByType(CONN_TYPE_ID_UNIX);
     return ct_unix;
 }
 
-int connectionIndexByType(const char *typename) {
+int connectionIndexByType(int type_id) {
     ConnectionType *ct;
 
     for (int type = 0; type < CONN_TYPE_MAX; type++) {
         ct = connTypes[type];
         if (!ct) break;
 
-        if (!strcasecmp(typename, ct->get_type(NULL))) return type;
+        if (ct->get_type_id(NULL) == type_id) {
+            return type;
+        }
     }
 
     return -1;
@@ -186,7 +187,7 @@ sds getListensInfoString(sds info) {
         connListener *listener = &server.listeners[j];
         if (listener->ct == NULL) continue;
 
-        info = sdscatfmt(info, "listener%i:name=%s", j, listener->ct->get_type(NULL));
+        info = sdscatfmt(info, "listener%i:name=%s", j, getConnectionTypeName(listener->ct->get_type_id(NULL)));
         for (int i = 0; i < listener->count; i++) {
             info = sdscatfmt(info, ",bind=%s", listener->bindaddr[i]);
         }

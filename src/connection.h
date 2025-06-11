@@ -77,6 +77,21 @@ typedef enum {
 #define CONN_TYPE_RDMA "rdma"
 #define CONN_TYPE_MAX 8 /* 8 is enough to be extendable */
 
+static inline const char *getConnectionTypeName(int type_id) {
+    switch (type_id) {
+    case CONN_TYPE_ID_SOCKET:
+        return CONN_TYPE_SOCKET;
+    case CONN_TYPE_ID_UNIX:
+        return CONN_TYPE_UNIX;
+    case CONN_TYPE_ID_TLS:
+        return CONN_TYPE_TLS;
+    case CONN_TYPE_ID_RDMA:
+        return CONN_TYPE_RDMA;
+    default:
+        return "invalid type";
+    }
+}
+
 typedef void (*ConnectionCallbackFunc)(struct connection *conn);
 
 typedef struct ConnectionType {
@@ -307,11 +322,6 @@ static inline ssize_t connSyncReadLine(connection *conn, char *ptr, ssize_t size
     return conn->type->sync_readline(conn, ptr, size, timeout);
 }
 
-/* Return CONN_TYPE_* for the specified connection */
-static inline const char *connGetType(connection *conn) {
-    return conn->type->get_type(conn);
-}
-
 static inline int connGetTypeId(connection *conn) {
     if (!conn || conn->type->get_type_id == NULL) {
         return CONN_TYPE_ID_INVALID;
@@ -434,7 +444,7 @@ int connTypeInitialize(void);
 int connTypeRegister(ConnectionType *ct);
 
 /* Lookup a connection type by type name */
-ConnectionType *connectionByType(const char *typename);
+ConnectionType *connectionByType(int type_id);
 
 /* Fast path to get TCP connection type */
 ConnectionType *connectionTypeTcp(void);
@@ -445,8 +455,8 @@ ConnectionType *connectionTypeTls(void);
 /* Fast path to get Unix connection type */
 ConnectionType *connectionTypeUnix(void);
 
-/* Lookup the index of a connection type by type name, return -1 if not found */
-int connectionIndexByType(const char *typename);
+/* Lookup the index of a connection type by type id, return -1 if not found */
+int connectionIndexByType(int type_id);
 
 /* Create a connection of specified type */
 static inline connection *connCreate(ConnectionType *ct) {

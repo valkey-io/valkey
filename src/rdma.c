@@ -1514,12 +1514,6 @@ copy:
     return size;
 }
 
-static const char *connRdmaGetType(connection *conn) {
-    UNUSED(conn);
-
-    return CONN_TYPE_RDMA;
-}
-
 static int connRdmaGetTypeId(connection *conn) {
     UNUSED(conn);
 
@@ -1821,7 +1815,6 @@ static void updateRdmaState(struct connection *conn) {
 static ConnectionType CT_RDMA = {
     /* connection type */
     .get_type_id = connRdmaGetTypeId,
-    .get_type = connRdmaGetType,
 
     /* connection type initialize & finalize & configure */
     .init = rdmaInit,

@@ -1176,6 +1176,7 @@ start_server {tags {"dual-channel-replication external:skip"}} {
         $replica config set dual-channel-replication-enabled yes
         $replica config set loglevel debug
         $replica config set repl-timeout 10
+        $replica config set loading-process-events-interval-bytes 1024
         set load_handle [start_one_key_write_load $primary_host $primary_port 100 "mykey"]
         test "Replica recover rdb-connection killed" {
             $replica replicaof $primary_host $primary_port

@@ -1135,7 +1135,8 @@ clusterNode *getNodeByQuery(client *c, int *error_code) {
         mc.cmd = c->cmd;
     }
 
-    serverDb *currentDb = c->db;
+    serverDb *origDb = c->db;
+    serverDb *currentDb = origDb;
 
     /* Check for multiple keys, existing keys, missing keys. */
     for (i = 0; i < ms->count; i++) {
@@ -1155,7 +1156,6 @@ clusterNode *getNodeByQuery(client *c, int *error_code) {
 
         if (mcmd->proc == selectCommand) {
             /* Failed SELECT is ignored since it doesn't modify the database. */
-            serverDb *origDb = currentDb;
             long long id;
             if (getLongLongFromObject(margv[1], &id) == C_OK && selectDb(c, id) == C_OK) {
                 currentDb = c->db;

@@ -591,7 +591,7 @@ static void registerSSLEvent(tls_connection *conn) {
 
     if (conn->flags & TLS_CONN_FLAG_WRITE_WANT_READ) {
         if (mask & AE_WRITABLE) aeDeleteFileEvent(server.el, conn->c.fd, AE_WRITABLE);
-        if (!(mask & AE_READABLE)) aeCreateFileEvent(server.el, conn->c.fd, AE_READABLE, tlsEventHandler, conn);
+        if (!(mask & AE_READABLE)) aeCreateFileEvent(server.el, conn->c.fd, AE_READABLE | AE_PREFETCH, tlsEventHandler, conn);
     } else if (conn->flags & TLS_CONN_FLAG_READ_WANT_WRITE) {
         if (mask & AE_READABLE) aeDeleteFileEvent(server.el, conn->c.fd, AE_READABLE);
         if (!(mask & AE_WRITABLE)) aeCreateFileEvent(server.el, conn->c.fd, AE_WRITABLE, tlsEventHandler, conn);
@@ -641,7 +641,7 @@ static void updateSSLEvent(tls_connection *conn) {
     int need_write = conn->c.write_handler || (conn->flags & TLS_CONN_FLAG_READ_WANT_WRITE);
 
     if (need_read && !(mask & AE_READABLE))
-        aeCreateFileEvent(server.el, conn->c.fd, AE_READABLE, tlsEventHandler, conn);
+        aeCreateFileEvent(server.el, conn->c.fd, AE_READABLE | AE_PREFETCH, tlsEventHandler, conn);
     if (!need_read && (mask & AE_READABLE)) aeDeleteFileEvent(server.el, conn->c.fd, AE_READABLE);
 
     if (need_write && !(mask & AE_WRITABLE))

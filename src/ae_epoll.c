@@ -110,8 +110,9 @@ static void aeApiDelEvent(aeEventLoop *eventLoop, int fd, int mask) {
 static int aeApiPoll(aeEventLoop *eventLoop, struct timeval *tvp) {
     aeApiState *state = eventLoop->apidata;
     int retval, numevents = 0;
+    int batch_size = eventLoop->epoll_batch_size > 0 ? eventLoop->epoll_batch_size : eventLoop->setsize;
 
-    retval = epoll_wait(state->epfd, state->events, eventLoop->setsize,
+    retval = epoll_wait(state->epfd, state->events, batch_size,
                         tvp ? (tvp->tv_sec * 1000 + (tvp->tv_usec + 999) / 1000) : -1);
     if (retval > 0) {
         int j;

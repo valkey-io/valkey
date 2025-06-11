@@ -240,6 +240,19 @@ void processClientsCommandsBatch(void) {
     }
 }
 
+/* Check if the command is about to be offloaded to IO threads */
+static int isCommandBeingOffloaded(client *c) {
+    if (!server.io_threads_do_commands_offloading) {
+        return 0;
+    }
+
+    if (!server.cluster_enabled) {
+        return 0;
+    }
+
+    return (c->parsed_cmd->flags & CMD_CAN_BE_OFFLOADED) && (c->querybuf == NULL);
+}
+
 /* Adds the client's command to the current batch and processes the batch
  * if it becomes full.
  *
@@ -250,7 +263,7 @@ int addCommandToBatchAndProcessIfFull(client *c) {
     batch->clients[batch->client_count++] = c;
 
     /* Get command's keys positions */
-    if (c->parsed_cmd && !(c->read_flags & READ_FLAGS_BAD_ARITY)) {
+    if (c->parsed_cmd && !(c->read_flags & READ_FLAGS_BAD_ARITY) && !isCommandBeingOffloaded(c)) {
         getKeysResult result;
         initGetKeysResult(&result);
         int num_keys = getKeysFromCommand(c->parsed_cmd, c->argv, c->argc, &result);
@@ -282,5 +295,45 @@ void removeClientFromPendingCommandsBatch(client *c) {
             batch->clients[i] = NULL;
             return;
         }
+    }
+}
+
+/* Prefetch memory for upcoming file events to improve cache performance */
+void prefetchEvents(aeEventLoop *eventLoop, int cur_idx, int numevents) {
+    const int BATCH_SIZE = 16;
+
+    /* Only prefetch at batch boundaries (cur_idx = 0, 16, 32, ...) each time BATCH_SIZE events at once */
+    if (cur_idx % BATCH_SIZE) return;
+
+    aeFileEvent *fes[BATCH_SIZE];
+    int fes_idx = 0;
+    int batch_size = min(numevents - cur_idx, BATCH_SIZE);
+    int start = cur_idx;
+    int end = start + batch_size;
+
+    /* Phase 1: Prefetch aeFileEvent structures for events that need prefetching */
+    for (int i = start; i < end; i++) {
+        int mask = eventLoop->fired[i].mask;
+        if (mask & AE_PREFETCH) {
+            fes[fes_idx] = &eventLoop->events[eventLoop->fired[i].fd];
+            valkey_prefetch(fes[fes_idx]);
+        } else {
+            /* Mark as NULL so we skip this event in subsequent phases */
+            fes[fes_idx] = NULL;
+        }
+        fes_idx++;
+    }
+
+    /* Phase 2: Prefetch connection objects (clientData from aeFileEvent) */
+    for (int i = 0; i < batch_size; i++) {
+        if (fes[i] == NULL) continue;
+        valkey_prefetch(fes[i]->clientData);
+    }
+
+    /* Phase 3: Prefetch private data (client* struct) within each connection */
+    for (int i = 0; i < batch_size; i++) {
+        if (fes[i] == NULL) continue;
+        connection *conn = fes[i]->clientData;
+        valkey_prefetch(connGetPrivateData(conn));
     }
 }

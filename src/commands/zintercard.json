@@ -8,7 +8,8 @@
         "function": "zinterCardCommand",
         "get_keys_function": "zunionInterDiffGetKeys",
         "command_flags": [
-            "READONLY"
+            "READONLY",
+            "CAN_BE_OFFLOADED"
         ],
         "acl_categories": [
             "SORTEDSET"

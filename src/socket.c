@@ -251,7 +251,7 @@ static int connSocketSetReadHandler(connection *conn, ConnectionCallbackFunc fun
     conn->read_handler = func;
     if (!conn->read_handler)
         aeDeleteFileEvent(server.el, conn->fd, AE_READABLE);
-    else if (aeCreateFileEvent(server.el, conn->fd, AE_READABLE, conn->type->ae_handler, conn) == AE_ERR)
+    else if (aeCreateFileEvent(server.el, conn->fd, AE_READABLE | AE_PREFETCH, conn->type->ae_handler, conn) == AE_ERR)
         return C_ERR;
     return C_OK;
 }

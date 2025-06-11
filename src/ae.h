@@ -47,6 +47,7 @@
                          loop iteration. Useful when you want to persist \
                          things to disk before sending replies, and want \
                          to do that in a group fashion. */
+#define AE_PREFETCH 8 /* With PREFETCH, call prefetch callback for the events */
 
 #define AE_FILE_EVENTS (1 << 0)
 #define AE_TIME_EVENTS (1 << 1)
@@ -72,6 +73,7 @@ typedef void aeEventFinalizerProc(struct aeEventLoop *eventLoop, void *clientDat
 typedef void aeBeforeSleepProc(struct aeEventLoop *eventLoop);
 typedef void aeAfterSleepProc(struct aeEventLoop *eventLoop, int numevents);
 typedef int aeCustomPollProc(struct aeEventLoop *eventLoop);
+typedef void aePrefetchProc(struct aeEventLoop *eventLoop, int cur_idx, int numevents);
 
 /* File event structure */
 typedef struct aeFileEvent {
@@ -113,8 +115,10 @@ typedef struct aeEventLoop {
     aeBeforeSleepProc *beforesleep;
     aeAfterSleepProc *aftersleep;
     aeCustomPollProc *custompoll;
+    aePrefetchProc *prefetch;
     pthread_mutex_t poll_mutex;
     int flags;
+    int epoll_batch_size; /* Optional batch size for epoll_wait */
 } aeEventLoop;
 
 /* Prototypes */
@@ -138,6 +142,7 @@ char *aeGetApiName(void);
 void aeSetBeforeSleepProc(aeEventLoop *eventLoop, aeBeforeSleepProc *beforesleep);
 void aeSetAfterSleepProc(aeEventLoop *eventLoop, aeAfterSleepProc *aftersleep);
 void aeSetCustomPollProc(aeEventLoop *eventLoop, aeCustomPollProc *custompoll);
+void aeSetPrefetchProc(aeEventLoop *eventLoop, aePrefetchProc *prefetch);
 void aeSetPollProtect(aeEventLoop *eventLoop, int protect);
 int aePoll(aeEventLoop *eventLoop, struct timeval *tvp);
 int aeGetSetSize(aeEventLoop *eventLoop);

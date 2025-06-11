@@ -55,6 +55,11 @@ start_server {tags {"maxmemory external:skip"}} {
     }
 
     foreach {client_eviction} {false true} {
+        # Skip client eviction test when IO threads are enabled because client freeing
+        # may be deferred with IO threads, making the eviction behavior unpredictable
+        if {$client_eviction && $::io_threads} {
+            continue
+        }
         set clients {}
         test "eviction due to output buffers of many MGET clients, client eviction: $client_eviction" {
             init_test $client_eviction

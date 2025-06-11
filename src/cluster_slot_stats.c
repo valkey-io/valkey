@@ -146,7 +146,7 @@ void clusterSlotStatsAddNetworkBytesOutForUserClient(client *c) {
 
 /* Accumulates egress bytes upon sending replication stream. This only applies for primary nodes. */
 static void clusterSlotStatsUpdateNetworkBytesOutForReplication(long long len) {
-    client *c = server.current_client;
+    client *c = getCurrentClient();
     if (c == NULL || !clusterSlotStatsEnabled(c->slot)) return;
 
     /* We multiply the bytes len by the number of replicas to account for us broadcasting to multiple replicas at once. */

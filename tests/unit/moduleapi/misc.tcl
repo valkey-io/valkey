@@ -560,3 +560,40 @@ if {[string match {*jemalloc*} [s mem_allocator]]} {
         assert_equal {OK} [r module unload misc]
     }
 }
+
+start_cluster 1 0 {tags {"modules external:skip"}} {
+    set testmodule [file normalize tests/modules/misc.so]
+    test {Commands are not offloaded by default when modules are loaded} {
+        # Skip if non io-threads mode - as it is relevant only for io-threads mode
+        if {[r config get io-threads] ne "io-threads 1"} {
+            r module load $testmodule
+            
+            # Get the initial IO thread stats
+            set initial_info [r info stats]
+            set initial_processed [getInfoProperty $initial_info io_threaded_commands_processed]
+            
+            # Send a GET command that normally would be offloaded
+            r GET key
+            
+            # Get the updated IO thread stats
+            set updated_info [r info stats]
+            set updated_processed [getInfoProperty $updated_info io_threaded_commands_processed]
+            
+            # Verify the GET command was not offloaded (processed count should be the same)
+            assert_equal $initial_processed $updated_processed
+            
+            # Now override the default behavior to allow offloading even with modules
+            r config set io-threads-do-command-offloading-with-modules yes
+            
+            # Send another GET command
+            r GET key
+            
+            # Get the final IO thread stats
+            set final_info [r info stats]
+            set final_processed [getInfoProperty $final_info io_threaded_commands_processed]
+            
+            # Verify the GET command was offloaded (processed count should increase)
+            assert {$final_processed > $updated_processed}
+        }
+    }
+}

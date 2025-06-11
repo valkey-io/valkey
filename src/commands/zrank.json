@@ -14,7 +14,8 @@
         ],
         "command_flags": [
             "READONLY",
-            "FAST"
+            "FAST",
+            "CAN_BE_OFFLOADED"
         ],
         "acl_categories": [
             "SORTEDSET"

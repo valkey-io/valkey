@@ -7,7 +7,8 @@
         "arity": 4,
         "function": "lrangeCommand",
         "command_flags": [
-            "READONLY"
+            "READONLY",
+            "CAN_BE_OFFLOADED"
         ],
         "acl_categories": [
             "LIST"

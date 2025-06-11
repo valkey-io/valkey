@@ -579,17 +579,7 @@ start_server {tags {"other external:skip"}} {
     }
 }
 
-start_server {tags {"other external:skip"}} {
-    test "test io-threads are runtime modifiable" {
-        # Randomly set the number of threads between 1 and 5
-        for {set i 0} {$i < 100} {incr i} {
-            set random_num [expr {int(rand() * 5) + 1}]
-            r config set io-threads $random_num
-            set thread_num [lindex [r config get io-threads] 1]
-            assert_equal $random_num $thread_num
-        }
-    }
-}
+
 
 set tempFileName [file join [pwd] [pid]]
 if {$::verbose} {

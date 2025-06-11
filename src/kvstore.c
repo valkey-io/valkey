@@ -46,6 +46,7 @@
 #include "kvstore.h"
 #include "serverassert.h"
 #include "monotonic.h"
+#include "io_threads.h"
 
 #define UNUSED(V) ((void)V)
 
@@ -65,7 +66,7 @@ struct _kvstore {
     unsigned long long bucket_count;          /* Total number of buckets in this kvstore across hash tables. */
     unsigned long long *hashtable_size_index; /* Binary indexed tree (BIT) that describes cumulative key frequencies up until
                                                * given hashtable-index. */
-    size_t overhead_hashtable_lut;            /* Overhead of all hashtables in bytes. */
+    _Atomic size_t overhead_hashtable_lut;    /* Overhead of all hashtables in bytes, Atomic as it may be update by the IO threads */
     size_t overhead_hashtable_rehashing;      /* Overhead of hash tables rehashing in bytes. */
 };
 
@@ -221,22 +222,38 @@ void kvstoreHashtableRehashingStarted(hashtable *ht) {
     kvs->overhead_hashtable_rehashing += from * HASHTABLE_BUCKET_SIZE;
 }
 
+typedef struct {
+    size_t from;
+    kvstore *kvs;
+    listNode *rehashing_node;
+} rehashing_completion_ctx;
+
+void kvstoreHashtableUpdateRehashingInfo(void *data) {
+    rehashing_completion_ctx *ctx = (rehashing_completion_ctx *)data;
+    if (ctx->rehashing_node) {
+        listDelNode(ctx->kvs->rehashing, ctx->rehashing_node);
+    }
+    ctx->kvs->bucket_count -= ctx->from; /* Finished rehashing (Remove the old ht size) */
+    ctx->kvs->overhead_hashtable_rehashing -= ctx->from * HASHTABLE_BUCKET_SIZE;
+}
+
 /* Remove hash table from the rehashing list.
  *
  * Updates the bucket count for the given hash table in a DB. It removes
  * the old ht size of the hash table from the total sum of buckets for a DB.  */
 void kvstoreHashtableRehashingCompleted(hashtable *ht) {
     kvstoreHashtableMetadata *metadata = (kvstoreHashtableMetadata *)hashtableMetadata(ht);
-    kvstore *kvs = metadata->kvs;
-    if (metadata->rehashing_node) {
-        listDelNode(kvs->rehashing, metadata->rehashing_node);
-        metadata->rehashing_node = NULL;
-    }
-
     size_t from, to;
     hashtableRehashingInfo(ht, &from, &to);
-    kvs->bucket_count -= from; /* Finished rehashing (Remove the old ht size) */
-    kvs->overhead_hashtable_rehashing -= from * HASHTABLE_BUCKET_SIZE;
+    rehashing_completion_ctx ctx = {.rehashing_node = metadata->rehashing_node, .kvs = metadata->kvs, .from = from};
+    metadata->rehashing_node = NULL;
+
+    /* If not in main-thread postpone the update of kvs rehashing info to be done later by the main-thread -*/
+    if (!inMainThread()) {
+        threadAddDelayedJob(-1, kvstoreHashtableUpdateRehashingInfo, sizeof(ctx), &ctx);
+    } else {
+        kvstoreHashtableUpdateRehashingInfo(&ctx);
+    }
 }
 
 /* Hashtable callback to keep track of memory usage. */

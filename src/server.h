@@ -82,6 +82,7 @@ typedef long long ustime_t; /* microsecond time type. */
 #include "rax.h"        /* Radix tree */
 #include "connection.h" /* Connection abstraction */
 #include "memory_prefetch.h"
+#include "io_threads.h"
 #include "trace/trace.h"
 
 #ifdef USE_LTTNG
@@ -251,6 +252,7 @@ extern int configOOMScoreAdjValuesDefaults[CONFIG_OOM_COUNT];
 #define CMD_ALLOW_BUSY ((1ULL << 26))
 #define CMD_MODULE_GETCHANNELS (1ULL << 27) /* Use the modules getchannels interface. */
 #define CMD_TOUCHES_ARBITRARY_KEYS (1ULL << 28)
+#define CMD_CAN_BE_OFFLOADED (1ULL << 29) /* Command can be offloaded to worker IO threads. */
 /* Command flags. Please don't forget to add command flag documentation in struct
  * serverCommand in this file. */
 
@@ -366,6 +368,7 @@ typedef enum blocking_type {
     BLOCKED_ZSET,     /* BZPOP et al. */
     BLOCKED_POSTPONE, /* Blocked by processCommand, re-try processing later. */
     BLOCKED_SHUTDOWN, /* SHUTDOWN. */
+    BLOCKED_SLOT,     /* Blocked on slot due to command offloading */
     BLOCKED_NUM,      /* Number of blocked states. */
     BLOCKED_END       /* End of enumeration */
 } blocking_type;
@@ -698,6 +701,8 @@ typedef enum {
     AE_IO_STATE_DONE
 } AeIoState;
 
+#define AE_EPOLL_EVENTS_BATCH_SIZE 200 /* Default batch size for epoll_wait */
+
 /*-----------------------------------------------------------------------------
  * Data types
  *----------------------------------------------------------------------------*/
@@ -918,9 +923,11 @@ typedef struct blockingState {
                                     which is opaque for the Redis core, only
                                     handled in module.c. */
 
-    void *async_rm_call_handle; /* ValkeyModuleAsyncRMCallPromise structure.
-                                   which is opaque for the Redis core, only
-                                   handled in module.c. */
+    void *async_rm_call_handle;   /* ValkeyModuleAsyncRMCallPromise structure.
+                                     which is opaque for the Redis core, only
+                                     handled in module.c. */
+    void *slot_pending_list;      /* Pending clients queue on which the client is blocked while waiting for busy slot */
+    listNode pending_client_node; /* Node in clients pending queue */
 } blockingState;
 
 /* The following structure represents a node in the server.ready_keys list,
@@ -1203,12 +1210,31 @@ typedef struct LastWrittenBuf {
 } LastWrittenBuf;
 
 typedef struct client {
+    volatile uint8_t io_read_state;               /* Indicate the IO read state of the client */
+    volatile uint8_t io_write_state;              /* Indicate the IO write state of the client */
+    volatile uint8_t io_command_state;            /* Indicate the IO command state of the client */
+    ustime_t duration;                            /* Current command duration. Used for measuring latency of blocking/non-blocking cmds */
+    robj **original_argv;                         /* Arguments of original command if arguments were rewritten. */
+    unsigned long long net_input_bytes_curr_cmd;  /* Total network input bytes read for the* execution of this client's current command. */
+    unsigned long long net_output_bytes_curr_cmd; /* Total network output bytes sent to this client, by the current command. */
+    unsigned long long commands_processed;        /* Total count of commands this client executed. */
+
+
+    int original_argc;                   /* Num of arguments of original command if arguments were rewritten. */
+    unsigned long long net_output_bytes; /* Total network output bytes sent to this client. */
     /* Basic client information and connection. */
     uint64_t id; /* Client incremental unique ID. */
     connection *conn;
     /* Input buffer and command parsing fields */
-    sds querybuf;        /* Buffer we use to accumulate client queries. */
-    size_t qb_pos;       /* The position we have read in querybuf. */
+    sds querybuf;  /* Buffer we use to accumulate client queries. */
+    size_t qb_pos; /* The position we have read in querybuf. */
+    /* Client flags and state indicators */
+    union {
+        uint64_t raw_flag;
+        struct ClientFlags flag;
+    };
+    list *reply;         /* List of reply objects to send to the client. */
+    int slot;            /* The slot the client is executing against. Set to -1 if no slot is being used */
     robj **argv;         /* Arguments of current command. */
     int argc;            /* Num of arguments of current command. */
     int argv_len;        /* Size of argv array (may be more than argc) */
@@ -1231,10 +1257,9 @@ typedef struct client {
     multiState *mstate;               /* MULTI/EXEC state, lazily initialized when first needed */
     blockingState *bstate;            /* Blocking state, lazily initialized when first needed */
     /* Output buffer and reply handling */
-    long duration;                       /* Current command duration. Used for measuring latency of blocking/non-blocking cmds */
+
     char *buf;                           /* Output buffer */
     size_t buf_usable_size;              /* Usable size of buffer. */
-    list *reply;                         /* List of reply objects to send to the client. */
     listNode *io_last_reply_block;       /* Last client reply block when sent to IO thread */
     size_t io_last_bufpos;               /* The client's bufpos at the time it was sent to the IO thread */
     LastWrittenBuf io_last_written;      /* Track state for last written buffer */
@@ -1242,37 +1267,28 @@ typedef struct client {
     listNode clients_pending_write_node; /* list node in clients_pending_write or in clients_pending_io_write list */
     size_t bufpos;
     payloadHeader *last_header; /* Pointer to the last header in a buffer when using copy avoidance */
-    int original_argc;          /* Num of arguments of original command if arguments were rewritten. */
-    robj **original_argv;       /* Arguments of original command if arguments were rewritten. */
-    /* Client flags and state indicators */
-    union {
-        uint64_t raw_flag;
-        struct ClientFlags flag;
-    };
-    uint16_t write_flags;            /* Client Write flags - used to communicate the client write state. */
-    volatile uint8_t io_read_state;  /* Indicate the IO read state of the client */
-    volatile uint8_t io_write_state; /* Indicate the IO write state of the client */
-    uint8_t resp;                    /* RESP protocol version. Can be 2 or 3. */
-    uint8_t cur_tid;                 /* ID of IO thread currently performing IO for this client */
+
+
+    uint16_t write_flags; /* Client Write flags - used to communicate the client write state. */
+
+
+    uint8_t resp;    /* RESP protocol version. Can be 2 or 3. */
+    uint8_t cur_tid; /* ID of IO thread currently performing IO for this client */
     /* In updateClientMemoryUsage() we track the memory usage of
      * each client and add it to the sum of all the clients of a given type,
      * however we need to remember what was the old contribution of each
      * client, and in which category the client was, in order to remove it
      * before adding it the new value. */
     uint8_t last_memory_type;
-    uint8_t capa;                    /* Client capabilities: CLIENT_CAPA* macros. */
-    listNode pending_read_list_node; /* IO thread only ?*/
+    uint8_t capa; /* Client capabilities: CLIENT_CAPA* macros. */
     /* Statistics and metrics */
-    unsigned long long net_input_bytes;           /* Total network input bytes read from this client. */
-    unsigned long long net_input_bytes_curr_cmd;  /* Total network input bytes read for the* execution of this client's current command. */
-    unsigned long long net_output_bytes;          /* Total network output bytes sent to this client. */
-    unsigned long long commands_processed;        /* Total count of commands this client executed. */
-    unsigned long long net_output_bytes_curr_cmd; /* Total network output bytes sent to this client, by the current command. */
-    size_t buf_peak;                              /* Peak used size of buffer in last 5 sec interval. */
-    int nwritten;                                 /* Number of bytes of the last write. */
-    int nread;                                    /* Number of bytes of the last read. */
-    int read_flags;                               /* Client Read flags - used to communicate the client read state. */
-    int slot;                                     /* The slot the client is executing against. Set to -1 if no slot is being used */
+    unsigned long long net_input_bytes; /* Total network input bytes read from this client. */
+
+
+    size_t buf_peak; /* Peak used size of buffer in last 5 sec interval. */
+    int nwritten;    /* Number of bytes of the last write. */
+    int nread;       /* Number of bytes of the last read. */
+    int read_flags;  /* Client Read flags - used to communicate the client read state. */
     listNode *mem_usage_bucket_node;
     clientMemUsageBucket *mem_usage_bucket;
     /* In updateClientMemoryUsage() we track the memory usage of
@@ -1302,6 +1318,15 @@ typedef struct client {
     clientReqResInfo reqres;
 #endif
 } client;
+
+extern __thread client *_current_client;   /* The client that triggered the command execution (External or AOF). */
+extern __thread client *_executing_client; /* The client executing the current command (possibly script or module). */
+
+#define getCurrentClient() (_current_client)
+#define setCurrentClient(c) (_current_client = (c))
+#define getExecutingClient() (_executing_client)
+#define setExecutingClient(c) (_executing_client = (c))
+#define isCurrentClient(c) ((c) == getCurrentClient())
 
 /* When a command generates a lot of discrete elements to the client output buffer, it is much faster to
  * skip certain types of initialization. This type is used to indicate a client that has been initialized
@@ -1657,16 +1682,12 @@ struct valkeyServer {
     list *clients;                         /* List of active clients */
     list *clients_to_close;                /* Clients to close asynchronously */
     list *clients_pending_write;           /* There is to write or install handler. */
-    list *clients_pending_io_read;         /* List of clients with pending read to be process by I/O threads. */
-    list *clients_pending_io_write;        /* List of clients with pending write to be process by I/O threads. */
     list *replicas, *monitors;             /* List of replicas and MONITORs */
     rax *replicas_waiting_psync;           /* Radix tree for tracking replicas awaiting partial synchronization.
                                             * Key: RDB client ID
                                             * Value: RDB client object
                                             * This structure holds dual-channel sync replicas from the start of their
                                             * RDB transfer until their main channel establishes partial synchronization. */
-    client *current_client;                /* The client that triggered the command execution (External or AOF). */
-    client *executing_client;              /* The client executing the current command (possibly script or module). */
 
 #ifdef LOG_REQ_RES
     char *req_res_logfile; /* Path of log file for logging all requests and their replies. If NULL, no logging will be
@@ -1685,20 +1706,22 @@ struct valkeyServer {
     uint32_t paused_actions;    /* Bitmask of actions that are currently paused */
     list *postponed_clients;    /* List of postponed clients */
     pause_event client_pause_per_purpose[NUM_PAUSE_PURPOSES];
-    char neterr[ANET_ERR_LEN];                /* Error buffer for anet.c */
-    dict *migrate_cached_sockets;             /* MIGRATE cached sockets */
-    _Atomic uint64_t next_client_id;          /* Next client unique ID. Incremental. */
-    int protected_mode;                       /* Don't accept external connections. */
-    int io_threads_num;                       /* Number of IO threads to use. */
-    int active_io_threads_num;                /* Current number of active IO threads, includes main thread. */
-    int events_per_io_thread;                 /* Number of events on the event loop to trigger IO threads activation. */
-    int prefetch_batch_max_size;              /* Maximum number of keys to prefetch in a single batch */
-    long long events_processed_while_blocked; /* processEventsWhileBlocked() */
-    int enable_protected_configs;             /* Enable the modification of protected configs, see PROTECTED_ACTION_ALLOWED_* */
-    int enable_debug_cmd;                     /* Enable DEBUG commands, see PROTECTED_ACTION_ALLOWED_* */
-    int enable_module_cmd;                    /* Enable MODULE commands, see PROTECTED_ACTION_ALLOWED_* */
-    int enable_debug_assert;                  /* Enable debug asserts */
-    int debug_client_enforce_reply_list;      /* Force client to always use the reply list */
+    char neterr[ANET_ERR_LEN];                          /* Error buffer for anet.c */
+    dict *migrate_cached_sockets;                       /* MIGRATE cached sockets */
+    _Atomic uint64_t next_client_id;                    /* Next client unique ID. Incremental. */
+    int protected_mode;                                 /* Don't accept external connections. */
+    int io_threads_num;                                 /* Number of IO threads to use. */
+    int active_io_threads_num;                          /* Current number of active IO threads, includes main thread. */
+    int events_per_io_thread;                           /* Number of events on the event loop to trigger IO threads activation. */
+    int io_threads_do_commands_offloading;              /* If enabled, commands can be offloaded to IO threads. */
+    int io_threads_do_commands_offloading_with_modules; /* If enabled, commands can be offloaded to IO threads even when modules are loaded. */
+    int prefetch_batch_max_size;                        /* Maximum number of keys to prefetch in a single batch */
+    long long events_processed_while_blocked;           /* processEventsWhileBlocked() */
+    int enable_protected_configs;                       /* Enable the modification of protected configs, see PROTECTED_ACTION_ALLOWED_* */
+    int enable_debug_cmd;                               /* Enable DEBUG commands, see PROTECTED_ACTION_ALLOWED_* */
+    int enable_module_cmd;                              /* Enable MODULE commands, see PROTECTED_ACTION_ALLOWED_* */
+    int enable_debug_assert;                            /* Enable debug asserts */
+    int debug_client_enforce_reply_list;                /* Force client to always use the reply list */
     /* Reply construction copy avoidance */
     int min_io_threads_copy_avoid;           /* Minimum number of IO threads for copy avoidance in reply construction */
     int min_string_size_copy_avoid_threaded; /* Minimum bulk string size for copy avoidance in reply construction when IO threads enabled */
@@ -1725,8 +1748,8 @@ struct valkeyServer {
     long long stat_evictedscripts;                 /* Number of evicted lua scripts. */
     long long stat_total_eviction_exceeded_time;   /* Total time over the memory limit, unit us */
     monotime stat_last_eviction_exceeded_time;     /* Timestamp of current eviction start, unit us */
-    long long stat_keyspace_hits;                  /* Number of successful lookups of keys */
-    long long stat_keyspace_misses;                /* Number of failed lookups of keys */
+    _Atomic long long stat_keyspace_hits;          /* Number of successful lookups of keys */
+    _Atomic long long stat_keyspace_misses;        /* Number of failed lookups of keys */
     long long stat_active_defrag_hits;             /* number of allocations moved */
     long long stat_active_defrag_misses;           /* number of allocations scanned but not moved */
     long long stat_active_defrag_key_hits;         /* number of keys with moved allocations */
@@ -1764,20 +1787,27 @@ struct valkeyServer {
     size_t stat_clients_type_memory[CLIENT_TYPE_COUNT]; /* Mem usage by type */
     size_t stat_cluster_links_memory;                   /* Mem usage by cluster links */
     long long
-        stat_unexpected_error_replies;                 /* Number of unexpected (aof-loading, replica to primary, etc.) error replies */
-    long long stat_total_error_replies;                /* Total number of issued error replies ( command + rejected errors ) */
-    long long stat_dump_payload_sanitizations;         /* Number deep dump payloads integrity validations. */
-    long long stat_io_reads_processed;                 /* Number of read events processed by IO threads */
-    long long stat_io_writes_processed;                /* Number of write events processed by IO threads */
-    long long stat_io_freed_objects;                   /* Number of objects freed by IO threads */
-    long long stat_io_accept_offloaded;                /* Number of offloaded accepts */
-    long long stat_poll_processed_by_io_threads;       /* Total number of poll jobs processed by IO */
-    long long stat_total_reads_processed;              /* Total number of read events processed */
-    long long stat_total_writes_processed;             /* Total number of write events processed */
-    long long stat_client_qbuf_limit_disconnections;   /* Total number of clients reached query buf length limit */
-    long long stat_client_outbuf_limit_disconnections; /* Total number of clients reached output buf length limit */
-    long long stat_total_prefetch_entries;             /* Total number of prefetched dict entries */
-    long long stat_total_prefetch_batches;             /* Total number of prefetched batches */
+        stat_unexpected_error_replies;                  /* Number of unexpected (aof-loading, replica to primary, etc.) error replies */
+    long long stat_total_error_replies;                 /* Total number of issued error replies ( command + rejected errors ) */
+    long long stat_dump_payload_sanitizations;          /* Number deep dump payloads integrity validations. */
+    long long stat_io_reads_processed;                  /* Number of read events processed by IO threads */
+    long long stat_io_reads_pending;                    /* Number of read events pending in IO threads */
+    long long stat_io_writes_processed;                 /* Number of write events processed by IO threads */
+    long long stat_io_writes_pending;                   /* Number of write events pending in IO threads */
+    long long stat_io_commands_processed;               /* Number of write events pending in IO threads */
+    long long stat_io_commands_pending;                 /* Number of write events pending in IO threads */
+    long long stat_io_freed_objects;                    /* Number of objects freed by IO threads */
+    long long stat_io_accept_offloaded;                 /* Number of offloaded accepts */
+    long long stat_poll_processed_by_io_threads;        /* Total number of poll jobs processed by IO */
+    long long stat_io_threaded_clients_blocked_on_slot; /* Number of clients currently blocked on slots */
+    long long stat_io_threaded_clients_blocked_total;   /* Total number of clients that were blocked on slots */
+    long long stat_total_reads_processed;               /* Total number of read events processed */
+    long long stat_total_writes_processed;              /* Total number of write events processed */
+    long long stat_client_qbuf_limit_disconnections;    /* Total number of clients reached query buf length limit */
+    long long stat_client_outbuf_limit_disconnections;  /* Total number of clients reached output buf length limit */
+    long long stat_total_prefetch_entries;              /* Total number of prefetched dict entries */
+    long long stat_total_prefetch_batches;              /* Total number of prefetched batches */
+    long long stat_delayed_jobs_processed;              /* Total number of delayed jobs sent to main thread from worker threads */
     /* The following two are used to track instantaneous metrics, like
      * number of operations per second, network traffic. */
     struct {
@@ -2446,6 +2476,11 @@ typedef int serverGetKeysProc(struct serverCommand *cmd, robj **argv, int argc, 
  * CMD_TOUCHES_ARBITRARY_KEYS: The command may touch (and cause lazy-expire)
  *                             arbitrary key (i.e not provided in argv)
  *
+ * CMD_CAN_BE_OFFLOADED: The command can be safely offloaded to worker IO threads.
+ *                      Currently only simple read commands that don't have side effects
+ *                      are eligible for offloading. Commands with this flag should be
+ *                      idempotent and not modify any server state.
+ *
  * The following additional flags are only used in order to put commands
  * in a specific ACL category. Commands can have multiple ACL categories.
  * See valkey.conf for the exact meaning of each.
@@ -2674,13 +2709,14 @@ void dictVanillaFree(void *val);
 #define READ_FLAGS_BAD_ARITY (1 << 18)
 #define READ_FLAGS_NO_KEYS (1 << 19)
 #define READ_FLAGS_CROSSSLOT (1 << 20)
+#define READ_FLAGS_COMMAND_PROCESSED (1 << 17)
 
 /* Write flags for various write errors and states */
 #define WRITE_FLAGS_WRITE_ERROR (1 << 0)
 #define WRITE_FLAGS_IS_REPLICA (1 << 1)
 
 client *createClient(connection *conn);
-void freeClient(client *c);
+int freeClient(client *c);
 void freeClientAsync(client *c);
 void logInvalidUseAndFreeClientAsync(client *c, const char *fmt, ...);
 void beforeNextClient(client *c);
@@ -2800,7 +2836,7 @@ void linkClient(client *c);
 void protectClient(client *c);
 void unprotectClient(client *c);
 void initSharedQueryBuf(void);
-void freeSharedQueryBuf(void *dummy);
+void freeSharedQueryBuf(void);
 client *lookupClientByID(uint64_t id);
 int authRequired(client *c);
 void clientSetUser(client *c, user *u, int authenticated);
@@ -2810,12 +2846,14 @@ void deleteCachedResponseClient(client *recording_client);
 void waitForClientIO(client *c);
 void ioThreadReadQueryFromClient(void *data);
 void ioThreadWriteToClient(void *data);
+void ioThreadProcessCommand(void *data);
 int canParseCommand(client *c);
-int processIOThreadsReadDone(void);
-int processIOThreadsWriteDone(void);
+void processClientIOReadsDone(client *c);
+void processClientIOWriteDone(client *c, int allow_async_writes);
+void commandProcessed(client *c);
+long long serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData);
 void releaseReplyReferences(client *c);
 void resetLastWrittenBuf(client *c);
-
 
 /* logreqres.c - logging of requests and responses */
 void reqresReset(client *c, int free_buf);

@@ -12,7 +12,7 @@ on:
     inputs:
       skipjobs:
         description: "jobs to skip (delete the ones you wanna keep, do not leave empty)"
-        default: "valgrind,sanitizer,tls,freebsd,macos,alpine,32bit,iothreads,ubuntu,rpm-distros,malloc,specific,fortify,reply-schema,arm"
+        default: "valgrind,sanitizer,tls,freebsd,macos,alpine,32bit,iothreads,ubuntu,rpm-distros,malloc,specific,fortify,reply-schema,arm,lttng"
       skiptests:
         description: "tests to skip (delete the ones you wanna keep, do not leave empty)"
         default: "valkey,modules,sentinel,cluster,unittest,large-memory"
@@ -1378,6 +1378,7 @@ jobs:
       - test-sanitizer-address
       - test-sanitizer-undefined
       - test-sanitizer-force-defrag
+      - test-ubuntu-lttng
       - test-rpm-distros-jemalloc
       - test-rpm-distros-tls-module
       - test-rpm-distros-tls-module-no-tls

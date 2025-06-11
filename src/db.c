@@ -923,7 +923,7 @@ void keysCommand(client *c) {
 
 /* Data used by the dict scan callback. */
 typedef struct {
-    sds *result;    /* elements that collect from dict */
+    array *result;  /* elements that collect from dict */
     robj *o;        /* o must be a hash/set/zset object, NULL means current db */
     serverDb *db;   /* database currently being scanned */
     long long type; /* the particular type when scan the db */
@@ -978,7 +978,8 @@ void keysScanCallback(void *privdata, void *entry) {
     }
 
     /* Keep this key. */
-    arrayPush(data->result, key);
+    sds *item = arrayPush(data->result);
+    *item = key;
 }
 
 /* This callback is used by scanGenericCommand in order to collect elements
@@ -1031,8 +1032,12 @@ void hashtableScanCallback(void *privdata, void *entry) {
         }
     }
 
-    arrayPush(data->result, key);
-    if (val) arrayPush(data->result, val);
+    sds *item = arrayPush(data->result);
+    *item = key;
+    if (val) {
+        item = arrayPush(data->result);
+        *item = val;
+    }
 }
 
 /* Try to parse a SCAN cursor stored at buffer 'buf':
@@ -1097,7 +1102,7 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {
     sds typename = NULL;
     long long type = LLONG_MAX;
     int patlen = 0, use_pattern = 0, only_keys = 0;
-    sds *result;
+    array result;
 
     /* Object must be NULL (to iterate keys names), or the type of the object
      * must be Set, Sorted Set, or Hash. */
@@ -1171,7 +1176,7 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {
     /* Set a free callback for the contents of the collected keys list if they
      * are deep copied temporary strings. We must not free them if they are just
      * a shallow copy - a pointer to the actual data in the data structure */
-    void (*free_callback)(void *) = sdsfreeVoid;
+    void (*free_callback)(sds) = sdsfree;
     if (o == NULL) {
         free_callback = NULL;
     } else if (o->type == OBJ_SET && o->encoding == OBJ_ENCODING_HASHTABLE) {
@@ -1184,9 +1189,9 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {
         zset *zs = o->ptr;
         ht = zs->ht;
         /* scanning ZSET allocates temporary strings even though it's a dict */
-        free_callback = sdsfreeVoid;
+        free_callback = sdsfree;
     }
-    arrayNew(result, MAX_SCAN_ARRAY_BUFFER, free_callback);
+    arrayInit(&result, MAX_SCAN_ARRAY_BUFFER, sizeof(sds));
 
     /* For main hash table scan or scannable data structure. */
     if (!o || ht) {
@@ -1210,7 +1215,7 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {
          * 6. data.only_keys: to control whether values will be returned or
          * only keys are returned. */
         scanData data = {
-            .result = result,
+            .result = &result,
             .db = c->db,
             .o = o,
             .type = type,
@@ -1233,7 +1238,6 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {
                 cursor = hashtableScan(ht, cursor, hashtableScanCallback, &data);
             }
         } while (cursor && maxiterations-- && data.sampled < count);
-        result = data.result;
     } else if (o->type == OBJ_SET) {
         char *str;
         char buf[LONG_STR_SIZE];
@@ -1248,7 +1252,8 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {
             if (use_pattern && !stringmatchlen(pat, sdslen(pat), key, len, 0)) {
                 continue;
             }
-            arrayPush(result, sdsnewlen(key, len));
+            sds *item = arrayPush(&result);
+            *item = sdsnewlen(key, len);
         }
         setTypeReleaseIterator(si);
         cursor = 0;
@@ -1268,11 +1273,13 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {
                 continue;
             }
             /* add key object */
-            arrayPush(result, sdsnewlen(str, len));
+            sds *item = arrayPush(&result);
+            *item = sdsnewlen(str, len);
             /* add value object */
             if (!only_keys) {
                 str = lpGet(p, &len, intbuf);
-                arrayPush(result, sdsnewlen(str, len));
+                item = arrayPush(&result);
+                *item = sdsnewlen(str, len);
             }
             p = lpNext(o->ptr, p);
         }
@@ -1285,13 +1292,16 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {
     addReplyArrayLen(c, 2);
     addReplyBulkLongLong(c, cursor);
 
-    addReplyArrayLen(c, arrayLen(result));
-    for (unsigned long i = 0; i < arrayLen(result); i++) {
-        sds key = result[i];
-        addReplyBulkCBuffer(c, key, sdslen(key));
+    addReplyArrayLen(c, arrayLen(&result));
+    for (uint32_t i = 0; i < arrayLen(&result); i++) {
+        sds *key = arrayGet(&result, i);
+        addReplyBulkCBuffer(c, *key, sdslen(*key));
+        if (free_callback) {
+            free_callback(*key);
+        }
     }
 
-    arrayFree(result);
+    arrayCleanup(&result);
 }
 
 /* The SCAN command completely relies on scanGenericCommand. */

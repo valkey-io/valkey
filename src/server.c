@@ -6467,26 +6467,31 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
             if (server.db[j] == NULL) continue;
             info = sdscatprintf(info, "db%d_distrib_strings_sizes:", j);
             for (int l = 0; l < server.db[j]->strings_array_length; l++) {
+                if (server.db[j]->strings_array[l].num == 0) continue;
                 info = sdscatprintf(info, "%lld=%lld,", server.db[j]->strings_array[l].element_size, server.db[j]->strings_array[l].num);
             }
             info = sdscatprintf(info, "\r\n");
             info = sdscatprintf(info, "db%d_distrib_lists_items:", j);
             for (int l = 0; l < server.db[j]->lists_array_length; l++) {
+                if (server.db[j]->lists_array[l].num == 0) continue;
                 info = sdscatprintf(info, "%lld=%lld,", server.db[j]->lists_array[l].element_size, server.db[j]->lists_array[l].num);
             }
             info = sdscatprintf(info, "\r\n");
             info = sdscatprintf(info, "db%d_distrib_sets_items:", j);
             for (int l = 0; l < server.db[j]->sets_array_length; l++) {
+                if (server.db[j]->sets_array[l].num == 0) continue;
                 info = sdscatprintf(info, "%lld=%lld,", server.db[j]->sets_array[l].element_size, server.db[j]->sets_array[l].num);
             }
             info = sdscatprintf(info, "\r\n");
             info = sdscatprintf(info, "db%d_distrib_hashes_items:", j);
             for (int l = 0; l < server.db[j]->hashes_array_length; l++) {
+                if (server.db[j]->hashes_array[l].num == 0) continue;
                 info = sdscatprintf(info, "%lld=%lld,", server.db[j]->hashes_array[l].element_size, server.db[j]->hashes_array[l].num);
             }
             info = sdscatprintf(info, "\r\n");
             info = sdscatprintf(info, "db%d_distrib_zsets_items:", j);
             for (int l = 0; l < server.db[j]->zsets_array_length; l++) {
+                if (server.db[j]->zsets_array[l].num == 0) continue;
                 info = sdscatprintf(info, "%lld=%lld,", server.db[j]->zsets_array[l].element_size, server.db[j]->zsets_array[l].num);
             }
             info = sdscatprintf(info, "\r\n");

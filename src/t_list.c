@@ -490,7 +490,6 @@ void pushGenericCommand(client *c, int where, int xx) {
     char *event = (where == LIST_HEAD) ? "lpush" : "rpush";
     notifyKeyspaceEvent(NOTIFY_LIST, event, c->argv[1], c->db->id);
     current_element_number = listTypeLength(lobj);
-    //    displayUpdate(previous_element_number, current_element_number);
     updateListKeySizeArray(c, previous_element_number, current_element_number);
 
     addReplyLongLong(c, listTypeLength(lobj));

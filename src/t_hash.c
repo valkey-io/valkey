@@ -818,7 +818,6 @@ void hsetnxCommand(client *c) {
         server.dirty++;
         addReply(c, shared.cone);
         current_element_number = previous_element_number + 1;
-        /* TO DO: update INFO KEYSIZES  */
         updateHashKeySizeArray(c, previous_element_number, current_element_number);
     }
 }
@@ -912,7 +911,6 @@ void hincrbyCommand(client *c) {
     server.dirty++;
     addReplyLongLong(c, value);
     current_element_number = hashTypeLength(o);
-    /* TO DO: update INFO KEYSIZES  */
     updateHashKeySizeArray(c, previous_element_number, current_element_number);
 }
 
@@ -970,7 +968,6 @@ void hincrbyfloatCommand(client *c) {
     server.dirty++;
     addReplyBulkCBuffer(c, buf, len);
     current_element_number = hashTypeLength(o);
-    /* TO DO: update INFO KEYSIZES  */
     updateHashKeySizeArray(c, previous_element_number, current_element_number);
 
     /* Always replicate HINCRBYFLOAT as an HSET command with the final value
@@ -1054,7 +1051,6 @@ void hdelCommand(client *c) {
             c->db->hashes_number_of_elements--;
         }
         current_element_number = previous_element_number - deleted;
-        /* TO DO: update INFO KEYSIZES  */
         updateHashKeySizeArray(c, previous_element_number, current_element_number);
         server.dirty += deleted;
     }

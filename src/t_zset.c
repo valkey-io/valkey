@@ -1846,7 +1846,6 @@ static void zaddGenericCommand(client *c, int flags) {
     }
     server.dirty += (added + updated);
     current_element_number = zsetLength(zobj);
-    /* TO DO: update INFO KEYSIZES  */
     updateZsetKeySizeArray(c, previous_element_number, current_element_number);
 
 reply_to_client:

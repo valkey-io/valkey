@@ -621,7 +621,6 @@ void saddCommand(client *c) {
         notifyKeyspaceEvent(NOTIFY_SET, "sadd", c->argv[1], c->db->id);
         server.dirty += added;
         current_element_number = previous_element_number + added;
-        /* TO DO: update INFO KEYSIZES  */
         updateSetKeySizeArray(c, previous_element_number, current_element_number);
     }
     addReplyLongLong(c, added);
@@ -653,7 +652,6 @@ void sremCommand(client *c) {
         server.dirty += deleted;
     }
     current_element_number = previous_element_number - deleted;
-    /* TO DO: update INFO KEYSIZES  */
     updateSetKeySizeArray(c, previous_element_number, current_element_number);
     addReplyLongLong(c, deleted);
 }
@@ -1005,7 +1003,6 @@ void spopCommand(client *c) {
     /* Pop a random element from the set */
     ele = setTypePopRandom(set);
     current_element_number = setTypeSize(set);
-    /* TO DO: update INFO KEYSIZES  */
     updateSetKeySizeArray(c, previous_element_number, current_element_number);
 
     notifyKeyspaceEvent(NOTIFY_SET, "spop", c->argv[1], c->db->id);

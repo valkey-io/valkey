@@ -6,6 +6,7 @@ typedef struct unitTest {
     unitTestProc *proc;
 } unitTest;
 
+int test_array(int argc, char **argv, int flags);
 int test_popcount(int argc, char **argv, int flags);
 int test_crc64(int argc, char **argv, int flags);
 int test_crc64combine(int argc, char **argv, int flags);
@@ -237,6 +238,7 @@ int test_zmallocInitialUsedMemory(int argc, char **argv, int flags);
 int test_zmallocAllocReallocCallocAndFree(int argc, char **argv, int flags);
 int test_zmallocAllocZeroByteAndFree(int argc, char **argv, int flags);
 
+unitTest __test_array_c[] = {{"test_array", test_array}, {NULL, NULL}};
 unitTest __test_bitops_c[] = {{"test_popcount", test_popcount}, {NULL, NULL}};
 unitTest __test_crc64_c[] = {{"test_crc64", test_crc64}, {NULL, NULL}};
 unitTest __test_crc64combine_c[] = {{"test_crc64combine", test_crc64combine}, {NULL, NULL}};
@@ -262,6 +264,7 @@ struct unitTestSuite {
     char *filename;
     unitTest *tests;
 } unitTestSuite[] = {
+    {"test_array.c", __test_array_c},
     {"test_bitops.c", __test_bitops_c},
     {"test_crc64.c", __test_crc64_c},
     {"test_crc64combine.c", __test_crc64combine_c},

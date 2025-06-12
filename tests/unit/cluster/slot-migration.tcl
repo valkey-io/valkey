@@ -543,8 +543,7 @@ start_cluster 3 3 {tags {external:skip cluster} } {
         R $primary_id_src exists "{3560}key2"
         R $primary_id_src select 2
         R $primary_id_src exists "{3560}no_key"
-        set result [catch {R $primary_id_src exec} err]
-        assert_match "TRYAGAIN Multiple keys request during rehashing of slot" $err
+        assert_error "TRYAGAIN Multiple keys*" {R $primary_id_src exec}
         # Connection must still be on db 0 after aborted MULTI
         assert_equal [R $primary_id_src get "{3560}key1"] "value1_db0"
 

@@ -822,7 +822,7 @@ void sentinelRunPendingScripts(void) {
         sj->flags |= SENTINEL_SCRIPT_RUNNING;
         sj->start_time = mstime();
         sj->retry_num++;
-        pid = fork();
+        pid = valkey_fork();
 
         if (pid == -1) {
             /* Parent (fork error).

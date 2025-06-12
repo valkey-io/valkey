@@ -589,7 +589,8 @@ proc find_valgrind_errors {stderr on_termination} {
 # of seconds to the specified the server instance.
 proc start_write_load {host port seconds} {
     set tclsh [info nameofexecutable]
-    exec $tclsh tests/helpers/gen_write_load.tcl $host $port $seconds $::tls "" &
+    set db [expr {$::singledb ? 0 : 9}]
+    exec $tclsh tests/helpers/gen_write_load.tcl $host $port $seconds $::tls $db "" &
 }
 
 # Execute a background process writing only one key for the specified number
@@ -597,7 +598,8 @@ proc start_write_load {host port seconds} {
 # tests which requires heavy replication stream but no memory load. 
 proc start_one_key_write_load {host port seconds key} {
     set tclsh [info nameofexecutable]
-    exec $tclsh tests/helpers/gen_write_load.tcl $host $port $seconds $::tls $key &
+    set db [expr {$::singledb ? 0 : 9}]
+    exec $tclsh tests/helpers/gen_write_load.tcl $host $port $seconds $::tls $db $key &
 }
 
 # Stop a process generating write load executed with start_write_load.

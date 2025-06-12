@@ -65,7 +65,7 @@ int test_call_generic(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc)
     }
 
     const char* cmdname = ValkeyModule_StringPtrLen(argv[1], NULL);
-    ValkeyModuleCallReply *reply = ValkeyModule_Call(ctx, cmdname, "v", argv+2, argc-2);
+    ValkeyModuleCallReply *reply = ValkeyModule_Call(ctx, cmdname, "v", argv+2, (size_t)argc-2);
     if (reply) {
         ValkeyModule_ReplyWithCallReply(ctx, reply);
         ValkeyModule_FreeCallReply(reply);
@@ -397,7 +397,7 @@ int test_rm_call(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc){
 
     const char* cmd = ValkeyModule_StringPtrLen(argv[1], NULL);
 
-    ValkeyModuleCallReply* rep = ValkeyModule_Call(ctx, cmd, "Ev", argv + 2, argc - 2);
+    ValkeyModuleCallReply* rep = ValkeyModule_Call(ctx, cmd, "Ev", argv + 2, (size_t)argc - 2);
     if(!rep){
         ValkeyModule_ReplyWithError(ctx, "NULL reply returned");
     }else{
@@ -429,7 +429,7 @@ int test_rm_call_flags(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc
     const char* flg = ValkeyModule_StringPtrLen(flags, NULL);
     const char* cmd = ValkeyModule_StringPtrLen(argv[2], NULL);
 
-    ValkeyModuleCallReply* rep = ValkeyModule_Call(ctx, cmd, flg, argv + 3, argc - 3);
+    ValkeyModuleCallReply* rep = ValkeyModule_Call(ctx, cmd, flg, argv + 3, (size_t)argc - 3);
     if(!rep){
         ValkeyModule_ReplyWithError(ctx, "NULL reply returned");
     }else{

@@ -738,7 +738,7 @@ void moduleReleaseTempClient(client *c) {
     c->flag.module = 1;
     c->flag.fake = 1;
     c->user = NULL; /* Root user */
-    c->cmd = c->lastcmd = c->realcmd = c->io_parsed_cmd = NULL;
+    c->cmd = c->lastcmd = c->realcmd = c->parsed_cmd = NULL;
     if (c->bstate && c->bstate->async_rm_call_handle) {
         ValkeyModuleAsyncRMCallPromise *promise = c->bstate->async_rm_call_handle;
         promise->c = NULL; /* Remove the client from the promise so it will no longer be possible to abort it. */
@@ -4981,7 +4981,7 @@ int zsetInitScoreRange(ValkeyModuleKey *key, double min, double max, int minex, 
     } else if (key->value->encoding == OBJ_ENCODING_SKIPLIST) {
         zset *zs = key->value->ptr;
         zskiplist *zsl = zs->zsl;
-        key->u.zset.current = first ? zslNthInRange(zsl, zrs, 0) : zslNthInRange(zsl, zrs, -1);
+        key->u.zset.current = first ? zslNthInRange(zsl, zrs, 0, NULL) : zslNthInRange(zsl, zrs, -1, NULL);
     } else {
         serverPanic("Unsupported zset encoding");
     }
@@ -6551,7 +6551,8 @@ ValkeyModuleCallReply *VM_Call(ValkeyModuleCtx *ctx, const char *cmdname, const 
         /* Duplicate relevant flags in the module client. */
         c->flag.readonly = ctx->client->flag.readonly;
         c->flag.asking = ctx->client->flag.asking;
-        if (getNodeByQuery(c, c->cmd, c->argv, c->argc, NULL, &error_code) != getMyClusterNode()) {
+        c->slot = clusterSlotByCommand(c->cmd, c->argv, c->argc, &c->read_flags);
+        if (getNodeByQuery(c, &error_code) != getMyClusterNode()) {
             sds msg = NULL;
             if (error_code == CLUSTER_REDIR_DOWN_RO_STATE) {
                 if (error_as_call_replies) {
@@ -7716,7 +7717,7 @@ void VM__Assert(const char *estr, const char *file, int line) {
  * command. The call is skipped if the latency is smaller than the configured
  * latency-monitor-threshold. */
 void VM_LatencyAddSample(const char *event, mstime_t latency) {
-    latencyAddSampleIfNeeded(event, latency);
+    latencyAddSampleIfNeeded(event, latency * 1000);
 }
 
 /* --------------------------------------------------------------------------
@@ -10943,9 +10944,9 @@ void moduleCallCommandFilters(client *c) {
     c->argv_len = filter.argv_len;
     c->argc = filter.argc;
     if (tmp != c->argv[0]) {
-        /* With I/O thread command-lookup offload, we set c->io_parsed_cmd to the command corresponding to c->argv[0].
-         * Since the command filter just changed it, we need to reset c->io_parsed_cmd to null. */
-        c->io_parsed_cmd = NULL;
+        /* Reset and lookup the command and cluster slot again. */
+        unprepareCommand(c);
+        prepareCommand(c);
     }
     decrRefCount(tmp);
 }

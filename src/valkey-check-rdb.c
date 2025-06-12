@@ -135,14 +135,25 @@ void rdbCheckError(const char *fmt, ...) {
 
 /* Print information during RDB checking. */
 void rdbCheckInfo(const char *fmt, ...) {
-    char msg[1024];
+    char msg[1024], *msgbuf = msg;
     va_list ap;
+    int msglen;
 
     va_start(ap, fmt);
-    vsnprintf(msg, sizeof(msg), fmt, ap);
+    msglen = vsnprintf(msg, sizeof(msg), fmt, ap);
     va_end(ap);
 
-    printf("[offset %llu] %s\n", (unsigned long long)(rdbstate.rio ? rdbstate.rio->processed_bytes : 0), msg);
+    if (msglen > (int)(sizeof(msg) - 1)) {
+        msgbuf = sdsnewlen(SDS_NOINIT, sizeof(msg) * 2);
+        sdsclear(msgbuf);
+        va_start(ap, fmt);
+        msgbuf = sdscatvprintf(msgbuf, fmt, ap);
+        va_end(ap);
+    }
+
+    printf("[offset %llu] %s\n", (unsigned long long)(rdbstate.rio ? rdbstate.rio->processed_bytes : 0), msgbuf);
+
+    if (msgbuf != msg) sdsfree(msgbuf);
 }
 
 /* Used inside rdb.c in order to log specific errors happening inside

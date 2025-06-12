@@ -9,6 +9,7 @@
         "function": "clientReplyCommand",
         "command_flags": [
             "NOSCRIPT",
+            "NO_MULTI",
             "LOADING",
             "STALE",
             "SENTINEL"

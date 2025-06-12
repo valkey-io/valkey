@@ -1136,7 +1136,7 @@ foreach {pop} {BLPOP BLMPOP_LEFT} {
         wait_for_blocked_clients_count 1
         r swapdb 1 9
         $rd read
-    } {k hello} {singledb:skip}
+    } {k hello} {singledb:skip cluster:skip}
 
     test {SWAPDB wants to wake blocked client, but the key already expired} {
         set repl [attach_to_replication_stream]
@@ -1184,7 +1184,7 @@ foreach {pop} {BLPOP BLMPOP_LEFT} {
         r debug set-active-expire 1
         # Restore server and client state
         r select 9
-    } {OK} {singledb:skip needs:debug}
+    } {OK} {singledb:skip cluster:skip needs:debug}
 
     test {MULTI + LPUSH + EXPIRE + DEBUG SLEEP on blocked client, key already expired} {
         set repl [attach_to_replication_stream]

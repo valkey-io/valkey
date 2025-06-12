@@ -572,7 +572,7 @@ robj *dbUnshareStringValue(serverDb *db, robj *key, robj *o) {
  * The dbnum can be -1 if all the DBs should be emptied, or the specified
  * DB index if we want to empty only a single database.
  * The function returns the number of keys removed from the database(s). */
-long long emptyDbStructure(serverDb *dbarray, int dbnum, int async, void(callback)(hashtable *)) {
+long long emptyDbStructure(serverDb **dbarray, int dbnum, int async, void(callback)(hashtable *)) {
     long long removed = 0;
     int startdb, enddb;
 
@@ -584,16 +584,18 @@ long long emptyDbStructure(serverDb *dbarray, int dbnum, int async, void(callbac
     }
 
     for (int j = startdb; j <= enddb; j++) {
-        removed += kvstoreSize(dbarray[j].keys);
+        if (dbarray[j] == NULL || kvstoreSize(dbarray[j]->keys) == 0) continue;
+
+        removed += kvstoreSize(dbarray[j]->keys);
         if (async) {
-            emptyDbAsync(&dbarray[j]);
+            emptyDbAsync(dbarray[j]);
         } else {
-            kvstoreEmpty(dbarray[j].keys, callback);
-            kvstoreEmpty(dbarray[j].expires, callback);
+            kvstoreEmpty(dbarray[j]->keys, callback);
+            kvstoreEmpty(dbarray[j]->expires, callback);
         }
         /* Because all keys of database are removed, reset average ttl. */
-        dbarray[j].avg_ttl = 0;
-        dbarray[j].expires_cursor = 0;
+        dbarray[j]->avg_ttl = 0;
+        dbarray[j]->expires_cursor = 0;
     }
 
     return removed;
@@ -651,39 +653,35 @@ long long emptyData(int dbnum, int flags, void(callback)(hashtable *)) {
     return removed;
 }
 
-/* Initialize temporary db on replica for use during diskless replication. */
-serverDb *initTempDb(void) {
-    int slot_count_bits = 0;
-    int flags = KVSTORE_ALLOCATE_HASHTABLES_ON_DEMAND;
-    if (server.cluster_enabled) {
-        slot_count_bits = CLUSTER_SLOT_MASK_BITS;
-        flags |= KVSTORE_FREE_EMPTY_HASHTABLES;
-    }
-    serverDb *tempDb = zcalloc(sizeof(serverDb) * server.dbnum);
-    for (int i = 0; i < server.dbnum; i++) {
-        tempDb[i].id = i;
-        tempDb[i].keys = kvstoreCreate(&kvstoreKeysHashtableType, slot_count_bits, flags);
-        tempDb[i].expires = kvstoreCreate(&kvstoreExpiresHashtableType, slot_count_bits, flags);
-    }
-
-    return tempDb;
-}
-
-/* Discard tempDb, it's always async. */
-void discardTempDb(serverDb *tempDb) {
+/* Discard tempDb array. It's always async. */
+void discardTempDb(serverDb **tempDb) {
     /* Release temp DBs. */
     emptyDbStructure(tempDb, -1, 1, NULL);
     for (int i = 0; i < server.dbnum; i++) {
-        kvstoreRelease(tempDb[i].keys);
-        kvstoreRelease(tempDb[i].expires);
-    }
+        if (tempDb[i]) {
+            kvstoreRelease(tempDb[i]->keys);
+            kvstoreRelease(tempDb[i]->expires);
 
+            /* These are expected to be empty on temporary databases */
+            serverAssert(dictSize(tempDb[i]->blocking_keys) == 0);
+            serverAssert(dictSize(tempDb[i]->blocking_keys_unblock_on_nokey) == 0);
+            serverAssert(dictSize(tempDb[i]->ready_keys) == 0);
+            serverAssert(dictSize(tempDb[i]->watched_keys) == 0);
+
+            dictRelease(tempDb[i]->blocking_keys);
+            dictRelease(tempDb[i]->blocking_keys_unblock_on_nokey);
+            dictRelease(tempDb[i]->ready_keys);
+            dictRelease(tempDb[i]->watched_keys);
+            zfree(tempDb[i]);
+            tempDb[i] = NULL;
+        }
+    }
     zfree(tempDb);
 }
 
 int selectDb(client *c, int id) {
     if (id < 0 || id >= server.dbnum) return C_ERR;
-    c->db = &server.db[id];
+    c->db = createDatabaseIfNeeded(id);
     return C_OK;
 }
 
@@ -691,7 +689,8 @@ long long dbTotalServerKeyCount(void) {
     long long total = 0;
     int j;
     for (j = 0; j < server.dbnum; j++) {
-        total += kvstoreSize(server.db[j].keys);
+        if (dbHasNoKeys(j)) continue;
+        total += kvstoreSize(server.db[j]->keys);
     }
     return total;
 }
@@ -722,8 +721,9 @@ void signalFlushedDb(int dbid, int async) {
     }
 
     for (int j = startdb; j <= enddb; j++) {
-        scanDatabaseForDeletedKeys(&server.db[j], NULL);
-        touchAllWatchedKeysInDb(&server.db[j], NULL);
+        if (server.db[j] == NULL) continue;
+        scanDatabaseForDeletedKeys(server.db[j], NULL);
+        touchAllWatchedKeysInDb(server.db[j], NULL);
     }
 
     trackingInvalidateKeysOnFlush(async);
@@ -1640,8 +1640,9 @@ void scanDatabaseForDeletedKeys(serverDb *emptied, serverDb *replaced_with) {
 int dbSwapDatabases(int id1, int id2) {
     if (id1 < 0 || id1 >= server.dbnum || id2 < 0 || id2 >= server.dbnum) return C_ERR;
     if (id1 == id2) return C_OK;
-    serverDb aux = server.db[id1];
-    serverDb *db1 = &server.db[id1], *db2 = &server.db[id2];
+    serverDb *db1 = createDatabaseIfNeeded(id1);
+    serverDb *db2 = createDatabaseIfNeeded(id2);
+    serverDb aux = *db1;
 
     /* Swapdb should make transaction fail if there is any
      * client watching keys */
@@ -1682,10 +1683,13 @@ int dbSwapDatabases(int id1, int id2) {
 /* Logically, this discards (flushes) the old main database, and apply the newly loaded
  * database (temp) as the main (active) database, the actual freeing of old database
  * (which will now be placed in the temp one) is done later. */
-void swapMainDbWithTempDb(serverDb *tempDb) {
+void swapMainDbWithTempDb(serverDb **tempDb) {
     for (int i = 0; i < server.dbnum; i++) {
-        serverDb aux = server.db[i];
-        serverDb *activedb = &server.db[i], *newdb = &tempDb[i];
+        if (tempDb[i] == NULL && server.db[i] == NULL) continue;
+        if (tempDb[i] == NULL) tempDb[i] = createDatabase(i);
+        if (server.db[i] == NULL) server.db[i] = createDatabase(i);
+        serverDb aux = *server.db[i];
+        serverDb *activedb = server.db[i], *newdb = tempDb[i];
 
         /* Swapping databases should make transaction fail if there is any
          * client watching keys. */
@@ -1827,6 +1831,7 @@ void deleteExpiredKeyAndPropagateWithDictIndex(serverDb *db, robj *keyobj, int d
     dbGenericDeleteWithDictIndex(db, keyobj, server.lazyfree_lazy_expire, DB_FLAG_KEY_EXPIRED, dict_index);
     latencyEndMonitor(expire_latency);
     latencyAddSampleIfNeeded("expire-del", expire_latency);
+    latencyTraceIfNeeded(db, expire_del, expire_latency);
     notifyKeyspaceEvent(NOTIFY_EXPIRED, "expired", keyobj, db->id);
     signalModifiedKey(NULL, db, keyobj);
     propagateDeletion(db, keyobj, server.lazyfree_lazy_expire);
@@ -1877,8 +1882,6 @@ void propagateDeletion(serverDb *db, robj *key, int lazy) {
 
     argv[0] = lazy ? shared.unlink : shared.del;
     argv[1] = key;
-    incrRefCount(argv[0]);
-    incrRefCount(argv[1]);
 
     /* If the primary decided to delete a key we must propagate it to replicas no matter what.
      * Even if module executed a command without asking for propagation. */
@@ -1886,9 +1889,6 @@ void propagateDeletion(serverDb *db, robj *key, int lazy) {
     server.replication_allowed = 1;
     alsoPropagate(db->id, argv, 2, PROPAGATE_AOF | PROPAGATE_REPL);
     server.replication_allowed = prev_replication_allowed;
-
-    decrRefCount(argv[0]);
-    decrRefCount(argv[1]);
 }
 
 /* Returns 1 if the expire value is expired, 0 otherwise. */
@@ -2849,13 +2849,4 @@ int bitfieldGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysRes
         keys[0].flags = CMD_KEY_RW | CMD_KEY_ACCESS | CMD_KEY_UPDATE;
     }
     return 1;
-}
-
-bool dbHasNoKeys(void) {
-    for (int i = 0; i < server.dbnum; i++) {
-        if (kvstoreSize(server.db[i].keys) != 0) {
-            return false;
-        }
-    }
-    return true;
 }

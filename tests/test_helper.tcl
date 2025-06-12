@@ -404,8 +404,7 @@ proc read_from_test_client fd {
         lappend ::failed_tests $err
         set ::active_clients_task($fd) "(ERR) $data"
         if {$::exit_on_failure} {
-            puts -nonewline "(Fast fail: test will exit now)"
-            flush stdout
+            puts "(Fast fail: test will exit now)"
             exit 1
         }
         if {$::stop_on_failure} {
@@ -569,8 +568,8 @@ proc send_data_packet {fd status data {elapsed 0}} {
 }
 
 proc print_help_screen {} {
+    #   |-- This is for terminal output, so assume default term width of 80 columns. ---|
     puts [join {
-        # This is for terminal output, so assume default term width of 80 columns. -----|
         "--cluster          Run the cluster tests, by default cluster tests run along"
         "                   with all tests."
         "--moduleapi        Run the module API tests, this option should only be used in"
@@ -621,11 +620,14 @@ proc print_help_screen {} {
         "--baseport <port>  Initial port number for spawned valkey servers."
         "--portcount <num>  Port range for spawned valkey servers."
         "--singledb         Use a single database, avoid SELECT."
-        "--cluster-mode     Run tests in cluster protocol compatible mode."
+        "--cluster-mode     Skip tests that are not compatible with cluster mode."
+        "                   When running tests against an external node in cluster"
+        "                   mode, it needs to be started with cluster-databases 16."
         "--ignore-encoding  Don't validate object encoding."
         "--ignore-digest    Don't use debug digest validations."
         "--large-memory     Run tests using over 100mb."
-        "--debug-defrag     Indicate the test is running against server compiled with DEBUG_FORCE_DEFRAG option"
+        "--debug-defrag     Indicate the test is running against server compiled with"
+        "                   DEBUG_FORCE_DEFRAG option."
         "--help             Print this help screen."
     } "\n"]
 }
@@ -763,7 +765,6 @@ for {set j 0} {$j < [llength $argv]} {incr j} {
         set ::singledb 1
     } elseif {$opt eq {--cluster-mode}} {
         set ::cluster_mode 1
-        set ::singledb 1
     } elseif {$opt eq {--large-memory}} {
         set ::large_memory 1
     } elseif {$opt eq {--ignore-encoding}} {

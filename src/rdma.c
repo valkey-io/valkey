@@ -1520,6 +1520,12 @@ static const char *connRdmaGetType(connection *conn) {
     return CONN_TYPE_RDMA;
 }
 
+static int connRdmaGetTypeId(connection *conn) {
+    UNUSED(conn);
+
+    return CONN_TYPE_ID_RDMA;
+}
+
 static int rdmaServer(char *err, int port, char *bindaddr, int af, rdma_listener *rdma_listener) {
     int ret = ANET_OK, rv, afonly = 1;
     char _port[6]; /* strlen("65535") */
@@ -1814,6 +1820,7 @@ static void updateRdmaState(struct connection *conn) {
 
 static ConnectionType CT_RDMA = {
     /* connection type */
+    .get_type_id = connRdmaGetTypeId,
     .get_type = connRdmaGetType,
 
     /* connection type initialize & finalize & configure */

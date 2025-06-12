@@ -49,7 +49,8 @@ jobs:
         run: make SERVER_CFLAGS=-Werror
       - name: Start valkey-server
         run: |
-          ./src/valkey-server --cluster-enabled yes --daemonize yes --save "" --logfile external-server.log \
+          ./src/valkey-server --cluster-enabled yes --cluster-databases 16 --daemonize yes \
+            --save "" --logfile external-server.log \
             --enable-protected-configs yes --enable-debug-command yes --enable-module-command yes
       - name: Create a single node cluster
         run: ./src/valkey-cli cluster addslots $(for slot in {0..16383}; do echo $slot; done); sleep 5

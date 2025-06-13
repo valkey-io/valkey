@@ -3826,6 +3826,8 @@ void genericZpopCommand(client *c,
     robj *zobj = NULL;
     sds ele;
     double score;
+    long previous_element_number;
+    long current_element_number;
 
     if (deleted) *deleted = 0;
 
@@ -3862,6 +3864,7 @@ void genericZpopCommand(client *c,
 
     long llen = zsetLength(zobj);
     long rangelen = (count > llen) ? llen : count;
+    previous_element_number = llen;
 
     /* Remove the element. */
     do {
@@ -3919,6 +3922,7 @@ void genericZpopCommand(client *c,
         ++result_count;
     } while (--rangelen);
 
+    current_element_number = zsetLength(zobj);
     /* Remove the key, if indeed needed. */
     if (zsetLength(zobj) == 0) {
         if (deleted) *deleted = 1;
@@ -3927,6 +3931,7 @@ void genericZpopCommand(client *c,
         notifyKeyspaceEvent(NOTIFY_GENERIC, "del", key, c->db->id);
     }
     signalModifiedKey(c, c->db, key);
+    updateZsetKeySizeArray(c, previous_element_number, current_element_number);
 
     if (c->cmd->proc == zmpopCommand) {
         /* Always replicate it as ZPOP[MIN|MAX] with COUNT option instead of ZMPOP. */

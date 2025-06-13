@@ -456,7 +456,6 @@ err:
  * 6. Extract the final value.
  * Output: *value = 1234567890
  */
-//ATTRIBUTE_TARGET_AVX512
 valkey_attribute_target("avx512f,avx512bw,avx512vl")
 static int string2llAVX512(const char *s, unsigned long slen, long long *value) {
     const char *p = s;

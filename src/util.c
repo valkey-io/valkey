@@ -457,7 +457,7 @@ err:
  * Output: *value = 1234567890
  */
 valkey_attribute_target("avx512f,avx512bw,avx512vl")
-static int string2llAVX512(const char *s, unsigned long slen, long long *value) {
+static int string2llAVX512(const char *s, size_t slen, long long *value) {
     const char *p = s;
     unsigned long plen = 0;
     int negative = 0;

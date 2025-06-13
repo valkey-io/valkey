@@ -3009,17 +3009,15 @@ static uint32_t writePingExtensions(clusterMsg *hdr, int gossipcount) {
     extensions++;
 
     /* Populate replica_priority */
-    if (myself->replica_priority) {
-        if (cursor != NULL) {
-            clusterMsgPingExtReplicaPriority *ext = preparePingExt(cursor, CLUSTERMSG_EXT_TYPE_REPLICA_PRIORITY, getReplicaPriorityExtSize());
-            ext->replica_priority = myself->replica_priority;
+    if (cursor != NULL) {
+        clusterMsgPingExtReplicaPriority *ext = preparePingExt(cursor, CLUSTERMSG_EXT_TYPE_REPLICA_PRIORITY, getReplicaPriorityExtSize());
+        ext->replica_priority = myself->replica_priority;
 
-            /* Move the write cursor */
-            cursor = getNextPingExt(cursor);
-        }
-        totlen += getReplicaPriorityExtSize();
-        extensions++;
+        /* Move the write cursor */
+        cursor = getNextPingExt(cursor);
     }
+    totlen += getReplicaPriorityExtSize();
+    extensions++;
 
     if (hdr != NULL) {
         hdr->mflags[0] |= CLUSTERMSG_FLAG0_EXT_DATA;
@@ -4772,29 +4770,20 @@ int clusterGetReplicaRank(void) {
 
         /* Replication offset is always the highest priority here, since we want to
          * ensure that the data is as up-to-date as possible. */
-        if (primary->replicas[j]->repl_offset > myoffset) {
-            rank++;
-            continue;
-        } else if (primary->replicas[j]->repl_offset < myoffset) {
-            continue;
-        }
+        if (primary->replicas[j]->repl_offset > myoffset) rank++;
+        if (primary->replicas[j]->repl_offset != myoffset) continue;
 
-        /* Replication offset is the same. */
-
-        /* The smaller the replica-priority, the better the ranking, that is,
+        /* Replication offset is the same.
+         * The smaller the replica-priority, the better the ranking, that is,
          * the smaller the rank and the smaller the delay. */
-        if (primary->replicas[j]->replica_priority < myself->replica_priority) {
-            rank++;
-            continue;
-        }
+        if (primary->replicas[j]->replica_priority < myself->replica_priority) rank++;
+        if (primary->replicas[j]->replica_priority != myself->replica_priority) continue;
 
-        /* If the replication offsets are the same, the one with the lexicographically
+        /* Replica priority is the same.
+         * If the replication offsets are the same, the one with the lexicographically
          * smaller node id will have a lower rank to avoid simultaneous elections
          * of replicas. */
-        if (memcmp(primary->replicas[j]->name, myself->name, CLUSTER_NAMELEN) < 0) {
-            rank++;
-            continue;
-        }
+        if (memcmp(primary->replicas[j]->name, myself->name, CLUSTER_NAMELEN) < 0) rank++;
     }
     return rank;
 }
@@ -5038,7 +5027,7 @@ void clusterHandleReplicaFailover(void) {
         }
         serverLog(LL_NOTICE,
                   "Start of election delayed for %lld milliseconds "
-                  "(rank #%d, primary rank #%d, offset %lld, replica priority: %u).",
+                  "(rank #%d, primary rank #%d, offset %lld, replica priority %u).",
                   server.cluster->failover_auth_time - now, server.cluster->failover_auth_rank,
                   server.cluster->failover_failed_primary_rank, replicationGetReplicaOffset(),
                   myself->replica_priority);

@@ -1013,3 +1013,7 @@ cleanup:
     if (objb) decrRefCount(objb);
     return;
 }
+
+void getWatchCommand(client *c) {
+    getGenericCommand(c);
+}

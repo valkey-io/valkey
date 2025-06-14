@@ -151,7 +151,7 @@ char *type_name[OBJ_TYPE_MAX] = {"string", "list", "set", "zset", "hash", "modul
                                  "stream"};
 
 /********************** Rdb stats **********************/
-void stats_record_count(size_t eleCount, rdbStats *stats) {
+void statsRecordCount(size_t eleCount, rdbStats *stats) {
     if (!stats) return;
 
     stats->elements += eleCount;
@@ -161,7 +161,7 @@ void stats_record_count(size_t eleCount, rdbStats *stats) {
     hdr_record_value(stats->element_count_histogram, (int64_t)eleCount);
 }
 
-void stats_record_element_size(size_t eleSize, size_t count, rdbStats *stats) {
+void statsRecordElementSize(size_t eleSize, size_t count, rdbStats *stats) {
     if (!stats) return;
 
     stats->all_value_size += eleSize * count;
@@ -174,12 +174,12 @@ void stats_record_element_size(size_t eleSize, size_t count, rdbStats *stats) {
     hdr_record_value(stats->element_size_histogram, (int64_t)eleSize);
 }
 
-void stats_record_simple(size_t eleSize, size_t eleCount, rdbStats *stats) {
-    stats_record_count(eleCount, stats);
-    stats_record_element_size(eleSize, eleCount, stats);
+void statsRecordSimple(size_t eleSize, size_t eleCount, rdbStats *stats) {
+    statsRecordCount(eleCount, stats);
+    statsRecordElementSize(eleSize, eleCount, stats);
 }
 
-void stats_record_element_size_add(rdbStats *to, rdbStats *from) {
+void statsRecordElementSizeAdd(rdbStats *to, rdbStats *from) {
     if (!to || !from) return;
 
     to->all_value_size += from->all_value_size;
@@ -258,26 +258,26 @@ void computeDatasetProfile(int dbid, robj *keyobj, robj *o, long long expiretime
 
     /* Save the key and associated value */
     if (o->type == OBJ_STRING) {
-        stats_record_simple(stringObjectLen(o), 1, stats);
+        statsRecordSimple(stringObjectLen(o), 1, stats);
     } else if (o->type == OBJ_LIST) {
         listTypeIterator *li = listTypeInitIterator(o, 0, LIST_TAIL);
         listTypeEntry entry;
         while (listTypeNext(li, &entry)) {
             robj *eleobj = listTypeGet(&entry);
-            stats_record_element_size(stringObjectLen(eleobj), 1, stats);
+            statsRecordElementSize(stringObjectLen(eleobj), 1, stats);
             decrRefCount(eleobj);
         }
         listTypeReleaseIterator(li);
-        stats_record_count(listTypeLength(o), stats);
+        statsRecordCount(listTypeLength(o), stats);
     } else if (o->type == OBJ_SET) {
         setTypeIterator *si = setTypeInitIterator(o);
         sds sdsele;
         while ((sdsele = setTypeNextObject(si)) != NULL) {
-            stats_record_element_size(sdslen(sdsele), 1, stats);
+            statsRecordElementSize(sdslen(sdsele), 1, stats);
             sdsfree(sdsele);
         }
         setTypeReleaseIterator(si);
-        stats_record_count(setTypeSize(o), stats);
+        statsRecordCount(setTypeSize(o), stats);
     } else if (o->type == OBJ_ZSET) {
         if (o->encoding == OBJ_ENCODING_LISTPACK) {
             unsigned char *zl = o->ptr;
@@ -307,10 +307,10 @@ void computeDatasetProfile(int dbid, robj *keyobj, robj *o, long long expiretime
                 const int len = fpconv_dtoa(score, buf);
                 buf[len] = '\0';
                 eleLen += strlen(buf);
-                stats_record_element_size(eleLen, 1, stats);
+                statsRecordElementSize(eleLen, 1, stats);
                 zzlNext(zl, &eptr, &sptr);
             }
-            stats_record_count(lpLength(o->ptr), stats);
+            statsRecordCount(lpLength(o->ptr), stats);
         } else if (o->encoding == OBJ_ENCODING_SKIPLIST) {
             zset *zs = o->ptr;
             hashtableIterator iter;
@@ -324,10 +324,10 @@ void computeDatasetProfile(int dbid, robj *keyobj, robj *o, long long expiretime
                 const int len = fpconv_dtoa(node->score, buf);
                 buf[len] = '\0';
                 eleLen += sdslen(node->ele) + strlen(buf);
-                stats_record_element_size(eleLen, 1, stats);
+                statsRecordElementSize(eleLen, 1, stats);
             }
             hashtableResetIterator(&iter);
-            stats_record_count(hashtableSize(zs->ht), stats);
+            statsRecordCount(hashtableSize(zs->ht), stats);
         } else {
             serverPanic("Unknown sorted set encoding");
         }
@@ -345,10 +345,10 @@ void computeDatasetProfile(int dbid, robj *keyobj, robj *o, long long expiretime
             eleLen += sdslen(sdsele);
             sdsfree(sdsele);
 
-            stats_record_element_size(eleLen, 1, stats);
+            statsRecordElementSize(eleLen, 1, stats);
         }
         hashTypeResetIterator(&hi);
-        stats_record_count(hashTypeLength(o), stats);
+        statsRecordCount(hashTypeLength(o), stats);
     } else if (o->type == OBJ_STREAM) {
         streamIterator si;
         streamIteratorStart(&si, o->ptr, NULL, NULL, 0);
@@ -360,13 +360,13 @@ void computeDatasetProfile(int dbid, robj *keyobj, robj *o, long long expiretime
                 unsigned char *field, *value;
                 int64_t field_len, value_len;
                 streamIteratorGetField(&si, &field, &value, &field_len, &value_len);
-                stats_record_element_size(field_len + value_len, 1, stats);
+                statsRecordElementSize(field_len + value_len, 1, stats);
             }
         }
         streamIteratorStop(&si);
-        stats_record_count(streamLength(o), stats);
+        statsRecordCount(streamLength(o), stats);
     } else if (o->type == OBJ_MODULE) {
-        stats_record_count(1, stats);
+        statsRecordCount(1, stats);
     } else {
         serverPanic("Unknown object type");
     }

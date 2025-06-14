@@ -34,6 +34,36 @@
 
 #include "server.h"
 #include <math.h> /* isnan(), isinf() */
+#include "dict.h"
+
+// Add after other global variables
+// Maps key -> list of subscribed clients
+
+static dict *key_subscribers = NULL;
+
+dictType keyClientDictType = {
+    dictSdsHash,       /* hash function */
+    NULL,              /* key dup */
+    dictSdsKeyCompare, /* key compare */
+    dictSdsDestructor, /* key destructor */
+    NULL,              /* val destructor */
+    NULL               /* allow to expand */
+};
+
+void initKeySubscribers(void) {
+    key_subscribers = dictCreate(&keyClientDictType);
+}
+
+// Add after other cleanup code
+// TODO: Call this function on shutdown
+// TODO: Check if everything is getting cleaned up
+// as expected. esp. the values put in the dict.
+void cleanupKeySubscribers(void) {
+    if (key_subscribers) {
+        dictRelease(key_subscribers);
+        key_subscribers = NULL;
+    }
+}
 
 /* Forward declarations */
 int getGenericCommand(client *c);
@@ -384,10 +414,38 @@ void psetexCommand(client *c) {
     setGenericCommand(c, OBJ_PX | OBJ_ARGV3, c->argv[1], c->argv[3], c->argv[2], UNIT_MILLISECONDS, NULL, NULL, NULL);
 }
 
+
+void subscribeClient(client *c, robj *key) {
+    if (!key_subscribers) {
+        initKeySubscribers();
+    }
+
+    list *subscribers = dictFetchValue(key_subscribers, key->ptr);
+    if (!subscribers) {
+        subscribers = listCreate();
+        dictAdd(key_subscribers, key->ptr, subscribers);
+    }
+
+    listNode *ln;
+    listIter li;
+    listRewind(subscribers, &li);
+    while ((ln = listNext(&li)) != NULL) {
+        if (ln->value == c) break;
+    }
+    if (!ln) {
+        listAddNodeTail(subscribers, c);
+    }
+
+    // TODO: use appropriate logging level
+    // mostly this would be debug level
+    printf("Number of subscribers to key %s: %ld\n", (char *) key->ptr, listLength(subscribers));
+}
+
 int getGenericCommand(client *c) {
     robj *o;
+    robj *key = c->argv[1];
 
-    if ((o = lookupKeyReadOrReply(c, c->argv[1], shared.null[c->resp])) == NULL)
+    if ((o = lookupKeyReadOrReply(c, key, shared.null[c->resp])) == NULL)
         return C_OK;
 
     if (checkType(c, o, OBJ_STRING)) {
@@ -1015,5 +1073,42 @@ cleanup:
 }
 
 void getWatchCommand(client *c) {
-    getGenericCommand(c);
+    int rval = getGenericCommand(c);
+    if (rval != C_OK) {
+        addReply(c, shared.null[c->resp]);
+        return;
+    }
+
+    // If everything is good, i.e. GET command was successful
+    // then we need to subscribe the client to the key
+    // and return the value.
+    robj *key = c->argv[1];
+    subscribeClient(c, key);
+}
+
+void removeClientFromSubscriptions(client *c) {
+    if (!key_subscribers) return;
+
+    dictIterator *di = dictGetIterator(key_subscribers);
+    dictEntry *de;
+
+    while ((de = dictNext(di)) != NULL) {
+        list *subscribers = dictGetVal(de);
+        listNode *ln;
+        listIter li;
+
+        listRewind(subscribers, &li);
+        while ((ln = listNext(&li)) != NULL) {
+            if (ln->value == c) {
+                listDelNode(subscribers, ln);
+                break;
+            }
+        }
+
+        // Remove empty subscriber lists
+        if (listLength(subscribers) == 0) {
+            dictDelete(key_subscribers, dictGetKey(de));
+        }
+    }
+    dictReleaseIterator(di);
 }

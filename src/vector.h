@@ -1,5 +1,5 @@
-#ifndef __ARRAY_H_
-#define __ARRAY_H_
+#ifndef __VECTOR_H_
+#define __VECTOR_H_
 
 #include <stdlib.h>
 #include <stdint.h>

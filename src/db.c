@@ -34,7 +34,7 @@
 #include "functions.h"
 #include "io_threads.h"
 #include "module.h"
-#include "array.h"
+#include "vector.h"
 
 #include <signal.h>
 #include <ctype.h>
@@ -919,11 +919,11 @@ void keysCommand(client *c) {
  * Since it may store keys + values, the
  * buffer size is roughly 10 * 2 = 20.
  * Adding a 20% buffer (20 * 1.2) gives 24. */
-#define MAX_SCAN_ARRAY_BUFFER 24
+#define SCAN_VECTOR_INITIAL_ALLOC 24
 
 /* Data used by the dict scan callback. */
 typedef struct {
-    array *result;  /* elements that collect from dict */
+    vector *result; /* elements that collect from dict */
     robj *o;        /* o must be a hash/set/zset object, NULL means current db */
     serverDb *db;   /* database currently being scanned */
     long long type; /* the particular type when scan the db */
@@ -978,7 +978,7 @@ void keysScanCallback(void *privdata, void *entry) {
     }
 
     /* Keep this key. */
-    sds *item = arrayPush(data->result);
+    sds *item = vectorPush(data->result);
     *item = key;
 }
 
@@ -1032,10 +1032,10 @@ void hashtableScanCallback(void *privdata, void *entry) {
         }
     }
 
-    sds *item = arrayPush(data->result);
+    sds *item = vectorPush(data->result);
     *item = key;
     if (val) {
-        item = arrayPush(data->result);
+        item = vectorPush(data->result);
         *item = val;
     }
 }
@@ -1102,7 +1102,7 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {
     sds typename = NULL;
     long long type = LLONG_MAX;
     int patlen = 0, use_pattern = 0, only_keys = 0;
-    array result;
+    vector result;
 
     /* Object must be NULL (to iterate keys names), or the type of the object
      * must be Set, Sorted Set, or Hash. */
@@ -1191,7 +1191,7 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {
         /* scanning ZSET allocates temporary strings even though it's a dict */
         free_callback = sdsfree;
     }
-    arrayInit(&result, MAX_SCAN_ARRAY_BUFFER, sizeof(sds));
+    vectorInit(&result, SCAN_VECTOR_INITIAL_ALLOC, sizeof(sds));
 
     /* For main hash table scan or scannable data structure. */
     if (!o || ht) {
@@ -1252,7 +1252,7 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {
             if (use_pattern && !stringmatchlen(pat, sdslen(pat), key, len, 0)) {
                 continue;
             }
-            sds *item = arrayPush(&result);
+            sds *item = vectorPush(&result);
             *item = sdsnewlen(key, len);
         }
         setTypeReleaseIterator(si);
@@ -1273,12 +1273,12 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {
                 continue;
             }
             /* add key object */
-            sds *item = arrayPush(&result);
+            sds *item = vectorPush(&result);
             *item = sdsnewlen(str, len);
             /* add value object */
             if (!only_keys) {
                 str = lpGet(p, &len, intbuf);
-                item = arrayPush(&result);
+                item = vectorPush(&result);
                 *item = sdsnewlen(str, len);
             }
             p = lpNext(o->ptr, p);
@@ -1292,16 +1292,16 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {
     addReplyArrayLen(c, 2);
     addReplyBulkLongLong(c, cursor);
 
-    addReplyArrayLen(c, arrayLen(&result));
-    for (uint32_t i = 0; i < arrayLen(&result); i++) {
-        sds *key = arrayGet(&result, i);
+    addReplyArrayLen(c, vectorLen(&result));
+    for (uint32_t i = 0; i < vectorLen(&result); i++) {
+        sds *key = vectorGet(&result, i);
         addReplyBulkCBuffer(c, *key, sdslen(*key));
         if (free_callback) {
             free_callback(*key);
         }
     }
 
-    arrayCleanup(&result);
+    vectorCleanup(&result);
 }
 
 /* The SCAN command completely relies on scanGenericCommand. */

@@ -4,16 +4,16 @@
 #include "zmalloc.h"
 
 /* Usage example:
- *   array arr;
- *   arrayInit(&arr, 10, sizeof(int));  // Initialize for 10 integers
+ *   vector arr;
+ *   vectorInit(&arr, 10, sizeof(int));  // Initialize for 10 integers
  *
- *   int* new_int = arrayPush(&arr);   // Add new element
- *   *new_int = 42;                    // Initialize value
+ *   int* new_int = vectorPush(&arr);    // Add new element
+ *   *new_int = 42;                      // Initialize value
  *
- *   int* val = arrayGet(&arr, 0);     // Access element
- *   printf("%d\n", *val);             // Output: 42
+ *   int* val = vectorGet(&arr, 0);      // Access element
+ *   printf("%d\n", *val);               // Output: 42
  *
- *   arrayCleanup(&arr);               // Release memory
+ *   vectorCleanup(&arr);                // Release memory
  */
 
 /* Initialize a dynamic array (vector). */

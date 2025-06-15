@@ -41,13 +41,16 @@
 
 static dict *key_subscribers = NULL;
 
+// TODO: This might not be the best way to maintain this map
+// as we are copying the SDS string into the dict.
+// We should use the actual key pointer stored in the main memory store.
 dictType keyClientDictType = {
-    dictSdsHash,       /* hash function */
-    NULL,              /* key dup */
-    dictSdsKeyCompare, /* key compare */
-    dictSdsDestructor, /* key destructor */
-    NULL,              /* val destructor */
-    NULL               /* allow to expand */
+    dictSdsHash,          /* hash function */
+    dictSdsDup,           /* key dup */
+    dictSdsKeyCompare,    /* key compare */
+    dictSdsDestructor,    /* key destructor */
+    NULL,                 /* val destructor */
+    NULL                  /* allow to expand */
 };
 
 void initKeySubscribers(void) {
@@ -416,6 +419,9 @@ void psetexCommand(client *c) {
 
 
 void subscribeClient(client *c, robj *key) {
+    // TODO: Create this map of key -> list of clients
+    // during the startup of the server. The creation can be put behind
+    // a flag in the server struct.
     if (!key_subscribers) {
         initKeySubscribers();
     }

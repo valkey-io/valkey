@@ -1543,11 +1543,6 @@ int parseOptions(int argc, char **argv) {
         } else if (!strcmp(argv[i], "--rps")) {
             if (lastarg) goto invalid;
             config.rps = atoi(argv[++i]);
-            // if (config.rps <= 1000) {
-            //     // TODO: remove this check when we support --rps option < 1000.
-            //     fprintf(stderr, "WARNING: --rps option must be >= 1000.\n");
-            //     config.rps = 0;
-            // }
         } else if (!strcmp(argv[i], "-u") && !lastarg) {
             parseUri(argv[++i], "valkey-benchmark", &config.conn_info, &config.tls);
             if (config.conn_info.hostport < 0 || config.conn_info.hostport > 65535) {
@@ -1812,6 +1807,7 @@ usage:
         "                    on the command line.\n"
         " -I                 Idle mode. Just open N idle connections and wait.\n"
         " -x                 Read last argument from STDIN.\n"
+        " --rps <requests>   Limit the total number of requests per second. Default 0 (no limit)\n"
         " --seed <num>       Set the seed for random number generator. Default seed is based on time.\n"
         " --num-functions <num>\n"
         "                    Sets the number of functions present in the Lua lib that is\n"

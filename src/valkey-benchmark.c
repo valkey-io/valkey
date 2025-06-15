@@ -476,13 +476,17 @@ static void setClusterKeyHashTag(client c) {
     }
 }
 
-/* Acquire a token from the token bucket.
+/**
+ * Acquires the specified number of tokens from the token bucket or calculates the wait time if tokens are not available.
+ * This function implements a token bucket rate limiting algorithm to control access to a resource.
  *
- * This function is used to throttle the number of requests per second.
+ * @param tokens The number of tokens to acquire.
+ * @return The delay time in milliseconds that the caller should wait before proceeding, or 0 if tokens are immediately available.
  *
- * The function returns the number of milliseconds that the caller should
- * wait before issuing the next request.
- *
+ * Token Bucket Algorithm Explanation:
+ * - The token bucket algorithm allows a certain number of tokens to be accumulated over time, which can then be used to control the rate of requests.
+ * - Due to the time event only allowing a delay of 1ms, a request for the next 1ms is issued.
+ * 
  * The function is thread-safe. */
 static long long acquireTokenOrWait(int tokens) {
     if (config.num_threads) pthread_mutex_lock(&(config.token_bucket_mutex));
@@ -492,30 +496,28 @@ static long long acquireTokenOrWait(int tokens) {
     long long time_per_burst = config.time_per_burst;
     long long new_time = 0;
 
-    long long now_since_epoch = nstime();
-    long long min_time = now_since_epoch - time_per_burst;
+    long long now_epoch = nstime();
+    // If the last_time is 0, it means this is the first request, so we set it to now_epoch.
     if (last_time == 0) {
-        last_time = now_since_epoch;
+        config.last_time = last_time = now_epoch;
     }
-    if (min_time > last_time) {
+
+    long long next_epoch = now_epoch + 1000000;
+    long long min_time = next_epoch - time_per_burst;
+
+    if (min_time > last_time) { // if the last time is too old, reset it
         new_time = min_time + (time_per_token * tokens);
     } else {
         new_time = last_time + (time_per_token * tokens);
     }
 
     long long delay_time = 0;
-    if (new_time > now_since_epoch) {
-        delay_time = new_time - now_since_epoch;
-
-        // Due to the fact that the minimum time interval for event loops is in the millisecond range,
-        // when the delay is less than 1ms, we don't need to wait, 
-        if (delay_time <= 1000000) {
-            config.last_time = now_since_epoch + delay_time;
-            delay_time = 0;
-        }
+    if (new_time > next_epoch) {    // if the new time is in the next epoch, we need to wait
+        delay_time = new_time - now_epoch;
     } else {
         config.last_time = new_time;
     }
+
     if (config.num_threads) pthread_mutex_unlock(&(config.token_bucket_mutex));
     return delay_time / 1000000;
 }
@@ -1529,11 +1531,11 @@ int parseOptions(int argc, char **argv) {
         } else if (!strcmp(argv[i], "--rps")) {
             if (lastarg) goto invalid;
             config.rps = atoi(argv[++i]);
-            if (config.rps <= 1000) {
-                // TODO: remove this check when we support --rps option < 1000.
-                fprintf(stderr, "WARNING: --rps option must be >= 1000.\n");
-                config.rps = 0;
-            }
+            // if (config.rps <= 1000) {
+            //     // TODO: remove this check when we support --rps option < 1000.
+            //     fprintf(stderr, "WARNING: --rps option must be >= 1000.\n");
+            //     config.rps = 0;
+            // }
         } else if (!strcmp(argv[i], "-u") && !lastarg) {
             parseUri(argv[++i], "valkey-benchmark", &config.conn_info, &config.tls);
             if (config.conn_info.hostport < 0 || config.conn_info.hostport > 65535) {

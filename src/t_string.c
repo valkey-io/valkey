@@ -1092,7 +1092,9 @@ void getWatchCommand(client *c) {
     subscribeClient(c, key);
 }
 
-void removeClientFromSubscriptions(client *c) {
+// TODO: This is not the most efficient way to remove a
+// client from the subscriptions. This can be optimized by a mile.
+void cleanupClientForWatch(client *c) {
     if (!key_subscribers) return;
 
     dictIterator *di = dictGetIterator(key_subscribers);

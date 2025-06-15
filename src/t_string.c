@@ -36,10 +36,15 @@
 #include <math.h> /* isnan(), isinf() */
 #include "dict.h"
 
+// Forward declarations
+void notifyWatchers(robj *key, robj *val);
+void unwatchClientAll(client *c);
+void watchClient(client *c, robj *key);
+
 // Add after other global variables
 // Maps key -> list of subscribed clients
 
-static dict *key_subscribers = NULL;
+static dict *key_watchers = NULL;
 
 // TODO: This might not be the best way to maintain this map
 // as we are copying the SDS string into the dict.
@@ -53,18 +58,18 @@ dictType keyClientDictType = {
     NULL                  /* allow to expand */
 };
 
-void initKeySubscribers(void) {
-    key_subscribers = dictCreate(&keyClientDictType);
+void initKeyWatchers(void) {
+    key_watchers = dictCreate(&keyClientDictType);
 }
 
 // Add after other cleanup code
 // TODO: Call this function on shutdown
 // TODO: Check if everything is getting cleaned up
 // as expected. esp. the values put in the dict.
-void cleanupKeySubscribers(void) {
-    if (key_subscribers) {
-        dictRelease(key_subscribers);
-        key_subscribers = NULL;
+void cleanupKeyWatchers(void) {
+    if (key_watchers) {
+        dictRelease(key_watchers);
+        key_watchers = NULL;
     }
 }
 
@@ -229,6 +234,11 @@ void setGenericCommand(client *c,
         }
         replaceClientCommandVector(c, argc, argv);
     }
+
+    // Notify the clients that are watching the key
+    // Change this to command i.e. client should be watching a command
+    // for now key is okay.
+    notifyWatchers(key, val);
 
 cleanup:
     commitDeferredReplyBuffer(c, 1);
@@ -418,33 +428,33 @@ void psetexCommand(client *c) {
 }
 
 
-void subscribeClient(client *c, robj *key) {
+void watchClient(client *c, robj *key) {
     // TODO: Create this map of key -> list of clients
     // during the startup of the server. The creation can be put behind
     // a flag in the server struct.
-    if (!key_subscribers) {
-        initKeySubscribers();
+    if (!key_watchers) {
+        initKeyWatchers();
     }
 
-    list *subscribers = dictFetchValue(key_subscribers, key->ptr);
-    if (!subscribers) {
-        subscribers = listCreate();
-        dictAdd(key_subscribers, key->ptr, subscribers);
+    list *watchers = dictFetchValue(key_watchers, key->ptr);
+    if (!watchers) {
+        watchers = listCreate();
+        dictAdd(key_watchers, key->ptr, watchers);
     }
 
     listNode *ln;
     listIter li;
-    listRewind(subscribers, &li);
+    listRewind(watchers, &li);
     while ((ln = listNext(&li)) != NULL) {
         if (ln->value == c) break;
     }
     if (!ln) {
-        listAddNodeTail(subscribers, c);
+        listAddNodeTail(watchers, c);
     }
 
     // TODO: use appropriate logging level
     // mostly this would be debug level
-    printf("Number of subscribers to key %s: %ld\n", (char *) key->ptr, listLength(subscribers));
+    printf("Number of watchers to key %s: %ld\n", (char *) key->ptr, listLength(watchers));
 }
 
 int getGenericCommand(client *c) {
@@ -1089,15 +1099,15 @@ void getWatchCommand(client *c) {
     // then we need to subscribe the client to the key
     // and return the value.
     robj *key = c->argv[1];
-    subscribeClient(c, key);
+    watchClient(c, key);
 }
 
 // TODO: This is not the most efficient way to remove a
 // client from the subscriptions. This can be optimized by a mile.
-void cleanupClientForWatch(client *c) {
-    if (!key_subscribers) return;
+void unwatchClientAll(client *c) {
+    if (!key_watchers) return;
 
-    dictIterator *di = dictGetIterator(key_subscribers);
+    dictIterator *di = dictGetIterator(key_watchers);
     dictEntry *de;
     list *keys_to_delete = listCreate();
 
@@ -1126,7 +1136,26 @@ void cleanupClientForWatch(client *c) {
     listIter li;
     listRewind(keys_to_delete, &li);
     while ((ln = listNext(&li)) != NULL) {
-        dictDelete(key_subscribers, ln->value);
+        dictDelete(key_watchers, ln->value);
     }
     listRelease(keys_to_delete);
+}
+
+void notifyWatchers(robj *key, robj *val) {
+    if (!key_watchers) return;
+
+    // from key_watchers get value for key key
+    dictEntry *de = dictFind(key_watchers, key);
+    if (!de) return;
+
+    // get the list of clients that are subscribed to the key
+    list *subscribers = dictGetVal(de);
+    listNode *ln;
+    listIter li;
+    listRewind(subscribers, &li);
+    while ((ln = listNext(&li)) != NULL) {
+        client *c = ln->value;
+        printf("Notifying client %ld about key %s and value %s\n", c->id, (char *)key->ptr, (char *)val->ptr);
+        addReply(c, val);
+    }
 }

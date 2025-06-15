@@ -3944,6 +3944,6 @@ int iAmPrimary(void);
 #define STRINGIFY_(x) #x
 #define STRINGIFY(x) STRINGIFY_(x)
 
-void cleanupClientForWatch(client *c);
+void unwatchClientAll(client *c);
 
 #endif

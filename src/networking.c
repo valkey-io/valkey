@@ -1818,7 +1818,7 @@ void freeClient(client *c) {
     if (c->conn) server.stat_clients_type_memory[c->last_memory_type] -= c->last_memory_usage;
 
     /* Cleanup all things related to watch when a client disconnects */
-    cleanupClientForWatch(c);
+    unwatchClientAll(c);
 
     /* Unlink the client: this will close the socket, remove the I/O
      * handlers, and remove references of the client from different

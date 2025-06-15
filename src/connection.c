@@ -31,22 +31,18 @@ static ConnectionType *connTypes[CONN_TYPE_MAX];
 
 int connTypeRegister(ConnectionType *ct) {
     int type_id = ct->get_type_id(NULL);
-    ConnectionType *tmpct;
-    int type;
-
-    /* find an empty slot to store the new connection type */
-    for (type = 0; type < CONN_TYPE_MAX; type++) {
-        tmpct = connTypes[type];
-        if (!tmpct) break;
-
-        if (tmpct->get_type_id(NULL) == type_id) {
-            serverLog(LL_WARNING, "Connection type %s already registered", getConnectionTypeName(type_id));
-            return C_ERR;
-        }
+    if (type_id <= 0 || type_id >= CONN_TYPE_MAX) {
+        serverLog(LL_WARNING, "Invalid connection type id %d", type_id);
+        return C_ERR;
     }
 
-    serverLog(LL_VERBOSE, "Connection type %s registered", getConnectionTypeName(type_id));
-    connTypes[type] = ct;
+    if (connTypes[type_id]) {
+        serverLog(LL_WARNING, "Connection type %s already registered", getConnectionTypeName(type_id));
+        return C_ERR;
+    }
+
+    serverLog(LL_VERBOSE, "Connection type %s registering", getConnectionTypeName(type_id));
+    connTypes[type_id] = ct;
 
     if (ct->init) {
         ct->init();
@@ -72,18 +68,18 @@ int connTypeInitialize(void) {
 }
 
 ConnectionType *connectionByType(int type_id) {
-    ConnectionType *ct;
-
-    for (int type = 0; type < CONN_TYPE_MAX; type++) {
-        ct = connTypes[type];
-        if (!ct) break;
-
-        if (ct->get_type_id(NULL) == type_id) return ct;
+    if (type_id <= 0 || type_id >= CONN_TYPE_MAX) {
+        serverLog(LL_WARNING, "Invalid connection type id %d", type_id);
+        return NULL;
     }
 
-    serverLog(LL_WARNING, "Missing implement of connection type %s", getConnectionTypeName(type_id));
+    ConnectionType *ct = connTypes[type_id];
 
-    return NULL;
+    if (!ct) {
+        serverLog(LL_WARNING, "Missing implement of connection type %s", getConnectionTypeName(type_id));
+        return NULL;
+    }
+    return ct;
 }
 
 /* Cache TCP connection type, query it by string once */
@@ -124,18 +120,8 @@ ConnectionType *connectionTypeUnix(void) {
 }
 
 int connectionIndexByType(int type_id) {
-    ConnectionType *ct;
-
-    for (int type = 0; type < CONN_TYPE_MAX; type++) {
-        ct = connTypes[type];
-        if (!ct) break;
-
-        if (ct->get_type_id(NULL) == type_id) {
-            return type;
-        }
-    }
-
-    return -1;
+    if (!connTypes[type_id]) return -1;
+    return type_id;
 }
 
 void connTypeCleanupAll(void) {
@@ -144,7 +130,7 @@ void connTypeCleanupAll(void) {
 
     for (type = 0; type < CONN_TYPE_MAX; type++) {
         ct = connTypes[type];
-        if (!ct) break;
+        if (!ct) continue;
 
         if (ct->cleanup) ct->cleanup();
     }

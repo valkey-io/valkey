@@ -141,8 +141,8 @@ static struct config {
     int resp3; /* use RESP3 */
     int rps;
     atomic_uint_fast64_t last_time_ns;
-    long long time_per_token;
-    long long time_per_burst;
+    uint64_t time_per_token;
+    uint64_t time_per_burst;
 } config;
 
 typedef struct _client {
@@ -489,11 +489,11 @@ static void setClusterKeyHashTag(client c) {
  * The function is thread-safe. */
 static long long acquireTokenOrWait(int tokens) {
 
-    long long time_per_token = config.time_per_token;
-    long long time_per_burst = config.time_per_burst;
-    long long new_time = 0, delay_time;
-    long long now_epoch, next_epoch, min_time;
-    long long last_time_ns, old_last_time_ns;
+    uint64_t time_per_token = config.time_per_token;
+    uint64_t time_per_burst = config.time_per_burst;
+    uint64_t new_time = 0;
+    uint64_t now_epoch, next_epoch, min_time, delay_time;
+    uint64_t last_time_ns, old_last_time_ns;
 
     while (1) {
         old_last_time_ns = atomic_load_explicit(&config.last_time_ns, memory_order_relaxed);

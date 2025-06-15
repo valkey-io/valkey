@@ -140,7 +140,7 @@ static struct config {
     pthread_mutex_t is_updating_slots_mutex;
     int resp3; /* use RESP3 */
     int rps;
-    _Atomic long last_time_ns;
+    atomic_uint_fast64_t last_time_ns;
     long long time_per_token;
     long long time_per_burst;
 } config;

@@ -1099,6 +1099,7 @@ void cleanupClientForWatch(client *c) {
 
     dictIterator *di = dictGetIterator(key_subscribers);
     dictEntry *de;
+    list *keys_to_delete = listCreate();
 
     while ((de = dictNext(di)) != NULL) {
         list *subscribers = dictGetVal(de);
@@ -1113,10 +1114,19 @@ void cleanupClientForWatch(client *c) {
             }
         }
 
-        // Remove empty subscriber lists
+        // Collect keys with empty subscriber lists
         if (listLength(subscribers) == 0) {
-            dictDelete(key_subscribers, dictGetKey(de));
+            listAddNodeTail(keys_to_delete, dictGetKey(de));
         }
     }
     dictReleaseIterator(di);
+
+    // Delete collected keys after iteration is complete
+    listNode *ln;
+    listIter li;
+    listRewind(keys_to_delete, &li);
+    while ((ln = listNext(&li)) != NULL) {
+        dictDelete(key_subscribers, ln->value);
+    }
+    listRelease(keys_to_delete);
 }

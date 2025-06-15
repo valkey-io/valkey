@@ -140,8 +140,7 @@ static struct config {
     pthread_mutex_t is_updating_slots_mutex;
     int resp3; /* use RESP3 */
     int rps;
-    pthread_mutex_t token_bucket_mutex;
-    long long last_time;
+    _Atomic long last_time_ns;
     long long time_per_token;
     long long time_per_burst;
 } config;
@@ -489,36 +488,49 @@ static void setClusterKeyHashTag(client c) {
  * 
  * The function is thread-safe. */
 static long long acquireTokenOrWait(int tokens) {
-    if (config.num_threads) pthread_mutex_lock(&(config.token_bucket_mutex));
 
-    long long last_time = config.last_time;
     long long time_per_token = config.time_per_token;
     long long time_per_burst = config.time_per_burst;
-    long long new_time = 0;
+    long long new_time = 0, delay_time;
+    long long now_epoch, next_epoch, min_time;
+    long long last_time_ns, old_last_time_ns;
 
-    long long now_epoch = nstime();
-    // If the last_time is 0, it means this is the first request, so we set it to now_epoch.
-    if (last_time == 0) {
-        config.last_time = last_time = now_epoch;
+    while (1) {
+        old_last_time_ns = atomic_load_explicit(&config.last_time_ns, memory_order_relaxed);
+        last_time_ns = old_last_time_ns;
+        now_epoch = nstime();
+
+        // If the last_time_ns is 0, it means this is the first request, so we set it to now_epoch.
+        if (last_time_ns == 0) {
+            last_time_ns = now_epoch;
+        }
+
+        next_epoch = now_epoch + 1000000;
+        min_time = next_epoch - time_per_burst;
+    
+        if (min_time > last_time_ns) { // if the last time is too old, reset it
+            new_time = min_time + (time_per_token * tokens);
+        } else {
+            new_time = last_time_ns + (time_per_token * tokens);
+        }
+
+        delay_time = 0;
+        if (new_time > next_epoch) {    // if the new time is in the next epoch, we need to wait
+            delay_time = new_time - now_epoch;
+        } else {
+            last_time_ns = new_time;
+        }
+
+        if (atomic_compare_exchange_weak_explicit(
+                &config.last_time_ns,
+                &old_last_time_ns,
+                last_time_ns,
+                memory_order_release,
+                memory_order_relaxed)) {
+            break;
+        }
     }
 
-    long long next_epoch = now_epoch + 1000000;
-    long long min_time = next_epoch - time_per_burst;
-
-    if (min_time > last_time) { // if the last time is too old, reset it
-        new_time = min_time + (time_per_token * tokens);
-    } else {
-        new_time = last_time + (time_per_token * tokens);
-    }
-
-    long long delay_time = 0;
-    if (new_time > next_epoch) {    // if the new time is in the next epoch, we need to wait
-        delay_time = new_time - now_epoch;
-    } else {
-        config.last_time = new_time;
-    }
-
-    if (config.num_threads) pthread_mutex_unlock(&(config.token_bucket_mutex));
     return delay_time / 1000000;
 }
 
@@ -1150,7 +1162,7 @@ static void benchmarkSequence(const char *title, char *cmd, int len, int seqlen)
     if (config.rps > 0) {
         config.time_per_token = 1000000000 / config.rps;
         config.time_per_burst = config.time_per_token * config.rps;
-        config.last_time = 0;
+        config.last_time_ns = 0;
     }
 
     int thread_id = config.num_threads > 0 ? 0 : -1;

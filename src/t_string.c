@@ -1144,15 +1144,12 @@ void unwatchClientAll(client *c) {
 void notifyWatchers(robj *key, robj *val) {
     if (!key_watchers) return;
 
-    // from key_watchers get value for key key
-    dictEntry *de = dictFind(key_watchers, key);
-    if (!de) return;
+    list *watchers = dictFetchValue(key_watchers, key->ptr);
+    if (!watchers) return;
 
-    // get the list of clients that are subscribed to the key
-    list *subscribers = dictGetVal(de);
     listNode *ln;
     listIter li;
-    listRewind(subscribers, &li);
+    listRewind(watchers, &li);
     while ((ln = listNext(&li)) != NULL) {
         client *c = ln->value;
         printf("Notifying client %ld about key %s and value %s\n", c->id, (char *)key->ptr, (char *)val->ptr);

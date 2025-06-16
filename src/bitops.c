@@ -52,14 +52,15 @@ static const unsigned char bitsinbyte[256] = {
     6, 7, 3, 4, 4, 5, 4, 5, 5, 6, 4, 5, 5, 6, 5, 6, 6, 7, 4, 5, 5, 6, 5, 6, 6, 7, 5, 6, 6, 7, 6, 7, 7, 8};
 
 #if HAVE_X86_SIMD
+#define AVX512_CHUNK_SIZE 64
 valkey_attribute_target("avx512f,avx512bw,avx512vpopcntdq")
 long long popcountAVX512(void *s, long count) {
-    const size_t chunks = count / 64;
+    const size_t chunks = count / AVX512_CHUNK_SIZE;
     uint8_t *ptr = (uint8_t *)s;
     const uint8_t *end = ptr + count;
 
     __m512i accumulator = _mm512_setzero_si512();
-    for (size_t i = 0; i < chunks; i++, ptr += 64) {
+    for (size_t i = 0; i < chunks; i++, ptr += AVX512_CHUNK_SIZE) {
         const __m512i v = _mm512_loadu_si512((const __m512i *)ptr);
         const __m512i p = _mm512_popcnt_epi64(v);
         accumulator = _mm512_add_epi64(accumulator, p);
@@ -267,9 +268,7 @@ long long serverPopcount(void *s, long count) {
     __builtin_cpu_init();
     if (__builtin_cpu_supports("avx512f") && __builtin_cpu_supports("avx512bw") && __builtin_cpu_supports("avx512vpopcntdq")) {
         return popcountAVX512(s, count);
-    }
-    
-    if (__builtin_cpu_supports("avx2")) {
+    } else if (__builtin_cpu_supports("avx2")) {
         return popcountAVX2(s, count);
     }
 #endif

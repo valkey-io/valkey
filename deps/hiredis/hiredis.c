@@ -53,6 +53,7 @@ static redisContextFuncs redisContextDefaultFuncs = {
     .async_read = redisAsyncRead,
     .async_write = redisAsyncWrite,
     .read = redisNetRead,
+    // .read_watch = redisNetReadWatch,
     .write = redisNetWrite
 };
 
@@ -717,10 +718,10 @@ static redisContext *redisContextInit(void) {
 
     c->obuf = hi_sdsempty();
     c->reader = redisReaderCreate();
+    c->reader_watch = redisReaderCreate();
     c->fd = REDIS_INVALID_FD;
-    c->fd_watch = REDIS_INVALID_FD;
 
-    if (c->obuf == NULL || c->reader == NULL) {
+    if (c->obuf == NULL || c->reader == NULL || c->reader_watch == NULL) {
         redisFree(c);
         return NULL;
     }
@@ -738,6 +739,7 @@ void redisFree(redisContext *c) {
 
     hi_sdsfree(c->obuf);
     redisReaderFree(c->reader);
+    redisReaderFree(c->reader_watch);
     hi_free(c->tcp.host);
     hi_free(c->tcp.source_addr);
     hi_free(c->unix_sock.path);
@@ -755,6 +757,8 @@ void redisFree(redisContext *c) {
     hi_free(c);
 }
 
+// TODO: Check if we should change something to accomodate
+// fd_watch changes.
 redisFD redisFreeKeepFd(redisContext *c) {
     redisFD fd = c->fd;
     c->fd = REDIS_INVALID_FD;
@@ -777,11 +781,13 @@ int redisReconnect(redisContext *c, redisContext *c2) {
 
     hi_sdsfree(c->obuf);
     redisReaderFree(c->reader);
+    redisReaderFree(c->reader_watch);
 
     c->obuf = hi_sdsempty();
     c->reader = redisReaderCreate();
+    c->reader_watch = redisReaderCreate();
 
-    if (c->obuf == NULL || c->reader == NULL) {
+    if (c->obuf == NULL || c->reader == NULL || c->reader_watch == NULL) {
         __redisSetError(c, REDIS_ERR_OOM, "Out of memory");
         return REDIS_ERR;
     }
@@ -860,6 +866,7 @@ redisContext *redisConnectWithOptions(const redisOptions *options) {
         redisContextConnectUnix(c, options->endpoint.unix_socket,
                                 options->connect_timeout);
     } else if (options->type == REDIS_CONN_USERFD) {
+        // TODO: Do this when you are adding support for WATCH for Unix Sockets
         c->fd = options->endpoint.fd;
         c->flags |= REDIS_CONNECTED;
     } else {
@@ -979,6 +986,7 @@ redisPushFn *redisSetPushCallback(redisContext *c, redisPushFn *fn) {
 int redisBufferRead(redisContext *c) {
     char buf[1024*16];
     int nread;
+    // int nread_watch = 0;
 
     /* Return early when the context has seen an error. */
     if (c->err)
@@ -992,6 +1000,12 @@ int redisBufferRead(redisContext *c) {
         __redisSetError(c, c->reader->err, c->reader->errstr);
         return REDIS_ERR;
     }
+
+    // nread_watch = c->funcs->read_watch(c, buf, sizeof(buf));
+    // if (nread_watch > 0 && redisReaderFeed(c->reader_watch, buf, nread_watch) != REDIS_OK) {
+    //     __redisSetError(c, c->reader_watch->err, c->reader_watch->errstr);
+    //     return REDIS_ERR;
+    // }
     return REDIS_OK;
 }
 
@@ -1050,7 +1064,16 @@ int redisGetReplyFromReader(redisContext *c, void **reply) {
         __redisSetError(c,c->reader->err,c->reader->errstr);
         return REDIS_ERR;
     }
+    return REDIS_OK;
+}
 
+/* Get a reply from our watch reader or set an error in the context. */
+int redisGetReplyFromReaderWatch(redisContext *c, void **reply) {
+    // fd_watch
+    if (redisReaderGetReply(c->reader_watch, reply) == REDIS_ERR) {
+        __redisSetError(c,c->reader_watch->err,c->reader_watch->errstr);
+        return REDIS_ERR;
+    }
     return REDIS_OK;
 }
 

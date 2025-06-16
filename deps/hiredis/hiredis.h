@@ -249,6 +249,7 @@ typedef struct redisContextFuncs {
      * these functions shall return a value < 0.  In the event of a
      * recoverable error, they should return 0. */
     ssize_t (*read)(struct redisContext *, char *, size_t);
+    ssize_t (*read_watch)(struct redisContext *, char *, size_t);
     ssize_t (*write)(struct redisContext *);
 } redisContextFuncs;
 
@@ -260,10 +261,10 @@ typedef struct redisContext {
     int err; /* Error flags, 0 when there is no error */
     char errstr[128]; /* String representation of error when applicable */
     redisFD fd;
-    redisFD fd_watch;
     int flags;
     char *obuf; /* Write buffer */
     redisReader *reader; /* Protocol reader */
+    redisReader *reader_watch; /* Protocol reader for watch mode */
 
     enum redisConnectionType connection_type;
     struct timeval *connect_timeout;

@@ -39,6 +39,7 @@ typedef struct redisAeEvents {
     redisAsyncContext *context;
     aeEventLoop *loop;
     int fd;
+    // int fd_watch;
     int reading, writing;
 } redisAeEvents;
 
@@ -62,6 +63,7 @@ static void redisAeAddRead(void *privdata) {
     if (!e->reading) {
         e->reading = 1;
         aeCreateFileEvent(loop,e->fd,AE_READABLE,redisAeReadEvent,e);
+        // aeCreateFileEvent(loop,e->fd_watch,AE_READABLE,redisAeReadEvent,e);
     }
 }
 
@@ -71,6 +73,7 @@ static void redisAeDelRead(void *privdata) {
     if (e->reading) {
         e->reading = 0;
         aeDeleteFileEvent(loop,e->fd,AE_READABLE);
+        // aeDeleteFileEvent(loop,e->fd_watch,AE_READABLE);
     }
 }
 
@@ -115,6 +118,7 @@ static int redisAeAttach(aeEventLoop *loop, redisAsyncContext *ac) {
     e->context = ac;
     e->loop = loop;
     e->fd = c->fd;
+    // e->fd_watch = c->fd_watch;
     e->reading = e->writing = 0;
 
     /* Register functions to start/stop listening for events */
@@ -124,6 +128,10 @@ static int redisAeAttach(aeEventLoop *loop, redisAsyncContext *ac) {
     ac->ev.delWrite = redisAeDelWrite;
     ac->ev.cleanup = redisAeCleanup;
     ac->ev.data = e;
+
+    /* Nothing should be attached when something is already attached */
+    if (ac->ev.data != NULL)
+        return REDIS_ERR;
 
     return REDIS_OK;
 }

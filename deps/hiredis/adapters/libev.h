@@ -182,6 +182,7 @@ static int redisLibevAttach(EV_P_ redisAsyncContext *ac) {
     /* Initialize read/write events */
     ev_io_init(&e->rev,redisLibevReadEvent,c->fd,EV_READ);
     ev_io_init(&e->wev,redisLibevWriteEvent,c->fd,EV_WRITE);
+    // ev_io_init(&e->rev,redisLibevReadEvent,c->fd_watch,EV_READ);
     return REDIS_OK;
 }
 

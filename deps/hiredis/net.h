@@ -39,6 +39,7 @@
 
 void redisNetClose(redisContext *c);
 ssize_t redisNetRead(redisContext *c, char *buf, size_t bufcap);
+// ssize_t redisNetReadWatch(redisContext *c, char *buf, size_t bufcap);
 ssize_t redisNetWrite(redisContext *c);
 
 int redisCheckSocketError(redisContext *c);

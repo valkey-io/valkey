@@ -209,6 +209,7 @@ static int createClusterManagerCommand(char *cmdname, int argc, char **argv);
 
 
 static redisContext *context;
+static redisContext *context_watch;
 static struct config {
     cliConnInfo conn_info;
     struct timeval connect_timeout;
@@ -222,6 +223,7 @@ static struct config {
     int shutdown;
     int monitor_mode;
     int pubsub_mode;
+    int watch_mode;             /* watch mode for key changes */
     int pubsub_unsharded_count; /* channels and patterns */
     int pubsub_sharded_count;   /* shard channels */
     int blocking_state_aborted; /* used to abort monitor_mode and pubsub_mode. */
@@ -337,6 +339,7 @@ static void cliRefreshPrompt(void) {
     if (config.in_multi) prompt = sdscatlen(prompt, "(TX)", 4);
 
     if (config.pubsub_mode) prompt = sdscatfmt(prompt, "(subscribed mode)");
+    if (config.watch_mode) prompt = sdscatfmt(prompt, "(watch mode)");
 
     /* Copy the prompt in the static buffer. */
     prompt = sdscatlen(prompt, "> ", 2);
@@ -1618,6 +1621,7 @@ static void resetConfig(void) {
     config.dbnum = 0;
     config.in_multi = 0;
     config.pubsub_mode = 0;
+    config.watch_mode = 0;
 }
 
 /* Connect to the server. It is possible to pass certain flags to the function:
@@ -1636,6 +1640,7 @@ static int cliConnect(int flags) {
         /* Do not use hostsocket when we got redirected in cluster mode */
         if (config.hostsocket == NULL || (config.cluster_mode && config.cluster_reissue_command)) {
             context = redisConnectWrapper(config.conn_info.hostip, config.conn_info.hostport, config.connect_timeout, 0);
+            context_watch = redisConnectWrapper(config.conn_info.hostip, config.conn_info.hostport, config.connect_timeout, 0);
         } else {
             // TODO: Do what we did with redisConnectWrapper
             context = redisConnectUnixWrapper(config.hostsocket, config.connect_timeout, 0);
@@ -2170,6 +2175,7 @@ static int cliReadReply(int output_raw_strings) {
             config.blocking_state_aborted = 0;
             config.monitor_mode = 0;
             config.pubsub_mode = 0;
+            config.watch_mode = 0;
             return cliConnect(CC_FORCE);
         }
 
@@ -2263,6 +2269,17 @@ static void handlePubSubMode(redisReply *reply) {
     }
 }
 
+/* Helper method to handle watch mode. */
+static void handleWatchMode(redisReply *reply) {
+    if (config.watch_mode) {
+        config.watch_mode = 0;
+        cliRefreshPrompt();
+    } else {
+        config.watch_mode = 1;
+        cliRefreshPrompt();
+    }
+}
+
 /* Simultaneously wait for pubsub messages from the server and input on stdin. */
 static void cliWaitForMessagesOrStdin(void) {
     int show_info = config.output != OUTPUT_RAW && (isatty(STDOUT_FILENO) || getenv("FAKETTY"));
@@ -2335,6 +2352,75 @@ static void cliWaitForMessagesOrStdin(void) {
     cliRestoreTTY();
 }
 
+static void cliWaitForWatch(void) {
+    int show_info = config.output != OUTPUT_RAW && (isatty(STDOUT_FILENO) || getenv("FAKETTY"));
+    int use_color = show_info && isColorTerm();
+    cliPressAnyKeyTTY();
+    while (config.watch_mode) {
+        /* First check if there are any buffered replies. */
+        redisReply *reply;
+        do {
+            if (redisGetReplyFromReader(context_watch, (void **)&reply) != REDIS_OK) {
+                cliPrintContextError();
+                exit(1);
+            }
+            if (reply) {
+                sds out = cliFormatReply(reply, config.output, 0);
+                fwrite(out, sdslen(out), 1, stdout);
+                fflush(stdout);
+
+                handleWatchMode(reply);
+
+                sdsfree(out);
+                freeReplyObject(reply);
+            }
+        } while (reply);
+
+        /* Wait for input, either on the server socket or on stdin. */
+        struct timeval tv;
+        fd_set readfds;
+        FD_ZERO(&readfds);
+        FD_SET(context_watch->fd, &readfds);
+        FD_SET(STDIN_FILENO, &readfds);
+        tv.tv_sec = 5;
+        tv.tv_usec = 0;
+        if (show_info) {
+            if (use_color) printf("\033[1;90m"); /* Bold, bright color. */
+            printf("Reading watch messages... (press Ctrl-C to quit or any key to type command)\r");
+            if (use_color) printf("\033[0m"); /* Reset color. */
+            fflush(stdout);
+        }
+        select(context_watch->fd + 1, &readfds, NULL, NULL, &tv);
+        if (show_info) {
+            printf("\033[K"); /* Erase current line */
+            fflush(stdout);
+        }
+        if (config.blocking_state_aborted) {
+            /* Ctrl-C pressed */
+            config.blocking_state_aborted = 0;
+            config.pubsub_mode = 0;
+            printf("Closing current connection. Ready to reconnect to Valkey server... \n");
+            fflush(stdout);
+            if (cliConnect(CC_FORCE) != REDIS_OK) {
+                cliPrintContextError();
+                exit(1);
+            }
+            break;
+        } else if (FD_ISSET(context_watch->fd, &readfds)) {
+            /* Message from the server */
+            if (cliReadReply(0) != REDIS_OK) {
+                cliPrintContextError();
+                exit(1);
+            }
+            fflush(stdout);
+        } else if (FD_ISSET(STDIN_FILENO, &readfds)) {
+            /* Any key pressed */
+            break;
+        }
+    }
+    cliRestoreTTY();
+}
+
 static int cliSendCommand(int argc, char **argv, long repeat) {
     char *command = argv[0];
     size_t *argvlen;
@@ -2371,6 +2457,9 @@ static int cliSendCommand(int argc, char **argv, long repeat) {
     int is_unsubscribe = (!strcasecmp(command, "unsubscribe") || !strcasecmp(command, "punsubscribe") ||
                           !strcasecmp(command, "sunsubscribe"));
     if (!strcasecmp(command, "sync") || !strcasecmp(command, "psync")) config.replica_mode = 1;
+    // TODO: Change this logic to cover all the watch commands.
+    // case ignore compare the suffix to .watch
+    if (!strcasecmp(command, "get.watch")) config.watch_mode = 1;
 
     /* When the user manually calls SCRIPT DEBUG, setup the activation of
      * debugging mode on the next eval if needed. */
@@ -3393,6 +3482,11 @@ static void repl(void) {
 
         if (config.pubsub_mode) {
             cliWaitForMessagesOrStdin();
+        }
+
+        printf("watch_mode: %d\n", config.watch_mode);
+        if (config.watch_mode) {
+            cliWaitForWatch();
         }
 
         /* linenoise() returns malloc-ed lines like readline() */
@@ -9388,9 +9482,11 @@ unsigned long compute_something_fast(void) {
 static void sigIntHandler(int s) {
     UNUSED(s);
 
-    if (config.monitor_mode || config.pubsub_mode) {
+    if (config.monitor_mode || config.pubsub_mode || config.watch_mode) {
         close(context->fd);
+        close(context_watch->fd);
         context->fd = REDIS_INVALID_FD;
+        context_watch->fd = REDIS_INVALID_FD;
         config.blocking_state_aborted = 1;
     } else {
         exit(1);
@@ -9543,6 +9639,7 @@ int main(int argc, char **argv) {
     config.shutdown = 0;
     config.monitor_mode = 0;
     config.pubsub_mode = 0;
+    config.watch_mode = 0;
     config.pubsub_unsharded_count = 0;
     config.pubsub_sharded_count = 0;
     config.blocking_state_aborted = 0;

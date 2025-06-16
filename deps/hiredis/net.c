@@ -57,6 +57,11 @@ void redisNetClose(redisContext *c) {
         close(c->fd);
         c->fd = REDIS_INVALID_FD;
     }
+
+    // if (c && c->fd_watch != REDIS_INVALID_FD) {
+    //     close(c->fd_watch);
+    //     c->fd_watch = REDIS_INVALID_FD;
+    // }
 }
 
 ssize_t redisNetRead(redisContext *c, char *buf, size_t bufcap) {
@@ -116,6 +121,7 @@ static int redisSetReuseAddr(redisContext *c) {
         redisNetClose(c);
         return REDIS_ERR;
     }
+    // TODO: Right now not setting reuse addr for fd_watch. But evaluate.
     return REDIS_OK;
 }
 
@@ -171,6 +177,9 @@ static int redisSetBlocking(redisContext *c, int blocking) {
 int redisKeepAlive(redisContext *c, int interval) {
     int val = 1;
     redisFD fd = c->fd;
+
+    // TODO: WE might need to do something here as fd for fd_watch here.
+    // redisFD fd_watch = c->fd_watch;
 
 #ifndef _WIN32
     if (setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, &val, sizeof(val)) == -1){
@@ -274,6 +283,8 @@ static int redisContextTimeoutMsec(redisContext *c, long *result)
 static int redisContextWaitReady(redisContext *c, long msec) {
     struct pollfd   wfd[1];
 
+    // TODO: Check if we need to do something here for fd_watch.
+
     wfd[0].fd     = c->fd;
     wfd[0].events = POLLOUT;
 
@@ -338,6 +349,42 @@ int redisCheckConnectDone(redisContext *c, int *completed) {
     default:
         return REDIS_ERR;
     }
+
+
+    // printf("Connecting to fd_watch %d\n", c->fd_watch);
+    // rc = connect(c->fd_watch, (const struct sockaddr *)c->saddr, c->addrlen);
+    // if (rc == 0) {
+    //     *completed = 1;
+    //     return REDIS_OK;
+    // }
+    // error = errno;
+    // if (error == EINPROGRESS) {
+    //     /* must check error to see if connect failed.  Get the socket error */
+    //     int fail, so_error;
+    //     socklen_t optlen = sizeof(so_error);
+    //     fail = getsockopt(c->fd_watch, SOL_SOCKET, SO_ERROR, &so_error, &optlen);
+    //     if (fail == 0) {
+    //         if (so_error == 0) {
+    //             /* Socket is connected! */
+    //             *completed = 1;
+    //             return REDIS_OK;
+    //         }
+    //         /* connection error; */
+    //         errno = so_error;
+    //         error = so_error;
+    //     }
+    // }
+    // switch (error) {
+    // case EISCONN:
+    //     *completed = 1;
+    //     return REDIS_OK;
+    // case EALREADY:
+    // case EWOULDBLOCK:
+    //     *completed = 0;
+    //     return REDIS_OK;
+    // default:
+    //     return REDIS_ERR;
+    // }
 }
 
 int redisCheckSocketError(redisContext *c) {
@@ -359,12 +406,17 @@ int redisCheckSocketError(redisContext *c) {
         return REDIS_ERR;
     }
 
+    // TODO: Check if we need to do something here for fd_watch.
+
     return REDIS_OK;
 }
 
 int redisContextSetTimeout(redisContext *c, const struct timeval tv) {
     const void *to_ptr = &tv;
     size_t to_sz = sizeof(tv);
+
+    // TODO: Check if we need to do something here for fd_watch.
+    // AS we need not have timeout for watch, this could be skipped, but confirm.
 
     if (redisContextUpdateCommandTimeout(c, &tv) != REDIS_OK) {
         __redisSetError(c, REDIS_ERR_OOM, "Out of memory");
@@ -606,7 +658,7 @@ int redisContextConnectBindTcp(redisContext *c, redisContext *c2, const char *ad
                                const char *source_addr) {
     int v = _redisContextConnectTcp(c, addr, port, timeout, source_addr);
     _redisContextConnectTcp(c2, addr, port, timeout, source_addr);
-    c->fd_watch = c2->fd_watch;
+    // c->fd_watch = c2->fd;
     return v;
 }
 

@@ -151,8 +151,23 @@ tags {"benchmark network external:skip logreqres:skip"} {
             assert_match  {100} [scan [regexp -inline {keys\=([\d]*)} [r info keyspace]] keys=%d]
         }
 
-        test {benchmark: multiple placeholder occurences have same value} {
-            set cmd [valkeybenchmark $master_host $master_port "-r 100 -n 1000 -- set rain__rand_int__ rain__rand_int__"]
+        test {benchmark: multiple occurences of first placeholder have different values} {
+            set cmd [valkeybenchmark $master_host $master_port "-r 100 -n 100 --sequential -- set rain__rand_int__ rain__rand_int__"]
+            common_bench_setup $cmd
+            assert_match  {*calls=100,*} [cmdstat set]
+            
+            # Each command takes two sequential values, so keys count by twos
+            assert_match  {50} [scan [regexp -inline {keys\=([\d]*)} [r info keyspace]] keys=%d]
+
+            # randomly check some keys
+            for {set i 0} {$i < 10} {incr i} {
+                set key [r randomkey]
+                assert {$key ne [r get $key]}
+            }
+        }
+
+        test {benchmark: besides first placeholder, multiple placeholder occurences have same value} {
+            set cmd [valkeybenchmark $master_host $master_port "-r 100 -n 1000 -- set rain__rand_1st__ rain__rand_1st__"]
             common_bench_setup $cmd
             assert_match  {*calls=1000,*} [cmdstat set]
 

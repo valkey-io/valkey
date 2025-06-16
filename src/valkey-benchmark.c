@@ -425,8 +425,18 @@ void initPlaceholders(const char *cmd, size_t cmd_len) {
     return;
 }
 
-static void replacePlaceholder(const size_t *indices, const size_t count, char *cmd, uint64_t key) {
+static void replacePlaceholder(const size_t *indices, const size_t count, char *cmd, _Atomic uint64_t *key_counter) {
     if (count == 0) return;
+
+    uint64_t key = 0;
+    if (config.keyspacelen != 0) {
+        if (config.sequential_replacement) {
+            key = atomic_fetch_add_explicit(key_counter, 1, memory_order_relaxed);
+        } else {
+            key = random();
+        }
+        key %= config.keyspacelen;
+    }
 
     /* convert key to string at first location */
     char *p = cmd + indices[0] + KEY_PLACEHOLDER_LEN - 1;
@@ -449,20 +459,20 @@ static void replacePlaceholders(char *cmd_data, int cmd_count) {
     for (int cmd_index = 0; cmd_index < cmd_count; cmd_index++) {
         char *cmd = cmd_data + cmd_index * placeholders.cmd_len;
 
-        for (size_t placeholder = 0; placeholder < PLACEHOLDER_COUNT; placeholder++) {
-            size_t count = placeholders.count[placeholder];
-            if (count == 0) continue;
+        /* for __rand_int__, multiple instances will have different values */
+        size_t *indices = placeholders.indices[0];
+        _Atomic uint64_t *key_counter = &seq_key[0];
+        for (size_t i = 0; i < placeholders.count[0]; i++) {
+            replacePlaceholder(indices + i, 1, cmd, key_counter);
+        }
 
-            uint64_t key = 0;
-            if (config.keyspacelen != 0) {
-                if (config.sequential_replacement) {
-                    key = atomic_fetch_add_explicit(&seq_key[placeholder], 1, memory_order_relaxed);
-                } else {
-                    key = random();
-                }
-                key %= config.keyspacelen;
-            }
-            replacePlaceholder(placeholders.indices[placeholder], count, cmd, key);
+        /* For other placeholders, multiple occurences within the command will
+         * have the same value */
+        for (size_t placeholder = 1; placeholder < PLACEHOLDER_COUNT; placeholder++) {
+            size_t *indices = placeholders.indices[placeholder];
+            size_t count = placeholders.count[placeholder];
+            _Atomic uint64_t *key_counter = &seq_key[placeholder];
+            replacePlaceholder(indices, count, cmd, key_counter);
         }
     }
 }
@@ -1782,9 +1792,10 @@ usage:
         "a number N to repeat the command N times. In command arguments, the following\n"
         "placeholders are substituted:\n\n"
         " __rand_int__       Replaced with a zero-padded random integer in the range\n"
-        "                    selected using the -r option. Multiple occurences will have\n"
-        "                    the same value. __rand_1st__ through __rand_9th__ are also\n"
-        "                    available if unique values are needed.\n"
+        "                    selected using the -r option. Multiple occurences within the\n"
+        "                    command will have different values.\n"
+        "__rand_1st__        Like __rand_int__ but multiple occurences will have the same\n"
+        "                    value. __rand_2nd__ through __rand_9th__ are also available.\n"
         " __data__           Replaced with data of the size specified by the -d option.\n"
         " {tag}              Replaced with a tag that routes the command to each node in\n"
         "                    a cluster. Include this in key names when running in cluster\n"

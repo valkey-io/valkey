@@ -475,20 +475,19 @@ static void setClusterKeyHashTag(client c) {
     }
 }
 
-/**
- * Acquires the specified number of tokens from the token bucket or calculates the wait time if tokens are not available.
+/* Acquires the specified number of tokens from the token bucket or calculates the wait time if tokens are not available.
  * This function implements a token bucket rate limiting algorithm to control access to a resource.
  *
- * @param tokens The number of tokens to acquire.
- * @return The delay time in milliseconds that the caller should wait before proceeding, or 0 if tokens are immediately available.
+ * The tokens parameter is the number of tokens to acquire.
+ *
+ * Returns the delay time in milliseconds that the caller should wait before proceeding, or 0 if tokens are immediately available.
  *
  * Token Bucket Algorithm Explanation:
  * - The token bucket algorithm allows a certain number of tokens to be accumulated over time, which can then be used to control the rate of requests.
  * - Due to the time event only allowing a delay of 1ms, a request for the next 1ms is issued.
- * 
+ *
  * The function is thread-safe. */
 static long long acquireTokenOrWait(int tokens) {
-
     uint64_t time_per_token = config.time_per_token;
     uint64_t time_per_burst = config.time_per_burst;
     uint64_t new_time = 0;
@@ -507,7 +506,7 @@ static long long acquireTokenOrWait(int tokens) {
 
         next_epoch = now_epoch + 1000000;
         min_time = next_epoch - time_per_burst;
-    
+
         if (min_time > last_time_ns) { // if the last time is too old, reset it
             new_time = min_time + (time_per_token * tokens);
         } else {
@@ -515,7 +514,7 @@ static long long acquireTokenOrWait(int tokens) {
         }
 
         delay_time = 0;
-        if (new_time > next_epoch) {    // if the new time is in the next epoch, we need to wait
+        if (new_time > next_epoch) { // if the new time is in the next epoch, we need to wait
             delay_time = new_time - now_epoch;
         } else {
             last_time_ns = new_time;
@@ -698,7 +697,7 @@ static long long awakenPausedClient(struct aeEventLoop *eventLoop, long long id,
         writeHandler(eventLoop, c->context->fd, c, AE_WRITABLE);
         listDelNode(paused_clients, ln);
     }
-    
+
     // If there are no more paused clients, remove the event.
     if (delay == 0) {
         return AE_NOMORE;

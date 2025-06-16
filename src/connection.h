@@ -40,7 +40,7 @@
 #include "ae.h"
 
 #define CONN_INFO_LEN 32
-#define CONN_ADDR_STR_LEN 128 /* Similar to INET6_ADDRSTRLEN, hoping to handle other protocols. */
+#define CONN_ADDR_STR_LEN 128 /* Similar to NET_ADDR_STR_LEN, hoping to handle other protocols. */
 
 #define NET_HOST_STR_LEN 256                          /* Longest valid hostname */
 #define NET_IP_STR_LEN 46                             /* INET6_ADDRSTRLEN is 46, but we need to be sure */

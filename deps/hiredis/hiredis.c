@@ -718,6 +718,7 @@ static redisContext *redisContextInit(void) {
     c->obuf = hi_sdsempty();
     c->reader = redisReaderCreate();
     c->fd = REDIS_INVALID_FD;
+    c->fd_watch = REDIS_INVALID_FD;
 
     if (c->obuf == NULL || c->reader == NULL) {
         redisFree(c);
@@ -761,7 +762,7 @@ redisFD redisFreeKeepFd(redisContext *c) {
     return fd;
 }
 
-int redisReconnect(redisContext *c) {
+int redisReconnect(redisContext *c, redisContext *c2) {
     c->err = 0;
     memset(c->errstr, '\0', strlen(c->errstr));
 
@@ -787,7 +788,7 @@ int redisReconnect(redisContext *c) {
 
     int ret = REDIS_ERR;
     if (c->connection_type == REDIS_CONN_TCP) {
-        ret = redisContextConnectBindTcp(c, c->tcp.host, c->tcp.port,
+        ret = redisContextConnectBindTcp(c, c2, c->tcp.host, c->tcp.port,
                c->connect_timeout, c->tcp.source_addr);
     } else if (c->connection_type == REDIS_CONN_UNIX) {
         ret = redisContextConnectUnix(c, c->unix_sock.path, c->connect_timeout);
@@ -810,6 +811,12 @@ redisContext *redisConnectWithOptions(const redisOptions *options) {
     if (c == NULL) {
         return NULL;
     }
+
+    redisContext *c2 = redisContextInit();
+    if (c2 == NULL) {
+        return NULL;
+    }
+
     if (!(options->options & REDIS_OPT_NONBLOCK)) {
         c->flags |= REDIS_BLOCK;
     }
@@ -828,7 +835,6 @@ redisContext *redisConnectWithOptions(const redisOptions *options) {
     if (options->options & REDIS_OPT_PREFER_IPV6) {
         c->flags |= REDIS_PREFER_IPV6;
     }
-
     /* Set any user supplied RESP3 PUSH handler or use freeReplyObject
      * as a default unless specifically flagged that we don't want one. */
     if (options->push_cb != NULL)
@@ -846,10 +852,11 @@ redisContext *redisConnectWithOptions(const redisOptions *options) {
     }
 
     if (options->type == REDIS_CONN_TCP) {
-        redisContextConnectBindTcp(c, options->endpoint.tcp.ip,
+        redisContextConnectBindTcp(c, c2, options->endpoint.tcp.ip,
                                    options->endpoint.tcp.port, options->connect_timeout,
                                    options->endpoint.tcp.source_addr);
     } else if (options->type == REDIS_CONN_UNIX) {
+        // TODO: Do this when you are adding support for WATCH for Unix Sockets
         redisContextConnectUnix(c, options->endpoint.unix_socket,
                                 options->connect_timeout);
     } else if (options->type == REDIS_CONN_USERFD) {
@@ -865,7 +872,6 @@ redisContext *redisConnectWithOptions(const redisOptions *options) {
     {
         redisContextSetTimeout(c, *options->command_timeout);
     }
-
     return c;
 }
 

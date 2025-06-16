@@ -260,6 +260,7 @@ typedef struct redisContext {
     int err; /* Error flags, 0 when there is no error */
     char errstr[128]; /* String representation of error when applicable */
     redisFD fd;
+    redisFD fd_watch;
     int flags;
     char *obuf; /* Write buffer */
     redisReader *reader; /* Protocol reader */
@@ -317,7 +318,7 @@ redisContext *redisConnectFd(redisFD fd);
  *
  * Returns REDIS_OK on successful connect or REDIS_ERR otherwise.
  */
-int redisReconnect(redisContext *c);
+int redisReconnect(redisContext *c, redisContext *c2);
 
 redisPushFn *redisSetPushCallback(redisContext *c, redisPushFn *fn);
 int redisSetTimeout(redisContext *c, const struct timeval tv);

@@ -598,10 +598,16 @@ int redisContextConnectTcp(redisContext *c, const char *addr, int port,
     return _redisContextConnectTcp(c, addr, port, timeout, NULL);
 }
 
-int redisContextConnectBindTcp(redisContext *c, const char *addr, int port,
+// TODO: PAssing c2 is a hack so that I need not change the _redisContextConnectTcp
+// This needs be removed once we get WATCH working.
+// TODO: Check how Redis PubSub is setup with connection
+int redisContextConnectBindTcp(redisContext *c, redisContext *c2, const char *addr, int port,
                                const struct timeval *timeout,
                                const char *source_addr) {
-    return _redisContextConnectTcp(c, addr, port, timeout, source_addr);
+    int v = _redisContextConnectTcp(c, addr, port, timeout, source_addr);
+    _redisContextConnectTcp(c2, addr, port, timeout, source_addr);
+    c->fd_watch = c2->fd_watch;
+    return v;
 }
 
 int redisContextConnectUnix(redisContext *c, const char *path, const struct timeval *timeout) {

@@ -1637,6 +1637,7 @@ static int cliConnect(int flags) {
         if (config.hostsocket == NULL || (config.cluster_mode && config.cluster_reissue_command)) {
             context = redisConnectWrapper(config.conn_info.hostip, config.conn_info.hostport, config.connect_timeout, 0);
         } else {
+            // TODO: Do what we did with redisConnectWrapper
             context = redisConnectUnixWrapper(config.hostsocket, config.connect_timeout, 0);
         }
 

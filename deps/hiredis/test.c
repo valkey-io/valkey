@@ -251,8 +251,8 @@ static redisContext *do_connect(struct config config) {
     return select_database(c);
 }
 
-static void do_reconnect(redisContext *c, struct config config) {
-    redisReconnect(c);
+static void do_reconnect(redisContext *c, redisContext *c2, struct config config) {
+    redisReconnect(c, c2);
 
     if (config.type == CONN_SSL) {
         do_ssl_handshake(c);
@@ -1277,7 +1277,9 @@ static void test_blocking_connection_timeouts(struct config config) {
     }
 
     test("Reconnect properly reconnects after a timeout: ");
-    do_reconnect(c, config);
+    // TODO: Fix - we are passing the same redis context twice.
+    // This is a hack to get WATCH running.
+    do_reconnect(c, c, config);
     reply = redisCommand(c, "PING");
     test_cond(reply != NULL && reply->type == REDIS_REPLY_STATUS && strcmp(reply->str, "PONG") == 0);
     freeReplyObject(reply);
@@ -1285,7 +1287,9 @@ static void test_blocking_connection_timeouts(struct config config) {
     test("Reconnect properly uses owned parameters: ");
     config.tcp.host = "foo";
     config.unix_sock.path = "foo";
-    do_reconnect(c, config);
+    // TODO: Fix - we are passing the same redis context twice.
+    // This is a hack to get WATCH running.
+    do_reconnect(c, c, config);
     reply = redisCommand(c, "PING");
     test_cond(reply != NULL && reply->type == REDIS_REPLY_STATUS && strcmp(reply->str, "PONG") == 0);
     freeReplyObject(reply);

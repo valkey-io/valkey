@@ -3307,6 +3307,7 @@ void updateStringKeySizeArray(client *c, long previous, long curr);
 void updateListKeySizeArray(client *c, long previous, long curr);
 void updateZsetKeySizeArray(client *c, long previous, long curr);
 void updateSetKeySizeArray(client *c, long previous, long curr);
+void updateKeySizeArray(client *c, robj *key);
 
 #define RESTART_SERVER_NONE 0
 #define RESTART_SERVER_GRACEFULLY (1 << 0)     /* Do proper shutdown. */

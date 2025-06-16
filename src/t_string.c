@@ -100,8 +100,6 @@ void setGenericCommand(client *c,
     long long milliseconds = 0; /* initialized to avoid any harmness warning */
     int found = 0;
     int setkey_flags = 0;
-    long previous_str_len;
-    long curr_str_len;
 
     if (expire && getExpireMillisecondsOrReply(c, expire, flags, unit, &milliseconds) != C_OK) {
         return;
@@ -155,19 +153,16 @@ void setGenericCommand(client *c,
     setkey_flags |= ((flags & OBJ_KEEPTTL) || expire) ? SETKEY_KEEPTTL : 0;
     setkey_flags |= found ? SETKEY_ALREADY_EXIST : SETKEY_DOESNT_EXIST;
     if (found) {
-        // previous_str_len = stringObjectLen(existing_value);
-        previous_str_len = 0;
+        updateKeySizeArray(c, key);
     } else {
-        previous_str_len = 0;
         c->db->strings_number_of_elements++;
     }
 
 
     setKey(c, c->db, key, &val, setkey_flags);
     if (expire) val = setExpire(c, c->db, key, milliseconds);
-    // curr_str_len = stringObjectLen(val);
-    curr_str_len = 0;
-    updateStringKeySizeArray(c, previous_str_len, curr_str_len);
+
+    updateStringKeySizeArray(c, 0, stringObjectLen(val));
 
     /* By setting the reallocated value back into argv, we can avoid duplicating
      * a large string value when adding it to the db. */
@@ -400,8 +395,10 @@ void psetexCommand(client *c) {
 /* DELIFEQ key value */
 void delifeqCommand(client *c) {
     robj *o;
+    long previous_str_len;
     if ((o = lookupKeyWriteOrReply(c, c->argv[1], shared.czero)) == NULL || checkType(c, o, OBJ_STRING)) return;
 
+    previous_str_len = stringObjectLen(o);
     if (compareStringObjects(o, c->argv[2]) != 0) {
         addReply(c, shared.czero);
         return;
@@ -409,6 +406,7 @@ void delifeqCommand(client *c) {
 
     serverAssert(dbSyncDelete(c->db, c->argv[1]));
 
+    updateStringKeySizeArray(c, previous_str_len, 0);
     /* Propagate as DEL command */
     rewriteClientCommandVector(c, 2, shared.del, c->argv[1]);
     signalModifiedKey(c, c->db, c->argv[1]);
@@ -706,10 +704,12 @@ void msetGenericCommand(client *c, int nx) {
 
     int setkey_flags = nx ? SETKEY_DOESNT_EXIST : 0;
     for (j = 1; j < c->argc; j += 2) {
+        updateKeySizeArray(c, c->argv[j]);
         robj *val = tryObjectEncoding(c->argv[j + 1]);
         setKey(c, c->db, c->argv[j], &val, setkey_flags);
         incrRefCount(val);
         c->argv[j + 1] = val;
+        updateStringKeySizeArray(c, 0, stringObjectLen(val));
         notifyKeyspaceEvent(NOTIFY_STRING, "set", c->argv[j], c->db->id);
         /* In MSETNX, It could be that we're overriding the same key, we can't be sure it doesn't exist. */
         if (nx)
@@ -730,6 +730,8 @@ void msetnxCommand(client *c) {
 void incrDecrCommand(client *c, long long incr) {
     long long value, oldvalue;
     robj *o, *new;
+    long previous_str_len;
+    long curr_str_len;
 
     o = lookupKeyWrite(c->db, c->argv[1]);
     if (checkType(c, o, OBJ_STRING)) return;
@@ -743,6 +745,14 @@ void incrDecrCommand(client *c, long long incr) {
     }
     value += incr;
 
+
+    if (o) {
+        previous_str_len = stringObjectLen(o);
+    } else {
+        previous_str_len = 0;
+    }
+
+
     if (o && o->refcount == 1 && o->encoding == OBJ_ENCODING_INT &&
         value >= LONG_MIN && value <= LONG_MAX) {
         new = o;
@@ -755,6 +765,8 @@ void incrDecrCommand(client *c, long long incr) {
             dbAdd(c->db, c->argv[1], &new);
         }
     }
+    curr_str_len = stringObjectLen(new);
+    updateStringKeySizeArray(c, previous_str_len, curr_str_len);
     signalModifiedKey(c, c->db, c->argv[1]);
     notifyKeyspaceEvent(NOTIFY_STRING, "incrby", c->argv[1], c->db->id);
     server.dirty++;
@@ -791,6 +803,8 @@ void decrbyCommand(client *c) {
 void incrbyfloatCommand(client *c) {
     long double incr, value;
     robj *o, *new;
+    long previous_str_len;
+    long curr_str_len;
 
     o = lookupKeyWrite(c->db, c->argv[1]);
     if (checkType(c, o, OBJ_STRING)) return;
@@ -804,10 +818,15 @@ void incrbyfloatCommand(client *c) {
         return;
     }
     new = createStringObjectFromLongDouble(value, 1);
-    if (o)
+    if (o) {
+        previous_str_len = stringObjectLen(o);
         dbReplaceValue(c->db, c->argv[1], &new);
-    else
+    } else {
+        previous_str_len = 0;
         dbAdd(c->db, c->argv[1], &new);
+    }
+    curr_str_len = stringObjectLen(new);
+    updateStringKeySizeArray(c, previous_str_len, curr_str_len);
     signalModifiedKey(c, c->db, c->argv[1]);
     notifyKeyspaceEvent(NOTIFY_STRING, "incrbyfloat", c->argv[1], c->db->id);
     server.dirty++;

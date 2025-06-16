@@ -1277,29 +1277,6 @@ int qsortCompareSetsByRevCardinality(const void *s1, const void *s2) {
     return 0;
 }
 
-void updateKeySizeArray(client *c, robj *dstkey) {
-    robj *t_obj = lookupKeyWrite(c->db, dstkey);
-    if (t_obj) {
-        if (t_obj->type == OBJ_STRING) {
-            updateStringKeySizeArray(c, stringObjectLen(t_obj), 0);
-            c->db->strings_number_of_elements--;
-        } else if (t_obj->type == OBJ_LIST) {
-            updateListKeySizeArray(c, listTypeLength(t_obj), 0);
-            c->db->lists_number_of_elements--;
-        } else if (t_obj->type == OBJ_SET) {
-            updateSetKeySizeArray(c, setTypeSize(t_obj), 0);
-            c->db->sets_number_of_elements--;
-        } else if (t_obj->type == OBJ_ZSET) {
-            updateZsetKeySizeArray(c, zsetLength(t_obj), 0);
-            c->db->zsets_number_of_elements--;
-        } else if (t_obj->type == OBJ_HASH) {
-            updateHashKeySizeArray(c, hashTypeLength(t_obj), 0);
-            c->db->hashes_number_of_elements--;
-        } else if (t_obj->type == OBJ_STREAM) {
-        }
-    }
-}
-
 /* SINTER / SMEMBERS / SINTERSTORE / SINTERCARD
  *
  * 'cardinality_only' work for SINTERCARD, only return the cardinality

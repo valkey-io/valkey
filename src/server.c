@@ -999,6 +999,29 @@ void updateZsetKeySizeArray(client *c, long previous, long curr) {
     }
 }
 
+void updateKeySizeArray(client *c, robj *dstkey) {
+    robj *t_obj = lookupKeyWrite(c->db, dstkey);
+    if (t_obj) {
+        if (t_obj->type == OBJ_STRING) {
+            updateStringKeySizeArray(c, stringObjectLen(t_obj), 0);
+            c->db->strings_number_of_elements--;
+        } else if (t_obj->type == OBJ_LIST) {
+            updateListKeySizeArray(c, listTypeLength(t_obj), 0);
+            c->db->lists_number_of_elements--;
+        } else if (t_obj->type == OBJ_SET) {
+            updateSetKeySizeArray(c, setTypeSize(t_obj), 0);
+            c->db->sets_number_of_elements--;
+        } else if (t_obj->type == OBJ_ZSET) {
+            updateZsetKeySizeArray(c, zsetLength(t_obj), 0);
+            c->db->zsets_number_of_elements--;
+        } else if (t_obj->type == OBJ_HASH) {
+            updateHashKeySizeArray(c, hashTypeLength(t_obj), 0);
+            c->db->hashes_number_of_elements--;
+        } else if (t_obj->type == OBJ_STREAM) {
+        }
+    }
+}
+
 /* Return the mean of all the samples. */
 long long getInstantaneousMetric(int metric) {
     int j;

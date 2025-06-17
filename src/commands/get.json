@@ -9,7 +9,7 @@
         "command_flags": [
             "READONLY",
             "FAST",
-	        "CAN_BE_OFFLOADED"
+            "CAN_BE_OFFLOADED"
         ],
         "acl_categories": [
             "STRING"

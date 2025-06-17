@@ -6,6 +6,7 @@
 struct client;
 struct connection;
 struct serverObject;
+struct serverCommand;
 
 typedef enum {
     R_READ = 0,
@@ -29,12 +30,13 @@ void drainIOThreadsQueue(void);
 void trySendPollJobToIOThreads(void);
 int trySendAcceptToIOThreads(struct connection *conn);
 int trySendProcessCommandToIOThreads(struct client *c);
+int canCommandBeOffloaded(struct serverCommand *cmd);
 int processIOThreadsResponses(void);
-void threadAddDelayedJob(int slot, job_handler handler, size_t len, void *data);
+void threadAdddeferredJob(int slot, job_handler handler, size_t len, void *data);
 void threadRespond(struct client *c, jobResponseType r);
 int clientIOInProgress(struct client *c);
 int postponeClientCommand(struct client *c);
-int isServerCronDelayed(void);
+int isServerCronDeferred(void);
 void ioThreadsOnUnlinkClient(struct client *c);
 void pollIOThreadStats(void);
 int isCommandOffloadingRunning(void);

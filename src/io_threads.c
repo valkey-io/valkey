@@ -68,7 +68,7 @@ static IoToMTQueue *IoToMTQueueCreate(size_t capacity) {
  *   1 - If the value was successfully added to the queue
  *   0 - If the queue was full and the value couldn't be added
  */
-static int IoToMTQueueProduce(uint64_t value, uint64_t counter) {
+static int IoToMTQueueProduce(uintptr_t value, uintptr_t counter) {
     IoToMTQueue *q = io_to_mt_queue;
     int first_try = counter == 0;
     /* Get the next producer slot if no slot is given */
@@ -136,7 +136,7 @@ static int IoToMTQueueConsumeBatch(int max_items, uint64_t *values) {
 
     /* If we consumed any items, update the producer limit */
     if (consumed_count > 0) {
-        /* Release so that the threads see the NULL assingments */
+        /* Release so that the threads see the NULL assignments */
         atomic_store_explicit(&q->producer_limit, q->producer_limit + consumed_count, memory_order_release);
         /* Acqiure to get the latest thread changes */
         atomic_thread_fence(memory_order_acquire);
@@ -313,14 +313,14 @@ typedef struct deferredQueue {
 deferredQueue deferredCmdExclusive = {0};
 deferredQueue slot_use_info[16384] = {0};
 
-typedef struct delayedJob {
+typedef struct deferredJob {
     job_handler handler;
     int slot;
     char data[];
-} delayedJob;
+} deferredJob;
 
-/* Global thread-local storage for delayed jobs */
-static __thread list *thread_delayed_jobs = NULL;
+/* Global thread-local storage for deferred jobs */
+static __thread list *thread_deferred_jobs = NULL;
 
 /*
  * executionContext
@@ -377,8 +377,8 @@ static void dqIncr(deferredQueue *queue) {
 /* Create a new job with the given handler and data */
 static listNode *createJobNode(int slot, job_handler handler, size_t data_size, void *data) {
     /* Allocate memory for job structure plus data using flexible array member */
-    listNode *node = zmalloc(sizeof(listNode) + sizeof(delayedJob) + data_size);
-    delayedJob *job = (delayedJob *)(node + 1);
+    listNode *node = zmalloc(sizeof(listNode) + sizeof(deferredJob) + data_size);
+    deferredJob *job = (deferredJob *)(node + 1);
     job->slot = slot;
     job->handler = handler;
     if (data_size) {
@@ -392,7 +392,7 @@ static listNode *createJobNode(int slot, job_handler handler, size_t data_size, 
 /* Process a job immediately or add it to queue based on refcount */
 static void processOrAddJob(deferredQueue *q, listNode *jobNode) {
     if (q->refcount == 0) {
-        delayedJob *job = listNodeValue(jobNode);
+        deferredJob *job = listNodeValue(jobNode);
         job->handler(job->data);
         zfree(jobNode);
     } else {
@@ -436,7 +436,7 @@ static void processDeferredJobsList(deferredQueue *queue) {
     listRewind(queue->deferred_jobs, &li);
 
     while ((ln = listNext(&li))) {
-        delayedJob *job = listNodeValue(ln);
+        deferredJob *job = listNodeValue(ln);
         listUnlinkNode(queue->deferred_jobs, ln);
         job->handler(job->data);
         zfree(ln);
@@ -516,7 +516,7 @@ static void dqDecr(int slot) {
 /* Add a client to the pending clients list of a deferred queue */
 static void dqAddPendingClient(deferredQueue *queue, client *c) {
     /* Create the pending clients list if it doesn't exist */
-    if (isClientListEmpty(queue)) {
+    if (queue->pending_clients == NULL) {
         queue->pending_clients = listCreate();
     }
 
@@ -550,39 +550,39 @@ static void dqRemoveClient(deferredQueue *queue, client *c) {
     server.stat_io_threaded_clients_blocked_on_slot--;
 }
 
-static void delayedServerCron(void *data) {
+static void deferServerCron(void *data) {
     UNUSED(data);
     long long interval = serverCron(server.el, 0, NULL);
     aeCreateTimeEvent(server.el, interval, serverCron, NULL, NULL);
 }
 
-/* Add a delayed job to the thread-local job list */
-void threadAddDelayedJob(int slot, job_handler handler, size_t data_size, void *data) {
+/* Add a deferred job to the thread-local job list */
+void threadAdddeferredJob(int slot, job_handler handler, size_t data_size, void *data) {
     /* Allocate memory for job structure plus data using flexible array member */
     listNode *job_node = createJobNode(slot, handler, data_size, data);
-    listLinkNodeTail(thread_delayed_jobs, job_node);
+    listLinkNodeTail(thread_deferred_jobs, job_node);
 }
 
-int isServerCronDelayed(void) {
+int isServerCronDeferred(void) {
     if (!server.cluster_enabled || server.io_threads_num == 1) {
         return 0;
     }
 
     if (dqAvailable(&deferredCmdExclusive)) return 0;
 
-    listNode *job_node = createJobNode(-1, delayedServerCron, 0, NULL);
+    listNode *job_node = createJobNode(-1, deferServerCron, 0, NULL);
     listLinkNodeTail(deferredCmdExclusive.deferred_jobs, job_node);
     return 1;
 }
 
-/* Dispatch delayed jobs based on their type */
+/* Dispatch deferred jobs based on their type */
 static void dispatchThreadDeferredJobs(list *jobs_list) {
     listIter li;
     listNode *ln;
     listRewind(jobs_list, &li);
 
     while ((ln = listNext(&li))) {
-        delayedJob *job = listNodeValue(ln);
+        deferredJob *job = listNodeValue(ln);
         if (job->slot == -1) {
             job->handler(job->data);
             listDelNode(jobs_list, ln);
@@ -590,7 +590,7 @@ static void dispatchThreadDeferredJobs(list *jobs_list) {
             listUnlinkNode(jobs_list, ln);
             processOrAddJob(getDeferredQueue(job->slot), ln);
         }
-        server.stat_delayed_jobs_processed++;
+        server.stat_deferred_jobs_processed++;
     }
 
     listRelease(jobs_list);
@@ -768,9 +768,9 @@ void cleanupThreadResources(void *dummy) {
     freeSharedQueryBuf();
 
     /* Free the delayed jobs list if it exists */
-    if (thread_delayed_jobs) {
-        listRelease(thread_delayed_jobs);
-        thread_delayed_jobs = NULL;
+    if (thread_deferred_jobs) {
+        listRelease(thread_deferred_jobs);
+        thread_deferred_jobs = NULL;
     }
 
     /* Clean any other thread-specific resources here */
@@ -790,7 +790,7 @@ static void *IOThreadMain(void *myid) {
     initSharedQueryBuf();
     setCurrentClient(NULL);
     setExecutingClient(NULL);
-    thread_delayed_jobs = listCreate();
+    thread_deferred_jobs = listCreate();
     pthread_cleanup_push(cleanupThreadResources, NULL);
 
     thread_id = (int)id;
@@ -938,7 +938,6 @@ void initIOThreads(void) {
     prefetchCommandsBatchInit();
     size_t io_to_mt_queue_size = (server.io_threads_num - 1) * DEFAULT_MPSC_QUEUE_SIZE_PER_THREAD;
     io_to_mt_queue = IoToMTQueueCreate(io_to_mt_queue_size);
-    thread_delayed_jobs = listCreate();
     deferredCmdExclusive.pending_clients = listCreate();
     deferredCmdExclusive.deferred_jobs = listCreate();
 
@@ -969,30 +968,40 @@ static int isCommandPostpone(client *c) {
     return C_ERR;
 }
 
-int trySendProcessCommandToIOThreads(client *c) {
+/* Check if a command can be offloaded to IO threads.
+ * Returns 1 if the command can be offloaded, 0 otherwise. */
+int canCommandBeOffloaded(struct serverCommand *cmd) {
+    if (!server.cluster_enabled) {
+        return 0; /* Avoid offloading commands in non cluster mode. */
+    }
+
     if (server.active_io_threads_num == 1) {
-        return C_ERR; /* No IO threads to offload to. */
+        return 0; /* No IO threads to offload to. */
     }
 
     if (!server.io_threads_do_commands_offloading) {
-        return C_ERR; /* Command offloading is disabled. */
+        return 0; /* Command offloading is disabled. */
     }
 
     /* Check if modules are loaded and module offloading is disabled */
     if (moduleCount() > 0 && !server.io_threads_do_commands_offloading_with_modules) {
-        return C_ERR; /* Modules are loaded and module command offloading is disabled. */
+        return 0; /* Modules are loaded and module command offloading is disabled. */
     }
 
-    if (!(c->cmd->flags & CMD_CAN_BE_OFFLOADED)) {
-        return C_ERR;
-    }
-
-    if (!server.cluster_enabled) {
-        return C_ERR; /* Avoid offloading commands in non cluster mode. */
+    if (!(cmd->flags & CMD_CAN_BE_OFFLOADED)) {
+        return 0;
     }
 
     if (server.notify_keyspace_events & NOTIFY_KEY_MISS) {
-        return C_ERR; /* Avoid offloading commands when NOTIFY_KEY_MISS is enabled. */
+        return 0; /* Avoid offloading commands when NOTIFY_KEY_MISS is enabled. */
+    }
+
+    return 1;
+}
+
+int trySendProcessCommandToIOThreads(client *c) {
+    if (!canCommandBeOffloaded(c->cmd)) {
+        return C_ERR;
     }
 
     if (c->io_read_state != CLIENT_IDLE || c->io_command_state != CLIENT_IDLE || c->io_write_state != CLIENT_IDLE) {
@@ -1029,7 +1038,7 @@ int trySendProcessCommandToIOThreads(client *c) {
     /* Setting current client to NULL to avoid accessing it after it was sent to IO */
     setCurrentClient(NULL);
     setExecutingClient(NULL);
-    IOJobQueue_push(&io_jobs[tid], ioThreadProcessCommand, c);
+    IOJobQueue_push(&io_jobs[tid], ioThreadCallCommand, c);
 
     server.stat_io_commands_pending++;
     return C_OK;
@@ -1346,8 +1355,8 @@ static inline jobResponseType getJobResponseType(uint64_t jobData) {
     return type;
 }
 
-static inline void *getJobData(uint64_t jobData) {
-    return (void *)(jobData & CLIENT_PTR_MASK);
+static inline void *getJobData(uintptr_t jobData) {
+    return (void *)(uintptr_t)(jobData & CLIENT_PTR_MASK);
 }
 
 /* Function to handle read jobs */
@@ -1388,10 +1397,10 @@ static void handleWriteJobs(client **write_jobs, int write_count) {
 }
 
 static void threadRespondJobList(void) {
-    if (listLength(thread_delayed_jobs) == 0) return;
+    if (listLength(thread_deferred_jobs) == 0) return;
 
-    IoToMTQueueProduce((uint64_t)thread_delayed_jobs | (uint64_t)R_JOBLIST, 0);
-    thread_delayed_jobs = listCreate();
+    IoToMTQueueProduce((uintptr_t)thread_deferred_jobs | (uintptr_t)R_JOBLIST, 0);
+    thread_deferred_jobs = listCreate();
 }
 
 void threadRespond(client *c, jobResponseType r) {
@@ -1400,7 +1409,7 @@ void threadRespond(client *c, jobResponseType r) {
         threadRespondJobList();
     }
 
-    IoToMTQueueProduce((uint64_t)c | (uint64_t)r, 0);
+    IoToMTQueueProduce((uintptr_t)c | (uintptr_t)r, 0);
 }
 
 static void processClientIOCommandDone(client *c) {

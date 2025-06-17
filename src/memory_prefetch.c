@@ -242,15 +242,13 @@ void processClientsCommandsBatch(void) {
 
 /* Check if the command is about to be offloaded to IO threads */
 static int isCommandBeingOffloaded(client *c) {
-    if (!server.io_threads_do_commands_offloading) {
+    /* Check basic offloading conditions */
+    if (canCommandBeOffloaded(c->parsed_cmd) != C_OK) {
         return 0;
     }
 
-    if (!server.cluster_enabled) {
-        return 0;
-    }
-
-    return (c->parsed_cmd->flags & CMD_CAN_BE_OFFLOADED) && (c->querybuf == NULL);
+    /* We avoid offloading commands when there is data pending in the query buffer */
+    return (c->querybuf == NULL);
 }
 
 /* Adds the client's command to the current batch and processes the batch
@@ -314,7 +312,7 @@ void prefetchEvents(aeEventLoop *eventLoop, int cur_idx, int numevents) {
     /* Phase 1: Prefetch aeFileEvent structures for events that need prefetching */
     for (int i = start; i < end; i++) {
         int mask = eventLoop->fired[i].mask;
-        if (mask & AE_PREFETCH) {
+        if (mask & AE_PRE_READABLE_HOOK) {
             fes[fes_idx] = &eventLoop->events[eventLoop->fired[i].fd];
             valkey_prefetch(fes[fes_idx]);
         } else {

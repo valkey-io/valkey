@@ -1807,7 +1807,7 @@ struct valkeyServer {
     long long stat_client_outbuf_limit_disconnections;  /* Total number of clients reached output buf length limit */
     long long stat_total_prefetch_entries;              /* Total number of prefetched dict entries */
     long long stat_total_prefetch_batches;              /* Total number of prefetched batches */
-    long long stat_delayed_jobs_processed;              /* Total number of delayed jobs sent to main thread from worker threads */
+    long long stat_deferred_jobs_processed;             /* Total number of delayed jobs sent to main thread from worker threads */
     /* The following two are used to track instantaneous metrics, like
      * number of operations per second, network traffic. */
     struct {
@@ -2832,6 +2832,7 @@ void removeClientFromMemUsageBucket(client *c, int allow_eviction);
 void unlinkClient(client *c);
 void removeFromServerClientList(client *c);
 int writeToClient(client *c);
+int writeClientData(client *c);
 void linkClient(client *c);
 void protectClient(client *c);
 void unprotectClient(client *c);
@@ -2846,7 +2847,7 @@ void deleteCachedResponseClient(client *recording_client);
 void waitForClientIO(client *c);
 void ioThreadReadQueryFromClient(void *data);
 void ioThreadWriteToClient(void *data);
-void ioThreadProcessCommand(void *data);
+void ioThreadCallCommand(void *data);
 int canParseCommand(client *c);
 void processClientIOReadsDone(client *c);
 void processClientIOWriteDone(client *c, int allow_async_writes);

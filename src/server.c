@@ -1485,7 +1485,7 @@ long long serverCron(struct aeEventLoop *eventLoop, long long id, void *clientDa
     UNUSED(id);
     UNUSED(clientData);
 
-    if (isServerCronDelayed()) {
+    if (isServerCronDeferred()) {
         return AE_NOMORE;
     }
 
@@ -2735,7 +2735,7 @@ void resetServerStats(void) {
     server.stat_total_writes_processed = 0;
     server.stat_client_qbuf_limit_disconnections = 0;
     server.stat_client_outbuf_limit_disconnections = 0;
-    server.stat_delayed_jobs_processed = 0;
+    server.stat_deferred_jobs_processed = 0;
     for (j = 0; j < STATS_METRIC_COUNT; j++) {
         server.inst_metric[j].idx = 0;
         server.inst_metric[j].last_sample_base = 0;
@@ -2881,7 +2881,7 @@ void initServer(void) {
         exit(1);
     }
     /* Set the epoll batch size for the server event loop */
-    server.el->epoll_batch_size = AE_EPOLL_EVENTS_BATCH_SIZE;
+    aeSetEpollBatchSize(server.el, AE_EPOLL_EVENTS_BATCH_SIZE);
 
     aeSetPrefetchProc(server.el, prefetchEvents);
 
@@ -3944,6 +3944,53 @@ void call(client *c, int flags) {
     }
 
     setExecutingClient(prev_client);
+}
+
+/* Execute a command that has been offloaded to an IO thread.
+ * This function is called by IO threads.
+ * It executes the command and writes the response back to the client. */
+void ioThreadCallCommand(void *data) {
+    client *c = (client *)data;
+    serverAssert(c->cmd->flags & CMD_CAN_BE_OFFLOADED);
+    const long long call_timer = ustime();
+    c->flag.executing_command = 1;
+    setCurrentClient(c);
+    setExecutingClient(c);
+
+    monotime monotonic_start = 0;
+    if (monotonicGetType() == MONOTONIC_CLOCK_HW) {
+        monotonic_start = getMonotonicUs();
+    }
+
+    /* Execute the command */
+    c->cmd->proc(c);
+
+    c->flag.executing_command = 0;
+
+    ustime_t duration;
+    if (monotonicGetType() == MONOTONIC_CLOCK_HW)
+        duration = getMonotonicUs() - monotonic_start;
+    else
+        duration = ustime() - call_timer;
+
+    c->duration += duration;
+
+    /* Send write response to the client */
+    c->nwritten = 0;
+    c->write_flags = 0;
+    /* Set the reply block and bufpos */
+    c->io_last_reply_block = listLast(c->reply);
+    if (c->io_last_reply_block) {
+        c->io_last_bufpos = ((clientReplyBlock *)listNodeValue(c->io_last_reply_block))->used;
+    } else {
+        c->io_last_bufpos = (size_t)c->bufpos;
+    }
+
+    writeClientData(c);
+
+    c->io_command_state = CLIENT_COMPLETED_IO;
+    c->io_write_state = CLIENT_COMPLETED_IO;
+    threadRespond(c, R_COMMAND);
 }
 
 /* Used when a command that is ready for execution needs to be rejected, due to
@@ -6102,7 +6149,7 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                 "io_threaded_total_prefetch_entries:%lld\r\n", server.stat_total_prefetch_entries,
                 "io_threaded_clients_blocked_on_slot:%lld\r\n", server.stat_io_threaded_clients_blocked_on_slot,
                 "io_threaded_clients_blocked_total:%lld\r\n", server.stat_io_threaded_clients_blocked_total,
-                "io_threaded_postponed_jobs_to_mainthread:%lld\r\n", server.stat_delayed_jobs_processed,
+                "io_threaded_postponed_jobs_to_mainthread:%lld\r\n", server.stat_deferred_jobs_processed,
                 "client_query_buffer_limit_disconnections:%lld\r\n", server.stat_client_qbuf_limit_disconnections,
                 "client_output_buffer_limit_disconnections:%lld\r\n", server.stat_client_outbuf_limit_disconnections,
                 "reply_buffer_shrinks:%lld\r\n", server.stat_reply_buffer_shrinks,

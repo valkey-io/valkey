@@ -91,6 +91,7 @@ aeEventLoop *aeCreateEventLoop(int setsize) {
     eventLoop->beforesleep = NULL;
     eventLoop->aftersleep = NULL;
     eventLoop->custompoll = NULL;
+    eventLoop->prefetch = NULL;
     eventLoop->flags = 0;
     eventLoop->epoll_batch_size = 0; /* Default to 0, meaning use setsize */
     /* Initialize the eventloop mutex with PTHREAD_MUTEX_ERRORCHECK type */
@@ -218,8 +219,8 @@ void aeDeleteFileEvent(aeEventLoop *eventLoop, int fd, int mask) {
      * is removed. */
     if (mask & AE_WRITABLE) mask |= AE_BARRIER;
 
-    /* We want to always remove AE_PREFETCH if set when AE_READABLE is removed. */
-    if (mask & AE_READABLE) mask |= AE_PREFETCH;
+    /* We want to always remove AE_PRE_READABLE_HOOK if set when AE_READABLE is removed. */
+    if (mask & AE_READABLE) mask |= AE_PRE_READABLE_HOOK;
 
     /* Only remove attached events */
     mask = mask & fe->mask;
@@ -577,4 +578,8 @@ void aeSetPollProtect(aeEventLoop *eventLoop, int protect) {
     } else {
         eventLoop->flags &= ~AE_PROTECT_POLL;
     }
+}
+
+void aeSetEpollBatchSize(aeEventLoop *eventLoop, int batchSize) {
+    eventLoop->epoll_batch_size = batchSize;
 }

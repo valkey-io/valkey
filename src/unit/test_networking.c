@@ -92,7 +92,7 @@ int test_writeToReplica(int argc, char **argv, int flags) {
         c->repl_data->ref_block_pos = 0;
         c->bufpos = 0;
 
-        writeToReplica(c);
+        writeReplicaData(c);
 
         TEST_ASSERT(c->nwritten == 64);
         TEST_ASSERT(fake_conn->written == 64);
@@ -132,7 +132,7 @@ int test_writeToReplica(int argc, char **argv, int flags) {
         c->repl_data->ref_block_pos = 0;
         c->bufpos = 0;
 
-        writeToReplica(c);
+        writeReplicaData(c);
 
         TEST_ASSERT(c->nwritten == 96); /* 64 + 32 */
         TEST_ASSERT(fake_conn->written == 96);
@@ -170,7 +170,7 @@ int test_writeToReplica(int argc, char **argv, int flags) {
         c->repl_data->ref_block_pos = 0;
         c->bufpos = 0;
 
-        writeToReplica(c);
+        writeReplicaData(c);
 
         TEST_ASSERT(c->nwritten <= 0);
         TEST_ASSERT((c->write_flags & WRITE_FLAGS_WRITE_ERROR) != 0);

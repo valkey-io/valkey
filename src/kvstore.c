@@ -250,7 +250,7 @@ void kvstoreHashtableRehashingCompleted(hashtable *ht) {
 
     /* If not in main-thread postpone the update of kvs rehashing info to be done later by the main-thread -*/
     if (!inMainThread()) {
-        threadAddDelayedJob(-1, kvstoreHashtableUpdateRehashingInfo, sizeof(ctx), &ctx);
+        threadAdddeferredJob(-1, kvstoreHashtableUpdateRehashingInfo, sizeof(ctx), &ctx);
     } else {
         kvstoreHashtableUpdateRehashingInfo(&ctx);
     }

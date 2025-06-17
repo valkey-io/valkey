@@ -218,7 +218,7 @@ static inline int isReplicaReadyForReplData(client *replica) {
 /* Decides if copy avoidance is preferred according to client type, number of I/O threads, object size
  * Maybe called with NULL obj for evaluation with no regard to object size
  * Copy avoidance can be allowed only for regular Valkey clients
- * that use _writeToClient handler to write replies to client connection */
+ * that use writeClientData handler to write replies to client connection */
 static int isCopyAvoidPreferred(client *c, robj *obj) {
     if (c->flag.fake || isDeferredReplyEnabled(c)) return 0;
 
@@ -836,7 +836,7 @@ void afterErrorReply(client *c, const char *s, size_t len, int flags) {
     /* Postpone error updates if its io-thread */
     if (!inMainThread()) {
         delayedErrorStatsUpdateCtx ctx = {.c = c, .s = sdsnewlen(s, len), .len = len, .flags = flags};
-        threadAddDelayedJob(-1, afterErrorReplyDelayed, sizeof(ctx), &ctx);
+        threadAdddeferredJob(-1, afterErrorReplyDelayed, sizeof(ctx), &ctx);
         return;
     }
 
@@ -2269,7 +2269,7 @@ static void postWriteToReplica(client *c) {
     incrementalTrimReplicationBacklog(REPL_BACKLOG_TRIM_BLOCKS_PER_CALL);
 }
 
-static void writeToReplica(client *c) {
+static void writeReplicaData(client *c) {
     listNode *last_node;
     size_t bufpos;
 
@@ -2531,7 +2531,7 @@ static void proceedToUnwritten(replyIOV *reply, int nwritten) {
     }
 }
 
-/* This function should be called from _writeToClient when the reply list is not empty,
+/* This function should be called from writeClientData when the reply list is not empty,
  * it gathers the scattered buffers from reply list and sends them away with connWritev.
  * If we write successfully, it returns C_OK, otherwise, C_ERR is returned.
  * Sets the c->nwritten to the number of bytes the server wrote to the client.
@@ -2640,7 +2640,7 @@ static int writevToClient(client *c) {
 /* This function does actual writing output buffers to non-replica client, it is called by writeToClient.
  * If we write successfully, it returns C_OK, otherwise, C_ERR is returned,
  * and 'c->nwritten' is set to the number of bytes the server wrote to the client. */
-int _writeToClient(client *c) {
+int writeClientData(client *c) {
     listNode *lastblock;
     size_t bufpos;
 
@@ -2775,7 +2775,7 @@ static void _postWriteToClient(client *c) {
 /* Updates the client's memory usage and bucket and server stats after writing.
  * If a write handler is installed , it will attempt to clear the write event.
  * If the client is no longer valid, it will return C_ERR, otherwise C_OK. */
-int postWriteToClient(client *c) {
+int postWriteClientData(client *c) {
     c->io_last_reply_block = NULL;
     c->io_last_bufpos = 0;
     /* Update total number of writes on server */
@@ -2830,12 +2830,12 @@ int writeToClient(client *c) {
     c->write_flags = 0;
 
     if (getClientType(c) == CLIENT_TYPE_REPLICA) {
-        writeToReplica(c);
+        writeReplicaData(c);
     } else {
-        _writeToClient(c);
+        writeClientData(c);
     }
 
-    return postWriteToClient(c);
+    return postWriteClientData(c);
 }
 
 /* Write event handler. Just send data to the client. */
@@ -2999,7 +2999,7 @@ void processClientIOWriteDone(client *c, int allow_async_writes) {
 
     connSetPostponeUpdateState(c->conn, 0);
     connUpdateState(c->conn);
-    if (postWriteToClient(c) == C_ERR) {
+    if (postWriteClientData(c) == C_ERR) {
         return;
     }
 
@@ -5938,54 +5938,10 @@ void ioThreadWriteToClient(void *data) {
     serverAssert(c->io_write_state == CLIENT_PENDING_IO);
     c->nwritten = 0;
     if (c->write_flags & WRITE_FLAGS_IS_REPLICA) {
-        writeToReplica(c);
+        writeReplicaData(c);
     } else {
-        _writeToClient(c);
+        writeClientData(c);
     }
     c->io_write_state = CLIENT_COMPLETED_IO;
     threadRespond(c, R_WRITE);
-}
-
-void ioThreadProcessCommand(void *data) {
-    client *c = (client *)data;
-    serverAssert(c->cmd->flags & CMD_CAN_BE_OFFLOADED);
-    const long long call_timer = ustime();
-    c->flag.executing_command = 1;
-    setCurrentClient(c);
-    setExecutingClient(c);
-
-    monotime monotonic_start = 0;
-    if (monotonicGetType() == MONOTONIC_CLOCK_HW) {
-        monotonic_start = getMonotonicUs();
-    }
-
-    /* Execute the command */
-    c->cmd->proc(c);
-
-    c->flag.executing_command = 0;
-
-    ustime_t duration;
-    if (monotonicGetType() == MONOTONIC_CLOCK_HW)
-        duration = getMonotonicUs() - monotonic_start;
-    else
-        duration = ustime() - call_timer;
-
-    c->duration += duration;
-
-    /* Send write response to the client */
-    c->nwritten = 0;
-    c->write_flags = 0;
-    /* Set the rebly block and bufpos */
-    c->io_last_reply_block = listLast(c->reply);
-    if (c->io_last_reply_block) {
-        c->io_last_bufpos = ((clientReplyBlock *)listNodeValue(c->io_last_reply_block))->used;
-    } else {
-        c->io_last_bufpos = (size_t)c->bufpos;
-    }
-
-    _writeToClient(c);
-
-    c->io_command_state = CLIENT_COMPLETED_IO;
-    c->io_write_state = CLIENT_COMPLETED_IO;
-    threadRespond(c, R_COMMAND);
 }

@@ -39,15 +39,15 @@
 #define AE_OK 0
 #define AE_ERR -1
 
-#define AE_NONE 0     /* No events registered. */
-#define AE_READABLE 1 /* Fire when descriptor is readable. */
-#define AE_WRITABLE 2 /* Fire when descriptor is writable. */
-#define AE_BARRIER 4  /* With WRITABLE, never fire the event if the      \
-                         READABLE event already fired in the same event  \
-                         loop iteration. Useful when you want to persist \
-                         things to disk before sending replies, and want \
-                         to do that in a group fashion. */
-#define AE_PREFETCH 8 /* With PREFETCH, call prefetch callback for the events */
+#define AE_NONE 0              /* No events registered. */
+#define AE_READABLE 1          /* Fire when descriptor is readable. */
+#define AE_WRITABLE 2          /* Fire when descriptor is writable. */
+#define AE_BARRIER 4           /* With WRITABLE, never fire the event if the      \
+                                  READABLE event already fired in the same event  \
+                                  loop iteration. Useful when you want to persist \
+                                  things to disk before sending replies, and want \
+                                  to do that in a group fashion. */
+#define AE_PRE_READABLE_HOOK 8 /* Call pre-process-read callback for the events */
 
 #define AE_FILE_EVENTS (1 << 0)
 #define AE_TIME_EVENTS (1 << 1)
@@ -118,7 +118,7 @@ typedef struct aeEventLoop {
     aePrefetchProc *prefetch;
     pthread_mutex_t poll_mutex;
     int flags;
-    int epoll_batch_size; /* Optional batch size for epoll_wait */
+    int epoll_batch_size; /* Maximum events to process per epoll_wait call  (0 = use system default batch size) */
 } aeEventLoop;
 
 /* Prototypes */
@@ -148,5 +148,6 @@ int aePoll(aeEventLoop *eventLoop, struct timeval *tvp);
 int aeGetSetSize(aeEventLoop *eventLoop);
 int aeResizeSetSize(aeEventLoop *eventLoop, int setsize);
 void aeSetDontWait(aeEventLoop *eventLoop, int noWait);
+void aeSetEpollBatchSize(aeEventLoop *eventLoop, int batchSize);
 
 #endif

@@ -1,7 +1,8 @@
 #include "valkeymodule.h"
 
-#include <ctype.h>
 #include <errno.h>
+#include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
@@ -605,10 +606,10 @@ static ValkeyModuleScriptingEngineDebuggerCommandParam stack_params[1] = {
 };
 
 static ValkeyModuleScriptingEngineDebuggerCommand helloDebuggerCommands[COMMAND_COUNT] = {
-    VALKEYMODULE_SCRIPTING_ENIGNE_DEBUGGER_COMMAND("step", 1, NULL, 0, "Execute current instruction.", 0 ,helloDebuggerStepCommand),
-    VALKEYMODULE_SCRIPTING_ENIGNE_DEBUGGER_COMMAND("continue", 1, NULL, 0, "Continue normal execution.", 0, helloDebuggerContinueCommand),
-    VALKEYMODULE_SCRIPTING_ENIGNE_DEBUGGER_COMMAND("stack", 2, stack_params, 1, "Print stack contents. If index is specified, print only the value at index. Indexes start at 0 (top = 0).", 0, helloDebuggerStackCommand),
-    VALKEYMODULE_SCRIPTING_ENIGNE_DEBUGGER_COMMAND("abort", 1, NULL, 0, "Abort execution.", 0, helloDebuggerAbortCommand),
+    VALKEYMODULE_SCRIPTING_ENGINE_DEBUGGER_COMMAND("step", 1, NULL, 0, "Execute current instruction.", 0 ,helloDebuggerStepCommand),
+    VALKEYMODULE_SCRIPTING_ENGINE_DEBUGGER_COMMAND("continue", 1, NULL, 0, "Continue normal execution.", 0, helloDebuggerContinueCommand),
+    VALKEYMODULE_SCRIPTING_ENGINE_DEBUGGER_COMMAND("stack", 2, stack_params, 1, "Print stack contents. If index is specified, print only the value at index. Indexes start at 0 (top = 0).", 0, helloDebuggerStackCommand),
+    VALKEYMODULE_SCRIPTING_ENGINE_DEBUGGER_COMMAND("abort", 1, NULL, 0, "Abort execution.", 0, helloDebuggerAbortCommand),
 };
 
 static ValkeyModuleScriptingEngineDebuggerEnableRet helloDebuggerEnable(ValkeyModuleCtx *module_ctx,

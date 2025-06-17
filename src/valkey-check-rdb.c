@@ -452,7 +452,7 @@ void rdbShowGenericInfo(void) {
             stats_fd = open(rdbstate.stats_output, O_WRONLY | O_CREAT, 0644);
             if (stats_fd == -1) {
                 fprintf(stderr, "Cannot open output file: '%s': %s\n", rdbstate.stats_output, strerror(errno));
-                exit(0);
+                exit(1);
             } else {
                 dup2(stats_fd, STDOUT_FILENO);
             }

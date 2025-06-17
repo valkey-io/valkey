@@ -43,7 +43,7 @@ void *vectorGet(vector *a, uint32_t idx) {
 /* Adds a new uninitialized element to the array and returns a pointer to it. */
 void *vectorPush(vector *a) {
     if (a->len == a->alloc) {
-        size_t alloc = a->alloc ? 2 * a->alloc : 8;
+        uint32_t alloc = a->alloc ? 2 * a->alloc : 8;
         a->data = zrealloc(a->data, alloc * a->item_size);
         a->alloc = alloc;
     }

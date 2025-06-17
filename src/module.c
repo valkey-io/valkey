@@ -13376,7 +13376,7 @@ void VM_ScriptingEngineDebuggerFlushLogs(void) {
 
 /* Function used to process debugger commands sent by the client.
  *
- * This function in conjuction with `ValkeyModule_ScriptingEngineDebuggerLog` and
+ * This function in conjunction with `ValkeyModule_ScriptingEngineDebuggerLog` and
  * `ValkeyModule_ScriptingEngineDebuggerFlushLogs` allows to implement an
  * interactive debugging session for scripts executed by the scripting engine.
  */

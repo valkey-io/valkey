@@ -6485,7 +6485,8 @@ ValkeyModuleCallReply *VM_Call(ValkeyModuleCtx *ctx, const char *cmdname, const 
             }
 
             int deny_write_type = writeCommandsDeniedByDiskError();
-            int obey_client = (getCurrentClient() && mustObeyClient(getCurrentClient()));
+            client *current_client = getCurrentClient();
+            int obey_client = (current_client && mustObeyClient(current_client));
 
             if (deny_write_type != DISK_ERROR_TYPE_NONE && !obey_client) {
                 errno = ESPIPE;

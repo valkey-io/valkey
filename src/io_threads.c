@@ -404,7 +404,7 @@ static void processOrAddJob(deferredQueue *q, listNode *jobNode) {
 }
 
 /* Returns whether the given command requires exclusive access to the whole database. */
-static int isDBExclusiveCmd(struct serverCommand *cmd, int slot) {
+static int isServerExclusiveCmd(struct serverCommand *cmd, int slot) {
     /* If no slot is specified but the client command changes the keyspace, we assume it is an exclusive command */
     if (slot == -1 && (cmd->flags & CMD_WRITE)) return 1;
     /* The exec command can contain commands that may affect the whole database */
@@ -422,7 +422,7 @@ static int isSlotExclusiveCmd(struct serverCommand *cmd, int slot) {
     if (cmd->flags & CMD_CAN_BE_OFFLOADED) return 0;
 
     /* Not slot exclusive rather DB exclusive */
-    if (isDBExclusiveCmd(cmd, slot)) return 0;
+    if (isServerExclusiveCmd(cmd, slot)) return 0;
 
     return 1;
 }
@@ -468,7 +468,7 @@ static void dqProcessPendingClients(int slot) {
         /* Check if we need to wait due to exclusive commands */
         if (queue->refcount) {
             if (dq_context == CTX_EXCLUSIVE) {
-                if (isDBExclusiveCmd(c->cmd, c->slot)) break;
+                if (isServerExclusiveCmd(c->cmd, c->slot)) break;
             } else {
                 if (isSlotExclusiveCmd(c->cmd, c->slot)) break;
             }
@@ -605,7 +605,7 @@ int postponeClientCommand(client *c) {
 
     /* An exclusive command can be processed either when processing the exclusive deferered queue
      * or in immediate mode if there are no read commands executed in queues*/
-    if (isDBExclusiveCmd(c->cmd, c->slot)) {
+    if (isServerExclusiveCmd(c->cmd, c->slot)) {
         if (dq_context == CTX_EXCLUSIVE) return 1;
 
         if (dqAvailable(&deferredCmdExclusive)) return 1;
@@ -665,7 +665,7 @@ void drainIOThreadsQueue(void) {
 }
 
 /* Returns if there is an IO operation in progress for the given client. */
-int clientIOInProgress(client *c) {
+int clientHandlingThreadedIO(client *c) {
     return c->io_read_state != CLIENT_IDLE || c->io_write_state != CLIENT_IDLE || c->io_command_state != CLIENT_IDLE;
 }
 

@@ -321,30 +321,34 @@ if {$::io_threads} {
         }
 
         test {Key expiry is postponed when read from main thread} {
+            r debug set-active-expire 0
             # This test verifies that when a key with expiry is read from the IO thread,
             # its expiry deletion is postponed to the main-thread to prevent race conditions with the main-thread
             set updated_info_stats [r INFO]    
             set initial_postponed [getInfoProperty $updated_info_stats io_threaded_postponed_jobs_to_mainthread]
 
-            # Set a key with a short expiry time (2 seconds)
+            # Set a key with a long expiry time (100 sec)
             r set key "val"
-            r expire key 2
-
+            r expire key 100 
             # Verify the key exists
             assert_equal "val" [r get key]
+         
+            # Set a key with a short expiry time (100 ms)
+            r set key2 "val2"
+            r pexpire key2 100 
 
             # Wait for the key to be expired
-            after 2000
+            after 200
 
             # Read the key (this should trigger expiry postponement)
             # The answer should be empty
-            assert_equal {} [r get key]
+            assert_equal {} [r get key2]
 
             # Check if postponed jobs counter increased
             set updated_info_stats [r INFO]    
             set updated_postponed [getInfoProperty $updated_info_stats io_threaded_postponed_jobs_to_mainthread]
             # The postponed jobs counter should have increased if expiry was postponed
-            assert {$updated_postponed > $initial_postponed}
+            assert {$updated_postponed == $initial_postponed + 1}
         }
 
         test "test io-threads are runtime modifiable" {

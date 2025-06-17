@@ -242,8 +242,7 @@ void processClientsCommandsBatch(void) {
 
 /* Check if the command is about to be offloaded to IO threads */
 static int isCommandBeingOffloaded(client *c) {
-    /* Check basic offloading conditions */
-    if (canCommandBeOffloaded(c->parsed_cmd) != C_OK) {
+    if (!canCommandBeOffloaded(c->parsed_cmd)) {
         return 0;
     }
 

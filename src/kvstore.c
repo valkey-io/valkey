@@ -66,7 +66,7 @@ struct _kvstore {
     unsigned long long bucket_count;          /* Total number of buckets in this kvstore across hash tables. */
     unsigned long long *hashtable_size_index; /* Binary indexed tree (BIT) that describes cumulative key frequencies up until
                                                * given hashtable-index. */
-    _Atomic size_t overhead_hashtable_lut;    /* Overhead of all hashtables in bytes, Atomic as it may be update by the IO threads */
+    _Atomic size_t overhead_hashtable_lut;    /* Overhead of all hashtables in bytes, Atomic as it may be updated by the IO threads for rehashing. */
     size_t overhead_hashtable_rehashing;      /* Overhead of hash tables rehashing in bytes. */
 };
 

@@ -34,7 +34,7 @@ int canCommandBeOffloaded(struct serverCommand *cmd);
 int processIOThreadsResponses(void);
 void threadAdddeferredJob(int slot, job_handler handler, size_t len, void *data);
 void threadRespond(struct client *c, jobResponseType r);
-int clientIOInProgress(struct client *c);
+int clientHandlingThreadedIO(struct client *c);
 int postponeClientCommand(struct client *c);
 int isServerCronDeferred(void);
 void ioThreadsOnUnlinkClient(struct client *c);

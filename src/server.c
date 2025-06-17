@@ -3614,8 +3614,9 @@ static void propagatePendingCommands(void) {
     /* In case a command that may modify random keys was run *directly*
      * (i.e. not from within a script, MULTI/EXEC, RM_Call, etc.) we want
      * to avoid using a transaction (much like active-expire) */
-    if (getCurrentClient() && getCurrentClient()->cmd &&
-        getCurrentClient()->cmd->flags & CMD_TOUCHES_ARBITRARY_KEYS) {
+    client *current_client = getCurrentClient();
+    if (current_client && current_client->cmd &&
+        current_client->cmd->flags & CMD_TOUCHES_ARBITRARY_KEYS) {
         transaction = 0;
     }
 
@@ -3905,22 +3906,23 @@ void call(client *c, int flags) {
     /* If the client has keys tracking enabled for client side caching,
      * make sure to remember the keys it fetched via this command. For read-only
      * scripts, don't process the script, only the commands it executes. */
+    client *current_client = getCurrentClient();
     if ((c->cmd->flags & CMD_READONLY) && (c->cmd->proc != evalRoCommand) && (c->cmd->proc != evalShaRoCommand) &&
         (c->cmd->proc != fcallroCommand)) {
         /* We use the tracking flag of the original external client that
          * triggered the command, but we take the keys from the actual command
          * being executed. */
-        if (getCurrentClient() && (getCurrentClient()->flag.tracking) &&
-            !(getCurrentClient()->flag.tracking_bcast)) {
-            trackingRememberKeys(getCurrentClient(), c);
+        if (current_client && (current_client->flag.tracking) &&
+            !(current_client->flag.tracking_bcast)) {
+            trackingRememberKeys(current_client, c);
         }
     }
 
     if (!c->flag.blocked) {
         /* Modules may call commands in cron, in which case current_client
          * is not set. */
-        if (getCurrentClient()) {
-            getCurrentClient()->commands_processed++;
+        if (current_client) {
+            current_client->commands_processed++;
         }
         server.stat_numcommands++;
     }

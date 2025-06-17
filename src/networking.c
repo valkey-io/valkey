@@ -1957,7 +1957,7 @@ int freeClient(client *c) {
 
     /* If a client is protected, yet we need to free it right now, make sure
      * to at least use asynchronous freeing. */
-    if (c->flag.protected || c->flag.protected_rdb_channel || clientIOInProgress(c)) {
+    if (c->flag.protected || c->flag.protected_rdb_channel || clientHandlingThreadedIO(c)) {
         freeClientAsync(c);
         return 0;
     }
@@ -2214,7 +2214,7 @@ int freeClientsInAsyncFreeQueue(void) {
             c->flag.protected_rdb_channel = 0;
         }
 
-        if (clientIOInProgress(c)) continue;
+        if (clientHandlingThreadedIO(c)) continue;
 
         if (c->flag.protected) continue;
 
@@ -5858,7 +5858,7 @@ void evictClients(void) {
             client *c = ln->value;
             if (c->flag.close_asap) {
                 /* We don't want to continue evicting clients in this case
-                 * since it can cause multiple clients to be evicted unnecssarily */
+                 * since it can cause multiple clients to be evicted unnecessarily */
                 break;
             }
             sds ci = catClientInfoString(sdsempty(), c, server.hide_user_data_from_log);
@@ -5868,7 +5868,7 @@ void evictClients(void) {
             if (freeClient(c) == 0) {
                 /* The client is protected and will be closed later.
                  * We don't want to continue evicting clients in this case
-                 * since it can cause multiple clients to be evicted unnecssarily */
+                 * since it can cause multiple clients to be evicted unnecessarily */
                 break;
             }
         } else {

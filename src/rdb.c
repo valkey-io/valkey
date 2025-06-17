@@ -1879,11 +1879,12 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error) {
 
     int deep_integrity_validation = server.sanitize_dump_payload == SANITIZE_DUMP_YES;
     if (server.sanitize_dump_payload == SANITIZE_DUMP_CLIENTS) {
+        client *current_client = getCurrentClient();
         /* Skip sanitization when loading (an RDB), or getting a RESTORE command
          * from either the primary or a client using an ACL user with the skip-sanitize-payload flag. */
-        int skip = server.loading || (getCurrentClient() && (getCurrentClient()->flag.primary));
-        if (!skip && getCurrentClient() && getCurrentClient()->user)
-            skip = !!(getCurrentClient()->user->flags & USER_FLAG_SANITIZE_PAYLOAD_SKIP);
+        int skip = server.loading || (current_client && (current_client->flag.primary));
+        if (!skip && current_client && current_client->user)
+            skip = !!(current_client->user->flags & USER_FLAG_SANITIZE_PAYLOAD_SKIP);
         deep_integrity_validation = !skip;
     }
 

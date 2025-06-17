@@ -2204,6 +2204,13 @@ void markNodeAsFailingIfNeeded(clusterNode *node) {
     node->flags |= CLUSTER_NODE_FAIL;
     node->fail_time = mstime();
 
+    if (nodeIsReplica(myself) && myself->replicaof == node) {
+        /* Immediately check if the node is our primary node, if so, we can try
+         * to initiate a failover as soon as possible. */
+        myself->flags |= CLUSTER_NODE_MY_PRIMARY_FAIL;
+        clusterDoBeforeSleep(CLUSTER_TODO_HANDLE_FASTER_FAILOVER);
+    }
+
     /* Broadcast the failing node name to everybody, forcing all the other
      * reachable nodes to flag the node as FAIL.
      * We do that even if this node is a replica and not a primary: anyway
@@ -2227,6 +2234,7 @@ void clearNodeFailureIfNeeded(clusterNode *node) {
         serverLog(LL_NOTICE, "Clear FAIL state for node %.40s (%s): %s is reachable again.", node->name,
                   node->human_nodename, nodeIsReplica(node) ? "replica" : "primary without slots");
         node->flags &= ~CLUSTER_NODE_FAIL;
+        if (nodeIsReplica(myself) && myself->replicaof == node) node->flags &= ~CLUSTER_NODE_MY_PRIMARY_FAIL;
         clusterDoBeforeSleep(CLUSTER_TODO_UPDATE_STATE | CLUSTER_TODO_SAVE_CONFIG);
     }
 
@@ -2241,6 +2249,7 @@ void clearNodeFailureIfNeeded(clusterNode *node) {
             "Clear FAIL state for node %.40s (%s): is reachable again and nobody is serving its slots after some time.",
             node->name, node->human_nodename);
         node->flags &= ~CLUSTER_NODE_FAIL;
+        if (nodeIsReplica(myself) && myself->replicaof == node) node->flags &= ~CLUSTER_NODE_MY_PRIMARY_FAIL;
         clusterDoBeforeSleep(CLUSTER_TODO_UPDATE_STATE | CLUSTER_TODO_SAVE_CONFIG);
     }
 }
@@ -3319,7 +3328,7 @@ int clusterProcessPacket(clusterLink *link) {
         sender->flags |= CLUSTER_NODE_EXTENSIONS_SUPPORTED;
     }
 
-    /* Checks if the node supports light message hdr */
+    /* Checks if the node supports some flags. */
     if (sender) {
         if (flags & CLUSTER_NODE_LIGHT_HDR_PUBLISH_SUPPORTED) {
             sender->flags |= CLUSTER_NODE_LIGHT_HDR_PUBLISH_SUPPORTED;
@@ -3331,6 +3340,12 @@ int clusterProcessPacket(clusterLink *link) {
             sender->flags |= CLUSTER_NODE_LIGHT_HDR_MODULE_SUPPORTED;
         } else {
             sender->flags &= ~CLUSTER_NODE_LIGHT_HDR_MODULE_SUPPORTED;
+        }
+
+        if (flags & CLUSTER_NODE_MY_PRIMARY_FAIL) {
+            sender->flags |= CLUSTER_NODE_MY_PRIMARY_FAIL;
+        } else {
+            sender->flags &= ~CLUSTER_NODE_MY_PRIMARY_FAIL;
         }
     }
 
@@ -3542,6 +3557,12 @@ int clusterProcessPacket(clusterLink *link) {
                     noaddr_node->flags &= ~CLUSTER_NODE_PFAIL;
                     noaddr_node->flags |= CLUSTER_NODE_FAIL;
                     noaddr_node->fail_time = now;
+                    if (nodeIsReplica(myself) && myself->replicaof == noaddr_node) {
+                        /* Immediately check if the node is our primary node, if so, we can try
+                         * to initiate a failover as soon as possible. */
+                        myself->flags |= CLUSTER_NODE_MY_PRIMARY_FAIL;
+                        clusterDoBeforeSleep(CLUSTER_TODO_HANDLE_FASTER_FAILOVER);
+                    }
                     clusterSendFail(noaddr_node->name);
                 }
                 clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_UPDATE_STATE);
@@ -3777,6 +3798,16 @@ int clusterProcessPacket(clusterLink *link) {
                 failing->fail_time = now;
                 failing->flags &= ~CLUSTER_NODE_PFAIL;
                 clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_UPDATE_STATE);
+
+                if (nodeIsReplica(myself) && myself->replicaof == failing) {
+                    /* Immediately check if the node is our primary node, if so, we can try
+                     * to initiate a failover as soon as possible. We will also try to send
+                     * the FAIL packet in case we trigger the failover immediately but unable
+                     * to get the votes. */
+                    myself->flags |= CLUSTER_NODE_MY_PRIMARY_FAIL;
+                    clusterSendFail(failing->name);
+                    clusterDoBeforeSleep(CLUSTER_TODO_HANDLE_FASTER_FAILOVER);
+                }
             }
         } else {
             serverLog(LL_NOTICE, "Ignoring FAIL message from unknown node %.40s about %.40s", hdr->sender,
@@ -4787,6 +4818,21 @@ int clusterGetFailedPrimaryRank(void) {
     return rank;
 }
 
+
+/* Returns 1 if all replicas under my primary think the primary is in FAIL state. */
+int clusterAllReplicasThinkPrimaryIsFail(void) {
+    serverAssert(nodeIsReplica(myself));
+    serverAssert(myself->replicaof);
+
+    clusterNode *primary = myself->replicaof;
+    for (int i = 0; i < primary->num_replicas; i++) {
+        if (!nodePrimaryIsFail(primary->replicas[i])) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
 /* This function is called by clusterHandleReplicaFailover() in order to
  * let the replica log why it is not able to failover. Sometimes there are
  * not the conditions, but since the failover function is called again and
@@ -4963,7 +5009,7 @@ void clusterHandleReplicaFailover(void) {
      * elapsed, we can setup a new one. */
     if (auth_age > auth_retry_time) {
         server.cluster->failover_auth_time = now +
-                                             500 +           /* Fixed delay of 500 milliseconds, let FAIL msg propagate. */
+                                             500 + /* Fixed delay of 500 milliseconds, let FAIL msg propagate. */
                                              random() % 500; /* Random delay between 0 and 500 milliseconds. */
         server.cluster->failover_auth_count = 0;
         server.cluster->failover_auth_sent = 0;
@@ -4981,10 +5027,23 @@ void clusterHandleReplicaFailover(void) {
         if (server.cluster->mf_end) {
             server.cluster->failover_auth_time = now;
             server.cluster->failover_auth_rank = 0;
-            /* Reset auth_age since it is outdated now and we can bypass the auth_timeout
+        }
+
+        if (server.cluster->mf_end == 0 &&
+            server.cluster->failover_auth_rank == 0 &&
+            server.cluster->failover_failed_primary_rank == 0 &&
+            clusterAllReplicasThinkPrimaryIsFail()) {
+            server.cluster->failover_auth_time = now;
+            serverLog(LL_NOTICE, "I am the best ranked replica and can initiate the election immediately.");
+        }
+
+        if (server.cluster->failover_auth_time == now) {
+            /* If we happen to initiate a failover (automatic or manual) immediately.
+             * Reset auth_age since it is outdated now and we can bypass the auth_timeout
              * check in the next state and start the election ASAP. */
             auth_age = 0;
         }
+
         serverLog(LL_NOTICE,
                   "Start of election delayed for %lld milliseconds "
                   "(rank #%d, primary rank #%d, offset %lld).",
@@ -5008,8 +5067,13 @@ void clusterHandleReplicaFailover(void) {
      * It is also possible that we received the message that telling a
      * shard is up. Update the delay if our failed_primary_rank changed.
      *
+     * It is also possible that we received more message and then we figure
+     * out myself is the best ranked replica, in this case, we can initiate
+     * the election immediately.
+     *
      * Not performed if this is a manual failover. */
-    if (server.cluster->failover_auth_sent == 0 && server.cluster->mf_end == 0) {
+    if (server.cluster->failover_auth_sent == 0 && server.cluster->mf_end == 0 &&
+        server.cluster->failover_auth_time != now) {
         int newrank = clusterGetReplicaRank();
         if (newrank != server.cluster->failover_auth_rank) {
             long long added_delay = (newrank - server.cluster->failover_auth_rank) * 1000;
@@ -5026,6 +5090,13 @@ void clusterHandleReplicaFailover(void) {
             server.cluster->failover_failed_primary_rank = new_failed_primary_rank;
             serverLog(LL_NOTICE, "Failed primary rank updated to #%d, added %lld milliseconds of delay.",
                       new_failed_primary_rank, added_delay);
+        }
+
+        if (server.cluster->failover_auth_rank == 0 &&
+            server.cluster->failover_failed_primary_rank == 0 &&
+            clusterAllReplicasThinkPrimaryIsFail()) {
+            server.cluster->failover_auth_time = now;
+            serverLog(LL_NOTICE, "I am the best ranked replica and can initiate the election immediately.");
         }
     }
 
@@ -5573,7 +5644,8 @@ void clusterBeforeSleep(void) {
         }
     } else if (flags & CLUSTER_TODO_HANDLE_FAILOVER) {
         /* Handle failover, this is needed when it is likely that there is already
-         * the quorum from primaries in order to react fast. */
+         * the quorum from primaries in order to react fast. Or when we determine
+         * that we can proceed with the failover. */
         clusterHandleReplicaFailover();
     }
 
@@ -5591,6 +5663,12 @@ void clusterBeforeSleep(void) {
          * in the configuration and we want to make the cluster aware it before the
          * regular ping. */
         clusterBroadcastPong(CLUSTER_BROADCAST_ALL);
+    }
+
+    if (flags & CLUSTER_TODO_HANDLE_FASTER_FAILOVER) {
+        /* Handle faster failover, this goes after all the todos to check if we
+         * can initiate a fast failover. */
+        clusterHandleReplicaFailover();
     }
 }
 

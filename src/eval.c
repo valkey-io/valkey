@@ -620,22 +620,15 @@ void scriptCommand(client *c) {
             addReplyError(c, "SCRIPT DEBUG must be called outside a pipeline");
             return;
         }
-        scriptingEngine *en = NULL;
-        if (c->argc == 4) {
-            sds engine_name = c->argv[3]->ptr;
-            en = scriptingEngineManagerFind(engine_name);
-            if (en == NULL) {
-                addReplyErrorFormat(c, "No scripting engine found with name '%s' to enable debug", (const char *)engine_name);
-                return;
-            }
-        } else {
-            en = scriptingEngineManagerFind("lua");
-            if (en == NULL) {
-                addReplyError(c, "No scripting engine found with name 'lua' to enable debug");
-                return;
-            }
+
+        const char *engine_name = c->argc == 4 ? c->argv[3]->ptr : "lua";
+        scriptingEngine *en = scriptingEngineManagerFind(engine_name);
+        if (en == NULL) {
+            addReplyErrorFormat(c, "No scripting engine found with name '%s' to enable debug", engine_name);
+            return;
         }
         serverAssert(en != NULL);
+
         sds err;
         if (!strcasecmp(c->argv[2]->ptr, "no")) {
             scriptingEngineDebuggerDisable(c);

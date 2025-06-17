@@ -38,6 +38,7 @@
 #include <sys/time.h>
 #include <unistd.h>
 #include <sys/stat.h>
+#include <fcntl.h>
 
 void createSharedObjects(void);
 void rdbLoadProgressCallback(rio *r, const void *buf, size_t len);

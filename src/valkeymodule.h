@@ -1036,17 +1036,29 @@ typedef struct ValkeyModuleScriptingEngineDebuggerCommand {
 
 #define ValkeyModuleScriptingEngineDebuggerCommand ValkeyModuleScriptingEngineDebuggerCommandV1
 
-#define VALKEYMODULE_SCRIPTING_ENIGNE_DEBUGGER_COMMAND(NAME, PREFIX, PARAMS, PARAMS_LEN, DESC, INVISIBLE, HANDLER, ...) \
-    {                                                                                                                   \
-        .version = VALKEYMODULE_SCRIPTING_ENGINE_ABI_DEBUGGER_COMMAND_VERSION,                                          \
-        .name = NAME,                                                                                                   \
-        .prefix_len = PREFIX,                                                                                           \
-        .params = PARAMS,                                                                                               \
-        .params_len = PARAMS_LEN,                                                                                       \
-        .desc = DESC,                                                                                                   \
-        .invisible = INVISIBLE,                                                                                         \
-        .handler = HANDLER,                                                                                             \
-        __VA_ARGS__}
+#define VALKEYMODULE_SCRIPTING_ENGINE_DEBUGGER_COMMAND(NAME, PREFIX, PARAMS, PARAMS_LEN, DESC, INVISIBLE, HANDLER) \
+    {                                                                                                              \
+        .version = VALKEYMODULE_SCRIPTING_ENGINE_ABI_DEBUGGER_COMMAND_VERSION,                                     \
+        .name = NAME,                                                                                              \
+        .prefix_len = PREFIX,                                                                                      \
+        .params = PARAMS,                                                                                          \
+        .params_len = PARAMS_LEN,                                                                                  \
+        .desc = DESC,                                                                                              \
+        .invisible = INVISIBLE,                                                                                    \
+        .handler = HANDLER,                                                                                        \
+        .context = NULL}
+
+#define VALKEYMODULE_SCRIPTING_ENGINE_DEBUGGER_COMMAND_WITH_CTX(NAME, PREFIX, PARAMS, PARAMS_LEN, DESC, INVISIBLE, HANDLER, CTX) \
+    {                                                                                                                            \
+        .version = VALKEYMODULE_SCRIPTING_ENGINE_ABI_DEBUGGER_COMMAND_VERSION,                                                   \
+        .name = NAME,                                                                                                            \
+        .prefix_len = PREFIX,                                                                                                    \
+        .params = PARAMS,                                                                                                        \
+        .params_len = PARAMS_LEN,                                                                                                \
+        .desc = DESC,                                                                                                            \
+        .invisible = INVISIBLE,                                                                                                  \
+        .handler = HANDLER,                                                                                                      \
+        .context = CTX}
 
 /* The callback function called when `SCRIPT DEBUG (YES|SYNC)` command is called
  * to enable the remote debugger when executing a compiled function.

@@ -13265,6 +13265,10 @@ int VM_RdbSave(ValkeyModuleCtx *ctx, ValkeyModuleRdbStream *stream, int flags) {
     return VALKEYMODULE_OK;
 }
 
+/* --------------------------------------------------------------------------
+ * ## Scripting Engine API
+ * -------------------------------------------------------------------------- */
+
 /* Registers a new scripting engine in the server.
  *
  * - `module_ctx`: the module context object.
@@ -13336,6 +13340,15 @@ ValkeyModuleScriptingEngineExecutionState VM_GetFunctionExecutionState(
     return ret == SCRIPT_CONTINUE ? VMSE_STATE_EXECUTING : VMSE_STATE_KILLED;
 }
 
+/* Function to send string messages to the client during a debug session.
+ * These messages are buffered in memory, and are only sent to the client when
+ * `ValkeyModule_VM_ScriptingEngineDebuggerFlushLogs` is called.
+ *
+ * - `msg`: the message to send.
+ *
+ * - `truncate`: if set to 1, the message will be truncated to the maximum length
+ *   configured in the debugger settings.
+ */
 void VM_ScriptingEngineDebuggerLog(ValkeyModuleString *msg, int truncate) {
     if (truncate) {
         scriptingEngineDebuggerLogWithMaxLen(msg->ptr);
@@ -13344,14 +13357,29 @@ void VM_ScriptingEngineDebuggerLog(ValkeyModuleString *msg, int truncate) {
     }
 }
 
+/* Function to log a RESP reply C string as debugger output, in a human readable
+ * format.
+ *
+ * If the resulting string is longer than the maximum text length, configured in
+ * the debugger settings, plus a few more chars used as prefix, it gets truncated.
+ */
 void VM_ScriptingEngineDebuggerLogRespReplyStr(const char *reply) {
     scriptingEngineDebuggerLogRespReplyStr(reply);
 }
 
+/* Function to send all debugger messages in the memory buffer written with the
+ * `ValkeyModule_ScriptingEngineDebuggerLog` function.
+ */
 void VM_ScriptingEngineDebuggerFlushLogs(void) {
     scriptingEngineDebuggerFlushLogs();
 }
 
+/* Function used to process debugger commands sent by the client.
+ *
+ * This function in conjuction with `ValkeyModule_ScriptingEngineDebuggerLog` and
+ * `ValkeyModule_ScriptingEngineDebuggerFlushLogs` allows to implement an
+ * interactive debugging session for scripts executed by the scripting engine.
+ */
 void VM_ScriptingEngineDebuggerProcessCommands(int *client_disconnected,
                                                ValkeyModuleString **err) {
     scriptingEngineDebuggerProcessCommands(client_disconnected, err);

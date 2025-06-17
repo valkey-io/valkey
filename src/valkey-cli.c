@@ -3524,7 +3524,7 @@ static int evalMode(int argc, char **argv) {
 
         char *engine_name = NULL;
         if (script[0] == '#' && script[1] == '!') {
-            const char *sp = strchr(script, '\n');
+            const char *sp = strpbrk(script, "\r\n ");
             engine_name = strndup(script + 2, (sp - script) - 2);
         } else {
             engine_name = strdup("lua");

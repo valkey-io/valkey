@@ -5418,7 +5418,7 @@ struct COMMAND_ARG SCRIPT_DEBUG_mode_Subargs[] = {
 /* SCRIPT DEBUG argument table */
 struct COMMAND_ARG SCRIPT_DEBUG_Args[] = {
 {MAKE_ARG("mode",ARG_TYPE_ONEOF,-1,NULL,NULL,NULL,CMD_ARG_NONE,3,NULL),.subargs=SCRIPT_DEBUG_mode_Subargs},
-{MAKE_ARG("engine",ARG_TYPE_STRING,-1,NULL,NULL,"8.1.0",CMD_ARG_OPTIONAL,0,NULL)},
+{MAKE_ARG("engine",ARG_TYPE_STRING,-1,NULL,NULL,"9.0.0",CMD_ARG_OPTIONAL,0,NULL)},
 };
 
 /********** SCRIPT EXISTS ********************/

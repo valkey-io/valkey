@@ -2,6 +2,7 @@
 #define _SCRIPTING_ENGINE_H_
 
 #include "server.h"
+#include "valkeymodule.h"
 
 // Forward declaration of the engine structure.
 typedef struct scriptingEngine scriptingEngine;
@@ -17,6 +18,7 @@ typedef ValkeyModuleScriptingEngineCallableLazyEvalReset callableLazyEvalReset;
 typedef ValkeyModuleScriptingEngineDebuggerEnableRet debuggerEnableRet;
 typedef ValkeyModuleScriptingEngineDebuggerCommand debuggerCommand;
 typedef ValkeyModuleScriptingEngineDebuggerCommandParam debuggerCommandParam;
+typedef ValkeyModuleScriptingEngineMethodsV1 engineMethodsV1;
 typedef ValkeyModuleScriptingEngineMethods engineMethods;
 
 /*

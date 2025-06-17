@@ -8,6 +8,7 @@
 #include "dict.h"
 #include "functions.h"
 #include "module.h"
+#include "server.h"
 
 typedef struct scriptingEngineImpl {
     /* Engine specific context */
@@ -76,6 +77,14 @@ size_t scriptingEngineManagerGetMemoryUsage(void) {
     return dictMemUsage(engineMgr.engines) + sizeof(engineMgr);
 }
 
+static inline void scriptingEngineInitializeEngineMethods(scriptingEngine *engine, engineMethods *methods) {
+    if (methods->version < 3) {
+        memcpy(&engine->impl.methods, methods, sizeof(engineMethodsV1));
+    } else {
+        engine->impl.methods = *methods;
+    }
+}
+
 /* Registers a new scripting engine in the engine manager.
  *
  * - `engine_name`: the name of the scripting engine. This name will match
@@ -111,11 +120,11 @@ int scriptingEngineManagerRegister(const char *engine_name,
         .module = engine_module,
         .impl = {
             .ctx = engine_ctx,
-            .methods = *engine_methods,
         },
         .client = c,
         .module_ctx = engine_module ? moduleAllocateContext() : NULL,
     };
+    scriptingEngineInitializeEngineMethods(e, engine_methods);
 
     dictAdd(engineMgr.engines, engine_name_sds, e);
 
@@ -329,6 +338,13 @@ debuggerEnableRet scriptingEngineCallDebuggerEnable(scriptingEngine *engine,
                                                     subsystemType type,
                                                     const debuggerCommand **commands,
                                                     size_t *commands_len) {
+    if (engine->impl.methods.version < 3) {
+        serverLog(LL_WARNING, "Scripting engine '%s' uses ABI version '%lu', which does not support debugger API",
+                  scriptingEngineGetName(engine),
+                  (unsigned long)engine->impl.methods.version);
+        return VMSE_DEBUG_NOT_SUPPORTED;
+    }
+
     if (engine->impl.methods.debugger_enable == NULL ||
         engine->impl.methods.debugger_disable == NULL ||
         engine->impl.methods.debugger_start == NULL ||
@@ -349,6 +365,9 @@ debuggerEnableRet scriptingEngineCallDebuggerEnable(scriptingEngine *engine,
 
 void scriptingEngineCallDebuggerDisable(scriptingEngine *engine,
                                         subsystemType type) {
+    serverAssert(engine->impl.methods.version >= 3);
+    serverAssert(engine->impl.methods.debugger_disable != NULL);
+
     engineSetupModuleCtx(engine, NULL);
     engine->impl.methods.debugger_disable(
         engine->module_ctx,
@@ -360,6 +379,9 @@ void scriptingEngineCallDebuggerDisable(scriptingEngine *engine,
 void scriptingEngineCallDebuggerStart(scriptingEngine *engine,
                                       subsystemType type,
                                       robj *source) {
+    serverAssert(engine->impl.methods.version >= 3);
+    serverAssert(engine->impl.methods.debugger_start != NULL);
+
     engineSetupModuleCtx(engine, NULL);
     engine->impl.methods.debugger_start(
         engine->module_ctx,
@@ -371,6 +393,9 @@ void scriptingEngineCallDebuggerStart(scriptingEngine *engine,
 
 void scriptingEngineCallDebuggerEnd(scriptingEngine *engine,
                                     subsystemType type) {
+    serverAssert(engine->impl.methods.version >= 3);
+    serverAssert(engine->impl.methods.debugger_end != NULL);
+
     engineSetupModuleCtx(engine, NULL);
     engine->impl.methods.debugger_end(
         engine->module_ctx,
@@ -450,6 +475,11 @@ int scriptingEngineDebuggerEnable(client *c, scriptingEngine *engine, sds *err) 
  * to properly shut down a client debugging session, see scriptingEngineDebuggerEndSession()
  * for more information. */
 void scriptingEngineDebuggerDisable(client *c) {
+    if (ds.engine == NULL) {
+        /* No debug session enabled. */
+        return;
+    }
+
     ds.commands = NULL;
     ds.commands_len = 0;
     c->flag.lua_debug = 0;
@@ -569,6 +599,8 @@ int scriptingEngineDebuggerStartSession(client *c) {
 /* End a debugging session after the EVAL call with debugging enabled
  * returned. */
 void scriptingEngineDebuggerEndSession(client *c) {
+    serverAssert(ds.active);
+
     /* Emit the remaining logs and an <endsession> mark. */
     scriptingEngineDebuggerLog(sdsnew("<endsession>"));
     scriptingEngineDebuggerFlushLogs();

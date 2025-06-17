@@ -1119,9 +1119,43 @@ typedef void (*ValkeyModuleScriptingEngineDebuggerEndFunc)(
     ValkeyModuleScriptingEngineSubsystemType type);
 
 /* Current ABI version for scripting engine modules. */
-#define VALKEYMODULE_SCRIPTING_ENGINE_ABI_VERSION 2UL
+/* Version Changelog:
+ *  - 1: Initial version.
+ *  - 2: Changed the `compile_code` callback to support binary data in the source code.
+ *  - 3: Added support for new debugging commands.
+ */
+#define VALKEYMODULE_SCRIPTING_ENGINE_ABI_VERSION 3UL
 
 typedef struct ValkeyModuleScriptingEngineMethods {
+    uint64_t version; /* Version of this structure for ABI compat. */
+
+    /* Compile code function callback. When a new script is loaded, this
+     * callback will be called with the script code, compiles it, and returns a
+     * list of `ValkeyModuleScriptingEngineCompiledFunc` objects. */
+    union {
+        ValkeyModuleScriptingEngineCompileCodeFuncV1 compile_code_v1;
+        ValkeyModuleScriptingEngineCompileCodeFunc compile_code;
+    };
+    /* Function callback to free the memory of a registered engine function. */
+    ValkeyModuleScriptingEngineFreeFunctionFunc free_function;
+
+    /* The callback function called when `FCALL` command is called on a function
+     * registered in this engine. */
+    ValkeyModuleScriptingEngineCallFunctionFunc call_function;
+
+    /* Function callback to return memory overhead for a given function. */
+    ValkeyModuleScriptingEngineGetFunctionMemoryOverheadFunc get_function_memory_overhead;
+
+    /* The callback function used to reset the runtime environment used
+     * by the scripting engine for EVAL scripts. */
+    ValkeyModuleScriptingEngineResetEvalEnvFunc reset_eval_env;
+
+    /* Function callback to get the used memory by the engine. */
+    ValkeyModuleScriptingEngineGetMemoryInfoFunc get_memory_info;
+
+} ValkeyModuleScriptingEngineMethodsV1;
+
+typedef struct ValkeyModuleScriptingEngineMethodsV2 {
     uint64_t version; /* Version of this structure for ABI compat. */
 
     /* Compile code function callback. When a new script is loaded, this
@@ -1161,9 +1195,9 @@ typedef struct ValkeyModuleScriptingEngineMethods {
     ValkeyModuleScriptingEngineDebuggerEndFunc debugger_end;
 
 
-} ValkeyModuleScriptingEngineMethodsV1;
+} ValkeyModuleScriptingEngineMethodsV2;
 
-#define ValkeyModuleScriptingEngineMethods ValkeyModuleScriptingEngineMethodsV1
+#define ValkeyModuleScriptingEngineMethods ValkeyModuleScriptingEngineMethodsV2
 
 /* ------------------------- End of common defines ------------------------ */
 

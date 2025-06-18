@@ -673,32 +673,66 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx,
     VALKEYMODULE_NOT_USED(argv);
     VALKEYMODULE_NOT_USED(argc);
 
-    if (ValkeyModule_Init(ctx, "helloengine", 1, VALKEYMODULE_APIVER_1) ==
-        VALKEYMODULE_ERR)
+    if (ValkeyModule_Init(ctx, "helloengine", 1, VALKEYMODULE_APIVER_1) == VALKEYMODULE_ERR) {
         return VALKEYMODULE_ERR;
+    }
+
+    unsigned long long abi_version = VALKEYMODULE_SCRIPTING_ENGINE_ABI_VERSION;
+    if (argc > 0) {
+        if (ValkeyModule_StringToULongLong(argv[0], &abi_version) == VALKEYMODULE_ERR) {
+            const char *arg_str = ValkeyModule_StringPtrLen(argv[0], NULL);
+            ValkeyModule_Log(ctx, "error", "Invalid ABI version: %s", arg_str);
+            return VALKEYMODULE_ERR;
+        }
+        else {
+            const char *arg_str = ValkeyModule_StringPtrLen(argv[0], NULL);
+            ValkeyModule_Log(ctx, "info", "initializing Hello scripting enigne with ABI version: %s", arg_str);
+        }
+    }
 
     hello_ctx = ValkeyModule_Alloc(sizeof(HelloLangCtx));
     hello_ctx->program = NULL;
     hello_ctx->debug.enabled = 0;
 
-    ValkeyModuleScriptingEngineMethods methods = {
-        .version = VALKEYMODULE_SCRIPTING_ENGINE_ABI_VERSION,
-        .compile_code = createHelloLangEngine,
-        .free_function = engineFreeFunction,
-        .call_function = callHelloLangFunction,
-        .get_function_memory_overhead = engineFunctionMemoryOverhead,
-	    .reset_eval_env = helloResetEvalEnv,
-        .get_memory_info = engineGetMemoryInfo,
-        .debugger_enable = helloDebuggerEnable,
-        .debugger_disable = helloDebuggerDisable,
-        .debugger_start = helloDebuggerStart,
-        .debugger_end = helloDebuggerEnd,
-    };
+    ValkeyModuleScriptingEngineMethodsV1 methodsV1;
+    ValkeyModuleScriptingEngineMethodsV2 methodsV2;
+
+    if (abi_version <= 2) {
+        methodsV1 = (ValkeyModuleScriptingEngineMethodsV1){
+            .version = VALKEYMODULE_SCRIPTING_ENGINE_ABI_VERSION,
+            .compile_code = createHelloLangEngine,
+            .free_function = engineFreeFunction,
+            .call_function = callHelloLangFunction,
+            .get_function_memory_overhead = engineFunctionMemoryOverhead,
+            .reset_eval_env = helloResetEvalEnv,
+            .get_memory_info = engineGetMemoryInfo,
+        };
+    }
+    else {
+        methodsV2 = (ValkeyModuleScriptingEngineMethodsV2) {
+            .version = VALKEYMODULE_SCRIPTING_ENGINE_ABI_VERSION,
+            .compile_code = createHelloLangEngine,
+            .free_function = engineFreeFunction,
+            .call_function = callHelloLangFunction,
+            .get_function_memory_overhead = engineFunctionMemoryOverhead,
+            .reset_eval_env = helloResetEvalEnv,
+            .get_memory_info = engineGetMemoryInfo,
+            .debugger_enable = helloDebuggerEnable,
+            .debugger_disable = helloDebuggerDisable,
+            .debugger_start = helloDebuggerStart,
+            .debugger_end = helloDebuggerEnd,
+        };
+    }
+
+    ValkeyModuleScriptingEngineMethods *methods = abi_version <= 2 ?
+        (ValkeyModuleScriptingEngineMethods *)&methodsV1 :
+        (ValkeyModuleScriptingEngineMethods *)&methodsV2;
 
     ValkeyModule_RegisterScriptingEngine(ctx,
                                          "HELLO",
                                          hello_ctx,
-                                         &methods);
+                                         methods);
+
     return VALKEYMODULE_OK;
 }
 

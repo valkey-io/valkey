@@ -7,14 +7,11 @@
 #include "debug_lua.h"
 #include "script_lua.h"
 
-#include "../connection.h"
-#include "../adlist.h"
 #include "../server.h"
 
 #include <lua.h>
 #include <lauxlib.h>
 #include <lualib.h>
-#include <signal.h>
 
 /* ---------------------------------------------------------------------------
  * LDB: Lua debugging facilities
@@ -86,7 +83,7 @@ void ldbEnd(void) {
 }
 
 void ldbLog(sds entry) {
-    scriptingEngineDebuggerLog(entry);
+    scriptingEngineDebuggerLog(createObject(OBJ_STRING, entry));
 }
 
 void ldbSendLogs(void) {
@@ -260,7 +257,7 @@ sds ldbCatStackValue(sds s, lua_State *lua, int idx) {
 static void ldbLogStackValue(lua_State *lua, char *prefix) {
     sds s = sdsnew(prefix);
     s = ldbCatStackValue(s, lua, -1);
-    scriptingEngineDebuggerLogWithMaxLen(s);
+    scriptingEngineDebuggerLogWithMaxLen(createObject(OBJ_STRING, s));
 }
 
 /* Log a RESP reply as debugger output, in a human readable format.

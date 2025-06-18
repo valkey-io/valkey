@@ -8,6 +8,7 @@
 #include "dict.h"
 #include "functions.h"
 #include "module.h"
+#include "sds.h"
 #include "server.h"
 
 typedef struct scriptingEngineImpl {
@@ -423,13 +424,17 @@ typedef struct debugState {
 
 static debugState ds;
 
+static inline void freeLogEntry(void *obj) {
+    decrRefCount((robj *)obj);
+}
+
 /* Initialize script debugger data structures. */
 void scriptingEngineDebuggerInit(void) {
     ds.engine = NULL;
     ds.conn = NULL;
     ds.active = 0;
     ds.logs = listCreate();
-    listSetFreeMethod(ds.logs, sdsfreeVoid);
+    listSetFreeMethod(ds.logs, freeLogEntry);
     ds.children = listCreate();
     ds.cbuf = sdsempty();
 }
@@ -488,7 +493,7 @@ void scriptingEngineDebuggerDisable(client *c) {
 }
 
 /* Append a log entry to the specified debug state log. */
-void scriptingEngineDebuggerLog(sds entry) {
+void scriptingEngineDebuggerLog(robj *entry) {
     listAddNodeTail(ds.logs, entry);
 }
 
@@ -496,17 +501,19 @@ void scriptingEngineDebuggerLog(sds entry) {
  * ds.maxlen. The first time the limit is reached a hint is generated
  * to inform the user that reply trimming can be disabled using the
  * debugger "maxlen" command. */
-void scriptingEngineDebuggerLogWithMaxLen(sds entry) {
+void scriptingEngineDebuggerLogWithMaxLen(robj *entry) {
     int trimmed = 0;
-    if (ds.maxlen && sdslen(entry) > ds.maxlen) {
-        sdsrange(entry, 0, ds.maxlen - 1);
-        entry = sdscatlen(entry, " ...", 4);
+
+    if (ds.maxlen && sdslen(entry->ptr) > ds.maxlen) {
+        sdsrange(entry->ptr, 0, ds.maxlen - 1);
+        entry->ptr = sdscatlen(entry->ptr, " ...", 4);
         trimmed = 1;
     }
     scriptingEngineDebuggerLog(entry);
     if (trimmed && ds.maxlen_hint_sent == 0) {
         ds.maxlen_hint_sent = 1;
-        scriptingEngineDebuggerLog(sdsnew("<hint> The above reply was trimmed. Use 'maxlen 0' to disable trimming."));
+        scriptingEngineDebuggerLog(
+            createObject(OBJ_STRING, sdsnew("<hint> The above reply was trimmed. Use 'maxlen 0' to disable trimming.")));
     }
 }
 
@@ -531,9 +538,10 @@ void scriptingEngineDebuggerFlushLogs(void) {
     proto = sdscatfmt(proto, "*%i\r\n", (int)listLength(ds.logs));
     while (listLength(ds.logs)) {
         listNode *ln = listFirst(ds.logs);
+        robj *msg = ln->value;
         proto = sdscatlen(proto, "+", 1);
-        sdsmapchars(ln->value, "\r\n", "  ", 2);
-        proto = sdscatsds(proto, ln->value);
+        sdsmapchars(msg->ptr, "\r\n", "  ", 2);
+        proto = sdscatsds(proto, msg->ptr);
         proto = sdscatlen(proto, "\r\n", 2);
         listDelNode(ds.logs, ln);
     }
@@ -602,7 +610,7 @@ void scriptingEngineDebuggerEndSession(client *c) {
     serverAssert(ds.active);
 
     /* Emit the remaining logs and an <endsession> mark. */
-    scriptingEngineDebuggerLog(sdsnew("<endsession>"));
+    scriptingEngineDebuggerLog(createObject(OBJ_STRING, sdsnew("<endsession>")));
     scriptingEngineDebuggerFlushLogs();
 
     /* If it's a fork()ed session, we just exit. */
@@ -767,6 +775,7 @@ static void printCommandHelp(const debuggerCommand *command,
     if (command->prefix_len > 0 && command->prefix_len < strlen(command->name)) {
         sds prefix = sdsnewlen(command->name, command->prefix_len);
         msg = sdscatfmt(msg, "[%S]%s", prefix, command->name + command->prefix_len);
+        sdsfree(prefix);
     } else {
         msg = sdscatfmt(msg, "%s", command->name);
     }
@@ -786,7 +795,7 @@ static void printCommandHelp(const debuggerCommand *command,
      * space slot, then start the description of the command in the next line.*/
     int breakline = (int)sdslen(msg) > name_width;
     if (breakline) {
-        scriptingEngineDebuggerLog(msg);
+        scriptingEngineDebuggerLog(createObject(OBJ_STRING, msg));
     }
 
     size_t count = 0;
@@ -797,7 +806,7 @@ static void printCommandHelp(const debuggerCommand *command,
         } else {
             msg = sdscatprintf(sdsempty(), "%*s%s", name_width, "", lines[i]);
         }
-        scriptingEngineDebuggerLog(msg);
+        scriptingEngineDebuggerLog(createObject(OBJ_STRING, msg));
         sdsfree(lines[i]);
     }
     zfree(lines);
@@ -823,7 +832,8 @@ static int printHelpMessage(robj **argv, size_t argc, void *context) {
     UNUSED(argc);
     UNUSED(context);
 
-    scriptingEngineDebuggerLog(sdscatfmt(sdsempty(), "%s debugger help:", scriptingEngineGetName(ds.engine)));
+    sds title = sdscatfmt(sdsempty(), "%s debugger help:", scriptingEngineGetName(ds.engine));
+    scriptingEngineDebuggerLog(createObject(OBJ_STRING, title));
 
     printCommandHelp(&helpCommand, HELP_CMD_NAME_WIDTH, HELP_LINE_WIDTH);
 
@@ -894,8 +904,9 @@ static const debuggerCommand *findCommand(robj **argv, size_t argc) {
 static int findAndExecuteCommand(robj **argv, size_t argc) {
     const debuggerCommand *cmd = findCommand(argv, argc);
     if (cmd == NULL) {
-        scriptingEngineDebuggerLog(sdsnew("<error> Unknown debugger command or "
-                                          "wrong number of arguments."));
+        scriptingEngineDebuggerLog(createObject(
+            OBJ_STRING,
+            sdsnew("<error> Unknown debugger command or wrong number of arguments.")));
         scriptingEngineDebuggerFlushLogs();
         return CONTINUE_READ_NEXT_COMMAND;
     }
@@ -944,15 +955,17 @@ void scriptingEngineDebuggerProcessCommands(int *client_disconnected, robj **err
             return;
         }
 
-        if (findAndExecuteCommand(argv, argc) != CONTINUE_READ_NEXT_COMMAND) {
-            return;
-        }
+        int res = findAndExecuteCommand(argv, argc);
 
         /* Free the command vector. */
         for (size_t i = 0; i < argc; i++) {
             decrRefCount(argv[i]);
         }
         zfree(argv);
+
+        if (res != CONTINUE_READ_NEXT_COMMAND) {
+            return;
+        }
     }
 }
 
@@ -1100,5 +1113,5 @@ static const char *debugScriptRespToHuman_Double(sds *o, const char *reply) {
 void scriptingEngineDebuggerLogRespReplyStr(const char *reply) {
     sds log = sdsnew("<reply> ");
     debugScriptRespToHuman(&log, reply);
-    scriptingEngineDebuggerLogWithMaxLen(log);
+    scriptingEngineDebuggerLogWithMaxLen(createObject(OBJ_STRING, log));
 }

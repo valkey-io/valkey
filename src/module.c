@@ -13351,9 +13351,9 @@ ValkeyModuleScriptingEngineExecutionState VM_GetFunctionExecutionState(
  */
 void VM_ScriptingEngineDebuggerLog(ValkeyModuleString *msg, int truncate) {
     if (truncate) {
-        scriptingEngineDebuggerLogWithMaxLen(msg->ptr);
+        scriptingEngineDebuggerLogWithMaxLen(msg);
     } else {
-        scriptingEngineDebuggerLog(msg->ptr);
+        scriptingEngineDebuggerLog(msg);
     }
 }
 

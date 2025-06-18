@@ -8,9 +8,6 @@
 #include "script_lua.h"
 #include "debug_lua.h"
 
-#include "../dict.h"
-#include "../adlist.h"
-
 #define LUA_ENGINE_NAME "LUA"
 #define REGISTRY_ERROR_HANDLER_NAME "__ERROR_HANDLER__"
 

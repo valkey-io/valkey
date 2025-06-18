@@ -116,9 +116,9 @@ int scriptingEngineDebuggerStartSession(client *c);
 
 void scriptingEngineDebuggerEndSession(client *c);
 
-void scriptingEngineDebuggerLog(sds entry);
+void scriptingEngineDebuggerLog(robj *entry);
 
-void scriptingEngineDebuggerLogWithMaxLen(sds entry);
+void scriptingEngineDebuggerLogWithMaxLen(robj *entry);
 
 void scriptingEngineDebuggerSetMaxlen(size_t max);
 

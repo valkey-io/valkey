@@ -45,6 +45,22 @@
 
 #define TEST_ASSERT(_c) TEST_ASSERT_MESSAGE("Failed assertion: " #_c, _c)
 
+#define TEST_EXPECT_MESSAGE(descr, _c) \
+    do {                               \
+        if (!(_c)) {                   \
+            TEST_PRINT_ERROR(descr);   \
+            expect_status_ = 1;        \
+        }                              \
+    } while (0)
+
+#define TEST_EXPECT(_c) TEST_EXPECT_MESSAGE("Failed expect: " #_c, _c)
+
+#define TEST_BEGIN() int expect_status_ = 0
+#define TEST_END()             \
+    do {                       \
+        return expect_status_; \
+    } while (0)
+
 #ifndef UNUSED
 #define UNUSED(x) (void)(x)
 #endif

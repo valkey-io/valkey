@@ -483,8 +483,6 @@ void debugCommand(client *c) {
             "    Enables or disables checksum checks for RDB files and RESTORE's payload.",
             "SLEEP <seconds>",
             "    Stop the server for <seconds>. Decimals allowed.",
-            "STRINGMATCH-TEST",
-            "    Run a fuzz tester against the stringmatchlen() function.",
             "STRUCTSIZE",
             "    Return the size of different core C structures.",
             "LISTPACK <key>",
@@ -959,9 +957,6 @@ void debugCommand(client *c) {
         changeReplicationId();
         clearReplicationId2();
         addReply(c, shared.ok);
-    } else if (!strcasecmp(c->argv[1]->ptr, "stringmatch-test") && c->argc == 2) {
-        stringmatchlen_fuzz_test();
-        addReplyStatus(c, "Apparently the server did not crash: test passed");
     } else if (!strcasecmp(c->argv[1]->ptr, "set-disable-deny-scripts") && c->argc == 3) {
         server.script_disable_deny_script = atoi(c->argv[2]->ptr);
         addReply(c, shared.ok);

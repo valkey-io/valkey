@@ -120,36 +120,41 @@ static int stringmatchlen_impl(const char *pattern,
                 if (patternLen >= 2 && pattern[0] == '\\') {
                     pattern++;
                     patternLen--;
-                    if (pattern[0] == string[0]) match = 1;
                 } else if (patternLen == 0) {
                     pattern--;
                     patternLen++;
                     break;
                 } else if (pattern[0] == ']') {
                     break;
-                } else if (patternLen >= 3 && pattern[1] == '-') {
+                }
+                if (patternLen >= 3 && pattern[1] == '-') {
                     int start = pattern[0];
                     int end = pattern[2];
+                    if (end == '\\' && patternLen >= 4) {
+                        end = pattern[3];
+                        pattern++;
+                        patternLen--;
+                    }
                     int c = string[0];
                     if (start > end) {
                         int t = start;
                         start = end;
                         end = t;
                     }
-                    if (nocase) {
-                        start = tolower(start);
-                        end = tolower(end);
-                        c = tolower(c);
+                    if (c >= start && c <= end) {
+                        match = 1;
+                    } else if (nocase && isalpha(c)) {
+                        c = islower(c) ? toupper(c) : tolower(c);
+                        if (c >= start && c <= end) match = 1;
                     }
-                    pattern += 2;
-                    patternLen -= 2;
-                    if (c >= start && c <= end) match = 1;
+                    pattern += 3;
+                    patternLen -= 3;
+                    continue;
+                }
+                if (!nocase) {
+                    if (pattern[0] == string[0]) match = 1;
                 } else {
-                    if (!nocase) {
-                        if (pattern[0] == string[0]) match = 1;
-                    } else {
-                        if (tolower((int)pattern[0]) == tolower((int)string[0])) match = 1;
-                    }
+                    if (tolower((int)pattern[0]) == tolower((int)string[0])) match = 1;
                 }
                 pattern++;
                 patternLen--;
@@ -178,12 +183,11 @@ static int stringmatchlen_impl(const char *pattern,
         }
         pattern++;
         patternLen--;
-        if (stringLen == 0) {
-            while (patternLen && *pattern == '*') {
-                pattern++;
-                patternLen--;
-            }
-            break;
+    }
+    if (stringLen == 0) {
+        while (patternLen && *pattern == '*') {
+            pattern++;
+            patternLen--;
         }
     }
     if (patternLen == 0 && stringLen == 0) return 1;
@@ -197,22 +201,6 @@ int stringmatchlen(const char *pattern, int patternLen, const char *string, int 
 
 int stringmatch(const char *pattern, const char *string, int nocase) {
     return stringmatchlen(pattern, strlen(pattern), string, strlen(string), nocase);
-}
-
-/* Fuzz stringmatchlen() trying to crash it with bad input. */
-int stringmatchlen_fuzz_test(void) {
-    char str[32];
-    char pat[32];
-    int cycles = 10000000;
-    int total_matches = 0;
-    while (cycles--) {
-        int strlen = rand() % sizeof(str);
-        int patlen = rand() % sizeof(pat);
-        for (int j = 0; j < strlen; j++) str[j] = rand() % 128;
-        for (int j = 0; j < patlen; j++) pat[j] = rand() % 128;
-        total_matches += stringmatchlen(pat, patlen, str, strlen, 0);
-    }
-    return total_matches;
 }
 
 

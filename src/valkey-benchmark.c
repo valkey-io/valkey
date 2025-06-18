@@ -76,8 +76,8 @@
 #define CLIENT_GET_EVENTLOOP(c) (c->thread_id >= 0 ? config.threads[c->thread_id]->el : config.el)
 
 #define PLACEHOLDER_COUNT 10
-static const size_t KEY_PLACEHOLDER_LEN = 12; // length of BENCHMARK_PLACEHOLDERS strings
-static const char *BENCHMARK_PLACEHOLDERS[PLACEHOLDER_COUNT] = {
+static const size_t PLACEHOLDER_LEN = 12; // length of BENCHMARK_PLACEHOLDERS strings
+static const char *PLACEHOLDERS[PLACEHOLDER_COUNT] = {
     "__rand_int__", "__rand_1st__", "__rand_2nd__", "__rand_3rd__", "__rand_4th__",
     "__rand_5th__", "__rand_6th__", "__rand_7th__", "__rand_8th__", "__rand_9th__"};
 
@@ -151,27 +151,30 @@ static struct config {
     uint64_t time_per_burst;
 } config;
 
+/* Locations of the placeholders __rand_int__, __rand_1st__,
+ * __rand_2nd, etc. within the RESP encoded command buffer. */
 static struct placeholders {
     size_t cmd_len;                     /* length of the command */
     size_t count[PLACEHOLDER_COUNT];    /* number of each placeholder in the command */
-    size_t *indices[PLACEHOLDER_COUNT]; /* placeholder indices in the command */
+    size_t *indices[PLACEHOLDER_COUNT]; /* pointer to indices for each placeholder */
+    size_t *index_data;                 /* allocation holding all index data */
 } placeholders;
 
 typedef struct _client {
     valkeyContext *context;
     sds obuf;
-    char **stagptr;                     /* Pointers to slot hashtags (cluster mode only) */
-    size_t staglen;                     /* Number of pointers in client->stagptr */
-    size_t stagfree;                    /* Number of unused pointers in client->stagptr */
-    size_t written;                     /* Bytes of 'obuf' already written */
-    long long start;                    /* Start time of a request */
-    long long latency;                  /* Request latency */
-    int seqlen;                         /* Number of commands in the command sequence */
-    int pending;                        /* Number of pending requests (replies to consume) */
-    int prefix_pending;                 /* If non-zero, number of pending prefix commands. Commands
-                                           such as auth and select are prefixed to the pipeline of
-                                           benchmark commands and discarded after the first send. */
-    int prefixlen;                      /* Size in bytes of the pending prefix commands */
+    char **stagptr;     /* Pointers to slot hashtags (cluster mode only) */
+    size_t staglen;     /* Number of pointers in client->stagptr */
+    size_t stagfree;    /* Number of unused pointers in client->stagptr */
+    size_t written;     /* Bytes of 'obuf' already written */
+    long long start;    /* Start time of a request */
+    long long latency;  /* Request latency */
+    int seqlen;         /* Number of commands in the command sequence */
+    int pending;        /* Number of pending requests (replies to consume) */
+    int prefix_pending; /* If non-zero, number of pending prefix commands. Commands
+                           such as auth and select are prefixed to the pipeline of
+                           benchmark commands and discarded after the first send. */
+    int prefixlen;      /* Size in bytes of the pending prefix commands */
     int thread_id;
     struct clusterNode *cluster_node;
     int slots_last_update;
@@ -376,8 +379,8 @@ static void freeServerConfig(serverConfig *cfg) {
 }
 
 void resetPlaceholders(void) {
-    if (placeholders.indices[0])
-        zfree(placeholders.indices[0]); /* indices are a single contiguous allocation */
+    if (placeholders.index_data)
+        zfree(placeholders.index_data); /* indices are a single contiguous allocation */
     memset(&placeholders, 0, sizeof(placeholders));
 }
 
@@ -396,7 +399,7 @@ void initPlaceholders(const char *cmd, size_t cmd_len) {
         temp_indices[placeholder] = zmalloc(sizeof(size_t) * temp_size);
         const char *p = cmd;
         const char *end = cmd + cmd_len;
-        while ((p = strstr(p, BENCHMARK_PLACEHOLDERS[placeholder])) != NULL && p < end) {
+        while ((p = strstr(p, PLACEHOLDERS[placeholder])) != NULL && p < end) {
             if (*count == temp_size) {
                 temp_size *= 2;
                 temp_indices[placeholder] = zrealloc(temp_indices[placeholder], sizeof(size_t) * temp_size);
@@ -405,15 +408,15 @@ void initPlaceholders(const char *cmd, size_t cmd_len) {
             temp_indices[placeholder][*count] = index;
             (*count)++;
             total_count++;
-            p += KEY_PLACEHOLDER_LEN; // Move past the placeholder
+            p += PLACEHOLDER_LEN; // Move past the placeholder
         }
     }
 
     /* consolidate temp data into contiguous allocation */
-    placeholders.indices[0] = zmalloc(sizeof(size_t) * total_count);
+    placeholders.index_data = zmalloc(sizeof(size_t) * total_count);
     size_t overall_index = 0;
     for (size_t placeholder = 0; placeholder < PLACEHOLDER_COUNT; placeholder++) {
-        placeholders.indices[placeholder] = placeholders.indices[0] + overall_index;
+        placeholders.indices[placeholder] = placeholders.index_data + overall_index;
 
         const size_t count = placeholders.count[placeholder];
         memcpy(placeholders.indices[placeholder], temp_indices[placeholder],
@@ -439,17 +442,17 @@ static void replacePlaceholder(const size_t *indices, const size_t count, char *
     }
 
     /* convert key to string at first location */
-    char *p = cmd + indices[0] + KEY_PLACEHOLDER_LEN - 1;
-    for (size_t j = 0; j < KEY_PLACEHOLDER_LEN; j++) {
+    char *p = cmd + indices[0] + PLACEHOLDER_LEN - 1;
+    for (size_t j = 0; j < PLACEHOLDER_LEN; j++) {
         *p = '0' + key % 10;
         key /= 10;
         p--;
     }
 
-    /* copy the first instace to the other locations */
+    /* copy the first instance to the other locations */
     for (size_t i = 1; i < count; i++) {
         char *placeholder = cmd + indices[i];
-        memcpy(placeholder, cmd + indices[0], KEY_PLACEHOLDER_LEN);
+        memcpy(placeholder, cmd + indices[0], PLACEHOLDER_LEN);
     }
 }
 
@@ -466,7 +469,7 @@ static void replacePlaceholders(char *cmd_data, int cmd_count) {
             replacePlaceholder(indices + i, 1, cmd, key_counter);
         }
 
-        /* For other placeholders, multiple occurences within the command will
+        /* For other placeholders, multiple occurrences within the command will
          * have the same value */
         for (size_t placeholder = 1; placeholder < PLACEHOLDER_COUNT; placeholder++) {
             size_t *indices = placeholders.indices[placeholder];
@@ -1792,9 +1795,9 @@ usage:
         "a number N to repeat the command N times. In command arguments, the following\n"
         "placeholders are substituted:\n\n"
         " __rand_int__       Replaced with a zero-padded random integer in the range\n"
-        "                    selected using the -r option. Multiple occurences within the\n"
+        "                    selected using the -r option. Multiple occurrences within the\n"
         "                    command will have different values.\n"
-        "__rand_1st__        Like __rand_int__ but multiple occurences will have the same\n"
+        "__rand_1st__        Like __rand_int__ but multiple occurrences will have the same\n"
         "                    value. __rand_2nd__ through __rand_9th__ are also available.\n"
         " __data__           Replaced with data of the size specified by the -d option.\n"
         " {tag}              Replaced with a tag that routes the command to each node in\n"
@@ -2254,19 +2257,19 @@ int main(int argc, char **argv) {
         }
 
         if (test_is_selected("set")) {
-            len = valkeyFormatCommand(&cmd, "SET key%s:%s %s", tag, BENCHMARK_PLACEHOLDERS[0], data);
+            len = valkeyFormatCommand(&cmd, "SET key%s:__rand_int__ %s", tag, data);
             benchmark("SET", cmd, len);
             free(cmd);
         }
 
         if (test_is_selected("get")) {
-            len = valkeyFormatCommand(&cmd, "GET key%s:%s", tag, BENCHMARK_PLACEHOLDERS[0]);
+            len = valkeyFormatCommand(&cmd, "GET key%s:__rand_int__", tag);
             benchmark("GET", cmd, len);
             free(cmd);
         }
 
         if (test_is_selected("incr")) {
-            len = valkeyFormatCommand(&cmd, "INCR counter%s:%s", tag, BENCHMARK_PLACEHOLDERS[0]);
+            len = valkeyFormatCommand(&cmd, "INCR counter%s:__rand_int__", tag);
             benchmark("INCR", cmd, len);
             free(cmd);
         }
@@ -2296,13 +2299,13 @@ int main(int argc, char **argv) {
         }
 
         if (test_is_selected("sadd")) {
-            len = valkeyFormatCommand(&cmd, "SADD myset%s element:%s", tag, BENCHMARK_PLACEHOLDERS[0]);
+            len = valkeyFormatCommand(&cmd, "SADD myset%s element:__rand_int__", tag);
             benchmark("SADD", cmd, len);
             free(cmd);
         }
 
         if (test_is_selected("hset")) {
-            len = valkeyFormatCommand(&cmd, "HSET myhash%s element:%s %s", tag, BENCHMARK_PLACEHOLDERS[0], data);
+            len = valkeyFormatCommand(&cmd, "HSET myhash%s element:__rand_int__ %s", tag, data);
             benchmark("HSET", cmd, len);
             free(cmd);
         }
@@ -2315,8 +2318,8 @@ int main(int argc, char **argv) {
 
         if (test_is_selected("zadd")) {
             char *score = "0";
-            if (config.replace_placeholders) score = (char *)BENCHMARK_PLACEHOLDERS[0];
-            len = valkeyFormatCommand(&cmd, "ZADD myzset%s %s element:%s", tag, score, BENCHMARK_PLACEHOLDERS[1]);
+            if (config.replace_placeholders) score = "__rand_int__";
+            len = valkeyFormatCommand(&cmd, "ZADD myzset%s %s element:__rand_1st__", tag, score);
             benchmark("ZADD", cmd, len);
             free(cmd);
         }
@@ -2361,7 +2364,7 @@ int main(int argc, char **argv) {
         if (test_is_selected("mset")) {
             const char *cmd_argv[21];
             cmd_argv[0] = "MSET";
-            sds key_placeholder = sdscatprintf(sdsnew(""), "key%s:%s", tag, BENCHMARK_PLACEHOLDERS[0]);
+            sds key_placeholder = sdscatprintf(sdsnew(""), "key%s:__rand_int__", tag);
             for (i = 1; i < 21; i += 2) {
                 cmd_argv[i] = key_placeholder;
                 cmd_argv[i + 1] = data;
@@ -2375,7 +2378,7 @@ int main(int argc, char **argv) {
         if (test_is_selected("mget")) {
             const char *cmd_argv[11];
             cmd_argv[0] = "MGET";
-            sds key_placeholder = sdscatprintf(sdsnew(""), "key%s:%s", tag, BENCHMARK_PLACEHOLDERS[0]);
+            sds key_placeholder = sdscatprintf(sdsnew(""), "key%s:__rand_int__", tag);
             for (i = 1; i < 11; i++) {
                 cmd_argv[i] = key_placeholder;
             }

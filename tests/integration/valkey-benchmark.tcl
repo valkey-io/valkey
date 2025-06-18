@@ -81,7 +81,7 @@ tags {"benchmark network external:skip logreqres:skip"} {
             default_set_get_checks
 
             # ensure only one key was populated
-            assert_match  {1} [scan [regexp -inline {keys\=([\d]*)} [r info keyspace]] keys=%d]
+            assert_equal  {keys=1} [regexp -inline {keys=[\d]*} [r info keyspace]]
         }
 
         test {benchmark: pipelined full set,get} {
@@ -93,7 +93,7 @@ tags {"benchmark network external:skip logreqres:skip"} {
             assert_match  {} [cmdstat lrange]
 
             # ensure only one key was populated
-            assert_match  {1} [scan [regexp -inline {keys\=([\d]*)} [r info keyspace]] keys=%d]
+            assert_equal  {keys=1} [regexp -inline {keys=[\d]*} [r info keyspace]]
         }
 
         test {benchmark: arbitrary command} {
@@ -104,7 +104,7 @@ tags {"benchmark network external:skip logreqres:skip"} {
             assert_match  {} [cmdstat get]
 
             # ensure only one key was populated
-            assert_match  {1} [scan [regexp -inline {keys\=([\d]*)} [r info keyspace]] keys=%d]
+            assert_equal  {keys=1} [regexp -inline {keys=[\d]*} [r info keyspace]]
         }
 
         test {benchmark: arbitrary command sequence} {
@@ -130,7 +130,7 @@ tags {"benchmark network external:skip logreqres:skip"} {
             assert_match  {} [cmdstat get]
 
             # ensure the keyspace has the desired size
-            assert_match  {50} [scan [regexp -inline {keys\=([\d]*)} [r info keyspace]] keys=%d]
+            assert_equal  {keys=50} [regexp -inline {keys=[\d]*} [r info keyspace]]
         }
 
         test {benchmark: keyspace covered by sequential option} {
@@ -139,7 +139,7 @@ tags {"benchmark network external:skip logreqres:skip"} {
             assert_match  {*calls=50,*} [cmdstat set]
 
             # ensure the keyspace has the desired size
-            assert_match  {50} [scan [regexp -inline {keys\=([\d]*)} [r info keyspace]] keys=%d]
+            assert_equal  {keys=50} [regexp -inline {keys=[\d]*} [r info keyspace]]
         }
 
         test {benchmark: multiple independent sequential replacements} {
@@ -148,16 +148,16 @@ tags {"benchmark network external:skip logreqres:skip"} {
             assert_match  {*calls=1000,*} [cmdstat set]
             
             # ensure the keyspace has the desired size
-            assert_match  {100} [scan [regexp -inline {keys\=([\d]*)} [r info keyspace]] keys=%d]
+            assert_equal  {keys=100} [regexp -inline {keys=[\d]*} [r info keyspace]]
         }
 
-        test {benchmark: multiple occurences of first placeholder have different values} {
+        test {benchmark: multiple occurrences of first placeholder have different values} {
             set cmd [valkeybenchmark $master_host $master_port "-r 100 -n 100 --sequential -- set rain__rand_int__ rain__rand_int__"]
             common_bench_setup $cmd
             assert_match  {*calls=100,*} [cmdstat set]
             
             # Each command takes two sequential values, so keys count by twos
-            assert_match  {50} [scan [regexp -inline {keys\=([\d]*)} [r info keyspace]] keys=%d]
+            assert_equal  {keys=50} [regexp -inline {keys=[\d]*} [r info keyspace]]
 
             # randomly check some keys
             for {set i 0} {$i < 10} {incr i} {
@@ -166,10 +166,13 @@ tags {"benchmark network external:skip logreqres:skip"} {
             }
         }
 
-        test {benchmark: besides first placeholder, multiple placeholder occurences have same value} {
-            set cmd [valkeybenchmark $master_host $master_port "-r 100 -n 1000 -- set rain__rand_1st__ rain__rand_1st__"]
+        test {benchmark: besides first placeholder, multiple placeholder occurrences have same value} {
+            set cmd [valkeybenchmark $master_host $master_port "-r 100 -n 100 -P 5 --sequential -- set rain__rand_1st__ rain__rand_1st__"]
             common_bench_setup $cmd
-            assert_match  {*calls=1000,*} [cmdstat set]
+            assert_match  {*calls=100,*} [cmdstat set]
+            
+            # Each command is handled separately regardness of pipelining
+            assert_equal  {keys=100} [regexp -inline {keys=[\d]*} [r info keyspace]]
 
             # randomly check some keys
             for {set i 0} {$i < 10} {incr i} {
@@ -178,7 +181,7 @@ tags {"benchmark network external:skip logreqres:skip"} {
             }
         }
 
-        test {benchmark: multiple placeholder occurences have same value} {
+        test {benchmark: multiple placeholder occurrences have same value} {
             set cmd [valkeybenchmark $master_host $master_port "-r 30000000 -n 20 -- set rain__rand_int__ rain__rand_1st__"]
             common_bench_setup $cmd
             assert_match  {*calls=20,*} [cmdstat set]
@@ -201,7 +204,7 @@ tags {"benchmark network external:skip logreqres:skip"} {
             assert_match  {*calls=50,*} [cmdstat zadd]
 
             # ensure the keyspace has the desired size
-            assert_match  {1} [scan [regexp -inline {keys\=([\d]*)} [r info keyspace]] keys=%d]
+            assert_equal  {keys=1} [regexp -inline {keys=[\d]*} [r info keyspace]]
             assert_match  {50} [r zcard myzset]
         }
 

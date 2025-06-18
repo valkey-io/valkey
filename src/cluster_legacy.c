@@ -4981,6 +4981,7 @@ void clusterHandleReplicaFailover(void) {
         if (server.cluster->mf_end) {
             server.cluster->failover_auth_time = now;
             server.cluster->failover_auth_rank = 0;
+            server.cluster->failover_failed_primary_rank = 0;
             /* Reset auth_age since it is outdated now and we can bypass the auth_timeout
              * check in the next state and start the election ASAP. */
             auth_age = 0;

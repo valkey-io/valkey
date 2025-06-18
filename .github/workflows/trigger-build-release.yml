@@ -58,5 +58,5 @@ jobs:
           client-payload: >
             {
               "version": "${{ steps.determine-vars.outputs.version }}",
-              "module": "valkey"
+              "component": "valkey"
             }

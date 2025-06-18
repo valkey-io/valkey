@@ -95,6 +95,7 @@ struct sharedObjectsStruct shared;
 
 __thread client *_current_client;   /* The client that triggered the command execution (External or AOF). */
 __thread client *_executing_client; /* The client executing the current command (possibly script or module). */
+__thread mstime_t cmd_time_snapshot; /* Time snapshot of the root execution nesting. */
 
 /* Global vars that are actually used as constants. The following double
  * values are used for double on-disk serialization, and are initialized
@@ -353,7 +354,7 @@ mstime_t commandTimeSnapshot(void) {
      * propagation to replicas / AOF consistent. See issue #1525 for more info.
      * Note that we cannot use the cached server.mstime because it can change
      * in processEventsWhileBlocked etc. */
-    return server.cmd_time_snapshot;
+    return cmd_time_snapshot;
 }
 
 /* After an RDB dump or AOF rewrite we exit from children using _exit() instead of
@@ -1362,7 +1363,7 @@ void enterExecutionUnit(int update_cached_time, long long us) {
             us = ustime();
         }
         updateCachedTimeWithUs(0, us);
-        server.cmd_time_snapshot = server.mstime;
+        cmd_time_snapshot = server.mstime;
     }
 }
 
@@ -2005,7 +2006,7 @@ void afterSleep(struct aeEventLoop *eventLoop, int numevents) {
      * e.g. somehow used by module timers. Don't update it while yielding to a
      * blocked command, call() will handle that and restore the original time. */
     if (!ProcessingEventsWhileBlocked) {
-        server.cmd_time_snapshot = server.mstime;
+        cmd_time_snapshot = server.mstime;
     }
 
     adjustIOThreadsByEventLoad(numevents, 0);
@@ -2216,7 +2217,7 @@ void initServerConfig(void) {
 
     initConfigValues();
     updateCachedTime(1);
-    server.cmd_time_snapshot = server.mstime;
+    cmd_time_snapshot = server.mstime;
     getRandomHexChars(server.runid, CONFIG_RUN_ID_SIZE);
     server.runid[CONFIG_RUN_ID_SIZE] = '\0';
     changeReplicationId();
@@ -3958,6 +3959,9 @@ void ioThreadCallCommand(void *data) {
     c->flag.executing_command = 1;
     setCurrentClient(c);
     setExecutingClient(c);
+    
+    /* Set command time snapshot for this thread context */
+    cmd_time_snapshot = server.mstime;
 
     monotime monotonic_start = 0;
     if (monotonicGetType() == MONOTONIC_CLOCK_HW) {

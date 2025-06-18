@@ -1321,6 +1321,7 @@ typedef struct client {
 
 extern __thread client *_current_client;   /* The client that triggered the command execution (External or AOF). */
 extern __thread client *_executing_client; /* The client executing the current command (possibly script or module). */
+extern __thread mstime_t cmd_time_snapshot; /* Time snapshot of the root execution nesting. */
 
 #define getCurrentClient() (_current_client)
 #define setCurrentClient(c) (_current_client = (c))
@@ -2109,7 +2110,6 @@ struct valkeyServer {
     _Atomic int daylight_active; /* Currently in daylight saving time. */
     mstime_t mstime;             /* 'unixtime' in milliseconds. */
     ustime_t ustime;             /* 'unixtime' in microseconds. */
-    mstime_t cmd_time_snapshot;  /* Time snapshot of the root execution nesting. */
     size_t blocking_op_nesting;  /* Nesting level of blocking operation, used to reset blocked_last_cron. */
     long long blocked_last_cron; /* Indicate the mstime of the last time we did cron jobs from a blocking operation */
     /* Pubsub */

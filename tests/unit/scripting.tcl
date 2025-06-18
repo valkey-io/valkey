@@ -2266,4 +2266,21 @@ start_server {tags {"scripting"}} {
             assert { [r memory usage foo] <= $expected_memory};
         }
     }
+
+    test {EVAL - explicit error() call handling} {
+        # error("simple string error")
+        assert_error {ERR user_script:1: simple string error script: *} {
+            r eval "error('simple string error')" 0
+        }
+
+        # error({"err": "ERR table error"})
+        assert_error {ERR table error script: *} {
+            r eval "error({err='ERR table error'})" 0
+        }
+
+        # error({})
+        assert_error {ERR unknown error script: *} {
+            r eval "error({})" 0
+        }
+    }
 }

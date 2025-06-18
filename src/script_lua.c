@@ -1645,6 +1645,11 @@ void luaExtractErrorInformation(lua_State *lua, errorInfo *err_info) {
         err_info->ignore_err_stats_update = lua_toboolean(lua, -1);
     }
     lua_pop(lua, 1);
+
+    if (err_info->msg == NULL) {
+        /* Ensure we never return a NULL msg. */
+        err_info->msg = sdsnew("ERR unknown error");
+    }
 }
 
 void luaCallFunction(scriptRunCtx* run_ctx, lua_State *lua, robj** keys, size_t nkeys, robj** args, size_t nargs, int debug_enabled) {

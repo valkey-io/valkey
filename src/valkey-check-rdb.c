@@ -446,10 +446,10 @@ void rdbShowGenericInfo(void) {
 
     char buffer[64];
     int stats_fd = -1;
-    int original_stdout_fd = -1;
+    int saved_stdout = -1;
     if (rdbCheckStats) {
         if (rdbCheckOutput) {
-            original_stdout_fd = dup(STDOUT_FILENO);
+            saved_stdout = dup(STDOUT_FILENO);
             stats_fd = open(rdbstate.stats_output, O_WRONLY | O_CREAT, 0644);
             if (stats_fd == -1) {
                 fprintf(stderr, "Cannot open output file: '%s': %s\n", rdbstate.stats_output, strerror(errno));
@@ -499,9 +499,9 @@ void rdbShowGenericInfo(void) {
             }
         }
         if (rdbCheckOutput) {
-            dup2(original_stdout_fd, STDOUT_FILENO);
+            dup2(saved_stdout, STDOUT_FILENO);
             close(stats_fd);
-            close(original_stdout_fd);
+            close(saved_stdout);
         }
     }
 }

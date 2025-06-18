@@ -12,6 +12,29 @@ SECURITY: There are security fixes in the release.
 --------------------------------------------------------------------------------
 
 ================================================================================
+Valkey 7.2.10  -  Released Fri 20 June 2025
+================================================================================
+
+Upgrade urgency HIGH: This release includes CVE fix for valkey-check-aof tool, we recommend you
+apply as soon as possible if you use the tool.
+
+Bug fixes
+=========
+* Fix a bug that allowed clients to process commands when the server has paused command processing (#2231)
+* Fix a crash when a module attempts to write auxiliary data with AOF enabled  (#2132)
+* Fix a bug where the engine may crash when establishing new outbound TLS connections (#2140)
+* Fix a bug where a cluster bus packet may be incorrectly marked as invalid (#2144)
+* Fix a bug where CLUSTER SLOTS/NODES information can be stale after updating node port/tls-port (#2186)
+* Fix a bug where replica in cluster mode can't finish failover when config epoch is outdated (#2232)
+* Fix a bug to avoid CLIENT UNBLOCK command to unblock paused clients (#2117)
+
+Security fixes
+==============
+* CVE-2025-27151 Check length of AOF file name in valkey-check-aof (#2146)
+* CVE-2025-32023 prevent out-of-bounds write during hyperloglog operations (#2314)
+* CVE-2025-48367 retry accept on transient errors (#2315)
+
+================================================================================
 Valkey 7.2.9  -  Released Wed 23 Apr 2025
 ================================================================================
 

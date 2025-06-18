@@ -418,10 +418,10 @@ static int isServerExclusiveCmd(struct serverCommand *cmd, int slot) {
 
 /* Returns if the given command requires exclusive access to the given slot. */
 static int isSlotExclusiveCmd(struct serverCommand *cmd, int slot) {
-    /* No exclusivity required */
-    if (cmd->flags & CMD_CAN_BE_OFFLOADED) return 0;
+    /* No exclusivity required for commands that can be offloaded */
+    if (CMD_CAN_BE_OFFLOADED(cmd)) return 0;
 
-    /* Not slot exclusive rather DB exclusive */
+    /* Not slot exclusive rather server exclusive */
     if (isServerExclusiveCmd(cmd, slot)) return 0;
 
     return 1;
@@ -557,7 +557,7 @@ static void deferServerCron(void *data) {
 }
 
 /* Add a deferred job to the thread-local job list */
-void threadAdddeferredJob(int slot, job_handler handler, size_t data_size, void *data) {
+void threadAddDeferredJob(int slot, job_handler handler, size_t data_size, void *data) {
     /* Allocate memory for job structure plus data using flexible array member */
     listNode *job_node = createJobNode(slot, handler, data_size, data);
     listLinkNodeTail(thread_deferred_jobs, job_node);
@@ -970,7 +970,9 @@ static int isCommandPostpone(client *c) {
 
 /* Check if a command can be offloaded to IO threads.
  * Returns 1 if the command can be offloaded, 0 otherwise. */
-int canCommandBeOffloaded(struct serverCommand *cmd) {
+int canCommandBeOffloaded(int slot, struct serverCommand *cmd) {
+    if (slot == -1) return 0;
+
     if (!server.cluster_enabled) {
         return 0; /* Avoid offloading commands in non cluster mode. */
     }
@@ -988,7 +990,7 @@ int canCommandBeOffloaded(struct serverCommand *cmd) {
         return 0; /* Modules are loaded and module command offloading is disabled. */
     }
 
-    if (!(cmd->flags & CMD_CAN_BE_OFFLOADED)) {
+    if (!CMD_CAN_BE_OFFLOADED(cmd)) {
         return 0;
     }
 
@@ -1000,7 +1002,7 @@ int canCommandBeOffloaded(struct serverCommand *cmd) {
 }
 
 int trySendProcessCommandToIOThreads(client *c) {
-    if (!canCommandBeOffloaded(c->cmd)) {
+    if (!canCommandBeOffloaded(c->slot, c->cmd)) {
         return C_ERR;
     }
 

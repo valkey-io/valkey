@@ -3954,7 +3954,6 @@ void call(client *c, int flags) {
  * It executes the command and writes the response back to the client. */
 void ioThreadCallCommand(void *data) {
     client *c = (client *)data;
-    serverAssert(c->cmd->flags & CMD_CAN_BE_OFFLOADED);
     const long long call_timer = ustime();
     c->flag.executing_command = 1;
     setCurrentClient(c);

@@ -169,6 +169,8 @@ size_t lazyfreeGetFreeEffort(robj *key, robj *obj, int dbid) {
 
 /* Free an object, if the object is huge enough, free it in async way. */
 void freeObjAsync(robj *key, robj *obj, int dbid) {
+    if (!inMainThread()) decrRefCount(obj);
+
     size_t free_effort = lazyfreeGetFreeEffort(key, obj, dbid);
     /* Note that if the object is shared, to reclaim it now it is not
      * possible. This rarely happens, however sometimes the implementation

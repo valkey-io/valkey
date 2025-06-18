@@ -836,7 +836,7 @@ void afterErrorReply(client *c, const char *s, size_t len, int flags) {
     /* Postpone error updates if its io-thread */
     if (!inMainThread()) {
         delayedErrorStatsUpdateCtx ctx = {.c = c, .s = sdsnewlen(s, len), .len = len, .flags = flags};
-        threadAdddeferredJob(-1, afterErrorReplyDelayed, sizeof(ctx), &ctx);
+        threadAddDeferredJob(-1, afterErrorReplyDelayed, sizeof(ctx), &ctx);
         return;
     }
 

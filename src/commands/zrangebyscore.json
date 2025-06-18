@@ -18,8 +18,7 @@
             "DEPRECATED"
         ],
         "command_flags": [
-            "READONLY",
-            "CAN_BE_OFFLOADED"
+            "READONLY"
         ],
         "acl_categories": [
             "SORTEDSET"

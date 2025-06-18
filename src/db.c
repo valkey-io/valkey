@@ -2012,7 +2012,7 @@ static keyStatus expireIfNeededWithDictIndex(serverDb *db, robj *key, robj *val,
     if (!inMainThread()) {
         postpone_expired_key_ctx ctx = {.dict_index = dict_index, .db = db, .key = key};
         if (!static_key) incrRefCount(key);
-        threadAdddeferredJob(dict_index, handlePostponeExpiredKey, sizeof(ctx), &ctx);
+        threadAddDeferredJob(dict_index, handlePostponeExpiredKey, sizeof(ctx), &ctx);
         return KEY_EXPIRED;
     }
 

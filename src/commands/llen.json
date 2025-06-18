@@ -8,8 +8,7 @@
         "function": "llenCommand",
         "command_flags": [
             "READONLY",
-            "FAST",
-            "CAN_BE_OFFLOADED"
+            "FAST"
         ],
         "acl_categories": [
             "LIST"

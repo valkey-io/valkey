@@ -252,7 +252,14 @@ extern int configOOMScoreAdjValuesDefaults[CONFIG_OOM_COUNT];
 #define CMD_ALLOW_BUSY ((1ULL << 26))
 #define CMD_MODULE_GETCHANNELS (1ULL << 27) /* Use the modules getchannels interface. */
 #define CMD_TOUCHES_ARBITRARY_KEYS (1ULL << 28)
-#define CMD_CAN_BE_OFFLOADED (1ULL << 29) /* Command can be offloaded to worker IO threads. */
+
+/* Check if a command can be offloaded. */
+#define CMD_CAN_BE_OFFLOADED(cmd) \
+    ((cmd->flags & CMD_READONLY) && \
+     !(cmd->flags & CMD_NO_MANDATORY_KEYS) && \
+     !(cmd->flags & CMD_MAY_REPLICATE) && \
+     !(cmd->flags & CMD_BLOCKING))
+
 /* Command flags. Please don't forget to add command flag documentation in struct
  * serverCommand in this file. */
 
@@ -2476,10 +2483,6 @@ typedef int serverGetKeysProc(struct serverCommand *cmd, robj **argv, int argc, 
  * CMD_TOUCHES_ARBITRARY_KEYS: The command may touch (and cause lazy-expire)
  *                             arbitrary key (i.e not provided in argv)
  *
- * CMD_CAN_BE_OFFLOADED: The command can be safely offloaded to worker IO threads.
- *                      Currently only simple read commands that don't have side effects
- *                      are eligible for offloading. Commands with this flag should be
- *                      idempotent and not modify any server state.
  *
  * The following additional flags are only used in order to put commands
  * in a specific ACL category. Commands can have multiple ACL categories.

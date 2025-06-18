@@ -1670,7 +1670,7 @@ void luaExtractErrorInformation(lua_State *lua, errorInfo *err_info) {
     lua_pop(lua, 1);
 
     if (err_info->msg == NULL) {
-        // Ensure we never return a NULL msg.
+        /* Ensure we never return a NULL msg. */
         err_info->msg = sdsnew("ERR unknown error");
     }
 }

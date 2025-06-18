@@ -5907,8 +5907,7 @@ static int clusterManagerFixSlotsCoverage(char *all_slots) {
                 if (!clusterManagerCheckValkeyReply(n, reply, NULL)) {
                     fixed = -1;
                     if (reply) freeReplyObject(reply);
-                    
-                    listRelease(slot_nodes); 
+                    listRelease(slot_nodes);
                     sdsfree(slot_nodes_str);
                     goto cleanup;
                 }

@@ -14,6 +14,8 @@
 #include "../hashtable.h"
 #include "../zmalloc.h"
 
+int failed_expects;
+
 /* We override the default assertion mechanism, so that it prints out info and then dies. */
 void _serverAssert(const char *estr, const char *file, int line) {
     printf("[" KRED "serverAssert - %s:%d" KRESET "] - %s\n", file, line, estr);
@@ -28,8 +30,9 @@ int runTestSuite(struct unitTestSuite *test, int argc, char **argv, int flags) {
 
     for (int id = 0; test->tests[id].proc != NULL; id++) {
         test_num++;
-        int test_result = (test->tests[id].proc(argc, argv, flags) != 0);
-        if (!test_result) {
+        failed_expects = 0;
+        int test_result = test->tests[id].proc(argc, argv, flags);
+        if (!test_result && !failed_expects) {
             printf("[" KGRN "ok" KRESET "] - %s:%s\n", test->filename, test->tests[id].name);
         } else {
             printf("[" KRED "fail" KRESET "] - %s:%s\n", test->filename, test->tests[id].name);

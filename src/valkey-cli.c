@@ -432,7 +432,10 @@ static void cliLegacyIntegrateHelp(void) {
     if (cliConnect(CC_QUIET) == VALKEY_ERR) return;
 
     valkeyReply *reply = valkeyCommand(context, "COMMAND");
-    if (reply == NULL || reply->type != VALKEY_REPLY_ARRAY) return;
+    if (reply == NULL || reply->type != VALKEY_REPLY_ARRAY) {
+        freeReplyObject(reply);
+        return;
+    }
 
     /* Scan the array reported by COMMAND and fill only the entries that
      * don't already match what we have. */

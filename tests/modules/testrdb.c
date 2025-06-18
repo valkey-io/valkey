@@ -72,8 +72,11 @@ void *testrdb_type_load(ValkeyModuleIO *rdb, int encver) {
     ValkeyModuleString *str = ValkeyModule_LoadString(rdb);
     float f = ValkeyModule_LoadFloat(rdb);
     long double ld = ValkeyModule_LoadLongDouble(rdb);
+    /* Context creation is part of the test. Creating the context will force the
+     * core to allocate a context, which needs to be cleaned up when the
+     * ValkeyModuleIO is destructed. */
+    ValkeyModuleCtx *ctx = ValkeyModule_GetContextFromIO(rdb);
     if (ValkeyModule_IsIOError(rdb)) {
-        ValkeyModuleCtx *ctx = ValkeyModule_GetContextFromIO(rdb);
         if (str)
             ValkeyModule_FreeString(ctx, str);
         return NULL;
@@ -98,6 +101,11 @@ void testrdb_aux_save(ValkeyModuleIO *rdb, int when) {
     if (!(conf_aux_count & CONF_AUX_OPTION_BEFORE_KEYSPACE)) assert(when == VALKEYMODULE_AUX_AFTER_RDB);
     if (!(conf_aux_count & CONF_AUX_OPTION_AFTER_KEYSPACE)) assert(when == VALKEYMODULE_AUX_BEFORE_RDB);
     assert(conf_aux_count!=CONF_AUX_OPTION_NO_AUX);
+    /* Context creation is part of the test. Creating the context will force the
+     * core to allocate a context, which needs to be cleaned up when the
+     * ValkeyModuleIO is destructed. */
+    ValkeyModuleCtx *ctx = ValkeyModule_GetContextFromIO(rdb);
+    VALKEYMODULE_NOT_USED(ctx);
     if (when == VALKEYMODULE_AUX_BEFORE_RDB) {
         if (before_str) {
             ValkeyModule_SaveSigned(rdb, 1);

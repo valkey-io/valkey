@@ -387,4 +387,10 @@ void setcpuaffinity(const char *cpulist);
 #define valkey_attribute_target(...)
 #endif
 
+#if defined(__linux__) && defined(__GLIBC__) && (defined(__GNUC__) && (__GNUC__ > 4) || defined(__clang__) && (__clang_major__) > 5)
+#define HAVE_IFUNC 1
+#else
+#define HAVE_IFUNC 0
+#endif
+
 #endif

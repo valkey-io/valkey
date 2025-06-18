@@ -52,6 +52,8 @@
 #include "lua/debug_lua.h"
 #include "eval.h"
 
+#include "trace/trace_commands.h"
+
 #include <time.h>
 #include <signal.h>
 #include <sys/wait.h>
@@ -956,15 +958,15 @@ int clientsCronResizeQueryBuffer(client *c) {
  * The buffer peak will be reset back to the buffer position every server.reply_buffer_peak_reset_time milliseconds
  * The function always returns 0 as it never terminates the client. */
 int clientsCronResizeOutputBuffer(client *c, mstime_t now_ms) {
-    if (c->io_write_state != CLIENT_IDLE) return 0;
+    /* in case the resizing is disabled return immediately */
+    if (!server.reply_buffer_resizing_enabled) return 0;
+
+    if (c->io_write_state != CLIENT_IDLE || c->flag.buf_encoded) return 0;
 
     size_t new_buffer_size = 0;
     char *oldbuf = NULL;
     const size_t buffer_target_shrink_size = c->buf_usable_size / 2;
     const size_t buffer_target_expand_size = c->buf_usable_size * 2;
-
-    /* in case the resizing is disabled return immediately */
-    if (!server.reply_buffer_resizing_enabled) return 0;
 
     if (buffer_target_shrink_size >= PROTO_REPLY_MIN_BYTES && c->buf_peak < buffer_target_shrink_size) {
         new_buffer_size = max(PROTO_REPLY_MIN_BYTES, c->buf_peak + 1);
@@ -1287,10 +1289,11 @@ void databasesCron(void) {
         if (dbs_per_call > server.dbnum) dbs_per_call = server.dbnum;
 
         for (j = 0; j < dbs_per_call; j++) {
-            serverDb *db = &server.db[resize_db % server.dbnum];
+            serverDb *db = server.db[resize_db % server.dbnum];
+            resize_db++;
+            if (db == NULL) continue;
             kvstoreTryResizeHashtables(db->keys, CRON_DICTS_PER_DB);
             kvstoreTryResizeHashtables(db->expires, CRON_DICTS_PER_DB);
-            resize_db++;
         }
 
         /* Rehash */
@@ -1298,11 +1301,13 @@ void databasesCron(void) {
             uint64_t elapsed_us = 0;
             uint64_t threshold_us = 1 * 1000000 / server.hz / 100;
             for (j = 0; j < dbs_per_call; j++) {
-                serverDb *db = &server.db[rehash_db % server.dbnum];
-                elapsed_us += kvstoreIncrementallyRehash(db->keys, threshold_us - elapsed_us);
-                if (elapsed_us >= threshold_us) break;
-                elapsed_us += kvstoreIncrementallyRehash(db->expires, threshold_us - elapsed_us);
-                if (elapsed_us >= threshold_us) break;
+                serverDb *db = server.db[rehash_db % server.dbnum];
+                if (db != NULL) {
+                    elapsed_us += kvstoreIncrementallyRehash(db->keys, threshold_us - elapsed_us);
+                    if (elapsed_us >= threshold_us) break;
+                    elapsed_us += kvstoreIncrementallyRehash(db->expires, threshold_us - elapsed_us);
+                    if (elapsed_us >= threshold_us) break;
+                }
                 rehash_db++;
             }
         }
@@ -1541,11 +1546,13 @@ long long serverCron(struct aeEventLoop *eventLoop, long long id, void *clientDa
     if (server.verbosity <= LL_VERBOSE) {
         run_with_period(5000) {
             for (j = 0; j < server.dbnum; j++) {
+                serverDb *db = server.db[j];
+                if (db == NULL) continue;
                 long long size, used, vkeys;
 
-                size = kvstoreBuckets(server.db[j].keys) * hashtableEntriesPerBucket();
-                used = kvstoreSize(server.db[j].keys);
-                vkeys = kvstoreSize(server.db[j].expires);
+                size = kvstoreBuckets(server.db[j]->keys) * hashtableEntriesPerBucket();
+                used = kvstoreSize(server.db[j]->keys);
+                vkeys = kvstoreSize(server.db[j]->expires);
                 if (used || vkeys) {
                     serverLog(LL_VERBOSE, "DB %d: %lld keys (%lld volatile) in %lld slots HT.", j, used, vkeys, size);
                 }
@@ -1743,6 +1750,7 @@ void whileBlockedCron(void) {
 
     latencyEndMonitor(latency);
     latencyAddSampleIfNeeded("while-blocked-cron", latency);
+    latencyTraceIfNeeded(server, while_blocked_cron, latency);
 
     /* We received a SIGTERM during loading, shutting down here in a safe way,
      * as it isn't ok doing so inside the signal handler. */
@@ -1885,7 +1893,9 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
     if (server.aof_state == AOF_ON || server.aof_state == AOF_WAIT_REWRITE) flushAppendOnlyFile(0);
 
     /* Record time consumption of AOF writing. */
-    durationAddSample(EL_DURATION_TYPE_AOF, getMonotonicUs() - aof_start_time);
+    monotime aof_duration = getMonotonicUs() - aof_start_time;
+    durationAddSample(EL_DURATION_TYPE_AOF, aof_duration);
+    latencyTraceIfNeeded(aof, aof_flush, aof_duration);
 
     /* Update the fsynced replica offset.
      * If an initial rewrite is in progress then not all data is guaranteed to have actually been
@@ -1929,9 +1939,11 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
     if (server.el_start > 0) {
         monotime el_duration = getMonotonicUs() - server.el_start;
         durationAddSample(EL_DURATION_TYPE_EL, el_duration);
+        latencyTraceIfNeeded(server, eventloop, el_duration);
     }
     server.el_cron_duration += duration_before_aof + duration_after_write;
     durationAddSample(EL_DURATION_TYPE_CRON, server.el_cron_duration);
+    latencyTraceIfNeeded(server, eventloop_cron, server.el_cron_duration);
     server.el_cron_duration = 0;
     /* Record max command count per cycle. */
     if (server.stat_numcommands > server.el_cmd_cnt_start) {
@@ -1973,6 +1985,7 @@ void afterSleep(struct aeEventLoop *eventLoop, int numevents) {
             moduleFireServerEvent(VALKEYMODULE_EVENT_EVENTLOOP, VALKEYMODULE_SUBEVENT_EVENTLOOP_AFTER_SLEEP, NULL);
             latencyEndMonitor(latency);
             latencyAddSampleIfNeeded("module-acquire-GIL", latency);
+            latencyTraceIfNeeded(server, module_acquire_gil, latency);
         }
         /* Set the eventloop start time. */
         server.el_start = getMonotonicUs();
@@ -1995,170 +2008,178 @@ void afterSleep(struct aeEventLoop *eventLoop, int numevents) {
 
 /* =========================== Server initialization ======================== */
 
+static inline robj *createSharedString(const char *string) {
+    return makeObjectShared(createStringObject(string, strlen(string)));
+}
+
+static inline robj *createSharedStringFromSds(sds s) {
+    return makeObjectShared(createObject(OBJ_STRING, s));
+}
+
 /* These shared strings depend on the extended-redis-compatibility config and is
- * called when the config changes. When the config is phased out, these
+ * called at initialization. When the config is phased out, these
  * initializations can be moved back inside createSharedObjects() below. */
-void createSharedObjectsWithCompat(void) {
-    const char *name = server.extended_redis_compat ? "Redis" : SERVER_TITLE;
-    if (shared.loadingerr) decrRefCount(shared.loadingerr);
-    shared.loadingerr =
-        createObject(OBJ_STRING, sdscatfmt(sdsempty(), "-LOADING %s is loading the dataset in memory\r\n", name));
-    if (shared.slowevalerr) decrRefCount(shared.slowevalerr);
-    shared.slowevalerr = createObject(
-        OBJ_STRING,
+void createSharedObjectsForCompat(int compat) {
+    const char *name = compat ? "Redis" : SERVER_TITLE;
+    shared.loadingerr_variants[compat] =
+        createSharedStringFromSds(sdscatfmt(sdsempty(), "-LOADING %s is loading the dataset in memory\r\n", name));
+    shared.slowevalerr_variants[compat] = createSharedStringFromSds(
         sdscatfmt(sdsempty(),
                   "-BUSY %s is busy running a script. You can only call SCRIPT KILL or SHUTDOWN NOSAVE.\r\n", name));
-    if (shared.slowscripterr) decrRefCount(shared.slowscripterr);
-    shared.slowscripterr = createObject(
-        OBJ_STRING,
+    shared.slowscripterr_variants[compat] = createSharedStringFromSds(
         sdscatfmt(sdsempty(),
                   "-BUSY %s is busy running a script. You can only call FUNCTION KILL or SHUTDOWN NOSAVE.\r\n", name));
-    if (shared.slowmoduleerr) decrRefCount(shared.slowmoduleerr);
-    shared.slowmoduleerr =
-        createObject(OBJ_STRING, sdscatfmt(sdsempty(), "-BUSY %s is busy running a module command.\r\n", name));
-    if (shared.bgsaveerr) decrRefCount(shared.bgsaveerr);
-    shared.bgsaveerr =
-        createObject(OBJ_STRING, sdscatfmt(sdsempty(),
-                                           "-MISCONF %s is configured to save RDB snapshots, but it's currently"
-                                           " unable to persist to disk. Commands that may modify the data set are"
-                                           " disabled, because this instance is configured to report errors during"
-                                           " writes if RDB snapshotting fails (stop-writes-on-bgsave-error option)."
-                                           " Please check the %s logs for details about the RDB error.\r\n",
-                                           name, name));
+    shared.slowmoduleerr_variants[compat] =
+        createSharedStringFromSds(sdscatfmt(sdsempty(), "-BUSY %s is busy running a module command.\r\n", name));
+    shared.bgsaveerr_variants[compat] =
+        createSharedStringFromSds(sdscatfmt(sdsempty(),
+                                            "-MISCONF %s is configured to save RDB snapshots, but it's currently"
+                                            " unable to persist to disk. Commands that may modify the data set are"
+                                            " disabled, because this instance is configured to report errors during"
+                                            " writes if RDB snapshotting fails (stop-writes-on-bgsave-error option)."
+                                            " Please check the %s logs for details about the RDB error.\r\n",
+                                            name, name));
+}
+
+/* These shared strings depend on the extended-redis-compatibility config and are
+ * called at initialization and when the config changes. */
+void updateSharedObjectsWithCompat(void) {
+    shared.loadingerr = shared.loadingerr_variants[server.extended_redis_compat];
+    shared.slowevalerr = shared.slowevalerr_variants[server.extended_redis_compat];
+    shared.slowscripterr = shared.slowscripterr_variants[server.extended_redis_compat];
+    shared.slowmoduleerr = shared.slowmoduleerr_variants[server.extended_redis_compat];
+    shared.bgsaveerr = shared.bgsaveerr_variants[server.extended_redis_compat];
 }
 
 void createSharedObjects(void) {
     int j;
 
     /* Shared command responses */
-    shared.ok = createObject(OBJ_STRING, sdsnew("+OK\r\n"));
-    shared.emptybulk = createObject(OBJ_STRING, sdsnew("$0\r\n\r\n"));
-    shared.czero = createObject(OBJ_STRING, sdsnew(":0\r\n"));
-    shared.cone = createObject(OBJ_STRING, sdsnew(":1\r\n"));
-    shared.emptyarray = createObject(OBJ_STRING, sdsnew("*0\r\n"));
-    shared.pong = createObject(OBJ_STRING, sdsnew("+PONG\r\n"));
-    shared.queued = createObject(OBJ_STRING, sdsnew("+QUEUED\r\n"));
-    shared.emptyscan = createObject(OBJ_STRING, sdsnew("*2\r\n$1\r\n0\r\n*0\r\n"));
-    shared.space = createObject(OBJ_STRING, sdsnew(" "));
-    shared.plus = createObject(OBJ_STRING, sdsnew("+"));
+    shared.ok = createSharedString("+OK\r\n");
+    shared.emptybulk = createSharedString("$0\r\n\r\n");
+    shared.czero = createSharedString(":0\r\n");
+    shared.cone = createSharedString(":1\r\n");
+    shared.emptyarray = createSharedString("*0\r\n");
+    shared.pong = createSharedString("+PONG\r\n");
+    shared.queued = createSharedString("+QUEUED\r\n");
+    shared.emptyscan = createSharedString("*2\r\n$1\r\n0\r\n*0\r\n");
+    shared.space = createSharedString(" ");
+    shared.plus = createSharedString("+");
 
     /* Shared command error responses */
-    shared.wrongtypeerr =
-        createObject(OBJ_STRING, sdsnew("-WRONGTYPE Operation against a key holding the wrong kind of value\r\n"));
-    shared.err = createObject(OBJ_STRING, sdsnew("-ERR\r\n"));
-    shared.nokeyerr = createObject(OBJ_STRING, sdsnew("-ERR no such key\r\n"));
-    shared.syntaxerr = createObject(OBJ_STRING, sdsnew("-ERR syntax error\r\n"));
-    shared.sameobjecterr = createObject(OBJ_STRING, sdsnew("-ERR source and destination objects are the same\r\n"));
-    shared.outofrangeerr = createObject(OBJ_STRING, sdsnew("-ERR index out of range\r\n"));
-    shared.noscripterr = createObject(OBJ_STRING, sdsnew("-NOSCRIPT No matching script.\r\n"));
-    createSharedObjectsWithCompat();
-    shared.primarydownerr = createObject(
-        OBJ_STRING, sdsnew("-MASTERDOWN Link with MASTER is down and replica-serve-stale-data is set to 'no'.\r\n"));
-    shared.roreplicaerr =
-        createObject(OBJ_STRING, sdsnew("-READONLY You can't write against a read only replica.\r\n"));
-    shared.noautherr = createObject(OBJ_STRING, sdsnew("-NOAUTH Authentication required.\r\n"));
-    shared.oomerr = createObject(OBJ_STRING, sdsnew("-OOM command not allowed when used memory > 'maxmemory'.\r\n"));
-    shared.execaborterr =
-        createObject(OBJ_STRING, sdsnew("-EXECABORT Transaction discarded because of previous errors.\r\n"));
-    shared.noreplicaserr = createObject(OBJ_STRING, sdsnew("-NOREPLICAS Not enough good replicas to write.\r\n"));
-    shared.busykeyerr = createObject(OBJ_STRING, sdsnew("-BUSYKEY Target key name already exists.\r\n"));
+    shared.wrongtypeerr = createSharedString("-WRONGTYPE Operation against a key holding the wrong kind of value\r\n");
+    shared.err = createSharedString("-ERR\r\n");
+    shared.nokeyerr = createSharedString("-ERR no such key\r\n");
+    shared.syntaxerr = createSharedString("-ERR syntax error\r\n");
+    shared.sameobjecterr = createSharedString("-ERR source and destination objects are the same\r\n");
+    shared.outofrangeerr = createSharedString("-ERR index out of range\r\n");
+    shared.noscripterr = createSharedString("-NOSCRIPT No matching script.\r\n");
+    createSharedObjectsForCompat(0);
+    createSharedObjectsForCompat(1);
+    updateSharedObjectsWithCompat();
+    shared.primarydownerr = createSharedString("-MASTERDOWN Link with MASTER is down and replica-serve-stale-data is set to 'no'.\r\n");
+    shared.roreplicaerr = createSharedString("-READONLY You can't write against a read only replica.\r\n");
+    shared.noautherr = createSharedString("-NOAUTH Authentication required.\r\n");
+    shared.oomerr = createSharedString("-OOM command not allowed when used memory > 'maxmemory'.\r\n");
+    shared.execaborterr = createSharedString("-EXECABORT Transaction discarded because of previous errors.\r\n");
+    shared.noreplicaserr = createSharedString("-NOREPLICAS Not enough good replicas to write.\r\n");
+    shared.busykeyerr = createSharedString("-BUSYKEY Target key name already exists.\r\n");
 
     /* The shared NULL depends on the protocol version. */
     shared.null[0] = NULL;
     shared.null[1] = NULL;
-    shared.null[2] = createObject(OBJ_STRING, sdsnew("$-1\r\n"));
-    shared.null[3] = createObject(OBJ_STRING, sdsnew("_\r\n"));
+    shared.null[2] = createSharedString("$-1\r\n");
+    shared.null[3] = createSharedString("_\r\n");
 
     shared.nullarray[0] = NULL;
     shared.nullarray[1] = NULL;
-    shared.nullarray[2] = createObject(OBJ_STRING, sdsnew("*-1\r\n"));
-    shared.nullarray[3] = createObject(OBJ_STRING, sdsnew("_\r\n"));
+    shared.nullarray[2] = createSharedString("*-1\r\n");
+    shared.nullarray[3] = createSharedString("_\r\n");
 
     shared.emptymap[0] = NULL;
     shared.emptymap[1] = NULL;
-    shared.emptymap[2] = createObject(OBJ_STRING, sdsnew("*0\r\n"));
-    shared.emptymap[3] = createObject(OBJ_STRING, sdsnew("%0\r\n"));
+    shared.emptymap[2] = createSharedString("*0\r\n");
+    shared.emptymap[3] = createSharedString("%0\r\n");
 
     shared.emptyset[0] = NULL;
     shared.emptyset[1] = NULL;
-    shared.emptyset[2] = createObject(OBJ_STRING, sdsnew("*0\r\n"));
-    shared.emptyset[3] = createObject(OBJ_STRING, sdsnew("~0\r\n"));
+    shared.emptyset[2] = createSharedString("*0\r\n");
+    shared.emptyset[3] = createSharedString("~0\r\n");
 
     for (j = 0; j < PROTO_SHARED_SELECT_CMDS; j++) {
         char dictid_str[64];
         int dictid_len;
 
         dictid_len = ll2string(dictid_str, sizeof(dictid_str), j);
-        shared.select[j] = createObject(
-            OBJ_STRING, sdscatprintf(sdsempty(), "*2\r\n$6\r\nSELECT\r\n$%d\r\n%s\r\n", dictid_len, dictid_str));
+        shared.select[j] = createSharedStringFromSds(sdscatprintf(sdsempty(), "*2\r\n$6\r\nSELECT\r\n$%d\r\n%s\r\n", dictid_len, dictid_str));
     }
-    shared.messagebulk = createStringObject("$7\r\nmessage\r\n", 13);
-    shared.pmessagebulk = createStringObject("$8\r\npmessage\r\n", 14);
-    shared.subscribebulk = createStringObject("$9\r\nsubscribe\r\n", 15);
-    shared.unsubscribebulk = createStringObject("$11\r\nunsubscribe\r\n", 18);
-    shared.ssubscribebulk = createStringObject("$10\r\nssubscribe\r\n", 17);
-    shared.sunsubscribebulk = createStringObject("$12\r\nsunsubscribe\r\n", 19);
-    shared.smessagebulk = createStringObject("$8\r\nsmessage\r\n", 14);
-    shared.psubscribebulk = createStringObject("$10\r\npsubscribe\r\n", 17);
-    shared.punsubscribebulk = createStringObject("$12\r\npunsubscribe\r\n", 19);
+    shared.messagebulk = createSharedString("$7\r\nmessage\r\n");
+    shared.pmessagebulk = createSharedString("$8\r\npmessage\r\n");
+    shared.subscribebulk = createSharedString("$9\r\nsubscribe\r\n");
+    shared.unsubscribebulk = createSharedString("$11\r\nunsubscribe\r\n");
+    shared.ssubscribebulk = createSharedString("$10\r\nssubscribe\r\n");
+    shared.sunsubscribebulk = createSharedString("$12\r\nsunsubscribe\r\n");
+    shared.smessagebulk = createSharedString("$8\r\nsmessage\r\n");
+    shared.psubscribebulk = createSharedString("$10\r\npsubscribe\r\n");
+    shared.punsubscribebulk = createSharedString("$12\r\npunsubscribe\r\n");
 
     /* Shared command names */
-    shared.del = createStringObject("DEL", 3);
-    shared.unlink = createStringObject("UNLINK", 6);
-    shared.rpop = createStringObject("RPOP", 4);
-    shared.lpop = createStringObject("LPOP", 4);
-    shared.lpush = createStringObject("LPUSH", 5);
-    shared.rpoplpush = createStringObject("RPOPLPUSH", 9);
-    shared.lmove = createStringObject("LMOVE", 5);
-    shared.blmove = createStringObject("BLMOVE", 6);
-    shared.zpopmin = createStringObject("ZPOPMIN", 7);
-    shared.zpopmax = createStringObject("ZPOPMAX", 7);
-    shared.multi = createStringObject("MULTI", 5);
-    shared.exec = createStringObject("EXEC", 4);
-    shared.hset = createStringObject("HSET", 4);
-    shared.srem = createStringObject("SREM", 4);
-    shared.xgroup = createStringObject("XGROUP", 6);
-    shared.xclaim = createStringObject("XCLAIM", 6);
-    shared.script = createStringObject("SCRIPT", 6);
-    shared.replconf = createStringObject("REPLCONF", 8);
-    shared.pexpireat = createStringObject("PEXPIREAT", 9);
-    shared.pexpire = createStringObject("PEXPIRE", 7);
-    shared.persist = createStringObject("PERSIST", 7);
-    shared.set = createStringObject("SET", 3);
-    shared.eval = createStringObject("EVAL", 4);
+    shared.del = createSharedString("DEL");
+    shared.unlink = createSharedString("UNLINK");
+    shared.rpop = createSharedString("RPOP");
+    shared.lpop = createSharedString("LPOP");
+    shared.lpush = createSharedString("LPUSH");
+    shared.rpoplpush = createSharedString("RPOPLPUSH");
+    shared.lmove = createSharedString("LMOVE");
+    shared.blmove = createSharedString("BLMOVE");
+    shared.zpopmin = createSharedString("ZPOPMIN");
+    shared.zpopmax = createSharedString("ZPOPMAX");
+    shared.multi = createSharedString("MULTI");
+    shared.exec = createSharedString("EXEC");
+    shared.hset = createSharedString("HSET");
+    shared.srem = createSharedString("SREM");
+    shared.xgroup = createSharedString("XGROUP");
+    shared.xclaim = createSharedString("XCLAIM");
+    shared.script = createSharedString("SCRIPT");
+    shared.replconf = createSharedString("REPLCONF");
+    shared.pexpireat = createSharedString("PEXPIREAT");
+    shared.pexpire = createSharedString("PEXPIRE");
+    shared.persist = createSharedString("PERSIST");
+    shared.set = createSharedString("SET");
+    shared.eval = createSharedString("EVAL");
 
     /* Shared command argument */
-    shared.left = createStringObject("left", 4);
-    shared.right = createStringObject("right", 5);
-    shared.pxat = createStringObject("PXAT", 4);
-    shared.time = createStringObject("TIME", 4);
-    shared.retrycount = createStringObject("RETRYCOUNT", 10);
-    shared.force = createStringObject("FORCE", 5);
-    shared.justid = createStringObject("JUSTID", 6);
-    shared.entriesread = createStringObject("ENTRIESREAD", 11);
-    shared.lastid = createStringObject("LASTID", 6);
-    shared.default_username = createStringObject("default", 7);
-    shared.ping = createStringObject("ping", 4);
-    shared.setid = createStringObject("SETID", 5);
-    shared.keepttl = createStringObject("KEEPTTL", 7);
-    shared.absttl = createStringObject("ABSTTL", 6);
-    shared.load = createStringObject("LOAD", 4);
-    shared.createconsumer = createStringObject("CREATECONSUMER", 14);
-    shared.getack = createStringObject("GETACK", 6);
-    shared.special_asterisk = createStringObject("*", 1);
-    shared.special_equals = createStringObject("=", 1);
-    shared.redacted = makeObjectShared(createStringObject("(redacted)", 10));
+    shared.left = createSharedString("left");
+    shared.right = createSharedString("right");
+    shared.pxat = createSharedString("PXAT");
+    shared.time = createSharedString("TIME");
+    shared.retrycount = createSharedString("RETRYCOUNT");
+    shared.force = createSharedString("FORCE");
+    shared.justid = createSharedString("JUSTID");
+    shared.entriesread = createSharedString("ENTRIESREAD");
+    shared.lastid = createSharedString("LASTID");
+    shared.default_username = createSharedString("default");
+    shared.ping = createSharedString("ping");
+    shared.setid = createSharedString("SETID");
+    shared.keepttl = createSharedString("KEEPTTL");
+    shared.absttl = createSharedString("ABSTTL");
+    shared.load = createSharedString("LOAD");
+    shared.createconsumer = createSharedString("CREATECONSUMER");
+    shared.getack = createSharedString("GETACK");
+    shared.special_asterisk = createSharedString("*");
+    shared.special_equals = createSharedString("=");
+    shared.redacted = createSharedString("(redacted)");
 
     for (j = 0; j < OBJ_SHARED_INTEGERS; j++) {
         shared.integers[j] = makeObjectShared(createObject(OBJ_STRING, (void *)(long)j));
-        initObjectLRUOrLFU(shared.integers[j]);
+        shared.integers[j]->encoding = OBJ_ENCODING_INT;
         shared.integers[j]->encoding = OBJ_ENCODING_INT;
     }
     for (j = 0; j < OBJ_SHARED_BULKHDR_LEN; j++) {
-        shared.mbulkhdr[j] = createObject(OBJ_STRING, sdscatprintf(sdsempty(), "*%d\r\n", j));
-        shared.bulkhdr[j] = createObject(OBJ_STRING, sdscatprintf(sdsempty(), "$%d\r\n", j));
-        shared.maphdr[j] = createObject(OBJ_STRING, sdscatprintf(sdsempty(), "%%%d\r\n", j));
-        shared.sethdr[j] = createObject(OBJ_STRING, sdscatprintf(sdsempty(), "~%d\r\n", j));
+        shared.mbulkhdr[j] = createSharedStringFromSds(sdscatprintf(sdsempty(), "*%d\r\n", j));
+        shared.bulkhdr[j] = createSharedStringFromSds(sdscatprintf(sdsempty(), "$%d\r\n", j));
+        shared.maphdr[j] = createSharedStringFromSds(sdscatprintf(sdsempty(), "%%%d\r\n", j));
+        shared.sethdr[j] = createSharedStringFromSds(sdscatprintf(sdsempty(), "~%d\r\n", j));
     }
     /* The following two shared objects, minstring and maxstring, are not
      * actually used for their value but as a special object meaning
@@ -2740,9 +2761,49 @@ void makeThreadKillable(void) {
     pthread_setcanceltype(PTHREAD_CANCEL_ASYNCHRONOUS, NULL);
 }
 
-void initServer(void) {
-    int j;
+/* Return non-zero if the database is empty  */
+int dbHasNoKeys(int dbid) {
+    return dbid < 0 || dbid >= server.dbnum || !server.db[dbid] || kvstoreSize(server.db[dbid]->keys) == 0;
+}
 
+bool dbsHaveNoKeys(void) {
+    for (int i = 0; i < server.dbnum; i++) {
+        if (server.db[i] && kvstoreSize(server.db[i]->keys) != 0) {
+            return false;
+        }
+    }
+    return true;
+}
+
+serverDb *createDatabase(int id) {
+    int slot_count_bits = 0;
+    int flags = KVSTORE_ALLOCATE_HASHTABLES_ON_DEMAND;
+    if (server.cluster_enabled) {
+        flags |= KVSTORE_FREE_EMPTY_HASHTABLES;
+        slot_count_bits = CLUSTER_SLOT_MASK_BITS;
+    }
+
+    serverDb *db = zmalloc(sizeof(serverDb));
+    db->keys = kvstoreCreate(&kvstoreKeysHashtableType, slot_count_bits, flags);
+    db->expires = kvstoreCreate(&kvstoreExpiresHashtableType, slot_count_bits, flags);
+    db->expires_cursor = 0;
+    db->blocking_keys = dictCreate(&keylistDictType);
+    db->blocking_keys_unblock_on_nokey = dictCreate(&objectKeyPointerValueDictType);
+    db->ready_keys = dictCreate(&objectKeyPointerValueDictType);
+    db->watched_keys = dictCreate(&keylistDictType);
+    db->id = id;
+    db->avg_ttl = 0;
+    return db;
+}
+
+serverDb *createDatabaseIfNeeded(int id) {
+    if (server.db[id] == NULL) {
+        server.db[id] = createDatabase(id);
+    }
+    return server.db[id];
+}
+
+void initServer(void) {
     signal(SIGHUP, SIG_IGN);
     signal(SIGPIPE, SIG_IGN);
     setupSignalHandlers();
@@ -2815,33 +2876,16 @@ void initServer(void) {
     }
 
     server.dbnum = server.cluster_enabled ? server.config_databases_cluster : server.config_databases;
-    server.db = zmalloc(sizeof(serverDb) * server.dbnum);
+    server.db = zcalloc(sizeof(serverDb *) * server.dbnum);
+    createDatabaseIfNeeded(0); /* The default database should always exist */
 
-    /* Create the databases, and initialize other internal state. */
-    int slot_count_bits = 0;
-    int flags = KVSTORE_ALLOCATE_HASHTABLES_ON_DEMAND;
-    if (server.cluster_enabled) {
-        slot_count_bits = CLUSTER_SLOT_MASK_BITS;
-        flags |= KVSTORE_FREE_EMPTY_HASHTABLES;
-    }
-    for (j = 0; j < server.dbnum; j++) {
-        server.db[j].keys = kvstoreCreate(&kvstoreKeysHashtableType, slot_count_bits, flags);
-        server.db[j].expires = kvstoreCreate(&kvstoreExpiresHashtableType, slot_count_bits, flags);
-        server.db[j].expires_cursor = 0;
-        server.db[j].blocking_keys = dictCreate(&keylistDictType);
-        server.db[j].blocking_keys_unblock_on_nokey = dictCreate(&objectKeyPointerValueDictType);
-        server.db[j].ready_keys = dictCreate(&objectKeyPointerValueDictType);
-        server.db[j].watched_keys = dictCreate(&keylistDictType);
-        server.db[j].id = j;
-        server.db[j].avg_ttl = 0;
-    }
     evictionPoolAlloc(); /* Initialize the LRU keys pool. */
     /* Note that server.pubsub_channels was chosen to be a kvstore (with only one dict, which
      * seems odd) just to make the code cleaner by making it be the same type as server.pubsubshard_channels
      * (which has to be kvstore), see pubsubtype.serverPubSubChannels */
     server.pubsub_channels = kvstoreCreate(&kvstoreChannelHashtableType, 0, KVSTORE_ALLOCATE_HASHTABLES_ON_DEMAND);
     server.pubsub_patterns = dictCreate(&objToHashtableDictType);
-    server.pubsubshard_channels = kvstoreCreate(&kvstoreChannelHashtableType, slot_count_bits,
+    server.pubsubshard_channels = kvstoreCreate(&kvstoreChannelHashtableType, server.cluster_enabled ? CLUSTER_SLOT_MASK_BITS : 0,
                                                 KVSTORE_ALLOCATE_HASHTABLES_ON_DEMAND | KVSTORE_FREE_EMPTY_HASHTABLES);
     server.pubsub_clients = 0;
     server.watching_clients = 0;
@@ -3691,7 +3735,7 @@ void call(client *c, int flags) {
      * and a client which is reprocessing command again (after being unblocked).
      * Blocked clients can be blocked in different places and not always it means the call() function has been
      * called. For example this is required for avoiding double logging to monitors.*/
-    int reprocessing_command = flags & CMD_CALL_REPROCESSING;
+    int reprocessing_command = c->flag.reexecuting_command ? 1 : 0;
 
     /* Initialization: clear the flags that must be set by the command on
      * demand, and initialize the array for additional commands propagation. */
@@ -3722,18 +3766,11 @@ void call(client *c, int flags) {
 
     c->flag.buffered_reply = 0;
     c->flag.keyspace_notified = 0;
-    /* Setting the CLIENT_REPROCESSING_COMMAND flag so that during the actual
-     * processing of the command proc, the client is aware that it is being
-     * re-processed. */
-    if (reprocessing_command) c->flag.reprocessing_command = 1;
 
     monotime monotonic_start = 0;
     if (monotonicGetType() == MONOTONIC_CLOCK_HW) monotonic_start = getMonotonicUs();
 
     c->cmd->proc(c);
-
-    /* Clear the CLIENT_REPROCESSING_COMMAND flag after the proc is executed. */
-    if (reprocessing_command) c->flag.reprocessing_command = 0;
 
     exitExecutionUnit();
 
@@ -3749,6 +3786,7 @@ void call(client *c, int flags) {
     else
         duration = ustime() - call_timer;
 
+    valkey_commands_trace(valkey_commands, command_call, connGetTypeId(c->conn), getClientPeerId(c), getClientPeerId(c), real_cmd->declared_name, duration);
     c->duration += duration;
     dirty = server.dirty - dirty;
     if (dirty < 0) dirty = 0;
@@ -3779,7 +3817,12 @@ void call(client *c, int flags) {
      * a MULTI-EXEC from inside an AOF). */
     if (update_command_stats) {
         char *latency_event = (real_cmd->flags & CMD_FAST) ? "fast-command" : "command";
-        latencyAddSampleIfNeeded(latency_event, duration / 1000);
+        latencyAddSampleIfNeeded(latency_event, duration);
+        if (real_cmd->flags & CMD_FAST) {
+            latencyTraceIfNeeded(server, fast_command, duration);
+        } else {
+            latencyTraceIfNeeded(server, command, duration);
+        }
         if (server.execution_nesting == 0) durationAddSample(EL_DURATION_TYPE_CMD, duration);
     }
 
@@ -4011,6 +4054,35 @@ uint64_t getCommandFlags(client *c) {
     return cmd_flags;
 }
 
+/* Prepare a parsed command for processing, including looking up the command,
+ * checking arity and calculating cluster slot. This should be done before
+ * calling processCommand() and can be done by I/O threads to offload the
+ * main-thread. */
+void prepareCommand(client *c) {
+    /* Make sure we don't do this twice. */
+    debugServerAssert(c->parsed_cmd == NULL && !(c->read_flags & READ_FLAGS_COMMAND_NOT_FOUND));
+    c->parsed_cmd = lookupCommand(c->argv, c->argc);
+    if (c->parsed_cmd && !commandCheckArity(c->parsed_cmd, c->argc, NULL)) {
+        /* The command was found, but the arity is invalid. */
+        c->read_flags |= READ_FLAGS_BAD_ARITY;
+    } else if (c->parsed_cmd && server.cluster_enabled) {
+        debugServerAssert(c->slot == -1 &&
+                          !(c->read_flags & READ_FLAGS_CROSSSLOT) &&
+                          !(c->read_flags & READ_FLAGS_NO_KEYS));
+        c->slot = clusterSlotByCommand(c->parsed_cmd, c->argv, c->argc, &c->read_flags);
+    }
+}
+
+/* Undo prepareCommand(), to allow prepareCommand() again after applying command filters. */
+void unprepareCommand(client *c) {
+    c->parsed_cmd = NULL;
+    c->read_flags &= ~(READ_FLAGS_COMMAND_NOT_FOUND |
+                       READ_FLAGS_BAD_ARITY |
+                       READ_FLAGS_CROSSSLOT |
+                       READ_FLAGS_NO_KEYS);
+    c->slot = -1;
+}
+
 /* If this function gets called we already read a whole
  * command, arguments are in the client argv/argc fields.
  * processCommand() execute the command or prepare the
@@ -4052,22 +4124,28 @@ int processCommand(client *c) {
      * In case we are reprocessing a command after it was blocked,
      * we do not have to repeat the same checks */
     if (!client_reprocessing_command) {
-        struct serverCommand *cmd = c->io_parsed_cmd ? c->io_parsed_cmd : lookupCommand(c->argv, c->argc);
+        struct serverCommand *cmd = c->parsed_cmd;
         if (!cmd) {
             /* Handle possible security attacks. */
             if (!strcasecmp(c->argv[0]->ptr, "host:") || !strcasecmp(c->argv[0]->ptr, "post")) {
                 securityWarningCommand(c);
                 return C_ERR;
             }
+            /* Check that the command lookup should has been done before calling
+             * this function, by calling prepareCommand(). */
+            serverAssert(!(c->read_flags & READ_FLAGS_COMMAND_NOT_FOUND));
         }
         c->cmd = c->lastcmd = c->realcmd = cmd;
         c->flag.buffered_reply = 0;
         sds err;
+
         if (!commandCheckExistence(c, &err)) {
             rejectCommandSds(c, err);
             return C_OK;
         }
-        if (!commandCheckArity(c->cmd, c->argc, &err)) {
+        if (c->read_flags & READ_FLAGS_BAD_ARITY) {
+            /* Already detected this, but do it again just to get the error message. */
+            serverAssert(!commandCheckArity(c->cmd, c->argc, &err));
             rejectCommandSds(c, err);
             return C_OK;
         }
@@ -4139,7 +4217,7 @@ int processCommand(client *c) {
     if (server.cluster_enabled && !obey_client &&
         !(!(c->cmd->flags & CMD_MOVABLE_KEYS) && c->cmd->key_specs_num == 0 && c->cmd->proc != execCommand)) {
         int error_code;
-        clusterNode *n = getNodeByQuery(c, c->cmd, c->argv, c->argc, &c->slot, &error_code);
+        clusterNode *n = getNodeByQuery(c, &error_code);
         if (n == NULL || !clusterNodeIsMyself(n)) {
             if (c->cmd->proc == execCommand) {
                 discardTransaction(c);
@@ -4346,16 +4424,13 @@ int processCommand(client *c) {
     }
 
     /* Exec the command */
-    if (c->flag.multi && c->cmd->proc == clientReplyCommand) {
-        addReplyError(c, "CLIENT REPLY not allowed during MULTI/EXEC transaction.");
-    } else if (c->flag.multi && c->cmd->proc != execCommand && c->cmd->proc != discardCommand &&
-               c->cmd->proc != multiCommand && c->cmd->proc != watchCommand && c->cmd->proc != quitCommand &&
-               c->cmd->proc != resetCommand) {
+    if (c->flag.multi && c->cmd->proc != execCommand && c->cmd->proc != discardCommand &&
+        c->cmd->proc != quitCommand &&
+        c->cmd->proc != resetCommand) {
         queueMultiCommand(c, cmd_flags);
         addReply(c, shared.queued);
     } else {
         int flags = CMD_CALL_FULL;
-        if (client_reprocessing_command) flags |= CMD_CALL_REPROCESSING;
         call(c, flags);
         if (listLength(server.ready_keys) && !isInsideYieldingLongCommand()) handleClientsBlockedOnKeys();
     }
@@ -5611,9 +5686,10 @@ void totalNumberOfStatefulKeys(unsigned long *blocking_keys,
                                unsigned long *watched_keys) {
     unsigned long bkeys = 0, bkeys_on_nokey = 0, wkeys = 0;
     for (int j = 0; j < server.dbnum; j++) {
-        bkeys += dictSize(server.db[j].blocking_keys);
-        bkeys_on_nokey += dictSize(server.db[j].blocking_keys_unblock_on_nokey);
-        wkeys += dictSize(server.db[j].watched_keys);
+        if (server.db[j] == NULL) continue;
+        bkeys += dictSize(server.db[j]->blocking_keys);
+        bkeys_on_nokey += dictSize(server.db[j]->blocking_keys_unblock_on_nokey);
+        wkeys += dictSize(server.db[j]->watched_keys);
     }
     if (blocking_keys) *blocking_keys = bkeys;
     if (blocking_keys_on_nokey) *blocking_keys_on_nokey = bkeys_on_nokey;
@@ -6213,13 +6289,15 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
         if (sections++) info = sdscat(info, "\r\n");
         info = sdscatprintf(info, "# Keyspace\r\n");
         for (j = 0; j < server.dbnum; j++) {
+            serverDb *db = server.db[j];
+            if (db == NULL) continue;
             long long keys, vkeys;
 
-            keys = kvstoreSize(server.db[j].keys);
-            vkeys = kvstoreSize(server.db[j].expires);
+            keys = kvstoreSize(db->keys);
+            vkeys = kvstoreSize(db->expires);
             if (keys || vkeys) {
                 info = sdscatprintf(info, "db%d:keys=%lld,expires=%lld,avg_ttl=%lld\r\n", j, keys, vkeys,
-                                    server.db[j].avg_ttl);
+                                    db->avg_ttl);
             }
         }
     }
@@ -6353,8 +6431,8 @@ void createPidFile(void) {
 void daemonize(void) {
     int fd;
 
-    if (fork() != 0) exit(0); /* parent exits */
-    setsid();                 /* create a new session */
+    if (valkey_fork() != 0) exit(0); /* parent exits */
+    setsid();                        /* create a new session */
 
     /* Every output goes to /dev/null. If the server is daemonized but
      * the 'logfile' is set to 'stdout' in the configuration file
@@ -6547,7 +6625,7 @@ int serverFork(int purpose) {
 
     int childpid;
     long long start = ustime();
-    if ((childpid = fork()) == 0) {
+    if ((childpid = valkey_fork()) == 0) {
         /* Child.
          *
          * The order of setting things up follows some reasoning:
@@ -6577,7 +6655,8 @@ int serverFork(int purpose) {
         server.stat_fork_time = ustime() - start;
         server.stat_fork_rate =
             (double)zmalloc_used_memory() * 1000000 / server.stat_fork_time / (1024 * 1024 * 1024); /* GB per second. */
-        latencyAddSampleIfNeeded("fork", server.stat_fork_time / 1000);
+        latencyAddSampleIfNeeded("fork", server.stat_fork_time);
+        latencyTraceIfNeeded(bgsave, fork, server.stat_fork_time);
 
         /* The child_pid and child_type are only for mutually exclusive children.
          * other child types should handle and store their pid's in dedicated variables.

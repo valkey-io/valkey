@@ -530,7 +530,7 @@ int writeAofManifestFile(sds buf) {
     sds tmp_am_name = getTempAofManifestFileName();
     sds tmp_am_filepath = makePath(server.aof_dirname, tmp_am_name);
 
-    int fd = open(tmp_am_filepath, O_WRONLY | O_TRUNC | O_CREAT, 0644);
+    int fd = open(tmp_am_filepath, O_WRONLY | O_TRUNC | O_CREAT, 0666);
     if (fd == -1) {
         serverLog(LL_WARNING, "Can't open the AOF manifest file %s: %s", tmp_am_name, strerror(errno));
 
@@ -728,7 +728,7 @@ void aofOpenIfNeededOnServerStart(void) {
 
     /* Here we should use 'O_APPEND' flag. */
     sds aof_filepath = makePath(server.aof_dirname, aof_name);
-    server.aof_fd = open(aof_filepath, O_WRONLY | O_APPEND | O_CREAT, 0644);
+    server.aof_fd = open(aof_filepath, O_WRONLY | O_APPEND | O_CREAT, 0666);
     sdsfree(aof_filepath);
     if (server.aof_fd == -1) {
         serverLog(LL_WARNING, "Can't open the append-only file %s: %s", aof_name, strerror(errno));
@@ -790,7 +790,7 @@ int openNewIncrAofForAppend(void) {
         new_aof_name = sdsdup(getNewIncrAofName(temp_am));
     }
     sds new_aof_filepath = makePath(server.aof_dirname, new_aof_name);
-    newfd = open(new_aof_filepath, O_WRONLY | O_TRUNC | O_CREAT, 0644);
+    newfd = open(new_aof_filepath, O_WRONLY | O_TRUNC | O_CREAT, 0666);
     sdsfree(new_aof_filepath);
     if (newfd == -1) {
         serverLog(LL_WARNING, "Can't open the append-only file %s: %s", new_aof_name, strerror(errno));
@@ -1129,12 +1129,16 @@ void flushAppendOnlyFile(int force) {
      * useful for graphing / monitoring purposes. */
     if (sync_in_progress) {
         latencyAddSampleIfNeeded("aof-write-pending-fsync", latency);
+        latencyTraceIfNeeded(aof, aof_write_pending_fsync, latency);
     } else if (hasActiveChildProcess()) {
         latencyAddSampleIfNeeded("aof-write-active-child", latency);
+        latencyTraceIfNeeded(aof, aof_write_active_child, latency);
     } else {
         latencyAddSampleIfNeeded("aof-write-alone", latency);
+        latencyTraceIfNeeded(aof, aof_write_alone, latency);
     }
     latencyAddSampleIfNeeded("aof-write", latency);
+    latencyTraceIfNeeded(aof, aof_write, latency);
 
     /* We performed the write so reset the postponed flush sentinel to zero. */
     server.aof_flush_postponed_start = 0;
@@ -1248,6 +1252,8 @@ try_fsync:
         }
         latencyEndMonitor(latency);
         latencyAddSampleIfNeeded("aof-fsync-always", latency);
+        latencyTraceIfNeeded(aof, aof_fsync_always, latency);
+
         server.aof_last_incr_fsync_offset = server.aof_last_incr_size;
         server.aof_last_fsync = server.mstime;
         atomic_store_explicit(&server.fsynced_reploff_pending, server.primary_repl_offset, memory_order_relaxed);
@@ -2210,8 +2216,8 @@ int rewriteAppendOnlyFileRio(rio *aof) {
 
     for (j = 0; j < server.dbnum; j++) {
         char selectcmd[] = "*2\r\n$6\r\nSELECT\r\n";
-        serverDb *db = server.db + j;
-        if (kvstoreSize(db->keys) == 0) continue;
+        if (dbHasNoKeys(j)) continue;
+        serverDb *db = server.db[j];
 
         /* SELECT the new DB */
         if (rioWrite(aof, selectcmd, sizeof(selectcmd) - 1) == 0) goto werr;
@@ -2501,6 +2507,7 @@ off_t getAppendOnlyFileSize(sds filename, int *status) {
     }
     latencyEndMonitor(latency);
     latencyAddSampleIfNeeded("aof-fstat", latency);
+    latencyTraceIfNeeded(aof, aof_fstat, latency);
     sdsfree(aof_filepath);
     return size;
 }
@@ -2577,6 +2584,7 @@ void backgroundRewriteDoneHandler(int exitcode, int bysignal) {
         }
         latencyEndMonitor(latency);
         latencyAddSampleIfNeeded("aof-rename", latency);
+        latencyTraceIfNeeded(aof, aof_rename, latency);
         serverLog(LL_NOTICE, "Successfully renamed the temporary AOF base file %s into %s", tmpfile, new_base_filename);
 
         /* Rename the temporary incr aof file to 'new_incr_filename'. */
@@ -2603,6 +2611,7 @@ void backgroundRewriteDoneHandler(int exitcode, int bysignal) {
             }
             latencyEndMonitor(latency);
             latencyAddSampleIfNeeded("aof-rename", latency);
+            latencyTraceIfNeeded(aof, aof_rename, latency);
             serverLog(LL_NOTICE, "Successfully renamed the temporary AOF incr file %s into %s", temp_incr_aof_name,
                       new_incr_filename);
             sdsfree(temp_incr_filepath);

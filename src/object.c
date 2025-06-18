@@ -229,9 +229,12 @@ robj *createStringObjectWithKeyAndExpire(const char *ptr, size_t len, const sds 
      * heuristics, e.g. we can look at the jemalloc sizes (16-byte intervals up
      * to 128 bytes). */
     size_t size = sizeof(robj);
-    size += (key != NULL) * (sdslen(key) + 3); /* hdr size (1) + hdr (1) + nullterm (1) */
+    if (key) {
+        size_t key_len = sdslen(key);
+        size += sdsReqSize(key_len, sdsReqType(key_len)) + 1; /* 1 byte for prefixed sds hdr size */
+    }
     size += (expire != -1) * sizeof(long long);
-    size += 4 + len; /* embstr header (3) + nullterm (1) */
+    size += sdsReqSize(len, SDS_TYPE_8);
     if (size <= 64) {
         return createEmbeddedStringObjectWithKeyAndExpire(ptr, len, key, expire);
     } else {
@@ -925,13 +928,17 @@ int collateStringObjects(const robj *a, const robj *b) {
 
 /* Equal string objects return 1 if the two objects are the same from the
  * point of view of a string comparison, otherwise 0 is returned. Note that
- * this function is faster then checking for (compareStringObject(a,b) == 0)
+ * this function is faster than checking for (compareStringObject(a,b) == 0)
  * because it can perform some more optimization. */
 int equalStringObjects(robj *a, robj *b) {
     if (a->encoding == OBJ_ENCODING_INT && b->encoding == OBJ_ENCODING_INT) {
         /* If both strings are integer encoded just check if the stored
          * long is the same. */
         return a->ptr == b->ptr;
+    } else if (a->encoding != OBJ_ENCODING_INT &&
+               b->encoding != OBJ_ENCODING_INT &&
+               sdslen(a->ptr) != sdslen(b->ptr)) {
+        return 0;
     } else {
         return compareStringObjects(a, b) == 0;
     }
@@ -1357,8 +1364,8 @@ struct serverMemOverhead *getMemoryOverheadData(void) {
     mem_total += mh->functions_caches;
 
     for (j = 0; j < server.dbnum; j++) {
-        serverDb *db = server.db + j;
-        if (!kvstoreNumAllocatedHashtables(db->keys)) continue;
+        serverDb *db = server.db[j];
+        if (db == NULL || !kvstoreNumAllocatedHashtables(db->keys)) continue;
 
         unsigned long long keyscount = kvstoreSize(db->keys);
 

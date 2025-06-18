@@ -1176,6 +1176,7 @@ start_server {tags {"dual-channel-replication external:skip"}} {
         $replica config set dual-channel-replication-enabled yes
         $replica config set loglevel debug
         $replica config set repl-timeout 10
+        $replica config set loading-process-events-interval-bytes 1024
         set load_handle [start_one_key_write_load $primary_host $primary_port 100 "mykey"]
         test "Replica recover rdb-connection killed" {
             $replica replicaof $primary_host $primary_port
@@ -1211,12 +1212,36 @@ start_server {tags {"dual-channel-replication external:skip"}} {
                 fail "replica didn't retry after connection close"
             }
         }
-        $replica replicaof no one
-        wait_for_condition 500 1000 {
-            [s -1 rdb_bgsave_in_progress] eq 0
-        } else {
-            fail "Primary should abort sync"
-        }
+        stop_write_load $load_handle
+    }
+}
+
+start_server {tags {"dual-channel-replication external:skip"}} {
+    set primary [srv 0 client]
+    set primary_host [srv 0 host]
+    set primary_port [srv 0 port]
+    set loglines [count_log_lines 0]
+
+    $primary config set repl-diskless-sync yes
+    $primary config set dual-channel-replication-enabled yes
+    $primary config set loglevel debug
+    $primary config set repl-diskless-sync-delay 0
+
+    # Generating RDB will cost 100 sec to generate
+    $primary debug populate 100000 primary 1
+    $primary config set rdb-key-save-delay 1000
+    
+    start_server {} {
+        set replica [srv 0 client]
+        set replica_host [srv 0 host]
+        set replica_port [srv 0 port]
+        set replica_log [srv 0 stdout]
+        
+        $replica config set dual-channel-replication-enabled yes
+        $replica config set loglevel debug
+        $replica config set repl-timeout 10
+        $replica config set loading-process-events-interval-bytes 1024
+        set load_handle [start_one_key_write_load $primary_host $primary_port 100 "mykey"]
         test "Replica recover main-connection killed" {
             $replica replicaof $primary_host $primary_port
             # Wait for sync session to start

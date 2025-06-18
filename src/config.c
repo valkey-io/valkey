@@ -28,6 +28,7 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
+#include "io_threads.h"
 #include "server.h"
 #include "cluster.h"
 #include "connection.h"
@@ -2472,6 +2473,7 @@ static int updatePort(const char **err) {
     listener->bindaddr_count = server.bindaddr_count;
     listener->port = server.port;
     listener->ct = connectionByType(CONN_TYPE_SOCKET);
+    clusterUpdateMyselfAnnouncedPorts();
     if (changeListener(listener) == C_ERR) {
         *err = "Unable to listen on this port. Check server logs.";
         return 0;
@@ -2549,7 +2551,7 @@ static int updateAofAutoGCEnabled(const char **err) {
 
 static int updateExtendedRedisCompat(const char **err) {
     UNUSED(err);
-    createSharedObjectsWithCompat();
+    updateSharedObjectsWithCompat();
     return 1;
 }
 
@@ -2659,7 +2661,6 @@ int updateClusterFlags(const char **err) {
 static int updateClusterAnnouncedPort(const char **err) {
     UNUSED(err);
     clusterUpdateMyselfAnnouncedPorts();
-    clearCachedClusterSlotsResponse();
     return 1;
 }
 
@@ -2718,6 +2719,7 @@ static int applyTLSPort(const char **err) {
     listener->bindaddr_count = server.bindaddr_count;
     listener->port = server.tls_port;
     listener->ct = connectionByType(CONN_TYPE_TLS);
+    clusterUpdateMyselfAnnouncedPorts();
     if (changeListener(listener) == C_ERR) {
         *err = "Unable to listen on this port. Check server logs.";
         return 0;
@@ -3258,9 +3260,12 @@ standardConfig static_configs[] = {
     /* Integer configs */
     createIntConfig("databases", NULL, IMMUTABLE_CONFIG, 1, INT_MAX, server.config_databases, 16, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("cluster-databases", NULL, IMMUTABLE_CONFIG, 1, INT_MAX, server.config_databases_cluster, 1, INTEGER_CONFIG, NULL, NULL),
-    createIntConfig("port", NULL, MODIFIABLE_CONFIG, 0, 65535, server.port, 6379, INTEGER_CONFIG, NULL, updatePort),                                   /* TCP port. */
-    createIntConfig("io-threads", NULL, DEBUG_CONFIG | IMMUTABLE_CONFIG, 1, IO_THREADS_MAX_NUM, server.io_threads_num, 1, INTEGER_CONFIG, NULL, NULL), /* Single threaded by default */
+    createIntConfig("port", NULL, MODIFIABLE_CONFIG, 0, 65535, server.port, 6379, INTEGER_CONFIG, NULL, updatePort),                                               /* TCP port. */
+    createIntConfig("io-threads", NULL, DEBUG_CONFIG | MODIFIABLE_CONFIG, 1, IO_THREADS_MAX_NUM, server.io_threads_num, 1, INTEGER_CONFIG, NULL, updateIOThreads), /* Single threaded by default */
     createIntConfig("events-per-io-thread", NULL, MODIFIABLE_CONFIG | HIDDEN_CONFIG, 0, INT_MAX, server.events_per_io_thread, 2, INTEGER_CONFIG, NULL, NULL),
+    createIntConfig("min-io-threads-avoid-copy-reply", NULL, MODIFIABLE_CONFIG | HIDDEN_CONFIG, 0, INT_MAX, server.min_io_threads_copy_avoid, 7, INTEGER_CONFIG, NULL, NULL),
+    createIntConfig("min-string-size-avoid-copy-reply", NULL, MODIFIABLE_CONFIG | HIDDEN_CONFIG, 0, INT_MAX, server.min_string_size_copy_avoid, 16384, INTEGER_CONFIG, NULL, NULL),
+    createIntConfig("min-string-size-avoid-copy-reply-threaded", NULL, MODIFIABLE_CONFIG | HIDDEN_CONFIG, 0, INT_MAX, server.min_string_size_copy_avoid_threaded, 65536, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("prefetch-batch-max-size", NULL, MODIFIABLE_CONFIG, 0, 128, server.prefetch_batch_max_size, 16, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("auto-aof-rewrite-percentage", NULL, MODIFIABLE_CONFIG, 0, INT_MAX, server.aof_rewrite_perc, 100, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("cluster-replica-validity-factor", "cluster-slave-validity-factor", MODIFIABLE_CONFIG, 0, INT_MAX, server.cluster_replica_validity_factor, 10, INTEGER_CONFIG, NULL, NULL), /* replica max data age factor. */

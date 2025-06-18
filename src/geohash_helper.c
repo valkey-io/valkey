@@ -96,14 +96,60 @@ uint8_t geohashEstimateStepsByRadius(double range_meters, double lat) {
  *       \           /         /              \             /             \
  *         ---------          /----------------\           /---------------\
  *  Northern Hemisphere       Southern Hemisphere         Around the equator
+ *
+ * Note: In case of the BYPOLYGON search, this function also sets the centroid coordinates in the shape.
  */
 int geohashBoundingBox(GeoShape *shape, double *bounds) {
     if (!bounds) return 0;
+    double height = 0.0, width = 0.0;
+    if (shape->type == CIRCULAR_TYPE) {
+        height = shape->conversion * shape->t.radius;
+        width = shape->conversion * shape->t.radius;
+    } else if (shape->type == RECTANGLE_TYPE) {
+        height = shape->conversion * shape->t.r.height / 2;
+        width = shape->conversion * shape->t.r.width / 2;
+    } else if (shape->type == POLYGON_TYPE) {
+        int num_vertices = shape->t.polygon.num_vertices;
+        double x = 0.0, y = 0.0, z = 0.0;
+        /* Bounding box directly from lon & lat. */
+        double min_lon = GEO_LONG_MAX, max_lon = GEO_LONG_MIN;
+        double min_lat = GEO_LAT_MAX, max_lat = GEO_LAT_MIN;
+        for (int i = 0; i < num_vertices; i++) {
+            double longitude = shape->t.polygon.points[i][0];
+            double latitude = shape->t.polygon.points[i][1];
+            /* Calculate the bounding box (in LON/LAT). */
+            if (longitude < min_lon) min_lon = longitude;
+            if (longitude > max_lon) max_lon = longitude;
+            if (latitude < min_lat) min_lat = latitude;
+            if (latitude > max_lat) max_lat = latitude;
+            /* Convert to cartesian coordinates and accumulate for centroid.
+             * Note: We do not need to divide the x, y & z values by num_vertices because the magnitude is not needed
+             * for centroid calculation. Summing the cartesian coordinates is all that is needed for computing the angle
+             * which can be converted back into the LON/LAT format. */
+            double lon_rad = deg_rad(longitude);
+            double lat_rad = deg_rad(latitude);
+            double cur_x = cos(lat_rad) * cos(lon_rad);
+            double cur_y = cos(lat_rad) * sin(lon_rad);
+            double cur_z = sin(lat_rad);
+            x += cur_x;
+            y += cur_y;
+            z += cur_z;
+        }
+        /* Set bounding box. */
+        bounds[0] = min_lon;
+        bounds[1] = min_lat;
+        bounds[2] = max_lon;
+        bounds[3] = max_lat;
+        /* Compute centroid radians from the summed cartesian coords. The centroid is used as the starting coord. */
+        double central_lon = atan2(y, x);
+        double central_hyp = sqrt(x * x + y * y);
+        double central_lat = atan2(z, central_hyp);
+        shape->xy[0] = rad_deg(central_lon);
+        shape->xy[1] = rad_deg(central_lat);
+        return 1;
+    }
     double longitude = shape->xy[0];
     double latitude = shape->xy[1];
-    double height = shape->conversion * (shape->type == CIRCULAR_TYPE ? shape->t.radius : shape->t.r.height / 2);
-    double width = shape->conversion * (shape->type == CIRCULAR_TYPE ? shape->t.radius : shape->t.r.width / 2);
-
     const double lat_delta = rad_deg(height / EARTH_RADIUS_IN_METERS);
     const double long_delta_top = rad_deg(width / EARTH_RADIUS_IN_METERS / cos(deg_rad(latitude + lat_delta)));
     const double long_delta_bottom = rad_deg(width / EARTH_RADIUS_IN_METERS / cos(deg_rad(latitude - lat_delta)));
@@ -140,11 +186,28 @@ GeoHashRadius geohashCalculateAreasByShapeWGS84(GeoShape *shape) {
     /* radius_meters is calculated differently in different search types:
      * 1) CIRCULAR_TYPE, just use radius.
      * 2) RECTANGLE_TYPE, we use sqrt((width/2)^2 + (height/2)^2) to
-     * calculate the distance from the center point to the corner */
-    double radius_meters =
-        shape->type == CIRCULAR_TYPE
-            ? shape->t.radius
-            : sqrt((shape->t.r.width / 2) * (shape->t.r.width / 2) + (shape->t.r.height / 2) * (shape->t.r.height / 2));
+     * calculate the distance from the center point to the corner
+     * 3) POLYGON_TYPE, use height/width from the bounding box and
+     * use the centroid (as center) to calculate the distance. */
+    double radius_meters = 0.0;
+    if (shape->type == CIRCULAR_TYPE) {
+        /* For circular shapes, use the given radius directly. */
+        radius_meters = shape->t.radius;
+    } else if (shape->type == RECTANGLE_TYPE) {
+        /* For rectangles, calculate the diagonal as the radius. */
+        radius_meters = sqrt((shape->t.r.width / 2) * (shape->t.r.width / 2) + (shape->t.r.height / 2) * (shape->t.r.height / 2));
+    } else if (shape->type == POLYGON_TYPE) {
+        /* For polygons, use max distance from the centroid to the bounding box. */
+        double dist_top_left = geohashGetDistance(longitude, latitude, min_lon, max_lat);
+        double dist_top_right = geohashGetDistance(longitude, latitude, max_lon, max_lat);
+        double dist_bottom_left = geohashGetDistance(longitude, latitude, min_lon, min_lat);
+        double dist_bottom_right = geohashGetDistance(longitude, latitude, max_lon, min_lat);
+        /* Find the maximum distance (which will be the radius that covers the whole bounding box). */
+        radius_meters = dist_top_left;
+        if (dist_top_right > radius_meters) radius_meters = dist_top_right;
+        if (dist_bottom_left > radius_meters) radius_meters = dist_bottom_left;
+        if (dist_bottom_right > radius_meters) radius_meters = dist_bottom_right;
+    }
     radius_meters *= shape->conversion;
 
     steps = geohashEstimateStepsByRadius(radius_meters, latitude);
@@ -279,4 +342,27 @@ int geohashGetDistanceIfInRectangle(double width_m,
     }
     *distance = geohashGetDistance(x1, y1, x2, y2);
     return 1;
+}
+
+/* Check if `point` is inside a polygon (defined by `vertices` where each vertex's index 0 is lon & 1 is lat) using
+ * ray casting and calculate the distance from the centroid to the point.
+ * The Polygon's centroid's lon lat coordinates are `centroidLon` and `centroidLat`.
+ * The algorithm is based on PNPOLY - Point Inclusion in Polygon Test by W. Randolph Franklin (WRF).
+ * See: https://wrfranklin.org/Research/Short_Notes/pnpoly.html
+ * Returns 1 if inside the polyon and returns 0 otherwise. */
+int geohashGetDistanceIfInPolygon(double centroidLon, double centroidLat, double *point, double (*vertices)[2], int num_vertices, double *distance) {
+    int i, j;
+    int inside = 0;
+    for (i = 0, j = num_vertices - 1; i < num_vertices; j = i++) {
+        double *vertexA = vertices[i];
+        double *vertexB = vertices[j];
+        if (((vertexA[1] > point[1]) != (vertexB[1] > point[1])) &&
+            (point[0] < (vertexB[0] - vertexA[0]) * (point[1] - vertexA[1]) / (vertexB[1] - vertexA[1]) + vertexA[0])) {
+            inside = !inside;
+        }
+    }
+    if (inside) {
+        *distance = geohashGetDistance(centroidLon, centroidLat, point[0], point[1]);
+    }
+    return inside;
 }

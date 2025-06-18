@@ -2087,13 +2087,13 @@ int replicationSupportSkipRDBChecksum(connection *conn, int is_replica_stream_ve
 /* Helper function for readSyncBulkPayload() to initialize tempDb
  * before socket-loading the new db from primary. The tempDb may be populated
  * by swapMainDbWithTempDb or freed by disklessLoadDiscardTempDb later. */
-serverDb *disklessLoadInitTempDb(void) {
-    return initTempDb();
+serverDb **disklessLoadInitTempDb(void) {
+    return zcalloc(sizeof(serverDb *) * server.dbnum);
 }
 
 /* Helper function for readSyncBulkPayload() to discard our tempDb
  * when the loading succeeded or failed. */
-void disklessLoadDiscardTempDb(serverDb *tempDb) {
+void disklessLoadDiscardTempDb(serverDb **tempDb) {
     discardTempDb(tempDb);
 }
 
@@ -2130,7 +2130,7 @@ void readSyncBulkPayload(connection *conn) {
     char buf[PROTO_IOBUF_LEN];
     ssize_t nread, readlen, nwritten;
     int use_diskless_load = useDisklessLoad();
-    serverDb *diskless_load_tempDb = NULL;
+    serverDb **diskless_load_tempDb = NULL;
     functionsLibCtx *temp_functions_lib_ctx = NULL;
     int empty_db_flags = server.repl_replica_lazy_flush ? EMPTYDB_ASYNC : EMPTYDB_NO_FLAGS;
     off_t left;
@@ -2326,7 +2326,7 @@ void readSyncBulkPayload(connection *conn) {
     rdbSaveInfo rsi = RDB_SAVE_INFO_INIT;
     if (use_diskless_load) {
         rio rdb;
-        serverDb *dbarray;
+        serverDb **dbarray;
         functionsLibCtx *functions_lib_ctx;
         int asyncLoading = 0;
 
@@ -2701,7 +2701,7 @@ int sendCurrentOffsetToReplica(client *replica) {
     char buf[128];
     int buflen;
     buflen = snprintf(buf, sizeof(buf), "$ENDOFF:%lld %s %d %llu\r\n", server.primary_repl_offset, server.replid,
-                      server.db->id, (long long unsigned int)replica->id);
+                      server.replicas_eldb, (long long unsigned int)replica->id);
     dualChannelServerLog(LL_NOTICE, "Sending to replica %s RDB end offset %lld and client-id %llu",
                          replicationGetReplicaName(replica), server.primary_repl_offset,
                          (long long unsigned int)replica->id);
@@ -3917,7 +3917,7 @@ void syncWithPrimary(connection *conn) {
         int dfd = -1, maxtries = 5;
         while (maxtries--) {
             snprintf(tmpfile, 256, "temp-%d.%ld.rdb", (int)server.unixtime, (long int)getpid());
-            dfd = open(tmpfile, O_CREAT | O_WRONLY | O_EXCL, 0644);
+            dfd = open(tmpfile, O_CREAT | O_WRONLY | O_EXCL, 0666);
             if (dfd != -1) break;
             /* We save the errno of open to prevent some systems from modifying it after
              * the sleep call. For example, sleep in Mac will change errno to ETIMEDOUT. */
@@ -4371,8 +4371,9 @@ void replicationCachePrimary(client *c) {
     server.primary->repl_data->repl_applied = 0;
     server.primary->repl_data->read_reploff = server.primary->repl_data->reploff;
     if (c->flag.multi) discardTransaction(c);
+    releaseReplyReferences(c);
+    resetLastWrittenBuf(c);
     listEmpty(c->reply);
-    c->sentlen = 0;
     c->reply_bytes = 0;
     c->bufpos = 0;
     resetClient(c);

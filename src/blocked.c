@@ -657,6 +657,7 @@ static void unblockClientOnKey(client *c, robj *key) {
      * we need to re process the command again */
     if (c->flags & CLIENT_PENDING_COMMAND) {
         c->flags &= ~CLIENT_PENDING_COMMAND;
+        c->flags |= CLIENT_REPROCESSING_COMMAND;
         /* We want the command processing and the unblock handler (see RM_Call 'K' option)
          * to run atomically, this is why we must enter the execution unit here before
          * running the command, and exit the execution unit after calling the unblock handler (if exists).
@@ -675,6 +676,8 @@ static void unblockClientOnKey(client *c, robj *key) {
         }
         exitExecutionUnit();
         afterCommand(c);
+        /* Clear the reprocessing command flag after the proc is executed. */
+        c->flags &= ~CLIENT_REPROCESSING_COMMAND;
         server.current_client = old_client;
     }
 }

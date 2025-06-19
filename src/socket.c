@@ -337,8 +337,8 @@ static int connSocketAddr(connection *conn, char *ip, size_t ip_len, int *port, 
     UNUSED(conn);
     UNUSED(remote);
 
-    snprintf(ip, ip_len, "%s", server.unixsocket);
-    *port = 0;
+    snprintf(ip, ip_len, "%s:0", server.unixsocket);
+    if (port) *port = 0;
     return 0;
 }
 

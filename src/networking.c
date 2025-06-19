@@ -3815,13 +3815,7 @@ void readQueryFromClient(connection *conn) {
  * you want to relax error checking or need to display something anyway (see
  * anetFdToString implementation for more info). */
 void genClientAddrString(client *client, char *addr, size_t addr_len, int remote) {
-    if (client->flag.unix_socket) {
-        /* Unix socket client. */
-        snprintf(addr, addr_len, "%s:0", server.unixsocket);
-    } else {
-        /* TCP client. */
-        connFormatAddr(client->conn, addr, addr_len, remote);
-    }
+    connFormatAddr(client->conn, addr, addr_len, remote);
 }
 
 /* This function returns the client peer id, by creating and caching it

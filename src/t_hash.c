@@ -89,8 +89,7 @@ void hashTypeIgnoreTTL(robj *o, bool ignore) {
     }
 }
 
-static volatile_set *
-hashTypeGetOrcreateVolatileSet(robj *o) {
+static volatile_set *hashTypeGetOrcreateVolatileSet(robj *o) {
     serverAssert(o->encoding == OBJ_ENCODING_HASHTABLE);
     volatile_set **volatile_set_ref = hashtableMetadata(o->ptr);
     if (*volatile_set_ref == NULL) {

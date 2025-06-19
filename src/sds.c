@@ -34,7 +34,6 @@
 #include <string.h>
 #include <ctype.h>
 #include <limits.h>
-#include <math.h>
 #include "serverassert.h"
 #include "sds.h"
 #include "sdsalloc.h"

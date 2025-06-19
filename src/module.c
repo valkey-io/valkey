@@ -5350,11 +5350,11 @@ int VM_HashSet(ValkeyModuleKey *key, int flags, ...) {
         /* If CFIELDS is active, we can pass the ownership of the
          * SDS object to the low level function that sets the field
          * to avoid a useless copy. */
-        if (flags & VALKEYMODULE_HASH_CFIELDS) low_flags |= HASH_SET_TAKE_FIELD;
+        if (flags & VALKEYMODULE_HASH_CFIELDS) low_flags |= (HASH_SET_TAKE_FIELD);
 
         robj *argv[2] = {field, value};
         hashTypeTryConversion(key->value, argv, 0, 1);
-        int updated = hashTypeSet(key->value, field->ptr, value->ptr, low_flags);
+        int updated = hashTypeSet(key->value, field->ptr, value->ptr, EXPIRY_NONE, low_flags);
         count += (flags & VALKEYMODULE_HASH_COUNT_ALL) ? 1 : updated;
 
         /* If CFIELDS is active, SDS string ownership is now of hashTypeSet(),
@@ -11224,8 +11224,8 @@ static void moduleScanKeyHashtableCallback(void *privdata, void *entry) {
         key = node->ele;
         value = createStringObjectFromLongDouble(node->score, 0);
     } else if (o->type == OBJ_HASH) {
-        key = hashTypeEntryGetField(entry);
-        sds val = hashTypeEntryGetValue(entry);
+        key = entryGetField(entry);
+        sds val = entryGetValue(entry);
         value = createStringObject(val, sdslen(val));
     } else {
         serverPanic("unexpected object type");

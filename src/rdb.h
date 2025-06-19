@@ -90,32 +90,36 @@ static_assert(RDB_VERSION < RDB_FOREIGN_VERSION_MIN || RDB_VERSION > RDB_FOREIGN
 /* Map object types to RDB object types. Macros starting with OBJ_ are for
  * memory storage and may change. Instead RDB types must be fixed because
  * we store them on disk. */
-#define RDB_TYPE_STRING 0
-#define RDB_TYPE_LIST 1
-#define RDB_TYPE_SET 2
-#define RDB_TYPE_ZSET 3
-#define RDB_TYPE_HASH 4
-#define RDB_TYPE_ZSET_2 5        /* ZSET version 2 with doubles stored in binary. */
-#define RDB_TYPE_MODULE_PRE_GA 6 /* Used in 4.0 release candidates */
-#define RDB_TYPE_MODULE_2 7      /* Module value with annotations for parsing without \
+enum RdbType {
+    RDB_TYPE_STRING = 0,
+    RDB_TYPE_LIST = 1,
+    RDB_TYPE_SET = 2,
+    RDB_TYPE_ZSET = 3,
+    RDB_TYPE_HASH = 4,
+    RDB_TYPE_ZSET_2 = 5,        /* ZSET version 2 with doubles stored in binary. */
+    RDB_TYPE_MODULE_PRE_GA = 6, /* Used in 4.0 release candidates */
+    RDB_TYPE_MODULE_2 = 7,      /* Module value with annotations for parsing without \
                                     the generating module being loaded. */
-#define RDB_TYPE_HASH_ZIPMAP 9
-#define RDB_TYPE_LIST_ZIPLIST 10
-#define RDB_TYPE_SET_INTSET 11
-#define RDB_TYPE_ZSET_ZIPLIST 12
-#define RDB_TYPE_HASH_ZIPLIST 13
-#define RDB_TYPE_LIST_QUICKLIST 14
-#define RDB_TYPE_STREAM_LISTPACKS 15
-#define RDB_TYPE_HASH_LISTPACK 16
-#define RDB_TYPE_ZSET_LISTPACK 17
-#define RDB_TYPE_LIST_QUICKLIST_2 18
-#define RDB_TYPE_STREAM_LISTPACKS_2 19
-#define RDB_TYPE_SET_LISTPACK 20
-#define RDB_TYPE_STREAM_LISTPACKS_3 21
-/* NOTE: WHEN ADDING NEW RDB TYPE, UPDATE rdbIsObjectType(), and rdb_type_string[] */
+    RDB_TYPE_HASH_ZIPMAP = 9,
+    RDB_TYPE_LIST_ZIPLIST = 10,
+    RDB_TYPE_SET_INTSET = 11,
+    RDB_TYPE_ZSET_ZIPLIST = 12,
+    RDB_TYPE_HASH_ZIPLIST = 13,
+    RDB_TYPE_LIST_QUICKLIST = 14,
+    RDB_TYPE_STREAM_LISTPACKS = 15,
+    RDB_TYPE_HASH_LISTPACK = 16,
+    RDB_TYPE_ZSET_LISTPACK = 17,
+    RDB_TYPE_LIST_QUICKLIST_2 = 18,
+    RDB_TYPE_STREAM_LISTPACKS_2 = 19,
+    RDB_TYPE_SET_LISTPACK = 20,
+    RDB_TYPE_STREAM_LISTPACKS_3 = 21,
+    RDB_TYPE_HASH_2 = 22,
+    RDB_TYPE_LAST
+};
+/* NOTE: WHEN ADDING NEW RDB TYPE, UPDATE rdb_type_string[] */
 
 /* Test if a type is an object type. */
-#define rdbIsObjectType(t) (((t) >= 0 && (t) <= 7) || ((t) >= 9 && (t) <= 21))
+#define rdbIsObjectType(t) (((t) >= 0 && (t) <= 7) || ((t) >= 9 && (t) < RDB_TYPE_LAST))
 
 /* Special RDB opcodes (saved/loaded with rdbSaveType/rdbLoadType). */
 #define RDB_OPCODE_FUNCTION2 245       /* function library data */

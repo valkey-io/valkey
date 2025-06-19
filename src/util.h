@@ -33,6 +33,12 @@
 #include <stdint.h>
 #include "sds.h"
 
+/* min/max */
+#undef min
+#undef max
+#define min(a, b) ((a) < (b) ? (a) : (b))
+#define max(a, b) ((a) > (b) ? (a) : (b))
+
 /* The maximum number of characters needed to represent a long double
  * as a string (long double has a huge range of some 4952 chars, see LDBL_MAX).
  * This should be the size of the buffer given to ld2string */

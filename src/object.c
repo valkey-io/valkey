@@ -525,7 +525,10 @@ void freeZsetObject(robj *o) {
 
 void freeHashObject(robj *o) {
     switch (o->encoding) {
-    case OBJ_ENCODING_HASHTABLE: hashtableRelease((hashtable *)o->ptr); break;
+    case OBJ_ENCODING_HASHTABLE:
+        hashTypeFreeVolatileSet(o);
+        hashtableRelease((hashtable *)o->ptr);
+        break;
     case OBJ_ENCODING_LISTPACK: lpFree(o->ptr); break;
     default: serverPanic("Unknown hash encoding type"); break;
     }
@@ -680,7 +683,7 @@ void dismissHashObject(robj *o, size_t size_hint) {
             hashtableInitIterator(&iter, ht, 0);
             void *next;
             while (hashtableNext(&iter, &next)) {
-                dismissHashTypeEntry(next);
+                dismissEntry(next);
             }
             hashtableResetIterator(&iter);
         }
@@ -1201,7 +1204,7 @@ size_t objectComputeSize(robj *key, robj *o, size_t sample_size, int dbid) {
 
             asize = sizeof(*o) + hashtableMemUsage(ht);
             while (hashtableNext(&iter, &next) && samples < sample_size) {
-                elesize += hashTypeEntryMemUsage(next);
+                elesize += entryMemUsage(next);
                 samples++;
             }
             hashtableResetIterator(&iter);

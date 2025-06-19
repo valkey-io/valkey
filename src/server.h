@@ -1633,9 +1633,9 @@ typedef enum {
 
 /* Return value for getExpirationPolicy */
 typedef enum { 
-    POLICY_IGNORE_EXPIRE,  /* Ignore expiration time of items and treat them as valid. */
-    POLICY_KEEP_EXPIRED,   /* Ignore items which are expired but do not actively delete them. */
-    POLICY_DELETE_EXPIRED  /* Delete expired keys on access. */
+    POLICY_IGNORE_EXPIRE, /* Ignore expiration time of items and treat them as valid. */
+    POLICY_KEEP_EXPIRED,  /* Ignore items which are expired but do not actively delete them. */
+    POLICY_DELETE_EXPIRED /* Delete expired keys on access. */
 } expirationPolicy;
 
 struct valkeyServer {

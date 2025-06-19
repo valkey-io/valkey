@@ -6,7 +6,6 @@
 
 typedef void entry;
 
-sds *entryGetValueRef(const entry *entry);
 sds entryGetField(const entry *entry);
 sds entryGetValue(const entry *entry);
 entry *entrySetValue(entry *entry, sds value);

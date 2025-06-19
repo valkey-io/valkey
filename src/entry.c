@@ -22,10 +22,7 @@
  *     +--------------+--------------+---------------+
  *     | Expiration   | field        | value         |
  *     | 1234567890LL | hdr "foo" \0 | hdr8 "bar" \0 |
- *     +--------------+------^-------+---------------+
- *                           |
- *                           |
- *                           entry pointer = field sds
+ *     +--------------+--------------+---------------+
  *
  * Entry with value pointer, used for larger fields and values. The field is SDS
  * type 8 or higher.
@@ -36,7 +33,7 @@
  *     +--------------+---^---+--------------+
  *                        |
  *                        |
- *                        entry pointer = field sds
+ *                        entry pointer = value sds
  */
 
 /* The maximum allocation size we want to use for entries with embedded
@@ -63,18 +60,18 @@ bool entryHasExpiry(const entry *entry) {
     return sdsGetAuxBit(entry, FIELD_SDS_AUX_BIT_ENTRY_HAS_EXPIRY);
 }
 
+/* The entry pointer is the field sds, but that's an implementation detail. */
+sds entryGetField(const entry *entry) {
+    return (sds)entry;
+}
+
 /* Returns the location of a pointer to a separately allocated value. Only for
  * an entry without an embedded value. */
-sds *entryGetValueRef(const entry *entry) {
+static sds *entryGetValueRef(const entry *entry) {
     serverAssert(entryHasValuePtr(entry));
     char *field_data = sdsAllocPtr(entry);
     field_data -= sizeof(sds *);
     return (sds *)field_data;
-}
-
-/* The entry pointer is the field sds, but that's an implementation detail. */
-sds entryGetField(const entry *entry) {
-    return (sds)entry;
 }
 
 /* Returns the sds of the entry's value. */
@@ -159,11 +156,8 @@ void entryFree(entry *entry) {
     zfree(entryAllocPtr(entry));
 }
 
-/* Takes ownership of value, does not take ownership of field */
+/* Takes ownership of value. does not take ownership of field */
 entry *entryCreate(sds field, sds value, long long expiry) {
-    /* In case simple sds just return the same field we got. */
-    if (!value && expiry == EXPIRY_NONE)
-        return field;
     sds embedded_field_sds;
     size_t expiry_size = (expiry == EXPIRY_NONE) ? 0 : sizeof(long long);
     size_t field_len = sdslen(field);
@@ -287,7 +281,12 @@ entry *entryUpdate(entry *e, sds value, long long expiry) {
             } else {
                 /* Skip field content, field null terminator and value sds8 hdr. */
                 sds old_value = entryGetValue(e);
-                sdswrite(sdsAllocPtr(old_value), sdsAllocSize(old_value), SDS_TYPE_8, value, sdslen(value));
+                /* We are using the same entry memory in order to store a potentially new value.
+                 * In such cases the old value alloc was adjusted to the real buffer size part it was embedded to.
+                 * since we can potentially write here a smaller value, which requires less allocation space, we would like to
+                 * inherit the old value memory allocation size. */
+                size_t value_size = sdsHdrSize(SDS_TYPE_8) + sdsalloc(value) + 1;
+                sdswrite(sdsAllocPtr(old_value), value_size, SDS_TYPE_8, value, sdslen(value));
                 sdsfree(value);
             }
         }

@@ -366,13 +366,13 @@ typedef struct {
     void **entries; /* Array of sampled entries. */
 } scan_samples;
 
+/* --- Internal functions --- */
+
 /* --- Access API --- */
 static inline hashtableEntryValidationState validateElementIfNeeded(hashtable *ht, void *elem) {
     if (ht->type->validateEntry == NULL) return ENTRY_VALID;
     return ht->type->validateEntry(ht, elem);
 }
-
-/* --- Internal functions --- */
 
 static bucket *findBucketForInsert(hashtable *ht, uint64_t hash, int *pos_in_bucket, int *table_index);
 

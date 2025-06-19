@@ -127,7 +127,6 @@ sds sdswrite(char *buf, size_t bufsize, char type, const char *init, size_t init
     assert(bufsize >= sdsReqSize(initlen, type));
     int hdrlen = sdsHdrSize(type);
     size_t usable = bufsize - hdrlen - 1;
-    assert(usable <= sdsTypeMaxSize(type));
     sds s = buf + hdrlen;
     unsigned char *fp = ((unsigned char *)s) - 1; /* flags pointer. */
 

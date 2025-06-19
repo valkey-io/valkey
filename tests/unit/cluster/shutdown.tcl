@@ -1,5 +1,5 @@
 start_cluster 3 0 {tags {external:skip cluster shutdown}} {
-    test "Test shutdown safe is work" {
+    test "Test shutdown safe is working" {
         assert_error {ERR Errors trying to SHUTDOWN*} {R 0 shutdown safe}
         assert_error {ERR Errors trying to SHUTDOWN*} {R 1 shutdown safe}
         assert_error {ERR Errors trying to SHUTDOWN*} {R 2 shutdown safe}

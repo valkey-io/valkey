@@ -4578,11 +4578,11 @@ int finishShutdown(void) {
 
     if (safe && server.cluster_enabled && clusterNodeIsVotingPrimary(getMyClusterNode())) {
         if (force) {
-            serverLog(LL_WARNING, "I am a voting primary, shutting down may cause the cluster to down. Exit anyway.");
+            serverLog(LL_WARNING, "This is a voting primary. Shutting down may cause the cluster to go down. Exit anyway.");
         } else {
-            serverLog(LL_WARNING, "I am a voting primary, shutting down may cause the cluster to down, can't exit.");
+            serverLog(LL_WARNING, "This is a voting primary. Shutting down may cause the cluster to go down. Can't exit.");
             if (server.supervised_mode == SUPERVISED_SYSTEMD)
-                serverCommunicateSystemd("I am a voting primary, shutting down may cause the cluster to down, can't exit.\n");
+                serverCommunicateSystemd("This is a voting primary. Shutting down may cause the cluster to go down. Can't exit.\n");
             goto error;
         }
     }

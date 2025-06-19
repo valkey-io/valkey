@@ -1692,13 +1692,8 @@ void acceptCommonHandler(connection *conn, struct ClientFlags flags, char *ip) {
 
     char addr[CONN_ADDR_STR_LEN] = {0};
     char laddr[CONN_ADDR_STR_LEN] = {0};
-    if (conn->type == connectionTypeUnix()) {
-        snprintf(addr, sizeof(addr), "%s:0", server.unixsocket);
-        snprintf(laddr, sizeof(laddr), "%s:0", server.unixsocket);
-    } else {
-        connFormatAddr(conn, addr, sizeof(addr), 1);
-        connFormatAddr(conn, laddr, sizeof(addr), 0);
-    }
+    connFormatAddr(conn, addr, sizeof(addr), 1);
+    connFormatAddr(conn, laddr, sizeof(addr), 0);
 
     if (connGetState(conn) != CONN_STATE_ACCEPTING) {
         serverLog(LL_VERBOSE, "Accepted client connection in error state: %s (addr=%s laddr=%s)",

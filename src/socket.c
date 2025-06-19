@@ -334,10 +334,12 @@ static void connSocketAcceptHandler(aeEventLoop *el, int fd, void *privdata, int
 }
 
 static int connSocketAddr(connection *conn, char *ip, size_t ip_len, int *port, int remote) {
-    if (anetFdToString(conn->fd, ip, ip_len, port, remote) == 0) return 0;
+    UNUSED(conn);
+    UNUSED(remote);
 
-    conn->last_errno = errno;
-    return -1;
+    snprintf(ip, ip_len, "%s", server.unixsocket);
+    *port = 0;
+    return 0;
 }
 
 static int connSocketIsLocal(connection *conn) {

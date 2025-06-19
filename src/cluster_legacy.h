@@ -398,7 +398,7 @@ struct clusterState {
     int cant_failover_reason;         /* Why a replica is currently not able to
                                        * failover. See the CANT_FAILOVER_* macros. */
     /* Manual failover state in common. */
-    mstime_t mf_end; /* Manual failover time limit (ms unixtime).
+    mstime_t mf_end; /* Manual failover t`ime limit (ms unixtime).
                         It is zero if there is no MF in progress. */
     /* Manual failover state of primary. */
     clusterNode *mf_replica; /* replica performing the manual failover. */

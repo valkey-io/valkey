@@ -244,7 +244,7 @@ int scriptPrepareForRun(scriptRunCtx *run_ctx,
     if (client_allow_oom ||
         (!(script_flags & SCRIPT_FLAG_EVAL_COMPAT_MODE) && (script_flags & SCRIPT_FLAG_ALLOW_OOM))) {
         /* Note: we don't need to test the no-writes flag here and set this run_ctx flag,
-         * since only write commands can are deny-oom. */
+         * since only write commands can deny-oom. */
         run_ctx->flags |= SCRIPT_ALLOW_OOM;
     }
 

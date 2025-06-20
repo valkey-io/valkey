@@ -8067,17 +8067,41 @@ int checkModuleAuthentication(client *c, robj *username, robj *password, robj **
         serverAssert(result == VALKEYMODULE_AUTH_HANDLED);
         return AUTH_BLOCKED;
     }
+
+    ValkeyModuleAuthCtx *auth_ctx = c->module_data ? c->module_data->module_auth_ctx : NULL;
+
     if (c->module_data) c->module_data->module_auth_ctx = NULL;
     if (result == VALKEYMODULE_AUTH_NOT_HANDLED) {
         c->flag.module_auth_has_result = 0;
         return AUTH_NOT_HANDLED;
     }
 
+    int auth_result = AUTH_ERR;
+
     if (c->flag.module_auth_has_result) {
         c->flag.module_auth_has_result = 0;
-        if (c->flag.authenticated) return AUTH_OK;
+        if (c->flag.authenticated) {
+            auth_result = AUTH_OK;
+        }
     }
-    return AUTH_ERR;
+
+    {
+        ValkeyModuleAuthenticationInfo info = VALKEYMODULE_AUTHENTICATIONINFO_INITIALIZER_V1;
+        info.client_id = c->id;
+        int port;
+        connAddrPeerName(c->conn, info.addr, sizeof(info.addr), &port);
+        info.port = port;
+        info.username = username->ptr;
+        if (auth_ctx) {
+            info.module_name = auth_ctx->module->name;
+        } else {
+            info.module_name = NULL;
+        }
+        info.success = (auth_result == AUTH_OK);
+        moduleFireServerEvent(VALKEYMODULE_EVENT_AUTHENTICATION_ATTEMPT, 0, &info);
+    }
+
+    return auth_result;
 }
 
 /* This function is called from module.c in order to check if a module
@@ -11473,6 +11497,7 @@ static uint64_t moduleEventVersions[] = {
     -1,                                    /* VALKEYMODULE_EVENT_EVENTLOOP */
     -1,                                    /* VALKEYMODULE_EVENT_CONFIG */
     VALKEYMODULE_KEYINFO_VERSION,          /* VALKEYMODULE_EVENT_KEY */
+    VALKEYMODULE_AUTHENTICATION_INFO_VERSION, /* VALKEYMODULE_EVENT_AUTHENTICATION_ATTEMPT */
 };
 
 /* Register to be notified, via a callback, when the specified server event
@@ -11763,6 +11788,23 @@ static uint64_t moduleEventVersions[] = {
  *
  *         ValkeyModuleKey *key;    // Key name
  *
+ * * ValkeyModule_Authentication_Attempt
+ *
+ *     Called when an authentication attempt is made, either successful or not.
+ *
+ *     The data pointer can be casted to a ValkeyModuleAuthenticationInfo
+ *     structure with the following fields:
+ *
+ *         uint64_t client_id;      // Client ID.
+ *         char addr[46];           // IPv4 or IPv6 address.
+ *         uint16_t port;           // TCP port.
+ *         const char *username;    // Username used for authentication.
+ *         const char *module_name; // Name of the module that is handling the
+ *                                  // authentication. It is NULL if the
+ *                                  // authentication is handled by the core.
+ *         int success;             // Result of the authentication, 1 for success,
+ *                                  // 0 for failure.
+ *
  * The function returns VALKEYMODULE_OK if the module was successfully subscribed
  * for the specified event. If the API is called from a wrong context or unsupported event
  * is given then VALKEYMODULE_ERR is returned. */
@@ -11912,6 +11954,8 @@ void moduleFireServerEvent(uint64_t eid, int subid, void *data) {
                 selectDb(ctx.client, info->dbnum);
                 moduleInitKey(&key, &ctx, info->key, info->value, info->mode);
                 moduledata = &ki;
+            } else if (eid == VALKEYMODULE_EVENT_AUTHENTICATION_ATTEMPT) {
+                moduledata = data;
             }
 
             el->module->in_hook++;

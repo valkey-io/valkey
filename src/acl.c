@@ -30,6 +30,7 @@
 #include "server.h"
 #include "sha256.h"
 #include "module.h"
+#include "valkeymodule.h"
 #include <fcntl.h>
 #include <ctype.h>
 
@@ -1453,16 +1454,32 @@ void addAuthErrReply(client *c, robj *err) {
  *
  * The return value is AUTH_OK on success (valid username / password pair) & AUTH_ERR otherwise. */
 static int checkPasswordBasedAuth(client *c, robj *username, robj *password) {
+    int result;
+
     if (ACLCheckUserCredentials(username, password) == C_OK) {
         user *user = ACLGetUserByName(username->ptr, sdslen(username->ptr));
         clientSetUser(c, user, 1);
         moduleNotifyUserChanged(c);
-        return AUTH_OK;
+        result = AUTH_OK;
     } else {
         addACLLogEntry(c, ACL_DENIED_AUTH, (c->flag.multi) ? ACL_LOG_CTX_MULTI : ACL_LOG_CTX_TOPLEVEL, 0, username->ptr,
                        NULL);
-        return AUTH_ERR;
+        result = AUTH_ERR;
     }
+
+    {
+        ValkeyModuleAuthenticationInfo info = VALKEYMODULE_AUTHENTICATIONINFO_INITIALIZER_V1;
+        info.client_id = c->id;
+        int port;
+        connAddrPeerName(c->conn, info.addr, sizeof(info.addr), &port);
+        info.port = port;
+        info.username = username->ptr;
+        info.module_name = NULL;
+        info.success = (result == AUTH_OK);
+        moduleFireServerEvent(VALKEYMODULE_EVENT_AUTHENTICATION_ATTEMPT, 0, &info);
+    }
+
+    return result;
 }
 
 /* Attempt authenticating the user - first through module based authentication,

@@ -71,6 +71,16 @@ void flushdbCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent e, uint64_t sub, vo
     }
 }
 
+void authenticationAttemptCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent e, uint64_t sub, void *data) {
+    VALKEYMODULE_NOT_USED(ctx);
+    VALKEYMODULE_NOT_USED(e);
+
+    ValkeyModuleAuthenticationInfo *ai = data;
+    printf("Authentication attempt for client #%llu %s:%d with username=%s module=%s success=%d\n",
+           (unsigned long long)ai->client_id, ai->addr, ai->port, ai->username, ai->module_name, ai->success);
+
+}
+
 /* This function must be present on each module. It is used in order to
  * register the commands into the server. */
 int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
@@ -81,5 +91,6 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
 
     ValkeyModule_SubscribeToServerEvent(ctx, ValkeyModuleEvent_ClientChange, clientChangeCallback);
     ValkeyModule_SubscribeToServerEvent(ctx, ValkeyModuleEvent_FlushDB, flushdbCallback);
+    ValkeyModule_SubscribeToServerEvent(ctx, ValkeyModuleEvent_AuthenticationAttempt, authenticationAttemptCallback);
     return VALKEYMODULE_OK;
 }

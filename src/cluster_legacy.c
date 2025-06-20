@@ -3294,12 +3294,12 @@ int clusterProcessPacket(clusterLink *link) {
 
     if (is_light) {
         if (!link->node || nodeInHandshake(link->node)) {
-            freeClusterLink(link);
             serverLog(
                 LL_NOTICE,
                 "Closing link for node %.40s that sent a lightweight message of type %s as its first message on the link",
                 hdr->sender,
                 clusterGetMessageTypeString(type));
+            freeClusterLink(link);
             return 0;
         }
         clusterNode *sender = link->node;

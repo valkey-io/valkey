@@ -11479,24 +11479,24 @@ void ModuleForkDoneHandler(int exitcode, int bysignal) {
  * a data structure associated with it. We use MAX_UINT64 on purpose,
  * in order to pass the check in ValkeyModule_SubscribeToServerEvent. */
 static uint64_t moduleEventVersions[] = {
-    VALKEYMODULE_REPLICATIONINFO_VERSION,  /* VALKEYMODULE_EVENT_REPLICATION_ROLE_CHANGED */
-    -1,                                    /* VALKEYMODULE_EVENT_PERSISTENCE */
-    VALKEYMODULE_FLUSHINFO_VERSION,        /* VALKEYMODULE_EVENT_FLUSHDB */
-    -1,                                    /* VALKEYMODULE_EVENT_LOADING */
-    VALKEYMODULE_CLIENTINFO_VERSION,       /* VALKEYMODULE_EVENT_CLIENT_CHANGE */
-    -1,                                    /* VALKEYMODULE_EVENT_SHUTDOWN */
-    -1,                                    /* VALKEYMODULE_EVENT_REPLICA_CHANGE */
-    -1,                                    /* VALKEYMODULE_EVENT_PRIMARY_LINK_CHANGE */
-    VALKEYMODULE_CRON_LOOP_VERSION,        /* VALKEYMODULE_EVENT_CRON_LOOP */
-    VALKEYMODULE_MODULE_CHANGE_VERSION,    /* VALKEYMODULE_EVENT_MODULE_CHANGE */
-    VALKEYMODULE_LOADING_PROGRESS_VERSION, /* VALKEYMODULE_EVENT_LOADING_PROGRESS */
-    VALKEYMODULE_SWAPDBINFO_VERSION,       /* VALKEYMODULE_EVENT_SWAPDB */
-    -1,                                    /* VALKEYMODULE_EVENT_REPL_BACKUP */
-    -1,                                    /* VALKEYMODULE_EVENT_FORK_CHILD */
-    -1,                                    /* VALKEYMODULE_EVENT_REPL_ASYNC_LOAD */
-    -1,                                    /* VALKEYMODULE_EVENT_EVENTLOOP */
-    -1,                                    /* VALKEYMODULE_EVENT_CONFIG */
-    VALKEYMODULE_KEYINFO_VERSION,          /* VALKEYMODULE_EVENT_KEY */
+    VALKEYMODULE_REPLICATIONINFO_VERSION,     /* VALKEYMODULE_EVENT_REPLICATION_ROLE_CHANGED */
+    -1,                                       /* VALKEYMODULE_EVENT_PERSISTENCE */
+    VALKEYMODULE_FLUSHINFO_VERSION,           /* VALKEYMODULE_EVENT_FLUSHDB */
+    -1,                                       /* VALKEYMODULE_EVENT_LOADING */
+    VALKEYMODULE_CLIENTINFO_VERSION,          /* VALKEYMODULE_EVENT_CLIENT_CHANGE */
+    -1,                                       /* VALKEYMODULE_EVENT_SHUTDOWN */
+    -1,                                       /* VALKEYMODULE_EVENT_REPLICA_CHANGE */
+    -1,                                       /* VALKEYMODULE_EVENT_PRIMARY_LINK_CHANGE */
+    VALKEYMODULE_CRON_LOOP_VERSION,           /* VALKEYMODULE_EVENT_CRON_LOOP */
+    VALKEYMODULE_MODULE_CHANGE_VERSION,       /* VALKEYMODULE_EVENT_MODULE_CHANGE */
+    VALKEYMODULE_LOADING_PROGRESS_VERSION,    /* VALKEYMODULE_EVENT_LOADING_PROGRESS */
+    VALKEYMODULE_SWAPDBINFO_VERSION,          /* VALKEYMODULE_EVENT_SWAPDB */
+    -1,                                       /* VALKEYMODULE_EVENT_REPL_BACKUP */
+    -1,                                       /* VALKEYMODULE_EVENT_FORK_CHILD */
+    -1,                                       /* VALKEYMODULE_EVENT_REPL_ASYNC_LOAD */
+    -1,                                       /* VALKEYMODULE_EVENT_EVENTLOOP */
+    -1,                                       /* VALKEYMODULE_EVENT_CONFIG */
+    VALKEYMODULE_KEYINFO_VERSION,             /* VALKEYMODULE_EVENT_KEY */
     VALKEYMODULE_AUTHENTICATION_INFO_VERSION, /* VALKEYMODULE_EVENT_AUTHENTICATION_ATTEMPT */
 };
 

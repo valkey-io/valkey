@@ -115,7 +115,7 @@ start_server {} {
         }
 
         test {WAIT in script will work} {
-            # Pause the old replica so it can not catch up the offset.
+            # Pause the old replica so it cannot catch up the offset.
             pause_process $slave_pid
 
             # Primary set a new key and wait the new replica catch up the offset.

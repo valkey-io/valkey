@@ -139,7 +139,7 @@ int scriptPrepareForRun(scriptRunCtx *run_ctx,
 
     if (!(script_flags & SCRIPT_FLAG_EVAL_COMPAT_MODE)) {
         if ((script_flags & SCRIPT_FLAG_NO_CLUSTER) && server.cluster_enabled) {
-            addReplyError(caller, "Can not run script on cluster, 'no-cluster' flag is set.");
+            addReplyError(caller, "Cannot run script on cluster, 'no-cluster' flag is set.");
             return C_ERR;
         }
 

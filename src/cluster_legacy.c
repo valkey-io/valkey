@@ -2204,11 +2204,9 @@ void markNodeAsFailingIfNeeded(clusterNode *node) {
     node->flags |= CLUSTER_NODE_FAIL;
     node->fail_time = mstime();
 
+    /* Immediately check if the failing node is our primary node. */
     if (nodeIsReplica(myself) && myself->replicaof == node) {
-        /* Immediately check if the node is our primary node, if so, we can try
-         * to initiate a failover as soon as possible. */
         myself->flags |= CLUSTER_NODE_MY_PRIMARY_FAIL;
-        clusterDoBeforeSleep(CLUSTER_TODO_HANDLE_FASTER_FAILOVER);
     }
 
     /* Broadcast the failing node name to everybody, forcing all the other
@@ -3328,20 +3326,23 @@ int clusterProcessPacket(clusterLink *link) {
         sender->flags |= CLUSTER_NODE_EXTENSIONS_SUPPORTED;
     }
 
-    /* Checks if the node supports some flags. */
+    /* Store some flags about the sender. */
     if (sender) {
+        /* Check if the node supports light publish message hdr */
         if (flags & CLUSTER_NODE_LIGHT_HDR_PUBLISH_SUPPORTED) {
             sender->flags |= CLUSTER_NODE_LIGHT_HDR_PUBLISH_SUPPORTED;
         } else {
             sender->flags &= ~CLUSTER_NODE_LIGHT_HDR_PUBLISH_SUPPORTED;
         }
 
+        /* Check if the node supports light module message hdr */
         if (flags & CLUSTER_NODE_LIGHT_HDR_MODULE_SUPPORTED) {
             sender->flags |= CLUSTER_NODE_LIGHT_HDR_MODULE_SUPPORTED;
         } else {
             sender->flags &= ~CLUSTER_NODE_LIGHT_HDR_MODULE_SUPPORTED;
         }
 
+        /* Check if the sender has marked its primary node as FAIL. */
         if (flags & CLUSTER_NODE_MY_PRIMARY_FAIL) {
             sender->flags |= CLUSTER_NODE_MY_PRIMARY_FAIL;
         } else {
@@ -3557,11 +3558,9 @@ int clusterProcessPacket(clusterLink *link) {
                     noaddr_node->flags &= ~CLUSTER_NODE_PFAIL;
                     noaddr_node->flags |= CLUSTER_NODE_FAIL;
                     noaddr_node->fail_time = now;
+                    /* Immediately check if the failing node is our primary node. */
                     if (nodeIsReplica(myself) && myself->replicaof == noaddr_node) {
-                        /* Immediately check if the node is our primary node, if so, we can try
-                         * to initiate a failover as soon as possible. */
                         myself->flags |= CLUSTER_NODE_MY_PRIMARY_FAIL;
-                        clusterDoBeforeSleep(CLUSTER_TODO_HANDLE_FASTER_FAILOVER);
                     }
                     clusterSendFail(noaddr_node->name);
                 }
@@ -3799,14 +3798,9 @@ int clusterProcessPacket(clusterLink *link) {
                 failing->flags &= ~CLUSTER_NODE_PFAIL;
                 clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_UPDATE_STATE);
 
+                /* Immediately check if the failing node is our primary node. */
                 if (nodeIsReplica(myself) && myself->replicaof == failing) {
-                    /* Immediately check if the node is our primary node, if so, we can try
-                     * to initiate a failover as soon as possible. We will also try to send
-                     * the FAIL packet in case we trigger the failover immediately but unable
-                     * to get the votes. */
                     myself->flags |= CLUSTER_NODE_MY_PRIMARY_FAIL;
-                    clusterSendFail(failing->name);
-                    clusterDoBeforeSleep(CLUSTER_TODO_HANDLE_FASTER_FAILOVER);
                 }
             }
         } else {
@@ -4819,7 +4813,15 @@ int clusterGetFailedPrimaryRank(void) {
 }
 
 
-/* Returns 1 if all replicas under my primary think the primary is in FAIL state. */
+/* Returns 1 if all replicas under my primary think the primary is in FAIL state.
+ *
+ * This is useful in automatic failover. For example, from my perspective,
+ * if all other replicas, including myself, both mark the primary node as FAIL,
+ * which means that myself and other replicas have exchanged new gossip information
+ * after the primary node went down, and we know the latest replication offset of
+ * the replicas. If a replica finds that its ranking is optimal in all cases, then
+ * the replica can initiate an election immediately in automatic failover without
+ * waiting for the delay. */
 int clusterAllReplicasThinkPrimaryIsFail(void) {
     serverAssert(nodeIsReplica(myself));
     serverAssert(myself->replicaof);
@@ -5035,7 +5037,7 @@ void clusterHandleReplicaFailover(void) {
             server.cluster->failover_failed_primary_rank == 0 &&
             clusterAllReplicasThinkPrimaryIsFail()) {
             server.cluster->failover_auth_time = now;
-            serverLog(LL_NOTICE, "I am the best ranked replica and can initiate the election immediately.");
+            serverLog(LL_NOTICE, "This is a best ranked replica and can initiate the election immediately.");
         }
 
         if (server.cluster->failover_auth_time == now) {
@@ -5097,7 +5099,7 @@ void clusterHandleReplicaFailover(void) {
             server.cluster->failover_failed_primary_rank == 0 &&
             clusterAllReplicasThinkPrimaryIsFail()) {
             server.cluster->failover_auth_time = now;
-            serverLog(LL_NOTICE, "I am the best ranked replica and can initiate the election immediately.");
+            serverLog(LL_NOTICE, "This is the best ranked replica and can initiate the election immediately.");
         }
     }
 
@@ -5664,12 +5666,6 @@ void clusterBeforeSleep(void) {
          * in the configuration and we want to make the cluster aware it before the
          * regular ping. */
         clusterBroadcastPong(CLUSTER_BROADCAST_ALL);
-    }
-
-    if (flags & CLUSTER_TODO_HANDLE_FASTER_FAILOVER) {
-        /* Handle faster failover, this goes after all the todos to check if we
-         * can initiate a fast failover. */
-        clusterHandleReplicaFailover();
     }
 }
 

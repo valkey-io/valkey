@@ -905,7 +905,7 @@ static void cliInitHelp(void) {
     dict *groups;
 
     if (cliConnect(CC_QUIET) == VALKEY_ERR) {
-        /* Can not connect to the server, but we still want to provide
+        /* Cannot connect to the server, but we still want to provide
          * help, generate it only from the static cli_commands.c data instead. */
         groups = dictCreate(&groupsdt);
         cliLegacyInitHelp(groups);
@@ -5863,7 +5863,7 @@ static clusterManagerNode *clusterManagerNodePrimaryRandom(void) {
             return n;
         }
     }
-    /* Can not be reached */
+    /* Cannot be reached */
     assert(0);
     /* Make compiler happy */
     return 0;
@@ -7130,7 +7130,7 @@ static int clusterManagerCommandAddNode(int argc, char **argv) {
             }
             assert(function_list_reply->type == VALKEY_REPLY_ARRAY);
             if (function_list_reply->elements > 0) {
-                clusterManagerLogErr(">>> New node already contains functions and can not be added to the cluster. Use "
+                clusterManagerLogErr(">>> New node already contains functions and cannot be added to the cluster. Use "
                                      "FUNCTION FLUSH and try again.\r\n");
                 success = 0;
                 goto cleanup;

@@ -326,7 +326,7 @@ void bioKillThreads(void) {
         if (bio_threads[j] == pthread_self()) continue;
         if (bio_threads[j] && pthread_cancel(bio_threads[j]) == 0) {
             if ((err = pthread_join(bio_threads[j], NULL)) != 0) {
-                serverLog(LL_WARNING, "Bio worker thread #%lu can not be joined: %s", j, strerror(err));
+                serverLog(LL_WARNING, "Bio worker thread #%lu cannot be joined: %s", j, strerror(err));
             } else {
                 serverLog(LL_WARNING, "Bio worker thread #%lu terminated", j);
             }

@@ -1690,8 +1690,8 @@ void acceptCommonHandler(connection *conn, struct ClientFlags flags, char *ip) {
     client *c;
     UNUSED(ip);
 
-    char addr[NET_ADDR_STR_LEN] = {0};
-    char laddr[NET_ADDR_STR_LEN] = {0};
+    char addr[CONN_ADDR_STR_LEN] = {0};
+    char laddr[CONN_ADDR_STR_LEN] = {0};
     connFormatAddr(conn, addr, sizeof(addr), 1);
     connFormatAddr(conn, laddr, sizeof(addr), 0);
 
@@ -3806,22 +3806,16 @@ void readQueryFromClient(connection *conn) {
 /* An "Address String" is a colon separated ip:port pair.
  * For IPv4 it's in the form x.y.z.k:port, example: "127.0.0.1:1234".
  * For IPv6 addresses we use [] around the IP part, like in "[::1]:1234".
- * For Unix sockets we use path:0, like in "/tmp/redis:0".
+ * For Unix sockets we use path:0, like in "/tmp/valkey:0".
  *
- * An Address String always fits inside a buffer of NET_ADDR_STR_LEN bytes,
+ * An Address String always fits inside a buffer of CONN_ADDR_STR_LEN bytes,
  * including the null term.
  *
  * On failure the function still populates 'addr' with the "?:0" string in case
  * you want to relax error checking or need to display something anyway (see
  * anetFdToString implementation for more info). */
 void genClientAddrString(client *client, char *addr, size_t addr_len, int remote) {
-    if (client->flag.unix_socket) {
-        /* Unix socket client. */
-        snprintf(addr, addr_len, "%s:0", server.unixsocket);
-    } else {
-        /* TCP client. */
-        connFormatAddr(client->conn, addr, addr_len, remote);
-    }
+    connFormatAddr(client->conn, addr, addr_len, remote);
 }
 
 /* This function returns the client peer id, by creating and caching it
@@ -3829,7 +3823,7 @@ void genClientAddrString(client *client, char *addr, size_t addr_len, int remote
  * The Peer ID never changes during the life of the client, however it
  * is expensive to compute. */
 char *getClientPeerId(client *c) {
-    char peerid[NET_ADDR_STR_LEN] = {0};
+    char peerid[CONN_ADDR_STR_LEN] = {0};
 
     if (c->peerid == NULL) {
         genClientAddrString(c, peerid, sizeof(peerid), 1);
@@ -3843,7 +3837,7 @@ char *getClientPeerId(client *c) {
  * The Socket Name never changes during the life of the client, however it
  * is expensive to compute. */
 char *getClientSockname(client *c) {
-    char sockname[NET_ADDR_STR_LEN] = {0};
+    char sockname[CONN_ADDR_STR_LEN] = {0};
 
     if (c->sockname == NULL) {
         genClientAddrString(c, sockname, sizeof(sockname), 0);

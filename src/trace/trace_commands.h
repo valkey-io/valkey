@@ -53,8 +53,8 @@ LTTNG_UST_TRACEPOINT_EVENT(
 	/* Input arguments */
 	LTTNG_UST_TP_ARGS(
 		int, prot,
-		const char *, saddr,
-		const char *, daddr,
+		const char *, addr,
+		const char *, laddr,
 		const char *, name,
 		uint64_t, duration
 	),
@@ -62,8 +62,8 @@ LTTNG_UST_TRACEPOINT_EVENT(
 	/* Output event fields */
 	LTTNG_UST_TP_FIELDS(
 		lttng_ust_field_enum(valkey_commands, valkey_conn_type_enum, int, enum_field, prot)
-		lttng_ust_field_string(saddr, saddr)
-		lttng_ust_field_string(daddr, daddr)
+		lttng_ust_field_string(addr, addr)
+		lttng_ust_field_string(laddr, laddr)
 		lttng_ust_field_string(name, name)
 		lttng_ust_field_integer(uint64_t, duration, duration)
 	)

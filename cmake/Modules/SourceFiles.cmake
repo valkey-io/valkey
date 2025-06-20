@@ -6,6 +6,7 @@
 set(VALKEY_SERVER_SRCS
     ${CMAKE_SOURCE_DIR}/src/threads_mngr.c
     ${CMAKE_SOURCE_DIR}/src/adlist.c
+    ${CMAKE_SOURCE_DIR}/src/vector.c
     ${CMAKE_SOURCE_DIR}/src/quicklist.c
     ${CMAKE_SOURCE_DIR}/src/ae.c
     ${CMAKE_SOURCE_DIR}/src/anet.c

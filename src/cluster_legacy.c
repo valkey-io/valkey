@@ -5027,6 +5027,7 @@ void clusterHandleReplicaFailover(void) {
         if (server.cluster->mf_end) {
             server.cluster->failover_auth_time = now;
             server.cluster->failover_auth_rank = 0;
+            server.cluster->failover_failed_primary_rank = 0;
         }
 
         if (server.cluster->mf_end == 0 &&

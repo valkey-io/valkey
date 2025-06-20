@@ -34,6 +34,7 @@
 #include "functions.h"
 #include "io_threads.h"
 #include "module.h"
+#include "vector.h"
 
 #include <signal.h>
 #include <ctype.h>
@@ -912,9 +913,17 @@ void keysCommand(client *c) {
     setDeferredArrayLen(c, replylen, numkeys);
 }
 
+#define DEFAULT_SCAN_COMMAND_COUNT 10
+
+/* The SCAN command's default COUNT is 10.
+ * Since it may store keys + values, the
+ * buffer size is roughly 10 * 2 = 20.
+ * Adding a 20% buffer (20 * 1.2) gives 24. */
+#define SCAN_VECTOR_INITIAL_ALLOC 24
+
 /* Data used by the dict scan callback. */
 typedef struct {
-    list *keys;     /* elements that collect from dict */
+    vector *result; /* elements that collect from dict */
     robj *o;        /* o must be a hash/set/zset object, NULL means current db */
     serverDb *db;   /* database currently being scanned */
     long long type; /* the particular type when scan the db */
@@ -969,8 +978,8 @@ void keysScanCallback(void *privdata, void *entry) {
     }
 
     /* Keep this key. */
-    list *keys = data->keys;
-    listAddNodeTail(keys, key);
+    sds *item = vectorPush(data->result);
+    *item = key;
 }
 
 /* This callback is used by scanGenericCommand in order to collect elements
@@ -981,7 +990,6 @@ void hashtableScanCallback(void *privdata, void *entry) {
     sds key = NULL;
 
     robj *o = data->o;
-    list *keys = data->keys;
     data->sampled++;
 
     /* This callback is only used for scanning elements within a key (hash
@@ -1024,8 +1032,12 @@ void hashtableScanCallback(void *privdata, void *entry) {
         }
     }
 
-    listAddNodeTail(keys, key);
-    if (val) listAddNodeTail(keys, val);
+    sds *item = vectorPush(data->result);
+    *item = key;
+    if (val) {
+        item = vectorPush(data->result);
+        *item = val;
+    }
 }
 
 /* Try to parse a SCAN cursor stored at buffer 'buf':
@@ -1085,12 +1097,12 @@ char *getObjectTypeName(robj *o) {
  * of every element on the Hash. */
 void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {
     int i, j;
-    listNode *node;
-    long count = 10;
+    long count = DEFAULT_SCAN_COMMAND_COUNT;
     sds pat = NULL;
     sds typename = NULL;
     long long type = LLONG_MAX;
     int patlen = 0, use_pattern = 0, only_keys = 0;
+    vector result;
 
     /* Object must be NULL (to iterate keys names), or the type of the object
      * must be Set, Sorted Set, or Hash. */
@@ -1161,29 +1173,25 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {
 
     /* Handle the case of kvstore, dict or hashtable. */
     hashtable *ht = NULL;
-    int shallow_copied_list_items = 0;
+    /* Set a free callback for the contents of the collected keys list if they
+     * are deep copied temporary strings. We must not free them if they are just
+     * a shallow copy - a pointer to the actual data in the data structure */
+    void (*free_callback)(sds) = sdsfree;
     if (o == NULL) {
-        shallow_copied_list_items = 1;
+        free_callback = NULL;
     } else if (o->type == OBJ_SET && o->encoding == OBJ_ENCODING_HASHTABLE) {
         ht = o->ptr;
-        shallow_copied_list_items = 1;
+        free_callback = NULL;
     } else if (o->type == OBJ_HASH && o->encoding == OBJ_ENCODING_HASHTABLE) {
         ht = o->ptr;
-        shallow_copied_list_items = 1;
+        free_callback = NULL;
     } else if (o->type == OBJ_ZSET && o->encoding == OBJ_ENCODING_SKIPLIST) {
         zset *zs = o->ptr;
         ht = zs->ht;
         /* scanning ZSET allocates temporary strings even though it's a dict */
-        shallow_copied_list_items = 0;
+        free_callback = sdsfree;
     }
-
-    list *keys = listCreate();
-    /* Set a free callback for the contents of the collected keys list if they
-     * are deep copied temporary strings. We must not free them if they are just
-     * a shallow copy - a pointer to the actual data in the data structure */
-    if (!shallow_copied_list_items) {
-        listSetFreeMethod(keys, sdsfreeVoid);
-    }
+    vectorInit(&result, SCAN_VECTOR_INITIAL_ALLOC, sizeof(sds));
 
     /* For main hash table scan or scannable data structure. */
     if (!o || ht) {
@@ -1207,7 +1215,7 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {
          * 6. data.only_keys: to control whether values will be returned or
          * only keys are returned. */
         scanData data = {
-            .keys = keys,
+            .result = &result,
             .db = c->db,
             .o = o,
             .type = type,
@@ -1244,7 +1252,8 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {
             if (use_pattern && !stringmatchlen(pat, sdslen(pat), key, len, 0)) {
                 continue;
             }
-            listAddNodeTail(keys, sdsnewlen(key, len));
+            sds *item = vectorPush(&result);
+            *item = sdsnewlen(key, len);
         }
         setTypeReleaseIterator(si);
         cursor = 0;
@@ -1264,11 +1273,13 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {
                 continue;
             }
             /* add key object */
-            listAddNodeTail(keys, sdsnewlen(str, len));
+            sds *item = vectorPush(&result);
+            *item = sdsnewlen(str, len);
             /* add value object */
             if (!only_keys) {
                 str = lpGet(p, &len, intbuf);
-                listAddNodeTail(keys, sdsnewlen(str, len));
+                item = vectorPush(&result);
+                *item = sdsnewlen(str, len);
             }
             p = lpNext(o->ptr, p);
         }
@@ -1281,14 +1292,16 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {
     addReplyArrayLen(c, 2);
     addReplyBulkLongLong(c, cursor);
 
-    addReplyArrayLen(c, listLength(keys));
-    while ((node = listFirst(keys)) != NULL) {
-        sds key = listNodeValue(node);
-        addReplyBulkCBuffer(c, key, sdslen(key));
-        listDelNode(keys, node);
+    addReplyArrayLen(c, vectorLen(&result));
+    for (uint32_t i = 0; i < vectorLen(&result); i++) {
+        sds *key = vectorGet(&result, i);
+        addReplyBulkCBuffer(c, *key, sdslen(*key));
+        if (free_callback) {
+            free_callback(*key);
+        }
     }
 
-    listRelease(keys);
+    vectorCleanup(&result);
 }
 
 /* The SCAN command completely relies on scanGenericCommand. */

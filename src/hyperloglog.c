@@ -1110,8 +1110,7 @@ int hllAdd(robj *o, unsigned char *ele, size_t elesize) {
  * reg_raw: pointer to the raw representation array (16384 bytes, one byte per register)
  * reg_dense: pointer to the dense representation array (12288 bytes, 6 bits per register)
  */
-valkey_attribute_target("avx2")
-void hllMergeDenseAVX2(uint8_t *reg_raw, const uint8_t *reg_dense) {
+valkey_attribute_target("avx2") void hllMergeDenseAVX2(uint8_t *reg_raw, const uint8_t *reg_dense) {
     /* Shuffle indices for unpacking bytes of dense registers
      * From: {XXXX|AAAB|BBCC|CDDD|EEEF|FFGG|GHHH|XXXX}
      * To:   {AAA0|BBB0|CCC0|DDD0|EEE0|FFF0|GGG0|HHH0}
@@ -1382,8 +1381,7 @@ int hllMerge(uint8_t *max, robj *hll) {
  * reg_dense: pointer to the dense representation array (12288 bytes, 6 bits per register)
  * reg_raw: pointer to the raw representation array (16384 bytes, one byte per register)
  */
-valkey_attribute_target("avx2")
-void hllDenseCompressAVX2(uint8_t *reg_dense, const uint8_t *reg_raw) {
+valkey_attribute_target("avx2") void hllDenseCompressAVX2(uint8_t *reg_dense, const uint8_t *reg_raw) {
     /* Shuffle indices for packing bytes of dense registers
      * From: {AAA0|BBB0|CCC0|DDD0|EEE0|FFF0|GGG0|HHH0}
      * To:   {AAAB|BBCC|CDDD|0000|EEEF|FFGG|GHHH|0000}

@@ -53,8 +53,7 @@ static const unsigned char bitsinbyte[256] = {
 
 #if HAVE_X86_SIMD
 #define AVX512_CHUNK_SIZE 64
-valkey_attribute_target("avx512f,avx512bw,avx512vpopcntdq")
-long long popcountAVX512(void *s, long count) {
+valkey_attribute_target("avx512f,avx512bw,avx512vpopcntdq") long long popcountAVX512(void *s, long count) {
     const size_t chunks = count / AVX512_CHUNK_SIZE;
     uint8_t *ptr = (uint8_t *)s;
     const uint8_t *end = ptr + count;
@@ -79,8 +78,7 @@ long long popcountAVX512(void *s, long count) {
 
 /* The SIMD version of popcount enhances performance through parallel lookup tables which is based on the following article:
  * https://arxiv.org/pdf/1611.07612 */
-valkey_attribute_target("avx2")
-long long popcountAVX2(void *s, long count) {
+valkey_attribute_target("avx2") long long popcountAVX2(void *s, long count) {
     long i = 0;
     unsigned char *p = (unsigned char *)s;
     long long bits = 0;

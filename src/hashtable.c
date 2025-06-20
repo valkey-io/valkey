@@ -693,8 +693,7 @@ static inline int checkCandidateInBucket(hashtable *ht, bucket *b, int pos, cons
 }
 
 #if HAVE_X86_SIMD
-valkey_attribute_target("sse2")
-static int findKeyInBucketSSE2(hashtable *ht, bucket *b, uint8_t h2, const void *key, int table, int *pos_in_bucket, int *table_index) {
+valkey_attribute_target("sse2") static int findKeyInBucketSSE2(hashtable *ht, bucket *b, uint8_t h2, const void *key, int table, int *pos_in_bucket, int *table_index) {
     /* Get the bucket's presence mask - indicates which positions are filled. */
     BUCKET_BITS_TYPE presence_mask = b->presence & ((1 << ENTRIES_PER_BUCKET) - 1);
     __m128i hash_vector = _mm_loadu_si128((__m128i *)b->hashes);

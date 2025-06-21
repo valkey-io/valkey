@@ -326,6 +326,11 @@ static void connSocketAcceptHandler(aeEventLoop *el, int fd, void *privdata, int
             if (errno != EWOULDBLOCK) serverLog(LL_WARNING, "Accepting client connection: %s", server.neterr);
             return;
         }
+        if (cfd >= (int)server.maxclients + CONFIG_FDSET_INCR) {
+            close(cfd);
+            serverLog(LL_WARNING, "Accept %s:%d failed, the cfd is overflow.", cip, cport);
+            return;
+        }
         serverLog(LL_VERBOSE, "Accepted %s:%d", cip, cport);
 
         if (server.tcpkeepalive) anetKeepAlive(NULL, cfd, server.tcpkeepalive);

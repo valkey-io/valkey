@@ -32,10 +32,6 @@ concurrency:
   group: daily-${{ github.head_ref || github.ref }}
   cancel-in-progress: true
 
-concurrency:
-  group: daily-${{ github.head_ref || github.ref }}
-  cancel-in-progress: true
-
 permissions:
   contents: read
 

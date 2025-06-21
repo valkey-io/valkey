@@ -5037,7 +5037,7 @@ void clusterHandleReplicaFailover(void) {
             server.cluster->failover_failed_primary_rank == 0 &&
             clusterAllReplicasThinkPrimaryIsFail()) {
             server.cluster->failover_auth_time = now;
-            serverLog(LL_NOTICE, "This is a best ranked replica and can initiate the election immediately.");
+            serverLog(LL_NOTICE, "This is the best ranked replica and can initiate the election immediately.");
         }
 
         if (server.cluster->failover_auth_time == now) {
@@ -5099,7 +5099,7 @@ void clusterHandleReplicaFailover(void) {
             server.cluster->failover_failed_primary_rank == 0 &&
             clusterAllReplicasThinkPrimaryIsFail()) {
             server.cluster->failover_auth_time = now;
-            serverLog(LL_NOTICE, "This is the best ranked replica and can initiate the election immediately.");
+            serverLog(LL_NOTICE, "Myself become the best ranked replica, initiate the election immediately.");
         }
     }
 

@@ -201,7 +201,7 @@ proc verify_log_message {srv_idx pattern from_line} {
     incr from_line
     set result [exec tail -n +$from_line < [srv $srv_idx stdout]]
     if {![string match $pattern $result]} {
-        fail "expected message not found in log file: $pattern"
+        fail "expected message not found in srv $srv_idx log file [srv $srv_idx stdout]: $pattern"
     }
 }
 
@@ -210,7 +210,7 @@ proc verify_no_log_message {srv_idx pattern from_line} {
     incr from_line
     set result [exec tail -n +$from_line < [srv $srv_idx stdout]]
     if {[string match $pattern $result]} {
-        fail "expected message found in log file: $pattern"
+        fail "expected message found in srv $srv_idx log file [srv $srv_idx stdout]: $pattern"
     }
 }
 
@@ -1251,4 +1251,19 @@ proc bp {{s {}}} {
         catch {uplevel 1 $line} res
         puts $res
     }
+}
+
+proc memcmp {string1 string2} {
+    set len1 [string length $string1]
+    set len2 [string length $string2]
+    set minLen [expr min($len1, $len2)]
+
+    for {set i 0} {$i < $minLen} {incr i} {
+        set char1 [scan [string index $string1 $i] %c]
+        set char2 [scan [string index $string2 $i] %c]
+        if {$char1 != $char2} {
+            return [expr {$char1 - $char2}]
+        }
+    }
+    return [expr {$len1 - $len2}]
 }

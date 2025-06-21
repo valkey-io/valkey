@@ -47,6 +47,7 @@ void computeDatasetProfile(int dbid, robj *keyobj, robj *o, long long expiretime
 int rdbCheckMode = 0;
 int rdbCheckStats = 0;
 int rdbCheckOutput = 0;
+int rdbCheckPrintLua = 0;
 long long now;
 
 #define LOW_TRACKE_VALUE 1
@@ -694,6 +695,11 @@ int redis_check_rdb(char *rdbfilename, FILE *fp) {
             if (!strcasecmp(auxkey->ptr, "lua")) {
                 /* In older version before 7.0, we may save lua scripts in a replication RDB. */
                 rdbstate.lua_scripts++;
+                if (!rdbCheckPrintLua) {
+                    decrRefCount(auxkey);
+                    decrRefCount(auxval);
+                    continue;
+                }
             }
             rdbCheckInfo("AUX FIELD %s = '%s'", (char *)auxkey->ptr, (char *)auxval->ptr);
             decrRefCount(auxkey);
@@ -817,6 +823,8 @@ void parseCheckRdbOptions(int argc, char **argv, FILE *fp) {
             exit(0);
         } else if (!strcmp(argv[i], "--stats")) {
             rdbCheckStats = 1;
+        } else if (!strcmp(argv[i], "--print_lua")) {
+            rdbCheckPrintLua = 1;
         } else if (!strcmp(argv[i], "--output")) {
             rdbstate.stats_output = zstrdup(argv[i + 1]);
             rdbCheckOutput = 1;

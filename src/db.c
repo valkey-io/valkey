@@ -35,6 +35,7 @@
 #include "io_threads.h"
 #include "module.h"
 #include "vector.h"
+#include "expire.h"
 
 #include <signal.h>
 #include <ctype.h>

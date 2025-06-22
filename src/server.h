@@ -62,9 +62,6 @@
 #define static_assert(expr, lit) extern char __static_assert_failure[(expr) ? 1 : -1]
 #endif
 
-typedef long long mstime_t; /* millisecond time type. */
-typedef long long ustime_t; /* microsecond time type. */
-
 #include "ae.h"         /* Event driven programming library */
 #include "sds.h"        /* Dynamic safe strings */
 #include "dict.h"       /* Hash tables (old implementation) */
@@ -79,7 +76,8 @@ typedef long long ustime_t; /* microsecond time type. */
 #include "sparkline.h"  /* ASCII graphs API */
 #include "quicklist.h"  /* Lists are encoded as linked lists of
                            N-elements flat arrays */
-#include "rax.h"        /* Radix tree */
+#include "expire.h"     /* Expiration public API */
+                           #include "rax.h"        /* Radix tree */
 #include "connection.h" /* Connection abstraction */
 #include "memory_prefetch.h"
 #include "volatile_set.h"
@@ -163,9 +161,6 @@ struct hdr_histogram;
 #define CLIENT_MEM_USAGE_BUCKET_MIN_LOG 15 /* Bucket sizes start at up to 32KB (2^15) */
 #define CLIENT_MEM_USAGE_BUCKET_MAX_LOG 33 /* Bucket for largest clients: sizes above 4GB (2^32) */
 #define CLIENT_MEM_USAGE_BUCKETS (1 + CLIENT_MEM_USAGE_BUCKET_MAX_LOG - CLIENT_MEM_USAGE_BUCKET_MIN_LOG)
-
-#define ACTIVE_EXPIRE_CYCLE_SLOW 0
-#define ACTIVE_EXPIRE_CYCLE_FAST 1
 
 /* Children process will exit with this status code to signal that the
  * process terminated without an error: this is useful in order to kill
@@ -322,11 +317,6 @@ extern int configOOMScoreAdjValuesDefaults[CONFIG_OOM_COUNT];
 
 /* Key flags for when access type is unknown */
 #define CMD_KEY_FULL_ACCESS (CMD_KEY_RW | CMD_KEY_ACCESS | CMD_KEY_UPDATE)
-
-#define EXPIRE_NX (1 << 0)
-#define EXPIRE_XX (1 << 1)
-#define EXPIRE_GT (1 << 2)
-#define EXPIRE_LT (1 << 3)
 
 /* Key flags for how key is removed */
 #define DB_FLAG_KEY_NONE 0
@@ -1623,21 +1613,6 @@ typedef enum childInfoType {
     CHILD_INFO_TYPE_RDB_COW_SIZE,
     CHILD_INFO_TYPE_MODULE_COW_SIZE
 } childInfoType;
-
-/* Return values for expireIfNeeded */
-typedef enum {
-    KEY_VALID = 0, /* Could be volatile and not yet expired, non-volatile, or even non-existing key. */
-    KEY_EXPIRED,   /* Logically expired but not yet deleted. */
-    KEY_DELETED    /* The key was deleted now. */
-} keyStatus;
-
-/* Return value for getExpirationPolicy */
-typedef enum { 
-    POLICY_IGNORE_EXPIRE, /* Ignore expiration time of items and treat them as valid. */
-    POLICY_KEEP_EXPIRED,  /* Ignore items which are expired but do not actively delete them. */
-    POLICY_DELETE_EXPIRED /* Delete expired keys on access. */
-} expirationPolicy;
-
 struct valkeyServer {
     /* General */
     pid_t pid;                /* Main process pid. */
@@ -2685,7 +2660,6 @@ int validateProcTitleTemplate(const char *template);
 int serverCommunicateSystemd(const char *sd_notify_msg);
 void serverSetCpuAffinity(const char *cpulist);
 void dictVanillaFree(void *val);
-int timestampIsExpired(mstime_t when);
 
 /* ERROR STATS constants */
 
@@ -2867,10 +2841,7 @@ int processIOThreadsWriteDone(void);
 void releaseReplyReferences(client *c);
 void resetLastWrittenBuf(client *c);
 
-expirationPolicy getExpirationPolicyWithFlags(int flags);
-int parseExtendedExpireArgumentsOrReply(client *c, int *flags, int max_args);
 int parseExtendedCommandArgumentsOrReply(client *c, int *flags, int *unit, robj **expire, robj **compare_val, int command_type, int max_args);
-int convertExpireArgumentToUnixTime(client *c, robj *arg, long long basetime, int unit, long long *unixtime);
 
 /* logreqres.c - logging of requests and responses */
 void reqresReset(client *c, int free_buf);
@@ -3386,7 +3357,7 @@ robj *hashTypeLookupWriteOrCreate(client *c, robj *key);
 robj *hashTypeGetValueObject(robj *o, sds field);
 int hashTypeSet(robj *o, sds field, sds value, long long expiry, int flags);
 robj *hashTypeDup(robj *o);
-int hashTypeHasVolatileElements(robj *o);
+bool hashTypeHasVolatileElements(robj *o);
 size_t hashTypeNumVolatileElements(robj *o);
 
 /* Pub / Sub */

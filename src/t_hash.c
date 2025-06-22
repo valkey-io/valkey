@@ -66,7 +66,7 @@ void hashTypeFreeVolatileSet(robj *o) {
         freeVolatileSet(set);
 }
 
-int hashTypeHasVolatileElements(robj *o) {
+bool hashTypeHasVolatileElements(robj *o) {
     return ((o->encoding == OBJ_ENCODING_HASHTABLE) && (hashTypeGetVolatileSet(o) != NULL));
 }
 

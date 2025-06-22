@@ -1100,5 +1100,85 @@ start_server {tags {"hashexpire external:skip"}} {
 
         }
 
+        test {HSETEX with expired time is propagated to the replica} {
+            $primary flushall            
+
+            assert_equal [$primary HSET myhash f1 val1] "1"
+            
+            wait_for_condition 100 100 {
+                [$replica HGET myhash f1] eq {val1}
+            } else {
+                fail "hash field was not set on replica after timeout"
+            }
+
+            assert_equal [$primary HSETEX myhash EXAT 0 FIELDS 1 f1 val1] {1}
+            
+            wait_for_condition 100 100 {
+                [$primary EXISTS myhash] eq "0"
+            } else {
+                fail "hash object was not deleted on primary after timeout"
+            }
+            wait_for_ofs_sync $primary $replica
+
+            wait_for_condition 100 100 {
+                [$replica EXISTS myhash] eq "0"
+            } else {
+                fail "hash object was not deleted on replica after timeout"
+            }
+        }
+
+        test {HGETEX with expired time is propagated to the replica} {
+            $primary flushall            
+
+            assert_equal [$primary HSET myhash f1 val1] "1"
+            
+            wait_for_condition 100 100 {
+                [$replica HGET myhash f1] eq {val1}
+            } else {
+                fail "hash field was not set on replica after timeout"
+            }
+
+            assert_equal [$primary HGETEX myhash EXAT 0 FIELDS 1 f1] {val1}
+            
+            wait_for_condition 100 100 {
+                [$primary EXISTS myhash] eq "0"
+            } else {
+                fail "hash object was not deleted on primary after timeout"
+            }
+            wait_for_ofs_sync $primary $replica
+
+            wait_for_condition 100 100 {
+                [$replica EXISTS myhash] eq "0"
+            } else {
+                fail "hash object was not deleted on replica after timeout"
+            }
+        }
+        test {HEXPIREAT with expired time is propagated to the replica} {
+            $primary flushall            
+
+            assert_equal [$primary HSET myhash f1 val1] "1"
+            
+            wait_for_condition 100 100 {
+                [$replica HGET myhash f1] eq {val1}
+            } else {
+                fail "hash field was not set on replica after timeout"
+            }
+
+            assert_equal [$primary HEXPIREAT myhash 0 FIELDS 1 f1] {2}
+            
+            wait_for_condition 100 100 {
+                [$primary EXISTS myhash] eq "0"
+            } else {
+                fail "hash object was not deleted on primary after timeout"
+            }
+            wait_for_ofs_sync $primary $replica
+
+            wait_for_condition 100 100 {
+                [$replica EXISTS myhash] eq "0"
+            } else {
+                fail "hash object was not deleted on replica after timeout"
+            }
+        }
+
     }
 }

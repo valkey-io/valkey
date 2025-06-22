@@ -43,12 +43,9 @@
 #include "entry.h"
 
 
-int hashTypeExpireEntry(entry *entry);
-
 volatileEntryType hashVolatileEntryType = {
     .entryGetKey = (sds(*)(const void *entry))entryGetField,
     .getExpiry = (long long (*)(const void *entry))entryGetExpiry,
-    .expire = hashTypeExpireEntry,
 };
 
 /*-----------------------------------------------------------------------------
@@ -145,12 +142,6 @@ static void hashTypeTrackUpdateEntry(robj *o, void *old_entry, void *new_entry, 
     if (volatileSetNumEntries(set) == 0) {
         hashTypeDeleteVolatileSet(o);
     }
-}
-
-int hashTypeExpireEntry(void *entry) {
-    // TBD
-    UNUSED(entry);
-    return 1;
 }
 
 hashtableEntryValidationState hashHashtableTypeValidate(hashtable *ht, void *entry) {
@@ -408,12 +399,13 @@ int hashTypeSet(robj *o, sds field, sds value, long long expiry, int flags) {
         } else {
             /* exists: replace value */
             long long entry_expiry = entryGetExpiry(existing);
-            /* It is possible that the entry is already expired. In this case we can override it, but we need to make sure to treat it
-             * like it did not exist. */
+            /* It is possible that the entry is already expired. In this case we can override it, but we need to make sure to expire it first
+             * and treat it like it did not exist. */
             int is_expired = timestampIsExpired(entry_expiry);
-            /* In case the HASH_SET_KEEP_EXPIRY will force keeping the existing entry expiry. */
-            if (!is_expired && (flags & HASH_SET_KEEP_EXPIRY))
+            if (!is_expired && flags & HASH_SET_KEEP_EXPIRY) {
+                /* In case the HASH_SET_KEEP_EXPIRY will force keeping the existing entry expiry. */
                 expiry = entry_expiry;
+            }
             void *new_entry = entryUpdate(existing, v, expiry);
             if (new_entry != existing) {
                 /* It has been reallocated. */
@@ -1118,6 +1110,8 @@ void hsetexCommand(client *c) {
     int i = 0;
     int set_flags = HASH_SET_COPY, set_expired = 0;
     int changes = 0;
+    robj **new_argv = NULL;
+    int new_argc = 0;
 
     for (; fields_index < c->argc; fields_index++) {
         if (!strcasecmp(c->argv[fields_index]->ptr, "fields")) {
@@ -1159,7 +1153,6 @@ void hsetexCommand(client *c) {
 
         if (((flags & OBJ_PXAT) || (flags & OBJ_EXAT)) && checkAlreadyExpired(when)) {
             set_expired = 1;
-            when = 0;
         }
     }
 
@@ -1174,35 +1167,60 @@ void hsetexCommand(client *c) {
         }
     }
 
+    /* In case we are expiring all the elements prepare a new argv since we are going to delete all the expired fields. */
+    if (set_expired) {
+        new_argv = zmalloc(sizeof(robj *) * (num_fields + 2));
+        new_argv[new_argc++] = shared.hdel;
+        incrRefCount(shared.hdel);
+        new_argv[new_argc++] = c->argv[1];
+        incrRefCount(c->argv[1]);
+    }
+
     for (i = fields_index; i < c->argc; i += 2) {
         if (set_expired) {
-            changes += hashTypeDelete(o, c->argv[i]->ptr);
+            if (hashTypeDelete(o, c->argv[i]->ptr)) {
+                new_argv[new_argc++] = c->argv[i];
+                incrRefCount(c->argv[i]);
+                changes++;
+            }
         } else {
             hashTypeSet(o, c->argv[i]->ptr, c->argv[i + 1]->ptr, when, set_flags);
             changes++;
         }
     }
-    if (expire) {
-        /* Propagate as HSETEX Key Value PXAT millisecond-timestamp if there is
-         * EX/PX/EXAT flag. */
-        if (!(flags & OBJ_PXAT)) {
-            for (int i = 2; i < fields_index; i++) {
-                if (c->argv[i + 1] == expire) {
-                    robj *milliseconds_obj = createStringObjectFromLongLong(when);
-                    rewriteClientCommandArgument(c, i, shared.pxat);
-                    rewriteClientCommandArgument(c, i + 1, milliseconds_obj);
-                    decrRefCount(milliseconds_obj);
-                    break;
+
+    if (changes) {
+        if (set_expired) {
+            replaceClientCommandVector(c, new_argc, new_argv);
+            /* We would like to reduce the number of hexpired events in case there are potential many expired fields. */
+            notifyKeyspaceEvent(NOTIFY_HASH, "hexpired", c->argv[1], c->db->id);
+        } else if (expire) {
+            /* Propagate as HSETEX Key Value PXAT millisecond-timestamp if there is
+             * EX/PX/EXAT flag. */
+            if (!(flags & OBJ_PXAT)) {
+                for (int i = 2; i < fields_index; i++) {
+                    if (c->argv[i + 1] == expire) {
+                        robj *milliseconds_obj = createStringObjectFromLongLong(when);
+                        rewriteClientCommandArgument(c, i, shared.pxat);
+                        rewriteClientCommandArgument(c, i + 1, milliseconds_obj);
+                        decrRefCount(milliseconds_obj);
+                        break;
+                    }
                 }
             }
+            notifyKeyspaceEvent(NOTIFY_HASH, "hexpire", c->argv[1], c->db->id);
         }
-        notifyKeyspaceEvent(NOTIFY_HASH, "hexpire", c->argv[1], c->db->id);
-        if (set_expired && changes)
-            notifyKeyspaceEvent(NOTIFY_HASH, "hexpired", c->argv[1], c->db->id);
+        signalModifiedKey(c, c->db, c->argv[1]);
+        /* Delete the object in case it was left empty */
+        if (hashTypeLength(o) == 0) {
+            dbDelete(c->db, c->argv[1]);
+            notifyKeyspaceEvent(NOTIFY_GENERIC, "del", c->argv[1], c->db->id);
+        }
+        server.dirty += changes;
+    } else {
+        if (new_argv) zfree(new_argv);
     }
-    signalModifiedKey(c, c->db, c->argv[1]);
     notifyKeyspaceEvent(NOTIFY_HASH, "hset", c->argv[1], c->db->id);
-    server.dirty += changes;
     addReplyLongLong(c, changes == num_fields ? 1 : 0);
 }
 
@@ -1267,23 +1285,26 @@ void hgetexCommand(client *c) {
     initDeferredReplyBuffer(c);
 
     addReplyArrayLen(c, num_fields);
-    /* This command is never propagated as is. It is either propagated as HPEXPIREAT or PERSIST.
+    /* This command is never propagated as is. It is either propagated as HDEL, HPEXPIREAT or PERSIST.
      * This why it doesn't need special handling in feedAppendOnlyFile to convert relative expire time to absolute one. */
     if (set_expiry || set_expired || persist) {
         /* allocate a new client argv for replicating the command. */
         new_argv = zmalloc(sizeof(robj *) * (num_fields + 5));
-        if (persist)
+        if (set_expired)
+            new_argv[new_argc++] = shared.hdel;
+        else if (persist)
             new_argv[new_argc++] = shared.hpersist;
         else
             new_argv[new_argc++] = shared.hpexpireat;
 
         new_argv[new_argc++] = c->argv[1];
+        incrRefCount(c->argv[1]);
         if (set_expiry || set_expired) {
             new_argv[new_argc++] = NULL; // placeholder for the expiration time
             milliseconds_index = new_argc - 1;
+            new_argv[new_argc++] = shared.fields;
+            new_argv[new_argc++] = NULL; // placeholder for the number of objects
         }
-        new_argv[new_argc++] = shared.fields;
-        new_argv[new_argc++] = NULL; // placeholder for the number of objects
         numitems_index = new_argc - 1;
     }
     for (i = fields_index; i < c->argc; i++) {
@@ -1299,27 +1320,39 @@ void hgetexCommand(client *c) {
         if (changed) {
             changes++;
             new_argv[new_argc++] = c->argv[i];
+            incrRefCount(c->argv[i]);
         }
     }
+
+    /* rewrite the command vector and persist in case there are changes.
+     * Also notify keyspace notifications and signal the key was changed. */
     if (changes) {
-        if (set_expiry) {
+        if (milliseconds_index > 0) {
             milliseconds_obj = createStringObjectFromLongLong(when);
             new_argv[milliseconds_index] = milliseconds_obj;
+            incrRefCount(milliseconds_obj);
         }
-        numitems_obj = createStringObjectFromLongLong(changes);
-        new_argv[numitems_index] = numitems_obj;
-
-        for (i = 0; i < new_argc; i++)
-            if (new_argv[i])
-                incrRefCount(new_argv[i]);
+        if (numitems_index > 0) {
+            numitems_obj = createStringObjectFromLongLong(changes);
+            new_argv[numitems_index] = numitems_obj;
+            incrRefCount(numitems_obj);
+        }
         replaceClientCommandVector(c, new_argc, new_argv);
-        server.dirty += changes;
-        signalModifiedKey(c, c->db, c->argv[1]);
         if (set_expired)
             notifyKeyspaceEvent(NOTIFY_HASH, "hexpired", c->argv[1], c->db->id);
-        notifyKeyspaceEvent(NOTIFY_HASH, set_expiry ? "hexpire" : "hpersist", c->argv[1], c->db->id);
+        else
+            notifyKeyspaceEvent(NOTIFY_HASH, set_expiry ? "hexpire" : "hpersist", c->argv[1], c->db->id);
         if (milliseconds_obj) decrRefCount(milliseconds_obj);
         if (numitems_obj) decrRefCount(numitems_obj);
+
+        server.dirty += changes;
+        signalModifiedKey(c, c->db, c->argv[1]);
+
+        /* Delete the object in case it was left empty */
+        if (hashTypeLength(o) == 0) {
+            dbDelete(c->db, c->argv[1]);
+            notifyKeyspaceEvent(NOTIFY_GENERIC, "del", c->argv[1], c->db->id);
+        }
     } else {
         if (new_argv) zfree(new_argv);
     }
@@ -1414,6 +1447,9 @@ void hexpireGenericCommand(client *c, long long basetime, int unit) {
     int fields_index = 3;
     long long num_fields = 0;
     int i, result = 0, expired = 0, updated = 0;
+    int set_expired = 0;
+    robj **new_argv = NULL;
+    int new_argc = 0;
 
     for (; fields_index < c->argc; fields_index++) {
         if (!strcasecmp(c->argv[fields_index]->ptr, "fields")) {
@@ -1434,7 +1470,7 @@ void hexpireGenericCommand(client *c, long long basetime, int unit) {
         return;
 
     if (checkAlreadyExpired(when))
-        when = 0;
+        set_expired = 1;
 
     robj *obj = lookupKeyWrite(c->db, key);
 
@@ -1445,38 +1481,59 @@ void hexpireGenericCommand(client *c, long long basetime, int unit) {
     /* From this point we would return array reply */
     addReplyArrayLen(c, num_fields);
 
+    /* In case we are expiring all the elements prepare a new argv since we are going to delete all the expired fields. */
+    if (set_expired) {
+        new_argv = zmalloc(sizeof(robj *) * (num_fields + 3));
+        new_argv[new_argc++] = shared.hdel;
+        incrRefCount(shared.hdel);
+        new_argv[new_argc++] = c->argv[1];
+        incrRefCount(c->argv[1]);
+    }
+
     for (i = 0; i < num_fields; i++) {
-        if (when == 0) {
-            result = -2;
+        result = -2;
+        if (set_expired) {
             if (hashTypeDelete(obj, c->argv[fields_index + i]->ptr)) {
+                /* In case we deleted the field, add it to the new hdel command vector. */
+                new_argv[new_argc++] = c->argv[fields_index + i];
+                incrRefCount(c->argv[fields_index + i]);
                 result = 2;
                 expired++;
             }
         } else {
             result = hashTypeSetExpire(obj, c->argv[fields_index + i]->ptr, when, flag);
-            updated++;
+            if (result == 1) updated++;
         }
-        server.dirty += (result > 0 ? 1 : 0); // in case there was a change increment the dirty
         addReplyLongLong(c, result);
     }
 
     if (expired || updated) {
-        /* Propagate as HPEXPIREAT millisecond-timestamp
-         * Only rewrite the command arg if not already HPEXPIREAT */
-        if (c->cmd->proc != hpexpireAtCommand) {
-            rewriteClientCommandArgument(c, 0, shared.hpexpireat);
-        }
-
-        /* Avoid creating a string object when it's the same as argv[2] parameter  */
-        if (basetime != 0 || unit == UNIT_SECONDS) {
-            robj *when_obj = createStringObjectFromLongLong(when);
-            rewriteClientCommandArgument(c, 2, when_obj);
-            decrRefCount(when_obj);
-        }
-        if (expired)
+        if (expired) {
+            replaceClientCommandVector(c, new_argc, new_argv);
+            /* We would like to reduce the number of hexpired events in case there are potential many expired fields. */
             notifyKeyspaceEvent(NOTIFY_HASH, "hexpired", c->argv[1], c->db->id);
-        notifyKeyspaceEvent(NOTIFY_HASH, "hexpire", c->argv[1], c->db->id);
+        } else if (updated) {
+            /* Propagate as HPEXPIREAT millisecond-timestamp
+             * Only rewrite the command arg if not already HPEXPIREAT */
+            if (c->cmd->proc != hpexpireAtCommand) {
+                rewriteClientCommandArgument(c, 0, shared.hpexpireat);
+            }
+
+            /* Avoid creating a string object when it's the same as argv[2] parameter  */
+            if (basetime != 0 || unit == UNIT_SECONDS) {
+                robj *when_obj = createStringObjectFromLongLong(when);
+                rewriteClientCommandArgument(c, 2, when_obj);
+                decrRefCount(when_obj);
+            }
+            notifyKeyspaceEvent(NOTIFY_HASH, "hexpire", c->argv[1], c->db->id);
+        }
+        server.dirty += (expired + updated); // in case there was a change increment the dirty
         signalModifiedKey(c, c->db, obj);
+        /* Delete the object in case it was left empty */
+        if (hashTypeLength(obj) == 0) {
+            dbDelete(c->db, c->argv[1]);
+            notifyKeyspaceEvent(NOTIFY_GENERIC, "del", c->argv[1], c->db->id);
+        }
     }
 }
 

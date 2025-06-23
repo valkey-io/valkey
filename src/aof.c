@@ -2479,7 +2479,7 @@ void aofRemoveTempFile(pid_t childpid, int from_signal) {
     char tmpfile2[256];
     char pid[32];
 
-    /* Generate temp aof file name using aync-signal safe functions. */
+    /* Generate temp aof file name using async-signal safe functions. */
     ll2string(pid, sizeof(pid), childpid);
     valkey_strlcpy(tmpfile, "temp-rewriteaof-bg-", sizeof(tmpfile));
     valkey_strlcat(tmpfile, pid, sizeof(tmpfile));

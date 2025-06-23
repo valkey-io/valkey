@@ -58,6 +58,7 @@ typedef struct clusterLink {
                                                             * myself will gossip this flag to other replica in the
                                                             * shard so that the replicas can make a better ranking
                                                             * decisions to help with the failover. */
+
 #define CLUSTER_NODE_NULL_NAME                                                                                         \
     "\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000" \
     "\000\000\000\000\000\000\000\000\000\000\000\000"

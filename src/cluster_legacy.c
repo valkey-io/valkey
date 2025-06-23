@@ -99,7 +99,6 @@ const char *clusterGetMessageTypeString(int type);
 void removeChannelsInSlot(unsigned int slot);
 unsigned int countChannelsInSlot(unsigned int hashslot);
 void clusterAddNodeToShard(const char *shard_id, clusterNode *node);
-list *clusterLookupNodeListByShardId(const char *shard_id);
 void clusterRemoveNodeFromShard(clusterNode *node);
 int auxShardIdSetter(clusterNode *n, void *value, size_t length);
 sds auxShardIdGetter(clusterNode *n, sds s);
@@ -127,11 +126,20 @@ sds clusterEncodeOpenSlotsAuxField(int rdbflags);
 int clusterDecodeOpenSlotsAuxField(int rdbflags, sds s);
 static int nodeExceedsHandshakeTimeout(clusterNode *node, mstime_t now);
 void clusterCommandFlushslot(client *c);
+int clusterAllReplicasThinkPrimaryIsFail(void);
 
 /* Only primaries that own slots have voting rights.
  * Returns 1 if the node has voting rights, otherwise returns 0. */
 static inline int clusterNodeIsVotingPrimary(clusterNode *n) {
     return (n->flags & CLUSTER_NODE_PRIMARY) && n->numslots;
+}
+
+/* Returns if myself is the best ranked replica in an automatic failover process. */
+static inline int myselfIsBestRankedReplica(void) {
+    return (server.cluster->mf_end == 0 &&
+            server.cluster->failover_auth_rank == 0 &&
+            server.cluster->failover_failed_primary_rank == 0 &&
+            clusterAllReplicasThinkPrimaryIsFail());
 }
 
 int getNodeDefaultClientPort(clusterNode *n) {
@@ -4615,6 +4623,16 @@ void clusterRequestFailoverAuth(void) {
      * in the header to communicate the nodes receiving the message that
      * they should authorized the failover even if the primary is working. */
     if (server.cluster->mf_end) msgblock->data[0].msg.mflags[0] |= CLUSTERMSG_FLAG0_FORCEACK;
+
+    /* If this is an automatic failover and if myself is the best ranked replica,
+     * set the CLUSTERMSG_FLAG0_FORCEACK bit in the header as well.
+     *
+     * In this case, we hope that other primary nodes will not refuse to vote because
+     * they did not receive the FAIL message in time. */
+    if (server.cluster->mf_end == 0 && myselfIsBestRankedReplica()) {
+        msgblock->data[0].msg.mflags[0] |= CLUSTERMSG_FLAG0_FORCEACK;
+    }
+
     clusterBroadcastMessage(msgblock);
     clusterMsgSendBlockDecrRefCount(msgblock);
 }
@@ -5027,10 +5045,7 @@ void clusterHandleReplicaFailover(void) {
             server.cluster->failover_failed_primary_rank = 0;
         }
 
-        if (server.cluster->mf_end == 0 &&
-            server.cluster->failover_auth_rank == 0 &&
-            server.cluster->failover_failed_primary_rank == 0 &&
-            clusterAllReplicasThinkPrimaryIsFail()) {
+        if (server.cluster->mf_end == 0 && myselfIsBestRankedReplica()) {
             server.cluster->failover_auth_time = now;
             serverLog(LL_NOTICE, "This is the best ranked replica and can initiate the election immediately.");
         }
@@ -5090,9 +5105,7 @@ void clusterHandleReplicaFailover(void) {
                       new_failed_primary_rank, added_delay);
         }
 
-        if (server.cluster->failover_auth_rank == 0 &&
-            server.cluster->failover_failed_primary_rank == 0 &&
-            clusterAllReplicasThinkPrimaryIsFail()) {
+        if (myselfIsBestRankedReplica()) {
             server.cluster->failover_auth_time = now;
             serverLog(LL_NOTICE, "Myself become the best ranked replica, initiate the election immediately.");
         }

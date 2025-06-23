@@ -205,7 +205,7 @@ void persistenceCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent e, uint64_t sub
     /* modifying the keyspace from the fork child is not an option, using log instead */
     ValkeyModule_Log(ctx, "warning", "module-event-%s", keyname);
     if (sub == VALKEYMODULE_SUBEVENT_PERSISTENCE_SYNC_RDB_START ||
-        sub == VALKEYMODULE_SUBEVENT_PERSISTENCE_SYNC_AOF_START)
+        sub == VALKEYMODULE_SUBEVENT_PERSISTENCE_SYNC_AOF_START) 
     {
         LogNumericEvent(ctx, keyname, 0);
     }

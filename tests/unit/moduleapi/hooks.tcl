@@ -27,7 +27,7 @@ tags "modules" {
             # assert server is still up
             assert_equal [r ping] PONG
             $rd close
-        }
+        } 
 
         test {Test module cron hook} {
             after 100
@@ -339,7 +339,7 @@ tags "modules" {
         }
 
         test {Test configchange hooks} {
-            r config set rdbcompression no
+            r config set rdbcompression no 
             assert_equal [r hooks.event_last config-change-count] 1
             assert_equal [r hooks.event_last config-change-first] rdbcompression
         }

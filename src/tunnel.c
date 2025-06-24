@@ -240,6 +240,8 @@ static tunnelSession *createTunnelSession(client *c, char *host, int port) {
     session->host = sdsnew(host);
     session->port = port;
     session->downstream_client = c;
+    sdsfree(c->querybuf);
+    c->querybuf = NULL;
     session->downstream_client->tunnel_session = session;
     initTunnelPipe(&session->up_pipe, c->conn, conn);
     initTunnelPipe(&session->down_pipe, conn, c->conn);

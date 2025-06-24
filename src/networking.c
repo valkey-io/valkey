@@ -5076,7 +5076,7 @@ void tunnelCommand(client *c) {
         addReplyErrorFormat(c, "TUNNEL cannot be used with replica instances");
         return;
     }
-    if (c->argc < 3 && c->argc > 7) {
+    if (c->argc < 3 || c->argc > 7) {
         char *cmd = c->argv[0]->ptr;
         addReplyErrorFormat(c, "Wrong number of arguments for the '%s' subcommand", cmd);
         return;
@@ -5108,19 +5108,19 @@ void tunnelCommand(client *c) {
         }
         int argc = 4;
         if (server.primary_user) {
-              robj *primary_user = c->argv[argc];
-              ++argc;
-              if (sdslen(primary_user->ptr) != strlen(server.primary_user) || strcmp(primary_user->ptr, server.primary_user) != 0) {
-                  addReplyErrorFormat(c, "Authentication failed");
-                  return;
-              }
+            robj *primary_user = c->argv[argc];
+            ++argc;
+            if (sdslen(primary_user->ptr) != strlen(server.primary_user) || strcmp(primary_user->ptr, server.primary_user) != 0) {
+                addReplyErrorFormat(c, "Authentication failed");
+                return;
+            }
         }
         if (server.primary_auth) {
-              robj *primary_auth = c->argv[argc];
-              if (sdscmp(primary_auth->ptr, server.primary_auth) != 0) {
-                  addReplyErrorFormat(c, "Authentication failed");
-                  return;
-              }
+            robj *primary_auth = c->argv[argc];
+            if (sdscmp(primary_auth->ptr, server.primary_auth) != 0) {
+                addReplyErrorFormat(c, "Authentication failed");
+                return;
+            }
         }
     }
     clientSetName(c, clientname, NULL);

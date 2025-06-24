@@ -1694,11 +1694,9 @@ void failReportTrackerAdd(failReportTracker *t, clusterNode *sender) {
     failReportEntry *e = dictFetchValue(t->reports, sender_name);
     if (e) {
         /* refresh: remove old node and re-append */
-        serverLog(LL_NOTICE, "[failReportTrackerAdd] Before Del node %.40s, len: %llu", sender->name, (unsigned long long)t->expiry_list->len);
         listDelNode(t->expiry_list, e->ln);
         e->expiry = expiry;
         sdsfree(sender_name);
-        serverLog(LL_NOTICE, "[failReportTrackerAdd] After Del node %.40s, len: %llu", sender->name, (unsigned long long)t->expiry_list->len);
     } else {
         /* new entry */
         e = zmalloc(sizeof(*e));
@@ -1706,8 +1704,6 @@ void failReportTrackerAdd(failReportTracker *t, clusterNode *sender) {
         e->expiry = expiry;
         dictAdd(t->reports, sender_name, e);
         t->report_count++;
-
-        serverLog(LL_NOTICE, "[failReportTrackerAdd] Update node %.40s, report count: %llu", sender->name, (unsigned long long)t->report_count);
     }
 
     // 2) Append at tail and record the new node

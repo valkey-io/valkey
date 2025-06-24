@@ -4132,6 +4132,7 @@ void replicationUnsetPrimary(void) {
     sdsfree(server.primary_host);
     server.primary_host = NULL;
     if (server.primary) freeClient(server.primary);
+    server.tunnel_failover = 0;
     replicationDiscardCachedPrimary();
     cancelReplicationHandshake(0);
     /* When a replica is turned into a primary, the current replication ID
@@ -5108,10 +5109,11 @@ void abortFailover(const char *err) {
         replicationUnsetPrimary();
     }
     clearFailoverState();
+    server.tunnel_failover = 0;
 }
 
 /*
- * FAILOVER [TO <HOST> <PORT> [FORCE]] [ABORT] [TIMEOUT <timeout>]
+ * FAILOVER [TO <HOST> <PORT> [FORCE] [TUNNEL]] [ABORT] [TIMEOUT <timeout>]
  *
  * This command will coordinate a failover between the primary and one
  * of its replicas. The happy path contains the following steps:
@@ -5156,6 +5158,7 @@ void failoverCommand(client *c) {
 
     long timeout_in_ms = 0;
     int force_flag = 0;
+    int tunnel_flag = 0;
     long port = 0;
     char *host = NULL;
 
@@ -5174,6 +5177,8 @@ void failoverCommand(client *c) {
             j += 2;
         } else if (!strcasecmp(c->argv[j]->ptr, "force") && !force_flag) {
             force_flag = 1;
+        } else if (!strcasecmp(c->argv[j]->ptr, "tunnel") && !tunnel_flag) {
+            tunnel_flag = 1;
         } else {
             addReplyErrorObject(c, shared.syntaxerr);
             return;
@@ -5198,6 +5203,14 @@ void failoverCommand(client *c) {
     if (force_flag && (!timeout_in_ms || !host)) {
         addReplyError(c, "FAILOVER with force option requires both a timeout "
                          "and target HOST and IP.");
+        return;
+    }
+    if (tunnel_flag && !host) {
+        addReplyError(c, "FAILOVER with tunnel option requires a target HOST");
+        return;
+    }
+    if (tunnel_flag && server.cluster_enabled) {
+        addReplyError(c, "FAILOVER with tunnel is not supported in cluster mode.");
         return;
     }
 
@@ -5230,6 +5243,7 @@ void failoverCommand(client *c) {
     }
 
     server.force_failover = force_flag;
+    server.tunnel_failover = tunnel_flag;
     server.failover_state = FAILOVER_WAIT_FOR_SYNC;
     /* Cluster failover will unpause eventually */
     pauseActions(PAUSE_DURING_FAILOVER, LLONG_MAX, PAUSE_ACTIONS_CLIENT_WRITE_SET);

@@ -1,0 +1,22 @@
+{
+    "TUNNEL": {
+        "summary": "An internal command for tunneling client commands.",
+        "complexity": "O(1)",
+        "group": "server",
+        "since": "9.0.0",
+        "arity": 3,
+        "function": "tunnelCommand",
+        "doc_flags": [
+            "SYSCMD"
+        ],
+        "command_flags": [
+            "ADMIN",
+            "NOSCRIPT",
+            "STALE",
+            "ALLOW_BUSY"
+        ],
+        "reply_schema": {
+            "const": "OK"
+        }
+    }
+}

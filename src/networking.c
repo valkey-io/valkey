@@ -334,6 +334,7 @@ client *createClient(connection *conn) {
     c->io_last_written.buf = NULL;
     c->io_last_written.bufpos = 0;
     c->io_last_written.data_len = 0;
+    c->tunnel_session = NULL;
     return c;
 }
 
@@ -2012,6 +2013,7 @@ void freeClient(client *c) {
     reqresReset(c, 1);
 #endif
 
+    freeTunnelSesssion(c->tunnel_session);
     /* Remove the contribution that this client gave to our
      * incrementally computed memory usage. */
     if (c->conn) server.stat_clients_type_memory[c->last_memory_type] -= c->last_memory_usage;
@@ -5062,6 +5064,31 @@ void clientCommand(client *c) {
     addReplySubcommandSyntaxError(c);
 }
 
+/* TUNNEL <user> <protocol-version>
+ * Internal command that marks the connection as a tunnel, used to proxy client commands
+ * on behalf of the specified user and using the given RESP protocol version.
+ */
+void tunnelCommand(client *c) {
+    robj *clientname = c->argv[1];
+    const char *err = NULL;
+    if (validateClientName(clientname, &err) == C_ERR) {
+          addReplyError(c, err);
+          return;
+    }
+    clientSetName(c, clientname, NULL);
+    long long ver = 0;
+    if (getLongLongFromObjectOrReply(c, c->argv[2], &ver,
+                                     "Protocol version is not an integer or out of range") != C_OK) {
+        return;
+    }
+
+    if (ver < 2 || ver > 3) {
+        addReplyError(c, "-NOPROTO unsupported protocol version");
+        return;
+    }
+    c->resp = ver;
+    addReply(c, shared.ok);
+}
 /* HELLO [<protocol-version> [AUTH <user> <password>] [SETNAME <name>] ] */
 void helloCommand(client *c) {
     long long ver = 0;

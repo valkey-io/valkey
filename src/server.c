@@ -51,6 +51,7 @@
 #include "lua/engine_lua.h"
 #include "lua/debug_lua.h"
 #include "eval.h"
+#include "tunnel.h"
 
 #include "trace/trace_commands.h"
 
@@ -2750,6 +2751,8 @@ void resetServerStats(void) {
     server.stat_reply_buffer_expands = 0;
     memset(server.duration_stats, 0, sizeof(durationStats) * EL_DURATION_TYPE_NUM);
     server.el_cmd_cnt_max = 0;
+    server.stat_tunnel_sessions = 0;
+    server.stat_active_tunnel_sessions = 0;
     lazyfreeResetStats();
 }
 
@@ -4054,6 +4057,12 @@ uint64_t getCommandFlags(client *c) {
     return cmd_flags;
 }
 
+static int shouldTunnelOnFailure(client *c) {
+    return (!server.cluster_enabled && c->id != CLIENT_ID_AOF && !c->flag.blocked &&
+        !c->flag.close_asap && !c->flag.repl_rdb_channel && !c->flag.fake &&
+        server.repl_state == REPL_STATE_CONNECTED && server.tunnel_failover &&
+        !c->flag.replica && !c->flag.primary && (!c->mstate || c->cmd->proc == execCommand));
+}
 /* Prepare a parsed command for processing, including looking up the command,
  * checking arity and calculating cluster slot. This should be done before
  * calling processCommand() and can be done by I/O threads to offload the
@@ -4231,8 +4240,9 @@ int processCommand(client *c) {
         }
     }
 
-    if (!server.cluster_enabled && c->capa & CLIENT_CAPA_REDIRECT && server.primary_host && !obey_client &&
-        (is_write_command || (is_read_command && !c->flag.readonly))) {
+    if (!server.cluster_enabled && server.primary_host && !obey_client &&
+        (is_write_command || (is_read_command && !c->flag.readonly)) &&
+        (c->capa & CLIENT_CAPA_REDIRECT || shouldTunnelOnFailure(c))) {
         if (server.failover_state == FAILOVER_IN_PROGRESS) {
             /* During the FAILOVER process, when conditions are met (such as
              * when the force time is reached or the primary and replica offsets
@@ -4255,14 +4265,18 @@ int processCommand(client *c) {
              * and then resume the execution. */
             blockPostponeClient(c);
         } else {
+            c->duration = 0;
+            c->cmd->rejected_calls++;
+            if (c->capa & CLIENT_CAPA_REDIRECT) {
+                addReplyErrorSds(c, sdscatprintf(sdsempty(), "-REDIRECT %s:%d", server.primary_host, server.primary_port));
+            } else {
+                establishTunnelOrClose(c);
+            }
             if (c->cmd->proc == execCommand) {
                 discardTransaction(c);
             } else {
                 flagTransaction(c);
             }
-            c->duration = 0;
-            c->cmd->rejected_calls++;
-            addReplyErrorSds(c, sdscatprintf(sdsempty(), "-REDIRECT %s:%d", server.primary_host, server.primary_port));
         }
         return C_OK;
     }
@@ -4347,7 +4361,7 @@ int processCommand(client *c) {
 
     /* Don't accept write commands if this is a read only replica. But
      * accept write commands if this is our primary. */
-    if (server.primary_host && server.repl_replica_ro && !obey_client && is_write_command) {
+    if (server.primary_host && server.repl_replica_ro && !obey_client && is_write_command && !server.tunnel_failover) {
         rejectCommand(c, shared.roreplicaerr);
         return C_OK;
     }
@@ -5824,7 +5838,9 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                 "total_blocking_keys_on_nokey:%lu\r\n", blocking_keys_on_nokey,
                 "paused_reason:%s\r\n", paused_reason,
                 "paused_actions:%s\r\n", paused_actions,
-                "paused_timeout_milliseconds:%lld\r\n", paused_timeout));
+                "paused_timeout_milliseconds:%lld\r\n", paused_timeout,
+                "total_tunnel_sessions:%lld\r\n", server.stat_tunnel_sessions,
+                "active_tunnel_sessions:%lld\r\n", server.stat_active_tunnel_sessions));
     }
 
     /* Memory */

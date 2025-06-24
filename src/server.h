@@ -82,6 +82,7 @@ typedef long long ustime_t; /* microsecond time type. */
 #include "rax.h"        /* Radix tree */
 #include "connection.h" /* Connection abstraction */
 #include "memory_prefetch.h"
+#include "tunnel.h"
 #include "trace/trace.h"
 
 #ifdef USE_LTTNG
@@ -1298,6 +1299,7 @@ typedef struct client {
     list *deferred_reply;                    /* List of reply objects to be sent to the client, typically after
                                                 the client has been unblocked. */
     unsigned long long deferred_reply_bytes; /* Total bytes of objects in the blocked client pending list.*/
+    tunnelSession *tunnel_session;
 #ifdef LOG_REQ_RES
     clientReqResInfo reqres;
 #endif
@@ -1716,6 +1718,8 @@ struct valkeyServer {
     time_t stat_starttime;                         /* Server start time */
     long long stat_numcommands;                    /* Number of processed commands */
     long long stat_numconnections;                 /* Number of connections received */
+    long long stat_tunnel_sessions;                /* Number of tunnel sessions */
+    long long stat_active_tunnel_sessions;         /* Active tunnel sessions */
     long long stat_expiredkeys;                    /* Number of expired keys */
     double stat_expired_stale_perc;                /* Percentage of keys probably expired */
     long long stat_expired_time_cap_reached_count; /* Early expire cycle stops.*/
@@ -2176,6 +2180,8 @@ struct valkeyServer {
     mstime_t failover_end_time;              /* Deadline for failover command. */
     int force_failover;                      /* If true then failover will be forced at the
                                               * deadline, otherwise failover is aborted. */
+    int tunnel_failover;                     /* If true then once failover is completed, tunnel the existing and the new
+                                              * connections to the failover target. */
     char *target_replica_host;               /* Failover target host. If null during a
                                               * failover then any replica can be used. */
     int target_replica_port;                 /* Failover target port */
@@ -3887,6 +3893,7 @@ void bitopCommand(client *c);
 void bitcountCommand(client *c);
 void bitposCommand(client *c);
 void replconfCommand(client *c);
+void tunnelCommand(client *c);
 void waitCommand(client *c);
 void waitaofCommand(client *c);
 void georadiusbymemberCommand(client *c);

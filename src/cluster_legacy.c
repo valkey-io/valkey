@@ -1773,6 +1773,7 @@ int failReportTrackerDel(failReportTracker *t, clusterNode *sender) {
     listDelNode(t->expiry_list, e->ln);
     dictDelete(t->reports, sender_name);
     sdsfree(sender_name);
+    zfree(e);
     t->report_count--;
     return 1;
 }

@@ -5064,12 +5064,19 @@ void clientCommand(client *c) {
     addReplySubcommandSyntaxError(c);
 }
 
-/* TUNNEL <user> <protocol-version> <primary_user> <primary_auth>
- * Internal command that marks the connection as a tunnel, used to proxy client commands
+/* TUNNEL <user> <protocol-version> [PRIMARY_AUTH <user> <password>]
+ * Internal command which marks the connection as a tunnel, used to proxy client commands
  * on behalf of the specified user and using the given RESP protocol version.
+ *
+ * PRIMARY_AUTH is an optional parameter, followed by the primary's username and password, used to
+ * ensure the command is authorized for execution.
  */
 void tunnelCommand(client *c) {
-    if (c->argc < 3 && c->argc > 6) {
+    if (server.primary_host) {
+        addReplyErrorFormat(c, "TUNNEL cannot be used with replica instances");
+        return;
+    }
+    if (c->argc < 3 && c->argc > 7) {
         char *cmd = c->argv[0]->ptr;
         addReplyErrorFormat(c, "Wrong number of arguments for the '%s' subcommand", cmd);
         return;
@@ -5087,24 +5094,33 @@ void tunnelCommand(client *c) {
     }
 
     if (ver < 2 || ver > 3) {
-        addReplyError(c, "-NOPROTO unsupported protocol version");
+        addReplyError(c, "Unsupported resp protocol version");
         return;
     }
-
-    if (c->argc >= 4 && server.primary_auth) {
-        int argc = 3;
-        if (c->argc == 5) {
-            robj *primary_user = c->argv[argc];
-            ++argc;
-            if (!server.primary_user || sdscmp(primary_user->ptr, server.primary_user) != 0) {
-                addReplyErrorFormat(c, "Replica authentication failed");
-                return;
-            }
+    if ((server.primary_auth && c->argc < 5) || (server.primary_user && c->argc != 6)) {
+        addReplyErrorFormat(c, "Primary authentication info is missing");
+        return;
+    }
+    if (c->argc > 3) {
+        if (strcasecmp(c->argv[3]->ptr, "PRIMARY_AUTH")) {
+            addReplyErrorFormat(c, "Unexpected parameter: %s", (char *)c->argv[3]->ptr);
+            return;
         }
-        robj *primary_auth = c->argv[argc];
-          if (sdscmp(primary_auth->ptr, server.primary_auth) != 0) {
-              addReplyErrorFormat(c, "Replica authentication failed");
-              return;
+        int argc = 4;
+        if (server.primary_user) {
+              robj *primary_user = c->argv[argc];
+              ++argc;
+              if (sdslen(primary_user->ptr) != strlen(server.primary_user) || strcmp(primary_user->ptr, server.primary_user) != 0) {
+                  addReplyErrorFormat(c, "Authentication failed");
+                  return;
+              }
+        }
+        if (server.primary_auth) {
+              robj *primary_auth = c->argv[argc];
+              if (sdscmp(primary_auth->ptr, server.primary_auth) != 0) {
+                  addReplyErrorFormat(c, "Authentication failed");
+                  return;
+              }
         }
     }
     clientSetName(c, clientname, NULL);

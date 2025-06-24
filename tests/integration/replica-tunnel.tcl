@@ -28,6 +28,10 @@ start_server {tags {needs:repl external:skip "quit"}} {
             assert_match $value_str [$node_0 get foo]
         }
 
+        test {The TUNNEL command can not be issued against a replica node} {
+            set replica [valkey_client -1]
+            assert_error {*TUNNEL cannot be used with replica instances} {$replica TUNNEL default 2}
+        }
         test {REDIRECT takes president over tunnel} {
             $node_1 CLIENT CAPA REDIRECT
             $node_1 FAILOVER TO $node_0_host $node_0_port TIMEOUT 100 FORCE TUNNEL
@@ -74,6 +78,44 @@ start_server {tags {needs:repl external:skip "quit"}} {
             $rr1 close
         }
 
+        test {The TUNNEL command uses invalid resp version} {
+            set primary [valkey_client -1]
+            assert_error {*Unsupported resp protocol version} {$primary TUNNEL default 5}
+        }
+        test {The TUNNEL command uses invalid resp version 1} {
+            set primary [valkey_client -1]
+            assert_error {*Protocol version is not an integer or out of range} {$primary TUNNEL default a}
+        }
+        test {The TUNNEL command requires authentication params if primaryauth is configured on the primary} {
+            set primary [valkey_client -1]
+            $primary config set primaryauth "abc"
+            assert_error {*Primary authentication info is missing} {$primary TUNNEL default 2}
+        }
+        test {The TUNNEL command uses the PRIMARY_AUTH param but missing the username/password} {
+            set primary [valkey_client -1]
+            assert_error {*Primary authentication info is missing} {$primary TUNNEL default 2 PRIMARY_AUTH}
+        }
+        test {The TUNNEL command uses unexpected 3rd param} {
+            set primary [valkey_client -1]
+            assert_error {*Unexpected parameter:*} {$primary TUNNEL default 2 PRIMARY abc}
+        }
+        test {The TUNNEL command uses invalid primary password} {
+            set primary [valkey_client -1]
+            assert_error {*Authentication failed} {$primary TUNNEL default 2 PRIMARY_AUTH invalid_password}
+        }
+        test {The TUNNEL command uses valid primary password} {
+            set primary [valkey_client -1]
+            $primary TUNNEL default 2 PRIMARY_AUTH abc
+        }
+        test {The TUNNEL command requires auth user if primaryuser is configured on the primary} {
+            set primary [valkey_client -1]
+            $primary config set primaryuser "user-1"
+            assert_error {*Primary authentication info is missing} {$primary TUNNEL default 2 PRIMARY_AUTH abc}
+        }
+        test {The TUNNEL command uses auth user} {
+            set primary [valkey_client -1]
+            $primary TUNNEL default 2 PRIMARY_AUTH user-1 abc
+        }
     }
 }
 

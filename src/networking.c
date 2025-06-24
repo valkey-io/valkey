@@ -2013,7 +2013,7 @@ void freeClient(client *c) {
     reqresReset(c, 1);
 #endif
 
-    freeTunnelSesssion(c->tunnel_session);
+    freeTunnelSession(c->tunnel_session);
     /* Remove the contribution that this client gave to our
      * incrementally computed memory usage. */
     if (c->conn) server.stat_clients_type_memory[c->last_memory_type] -= c->last_memory_usage;

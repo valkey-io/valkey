@@ -5,12 +5,12 @@
 
 static int isTunnelClosed(tunnelSession *session) {
      return !session || !session->downstream_client ||
-         session->downstream_client->flag.close_asap ||
-         !session->upstream_client ||
-         session->upstream_client->flag.close_asap;
+          session->downstream_client->flag.close_asap ||
+          !session->upstream_client ||
+          session->upstream_client->flag.close_asap;
 }
 
-void freeTunnelSesssion(tunnelSession *session) {
+void freeTunnelSession(tunnelSession *session) {
     if (session == NULL) return;
     --server.stat_active_tunnel_sessions;
     sdsfree(session->host);
@@ -29,12 +29,12 @@ static void abortTunnel(tunnelSession *session) {
     session->downstream_client = NULL;
 }
 
-#define ENSURE_CONNECTED_OR_RETURN(conn, session)                    \
-    do {                                                             \
-        if (connGetState(conn) != CONN_STATE_CONNECTED) {            \
-            abortTunnel(session);                                    \
-            return;                                                  \
-        }                                                            \
+#define ENSURE_CONNECTED_OR_RETURN(conn, session)         \
+    do {                                                  \
+        if (connGetState(conn) != CONN_STATE_CONNECTED) { \
+            abortTunnel(session);                         \
+            return;                                       \
+        }                                                 \
     } while (0)
 
 /* Forward data from one end of the pipe to the other. */
@@ -114,8 +114,7 @@ static size_t expectedReplyLength(int multi_cnt) {
     return multi_cnt ? ret + ok_str_len : ret;
 }
 
-static int verifyReadReply(tunnelSession *session, const char *buf, size_t buf_offset, size_t buf_len,
-                           const char *expected_str, size_t expected_str_len) {
+static int verifyReadReply(tunnelSession *session, const char *buf, size_t buf_offset, size_t buf_len, const char *expected_str, size_t expected_str_len) {
     if (buf_offset >= buf_len) return 0;
     buf += buf_offset;
     buf_len -= buf_offset;
@@ -164,7 +163,7 @@ static void readSetupCmdsReply(connection *conn) {
 }
 /* Send the pipeline commands upstream to align the connection with the downstream
  * RESP protocol version and the downstream user.
-*/
+ */
 static void upstreamCmds(connection *conn) {
     tunnelSession *session = ((client *)connGetPrivateData(conn))->tunnel_session;
     if (isTunnelClosed(session)) return;
@@ -187,7 +186,7 @@ static void upstreamCmds(connection *conn) {
 /* A connect handler that gets called when a connection to the upstream node
  * gets established.
  */
- static void connectHander(connection *conn) {
+static void connectHandler(connection *conn) {
     tunnelSession *session = ((client *)connGetPrivateData(conn))->tunnel_session;
     ENSURE_CONNECTED_OR_RETURN(conn, session);
     if (isTunnelClosed(session)) return;
@@ -198,7 +197,7 @@ static void upstreamCmds(connection *conn) {
 static sds reconstructCommand(robj **argv, int argc, sds resp) {
     resp = sdscatfmt(resp, "*%i\r\n", argc);
 
-    for (int j = 0;j < argc; j++) {
+    for (int j = 0; j < argc; j++) {
         robj *arg = argv[j];
         size_t len = sdslen(arg->ptr);
         resp = sdscatfmt(resp, "$%U\r\n", (unsigned long long)len);
@@ -271,7 +270,7 @@ static tunnelSession *createTunnelSession(client *c, char *host, int port) {
 void establishTunnelOrClose(client *c) {
     tunnelSession *session = createTunnelSession(c, server.primary_host, server.primary_port);
     if (connConnect(session->up_pipe.write_conn, session->host, session->port,
-        server.bind_source_addr, 0, connectHander) == C_ERR) {
-        freeTunnelSesssion(session);
+                         server.bind_source_addr, 0, connectHandler) == C_ERR) {
+        freeTunnelSession(session);
     }
 }

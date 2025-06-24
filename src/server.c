@@ -4058,7 +4058,7 @@ uint64_t getCommandFlags(client *c) {
 }
 
 static int shouldTunnelOnFailure(client *c) {
-    return (!server.cluster_enabled && c->id != CLIENT_ID_AOF && !c->flag.blocked &&
+    return (getClientType(c) == CLIENT_TYPE_NORMAL && c->id != CLIENT_ID_AOF && !c->flag.blocked &&
             !c->flag.close_asap && !c->flag.repl_rdb_channel && !c->flag.fake &&
             server.repl_state == REPL_STATE_CONNECTED && server.tunnel_failover &&
             !c->flag.replica && !c->flag.primary && (!c->mstate || c->cmd->proc == execCommand));
@@ -4360,7 +4360,9 @@ int processCommand(client *c) {
     }
 
     /* Don't accept write commands if this is a read only replica. But
-     * accept write commands if this is our primary. */
+     * accept write commands if this is our primary. However, if failover tunneling
+     * is active, allow the command to be queued. It will be upstreamed later over
+     * the tunnel upon receiving the EXEC command. */
     if (server.primary_host && server.repl_replica_ro && !obey_client && is_write_command && !server.tunnel_failover) {
         rejectCommand(c, shared.roreplicaerr);
         return C_OK;

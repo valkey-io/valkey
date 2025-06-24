@@ -71,7 +71,7 @@ void syncWithPrimary(connection *conn);
 int RDBGeneratedByReplication = 0;
 
 /* --------------------------- Utility functions ---------------------------- */
-static ConnectionType *connTypeOfReplication(void) {
+ConnectionType *connTypeOfReplication(void) {
     if (server.tls_replication) {
         return connectionTypeTls();
     }
@@ -5138,6 +5138,9 @@ void abortFailover(const char *err) {
  * TIMEOUT <timeout> indicates how long should the primary wait for
  * a replica to sync up before aborting. If not specified, the failover
  * will attempt forever and must be manually aborted.
+ *
+ * TUNNEL flag indicates that after the failover, this node will tunnel traffic
+ * of the existing connections to the new primary
  */
 void failoverCommand(client *c) {
     if (!clusterAllowFailoverCmd(c)) {

@@ -85,28 +85,13 @@ static void initTunnelPipe(tunnelPipe *pipe, connection *read_conn, connection *
     pipe->buffer_len = 0;
 }
 
-static ConnectionType *connTypeOfTunneling(void) {
-    if (server.tls_replication) {
-        return connectionTypeTls();
-    }
-    return connectionTypeTcp();
-}
-
 static const char ok_str[] = "+OK\r\n";
 static const size_t ok_str_len = sizeof(ok_str) - 1; // 5
 static const char queued_str[] = "+QUEUED\r\n";
 static const size_t queued_str_len = sizeof(queued_str) - 1; // 9
 
-static int isReplyError(const char *buf, size_t buf_len) {
-    return (buf_len > 0 && buf[0] == '-');
-}
-
 static int isEntireReplyReceived(size_t buf_len, size_t len) {
     return buf_len >= len;
-}
-
-static int isExpectedReply(const char *buf, const char *str, size_t len) {
-    return (memcmp(buf, str, len) == 0);
 }
 
 static size_t expectedReplyLength(int multi_cnt) {
@@ -119,7 +104,7 @@ static int verifyReadReply(tunnelSession *session, const char *buf, size_t buf_o
     buf += buf_offset;
     buf_len -= buf_offset;
     size_t prefix_size = buf_len > expected_str_len ? expected_str_len : buf_len;
-    /* Check if what is in buf partially or fully matches expected_str */ 
+    /* Check if what is in buf partially or fully matches expected_str */
     if (strncmp(buf, expected_str, prefix_size)) {
         /* What we have so far does not match what we expected */
         abortTunnel(session);
@@ -248,7 +233,7 @@ static tunnelSession *createTunnelSession(client *c, char *host, int port) {
     ++server.stat_tunnel_sessions;
     ++server.stat_active_tunnel_sessions;
     tunnelSession *session = zmalloc(sizeof(tunnelSession));
-    connection *conn = connCreate(connTypeOfTunneling());
+    connection *conn = connCreate(connTypeOfReplication());
     session->upstream_client = createClient(NULL);
     connSetPrivateData(conn, session->upstream_client);
     session->upstream_client->tunnel_session = session;

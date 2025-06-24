@@ -4266,8 +4266,8 @@ int processCommand(client *c) {
             blockPostponeClient(c);
         } else {
             c->duration = 0;
-            c->cmd->rejected_calls++;
             if (c->capa & CLIENT_CAPA_REDIRECT) {
+                c->cmd->rejected_calls++;
                 addReplyErrorSds(c, sdscatprintf(sdsempty(), "-REDIRECT %s:%d", server.primary_host, server.primary_port));
             } else {
                 establishTunnelOrClose(c);

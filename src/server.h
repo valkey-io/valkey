@@ -2990,6 +2990,7 @@ int replicationCountAOFAcksByOffset(long long offset);
 void replicationSendNewlineToPrimary(void);
 long long replicationGetReplicaOffset(void);
 char *replicationGetReplicaName(client *c);
+ConnectionType *connTypeOfReplication(void);
 long long getPsyncInitialOffset(void);
 int replicationSetupReplicaForFullResync(client *replica, long long offset);
 void changeReplicationId(void);

@@ -8088,16 +8088,14 @@ int checkModuleAuthentication(client *c, robj *username, robj *password, robj **
     {
         ValkeyModuleAuthenticationInfo info = VALKEYMODULE_AUTHENTICATIONINFO_INITIALIZER_V1;
         info.client_id = c->id;
-        int port;
-        connAddrPeerName(c->conn, info.addr, sizeof(info.addr), &port);
-        info.port = port;
         info.username = username->ptr;
         if (auth_ctx) {
             info.module_name = auth_ctx->module->name;
         } else {
             info.module_name = NULL;
         }
-        info.success = (auth_result == AUTH_OK);
+        info.result = auth_result == AUTH_OK ? VALKEYMODULE_AUTH_RESULT_GRANTED
+                                             : VALKEYMODULE_AUTH_RESULT_DENIED;
         moduleFireServerEvent(VALKEYMODULE_EVENT_AUTHENTICATION_ATTEMPT, 0, &info);
     }
 

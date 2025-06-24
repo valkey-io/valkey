@@ -375,7 +375,7 @@ void authAttemptCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent e, uint64_t sub
     if (ai->module_name) {
         LogStringEvent(ctx, "auth-attempt-module", ai->module_name);
     }
-    LogNumericEvent(ctx, "auth-attempt-success", ai->success);
+    LogNumericEvent(ctx, "auth-attempt-success", ai->result == VALKEYMODULE_AUTH_RESULT_GRANTED);
 }
 
 static int cmdIsKeyRemoved(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc){

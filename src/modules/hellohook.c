@@ -76,8 +76,8 @@ void authenticationAttemptCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent e, ui
     VALKEYMODULE_NOT_USED(e);
 
     ValkeyModuleAuthenticationInfo *ai = data;
-    printf("Authentication attempt for client #%llu %s:%d with username=%s module=%s success=%d\n",
-           (unsigned long long)ai->client_id, ai->addr, ai->port, ai->username, ai->module_name, ai->success);
+    printf("Authentication attempt for client #%llu with username=%s module=%s success=%d\n",
+           (unsigned long long)ai->client_id, ai->username, ai->module_name, ai->result == VALKEYMODULE_AUTH_RESULT_GRANTED);
 }
 
 /* This function must be present on each module. It is used in order to

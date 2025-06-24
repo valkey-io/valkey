@@ -258,8 +258,31 @@ tags "modules" {
         test {Test failed module authentication attempt hooks} {
             r module load $authmodule
             r testmoduleone.rm_register_auth_cb
-            r acl setuser foo on >testpass ~* +@all
+            r acl setuser foo on ~* +@all
             catch {r auth foo deny} e
+            assert_match {*Auth denied by Misc Module*} $e
+            assert_equal [r hooks.event_last auth-attempt] "foo"
+            assert_equal [r hooks.event_last auth-attempt-module] "testacl"
+            assert_equal [r hooks.event_last auth-attempt-success] "0"
+            r module unload testacl
+        }
+
+        test {Test success module blocking authentication attempt hooks} {
+            r module load $authmodule
+            r testmoduleone.rm_register_blocking_auth_cb
+            r acl setuser foo on ~* +@all
+            r auth foo block_allow
+            assert_equal [r hooks.event_last auth-attempt] "foo"
+            assert_equal [r hooks.event_last auth-attempt-module] "testacl"
+            assert_equal [r hooks.event_last auth-attempt-success] "1"
+            r module unload testacl
+        }
+
+        test {Test failed module blocking authentication attempt hooks} {
+            r module load $authmodule
+            r testmoduleone.rm_register_blocking_auth_cb
+            r acl setuser foo on ~* +@all
+            catch {r auth foo block_deny} e
             assert_match {*Auth denied by Misc Module*} $e
             assert_equal [r hooks.event_last auth-attempt] "foo"
             assert_equal [r hooks.event_last auth-attempt-module] "testacl"

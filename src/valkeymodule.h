@@ -783,14 +783,18 @@ typedef struct ValkeyModuleKeyInfo {
 #define ValkeyModuleKeyInfo ValkeyModuleKeyInfoV1
 
 #define VALKEYMODULE_AUTHENTICATION_INFO_VERSION 1
+
+typedef enum {
+    VALKEYMODULE_AUTH_RESULT_GRANTED = 0, /* Authentication succeeded. */
+    VALKEYMODULE_AUTH_RESULT_DENIED = 1,  /* Authentication failed. */
+} ValkeyModuleAuthenticationResult;
+
 typedef struct ValkeyModuleAuthenticationInfo {
-    uint64_t version;        /* Version of this structure for ABI compat. */
-    uint64_t client_id;      /* Client ID. */
-    char addr[46];           /* IPv4 or IPv6 address. */
-    uint16_t port;           /* TCP port. */
-    const char *username;    /* Username used for authentication. */
-    const char *module_name; /* Name of the module that is handling the authentication. */
-    int success;             /* Result of the authentication, 1 for success, 0 for failure. */
+    uint64_t version;                        /* Version of this structure for ABI compat. */
+    uint64_t client_id;                      /* Client ID. */
+    const char *username;                    /* Username used for authentication. */
+    const char *module_name;                 /* Name of the module that is handling the authentication. */
+    ValkeyModuleAuthenticationResult result; /* Result of the authentication */
 } ValkeyModuleAuthenticationInfoV1;
 
 #define ValkeyModuleAuthenticationInfo ValkeyModuleAuthenticationInfoV1

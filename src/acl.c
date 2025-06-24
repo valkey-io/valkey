@@ -1470,12 +1470,10 @@ static int checkPasswordBasedAuth(client *c, robj *username, robj *password) {
     {
         ValkeyModuleAuthenticationInfo info = VALKEYMODULE_AUTHENTICATIONINFO_INITIALIZER_V1;
         info.client_id = c->id;
-        int port;
-        connAddrPeerName(c->conn, info.addr, sizeof(info.addr), &port);
-        info.port = port;
         info.username = username->ptr;
         info.module_name = NULL;
-        info.success = (result == AUTH_OK);
+        info.result = result == AUTH_OK ? VALKEYMODULE_AUTH_RESULT_GRANTED
+                                        : VALKEYMODULE_AUTH_RESULT_DENIED;
         moduleFireServerEvent(VALKEYMODULE_EVENT_AUTHENTICATION_ATTEMPT, 0, &info);
     }
 

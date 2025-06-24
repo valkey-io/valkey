@@ -4059,9 +4059,9 @@ uint64_t getCommandFlags(client *c) {
 
 static int shouldTunnelOnFailure(client *c) {
     return (!server.cluster_enabled && c->id != CLIENT_ID_AOF && !c->flag.blocked &&
-          !c->flag.close_asap && !c->flag.repl_rdb_channel && !c->flag.fake &&
-          server.repl_state == REPL_STATE_CONNECTED && server.tunnel_failover &&
-          !c->flag.replica && !c->flag.primary && (!c->mstate || c->cmd->proc == execCommand));
+            !c->flag.close_asap && !c->flag.repl_rdb_channel && !c->flag.fake &&
+            server.repl_state == REPL_STATE_CONNECTED && server.tunnel_failover &&
+            !c->flag.replica && !c->flag.primary && (!c->mstate || c->cmd->proc == execCommand));
 }
 /* Prepare a parsed command for processing, including looking up the command,
  * checking arity and calculating cluster slot. This should be done before

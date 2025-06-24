@@ -4,10 +4,10 @@
 #include <string.h>
 
 static int isTunnelClosed(tunnelSession *session) {
-     return !session || !session->downstream_client ||
-          session->downstream_client->flag.close_asap ||
-          !session->upstream_client ||
-          session->upstream_client->flag.close_asap;
+    return !session || !session->downstream_client ||
+           session->downstream_client->flag.close_asap ||
+           !session->upstream_client ||
+           session->upstream_client->flag.close_asap;
 }
 
 void freeTunnelSession(tunnelSession *session) {
@@ -190,6 +190,7 @@ static void connectHandler(connection *conn) {
     tunnelSession *session = ((client *)connGetPrivateData(conn))->tunnel_session;
     ENSURE_CONNECTED_OR_RETURN(conn, session);
     if (isTunnelClosed(session)) return;
+    session->upstream_client->conn = conn;
     connSetWriteHandler(conn, upstreamCmds);
     upstreamCmds(conn);
 }
@@ -250,9 +251,9 @@ static tunnelSession *createTunnelSession(client *c, char *host, int port) {
     ++server.stat_active_tunnel_sessions;
     tunnelSession *session = zmalloc(sizeof(tunnelSession));
     connection *conn = connCreate(connTypeOfTunneling());
-    session->upstream_client = createClient(conn);
-    session->upstream_client->tunnel_session = session;
+    session->upstream_client = createClient(NULL);
     connSetPrivateData(conn, session->upstream_client);
+    session->upstream_client->tunnel_session = session;
     session->host = sdsnew(host);
     session->port = port;
     session->downstream_client = c;
@@ -270,7 +271,7 @@ static tunnelSession *createTunnelSession(client *c, char *host, int port) {
 void establishTunnelOrClose(client *c) {
     tunnelSession *session = createTunnelSession(c, server.primary_host, server.primary_port);
     if (connConnect(session->up_pipe.write_conn, session->host, session->port,
-                         server.bind_source_addr, 0, connectHandler) == C_ERR) {
+                    server.bind_source_addr, 0, connectHandler) == C_ERR) {
         freeTunnelSession(session);
     }
 }

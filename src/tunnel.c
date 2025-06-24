@@ -118,16 +118,14 @@ static int verifyReadReply(tunnelSession *session, const char *buf, size_t buf_o
     if (buf_offset >= buf_len) return 0;
     buf += buf_offset;
     buf_len -= buf_offset;
-    if (isReplyError(buf, buf_len)) {
+    size_t prefix_size = buf_len > expected_str_len ? expected_str_len : buf_len;
+    /* Check if what is in buf partially or fully matches expected_str */ 
+    if (strncmp(buf, expected_str, prefix_size)) {
+        /* What we have so far does not match what we expected */
         abortTunnel(session);
         return 0;
     }
     if (!isEntireReplyReceived(buf_len, expected_str_len)) return 0;
-
-    if (!isExpectedReply(buf, expected_str, expected_str_len)) {
-        abortTunnel(session);
-        return 0;
-    }
     return 1;
 }
 

@@ -5072,8 +5072,8 @@ void tunnelCommand(client *c) {
     robj *clientname = c->argv[1];
     const char *err = NULL;
     if (validateClientName(clientname, &err) == C_ERR) {
-          addReplyError(c, err);
-          return;
+        addReplyError(c, err);
+        return;
     }
     clientSetName(c, clientname, NULL);
     long long ver = 0;

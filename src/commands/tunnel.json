@@ -4,7 +4,6 @@
         "complexity": "O(1)",
         "group": "server",
         "since": "9.0.0",
-        "arity": 3,
         "function": "tunnelCommand",
         "doc_flags": [
             "SYSCMD"

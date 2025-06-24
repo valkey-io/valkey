@@ -203,21 +203,37 @@ static sds reconstructClientCommand(client *c, sds resp) {
     return reconstructCommand(c->argv, c->argc, resp);
 }
 
+static sds serializeSds(sds in, sds resp) {
+    size_t len = sdslen(in);
+    resp = sdscatfmt(resp, "$%U\r\n", (unsigned long long)len);
+    resp = sdscatlen(resp, in, len);
+    resp = sdscatlen(resp, "\r\n", 2);
+    return resp;
+}
+
 static sds serializeTunnelCmd(client *c, sds resp) {
-    resp = sdscatlen(resp, "*3\r\n", 4);
+    unsigned long long params = 2;
+    if (server.primary_auth) ++params;
+    if (server.primary_user) ++params;
+
+    resp = sdscatfmt(resp, "*%U\r\n", (params + 1));
     resp = sdscatlen(resp, "$6\r\nTUNNEL\r\n", 12);
 
-    size_t len = sdslen(c->user->name);
-    resp = sdscatfmt(resp, "$%U\r\n", (unsigned long long)len);
-    resp = sdscatlen(resp, c->user->name, len);
-    resp = sdscatlen(resp, "\r\n", 2);
+    resp = serializeSds(c->user->name, resp);
 
     char resp_version[16];
     snprintf(resp_version, sizeof(resp_version), "%d", c->resp);
-    len = strlen(resp_version);
+    size_t len = strlen(resp_version);
     resp = sdscatfmt(resp, "$%U\r\n", (unsigned long long)len);
     resp = sdscatlen(resp, resp_version, len);
     resp = sdscatlen(resp, "\r\n", 2);
+
+    if (server.primary_auth) {
+        if (server.primary_user) {
+            resp = serializeSds(server.primary_user, resp);
+        }
+        resp = serializeSds(server.primary_auth, resp);
+    }
     return resp;
 }
 

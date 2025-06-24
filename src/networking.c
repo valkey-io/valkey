@@ -5064,18 +5064,22 @@ void clientCommand(client *c) {
     addReplySubcommandSyntaxError(c);
 }
 
-/* TUNNEL <user> <protocol-version>
+/* TUNNEL <user> <protocol-version> <primary_user> <primary_auth>
  * Internal command that marks the connection as a tunnel, used to proxy client commands
  * on behalf of the specified user and using the given RESP protocol version.
  */
 void tunnelCommand(client *c) {
+    if (c->argc < 3 && c->argc > 6) {
+        char *cmd = c->argv[0]->ptr;
+        addReplyErrorFormat(c, "Wrong number of arguments for the '%s' subcommand", cmd);
+        return;
+    }
     robj *clientname = c->argv[1];
     const char *err = NULL;
     if (validateClientName(clientname, &err) == C_ERR) {
         addReplyError(c, err);
         return;
     }
-    clientSetName(c, clientname, NULL);
     long long ver = 0;
     if (getLongLongFromObjectOrReply(c, c->argv[2], &ver,
                                      "Protocol version is not an integer or out of range") != C_OK) {
@@ -5086,6 +5090,24 @@ void tunnelCommand(client *c) {
         addReplyError(c, "-NOPROTO unsupported protocol version");
         return;
     }
+
+    if (c->argc >= 4 && server.primary_auth) {
+        int argc = 3;
+        if (c->argc == 5) {
+            robj *primary_user = c->argv[argc];
+            ++argc;
+            if (!server.primary_user || sdscmp(primary_user->ptr, server.primary_user) != 0) {
+                addReplyErrorFormat(c, "Replica authentication failed");
+                return;
+            }
+        }
+        robj *primary_auth = c->argv[argc];
+          if (sdscmp(primary_auth->ptr, server.primary_auth) != 0) {
+              addReplyErrorFormat(c, "Replica authentication failed");
+              return;
+        }
+    }
+    clientSetName(c, clientname, NULL);
     c->resp = ver;
     addReply(c, shared.ok);
 }

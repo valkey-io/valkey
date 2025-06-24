@@ -77,6 +77,18 @@ typedef struct clusterNodeFailReport {
     mstime_t time;     /* Time of the last report from this node. */
 } clusterNodeFailReport;
 
+typedef struct {
+    clusterNode *sender; // which node reported failure
+    mstime_t expiry;     // absolute time when this report expires
+    listNode *ln;        // back‐pointer into expiry_list for O(1) deletion
+} failReportEntry;
+
+typedef struct {
+    dict *reports;     // map<node name → failReportEntry*>
+    list *expiry_list; // head = earliest expiry
+    int report_count;
+} failReportTracker;
+
 /* Cluster messages header */
 
 /* Message types.
@@ -364,7 +376,7 @@ struct _clusterNode {
     int cport;                              /* Latest known cluster port of this node. */
     clusterLink *link;                      /* TCP/IP link established toward this node */
     clusterLink *inbound_link;              /* TCP/IP link accepted from this node */
-    list *fail_reports;                     /* List of nodes signaling this as failing */
+    failReportTracker *fail_tracker;        /* List of nodes signaling this as failing */
     int is_node_healthy;                    /* Boolean indicating the cached node health.
                                                Update with updateAndCountChangedNodeHealth(). */
 };

@@ -855,9 +855,9 @@ int clusterSaveConfig(int do_fsync) {
     /* Get the nodes description and concatenate our "vars" directive to
      * save currentEpoch and lastVoteEpoch. */
     ci = clusterGenNodesDescription(NULL, CLUSTER_NODE_HANDSHAKE, 0);
-    ci = sdscatprintf(ci, "vars currentEpoch %llu lastVoteEpoch %llu\n",
-                      (unsigned long long)server.cluster->currentEpoch,
-                      (unsigned long long)server.cluster->lastVoteEpoch);
+    ci = sdscatfmt(ci, "vars currentEpoch %U lastVoteEpoch %U\n",
+                   (unsigned long long)server.cluster->currentEpoch,
+                   (unsigned long long)server.cluster->lastVoteEpoch);
     content_size = sdslen(ci);
 
     /* Create a temp file with the new content. */
@@ -6475,27 +6475,23 @@ sds genClusterInfoString(void) {
     sds info = sdsempty();
     char *statestr[] = {"ok", "fail"};
     int slots_assigned = 0, slots_ok = 0, slots_pfail = 0, slots_fail = 0;
-    int j;
-
-    for (j = 0; j < CLUSTER_SLOTS; j++) {
-        clusterNode *n = server.cluster->slots[j];
-
-        if (n == NULL) continue;
-        slots_assigned++;
-        if (nodeFailed(n)) {
-            slots_fail++;
-        } else if (nodeTimedOut(n)) {
-            slots_pfail++;
-        } else {
-            slots_ok++;
-        }
-    }
 
     dictIterator *di = dictGetIterator(server.cluster->nodes);
     dictEntry *de;
     unsigned nodes_pfail = 0, nodes_fail = 0, voting_nodes_pfail = 0, voting_nodes_fail = 0;
     while ((de = dictNext(di)) != NULL) {
         clusterNode *node = dictGetVal(de);
+        if (node->numslots) {
+            slots_assigned += node->numslots;
+            if (nodeFailed(node)) {
+                slots_fail += node->numslots;
+            } else if (nodeTimedOut(node)) {
+                slots_pfail += node->numslots;
+            } else {
+                slots_ok += node->numslots;
+            }
+        }
+
         if (nodeTimedOut(node)) {
             nodes_pfail++;
             if (clusterNodeIsVotingPrimary(node)) {
@@ -6511,23 +6507,24 @@ sds genClusterInfoString(void) {
     }
     dictReleaseIterator(di);
 
-    info = sdscatprintf(info,
-                        "cluster_state:%s\r\n"
-                        "cluster_slots_assigned:%d\r\n"
-                        "cluster_slots_ok:%d\r\n"
-                        "cluster_slots_pfail:%d\r\n"
-                        "cluster_slots_fail:%d\r\n"
-                        "cluster_nodes_pfail:%u\r\n"
-                        "cluster_nodes_fail:%u\r\n"
-                        "cluster_voting_nodes_pfail:%u\r\n"
-                        "cluster_voting_nodes_fail:%u\r\n"
-                        "cluster_known_nodes:%lu\r\n"
-                        "cluster_size:%d\r\n"
-                        "cluster_current_epoch:%llu\r\n"
-                        "cluster_my_epoch:%llu\r\n",
-                        statestr[server.cluster->state], slots_assigned, slots_ok, slots_pfail, slots_fail,
-                        nodes_pfail, nodes_fail, voting_nodes_pfail, voting_nodes_fail, dictSize(server.cluster->nodes), server.cluster->size,
-                        (unsigned long long)server.cluster->currentEpoch, (unsigned long long)nodeEpoch(myself));
+    info = sdscatfmt(info,
+                     "cluster_state:%s\r\n"
+                     "cluster_slots_assigned:%i\r\n"
+                     "cluster_slots_ok:%i\r\n"
+                     "cluster_slots_pfail:%i\r\n"
+                     "cluster_slots_fail:%i\r\n"
+                     "cluster_nodes_pfail:%i\r\n"
+                     "cluster_nodes_fail:%i\r\n"
+                     "cluster_voting_nodes_pfail:%i\r\n"
+                     "cluster_voting_nodes_fail:%i\r\n"
+                     "cluster_known_nodes:%U\r\n"
+                     "cluster_size:%i\r\n"
+                     "cluster_current_epoch:%U\r\n"
+                     "cluster_my_epoch:%U\r\n",
+                     statestr[server.cluster->state], slots_assigned, slots_ok, slots_pfail, slots_fail,
+                     nodes_pfail, nodes_fail, voting_nodes_pfail, voting_nodes_fail,
+                     (unsigned long long)dictSize(server.cluster->nodes), server.cluster->size,
+                     (unsigned long long)server.cluster->currentEpoch, (unsigned long long)nodeEpoch(myself));
 
     /* Show stats about messages sent and received. */
     long long tot_msg_sent = 0;
@@ -6536,21 +6533,21 @@ sds genClusterInfoString(void) {
     for (int i = 0; i < CLUSTERMSG_TYPE_COUNT; i++) {
         if (server.cluster->stats_bus_messages_sent[i] == 0) continue;
         tot_msg_sent += server.cluster->stats_bus_messages_sent[i];
-        info = sdscatprintf(info, "cluster_stats_messages_%s_sent:%lld\r\n", clusterGetMessageTypeString(i),
-                            server.cluster->stats_bus_messages_sent[i]);
+        info = sdscatfmt(info, "cluster_stats_messages_%s_sent:%I\r\n", clusterGetMessageTypeString(i),
+                         (long long)server.cluster->stats_bus_messages_sent[i]);
     }
-    info = sdscatprintf(info, "cluster_stats_messages_sent:%lld\r\n", tot_msg_sent);
+    info = sdscatfmt(info, "cluster_stats_messages_sent:%I\r\n", tot_msg_sent);
 
     for (int i = 0; i < CLUSTERMSG_TYPE_COUNT; i++) {
         if (server.cluster->stats_bus_messages_received[i] == 0) continue;
         tot_msg_received += server.cluster->stats_bus_messages_received[i];
-        info = sdscatprintf(info, "cluster_stats_messages_%s_received:%lld\r\n", clusterGetMessageTypeString(i),
-                            server.cluster->stats_bus_messages_received[i]);
+        info = sdscatfmt(info, "cluster_stats_messages_%s_received:%I\r\n", clusterGetMessageTypeString(i),
+                         (long long)server.cluster->stats_bus_messages_received[i]);
     }
-    info = sdscatprintf(info, "cluster_stats_messages_received:%lld\r\n", tot_msg_received);
+    info = sdscatfmt(info, "cluster_stats_messages_received:%I\r\n", tot_msg_received);
 
-    info = sdscatprintf(info, "total_cluster_links_buffer_limit_exceeded:%llu\r\n",
-                        server.cluster->stat_cluster_links_buffer_limit_exceeded);
+    info = sdscatfmt(info, "total_cluster_links_buffer_limit_exceeded:%U\r\n",
+                     (unsigned long long)server.cluster->stat_cluster_links_buffer_limit_exceeded);
 
     return info;
 }
@@ -7159,8 +7156,8 @@ int clusterCommandSpecial(client *c) {
     } else if (!strcasecmp(c->argv[1]->ptr, "bumpepoch") && c->argc == 2) {
         /* CLUSTER BUMPEPOCH */
         int retval = clusterBumpConfigEpochWithoutConsensus();
-        sds reply = sdscatprintf(sdsempty(), "+%s %llu\r\n", (retval == C_OK) ? "BUMPED" : "STILL",
-                                 (unsigned long long)myself->configEpoch);
+        sds reply = sdscatfmt(sdsempty(), "+%s %U\r\n", (retval == C_OK) ? "BUMPED" : "STILL",
+                              (unsigned long long)myself->configEpoch);
         addReplySds(c, reply);
     } else if (!strcasecmp(c->argv[1]->ptr, "saveconfig") && c->argc == 2) {
         int retval = clusterSaveConfig(1);

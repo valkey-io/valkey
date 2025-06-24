@@ -136,7 +136,7 @@ void createDumpPayload(rio *payload, robj *o, robj *key, int dbid) {
      * ----------------+---------------------+---------------+
      * ... RDB payload | 2 bytes RDB version | 8 bytes CRC64 |
      * ----------------+---------------------+---------------+
-     * RDB version and CRC are both in little endian.
+     * RDB version and CRC are both in little-endian.
      */
 
     /* RDB version */

@@ -15,7 +15,7 @@
  *
  * <zlbytes> <zltail> <zllen> <entry> <entry> ... <entry> <zlend>
  *
- * NOTE: all fields are stored in little endian, if not specified otherwise.
+ * NOTE: all fields are stored in little-endian, if not specified otherwise.
  *
  * <uint32_t zlbytes> is an unsigned integer to hold the number of bytes that
  * the ziplist occupies, including the four bytes of the zlbytes field itself.
@@ -66,7 +66,7 @@
  * Or alternatively if the previous entry length is greater than 253 bytes
  * the following encoding is used:
  *
- * 0xFE <4 bytes unsigned little endian prevlen> <encoding> <entry>
+ * 0xFE <4 bytes unsigned little-endian prevlen> <encoding> <entry>
  *
  * The encoding field of the entry depends on the content of the
  * entry. When the entry is a string, the first 2 bits of the encoding first

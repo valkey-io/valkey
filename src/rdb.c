@@ -200,14 +200,14 @@ time_t rdbLoadTime(rio *rdb) {
 
 ssize_t rdbSaveMillisecondTime(rio *rdb, long long t) {
     int64_t t64 = (int64_t)t;
-    memrev64ifbe(&t64); /* Store in little endian. */
+    memrev64ifbe(&t64); /* Store in little-endian. */
     return rdbWriteRaw(rdb, &t64, 8);
 }
 
 /* This function loads a time from the RDB file. It gets the version of the
  * RDB because, unfortunately, before Redis OSS 5 (RDB version 9), the function
- * failed to convert data to/from little endian, so RDB files with keys having
- * expires could not be shared between big-endian and little endian systems
+ * failed to convert data to/from little-endian, so RDB files with keys having
+ * expires could not be shared between big-endian and little-endian systems
  * (because the expire time will be totally wrong). The fix for this is just
  * to call memrev64ifbe(), however if we fix this for all the RDB versions,
  * this call will introduce an incompatibility for big-endian systems:
@@ -684,7 +684,7 @@ int rdbLoadDoubleValue(rio *rdb, double *val) {
 }
 
 /* Saves a double for RDB 8 or greater, where IE754 binary64 format is assumed.
- * We just make sure the integer is always stored in little endian, otherwise
+ * We just make sure the integer is always stored in little-endian, otherwise
  * the value is copied verbatim from memory to disk.
  *
  * Return -1 on error, the size of the serialized value on success. */

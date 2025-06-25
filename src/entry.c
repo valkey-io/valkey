@@ -279,7 +279,7 @@ entry *entryUpdate(entry *e, sds value, long long expiry) {
                  * In such cases the old value alloc was adjusted to the real buffer size part it was embedded to.
                  * since we can potentially write here a smaller value, which requires less allocation space, we would like to
                  * inherit the old value memory allocation size. */
-                size_t value_size = sdsHdrSize(SDS_TYPE_8) + sdsalloc(value) + 1;
+                size_t value_size = sdsHdrSize(SDS_TYPE_8) + sdsalloc(old_value) + 1;
                 sdswrite(sdsAllocPtr(old_value), value_size, SDS_TYPE_8, value, sdslen(value));
                 sdsfree(value);
             }

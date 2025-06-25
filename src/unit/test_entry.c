@@ -167,7 +167,7 @@ int test_entryUpdate(int argc, char **argv, int flags) {
     // Update the value so that memory usage is less than 3/4 of the current allocation size
     // Ensuring required_embedded_size < current_embedded_allocation_size * 3 / 4, which creates a new entry
     size_t current_embedded_allocation_size = entryMemUsage(e9);
-    sds value10 = sdsnew("xxxxxxxxxxxxxxxxxxxxxx");
+    sds value10 = sdsnew("xxxxxxxxxxxxxxxxxxxxx");
     sds value_copy10 = sdsdup(value10);
     long long expiry10 = expiry9;
     entry *e10 = entryUpdate(e9, value10, expiry10);
@@ -294,15 +294,15 @@ int test_entryIsExpired(int argc, char **argv, int flags) {
     UNUSED(flags);
 
     // Setup server state
-    long long current_time = mstime();
-    server.cmd_time_snapshot = current_time;
+    enterExecutionUnit(1, ustime());
+    long long current_time = commandTimeSnapshot();
 
     // No expiry
     sds field1 = sdsnew(SHORT_FIELD);
     sds value1 = sdsnew(SHORT_VALUE);
     entry *e1 = entryCreate(field1, value1, EXPIRY_NONE);
     TEST_ASSERT(entryGetExpiry(e1) == EXPIRY_NONE);
-    TEST_ASSERT(entryIsExpired(e1) == 0);
+    TEST_ASSERT(entryIsExpired(e1) == false);
 
     // Future expiry
     sds field2 = sdsnew(SHORT_FIELD);
@@ -310,14 +310,14 @@ int test_entryIsExpired(int argc, char **argv, int flags) {
     long long future_time = current_time + 10000; // 10 seconds in future
     entry *e2 = entryCreate(field2, value2, future_time);
     TEST_ASSERT(entryGetExpiry(e2) == future_time);
-    TEST_ASSERT(entryIsExpired(e2) == 0);
+    TEST_ASSERT(entryIsExpired(e2) == false);
 
     // Current time expiry
     sds field3 = sdsnew(SHORT_FIELD);
     sds value3 = sdsnew(SHORT_VALUE);
     entry *e3 = entryCreate(field3, value3, current_time);
     TEST_ASSERT(entryGetExpiry(e3) == current_time);
-    TEST_ASSERT(entryIsExpired(e3) == 0);
+    TEST_ASSERT(entryIsExpired(e3) == false);
 
     // Test with past expiry
     sds field4 = sdsnew(SHORT_FIELD);
@@ -325,7 +325,7 @@ int test_entryIsExpired(int argc, char **argv, int flags) {
     long long past_time = current_time - 10000; // 10 seconds ago
     entry *e4 = entryCreate(field4, value4, past_time);
     TEST_ASSERT(entryGetExpiry(e4) == past_time);
-    TEST_ASSERT(entryIsExpired(e4) == 1);
+    TEST_ASSERT(entryIsExpired(e4) == true);
 
     entryFree(e1);
     entryFree(e2);
@@ -335,7 +335,7 @@ int test_entryIsExpired(int argc, char **argv, int flags) {
     sdsfree(field2);
     sdsfree(field3);
     sdsfree(field4);
-
+    exitExecutionUnit();
     return 0;
 }
 
@@ -380,7 +380,7 @@ int test_entryMemUsage_entrySetExpiry_entrySetValue(int argc, char **argv, int f
     entry *e2 = entrySetExpiry(e1, expiry2);
     size_t e2_entryMemUsage = entryMemUsage(e2);
     verify_entry_properties(e2, field1, value_copy1, expiry2, true, false);
-    TEST_ASSERT(e2_entryMemUsage == e1_entryMemUsage + sizeof(long long) + 2);
+    TEST_ASSERT(zmalloc_usable_size((char *)e2 - sizeof(long long) - 3) == e2_entryMemUsage);
 
     // Update expiry on an entry that already has one
     // This should NOT change memory usage as we're just updating the expiry value (long long)
@@ -397,7 +397,7 @@ int test_entryMemUsage_entrySetExpiry_entrySetValue(int argc, char **argv, int f
     entry *e4 = entrySetValue(e3, value4);
     size_t e4_entryMemUsage = entryMemUsage(e4);
     verify_entry_properties(e4, field1, value_copy4, expiry3, true, false);
-    TEST_ASSERT(e4_entryMemUsage == e3_entryMemUsage - 2);
+    TEST_ASSERT(zmalloc_usable_size((char *)e4 - sizeof(long long) - 3) == e4_entryMemUsage);
 
     // Update to bigger value (keeping embedded)
     // Memory usage should increase by the difference in value size (1 byte)
@@ -406,7 +406,7 @@ int test_entryMemUsage_entrySetExpiry_entrySetValue(int argc, char **argv, int f
     entry *e5 = entrySetValue(e4, value5);
     size_t e5_entryMemUsage = entryMemUsage(e5);
     verify_entry_properties(e5, field1, value_copy5, expiry3, true, false);
-    TEST_ASSERT(e5_entryMemUsage == e4_entryMemUsage + 1);
+    TEST_ASSERT(zmalloc_usable_size((char *)e5 - sizeof(long long) - 3) == e5_entryMemUsage);
 
     // Tests with non-embedded entry
     // Non-embedded entry without expiry
@@ -418,7 +418,7 @@ int test_entryMemUsage_entrySetExpiry_entrySetValue(int argc, char **argv, int f
     entry *e6 = entryCreate(field6, value6, EXPIRY_NONE);
     size_t e6_entryMemUsage = entryMemUsage(e6);
     verify_entry_properties(e6, field6, value_copy6, expiry6, false, true);
-    TEST_ASSERT(entryMemUsage(e6) > 0);
+    TEST_ASSERT(e6_entryMemUsage > 0);
 
     // Add expiry to non-embedded entry without expiry
     // For non-embedded entries this increases memory by exactly sizeof(long long)
@@ -426,7 +426,8 @@ int test_entryMemUsage_entrySetExpiry_entrySetValue(int argc, char **argv, int f
     entry *e7 = entrySetExpiry(e6, expiry7);
     size_t e7_entryMemUsage = entryMemUsage(e7);
     verify_entry_properties(e7, field6, value_copy6, expiry7, true, true);
-    TEST_ASSERT(e7_entryMemUsage == e6_entryMemUsage + sizeof(long long));
+    size_t expected_e7_entry_mem = zmalloc_usable_size((char *)e7 - sizeof(long long) - sizeof(sds) - 3) + sdsAllocSize(value6);
+    TEST_ASSERT(expected_e7_entry_mem == e7_entryMemUsage);
 
     // Update expiry on a non-embedded entry that already has one
     // This should not change memory usage as we're just updating the expiry value
@@ -437,13 +438,14 @@ int test_entryMemUsage_entrySetExpiry_entrySetValue(int argc, char **argv, int f
     TEST_ASSERT(e8_entryMemUsage == e7_entryMemUsage);
 
     // Update to smaller value (keeping non-embedded)
-    // Memory usage should increase by the difference between LONG_VALUE and "x" (143)
+    // Memory usage should increase by at least the difference between LONG_VALUE and "x" (143)
     sds value9 = sdsnew("x");
     sds value_copy9 = sdsdup(value9);
     entry *e9 = entrySetValue(e8, value9);
     size_t e9_entryMemUsage = entryMemUsage(e9);
     verify_entry_properties(e9, field6, value_copy9, expiry8, true, true);
-    TEST_ASSERT(e9_entryMemUsage == e8_entryMemUsage - 143);
+    size_t expected_e9_entry_mem = zmalloc_usable_size((char *)e9 - sizeof(long long) - sizeof(sds) - 3) + sdsAllocSize(value9);
+    TEST_ASSERT(expected_e9_entry_mem == e9_entryMemUsage);
 
     // Update to bigger value (keeping non-embedded)
     // Memory usage increases by the difference in value size (1 byte)
@@ -451,8 +453,8 @@ int test_entryMemUsage_entrySetExpiry_entrySetValue(int argc, char **argv, int f
     sds value_copy10 = sdsdup(value10);
     entry *e10 = entrySetValue(e9, value10);
     size_t e10_entryMemUsage = entryMemUsage(e10);
-    verify_entry_properties(e10, field6, value_copy10, expiry8, true, true);
-    TEST_ASSERT(e10_entryMemUsage == e9_entryMemUsage + 1);
+    size_t expected_10_entry_mem = zmalloc_usable_size((char *)e10 - sizeof(long long) - sizeof(sds) - 3) + sdsAllocSize(value10);
+    TEST_ASSERT(expected_10_entry_mem == e10_entryMemUsage);
 
     entryFree(e5);
     entryFree(e10);

@@ -74,7 +74,7 @@ void entryFree(entry *entry);
 /* Creates a new entry with the given field, value, and optional expiry. */
 entry *entryCreate(const_sds field, sds value, long long expiry);
 
-/* Updates the value and/or expiry of an existing entry. 
+/* Updates the value and/or expiry of an existing entry.
  * In case value is NULL, will use the existing entry value.
  * In case expiry is EXPIRE_NONE, will use the existing entry expiration time. */
 entry *entryUpdate(entry *entry, sds value, long long expiry);

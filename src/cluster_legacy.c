@@ -5270,7 +5270,7 @@ void manualFailoverCheckTimeout(void) {
     }
 }
 
-/* This function is called from the cluster cron function in order to go
+/* This function is called from clusterCron or clusterBeforeSleep in order to go
  * forward with a manual failover state machine. */
 void clusterHandleManualFailover(void) {
     /* Return ASAP if no manual failover is in progress. */
@@ -5585,9 +5585,13 @@ void clusterBeforeSleep(void) {
             if (!(server.cluster_module_flags & CLUSTER_MODULE_FLAG_NO_FAILOVER)) clusterHandleReplicaFailover();
         }
     } else if (flags & CLUSTER_TODO_HANDLE_FAILOVER) {
-        /* Handle failover, this is needed when it is likely that there is already
+        /* Handle failover as soon as possible so that won't have a 100ms
+         * as it was handled only in clusterCron. This is needed when it
+         * is likely that we can start the election or there is already
          * the quorum from primaries in order to react fast. */
-        clusterHandleReplicaFailover();
+        if (nodeIsReplica(myself)) {
+            if (!(server.cluster_module_flags & CLUSTER_MODULE_FLAG_NO_FAILOVER)) clusterHandleReplicaFailover();
+        }
     }
 
     /* Update the cluster state. */

@@ -12,13 +12,13 @@ entry *entrySetValue(entry *entry, sds value);
 long long entryGetExpiry(const entry *entry);
 bool entryHasExpiry(const entry *entry);
 entry *entrySetExpiry(entry *entry, long long expiry);
-int entryIsExpired(entry *entry);
+bool entryIsExpired(entry *entry);
 
 void entryFree(entry *entry);
-entry *entryCreate(sds field, sds value, long long expiry);
+entry *entryCreate(const_sds field, sds value, long long expiry);
 entry *entryUpdate(entry *entry, sds value, long long expiry);
 size_t entryMemUsage(entry *entry);
 entry *entryDefrag(entry *entry, void *(*defragfn)(void *), sds (*sdsdefragfn)(sds));
-void dismissEntry(entry *entry);
+void entryDismissMemory(entry *entry);
 
 #endif

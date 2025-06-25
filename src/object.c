@@ -683,7 +683,7 @@ void dismissHashObject(robj *o, size_t size_hint) {
             hashtableInitIterator(&iter, ht, 0);
             void *next;
             while (hashtableNext(&iter, &next)) {
-                dismissEntry(next);
+                entryDismissMemory(next);
             }
             hashtableResetIterator(&iter);
         }

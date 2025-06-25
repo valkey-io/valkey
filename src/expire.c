@@ -815,3 +815,66 @@ void touchCommand(client *c) {
         if (lookupKeyRead(c->db, c->argv[j]) != NULL) touched++;
     addReplyLongLong(c, touched);
 }
+
+/* Returns 1 if the expire value is expired, 0 otherwise. */
+int timestampIsExpired(mstime_t when) {
+    if (when < 0) return 0; /* no expire */
+    mstime_t now = commandTimeSnapshot();
+
+    /* The time indicated by 'when' is considered expired if the current (virtual or real) time is greater
+     * than it. */
+    return now > when;
+}
+
+/* This function verify if the current conditions allow expiration of keys and fields.
+ * For some cases expiration is not allowed, but we would still like to ignore the key
+ * so to treat it as "expired" without actively deleting it. */
+expirationPolicy getExpirationPolicyWithFlags(int flags) {
+    if (server.loading) return POLICY_IGNORE_EXPIRE;
+
+    /* If we are running in the context of a replica, instead of
+     * evicting the expired key from the database, we return ASAP:
+     * the replica key expiration is controlled by the primary that will
+     * send us synthesized DEL operations for expired keys. The
+     * exception is when write operations are performed on writable
+     * replicas.
+     *
+     * Still we try to reflect the correct state to the caller,
+     * that is, POLICY_KEEP_EXPIRED so that the key will be ignored, but not deleted.
+     *
+     * When replicating commands from the primary, keys are never considered
+     * expired, so we return POLICY_IGNORE_EXPIRE */
+    if (server.primary_host != NULL) {
+        if (server.current_client && (server.current_client->flag.primary)) return POLICY_IGNORE_EXPIRE;
+        if (!(flags & EXPIRE_FORCE_DELETE_EXPIRED)) return POLICY_KEEP_EXPIRED;
+    } else if (server.import_mode) {
+        /* If we are running in the import mode on a primary, instead of
+         * evicting the expired key from the database, we return ASAP:
+         * the key expiration is controlled by the import source that will
+         * send us synthesized DEL operations for expired keys. The
+         * exception is when write operations are performed on this server
+         * because it's a primary.
+         *
+         * Notice: other clients, apart from the import source, should not access
+         * the data imported by import source.
+         *
+         * Still we try to reflect the correct state to the caller,
+         * that is, POLICY_KEEP_EXPIRED so that the key will be ignored, but not deleted.
+         *
+         * When receiving commands from the import source, keys are never considered
+         * expired, so we return POLICY_IGNORE_EXPIRE */
+        if (server.current_client && (server.current_client->flag.import_source)) return POLICY_IGNORE_EXPIRE;
+        if (!(flags & EXPIRE_FORCE_DELETE_EXPIRED)) return POLICY_KEEP_EXPIRED;
+    }
+
+    /* In some cases we're explicitly instructed to return an indication of a
+     * missing key without actually deleting it, even on primaries. */
+    if (flags & EXPIRE_AVOID_DELETE_EXPIRED) return POLICY_KEEP_EXPIRED;
+
+    /* If 'expire' action is paused, for whatever reason, then don't expire any key.
+     * Typically, at the end of the pause we will properly expire the key OR we
+     * will have failed over and the new primary will send us the expire. */
+    if (isPausedActionsWithUpdate(PAUSE_ACTION_EXPIRE)) return POLICY_KEEP_EXPIRED;
+
+    return POLICY_DELETE_EXPIRED;
+}

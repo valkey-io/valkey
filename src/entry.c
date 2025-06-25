@@ -50,7 +50,7 @@
 
 /* Returns true in case the entry's value is not embedded in the entry.
  * Returns false otherwise. */
-bool entryHasValuePtr(const entry *entry) {
+static inline bool entryHasValuePtr(const entry *entry) {
     return sdsGetAuxBit(entry, FIELD_SDS_AUX_BIT_ENTRY_HAS_VALUE_PTR);
 }
 
@@ -81,8 +81,6 @@ sds entryGetValue(const entry *entry) {
     } else {
         /* Skip field content, field null terminator and value sds8 hdr. */
         size_t offset = sdslen(entry) + 1 + sdsHdrSize(SDS_TYPE_8);
-        serverAssert((char *)entry + offset);
-
         return (char *)entry + offset;
     }
 }
@@ -117,8 +115,9 @@ long long entryGetExpiry(const entry *entry) {
     long long expiry = EXPIRY_NONE;
     if (entryHasExpiry(entry)) {
         char *buf = sdsAllocPtr(entry);
+        debugServerAssert((((uintptr_t)buf & 0x7) == 0));
         if (entryHasValuePtr(entry)) buf -= sizeof(sds *);
-        buf -= sizeof(expiry);
+        buf -= sizeof(long long);
         expiry = *(long long *)buf;
     }
     return expiry;
@@ -138,26 +137,21 @@ entry *entrySetExpiry(entry *e, long long expiry) {
 }
 
 /* Return true in case the entry has assigned expiration or false otherwise. */
-int entryIsExpired(entry *entry) {
-    /* Don't expire anything while loading. It will be done later. */
-    if (server.loading) return 0;
-    if (!timestampIsExpired(entryGetExpiry(entry))) return 0;
-    if (server.primary_host == NULL && server.import_mode) {
-        if (server.current_client && server.current_client->flag.import_source) return 0;
-    }
-    return 1;
+bool entryIsExpired(entry *entry) {
+    if (!timestampIsExpired(entryGetExpiry(entry))) return false;
+    return true;
 }
 /**************************************** Entry Expiry API - End *****************************************/
 
 void entryFree(entry *entry) {
     if (entryHasValuePtr(entry)) {
-        sdsfree(*entryGetValueRef(entry));
+        sdsfree(entryGetValue(entry));
     }
     zfree(entryAllocPtr(entry));
 }
 
 /* Takes ownership of value. does not take ownership of field */
-entry *entryCreate(sds field, sds value, long long expiry) {
+entry *entryCreate(const_sds field, sds value, long long expiry) {
     sds embedded_field_sds;
     size_t expiry_size = (expiry == EXPIRY_NONE) ? 0 : sizeof(long long);
     size_t field_len = sdslen(field);
@@ -192,7 +186,7 @@ entry *entryCreate(sds field, sds value, long long expiry) {
              *     +------+-------+---------------+
              */
             embed_value = false;
-            alloc_size += sizeof(sds *);
+            alloc_size += sizeof(sds);
             if (field_sds_type == SDS_TYPE_5) {
                 field_sds_type = SDS_TYPE_8;
                 alloc_size -= field_size;
@@ -214,8 +208,8 @@ entry *entryCreate(sds field, sds value, long long expiry) {
     if (value) {
         if (!embed_value) {
             *(sds *)buf = value;
-            buf += sizeof(sds *);
-            buf_size -= sizeof(sds *);
+            buf += sizeof(sds);
+            buf_size -= sizeof(sds);
         } else {
             sdswrite(buf + field_size, buf_size - field_size, SDS_TYPE_8, value, value_len);
             sdsfree(value);
@@ -237,13 +231,13 @@ entry *entryUpdate(entry *e, sds value, long long expiry) {
     sds field = (sds)e;
 
     bool update_value = value ? true : false;
-    long long ttl = entryGetExpiry(e);
-    bool update_expiry = (expiry != ttl) ? true : false;
+    long long expiration_time = entryGetExpiry(e);
+    bool update_expiry = (expiry != expiration_time) ? true : false;
     if (!update_value && !update_expiry)
         return e;
-    ttl = expiry;
+    expiration_time = expiry;
     value = update_value ? value : entryGetValue(e);
-    size_t expiry_size = ttl != EXPIRY_NONE ? sizeof(ttl) : 0;
+    size_t expiry_size = (expiration_time != EXPIRY_NONE) ? sizeof(expiration_time) : 0;
     int field_sds_type = sdsReqType(sdslen(field));
     if (field_sds_type == SDS_TYPE_5 && (expiry_size > 0)) {
         field_sds_type = SDS_TYPE_8;
@@ -257,7 +251,7 @@ entry *entryUpdate(entry *e, sds value, long long expiry) {
     /* // We will create a new entry in the following cases:
      * 1. In the case were we add or remove expiration.
      * 2. in the case were we are NOT migrating from an embedded entry to an embedded entry with ~the same size. */
-    bool create_new_entry = (update_expiry && (entryGetExpiry(e) == EXPIRY_NONE || ttl == EXPIRY_NONE)) ||
+    bool create_new_entry = (update_expiry && (entryGetExpiry(e) == EXPIRY_NONE || expiration_time == EXPIRY_NONE)) ||
                             !(update_value && !entryHasValuePtr(e) &&
                               required_embedded_size <= EMBED_VALUE_MAX_ALLOC_SIZE &&
                               required_embedded_size <= current_embedded_allocation_size &&
@@ -307,7 +301,7 @@ entry *entryUpdate(entry *e, sds value, long long expiry) {
         }
     }
 
-    entry *new_entry = entryCreate(entryGetField(e), value, ttl);
+    entry *new_entry = entryCreate(entryGetField(e), value, expiration_time);
     if (new_entry != e)
         entryFree(e);
     return new_entry;
@@ -355,7 +349,7 @@ entry *entryDefrag(entry *entry, void *(*defragfn)(void *), sds (*sdsdefragfn)(s
 
 /* Used for releasing memory to OS to avoid unnecessary CoW. Called when we've
  * forked and memory won't be used again. See zmadvise_dontneed() */
-void dismissEntry(entry *entry) {
+void entryDismissMemory(entry *entry) {
     /* Only dismiss values memory since the field size usually is small. */
     if (entryHasValuePtr(entry)) {
         dismissSds(*entryGetValueRef(entry));

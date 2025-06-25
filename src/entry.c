@@ -107,6 +107,10 @@ void *entryAllocPtr(const entry *entry) {
     return buf;
 }
 
+bool entryHasEmbeddedValue(entry *entry) {
+    return (entryGetValue(entry) && !entryHasValuePtr(entry));
+}
+
 /**************************************** Entry Expiry API *****************************************/
 
 /* Returns the entry expiration timestamp.
@@ -115,8 +119,8 @@ long long entryGetExpiry(const entry *entry) {
     long long expiry = EXPIRY_NONE;
     if (entryHasExpiry(entry)) {
         char *buf = sdsAllocPtr(entry);
-        debugServerAssert((((uintptr_t)buf & 0x7) == 0));
-        if (entryHasValuePtr(entry)) buf -= sizeof(sds *);
+        debugServerAssert((((uintptr_t)buf & 0x7) == 0)); /* Test that the allocation is indeed 8 bytes aligned */
+        if (entryHasValuePtr(entry)) buf -= sizeof(sds);
         buf -= sizeof(long long);
         expiry = *(long long *)buf;
     }

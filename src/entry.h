@@ -21,4 +21,7 @@ size_t entryMemUsage(entry *entry);
 entry *entryDefrag(entry *entry, void *(*defragfn)(void *), sds (*sdsdefragfn)(sds));
 void entryDismissMemory(entry *entry);
 
+/* Internal used for debug. No need to use this function except in tests */
+bool entryHasEmbeddedValue(entry *entry);
+
 #endif

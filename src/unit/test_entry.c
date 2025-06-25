@@ -19,7 +19,7 @@ static int verify_entry_properties(entry *e, sds field, sds value_copy, long lon
     TEST_ASSERT(sdscmp(entryGetValue(e), value_copy) == 0);
     TEST_ASSERT(entryGetExpiry(e) == expiry);
     TEST_ASSERT(entryHasExpiry(e) == has_expiry);
-    TEST_ASSERT(entryHasValuePtr(e) == has_valueptr);
+    TEST_ASSERT(entryHasEmbeddedValue(e) != has_valueptr);
     return 0;
 }
 
@@ -251,7 +251,7 @@ int test_entryHasexpiry_entrySetExpiry(int argc, char **argv, int flags) {
     sds value4 = sdsnew(LONG_VALUE);
     entry *e4 = entryCreate(field4, value4, EXPIRY_NONE);
     TEST_ASSERT(entryHasExpiry(e4) == false);
-    TEST_ASSERT(entryHasValuePtr(e4) == true);
+    TEST_ASSERT(entryHasEmbeddedValue(e4) == false);
 
     // Set expiry on entry without expiry
     long long expiry5 = 100;
@@ -417,7 +417,7 @@ int test_entryMemUsage_entrySetExpiry_entrySetValue(int argc, char **argv, int f
     verify_entry_properties(e6, field6, value_copy6, expiry6, false, true);
     TEST_ASSERT(entryMemUsage(e6) > 0);
 
-    // Add expiry to non-embedded entry wihout expiry
+    // Add expiry to non-embedded entry without expiry
     // For non-embedded entries this increases memory by exactly sizeof(long long)
     long long expiry7 = 100;
     entry *e7 = entrySetExpiry(e6, expiry7);

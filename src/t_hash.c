@@ -64,7 +64,7 @@ void hashTypeFreeVolatileSet(robj *o) {
 }
 
 bool hashTypeHasVolatileElements(robj *o) {
-    return ((o->encoding == OBJ_ENCODING_HASHTABLE) && (hashtableGetType(o->ptr) == &hashWithVolatileItemsHashtableType));
+    return ((o->encoding == OBJ_ENCODING_HASHTABLE) && (hashTypeGetVolatileSet(o) != NULL));
 }
 
 /* make any access to the hash object elements ignore the specific elements expiration.

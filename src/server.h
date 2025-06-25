@@ -77,7 +77,7 @@
 #include "quicklist.h"  /* Lists are encoded as linked lists of
                            N-elements flat arrays */
 #include "expire.h"     /* Expiration public API */
-                           #include "rax.h"        /* Radix tree */
+#include "rax.h"        /* Radix tree */
 #include "connection.h" /* Connection abstraction */
 #include "memory_prefetch.h"
 #include "volatile_set.h"

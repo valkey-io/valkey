@@ -1218,7 +1218,7 @@ int hashtableExpandIfNeeded(hashtable *ht) {
  * resize policy to ALLOW, you may want to call hashtableShrinkIfNeeded. */
 int hashtableShrinkIfNeeded(hashtable *ht) {
     /* Don't shrink if rehashing is already in progress. */
-    if (hashtableIsRehashing(ht) || resize_policy == HASHTABLE_RESIZE_FORBID) {
+    if (hashtableIsRehashing(ht) || resize_policy == HASHTABLE_RESIZE_FORBID || ht->pause_auto_shrink) {
         return 0;
     }
     size_t current_capacity = numBuckets(ht->bucket_exp[0]) * ENTRIES_PER_BUCKET;
@@ -1710,6 +1710,7 @@ size_t hashtableScanDefrag(hashtable *ht, size_t cursor, hashtableScanFunction f
     /* Prevent entries from being moved around during the scan call, as a
      * side-effect of the scan callback. */
     hashtablePauseRehashing(ht);
+    hashtablePauseAutoShrink(ht);
 
     /* Flags. */
     int emit_ref = (flags & HASHTABLE_SCAN_EMIT_REF);
@@ -1814,6 +1815,7 @@ size_t hashtableScanDefrag(hashtable *ht, size_t cursor, hashtableScanFunction f
         } while (cursor & (mask_small ^ mask_large));
     }
     hashtableResumeRehashing(ht);
+    hashtableResumeAutoShrink(ht);
     return cursor;
 }
 

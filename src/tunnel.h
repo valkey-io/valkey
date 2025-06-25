@@ -16,6 +16,10 @@ typedef struct tunnelPipe {
     size_t buffer_len;
 } tunnelPipe;
 
+typedef struct TunnelFlags {
+    uint64_t expect_auth_reply : 1;        /* Upstreamed an AUTH command to authenticate this node */
+} TunnelFlags;
+
 typedef struct tunnelSession {
     client *downstream_client;
     client *upstream_client;
@@ -25,6 +29,10 @@ typedef struct tunnelSession {
     int port;
     sds cmd;
     int multi_cnt;
+    union {
+        uint64_t raw_flag;
+        struct TunnelFlags flag;
+    };
 } tunnelSession;
 
 void establishTunnelOrClose(client *c);

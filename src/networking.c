@@ -5064,12 +5064,9 @@ void clientCommand(client *c) {
     addReplySubcommandSyntaxError(c);
 }
 
-/* TUNNEL <user> <protocol-version> [PRIMARY_AUTH <user> <password>]
+/* TUNNEL <user> <protocol-version>
  * Internal command which marks the connection as a tunnel, used to proxy client commands
  * on behalf of the specified user and using the given RESP protocol version.
- *
- * PRIMARY_AUTH is an optional parameter, followed by the primary's username and password, used to
- * ensure the command is authorized for execution.
  */
 void tunnelCommand(client *c) {
     if (server.primary_host) {
@@ -5096,32 +5093,6 @@ void tunnelCommand(client *c) {
     if (ver < 2 || ver > 3) {
         addReplyError(c, "Unsupported resp protocol version");
         return;
-    }
-    if ((server.primary_auth && c->argc < 5) || (server.primary_user && c->argc != 6)) {
-        addReplyErrorFormat(c, "Primary authentication info is missing");
-        return;
-    }
-    if (c->argc > 3) {
-        if (strcasecmp(c->argv[3]->ptr, "PRIMARY_AUTH")) {
-            addReplyErrorFormat(c, "Unexpected parameter: %s", (char *)c->argv[3]->ptr);
-            return;
-        }
-        int argc = 4;
-        if (server.primary_user) {
-            robj *primary_user = c->argv[argc];
-            ++argc;
-            if (sdslen(primary_user->ptr) != strlen(server.primary_user) || strcmp(primary_user->ptr, server.primary_user) != 0) {
-                addReplyErrorFormat(c, "Authentication failed");
-                return;
-            }
-        }
-        if (server.primary_auth) {
-            robj *primary_auth = c->argv[argc];
-            if (sdscmp(primary_auth->ptr, server.primary_auth) != 0) {
-                addReplyErrorFormat(c, "Authentication failed");
-                return;
-            }
-        }
     }
     clientSetName(c, clientname, NULL);
     c->resp = ver;

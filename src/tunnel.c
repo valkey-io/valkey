@@ -124,9 +124,17 @@ static void readSetupCmdsReply(connection *conn) {
         return;
     }
     pipe->buffer_pos += nread;
-    if (!verifyReadReply(session, pipe->buffer, 0, pipe->buffer_pos, ok_str, ok_str_len)) return;
+    size_t buf_offset = 0;
+    if (session->flag.expect_auth_reply) {
+        // AUTH reply
+        if (!verifyReadReply(session, pipe->buffer, buf_offset, pipe->buffer_pos, ok_str, ok_str_len)) return;
+        buf_offset += ok_str_len;
+    }
+    // TUNNEL reply
+    if (!verifyReadReply(session, pipe->buffer, buf_offset, pipe->buffer_pos, ok_str, ok_str_len)) return;
+    buf_offset += ok_str_len;
     if (session->multi_cnt) {
-        size_t buf_offset = ok_str_len;
+        // MULTI reply
         if (!verifyReadReply(session, pipe->buffer, buf_offset, pipe->buffer_pos, ok_str, ok_str_len)) return;
         buf_offset += ok_str_len;
         for (int j = 0; j < session->multi_cnt; j++) {
@@ -191,8 +199,10 @@ static sds reconstructCommand(robj **argv, int argc, sds resp) {
     return resp;
 }
 
-static sds reconstructClientCommand(client *c, sds resp) {
+static sds reconstructClientCommand(tunnelSession *session, sds resp) {
+    client *c = session->downstream_client;
     if (c->mstate) {
+        session->multi_cnt = c->mstate->count;
         resp = sdscatlen(resp, "*1\r\n", 4);
         resp = sdscatlen(resp, "$5\r\nMULTI\r\n", 11);
         for (int j = 0; j < c->mstate->count; j++) {
@@ -203,44 +213,44 @@ static sds reconstructClientCommand(client *c, sds resp) {
     return reconstructCommand(c->argv, c->argc, resp);
 }
 
-static sds serializeSds(sds in, sds resp) {
-    size_t len = sdslen(in);
+static sds serializeBuffer(const char *buf, size_t len, sds resp) {
     resp = sdscatfmt(resp, "$%U\r\n", (unsigned long long)len);
-    resp = sdscatlen(resp, in, len);
+    resp = sdscatlen(resp, buf, len);
     resp = sdscatlen(resp, "\r\n", 2);
     return resp;
 }
 
 static sds serializeTunnelCmd(client *c, sds resp) {
-    unsigned long long params = 2;
-    if (server.primary_auth) ++params;
-    if (server.primary_user) ++params;
-
-    resp = sdscatfmt(resp, "*%U\r\n", (params + 1));
+    resp = sdscatlen(resp, "*3\r\n", 4);
     resp = sdscatlen(resp, "$6\r\nTUNNEL\r\n", 12);
 
-    resp = serializeSds(c->user->name, resp);
-
+    resp = serializeBuffer(c->user->name, sdslen(c->user->name), resp);
     char resp_version[16];
     snprintf(resp_version, sizeof(resp_version), "%d", c->resp);
-    size_t len = strlen(resp_version);
-    resp = sdscatfmt(resp, "$%U\r\n", (unsigned long long)len);
-    resp = sdscatlen(resp, resp_version, len);
-    resp = sdscatlen(resp, "\r\n", 2);
-
-    if (server.primary_auth) {
-        if (server.primary_user) {
-            resp = serializeSds(server.primary_user, resp);
-        }
-        resp = serializeSds(server.primary_auth, resp);
-    }
+    resp = serializeBuffer(resp_version, strlen(resp_version), resp);
     return resp;
 }
 
-static sds constructPipelineCommands(client *c) {
+static sds serializeAuthCmd(tunnelSession *session, sds resp) {
+    if (!server.primary_auth) return resp;
+    session->flag.expect_auth_reply = 1;
+    unsigned long long params = 2;
+    if (server.primary_user) ++params;
+
+    resp = sdscatfmt(resp, "*%U\r\n", params);
+    resp = sdscatlen(resp, "$4\r\nAUTH\r\n", 10);
+    if (server.primary_user) {
+        resp = serializeBuffer(server.primary_user, strlen(server.primary_user), resp);
+    }
+    resp = serializeBuffer(server.primary_auth, sdslen(server.primary_auth), resp);
+    return resp;
+}
+
+static sds constructPipelineCommands(tunnelSession *session) {
     sds resp = sdsempty();
-    resp = serializeTunnelCmd(c, resp);
-    resp = reconstructClientCommand(c, resp);
+    resp = serializeAuthCmd(session, resp);
+    resp = serializeTunnelCmd(session->downstream_client, resp);
+    resp = reconstructClientCommand(session, resp);
     return resp;
 }
 
@@ -255,14 +265,15 @@ static tunnelSession *createTunnelSession(client *c, char *host, int port) {
     session->upstream_client->tunnel_session = session;
     session->host = sdsnew(host);
     session->port = port;
+    session->raw_flag = 0;
     session->downstream_client = c;
     sdsfree(c->querybuf);
     c->querybuf = NULL;
     session->downstream_client->tunnel_session = session;
     initTunnelPipe(&session->up_pipe, c->conn, conn);
     initTunnelPipe(&session->down_pipe, conn, c->conn);
-    session->cmd = constructPipelineCommands(c);
-    session->multi_cnt = (!c->mstate) ? 0 : c->mstate->count;
+    session->multi_cnt = 0;
+    session->cmd = constructPipelineCommands(session);
     return session;
 }
 

@@ -81,40 +81,54 @@ start_server {tags {needs:repl external:skip "quit"}} {
         test {The TUNNEL command uses invalid resp version} {
             set primary [valkey_client -1]
             assert_error {*Unsupported resp protocol version} {$primary TUNNEL default 5}
+            $primary close
         }
         test {The TUNNEL command uses invalid resp version 1} {
             set primary [valkey_client -1]
             assert_error {*Protocol version is not an integer or out of range} {$primary TUNNEL default a}
+            $primary close
         }
         test {The TUNNEL command requires authentication params if primaryauth is configured on the primary} {
             set primary [valkey_client -1]
             $primary config set primaryauth "abc"
-            assert_error {*Primary authentication info is missing} {$primary TUNNEL default 2}
-        }
-        test {The TUNNEL command uses the PRIMARY_AUTH param but missing the username/password} {
-            set primary [valkey_client -1]
-            assert_error {*Primary authentication info is missing} {$primary TUNNEL default 2 PRIMARY_AUTH}
-        }
-        test {The TUNNEL command uses unexpected 3rd param} {
-            set primary [valkey_client -1]
-            assert_error {*Unexpected parameter:*} {$primary TUNNEL default 2 PRIMARY abc}
-        }
-        test {The TUNNEL command uses invalid primary password} {
-            set primary [valkey_client -1]
-            assert_error {*Authentication failed} {$primary TUNNEL default 2 PRIMARY_AUTH invalid_password}
-        }
-        test {The TUNNEL command uses valid primary password} {
-            set primary [valkey_client -1]
-            $primary TUNNEL default 2 PRIMARY_AUTH abc
+            $primary ACL SETUSER user_1 on >pwd_1 allcommands allkeys -@admin
+            $primary ACL SETUSER user_2 on >pwd_1 allcommands allkeys +@admin
+            $primary AUTH user_1 pwd_1
+            assert_error {*NOPERM User user_1 has no permissions to run the 'tunnel'*} {$primary TUNNEL default 2}
+            $primary close
         }
         test {The TUNNEL command requires auth user if primaryuser is configured on the primary} {
             set primary [valkey_client -1]
-            $primary config set primaryuser "user-1"
-            assert_error {*Primary authentication info is missing} {$primary TUNNEL default 2 PRIMARY_AUTH abc}
+            $primary AUTH user_2 pwd_1
+            $primary config set primaryuser "user_1"
+            $primary AUTH user_1 pwd_1
+            assert_error {*NOPERM User user_1 has no permissions to run the 'tunnel'*} {$primary TUNNEL default 2}
+            $primary close
         }
         test {The TUNNEL command uses auth user} {
             set primary [valkey_client -1]
-            $primary TUNNEL default 2 PRIMARY_AUTH user-1 abc
+            $primary AUTH user_2 pwd_1
+            $primary TUNNEL default 2
+            $primary close
+        }
+        test {The TUNNEL command uses auth user} {
+            set replica [valkey_client]
+            $replica ACL SETUSER user_1 on >abc allcommands allkeys +@admin
+            set primary [valkey_client -1]
+            $primary AUTH user_2 pwd_1
+            $primary FAILOVER TO $node_1_host $node_1_port TIMEOUT 100 FORCE TUNNEL
+
+            # Wait for failover completion
+            wait_for_condition 50 100 {
+                [s -1 master_failover_state] == "no-failover"
+            } else {
+                fail "Failover timed-out"
+            }
+             # Generate a large string
+            set value_str [string repeat "A" 512000]
+            $primary SET foo $value_str
+            $primary close
+            $replica close
         }
     }
 }

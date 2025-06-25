@@ -33,6 +33,11 @@
 #include <stdint.h>
 #include "sds.h"
 
+/* Anti-warning macro... */
+#ifndef UNUSED
+#define UNUSED(V) ((void)V)
+#endif
+
 /* min/max */
 #undef min
 #undef max

@@ -4,6 +4,9 @@
 #include <time.h>
 #include "monotonic.h"
 
+/* Special Expiry values */
+#define EXPIRY_NONE -1
+
 /* Flags for expireIfNeeded */
 #define EXPIRE_FORCE_DELETE_EXPIRED 1
 #define EXPIRE_AVOID_DELETE_EXPIRED 2

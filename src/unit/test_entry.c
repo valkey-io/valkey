@@ -1,6 +1,8 @@
-#include "../entry.c"
+#include "../entry.h"
 #include "test_help.h"
-
+#include "../expire.h"
+#include "../monotonic.h"
+#include "../server.h"
 #include <stdio.h>
 #include <limits.h>
 #include <string.h>
@@ -183,7 +185,8 @@ int test_entryUpdate(int argc, char **argv, int flags) {
     verify_entry_properties(e11, field, value_copy11, expiry11, true, false);
     TEST_ASSERT(entryMemUsage(e11) >= current_embedded_allocation_size * 3 / 4);
     TEST_ASSERT(entryMemUsage(e11) <= current_embedded_allocation_size);
-    TEST_ASSERT(entryMemUsage(e11) <= EMBED_VALUE_MAX_ALLOC_SIZE);
+    TEST_ASSERT(entryMemUsage(e11) <=
+                EMBED_VALUE_MAX_ALLOC_SIZE);
     TEST_ASSERT(e10 == e11);
 
     // Update the value so that memory usage is exactly equal to the current allocation size

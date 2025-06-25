@@ -599,9 +599,6 @@ typedef enum {
 #define PAUSE_ACTION_EVICT (1 << 3)
 #define PAUSE_ACTION_REPLICA (1 << 4) /* pause replica traffic */
 
-/* Special Expiry values */
-#define EXPIRY_NONE -1
-
 /* Sets log format */
 typedef enum { LOG_FORMAT_LEGACY = 0,
                LOG_FORMAT_LOGFMT } log_format_type;

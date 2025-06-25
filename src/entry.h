@@ -43,6 +43,10 @@
  * - Used for large value sizes. */
 typedef void entry;
 
+/* The maximum allocation size we want to use for entries with embedded
+ * values. */
+#define EMBED_VALUE_MAX_ALLOC_SIZE 128
+
 /* Returns the field string (sds) from the entry. */
 sds entryGetField(const entry *entry);
 

@@ -36,10 +36,6 @@
  *                        entry pointer = value sds
  */
 
-/* The maximum allocation size we want to use for entries with embedded
- * values. */
-#define EMBED_VALUE_MAX_ALLOC_SIZE 128
-
 /* SDS aux flag. If set, it indicates that the entry has TTL metadata set. */
 #define FIELD_SDS_AUX_BIT_ENTRY_HAS_EXPIRY 0
 

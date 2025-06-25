@@ -2211,12 +2211,6 @@ void markNodeAsFailingIfNeeded(clusterNode *node) {
      * so here the replica is only helping propagating this status. */
     clusterSendFail(node->name);
     clusterDoBeforeSleep(CLUSTER_TODO_UPDATE_STATE | CLUSTER_TODO_SAVE_CONFIG);
-
-    if (nodeIsReplica(myself) && myself->replicaof == node) {
-        /* Immediately check if the node is our primary node, if so, we can try
-         * to initiate a failover as soon as possible. */
-        clusterDoBeforeSleep(CLUSTER_TODO_HANDLE_FASTER_FAILOVER);
-    }
 }
 
 /* This function is called only if a node is marked as FAIL, but we are able
@@ -3549,12 +3543,6 @@ int clusterProcessPacket(clusterLink *link) {
                     noaddr_node->flags |= CLUSTER_NODE_FAIL;
                     noaddr_node->fail_time = now;
                     clusterSendFail(noaddr_node->name);
-
-                    if (nodeIsReplica(myself) && myself->replicaof == noaddr_node) {
-                        /* Immediately check if the node is our primary node, if so, we can try
-                         * to initiate a failover as soon as possible. */
-                        clusterDoBeforeSleep(CLUSTER_TODO_HANDLE_FASTER_FAILOVER);
-                    }
                 }
                 clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_UPDATE_STATE);
                 return 0;
@@ -3789,15 +3777,6 @@ int clusterProcessPacket(clusterLink *link) {
                 failing->fail_time = now;
                 failing->flags &= ~CLUSTER_NODE_PFAIL;
                 clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_UPDATE_STATE);
-
-                if (nodeIsReplica(myself) && myself->replicaof == failing) {
-                    /* Immediately check if the node is our primary node, if so, we can try
-                     * to initiate a failover as soon as possible. We will also try to send
-                     * the FAIL packet in case we trigger the failover immediately but unable
-                     * to get the votes. */
-                    clusterSendFail(failing->name);
-                    clusterDoBeforeSleep(CLUSTER_TODO_HANDLE_FASTER_FAILOVER);
-                }
             }
         } else {
             serverLog(LL_NOTICE, "Ignoring FAIL message from unknown node %.40s about %.40s", hdr->sender,
@@ -4984,6 +4963,7 @@ void clusterHandleReplicaFailover(void) {
      * elapsed, we can setup a new one. */
     if (auth_age > auth_retry_time) {
         server.cluster->failover_auth_time = now +
+                                             500 +           /* Fixed delay of 500 milliseconds, let FAIL msg propagate. */
                                              random() % 500; /* Random delay between 0 and 500 milliseconds. */
         server.cluster->failover_auth_count = 0;
         server.cluster->failover_auth_sent = 0;
@@ -5003,11 +4983,6 @@ void clusterHandleReplicaFailover(void) {
             server.cluster->failover_auth_rank = 0;
             /* Reset auth_age since it is outdated now and we can bypass the auth_timeout
              * check in the next state and start the election ASAP. */
-            auth_age = 0;
-        } else if (server.cluster->failover_auth_time == now) {
-            /* If we happen to initiate a failover immediately, reset auth_age since it is
-             * outdated now and we can bypass the auth_timeout check in the next state and
-             * start the election ASAP. */
             auth_age = 0;
         }
         serverLog(LL_NOTICE,
@@ -5598,8 +5573,7 @@ void clusterBeforeSleep(void) {
         }
     } else if (flags & CLUSTER_TODO_HANDLE_FAILOVER) {
         /* Handle failover, this is needed when it is likely that there is already
-         * the quorum from primaries in order to react fast. Or when we determine
-         * that we can proceed with the failover. */
+         * the quorum from primaries in order to react fast. */
         clusterHandleReplicaFailover();
     }
 
@@ -5617,12 +5591,6 @@ void clusterBeforeSleep(void) {
          * in the configuration and we want to make the cluster aware it before the
          * regular ping. */
         clusterBroadcastPong(CLUSTER_BROADCAST_ALL);
-    }
-
-    if (flags & CLUSTER_TODO_HANDLE_FASTER_FAILOVER) {
-        /* Handle faster failover, this goes after all the todos to check if we
-         * can initiate a fast failover. */
-        clusterHandleReplicaFailover();
     }
 }
 

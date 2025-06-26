@@ -338,11 +338,13 @@ proc test_server_cron {} {
         foreach fd $::active_clients {
             if {[info exist ::active_clients_task($fd)]} {
                 set task $::active_clients_task($fd)
-                # Strip leading state description
-                set test_name [string trim [regsub {^\([^)]*\)\s*} $task {}]]
-                if {[regexp {\(([^()]*)\)$} $task -> tn]} {
+                set test_name [regsub {^\([^)]*\)\s*} $task {}]
+                set test_name [regsub {\s*\(pid\s+\d+\)\s*$} $test_name {}]
+                if {![string length [string trim $test_name]] && \
+                    [regexp {\(([^()]*)\)$} $task -> tn]} {
                     set test_name $tn
                 }
+                set test_name [string trim $test_name]
                 if {[string length $test_name]} {
                     lappend ::failed_tests $test_name
                 }

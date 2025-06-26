@@ -5106,16 +5106,14 @@ void tunnelCommand(client *c) {
                 addReplyError(c, err);
                 return;
             }
-        }
-        else if (strcasecmp(c->argv[i]->ptr, "USER") == 0) {
+        } else if (strcasecmp(c->argv[i]->ptr, "USER") == 0) {
             robj *u = c->argv[i + 1];
             client_user = ACLGetUserByName(u->ptr, sdslen(u->ptr));
             if (client_user == NULL || (client_user->flags & USER_FLAG_DISABLED)) {
                 addReplyErrorFormat(c, "AUTH user not found or disabled");
                 return;
             }
-        }
-        else {
+        } else {
             addReplyErrorFormat(c, "Unexpected parameter: %s", (char *)c->argv[i]->ptr);
             return;
         }

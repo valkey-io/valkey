@@ -1686,11 +1686,9 @@ clusterNode *createClusterNode(char *nodename, int flags) {
 }
 
 /* This function is called every time we get a failure report from a node.
- * The side effect is to populate the fail_reports list (or to update
- * the timestamp of an existing report).
  *
- * 'failing' is the node that is in failure state according to the
- * 'sender' node.
+ * If ‘sender’ has already reported this node, its report expiry is refreshed.
+ * Otherwise, a new report entry is created and tracked until it expires.
  *
  * The function returns 0 if it just updates a timestamp of an existing
  * failure report from the same sender. 1 is returned if a new failure
@@ -1705,12 +1703,10 @@ int clusterNodeAddFailureReport(clusterNode *failing, clusterNode *sender) {
     int new_report = 0;
 
     if (e) {
-        /* refresh: remove old node and re-append */
         listDelNode(f->expiry_list, e->ln);
         e->expiry = expiry;
         sdsfree(sender_name);
     } else {
-        /* new entry */
         e = zmalloc(sizeof(*e));
         e->sender = sender;
         e->expiry = expiry;
@@ -1719,7 +1715,6 @@ int clusterNodeAddFailureReport(clusterNode *failing, clusterNode *sender) {
         new_report = 1;
     }
 
-    /* Append at tail and record the new node */
     listAddNodeTail(f->expiry_list, e);
     e->ln = f->expiry_list->tail;
     return new_report;

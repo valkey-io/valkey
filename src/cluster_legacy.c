@@ -1847,13 +1847,25 @@ void freeClusterNode(clusterNode *n) {
     if (n->link) freeClusterLink(n->link);
     if (n->inbound_link) freeClusterLink(n->inbound_link);
 
+    /* Free all entries in the expiry_list */
+    clusterNodeFailReport *f = n->fail_report;
+    listNode *ln;
+    while ((ln = listFirst(f->expiry_list))) {
+        clusterNodefailReportEntry *e = ln->value;
+        listDelNode(f->expiry_list, ln);
+        sds key = sdsnewlen(e->sender->name, CLUSTER_NAMELEN);
+        dictDelete(f->reports, key);
+        sdsfree(key);
+        zfree(e);
+    }
+
     /* Free these members after links are freed, as freeClusterLink may access them. */
     sdsfree(n->hostname);
     sdsfree(n->human_nodename);
     sdsfree(n->announce_client_ipv4);
     sdsfree(n->announce_client_ipv6);
-    dictRelease(n->fail_report->reports);
     listRelease(n->fail_report->expiry_list);
+    dictRelease(n->fail_report->reports);
     zfree(n->fail_report);
     zfree(n->replicas);
     zfree(n);

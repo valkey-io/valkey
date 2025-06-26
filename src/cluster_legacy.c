@@ -3091,6 +3091,20 @@ void clusterProcessPingExtensions(clusterMsg *hdr, clusterLink *link) {
     if (ext_shardid == NULL) ext_shardid = clusterNodeGetPrimary(sender)->shard_id;
 
     updateShardId(sender, ext_shardid);
+
+    /* In some cases, we may first learn about other nodes through gossip (assigning a
+     * random shard_id), and then learn the sender's shard_id through ping extensions.
+     * Since the processing order is random, we may end up with multiple primary nodes
+     * in a shard, in this case, if the sender's config epoch is greater, we configure
+     * myself as its replica. */
+    if (nodeIsPrimary(myself) && nodeIsPrimary(sender) && areInSameShard(myself, sender) &&
+        nodeEpoch(sender) > nodeEpoch(myself)) {
+        serverLog(LL_NOTICE, "Two primaries in same shard, and the sender has a greater config epoch. "
+                             "Reconfiguring myself as a replica of %.40s (%s)",
+                  sender->name, sender->human_nodename);
+         clusterSetPrimary(sender, 1, 0);
+         clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_UPDATE_STATE | CLUSTER_TODO_FSYNC_CONFIG);
+    }
 }
 
 static clusterNode *getNodeFromLinkAndMsg(clusterLink *link, clusterMsg *hdr) {

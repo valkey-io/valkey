@@ -335,7 +335,19 @@ proc test_server_cron {} {
     if {$elapsed > $::timeout} {
         set err "\[[colorstr red TIMEOUT]\]: clients state report follows."
         puts $err
-        lappend ::failed_tests $err
+        foreach fd $::active_clients {
+            if {[info exist ::active_clients_task($fd)]} {
+                set task $::active_clients_task($fd)
+                # Strip leading state description
+                set test_name [string trim [regsub {^\([^)]*\)\s*} $task {}]]
+                if {[regexp {\(([^()]*)\)$} $task -> tn]} {
+                    set test_name $tn
+                }
+                if {[string length $test_name]} {
+                    lappend ::failed_tests $test_name
+                }
+            }
+        }
         show_clients_state
         kill_clients
         force_kill_all_servers
@@ -402,7 +414,8 @@ proc read_from_test_client fd {
     } elseif {$status eq {err}} {
         set err "\[[colorstr red $status]\]: $data"
         puts $err
-        lappend ::failed_tests $err
+        set test_name [lindex [split $data "\n"] 0]
+        lappend ::failed_tests $test_name
         set ::active_clients_task($fd) "(ERR) $data"
         if {$::exit_on_failure} {
             puts "(Fast fail: test will exit now)"

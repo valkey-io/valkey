@@ -30,7 +30,7 @@ start_server {tags {needs:repl external:skip "quit"}} {
 
         test {The TUNNEL command can not be issued against a replica node} {
             set replica [valkey_client -1]
-            assert_error {*TUNNEL cannot be used with replica instances} {$replica TUNNEL default 2}
+            assert_error {*TUNNEL cannot be used with replica instances} {$replica TUNNEL 2 USER default}
         }
         test {REDIRECT takes president over tunnel} {
             $node_1 CLIENT CAPA REDIRECT
@@ -80,12 +80,12 @@ start_server {tags {needs:repl external:skip "quit"}} {
 
         test {The TUNNEL command uses invalid resp version} {
             set primary [valkey_client -1]
-            assert_error {*Unsupported resp protocol version} {$primary TUNNEL default 5}
+            assert_error {ERR Unsupported resp protocol version} {$primary TUNNEL 5}
             $primary close
         }
         test {The TUNNEL command uses invalid resp version 1} {
             set primary [valkey_client -1]
-            assert_error {*Protocol version is not an integer or out of range} {$primary TUNNEL default a}
+            assert_error {ERR Protocol version is not an integer or out of range} {$primary TUNNEL a}
             $primary close
         }
         test {The TUNNEL command requires authentication params if primaryauth is configured on the primary} {
@@ -94,7 +94,7 @@ start_server {tags {needs:repl external:skip "quit"}} {
             $primary ACL SETUSER user_1 on >pwd_1 allcommands allkeys -@admin
             $primary ACL SETUSER user_2 on >pwd_1 allcommands allkeys +@admin
             $primary AUTH user_1 pwd_1
-            assert_error {*NOPERM User user_1 has no permissions to run the 'tunnel'*} {$primary TUNNEL default 2}
+            assert_error {*NOPERM User user_1 has no permissions to run the 'tunnel'*} {$primary TUNNEL 2}
             $primary close
         }
         test {The TUNNEL command requires auth user if primaryuser is configured on the primary} {
@@ -102,20 +102,21 @@ start_server {tags {needs:repl external:skip "quit"}} {
             $primary AUTH user_2 pwd_1
             $primary config set primaryuser "user_1"
             $primary AUTH user_1 pwd_1
-            assert_error {*NOPERM User user_1 has no permissions to run the 'tunnel'*} {$primary TUNNEL default 2}
+            assert_error {*NOPERM User user_1 has no permissions to run the 'tunnel'*} {$primary TUNNEL 2}
             $primary close
         }
-        test {The TUNNEL command uses auth user} {
+        test {Auth the client as admin before issue the TUNNEL command} {
             set primary [valkey_client -1]
             $primary AUTH user_2 pwd_1
-            $primary TUNNEL default 2
+            $primary TUNNEL 2 USER default
             $primary close
         }
-        test {The TUNNEL command uses auth user} {
+        test {Using valid primary auth info for the upstream tunnel connection} {
             set replica [valkey_client]
             $replica ACL SETUSER user_1 on >abc allcommands allkeys +@admin
             set primary [valkey_client -1]
             $primary AUTH user_2 pwd_1
+            $replica ACL SETUSER user_2 on >pwd_1 allcommands allkeys
             $primary FAILOVER TO $node_1_host $node_1_port TIMEOUT 100 FORCE TUNNEL
 
             # Wait for failover completion
@@ -127,6 +128,26 @@ start_server {tags {needs:repl external:skip "quit"}} {
              # Generate a large string
             set value_str [string repeat "A" 512000]
             $primary SET foo $value_str
+            $primary close
+            $replica close
+        }
+        test {Failing the upstream tunnel connection due to client username ACL restriction} {
+            set primary [valkey_client]
+            $primary ACL SETUSER user_3 on >pwd_3 allcommands -SET allkeys
+            set replica [valkey_client -1]
+            $replica ACL SETUSER user_3 on >pwd_3 allcommands
+            $replica AUTH user_3 pwd_3
+            assert_error {NOPERM No permissions to access a key} {$replica SET foo bar}
+            $primary close
+            $replica close
+        }
+        test {succeeding the upstream tunnel connection due to client username ACL restriction} {
+            set primary [valkey_client]
+            set replica [valkey_client -1]
+            $primary ACL SETUSER user_4 on >pwd_4 allcommands allkeys
+            $replica ACL SETUSER user_4 on >pwd_4 allcommands allkeys
+            $replica AUTH user_4 pwd_4
+            $replica SET foo bar
             $primary close
             $replica close
         }

@@ -221,13 +221,23 @@ static sds serializeBuffer(const char *buf, size_t len, sds resp) {
 }
 
 static sds serializeTunnelCmd(client *c, sds resp) {
-    resp = sdscatlen(resp, "*3\r\n", 4);
+    unsigned long long params = 2;
+    if (c->flag.authenticated) params += 2;
+    if (c->name) params += 2;
+    resp = sdscatfmt(resp, "*%U\r\n", params);
     resp = sdscatlen(resp, "$6\r\nTUNNEL\r\n", 12);
 
-    resp = serializeBuffer(c->user->name, sdslen(c->user->name), resp);
     char resp_version[16];
     snprintf(resp_version, sizeof(resp_version), "%d", c->resp);
     resp = serializeBuffer(resp_version, strlen(resp_version), resp);
+    if (c->flag.authenticated) {
+        resp = sdscatlen(resp, "$4\r\nUSER\r\n", 10);
+        resp = serializeBuffer(c->user->name, sdslen(c->user->name), resp);
+    }
+    if (c->name) {
+        resp = sdscatlen(resp, "$10\r\nCLIENTNAME\r\n", 16);
+        resp = serializeBuffer(c->name->ptr, sdslen(c->name->ptr), resp);
+    }
     return resp;
 }
 

@@ -5064,28 +5064,25 @@ void clientCommand(client *c) {
     addReplySubcommandSyntaxError(c);
 }
 
-/* TUNNEL <user> <protocol-version>
- * Internal command which marks the connection as a tunnel, used to proxy client commands
- * on behalf of the specified user and using the given RESP protocol version.
+/* TUNNEL <protocol-version> [CLIENTNAME <name> USER <user>]
+ * Internal command used to propagate downstream client information to the
+ * upstream tunnel client. The first argument specifies the RESP protocol version
+ * used by the downstream client, followed by two optional parameters:
+ * - CLIENTNAME <name>: The name of the downstream client.
+ * - USER <user>: The ACL-authenticated username.
  */
 void tunnelCommand(client *c) {
     if (server.primary_host) {
         addReplyErrorFormat(c, "TUNNEL cannot be used with replica instances");
         return;
     }
-    if (c->argc < 3 || c->argc > 7) {
+    if (c->argc < 2) {
         char *cmd = c->argv[0]->ptr;
         addReplyErrorFormat(c, "Wrong number of arguments for the '%s' subcommand", cmd);
         return;
     }
-    robj *clientname = c->argv[1];
-    const char *err = NULL;
-    if (validateClientName(clientname, &err) == C_ERR) {
-        addReplyError(c, err);
-        return;
-    }
     long long ver = 0;
-    if (getLongLongFromObjectOrReply(c, c->argv[2], &ver,
+    if (getLongLongFromObjectOrReply(c, c->argv[1], &ver,
                                      "Protocol version is not an integer or out of range") != C_OK) {
         return;
     }
@@ -5094,8 +5091,41 @@ void tunnelCommand(client *c) {
         addReplyError(c, "Unsupported resp protocol version");
         return;
     }
-    clientSetName(c, clientname, NULL);
+    robj *client_name = NULL;
+    user *client_user = NULL;
+
+    for (int i = 2; i < c->argc; i += 2) {
+        if (i >= c->argc - 1) {
+            addReplyErrorFormat(c, "Missing parameter after: %s", (char *)c->argv[i]->ptr);
+            return;
+        }
+        if (strcasecmp(c->argv[i]->ptr, "CLIENTNAME") == 0) {
+            const char *err = NULL;
+            client_name = c->argv[i + 1];
+            if (validateClientName(client_name, &err) == C_ERR) {
+                addReplyError(c, err);
+                return;
+            }
+        }
+        else if (strcasecmp(c->argv[i]->ptr, "USER") == 0) {
+            robj *u = c->argv[i + 1];
+            client_user = ACLGetUserByName(u->ptr, sdslen(u->ptr));
+            if (client_user == NULL || (client_user->flags & USER_FLAG_DISABLED)) {
+                addReplyErrorFormat(c, "AUTH user not found or disabled");
+                return;
+            }
+        }
+        else {
+            addReplyErrorFormat(c, "Unexpected parameter: %s", (char *)c->argv[i]->ptr);
+            return;
+        }
+    }
     c->resp = ver;
+    if (client_name) clientSetName(c, client_name, NULL);
+    if (client_user) {
+        clientSetUser(c, client_user, 1);
+        moduleNotifyUserChanged(c);
+    }
     addReply(c, shared.ok);
 }
 /* HELLO [<protocol-version> [AUTH <user> <password>] [SETNAME <name>] ] */

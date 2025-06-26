@@ -1702,6 +1702,8 @@ int clusterNodeAddFailureReport(clusterNode *failing, clusterNode *sender) {
     clusterNodeFailReport *f = failing->fail_report;
     sds sender_name = sdsnewlen(sender->name, CLUSTER_NAMELEN);
     clusterNodefailReportEntry *e = dictFetchValue(f->reports, sender_name);
+    int new_report = 0;
+
     if (e) {
         /* refresh: remove old node and re-append */
         listDelNode(f->expiry_list, e->ln);
@@ -1714,22 +1716,28 @@ int clusterNodeAddFailureReport(clusterNode *failing, clusterNode *sender) {
         e->expiry = expiry;
         dictAdd(f->reports, sender_name, e);
         f->report_count++;
+        new_report = 1;
     }
 
     /* Append at tail and record the new node */
     listAddNodeTail(f->expiry_list, e);
     e->ln = f->expiry_list->tail;
-    return 1;
+    return new_report;
 }
 
-/* Remove failure reports that are too old, where too old means reasonably
- * older than the global node timeout. Note that anyway for a node to be
- * flagged as FAIL we need to have a local PFAIL state that is at least
- * older than the global node timeout, so we don't just trust the number
- * of failure reports from other nodes.
+/* Expire outdated failure reports.
  *
- * If the reporting node loses its voting right during this time, we will
- * also clear its report. */
+ * A report is stale once its expiry timestamp ≤ now (older than
+ * server.cluster_node_timeout * CLUSTER_FAIL_REPORT_VALIDITY_MULT).
+ * This guarantees we only count votes within the valid window, in line
+ * with the requirement that a node’s own PFAIL must age past the timeout
+ * before it can be declared FAIL.
+ *
+ * Iterates from the head of expiry_list (earliest expiry) and removes
+ * any report whose expiry timestamp ≤ now. Each removal is O(1)
+ *
+ * By expiring entries older than the global node timeout window,
+ * we guarantee only fresh votes remain. */
 void clusterNodeCleanupFailureReports(clusterNode *node) {
     mstime_t now = mstime();
     listNode *ln;
@@ -1750,11 +1758,7 @@ void clusterNodeCleanupFailureReports(clusterNode *node) {
 /* Remove the failing report for 'node' if it was previously considered
  * failing by 'sender'. This function is called when a node informs us via
  * gossip that a node is OK from its point of view (no FAIL or PFAIL flags).
- *
- * Note that this function is called relatively often as it gets called even
- * when there are no nodes failing, and is O(N), however when the cluster is
- * fine the failure reports list is empty so the function runs in constant
- * time.
+ * Removal runs in O(1) time
  *
  * The function returns 1 if the failure report was found and removed.
  * Otherwise 0 is returned. */

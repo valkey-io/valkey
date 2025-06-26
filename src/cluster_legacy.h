@@ -71,17 +71,18 @@ typedef struct clusterLink {
 #define nodeSupportsLightMsgHdrForModule(n) ((n)->flags & CLUSTER_NODE_LIGHT_HDR_MODULE_SUPPORTED)
 #define nodeInNormalState(n) (!((n)->flags & (CLUSTER_NODE_HANDSHAKE | CLUSTER_NODE_MEET | CLUSTER_NODE_PFAIL | CLUSTER_NODE_FAIL)))
 
+/* Single failure report structure */
 typedef struct {
-    clusterNode *sender; // which node reported failure
-    mstime_t expiry;     // report expiration time
-    listNode *ln;        // back‐pointer into expiry_list for O(1) deletion
+    clusterNode *sender; /* Reporting node */
+    mstime_t expiry;     /* Report expiration time */
+    listNode *ln;        /* Link for O(1) removal/update */
 } clusterNodefailReportEntry;
 
 /* This structure represent elements of node->fail_reports. */
 typedef struct {
-    dict *reports;     // map<node name → failReportEntry*>
-    list *expiry_list; // head = earliest expiry
-    int report_count;
+    dict *reports;     /* Hash table of node name -> clusterNodefailReportEntry structure */
+    list *expiry_list; /* Entries in ascending expiry order */
+    int report_count;  /* Number of active reports */
 } clusterNodeFailReport;
 
 /* Cluster messages header */

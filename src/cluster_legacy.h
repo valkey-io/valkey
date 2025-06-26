@@ -71,23 +71,18 @@ typedef struct clusterLink {
 #define nodeSupportsLightMsgHdrForModule(n) ((n)->flags & CLUSTER_NODE_LIGHT_HDR_MODULE_SUPPORTED)
 #define nodeInNormalState(n) (!((n)->flags & (CLUSTER_NODE_HANDSHAKE | CLUSTER_NODE_MEET | CLUSTER_NODE_PFAIL | CLUSTER_NODE_FAIL)))
 
-/* This structure represent elements of node->fail_reports. */
-typedef struct clusterNodeFailReport {
-    clusterNode *node; /* Node reporting the failure condition. */
-    mstime_t time;     /* Time of the last report from this node. */
-} clusterNodeFailReport;
-
 typedef struct {
     clusterNode *sender; // which node reported failure
-    mstime_t expiry;     // absolute time when this report expires
+    mstime_t expiry;     // report expiration time
     listNode *ln;        // back‐pointer into expiry_list for O(1) deletion
-} failReportEntry;
+} clusterNodefailReportEntry;
 
+/* This structure represent elements of node->fail_reports. */
 typedef struct {
     dict *reports;     // map<node name → failReportEntry*>
     list *expiry_list; // head = earliest expiry
     int report_count;
-} failReportTracker;
+} clusterNodeFailReport;
 
 /* Cluster messages header */
 
@@ -376,7 +371,7 @@ struct _clusterNode {
     int cport;                              /* Latest known cluster port of this node. */
     clusterLink *link;                      /* TCP/IP link established toward this node */
     clusterLink *inbound_link;              /* TCP/IP link accepted from this node */
-    failReportTracker *fail_tracker;        /* List of nodes signaling this as failing */
+    clusterNodeFailReport *fail_report;     /* List of nodes signaling this as failing */
     int is_node_healthy;                    /* Boolean indicating the cached node health.
                                                Update with updateAndCountChangedNodeHealth(). */
 };

@@ -1626,7 +1626,7 @@ unsigned long getClusterConnectionsCount(void) {
     return server.cluster_enabled ? ((dictSize(server.cluster->nodes) - 1) * 2) : 0;
 }
 
-void failReportTrackerInit(failReportTracker *t) {
+void clusterNodeFailReportInit(clusterNodeFailReport *t) {
     t->reports = dictCreate(&clusterNodesDictType);
     t->expiry_list = listCreate();
     t->report_count = 0;
@@ -1677,39 +1677,12 @@ clusterNode *createClusterNode(char *nodename, int flags) {
     node->tcp_port = 0;
     node->cport = 0;
     node->tls_port = 0;
-    node->fail_tracker = zmalloc(sizeof(*node->fail_tracker));
-    failReportTrackerInit(node->fail_tracker);
+    node->fail_report = zmalloc(sizeof(*node->fail_report));
+    clusterNodeFailReportInit(node->fail_report);
     node->orphaned_time = 0;
     node->repl_offset = 0;
     node->is_node_healthy = 0;
     return node;
-}
-
-void failReportTrackerAdd(failReportTracker *t, clusterNode *sender) {
-    mstime_t now = mstime();
-    mstime_t expiry = now + server.cluster_node_timeout * CLUSTER_FAIL_REPORT_VALIDITY_MULT;
-
-    serverLog(LL_NOTICE, "[failReportTrackerAdd] Trying to add %.40s", sender->name);
-    sds sender_name = sdsnewlen(sender->name, CLUSTER_NAMELEN);
-    failReportEntry *e = dictFetchValue(t->reports, sender_name);
-    if (e) {
-        /* refresh: remove old node and re-append */
-        listDelNode(t->expiry_list, e->ln);
-        e->expiry = expiry;
-        sdsfree(sender_name);
-    } else {
-        /* new entry */
-        e = zmalloc(sizeof(*e));
-        e->sender = sender;
-        e->expiry = expiry;
-        dictAdd(t->reports, sender_name, e);
-        t->report_count++;
-    }
-
-    // 2) Append at tail and record the new node
-    listAddNodeTail(t->expiry_list, e);
-    e->ln = t->expiry_list->tail;
-    serverLog(LL_NOTICE, "[failReportTrackerAdd] Added node %.40s, report count: %llu", sender->name, (unsigned long long)t->report_count);
 }
 
 /* This function is called every time we get a failure report from a node.
@@ -1723,28 +1696,31 @@ void failReportTrackerAdd(failReportTracker *t, clusterNode *sender) {
  * failure report from the same sender. 1 is returned if a new failure
  * report is created. */
 int clusterNodeAddFailureReport(clusterNode *failing, clusterNode *sender) {
-    if (nodeFailed(failing)) return 1;
-    failReportTrackerAdd(failing->fail_tracker, sender);
+    mstime_t now = mstime();
+    mstime_t expiry = now + server.cluster_node_timeout * CLUSTER_FAIL_REPORT_VALIDITY_MULT;
+
+    clusterNodeFailReport *f = failing->fail_report;
+    sds sender_name = sdsnewlen(sender->name, CLUSTER_NAMELEN);
+    clusterNodefailReportEntry *e = dictFetchValue(f->reports, sender_name);
+    if (e) {
+        /* refresh: remove old node and re-append */
+        listDelNode(f->expiry_list, e->ln);
+        e->expiry = expiry;
+        sdsfree(sender_name);
+    } else {
+        /* new entry */
+        e = zmalloc(sizeof(*e));
+        e->sender = sender;
+        e->expiry = expiry;
+        dictAdd(f->reports, sender_name, e);
+        f->report_count++;
+    }
+
+    /* Append at tail and record the new node */
+    listAddNodeTail(f->expiry_list, e);
+    e->ln = f->expiry_list->tail;
     return 1;
 }
-
-void failReportTrackerCleanup(failReportTracker *t) {
-    mstime_t now = mstime();
-    listNode *ln;
-    while ((ln = listFirst(t->expiry_list))) {
-        failReportEntry *e = ln->value;
-        if (e->expiry > now) break;
-        /* expire it */
-        listDelNode(t->expiry_list, ln);
-        sds nodename = sdsnewlen(e->sender->name, CLUSTER_NAMELEN);
-        serverLog(LL_NOTICE, "[failReportTrackerCleanup] clean up report count: %llu, node: %.40s", (unsigned long long)t->report_count, nodename);
-        dictDelete(t->reports, nodename);
-        sdsfree(nodename);
-        zfree(e);
-        t->report_count--;
-    }
-}
-
 
 /* Remove failure reports that are too old, where too old means reasonably
  * older than the global node timeout. Note that anyway for a node to be
@@ -1755,23 +1731,20 @@ void failReportTrackerCleanup(failReportTracker *t) {
  * If the reporting node loses its voting right during this time, we will
  * also clear its report. */
 void clusterNodeCleanupFailureReports(clusterNode *node) {
-    failReportTrackerCleanup(node->fail_tracker);
-}
+    mstime_t now = mstime();
+    listNode *ln;
+    clusterNodeFailReport *f = node->fail_report;
+    while ((ln = listFirst(f->expiry_list))) {
+        clusterNodefailReportEntry *e = ln->value;
+        if (e->expiry > now) break;
 
-int failReportTrackerDel(failReportTracker *t, clusterNode *sender) {
-    sds sender_name = sdsnewlen(sender->name, CLUSTER_NAMELEN);
-    failReportEntry *e = dictFetchValue(t->reports, sender_name);
-    if (!e) {
-        sdsfree(sender_name);
-        return 0;
+        listDelNode(f->expiry_list, ln);
+        sds nodename = sdsnewlen(e->sender->name, CLUSTER_NAMELEN);
+        dictDelete(f->reports, nodename);
+        sdsfree(nodename);
+        zfree(e);
+        f->report_count--;
     }
-    serverLog(LL_NOTICE, "[failReportTrackerDel] Del node: %.40s", sender_name);
-    listDelNode(t->expiry_list, e->ln);
-    dictDelete(t->reports, sender_name);
-    sdsfree(sender_name);
-    zfree(e);
-    t->report_count--;
-    return 1;
 }
 
 /* Remove the failing report for 'node' if it was previously considered
@@ -1786,19 +1759,28 @@ int failReportTrackerDel(failReportTracker *t, clusterNode *sender) {
  * The function returns 1 if the failure report was found and removed.
  * Otherwise 0 is returned. */
 int clusterNodeDelFailureReport(clusterNode *node, clusterNode *sender) {
-    return failReportTrackerDel(node->fail_tracker, sender);
-}
+    sds sender_name = sdsnewlen(sender->name, CLUSTER_NAMELEN);
+    clusterNodeFailReport *f = node->fail_report;
+    clusterNodefailReportEntry *e = dictFetchValue(f->reports, sender_name);
+    if (!e) {
+        sdsfree(sender_name);
+        return 0;
+    }
 
-int failReportTrackerCount(failReportTracker *t) {
-    failReportTrackerCleanup(t);
-    return t->report_count;
+    listDelNode(f->expiry_list, e->ln);
+    dictDelete(f->reports, sender_name);
+    sdsfree(sender_name);
+    zfree(e);
+    f->report_count--;
+    return 1;
 }
 
 /* Return the number of external nodes that believe 'node' is failing,
  * not including this node, that may have a PFAIL or FAIL state for this
  * node as well. */
 int clusterNodeFailureReportsCount(clusterNode *node) {
-    return failReportTrackerCount(node->fail_tracker);
+    clusterNodeCleanupFailureReports(node);
+    return node->fail_report->report_count;
 }
 
 static int clusterNodeNameComparator(const void *node1, const void *node2) {
@@ -1871,9 +1853,9 @@ void freeClusterNode(clusterNode *n) {
     sdsfree(n->human_nodename);
     sdsfree(n->announce_client_ipv4);
     sdsfree(n->announce_client_ipv6);
-    dictRelease(n->fail_tracker->reports);
-    listRelease(n->fail_tracker->expiry_list);
-    zfree(n->fail_tracker);
+    dictRelease(n->fail_report->reports);
+    listRelease(n->fail_report->expiry_list);
+    zfree(n->fail_report);
     zfree(n->replicas);
     zfree(n);
 }
@@ -2297,7 +2279,7 @@ void clearNodeFailureIfNeeded(clusterNode *node) {
         clusterDoBeforeSleep(CLUSTER_TODO_UPDATE_STATE | CLUSTER_TODO_SAVE_CONFIG);
     }
 
-    failReportTrackerCleanup(node->fail_tracker);
+    clusterNodeCleanupFailureReports(node);
 }
 
 /* Return 1 if we already have a node in HANDSHAKE state matching the
@@ -2470,8 +2452,8 @@ void clusterProcessGossipSection(clusterMsg *hdr, clusterLink *link) {
             if (sender) {
                 if (flags & (CLUSTER_NODE_FAIL | CLUSTER_NODE_PFAIL)) {
                     if (clusterNodeIsVotingPrimary(sender) && clusterNodeAddFailureReport(node, sender)) {
-                        // serverLog(LL_NOTICE, "Node %.40s (%s) reported node %.40s (%s) as not reachable.", sender->name,
-                        //           sender->human_nodename, node->name, node->human_nodename);
+                        serverLog(LL_NOTICE, "Node %.40s (%s) reported node %.40s (%s) as not reachable.", sender->name,
+                                  sender->human_nodename, node->name, node->human_nodename);
                     }
                     markNodeAsFailingIfNeeded(node);
                 } else {

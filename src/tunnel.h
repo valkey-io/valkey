@@ -17,7 +17,7 @@ typedef struct tunnelPipe {
 } tunnelPipe;
 
 typedef struct TunnelFlags {
-    uint64_t expect_auth_reply : 1;        /* Upstreamed an AUTH command to authenticate this node */
+    uint64_t expect_auth_reply : 1; /* Upstreamed an AUTH command to authenticate this node */
 } TunnelFlags;
 
 typedef struct tunnelSession {

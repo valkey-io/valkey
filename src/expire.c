@@ -740,7 +740,7 @@ void ttlGenericCommand(client *c, int output_ms, int output_abs) {
 
     /* The key exists. Return -1 if it has no expire, or the actual
      * TTL value otherwise. */
-    expire = objectGetExpire(o);;
+    expire = objectGetExpire(o);
     if (expire != -1) {
         ttl = output_abs ? expire : expire - commandTimeSnapshot();
         if (ttl < 0) ttl = 0;

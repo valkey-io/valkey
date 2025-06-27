@@ -5590,7 +5590,7 @@ void clusterBeforeSleep(void) {
     server.cluster->todo_before_sleep = 0;
 
     /* Update the cluster state. We handle this flag first so that if we happen
-     * to also has have failover flag, we can check the state first (and log the
+     * to also have a failover flag, we can check the state first (and log the
      * state) before attempting the failover. */
     if (flags & CLUSTER_TODO_UPDATE_STATE) clusterUpdateState();
 

@@ -991,7 +991,7 @@ unsigned char *lpDeleteRange(unsigned char *lp, long index, unsigned long num) {
 
 /* Delete the elements 'ps' passed as an array of 'count' element pointers and
  * return the resulting listpack. The elements must be given in the same order
- * as they apper in the listpack. */
+ * as they appear in the listpack. */
 unsigned char *lpBatchDelete(unsigned char *lp, unsigned char **ps, unsigned long count) {
     if (count == 0) return lp;
     unsigned char *dst = ps[0];

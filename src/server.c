@@ -3648,7 +3648,7 @@ void postExecutionUnitOperations(void) {
 
     firePostExecutionUnitJobs();
 
-    /* If we are at the top-most call() and not inside a an active module
+    /* If we are at the top-most call() and not inside an active module
      * context (e.g. within a module timer) we can propagate what we accumulated. */
     propagatePendingCommands();
 
@@ -3786,7 +3786,7 @@ void call(client *c, int flags) {
     else
         duration = ustime() - call_timer;
 
-    valkey_commands_trace(valkey_commands, command_call, connGetTypeId(c->conn), getClientPeerId(c), getClientPeerId(c), real_cmd->declared_name, duration);
+    valkey_commands_trace(valkey_commands, command_call, connGetTypeId(c->conn), getClientPeerId(c), getClientSockname(c), real_cmd->declared_name, duration);
     c->duration += duration;
     dirty = server.dirty - dirty;
     if (dirty < 0) dirty = 0;
@@ -6552,7 +6552,15 @@ static void sigShutdownHandler(int sig) {
      * on disk and without waiting for lagging replicas. */
     if (server.shutdown_asap && sig == SIGINT) {
         serverLogRawFromHandler(LL_WARNING, "You insist... exiting now.");
-        rdbRemoveTempFile(getpid(), 1);
+        /* Make sure the process cleans up the temp files before exiting.
+         * We let the parent process handle this. For RDB, we have foreground save
+         * and background save, so we need to handle both pid and child_pid. For AOF,
+         * we only have background aof rewrite, so we only need to handle child_pid. */
+        if (!server.in_fork_child) {
+            rdbRemoveTempFile(server.pid, 1);
+            rdbRemoveTempFile(server.child_pid, 1);
+            aofRemoveTempFile(server.child_pid, 1);
+        }
         exit(1); /* Exit with an error since this was not a clean shutdown. */
     } else if (server.loading) {
         msg = "Received shutdown signal during loading, scheduling shutdown.";

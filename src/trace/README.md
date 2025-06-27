@@ -59,14 +59,14 @@ Enable lttng trace events dynamically:
 Examples (a client run 'SET', another run 'keys'):
 ```
 ...
-[15:30:19.334467738] (+0.000001222) libai valkey:command_call: { cpu_id = 15 }, { name = "set", duration = 0 }
-[15:30:19.334469105] (+0.000001367) libai valkey:command_call: { cpu_id = 15 }, { name = "set", duration = 1 }
-[15:30:19.334470327] (+0.000001222) libai valkey:command_call: { cpu_id = 15 }, { name = "set", duration = 0 }
-[15:30:19.369348485] (+0.034878158) libai valkey:command_call: { cpu_id = 15 }, { name = "keys", duration = 34874 }
-[15:30:19.369698322] (+0.000349837) libai valkey:command_call: { cpu_id = 15 }, { name = "set", duration = 4 }
-[15:30:19.369702327] (+0.000004005) libai valkey:command_call: { cpu_id = 15 }, { name = "set", duration = 2 }
-[15:30:19.369704098] (+0.000001771) libai valkey:command_call: { cpu_id = 15 }, { name = "set", duration = 1 }
-[15:30:19.369705884] (+0.000001786) libai valkey:command_call: { cpu_id = 15 }, { name = "set", duration = 0 }
+[15:30:19.334467738] (+0.000001222) libai valkey_commands:command_call: { cpu_id = 15 }, { name = "set", duration = 0 }
+[15:30:19.334469105] (+0.000001367) libai valkey_commands:command_call: { cpu_id = 15 }, { name = "set", duration = 1 }
+[15:30:19.334470327] (+0.000001222) libai valkey_commands:command_call: { cpu_id = 15 }, { name = "set", duration = 0 }
+[15:30:19.369348485] (+0.034878158) libai valkey_commands:command_call: { cpu_id = 15 }, { name = "keys", duration = 34874 }
+[15:30:19.369698322] (+0.000349837) libai valkey_commands:command_call: { cpu_id = 15 }, { name = "set", duration = 4 }
+[15:30:19.369702327] (+0.000004005) libai valkey_commands:command_call: { cpu_id = 15 }, { name = "set", duration = 2 }
+[15:30:19.369704098] (+0.000001771) libai valkey_commands:command_call: { cpu_id = 15 }, { name = "set", duration = 1 }
+[15:30:19.369705884] (+0.000001786) libai valkey_commands:command_call: { cpu_id = 15 }, { name = "set", duration = 0 }
 ...
 ```
 

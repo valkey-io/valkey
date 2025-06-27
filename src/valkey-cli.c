@@ -3545,6 +3545,12 @@ static int evalMode(int argc, char **argv) {
         /* Call it */
         int eval_ldb = config.eval_ldb; /* Save it, may be reverted. */
         retval = issueCommand(argc + 3 - got_comma, argv2);
+
+        for (j = 0; j < argc + 3 - got_comma; j++) {
+            sdsfree(argv2[j]);
+        }
+        free(argv2);
+
         if (eval_ldb) {
             if (!config.eval_ldb) {
                 /* If the debugging session ended immediately, there was an
@@ -5901,6 +5907,8 @@ static int clusterManagerFixSlotsCoverage(char *all_slots) {
                 if (!clusterManagerCheckValkeyReply(n, reply, NULL)) {
                     fixed = -1;
                     if (reply) freeReplyObject(reply);
+                    listRelease(slot_nodes);
+                    sdsfree(slot_nodes_str);
                     goto cleanup;
                 }
                 assert(reply->type == VALKEY_REPLY_ARRAY);

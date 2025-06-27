@@ -1668,6 +1668,11 @@ void luaExtractErrorInformation(lua_State *lua, errorInfo *err_info) {
         err_info->ignore_err_stats_update = lua_toboolean(lua, -1);
     }
     lua_pop(lua, 1);
+
+    if (err_info->msg == NULL) {
+        /* Ensure we never return a NULL msg. */
+        err_info->msg = sdsnew("ERR unknown error");
+    }
 }
 
 /* This is the core of our Lua debugger, called each time Lua is about

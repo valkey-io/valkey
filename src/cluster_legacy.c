@@ -2176,6 +2176,25 @@ int clusterBlacklistExists(char *nodeid, size_t len) {
  * CLUSTER messages exchange - PING/PONG and gossip
  * -------------------------------------------------------------------------- */
 
+/* Marks a node as FAIL. Apart from clusterLoadConfig, this is the only way we mark a
+ * node as FAIL during runtime. */
+void markNodeAsFailing(clusterNode *node) {
+    /* Mark the node as FAIL. */
+    node->flags |= CLUSTER_NODE_FAIL;
+    node->fail_time = mstime();
+    /* Remove the PFAIL flag. */
+    node->flags &= ~CLUSTER_NODE_PFAIL;
+
+    /* Immediately check if the failing node is our primary node. */
+    if (nodeIsReplica(myself) && myself->replicaof == node) {
+        /* We can start an automatic failover as soon as possible, setting a flag
+         * here so that we don't need to waiting for the cron to kick in. */
+        clusterDoBeforeSleep(CLUSTER_TODO_HANDLE_FAILOVER);
+    }
+
+    clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_UPDATE_STATE);
+}
+
 /* This function checks if a given node should be marked as FAIL.
  * It happens if the following conditions are met:
  *
@@ -2212,9 +2231,7 @@ void markNodeAsFailingIfNeeded(clusterNode *node) {
     serverLog(LL_NOTICE, "Marking node %.40s (%s) as failing (quorum reached).", node->name, node->human_nodename);
 
     /* Mark the node as failing. */
-    node->flags &= ~CLUSTER_NODE_PFAIL;
-    node->flags |= CLUSTER_NODE_FAIL;
-    node->fail_time = mstime();
+    markNodeAsFailing(node);
 
     /* Broadcast the failing node name to everybody, forcing all the other
      * reachable nodes to flag the node as FAIL.
@@ -2222,7 +2239,6 @@ void markNodeAsFailingIfNeeded(clusterNode *node) {
      * the failing state is triggered collecting failure reports from primaries,
      * so here the replica is only helping propagating this status. */
     clusterSendFail(node->name);
-    clusterDoBeforeSleep(CLUSTER_TODO_UPDATE_STATE | CLUSTER_TODO_SAVE_CONFIG);
 }
 
 /* This function is called only if a node is marked as FAIL, but we are able
@@ -3551,9 +3567,7 @@ int clusterProcessPacket(clusterLink *link) {
                  * the clients, and the replica will never initiate a failover since the
                  * node is not actually in FAIL state. */
                 if (!nodeFailed(noaddr_node)) {
-                    noaddr_node->flags &= ~CLUSTER_NODE_PFAIL;
-                    noaddr_node->flags |= CLUSTER_NODE_FAIL;
-                    noaddr_node->fail_time = now;
+                    markNodeAsFailing(noaddr_node);
                     clusterSendFail(noaddr_node->name);
                 }
                 clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_UPDATE_STATE);
@@ -3785,10 +3799,7 @@ int clusterProcessPacket(clusterLink *link) {
             if (failing && !(failing->flags & (CLUSTER_NODE_FAIL | CLUSTER_NODE_MYSELF))) {
                 serverLog(LL_NOTICE, "FAIL message received from %.40s (%s) about %.40s (%s)", hdr->sender,
                           sender->human_nodename, hdr->data.fail.about.nodename, failing->human_nodename);
-                failing->flags |= CLUSTER_NODE_FAIL;
-                failing->fail_time = now;
-                failing->flags &= ~CLUSTER_NODE_PFAIL;
-                clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_UPDATE_STATE);
+                markNodeAsFailing(failing);
             }
         } else {
             serverLog(LL_NOTICE, "Ignoring FAIL message from unknown node %.40s about %.40s", hdr->sender,
@@ -5578,6 +5589,11 @@ void clusterBeforeSleep(void) {
      * called for flags set should be able to clear its flag). */
     server.cluster->todo_before_sleep = 0;
 
+    /* Update the cluster state. We handle this flag first so that if we happen
+     * to also has have failover flag, we can check the state first (and log the
+     * state) before attempting the failover. */
+    if (flags & CLUSTER_TODO_UPDATE_STATE) clusterUpdateState();
+
     if (flags & CLUSTER_TODO_HANDLE_MANUALFAILOVER) {
         /* Handle manual failover as soon as possible so that won't have a 100ms
          * as it was handled only in clusterCron */
@@ -5595,9 +5611,6 @@ void clusterBeforeSleep(void) {
             clusterHandleReplicaFailover();
         }
     }
-
-    /* Update the cluster state. */
-    if (flags & CLUSTER_TODO_UPDATE_STATE) clusterUpdateState();
 
     /* Save the config, possibly using fsync. */
     if (flags & CLUSTER_TODO_SAVE_CONFIG) {

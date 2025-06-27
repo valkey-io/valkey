@@ -5589,8 +5589,9 @@ void clusterBeforeSleep(void) {
          * as it was handled only in clusterCron. This is needed when it
          * is likely that we can start the election or there is already
          * the quorum from primaries in order to react fast. */
-        if (nodeIsReplica(myself)) {
-            if (!(server.cluster_module_flags & CLUSTER_MODULE_FLAG_NO_FAILOVER)) clusterHandleReplicaFailover();
+        if (nodeIsReplica(myself) &&
+            !(server.cluster_module_flags & CLUSTER_MODULE_FLAG_NO_FAILOVER)) {
+            clusterHandleReplicaFailover();
         }
     }
 

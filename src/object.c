@@ -256,9 +256,11 @@ sds objectGetKey(const robj *val) {
     return NULL;
 }
 
+/* Return the expire time of the specified robj, or -1 if no expire
+ * is associated with this robj (i.e. the robj is non volatile) */
 long long objectGetExpire(const robj *val) {
-    unsigned char *data = (void *)(val + 1);
     if (val->hasexpire) {
+        unsigned char *data = (void *)(val + 1);
         return *(long long *)data;
     } else {
         return -1;

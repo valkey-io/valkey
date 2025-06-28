@@ -4279,8 +4279,8 @@ int VM_UnlinkKey(ValkeyModuleKey *key) {
  * If no TTL is associated with the key or if the key is empty,
  * VALKEYMODULE_NO_EXPIRE is returned. */
 mstime_t VM_GetExpire(ValkeyModuleKey *key) {
-    mstime_t expire = getExpire(key->db, key->key);
-    if (expire == -1 || key->value == NULL) return VALKEYMODULE_NO_EXPIRE;
+    mstime_t expire = key->value ? objectGetExpire(key->value) : -1;
+    if (expire == -1) return VALKEYMODULE_NO_EXPIRE;
     expire -= commandTimeSnapshot();
     return expire >= 0 ? expire : 0;
 }
@@ -4310,8 +4310,8 @@ int VM_SetExpire(ValkeyModuleKey *key, mstime_t expire) {
  * If no TTL is associated with the key or if the key is empty,
  * VALKEYMODULE_NO_EXPIRE is returned. */
 mstime_t VM_GetAbsExpire(ValkeyModuleKey *key) {
-    mstime_t expire = getExpire(key->db, key->key);
-    if (expire == -1 || key->value == NULL) return VALKEYMODULE_NO_EXPIRE;
+    mstime_t expire = key->value ? objectGetExpire(key->value) : -1;
+    if (expire == -1) return VALKEYMODULE_NO_EXPIRE;
     return expire;
 }
 

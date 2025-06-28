@@ -3792,9 +3792,6 @@ int clusterProcessPacket(clusterLink *link) {
             clusterProcessGossipSection(hdr, link);
             clusterProcessPingExtensions(hdr, link);
         }
-
-        /* Make sure we don't have two primaries in the same shard. */
-        debugServerAssert(!(sender && nodeIsPrimary(sender) && nodeIsPrimary(myself) && areInSameShard(sender, myself)));
     } else if (type == CLUSTERMSG_TYPE_FAIL) {
         clusterNode *failing;
 

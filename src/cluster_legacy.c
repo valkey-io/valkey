@@ -2088,9 +2088,6 @@ int clusterBumpConfigEpochWithoutConsensus(void) {
  * end with a different configuration epoch.
  */
 void clusterHandleConfigEpochCollision(clusterNode *sender) {
-    /* Prerequisites: nodes have the same configEpoch and are both primaries. */
-    if (sender->configEpoch != myself->configEpoch || !clusterNodeIsPrimary(sender) || !clusterNodeIsPrimary(myself))
-        return;
     /* Don't act if the colliding node has a smaller Node ID. */
     if (memcmp(sender->name, myself->name, CLUSTER_NAMELEN) <= 0) return;
     /* Get the next ID available at the best of this node knowledge. */
@@ -2099,6 +2096,21 @@ void clusterHandleConfigEpochCollision(clusterNode *sender) {
     clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_FSYNC_CONFIG | CLUSTER_TODO_BROADCAST_ALL);
     serverLog(LL_NOTICE, "configEpoch collision with node %.40s (%s). configEpoch set to %llu", sender->name,
               sender->human_nodename, (unsigned long long)myself->configEpoch);
+}
+
+/* In some cases, we might first learn about other nodes through gossip and assign them
+ * a random shard_id, and then further learn the actual shard_id via a direct ping/pong
+ * message through ping extensions.
+ *
+ * Since the processing order is random, we may end up with multiple primary nodes
+ * in a shard, in this case, if the sender's config epoch is greater, we configure
+ * myself as its replica. */
+void clusterHandlePrimariesSameShardCollision(clusterNode *sender) {
+    serverLog(LL_NOTICE, "Two primaries in same shard, and the sender has a greater config epoch. "
+                         "Reconfiguring myself as a replica of %.40s (%s)",
+              sender->name, sender->human_nodename);
+    clusterSetPrimary(sender, 1, 0);
+    clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_UPDATE_STATE | CLUSTER_TODO_FSYNC_CONFIG);
 }
 
 /* -----------------------------------------------------------------------------
@@ -3091,20 +3103,6 @@ void clusterProcessPingExtensions(clusterMsg *hdr, clusterLink *link) {
     if (ext_shardid == NULL) ext_shardid = clusterNodeGetPrimary(sender)->shard_id;
 
     updateShardId(sender, ext_shardid);
-
-    /* In some cases, we may first learn about other nodes through gossip (assigning a
-     * random shard_id), and then learn the sender's shard_id through ping extensions.
-     * Since the processing order is random, we may end up with multiple primary nodes
-     * in a shard, in this case, if the sender's config epoch is greater, we configure
-     * myself as its replica. */
-    if (nodeIsPrimary(myself) && nodeIsPrimary(sender) && areInSameShard(myself, sender) &&
-        nodeEpoch(sender) > nodeEpoch(myself)) {
-        serverLog(LL_NOTICE, "Two primaries in same shard, and the sender has a greater config epoch. "
-                             "Reconfiguring myself as a replica of %.40s (%s)",
-                  sender->name, sender->human_nodename);
-         clusterSetPrimary(sender, 1, 0);
-         clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_UPDATE_STATE | CLUSTER_TODO_FSYNC_CONFIG);
-    }
 }
 
 static clusterNode *getNodeFromLinkAndMsg(clusterLink *link, clusterMsg *hdr) {
@@ -3791,6 +3789,15 @@ int clusterProcessPacket(clusterLink *link) {
             clusterProcessGossipSection(hdr, link);
             clusterProcessPingExtensions(hdr, link);
         }
+
+        /* If after processing everything, we find that myself and sender are on the
+         * same shard and are both primaries, if myself config epoch is smaller, make
+         * it a replica. */
+        if (sender && nodeIsPrimary(myself) && nodeIsPrimary(sender) && areInSameShard(myself, sender) &&
+            nodeEpoch(sender) > nodeEpoch(myself)) {
+            clusterHandlePrimariesSameShardCollision(sender);
+        }
+
     } else if (type == CLUSTERMSG_TYPE_FAIL) {
         clusterNode *failing;
 

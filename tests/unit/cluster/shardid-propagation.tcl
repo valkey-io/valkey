@@ -89,7 +89,7 @@ start_cluster 3 2 {tags {external:skip cluster}} {
         wait_for_condition 1000 50 {
             [s -$B role] eq {master}
         } else {
-            fail "Failover B does not happened"
+            fail "Failed waiting for B to takeover primaryship"
         }
 
         # Wait for C to become a replica.
@@ -108,7 +108,7 @@ start_cluster 3 2 {tags {external:skip cluster}} {
         wait_for_condition 1000 50 {
             [s -$C role] eq {master}
         } else {
-            fail "Failover C does not happened"
+            fail "Failed waiting for C to become primary"
         }
 
         # Resume A and B and make sure A drop all the links so that it won't get the pending packets.
@@ -117,7 +117,7 @@ start_cluster 3 2 {tags {external:skip cluster}} {
         wait_for_condition 1000 50 {
             [R $A cluster links] eq {}
         } else {
-            fail "Failover does not happened"
+            fail "Failed waiting for A to drop all cluster links"
         }
 
         # Make sure A and B become the replica.
@@ -127,7 +127,7 @@ start_cluster 3 2 {tags {external:skip cluster}} {
             [s -$A role] eq {slave} &&
             [s -$B role] eq {slave}
         } else {
-            fail "Failover does not happened"
+            fail "Failed waiting for A and B to become replicas"
         }
 
         # Make sure A print the log.

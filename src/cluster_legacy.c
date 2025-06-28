@@ -1384,10 +1384,11 @@ void clusterHandleServerShutdown(void) {
 void clusterReset(int hard) {
     dictIterator *di;
     dictEntry *de;
-    int j;
+    int j, was_replica = 0;
 
     /* Turn into primary. */
     if (nodeIsReplica(myself)) {
+        was_replica = 1;
         clusterSetNodeAsPrimary(myself);
         replicationUnsetPrimary();
         flushAllDataAndResetRDB(server.lazyfree_lazy_user_flush ? EMPTYDB_ASYNC : EMPTYDB_NO_FLAGS);
@@ -1434,6 +1435,11 @@ void clusterReset(int hard) {
         getRandomHexChars(myself->shard_id, CLUSTER_NAMELEN);
         clusterAddNode(myself);
         serverLog(LL_NOTICE, "Node hard reset, now I'm %.40s", myself->name);
+    } else {
+        /* If we were a replica, this means our shard_id is the shard_id of
+         * the primary node, and since now we become a new empty primary, we
+         * need to have our own shard_id. */
+        if (was_replica) getRandomHexChars(myself->shard_id, CLUSTER_NAMELEN);
     }
 
     /* Re-populate shards */
@@ -1487,6 +1493,7 @@ clusterLink *createClusterLink(clusterNode *node) {
     if (!link->inbound) {
         node->link = link;
     }
+    link->support_extension = 0;
     return link;
 }
 
@@ -3246,6 +3253,7 @@ int clusterIsValidPacket(clusterLink *link) {
                 explen += extlen;
                 ext = getNextPingExt(ext);
             }
+            link->support_extension = 1;
         }
     } else if (type == CLUSTERMSG_TYPE_FAIL) {
         explen = sizeof(clusterMsg) - sizeof(union clusterMsgData);
@@ -3342,10 +3350,6 @@ int clusterProcessPacket(clusterLink *link) {
     int sender_claims_to_be_primary = !memcmp(hdr->replicaof, CLUSTER_NODE_NULL_NAME, CLUSTER_NAMELEN);
     int sender_last_reported_as_replica = sender && nodeIsReplica(sender);
     int sender_last_reported_as_primary = sender && nodeIsPrimary(sender);
-
-    if (sender && (hdr->mflags[0] & CLUSTERMSG_FLAG0_EXT_DATA)) {
-        sender->flags |= CLUSTER_NODE_EXTENSIONS_SUPPORTED;
-    }
 
     /* Checks if the node supports light message hdr */
     if (sender) {
@@ -3461,9 +3465,6 @@ int clusterProcessPacket(clusterLink *link) {
                     memcpy(node->ip, ip, sizeof(ip));
                     getClientPortFromClusterMsg(hdr, &node->tls_port, &node->tcp_port);
                     node->cport = ntohs(hdr->cport);
-                    if (hdr->mflags[0] & CLUSTERMSG_FLAG0_EXT_DATA) {
-                        node->flags |= CLUSTER_NODE_EXTENSIONS_SUPPORTED;
-                    }
                     setClusterNodeToInboundClusterLink(node, link);
                     clusterAddNode(node);
                     clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG);
@@ -3791,6 +3792,9 @@ int clusterProcessPacket(clusterLink *link) {
             clusterProcessGossipSection(hdr, link);
             clusterProcessPingExtensions(hdr, link);
         }
+
+        /* Make sure we don't have two primaries in the same shard. */
+        debugServerAssert(!(sender && nodeIsPrimary(sender) && nodeIsPrimary(myself) && areInSameShard(sender, myself)));
     } else if (type == CLUSTERMSG_TYPE_FAIL) {
         clusterNode *failing;
 
@@ -4261,7 +4265,7 @@ void clusterSendPing(clusterLink *link, int type) {
      * to put inside the packet. */
     estlen = sizeof(clusterMsg) - sizeof(union clusterMsgData);
     estlen += (sizeof(clusterMsgDataGossip) * (wanted + pfail_wanted));
-    if (link->node && nodeSupportsExtensions(link->node)) {
+    if (link->support_extension) {
         estlen += writePingExtensions(NULL, 0);
     }
     /* Note: clusterBuildMessageHdr() expects the buffer to be always at least
@@ -4337,7 +4341,7 @@ void clusterSendPing(clusterLink *link, int type) {
     /* Compute the actual total length and send! */
     uint32_t totlen = 0;
 
-    if (link->node && nodeSupportsExtensions(link->node)) {
+    if (link->support_extension) {
         totlen += writePingExtensions(hdr, gossipcount);
     } else {
         serverLog(LL_DEBUG, "Unable to send extensions data, however setting ext data flag to true");

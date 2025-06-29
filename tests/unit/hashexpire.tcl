@@ -320,11 +320,14 @@ test {HINCRBY - on expired field} {
         fail "hash value was not expired after timeout"
     }
 
-    # Field should still be present in memory due to lazy expiry
+    # Field should still be present in memory
     assert_equal 1 [r HLEN myhash]
 
     # Overwrite with HINCRBY (no TTL) before accessing
     r HINCRBY myhash field1 1
+
+    # Sanity check: check we only have one field in the hash
+    assert_equal 1 [r HLEN myhash]
 
     # TTL should now be gone; field becomes persistent
     set ttl [r HPTTL myhash FIELDS 1 field1]
@@ -332,6 +335,56 @@ test {HINCRBY - on expired field} {
     assert_equal 1 [r HGET myhash field1]
     assert_equal 1 [r HLEN myhash]
 
+    # set expiration on the field
+    assert_equal 1 [r HEXPIRE myhash 100000000 FIELDS 1 field1]
+    # verify the field has TTL
+    assert_morethan [r HPTTL myhash FIELDS 1 field1] 0
+    # now incr the field again
+    assert_equal 2 [r HINCRBY myhash field1 1]
+    # verify the field has TTL
+    assert_morethan [r HPTTL myhash FIELDS 1 field1] 0
+    r debug SET-ACTIVE-EXPIRE yes
+}
+
+test {HINCRBYFLOAT - on expired field} {
+    r FLUSHALL
+    r debug SET-ACTIVE-EXPIRE no
+
+    # This test verifies that if a field has expired,
+    # and it is overwritten using a plain HINCRBYFLOAT (i.e., no TTL),
+    # Valkey treats the field as still existing and updates it,
+    # effectively clearing the old TTL and starting the value from 0.
+   
+    r HSETEX myhash PX 10 FIELDS 1 field1 1
+    wait_for_condition 100 100 {
+        [r HTTL myhash FIELDS 1 field1] eq "-2"
+    } else {
+        fail "hash value was not expired after timeout"
+    }
+
+    # Field should still be present in memory
+    assert_equal 1 [r HLEN myhash]
+
+    # Overwrite with HINCRBYFLOAT (no TTL) before accessing
+    r HINCRBYFLOAT myhash field1 1
+
+    # Sanity check: check we only have one field in the hash
+    assert_equal 1 [r HLEN myhash]
+
+    # TTL should now be gone; field becomes persistent
+    set ttl [r HPTTL myhash FIELDS 1 field1]
+    assert_equal -1 $ttl
+    assert_equal 1 [r HGET myhash field1]
+    assert_equal 1 [r HLEN myhash]
+
+    # set expiration on the field
+    assert_equal 1 [r HEXPIRE myhash 100000000 FIELDS 1 field1]
+    # verify the field has TTL
+    assert_morethan [r HPTTL myhash FIELDS 1 field1] 0
+    # now incr the field again
+    assert_equal 2 [r HINCRBYFLOAT myhash field1 1]
+    # verify the field has TTL
+    assert_morethan [r HPTTL myhash FIELDS 1 field1] 0
     r debug SET-ACTIVE-EXPIRE yes
 }
 

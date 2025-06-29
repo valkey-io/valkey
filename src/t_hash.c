@@ -208,19 +208,6 @@ int hashTypeGetFromListpack(robj *o, sds field, unsigned char **vstr, unsigned i
     return -1;
 }
 
-/* Get the value from a hash table encoded hash, identified by field.
- * Returns NULL when the field cannot be found, otherwise the SDS value
- * is returned. */
-sds hashTypeGetFromHashTable(robj *o, sds field) {
-    serverAssert(o->encoding == OBJ_ENCODING_HASHTABLE);
-    void *found_element = NULL;
-    hashtableFind(o->ptr, field, &found_element);
-    if (found_element)
-        return entryGetValue(found_element);
-    else
-        return NULL;
-}
-
 /* Higher level function of hashTypeGet*() that returns the hash value
  * associated with the specified field. If the field is found C_OK
  * is returned, otherwise C_ERR. The returned object is returned by
@@ -229,16 +216,26 @@ sds hashTypeGetFromHashTable(robj *o, sds field) {
  *
  * If *vll is populated *vstr is set to NULL, so the caller
  * can always check the function return by checking the return value
- * for C_OK and checking if vll (or vstr) is NULL. */
-int hashTypeGetValue(robj *o, sds field, unsigned char **vstr, unsigned int *vlen, long long *vll) {
+ * for C_OK and checking if vll (or vstr) is NULL.
+ *
+ * If *expiry is populated than the function will also provide the current field expiration time
+ * or EXPIRY_NONE in case the field has no expiration time defined. */
+int hashTypeGetValue(robj *o, sds field, unsigned char **vstr, unsigned int *vlen, long long *vll, long long *expiry) {
     if (o->encoding == OBJ_ENCODING_LISTPACK) {
         *vstr = NULL;
-        if (hashTypeGetFromListpack(o, field, vstr, vlen, vll) == 0) return C_OK;
+        if (hashTypeGetFromListpack(o, field, vstr, vlen, vll) == 0) {
+            if (expiry) *expiry = EXPIRY_NONE;
+            return C_OK;
+        }
     } else if (o->encoding == OBJ_ENCODING_HASHTABLE) {
-        sds value = hashTypeGetFromHashTable(o, field);
-        if (value != NULL) {
+        void *entry = NULL;
+        hashtableFind(o->ptr, field, &entry);
+        if (entry) {
+            sds value = entryGetValue(entry);
+            serverAssert(value != NULL);
             *vstr = (unsigned char *)value;
             *vlen = sdslen(value);
+            if (expiry) *expiry = entryGetExpiry(entry);
             return C_OK;
         }
     } else {
@@ -278,7 +275,7 @@ robj *hashTypeGetValueObject(robj *o, sds field) {
     unsigned int vlen;
     long long vll;
 
-    if (hashTypeGetValue(o, field, &vstr, &vlen, &vll) == C_ERR) return NULL;
+    if (hashTypeGetValue(o, field, &vstr, &vlen, &vll, NULL) == C_ERR) return NULL;
     if (vstr)
         return createStringObject((char *)vstr, vlen);
     else
@@ -294,7 +291,7 @@ size_t hashTypeGetValueLength(robj *o, sds field) {
     unsigned int vlen = UINT_MAX;
     long long vll = LLONG_MAX;
 
-    if (hashTypeGetValue(o, field, &vstr, &vlen, &vll) == C_OK) len = vstr ? vlen : sdigits10(vll);
+    if (hashTypeGetValue(o, field, &vstr, &vlen, &vll, NULL) == C_OK) len = vstr ? vlen : sdigits10(vll);
 
     return len;
 }
@@ -306,7 +303,7 @@ int hashTypeExists(robj *o, sds field) {
     unsigned int vlen = UINT_MAX;
     long long vll = LLONG_MAX;
 
-    return hashTypeGetValue(o, field, &vstr, &vlen, &vll) == C_OK;
+    return hashTypeGetValue(o, field, &vstr, &vlen, &vll, NULL) == C_OK;
 }
 
 /* Add a new field, overwrite the old with the new value if it already exists.
@@ -860,10 +857,10 @@ void hincrbyCommand(client *c) {
     sds new;
     unsigned char *vstr;
     unsigned int vlen;
-
+    long long expiry = EXPIRY_NONE;
     if (getLongLongFromObjectOrReply(c, c->argv[3], &incr, NULL) != C_OK) return;
     if ((o = hashTypeLookupWriteOrCreate(c, c->argv[1])) == NULL) return;
-    if (hashTypeGetValue(o, c->argv[2]->ptr, &vstr, &vlen, &value) == C_OK) {
+    if (hashTypeGetValue(o, c->argv[2]->ptr, &vstr, &vlen, &value, &expiry) == C_OK) {
         if (vstr) {
             if (string2ll((char *)vstr, vlen, &value) == 0) {
                 addReplyError(c, "hash value is not an integer");
@@ -882,7 +879,7 @@ void hincrbyCommand(client *c) {
     }
     value += incr;
     new = sdsfromlonglong(value);
-    hashTypeSet(o, c->argv[2]->ptr, new, EXPIRY_NONE, HASH_SET_TAKE_VALUE);
+    hashTypeSet(o, c->argv[2]->ptr, new, expiry, HASH_SET_TAKE_VALUE);
     signalModifiedKey(c, c->db, c->argv[1]);
     notifyKeyspaceEvent(NOTIFY_HASH, "hincrby", c->argv[1], c->db->id);
     server.dirty++;
@@ -896,6 +893,7 @@ void hincrbyfloatCommand(client *c) {
     sds new;
     unsigned char *vstr;
     unsigned int vlen;
+    long long expiry = EXPIRY_NONE;
 
     if (getLongDoubleFromObjectOrReply(c, c->argv[3], &incr, NULL) != C_OK) return;
     if (isnan(incr) || isinf(incr)) {
@@ -904,7 +902,7 @@ void hincrbyfloatCommand(client *c) {
     }
     if ((o = hashTypeLookupWriteOrCreate(c, c->argv[1])) == NULL) return;
 
-    if (hashTypeGetValue(o, c->argv[2]->ptr, &vstr, &vlen, &ll) == C_OK) {
+    if (hashTypeGetValue(o, c->argv[2]->ptr, &vstr, &vlen, &ll, &expiry) == C_OK) {
         if (vstr) {
             if (string2ld((char *)vstr, vlen, &value) == 0) {
                 addReplyError(c, "hash value is not a float");
@@ -926,7 +924,7 @@ void hincrbyfloatCommand(client *c) {
     char buf[MAX_LONG_DOUBLE_CHARS];
     int len = ld2string(buf, sizeof(buf), value, LD_STR_HUMAN);
     new = sdsnewlen(buf, len);
-    hashTypeSet(o, c->argv[2]->ptr, new, EXPIRY_NONE, HASH_SET_TAKE_VALUE);
+    hashTypeSet(o, c->argv[2]->ptr, new, expiry, HASH_SET_TAKE_VALUE);
     signalModifiedKey(c, c->db, c->argv[1]);
     notifyKeyspaceEvent(NOTIFY_HASH, "hincrbyfloat", c->argv[1], c->db->id);
     server.dirty++;
@@ -952,7 +950,7 @@ static void addHashFieldToReply(client *c, robj *o, sds field) {
     unsigned int vlen = UINT_MAX;
     long long vll = LLONG_MAX;
 
-    if (hashTypeGetValue(o, field, &vstr, &vlen, &vll) == C_OK) {
+    if (hashTypeGetValue(o, field, &vstr, &vlen, &vll, NULL) == C_OK) {
         if (vstr) {
             addReplyBulkCBuffer(c, vstr, vlen);
         } else {

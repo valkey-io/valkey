@@ -972,6 +972,7 @@ int clusterSlotByCommand(struct serverCommand *cmd, robj **argv, int argc, int *
     initGetKeysResult(&result);
     int numkeys = getKeysFromCommand(cmd, argv, argc, &result);
     int slot = -1;
+    valkey_prefetch(crc16_tbl + (sizeof(crc16_tbl) / sizeof(crc16_tbl[0])));
     if (numkeys == 0) *read_flags |= READ_FLAGS_NO_KEYS;
     for (int i = 0; i < numkeys; i++) {
         sds key = argv[result.keys[i].pos]->ptr;

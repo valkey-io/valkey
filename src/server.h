@@ -3656,6 +3656,7 @@ int bzmpopGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysResul
 int setGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysResult *result);
 int bitfieldGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysResult *result);
 
+extern const uint16_t crc16_tbl[16];
 unsigned short crc16(const char *buf, int len);
 
 /* Sentinel */

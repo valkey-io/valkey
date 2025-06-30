@@ -955,6 +955,12 @@ start_server {tags {"multi"}} {
         $rd close
     }
 
+    test "AUTH errored inside MULTI will add the reply" {
+        r config set requirepass ""
+        r multi
+        r auth no-user foobar
+        assert_error {WRONGPASS invalid username-password pair or user is disabled.} {r exec}
+    }
 }
 
 start_server {overrides {appendonly {yes} appendfilename {appendonly.aof} appendfsync always} tags {external:skip}} {

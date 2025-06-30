@@ -4456,6 +4456,12 @@ void closeListeningSockets(int unlink_unix_socket) {
  * - SHUTDOWN_FORCE: Ignore errors writing AOF and RDB files on disk, which
  *   would normally prevent a shutdown.
  *
+ * - SHUTDOWN_SAFE: Shut down only when safe. Note that safe cannot prevent force,
+ *   in the case of force, safe will print the relevant logs. The definition of
+ *   safe may be different in different modes. Here are the definitions:
+ *   * In cluster mode, it is unsafe to shut down a primary with slots, and may
+ *     cause the cluster to go down.
+ *
  * Unless SHUTDOWN_NOW is set and if any replicas are lagging behind, C_ERR is
  * returned and server.shutdown_mstime is set to a timestamp to allow a grace
  * period for the replicas to catch up. This is checked and handled by

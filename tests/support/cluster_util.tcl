@@ -129,6 +129,9 @@ proc wait_for_cluster_propagation {} {
     wait_for_condition 1000 50 {
         [cluster_config_consistent] eq 1
     } else {
+        for {set j 0} {$j < [llength $::servers]} {incr j} {
+            puts "R $j cluster slots output: [R $j cluster slots]"
+        }
         fail "cluster config did not reach a consistent state"
     }
 }
@@ -207,6 +210,12 @@ proc cluster_allocate_replicas {masters replicas} {
 # Setup method to be executed to configure the cluster before the
 # tests run.
 proc cluster_setup {masters replicas node_count slot_allocator replica_allocator code} {
+    set config_epoch 1
+    for {set i 0} {$i < $node_count} {incr i} {
+        R $i CLUSTER SET-CONFIG-EPOCH $config_epoch
+        incr config_epoch
+    }
+
     # Have all nodes meet
     if {$::tls} {
         set tls_cluster [lindex [R 0 CONFIG GET tls-cluster] 1]
@@ -253,7 +262,8 @@ proc start_cluster {masters replicas options code {slot_allocator continuous_slo
 
     # Configure the starting of multiple servers. Set cluster node timeout
     # aggressively since many tests depend on ping/pong messages. 
-    set cluster_options [list overrides [list cluster-enabled yes cluster-ping-interval 100 cluster-node-timeout 3000]]
+
+    set cluster_options [list overrides [list cluster-enabled yes cluster-ping-interval 100 cluster-node-timeout 3000 cluster-databases 16 cluster-slot-stats-enabled yes]]
     set options [concat $cluster_options $options]
 
     # Cluster mode only supports a single database, so before executing the tests

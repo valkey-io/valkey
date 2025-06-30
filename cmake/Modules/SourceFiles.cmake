@@ -6,6 +6,7 @@
 set(VALKEY_SERVER_SRCS
     ${CMAKE_SOURCE_DIR}/src/threads_mngr.c
     ${CMAKE_SOURCE_DIR}/src/adlist.c
+    ${CMAKE_SOURCE_DIR}/src/vector.c
     ${CMAKE_SOURCE_DIR}/src/quicklist.c
     ${CMAKE_SOURCE_DIR}/src/ae.c
     ${CMAKE_SOURCE_DIR}/src/anet.c
@@ -47,7 +48,7 @@ set(VALKEY_SERVER_SRCS
     ${CMAKE_SOURCE_DIR}/src/cluster_slot_stats.c
     ${CMAKE_SOURCE_DIR}/src/crc16.c
     ${CMAKE_SOURCE_DIR}/src/endianconv.c
-    ${CMAKE_SOURCE_DIR}/src/slowlog.c
+    ${CMAKE_SOURCE_DIR}/src/commandlog.c
     ${CMAKE_SOURCE_DIR}/src/eval.c
     ${CMAKE_SOURCE_DIR}/src/bio.c
     ${CMAKE_SOURCE_DIR}/src/rio.c
@@ -97,10 +98,20 @@ set(VALKEY_SERVER_SRCS
     ${CMAKE_SOURCE_DIR}/src/mt19937-64.c
     ${CMAKE_SOURCE_DIR}/src/resp_parser.c
     ${CMAKE_SOURCE_DIR}/src/call_reply.c
-    ${CMAKE_SOURCE_DIR}/src/script_lua.c
+    ${CMAKE_SOURCE_DIR}/src/lua/script_lua.c
     ${CMAKE_SOURCE_DIR}/src/script.c
     ${CMAKE_SOURCE_DIR}/src/functions.c
-    ${CMAKE_SOURCE_DIR}/src/function_lua.c
+    ${CMAKE_SOURCE_DIR}/src/scripting_engine.c
+    ${CMAKE_SOURCE_DIR}/src/lua/function_lua.c
+    ${CMAKE_SOURCE_DIR}/src/lua/engine_lua.c
+    ${CMAKE_SOURCE_DIR}/src/lua/debug_lua.c
+    ${CMAKE_SOURCE_DIR}/src/trace/trace.c
+    ${CMAKE_SOURCE_DIR}/src/trace/trace_aof.c
+    ${CMAKE_SOURCE_DIR}/src/trace/trace_commands.c
+    ${CMAKE_SOURCE_DIR}/src/trace/trace_db.c
+    ${CMAKE_SOURCE_DIR}/src/trace/trace_cluster.c
+    ${CMAKE_SOURCE_DIR}/src/trace/trace_server.c
+    ${CMAKE_SOURCE_DIR}/src/trace/trace_bgsave.c
     ${CMAKE_SOURCE_DIR}/src/commands.c
     ${CMAKE_SOURCE_DIR}/src/strl.c
     ${CMAKE_SOURCE_DIR}/src/connection.c
@@ -113,6 +124,9 @@ set(VALKEY_CLI_SRCS
     ${CMAKE_SOURCE_DIR}/src/anet.c
     ${CMAKE_SOURCE_DIR}/src/adlist.c
     ${CMAKE_SOURCE_DIR}/src/dict.c
+    ${CMAKE_SOURCE_DIR}/src/sds.c
+    ${CMAKE_SOURCE_DIR}/src/sha256.c
+    ${CMAKE_SOURCE_DIR}/src/util.c
     ${CMAKE_SOURCE_DIR}/src/valkey-cli.c
     ${CMAKE_SOURCE_DIR}/src/zmalloc.c
     ${CMAKE_SOURCE_DIR}/src/release.c
@@ -133,6 +147,9 @@ set(VALKEY_CLI_SRCS
 set(VALKEY_BENCHMARK_SRCS
     ${CMAKE_SOURCE_DIR}/src/ae.c
     ${CMAKE_SOURCE_DIR}/src/anet.c
+    ${CMAKE_SOURCE_DIR}/src/sds.c
+    ${CMAKE_SOURCE_DIR}/src/sha256.c
+    ${CMAKE_SOURCE_DIR}/src/util.c
     ${CMAKE_SOURCE_DIR}/src/valkey-benchmark.c
     ${CMAKE_SOURCE_DIR}/src/adlist.c
     ${CMAKE_SOURCE_DIR}/src/dict.c

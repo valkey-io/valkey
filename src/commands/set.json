@@ -111,14 +111,7 @@
                         "type": "string",
                         "token": "IFEQ",
                         "since": "8.1.0",
-                        "summary": "Sets the key's value only if the current value matches the specified comparison value.",
-                        "arguments": [
-                            {
-                                "name": "comparison-value",
-                                "type": "string",
-                                "summary": "The value to compare with the current key's value before setting."
-                            }
-                        ]
+                        "summary": "Sets the key's value only if the current value matches the specified comparison value."
                     }
                 ]
             },

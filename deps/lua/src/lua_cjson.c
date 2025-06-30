@@ -469,13 +469,9 @@ static void json_append_string(lua_State *l, strbuf_t *json, int lindex)
 
     str = lua_tolstring(l, lindex, &len);
 
-    /* Worst case is len * 6 (all unicode escapes).
-     * This buffer is reused constantly for small strings
-     * If there are any excess pages, they won't be hit anyway.
-     * This gains ~5% speedup. */
-    if (len > SIZE_MAX / 6 - 3)
+    if (len > SIZE_MAX - 3)
         abort(); /* Overflow check */
-    strbuf_ensure_empty_length(json, len * 6 + 2);
+    strbuf_ensure_empty_length(json, len + 2);
 
     strbuf_append_char_unsafe(json, '\"');
     for (i = 0; i < len; i++) {
@@ -483,9 +479,9 @@ static void json_append_string(lua_State *l, strbuf_t *json, int lindex)
         if (escstr)
             strbuf_append_string(json, escstr);
         else
-            strbuf_append_char_unsafe(json, str[i]);
+            strbuf_append_char(json, str[i]);
     }
-    strbuf_append_char_unsafe(json, '\"');
+    strbuf_append_char(json, '\"');
 }
 
 /* Find the size of the array on the top of the Lua stack

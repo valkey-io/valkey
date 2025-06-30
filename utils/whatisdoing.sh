@@ -1,15 +1,15 @@
 # This script is from http://poormansprofiler.org/
 #
-# NOTE: Instead of using this script, you should use the Redis
+# NOTE: Instead of using this script, you should use the Valkey
 # Software Watchdog, which provides a similar functionality but in
 # a more reliable / easy to use way.
 #
-# Check https://redis.io/topics/latency for more information.
+# Check https://valkey.io/topics/latency for more information.
 
 #!/bin/bash
 nsamples=1
 sleeptime=0
-pid=$(ps auxww | grep '[r]edis-server' | awk '{print $2}')
+pid=$(ps auxww | grep '[v]alkey-server' | awk '{print $2}')
 
 for x in $(seq 1 $nsamples)
   do

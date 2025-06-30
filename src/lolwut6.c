@@ -180,9 +180,10 @@ void lolwut6Command(client *c) {
     lwCanvas *canvas = lwCreateCanvas(cols, rows, 3);
     generateSkyline(canvas);
     sds rendered = renderCanvas(canvas);
-    rendered = sdscat(rendered, "\nDedicated to the 8 bit game developers of past and present.\n"
-                                "Original 8 bit image from Plaguemon by hikikomori. Redis ver. ");
-    rendered = sdscat(rendered, VALKEY_VERSION);
+    rendered = sdscatprintf(rendered, "\nDedicated to the 8 bit game developers of past and present.\n"
+                                      "Original 8 bit image from Plaguemon by hikikomori. %s ver. ",
+                            server.extended_redis_compat ? "Redis" : "Valkey");
+    rendered = sdscat(rendered, server.extended_redis_compat ? REDIS_VERSION : VALKEY_VERSION);
     rendered = sdscatlen(rendered, "\n", 1);
     addReplyVerbatim(c, rendered, sdslen(rendered), "txt");
     sdsfree(rendered);

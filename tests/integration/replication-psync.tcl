@@ -9,7 +9,7 @@
 # reconnect with the master, otherwise just the initial synchronization is
 # checked for consistency.
 proc test_psync {descr duration backlog_size backlog_ttl delay cond mdl sdl dualchannel reconnect} {
-    start_server {tags {"repl"} overrides {save {}}} {
+    start_server {tags {repl singledb:skip} overrides {save {}}} {
         start_server {overrides {save {}}} {
 
             set master [srv -1 client]
@@ -115,6 +115,10 @@ tags {"external:skip"} {
 foreach mdl {no yes} {
     foreach sdl {disabled swapdb} {
         foreach dualchannel {yes no} {
+            # Skip dual channel test with master diskless disabled
+            if {$dualchannel == "yes" && $mdl == "no"} {
+                continue
+            }
             test_psync {no reconnection, just sync} 6 1000000 3600 0 {
             } $mdl $sdl $dualchannel 0
 

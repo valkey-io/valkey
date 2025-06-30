@@ -755,4 +755,64 @@ if {[string match {*jemalloc*} [s mem_allocator]]} {
         assert_encoding "int" bar
         lappend res [r get bar]
     } {12 12}
+
+    test {DELIFEQ non-existing key} {
+        r del foo
+        assert_equal 0 [r delifeq foo "test"]
+    }
+
+    test {DELIFEQ existing key, matching value} {
+        r set foo "test"
+        assert_equal 1 [r delifeq foo "test"]
+    }
+
+    test {DELIFEQ existing key, non-matching value} {
+        r set foo "nope"
+        assert_equal 0 [r delifeq foo "test"]
+    }
+
+    test {DELIFEQ existing key, non-string value} {
+        r del foo
+        r sadd foo "test"
+        assert_error "WRONGTYPE*" {r delifeq foo "test"}
+    }
+
+    test {DELIFEQ propagate as DEL command to replica} {
+        set repl [attach_to_replication_stream]
+        r set foo bar
+        r delifeq foo bar
+        assert_replication_stream $repl {
+            {select *}
+            {set foo bar}
+            {del foo}
+        }
+        close_replication_stream $repl
+    } {} {needs:repl}
+
+if {[string match {*jemalloc*} [s mem_allocator]]} {
+    test {Memory usage of embedded string value} {
+        # Check that we can fit 9 bytes of key + value into a 32 byte
+        # allocation, including the serverObject itself.
+        r set quux xyzzy
+        assert_lessthan_equal [r memory usage quux] 32
+
+        # Check that the SDS overhead of the embedded key and value is 6 bytes
+        # (sds5 + sds8). This is the memory layout:
+        #
+        # +--------------+--------------+---------------+----------------+
+        # | serverObject |              | sds5 key      | sds8 value     |
+        # | header       | key-hdr-size | hdr "quux" \0 | hdr "xyzzy" \0 |
+        # | 16 bytes     | 1            | 1  + 4    + 1 | 3  + 5     + 1 |
+        # +--------------+--------------+---------------+----------------+
+        #
+        set content_size [expr {[string length quux] + [string length xyzzy]}]
+        regexp {robj:(\d+)} [r debug structsize] _ obj_header_size
+        set debug_sdslen [r debug sdslen quux]
+        regexp {key_sds_len:4 key_sds_avail:0 obj_alloc:(\d+)} $debug_sdslen _ obj_alloc
+        regexp {val_sds_len:5 val_sds_avail:(\d+) val_alloc:(\d+)} $debug_sdslen _ avail val_alloc
+        set sds_overhead [expr {$obj_alloc + $val_alloc - $obj_header_size - 1 - $content_size - $avail}]
+        assert_equal 6 $sds_overhead
+    } {} {needs:debug}
+} ; # if jemalloc
+
 }

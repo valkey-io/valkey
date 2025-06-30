@@ -34,12 +34,17 @@
 #include <errno.h>
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 #include <sys/uio.h>
 
 #include "ae.h"
 
 #define CONN_INFO_LEN 32
-#define CONN_ADDR_STR_LEN 128 /* Similar to INET6_ADDRSTRLEN, hoping to handle other protocols. */
+#define CONN_ADDR_STR_LEN 128
+
+#define NET_HOST_STR_LEN 256                          /* Longest valid hostname */
+#define NET_IP_STR_LEN 46                             /* INET6_ADDRSTRLEN is 46, but we need to be sure */
+#define NET_HOST_PORT_STR_LEN (NET_HOST_STR_LEN + 32) /* Must be enough for hostname:port */
 
 struct aeEventLoop;
 typedef struct connection connection;
@@ -58,6 +63,14 @@ typedef enum {
 #define CONN_FLAG_WRITE_BARRIER (1 << 1)        /* Write barrier requested */
 #define CONN_FLAG_ALLOW_ACCEPT_OFFLOAD (1 << 2) /* Connection accept can be offloaded to IO threads. */
 
+typedef enum {
+    CONN_TYPE_ID_INVALID = 0,
+    CONN_TYPE_ID_SOCKET,
+    CONN_TYPE_ID_UNIX,
+    CONN_TYPE_ID_TLS,
+    CONN_TYPE_ID_RDMA,
+} ConnectionTypeId;
+
 #define CONN_TYPE_SOCKET "tcp"
 #define CONN_TYPE_UNIX "unix"
 #define CONN_TYPE_TLS "tls"
@@ -68,6 +81,7 @@ typedef void (*ConnectionCallbackFunc)(struct connection *conn);
 
 typedef struct ConnectionType {
     /* connection type */
+    int (*get_type_id)(struct connection *conn);
     const char *(*get_type)(struct connection *conn);
 
     /* connection type initialize & finalize & configure */
@@ -94,6 +108,7 @@ typedef struct ConnectionType {
                    const char *addr,
                    int port,
                    const char *source_addr,
+                   int multipath,
                    ConnectionCallbackFunc connect_handler);
     int (*blocking_connect)(struct connection *conn, const char *addr, int port, long long timeout);
     int (*accept)(struct connection *conn, ConnectionCallbackFunc accept_handler);
@@ -121,6 +136,9 @@ typedef struct ConnectionType {
 
     /* TLS specified methods */
     sds (*get_peer_cert)(struct connection *conn);
+
+    /* Miscellaneous */
+    int (*connIntegrityChecked)(void); // return 1 if connection type has built-in integrity checks
 } ConnectionType;
 
 struct connection {
@@ -185,8 +203,9 @@ static inline int connConnect(connection *conn,
                               const char *addr,
                               int port,
                               const char *src_addr,
+                              int multipath,
                               ConnectionCallbackFunc connect_handler) {
-    return conn->type->connect(conn, addr, port, src_addr, connect_handler);
+    return conn->type->connect(conn, addr, port, src_addr, multipath, connect_handler);
 }
 
 /* Blocking connect.
@@ -290,6 +309,13 @@ static inline const char *connGetType(connection *conn) {
     return conn->type->get_type(conn);
 }
 
+static inline int connGetTypeId(connection *conn) {
+    if (!conn || conn->type->get_type_id == NULL) {
+        return CONN_TYPE_ID_INVALID;
+    }
+    return conn->type->get_type_id(conn);
+}
+
 static inline int connLastErrorRetryable(connection *conn) {
     return conn->last_errno == EINTR;
 }
@@ -377,8 +403,6 @@ static inline const char *connGetInfo(connection *conn, char *buf, size_t buf_le
 /* anet-style wrappers to conns */
 int connBlock(connection *conn);
 int connNonBlock(connection *conn);
-int connEnableTcpNoDelay(connection *conn);
-int connDisableTcpNoDelay(connection *conn);
 int connKeepAlive(connection *conn, int interval);
 int connSendTimeout(connection *conn, long long ms);
 int connRecvTimeout(connection *conn, long long ms);
@@ -481,6 +505,10 @@ static inline void connSetPostponeUpdateState(connection *conn, int on) {
     if (conn->type->postpone_update_state) {
         conn->type->postpone_update_state(conn, on);
     }
+}
+
+static inline int connIsIntegrityChecked(connection *conn) {
+    return conn->type->connIntegrityChecked && conn->type->connIntegrityChecked();
 }
 
 #endif /* __REDIS_CONNECTION_H */

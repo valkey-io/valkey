@@ -34,7 +34,13 @@
 #ifndef __LATENCY_H
 #define __LATENCY_H
 
+#include "trace/trace.h"
+
 #define LATENCY_TS_LEN 160 /* History length for every monitored event. */
+
+#ifndef LATENCY_TRACE_SWITCH
+#define LATENCY_TRACE_SWITCH 0
+#endif
 
 /* Representation of a latency sample: the sampling time and the latency
  * observed in milliseconds. */
@@ -47,6 +53,8 @@ struct latencySample {
 struct latencyTimeSeries {
     int idx;                                      /* Index of the next sample to store. */
     uint32_t max;                                 /* Max latency observed for this event. */
+    uint32_t sum;                                 /* Sum latency observed for this event. */
+    uint32_t cnt;                                 /* Count observed for this event. */
     struct latencySample samples[LATENCY_TS_LEN]; /* Latest history. */
 };
 
@@ -62,28 +70,28 @@ struct latencyStats {
 };
 
 void latencyMonitorInit(void);
-void latencyAddSample(const char *event, mstime_t latency);
+void latencyAddSample(const char *event, ustime_t latency);
 
 /* Latency monitoring macros. */
 
 /* Start monitoring an event. We just set the current time. */
-#define latencyStartMonitor(var)            \
-    if (server.latency_monitor_threshold) { \
-        var = mstime();                     \
-    } else {                                \
-        var = 0;                            \
+#define latencyStartMonitor(var)                                    \
+    if (server.latency_monitor_threshold || LATENCY_TRACE_SWITCH) { \
+        var = ustime();                                             \
+    } else {                                                        \
+        var = 0;                                                    \
     }
 
 /* End monitoring an event, compute the difference with the current time
  * to check the amount of time elapsed. */
-#define latencyEndMonitor(var)              \
-    if (server.latency_monitor_threshold) { \
-        var = mstime() - var;               \
+#define latencyEndMonitor(var)                                      \
+    if (server.latency_monitor_threshold || LATENCY_TRACE_SWITCH) { \
+        var = ustime() - var;                                       \
     }
 
 /* Add the sample only if the elapsed time is >= to the configured threshold. */
 #define latencyAddSampleIfNeeded(event, var) \
-    if (server.latency_monitor_threshold && (var) >= server.latency_monitor_threshold) latencyAddSample((event), (var));
+    if (server.latency_monitor_threshold && (var) >= server.latency_monitor_threshold * 1000) latencyAddSample((event), (var));
 
 /* Remove time from a nested event. */
 #define latencyRemoveNestedEvent(event_var, nested_var) event_var += nested_var;

@@ -11,6 +11,7 @@ start_server {tags {"other"}} {
         assert_match "*MEMORY <subcommand> *" [r MEMORY HELP]
         assert_match "*PUBSUB <subcommand> *" [r PUBSUB HELP]
         assert_match "*SLOWLOG <subcommand> *" [r SLOWLOG HELP]
+        assert_match "*COMMANDLOG <subcommand> *" [r COMMANDLOG HELP]
         assert_match "*CLIENT <subcommand> *" [r CLIENT HELP]
         assert_match "*COMMAND <subcommand> *" [r COMMAND HELP]
         assert_match "*CONFIG <subcommand> *" [r CONFIG HELP]
@@ -28,6 +29,10 @@ start_server {tags {"other"}} {
         if {[string match {*jemalloc*} [s mem_allocator]]} {
             assert_equal {OK} [r memory purge]
         }
+    }
+
+    test {Coverage: ECHO} {
+        assert_equal bang [r ECHO bang]
     }
 
     test {SAVE - make sure there are all the types as values} {
@@ -380,6 +385,12 @@ start_server {tags {"other"}} {
             set info [r info server]
             assert_match "*redis_mode:*" $info
             assert_no_match "*server_mode:*" $info
+            set lolwut_output [r lolwut 5]
+            assert_match {*Redis ver.*} $lolwut_output
+            set lolwut_output [r lolwut 6]
+            assert_match {*Redis ver.*} $lolwut_output
+            set lolwut_output [r lolwut]
+            assert_match {*Redis ver.*} $lolwut_output
             r config set extended-redis-compatibility no
             set hello [r hello 3]
             assert_equal "valkey" [dict get $hello server]
@@ -387,6 +398,12 @@ start_server {tags {"other"}} {
             set info [r info server]
             assert_no_match "*redis_mode:*" $info
             assert_match "*server_mode:*" $info
+            set lolwut_output [r lolwut]
+            assert_match {*Valkey ver.*} $lolwut_output
+            set lolwut_output [r lolwut 5]
+            assert_match {*Valkey ver.*} $lolwut_output
+            set lolwut_output [r lolwut 6]
+            assert_match {*Valkey ver.*} $lolwut_output
         }
     }
 }
@@ -475,7 +492,7 @@ start_server {tags {"other external:skip"}} {
 }
 
 start_cluster 1 0 {tags {"other external:skip cluster slow"}} {
-    r config set dynamic-hz no hz 500
+    r config set hz 500
     test "Server can trigger resizing" {
         r flushall
         # hashslot(foo) is 12182
@@ -534,6 +551,11 @@ start_cluster 1 0 {tags {"other external:skip cluster slow"}} {
             fail "hash tables weren't resize."
         }
     } {} {needs:debug}
+
+    test "CLUSTER FORGET with invalid node ID" {
+         catch {r cluster forget 1} err
+         set _ $err
+    } {*ERR Unknown node*} 
 }
 
 start_server {tags {"other external:skip"}} {
@@ -557,6 +579,18 @@ start_server {tags {"other external:skip"}} {
     }
 }
 
+start_server {tags {"other external:skip"}} {
+    test "test io-threads are runtime modifiable" {
+        # Randomly set the number of threads between 1 and 5
+        for {set i 0} {$i < 100} {incr i} {
+            set random_num [expr {int(rand() * 5) + 1}]
+            r config set io-threads $random_num
+            set thread_num [lindex [r config get io-threads] 1]
+            assert_equal $random_num $thread_num
+        }
+    }
+}
+
 set tempFileName [file join [pwd] [pid]]
 if {$::verbose} {
     puts "Creating temp file $tempFileName"
@@ -564,7 +598,8 @@ if {$::verbose} {
 set tempFileId [open $tempFileName w]
 set group [dict get [file attributes $tempFileName] -group]
 if {$group != ""} {
-    start_server [list tags {"repl external:skip"} overrides [list unixsocketgroup $group unixsocketperm 744]] {
+    set escaped_group "\"[string map {"\\" "\\\\"} $group]\""
+    start_server [list tags {"repl external:skip"} overrides [list unixsocketgroup $escaped_group unixsocketperm 744]] {
         test {test unixsocket options are set correctly} {
             set socketpath [lindex [r config get unixsocket] 1]
             set attributes [file attributes $socketpath]

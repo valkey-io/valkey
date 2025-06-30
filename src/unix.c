@@ -35,12 +35,23 @@ static const char *connUnixGetType(connection *conn) {
     return CONN_TYPE_UNIX;
 }
 
+static int connUnixGetTypeId(connection *conn) {
+    UNUSED(conn);
+
+    return CONN_TYPE_ID_UNIX;
+}
+
 static void connUnixEventHandler(struct aeEventLoop *el, int fd, void *clientData, int mask) {
     connectionTypeTcp()->ae_handler(el, fd, clientData, mask);
 }
 
 static int connUnixAddr(connection *conn, char *ip, size_t ip_len, int *port, int remote) {
-    return connectionTypeTcp()->addr(conn, ip, ip_len, port, remote);
+    UNUSED(conn);
+    UNUSED(remote);
+
+    snprintf(ip, ip_len, "%s:0", server.unixsocket);
+    if (port) *port = 0;
+    return 0;
 }
 
 static int connUnixIsLocal(connection *conn) {
@@ -165,6 +176,7 @@ static ssize_t connUnixSyncReadLine(connection *conn, char *ptr, ssize_t size, l
 
 static ConnectionType CT_Unix = {
     /* connection type */
+    .get_type_id = connUnixGetTypeId,
     .get_type = connUnixGetType,
 
     /* connection type initialize & finalize & configure */
@@ -207,6 +219,9 @@ static ConnectionType CT_Unix = {
     .process_pending_data = NULL,
     .postpone_update_state = NULL,
     .update_state = NULL,
+
+    /* Miscellaneous */
+    .connIntegrityChecked = NULL,
 };
 
 int RedisRegisterConnectionTypeUnix(void) {

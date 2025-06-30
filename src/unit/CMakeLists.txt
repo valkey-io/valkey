@@ -7,7 +7,6 @@ get_valkey_server_linker_option(VALKEY_SERVER_LDFLAGS)
 
 # Build unit tests only
 message(STATUS "Building unit tests")
-list(APPEND COMPILE_DEFINITIONS "SERVER_TEST=1")
 if (USE_TLS)
     if (BUILD_TLS_MODULE)
         # TLS as a module
@@ -49,10 +48,10 @@ target_link_libraries(
     fpconv
     lualib
     hdr_histogram
-    hiredis
+    valkey::valkey
     ${VALKEY_SERVER_LDFLAGS})
 
 if (USE_TLS)
     # Add required libraries needed for TLS
-    target_link_libraries(valkey-unit-tests OpenSSL::SSL hiredis_ssl)
+    target_link_libraries(valkey-unit-tests OpenSSL::SSL valkey::valkey_tls)
 endif ()

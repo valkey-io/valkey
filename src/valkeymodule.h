@@ -325,10 +325,15 @@ typedef uint64_t ValkeyModuleTimerID;
  * If enabled, the module is responsible to break endless loop. */
 #define VALKEYMODULE_OPTIONS_ALLOW_NESTED_KEYSPACE_NOTIFICATIONS (1 << 3)
 
+/* Skipping command validation can improve performance by reducing the overhead associated
+ * with command checking, especially in high-throughput scenarios where commands
+ * are already pre-validated or trusted. */
+#define VALKEYMODULE_OPTIONS_SKIP_COMMAND_VALIDATION (1 << 4)
+
 /* Next option flag, must be updated when adding new module flags above!
  * This flag should not be used directly by the module.
  * Use ValkeyModule_GetModuleOptionsAll instead. */
-#define _VALKEYMODULE_OPTIONS_FLAGS_NEXT (1 << 4)
+#define _VALKEYMODULE_OPTIONS_FLAGS_NEXT (1 << 5)
 
 /* Definitions for ValkeyModule_SetCommandInfo. */
 
@@ -795,76 +800,217 @@ typedef void (*ValkeyModuleInfoFunc)(ValkeyModuleInfoCtx *ctx, int for_crash_rep
 typedef void (*ValkeyModuleDefragFunc)(ValkeyModuleDefragCtx *ctx);
 typedef void (*ValkeyModuleUserChangedFunc)(uint64_t client_id, void *privdata);
 
-/* Current ABI version for scripting engine modules. */
-#define VALKEYMODULE_SCRIPTING_ENGINE_ABI_VERSION 1UL
-
 /* Type definitions for implementing scripting engines modules. */
 typedef void ValkeyModuleScriptingEngineCtx;
-typedef void ValkeyModuleScriptingEngineFunctionCtx;
+typedef void ValkeyModuleScriptingEngineServerRuntimeCtx;
+
+/* Current ABI version for scripting engine compiled functions structure. */
+#define VALKEYMODULE_SCRIPTING_ENGINE_ABI_COMPILED_FUNCTION_VERSION 1UL
 
 /* This struct represents a scripting engine function that results from the
  * compilation of a script by the engine implementation.
- *
- * IMPORTANT: If we ever need to add/remove fields from this struct, we need
- * to bump the version number defined in the
- * `VALKEYMODULE_SCRIPTING_ENGINE_ABI_VERSION` constant.
  */
 typedef struct ValkeyModuleScriptingEngineCompiledFunction {
+    uint64_t version;         /* Version of this structure for ABI compat. */
     ValkeyModuleString *name; /* Function name */
-    void *function;           /* Opaque object representing a function, usually it'
+    void *function;           /* Opaque object representing a function, usually it's
                                  the function compiled code. */
     ValkeyModuleString *desc; /* Function description */
     uint64_t f_flags;         /* Function flags */
-} ValkeyModuleScriptingEngineCompiledFunction;
+} ValkeyModuleScriptingEngineCompiledFunctionV1;
+
+#define ValkeyModuleScriptingEngineCompiledFunction ValkeyModuleScriptingEngineCompiledFunctionV1
+
+/* Current ABI version for scripting engine memory info structure. */
+#define VALKEYMODULE_SCRIPTING_ENGINE_ABI_MEMORY_INFO_VERSION 1UL
 
 /* This struct is used to return the memory information of the scripting
- * engine. */
+ * engine.
+ */
 typedef struct ValkeyModuleScriptingEngineMemoryInfo {
-    /* The memory used by the scripting engine runtime. */
-    size_t used_memory;
-    /* The memory used by the scripting engine data structures. */
-    size_t engine_memory_overhead;
-} ValkeyModuleScriptingEngineMemoryInfo;
+    uint64_t version;              /* Version of this structure for ABI compat. */
+    size_t used_memory;            /* The memory used by the scripting engine runtime. */
+    size_t engine_memory_overhead; /* The memory used by the scripting engine data structures. */
+} ValkeyModuleScriptingEngineMemoryInfoV1;
 
-typedef ValkeyModuleScriptingEngineCompiledFunction **(*ValkeyModuleScriptingEngineCreateFunctionsLibraryFunc)(
+#define ValkeyModuleScriptingEngineMemoryInfo ValkeyModuleScriptingEngineMemoryInfoV1
+
+typedef enum ValkeyModuleScriptingEngineSubsystemType {
+    VMSE_EVAL,
+    VMSE_FUNCTION,
+    VMSE_ALL
+} ValkeyModuleScriptingEngineSubsystemType;
+
+typedef enum ValkeyModuleScriptingEngineExecutionState {
+    VMSE_STATE_EXECUTING,
+    VMSE_STATE_KILLED,
+} ValkeyModuleScriptingEngineExecutionState;
+
+typedef struct ValkeyModuleScriptingEngineCallableLazyEvalReset {
+    void *context;
+
+    /*
+     * Callback function used for resetting the EVAL context implemented by an
+     * engine. This callback will be called by a background thread when it's
+     * ready for resetting the context.
+     *
+     * - `context`: a generic pointer to a context object, stored in the
+     * callableLazyEvalReset struct.
+     *
+     */
+    void (*engineLazyEvalResetCallback)(void *context);
+} ValkeyModuleScriptingEngineCallableLazyEvalReset;
+
+/* The callback function called when either `EVAL`, `SCRIPT LOAD`, or
+ * `FUNCTION LOAD` command is called to compile the code.
+ * This callback function evaluates the source code passed and produces a list
+ * of pointers to the compiled functions structure.
+ * In the `EVAL` and `SCRIPT LOAD` case, the list only contains a single
+ * function.
+ * In the `FUNCTION LOAD` case, there are as many functions as there are calls
+ * to the `server.register_function` function in the source code.
+ *
+ * - `module_ctx`: the module runtime context.
+ *
+ * - `engine_ctx`: the scripting engine runtime context.
+ *
+ * - `type`: the subsystem type. Either EVAL or FUNCTION.
+ *
+ * - `code`: string pointer to the source code.
+ *
+ * - `code_len`: The length of the code string.
+ *
+ * - `timeout`: timeout for the library creation (0 for no timeout).
+ *
+ * - `out_num_compiled_functions`: out param with the number of objects
+ *   returned by this function.
+ *
+ * - `err` - out param with the description of error (if occurred).
+ *
+ * Returns an array of compiled function objects, or `NULL` if some error
+ * occurred.
+ */
+typedef ValkeyModuleScriptingEngineCompiledFunction **(*ValkeyModuleScriptingEngineCompileCodeFunc)(
     ValkeyModuleCtx *module_ctx,
     ValkeyModuleScriptingEngineCtx *engine_ctx,
+    ValkeyModuleScriptingEngineSubsystemType type,
+    const char *code,
+    size_t code_len,
+    size_t timeout,
+    size_t *out_num_compiled_functions,
+    ValkeyModuleString **err);
+
+/* Version one of source code compilation interface. This API does not allow the compiler to
+ * safely handle binary data. You should use a newer version of the API if possible. */
+typedef ValkeyModuleScriptingEngineCompiledFunctionV1 **(*ValkeyModuleScriptingEngineCompileCodeFuncV1)(
+    ValkeyModuleCtx *module_ctx,
+    ValkeyModuleScriptingEngineCtx *engine_ctx,
+    ValkeyModuleScriptingEngineSubsystemType type,
     const char *code,
     size_t timeout,
     size_t *out_num_compiled_functions,
-    char **err);
+    ValkeyModuleString **err);
 
+/* Free the given function.
+ *
+ * - `module_ctx`: the module runtime context.
+ *
+ * - `engine_ctx`: the scripting engine runtime context.
+ *
+ * - `type`: the subsystem where the function is associated with, either `EVAL`
+ *   or `FUNCTION`.
+ *
+ * - `compiled_function`: the compiled function to be freed.
+ */
+typedef void (*ValkeyModuleScriptingEngineFreeFunctionFunc)(
+    ValkeyModuleCtx *module_ctx,
+    ValkeyModuleScriptingEngineCtx *engine_ctx,
+    ValkeyModuleScriptingEngineSubsystemType type,
+    ValkeyModuleScriptingEngineCompiledFunction *compiled_function);
+
+/* The callback function called when either `EVAL`, or`FCALL`, command is
+ * called.
+ * This callback function executes the `compiled_function` code.
+ *
+ * - `module_ctx`: the module runtime context.
+ *
+ * - `engine_ctx`: the scripting engine runtime context.
+ *
+ * - `server_ctx`: the context opaque structure that represents the server-side
+ *   runtime context for the function.
+ *
+ * - `compiled_function`: pointer to the compiled function registered by the
+ *   engine.
+ *
+ * - `type`: the subsystem type. Either EVAL or FUNCTION.
+ *
+ * - `keys`: the array of key strings passed in the `FCALL` command.
+ *
+ * - `nkeys`: the number of elements present in the `keys` array.
+ *
+ * - `args`: the array of string arguments passed in the `FCALL` command.
+ *
+ * - `nargs`: the number of elements present in the `args` array.
+ */
 typedef void (*ValkeyModuleScriptingEngineCallFunctionFunc)(
     ValkeyModuleCtx *module_ctx,
     ValkeyModuleScriptingEngineCtx *engine_ctx,
-    ValkeyModuleScriptingEngineFunctionCtx *func_ctx,
-    void *compiled_function,
+    ValkeyModuleScriptingEngineServerRuntimeCtx *server_ctx,
+    ValkeyModuleScriptingEngineCompiledFunction *compiled_function,
+    ValkeyModuleScriptingEngineSubsystemType type,
     ValkeyModuleString **keys,
     size_t nkeys,
     ValkeyModuleString **args,
     size_t nargs);
 
+/* Return memory overhead for a given function, such memory is not counted as
+ * engine memory but as general structs memory that hold different information
+ */
 typedef size_t (*ValkeyModuleScriptingEngineGetFunctionMemoryOverheadFunc)(
     ValkeyModuleCtx *module_ctx,
-    void *compiled_function);
+    ValkeyModuleScriptingEngineCompiledFunction *compiled_function);
 
-typedef void (*ValkeyModuleScriptingEngineFreeFunctionFunc)(
+/* The callback function called when `SCRIPT FLUSH` command is called. The
+ * engine should reset the runtime environment used for EVAL scripts.
+ *
+ * - `module_ctx`: the module runtime context.
+ *
+ * - `engine_ctx`: the scripting engine runtime context.
+ *
+ * - `async`: if has value 1 then the reset is done asynchronously through
+ * the callback structure returned by this function.
+ */
+typedef ValkeyModuleScriptingEngineCallableLazyEvalReset *(*ValkeyModuleScriptingEngineResetEvalEnvFunc)(
     ValkeyModuleCtx *module_ctx,
     ValkeyModuleScriptingEngineCtx *engine_ctx,
-    void *compiled_function);
+    int async);
 
+/* Return the current used memory by the engine.
+ *
+ * - `module_ctx`: the module runtime context.
+ *
+ * - `engine_ctx`: the scripting engine runtime context.
+ *
+ * - `type`: the subsystem type.
+ */
 typedef ValkeyModuleScriptingEngineMemoryInfo (*ValkeyModuleScriptingEngineGetMemoryInfoFunc)(
     ValkeyModuleCtx *module_ctx,
-    ValkeyModuleScriptingEngineCtx *engine_ctx);
+    ValkeyModuleScriptingEngineCtx *engine_ctx,
+    ValkeyModuleScriptingEngineSubsystemType type);
 
-typedef struct ValkeyModuleScriptingEngineMethodsV1 {
+/* Current ABI version for scripting engine modules. */
+#define VALKEYMODULE_SCRIPTING_ENGINE_ABI_VERSION 2UL
+
+typedef struct ValkeyModuleScriptingEngineMethods {
     uint64_t version; /* Version of this structure for ABI compat. */
 
-    /* Library create function callback. When a new script is loaded, this
-     * callback will be called with the script code, and returns a list of
-     * ValkeyModuleScriptingEngineCompiledFunc objects. */
-    ValkeyModuleScriptingEngineCreateFunctionsLibraryFunc create_functions_library;
-
+    /* Compile code function callback. When a new script is loaded, this
+     * callback will be called with the script code, compiles it, and returns a
+     * list of `ValkeyModuleScriptingEngineCompiledFunc` objects. */
+    union {
+        ValkeyModuleScriptingEngineCompileCodeFuncV1 compile_code_v1;
+        ValkeyModuleScriptingEngineCompileCodeFunc compile_code;
+    };
     /* Function callback to free the memory of a registered engine function. */
     ValkeyModuleScriptingEngineFreeFunctionFunc free_function;
 
@@ -874,6 +1020,10 @@ typedef struct ValkeyModuleScriptingEngineMethodsV1 {
 
     /* Function callback to return memory overhead for a given function. */
     ValkeyModuleScriptingEngineGetFunctionMemoryOverheadFunc get_function_memory_overhead;
+
+    /* The callback function used to reset the runtime environment used
+     * by the scripting engine for EVAL scripts. */
+    ValkeyModuleScriptingEngineResetEvalEnvFunc reset_eval_env;
 
     /* Function callback to get the used memory by the engine. */
     ValkeyModuleScriptingEngineGetMemoryInfoFunc get_memory_info;
@@ -1266,6 +1416,7 @@ VALKEYMODULE_API void (*ValkeyModule_ChannelAtPosWithFlags)(ValkeyModuleCtx *ctx
 VALKEYMODULE_API unsigned long long (*ValkeyModule_GetClientId)(ValkeyModuleCtx *ctx) VALKEYMODULE_ATTR;
 VALKEYMODULE_API ValkeyModuleString *(*ValkeyModule_GetClientUserNameById)(ValkeyModuleCtx *ctx,
                                                                            uint64_t id)VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_MustObeyClient)(ValkeyModuleCtx *ctx) VALKEYMODULE_ATTR;
 VALKEYMODULE_API int (*ValkeyModule_GetClientInfoById)(void *ci, uint64_t id) VALKEYMODULE_ATTR;
 VALKEYMODULE_API ValkeyModuleString *(*ValkeyModule_GetClientNameById)(ValkeyModuleCtx *ctx,
                                                                        uint64_t id)VALKEYMODULE_ATTR;
@@ -1745,6 +1896,8 @@ VALKEYMODULE_API int (*ValkeyModule_RegisterScriptingEngine)(ValkeyModuleCtx *mo
 VALKEYMODULE_API int (*ValkeyModule_UnregisterScriptingEngine)(ValkeyModuleCtx *module_ctx,
                                                                const char *engine_name) VALKEYMODULE_ATTR;
 
+VALKEYMODULE_API ValkeyModuleScriptingEngineExecutionState (*ValkeyModule_GetFunctionExecutionState)(ValkeyModuleScriptingEngineServerRuntimeCtx *server_ctx) VALKEYMODULE_ATTR;
+
 #define ValkeyModule_IsAOFClient(id) ((id) == UINT64_MAX)
 
 /* This is included inline inside each Valkey module. */
@@ -1891,6 +2044,7 @@ static int ValkeyModule_Init(ValkeyModuleCtx *ctx, const char *name, int ver, in
     VALKEYMODULE_GET_API(ChannelAtPosWithFlags);
     VALKEYMODULE_GET_API(GetClientId);
     VALKEYMODULE_GET_API(GetClientUserNameById);
+    VALKEYMODULE_GET_API(MustObeyClient);
     VALKEYMODULE_GET_API(GetContextFlags);
     VALKEYMODULE_GET_API(AvoidReplicaTraffic);
     VALKEYMODULE_GET_API(PoolAlloc);
@@ -2114,6 +2268,7 @@ static int ValkeyModule_Init(ValkeyModuleCtx *ctx, const char *name, int ver, in
     VALKEYMODULE_GET_API(RdbSave);
     VALKEYMODULE_GET_API(RegisterScriptingEngine);
     VALKEYMODULE_GET_API(UnregisterScriptingEngine);
+    VALKEYMODULE_GET_API(GetFunctionExecutionState);
 
     if (ValkeyModule_IsModuleNameBusy && ValkeyModule_IsModuleNameBusy(name)) return VALKEYMODULE_ERR;
     ValkeyModule_SetModuleAttribs(ctx, name, ver, apiver);

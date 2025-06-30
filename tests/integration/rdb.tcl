@@ -1,9 +1,21 @@
 tags {"rdb external:skip"} {
 
+# Helper function to start a server and kill it, just to check the error
+# logged.
+set defaults {}
+proc start_server_and_kill_it {overrides code} {
+    upvar defaults defaults srv srv server_path server_path
+    set config [concat $defaults $overrides]
+    set srv [start_server [list overrides $config keep_persistence true]]
+    uplevel 1 $code
+    kill_server $srv
+}
+
 set server_path [tmpdir "server.rdb-encoding-test"]
 
 # Copy RDB with different encodings in server path
 exec cp tests/assets/encodings.rdb $server_path
+exec cp tests/assets/encodings-rdb987.rdb $server_path
 exec cp tests/assets/list-quicklist.rdb $server_path
 
 start_server [list overrides [list "dir" $server_path "dbfilename" "list-quicklist.rdb" save ""]] {
@@ -15,11 +27,7 @@ start_server [list overrides [list "dir" $server_path "dbfilename" "list-quickli
     } {7}
 }
 
-start_server [list overrides [list "dir" $server_path "dbfilename" "encodings.rdb"]] {
-  test "RDB encoding loading test" {
-    r select 0
-    csvdump r
-  } {"0","compressible","string","aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+set csv_dump {"0","compressible","string","aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 "0","hash","hash","a","1","aa","10","aaa","100","b","2","bb","20","bbb","200","c","3","cc","30","ccc","300","ddd","400","eee","5000000000",
 "0","hash_zipped","hash","a","1","b","2","c","3",
 "0","list","list","1","2","3","a","b","c","100000","6000000000","1","2","3","a","b","c","100000","6000000000","1","2","3","a","b","c","100000","6000000000",
@@ -33,6 +41,32 @@ start_server [list overrides [list "dir" $server_path "dbfilename" "encodings.rd
 "0","zset","zset","a","1","b","2","c","3","aa","10","bb","20","cc","30","aaa","100","bbb","200","ccc","300","aaaa","1000","cccc","123456789","bbbb","5000000000",
 "0","zset_zipped","zset","a","1","b","2","c","3",
 }
+
+start_server [list overrides [list "dir" $server_path "dbfilename" "encodings.rdb"]] {
+  test "RDB encoding loading test" {
+    r select 0
+    csvdump r
+  } $csv_dump
+}
+
+start_server_and_kill_it [list "dir" $server_path "dbfilename" "encodings-rdb987.rdb"] {
+    test "RDB future version loading, strict version check" {
+        wait_for_condition 50 100 {
+            [string match {*Fatal error loading*} \
+                 [exec tail -1 < [dict get $srv stdout]]]
+        } else {
+            fail "Server started even if RDB version check failed"
+        }
+    }
+}
+
+start_server [list overrides [list "dir" $server_path \
+                                  "dbfilename" "encodings-rdb987.rdb" \
+                                  "rdb-version-check" "relaxed"]] {
+    test "RDB future version loading, relaxed version check" {
+        r select 0
+        csvdump r
+    } $csv_dump
 }
 
 set server_path [tmpdir "server.rdb-startup-test"]
@@ -80,24 +114,44 @@ start_server [list overrides [list "dir" $server_path] keep_persistence true] {
     r del stream
 }
 
-# Helper function to start a server and kill it, just to check the error
-# logged.
-set defaults {}
-proc start_server_and_kill_it {overrides code} {
-    upvar defaults defaults srv srv server_path server_path
-    set config [concat $defaults $overrides]
-    set srv [start_server [list overrides $config keep_persistence true]]
-    uplevel 1 $code
-    kill_server $srv
+set dump_path [file join $server_path dump.rdb]
+
+# Prepare custom umask test scenario
+if {[catch {package require Tclx}]} {
+    if {$::verbose} {
+        puts "Skipping umask test. Package Tclx not installed."
+    }
+} else {
+    # We have umask from the Tclx package.
+    set old_umask [umask]
+    set old_perm [expr {666 - $old_umask}]
+    assert_equal [file attributes $dump_path -permissions] 00$old_perm
+
+    if {$old_umask == 22} {
+        set new_umask 2
+    } else {
+        set new_umask 22
+    }
+    set new_perm [expr {666 - $new_umask}]
+
+    umask $new_umask
+    start_server [list overrides [list "dir" $server_path] keep_persistence true] {
+        test {Test nondefault umask applied} {
+            r save
+            # Use numeric comparison for compatibility with Tcl 8 and 9.
+            assert_range [file attributes $dump_path -permissions] 00$new_perm 00$new_perm
+        }
+    }
+    umask $old_umask
 }
 
 # Make the RDB file unreadable
-file attributes [file join $server_path dump.rdb] -permissions 0222
+file attributes $dump_path -permissions 0222
 
 # Detect root account (it is able to read the file even with 002 perm)
 set isroot 0
 catch {
-    open [file join $server_path dump.rdb]
+    open $dump_path
     set isroot 1
 }
 
@@ -116,11 +170,11 @@ if {!$isroot} {
 }
 
 # Fix permissions of the RDB file.
-file attributes [file join $server_path dump.rdb] -permissions 0666
+file attributes $dump_path -permissions 0666
 
 # Corrupt its CRC64 checksum.
-set filesize [file size [file join $server_path dump.rdb]]
-set fd [open [file join $server_path dump.rdb] r+]
+set filesize [file size $dump_path]
+set fd [open $dump_path r+]
 fconfigure $fd -translation binary
 seek $fd -8 end
 puts -nonewline $fd "foobar00"; # Corrupt the checksum

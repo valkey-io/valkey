@@ -117,9 +117,25 @@ start_server {tags {"acl external:skip"}} {
     }
 
     test {Validate read and write permissions format} {
-        catch {r ACL SETUSER key-permission-RW %~} err
-        set err
-    } {ERR Error in ACL SETUSER modifier '%~': Syntax error}
+        # Regression tests for CVE-2024-51741
+        assert_error "ERR Error in ACL SETUSER modifier '%~': Syntax error" {r ACL SETUSER invalid %~}
+        assert_error "ERR Error in ACL SETUSER modifier '%': Syntax error" {r ACL SETUSER invalid %}
+    }
+
+    test {Validate key permissions format - empty and omitted pattern} {
+        # Empty pattern results with access to only the empty key
+        r ACL SETUSER key-permission-no-key on nopass %RW~ +@all
+        assert_equal "User key-permission-no-key has no permissions to access the 'x' key" [r ACL DRYRUN key-permission-no-key GET x]
+        assert_equal "OK" [r ACL DRYRUN key-permission-no-key GET ""]
+
+        # This is incorrect syntax, it should have `~`, but we'll allow it for compatibility since it does something
+        r ACL SETUSER key-permission-omit on nopass %RW +@all
+        assert_equal "User key-permission-omit has no permissions to access the 'x' key" [r ACL DRYRUN key-permission-omit GET x]
+        assert_equal "OK" [r ACL DRYRUN key-permission-omit GET ""]
+
+        # Assert these two are equivalent 
+        assert_equal [r ACL GETUSER key-permission-omit] [r ACL GETUSER key-permission-no-key]
+    }
 
     test {Test separate read and write permissions on different selectors are not additive} {
         r ACL SETUSER key-permission-RW-selector on nopass "(%R~read* +@all)" "(%W~write* +@all)"

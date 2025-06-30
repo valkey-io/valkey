@@ -33,6 +33,8 @@
 #include "script.h"
 #include "functions.h"
 #include "io_threads.h"
+#include "module.h"
+#include "vector.h"
 
 #include <signal.h>
 #include <ctype.h>
@@ -124,7 +126,7 @@ robj *lookupKey(serverDb *db, robj *key, int flags) {
          * Don't do it if we have a saving child, as this will trigger
          * a copy on write madness. */
         if (server.current_client && server.current_client->flag.no_touch &&
-            server.current_client->cmd->proc != touchCommand)
+            server.executing_client->cmd->proc != touchCommand)
             flags |= LOOKUP_NOTOUCH;
         if (!hasActiveChildProcess() && !(flags & LOOKUP_NOTOUCH)) {
             /* Shared objects can't be stored in the database. */
@@ -444,7 +446,7 @@ robj *dbRandomKey(serverDb *db) {
         sds key = objectGetKey(valkey);
         robj *keyobj = createStringObject(key, sdslen(key));
         if (objectIsExpired(valkey)) {
-            if (allvolatile && (server.primary_host || server.import_mode) && --maxtries == 0) {
+            if (allvolatile && (server.primary_host || server.import_mode || isPausedActions(PAUSE_ACTION_EXPIRE)) && --maxtries == 0) {
                 /* If the DB is composed only of keys with an expire set,
                  * it could happen that all the keys are already logically
                  * expired in the replica, so the function cannot stop because
@@ -570,7 +572,7 @@ robj *dbUnshareStringValue(serverDb *db, robj *key, robj *o) {
  * The dbnum can be -1 if all the DBs should be emptied, or the specified
  * DB index if we want to empty only a single database.
  * The function returns the number of keys removed from the database(s). */
-long long emptyDbStructure(serverDb *dbarray, int dbnum, int async, void(callback)(hashtable *)) {
+long long emptyDbStructure(serverDb **dbarray, int dbnum, int async, void(callback)(hashtable *)) {
     long long removed = 0;
     int startdb, enddb;
 
@@ -582,16 +584,18 @@ long long emptyDbStructure(serverDb *dbarray, int dbnum, int async, void(callbac
     }
 
     for (int j = startdb; j <= enddb; j++) {
-        removed += kvstoreSize(dbarray[j].keys);
+        if (dbarray[j] == NULL || kvstoreSize(dbarray[j]->keys) == 0) continue;
+
+        removed += kvstoreSize(dbarray[j]->keys);
         if (async) {
-            emptyDbAsync(&dbarray[j]);
+            emptyDbAsync(dbarray[j]);
         } else {
-            kvstoreEmpty(dbarray[j].keys, callback);
-            kvstoreEmpty(dbarray[j].expires, callback);
+            kvstoreEmpty(dbarray[j]->keys, callback);
+            kvstoreEmpty(dbarray[j]->expires, callback);
         }
         /* Because all keys of database are removed, reset average ttl. */
-        dbarray[j].avg_ttl = 0;
-        dbarray[j].expires_cursor = 0;
+        dbarray[j]->avg_ttl = 0;
+        dbarray[j]->expires_cursor = 0;
     }
 
     return removed;
@@ -649,39 +653,35 @@ long long emptyData(int dbnum, int flags, void(callback)(hashtable *)) {
     return removed;
 }
 
-/* Initialize temporary db on replica for use during diskless replication. */
-serverDb *initTempDb(void) {
-    int slot_count_bits = 0;
-    int flags = KVSTORE_ALLOCATE_HASHTABLES_ON_DEMAND;
-    if (server.cluster_enabled) {
-        slot_count_bits = CLUSTER_SLOT_MASK_BITS;
-        flags |= KVSTORE_FREE_EMPTY_HASHTABLES;
-    }
-    serverDb *tempDb = zcalloc(sizeof(serverDb) * server.dbnum);
-    for (int i = 0; i < server.dbnum; i++) {
-        tempDb[i].id = i;
-        tempDb[i].keys = kvstoreCreate(&kvstoreKeysHashtableType, slot_count_bits, flags);
-        tempDb[i].expires = kvstoreCreate(&kvstoreExpiresHashtableType, slot_count_bits, flags);
-    }
-
-    return tempDb;
-}
-
-/* Discard tempDb, it's always async. */
-void discardTempDb(serverDb *tempDb) {
+/* Discard tempDb array. It's always async. */
+void discardTempDb(serverDb **tempDb) {
     /* Release temp DBs. */
     emptyDbStructure(tempDb, -1, 1, NULL);
     for (int i = 0; i < server.dbnum; i++) {
-        kvstoreRelease(tempDb[i].keys);
-        kvstoreRelease(tempDb[i].expires);
-    }
+        if (tempDb[i]) {
+            kvstoreRelease(tempDb[i]->keys);
+            kvstoreRelease(tempDb[i]->expires);
 
+            /* These are expected to be empty on temporary databases */
+            serverAssert(dictSize(tempDb[i]->blocking_keys) == 0);
+            serverAssert(dictSize(tempDb[i]->blocking_keys_unblock_on_nokey) == 0);
+            serverAssert(dictSize(tempDb[i]->ready_keys) == 0);
+            serverAssert(dictSize(tempDb[i]->watched_keys) == 0);
+
+            dictRelease(tempDb[i]->blocking_keys);
+            dictRelease(tempDb[i]->blocking_keys_unblock_on_nokey);
+            dictRelease(tempDb[i]->ready_keys);
+            dictRelease(tempDb[i]->watched_keys);
+            zfree(tempDb[i]);
+            tempDb[i] = NULL;
+        }
+    }
     zfree(tempDb);
 }
 
 int selectDb(client *c, int id) {
     if (id < 0 || id >= server.dbnum) return C_ERR;
-    c->db = &server.db[id];
+    c->db = createDatabaseIfNeeded(id);
     return C_OK;
 }
 
@@ -689,7 +689,8 @@ long long dbTotalServerKeyCount(void) {
     long long total = 0;
     int j;
     for (j = 0; j < server.dbnum; j++) {
-        total += kvstoreSize(server.db[j].keys);
+        if (dbHasNoKeys(j)) continue;
+        total += kvstoreSize(server.db[j]->keys);
     }
     return total;
 }
@@ -720,8 +721,9 @@ void signalFlushedDb(int dbid, int async) {
     }
 
     for (int j = startdb; j <= enddb; j++) {
-        scanDatabaseForDeletedKeys(&server.db[j], NULL);
-        touchAllWatchedKeysInDb(&server.db[j], NULL);
+        if (server.db[j] == NULL) continue;
+        scanDatabaseForDeletedKeys(server.db[j], NULL);
+        touchAllWatchedKeysInDb(server.db[j], NULL);
     }
 
     trackingInvalidateKeysOnFlush(async);
@@ -859,10 +861,6 @@ void selectCommand(client *c) {
 
     if (getIntFromObjectOrReply(c, c->argv[1], &id, NULL) != C_OK) return;
 
-    if (server.cluster_enabled && id != 0) {
-        addReplyError(c, "SELECT is not allowed in cluster mode");
-        return;
-    }
     if (selectDb(c, id) == C_ERR) {
         addReplyError(c, "DB index is out of range");
     } else {
@@ -894,9 +892,9 @@ void keysCommand(client *c) {
     kvstoreHashtableIterator *kvs_di = NULL;
     kvstoreIterator *kvs_it = NULL;
     if (pslot != -1) {
-        kvs_di = kvstoreGetHashtableSafeIterator(c->db->keys, pslot);
+        kvs_di = kvstoreGetHashtableIterator(c->db->keys, pslot, HASHTABLE_ITER_SAFE);
     } else {
-        kvs_it = kvstoreIteratorInit(c->db->keys);
+        kvs_it = kvstoreIteratorInit(c->db->keys, HASHTABLE_ITER_SAFE);
     }
     void *next;
     while (kvs_di ? kvstoreHashtableIteratorNext(kvs_di, &next) : kvstoreIteratorNext(kvs_it, &next)) {
@@ -915,9 +913,17 @@ void keysCommand(client *c) {
     setDeferredArrayLen(c, replylen, numkeys);
 }
 
+#define DEFAULT_SCAN_COMMAND_COUNT 10
+
+/* The SCAN command's default COUNT is 10.
+ * Since it may store keys + values, the
+ * buffer size is roughly 10 * 2 = 20.
+ * Adding a 20% buffer (20 * 1.2) gives 24. */
+#define SCAN_VECTOR_INITIAL_ALLOC 24
+
 /* Data used by the dict scan callback. */
 typedef struct {
-    list *keys;     /* elements that collect from dict */
+    vector *result; /* elements that collect from dict */
     robj *o;        /* o must be a hash/set/zset object, NULL means current db */
     serverDb *db;   /* database currently being scanned */
     long long type; /* the particular type when scan the db */
@@ -972,61 +978,39 @@ void keysScanCallback(void *privdata, void *entry) {
     }
 
     /* Keep this key. */
-    list *keys = data->keys;
-    listAddNodeTail(keys, key);
+    sds *item = vectorPush(data->result);
+    *item = key;
 }
 
 /* This callback is used by scanGenericCommand in order to collect elements
  * returned by the dictionary iterator into a list. */
-void dictScanCallback(void *privdata, const dictEntry *de) {
+void hashtableScanCallback(void *privdata, void *entry) {
     scanData *data = (scanData *)privdata;
-    list *keys = data->keys;
-    robj *o = data->o;
     sds val = NULL;
     sds key = NULL;
+
+    robj *o = data->o;
     data->sampled++;
 
     /* This callback is only used for scanning elements within a key (hash
      * fields, set elements, etc.) so o must be set here. */
     serverAssert(o != NULL);
 
-    /* Filter element if it does not match the pattern. */
-    sds keysds = dictGetKey(de);
-    if (data->pattern) {
-        if (!stringmatchlen(data->pattern, sdslen(data->pattern), keysds, sdslen(keysds), 0)) {
-            return;
-        }
-    }
-
-    if (o->type == OBJ_HASH) {
-        key = keysds;
-        if (!data->only_keys) {
-            val = dictGetVal(de);
-        }
+    /* get key, value */
+    if (o->type == OBJ_SET) {
+        key = (sds)entry;
     } else if (o->type == OBJ_ZSET) {
-        key = sdsdup(keysds);
+        zskiplistNode *node = (zskiplistNode *)entry;
+        key = node->ele;
+        /* zset data is copied after filtering by key */
+    } else if (o->type == OBJ_HASH) {
+        key = hashTypeEntryGetField(entry);
         if (!data->only_keys) {
-            char buf[MAX_LONG_DOUBLE_CHARS];
-            int len = ld2string(buf, sizeof(buf), *(double *)dictGetVal(de), LD_STR_AUTO);
-            val = sdsnewlen(buf, len);
+            val = hashTypeEntryGetValue(entry);
         }
     } else {
-        serverPanic("Type not handled in dict SCAN callback.");
+        serverPanic("Type not handled in hashtable SCAN callback.");
     }
-
-    listAddNodeTail(keys, key);
-    if (val) listAddNodeTail(keys, val);
-}
-
-void hashtableScanCallback(void *privdata, void *entry) {
-    scanData *data = (scanData *)privdata;
-    robj *o = data->o;
-    list *keys = data->keys;
-    data->sampled++;
-
-    /* currently only implemented for SET scan */
-    serverAssert(o && o->type == OBJ_SET && o->encoding == OBJ_ENCODING_HASHTABLE);
-    sds key = (sds)entry; /* Specific for OBJ_SET */
 
     /* Filter element if it does not match the pattern. */
     if (data->pattern) {
@@ -1035,15 +1019,33 @@ void hashtableScanCallback(void *privdata, void *entry) {
         }
     }
 
-    listAddNodeTail(keys, key);
+    /* zset data must be copied. Do this after filtering to avoid unneeded
+     * allocations. */
+    if (o->type == OBJ_ZSET) {
+        /* zset data is copied */
+        zskiplistNode *node = (zskiplistNode *)entry;
+        key = sdsdup(node->ele);
+        if (!data->only_keys) {
+            char buf[MAX_LONG_DOUBLE_CHARS];
+            int len = ld2string(buf, sizeof(buf), node->score, LD_STR_AUTO);
+            val = sdsnewlen(buf, len);
+        }
+    }
+
+    sds *item = vectorPush(data->result);
+    *item = key;
+    if (val) {
+        item = vectorPush(data->result);
+        *item = val;
+    }
 }
 
-/* Try to parse a SCAN cursor stored at object 'o':
+/* Try to parse a SCAN cursor stored at buffer 'buf':
  * if the cursor is valid, store it as unsigned integer into *cursor and
  * returns C_OK. Otherwise return C_ERR and send an error to the
  * client. */
-int parseScanCursorOrReply(client *c, robj *o, unsigned long long *cursor) {
-    if (!string2ull(o->ptr, cursor)) {
+int parseScanCursorOrReply(client *c, sds buf, unsigned long long *cursor) {
+    if (!string2ull(buf, sdslen(buf), cursor)) {
         addReplyError(c, "invalid cursor");
         return C_ERR;
     }
@@ -1095,12 +1097,12 @@ char *getObjectTypeName(robj *o) {
  * of every element on the Hash. */
 void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {
     int i, j;
-    listNode *node;
-    long count = 10;
+    long count = DEFAULT_SCAN_COMMAND_COUNT;
     sds pat = NULL;
     sds typename = NULL;
     long long type = LLONG_MAX;
     int patlen = 0, use_pattern = 0, only_keys = 0;
+    vector result;
 
     /* Object must be NULL (to iterate keys names), or the type of the object
      * must be Set, Sorted Set, or Hash. */
@@ -1170,34 +1172,29 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {
      * cursor to zero to signal the end of the iteration. */
 
     /* Handle the case of kvstore, dict or hashtable. */
-    dict *dict_table = NULL;
-    hashtable *hashtable_table = NULL;
-    int shallow_copied_list_items = 0;
-    if (o == NULL) {
-        shallow_copied_list_items = 1;
-    } else if (o->type == OBJ_SET && o->encoding == OBJ_ENCODING_HASHTABLE) {
-        hashtable_table = o->ptr;
-        shallow_copied_list_items = 1;
-    } else if (o->type == OBJ_HASH && o->encoding == OBJ_ENCODING_HT) {
-        dict_table = o->ptr;
-        shallow_copied_list_items = 1;
-    } else if (o->type == OBJ_ZSET && o->encoding == OBJ_ENCODING_SKIPLIST) {
-        zset *zs = o->ptr;
-        dict_table = zs->dict;
-        /* scanning ZSET allocates temporary strings even though it's a dict */
-        shallow_copied_list_items = 0;
-    }
-
-    list *keys = listCreate();
+    hashtable *ht = NULL;
     /* Set a free callback for the contents of the collected keys list if they
      * are deep copied temporary strings. We must not free them if they are just
      * a shallow copy - a pointer to the actual data in the data structure */
-    if (!shallow_copied_list_items) {
-        listSetFreeMethod(keys, sdsfreeVoid);
+    void (*free_callback)(sds) = sdsfree;
+    if (o == NULL) {
+        free_callback = NULL;
+    } else if (o->type == OBJ_SET && o->encoding == OBJ_ENCODING_HASHTABLE) {
+        ht = o->ptr;
+        free_callback = NULL;
+    } else if (o->type == OBJ_HASH && o->encoding == OBJ_ENCODING_HASHTABLE) {
+        ht = o->ptr;
+        free_callback = NULL;
+    } else if (o->type == OBJ_ZSET && o->encoding == OBJ_ENCODING_SKIPLIST) {
+        zset *zs = o->ptr;
+        ht = zs->ht;
+        /* scanning ZSET allocates temporary strings even though it's a dict */
+        free_callback = sdsfree;
     }
+    vectorInit(&result, SCAN_VECTOR_INITIAL_ALLOC, sizeof(sds));
 
     /* For main hash table scan or scannable data structure. */
-    if (!o || dict_table || hashtable_table) {
+    if (!o || ht) {
         /* We set the max number of iterations to ten times the specified
          * COUNT, so if the hash table is in a pathological state (very
          * sparsely populated) we avoid to block too much time at the cost
@@ -1218,7 +1215,7 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {
          * 6. data.only_keys: to control whether values will be returned or
          * only keys are returned. */
         scanData data = {
-            .keys = keys,
+            .result = &result,
             .db = c->db,
             .o = o,
             .type = type,
@@ -1237,10 +1234,8 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {
              * If cursor is empty, we should try exploring next non-empty slot. */
             if (o == NULL) {
                 cursor = kvstoreScan(c->db->keys, cursor, onlydidx, keysScanCallback, NULL, &data);
-            } else if (dict_table) {
-                cursor = dictScan(dict_table, cursor, dictScanCallback, &data);
             } else {
-                cursor = hashtableScan(hashtable_table, cursor, hashtableScanCallback, &data);
+                cursor = hashtableScan(ht, cursor, hashtableScanCallback, &data);
             }
         } while (cursor && maxiterations-- && data.sampled < count);
     } else if (o->type == OBJ_SET) {
@@ -1257,7 +1252,8 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {
             if (use_pattern && !stringmatchlen(pat, sdslen(pat), key, len, 0)) {
                 continue;
             }
-            listAddNodeTail(keys, sdsnewlen(key, len));
+            sds *item = vectorPush(&result);
+            *item = sdsnewlen(key, len);
         }
         setTypeReleaseIterator(si);
         cursor = 0;
@@ -1277,11 +1273,13 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {
                 continue;
             }
             /* add key object */
-            listAddNodeTail(keys, sdsnewlen(str, len));
+            sds *item = vectorPush(&result);
+            *item = sdsnewlen(str, len);
             /* add value object */
             if (!only_keys) {
                 str = lpGet(p, &len, intbuf);
-                listAddNodeTail(keys, sdsnewlen(str, len));
+                item = vectorPush(&result);
+                *item = sdsnewlen(str, len);
             }
             p = lpNext(o->ptr, p);
         }
@@ -1294,20 +1292,22 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {
     addReplyArrayLen(c, 2);
     addReplyBulkLongLong(c, cursor);
 
-    addReplyArrayLen(c, listLength(keys));
-    while ((node = listFirst(keys)) != NULL) {
-        sds key = listNodeValue(node);
-        addReplyBulkCBuffer(c, key, sdslen(key));
-        listDelNode(keys, node);
+    addReplyArrayLen(c, vectorLen(&result));
+    for (uint32_t i = 0; i < vectorLen(&result); i++) {
+        sds *key = vectorGet(&result, i);
+        addReplyBulkCBuffer(c, *key, sdslen(*key));
+        if (free_callback) {
+            free_callback(*key);
+        }
     }
 
-    listRelease(keys);
+    vectorCleanup(&result);
 }
 
 /* The SCAN command completely relies on scanGenericCommand. */
 void scanCommand(client *c) {
     unsigned long long cursor;
-    if (parseScanCursorOrReply(c, c->argv[1], &cursor) == C_ERR) return;
+    if (parseScanCursorOrReply(c, c->argv[1]->ptr, &cursor) == C_ERR) return;
     scanGenericCommand(c, NULL, cursor);
 }
 
@@ -1402,7 +1402,7 @@ void renameGenericCommand(client *c, int nx) {
     }
 
     incrRefCount(o);
-    expire = getExpire(c->db, c->argv[1]);
+    expire = objectGetExpire(o);
     if (lookupKeyWrite(c->db, c->argv[2]) != NULL) {
         if (nx) {
             decrRefCount(o);
@@ -1438,11 +1438,6 @@ void moveCommand(client *c) {
     int srcid, dbid;
     long long expire;
 
-    if (server.cluster_enabled) {
-        addReplyError(c, "MOVE is not allowed in cluster mode");
-        return;
-    }
-
     /* Obtain source and target DB pointers */
     src = c->db;
     srcid = c->db->id;
@@ -1469,7 +1464,7 @@ void moveCommand(client *c) {
         addReply(c, shared.czero);
         return;
     }
-    expire = getExpire(c->db, c->argv[1]);
+    expire = objectGetExpire(o);
 
     /* Return zero if the key already exists in the target DB */
     if (lookupKeyWrite(dst, c->argv[1]) != NULL) {
@@ -1527,11 +1522,6 @@ void copyCommand(client *c) {
         }
     }
 
-    if ((server.cluster_enabled == 1) && (srcid != 0 || dbid != 0)) {
-        addReplyError(c, "Copying to another database is not allowed in cluster mode");
-        return;
-    }
-
     /* If the user select the same DB as
      * the source DB and using newkey as the same key
      * it is probably an error. */
@@ -1548,7 +1538,7 @@ void copyCommand(client *c) {
         addReply(c, shared.czero);
         return;
     }
-    expire = getExpire(c->db, key);
+    expire = objectGetExpire(o);
 
     /* Return zero if the key already exists in the target DB.
      * If REPLACE option is selected, delete newkey from targetDB. */
@@ -1650,8 +1640,9 @@ void scanDatabaseForDeletedKeys(serverDb *emptied, serverDb *replaced_with) {
 int dbSwapDatabases(int id1, int id2) {
     if (id1 < 0 || id1 >= server.dbnum || id2 < 0 || id2 >= server.dbnum) return C_ERR;
     if (id1 == id2) return C_OK;
-    serverDb aux = server.db[id1];
-    serverDb *db1 = &server.db[id1], *db2 = &server.db[id2];
+    serverDb *db1 = createDatabaseIfNeeded(id1);
+    serverDb *db2 = createDatabaseIfNeeded(id2);
+    serverDb aux = *db1;
 
     /* Swapdb should make transaction fail if there is any
      * client watching keys */
@@ -1692,10 +1683,13 @@ int dbSwapDatabases(int id1, int id2) {
 /* Logically, this discards (flushes) the old main database, and apply the newly loaded
  * database (temp) as the main (active) database, the actual freeing of old database
  * (which will now be placed in the temp one) is done later. */
-void swapMainDbWithTempDb(serverDb *tempDb) {
+void swapMainDbWithTempDb(serverDb **tempDb) {
     for (int i = 0; i < server.dbnum; i++) {
-        serverDb aux = server.db[i];
-        serverDb *activedb = &server.db[i], *newdb = &tempDb[i];
+        if (tempDb[i] == NULL && server.db[i] == NULL) continue;
+        if (tempDb[i] == NULL) tempDb[i] = createDatabase(i);
+        if (server.db[i] == NULL) server.db[i] = createDatabase(i);
+        serverDb aux = *server.db[i];
+        serverDb *activedb = server.db[i], *newdb = tempDb[i];
 
         /* Swapping databases should make transaction fail if there is any
          * client watching keys. */
@@ -1837,6 +1831,7 @@ void deleteExpiredKeyAndPropagateWithDictIndex(serverDb *db, robj *keyobj, int d
     dbGenericDeleteWithDictIndex(db, keyobj, server.lazyfree_lazy_expire, DB_FLAG_KEY_EXPIRED, dict_index);
     latencyEndMonitor(expire_latency);
     latencyAddSampleIfNeeded("expire-del", expire_latency);
+    latencyTraceIfNeeded(db, expire_del, expire_latency);
     notifyKeyspaceEvent(NOTIFY_EXPIRED, "expired", keyobj, db->id);
     signalModifiedKey(NULL, db, keyobj);
     propagateDeletion(db, keyobj, server.lazyfree_lazy_expire);
@@ -1859,7 +1854,8 @@ void deleteExpiredKeyFromOverwriteAndPropagate(client *c, robj *keyobj) {
     robj *aux = server.lazyfree_lazy_expire ? shared.unlink : shared.del;
     rewriteClientCommandVector(c, 2, aux, keyobj);
     signalModifiedKey(c, c->db, keyobj);
-    notifyKeyspaceEvent(NOTIFY_GENERIC, "del", keyobj, c->db->id);
+    notifyKeyspaceEvent(NOTIFY_EXPIRED, "expired", keyobj, c->db->id);
+    server.stat_expiredkeys++;
 }
 
 /* Propagate an implicit key deletion into replicas and the AOF file.
@@ -1886,8 +1882,6 @@ void propagateDeletion(serverDb *db, robj *key, int lazy) {
 
     argv[0] = lazy ? shared.unlink : shared.del;
     argv[1] = key;
-    incrRefCount(argv[0]);
-    incrRefCount(argv[1]);
 
     /* If the primary decided to delete a key we must propagate it to replicas no matter what.
      * Even if module executed a command without asking for propagation. */
@@ -1895,9 +1889,6 @@ void propagateDeletion(serverDb *db, robj *key, int lazy) {
     server.replication_allowed = 1;
     alsoPropagate(db->id, argv, 2, PROPAGATE_AOF | PROPAGATE_REPL);
     server.replication_allowed = prev_replication_allowed;
-
-    decrRefCount(argv[0]);
-    decrRefCount(argv[1]);
 }
 
 /* Returns 1 if the expire value is expired, 0 otherwise. */

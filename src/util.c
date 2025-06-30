@@ -51,8 +51,13 @@
 #include "sha256.h"
 #include "config.h"
 #include "zmalloc.h"
+#include "serverassert.h"
 
 #include "valkey_strtod.h"
+
+#if HAVE_X86_SIMD
+#include <immintrin.h>
+#endif
 
 #define UNUSED(x) ((void)(x))
 
@@ -414,6 +419,133 @@ err:
     return 0;
 }
 
+#if HAVE_X86_SIMD
+
+#define MULTIPLIER_10E8 100000000
+#define MULTIPLIER_10E16 10000000000000000ULL
+
+/**
+ * Convert a string into an signed 64-bit integer using AVX-512 instructions.
+ *
+ * This function parses a string of digits and converts it into an signed
+ * 64-bit integer. It leverages AVX-512 SIMD instructions for optimized
+ * processing and performs strict validation to ensure the input string
+ * represents a valid signed integer.
+ *
+ * Notes:
+ * - The input string must not contain leading zeros unless it is "0".
+ * - The function checks for overflow and returns 0 if the result exceeds
+ *   the maximum value of LLONG_MAX.
+ * - This function requires AVX-512 support and will only be compiled if
+ *   `HAVE_X86_SIMD` is defined.
+ *
+ * Example:
+ * Input: s = "1234567890", slen = 10
+ * Steps:
+ * 1. Load the string into SIMD registers and subtract '0' from each character
+ *    to convert ASCII digits to integers.
+ *    Format (32 bytes, 8 bits each):
+ *      0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1 2 3 4 5 6 7 8 9 0
+ * 2. Validate that all characters are digits (0-9).
+ * 3. Multiply by 10 and horizontally add adjacent pairs of intermediate values.
+ *    Format (16 bytes, 8 bits each):
+ *      00 00 00 00 00 00 00 00 00 00 00 12 34 56 78 90
+ * 4. Multiply by 100 and horizontally add adjacent pairs of intermediate values.
+ *    Format (8 bytes, 16 bits each):
+ *      0000 0000 0000 0000 0000 0012 3456 7890
+ * 5. Multiply by 10000 and horizontally add adjacent pairs of intermediate values.
+ *    Format (4 bytes, 32 bits each):
+ *      00000000 00000000 00000012 34567890
+ * 6. Extract the final value.
+ * Output: *value = 1234567890
+ */
+ATTRIBUTE_TARGET_AVX512
+static int string2llAVX512(const char *s, size_t slen, long long *value) {
+    const char *p = s;
+    unsigned long plen = 0;
+    int negative = 0;
+
+    /* Abort if length indicates this cannot possibly be an int */
+    if (slen == 0 || slen >= LONG_STR_SIZE) return 0;
+
+    /* Special case: first and only digit is 0. Also handle single-digit 1-9 here. */
+    if (slen == 1 && p[0] >= '0' && p[0] <= '9') {
+        if (value != NULL) *value = p[0] - '0';
+        return 1;
+    }
+
+    if (p[0] == '-') {
+        negative = 1;
+        p++;
+        plen++;
+
+        /* Abort on only a negative sign. */
+        if (plen == slen) return 0;
+    }
+
+    /* If first digit is 0, the string should just be 0. */
+    if (unlikely(p[0] == '0')) {
+        return 0;
+    }
+
+    const __m256i ascii0 = _mm256_set1_epi8('0');
+    const __m256i nine = _mm256_set1_epi8(9);
+    uint32_t mask = (uint32_t)(0xFFFFFFFF << (32 - slen + plen));
+    __m256i input = _mm256_maskz_loadu_epi8(mask, s + slen - 32);
+    /* Load the string into SIMD registers and subtract '0' to convert ASCII to integers */
+    __m256i ascii_digits = _mm256_maskz_sub_epi8(mask, input, ascii0);
+    /* Validate that all characters are digits (0-9) */
+    uint32_t nondigits = _mm256_mask_cmpgt_epu8_mask(mask, ascii_digits, nine);
+    if (nondigits) {
+        return 0;
+    }
+
+    const __m256i mul_1_10 = _mm256_set_epi8(1, 10, 1, 10, 1, 10, 1, 10, 1, 10, 1, 10, 1, 10, 1, 10, 1, 10, 1, 10, 1, 10, 1, 10, 1, 10, 1, 10, 1, 10, 1, 10);
+    /* Multiply by 10 and horizontally add adjacent pairs of intermediate values. */
+    __m256i multiplied_by_10 = _mm256_maddubs_epi16(ascii_digits, mul_1_10);
+    __m128i reduced_to_16bit = _mm256_cvtepi16_epi8(multiplied_by_10);
+
+    const __m128i mul_1_100 = _mm_set_epi8(1, 100, 1, 100, 1, 100, 1, 100, 1, 100, 1, 100, 1, 100, 1, 100);
+    /* Multiply by 100 and horizontally add adjacent pairs of intermediate values. */
+    __m128i multiplied_by_100 = _mm_maddubs_epi16(reduced_to_16bit, mul_1_100);
+
+    const __m128i mul_1_10000 = _mm_set_epi16(1, 10000, 1, 10000, 1, 10000, 1, 10000);
+    /* Multiply by 10000 and horizontally add adjacent pairs of intermediate values. */
+    __m128i multiplied_by_10000 = _mm_madd_epi16(multiplied_by_100, mul_1_10000);
+    uint64_t low = (uint64_t)_mm_extract_epi32(multiplied_by_10000, 3);
+    if ((mask & 0xFFFFFF) == 0) {
+        if (value != NULL) *value = negative ? -low : low;
+        return 1;
+    }
+
+    uint64_t middle = (uint64_t)_mm_extract_epi32(multiplied_by_10000, 2);
+    uint64_t middle_low = low + MULTIPLIER_10E8 * middle;
+    if ((mask & 0xFFFF) == 0) {
+        if (value != NULL) *value = negative ? -middle_low : middle_low;
+        return 1;
+    }
+
+    uint64_t high = (uint64_t)_mm_extract_epi32(multiplied_by_10000, 1);
+    uint64_t result = middle_low + MULTIPLIER_10E16 * high;
+    /* ULONG_MAX = 18446744073709551615 */
+    if (high > 1844 || result < middle_low) { /* Overflow. */
+        return 0;
+    }
+    /* Convert to negative if needed, and do the final overflow check when
+     * converting from unsigned long long to long long. */
+    if (negative) {
+        if (result > ((unsigned long long)(-(LLONG_MIN + 1)) + 1)) /* Overflow. */
+            return 0;
+        if (value != NULL) *value = -result;
+    } else {
+        if (result > LLONG_MAX) /* Overflow. */
+            return 0;
+        if (value != NULL) *value = result;
+    }
+    return 1;
+}
+#endif
+
 /* Convert a string into a long long. Returns 1 if the string could be parsed
  * into a (non-overflowing) long long, 0 otherwise. The value will be set to
  * the parsed value when appropriate.
@@ -426,7 +558,7 @@ err:
  * Because of its strictness, it is safe to use this function to check if
  * you can convert a string into a long long, and obtain back the string
  * from the number without any loss in the string representation. */
-int string2ll(const char *s, size_t slen, long long *value) {
+static int string2llScalar(const char *s, size_t slen, long long *value) {
     const char *p = s;
     size_t plen = 0;
     int negative = 0;
@@ -435,9 +567,9 @@ int string2ll(const char *s, size_t slen, long long *value) {
     /* A string of zero length or excessive length is not a valid number. */
     if (plen == slen || slen >= LONG_STR_SIZE) return 0;
 
-    /* Special case: first and only digit is 0. */
-    if (slen == 1 && p[0] == '0') {
-        if (value != NULL) *value = 0;
+    /* Special case: first and only digit is 0. Also handle single-digit 1-9 here. */
+    if (slen == 1 && p[0] >= '0' && p[0] <= '9') {
+        if (value != NULL) *value = p[0] - '0';
         return 1;
     }
 
@@ -492,14 +624,40 @@ int string2ll(const char *s, size_t slen, long long *value) {
     return 1;
 }
 
+#if HAVE_IFUNC && HAVE_X86_SIMD
+__attribute__((no_sanitize_address, used)) static int (*string2ll_resolver(void))(const char *, size_t, long long *) {
+    /* Ifunc resolvers run before ASan initialization and before CPU detection
+     * is initialized, so disable ASan and init CPU detection here. */
+    __builtin_cpu_init();
+    if (__builtin_cpu_supports("avx512f") &&
+        __builtin_cpu_supports("avx512vl") &&
+        __builtin_cpu_supports("avx512bw"))
+        return string2llAVX512;
+    return string2llScalar;
+}
+
+int string2ll(const char *s, size_t slen, long long *value)
+    __attribute__((ifunc("string2ll_resolver")));
+#else
+int string2ll(const char *s, size_t slen, long long *value) {
+#if HAVE_X86_SIMD
+    if (__builtin_cpu_supports("avx512f") &&
+        __builtin_cpu_supports("avx512vl") &&
+        __builtin_cpu_supports("avx512bw"))
+        return string2llAVX512(s, slen, value);
+#endif
+    return string2llScalar(s, slen, value);
+}
+#endif /* HAVE_IFUNC && HAVE_X86_SIMD */
+
 /* Helper function to convert a string to an unsigned long long value.
  * The function attempts to use the faster string2ll() function inside
  * Valkey: if it fails, strtoull() is used instead. The function returns
  * 1 if the conversion happened successfully or 0 if the number is
  * invalid or out of range. */
-int string2ull(const char *s, unsigned long long *value) {
+int string2ull(const char *s, size_t slen, unsigned long long *value) {
     long long ll;
-    if (string2ll(s, strlen(s), &ll)) {
+    if (string2ll(s, slen, &ll)) {
         if (ll < 0) return 0; /* Negative values are out of range. */
         *value = ll;
         return 1;
@@ -905,36 +1063,67 @@ int version2num(const char *version) {
     return v;
 }
 
+/* Global state. */
+static int seed_initialized = 0;
+static unsigned char seed[64]; /* 512 bit internal block size. */
+
+static void initializeRandomSeed(void) {
+    assert(seed_initialized == 0);
+    /* Initialize a seed and use SHA1 in counter mode, where we hash
+     * the same seed with a progressive counter. For the goals of this
+     * function we just need non-colliding strings, there are no
+     * cryptographic security needs. */
+    FILE *fp = fopen("/dev/urandom", "r");
+    if (fp == NULL || fread(seed, sizeof(seed), 1, fp) != 1) {
+        /* Revert to a weaker seed, and in this case reseed again
+         * at every call.*/
+        for (unsigned int j = 0; j < sizeof(seed); j++) {
+            struct timeval tv;
+            gettimeofday(&tv, NULL);
+            pid_t pid = getpid();
+            seed[j] = tv.tv_sec ^ tv.tv_usec ^ pid ^ (long)fp;
+        }
+    } else {
+        seed_initialized = 1;
+    }
+    if (fp) fclose(fp);
+}
+
+/* This function receives a string with 64 bytes encoded as 128 hexadecimal
+ * digits, and sets the 64 byte random seed. */
+void setRandomSeedCString(char *seed_str, size_t len) {
+    assert(len == sizeof(seed) * 2);
+    for (size_t i = 0; i < sizeof(seed); i++) {
+        sscanf(seed_str + (i * 2), "%02hhX", &seed[i]);
+    }
+    seed_initialized = 1;
+}
+
+/* This function populates a char buffer with 129 bytes with the 64 bytes
+ * random seed encoded as 128 hexadecimal digits and a null terminator. */
+void getRandomSeedCString(char *buff, size_t len) {
+    assert(len == (sizeof(seed) * 2 + 1));
+
+    if (!seed_initialized) {
+        initializeRandomSeed();
+    }
+
+    for (size_t i = 0; i < sizeof(seed); i++) {
+        snprintf(buff + (i * 2), 3, "%02hhX", seed[i]);
+    }
+    buff[sizeof(seed) * 2] = '\0';
+}
+
 /* Get random bytes, attempts to get an initial seed from /dev/urandom and
  * the uses a one way hash function in counter mode to generate a random
  * stream. However if /dev/urandom is not available, a weaker seed is used.
  *
  * This function is not thread safe, since the state is global. */
 void getRandomBytes(unsigned char *p, size_t len) {
-    /* Global state. */
-    static int seed_initialized = 0;
-    static unsigned char seed[64]; /* 512 bit internal block size. */
-    static uint64_t counter = 0;   /* The counter we hash with the seed. */
+    static uint64_t counter = 0; /* The counter we hash with the seed. */
 
     if (!seed_initialized) {
-        /* Initialize a seed and use SHA1 in counter mode, where we hash
-         * the same seed with a progressive counter. For the goals of this
-         * function we just need non-colliding strings, there are no
-         * cryptographic security needs. */
-        FILE *fp = fopen("/dev/urandom", "r");
-        if (fp == NULL || fread(seed, sizeof(seed), 1, fp) != 1) {
-            /* Revert to a weaker seed, and in this case reseed again
-             * at every call.*/
-            for (unsigned int j = 0; j < sizeof(seed); j++) {
-                struct timeval tv;
-                gettimeofday(&tv, NULL);
-                pid_t pid = getpid();
-                seed[j] = tv.tv_sec ^ tv.tv_usec ^ pid ^ (long)fp;
-            }
-        } else {
-            seed_initialized = 1;
-        }
-        if (fp) fclose(fp);
+        initializeRandomSeed();
     }
 
     while (len) {
@@ -1380,24 +1569,4 @@ int snprintf_async_signal_safe(char *to, size_t n, const char *fmt, ...) {
     result = vsnprintf_async_signal_safe(to, n, fmt, args);
     va_end(args);
     return result;
-}
-
-/* A printf-like function that returns a freshly allocated string.
- *
- * This function is similar to asprintf function, but it uses zmalloc for
- * allocating the string buffer. */
-char *valkey_asprintf(char const *fmt, ...) {
-    va_list args;
-
-    va_start(args, fmt);
-    size_t str_len = vsnprintf(NULL, 0, fmt, args) + 1;
-    va_end(args);
-
-    char *str = zmalloc(str_len);
-
-    va_start(args, fmt);
-    vsnprintf(str, str_len, fmt, args);
-    va_end(args);
-
-    return str;
 }

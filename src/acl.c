@@ -29,6 +29,7 @@
 
 #include "server.h"
 #include "sha256.h"
+#include "module.h"
 #include <fcntl.h>
 #include <ctype.h>
 
@@ -151,17 +152,6 @@ struct ACLUserFlag {
     {NULL, 0} /* Terminator. */
 };
 
-struct ACLSelectorFlags {
-    const char *name;
-    uint64_t flag;
-} ACLSelectorFlags[] = {
-    /* Note: the order here dictates the emitted order at ACLDescribeUser */
-    {"allkeys", SELECTOR_FLAG_ALLKEYS},
-    {"allchannels", SELECTOR_FLAG_ALLCHANNELS},
-    {"allcommands", SELECTOR_FLAG_ALLCOMMANDS},
-    {NULL, 0} /* Terminator. */
-};
-
 /* ACL selectors are private and not exposed outside of acl.c. */
 typedef struct {
     uint32_t flags; /* See SELECTOR_FLAG_* */
@@ -192,11 +182,11 @@ typedef struct {
                         * is used to regenerate the original ACL string for display. */
 } aclSelector;
 
-void ACLResetFirstArgsForCommand(aclSelector *selector, unsigned long id);
-void ACLResetFirstArgs(aclSelector *selector);
-void ACLAddAllowedFirstArg(aclSelector *selector, unsigned long id, const char *sub);
-void ACLFreeLogEntry(void *le);
-int ACLSetSelector(aclSelector *selector, const char *op, size_t oplen);
+static void ACLResetFirstArgsForCommand(aclSelector *selector, unsigned long id);
+static void ACLResetFirstArgs(aclSelector *selector);
+static void ACLAddAllowedFirstArg(aclSelector *selector, unsigned long id, const char *sub);
+static void ACLFreeLogEntry(void *le);
+static int ACLSetSelector(aclSelector *selector, const char *op, size_t oplen);
 
 /* The length of the string representation of a hashed password. */
 #define HASH_PASSWORD_LEN (SHA256_BLOCK_SIZE * 2)
@@ -210,7 +200,7 @@ int ACLSetSelector(aclSelector *selector, const char *op, size_t oplen);
  * information about the nature of the strings just monitoring the execution
  * time of the function. Note: The two strings must be the same length.
  */
-int time_independent_strcmp(char *a, char *b, int len) {
+static int time_independent_strcmp(char *a, char *b, int len) {
     int diff = 0;
     for (int j = 0; j < len; j++) {
         diff |= (a[j] ^ b[j]);
@@ -220,7 +210,7 @@ int time_independent_strcmp(char *a, char *b, int len) {
 
 /* Given an SDS string, returns the SHA256 hex representation as a
  * new SDS string. */
-sds ACLHashPassword(unsigned char *cleartext, size_t len) {
+static sds ACLHashPassword(unsigned char *cleartext, size_t len) {
     SHA256_CTX ctx;
     unsigned char hash[SHA256_BLOCK_SIZE];
     char hex[HASH_PASSWORD_LEN];
@@ -239,7 +229,7 @@ sds ACLHashPassword(unsigned char *cleartext, size_t len) {
 
 /* Given a hash and the hash length, returns C_OK if it is a valid password
  * hash, or C_ERR otherwise. */
-int ACLCheckPasswordHash(unsigned char *hash, int hashlen) {
+static int ACLCheckPasswordHash(unsigned char *hash, int hashlen) {
     if (hashlen != HASH_PASSWORD_LEN) {
         return C_ERR;
     }
@@ -265,7 +255,7 @@ int ACLCheckPasswordHash(unsigned char *hash, int hashlen) {
  * ACL rules, presentation on ACL list, and to avoid subtle security bugs
  * that may arise from parsing the rules in presence of escapes.
  * The function returns 0 if the string has no spaces. */
-int ACLStringHasSpaces(const char *s, size_t len) {
+static int ACLStringHasSpaces(const char *s, size_t len) {
     for (size_t i = 0; i < len; i++) {
         if (isspace(s[i]) || s[i] == 0) return 1;
     }
@@ -286,19 +276,19 @@ uint64_t ACLGetCommandCategoryFlagByName(const char *name) {
 /* Method for searching for a user within a list of user definitions. The
  * list contains an array of user arguments, and we are only
  * searching the first argument, the username, for a match. */
-int ACLListMatchLoadedUser(void *definition, void *user) {
+static int ACLListMatchLoadedUser(void *definition, void *user) {
     sds *user_definition = definition;
     return sdscmp(user_definition[0], user) == 0;
 }
 
 /* Method for passwords/pattern comparison used for the user->passwords list
  * so that we can search for items with listSearchKey(). */
-int ACLListMatchSds(void *a, void *b) {
+static int ACLListMatchSds(void *a, void *b) {
     return sdscmp(a, b) == 0;
 }
 
 /* Method to duplicate list elements from ACL users password/patterns lists. */
-void *ACLListDupSds(void *item) {
+static void *ACLListDupSds(void *item) {
     return sdsdup(item);
 }
 
@@ -310,7 +300,7 @@ typedef struct {
 } keyPattern;
 
 /* Create a new key pattern. */
-keyPattern *ACLKeyPatternCreate(sds pattern, int flags) {
+static keyPattern *ACLKeyPatternCreate(sds pattern, int flags) {
     keyPattern *new = (keyPattern *)zmalloc(sizeof(keyPattern));
     new->pattern = pattern;
     new->flags = flags;
@@ -318,31 +308,31 @@ keyPattern *ACLKeyPatternCreate(sds pattern, int flags) {
 }
 
 /* Free a key pattern and internal structures. */
-void ACLKeyPatternFree(keyPattern *pattern) {
+static void ACLKeyPatternFree(keyPattern *pattern) {
     sdsfree(pattern->pattern);
     zfree(pattern);
 }
 
 /* Method for passwords/pattern comparison used for the user->passwords list
  * so that we can search for items with listSearchKey(). */
-int ACLListMatchKeyPattern(void *a, void *b) {
+static int ACLListMatchKeyPattern(void *a, void *b) {
     return sdscmp(((keyPattern *)a)->pattern, ((keyPattern *)b)->pattern) == 0;
 }
 
 /* Method to free list elements from ACL users password/patterns lists. */
-void ACLListFreeKeyPattern(void *item) {
+static void ACLListFreeKeyPattern(void *item) {
     ACLKeyPatternFree(item);
 }
 
 /* Method to duplicate list elements from ACL users password/patterns lists. */
-void *ACLListDupKeyPattern(void *item) {
+static void *ACLListDupKeyPattern(void *item) {
     keyPattern *old = (keyPattern *)item;
     return ACLKeyPatternCreate(sdsdup(old->pattern), old->flags);
 }
 
 /* Append the string representation of a key pattern onto the
  * provided base string. */
-sds sdsCatPatternString(sds base, keyPattern *pat) {
+static sds sdsCatPatternString(sds base, keyPattern *pat) {
     if (pat->flags == ACL_ALL_PERMISSION) {
         base = sdscatlen(base, "~", 1);
     } else if (pat->flags == ACL_READ_PERMISSION) {
@@ -357,7 +347,7 @@ sds sdsCatPatternString(sds base, keyPattern *pat) {
 
 /* Create an empty selector with the provided set of initial
  * flags. The selector will be default have no permissions. */
-aclSelector *ACLCreateSelector(int flags) {
+static aclSelector *ACLCreateSelector(int flags) {
     aclSelector *selector = zmalloc(sizeof(aclSelector));
     selector->flags = flags | server.acl_pubsub_default;
     selector->patterns = listCreate();
@@ -377,7 +367,7 @@ aclSelector *ACLCreateSelector(int flags) {
 }
 
 /* Cleanup the provided selector, including all interior structures. */
-void ACLFreeSelector(aclSelector *selector) {
+static void ACLFreeSelector(aclSelector *selector) {
     listRelease(selector->patterns);
     listRelease(selector->channels);
     sdsfree(selector->command_rules);
@@ -386,7 +376,7 @@ void ACLFreeSelector(aclSelector *selector) {
 }
 
 /* Create an exact copy of the provided selector. */
-aclSelector *ACLCopySelector(aclSelector *src) {
+static aclSelector *ACLCopySelector(aclSelector *src) {
     aclSelector *dst = zmalloc(sizeof(aclSelector));
     dst->flags = src->flags;
     dst->patterns = listDup(src->patterns);
@@ -407,19 +397,19 @@ aclSelector *ACLCopySelector(aclSelector *src) {
 }
 
 /* List method for freeing a selector */
-void ACLListFreeSelector(void *a) {
+static void ACLListFreeSelector(void *a) {
     ACLFreeSelector((aclSelector *)a);
 }
 
 /* List method for duplicating a selector */
-void *ACLListDuplicateSelector(void *src) {
+static void *ACLListDuplicateSelector(void *src) {
     return ACLCopySelector((aclSelector *)src);
 }
 
 /* All users have an implicit root selector which
  * provides backwards compatibility to the old ACLs-
  * permissions. */
-aclSelector *ACLUserGetRootSelector(user *u) {
+static aclSelector *ACLUserGetRootSelector(user *u) {
     serverAssert(listLength(u->selectors));
     aclSelector *s = (aclSelector *)listNodeValue(listFirst(u->selectors));
     serverAssert(s->flags & SELECTOR_FLAG_ROOT);
@@ -431,7 +421,7 @@ aclSelector *ACLUserGetRootSelector(user *u) {
  * the structure representing the user.
  *
  * If the user with such name already exists NULL is returned. */
-user *ACLCreateUser(const char *name, size_t namelen) {
+static user *ACLCreateUser(const char *name, size_t namelen) {
     if (raxFind(Users, (unsigned char *)name, namelen, NULL)) return NULL;
     user *u = zmalloc(sizeof(*u));
     u->name = sdsnewlen(name, namelen);
@@ -505,8 +495,7 @@ void ACLFreeUserAndKillClients(user *u) {
              * this may result in some security hole: it's much
              * more defensive to set the default user and put
              * it in non authenticated mode. */
-            c->user = DefaultUser;
-            c->flag.authenticated = 0;
+            clientSetUser(c, DefaultUser, 0);
             /* We will write replies to this client later, so we can't
              * close it directly even if async. */
             if (c == server.current_client) {
@@ -522,7 +511,7 @@ void ACLFreeUserAndKillClients(user *u) {
 /* Copy the user ACL rules from the source user 'src' to the destination
  * user 'dst' so that at the end of the process they'll have exactly the
  * same rules (but the names will continue to be the original ones). */
-void ACLCopyUser(user *dst, user *src) {
+static void ACLCopyUser(user *dst, user *src) {
     listRelease(dst->passwords);
     listRelease(dst->selectors);
     dst->passwords = listDup(src->passwords);
@@ -544,7 +533,7 @@ void ACLCopyUser(user *dst, user *src) {
  * so that user->allowed_commands[word]&bit will identify that specific
  * bit. The function returns C_ERR in case the specified ID overflows
  * the bitmap in the user representation. */
-int ACLGetCommandBitCoordinates(uint64_t id, uint64_t *word, uint64_t *bit) {
+static int ACLGetCommandBitCoordinates(uint64_t id, uint64_t *word, uint64_t *bit) {
     if (id >= USER_COMMAND_BITS_COUNT) return C_ERR;
     *word = id / sizeof(uint64_t) / 8;
     *bit = 1ULL << (id % (sizeof(uint64_t) * 8));
@@ -558,7 +547,7 @@ int ACLGetCommandBitCoordinates(uint64_t id, uint64_t *word, uint64_t *bit) {
  *
  * If the bit overflows the user internal representation, zero is returned
  * in order to disallow the execution of the command in such edge case. */
-int ACLGetSelectorCommandBit(const aclSelector *selector, unsigned long id) {
+static int ACLGetSelectorCommandBit(const aclSelector *selector, unsigned long id) {
     uint64_t word, bit;
     if (ACLGetCommandBitCoordinates(id, &word, &bit) == C_ERR) return 0;
     return (selector->allowed_commands[word] & bit) != 0;
@@ -567,7 +556,7 @@ int ACLGetSelectorCommandBit(const aclSelector *selector, unsigned long id) {
 /* When +@all or allcommands is given, we set a reserved bit as well that we
  * can later test, to see if the user has the right to execute "future commands",
  * that is, commands loaded later via modules. */
-int ACLSelectorCanExecuteFutureCommands(aclSelector *selector) {
+static int ACLSelectorCanExecuteFutureCommands(aclSelector *selector) {
     return ACLGetSelectorCommandBit(selector, USER_COMMAND_BITS_COUNT - 1);
 }
 
@@ -576,7 +565,7 @@ int ACLSelectorCanExecuteFutureCommands(aclSelector *selector) {
  * is performed. As a side effect of calling this function with a value of
  * zero, the user flag ALLCOMMANDS is cleared since it is no longer possible
  * to skip the command bit explicit test. */
-void ACLSetSelectorCommandBit(aclSelector *selector, unsigned long id, int value) {
+static void ACLSetSelectorCommandBit(aclSelector *selector, unsigned long id, int value) {
     uint64_t word, bit;
     if (ACLGetCommandBitCoordinates(id, &word, &bit) == C_ERR) return;
     if (value) {
@@ -590,7 +579,7 @@ void ACLSetSelectorCommandBit(aclSelector *selector, unsigned long id, int value
 /* Remove a rule from the retained command rules. Always match rules
  * verbatim, but also remove subcommand rules if we are adding or removing the
  * entire command. */
-void ACLSelectorRemoveCommandRule(aclSelector *selector, sds new_rule) {
+static void ACLSelectorRemoveCommandRule(aclSelector *selector, sds new_rule) {
     size_t new_len = sdslen(new_rule);
     char *existing_rule = selector->command_rules;
 
@@ -636,7 +625,7 @@ void ACLSelectorRemoveCommandRule(aclSelector *selector, sds new_rule) {
 
 /* This function is responsible for updating the command_rules struct so that relative ordering of
  * commands and categories is maintained and can be reproduced without loss. */
-void ACLUpdateCommandRules(aclSelector *selector, const char *rule, int allow) {
+static void ACLUpdateCommandRules(aclSelector *selector, const char *rule, int allow) {
     sds new_rule = sdsnew(rule);
     sdstolower(new_rule);
 
@@ -648,13 +637,13 @@ void ACLUpdateCommandRules(aclSelector *selector, const char *rule, int allow) {
 
 /* This function is used to allow/block a specific command.
  * Allowing/blocking a container command also applies for its subcommands */
-void ACLChangeSelectorPerm(aclSelector *selector, struct serverCommand *cmd, int allow) {
+static void ACLChangeSelectorPerm(aclSelector *selector, struct serverCommand *cmd, int allow) {
     unsigned long id = cmd->id;
     ACLSetSelectorCommandBit(selector, id, allow);
     ACLResetFirstArgsForCommand(selector, id);
     if (cmd->subcommands_ht) {
         hashtableIterator iter;
-        hashtableInitSafeIterator(&iter, cmd->subcommands_ht);
+        hashtableInitIterator(&iter, cmd->subcommands_ht, HASHTABLE_ITER_SAFE);
         void *next;
         while (hashtableNext(&iter, &next)) {
             struct serverCommand *sub = next;
@@ -670,9 +659,9 @@ void ACLChangeSelectorPerm(aclSelector *selector, struct serverCommand *cmd, int
  * value. Since the category passed by the user may be non existing, the
  * function returns C_ERR if the category was not found, or C_OK if it was
  * found and the operation was performed. */
-void ACLSetSelectorCommandBitsForCategory(hashtable *commands, aclSelector *selector, uint64_t cflag, int value) {
+static void ACLSetSelectorCommandBitsForCategory(hashtable *commands, aclSelector *selector, uint64_t cflag, int value) {
     hashtableIterator iter;
-    hashtableInitIterator(&iter, commands);
+    hashtableInitIterator(&iter, commands, 0);
     void *next;
     while (hashtableNext(&iter, &next)) {
         struct serverCommand *cmd = next;
@@ -723,7 +712,7 @@ void ACLRecomputeCommandBitsFromCommandRulesAllUsers(void) {
     raxStop(&ri);
 }
 
-int ACLSetSelectorCategory(aclSelector *selector, const char *category, int allow) {
+static int ACLSetSelectorCategory(aclSelector *selector, const char *category, int allow) {
     uint64_t cflag = ACLGetCommandCategoryFlagByName(category + 1);
     if (!cflag) return C_ERR;
 
@@ -734,42 +723,6 @@ int ACLSetSelectorCategory(aclSelector *selector, const char *category, int allo
     return C_OK;
 }
 
-void ACLCountCategoryBitsForCommands(hashtable *commands,
-                                     aclSelector *selector,
-                                     unsigned long *on,
-                                     unsigned long *off,
-                                     uint64_t cflag) {
-    hashtableIterator iter;
-    hashtableInitIterator(&iter, commands);
-    void *next;
-    while (hashtableNext(&iter, &next)) {
-        struct serverCommand *cmd = next;
-        if (cmd->acl_categories & cflag) {
-            if (ACLGetSelectorCommandBit(selector, cmd->id))
-                (*on)++;
-            else
-                (*off)++;
-        }
-        if (cmd->subcommands_ht) {
-            ACLCountCategoryBitsForCommands(cmd->subcommands_ht, selector, on, off, cflag);
-        }
-    }
-    hashtableResetIterator(&iter);
-}
-
-/* Return the number of commands allowed (on) and denied (off) for the user 'u'
- * in the subset of commands flagged with the specified category name.
- * If the category name is not valid, C_ERR is returned, otherwise C_OK is
- * returned and on and off are populated by reference. */
-int ACLCountCategoryBitsForSelector(aclSelector *selector, unsigned long *on, unsigned long *off, const char *category) {
-    uint64_t cflag = ACLGetCommandCategoryFlagByName(category);
-    if (!cflag) return C_ERR;
-
-    *on = *off = 0;
-    ACLCountCategoryBitsForCommands(server.orig_commands, selector, on, off, cflag);
-    return C_OK;
-}
-
 /* This function returns an SDS string representing the specified selector ACL
  * rules related to command execution, in the same format you could set them
  * back using ACL SETUSER. The function will return just the set of rules needed
@@ -777,7 +730,7 @@ int ACLCountCategoryBitsForSelector(aclSelector *selector, unsigned long *on, un
  * as on/off, passwords and so forth. The returned string always starts with
  * the +@all or -@all rule, depending on the user bitmap, and is followed, if
  * needed, by the other rules needed to narrow or extend what the user can do. */
-sds ACLDescribeSelectorCommandRules(aclSelector *selector) {
+static sds ACLDescribeSelectorCommandRules(aclSelector *selector) {
     sds rules = sdsempty();
 
     /* We use this fake selector as a "sanity" check to make sure the rules
@@ -827,7 +780,7 @@ sds ACLDescribeSelectorCommandRules(aclSelector *selector) {
     return rules;
 }
 
-sds ACLDescribeSelector(aclSelector *selector) {
+static sds ACLDescribeSelector(aclSelector *selector) {
     listIter li;
     listNode *ln;
     sds res = sdsempty();
@@ -920,7 +873,7 @@ robj *ACLDescribeUser(user *u) {
 /* Get a command from the original command table, that is not affected
  * by the command renaming operations: we base all the ACL work from that
  * table, so that ACLs are valid regardless of command renaming. */
-struct serverCommand *ACLLookupCommand(const char *name) {
+static struct serverCommand *ACLLookupCommand(const char *name) {
     struct serverCommand *cmd;
     sds sdsname = sdsnew(name);
     cmd = lookupCommandBySdsLogic(server.orig_commands, sdsname);
@@ -930,7 +883,7 @@ struct serverCommand *ACLLookupCommand(const char *name) {
 
 /* Flush the array of allowed first-args for the specified user
  * and command ID. */
-void ACLResetFirstArgsForCommand(aclSelector *selector, unsigned long id) {
+static void ACLResetFirstArgsForCommand(aclSelector *selector, unsigned long id) {
     if (selector->allowed_firstargs && selector->allowed_firstargs[id]) {
         for (int i = 0; selector->allowed_firstargs[id][i]; i++) sdsfree(selector->allowed_firstargs[id][i]);
         zfree(selector->allowed_firstargs[id]);
@@ -941,7 +894,7 @@ void ACLResetFirstArgsForCommand(aclSelector *selector, unsigned long id) {
 /* Flush the entire table of first-args. This is useful on +@all, -@all
  * or similar to return back to the minimal memory usage (and checks to do)
  * for the user. */
-void ACLResetFirstArgs(aclSelector *selector) {
+static void ACLResetFirstArgs(aclSelector *selector) {
     if (selector->allowed_firstargs == NULL) return;
     for (int j = 0; j < USER_COMMAND_BITS_COUNT; j++) {
         if (selector->allowed_firstargs[j]) {
@@ -955,7 +908,7 @@ void ACLResetFirstArgs(aclSelector *selector) {
 
 /* Add a first-arg to the list of subcommands for the user 'u' and
  * the command id specified. */
-void ACLAddAllowedFirstArg(aclSelector *selector, unsigned long id, const char *sub) {
+static void ACLAddAllowedFirstArg(aclSelector *selector, unsigned long id, const char *sub) {
     /* If this is the first first-arg to be configured for
      * this user, we have to allocate the first-args array. */
     if (selector->allowed_firstargs == NULL) {
@@ -988,7 +941,7 @@ void ACLAddAllowedFirstArg(aclSelector *selector, unsigned long id, const char *
  *
  * If any of the operations are invalid, NULL will be returned instead
  * and errno will be set corresponding to the interior error. */
-aclSelector *aclCreateSelectorFromOpSet(const char *opset, size_t opsetlen) {
+static aclSelector *aclCreateSelectorFromOpSet(const char *opset, size_t opsetlen) {
     serverAssert(opset[0] == '(' && opset[opsetlen - 1] == ')');
     aclSelector *s = ACLCreateSelector(0);
 
@@ -999,11 +952,10 @@ aclSelector *aclCreateSelectorFromOpSet(const char *opset, size_t opsetlen) {
         if (ACLSetSelector(s, argv[i], sdslen(argv[i])) == C_ERR) {
             ACLFreeSelector(s);
             s = NULL;
-            goto cleanup;
+            break;
         }
     }
 
-cleanup:
     sdsfreesplitres(argv, argc);
     sdsfree(trimmed);
     return s;
@@ -1046,7 +998,7 @@ cleanup:
  * allchannels              Alias for &*
  * resetchannels            Flush the list of allowed channel patterns.
  */
-int ACLSetSelector(aclSelector *selector, const char *op, size_t oplen) {
+static int ACLSetSelector(aclSelector *selector, const char *op, size_t oplen) {
     if (!strcasecmp(op, "allkeys") || !strcasecmp(op, "~*")) {
         selector->flags |= SELECTOR_FLAG_ALLKEYS;
         listEmpty(selector->patterns);
@@ -1077,18 +1029,23 @@ int ACLSetSelector(aclSelector *selector, const char *op, size_t oplen) {
         int flags = 0;
         size_t offset = 1;
         if (op[0] == '%') {
+            int perm_ok = 1;
             for (; offset < oplen; offset++) {
                 if (toupper(op[offset]) == 'R' && !(flags & ACL_READ_PERMISSION)) {
                     flags |= ACL_READ_PERMISSION;
                 } else if (toupper(op[offset]) == 'W' && !(flags & ACL_WRITE_PERMISSION)) {
                     flags |= ACL_WRITE_PERMISSION;
-                } else if (op[offset] == '~' && flags) {
+                } else if (op[offset] == '~') {
                     offset++;
                     break;
                 } else {
-                    errno = EINVAL;
-                    return C_ERR;
+                    perm_ok = 0;
+                    break;
                 }
+            }
+            if (!flags || !perm_ok) {
+                errno = EINVAL;
+                return C_ERR;
             }
         } else {
             flags = ACL_ALL_PERMISSION;
@@ -1417,7 +1374,7 @@ const char *ACLSetUserStringError(void) {
 }
 
 /* Create the default user, this has special permissions. */
-user *ACLCreateDefaultUser(void) {
+static user *ACLCreateDefaultUser(void) {
     user *new = ACLCreateUser("default", 7);
     ACLSetUser(new, "+@all", -1);
     ACLSetUser(new, "~*", -1);
@@ -1495,10 +1452,10 @@ void addAuthErrReply(client *c, robj *err) {
  * connection user reference is populated.
  *
  * The return value is AUTH_OK on success (valid username / password pair) & AUTH_ERR otherwise. */
-int checkPasswordBasedAuth(client *c, robj *username, robj *password) {
+static int checkPasswordBasedAuth(client *c, robj *username, robj *password) {
     if (ACLCheckUserCredentials(username, password) == C_OK) {
-        c->flag.authenticated = 1;
-        c->user = ACLGetUserByName(username->ptr, sdslen(username->ptr));
+        user *user = ACLGetUserByName(username->ptr, sdslen(username->ptr));
+        clientSetUser(c, user, 1);
         moduleNotifyUserChanged(c);
         return AUTH_OK;
     } else {
@@ -1542,7 +1499,7 @@ unsigned long ACLGetCommandID(sds cmdname) {
         sdsfree(lowername);
         return (unsigned long)id;
     }
-    raxInsert(commandId, (unsigned char *)lowername, strlen(lowername), (void *)nextid, NULL);
+    raxInsert(commandId, (unsigned char *)lowername, sdslen(lowername), (void *)nextid, NULL);
     sdsfree(lowername);
     unsigned long thisid = nextid;
     nextid++;
@@ -1557,13 +1514,6 @@ unsigned long ACLGetCommandID(sds cmdname) {
      * with ACL SAVE. */
     if (nextid == USER_COMMAND_BITS_COUNT - 1) nextid++;
     return thisid;
-}
-
-/* Clear command id table and reset nextid to 0. */
-void ACLClearCommandID(void) {
-    if (commandId) raxFree(commandId);
-    commandId = NULL;
-    nextid = 0;
 }
 
 /* Return an username by its name, or NULL if the user does not exist. */
@@ -1668,11 +1618,11 @@ typedef struct {
     getKeysResult keys;
 } aclKeyResultCache;
 
-void initACLKeyResultCache(aclKeyResultCache *cache) {
+static void initACLKeyResultCache(aclKeyResultCache *cache) {
     cache->keys_init = 0;
 }
 
-void cleanupACLKeyResultCache(aclKeyResultCache *cache) {
+static void cleanupACLKeyResultCache(aclKeyResultCache *cache) {
     if (cache->keys_init) getKeysFreeResult(&(cache->keys));
 }
 
@@ -1891,7 +1841,7 @@ int ACLCheckAllPerm(client *c, int *idxptr) {
 
 /* If 'new' can access all channels 'original' could then return NULL;
    Otherwise return a list of channels that the new user can access */
-list *getUpcomingChannelList(user *new, user *original) {
+static list *getUpcomingChannelList(user *new, user *original) {
     listIter li, lpi;
     listNode *ln, *lpn;
 
@@ -1948,42 +1898,45 @@ list *getUpcomingChannelList(user *new, user *original) {
 
 /* Check if the client should be killed because it is subscribed to channels that were
  * permitted in the past, are not in the `upcoming` channel list. */
-int ACLShouldKillPubsubClient(client *c, list *upcoming) {
-    robj *o;
-    int kill = 0;
-
+static int ACLShouldKillPubsubClient(client *c, list *upcoming) {
     if (getClientType(c) == CLIENT_TYPE_PUBSUB) {
+        int kill = 0;
+
         /* Check for pattern violations. */
-        dictIterator *di = dictGetIterator(c->pubsub_patterns);
-        dictEntry *de;
-        while (!kill && ((de = dictNext(di)) != NULL)) {
-            o = dictGetKey(de);
+        hashtableIterator iter;
+        hashtableInitIterator(&iter, c->pubsub_data->pubsub_patterns, 0);
+        void *next;
+        while (!kill && hashtableNext(&iter, &next)) {
+            robj *o = next;
             int res = ACLCheckChannelAgainstList(upcoming, o->ptr, sdslen(o->ptr), 1);
             kill = (res == ACL_DENIED_CHANNEL);
         }
-        dictReleaseIterator(di);
+        hashtableResetIterator(&iter);
 
         /* Check for channel violations. */
         if (!kill) {
             /* Check for global channels violation. */
-            di = dictGetIterator(c->pubsub_channels);
-
-            while (!kill && ((de = dictNext(di)) != NULL)) {
-                o = dictGetKey(de);
+            hashtableIterator iter;
+            hashtableInitIterator(&iter, c->pubsub_data->pubsub_channels, 0);
+            void *next;
+            while (!kill && hashtableNext(&iter, &next)) {
+                robj *o = next;
                 int res = ACLCheckChannelAgainstList(upcoming, o->ptr, sdslen(o->ptr), 0);
                 kill = (res == ACL_DENIED_CHANNEL);
             }
-            dictReleaseIterator(di);
+            hashtableResetIterator(&iter);
         }
         if (!kill) {
             /* Check for shard channels violation. */
-            di = dictGetIterator(c->pubsubshard_channels);
-            while (!kill && ((de = dictNext(di)) != NULL)) {
-                o = dictGetKey(de);
+            hashtableIterator iter;
+            hashtableInitIterator(&iter, c->pubsub_data->pubsubshard_channels, 0);
+            void *next;
+            while (!kill && hashtableNext(&iter, &next)) {
+                robj *o = next;
                 int res = ACLCheckChannelAgainstList(upcoming, o->ptr, sdslen(o->ptr), 0);
                 kill = (res == ACL_DENIED_CHANNEL);
             }
-            dictReleaseIterator(di);
+            hashtableResetIterator(&iter);
         }
 
         if (kill) {
@@ -1995,7 +1948,7 @@ int ACLShouldKillPubsubClient(client *c, list *upcoming) {
 
 /* Check if the user's existing pub/sub clients violate the ACL pub/sub
  * permissions specified via the upcoming argument, and kill them if so. */
-void ACLKillPubsubClientsIfNeeded(user *new, user *original) {
+static void ACLKillPubsubClientsIfNeeded(user *new, user *original) {
     /* Do nothing if there are no subscribers. */
     if (pubsubTotalSubscriptions() == 0) return;
 
@@ -2035,7 +1988,7 @@ void ACLKillPubsubClientsIfNeeded(user *new, user *original) {
  * that are untouched are still duplicated. If there is an unmatched parenthesis, NULL
  * is returned and invalid_idx is set to the argument with the start of the opening
  * parenthesis. */
-sds *ACLMergeSelectorArguments(sds *argv, int argc, int *merged_argc, int *invalid_idx) {
+static sds *ACLMergeSelectorArguments(sds *argv, int argc, int *merged_argc, int *invalid_idx) {
     *merged_argc = 0;
     int open_bracket_start = -1;
 
@@ -2206,7 +2159,7 @@ int ACLAppendUserForLoading(sds *argv, int argc, int *argc_err) {
 /* This function will load the configured users appended to the server
  * configuration via ACLAppendUserForLoading(). On loading errors it will
  * log an error and return C_ERR, otherwise C_OK will be returned. */
-int ACLLoadConfiguredUsers(void) {
+static int ACLLoadConfiguredUsers(void) {
     listIter li;
     listNode *ln;
     listRewind(UsersToLoad, &li);
@@ -2275,7 +2228,7 @@ int ACLLoadConfiguredUsers(void) {
  * At the end of the process, if no errors were found in the whole file then
  * NULL is returned. Otherwise an SDS string describing in a single line
  * a description of all the issues found is returned. */
-sds ACLLoadFromFile(const char *filename) {
+static sds ACLLoadFromFile(const char *filename) {
     FILE *fp;
     char buf[1024];
 
@@ -2293,7 +2246,7 @@ sds ACLLoadFromFile(const char *filename) {
     /* Split the file into lines and attempt to load each line. */
     int totlines;
     sds *lines, errors = sdsempty();
-    lines = sdssplitlen(acls, strlen(acls), "\n", 1, &totlines);
+    lines = sdssplitlen(acls, sdslen(acls), "\n", 1, &totlines);
     sdsfree(acls);
 
     /* We do all the loading in a fresh instance of the Users radix tree,
@@ -2426,6 +2379,9 @@ sds ACLLoadFromFile(const char *filename) {
         listRewind(server.clients, &li);
         while ((ln = listNext(&li)) != NULL) {
             client *c = listNodeValue(ln);
+            /* Some clients, e.g. the one from the primary to replica, don't have a user
+             * associated with them. */
+            if (!c->user) continue;
             user *original = c->user;
             list *channels = NULL;
             user *new_user = ACLGetUserByName(c->user->name, sdslen(c->user->name));
@@ -2461,7 +2417,7 @@ sds ACLLoadFromFile(const char *filename) {
 /* Generate a copy of the ACLs currently in memory in the specified filename.
  * Returns C_OK on success or C_ERR if there was an error during the I/O.
  * When C_ERR is returned a log is produced with hints about the issue. */
-int ACLSaveToFile(const char *filename) {
+static int ACLSaveToFile(const char *filename) {
     sds acl = sdsempty();
     int fd = -1;
     sds tmpfilename = NULL;
@@ -2589,7 +2545,7 @@ typedef struct ACLLogEntry {
 /* This function will check if ACL entries 'a' and 'b' are similar enough
  * that we should actually update the existing entry in our ACL log instead
  * of creating a new one. */
-int ACLLogMatchEntry(ACLLogEntry *a, ACLLogEntry *b) {
+static int ACLLogMatchEntry(ACLLogEntry *a, ACLLogEntry *b) {
     if (a->reason != b->reason) return 0;
     if (a->context != b->context) return 0;
     mstime_t delta = a->ctime - b->ctime;
@@ -2601,7 +2557,7 @@ int ACLLogMatchEntry(ACLLogEntry *a, ACLLogEntry *b) {
 }
 
 /* Release an ACL log entry. */
-void ACLFreeLogEntry(void *leptr) {
+static void ACLFreeLogEntry(void *leptr) {
     ACLLogEntry *le = leptr;
     sdsfree(le->object);
     sdsfree(le->username);
@@ -2610,7 +2566,7 @@ void ACLFreeLogEntry(void *leptr) {
 }
 
 /* Update the relevant counter by the reason */
-void ACLUpdateInfoMetrics(int reason) {
+static void ACLUpdateInfoMetrics(int reason) {
     if (reason == ACL_DENIED_AUTH) {
         server.acl_info.user_auth_failures++;
     } else if (reason == ACL_DENIED_CMD) {
@@ -2757,9 +2713,9 @@ sds getAclErrorMessage(int acl_res, user *user, struct serverCommand *cmd, sds e
  * ==========================================================================*/
 
 /* ACL CAT category */
-void aclCatWithFlags(client *c, hashtable *commands, uint64_t cflag, int *arraylen) {
+static void aclCatWithFlags(client *c, hashtable *commands, uint64_t cflag, int *arraylen) {
     hashtableIterator iter;
-    hashtableInitIterator(&iter, commands);
+    hashtableInitIterator(&iter, commands, 0);
     void *next;
     while (hashtableNext(&iter, &next)) {
         struct serverCommand *cmd = next;
@@ -2781,7 +2737,7 @@ void aclCatWithFlags(client *c, hashtable *commands, uint64_t cflag, int *arrayl
  * Setting verbose to 1 means that the full qualifier for key and channel
  * permissions are shown.
  */
-int aclAddReplySelectorDescription(client *c, aclSelector *s) {
+static int aclAddReplySelectorDescription(client *c, aclSelector *s) {
     listIter li;
     listNode *ln;
 
@@ -3140,8 +3096,8 @@ void aclCommand(client *c) {
             "    Show the ACL log entries.",
             "SAVE",
             "    Save the current config to the ACL file.",
-            "SETUSER <username> <attribute> [<attribute> ...]",
-            "    Create or modify a user with the specified attributes.",
+            "SETUSER <username> <rule> [<rule> ...]",
+            "    Create or modify a user with the specified rules.",
             "USERS",
             "    List all the registered usernames.",
             "WHOAMI",

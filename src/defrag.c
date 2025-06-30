@@ -32,17 +32,24 @@
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  * POSSIBILITY OF SUCH DAMAGE.
  */
+/*
+ * Copyright (c) Valkey Contributors
+ * All rights reserved.
+ * SPDX-License-Identifier: BSD-3-Clause
+ */
 
 #include "server.h"
 #include "hashtable.h"
+#include "eval.h"
 #include "script.h"
+#include "module.h"
+#include <stdbool.h>
 #include <stddef.h>
 
 #ifdef HAVE_DEFRAG
 
 typedef enum { DEFRAG_NOT_DONE = 0,
                DEFRAG_DONE = 1 } doneStatus;
-
 
 /*
  * Defragmentation is performed in stages.  Each stage is serviced by a stage function
@@ -127,7 +134,7 @@ typedef struct {
 static_assert(offsetof(defragKeysCtx, kvstate) == 0, "defragStageKvstoreHelper requires this");
 
 // Private data for pubsub kvstores
-typedef dict *(*getClientChannelsFn)(client *);
+typedef hashtable *(*getClientChannelsFn)(client *);
 typedef struct {
     getClientChannelsFn fn;
 } getClientChannelsFnWrapper;
@@ -235,51 +242,6 @@ robj *activeDefragStringOb(robj *ob) {
     return new_robj;
 }
 
-
-/* Defrag helper for lua scripts
- *
- * Returns NULL in case the allocation wasn't moved.
- * When it returns a non-null value, the old pointer was already released
- * and should NOT be accessed. */
-static luaScript *activeDefragLuaScript(luaScript *script) {
-    luaScript *ret = NULL;
-
-    /* try to defrag script struct */
-    if ((ret = activeDefragAlloc(script))) {
-        script = ret;
-    }
-
-    /* try to defrag actual script object */
-    robj *ob = activeDefragStringOb(script->body);
-    if (ob) script->body = ob;
-
-    return ret;
-}
-
-/* Defrag helper for dict main allocations (dict struct, and hash tables).
- * Receives a pointer to the dict* and return a new dict* when the dict
- * struct itself was moved.
- *
- * Returns NULL in case the allocation wasn't moved.
- * When it returns a non-null value, the old pointer was already released
- * and should NOT be accessed. */
-static dict *dictDefragTables(dict *d) {
-    dict *ret = NULL;
-    dictEntry **newtable;
-    /* handle the dict struct */
-    if ((ret = activeDefragAlloc(d))) d = ret;
-    /* handle the first hash table */
-    if (!d->ht_table[0]) return ret; /* created but unused */
-    newtable = activeDefragAlloc(d->ht_table[0]);
-    if (newtable) d->ht_table[0] = newtable;
-    /* handle the second hash table */
-    if (d->ht_table[1]) {
-        newtable = activeDefragAlloc(d->ht_table[1]);
-        if (newtable) d->ht_table[1] = newtable;
-    }
-    return ret;
-}
-
 /* Internal function used by zslDefrag */
 static void zslUpdateNode(zskiplist *zsl, zskiplistNode *oldnode, zskiplistNode *newnode, zskiplistNode **update) {
     int i;
@@ -296,55 +258,45 @@ static void zslUpdateNode(zskiplist *zsl, zskiplistNode *oldnode, zskiplistNode 
     }
 }
 
-/* Defrag helper for sorted set.
- * Update the robj pointer, defrag the skiplist struct and return the new score
- * reference. We may not access oldele pointer (not even the pointer stored in
- * the skiplist), as it was already freed. Newele may be null, in which case we
- * only need to defrag the skiplist, but not update the obj pointer.
- * When return value is non-NULL, it is the score reference that must be updated
- * in the dict record. */
-static double *zslDefrag(zskiplist *zsl, double score, sds oldele, sds newele) {
-    zskiplistNode *update[ZSKIPLIST_MAXLEVEL], *x, *newx;
-    int i;
-    sds ele = newele ? newele : oldele;
+/* Hashtable scan callback for sorted set. It defragments a single skiplist
+ * node, updates skiplist pointers, and updates the hashtable pointer to the
+ * node. */
+static void activeDefragZsetNode(void *privdata, void *entry_ref) {
+    zskiplist *zsl = privdata;
+    zskiplistNode **node_ref = (zskiplistNode **)entry_ref;
+    zskiplistNode *node = *node_ref;
 
-    /* find the skiplist node referring to the object that was moved,
-     * and all pointers that need to be updated if we'll end up moving the skiplist node. */
-    x = zsl->header;
-    for (i = zsl->level - 1; i >= 0; i--) {
-        while (x->level[i].forward && x->level[i].forward->ele != oldele && /* make sure not to access the
-                                                                               ->obj pointer if it matches
-                                                                               oldele */
-               (x->level[i].forward->score < score ||
-                (x->level[i].forward->score == score && sdscmp(x->level[i].forward->ele, ele) < 0)))
-            x = x->level[i].forward;
+    /* defragment node internals */
+    sds newsds = activeDefragSds(node->ele);
+    if (newsds) node->ele = newsds;
+
+    const double score = node->score;
+    const sds ele = node->ele;
+
+    /* find skiplist pointers that need to be updated if we end up moving the
+     * skiplist node. */
+    zskiplistNode *update[ZSKIPLIST_MAXLEVEL];
+    zskiplistNode *x = zsl->header;
+    for (int i = zsl->level - 1; i >= 0; i--) {
+        /* stop when we've reached the end of this level or the next node comes
+         * after our target in sorted order */
+        zskiplistNode *next = x->level[i].forward;
+        while (next &&
+               (next->score < score ||
+                (next->score == score && sdscmp(next->ele, ele) < 0))) {
+            x = next;
+            next = x->level[i].forward;
+        }
         update[i] = x;
     }
-
-    /* update the robj pointer inside the skip list record. */
-    x = x->level[0].forward;
-    serverAssert(x && score == x->score && x->ele == oldele);
-    if (newele) x->ele = newele;
+    /* should have arrived at intended node */
+    serverAssert(x->level[0].forward == node);
 
     /* try to defrag the skiplist record itself */
-    newx = activeDefragAlloc(x);
-    if (newx) {
-        zslUpdateNode(zsl, x, newx, update);
-        return &newx->score;
-    }
-    return NULL;
-}
-
-/* Defrag helper for sorted set.
- * Defrag a single dict entry key name, and corresponding skiplist struct */
-static void activeDefragZsetEntry(zset *zs, dictEntry *de) {
-    sds newsds;
-    double *newscore;
-    sds sdsele = dictGetKey(de);
-    if ((newsds = activeDefragSds(sdsele))) dictSetKey(zs->dict, de, newsds);
-    newscore = zslDefrag(zs->zsl, *(double *)dictGetVal(de), sdsele, newsds);
-    if (newscore) {
-        dictSetVal(zs->dict, de, newscore);
+    zskiplistNode *newnode = activeDefragAlloc(node);
+    if (newnode) {
+        zslUpdateNode(zsl, node, newnode, update);
+        *node_ref = newnode; /* update hashtable pointer */
     }
 }
 
@@ -368,25 +320,18 @@ static void activeDefragSdsDict(dict *d, int val_type) {
         .defragVal = (val_type == DEFRAG_SDS_DICT_VAL_IS_SDS       ? (dictDefragAllocFunction *)activeDefragSds
                       : val_type == DEFRAG_SDS_DICT_VAL_IS_STROB   ? (dictDefragAllocFunction *)activeDefragStringOb
                       : val_type == DEFRAG_SDS_DICT_VAL_VOID_PTR   ? (dictDefragAllocFunction *)activeDefragAlloc
-                      : val_type == DEFRAG_SDS_DICT_VAL_LUA_SCRIPT ? (dictDefragAllocFunction *)activeDefragLuaScript
+                      : val_type == DEFRAG_SDS_DICT_VAL_LUA_SCRIPT ? (dictDefragAllocFunction *)evalActiveDefragScript
                                                                    : NULL)};
     do {
         cursor = dictScanDefrag(d, cursor, activeDefragSdsDictCallback, &defragfns, NULL);
     } while (cursor != 0);
 }
 
-void activeDefragSdsHashtableCallback(void *privdata, void *entry_ref) {
+static void activeDefragSdsHashtableCallback(void *privdata, void *entry_ref) {
     UNUSED(privdata);
     sds *sds_ref = (sds *)entry_ref;
     sds new_sds = activeDefragSds(*sds_ref);
     if (new_sds != NULL) *sds_ref = new_sds;
-}
-
-void activeDefragSdsHashtable(hashtable *ht) {
-    unsigned long cursor = 0;
-    do {
-        cursor = hashtableScanDefrag(ht, cursor, activeDefragSdsHashtableCallback, NULL, activeDefragAlloc, HASHTABLE_SCAN_EMIT_REF);
-    } while (cursor != 0);
 }
 
 /* Defrag a list of ptr, sds or robj string values */
@@ -434,7 +379,7 @@ static long scanLaterList(robj *ob, unsigned long *cursor, monotime endtime) {
     quicklistNode *node;
     long iterations = 0;
     int bookmark_failed = 0;
-    if (ob->type != OBJ_LIST || ob->encoding != OBJ_ENCODING_QUICKLIST) return 0;
+    serverAssert(ob->type == OBJ_LIST && ob->encoding == OBJ_ENCODING_QUICKLIST);
 
     if (*cursor == 0) {
         /* if cursor is 0, we start new iteration */
@@ -471,24 +416,15 @@ static long scanLaterList(robj *ob, unsigned long *cursor, monotime endtime) {
     return bookmark_failed ? 1 : 0;
 }
 
-typedef struct {
-    zset *zs;
-} scanLaterZsetData;
-
-static void scanLaterZsetCallback(void *privdata, const dictEntry *_de) {
-    dictEntry *de = (dictEntry *)_de;
-    scanLaterZsetData *data = privdata;
-    activeDefragZsetEntry(data->zs, de);
+static void scanLaterZsetCallback(void *privdata, void *element_ref) {
+    activeDefragZsetNode(privdata, element_ref);
     server.stat_active_defrag_scanned++;
 }
 
 static void scanLaterZset(robj *ob, unsigned long *cursor) {
-    if (ob->type != OBJ_ZSET || ob->encoding != OBJ_ENCODING_SKIPLIST) return;
+    serverAssert(ob->type == OBJ_ZSET && ob->encoding == OBJ_ENCODING_SKIPLIST);
     zset *zs = (zset *)ob->ptr;
-    dict *d = zs->dict;
-    scanLaterZsetData data = {zs};
-    dictDefragFunctions defragfns = {.defragAlloc = activeDefragAlloc};
-    *cursor = dictScanDefrag(d, *cursor, scanLaterZsetCallback, &defragfns, &data);
+    *cursor = hashtableScanDefrag(zs->ht, *cursor, scanLaterZsetCallback, zs->zsl, activeDefragAlloc, HASHTABLE_SCAN_EMIT_REF);
 }
 
 /* Used as hashtable scan callback when all we need is to defrag the hashtable
@@ -499,26 +435,25 @@ static void scanHashtableCallbackCountScanned(void *privdata, void *elemref) {
     server.stat_active_defrag_scanned++;
 }
 
-/* Used as dict scan callback when all the work is done in the dictDefragFunctions. */
-static void scanCallbackCountScanned(void *privdata, const dictEntry *de) {
-    UNUSED(privdata);
-    UNUSED(de);
-    server.stat_active_defrag_scanned++;
-}
-
 static void scanLaterSet(robj *ob, unsigned long *cursor) {
-    if (ob->type != OBJ_SET || ob->encoding != OBJ_ENCODING_HASHTABLE) return;
+    serverAssert(ob->type == OBJ_SET && ob->encoding == OBJ_ENCODING_HASHTABLE);
     hashtable *ht = ob->ptr;
     *cursor = hashtableScanDefrag(ht, *cursor, activeDefragSdsHashtableCallback, NULL, activeDefragAlloc, HASHTABLE_SCAN_EMIT_REF);
 }
 
+/* Hashtable scan callback for hash datatype */
+static void activeDefragHashTypeEntry(void *privdata, void *element_ref) {
+    UNUSED(privdata);
+    hashTypeEntry **entry_ref = (hashTypeEntry **)element_ref;
+
+    hashTypeEntry *new_entry = hashTypeEntryDefrag(*entry_ref, activeDefragAlloc, activeDefragSds);
+    if (new_entry) *entry_ref = new_entry;
+}
+
 static void scanLaterHash(robj *ob, unsigned long *cursor) {
-    if (ob->type != OBJ_HASH || ob->encoding != OBJ_ENCODING_HT) return;
-    dict *d = ob->ptr;
-    dictDefragFunctions defragfns = {.defragAlloc = activeDefragAlloc,
-                                     .defragKey = (dictDefragAllocFunction *)activeDefragSds,
-                                     .defragVal = (dictDefragAllocFunction *)activeDefragSds};
-    *cursor = dictScanDefrag(d, *cursor, scanCallbackCountScanned, &defragfns, NULL);
+    serverAssert(ob->type == OBJ_HASH && ob->encoding == OBJ_ENCODING_HASHTABLE);
+    hashtable *ht = ob->ptr;
+    *cursor = hashtableScanDefrag(ht, *cursor, activeDefragHashTypeEntry, NULL, activeDefragAlloc, HASHTABLE_SCAN_EMIT_REF);
 }
 
 static void defragQuicklist(robj *ob) {
@@ -532,39 +467,43 @@ static void defragQuicklist(robj *ob) {
 }
 
 static void defragZsetSkiplist(robj *ob) {
+    serverAssert(ob->type == OBJ_ZSET && ob->encoding == OBJ_ENCODING_SKIPLIST);
     zset *zs = (zset *)ob->ptr;
+
     zset *newzs;
     zskiplist *newzsl;
-    dict *newdict;
-    dictEntry *de;
     struct zskiplistNode *newheader;
-    serverAssert(ob->type == OBJ_ZSET && ob->encoding == OBJ_ENCODING_SKIPLIST);
     if ((newzs = activeDefragAlloc(zs))) ob->ptr = zs = newzs;
     if ((newzsl = activeDefragAlloc(zs->zsl))) zs->zsl = newzsl;
     if ((newheader = activeDefragAlloc(zs->zsl->header))) zs->zsl->header = newheader;
-    if (dictSize(zs->dict) > server.active_defrag_max_scan_fields)
+
+    hashtable *newtable;
+    if ((newtable = hashtableDefragTables(zs->ht, activeDefragAlloc))) zs->ht = newtable;
+
+    if (hashtableSize(zs->ht) > server.active_defrag_max_scan_fields)
         defragLater(ob);
     else {
-        dictIterator *di = dictGetIterator(zs->dict);
-        while ((de = dictNext(di)) != NULL) {
-            activeDefragZsetEntry(zs, de);
-        }
-        dictReleaseIterator(di);
+        unsigned long cursor = 0;
+        do {
+            cursor = hashtableScanDefrag(zs->ht, cursor, activeDefragZsetNode, zs->zsl, activeDefragAlloc, HASHTABLE_SCAN_EMIT_REF);
+        } while (cursor != 0);
     }
-    /* defrag the dict struct and tables */
-    if ((newdict = dictDefragTables(zs->dict))) zs->dict = newdict;
 }
 
 static void defragHash(robj *ob) {
-    dict *d, *newd;
-    serverAssert(ob->type == OBJ_HASH && ob->encoding == OBJ_ENCODING_HT);
-    d = ob->ptr;
-    if (dictSize(d) > server.active_defrag_max_scan_fields)
+    serverAssert(ob->type == OBJ_HASH && ob->encoding == OBJ_ENCODING_HASHTABLE);
+    hashtable *ht = ob->ptr;
+    if (hashtableSize(ht) > server.active_defrag_max_scan_fields) {
         defragLater(ob);
-    else
-        activeDefragSdsDict(d, DEFRAG_SDS_DICT_VAL_IS_SDS);
-    /* defrag the dict struct and tables */
-    if ((newd = dictDefragTables(ob->ptr))) ob->ptr = newd;
+    } else {
+        unsigned long cursor = 0;
+        do {
+            cursor = hashtableScanDefrag(ht, cursor, activeDefragHashTypeEntry, NULL, activeDefragAlloc, HASHTABLE_SCAN_EMIT_REF);
+        } while (cursor != 0);
+    }
+    /* defrag the hashtable struct and tables */
+    hashtable *new_hashtable = hashtableDefragTables(ht, activeDefragAlloc);
+    if (new_hashtable) ob->ptr = new_hashtable;
 }
 
 static void defragSet(robj *ob) {
@@ -573,11 +512,14 @@ static void defragSet(robj *ob) {
     if (hashtableSize(ht) > server.active_defrag_max_scan_fields) {
         defragLater(ob);
     } else {
-        activeDefragSdsHashtable(ht);
+        unsigned long cursor = 0;
+        do {
+            cursor = hashtableScanDefrag(ht, cursor, activeDefragSdsHashtableCallback, NULL, activeDefragAlloc, HASHTABLE_SCAN_EMIT_REF);
+        } while (cursor != 0);
     }
     /* defrag the hashtable struct and tables */
-    hashtable *newHashtable = hashtableDefragTables(ht, activeDefragAlloc);
-    if (newHashtable) ob->ptr = newHashtable;
+    hashtable *new_hashtable = hashtableDefragTables(ht, activeDefragAlloc);
+    if (new_hashtable) ob->ptr = new_hashtable;
 }
 
 /* Defrag callback for radix tree iterator, called for each node,
@@ -596,10 +538,7 @@ static int scanLaterStreamListpacks(robj *ob, unsigned long *cursor, monotime en
     static unsigned char last[sizeof(streamID)];
     raxIterator ri;
     long iterations = 0;
-    if (ob->type != OBJ_STREAM || ob->encoding != OBJ_ENCODING_STREAM) {
-        *cursor = 0;
-        return 0;
-    }
+    serverAssert(ob->type == OBJ_STREAM && ob->encoding == OBJ_ENCODING_STREAM);
 
     stream *s = ob->ptr;
     raxStart(&ri, s->rax);
@@ -745,7 +684,7 @@ static void defragModule(serverDb *db, robj *obj) {
 /* for each key we scan in the main dict, this function will attempt to defrag
  * all the various pointers it has. */
 static void defragKey(defragKeysCtx *ctx, robj **elemref) {
-    serverDb *db = &server.db[ctx->dbid];
+    serverDb *db = server.db[ctx->dbid];
     int slot = ctx->kvstate.slot;
     robj *newob, *ob;
     unsigned char *newzl;
@@ -794,7 +733,7 @@ static void defragKey(defragKeysCtx *ctx, robj **elemref) {
     } else if (ob->type == OBJ_HASH) {
         if (ob->encoding == OBJ_ENCODING_LISTPACK) {
             if ((newzl = activeDefragAlloc(ob->ptr))) ob->ptr = newzl;
-        } else if (ob->encoding == OBJ_ENCODING_HT) {
+        } else if (ob->encoding == OBJ_ENCODING_HASHTABLE) {
             defragHash(ob);
         } else {
             serverPanic("Unknown hash encoding");
@@ -822,37 +761,33 @@ static void dbKeysScanCallback(void *privdata, void *elemref) {
 /* Defrag scan callback for a pubsub channels hashtable. */
 static void defragPubsubScanCallback(void *privdata, void *elemref) {
     defragPubSubCtx *ctx = privdata;
-    void **channel_dict_ref = (void **)elemref;
-    dict *newclients, *clients = *channel_dict_ref;
-    robj *newchannel, *channel = *(robj **)dictMetadata(clients);
-    size_t allocation_size;
+    void **clients_ref = (void **)elemref;
+    hashtable *newclients, *clients = *clients_ref;
+    robj *newchannel, *channel = *(robj **)hashtableMetadata(clients);
 
     /* Try to defrag the channel name. */
-    serverAssert(channel->refcount == (int)dictSize(clients) + 1);
-    newchannel = activeDefragStringObWithoutFree(channel, &allocation_size);
+    serverAssert(channel->refcount == (int)hashtableSize(clients) + 1);
+    newchannel = activeDefragStringOb(channel);
     if (newchannel) {
-        *(robj **)dictMetadata(clients) = newchannel;
+        *(robj **)hashtableMetadata(clients) = newchannel;
 
         /* The channel name is shared by the client's pubsub(shard) and server's
          * pubsub(shard), after defraging the channel name, we need to update
          * the reference in the clients' dictionary. */
-        dictIterator *di = dictGetIterator(clients);
-        dictEntry *clientde;
-        while ((clientde = dictNext(di)) != NULL) {
-            client *c = dictGetKey(clientde);
-            dict *client_channels = ctx->getPubSubChannels(c);
-            dictEntry *pubsub_channel = dictFind(client_channels, newchannel);
-            serverAssert(pubsub_channel);
-            dictSetKey(ctx->getPubSubChannels(c), pubsub_channel, newchannel);
+        hashtableIterator iter;
+        hashtableInitIterator(&iter, clients, 0);
+        void *c;
+        while (hashtableNext(&iter, &c)) {
+            hashtable *client_channels = ctx->getPubSubChannels(c);
+            int replaced = hashtableReplaceReallocatedEntry(client_channels, channel, newchannel);
+            serverAssert(replaced);
         }
-        dictReleaseIterator(di);
-        // Now that we're done correcting the references, we can safely free the old channel robj
-        allocatorDefragFree(channel, allocation_size);
+        hashtableResetIterator(&iter);
     }
 
     /* Try to defrag the dictionary of clients that is stored as the value part. */
-    if ((newclients = dictDefragTables(clients)))
-        *channel_dict_ref = newclients;
+    if ((newclients = hashtableDefragTables(clients, activeDefragAlloc)))
+        *clients_ref = newclients;
 
     server.stat_active_defrag_scanned++;
 }
@@ -861,15 +796,15 @@ static void defragPubsubScanCallback(void *privdata, void *elemref) {
  * and 1 if time is up and more work is needed. */
 static int defragLaterItem(robj *ob, unsigned long *cursor, monotime endtime, int dbid) {
     if (ob) {
-        if (ob->type == OBJ_LIST) {
+        if (ob->type == OBJ_LIST && ob->encoding == OBJ_ENCODING_QUICKLIST) {
             return scanLaterList(ob, cursor, endtime);
-        } else if (ob->type == OBJ_SET) {
+        } else if (ob->type == OBJ_SET && ob->encoding == OBJ_ENCODING_HASHTABLE) {
             scanLaterSet(ob, cursor);
-        } else if (ob->type == OBJ_ZSET) {
+        } else if (ob->type == OBJ_ZSET && ob->encoding == OBJ_ENCODING_SKIPLIST) {
             scanLaterZset(ob, cursor);
-        } else if (ob->type == OBJ_HASH) {
+        } else if (ob->type == OBJ_HASH && ob->encoding == OBJ_ENCODING_HASHTABLE) {
             scanLaterHash(ob, cursor);
-        } else if (ob->type == OBJ_STREAM) {
+        } else if (ob->type == OBJ_STREAM && ob->encoding == OBJ_ENCODING_STREAM) {
             return scanLaterStreamListpacks(ob, cursor, endtime);
         } else if (ob->type == OBJ_MODULE) {
             /* Fun fact (and a bug since forever): The key is passed to
@@ -878,10 +813,9 @@ static int defragLaterItem(robj *ob, unsigned long *cursor, monotime endtime, in
              * callbacks. Nobody can ever have used this, i.e. accessed the key
              * name in the defrag module type callback. */
             void *sds_key_passed_as_robj = objectGetKey(ob);
-            long long endtimeWallClock = ustime() + (endtime - getMonotonicUs());
-            return moduleLateDefrag(sds_key_passed_as_robj, ob, cursor, endtimeWallClock, dbid);
+            return moduleLateDefrag(sds_key_passed_as_robj, ob, cursor, endtime, dbid);
         } else {
-            *cursor = 0; /* object type may have changed since we schedule it for later */
+            *cursor = 0; /* object type/encoding may have changed since we schedule it for later */
         }
     } else {
         *cursor = 0; /* object may have been deleted already */
@@ -1006,7 +940,7 @@ static doneStatus defragStageKvstoreHelper(monotime endtime,
 static doneStatus defragStageDbKeys(monotime endtime, void *target, void *privdata) {
     UNUSED(privdata);
     int dbid = (uintptr_t)target;
-    serverDb *db = &server.db[dbid];
+    serverDb *db = server.db[dbid];
 
     static defragKeysCtx ctx; // STATIC - this persists
     if (endtime == 0) {
@@ -1024,7 +958,7 @@ static doneStatus defragStageDbKeys(monotime endtime, void *target, void *privda
 static doneStatus defragStageExpiresKvstore(monotime endtime, void *target, void *privdata) {
     UNUSED(privdata);
     int dbid = (uintptr_t)target;
-    serverDb *db = &server.db[dbid];
+    serverDb *db = server.db[dbid];
     return defragStageKvstoreHelper(endtime, db->expires,
                                     scanHashtableCallbackCountScanned, NULL, NULL);
 }
@@ -1081,7 +1015,6 @@ static void endDefragCycle(bool normal_termination) {
         // For normal termination, we expect...
         serverAssert(!defrag.current_stage);
         serverAssert(listLength(defrag.remaining_stages) == 0);
-        serverAssert(!defrag_later || listLength(defrag_later) == 0);
     } else {
         // Defrag is being terminated abnormally
         aeDeleteTimeEvent(server.el, defrag.timeproc_id);
@@ -1097,6 +1030,8 @@ static void endDefragCycle(bool normal_termination) {
     listRelease(defrag.remaining_stages);
     defrag.remaining_stages = NULL;
 
+    /* For a normal termination, this list is usually empty, but it might contain elements
+     *  if a stage was aborted due to a flushall or some other DB swap. */
     if (defrag_later) {
         listRelease(defrag_later);
         defrag_later = NULL;
@@ -1112,6 +1047,9 @@ static void endDefragCycle(bool normal_termination) {
     server.stat_total_active_defrag_time += elapsedUs(server.stat_last_active_defrag_time);
     server.stat_last_active_defrag_time = 0;
     server.active_defrag_cpu_percent = 0;
+
+    /* Immediately check to see if we should start another defrag cycle. */
+    monitorActiveDefrag();
 }
 
 
@@ -1249,7 +1187,7 @@ static long long activeDefragTimeProc(struct aeEventLoop *eventLoop, long long i
 
     latencyEndMonitor(latency);
     latencyAddSampleIfNeeded("active-defrag-cycle", latency);
-
+    latencyTraceIfNeeded(db, active_defrag_cycle, latency);
     if (haveMoreWork) {
         return computeDelayMs(endtime);
     } else {
@@ -1289,6 +1227,7 @@ static void beginDefragCycle(void) {
     defrag.remaining_stages = listCreate();
 
     for (int dbid = 0; dbid < server.dbnum; dbid++) {
+        if (dbHasNoKeys(dbid)) continue;
         addDefragStage(defragStageDbKeys, (void *)(uintptr_t)dbid, NULL);
         addDefragStage(defragStageExpiresKvstore, (void *)(uintptr_t)dbid, NULL);
     }

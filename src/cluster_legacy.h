@@ -7,7 +7,6 @@
  * multiplicators of the node timeout value (when ending with MULT). */
 #define CLUSTER_FAIL_REPORT_VALIDITY_MULT 2  /* Fail report validity. */
 #define CLUSTER_FAIL_UNDO_TIME_MULT 2        /* Undo fail if primary is back. */
-#define CLUSTER_MF_TIMEOUT 5000              /* Milliseconds to do a manual failover. */
 #define CLUSTER_MF_PAUSE_MULT 2              /* Primary pause manual failover mult. */
 #define CLUSTER_REPLICA_MIGRATION_DELAY 5000 /* Delay for replica migration. */
 
@@ -42,18 +41,19 @@ typedef struct clusterLink {
 } clusterLink;
 
 /* Cluster node flags and macros. */
-#define CLUSTER_NODE_PRIMARY (1 << 0)               /* The node is a primary */
-#define CLUSTER_NODE_REPLICA (1 << 1)               /* The node is a replica */
-#define CLUSTER_NODE_PFAIL (1 << 2)                 /* Failure? Need acknowledge */
-#define CLUSTER_NODE_FAIL (1 << 3)                  /* The node is believed to be malfunctioning */
-#define CLUSTER_NODE_MYSELF (1 << 4)                /* This node is myself */
-#define CLUSTER_NODE_HANDSHAKE (1 << 5)             /* We have still to exchange the first ping */
-#define CLUSTER_NODE_NOADDR (1 << 6)                /* We don't know the address of this node */
-#define CLUSTER_NODE_MEET (1 << 7)                  /* Send a MEET message to this node */
-#define CLUSTER_NODE_MIGRATE_TO (1 << 8)            /* Primary eligible for replica migration. */
-#define CLUSTER_NODE_NOFAILOVER (1 << 9)            /* Replica will not try to failover. */
-#define CLUSTER_NODE_EXTENSIONS_SUPPORTED (1 << 10) /* This node supports extensions. */
-#define CLUSTER_NODE_LIGHT_HDR_SUPPORTED (1 << 11)  /* This node supports light pubsub message header. */
+#define CLUSTER_NODE_PRIMARY (1 << 0)                      /* The node is a primary */
+#define CLUSTER_NODE_REPLICA (1 << 1)                      /* The node is a replica */
+#define CLUSTER_NODE_PFAIL (1 << 2)                        /* Failure? Need acknowledge */
+#define CLUSTER_NODE_FAIL (1 << 3)                         /* The node is believed to be malfunctioning */
+#define CLUSTER_NODE_MYSELF (1 << 4)                       /* This node is myself */
+#define CLUSTER_NODE_HANDSHAKE (1 << 5)                    /* We have still to exchange the first ping */
+#define CLUSTER_NODE_NOADDR (1 << 6)                       /* We don't know the address of this node */
+#define CLUSTER_NODE_MEET (1 << 7)                         /* Send a MEET message to this node */
+#define CLUSTER_NODE_MIGRATE_TO (1 << 8)                   /* Primary eligible for replica migration. */
+#define CLUSTER_NODE_NOFAILOVER (1 << 9)                   /* Replica will not try to failover. */
+#define CLUSTER_NODE_EXTENSIONS_SUPPORTED (1 << 10)        /* This node supports extensions. */
+#define CLUSTER_NODE_LIGHT_HDR_PUBLISH_SUPPORTED (1 << 11) /* This node supports light message header for publish type. */
+#define CLUSTER_NODE_LIGHT_HDR_MODULE_SUPPORTED (1 << 12)  /* This node supports light message header for module type. */
 #define CLUSTER_NODE_NULL_NAME                                                                                         \
     "\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000" \
     "\000\000\000\000\000\000\000\000\000\000\000\000"
@@ -67,7 +67,8 @@ typedef struct clusterLink {
 #define nodeFailed(n) ((n)->flags & CLUSTER_NODE_FAIL)
 #define nodeCantFailover(n) ((n)->flags & CLUSTER_NODE_NOFAILOVER)
 #define nodeSupportsExtensions(n) ((n)->flags & CLUSTER_NODE_EXTENSIONS_SUPPORTED)
-#define nodeSupportsLightMsgHdr(n) ((n)->flags & CLUSTER_NODE_LIGHT_HDR_SUPPORTED)
+#define nodeSupportsLightMsgHdrForPubSub(n) ((n)->flags & CLUSTER_NODE_LIGHT_HDR_PUBLISH_SUPPORTED)
+#define nodeSupportsLightMsgHdrForModule(n) ((n)->flags & CLUSTER_NODE_LIGHT_HDR_MODULE_SUPPORTED)
 #define nodeInNormalState(n) (!((n)->flags & (CLUSTER_NODE_HANDSHAKE | CLUSTER_NODE_MEET | CLUSTER_NODE_PFAIL | CLUSTER_NODE_FAIL)))
 
 /* This structure represent elements of node->fail_reports. */
@@ -103,6 +104,13 @@ typedef struct clusterNodeFailReport {
 
 /* We check for the modifier bit to determine if the message is sent using light header.*/
 #define IS_LIGHT_MESSAGE(type) ((type) & CLUSTERMSG_LIGHT)
+
+/* Types of header supported over the cluster bus. */
+typedef enum {
+    CLUSTERMSG_HDR_NORMAL = 0, /* This corresponds to `clusterMsg` struct. */
+    CLUSTERMSG_HDR_LIGHT,      /* This corresponds to `clusterMsgLight` struct. */
+    CLUSTERMSG_HDR_NUM,        /* Overall count of header type supported. */
+} clusterMsgHdrType;
 
 /* Initially we don't know our "name", but we'll find it once we connect
  * to the first node, using the getsockname() function. Then we'll use this
@@ -340,8 +348,8 @@ struct _clusterNode {
     mstime_t ping_sent;                     /* Unix time we sent latest ping */
     mstime_t pong_received;                 /* Unix time we received the pong */
     mstime_t data_received;                 /* Unix time we received any data */
+    mstime_t meet_sent;                     /* Unix time we sent latest meet packet */
     mstime_t fail_time;                     /* Unix time when FAIL flag was set */
-    mstime_t repl_offset_time;              /* Unix time we received offset for this node */
     mstime_t orphaned_time;                 /* Starting time of orphaned primary condition */
     mstime_t inbound_link_freed_time;       /* Last time we freed the inbound link for this node.
                                                If it was never freed, it is the same as ctime */
@@ -381,13 +389,14 @@ struct clusterState {
     clusterNode *importing_slots_from[CLUSTER_SLOTS];
     clusterNode *slots[CLUSTER_SLOTS];
     /* The following fields are used to take the replica state on elections. */
-    mstime_t failover_auth_time;  /* Time of previous or next election. */
-    int failover_auth_count;      /* Number of votes received so far. */
-    int failover_auth_sent;       /* True if we already asked for votes. */
-    int failover_auth_rank;       /* This replica rank for current auth request. */
-    uint64_t failover_auth_epoch; /* Epoch of the current election. */
-    int cant_failover_reason;     /* Why a replica is currently not able to
-                                     failover. See the CANT_FAILOVER_* macros. */
+    mstime_t failover_auth_time;      /* Time of previous or next election. */
+    int failover_auth_count;          /* Number of votes received so far. */
+    int failover_auth_sent;           /* True if we already asked for votes. */
+    int failover_auth_rank;           /* This replica rank for current auth request. */
+    int failover_failed_primary_rank; /* The rank of this instance in the context of all failed primary list. */
+    uint64_t failover_auth_epoch;     /* Epoch of the current election. */
+    int cant_failover_reason;         /* Why a replica is currently not able to
+                                       * failover. See the CANT_FAILOVER_* macros. */
     /* Manual failover state in common. */
     mstime_t mf_end; /* Manual failover time limit (ms unixtime).
                         It is zero if there is no MF in progress. */

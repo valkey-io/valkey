@@ -1,8 +1,4 @@
-# make sure the test infra won't use SELECT
-set old_singledb $::singledb
-set ::singledb 1
-
-tags {tls:skip external:skip cluster} {
+tags {tls:skip external:skip cluster singledb} {
     set CLUSTER_PACKET_TYPE_PING 0
     set CLUSTER_PACKET_TYPE_PONG 1
     set CLUSTER_PACKET_TYPE_MEET 2
@@ -70,13 +66,11 @@ tags {tls:skip external:skip cluster} {
                 [CI 0 cluster_stats_messages_meet_received] >= 4 &&
                 [CI 1 cluster_stats_messages_meet_sent] == [CI 0 cluster_stats_messages_meet_received]
             } else {
-                fail "1 cluster_state:[CI 1 cluster_state], 0 cluster_state: [CI 0 cluster_state]"
+                fail "Unexpected cluster state: node 1 cluster_state:[CI 1 cluster_state], node 0 cluster_state: [CI 0 cluster_state]"
             }
         }
     } ;# stop servers
 } ;# tags
-
-set ::singledb $old_singledb
 
 proc cluster_get_first_node_in_handshake id {
     set nodes [get_cluster_nodes $id]
@@ -178,14 +172,13 @@ start_cluster 2 0 {tags {external:skip cluster} overrides {cluster-node-timeout 
 
             # Wait for Node 0's handshake to timeout
             wait_for_condition 50 100 {
-                [cluster_get_first_node_in_handshake 1] eq {}
+                [cluster_get_first_node_in_handshake 0] eq {}
             } else {
                 fail "Node 0 never exited handshake state"
             }
 
-            # At this point Node 0 knows Node 1 & 2 through the gossip, but they don't know Node 0.
+            # At this point Node 0 knows Node 2 through the gossip, but Node 1 & 2 don't know Node 0.
             wait_for_condition 50 100 {
-                [cluster_get_node_by_id 0 $node1_id] != {} &&
                 [cluster_get_node_by_id 0 $node2_id] != {} &&
                 [cluster_get_node_by_id 1 $node0_id] eq {} &&
                 [cluster_get_node_by_id 2 $node0_id] eq {}

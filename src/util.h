@@ -68,7 +68,7 @@ uint32_t sdigits10(int64_t v);
 int ll2string(char *s, size_t len, long long value);
 int ull2string(char *s, size_t len, unsigned long long value);
 int string2ll(const char *s, size_t slen, long long *value);
-int string2ull(const char *s, unsigned long long *value);
+int string2ull(const char *s, size_t slen, unsigned long long *value);
 int string2l(const char *s, size_t slen, long *value);
 int string2ul_base16_async_signal_safe(const char *src, size_t slen, unsigned long *result_output);
 int string2ld(const char *s, size_t slen, long double *dp);
@@ -99,6 +99,9 @@ int snprintf_async_signal_safe(char *to, size_t n, const char *fmt, ...);
 #endif
 size_t valkey_strlcpy(char *dst, const char *src, size_t dsize);
 size_t valkey_strlcat(char *dst, const char *src, size_t dsize);
-char *valkey_asprintf(char const *fmt, ...);
+void getRandomSeedCString(char *buff, size_t len);
+void setRandomSeedCString(char *seed_str, size_t len);
+void getRandomHexChars(char *p, size_t len);
+void getRandomBytes(unsigned char *p, size_t len);
 
 #endif

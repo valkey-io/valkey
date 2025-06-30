@@ -29,6 +29,11 @@
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  * POSSIBILITY OF SUCH DAMAGE.
  */
+/*
+ * Copyright (c) Valkey Contributors
+ * All rights reserved.
+ * SPDX-License-Identifier: BSD-3-Clause
+ */
 
 #include "server.h"
 
@@ -234,7 +239,7 @@ void activeExpireCycle(int type) {
         data.ttl_sum = 0;
         data.ttl_samples = 0;
 
-        serverDb *db = server.db + (current_db % server.dbnum);
+        serverDb *db = server.db[(current_db % server.dbnum)];
         data.db = db;
 
         int db_done = 0; /* The scan of the current DB is done? */
@@ -245,13 +250,17 @@ void activeExpireCycle(int type) {
          * distribute the time evenly across DBs. */
         current_db++;
 
-        if (kvstoreSize(db->expires)) dbs_performed++;
+        if (db && kvstoreSize(db->expires)) dbs_performed++;
 
         /* Continue to expire if at the end of the cycle there are still
          * a big percentage of keys to expire, compared to the number of keys
          * we scanned. The percentage, stored in config_cycle_acceptable_stale
          * is not fixed, but depends on the configured "expire effort". */
         do {
+            if (db == NULL) {
+                break; /* DB not allocated since it was never used */
+            }
+
             unsigned long num;
             iteration++;
 
@@ -354,7 +363,8 @@ void activeExpireCycle(int type) {
 
     elapsed = ustime() - start;
     server.stat_expire_cycle_time_used += elapsed;
-    latencyAddSampleIfNeeded("expire-cycle", elapsed / 1000);
+    latencyAddSampleIfNeeded("expire-cycle", elapsed);
+    latencyTraceIfNeeded(db, expire_cycle, elapsed);
 
     /* Update our estimate of keys existing but yet to be expired.
      * Running average with this sample accounting for 5%. */
@@ -421,11 +431,11 @@ void expireReplicaKeys(void) {
         int dbid = 0;
         while (dbids && dbid < server.dbnum) {
             if ((dbids & 1) != 0) {
-                serverDb *db = server.db + dbid;
-                robj *expire = dbFindExpires(db, keyname);
+                serverDb *db = server.db[dbid];
+                robj *expire = db == NULL ? NULL : dbFindExpires(db, keyname);
                 int expired = 0;
 
-                if (expire && activeExpireCycleTryExpire(server.db + dbid, expire, start)) {
+                if (expire && activeExpireCycleTryExpire(db, expire, start)) {
                     expired = 1;
                     /* Propagate the DEL (writable replicas do not propagate anything to other replicas,
                      * but they might propagate to AOF) and trigger module hooks. */
@@ -677,6 +687,9 @@ void expireGenericCommand(client *c, long long basetime, int unit) {
         return;
     } else {
         obj = setExpire(c, c->db, key, when);
+        signalModifiedKey(c, c->db, key);
+        notifyKeyspaceEvent(NOTIFY_GENERIC, "expire", key, c->db->id);
+        server.dirty++;
         addReply(c, shared.cone);
         /* Propagate as PEXPIREAT millisecond-timestamp
          * Only rewrite the command arg if not already PEXPIREAT */
@@ -690,10 +703,6 @@ void expireGenericCommand(client *c, long long basetime, int unit) {
             rewriteClientCommandArgument(c, 2, when_obj);
             decrRefCount(when_obj);
         }
-
-        signalModifiedKey(c, c->db, key);
-        notifyKeyspaceEvent(NOTIFY_GENERIC, "expire", key, c->db->id);
-        server.dirty++;
         return;
     }
 }
@@ -720,17 +729,18 @@ void pexpireatCommand(client *c) {
 
 /* Implements TTL, PTTL, EXPIRETIME and PEXPIRETIME */
 void ttlGenericCommand(client *c, int output_ms, int output_abs) {
+    robj *o;
     long long expire, ttl = -1;
 
     /* If the key does not exist at all, return -2 */
-    if (lookupKeyReadWithFlags(c->db, c->argv[1], LOOKUP_NOTOUCH) == NULL) {
+    if ((o = lookupKeyReadWithFlags(c->db, c->argv[1], LOOKUP_NOTOUCH)) == NULL) {
         addReplyLongLong(c, -2);
         return;
     }
 
     /* The key exists. Return -1 if it has no expire, or the actual
      * TTL value otherwise. */
-    expire = getExpire(c->db, c->argv[1]);
+    expire = objectGetExpire(o);
     if (expire != -1) {
         ttl = output_abs ? expire : expire - commandTimeSnapshot();
         if (ttl < 0) ttl = 0;

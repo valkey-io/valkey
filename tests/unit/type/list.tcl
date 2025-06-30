@@ -282,7 +282,7 @@ foreach type {listpack quicklist} {
 }
 
 run_solo {list-large-memory} {
-start_server [list overrides [list save ""] ] {
+start_server [list overrides [list save ""] tags {"large-memory"}] {
 
 # test if the server supports such large configs (avoid 32 bit builds)
 catch {
@@ -1136,7 +1136,7 @@ foreach {pop} {BLPOP BLMPOP_LEFT} {
         wait_for_blocked_clients_count 1
         r swapdb 1 9
         $rd read
-    } {k hello} {singledb:skip}
+    } {k hello} {singledb:skip cluster:skip}
 
     test {SWAPDB wants to wake blocked client, but the key already expired} {
         set repl [attach_to_replication_stream]
@@ -1184,7 +1184,7 @@ foreach {pop} {BLPOP BLMPOP_LEFT} {
         r debug set-active-expire 1
         # Restore server and client state
         r select 9
-    } {OK} {singledb:skip needs:debug}
+    } {OK} {singledb:skip cluster:skip needs:debug}
 
     test {MULTI + LPUSH + EXPIRE + DEBUG SLEEP on blocked client, key already expired} {
         set repl [attach_to_replication_stream]
@@ -2429,5 +2429,28 @@ foreach {pop} {BLPOP BLMPOP_RIGHT} {
 
         close_replication_stream $repl
     } {} {needs:repl}
+
+    test "Blocking timeout following PAUSE should honor the timeout" {
+        # cleanup first
+        r del mylist
+        
+        # create a test client
+        set rd [valkey_deferring_client]
+        
+        # first PAUSE all writes for a very long time
+        r client pause 10000000000000 write
+
+        # block a client on the list
+        $rd BLPOP mylist 1
+        wait_for_blocked_clients_count 1
+        
+        # now unpause the writes
+        r client unpause
+
+        # client should time-out
+        wait_for_blocked_clients_count 0
+        
+        $rd close
+    }
 
 } ;# stop servers

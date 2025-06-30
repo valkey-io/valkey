@@ -1,5 +1,8 @@
 start_server {tags {"lazyfree"}} {
     test "UNLINK can reclaim memory in background" {
+        # make sure the previous test is really done before sampling used_memory
+        wait_lazyfree_done r
+
         set orig_mem [s used_memory]
         set args {}
         for {set i 0} {$i < 100000} {incr i} {
@@ -19,7 +22,7 @@ start_server {tags {"lazyfree"}} {
     }
 
     test "FLUSHDB ASYNC can reclaim memory in background" {
-        # make the previous test is really done before sampling used_memory
+        # make sure the previous test is really done before sampling used_memory
         wait_lazyfree_done r
 
         set orig_mem [s used_memory]

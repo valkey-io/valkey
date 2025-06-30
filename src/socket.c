@@ -29,6 +29,7 @@
 
 #include "server.h"
 #include "connhelpers.h"
+#include "io_threads.h"
 
 /* The connections module provides a lean abstraction of network connections
  * to avoid direct socket and async event management across the server code base.
@@ -105,8 +106,9 @@ static int connSocketConnect(connection *conn,
                              const char *addr,
                              int port,
                              const char *src_addr,
+                             int multipath,
                              ConnectionCallbackFunc connect_handler) {
-    int fd = anetTcpNonBlockBestEffortBindConnect(NULL, addr, port, src_addr);
+    int fd = anetTcpNonBlockBestEffortBindConnect(NULL, addr, port, src_addr, multipath);
     if (fd == -1) {
         conn->state = CONN_STATE_ERROR;
         conn->last_errno = errno;
@@ -154,6 +156,10 @@ static void connSocketClose(connection *conn) {
 }
 
 static int connSocketWrite(connection *conn, const void *data, size_t data_len) {
+    /* Assert the main thread is not writing to a connection that is currently offloaded. */
+    debugServerAssert(!(conn->flags & CONN_FLAG_ALLOW_ACCEPT_OFFLOAD) || !inMainThread() ||
+                      ((client *)connGetPrivateData(conn))->io_write_state != CLIENT_PENDING_IO);
+
     int ret = write(conn->fd, data, data_len);
     if (ret < 0 && errno != EAGAIN) {
         conn->last_errno = errno;
@@ -182,6 +188,11 @@ static int connSocketWritev(connection *conn, const struct iovec *iov, int iovcn
 }
 
 static int connSocketRead(connection *conn, void *buf, size_t buf_len) {
+    /* Assert the main thread is not reading from a connection that is currently offloaded. */
+    debugServerAssert(!(conn->flags & CONN_FLAG_ALLOW_ACCEPT_OFFLOAD) || !inMainThread() ||
+                      ((client *)connGetPrivateData(conn))->io_read_state != CLIENT_PENDING_IO);
+
+
     int ret = read(conn->fd, buf, buf_len);
     if (!ret) {
         conn->state = CONN_STATE_CLOSED;
@@ -316,21 +327,23 @@ static void connSocketAcceptHandler(aeEventLoop *el, int fd, void *privdata, int
             return;
         }
         serverLog(LL_VERBOSE, "Accepted %s:%d", cip, cport);
+
+        if (server.tcpkeepalive) anetKeepAlive(NULL, cfd, server.tcpkeepalive);
         acceptCommonHandler(connCreateAcceptedSocket(cfd, NULL), flags, cip);
     }
 }
 
 static int connSocketAddr(connection *conn, char *ip, size_t ip_len, int *port, int remote) {
-    if (anetFdToString(conn->fd, ip, ip_len, port, remote) == 0) return C_OK;
+    if (anetFdToString(conn->fd, ip, ip_len, port, remote) == 0) return 0;
 
     conn->last_errno = errno;
-    return C_ERR;
+    return -1;
 }
 
 static int connSocketIsLocal(connection *conn) {
     char cip[NET_IP_STR_LEN + 1] = {0};
 
-    if (connSocketAddr(conn, cip, sizeof(cip) - 1, NULL, 1) == C_ERR) return -1;
+    if (connSocketAddr(conn, cip, sizeof(cip) - 1, NULL, 1) == -1) return -1;
 
     return !strncmp(cip, "127.", 4) || !strcmp(cip, "::1");
 }
@@ -393,8 +406,15 @@ static const char *connSocketGetType(connection *conn) {
     return CONN_TYPE_SOCKET;
 }
 
+static int connSocketGetTypeId(connection *conn) {
+    (void)conn;
+
+    return CONN_TYPE_ID_SOCKET;
+}
+
 static ConnectionType CT_Socket = {
     /* connection type */
+    .get_type_id = connSocketGetTypeId,
     .get_type = connSocketGetType,
 
     /* connection type initialize & finalize & configure */
@@ -437,6 +457,9 @@ static ConnectionType CT_Socket = {
     .process_pending_data = NULL,
     .postpone_update_state = NULL,
     .update_state = NULL,
+
+    /* Miscellaneous */
+    .connIntegrityChecked = NULL,
 };
 
 int connBlock(connection *conn) {
@@ -447,16 +470,6 @@ int connBlock(connection *conn) {
 int connNonBlock(connection *conn) {
     if (conn->fd == -1) return C_ERR;
     return anetNonBlock(NULL, conn->fd);
-}
-
-int connEnableTcpNoDelay(connection *conn) {
-    if (conn->fd == -1) return C_ERR;
-    return anetEnableTcpNoDelay(NULL, conn->fd);
-}
-
-int connDisableTcpNoDelay(connection *conn) {
-    if (conn->fd == -1) return C_ERR;
-    return anetDisableTcpNoDelay(NULL, conn->fd);
 }
 
 int connKeepAlive(connection *conn, int interval) {

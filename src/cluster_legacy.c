@@ -6073,28 +6073,22 @@ sds representSlotInfo(sds ci, uint16_t *slot_info_pairs, int slot_info_pairs_cou
  * The function returns the string representation as an SDS string. */
 sds clusterGenNodeDescription(client *c, clusterNode *node, int tls_primary) {
     int j, start;
+    sds ci = sdsempty();
     int port = clusterNodeClientPort(node, tls_primary);
     char *ip = clusterNodeIp(node, c);
-    int64_t ping = node->ping_sent, pong = node->pong_received;
-    uint64_t epoch = nodeEpoch(node);
-    const char *conn = (node->link || (node->flags & CLUSTER_NODE_MYSELF)) ? "connected" : "disconnected";
 
-    // 2) Start with the node ID
-    sds ci = sdsempty();
-    sdsMakeRoomFor(ci, 256); // rough reservation
-
-    // 3) Build the “header” in one go
+    /* Node coordinates */
     char hdr[128];
-    int hdrlen = snprintf(hdr, sizeof(hdr),
-                          "%.40s %s:%d@%d", // name, ip:port@cport
-                          node->name,
-                          ip, port, node->cport);
-    // optionally append hostname or a comma for nodes.conf
+    int hdrlen;
     if (sdslen(node->hostname)) {
-        hdrlen += snprintf(hdr + hdrlen, sizeof(hdr) - hdrlen,
-                           ",%s", node->hostname);
-    } else if (c == NULL) {
-        hdr[hdrlen++] = ',';
+        hdrlen = snprintf(hdr, sizeof(hdr),
+                          "%.40s %s:%d@%d,%s",
+                          node->name, ip, port, node->cport,
+                          node->hostname);
+    } else {
+        hdrlen = snprintf(hdr, sizeof(hdr),
+                          "%.40s %s:%d@%d",
+                          node->name, ip, port, node->cport);
     }
     ci = sdscatlen(ci, hdr, hdrlen);
 
@@ -6115,15 +6109,35 @@ sds clusterGenNodeDescription(client *c, clusterNode *node, int tls_primary) {
         }
     }
 
-    // 5) Build the flags + replica + stats in one buffer
+    /* Flags */
+    ci = sdscatlen(ci, " ", 1);
+    ci = representClusterNodeFlags(ci, node->flags);
+
+    /* Replica‐of + ping/pong/epoch + connection status */
     char meta[128];
-    // get flags as C-string (representClusterNodeFlags must return a pointer in this version)
-    char *flags_str = representClusterNodeFlags(NULL, node->flags);
-    int metalen = snprintf(meta, sizeof(meta),
-                           " %s %s %ld %ld %lu %s",
-                           flags_str,
-                           node->replicaof ? node->replicaof->name : "-",
-                           ping, pong, epoch, conn);
+    int metalen;
+    int64_t ping = node->ping_sent, pong = node->pong_received;
+    uint64_t epoch = nodeEpoch(node);
+    const char *conn = (node->link || (node->flags & CLUSTER_NODE_MYSELF))
+                           ? "connected"
+                           : "disconnected";
+    if (node->replicaof) {
+        metalen = snprintf(meta, sizeof(meta),
+                           " %.40s %lld %lld %llu %s",
+                           node->replicaof->name,
+                           (long long)ping,
+                           (long long)pong,
+                           (unsigned long long)epoch,
+                           conn);
+    } else {
+        // No replica, emit "-" instead
+        metalen = snprintf(meta, sizeof(meta),
+                           " - %lld %lld %llu %s",
+                           (long long)ping,
+                           (long long)pong,
+                           (unsigned long long)epoch,
+                           conn);
+    }
     ci = sdscatlen(ci, meta, metalen);
 
     /* Slots served by this instance. If we already have slots info,

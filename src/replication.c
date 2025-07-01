@@ -5121,6 +5121,27 @@ sds getClientPeerIP(client *c) {
     return sdsnewlen(id, last_colon - id);
 }
 
+static void releaseTunnelExcludedIps(void) {
+    listIter li;
+    listNode *ln;
+    listRewind(server.tunnel_excluded_ips, &li);
+    while ((ln = listNext(&li)) != NULL) {
+        sds ip = listNodeValue(ln);
+        listDelNode(server.tunnel_excluded_ips, ln);
+        sdsfree(ip);
+    }
+    listRelease(server.tunnel_excluded_ips);
+}
+
+static void setTunnelExcludedIps(client *c, int exclude_ip_start, int exclude_ip_end) {
+    server.tunnel_excluded_ips = listCreate();
+    for (int j = exclude_ip_start; j < exclude_ip_end; ++j) {
+        listAddNodeTail(server.tunnel_excluded_ips, sdsdup(c->argv[j]->ptr));
+    }
+    client *replica = findReplica(server.target_replica_host, server.target_replica_port);
+    listAddNodeTail(server.tunnel_excluded_ips, getClientPeerIP(replica));
+    listAddNodeTail(server.tunnel_excluded_ips, getClientPeerIP(c));
+}
 /*
  * FAILOVER [TO <HOST> <PORT> [FORCE] [TUNNEL [<EXCLUDE_IP> ...]]] [ABORT] [TIMEOUT <timeout>]
  *
@@ -5174,7 +5195,8 @@ void failoverCommand(client *c) {
     int tunnel_flag = 0;
     long port = 0;
     char *host = NULL;
-    list *tunnel_excluded_ips = listCreate();
+    int exclude_ip_start = -1;
+    int exclude_ip_end = -1;
 
     /* Parse the command for syntax and arguments. */
     for (int j = 1; j < c->argc; j++) {
@@ -5199,7 +5221,8 @@ void failoverCommand(client *c) {
                     --j;
                     break;
                 }
-                listAddNodeTail(tunnel_excluded_ips, sdsdup(c->argv[j]->ptr));
+                if (exclude_ip_start == -1) exclude_ip_start = j;
+                exclude_ip_end = j + 1;
             }
         } else {
             addReplyErrorObject(c, shared.syntaxerr);
@@ -5252,7 +5275,6 @@ void failoverCommand(client *c) {
             return;
         }
 
-        if (tunnel_flag) listAddNodeTail(tunnel_excluded_ips, getClientPeerIP(c));
         server.target_replica_host = zstrdup(host);
         server.target_replica_port = port;
         serverLog(LL_NOTICE, "FAILOVER requested to %s:%ld.", host, port);
@@ -5267,8 +5289,10 @@ void failoverCommand(client *c) {
 
     server.force_failover = force_flag;
     server.tunnel_primary = tunnel_flag;
-    listRelease(server.tunnel_excluded_ips);
-    server.tunnel_excluded_ips = tunnel_excluded_ips;
+    releaseTunnelExcludedIps();
+    if (tunnel_flag) {
+        setTunnelExcludedIps(c, exclude_ip_start, exclude_ip_end);
+    }
     server.failover_state = FAILOVER_WAIT_FOR_SYNC;
     /* Cluster failover will unpause eventually */
     pauseActions(PAUSE_DURING_FAILOVER, LLONG_MAX, PAUSE_ACTIONS_CLIENT_WRITE_SET);

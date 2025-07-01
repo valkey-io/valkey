@@ -37,7 +37,7 @@ start_server {tags {needs:repl external:skip "quit"}} {
             close $client_sock
         }
 
-        test {failover back to the orignal primary without tunneling} {
+        test {failover back to the original primary without tunneling} {
             set primary [valkey_client]
             $primary FAILOVER TO $node_0_host $node_0_port TIMEOUT 100 FORCE
 
@@ -52,7 +52,7 @@ start_server {tags {needs:repl external:skip "quit"}} {
             assert_error "READONLY*" {$replica SET foo boo}
             $replica close
         }
-        test {avoid tunneling if client exluded ip} {
+        test {avoid tunneling if client excluded ip} {
             set primary [valkey_client -1]
             $primary FAILOVER TO $node_1_host $node_1_port TIMEOUT 100 FORCE TUNNEL 127.0.0.3
 

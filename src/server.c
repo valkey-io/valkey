@@ -4593,10 +4593,11 @@ int abortShutdown(void) {
  * sequence was successful and it's OK to call exit(). If C_ERR is returned,
  * it's not safe to call exit(). */
 int finishShutdown(void) {
-    int save = server.shutdown_flags & SHUTDOWN_SAVE;
-    int nosave = server.shutdown_flags & SHUTDOWN_NOSAVE;
-    int force = server.shutdown_flags & SHUTDOWN_FORCE;
-    int safe = server.shutdown_flags & SHUTDOWN_SAFE;
+    bool save = (server.shutdown_flags & SHUTDOWN_SAVE) != 0;
+    bool nosave = (server.shutdown_flags & SHUTDOWN_NOSAVE) != 0;
+    bool force = (server.shutdown_flags & SHUTDOWN_FORCE) != 0;
+    bool safe = (server.shutdown_flags & SHUTDOWN_SAFE) != 0;
+    bool failover = (server.shutdown_flags & SHUTDOWN_FAILOVER) != 0;
 
     /* Log a warning for each replica that is lagging. */
     listIter replicas_iter;
@@ -4720,7 +4721,7 @@ int finishShutdown(void) {
     }
 
     /* Handle cluster-related matters when shutdown. */
-    if (server.cluster_enabled) clusterHandleServerShutdown();
+    if (server.cluster_enabled) clusterHandleServerShutdown(failover);
 
     /* Best effort flush of replica output buffers, so that we hopefully
      * send them pending writes. */

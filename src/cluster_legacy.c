@@ -1291,7 +1291,7 @@ void clusterInitLast(void) {
 }
 
 void clusterAutoFailoverOnShutdown(void) {
-    if (!nodeIsPrimary(myself) || !server.auto_failover_on_shutdown) return;
+    if (!nodeIsPrimary(myself)) return;
 
     /* Find the first best replica, that is, the replica with the largest offset. */
     int legacy_replica = 0;
@@ -1348,9 +1348,9 @@ void clusterAutoFailoverOnShutdown(void) {
 }
 
 /* Called when a cluster node receives SHUTDOWN. */
-void clusterHandleServerShutdown(void) {
+void clusterHandleServerShutdown(bool auto_failover) {
     /* Check if we are able to do the auto failover on shutdown. */
-    clusterAutoFailoverOnShutdown();
+    if (auto_failover) clusterAutoFailoverOnShutdown();
 
     /* The error logs have been logged in the save function if the save fails. */
     serverLog(LL_NOTICE, "Saving the cluster configuration file before exiting.");

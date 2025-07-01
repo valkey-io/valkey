@@ -78,11 +78,10 @@ typedef struct {
     listNode *ln;        /* Link for O(1) removal/update */
 } clusterNodefailReportEntry;
 
-/* This structure represent elements of node->fail_reports. */
+/* This structure represent elements of node->fail_report. */
 typedef struct {
     dict *reports;     /* Hash table of node name -> clusterNodefailReportEntry structure */
     list *expiry_list; /* Entries in ascending expiry order */
-    int report_count;  /* Number of active reports */
 } clusterNodeFailReport;
 
 /* Cluster messages header */
@@ -372,7 +371,7 @@ struct _clusterNode {
     int cport;                              /* Latest known cluster port of this node. */
     clusterLink *link;                      /* TCP/IP link established toward this node */
     clusterLink *inbound_link;              /* TCP/IP link accepted from this node */
-    clusterNodeFailReport *fail_report;     /* List of nodes signaling this as failing */
+    clusterNodeFailReport *fail_report;     /* Report of peer failure reports with expiry ordering */
     int is_node_healthy;                    /* Boolean indicating the cached node health.
                                                Update with updateAndCountChangedNodeHealth(). */
 };

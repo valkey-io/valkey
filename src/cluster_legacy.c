@@ -1626,10 +1626,15 @@ unsigned long getClusterConnectionsCount(void) {
     return server.cluster_enabled ? ((dictSize(server.cluster->nodes) - 1) * 2) : 0;
 }
 
-void clusterNodeFailReportInit(clusterNodeFailReport *t) {
-    t->reports = dictCreate(&clusterNodesDictType);
-    t->expiry_list = listCreate();
-    t->report_count = 0;
+/* Initialize a new failure report.
+ *
+ * This report uses an internal dict to map reporting nodes to their
+ * fail report entries, and a linked list to maintain entries in order of expiry. */
+clusterNodeFailReport *clusterNodeFailReportCreate(void) {
+    clusterNodeFailReport *fr = zmalloc(sizeof(*fr));
+    fr->reports = dictCreate(&clusterNodesDictType);
+    fr->expiry_list = listCreate();
+    return fr;
 }
 
 /* -----------------------------------------------------------------------------
@@ -1677,12 +1682,39 @@ clusterNode *createClusterNode(char *nodename, int flags) {
     node->tcp_port = 0;
     node->cport = 0;
     node->tls_port = 0;
-    node->fail_report = zmalloc(sizeof(*node->fail_report));
-    clusterNodeFailReportInit(node->fail_report);
+    node->fail_report = clusterNodeFailReportCreate();
     node->orphaned_time = 0;
     node->repl_offset = 0;
     node->is_node_healthy = 0;
     return node;
+}
+
+/* Remove and free one report entry
+ *
+ * Unlinks the given entry from the expiry_list,
+ * deletes the corresponding dict key by sender name, and frees the entry structure. */
+void clusterNodeRemoveEntry(clusterNodeFailReport *fr, clusterNodefailReportEntry *fr_entry) {
+    listDelNode(fr->expiry_list, fr_entry->ln);
+    sds nodename = sdsnewlen(fr_entry->sender->name, CLUSTER_NAMELEN);
+    dictDelete(fr->reports, nodename);
+    sdsfree(nodename);
+    zfree(fr_entry);
+}
+
+/* Destroy a failure report
+ *
+ * Removes all entries then releases the dict and list containers,
+ * and finally frees the failure report structure.
+ * Only called by freeClusterNode(). */
+void clusterNodeFailReportFree(clusterNodeFailReport *fr) {
+    listNode *ln;
+    while ((ln = listFirst(fr->expiry_list))) {
+        clusterNodefailReportEntry *e = ln->value;
+        clusterNodeRemoveEntry(fr, e);
+    }
+    dictRelease(fr->reports);
+    listRelease(fr->expiry_list);
+    zfree(fr);
 }
 
 /* This function is called every time we get a failure report from a node.
@@ -1697,27 +1729,26 @@ int clusterNodeAddFailureReport(clusterNode *failing, clusterNode *sender) {
     mstime_t now = mstime();
     mstime_t expiry = now + server.cluster_node_timeout * CLUSTER_FAIL_REPORT_VALIDITY_MULT;
 
-    clusterNodeFailReport *f = failing->fail_report;
+    clusterNodeFailReport *fr = failing->fail_report;
     sds sender_name = sdsnewlen(sender->name, CLUSTER_NAMELEN);
-    clusterNodefailReportEntry *e = dictFetchValue(f->reports, sender_name);
-    int new_report = 0;
+    clusterNodefailReportEntry *fr_entry = dictFetchValue(fr->reports, sender_name);
+    int is_new = 0;
 
-    if (e) {
-        listDelNode(f->expiry_list, e->ln);
-        e->expiry = expiry;
+    if (fr_entry) {
+        listDelNode(fr->expiry_list, fr_entry->ln);
+        fr_entry->expiry = expiry;
         sdsfree(sender_name);
     } else {
-        e = zmalloc(sizeof(*e));
-        e->sender = sender;
-        e->expiry = expiry;
-        dictAdd(f->reports, sender_name, e);
-        f->report_count++;
-        new_report = 1;
+        fr_entry = zmalloc(sizeof(*fr_entry));
+        fr_entry->sender = sender;
+        fr_entry->expiry = expiry;
+        dictAdd(fr->reports, sender_name, fr_entry);
+        is_new = 1;
     }
 
-    listAddNodeTail(f->expiry_list, e);
-    e->ln = f->expiry_list->tail;
-    return new_report;
+    listAddNodeTail(fr->expiry_list, fr_entry);
+    fr_entry->ln = fr->expiry_list->tail;
+    return is_new;
 }
 
 /* Expire outdated failure reports.
@@ -1736,17 +1767,11 @@ int clusterNodeAddFailureReport(clusterNode *failing, clusterNode *sender) {
 void clusterNodeCleanupFailureReports(clusterNode *node) {
     mstime_t now = mstime();
     listNode *ln;
-    clusterNodeFailReport *f = node->fail_report;
-    while ((ln = listFirst(f->expiry_list))) {
-        clusterNodefailReportEntry *e = ln->value;
-        if (e->expiry > now) break;
-
-        listDelNode(f->expiry_list, ln);
-        sds nodename = sdsnewlen(e->sender->name, CLUSTER_NAMELEN);
-        dictDelete(f->reports, nodename);
-        sdsfree(nodename);
-        zfree(e);
-        f->report_count--;
+    clusterNodeFailReport *fr = node->fail_report;
+    while ((ln = listFirst(fr->expiry_list))) {
+        clusterNodefailReportEntry *fr_entry = ln->value;
+        if (fr_entry->expiry > now) break;
+        clusterNodeRemoveEntry(fr, fr_entry);
     }
 }
 
@@ -1759,18 +1784,11 @@ void clusterNodeCleanupFailureReports(clusterNode *node) {
  * Otherwise 0 is returned. */
 int clusterNodeDelFailureReport(clusterNode *node, clusterNode *sender) {
     sds sender_name = sdsnewlen(sender->name, CLUSTER_NAMELEN);
-    clusterNodeFailReport *f = node->fail_report;
-    clusterNodefailReportEntry *e = dictFetchValue(f->reports, sender_name);
-    if (!e) {
-        sdsfree(sender_name);
-        return 0;
-    }
-
-    listDelNode(f->expiry_list, e->ln);
-    dictDelete(f->reports, sender_name);
+    clusterNodeFailReport *fr = node->fail_report;
+    clusterNodefailReportEntry *fr_entry = dictFetchValue(fr->reports, sender_name);
     sdsfree(sender_name);
-    zfree(e);
-    f->report_count--;
+    if (!fr_entry) return 0;
+    clusterNodeRemoveEntry(fr, fr_entry);
     return 1;
 }
 
@@ -1779,7 +1797,7 @@ int clusterNodeDelFailureReport(clusterNode *node, clusterNode *sender) {
  * node as well. */
 int clusterNodeFailureReportsCount(clusterNode *node) {
     clusterNodeCleanupFailureReports(node);
-    return node->fail_report->report_count;
+    return node->fail_report->expiry_list->len;
 }
 
 static int clusterNodeNameComparator(const void *node1, const void *node2) {
@@ -1848,25 +1866,13 @@ void freeClusterNode(clusterNode *n) {
     if (n->inbound_link) freeClusterLink(n->inbound_link);
 
     /* Free all entries in the expiry_list */
-    clusterNodeFailReport *f = n->fail_report;
-    listNode *ln;
-    while ((ln = listFirst(f->expiry_list))) {
-        clusterNodefailReportEntry *e = ln->value;
-        listDelNode(f->expiry_list, ln);
-        sds key = sdsnewlen(e->sender->name, CLUSTER_NAMELEN);
-        dictDelete(f->reports, key);
-        sdsfree(key);
-        zfree(e);
-    }
+    clusterNodeFailReportFree(n->fail_report);
 
     /* Free these members after links are freed, as freeClusterLink may access them. */
     sdsfree(n->hostname);
     sdsfree(n->human_nodename);
     sdsfree(n->announce_client_ipv4);
     sdsfree(n->announce_client_ipv6);
-    listRelease(n->fail_report->expiry_list);
-    dictRelease(n->fail_report->reports);
-    zfree(n->fail_report);
     zfree(n->replicas);
     zfree(n);
 }

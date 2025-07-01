@@ -1761,7 +1761,9 @@ size_t hashtableScanDefrag(hashtable *ht, size_t cursor, hashtableScanFunction f
     if (!hashtableIsRehashing(ht)) {
         /* Emit entries at the cursor index. */
         size_t mask = expToMask(ht->bucket_exp[0]);
-        bucket *b = &ht->tables[0][cursor & mask];
+        size_t idx = cursor & mask;
+        size_t used_before = ht->used[0];
+        bucket *b = &ht->tables[0][idx];
         do {
             if (b->presence != 0) {
                 int pos;
@@ -1778,6 +1780,11 @@ size_t hashtableScanDefrag(hashtable *ht, size_t cursor, hashtableScanFunction f
             }
             b = next;
         } while (b != NULL);
+
+        /* If any entries were deleted, fill the holes. */
+        if (ht->used[0] < used_before) {
+            compactBucketChain(ht, idx, 0);
+        }
 
         /* Advance cursor. */
         cursor = nextCursor(cursor, mask);

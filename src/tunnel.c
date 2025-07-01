@@ -123,7 +123,6 @@ static tunnelSession *createTunnelSession(connection *downstream_conn, char *hos
  * Close the client incase of an error.
  */
 void establishTunnelOrClose(connection *conn) {
-            serverLog(LL_VERBOSE, "establishTunnelOrClose");
     tunnelSession *session = createTunnelSession(conn, server.primary_host, server.primary_port);
     if (connConnect(session->up_pipe.write_conn, session->host, session->port,
                     server.bind_source_addr, 0, connectHandler) == C_ERR) {

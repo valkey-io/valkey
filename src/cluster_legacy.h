@@ -76,7 +76,7 @@ typedef struct {
     clusterNode *sender; /* Reporting node */
     mstime_t expiry;     /* Report expiration time */
     listNode *ln;        /* Link for O(1) removal/update */
-} clusterNodefailReportEntry;
+} clusterNodeFailReportEntry;
 
 /* This structure represent elements of node->fail_report. */
 typedef struct {

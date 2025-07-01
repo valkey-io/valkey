@@ -1630,7 +1630,7 @@ unsigned long getClusterConnectionsCount(void) {
  *
  * This report uses an internal dict to map reporting nodes to their
  * fail report entries, and a linked list to maintain entries in order of expiry. */
-clusterNodeFailReport *clusterNodeFailReportCreate(void) {
+clusterNodeFailReport *clusterNodeCreateFailReport(void) {
     clusterNodeFailReport *fr = zmalloc(sizeof(*fr));
     fr->reports = dictCreate(&clusterNodesDictType);
     fr->expiry_list = listCreate();
@@ -1682,7 +1682,7 @@ clusterNode *createClusterNode(char *nodename, int flags) {
     node->tcp_port = 0;
     node->cport = 0;
     node->tls_port = 0;
-    node->fail_report = clusterNodeFailReportCreate();
+    node->fail_report = clusterNodeCreateFailReport();
     node->orphaned_time = 0;
     node->repl_offset = 0;
     node->is_node_healthy = 0;
@@ -1693,7 +1693,7 @@ clusterNode *createClusterNode(char *nodename, int flags) {
  *
  * Unlinks the given entry from the expiry_list,
  * deletes the corresponding dict key by sender name, and frees the entry structure. */
-void clusterNodeRemoveEntry(clusterNodeFailReport *fr, clusterNodefailReportEntry *fr_entry) {
+void clusterNodeRemoveEntry(clusterNodeFailReport *fr, clusterNodeFailReportEntry *fr_entry) {
     listDelNode(fr->expiry_list, fr_entry->ln);
     sds nodename = sdsnewlen(fr_entry->sender->name, CLUSTER_NAMELEN);
     dictDelete(fr->reports, nodename);
@@ -1706,10 +1706,10 @@ void clusterNodeRemoveEntry(clusterNodeFailReport *fr, clusterNodefailReportEntr
  * Removes all entries then releases the dict and list containers,
  * and finally frees the failure report structure.
  * Only called by freeClusterNode(). */
-void clusterNodeFailReportFree(clusterNodeFailReport *fr) {
+void clusterNodeFreeFailReport(clusterNodeFailReport *fr) {
     listNode *ln;
     while ((ln = listFirst(fr->expiry_list))) {
-        clusterNodefailReportEntry *e = ln->value;
+        clusterNodeFailReportEntry *e = ln->value;
         clusterNodeRemoveEntry(fr, e);
     }
     dictRelease(fr->reports);
@@ -1731,7 +1731,7 @@ int clusterNodeAddFailureReport(clusterNode *failing, clusterNode *sender) {
 
     clusterNodeFailReport *fr = failing->fail_report;
     sds sender_name = sdsnewlen(sender->name, CLUSTER_NAMELEN);
-    clusterNodefailReportEntry *fr_entry = dictFetchValue(fr->reports, sender_name);
+    clusterNodeFailReportEntry *fr_entry = dictFetchValue(fr->reports, sender_name);
     int is_new = 0;
 
     if (fr_entry) {
@@ -1769,7 +1769,7 @@ void clusterNodeCleanupFailureReports(clusterNode *node) {
     listNode *ln;
     clusterNodeFailReport *fr = node->fail_report;
     while ((ln = listFirst(fr->expiry_list))) {
-        clusterNodefailReportEntry *fr_entry = ln->value;
+        clusterNodeFailReportEntry *fr_entry = ln->value;
         if (fr_entry->expiry > now) break;
         clusterNodeRemoveEntry(fr, fr_entry);
     }
@@ -1785,7 +1785,7 @@ void clusterNodeCleanupFailureReports(clusterNode *node) {
 int clusterNodeDelFailureReport(clusterNode *node, clusterNode *sender) {
     sds sender_name = sdsnewlen(sender->name, CLUSTER_NAMELEN);
     clusterNodeFailReport *fr = node->fail_report;
-    clusterNodefailReportEntry *fr_entry = dictFetchValue(fr->reports, sender_name);
+    clusterNodeFailReportEntry *fr_entry = dictFetchValue(fr->reports, sender_name);
     sdsfree(sender_name);
     if (!fr_entry) return 0;
     clusterNodeRemoveEntry(fr, fr_entry);
@@ -1866,7 +1866,7 @@ void freeClusterNode(clusterNode *n) {
     if (n->inbound_link) freeClusterLink(n->inbound_link);
 
     /* Free all entries in the expiry_list */
-    clusterNodeFailReportFree(n->fail_report);
+    clusterNodeFreeFailReport(n->fail_report);
 
     /* Free these members after links are freed, as freeClusterLink may access them. */
     sdsfree(n->hostname);

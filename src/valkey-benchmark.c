@@ -126,7 +126,7 @@ static struct config {
     readFromReplica read_from_replica;
     int cluster_node_count;
     struct clusterNode **cluster_nodes;
-    struct serverConfig *redis_config;
+    struct serverConfig *server_config;
     struct hdr_histogram *latency_histogram;
     struct hdr_histogram *current_sec_latency_histogram;
     _Atomic int is_fetching_slots;
@@ -183,7 +183,7 @@ typedef struct clusterNode {
     int *updated_slots;      /* Used by updateClusterSlotsConfiguration */
     int updated_slots_count; /* Used by updateClusterSlotsConfiguration */
     int replicas_count;
-    struct serverConfig *redis_config;
+    struct serverConfig *server_config;
 } clusterNode;
 
 typedef struct serverConfig {
@@ -888,16 +888,16 @@ static void showLatencyReport(void) {
             int m;
             for (m = 0; m < config.cluster_node_count; m++) {
                 clusterNode *node = config.cluster_nodes[m];
-                serverConfig *cfg = node->redis_config;
+                serverConfig *cfg = node->server_config;
                 if (cfg == NULL) continue;
                 printf("  node [%d] configuration:\n", m);
                 printf("    save: %s\n", sdslen(cfg->save) ? cfg->save : "NONE");
                 printf("    appendonly: %s\n", cfg->appendonly);
             }
         } else {
-            if (config.redis_config) {
-                printf("  host configuration \"save\": %s\n", config.redis_config->save);
-                printf("  host configuration \"appendonly\": %s\n", config.redis_config->appendonly);
+            if (config.server_config) {
+                printf("  host configuration \"save\": %s\n", config.server_config->save);
+                printf("  host configuration \"appendonly\": %s\n", config.server_config->appendonly);
             }
         }
         printf("  multi-thread: %s\n", (config.num_threads ? "yes" : "no"));
@@ -1065,7 +1065,7 @@ static clusterNode *createClusterNode(char *ip, int port) {
     node->slots_count = 0;
     node->updated_slots = NULL;
     node->updated_slots_count = 0;
-    node->redis_config = NULL;
+    node->server_config = NULL;
     return node;
 }
 
@@ -1076,7 +1076,7 @@ static void freeClusterNode(clusterNode *node) {
      * config.conn_info.hostip and config.conn_info.hostport, then the node ip has been
      * allocated by fetchClusterConfiguration, so it must be freed. */
     if (node->ip && strcmp(node->ip, config.conn_info.hostip) != 0) sdsfree(node->ip);
-    if (node->redis_config != NULL) freeServerConfig(node->redis_config);
+    if (node->server_config != NULL) freeServerConfig(node->server_config);
     zfree(node->slots);
     zfree(node);
 }
@@ -1800,7 +1800,7 @@ int main(int argc, char **argv) {
     config.read_from_replica = FROM_PRIMARY_ONLY;
     config.cluster_node_count = 0;
     config.cluster_nodes = NULL;
-    config.redis_config = NULL;
+    config.server_config = NULL;
     config.is_fetching_slots = 0;
     config.is_updating_slots = 0;
     config.slots_last_update = 0;
@@ -1869,8 +1869,8 @@ int main(int argc, char **argv) {
             printf("Node %d(%s): ", i, node_type);
             if (node->name) printf("%s ", node->name);
             printf("%s:%d\n", node->ip, node->port);
-            node->redis_config = getServerConfig(config.ct, node->ip, node->port);
-            if (node->redis_config == NULL) {
+            node->server_config = getServerConfig(config.ct, node->ip, node->port);
+            if (node->server_config == NULL) {
                 fprintf(stderr, "WARNING: Could not fetch node CONFIG %s:%d\n", node->ip, node->port);
             }
         }
@@ -1879,8 +1879,8 @@ int main(int argc, char **argv) {
          * by the user. */
         if (config.num_threads == 0) config.num_threads = config.cluster_node_count;
     } else {
-        config.redis_config = getServerConfig(config.ct, config.conn_info.hostip, config.conn_info.hostport);
-        if (config.redis_config == NULL) {
+        config.server_config = getServerConfig(config.ct, config.conn_info.hostip, config.conn_info.hostport);
+        if (config.server_config == NULL) {
             fprintf(stderr, "WARNING: Could not fetch server CONFIG\n");
         }
     }
@@ -1995,7 +1995,7 @@ int main(int argc, char **argv) {
         sdsfreesplitres(sds_args, argc);
 
         sdsfree(title);
-        if (config.redis_config != NULL) freeServerConfig(config.redis_config);
+        if (config.server_config != NULL) freeServerConfig(config.server_config);
         zfree(argvlen);
         return 0;
     }
@@ -2202,7 +2202,7 @@ int main(int argc, char **argv) {
 
     zfree(data);
     freeCliConnInfo(config.conn_info);
-    if (config.redis_config != NULL) freeServerConfig(config.redis_config);
+    if (config.server_config != NULL) freeServerConfig(config.server_config);
 
     return 0;
 }

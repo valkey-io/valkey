@@ -46,7 +46,12 @@ static void connUnixEventHandler(struct aeEventLoop *el, int fd, void *clientDat
 }
 
 static int connUnixAddr(connection *conn, char *ip, size_t ip_len, int *port, int remote) {
-    return connectionTypeTcp()->addr(conn, ip, ip_len, port, remote);
+    UNUSED(conn);
+    UNUSED(remote);
+
+    snprintf(ip, ip_len, "%s:0", server.unixsocket);
+    if (port) *port = 0;
+    return 0;
 }
 
 static int connUnixIsLocal(connection *conn) {

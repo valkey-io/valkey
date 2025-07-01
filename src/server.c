@@ -3666,7 +3666,7 @@ void postExecutionUnitOperations(void) {
 
     firePostExecutionUnitJobs();
 
-    /* If we are at the top-most call() and not inside a an active module
+    /* If we are at the top-most call() and not inside an active module
      * context (e.g. within a module timer) we can propagate what we accumulated. */
     propagatePendingCommands();
 
@@ -3804,7 +3804,7 @@ void call(client *c, int flags) {
     else
         duration = ustime() - call_timer;
 
-    valkey_commands_trace(valkey_commands, command_call, connGetTypeId(c->conn), getClientPeerId(c), getClientPeerId(c), real_cmd->declared_name, duration);
+    valkey_commands_trace(valkey_commands, command_call, connGetTypeId(c->conn), getClientPeerId(c), getClientSockname(c), real_cmd->declared_name, duration);
     c->duration += duration;
     dirty = server.dirty - dirty;
     if (dirty < 0) dirty = 0;
@@ -4154,6 +4154,16 @@ int processCommand(client *c) {
             serverAssert(!(c->read_flags & READ_FLAGS_COMMAND_NOT_FOUND));
         }
         c->cmd = c->lastcmd = c->realcmd = cmd;
+
+        if (authRequired(c)) {
+            /* AUTH and HELLO and no auth commands are valid even in
+             * non-authenticated state. */
+            if (!c->cmd || !(c->cmd->flags & CMD_NO_AUTH)) {
+                rejectCommand(c, shared.noautherr);
+                return C_OK;
+            }
+        }
+
         c->flag.buffered_reply = 0;
         sds err;
 
@@ -4200,15 +4210,6 @@ int processCommand(client *c) {
     int is_deny_async_loading_command = (combined_flags & CMD_NO_ASYNC_LOADING);
 
     const int obey_client = mustObeyClient(c);
-
-    if (authRequired(c)) {
-        /* AUTH and HELLO and no auth commands are valid even in
-         * non-authenticated state. */
-        if (!(c->cmd->flags & CMD_NO_AUTH)) {
-            rejectCommand(c, shared.noautherr);
-            return C_OK;
-        }
-    }
 
     if (c->flag.multi && c->cmd->flags & CMD_NO_MULTI) {
         rejectCommandFormat(c, "Command not allowed inside a transaction");
@@ -4510,6 +4511,12 @@ void closeListeningSockets(int unlink_unix_socket) {
  * - SHUTDOWN_FORCE: Ignore errors writing AOF and RDB files on disk, which
  *   would normally prevent a shutdown.
  *
+ * - SHUTDOWN_SAFE: Shut down only when safe. Note that safe cannot prevent force,
+ *   in the case of force, safe will print the relevant logs. The definition of
+ *   safe may be different in different modes. Here are the definitions:
+ *   * In cluster mode, it is unsafe to shut down a primary with slots, and may
+ *     cause the cluster to go down.
+ *
  * Unless SHUTDOWN_NOW is set and if any replicas are lagging behind, C_ERR is
  * returned and server.shutdown_mstime is set to a timestamp to allow a grace
  * period for the replicas to catch up. This is checked and handled by
@@ -4607,6 +4614,7 @@ int finishShutdown(void) {
     int save = server.shutdown_flags & SHUTDOWN_SAVE;
     int nosave = server.shutdown_flags & SHUTDOWN_NOSAVE;
     int force = server.shutdown_flags & SHUTDOWN_FORCE;
+    int safe = server.shutdown_flags & SHUTDOWN_SAFE;
 
     /* Log a warning for each replica that is lagging. */
     listIter replicas_iter;
@@ -4627,6 +4635,17 @@ int finishShutdown(void) {
     if (num_replicas > 0) {
         serverLog(LL_NOTICE, "%d of %d replicas are in sync when shutting down.", num_replicas - num_lagging_replicas,
                   num_replicas);
+    }
+
+    if (safe && server.cluster_enabled && clusterNodeIsVotingPrimary(getMyClusterNode())) {
+        if (force) {
+            serverLog(LL_WARNING, "This is a voting primary. Shutting down may cause the cluster to go down. Exit anyway.");
+        } else {
+            serverLog(LL_WARNING, "This is a voting primary. Shutting down may cause the cluster to go down. Can't exit.");
+            if (server.supervised_mode == SUPERVISED_SYSTEMD)
+                serverCommunicateSystemd("This is a voting primary. Shutting down may cause the cluster to go down. Can't exit.\n");
+            goto error;
+        }
     }
 
     /* Kill all the Lua debugger forked sessions. */
@@ -6570,7 +6589,15 @@ static void sigShutdownHandler(int sig) {
      * on disk and without waiting for lagging replicas. */
     if (server.shutdown_asap && sig == SIGINT) {
         serverLogRawFromHandler(LL_WARNING, "You insist... exiting now.");
-        rdbRemoveTempFile(getpid(), 1);
+        /* Make sure the process cleans up the temp files before exiting.
+         * We let the parent process handle this. For RDB, we have foreground save
+         * and background save, so we need to handle both pid and child_pid. For AOF,
+         * we only have background aof rewrite, so we only need to handle child_pid. */
+        if (!server.in_fork_child) {
+            rdbRemoveTempFile(server.pid, 1);
+            rdbRemoveTempFile(server.child_pid, 1);
+            aofRemoveTempFile(server.child_pid, 1);
+        }
         exit(1); /* Exit with an error since this was not a clean shutdown. */
     } else if (server.loading) {
         msg = "Received shutdown signal during loading, scheduling shutdown.";

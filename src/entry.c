@@ -138,8 +138,7 @@ entry *entrySetExpiry(entry *e, long long expiry) {
 
 /* Return true in case the entry has assigned expiration or false otherwise. */
 bool entryIsExpired(entry *entry) {
-    if (!timestampIsExpired(entryGetExpiry(entry))) return false;
-    return true;
+    return timestampIsExpired(entryGetExpiry(entry));
 }
 /**************************************** Entry Expiry API - End *****************************************/
 

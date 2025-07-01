@@ -2,6 +2,7 @@
 #define EXPIRE_H
 
 #include <time.h>
+#include <stdbool.h>
 #include "monotonic.h"
 
 /* Special Expiry values */
@@ -38,7 +39,7 @@ typedef enum {
 typedef struct client client;
 typedef struct serverObject robj;
 
-int timestampIsExpired(mstime_t when);
+bool timestampIsExpired(mstime_t when);
 expirationPolicy getExpirationPolicyWithFlags(int flags);
 int parseExtendedExpireArgumentsOrReply(client *c, int *flags, int max_args);
 int convertExpireArgumentToUnixTime(client *c, robj *arg, long long basetime, int unit, long long *unixtime);

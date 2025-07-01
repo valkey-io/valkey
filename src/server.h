@@ -714,7 +714,7 @@ typedef enum {
 #define ARGS_PERSIST (1 << 8)  /* Set if we need to remove the ttl */
 #define ARGS_SET_IFEQ (1 << 9) /* Set if we need compare and set */
 #define ARGS_ARGV3 (1 << 10)   /* Set if the value is at argv[3]; otherwise it's \
-                               * at argv[2]. */
+                                * at argv[2]. */
 #define ARGS_SET_FNX (1 << 11) /* Set if key item not exists. */
 #define ARGS_SET_FXX (1 << 12) /* Set if key item exists. */
 

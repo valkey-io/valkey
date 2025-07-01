@@ -1247,14 +1247,7 @@ void hgetexCommand(client *c) {
         return;
     }
 
-    o = lookupKeyRead(c->db, c->argv[1]);
-    if (checkType(c, o, OBJ_HASH))
-        return;
-
-    if (o == NULL) {
-        o = createHashObject();
-        dbAdd(c->db, c->argv[1], &o);
-    }
+    if ((o = lookupKeyReadOrReply(c, c->argv[1], shared.null[c->resp])) == NULL || checkType(c, o, OBJ_HASH)) return;
 
     /* Handle parsing and calculating the expiration time. */
     if (flags & OBJ_PERSIST) {
@@ -1290,13 +1283,17 @@ void hgetexCommand(client *c) {
 
         new_argv[new_argc++] = c->argv[1];
         incrRefCount(c->argv[1]);
-        if (set_expiry || set_expired) {
+
+        if (set_expiry) {
             new_argv[new_argc++] = NULL; // placeholder for the expiration time
             milliseconds_index = new_argc - 1;
+        }
+
+        if (set_expiry || persist) {
             new_argv[new_argc++] = shared.fields;
             new_argv[new_argc++] = NULL; // placeholder for the number of objects
+            numitems_index = new_argc - 1;
         }
-        numitems_index = new_argc - 1;
     }
     for (i = fields_index; i < c->argc; i++) {
         int changed = 0;
@@ -1306,7 +1303,7 @@ void hgetexCommand(client *c) {
         } else if (set_expiry) {
             changed = (hashTypeSetExpire(o, c->argv[i]->ptr, when, 0) == 1) ? 1 : 0;
         } else if (persist) {
-            changed = hashTypePersist(o, c->argv[i]->ptr);
+            changed = (hashTypePersist(o, c->argv[i]->ptr) == 1) ? 1 : 0;
         }
         if (changed) {
             changes++;

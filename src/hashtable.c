@@ -652,7 +652,7 @@ static int resize(hashtable *ht, size_t min_capacity, int *malloc_failed) {
     if (ht->type->rehashingStarted) ht->type->rehashingStarted(ht);
 
     /* If the old table was empty, the rehashing is completed immediately. */
-    if (ht->tables[0] == NULL) {
+    if (ht->tables[0] == NULL || (ht->used[0] == 0 && ht->child_buckets[0] == 0)) {
         rehashingCompleted(ht);
     } else if (ht->type->instant_rehashing) {
         while (hashtableIsRehashing(ht)) {

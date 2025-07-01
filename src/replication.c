@@ -4132,7 +4132,7 @@ void replicationUnsetPrimary(void) {
     sdsfree(server.primary_host);
     server.primary_host = NULL;
     if (server.primary) freeClient(server.primary);
-    server.tunnel_failover = 0;
+    server.tunnel_primary = 0;
     replicationDiscardCachedPrimary();
     cancelReplicationHandshake(0);
     /* When a replica is turned into a primary, the current replication ID
@@ -5109,11 +5109,20 @@ void abortFailover(const char *err) {
         replicationUnsetPrimary();
     }
     clearFailoverState();
-    server.tunnel_failover = 0;
+    server.tunnel_primary = 0;
+}
+
+sds getClientPeerIP(client *c) {
+    sds id = getClientPeerId(c);
+    char *last_colon = strrchr(id, ':');
+    if (!last_colon) {
+        return sdsnew(id);
+    }
+    return sdsnewlen(id, last_colon - id);
 }
 
 /*
- * FAILOVER [TO <HOST> <PORT> [FORCE] [TUNNEL]] [ABORT] [TIMEOUT <timeout>]
+ * FAILOVER [TO <HOST> <PORT> [FORCE] [TUNNEL [<EXCLUDE_IP> ...]]] [ABORT] [TIMEOUT <timeout>]
  *
  * This command will coordinate a failover between the primary and one
  * of its replicas. The happy path contains the following steps:
@@ -5139,8 +5148,9 @@ void abortFailover(const char *err) {
  * a replica to sync up before aborting. If not specified, the failover
  * will attempt forever and must be manually aborted.
  *
- * TUNNEL flag indicates that after the failover, this node will tunnel traffic
- * of the existing connections to the new primary
+ * TUNNEL flag indicates that after the failover is complete, new connections
+ * are tunneled to the new primary. The excluded IPs list specifies addresses
+ * for which tunneling should be disabled.
  */
 void failoverCommand(client *c) {
     if (!clusterAllowFailoverCmd(c)) {
@@ -5164,6 +5174,7 @@ void failoverCommand(client *c) {
     int tunnel_flag = 0;
     long port = 0;
     char *host = NULL;
+    list *tunnel_excluded_ips = listCreate();
 
     /* Parse the command for syntax and arguments. */
     for (int j = 1; j < c->argc; j++) {
@@ -5182,6 +5193,14 @@ void failoverCommand(client *c) {
             force_flag = 1;
         } else if (!strcasecmp(c->argv[j]->ptr, "tunnel") && !tunnel_flag) {
             tunnel_flag = 1;
+            ++j;
+            for (; j < c->argc; ++j) {
+                if (!isValidIpV4(c->argv[j]->ptr, NULL) && !isValidIpV6(c->argv[j]->ptr, NULL)) {
+                    --j;
+                    break;
+                }
+                listAddNodeTail(tunnel_excluded_ips, sdsdup(c->argv[j]->ptr));
+            }
         } else {
             addReplyErrorObject(c, shared.syntaxerr);
             return;
@@ -5233,6 +5252,7 @@ void failoverCommand(client *c) {
             return;
         }
 
+        if (tunnel_flag) listAddNodeTail(tunnel_excluded_ips, getClientPeerIP(c));
         server.target_replica_host = zstrdup(host);
         server.target_replica_port = port;
         serverLog(LL_NOTICE, "FAILOVER requested to %s:%ld.", host, port);
@@ -5246,7 +5266,9 @@ void failoverCommand(client *c) {
     }
 
     server.force_failover = force_flag;
-    server.tunnel_failover = tunnel_flag;
+    server.tunnel_primary = tunnel_flag;
+    listRelease(server.tunnel_excluded_ips);
+    server.tunnel_excluded_ips = tunnel_excluded_ips;
     server.failover_state = FAILOVER_WAIT_FOR_SYNC;
     /* Cluster failover will unpause eventually */
     pauseActions(PAUSE_DURING_FAILOVER, LLONG_MAX, PAUSE_ACTIONS_CLIENT_WRITE_SET);

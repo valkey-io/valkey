@@ -334,7 +334,6 @@ client *createClient(connection *conn) {
     c->io_last_written.buf = NULL;
     c->io_last_written.bufpos = 0;
     c->io_last_written.data_len = 0;
-    c->tunnel_session = NULL;
     return c;
 }
 
@@ -1687,6 +1686,23 @@ void clientAcceptHandler(connection *conn) {
     moduleFireServerEvent(VALKEYMODULE_EVENT_CLIENT_CHANGE, VALKEYMODULE_SUBEVENT_CLIENT_CHANGE_CONNECTED, c);
 }
 
+static int shouldTunnelToPrimary(char * addr) {
+    if (!server.tunnel_primary || !server.primary_host ||
+        server.failover_state != NO_FAILOVER) return 0;
+
+    listIter li;
+    listNode *ln;
+    listRewind(server.tunnel_excluded_ips, &li);
+
+    while ((ln = listNext(&li))) {
+        sds exclude_ip = ln->value;
+        if (sdslen(exclude_ip) <= strlen(addr) && !strncmp(exclude_ip, addr, sdslen(exclude_ip))) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
 void acceptCommonHandler(connection *conn, struct ClientFlags flags, char *ip) {
     client *c;
     UNUSED(ip);
@@ -1702,7 +1718,10 @@ void acceptCommonHandler(connection *conn, struct ClientFlags flags, char *ip) {
         connClose(conn);
         return;
     }
-
+    if (shouldTunnelToPrimary(addr)) {
+        establishTunnelOrClose(conn);
+        return;
+    }
     /* Limit the number of connections we take at the same time.
      *
      * Admission control will happen before a client is created and connAccept()
@@ -2013,7 +2032,6 @@ void freeClient(client *c) {
     reqresReset(c, 1);
 #endif
 
-    freeTunnelSession(c->tunnel_session);
     /* Remove the contribution that this client gave to our
      * incrementally computed memory usage. */
     if (c->conn) server.stat_clients_type_memory[c->last_memory_type] -= c->last_memory_usage;
@@ -5064,68 +5082,6 @@ void clientCommand(client *c) {
     addReplySubcommandSyntaxError(c);
 }
 
-/* TUNNEL <protocol-version> [CLIENTNAME <name> USER <user>]
- * Internal command used to propagate downstream client information to the
- * upstream tunnel client. The first argument specifies the RESP protocol version
- * used by the downstream client, followed by two optional parameters:
- * - CLIENTNAME <name>: The name of the downstream client.
- * - USER <user>: The ACL-authenticated username.
- */
-void tunnelCommand(client *c) {
-    if (server.primary_host) {
-        addReplyErrorFormat(c, "TUNNEL cannot be used with replica instances");
-        return;
-    }
-    if (c->argc < 2) {
-        char *cmd = c->argv[0]->ptr;
-        addReplyErrorFormat(c, "Wrong number of arguments for the '%s' subcommand", cmd);
-        return;
-    }
-    long long ver = 0;
-    if (getLongLongFromObjectOrReply(c, c->argv[1], &ver,
-                                     "Protocol version is not an integer or out of range") != C_OK) {
-        return;
-    }
-
-    if (ver < 2 || ver > 3) {
-        addReplyError(c, "Unsupported resp protocol version");
-        return;
-    }
-    robj *client_name = NULL;
-    user *client_user = NULL;
-
-    for (int i = 2; i < c->argc; i += 2) {
-        if (i >= c->argc - 1) {
-            addReplyErrorFormat(c, "Missing parameter after: %s", (char *)c->argv[i]->ptr);
-            return;
-        }
-        if (strcasecmp(c->argv[i]->ptr, "CLIENTNAME") == 0) {
-            const char *err = NULL;
-            client_name = c->argv[i + 1];
-            if (validateClientName(client_name, &err) == C_ERR) {
-                addReplyError(c, err);
-                return;
-            }
-        } else if (strcasecmp(c->argv[i]->ptr, "USER") == 0) {
-            robj *u = c->argv[i + 1];
-            client_user = ACLGetUserByName(u->ptr, sdslen(u->ptr));
-            if (client_user == NULL || (client_user->flags & USER_FLAG_DISABLED)) {
-                addReplyErrorFormat(c, "AUTH user not found or disabled");
-                return;
-            }
-        } else {
-            addReplyErrorFormat(c, "Unexpected parameter: %s", (char *)c->argv[i]->ptr);
-            return;
-        }
-    }
-    c->resp = ver;
-    if (client_name) clientSetName(c, client_name, NULL);
-    if (client_user) {
-        clientSetUser(c, client_user, 1);
-        moduleNotifyUserChanged(c);
-    }
-    addReply(c, shared.ok);
-}
 /* HELLO [<protocol-version> [AUTH <user> <password>] [SETNAME <name>] ] */
 void helloCommand(client *c) {
     long long ver = 0;

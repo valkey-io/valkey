@@ -1299,7 +1299,6 @@ typedef struct client {
     list *deferred_reply;                    /* List of reply objects to be sent to the client, typically after
                                                 the client has been unblocked. */
     unsigned long long deferred_reply_bytes; /* Total bytes of objects in the blocked client pending list.*/
-    tunnelSession *tunnel_session;
 #ifdef LOG_REQ_RES
     clientReqResInfo reqres;
 #endif
@@ -1657,6 +1656,7 @@ struct valkeyServer {
     uint32_t socket_mark_id;               /* ID for listen socket marking */
     connListener clistener;                /* Cluster bus listener */
     list *clients;                         /* List of active clients */
+    list *tunnels_to_close;                /* Tunnel sessions to close asynchronously */
     list *clients_to_close;                /* Clients to close asynchronously */
     list *clients_pending_write;           /* There is to write or install handler. */
     list *clients_pending_io_read;         /* List of clients with pending read to be process by I/O threads. */
@@ -2180,8 +2180,9 @@ struct valkeyServer {
     mstime_t failover_end_time;              /* Deadline for failover command. */
     int force_failover;                      /* If true then failover will be forced at the
                                               * deadline, otherwise failover is aborted. */
-    int tunnel_failover;                     /* If true then once failover is completed, tunnel the existing and the new
+    int tunnel_primary;                     /* If true then once failover is completed, tunnel the existing and the new
                                               * connections to the failover target. */
+    list *tunnel_excluded_ips;
     char *target_replica_host;               /* Failover target host. If null during a
                                               * failover then any replica can be used. */
     int target_replica_port;                 /* Failover target port */
@@ -2685,6 +2686,8 @@ void dictVanillaFree(void *val);
 #define WRITE_FLAGS_WRITE_ERROR (1 << 0)
 #define WRITE_FLAGS_IS_REPLICA (1 << 1)
 
+int isValidIpV4(char *val, const char **err);
+int isValidIpV6(char *val, const char **err);
 client *createClient(connection *conn);
 void freeClient(client *c);
 void freeClientAsync(client *c);
@@ -2774,6 +2777,7 @@ void redactClientCommandArgument(client *c, int argc);
 size_t getClientOutputBufferMemoryUsage(client *c);
 size_t getClientMemoryUsage(client *c, size_t *output_buffer_mem_usage);
 int freeClientsInAsyncFreeQueue(void);
+void freeTunnelsInAsyncFreeQueue(void);
 int closeClientOnOutputBufferLimitReached(client *c, int async);
 int getClientType(client *c);
 int getClientTypeByName(char *name);
@@ -3894,7 +3898,6 @@ void bitopCommand(client *c);
 void bitcountCommand(client *c);
 void bitposCommand(client *c);
 void replconfCommand(client *c);
-void tunnelCommand(client *c);
 void waitCommand(client *c);
 void waitaofCommand(client *c);
 void georadiusbymemberCommand(client *c);

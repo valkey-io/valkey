@@ -4,7 +4,6 @@
 #include "sds.h"
 
 typedef struct connection connection;
-typedef struct client client;
 
 #define TUNNEL_BUFSIZE 4096
 
@@ -17,25 +16,21 @@ typedef struct tunnelPipe {
 } tunnelPipe;
 
 typedef struct TunnelFlags {
-    uint64_t expect_auth_reply : 1; /* Upstreamed an AUTH command to authenticate this node */
+    uint64_t closed : 1; /* Tunnel session is marked for close */
 } TunnelFlags;
 
 typedef struct tunnelSession {
-    client *downstream_client;
-    client *upstream_client;
     tunnelPipe up_pipe;   /* 'up' reads from downstream and writes to upstream */
     tunnelPipe down_pipe; /* 'down' reads from upstream and writes to downstream */
     sds host;
     int port;
-    sds cmd;
-    int multi_cnt;
     union {
         uint64_t raw_flag;
         struct TunnelFlags flag;
     };
 } tunnelSession;
 
-void establishTunnelOrClose(client *c);
-void freeTunnelSession(tunnelSession *tunnel_session);
+void establishTunnelOrClose(connection *conn);
+void freeTunnelsInAsyncFreeQueue(void);
 
 #endif /* TUNNEL_H */

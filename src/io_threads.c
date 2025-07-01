@@ -371,10 +371,6 @@ int trySendReadToIOThreads(client *c) {
     /* For simplicity let the main-thread handle the blocked clients */
     if (c->flag.blocked || c->flag.unblocked) return C_ERR;
     if (c->flag.close_asap) return C_ERR;
-    /* Tunnel sessions involve two clients, upstream and downstream,
-     * both of which must be handled by the same thread.
-     * For simplicity, we enforce handling on the main thread. */
-    if (c->tunnel_session) return C_ERR;
     size_t tid = (c->id % (server.active_io_threads_num - 1)) + 1;
 
     /* Handle case where client has a pending IO write job on a different thread:
@@ -415,10 +411,6 @@ int trySendWriteToIOThreads(client *c) {
     if (getClientType(c) == CLIENT_TYPE_REPLICA && c->repl_data->repl_state != REPLICA_STATE_ONLINE) return C_ERR;
     /* We can't offload debugged clients as the main-thread may read at the same time  */
     if (c->flag.lua_debug) return C_ERR;
-    /* Tunnel sessions involve two clients, upstream and downstream,
-     * both of which must be handled by the same thread.
-     * For simplicity, we enforce handling on the main thread. */
-    if (c->tunnel_session) return C_ERR;
 
     size_t tid = (c->id % (server.active_io_threads_num - 1)) + 1;
     /* Handle case where client has a pending IO read job on a different thread:

@@ -51,7 +51,6 @@
 #include "lua/engine_lua.h"
 #include "lua/debug_lua.h"
 #include "eval.h"
-#include "tunnel.h"
 
 #include "trace/trace_commands.h"
 
@@ -1925,6 +1924,8 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
 
     /* Close clients that need to be closed asynchronous */
     freeClientsInAsyncFreeQueue();
+    /* Close tunnel sessions that need to be closed asynchronous */
+    freeTunnelsInAsyncFreeQueue();
 
     /* Incrementally trim replication backlog, 10 times the normal speed is
      * to free replication backlog as much as possible. */
@@ -2306,6 +2307,8 @@ void initServerConfig(void) {
     /* Failover related */
     server.failover_end_time = 0;
     server.force_failover = 0;
+    server.tunnel_primary = 0;
+    server.tunnel_excluded_ips = listCreate();
     server.target_replica_host = NULL;
     server.target_replica_port = 0;
     server.failover_state = NO_FAILOVER;
@@ -2830,6 +2833,7 @@ void initServer(void) {
     server.clients = listCreate();
     server.clients_index = raxNew();
     server.clients_to_close = listCreate();
+    server.tunnels_to_close = listCreate();
     server.replicas = listCreate();
     server.monitors = listCreate();
     server.replicas_waiting_psync = raxNew();
@@ -4057,12 +4061,6 @@ uint64_t getCommandFlags(client *c) {
     return cmd_flags;
 }
 
-static int shouldTunnelOnFailure(client *c) {
-    return (getClientType(c) == CLIENT_TYPE_NORMAL && c->id != CLIENT_ID_AOF && !c->flag.blocked &&
-            !c->flag.close_asap && !c->flag.repl_rdb_channel && !c->flag.fake &&
-            server.repl_state == REPL_STATE_CONNECTED && server.tunnel_failover &&
-            !c->flag.replica && !c->flag.primary && (!c->mstate || c->cmd->proc == execCommand));
-}
 /* Prepare a parsed command for processing, including looking up the command,
  * checking arity and calculating cluster slot. This should be done before
  * calling processCommand() and can be done by I/O threads to offload the
@@ -4240,9 +4238,8 @@ int processCommand(client *c) {
         }
     }
 
-    if (!server.cluster_enabled && server.primary_host && !obey_client &&
-        (is_write_command || (is_read_command && !c->flag.readonly)) &&
-        (c->capa & CLIENT_CAPA_REDIRECT || shouldTunnelOnFailure(c))) {
+    if (!server.cluster_enabled && c->capa & CLIENT_CAPA_REDIRECT && server.primary_host && !obey_client &&
+        (is_write_command || (is_read_command && !c->flag.readonly))) {
         if (server.failover_state == FAILOVER_IN_PROGRESS) {
             /* During the FAILOVER process, when conditions are met (such as
              * when the force time is reached or the primary and replica offsets
@@ -4266,17 +4263,13 @@ int processCommand(client *c) {
             blockPostponeClient(c);
         } else {
             c->duration = 0;
-            if (c->capa & CLIENT_CAPA_REDIRECT) {
-                c->cmd->rejected_calls++;
-                addReplyErrorSds(c, sdscatprintf(sdsempty(), "-REDIRECT %s:%d", server.primary_host, server.primary_port));
-            } else {
-                establishTunnelOrClose(c);
-            }
             if (c->cmd->proc == execCommand) {
                 discardTransaction(c);
             } else {
                 flagTransaction(c);
             }
+            c->cmd->rejected_calls++;
+            addReplyErrorSds(c, sdscatprintf(sdsempty(), "-REDIRECT %s:%d", server.primary_host, server.primary_port));
         }
         return C_OK;
     }
@@ -4360,10 +4353,8 @@ int processCommand(client *c) {
     }
 
     /* Don't accept write commands if this is a read only replica. But
-     * accept write commands if this is our primary. However, if failover tunneling
-     * is active, allow the command to be queued. It will be upstreamed later over
-     * the tunnel upon receiving the EXEC command. */
-    if (server.primary_host && server.repl_replica_ro && !obey_client && is_write_command && !server.tunnel_failover) {
+     * accept write commands if this is our primary. */
+    if (server.primary_host && server.repl_replica_ro && !obey_client && is_write_command) {
         rejectCommand(c, shared.roreplicaerr);
         return C_OK;
     }

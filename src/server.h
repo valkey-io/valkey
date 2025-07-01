@@ -2177,11 +2177,11 @@ struct valkeyServer {
     /* Sentinel config */
     struct sentinelConfig *sentinel_config; /* sentinel config to load at startup time. */
     /* Coordinate failover info */
-    mstime_t failover_end_time;              /* Deadline for failover command. */
-    int force_failover;                      /* If true then failover will be forced at the
-                                              * deadline, otherwise failover is aborted. */
-    int tunnel_primary;                     /* If true then once failover is completed, tunnel the existing and the new
-                                              * connections to the failover target. */
+    mstime_t failover_end_time; /* Deadline for failover command. */
+    int force_failover;         /* If true then failover will be forced at the
+                                 * deadline, otherwise failover is aborted. */
+    int tunnel_primary;         /* If true then once failover is completed, tunnel the existing and the new
+                                 * connections to the failover target. */
     list *tunnel_excluded_ips;
     char *target_replica_host;               /* Failover target host. If null during a
                                               * failover then any replica can be used. */

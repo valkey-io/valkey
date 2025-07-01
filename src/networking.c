@@ -1686,7 +1686,7 @@ void clientAcceptHandler(connection *conn) {
     moduleFireServerEvent(VALKEYMODULE_EVENT_CLIENT_CHANGE, VALKEYMODULE_SUBEVENT_CLIENT_CHANGE_CONNECTED, c);
 }
 
-static int shouldTunnelToPrimary(char * addr) {
+static int shouldTunnelToPrimary(char *addr) {
     if (!server.tunnel_primary || !server.primary_host ||
         server.failover_state != NO_FAILOVER) return 0;
 

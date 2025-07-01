@@ -5130,11 +5130,9 @@ static void releaseTunnelExcludedIps(void) {
         listDelNode(server.tunnel_excluded_ips, ln);
         sdsfree(ip);
     }
-    listRelease(server.tunnel_excluded_ips);
 }
 
 static void setTunnelExcludedIps(client *c, int exclude_ip_start, int exclude_ip_end) {
-    server.tunnel_excluded_ips = listCreate();
     for (int j = exclude_ip_start; j < exclude_ip_end; ++j) {
         listAddNodeTail(server.tunnel_excluded_ips, sdsdup(c->argv[j]->ptr));
     }

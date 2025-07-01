@@ -35,9 +35,9 @@
  *   | Expiration (opt)  | Value pointer     | Field (sds)      |
  *   | 8 bytes (int64_t) | 8 bytes (void *)  | "field" + header |
  *   +-------------------+-------------------+------------------+
- *                               ^
- *                               |
- *                         entry pointer
+ *                                           ^
+ *                                           |
+ *                                           entry pointer
  *
  * - The value is stored separately via a pointer.
  * - Used for large value sizes. */

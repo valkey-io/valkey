@@ -33,7 +33,7 @@
  *     +--------------+---^---+--------------+
  *                        |
  *                        |
- *                        entry pointer = value sds
+ *                        value pointer = value sds
  */
 
 /* SDS aux flag. If set, it indicates that the entry has TTL metadata set. */
@@ -66,7 +66,7 @@ sds entryGetField(const entry *entry) {
 static sds *entryGetValueRef(const entry *entry) {
     serverAssert(entryHasValuePtr(entry));
     char *field_data = sdsAllocPtr(entry);
-    field_data -= sizeof(sds *);
+    field_data -= sizeof(sds);
     return (sds *)field_data;
 }
 
@@ -98,13 +98,13 @@ entry *entrySetValue(entry *e, sds value) {
 /* Returns the address of the entry allocation. */
 void *entryAllocPtr(const entry *entry) {
     char *buf = sdsAllocPtr(entry);
-    if (entryHasValuePtr(entry)) buf -= sizeof(sds *);
+    if (entryHasValuePtr(entry)) buf -= sizeof(sds);
     if (entryHasExpiry(entry)) buf -= sizeof(long long);
     return buf;
 }
 
 bool entryHasEmbeddedValue(entry *entry) {
-    return (entryGetValue(entry) && !entryHasValuePtr(entry));
+    return (!entryHasValuePtr(entry));
 }
 
 /**************************************** Entry Expiry API *****************************************/
@@ -127,7 +127,7 @@ long long entryGetExpiry(const entry *entry) {
 entry *entrySetExpiry(entry *e, long long expiry) {
     if (entryHasExpiry(e)) {
         char *buf = sdsAllocPtr(e);
-        if (entryHasValuePtr(e)) buf -= sizeof(sds *);
+        if (entryHasValuePtr(e)) buf -= sizeof(sds);
         buf -= sizeof(expiry);
         memcpy(buf, &expiry, sizeof(expiry));
         return e;
@@ -262,7 +262,7 @@ entry *entryUpdate(entry *e, sds value, long long expiry) {
         if (update_expiry) {
             serverAssert(entryHasExpiry(e));
             char *buf = sdsAllocPtr(e);
-            if (entryHasValuePtr(e)) buf -= sizeof(sds *);
+            if (entryHasValuePtr(e)) buf -= sizeof(sds);
             buf -= sizeof(expiry);
             memcpy(buf, &expiry, sizeof(expiry));
         }
@@ -302,8 +302,8 @@ entry *entryUpdate(entry *e, sds value, long long expiry) {
     }
 
     entry *new_entry = entryCreate(entryGetField(e), value, expiration_time);
-    if (new_entry != e)
-        entryFree(e);
+    debugServerAssert(new_entry != e);
+    entryFree(e);
     return new_entry;
 }
 

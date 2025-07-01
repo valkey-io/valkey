@@ -7366,34 +7366,34 @@ int parseExtendedCommandArgumentsOrReply(client *c, int *flags, int *unit, robj 
         /* clang-format off */
         if ((opt[0] == 'n' || opt[0] == 'N') &&
             (opt[1] == 'x' || opt[1] == 'X') && opt[2] == '\0' &&
-            !(*flags & OBJ_SET_XX || *flags & OBJ_SET_IFEQ) && (command_type == COMMAND_SET))
+            !(*flags & ARGS_SET_XX || *flags & ARGS_SET_IFEQ) && (command_type == COMMAND_SET))
         {
-            *flags |= OBJ_SET_NX;
+            *flags |= ARGS_SET_NX;
         } else if ((opt[0] == 'x' || opt[0] == 'X') &&
                    (opt[1] == 'x' || opt[1] == 'X') && opt[2] == '\0' &&
-                   !(*flags & OBJ_SET_NX || *flags & OBJ_SET_IFEQ) && (command_type == COMMAND_SET))
+                   !(*flags & ARGS_SET_NX || *flags & ARGS_SET_IFEQ) && (command_type == COMMAND_SET))
         {
-            *flags |= OBJ_SET_XX;
+            *flags |= ARGS_SET_XX;
         } else if ((opt[0] == 'f' || opt[0] == 'F') &&
                    (opt[1] == 'n' || opt[1] == 'N') &&
                    (opt[2] == 'x' || opt[2] == 'X') && opt[3] == '\0' &&
-                   !(*flags & OBJ_SET_FXX || *flags & OBJ_SET_IFEQ) && (command_type == COMMAND_HSET))
+                   !(*flags & ARGS_SET_FXX || *flags & ARGS_SET_IFEQ) && (command_type == COMMAND_HSET))
         {
-            *flags |= OBJ_SET_FNX;
+            *flags |= ARGS_SET_FNX;
         } else if ((opt[0] == 'f' || opt[0] == 'F') &&
                    (opt[1] == 'x' || opt[1] == 'X') &&
                    (opt[2] == 'x' || opt[2] == 'X') && opt[3] == '\0' &&
-                   !(*flags & OBJ_SET_FNX || *flags & OBJ_SET_IFEQ) && (command_type == COMMAND_HSET))
+                   !(*flags & ARGS_SET_FNX || *flags & ARGS_SET_IFEQ) && (command_type == COMMAND_HSET))
         {
-            *flags |= OBJ_SET_FXX;
+            *flags |= ARGS_SET_FXX;
         } else if ((opt[0] == 'i' || opt[0] == 'I') &&
                    (opt[1] == 'f' || opt[1] == 'F') &&
                    (opt[2] == 'e' || opt[2] == 'E') &&
                    (opt[3] == 'q' || opt[3] == 'Q') && opt[4] == '\0' &&
                    next && 
-                   !(*flags & OBJ_SET_NX || *flags & OBJ_SET_XX || *flags & OBJ_SET_IFEQ) && (command_type == COMMAND_SET))
+                   !(*flags & ARGS_SET_NX || *flags & ARGS_SET_XX || *flags & ARGS_SET_IFEQ) && (command_type == COMMAND_SET))
         {
-            *flags |= OBJ_SET_IFEQ;
+            *flags |= ARGS_SET_IFEQ;
             *compare_val = next;
             j++;
         } else if ((opt[0] == 'g' || opt[0] == 'G') &&
@@ -7401,34 +7401,34 @@ int parseExtendedCommandArgumentsOrReply(client *c, int *flags, int *unit, robj 
                    (opt[2] == 't' || opt[2] == 'T') && opt[3] == '\0' &&
                    (command_type == COMMAND_SET))
         {
-            *flags |= OBJ_SET_GET;
-        } else if (!strcasecmp(opt, "KEEPTTL") && !(*flags & OBJ_PERSIST) &&
-                   !(*flags & OBJ_EX) && !(*flags & OBJ_EXAT) &&
-                   !(*flags & OBJ_PX) && !(*flags & OBJ_PXAT) && (command_type == COMMAND_SET || command_type == COMMAND_HSET))
+            *flags |= ARGS_SET_GET;
+        } else if (!strcasecmp(opt, "KEEPTTL") && !(*flags & ARGS_PERSIST) &&
+                   !(*flags & ARGS_EX) && !(*flags & ARGS_EXAT) &&
+                   !(*flags & ARGS_PX) && !(*flags & ARGS_PXAT) && (command_type == COMMAND_SET || command_type == COMMAND_HSET))
         {
-            *flags |= OBJ_KEEPTTL;
+            *flags |= ARGS_KEEPTTL;
         } else if (!strcasecmp(opt,"PERSIST") && (command_type == COMMAND_GET || command_type == COMMAND_HGET) &&
-                   !(*flags & OBJ_EX) && !(*flags & OBJ_EXAT) &&
-                   !(*flags & OBJ_PX) && !(*flags & OBJ_PXAT) &&
-                   !(*flags & OBJ_KEEPTTL))
+                   !(*flags & ARGS_EX) && !(*flags & ARGS_EXAT) &&
+                   !(*flags & ARGS_PX) && !(*flags & ARGS_PXAT) &&
+                   !(*flags & ARGS_KEEPTTL))
         {
-            *flags |= OBJ_PERSIST;
+            *flags |= ARGS_PERSIST;
         } else if ((opt[0] == 'e' || opt[0] == 'E') &&
                    (opt[1] == 'x' || opt[1] == 'X') && opt[2] == '\0' &&
-                   !(*flags & OBJ_KEEPTTL) && !(*flags & OBJ_PERSIST) &&
-                   !(*flags & OBJ_EXAT) && !(*flags & OBJ_PX) &&
-                   !(*flags & OBJ_PXAT) && next)
+                   !(*flags & ARGS_KEEPTTL) && !(*flags & ARGS_PERSIST) &&
+                   !(*flags & ARGS_EXAT) && !(*flags & ARGS_PX) &&
+                   !(*flags & ARGS_PXAT) && next)
         {
-            *flags |= OBJ_EX;
+            *flags |= ARGS_EX;
             *expire = next;
             j++;
         } else if ((opt[0] == 'p' || opt[0] == 'P') &&
                    (opt[1] == 'x' || opt[1] == 'X') && opt[2] == '\0' &&
-                   !(*flags & OBJ_KEEPTTL) && !(*flags & OBJ_PERSIST) &&
-                   !(*flags & OBJ_EX) && !(*flags & OBJ_EXAT) &&
-                   !(*flags & OBJ_PXAT) && next)
+                   !(*flags & ARGS_KEEPTTL) && !(*flags & ARGS_PERSIST) &&
+                   !(*flags & ARGS_EX) && !(*flags & ARGS_EXAT) &&
+                   !(*flags & ARGS_PXAT) && next)
         {
-            *flags |= OBJ_PX;
+            *flags |= ARGS_PX;
             *unit = UNIT_MILLISECONDS;
             *expire = next;
             j++;
@@ -7436,22 +7436,22 @@ int parseExtendedCommandArgumentsOrReply(client *c, int *flags, int *unit, robj 
                    (opt[1] == 'x' || opt[1] == 'X') &&
                    (opt[2] == 'a' || opt[2] == 'A') &&
                    (opt[3] == 't' || opt[3] == 'T') && opt[4] == '\0' &&
-                   !(*flags & OBJ_KEEPTTL) && !(*flags & OBJ_PERSIST) &&
-                   !(*flags & OBJ_EX) && !(*flags & OBJ_PX) &&
-                   !(*flags & OBJ_PXAT) && next)
+                   !(*flags & ARGS_KEEPTTL) && !(*flags & ARGS_PERSIST) &&
+                   !(*flags & ARGS_EX) && !(*flags & ARGS_PX) &&
+                   !(*flags & ARGS_PXAT) && next)
         {
-            *flags |= OBJ_EXAT;
+            *flags |= ARGS_EXAT;
             *expire = next;
             j++;
         } else if ((opt[0] == 'p' || opt[0] == 'P') &&
                    (opt[1] == 'x' || opt[1] == 'X') &&
                    (opt[2] == 'a' || opt[2] == 'A') &&
                    (opt[3] == 't' || opt[3] == 'T') && opt[4] == '\0' &&
-                   !(*flags & OBJ_KEEPTTL) && !(*flags & OBJ_PERSIST) &&
-                   !(*flags & OBJ_EX) && !(*flags & OBJ_EXAT) &&
-                   !(*flags & OBJ_PX) && next)
+                   !(*flags & ARGS_KEEPTTL) && !(*flags & ARGS_PERSIST) &&
+                   !(*flags & ARGS_EX) && !(*flags & ARGS_EXAT) &&
+                   !(*flags & ARGS_PX) && next)
         {
-            *flags |= OBJ_PXAT;
+            *flags |= ARGS_PXAT;
             *unit = UNIT_MILLISECONDS;
             *expire = next;
             j++;

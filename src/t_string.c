@@ -90,7 +90,7 @@ void setGenericCommand(client *c,
         return;
     }
 
-    if (flags & OBJ_SET_GET) {
+    if (flags & ARGS_SET_GET) {
         initDeferredReplyBuffer(c);
         if (getGenericCommand(c) == C_ERR) goto cleanup;
     }
@@ -99,26 +99,26 @@ void setGenericCommand(client *c,
     found = existing_value != NULL;
 
     /* Handle the IFEQ conditional check */
-    if (flags & OBJ_SET_IFEQ && found) {
-        if (!(flags & OBJ_SET_GET) && checkType(c, existing_value, OBJ_STRING)) {
+    if (flags & ARGS_SET_IFEQ && found) {
+        if (!(flags & ARGS_SET_GET) && checkType(c, existing_value, OBJ_STRING)) {
             goto cleanup;
         }
 
         if (compareStringObjects(existing_value, comparison) != 0) {
-            if (!(flags & OBJ_SET_GET)) {
+            if (!(flags & ARGS_SET_GET)) {
                 addReply(c, abort_reply ? abort_reply : shared.null[c->resp]);
             }
             goto cleanup;
         }
-    } else if (flags & OBJ_SET_IFEQ && !found) {
-        if (!(flags & OBJ_SET_GET)) {
+    } else if (flags & ARGS_SET_IFEQ && !found) {
+        if (!(flags & ARGS_SET_GET)) {
             addReply(c, abort_reply ? abort_reply : shared.null[c->resp]);
         }
         goto cleanup;
     }
 
-    if ((flags & OBJ_SET_NX && found) || (flags & OBJ_SET_XX && !found)) {
-        if (!(flags & OBJ_SET_GET)) {
+    if ((flags & ARGS_SET_NX && found) || (flags & ARGS_SET_XX && !found)) {
+        if (!(flags & ARGS_SET_GET)) {
             addReply(c, abort_reply ? abort_reply : shared.null[c->resp]);
         }
         goto cleanup;
@@ -129,13 +129,13 @@ void setGenericCommand(client *c,
      * If the key already exists, delete it. */
     if (expire && checkAlreadyExpired(milliseconds)) {
         if (found) deleteExpiredKeyFromOverwriteAndPropagate(c, key);
-        if (!(flags & OBJ_SET_GET)) addReply(c, shared.ok);
+        if (!(flags & ARGS_SET_GET)) addReply(c, shared.ok);
         goto cleanup;
     }
 
     /* When expire is not NULL, we avoid deleting the TTL so it can be updated later instead of being deleted and then
      * created again. */
-    setkey_flags |= ((flags & OBJ_KEEPTTL) || expire) ? SETKEY_KEEPTTL : 0;
+    setkey_flags |= ((flags & ARGS_KEEPTTL) || expire) ? SETKEY_KEEPTTL : 0;
     setkey_flags |= found ? SETKEY_ALREADY_EXIST : SETKEY_DOESNT_EXIST;
 
     setKey(c, c->db, key, &val, setkey_flags);
@@ -143,7 +143,7 @@ void setGenericCommand(client *c,
 
     /* By setting the reallocated value back into argv, we can avoid duplicating
      * a large string value when adding it to the db. */
-    c->argv[(flags & OBJ_ARGV3) ? 3 : 2] = val;
+    c->argv[(flags & ARGS_ARGV3) ? 3 : 2] = val;
     incrRefCount(val);
 
     server.dirty++;
@@ -152,7 +152,7 @@ void setGenericCommand(client *c,
     if (expire) {
         /* Propagate as SET Key Value PXAT millisecond-timestamp if there is
          * EX/PX/EXAT flag. */
-        if (!(flags & OBJ_PXAT)) {
+        if (!(flags & ARGS_PXAT)) {
             robj *milliseconds_obj = createStringObjectFromLongLong(milliseconds);
             rewriteClientCommandVector(c, 5, shared.set, key, val, shared.pxat, milliseconds_obj);
             decrRefCount(milliseconds_obj);
@@ -160,13 +160,13 @@ void setGenericCommand(client *c,
         notifyKeyspaceEvent(NOTIFY_GENERIC, "expire", key, c->db->id);
     }
 
-    if (!(flags & OBJ_SET_GET)) {
+    if (!(flags & ARGS_SET_GET)) {
         addReply(c, ok_reply ? ok_reply : shared.ok);
     }
 
     /* Propagate without the GET argument (Isn't needed if we had expire since in that case we completely re-written the
      * command argv) */
-    if ((flags & OBJ_SET_GET) && !expire) {
+    if ((flags & ARGS_SET_GET) && !expire) {
         int argc = 0;
         int j;
         robj **argv = zmalloc((c->argc - 1) * sizeof(robj *));
@@ -212,7 +212,7 @@ static int getExpireMillisecondsOrReply(client *c, robj *expire, int flags, int 
 
     if (unit == UNIT_SECONDS) *milliseconds *= 1000;
 
-    if ((flags & OBJ_PX) || (flags & OBJ_EX)) {
+    if ((flags & ARGS_PX) || (flags & ARGS_EX)) {
         *milliseconds += commandTimeSnapshot();
     }
 
@@ -232,7 +232,7 @@ void setCommand(client *c) {
     robj *expire = NULL;
     robj *comparison = NULL;
     int unit = UNIT_SECONDS;
-    int flags = OBJ_NO_FLAGS;
+    int flags = ARGS_NO_FLAGS;
 
     if (parseExtendedCommandArgumentsOrReply(c, &flags, &unit, &expire, &comparison, COMMAND_SET, c->argc) != C_OK) {
         return;
@@ -244,17 +244,17 @@ void setCommand(client *c) {
 
 void setnxCommand(client *c) {
     c->argv[2] = tryObjectEncoding(c->argv[2]);
-    setGenericCommand(c, OBJ_SET_NX, c->argv[1], c->argv[2], NULL, 0, shared.cone, shared.czero, NULL);
+    setGenericCommand(c, ARGS_SET_NX, c->argv[1], c->argv[2], NULL, 0, shared.cone, shared.czero, NULL);
 }
 
 void setexCommand(client *c) {
     c->argv[3] = tryObjectEncoding(c->argv[3]);
-    setGenericCommand(c, OBJ_EX | OBJ_ARGV3, c->argv[1], c->argv[3], c->argv[2], UNIT_SECONDS, NULL, NULL, NULL);
+    setGenericCommand(c, ARGS_EX | ARGS_ARGV3, c->argv[1], c->argv[3], c->argv[2], UNIT_SECONDS, NULL, NULL, NULL);
 }
 
 void psetexCommand(client *c) {
     c->argv[3] = tryObjectEncoding(c->argv[3]);
-    setGenericCommand(c, OBJ_PX | OBJ_ARGV3, c->argv[1], c->argv[3], c->argv[2], UNIT_MILLISECONDS, NULL, NULL, NULL);
+    setGenericCommand(c, ARGS_PX | ARGS_ARGV3, c->argv[1], c->argv[3], c->argv[2], UNIT_MILLISECONDS, NULL, NULL, NULL);
 }
 
 /* DELIFEQ key value */
@@ -318,7 +318,7 @@ void getCommand(client *c) {
 void getexCommand(client *c) {
     robj *expire = NULL;
     int unit = UNIT_SECONDS;
-    int flags = OBJ_NO_FLAGS;
+    int flags = ARGS_NO_FLAGS;
 
     if (parseExtendedCommandArgumentsOrReply(c, &flags, &unit, &expire, NULL, COMMAND_GET, c->argc) != C_OK) {
         return;
@@ -345,7 +345,7 @@ void getexCommand(client *c) {
 
     /* This command is never propagated as is. It is either propagated as PEXPIRE[AT],DEL,UNLINK or PERSIST.
      * This why it doesn't need special handling in feedAppendOnlyFile to convert relative expire time to absolute one. */
-    if (((flags & OBJ_PXAT) || (flags & OBJ_EXAT)) && checkAlreadyExpired(milliseconds)) {
+    if (((flags & ARGS_PXAT) || (flags & ARGS_EXAT)) && checkAlreadyExpired(milliseconds)) {
         /* When PXAT/EXAT absolute timestamp is specified, there can be a chance that timestamp
          * has already elapsed so delete the key in that case. */
         deleteExpiredKeyFromOverwriteAndPropagate(c, c->argv[1]);
@@ -359,7 +359,7 @@ void getexCommand(client *c) {
         signalModifiedKey(c, c->db, c->argv[1]);
         notifyKeyspaceEvent(NOTIFY_GENERIC, "expire", c->argv[1], c->db->id);
         server.dirty++;
-    } else if (flags & OBJ_PERSIST) {
+    } else if (flags & ARGS_PERSIST) {
         if (removeExpire(c->db, c->argv[1])) {
             signalModifiedKey(c, c->db, c->argv[1]);
             rewriteClientCommandVector(c, 2, shared.persist, c->argv[1]);

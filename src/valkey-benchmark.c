@@ -393,7 +393,7 @@ static void freeClient(client c) {
         }
     }
     valkeyFree(c->context);
-    releasePausedClient(c);
+    if (c->paused)  releasePausedClient(c);
     sdsfree(c->obuf);
     zfree(c->randptr);
     zfree(c->stagptr);

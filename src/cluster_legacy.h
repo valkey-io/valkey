@@ -1,6 +1,8 @@
 #ifndef CLUSTER_LEGACY_H
 #define CLUSTER_LEGACY_H
 
+#include "expiry_set.h"
+
 #define CLUSTER_PORT_INCR 10000 /* Cluster port = baseport + PORT_INCR */
 
 /* The following defines are amount of time, sometimes expressed as
@@ -70,19 +72,6 @@ typedef struct clusterLink {
 #define nodeSupportsLightMsgHdrForPubSub(n) ((n)->flags & CLUSTER_NODE_LIGHT_HDR_PUBLISH_SUPPORTED)
 #define nodeSupportsLightMsgHdrForModule(n) ((n)->flags & CLUSTER_NODE_LIGHT_HDR_MODULE_SUPPORTED)
 #define nodeInNormalState(n) (!((n)->flags & (CLUSTER_NODE_HANDSHAKE | CLUSTER_NODE_MEET | CLUSTER_NODE_PFAIL | CLUSTER_NODE_FAIL)))
-
-/* Single failure report structure */
-typedef struct {
-    clusterNode *sender; /* Reporting node */
-    mstime_t expiry;     /* Report expiration time */
-    listNode *ln;        /* Link for O(1) removal/update */
-} clusterNodeFailReportEntry;
-
-/* This structure represent elements of node->fail_report. */
-typedef struct {
-    dict *reports;     /* Hash table of node name -> clusterNodefailReportEntry structure */
-    list *expiry_list; /* Entries in ascending expiry order */
-} clusterNodeFailReport;
 
 /* Cluster messages header */
 
@@ -371,7 +360,7 @@ struct _clusterNode {
     int cport;                              /* Latest known cluster port of this node. */
     clusterLink *link;                      /* TCP/IP link established toward this node */
     clusterLink *inbound_link;              /* TCP/IP link accepted from this node */
-    clusterNodeFailReport *fail_report;     /* Report of peer failure reports with expiry ordering */
+    ExpirySet *fail_report;                 /* Report of peer failure reports with expiry ordering */
     int is_node_healthy;                    /* Boolean indicating the cached node health.
                                                Update with updateAndCountChangedNodeHealth(). */
 };

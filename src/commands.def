@@ -8148,23 +8148,6 @@ const char *TIME_Tips[] = {
 #define TIME_Keyspecs NULL
 #endif
 
-/********** TUNNEL ********************/
-
-#ifndef SKIP_CMD_HISTORY_TABLE
-/* TUNNEL history */
-#define TUNNEL_History NULL
-#endif
-
-#ifndef SKIP_CMD_TIPS_TABLE
-/* TUNNEL tips */
-#define TUNNEL_Tips NULL
-#endif
-
-#ifndef SKIP_CMD_KEY_SPECS_TABLE
-/* TUNNEL key specs */
-#define TUNNEL_Keyspecs NULL
-#endif
-
 /********** SADD ********************/
 
 #ifndef SKIP_CMD_HISTORY_TABLE

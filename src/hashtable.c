@@ -464,6 +464,10 @@ static void rehashingCompleted(hashtable *ht) {
     ht->child_buckets[0] = ht->child_buckets[1];
     resetTable(ht, 1);
     ht->rehash_idx = -1;
+
+    /* Do a recursive call back to the resize function in case
+     * we need to do another resize run immediately after. */
+    hashtableRightsizeIfNeeded(ht);
 }
 
 /* Reverse bits, adapted to use bswap, from
@@ -625,9 +629,14 @@ static int resize(hashtable *ht, size_t min_capacity, int *malloc_failed) {
         }
     }
 
-    if (ht->type->resizeAllowed) {
+    if (resize_policy == HASHTABLE_RESIZE_FORBID && ht->tables[0]) {
+        /* Refuse to resize if resizing is forbidden and we already have a primary table. */
+        return 0;
+    }
+    if (exp > old_exp && ht->type->resizeAllowed) {
+        /* If we're growing the table, let's check if the resize is allowed (for now just does a maxmemory checks). */
         double fill_factor = (double)min_capacity / ((double)numBuckets(old_exp) * ENTRIES_PER_BUCKET);
-        if (fill_factor * 100 < MAX_FILL_PERCENT_HARD && !ht->type->resizeAllowed(exp > old_exp ? alloc_size : 0, fill_factor)) {
+        if (fill_factor * 100 < MAX_FILL_PERCENT_HARD && !ht->type->resizeAllowed(alloc_size, fill_factor)) {
             /* Resize callback says no. */
             return 0;
         }
@@ -1242,14 +1251,13 @@ int hashtableTryExpand(hashtable *ht, size_t size) {
 }
 
 /* Expanding is done automatically on insertion, but less eagerly if resize
- * policy is set to AVOID or FORBID. After restoring resize policy to ALLOW, you
- * may want to call hashtableExpandIfNeeded. Returns 1 if expanding, 0 if not
- * expanding. */
+ * policy is set to AVOID and not at all if set to FORBID.
+ * Returns 1 if expanding, 0 if not expanding. */
 int hashtableExpandIfNeeded(hashtable *ht) {
     size_t min_capacity = ht->used[0] + ht->used[1] + 1;
     size_t num_buckets = numBuckets(ht->bucket_exp[hashtableIsRehashing(ht) ? 1 : 0]);
     size_t current_capacity = num_buckets * ENTRIES_PER_BUCKET;
-    unsigned max_fill_percent = resize_policy == HASHTABLE_RESIZE_AVOID ? MAX_FILL_PERCENT_HARD : MAX_FILL_PERCENT_SOFT;
+    unsigned max_fill_percent = resize_policy == HASHTABLE_RESIZE_ALLOW ? MAX_FILL_PERCENT_SOFT : MAX_FILL_PERCENT_HARD;
     if (min_capacity * 100 <= current_capacity * max_fill_percent) {
         return 0;
     }
@@ -1257,19 +1265,32 @@ int hashtableExpandIfNeeded(hashtable *ht) {
 }
 
 /* Shrinking is done automatically on deletion, but less eagerly if resize
- * policy is set to AVOID and not at all if set to FORBID. After restoring
- * resize policy to ALLOW, you may want to call hashtableShrinkIfNeeded. */
+ * policy is set to AVOID and not at all if set to FORBID.
+ * Returns 1 if shrinking, 0 if not shrinking. */
 int hashtableShrinkIfNeeded(hashtable *ht) {
     /* Don't shrink if rehashing is already in progress. */
-    if (hashtableIsRehashing(ht) || resize_policy == HASHTABLE_RESIZE_FORBID || ht->pause_auto_shrink) {
+    if (hashtableIsRehashing(ht) || ht->pause_auto_shrink) {
         return 0;
     }
     size_t current_capacity = numBuckets(ht->bucket_exp[0]) * ENTRIES_PER_BUCKET;
-    unsigned min_fill_percent = resize_policy == HASHTABLE_RESIZE_AVOID ? MIN_FILL_PERCENT_HARD : MIN_FILL_PERCENT_SOFT;
+    unsigned min_fill_percent = resize_policy == HASHTABLE_RESIZE_ALLOW ? MIN_FILL_PERCENT_SOFT : MIN_FILL_PERCENT_HARD;
     if (ht->used[0] * 100 > current_capacity * min_fill_percent) {
         return 0;
     }
     return resize(ht, ht->used[0], NULL);
+}
+
+/* Resizes the hashtable to an optimal size, based on the current number of
+ * entries. This is a convenience function that first tries to shrink the table
+ * if needed, and then expands it if needed. After restoring resize policy
+ * to ALLOW, you may want to call hashtableShrinkIfNeeded.
+ * Returns 1 if resizing was performed, 0 otherwise. */
+int hashtableRightsizeIfNeeded(hashtable *ht) {
+    int ret = hashtableShrinkIfNeeded(ht);
+    if (!ret) {
+        ret = hashtableExpandIfNeeded(ht);
+    }
+    return ret;
 }
 
 /* Defragment the main allocations of the hashtable by reallocating them. The

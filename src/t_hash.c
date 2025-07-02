@@ -429,6 +429,14 @@ int hashTypeSetExpire(robj *o, sds field, long long expiry, int flag) {
     if (o == NULL) return -2;
 
     if (o->encoding == OBJ_ENCODING_LISTPACK) {
+        unsigned char *vstr;
+        unsigned int vlen;
+        long long vll;
+        /* We do not want to convert to listpack for no good reason.
+         * So we first check if the item exists.*/
+        if (hashTypeGetFromListpack(o, field, &vstr, &vlen, &vll) < 0) {
+            return -2;
+        }
         /* When listpack representation is used, we consider it as infinite TTL,
          * so expire command with gt always fail the GT as well as existence(XX).
          * Else, we already know we are going to set an expiration so we expend to hashtable encoding. */
@@ -438,6 +446,9 @@ int hashTypeSetExpire(robj *o, sds field, long long expiry, int flag) {
             hashTypeConvert(o, OBJ_ENCODING_HASHTABLE);
         }
     }
+
+    /* we must be hashtable encoded */
+    serverAssert(o->encoding == OBJ_ENCODING_HASHTABLE);
 
     hashtable *ht = o->ptr;
     void **entry_ref = NULL;
@@ -1342,6 +1353,10 @@ void hgetexCommand(client *c) {
             notifyKeyspaceEvent(NOTIFY_GENERIC, "del", c->argv[1], c->db->id);
         }
     } else {
+        /* If no changes were done we still need to free the new argv array and the refcount of the first argument. */
+        if (set_expiry || set_expired || persist) {
+            decrRefCount(c->argv[1]);
+        }
         if (new_argv) zfree(new_argv);
     }
 

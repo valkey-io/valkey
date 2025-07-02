@@ -1,5 +1,5 @@
 #include <stdint.h>
-#include "expiry_set.h"
+#include "../expiry_set.h"
 #include "test_help.h"
 #include "zmalloc.h"
 

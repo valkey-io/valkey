@@ -1,7 +1,6 @@
 #include <stdint.h>
 #include "../expiry_set.h"
 #include "test_help.h"
-#include "zmalloc.h"
 
 static uint64_t ptrHash(const void *key) {
     /* use the pointer value itself as hash */

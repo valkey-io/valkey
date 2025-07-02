@@ -351,11 +351,7 @@ proc test_server_cron {} {
                     if {[info exist ::active_clients_file($fd)]} {
                         set file $::active_clients_file($fd)
                     }
-                    if {[string length $file]} {
-                        lappend ::failed_tests "\[TIMEOUT]: $test_name in $file"
-                    } else {
-                        lappend ::failed_tests $test_name
-                    }
+                    lappend ::failed_tests "\[TIMEOUT]: $test_name in $file"
                 }
             }
         }

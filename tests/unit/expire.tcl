@@ -985,7 +985,7 @@ start_server {tags {expire} overrides {hz 100}} {
 
         # Verify server is still responsive
         assert_equal [r ping] {PONG}
-    }
+    } {} {needs:debug}
 }
 
 start_cluster 1 0 {tags {"expire external:skip cluster"}} {

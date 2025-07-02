@@ -38,6 +38,7 @@
  * SPDX-License-Identifier: BSD-3-Clause
  */
 
+#include "entry.h"
 #include "server.h"
 #include "hashtable.h"
 #include "eval.h"
@@ -445,9 +446,19 @@ static void scanLaterSet(robj *ob, unsigned long *cursor) {
 static void activeDefragEntry(void *privdata, void *element_ref) {
     UNUSED(privdata);
     entry **entry_ref = (entry **)element_ref;
+    entry *old_entry = *entry_ref, *new_entry = NULL;
+    long long old_expiry = entryGetExpiry(old_entry);
 
-    entry *new_entry = entryDefrag(*entry_ref, activeDefragAlloc, activeDefragSds);
-    if (new_entry) *entry_ref = new_entry;
+    new_entry = entryDefrag(*entry_ref, activeDefragAlloc, activeDefragSds);
+    if (new_entry) {
+        /* In case the entry is tracked we need to update it in the volatile set */
+        if (entryHasExpiry(new_entry)) {
+            robj *obj = (robj *)privdata;
+            serverAssert(obj);
+            hashTypeTrackUpdateEntry(obj, old_entry, new_entry, old_expiry, entryGetExpiry(new_entry));
+        }
+        *entry_ref = new_entry;
+    }
 }
 
 static void scanLaterHash(robj *ob, unsigned long *cursor) {
@@ -498,7 +509,7 @@ static void defragHash(robj *ob) {
     } else {
         unsigned long cursor = 0;
         do {
-            cursor = hashtableScanDefrag(ht, cursor, activeDefragEntry, NULL, activeDefragAlloc, HASHTABLE_SCAN_EMIT_REF);
+            cursor = hashtableScanDefrag(ht, cursor, activeDefragEntry, ob, activeDefragAlloc, HASHTABLE_SCAN_EMIT_REF);
         } while (cursor != 0);
     }
     /* defrag the hashtable struct and tables */

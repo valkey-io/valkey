@@ -361,7 +361,7 @@ jobs:
           ref: ${{ env.GITHUB_HEAD_REF }}
       - name: make
         run: |
-          make BUILD_TLS=yes SERVER_CFLAGS='-Werror' USE_FAST_FLOAT=yes
+          make BUILD_TLS=yes SERVER_CFLAGS='-Werror' USE_FAST_FLOAT=no
       - name: testprep
         run: |
           sudo apt-get install tcl8.6 tclx tcl-tls

@@ -11,12 +11,12 @@ static int ptrKeyCompare(const void *a, const void *b) {
 }
 
 static dictType testDictType = {
-    ptrHash,            /* hash function */
-    NULL,               /* key dup       */
-    ptrKeyCompare,      /* key compare   */
-    NULL,               /* key destructor*/
-    NULL,               /* val dup       */
-    NULL                /* val destructor*/
+    ptrHash,       /* hash function */
+    NULL,          /* key dup       */
+    ptrKeyCompare, /* key compare   */
+    NULL,          /* key destructor*/
+    NULL,          /* val dup       */
+    NULL           /* val destructor*/
 };
 
 /* Two distinct static variables. we’ll use these as keys. */
@@ -24,7 +24,9 @@ static int key1, key2;
 
 /* Test that adding a key returns 1, refreshing it returns 0, and count is correct. */
 int test_expiry_set_add_and_count(int argc, char **argv, int flags) {
-    UNUSED(argc); UNUSED(argv); UNUSED(flags);
+    UNUSED(argc);
+    UNUSED(argv);
+    UNUSED(flags);
 
     ExpirySet *es = expirySetCreate(&testDictType);
     TEST_ASSERT(es != NULL);
@@ -48,7 +50,9 @@ int test_expiry_set_add_and_count(int argc, char **argv, int flags) {
 
 /* Test removal of existing and non­existing keys. */
 int test_expiry_set_remove(int argc, char **argv, int flags) {
-    UNUSED(argc); UNUSED(argv); UNUSED(flags);
+    UNUSED(argc);
+    UNUSED(argv);
+    UNUSED(flags);
 
     ExpirySet *es = expirySetCreate(&testDictType);
     TEST_ASSERT(es != NULL);
@@ -71,7 +75,9 @@ int test_expiry_set_remove(int argc, char **argv, int flags) {
 
 /* Test that entries whose expiry ≤ now are purged. */
 int test_expiry_set_expire(int argc, char **argv, int flags) {
-    UNUSED(argc); UNUSED(argv); UNUSED(flags);
+    UNUSED(argc);
+    UNUSED(argv);
+    UNUSED(flags);
 
     ExpirySet *es = expirySetCreate(&testDictType);
     TEST_ASSERT(es != NULL);
@@ -93,7 +99,9 @@ int test_expiry_set_expire(int argc, char **argv, int flags) {
 
 /* Test that Count automatically expires old entries before reporting length. */
 int test_expiry_set_count_triggers_expire(int argc, char **argv, int flags) {
-    UNUSED(argc); UNUSED(argv); UNUSED(flags);
+    UNUSED(argc);
+    UNUSED(argv);
+    UNUSED(flags);
 
     ExpirySet *es = expirySetCreate(&testDictType);
     TEST_ASSERT(es != NULL);

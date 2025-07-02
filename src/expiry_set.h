@@ -22,17 +22,17 @@
  *    fast add/remove, and periodically purge expired entries.
  */
 
- /* Internal entry struct */
+/* Internal entry struct */
 typedef struct ExpirySetEntry {
-    void     *key;     /* Key */
-    mstime_t  expiry;  /* Expiry time */
-    listNode *ln;      /* Back pointer into expiry_list */
+    void *key;       /* Key */
+    mstime_t expiry; /* Expiry time */
+    listNode *ln;    /* Back pointer into expiry_list */
 } ExpirySetEntry;
 
 /* The ExpirySet container */
 typedef struct ExpirySet {
-    dict *dict;         /* Hash of key -> ExpirySetEntry* */
-    list *expiry_list;  /* Entries in ascending expiry order */
+    dict *dict;        /* Hash of key -> ExpirySetEntry* */
+    list *expiry_list; /* Entries in ascending expiry order */
 } ExpirySet;
 
 ExpirySet *expirySetCreate(dictType *dt);

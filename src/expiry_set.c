@@ -36,7 +36,7 @@ ExpirySet *expirySetCreate(dictType *dt) {
     assert(dt != NULL);
     ExpirySet *es = zmalloc(sizeof(*es));
     if (!es) return NULL;
-    es->dict        = dictCreate(dt);
+    es->dict = dictCreate(dt);
     es->expiry_list = listCreate();
     return es;
 }
@@ -67,7 +67,7 @@ int expirySetAdd(ExpirySet *es, void *key, mstime_t expiry) {
     } else {
         /* new entry */
         e = zmalloc(sizeof(*e));
-        e->key    = key;
+        e->key = key;
         e->expiry = expiry;
         dictAdd(es->dict, key, e);
         is_new = 1;

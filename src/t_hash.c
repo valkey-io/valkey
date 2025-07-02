@@ -1142,7 +1142,7 @@ void hsetexCommand(client *c) {
         if (convertExpireArgumentToUnixTime(c, expire, basetime, unit, &when) == C_ERR)
             return;
 
-        if (((flags & ARGS_PXAT) || (flags & ARGS_EXAT)) && checkAlreadyExpired(when)) {
+        if ((when == basetime) || (((flags & ARGS_PXAT) || (flags & ARGS_EXAT)) && ((when == basetime) || checkAlreadyExpired(when)))) {
             set_expired = 1;
         }
     }
@@ -1258,7 +1258,7 @@ void hgetexCommand(client *c) {
         if (convertExpireArgumentToUnixTime(c, expire, basetime, unit, &when) == C_ERR)
             return;
 
-        if (((flags & ARGS_PXAT) || (flags & ARGS_EXAT)) && checkAlreadyExpired(when)) {
+        if ((when == basetime) || (((flags & ARGS_PXAT) || (flags & ARGS_EXAT)) && checkAlreadyExpired(when))) {
             set_expired = 1;
             when = 0;
         } else {
@@ -1457,7 +1457,7 @@ void hexpireGenericCommand(client *c, long long basetime, int unit) {
     if (convertExpireArgumentToUnixTime(c, param, basetime, unit, &when) == C_ERR)
         return;
 
-    if (checkAlreadyExpired(when))
+    if ((when == basetime) || checkAlreadyExpired(when))
         set_expired = 1;
 
     robj *obj = lookupKeyWrite(c->db, key);

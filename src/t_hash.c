@@ -403,7 +403,7 @@ int hashTypeSet(robj *o, sds field, sds value, long long expiry, int flags) {
                 serverAssert(replaced);
             }
             hashTypeTrackUpdateEntry(o, existing, new_entry, entry_expiry, expiry);
-
+            /* since we are exposed to expired entries, we must NOT reflect them as being "updated" */
             update = is_expired ? 0 : 1;
         }
         hashTypeIgnoreTTL(o, false);
@@ -1191,7 +1191,9 @@ void hsetexCommand(client *c) {
         }
     }
 
+
     if (changes) {
+        notifyKeyspaceEvent(NOTIFY_HASH, "hset", c->argv[1], c->db->id);
         if (set_expired) {
             replaceClientCommandVector(c, new_argc, new_argv);
             /* We would like to reduce the number of hexpired events in case there are potential many expired fields. */
@@ -1220,9 +1222,11 @@ void hsetexCommand(client *c) {
         }
         server.dirty += changes;
     } else {
+        /* If no changes were done we still need to free the new argv array and the refcount of the first argument. */
+        if (set_expired)
+            decrRefCount(c->argv[1]);
         if (new_argv) zfree(new_argv);
     }
-    notifyKeyspaceEvent(NOTIFY_HASH, "hset", c->argv[1], c->db->id);
     addReplyLongLong(c, changes == num_fields ? 1 : 0);
 }
 

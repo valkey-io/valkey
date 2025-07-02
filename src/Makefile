@@ -437,7 +437,7 @@ ENGINE_TEST_OBJ:=$(sort $(patsubst unit/%.c,unit/%.o,$(ENGINE_TEST_FILES)))
 ENGINE_UNIT_TESTS:=$(ENGINE_NAME)-unit-tests$(PROG_SUFFIX)
 ALL_SOURCES=$(sort $(patsubst %.o,%.c,$(ENGINE_SERVER_OBJ) $(ENGINE_CLI_OBJ) $(ENGINE_BENCHMARK_OBJ)))
 
-USE_FAST_FLOAT?=no
+USE_FAST_FLOAT?=yes
 ifeq ($(USE_FAST_FLOAT),yes)
 	# valkey_strtod.h uses this flag to switch valkey_strtod function to fast_float_strtod,
 	# therefore let's pass it to compiler for preprocessing.

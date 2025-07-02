@@ -52,6 +52,11 @@ as libsystemd-dev on Debian/Ubuntu or systemd-devel on CentOS) and run:
 
     % make USE_SYSTEMD=yes
 
+By default, Valkey is built with the fast_float library which requires a C++
+compiler. To build without fast_float, set USE_FAST_FLOAT to no:
+
+    % make USE_FAST_FLOAT=no
+
 To append a suffix to Valkey program names, use:
 
     % make PROG_SUFFIX="-alt"

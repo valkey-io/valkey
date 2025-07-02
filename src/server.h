@@ -3317,9 +3317,9 @@ robj *setTypeDup(robj *o);
 #define HASH_SET_COPY 0
 
 typedef void hashTypeEntry;
-hashTypeEntry *hashTypeCreateEntry(sds field, sds value);
+hashTypeEntry *hashTypeCreateEntry(sds field, size_t field_len, sds value);
 sds hashTypeEntryGetField(const hashTypeEntry *entry);
-sds hashTypeEntryGetValue(const hashTypeEntry *entry);
+char *hashTypeEntryGetValue(const hashTypeEntry *entry, size_t *len);
 size_t hashTypeEntryMemUsage(hashTypeEntry *entry);
 hashTypeEntry *hashTypeEntryDefrag(hashTypeEntry *entry, void *(*defragfn)(void *), sds (*sdsdefragfn)(sds));
 void dismissHashTypeEntry(hashTypeEntry *entry);
@@ -3336,14 +3336,15 @@ int hashTypeNext(hashTypeIterator *hi);
 void hashTypeCurrentFromListpack(hashTypeIterator *hi,
                                  int what,
                                  unsigned char **vstr,
-                                 unsigned int *vlen,
+                                 size_t *vlen,
                                  long long *vll);
-sds hashTypeCurrentFromHashTable(hashTypeIterator *hi, int what);
+char *hashTypeCurrentFromHashTable(hashTypeIterator *hi, int what, size_t *len);
 sds hashTypeCurrentObjectNewSds(hashTypeIterator *hi, int what);
 robj *hashTypeLookupWriteOrCreate(client *c, robj *key);
 robj *hashTypeGetValueObject(robj *o, sds field);
 int hashTypeSet(robj *o, sds field, sds value, int flags);
 robj *hashTypeDup(robj *o);
+int hashTypeExternalize(robj *o, sds field, const char *buf, size_t len);
 
 /* Pub / Sub */
 int pubsubUnsubscribeAllChannels(client *c, int notify);

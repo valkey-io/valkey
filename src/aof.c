@@ -1934,7 +1934,7 @@ int rewriteSortedSetObject(rio *r, robj *key, robj *o) {
 static int rioWriteHashIteratorCursor(rio *r, hashTypeIterator *hi, int what) {
     if (hi->encoding == OBJ_ENCODING_LISTPACK) {
         unsigned char *vstr = NULL;
-        unsigned int vlen = UINT_MAX;
+        size_t vlen = LLONG_MAX;
         long long vll = LLONG_MAX;
 
         hashTypeCurrentFromListpack(hi, what, &vstr, &vlen, &vll);
@@ -1943,8 +1943,9 @@ static int rioWriteHashIteratorCursor(rio *r, hashTypeIterator *hi, int what) {
         else
             return rioWriteBulkLongLong(r, vll);
     } else if (hi->encoding == OBJ_ENCODING_HASHTABLE) {
-        sds value = hashTypeCurrentFromHashTable(hi, what);
-        return rioWriteBulkString(r, value, sdslen(value));
+        size_t len;
+        char *value = hashTypeCurrentFromHashTable(hi, what, &len);
+        return rioWriteBulkString(r, value, len);
     }
 
     serverPanic("Unknown hash encoding");

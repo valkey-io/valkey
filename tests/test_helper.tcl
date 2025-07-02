@@ -405,7 +405,7 @@ proc read_from_test_client fd {
         lappend ::clients_time_history $elapsed $data
         signal_idle_client $fd
         set ::active_clients_task($fd) "(DONE) $data"
-        catch {unset ::active_clients_file($fd)}
+        unset ::active_clients_file($fd)
     } elseif {$status eq {ok}} {
         if {!$::quiet} {
             puts "\[[colorstr green $status]\]: $data ($elapsed ms)"

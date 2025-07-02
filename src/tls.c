@@ -1270,11 +1270,10 @@ static ConnectionType CT_TLS = {
 
     /* TLS specified methods */
     .get_peer_cert = connTLSGetPeerCert,
+    .get_peer_username = tlsGetPeerUsername,
 
     /* Miscellaneous */
     .connIntegrityChecked = connTLSIsIntegrityChecked,
-
-    .get_peer_username = tlsGetPeerUsername,
 
 };
 

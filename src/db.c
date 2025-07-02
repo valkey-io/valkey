@@ -1325,7 +1325,7 @@ void typeCommand(client *c) {
     addReplyStatus(c, getObjectTypeName(o));
 }
 
-/* SHUTDOWN [[NOSAVE | SAVE] [NOW] [FORCE] | ABORT] */
+/* SHUTDOWN [[NOSAVE | SAVE] [NOW] [FORCE] [SAFE] | ABORT] */
 void shutdownCommand(client *c) {
     int flags = SHUTDOWN_NOFLAGS;
     int abort = 0;
@@ -1340,6 +1340,8 @@ void shutdownCommand(client *c) {
             flags |= SHUTDOWN_FORCE;
         } else if (!strcasecmp(c->argv[i]->ptr, "abort")) {
             abort = 1;
+        } else if (!strcasecmp(c->argv[i]->ptr, "safe")) {
+            flags |= SHUTDOWN_SAFE;
         } else {
             addReplyErrorObject(c, shared.syntaxerr);
             return;
@@ -1402,7 +1404,7 @@ void renameGenericCommand(client *c, int nx) {
     }
 
     incrRefCount(o);
-    expire = getExpire(c->db, c->argv[1]);
+    expire = objectGetExpire(o);
     if (lookupKeyWrite(c->db, c->argv[2]) != NULL) {
         if (nx) {
             decrRefCount(o);
@@ -1464,7 +1466,7 @@ void moveCommand(client *c) {
         addReply(c, shared.czero);
         return;
     }
-    expire = getExpire(c->db, c->argv[1]);
+    expire = objectGetExpire(o);
 
     /* Return zero if the key already exists in the target DB */
     if (lookupKeyWrite(dst, c->argv[1]) != NULL) {
@@ -1538,7 +1540,7 @@ void copyCommand(client *c) {
         addReply(c, shared.czero);
         return;
     }
-    expire = getExpire(c->db, key);
+    expire = objectGetExpire(o);
 
     /* Return zero if the key already exists in the target DB.
      * If REPLACE option is selected, delete newkey from targetDB. */

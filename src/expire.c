@@ -729,17 +729,18 @@ void pexpireatCommand(client *c) {
 
 /* Implements TTL, PTTL, EXPIRETIME and PEXPIRETIME */
 void ttlGenericCommand(client *c, int output_ms, int output_abs) {
+    robj *o;
     long long expire, ttl = -1;
 
     /* If the key does not exist at all, return -2 */
-    if (lookupKeyReadWithFlags(c->db, c->argv[1], LOOKUP_NOTOUCH) == NULL) {
+    if ((o = lookupKeyReadWithFlags(c->db, c->argv[1], LOOKUP_NOTOUCH)) == NULL) {
         addReplyLongLong(c, -2);
         return;
     }
 
     /* The key exists. Return -1 if it has no expire, or the actual
      * TTL value otherwise. */
-    expire = getExpire(c->db, c->argv[1]);
+    expire = objectGetExpire(o);
     if (expire != -1) {
         ttl = output_abs ? expire : expire - commandTimeSnapshot();
         if (ttl < 0) ttl = 0;

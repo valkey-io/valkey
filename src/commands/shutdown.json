@@ -61,6 +61,13 @@
                                 "token": "FORCE",
                                 "optional": true,
                                 "since": "7.0.0"
+                            },
+                            {
+                                "name": "safe",
+                                "type": "pure-token",
+                                "token": "SAFE",
+                                "optional": true,
+                                "since": "9.0.0"
                             }
                         ]
                     },

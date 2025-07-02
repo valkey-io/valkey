@@ -1385,7 +1385,7 @@ ssize_t rdbSaveDb(rio *rdb, int dbid, int rdbflags, long *key_counter) {
         size_t rdb_bytes_before_key = rdb->processed_bytes;
 
         initStaticStringObject(key, keystr);
-        expire = getExpire(db, &key);
+        expire = objectGetExpire(o);
         if ((res = rdbSaveKeyValuePair(rdb, &key, o, expire, dbid)) < 0) goto werr;
         written += res;
 

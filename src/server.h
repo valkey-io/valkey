@@ -570,12 +570,12 @@ typedef enum {
 #define UNIT_MILLISECONDS 1
 
 /* SHUTDOWN flags */
-#define SHUTDOWN_NOFLAGS 0 /* No flags. */
-#define SHUTDOWN_SAVE 1    /* Force SAVE on SHUTDOWN even if no save \
-                              points are configured. */
-#define SHUTDOWN_NOSAVE 2  /* Don't SAVE on SHUTDOWN. */
-#define SHUTDOWN_NOW 4     /* Don't wait for replicas to catch up. */
-#define SHUTDOWN_FORCE 8   /* Don't let errors prevent shutdown. */
+#define SHUTDOWN_NOFLAGS 0       /* No flags. */
+#define SHUTDOWN_SAVE (1 << 0)   /* Force SAVE on SHUTDOWN even if no save points are configured. */
+#define SHUTDOWN_NOSAVE (1 << 1) /* Don't SAVE on SHUTDOWN. */
+#define SHUTDOWN_NOW (1 << 2)    /* Don't wait for replicas to catch up. */
+#define SHUTDOWN_FORCE (1 << 3)  /* Don't let errors prevent shutdown. */
+#define SHUTDOWN_SAFE (1 << 4)   /* Shutdown only when safe. */
 
 /* Command call flags, see call() function */
 #define CMD_CALL_NONE 0
@@ -3033,7 +3033,7 @@ int bg_unlink(const char *filename);
 /* AOF persistence */
 void flushAppendOnlyFile(int force);
 void feedAppendOnlyFile(int dictid, robj **argv, int argc);
-void aofRemoveTempFile(pid_t childpid);
+void aofRemoveTempFile(pid_t childpid, int from_signal);
 int rewriteAppendOnlyFileBackground(void);
 int loadAppendOnlyFiles(aofManifest *am);
 void stopAppendOnly(void);

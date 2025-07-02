@@ -706,11 +706,11 @@ sds tlsGetPeerUsername(connection *conn_) {
     /* Find the corresponding field name from the enum mapping */
     const char *field = NULL;
     switch (server.tls_ctx_config.client_auth_user) {
-        case TLS_CLIENT_FIELD_CN:
-            field = "CN";
-            break;
-        default:
-            return NULL;
+    case TLS_CLIENT_FIELD_CN:
+        field = "CN";
+        break;
+    default:
+        return NULL;
     }
 
     if (!field) return NULL;

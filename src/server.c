@@ -2946,6 +2946,7 @@ void initServer(void) {
     server.acl_info.invalid_key_accesses = 0;
     server.acl_info.user_auth_failures = 0;
     server.acl_info.invalid_channel_accesses = 0;
+    server.acl_info.invalid_tls_cert_auth_failures = 0;
 
     /* Create the timer callback, this is our way to process many background
      * operations incrementally, like eviction of unaccessed expired keys, etc. */
@@ -5584,9 +5585,11 @@ sds genValkeyInfoStringACLStats(sds info) {
                         "acl_access_denied_auth:%lld\r\n"
                         "acl_access_denied_cmd:%lld\r\n"
                         "acl_access_denied_key:%lld\r\n"
-                        "acl_access_denied_channel:%lld\r\n",
+                        "acl_access_denied_channel:%lld\r\n"
+                        "invalid_tls_cert_auth_failures:%lld\r\n",
                         server.acl_info.user_auth_failures, server.acl_info.invalid_cmd_accesses,
-                        server.acl_info.invalid_key_accesses, server.acl_info.invalid_channel_accesses);
+                        server.acl_info.invalid_key_accesses, server.acl_info.invalid_channel_accesses,
+                        server.acl_info.invalid_tls_cert_auth_failures);
     return info;
 }
 

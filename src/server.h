@@ -1315,10 +1315,11 @@ typedef struct writePreparedClient writePreparedClient;
 
 /* ACL information */
 typedef struct aclInfo {
-    long long user_auth_failures;       /* Auth failure counts on user level */
-    long long invalid_cmd_accesses;     /* Invalid command accesses that user doesn't have permission to */
-    long long invalid_key_accesses;     /* Invalid key accesses that user doesn't have permission to */
-    long long invalid_channel_accesses; /* Invalid channel accesses that user doesn't have permission to */
+    long long user_auth_failures;             /* Auth failure counts on user level */
+    long long invalid_cmd_accesses;           /* Invalid command accesses that user doesn't have permission to */
+    long long invalid_key_accesses;           /* Invalid key accesses that user doesn't have permission to */
+    long long invalid_channel_accesses;       /* Invalid channel accesses that user doesn't have permission to */
+    long long invalid_tls_cert_auth_failures; /* Invalid channel accesses that user doesn't have permission to */
 } aclInfo;
 
 struct saveparam {
@@ -3074,15 +3075,15 @@ void ACLInit(void);
 #define ACL_OK 0
 #define ACL_DENIED_CMD 1
 #define ACL_DENIED_KEY 2
-#define ACL_DENIED_AUTH 3    /* Only used for ACL LOG entries. */
-#define ACL_DENIED_CHANNEL 4 /* Only used for pub/sub commands */
+#define ACL_DENIED_AUTH 3           /* Only used for ACL LOG entries. */
+#define ACL_DENIED_CHANNEL 4        /* Only used for pub/sub commands */
+#define ACL_INVALID_TLS_CERT_AUTH 5 /* Only used for TLS Auto-authentication */
 
 /* Context values for addACLLogEntry(). */
 #define ACL_LOG_CTX_TOPLEVEL 0
 #define ACL_LOG_CTX_LUA 1
 #define ACL_LOG_CTX_MULTI 2
 #define ACL_LOG_CTX_MODULE 3
-#define ACL_INVALID_TLS_CERT_AUTH 4
 
 /* ACL key permission types */
 #define ACL_READ_PERMISSION (1 << 0)

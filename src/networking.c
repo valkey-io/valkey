@@ -1693,8 +1693,7 @@ void clientAcceptHandler(connection *conn) {
             serverLog(LL_VERBOSE, "TLS: Auto-authenticated client as %s",
                       server.hide_user_data_from_log ? "*redacted*" : u->name);
         } else {
-            serverLog(LL_NOTICE, "TLS: Auto-authentication failed, user '%s' not found", username);
-            addACLLogEntry(c, ACL_INVALID_TLS_CERT_AUTH, 0, 0, username, sdsnew("User not found in auto TLS auth"));
+            addACLLogEntry(c, ACL_INVALID_TLS_CERT_AUTH, ACL_LOG_CTX_TOPLEVEL, 0, username, NULL);
         }
         sdsfree(username);
     }

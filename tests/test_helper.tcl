@@ -78,6 +78,38 @@ set ::large_memory 0
 set ::log_req_res 0
 set ::force_resp3 0
 
+# Expand a unit specification (test name, file, or directory) into a list
+# of canonical unit names relative to the tests directory.
+proc expand_unit_spec {spec} {
+    set tests_dir [file normalize [file join [pwd] tests]]
+
+    if {[file isdirectory $spec]} {
+        set files [glob -nocomplain [file join [file normalize $spec] *.tcl]]
+    } elseif {[file exists $spec]} {
+        set files [list [file normalize $spec]]
+    } elseif {[file isdirectory [file join $tests_dir $spec]]} {
+        set files [glob -nocomplain [file join [file normalize [file join $tests_dir $spec]] *.tcl]]
+    } elseif {[file exists [file join $tests_dir $spec]]} {
+        set files [list [file normalize [file join $tests_dir $spec]]]
+    } elseif {[file exists [file join $tests_dir "${spec}.tcl"]]} {
+        set files [list [file normalize [file join $tests_dir "${spec}.tcl"]]]
+    } else {
+        return [list $spec]
+    }
+
+    set result {}
+    foreach test_file $files {
+        set norm [file normalize $test_file]
+        if {[string match "$tests_dir/*" $norm]} {
+            set rel [string range $norm [expr {[string length $tests_dir]+1}] end]
+            lappend result [file rootname $rel]
+        } else {
+            lappend result [file rootname $norm]
+        }
+    }
+    return $result
+}
+
 # Set to 1 when we are running in client mode. The server test uses a
 # server-client model to run tests simultaneously. The server instance
 # runs the specified number of client instances that will actually run tests.
@@ -658,13 +690,17 @@ for {set j 0} {$j < [llength $argv]} {incr j} {
     } elseif {$opt eq {--force-failure}} {
         set ::force_failure 1
     } elseif {$opt eq {--single}} {
-        lappend ::single_tests $arg
+        foreach unit [expand_unit_spec $arg] {
+            lappend ::single_tests $unit
+        }
         incr j
     } elseif {$opt eq {--only}} {
         lappend ::only_tests $arg
         incr j
     } elseif {$opt eq {--skipunit}} {
-        lappend ::skipunits $arg
+        foreach unit [expand_unit_spec $arg] {
+            lappend ::skipunits $unit
+        }
         incr j
     } elseif {$opt eq {--skip-till}} {
         set ::skip_till $arg

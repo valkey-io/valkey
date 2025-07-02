@@ -3336,7 +3336,7 @@ int hashTypeNext(hashTypeIterator *hi);
 void hashTypeCurrentFromListpack(hashTypeIterator *hi,
                                  int what,
                                  unsigned char **vstr,
-                                 size_t *vlen,
+                                 unsigned int *vlen,
                                  long long *vll);
 char *hashTypeCurrentFromHashTable(hashTypeIterator *hi, int what, size_t *len);
 sds hashTypeCurrentObjectNewSds(hashTypeIterator *hi, int what);

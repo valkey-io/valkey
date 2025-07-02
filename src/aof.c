@@ -1934,7 +1934,7 @@ int rewriteSortedSetObject(rio *r, robj *key, robj *o) {
 static int rioWriteHashIteratorCursor(rio *r, hashTypeIterator *hi, int what) {
     if (hi->encoding == OBJ_ENCODING_LISTPACK) {
         unsigned char *vstr = NULL;
-        size_t vlen = LLONG_MAX;
+        unsigned int vlen = UINT_MAX;
         long long vll = LLONG_MAX;
 
         hashTypeCurrentFromListpack(hi, what, &vstr, &vlen, &vll);

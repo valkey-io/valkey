@@ -382,7 +382,7 @@ void hashTypeTryConversion(robj *o, robj **argv, int start, int end) {
 
 /* Get the value from a listpack encoded hash, identified by field.
  * Returns -1 when the field cannot be found. */
-int hashTypeGetFromListpack(robj *o, sds field, unsigned char **vstr, size_t *vlen, long long *vll) {
+int hashTypeGetFromListpack(robj *o, sds field, unsigned char **vstr, unsigned int *vlen, long long *vll) {
     unsigned char *zl, *fptr = NULL, *vptr = NULL;
 
     serverAssert(o->encoding == OBJ_ENCODING_LISTPACK);
@@ -425,12 +425,12 @@ char *hashTypeGetFromHashTable(robj *o, sds field, size_t *len) {
  * If *vll is populated *vstr is set to NULL, so the caller
  * can always check the function return by checking the return value
  * for C_OK and checking if vll (or vstr) is NULL. */
-int hashTypeGetValue(robj *o, sds field, unsigned char **vstr, size_t *vlen, long long *vll) {
+int hashTypeGetValue(robj *o, sds field, unsigned char **vstr, unsigned int *vlen, long long *vll) {
     if (o->encoding == OBJ_ENCODING_LISTPACK) {
         *vstr = NULL;
         if (hashTypeGetFromListpack(o, field, vstr, vlen, vll) == 0) return C_OK;
     } else if (o->encoding == OBJ_ENCODING_HASHTABLE) {
-        *vstr = (unsigned char *)hashTypeGetFromHashTable(o, field, vlen);
+        *vstr = (unsigned char *)hashTypeGetFromHashTable(o, field, (size_t *)vlen);
         if (vstr != NULL) {
             return C_OK;
         }
@@ -446,7 +446,7 @@ int hashTypeGetValue(robj *o, sds field, unsigned char **vstr, size_t *vlen, lon
  * a newly allocated string object with the value is returned. */
 robj *hashTypeGetValueObject(robj *o, sds field) {
     unsigned char *vstr;
-    size_t vlen;
+    unsigned int vlen;
     long long vll;
 
     if (hashTypeGetValue(o, field, &vstr, &vlen, &vll) == C_ERR) return NULL;
@@ -462,7 +462,7 @@ robj *hashTypeGetValueObject(robj *o, sds field) {
 size_t hashTypeGetValueLength(robj *o, sds field) {
     size_t len = 0;
     unsigned char *vstr = NULL;
-    size_t vlen = LLONG_MAX;
+    unsigned int vlen = UINT_MAX;
     long long vll = LLONG_MAX;
 
     if (hashTypeGetValue(o, field, &vstr, &vlen, &vll) == C_OK) len = vstr ? vlen : sdigits10(vll);
@@ -474,7 +474,7 @@ size_t hashTypeGetValueLength(robj *o, sds field) {
  * exists, and 0 when it doesn't. */
 int hashTypeExists(robj *o, sds field) {
     unsigned char *vstr = NULL;
-    size_t vlen = LLONG_MAX;
+    unsigned int vlen = UINT_MAX;
     long long vll = LLONG_MAX;
 
     return hashTypeGetValue(o, field, &vstr, &vlen, &vll) == C_OK;
@@ -710,7 +710,7 @@ int hashTypeNext(hashTypeIterator *hi) {
 void hashTypeCurrentFromListpack(hashTypeIterator *hi,
                                  int what,
                                  unsigned char **vstr,
-                                 size_t *vlen,
+                                 unsigned int *vlen,
                                  long long *vll) {
     serverAssert(hi->encoding == OBJ_ENCODING_LISTPACK);
 
@@ -745,7 +745,7 @@ char *hashTypeCurrentFromHashTable(hashTypeIterator *hi, int what, size_t *len) 
  * If *vll is populated *vstr is set to NULL, so the caller
  * can always check the function return by checking the return value
  * type checking if vstr == NULL. */
-static void hashTypeCurrentObject(hashTypeIterator *hi, int what, unsigned char **vstr, size_t *vlen, long long *vll) {
+static void hashTypeCurrentObject(hashTypeIterator *hi, int what, unsigned char **vstr, unsigned int *vlen, long long *vll) {
     if (hi->encoding == OBJ_ENCODING_LISTPACK) {
         *vstr = NULL;
         hashTypeCurrentFromListpack(hi, what, vstr, vlen, vll);
@@ -760,7 +760,7 @@ static void hashTypeCurrentObject(hashTypeIterator *hi, int what, unsigned char 
  * SDS string. */
 sds hashTypeCurrentObjectNewSds(hashTypeIterator *hi, int what) {
     unsigned char *vstr;
-    size_t vlen;
+    unsigned int vlen;
     long long vll;
 
     hashTypeCurrentObject(hi, what, &vstr, &vlen, &vll);
@@ -959,7 +959,7 @@ void hincrbyCommand(client *c) {
     robj *o;
     sds new;
     unsigned char *vstr;
-    size_t vlen;
+    unsigned int vlen;
 
     if (getLongLongFromObjectOrReply(c, c->argv[3], &incr, NULL) != C_OK) return;
     if ((o = hashTypeLookupWriteOrCreate(c, c->argv[1])) == NULL) return;
@@ -995,7 +995,7 @@ void hincrbyfloatCommand(client *c) {
     robj *o;
     sds new;
     unsigned char *vstr;
-    size_t vlen;
+    unsigned int vlen;
 
     if (getLongDoubleFromObjectOrReply(c, c->argv[3], &incr, NULL) != C_OK) return;
     if (isnan(incr) || isinf(incr)) {
@@ -1048,7 +1048,7 @@ static void addHashFieldToReply(client *c, robj *o, sds field) {
     }
 
     unsigned char *vstr = NULL;
-    size_t vlen = LLONG_MAX;
+    unsigned int vlen = UINT_MAX;
     long long vll = LLONG_MAX;
 
     if (hashTypeGetValue(o, field, &vstr, &vlen, &vll) == C_OK) {
@@ -1128,7 +1128,7 @@ void hstrlenCommand(client *c) {
 static void addHashIteratorCursorToReply(writePreparedClient *wpc, hashTypeIterator *hi, int what) {
     if (hi->encoding == OBJ_ENCODING_LISTPACK) {
         unsigned char *vstr = NULL;
-        size_t vlen = LLONG_MAX;
+        unsigned int vlen = UINT_MAX;
         long long vll = LLONG_MAX;
 
         hashTypeCurrentFromListpack(hi, what, &vstr, &vlen, &vll);

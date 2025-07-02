@@ -6472,24 +6472,24 @@ sds getVersion(void) {
 }
 
 void usage(void) {
-    fprintf(stderr, "Usage: ./valkey-server [/path/to/valkey.conf] [options] [-]\n");
-    fprintf(stderr, "       ./valkey-server - (read config from stdin)\n");
-    fprintf(stderr, "       ./valkey-server -v or --version\n");
-    fprintf(stderr, "       ./valkey-server -h or --help\n");
-    fprintf(stderr, "       ./valkey-server --test-memory <megabytes>\n");
-    fprintf(stderr, "       ./valkey-server --check-system\n");
-    fprintf(stderr, "\n");
-    fprintf(stderr, "Examples:\n");
-    fprintf(stderr, "       ./valkey-server (run the server with default conf)\n");
-    fprintf(stderr, "       echo 'maxmemory 128mb' | ./valkey-server -\n");
-    fprintf(stderr, "       ./valkey-server /etc/valkey/6379.conf\n");
-    fprintf(stderr, "       ./valkey-server --port 7777\n");
-    fprintf(stderr, "       ./valkey-server --port 7777 --replicaof 127.0.0.1 8888\n");
-    fprintf(stderr, "       ./valkey-server /etc/myvalkey.conf --loglevel verbose -\n");
-    fprintf(stderr, "       ./valkey-server /etc/myvalkey.conf --loglevel verbose\n\n");
-    fprintf(stderr, "Sentinel mode:\n");
-    fprintf(stderr, "       ./valkey-server /etc/sentinel.conf --sentinel\n");
-    exit(1);
+    fprintf(stdout, "Usage: ./valkey-server [/path/to/valkey.conf] [options] [-]\n");
+    fprintf(stdout, "       ./valkey-server - (read config from stdin)\n");
+    fprintf(stdout, "       ./valkey-server -v or --version\n");
+    fprintf(stdout, "       ./valkey-server -h or --help\n");
+    fprintf(stdout, "       ./valkey-server --test-memory <megabytes>\n");
+    fprintf(stdout, "       ./valkey-server --check-system\n");
+    fprintf(stdout, "\n");
+    fprintf(stdout, "Examples:\n");
+    fprintf(stdout, "       ./valkey-server (run the server with default conf)\n");
+    fprintf(stdout, "       echo 'maxmemory 128mb' | ./valkey-server -\n");
+    fprintf(stdout, "       ./valkey-server /etc/valkey/6379.conf\n");
+    fprintf(stdout, "       ./valkey-server --port 7777\n");
+    fprintf(stdout, "       ./valkey-server --port 7777 --replicaof 127.0.0.1 8888\n");
+    fprintf(stdout, "       ./valkey-server /etc/myvalkey.conf --loglevel verbose -\n");
+    fprintf(stdout, "       ./valkey-server /etc/myvalkey.conf --loglevel verbose\n\n");
+    fprintf(stdout, "Sentinel mode:\n");
+    fprintf(stdout, "       ./valkey-server /etc/sentinel.conf --sentinel\n");
+    exit(0);
 }
 
 void serverAsciiArt(void) {

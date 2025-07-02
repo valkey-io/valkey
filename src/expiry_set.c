@@ -92,7 +92,7 @@ int expirySetExpire(ExpirySet *es) {
     assert(es);
     int removed = 0;
     listNode *ln;
-    mstime_t now = mstime(); 
+    mstime_t now = mstime();
     /* expire from head while expiry ≤ now */
     while ((ln = listFirst(es->expiry_list))) {
         ExpirySetEntry *e = ln->value;

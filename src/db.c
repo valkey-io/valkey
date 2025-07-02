@@ -1006,7 +1006,9 @@ void hashtableScanCallback(void *privdata, void *entry) {
     } else if (o->type == OBJ_HASH) {
         key = hashTypeEntryGetField(entry);
         if (!data->only_keys) {
-            val = hashTypeEntryGetValue(entry);
+            size_t len;
+            char *buf = hashTypeEntryGetValue(entry, &len);
+            val = sdsnewlen(buf, len);
         }
     } else {
         serverPanic("Type not handled in hashtable SCAN callback.");

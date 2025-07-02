@@ -76,8 +76,34 @@
  * instead has an embedded value located after the embedded field. */
 #define FIELD_SDS_AUX_BIT_ENTRY_HAS_VALUE_PTR 0
 
+/* SDS aux flag for hash field sds.
+ * If set, it indicates that the hash entry's value is a ExternalizedValue,
+ * meaning it's a char* and size_t managed externally by a module.
+ * The actual value stored in the hash entry (if entryHasValuePtr is true)
+ * will be a pointer to a ExternalizedValue struct.
+ * This bit is mutually exclusive with the actual value being a normal sds.
+ */
+#define FIELD_SDS_AUX_BIT_EXTERNALIZED 1
+
+
+/* Structure representing an externalized string.
+ * This allows modules to store a char* and length directly in a hash field,
+ * bypassing normal SDS string allocation for the value.
+ * The module using this structure is responsible for the lifetime management
+ * of the memory pointed to by 'buf'. Valkey core will not free 'buf'.
+ */
+typedef struct ExternalizedValue {
+    const char *buf;    /* Pointer to the externalized buffer */
+    size_t len;   /* Length of the buffer */
+} ExternalizedValue;
+
+
 static inline bool entryHasValuePtr(const hashTypeEntry *entry) {
     return sdsGetAuxBit(entry, FIELD_SDS_AUX_BIT_ENTRY_HAS_VALUE_PTR);
+}
+
+static inline bool entryIsExternalizedValue(const hashTypeEntry *entry) {
+    return sdsGetAuxBit(entry, FIELD_SDS_AUX_BIT_EXTERNALIZED);
 }
 
 /* Returns the location of a pointer to a separately allocated value. Only for
@@ -89,9 +115,11 @@ static sds *hashTypeEntryGetValueRef(const hashTypeEntry *entry) {
     return (sds *)field_data;
 }
 
+static ExternalizedValue *hashTypeEntryGetExternValueRef(const hashTypeEntry *entry) {
+    return *(ExternalizedValue **)hashTypeEntryGetValueRef(entry);
+}
 /* takes ownership of value, does not take ownership of field */
-hashTypeEntry *hashTypeCreateEntry(sds field, sds value) {
-    size_t field_len = sdslen(field);
+hashTypeEntry *hashTypeCreateEntry(char *field, size_t field_len, sds value) {
     int field_sds_type = sdsReqType(field_len);
     size_t field_size = sdsReqSize(field_len, field_sds_type);
     size_t value_len = sdslen(value);
@@ -113,6 +141,7 @@ hashTypeEntry *hashTypeCreateEntry(sds field, sds value) {
         sdswrite(buf + field_size, buf_size - field_size, SDS_TYPE_8, value, value_len);
         /* Field sds aux bits are zero, which we use for this entry encoding. */
         sdsSetAuxBit(embedded_field_sds, FIELD_SDS_AUX_BIT_ENTRY_HAS_VALUE_PTR, 0);
+        sdsSetAuxBit(embedded_field_sds, FIELD_SDS_AUX_BIT_EXTERNALIZED, 0);
         serverAssert(!entryHasValuePtr(embedded_field_sds));
         sdsfree(value);
     } else {
@@ -133,9 +162,39 @@ hashTypeEntry *hashTypeCreateEntry(sds field, sds value) {
         embedded_field_sds = sdswrite(buf + sizeof(sds *), field_size, field_sds_type, field, field_len);
         /* Store the entry encoding type in sds aux bits. */
         sdsSetAuxBit(embedded_field_sds, FIELD_SDS_AUX_BIT_ENTRY_HAS_VALUE_PTR, 1);
+        sdsSetAuxBit(embedded_field_sds, FIELD_SDS_AUX_BIT_EXTERNALIZED, 0);
         serverAssert(entryHasValuePtr(embedded_field_sds));
     }
     return (void *)embedded_field_sds;
+}
+
+/* Create a hashTypeEntry for an externalized string.
+ * It will always use the value pointer layout.
+ * The 'value' (buf and len) is owned by the module.
+ */
+hashTypeEntry *hashTypeCreateExternalizedEntry(sds field, const char *buf, size_t len) {
+    ExternalizedValue *ext_value = zmalloc(sizeof(ExternalizedValue));
+    ext_value->buf = buf;
+    ext_value->len = len;
+
+    size_t field_len = sdslen(field);
+    char field_sds_type = sdsReqType(field_len);
+    if (field_sds_type == SDS_TYPE_5) field_sds_type = SDS_TYPE_8; // Ensure we can set aux bits
+    size_t field_size = sdsReqSize(field_len, field_sds_type);
+
+    size_t alloc_size = sizeof(void *) + field_size; // Store pointer to ExternalizedValue
+    char *alloc_buf = zmalloc(alloc_size);
+
+    *(void **)alloc_buf = ext_value; // Store the pointer to our struct
+
+    sds embedded_field_sds = sdswrite(alloc_buf + sizeof(void *), field_size, field_sds_type, field, field_len);
+
+    sdsSetAuxBit(embedded_field_sds, FIELD_SDS_AUX_BIT_ENTRY_HAS_VALUE_PTR, 1); // It's a value pointer
+    sdsSetAuxBit(embedded_field_sds, FIELD_SDS_AUX_BIT_EXTERNALIZED, 1);      // Mark as externalized
+    serverAssert(entryHasValuePtr(embedded_field_sds));
+    serverAssert(entryIsExternalizedValue(embedded_field_sds));
+
+    return (hashTypeEntry *)embedded_field_sds;
 }
 
 /* The entry pointer is the field sds, but that's an implementation detail. */
@@ -143,20 +202,31 @@ sds hashTypeEntryGetField(const hashTypeEntry *entry) {
     return (sds)entry;
 }
 
-sds hashTypeEntryGetValue(const hashTypeEntry *entry) {
-    if (entryHasValuePtr(entry)) {
-        return *hashTypeEntryGetValueRef(entry);
-    } else {
-        /* Skip field content, field null terminator and value sds8 hdr. */
-        size_t offset = sdslen(entry) + 1 + sdsHdrSize(SDS_TYPE_8);
-        return (char *)entry + offset;
+char *hashTypeEntryGetValue(const hashTypeEntry *entry, size_t *len) {
+    if (entryIsExternalizedValue(entry)) {
+        serverAssert(entryHasValuePtr(entry)); // Externalized must use value pointer
+        ExternalizedValue *ext_value = hashTypeEntryGetExternValueRef(entry);
+        *len = ext_value->len;
+        return (char *)ext_value->buf;
     }
+    if (entryHasValuePtr(entry)) {
+      sds *value = hashTypeEntryGetValueRef(entry);
+      *len = sdslen(*value);
+      return *value;
+    }
+    /* Skip field content, field null terminator and value sds8 hdr. */
+    size_t offset = sdslen(entry) + 1 + sdsHdrSize(SDS_TYPE_8);
+    sds value = (char *)entry + offset;
+    *len = sdslen(value);
+    return value;
 }
 
 /* Returns the address of the entry allocation. */
 static void *hashTypeEntryAllocPtr(hashTypeEntry *entry) {
     char *buf = sdsAllocPtr(entry);
-    if (entryHasValuePtr(entry)) {
+    if (entryIsExternalizedValue(entry)) {
+        buf -= sizeof(ExternalizedValue **);
+    } else if (entryHasValuePtr(entry)) {
         buf -= sizeof(sds *);
     }
     return buf;
@@ -172,42 +242,51 @@ static hashTypeEntry *hashTypeEntryReplaceValue(hashTypeEntry *entry, sds value)
     if (!entryHasValuePtr(entry)) {
         /* Reuse the allocation if the new value fits and leaves no more than
          * 25% unused space after replacing the value. */
-        char *alloc_ptr = sdsAllocPtr(entry);
         size_t required_size = field_size + value_size;
         size_t alloc_size;
         if (required_size <= EMBED_VALUE_MAX_ALLOC_SIZE &&
             required_size <= (alloc_size = hashTypeEntryMemUsage(entry)) &&
             required_size >= alloc_size * 3 / 4) {
+            char *alloc_ptr = sdsAllocPtr(entry);
             /* It fits in the allocation and leaves max 25% unused space. */
             sdswrite(alloc_ptr + field_size, alloc_size - field_size, SDS_TYPE_8, value, value_len);
             sdsfree(value);
             return entry;
         }
-        hashTypeEntry *new_entry = hashTypeCreateEntry(hashTypeEntryGetField(entry), value);
+        field = hashTypeEntryGetField(entry);
+        hashTypeEntry *new_entry = hashTypeCreateEntry(field, sdslen(field), value);
         freeHashTypeEntry(entry);
         return new_entry;
-    } else {
-        /* The value pointer is located before the embedded field. */
-        if (field_size + value_size <= EMBED_VALUE_MAX_ALLOC_SIZE) {
-            /* Convert to entry with embedded value. */
-            hashTypeEntry *new_entry = hashTypeCreateEntry(field, value);
-            freeHashTypeEntry(entry);
-            return new_entry;
-        } else {
-            /* Not embedded value. */
-            sds *value_ref = hashTypeEntryGetValueRef(entry);
-            sdsfree(*value_ref);
-            *value_ref = value;
-            return entry;
-        }
     }
+    if (entryIsExternalizedValue(entry)) {
+        field = hashTypeEntryGetField(entry);
+        hashTypeEntry *new_entry = hashTypeCreateEntry(field, sdslen(field), value);
+        freeHashTypeEntry(entry);
+        return new_entry;
+    }
+    /* The value pointer is located before the embedded field. */
+    if (field_size + value_size <= EMBED_VALUE_MAX_ALLOC_SIZE) {
+        /* Convert to entry with embedded value. */
+        hashTypeEntry *new_entry = hashTypeCreateEntry(field, sdslen(field), value);
+        freeHashTypeEntry(entry);
+        return new_entry;
+    }
+    /* Not embedded value. */
+    sds *value_ref = hashTypeEntryGetValueRef(entry);
+    sdsfree(*value_ref);
+    *value_ref = value;
+    return entry;
 }
 
 /* Returns memory usage of a hashTypeEntry, including all allocations owned by
  * the hashTypeEntry. */
 size_t hashTypeEntryMemUsage(hashTypeEntry *entry) {
     size_t mem = 0;
-    if (entryHasValuePtr(entry)) {
+    if (entryIsExternalizedValue(entry)) {
+        mem = zmalloc_usable_size(hashTypeEntryAllocPtr(entry));
+        ExternalizedValue *ext_value = hashTypeEntryGetExternValueRef(entry);
+        mem += ext_value->len;
+    } else if (entryHasValuePtr(entry)) {
         /* Alloc size is not stored in the embedded field. */
         mem = zmalloc_usable_size(hashTypeEntryAllocPtr(entry));
         mem += sdsAllocSize(*hashTypeEntryGetValueRef(entry));
@@ -230,6 +309,7 @@ size_t hashTypeEntryMemUsage(hashTypeEntry *entry) {
  * If the location of the hashTypeEntry changed we return the new location,
  * otherwise we return NULL. */
 hashTypeEntry *hashTypeEntryDefrag(hashTypeEntry *entry, void *(*defragfn)(void *), sds (*sdsdefragfn)(sds)) {
+    if (entryIsExternalizedValue(entry)) return NULL;
     if (entryHasValuePtr(entry)) {
         sds *value_ref = hashTypeEntryGetValueRef(entry);
         sds new_value = sdsdefragfn(*value_ref);
@@ -248,6 +328,7 @@ hashTypeEntry *hashTypeEntryDefrag(hashTypeEntry *entry, void *(*defragfn)(void 
 /* Used for releasing memory to OS to avoid unnecessary CoW. Called when we've
  * forked and memory won't be used again. See zmadvise_dontneed() */
 void dismissHashTypeEntry(hashTypeEntry *entry) {
+    if (entryIsExternalizedValue(entry)) return;
     /* Only dismiss values memory since the field size usually is small. */
     if (entryHasValuePtr(entry)) {
         dismissSds(*hashTypeEntryGetValueRef(entry));
@@ -255,7 +336,10 @@ void dismissHashTypeEntry(hashTypeEntry *entry) {
 }
 
 void freeHashTypeEntry(hashTypeEntry *entry) {
-    if (entryHasValuePtr(entry)) {
+    if (entryIsExternalizedValue(entry)) {
+        ExternalizedValue *ext_value = hashTypeEntryGetExternValueRef(entry);
+        zfree(ext_value);
+    } else if (entryHasValuePtr(entry)) {
         sdsfree(*hashTypeEntryGetValueRef(entry));
     }
     zfree(hashTypeEntryAllocPtr(entry));
@@ -298,7 +382,7 @@ void hashTypeTryConversion(robj *o, robj **argv, int start, int end) {
 
 /* Get the value from a listpack encoded hash, identified by field.
  * Returns -1 when the field cannot be found. */
-int hashTypeGetFromListpack(robj *o, sds field, unsigned char **vstr, unsigned int *vlen, long long *vll) {
+int hashTypeGetFromListpack(robj *o, sds field, unsigned char **vstr, size_t *vlen, long long *vll) {
     unsigned char *zl, *fptr = NULL, *vptr = NULL;
 
     serverAssert(o->encoding == OBJ_ENCODING_LISTPACK);
@@ -315,7 +399,7 @@ int hashTypeGetFromListpack(robj *o, sds field, unsigned char **vstr, unsigned i
     }
 
     if (vptr != NULL) {
-        *vstr = lpGetValue(vptr, vlen, vll);
+        *vstr = lpGetValue(vptr, (unsigned int *)vlen, vll);
         return 0;
     }
 
@@ -325,11 +409,11 @@ int hashTypeGetFromListpack(robj *o, sds field, unsigned char **vstr, unsigned i
 /* Get the value from a hash table encoded hash, identified by field.
  * Returns NULL when the field cannot be found, otherwise the SDS value
  * is returned. */
-sds hashTypeGetFromHashTable(robj *o, sds field) {
+char *hashTypeGetFromHashTable(robj *o, sds field, size_t *len) {
     serverAssert(o->encoding == OBJ_ENCODING_HASHTABLE);
     void *found_element;
     if (!hashtableFind(o->ptr, field, &found_element)) return NULL;
-    return hashTypeEntryGetValue(found_element);
+    return hashTypeEntryGetValue(found_element, len);
 }
 
 /* Higher level function of hashTypeGet*() that returns the hash value
@@ -341,15 +425,13 @@ sds hashTypeGetFromHashTable(robj *o, sds field) {
  * If *vll is populated *vstr is set to NULL, so the caller
  * can always check the function return by checking the return value
  * for C_OK and checking if vll (or vstr) is NULL. */
-int hashTypeGetValue(robj *o, sds field, unsigned char **vstr, unsigned int *vlen, long long *vll) {
+int hashTypeGetValue(robj *o, sds field, unsigned char **vstr, size_t *vlen, long long *vll) {
     if (o->encoding == OBJ_ENCODING_LISTPACK) {
         *vstr = NULL;
         if (hashTypeGetFromListpack(o, field, vstr, vlen, vll) == 0) return C_OK;
     } else if (o->encoding == OBJ_ENCODING_HASHTABLE) {
-        sds value = hashTypeGetFromHashTable(o, field);
-        if (value != NULL) {
-            *vstr = (unsigned char *)value;
-            *vlen = sdslen(value);
+        *vstr = (unsigned char *)hashTypeGetFromHashTable(o, field, vlen);
+        if (vstr != NULL) {
             return C_OK;
         }
     } else {
@@ -364,7 +446,7 @@ int hashTypeGetValue(robj *o, sds field, unsigned char **vstr, unsigned int *vle
  * a newly allocated string object with the value is returned. */
 robj *hashTypeGetValueObject(robj *o, sds field) {
     unsigned char *vstr;
-    unsigned int vlen;
+    size_t vlen;
     long long vll;
 
     if (hashTypeGetValue(o, field, &vstr, &vlen, &vll) == C_ERR) return NULL;
@@ -380,7 +462,7 @@ robj *hashTypeGetValueObject(robj *o, sds field) {
 size_t hashTypeGetValueLength(robj *o, sds field) {
     size_t len = 0;
     unsigned char *vstr = NULL;
-    unsigned int vlen = UINT_MAX;
+    size_t vlen = LLONG_MAX;
     long long vll = LLONG_MAX;
 
     if (hashTypeGetValue(o, field, &vstr, &vlen, &vll) == C_OK) len = vstr ? vlen : sdigits10(vll);
@@ -392,10 +474,45 @@ size_t hashTypeGetValueLength(robj *o, sds field) {
  * exists, and 0 when it doesn't. */
 int hashTypeExists(robj *o, sds field) {
     unsigned char *vstr = NULL;
-    unsigned int vlen = UINT_MAX;
+    size_t vlen = LLONG_MAX;
     long long vll = LLONG_MAX;
 
     return hashTypeGetValue(o, field, &vstr, &vlen, &vll) == C_OK;
+}
+
+/* Set an externalized string field in a hash.
+ * Returns 0 on insert, 1 on update.
+ * Assumes the key 'o' is already a hash or a new key.
+ * The 'field' sds is consumed by this function.
+ */
+int hashTypeExternalize(robj *o, sds field, const char *buf, size_t len) {
+
+    if (o->encoding == OBJ_ENCODING_LISTPACK) {
+        // Externalized strings require HASHTABLE encoding due to aux bits and pointer storage.
+        hashTypeConvert(o, OBJ_ENCODING_HASHTABLE);
+    }
+
+    hashtable *ht = o->ptr;
+    hashtablePosition position;
+    void *existing;
+    if (hashtableFindPositionForInsert(ht, field, &position, &existing)) {
+        /* does not exist yet */
+        hashTypeEntry *entry = hashTypeCreateExternalizedEntry(field, buf, len);
+        hashtableInsertAtPosition(ht, entry, &position);
+        return 0;
+    }
+    if (entryIsExternalizedValue(existing)) {
+        ExternalizedValue *ext_value = hashTypeEntryGetExternValueRef(existing);
+        ext_value->buf = buf;
+        ext_value->len = len;
+        return 1;
+    }
+    zfree(hashTypeEntryAllocPtr(existing));
+    hashTypeEntry *new_entry = hashTypeCreateExternalizedEntry(field, buf, len);
+    int deleted = hashtableDelete(ht, field); // field is not consumed by delete
+    serverAssert(deleted);
+    hashtableInsertAtPosition(ht, new_entry, &position);
+    return 1;
 }
 
 /* Add a new field, overwrite the old with the new value if it already exists.
@@ -469,7 +586,7 @@ int hashTypeSet(robj *o, sds field, sds value, int flags) {
         void *existing;
         if (hashtableFindPositionForInsert(ht, field, &position, &existing)) {
             /* does not exist yet */
-            hashTypeEntry *entry = hashTypeCreateEntry(field, v);
+            hashTypeEntry *entry = hashTypeCreateEntry(field, sdslen(field), v);
             hashtableInsertAtPosition(ht, entry, &position);
         } else {
             /* exists: replace value */
@@ -593,28 +710,29 @@ int hashTypeNext(hashTypeIterator *hi) {
 void hashTypeCurrentFromListpack(hashTypeIterator *hi,
                                  int what,
                                  unsigned char **vstr,
-                                 unsigned int *vlen,
+                                 size_t *vlen,
                                  long long *vll) {
     serverAssert(hi->encoding == OBJ_ENCODING_LISTPACK);
 
     if (what & OBJ_HASH_FIELD) {
-        *vstr = lpGetValue(hi->fptr, vlen, vll);
+        *vstr = lpGetValue(hi->fptr, (unsigned int *)vlen, vll);
     } else {
-        *vstr = lpGetValue(hi->vptr, vlen, vll);
+        *vstr = lpGetValue(hi->vptr, (unsigned int *)vlen, vll);
     }
 }
 
 /* Get the field or value at iterator cursor, for an iterator on a hash value
  * encoded as a hash table. Prototype is similar to
  * `hashTypeGetFromHashTable`. */
-sds hashTypeCurrentFromHashTable(hashTypeIterator *hi, int what) {
+char *hashTypeCurrentFromHashTable(hashTypeIterator *hi, int what, size_t *len) {
     serverAssert(hi->encoding == OBJ_ENCODING_HASHTABLE);
 
     if (what & OBJ_HASH_FIELD) {
-        return hashTypeEntryGetField(hi->next);
-    } else {
-        return hashTypeEntryGetValue(hi->next);
+        sds key = hashTypeEntryGetField(hi->next);
+        *len = sdslen(key);
+        return key;
     }
+    return hashTypeEntryGetValue(hi->next, len);
 }
 
 /* Higher level function of hashTypeCurrent*() that returns the hash value
@@ -627,14 +745,12 @@ sds hashTypeCurrentFromHashTable(hashTypeIterator *hi, int what) {
  * If *vll is populated *vstr is set to NULL, so the caller
  * can always check the function return by checking the return value
  * type checking if vstr == NULL. */
-static void hashTypeCurrentObject(hashTypeIterator *hi, int what, unsigned char **vstr, unsigned int *vlen, long long *vll) {
+static void hashTypeCurrentObject(hashTypeIterator *hi, int what, unsigned char **vstr, size_t *vlen, long long *vll) {
     if (hi->encoding == OBJ_ENCODING_LISTPACK) {
         *vstr = NULL;
         hashTypeCurrentFromListpack(hi, what, vstr, vlen, vll);
     } else if (hi->encoding == OBJ_ENCODING_HASHTABLE) {
-        sds ele = hashTypeCurrentFromHashTable(hi, what);
-        *vstr = (unsigned char *)ele;
-        *vlen = sdslen(ele);
+        *vstr = (unsigned char *)hashTypeCurrentFromHashTable(hi, what, (size_t *)vlen);
     } else {
         serverPanic("Unknown hash encoding");
     }
@@ -644,7 +760,7 @@ static void hashTypeCurrentObject(hashTypeIterator *hi, int what, unsigned char 
  * SDS string. */
 sds hashTypeCurrentObjectNewSds(hashTypeIterator *hi, int what) {
     unsigned char *vstr;
-    unsigned int vlen;
+    size_t vlen;
     long long vll;
 
     hashTypeCurrentObject(hi, what, &vstr, &vlen, &vll);
@@ -682,7 +798,7 @@ void hashTypeConvertListpack(robj *o, int enc) {
         while (hashTypeNext(&hi) != C_ERR) {
             sds field = hashTypeCurrentObjectNewSds(&hi, OBJ_HASH_FIELD);
             sds value = hashTypeCurrentObjectNewSds(&hi, OBJ_HASH_VALUE);
-            hashTypeEntry *entry = hashTypeCreateEntry(field, value);
+            hashTypeEntry *entry = hashTypeCreateEntry(field, sdslen(field), value);
             sdsfree(field);
             if (!hashtableAdd(ht, entry)) {
                 freeHashTypeEntry(entry);
@@ -734,12 +850,14 @@ robj *hashTypeDup(robj *o) {
 
         hashTypeInitIterator(o, &hi);
         while (hashTypeNext(&hi) != C_ERR) {
+            size_t field_str_len, value_str_len;
             /* Extract a field-value pair from an original hash object.*/
-            sds field = hashTypeCurrentFromHashTable(&hi, OBJ_HASH_FIELD);
-            sds value = hashTypeCurrentFromHashTable(&hi, OBJ_HASH_VALUE);
+            char *field_str = hashTypeCurrentFromHashTable(&hi, OBJ_HASH_FIELD, &field_str_len);
+            char *value_str = hashTypeCurrentFromHashTable(&hi, OBJ_HASH_VALUE, &value_str_len);
 
             /* Add a field-value pair to a new hash object. */
-            hashTypeEntry *entry = hashTypeCreateEntry(field, sdsdup(value));
+            sds value = sdsnewlen(value_str, value_str_len);
+            hashTypeEntry *entry = hashTypeCreateEntry(field_str, field_str_len, value);
             hashtableAdd(ht, entry);
         }
         hashTypeResetIterator(&hi);
@@ -777,9 +895,7 @@ static void hashTypeRandomElement(robj *hashobj, unsigned long hashsize, listpac
         field->sval = (unsigned char *)sds_field;
         field->slen = sdslen(sds_field);
         if (val) {
-            sds sds_val = hashTypeEntryGetValue(entry);
-            val->sval = (unsigned char *)sds_val;
-            val->slen = sdslen(sds_val);
+            val->sval = (unsigned char *)hashTypeEntryGetValue(entry, (size_t *)&val->slen);
         }
     } else if (hashobj->encoding == OBJ_ENCODING_LISTPACK) {
         lpRandomPair(hashobj->ptr, hashsize, field, val);
@@ -843,7 +959,7 @@ void hincrbyCommand(client *c) {
     robj *o;
     sds new;
     unsigned char *vstr;
-    unsigned int vlen;
+    size_t vlen;
 
     if (getLongLongFromObjectOrReply(c, c->argv[3], &incr, NULL) != C_OK) return;
     if ((o = hashTypeLookupWriteOrCreate(c, c->argv[1])) == NULL) return;
@@ -879,7 +995,7 @@ void hincrbyfloatCommand(client *c) {
     robj *o;
     sds new;
     unsigned char *vstr;
-    unsigned int vlen;
+    size_t vlen;
 
     if (getLongDoubleFromObjectOrReply(c, c->argv[3], &incr, NULL) != C_OK) return;
     if (isnan(incr) || isinf(incr)) {
@@ -932,7 +1048,7 @@ static void addHashFieldToReply(client *c, robj *o, sds field) {
     }
 
     unsigned char *vstr = NULL;
-    unsigned int vlen = UINT_MAX;
+    size_t vlen = LLONG_MAX;
     long long vll = LLONG_MAX;
 
     if (hashTypeGetValue(o, field, &vstr, &vlen, &vll) == C_OK) {
@@ -1012,7 +1128,7 @@ void hstrlenCommand(client *c) {
 static void addHashIteratorCursorToReply(writePreparedClient *wpc, hashTypeIterator *hi, int what) {
     if (hi->encoding == OBJ_ENCODING_LISTPACK) {
         unsigned char *vstr = NULL;
-        unsigned int vlen = UINT_MAX;
+        size_t vlen = LLONG_MAX;
         long long vll = LLONG_MAX;
 
         hashTypeCurrentFromListpack(hi, what, &vstr, &vlen, &vll);
@@ -1021,8 +1137,9 @@ static void addHashIteratorCursorToReply(writePreparedClient *wpc, hashTypeItera
         else
             addWritePreparedReplyBulkLongLong(wpc, vll);
     } else if (hi->encoding == OBJ_ENCODING_HASHTABLE) {
-        sds value = hashTypeCurrentFromHashTable(hi, what);
-        addWritePreparedReplyBulkCBuffer(wpc, value, sdslen(value));
+        size_t len;
+        char *value = hashTypeCurrentFromHashTable(hi, what, &len);
+        addWritePreparedReplyBulkCBuffer(wpc, value, len);
     } else {
         serverPanic("Unknown hash encoding");
     }
@@ -1159,10 +1276,11 @@ void hrandfieldWithCountCommand(client *c, long l, int withvalues) {
                 void *entry;
                 hashtableFairRandomEntry(hash->ptr, &entry);
                 sds field = hashTypeEntryGetField(entry);
-                sds value = hashTypeEntryGetValue(entry);
+                size_t value_len;
+                char *value = hashTypeEntryGetValue(entry, &value_len);
                 if (withvalues && c->resp > 2) addWritePreparedReplyArrayLen(wpc, 2);
                 addWritePreparedReplyBulkCBuffer(wpc, field, sdslen(field));
-                if (withvalues) addWritePreparedReplyBulkCBuffer(wpc, value, sdslen(value));
+                if (withvalues) addWritePreparedReplyBulkCBuffer(wpc, value, value_len);
                 if (c->flag.close_asap) break;
             }
         } else if (hash->encoding == OBJ_ENCODING_LISTPACK) {
@@ -1264,10 +1382,11 @@ void hrandfieldWithCountCommand(client *c, long l, int withvalues) {
         void *next;
         while (hashtableNext(&iter, &next)) {
             sds field = hashTypeEntryGetField(next);
-            sds value = hashTypeEntryGetValue(next);
+            size_t value_len;
+            char *value = hashTypeEntryGetValue(next, &value_len);
             if (withvalues && c->resp > 2) addWritePreparedReplyArrayLen(wpc, 2);
             addWritePreparedReplyBulkCBuffer(wpc, field, sdslen(field));
-            if (withvalues) addWritePreparedReplyBulkCBuffer(wpc, value, sdslen(value));
+            if (withvalues) addWritePreparedReplyBulkCBuffer(wpc, value, value_len);
         }
 
         hashtableResetIterator(&iter);

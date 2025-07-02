@@ -5227,6 +5227,12 @@ int VM_ZsetRangePrev(ValkeyModuleKey *key) {
     }
 }
 
+
+int VM_HashExternalize(ValkeyModuleKey *key, ValkeyModuleString* field, const char * buf, size_t len) {
+    if (!key || !key->value || key->value->type != OBJ_HASH || !field || !buf) return VALKEYMODULE_ERR;
+    return hashTypeExternalize(key->value, field->ptr, buf, len);
+}
+
 /* --------------------------------------------------------------------------
  * ## Key API for Hash type
  *
@@ -11225,8 +11231,9 @@ static void moduleScanKeyHashtableCallback(void *privdata, void *entry) {
         value = createStringObjectFromLongDouble(node->score, 0);
     } else if (o->type == OBJ_HASH) {
         key = hashTypeEntryGetField(entry);
-        sds val = hashTypeEntryGetValue(entry);
-        value = createStringObject(val, sdslen(val));
+        size_t val_len;
+        char *val = hashTypeEntryGetValue(entry, &val_len);
+        value = createStringObject(val, val_len);
     } else {
         serverPanic("unexpected object type");
     }
@@ -13969,6 +13976,7 @@ void moduleRegisterCoreAPI(void) {
     REGISTER_API(ZsetRangeEndReached);
     REGISTER_API(HashSet);
     REGISTER_API(HashGet);
+    REGISTER_API(HashExternalize);
     REGISTER_API(StreamAdd);
     REGISTER_API(StreamDelete);
     REGISTER_API(StreamIteratorStart);

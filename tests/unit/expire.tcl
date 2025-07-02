@@ -951,6 +951,43 @@ start_server {tags {"expire"}} {
     }
 }
 
+start_server {tags {expire} overrides {hz 100}} {
+    test {Active expiration triggers hashtable shrink} {
+        set persistent_keys 5
+        set volatile_keys 100
+        set total_keys [expr $persistent_keys + $volatile_keys]
+
+        for {set i 0} {$i < $persistent_keys} {incr i} {
+            r set "key_$i" "value_$i"
+        }
+        for {set i 0} {$i < $volatile_keys} {incr i} {
+            r psetex "expire_key_${i}" 100 "expire_value_${i}"
+        }
+        set table_size_before_expire [main_hash_table_size]
+
+        # Verify keys are set
+        assert_equal $total_keys [r dbsize]
+
+        # Wait for active expiration
+        wait_for_condition 100 50 {
+            [r dbsize] eq $persistent_keys
+        } else {
+            fail "Keys not expired"
+        }
+
+        # Wait for the table to shrink and active rehashing finish
+        wait_for_condition 100 50 {
+            [main_hash_table_size] < $table_size_before_expire
+        } else {
+            puts [r debug htstats 9]
+            fail "Table didn't shrink"
+        }
+
+        # Verify server is still responsive
+        assert_equal [r ping] {PONG}
+    } {} {needs:debug}
+}
+
 start_cluster 1 0 {tags {"expire external:skip cluster"}} {
     test "expire scan should skip dictionaries with lot's of empty buckets" {
         r debug set-active-expire 0

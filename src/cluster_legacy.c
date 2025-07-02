@@ -3593,7 +3593,7 @@ int clusterProcessPacket(clusterLink *link) {
                     markNodeAsFailing(noaddr_node);
                     clusterSendFail(noaddr_node->name);
                 }
-                clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG);
+                clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_UPDATE_STATE);
                 return 0;
             }
         }

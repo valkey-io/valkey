@@ -5228,7 +5228,7 @@ int VM_ZsetRangePrev(ValkeyModuleKey *key) {
 }
 
 
-int VM_HashExternalize(ValkeyModuleKey *key, ValkeyModuleString* field, const char * buf, size_t len) {
+int VM_HashExternalize(ValkeyModuleKey *key, ValkeyModuleString *field, const char *buf, size_t len) {
     if (!key || !key->value || key->value->type != OBJ_HASH || !field || !buf) return VALKEYMODULE_ERR;
     return hashTypeExternalize(key->value, field->ptr, buf, len);
 }

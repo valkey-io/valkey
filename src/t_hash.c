@@ -93,8 +93,8 @@
  * of the memory pointed to by 'buf'. Valkey core will not free 'buf'.
  */
 typedef struct ExternalizedValue {
-    const char *buf;    /* Pointer to the externalized buffer */
-    size_t len;   /* Length of the buffer */
+    const char *buf; /* Pointer to the externalized buffer */
+    size_t len;      /* Length of the buffer */
 } ExternalizedValue;
 
 
@@ -141,7 +141,6 @@ hashTypeEntry *hashTypeCreateEntry(char *field, size_t field_len, sds value) {
         sdswrite(buf + field_size, buf_size - field_size, SDS_TYPE_8, value, value_len);
         /* Field sds aux bits are zero, which we use for this entry encoding. */
         sdsSetAuxBit(embedded_field_sds, FIELD_SDS_AUX_BIT_ENTRY_HAS_VALUE_PTR, 0);
-        sdsSetAuxBit(embedded_field_sds, FIELD_SDS_AUX_BIT_EXTERNALIZED, 0);
         serverAssert(!entryHasValuePtr(embedded_field_sds));
         sdsfree(value);
     } else {
@@ -162,7 +161,6 @@ hashTypeEntry *hashTypeCreateEntry(char *field, size_t field_len, sds value) {
         embedded_field_sds = sdswrite(buf + sizeof(sds *), field_size, field_sds_type, field, field_len);
         /* Store the entry encoding type in sds aux bits. */
         sdsSetAuxBit(embedded_field_sds, FIELD_SDS_AUX_BIT_ENTRY_HAS_VALUE_PTR, 1);
-        sdsSetAuxBit(embedded_field_sds, FIELD_SDS_AUX_BIT_EXTERNALIZED, 0);
         serverAssert(entryHasValuePtr(embedded_field_sds));
     }
     return (void *)embedded_field_sds;
@@ -190,7 +188,7 @@ hashTypeEntry *hashTypeCreateExternalizedEntry(sds field, const char *buf, size_
     sds embedded_field_sds = sdswrite(alloc_buf + sizeof(void *), field_size, field_sds_type, field, field_len);
 
     sdsSetAuxBit(embedded_field_sds, FIELD_SDS_AUX_BIT_ENTRY_HAS_VALUE_PTR, 1); // It's a value pointer
-    sdsSetAuxBit(embedded_field_sds, FIELD_SDS_AUX_BIT_EXTERNALIZED, 1);      // Mark as externalized
+    sdsSetAuxBit(embedded_field_sds, FIELD_SDS_AUX_BIT_EXTERNALIZED, 1);        // Mark as externalized
     serverAssert(entryHasValuePtr(embedded_field_sds));
     serverAssert(entryIsExternalizedValue(embedded_field_sds));
 
@@ -210,9 +208,9 @@ char *hashTypeEntryGetValue(const hashTypeEntry *entry, size_t *len) {
         return (char *)ext_value->buf;
     }
     if (entryHasValuePtr(entry)) {
-      sds *value = hashTypeEntryGetValueRef(entry);
-      *len = sdslen(*value);
-      return *value;
+        sds *value = hashTypeEntryGetValueRef(entry);
+        *len = sdslen(*value);
+        return *value;
     }
     /* Skip field content, field null terminator and value sds8 hdr. */
     size_t offset = sdslen(entry) + 1 + sdsHdrSize(SDS_TYPE_8);
@@ -474,10 +472,10 @@ size_t hashTypeGetValueLength(robj *o, sds field) {
  * exists, and 0 when it doesn't. */
 int hashTypeExists(robj *o, sds field) {
     unsigned char *vstr = NULL;
-    unsigned int vlen = UINT_MAX;
+    size_t vlen = SIZE_MAX;
     long long vll = LLONG_MAX;
 
-    return hashTypeGetValue(o, field, &vstr, &vlen, &vll) == C_OK;
+    return hashTypeGetValue(o, field, &vstr, (unsigned int *)&vlen, &vll) == C_OK;
 }
 
 /* Set an externalized string field in a hash.
@@ -486,7 +484,6 @@ int hashTypeExists(robj *o, sds field) {
  * The 'field' sds is consumed by this function.
  */
 int hashTypeExternalize(robj *o, sds field, const char *buf, size_t len) {
-
     if (o->encoding == OBJ_ENCODING_LISTPACK) {
         // Externalized strings require HASHTABLE encoding due to aux bits and pointer storage.
         hashTypeConvert(o, OBJ_ENCODING_HASHTABLE);
@@ -750,7 +747,9 @@ static void hashTypeCurrentObject(hashTypeIterator *hi, int what, unsigned char 
         *vstr = NULL;
         hashTypeCurrentFromListpack(hi, what, vstr, vlen, vll);
     } else if (hi->encoding == OBJ_ENCODING_HASHTABLE) {
-        *vstr = (unsigned char *)hashTypeCurrentFromHashTable(hi, what, (size_t *)vlen);
+        size_t len;
+        *vstr = (unsigned char *)hashTypeCurrentFromHashTable(hi, what, &len);
+        *vlen = len;
     } else {
         serverPanic("Unknown hash encoding");
     }

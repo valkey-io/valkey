@@ -3639,6 +3639,7 @@ int clusterProcessPacket(clusterLink *link) {
                              * this may cause a primary-replica chain issue. */
                             return 1;
                         } else if (nodeIsReplica(sender_claimed_primary)) {
+                            serverAssert(sender_claimed_primary->replicaof == sender);
                             /* A failover occurred in the shard where `sender` belongs to and `sender` is
                              * no longer a primary. Update slot assignment to `sender_claimed_config_epoch`,
                              * which is the new primary in the shard */

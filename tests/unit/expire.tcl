@@ -1041,8 +1041,8 @@ start_cluster 1 0 {tags {"expire external:skip cluster"}} {
         # by deleting it to trigger shrink
         # we put just barely enough data in to trigger the resize, not the full 1000 keys
         for {set j 1} {$j <= 10} {incr j} {
-            r psetex "{foo}$j" 500 a
-            r del "{foo}$j"
+            r psetex "{foo}0" 500 a
+            r del "{foo}0"
         }
 
         # Verify all keys have expired

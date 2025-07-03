@@ -803,8 +803,6 @@ int test_random_entry_with_long_chain(int argc, char **argv, int flags) {
     UNUSED(argv);
     UNUSED(flags);
 
-    hashtableSetResizePolicy(HASHTABLE_RESIZE_FORBID);
-
     /* We use an estimator of true probability.
      * We determine how many samples to take based on how precise of a
      * measurement we want to take, and how certain we want to be that the
@@ -855,8 +853,6 @@ int test_random_entry_with_long_chain(int argc, char **argv, int flags) {
     for (size_t i = 0; i < num_chained_entries; i++) {
         hashtableAdd(ht, mock_hash_entry_create(i, chain_hash));
     }
-
-    hashtableSetResizePolicy(HASHTABLE_RESIZE_ALLOW);
 
     TEST_ASSERT(!hashtableIsRehashing(ht));
 

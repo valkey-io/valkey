@@ -444,7 +444,6 @@ static void scanLaterSet(robj *ob, unsigned long *cursor) {
 
 /* Hashtable scan callback for hash datatype */
 static void activeDefragEntry(void *privdata, void *element_ref) {
-    UNUSED(privdata);
     entry **entry_ref = (entry **)element_ref;
     entry *old_entry = *entry_ref, *new_entry = NULL;
     long long old_expiry = entryGetExpiry(old_entry);
@@ -464,7 +463,7 @@ static void activeDefragEntry(void *privdata, void *element_ref) {
 static void scanLaterHash(robj *ob, unsigned long *cursor) {
     serverAssert(ob->type == OBJ_HASH && ob->encoding == OBJ_ENCODING_HASHTABLE);
     hashtable *ht = ob->ptr;
-    *cursor = hashtableScanDefrag(ht, *cursor, activeDefragEntry, NULL, activeDefragAlloc, HASHTABLE_SCAN_EMIT_REF);
+    *cursor = hashtableScanDefrag(ht, *cursor, activeDefragEntry, ob, activeDefragAlloc, HASHTABLE_SCAN_EMIT_REF);
 }
 
 static void defragQuicklist(robj *ob) {

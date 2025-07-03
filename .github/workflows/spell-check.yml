@@ -9,6 +9,10 @@ on:
   push:
   pull_request:
 
+concurrency:
+  group: spellcheck-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
@@ -22,7 +26,7 @@ jobs:
         uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
 
       - name: Install typos
-        uses: taiki-e/install-action@cd5df4de2e75f3b819ba55f780f7bb8cd4a05a41 # v2.32.2
+        uses: taiki-e/install-action@fe9759bf4432218c779595708e80a1aadc85cedc # v2.46.10
         with:
           tool: typos
 

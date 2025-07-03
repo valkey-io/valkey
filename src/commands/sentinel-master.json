@@ -1,12 +1,17 @@
 {
     "MASTER": {
-        "summary": "Returns the state of a master instance.",
+        "summary": "Returns the state of a primary instance.",
         "complexity": "O(1)",
         "group": "sentinel",
         "since": "2.8.4",
         "arity": 3,
         "container": "SENTINEL",
         "function": "sentinelCommand",
+        "deprecated_since": "8.0.0",
+        "replaced_by": "`SENTINEL PRIMARY`",
+        "doc_flags": [
+            "DEPRECATED"
+        ],
         "command_flags": [
             "ADMIN",
             "SENTINEL",
@@ -14,14 +19,14 @@
         ],
         "reply_schema": {
             "type": "object",
-            "description": "The state and info of the specified master.",
+            "description": "The state and info of the specified primary.",
             "additionalProperties": {
                 "type": "string"
             }
         },
         "arguments": [
             {
-                "name": "master-name",
+                "name": "primary-name",
                 "type": "string"
             }
         ]

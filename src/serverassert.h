@@ -7,7 +7,7 @@
  *
  * ----------------------------------------------------------------------------
  *
- * Copyright (c) 2006-2012, Salvatore Sanfilippo <antirez at gmail dot com>
+ * Copyright (c) 2006-2012, Redis Ltd.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -51,6 +51,10 @@
 #define likely(x) __builtin_expect(!!(x), 1)
 #else
 #define likely(x) (x)
+#endif
+
+#ifdef assert
+#undef assert
 #endif
 
 #define assert(_e) (likely((_e)) ? (void)0 : (_serverAssert(#_e, __FILE__, __LINE__), valkey_unreachable()))

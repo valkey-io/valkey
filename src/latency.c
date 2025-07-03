@@ -5,7 +5,7 @@
  *
  * ----------------------------------------------------------------------------
  *
- * Copyright (c) 2014, Salvatore Sanfilippo <antirez at gmail dot com>
+ * Copyright (c) 2014, Redis Ltd.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -37,8 +37,7 @@
 #include "hdr_histogram.h"
 
 /* Dictionary type for latency events. */
-int dictStringKeyCompare(dict *d, const void *key1, const void *key2) {
-    UNUSED(d);
+int dictStringKeyCompare(const void *key1, const void *key2) {
     return strcmp(key1, key2) == 0;
 }
 
@@ -75,9 +74,10 @@ void latencyMonitorInit(void) {
 
 /* Add the specified sample to the specified time series "event".
  * This function is usually called via latencyAddSampleIfNeeded(), that
- * is a macro that only adds the sample if the latency is higher than
+ * is a macro that only adds the sample if the latency is above
  * server.latency_monitor_threshold. */
-void latencyAddSample(const char *event, mstime_t latency) {
+void latencyAddSample(const char *event, ustime_t latency_us) {
+    mstime_t latency = latency_us / 1000;
     struct latencyTimeSeries *ts = dictFetchValue(server.latency_events, event);
     time_t now = time(NULL);
     int prev;
@@ -87,11 +87,15 @@ void latencyAddSample(const char *event, mstime_t latency) {
         ts = zmalloc(sizeof(*ts));
         ts->idx = 0;
         ts->max = 0;
+        ts->sum = 0;
+        ts->cnt = 0;
         memset(ts->samples, 0, sizeof(ts->samples));
         dictAdd(server.latency_events, zstrdup(event), ts);
     }
 
     if (latency > ts->max) ts->max = latency;
+    ts->sum += latency;
+    ts->cnt++;
 
     /* If the previous sample is in the same second, we update our old sample
      * if this latency is > of the old one, or just return. */
@@ -216,9 +220,8 @@ sds createLatencyReport(void) {
      * was never enabled so far. */
     if (dictSize(server.latency_events) == 0 && server.latency_monitor_threshold == 0) {
         report = sdscat(
-            report, "I'm sorry, Dave, I can't do that. Latency monitoring is disabled in this Redis instance. You may "
-                    "use \"CONFIG SET latency-monitor-threshold <milliseconds>.\" in order to enable it. If we weren't "
-                    "in a deep space mission I'd suggest to take a look at https://redis.io/topics/latency-monitor.\n");
+            report, "I'm sorry, Dave, I can't do that. Latency monitoring is disabled in this Valkey instance. You may "
+                    "use \"CONFIG SET latency-monitor-threshold <milliseconds>.\" in order to enable it.\n");
         return report;
     }
 
@@ -237,8 +240,7 @@ sds createLatencyReport(void) {
         if (ts == NULL) continue;
         eventnum++;
         if (eventnum == 1) {
-            report = sdscat(report, "Dave, I have observed latency spikes in this Redis instance. You don't mind "
-                                    "talking about it, do you Dave?\n\n");
+            report = sdscat(report, "Latency spikes are observed in this Valkey instance.\n\n");
         }
         analyzeLatencyForEvent(event, &ls);
 
@@ -269,10 +271,10 @@ sds createLatencyReport(void) {
 
         /* Potentially commands. */
         if (!strcasecmp(event, "command")) {
-            if (server.slowlog_log_slower_than < 0 || server.slowlog_max_len == 0) {
+            if (server.commandlog[COMMANDLOG_TYPE_SLOW].threshold < 0 || server.commandlog[COMMANDLOG_TYPE_SLOW].max_len == 0) {
                 advise_slowlog_enabled = 1;
                 advices++;
-            } else if (server.slowlog_log_slower_than / 1000 > server.latency_monitor_threshold) {
+            } else if (server.commandlog[COMMANDLOG_TYPE_SLOW].threshold / 1000 > server.latency_monitor_threshold) {
                 advise_slowlog_tuning = 1;
                 advices++;
             }
@@ -358,18 +360,16 @@ sds createLatencyReport(void) {
     }
 
     if (eventnum == 0 && advices == 0) {
-        report = sdscat(report, "Dave, no latency spike was observed during the lifetime of this Redis instance, not "
-                                "in the slightest bit. I honestly think you ought to sit down calmly, take a stress "
-                                "pill, and think things over.\n");
+        report = sdscat(report, "No latency spike was observed during the lifetime of this Valkey instance, not "
+                                "in the slightest bit.\n");
     } else if (eventnum > 0 && advices == 0) {
-        report =
-            sdscat(report, "\nWhile there are latency events logged, I'm not able to suggest any easy fix. Please use "
-                           "the Redis community to get some help, providing this report in your help request.\n");
+        report = sdscat(report, "\nThere are latency events logged that are not easy to fix. Please get some "
+                                "help from Valkey community, providing this report in your help request.\n");
     } else {
         /* Add all the suggestions accumulated so far. */
 
         /* Better VM. */
-        report = sdscat(report, "\nI have a few advices for you:\n\n");
+        report = sdscat(report, "\nHere is some advice for you:\n\n");
         if (advise_better_vm) {
             report = sdscat(report, "- If you are using a virtual machine, consider upgrading it with a faster one "
                                     "using a hypervisior that provides less latency during fork() calls. Xen is known "
@@ -382,8 +382,8 @@ sds createLatencyReport(void) {
             report =
                 sdscatprintf(report,
                              "- There are latency issues with potentially slow commands you are using. Try to enable "
-                             "the Slow Log Redis feature using the command 'CONFIG SET slowlog-log-slower-than %llu'. "
-                             "If the Slow log is disabled Redis is not able to log slow commands execution for you.\n",
+                             "the Slow Log Valkey feature using the command 'CONFIG SET slowlog-log-slower-than %llu'. "
+                             "If the Slow log is disabled Valkey is not able to log slow commands execution for you.\n",
                              (unsigned long long)server.latency_monitor_threshold * 1000);
         }
 
@@ -398,20 +398,20 @@ sds createLatencyReport(void) {
         if (advise_slowlog_inspect) {
             report = sdscat(report,
                             "- Check your Slow Log to understand what are the commands you are running which are too "
-                            "slow to execute. Please check https://redis.io/commands/slowlog for more information.\n");
+                            "slow to execute. Please check https://valkey.io/commands/slowlog for more information.\n");
         }
 
         /* Intrinsic latency. */
         if (advise_scheduler) {
             report = sdscat(
                 report,
-                "- The system is slow to execute Redis code paths not containing system calls. This usually means the "
-                "system does not provide Redis CPU time to run for long periods. You should try to:\n"
+                "- The system is slow to execute Valkey code paths not containing system calls. This usually means the "
+                "system does not provide Valkey CPU time to run for long periods. You should try to:\n"
                 "  1) Lower the system load.\n"
-                "  2) Use a computer / VM just for Redis if you are running other software in the same system.\n"
+                "  2) Use a computer / VM just for Valkey if you are running other software in the same system.\n"
                 "  3) Check if you have a \"noisy neighbour\" problem.\n"
-                "  4) Check with 'redis-cli --intrinsic-latency 100' what is the intrinsic latency in your system.\n"
-                "  5) Check if the problem is allocator-related by recompiling Redis with MALLOC=libc, if you are "
+                "  4) Check with 'valkey-cli --intrinsic-latency 100' what is the intrinsic latency in your system.\n"
+                "  5) Check if the problem is allocator-related by recompiling Valkey with MALLOC=libc, if you are "
                 "using Jemalloc. However this may create fragmentation problems.\n");
         }
 
@@ -423,11 +423,11 @@ sds createLatencyReport(void) {
         }
 
         if (advise_ssd) {
-            report =
-                sdscat(report, "- SSD disks are able to reduce fsync latency, and total time needed for snapshotting "
-                               "and AOF log rewriting (resulting in smaller memory usage). With extremely high write "
-                               "load SSD disks can be a good option. However Redis should perform reasonably with high "
-                               "load using normal disks. Use this advice as a last resort.\n");
+            report = sdscat(report,
+                            "- SSD disks are able to reduce fsync latency, and total time needed for snapshotting "
+                            "and AOF log rewriting (resulting in smaller memory usage). With extremely high write "
+                            "load SSD disks can be a good option. However Valkey should perform reasonably with high "
+                            "load using normal disks. Use this advice as a last resort.\n");
         }
 
         if (advise_data_writeback) {
@@ -435,12 +435,12 @@ sds createLatencyReport(void) {
                 sdscat(report, "- Mounting ext3/4 filesystems with data=writeback can provide a performance boost "
                                "compared to data=ordered, however this mode of operation provides less guarantees, and "
                                "sometimes it can happen that after a hard crash the AOF file will have a half-written "
-                               "command at the end and will require to be repaired before Redis restarts.\n");
+                               "command at the end and will require to be repaired before Valkey restarts.\n");
         }
 
         if (advise_disk_contention) {
             report = sdscat(report, "- Try to lower the disk contention. This is often caused by other disk intensive "
-                                    "processes running in the same computer (including other Redis instances).\n");
+                                    "processes running in the same computer (including other Valkey instances).\n");
         }
 
         if (advise_no_appendfsync) {
@@ -464,7 +464,7 @@ sds createLatencyReport(void) {
         }
 
         if (advise_hz && server.hz < 100) {
-            report = sdscat(report, "- In order to make the Redis keys expiring process more incremental, try to set "
+            report = sdscat(report, "- In order to make the Valkey keys expiring process more incremental, try to set "
                                     "the 'hz' configuration parameter to 100 using 'CONFIG SET hz 100'.\n");
         }
 
@@ -477,19 +477,20 @@ sds createLatencyReport(void) {
 
         if (advise_mass_eviction) {
             report = sdscat(report, "- Sudden changes to the 'maxmemory' setting via 'CONFIG SET', or allocation of "
-                                    "large objects via sets or sorted sets intersections, STORE option of SORT, Redis "
+                                    "large objects via sets or sorted sets intersections, STORE option of SORT, Valkey "
                                     "Cluster large keys migrations (RESTORE command), may create sudden memory "
                                     "pressure forcing the server to block trying to evict keys. \n");
         }
 
         if (advise_disable_thp) {
-            report = sdscat(report, "- I detected a non zero amount of anonymous huge pages used by your process. This "
-                                    "creates very serious latency events in different conditions, especially when "
-                                    "Redis is persisting on disk. To disable THP support use the command 'echo never > "
-                                    "/sys/kernel/mm/transparent_hugepage/enabled', make sure to also add it into "
-                                    "/etc/rc.local so that the command will be executed again after a reboot. Note "
-                                    "that even if you have already disabled THP, you still need to restart the Redis "
-                                    "process to get rid of the huge pages already created.\n");
+            report =
+                sdscat(report, "- I detected a non zero amount of anonymous huge pages used by your process. This "
+                               "creates very serious latency events in different conditions, especially when "
+                               "Valkey is persisting on disk. To disable THP support use the command 'echo never > "
+                               "/sys/kernel/mm/transparent_hugepage/enabled', make sure to also add it into "
+                               "/etc/rc.local so that the command will be executed again after a reboot. Note "
+                               "that even if you have already disabled THP, you still need to restart the Valkey "
+                               "process to get rid of the huge pages already created.\n");
         }
     }
 
@@ -530,13 +531,12 @@ void fillCommandCDF(client *c, struct hdr_histogram *histogram) {
 
 /* latencyCommand() helper to produce for all commands,
  * a per command cumulative distribution of latencies. */
-void latencyAllCommandsFillCDF(client *c, dict *commands, int *command_with_data) {
-    dictIterator *di = dictGetSafeIterator(commands);
-    dictEntry *de;
-    struct serverCommand *cmd;
-
-    while ((de = dictNext(di)) != NULL) {
-        cmd = (struct serverCommand *)dictGetVal(de);
+void latencyAllCommandsFillCDF(client *c, hashtable *commands, int *command_with_data) {
+    hashtableIterator iter;
+    hashtableInitIterator(&iter, commands, HASHTABLE_ITER_SAFE);
+    void *next;
+    while (hashtableNext(&iter, &next)) {
+        struct serverCommand *cmd = next;
         if (cmd->latency_histogram) {
             addReplyBulkCBuffer(c, cmd->fullname, sdslen(cmd->fullname));
             fillCommandCDF(c, cmd->latency_histogram);
@@ -544,10 +544,10 @@ void latencyAllCommandsFillCDF(client *c, dict *commands, int *command_with_data
         }
 
         if (cmd->subcommands) {
-            latencyAllCommandsFillCDF(c, cmd->subcommands_dict, command_with_data);
+            latencyAllCommandsFillCDF(c, cmd->subcommands_ht, command_with_data);
         }
     }
-    dictReleaseIterator(di);
+    hashtableResetIterator(&iter);
 }
 
 /* latencyCommand() helper to produce for a specific command set,
@@ -568,19 +568,19 @@ void latencySpecificCommandsFillCDF(client *c) {
             command_with_data++;
         }
 
-        if (cmd->subcommands_dict) {
-            dictEntry *de;
-            dictIterator *di = dictGetSafeIterator(cmd->subcommands_dict);
-
-            while ((de = dictNext(di)) != NULL) {
-                struct serverCommand *sub = dictGetVal(de);
+        if (cmd->subcommands_ht) {
+            hashtableIterator iter;
+            hashtableInitIterator(&iter, cmd->subcommands_ht, HASHTABLE_ITER_SAFE);
+            void *next;
+            while (hashtableNext(&iter, &next)) {
+                struct serverCommand *sub = next;
                 if (sub->latency_histogram) {
                     addReplyBulkCBuffer(c, sub->fullname, sdslen(sub->fullname));
                     fillCommandCDF(c, sub->latency_histogram);
                     command_with_data++;
                 }
             }
-            dictReleaseIterator(di);
+            hashtableResetIterator(&iter);
         }
     }
     setDeferredMapLen(c, replylen, command_with_data);
@@ -617,11 +617,13 @@ void latencyCommandReplyWithLatestEvents(client *c) {
         struct latencyTimeSeries *ts = dictGetVal(de);
         int last = (ts->idx + LATENCY_TS_LEN - 1) % LATENCY_TS_LEN;
 
-        addReplyArrayLen(c, 4);
+        addReplyArrayLen(c, 6);
         addReplyBulkCString(c, event);
         addReplyLongLong(c, ts->samples[last].time);
         addReplyLongLong(c, ts->samples[last].latency);
         addReplyLongLong(c, ts->max);
+        addReplyLongLong(c, ts->sum);
+        addReplyLongLong(c, ts->cnt);
     }
     dictReleaseIterator(di);
 }
@@ -734,25 +736,23 @@ void latencyCommand(client *c) {
             latencySpecificCommandsFillCDF(c);
         }
     } else if (!strcasecmp(c->argv[1]->ptr, "help") && c->argc == 2) {
-        /* clang-format off */
         const char *help[] = {
-"DOCTOR",
-"    Return a human readable latency analysis report.",
-"GRAPH <event>",
-"    Return an ASCII latency graph for the <event> class.",
-"HISTORY <event>",
-"    Return time-latency samples for the <event> class.",
-"LATEST",
-"    Return the latest latency samples for all events.",
-"RESET [<event> ...]",
-"    Reset latency data of one or more <event> classes.",
-"    (default: reset all data for all event classes)",
-"HISTOGRAM [COMMAND ...]",
-"    Return a cumulative distribution of latencies in the format of a histogram for the specified command names.",
-"    If no commands are specified then all histograms are replied.",
-NULL
+            "DOCTOR",
+            "    Return a human readable latency analysis report.",
+            "GRAPH <event>",
+            "    Return an ASCII latency graph for the <event> class.",
+            "HISTORY <event>",
+            "    Return time-latency samples for the <event> class.",
+            "LATEST",
+            "    Return the latest latency samples for all events.",
+            "RESET [<event> ...]",
+            "    Reset latency data of one or more <event> classes.",
+            "    (default: reset all data for all event classes)",
+            "HISTOGRAM [COMMAND ...]",
+            "    Return a cumulative distribution of latencies in the format of a histogram for the specified command names.",
+            "    If no commands are specified then all histograms are replied.",
+            NULL,
         };
-        /* clang-format on */
         addReplyHelp(c, help);
     } else {
         addReplySubcommandSyntaxError(c);

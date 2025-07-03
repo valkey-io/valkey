@@ -34,12 +34,10 @@ start_server {tags {"multi"}} {
     } {QUEUED OK {a b c}}
 
     test {Nested MULTI are not allowed} {
-        set err {}
         r multi
-        catch {[r multi]} err
-        r exec
-        set _ $err
-    } {*ERR MULTI*}
+        assert_error "ERR*" {r multi}
+        assert_error "EXECABORT*" {r exec}
+    }
 
     test {MULTI where commands alter argc/argv} {
         r sadd myset a
@@ -49,12 +47,10 @@ start_server {tags {"multi"}} {
     } {a 0}
 
     test {WATCH inside MULTI is not allowed} {
-        set err {}
         r multi
-        catch {[r watch x]} err
-        r exec
-        set _ $err
-    } {*ERR WATCH*}
+        assert_error "ERR*" {r watch}
+        assert_error "EXECABORT*" {r exec}
+    }
 
     test {EXEC fails if there are errors while queueing commands #1} {
         r del foo1{t} foo2{t}
@@ -274,7 +270,7 @@ start_server {tags {"multi"}} {
         r multi
         r ping
         r exec
-    } {} {singledb:skip}
+    } {} {cluster:skip}
 
     test {SWAPDB is able to touch the watched keys that do not exist} {
         r flushall
@@ -286,7 +282,7 @@ start_server {tags {"multi"}} {
         r multi
         r ping
         r exec
-    } {} {singledb:skip}
+    } {} {singledb:skip cluster:skip}
 
     test {SWAPDB does not touch watched stale keys} {
         r flushall
@@ -300,7 +296,7 @@ start_server {tags {"multi"}} {
         r ping
         assert_equal {PONG} [r exec]
         r debug set-active-expire 1
-    } {OK} {singledb:skip needs:debug}
+    } {OK} {singledb:skip cluster:skip needs:debug}
 
     test {SWAPDB does not touch non-existing key replaced with stale key} {
         r flushall
@@ -315,7 +311,7 @@ start_server {tags {"multi"}} {
         r ping
         assert_equal {PONG} [r exec]
         r debug set-active-expire 1
-    } {OK} {singledb:skip needs:debug}
+    } {OK} {singledb:skip cluster:skip needs:debug}
 
     test {SWAPDB does not touch stale key replaced with another stale key} {
         r flushall
@@ -332,7 +328,7 @@ start_server {tags {"multi"}} {
         r ping
         assert_equal {PONG} [r exec]
         r debug set-active-expire 1
-    } {OK} {singledb:skip needs:debug}
+    } {OK} {singledb:skip cluster:skip needs:debug}
 
     test {WATCH is able to remember the DB a key belongs to} {
         r select 5
@@ -519,6 +515,7 @@ start_server {tags {"multi"}} {
             {select *}
             {set foo bar}
         }
+        close_replication_stream $repl
         r replicaof no one
     } {OK} {needs:repl cluster:skip}
 
@@ -904,6 +901,66 @@ start_server {tags {"multi"}} {
         r flushall
         r ping
      }
+
+    test {MULTI is rejected when CLIENT REPLY is ON/OFF/SKIP} {
+        r multi
+        assert_error "ERR Command not allowed inside a transaction" {r client reply on}
+        assert_error "EXECABORT *" {r exec}
+
+        r multi
+        assert_error "ERR Command not allowed inside a transaction" {r client reply skip}
+        assert_error "EXECABORT *" {r exec}
+
+        r multi
+        assert_error "ERR Command not allowed inside a transaction" {r client reply off}
+        assert_error "EXECABORT *" {r exec}
+
+        r client reply on
+    }
+
+    test "CLIENT REPLY OFF/SKIP: multi command" {
+        set rd [valkey_deferring_client]
+
+        # Turning the reply off
+        $rd client reply off
+
+        $rd multi
+        # These replies were skipped.
+        $rd ping pong2
+        $rd ping pong3
+        $rd exec
+
+        $rd client reply on
+        $rd ping
+        assert_equal {OK} [$rd read]
+        assert_equal {PONG} [$rd read]
+
+        $rd client reply skip
+
+        # Just this command was skipped
+        $rd multi
+
+        $rd ping pong2
+        $rd ping pong3
+        $rd exec
+        assert_equal {QUEUED} [$rd read]
+        assert_equal {QUEUED} [$rd read]
+        assert_equal {pong2 pong3} [$rd read]
+
+        $rd client reply on
+        $rd ping
+        assert_equal {OK} [$rd read]
+        assert_equal {PONG} [$rd read]
+
+        $rd close
+    }
+
+    test "AUTH errored inside MULTI will add the reply" {
+        r config set requirepass ""
+        r multi
+        r auth no-user foobar
+        assert_error {WRONGPASS invalid username-password pair or user is disabled.} {r exec}
+    }
 }
 
 start_server {overrides {appendonly {yes} appendfilename {appendonly.aof} appendfsync always} tags {external:skip}} {
@@ -922,4 +979,16 @@ start_server {overrides {appendonly {yes} appendfilename {appendonly.aof} append
         }
         r get foo
     } {}
+}
+
+start_cluster 1 0 {tags {"external:skip cluster"}} {
+    test "Regression test for multi-exec with RANDOMKEY accessing the wrong per-slot dictionary" {
+        R 0 SETEX FOO 10000 BAR
+        R 0 SETEX FIZZ 10000 BUZZ
+
+        R 0 MULTI
+        R 0 DEL FOO
+        R 0 RANDOMKEY
+        assert_equal [R 0 EXEC] {1 FIZZ}
+    }
 }

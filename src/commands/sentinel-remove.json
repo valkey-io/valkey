@@ -17,7 +17,7 @@
         },
         "arguments": [
             {
-                "name": "master-name",
+                "name": "primary-name",
                 "type": "string"
             }
         ]

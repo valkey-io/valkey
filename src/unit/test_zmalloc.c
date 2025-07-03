@@ -6,6 +6,8 @@ int test_zmallocInitialUsedMemory(int argc, char **argv, int flags) {
     UNUSED(argv);
     UNUSED(flags);
 
+    /* If this fails, it may be that other tests have failed and the memory has not been released. */
+    TEST_PRINT_INFO("test_zmallocInitialUsedMemory; used: %zu\n", zmalloc_used_memory());
     TEST_ASSERT(zmalloc_used_memory() == 0);
 
     return 0;

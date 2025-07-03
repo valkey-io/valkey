@@ -1,0 +1,40 @@
+{
+    "IMPORT-SOURCE": {
+        "summary": "Mark this client as an import source when server is in import mode.",
+        "complexity": "O(1)",
+        "group": "connection",
+        "since": "8.1.0",
+        "arity": 3,
+        "container": "CLIENT",
+        "function": "clientImportSourceCommand",
+        "command_flags": [
+            "NOSCRIPT",
+            "LOADING",
+            "STALE"
+        ],
+        "acl_categories": [
+            "CONNECTION"
+        ],
+        "reply_schema": {
+            "const": "OK"
+        },
+        "arguments": [
+            {
+                "name": "enabled",
+                "type": "oneof",
+                "arguments": [
+                    {
+                        "name": "on",
+                        "type": "pure-token",
+                        "token": "ON"
+                    },
+                    {
+                        "name": "off",
+                        "type": "pure-token",
+                        "token": "OFF"
+                    }
+                ]
+            }
+        ]
+    }
+}

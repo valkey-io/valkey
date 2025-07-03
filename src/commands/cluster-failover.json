@@ -1,6 +1,6 @@
 {
     "FAILOVER": {
-        "summary": "Forces a replica to perform a manual failover of its master.",
+        "summary": "Forces a replica to perform a manual failover of its primary.",
         "complexity": "O(1)",
         "group": "cluster",
         "since": "3.0.0",

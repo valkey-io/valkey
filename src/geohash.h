@@ -1,7 +1,7 @@
 /*
  * Copyright (c) 2013-2014, yinqiwen <yinqiwen@gmail.com>
  * Copyright (c) 2014, Matt Stancliff <matt@genges.com>.
- * Copyright (c) 2015, Salvatore Sanfilippo <antirez@gmail.com>.
+ * Copyright (c) 2015, Redis Ltd.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -91,6 +91,7 @@ typedef struct {
 
 #define CIRCULAR_TYPE 1
 #define RECTANGLE_TYPE 2
+#define POLYGON_TYPE 3
 typedef struct {
     int type;          /* search type */
     double xy[2];      /* search center point, xy[0]: lon, xy[1]: lat */
@@ -105,6 +106,10 @@ typedef struct {
             double height;
             double width;
         } r;
+        struct {
+            int num_vertices;
+            double (*points)[2];
+        } polygon;
     } t;
 } GeoShape;
 

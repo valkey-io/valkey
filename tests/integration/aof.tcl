@@ -4,11 +4,13 @@ set server_path [tmpdir server.aof]
 set aof_dirname "appendonlydir"
 set aof_basename "appendonly.aof"
 set aof_dirpath "$server_path/$aof_dirname"
-set aof_base_file "$server_path/$aof_dirname/${aof_basename}.1$::base_aof_sufix$::aof_format_suffix"
-set aof_file "$server_path/$aof_dirname/${aof_basename}.1$::incr_aof_sufix$::aof_format_suffix"
+set aof_base_file "$server_path/$aof_dirname/${aof_basename}.1$::base_aof_suffix$::aof_format_suffix"
+set aof_file "$server_path/$aof_dirname/${aof_basename}.1$::incr_aof_suffix$::aof_format_suffix"
 set aof_manifest_file "$server_path/$aof_dirname/$aof_basename$::manifest_suffix"
 
-tags {"aof external:skip"} {
+tags {"aof external:skip logreqres:skip"} {
+    set db [expr {$::singledb ? 0 : 9}]
+
     # Server can start when aof-load-truncated is set to yes and AOF
     # is truncated, with an incomplete MULTI block.
     create_aof $aof_dirpath $aof_file {
@@ -259,7 +261,7 @@ tags {"aof external:skip"} {
 
     start_server_aof_ex [list dir $server_path aof-load-truncated yes] [list wait_ready false] {
         test "Unknown command: Server should have logged an error" {
-            wait_for_log_messages 0 {"*Unknown command 'bla' reading the append only file*"} 0 10 1000
+            wait_for_log_messages 0 {"*unknown command 'bla'*"} 0 10 1000
         }
     }
 
@@ -435,7 +437,7 @@ tags {"aof external:skip"} {
             # generate a long running script that is propagated to the AOF as script
             # make sure that the script times out during loading
             create_aof $aof_dirpath $aof_file {
-                append_to_aof [formatCommand select 9]
+                append_to_aof [formatCommand select $db]
                 append_to_aof [formatCommand eval {redis.call('set',KEYS[1],'y'); for i=1,1500000 do redis.call('ping') end return 'ok'} 1 x]
             }
             set rd [valkey_deferring_client]
@@ -459,7 +461,7 @@ tags {"aof external:skip"} {
             append_to_manifest "file appendonly.aof.1.incr.aof seq 1 type i\n"
         }
         create_aof $aof_dirpath $aof_file {
-            append_to_aof [formatCommand select 9]
+            append_to_aof [formatCommand select $db]
             append_to_aof [formatCommand eval {redis.call("set",KEYS[1],"100")} 1 foo]
             append_to_aof [formatCommand eval {redis.call("incr",KEYS[1])} 1 foo]
             append_to_aof [formatCommand eval {redis.call("incr",KEYS[1])} 1 foo]
@@ -654,5 +656,80 @@ tags {"aof external:skip"} {
                 {flushall}
             }
         }
+    }
+
+    start_server {} {
+        # This test is just a coverage test, it does not check anything.
+        test {Turning appendonly on and off within a transaction} {
+            r config set appendonly no
+            r multi
+            r config set appendonly yes
+            r config set appendonly no
+            r exec
+
+            r config set appendonly yes
+            r multi
+            r config set appendonly no
+            r config set appendonly yes
+            r exec
+        }
+    }
+}
+
+tags {"aof cluster external:skip singledb"} {
+    test {Test cluster slots / cluster shards in aof won't crash} {
+        create_aof $aof_dirpath $aof_file {
+            append_to_aof [formatCommand cluster slots]
+            append_to_aof [formatCommand cluster shards]
+        }
+
+        create_aof_manifest $aof_dirpath $aof_manifest_file {
+            append_to_manifest "file appendonly.aof.1.incr.aof seq 1 type i\n"
+        }
+
+        start_server_aof [list dir $server_path cluster-enabled yes] {
+            assert_equal [r ping] {PONG}
+        }
+    }
+
+    test {Test command check in aof won't crash} {
+        # cluster, wrong number of arguments for 'cluster' command
+        create_aof $aof_dirpath $aof_file { append_to_aof [formatCommand cluster] }
+        create_aof_manifest $aof_dirpath $aof_manifest_file { append_to_manifest "file appendonly.aof.1.incr.aof seq 1 type i\n" }
+        start_server_aof_ex [list dir $server_path] [list wait_ready false] {
+            wait_for_condition 100 50 {
+                ! [is_alive [srv pid]]
+            } else {
+                fail "AOF loading didn't fail"
+            }
+            assert_equal 1 [count_message_lines $server_path/stdout "wrong number of arguments for 'cluster' command"]
+        }
+        clean_aof_persistence $aof_dirpath
+
+        # cluster slots-xxx, unknown subcommand 'slots-xxx'
+        create_aof $aof_dirpath $aof_file { append_to_aof [formatCommand cluster slots-xxx] }
+        create_aof_manifest $aof_dirpath $aof_manifest_file { append_to_manifest "file appendonly.aof.1.incr.aof seq 1 type i\n" }
+        start_server_aof_ex [list dir $server_path] [list wait_ready false] {
+            wait_for_condition 100 50 {
+                ! [is_alive [srv pid]]
+            } else {
+                fail "AOF loading didn't fail"
+            }
+            assert_equal 1 [count_message_lines $server_path/stdout "unknown subcommand 'slots-xxx'"]
+        }
+        clean_aof_persistence $aof_dirpath
+
+        # cluster slots xxx, wrong number of arguments for 'cluster|slots' command
+        create_aof $aof_dirpath $aof_file { append_to_aof [formatCommand cluster slots xxx] }
+        create_aof_manifest $aof_dirpath $aof_manifest_file { append_to_manifest "file appendonly.aof.1.incr.aof seq 1 type i\n" }
+        start_server_aof_ex [list dir $server_path] [list wait_ready false] {
+            wait_for_condition 100 50 {
+                ![is_alive [srv pid]]
+            } else {
+                fail "AOF loading didn't fail"
+            }
+            assert_equal 1 [count_message_lines $server_path/stdout "wrong number of arguments for 'cluster|slots' command"]
+        }
+        clean_aof_persistence $aof_dirpath
     }
 }

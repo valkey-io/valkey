@@ -1,0 +1,29 @@
+{
+    "CAPA": {
+        "summary": "A client claims its capability.",
+        "complexity": "O(1)",
+        "group": "connection",
+        "since": "8.0.0",
+        "arity": -3,
+        "container": "CLIENT",
+        "function": "clientCapaCommand",
+        "command_flags": [
+            "NOSCRIPT",
+            "LOADING",
+            "STALE"
+        ],
+        "acl_categories": [
+            "CONNECTION"
+        ],
+        "reply_schema": {
+            "const": "OK"
+        },
+        "arguments": [
+            {
+                "multiple": "true",
+                "name": "capability",
+                "type": "string"
+            }
+        ]
+    }
+}

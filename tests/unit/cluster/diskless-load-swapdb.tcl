@@ -78,6 +78,11 @@ test "Main db not affected when fail to diskless load" {
         fail "Fail to stop the full sync"
     }
 
+    # Since we paused the primary node earlier, the replica may enter
+    # cluster down due to primary node pfail. Here set allow read to
+    # prevent subsequent read errors.
+    $replica config set cluster-allow-reads-when-down yes
+
     # Replica keys and keys to slots map still both are right
     assert_equal {1} [$replica get $slot0_key]
     assert_equal $slot0_key [$replica CLUSTER GETKEYSINSLOT 0 1]

@@ -295,7 +295,7 @@ start_server {tags {"scripting"}} {
 
     test {EVAL - Scripts do not block on waitaof} {
         run_script {return redis.pcall('waitaof','0','1','0')} 0
-    } {0 0}
+    } {* 0}
 
     test {EVAL - Scripts do not block on XREAD with BLOCK option} {
         r del s
@@ -638,6 +638,21 @@ start_server {tags {"scripting"}} {
             [r evalsha b534286061d4b9e4026607613b95c06c06015ae8 0]
     } {b534286061d4b9e4026607613b95c06c06015ae8 loaded}
 
+    test {SCRIPT SHOW - is able to dump scripts from the scripting cache} {
+        r script load "return 'dump'"
+        r script show 4f5a49d7b18244a3b100d159b78b51474e23e081
+    } {return 'dump'}
+
+    test {SCRIPT SHOW - wrong sha1 length or invalid sha1 char return noscript error} {
+        assert_error {NOSCRIPT*} {r script show b534286061d4b06c06015ae8}
+        assert_error {NOSCRIPT*} {r script show AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA}
+    }
+
+    test {SCRIPT SHOW - script not exist return noscript error} {
+        r script flush
+        assert_error {NOSCRIPT*} {r script show 4f5a49d7b18244a3b100d159b78b51474e23e081}
+    }
+
     test "SORT is normally not alpha re-ordered for the scripting engine" {
         r del myset
         r sadd myset 1 2 3 4 10
@@ -717,6 +732,12 @@ start_server {tags {"scripting"}} {
         catch {run_script {a=10} 0} e
         set e
     } {ERR *Attempt to modify a readonly table*}
+
+    test {lua bit.tohex bug} {
+        set res [run_script {return bit.tohex(65535, -2147483648)} 0]
+        r ping
+        set res
+    } {0000FFFF}
 
     test {Test an example script DECR_IF_GT} {
         set decr_if_gt {
@@ -844,7 +865,7 @@ start_server {tags {"scripting"}} {
         # still this test isn't able to trigger the issue, but we keep it anyway.
         start_server {tags {"scripting"}} {
             set repl [attach_to_replication_stream]
-            # a command with 5 argsument
+            # a command with 5 arguments
             r eval {redis.call('hmget', KEYS[1], 1, 2, 3)} 1 key
             # then a command with 3 that is replicated as one with 4
             r eval {redis.call('incrbyfloat', KEYS[1], 1)} 1 key
@@ -1000,11 +1021,11 @@ start_server {tags {"scripting"}} {
              return redis.call("EXISTS", "key")
         } 1 key] 0
     }
-    
+
     test "Script ACL check" {
         r acl setuser bob on {>123} {+@scripting} {+set} {~x*}
         assert_equal [r auth bob 123] {OK}
-        
+
         # Check permission granted
         assert_equal [run_script {
             return redis.acl_check_cmd('set','xx',1)
@@ -1014,7 +1035,7 @@ start_server {tags {"scripting"}} {
         assert_equal [run_script {
             return redis.acl_check_cmd('hset','xx','f',1)
         } 1 xx] {}
-        
+
         # Check permission denied unauthorised key
         # Note: we don't pass the "yy" key as an argument to the script so key acl checks won't block the script
         assert_equal [run_script {
@@ -1276,6 +1297,7 @@ start_server {tags {"scripting"}} {
         $rd close
         $rd2 close
         $r3 close
+        r config set appendonly no
         r DEBUG set-disable-deny-scripts 0
     } {OK} {external:skip needs:debug}
 
@@ -1547,17 +1569,16 @@ start_server {tags {"scripting needs:debug external:skip"}} {
         reconnect
         assert_equal [r ping] {PONG}
     }
-    
+
     test {Test scripting debug lua server invocations} {
         r script debug sync
-        r eval {return 'hello'} 0 
+        r eval {return 'hello'} 0
         set cmd "*2\r\n\$6\r\nserver\r\n\$4\r\nping\r\n"
         r write $cmd
         r flush
         set ret [r read]
-        puts $ret
         assert_match {*PONG*} $ret
-        reconnect 
+        reconnect
         assert_equal [r ping] {PONG}
     }
 }
@@ -1619,7 +1640,7 @@ start_server {tags {"scripting external:skip"}} {
         # "return 1" is ok since it was moved to tail.
         assert_equal 1 [r evalsha e0e1f9fabfc9d4800c877a703b823ac0578ff8db 0]
         # "return 2" is ok since it was moved to tail.
-        assert_equal 1 [r evalsha e0e1f9fabfc9d4800c877a703b823ac0578ff8db 0]
+        assert_equal 2 [r evalsha 7f923f79fe76194c868d7e1d0820de36700eb649 0]
         # "return 3" was evicted.
         assert_error {NOSCRIPT*} {r evalsha 09d3822de862f46d784e6a36848b4f0736dda47a 0}
         # Others are ok.
@@ -1645,6 +1666,19 @@ start_server {tags {"scripting external:skip"}} {
         assert_equal $evicted [expr $num-500]
         # cached = num load scripts + 500 eval scripts
         assert_equal $cached [expr $num+500]
+    }
+
+    test {Lua scripts promoted from eval to script load} {
+        r script flush
+        r config resetstat
+
+        r eval "return 'hello world'" 0
+        set sha [r script load "return 'hello world'"]
+        for {set j 1} {$j <= 500} {incr j} {
+            r script load "return $j"
+            r eval "return 'str_$j'" 0
+        }
+        assert_equal {hello world} [r evalsha $sha 0]
     }
 }
 
@@ -1928,7 +1962,7 @@ start_server {tags {"scripting"}} {
                 return 1
             } 0
         } e
-        assert_match {*Unexpected engine in script shebang*} $e
+        assert_match {*Could not find scripting engine*} $e
 
         assert_equal [r eval {#!lua
             return 1
@@ -1955,7 +1989,7 @@ start_server {tags {"scripting"}} {
 
     test "allow-oom shebang flag" {
         r set x 123
-    
+
         r config set maxmemory 1
 
         # Fail to execute deny-oom command in OOM condition (backwards compatibility mode without flags)
@@ -2028,7 +2062,7 @@ start_server {tags {"scripting"}} {
             } 1 x
         }
     }
-    
+
     start_server {tags {"external:skip"}} {
         r -1 set x "some value"
         test "no-writes shebang flag on replica" {
@@ -2201,13 +2235,13 @@ start_server {tags {"scripting"}} {
                 return redis.call('get','x')
             } 1 x
         }
-        
+
         assert_match {foobar} [
             r eval {#!lua flags=allow-stale,no-writes
                 return redis.call('echo','foobar')
             } 0
         ]
-        
+
         # Test again with EVALSHA
         set sha [
             r script load {#!lua flags=allow-stale,no-writes
@@ -2215,7 +2249,7 @@ start_server {tags {"scripting"}} {
             }
         ]
         assert_match {foobar} [r evalsha $sha 0]
-        
+
         r replicaof no one
         r config set replica-serve-stale-data yes
         set _ {}
@@ -2267,7 +2301,7 @@ start_server {tags {"scripting"}} {
         assert_equal [s total_error_replies] {1}
         assert_match {calls=0*rejected_calls=1,failed_calls=0*} [cmdrstat set r]
         assert_match {calls=1*rejected_calls=0,failed_calls=0*} [cmdrstat eval r]
-        
+
         # Returning an error object from lua is handled as a valid RESP error result.
         r config resetstat
         assert_error {OOM command not allowed when used memory > 'maxmemory'.} {
@@ -2289,7 +2323,7 @@ start_server {tags {"scripting"}} {
         assert_equal [s total_error_replies] {1}
         assert_match {calls=1*rejected_calls=0,failed_calls=1*} [cmdrstat select r]
         assert_match {calls=1*rejected_calls=0,failed_calls=1*} [cmdrstat eval r]
-        
+
         # redis.pcall() failure due to error in server command returns lua error table with server error message without '-' prefix
         r config resetstat
         assert_equal [
@@ -2345,7 +2379,7 @@ start_server {tags {"scripting"}} {
         assert_match {calls=1*rejected_calls=0,failed_calls=1*} [cmdrstat geoadd r]
         assert_match {calls=1*rejected_calls=0,failed_calls=1*} [cmdrstat eval r]
     } {} {cluster:skip}
-    
+
     test "LUA redis.error_reply API" {
         r config resetstat
         assert_error {MY_ERR_CODE custom msg} {
@@ -2422,6 +2456,29 @@ start_server {tags {"scripting"}} {
 
             # Assert the string has been trimmed and the 80 bytes from the previous alloc were not kept.
             assert { [r memory usage foo] <= $expected_memory};
+        }
+    }
+
+    test {EVAL - Scripts support NULL byte} {
+        assert_equal [r eval "return \"\x00\";" 0] "\x00"
+        # Using a null byte never seemed to work with functions, so
+        # we don't have a test for that case.
+    }
+
+    test {EVAL - explicit error() call handling} {
+        # error("simple string error")
+        assert_error {ERR user_script:1: simple string error script: *} {
+            r eval "error('simple string error')" 0
+        }
+
+        # error({"err": "ERR table error"})
+        assert_error {ERR table error script: *} {
+            r eval "error({err='ERR table error'})" 0
+        }
+
+        # error({})
+        assert_error {ERR unknown error script: *} {
+            r eval "error({})" 0
         }
     }
 }

@@ -45,8 +45,61 @@ start_server {tags {"auth external:skip"} overrides {requirepass foobar}} {
         assert_match {*unauthenticated bulk length*} $e
         $rr close
     }
+
+    test {For unauthenticated clients output buffer is limited} {
+        set rr [valkey [srv "host"] [srv "port"] 1 $::tls]
+        
+        # make sure the client is no longer authenticated
+        $rr SET x 5
+        catch {[$rr read]} e
+        assert_match {*NOAUTH Authentication required*} $e
+
+        # Force clients to use the reply list in order 
+        # to make them have a larger than 1K output buffer on any reply
+        assert_match "OK" [r debug client-enforce-reply-list 1]
+        
+        # Fill the output buffer without reading it and make
+        # sure the client disconnected.
+        $rr SET x 5
+        catch {[$rr read]} e
+        assert_match {I/O error reading reply} $e  
+
+        # Reset the debug
+        assert_match "OK" [r debug client-enforce-reply-list 0]
+    }  
+
+    test {For once authenticated clients output buffer is NOT limited} {
+        set rr [valkey [srv "host"] [srv "port"] 1 $::tls]
+
+        # first time authenticate client
+        $rr auth foobar
+        assert_equal {OK} [$rr read]
+
+        # now reset the client so it is not authenticated
+        $rr reset
+        assert_equal {RESET} [$rr read]
+
+        # make sure the client is no longer authenticated
+        $rr SET x 5
+        catch {[$rr read]} e
+        assert_match {*NOAUTH Authentication required*} $e
+
+        # Force clients to use the reply list in order 
+        # to make them have a larger than 1K output buffer on any reply
+        assert_match "OK" [r debug client-enforce-reply-list 1]
+        
+        # Fill the output buffer without reading it and make
+        # sure the client was NOT disconnected.
+        $rr SET x 5
+        catch {[$rr read]} e
+        assert_match {*NOAUTH Authentication required*} $e
+
+        # Reset the debug
+        assert_match "OK" [r debug client-enforce-reply-list 0]
+    }  
 }
 
+foreach dualchannel {yes no} {
 start_server {tags {"auth_binary_password external:skip"}} {
     test {AUTH fails when binary password is wrong} {
         r config set requirepass "abc\x00def"
@@ -65,16 +118,17 @@ start_server {tags {"auth_binary_password external:skip"}} {
         set master_port [srv -1 port]
         set slave [srv 0 client]
 
-        test {primaryauth test with binary password} {
+        test "primaryauth test with binary password dualchannel = $dualchannel" {
             $master config set requirepass "abc\x00def"
-
+            $master config set dual-channel-replication-enabled $dualchannel
             # Configure the replica with primaryauth
             set loglines [count_log_lines 0]
             $slave config set primaryauth "abc"
+            $slave config set dual-channel-replication-enabled $dualchannel
             $slave slaveof $master_host $master_port
 
             # Verify replica is not able to sync with master
-            wait_for_log_messages 0 {"*Unable to AUTH to MASTER*"} $loglines 1000 10
+            wait_for_log_messages 0 {"*Unable to AUTH to PRIMARY*"} $loglines 1000 10
             assert_equal {down} [s 0 master_link_status]
             
             # Test replica with the correct primaryauth
@@ -86,4 +140,5 @@ start_server {tags {"auth_binary_password external:skip"}} {
             }
         }
     }
+}
 }

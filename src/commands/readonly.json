@@ -1,6 +1,6 @@
 {
     "READONLY": {
-        "summary": "Enables read-only queries for a connection to a Cluster replica node.",
+        "summary": "Enables read-only queries for a connection to a Valkey replica node.",
         "complexity": "O(1)",
         "group": "cluster",
         "since": "3.0.0",

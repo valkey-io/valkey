@@ -1,12 +1,17 @@
 {
     "IS-MASTER-DOWN-BY-ADDR": {
-        "summary": "Determines whether a master instance is down.",
+        "summary": "Determines whether a primary instance is down.",
         "complexity": "O(1)",
         "group": "sentinel",
         "since": "2.8.4",
         "arity": 6,
         "container": "SENTINEL",
         "function": "sentinelCommand",
+        "deprecated_since": "8.0.0",
+        "replaced_by": "`SENTINEL IS-PRIMARY-DOWN-BY-ADDR`",
+        "doc_flags": [
+            "DEPRECATED"
+        ],
         "command_flags": [
             "ADMIN",
             "SENTINEL",
@@ -21,11 +26,11 @@
                     "oneOf": [
                         {
                             "const": 0,
-                            "description": "Master is up."
+                            "description": "Primary is up."
                         },
                         {
                             "const": 1,
-                            "description": "Master is down."
+                            "description": "Primary is down."
                         }
                     ]
                 },

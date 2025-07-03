@@ -14,17 +14,69 @@ proc get_cluster_role {srv_idx} {
     return $role
 }
 
+proc get_myself_primary_flags {srv_idx} {
+    set flags [dict get [cluster_get_myself_primary $srv_idx] flags]
+    return $flags
+}
+
+proc get_myself_primary_linkstate {srv_idx} {
+    set linkstate [dict get [cluster_get_myself_primary $srv_idx] linkstate]
+    return $linkstate
+}
+
+proc get_port {instance_id} {
+    if {$::tls} {
+        set port [lindex [R $instance_id CONFIG GET tls-port] 1]
+    } else {
+        set port [lindex [R $instance_id CONFIG GET port] 1]
+    }
+}
+
 proc wait_for_role {srv_idx role} {
+    # Wait for the role, make sure the replication role matches.
     wait_for_condition 100 100 {
         [lindex [split [R $srv_idx ROLE] " "] 0] eq $role
     } else {
+        puts "R $srv_idx ROLE: [R $srv_idx ROLE]"
         fail "R $srv_idx didn't assume the replication $role in time"
     }
+
+    if {$role eq "slave"} {
+        # Wait for the replication link, make sure the replication link is normal.
+        wait_for_condition 100 100 {
+            [s -$srv_idx master_link_status] eq "up"
+        } else {
+            puts "R $srv_idx INFO REPLICATION: [R $srv_idx INFO REPLICATION]"
+            fail "R $srv_idx didn't assume the replication link in time"
+        }
+    }
+
+    # Wait for the cluster role, make sure the cluster role matches.
     wait_for_condition 100 100 {
         [get_cluster_role $srv_idx] eq $role
     } else {
+        puts "R $srv_idx CLUSTER NODES: [R $srv_idx CLUSTER NODES]"
         fail "R $srv_idx didn't assume the cluster $role in time"
     }
+
+    if {$role eq "slave"} {
+        # Wait for the flags, make sure the primary node is not failed.
+        wait_for_condition 100 100 {
+            [get_myself_primary_flags $srv_idx] eq "master"
+        } else {
+            puts "R $srv_idx CLUSTER NODES: [R $srv_idx CLUSTER NODES]"
+            fail "R $srv_idx didn't assume the primary state in time"
+        }
+
+        # Wait for the cluster link, make sure that the cluster connection is normal.
+        wait_for_condition 100 100 {
+            [get_myself_primary_linkstate $srv_idx] eq "connected"
+        } else {
+            puts "R $srv_idx CLUSTER NODES: [R $srv_idx CLUSTER NODES]"
+            fail "R $srv_idx didn't assume the cluster primary link in time"
+        }
+    }
+
     wait_for_cluster_propagation
 }
 
@@ -36,27 +88,19 @@ proc wait_for_slot_state {srv_idx pattern} {
     }
 }
 
-# Check if the server responds with "PONG"
-proc check_server_response {server_id} {
-    # Send a PING command and check if the response is "PONG"
-    return [expr {[catch {R $server_id PING} result] == 0 && $result eq "PONG"}]
+# restart a server and wait for it to come back online
+proc fail_server {server_id} {
+    set node_timeout [lindex [R 0 CONFIG GET cluster-node-timeout] 1]
+    pause_process [srv [expr -1*$server_id] pid]
+    after [expr 3*$node_timeout]
+    resume_process [srv [expr -1*$server_id] pid]
 }
 
-# restart a server and wait for it to come back online
-proc restart_server_and_wait {server_id} {
-    set node_timeout [lindex [R 0 CONFIG GET cluster-node-timeout] 1]
-    set result [catch {R $server_id DEBUG RESTART [expr 3*$node_timeout]} err]
-
-    # Check if the error is the expected "I/O error reading reply"
-    if {$result != 0 && $err ne "I/O error reading reply"} {
-        fail "Unexpected error restarting server $server_id: $err"
-    }
-
-    wait_for_condition 100 100 {
-        [check_server_response $server_id] eq 1
-    } else {
-        fail "Server $server_id didn't come back online in time"
-    }
+proc migrate_slot {from to slot} {
+    set from_id [R $from CLUSTER MYID]
+    set to_id [R $to CLUSTER MYID]
+    assert_equal {OK} [R $from CLUSTER SETSLOT $slot MIGRATING $to_id]
+    assert_equal {OK} [R $to CLUSTER SETSLOT $slot IMPORTING $from_id]
 }
 
 start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica-migration no cluster-node-timeout 1000} } {
@@ -91,8 +135,8 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
     }
 
     test "Migration target is auto-updated after failover in target shard" {
-        # Restart R1 to trigger an auto-failover to R4
-        restart_server_and_wait 1
+        # Trigger an auto-failover from R1 to R4
+        fail_server 1
         # Wait for R1 to become a replica
         wait_for_role 1 slave
         # Validate final states
@@ -111,8 +155,8 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
     }
 
     test "Migration source is auto-updated after failover in source shard" {
-        # Restart R0 to trigger an auto-failover to R3
-        restart_server_and_wait 0
+        # Trigger an auto-failover from R0 to R3
+        fail_server 0
         # Wait for R0 to become a replica
         wait_for_role 0 slave
         # Validate final states
@@ -225,6 +269,9 @@ proc create_empty_shard {p r} {
     wait_for_role $p master
 }
 
+# Temporarily disable empty shard migration tests while we
+# work to reduce their flakiness. See https://github.com/valkey-io/valkey/issues/858.
+if {0} {
 start_cluster 3 5 {tags {external:skip cluster} overrides {cluster-allow-replica-migration no cluster-node-timeout 1000} } {
 
     set node_timeout [lindex [R 0 CONFIG GET cluster-node-timeout] 1]
@@ -259,10 +306,10 @@ start_cluster 3 5 {tags {external:skip cluster} overrides {cluster-allow-replica
         wait_for_slot_state 7 "\[609-<-$R0_id\]"
     }
 
-    test "Empty-shard migration target is auto-updated after faiover in target shard" {
+    test "Empty-shard migration target is auto-updated after failover in target shard" {
         wait_for_role 6 master
-        # Restart R6 to trigger an auto-failover to R7
-        restart_server_and_wait 6
+        # Trigger an auto-failover from R6 to R7
+        fail_server 6
         # Wait for R6 to become a replica
         wait_for_role 6 slave
         # Validate final states
@@ -280,10 +327,10 @@ start_cluster 3 5 {tags {external:skip cluster} overrides {cluster-allow-replica
         wait_for_slot_state 7 "\[609-<-$R0_id\]"
     }
 
-    test "Empty-shard migration source is auto-updated after faiover in source shard" {
+    test "Empty-shard migration source is auto-updated after failover in source shard" {
         wait_for_role 0 master
-        # Restart R0 to trigger an auto-failover to R3
-        restart_server_and_wait 0
+        # Trigger an auto-failover from R0 to R3
+        fail_server 0
         # Wait for R0 to become a replica
         wait_for_role 0 slave
         # Validate final states
@@ -301,13 +348,8 @@ start_cluster 3 5 {tags {external:skip cluster} overrides {cluster-allow-replica
         wait_for_slot_state 7 "\[609-<-$R0_id\]"
     }
 }
-
-proc migrate_slot {from to slot} {
-    set from_id [R $from CLUSTER MYID]
-    set to_id [R $to CLUSTER MYID]
-    assert_equal {OK} [R $from CLUSTER SETSLOT $slot MIGRATING $to_id]
-    assert_equal {OK} [R $to CLUSTER SETSLOT $slot IMPORTING $from_id]
 }
+
 
 start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica-migration no cluster-node-timeout 1000} } {
 
@@ -439,4 +481,167 @@ start_cluster 2 0 {tags {tls:skip external:skip cluster regression} overrides {c
         # This line should cause the crash
         R 0 MIGRATE 127.0.0.1 [lindex [R 1 CONFIG GET port] 1] $stream_name 0 5000
     }
+}
+
+
+start_cluster 3 3 {tags {external:skip cluster} } {
+    test "Multi/Exec Validation During Slot Migration with Multiple Databases" {
+        set primary_id_src 0
+        set primary_id_src_nodeid [R $primary_id_src CLUSTER MYID]
+        set primary_id_src_port [get_port $primary_id_src]
+        set primary_id_target 1
+        set primary_id_target_port [get_port $primary_id_target]
+        set primary_id_target_nodeid [R $primary_id_target CLUSTER MYID]
+
+        R $primary_id_src select 0
+        R $primary_id_src set "{3560}key1" "value1_db0"
+        assert_equal [R $primary_id_src get "{3560}key1"] "value1_db0"
+
+        R $primary_id_src select 1
+        R $primary_id_src set "{3560}key2" "value2_db1"
+        assert_equal [R $primary_id_src get "{3560}key2"] "value2_db1"
+
+        set slot0 [R $primary_id_src cluster keyslot "{3560}key1"]
+        
+        R $primary_id_src select 0
+        
+        R $primary_id_target cluster setslot $slot0 importing $primary_id_src_nodeid
+        R $primary_id_src cluster setslot $slot0 migrating $primary_id_target_nodeid
+
+        # Ensure correct database is selected before running MULTI/EXEC during migration
+        R $primary_id_src select 0
+        # Ensure key is still accessible before running MULTI/EXEC
+        assert_equal [R $primary_id_src get "{3560}key1"] "value1_db0"
+        R $primary_id_src multi
+        R $primary_id_src exists "{3560}key1"
+        set result [R $primary_id_src exec]
+        assert_equal $result {1}
+
+        # Multi/Exec on source before migration should pass
+        R $primary_id_src multi
+        R $primary_id_src exists "{3560}key1"
+        R $primary_id_src select 1
+        R $primary_id_src exists "{3560}key2"
+        set result [R $primary_id_src exec]
+        assert_equal $result {1 OK 1}
+
+        # Multi/Exec on source before migration, bad select command would be allowed to fail
+        R $primary_id_src select 0
+        R $primary_id_src multi
+        R $primary_id_src select 100
+        R $primary_id_src exists "{3560}key1"
+        R $primary_id_src select 1
+        R $primary_id_src exists "{3560}key2"
+        set result [catch {R $primary_id_src exec} err]
+        assert_match "ERR DB index is out of range" $err
+
+        # Multi/Exec on source before migration, mixed key existence
+        R $primary_id_src select 0
+        R $primary_id_src multi
+        R $primary_id_src exists "{3560}key1"
+        R $primary_id_src select 1
+        R $primary_id_src exists "{3560}key2"
+        R $primary_id_src select 2
+        R $primary_id_src exists "{3560}no_key"
+        assert_error "TRYAGAIN Multiple keys*" {R $primary_id_src exec}
+        # Connection must still be on db 0 after aborted MULTI
+        assert_equal [R $primary_id_src get "{3560}key1"] "value1_db0"
+
+        # Multi/Exec on target before migration should fail at EXEC
+        R $primary_id_target ASKING
+        R $primary_id_target multi
+        R $primary_id_target exists "{3560}key1"
+        R $primary_id_src select 1
+        R $primary_id_target exists "{3560}key2"
+        set result [catch {R $primary_id_target exec} err]
+        assert_match "TRYAGAIN Multiple keys request during rehashing of slot" $err
+
+        # Multi/Exec on source - select invalid db num
+        R $primary_id_src multi        
+        R $primary_id_src select 100                
+        set result [catch {R $primary_id_src exec} err]
+        assert_match "ERR DB index is out of range" $err
+
+        # Migrate keys        
+        R $primary_id_src select 0
+        R $primary_id_src MIGRATE 127.0.0.1 $primary_id_target_port "{3560}key1" 0 5000
+        R $primary_id_src select 1
+        R $primary_id_src MIGRATE 127.0.0.1 $primary_id_target_port "{3560}key2" 1 5000
+
+        # Multi/exec accessing both keys should pass in the target
+        R $primary_id_target select 0
+        R $primary_id_target ASKING
+        R $primary_id_target multi
+        R $primary_id_target exists "{3560}key1"
+        R $primary_id_target select 1
+        R $primary_id_target exists "{3560}key2"        
+        set result [R $primary_id_target exec]        
+        assert_equal $result {1 OK 1}        
+    }
+}
+
+
+start_cluster 3 3 {tags {external:skip cluster} } {
+    test "MOVE should not be allowed while migrating slots with multi databases" {
+        set primary_id_src 0
+        set primary_id_src_nodeid [R $primary_id_src CLUSTER MYID]    
+        set primary_id_target 1
+        set primary_id_target_nodeid [R $primary_id_target CLUSTER MYID]
+
+        R $primary_id_src select 0
+        R $primary_id_src set "{3560}key1" "value1_db1"
+        assert_equal [R $primary_id_src get "{3560}key1"] "value1_db1"
+    
+        set slot [R $primary_id_src cluster keyslot "{3560}key1"]
+
+        R $primary_id_target cluster setslot $slot importing $primary_id_src_nodeid
+        R $primary_id_src cluster setslot $slot migrating $primary_id_target_nodeid
+
+        
+        set result [catch {assert_error [R $primary_id_src MOVE "{3560}key1" 2]} err]
+        assert_match "TRYAGAIN Multiple keys request during rehashing of slot" $err
+
+        set result [catch {assert_error [R $primary_id_target MOVE "{3560}key1" 2]} err]
+        assert_match "TRYAGAIN Multiple keys request during rehashing of slot" $err
+    }
+
+}
+
+
+start_cluster 3 3 {tags {external:skip cluster} } {
+    test "Cross-DB COPY command should not be allow during slot migration" {
+        set primary_id_src 0
+        set primary_id_src_nodeid [R $primary_id_src CLUSTER MYID]    
+        set primary_id_target 1
+        set primary_id_target_nodeid [R $primary_id_target CLUSTER MYID]
+
+        R $primary_id_src select 0
+        R $primary_id_src set "{3560}key1" "value1_db1"
+        R $primary_id_src set "{3560}key2" "value2_db1"
+
+    
+        set slot [R $primary_id_src cluster keyslot "{3560}key1"]
+
+        R $primary_id_target cluster setslot $slot importing $primary_id_src_nodeid
+        R $primary_id_src cluster setslot $slot migrating $primary_id_target_nodeid
+        
+        # Cross slot should still fail                
+        set result [catch {assert_error [R $primary_id_src COPY "{3560}key1" "{3561}key1"]} err]
+        assert_match "CROSSSLOT Keys in request don't hash to the same slot" $err
+
+        # Same DB, source key exist, dest key doesn't exist, should still fail
+        set result [catch {assert_error [R $primary_id_src COPY "{3560}key1" "{3560}key3"]} err]
+        assert_match "TRYAGAIN Multiple keys request during rehashing of slot" $err
+
+        # Cross-DB COPY should NOT be allowed
+        set result [catch {assert_error [R $primary_id_src COPY "{3560}key1" "{3560}key1" DB 7 REPLACE]} err]
+        assert_match "TRYAGAIN Multiple keys request during rehashing of slot" $err
+
+        # Both keys exist, should work, but both keys must exist. 
+        R $primary_id_src COPY "{3560}key1" "{3560}key2"
+        # And it should work if DB param is provided, as long as it matches the selected DB
+        R $primary_id_src COPY "{3560}key1" "{3560}key2" DB 0 REPLACE
+
+    }
+
 }

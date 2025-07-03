@@ -30,6 +30,8 @@
 #include "server.h"
 #include "script.h"
 #include "cluster.h"
+#include "cluster_slot_stats.h"
+#include "module.h"
 
 scriptFlag scripts_flags_def[] = {
     {.flag = SCRIPT_FLAG_NO_WRITES, .str = "no-writes"},
@@ -132,7 +134,7 @@ int scriptPrepareForRun(scriptRunCtx *run_ctx,
                         uint64_t script_flags,
                         int ro) {
     serverAssert(!curr_run_ctx);
-    int client_allow_oom = !!(caller->flags & CLIENT_ALLOW_OOM);
+    int client_allow_oom = !!(caller->flag.allow_oom);
 
     int running_stale =
         server.primary_host && server.repl_state != REPL_STATE_CONNECTED && server.repl_serve_stale_data == 0;
@@ -224,8 +226,9 @@ int scriptPrepareForRun(scriptRunCtx *run_ctx,
     script_client->resp = 2; /* Default is RESP2, scripts can change it. */
 
     /* If we are in MULTI context, flag Lua client as CLIENT_MULTI. */
-    if (curr_client->flags & CLIENT_MULTI) {
-        script_client->flags |= CLIENT_MULTI;
+    if (curr_client->flag.multi) {
+        script_client->flag.multi = 1;
+        initClientMultiState(script_client);
     }
 
     run_ctx->start_time = getMonotonicUs();
@@ -241,7 +244,7 @@ int scriptPrepareForRun(scriptRunCtx *run_ctx,
     if (client_allow_oom ||
         (!(script_flags & SCRIPT_FLAG_EVAL_COMPAT_MODE) && (script_flags & SCRIPT_FLAG_ALLOW_OOM))) {
         /* Note: we don't need to test the no-writes flag here and set this run_ctx flag,
-         * since only write commands can are deny-oom. */
+         * since only write commands can deny-oom. */
         run_ctx->flags |= SCRIPT_ALLOW_OOM;
     }
 
@@ -260,7 +263,7 @@ void scriptResetRun(scriptRunCtx *run_ctx) {
     serverAssert(curr_run_ctx);
 
     /* After the script done, remove the MULTI state. */
-    run_ctx->c->flags &= ~CLIENT_MULTI;
+    run_ctx->c->flag.multi = 0;
 
     if (scriptIsTimedout()) {
         exitScriptTimedoutMode(run_ctx);
@@ -426,10 +429,10 @@ static int scriptVerifyClusterState(scriptRunCtx *run_ctx, client *c, client *or
      * received from our primary or when loading the AOF back in memory. */
     int error_code;
     /* Duplicate relevant flags in the script client. */
-    c->flags &= ~(CLIENT_READONLY | CLIENT_ASKING);
-    c->flags |= original_c->flags & (CLIENT_READONLY | CLIENT_ASKING);
-    int hashslot = -1;
-    if (getNodeByQuery(c, c->cmd, c->argv, c->argc, &hashslot, &error_code) != getMyClusterNode()) {
+    c->flag.readonly = original_c->flag.readonly;
+    c->flag.asking = original_c->flag.asking;
+    int hashslot = c->slot = clusterSlotByCommand(c->cmd, c->argv, c->argc, &c->read_flags);
+    if (getNodeByQuery(c, &error_code) != getMyClusterNode()) {
         if (error_code == CLUSTER_REDIR_DOWN_RO_STATE) {
             *err = sdsnew("Script attempted to execute a write command while the "
                           "cluster is down and readonly");
@@ -471,7 +474,6 @@ static int scriptVerifyClusterState(scriptRunCtx *run_ctx, client *c, client *or
         }
     }
 
-    c->slot = hashslot;
     original_c->slot = hashslot;
 
     return C_OK;
@@ -545,7 +547,7 @@ void scriptCall(scriptRunCtx *run_ctx, sds *err) {
 
     /* There are commands that are not allowed inside scripts. */
     if (!server.script_disable_deny_script && (cmd->flags & CMD_NOSCRIPT)) {
-        *err = sdsnew("This Redis command is not allowed from script");
+        *err = sdscatprintf(sdsempty(), "This %s command is not allowed from script", server.extended_redis_compat ? "Redis" : "Valkey");
         goto error;
     }
 
@@ -582,7 +584,8 @@ void scriptCall(scriptRunCtx *run_ctx, sds *err) {
         call_flags |= CMD_CALL_PROPAGATE_REPL;
     }
     call(c, call_flags);
-    serverAssert((c->flags & CLIENT_BLOCKED) == 0);
+    serverAssert(c->flag.blocked == 0);
+    clusterSlotStatsInvalidateSlotIfApplicable(run_ctx);
     return;
 
 error:

@@ -1,0 +1,110 @@
+name: DB compatibility testing
+
+on: [push, pull_request]
+
+permissions:
+  contents: read
+
+jobs:
+  valkey:
+    name: Valkey ${{ matrix.valkey-version }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - valkey-version: '8.1.0'
+          - valkey-version: '8.0.2'
+          - valkey-version: '7.2.8'
+    steps:
+      - name: Prepare
+        uses: awalsh128/cache-apt-pkgs-action@7ca5f46d061ad9aa95863cd9b214dd48edef361d # v1.5.0
+        with:
+          packages: libevent-dev
+          version: 1.0
+      - name: Install Valkey for non-cluster tests
+        run: |
+          git clone --depth 1 --branch ${{ matrix.valkey-version }} https://github.com/valkey-io/valkey.git
+          cd valkey && BUILD_TLS=yes make install
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Create build folder
+        run: cmake -E make_directory build
+      - name: Generate makefiles
+        shell: bash
+        working-directory: build
+        run: cmake $GITHUB_WORKSPACE -DCMAKE_BUILD_TYPE=Release -DENABLE_IPV6_TESTS=ON -DTEST_WITH_VALKEY_VERSION=${{ matrix.valkey-version }} ..
+      - name: Build
+        shell: bash
+        working-directory: build
+        run: VERBOSE=1 make
+      - name: Setup clusters
+        shell: bash
+        working-directory: build
+        run: make start
+      - name: Wait for clusters to start..
+        uses: kibertoad/wait-action@99f6f101c5be7b88bb9b41c0d3b810722491b8e5 # 1.0.1
+        with:
+          time: '40s'
+      - name: Run tests
+        shell: bash
+        working-directory: build
+        run: make test
+      - name: Teardown clusters
+        working-directory: build
+        shell: bash
+        run: make stop
+
+  redis-comp:
+    name: Redis ${{ matrix.redis-version }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - redis-version: '7.2.4'
+          - redis-version: '7.0.15'
+          - redis-version: '6.2.14'
+    steps:
+      - name: Prepare
+        uses: awalsh128/cache-apt-pkgs-action@7ca5f46d061ad9aa95863cd9b214dd48edef361d # v1.5.0
+        with:
+          packages: libevent-dev
+          version: 1.0
+      - name: Install Redis for non-cluster tests
+        run: |
+          git clone --depth 1 --branch ${{ matrix.redis-version }} https://github.com/redis/redis.git
+          cd redis && BUILD_TLS=yes make install
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Create build folder
+        run: cmake -E make_directory build
+
+      - name: Generate makefiles
+        shell: bash
+        working-directory: build
+        run: cmake $GITHUB_WORKSPACE -DCMAKE_BUILD_TYPE=Release -DENABLE_IPV6_TESTS=ON -DTEST_WITH_REDIS_VERSION=${{ matrix.redis-version }} ..
+
+      - name: Build
+        shell: bash
+        working-directory: build
+        run: VERBOSE=1 make
+
+      - name: Setup clusters
+        shell: bash
+        working-directory: build
+        run: make start
+
+      - name: Wait for clusters to start..
+        uses: kibertoad/wait-action@99f6f101c5be7b88bb9b41c0d3b810722491b8e5 # 1.0.1
+        with:
+          time: '40s'
+
+      - name: Run tests
+        shell: bash
+        working-directory: build
+        run: make test
+
+      - name: Teardown clusters
+        working-directory: build
+        shell: bash
+        run: make stop

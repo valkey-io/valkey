@@ -59,6 +59,31 @@ start_server {tags {"string"}} {
         } {10000}
     }
 
+    test {memoryusage of string} {
+        # Simple test
+        set key "key"
+        set value "value"
+        r set $key $value
+        assert_lessthan_equal [expr [string length $key] + [string length $value]] [r memory usage key]
+
+        # Big value
+        set key "key"
+        set value [string repeat A 100000]
+        r set $key $value
+        assert_lessthan_equal [expr [string length $key] + [string length $value]] [r memory usage key]
+
+        # Big key
+        set key [string repeat A 100000]
+        set value "value"
+        r set $key $value
+        assert_lessthan_equal [expr [string length $key] + [string length $value]] [r memory usage key]
+
+        # Big key for int
+        set key [string repeat B 100000]
+        r incr $key
+        assert_lessthan_equal [string length $key] [r memory usage $key]
+    }
+
     test "SETNX target key missing" {
         r del novar
         assert_equal 1 [r setnx novar foobared]
@@ -582,6 +607,56 @@ if {[string match {*jemalloc*} [s mem_allocator]]} {
       set err1
     } {*WRONGTYPE*}
 
+    test "SET with IFEQ conditional" {
+        r del foo
+
+        r set foo "initial_value"
+
+        assert_equal {OK} [r set foo "new_value" ifeq "initial_value"]
+        assert_equal "new_value" [r get foo]
+
+        assert_equal {} [r set foo "should_not_set" ifeq "wrong_value"]
+        assert_equal "new_value" [r get foo]
+    }
+
+    test "SET with IFEQ conditional - non-string current value" {
+        r del foo
+
+        r sadd foo "some_set_value"
+        assert_error {WRONGTYPE Operation against a key holding the wrong kind of value} {r set foo "new_value" ifeq "some_set_value"}
+    }
+
+
+    test "SET with IFEQ conditional - with get" {
+        r del foo
+
+        assert_equal {} [r set foo "new_value" ifeq "initial_value" get]
+        assert_equal {} [r get foo]
+
+        r set foo "initial_value"
+
+        assert_equal "initial_value" [r set foo "new_value" ifeq "initial_value" get]
+        assert_equal "new_value" [r get foo]
+    }
+
+    test "SET with IFEQ conditional - non string current value with get" {
+        r del foo
+
+        r sadd foo "some_set_value"
+
+        assert_error {WRONGTYPE Operation against a key holding the wrong kind of value} {r set foo "new_value" ifeq "initial_value" get}
+    }
+
+    test "SET with IFEQ conditional - with xx" {
+        r del foo
+        assert_error {ERR syntax error} {r set foo "new_value" ifeq "initial_value" xx}
+    }
+
+    test "SET with IFEQ conditional - with nx" {
+        r del foo
+        assert_error {ERR syntax error} {r set foo "new_value" ifeq "initial_value" nx}
+    }
+
     test {Extended SET EX option} {
         r del foo
         r set foo bar ex 10
@@ -607,6 +682,40 @@ if {[string match {*jemalloc*} [s mem_allocator]]} {
         r set foo bar pxat [expr [clock milliseconds] + 10000]
         assert_range [r ttl foo] 5 10
     }
+
+    test "SET EXAT / PXAT Expiration time is expired" {
+        r debug set-active-expire 0
+        set repl [attach_to_replication_stream]
+
+        # Key exists.
+        r set foo bar
+        r set foo bar exat [expr [clock seconds] - 100]
+        assert_error {ERR no such key} {r debug object foo}
+        r set foo bar
+        r set foo bar pxat [expr [clock milliseconds] - 10000]
+        assert_error {ERR no such key} {r debug object foo}
+
+        # Key does not exist.
+        r del foo
+        r set foo bar exat [expr [clock seconds] - 100]
+        assert_error {ERR no such key} {r debug object foo}
+        r set foo bar pxat [expr [clock milliseconds] - 10000]
+        assert_error {ERR no such key} {r debug object foo}
+
+        r incr foo
+        assert_replication_stream $repl {
+           {select *}
+           {set foo bar}
+           {unlink foo}
+           {set foo bar}
+           {unlink foo}
+           {incr foo}
+        }
+
+        r debug set-active-expire 1
+        close_replication_stream $repl
+    } {} {needs:debug needs:repl}
+
     test {Extended SET using multiple options at once} {
         r set foo val
         assert {[r set foo bar xx px 10000] eq {OK}}
@@ -671,4 +780,64 @@ if {[string match {*jemalloc*} [s mem_allocator]]} {
         assert_encoding "int" bar
         lappend res [r get bar]
     } {12 12}
+
+    test {DELIFEQ non-existing key} {
+        r del foo
+        assert_equal 0 [r delifeq foo "test"]
+    }
+
+    test {DELIFEQ existing key, matching value} {
+        r set foo "test"
+        assert_equal 1 [r delifeq foo "test"]
+    }
+
+    test {DELIFEQ existing key, non-matching value} {
+        r set foo "nope"
+        assert_equal 0 [r delifeq foo "test"]
+    }
+
+    test {DELIFEQ existing key, non-string value} {
+        r del foo
+        r sadd foo "test"
+        assert_error "WRONGTYPE*" {r delifeq foo "test"}
+    }
+
+    test {DELIFEQ propagate as DEL command to replica} {
+        set repl [attach_to_replication_stream]
+        r set foo bar
+        r delifeq foo bar
+        assert_replication_stream $repl {
+            {select *}
+            {set foo bar}
+            {del foo}
+        }
+        close_replication_stream $repl
+    } {} {needs:repl}
+
+if {[string match {*jemalloc*} [s mem_allocator]]} {
+    test {Memory usage of embedded string value} {
+        # Check that we can fit 9 bytes of key + value into a 32 byte
+        # allocation, including the serverObject itself.
+        r set quux xyzzy
+        assert_lessthan_equal [r memory usage quux] 32
+
+        # Check that the SDS overhead of the embedded key and value is 6 bytes
+        # (sds5 + sds8). This is the memory layout:
+        #
+        # +--------------+--------------+---------------+----------------+
+        # | serverObject |              | sds5 key      | sds8 value     |
+        # | header       | key-hdr-size | hdr "quux" \0 | hdr "xyzzy" \0 |
+        # | 16 bytes     | 1            | 1  + 4    + 1 | 3  + 5     + 1 |
+        # +--------------+--------------+---------------+----------------+
+        #
+        set content_size [expr {[string length quux] + [string length xyzzy]}]
+        regexp {robj:(\d+)} [r debug structsize] _ obj_header_size
+        set debug_sdslen [r debug sdslen quux]
+        regexp {key_sds_len:4 key_sds_avail:0 obj_alloc:(\d+)} $debug_sdslen _ obj_alloc
+        regexp {val_sds_len:5 val_sds_avail:(\d+) val_alloc:(\d+)} $debug_sdslen _ avail val_alloc
+        set sds_overhead [expr {$obj_alloc + $val_alloc - $obj_header_size - 1 - $content_size - $avail}]
+        assert_equal 6 $sds_overhead
+    } {} {needs:debug}
+} ; # if jemalloc
+
 }

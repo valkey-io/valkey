@@ -8,7 +8,7 @@
  *
  * In the future we'll either continue implementing new things we need or
  * we'll switch to libeio. However there are probably long term uses for this
- * file as we may want to put here server specific background tasks (for instance
+ * file as we may want to put server specific background tasks here (for instance
  * it is not impossible that we'll need a non blocking FLUSHDB/FLUSHALL
  * implementation).
  *
@@ -31,7 +31,7 @@
  *
  * ----------------------------------------------------------------------------
  *
- * Copyright (c) 2009-2012, Salvatore Sanfilippo <antirez at gmail dot com>
+ * Copyright (c) 2009-2012, Redis Ltd.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without

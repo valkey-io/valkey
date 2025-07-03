@@ -80,6 +80,9 @@ start_server {tags {"modules"}} {
             fail "Can't find 'Killing AOF child' in recent log lines"
         }
 
+        # Verify that AOF is active.
+        assert_equal 1 [s aof_enabled]
+
         # Verify the value in the loaded rdb
         assert_equal v1 [r get k]
 

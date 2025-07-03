@@ -10,6 +10,10 @@
             [
                 "3.2.2",
                 "Added the `SCHEDULE` option."
+            ],
+            [
+                "8.1.0",
+                "Added the `CANCEL` option."
             ]
         ],
         "command_flags": [
@@ -19,11 +23,23 @@
         ],
         "arguments": [
             {
-                "name": "schedule",
-                "token": "SCHEDULE",
-                "type": "pure-token",
+                "name": "operation",
+                "type": "oneof",
                 "optional": true,
-                "since": "3.2.2"
+                "arguments": [
+                    {
+                        "name": "schedule",
+                        "token": "SCHEDULE",
+                        "type": "pure-token",
+                        "since": "3.2.2"
+                    },
+                    {
+                        "name": "cancel",
+                        "token": "CANCEL",
+                        "type": "pure-token",
+                        "since": "8.1.0"
+                    }
+                ]
             }
         ],
         "reply_schema": {
@@ -33,6 +49,12 @@
                 },
                 {
                     "const": "Background saving scheduled"
+                },
+                {
+                    "const": "Background saving cancelled"
+                },
+                {
+                    "const": "Scheduled background saving cancelled"
                 }
             ]
         }

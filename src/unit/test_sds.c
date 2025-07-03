@@ -6,7 +6,7 @@
 #include "../sds.h"
 #include "../sdsalloc.h"
 
-static sds sdsTestTemplateCallback(sds varname, void *arg) {
+static sds sdsTestTemplateCallback(const_sds varname, void *arg) {
     UNUSED(arg);
     static const char *_var1 = "variable1";
     static const char *_var2 = "variable2";
@@ -259,43 +259,44 @@ int test_typesAndAllocSize(int argc, char **argv, int flags) {
 
     sds x = sdsnewlen(NULL, 31);
     TEST_ASSERT_MESSAGE("len 31 type", (x[-1] & SDS_TYPE_MASK) == SDS_TYPE_5);
+    TEST_ASSERT_MESSAGE("len 31 sdsAllocSize", sdsAllocSize(x) == s_malloc_usable_size(sdsAllocPtr(x)));
     sdsfree(x);
 
     x = sdsnewlen(NULL, 32);
     TEST_ASSERT_MESSAGE("len 32 type", (x[-1] & SDS_TYPE_MASK) >= SDS_TYPE_8);
-    TEST_ASSERT_MESSAGE("len 32 sdsAllocSize", sdsAllocSize(x) == s_malloc_size(sdsAllocPtr(x)));
+    TEST_ASSERT_MESSAGE("len 32 sdsAllocSize", sdsAllocSize(x) == s_malloc_usable_size(sdsAllocPtr(x)));
     sdsfree(x);
 
     x = sdsnewlen(NULL, 252);
     TEST_ASSERT_MESSAGE("len 252 type", (x[-1] & SDS_TYPE_MASK) >= SDS_TYPE_8);
-    TEST_ASSERT_MESSAGE("len 252 sdsAllocSize", sdsAllocSize(x) == s_malloc_size(sdsAllocPtr(x)));
+    TEST_ASSERT_MESSAGE("len 252 sdsAllocSize", sdsAllocSize(x) == s_malloc_usable_size(sdsAllocPtr(x)));
     sdsfree(x);
 
     x = sdsnewlen(NULL, 253);
     TEST_ASSERT_MESSAGE("len 253 type", (x[-1] & SDS_TYPE_MASK) == SDS_TYPE_16);
-    TEST_ASSERT_MESSAGE("len 253 sdsAllocSize", sdsAllocSize(x) == s_malloc_size(sdsAllocPtr(x)));
+    TEST_ASSERT_MESSAGE("len 253 sdsAllocSize", sdsAllocSize(x) == s_malloc_usable_size(sdsAllocPtr(x)));
     sdsfree(x);
 
     x = sdsnewlen(NULL, 65530);
     TEST_ASSERT_MESSAGE("len 65530 type", (x[-1] & SDS_TYPE_MASK) >= SDS_TYPE_16);
-    TEST_ASSERT_MESSAGE("len 65530 sdsAllocSize", sdsAllocSize(x) == s_malloc_size(sdsAllocPtr(x)));
+    TEST_ASSERT_MESSAGE("len 65530 sdsAllocSize", sdsAllocSize(x) == s_malloc_usable_size(sdsAllocPtr(x)));
     sdsfree(x);
 
     x = sdsnewlen(NULL, 65531);
     TEST_ASSERT_MESSAGE("len 65531 type", (x[-1] & SDS_TYPE_MASK) >= SDS_TYPE_32);
-    TEST_ASSERT_MESSAGE("len 65531 sdsAllocSize", sdsAllocSize(x) == s_malloc_size(sdsAllocPtr(x)));
+    TEST_ASSERT_MESSAGE("len 65531 sdsAllocSize", sdsAllocSize(x) == s_malloc_usable_size(sdsAllocPtr(x)));
     sdsfree(x);
 
 #if (LONG_MAX == LLONG_MAX)
     if (flags & UNIT_TEST_LARGE_MEMORY) {
         x = sdsnewlen(NULL, 4294967286);
         TEST_ASSERT_MESSAGE("len 4294967286 type", (x[-1] & SDS_TYPE_MASK) >= SDS_TYPE_32);
-        TEST_ASSERT_MESSAGE("len 4294967286 sdsAllocSize", sdsAllocSize(x) == s_malloc_size(sdsAllocPtr(x)));
+        TEST_ASSERT_MESSAGE("len 4294967286 sdsAllocSize", sdsAllocSize(x) == s_malloc_usable_size(sdsAllocPtr(x)));
         sdsfree(x);
 
         x = sdsnewlen(NULL, 4294967287);
         TEST_ASSERT_MESSAGE("len 4294967287 type", (x[-1] & SDS_TYPE_MASK) == SDS_TYPE_64);
-        TEST_ASSERT_MESSAGE("len 4294967287 sdsAllocSize", sdsAllocSize(x) == s_malloc_size(sdsAllocPtr(x)));
+        TEST_ASSERT_MESSAGE("len 4294967287 sdsAllocSize", sdsAllocSize(x) == s_malloc_usable_size(sdsAllocPtr(x)));
         sdsfree(x);
     }
 #endif
@@ -325,6 +326,90 @@ int test_sdsHeaderSizes(int argc, char **argv, int flags) {
     TEST_ASSERT_MESSAGE("can't always adjust SDS_TYPE_32 with SDS_TYPE_64",
                         sizeof(struct sdshdr64) <= 2 * sizeof(struct sdshdr32) + 1);
 #endif
+
+    return 0;
+}
+
+int test_sdssplitargs(int argc, char **argv, int flags) {
+    UNUSED(argc);
+    UNUSED(argv);
+    UNUSED(flags);
+
+    int len;
+    sds *sargv;
+
+    sargv = sdssplitargs("Testing one two three", &len);
+    TEST_ASSERT(4 == len);
+    TEST_ASSERT(!strcmp("Testing", sargv[0]));
+    TEST_ASSERT(!strcmp("one", sargv[1]));
+    TEST_ASSERT(!strcmp("two", sargv[2]));
+    TEST_ASSERT(!strcmp("three", sargv[3]));
+    sdsfreesplitres(sargv, len);
+
+    sargv = sdssplitargs("", &len);
+    TEST_ASSERT(0 == len);
+    TEST_ASSERT(sargv != NULL);
+    sdsfreesplitres(sargv, len);
+
+    sargv = sdssplitargs("\"Testing split strings\" 'Another split string'", &len);
+    TEST_ASSERT(2 == len);
+    TEST_ASSERT(!strcmp("Testing split strings", sargv[0]));
+    TEST_ASSERT(!strcmp("Another split string", sargv[1]));
+    sdsfreesplitres(sargv, len);
+
+    sargv = sdssplitargs("\"Hello\" ", &len);
+    TEST_ASSERT(1 == len);
+    TEST_ASSERT(!strcmp("Hello", sargv[0]));
+    sdsfreesplitres(sargv, len);
+
+    char *binary_string = "\"\\x73\\x75\\x70\\x65\\x72\\x20\\x00\\x73\\x65\\x63\\x72\\x65\\x74\\x20\\x70\\x61\\x73\\x73\\x77\\x6f\\x72\\x64\"";
+    sargv = sdssplitargs(binary_string, &len);
+    TEST_ASSERT(1 == len);
+    TEST_ASSERT(!strcmp("super \x00secret password", sargv[0]));
+    sdsfreesplitres(sargv, len);
+
+    sargv = sdssplitargs("unquoted", &len);
+    TEST_ASSERT(1 == len);
+    TEST_ASSERT(!strcmp("unquoted", sargv[0]));
+    sdsfreesplitres(sargv, len);
+
+    sargv = sdssplitargs("empty string \"\"", &len);
+    TEST_ASSERT(3 == len);
+    TEST_ASSERT(!strcmp("empty", sargv[0]));
+    TEST_ASSERT(!strcmp("string", sargv[1]));
+    TEST_ASSERT(!strcmp("", sargv[2]));
+    sdsfreesplitres(sargv, len);
+
+    sargv = sdssplitargs("\"deeply\\\"quoted\" 's\\'t\\\"r'ing", &len);
+    TEST_ASSERT(2 == len);
+    TEST_ASSERT(!strcmp("deeply\"quoted", sargv[0]));
+    TEST_ASSERT(!strcmp("s't\\\"ring", sargv[1]));
+    sdsfreesplitres(sargv, len);
+
+    sargv = sdssplitargs("unquoted\" \"with' 'quotes string", &len);
+    TEST_ASSERT(2 == len);
+    TEST_ASSERT(!strcmp("unquoted with quotes", sargv[0]));
+    TEST_ASSERT(!strcmp("string", sargv[1]));
+    sdsfreesplitres(sargv, len);
+
+    sargv = sdssplitargs("\"quoted\"' another 'quoted string", &len);
+    TEST_ASSERT(2 == len);
+    TEST_ASSERT(!strcmp("quoted another quoted", sargv[0]));
+    TEST_ASSERT(!strcmp("string", sargv[1]));
+    sdsfreesplitres(sargv, len);
+
+    sargv = sdssplitargs("\"shell-like \"'\"'\"'\"' quote-escaping '", &len);
+    TEST_ASSERT(1 == len);
+    TEST_ASSERT(!strcmp("shell-like \"' quote-escaping ", sargv[0]));
+    sdsfreesplitres(sargv, len);
+
+    sargv = sdssplitargs("\"unterminated \"'single quotes", &len);
+    TEST_ASSERT(0 == len);
+    TEST_ASSERT(sargv == NULL);
+
+    sargv = sdssplitargs("'unterminated '\"double quotes", &len);
+    TEST_ASSERT(0 == len);
+    TEST_ASSERT(sargv == NULL);
 
     return 0;
 }

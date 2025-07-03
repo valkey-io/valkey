@@ -1,16 +1,22 @@
 #ifndef __CLUSTER_H
 #define __CLUSTER_H
 
+#include <stdbool.h>
 /*-----------------------------------------------------------------------------
  * Cluster exported API.
  *----------------------------------------------------------------------------*/
 
 #define CLUSTER_SLOT_MASK_BITS 14                   /* Number of bits used for slot id. */
 #define CLUSTER_SLOTS (1 << CLUSTER_SLOT_MASK_BITS) /* Total number of slots in cluster mode, which is 16384. */
-#define CLUSTER_SLOT_MASK ((unsigned long long)(CLUSTER_SLOTS - 1)) /* Bit mask for slot id stored in LSB. */
-#define CLUSTER_OK 0                                                /* Everything looks ok */
-#define CLUSTER_FAIL 1                                              /* The cluster can't work */
-#define CLUSTER_NAMELEN 40                                          /* sha1 hex length */
+#define CLUSTER_OK 0                                /* Everything looks ok */
+#define CLUSTER_FAIL 1                              /* The cluster can't work */
+#define CLUSTER_NAMELEN 40                          /* sha1 hex length */
+
+/* Reason why the cluster state changes to fail. When adding new reasons,
+ * make sure to update clusterLogFailReason. */
+#define CLUSTER_FAIL_NONE 0
+#define CLUSTER_FAIL_NOT_FULL_COVERAGE 1
+#define CLUSTER_FAIL_MINORITY_PARTITION 2
 
 /* Redirection errors returned by getNodeByQuery(). */
 #define CLUSTER_REDIR_NONE 0          /* Node can serve the request. */
@@ -39,6 +45,7 @@ void clusterInitLast(void);
 void clusterCron(void);
 void clusterBeforeSleep(void);
 int verifyClusterConfigWithData(void);
+void clusterHandleServerShutdown(void);
 
 int clusterSendModuleMessageToTarget(const char *target,
                                      uint64_t module_id,
@@ -48,6 +55,8 @@ int clusterSendModuleMessageToTarget(const char *target,
 
 void clusterUpdateMyselfFlags(void);
 void clusterUpdateMyselfIp(void);
+void clusterUpdateMyselfClientIpV4(void);
+void clusterUpdateMyselfClientIpV6(void);
 void clusterUpdateMyselfHostname(void);
 void clusterUpdateMyselfAnnouncedPorts(void);
 void clusterUpdateMyselfHumanNodename(void);
@@ -68,7 +77,7 @@ const char **clusterCommandExtendedHelp(void);
 
 int clusterAllowFailoverCmd(client *c);
 void clusterPromoteSelfToPrimary(void);
-int clusterManualFailoverTimeLimit(void);
+mstime_t clusterManualFailoverTimeLimit(void);
 
 void clusterCommandSlots(client *c);
 void clusterCommandMyId(client *c);
@@ -81,11 +90,11 @@ int getNodeDefaultClientPort(clusterNode *n);
 clusterNode *getMyClusterNode(void);
 int getClusterSize(void);
 int getMyShardSlotCount(void);
-int handleDebugClusterCommand(client *c);
 int clusterNodePending(clusterNode *node);
 int clusterNodeIsPrimary(clusterNode *n);
+int clusterNodeIsVotingPrimary(clusterNode *n);
 char **getClusterNodesList(size_t *numnodes);
-char *clusterNodeIp(clusterNode *node);
+char *clusterNodeIp(clusterNode *node, client *c);
 int clusterNodeIsReplica(clusterNode *node);
 clusterNode *clusterNodeGetPrimary(clusterNode *node);
 char *clusterNodeGetName(clusterNode *node);
@@ -94,23 +103,26 @@ int clusterNodeIsFailing(clusterNode *node);
 int clusterNodeIsNoFailover(clusterNode *node);
 char *clusterNodeGetShardId(clusterNode *node);
 int clusterNodeNumReplicas(clusterNode *node);
-clusterNode *clusterNodeGetReplica(clusterNode *node, int slave_idx);
+clusterNode *clusterNodeGetReplica(clusterNode *node, int replica_idx);
 clusterNode *getMigratingSlotDest(int slot);
 clusterNode *getImportingSlotSource(int slot);
 clusterNode *getNodeBySlot(int slot);
 int clusterNodeClientPort(clusterNode *n, int use_tls);
 char *clusterNodeHostname(clusterNode *node);
-const char *clusterNodePreferredEndpoint(clusterNode *n);
-long long clusterNodeReplOffset(clusterNode *node);
+const char *clusterNodePreferredEndpoint(clusterNode *n, client *c);
 clusterNode *clusterLookupNode(const char *name, int length);
 int detectAndUpdateCachedNodeHealth(void);
-client *createCachedResponseClient(void);
+client *createCachedResponseClient(int resp);
 void deleteCachedResponseClient(client *recording_client);
 void clearCachedClusterSlotsResponse(void);
+unsigned int countKeysInSlotForDb(unsigned int hashslot, serverDb *db);
+unsigned int countKeysInSlot(unsigned int hashslot);
+int getSlotOrReply(client *c, robj *o);
 
 /* functions with shared implementations */
 int clusterNodeIsMyself(clusterNode *n);
-clusterNode *getNodeByQuery(client *c, struct serverCommand *cmd, robj **argv, int argc, int *hashslot, int *ask);
+int clusterSlotByCommand(struct serverCommand *cmd, robj **argv, int argc, int *read_flags);
+clusterNode *getNodeByQuery(client *c, int *error_code);
 int clusterRedirectBlockedClientIfNeeded(client *c);
 void clusterRedirectClient(client *c, clusterNode *n, int hashslot, int error_code);
 void migrateCloseTimedoutSockets(void);
@@ -123,4 +135,6 @@ ConnectionType *connTypeOfCluster(void);
 int isNodeAvailable(clusterNode *node);
 long long getNodeReplicationOffset(clusterNode *node);
 sds aggregateClientOutputBuffer(client *c);
+void resetClusterStats(void);
+unsigned int delKeysInSlot(unsigned int hashslot, int lazy, bool propagate_del, bool send_del_event);
 #endif /* __CLUSTER_H */

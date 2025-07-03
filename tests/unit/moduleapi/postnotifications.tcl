@@ -72,7 +72,7 @@ tags "modules" {
                 {set x 1}
                 {pexpireat x *}
                 {multi}
-                {del x}
+                {unlink x}
                 {lpush before_expired x}
                 {incr expired}
                 {exec}
@@ -96,7 +96,7 @@ tags "modules" {
                 {set x 1}
                 {pexpireat x *}
                 {multi}
-                {del x}
+                {unlink x}
                 {lpush before_expired x}
                 {incr expired}
                 {exec}
@@ -122,7 +122,7 @@ tags "modules" {
                 {pexpireat x *}
                 {multi}
                 {set read_x 1}
-                {del x}
+                {unlink x}
                 {lpush before_expired x}
                 {incr expired}
                 {exec}
@@ -162,7 +162,7 @@ tags "modules" {
                 {select *}
                 {set x 1}
                 {multi}
-                {del x}
+                {unlink x}
                 {lpush before_evicted x}
                 {incr evicted}
                 {exec}

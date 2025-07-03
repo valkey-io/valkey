@@ -1,0 +1,108 @@
+name: Other targets
+
+on: [push, pull_request]
+
+jobs:
+  almalinux8:
+    name: AlmaLinux 8
+    runs-on: ubuntu-latest
+    container: almalinux:8
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Install dependencies
+        run: |
+          dnf -y install epel-release
+          dnf -y install gcc make cmake3 openssl openssl-devel libevent-devel procps-ng valkey
+
+      - name: Build using cmake
+        env:
+          EXTRA_CMAKE_OPTS: -DENABLE_EXAMPLES:BOOL=ON -DENABLE_TLS:BOOL=ON
+        run: mkdir build && cd build && cmake3 .. && make
+
+      - name: Build using Makefile
+        run: USE_TLS=1 TEST_ASYNC=1 make
+
+      - name: Run tests
+        working-directory: tests
+        env:
+          SKIPS_AS_FAILS: 1
+          TEST_TLS: 1
+        run: ./test.sh
+
+  centos8:
+    name: RockyLinux 8
+    runs-on: ubuntu-latest
+    container: rockylinux:8
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Install dependencies
+        run: |
+          dnf -y upgrade --refresh
+          dnf -y install https://rpms.remirepo.net/enterprise/remi-release-8.rpm
+          dnf -y module install redis:remi-6.0
+          dnf -y group install "Development Tools"
+          dnf -y install openssl-devel cmake libevent-devel valkey
+
+      - name: Build using cmake
+        env:
+          EXTRA_CMAKE_OPTS: -DENABLE_EXAMPLES:BOOL=ON -DENABLE_TLS:BOOL=ON
+        run: mkdir build && cd build && cmake .. && make
+
+      - name: Build using Makefile
+        run: USE_TLS=1 TEST_ASYNC=1 make
+
+      - name: Run tests
+        working-directory: tests
+        env:
+          SKIPS_AS_FAILS: 1
+          TEST_TLS: 1
+        run: ./test.sh
+
+  freebsd:
+    runs-on: ubuntu-latest
+    name:  FreeBSD
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Build in FreeBSD
+        uses: vmactions/freebsd-vm@c3ae29a132c8ef1924775414107a97cac042aad5 # v1.2.0
+        with:
+          prepare: pkg install -y gmake cmake
+          run: |
+            gmake
+            mkdir build && cd build && cmake .. && gmake
+
+  build-cross:
+    name: Cross-compile ${{ matrix.config.target }}
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        config:
+          - {target: arm,      host: arm-linux-gnueabi,       qemu: arm,      gccver: 12 }
+          - {target: armhf,    host: arm-linux-gnueabihf,     qemu: arm,      gccver: 12 }
+          - {target: aarch64,  host: aarch64-linux-gnu,       qemu: aarch64,  gccver: 12 }
+          - {target: riscv64,  host: riscv64-linux-gnu,       qemu: riscv64,  gccver: 12 }
+          - {target: ppc,      host: powerpc-linux-gnu,       qemu: ppc,      gccver: 12 }
+          - {target: ppc64,    host: powerpc64-linux-gnu,     qemu: ppc64,    gccver: 12 }
+          - {target: ppc64le,  host: powerpc64le-linux-gnu,   qemu: ppc64le,  gccver: 12 }
+          - {target: s390x,    host: s390x-linux-gnu,         qemu: s390x,    gccver: 12 }
+          - {target: mips,     host: mips-linux-gnu,          qemu: mips,     gccver: 10 }
+          - {target: mips64,   host: mips64-linux-gnuabi64,   qemu: mips64,   gccver: 10 }
+          - {target: mipsel,   host: mipsel-linux-gnu,        qemu: mipsel,   gccver: 10 }
+          - {target: mips64el, host: mips64el-linux-gnuabi64, qemu: mips64el, gccver: 10 }
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Prepare
+        uses: awalsh128/cache-apt-pkgs-action@7ca5f46d061ad9aa95863cd9b214dd48edef361d # v1.5.0
+        with:
+          packages: gcc-${{ matrix.config.gccver }}-${{ matrix.config.host }}
+          version: ${{ matrix.config.target }}-1.0
+      - name: Build
+        env:
+          CC: ${{ matrix.config.host }}-gcc-${{ matrix.config.gccver }}
+          AR: ${{ matrix.config.host }}-ar
+        run: |
+          make

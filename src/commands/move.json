@@ -52,7 +52,7 @@
                     "const": 1
                 },
                 {
-                    "description": "Key wasn't moved.",
+                    "description": "Key wasn't moved. When key already exists in the destination database, or it does not exist in the source database",
                     "const": 0
                 }
             ]

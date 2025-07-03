@@ -129,6 +129,9 @@ proc wait_for_cluster_propagation {} {
     wait_for_condition 1000 50 {
         [cluster_config_consistent] eq 1
     } else {
+        for {set j 0} {$j < [llength $::servers]} {incr j} {
+            puts "R $j cluster slots output: [R $j cluster slots]"
+        }
         fail "cluster config did not reach a consistent state"
     }
 }
@@ -145,6 +148,7 @@ proc wait_for_cluster_size {cluster_size} {
 # Check that cluster nodes agree about "state", or raise an error.
 proc wait_for_cluster_state {state} {
     for {set j 0} {$j < [llength $::servers]} {incr j} {
+        if {[process_is_paused [srv -$j pid]]} continue
         wait_for_condition 1000 50 {
             [CI $j cluster_state] eq $state
         } else {
@@ -206,6 +210,12 @@ proc cluster_allocate_replicas {masters replicas} {
 # Setup method to be executed to configure the cluster before the
 # tests run.
 proc cluster_setup {masters replicas node_count slot_allocator replica_allocator code} {
+    set config_epoch 1
+    for {set i 0} {$i < $node_count} {incr i} {
+        R $i CLUSTER SET-CONFIG-EPOCH $config_epoch
+        incr config_epoch
+    }
+
     # Have all nodes meet
     if {$::tls} {
         set tls_cluster [lindex [R 0 CONFIG GET tls-cluster] 1]
@@ -227,6 +237,15 @@ proc cluster_setup {masters replicas node_count slot_allocator replica_allocator
     # Setup master/replica relationships
     $replica_allocator $masters $replicas
 
+    # A helper debug log that can print the server id in the server logs.
+    # This can help us locate the corresponding server in the log file.
+    for {set i 0} {$i < $masters} {incr i} {
+        R $i DEBUG LOG "========== I am primary $i =========="
+    }
+    for {set i $i} {$i < [expr $masters+$replicas]} {incr i} {
+        R $i DEBUG LOG "========== I am replica $i =========="
+    }
+
     wait_for_cluster_propagation
     wait_for_cluster_state "ok"
 
@@ -243,7 +262,8 @@ proc start_cluster {masters replicas options code {slot_allocator continuous_slo
 
     # Configure the starting of multiple servers. Set cluster node timeout
     # aggressively since many tests depend on ping/pong messages. 
-    set cluster_options [list overrides [list cluster-enabled yes cluster-ping-interval 100 cluster-node-timeout 3000]]
+
+    set cluster_options [list overrides [list cluster-enabled yes cluster-ping-interval 100 cluster-node-timeout 3000 cluster-databases 16 cluster-slot-stats-enabled yes]]
     set options [concat $cluster_options $options]
 
     # Cluster mode only supports a single database, so before executing the tests
@@ -266,6 +286,14 @@ proc cluster_get_myself id {
         if {[cluster_has_flag $n myself]} {return $n}
     }
     return {}
+}
+
+# Returns the parsed "myself's primary" CLUSTER NODES entry as a dictionary.
+proc cluster_get_myself_primary id {
+    set myself [cluster_get_myself $id]
+    set replicaof [dict get $myself slaveof]
+    set node [cluster_get_node_by_id $id $replicaof]
+    return $node
 }
 
 # Get a specific node by ID by parsing the CLUSTER NODES output
@@ -305,6 +333,15 @@ proc get_cluster_nodes {id {status "*"}} {
     return $nodes
 }
 
+# Returns the parsed myself node entry as a dictionary.
+proc get_myself id {
+    set nodes [get_cluster_nodes $id]
+    foreach n $nodes {
+        if {[cluster_has_flag $n myself]} {return $n}
+    }
+    return {}
+}
+
 # Returns 1 if no node knows node_id, 0 if any node knows it.
 proc node_is_forgotten {node_id} {
     for {set j 0} {$j < [llength $::servers]} {incr j} {
@@ -337,6 +374,27 @@ proc are_hostnames_propagated {match_string} {
         foreach node $cfg {
             for {set i 2} {$i < [llength $node]} {incr i} {
                 if {! [string match $match_string [lindex [lindex [lindex $node $i] 3] 1]] } {
+                    return 0
+                }
+            }
+        }
+    }
+    return 1
+}
+
+# Check if cluster's announced IPs are consistent and match a pattern
+# Optionally, a list of clients can be supplied.
+proc are_cluster_announced_ips_propagated {match_string {clients {}}} {
+    for {set j 0} {$j < [llength $::servers]} {incr j} {
+        if {$clients eq {}} {
+            set client [srv [expr -1*$j] "client"]
+        } else {
+            set client [lindex $clients $j]
+        }
+        set cfg [$client cluster slots]
+        foreach node $cfg {
+            for {set i 2} {$i < [llength $node]} {incr i} {
+                if {! [string match $match_string [lindex [lindex $node $i] 0]] } {
                     return 0
                 }
             }

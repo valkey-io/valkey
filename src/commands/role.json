@@ -28,7 +28,7 @@
                             "const": "master"
                         },
                         {
-                            "description": "Current replication master offset.",
+                            "description": "Current replication primary offset.",
                             "type": "integer"
                         },
                         {
@@ -65,18 +65,18 @@
                             "const": "slave"
                         },
                         {
-                            "description": "IP of master.",
+                            "description": "IP of primary.",
                             "type": "string"
                         },
                         {
-                            "description": "Port number of master.",
+                            "description": "Port number of primary.",
                             "type": "integer"
                         },
                         {
-                            "description": "State of the replication from the point of view of the master.",
+                            "description": "State of the replication from the point of view of the primary.",
                             "oneOf": [
                                 {
-                                    "description": "The instance is in handshake with its master.",
+                                    "description": "The instance is in handshake with its primary.",
                                     "const": "handshake"
                                 },
                                 {
@@ -84,15 +84,15 @@
                                     "const": "none"
                                 },
                                 {
-                                    "description": "The instance needs to connect to its master.",
+                                    "description": "The instance needs to connect to its primary.",
                                     "const": "connect"
                                 },
                                 {
-                                    "description": "The master-replica connection is in progress.",
+                                    "description": "The primary-replica connection is in progress.",
                                     "const": "connecting"
                                 },
                                 {
-                                    "description": "The master and replica are trying to perform the synchronization.",
+                                    "description": "The primary and replica are trying to perform the synchronization.",
                                     "const": "sync"
                                 },
                                 {
@@ -106,7 +106,7 @@
                             ]
                         },
                         {
-                            "description": "The amount of data received from the replica so far in terms of master replication offset.",
+                            "description": "The amount of data received from the replica so far in terms of primary replication offset.",
                             "type": "integer"
                         }
                     ]
@@ -120,7 +120,7 @@
                             "const": "sentinel"
                         },
                         {
-                            "description": "List of master names monitored by this sentinel instance.",
+                            "description": "List of primary names monitored by this sentinel instance.",
                             "type": "array",
                             "items": {
                                 "type": "string"

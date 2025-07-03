@@ -1,6 +1,6 @@
 {
     "SET": {
-        "summary": "Changes the configuration of a monitored master.",
+        "summary": "Changes the configuration of a monitored primary.",
         "complexity": "O(1)",
         "group": "sentinel",
         "since": "2.8.4",
@@ -17,7 +17,7 @@
         },
         "arguments": [
             {
-                "name": "master-name",
+                "name": "primary-name",
                 "type": "string"
             },
             {

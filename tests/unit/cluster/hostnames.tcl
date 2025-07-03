@@ -132,11 +132,14 @@ test "Verify the nodes configured with prefer hostname only show hostname for ne
         R $j config set cluster-announce-hostname "shard-$j.com"
     }
 
+    # Grab the ID so we have it later for validation
+    set primary_id [R 0 CLUSTER MYID]
+
     # Prevent Node 0 and Node 6 from properly meeting,
     # they'll hang in the handshake phase. This allows us to 
     # test the case where we "know" about it but haven't
     # successfully retrieved information about it yet.
-    R 0 DEBUG DROP-CLUSTER-PACKET-FILTER 0
+    pause_process [srv 0 pid]
     R 6 DEBUG DROP-CLUSTER-PACKET-FILTER 0
 
     # Have a replica meet the isolated node
@@ -156,30 +159,29 @@ test "Verify the nodes configured with prefer hostname only show hostname for ne
     # to accept our isolated nodes connections. At this point they will
     # start showing up in cluster slots. 
     wait_for_condition 50 100 {
-        [llength [R 6 CLUSTER SLOTS]] eq 3
+        [llength [R 6 CLUSTER SLOTS]] eq 2
     } else {
         fail "Node did not learn about the 2 shards it can talk to"
     }
     wait_for_condition 50 100 {
-        [lindex [get_slot_field [R 6 CLUSTER SLOTS] 1 2 3] 1] eq "shard-1.com"
+        [lindex [get_slot_field [R 6 CLUSTER SLOTS] 0 2 3] 1] eq "shard-1.com"
     } else {
         fail "hostname for shard-1 didn't reach node 6"
     }
 
     wait_for_condition 50 100 {
-        [lindex [get_slot_field [R 6 CLUSTER SLOTS] 2 2 3] 1] eq "shard-2.com"
+        [lindex [get_slot_field [R 6 CLUSTER SLOTS] 1 2 3] 1] eq "shard-2.com"
     } else {
         fail "hostname for shard-2 didn't reach node 6"
     }
 
     # Also make sure we know about the isolated master, we 
     # just can't reach it.
-    set master_id [R 0 CLUSTER MYID]
-    assert_match "*$master_id*" [R 6 CLUSTER NODES]
+    assert_match "*$primary_id*" [R 6 CLUSTER NODES]
 
     # Stop dropping cluster packets, and make sure everything
     # stabilizes
-    R 0 DEBUG DROP-CLUSTER-PACKET-FILTER -1
+    resume_process [srv 0 pid]
     R 6 DEBUG DROP-CLUSTER-PACKET-FILTER -1
 
     # This operation sometimes spikes to around 5 seconds to resolve the state,

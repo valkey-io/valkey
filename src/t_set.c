@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009-2012, Salvatore Sanfilippo <antirez at gmail dot com>
+ * Copyright (c) 2009-2012, Redis Ltd.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -26,8 +26,14 @@
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  * POSSIBILITY OF SUCH DAMAGE.
  */
+/*
+ * Copyright (c) Valkey Contributors
+ * All rights reserved.
+ * SPDX-License-Identifier: BSD-3-Clause
+ */
 
 #include "server.h"
+#include "hashtable.h"
 #include "intset.h" /* Compact integer set structure */
 
 /*-----------------------------------------------------------------------------
@@ -50,7 +56,7 @@ robj *setTypeCreate(sds value, size_t size_hint) {
     /* We may oversize the set by using the hint if the hint is not accurate,
      * but we will assume this is acceptable to maximize performance. */
     robj *o = createSetObject();
-    dictExpand(o->ptr, size_hint);
+    hashtableExpand(o->ptr, size_hint);
     return o;
 }
 
@@ -59,7 +65,7 @@ robj *setTypeCreate(sds value, size_t size_hint) {
 void setTypeMaybeConvert(robj *set, size_t size_hint) {
     if ((set->encoding == OBJ_ENCODING_LISTPACK && size_hint > server.set_max_listpack_entries) ||
         (set->encoding == OBJ_ENCODING_INTSET && size_hint > server.set_max_intset_entries)) {
-        setTypeConvertAndExpand(set, OBJ_ENCODING_HT, size_hint, 1);
+        setTypeConvertAndExpand(set, OBJ_ENCODING_HASHTABLE, size_hint, 1);
     }
 }
 
@@ -74,7 +80,7 @@ static size_t intsetMaxEntries(void) {
 /* Converts intset to HT if it contains too many entries. */
 static void maybeConvertIntset(robj *subject) {
     serverAssert(subject->encoding == OBJ_ENCODING_INTSET);
-    if (intsetLen(subject->ptr) > intsetMaxEntries()) setTypeConvert(subject, OBJ_ENCODING_HT);
+    if (intsetLen(subject->ptr) > intsetMaxEntries()) setTypeConvert(subject, OBJ_ENCODING_HASHTABLE);
 }
 
 /* When you know all set elements are integers, call this to convert the set to
@@ -91,7 +97,7 @@ static void maybeConvertToIntset(robj *set) {
     while (setTypeNext(si, &str, &len, &llval) != -1) {
         if (str) {
             /* If the element is returned as a string, we may be able to convert
-             * it to integer. This happens for OBJ_ENCODING_HT. */
+             * it to integer. This happens for OBJ_ENCODING_HASHTABLE. */
             serverAssert(string2ll(str, len, (long long *)&llval));
         }
         uint8_t success = 0;
@@ -134,20 +140,21 @@ int setTypeAddAux(robj *set, char *str, size_t len, int64_t llval, int str_is_sd
     }
 
     serverAssert(str);
-    if (set->encoding == OBJ_ENCODING_HT) {
+    if (set->encoding == OBJ_ENCODING_HASHTABLE) {
         /* Avoid duping the string if it is an sds string. */
         sds sdsval = str_is_sds ? (sds)str : sdsnewlen(str, len);
-        dict *ht = set->ptr;
-        void *position = dictFindPositionForInsert(ht, sdsval, NULL);
-        if (position) {
+        hashtable *ht = set->ptr;
+        hashtablePosition position;
+        if (hashtableFindPositionForInsert(ht, sdsval, &position, NULL)) {
             /* Key doesn't already exist in the set. Add it but dup the key. */
             if (sdsval == str) sdsval = sdsdup(sdsval);
-            dictInsertAtPosition(ht, sdsval, position);
+            hashtableInsertAtPosition(ht, sdsval, &position);
+            return 1;
         } else if (sdsval != str) {
             /* String is already a member. Free our temporary sds copy. */
             sdsfree(sdsval);
+            return 0;
         }
-        return (position != NULL);
     } else if (set->encoding == OBJ_ENCODING_LISTPACK) {
         unsigned char *lp = set->ptr;
         unsigned char *p = lpFirst(lp);
@@ -166,8 +173,8 @@ int setTypeAddAux(robj *set, char *str, size_t len, int64_t llval, int str_is_sd
                 set->ptr = lp;
             } else {
                 /* Size limit is reached. Convert to hashtable and add. */
-                setTypeConvertAndExpand(set, OBJ_ENCODING_HT, lpLength(lp) + 1, 1);
-                serverAssert(dictAdd(set->ptr, sdsnewlen(str, len), NULL) == DICT_OK);
+                setTypeConvertAndExpand(set, OBJ_ENCODING_HASHTABLE, lpLength(lp) + 1, 1);
+                serverAssert(hashtableAdd(set->ptr, sdsnewlen(str, len)));
             }
             return 1;
         }
@@ -204,10 +211,10 @@ int setTypeAddAux(robj *set, char *str, size_t len, int64_t llval, int str_is_sd
                 set->ptr = lp;
                 return 1;
             } else {
-                setTypeConvertAndExpand(set, OBJ_ENCODING_HT, intsetLen(set->ptr) + 1, 1);
+                setTypeConvertAndExpand(set, OBJ_ENCODING_HASHTABLE, intsetLen(set->ptr) + 1, 1);
                 /* The set *was* an intset and this value is not integer
-                 * encodable, so dictAdd should always work. */
-                serverAssert(dictAdd(set->ptr, sdsnewlen(str, len), NULL) == DICT_OK);
+                 * encodable, so hashtableAdd should always work. */
+                serverAssert(hashtableAdd(set->ptr, sdsnewlen(str, len)));
                 return 1;
             }
         }
@@ -242,9 +249,9 @@ int setTypeRemoveAux(robj *setobj, char *str, size_t len, int64_t llval, int str
         str_is_sds = 0;
     }
 
-    if (setobj->encoding == OBJ_ENCODING_HT) {
+    if (setobj->encoding == OBJ_ENCODING_HASHTABLE) {
         sds sdsval = str_is_sds ? (sds)str : sdsnewlen(str, len);
-        int deleted = (dictDelete(setobj->ptr, sdsval) == DICT_OK);
+        int deleted = hashtableDelete(setobj->ptr, sdsval);
         if (sdsval != str) sdsfree(sdsval); /* free temp copy */
         return deleted;
     } else if (setobj->encoding == OBJ_ENCODING_LISTPACK) {
@@ -298,11 +305,11 @@ int setTypeIsMemberAux(robj *set, char *str, size_t len, int64_t llval, int str_
     } else if (set->encoding == OBJ_ENCODING_INTSET) {
         long long llval;
         return string2ll(str, len, &llval) && intsetFind(set->ptr, llval);
-    } else if (set->encoding == OBJ_ENCODING_HT && str_is_sds) {
-        return dictFind(set->ptr, (sds)str) != NULL;
-    } else if (set->encoding == OBJ_ENCODING_HT) {
+    } else if (set->encoding == OBJ_ENCODING_HASHTABLE && str_is_sds) {
+        return hashtableFind(set->ptr, (sds)str, NULL);
+    } else if (set->encoding == OBJ_ENCODING_HASHTABLE) {
         sds sdsval = sdsnewlen(str, len);
-        int result = dictFind(set->ptr, sdsval) != NULL;
+        int result = hashtableFind(set->ptr, sdsval, NULL);
         sdsfree(sdsval);
         return result;
     } else {
@@ -314,8 +321,8 @@ setTypeIterator *setTypeInitIterator(robj *subject) {
     setTypeIterator *si = zmalloc(sizeof(setTypeIterator));
     si->subject = subject;
     si->encoding = subject->encoding;
-    if (si->encoding == OBJ_ENCODING_HT) {
-        si->di = dictGetIterator(subject->ptr);
+    if (si->encoding == OBJ_ENCODING_HASHTABLE) {
+        si->hashtable_iterator = hashtableCreateIterator(subject->ptr, 0);
     } else if (si->encoding == OBJ_ENCODING_INTSET) {
         si->ii = 0;
     } else if (si->encoding == OBJ_ENCODING_LISTPACK) {
@@ -327,7 +334,7 @@ setTypeIterator *setTypeInitIterator(robj *subject) {
 }
 
 void setTypeReleaseIterator(setTypeIterator *si) {
-    if (si->encoding == OBJ_ENCODING_HT) dictReleaseIterator(si->di);
+    if (si->encoding == OBJ_ENCODING_HASHTABLE) hashtableReleaseIterator(si->hashtable_iterator);
     zfree(si);
 }
 
@@ -340,7 +347,7 @@ void setTypeReleaseIterator(setTypeIterator *si) {
  * (str and len) or (llele) depending on whether the value is stored as a string
  * or as an integer internally.
  *
- * If OBJ_ENCODING_HT is returned, then str points to an sds string and can be
+ * If OBJ_ENCODING_HASHTABLE is returned, then str points to an sds string and can be
  * used as such. If OBJ_ENCODING_INTSET, then llele is populated and str is
  * pointed to NULL. If OBJ_ENCODING_LISTPACK is returned, the value can be
  * either a string or an integer. If *str is not NULL, then str and len are
@@ -353,10 +360,10 @@ void setTypeReleaseIterator(setTypeIterator *si) {
  *
  * When there are no more elements -1 is returned. */
 int setTypeNext(setTypeIterator *si, char **str, size_t *len, int64_t *llele) {
-    if (si->encoding == OBJ_ENCODING_HT) {
-        dictEntry *de = dictNext(si->di);
-        if (de == NULL) return -1;
-        *str = dictGetKey(de);
+    if (si->encoding == OBJ_ENCODING_HASHTABLE) {
+        void *next;
+        if (!hashtableNext(si->hashtable_iterator, &next)) return -1;
+        *str = next;
         *len = sdslen(*str);
         *llele = -123456789; /* Not needed. Defensive. */
     } else if (si->encoding == OBJ_ENCODING_INTSET) {
@@ -406,15 +413,16 @@ sds setTypeNextObject(setTypeIterator *si) {
  * object. The return value of the function is the object->encoding
  * field of the object and can be used by the caller to check if the
  * int64_t pointer or the str and len pointers were populated, as for
- * setTypeNext. If OBJ_ENCODING_HT is returned, str is pointed to a
+ * setTypeNext. If OBJ_ENCODING_HASHTABLE is returned, str is pointed to a
  * string which is actually an sds string and it can be used as such.
  *
  * Note that both the str, len and llele pointers should be passed and cannot
  * be NULL. If str is set to NULL, the value is an integer stored in llele. */
 int setTypeRandomElement(robj *setobj, char **str, size_t *len, int64_t *llele) {
-    if (setobj->encoding == OBJ_ENCODING_HT) {
-        dictEntry *de = dictGetFairRandomKey(setobj->ptr);
-        *str = dictGetKey(de);
+    if (setobj->encoding == OBJ_ENCODING_HASHTABLE) {
+        void *entry = NULL;
+        hashtableFairRandomEntry(setobj->ptr, &entry);
+        *str = entry;
         *len = sdslen(*str);
         *llele = -123456789; /* Not needed. Defensive. */
     } else if (setobj->encoding == OBJ_ENCODING_INTSET) {
@@ -457,14 +465,14 @@ robj *setTypePopRandom(robj *set) {
             obj = createStringObject(str, len);
         else
             obj = createStringObjectFromLongLong(llele);
-        setTypeRemoveAux(set, str, len, llele, encoding == OBJ_ENCODING_HT);
+        setTypeRemoveAux(set, str, len, llele, encoding == OBJ_ENCODING_HASHTABLE);
     }
     return obj;
 }
 
 unsigned long setTypeSize(const robj *subject) {
-    if (subject->encoding == OBJ_ENCODING_HT) {
-        return dictSize((const dict *)subject->ptr);
+    if (subject->encoding == OBJ_ENCODING_HASHTABLE) {
+        return hashtableSize((const hashtable *)subject->ptr);
     } else if (subject->encoding == OBJ_ENCODING_INTSET) {
         return intsetLen((const intset *)subject->ptr);
     } else if (subject->encoding == OBJ_ENCODING_LISTPACK) {
@@ -474,7 +482,7 @@ unsigned long setTypeSize(const robj *subject) {
     }
 }
 
-/* Convert the set to specified encoding. The resulting dict (when converting
+/* Convert the set to specified encoding. The resulting hashtable (when converting
  * to a hash table) is presized to hold the number of elements in the original
  * set. */
 void setTypeConvert(robj *setobj, int enc) {
@@ -489,28 +497,28 @@ int setTypeConvertAndExpand(robj *setobj, int enc, unsigned long cap, int panic)
     setTypeIterator *si;
     serverAssertWithInfo(NULL, setobj, setobj->type == OBJ_SET && setobj->encoding != enc);
 
-    if (enc == OBJ_ENCODING_HT) {
-        dict *d = dictCreate(&setDictType);
+    if (enc == OBJ_ENCODING_HASHTABLE) {
+        hashtable *ht = hashtableCreate(&setHashtableType);
         sds element;
 
-        /* Presize the dict to avoid rehashing */
+        /* Presize the hashtable to avoid rehashing */
         if (panic) {
-            dictExpand(d, cap);
-        } else if (dictTryExpand(d, cap) != DICT_OK) {
-            dictRelease(d);
+            hashtableExpand(ht, cap);
+        } else if (!hashtableTryExpand(ht, cap)) {
+            hashtableRelease(ht);
             return C_ERR;
         }
 
         /* To add the elements we extract integers and create Objects */
         si = setTypeInitIterator(setobj);
         while ((element = setTypeNextObject(si)) != NULL) {
-            serverAssert(dictAdd(d, element, NULL) == DICT_OK);
+            serverAssert(hashtableAdd(ht, element));
         }
         setTypeReleaseIterator(si);
 
         freeSetObject(setobj); /* frees the internals but not setobj itself */
-        setobj->encoding = OBJ_ENCODING_HT;
-        setobj->ptr = d;
+        setobj->encoding = OBJ_ENCODING_HASHTABLE;
+        setobj->ptr = ht;
     } else if (enc == OBJ_ENCODING_LISTPACK) {
         /* Preallocate the minimum two bytes per element (enc/value + backlen) */
         size_t estcap = cap * 2;
@@ -568,10 +576,10 @@ robj *setTypeDup(robj *o) {
         memcpy(new_lp, lp, sz);
         set = createObject(OBJ_SET, new_lp);
         set->encoding = OBJ_ENCODING_LISTPACK;
-    } else if (o->encoding == OBJ_ENCODING_HT) {
+    } else if (o->encoding == OBJ_ENCODING_HASHTABLE) {
         set = createSetObject();
-        dict *d = o->ptr;
-        dictExpand(set->ptr, dictSize(d));
+        hashtable *ht = o->ptr;
+        hashtableExpand(set->ptr, hashtableSize(ht));
         si = setTypeInitIterator(o);
         char *str;
         size_t len;
@@ -595,7 +603,7 @@ void saddCommand(client *c) {
 
     if (set == NULL) {
         set = setTypeCreate(c->argv[2]->ptr, c->argc - 2);
-        dbAdd(c->db, c->argv[1], set);
+        dbAdd(c->db, c->argv[1], &set);
     } else {
         setTypeMaybeConvert(set, c->argc - 2);
     }
@@ -606,8 +614,8 @@ void saddCommand(client *c) {
     if (added) {
         signalModifiedKey(c, c->db, c->argv[1]);
         notifyKeyspaceEvent(NOTIFY_SET, "sadd", c->argv[1], c->db->id);
+        server.dirty += added;
     }
-    server.dirty += added;
     addReplyLongLong(c, added);
 }
 
@@ -674,7 +682,7 @@ void smoveCommand(client *c) {
     /* Create the destination set when it doesn't exist */
     if (!dstset) {
         dstset = setTypeCreate(ele->ptr, 1);
-        dbAdd(c->db, c->argv[2], dstset);
+        dbAdd(c->db, c->argv[2], &dstset);
     }
 
     signalModifiedKey(c, c->db, c->argv[1]);
@@ -891,11 +899,10 @@ void spopWithCountCommand(client *c) {
                 if (!newset) {
                     newset = str ? createSetListpackObject() : createIntsetObject();
                 }
-                setTypeAddAux(newset, str, len, llele, encoding == OBJ_ENCODING_HT);
-                setTypeRemoveAux(set, str, len, llele, encoding == OBJ_ENCODING_HT);
+                setTypeAddAux(newset, str, len, llele, encoding == OBJ_ENCODING_HASHTABLE);
+                setTypeRemoveAux(set, str, len, llele, encoding == OBJ_ENCODING_HASHTABLE);
             }
         }
-
         /* Transfer the old set to the client. */
         setTypeIterator *si;
         si = setTypeInitIterator(set);
@@ -919,7 +926,7 @@ void spopWithCountCommand(client *c) {
         setTypeReleaseIterator(si);
 
         /* Assign the new set as the key value. */
-        dbReplaceValue(c->db, c->argv[1], newset);
+        dbReplaceValue(c->db, c->argv[1], &newset);
     }
 
     /* Replicate/AOF the remaining elements as an SREM operation */
@@ -1001,8 +1008,6 @@ void srandmemberWithCountCommand(client *c) {
     size_t len;
     int64_t llele;
 
-    dict *d;
-
     if (getRangeLongFromObjectOrReply(c, c->argv[2], -LONG_MAX, LONG_MAX, &l, NULL) != C_OK) return;
     if (l >= 0) {
         count = (unsigned long)l;
@@ -1045,7 +1050,7 @@ void srandmemberWithCountCommand(client *c) {
                     else
                         addReplyBulkLongLong(c, entries[i].lval);
                 }
-                if (c->flags & CLIENT_CLOSE_ASAP) break;
+                if (c->flag.close_asap) break;
             }
             zfree(entries);
             return;
@@ -1058,7 +1063,7 @@ void srandmemberWithCountCommand(client *c) {
             } else {
                 addReplyBulkCBuffer(c, str, len);
             }
-            if (c->flags & CLIENT_CLOSE_ASAP) break;
+            if (c->flag.close_asap) break;
         }
         return;
     }
@@ -1111,8 +1116,8 @@ void srandmemberWithCountCommand(client *c) {
         return;
     }
 
-    /* For CASE 3 and CASE 4 we need an auxiliary dictionary. */
-    d = dictCreate(&sdsReplyDictType);
+    /* For CASE 3 and CASE 4 we need an auxiliary hashtable. */
+    hashtable *ht = hashtableCreate(&sdsReplyHashtableType);
 
     /* CASE 3:
      * The number of elements inside the set is not greater than
@@ -1126,29 +1131,25 @@ void srandmemberWithCountCommand(client *c) {
     if (count * SRANDMEMBER_SUB_STRATEGY_MUL > size) {
         setTypeIterator *si;
 
-        /* Add all the elements into the temporary dictionary. */
+        /* Add all the elements into the temporary hashtable. */
         si = setTypeInitIterator(set);
-        dictExpand(d, size);
+        hashtableExpand(ht, size);
         while (setTypeNext(si, &str, &len, &llele) != -1) {
-            int retval = DICT_ERR;
-
             if (str == NULL) {
-                retval = dictAdd(d, sdsfromlonglong(llele), NULL);
+                serverAssert(hashtableAdd(ht, (void *)sdsfromlonglong(llele)));
             } else {
-                retval = dictAdd(d, sdsnewlen(str, len), NULL);
+                serverAssert(hashtableAdd(ht, (void *)sdsnewlen(str, len)));
             }
-            serverAssert(retval == DICT_OK);
         }
         setTypeReleaseIterator(si);
-        serverAssert(dictSize(d) == size);
+        serverAssert(hashtableSize(ht) == size);
 
         /* Remove random elements to reach the right count. */
         while (size > count) {
-            dictEntry *de;
-            de = dictGetFairRandomKey(d);
-            dictUnlink(d, dictGetKey(de));
-            sdsfree(dictGetKey(de));
-            dictFreeUnlinkedEntry(d, de);
+            void *element;
+            hashtableFairRandomEntry(ht, &element);
+            hashtableDelete(ht, element);
+            sdsfree((sds)element);
             size--;
         }
     }
@@ -1161,7 +1162,7 @@ void srandmemberWithCountCommand(client *c) {
         unsigned long added = 0;
         sds sdsele;
 
-        dictExpand(d, count);
+        hashtableExpand(ht, count);
         while (added < count) {
             setTypeRandomElement(set, &str, &len, &llele);
             if (str == NULL) {
@@ -1172,7 +1173,7 @@ void srandmemberWithCountCommand(client *c) {
             /* Try to add the object to the dictionary. If it already exists
              * free it, otherwise increment the number of objects we have
              * in the result dictionary. */
-            if (dictAdd(d, sdsele, NULL) == DICT_OK)
+            if (hashtableAdd(ht, sdsele))
                 added++;
             else
                 sdsfree(sdsele);
@@ -1181,14 +1182,15 @@ void srandmemberWithCountCommand(client *c) {
 
     /* CASE 3 & 4: send the result to the user. */
     {
-        dictIterator *di;
-        dictEntry *de;
+        hashtableIterator iter;
+        hashtableInitIterator(&iter, ht, 0);
 
         addReplyArrayLen(c, count);
-        di = dictGetIterator(d);
-        while ((de = dictNext(di)) != NULL) addReplyBulkSds(c, dictGetKey(de));
-        dictReleaseIterator(di);
-        dictRelease(d);
+        serverAssert(count == hashtableSize(ht));
+        void *element;
+        while (hashtableNext(&iter, &element)) addReplyBulkSds(c, (sds)element);
+        hashtableResetIterator(&iter);
+        hashtableRelease(ht);
     }
 }
 
@@ -1336,7 +1338,7 @@ void sinterGenericCommand(client *c,
     while ((encoding = setTypeNext(si, &str, &len, &intobj)) != -1) {
         for (j = 1; j < setnum; j++) {
             if (sets[j] == sets[0]) continue;
-            if (!setTypeIsMemberAux(sets[j], str, len, intobj, encoding == OBJ_ENCODING_HT)) break;
+            if (!setTypeIsMemberAux(sets[j], str, len, intobj, encoding == OBJ_ENCODING_HASHTABLE)) break;
         }
 
         /* Only take action when all sets contain the member */
@@ -1355,7 +1357,7 @@ void sinterGenericCommand(client *c,
             } else {
                 if (str && only_integers) {
                     /* It may be an integer although we got it as a string. */
-                    if (encoding == OBJ_ENCODING_HT && string2ll(str, len, (long long *)&intobj)) {
+                    if (encoding == OBJ_ENCODING_HASHTABLE && string2ll(str, len, (long long *)&intobj)) {
                         if (dstset->encoding == OBJ_ENCODING_LISTPACK || dstset->encoding == OBJ_ENCODING_INTSET) {
                             /* Adding it as an integer is more efficient. */
                             str = NULL;
@@ -1365,7 +1367,7 @@ void sinterGenericCommand(client *c,
                         only_integers = 0;
                     }
                 }
-                setTypeAddAux(dstset, str, len, intobj, encoding == OBJ_ENCODING_HT);
+                setTypeAddAux(dstset, str, len, intobj, encoding == OBJ_ENCODING_HASHTABLE);
             }
         }
     }
@@ -1383,19 +1385,19 @@ void sinterGenericCommand(client *c,
                  * frequent reallocs. Therefore, we shrink it now. */
                 dstset->ptr = lpShrinkToFit(dstset->ptr);
             }
-            setKey(c, c->db, dstkey, dstset, 0);
-            addReplyLongLong(c, setTypeSize(dstset));
+            setKey(c, c->db, dstkey, &dstset, 0);
             notifyKeyspaceEvent(NOTIFY_SET, "sinterstore", dstkey, c->db->id);
             server.dirty++;
+            addReplyLongLong(c, setTypeSize(dstset));
         } else {
-            addReply(c, shared.czero);
             if (dbDelete(c->db, dstkey)) {
                 server.dirty++;
                 signalModifiedKey(c, c->db, dstkey);
                 notifyKeyspaceEvent(NOTIFY_GENERIC, "del", dstkey, c->db->id);
             }
+            addReply(c, shared.czero);
+            decrRefCount(dstset);
         }
-        decrRefCount(dstset);
     } else {
         setDeferredSetLen(c, replylen, cardinality);
     }
@@ -1445,6 +1447,7 @@ void sunionDiffGenericCommand(client *c, robj **setkeys, int setnum, robj *dstke
     robj **sets = zmalloc(sizeof(robj *) * setnum);
     setTypeIterator *si;
     robj *dstset = NULL;
+    int dstset_encoding = OBJ_ENCODING_INTSET;
     char *str;
     size_t len;
     int64_t llval;
@@ -1462,6 +1465,23 @@ void sunionDiffGenericCommand(client *c, robj **setkeys, int setnum, robj *dstke
         if (checkType(c, setobj, OBJ_SET)) {
             zfree(sets);
             return;
+        }
+        /* For a SET's encoding, according to the factory method setTypeCreate(), currently have 3 types:
+         * 1. OBJ_ENCODING_INTSET
+         * 2. OBJ_ENCODING_LISTPACK
+         * 3. OBJ_ENCODING_HASHTABLE
+         * 'dstset_encoding' is used to determine which kind of encoding to use when initialize 'dstset'.
+         *
+         * If all sets are all OBJ_ENCODING_INTSET encoding or 'dstkey' is not null, keep 'dstset'
+         * OBJ_ENCODING_INTSET encoding when initialize. Otherwise it is not efficient to create the 'dstset'
+         * from intset and then convert to listpack or hashtable.
+         *
+         * If one of the set is OBJ_ENCODING_LISTPACK, let's set 'dstset' to hashtable default encoding,
+         * the hashtable is more efficient when find and compare than the listpack. The corresponding
+         * time complexity are O(1) vs O(n). */
+        if (!dstkey && dstset_encoding == OBJ_ENCODING_INTSET &&
+            (setobj->encoding == OBJ_ENCODING_LISTPACK || setobj->encoding == OBJ_ENCODING_HASHTABLE)) {
+            dstset_encoding = OBJ_ENCODING_HASHTABLE;
         }
         sets[j] = setobj;
         if (j > 0 && sets[0] == sets[j]) {
@@ -1504,7 +1524,11 @@ void sunionDiffGenericCommand(client *c, robj **setkeys, int setnum, robj *dstke
     /* We need a temp set object to store our union/diff. If the dstkey
      * is not NULL (that is, we are inside an SUNIONSTORE/SDIFFSTORE operation) then
      * this set object will be the resulting object to set into the target key*/
-    dstset = createIntsetObject();
+    if (dstset_encoding == OBJ_ENCODING_INTSET) {
+        dstset = createIntsetObject();
+    } else {
+        dstset = createSetObject();
+    }
 
     if (op == SET_OP_UNION) {
         /* Union is trivial, just add every element of every set to the
@@ -1514,7 +1538,7 @@ void sunionDiffGenericCommand(client *c, robj **setkeys, int setnum, robj *dstke
 
             si = setTypeInitIterator(sets[j]);
             while ((encoding = setTypeNext(si, &str, &len, &llval)) != -1) {
-                cardinality += setTypeAddAux(dstset, str, len, llval, encoding == OBJ_ENCODING_HT);
+                cardinality += setTypeAddAux(dstset, str, len, llval, encoding == OBJ_ENCODING_HASHTABLE);
             }
             setTypeReleaseIterator(si);
         }
@@ -1534,11 +1558,11 @@ void sunionDiffGenericCommand(client *c, robj **setkeys, int setnum, robj *dstke
             for (j = 1; j < setnum; j++) {
                 if (!sets[j]) continue;        /* no key is an empty set. */
                 if (sets[j] == sets[0]) break; /* same set! */
-                if (setTypeIsMemberAux(sets[j], str, len, llval, encoding == OBJ_ENCODING_HT)) break;
+                if (setTypeIsMemberAux(sets[j], str, len, llval, encoding == OBJ_ENCODING_HASHTABLE)) break;
             }
             if (j == setnum) {
                 /* There is no other set with this element. Add it. */
-                cardinality += setTypeAddAux(dstset, str, len, llval, encoding == OBJ_ENCODING_HT);
+                cardinality += setTypeAddAux(dstset, str, len, llval, encoding == OBJ_ENCODING_HASHTABLE);
             }
         }
         setTypeReleaseIterator(si);
@@ -1556,9 +1580,9 @@ void sunionDiffGenericCommand(client *c, robj **setkeys, int setnum, robj *dstke
             si = setTypeInitIterator(sets[j]);
             while ((encoding = setTypeNext(si, &str, &len, &llval)) != -1) {
                 if (j == 0) {
-                    cardinality += setTypeAddAux(dstset, str, len, llval, encoding == OBJ_ENCODING_HT);
+                    cardinality += setTypeAddAux(dstset, str, len, llval, encoding == OBJ_ENCODING_HASHTABLE);
                 } else {
-                    cardinality -= setTypeRemoveAux(dstset, str, len, llval, encoding == OBJ_ENCODING_HT);
+                    cardinality -= setTypeRemoveAux(dstset, str, len, llval, encoding == OBJ_ENCODING_HASHTABLE);
                 }
             }
             setTypeReleaseIterator(si);
@@ -1585,19 +1609,19 @@ void sunionDiffGenericCommand(client *c, robj **setkeys, int setnum, robj *dstke
         /* If we have a target key where to store the resulting set
          * create this key with the result set inside */
         if (setTypeSize(dstset) > 0) {
-            setKey(c, c->db, dstkey, dstset, 0);
-            addReplyLongLong(c, setTypeSize(dstset));
+            setKey(c, c->db, dstkey, &dstset, 0);
             notifyKeyspaceEvent(NOTIFY_SET, op == SET_OP_UNION ? "sunionstore" : "sdiffstore", dstkey, c->db->id);
             server.dirty++;
+            addReplyLongLong(c, setTypeSize(dstset));
         } else {
-            addReply(c, shared.czero);
             if (dbDelete(c->db, dstkey)) {
                 server.dirty++;
                 signalModifiedKey(c, c->db, dstkey);
                 notifyKeyspaceEvent(NOTIFY_GENERIC, "del", dstkey, c->db->id);
             }
+            addReply(c, shared.czero);
+            decrRefCount(dstset);
         }
-        decrRefCount(dstset);
     }
     zfree(sets);
 }
@@ -1626,7 +1650,7 @@ void sscanCommand(client *c) {
     robj *set;
     unsigned long long cursor;
 
-    if (parseScanCursorOrReply(c, c->argv[2], &cursor) == C_ERR) return;
+    if (parseScanCursorOrReply(c, c->argv[2]->ptr, &cursor) == C_ERR) return;
     if ((set = lookupKeyReadOrReply(c, c->argv[1], shared.emptyscan)) == NULL || checkType(c, set, OBJ_SET)) return;
     scanGenericCommand(c, set, cursor);
 }

@@ -142,6 +142,31 @@ start_server {tags {"expire"}} {
         list $e $f
     } {somevalue {}}
 
+    test {EXPIRE / EXPIREAT / PEXPIRE / PEXPIREAT Expiration time is already expired} {
+        r flushall
+        r config resetstat
+
+        r set x somevalue
+        r expire x -1
+        assert_equal {0} [r exists x]
+        assert_equal {1} [s expired_keys]
+
+        r set x somevalue
+        r expireat x [expr [clock seconds] - 1]
+        assert_equal {0} [r exists x]
+        assert_equal {2}  [s expired_keys]
+
+        r set x somevalue
+        r pexpire x -1000
+        assert_equal {0} [r exists x]
+        assert_equal {3} [s expired_keys]
+
+        r set x somevalue
+        r pexpireat x [expr [clock milliseconds] - 1000]
+        assert_equal {0} [r exists x]
+        assert_equal {4} [s expired_keys]
+    }
+
     test {TTL returns time to live in seconds} {
         r del x
         r setex x 10 somevalue
@@ -368,7 +393,7 @@ start_server {tags {"expire"}} {
                 {set foo10 bar}
                 {pexpireat foo10 *}
                 {set foo11 bar}
-                {del foo11}
+                {unlink foo11}
                 {set foo12 bar}
                 {pexpireat foo12 *}
                 {set foo13 bar}
@@ -500,7 +525,7 @@ start_server {tags {"expire"}} {
             {set foo3 bar}
             {pexpireat foo3 *}
             {pexpireat foo3 *}
-            {del foo3}
+            {unlink foo3}
             {set foo4 bar}
             {pexpireat foo4 *}
             {pexpireat foo4 *}
@@ -629,7 +654,7 @@ start_server {tags {"expire"}} {
        r ttl foo
     } {-1} {needs:debug}
 
-    test {GETEX propagate as to replica as PERSIST, DEL, or nothing} {
+    test {GETEX propagate as to replica as PERSIST, UNLINK, or nothing} {
         # In the above tests, many keys with random expiration times are set, flush
         # the DBs to avoid active expiry kicking in and messing the replication streams.
         r flushall
@@ -642,7 +667,7 @@ start_server {tags {"expire"}} {
            {select *}
            {set foo bar PXAT *}
            {persist foo}
-           {del foo}
+           {unlink foo}
         }
         close_replication_stream $repl
     } {} {needs:repl}
@@ -784,7 +809,7 @@ start_server {tags {"expire"}} {
 
         assert_replication_stream $repl {
             {select *}
-            {del foo}
+            {unlink foo}
             {set x 1}
         }
         close_replication_stream $repl
@@ -805,8 +830,8 @@ start_server {tags {"expire"}} {
 
         assert_replication_stream $repl {
             {select *}
-            {del foo*}
-            {del foo*}
+            {unlink foo*}
+            {unlink foo*}
         }
         close_replication_stream $repl
         assert_equal [r debug set-active-expire 1] {OK}
@@ -826,11 +851,140 @@ start_server {tags {"expire"}} {
 
         assert_replication_stream $repl {
             {select *}
-            {del foo*}
-            {del foo*}
+            {unlink foo*}
+            {unlink foo*}
         }
         close_replication_stream $repl
         assert_equal [r debug set-active-expire 1] {OK}
+    } {} {needs:debug}
+
+    test {import-source can be closed when import-mode is off} {
+        r config set import-mode no
+        assert_error "ERR Server is not in import mode" {r client import-source on}
+
+        r config set import-mode yes
+        assert_equal [r client import-source on] {OK}
+        assert_match {*flags=I*} [r client list id [r client id]]
+
+        r config set import-mode no
+        assert_equal [r client import-source off] {OK}
+        assert_match {*flags=N*} [r client list id [r client id]]
+    }
+
+    test {Import mode should forbid active expiration} {
+        r flushall
+
+        r config set import-mode yes
+        assert_equal [r client import-source on] {OK}
+
+        r set foo1 bar PX 1
+        r set foo2 bar PX 1
+        after 10
+
+        assert_equal [r dbsize] {2}
+
+        assert_equal [r client import-source off] {OK}
+        r config set import-mode no
+
+        # Verify all keys have expired
+        wait_for_condition 40 100 {
+            [r dbsize] eq 0
+        } else {
+            fail "Keys did not actively expire."
+        }
+    }
+
+    test {Import mode should forbid lazy expiration} {
+        r flushall
+        r debug set-active-expire 0 
+
+        r config set import-mode yes
+        assert_equal [r client import-source on] {OK}
+
+        r set foo1 1 PX 1
+        after 10
+
+        r get foo1
+        assert_equal [r dbsize] {1}
+
+        assert_equal [r client import-source off] {OK}
+        r config set import-mode no
+
+        r get foo1
+
+        assert_equal [r dbsize] {0}
+
+        assert_equal [r debug set-active-expire 1] {OK}
+    } {} {needs:debug}
+
+    test {Client can visit expired key in import-source state} {
+        r flushall
+
+        r config set import-mode yes
+
+        r set foo1 1 PX 1
+        after 10
+
+        # Normal clients cannot visit expired key.
+        assert_equal [r get foo1] {}
+        assert_equal [r ttl foo1] {-2}
+        assert_equal [r dbsize] 1
+
+        # Client can visit expired key when in import-source state.
+        assert_equal [r client import-source on] {OK}
+        assert_equal [r ttl foo1] {0}
+        assert_equal [r get foo1] {1}
+        assert_equal [r incr foo1] {2}
+        assert_equal [r randomkey] {foo1}
+        assert_equal [r scan 0 match * count 10000] {0 foo1}
+        assert_equal [r keys *] {foo1}
+
+        assert_equal [r client import-source off] {OK}
+        r config set import-mode no
+
+        # Verify all keys have expired
+        wait_for_condition 40 100 {
+            [r dbsize] eq 0
+        } else {
+            fail "Keys did not actively expire."
+        }
+    }
+}
+
+start_server {tags {expire} overrides {hz 100}} {
+    test {Active expiration triggers hashtable shrink} {
+        set persistent_keys 5
+        set volatile_keys 100
+        set total_keys [expr $persistent_keys + $volatile_keys]
+
+        for {set i 0} {$i < $persistent_keys} {incr i} {
+            r set "key_$i" "value_$i"
+        }
+        for {set i 0} {$i < $volatile_keys} {incr i} {
+            r psetex "expire_key_${i}" 100 "expire_value_${i}"
+        }
+        set table_size_before_expire [main_hash_table_size]
+
+        # Verify keys are set
+        assert_equal $total_keys [r dbsize]
+
+        # Wait for active expiration
+        wait_for_condition 100 50 {
+            [r dbsize] eq $persistent_keys
+        } else {
+            fail "Keys not expired"
+        }
+
+        # Wait for the table to shrink and active rehashing finish
+        wait_for_condition 100 50 {
+            [main_hash_table_size] < $table_size_before_expire
+        } else {
+            puts [r debug htstats 9]
+            fail "Table didn't shrink"
+        }
+
+        # Verify server is still responsive
+        assert_equal [r ping] {PONG}
     } {} {needs:debug}
 }
 
@@ -847,7 +1001,7 @@ start_cluster 1 0 {tags {"expire external:skip cluster"}} {
 
         # hashslot(foo) is 12182
         # fill data across different slots with expiration
-        for {set j 1} {$j <= 100} {incr j} {
+        for {set j 1} {$j <= 1000} {incr j} {
             r psetex "{foo}$j" 500 a
         }
         # hashslot(key) is 12539
@@ -858,7 +1012,7 @@ start_cluster 1 0 {tags {"expire external:skip cluster"}} {
         r debug dict-resizing 0
 
         # delete data to have lot's (99%) of empty buckets (slot 12182 should be skipped)
-        for {set j 1} {$j <= 99} {incr j} {
+        for {set j 1} {$j <= 999} {incr j} {
             r del "{foo}$j"
         }
 
@@ -884,7 +1038,9 @@ start_cluster 1 0 {tags {"expire external:skip cluster"}} {
         r debug dict-resizing 1
 
         # put some data into slot 12182 and trigger the resize
+        # by deleting it to trigger shrink
         r psetex "{foo}0" 500 a
+        r del "{foo}0"
 
         # Verify all keys have expired
         wait_for_condition 400 100 {

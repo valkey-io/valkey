@@ -11,6 +11,7 @@
             "LOADING",
             "STALE",
             "FAST",
+            "NO_MULTI",
             "ALLOW_BUSY"
         ],
         "acl_categories": [

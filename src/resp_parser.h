@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, Redis Labs Ltd.
+ * Copyright (c) 2021, Redis Ltd.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without

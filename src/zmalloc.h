@@ -1,6 +1,6 @@
 /* zmalloc - total amount of allocated memory aware version of malloc()
  *
- * Copyright (c) 2009-2010, Salvatore Sanfilippo <antirez at gmail dot com>
+ * Copyright (c) 2009-2010, Redis Ltd.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -39,7 +39,7 @@
 
 #if defined(USE_TCMALLOC)
 #define ZMALLOC_LIB ("tcmalloc-" __xstr(TC_VERSION_MAJOR) "." __xstr(TC_VERSION_MINOR))
-#include <google/tcmalloc.h>
+#include <gperftools/tcmalloc.h>
 #if (TC_VERSION_MAJOR == 1 && TC_VERSION_MINOR >= 6) || (TC_VERSION_MAJOR > 1)
 #define HAVE_MALLOC_SIZE 1
 #define zmalloc_size(p) tc_malloc_size(p)
@@ -48,7 +48,7 @@
 #endif
 
 #elif defined(USE_JEMALLOC)
-#define ZMALLOC_LIB                                                                                                    \
+#define ZMALLOC_LIB \
     ("jemalloc-" __xstr(JEMALLOC_VERSION_MAJOR) "." __xstr(JEMALLOC_VERSION_MINOR) "." __xstr(JEMALLOC_VERSION_BUGFIX))
 #include <jemalloc/jemalloc.h>
 #if (JEMALLOC_VERSION_MAJOR == 2 && JEMALLOC_VERSION_MINOR >= 1) || (JEMALLOC_VERSION_MAJOR > 2)
@@ -76,7 +76,7 @@
 #define ZMALLOC_LIB "libc"
 #define USE_LIBC 1
 
-#if !defined(NO_MALLOC_USABLE_SIZE) && (defined(__GLIBC__) || defined(__FreeBSD__) || defined(__DragonFly__) ||        \
+#if !defined(NO_MALLOC_USABLE_SIZE) && (defined(__GLIBC__) || defined(__FreeBSD__) || defined(__DragonFly__) || \
                                         defined(__HAIKU__) || defined(USE_MALLOC_USABLE_SIZE))
 
 /* Includes for malloc_usable_size() */
@@ -100,12 +100,14 @@
 #include <malloc.h>
 #endif
 
-/* We can enable the server defrag capabilities only if we are using Jemalloc
- * and the version used is our special version modified for the server having
- * the ability to return per-allocation fragmentation hints. */
-#if defined(USE_JEMALLOC) && defined(JEMALLOC_FRAG_HINT)
-#define HAVE_DEFRAG
-#endif
+/* The zcalloc symbol is a symbol name already used by zlib, which is defining
+ * other names using the "z" prefix specific to zlib. In practice, linking
+ * valkey with a static openssl, which itself might depend on a static libz
+ * will result in link time error rejecting multiple symbol definitions. */
+#define zmalloc valkey_malloc
+#define zcalloc valkey_calloc
+#define zrealloc valkey_realloc
+#define zfree valkey_free
 
 /* 'noinline' attribute is intended to prevent the `-Wstringop-overread` warning
  * when using gcc-12 later with LTO enabled. It may be removed once the
@@ -118,6 +120,7 @@ __attribute__((malloc, alloc_size(1), noinline)) void *ztrymalloc(size_t size);
 __attribute__((malloc, alloc_size(1), noinline)) void *ztrycalloc(size_t size);
 __attribute__((alloc_size(2), noinline)) void *ztryrealloc(void *ptr, size_t size);
 void zfree(void *ptr);
+void zfree_with_size(void *ptr, size_t size);
 void *zmalloc_usable(size_t size, size_t *usable);
 void *zcalloc_usable(size_t size, size_t *usable);
 void *zrealloc_usable(void *ptr, size_t size, size_t *usable);
@@ -128,12 +131,7 @@ __attribute__((malloc)) char *zstrdup(const char *s);
 size_t zmalloc_used_memory(void);
 void zmalloc_set_oom_handler(void (*oom_handler)(size_t));
 size_t zmalloc_get_rss(void);
-int zmalloc_get_allocator_info(size_t *allocated,
-                               size_t *active,
-                               size_t *resident,
-                               size_t *retained,
-                               size_t *muzzy,
-                               size_t *frag_smallbins_bytes);
+int zmalloc_get_allocator_info(size_t *allocated, size_t *active, size_t *resident, size_t *retained, size_t *muzzy);
 void set_jemalloc_bg_thread(int enable);
 int jemalloc_purge(void);
 size_t zmalloc_get_private_dirty(long pid);
@@ -141,12 +139,7 @@ size_t zmalloc_get_smap_bytes_by_field(char *field, long pid);
 size_t zmalloc_get_memory_size(void);
 void zlibc_free(void *ptr);
 void zlibc_trim(void);
-void zmadvise_dontneed(void *ptr);
-
-#ifdef HAVE_DEFRAG
-void zfree_no_tcache(void *ptr);
-__attribute__((malloc)) void *zmalloc_no_tcache(size_t size);
-#endif
+void zmadvise_dontneed(void *ptr, size_t size_hint);
 
 #ifndef HAVE_MALLOC_SIZE
 size_t zmalloc_size(void *ptr);

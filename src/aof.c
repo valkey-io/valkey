@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009-2012, Salvatore Sanfilippo <antirez at gmail dot com>
+ * Copyright (c) 2009-2012, Redis Ltd.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -31,6 +31,7 @@
 #include "bio.h"
 #include "rio.h"
 #include "functions.h"
+#include "module.h"
 
 #include <signal.h>
 #include <fcntl.h>
@@ -423,7 +424,7 @@ void aofManifestFreeAndUpdate(aofManifest *am) {
  *  appendonly.aof.1.base.aof  (server.aof_use_rdb_preamble is no)
  *  appendonly.aof.1.base.rdb  (server.aof_use_rdb_preamble is yes)
  */
-sds getNewBaseFileNameAndMarkPreAsHistory(aofManifest *am) {
+sds getNewBaseFileNameAndMarkPreAsHistory(aofManifest *am, int aof_use_rdb_preamble) {
     serverAssert(am != NULL);
     if (am->base_aof_info) {
         serverAssert(am->base_aof_info->file_type == AOF_FILE_TYPE_BASE);
@@ -431,7 +432,7 @@ sds getNewBaseFileNameAndMarkPreAsHistory(aofManifest *am) {
         listAddNodeHead(am->history_aof_list, am->base_aof_info);
     }
 
-    char *format_suffix = server.aof_use_rdb_preamble ? RDB_FORMAT_SUFFIX : AOF_FORMAT_SUFFIX;
+    char *format_suffix = aof_use_rdb_preamble ? RDB_FORMAT_SUFFIX : AOF_FORMAT_SUFFIX;
 
     aofInfo *ai = aofInfoCreate();
     ai->file_name = sdscatprintf(sdsempty(), "%s.%lld%s%s", server.aof_filename, ++am->curr_base_file_seq,
@@ -476,7 +477,7 @@ sds getLastIncrAofName(aofManifest *am) {
     }
 
     /* Or return the last one. */
-    listNode *lastnode = listIndex(am->incr_aof_list, -1);
+    listNode *lastnode = listLast(am->incr_aof_list);
     aofInfo *ai = listNodeValue(lastnode);
     return ai->file_name;
 }
@@ -529,7 +530,7 @@ int writeAofManifestFile(sds buf) {
     sds tmp_am_name = getTempAofManifestFileName();
     sds tmp_am_filepath = makePath(server.aof_dirname, tmp_am_name);
 
-    int fd = open(tmp_am_filepath, O_WRONLY | O_TRUNC | O_CREAT, 0644);
+    int fd = open(tmp_am_filepath, O_WRONLY | O_TRUNC | O_CREAT, 0666);
     if (fd == -1) {
         serverLog(LL_WARNING, "Can't open the AOF manifest file %s: %s", tmp_am_name, strerror(errno));
 
@@ -712,7 +713,7 @@ void aofOpenIfNeededOnServerStart(void) {
     /* If we start with an empty dataset, we will force create a BASE file. */
     size_t incr_aof_len = listLength(server.aof_manifest->incr_aof_list);
     if (!server.aof_manifest->base_aof_info && !incr_aof_len) {
-        sds base_name = getNewBaseFileNameAndMarkPreAsHistory(server.aof_manifest);
+        sds base_name = getNewBaseFileNameAndMarkPreAsHistory(server.aof_manifest, server.aof_use_rdb_preamble);
         sds base_filepath = makePath(server.aof_dirname, base_name);
         if (rewriteAppendOnlyFile(base_filepath) != C_OK) {
             exit(1);
@@ -727,7 +728,7 @@ void aofOpenIfNeededOnServerStart(void) {
 
     /* Here we should use 'O_APPEND' flag. */
     sds aof_filepath = makePath(server.aof_dirname, aof_name);
-    server.aof_fd = open(aof_filepath, O_WRONLY | O_APPEND | O_CREAT, 0644);
+    server.aof_fd = open(aof_filepath, O_WRONLY | O_APPEND | O_CREAT, 0666);
     sdsfree(aof_filepath);
     if (server.aof_fd == -1) {
         serverLog(LL_WARNING, "Can't open the append-only file %s: %s", aof_name, strerror(errno));
@@ -789,7 +790,7 @@ int openNewIncrAofForAppend(void) {
         new_aof_name = sdsdup(getNewIncrAofName(temp_am));
     }
     sds new_aof_filepath = makePath(server.aof_dirname, new_aof_name);
-    newfd = open(new_aof_filepath, O_WRONLY | O_TRUNC | O_CREAT, 0644);
+    newfd = open(new_aof_filepath, O_WRONLY | O_TRUNC | O_CREAT, 0666);
     sdsfree(new_aof_filepath);
     if (newfd == -1) {
         serverLog(LL_WARNING, "Can't open the append-only file %s: %s", new_aof_name, strerror(errno));
@@ -922,7 +923,7 @@ void killAppendOnlyChild(void) {
     if (kill(server.child_pid, SIGUSR1) != -1) {
         while (waitpid(-1, &statloc, 0) != server.child_pid);
     }
-    aofRemoveTempFile(server.child_pid);
+    aofRemoveTempFile(server.child_pid, 0);
     resetChildState();
     server.aof_rewrite_time_start = -1;
 }
@@ -931,18 +932,23 @@ void killAppendOnlyChild(void) {
  * at runtime using the CONFIG command. */
 void stopAppendOnly(void) {
     serverAssert(server.aof_state != AOF_OFF);
-    flushAppendOnlyFile(1);
-    if (valkey_fsync(server.aof_fd) == -1) {
-        serverLog(LL_WARNING, "Fail to fsync the AOF file: %s", strerror(errno));
-    } else {
-        server.aof_last_fsync = server.mstime;
+    if (server.aof_fd != -1) {
+        flushAppendOnlyFile(1);
+        if (valkey_fsync(server.aof_fd) == -1) {
+            serverLog(LL_WARNING, "Fail to fsync the AOF file: %s", strerror(errno));
+        } else {
+            server.aof_last_fsync = server.mstime;
+        }
+        close(server.aof_fd);
     }
-    close(server.aof_fd);
 
     server.aof_fd = -1;
     server.aof_selected_db = -1;
     server.aof_state = AOF_OFF;
-    server.aof_rewrite_scheduled = 0;
+    if (server.aof_rewrite_scheduled) {
+        server.aof_rewrite_scheduled = 0;
+        serverLog(LL_NOTICE, "AOF was disabled but there is a scheduled AOF background, cancel it.");
+    }
     server.aof_last_incr_size = 0;
     server.aof_last_incr_fsync_offset = 0;
     server.fsynced_reploff = -1;
@@ -1123,12 +1129,16 @@ void flushAppendOnlyFile(int force) {
      * useful for graphing / monitoring purposes. */
     if (sync_in_progress) {
         latencyAddSampleIfNeeded("aof-write-pending-fsync", latency);
+        latencyTraceIfNeeded(aof, aof_write_pending_fsync, latency);
     } else if (hasActiveChildProcess()) {
         latencyAddSampleIfNeeded("aof-write-active-child", latency);
+        latencyTraceIfNeeded(aof, aof_write_active_child, latency);
     } else {
         latencyAddSampleIfNeeded("aof-write-alone", latency);
+        latencyTraceIfNeeded(aof, aof_write_alone, latency);
     }
     latencyAddSampleIfNeeded("aof-write", latency);
+    latencyTraceIfNeeded(aof, aof_write, latency);
 
     /* We performed the write so reset the postponed flush sentinel to zero. */
     server.aof_flush_postponed_start = 0;
@@ -1242,6 +1252,8 @@ try_fsync:
         }
         latencyEndMonitor(latency);
         latencyAddSampleIfNeeded("aof-fsync-always", latency);
+        latencyTraceIfNeeded(aof, aof_fsync_always, latency);
+
         server.aof_last_incr_fsync_offset = server.aof_last_incr_size;
         server.aof_last_fsync = server.mstime;
         atomic_store_explicit(&server.fsynced_reploff_pending, server.primary_repl_offset, memory_order_relaxed);
@@ -1364,11 +1376,14 @@ struct client *createAOFClient(void) {
      * background processing there is a chance that the
      * command execution order will be violated.
      */
-    c->flags = CLIENT_DENY_BLOCKING;
+    c->raw_flag = 0;
+    c->flag.deny_blocking = 1;
+    c->flag.fake = 1;
 
     /* We set the fake client as a replica waiting for the synchronization
      * so that the server will not try to send replies to this client. */
-    c->repl_state = REPLICA_STATE_WAIT_BGSAVE_START;
+    initClientReplicationData(c);
+    c->repl_data->repl_state = REPLICA_STATE_WAIT_BGSAVE_START;
     return c;
 }
 
@@ -1523,10 +1538,11 @@ int loadSingleAppendOnlyFile(char *filename) {
         }
 
         /* Command lookup */
-        cmd = lookupCommand(argv, argc);
-        if (!cmd) {
-            serverLog(LL_WARNING, "Unknown command '%s' reading the append only file %s", (char *)argv[0]->ptr,
-                      filename);
+        sds err = NULL;
+        fakeClient->cmd = fakeClient->lastcmd = cmd = lookupCommand(argv, argc);
+        if ((!cmd && !commandCheckExistence(fakeClient, &err)) || (cmd && !commandCheckArity(cmd, argc, &err))) {
+            serverLog(LL_WARNING, "Error reading the append only file %s, error: %s", filename, err);
+            sdsfree(err);
             freeClientArgv(fakeClient);
             ret = AOF_FAILED;
             goto cleanup;
@@ -1535,8 +1551,7 @@ int loadSingleAppendOnlyFile(char *filename) {
         if (cmd->proc == multiCommand) valid_before_multi = valid_up_to;
 
         /* Run the command in the context of a fake client */
-        fakeClient->cmd = fakeClient->lastcmd = cmd;
-        if (fakeClient->flags & CLIENT_MULTI && fakeClient->cmd->proc != execCommand) {
+        if (fakeClient->flag.multi && fakeClient->cmd->proc != execCommand) {
             /* Note: we don't have to attempt calling evalGetCommandFlags,
              * since this is AOF, the checks in processCommand are not made
              * anyway.*/
@@ -1549,7 +1564,7 @@ int loadSingleAppendOnlyFile(char *filename) {
         serverAssert(fakeClient->bufpos == 0 && listLength(fakeClient->reply) == 0);
 
         /* The fake client should never get blocked */
-        serverAssert((fakeClient->flags & CLIENT_BLOCKED) == 0);
+        serverAssert(fakeClient->flag.blocked == 0);
 
         /* Clean up. Command code may have changed argv/argc so we use the
          * argv/argc of the client instead of the local variables. */
@@ -1562,7 +1577,7 @@ int loadSingleAppendOnlyFile(char *filename) {
      * If the client is in the middle of a MULTI/EXEC, handle it as it was
      * a short read, even if technically the protocol is correct: we want
      * to remove the unprocessed tail and continue. */
-    if (fakeClient->flags & CLIENT_MULTI) {
+    if (fakeClient->flag.multi) {
         serverLog(LL_WARNING, "Revert incomplete MULTI/EXEC transaction in AOF file %s", filename);
         valid_up_to = valid_before_multi;
         goto uxeof;
@@ -1881,30 +1896,29 @@ int rewriteSortedSetObject(rio *r, robj *key, robj *o) {
         }
     } else if (o->encoding == OBJ_ENCODING_SKIPLIST) {
         zset *zs = o->ptr;
-        dictIterator *di = dictGetIterator(zs->dict);
-        dictEntry *de;
-
-        while ((de = dictNext(di)) != NULL) {
-            sds ele = dictGetKey(de);
-            double *score = dictGetVal(de);
-
+        hashtableIterator iter;
+        hashtableInitIterator(&iter, zs->ht, 0);
+        void *next;
+        while (hashtableNext(&iter, &next)) {
+            zskiplistNode *node = next;
             if (count == 0) {
                 int cmd_items = (items > AOF_REWRITE_ITEMS_PER_CMD) ? AOF_REWRITE_ITEMS_PER_CMD : items;
 
                 if (!rioWriteBulkCount(r, '*', 2 + cmd_items * 2) || !rioWriteBulkString(r, "ZADD", 4) ||
                     !rioWriteBulkObject(r, key)) {
-                    dictReleaseIterator(di);
+                    hashtableResetIterator(&iter);
                     return 0;
                 }
             }
-            if (!rioWriteBulkDouble(r, *score) || !rioWriteBulkString(r, ele, sdslen(ele))) {
-                dictReleaseIterator(di);
+            sds ele = node->ele;
+            if (!rioWriteBulkDouble(r, node->score) || !rioWriteBulkString(r, ele, sdslen(ele))) {
+                hashtableResetIterator(&iter);
                 return 0;
             }
             if (++count == AOF_REWRITE_ITEMS_PER_CMD) count = 0;
             items--;
         }
-        dictReleaseIterator(di);
+        hashtableResetIterator(&iter);
     } else {
         serverPanic("Unknown sorted zset encoding");
     }
@@ -1914,7 +1928,7 @@ int rewriteSortedSetObject(rio *r, robj *key, robj *o) {
 /* Write either the key or the value of the currently selected item of a hash.
  * The 'hi' argument passes a valid hash iterator.
  * The 'what' filed specifies if to write a key or a value and can be
- * either OBJ_HASH_KEY or OBJ_HASH_VALUE.
+ * either OBJ_HASH_FIELD or OBJ_HASH_VALUE.
  *
  * The function returns 0 on error, non-zero on success. */
 static int rioWriteHashIteratorCursor(rio *r, hashTypeIterator *hi, int what) {
@@ -1928,7 +1942,7 @@ static int rioWriteHashIteratorCursor(rio *r, hashTypeIterator *hi, int what) {
             return rioWriteBulkString(r, (char *)vstr, vlen);
         else
             return rioWriteBulkLongLong(r, vll);
-    } else if (hi->encoding == OBJ_ENCODING_HT) {
+    } else if (hi->encoding == OBJ_ENCODING_HASHTABLE) {
         sds value = hashTypeCurrentFromHashTable(hi, what);
         return rioWriteBulkString(r, value, sdslen(value));
     }
@@ -1940,30 +1954,30 @@ static int rioWriteHashIteratorCursor(rio *r, hashTypeIterator *hi, int what) {
 /* Emit the commands needed to rebuild a hash object.
  * The function returns 0 on error, 1 on success. */
 int rewriteHashObject(rio *r, robj *key, robj *o) {
-    hashTypeIterator *hi;
+    hashTypeIterator hi;
     long long count = 0, items = hashTypeLength(o);
 
-    hi = hashTypeInitIterator(o);
-    while (hashTypeNext(hi) != C_ERR) {
+    hashTypeInitIterator(o, &hi);
+    while (hashTypeNext(&hi) != C_ERR) {
         if (count == 0) {
             int cmd_items = (items > AOF_REWRITE_ITEMS_PER_CMD) ? AOF_REWRITE_ITEMS_PER_CMD : items;
 
             if (!rioWriteBulkCount(r, '*', 2 + cmd_items * 2) || !rioWriteBulkString(r, "HMSET", 5) ||
                 !rioWriteBulkObject(r, key)) {
-                hashTypeReleaseIterator(hi);
+                hashTypeResetIterator(&hi);
                 return 0;
             }
         }
 
-        if (!rioWriteHashIteratorCursor(r, hi, OBJ_HASH_KEY) || !rioWriteHashIteratorCursor(r, hi, OBJ_HASH_VALUE)) {
-            hashTypeReleaseIterator(hi);
+        if (!rioWriteHashIteratorCursor(r, &hi, OBJ_HASH_FIELD) || !rioWriteHashIteratorCursor(r, &hi, OBJ_HASH_VALUE)) {
+            hashTypeResetIterator(&hi);
             return 0;
         }
         if (++count == AOF_REWRITE_ITEMS_PER_CMD) count = 0;
         items--;
     }
 
-    hashTypeReleaseIterator(hi);
+    hashTypeResetIterator(&hi);
 
     return 1;
 }
@@ -1994,21 +2008,19 @@ int rioWriteStreamPendingEntry(rio *r,
               RETRYCOUNT <count> JUSTID FORCE. */
     streamID id;
     streamDecodeID(rawid, &id);
-    /* clang-format off */
-    if (rioWriteBulkCount(r,'*',12) == 0) return 0;
-    if (rioWriteBulkString(r,"XCLAIM",6) == 0) return 0;
-    if (rioWriteBulkObject(r,key) == 0) return 0;
-    if (rioWriteBulkString(r,groupname,groupname_len) == 0) return 0;
-    if (rioWriteBulkString(r,consumer->name,sdslen(consumer->name)) == 0) return 0;
-    if (rioWriteBulkString(r,"0",1) == 0) return 0;
-    if (rioWriteBulkStreamID(r,&id) == 0) return 0;
-    if (rioWriteBulkString(r,"TIME",4) == 0) return 0;
-    if (rioWriteBulkLongLong(r,nack->delivery_time) == 0) return 0;
-    if (rioWriteBulkString(r,"RETRYCOUNT",10) == 0) return 0;
-    if (rioWriteBulkLongLong(r,nack->delivery_count) == 0) return 0;
-    if (rioWriteBulkString(r,"JUSTID",6) == 0) return 0;
-    if (rioWriteBulkString(r,"FORCE",5) == 0) return 0;
-    /* clang-format on */
+    if (rioWriteBulkCount(r, '*', 12) == 0) return 0;
+    if (rioWriteBulkString(r, "XCLAIM", 6) == 0) return 0;
+    if (rioWriteBulkObject(r, key) == 0) return 0;
+    if (rioWriteBulkString(r, groupname, groupname_len) == 0) return 0;
+    if (rioWriteBulkString(r, consumer->name, sdslen(consumer->name)) == 0) return 0;
+    if (rioWriteBulkString(r, "0", 1) == 0) return 0;
+    if (rioWriteBulkStreamID(r, &id) == 0) return 0;
+    if (rioWriteBulkString(r, "TIME", 4) == 0) return 0;
+    if (rioWriteBulkLongLong(r, nack->delivery_time) == 0) return 0;
+    if (rioWriteBulkString(r, "RETRYCOUNT", 10) == 0) return 0;
+    if (rioWriteBulkLongLong(r, nack->delivery_count) == 0) return 0;
+    if (rioWriteBulkString(r, "JUSTID", 6) == 0) return 0;
+    if (rioWriteBulkString(r, "FORCE", 5) == 0) return 0;
     return 1;
 }
 
@@ -2021,14 +2033,12 @@ int rioWriteStreamEmptyConsumer(rio *r,
                                 size_t groupname_len,
                                 streamConsumer *consumer) {
     /* XGROUP CREATECONSUMER <key> <group> <consumer> */
-    /* clang-format off */
-    if (rioWriteBulkCount(r,'*',5) == 0) return 0;
-    if (rioWriteBulkString(r,"XGROUP",6) == 0) return 0;
-    if (rioWriteBulkString(r,"CREATECONSUMER",14) == 0) return 0;
-    if (rioWriteBulkObject(r,key) == 0) return 0;
-    if (rioWriteBulkString(r,groupname,groupname_len) == 0) return 0;
-    if (rioWriteBulkString(r,consumer->name,sdslen(consumer->name)) == 0) return 0;
-    /* clang-format on */
+    if (rioWriteBulkCount(r, '*', 5) == 0) return 0;
+    if (rioWriteBulkString(r, "XGROUP", 6) == 0) return 0;
+    if (rioWriteBulkString(r, "CREATECONSUMER", 14) == 0) return 0;
+    if (rioWriteBulkObject(r, key) == 0) return 0;
+    if (rioWriteBulkString(r, groupname, groupname_len) == 0) return 0;
+    if (rioWriteBulkString(r, consumer->name, sdslen(consumer->name)) == 0) return 0;
     return 1;
 }
 
@@ -2158,7 +2168,7 @@ int rewriteModuleObject(rio *r, robj *key, robj *o, int dbid) {
     ValkeyModuleIO io;
     moduleValue *mv = o->ptr;
     moduleType *mt = mv->type;
-    moduleInitIOContext(io, mt, r, key, dbid);
+    moduleInitIOContext(&io, mt, r, key, dbid);
     mt->aof_rewrite(&io, key, mv->value);
     if (io.ctx) {
         moduleFreeContext(io.ctx);
@@ -2187,7 +2197,6 @@ werr:
 }
 
 int rewriteAppendOnlyFileRio(rio *aof) {
-    dictEntry *de;
     int j;
     long key_count = 0;
     long long updated_time = 0;
@@ -2207,26 +2216,27 @@ int rewriteAppendOnlyFileRio(rio *aof) {
 
     for (j = 0; j < server.dbnum; j++) {
         char selectcmd[] = "*2\r\n$6\r\nSELECT\r\n";
-        serverDb *db = server.db + j;
-        if (kvstoreSize(db->keys) == 0) continue;
+        if (dbHasNoKeys(j)) continue;
+        serverDb *db = server.db[j];
 
         /* SELECT the new DB */
         if (rioWrite(aof, selectcmd, sizeof(selectcmd) - 1) == 0) goto werr;
         if (rioWriteBulkLongLong(aof, j) == 0) goto werr;
 
-        kvs_it = kvstoreIteratorInit(db->keys);
+        kvs_it = kvstoreIteratorInit(db->keys, HASHTABLE_ITER_SAFE | HASHTABLE_ITER_PREFETCH_VALUES);
         /* Iterate this DB writing every entry */
-        while ((de = kvstoreIteratorNext(kvs_it)) != NULL) {
+        void *next;
+        while (kvstoreIteratorNext(kvs_it, &next)) {
+            robj *o = next;
             sds keystr;
-            robj key, *o;
+            robj key;
             long long expiretime;
             size_t aof_bytes_before_key = aof->processed_bytes;
 
-            keystr = dictGetKey(de);
-            o = dictGetVal(de);
+            keystr = objectGetKey(o);
             initStaticStringObject(key, keystr);
 
-            expiretime = getExpire(db, &key);
+            expiretime = objectGetExpire(o);
 
             /* Save the key and associated value */
             if (o->type == OBJ_STRING) {
@@ -2443,6 +2453,7 @@ int rewriteAppendOnlyFileBackground(void) {
         serverLog(LL_NOTICE, "Background append only file rewriting started by pid %ld", (long)childpid);
         server.aof_rewrite_scheduled = 0;
         server.aof_rewrite_time_start = time(NULL);
+        server.aof_rewrite_use_rdb_preamble = server.aof_use_rdb_preamble;
         return C_OK;
     }
     return C_OK; /* unreached */
@@ -2456,6 +2467,7 @@ void bgrewriteaofCommand(client *c) {
         /* When manually triggering AOFRW we reset the count
          * so that it can be executed immediately. */
         server.stat_aofrw_consecutive_failures = 0;
+        serverLog(LL_NOTICE, "Background append only file rewriting scheduled.");
         addReplyStatus(c, "Background append only file rewriting scheduled");
     } else if (rewriteAppendOnlyFileBackground() == C_OK) {
         addReplyStatus(c, "Background append only file rewriting started");
@@ -2465,14 +2477,37 @@ void bgrewriteaofCommand(client *c) {
     }
 }
 
-void aofRemoveTempFile(pid_t childpid) {
+/* Note that we may call this function in signal handler 'sigShutdownHandler',
+ * so we need guarantee all functions we call are async-signal-safe.
+ * If we call this function from signal handle, we won't call bg_unlink that
+ * is not async-signal-safe. */
+void aofRemoveTempFile(pid_t childpid, int from_signal) {
     char tmpfile[256];
+    char tmpfile2[256];
+    char pid[32];
 
-    snprintf(tmpfile, 256, "temp-rewriteaof-bg-%d.aof", (int)childpid);
-    bg_unlink(tmpfile);
+    /* Generate temp aof file name using async-signal safe functions. */
+    ll2string(pid, sizeof(pid), childpid);
+    valkey_strlcpy(tmpfile, "temp-rewriteaof-bg-", sizeof(tmpfile));
+    valkey_strlcat(tmpfile, pid, sizeof(tmpfile));
+    valkey_strlcat(tmpfile, ".aof", sizeof(tmpfile));
+    valkey_strlcpy(tmpfile2, "temp-rewriteaof-", sizeof(tmpfile2));
+    valkey_strlcat(tmpfile2, pid, sizeof(tmpfile2));
+    valkey_strlcat(tmpfile2, ".aof", sizeof(tmpfile2));
 
-    snprintf(tmpfile, 256, "temp-rewriteaof-%d.aof", (int)childpid);
-    bg_unlink(tmpfile);
+    if (from_signal) {
+        /* bg_unlink is not async-signal-safe, but in this case we don't really
+         * need to close the fd, it'll be released when the process exists. */
+        int fd = open(tmpfile, O_RDONLY | O_NONBLOCK);
+        int fd2 = open(tmpfile2, O_RDONLY | O_NONBLOCK);
+        UNUSED(fd);
+        UNUSED(fd2);
+        unlink(tmpfile);
+        unlink(tmpfile2);
+    } else {
+        bg_unlink(tmpfile);
+        bg_unlink(tmpfile2);
+    }
 }
 
 /* Get size of an AOF file.
@@ -2495,6 +2530,7 @@ off_t getAppendOnlyFileSize(sds filename, int *status) {
     }
     latencyEndMonitor(latency);
     latencyAddSampleIfNeeded("aof-fstat", latency);
+    latencyTraceIfNeeded(aof, aof_fstat, latency);
     sdsfree(aof_filepath);
     return size;
 }
@@ -2554,7 +2590,7 @@ void backgroundRewriteDoneHandler(int exitcode, int bysignal) {
 
         /* Get a new BASE file name and mark the previous (if we have)
          * as the HISTORY type. */
-        sds new_base_filename = getNewBaseFileNameAndMarkPreAsHistory(temp_am);
+        sds new_base_filename = getNewBaseFileNameAndMarkPreAsHistory(temp_am, server.aof_rewrite_use_rdb_preamble);
         serverAssert(new_base_filename != NULL);
         new_base_filepath = makePath(server.aof_dirname, new_base_filename);
 
@@ -2571,6 +2607,7 @@ void backgroundRewriteDoneHandler(int exitcode, int bysignal) {
         }
         latencyEndMonitor(latency);
         latencyAddSampleIfNeeded("aof-rename", latency);
+        latencyTraceIfNeeded(aof, aof_rename, latency);
         serverLog(LL_NOTICE, "Successfully renamed the temporary AOF base file %s into %s", tmpfile, new_base_filename);
 
         /* Rename the temporary incr aof file to 'new_incr_filename'. */
@@ -2597,6 +2634,7 @@ void backgroundRewriteDoneHandler(int exitcode, int bysignal) {
             }
             latencyEndMonitor(latency);
             latencyAddSampleIfNeeded("aof-rename", latency);
+            latencyTraceIfNeeded(aof, aof_rename, latency);
             serverLog(LL_NOTICE, "Successfully renamed the temporary AOF incr file %s into %s", temp_incr_aof_name,
                       new_incr_filename);
             sdsfree(temp_incr_filepath);
@@ -2670,7 +2708,7 @@ void backgroundRewriteDoneHandler(int exitcode, int bysignal) {
     }
 
 cleanup:
-    aofRemoveTempFile(server.child_pid);
+    aofRemoveTempFile(server.child_pid, 0);
     /* Clear AOF buffer and delete temp incr aof for next rewrite. */
     if (server.aof_state == AOF_WAIT_REWRITE) {
         sdsfree(server.aof_buf);

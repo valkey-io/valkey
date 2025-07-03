@@ -1023,7 +1023,7 @@ void clusterUpdateMyselfFlags(void) {
     int nofailover = server.cluster_replica_no_failover ? CLUSTER_NODE_NOFAILOVER : 0;
     myself->flags &= ~CLUSTER_NODE_NOFAILOVER;
     myself->flags |= nofailover;
-    myself->flags |= CLUSTER_NODE_EXTENSIONS_SUPPORTED | CLUSTER_NODE_LIGHT_HDR_PUBLISH_SUPPORTED | CLUSTER_NODE_LIGHT_HDR_MODULE_SUPPORTED;
+    myself->flags |= CLUSTER_NODE_LIGHT_HDR_PUBLISH_SUPPORTED | CLUSTER_NODE_LIGHT_HDR_MODULE_SUPPORTED;
     if (myself->flags != oldflags) {
         clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_UPDATE_STATE);
     }
@@ -1493,7 +1493,6 @@ clusterLink *createClusterLink(clusterNode *node) {
     if (!link->inbound) {
         node->link = link;
     }
-    link->support_extension = 0;
     return link;
 }
 
@@ -3253,7 +3252,6 @@ int clusterIsValidPacket(clusterLink *link) {
                 explen += extlen;
                 ext = getNextPingExt(ext);
             }
-            link->support_extension = 1;
         }
     } else if (type == CLUSTERMSG_TYPE_FAIL) {
         explen = sizeof(clusterMsg) - sizeof(union clusterMsgData);
@@ -4271,7 +4269,7 @@ void clusterSendPing(clusterLink *link, int type) {
     estlen += (sizeof(clusterMsgDataGossip) * (wanted + pfail_wanted));
     /* If link supports it or the node indicates that it supports it, then we
      * pass the extensions. */
-    if (link->support_extension || (link->node && nodeSupportsExtensions(link->node))) {
+    if (link->node && nodeSupportsExtensions(link->node)) {
         estlen += writePingExtensions(NULL, 0);
     }
     /* Note: clusterBuildMessageHdr() expects the buffer to be always at least
@@ -4347,7 +4345,7 @@ void clusterSendPing(clusterLink *link, int type) {
     /* Compute the actual total length and send! */
     uint32_t totlen = 0;
 
-    if (link->support_extension || (link->node && nodeSupportsExtensions(link->node))) {
+    if (link->node && nodeSupportsExtensions(link->node)) {
         totlen += writePingExtensions(hdr, gossipcount);
     } else {
         serverLog(LL_DEBUG, "Unable to send extensions data, however setting ext data flag to true");

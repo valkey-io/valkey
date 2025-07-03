@@ -464,10 +464,6 @@ static void rehashingCompleted(hashtable *ht) {
     ht->child_buckets[0] = ht->child_buckets[1];
     resetTable(ht, 1);
     ht->rehash_idx = -1;
-
-    /* Do a recursive call back to the resize function in case
-     * we need to do another resize run immediately after. */
-    hashtableRightsizeIfNeeded(ht);
 }
 
 /* Reverse bits, adapted to use bswap, from

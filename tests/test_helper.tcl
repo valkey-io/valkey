@@ -324,6 +324,7 @@ proc test_server_main {} {
     set ::idle_clients {}
     set ::active_clients {}
     array set ::active_clients_task {}
+    array set ::active_clients_file {}
     array set ::clients_start_time {}
     set ::clients_time_history {}
     set ::failed_tests {}
@@ -340,7 +341,25 @@ proc test_server_cron {} {
     if {$elapsed > $::timeout} {
         set err "\[[colorstr red TIMEOUT]\]: clients state report follows."
         puts $err
-        lappend ::failed_tests $err
+        foreach fd $::active_clients {
+            if {[info exist ::active_clients_task($fd)]} {
+                set task $::active_clients_task($fd)
+                set test_name [regsub {^\([^)]*\)\s*} $task {}]
+                set test_name [regsub {\s*\(pid\s+\d+\)\s*$} $test_name {}]
+                if {![string length [string trim $test_name]] && \
+                    [regexp {\(([^()]*)\)$} $task -> tn]} {
+                    set test_name $tn
+                }
+                set test_name [string trim $test_name]
+                if {[string length $test_name]} {
+                    set file {}
+                    if {[info exist ::active_clients_file($fd)]} {
+                        set file $::active_clients_file($fd)
+                    }
+                    lappend ::failed_tests "\[TIMEOUT]: $test_name in $file"
+                }
+            }
+        }
         show_clients_state
         kill_clients
         force_kill_all_servers
@@ -390,6 +409,7 @@ proc read_from_test_client fd {
         lappend ::clients_time_history $elapsed $data
         signal_idle_client $fd
         set ::active_clients_task($fd) "(DONE) $data"
+        unset ::active_clients_file($fd)
     } elseif {$status eq {ok}} {
         if {!$::quiet} {
             puts "\[[colorstr green $status]\]: $data ($elapsed ms)"
@@ -406,7 +426,8 @@ proc read_from_test_client fd {
     } elseif {$status eq {err}} {
         set err "\[[colorstr red $status]\]: $data"
         puts $err
-        lappend ::failed_tests $err
+        set test_name [lindex [split $data "\n"] 0]
+        lappend ::failed_tests $test_name
         set ::active_clients_task($fd) "(ERR) $data"
         if {$::exit_on_failure} {
             puts -nonewline "(Fast fail: test will exit now)"
@@ -495,6 +516,7 @@ proc signal_idle_client fd {
             puts [colorstr bold-white "Testing [lindex $::all_tests $::next_test]"]
             set ::active_clients_task($fd) "ASSIGNED: $fd ([lindex $::all_tests $::next_test])"
         }
+        set ::active_clients_file($fd) "tests/[lindex $::all_tests $::next_test].tcl"
         set ::clients_start_time($fd) [clock seconds]
         send_data_packet $fd run [lindex $::all_tests $::next_test]
         lappend ::active_clients $fd
@@ -509,7 +531,9 @@ proc signal_idle_client fd {
             set ::active_clients_task($fd) "ASSIGNED: $fd solo test"
         }
         set ::clients_start_time($fd) [clock seconds]
-        send_data_packet $fd run_code [lpop ::run_solo_tests]
+        set solo_data [lpop ::run_solo_tests]
+        set ::active_clients_file($fd) [lindex $solo_data 1]
+        send_data_packet $fd run_code $solo_data
         lappend ::active_clients $fd
     } else {
         lappend ::idle_clients $fd

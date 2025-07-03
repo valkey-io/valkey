@@ -634,7 +634,7 @@ static int resize(hashtable *ht, size_t min_capacity, int *malloc_failed) {
         return 0;
     }
     if (exp > old_exp && ht->type->resizeAllowed) {
-        /* If we're growing the table, let's check if the resize is allowed (for now just does a maxmemory checks). */
+        /* If we're growing the table, let's check if the resizeAllowed callback allows the resize. */
         double fill_factor = (double)min_capacity / ((double)numBuckets(old_exp) * ENTRIES_PER_BUCKET);
         if (fill_factor * 100 < MAX_FILL_PERCENT_HARD && !ht->type->resizeAllowed(alloc_size, fill_factor)) {
             /* Resize callback says no. */

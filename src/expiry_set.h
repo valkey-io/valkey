@@ -36,7 +36,7 @@ typedef struct ExpirySet {
 } ExpirySet;
 
 ExpirySet *expirySetCreate(dictType *dt);
-void expirySetRemoveEntry(ExpirySet *es, ExpirySetEntry *e);
+void expirySetRemoveEntry(ExpirySet *es, ExpirySetEntry *es_entry);
 void expirySetFree(ExpirySet *es);
 int expirySetAdd(ExpirySet *es, void *key, mstime_t expiry);
 int expirySetRemove(ExpirySet *es, void *key);

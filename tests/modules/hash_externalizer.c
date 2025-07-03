@@ -9,7 +9,8 @@ int hash_extern(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     size_t buf_len;
     const char *buf = ValkeyModule_StringPtrLen(argv[3], &buf_len);
 
-    return ValkeyModule_HashExternalize(key, argv[2], buf, buf_len);
+    int result = ValkeyModule_HashExternalize(key, argv[2], buf, buf_len);
+    return ValkeyModule_ReplyWithLongLong(ctx, result);
 }
 
 int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {

@@ -4267,8 +4267,6 @@ void clusterSendPing(clusterLink *link, int type) {
      * to put inside the packet. */
     estlen = sizeof(clusterMsg) - sizeof(union clusterMsgData);
     estlen += (sizeof(clusterMsgDataGossip) * (wanted + pfail_wanted));
-    /* If link supports it or the node indicates that it supports it, then we
-     * pass the extensions. */
     if (link->node && nodeSupportsExtensions(link->node)) {
         estlen += writePingExtensions(NULL, 0);
     }

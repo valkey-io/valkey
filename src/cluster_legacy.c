@@ -71,6 +71,7 @@ list *clusterGetNodesInMyShard(clusterNode *node);
 int clusterNodeAddReplica(clusterNode *primary, clusterNode *replica);
 int clusterAddSlot(clusterNode *n, int slot);
 int clusterDelSlot(int slot);
+void clusterMoveNodeSlots(clusterNode *from_node, clusterNode *to_node);
 int clusterDelNodeSlots(clusterNode *node);
 void clusterNodeSetSlotBit(clusterNode *n, int slot);
 static void clusterSetPrimary(clusterNode *n, int closeSlots, int full_sync_required);
@@ -3638,6 +3639,10 @@ int clusterProcessPacket(clusterLink *link) {
                              * this may cause a primary-replica chain issue. */
                             return 1;
                         } else if (nodeIsReplica(sender_claimed_primary)) {
+                            /* A failover occurred in the shard where `sender` belongs to and `sender` is
+                             * no longer a primary. Update slot assignment to `sender_claimed_config_epoch`,
+                             * which is the new primary in the shard */
+                            clusterMoveNodeSlots(sender, sender_claimed_primary);
                             /* `primary` is still a `replica` in this observer node's view;
                              * update its role and configEpoch */
                             clusterSetNodeAsPrimary(sender_claimed_primary);
@@ -5742,6 +5747,18 @@ int clusterDelSlot(int slot) {
     bitmapClearBit(server.cluster->owner_not_claiming_slot, slot);
     clusterSlotStatReset(slot);
     return C_OK;
+}
+
+/* Transfer slots from `from_node` to `to_node`.
+ * Iterates over all cluster slots, transferring each slot covered
+ * by `from_node` to `to_node`. */
+void clusterMoveNodeSlots(clusterNode *from_node, clusterNode *to_node) {
+    for (int j = 0; j < CLUSTER_SLOTS; j++) {
+        if (clusterNodeCoversSlot(from_node, j)) {
+            clusterDelSlot(j);
+            clusterAddSlot(to_node, j);
+        }
+    }
 }
 
 /* Delete all the slots associated with the specified node.

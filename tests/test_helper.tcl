@@ -87,10 +87,6 @@ proc expand_unit_spec {spec} {
         set files [glob -nocomplain [file join [file normalize $spec] *.tcl]]
     } elseif {[file exists $spec]} {
         set files [list [file normalize $spec]]
-    } elseif {[file isdirectory [file join $tests_dir $spec]]} {
-        set files [glob -nocomplain [file join [file normalize [file join $tests_dir $spec]] *.tcl]]
-    } elseif {[file exists [file join $tests_dir $spec]]} {
-        set files [list [file normalize [file join $tests_dir $spec]]]
     } elseif {[file exists [file join $tests_dir "${spec}.tcl"]]} {
         set files [list [file normalize [file join $tests_dir "${spec}.tcl"]]]
     } else {

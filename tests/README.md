@@ -1,21 +1,6 @@
 Valkey Test Suite
 =================
 
-Overview
---------
-
-Integration tests are written in Tcl, a high-level, general-purpose, interpreted, dynamic programming language [[source](https://wiki.tcl-lang.org/page/What+is+Tcl)].
-`runtest` is the main entrance point for running integration tests.
-For example, to run a specific test or all tests in a directory:
-
-```shell
-# run a single test file
-./runtest --single tests/unit/your_test_name.tcl
-# run every test under a directory
-./runtest --single tests/integration
-# For additional arguments, you may refer to the `runtest` script itself.
-```
-
 The normal execution mode of the test suite involves starting and manipulating
 local `valkey-server` instances, inspecting process state, log files, etc.
 

@@ -332,6 +332,7 @@ int fuzzTest(int keymode, size_t count, double addprob, double remprob) {
 int fuzzTestCluster(size_t count, double addprob, double remprob) {
     unsigned char key[128];
     int keylen = 0;
+    size_t used_memory_before = zmalloc_used_memory();
 
     printf("Cluster Fuzz test [keys:%zu keylen:%d]: ", count, keylen);
     fflush(stdout);
@@ -365,13 +366,13 @@ int fuzzTestCluster(size_t count, double addprob, double remprob) {
         /* Insert element. */
         if ((double)genrand64_int64() / RAND_MAX < addprob) {
             raxInsert(rax, key, keylen, NULL, NULL);
-            TEST_ASSERT(raxAllocSize(rax) == zmalloc_used_memory());
+            TEST_ASSERT(raxAllocSize(rax) + used_memory_before == zmalloc_used_memory());
         }
 
         /* Remove element. */
         if ((double)genrand64_int64() / RAND_MAX < remprob) {
             raxRemove(rax, key, keylen, NULL);
-            TEST_ASSERT(raxAllocSize(rax) == zmalloc_used_memory());
+            TEST_ASSERT(raxAllocSize(rax) + used_memory_before == zmalloc_used_memory());
         }
     }
     size_t finalkeys = raxSize(rax);
@@ -537,6 +538,7 @@ int test_raxRandomWalk(int argc, char **argv, int flags) {
     UNUSED(argc);
     UNUSED(argv);
     UNUSED(flags);
+    size_t used_memory_before = zmalloc_used_memory();
 
     rax *t = raxNew();
     char *toadd[] = {"alligator", "alien", "byword", "chromodynamic", "romane", "romanus", "romulus", "rubens",
@@ -545,7 +547,7 @@ int test_raxRandomWalk(int argc, char **argv, int flags) {
     long numele;
     for (numele = 0; toadd[numele] != NULL; numele++) {
         raxInsert(t, (unsigned char *)toadd[numele], strlen(toadd[numele]), (void *)numele, NULL);
-        TEST_ASSERT(raxAllocSize(t) == zmalloc_used_memory());
+        TEST_ASSERT(raxAllocSize(t) + used_memory_before == zmalloc_used_memory());
     }
 
     raxIterator iter;
@@ -580,6 +582,7 @@ int test_raxIteratorUnitTests(int argc, char **argv, int flags) {
     UNUSED(argc);
     UNUSED(argv);
     UNUSED(flags);
+    size_t used_memory_before = zmalloc_used_memory();
 
     rax *t = raxNew();
     char *toadd[] = {"alligator", "alien", "byword", "chromodynamic", "romane", "romanus", "romulus", "rubens",
@@ -592,7 +595,7 @@ int test_raxIteratorUnitTests(int argc, char **argv, int flags) {
 
     for (long i = 0; i < items; i++) {
         raxInsert(t, (unsigned char *)toadd[i], strlen(toadd[i]), (void *)i, NULL);
-        TEST_ASSERT(raxAllocSize(t) == zmalloc_used_memory());
+        TEST_ASSERT(raxAllocSize(t) + used_memory_before == zmalloc_used_memory());
     }
 
     raxIterator iter;
@@ -842,6 +845,7 @@ int test_raxRegressionTest6(int argc, char **argv, int flags) {
 int test_raxBenchmark(int argc, char **argv, int flags) {
     UNUSED(argc);
     UNUSED(argv);
+    size_t used_memory_before = zmalloc_used_memory();
 
     if (!(flags & UNIT_TEST_SINGLE)) return 0;
 
@@ -853,7 +857,7 @@ int test_raxBenchmark(int argc, char **argv, int flags) {
             char buf[64];
             int len = int2key(buf, sizeof(buf), i, mode);
             raxInsert(t, (unsigned char *)buf, len, (void *)(long)i, NULL);
-            TEST_ASSERT(raxAllocSize(t) == zmalloc_used_memory());
+            TEST_ASSERT(raxAllocSize(t) + used_memory_before == zmalloc_used_memory());
         }
         printf("Insert: %f\n", (double)(_ustime() - start) / 1000000);
         printf("%llu total nodes\n", (unsigned long long)t->numnodes);
@@ -907,7 +911,7 @@ int test_raxBenchmark(int argc, char **argv, int flags) {
             int len = int2key(buf, sizeof(buf), i, mode);
             int retval = raxRemove(t, (unsigned char *)buf, len, NULL);
             TEST_ASSERT(retval == 1);
-            TEST_ASSERT(raxAllocSize(t) == zmalloc_used_memory());
+            TEST_ASSERT(raxAllocSize(t) + used_memory_before == zmalloc_used_memory());
         }
         printf("Deletion: %f\n", (double)(_ustime() - start) / 1000000);
 

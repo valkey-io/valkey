@@ -428,8 +428,10 @@ int hashTypeGetValue(robj *o, sds field, unsigned char **vstr, unsigned int *vle
         *vstr = NULL;
         if (hashTypeGetFromListpack(o, field, vstr, vlen, vll) == 0) return C_OK;
     } else if (o->encoding == OBJ_ENCODING_HASHTABLE) {
-        *vstr = (unsigned char *)hashTypeGetFromHashTable(o, field, (size_t *)vlen);
+        size_t len = 0;
+        *vstr = (unsigned char *)hashTypeGetFromHashTable(o, field, &len);
         if (vstr != NULL) {
+            *vlen = len;
             return C_OK;
         }
     } else {
@@ -472,10 +474,10 @@ size_t hashTypeGetValueLength(robj *o, sds field) {
  * exists, and 0 when it doesn't. */
 int hashTypeExists(robj *o, sds field) {
     unsigned char *vstr = NULL;
-    size_t vlen = SIZE_MAX;
+    unsigned int vlen = UINT_MAX;
     long long vll = LLONG_MAX;
 
-    return hashTypeGetValue(o, field, &vstr, (unsigned int *)&vlen, &vll) == C_OK;
+    return hashTypeGetValue(o, field, &vstr, &vlen, &vll) == C_OK;
 }
 
 /* Set an externalized string field in a hash.
@@ -732,39 +734,20 @@ char *hashTypeCurrentFromHashTable(hashTypeIterator *hi, int what, size_t *len) 
     return hashTypeEntryGetValue(hi->next, len);
 }
 
-/* Higher level function of hashTypeCurrent*() that returns the hash value
- * at current iterator position.
- *
- * The returned element is returned by reference in either *vstr and *vlen if
- * it's returned in string form, or stored in *vll if it's returned as
- * a number.
- *
- * If *vll is populated *vstr is set to NULL, so the caller
- * can always check the function return by checking the return value
- * type checking if vstr == NULL. */
-static void hashTypeCurrentObject(hashTypeIterator *hi, int what, unsigned char **vstr, unsigned int *vlen, long long *vll) {
-    if (hi->encoding == OBJ_ENCODING_LISTPACK) {
-        *vstr = NULL;
-        hashTypeCurrentFromListpack(hi, what, vstr, vlen, vll);
-    } else if (hi->encoding == OBJ_ENCODING_HASHTABLE) {
-        size_t len;
-        *vstr = (unsigned char *)hashTypeCurrentFromHashTable(hi, what, &len);
-        *vlen = len;
-    } else {
-        serverPanic("Unknown hash encoding");
-    }
-}
-
 /* Return the field or value at the current iterator position as a new
  * SDS string. */
 sds hashTypeCurrentObjectNewSds(hashTypeIterator *hi, int what) {
-    unsigned char *vstr;
-    unsigned int vlen;
-    long long vll;
-
-    hashTypeCurrentObject(hi, what, &vstr, &vlen, &vll);
-    if (vstr) return sdsnewlen(vstr, vlen);
-    return sdsfromlonglong(vll);
+    unsigned char *vstr = NULL;
+    if (hi->encoding == OBJ_ENCODING_LISTPACK) {
+        long long vll;
+        unsigned int vlen;
+        hashTypeCurrentFromListpack(hi, what, &vstr, &vlen, &vll);
+        if (vstr) return sdsnewlen(vstr, vlen);
+        return sdsfromlonglong(vll);
+    }
+    size_t vlen;
+    vstr = (unsigned char *)hashTypeCurrentFromHashTable(hi, what, &vlen);
+    return sdsnewlen(vstr, vlen);
 }
 
 robj *hashTypeLookupWriteOrCreate(client *c, robj *key) {

@@ -395,7 +395,7 @@ int valkeyHasMptcp(void) {
     return 0;
 }
 
-static int valkeyTcpGetProtocol(int is_mptcp_enabled) {
+static int valkeyTcpGetProtocol(VALKEY_UNUSED int is_mptcp_enabled) {
     assert(!is_mptcp_enabled);
     return IPPROTO_TCP;
 }

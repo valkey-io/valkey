@@ -1037,16 +1037,17 @@ start_cluster 1 0 {tags {"expire external:skip cluster"}} {
         # Enable resizing
         r debug dict-resizing 1
 
-        # put some data into slot 12182 and trigger the resize by deleting it to trigger shrink
-        # we put just barely enough data in to trigger the resize, not the full 1000 keys
-        # this triggers kicking off resizing and rehashing since we put the hash table
-        # into a bad state by disabling it with setting the dict-resizing flag and don't
-        # want to wait for databasesCron to kick off another resize.
-        # TODO: this is good enough for now but we should improve the logic of this test case
-        for {set j 1} {$j <= 100} {incr j} {
-            r psetex "{foo}0" 500 a
-            r del "{foo}0"
+        # Wait for ongoing rehashing to complete, if any
+        wait_for_condition 100 50 {
+            [dict get [r memory stats] db.dict.rehashing.count] == 0
+        } else {
+            fail "Active rehashing didn't finish"
         }
+
+        # put some data into slot 12182 and trigger the resize
+        # by deleting it to trigger shrink
+        r psetex "{foo}0" 500 a
+        r del "{foo}0"
 
         # Verify all keys have expired
         wait_for_condition 400 100 {

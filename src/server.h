@@ -254,6 +254,8 @@ extern int configOOMScoreAdjValuesDefaults[CONFIG_OOM_COUNT];
 #define CMD_ALLOW_BUSY ((1ULL << 26))
 #define CMD_MODULE_GETCHANNELS (1ULL << 27) /* Use the modules getchannels interface. */
 #define CMD_TOUCHES_ARBITRARY_KEYS (1ULL << 28)
+#define CMD_CROSS_DB (1ULL << 29)
+#define CMD_ALL_DBS (1ULL << 30)
 /* Command flags. Please don't forget to add command flag documentation in struct
  * serverCommand in this file. */
 
@@ -924,6 +926,7 @@ typedef struct multiState {
     size_t argv_len_sums; /* mem used by all commands arguments */
     int alloc_count;      /* total number of multiCmd struct memory reserved. */
     list watched_keys;
+    int transaction_db_id; /* Currently SELECTed DB id in transaction context */
 } multiState;
 
 /* This structure holds the blocking operation state for a client.
@@ -1005,6 +1008,9 @@ typedef struct readyList {
 #define SELECTOR_FLAG_ALLCOMMANDS (1 << 2) /* The user can run all commands. */
 #define SELECTOR_FLAG_ALLCHANNELS (1 << 3) /* The user can mention any Pub/Sub \
                                               channel. */
+#define SELECTOR_FLAG_DBLIST_NEGATED (1 << 4)   /* Negate DB list interpretation */
+#define SELECTOR_FLAG_ALLDBS (1 << 5)           /* Allow all databases */
+
 
 typedef struct {
     sds name;         /* The username as an SDS string. */
@@ -1380,6 +1386,7 @@ typedef struct aclInfo {
     long long invalid_key_accesses;       /* Invalid key accesses that user doesn't have permission to */
     long long invalid_channel_accesses;   /* Invalid channel accesses that user doesn't have permission to */
     long long acl_access_denied_tls_cert; /* TLS clients with cert not matching any existing user. */
+    long long invalid_db_accesses;       /* Invalid database accesses that user doesn't have permission to */
 } aclInfo;
 
 struct saveparam {
@@ -3186,11 +3193,12 @@ extern user *DefaultUser;
 void ACLInit(void);
 /* Return values for ACLCheckAllPerm(). */
 #define ACL_OK 0
-#define ACL_DENIED_CMD 1
-#define ACL_DENIED_KEY 2
-#define ACL_DENIED_AUTH 3           /* Only used for ACL LOG entries. */
-#define ACL_DENIED_CHANNEL 4        /* Only used for pub/sub commands */
-#define ACL_INVALID_TLS_CERT_AUTH 5 /* Only used for TLS Auto-authentication */
+#define ACL_DENIED_DB 1      /* Database can't be accessed */
+#define ACL_DENIED_CMD 2
+#define ACL_DENIED_KEY 3
+#define ACL_DENIED_AUTH 4           /* Only used for ACL LOG entries. */
+#define ACL_DENIED_CHANNEL 5        /* Only used for pub/sub commands */
+#define ACL_INVALID_TLS_CERT_AUTH 6 /* Only used for TLS Auto-authentication */
 
 /* Context values for addACLLogEntry(). */
 #define ACL_LOG_CTX_TOPLEVEL 0
@@ -3218,8 +3226,8 @@ unsigned long ACLGetCommandID(sds cmdname);
 user *ACLGetUserByName(const char *name, size_t namelen);
 int ACLUserCheckKeyPerm(user *u, const char *key, int keylen, int flags);
 int ACLUserCheckChannelPerm(user *u, sds channel, int literal);
-int ACLCheckAllUserCommandPerm(user *u, struct serverCommand *cmd, robj **argv, int argc, int *idxptr);
-int ACLUserCheckCmdWithUnrestrictedKeyAccess(user *u, struct serverCommand *cmd, robj **argv, int argc, int flags);
+int ACLCheckAllUserCommandPerm(user *u, struct serverCommand *cmd, robj **argv, int argc, int dbid, int *idxptr);
+int ACLUserCheckCmdWithUnrestrictedKeyAccess(user *u, struct serverCommand *cmd, robj **argv, int argc, int dbid, int flags);
 int ACLCheckAllPerm(client *c, int *idxptr);
 int ACLSetUser(user *u, const char *op, ssize_t oplen);
 sds ACLStringSetUser(user *u, sds username, sds *argv, int argc);

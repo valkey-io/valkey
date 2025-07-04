@@ -9,7 +9,8 @@
         "command_flags": [
             "LOADING",
             "STALE",
-            "FAST"
+            "FAST",
+            "CROSS_DB"
         ],
         "acl_categories": [
             "CONNECTION"

@@ -909,6 +909,10 @@ void selectCommand(client *c) {
 
     if (getIntFromObjectOrReply(c, c->argv[1], &id, NULL) != C_OK) return;
 
+    if (c->flag.multi) {
+        c->mstate->transaction_db_id = id;
+    }
+
     if (selectDb(c, id) == C_ERR) {
         addReplyError(c, "DB index is out of range");
     } else {

@@ -544,3 +544,209 @@ start_server [list overrides [list "dir" $server_path "aclfile" "userwithselecto
         assert_equal "%R~r*" [dict get $test_selector "keys"]
     }
 }
+
+start_server {tags {"acl external:skip"}} {
+    set r2 [valkey_client]
+    
+    test {Test basic database-level ACL functionality} {
+        r ACL SETUSER db-user on +@all nopass ~* db=0,1
+        $r2 auth db-user password
+        
+        assert_equal "OK" [$r2 select 0]
+        assert_equal "OK" [$r2 set key1 value1]
+        
+        assert_equal "OK" [$r2 select 1]
+        assert_equal "OK" [$r2 set key2 value2]
+        
+        catch {$r2 select 2} err
+        assert_match "*NOPERM*database*" $err
+    }
+    
+    test {Test negated database list} {
+        r ACL SETUSER db-user on +@all nopass ~* db!=0
+        $r2 auth db-user password
+        
+        catch {$r2 select 0} err
+        assert_match "*NOPERM*database*" $err
+        
+        assert_equal "OK" [$r2 select 1]
+        assert_equal "OK" [$r2 set key1 value1]
+        
+        r ACL SETUSER db-user resetdbs
+    }
+    
+    test {Test database permissions with selectors} {
+        r ACL SETUSER db-selector on nopass (db=0,1 +@all -@read ~write*) (db=2,3 +@all -@write ~read*)
+        $r2 auth db-selector password
+        
+        assert_equal "OK" [$r2 select 0]
+        assert_equal "OK" [$r2 set writekey value]
+        catch {$r2 get writekey} err
+        assert_match "*NOPERM*command*" $err
+        
+        assert_equal "OK" [$r2 select 1]
+        assert_equal "OK" [$r2 set writekey value]
+        
+        assert_equal "OK" [$r2 select 2]
+        catch {$r2 set write:key value} err
+        assert_match "*NOPERM*command*" $err
+        r set readstr bar
+        assert_equal [r get readstr] bar
+        
+        assert_equal "OK" [$r2 select 3]
+        r set readstr bar
+        assert_equal [r get readstr] bar
+        
+        catch {$r2 select 4} err
+        assert_match "*NOPERM*command*" $err
+    }
+    
+    test {Test alldbs and resetdbs commands} {
+        r ACL SETUSER db-reset-user on +@all ~* nopass db=0
+        $r2 auth db-reset-user password
+        
+        assert_equal "OK" [$r2 select 0]
+        catch {$r2 select 1} err
+        assert_match "*NOPERM*database*" $err
+        
+        r ACL SETUSER db-reset-user resetdbs
+        
+        assert_equal "OK" [$r2 select 0]
+        assert_equal "OK" [$r2 select 1]
+        assert_equal "OK" [$r2 select 2]
+        
+        r ACL SETUSER db-reset-user alldbs
+        
+        assert_equal "OK" [$r2 select 0]
+        assert_equal "OK" [$r2 select 1]
+    }
+    
+    test {Test transaction with database switching} {
+        r ACL SETUSER db-tx-user on nopass (db=0,1 +@all -@read ~*) (db=2,3 +@all -@write ~*)
+        $r2 auth db-tx-user password
+        
+        assert_equal "OK" [$r2 select 0]
+        assert_equal "OK" [$r2 multi]
+        assert_equal "QUEUED" [$r2 set key1 value1]
+        assert_equal "QUEUED" [$r2 select 2]
+        assert_equal "QUEUED" [$r2 get key2]
+        assert_equal "QUEUED" [$r2 select 0]
+        assert_equal "QUEUED" [$r2 set key3 value3]
+        
+        set result [$r2 exec]
+        assert_equal 5 [llength $result]
+        
+        assert_equal "OK" [$r2 select 0]
+        assert_equal "OK" [$r2 multi]
+        assert_equal "QUEUED" [$r2 set key1 value1]
+        catch {$r2 select 4} err
+        assert_match "*NOPERM*command*" $err
+        
+        catch {$r2 exec} err
+        assert_match "*EXECABORT*" $err
+    }
+    
+    test {Test transaction with command permissions in different DBs} {
+        r ACL SETUSER db-cmd-user on nopass (db=0,1 +@all -@read ~*) (db=2,3 +@all -@write ~*)
+        $r2 auth db-cmd-user password
+        
+        assert_equal "OK" [$r2 select 0]
+        catch {$r2 get key} err
+        assert_match "*NOPERM*command*" $err
+        
+        assert_equal "OK" [$r2 select 2]
+        catch {$r2 set key value} err
+        assert_match "*NOPERM*command*" $err
+        
+        assert_equal "OK" [$r2 select 0]
+        assert_equal "OK" [$r2 multi]
+        assert_equal "QUEUED" [$r2 set key1 value1]
+        assert_equal "QUEUED" [$r2 select 2]
+        assert_equal "QUEUED" [$r2 get key2]
+        
+
+        set result [$r2 exec]
+        assert_equal 3 [llength $result]
+    }
+    
+    test {Test database ACL with string representation} {
+        r ACL SETUSER db-string-user on +@all nopass ~* db=0,1
+        
+        set acl_str [r ACL LIST]
+        set user_line [lsearch -inline $acl_str "user db-string-user*"]
+        
+        assert_match "*db=0,1*" $user_line
+        
+        r ACL SETUSER db-string-user2 on +@all nopass ~* db!=0,1
+        
+        set acl_str [r ACL LIST]
+        set user_line [lsearch -inline $acl_str "user db-string-user2*"]
+        
+        assert_match "*db!=0,1*" $user_line
+    }
+    
+    test {Test edge cases with database IDs} {
+        catch {r ACL SETUSER db-edge-user db=999} err
+        assert_match "*Error in ACL SETUSER modifier*" $err
+        
+        catch {r ACL SETUSER db-edge-user db=-1} err
+        assert_match "*Error in ACL SETUSER modifier*" $err
+        
+        catch {r ACL SETUSER db-edge-user db=abc} err
+        assert_match "*Error in ACL SETUSER modifier*" $err
+    }
+    
+    test {Test default behavior without db restrictions} {
+        r ACL SETUSER db-compat-user on >password +@all 
+        $r2 auth db-compat-user password
+        
+        assert_equal "OK" [$r2 select 0]
+        assert_equal "OK" [$r2 select 1]
+        assert_equal "OK" [$r2 select 2]
+        assert_equal "OK" [$r2 select 3]
+        
+        r ACL SETUSER db-compat-user2 on >password +@all db=0
+        r ACL SETUSER db-compat-user2 reset
+        r ACL SETUSER db-compat-user2 on >password +@all
+        $r2 auth db-compat-user2 password
+        
+        assert_equal "OK" [$r2 select 0]
+        assert_equal "OK" [$r2 select 1]
+        assert_equal "OK" [$r2 select 2]
+        assert_equal "OK" [$r2 select 3]
+    }
+
+    test {Test FLUSHALL with database permissions} {
+        r ACL SETUSER flushall-user on nopass +@all ~* db=0
+        $r2 auth flushall-user password
+        $r2 select 0
+        $r2 set key value
+        
+        catch {$r2 flushall} e
+        assert_match "*NOPERM*" $e
+        
+        assert_equal "OK" [$r2 flushdb]
+    }
+
+    test {Test SWAPDB with database permissions} {
+        r ACL SETUSER swapdb-user on nopass +@all ~* db=0,1
+        $r2 auth swapdb-user password
+        
+        assert_equal "OK" [$r2 swapdb 0 1]
+        
+        catch {$r2 swapdb 0 2} e
+        assert_match "*NOPERM*" $e
+    }
+
+    test {Test MOVE with database permissions} {    
+        r ACL SETUSER move-user on nopass +move +set ~* db=0,1
+        $r2 auth move-user password
+        $r2 set move-key value
+        assert_equal "1" [$r2 move move-key 1]
+
+        catch {$r2 move move-key 2} e
+        assert_match "*NOPERM*" $e
+    }
+    
+    $r2 close
+}

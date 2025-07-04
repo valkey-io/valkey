@@ -8,7 +8,8 @@
         "function": "swapdbCommand",
         "command_flags": [
             "WRITE",
-            "FAST"
+            "FAST",
+            "CROSS_DB"
         ],
         "acl_categories": [
             "KEYSPACE",

@@ -69,6 +69,7 @@ void resetClientMultiState(client *c) {
     c->mstate->cmd_inv_flags = 0;
     c->mstate->argv_len_sums = 0;
     c->mstate->alloc_count = 0;
+    c->mstate->transaction_db_id = c->db->id;
 }
 
 /* Add a new command into the MULTI commands queue */
@@ -97,6 +98,15 @@ void queueMultiCommand(client *c, uint64_t cmd_flags) {
     mc->argv = c->argv;
     mc->argv_len = c->argv_len;
     mc->slot = c->slot;
+    
+    if (mc->cmd->proc == selectCommand && mc->argc > 1) {
+        long long target_db;
+        if (getLongLongFromObject(mc->argv[1], &target_db) == C_OK) {
+            if (target_db >= 0 && target_db < server.dbnum) {
+                c->mstate->transaction_db_id = (int)target_db;
+            }
+        }
+    }
 
     c->mstate->count++;
     c->mstate->cmd_flags |= cmd_flags;
@@ -131,6 +141,7 @@ void flagTransaction(client *c) {
 void multiCommand(client *c) {
     if (!c->mstate) initClientMultiState(c);
     c->flag.multi = 1;
+    c->mstate->transaction_db_id = c->db->id;
     addReply(c, shared.ok);
 }
 
@@ -207,6 +218,7 @@ void execCommand(client *c) {
     orig_argv_len = c->argv_len;
     orig_argc = c->argc;
     orig_cmd = c->cmd;
+    c->mstate->transaction_db_id = c->db->id;
     addReplyArrayLen(c, c->mstate->count);
     for (j = 0; j < c->mstate->count; j++) {
         c->argc = c->mstate->commands[j].argc;

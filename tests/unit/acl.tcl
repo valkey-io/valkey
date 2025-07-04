@@ -179,7 +179,7 @@ start_server {tags {"acl external:skip"}} {
         set curruser "hpuser"
         foreach user [lshuffle $users] {
             if {[string first $curruser $user] != -1} {
-                assert_equal {user hpuser on nopass sanitize-payload resetchannels &foo +@all} $user
+                assert_equal {user hpuser on nopass sanitize-payload resetchannels &foo alldbs +@all} $user
             }
         }
 

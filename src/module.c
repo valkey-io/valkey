@@ -6570,7 +6570,10 @@ ValkeyModuleCallReply *VM_Call(ValkeyModuleCtx *ctx, const char *cmdname, const 
         int acl_errpos;
         int acl_retval;
 
-        acl_retval = ACLCheckAllUserCommandPerm(user, c->cmd, c->argv, c->argc, &acl_errpos);
+        int dbid = (c->flag.multi) ? 
+            c->mstate->transaction_db_id : 
+            (c->db ? c->db->id : -1);
+        acl_retval = ACLCheckAllUserCommandPerm(user, c->cmd, c->argv, c->argc, dbid, &acl_errpos);
         if (acl_retval != ACL_OK) {
             sds object = (acl_retval == ACL_DENIED_CMD) ? sdsdup(c->cmd->fullname) : sdsdup(c->argv[acl_errpos]->ptr);
             addACLLogEntry(ctx->client, acl_retval, ACL_LOG_CTX_MODULE, -1, c->user->name, object);
@@ -9975,7 +9978,7 @@ ValkeyModuleUser *VM_GetModuleUserFromUserName(ValkeyModuleString *name) {
  * * ENOENT: Specified command does not exist.
  * * EACCES: Command cannot be executed, according to ACL rules
  */
-int VM_ACLCheckCommandPermissions(ValkeyModuleUser *user, ValkeyModuleString **argv, int argc) {
+int VM_ACLCheckCommandPermissions(ValkeyModuleUser *user, ValkeyModuleString **argv, int argc,  int dbid) {
     int keyidxptr;
     struct serverCommand *cmd;
 
@@ -9985,7 +9988,7 @@ int VM_ACLCheckCommandPermissions(ValkeyModuleUser *user, ValkeyModuleString **a
         return VALKEYMODULE_ERR;
     }
 
-    if (ACLCheckAllUserCommandPerm(user->user, cmd, argv, argc, &keyidxptr) != ACL_OK) {
+    if (ACLCheckAllUserCommandPerm(user->user, cmd, argv, argc, dbid, &keyidxptr) != ACL_OK) {
         errno = EACCES;
         return VALKEYMODULE_ERR;
     }

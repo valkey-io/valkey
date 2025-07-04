@@ -30,6 +30,7 @@
 #include "server.h"
 #include "sha256.h"
 #include "module.h"
+#include "intset.h"
 #include <fcntl.h>
 #include <ctype.h>
 
@@ -180,6 +181,8 @@ typedef struct {
                           ALLCHANNELS is set in the user. */
     sds command_rules; /* A string representation of the ordered categories and commands, this
                         * is used to regenerate the original ACL string for display. */
+    intset *dbs;         /* Set of database ids, based on SELECTOR_FLAG_DBLIST_NEGATED
+                          it is going to be allowed or disallowed database ids */
 } aclSelector;
 
 static void ACLResetFirstArgsForCommand(aclSelector *selector, unsigned long id);
@@ -350,8 +353,10 @@ static sds sdsCatPatternString(sds base, keyPattern *pat) {
 static aclSelector *ACLCreateSelector(int flags) {
     aclSelector *selector = zmalloc(sizeof(aclSelector));
     selector->flags = flags | server.acl_pubsub_default;
+    selector->flags = flags | SELECTOR_FLAG_ALLDBS;
     selector->patterns = listCreate();
     selector->channels = listCreate();
+    selector->dbs = intsetNew();
     selector->allowed_firstargs = NULL;
     selector->command_rules = sdsempty();
 
@@ -370,6 +375,7 @@ static aclSelector *ACLCreateSelector(int flags) {
 static void ACLFreeSelector(aclSelector *selector) {
     listRelease(selector->patterns);
     listRelease(selector->channels);
+    intsetFree(selector->dbs);
     sdsfree(selector->command_rules);
     ACLResetFirstArgs(selector);
     zfree(selector);
@@ -381,6 +387,7 @@ static aclSelector *ACLCopySelector(aclSelector *src) {
     dst->flags = src->flags;
     dst->patterns = listDup(src->patterns);
     dst->channels = listDup(src->channels);
+    dst->dbs = intsetDup(src->dbs);
     dst->command_rules = sdsdup(src->command_rules);
     memcpy(dst->allowed_commands, src->allowed_commands, sizeof(dst->allowed_commands));
     dst->allowed_firstargs = NULL;
@@ -810,6 +817,28 @@ static sds ACLDescribeSelector(aclSelector *selector) {
         }
     }
 
+    /* Database permissions. */
+    if (selector->flags & SELECTOR_FLAG_ALLDBS) {
+        res = sdscatlen(res, "alldbs ", 7);
+    } else {
+        if (selector->flags & SELECTOR_FLAG_DBLIST_NEGATED) {
+            res = sdscatlen(res, "db!=", 4);
+        } else {
+            res = sdscatlen(res, "db=", 3);
+        }
+        
+        uint32_t len = intsetLen(selector->dbs);
+        for (uint32_t i = 0; i < len; i++) {
+            int64_t dbid;
+            if (intsetGet(selector->dbs, i, &dbid)) {
+                if (i > 0) res = sdscatlen(res, ",", 1);
+                res = sdscatfmt(res, "%I", dbid);
+            }
+        }
+        
+        res = sdscatlen(res, " ", 1);
+    }
+
     /* Command rules. */
     sds rules = ACLDescribeSelectorCommandRules(selector);
     res = sdscatsds(res, rules);
@@ -935,6 +964,77 @@ static void ACLAddAllowedFirstArg(aclSelector *selector, unsigned long id, const
     selector->allowed_firstargs[id][items - 1] = NULL;
 }
 
+/* Helper function to set database permissions for a selector */
+static int ACLSetSelectorDatabasePermissions(aclSelector *selector, const char *dbs_str, int negated) {
+    selector->flags &= ~SELECTOR_FLAG_ALLDBS;
+    
+    intset *new_dbs = intsetNew();
+    if (!new_dbs) {
+        errno = ENOMEM;
+        return C_ERR;
+    }
+    
+    if (negated) {
+        selector->flags |= SELECTOR_FLAG_DBLIST_NEGATED;
+    } else {
+        selector->flags &= ~SELECTOR_FLAG_DBLIST_NEGATED;
+    }
+    
+    char *dblist = zstrdup(dbs_str);
+    if (!dblist) {
+        intsetFree(new_dbs);
+        errno = ENOMEM;
+        return C_ERR;
+    }
+
+    
+    // Reject empty list, trailing commas or more than 1 consecutive commas 
+    if (strlen(dblist) == 0 || dblist[0] == ',' ||
+        dblist[strlen(dblist) - 1] == ',' || strstr(dblist, ",,")) {
+        zfree(dblist);
+        intsetFree(new_dbs);
+        errno = EINVAL;
+        return C_ERR;
+    }
+    
+    char *saveptr = NULL;
+    char *token = strtok_r(dblist, ",", &saveptr);
+    
+    while (token) {
+        char *endptr = NULL;
+        errno = 0;
+        int64_t dbid = strtoll(token, &endptr, 10);
+        
+        if (errno == ERANGE || endptr == token || *endptr != '\0' || 
+            dbid < 0 || dbid >= server.dbnum) {
+            zfree(dblist);
+            intsetFree(new_dbs);
+            errno = EINVAL;
+            return C_ERR;
+        }
+        
+        uint8_t success;
+        intset *result = intsetAdd(new_dbs, dbid, &success);
+        if (!success) {
+            zfree(dblist);
+            intsetFree(new_dbs);
+            errno = EINVAL;
+            return C_ERR;
+        }
+        new_dbs = result;
+        
+        token = strtok_r(NULL, ",", &saveptr);
+    }
+    
+    if (selector->dbs) {
+        intsetFree(selector->dbs);
+    }
+    selector->dbs = new_dbs;
+    
+    zfree(dblist);
+    return C_OK;
+}
+
 /* Create an ACL selector from the given ACL operations, which should be
  * a list of space separate ACL operations that starts and ends
  * with parentheses.
@@ -997,6 +1097,15 @@ static aclSelector *aclCreateSelectorFromOpSet(const char *opset, size_t opsetle
  *              It is possible to specify multiple patterns.
  * allchannels              Alias for &*
  * resetchannels            Flush the list of allowed channel patterns.
+ * db=<dbid>    Add database ID to the set of allowed IDs, any other database ID
+ *              will be disallowed. May be used with `,` for assingning multiple 
+ *              allowed IDs (e.g "db=1,2,3").
+ * db!=<dbid>   Add database ID to the set of disallowed IDs, any other database ID
+ *              will be disallowed. May be used with `,` for assingning multiple
+ *              disallowed IDs (e.g "db!=4,5,6").
+ * alldbs       Allow access to all databases.
+ * resetdbs     Flush the set of allowed/disallowed database IDs, revert to default
+ *              behaviour (all databases are allowed).
  */
 static int ACLSetSelector(aclSelector *selector, const char *op, size_t oplen) {
     if (!strcasecmp(op, "allkeys") || !strcasecmp(op, "~*")) {
@@ -1011,6 +1120,24 @@ static int ACLSetSelector(aclSelector *selector, const char *op, size_t oplen) {
     } else if (!strcasecmp(op, "resetchannels")) {
         selector->flags &= ~SELECTOR_FLAG_ALLCHANNELS;
         listEmpty(selector->channels);
+    } else if (!strcasecmp(op, "alldbs")) {
+        selector->flags |= SELECTOR_FLAG_ALLDBS;
+        if (selector->dbs) {
+            intsetFree(selector->dbs);
+            selector->dbs = intsetNew();
+        }
+    } else if (!strcasecmp(op, "resetdbs")) {
+        selector->flags |= SELECTOR_FLAG_ALLDBS;
+        if (selector->dbs) {
+            intsetFree(selector->dbs);
+            selector->dbs = intsetNew();
+        }
+    } else if (strncmp(op, "db=", 3) == 0) {
+        int result = ACLSetSelectorDatabasePermissions(selector, op + 3, 0);
+        if (result != C_OK) return result;
+    } else if (strncmp(op, "db!=", 4) == 0) {
+        int result = ACLSetSelectorDatabasePermissions(selector, op + 4, 1);
+        if (result != C_OK) return result;
     } else if (!strcasecmp(op, "allcommands") || !strcasecmp(op, "+@all")) {
         memset(selector->allowed_commands, 255, sizeof(selector->allowed_commands));
         selector->flags |= SELECTOR_FLAG_ALLCOMMANDS;
@@ -1227,7 +1354,7 @@ static int ACLSetSelector(aclSelector *selector, const char *op, size_t oplen) {
  *
  * When an error is returned, errno is set to the following values:
  *
- * EINVAL: The specified opcode is not understood or the key/channel pattern is
+ * EINVAL: The specified opcode is not understood or the key/channel/db pattern is
  *         invalid (contains non allowed characters).
  * ENOENT: The command name or command category provided with + or - is not
  *         known.
@@ -1328,6 +1455,7 @@ int ACLSetUser(user *u, const char *op, ssize_t oplen) {
         serverAssert(ACLSetUser(u, "resetchannels", -1) == C_OK);
         if (server.acl_pubsub_default & SELECTOR_FLAG_ALLCHANNELS)
             serverAssert(ACLSetUser(u, "allchannels", -1) == C_OK);
+        serverAssert(ACLSetUser(u, "resetdbs", -1) == C_OK);
         serverAssert(ACLSetUser(u, "off", -1) == C_OK);
         serverAssert(ACLSetUser(u, "sanitize-payload", -1) == C_OK);
         serverAssert(ACLSetUser(u, "clearselectors", -1) == C_OK);
@@ -1381,6 +1509,7 @@ static user *ACLCreateDefaultUser(void) {
     ACLSetUser(new, "&*", -1);
     ACLSetUser(new, "on", -1);
     ACLSetUser(new, "nopass", -1);
+    ACLSetUser(new, "alldbs", -1);
     return new;
 }
 
@@ -1625,6 +1754,22 @@ static int ACLCheckChannelAgainstList(list *reference, const char *channel, int 
     return ACL_DENIED_CHANNEL;
 }
 
+/* Check if selector allows access to the specified database */
+int ACLSelectorCanAccessDb(aclSelector *selector, long long dbid) {
+    
+    if (selector->flags & SELECTOR_FLAG_ALLDBS)
+        return 1;
+
+    if (dbid < 0 || dbid >= server.dbnum)
+        return 0;
+    
+    int found = intsetFind(selector->dbs, (int64_t)dbid);
+    
+    if (selector->flags & SELECTOR_FLAG_DBLIST_NEGATED)
+        return !found;
+    return found;
+}
+
 /* To prevent duplicate calls to getKeysResult, a cache is maintained
  * in between calls to the various selectors. */
 typedef struct {
@@ -1644,18 +1789,57 @@ static void cleanupACLKeyResultCache(aclKeyResultCache *cache) {
  * ACLs associated with the specified selector.
  *
  * If the selector can execute the command ACL_OK is returned, otherwise
- * ACL_DENIED_CMD, ACL_DENIED_KEY, or ACL_DENIED_CHANNEL is returned: the first in case the
+ * ACL_DENIED_CMD, ACL_DENIED_KEY, ACL_DENIED_CHANNEL or ACL_DENIED_DB is returned: the first in case the
  * command cannot be executed because the selector is not allowed to run such
- * command, the second and third if the command is denied because the selector is trying
- * to access a key or channel that are not among the specified patterns. */
+ * command, the second, third and fourth if the command is denied because the selector is trying
+ * to access a key, channel or database that are not among the specified patterns. */
 static int ACLSelectorCheckCmd(aclSelector *selector,
                                struct serverCommand *cmd,
                                robj **argv,
                                int argc,
                                int *keyidxptr,
-                               aclKeyResultCache *cache) {
+                               aclKeyResultCache *cache,
+                               int dbid) {
     uint64_t id = cmd->id;
     int ret;
+    if (cmd->flags & CMD_CROSS_DB) {
+        if (cmd->proc == selectCommand && argc > 1) {
+            long long target_db;
+            if (getLongLongFromObject(argv[1], &target_db) == C_OK) {
+                if (target_db >= 0 && target_db < server.dbnum) {
+                    dbid = (int)target_db;
+                }
+            }
+        } else if (cmd->proc == swapdbCommand && argc > 2) {
+            long long db1, db2;
+            if (getLongLongFromObject(argv[1], &db1) == C_OK && getLongLongFromObject(argv[2], &db2) == C_OK &&
+                (!ACLSelectorCanAccessDb(selector, db1) || !ACLSelectorCanAccessDb(selector, db2))) {
+                return ACL_DENIED_DB;
+            }
+        } else if (cmd->proc == moveCommand && argc > 2) {
+            long long target_db;
+            if (getLongLongFromObject(argv[2], &target_db) == C_OK &&
+                !ACLSelectorCanAccessDb(selector, target_db)) {
+                return ACL_DENIED_DB;
+            }
+        }
+    }
+
+    if ((cmd->flags & CMD_ALL_DBS) && !(selector->flags & SELECTOR_FLAG_ALLDBS)) {
+        for (int i = 0; i < server.dbnum; i++) {
+            if (!ACLSelectorCanAccessDb(selector, i)) {
+                return ACL_DENIED_DB;
+            }
+        }
+    }
+
+    if (!ACLSelectorCanAccessDb(selector, dbid)) {
+        if (keyidxptr) {
+            *keyidxptr = (cmd->proc == selectCommand) ? 1 : 0;
+        }
+        return ACL_DENIED_DB;
+    }
+
     if (!(selector->flags & SELECTOR_FLAG_ALLCOMMANDS) && !(cmd->flags & CMD_NO_AUTH)) {
         /* If the bit is not set we have to check further, in case the
          * command is allowed just with that specific first argument. */
@@ -1734,6 +1918,7 @@ int ACLUserCheckKeyPerm(user *u, const char *key, int keylen, int flags) {
     /* If there is no associated user, the connection can run anything. */
     if (u == NULL) return ACL_OK;
 
+    // TODO: Determine what to do here and in VM function
     /* Check all of the selectors */
     listRewind(u->selectors, &li);
     while ((ln = listNext(&li))) {
@@ -1751,7 +1936,7 @@ int ACLUserCheckKeyPerm(user *u, const char *key, int keylen, int flags) {
  * granted in addition to the access required by the command. Returns 1
  * if the user has access or 0 otherwise.
  */
-int ACLUserCheckCmdWithUnrestrictedKeyAccess(user *u, struct serverCommand *cmd, robj **argv, int argc, int flags) {
+int ACLUserCheckCmdWithUnrestrictedKeyAccess(user *u, struct serverCommand *cmd, robj **argv, int argc, int dbid, int flags) {
     listIter li;
     listNode *ln;
     int local_idxptr;
@@ -1768,7 +1953,7 @@ int ACLUserCheckCmdWithUnrestrictedKeyAccess(user *u, struct serverCommand *cmd,
     listRewind(u->selectors, &li);
     while ((ln = listNext(&li))) {
         aclSelector *s = (aclSelector *)listNodeValue(ln);
-        int acl_retval = ACLSelectorCheckCmd(s, cmd, argv, argc, &local_idxptr, &cache);
+        int acl_retval = ACLSelectorCheckCmd(s, cmd, argv, argc, &local_idxptr, &cache, dbid);
         if (acl_retval == ACL_OK && ACLSelectorHasUnrestrictedKeyAccess(s, flags)) {
             cleanupACLKeyResultCache(&cache);
             return 1;
@@ -1810,7 +1995,7 @@ int ACLUserCheckChannelPerm(user *u, sds channel, int is_pattern) {
  * If the command fails an ACL check, idxptr will be to set to the first argv entry that
  * causes the failure, either 0 if the command itself fails or the idx of the key/channel
  * that causes the failure */
-int ACLCheckAllUserCommandPerm(user *u, struct serverCommand *cmd, robj **argv, int argc, int *idxptr) {
+int ACLCheckAllUserCommandPerm(user *u, struct serverCommand *cmd, robj **argv, int argc, int dbid, int *idxptr) {
     listIter li;
     listNode *ln;
 
@@ -1820,7 +2005,7 @@ int ACLCheckAllUserCommandPerm(user *u, struct serverCommand *cmd, robj **argv, 
     /* We have to pick a single error to log, the logic for picking is as follows:
      * 1) If no selector can execute the command, return the command.
      * 2) Return the last key or channel that no selector could match. */
-    int relevant_error = ACL_DENIED_CMD;
+    int relevant_error = ACL_DENIED_DB;
     int local_idxptr = 0, last_idx = 0;
 
     /* For multiple selectors, we cache the key result in between selector
@@ -1832,7 +2017,7 @@ int ACLCheckAllUserCommandPerm(user *u, struct serverCommand *cmd, robj **argv, 
     listRewind(u->selectors, &li);
     while ((ln = listNext(&li))) {
         aclSelector *s = (aclSelector *)listNodeValue(ln);
-        int acl_retval = ACLSelectorCheckCmd(s, cmd, argv, argc, &local_idxptr, &cache);
+        int acl_retval = ACLSelectorCheckCmd(s, cmd, argv, argc, &local_idxptr, &cache, dbid);
         if (acl_retval == ACL_OK) {
             cleanupACLKeyResultCache(&cache);
             return ACL_OK;
@@ -1850,7 +2035,10 @@ int ACLCheckAllUserCommandPerm(user *u, struct serverCommand *cmd, robj **argv, 
 
 /* High level API for checking if a client can execute the queued up command */
 int ACLCheckAllPerm(client *c, int *idxptr) {
-    return ACLCheckAllUserCommandPerm(c->user, c->cmd, c->argv, c->argc, idxptr);
+    int dbid = (c->flag.multi) ? 
+        c->mstate->transaction_db_id : 
+        (c->db ? c->db->id : -1);
+    return ACLCheckAllUserCommandPerm(c->user, c->cmd, c->argv, c->argc, dbid, idxptr);
 }
 
 /* If 'new' can access all channels 'original' could then return NULL;
@@ -2591,6 +2779,8 @@ static void ACLUpdateInfoMetrics(int reason) {
         server.acl_info.invalid_channel_accesses++;
     } else if (reason == ACL_INVALID_TLS_CERT_AUTH) {
         server.acl_info.acl_access_denied_tls_cert++;
+    } else if (reason == ACL_DENIED_DB) {
+        server.acl_info.invalid_db_accesses++;
     } else {
         serverPanic("Unknown ACL_DENIED encoding");
     }
@@ -2645,6 +2835,7 @@ void addACLLogEntry(client *c, int reason, int context, int argpos, sds username
         case ACL_DENIED_CMD: le->object = sdsdup(c->cmd->fullname); break;
         case ACL_DENIED_KEY: le->object = sdsdup(c->argv[argpos]->ptr); break;
         case ACL_DENIED_CHANNEL: le->object = sdsdup(c->argv[argpos]->ptr); break;
+        case ACL_DENIED_DB: le->object = sdsdup(c->argv[argpos]->ptr); break;
         case ACL_DENIED_AUTH: le->object = sdsdup(c->argv[0]->ptr); break;
         default: le->object = sdsempty();
         }
@@ -2719,6 +2910,14 @@ sds getAclErrorMessage(int acl_res, user *user, struct serverCommand *cmd, sds e
                              user->name, errored_val);
         } else {
             return sdsnew("No permissions to access a channel");
+        }
+    case ACL_DENIED_DB:
+        if (verbose) {
+            return sdscatfmt(sdsempty(), 
+                             "User %s has no permissions to access "
+                             "database %s", user->name, errored_val);
+        } else {
+            return sdsnew("No permissions to access current database");
         }
     }
     serverPanic("Reached deadcode on getAclErrorMessage");
@@ -3083,7 +3282,10 @@ void aclCommand(client *c) {
         }
 
         int idx;
-        int result = ACLCheckAllUserCommandPerm(u, cmd, c->argv + 3, c->argc - 3, &idx);
+        int dbid = (c->flag.multi) ? 
+        c->mstate->transaction_db_id : 
+        (c->db ? c->db->id : -1);
+        int result = ACLCheckAllUserCommandPerm(u, cmd, c->argv + 3, c->argc - 3, dbid, &idx);
         if (result != ACL_OK) {
             sds err = getAclErrorMessage(result, u, cmd, c->argv[idx + 3]->ptr, 1);
             addReplyBulkSds(c, err);

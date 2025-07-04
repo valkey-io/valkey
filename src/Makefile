@@ -466,17 +466,6 @@ all-with-unit-tests: all $(ENGINE_UNIT_TESTS)
 .PHONY: all
 
 persist-settings: distclean
-	echo STD=$(STD) >> .make-settings
-	echo WARN=$(WARN) >> .make-settings
-	echo OPT=$(OPT) >> .make-settings
-	echo MALLOC=$(MALLOC) >> .make-settings
-	echo BUILD_TLS=$(BUILD_TLS) >> .make-settings
-	echo BUILD_RDMA=$(BUILD_RDMA) >> .make-settings
-	echo USE_SYSTEMD=$(USE_SYSTEMD) >> .make-settings
-	echo CFLAGS=$(CFLAGS) >> .make-settings
-	echo LDFLAGS=$(LDFLAGS) >> .make-settings
-	echo SERVER_CFLAGS=$(SERVER_CFLAGS) >> .make-settings
-	echo SERVER_LDFLAGS=$(SERVER_LDFLAGS) >> .make-settings
 	echo PREV_FINAL_CFLAGS=$(FINAL_CFLAGS) >> .make-settings
 	echo PREV_FINAL_LDFLAGS=$(FINAL_LDFLAGS) >> .make-settings
 	-(cd ../deps && $(MAKE) $(DEPENDENCY_TARGETS))

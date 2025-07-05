@@ -836,16 +836,11 @@ start_server {tags {"multi"}} {
             r del foo
             r multi
             r set foo bar
-            catch {r $cmd} e1
-            catch {r exec} e2
-            if {$cmd == "SAVE"} {
-                assert_match {*Command 'save' not allowed inside a transaction*} $e1
-            } elseif {$cmd == "SHUTDOWN"} {
-                assert_match {*Command 'shutdown' not allowed inside a transaction*} $e1
-            }
-            assert_match {EXECABORT*} $e2
-            r get foo
-        } {}
+            set cmd_lower [string tolower $cmd]
+            assert_error "ERR Command '$cmd_lower' not allowed inside a transaction*" {r $cmd}
+            assert_error "EXECABORT Transaction discarded because of previous errors*" {r exec}
+            assert_equal [r get foo] {}
+        }
     }
 
     test "MULTI with BGREWRITEAOF" {

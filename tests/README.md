@@ -33,7 +33,7 @@ match different external server configurations. All options are listed by
 | `--large-memory`           | Enables tests that consume more than 100MB |
 | `--tls`                    | Run tests with TLS. See below. |
 | `--tls-module`             | Run tests with TLS, when TLS support is built as a module. |
-| `--other-server-path PATH` | Run compatibility tests with an other server executable. |
+| `--other-server-path PATH` | Run compatibility tests with another server executable. |
 | `--help`                   | Displays the full set of options. |
 
 Running with TLS requires the following preparations:

@@ -1439,7 +1439,12 @@ int ACLCheckUserCredentials(robj *username, robj *password) {
 /* If `err` is provided, this is added as an error reply to the client.
  * Otherwise, the standard Auth error is added as a reply. */
 void addAuthErrReply(client *c, robj *err) {
-    if (clientHasPendingReplies(c)) return;
+    /* Note that a module auth can add reply in its callback, or not
+     * add reply and just return an error robj in its callback. So in
+     * here, we use buffered_reply flag to determine if auth command
+     * has already had a reply added. */
+    if (c->flag.buffered_reply) return;
+
     if (!err) {
         addReplyError(c, "-WRONGPASS invalid username-password pair or user is disabled.");
         return;

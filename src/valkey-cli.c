@@ -3122,7 +3122,7 @@ static int confirmWithYes(char *msg, int ignore_force) {
 
 static int issueCommandRepeat(int argc, char **argv, long repeat) {
     /* In Lua debugging mode, we want to pass the "help" to the server to get
-     * it's own HELP message, rather than handle it by the CLI, see ldbRepl.
+     * its own HELP message, rather than handle it by the CLI, see ldbRepl.
      *
      * For the normal server HELP, we can process it without a connection. */
     if (!config.eval_ldb && (!strcasecmp(argv[0], "help") || !strcasecmp(argv[0], "?"))) {

@@ -1,4 +1,4 @@
-/* A very simple test framework for valkey. See unit/README.me for more information on usage.
+/* A very simple test framework for valkey. See unit/README.md for more information on usage.
  *
  * Example:
  *

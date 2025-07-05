@@ -17,7 +17,7 @@
 }
 
 {
-   <negative size allocatoin, see integration/corrupt-dump>
+   <negative size allocation, see integration/corrupt-dump>
    Memcheck:FishyValue
    malloc(size)
    fun:malloc

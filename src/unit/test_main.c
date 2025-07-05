@@ -26,6 +26,7 @@ void _serverAssert(const char *estr, const char *file, int line) {
 int runTestSuite(struct unitTestSuite *test, int argc, char **argv, int flags) {
     int test_num = 0;
     int failed_tests = 0;
+    size_t used_mem_before = zmalloc_used_memory();
     printf("[" KBLUE "START" KRESET "] - %s\n", test->filename);
 
     for (int id = 0; test->tests[id].proc != NULL; id++) {
@@ -42,8 +43,10 @@ int runTestSuite(struct unitTestSuite *test, int argc, char **argv, int flags) {
 
     /* Check if the test suite has cleaned up all the memory used. */
     test_num++;
-    if (zmalloc_used_memory() > 0) {
-        printf("[" KRED "%s" KRESET "] Memory leak detected of %zu bytes\n", test->filename, zmalloc_used_memory());
+    if (zmalloc_used_memory() != used_mem_before) {
+        printf("[" KRED "%s" KRESET "] Memory leak detected of %lld bytes\n",
+               test->filename,
+               (long long)zmalloc_used_memory() - (long long)used_mem_before);
         failed_tests++;
     }
 

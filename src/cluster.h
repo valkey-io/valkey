@@ -92,6 +92,7 @@ int getClusterSize(void);
 int getMyShardSlotCount(void);
 int clusterNodePending(clusterNode *node);
 int clusterNodeIsPrimary(clusterNode *n);
+int clusterNodeIsVotingPrimary(clusterNode *n);
 char **getClusterNodesList(size_t *numnodes);
 char *clusterNodeIp(clusterNode *node, client *c);
 int clusterNodeIsReplica(clusterNode *node);

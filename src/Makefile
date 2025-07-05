@@ -130,7 +130,7 @@ ifdef REDIS_LDFLAGS
     SERVER_LDFLAGS := $(REDIS_LDFLAGS)
 endif
 
-# Special case of forcing defrag to run even though we have no Jemlloc support
+# Special case of forcing defrag to run even though we have no Jemalloc support
 ifeq ($(DEBUG_FORCE_DEFRAG), yes)
 	SERVER_CFLAGS +=-DHAVE_DEFRAG -DDEBUG_FORCE_DEFRAG
 endif
@@ -587,7 +587,7 @@ distclean: clean
 
 .PHONY: distclean
 
-test: $(SERVER_NAME) $(ENGINE_CHECK_AOF_NAME) $(ENGINE_CLI_NAME) $(ENGINE_BENCHMARK_NAME)
+test: $(SERVER_NAME) $(ENGINE_CHECK_AOF_NAME) $(ENGINE_CHECK_RDB_NAME) $(ENGINE_CLI_NAME) $(ENGINE_BENCHMARK_NAME)
 	@(cd ..; ./runtest)
 
 test-unit: $(ENGINE_UNIT_TESTS)

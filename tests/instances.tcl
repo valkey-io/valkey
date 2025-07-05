@@ -446,7 +446,7 @@ proc test {descr code} {
     }
 }
 
-# Check memory leaks when running on OSX using the "leaks" utility.
+# Check memory leaks when running on macOS using the "leaks" utility.
 proc check_leaks instance_types {
     if {[string match {*Darwin*} [exec uname -a]]} {
         puts -nonewline "Testing for memory leaks..."; flush stdout

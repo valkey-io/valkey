@@ -139,6 +139,7 @@ int hashtableAdd(hashtable *ht, void *entry);
 int hashtableAddOrFind(hashtable *ht, void *entry, void **existing);
 int hashtableFindPositionForInsert(hashtable *ht, void *key, hashtablePosition *position, void **existing);
 void hashtableInsertAtPosition(hashtable *ht, void *entry, hashtablePosition *position);
+void hashtablePrefetchBucket(hashtable *ht, const void *key);
 int hashtablePop(hashtable *ht, const void *key, void **popped);
 int hashtableDelete(hashtable *ht, const void *key);
 void **hashtableTwoPhasePopFindRef(hashtable *ht, const void *key, hashtablePosition *position);

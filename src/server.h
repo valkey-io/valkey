@@ -3472,6 +3472,7 @@ int objectSetLRUOrLFU(robj *val, long long lfu_freq, long long lru_idle, long lo
 void dbAdd(serverDb *db, robj *key, robj **valref);
 int dbAddRDBLoad(serverDb *db, sds key, robj **valref);
 void dbReplaceValue(serverDb *db, robj *key, robj **valref);
+void dbPrefetch(serverDb *db, sds key);
 
 #define SETKEY_KEEPTTL 1
 #define SETKEY_NO_SIGNAL 2

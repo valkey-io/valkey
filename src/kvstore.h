@@ -79,6 +79,7 @@ int kvstoreHashtableAdd(kvstore *kvs, int didx, void *entry);
 
 int kvstoreHashtableFindPositionForInsert(kvstore *kvs, int didx, void *key, hashtablePosition *position, void **existing);
 void kvstoreHashtableInsertAtPosition(kvstore *kvs, int didx, void *entry, void *position);
+void kvstoreHashtablePrefetch(kvstore *kvs, int didx, const void *key);
 
 void **kvstoreHashtableTwoPhasePopFindRef(kvstore *kvs, int didx, const void *key, void *position);
 void kvstoreHashtableTwoPhasePopDelete(kvstore *kvs, int didx, void *position);

@@ -3020,6 +3020,122 @@ int rdbLoadRioWithLoadingCtxScopedRdb(rio *rdb, int rdbflags, rdbSaveInfo *rsi, 
     return retval;
 }
 
+/* During RDB loading, we accelerate the insertion process by prefetching before
+ * batch-inserting keys into the hashtable. Each parsed key-value pair is appended
+ * to the dbBatchRdbLoadCtx struct, and when the accumulated count reaches
+ * BATCH_LOAD_RDB_BUF_SIZE, batch insertion is automatically triggered. */
+#define BATCH_LOAD_RDB_BUF_SIZE 16
+typedef struct {
+    struct {
+        sds key;
+        robj *val;
+        long long expiretime;
+        long long lfu_freq;
+        long long lru_idle;
+        serverDb *db;
+    } items[BATCH_LOAD_RDB_BUF_SIZE];
+    int num; /* Number of items in the batch */
+    int rdbflags;
+    long long lru_clock;
+} dbBatchRdbLoadCtx;
+
+/* Initialize the dbBatchRdbLoadCtx structure. */
+static void initDbBatchRdbLoadCtx(dbBatchRdbLoadCtx *ctx, int rdbflags) {
+    ctx->num = 0;
+    ctx->rdbflags = rdbflags;
+    ctx->lru_clock = LRU_CLOCK();
+}
+
+/* Perform the batch loading operation for the items in the context.
+ * This function should be called when the batch is full or at the end of RDB loading. */
+static void dbBatchRdbLoad(dbBatchRdbLoadCtx *ctx) {
+    /* Prefetch the corresponding hashtable buckets for keys into the CPU cache
+     * to mitigate performance degradation caused by cache misses. */
+    for (int x = 0; x < ctx->num; x++) {
+        dbPrefetch(ctx->items[x].db, ctx->items[x].key);
+    }
+
+    /* Insert key-value pairs into the database individually. */
+    for (int x = 0; x < ctx->num; x++) {
+        sds key = ctx->items[x].key;
+        robj *val = ctx->items[x].val;
+        long long lru_idle = ctx->items[x].lru_idle;
+        long long lfu_freq = ctx->items[x].lfu_freq;
+        long long expiretime = ctx->items[x].expiretime;
+        serverDb *db = ctx->items[x].db;
+
+        robj keyobj;
+        initStaticStringObject(keyobj, key);
+
+        /* Add the new object in the hash table */
+        int added = dbAddRDBLoad(db, key, &val);
+        server.rdb_last_load_keys_loaded++;
+        if (!added) {
+            if (ctx->rdbflags & RDBFLAGS_ALLOW_DUP) {
+                /* This flag is useful for DEBUG RELOAD special modes.
+                 * When it's set we allow new keys to replace the current
+                 * keys with the same name. */
+                dbSyncDelete(db, &keyobj);
+                added = dbAddRDBLoad(db, key, &val);
+                serverAssert(added);
+            } else {
+                serverLog(LL_WARNING, "RDB has duplicated key '%s' in DB %d", key, db->id);
+                serverPanic("Duplicated key found in RDB file");
+            }
+        }
+
+        /* Set the expire time if needed */
+        if (expiretime != -1) {
+            val = setExpire(NULL, db, &keyobj, expiretime);
+        }
+
+        /* Set usage information (for eviction). */
+        objectSetLRUOrLFU(val, lfu_freq, lru_idle, ctx->lru_clock, 1000);
+
+        /* call key space notification on key loaded for modules only */
+        moduleNotifyKeyspaceEvent(NOTIFY_LOADED, "loaded", &keyobj, db->id);
+
+        /* Release key (sds), dictEntry stores a copy of it in embedded data */
+        sdsfree(key);
+    }
+    ctx->num = 0;
+}
+
+/* Add the key-value pair to the batch context, and if the batch is full,
+ * perform the batch loading operation. */
+static void dbBatchRdbLoadCtxAppend(dbBatchRdbLoadCtx *ctx, sds key, robj *val, long long expiretime, long long lfu_freq, long long lru_idle, serverDb *db) {
+    ctx->items[ctx->num].key = key;
+    ctx->items[ctx->num].val = val;
+    ctx->items[ctx->num].expiretime = expiretime;
+    ctx->items[ctx->num].lfu_freq = lfu_freq;
+    ctx->items[ctx->num].lru_idle = lru_idle;
+    ctx->items[ctx->num].db = db;
+    ctx->num++;
+    if (unlikely(ctx->num == BATCH_LOAD_RDB_BUF_SIZE)) {
+        dbBatchRdbLoad(ctx);
+        return;
+    }
+}
+
+/* If there are items in the batch context, perform the batch loading operation.
+ * This function should be called at the end of RDB loading to ensure all items
+ * are processed. */
+static void dbBatchRdbLoadIfNeed(dbBatchRdbLoadCtx *ctx) {
+    if (ctx->num) {
+        dbBatchRdbLoad(ctx);
+    }
+}
+
+/* Reset the dbBatchRdbLoadCtx structure, freeing all keys and values.
+ * This function should be called when an error occurs during rdbLoading. */
+static void resetDbBatchRdbLoadCtx(dbBatchRdbLoadCtx *ctx) {
+    for (int x = 0; x < ctx->num; x++) {
+        sdsfree(ctx->items[x].key);
+        decrRefCount(ctx->items[x].val);
+    }
+    ctx->num = 0;
+}
+
 /* Load an RDB file from the rio stream 'rdb'. On success C_OK is returned,
  * otherwise C_ERR is returned.
  * The rdb_loading_ctx argument holds objects to which the rdb will be loaded to,
@@ -3038,6 +3154,8 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
     int error;
     long long empty_keys_skipped = 0;
     bool is_valkey_magic;
+    dbBatchRdbLoadCtx batch_load_ctx;
+    initDbBatchRdbLoadCtx(&batch_load_ctx, rdbflags);
 
     rdb->update_cksum = rdbLoadProgressCallback;
     rdb->max_processing_chunk = server.loading_process_events_interval_bytes;
@@ -3061,7 +3179,6 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
 
     /* Key-specific attributes, set by opcodes before the key type. */
     long long lru_idle = -1, lfu_freq = -1, expiretime = -1, now = mstime();
-    long long lru_clock = LRU_CLOCK();
 
     while (1) {
         sds key;
@@ -3340,39 +3457,7 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
             decrRefCount(val);
             server.rdb_last_load_keys_expired++;
         } else {
-            robj keyobj;
-            initStaticStringObject(keyobj, key);
-
-            /* Add the new object in the hash table */
-            int added = dbAddRDBLoad(db, key, &val);
-            server.rdb_last_load_keys_loaded++;
-            if (!added) {
-                if (rdbflags & RDBFLAGS_ALLOW_DUP) {
-                    /* This flag is useful for DEBUG RELOAD special modes.
-                     * When it's set we allow new keys to replace the current
-                     * keys with the same name. */
-                    dbSyncDelete(db, &keyobj);
-                    added = dbAddRDBLoad(db, key, &val);
-                    serverAssert(added);
-                } else {
-                    serverLog(LL_WARNING, "RDB has duplicated key '%s' in DB %d", key, db->id);
-                    serverPanic("Duplicated key found in RDB file");
-                }
-            }
-
-            /* Set the expire time if needed */
-            if (expiretime != -1) {
-                val = setExpire(NULL, db, &keyobj, expiretime);
-            }
-
-            /* Set usage information (for eviction). */
-            objectSetLRUOrLFU(val, lfu_freq, lru_idle, lru_clock, 1000);
-
-            /* call key space notification on key loaded for modules only */
-            moduleNotifyKeyspaceEvent(NOTIFY_LOADED, "loaded", &keyobj, db->id);
-
-            /* Release key (sds), dictEntry stores a copy of it in embedded data */
-            sdsfree(key);
+            dbBatchRdbLoadCtxAppend(&batch_load_ctx, key, val, expiretime, lfu_freq, lru_idle, db);
         }
 
         /* Loading the database more slowly is useful in order to test
@@ -3385,6 +3470,10 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
         lfu_freq = -1;
         lru_idle = -1;
     }
+
+    /* If any key-value pairs remain, perform their insertion into db. */
+    dbBatchRdbLoadIfNeed(&batch_load_ctx);
+
     /* Verify the checksum if RDB version is >= 5 */
     if (rdbver >= 5) {
         uint64_t cksum, expected = rdb->cksum;
@@ -3421,6 +3510,8 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
      * the RDB file from a socket during initial SYNC (diskless replica mode),
      * we'll report the error to the caller, so that we can retry. */
 eoferr:
+    /* Any residual key-value pairs must be cleaned up. */
+    resetDbBatchRdbLoadCtx(&batch_load_ctx);
     serverLog(LL_WARNING, "Short read or OOM loading DB. Unrecoverable error, aborting now.");
     rdbReportReadError("Unexpected EOF reading RDB file");
     return C_ERR;

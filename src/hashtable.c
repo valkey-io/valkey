@@ -1426,6 +1426,24 @@ void hashtableInsertAtPosition(hashtable *ht, void *entry, hashtablePosition *po
     /* Hash bits are already set by hashtableFindPositionForInsert. */
 }
 
+/* Prefetches the bucket associated with a key into the CPU cache.
+ * One useful scenario is during RDB loading: batch prefetching the buckets
+ * for corresponding keys into the CPU cache before performing hashtable insert
+ * operations, thus reducing memory latency. */
+void hashtablePrefetchBucket(hashtable *ht, const void *key) {
+    if (hashtableSize(ht) == 0) return;
+    uint64_t hash = hashKey(ht, key);
+
+    for (int table = 0; table <= 1; table++) {
+        if (ht->used[table] == 0) continue;
+        size_t mask = expToMask(ht->bucket_exp[table]);
+        size_t bucket_idx = hash & mask;
+
+        bucket *b = ht->tables[table] + bucket_idx;
+        valkey_prefetch(b);
+    }
+}
+
 /* Removes the entry with the matching key and returns it. The entry
  * destructor is not called. Returns 1 and points 'popped' to the entry if a
  * matching entry was found. Returns 0 if no matching entry was found. */

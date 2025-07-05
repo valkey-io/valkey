@@ -298,6 +298,13 @@ int dbAddRDBLoad(serverDb *db, sds key, robj **valref) {
     return 1;
 }
 
+/* It is a helper function that prefetches the corresponding hashtable bucket
+ * into the CPU cache before batch key insertion operations, reducing memory latency. */
+void dbPrefetch(serverDb *db, sds key) {
+    int dict_index = getKVStoreIndexForKey(key);
+    kvstoreHashtablePrefetch(db->keys, dict_index, key);
+}
+
 /* Overwrite an existing key with a new value.
  *
  * The value may (if its reference counter == 1) be reallocated and become

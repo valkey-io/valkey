@@ -809,6 +809,11 @@ int kvstoreHashtableFindPositionForInsert(kvstore *kvs, int didx, void *key, has
     return hashtableFindPositionForInsert(ht, key, position, existing);
 }
 
+void kvstoreHashtablePrefetch(kvstore *kvs, int didx, const void *key) {
+    hashtable *ht = createHashtableIfNeeded(kvs, didx);
+    hashtablePrefetchBucket(ht, key);
+}
+
 /* Must be used together with kvstoreHashtableFindPositionForInsert, with returned
  * position and with the same didx. */
 void kvstoreHashtableInsertAtPosition(kvstore *kvs, int didx, void *entry, void *position) {

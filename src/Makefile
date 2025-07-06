@@ -24,10 +24,10 @@ $(if $($(1)), \
 endef
 
 $(shell \
-	> .tmp.make-settings; \
+    > .tmp.make-settings; \
     $(call save_var_if_defined,STD) \
     $(call save_var_if_defined,WARN) \
-	$(call save_var_if_defined,SANITIZER) \
+    $(call save_var_if_defined,SANITIZER) \
     $(call save_var_if_defined,OPT) \
     $(call save_var_if_defined,MALLOC) \
     $(call save_var_if_defined,BUILD_TLS) \

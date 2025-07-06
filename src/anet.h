@@ -73,5 +73,6 @@ int anetPipe(int fds[2], int read_flags, int write_flags);
 int anetSetSockMarkId(char *err, int fd, uint32_t id);
 int anetGetError(int fd);
 int anetIsFifo(char *filepath);
+int anetRetryAcceptOnError(int err);
 
 #endif

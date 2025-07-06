@@ -10,6 +10,22 @@ SECURITY: There are security fixes in the release.
 --------------------------------------------------------------------------------
 
 ================================================================================
+Valkey 8.1.3  -  Released Sun 07 July 2025
+================================================================================
+
+Upgrade urgency SECURITY: This release includes security fixes we recommend you
+apply as soon as possible.
+
+Bug fixes
+=========
+* Fix missing response when AUTH is errored inside a transaction (#2287)
+
+Security fixes
+==============
+* CVE-2025-32023 prevent out-of-bounds write during hyperloglog operations (#2146)
+* CVE-2025-48367 retry accept on transient errors (#2315)
+
+================================================================================
 Valkey 8.1.2  -  Released Wed 11 June 2025
 ================================================================================
 

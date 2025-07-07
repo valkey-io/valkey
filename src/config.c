@@ -3368,9 +3368,10 @@ standardConfig static_configs[] = {
     createSizeTConfig("tracking-table-max-keys", NULL, MODIFIABLE_CONFIG, 0, LONG_MAX, server.tracking_table_max_keys, 1000000, INTEGER_CONFIG, NULL, NULL),                                      /* Default: 1 million keys max. */
     createSizeTConfig("client-query-buffer-limit", NULL, DEBUG_CONFIG | MODIFIABLE_CONFIG, 1024 * 1024, LONG_MAX, server.client_max_querybuf_len, 1024 * 1024 * 1024, MEMORY_CONFIG, NULL, NULL), /* Default: 1GB max query buffer. */
     createSSizeTConfig("maxmemory-clients", NULL, MODIFIABLE_CONFIG, -100, SSIZE_MAX, server.maxmemory_clients, 0, MEMORY_CONFIG | PERCENT_CONFIG, NULL, applyClientMaxMemoryUsage),
+    createSSizeTConfig("slot-migration-max-failover-repl-bytes", NULL, MODIFIABLE_CONFIG, -1, SSIZE_MAX, server.slot_migration_max_failover_repl_bytes, 1024 * 1024, MEMORY_CONFIG, NULL, NULL),
 
-    /* Other configs */
-    createTimeTConfig("repl-backlog-ttl", NULL, MODIFIABLE_CONFIG, 0, LONG_MAX, server.repl_backlog_time_limit, 60 * 60, INTEGER_CONFIG, NULL, NULL), /* Default: 1 hour */
+/* Other configs */
+createTimeTConfig("repl-backlog-ttl", NULL, MODIFIABLE_CONFIG, 0, LONG_MAX, server.repl_backlog_time_limit, 60 * 60, INTEGER_CONFIG, NULL, NULL), /* Default: 1 hour */
     createOffTConfig("auto-aof-rewrite-min-size", NULL, MODIFIABLE_CONFIG, 0, LLONG_MAX, server.aof_rewrite_min_size, 64 * 1024 * 1024, MEMORY_CONFIG, NULL, NULL),
     createOffTConfig("loading-process-events-interval-bytes", NULL, MODIFIABLE_CONFIG | HIDDEN_CONFIG, 1024, INT_MAX, server.loading_process_events_interval_bytes, 1024 * 1024 * 2, INTEGER_CONFIG, NULL, NULL),
 
@@ -3409,7 +3410,8 @@ standardConfig static_configs[] = {
 
     /* NULL Terminator, this is dropped when we convert to the runtime array. */
     {NULL},
-};
+}
+;
 
 /* Create a new config by copying the passed in config. Returns 1 on success
  * or 0 when their was already a config with the same name.. */

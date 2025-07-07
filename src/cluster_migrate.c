@@ -974,9 +974,8 @@ void slotExportBeginStreaming(slotMigrationLink *link) {
 void slotExportTryDoPause(slotMigrationLink *link) {
     serverAssert(link->type == SLOT_MIGRATION_EXPORT);
 
-    if (server.debug_slot_migration_prevent_pause ||
-        /* TODO - what number? */
-        link->client->reply_bytes > 0) {
+    if (server.debug_slot_migration_prevent_pause || (server.slot_migration_max_failover_repl_bytes > 0 &&
+                                                      link->client->reply_bytes > (size_t) server.slot_migration_max_failover_repl_bytes)) {
         return;
     }
     serverLog(LL_NOTICE,

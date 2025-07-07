@@ -3317,6 +3317,13 @@ void xautoclaimCommand(client *c) {
     int startex;
     int justid = 0;
 
+    if (o == NULL) {
+        addReplyErrorFormat(c, "-NOGROUP No such key '%s'", (char *)c->argv[1]->ptr);
+        return;
+    }
+
+    if (checkType(c, o, OBJ_STREAM)) return; /* Type error. */
+
     /* Parse idle/start/end/count arguments ASAP if needed, in order to report
      * syntax errors before any other error. */
     if (getLongLongFromObjectOrReply(c, c->argv[4], &minidle, "Invalid min-idle-time argument for XAUTOCLAIM") != C_OK)
@@ -3347,16 +3354,12 @@ void xautoclaimCommand(client *c) {
         j++;
     }
 
-    if (o) {
-        if (checkType(c, o, OBJ_STREAM)) return; /* Type error. */
-        group = streamLookupCG(o->ptr, c->argv[2]->ptr);
-    }
+    group = streamLookupCG(o->ptr, c->argv[2]->ptr);
 
     /* No key or group? Send an error given that the group creation
      * is mandatory. */
-    if (o == NULL || group == NULL) {
-        addReplyErrorFormat(c, "-NOGROUP No such key '%s' or consumer group '%s'", (char *)c->argv[1]->ptr,
-                            (char *)c->argv[2]->ptr);
+    if (group == NULL) {
+        addReplyErrorFormat(c, "-NOGROUP No consumer group '%s'", (char *)c->argv[2]->ptr);
         return;
     }
 

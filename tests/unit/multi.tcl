@@ -900,6 +900,7 @@ start_server {tags {"multi"}} {
         r watch b{t} a{t}
         r flushall
         r ping
+        r UNWATCH
      }
 
     test {MULTI is rejected when CLIENT REPLY is ON/OFF/SKIP} {

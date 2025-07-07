@@ -463,40 +463,6 @@ void clusterCommandSyncSlotsFailoverGranted(client *c) {
     clusterDoBeforeSleep(CLUSTER_TODO_HANDLE_SLOT_MIGRATION);
 }
 
-/* Sent by the source to the target to deny final authorization for
- * failover. */
-void clusterCommandSyncSlotsFailoverDenied(client *c) {
-    slotMigrationLink *link = (slotMigrationLink *)c->slot_migration_link;
-    if (!link || link->type != SLOT_MIGRATION_IMPORT) {
-        serverLog(LL_WARNING,
-                  "Received CLUSTER SYNCSLOTS FAILOVER-DENIED from client %llu, "
-                  "but the client is not a slot import source. Closing link.",
-                  (unsigned long long)c->id);
-        freeClientAsync(c);
-        return;
-    }
-    if (!isSlotMigrationLinkInProgress(link)) {
-        return;
-    }
-    if (link->state != SLOT_IMPORT_FAILOVER_REQUESTED) {
-        serverLog(LL_WARNING,
-                  "Received CLUSTER SYNCSLOTS FAILOVER-DENIED from link %.40s, "
-                  "but we never sent a failover request. Closing link.",
-                  link->linkname);
-        finishSlotMigrationLink(link, SLOT_MIGRATION_LINK_FAILED,
-                                "Unexpected state machine transition");
-        return;
-    }
-    serverLog(LL_WARNING,
-              "Slot import link %.40s had failover denied from node %.40s "
-              "(owner of slots [%s]). Failing import request.",
-              link->linkname,
-              link->nodename,
-              link->slot_ranges_str);
-    finishSlotMigrationLink(link, SLOT_MIGRATION_LINK_FAILED, "Failover denied");
-    return;
-}
-
 slotMigrationLink *createSlotImportLink(client *c, char *nodename, char *linkname, list *slot_ranges) {
     slotMigrationLink *link = zcalloc(sizeof(slotMigrationLink));
     memcpy(link->linkname, linkname, CLUSTER_NAMELEN);
@@ -698,6 +664,7 @@ void clusterCommandMigrate(client *c) {
     while (curr_index < c->argc) {
         if (strcasecmp(c->argv[curr_index]->ptr, "slotsrange")) {
             addReplyErrorObject(c, shared.syntaxerr);
+            listRelease(new_slot_migrations);
             return;
         }
         curr_index++;
@@ -1875,9 +1842,6 @@ void clusterCommandSyncSlots(client *c) {
     } else if (!strcasecmp(c->argv[2]->ptr, "failover-granted")) {
         /* CLUSTER SYNCSLOTS FAILOVER-GRANTED */
         clusterCommandSyncSlotsFailoverGranted(c);
-    } else if (!strcasecmp(c->argv[2]->ptr, "failover-denied")) {
-        /* CLUSTER SYNCSLOTS FAILOVER-DENIED */
-        clusterCommandSyncSlotsFailoverDenied(c);
     } else if (!strcasecmp(c->argv[2]->ptr, "ack")) {
         /* CLUSTER SYNCSLOTS ACK */
         clusterCommandSyncSlotsAck(c);

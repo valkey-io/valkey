@@ -684,7 +684,7 @@ static void defragModule(serverDb *db, robj *obj) {
 /* for each key we scan in the main dict, this function will attempt to defrag
  * all the various pointers it has. */
 static void defragKey(defragKeysCtx *ctx, robj **elemref) {
-    serverDb *db = &server.db[ctx->dbid];
+    serverDb *db = server.db[ctx->dbid];
     int slot = ctx->kvstate.slot;
     robj *newob, *ob;
     unsigned char *newzl;
@@ -940,7 +940,7 @@ static doneStatus defragStageKvstoreHelper(monotime endtime,
 static doneStatus defragStageDbKeys(monotime endtime, void *target, void *privdata) {
     UNUSED(privdata);
     int dbid = (uintptr_t)target;
-    serverDb *db = &server.db[dbid];
+    serverDb *db = server.db[dbid];
 
     static defragKeysCtx ctx; // STATIC - this persists
     if (endtime == 0) {
@@ -958,7 +958,7 @@ static doneStatus defragStageDbKeys(monotime endtime, void *target, void *privda
 static doneStatus defragStageExpiresKvstore(monotime endtime, void *target, void *privdata) {
     UNUSED(privdata);
     int dbid = (uintptr_t)target;
-    serverDb *db = &server.db[dbid];
+    serverDb *db = server.db[dbid];
     return defragStageKvstoreHelper(endtime, db->expires,
                                     scanHashtableCallbackCountScanned, NULL, NULL);
 }
@@ -1187,7 +1187,7 @@ static long long activeDefragTimeProc(struct aeEventLoop *eventLoop, long long i
 
     latencyEndMonitor(latency);
     latencyAddSampleIfNeeded("active-defrag-cycle", latency);
-
+    latencyTraceIfNeeded(db, active_defrag_cycle, latency);
     if (haveMoreWork) {
         return computeDelayMs(endtime);
     } else {
@@ -1227,6 +1227,7 @@ static void beginDefragCycle(void) {
     defrag.remaining_stages = listCreate();
 
     for (int dbid = 0; dbid < server.dbnum; dbid++) {
+        if (dbHasNoKeys(dbid)) continue;
         addDefragStage(defragStageDbKeys, (void *)(uintptr_t)dbid, NULL);
         addDefragStage(defragStageExpiresKvstore, (void *)(uintptr_t)dbid, NULL);
     }

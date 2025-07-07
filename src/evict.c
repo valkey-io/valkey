@@ -568,7 +568,8 @@ int performEvictions(void) {
                  * so to start populate the eviction pool sampling keys from
                  * every DB. */
                 for (i = 0; i < server.dbnum; i++) {
-                    db = server.db + i;
+                    db = server.db[i];
+                    if (db == NULL) continue;
                     kvstore *kvs;
                     if (server.maxmemory_policy & MAXMEMORY_FLAG_ALLKEYS) {
                         kvs = db->keys;
@@ -601,9 +602,9 @@ int performEvictions(void) {
 
                     kvstore *kvs;
                     if (server.maxmemory_policy & MAXMEMORY_FLAG_ALLKEYS) {
-                        kvs = server.db[bestdbid].keys;
+                        kvs = server.db[bestdbid]->keys;
                     } else {
-                        kvs = server.db[bestdbid].expires;
+                        kvs = server.db[bestdbid]->expires;
                     }
                     void *entry = NULL;
                     int found = kvstoreHashtableFind(kvs, pool[k].slot, pool[k].key, &entry);
@@ -634,7 +635,8 @@ int performEvictions(void) {
              * incrementally visit all DBs. */
             for (i = 0; i < server.dbnum; i++) {
                 j = (++next_db) % server.dbnum;
-                db = server.db + j;
+                db = server.db[j];
+                if (db == NULL) continue;
                 kvstore *kvs;
                 if (server.maxmemory_policy == MAXMEMORY_ALLKEYS_RANDOM) {
                     kvs = db->keys;
@@ -653,7 +655,7 @@ int performEvictions(void) {
 
         /* Finally remove the selected key. */
         if (bestkey) {
-            db = server.db + bestdbid;
+            db = server.db[bestdbid];
             robj *keyobj = createStringObject(bestkey, sdslen(bestkey));
             /* We compute the amount of memory freed by db*Delete() alone.
              * It is possible that actually the memory needed to propagate
@@ -671,6 +673,7 @@ int performEvictions(void) {
             dbGenericDelete(db, keyobj, server.lazyfree_lazy_eviction, DB_FLAG_KEY_EVICTED);
             latencyEndMonitor(eviction_latency);
             latencyAddSampleIfNeeded("eviction-del", eviction_latency);
+            latencyTraceIfNeeded(db, eviction_del, eviction_latency);
             delta -= (long long)zmalloc_used_memory();
             mem_freed += delta;
             server.stat_evictedkeys++;
@@ -734,10 +737,12 @@ cant_free:
         }
         latencyEndMonitor(lazyfree_latency);
         latencyAddSampleIfNeeded("eviction-lazyfree", lazyfree_latency);
+        latencyTraceIfNeeded(db, eviction_lazyfree, lazyfree_latency);
     }
 
     latencyEndMonitor(latency);
     latencyAddSampleIfNeeded("eviction-cycle", latency);
+    latencyTraceIfNeeded(db, eviction_cycle, latency);
 
 update_metrics:
     if (result == EVICT_RUNNING || result == EVICT_FAIL) {

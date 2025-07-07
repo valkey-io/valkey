@@ -148,7 +148,7 @@ void mixStringObjectDigest(unsigned char *digest, robj *o) {
 void xorObjectDigest(serverDb *db, robj *keyobj, unsigned char *digest, robj *o) {
     uint32_t aux = htonl(o->type);
     mixDigest(digest, &aux, sizeof(aux));
-    long long expiretime = getExpire(db, keyobj);
+    long long expiretime = objectGetExpire(o);
     char buf[128];
 
     /* Save the key and associated value */
@@ -289,8 +289,8 @@ void computeDatasetDigest(unsigned char *final) {
     memset(final, 0, 20); /* Start with a clean result */
 
     for (int j = 0; j < server.dbnum; j++) {
-        serverDb *db = server.db + j;
-        if (kvstoreSize(db->keys) == 0) continue;
+        serverDb *db = server.db[j];
+        if (db == NULL || kvstoreSize(db->keys) == 0) continue;
         kvstoreIterator *kvs_it = kvstoreIteratorInit(db->keys, HASHTABLE_ITER_SAFE | HASHTABLE_ITER_PREFETCH_VALUES);
 
         /* hash the DB id, so the same dataset moved in a different DB will lead to a different digest */
@@ -924,14 +924,20 @@ void debugCommand(client *c) {
         if (c->argc >= 4 && !strcasecmp(c->argv[3]->ptr, "full")) full = 1;
 
         stats = sdscatprintf(stats, "[Dictionary HT]\n");
-        kvstoreGetStats(server.db[dbid].keys, buf, sizeof(buf), full);
-        stats = sdscat(stats, buf);
+        serverDb *db = server.db[dbid];
+        if (db) {
+            kvstoreGetStats(db->keys, buf, sizeof(buf), full);
+            stats = sdscat(stats, buf);
+        }
 
         stats = sdscatprintf(stats, "[Expires HT]\n");
-        kvstoreGetStats(server.db[dbid].expires, buf, sizeof(buf), full);
-        stats = sdscat(stats, buf);
+        if (db) {
+            kvstoreGetStats(db->expires, buf, sizeof(buf), full);
+            stats = sdscat(stats, buf);
+        }
 
         addReplyVerbatim(c, stats, sdslen(stats), "txt");
+
         sdsfree(stats);
     } else if (!strcasecmp(c->argv[1]->ptr, "htstats-key") && c->argc >= 3) {
         int full = 0;
@@ -1032,6 +1038,7 @@ void debugCommand(client *c) {
         addReply(c, shared.ok);
     } else if (!strcasecmp(c->argv[1]->ptr, "dict-resizing") && c->argc == 3) {
         server.dict_resizing = atoi(c->argv[2]->ptr);
+        updateDictResizePolicy();
         addReply(c, shared.ok);
     } else if (!strcasecmp(c->argv[1]->ptr, "client-enforce-reply-list") && c->argc == 3) {
         server.debug_client_enforce_reply_list = atoi(c->argv[2]->ptr);
@@ -1211,17 +1218,17 @@ static void *getAndSetMcontextEip(ucontext_t *uc, void *eip) {
         return old_val;                         \
     } while (0)
 #if defined(__APPLE__) && !defined(MAC_OS_10_6_DETECTED)
-/* OSX < 10.6 */
+/* Mac OS X < 10.6 */
 #if defined(__x86_64__)
     GET_SET_RETURN(uc->uc_mcontext->__ss.__rip, eip);
 #elif defined(__i386__)
     GET_SET_RETURN(uc->uc_mcontext->__ss.__eip, eip);
 #else
-    /* OSX PowerPC */
+    /* Mac OS X PowerPC */
     GET_SET_RETURN(uc->uc_mcontext->__ss.__srr0, eip);
 #endif
 #elif defined(__APPLE__) && defined(MAC_OS_10_6_DETECTED)
-/* OSX >= 10.6 */
+/* Mac OS X >= 10.6 */
 #if defined(_STRUCT_X86_THREAD_STATE64) && !defined(__i386__)
     GET_SET_RETURN(uc->uc_mcontext->__ss.__rip, eip);
 #elif defined(__i386__)
@@ -1229,7 +1236,7 @@ static void *getAndSetMcontextEip(ucontext_t *uc, void *eip) {
 #elif defined(__ppc__)
     GET_SET_RETURN(uc->uc_mcontext->__ss.__srr0, eip);
 #else
-    /* OSX ARM64 */
+    /* macOS ARM64 */
     void *old_val = (void *)arm_thread_state64_get_pc(uc->uc_mcontext->__ss);
     if (eip) {
         arm_thread_state64_set_pc_fptr(uc->uc_mcontext->__ss, eip);
@@ -1316,9 +1323,9 @@ void logRegisters(ucontext_t *uc) {
         serverLog(LL_WARNING, "  Dumping of registers not supported for this OS/arch"); \
     } while (0)
 
-/* OSX */
+/* Mac OS X */
 #if defined(__APPLE__) && defined(MAC_OS_10_6_DETECTED)
-    /* OSX AMD64 */
+    /* Mac OS X AMD64 */
 #if defined(_STRUCT_X86_THREAD_STATE64) && !defined(__i386__)
     serverLog(LL_WARNING,
               "\n"
@@ -1340,7 +1347,7 @@ void logRegisters(ucontext_t *uc) {
               (unsigned long)uc->uc_mcontext->__ss.__gs);
     logStackContent((void **)uc->uc_mcontext->__ss.__rsp);
 #elif defined(__i386__)
-    /* OSX x86 */
+    /* Mac OS X x86 */
     serverLog(LL_WARNING,
               "\n"
               "EAX:%08lx EBX:%08lx ECX:%08lx EDX:%08lx\n"
@@ -1357,7 +1364,7 @@ void logRegisters(ucontext_t *uc) {
               (unsigned long)uc->uc_mcontext->__ss.__fs, (unsigned long)uc->uc_mcontext->__ss.__gs);
     logStackContent((void **)uc->uc_mcontext->__ss.__esp);
 #elif defined(__arm64__)
-    /* OSX ARM64 */
+    /* macOS ARM64 */
     serverLog(
         LL_WARNING,
         "\n"

@@ -101,6 +101,7 @@ int getClusterSize(void);
 int getMyShardSlotCount(void);
 int clusterNodePending(clusterNode *node);
 int clusterNodeIsPrimary(clusterNode *n);
+int clusterNodeIsVotingPrimary(clusterNode *n);
 char **getClusterNodesList(size_t *numnodes);
 char *clusterNodeIp(clusterNode *node, client *c);
 int clusterNodeIsReplica(clusterNode *node);
@@ -130,7 +131,8 @@ int getSlotOrError(robj *o, sds *err);
 
 /* functions with shared implementations */
 int clusterNodeIsMyself(clusterNode *n);
-clusterNode *getNodeByQuery(client *c, struct serverCommand *cmd, robj **argv, int argc, int *hashslot, int *ask);
+int clusterSlotByCommand(struct serverCommand *cmd, robj **argv, int argc, int *read_flags);
+clusterNode *getNodeByQuery(client *c, int *error_code);
 int clusterRedirectBlockedClientIfNeeded(client *c);
 void clusterRedirectClient(client *c, clusterNode *n, int hashslot, int error_code);
 void migrateCloseTimedoutSockets(void);

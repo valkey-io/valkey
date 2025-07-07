@@ -1342,7 +1342,8 @@ ssize_t rdbSaveDb(rio *rdb, int dbid, int rdbflags, long *key_counter) {
     static long long info_updated_time = 0;
     char *pname = (rdbflags & RDBFLAGS_AOF_PREAMBLE) ? "AOF rewrite" : "RDB";
 
-    serverDb *db = server.db + dbid;
+    serverDb *db = server.db[dbid];
+    if (db == NULL) return 0;
     unsigned long long int db_size = kvstoreSize(db->keys);
     if (db_size == 0) return 0;
 
@@ -1386,7 +1387,7 @@ ssize_t rdbSaveDb(rio *rdb, int dbid, int rdbflags, long *key_counter) {
         size_t rdb_bytes_before_key = rdb->processed_bytes;
 
         initStaticStringObject(key, keystr);
-        expire = getExpire(db, &key);
+        expire = objectGetExpire(o);
         if ((res = rdbSaveKeyValuePair(rdb, &key, o, expire, dbid)) < 0) goto werr;
         written += res;
 
@@ -3031,7 +3032,10 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
     int type, rdbver;
     uint64_t db_size = 0, expires_size = 0;
     int should_expand_db = 0;
-    serverDb *db = rdb_loading_ctx->dbarray + 0;
+    if (rdb_loading_ctx->dbarray[0] == NULL) {
+        rdb_loading_ctx->dbarray[0] = createDatabase(0);
+    }
+    serverDb *db = rdb_loading_ctx->dbarray[0];
     char buf[1024];
     int error;
     long long empty_keys_skipped = 0;
@@ -3108,7 +3112,10 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
                           SERVER_TITLE, server.dbnum);
                 exit(1);
             }
-            db = rdb_loading_ctx->dbarray + dbid;
+            if (rdb_loading_ctx->dbarray[dbid] == NULL) {
+                rdb_loading_ctx->dbarray[dbid] = createDatabase(dbid);
+            }
+            db = rdb_loading_ctx->dbarray[dbid];
             continue; /* Read next opcode. */
         } else if (type == RDB_OPCODE_RESIZEDB) {
             /* RESIZEDB: Hint about the size of the keys in the currently
@@ -3480,6 +3487,7 @@ static void backgroundSaveDoneHandlerDisk(int exitcode, int bysignal, time_t sav
         rdbRemoveTempFile(server.child_pid, 0);
         latencyEndMonitor(latency);
         latencyAddSampleIfNeeded("rdb-unlink-temp-file", latency);
+        latencyTraceIfNeeded(bgsave, rdb_unlink_temp_file, latency);
         /* SIGUSR1 is whitelisted, so we have a way to kill a child without
          * triggering an error condition. */
         if (bysignal != SIGUSR1) server.lastbgsave_status = C_ERR;

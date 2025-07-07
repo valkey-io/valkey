@@ -447,9 +447,14 @@ int trySendWriteToIOThreads(client *c) {
          * threads from reading data that might be invalid in their local CPU cache. */
         c->io_last_reply_block = listLast(c->reply);
         if (c->io_last_reply_block) {
-            c->io_last_bufpos = ((clientReplyBlock *)listNodeValue(c->io_last_reply_block))->used;
+            clientReplyBlock *block = (clientReplyBlock *)listNodeValue(c->io_last_reply_block);
+            c->io_last_bufpos = block->used;
+            /* If buffer is encoded force new header */
+            if (block->flag.buf_encoded) block->last_header = NULL;
         } else {
             c->io_last_bufpos = (size_t)c->bufpos;
+            /* If buffer is encoded force new header */
+            if (c->flag.buf_encoded) c->last_header = NULL;
         }
     }
 

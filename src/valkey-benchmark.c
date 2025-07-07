@@ -75,6 +75,12 @@
 
 #define CLIENT_GET_EVENTLOOP(c) (c->thread_id >= 0 ? config.threads[c->thread_id]->el : config.el)
 
+#define PLACEHOLDER_COUNT 10
+static const size_t PLACEHOLDER_LEN = 12; // length of BENCHMARK_PLACEHOLDERS strings
+static const char *PLACEHOLDERS[PLACEHOLDER_COUNT] = {
+    "__rand_int__", "__rand_1st__", "__rand_2nd__", "__rand_3rd__", "__rand_4th__",
+    "__rand_5th__", "__rand_6th__", "__rand_7th__", "__rand_8th__", "__rand_9th__"};
+
 struct benchmarkThread;
 struct clusterNode;
 struct serverConfig;
@@ -103,7 +109,7 @@ static struct config {
     long long previous_tick;
     int keysize;
     int datasize;
-    int replacekeys;
+    int replace_placeholders;
     int keyspacelen;
     int sequential_replacement;
     int keepalive;
@@ -112,6 +118,7 @@ static struct config {
     long long totlatency;
     const char *title;
     list *clients;
+    list *paused_clients;
     int quiet;
     int csv;
     int loop;
@@ -126,7 +133,7 @@ static struct config {
     readFromReplica read_from_replica;
     int cluster_node_count;
     struct clusterNode **cluster_nodes;
-    struct serverConfig *redis_config;
+    struct serverConfig *server_config;
     struct hdr_histogram *latency_histogram;
     struct hdr_histogram *current_sec_latency_histogram;
     _Atomic int is_fetching_slots;
@@ -138,14 +145,24 @@ static struct config {
     pthread_mutex_t liveclients_mutex;
     pthread_mutex_t is_updating_slots_mutex;
     int resp3; /* use RESP3 */
+    int rps;
+    atomic_uint_fast64_t last_time_ns;
+    uint64_t time_per_token;
+    uint64_t time_per_burst;
 } config;
+
+/* Locations of the placeholders __rand_int__, __rand_1st__,
+ * __rand_2nd, etc. within the RESP encoded command buffer. */
+static struct placeholders {
+    size_t cmd_len;                     /* length of the command */
+    size_t count[PLACEHOLDER_COUNT];    /* number of each placeholder in the command */
+    size_t *indices[PLACEHOLDER_COUNT]; /* pointer to indices for each placeholder */
+    size_t *index_data;                 /* allocation holding all index data */
+} placeholders;
 
 typedef struct _client {
     valkeyContext *context;
     sds obuf;
-    char **randptr;     /* Pointers to :rand: strings inside the command buf */
-    size_t randlen;     /* Number of pointers in client->randptr */
-    size_t randfree;    /* Number of unused pointers in client->randptr */
     char **stagptr;     /* Pointers to slot hashtags (cluster mode only) */
     size_t staglen;     /* Number of pointers in client->stagptr */
     size_t stagfree;    /* Number of unused pointers in client->stagptr */
@@ -161,6 +178,8 @@ typedef struct _client {
     int thread_id;
     struct clusterNode *cluster_node;
     int slots_last_update;
+    uint64_t paused : 1;
+    uint64_t reuse : 1;
 } *client;
 
 /* Threads. */
@@ -169,6 +188,7 @@ typedef struct benchmarkThread {
     int index;
     pthread_t thread;
     aeEventLoop *el;
+    list *paused_clients;
 } benchmarkThread;
 
 /* Cluster. */
@@ -183,7 +203,7 @@ typedef struct clusterNode {
     int *updated_slots;      /* Used by updateClusterSlotsConfiguration */
     int updated_slots_count; /* Used by updateClusterSlotsConfiguration */
     int replicas_count;
-    struct serverConfig *redis_config;
+    struct serverConfig *server_config;
 } clusterNode;
 
 typedef struct serverConfig {
@@ -223,6 +243,12 @@ static long long ustime(void) {
 
 static long long mstime(void) {
     return ustime() / 1000;
+}
+
+static long long nstime(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (long long)ts.tv_sec * 1000000000LL + ts.tv_nsec;
 }
 
 static uint64_t dictSdsHash(const void *key) {
@@ -352,6 +378,123 @@ static void freeServerConfig(serverConfig *cfg) {
     zfree(cfg);
 }
 
+void resetPlaceholders(void) {
+    if (placeholders.index_data)
+        zfree(placeholders.index_data); /* indices are a single contiguous allocation */
+    memset(&placeholders, 0, sizeof(placeholders));
+}
+
+void initPlaceholders(const char *cmd, size_t cmd_len) {
+    resetPlaceholders();
+    placeholders.cmd_len = cmd_len;
+
+    /* store placeholder locations in temp arrays */
+    size_t total_count = 0;
+    size_t *temp_indices[PLACEHOLDER_COUNT];
+    for (size_t placeholder = 0; placeholder < PLACEHOLDER_COUNT; placeholder++) {
+        size_t *count = &placeholders.count[placeholder];
+        *count = 0;
+
+        size_t temp_size = RANDPTR_INITIAL_SIZE;
+        temp_indices[placeholder] = zmalloc(sizeof(size_t) * temp_size);
+        const char *p = cmd;
+        const char *end = cmd + cmd_len;
+        while ((p = strstr(p, PLACEHOLDERS[placeholder])) != NULL && p < end) {
+            if (*count == temp_size) {
+                temp_size *= 2;
+                temp_indices[placeholder] = zrealloc(temp_indices[placeholder], sizeof(size_t) * temp_size);
+            }
+            size_t index = p - cmd;
+            temp_indices[placeholder][*count] = index;
+            (*count)++;
+            total_count++;
+            p += PLACEHOLDER_LEN; // Move past the placeholder
+        }
+    }
+
+    /* consolidate temp data into contiguous allocation */
+    placeholders.index_data = zmalloc(sizeof(size_t) * total_count);
+    size_t overall_index = 0;
+    for (size_t placeholder = 0; placeholder < PLACEHOLDER_COUNT; placeholder++) {
+        placeholders.indices[placeholder] = placeholders.index_data + overall_index;
+
+        const size_t count = placeholders.count[placeholder];
+        memcpy(placeholders.indices[placeholder], temp_indices[placeholder],
+               sizeof(size_t) * count);
+        overall_index += count;
+
+        zfree(temp_indices[placeholder]);
+    }
+    return;
+}
+
+static void replacePlaceholder(const size_t *indices, const size_t count, char *cmd, _Atomic uint64_t *key_counter) {
+    if (count == 0) return;
+
+    uint64_t key = 0;
+    if (config.keyspacelen != 0) {
+        if (config.sequential_replacement) {
+            key = atomic_fetch_add_explicit(key_counter, 1, memory_order_relaxed);
+        } else {
+            key = random();
+        }
+        key %= config.keyspacelen;
+    }
+
+    /* convert key to string at first location */
+    char *p = cmd + indices[0] + PLACEHOLDER_LEN - 1;
+    for (size_t j = 0; j < PLACEHOLDER_LEN; j++) {
+        *p = '0' + key % 10;
+        key /= 10;
+        p--;
+    }
+
+    /* copy the first instance to the other locations */
+    for (size_t i = 1; i < count; i++) {
+        char *placeholder = cmd + indices[i];
+        memcpy(placeholder, cmd + indices[0], PLACEHOLDER_LEN);
+    }
+}
+
+static void replacePlaceholders(char *cmd_data, int cmd_count) {
+    static _Atomic uint64_t seq_key[PLACEHOLDER_COUNT] = {0};
+
+    for (int cmd_index = 0; cmd_index < cmd_count; cmd_index++) {
+        char *cmd = cmd_data + cmd_index * placeholders.cmd_len;
+
+        /* for __rand_int__, multiple instances will have different values */
+        size_t *indices = placeholders.indices[0];
+        _Atomic uint64_t *key_counter = &seq_key[0];
+        for (size_t i = 0; i < placeholders.count[0]; i++) {
+            replacePlaceholder(indices + i, 1, cmd, key_counter);
+        }
+
+        /* For other placeholders, multiple occurrences within the command will
+         * have the same value */
+        for (size_t placeholder = 1; placeholder < PLACEHOLDER_COUNT; placeholder++) {
+            size_t *indices = placeholders.indices[placeholder];
+            size_t count = placeholders.count[placeholder];
+            _Atomic uint64_t *key_counter = &seq_key[placeholder];
+            replacePlaceholder(indices, count, cmd, key_counter);
+        }
+    }
+}
+
+static void releasePausedClient(client c) {
+    if (c->thread_id >= 0) {
+        benchmarkThread *thread = config.threads[c->thread_id];
+        listNode *ln = listSearchKey(thread->paused_clients, c);
+        if (ln != NULL) {
+            listDelNode(thread->paused_clients, ln);
+        }
+    } else {
+        listNode *ln = listSearchKey(config.paused_clients, c);
+        if (ln != NULL) {
+            listDelNode(config.paused_clients, ln);
+        }
+    }
+}
+
 static void freeClient(client c) {
     aeEventLoop *el = CLIENT_GET_EVENTLOOP(c);
     listNode *ln;
@@ -364,8 +507,8 @@ static void freeClient(client c) {
         }
     }
     valkeyFree(c->context);
+    if (c->paused) releasePausedClient(c);
     sdsfree(c->obuf);
-    zfree(c->randptr);
     zfree(c->stagptr);
     zfree(c);
     if (config.num_threads) pthread_mutex_lock(&(config.liveclients_mutex));
@@ -399,28 +542,6 @@ static void resetClient(client c) {
     c->pending = config.pipeline * c->seqlen;
 }
 
-static void generateClientKey(client c) {
-    static _Atomic size_t seq_key = 0;
-    for (size_t i = 0; i < c->randlen; i++) {
-        char *p = c->randptr[i] + 11;
-        size_t key = 0;
-        if (config.keyspacelen != 0) {
-            if (config.sequential_replacement) {
-                key = atomic_fetch_add_explicit(&seq_key, 1, memory_order_relaxed);
-            } else {
-                key = random();
-            }
-            key %= config.keyspacelen;
-        }
-
-        for (size_t j = 0; j < 12; j++) {
-            *p = '0' + key % 10;
-            key /= 10;
-            p--;
-        }
-    }
-}
-
 static void setClusterKeyHashTag(client c) {
     assert(c->thread_id >= 0);
     clusterNode *node = c->cluster_node;
@@ -443,6 +564,64 @@ static void setClusterKeyHashTag(client c) {
         p[1] = (taglen >= 2 ? tag[1] : '}');
         p[2] = (taglen == 3 ? tag[2] : '}');
     }
+}
+
+/* Acquires the specified number of tokens from the token bucket or calculates the wait time if tokens are not available.
+ * This function implements a token bucket rate limiting algorithm to control access to a resource.
+ *
+ * The tokens parameter is the number of tokens to acquire.
+ *
+ * Returns the delay time in milliseconds that the caller should wait before proceeding, or 0 if tokens are immediately available.
+ *
+ * Token Bucket Algorithm Explanation:
+ * - The token bucket algorithm allows a certain number of tokens to be accumulated over time, which can then be used to control the rate of requests.
+ * - Due to the time event only allowing a delay of 1ms, a request for the next 1ms is issued.
+ *
+ * The function is thread-safe. */
+static long long acquireTokenOrWait(int tokens) {
+    uint64_t time_per_token = config.time_per_token;
+    uint64_t time_per_burst = config.time_per_burst;
+    uint64_t new_time = 0;
+    uint64_t now_epoch, next_epoch, min_time, delay_time;
+    uint64_t last_time_ns, old_last_time_ns;
+
+    while (1) {
+        old_last_time_ns = atomic_load_explicit(&config.last_time_ns, memory_order_relaxed);
+        last_time_ns = old_last_time_ns;
+        now_epoch = nstime();
+
+        // If the last_time_ns is 0, it means this is the first request, so we set it to now_epoch.
+        if (last_time_ns == 0) {
+            last_time_ns = now_epoch;
+        }
+
+        next_epoch = now_epoch + 1000000;
+        min_time = next_epoch - time_per_burst;
+
+        if (min_time > last_time_ns) { // if the last time is too old, reset it
+            new_time = min_time + (time_per_token * tokens);
+        } else {
+            new_time = last_time_ns + (time_per_token * tokens);
+        }
+
+        delay_time = 0;
+        if (new_time > next_epoch) { // if the new time is in the next epoch, we need to wait
+            delay_time = new_time - now_epoch;
+        } else {
+            last_time_ns = new_time;
+        }
+
+        if (atomic_compare_exchange_weak_explicit(
+                &config.last_time_ns,
+                &old_last_time_ns,
+                last_time_ns,
+                memory_order_release,
+                memory_order_relaxed)) {
+            break;
+        }
+    }
+
+    return delay_time / 1000000;
 }
 
 static void clientDone(client c) {
@@ -531,9 +710,6 @@ static void readHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
                     if (c->prefixlen > 0) {
                         size_t j;
                         sdsrange(c->obuf, c->prefixlen, -1);
-                        /* We also need to fix the pointers to the strings
-                         * we need to randomize. */
-                        for (j = 0; j < c->randlen; j++) c->randptr[j] -= c->prefixlen;
                         /* Fix the pointers to the slot hash tags */
                         for (j = 0; j < c->staglen; j++) c->stagptr[j] -= c->prefixlen;
                         c->prefixlen = 0;
@@ -574,11 +750,84 @@ static void readHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
     }
 }
 
+/*
+ * When a client is paused, the function is called by the event loop to
+ * awaken the client.
+ *
+ * Return the number of milliseconds to wait before calling the function again.
+ *
+ * If the function returns AE_NOMORE, the event is removed.
+ */
+static long long awakenPausedClient(struct aeEventLoop *eventLoop, long long id, void *clientData) {
+    UNUSED(id);
+    benchmarkThread *thread = (benchmarkThread *)clientData;
+
+    list *paused_clients = NULL;
+    if (thread == NULL) {
+        paused_clients = config.paused_clients;
+    } else {
+        paused_clients = thread->paused_clients;
+    }
+
+    listIter li;
+    listNode *ln;
+    long long delay = 0;
+    listRewind(paused_clients, &li);
+    while ((ln = listNext(&li)) != NULL) {
+        client c = ln->value;
+        delay = acquireTokenOrWait(config.pipeline);
+        if (delay) {
+            break;
+        }
+        // When client acquires a token, try to write with `reuse`.
+        c->paused = 0;
+        c->reuse = 1;
+        writeHandler(eventLoop, c->context->fd, c, AE_WRITABLE);
+        listDelNode(paused_clients, ln);
+    }
+
+    // If there are no more paused clients, remove the event.
+    if (delay == 0) {
+        return AE_NOMORE;
+    }
+    return delay;
+}
+
 static void writeHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
     client c = privdata;
     UNUSED(el);
     UNUSED(fd);
     UNUSED(mask);
+
+    // When benchmark with rps control, and client is not reuse, try to acquire a token.
+    if (config.rps > 0 && c->reuse == 0) {
+        /* Acquire a token from the token bucket. */
+        long long delay = acquireTokenOrWait(config.pipeline);
+
+        if (delay) {
+            int thread_id = c->thread_id;
+            int paused_clients_count = 0;
+
+            c->paused = 1;
+            aeDeleteFileEvent(el, c->context->fd, AE_WRITABLE);
+
+            benchmarkThread *thread = NULL;
+            if (thread_id < 0) {
+                paused_clients_count = listLength(config.paused_clients);
+                listAddNodeTail(config.paused_clients, c);
+            } else {
+                thread = config.threads[thread_id];
+                paused_clients_count = listLength(thread->paused_clients);
+                listAddNodeTail(thread->paused_clients, c);
+            }
+            if (paused_clients_count == 0) {
+                /* Create a time event to awaken the client. */
+                aeCreateTimeEvent(el, delay, awakenPausedClient, (void *)thread, NULL);
+            }
+            return;
+        }
+    }
+    c->reuse = 0;
 
     /* Initialize request when nothing was written. */
     if (c->written == 0) {
@@ -591,7 +840,7 @@ static void writeHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
         }
 
         /* Really initialize: replace keys and set start time. */
-        if (config.replacekeys) generateClientKey(c);
+        if (config.replace_placeholders) replacePlaceholders(c->obuf + c->prefixlen, config.pipeline);
         if (config.cluster_mode && c->staglen > 0) setClusterKeyHashTag(c);
         c->slots_last_update = atomic_load_explicit(&config.slots_last_update, memory_order_relaxed);
         c->start = ustime();
@@ -645,7 +894,6 @@ static void writeHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
  *
  * Even when cloning another client, prefix commands are applied if needed.*/
 static client createClient(char *cmd, int len, int seqlen, client from, int thread_id) {
-    int j;
     int is_cluster_client = (config.cluster_mode && thread_id >= 0);
     client c = zmalloc(sizeof(struct _client));
 
@@ -686,6 +934,8 @@ static client createClient(char *cmd, int len, int seqlen, client from, int thre
             exit(1);
         }
     }
+    c->paused = 0;
+    c->reuse = 0;
     c->thread_id = thread_id;
     /* Suppress libvalkey cleanup of unused buffers for max speed. */
     c->context->reader->maxbuf = 0;
@@ -751,46 +1001,15 @@ static client createClient(char *cmd, int len, int seqlen, client from, int thre
         c->obuf = sdscatlen(c->obuf, from->obuf + from->prefixlen, sdslen(from->obuf) - from->prefixlen);
         seqlen = from->seqlen;
     } else {
-        for (j = 0; j < config.pipeline; j++) c->obuf = sdscatlen(c->obuf, cmd, len);
+        for (int j = 0; j < config.pipeline; j++) c->obuf = sdscatlen(c->obuf, cmd, len);
     }
 
     c->written = 0;
     c->seqlen = seqlen;
     c->pending = config.pipeline * seqlen + c->prefix_pending;
-    c->randptr = NULL;
-    c->randlen = 0;
     c->stagptr = NULL;
     c->staglen = 0;
 
-    /* Find substrings in the output buffer that need to be replaced. */
-    if (config.replacekeys) {
-        if (from) {
-            c->randlen = from->randlen;
-            c->randfree = 0;
-            c->randptr = zmalloc(sizeof(char *) * c->randlen);
-            /* copy the offsets. */
-            for (j = 0; j < (int)c->randlen; j++) {
-                c->randptr[j] = c->obuf + (from->randptr[j] - from->obuf);
-                /* Adjust for the different select prefix length. */
-                c->randptr[j] += c->prefixlen - from->prefixlen;
-            }
-        } else {
-            char *p = c->obuf;
-
-            c->randlen = 0;
-            c->randfree = RANDPTR_INITIAL_SIZE;
-            c->randptr = zmalloc(sizeof(char *) * c->randfree);
-            while ((p = strstr(p, "__rand_int__")) != NULL) {
-                if (c->randfree == 0) {
-                    c->randptr = zrealloc(c->randptr, sizeof(char *) * c->randlen * 2);
-                    c->randfree += c->randlen;
-                }
-                c->randptr[c->randlen++] = p;
-                c->randfree--;
-                p += 12; /* 12 is strlen("__rand_int__). */
-            }
-        }
-    }
     /* If cluster mode is enabled, set slot hashtags pointers. */
     if (config.cluster_mode) {
         if (from) {
@@ -798,7 +1017,7 @@ static client createClient(char *cmd, int len, int seqlen, client from, int thre
             c->stagfree = 0;
             c->stagptr = zmalloc(sizeof(char *) * c->staglen);
             /* copy the offsets. */
-            for (j = 0; j < (int)c->staglen; j++) {
+            for (size_t j = 0; j < c->staglen; j++) {
                 c->stagptr[j] = c->obuf + (from->stagptr[j] - from->obuf);
                 /* Adjust for the different select prefix length. */
                 c->stagptr[j] += c->prefixlen - from->prefixlen;
@@ -888,16 +1107,16 @@ static void showLatencyReport(void) {
             int m;
             for (m = 0; m < config.cluster_node_count; m++) {
                 clusterNode *node = config.cluster_nodes[m];
-                serverConfig *cfg = node->redis_config;
+                serverConfig *cfg = node->server_config;
                 if (cfg == NULL) continue;
                 printf("  node [%d] configuration:\n", m);
                 printf("    save: %s\n", sdslen(cfg->save) ? cfg->save : "NONE");
                 printf("    appendonly: %s\n", cfg->appendonly);
             }
         } else {
-            if (config.redis_config) {
-                printf("  host configuration \"save\": %s\n", config.redis_config->save);
-                printf("  host configuration \"appendonly\": %s\n", config.redis_config->appendonly);
+            if (config.server_config) {
+                printf("  host configuration \"save\": %s\n", config.server_config->save);
+                printf("  host configuration \"appendonly\": %s\n", config.server_config->appendonly);
             }
         }
         printf("  multi-thread: %s\n", (config.num_threads ? "yes" : "no"));
@@ -993,7 +1212,14 @@ static void benchmarkSequence(const char *title, char *cmd, int len, int seqlen)
              config.precision,                           // Number of significant figures
              &config.current_sec_latency_histogram);     // Pointer to initialise
 
+    initPlaceholders(cmd, len);
     if (config.num_threads) initBenchmarkThreads();
+
+    if (config.rps > 0) {
+        config.time_per_token = 1000000000 / config.rps;
+        config.time_per_burst = config.time_per_token * config.rps;
+        config.last_time_ns = 0;
+    }
 
     int thread_id = config.num_threads > 0 ? 0 : -1;
     c = createClient(cmd, len, seqlen, NULL, thread_id);
@@ -1025,12 +1251,14 @@ static benchmarkThread *createBenchmarkThread(int index) {
     if (thread == NULL) return NULL;
     thread->index = index;
     thread->el = aeCreateEventLoop(1024 * 10);
+    thread->paused_clients = listCreate();
     aeCreateTimeEvent(thread->el, 1, showThroughput, (void *)thread, NULL);
     return thread;
 }
 
 static void freeBenchmarkThread(benchmarkThread *thread) {
     if (thread->el) aeDeleteEventLoop(thread->el);
+    listRelease(thread->paused_clients);
     zfree(thread);
 }
 
@@ -1065,7 +1293,7 @@ static clusterNode *createClusterNode(char *ip, int port) {
     node->slots_count = 0;
     node->updated_slots = NULL;
     node->updated_slots_count = 0;
-    node->redis_config = NULL;
+    node->server_config = NULL;
     return node;
 }
 
@@ -1076,7 +1304,7 @@ static void freeClusterNode(clusterNode *node) {
      * config.conn_info.hostip and config.conn_info.hostport, then the node ip has been
      * allocated by fetchClusterConfiguration, so it must be freed. */
     if (node->ip && strcmp(node->ip, config.conn_info.hostip) != 0) sdsfree(node->ip);
-    if (node->redis_config != NULL) freeServerConfig(node->redis_config);
+    if (node->server_config != NULL) freeServerConfig(node->server_config);
     zfree(node->slots);
     zfree(node);
 }
@@ -1368,6 +1596,9 @@ int parseOptions(int argc, char **argv) {
         } else if (!strcmp(argv[i], "--user")) {
             if (lastarg) goto invalid;
             config.conn_info.user = sdsnew(argv[++i]);
+        } else if (!strcmp(argv[i], "--rps")) {
+            if (lastarg) goto invalid;
+            config.rps = atoi(argv[++i]);
         } else if (!strcmp(argv[i], "-u") && !lastarg) {
             parseUri(argv[++i], "valkey-benchmark", &config.conn_info, &config.tls);
             if (config.conn_info.hostport < 0 || config.conn_info.hostport > 65535) {
@@ -1393,7 +1624,7 @@ int parseOptions(int argc, char **argv) {
                 p++;
                 if (*p < '0' || *p > '9') goto invalid;
             }
-            config.replacekeys = 1;
+            config.replace_placeholders = 1;
             config.keyspacelen = atoi(next);
             if (config.keyspacelen < 0) config.keyspacelen = 0;
         } else if (!strcmp(argv[i], "--sequential")) {
@@ -1564,7 +1795,10 @@ usage:
         "a number N to repeat the command N times. In command arguments, the following\n"
         "placeholders are substituted:\n\n"
         " __rand_int__       Replaced with a zero-padded random integer in the range\n"
-        "                    selected using the -r option.\n"
+        "                    selected using the -r option. Multiple occurrences within the\n"
+        "                    command will have different values.\n"
+        "__rand_1st__        Like __rand_int__ but multiple occurrences will have the same\n"
+        "                    value. __rand_2nd__ through __rand_9th__ are also available.\n"
         " __data__           Replaced with data of the size specified by the -d option.\n"
         " {tag}              Replaced with a tag that routes the command to each node in\n"
         "                    a cluster. Include this in key names when running in cluster\n"
@@ -1616,6 +1850,10 @@ usage:
         "                    use the same key.\n"
         " --sequential       Modifies the -r argument to replace the string __rand_int__\n"
         "                    with 12 digit numbers sequentially instead of randomly.\n"
+        "                    __rand_1st__ through __rand_9th__ are available with independent\n"
+        "                    counters. Used to create expected number of elements with multiple\n"
+        "                    replacements.\n"
+        "                    example: ZADD myzset __rand_int__ element:__rand_1st__\n"
         " -P <numreq>        Pipeline <numreq> requests. That is, send multiple requests\n"
         "                    before waiting for the replies. Default 1 (no pipeline).\n"
         "                    When multiple commands are specified on the command line,\n"
@@ -1632,6 +1870,7 @@ usage:
         "                    on the command line.\n"
         " -I                 Idle mode. Just open N idle connections and wait.\n"
         " -x                 Read last argument from STDIN.\n"
+        " --rps <requests>   Limit the total number of requests per second. Default 0 (no limit)\n"
         " --seed <num>       Set the seed for random number generator. Default seed is based on time.\n"
         " --num-functions <num>\n"
         "                    Sets the number of functions present in the Lua lib that is\n"
@@ -1779,7 +2018,7 @@ int main(int argc, char **argv) {
     config.keepalive = 1;
     config.datasize = 3;
     config.pipeline = 1;
-    config.replacekeys = 0;
+    config.replace_placeholders = 0;
     config.keyspacelen = 0;
     config.sequential_replacement = 0;
     config.quiet = 0;
@@ -1787,6 +2026,7 @@ int main(int argc, char **argv) {
     config.loop = 0;
     config.idlemode = 0;
     config.clients = listCreate();
+    config.paused_clients = listCreate();
     config.conn_info.hostip = sdsnew("127.0.0.1");
     config.conn_info.hostport = 6379;
     config.tests = NULL;
@@ -1797,10 +2037,11 @@ int main(int argc, char **argv) {
     config.num_threads = 0;
     config.threads = NULL;
     config.cluster_mode = 0;
+    config.rps = 0;
     config.read_from_replica = FROM_PRIMARY_ONLY;
     config.cluster_node_count = 0;
     config.cluster_nodes = NULL;
-    config.redis_config = NULL;
+    config.server_config = NULL;
     config.is_fetching_slots = 0;
     config.is_updating_slots = 0;
     config.slots_last_update = 0;
@@ -1808,6 +2049,7 @@ int main(int argc, char **argv) {
     config.num_functions = 10;
     config.num_keys_in_fcall = 1;
     config.resp3 = 0;
+    resetPlaceholders();
 
     i = parseOptions(argc, argv);
     argc -= i;
@@ -1869,8 +2111,8 @@ int main(int argc, char **argv) {
             printf("Node %d(%s): ", i, node_type);
             if (node->name) printf("%s ", node->name);
             printf("%s:%d\n", node->ip, node->port);
-            node->redis_config = getServerConfig(config.ct, node->ip, node->port);
-            if (node->redis_config == NULL) {
+            node->server_config = getServerConfig(config.ct, node->ip, node->port);
+            if (node->server_config == NULL) {
                 fprintf(stderr, "WARNING: Could not fetch node CONFIG %s:%d\n", node->ip, node->port);
             }
         }
@@ -1879,8 +2121,8 @@ int main(int argc, char **argv) {
          * by the user. */
         if (config.num_threads == 0) config.num_threads = config.cluster_node_count;
     } else {
-        config.redis_config = getServerConfig(config.ct, config.conn_info.hostip, config.conn_info.hostport);
-        if (config.redis_config == NULL) {
+        config.server_config = getServerConfig(config.ct, config.conn_info.hostip, config.conn_info.hostport);
+        if (config.server_config == NULL) {
             fprintf(stderr, "WARNING: Could not fetch server CONFIG\n");
         }
     }
@@ -1995,7 +2237,7 @@ int main(int argc, char **argv) {
         sdsfreesplitres(sds_args, argc);
 
         sdsfree(title);
-        if (config.redis_config != NULL) freeServerConfig(config.redis_config);
+        if (config.server_config != NULL) freeServerConfig(config.server_config);
         zfree(argvlen);
         return 0;
     }
@@ -2076,8 +2318,8 @@ int main(int argc, char **argv) {
 
         if (test_is_selected("zadd")) {
             char *score = "0";
-            if (config.replacekeys) score = "__rand_int__";
-            len = valkeyFormatCommand(&cmd, "ZADD myzset%s %s element:__rand_int__", tag, score);
+            if (config.replace_placeholders) score = "__rand_int__";
+            len = valkeyFormatCommand(&cmd, "ZADD myzset%s %s element:__rand_1st__", tag, score);
             benchmark("ZADD", cmd, len);
             free(cmd);
         }
@@ -2202,7 +2444,8 @@ int main(int argc, char **argv) {
 
     zfree(data);
     freeCliConnInfo(config.conn_info);
-    if (config.redis_config != NULL) freeServerConfig(config.redis_config);
+    if (config.server_config != NULL) freeServerConfig(config.server_config);
+    resetPlaceholders();
 
     return 0;
 }

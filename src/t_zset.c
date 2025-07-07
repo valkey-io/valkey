@@ -306,9 +306,7 @@ static void zslDelete(zskiplist *zsl, zskiplistNode *node) {
 static zskiplistNode *zslUpdateScore(zskiplist *zsl, zskiplistNode *node, double newscore) {
     /* If the node, after the score update, would be still exactly
      * at the same position, we can just update the score without
-     * actually removing and re-inserting the element in the skiplist.
-     * (TODO: The check can be extended to check also equality of the
-     * score, but then we'll also need to compare the key order). */
+     * actually removing and re-inserting the element in the skiplist. */
     if ((node->backward == NULL || node->backward->score < newscore) &&
         (node->level[0].forward == NULL || node->level[0].forward->score > newscore)) {
         node->score = newscore;
@@ -360,40 +358,35 @@ int zslIsInRange(zskiplist *zsl, zrangespec *range) {
 
 /* Find the Nth node that is contained in the specified range. N should be 0-based.
  * Negative N works for reversed order (-1 represents the last element). Returns
- * NULL when no element is contained in the range. */
-zskiplistNode *zslNthInRange(zskiplist *zsl, zrangespec *range, long n) {
-    zskiplistNode *x;
-    int i;
-    long edge_rank = 0;
-    long last_highest_level_rank = 0;
-    zskiplistNode *last_highest_level_node = NULL;
-    unsigned long rank_diff;
-
+ * NULL when no element is contained in the range.
+ * If rank is not NULL it will be set to the element's overall rank */
+zskiplistNode *zslNthInRange(zskiplist *zsl, zrangespec *range, long n, long *rank) {
     /* If everything is out of range, return early. */
     if (!zslIsInRange(zsl, range)) return NULL;
 
     /* Go forward while *OUT* of range at level of zsl->level-1. */
-    x = zsl->header;
-    i = zsl->level - 1;
+    zskiplistNode *x = zsl->header;
+    int i = zsl->level - 1;
+    long last_highest_level_rank = 0;
     while (x->level[i].forward && !zslValueGteMin(x->level[i].forward->score, range)) {
-        edge_rank += zslGetNodeSpanAtLevel(x, i);
+        last_highest_level_rank += zslGetNodeSpanAtLevel(x, i);
         x = x->level[i].forward;
     }
-    /* Remember the last node which has zsl->level-1 levels and its rank. */
-    last_highest_level_node = x;
-    last_highest_level_rank = edge_rank;
+    /* Remember the last node which has zsl->level-1 levels */
+    zskiplistNode *last_highest_level_node = x;
 
     if (n >= 0) {
+        long start_rank = last_highest_level_rank;
         for (i = zsl->level - 2; i >= 0; i--) {
             /* Go forward while *OUT* of range. */
             while (x->level[i].forward && !zslValueGteMin(x->level[i].forward->score, range)) {
                 /* Count the rank of the last element smaller than the range. */
-                edge_rank += zslGetNodeSpanAtLevel(x, i);
+                start_rank += zslGetNodeSpanAtLevel(x, i);
                 x = x->level[i].forward;
             }
         }
         /* Check if zsl is long enough. */
-        if ((unsigned long)(edge_rank + n) >= zsl->length) return NULL;
+        if ((unsigned long)(start_rank + n) >= zsl->length) return NULL;
         if (n < ZSKIPLIST_MAX_SEARCH) {
             /* If offset is small, we can just jump node by node */
             /* rank+1 is the first element in range, so we need n+1 steps to reach target. */
@@ -402,22 +395,24 @@ zskiplistNode *zslNthInRange(zskiplist *zsl, zrangespec *range, long n) {
             }
         } else {
             /* If offset is big, we can jump from the last zsl->level-1 node. */
-            rank_diff = edge_rank + 1 + n - last_highest_level_rank;
+            unsigned long rank_diff = start_rank + 1 + n - last_highest_level_rank;
             x = zslGetElementByRankFromNode(last_highest_level_node, zsl->level - 1, rank_diff);
         }
         /* Check if score <= max. */
         if (x && !zslValueLteMax(x->score, range)) return NULL;
+        if (rank) *rank = start_rank + n;
     } else {
+        long end_rank = last_highest_level_rank;
         for (i = zsl->level - 1; i >= 0; i--) {
             /* Go forward while *IN* range. */
             while (x->level[i].forward && zslValueLteMax(x->level[i].forward->score, range)) {
                 /* Count the rank of the last element in range. */
-                edge_rank += zslGetNodeSpanAtLevel(x, i);
+                end_rank += zslGetNodeSpanAtLevel(x, i);
                 x = x->level[i].forward;
             }
         }
         /* Check if the range is big enough. */
-        if (edge_rank < -n) return NULL;
+        if (end_rank < -n) return NULL;
         if (n + 1 > -ZSKIPLIST_MAX_SEARCH) {
             /* If offset is small, we can just jump node by node */
             /* rank is the -1th element in range, so we need -n-1 steps to reach target. */
@@ -427,11 +422,12 @@ zskiplistNode *zslNthInRange(zskiplist *zsl, zrangespec *range, long n) {
         } else {
             /* If offset is big, we can jump from the last zsl->level-1 node. */
             /* rank is the last element in range, n is -1-based, so we need n+1 to count backwards. */
-            rank_diff = edge_rank + 1 + n - last_highest_level_rank;
+            unsigned long rank_diff = end_rank + 1 + n - last_highest_level_rank;
             x = zslGetElementByRankFromNode(last_highest_level_node, zsl->level - 1, rank_diff);
         }
         /* Check if score >= min. */
         if (x && !zslValueGteMin(x->score, range)) return NULL;
+        if (rank) *rank = end_rank + n;
     }
 
     return x;
@@ -525,38 +521,14 @@ static unsigned long zslDeleteRangeByRank(zskiplist *zsl, unsigned int start, un
     return removed;
 }
 
-/* Find the rank for a specific skiplist node.
- * Returns 0 when the element cannot be found, rank otherwise.
- * Note that the rank is 1-based due to the span of zsl->header to the
- * first element. */
+/* Find the rank for a specific skiplist member node. Counts nodes after the one
+ * specified and subtracts from list length. Note that rank is 1-based.  */
 static unsigned long zslGetRank(zskiplist *zsl, const zskiplistNode *node) {
-    unsigned long rank = 0;
-
-    /* Count up nodes that come before */
-    zskiplistNode *x = zsl->header;
-    for (int i = zsl->level - 1; i >= 0; i--) {
-        while (zslCompareNodes(x->level[i].forward, node) <= 0) {
-            rank += zslGetNodeSpanAtLevel(x, i);
-            x = x->level[i].forward;
-        }
-
-        if (x == node) {
-            return rank;
-        }
-    }
-    return 0;
-}
-
-/* Find the rank for a specific skiplist node. Alternate method that counts
- * nodes after the one specified and subtracts from list length.
- * TODO investigate whether both rank methods are needed and compare perf */
-static unsigned long zslGetRankCountingNodesAfter(zskiplist *zsl, const zskiplistNode *node) {
-    int highest_node_span = zslGetNodeHeight(node) - 1;
-    unsigned long count_after_node = zslGetNodeSpanAtLevel(node, highest_node_span);
-    while (node->level[highest_node_span].forward) {
-        node = node->level[highest_node_span].forward;
-        highest_node_span = zslGetNodeHeight(node) - 1;
+    unsigned long count_after_node = 0;
+    while (node) { /* note this is never null the first time */
+        int highest_node_span = zslGetNodeHeight(node) - 1;
         count_after_node += zslGetNodeSpanAtLevel(node, highest_node_span);
+        node = node->level[highest_node_span].forward;
     }
 
     unsigned long rank = zsl->length - count_after_node;
@@ -1639,7 +1611,7 @@ static long zsetRank(robj *zobj, sds ele, int reverse, double *output_score) {
         if (!hashtableFind(zs->ht, ele, &entry)) return -1;
         zskiplistNode *node = entry;
 
-        rank = zslGetRankCountingNodesAfter(zs->zsl, node);
+        rank = zslGetRank(zs->zsl, node);
         /* Existing elements always have a rank. */
         serverAssert(rank != 0);
         if (output_score) *output_score = node->score;
@@ -3216,9 +3188,9 @@ void genericZrangebyscoreCommand(zrange_result_handler *handler,
 
         /* If reversed, get the last node in range as starting point. */
         if (reverse) {
-            ln = zslNthInRange(zsl, range, -offset - 1);
+            ln = zslNthInRange(zsl, range, -offset - 1, NULL);
         } else {
-            ln = zslNthInRange(zsl, range, offset);
+            ln = zslNthInRange(zsl, range, offset, NULL);
         }
 
         while (ln && limit--) {
@@ -3310,22 +3282,20 @@ void zcountCommand(client *c) {
         zset *zs = zobj->ptr;
         zskiplist *zsl = zs->zsl;
         zskiplistNode *zn;
-        unsigned long rank;
+        long rank;
 
         /* Find first element in range */
-        zn = zslNthInRange(zsl, &range, 0);
+        zn = zslNthInRange(zsl, &range, 0, &rank);
 
         /* Use rank of first element, if any, to determine preliminary count */
         if (zn != NULL) {
-            rank = zslGetRank(zsl, zn);
             count = (zsl->length - (rank - 1));
 
             /* Find last element in range */
-            zn = zslNthInRange(zsl, &range, -1);
+            zn = zslNthInRange(zsl, &range, -1, &rank);
 
             /* Use rank of last element, if any, to determine the actual count */
             if (zn != NULL) {
-                rank = zslGetRank(zsl, zn);
                 count -= (zsl->length - rank);
             }
         }

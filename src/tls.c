@@ -791,6 +791,7 @@ static void tlsAcceptHandler(aeEventLoop *el, int fd, void *privdata, int mask) 
     while (max--) {
         cfd = anetTcpAccept(server.neterr, fd, cip, sizeof(cip), &cport);
         if (cfd == ANET_ERR) {
+            if (anetRetryAcceptOnError(errno)) continue;
             if (errno != EWOULDBLOCK) serverLog(LL_WARNING, "Accepting client connection: %s", server.neterr);
             return;
         }
@@ -1120,6 +1121,12 @@ static const char *connTLSGetType(connection *conn_) {
     return CONN_TYPE_TLS;
 }
 
+static int connTLSGetTypeId(connection *conn_) {
+    (void)conn_;
+
+    return CONN_TYPE_ID_TLS;
+}
+
 static int tlsHasPendingData(void) {
     if (!pending_list) return 0;
     return listLength(pending_list) > 0;
@@ -1166,6 +1173,7 @@ static sds connTLSGetPeerCert(connection *conn_) {
 
 static ConnectionType CT_TLS = {
     /* connection type */
+    .get_type_id = connTLSGetTypeId,
     .get_type = connTLSGetType,
 
     /* connection type initialize & finalize & configure */

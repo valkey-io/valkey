@@ -1166,10 +1166,20 @@ int clusterSlotMigrationShouldInstallWriteHandler(client *c) {
     return link->state != SLOT_EXPORT_SNAPSHOTTING;
 }
 
+void failAllSlotExports(char *message) {
+    listIter li;
+    listNode *ln;
+    listRewind(server.cluster->slot_migration_links, &li);
+    while ((ln = listNext(&li))) {
+        slotMigrationLink *link = (slotMigrationLink *)ln->value;
+        if (link->type != SLOT_MIGRATION_EXPORT) continue;
+        if (!isSlotMigrationLinkInProgress(link)) continue;
+        finishSlotMigrationLink(link, SLOT_MIGRATION_LINK_FAILED, message);
+    }
+}
+
 void clusterFeedSlotExportLinks(int dbid, robj **argv, int argc) {
     UNUSED(dbid);
-    int i, error_code;
-    int slot = -1;
     listIter li;
     listNode *ln;
 
@@ -1211,16 +1221,15 @@ void clusterFeedSlotExportLinks(int dbid, robj **argv, int argc) {
      * Because of this case, we need to redo the slot lookup completely at this
      * time. */
     struct serverCommand *cmd = lookupCommand(argv, argc);
-    getNodeByQuery(server.current_client, cmd, argv, argc, &slot, &error_code);
-    if (error_code != CLUSTER_REDIR_NONE || slot == -1) {
-        /* A couple cases where this could happen:
-         *    - The replicated command is a command without a slot.
-         *    - The replicated command is written by VM_Replicate module APIs
-         *      and is a cross-slot command, or a slot that is not owned by
-         *      this node.
-         *
-         * In any case, our best solution is to not replicate this to the
-         * target node. */
+    int read_flags;
+    int slot = clusterSlotByCommand(cmd, argv, argc, &read_flags);
+    if (slot == -1) {
+        if (read_flags & READ_FLAGS_NO_KEYS) {
+            /* We can safely ignore any commands with no keys */
+            return;
+        }
+        /* Any other error means we can't proceed (e.g. cross slot) */
+        failAllSlotExports("A cross-slot operation was performed. Please check loaded modules for compatibility with the CLUSTER MIGRATE command.");
         return;
     }
 
@@ -1233,7 +1242,7 @@ void clusterFeedSlotExportLinks(int dbid, robj **argv, int argc) {
         if (!isSlotInSlotRanges(slot, link->slot_ranges)) continue;
 
         addReplyArrayLen(link->client, argc);
-        for (i = 0; i < argc; i++) {
+        for (int i = 0; i < argc; i++) {
             addReplyBulk(link->client, argv[i]);
         }
     }

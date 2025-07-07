@@ -31,15 +31,46 @@
 #include "server.h"
 #include "rdb.h"
 #include "module.h"
+#include "hdr_histogram.h"
+#include "fpconv_dtoa.h"
 
 #include <stdarg.h>
 #include <sys/time.h>
 #include <unistd.h>
 #include <sys/stat.h>
+#include <fcntl.h>
 
 void createSharedObjects(void);
 void rdbLoadProgressCallback(rio *r, const void *buf, size_t len);
+void computeDatasetProfile(int dbid, robj *keyobj, robj *o, long long expiretime);
+
 int rdbCheckMode = 0;
+int rdbCheckStats = 0;
+int rdbCheckOutput = 0;
+long long now;
+
+#define LOW_TRACKE_VALUE 1
+#define MAX_ELEMENTS_TRACKE 200 * 1024
+#define MAX_ELEMENTS_SIZE_TRACKE 1024 * 1024
+
+typedef struct rdbStats {
+    size_t type;
+    unsigned long keys;
+    unsigned long expires;
+    unsigned long already_expired;
+
+    unsigned long all_key_size;
+    unsigned long all_value_size;
+
+    unsigned long elements;
+    unsigned long all_elements_size;
+
+    unsigned long elements_max;
+    unsigned long elements_size_max;
+
+    struct hdr_histogram *element_count_histogram;
+    struct hdr_histogram *element_size_histogram;
+} rdbStats;
 
 struct {
     rio *rio;
@@ -48,9 +79,18 @@ struct {
     unsigned long keys;            /* Number of keys processed. */
     unsigned long expires;         /* Number of keys with an expire. */
     unsigned long already_expired; /* Number of keys already expired. */
+    unsigned long lua_scripts;     /* Number of lua scripts. */
+    unsigned long functions_num;   /* Number of functions. */
     int doing;                     /* The state while reading the RDB. */
     int error_set;                 /* True if error is populated. */
     char error[1024];
+    int databases;
+    int format;
+
+    /* stats */
+    rdbStats **stats; /* stats group by datatype,encoding,isexpired */
+    int stats_num;
+    char *stats_output;
 } rdbstate;
 
 /* At every loading step try to remember what we were about to do, so that
@@ -65,6 +105,10 @@ struct {
 #define RDB_CHECK_DOING_READ_AUX 7
 #define RDB_CHECK_DOING_READ_MODULE_AUX 8
 #define RDB_CHECK_DOING_READ_FUNCTIONS 9
+
+#define OUTPUT_FORMAT_INFO 0
+#define OUTPUT_FORMAT_TABLE 1
+#define OUTPUT_FORMAT_CSV 2
 
 char *rdb_check_doing_string[] = {
     "start",
@@ -104,11 +148,362 @@ char *rdb_type_string[] = {
     "stream-v3",
 };
 
+char *type_name[OBJ_TYPE_MAX] = {"string", "list", "set", "zset", "hash", "module", /* module type is special */
+                                 "stream"};
+
+/********************** Rdb stats **********************/
+void statsRecordCount(size_t eleCount, rdbStats *stats) {
+    if (!stats) return;
+
+    stats->elements += eleCount;
+    if (stats->elements_max < eleCount) {
+        stats->elements_max = eleCount;
+    }
+    hdr_record_value(stats->element_count_histogram, (int64_t)eleCount);
+}
+
+void statsRecordElementSize(size_t eleSize, size_t count, rdbStats *stats) {
+    if (!stats) return;
+
+    stats->all_value_size += eleSize * count;
+
+    stats->all_elements_size += eleSize * count;
+    if (stats->elements_size_max < eleSize) {
+        stats->elements_size_max = eleSize;
+    }
+
+    hdr_record_value(stats->element_size_histogram, (int64_t)eleSize);
+}
+
+void statsRecordSimple(size_t eleSize, size_t eleCount, rdbStats *stats) {
+    statsRecordCount(eleCount, stats);
+    statsRecordElementSize(eleSize, eleCount, stats);
+}
+
+void statsRecordElementSizeAdd(rdbStats *to, rdbStats *from) {
+    if (!to || !from) return;
+
+    to->all_value_size += from->all_value_size;
+
+    to->all_elements_size += from->all_elements_size;
+    if (to->elements_size_max < from->elements_size_max) {
+        to->elements_size_max = from->elements_size_max;
+    }
+
+    hdr_add(to->element_size_histogram, from->element_size_histogram);
+}
+
+rdbStats *newRdbStats(size_t type) {
+    rdbStats *stats = zcalloc(sizeof(rdbStats));
+    if (!stats) return NULL;
+
+    stats->type = type;
+    hdr_init(LOW_TRACKE_VALUE, MAX_ELEMENTS_TRACKE, 3, &stats->element_count_histogram);
+    hdr_init(LOW_TRACKE_VALUE, MAX_ELEMENTS_SIZE_TRACKE, 3, &stats->element_size_histogram);
+    return stats;
+}
+
+void deleteRdbStats(rdbStats *stats) {
+    hdr_close(stats->element_count_histogram);
+    hdr_close(stats->element_size_histogram);
+    zfree(stats);
+}
+
+rdbStats **initRdbStats(size_t num) {
+    rdbStats **tmp = zmalloc(sizeof(struct rdbStats *) * num);
+
+    for (size_t i = 0; i < num; i++) {
+        tmp[i] = newRdbStats(i % OBJ_TYPE_MAX);
+    }
+
+    return tmp;
+}
+
+rdbStats **tryExpandRdbStats(rdbStats **statss, size_t old_num, size_t num) {
+    if (old_num >= num) {
+        return statss;
+    }
+
+    rdbStats **tmp = zrealloc(statss, sizeof(struct rdbStats *) * num);
+    serverAssert(tmp != NULL);
+    for (size_t i = old_num; i < num; i++) {
+        tmp[i] = newRdbStats(i % OBJ_TYPE_MAX);
+    }
+
+    return tmp;
+}
+
+void freeRdbProfile(rdbStats **statss, size_t num) {
+    for (size_t i = 0; i < num; i++) {
+        deleteRdbStats(statss[i]);
+    }
+
+    zfree(statss);
+}
+
+void computeDatasetProfile(int dbid, robj *keyobj, robj *o, long long expiretime) {
+    UNUSED(dbid);
+    UNUSED(keyobj);
+    char buf[128];
+
+    rdbStats *stats = rdbstate.stats[o->type + dbid * OBJ_TYPE_MAX];
+
+    stats->all_key_size += sdslen(keyobj->ptr);
+    stats->keys++;
+
+    /* Check if the key already expired. */
+    if (expiretime != -1 && expiretime < now)
+        stats->already_expired++;
+    if (expiretime != -1)
+        stats->expires++;
+
+    /* Save the key and associated value */
+    if (o->type == OBJ_STRING) {
+        statsRecordSimple(stringObjectLen(o), 1, stats);
+    } else if (o->type == OBJ_LIST) {
+        listTypeIterator *li = listTypeInitIterator(o, 0, LIST_TAIL);
+        listTypeEntry entry;
+        while (listTypeNext(li, &entry)) {
+            robj *eleobj = listTypeGet(&entry);
+            statsRecordElementSize(stringObjectLen(eleobj), 1, stats);
+            decrRefCount(eleobj);
+        }
+        listTypeReleaseIterator(li);
+        statsRecordCount(listTypeLength(o), stats);
+    } else if (o->type == OBJ_SET) {
+        setTypeIterator *si = setTypeInitIterator(o);
+        sds sdsele;
+        while ((sdsele = setTypeNextObject(si)) != NULL) {
+            statsRecordElementSize(sdslen(sdsele), 1, stats);
+            sdsfree(sdsele);
+        }
+        setTypeReleaseIterator(si);
+        statsRecordCount(setTypeSize(o), stats);
+    } else if (o->type == OBJ_ZSET) {
+        if (o->encoding == OBJ_ENCODING_LISTPACK) {
+            unsigned char *zl = o->ptr;
+            unsigned char *eptr, *sptr;
+            unsigned char *vstr;
+            unsigned int vlen;
+            long long vll;
+            double score;
+
+            eptr = lpSeek(zl, 0);
+            serverAssert(eptr != NULL);
+            sptr = lpNext(zl, eptr);
+            serverAssert(sptr != NULL);
+
+            while (eptr != NULL) {
+                size_t eleLen = 0;
+
+                vstr = lpGetValue(eptr, &vlen, &vll);
+                score = zzlGetScore(sptr);
+
+                if (vstr != NULL) {
+                    eleLen += vlen;
+                } else {
+                    ll2string(buf, sizeof(buf), vll);
+                    eleLen += strlen(buf);
+                }
+                const int len = fpconv_dtoa(score, buf);
+                buf[len] = '\0';
+                eleLen += strlen(buf);
+                statsRecordElementSize(eleLen, 1, stats);
+                zzlNext(zl, &eptr, &sptr);
+            }
+            statsRecordCount(lpLength(o->ptr), stats);
+        } else if (o->encoding == OBJ_ENCODING_SKIPLIST) {
+            zset *zs = o->ptr;
+            hashtableIterator iter;
+            hashtableInitIterator(&iter, zs->ht, 0);
+
+            void *next;
+            while (hashtableNext(&iter, &next)) {
+                zskiplistNode *node = next;
+                size_t eleLen = 0;
+
+                const int len = fpconv_dtoa(node->score, buf);
+                buf[len] = '\0';
+                eleLen += sdslen(node->ele) + strlen(buf);
+                statsRecordElementSize(eleLen, 1, stats);
+            }
+            hashtableResetIterator(&iter);
+            statsRecordCount(hashtableSize(zs->ht), stats);
+        } else {
+            serverPanic("Unknown sorted set encoding");
+        }
+    } else if (o->type == OBJ_HASH) {
+        hashTypeIterator hi;
+        hashTypeInitIterator(o, &hi);
+        while (hashTypeNext(&hi) != C_ERR) {
+            sds sdsele;
+            size_t eleLen = 0;
+
+            sdsele = hashTypeCurrentObjectNewSds(&hi, OBJ_HASH_FIELD);
+            eleLen += sdslen(sdsele);
+            sdsfree(sdsele);
+            sdsele = hashTypeCurrentObjectNewSds(&hi, OBJ_HASH_VALUE);
+            eleLen += sdslen(sdsele);
+            sdsfree(sdsele);
+
+            statsRecordElementSize(eleLen, 1, stats);
+        }
+        hashTypeResetIterator(&hi);
+        statsRecordCount(hashTypeLength(o), stats);
+    } else if (o->type == OBJ_STREAM) {
+        streamIterator si;
+        streamIteratorStart(&si, o->ptr, NULL, NULL, 0);
+        streamID id;
+        int64_t numfields;
+
+        while (streamIteratorGetID(&si, &id, &numfields)) {
+            while (numfields--) {
+                unsigned char *field, *value;
+                int64_t field_len, value_len;
+                streamIteratorGetField(&si, &field, &value, &field_len, &value_len);
+                statsRecordElementSize(field_len + value_len, 1, stats);
+            }
+        }
+        streamIteratorStop(&si);
+        statsRecordCount(streamLength(o), stats);
+    } else if (o->type == OBJ_MODULE) {
+        statsRecordCount(1, stats);
+    } else {
+        serverPanic("Unknown object type");
+    }
+}
+
+char *stats_field_string[] = {
+    "type.name",
+    "keys.total",
+    "expire_keys.total",
+    "already_expired.total",
+    "keys.size",
+    "keys.value_size",
+    "elements.total",
+    "elements.size",
+    "elements.num.max",
+    "elements.num.avg",
+    "elements.num.p99",
+    "elements.num.p90",
+    "elements.num.p50",
+    "elements.size.max",
+    "elements.size.avg",
+    "elements.size.p99",
+    "elements.size.p90",
+    "elements.size.p50",
+    NULL};
+
+void rdbStatsPrintInfo(rdbStats *stats, char *field_string, char *value, size_t value_len) {
+    if (!strcasecmp(field_string, "type.name")) {
+        snprintf(value, value_len, "%s", type_name[stats->type]);
+    } else if (!strcasecmp(field_string, "keys.total")) {
+        snprintf(value, value_len, "%lu", stats->keys);
+    } else if (!strcasecmp(field_string, "expire_keys.total")) {
+        snprintf(value, value_len, "%lu", stats->expires);
+    } else if (!strcasecmp(field_string, "already_expired.total")) {
+        snprintf(value, value_len, "%lu", stats->already_expired);
+    } else if (!strcasecmp(field_string, "keys.size")) {
+        snprintf(value, value_len, "%lu", stats->all_key_size);
+    } else if (!strcasecmp(field_string, "keys.value_size")) {
+        snprintf(value, value_len, "%lu", stats->all_value_size);
+    } else if (!strcasecmp(field_string, "elements.total")) {
+        snprintf(value, value_len, "%lu", stats->elements);
+    } else if (!strcasecmp(field_string, "elements.size")) {
+        snprintf(value, value_len, "%lu", stats->all_elements_size);
+    } else if (!strcasecmp(field_string, "elements.num.max")) {
+        snprintf(value, value_len, "%lu", stats->elements_max);
+    } else if (!strcasecmp(field_string, "elements.num.avg")) {
+        snprintf(value, value_len, "%.2lf", (stats->keys > 0 ? (float)stats->elements / (float)stats->keys : 0));
+    } else if (!strcasecmp(field_string, "elements.num.p99")) {
+        snprintf(value, value_len, "%.2lf", (float)hdr_value_at_percentile(stats->element_count_histogram, 99.0));
+    } else if (!strcasecmp(field_string, "elements.num.p90")) {
+        snprintf(value, value_len, "%.2lf", (float)hdr_value_at_percentile(stats->element_count_histogram, 90.0));
+    } else if (!strcasecmp(field_string, "elements.num.p50")) {
+        snprintf(value, value_len, "%.2lf", (float)hdr_value_at_percentile(stats->element_count_histogram, 50.0));
+    } else if (!strcasecmp(field_string, "elements.size.max")) {
+        snprintf(value, value_len, "%lu", stats->elements_size_max);
+    } else if (!strcasecmp(field_string, "elements.size.avg")) {
+        snprintf(value, value_len, "%.2lf", (stats->elements > 0 ? (float)stats->all_elements_size / (float)stats->elements : 0));
+    } else if (!strcasecmp(field_string, "elements.size.p99")) {
+        snprintf(value, value_len, "%.2lf", (float)hdr_value_at_percentile(stats->element_size_histogram, 99.0));
+    } else if (!strcasecmp(field_string, "elements.size.p90")) {
+        snprintf(value, value_len, "%.2lf", (float)hdr_value_at_percentile(stats->element_size_histogram, 90.0));
+    } else if (!strcasecmp(field_string, "elements.size.p50")) {
+        snprintf(value, value_len, "%.2lf", (float)hdr_value_at_percentile(stats->element_size_histogram, 50.0));
+    }
+}
+
 /* Show a few stats collected into 'rdbstate' */
 void rdbShowGenericInfo(void) {
     printf("[info] %lu keys read\n", rdbstate.keys);
     printf("[info] %lu expires\n", rdbstate.expires);
     printf("[info] %lu already expired\n", rdbstate.already_expired);
+    printf("[info] %lu functions\n", rdbstate.functions_num);
+    if (rdbstate.lua_scripts) {
+        printf("[info] %lu lua scripts read\n", rdbstate.lua_scripts);
+    }
+
+    char buffer[64];
+    int stats_fd = -1;
+    int saved_stdout = -1;
+    if (rdbCheckStats) {
+        if (rdbCheckOutput) {
+            saved_stdout = dup(STDOUT_FILENO);
+            stats_fd = open(rdbstate.stats_output, O_WRONLY | O_CREAT, 0644);
+            if (stats_fd == -1) {
+                fprintf(stderr, "Cannot open output file: '%s': %s\n", rdbstate.stats_output, strerror(errno));
+                exit(1);
+            } else {
+                dup2(stats_fd, STDOUT_FILENO);
+            }
+        }
+
+        char field_string[80];
+        for (int dbid = 0; dbid <= rdbstate.databases; dbid++) {
+            for (size_t i = 0; stats_field_string[i] != NULL; i++) {
+                if (rdbstate.format == OUTPUT_FORMAT_TABLE) {
+                    snprintf(field_string, sizeof(field_string), "db.%d.%s", dbid, stats_field_string[i]);
+                    printf("%-30s", field_string);
+                } else if (rdbstate.format == OUTPUT_FORMAT_CSV) {
+                    printf("db.%d.%s", dbid, stats_field_string[i]);
+                }
+
+                for (size_t obj_type = 0; obj_type < OBJ_TYPE_MAX; obj_type++) {
+                    const size_t stats_idx = obj_type + dbid * OBJ_TYPE_MAX;
+                    rdbStats *stats = rdbstate.stats[stats_idx];
+
+                    if (rdbstate.format == OUTPUT_FORMAT_INFO) {
+                        if (i == 0) continue;
+                        snprintf(field_string, sizeof(field_string), "[info] db.%d.type.%s.%s", dbid, type_name[stats->type], stats_field_string[i]);
+                        printf("%s:", field_string);
+                    } else if (rdbstate.format == OUTPUT_FORMAT_TABLE) {
+                        printf("\t");
+                    } else if (rdbstate.format == OUTPUT_FORMAT_CSV) {
+                        printf(",");
+                    }
+
+                    rdbStatsPrintInfo(stats, stats_field_string[i], buffer, sizeof(buffer));
+                    if (rdbstate.format == OUTPUT_FORMAT_TABLE) {
+                        printf("%-5s", buffer);
+                    } else {
+                        printf("%s", buffer);
+                    }
+
+                    if (rdbstate.format == OUTPUT_FORMAT_INFO) {
+                        printf("\n");
+                    }
+                }
+                if (rdbstate.format == OUTPUT_FORMAT_TABLE || rdbstate.format == OUTPUT_FORMAT_CSV)
+                    printf("\n");
+            }
+        }
+        if (rdbCheckOutput) {
+            dup2(saved_stdout, STDOUT_FILENO);
+            close(stats_fd);
+            close(saved_stdout);
+        }
+    }
 }
 
 /* Called on RDB errors. Provides details about the RDB and the offset
@@ -135,14 +530,25 @@ void rdbCheckError(const char *fmt, ...) {
 
 /* Print information during RDB checking. */
 void rdbCheckInfo(const char *fmt, ...) {
-    char msg[1024];
+    char msg[1024], *msgbuf = msg;
     va_list ap;
+    int msglen;
 
     va_start(ap, fmt);
-    vsnprintf(msg, sizeof(msg), fmt, ap);
+    msglen = vsnprintf(msg, sizeof(msg), fmt, ap);
     va_end(ap);
 
-    printf("[offset %llu] %s\n", (unsigned long long)(rdbstate.rio ? rdbstate.rio->processed_bytes : 0), msg);
+    if (msglen > (int)(sizeof(msg) - 1)) {
+        msgbuf = sdsnewlen(SDS_NOINIT, sizeof(msg) * 2);
+        sdsclear(msgbuf);
+        va_start(ap, fmt);
+        msgbuf = sdscatvprintf(msgbuf, fmt, ap);
+        va_end(ap);
+    }
+
+    printf("[offset %llu] %s\n", (unsigned long long)(rdbstate.rio ? rdbstate.rio->processed_bytes : 0), msgbuf);
+
+    if (msgbuf != msg) sdsfree(msgbuf);
 }
 
 /* Used inside rdb.c in order to log specific errors happening inside
@@ -190,10 +596,11 @@ int redis_check_rdb(char *rdbfilename, FILE *fp) {
     int selected_dbid = -1;
     int type, rdbver;
     char buf[1024];
-    long long expiretime, now = mstime();
+    long long expiretime;
     static rio rdb; /* Pointed by global struct riostate. */
     struct stat sb;
 
+    now = mstime();
     int closefile = (fp == NULL);
     if (fp == NULL && (fp = fopen(rdbfilename, "r")) == NULL) return 1;
 
@@ -258,6 +665,10 @@ int redis_check_rdb(char *rdbfilename, FILE *fp) {
             if ((dbid = rdbLoadLen(&rdb, NULL)) == RDB_LENERR) goto eoferr;
             rdbCheckInfo("Selecting DB ID %llu", (unsigned long long)dbid);
             selected_dbid = dbid;
+            if (selected_dbid > rdbstate.databases) {
+                rdbstate.databases = dbid;
+            }
+
             continue; /* Read type again. */
         } else if (type == RDB_OPCODE_RESIZEDB) {
             /* RESIZEDB: Hint about the size of the keys in the currently
@@ -280,7 +691,10 @@ int redis_check_rdb(char *rdbfilename, FILE *fp) {
                 decrRefCount(auxkey);
                 goto eoferr;
             }
-
+            if (!strcasecmp(auxkey->ptr, "lua")) {
+                /* In older version before 7.0, we may save lua scripts in a replication RDB. */
+                rdbstate.lua_scripts++;
+            }
             rdbCheckInfo("AUX FIELD %s = '%s'", (char *)auxkey->ptr, (char *)auxval->ptr);
             decrRefCount(auxkey);
             decrRefCount(auxval);
@@ -315,6 +729,7 @@ int redis_check_rdb(char *rdbfilename, FILE *fp) {
                 sdsfree(err);
                 goto err;
             }
+            rdbstate.functions_num++;
             continue;
         } else {
             if (!rdbIsObjectType(type)) {
@@ -332,6 +747,15 @@ int redis_check_rdb(char *rdbfilename, FILE *fp) {
         /* Read value */
         rdbstate.doing = RDB_CHECK_DOING_READ_OBJECT_VALUE;
         if ((val = rdbLoadObject(type, &rdb, key->ptr, selected_dbid, NULL)) == NULL) goto eoferr;
+        if (rdbCheckStats) {
+            int max_stats_num = (rdbstate.databases + 1) * OBJ_TYPE_MAX;
+            if (max_stats_num > rdbstate.stats_num) {
+                rdbstate.stats = tryExpandRdbStats(rdbstate.stats, rdbstate.stats_num, max_stats_num);
+                rdbstate.stats_num = max_stats_num;
+            }
+
+            computeDatasetProfile(selected_dbid, key, val, expiretime);
+        }
         /* Check if the key already expired. */
         if (expiretime != -1 && expiretime < now) rdbstate.already_expired++;
         if (expiretime != -1) rdbstate.expires++;
@@ -374,6 +798,54 @@ err:
     return 1;
 }
 
+void parseCheckRdbOptions(int argc, char **argv, FILE *fp) {
+    int i = 1;
+    int lastarg;
+
+    if (argc < 2 && fp == NULL) {
+        goto checkRdbUsage;
+    }
+
+    rdbstate.format = OUTPUT_FORMAT_TABLE;
+
+    for (i = 2; i < argc; i++) {
+        lastarg = (i == (argc - 1));
+        if (!strcmp(argv[1], "-v") || !strcmp(argv[1], "--version")) {
+            sds version = getVersion();
+            printf("valkey-check-rdb %s\n", version);
+            sdsfree(version);
+            exit(0);
+        } else if (!strcmp(argv[i], "--stats")) {
+            rdbCheckStats = 1;
+        } else if (!strcmp(argv[i], "--output")) {
+            rdbstate.stats_output = zstrdup(argv[i + 1]);
+            rdbCheckOutput = 1;
+            i++;
+        } else if (!strcmp(argv[i], "--format")) {
+            if (lastarg) goto checkRdbUsage;
+            char *format = argv[i + 1];
+            if (!strcmp(format, "table")) {
+                rdbstate.format = OUTPUT_FORMAT_TABLE;
+            } else if (!strcmp(format, "csv")) {
+                rdbstate.format = OUTPUT_FORMAT_CSV;
+            } else if (!strcmp(format, "info")) {
+                rdbstate.format = OUTPUT_FORMAT_INFO;
+            } else {
+                goto checkRdbUsage;
+            }
+            i++;
+        } else {
+            goto checkRdbUsage;
+        }
+    }
+
+    return;
+
+checkRdbUsage:
+    fprintf(stderr, "Usage: %s <rdb-file-name> [--format table|info|csv] [--stats] [--output <file>]\n", argv[0]);
+    exit(1);
+}
+
 /* RDB check main: called form server.c when the server is executed with the
  * valkey-check-rdb alias, on during RDB loading errors.
  *
@@ -387,20 +859,18 @@ err:
  * Otherwise if called with a non NULL fp, the function returns C_OK or
  * C_ERR depending on the success or failure. */
 int redis_check_rdb_main(int argc, char **argv, FILE *fp) {
-    struct timeval tv;
+    parseCheckRdbOptions(argc, argv, fp);
 
-    if (argc != 2 && fp == NULL) {
-        fprintf(stderr, "Usage: %s <rdb-file-name>\n", argv[0]);
-        exit(1);
-    } else if (!strcmp(argv[1], "-v") || !strcmp(argv[1], "--version")) {
-        sds version = getVersion();
-        printf("valkey-check-rdb %s\n", version);
-        sdsfree(version);
-        exit(0);
-    }
+    struct timeval tv;
 
     gettimeofday(&tv, NULL);
     init_genrand64(((long long)tv.tv_sec * 1000000 + tv.tv_usec) ^ getpid());
+
+    rdbstate.stats = initRdbStats(OBJ_TYPE_MAX);
+    rdbstate.stats_num = OBJ_TYPE_MAX;
+    rdbstate.databases = 1;
+    rdbstate.functions_num = 0;
+    rdbstate.lua_scripts = 0;
 
     /* In order to call the loading functions we need to create the shared
      * integer objects, however since this function may be called from
@@ -417,5 +887,6 @@ int redis_check_rdb_main(int argc, char **argv, FILE *fp) {
         rdbShowGenericInfo();
     }
     if (fp) return (retval == 0) ? C_OK : C_ERR;
+    freeRdbProfile(rdbstate.stats, rdbstate.stats_num);
     exit(retval);
 }

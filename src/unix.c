@@ -35,12 +35,23 @@ static const char *connUnixGetType(connection *conn) {
     return CONN_TYPE_UNIX;
 }
 
+static int connUnixGetTypeId(connection *conn) {
+    UNUSED(conn);
+
+    return CONN_TYPE_ID_UNIX;
+}
+
 static void connUnixEventHandler(struct aeEventLoop *el, int fd, void *clientData, int mask) {
     connectionTypeTcp()->ae_handler(el, fd, clientData, mask);
 }
 
 static int connUnixAddr(connection *conn, char *ip, size_t ip_len, int *port, int remote) {
-    return connectionTypeTcp()->addr(conn, ip, ip_len, port, remote);
+    UNUSED(conn);
+    UNUSED(remote);
+
+    snprintf(ip, ip_len, "%s:0", server.unixsocket);
+    if (port) *port = 0;
+    return 0;
 }
 
 static int connUnixIsLocal(connection *conn) {
@@ -107,6 +118,7 @@ static void connUnixAcceptHandler(aeEventLoop *el, int fd, void *privdata, int m
     while (max--) {
         cfd = anetUnixAccept(server.neterr, fd);
         if (cfd == ANET_ERR) {
+            if (anetRetryAcceptOnError(errno)) continue;
             if (errno != EWOULDBLOCK) serverLog(LL_WARNING, "Accepting client connection: %s", server.neterr);
             return;
         }
@@ -165,6 +177,7 @@ static ssize_t connUnixSyncReadLine(connection *conn, char *ptr, ssize_t size, l
 
 static ConnectionType CT_Unix = {
     /* connection type */
+    .get_type_id = connUnixGetTypeId,
     .get_type = connUnixGetType,
 
     /* connection type initialize & finalize & configure */

@@ -3559,7 +3559,7 @@ void alsoPropagate(int dbid, robj **argv, int argc, int target, int slot) {
     /* Don't propagate slot migration links, these will be proxied in
      * replicationFeedStreamFromPrimaryStream() */
     if (server.current_client != NULL && server.current_client->slot_migration_link) return;
-    
+
     argvcopy = zmalloc(sizeof(robj *) * argc);
     for (j = 0; j < argc; j++) {
         argvcopy[j] = argv[j];

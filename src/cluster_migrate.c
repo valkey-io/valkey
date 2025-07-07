@@ -148,7 +148,7 @@ int isAnySlotInManualMigratingState(void) {
 /* Parse as many slot ranges starting from start_index, returning a list of parsed slot ranges, or
  * NULL if there is an error (in which case err_out will be set). If parsing completes successfully,
  * end_index_out will be set to the index of the next argument needed to be parsed in c->argv.
- * 
+ *
  * Note that all slots in the slot range should belong to a sole node in the cluster topology.
  * node_out will be set to the node that owns all the slots. */
 list *parseSlotRanges(client *c, int start_index, int *end_index_out, clusterNode **node_out, sds *err_out) {
@@ -264,7 +264,7 @@ int clusterIsSlotImporting(int slot) {
 /* Sent by the source to the target to initiate the AOF formatted snapshot.
  * Note that if there is an error in the request, we send a fail message in
  * order to prevent infinite retry in the case of incompatibility.
- * 
+ *
  * CLUSTER SYNCSLOTS ESTABLISH is the only CLUSTER SYNCSLOTS subcommand that
  * will return a reply. Errors are written from the perspective of the end user
  * to help with debugging migrations. */
@@ -488,11 +488,11 @@ void clusterCommandSyncSlotsFailoverDenied(client *c) {
         return;
     }
     serverLog(LL_WARNING,
-                "Slot import link %.40s had failover denied from node %.40s "
-                "(owner of slots [%s]). Failing import request.",
-                link->linkname,
-                link->nodename,
-                link->slot_ranges_str);
+              "Slot import link %.40s had failover denied from node %.40s "
+              "(owner of slots [%s]). Failing import request.",
+              link->linkname,
+              link->nodename,
+              link->slot_ranges_str);
     finishSlotMigrationLink(link, SLOT_MIGRATION_LINK_FAILED, "Failover denied");
     return;
 }
@@ -765,10 +765,10 @@ void clusterCommandMigrate(client *c) {
         slotMigrationLink *link = ln->value;
         listAddNodeHead(server.cluster->slot_migration_links, link);
         serverLog(LL_NOTICE,
-                "New slot export link created: link name %.40s, target node %.40s, slot range %s",
-                link->linkname,
-                link->nodename,
-                link->slot_ranges_str);
+                  "New slot export link created: link name %.40s, target node %.40s, slot range %s",
+                  link->linkname,
+                  link->nodename,
+                  link->slot_ranges_str);
         proceedWithSlotMigration(link);
     }
     listSetFreeMethod(new_slot_migrations, NULL);
@@ -857,7 +857,7 @@ void connectSlotExportLink(slotMigrationLink *link) {
 
     link->conn = connCreate(connTypeOfReplication());
     if (connConnect(link->conn, n->ip, port, server.bind_source_addr,
-        /*multipath=*/ 0, slotExportConnectHandler) == C_ERR) {
+                    /*multipath=*/0, slotExportConnectHandler) == C_ERR) {
         serverLog(LL_WARNING,
                   "Failed to connect slot export link %.40s to %.40s: %s",
                   link->linkname,
@@ -1301,9 +1301,9 @@ void slotMigrationLinkReadEstablishResponse(connection *conn) {
         link->read_buf = sdsempty();
         link->read_buf = sdsMakeRoomForNonGreedy(link->read_buf, PROTO_IOBUF_LEN);
     }
-    
+
     int result;
-    result = connRead(link->conn, ((char *) link->read_buf) + sdslen(link->read_buf), sdsavail(link->read_buf));
+    result = connRead(link->conn, ((char *)link->read_buf) + sdslen(link->read_buf), sdsavail(link->read_buf));
     if (result > 0) {
         sdsIncrLen(link->read_buf, result);
     }
@@ -1339,8 +1339,8 @@ void slotMigrationLinkWriteEstablishCommand(connection *conn) {
     slotMigrationLink *link = (slotMigrationLink *)connGetPrivateData(conn);
     serverAssert(link->write_buf);
     size_t write_len = sdslen(link->write_buf);
-    int result = connWrite(link->conn, link->write_buf, write_len); 
-    if (result < (ssize_t) write_len) {
+    int result = connWrite(link->conn, link->write_buf, write_len);
+    if (result < (ssize_t)write_len) {
         if (connGetState(link->conn) != CONN_STATE_CONNECTED) {
             finishSlotMigrationLink(link, SLOT_MIGRATION_LINK_FAILED, "Connection failed while sending establish link command");
             return;
@@ -1664,11 +1664,11 @@ void clusterHandleSlotMigrationLinkClientOOM(void *o) {
         return;
     }
     serverLog(LL_WARNING,
-                "Slot import link %.40s to node %.40s (owner of slots [%s]) "
-                "failed due due to OOM",
-                link->linkname,
-                link->nodename,
-                link->slot_ranges_str);
+              "Slot import link %.40s to node %.40s (owner of slots [%s]) "
+              "failed due due to OOM",
+              link->linkname,
+              link->nodename,
+              link->slot_ranges_str);
     finishSlotMigrationLink(link, SLOT_MIGRATION_LINK_FAILED,
                             "Ran out of memory (OOM) during slot import");
 }
@@ -1778,7 +1778,7 @@ int canSlotMigrationSendAck(slotMigrationLink *link) {
      *    sent one. This simplifies parsing of the response to CLUSTER SYNCSLOTS
      *    ESTABLISH. */
     return link->state != SLOT_EXPORT_SNAPSHOTTING &&
-        (link->type != SLOT_MIGRATION_IMPORT || link->last_ack != link->ctime);
+           (link->type != SLOT_MIGRATION_IMPORT || link->last_ack != link->ctime);
 }
 
 void clusterSlotMigrationCron(void) {

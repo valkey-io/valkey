@@ -1162,7 +1162,7 @@ clusterNode *getNodeByQuery(client *c, int *error_code) {
                 selectDb(c, origDb->id);
             }
         }
-    
+
         for (j = 0; j < numkeys; j++) {
             robj *thiskey = margv[keyindex[j].pos];
 

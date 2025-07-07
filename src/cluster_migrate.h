@@ -55,7 +55,7 @@ typedef struct slotMigrationLink {
     slotMigrationLinkState post_cleanup_state; /* Target state, after pending cleanup is done. */
 
     /* State needed during link establishment */
-    connection *conn;                          /* Connection to slot import source node. */
+    connection *conn; /* Connection to slot import source node. */
     sds write_buf;
     sds read_buf;
 } slotMigrationLink;

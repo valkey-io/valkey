@@ -3660,6 +3660,12 @@ int VM_Replicate(ValkeyModuleCtx *ctx, const char *cmdname, const char *fmt, ...
     va_end(ap);
     if (argv == NULL) return VALKEYMODULE_ERR;
 
+    int read_flags;
+    int slot = clusterSlotByCommand(cmd, argv, argc, &read_flags);
+    if (slot == -1 && read_flags & READ_FLAGS_CROSSSLOT) {
+        return VALKEYMODULE_ERR;
+    }
+
     /* Select the propagation target. Usually is AOF + replicas, however
      * the caller can exclude one or the other using the "A" or "R"
      * modifiers. */
@@ -3667,7 +3673,7 @@ int VM_Replicate(ValkeyModuleCtx *ctx, const char *cmdname, const char *fmt, ...
     if (!(flags & VALKEYMODULE_ARGV_NO_AOF)) target |= PROPAGATE_AOF;
     if (!(flags & VALKEYMODULE_ARGV_NO_REPLICAS)) target |= PROPAGATE_REPL;
 
-    alsoPropagate(ctx->client->db->id, argv, argc, target);
+    alsoPropagate(ctx->client->db->id, argv, argc, target, slot);
 
     /* Release the argv. */
     for (j = 0; j < argc; j++) decrRefCount(argv[j]);
@@ -3688,7 +3694,7 @@ int VM_Replicate(ValkeyModuleCtx *ctx, const char *cmdname, const char *fmt, ...
  *
  * The function always returns VALKEYMODULE_OK. */
 int VM_ReplicateVerbatim(ValkeyModuleCtx *ctx) {
-    alsoPropagate(ctx->client->db->id, ctx->client->argv, ctx->client->argc, PROPAGATE_AOF | PROPAGATE_REPL);
+    alsoPropagate(ctx->client->db->id, ctx->client->argv, ctx->client->argc, PROPAGATE_AOF | PROPAGATE_REPL, ctx->client->slot);
     server.dirty++;
     return VALKEYMODULE_OK;
 }

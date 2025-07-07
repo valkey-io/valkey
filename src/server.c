@@ -3331,7 +3331,7 @@ void resetErrorTableStats(void) {
 
 /* ========================== OP Array API ============================ */
 
-int serverOpArrayAppend(serverOpArray *oa, int dbid, robj **argv, int argc, int target) {
+int serverOpArrayAppend(serverOpArray *oa, int dbid, robj **argv, int argc, int target, int slot) {
     serverOp *op;
     int prev_capacity = oa->capacity;
 
@@ -3347,6 +3347,7 @@ int serverOpArrayAppend(serverOpArray *oa, int dbid, robj **argv, int argc, int 
     op->argv = argv;
     op->argc = argc;
     op->target = target;
+    op->slot = slot;
     oa->numops++;
     return oa->numops;
 }
@@ -3502,7 +3503,7 @@ static int shouldPropagate(int target) {
  * dbid value of -1 is saved to indicate that the called do not want
  * to replicate SELECT for this command (used for database neutral commands).
  */
-static void propagateNow(int dbid, robj **argv, int argc, int target) {
+static void propagateNow(int dbid, robj **argv, int argc, int target, int slot) {
     if (!shouldPropagate(target)) return;
 
     /* This needs to be unreachable since the dataset should be fixed during
@@ -3533,7 +3534,7 @@ static void propagateNow(int dbid, robj **argv, int argc, int target) {
     if (target & PROPAGATE_REPL) {
         replicationFeedReplicas(dbid, argv, argc);
         if (server.cluster_enabled && clusterIsAnySlotExporting()) {
-            clusterFeedSlotExportLinks(dbid, argv, argc);
+            clusterFeedSlotExportLinks(dbid, argv, argc, slot);
         }
     }
 }
@@ -3549,7 +3550,7 @@ static void propagateNow(int dbid, robj **argv, int argc, int target) {
  * so it is up to the caller to release the passed argv (but it is usually
  * stack allocated).  The function automatically increments ref count of
  * passed objects, so the caller does not need to. */
-void alsoPropagate(int dbid, robj **argv, int argc, int target) {
+void alsoPropagate(int dbid, robj **argv, int argc, int target, int slot) {
     robj **argvcopy;
     int j;
 
@@ -3564,7 +3565,7 @@ void alsoPropagate(int dbid, robj **argv, int argc, int target) {
         argvcopy[j] = argv[j];
         incrRefCount(argv[j]);
     }
-    serverOpArrayAppend(&server.also_propagate, dbid, argvcopy, argc, target);
+    serverOpArrayAppend(&server.also_propagate, dbid, argvcopy, argc, target, slot);
 }
 
 /* It is possible to call the function forceCommandPropagation() inside a
@@ -3630,18 +3631,18 @@ static void propagatePendingCommands(void) {
     if (transaction) {
         /* We use dbid=-1 to indicate we do not want to replicate SELECT.
          * It'll be inserted together with the next command (inside the MULTI) */
-        propagateNow(-1, &shared.multi, 1, PROPAGATE_AOF | PROPAGATE_REPL);
+        propagateNow(-1, &shared.multi, 1, PROPAGATE_AOF | PROPAGATE_REPL, -1);
     }
 
     for (j = 0; j < server.also_propagate.numops; j++) {
         rop = &server.also_propagate.ops[j];
         serverAssert(rop->target);
-        propagateNow(rop->dbid, rop->argv, rop->argc, rop->target);
+        propagateNow(rop->dbid, rop->argv, rop->argc, rop->target, rop->slot);
     }
 
     if (transaction) {
         /* We use dbid=-1 to indicate we do not want to replicate select */
-        propagateNow(-1, &shared.exec, 1, PROPAGATE_AOF | PROPAGATE_REPL);
+        propagateNow(-1, &shared.exec, 1, PROPAGATE_AOF | PROPAGATE_REPL, -1);
     }
 
     serverOpArrayFree(&server.also_propagate);
@@ -3901,7 +3902,7 @@ void call(client *c, int flags) {
 
         /* Call alsoPropagate() only if at least one of AOF / replication
          * propagation is needed. */
-        if (propagate_flags != PROPAGATE_NONE) alsoPropagate(c->db->id, c->argv, c->argc, propagate_flags);
+        if (propagate_flags != PROPAGATE_NONE) alsoPropagate(c->db->id, c->argv, c->argc, propagate_flags, c->slot);
     }
 
     /* Restore the old replication flags, since call() can be executed

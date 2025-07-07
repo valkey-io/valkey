@@ -1849,7 +1849,7 @@ void deleteExpiredKeyAndPropagateWithDictIndex(serverDb *db, robj *keyobj, int d
     latencyTraceIfNeeded(db, expire_del, expire_latency);
     notifyKeyspaceEvent(NOTIFY_EXPIRED, "expired", keyobj, db->id);
     signalModifiedKey(NULL, db, keyobj);
-    propagateDeletion(db, keyobj, server.lazyfree_lazy_expire);
+    propagateDeletion(db, keyobj, server.lazyfree_lazy_expire, dict_index);
     server.stat_expiredkeys++;
 }
 
@@ -1892,7 +1892,7 @@ void deleteExpiredKeyFromOverwriteAndPropagate(client *c, robj *keyobj) {
  *    postExecutionUnitOperations, preferably just after a
  *    single deletion batch, so that DEL/UNLINK will NOT be wrapped
  *    in MULTI/EXEC */
-void propagateDeletion(serverDb *db, robj *key, int lazy) {
+void propagateDeletion(serverDb *db, robj *key, int lazy, int slot) {
     robj *argv[2];
 
     argv[0] = lazy ? shared.unlink : shared.del;
@@ -1902,7 +1902,7 @@ void propagateDeletion(serverDb *db, robj *key, int lazy) {
      * Even if module executed a command without asking for propagation. */
     int prev_replication_allowed = server.replication_allowed;
     server.replication_allowed = 1;
-    alsoPropagate(db->id, argv, 2, PROPAGATE_AOF | PROPAGATE_REPL);
+    alsoPropagate(db->id, argv, 2, PROPAGATE_AOF | PROPAGATE_REPL, slot);
     server.replication_allowed = prev_replication_allowed;
 }
 

@@ -1405,7 +1405,7 @@ extern clientBufferLimitsConfig clientBufferLimitsDefaults[CLIENT_TYPE_OBUF_COUN
  * after the propagation of the executed command. */
 typedef struct serverOp {
     robj **argv;
-    int argc, dbid, target;
+    int argc, dbid, target, slot;
 } serverOp;
 
 /* Defines an array of Operations. There is an API to add to this
@@ -3240,7 +3240,7 @@ int commandCheckArity(struct serverCommand *cmd, int argc, sds *err);
 void startCommandExecution(void);
 int incrCommandStatsOnError(struct serverCommand *cmd, int flags);
 void call(client *c, int flags);
-void alsoPropagate(int dbid, robj **argv, int argc, int target);
+void alsoPropagate(int dbid, robj **argv, int argc, int target, int slot);
 void postExecutionUnitOperations(void);
 void serverOpArrayFree(serverOpArray *oa);
 void forceCommandPropagation(client *c, int flags);
@@ -3471,7 +3471,7 @@ int setModuleNumericConfig(ModuleConfig *config, long long val, const char **err
 int removeExpire(serverDb *db, robj *key);
 void deleteExpiredKeyAndPropagate(serverDb *db, robj *keyobj);
 void deleteExpiredKeyFromOverwriteAndPropagate(client *c, robj *keyobj);
-void propagateDeletion(serverDb *db, robj *key, int lazy);
+void propagateDeletion(serverDb *db, robj *key, int lazy, int slot);
 int keyIsExpired(serverDb *db, robj *key);
 long long getExpire(serverDb *db, robj *key);
 robj *setExpire(client *c, serverDb *db, robj *key, long long when);

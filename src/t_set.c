@@ -833,7 +833,7 @@ void spopWithCountCommand(client *c) {
             }
             /* Replicate/AOF this command as an SREM operation */
             if (propindex == 2 + batchsize) {
-                alsoPropagate(c->db->id, propargv, propindex, PROPAGATE_AOF | PROPAGATE_REPL);
+                alsoPropagate(c->db->id, propargv, propindex, PROPAGATE_AOF | PROPAGATE_REPL, c->slot);
                 for (unsigned long j = 2; j < propindex; j++) {
                     decrRefCount(propargv[j]);
                 }
@@ -855,7 +855,7 @@ void spopWithCountCommand(client *c) {
             propindex++;
             /* Replicate/AOF this command as an SREM operation */
             if (propindex == 2 + batchsize) {
-                alsoPropagate(c->db->id, propargv, propindex, PROPAGATE_AOF | PROPAGATE_REPL);
+                alsoPropagate(c->db->id, propargv, propindex, PROPAGATE_AOF | PROPAGATE_REPL, c->slot);
                 for (unsigned long j = 2; j < propindex; j++) {
                     decrRefCount(propargv[j]);
                 }
@@ -916,7 +916,7 @@ void spopWithCountCommand(client *c) {
             }
             /* Replicate/AOF this command as an SREM operation */
             if (propindex == 2 + batchsize) {
-                alsoPropagate(c->db->id, propargv, propindex, PROPAGATE_AOF | PROPAGATE_REPL);
+                alsoPropagate(c->db->id, propargv, propindex, PROPAGATE_AOF | PROPAGATE_REPL, c->slot);
                 for (unsigned long i = 2; i < propindex; i++) {
                     decrRefCount(propargv[i]);
                 }
@@ -931,7 +931,7 @@ void spopWithCountCommand(client *c) {
 
     /* Replicate/AOF the remaining elements as an SREM operation */
     if (propindex != 2) {
-        alsoPropagate(c->db->id, propargv, propindex, PROPAGATE_AOF | PROPAGATE_REPL);
+        alsoPropagate(c->db->id, propargv, propindex, PROPAGATE_AOF | PROPAGATE_REPL, c->slot);
         for (unsigned long i = 2; i < propindex; i++) {
             decrRefCount(propargv[i]);
         }

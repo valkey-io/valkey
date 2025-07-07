@@ -63,7 +63,7 @@ typedef struct slotMigrationLink {
 int isImportSlotMigrationLink(void *o);
 void clusterHandleSlotMigrationLinkClientClose(void *o);
 void clusterHandleSlotMigrationLinkClientOOM(void *o);
-void clusterFeedSlotExportLinks(int dbid, robj **argv, int argc);
+void clusterFeedSlotExportLinks(int dbid, robj **argv, int argc, int slot);
 int clusterIsSlotImporting(int slot);
 int clusterIsSlotExporting(int slot);
 int clusterIsAnySlotImporting(void);

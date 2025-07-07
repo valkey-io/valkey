@@ -555,6 +555,7 @@ int performEvictions(void) {
         static unsigned int next_db = 0;
         sds bestkey = NULL;
         int bestdbid;
+        int bestslot;
         serverDb *db;
         robj *valkey;
 
@@ -619,6 +620,7 @@ int performEvictions(void) {
                     if (found) {
                         valkey = entry;
                         bestkey = objectGetKey(valkey);
+                        bestslot = pool[k].slot;
                         break;
                     } else {
                         /* Ghost... Iterate again. */
@@ -648,6 +650,7 @@ int performEvictions(void) {
                 if (kvstoreHashtableRandomEntry(kvs, slot, &entry)) {
                     bestkey = objectGetKey((robj *)entry);
                     bestdbid = j;
+                    bestslot = slot;
                     break;
                 }
             }
@@ -679,7 +682,7 @@ int performEvictions(void) {
             server.stat_evictedkeys++;
             signalModifiedKey(NULL, db, keyobj);
             notifyKeyspaceEvent(NOTIFY_EVICTED, "evicted", keyobj, db->id);
-            propagateDeletion(db, keyobj, server.lazyfree_lazy_eviction);
+            propagateDeletion(db, keyobj, server.lazyfree_lazy_eviction, bestslot);
             exitExecutionUnit();
             postExecutionUnitOperations();
             decrRefCount(keyobj);

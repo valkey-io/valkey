@@ -453,6 +453,48 @@ test "Single source import - two phase" {
     }
 }
 
+test "Single source import - Incremental Command Coverage" {
+    assert_does_not_resync {
+        set_debug_prevent_pause 1
+
+        # Do the snapshot
+        assert_match "OK" [R 2 CLUSTER MIGRATE SLOTSRANGE 16383 16383 NODE $node0_id]
+        set linkname [get_link_name 2 16383]
+        wait_for_migration_field 2 $linkname state waiting-to-pause
+
+        # Multi/Exec should propagate without issue
+        assert_match "OK" [R 2 MULTI]
+        assert_match "QUEUED" [R 2 SET $16383_slot_tag:key1 my_value1]
+        assert_match "QUEUED" [R 2 SET $16383_slot_tag:key2 my_value2]
+        assert_match "QUEUED" [R 2 SET $16383_slot_tag:key3 my_value3]
+        assert_match "OK OK OK" [R 2 EXEC]
+        wait_for_countkeysinslot 0 16383 3
+        wait_for_countkeysinslot 3 16383 3
+
+        # Allow migration to complete and verify
+        set_debug_prevent_pause 0
+        wait_for_migration 0 16383
+        assert_match "3" [R 0 CLUSTER COUNTKEYSINSLOT 16383]
+        assert_match "my_value1" [R 0 GET $16383_slot_tag:key1]
+        assert_match "my_value2" [R 0 GET $16383_slot_tag:key2]
+        assert_match "my_value3" [R 0 GET $16383_slot_tag:key3]
+        assert_match "0" [R 2 CLUSTER COUNTKEYSINSLOT 16383]
+
+        # Also eventually reflected in replicas
+        wait_for_countkeysinslot 3 16383 3
+        wait_for_countkeysinslot 5 16383 0
+
+        # Migration log shows success on both ends
+        assert {[dict get [get_migration_by_linkname 0 $linkname] state] eq "success"}
+        assert {[dict get [get_migration_by_linkname 2 $linkname] state] eq "success"}
+
+        # Cleanup for the next test
+        assert_match "OK" [R 0 FLUSHDB SYNC]
+        assert_match "OK" [R 0 CLUSTER MIGRATE SLOTSRANGE 16383 16383 NODE $node2_id]
+        wait_for_migration 2 16383
+    }
+}
+
 test "Simultaneous imports" {
     assert_does_not_resync {
         # Populate data before migration
@@ -896,7 +938,8 @@ test "Slots split across shards during import" {
 
         # Cleanup for the next test
         set_debug_prevent_pause 0
-        assert_match "OK" [R 1 CLUSTER MIGRATE SLOTSRANGE 0 0 NODE $node0_id]
+        assert_match "*BUMPED*" [R 0 CLUSTER BUMPEPOCH]
+        assert_match "OK" [R 0 CLUSTER SETSLOT 0 NODE $node0_id]
         wait_for_migration 0 0
     }
 }

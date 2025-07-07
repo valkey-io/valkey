@@ -6664,7 +6664,7 @@ unsigned int delKeysInSlot(unsigned int hashslot, int lazy, bool propagate_del, 
                 dbSyncDelete(db, key);
             }
             // if is command, skip del propagate
-            if (propagate_del) propagateDeletion(db, key, lazy);
+            if (propagate_del) propagateDeletion(db, key, lazy, hashslot);
             signalModifiedKey(NULL, db, key);
             if (send_del_event) {
                 /* In the `cluster flushslot` scenario, the keys are actually deleted so notify everyone. */

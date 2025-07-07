@@ -1178,61 +1178,18 @@ void failAllSlotExports(char *message) {
     }
 }
 
-void clusterFeedSlotExportLinks(int dbid, robj **argv, int argc) {
+void clusterFeedSlotExportLinks(int dbid, robj **argv, int argc, int slot) {
     UNUSED(dbid);
+
+    if (slot == -1) {
+        /* We can safely ignore any commands with no keys. This includes
+         * MULTI/EXEC. This isn't a problem since the entire slot migration is
+         * atomically visible and therefore transactions are redundant. */
+        return;
+    }
+
     listIter li;
     listNode *ln;
-
-    if (server.server_del_keys_in_slot && !server.current_client) {
-        /* Three scenarios:
-         *
-         *  1. delKeysInSlot is triggered by user via CLUSTER FLUSHSLOT, in
-               which case current_client should be set.
-         *  2. delKeysInSlot is triggered by a topology update, in which case:
-         *     a. The topology update is related to this slot, and we would have
-         *        already cancelled/completed the migration via
-         *        clusterUpdateSlot(Imports|Exports)OnOwnershipChange
-         *     b. The topology update is unrelated to this slot, so we don't
-         *        care about the deleted keys.
-         *
-         * Because of this, we can simply return if it is scenario 2 */
-        return;
-    }
-
-    /* This function may be called after the command is executed.
-     * At this time, the arg in argv may be rewritten and the encoding
-     * may be an INT. In this case, we need to decode it into a string
-     * object because in getKeysFromCommand all the args are a string. */
-    robj **new_argv = NULL;
-    for (int i = 0; i < argc; i++) {
-        if (!sdsEncodedObject(argv[i])) {
-            new_argv = zmalloc(sizeof(robj *) * (argc));
-            break;
-        }
-    }
-    if (new_argv) {
-        for (int i = 0; i < argc; i++) new_argv[i] = getDecodedObject(argv[i]);
-        argv = new_argv;
-    }
-
-    /* Check the slot this command belongs to. Note that it is not a guarantee
-     * that the slot of the replicated command is the same as the slot of the
-     * executed command, for example in the case of module VM_Replicate APIs.
-     * Because of this case, we need to redo the slot lookup completely at this
-     * time. */
-    struct serverCommand *cmd = lookupCommand(argv, argc);
-    int read_flags;
-    int slot = clusterSlotByCommand(cmd, argv, argc, &read_flags);
-    if (slot == -1) {
-        if (read_flags & READ_FLAGS_NO_KEYS) {
-            /* We can safely ignore any commands with no keys */
-            return;
-        }
-        /* Any other error means we can't proceed (e.g. cross slot) */
-        failAllSlotExports("A cross-slot operation was performed. Please check loaded modules for compatibility with the CLUSTER MIGRATE command.");
-        return;
-    }
-
     listRewind(server.cluster->slot_migration_links, &li);
     while ((ln = listNext(&li))) {
         slotMigrationLink *link = (slotMigrationLink *)ln->value;
@@ -1245,11 +1202,6 @@ void clusterFeedSlotExportLinks(int dbid, robj **argv, int argc) {
         for (int i = 0; i < argc; i++) {
             addReplyBulk(link->client, argv[i]);
         }
-    }
-
-    if (new_argv) {
-        for (int i = 0; i < argc; i++) decrRefCount(new_argv[i]);
-        zfree(new_argv);
     }
 }
 

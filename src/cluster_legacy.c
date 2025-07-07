@@ -2720,7 +2720,7 @@ void clusterProcessGossipSection(clusterMsg *hdr, clusterLink *link) {
                  * updated correctly, and we will not have the opportunity to call
                  * replicationSetPrimary and update the primary host. */
                 if (nodeIsReplica(myself) && myself->replicaof == node)
-                    replicationSetPrimary(node->ip, getNodeDefaultReplicationPort(node), 0);
+                    replicationSetPrimary(node->ip, getNodeDefaultReplicationPort(node), 0, false);
             }
         } else if (!node) {
             /* If it's not in NOADDR state and we don't have it, we
@@ -2814,7 +2814,7 @@ int nodeUpdateAddressIfNeeded(clusterNode *node, clusterLink *link, clusterMsg *
     /* Check if this is our primary and we have to change the
      * replication target as well. */
     if (nodeIsReplica(myself) && myself->replicaof == node)
-        replicationSetPrimary(node->ip, getNodeDefaultReplicationPort(node), 0);
+        replicationSetPrimary(node->ip, getNodeDefaultReplicationPort(node), 0, false);
     return 1;
 }
 
@@ -5959,7 +5959,7 @@ void clusterCron(void) {
      * enable it if we know the address of our primary and it appears to
      * be up. */
     if (nodeIsReplica(myself) && server.primary_host == NULL && myself->replicaof && nodeHasAddr(myself->replicaof)) {
-        replicationSetPrimary(myself->replicaof->ip, getNodeDefaultReplicationPort(myself->replicaof), 0);
+        replicationSetPrimary(myself->replicaof->ip, getNodeDefaultReplicationPort(myself->replicaof), 0, false);
     }
 
     /* Abort a manual failover if the timeout is reached. */
@@ -6460,7 +6460,7 @@ static void clusterSetPrimary(clusterNode *n, int closeSlots, int full_sync_requ
     myself->replicaof = n;
     updateShardId(myself, n->shard_id);
     clusterNodeAddReplica(n, myself);
-    replicationSetPrimary(n->ip, getNodeDefaultReplicationPort(n), full_sync_required);
+    replicationSetPrimary(n->ip, getNodeDefaultReplicationPort(n), full_sync_required, true);
     removeAllNotOwnedShardChannelSubscriptions();
     resetManualFailover();
 

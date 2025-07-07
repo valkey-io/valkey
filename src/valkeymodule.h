@@ -1473,6 +1473,8 @@ VALKEYMODULE_API void *(*ValkeyModule_LoadDataTypeFromStringEncver)(const Valkey
 VALKEYMODULE_API ValkeyModuleString *(*ValkeyModule_SaveDataTypeToString)(ValkeyModuleCtx *ctx,
                                                                           void *data,
                                                                           const ValkeyModuleType *mt)VALKEYMODULE_ATTR;
+VALKEYMODULE_API ValkeyModuleString *(*ValkeyModule_DumpSerializedValue) (ValkeyModuleCtx *ctx, 
+                                             ValkeyModuleString *key) VALKEYMODULE_ATTR;
 VALKEYMODULE_API void (*ValkeyModule_Log)(ValkeyModuleCtx *ctx, const char *level, const char *fmt, ...)
     VALKEYMODULE_ATTR VALKEYMODULE_ATTR_PRINTF(3, 4);
 VALKEYMODULE_API void (*ValkeyModule_LogIOError)(ValkeyModuleIO *io, const char *levelstr, const char *fmt, ...)
@@ -2073,6 +2075,7 @@ static int ValkeyModule_Init(ValkeyModuleCtx *ctx, const char *name, int ver, in
     VALKEYMODULE_GET_API(SaveDataTypeToString);
     VALKEYMODULE_GET_API(LoadDataTypeFromString);
     VALKEYMODULE_GET_API(LoadDataTypeFromStringEncver);
+    VALKEYMODULE_GET_API(DumpSerializedValue);
     VALKEYMODULE_GET_API(EmitAOF);
     VALKEYMODULE_GET_API(Log);
     VALKEYMODULE_GET_API(LogIOError);

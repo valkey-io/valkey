@@ -957,6 +957,7 @@ start_server {tags {"multi"}} {
 
     test "AUTH errored inside MULTI will add the reply" {
         r config set requirepass ""
+        r unwatch
         r multi
         r auth no-user foobar
         assert_error {WRONGPASS invalid username-password pair or user is disabled.} {r exec}

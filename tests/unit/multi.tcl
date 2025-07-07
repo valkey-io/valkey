@@ -900,6 +900,7 @@ start_server {tags {"multi"}} {
         r watch b{t} a{t}
         r flushall
         r ping
+        r unwatch
      }
 
     test {MULTI is rejected when CLIENT REPLY is ON/OFF/SKIP} {
@@ -957,7 +958,6 @@ start_server {tags {"multi"}} {
 
     test "AUTH errored inside MULTI will add the reply" {
         r config set requirepass ""
-        r unwatch
         r multi
         r auth no-user foobar
         assert_error {WRONGPASS invalid username-password pair or user is disabled.} {r exec}

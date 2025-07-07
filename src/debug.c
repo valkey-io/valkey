@@ -617,6 +617,16 @@ void debugCommand(client *c) {
     } else if (!strcasecmp(c->argv[1]->ptr, "disable-cluster-random-ping") && c->argc == 3) {
         server.debug_cluster_disable_random_ping = atoi(c->argv[2]->ptr);
         addReply(c, shared.ok);
+    } else if (!strcasecmp(c->argv[1]->ptr, "slotmigration")) {
+        if (!strcasecmp(c->argv[2]->ptr, "prevent-pause")) {
+            server.debug_slot_migration_prevent_pause = atoi(c->argv[3]->ptr);
+        } else if (!strcasecmp(c->argv[2]->ptr, "prevent-failover")) {
+            server.debug_slot_migration_prevent_failover = atoi(c->argv[3]->ptr);
+        } else {
+            addReplySubcommandSyntaxError(c);
+            return;
+        }
+        addReply(c, shared.ok);
     } else if (!strcasecmp(c->argv[1]->ptr, "object") && (c->argc == 3 || c->argc == 4)) {
         robj *val;
         char *strenc;

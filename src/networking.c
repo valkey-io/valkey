@@ -30,7 +30,7 @@
 #include "server.h"
 #include "cluster.h"
 #include "cluster_slot_stats.h"
-#include "cluster_import.h"
+#include "cluster_migrate.h"
 #include "script.h"
 #include "intset.h"
 #include "sds.h"

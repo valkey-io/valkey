@@ -29,7 +29,7 @@
 
 #include "server.h"
 #include "cluster.h"
-#include "cluster_import.h"
+#include "cluster_migrate.h"
 #include "latency.h"
 #include "script.h"
 #include "functions.h"
@@ -799,7 +799,7 @@ void flushdbCommand(client *c) {
     server.dirty += emptyData(c->db->id, flags | EMPTYDB_NOFUNCTIONS, NULL);
 
     /* Without the forceCommandPropagation, when DB was already empty,
-        * FLUSHDB will not be replicated nor put into the AOF. */
+     * FLUSHDB will not be replicated nor put into the AOF. */
     forceCommandPropagation(c, PROPAGATE_REPL | PROPAGATE_AOF);
 
     addReply(c, shared.ok);

@@ -1,5 +1,5 @@
-#ifndef __CLUSTER_IMPORT_H
-#define __CLUSTER_IMPORT_H
+#ifndef __CLUSTER_MIGRATE_H
+#define __CLUSTER_MIGRATE_H
 
 #include "server.h"
 #include "cluster.h"
@@ -7,20 +7,21 @@
 
 typedef enum slotMigrationLinkState {
     /* Importing states */
-    SLOT_IMPORT_CONNECTING,
-    SLOT_IMPORT_AUTHENTICATING,
-    SLOT_IMPORT_START_SNAPSHOT,
     SLOT_IMPORT_RECEIVE_SNAPSHOT,
-    SLOT_IMPORT_RECEIVE_STREAM,
-    SLOT_IMPORT_FAILOVER_WAITING_FOR_PAUSED,
+    SLOT_IMPORT_WAITING_FOR_PAUSED,
     SLOT_IMPORT_FAILOVER_REQUESTED,
     SLOT_IMPORT_FAILOVER_GRANTED,
     SLOT_IMPORT_FINISHED_WAITING_TO_CLEANUP,
 
     /* Exporting states */
+    SLOT_EXPORT_CONNECTING,
+    SLOT_EXPORT_AUTHENTICATING,
+    SLOT_EXPORT_ESTABLISH_LINK,
+    SLOT_EXPORT_READ_ESTABLISH_LINK_RESPONSE,
     SLOT_EXPORT_WAITING_TO_SNAPSHOT,
     SLOT_EXPORT_SNAPSHOTTING,
     SLOT_EXPORT_STREAMING,
+    SLOT_EXPORT_WAITING_TO_PAUSE,
     SLOT_EXPORT_FAILOVER_PAUSED,
     SLOT_EXPORT_FAILOVER_GRANTED,
 
@@ -46,17 +47,17 @@ typedef struct slotMigrationLink {
     char nodename[CLUSTER_NAMELEN];            /* Name of the slot import source node, hex string, sha1-size. */
     char linkname[CLUSTER_NAMELEN];            /* Unique name for the link, hex string, sha1-size. */
     client *client;                            /* Client to other node. */
-    connection *conn;                          /* (Import only) Connection to slot import source node. */
     slotMigrationLinkState state;              /* State of the slot migration link. */
     sds status_msg;                            /* Human readable status message with more details. */
     list *slot_ranges;                         /* List of the slot ranges we want to import. */
     sds slot_ranges_str;                       /* Precomputed string of the slot ranges, for logging and info. */
-    int one_shot;                              /* One shot execution means that we will proceed through slot
-                                                * replication and failover in sequence. If the failover does
-                                                * not succeed, the import will be failed and replication will
-                                                * terminate. */
     mstime_t mf_end;                           /* End time for the manual failover, after this we will unpause. */
     slotMigrationLinkState post_cleanup_state; /* Target state, after pending cleanup is done. */
+
+    /* State needed during link establishment */
+    connection *conn;                          /* Connection to slot import source node. */
+    sds write_buf;
+    sds read_buf;
 } slotMigrationLink;
 
 int isImportSlotMigrationLink(void *o);
@@ -70,15 +71,14 @@ int clusterIsAnySlotExporting(void);
 int clusterSlotMigrationShouldInstallWriteHandler(client *c);
 void initClusterSlotMigrationLinkList(void);
 void clusterSlotMigrationCron(void);
-void clusterCommandImport(client *c, int prepare_only);
+void clusterCommandMigrate(client *c);
 void clusterCommandSyncSlots(client *c);
 void clusterCommandMigrations(client *c);
-void clusterCommandImportCancel(client *c);
-void clusterCommandImportCommit(client *c);
+void clusterCommandCancelMigration(client *c);
 void clusterHandleSlotExportBackgroundSaveDone(int bgsaveerr);
 void clusterUpdateSlotExportsOnOwnershipChange(void);
 void clusterUpdateSlotImportsOnOwnershipChange(void);
 void clusterCleanupSlotMigrationLog(void);
 void clusterHandleFlushDuringSlotMigration(void);
 
-#endif /* __CLUSTER_IMPORT_H */
+#endif /* __CLUSTER_MIGRATE_H */

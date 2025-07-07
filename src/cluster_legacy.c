@@ -40,7 +40,7 @@
 #include "cluster.h"
 #include "cluster_legacy.h"
 #include "cluster_slot_stats.h"
-#include "cluster_import.h"
+#include "cluster_migrate.h"
 #include "endianconv.h"
 #include "connection.h"
 #include "module.h"
@@ -7447,21 +7447,15 @@ int clusterCommandSpecial(client *c) {
     } else if (!strcasecmp(c->argv[1]->ptr, "flushslot") && (c->argc == 3 || c->argc == 4)) {
         /* CLUSTER FLUSHSLOT <slot> [ASYNC|SYNC] */
         clusterCommandFlushslot(c);
-    } else if (!strcasecmp(c->argv[1]->ptr, "import") && c->argc > 3 && c->argc % 2 == 1) {
-        /* CLUSTER IMPORT SLOTSRANGE <start slot> <end slot> [<start slot> <end slot> ...] */
-        clusterCommandImport(c, /*one_shot=*/1);
-    } else if (!strcasecmp(c->argv[1]->ptr, "import-prepare") && c->argc > 3 && c->argc % 2 == 1) {
-        /* CLUSTER IMPORT-PREPARE SLOTSRANGE <start slot> <end slot> [<start slot> <end slot> ...] */
-        clusterCommandImport(c, /*one_shot=*/0);
-    } else if (!strcasecmp(c->argv[1]->ptr, "import-commit") && c->argc == 4) {
-        /* CLUSTER IMPORT-COMMIT LINK <link-name> */
-        clusterCommandImportCommit(c);
+    } else if (!strcasecmp(c->argv[1]->ptr, "migrate") && c->argc > 3) {
+        /* CLUSTER MIGRATE SLOTSRANGE <start slot> <end slot> [<start slot> <end slot> ...] NODE <node> [SLOTSRANGE ... NODE ...] */
+        clusterCommandMigrate(c);
     } else if (!strcasecmp(c->argv[1]->ptr, "migrations") && c->argc == 2) {
         /* CLUSTER MIGRATIONS */
         clusterCommandMigrations(c);
-    } else if (!strcasecmp(c->argv[1]->ptr, "import-cancel") && c->argc > 2) {
-        /* CLUSTER IMPORT-CANCEL (LINK <link-name>|ALL) */
-        clusterCommandImportCancel(c);
+    } else if (!strcasecmp(c->argv[1]->ptr, "cancelmigration") && c->argc > 2) {
+        /* CLUSTER CANCELMIGRATION (LINK <link-name>|ALL) */
+        clusterCommandCancelMigration(c);
     } else if (!strcasecmp(c->argv[1]->ptr, "syncslots") && c->argc > 2) {
         /* CLUSTER SYNCSLOTS <subcommand>*/
         clusterCommandSyncSlots(c);

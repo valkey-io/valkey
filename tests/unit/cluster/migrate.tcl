@@ -901,7 +901,7 @@ test "Slot export failed on failover" {
     }
     assert {
         [string match {*Slots are no longer owned by source node*} [dict get [get_migration_by_linkname 2 $linkname] message]] ||
-        [string match {*Source node terminated import*} [dict get [get_migration_by_linkname 2 $linkname] message]]
+        [string match {*Connection lost to source*} [dict get [get_migration_by_linkname 2 $linkname] message]]
     }
 
     # Cleanup for the next test

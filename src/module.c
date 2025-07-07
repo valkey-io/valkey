@@ -69,6 +69,7 @@
 #include "module.h"
 #include "io_threads.h"
 #include "scripting_engine.h"
+#include "cluster_migrate.h"
 #include <dlfcn.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
@@ -3644,12 +3645,14 @@ int VM_ReplyWithLongDouble(ValkeyModuleCtx *ctx, long double ld) {
  * The command returns VALKEYMODULE_ERR if the format specifiers are invalid
  * or the command name does not belong to a known command. */
 int VM_Replicate(ValkeyModuleCtx *ctx, const char *cmdname, const char *fmt, ...) {
-    struct serverCommand *cmd;
+    struct serverCommand *cmd = NULL;
     robj **argv = NULL;
     int argc = 0, flags = 0, j;
     va_list ap;
+    int slot = -1;
 
-    if (!ctx->module || !(ctx->module->options & VALKEYMODULE_OPTIONS_SKIP_COMMAND_VALIDATION)) {
+    if (clusterIsAnySlotExporting() || !ctx->module ||
+        !(ctx->module->options & VALKEYMODULE_OPTIONS_SKIP_COMMAND_VALIDATION)) {
         cmd = lookupCommandByCString((char *)cmdname);
         if (!cmd) return VALKEYMODULE_ERR;
     }
@@ -3660,10 +3663,12 @@ int VM_Replicate(ValkeyModuleCtx *ctx, const char *cmdname, const char *fmt, ...
     va_end(ap);
     if (argv == NULL) return VALKEYMODULE_ERR;
 
-    int read_flags;
-    int slot = clusterSlotByCommand(cmd, argv, argc, &read_flags);
-    if (slot == -1 && read_flags & READ_FLAGS_CROSSSLOT) {
-        return VALKEYMODULE_ERR;
+    if (cmd) {
+        int read_flags;
+        slot = clusterSlotByCommand(cmd, argv, argc, &read_flags);
+        if (slot == -1 && read_flags & READ_FLAGS_CROSSSLOT) {
+            return VALKEYMODULE_ERR;
+        }
     }
 
     /* Select the propagation target. Usually is AOF + replicas, however

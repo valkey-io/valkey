@@ -1002,14 +1002,14 @@ typedef struct readyList {
                                                   * deep sanitization of RESTORE \
                                                   * payload. */
 
-#define SELECTOR_FLAG_ROOT (1 << 0)        /* This is the root user permission \
-                                            * selector. */
-#define SELECTOR_FLAG_ALLKEYS (1 << 1)     /* The user can mention any key. */
-#define SELECTOR_FLAG_ALLCOMMANDS (1 << 2) /* The user can run all commands. */
-#define SELECTOR_FLAG_ALLCHANNELS (1 << 3) /* The user can mention any Pub/Sub \
-                                              channel. */
-#define SELECTOR_FLAG_DBLIST_NEGATED (1 << 4)   /* Negate DB list interpretation */
-#define SELECTOR_FLAG_ALLDBS (1 << 5)           /* Allow all databases */
+#define SELECTOR_FLAG_ROOT (1 << 0)           /* This is the root user permission \
+                                               * selector. */
+#define SELECTOR_FLAG_ALLKEYS (1 << 1)        /* The user can mention any key. */
+#define SELECTOR_FLAG_ALLCOMMANDS (1 << 2)    /* The user can run all commands. */
+#define SELECTOR_FLAG_ALLCHANNELS (1 << 3)    /* The user can mention any Pub/Sub \
+                                                 channel. */
+#define SELECTOR_FLAG_DBLIST_NEGATED (1 << 4) /* Negate DB list interpretation */
+#define SELECTOR_FLAG_ALLDBS (1 << 5)         /* Allow all databases */
 
 
 typedef struct {
@@ -1386,7 +1386,7 @@ typedef struct aclInfo {
     long long invalid_key_accesses;       /* Invalid key accesses that user doesn't have permission to */
     long long invalid_channel_accesses;   /* Invalid channel accesses that user doesn't have permission to */
     long long acl_access_denied_tls_cert; /* TLS clients with cert not matching any existing user. */
-    long long invalid_db_accesses;       /* Invalid database accesses that user doesn't have permission to */
+    long long invalid_db_accesses;      /* Invalid database accesses that user doesn't have permission to */
 } aclInfo;
 
 struct saveparam {
@@ -3193,7 +3193,7 @@ extern user *DefaultUser;
 void ACLInit(void);
 /* Return values for ACLCheckAllPerm(). */
 #define ACL_OK 0
-#define ACL_DENIED_DB 1      /* Database can't be accessed */
+#define ACL_DENIED_DB 1 /* Database can't be accessed */
 #define ACL_DENIED_CMD 2
 #define ACL_DENIED_KEY 3
 #define ACL_DENIED_AUTH 4           /* Only used for ACL LOG entries. */

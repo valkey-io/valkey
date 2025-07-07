@@ -212,9 +212,7 @@ void sortCommandGeneric(client *c, int readonly) {
     listSetFreeMethod(operations, zfree);
     j = 2; /* options start at argv[2] */
 
-    int dbid = (c->flag.multi) ? 
-            c->mstate->transaction_db_id : 
-            (c->db ? c->db->id : -1);
+    int dbid = (c->flag.multi) ? c->mstate->transaction_db_id : (c->db ? c->db->id : -1);
     user_has_full_key_access =
         ACLUserCheckCmdWithUnrestrictedKeyAccess(c->user, c->cmd, c->argv, c->argc, dbid, CMD_KEY_ACCESS);
 

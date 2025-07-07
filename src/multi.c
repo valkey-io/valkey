@@ -98,7 +98,7 @@ void queueMultiCommand(client *c, uint64_t cmd_flags) {
     mc->argv = c->argv;
     mc->argv_len = c->argv_len;
     mc->slot = c->slot;
-    
+
     if (mc->cmd->proc == selectCommand && mc->argc > 1) {
         long long target_db;
         if (getLongLongFromObject(mc->argv[1], &target_db) == C_OK) {

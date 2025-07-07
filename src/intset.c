@@ -344,11 +344,11 @@ void intsetFree(intset *is) {
 /* Duplicate an intset */
 intset *intsetDup(intset *is) {
     if (!is) return intsetNew();
-    
+
     size_t size = intsetBlobLen(is);
     intset *copy = zmalloc(size);
     if (!copy) return NULL;
-    
+
     memcpy(copy, is, size);
     return copy;
 }

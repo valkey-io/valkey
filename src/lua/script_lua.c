@@ -1152,9 +1152,7 @@ static int luaRedisAclCheckCmdPermissionsCommand(lua_State *lua) {
         raise_error = 1;
     } else {
         int keyidxptr;
-        int dbid = (rctx->original_client->flag.multi) ? 
-            rctx->original_client->mstate->transaction_db_id : 
-            (rctx->original_client->db ? rctx->original_client->db->id : -1);
+        int dbid = (rctx->original_client->flag.multi) ? rctx->original_client->mstate->transaction_db_id : (rctx->original_client->db ? rctx->original_client->db->id : -1);
         if (ACLCheckAllUserCommandPerm(rctx->original_client->user, cmd, argv, argc, dbid, &keyidxptr) != ACL_OK) {
             lua_pushboolean(lua, 0);
         } else {

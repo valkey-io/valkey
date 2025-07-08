@@ -58,6 +58,7 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
 }
 
 int ValkeyModule_OnUnload(ValkeyModuleCtx *ctx) {
+    VALKEYMODULE_NOT_USED(ctx);
     freeBufferList();
     return VALKEYMODULE_OK;
 }

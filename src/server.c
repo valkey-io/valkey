@@ -1506,10 +1506,6 @@ long long serverCron(struct aeEventLoop *eventLoop, long long id, void *clientDa
                                  factor);
         trackInstantaneousMetric(STATS_METRIC_EL_DURATION, server.duration_stats[EL_DURATION_TYPE_EL].sum,
                                  server.duration_stats[EL_DURATION_TYPE_EL].cnt, 1);
-        trackInstantaneousMetric(STATS_METRIC_NET_CLUSTER_SLOT_IMPORT, server.stat_net_cluster_slot_import_bytes, current_time,
-                                 factor);
-        trackInstantaneousMetric(STATS_METRIC_NET_CLUSTER_SLOT_EXPORT, server.stat_net_cluster_slot_export_bytes, current_time,
-                                 factor);
     }
 
     /* We have just LRU_BITS bits per object for LRU information.
@@ -6136,9 +6132,7 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                 "instantaneous_eventloop_cycles_per_sec:%llu\r\n", getInstantaneousMetric(STATS_METRIC_EL_CYCLE),
                 "instantaneous_eventloop_duration_usec:%llu\r\n", getInstantaneousMetric(STATS_METRIC_EL_DURATION),
                 "total_net_cluster_slot_import_bytes:%lld\r\n", server.stat_net_cluster_slot_import_bytes,
-                "total_net_cluster_slot_export_bytes:%lld\r\n", server.stat_net_cluster_slot_export_bytes,
-                "instantaneous_cluster_slot_import_kbps:%.2f\r\n", (float)getInstantaneousMetric(STATS_METRIC_NET_CLUSTER_SLOT_IMPORT) / 1024,
-                "instantaneous_cluster_slot_export_kbps:%.2f\r\n", (float)getInstantaneousMetric(STATS_METRIC_NET_CLUSTER_SLOT_EXPORT) / 1024));
+                "total_net_cluster_slot_export_bytes:%lld\r\n", server.stat_net_cluster_slot_export_bytes));
         info = genValkeyInfoStringACLStats(info);
     }
 

@@ -53,6 +53,7 @@ typedef struct slotMigrationLink {
     sds slot_ranges_str;                       /* Precomputed string of the slot ranges, for logging and info. */
     mstime_t mf_end;                           /* End time for the manual failover, after this we will unpause. */
     slotMigrationLinkState post_cleanup_state; /* Target state, after pending cleanup is done. */
+    sds description;                           /* Description, used for logging. */
 
     /* State needed during link establishment */
     connection *conn; /* Connection to slot import source node. */

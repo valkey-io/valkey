@@ -184,16 +184,14 @@ struct hdr_histogram;
 #define RIO_CONNSET_WRITE_MAX_CHUNK_SIZE 16384
 
 /* Instantaneous metrics tracking. */
-#define STATS_METRIC_SAMPLES 16                /* Number of samples per metric. */
-#define STATS_METRIC_COMMAND 0                 /* Number of commands executed. */
-#define STATS_METRIC_NET_INPUT 1               /* Bytes read to network. */
-#define STATS_METRIC_NET_OUTPUT 2              /* Bytes written to network. */
-#define STATS_METRIC_NET_INPUT_REPLICATION 3   /* Bytes read to network during replication. */
-#define STATS_METRIC_NET_OUTPUT_REPLICATION 4  /* Bytes written to network during replication. */
-#define STATS_METRIC_EL_CYCLE 5                /* Number of eventloop cycled. */
-#define STATS_METRIC_EL_DURATION 6             /* Eventloop duration. */
-#define STATS_METRIC_NET_CLUSTER_SLOT_IMPORT 7 /* Bytes read from network for slot import. */
-#define STATS_METRIC_NET_CLUSTER_SLOT_EXPORT 8 /* Bytes written to network for slot export. */
+#define STATS_METRIC_SAMPLES 16               /* Number of samples per metric. */
+#define STATS_METRIC_COMMAND 0                /* Number of commands executed. */
+#define STATS_METRIC_NET_INPUT 1              /* Bytes read to network. */
+#define STATS_METRIC_NET_OUTPUT 2             /* Bytes written to network. */
+#define STATS_METRIC_NET_INPUT_REPLICATION 3  /* Bytes read to network during replication. */
+#define STATS_METRIC_NET_OUTPUT_REPLICATION 4 /* Bytes written to network during replication. */
+#define STATS_METRIC_EL_CYCLE 5               /* Number of eventloop cycled. */
+#define STATS_METRIC_EL_DURATION 6            /* Eventloop duration. */
 #define STATS_METRIC_COUNT 9
 
 /* Protocol and I/O related defines */
@@ -3029,9 +3027,10 @@ int sendCurrentOffsetToReplica(client *replica);
 void addRdbReplicaToPsyncWait(client *replica);
 void initClientReplicationData(client *c);
 void freeClientReplicationData(client *c);
-char *replicationSendAuth(connection *conn);
-char *receiveSynchronousResponse(connection *conn);
+sds replicationSendAuth(connection *conn);
+sds receiveSynchronousResponse(connection *conn);
 ConnectionType *connTypeOfReplication(void);
+robj *generateSelectCommand(int dictid);
 
 /* Generic persistence functions */
 void startLoadingFile(size_t size, char *filename, int rdbflags);

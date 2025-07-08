@@ -133,6 +133,9 @@ static struct config {
     int num_threads;
     struct benchmarkThread **threads;
     int cluster_mode;
+    int fuzz_mode;    /* Boolean flag to enable fuzzing */
+    const char *fuzz_log_level;
+    const char *fuzz_level;  /* Fuzzing mode: "normal" or "aggressive" */
     readFromReplica read_from_replica;
     int cluster_node_count;
     struct clusterNode **cluster_nodes;
@@ -229,6 +232,8 @@ static void freeServerConfig(serverConfig *cfg);
 static int fetchClusterSlotsConfiguration(client c);
 static void updateClusterSlotsConfiguration(void);
 static long long showThroughput(struct aeEventLoop *eventLoop, long long id, void *clientData);
+int runFuzzerClients(const char *host, int port, int max_commands, int parallel_clients, int cluster_mode,
+                       int num_keys, cliSSLconfig *ssl_config, const char *log_level, const char *fuzz_level);
 
 /* Dict callbacks */
 static uint64_t dictSdsHash(const void *key);
@@ -1819,6 +1824,21 @@ int parseOptions(int argc, char **argv) {
             }
             config.ct = VALKEY_CONN_RDMA;
 #endif
+        } else if (!strcmp(argv[i], "--fuzz")) {
+            config.fuzz_mode = 1;
+        } else if (!strcmp(argv[i], "--fuzz-log-level")) {
+            if (lastarg) goto invalid;
+            config.fuzz_log_level = argv[++i];
+        } else if (!strcmp(argv[i], "--fuzz-level")) {
+            if (lastarg) goto invalid;
+            const char *mode = argv[++i];
+            if (!strcmp(mode, "normal") || !strcmp(mode, "aggressive")) {
+                config.fuzz_level = mode;
+            } else {
+                fprintf(stderr, "Invalid fuzz mode: %s\n", mode);
+                fprintf(stderr, "Valid modes are: normal, aggressive\n");
+                exit(1);
+            }
         } else if (!strcmp(argv[i], "--mptcp")) {
             config.mptcp = 1;
         } else if (!strcmp(argv[i], "--")) {
@@ -1976,6 +1996,13 @@ usage:
         tls_usage,
         rdma_usage,
         " --mptcp            Enable an MPTCP connection.\n"
+        " --fuzz             Enable fuzzy mode to generate random commands.\n"
+        " --fuzz-level <mode> Set fuzzing mode: normal (default) or aggressive.\n"
+        "                    normal: Generates valid commands only, doesn't change server configs.\n"
+        "                    aggressive: Generates also malformed commands and allows CONFIG SET commands.\n"
+        " --fuzz-log-level <level>\n"
+        "                    Set log level for fuzzer (none, error, info, debug).\n"
+        "                    Default is 'info'.\n"
         " --help             Output this help and exit.\n"
         " --version          Output version and exit.\n\n"
         "Examples:\n\n"
@@ -2162,6 +2189,9 @@ int main(int argc, char **argv) {
     config.num_threads = 0;
     config.threads = NULL;
     config.cluster_mode = 0;
+    config.fuzz_mode = 0;
+    config.fuzz_log_level = "info";
+    config.fuzz_level = "normal";
     config.rps = 0;
     config.read_from_replica = FROM_PRIMARY_ONLY;
     config.cluster_node_count = 0;
@@ -2196,7 +2226,7 @@ int main(int argc, char **argv) {
         exit(1);
     }
 
-    if (config.cluster_mode) {
+    if (config.cluster_mode && !config.fuzz_mode) {
         // We only include the slot placeholder {tag} if cluster mode is enabled
         tag = ":{tag}";
 
@@ -2288,6 +2318,21 @@ int main(int argc, char **argv) {
         printf("\"test\",\"rps\",\"avg_latency_ms\",\"min_latency_ms\",\"p50_latency_ms\",\"p95_latency_ms\",\"p99_"
                "latency_ms\",\"max_latency_ms\"\n");
     }
+
+    if (config.fuzz_mode) {
+        return runFuzzerClients(
+            config.conn_info.hostip,
+            config.conn_info.hostport,
+            config.requests,
+            config.numclients,
+            config.cluster_mode,
+            config.keyspacelen,
+            config.tls ? &config.sslconfig: NULL,
+            config.fuzz_log_level,
+            config.fuzz_level
+        );
+    }
+
     /* Run benchmark with command in the remainder of the arguments. */
     if (argc) {
         sds title = sdsnew(argv[0]);

@@ -204,6 +204,7 @@ char *hashTypeEntryGetValue(const hashTypeEntry *entry, size_t *len) {
     if (entryIsExternalizedValue(entry)) {
         serverAssert(entryHasValuePtr(entry)); // Externalized must use value pointer
         ExternalizedValue *ext_value = hashTypeEntryGetExternValueRef(entry);
+
         *len = ext_value->len;
         return (char *)ext_value->buf;
     }
@@ -506,11 +507,9 @@ int hashTypeExternalize(robj *o, sds field, const char *buf, size_t len) {
         ext_value->len = len;
         return 1;
     }
-    zfree(hashTypeEntryAllocPtr(existing));
     hashTypeEntry *new_entry = hashTypeCreateExternalizedEntry(field, buf, len);
-    int deleted = hashtableDelete(ht, field); // field is not consumed by delete
-    serverAssert(deleted);
-    hashtableInsertAtPosition(ht, new_entry, &position);
+    int replaced = hashtableReplaceReallocatedEntry(ht, existing, new_entry);
+    serverAssert(replaced);
     return 1;
 }
 

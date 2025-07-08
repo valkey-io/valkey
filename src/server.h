@@ -1315,11 +1315,11 @@ typedef struct writePreparedClient writePreparedClient;
 
 /* ACL information */
 typedef struct aclInfo {
-    long long user_auth_failures;             /* Auth failure counts on user level */
-    long long invalid_cmd_accesses;           /* Invalid command accesses that user doesn't have permission to */
-    long long invalid_key_accesses;           /* Invalid key accesses that user doesn't have permission to */
-    long long invalid_channel_accesses;       /* Invalid channel accesses that user doesn't have permission to */
-    long long acl_access_denied_tls_cert; /* Invalid channel accesses that user doesn't have permission to */
+    long long user_auth_failures;         /* Auth failure counts on user level */
+    long long invalid_cmd_accesses;       /* Invalid command accesses that user doesn't have permission to */
+    long long invalid_key_accesses;       /* Invalid key accesses that user doesn't have permission to */
+    long long invalid_channel_accesses;   /* Invalid channel accesses that user doesn't have permission to */
+    long long acl_access_denied_tls_cert; /* TLS clients with cert not matching any exisiting user. */
 } aclInfo;
 
 struct saveparam {

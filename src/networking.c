@@ -37,13 +37,13 @@
 #include "fmtargs.h"
 #include "io_threads.h"
 #include "module.h"
+#include "connection.h"
 #include <strings.h>
 #include <sys/socket.h>
 #include <sys/uio.h>
 #include <math.h>
 #include <ctype.h>
 #include <stdatomic.h>
-#include "connection.h"
 #include <stdbool.h>
 
 /* This struct is used to encapsulate filtering criteria for operations on clients

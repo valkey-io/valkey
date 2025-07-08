@@ -2576,7 +2576,7 @@ static void ACLUpdateInfoMetrics(int reason) {
     } else if (reason == ACL_DENIED_CHANNEL) {
         server.acl_info.invalid_channel_accesses++;
     } else if (reason == ACL_INVALID_TLS_CERT_AUTH) {
-        server.acl_info.invalid_tls_cert_auth_failures++;
+        server.acl_info.acl_access_denied_tls_cert++;
     } else {
         serverPanic("Unknown ACL_DENIED encoding");
     }

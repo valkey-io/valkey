@@ -1319,7 +1319,7 @@ typedef struct aclInfo {
     long long invalid_cmd_accesses;           /* Invalid command accesses that user doesn't have permission to */
     long long invalid_key_accesses;           /* Invalid key accesses that user doesn't have permission to */
     long long invalid_channel_accesses;       /* Invalid channel accesses that user doesn't have permission to */
-    long long invalid_tls_cert_auth_failures; /* Invalid channel accesses that user doesn't have permission to */
+    long long acl_access_denied_tls_cert; /* Invalid channel accesses that user doesn't have permission to */
 } aclInfo;
 
 struct saveparam {

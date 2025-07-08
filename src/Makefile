@@ -626,7 +626,7 @@ gcov:
 	$(MAKE) SERVER_CFLAGS="-fprofile-arcs -ftest-coverage -DCOVERAGE_TEST" SERVER_LDFLAGS="-fprofile-arcs -ftest-coverage"
 
 noopt:
-	$(MAKE) OPTIMIZATION="-O0"
+	$(MAKE) OPTIMIZATION="-O0 -fno-lto"
 
 valgrind:
 	$(MAKE) OPTIMIZATION="-O0" MALLOC="libc"

@@ -511,6 +511,7 @@ int hashTypeExternalize(robj *o, sds field, const char *buf, size_t len) {
     hashTypeEntry *new_entry = hashTypeCreateExternalizedEntry(field, buf, len);
     int replaced = hashtableReplaceReallocatedEntry(ht, existing, new_entry);
     serverAssert(replaced);
+    freeHashTypeEntry(existing);
     return 1;
 }
 

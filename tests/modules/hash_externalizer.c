@@ -1,6 +1,37 @@
 #include "valkeymodule.h"
+#include <string.h>
 
-int hash_extern(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+typedef struct bufferNode {
+    char *buf;
+    size_t len;
+    struct bufferNode *next;
+} bufferNode;
+
+bufferNode *head = NULL;
+
+bufferNode *addBuffer(const char *buf, size_t len) {
+    if (!buf || len == 0) return NULL;
+
+    bufferNode *node = malloc(sizeof(bufferNode));
+    node->buf = malloc(len);
+    memcpy(node->buf, buf, len);
+    node->len = len;
+    node->next = head;
+    head = node;
+    return node;
+}
+
+void freeBufferList(void) {
+    bufferNode *current = head;
+    while (current) {
+        bufferNode *next = current->next;
+        free(current->buf);
+        free(current);
+        current = next;
+    }
+}
+
+int hashExtern(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     if (argc != 4) return ValkeyModule_WrongArity(ctx);
 
     ValkeyModule_AutoMemory(ctx);
@@ -8,8 +39,9 @@ int hash_extern(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
 
     size_t buf_len;
     const char *buf = ValkeyModule_StringPtrLen(argv[3], &buf_len);
+    bufferNode *node = addBuffer(buf, buf_len);
 
-    int result = ValkeyModule_HashExternalize(key, argv[2], buf, buf_len);
+    int result = ValkeyModule_HashExternalize(key, argv[2], node->buf, node->len);
     return ValkeyModule_ReplyWithLongLong(ctx, result);
 }
 
@@ -18,9 +50,14 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
     VALKEYMODULE_NOT_USED(argc);
     if (ValkeyModule_Init(ctx, "hash.extern", 1, VALKEYMODULE_APIVER_1) ==
         VALKEYMODULE_OK &&
-        ValkeyModule_CreateCommand(ctx, "hash.extern", hash_extern, "write",
+        ValkeyModule_CreateCommand(ctx, "hash.extern", hashExtern, "write",
                                   1, 1, 1) == VALKEYMODULE_OK) {
         return VALKEYMODULE_OK;
     }
     return VALKEYMODULE_ERR;
+}
+
+int ValkeyModule_OnUnload(ValkeyModuleCtx *ctx) {
+    freeBufferList();
+    return VALKEYMODULE_OK;
 }

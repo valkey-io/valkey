@@ -430,8 +430,9 @@ int hashTypeGetValue(robj *o, sds field, unsigned char **vstr, unsigned int *vle
         if (hashTypeGetFromListpack(o, field, vstr, vlen, vll) == 0) return C_OK;
     } else if (o->encoding == OBJ_ENCODING_HASHTABLE) {
         size_t len = 0;
-        *vstr = (unsigned char *)hashTypeGetFromHashTable(o, field, &len);
-        if (vstr != NULL) {
+        unsigned char *value = (unsigned char *)hashTypeGetFromHashTable(o, field, &len);
+        if (value != NULL) {
+            *vstr = value;
             *vlen = len;
             return C_OK;
         }

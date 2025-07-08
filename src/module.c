@@ -5227,18 +5227,19 @@ int VM_ZsetRangePrev(ValkeyModuleKey *key) {
     }
 }
 
-
-int VM_HashExternalize(ValkeyModuleKey *key, ValkeyModuleString *field, const char *buf, size_t len) {
-    if (key->value == NULL) moduleCreateEmptyKey(key, VALKEYMODULE_KEYTYPE_HASH);
-    if (!key || key->value->type != OBJ_HASH || !field || !buf) return VALKEYMODULE_ERR;
-    return hashTypeExternalize(key->value, field->ptr, buf, len);
-}
-
 /* --------------------------------------------------------------------------
  * ## Key API for Hash type
  *
  * See also VM_ValueLength(), which returns the number of fields in a hash.
  * -------------------------------------------------------------------------- */
+
+/* Externalizes a buffer owned by the module as a hash field.
+ * The function takes the hash key, hash field, and a buffer along with its length. */
+int VM_HashExternalize(ValkeyModuleKey *key, ValkeyModuleString *field, const char *buf, size_t len) {
+    if (key->value == NULL) moduleCreateEmptyKey(key, VALKEYMODULE_KEYTYPE_HASH);
+    if (!key || key->value->type != OBJ_HASH || !field || !buf) return VALKEYMODULE_ERR;
+    return hashTypeExternalize(key->value, field->ptr, buf, len);
+}
 
 /* Set the field of the specified hash field to the specified value.
  * If the key is an empty key open for writing, it is created with an empty

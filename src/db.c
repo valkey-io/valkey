@@ -1119,7 +1119,7 @@ int excludeImportingSlotsPredicate(int didx, hashtable *ht, void *privdata) {
  * function returns NULL. A NULL predicate is preferred over a predicate that
  * returns true for all hashtables, as it allows functions to optimize for the
  * unfiltered case. */
-kvstoreHashtablePredicate *getOwnedSlotsHashtablePredicate() {
+kvstoreHashtablePredicate *getOwnedSlotsHashtablePredicate(void) {
     if (server.cluster_enabled && clusterIsAnySlotImporting()) {
         return excludeImportingSlotsPredicate;
     }

@@ -429,7 +429,7 @@ start_cluster 3 1 {tags {external:skip cluster}} {
         R 2 debug disable-cluster-reconnection 1
         R 3 debug disable-cluster-reconnection 1
 
-        # After killing the cluster link, ensure that R1 and R3 do not receive
+        # After killing the cluster link, ensure that R1 and R2 do not receive
         # messages from R3 (new primary).
         R 1 debug clusterlink kill all $R3_nodeid
         R 2 debug clusterlink kill all $R3_nodeid

@@ -3353,7 +3353,7 @@ int clusterProcessPacket(clusterLink *link) {
     int sender_last_reported_as_replica = sender && nodeIsReplica(sender);
     int sender_last_reported_as_primary = sender && nodeIsPrimary(sender);
 
-    if (sender && (hdr->mflags[0] & CLUSTERMSG_FLAG0_EXT_DATA)) {
+    if (sender && link->support_extension) {
         sender->flags |= CLUSTER_NODE_EXTENSIONS_SUPPORTED;
     }
 
@@ -3471,7 +3471,7 @@ int clusterProcessPacket(clusterLink *link) {
                     memcpy(node->ip, ip, sizeof(ip));
                     getClientPortFromClusterMsg(hdr, &node->tls_port, &node->tcp_port);
                     node->cport = ntohs(hdr->cport);
-                    if (hdr->mflags[0] & CLUSTERMSG_FLAG0_EXT_DATA) {
+                    if (link->support_extension) {
                         node->flags |= CLUSTER_NODE_EXTENSIONS_SUPPORTED;
                     }
                     setClusterNodeToInboundClusterLink(node, link);
@@ -4271,9 +4271,7 @@ void clusterSendPing(clusterLink *link, int type) {
      * to put inside the packet. */
     estlen = sizeof(clusterMsg) - sizeof(union clusterMsgData);
     estlen += (sizeof(clusterMsgDataGossip) * (wanted + pfail_wanted));
-    /* If the link or the node indicates that it supports extensions, then we
-     * pass the extensions. */
-    if (link->support_extension || (link->node && nodeSupportsExtensions(link->node))) {
+    if (link->support_extension) {
         estlen += writePingExtensions(NULL, 0);
     }
     /* Note: clusterBuildMessageHdr() expects the buffer to be always at least
@@ -4349,7 +4347,7 @@ void clusterSendPing(clusterLink *link, int type) {
     /* Compute the actual total length and send! */
     uint32_t totlen = 0;
 
-    if (link->support_extension || (link->node && nodeSupportsExtensions(link->node))) {
+    if (link->support_extension) {
         totlen += writePingExtensions(hdr, gossipcount);
     } else {
         serverLog(LL_DEBUG, "Unable to send extensions data, however setting ext data flag to true");

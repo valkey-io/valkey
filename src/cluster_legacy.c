@@ -71,8 +71,8 @@ list *clusterGetNodesInMyShard(clusterNode *node);
 int clusterNodeAddReplica(clusterNode *primary, clusterNode *replica);
 int clusterAddSlot(clusterNode *n, int slot);
 int clusterDelSlot(int slot);
-void clusterMoveNodeSlots(clusterNode *from_node, clusterNode *to_node);
 int clusterDelNodeSlots(clusterNode *node);
+int clusterMoveNodeSlots(clusterNode *from_node, clusterNode *to_node);
 void clusterNodeSetSlotBit(clusterNode *n, int slot);
 static void clusterSetPrimary(clusterNode *n, int closeSlots, int full_sync_required);
 void clusterHandleReplicaFailover(void);
@@ -686,6 +686,7 @@ int clusterLoadConfig(char *filename) {
             } else if (!strcasecmp(s, "master") || !strcasecmp(s, "primary")) {
                 n->flags |= CLUSTER_NODE_PRIMARY;
             } else if (!strcasecmp(s, "slave") || !strcasecmp(s, "replica")) {
+                serverAssert(n->numslots == 0);
                 n->flags |= CLUSTER_NODE_REPLICA;
             } else if (!strcasecmp(s, "fail?")) {
                 n->flags |= CLUSTER_NODE_PFAIL;
@@ -3642,16 +3643,16 @@ int clusterProcessPacket(clusterLink *link) {
                             serverAssert(sender_claimed_primary->replicaof == sender);
                             /* A failover occurred in the shard where `sender` belongs to and `sender` is
                              * no longer a primary. Update slot assignment to `sender_claimed_config_epoch`,
-                             * which is the new primary in the shard */
-                            clusterMoveNodeSlots(sender, sender_claimed_primary);
+                             * which is the new primary in the shard. */
+                            int slots = clusterMoveNodeSlots(sender, sender_claimed_primary);
                             /* `primary` is still a `replica` in this observer node's view;
                              * update its role and configEpoch */
                             clusterSetNodeAsPrimary(sender_claimed_primary);
                             sender_claimed_primary->configEpoch = sender_claimed_config_epoch;
                             serverLog(LL_NOTICE,
-                                      "A failover occurred in shard %.40s; node %.40s (%s)"
+                                      "A failover occurred in shard %.40s; node %.40s (%s) lost %d slot(s) and"
                                       " failed over to node %.40s (%s) with a config epoch of %llu",
-                                      sender->shard_id, sender->name, sender->human_nodename,
+                                      sender->shard_id, sender->name, sender->human_nodename, slots,
                                       sender_claimed_primary->name, sender_claimed_primary->human_nodename,
                                       (unsigned long long)sender_claimed_primary->configEpoch);
                         }
@@ -3668,6 +3669,7 @@ int clusterProcessPacket(clusterLink *link) {
                         }
                     }
 
+                    serverAssert(sender->numslots == 0);
                     sender->flags &= ~(CLUSTER_NODE_PRIMARY | CLUSTER_NODE_MIGRATE_TO);
                     sender->flags |= CLUSTER_NODE_REPLICA;
 
@@ -5433,7 +5435,7 @@ void clusterCron(void) {
         /* The protocol is that function(s) below return non-zero if the node was
          * terminated.
          */
-        if (clusterNodeCronHandleReconnect(node, now)) continue;
+        if (!server.debug_cluster_disable_reconnection && clusterNodeCronHandleReconnect(node, now)) continue;
     }
     dictReleaseIterator(di);
 
@@ -5750,18 +5752,6 @@ int clusterDelSlot(int slot) {
     return C_OK;
 }
 
-/* Transfer slots from `from_node` to `to_node`.
- * Iterates over all cluster slots, transferring each slot covered
- * by `from_node` to `to_node`. */
-void clusterMoveNodeSlots(clusterNode *from_node, clusterNode *to_node) {
-    for (int j = 0; j < CLUSTER_SLOTS; j++) {
-        if (clusterNodeCoversSlot(from_node, j)) {
-            clusterDelSlot(j);
-            clusterAddSlot(to_node, j);
-        }
-    }
-}
-
 /* Delete all the slots associated with the specified node.
  * The number of deleted slots is returned. */
 int clusterDelNodeSlots(clusterNode *node) {
@@ -5774,6 +5764,23 @@ int clusterDelNodeSlots(clusterNode *node) {
         }
     }
     return deleted;
+}
+
+/* Transfer slots from `from_node` to `to_node`.
+ *
+ * Iterates over all cluster slots, transferring each slot covered
+ * by `from_node` to `to_node`. Counts and returns the number of
+ * slots transferred. */
+int clusterMoveNodeSlots(clusterNode *from_node, clusterNode *to_node) {
+    int processed = 0;
+    for (int j = 0; j < CLUSTER_SLOTS; j++) {
+        if (clusterNodeCoversSlot(from_node, j)) {
+            clusterDelSlot(j);
+            clusterAddSlot(to_node, j);
+            processed++;
+        }
+    }
+    return processed;
 }
 
 /* Clear the migrating / importing state for all the slots.

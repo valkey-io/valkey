@@ -440,6 +440,8 @@ void debugCommand(client *c) {
             "    When set to 1, the cluster link is closed after dropping a packet based on the filter.",
             "DISABLE-CLUSTER-RANDOM-PING <0|1>",
             "    Disable sending cluster ping to a random node every second.",
+            "DISABLE-CLUSTER-RECONNECTION <0|1>",
+            "    Disable cluster reconnection of cluster nodes.",
             "OOM",
             "    Crash the server simulating an out-of-memory error.",
             "PANIC",
@@ -616,6 +618,9 @@ void debugCommand(client *c) {
         addReply(c, shared.ok);
     } else if (!strcasecmp(c->argv[1]->ptr, "disable-cluster-random-ping") && c->argc == 3) {
         server.debug_cluster_disable_random_ping = atoi(c->argv[2]->ptr);
+        addReply(c, shared.ok);
+    } else if (!strcasecmp(c->argv[1]->ptr, "disable-cluster-reconnection") && c->argc == 3) {
+        server.debug_cluster_disable_reconnection = atoi(c->argv[2]->ptr);
         addReply(c, shared.ok);
     } else if (!strcasecmp(c->argv[1]->ptr, "object") && (c->argc == 3 || c->argc == 4)) {
         robj *val;

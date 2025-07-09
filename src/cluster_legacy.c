@@ -5754,12 +5754,14 @@ int clusterDelSlot(int slot) {
 /* Delete all the slots associated with the specified node.
  * The number of deleted slots is returned. */
 int clusterDelNodeSlots(clusterNode *node) {
-    int deleted = 0, j;
+    int deleted = 0;
+    int remaining = node->numslots;
 
-    for (j = 0; j < CLUSTER_SLOTS; j++) {
+    for (int j = 0; j < CLUSTER_SLOTS && remaining > 0; j++) {
         if (clusterNodeCoversSlot(node, j)) {
             clusterDelSlot(j);
             deleted++;
+            remaining--;
         }
     }
     return deleted;

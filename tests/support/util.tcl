@@ -652,7 +652,12 @@ proc populate {num {prefix key:} {size 3} {idx 0} {prints false} {expires 0}} {
     set val [string repeat A $size]
     for {set j 0} {$j < $pipeline} {incr j} {
         if {$expires > 0} {
-            r $idx set $prefix$j $val ex $expires
+            if {$expires < 1} {
+                set pexpires [expr int($expires * 1000)]
+                r $idx set $prefix$j $val px $pexpires
+            } else {
+                r $idx set $prefix$j $val ex $expires
+            }
         } else {
             r $idx set $prefix$j $val
         }
@@ -660,7 +665,12 @@ proc populate {num {prefix key:} {size 3} {idx 0} {prints false} {expires 0}} {
     }
     for {} {$j < $num} {incr j} {
         if {$expires > 0} {
-            r $idx set $prefix$j $val ex $expires
+            if {$expires < 1} {
+                set pexpires [expr int($expires * 1000)]
+                r $idx set $prefix$j $val px $pexpires
+            } else {
+                r $idx set $prefix$j $val ex $expires
+            }
         } else {
             r $idx set $prefix$j $val
         }

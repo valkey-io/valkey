@@ -609,31 +609,32 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
                         }
                     }
                     # Validate keys are there
-                    assert_match "1000" [R $target_idx CLUSTER COUNTKEYSINSLOT $slot_to_migrate] 
+                    assert_match "1000" [R $target_idx CLUSTER COUNTKEYSINSLOT $slot_to_migrate]
                 }
             }
         }
 
-        test "Importing key containment (slot $slot_to_migrate from node $source_idx to $target_idx) - setup for active expiration test" {
+        test "Importing key containment (slot $slot_to_migrate from node $source_idx to $target_idx) - active expiration excludes importing keys" {
             # Populate 1000 keys with 1 second timeout, and do the snapshot
             assert_match "OK" [R $source_idx FLUSHALL SYNC]
             assert_match "OK" [R $target_idx FLUSHALL SYNC]
-            populate 1000 "$slot_to_migrate_tag:1:" 1000 -$source_idx false 1
-            populate 1000 "$slot_to_test_tag:1:" 1000 -$target_idx false 1
+            assert_match "OK" [R $source_idx DEBUG SET-ACTIVE-EXPIRE 0]
+            assert_match "OK" [R $target_idx DEBUG SET-ACTIVE-EXPIRE 0]
+            populate 1000 "$slot_to_migrate_tag:1:" 1000 -$source_idx false 0.5
+            populate 1000 "$slot_to_test_tag:1:" 1000 -$target_idx false 0.5
             assert_match "OK" [R $source_idx CLUSTER MIGRATE SLOTSRANGE $slot_to_migrate $slot_to_migrate NODE $target_id]
             set linkname [get_link_name $source_idx $slot_to_migrate]
             wait_for_migration_field $source_idx $linkname state waiting-to-pause
             assert_match "1000" [R $target_idx CLUSTER COUNTKEYSINSLOT $slot_to_migrate]
-        }
 
-        test "Importing key containment (slot $slot_to_migrate from node $source_idx to $target_idx) - active expiration excludes importing keys" {
             # Pause the source
             set source_pid  [srv -$source_idx pid]
             pause_process $source_pid
+            assert_match "OK" [R $target_idx DEBUG SET-ACTIVE-EXPIRE 1]
 
-            # Wait 2 seconds, to allow active expiration to trigger (it shouldn't)
-            after 2000
-            
+            # Wait for active expiration
+            wait_for_countkeysinslot $target_idx $slot_to_test 0
+
             # Validate keys are still there
             assert_match "1000" [R $target_idx CLUSTER COUNTKEYSINSLOT $slot_to_migrate]
 
@@ -642,6 +643,7 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
 
             # Resume the source
             resume_process $source_pid
+            assert_match "OK" [R $source_idx DEBUG SET-ACTIVE-EXPIRE 1]
 
             # Wait for the expirations to be propagated
             wait_for_countkeysinslot $target_idx $slot_to_migrate 0
@@ -1262,7 +1264,7 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
 
     test "Import cancelled when source hangs" {
         assert_does_not_resync {
-            R 2 CONFIG SET repl-timeout 1
+            R 2 CONFIG SET repl-timeout 2
 
             # Load data before the snapshot
             populate 333 "$0_slot_tag:1:" 1000 -0
@@ -1299,7 +1301,7 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
 
     test "Export cancelled when target hangs" {
         assert_does_not_resync {
-            R 0 CONFIG SET repl-timeout 1
+            R 0 CONFIG SET repl-timeout 2
 
             # Load data before the snapshot
             populate 333 "$0_slot_tag:1:" 1000 -0

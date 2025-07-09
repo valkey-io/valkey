@@ -3621,16 +3621,21 @@ int clusterProcessPacket(clusterLink *link) {
 
         /* Check for role switch: replica -> primary or primary -> replica. */
         if (sender) {
-            serverLog(LL_DEBUG, "node %.40s (%s) announces that it is a %s in shard %.40s", sender->name,
-                      sender->human_nodename, sender_claims_to_be_primary ? "primary" : "replica", sender->shard_id);
             if (sender_claims_to_be_primary) {
                 /* Node is a primary. */
-                clusterSetNodeAsPrimary(sender);
+                if (nodeIsReplica(sender)) {
+                    serverLog(LL_DEBUG, "node %.40s (%s) announces that it is a %s in shard %.40s", sender->name,
+                              sender->human_nodename, sender_claims_to_be_primary ? "primary" : "replica", sender->shard_id);
+                    clusterSetNodeAsPrimary(sender);
+                }
             } else {
                 /* Node is a replica. */
                 clusterNode *sender_claimed_primary = clusterLookupNode(hdr->replicaof, CLUSTER_NAMELEN);
 
                 if (sender_last_reported_as_primary) {
+                    serverLog(LL_DEBUG, "node %.40s (%s) announces that it is a %s in shard %.40s", sender->name,
+                              sender->human_nodename, sender_claims_to_be_primary ? "primary" : "replica", sender->shard_id);
+
                     /* Primary turned into a replica! Reconfigure the node. */
                     if (sender_claimed_primary && areInSameShard(sender_claimed_primary, sender)) {
                         /* `sender` was a primary and was in the same shard as its new primary */

@@ -904,11 +904,11 @@ void keysCommand(client *c) {
     allkeys = (pattern[0] == '*' && plen == 1);
     if (server.cluster_enabled && !allkeys) {
         pslot = patternHashSlot(pattern, plen);
-    }
-    if (clusterIsSlotImporting(pslot)) {
-        /* Short circuit if requested slot is being imported. */
-        setDeferredArrayLen(c, replylen, 0);
-        return;
+        if (pslot != -1 && clusterIsSlotImporting(pslot)) {
+            /* Short circuit if requested slot is being imported. */
+            setDeferredArrayLen(c, replylen, 0);
+            return;
+        }
     }
     kvstoreHashtableIterator *kvs_di = NULL;
     kvstoreIterator *kvs_it = NULL;

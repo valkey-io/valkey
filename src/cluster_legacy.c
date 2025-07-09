@@ -686,7 +686,6 @@ int clusterLoadConfig(char *filename) {
             } else if (!strcasecmp(s, "master") || !strcasecmp(s, "primary")) {
                 n->flags |= CLUSTER_NODE_PRIMARY;
             } else if (!strcasecmp(s, "slave") || !strcasecmp(s, "replica")) {
-                serverAssert(n->numslots == 0);
                 n->flags |= CLUSTER_NODE_REPLICA;
             } else if (!strcasecmp(s, "fail?")) {
                 n->flags |= CLUSTER_NODE_PFAIL;
@@ -3655,6 +3654,7 @@ int clusterProcessPacket(clusterLink *link) {
                                       sender->shard_id, sender->name, sender->human_nodename, slots,
                                       sender_claimed_primary->name, sender_claimed_primary->human_nodename,
                                       (unsigned long long)sender_claimed_primary->configEpoch);
+                            serverAssert(sender->numslots == 0);
                         }
                     } else {
                         /* `sender` was moved to another shard and has become a replica, remove its slot assignment */
@@ -3667,9 +3667,9 @@ int clusterProcessPacket(clusterLink *link) {
                             serverLog(LL_NOTICE, "Node %.40s (%s) is now part of shard %.40s", sender->name,
                                       sender->human_nodename, sender_claimed_primary->shard_id);
                         }
+                        serverAssert(sender->numslots == 0);
                     }
 
-                    serverAssert(sender->numslots == 0);
                     sender->flags &= ~(CLUSTER_NODE_PRIMARY | CLUSTER_NODE_MIGRATE_TO);
                     sender->flags |= CLUSTER_NODE_REPLICA;
 

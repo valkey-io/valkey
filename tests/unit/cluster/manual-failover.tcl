@@ -412,9 +412,7 @@ start_cluster 3 1 {tags {external:skip cluster}} {
     # The purpose of this test is to verify the behavior of R1 and R2 after receiving
     # the message from R0 (new replica) first. R1 and R2 will update R0 as a replica
     # and R3 as a primary, and transfer all slots of R0 to R3.
-    #
-    # The role change and the slot ownership change should've been an atomic operation.
-    test "111 Broadcast PONG to the cluster when the node role changes" {
+    test "The role change and the slot ownership change should be an atomic operation" {
         set R0_nodeid [R 0 cluster myid]
         set R1_nodeid [R 1 cluster myid]
         set R2_nodeid [R 2 cluster myid]

@@ -92,6 +92,34 @@ proc assert_does_not_resync {body} {
     assert_equal $prev_syncs [get_cluster_total_syncs_count]
 }
 
+# Helper to perform eviction related tests. It sets up the configs on idx so
+# that the node will begin evicting with the given policy once full. It will
+# require ~1 MiB of data to be added to fill up the repl-backlog first.
+proc setup_eviction_test {idx policy body} {
+    R $idx CONFIG SET maxmemory-policy $policy
+    set old_cob_limit [lindex [R $idx config get client-output-buffer-limit] 1]
+    R $idx CONFIG SET client-output-buffer-limit "replica 10k 0 0"
+    R $idx CONFIG SET lazyfree-lazy-eviction no
+    R $idx CONFIG SET maxmemory-eviction-tenacity 100
+    set old_repl_backlog [lindex [R $idx config get repl-backlog-size] 1]
+    R $idx CONFIG SET repl-backlog-size 1mb
+
+    set used [s -$idx used_memory]
+    # limit = current used + repl backlog max size + 100kiB for keys
+    set limit [expr {$used+1024*1024+100*1024}]
+    R $idx config set maxmemory $limit
+
+    uplevel 1 $body
+
+    R $idx CONFIG SET client-output-buffer-limit $old_cob_limit
+    R $idx CONFIG SET maxmemory-policy volatile-lru
+    R $idx CONFIG SET maxmemory 0
+    R $idx CONFIG SET lazyfree-lazy-eviction yes
+    R $idx CONFIG SET maxmemory-eviction-tenacity 10
+    R $idx CONFIG SET repl-backlog-size $old_repl_backlog
+
+}
+
 proc assert_causes_syncslots_fail {node_idx args} {
     set client [valkey_client_by_addr [srv -$node_idx host] [srv -$node_idx port]]
     assert_match "*CLUSTER SYNCSLOTS FAIL*" [$client {*}$args]
@@ -148,6 +176,7 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
         assert_error "*Slot range 0-5 overlaps with previous range 3-6*" {R 0 CLUSTER MIGRATE SLOTSRANGE 3 6 0 5}
         assert_error "*syntax error*" {R 0 CLUSTER MIGRATE SLOTSRANGE 0 0}
         assert_error "*syntax error*" {R 0 CLUSTER MIGRATE SLOTSRANGE 0 0 NODE}
+        assert_error "*Slot ranges in migrations overlap*" {R 0 CLUSTER MIGRATE SLOTSRANGE 1 1 NODE $node1_id SLOTSRANGE 0 2 NODE $node2_id} 
 
         set source_node_id [R 0 CLUSTER MYID]
         set target_node_id [R 1 CLUSTER MYID]
@@ -518,6 +547,114 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
         }
     }
 
+    # Test with both migrating slot < existing slot and vice versa, since a lot of the
+    # kvstore logic is ordering dependent
+    foreach testcase [list \
+        [list 0 2 $node2_id 0 $0_slot_tag 16383 $16383_slot_tag] \
+        [list 2 0 $node0_id 16383 $16383_slot_tag 0 $0_slot_tag] \
+    ] {
+        lassign $testcase source_idx target_idx target_id slot_to_migrate slot_to_migrate_tag slot_to_test slot_to_test_tag
+        set_debug_prevent_pause 1
+        test "Importing key containment (slot $slot_to_migrate from node $source_idx to $target_idx) - start migration" {
+            populate 1000 "$slot_to_migrate_tag:1:" 1000 -$source_idx false 1000
+            assert_match "OK" [R $source_idx CLUSTER MIGRATE SLOTSRANGE $slot_to_migrate $slot_to_migrate NODE $target_id]
+            set linkname [get_link_name $source_idx $slot_to_migrate]
+            wait_for_migration_field $source_idx $linkname state waiting-to-pause
+
+            assert_match "1000" [R $target_idx CLUSTER COUNTKEYSINSLOT $slot_to_migrate]
+        }
+        test "Importing key containment (slot $slot_to_migrate from node $source_idx to $target_idx) - KEYS command excludes importing keys" {
+            assert_match "" [R $target_idx KEYS *]
+            assert_match "" [R $target_idx KEYS $slot_to_migrate_tag:*]
+            assert_match "OK" [R $target_idx SET $slot_to_test_tag:my_key my_value]
+            assert_match "{$slot_to_test_tag:my_key}" [R $target_idx KEYS *]
+            assert_match "" [R $target_idx KEYS $slot_to_migrate_tag:*]
+            assert_match "1" [R $target_idx DEL $slot_to_test_tag:my_key]
+        }
+
+        test "Importing key containment (slot $slot_to_migrate from node $source_idx to $target_idx) - SCAN command excludes importing keys" {
+            assert_match "0 {}" [R $target_idx SCAN 0]
+            assert_match "OK" [R $target_idx SET $slot_to_test_tag:my_key my_value]
+            assert_match "0 {{$slot_to_test_tag:my_key}}" [R $target_idx SCAN 0]
+            assert_match "1" [R $target_idx DEL $slot_to_test_tag:my_key]
+        }
+
+        test "Importing key containment (slot $slot_to_migrate from node $source_idx to $target_idx) - RANDOMKEY command excludes importing keys" {
+            assert_match "" [R $target_idx RANDOMKEY]
+            assert_match "OK" [R $target_idx SET $slot_to_test_tag:my_key my_value]
+            assert_match "$slot_to_test_tag:my_key" [R $target_idx RANDOMKEY]
+            assert_match "1" [R $target_idx DEL $slot_to_test_tag:my_key]
+        }
+
+        foreach eviction_policy {
+            allkeys-random
+            allkeys-lru
+            allkeys-lfu
+            volatile-random
+            volatile-lru
+            volatile-lfu
+            volatile-ttl
+        } {
+            test "Importing key containment (slot $slot_to_migrate from node $source_idx to $target_idx) - $eviction_policy eviction excludes importing keys" {
+                # Eviction should only touch non-importing keys
+                setup_eviction_test $target_idx $eviction_policy {
+                    # Do 1000 evictions
+                    set old_evictions [s -$target_idx evicted_keys]
+                    set batch 1
+                    while 1 {
+                        populate 1000 "$slot_to_test_tag:$batch:" 1000 -$target_idx false 1000
+                        incr batch
+                        if {[s -$target_idx evicted_keys] > [expr $old_evictions + 1000]} {
+                            break
+                        }
+                    }
+                    # Validate keys are there
+                    assert_match "1000" [R $target_idx CLUSTER COUNTKEYSINSLOT $slot_to_migrate] 
+                }
+            }
+        }
+
+        test "Importing key containment (slot $slot_to_migrate from node $source_idx to $target_idx) - setup for active expiration test" {
+            # Populate 1000 keys with 1 second timeout, and do the snapshot
+            assert_match "OK" [R $source_idx FLUSHALL SYNC]
+            assert_match "OK" [R $target_idx FLUSHALL SYNC]
+            populate 1000 "$slot_to_migrate_tag:1:" 1000 -$source_idx false 1
+            populate 1000 "$slot_to_test_tag:1:" 1000 -$target_idx false 1
+            assert_match "OK" [R $source_idx CLUSTER MIGRATE SLOTSRANGE $slot_to_migrate $slot_to_migrate NODE $target_id]
+            set linkname [get_link_name $source_idx $slot_to_migrate]
+            wait_for_migration_field $source_idx $linkname state waiting-to-pause
+            assert_match "1000" [R $target_idx CLUSTER COUNTKEYSINSLOT $slot_to_migrate]
+        }
+
+        test "Importing key containment (slot $slot_to_migrate from node $source_idx to $target_idx) - active expiration excludes importing keys" {
+            # Pause the source
+            set source_pid  [srv -$source_idx pid]
+            pause_process $source_pid
+
+            # Wait 2 seconds, to allow active expiration to trigger (it shouldn't)
+            after 2000
+            
+            # Validate keys are still there
+            assert_match "1000" [R $target_idx CLUSTER COUNTKEYSINSLOT $slot_to_migrate]
+
+            # Active expiration of non-importing keys is functioning
+            assert_match "0" [R $target_idx CLUSTER COUNTKEYSINSLOT $slot_to_test]
+
+            # Resume the source
+            resume_process $source_pid
+
+            # Wait for the expirations to be propagated
+            wait_for_countkeysinslot $target_idx $slot_to_migrate 0
+
+            # Cleanup for the next test
+            assert_match "OK" [R $source_idx FLUSHALL SYNC]
+            assert_match "OK" [R $target_idx FLUSHALL SYNC]
+            wait_for_migration_field $source_idx $linkname state failed
+            wait_for_migration_field $target_idx $linkname state failed
+        }
+        set_debug_prevent_pause 0
+    }
+
     test "Simultaneous imports" {
         assert_does_not_resync {
             # Populate data before migration
@@ -561,8 +698,8 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
             # Cleanup for next test
             assert_match "OK" [R 0 FLUSHDB SYNC]
             assert_match "OK" [R 0 CLUSTER MIGRATE SLOTSRANGE 5462 5462 NODE $node1_id]
-            assert_match "OK" [R 0 CLUSTER MIGRATE SLOTSRANGE 16383 16383 NODE $node2_id]
             wait_for_migration 1 5462
+            assert_match "OK" [R 0 CLUSTER MIGRATE SLOTSRANGE 16383 16383 NODE $node2_id]
             wait_for_migration 2 16383
         }
     }
@@ -1046,42 +1183,39 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
         }
     }
 
-    test "FLUSHDB on target during import" {
+    test "FLUSH on target during import" {
         assert_does_not_resync {
+            set_debug_prevent_pause 1
+
             # Load data before the snapshot
             populate 1000 "$16383_slot_tag:1:" 1000 -2
 
-            # Do the import
-            set_debug_prevent_pause 1
-            assert_match "OK" [R 2 CLUSTER MIGRATE SLOTSRANGE 16383 16383 NODE $node0_id]
-            set linkname [get_link_name 2 16383]
+            foreach command {
+                {FLUSHDB SYNC}
+                {FLUSHDB ASYNC}
+                {FLUSHALL SYNC}
+                {FLUSHALL ASYNC}
+            } {
 
-            # Keys should be on both source and destination
-            assert_match "1000" [R 2 CLUSTER COUNTKEYSINSLOT 16383]
-            wait_for_countkeysinslot 0 16383 1000
+                # Do the import
+                assert_match "OK" [R 2 CLUSTER MIGRATE SLOTSRANGE 16383 16383 NODE $node0_id]
+                set linkname [get_link_name 2 16383]
 
-            # Now run FLUSHDB SYNC on the target
-            assert_match "OK" [R 0 FLUSHDB SYNC]
+                # Keys should be on both source and destination
+                assert_match "1000" [R 2 CLUSTER COUNTKEYSINSLOT 16383]
+                wait_for_countkeysinslot 0 16383 1000
 
-            # Target should fail the migration
-            wait_for_migration_field 2 $linkname state failed
-            wait_for_migration_field 0 $linkname state failed
-            assert {[string match {*Data was flushed*} [dict get [get_migration_by_linkname 0 $linkname] message]]}
-            assert {[string match {*Connection lost to target*} [dict get [get_migration_by_linkname 2 $linkname] message]]}
-            wait_for_countkeysinslot 0 16383 0
-            wait_for_countkeysinslot 3 16383 0
-            
-            # Same for FLUSHDB ASYNC
-            assert_match "OK" [R 2 CLUSTER MIGRATE SLOTSRANGE 16383 16383 NODE $node0_id]
-            assert_match "1000" [R 2 CLUSTER COUNTKEYSINSLOT 16383]
-            wait_for_countkeysinslot 0 16383 1000
-            assert_match "OK" [R 0 FLUSHDB ASYNC]
-            wait_for_migration_field 2 $linkname state failed
-            wait_for_migration_field 0 $linkname state failed
-            assert {[string match {*Data was flushed*} [dict get [get_migration_by_linkname 0 $linkname] message]]}
-            assert {[string match {*Connection lost to target*} [dict get [get_migration_by_linkname 2 $linkname] message]]}
-            wait_for_countkeysinslot 0 16383 0
-            wait_for_countkeysinslot 3 16383 0
+                # Now run FLUSHDB SYNC on the target
+                assert_match "OK" [eval R 0 $command]
+
+                # Target should fail the migration
+                wait_for_migration_field 2 $linkname state failed
+                wait_for_migration_field 0 $linkname state failed
+                assert {[string match {*Data was flushed*} [dict get [get_migration_by_linkname 0 $linkname] message]]}
+                assert {[string match {*Connection lost to target*} [dict get [get_migration_by_linkname 2 $linkname] message]]}
+                wait_for_countkeysinslot 0 16383 0
+                wait_for_countkeysinslot 3 16383 0
+            }
 
             # Cleanup
             assert_match "OK" [R 2 FLUSHDB SYNC]
@@ -1089,30 +1223,37 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
         }
     }
 
-    test "FLUSHDB on source during export" {
+    test "FLUSH on source during export" {
         assert_does_not_resync {
-            # Load data before the snapshot
-            populate 1000 "$16383_slot_tag:1:" 1000 -2
-
-            # Do the import
             set_debug_prevent_pause 1
-            assert_match "OK" [R 2 CLUSTER MIGRATE SLOTSRANGE 16383 16383 NODE $node0_id]
-            set linkname [get_link_name 2 16383]
 
-            # Keys should be on both source and destination
-            assert_match "1000" [R 2 CLUSTER COUNTKEYSINSLOT 16383]
-            wait_for_countkeysinslot 0 16383 1000
+            foreach command {
+                {FLUSHDB SYNC}
+                {FLUSHDB ASYNC}
+                {FLUSHALL SYNC}
+                {FLUSHALL ASYNC}
+            } {
+                # Load data before the snapshot
+                populate 1000 "$16383_slot_tag:1:" 1000 -2
 
-            # FLUSHDB on the source should fail the import
-            assert_match "OK" [R 2 FLUSHDB SYNC]
-            wait_for_migration_field 2 $linkname state failed
-            wait_for_migration_field 0 $linkname state failed
-            assert {[string match {*Data was flushed*} [dict get [get_migration_by_linkname 2 $linkname] message]]}
-            assert {[string match {*Connection lost to source*} [dict get [get_migration_by_linkname 0 $linkname] message]]}
+                # Do the import
+                assert_match "OK" [R 2 CLUSTER MIGRATE SLOTSRANGE 16383 16383 NODE $node0_id]
+                set linkname [get_link_name 2 16383]
 
-            assert_match "0" [R 2 CLUSTER COUNTKEYSINSLOT 16383]
-            wait_for_countkeysinslot 0 16383 0
-            wait_for_countkeysinslot 3 16383 0
+                # Keys should be on both source and destination
+                assert_match "1000" [R 2 CLUSTER COUNTKEYSINSLOT 16383]
+                wait_for_countkeysinslot 0 16383 1000
+
+                # FLUSH on the source should fail the import
+                assert_match "OK" [eval R 2 $command]
+                wait_for_migration_field 2 $linkname state failed
+                wait_for_migration_field 0 $linkname state failed
+                assert {[string match {*Data was flushed*} [dict get [get_migration_by_linkname 2 $linkname] message]]}
+                assert {[string match {*Connection lost to source*} [dict get [get_migration_by_linkname 0 $linkname] message]]}
+                assert_match "0" [R 2 CLUSTER COUNTKEYSINSLOT 16383]
+                wait_for_countkeysinslot 0 16383 0
+                wait_for_countkeysinslot 3 16383 0
+            }
 
             # Cleanup
             set_debug_prevent_pause 0
@@ -1372,6 +1513,68 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
             assert_match "OK" [R 2 FLUSHDB SYNC]
             assert_match "OK" [R 0 CLUSTER MIGRATE SLOTSRANGE 16381 16381 16383 16383 NODE $node2_id]
             wait_for_migration 2 16381
+        }
+    }
+
+    test "Export client buffer excluded from maxmemory" {
+        assert_does_not_resync {
+            set_debug_prevent_pause 1
+            setup_eviction_test 2 allkeys-random {
+                assert_match "OK" [R 2 CLUSTER MIGRATE SLOTSRANGE 16383 16383 NODE $node0_id]
+                set linkname [get_link_name 2 16383]
+                wait_for_migration_field 2 $linkname state waiting-to-pause
+
+                set prev_evictions [s -2 evicted_keys]
+
+                # Fill source with keys until full
+                set batch 1
+                while 1 {
+                    populate 1000 "$16383_slot_tag:$batch" 1000 -2
+                    incr batch
+                    if {[s -2 evicted_keys] > $prev_evictions} {
+                        break
+                    }
+                }
+
+                # Pause the target
+                set node0_pid [srv -0 pid]
+                pause_process $node0_pid
+
+                # Accumulate backlog on the source, it should not cause an eviction loop
+                catch {
+                    for {set i 0} {$i < 100} {incr i} {
+                        # Continue to add keys
+                        populate 1000 "$16383_slot_tag:" 1000 -2
+
+                        # Eventually the output buffer should go over the limit
+                        set migration [get_migration_by_linkname 2 $linkname]
+                        if {[dict get $migration state] eq "failed"} {
+                            break
+                        }
+                    }
+                } err
+                if {$err != ""} {
+                    fail "error during populate $err"
+                }
+                if {[dict get $migration state] ne "failed"} {
+                    fail "Export was not failed after writing 100 MiB of changes, current state: $migration"
+                }
+
+                # If maxmemory includes the client buffer, we would see all keys evicted
+                assert {[R 2 CLUSTER COUNTKEYSINSLOT 16383] > 0}
+
+                resume_process $node0_pid
+
+                # Import should be failed
+                wait_for_migration_field 2 $linkname state failed
+                wait_for_migration_field 0 $linkname state failed
+                assert_match "*Connection lost to source*" [dict get [get_migration_by_linkname 0 $linkname] message]
+                assert_match "*Connection lost to target*" [dict get [get_migration_by_linkname 2 $linkname] message]
+
+                # Cleanup for the next test
+                assert_match "OK" [R 2 FLUSHDB SYNC]
+            }
+            set_debug_prevent_pause 0
         }
     }
 }

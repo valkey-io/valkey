@@ -8,9 +8,8 @@ typedef struct _kvstore kvstore;
 typedef struct _kvstoreIterator kvstoreIterator;
 typedef struct _kvstoreHashtableIterator kvstoreHashtableIterator;
 
-typedef int(kvstoreScanShouldSkipHashtable)(int didx, hashtable *d);
+typedef int(kvstoreHashtablePredicate)(int didx, hashtable *d, void *privdata);
 typedef int(kvstoreExpandShouldSkipHashtableIndex)(int didx);
-typedef int(kvstoreIteratorPredicate)(int didx, void *privdata);
 
 #define KVSTORE_ALLOCATE_HASHTABLES_ON_DEMAND (1 << 0)
 #define KVSTORE_FREE_EMPTY_HASHTABLES (1 << 1)
@@ -24,10 +23,10 @@ unsigned long long kvstoreScan(kvstore *kvs,
                                unsigned long long cursor,
                                int onlydidx,
                                hashtableScanFunction scan_cb,
-                               kvstoreScanShouldSkipHashtable *skip_cb,
+                               kvstoreHashtablePredicate *skip_cb,
                                void *privdata);
 int kvstoreExpand(kvstore *kvs, uint64_t newsize, int try_expand, kvstoreExpandShouldSkipHashtableIndex *skip_cb);
-int kvstoreGetFairRandomHashtableIndex(kvstore *kvs);
+int kvstoreGetFairRandomHashtableIndex(kvstore *kvs, kvstoreHashtablePredicate *predicate);
 void kvstoreGetStats(kvstore *kvs, char *buf, size_t bufsize, int full);
 
 int kvstoreFindHashtableIndexByKeyIndex(kvstore *kvs, unsigned long target);
@@ -45,7 +44,7 @@ size_t kvstoreHashtableMetadataSize(void);
 
 /* kvstore iterator specific functions */
 kvstoreIterator *kvstoreIteratorInit(kvstore *kvs, uint8_t flags);
-kvstoreIterator *kvstoreFilteredIteratorInit(kvstore *kvs, uint8_t flags, kvstoreIteratorPredicate *filter, void *privdata);
+kvstoreIterator *kvstoreFilteredIteratorInit(kvstore *kvs, uint8_t flags, kvstoreHashtablePredicate *predicate, void *privdata);
 void kvstoreIteratorRelease(kvstoreIterator *kvs_it);
 int kvstoreIteratorGetCurrentHashtableIndex(kvstoreIterator *kvs_it);
 int kvstoreIteratorNext(kvstoreIterator *kvs_it, void **next);

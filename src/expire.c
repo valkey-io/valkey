@@ -151,20 +151,21 @@ void expireScanCallback(void *privdata, void *entry) {
     data->sampled++;
 }
 
-static inline int isExpiryTableValidForSamplingCb(int didx, hashtable *ht) {
+static inline int isExpiryTableValidForSamplingCb(int didx, hashtable *ht, void *privdata) {
+    UNUSED(privdata);
     long long numkeys = hashtableSize(ht);
     unsigned long buckets = hashtableBuckets(ht);
     /* When there are less than 1% filled buckets, sampling the key
      * space is expensive, so stop here waiting for better times...
      * The dictionary will be resized asap. */
     if (buckets > 0 && (numkeys * 100 / buckets < 1)) {
-        return C_ERR;
+        return 0;
     }
     /* If the hashtable is currently being imported, skip it. */
     if (server.cluster_enabled && clusterIsSlotImporting(didx)) {
-        return C_ERR;
+        return 0;
     }
-    return C_OK;
+    return 1;
 }
 
 void activeExpireCycle(int type) {

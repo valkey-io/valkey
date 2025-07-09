@@ -33,6 +33,7 @@
 #include "server.h"
 #include "bio.h"
 #include "script.h"
+#include "cluster_migrate.h"
 #include <math.h>
 
 /* ----------------------------------------------------------------------------
@@ -145,7 +146,11 @@ int evictionPoolPopulate(serverDb *db, kvstore *samplekvs, struct evictionPoolEn
     int j, k, count;
     void *samples[server.maxmemory_samples];
 
-    int slot = kvstoreGetFairRandomHashtableIndex(samplekvs);
+    int slot = kvstoreGetFairRandomHashtableIndex(samplekvs, getOwnedSlotsHashtablePredicate());
+    if (slot == -1) {
+        /* Either there are no keys, or they are all not owned by this node */
+        return 0;
+    }
     count = kvstoreHashtableSampleEntries(samplekvs, slot, &samples[0], server.maxmemory_samples);
     for (j = 0; j < count; j++) {
         unsigned long long idle;
@@ -350,6 +355,11 @@ size_t freeMemoryGetNotCountedMemory(void) {
     if (server.aof_state != AOF_OFF) {
         overhead += sdsAllocSize(server.aof_buf);
     }
+
+    if (server.cluster_enabled && clusterIsAnySlotExporting()) {
+        overhead += clusterGetTotalSlotExportBufferMemory();
+    }
+
     return overhead;
 }
 
@@ -608,6 +618,13 @@ int performEvictions(void) {
                         kvs = server.db[bestdbid]->expires;
                     }
                     void *entry = NULL;
+
+                    /* Keys in importing slots will not be evicted since they
+                     * are owned by the source node still. */
+                    if (server.cluster_enabled && clusterIsSlotImporting(pool[k].slot)) {
+                        continue;
+                    }
+
                     int found = kvstoreHashtableFind(kvs, pool[k].slot, pool[k].key, &entry);
 
                     /* Remove the entry from the pool. */
@@ -645,9 +662,9 @@ int performEvictions(void) {
                 } else {
                     kvs = db->expires;
                 }
-                int slot = kvstoreGetFairRandomHashtableIndex(kvs);
+                int slot = kvstoreGetFairRandomHashtableIndex(kvs, getOwnedSlotsHashtablePredicate());
                 void *entry;
-                if (kvstoreHashtableRandomEntry(kvs, slot, &entry)) {
+                if (slot != -1 && kvstoreHashtableRandomEntry(kvs, slot, &entry)) {
                     bestkey = objectGetKey((robj *)entry);
                     bestdbid = j;
                     bestslot = slot;

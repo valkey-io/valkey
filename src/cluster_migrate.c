@@ -779,6 +779,17 @@ void clusterCommandMigrate(client *c) {
             }
         }
 
+        listRewind(new_slot_migrations, &li);
+        while ((ln = listNext(&li))) {
+            slotMigrationLink *link = (slotMigrationLink *)ln->value;
+            if (doSlotRangeListsOverlap(link->slot_ranges, slot_ranges)) {
+                addReplyError(c, "Slot ranges in migrations overlap");
+                listRelease(slot_ranges);
+                listRelease(new_slot_migrations);
+                return;
+            }
+        }
+
         if (curr_index + 1 >= c->argc || strcasecmp(c->argv[curr_index]->ptr, "node")) {
             addReplyErrorObject(c, shared.syntaxerr);
             listRelease(slot_ranges);
@@ -1040,8 +1051,9 @@ void slotExportBeginStreaming(slotMigrationLink *link) {
 void slotExportTryDoPause(slotMigrationLink *link) {
     serverAssert(link->type == SLOT_MIGRATION_EXPORT);
 
-    if (server.debug_slot_migration_prevent_pause || (server.slot_migration_max_failover_repl_bytes > 0 &&
-                                                      link->client->reply_bytes > (size_t)server.slot_migration_max_failover_repl_bytes)) {
+    if (server.debug_slot_migration_prevent_pause ||
+        (server.slot_migration_max_failover_repl_bytes >= 0 &&
+         getClientOutputBufferMemoryUsage(link->client) > (size_t)server.slot_migration_max_failover_repl_bytes)) {
         return;
     }
     serverLog(LL_NOTICE,
@@ -1127,7 +1139,8 @@ void clusterCommandSyncSlotsRequestFailover(client *c) {
 
 /* Predicate function supplied to rewriteAppendOnlyFileRio to filter to only
  * slots in this migration. */
-int shouldRewriteHashtableIndex(int didx, void *privdata) {
+int shouldRewriteHashtableIndex(int didx, hashtable *ht, void *privdata) {
+    UNUSED(ht);
     return isSlotInSlotRanges(didx, (list *)privdata);
 }
 
@@ -1322,6 +1335,19 @@ int clusterIsAnySlotExporting(void) {
         }
     }
     return 0;
+}
+
+size_t clusterGetTotalSlotExportBufferMemory(void) {
+    listNode *ln;
+    listIter li;
+    listRewind(server.cluster->slot_migration_links, &li);
+    size_t result = 0;
+    while ((ln = listNext(&li)) != NULL) {
+        slotMigrationLink *link = ln->value;
+        if (link->type != SLOT_MIGRATION_EXPORT || link->client == NULL) continue;
+        result += getClientOutputBufferMemoryUsage(link->client);
+    }
+    return result;
 }
 
 /* Create a slot export link with the given target and slot ranges. */

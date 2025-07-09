@@ -3070,7 +3070,7 @@ void aofOpenIfNeededOnServerStart(void);
 void aofManifestFree(aofManifest *am);
 int aofDelHistoryFiles(void);
 int aofRewriteLimited(void);
-int rewriteAppendOnlyFileRio(rio *aof, int skip_timestamp, kvstoreIteratorPredicate predicate, void *privdata);
+int rewriteAppendOnlyFileRio(rio *aof, int skip_timestamp, kvstoreHashtablePredicate predicate, void *privdata);
 
 /* Child info */
 void openChildInfoPipe(void);
@@ -3533,6 +3533,7 @@ size_t lazyfreeGetFreedObjectsCount(void);
 void lazyfreeResetStats(void);
 void freeObjAsync(robj *key, robj *obj, int dbid);
 void freeReplicationBacklogRefMemAsync(list *blocks, rax *index);
+kvstoreHashtablePredicate *getOwnedSlotsHashtablePredicate(void);
 
 /* API to get key arguments from commands */
 #define GET_KEYSPEC_DEFAULT 0

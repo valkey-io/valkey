@@ -2196,7 +2196,7 @@ werr:
     return 0;
 }
 
-int rewriteAppendOnlyFileRio(rio *aof, int skip_timestamp, kvstoreIteratorPredicate predicate, void *privdata) {
+int rewriteAppendOnlyFileRio(rio *aof, int skip_timestamp, kvstoreHashtablePredicate predicate, void *privdata) {
     int j;
     long key_count = 0;
     long long updated_time = 0;

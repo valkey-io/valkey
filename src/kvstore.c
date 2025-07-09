@@ -74,7 +74,7 @@ struct _kvstoreIterator {
     kvstore *kvs;
     long long didx;
     long long next_didx;
-    kvstoreIteratorPredicate *predicate;
+    kvstoreHashtablePredicate *predicate;
     void *predicate_privdata;
     hashtableIterator di;
 };
@@ -391,7 +391,7 @@ unsigned long long kvstoreScan(kvstore *kvs,
                                unsigned long long cursor,
                                int onlydidx,
                                hashtableScanFunction scan_cb,
-                               kvstoreScanShouldSkipHashtable *skip_cb,
+                               kvstoreHashtablePredicate *predicate,
                                void *privdata) {
     unsigned long long next_cursor = 0;
     /* During hash table traversal, 48 upper bits in the cursor are used for positioning in the HT.
@@ -413,7 +413,7 @@ unsigned long long kvstoreScan(kvstore *kvs,
 
     hashtable *ht = kvstoreGetHashtable(kvs, didx);
 
-    int skip = !ht || (skip_cb && skip_cb(didx, ht));
+    int skip = !ht || (predicate && !predicate(didx, ht, privdata));
     if (!skip) {
         next_cursor = hashtableScan(ht, cursor, scan_cb, privdata);
         /* In hashtableScan, scan_cb may delete entries (e.g., in active expire case). */
@@ -433,7 +433,7 @@ unsigned long long kvstoreScan(kvstore *kvs,
 
 /*
  * This functions increases size of kvstore to match desired number.
- * It resizes all individual hash tables, unless skip_cb indicates otherwise.
+ * It resizes all individual hash tables, unless predicate indicates otherwise.
  *
  * Based on the parameter `try_expand`, appropriate hashtable expand API is invoked.
  * if try_expand is set to 1, `hashtableTryExpand` is used else `hashtableExpand`.
@@ -457,13 +457,55 @@ int kvstoreExpand(kvstore *kvs, uint64_t newsize, int try_expand, kvstoreExpandS
     return 1;
 }
 
+/* Get the index of a key (1 indexed) within the kvstore, excluding any hashtables filtered by
+ * predicate. If no such key exists, return 0. */
+unsigned long kvstoreGetRandomKeyIndex(kvstore *kvs, kvstoreHashtablePredicate *predicate) {
+    if (!predicate) {
+        return kvstoreSize(kvs) ? random() % kvstoreSize(kvs) + 1 : 0;
+    }
+
+    /* Get the size of all non-filtered hashtables */
+    unsigned long long non_filtered_count = 0;
+    for (int i = 0; i < kvs->num_hashtables; i++) {
+        hashtable *ht = kvstoreGetHashtable(kvs, i);
+        if (ht && predicate(i, ht, NULL)) {
+            non_filtered_count += hashtableSize(ht);
+        }
+    }
+    if (non_filtered_count == 0) return 0;
+
+    /* We compute a random index, excluding filtered hashtables. We can then convert this back by
+     * iterating over the hashtables and adding back all skipped hashtables until we arrive at the
+     * logical index chosen here. */
+    unsigned long long logical_index = random() % non_filtered_count;
+    unsigned long long actual_index = 0;
+    for (int i = 0; i < kvs->num_hashtables; i++) {
+        hashtable *ht = kvstoreGetHashtable(kvs, i);
+        if (!ht) continue;
+
+        if (!predicate(i, ht, NULL)) {
+            actual_index += hashtableSize(ht);
+            continue;
+        }
+        unsigned long long to_add = logical_index < hashtableSize(ht) ? logical_index : hashtableSize(ht);
+        actual_index += to_add;
+        logical_index -= to_add;
+        if (logical_index == 0) break;
+    }
+    return actual_index + 1;
+}
+
 /* Returns fair random hashtable index, probability of each hashtable being
  * returned is proportional to the number of elements that hash table holds.
  * This function guarantees that it returns a hashtable-index of a non-empty
  * hashtable, unless the entire kvstore is empty. Time complexity of this
- * function is O(log(kvs->num_hashtables)). */
-int kvstoreGetFairRandomHashtableIndex(kvstore *kvs) {
-    unsigned long target = kvstoreSize(kvs) ? (random() % kvstoreSize(kvs)) + 1 : 0;
+ * function is O(log(kvs->num_hashtables)).
+ *
+ * If all hashtables are empty, this function returns -1.
+ *
+ * An optional predicate can be provided, ensuring the hashtables would be skipped. */
+int kvstoreGetFairRandomHashtableIndex(kvstore *kvs, kvstoreHashtablePredicate *predicate) {
+    unsigned long target = kvstoreGetRandomKeyIndex(kvs, predicate);
     return kvstoreFindHashtableIndexByKeyIndex(kvs, target);
 }
 
@@ -525,6 +567,8 @@ void kvstoreGetStats(kvstore *kvs, char *buf, size_t bufsize, int full) {
  *
  * The return value is 0 based hashtable-index, and the range of the target is [1..kvstoreSize], kvstoreSize inclusive.
  *
+ * If the target is 0, or the kvstore is empty, returns -1, indicating no such hashtable.
+ *
  * To find the hashtable, we start with the root node of the binary index tree and search through its children
  * from the highest index (2^num_hashtables_bits in our case) to the lowest index. At each node, we check if the target
  * value is greater than the node's value. If it is, we remove the node's value from the target and recursively
@@ -532,7 +576,8 @@ void kvstoreGetStats(kvstore *kvs, char *buf, size_t bufsize, int full) {
  * Time complexity of this function is O(log(kvs->num_hashtables))
  */
 int kvstoreFindHashtableIndexByKeyIndex(kvstore *kvs, unsigned long target) {
-    if (kvs->num_hashtables == 1 || kvstoreSize(kvs) == 0) return 0;
+    if (kvs->num_hashtables == 1) return 0;
+    if (kvstoreSize(kvs) == 0 || target == 0) return -1;
     assert(target <= kvstoreSize(kvs));
 
     int result = 0, bit_mask = 1 << kvs->num_hashtables_bits;
@@ -590,12 +635,12 @@ kvstoreIterator *kvstoreIteratorInit(kvstore *kvs, uint8_t flags) {
 }
 
 /* Returns kvstore iterator that filters out hash tables based on the predicate.*/
-kvstoreIterator *kvstoreFilteredIteratorInit(kvstore *kvs, uint8_t flags, kvstoreIteratorPredicate *predicate, void *privdata) {
+kvstoreIterator *kvstoreFilteredIteratorInit(kvstore *kvs, uint8_t flags, kvstoreHashtablePredicate *predicate, void *privdata) {
     kvstoreIterator *kvs_it = zmalloc(sizeof(*kvs_it));
     kvs_it->kvs = kvs;
     kvs_it->didx = -1;
     kvs_it->next_didx = kvstoreGetFirstNonEmptyHashtableIndex(kvs_it->kvs);
-    while (kvs_it->next_didx != -1 && predicate && !predicate(kvs_it->next_didx, privdata)) {
+    while (kvs_it->next_didx != -1 && predicate && !predicate(kvs_it->next_didx, kvstoreGetHashtable(kvs, kvs_it->next_didx), privdata)) {
         kvs_it->next_didx = kvstoreGetNextNonEmptyHashtableIndex(kvs_it->kvs, kvs_it->next_didx);
     }
     kvs_it->predicate = predicate;
@@ -631,7 +676,7 @@ static hashtable *kvstoreIteratorNextHashtable(kvstoreIterator *kvs_it) {
     kvs_it->didx = kvs_it->next_didx;
     do {
         kvs_it->next_didx = kvstoreGetNextNonEmptyHashtableIndex(kvs_it->kvs, kvs_it->next_didx);
-    } while (kvs_it->next_didx != -1 && kvs_it->predicate && !kvs_it->predicate(kvs_it->next_didx, kvs_it->predicate_privdata));
+    } while (kvs_it->next_didx != -1 && kvs_it->predicate && !kvs_it->predicate(kvs_it->next_didx, kvstoreGetHashtable(kvs_it->kvs, kvs_it->next_didx), kvs_it->predicate_privdata));
     return kvs_it->kvs->hashtables[kvs_it->didx];
 }
 

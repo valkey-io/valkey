@@ -29,7 +29,9 @@ tags {external:skip needs:other-server cluster singledb} {
             }
         }
     }
+}
 
+tags {external:skip needs:other-server cluster singledb compatible-redis} {
     test "Cross version cluster - PING/PONG" {
         start_server {config "minimal-cluster-legacy.conf" start-other-server 1} {
             set other_node_name [r CLUSTER MYID]

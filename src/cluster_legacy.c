@@ -3623,7 +3623,7 @@ int clusterProcessPacket(clusterLink *link) {
         if (sender) {
             if (sender_claims_to_be_primary) {
                 /* Node is a primary. */
-                if (nodeIsReplica(sender)) {
+                if (sender_last_reported_as_replica) {
                     serverLog(LL_DEBUG, "node %.40s (%s) announces that it is a %s in shard %.40s", sender->name,
                               sender->human_nodename, sender_claims_to_be_primary ? "primary" : "replica", sender->shard_id);
                     clusterSetNodeAsPrimary(sender);

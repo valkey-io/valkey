@@ -21,7 +21,8 @@ static int isSlotExportPauseTimedOut(slotMigrationLink *link);
 static void resetSlotMigrationLink(slotMigrationLink *link);
 static void finishSlotMigrationLink(slotMigrationLink *link, slotMigrationLinkState state, char *message);
 static void freeSlotMigrationLink(void *o);
-sds generateSlotMigrationLinkDescription(slotMigrationLink *link, clusterNode *node);
+static sds generateSlotMigrationLinkDescription(slotMigrationLink *link, clusterNode *node);
+static void slotExportTryUnpause(void);
 
 /* Create an empty list of slot ranges. */
 list *createSlotRangeList(void) {
@@ -718,6 +719,21 @@ int clusterIsSlotExporting(int slot) {
     return 0;
 }
 
+/* Returns the name of the slot export target for the given slot, or NULL if the
+ * slot is not being exported. */
+char *getNameOfSlotExportTarget(int slot) {
+    listNode *ln;
+    listIter li;
+    listRewind(server.cluster->slot_migration_links, &li);
+    while ((ln = listNext(&li)) != NULL) {
+        slotMigrationLink *link = ln->value;
+        if (link->type != SLOT_MIGRATION_EXPORT) continue;
+        if (!isSlotMigrationLinkInProgress(link)) continue;
+        if (isSlotInSlotRanges(slot, link->slot_ranges)) return link->nodename;
+    }
+    return NULL;
+}
+
 /* Sent by an operator to the current owner of one or more slot ranges. The
  * source will attempt to migrate the slot ranges to the specified target node. */
 void clusterCommandMigrate(client *c) {
@@ -831,14 +847,13 @@ void clusterCommandMigrate(client *c) {
     addReply(c, shared.ok);
 }
 
-slotMigrationLink *clusterLookupExportLink(sds linkname) {
+slotMigrationLink *clusterLookupMigrationLink(sds linkname) {
     listNode *ln;
     listIter li;
     if (sdslen(linkname) != CLUSTER_NAMELEN) return NULL;
     listRewind(server.cluster->slot_migration_links, &li);
     while ((ln = listNext(&li)) != NULL) {
         slotMigrationLink *link = ln->value;
-        if (link->type != SLOT_MIGRATION_EXPORT) continue;
         if (!memcmp(linkname, link->linkname, CLUSTER_NAMELEN)) return link;
     }
     return NULL;
@@ -867,7 +882,7 @@ void clusterCommandCancelMigration(client *c) {
         addReply(c, shared.ok);
         return;
     } else if (!strcasecmp(c->argv[2]->ptr, "link") && c->argc > 3) {
-        slotMigrationLink *link = clusterLookupExportLink(c->argv[3]->ptr);
+        slotMigrationLink *link = clusterLookupMigrationLink(c->argv[3]->ptr);
         if (!link || !isSlotMigrationLinkInProgress(link)) {
             addReplyErrorFormat(c, "No outgoing migration with link name found.");
             return;
@@ -876,10 +891,10 @@ void clusterCommandCancelMigration(client *c) {
             addReplyErrorFormat(c, "Migrations must be cancelled on the node that currently owns the slots.");
             return;
         }
-        finishSlotMigrationLink(link, SLOT_MIGRATION_LINK_CANCELLED, NULL);
         serverLog(LL_NOTICE,
-                  "Slot migration %s cancelled due to operator's request.",
+                  "Cancelling slot migration %s due to operator's request.",
                   link->description);
+        finishSlotMigrationLink(link, SLOT_MIGRATION_LINK_CANCELLED, NULL);
         addReply(c, shared.ok);
         return;
     } else {
@@ -1209,19 +1224,6 @@ int clusterSlotMigrationShouldInstallWriteHandler(client *c) {
         return 1;
     }
     return link->state != SLOT_EXPORT_SNAPSHOTTING;
-}
-
-/* Fail all ongoing slot exports. */
-void failAllSlotExports(char *message) {
-    listIter li;
-    listNode *ln;
-    listRewind(server.cluster->slot_migration_links, &li);
-    while ((ln = listNext(&li))) {
-        slotMigrationLink *link = (slotMigrationLink *)ln->value;
-        if (link->type != SLOT_MIGRATION_EXPORT) continue;
-        if (!isSlotMigrationLinkInProgress(link)) continue;
-        finishSlotMigrationLink(link, SLOT_MIGRATION_LINK_FAILED, message);
-    }
 }
 
 /* Feed the slot export links with the given argv and argc from the replication
@@ -1728,6 +1730,7 @@ void finishSlotMigrationLink(slotMigrationLink *link, slotMigrationLinkState sta
     if (link->type == SLOT_MIGRATION_EXPORT) {
         /* If we finish the export, we should not remain paused */
         link->mf_end = 0;
+        slotExportTryUnpause();
     }
     if (link->type == SLOT_MIGRATION_IMPORT) {
         /* Defer cleanup until beforeSleep. */
@@ -1829,7 +1832,6 @@ void clusterSlotMigrationCron(void) {
     slotMigrationLink *link;
     listNode *ln;
     listIter li;
-    int paused = 0;
     listRewind(server.cluster->slot_migration_links, &li);
     while ((ln = listNext(&li)) != NULL) {
         link = ln->value;
@@ -1863,17 +1865,24 @@ void clusterSlotMigrationCron(void) {
             }
         }
         proceedWithSlotMigration(link);
-        if (link->mf_end) {
-            paused++;
-        }
     }
 
     clusterCleanupSlotMigrationLog();
+    slotExportTryUnpause();
+}
 
-    /* If no exports are paused, we can unpause */
-    if (!paused && getPausedActionsWithPurpose(PAUSE_DURING_SLOT_MIGRATION)) {
-        unpauseActions(PAUSE_DURING_SLOT_MIGRATION);
+void slotExportTryUnpause(void) {
+    if (getPausedActionsWithPurpose(PAUSE_DURING_SLOT_MIGRATION) == 0) return;
+    listNode *ln;
+    listIter li;
+    listRewind(server.cluster->slot_migration_links, &li);
+    while ((ln = listNext(&li)) != NULL) {
+        slotMigrationLink *link = ln->value;
+        if (link->mf_end) {
+            return;
+        }
     }
+    unpauseActions(PAUSE_DURING_SLOT_MIGRATION);
 }
 
 /* Sent by either the target or the source as a liveness check. */

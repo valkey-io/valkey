@@ -82,5 +82,6 @@ void clusterUpdateSlotImportsOnOwnershipChange(void);
 void clusterCleanupSlotMigrationLog(void);
 void clusterHandleFlushDuringSlotMigration(void);
 size_t clusterGetTotalSlotExportBufferMemory(void);
+char *getNameOfSlotExportTarget(int slot);
 
 #endif /* __CLUSTER_MIGRATE_H */

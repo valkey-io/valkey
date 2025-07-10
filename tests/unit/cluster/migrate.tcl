@@ -120,24 +120,13 @@ proc setup_eviction_test {idx policy body} {
 
 }
 
-proc assert_causes_syncslots_fail {node_idx args} {
-    set client [valkey_client_by_addr [srv -$node_idx host] [srv -$node_idx port]]
-    assert_match "*CLUSTER SYNCSLOTS FAIL*" [$client {*}$args]
-    $client deferred 1
+proc assert_causes_conn_drop {node_idx body} {
+    upvar 1 client vc
+    set vc [valkey_client_by_addr [srv -$node_idx host] [srv -$node_idx port]]
     catch {
-        $client read
+        uplevel 1 $body
     } result
-    $client deferred 0
-    $client close
-    assert_match "*I/O error reading reply*" $result
-}
-
-proc assert_causes_conn_drop {node_idx args} {
-    set client [valkey_client_by_addr [srv -$node_idx host] [srv -$node_idx port]]
-    catch {
-        $client {*}$args
-    } result
-    $client close
+    $vc close
     assert_match "*I/O error reading reply*" $result
 }
 
@@ -176,6 +165,8 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
         assert_error "*Slot range 0-5 overlaps with previous range 3-6*" {R 0 CLUSTER MIGRATE SLOTSRANGE 3 6 0 5}
         assert_error "*syntax error*" {R 0 CLUSTER MIGRATE SLOTSRANGE 0 0}
         assert_error "*syntax error*" {R 0 CLUSTER MIGRATE SLOTSRANGE 0 0 NODE}
+        assert_error "*Invalid node name*" {R 0 CLUSTER MIGRATE SLOTSRANGE 0 0 NODE blah}
+        assert_error "*Unknown node name*" {R 0 CLUSTER MIGRATE SLOTSRANGE 0 0 NODE $fake_linkname}
         assert_error "*Slot ranges in migrations overlap*" {R 0 CLUSTER MIGRATE SLOTSRANGE 1 1 NODE $node1_id SLOTSRANGE 0 2 NODE $node2_id} 
 
         set source_node_id [R 0 CLUSTER MYID]
@@ -390,6 +381,7 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
         assert {[dict get [get_migration_by_linkname 0 $linkname1] state] eq "waiting-for-paused"}
         assert {[dict get [get_migration_by_linkname 0 $linkname2] state] eq "waiting-for-paused"}
 
+        assert_error "*Migrations must be cancelled on the node that currently owns the slots*" {R 0 CLUSTER CANCELMIGRATION LINK $linkname1}
         assert_match "OK" [R 2 CLUSTER CANCELMIGRATION LINK $linkname1]
 
         # One link is closed, migration log says "cancelled"
@@ -1116,6 +1108,9 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
             set_debug_prevent_failover 1
             assert_match "OK" [R 0 CLUSTER MIGRATE SLOTSRANGE 0 0 NODE $node2_id]
             set linkname [get_link_name 0 0]
+            wait_for_migration_field 0 $linkname state failover-granted
+
+            assert_match "slot_migration_in_progress" [s -0 paused_reason]
 
             # Our link should get dropped after pause timeout expires
             wait_for_migration_field 0 $linkname state failed
@@ -1126,7 +1121,38 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
             assert {[string match {*Connection lost to source*} [dict get [get_migration_by_linkname 2 $linkname] message]]}
 
             # Validate no longer paused
-            populate 1 "$0_slot_tag:" 1000 -0
+            assert_match "none" [s -0 paused_reason]
+
+            # Reset manual failover timeout
+            R 0 CONFIG SET cluster-manual-failover-timeout $mf_timeout_old
+
+            # Cleanup for the next test
+            set_debug_prevent_failover 0
+            assert_match "OK" [R 0 FLUSHDB SYNC]
+        }
+    }
+
+    test "Export unpauses when cancelled" {
+        assert_does_not_resync {
+            # Lower manual failover timeout for this test
+            set mf_timeout_old [lindex [R 0 CONFIG GET cluster-manual-failover-timeout] 1]
+            R 0 CONFIG SET cluster-manual-failover-timeout 100
+
+            # Use debug command to prevent failover
+            set_debug_prevent_failover 1
+            assert_match "OK" [R 0 CLUSTER MIGRATE SLOTSRANGE 0 0 NODE $node2_id]
+            set linkname [get_link_name 0 0]
+            wait_for_migration_field 0 $linkname state failover-granted
+
+            assert_match "slot_migration_in_progress" [s -0 paused_reason]
+            assert_match "write" [s -0 paused_actions]
+
+            # Cancel the link
+            assert_match "OK" [R 0 CLUSTER CANCELMIGRATION LINK $linkname]
+            wait_for_migration_field 0 $linkname state cancelled
+            wait_for_migration_field 2 $linkname state failed
+
+            assert_match "none" [s -0 paused_reason]
 
             # Reset manual failover timeout
             R 0 CONFIG SET cluster-manual-failover-timeout $mf_timeout_old
@@ -1139,15 +1165,37 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
 
     test "CLUSTER SYNCSLOTS invalid state machine traversal" {
         assert_does_not_resync {
-            # Invalid state machine traversal on export node will send SYNCSLOTS FAIL
-            assert_causes_conn_drop 0 CLUSTER SYNCSLOTS PAUSE
-            assert_causes_conn_drop 0 CLUSTER SYNCSLOTS REQUEST-FAILOVER
-
-            # Invalid state machine traversal on import node just drops connection
-            assert_causes_conn_drop 0 CLUSTER SYNCSLOTS SNAPSHOT-EOF
-            assert_causes_conn_drop 0 CLUSTER SYNCSLOTS PAUSED
-            assert_causes_conn_drop 0 CLUSTER SYNCSLOTS FAILOVER-GRANTED
-            assert_causes_conn_drop 0 CLUSTER SYNCSLOTS ACK
+            assert_causes_conn_drop 0 {
+                $client CLUSTER SYNCSLOTS PAUSE
+            }
+            assert_causes_conn_drop 0 {
+                $client CLUSTER SYNCSLOTS REQUEST-FAILOVER
+            }
+            assert_causes_conn_drop 0 {
+                $client CLUSTER SYNCSLOTS SNAPSHOT-EOF
+            }
+            assert_causes_conn_drop 0 {
+                $client CLUSTER SYNCSLOTS PAUSED
+            }
+            assert_causes_conn_drop 0 {
+                $client CLUSTER SYNCSLOTS FAILOVER-GRANTED
+            }
+            assert_causes_conn_drop 0 {
+                $client CLUSTER SYNCSLOTS ACK
+            }
+            assert_causes_conn_drop 0 {
+                $client CLUSTER SYNCSLOTS ESTABLISH SOURCE $node2_id LINKNAME $fake_linkname SLOTSRANGE 16383 16383
+                $client CLUSTER SYNCSLOTS SNAPSHOT-EOF
+                $client CLUSTER SYNCSLOTS SNAPSHOT-EOF
+            }
+            assert_causes_conn_drop 0 {
+                $client CLUSTER SYNCSLOTS ESTABLISH SOURCE $node2_id LINKNAME $fake_linkname SLOTSRANGE 16383 16383
+                $client CLUSTER SYNCSLOTS PAUSED
+            }
+            assert_causes_conn_drop 0 {
+                $client CLUSTER SYNCSLOTS ESTABLISH SOURCE $node2_id LINKNAME $fake_linkname SLOTSRANGE 16383 16383
+                $client CLUSTER SYNCSLOTS FAILOVER-GRANTED
+            }
         }
     }
 
@@ -1169,19 +1217,37 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
             assert_error "*No end slot for final slot range*" {R 0 CLUSTER SYNCSLOTS ESTABLISH SOURCE $node2_id LINKNAME $fake_linkname SLOTSRANGE 0}
 
             # Unknown target
-            assert_error "*Target node does not know the source node*" {R 0 CLUSTER SYNCSLOTS ESTABLISH SOURCE $fake_linkname LINKNAME $fake_linkname SLOTSRANGE 0 0}
+            assert_error "*Target node does not know the source node*" {R 0 CLUSTER SYNCSLOTS ESTABLISH SOURCE $fake_linkname LINKNAME $fake_linkname SLOTSRANGE 16383 16383}
 
             # Unowned slotsrange
             assert_error "*Target node does not agree about current slot ownership*" {R 0 CLUSTER SYNCSLOTS ESTABLISH SOURCE $node1_id LINKNAME $fake_linkname SLOTSRANGE 16383 16383}
 
             # Not primary
-            assert_error "*Target node is not a primary*" {R 3 CLUSTER SYNCSLOTS ESTABLISH SOURCE $node2_id LINKNAME $fake_linkname SLOTSRANGE 0 0}
+            assert_error "*Target node is not a primary*" {R 3 CLUSTER SYNCSLOTS ESTABLISH SOURCE $node2_id LINKNAME $fake_linkname SLOTSRANGE 16383 16383}
 
             # Invalid target name
-            assert_error "*syntax error*" {R 0 CLUSTER SYNCSLOTS ESTABLISH SOURCE invalid LINKNAME $fake_linkname SLOTSRANGE 0 0}
+            assert_error "*syntax error*" {R 0 CLUSTER SYNCSLOTS ESTABLISH SOURCE invalid LINKNAME $fake_linkname SLOTSRANGE 16383 16383}
 
             # Invalid link name
-            assert_error "*syntax error*" {R 0 CLUSTER SYNCSLOTS ESTABLISH SOURCE $node2_id LINKNAME invalid SLOTSRANGE 0 0}
+            assert_error "*syntax error*" {R 0 CLUSTER SYNCSLOTS ESTABLISH SOURCE $node2_id LINKNAME invalid SLOTSRANGE 16383 16383}
+
+            # Duplicated fields
+            assert_error "*syntax error*" {R 0 CLUSTER SYNCSLOTS ESTABLISH SOURCE $node2_id LINKNAME $fake_linkname SLOTSRANGE 16383 16383 SLOTSRANGE 16383 16383}
+            assert_error "*syntax error*" {R 0 CLUSTER SYNCSLOTS ESTABLISH SOURCE $node2_id LINKNAME $fake_linkname LINKNAME $fake_linkname SLOTSRANGE 16383 16383}
+            assert_error "*syntax error*" {R 0 CLUSTER SYNCSLOTS ESTABLISH SOURCE $node2_id SOURCE $node2_id LINKNAME $fake_linkname SLOTSRANGE 16383 16383}
+
+            # Unknown field
+            assert_error "*syntax error*" {R 0 CLUSTER SYNCSLOTS ESTABLISH SOURCE $node2_id LINKNAME $fake_linkname SLOTSRANGE 16383 16383 BAD_FIELD bad_value}
+
+            # Already importing
+            set_debug_prevent_pause 1
+            assert_match "OK" [R 2 CLUSTER MIGRATE SLOTSRANGE 16383 16383 NODE $node0_id]
+            set linkname [get_link_name 2 16383]
+            wait_for_migration_field 0 $linkname state waiting-for-paused
+            assert_error "*Slot is already being imported on the target by a different migration*" {R 0 CLUSTER SYNCSLOTS ESTABLISH SOURCE $node2_id LINKNAME $fake_linkname SLOTSRANGE 16383 16383}
+            assert_match "OK" [R 2 CLUSTER CANCELMIGRATION ALL]
+            wait_for_migration_field 0 $linkname state failed
+            set_debug_prevent_pause 0
         }
     }
 

@@ -2694,8 +2694,13 @@ void clusterUpdateSlotsConfigWith(clusterNode *sender, uint64_t senderConfigEpoc
 
             /* We rebind the slot to the new node claiming it if
              * the slot was unassigned or the new node claims it with a
-             * greater configEpoch. */
-            if (isSlotUnclaimed(j) || server.cluster->slots[j]->configEpoch < senderConfigEpoch) {
+             * greater configEpoch. Additionally, we always allow slots we are
+             * migrating to be claimed by the new node, regardless of epoch. */
+            char *slotExportTargetName = getNameOfSlotExportTarget(j);
+            if (isSlotUnclaimed(j) ||
+                server.cluster->slots[j]->configEpoch < senderConfigEpoch ||
+                (slotExportTargetName &&
+                 !memcmp(slotExportTargetName, sender->name, CLUSTER_NAMELEN))) {
                 if (!isSlotUnclaimed(j) && !areInSameShard(server.cluster->slots[j], sender)) {
                     serverLog(LL_NOTICE,
                               "Slot %d is migrated from node %.40s (%s) in shard %.40s"
@@ -2712,7 +2717,7 @@ void clusterUpdateSlotsConfigWith(clusterNode *sender, uint64_t senderConfigEpoc
                     dirty_slots_count++;
                 }
 
-                if (clusterIsSlotExporting(j)) {
+                if (slotExportTargetName) {
                     exporting_slots_count++;
                 }
 

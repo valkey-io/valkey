@@ -36,7 +36,6 @@
 #include "expiry_set.h"
 #include "server.h"
 #include "zmalloc.h"
-#include <assert.h>
 
 /* Remove a single expiry set from the ExpirySet.
  *

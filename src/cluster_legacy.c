@@ -1661,6 +1661,7 @@ clusterNode *createClusterNode(char *nodename, int flags) {
     node->replicaof = NULL;
     node->last_in_ping_gossip = 0;
     node->ping_sent = node->pong_received = 0;
+    node->outbound_link_attempt_time = 0;
     node->data_received = 0;
     node->meet_sent = 0;
     node->fail_time = 0;
@@ -5365,7 +5366,7 @@ static int nodeExceedsHandshakeTimeout(clusterNode *node, mstime_t now) {
 /* Check if the node is disconnected and re-establish the connection.
  * Also update a few stats while we are here, that can be used to make
  * better decisions in other part of the code. */
-static int clusterNodeCronHandleReconnect(clusterNode *node, mstime_t now) {
+static int clusterNodeCronHandleReconnect(clusterNode *node, mstime_t now, int *cluster_conn_attempts, const long long max_conn_attempts) {
     /* Not interested in reconnecting the link with myself or nodes
      * for which we have no address. */
     if (node->flags & (CLUSTER_NODE_MYSELF | CLUSTER_NODE_NOADDR)) return 1;
@@ -5394,6 +5395,11 @@ static int clusterNodeCronHandleReconnect(clusterNode *node, mstime_t now) {
     }
 
     if (node->link == NULL) {
+        if (!node->inbound_link && (now - node->outbound_link_attempt_time < server.cluster_node_timeout / 10 && *cluster_conn_attempts > max_conn_attempts)) {
+            return 1;
+        }
+        node->outbound_link_attempt_time = now;
+        (*cluster_conn_attempts)++;
         clusterLink *link = createClusterLink(node);
         link->conn = connCreate(connTypeOfCluster());
         connSetPrivateData(link->conn, link);
@@ -5439,6 +5445,28 @@ static void clusterNodeCronFreeLinkOnBufferLimitReached(clusterNode *node) {
     freeClusterLinkOnBufferLimitReached(node->inbound_link);
 }
 
+/**
+ * Compute the maximum number of connection attempts the cluster-cron
+ * loop should schedule in a single cron.
+ *
+ * We want to guarantee that every node is contacted twice within cluster node timeout.
+ */
+static long long maxConnectionAttemptsPerCron(const int nodes, const long long timeout_ms) {
+    if (nodes <= 0 || timeout_ms <= 0)
+        return 0;
+    /*
+     * We run the cron loop every 100 ms.  To reach 100 % of the nodes
+     * within the timeout, we need: ceil(nodes * 100 / timeout_ms)
+     * We use (a + b − 1) / b to give us the integer-ceil without using floating-point.
+     */
+    const long long min_nodes_for_coverage = (nodes * 100 + timeout_ms - 1) / timeout_ms;
+    /*
+     * Double the coverage budget so each node can be probed twice
+     * inside the timeout, improving resilience to packet loss.
+     */
+    return min_nodes_for_coverage * 10;
+}
+
 /* This is executed 10 times every second */
 void clusterCron(void) {
     dictIterator *di;
@@ -5450,6 +5478,7 @@ void clusterCron(void) {
     mstime_t min_pong = 0, now = mstime();
     clusterNode *min_pong_node = NULL;
     static unsigned long long iteration = 0;
+    int cluster_node_conn_attempts = 0;
 
     iteration++; /* Number of times this function was called so far. */
 
@@ -5459,6 +5488,7 @@ void clusterCron(void) {
     server.cluster->stats_pfail_nodes = 0;
     /* Run through some of the operations we want to do on each cluster node. */
     di = dictGetSafeIterator(server.cluster->nodes);
+    const long long max_conn_attempts = maxConnectionAttemptsPerCron(dictSize(server.cluster->nodes), server.cluster_node_timeout);
     while ((de = dictNext(di)) != NULL) {
         clusterNode *node = dictGetVal(de);
         /* We free the inbound or outboud link to the node if the link has an
@@ -5467,8 +5497,9 @@ void clusterCron(void) {
         /* The protocol is that function(s) below return non-zero if the node was
          * terminated.
          */
-        if (!server.debug_cluster_disable_reconnection && clusterNodeCronHandleReconnect(node, now)) continue;
+        if (!server.debug_cluster_disable_reconnection && clusterNodeCronHandleReconnect(node, now, &cluster_node_conn_attempts, max_conn_attempts)) continue;
     }
+    cluster_node_conn_attempts = 0;
     dictReleaseIterator(di);
 
     /* Ping some random node 1 time every 10 iterations, so that we usually ping

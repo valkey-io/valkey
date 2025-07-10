@@ -357,6 +357,7 @@ struct _clusterNode {
     mstime_t meet_sent;                     /* Unix time we sent latest meet packet */
     mstime_t fail_time;                     /* Unix time when FAIL flag was set */
     mstime_t orphaned_time;                 /* Starting time of orphaned primary condition */
+    mstime_t outbound_link_attempt_time;    /* Unix time we last tried to establish an outgoing link */
     mstime_t inbound_link_freed_time;       /* Last time we freed the inbound link for this node.
                                                If it was never freed, it is the same as ctime */
     long long repl_offset;                  /* Last known repl offset for this node. */

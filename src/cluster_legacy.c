@@ -5363,6 +5363,8 @@ static int nodeExceedsHandshakeTimeout(clusterNode *node, mstime_t now) {
     return now - node->ctime > getHandshakeTimeout() ? 1 : 0;
 }
 
+#define NODE_CONNECTION_RETRIES_PER_TIMEOUT 10
+
 /* Check if the node is disconnected and re-establish the connection.
  * Also update a few stats while we are here, that can be used to make
  * better decisions in other part of the code. */
@@ -5395,7 +5397,7 @@ static int clusterNodeCronHandleReconnect(clusterNode *node, mstime_t now, int *
     }
 
     if (node->link == NULL) {
-        if (!node->inbound_link && (now - node->outbound_link_attempt_time < server.cluster_node_timeout / 10 && *cluster_conn_attempts > max_conn_attempts)) {
+        if (!node->inbound_link && (now - node->outbound_link_attempt_time < server.cluster_node_timeout / NODE_CONNECTION_RETRIES_PER_TIMEOUT && *cluster_conn_attempts > max_conn_attempts)) {
             return 1;
         }
         node->outbound_link_attempt_time = now;
@@ -5461,10 +5463,10 @@ static long long maxConnectionAttemptsPerCron(const int nodes, const long long t
      */
     const long long min_nodes_for_coverage = (nodes * 100 + timeout_ms - 1) / timeout_ms;
     /*
-     * Double the coverage budget so each node can be probed twice
-     * inside the timeout, improving resilience to packet loss.
+     * Increase the coverage budget so each node can be probed 10 times
+     * inside the timeout.
      */
-    return min_nodes_for_coverage * 10;
+    return min_nodes_for_coverage * NODE_CONNECTION_RETRIES_PER_TIMEOUT;
 }
 
 /* This is executed 10 times every second */

@@ -4894,8 +4894,9 @@ void clusterFailoverReplaceYourPrimary(void) {
     clusterSetNodeAsPrimary(myself);
     replicationUnsetPrimary();
 
+    int remaining = old_primary->numslots;
     /* 2) Claim all the slots assigned to our primary. */
-    for (unsigned long byte = 0; byte < sizeof(old_primary->slots); ++byte) {
+    for (unsigned long byte = 0; byte < sizeof(old_primary->slots) && remaining > 0; ++byte) {
         unsigned char bits = old_primary->slots[byte];
         while (bits) {
             unsigned bit = __builtin_ctz(bits);
@@ -4903,6 +4904,7 @@ void clusterFailoverReplaceYourPrimary(void) {
             clusterDelSlot(slot);
             clusterAddSlot(myself, slot);
             bits &= bits - 1;
+            remaining--;
         }
     }
 
@@ -5759,15 +5761,17 @@ int clusterDelSlot(int slot) {
 int clusterDelNodeSlots(clusterNode *node) {
     int deleted = 0;
     if (node->numslots == 0) return 0;
+    int remaining = node->numslots;
 
-    for (unsigned long i = 0; i < sizeof(node->slots); ++i) {
-        unsigned char bits = node->slots[i];
+    for (unsigned long byte = 0; byte < sizeof(node->slots) && remaining > 0; ++byte) {
+        unsigned char bits = node->slots[byte];
         while (bits) {
             unsigned bit = __builtin_ctz(bits);
-            int slot = (i << 3) | bit;
+            int slot = (byte << 3) | bit;
             clusterDelSlot(slot);
             bits &= bits - 1;
-            ++deleted;
+            deleted++;
+            remaining--;
         }
     }
     return deleted;

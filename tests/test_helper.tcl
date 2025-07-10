@@ -431,9 +431,9 @@ proc read_from_test_client fd {
         set completed_tests_count [expr {$::next_test-$running_tests_count+$completed_solo_tests_count}]
         puts "\[$completed_tests_count/$all_tests_count [colorstr yellow $status]\]: $data ($elapsed seconds)"
         lappend ::clients_time_history $elapsed $data
+        unset ::active_clients_file($fd)
         signal_idle_client $fd
         set ::active_clients_task($fd) "(DONE) $data"
-        unset ::active_clients_file($fd)
     } elseif {$status eq {ok}} {
         if {!$::quiet} {
             puts "\[[colorstr green $status]\]: $data ($elapsed ms)"

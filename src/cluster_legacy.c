@@ -4883,7 +4883,6 @@ void clusterLogCantFailover(int reason) {
  * Note that it's up to the caller to be sure that the node got a new
  * configuration epoch already. */
 void clusterFailoverReplaceYourPrimary(void) {
-    int j;
     clusterNode *old_primary = myself->replicaof;
 
     if (clusterNodeIsPrimary(myself) || old_primary == NULL) return;
@@ -4896,10 +4895,14 @@ void clusterFailoverReplaceYourPrimary(void) {
     replicationUnsetPrimary();
 
     /* 2) Claim all the slots assigned to our primary. */
-    for (j = 0; j < CLUSTER_SLOTS; j++) {
-        if (clusterNodeCoversSlot(old_primary, j)) {
-            clusterDelSlot(j);
-            clusterAddSlot(myself, j);
+    for (unsigned long byte = 0; byte < sizeof(old_primary->slots); ++byte) {
+        unsigned char bits = old_primary->slots[byte];
+        while (bits) {
+            unsigned bit = __builtin_ctz(bits);
+            int slot = (byte << 3) | bit;
+            clusterDelSlot(slot);
+            clusterAddSlot(myself, slot);
+            bits &= bits - 1;
         }
     }
 
@@ -5755,13 +5758,16 @@ int clusterDelSlot(int slot) {
  * The number of deleted slots is returned. */
 int clusterDelNodeSlots(clusterNode *node) {
     int deleted = 0;
-    int remaining = node->numslots;
+    if (node->numslots == 0) return 0;
 
-    for (int j = 0; j < CLUSTER_SLOTS && remaining > 0; j++) {
-        if (clusterNodeCoversSlot(node, j)) {
-            clusterDelSlot(j);
-            deleted++;
-            remaining--;
+    for (unsigned long i = 0; i < sizeof(node->slots); ++i) {
+        unsigned char bits = node->slots[i];
+        while (bits) {
+            unsigned bit = __builtin_ctz(bits);
+            int slot = (i << 3) | bit;
+            clusterDelSlot(slot);
+            bits &= bits - 1;
+            ++deleted;
         }
     }
     return deleted;

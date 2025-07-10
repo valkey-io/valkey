@@ -1426,10 +1426,26 @@ void hashtableInsertAtPosition(hashtable *ht, void *entry, hashtablePosition *po
     /* Hash bits are already set by hashtableFindPositionForInsert. */
 }
 
-/* Prefetches the bucket associated with a key into the CPU cache.
- * One useful scenario is during RDB loading: batch prefetching the buckets
- * for corresponding keys into the CPU cache before performing hashtable insert
- * operations, thus reducing memory latency. */
+/* A helper function designed for large hashtable in insertion scenarios. It reduces memory
+ * latency by prefetching the bucket corresponding to the specified key into the CPU cache.
+ *
+ * Example:
+ *
+ *     hashtablePosition position;
+ *     void *existing;
+ *
+ *     //Start to prefetch bucket
+ *     hashtablePrefetchBucket(hashtable, key);
+ *
+ *     perform_heavy_computation();
+ *
+ *     //The execution of hashtableFindPositionForInsert is accelerated due to
+ *     //reduced cache misses when accessing the target bucket.
+ *     if (hashtableFindPositionForInsert(hashtable, key, &position, &existing)) {
+ *         void *entry = createNewEntryWithKeyAndValue(key, some_value);
+ *         hashtableInsertAtPosition(ht, entry, &position);
+ *     }
+ */
 void hashtablePrefetchBucket(hashtable *ht, const void *key) {
     if (hashtableSize(ht) == 0) return;
     uint64_t hash = hashKey(ht, key);

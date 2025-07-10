@@ -2228,8 +2228,6 @@ void clearNodeFailureIfNeeded(clusterNode *node) {
         node->flags &= ~CLUSTER_NODE_FAIL;
         clusterDoBeforeSleep(CLUSTER_TODO_UPDATE_STATE | CLUSTER_TODO_SAVE_CONFIG);
     }
-
-    clusterNodeCleanupFailureReports(node);
 }
 
 /* Return 1 if we already have a node in HANDSHAKE state matching the

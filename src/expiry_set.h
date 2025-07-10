@@ -42,5 +42,7 @@ int expirySetAdd(ExpirySet *es, void *key, mstime_t expiry);
 int expirySetRemove(ExpirySet *es, void *key);
 int expirySetExpire(ExpirySet *es);
 int expirySetCount(ExpirySet *es);
+int expirySetExists(ExpirySet *es, void *key);
+int expirySetGetExpiry(ExpirySet *es, void *key, mstime_t *out_expiry);
 
 #endif /* EXPIRY_SET_H */

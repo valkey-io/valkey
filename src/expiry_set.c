@@ -25,7 +25,6 @@
  * This unlinks the entry from the expiry_list and deletes its dict mapping,
  * then frees the entry object. */
 void expirySetRemoveEntry(ExpirySet *es, ExpirySetEntry *es_entry) {
-    if (es == NULL || es_entry == NULL) return;
     listDelNode(es->expiry_list, es_entry->ln);
     dictDelete(es->dict, es_entry->key);
     zfree(es_entry);
@@ -33,17 +32,27 @@ void expirySetRemoveEntry(ExpirySet *es, ExpirySetEntry *es_entry) {
 
 /* Allocate and initialize a new ExpirySet. */
 ExpirySet *expirySetCreate(dictType *dt) {
-    assert(dt != NULL);
     ExpirySet *es = zmalloc(sizeof(*es));
     if (!es) return NULL;
+
     es->dict = dictCreate(dt);
+    if (!es->dict) {
+        zfree(es);
+        return NULL;
+    }
+
     es->expiry_list = listCreate();
+    if (!es->expiry_list) {
+        dictRelease(es->dict);
+        zfree(es);
+        return NULL;
+    }
+
     return es;
 }
 
 /* Destroy an ExpirySet and free all resources. */
 void expirySetFree(ExpirySet *es) {
-    if (!es) return;
     /* Remove all entries */
     listNode *ln;
     while ((ln = listFirst(es->expiry_list))) {
@@ -55,9 +64,9 @@ void expirySetFree(ExpirySet *es) {
     zfree(es);
 }
 
-/* Add a new key with its expiry timestamp, or refresh an existing one. */
+/* Add a new key with its expiry timestamp, or refresh an existing one.
+ * Return 1 if it is new entry, 0 otherwise */
 int expirySetAdd(ExpirySet *es, void *key, mstime_t expiry) {
-    assert(es && key);
     ExpirySetEntry *es_entry = dictFetchValue(es->dict, key);
     int is_new = 0;
     if (es_entry) {
@@ -72,24 +81,40 @@ int expirySetAdd(ExpirySet *es, void *key, mstime_t expiry) {
         dictAdd(es->dict, key, es_entry);
         is_new = 1;
     }
-    /* append at tail (most recently used/updated) */
-    listAddNodeTail(es->expiry_list, es_entry);
-    es_entry->ln = es->expiry_list->tail;
+
+    /* Find the insertion point by scanning backwards from the tail */
+    listNode *prev_node = listLast(es->expiry_list);
+    while (prev_node) {
+        ExpirySetEntry *prev_entry = listNodeValue(prev_node);
+        if (prev_entry->expiry <= expiry) break;
+        prev_node = prev_node->prev;
+    }
+
+    if (prev_node) {
+        /* Insert after prev_node so everything before has expiry ≤ new expiry */
+        listInsertNode(es->expiry_list, prev_node, es_entry, 1);
+        es_entry->ln = prev_node->next;
+    } else {
+        /* No existing entry is ≤ expiry. This becomes the new head */
+        listAddNodeHead(es->expiry_list, es_entry);
+        es_entry->ln = listFirst(es->expiry_list);
+    }
+
     return is_new;
 }
 
-/* Remove a key (and its entry) from the ExpirySet, if present. */
+/* Remove a key and its entry from the ExpirySet.
+ * Return 1 if an entry is deleted, 0 if no matching entry is found */
 int expirySetRemove(ExpirySet *es, void *key) {
-    assert(es && key);
     ExpirySetEntry *es_entry = dictFetchValue(es->dict, key);
     if (!es_entry) return 0;
     expirySetRemoveEntry(es, es_entry);
     return 1;
 }
 
-/* Expire all entries whose timestamp ≤ now. */
+/* Expire all entries whose timestamp ≤ now.
+ * Return the number of removed entries */
 int expirySetExpire(ExpirySet *es) {
-    assert(es);
     int removed = 0;
     listNode *ln;
     mstime_t now = mstime();
@@ -105,7 +130,33 @@ int expirySetExpire(ExpirySet *es) {
 
 /* Expire old entries and return the count of remaining live entries. */
 int expirySetCount(ExpirySet *es) {
-    assert(es);
     expirySetExpire(es);
     return es->expiry_list->len;
+}
+
+/* Check whether the key exists in the set.
+ * If the expiry ≤ current time, it is removed and treated as missing.
+ * Return 1 if key exists, 0 otherwise */
+int expirySetExists(ExpirySet *es, void *key) {
+    ExpirySetEntry *e = dictFetchValue(es->dict, key);
+    if (!e) return 0;
+    if (e->expiry <= mstime()) {
+        expirySetRemove(es, key);
+        return 0;
+    }
+    return 1;
+}
+
+/* Retrieve the expiry timestamp for the key.
+ * If the expiry ≤ current time, it is removed and treated as missing.
+ * Returns 1 if key exists, 0 otherwise */
+int expirySetGetExpiry(ExpirySet *es, void *key, mstime_t *out_expiry) {
+    ExpirySetEntry *e = dictFetchValue(es->dict, key);
+    if (!e) return 0;
+    if (e->expiry <= mstime()) {
+        expirySetRemove(es, key);
+        return 0;
+    }
+    if (out_expiry) *out_expiry = e->expiry;
+    return 1;
 }

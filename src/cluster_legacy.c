@@ -1703,8 +1703,9 @@ int clusterNodeAddFailureReport(clusterNode *failing, clusterNode *sender) {
  * with the requirement that a node’s own PFAIL must age past the timeout
  * before it can be declared FAIL.
  *
- * Iterates from the head of expiry_list (earliest expiry) and removes
- * any report whose expiry timestamp ≤ now. Each removal is O(1)
+ * Iterates from the head of expiry_list (earliest expiry) and
+ * removes any report whose expiry timestamp ≤ now.
+ * All expired entries can be purged in O(E) where E is the number of expired items
  *
  * By expiring entries older than the global node timeout window,
  * we guarantee only fresh votes remain. */

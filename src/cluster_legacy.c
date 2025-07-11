@@ -134,9 +134,11 @@ int clusterNodeIsVotingPrimary(clusterNode *n) {
     return (n->flags & CLUSTER_NODE_PRIMARY) && n->numslots;
 }
 
-/* Returns if myself is the best ranked replica in an automatic failover process. */
+/* Returns if myself is the best ranked replica in an automatic failover process.
+ * To avoid newly added empty replica from affecting the ranking, we will skip it. */
 static inline int myselfIsBestRankedReplica(void) {
     return (server.cluster->mf_end == 0 &&
+            getNodeReplicationOffset(myself) != 0 &&
             server.cluster->failover_auth_rank == 0 &&
             server.cluster->failover_failed_primary_rank == 0 &&
             clusterAllReplicasThinkPrimaryIsFail());

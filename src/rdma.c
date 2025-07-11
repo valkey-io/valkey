@@ -17,6 +17,8 @@
 #include "server.h"
 #include "connection.h"
 
+#define CONN_TYPE_RDMA "rdma"
+
 #if defined __linux__ && defined USE_RDMA /* currently RDMA is only supported on Linux */
 #if (USE_RDMA == 1 /* BUILD_YES */) || \
     ((USE_RDMA == 2 /* BUILD_MODULE */) && defined(BUILD_RDMA_MODULE) && (BUILD_RDMA_MODULE == 2))
@@ -30,8 +32,6 @@
 #include <sys/socket.h>
 #include <netdb.h>
 #include <sys/mman.h>
-
-#define CONN_TYPE_RDMA "rdma"
 
 typedef struct ValkeyRdmaFeature {
     /* defined as following Opcodes */

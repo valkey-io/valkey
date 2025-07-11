@@ -1267,7 +1267,7 @@ void clusterInit(void) {
 }
 
 void clusterInitLast(void) {
-    if (connectionIndexByType(connTypeOfCluster()->get_type_id(NULL)) < 0) {
+    if (!connectionByType(connTypeOfCluster()->get_type_id(NULL))) {
         serverLog(LL_WARNING, "Missing connection type %s, but it is required for the Cluster bus.",
                   getConnectionTypeName(connTypeOfCluster()->get_type_id(NULL)));
         exit(1);

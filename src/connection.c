@@ -31,15 +31,7 @@ static ConnectionType *connTypes[CONN_TYPE_MAX];
 
 int connTypeRegister(ConnectionType *ct) {
     int type_id = ct->get_type_id(NULL);
-    if (type_id <= 0 || type_id >= CONN_TYPE_MAX) {
-        serverLog(LL_WARNING, "Invalid connection type id %d", type_id);
-        return C_ERR;
-    }
-
-    if (connTypes[type_id]) {
-        serverLog(LL_WARNING, "Connection type %s already registered", getConnectionTypeName(type_id));
-        return C_ERR;
-    }
+    serverAssert(type_id > 0 && type_id < CONN_TYPE_MAX && !connTypes[type_id]);
 
     serverLog(LL_VERBOSE, "Connection type %s registering", getConnectionTypeName(type_id));
     connTypes[type_id] = ct;
@@ -68,10 +60,7 @@ int connTypeInitialize(void) {
 }
 
 ConnectionType *connectionByType(int type_id) {
-    if (type_id <= 0 || type_id >= CONN_TYPE_MAX) {
-        serverLog(LL_WARNING, "Invalid connection type id %d", type_id);
-        return NULL;
-    }
+    serverAssert(type_id > 0 && type_id < CONN_TYPE_MAX);
 
     ConnectionType *ct = connTypes[type_id];
 
@@ -117,11 +106,6 @@ ConnectionType *connectionTypeUnix(void) {
 
     ct_unix = connectionByType(CONN_TYPE_ID_UNIX);
     return ct_unix;
-}
-
-int connectionIndexByType(int type_id) {
-    if (!connTypes[type_id]) return -1;
-    return type_id;
 }
 
 void connTypeCleanupAll(void) {

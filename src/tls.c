@@ -34,6 +34,8 @@
 #include "adlist.h"
 #include "io_threads.h"
 
+#define CONN_TYPE_TLS "tls"
+
 #if defined(USE_OPENSSL) &&                    \
     ((USE_OPENSSL == 1 /* BUILD_YES */) ||     \
      ((USE_OPENSSL == 2 /* BUILD_MODULE */) && \

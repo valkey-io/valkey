@@ -38,6 +38,7 @@
 #include <sys/uio.h>
 
 #include "ae.h"
+#include "sds.h"
 
 #define CONN_INFO_LEN 32
 #define CONN_ADDR_STR_LEN 128
@@ -71,22 +72,18 @@ typedef enum {
     CONN_TYPE_ID_RDMA,
 } ConnectionTypeId;
 
-#define CONN_TYPE_SOCKET "tcp"
-#define CONN_TYPE_UNIX "unix"
-#define CONN_TYPE_TLS "tls"
-#define CONN_TYPE_RDMA "rdma"
 #define CONN_TYPE_MAX 8 /* 8 is enough to be extendable */
 
 static inline const char *getConnectionTypeName(int type_id) {
     switch (type_id) {
     case CONN_TYPE_ID_SOCKET:
-        return CONN_TYPE_SOCKET;
+        return "tcp";
     case CONN_TYPE_ID_UNIX:
-        return CONN_TYPE_UNIX;
+        return "unix";
     case CONN_TYPE_ID_TLS:
-        return CONN_TYPE_TLS;
+        return "tls";
     case CONN_TYPE_ID_RDMA:
-        return CONN_TYPE_RDMA;
+        return "rdma";
     default:
         return "invalid type";
     }
@@ -454,9 +451,6 @@ ConnectionType *connectionTypeTls(void);
 
 /* Fast path to get Unix connection type */
 ConnectionType *connectionTypeUnix(void);
-
-/* Lookup the index of a connection type by type id, return -1 if not found */
-int connectionIndexByType(int type_id);
 
 /* Create a connection of specified type */
 static inline connection *connCreate(ConnectionType *ct) {

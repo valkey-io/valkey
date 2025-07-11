@@ -3361,7 +3361,7 @@ int clusterProcessPacket(clusterLink *link) {
     /* Store some flags about the sender. */
     if (sender) {
         /* Check if the node supports extensions. */
-        if (flags & CLUSTER_NODE_EXTENSIONS_SUPPORTED || linkSupportsExtension(sender->inbound_link)) {
+        if (flags & CLUSTER_NODE_EXTENSIONS_SUPPORTED || linkSupportsExtension(link)) {
             sender->flags |= CLUSTER_NODE_EXTENSIONS_SUPPORTED;
         } else {
             sender->flags &= ~CLUSTER_NODE_EXTENSIONS_SUPPORTED;

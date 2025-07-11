@@ -2096,6 +2096,9 @@ int clusterBumpConfigEpochWithoutConsensus(void) {
  * end with a different configuration epoch.
  */
 void clusterHandleConfigEpochCollision(clusterNode *sender) {
+    /* Prerequisites: nodes have the same configEpoch and are both primaries. */
+    if (sender->configEpoch != myself->configEpoch || !clusterNodeIsPrimary(sender) || !clusterNodeIsPrimary(myself))
+        return;
     /* Don't act if the colliding node has a smaller Node ID. */
     if (memcmp(sender->name, myself->name, CLUSTER_NAMELEN) <= 0) return;
     /* Get the next ID available at the best of this node knowledge. */
@@ -3382,6 +3385,12 @@ int clusterProcessPacket(clusterLink *link) {
         }
     }
 
+    /* We try to process extensions first, as we become more and more
+     * dependent on extensions. */
+    if (sender && (type == CLUSTERMSG_TYPE_PING || type == CLUSTERMSG_TYPE_PONG || type == CLUSTERMSG_TYPE_MEET)) {
+        clusterProcessPingExtensions(hdr, link);
+    }
+
     /* Update the last time we saw any data from this node. We
      * use this in order to avoid detecting a timeout from a node that
      * is just sending a lot of data in the cluster bus, for instance
@@ -3821,17 +3830,15 @@ int clusterProcessPacket(clusterLink *link) {
         /* Get info from the gossip section */
         if (sender) {
             clusterProcessGossipSection(hdr, link);
-            clusterProcessPingExtensions(hdr, link);
         }
 
         /* If after processing everything, we find that myself and sender are on the
-         * same shard and are both primaries, if myself config epoch is smaller, make
-         * it a replica. */
+         * same shard and are both primaries, if myself is a empty primary and myself
+         * config epoch is smaller, make it become a replica of sender. */
         if (sender && nodeIsPrimary(myself) && nodeIsPrimary(sender) && areInSameShard(myself, sender) &&
-            nodeEpoch(sender) > nodeEpoch(myself)) {
+            myself->numslots == 0 && nodeEpoch(sender) > nodeEpoch(myself)) {
             clusterHandlePrimariesSameShardCollision(sender);
         }
-
     } else if (type == CLUSTERMSG_TYPE_FAIL) {
         clusterNode *failing;
 

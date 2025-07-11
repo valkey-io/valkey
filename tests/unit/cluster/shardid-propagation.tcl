@@ -130,11 +130,25 @@ start_cluster 3 2 {tags {external:skip cluster}} {
         # Resume A and B and make sure A drop all the links so that it won't get the pending packets.
         resume_process [srv -$A pid]
         resume_process [srv -$B pid]
+
+        # Ensure that related nodes do not reconnect.
+        R 0 debug disable-cluster-reconnection 1
+        R 1 debug disable-cluster-reconnection 1
+        R 2 debug disable-cluster-reconnection 1
+        R 3 debug disable-cluster-reconnection 1
+        R 4 debug disable-cluster-reconnection 1
+
         wait_for_condition 1000 50 {
             [R $A cluster links] eq {}
         } else {
             fail "Failed waiting for A to drop all cluster links"
         }
+
+        R 0 debug disable-cluster-reconnection 0
+        R 1 debug disable-cluster-reconnection 0
+        R 2 debug disable-cluster-reconnection 0
+        R 3 debug disable-cluster-reconnection 0
+        R 4 debug disable-cluster-reconnection 0
 
         # Make sure A and B become the replica.
         R $A debug close-cluster-link-on-packet-drop 0
@@ -143,10 +157,7 @@ start_cluster 3 2 {tags {external:skip cluster}} {
             [s -$A role] eq {slave} &&
             [s -$B role] eq {slave}
         } else {
-            fail "Failed waiting for A and B to become replicas"
+            fail "Failed waiting for $A and $B to become replicas"
         }
-
-        # Make sure A print the log.
-        verify_log_message -$A "*Two primaries in same shard*Reconfiguring myself as a replica*" 0
     }
 }

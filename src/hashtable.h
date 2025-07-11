@@ -129,6 +129,7 @@ int hashtableExpand(hashtable *ht, size_t size);
 int hashtableTryExpand(hashtable *ht, size_t size);
 int hashtableExpandIfNeeded(hashtable *ht);
 int hashtableShrinkIfNeeded(hashtable *ht);
+int hashtableRightsizeIfNeeded(hashtable *ht);
 hashtable *hashtableDefragTables(hashtable *ht, void *(*defragfn)(void *));
 void dismissHashtable(hashtable *ht);
 

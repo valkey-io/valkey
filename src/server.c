@@ -522,9 +522,6 @@ uint64_t dictEncObjHash(const void *key) {
 int hashtableResizeAllowed(size_t moreMem, double usedRatio) {
     UNUSED(usedRatio);
 
-    /* For debug purposes, not allowed to be resized. */
-    if (!server.dict_resizing) return 0;
-
     /* Avoid resizing over max memory. */
     return !overMaxmemoryAfterAlloc(moreMem);
 }
@@ -811,7 +808,7 @@ hashtableType clientHashtableType = {
  * for dict.c to resize or rehash the tables accordingly to the fact we have an
  * active fork child running. */
 void updateDictResizePolicy(void) {
-    if (server.in_fork_child != CHILD_TYPE_NONE) {
+    if (server.in_fork_child != CHILD_TYPE_NONE || !server.dict_resizing) {
         dictSetResizeEnabled(DICT_RESIZE_FORBID);
         hashtableSetResizePolicy(HASHTABLE_RESIZE_FORBID);
     } else if (hasActiveChildProcess()) {

@@ -81,7 +81,7 @@ tags {"benchmark network external:skip logreqres:skip"} {
             default_set_get_checks
 
             # ensure only one key was populated
-            assert_match  {1} [scan [regexp -inline {keys\=([\d]*)} [r info keyspace]] keys=%d]
+            assert_equal  {keys=1} [regexp -inline {keys=[\d]*} [r info keyspace]]
         }
 
         test {benchmark: pipelined full set,get} {
@@ -93,7 +93,7 @@ tags {"benchmark network external:skip logreqres:skip"} {
             assert_match  {} [cmdstat lrange]
 
             # ensure only one key was populated
-            assert_match  {1} [scan [regexp -inline {keys\=([\d]*)} [r info keyspace]] keys=%d]
+            assert_equal  {keys=1} [regexp -inline {keys=[\d]*} [r info keyspace]]
         }
 
         test {benchmark: arbitrary command} {
@@ -104,7 +104,7 @@ tags {"benchmark network external:skip logreqres:skip"} {
             assert_match  {} [cmdstat get]
 
             # ensure only one key was populated
-            assert_match  {1} [scan [regexp -inline {keys\=([\d]*)} [r info keyspace]] keys=%d]
+            assert_equal  {keys=1} [regexp -inline {keys=[\d]*} [r info keyspace]]
         }
 
         test {benchmark: arbitrary command sequence} {
@@ -130,9 +130,84 @@ tags {"benchmark network external:skip logreqres:skip"} {
             assert_match  {} [cmdstat get]
 
             # ensure the keyspace has the desired size
-            assert_match  {50} [scan [regexp -inline {keys\=([\d]*)} [r info keyspace]] keys=%d]
+            assert_equal  {keys=50} [regexp -inline {keys=[\d]*} [r info keyspace]]
         }
-        
+
+        test {benchmark: keyspace covered by sequential option} {
+            set cmd [valkeybenchmark $master_host $master_port "-r 50 -t set -n 50 --sequential"]
+            common_bench_setup $cmd
+            assert_match  {*calls=50,*} [cmdstat set]
+
+            # ensure the keyspace has the desired size
+            assert_equal  {keys=50} [regexp -inline {keys=[\d]*} [r info keyspace]]
+        }
+
+        test {benchmark: multiple independent sequential replacements} {
+            set cmd [valkeybenchmark $master_host $master_port "-r 50 -n 1000 --sequential -- set j__rand_int__ rain ; set k__rand_1st__ rain"]
+            common_bench_setup $cmd
+            assert_match  {*calls=1000,*} [cmdstat set]
+            
+            # ensure the keyspace has the desired size
+            assert_equal  {keys=100} [regexp -inline {keys=[\d]*} [r info keyspace]]
+        }
+
+        test {benchmark: multiple occurrences of first placeholder have different values} {
+            set cmd [valkeybenchmark $master_host $master_port "-r 100 -n 100 --sequential -- set rain__rand_int__ rain__rand_int__"]
+            common_bench_setup $cmd
+            assert_match  {*calls=100,*} [cmdstat set]
+            
+            # Each command takes two sequential values, so keys count by twos
+            assert_equal  {keys=50} [regexp -inline {keys=[\d]*} [r info keyspace]]
+
+            # randomly check some keys
+            for {set i 0} {$i < 10} {incr i} {
+                set key [r randomkey]
+                assert {$key ne [r get $key]}
+            }
+        }
+
+        test {benchmark: besides first placeholder, multiple placeholder occurrences have same value} {
+            set cmd [valkeybenchmark $master_host $master_port "-r 100 -n 100 -P 5 --sequential -- set rain__rand_1st__ rain__rand_1st__"]
+            common_bench_setup $cmd
+            assert_match  {*calls=100,*} [cmdstat set]
+            
+            # Each command is handled separately regardness of pipelining
+            assert_equal  {keys=100} [regexp -inline {keys=[\d]*} [r info keyspace]]
+
+            # randomly check some keys
+            for {set i 0} {$i < 10} {incr i} {
+                set key [r randomkey]
+                assert_equal $key [r get $key]
+            }
+        }
+
+        test {benchmark: multiple placeholder occurrences have same value} {
+            set cmd [valkeybenchmark $master_host $master_port "-r 30000000 -n 20 -- set rain__rand_int__ rain__rand_1st__"]
+            common_bench_setup $cmd
+            assert_match  {*calls=20,*} [cmdstat set]
+
+            # randomly check some keys
+            set different_count 0
+            for {set i 0} {$i < 10} {incr i} {
+                set key [r randomkey]
+                set value [r get $key]
+                if {$key ne $value} {
+                    incr different_count
+                }
+            }
+            assert {$different_count > 0}
+        }
+
+        test {benchmark: sequential zadd results in expected number of keys} {
+            set cmd [valkeybenchmark $master_host $master_port "-r 50 -n 50 --sequential -t zadd"]
+            common_bench_setup $cmd
+            assert_match  {*calls=50,*} [cmdstat zadd]
+
+            # ensure the keyspace has the desired size
+            assert_equal  {keys=1} [regexp -inline {keys=[\d]*} [r info keyspace]]
+            assert_match  {50} [r zcard myzset]
+        }
+
         test {benchmark: clients idle mode should return error when reached maxclients limit} {
             set cmd [valkeybenchmark $master_host $master_port "-c 10 -I"]
             set original_maxclients [lindex [r config get maxclients] 1]

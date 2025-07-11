@@ -9014,7 +9014,7 @@ typedef struct moduleClusterNodeInfo {
     char ip[NET_IP_STR_LEN];
     int port;
     char primary_id[40]; /* Only if flags & VALKEYMODULE_NODE_PRIMARY is true. */
-} mdouleClusterNodeInfo;
+} moduleClusterNodeInfo;
 
 /* We have an array of message types: each bucket is a linked list of
  * configured receivers. */

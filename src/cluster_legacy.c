@@ -1394,10 +1394,11 @@ void clusterHandleServerShutdown(void) {
 void clusterReset(int hard) {
     dictIterator *di;
     dictEntry *de;
-    int j;
+    int j, was_replica = 0;
 
     /* Turn into primary. */
     if (nodeIsReplica(myself)) {
+        was_replica = 1;
         clusterSetNodeAsPrimary(myself);
         replicationUnsetPrimary();
         flushAllDataAndResetRDB(server.lazyfree_lazy_user_flush ? EMPTYDB_ASYNC : EMPTYDB_NO_FLAGS);
@@ -1444,6 +1445,11 @@ void clusterReset(int hard) {
         getRandomHexChars(myself->shard_id, CLUSTER_NAMELEN);
         clusterAddNode(myself);
         serverLog(LL_NOTICE, "Node hard reset, now I'm %.40s", myself->name);
+    } else {
+        /* If we were a replica, this means our shard_id is the shard_id of
+         * the primary node, and since now we become a new empty primary, we
+         * need to have our own shard_id. */
+        if (was_replica) getRandomHexChars(myself->shard_id, CLUSTER_NAMELEN);
     }
 
     /* Re-populate shards */
@@ -1589,6 +1595,7 @@ void clusterAcceptHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
     while (max--) {
         cfd = anetTcpAccept(server.neterr, fd, cip, sizeof(cip), &cport);
         if (cfd == ANET_ERR) {
+            if (anetRetryAcceptOnError(errno)) continue;
             if (errno != EWOULDBLOCK) serverLog(LL_VERBOSE, "Error accepting cluster node: %s", server.neterr);
             return;
         }
@@ -3639,16 +3646,21 @@ int clusterProcessPacket(clusterLink *link) {
 
         /* Check for role switch: replica -> primary or primary -> replica. */
         if (sender) {
-            serverLog(LL_DEBUG, "node %.40s (%s) announces that it is a %s in shard %.40s", sender->name,
-                      sender->human_nodename, sender_claims_to_be_primary ? "primary" : "replica", sender->shard_id);
             if (sender_claims_to_be_primary) {
                 /* Node is a primary. */
-                clusterSetNodeAsPrimary(sender);
+                if (sender_last_reported_as_replica) {
+                    serverLog(LL_DEBUG, "node %.40s (%s) announces that it is a %s in shard %.40s", sender->name,
+                              sender->human_nodename, sender_claims_to_be_primary ? "primary" : "replica", sender->shard_id);
+                    clusterSetNodeAsPrimary(sender);
+                }
             } else {
                 /* Node is a replica. */
                 clusterNode *sender_claimed_primary = clusterLookupNode(hdr->replicaof, CLUSTER_NAMELEN);
 
                 if (sender_last_reported_as_primary) {
+                    serverLog(LL_DEBUG, "node %.40s (%s) announces that it is a %s in shard %.40s", sender->name,
+                              sender->human_nodename, sender_claims_to_be_primary ? "primary" : "replica", sender->shard_id);
+
                     /* Primary turned into a replica! Reconfigure the node. */
                     if (sender_claimed_primary && areInSameShard(sender_claimed_primary, sender)) {
                         /* `sender` was a primary and was in the same shard as its new primary */
@@ -6760,7 +6772,7 @@ int clusterNodeIsPrimary(clusterNode *n) {
 }
 
 int handleDebugClusterCommand(client *c) {
-    if (strcasecmp(c->argv[1]->ptr, "CLUSTERLINK") || strcasecmp(c->argv[2]->ptr, "KILL") || c->argc != 5) {
+    if (c->argc != 5 || strcasecmp(c->argv[1]->ptr, "CLUSTERLINK") || strcasecmp(c->argv[2]->ptr, "KILL")) {
         return 0;
     }
 

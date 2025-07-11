@@ -95,6 +95,34 @@ set ::force_resp3 0
 set ::solo_tests_count 0
 set ::debug_defrag 0
 
+# Expand a unit specification (test name, file, or directory) into a list
+# of canonical unit names relative to the tests directory.
+proc expand_unit_spec {spec} {
+    set tests_dir [file normalize [file join [pwd] tests]]
+
+    if {[file isdirectory $spec]} {
+        set files [glob -nocomplain [file join [file normalize $spec] *.tcl]]
+    } elseif {[file exists $spec]} {
+        set files [list [file normalize $spec]]
+    } elseif {[file exists [file join $tests_dir "${spec}.tcl"]]} {
+        set files [list [file normalize [file join $tests_dir "${spec}.tcl"]]]
+    } else {
+        return [list $spec]
+    }
+
+    set result {}
+    foreach test_file $files {
+        set norm [file normalize $test_file]
+        if {[string match "$tests_dir/*" $norm]} {
+            set rel [string range $norm [expr {[string length $tests_dir]+1}] end]
+            lappend result [file rootname $rel]
+        } else {
+            lappend result [file rootname $norm]
+        }
+    }
+    return $result
+}
+
 # Set to 1 when we are running in client mode. The server test uses a
 # server-client model to run tests simultaneously. The server instance
 # runs the specified number of client instances that will actually run tests.
@@ -403,9 +431,9 @@ proc read_from_test_client fd {
         set completed_tests_count [expr {$::next_test-$running_tests_count+$completed_solo_tests_count}]
         puts "\[$completed_tests_count/$all_tests_count [colorstr yellow $status]\]: $data ($elapsed seconds)"
         lappend ::clients_time_history $elapsed $data
+        unset ::active_clients_file($fd)
         signal_idle_client $fd
         set ::active_clients_task($fd) "(DONE) $data"
-        unset ::active_clients_file($fd)
     } elseif {$status eq {ok}} {
         if {!$::quiet} {
             puts "\[[colorstr green $status]\]: $data ($elapsed ms)"
@@ -733,13 +761,17 @@ for {set j 0} {$j < [llength $argv]} {incr j} {
     } elseif {$opt eq {--force-failure}} {
         set ::force_failure 1
     } elseif {$opt eq {--single}} {
-        lappend ::single_tests $arg
+        foreach unit [expand_unit_spec $arg] {
+            lappend ::single_tests $unit
+        }
         incr j
     } elseif {$opt eq {--only}} {
         lappend ::only_tests $arg
         incr j
     } elseif {$opt eq {--skipunit}} {
-        lappend ::skipunits $arg
+        foreach unit [expand_unit_spec $arg] {
+            lappend ::skipunits $unit
+        }
         incr j
     } elseif {$opt eq {--skip-till}} {
         set ::skip_till $arg

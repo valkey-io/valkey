@@ -82,13 +82,16 @@
 #define OUTPUT_QUOTED_JSON 4
 #define CLI_KEEPALIVE_INTERVAL 15   /* seconds */
 #define CLI_DEFAULT_PIPE_TIMEOUT 30 /* seconds */
-#define CLI_HISTFILE_ENV "REDISCLI_HISTFILE"
+#define CLI_HISTFILE_ENV "VALKEYCLI_HISTFILE"
+#define OLD_CLI_HISTFILE_ENV "REDISCLI_HISTFILE"
 #define CLI_HISTFILE_DEFAULT ".valkeycli_history"
-#define CLI_RCFILE_ENV "REDISCLI_RCFILE"
+#define CLI_RCFILE_ENV "VALKEYCLI_RCFILE"
+#define OLD_CLI_RCFILE_ENV "REDISCLI_RCFILE"
 #define CLI_RCFILE_DEFAULT ".valkeyclirc"
 #define CLI_AUTH_ENV "VALKEYCLI_AUTH"
 #define OLD_CLI_AUTH_ENV "REDISCLI_AUTH"
-#define CLI_CLUSTER_YES_ENV "REDISCLI_CLUSTER_YES"
+#define CLI_CLUSTER_YES_ENV "VALKEYCLI_CLUSTER_YES"
+#define OLD_CLI_CLUSTER_YES_ENV "REDISCLI_CLUSTER_YES"
 
 #define CLUSTER_MANAGER_SLOTS 16384
 #define CLUSTER_MANAGER_PORT_INCR 10000 /* same as CLUSTER_PORT_INCR */
@@ -359,12 +362,16 @@ static void cliRefreshPrompt(void) {
  * The function returns NULL (if the file is /dev/null or cannot be
  * obtained for some error), or an SDS string that must be freed by
  * the user. */
-static sds getDotfilePath(char *envoverride, char *dotfilename) {
+static sds getDotfilePath(char *envoverride, char *envoverride_old, char *dotfilename) {
     char *path = NULL;
     sds dotPath = NULL;
 
-    /* Check the env for a dotfile override. */
+    /* Check the env for a dotfile override, with fallback to legacy env variable. */
     path = getenv(envoverride);
+    if (path == NULL && envoverride_old != NULL) {
+        path = getenv(envoverride_old);
+    }
+
     if (path != NULL && *path != '\0') {
         if (!strcmp("/dev/null", path)) {
             return NULL;
@@ -2934,7 +2941,11 @@ static void parseEnv(void) {
         config.conn_info.auth = auth;
     }
 
+    /* Check for cluster yes flag with fallback to legacy env variable */
     char *cluster_yes = getenv(CLI_CLUSTER_YES_ENV);
+    if (cluster_yes == NULL) {
+        cluster_yes = getenv(OLD_CLI_CLUSTER_YES_ENV);
+    }
     if (cluster_yes != NULL && !strcmp(cluster_yes, "1")) {
         config.cluster_manager_command.flags |= CLUSTER_MANAGER_CMD_FLAG_YES;
     }
@@ -3212,7 +3223,7 @@ void cliSetPreferences(char **argv, int argc, int interactive) {
 
 /* Load the ~/.valkeyclirc file if any. */
 void cliLoadPreferences(void) {
-    sds rcfile = getDotfilePath(CLI_RCFILE_ENV, CLI_RCFILE_DEFAULT);
+    sds rcfile = getDotfilePath(CLI_RCFILE_ENV, OLD_CLI_RCFILE_ENV, CLI_RCFILE_DEFAULT);
     if (rcfile == NULL) return;
     FILE *fp = fopen(rcfile, "r");
     char buf[1024];
@@ -3321,7 +3332,7 @@ static void repl(void) {
 
     /* Only use history and load the rc file when stdin is a tty. */
     if (isatty(fileno(stdin))) {
-        historyfile = getDotfilePath(CLI_HISTFILE_ENV, CLI_HISTFILE_DEFAULT);
+        historyfile = getDotfilePath(CLI_HISTFILE_ENV, OLD_CLI_HISTFILE_ENV, CLI_HISTFILE_DEFAULT);
         // keep in-memory history always regardless if history file can be determined
         history = 1;
         if (historyfile != NULL) {

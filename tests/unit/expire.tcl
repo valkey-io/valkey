@@ -953,6 +953,7 @@ start_server {tags {"expire"}} {
 
 start_server {tags {expire} overrides {hz 100}} {
     test {Active expiration triggers hashtable shrink} {
+        r debug SET-ACTIVE-EXPIRE 0
         set persistent_keys 5
         set volatile_keys 100
         set total_keys [expr $persistent_keys + $volatile_keys]
@@ -969,6 +970,7 @@ start_server {tags {expire} overrides {hz 100}} {
         assert_equal $total_keys [r dbsize]
 
         # Wait for active expiration
+        r debug SET-ACTIVE-EXPIRE 1
         wait_for_condition 100 50 {
             [r dbsize] eq $persistent_keys
         } else {

@@ -41,6 +41,11 @@ typedef struct clusterLink {
     int flags;                             /* We share CLUSTER_NODE_* with clusterNode->flags. */
 } clusterLink;
 
+/* Cluster link flags and macros. */
+#define CLUSTER_LINK_EXTENSIONS_SUPPORTED (1 << 0)        /* This link supports extensions. */
+
+#define linkSupportsExtension(link) ((link)->flags & CLUSTER_LINK_EXTENSIONS_SUPPORTED)
+
 /* Cluster node flags and macros. */
 #define CLUSTER_NODE_PRIMARY (1 << 0)                      /* The node is a primary */
 #define CLUSTER_NODE_REPLICA (1 << 1)                      /* The node is a replica */
@@ -71,8 +76,6 @@ typedef struct clusterLink {
 #define nodeSupportsLightMsgHdrForPubSub(n) ((n)->flags & CLUSTER_NODE_LIGHT_HDR_PUBLISH_SUPPORTED)
 #define nodeSupportsLightMsgHdrForModule(n) ((n)->flags & CLUSTER_NODE_LIGHT_HDR_MODULE_SUPPORTED)
 #define nodeInNormalState(n) (!((n)->flags & (CLUSTER_NODE_HANDSHAKE | CLUSTER_NODE_MEET | CLUSTER_NODE_PFAIL | CLUSTER_NODE_FAIL)))
-
-#define linkSupportsExtension(link) ((link)->flags & CLUSTER_NODE_EXTENSIONS_SUPPORTED)
 
 /* This structure represent elements of node->fail_reports. */
 typedef struct clusterNodeFailReport {

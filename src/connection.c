@@ -112,7 +112,8 @@ void connTypeCleanupAll(void) {
     ConnectionType *ct;
     int type;
 
-    for (type = 0; type < CONN_TYPE_MAX; type++) {
+    // type = 0 is an invalid conn type.
+    for (type = 1; type < CONN_TYPE_MAX; type++) {
         ct = connTypes[type];
         if (!ct) continue;
 
@@ -126,7 +127,8 @@ int connTypeHasPendingData(void) {
     int type;
     int ret = 0;
 
-    for (type = 0; type < CONN_TYPE_MAX; type++) {
+    // type = 0 is an invalid conn type.
+    for (type = 1; type < CONN_TYPE_MAX; type++) {
         ct = connTypes[type];
         if (ct && ct->has_pending_data && (ret = ct->has_pending_data())) {
             return ret;
@@ -142,7 +144,8 @@ int connTypeProcessPendingData(void) {
     int type;
     int ret = 0;
 
-    for (type = 0; type < CONN_TYPE_MAX; type++) {
+    // type = 0 is an invalid conn type.
+    for (type = 1; type < CONN_TYPE_MAX; type++) {
         ct = connTypes[type];
         if (ct && ct->process_pending_data) {
             ret += ct->process_pending_data();
@@ -153,7 +156,8 @@ int connTypeProcessPendingData(void) {
 }
 
 sds getListensInfoString(sds info) {
-    for (int j = 0; j < CONN_TYPE_MAX; j++) {
+    // server.listeners[0] is reserved.
+    for (int j = 1; j < CONN_TYPE_MAX; j++) {
         connListener *listener = &server.listeners[j];
         if (listener->ct == NULL) continue;
 

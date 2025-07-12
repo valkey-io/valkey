@@ -72,7 +72,7 @@ typedef enum {
     CONN_TYPE_RDMA,
 } ConnectionTypeId;
 
-#define CONN_TYPE_MAX 8 /* 8 is enough to be extendable */
+#define CONN_TYPE_MAX 5
 
 static inline const char *getConnectionTypeName(int type) {
     switch (type) {

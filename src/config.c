@@ -2473,13 +2473,13 @@ static int updateHZ(const char **err) {
 }
 
 static int updatePort(const char **err) {
-    connListener *listener = listenerByType(CONN_TYPE_ID_SOCKET);
+    connListener *listener = listenerByType(CONN_TYPE_SOCKET);
 
     serverAssert(listener != NULL);
     listener->bindaddr = server.bindaddr;
     listener->bindaddr_count = server.bindaddr_count;
     listener->port = server.port;
-    listener->ct = connectionByType(CONN_TYPE_ID_SOCKET);
+    listener->ct = connectionByType(CONN_TYPE_SOCKET);
     clusterUpdateMyselfAnnouncedPorts();
     if (changeListener(listener) == C_ERR) {
         *err = "Unable to listen on this port. Check server logs.";
@@ -2629,14 +2629,14 @@ int updateAppendFsync(const char **err) {
 
 /* applyBind affects both TCP and TLS (if enabled) together */
 static int applyBind(const char **err) {
-    connListener *tcp_listener = listenerByType(CONN_TYPE_ID_SOCKET);
-    connListener *tls_listener = listenerByType(CONN_TYPE_ID_TLS);
+    connListener *tcp_listener = listenerByType(CONN_TYPE_SOCKET);
+    connListener *tls_listener = listenerByType(CONN_TYPE_TLS);
 
     serverAssert(tcp_listener != NULL);
     tcp_listener->bindaddr = server.bindaddr;
     tcp_listener->bindaddr_count = server.bindaddr_count;
     tcp_listener->port = server.port;
-    tcp_listener->ct = connectionByType(CONN_TYPE_ID_SOCKET);
+    tcp_listener->ct = connectionByType(CONN_TYPE_SOCKET);
     if (changeListener(tcp_listener) == C_ERR) {
         *err = "Failed to bind to specified addresses.";
         if (tls_listener) connCloseListener(tls_listener); /* failed with TLS together */
@@ -2648,7 +2648,7 @@ static int applyBind(const char **err) {
         tls_listener->bindaddr = server.bindaddr;
         tls_listener->bindaddr_count = server.bindaddr_count;
         tls_listener->port = server.tls_port;
-        tls_listener->ct = connectionByType(CONN_TYPE_ID_TLS);
+        tls_listener->ct = connectionByType(CONN_TYPE_TLS);
         if (changeListener(tls_listener) == C_ERR) {
             *err = "Failed to bind to specified addresses.";
             connCloseListener(tcp_listener); /* failed with TCP together */
@@ -2720,12 +2720,12 @@ static int applyTLSPort(const char **err) {
         return 0;
     }
 
-    connListener *listener = listenerByType(CONN_TYPE_ID_TLS);
+    connListener *listener = listenerByType(CONN_TYPE_TLS);
     serverAssert(listener != NULL);
     listener->bindaddr = server.bindaddr;
     listener->bindaddr_count = server.bindaddr_count;
     listener->port = server.tls_port;
-    listener->ct = connectionByType(CONN_TYPE_ID_TLS);
+    listener->ct = connectionByType(CONN_TYPE_TLS);
     clusterUpdateMyselfAnnouncedPorts();
     if (changeListener(listener) == C_ERR) {
         *err = "Unable to listen on this port. Check server logs.";
@@ -2970,7 +2970,7 @@ static void rewriteConfigRdmaBindOption(standardConfig *config, const char *name
 }
 
 static int applyRdmaBind(const char **err) {
-    connListener *rdma_listener = listenerByType(CONN_TYPE_ID_RDMA);
+    connListener *rdma_listener = listenerByType(CONN_TYPE_RDMA);
 
     if (!rdma_listener) {
         *err = "No RDMA building support.";
@@ -2980,7 +2980,7 @@ static int applyRdmaBind(const char **err) {
     rdma_listener->bindaddr = server.rdma_ctx_config.bindaddr;
     rdma_listener->bindaddr_count = server.rdma_ctx_config.bindaddr_count;
     rdma_listener->port = server.rdma_ctx_config.port;
-    rdma_listener->ct = connectionByType(CONN_TYPE_ID_RDMA);
+    rdma_listener->ct = connectionByType(CONN_TYPE_RDMA);
     if (changeListener(rdma_listener) == C_ERR) {
         *err = "Failed to bind to specified addresses for RDMA.";
         return 0;
@@ -2990,7 +2990,7 @@ static int applyRdmaBind(const char **err) {
 }
 
 static int updateRdmaPort(const char **err) {
-    connListener *listener = listenerByType(CONN_TYPE_ID_RDMA);
+    connListener *listener = listenerByType(CONN_TYPE_RDMA);
 
     if (listener == NULL) {
         *err = "No RDMA building support.";
@@ -3000,7 +3000,7 @@ static int updateRdmaPort(const char **err) {
     listener->bindaddr = server.rdma_ctx_config.bindaddr;
     listener->bindaddr_count = server.rdma_ctx_config.bindaddr_count;
     listener->port = server.rdma_ctx_config.port;
-    listener->ct = connectionByType(CONN_TYPE_ID_RDMA);
+    listener->ct = connectionByType(CONN_TYPE_RDMA);
     if (changeListener(listener) == C_ERR) {
         *err = "Unable to listen on this port for RDMA. Check server logs.";
         return 0;

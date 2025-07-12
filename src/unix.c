@@ -29,10 +29,8 @@
 
 static ConnectionType CT_Unix;
 
-static int connUnixGetTypeId(connection *conn) {
-    UNUSED(conn);
-
-    return CONN_TYPE_ID_UNIX;
+static int connUnixGetType(void) {
+    return CONN_TYPE_UNIX;
 }
 
 static void connUnixEventHandler(struct aeEventLoop *el, int fd, void *clientData, int mask) {
@@ -171,7 +169,7 @@ static ssize_t connUnixSyncReadLine(connection *conn, char *ptr, ssize_t size, l
 
 static ConnectionType CT_Unix = {
     /* connection type */
-    .get_type_id = connUnixGetTypeId,
+    .get_type = connUnixGetType,
 
     /* connection type initialize & finalize & configure */
     .init = NULL,

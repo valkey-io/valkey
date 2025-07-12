@@ -65,24 +65,24 @@ typedef enum {
 #define CONN_FLAG_ALLOW_ACCEPT_OFFLOAD (1 << 2) /* Connection accept can be offloaded to IO threads. */
 
 typedef enum {
-    CONN_TYPE_ID_INVALID = 0,
-    CONN_TYPE_ID_SOCKET,
-    CONN_TYPE_ID_UNIX,
-    CONN_TYPE_ID_TLS,
-    CONN_TYPE_ID_RDMA,
+    CONN_TYPE_INVALID = 0,
+    CONN_TYPE_SOCKET,
+    CONN_TYPE_UNIX,
+    CONN_TYPE_TLS,
+    CONN_TYPE_RDMA,
 } ConnectionTypeId;
 
 #define CONN_TYPE_MAX 8 /* 8 is enough to be extendable */
 
-static inline const char *getConnectionTypeName(int type_id) {
-    switch (type_id) {
-    case CONN_TYPE_ID_SOCKET:
+static inline const char *getConnectionTypeName(int type) {
+    switch (type) {
+    case CONN_TYPE_SOCKET:
         return "tcp";
-    case CONN_TYPE_ID_UNIX:
+    case CONN_TYPE_UNIX:
         return "unix";
-    case CONN_TYPE_ID_TLS:
+    case CONN_TYPE_TLS:
         return "tls";
-    case CONN_TYPE_ID_RDMA:
+    case CONN_TYPE_RDMA:
         return "rdma";
     default:
         return "invalid type";
@@ -93,8 +93,7 @@ typedef void (*ConnectionCallbackFunc)(struct connection *conn);
 
 typedef struct ConnectionType {
     /* connection type */
-    int (*get_type_id)(struct connection *conn);
-    const char *(*get_type)(struct connection *conn);
+    int (*get_type)(void);
 
     /* connection type initialize & finalize & configure */
     void (*init)(void); /* auto-call during register */
@@ -319,11 +318,11 @@ static inline ssize_t connSyncReadLine(connection *conn, char *ptr, ssize_t size
     return conn->type->sync_readline(conn, ptr, size, timeout);
 }
 
-static inline int connGetTypeId(connection *conn) {
-    if (!conn || conn->type->get_type_id == NULL) {
-        return CONN_TYPE_ID_INVALID;
+static inline int connGetType(connection *conn) {
+    if (!conn || conn->type->get_type == NULL) {
+        return CONN_TYPE_INVALID;
     }
-    return conn->type->get_type_id(conn);
+    return conn->type->get_type();
 }
 
 static inline int connLastErrorRetryable(connection *conn) {
@@ -441,7 +440,7 @@ int connTypeInitialize(void);
 int connTypeRegister(ConnectionType *ct);
 
 /* Lookup a connection type by type name */
-ConnectionType *connectionByType(int type_id);
+ConnectionType *connectionByType(int type);
 
 /* Fast path to get TCP connection type */
 ConnectionType *connectionTypeTcp(void);

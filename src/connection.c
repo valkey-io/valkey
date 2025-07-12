@@ -30,11 +30,11 @@
 static ConnectionType *connTypes[CONN_TYPE_MAX];
 
 int connTypeRegister(ConnectionType *ct) {
-    int type_id = ct->get_type_id(NULL);
-    serverAssert(type_id > 0 && type_id < CONN_TYPE_MAX && !connTypes[type_id]);
+    int type = ct->get_type();
+    serverAssert(type > 0 && type < CONN_TYPE_MAX && !connTypes[type]);
 
-    serverLog(LL_VERBOSE, "Connection type %s registering", getConnectionTypeName(type_id));
-    connTypes[type_id] = ct;
+    serverLog(LL_VERBOSE, "Connection type %s registering", getConnectionTypeName(type));
+    connTypes[type] = ct;
 
     if (ct->init) {
         ct->init();
@@ -59,13 +59,13 @@ int connTypeInitialize(void) {
     return C_OK;
 }
 
-ConnectionType *connectionByType(int type_id) {
-    serverAssert(type_id > 0 && type_id < CONN_TYPE_MAX);
+ConnectionType *connectionByType(int type) {
+    serverAssert(type > 0 && type < CONN_TYPE_MAX);
 
-    ConnectionType *ct = connTypes[type_id];
+    ConnectionType *ct = connTypes[type];
 
     if (!ct) {
-        serverLog(LL_WARNING, "Missing implement of connection type %s", getConnectionTypeName(type_id));
+        serverLog(LL_WARNING, "Missing implement of connection type %s", getConnectionTypeName(type));
         return NULL;
     }
     return ct;
@@ -77,7 +77,7 @@ ConnectionType *connectionTypeTcp(void) {
 
     if (ct_tcp != NULL) return ct_tcp;
 
-    ct_tcp = connectionByType(CONN_TYPE_ID_SOCKET);
+    ct_tcp = connectionByType(CONN_TYPE_SOCKET);
     serverAssert(ct_tcp != NULL);
 
     return ct_tcp;
@@ -92,7 +92,7 @@ ConnectionType *connectionTypeTls(void) {
      * So we need the cached pointer to handle NULL correctly too. */
     if (!cached) {
         cached = 1;
-        ct_tls = connectionByType(CONN_TYPE_ID_TLS);
+        ct_tls = connectionByType(CONN_TYPE_TLS);
     }
 
     return ct_tls;
@@ -104,7 +104,7 @@ ConnectionType *connectionTypeUnix(void) {
 
     if (ct_unix != NULL) return ct_unix;
 
-    ct_unix = connectionByType(CONN_TYPE_ID_UNIX);
+    ct_unix = connectionByType(CONN_TYPE_UNIX);
     return ct_unix;
 }
 
@@ -157,7 +157,7 @@ sds getListensInfoString(sds info) {
         connListener *listener = &server.listeners[j];
         if (listener->ct == NULL) continue;
 
-        info = sdscatfmt(info, "listener%i:name=%s", j, getConnectionTypeName(listener->ct->get_type_id(NULL)));
+        info = sdscatfmt(info, "listener%i:name=%s", j, getConnectionTypeName(listener->ct->get_type()));
         for (int i = 0; i < listener->count; i++) {
             info = sdscatfmt(info, ",bind=%s", listener->bindaddr[i]);
         }

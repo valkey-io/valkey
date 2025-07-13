@@ -126,7 +126,7 @@ robj *lookupKey(serverDb *db, robj *key, int flags) {
          * Don't do it if we have a saving child, as this will trigger
          * a copy on write madness. */
         if (server.current_client && server.current_client->flag.no_touch &&
-            server.executing_client->cmd->proc != touchCommand)
+            server.executing_client && server.executing_client->cmd->proc != touchCommand)
             flags |= LOOKUP_NOTOUCH;
         if (!hasActiveChildProcess() && !(flags & LOOKUP_NOTOUCH)) {
             /* Shared objects can't be stored in the database. */

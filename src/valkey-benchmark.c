@@ -133,9 +133,9 @@ static struct config {
     int num_threads;
     struct benchmarkThread **threads;
     int cluster_mode;
-    int fuzz_mode;    /* Boolean flag to enable fuzzing */
+    int fuzz_mode; /* Boolean flag to enable fuzzing */
     const char *fuzz_log_level;
-    const char *fuzz_level;  /* Fuzzing mode: "normal" or "aggressive" */
+    const char *fuzz_level; /* Fuzzing mode: "normal" or "aggressive" */
     readFromReplica read_from_replica;
     int cluster_node_count;
     struct clusterNode **cluster_nodes;
@@ -232,8 +232,7 @@ static void freeServerConfig(serverConfig *cfg);
 static int fetchClusterSlotsConfiguration(client c);
 static void updateClusterSlotsConfiguration(void);
 static long long showThroughput(struct aeEventLoop *eventLoop, long long id, void *clientData);
-int runFuzzerClients(const char *host, int port, int max_commands, int parallel_clients, int cluster_mode,
-                       int num_keys, cliSSLconfig *ssl_config, const char *log_level, const char *fuzz_level);
+int runFuzzerClients(const char *host, int port, int max_commands, int parallel_clients, int cluster_mode, int num_keys, cliSSLconfig *ssl_config, const char *log_level, const char *fuzz_level);
 
 /* Dict callbacks */
 static uint64_t dictSdsHash(const void *key);
@@ -2327,10 +2326,9 @@ int main(int argc, char **argv) {
             config.numclients,
             config.cluster_mode,
             config.keyspacelen,
-            config.tls ? &config.sslconfig: NULL,
+            config.tls ? &config.sslconfig : NULL,
             config.fuzz_log_level,
-            config.fuzz_level
-        );
+            config.fuzz_level);
     }
 
     /* Run benchmark with command in the remainder of the arguments. */

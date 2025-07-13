@@ -166,7 +166,9 @@ set(VALKEY_BENCHMARK_SRCS
     ${CMAKE_SOURCE_DIR}/src/monotonic.c
     ${CMAKE_SOURCE_DIR}/src/cli_common.c
     ${CMAKE_SOURCE_DIR}/src/mt19937-64.c
-    ${CMAKE_SOURCE_DIR}/src/strl.c)
+    ${CMAKE_SOURCE_DIR}/src/strl.c
+    ${CMAKE_SOURCE_DIR}/src/fuzzer_client.c
+    ${CMAKE_SOURCE_DIR}/src/fuzzer_command_generator.c)
 
 # valkey-rdma module
 set(VALKEY_RDMA_MODULE_SRCS ${CMAKE_SOURCE_DIR}/src/rdma.c)

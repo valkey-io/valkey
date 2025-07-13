@@ -153,35 +153,6 @@ static sds formatCommandString(const Command *cmd) {
     return cmd_str;
 }
 
-static void formatCommandToBuffer(const Command *cmd, char *buffer, size_t buffer_size) {
-    buffer[0] = '\0';
-    size_t pos = 0;
-
-    for (int i = 0; i < cmd->argc && pos < buffer_size - 1; i++) {
-        if (i > 0 && pos < buffer_size - 2) {
-            buffer[pos++] = ' ';
-            buffer[pos] = '\0';
-        }
-
-        size_t arg_len = strlen(cmd->argv[i]);
-        size_t remaining = buffer_size - pos - 1;
-
-        if (arg_len > 50 && remaining > 53) {
-            /* Truncate long arguments */
-            strncat(buffer + pos, cmd->argv[i], 50);
-            strcat(buffer + pos, "...");
-            pos += 53;
-        } else if (remaining > arg_len) {
-            strcat(buffer + pos, cmd->argv[i]);
-            pos += arg_len;
-        } else {
-            /* Not enough space, truncate */
-            strncat(buffer + pos, cmd->argv[i], remaining);
-            break;
-        }
-    }
-}
-
 static void addError(ErrorList *list, const char *message, const char *command) {
     list->total_errors++;
 
@@ -392,7 +363,7 @@ static valkeyContext *connectToServer(const char *host, int port, cliSSLconfig *
     /* Test connection with a PING */
     reply = valkeyCommand(ctx, "PING");
     if (reply == NULL || ctx->err) {
-        logMessage(LOG_ERROR, "[Thread %d] PING failed: %s", thread_id, ctx->errstr);
+        logMessage(LOG_INFO, "[Thread %d] PING failed: %s", thread_id, ctx->errstr);
         if (reply) freeReplyObject(reply);
         valkeyFree(ctx);
         return NULL;
@@ -489,10 +460,9 @@ static void handleCommandTimeout(Command *cmd, time_t start_time) {
     time_t current_time = time(NULL);
     double elapsed_time = difftime(current_time, start_time);
 
-    char cmd_buffer[256];
-    formatCommandToBuffer(cmd, cmd_buffer, sizeof(cmd_buffer));
-    logMessage(LOG_ERROR, "[Thread %d] TIMEOUT: Command timed out after %.1f seconds (max %d seconds) - Command: %s",
-               thread_id, elapsed_time, COMMAND_TIMEOUT_SEC, cmd_buffer);
+    logMessage(LOG_ERROR, "[Thread %d] TIMEOUT: Command timed out after %.1f seconds (max %d seconds) - Command: ",
+               thread_id, elapsed_time, COMMAND_TIMEOUT_SEC);
+    logMessage(LOG_ERROR, "Command: %s", printCommand(cmd));
     logMessage(LOG_ERROR, "[Thread %d] ABORTING THREAD due to timeout (pthread_id: %lu)",
                thread_id, (unsigned long)pthread_self());
 }
@@ -532,22 +502,22 @@ static void logReplyDebug(const char *command, valkeyReply *reply) {
     case VALKEY_REPLY_STATUS:
     case VALKEY_REPLY_ERROR:
         if (reply->str) {
-            logMessage(LOG_DEBUG, "Command -> Reply: %s -> %.100s", command, reply->str);
+            logMessage(LOG_DEBUG, "%s: -> %.100s", command, reply->str);
         } else {
-            logMessage(LOG_DEBUG, "Command -> Reply: %s -> (empty)", command);
+            logMessage(LOG_DEBUG, "%s: -> (empty)", command);
         }
         break;
     case VALKEY_REPLY_ARRAY:
-        logMessage(LOG_DEBUG, "Command -> Reply: %s -> (array of %zu elements)", command, reply->elements);
+        logMessage(LOG_DEBUG, "%s: -> (array of %zu elements)", command, reply->elements);
         break;
     case VALKEY_REPLY_INTEGER:
-        logMessage(LOG_DEBUG, "Command -> Reply: %s -> %lld", command, reply->integer);
+        logMessage(LOG_DEBUG, "%s: -> %lld", command, reply->integer);
         break;
     case VALKEY_REPLY_NIL:
-        logMessage(LOG_DEBUG, "Command -> Reply: %s -> (nil)", command);
+        logMessage(LOG_DEBUG, "%s: -> (nil)", command);
         break;
     default:
-        logMessage(LOG_DEBUG, "Command -> Reply: %s -> (unknown reply type)", command);
+        logMessage(LOG_DEBUG, "%s: -> (unknown reply type)", command);
     }
 }
 
@@ -579,8 +549,7 @@ static CommandResult sendCommandAndGetReply(valkeyContext *ctx) {
 
     Command *cmd = generateCmd();
     if (current_log_level >= LOG_DEBUG) {
-        logMessage(LOG_DEBUG, "send Command: ");
-        printCommand(cmd);
+        logMessage(LOG_DEBUG, "send Command: %s", printCommand(cmd));
     }
 
     /* Send command */

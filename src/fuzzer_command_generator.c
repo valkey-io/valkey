@@ -264,16 +264,26 @@ void freeCommand(Command *cmd) {
     free(cmd);
 }
 
-void printCommand(Command *cmd) {
+char *printCommand(Command *cmd) {
+    static __thread char buffer[1024];
+    int offset = 0;
+
+    buffer[0] = '\0';
     for (int i = 0; i < cmd->argc; i++) {
         int arg_len = sdslen(cmd->argv[i]);
         if (arg_len > 50) {
-            printf("%.50s... ", cmd->argv[i]);
+            offset += snprintf(buffer + offset, sizeof(buffer) - offset, "%.50s... ", cmd->argv[i]);
         } else {
-            printf("%s ", cmd->argv[i]);
+            offset += snprintf(buffer + offset, sizeof(buffer) - offset, "%s ", cmd->argv[i]);
+        }
+
+        /* Prevent buffer overflow */
+        if ((size_t)offset >= sizeof(buffer) - 1) {
+            break;
         }
     }
-    printf("\n");
+
+    return buffer;
 }
 
 /* Dictionary type implementation for config entries */
@@ -501,20 +511,19 @@ void generateRandomSpecialValue(Command *cmd, ConfigEntry *entry, const char *co
     } else if (strcasecmp(config_name, "notify-keyspace-events") == 0) {
         /* Generate valid keyspace notification configuration */
         static const char *options[] = {
-            "",    /* Empty string = notifications disabled */
-            "AKE", /* All keyspace events */
-            "AK",  /* All keyspace events for keys */
-            "AE",  /* All keyspace events for events */
-            "K",   /* Keyspace events */
-            "E",   /* Key-event events */
-            "g",   /* Generic commands */
-            "l",   /* List commands */
-            "s",   /* Set commands */
-            "h",   /* Hash commands */
-            "z",   /* Sorted set commands */
-            "x",   /* Expired events */
-            "e",   /* Evicted events */
-            "KEA"  /* Combination */
+            "",   /* Empty string = notifications disabled */
+            "AK", /* All keyspace events for keys */
+            "AE", /* All keyspace events for events */
+            "K",  /* Keyspace events */
+            "E",  /* Key-event events */
+            "g",  /* Generic commands */
+            "l",  /* List commands */
+            "s",  /* Set commands */
+            "h",  /* Hash commands */
+            "z",  /* Sorted set commands */
+            "x",  /* Expired events */
+            "e",  /* Evicted events */
+            "KEA" /* Combination */
         };
         appendArg(cmd, sdsnew(options[rand() % 14]));
     } else if (strcasecmp(config_name, "oom-score-adj-values") == 0) {
@@ -1417,8 +1426,16 @@ static void generateStringArgValue(Command *cmd, const char *argName, CommandArg
     } else if (strcmp(argName, "field") == 0) {
         appendArg(cmd, sdscatprintf(sdsempty(), "field:%d", r % 20));
     } else if (strcmp(argName, "value") == 0) {
-        /* generate value of 10 KB */
-        int value_size = 5 * 1024 * 1024;
+        /* Generate random value with 95% chance between 1 byte and 1KB, 5% chance between 1KB and 10KB */
+        int value_size;
+        if ((r % 100) < 95) {
+            /* 95% chance: between 1 byte and 1KB */
+            value_size = 1 + (rand() % 1024);
+        } else {
+            /* 5% chance: between 1KB and 10KB */
+            value_size = 1024 + (rand() % (10240 - 1024));
+        }
+
         sds value = sdsnewlen(NULL, value_size);
         memset(value, 'x', value_size);
         appendArg(cmd, value);

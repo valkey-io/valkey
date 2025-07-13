@@ -23,6 +23,6 @@ void resetClientFuzzCtx(void);
 void freeClientCtx(void);
 Command *generateCmd(void);
 void freeCommand(Command *args);
-void printCommand(Command *cmd);
+char *printCommand(Command *cmd);
 
 #endif /* FUZZER_COMMAND_GENERATOR_H */

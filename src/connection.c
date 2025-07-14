@@ -31,7 +31,7 @@ static ConnectionType *connTypes[CONN_TYPE_MAX];
 
 int connTypeRegister(ConnectionType *ct) {
     int type = ct->get_type();
-    serverAssert(type > 0 && type < CONN_TYPE_MAX && !connTypes[type]);
+    serverAssert(type >= 0 && type < CONN_TYPE_MAX && !connTypes[type]);
 
     serverLog(LL_VERBOSE, "Connection type %s registering", getConnectionTypeName(type));
     connTypes[type] = ct;
@@ -60,13 +60,12 @@ int connTypeInitialize(void) {
 }
 
 ConnectionType *connectionByType(int type) {
-    serverAssert(type > 0 && type < CONN_TYPE_MAX);
+    serverAssert(type >= 0 && type < CONN_TYPE_MAX);
 
     ConnectionType *ct = connTypes[type];
 
     if (!ct) {
         serverLog(LL_WARNING, "Missing implement of connection type %s", getConnectionTypeName(type));
-        return NULL;
     }
     return ct;
 }
@@ -112,8 +111,7 @@ void connTypeCleanupAll(void) {
     ConnectionType *ct;
     int type;
 
-    // type = 0 is an invalid conn type.
-    for (type = 1; type < CONN_TYPE_MAX; type++) {
+    for (type = 0; type < CONN_TYPE_MAX; type++) {
         ct = connTypes[type];
         if (!ct) continue;
 
@@ -127,8 +125,7 @@ int connTypeHasPendingData(void) {
     int type;
     int ret = 0;
 
-    // type = 0 is an invalid conn type.
-    for (type = 1; type < CONN_TYPE_MAX; type++) {
+    for (type = 0; type < CONN_TYPE_MAX; type++) {
         ct = connTypes[type];
         if (ct && ct->has_pending_data && (ret = ct->has_pending_data())) {
             return ret;
@@ -144,8 +141,7 @@ int connTypeProcessPendingData(void) {
     int type;
     int ret = 0;
 
-    // type = 0 is an invalid conn type.
-    for (type = 1; type < CONN_TYPE_MAX; type++) {
+    for (type = 0; type < CONN_TYPE_MAX; type++) {
         ct = connTypes[type];
         if (ct && ct->process_pending_data) {
             ret += ct->process_pending_data();
@@ -156,8 +152,7 @@ int connTypeProcessPendingData(void) {
 }
 
 sds getListensInfoString(sds info) {
-    // server.listeners[0] is reserved.
-    for (int j = 1; j < CONN_TYPE_MAX; j++) {
+    for (int j = 0; j < CONN_TYPE_MAX; j++) {
         connListener *listener = &server.listeners[j];
         if (listener->ct == NULL) continue;
 

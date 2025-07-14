@@ -65,14 +65,13 @@ typedef enum {
 #define CONN_FLAG_ALLOW_ACCEPT_OFFLOAD (1 << 2) /* Connection accept can be offloaded to IO threads. */
 
 typedef enum {
-    CONN_TYPE_INVALID = 0,
+    CONN_TYPE_INVALID = -1,
     CONN_TYPE_SOCKET,
     CONN_TYPE_UNIX,
     CONN_TYPE_TLS,
     CONN_TYPE_RDMA,
+    CONN_TYPE_MAX,
 } ConnectionTypeId;
-
-#define CONN_TYPE_MAX 5
 
 static inline const char *getConnectionTypeName(int type) {
     switch (type) {

@@ -3074,7 +3074,7 @@ void initListeners(void) {
 
     /* create all the configured listener, and add handler to start to accept */
     int listen_fds = 0;
-    for (int j = 1; j < CONN_TYPE_MAX; j++) {
+    for (int j = 0; j < CONN_TYPE_MAX; j++) {
         listener = &server.listeners[j];
         if (listener->ct == NULL) continue;
 
@@ -4459,7 +4459,7 @@ void incrementErrorCount(const char *fullerr, size_t namelen) {
 void closeListeningSockets(int unlink_unix_socket) {
     int j;
 
-    for (int i = 1; i < CONN_TYPE_MAX; i++) {
+    for (int i = 0; i < CONN_TYPE_MAX; i++) {
         connListener *listener = &server.listeners[i];
         if (listener->ct == NULL) continue;
 
@@ -7279,7 +7279,7 @@ __attribute__((weak)) int main(int argc, char **argv) {
             serverAssert(verifyClusterConfigWithData() == C_OK);
         }
 
-        for (j = 1; j < CONN_TYPE_MAX; j++) {
+        for (j = 0; j < CONN_TYPE_MAX; j++) {
             connListener *listener = &server.listeners[j];
             if (listener->ct == NULL) continue;
 

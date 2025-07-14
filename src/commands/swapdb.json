@@ -15,6 +15,7 @@
             "KEYSPACE",
             "DANGEROUS"
         ],
+        "get_dbid_args": "swapdbDbIdArgs",
         "arguments": [
             {
                 "name": "index1",

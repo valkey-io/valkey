@@ -1002,14 +1002,13 @@ typedef struct readyList {
                                                   * deep sanitization of RESTORE \
                                                   * payload. */
 
-#define SELECTOR_FLAG_ROOT (1 << 0)           /* This is the root user permission \
-                                               * selector. */
-#define SELECTOR_FLAG_ALLKEYS (1 << 1)        /* The user can mention any key. */
-#define SELECTOR_FLAG_ALLCOMMANDS (1 << 2)    /* The user can run all commands. */
-#define SELECTOR_FLAG_ALLCHANNELS (1 << 3)    /* The user can mention any Pub/Sub \
-                                                 channel. */
-#define SELECTOR_FLAG_DBLIST_NEGATED (1 << 4) /* Negate DB list interpretation */
-#define SELECTOR_FLAG_ALLDBS (1 << 5)         /* Allow all databases */
+#define SELECTOR_FLAG_ROOT (1 << 0)        /* This is the root user permission \
+                                            * selector. */
+#define SELECTOR_FLAG_ALLKEYS (1 << 1)     /* The user can mention any key. */
+#define SELECTOR_FLAG_ALLCOMMANDS (1 << 2) /* The user can run all commands. */
+#define SELECTOR_FLAG_ALLCHANNELS (1 << 3) /* The user can mention any Pub/Sub \
+                                              channel. */
+#define SELECTOR_FLAG_ALLDBS (1 << 4)      /* Allow all databases */
 
 
 typedef struct {
@@ -2473,6 +2472,7 @@ typedef enum {
 
 typedef void serverCommandProc(client *c);
 typedef int serverGetKeysProc(struct serverCommand *cmd, robj **argv, int argc, getKeysResult *result);
+typedef int *commandDbIdArgs(robj **argv, int argc, int *count);
 
 /* Command structure.
  *
@@ -2558,6 +2558,10 @@ typedef int serverGetKeysProc(struct serverCommand *cmd, robj **argv, int argc, 
  * CMD_TOUCHES_ARBITRARY_KEYS: The command may touch (and cause lazy-expire)
  *                             arbitrary key (i.e not provided in argv)
  *
+ * CMD_CROSS_DB: The command works across multiple databases.
+ *
+ * CMD_ALL_DBS: The command works with all databases.
+ *
  * The following additional flags are only used in order to put commands
  * in a specific ACL category. Commands can have multiple ACL categories.
  * See valkey.conf for the exact meaning of each.
@@ -2594,10 +2598,11 @@ struct serverCommand {
     int num_history;
     const char **tips; /* An array of strings that are meant to be tips for clients/proxies regarding this command */
     int num_tips;
-    serverCommandProc *proc; /* Command implementation */
-    int arity;               /* Number of arguments, it is possible to use -N to say >= N */
-    uint64_t flags;          /* Command flags, see CMD_*. */
-    uint64_t acl_categories; /* ACl categories, see ACL_CATEGORY_*. */
+    serverCommandProc *proc;        /* Command implementation */
+    int arity;                      /* Number of arguments, it is possible to use -N to say >= N */
+    uint64_t flags;                 /* Command flags, see CMD_*. */
+    uint64_t acl_categories;        /* ACl categories, see ACL_CATEGORY_*. */
+    commandDbIdArgs *get_dbid_args; /* Function to get database IDs used by this command */
     keySpec *key_specs;
     int key_specs_num;
     /* Use a function to determine keys arguments in a command line.
@@ -3199,6 +3204,7 @@ void ACLInit(void);
 #define ACL_DENIED_AUTH 4           /* Only used for ACL LOG entries. */
 #define ACL_DENIED_CHANNEL 5        /* Only used for pub/sub commands */
 #define ACL_INVALID_TLS_CERT_AUTH 6 /* Only used for TLS Auto-authentication */
+#define ACL_NOT_IMPLEMENTED 7       /* Only used for CMD_CROSS_DB validation */
 
 /* Context values for addACLLogEntry(). */
 #define ACL_LOG_CTX_TOPLEVEL 0
@@ -4072,6 +4078,11 @@ void lcsCommand(client *c);
 void quitCommand(client *c);
 void resetCommand(client *c);
 void failoverCommand(client *c);
+
+/* Helper functions for getting database id args from argv, argc */
+int *selectDbIdArgs(robj **argv, int argc, int *count);
+int *swapdbDbIdArgs(robj **argv, int argc, int *count);
+int *moveDbIdArgs(robj **argv, int argc, int *count);
 
 #if defined(__GNUC__)
 void *calloc(size_t count, size_t size) __attribute__((deprecated));

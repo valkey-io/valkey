@@ -562,19 +562,6 @@ start_server {tags {"acl external:skip"}} {
         assert_match "*NOPERM*database*" $err
     }
     
-    test {Test negated database list} {
-        r ACL SETUSER db-user on +@all nopass ~* db!=0
-        $r2 auth db-user password
-        
-        catch {$r2 select 0} err
-        assert_match "*NOPERM*database*" $err
-        
-        assert_equal "OK" [$r2 select 1]
-        assert_equal "OK" [$r2 set key1 value1]
-        
-        r ACL SETUSER db-user resetdbs
-    }
-    
     test {Test database permissions with selectors} {
         r ACL SETUSER db-selector on nopass (db=0,1 +@all -@read ~write*) (db=2,3 +@all -@write ~read*)
         $r2 auth db-selector password
@@ -676,13 +663,6 @@ start_server {tags {"acl external:skip"}} {
         set user_line [lsearch -inline $acl_str "user db-string-user*"]
         
         assert_match "*db=0,1*" $user_line
-        
-        r ACL SETUSER db-string-user2 on +@all nopass ~* db!=0,1
-        
-        set acl_str [r ACL LIST]
-        set user_line [lsearch -inline $acl_str "user db-string-user2*"]
-        
-        assert_match "*db!=0,1*" $user_line
     }
     
     test {Test edge cases with database IDs} {

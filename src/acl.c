@@ -181,8 +181,8 @@ typedef struct {
                           ALLCHANNELS is set in the user. */
     sds command_rules; /* A string representation of the ordered categories and commands, this
                         * is used to regenerate the original ACL string for display. */
-    intset *dbs;       /* Set of database ids, based on SELECTOR_FLAG_DBLIST_NEGATED
-                        it is going to be allowed or disallowed database ids */
+    intset *dbs;       /* Set of allowed database ids. If set is NULL or empty the user
+                        * cannot access any database, unless the flag ALLDBS is set. */
 } aclSelector;
 
 static void ACLResetFirstArgsForCommand(aclSelector *selector, unsigned long id);
@@ -821,12 +821,7 @@ static sds ACLDescribeSelector(aclSelector *selector) {
     if (selector->flags & SELECTOR_FLAG_ALLDBS) {
         res = sdscatlen(res, "alldbs ", 7);
     } else {
-        if (selector->flags & SELECTOR_FLAG_DBLIST_NEGATED) {
-            res = sdscatlen(res, "db!=", 4);
-        } else {
-            res = sdscatlen(res, "db=", 3);
-        }
-
+        res = sdscatlen(res, "db=", 3);
         uint32_t len = intsetLen(selector->dbs);
         for (uint32_t i = 0; i < len; i++) {
             int64_t dbid;
@@ -965,7 +960,7 @@ static void ACLAddAllowedFirstArg(aclSelector *selector, unsigned long id, const
 }
 
 /* Helper function to set database permissions for a selector */
-static int ACLSetSelectorDatabasePermissions(aclSelector *selector, const char *dbs_str, int negated) {
+static int ACLSetSelectorDatabasePermissions(aclSelector *selector, const char *dbs_str) {
     selector->flags &= ~SELECTOR_FLAG_ALLDBS;
 
     intset *new_dbs = intsetNew();
@@ -974,19 +969,12 @@ static int ACLSetSelectorDatabasePermissions(aclSelector *selector, const char *
         return C_ERR;
     }
 
-    if (negated) {
-        selector->flags |= SELECTOR_FLAG_DBLIST_NEGATED;
-    } else {
-        selector->flags &= ~SELECTOR_FLAG_DBLIST_NEGATED;
-    }
-
     char *dblist = zstrdup(dbs_str);
     if (!dblist) {
         intsetFree(new_dbs);
         errno = ENOMEM;
         return C_ERR;
     }
-
 
     // Reject empty list, trailing commas or more than 1 consecutive commas
     if (strlen(dblist) == 0 || dblist[0] == ',' ||
@@ -1100,11 +1088,8 @@ static aclSelector *aclCreateSelectorFromOpSet(const char *opset, size_t opsetle
  * db=<dbid>    Add database ID to the set of allowed IDs, any other database ID
  *              will be disallowed. May be used with `,` for assingning multiple
  *              allowed IDs (e.g "db=1,2,3").
- * db!=<dbid>   Add database ID to the set of disallowed IDs, any other database ID
- *              will be disallowed. May be used with `,` for assingning multiple
- *              disallowed IDs (e.g "db!=4,5,6").
  * alldbs       Allow access to all databases.
- * resetdbs     Flush the set of allowed/disallowed database IDs, revert to default
+ * resetdbs     Flush the set of allowed database IDs, revert to default
  *              behaviour (all databases are allowed).
  */
 static int ACLSetSelector(aclSelector *selector, const char *op, size_t oplen) {
@@ -1132,11 +1117,8 @@ static int ACLSetSelector(aclSelector *selector, const char *op, size_t oplen) {
             intsetFree(selector->dbs);
             selector->dbs = intsetNew();
         }
-    } else if (strncmp(op, "db=", 3) == 0) {
-        int result = ACLSetSelectorDatabasePermissions(selector, op + 3, 0);
-        if (result != C_OK) return result;
-    } else if (strncmp(op, "db!=", 4) == 0) {
-        int result = ACLSetSelectorDatabasePermissions(selector, op + 4, 1);
+    } else if (strncmp(op, "db=", 3) == 0 || strncmp(op, "DB=", 3) == 0) {
+        int result = ACLSetSelectorDatabasePermissions(selector, op + 3);
         if (result != C_OK) return result;
     } else if (!strcasecmp(op, "allcommands") || !strcasecmp(op, "+@all")) {
         memset(selector->allowed_commands, 255, sizeof(selector->allowed_commands));
@@ -1759,13 +1741,11 @@ int ACLSelectorCanAccessDb(aclSelector *selector, long long dbid) {
     if (selector->flags & SELECTOR_FLAG_ALLDBS)
         return 1;
 
-    if (dbid < 0 || dbid >= server.dbnum)
+    if (dbid < 0 || dbid >= server.dbnum || !selector->dbs)
         return 0;
 
     int found = intsetFind(selector->dbs, (int64_t)dbid);
 
-    if (selector->flags & SELECTOR_FLAG_DBLIST_NEGATED)
-        return !found;
     return found;
 }
 
@@ -1801,41 +1781,43 @@ static int ACLSelectorCheckCmd(aclSelector *selector,
                                int dbid) {
     uint64_t id = cmd->id;
     int ret;
-    if (cmd->flags & CMD_CROSS_DB) {
-        if (cmd->proc == selectCommand && argc > 1) {
-            long long target_db;
-            if (getLongLongFromObject(argv[1], &target_db) == C_OK) {
-                if (target_db >= 0 && target_db < server.dbnum) {
-                    dbid = (int)target_db;
-                }
-            }
-        } else if (cmd->proc == swapdbCommand && argc > 2) {
-            long long db1, db2;
-            if (getLongLongFromObject(argv[1], &db1) == C_OK && getLongLongFromObject(argv[2], &db2) == C_OK &&
-                (!ACLSelectorCanAccessDb(selector, db1) || !ACLSelectorCanAccessDb(selector, db2))) {
-                return ACL_DENIED_DB;
-            }
-        } else if (cmd->proc == moveCommand && argc > 2) {
-            long long target_db;
-            if (getLongLongFromObject(argv[2], &target_db) == C_OK &&
-                !ACLSelectorCanAccessDb(selector, target_db)) {
-                return ACL_DENIED_DB;
-            }
-        }
-    }
 
-    if ((cmd->flags & CMD_ALL_DBS) && !(selector->flags & SELECTOR_FLAG_ALLDBS)) {
+    /* Check database level permissions based on command flags. */
+    if (cmd->flags & CMD_CROSS_DB) {
+        if (cmd->get_dbid_args) {
+            int count = 0;
+            int *dbids = cmd->get_dbid_args(argv, argc, &count);
+            if (dbids) {
+                for (int i = 0; i < count; i++) {
+                    if (!ACLSelectorCanAccessDb(selector, dbids[i])) {
+                        if (keyidxptr) {
+                            if (cmd->proc == selectCommand)
+                                *keyidxptr = 1;
+                            else if (cmd->proc == moveCommand)
+                                *keyidxptr = 2;
+                            else if (cmd->proc == swapdbCommand)
+                                *keyidxptr = (i == 0) ? 1 : 2;
+                            else
+                                *keyidxptr = 0;
+                        }
+                        zfree(dbids);
+                        return ACL_DENIED_DB;
+                    }
+                }
+                zfree(dbids);
+            }
+        } else {
+            /* Command has flag CMD_CROSS_DB but has no function to get its db id args */
+            return ACL_NOT_IMPLEMENTED;
+        }
+    } else if ((cmd->flags & CMD_ALL_DBS) && !(selector->flags & SELECTOR_FLAG_ALLDBS)) {
         for (int i = 0; i < server.dbnum; i++) {
             if (!ACLSelectorCanAccessDb(selector, i)) {
                 return ACL_DENIED_DB;
             }
         }
-    }
-
-    if (!ACLSelectorCanAccessDb(selector, dbid)) {
-        if (keyidxptr) {
-            *keyidxptr = (cmd->proc == selectCommand) ? 1 : 0;
-        }
+    } else if (!ACLSelectorCanAccessDb(selector, dbid)) {
+        if (keyidxptr) *keyidxptr = 0;
         return ACL_DENIED_DB;
     }
 
@@ -2778,6 +2760,7 @@ static void ACLUpdateInfoMetrics(int reason) {
         server.acl_info.acl_access_denied_tls_cert++;
     } else if (reason == ACL_DENIED_DB) {
         server.acl_info.invalid_db_accesses++;
+    } else if (reason == ACL_NOT_IMPLEMENTED) {
     } else {
         serverPanic("Unknown ACL_DENIED encoding");
     }
@@ -2915,8 +2898,14 @@ sds getAclErrorMessage(int acl_res, user *user, struct serverCommand *cmd, sds e
                              "database %s",
                              user->name, errored_val);
         } else {
-            return sdsnew("No permissions to access current database");
+            return sdsnew("No permissions to access database");
         }
+    case ACL_NOT_IMPLEMENTED:
+        return sdscatfmt(sdsempty(),
+                         "Command '%S' has flag CMD_CROSS_DB "
+                         "but has no function to get its database id args, "
+                         "see serverCommand in server.h",
+                         cmd->fullname);
     }
     serverPanic("Reached deadcode on getAclErrorMessage");
 }

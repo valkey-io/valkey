@@ -2479,7 +2479,8 @@ static int cliSendCommand(int argc, char **argv, long repeat) {
                 cliRefreshPrompt();
             } else if (!strcasecmp(command, "exec") && argc == 1 && config.in_multi) {
                 config.in_multi = 0;
-                if (config.last_cmd_type == VALKEY_REPLY_ERROR || config.last_cmd_type == VALKEY_REPLY_NIL) {
+                if (config.last_cmd_type == VALKEY_REPLY_ERROR || config.last_cmd_type == VALKEY_REPLY_NIL ||
+                    config.last_cmd_type == VALKEY_REPLY_ARRAY) {
                     config.conn_info.input_dbnum = config.dbnum = config.pre_multi_dbnum;
                 }
                 cliRefreshPrompt();

@@ -42,7 +42,7 @@ typedef struct clusterLink {
 } clusterLink;
 
 /* Cluster link flags and macros. */
-#define CLUSTER_LINK_EXTENSIONS_SUPPORTED (1 << 0)        /* This link supports extensions. */
+#define CLUSTER_LINK_EXTENSIONS_SUPPORTED (1 << 0) /* This link supports extensions. */
 
 #define linkSupportsExtension(link) ((link)->flags & CLUSTER_LINK_EXTENSIONS_SUPPORTED)
 

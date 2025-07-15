@@ -452,21 +452,6 @@ static void ldbTrace(lua_State *lua) {
     }
 }
 
-/* Implements the debugger "maxlen" command. It just queries or sets the
- * ldb.maxlen variable. */
-static void ldbMaxlen(robj **argv, int argc) {
-    if (argc == 2) {
-        int newval = atoi(argv[1]->ptr);
-        scriptingEngineDebuggerSetMaxlen(newval);
-    }
-    size_t maxlen = scriptingEngineDebuggerGetMaxlen();
-    if (maxlen) {
-        ldbLog(sdscatprintf(sdsempty(), "<value> replies are truncated at %u bytes.", (uint32_t)maxlen));
-    } else {
-        ldbLog(sdscatprintf(sdsempty(), "<value> replies are unlimited."));
-    }
-}
-
 #define CONTINUE_SCRIPT_EXECUTION 0
 #define CONTINUE_READ_NEXT_COMMAND 1
 
@@ -552,13 +537,6 @@ static int valkeyCommandHandler(robj **argv, size_t argc, void *context) {
     return CONTINUE_READ_NEXT_COMMAND;
 }
 
-static int maxlenCommandHandler(robj **argv, size_t argc, void *context) {
-    UNUSED(context);
-    ldbMaxlen(argv, argc);
-    scriptingEngineDebuggerFlushLogs();
-    return CONTINUE_READ_NEXT_COMMAND;
-}
-
 static int abortCommandHandler(robj **argv, size_t argc, void *context) {
     UNUSED(argv);
     UNUSED(argc);
@@ -570,7 +548,8 @@ static int abortCommandHandler(robj **argv, size_t argc, void *context) {
     return CONTINUE_READ_NEXT_COMMAND;
 }
 
-static debuggerCommand *commands_def_cache = NULL;
+static debuggerCommand *commands_array_cache = NULL;
+static size_t commands_array_len = 0;
 
 void ldbGenerateDebuggerCommandsArray(lua_State *lua,
                                       const debuggerCommand **commands,
@@ -596,12 +575,8 @@ void ldbGenerateDebuggerCommandsArray(lua_State *lua,
         {.name = "cmd", .optional = 0, .variadic = 1},
     };
 
-    static debuggerCommandParam maxlen_params[] = {
-        {.name = "len", .optional = 1},
-    };
-
-    if (commands_def_cache == NULL) {
-        debuggerCommand commands_def[14] = {
+    if (commands_array_cache == NULL) {
+        debuggerCommand commands_array[] = {
             VALKEYMODULE_SCRIPTING_ENGINE_DEBUGGER_COMMAND("step", 1, NULL, 0, "Run current line and stop again.", 0, stepCommandHandler),
             VALKEYMODULE_SCRIPTING_ENGINE_DEBUGGER_COMMAND("next", 1, NULL, 0, "Alias for step.", 0, stepCommandHandler),
             VALKEYMODULE_SCRIPTING_ENGINE_DEBUGGER_COMMAND("continue", 1, NULL, 0, "Run till next breakpoint.", 0, continueCommandHandler),
@@ -614,16 +589,17 @@ void ldbGenerateDebuggerCommandsArray(lua_State *lua,
             VALKEYMODULE_SCRIPTING_ENGINE_DEBUGGER_COMMAND_WITH_CTX("valkey", 1, valkey_params, 1, "Execute a command.", 0, valkeyCommandHandler, lua),
             VALKEYMODULE_SCRIPTING_ENGINE_DEBUGGER_COMMAND_WITH_CTX("redis", 1, valkey_params, 1, NULL, 1, valkeyCommandHandler, lua),
             VALKEYMODULE_SCRIPTING_ENGINE_DEBUGGER_COMMAND_WITH_CTX(SERVER_API_NAME, 0, valkey_params, 1, NULL, 1, valkeyCommandHandler, lua),
-            VALKEYMODULE_SCRIPTING_ENGINE_DEBUGGER_COMMAND("maxlen", 1, maxlen_params, 1, "Trim logged replies and Lua var dumps to len. Specifying zero as <len> means unlimited.", 0, maxlenCommandHandler),
             VALKEYMODULE_SCRIPTING_ENGINE_DEBUGGER_COMMAND_WITH_CTX("abort", 1, NULL, 0, "Stop the execution of the script. In sync mode dataset changes will be retained.", 0, abortCommandHandler, lua),
         };
 
-        commands_def_cache = zmalloc(sizeof(debuggerCommand) * 14);
-        memcpy(commands_def_cache, &commands_def, sizeof(commands_def));
+        commands_array_len = sizeof(commands_array) / sizeof(debuggerCommand);
+
+        commands_array_cache = zmalloc(sizeof(debuggerCommand) * commands_array_len);
+        memcpy(commands_array_cache, &commands_array, sizeof(commands_array));
     }
 
-    *commands = commands_def_cache;
-    *commands_len = 14;
+    *commands = commands_array_cache;
+    *commands_len = commands_array_len;
 }
 
 /* Read debugging commands from client.

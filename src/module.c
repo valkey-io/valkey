@@ -13367,6 +13367,17 @@ void VM_ScriptingEngineDebuggerLogRespReplyStr(const char *reply) {
     scriptingEngineDebuggerLogRespReplyStr(reply);
 }
 
+/* Function to log a RESP reply as debugger output, in a human readable format.
+ *
+ * If the resulting string is longer than the maximum text length, configured in
+ * the debugger settings, plus a few more chars used as prefix, it gets truncated.
+ */
+void VM_ScriptingEngineDebuggerLogRespReply(ValkeyModuleCallReply *reply) {
+    size_t proto_len;
+    const char *proto = callReplyGetProto(reply, &proto_len);
+    scriptingEngineDebuggerLogRespReplyStr(proto);
+}
+
 /* Function to send all debugger messages in the memory buffer written with the
  * `ValkeyModule_ScriptingEngineDebuggerLog` function.
  */
@@ -14261,6 +14272,7 @@ void moduleRegisterCoreAPI(void) {
     REGISTER_API(GetFunctionExecutionState);
     REGISTER_API(ScriptingEngineDebuggerLog);
     REGISTER_API(ScriptingEngineDebuggerLogRespReplyStr);
+    REGISTER_API(ScriptingEngineDebuggerLogRespReply);
     REGISTER_API(ScriptingEngineDebuggerFlushLogs);
     REGISTER_API(ScriptingEngineDebuggerProcessCommands);
 }

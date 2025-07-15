@@ -2082,6 +2082,8 @@ VALKEYMODULE_API void (*ValkeyModule_ScriptingEngineDebuggerLog)(ValkeyModuleStr
 
 VALKEYMODULE_API void (*ValkeyModule_ScriptingEngineDebuggerLogRespReplyStr)(const char *reply) VALKEYMODULE_ATTR;
 
+VALKEYMODULE_API void (*ValkeyModule_ScriptingEngineDebuggerLogRespReply)(ValkeyModuleCallReply *reply) VALKEYMODULE_ATTR;
+
 VALKEYMODULE_API void (*ValkeyModule_ScriptingEngineDebuggerFlushLogs)(void) VALKEYMODULE_ATTR;
 
 VALKEYMODULE_API void (*ValkeyModule_ScriptingEngineDebuggerProcessCommands)(int *client_disconnected,
@@ -2461,6 +2463,7 @@ static int ValkeyModule_Init(ValkeyModuleCtx *ctx, const char *name, int ver, in
     VALKEYMODULE_GET_API(GetFunctionExecutionState);
     VALKEYMODULE_GET_API(ScriptingEngineDebuggerLog);
     VALKEYMODULE_GET_API(ScriptingEngineDebuggerLogRespReplyStr);
+    VALKEYMODULE_GET_API(ScriptingEngineDebuggerLogRespReply);
     VALKEYMODULE_GET_API(ScriptingEngineDebuggerFlushLogs);
     VALKEYMODULE_GET_API(ScriptingEngineDebuggerProcessCommands);
 

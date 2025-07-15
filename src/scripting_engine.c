@@ -526,10 +526,6 @@ void scriptingEngineDebuggerSetMaxlen(size_t max) {
     ds.maxlen = newval;
 }
 
-size_t scriptingEngineDebuggerGetMaxlen(void) {
-    return ds.maxlen;
-}
-
 /* Send ds.logs to the debugging client as a multi-bulk reply
  * consisting of simple strings. Log entries which include newlines have them
  * replaced with spaces. The entries sent are also consumed. */
@@ -820,12 +816,55 @@ static void printCommandHelp(const debuggerCommand *command,
 
 static int printHelpMessage(robj **argv, size_t argc, void *context);
 
-static debuggerCommand helpCommand = {
-    .name = "help",
-    .prefix_len = 1,
-    .desc = "Show this help.",
-    .handler = printHelpMessage,
-};
+/* Handler for the "maxlen" debugger command. */
+static int maxlenCommandHandler(robj **argv, size_t argc, void *context) {
+    UNUSED(context);
+
+    if (argc == 1) {
+        /* Show current value */
+        sds msg = sdscatfmt(sdsempty(), "Current maxlen is %U", ds.maxlen);
+        scriptingEngineDebuggerLog(createObject(OBJ_STRING, msg));
+    } else if (argc == 2) {
+        long long new_maxlen;
+        if (string2ll(argv[1]->ptr, sdslen(argv[1]->ptr), &new_maxlen) && new_maxlen >= 0) {
+            scriptingEngineDebuggerSetMaxlen((size_t)new_maxlen);
+            if (new_maxlen == 0) {
+                sds msg = sdscatfmt(sdsempty(), "<value> replies are not truncated.");
+                scriptingEngineDebuggerLog(createObject(OBJ_STRING, msg));
+            } else {
+                sds msg = sdscatfmt(sdsempty(), "<value> replies are truncated at %U bytes.", ds.maxlen);
+                scriptingEngineDebuggerLog(createObject(OBJ_STRING, msg));
+            }
+        } else {
+            scriptingEngineDebuggerLog(createObject(OBJ_STRING, sdsnew("<error> Invalid maxlen value.")));
+        }
+    } else {
+        scriptingEngineDebuggerLog(createObject(OBJ_STRING, sdsnew("<error> Wrong number of arguments for 'maxlen'.")));
+    }
+    scriptingEngineDebuggerFlushLogs();
+    return CONTINUE_READ_NEXT_COMMAND;
+}
+
+static debuggerCommand builtins[] = {
+    {
+        .name = "help",
+        .prefix_len = 1,
+        .desc = "Show this help.",
+        .handler = printHelpMessage,
+    },
+    {
+        .name = "maxlen",
+        .prefix_len = 3,
+        .desc = "Trim logged replies to len. Specifying zero as <len> means unlimited. "
+                "If no <len> is specified, the current value is shown. "
+                "Usage: maxlen [len]",
+        .handler = maxlenCommandHandler,
+        .params = (debuggerCommandParam[]){
+            {.name = "len", .optional = 1, .variadic = 0}},
+        .params_len = 1,
+    }};
+
+static size_t builtins_len = sizeof(builtins) / sizeof(debuggerCommand);
 
 static int printHelpMessage(robj **argv, size_t argc, void *context) {
     UNUSED(argv);
@@ -835,7 +874,12 @@ static int printHelpMessage(robj **argv, size_t argc, void *context) {
     sds title = sdscatfmt(sdsempty(), "%s debugger help:", scriptingEngineGetName(ds.engine));
     scriptingEngineDebuggerLog(createObject(OBJ_STRING, title));
 
-    printCommandHelp(&helpCommand, HELP_CMD_NAME_WIDTH, HELP_LINE_WIDTH);
+    // Print built-in commands first.
+    for (size_t i = 0; i < builtins_len; i++) {
+        if (!builtins[i].invisible) {
+            printCommandHelp(&builtins[i], HELP_CMD_NAME_WIDTH, HELP_LINE_WIDTH);
+        }
+    }
 
     for (size_t i = 0; i < ds.commands_len; i++) {
         if (!ds.commands[i].invisible) {
@@ -882,12 +926,19 @@ static int checkCommandParameters(const debuggerCommand *cmd, size_t argc) {
 }
 
 static const debuggerCommand *findCommand(robj **argv, size_t argc) {
-    if ((sdslen(argv[0]->ptr) == helpCommand.prefix_len &&
-         strncasecmp(helpCommand.name, argv[0]->ptr, helpCommand.prefix_len) == 0) ||
-        strcasecmp(helpCommand.name, argv[0]->ptr) == 0) {
-        return &helpCommand;
+    // Check built-in commands first.
+    for (size_t i = 0; i < builtins_len; i++) {
+        const debuggerCommand *cmd = &builtins[i];
+        if ((sdslen(argv[0]->ptr) == cmd->prefix_len &&
+             strncasecmp(cmd->name, argv[0]->ptr, cmd->prefix_len) == 0) ||
+            strcasecmp(cmd->name, argv[0]->ptr) == 0) {
+            if (checkCommandParameters(cmd, argc)) {
+                return cmd;
+            }
+        }
     }
 
+    // Then check the commands exported by the scripting engine.
     for (size_t i = 0; i < ds.commands_len; i++) {
         const debuggerCommand *cmd = &ds.commands[i];
         if ((sdslen(argv[0]->ptr) == cmd->prefix_len &&

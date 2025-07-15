@@ -3355,7 +3355,7 @@ int clusterProcessPacket(clusterLink *link) {
     /* We store this information at the link layer so that we can send extensions
      * during the handshake even if we don't know the sender. */
     if (hdr->mflags[0] & CLUSTERMSG_FLAG0_EXT_DATA) {
-        link->flags |= CLUSTER_NODE_EXTENSIONS_SUPPORTED;
+        link->flags |= CLUSTER_LINK_EXTENSIONS_SUPPORTED;
     }
 
     /* Store some flags about the sender. */

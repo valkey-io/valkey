@@ -3354,17 +3354,15 @@ int clusterProcessPacket(clusterLink *link) {
 
     /* We store this information at the link layer so that we can send extensions
      * during the handshake even if we don't know the sender. */
-    if (!linkSupportsExtension(link) && hdr->mflags[0] & CLUSTERMSG_FLAG0_EXT_DATA) {
+    if (hdr->mflags[0] & CLUSTERMSG_FLAG0_EXT_DATA) {
         link->flags |= CLUSTER_NODE_EXTENSIONS_SUPPORTED;
     }
 
     /* Store some flags about the sender. */
     if (sender) {
         /* Check if the node supports extensions. */
-        if (flags & CLUSTER_NODE_EXTENSIONS_SUPPORTED || linkSupportsExtension(link)) {
+        if (linkSupportsExtension(link)) {
             sender->flags |= CLUSTER_NODE_EXTENSIONS_SUPPORTED;
-        } else {
-            sender->flags &= ~CLUSTER_NODE_EXTENSIONS_SUPPORTED;
         }
 
         /* Check if the node supports light publish message hdr */
@@ -3482,7 +3480,7 @@ int clusterProcessPacket(clusterLink *link) {
                     memcpy(node->ip, ip, sizeof(ip));
                     getClientPortFromClusterMsg(hdr, &node->tls_port, &node->tcp_port);
                     node->cport = ntohs(hdr->cport);
-                    if ((flags & ~CLUSTER_NODE_EXTENSIONS_SUPPORTED) && linkSupportsExtension(link)) {
+                    if (linkSupportsExtension(link)) {
                         node->flags |= CLUSTER_NODE_EXTENSIONS_SUPPORTED;
                     }
                     setClusterNodeToInboundClusterLink(node, link);

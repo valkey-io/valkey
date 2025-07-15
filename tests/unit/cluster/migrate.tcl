@@ -1645,6 +1645,42 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
             set_debug_prevent_pause 0
         }
     }
+
+    test "Migration not cancelled when snapshot takes more time than repl-timeout" {
+        assert_does_not_resync {
+            R 2 CONFIG SET repl-timeout 2
+
+            # Load keys before the snapshot to target a snapshot time > 2sec
+            # 50 * 100ms = 5 sec
+            R 2 CONFIG SET rdb-key-save-delay 100000
+            populate 50 "$0_slot_tag:1:" 1000 -0
+
+            assert_match "OK" [R 0 CLUSTER MIGRATE SLOTSRANGE 0 0 NODE $node2_id]
+            set linkname [get_link_name 0 0]
+
+            wait_for_migration 2 0
+
+            # Keys successfully migrated
+            assert_match "50" [R 2 CLUSTER COUNTKEYSINSLOT 0]
+            assert_match "0" [R 0 CLUSTER COUNTKEYSINSLOT 0]
+
+            # Also eventually reflected in replicas
+            wait_for_countkeysinslot 5 0 50
+            wait_for_countkeysinslot 3 0 0
+
+            # Migration log shows success on both ends
+            assert {[dict get [get_migration_by_linkname 0 $linkname] state] eq "success"}
+            assert {[dict get [get_migration_by_linkname 2 $linkname] state] eq "success"}
+
+            # Cleanup for next test
+            assert_match "OK" [R 0 FLUSHDB SYNC]
+            assert_match "OK" [R 2 CLUSTER MIGRATE SLOTSRANGE 0 0 NODE $node0_id]
+            wait_for_migration 0 0
+            R 2 CONFIG SET repl-timeout 60
+            R 2 CONFIG SET rdb-key-save-delay 0
+        }
+    }
+
 }
 
 start_cluster 3 0 {tags {external:skip cluster}} {

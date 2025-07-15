@@ -511,6 +511,10 @@ void debugCommand(client *c) {
             "CLIENT-ENFORCE-REPLY-LIST <0|1>",
             "When set to 1, it enforces the use of the client reply list directly",
             "    and avoids using the client's static buffer.",
+            "SLOTMIGRATION PREVENT-PAUSE <0|1>",
+            "    When set to 1, slot migrations will be prevented from pausing on the source node.",
+            "SLOTMIGRATION PREVENT-FAILOVER <0|1>",
+            "    When set to 1, slot migrations will be prevented from performing the slot-level failover on the target node.",
             NULL};
         addExtendedReplyHelp(c, help, clusterDebugCommandExtendedHelp());
     } else if (!strcasecmp(c->argv[1]->ptr, "segfault")) {

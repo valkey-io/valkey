@@ -7,6 +7,7 @@
 
 typedef enum slotMigrationLinkState {
     /* Importing states */
+    SLOT_IMPORT_WAIT_ACK,
     SLOT_IMPORT_RECEIVE_SNAPSHOT,
     SLOT_IMPORT_WAITING_FOR_PAUSED,
     SLOT_IMPORT_FAILOVER_REQUESTED,

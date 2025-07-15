@@ -139,7 +139,7 @@ int getNodeDefaultClientPort(clusterNode *n) {
     return server.tls_cluster ? n->tls_port : n->tcp_port;
 }
 
-static inline int getNodeDefaultReplicationPort(clusterNode *n) {
+int getNodeDefaultReplicationPort(clusterNode *n) {
     return server.tls_replication ? n->tls_port : n->tcp_port;
 }
 

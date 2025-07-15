@@ -254,8 +254,12 @@ list *parseSlotRanges(client *c, int start_index, int *end_index_out, clusterNod
  *
  * State Machine:
  *
- *          ┌────────────────────────────┐
- *          │SLOT_IMPORT_RECEIVE_SNAPSHOT┼──┐
+ *              ┌────────────────────┐
+ *              │SLOT_IMPORT_WAIT_ACK┼──────┐
+ *              └──────────┬─────────┘      │
+ *                      ACK│                │
+ *          ┌──────────────▼─────────────┐  │
+ *          │SLOT_IMPORT_RECEIVE_SNAPSHOT┼──┤
  *          └──────────────┬─────────────┘  │
  *             SNAPSHOT-EOF│                │
  *         ┌───────────────▼──────────────┐ │
@@ -506,7 +510,7 @@ slotMigrationLink *createSlotImportLink(client *c, clusterNode *source_node, cha
     link->type = SLOT_MIGRATION_IMPORT;
     link->slot_ranges = slot_ranges;
     link->slot_ranges_str = representSlotRangeList(slot_ranges);
-    link->state = SLOT_IMPORT_RECEIVE_SNAPSHOT;
+    link->state = SLOT_IMPORT_WAIT_ACK;
     link->client = c;
     link->client->slot_migration_link = link;
     link->client->flag.reply_off = 1;
@@ -914,7 +918,7 @@ void slotExportConnectHandler(connection *conn) {
 void connectSlotExportLink(slotMigrationLink *link) {
     sds status_msg;
     clusterNode *n = clusterLookupNode(link->nodename, CLUSTER_NAMELEN);
-    int port = getNodeDefaultClientPort(n);
+    int port = getNodeDefaultReplicationPort(n);
     serverLog(LL_NOTICE, "Connecting slot migration %s (ip: %s, port %d)",
               link->description,
               n->ip,
@@ -1409,6 +1413,11 @@ void slotMigrationLinkReadEstablishResponse(connection *conn) {
     updateSlotMigrationLinkState(link, SLOT_EXPORT_WAITING_TO_SNAPSHOT);
     initSlotExportLinkClient(link);
     clusterDoBeforeSleep(CLUSTER_TODO_HANDLE_SLOT_MIGRATION);
+
+    /* We need to send an ACK to take the import out of WAIT_ACK state. This
+     * will kickstart the health checks, effectively taking the link online. */
+    sendSyncSlotsMessageOnLink(link, "ACK");
+
     sdsfree(link->read_buf);
     link->read_buf = NULL;
 }
@@ -1454,6 +1463,9 @@ void proceedWithSlotMigration(slotMigrationLink *link) {
     while (1) {
         switch (link->state) {
         /* Importing states */
+        case SLOT_IMPORT_WAIT_ACK:
+            /* Waiting for ACK */
+            return;
         case SLOT_IMPORT_RECEIVE_SNAPSHOT:
             /* Waiting for SNAPSHOT-EOF marker */
             return;
@@ -1628,6 +1640,7 @@ int shouldCleanupSlotMigrationLink(slotMigrationLink *link) {
 /* Convert a slotMigrationLinkState enum to a user presentable string. */
 const char *slotMigrationLinkStateToString(slotMigrationLinkState state) {
     switch (state) {
+    case SLOT_IMPORT_WAIT_ACK: return "waiting-for-ack";
     case SLOT_IMPORT_RECEIVE_SNAPSHOT: return "snapshotting";
     case SLOT_IMPORT_WAITING_FOR_PAUSED: return "waiting-for-paused";
     case SLOT_IMPORT_FAILOVER_REQUESTED: return "failover-requested";
@@ -1821,10 +1834,10 @@ void clusterCleanupSlotMigrationLog(void) {
 int canSlotMigrationSendAck(slotMigrationLink *link) {
     /* 1. We cannot send ACK from parent process while child is snapshotting
      * 2. We don't send an ACK from the import side until the export has first
-     *    sent one. This simplifies parsing of the response to CLUSTER SYNCSLOTS
-     *    ESTABLISH. */
+     *    sent one (thus taking us out of SLOT_IMPORT_WAIT_ACK). This simplifies
+     *    parsing of the response to CLUSTER SYNCSLOTS ESTABLISH. */
     return link->state != SLOT_EXPORT_SNAPSHOTTING &&
-           (link->type != SLOT_MIGRATION_IMPORT || link->last_ack != link->ctime);
+           link->state != SLOT_IMPORT_WAIT_ACK;
 }
 
 /* Cron related tasks run in clusterCron to drive slot migrations. */
@@ -1837,13 +1850,14 @@ void clusterSlotMigrationCron(void) {
         link = ln->value;
 
         if (link->client) {
-            time_t last_interaction = link->client->last_interaction;
-            if (link->type == SLOT_MIGRATION_EXPORT) {
-                /* For export, we just use the last ack received time */
-                last_interaction = link->last_ack;
-            }
-
             if (isSlotMigrationLinkInProgress(link)) {
+                /* For imports, last interaction will be set to the last
+                 * incoming command, as replicated clients don't set
+                 * last_interaction when a reply is sent. However, for exports,
+                 * we have to use the last ack time to avoid counting sending
+                 * data/ACKs as an interaction here. */
+                time_t last_interaction = link->type == SLOT_MIGRATION_EXPORT ? link->last_ack : link->client->last_interaction;
+
                 /* Only enforce the ACK timeout when not in failover granted
                  * state. Instead, rely on the pause timeout in such cases. */
                 if (link->state != SLOT_EXPORT_FAILOVER_GRANTED &&
@@ -1898,6 +1912,9 @@ void clusterCommandSyncSlotsAck(client *c) {
     }
     slotMigrationLink *link = (slotMigrationLink *)c->slot_migration_link;
     link->last_ack = server.unixtime;
+    if (link->state == SLOT_IMPORT_WAIT_ACK) {
+        updateSlotMigrationLinkState(link, SLOT_IMPORT_RECEIVE_SNAPSHOT);
+    }
 }
 
 /* Sent by either the target or the source as a control message for progressing

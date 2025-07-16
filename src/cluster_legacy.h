@@ -1,8 +1,6 @@
 #ifndef CLUSTER_LEGACY_H
 #define CLUSTER_LEGACY_H
 
-#include "expiry_set.h"
-
 #define CLUSTER_PORT_INCR 10000 /* Cluster port = baseport + PORT_INCR */
 
 /* The following defines are amount of time, sometimes expressed as
@@ -360,7 +358,7 @@ struct _clusterNode {
     int cport;                              /* Latest known cluster port of this node. */
     clusterLink *link;                      /* TCP/IP link established toward this node */
     clusterLink *inbound_link;              /* TCP/IP link accepted from this node */
-    ExpirySet *fail_report;                 /* Report of peer failure reports with expiry ordering */
+    rax *fail_reports;                      /* Radix tree for failure reports with sorted order by timestamp */
     int is_node_healthy;                    /* Boolean indicating the cached node health.
                                                Update with updateAndCountChangedNodeHealth(). */
 };

@@ -43,7 +43,6 @@
 #include "endianconv.h"
 #include "connection.h"
 #include "module.h"
-#include "expiry_set.h"
 
 #include <stdlib.h>
 #include <sys/types.h>
@@ -1672,66 +1671,149 @@ clusterNode *createClusterNode(char *nodename, int flags) {
     node->tcp_port = 0;
     node->cport = 0;
     node->tls_port = 0;
-    node->fail_report = expirySetCreate(&clusterNodesDictType);
+    node->fail_reports = raxNew();
     node->orphaned_time = 0;
     node->repl_offset = 0;
     node->is_node_healthy = 0;
     return node;
 }
 
+/* 8 bytes mstime + 8 bytes cluster node */
+#define FAILURE_REPORT_ST_KEYLEN 16
+
+/* The expiry time is rounded up (ceiled) to the nearest second in order to bucket
+ * timestamps and keep the radix‐tree keys compact.  The resulting timestamp is stored
+ * in big‑endian format, followed by the pointer to the clusterNode. */
+static void encodeFailureReportKey(unsigned char *buf, mstime_t expiry, clusterNode *node) {
+    mstime_t bt = ((expiry + 999) / 1000) * 1000;
+    uint64_t be = htonu64((uint64_t)bt);
+    memcpy(buf, &be, 8);
+    memcpy(buf + 8, &node, sizeof(node));
+    if (sizeof(node) == 4) memset(buf + 12, 0, 4);
+}
+
+/* Reverses the operation of encodeFailureReportKey, reading back a timestamp
+ * and the pointer to the associated clusterNode. */
+static void decodeFailureReportKey(unsigned char *buf, mstime_t *expiry_ptr, clusterNode **node_ptr) {
+    uint64_t be;
+    memcpy(&be, buf, 8);
+    *expiry_ptr = (mstime_t)ntohu64(be);
+    memcpy(node_ptr, buf + 8, sizeof(*node_ptr));
+}
+
 /* This function is called every time we get a failure report from a node.
+ * We maintain fail_reports as a radix tree keyed by bucketed expiry timestamp
+ * (ceiled to the next second) and the sender pointer, which naturally orders
+ * entries by expiry time.
  *
- * If ‘sender’ has already reported this node, its report expiry is refreshed.
- * Otherwise, a new report entry is created and tracked until it expires.
+ * 'failing' is the node that is in failure state according to the
+ * 'sender' node.
  *
  * The function returns 0 if it just updates a timestamp of an existing
  * failure report from the same sender. 1 is returned if a new failure
  * report is created. */
 int clusterNodeAddFailureReport(clusterNode *failing, clusterNode *sender) {
-    mstime_t expiry = mstime() + server.cluster_node_timeout * CLUSTER_FAIL_REPORT_VALIDITY_MULT;
-    sds sender_name = sdsnewlen(sender->name, CLUSTER_NAMELEN);
-    int is_added = expirySetAdd(failing->fail_report, sender_name, expiry);
-    if (!is_added) sdsfree(sender_name);
-    return is_added;
+    unsigned char buf[FAILURE_REPORT_ST_KEYLEN];
+    mstime_t now = mstime();
+    int is_new = 1;
+
+    /* Look for any existing entry from this sender and remove it */
+    raxIterator ri;
+    raxStart(&ri, failing->fail_reports);
+    raxSeek(&ri, "^", NULL, 0);
+    while (raxNext(&ri)) {
+        mstime_t stored_ts;
+        clusterNode *stored_sender;
+        decodeFailureReportKey(ri.key, &stored_ts, &stored_sender);
+        if (stored_sender == sender) {
+            raxRemove(failing->fail_reports,
+                      ri.key, ri.key_len, NULL);
+            is_new = 0;
+            break;
+        }
+    }
+    raxStop(&ri);
+
+    /* Encode new key (now + sender) and store the fresh timestamp */
+    encodeFailureReportKey(buf, now, sender);
+    raxInsert(failing->fail_reports,
+              buf, sizeof(buf), NULL, NULL);
+
+    return is_new;
 }
 
-/* Expire outdated failure reports.
+/* Remove failure reports that are too old, where too old means reasonably
+ * older than the global node timeout. Note that anyway for a node to be
+ * flagged as FAIL we need to have a local PFAIL state that is at least
+ * older than the global node timeout, so we don't just trust the number
+ * of failure reports from other nodes.
  *
- * A report is stale once its expiry timestamp ≤ now (older than
- * server.cluster_node_timeout * CLUSTER_FAIL_REPORT_VALIDITY_MULT).
- * This guarantees we only count votes within the valid window, in line
- * with the requirement that a node’s own PFAIL must age past the timeout
- * before it can be declared FAIL.
- *
- * Iterates from the head of expiry_list (earliest expiry) and
- * removes any report whose expiry timestamp ≤ now.
- * All expired entries can be purged in O(E) where E is the number of expired items
+ * This function scans the radix tree of failure reports (keyed by bucketed expiry
+ * timestamps plus sender pointer) for the given node and removes any entries that
+ * have expired beyond the cutoff window
  *
  * By expiring entries older than the global node timeout window,
  * we guarantee only fresh votes remain. */
 void clusterNodeCleanupFailureReports(clusterNode *node) {
-    expirySetExpire(node->fail_report);
+    mstime_t now = mstime();
+    mstime_t timeout = server.cluster_node_timeout * CLUSTER_FAIL_REPORT_VALIDITY_MULT;
+    mstime_t cutoff = now - timeout;
+
+    raxIterator ri;
+    raxStart(&ri, node->fail_reports);
+    raxSeek(&ri, "^", NULL, 0);
+
+    while (raxNext(&ri)) {
+        mstime_t stored_ts;
+        clusterNode *stored_sender;
+        decodeFailureReportKey(ri.key, &stored_ts, &stored_sender);
+        if (stored_ts > cutoff) break;
+        if (raxRemove(node->fail_reports, ri.key, ri.key_len, NULL)) {
+            /* Move directly to the next element after the tree mutation due to removal */
+            raxSeek(&ri, ">=", ri.key, ri.key_len);
+        }
+    }
+
+    raxStop(&ri);
 }
 
 /* Remove the failing report for 'node' if it was previously considered
  * failing by 'sender'. This function is called when a node informs us via
  * gossip that a node is OK from its point of view (no FAIL or PFAIL flags).
- * Removal runs in O(1) time
+ *
+ * Note that this function is called relatively often as it gets called even
+ * when there are no nodes failing, and is O(N), however when the cluster is
+ * fine the failure reports list is empty so the function runs in constant
+ * time.
  *
  * The function returns 1 if the failure report was found and removed.
  * Otherwise 0 is returned. */
 int clusterNodeDelFailureReport(clusterNode *node, clusterNode *sender) {
-    sds sender_name = sdsnewlen(sender->name, CLUSTER_NAMELEN);
-    int removed = expirySetRemove(node->fail_report, sender_name);
-    sdsfree(sender_name);
-    return removed;
+    raxIterator ri;
+    raxStart(&ri, node->fail_reports);
+    raxSeek(&ri, "^", NULL, 0);
+
+    while (raxNext(&ri)) {
+        mstime_t stored_ts;
+        clusterNode *stored_sender;
+        decodeFailureReportKey(ri.key, &stored_ts, &stored_sender);
+        if (stored_sender == sender) {
+            raxRemove(node->fail_reports,
+                      ri.key, ri.key_len, NULL);
+            raxStop(&ri);
+            return 1;
+        }
+    }
+    raxStop(&ri);
+    return 0;
 }
 
 /* Return the number of external nodes that believe 'node' is failing,
  * not including this node, that may have a PFAIL or FAIL state for this
  * node as well. */
 int clusterNodeFailureReportsCount(clusterNode *node) {
-    return expirySetCount(node->fail_report);
+    clusterNodeCleanupFailureReports(node);
+    return raxSize(node->fail_reports);
 }
 
 static int clusterNodeNameComparator(const void *node1, const void *node2) {
@@ -1799,14 +1881,12 @@ void freeClusterNode(clusterNode *n) {
     if (n->link) freeClusterLink(n->link);
     if (n->inbound_link) freeClusterLink(n->inbound_link);
 
-    /* Free all entries in the expiry_list */
-    expirySetFree(n->fail_report);
-
     /* Free these members after links are freed, as freeClusterLink may access them. */
     sdsfree(n->hostname);
     sdsfree(n->human_nodename);
     sdsfree(n->announce_client_ipv4);
     sdsfree(n->announce_client_ipv6);
+    raxFree(n->fail_reports);
     zfree(n->replicas);
     zfree(n);
 }

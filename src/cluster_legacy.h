@@ -38,7 +38,13 @@ typedef struct clusterLink {
     size_t rcvbuf_alloc;                   /* Allocated size of rcvbuf */
     clusterNode *node;                     /* Node related to this link. Initialized to NULL when unknown */
     int inbound;                           /* 1 if this link is an inbound link accepted from the related node */
+    int flags;                             /* We share CLUSTER_NODE_* with clusterNode->flags. */
 } clusterLink;
+
+/* Cluster link flags and macros. */
+#define CLUSTER_LINK_EXTENSIONS_SUPPORTED (1 << 0) /* This link supports extensions. */
+
+#define linkSupportsExtension(link) ((link)->flags & CLUSTER_LINK_EXTENSIONS_SUPPORTED)
 
 /* Cluster node flags and macros. */
 #define CLUSTER_NODE_PRIMARY (1 << 0)                      /* The node is a primary */

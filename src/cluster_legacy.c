@@ -3399,9 +3399,12 @@ int clusterProcessPacket(clusterLink *link) {
 
     /* We try to process extensions first, as we become more and more
      * dependent on extensions. */
+    /* clusterProcessPingExtensions -> updateShardId may rely on node flag, but
+     * in here, we don't have the right node flag.
     if (sender && (type == CLUSTERMSG_TYPE_PING || type == CLUSTERMSG_TYPE_PONG || type == CLUSTERMSG_TYPE_MEET)) {
         clusterProcessPingExtensions(hdr, link);
     }
+    */
 
     /* Update the last time we saw any data from this node. We
      * use this in order to avoid detecting a timeout from a node that
@@ -3843,13 +3846,14 @@ int clusterProcessPacket(clusterLink *link) {
         /* Get info from the gossip section */
         if (sender) {
             clusterProcessGossipSection(hdr, link);
+            clusterProcessPingExtensions(hdr, link);
         }
 
         /* If after processing everything, we find that myself and sender are on the
          * same shard and are both primaries, if myself is a empty primary and myself
          * config epoch is smaller, make it become a replica of sender. */
         if (sender && nodeIsPrimary(myself) && nodeIsPrimary(sender) && areInSameShard(myself, sender) &&
-            myself->numslots == 0 && nodeEpoch(sender) > nodeEpoch(myself)) {
+            nodeEpoch(sender) > nodeEpoch(myself)) {
             clusterHandlePrimariesSameShardCollision(sender);
         }
     } else if (type == CLUSTERMSG_TYPE_FAIL) {

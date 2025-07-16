@@ -2134,6 +2134,7 @@ struct valkeyServer {
     int cluster_slot_stats_enabled;                        /* Cluster slot usage statistics tracking enabled. */
     int auto_failover_on_shutdown;                         /* Trigger manual failover on shutdown to primary. */
     mstime_t cluster_mf_timeout;                           /* Milliseconds to do a manual failover. */
+    int cluster_non_random_gossip;                         /* Always ping all nodes with gossip entries for all known nodes in gossip protocol */
     /* Debug config that goes along with cluster_drop_packet_filter. When set, the link is closed on packet drop. */
     uint32_t debug_cluster_close_link_on_packet_drop : 1;
     /* Debug config to control the random ping. When set, we will disable the random ping in clusterCron. */

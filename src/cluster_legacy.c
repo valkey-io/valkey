@@ -4235,6 +4235,37 @@ void clusterSetGossipEntry(clusterMsg *hdr, int i, clusterNode *n) {
     gossip->notused1 = 0;
 }
 
+static void addNodeToGossip(clusterMsg *hdr, clusterNode *this, clusterLink *link, int *freshnodes, int *gossipcount, unsigned long long cluster_pings_sent) {
+    /* Don't include this node: the whole packet header is about us
+     * already, so we just gossip about other nodes.
+     * Also, don't include the receiver. Receiver will not update its state
+     * based on gossips about itself. */
+    if (this == myself || this == link->node) return;
+
+    /* PFAIL nodes will be added later. */
+    if (this->flags & CLUSTER_NODE_PFAIL) return;
+
+    /* In the gossip section don't include:
+     * 1) Nodes in HANDSHAKE state.
+     * 3) Nodes with the NOADDR flag set.
+     * 4) Disconnected nodes if they don't have configured slots.
+     */
+    if (this->flags & (CLUSTER_NODE_HANDSHAKE | CLUSTER_NODE_NOADDR) ||
+        (this->link == NULL && this->numslots == 0)) {
+        (*freshnodes)--; /* Technically not correct, but saves CPU. */
+        return;
+    }
+
+    /* Do not add a node we already have. */
+    if (this->last_in_ping_gossip == cluster_pings_sent) return;
+
+    /* Add it */
+    clusterSetGossipEntry(hdr, *gossipcount, this);
+    this->last_in_ping_gossip = cluster_pings_sent;
+    (*freshnodes)--;
+    (*gossipcount)++;
+}
+
 /* Send a PING or PONG packet to the specified node, making sure to add enough
  * gossip information. */
 void clusterSendPing(clusterLink *link, int type) {
@@ -4284,6 +4315,7 @@ void clusterSendPing(clusterLink *link, int type) {
     wanted = floor(dictSize(server.cluster->nodes) / 10);
     if (wanted < 3) wanted = 3;
     if (wanted > freshnodes) wanted = freshnodes;
+    if (server.cluster_non_random_gossip) wanted = freshnodes;
 
     /* Include all the nodes in PFAIL state, so that failure reports are
      * faster to propagate to go from PFAIL to FAIL state. */
@@ -4312,40 +4344,25 @@ void clusterSendPing(clusterLink *link, int type) {
             link->node->meet_sent = mstime();
     }
 
-    /* Populate the gossip fields */
-    int maxiterations = wanted * 3;
-    while (freshnodes > 0 && gossipcount < wanted && maxiterations--) {
-        dictEntry *de = dictGetRandomKey(server.cluster->nodes);
-        clusterNode *this = dictGetVal(de);
-
-        /* Don't include this node: the whole packet header is about us
-         * already, so we just gossip about other nodes.
-         * Also, don't include the receiver. Receiver will not update its state
-         * based on gossips about itself. */
-        if (this == myself || this == link->node) continue;
-
-        /* PFAIL nodes will be added later. */
-        if (this->flags & CLUSTER_NODE_PFAIL) continue;
-
-        /* In the gossip section don't include:
-         * 1) Nodes in HANDSHAKE state.
-         * 3) Nodes with the NOADDR flag set.
-         * 4) Disconnected nodes if they don't have configured slots.
-         */
-        if (this->flags & (CLUSTER_NODE_HANDSHAKE | CLUSTER_NODE_NOADDR) ||
-            (this->link == NULL && this->numslots == 0)) {
-            freshnodes--; /* Technically not correct, but saves CPU. */
-            continue;
+    if (server.cluster_non_random_gossip) {
+        /* Populate the gossip fields. Add all known nodes */
+        dictEntry *de;
+        dictIterator *di;
+        di = dictGetSafeIterator(server.cluster->nodes);
+        while ((de = dictNext(di)) != NULL) {
+            clusterNode *this = dictGetVal(de);
+            addNodeToGossip(hdr, this, link, &freshnodes, &gossipcount, cluster_pings_sent);
         }
 
-        /* Do not add a node we already have. */
-        if (this->last_in_ping_gossip == cluster_pings_sent) continue;
-
-        /* Add it */
-        clusterSetGossipEntry(hdr, gossipcount, this);
-        this->last_in_ping_gossip = cluster_pings_sent;
-        freshnodes--;
-        gossipcount++;
+        dictReleaseIterator(di);
+    } else {
+        /* Populate the gossip fields */
+        int maxiterations = wanted * 3;
+        while (freshnodes > 0 && gossipcount < wanted && maxiterations--) {
+            dictEntry *de = dictGetRandomKey(server.cluster->nodes);
+            clusterNode *this = dictGetVal(de);
+            addNodeToGossip(hdr, this, link, &freshnodes, &gossipcount, cluster_pings_sent);
+        }
     }
 
     /* If there are PFAIL nodes, add them at the end. */
@@ -5474,25 +5491,40 @@ void clusterCron(void) {
     /* Ping some random node 1 time every 10 iterations, so that we usually ping
      * one random node every second. */
     if (!server.debug_cluster_disable_random_ping && !(iteration % 10)) {
-        int j;
+        if (server.cluster_non_random_gossip) {
+            /* Ping all nodes. */
+            di = dictGetSafeIterator(server.cluster->nodes);
+            while ((de = dictNext(di)) != NULL) {
+                clusterNode *this = dictGetVal(de);
+                /* Don't ping nodes disconnected or with a ping currently active. */
+                if (this->link == NULL || this->ping_sent != 0) continue;
+                if (this->flags & (CLUSTER_NODE_MYSELF | CLUSTER_NODE_HANDSHAKE)) continue;
 
-        /* Check a few random nodes and ping the one with the oldest
-         * pong_received time. */
-        for (j = 0; j < 5; j++) {
-            de = dictGetRandomKey(server.cluster->nodes);
-            clusterNode *this = dictGetVal(de);
-
-            /* Don't ping nodes disconnected or with a ping currently active. */
-            if (this->link == NULL || this->ping_sent != 0) continue;
-            if (this->flags & (CLUSTER_NODE_MYSELF | CLUSTER_NODE_HANDSHAKE)) continue;
-            if (min_pong_node == NULL || min_pong > this->pong_received) {
-                min_pong_node = this;
-                min_pong = this->pong_received;
+                serverLog(LL_DEBUG, "Pinging node %.40s (%s)", this->name, this->human_nodename);
+                clusterSendPing(this->link, CLUSTERMSG_TYPE_PING);
             }
-        }
-        if (min_pong_node) {
-            serverLog(LL_DEBUG, "Pinging node %.40s (%s)", min_pong_node->name, min_pong_node->human_nodename);
-            clusterSendPing(min_pong_node->link, CLUSTERMSG_TYPE_PING);
+            dictReleaseIterator(di);
+        } else {
+            int j;
+
+            /* Check a few random nodes and ping the one with the oldest
+             * pong_received time. */
+            for (j = 0; j < 5; j++) {
+                de = dictGetRandomKey(server.cluster->nodes);
+                clusterNode *this = dictGetVal(de);
+
+                /* Don't ping nodes disconnected or with a ping currently active. */
+                if (this->link == NULL || this->ping_sent != 0) continue;
+                if (this->flags & (CLUSTER_NODE_MYSELF | CLUSTER_NODE_HANDSHAKE)) continue;
+                if (min_pong_node == NULL || min_pong > this->pong_received) {
+                    min_pong_node = this;
+                    min_pong = this->pong_received;
+                }
+            }
+            if (min_pong_node) {
+                serverLog(LL_DEBUG, "Pinging node %.40s (%s)", min_pong_node->name, min_pong_node->human_nodename);
+                clusterSendPing(min_pong_node->link, CLUSTERMSG_TYPE_PING);
+            }
         }
     }
 

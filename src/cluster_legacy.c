@@ -5397,7 +5397,8 @@ static int clusterNodeCronHandleReconnect(clusterNode *node, mstime_t now, int *
     }
 
     if (node->link == NULL) {
-        if (!node->inbound_link && (now - node->outbound_link_attempt_time < server.cluster_node_timeout / NODE_CONNECTION_RETRIES_PER_TIMEOUT && *cluster_conn_attempts > max_conn_attempts)) {
+        mstime_t reconnect_interval = server.cluster_node_timeout / 2;
+        if (!node->inbound_link && (now - node->outbound_link_attempt_time < reconnect_interval / NODE_CONNECTION_RETRIES_PER_TIMEOUT && *cluster_conn_attempts > max_conn_attempts)) {
             return 1;
         }
         node->outbound_link_attempt_time = now;
@@ -5453,15 +5454,15 @@ static void clusterNodeCronFreeLinkOnBufferLimitReached(clusterNode *node) {
  *
  * We want to guarantee that every node is contacted twice within cluster node timeout.
  */
-static long long maxConnectionAttemptsPerCron(const int nodes, const long long timeout_ms) {
-    if (nodes <= 0 || timeout_ms <= 0)
+static long long maxConnectionAttemptsPerCron(void) {
+    long long reconnect_interval = server.cluster_node_timeout / 2;
+    if (dictSize(server.cluster->nodes) <= 0 || reconnect_interval <= 0)
         return 0;
     /*
      * We run the cron loop every 100 ms.  To reach 100 % of the nodes
-     * within the timeout, we need: ceil(nodes * 100 / timeout_ms)
-     * We use (a + b − 1) / b to give us the integer-ceil without using floating-point.
+     * within the timeout, we need: ceil(nodes * 100 / reconnect_interval)
      */
-    const long long min_nodes_for_coverage = (nodes * 100 + timeout_ms - 1) / timeout_ms;
+    const long long min_nodes_for_coverage = (dictSize(server.cluster->nodes) * CLUSTER_CRON_PERIOD_MS + reconnect_interval - 1) / reconnect_interval;
     /*
      * Increase the coverage budget so each node can be probed 10 times
      * inside the timeout.
@@ -5490,7 +5491,7 @@ void clusterCron(void) {
     server.cluster->stats_pfail_nodes = 0;
     /* Run through some of the operations we want to do on each cluster node. */
     di = dictGetSafeIterator(server.cluster->nodes);
-    const long long max_conn_attempts = maxConnectionAttemptsPerCron(dictSize(server.cluster->nodes), server.cluster_node_timeout);
+    const long long max_conn_attempts = maxConnectionAttemptsPerCron();
     while ((de = dictNext(di)) != NULL) {
         clusterNode *node = dictGetVal(de);
         /* We free the inbound or outboud link to the node if the link has an

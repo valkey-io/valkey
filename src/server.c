@@ -1653,7 +1653,7 @@ long long serverCron(struct aeEventLoop *eventLoop, long long id, void *clientDa
 
     /* Run the Cluster cron. */
     if (server.cluster_enabled) {
-        run_with_period(100) clusterCron();
+        run_with_period(CLUSTER_CRON_PERIOD_MS) clusterCron();
     }
 
     /* Run the Sentinel timer if we are in sentinel mode. */

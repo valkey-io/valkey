@@ -133,7 +133,7 @@ static void initErrorList(ErrorList *list) {
     }
 }
 
-static sds formatCommandString(const Command *cmd) {
+static sds formatCommandString(const FuzzerCommand *cmd) {
     sds cmd_str = sdsempty();
 
     for (int i = 0; i < cmd->argc; i++) {
@@ -412,7 +412,7 @@ typedef enum {
     CMD_TIMEOUT = 3       /* Command timed out */
 } CommandResult;
 
-static void handleMalformedReply(valkeyContext *ctx, Command *cmd) {
+static void handleMalformedReply(valkeyContext *ctx, FuzzerCommand *cmd) {
     /* Protocol error (malformed reply) - ABORT ALL THREADS */
     sds cmd_str = formatCommandString(cmd);
     char error_msg[512];
@@ -455,7 +455,7 @@ static void handleMalformedReply(valkeyContext *ctx, Command *cmd) {
     sdsfree(cmd_str);
 }
 
-static void handleCommandTimeout(Command *cmd, time_t start_time) {
+static void handleCommandTimeout(FuzzerCommand *cmd, time_t start_time) {
     /* Timeout error */
     time_t current_time = time(NULL);
     double elapsed_time = difftime(current_time, start_time);
@@ -468,7 +468,7 @@ static void handleCommandTimeout(Command *cmd, time_t start_time) {
 }
 
 /* Helper function to handle command errors and update counters */
-static CommandResult handleCommandError(valkeyContext *ctx, Command *cmd, time_t start_time) {
+static CommandResult handleCommandError(valkeyContext *ctx, FuzzerCommand *cmd, time_t start_time) {
     CommandResult result = CMD_ERROR;
 
     if (ctx->err == VALKEY_ERR_IO && (errno == EAGAIN || errno == EWOULDBLOCK || errno == ETIMEDOUT)) {
@@ -522,7 +522,7 @@ static void logReplyDebug(const char *command, valkeyReply *reply) {
 }
 
 /* Helper function to validate reply and update counters */
-static void validateReplyAndUpdateCounters(valkeyReply *reply, Command *cmd) {
+static void validateReplyAndUpdateCounters(valkeyReply *reply, FuzzerCommand *cmd) {
     if (reply->type == VALKEY_REPLY_ERROR) {
         const char *error_str = reply->str ? reply->str : "";
 
@@ -547,7 +547,7 @@ static void validateReplyAndUpdateCounters(valkeyReply *reply, Command *cmd) {
 static CommandResult sendCommandAndGetReply(valkeyContext *ctx) {
     int ret = CMD_SUCCESS;
 
-    Command *cmd = generateCmd();
+    FuzzerCommand *cmd = generateCmd();
     if (current_log_level >= LOG_DEBUG) {
         logMessage(LOG_DEBUG, "send Command: %s", printCommand(cmd));
     }

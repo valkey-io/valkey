@@ -240,15 +240,15 @@ static CommandGroupType mapGroupType(const sds groupStr) {
     return CMD_GROUP_UNKNOWN;
 }
 
-static Command *allocCommand(void) {
-    Command *cmd = malloc(sizeof(Command));
+static FuzzerCommand *allocCommand(void) {
+    FuzzerCommand *cmd = malloc(sizeof(FuzzerCommand));
     cmd->argc = 0;
     cmd->size = 16;
     cmd->argv = malloc(sizeof(sds) * cmd->size);
     return cmd;
 }
 
-static void appendArg(Command *cmd, sds arg) {
+static void appendArg(FuzzerCommand *cmd, sds arg) {
     if (cmd->argc >= cmd->size) {
         cmd->size *= 2;
         cmd->argv = realloc(cmd->argv, sizeof(sds) * cmd->size);
@@ -256,7 +256,7 @@ static void appendArg(Command *cmd, sds arg) {
     cmd->argv[cmd->argc++] = arg;
 }
 
-void freeCommand(Command *cmd) {
+void freeCommand(FuzzerCommand *cmd) {
     for (int i = 0; i < cmd->argc; i++) {
         sdsfree(cmd->argv[i]);
     }
@@ -264,7 +264,7 @@ void freeCommand(Command *cmd) {
     free(cmd);
 }
 
-char *printCommand(Command *cmd) {
+char *printCommand(FuzzerCommand *cmd) {
     static __thread char buffer[1024];
     int offset = 0;
 
@@ -451,7 +451,7 @@ void addConfigEntry(dict *configDict, const char *key, const char *value) {
     dictAdd(configDict, (void *)dict_key, entry);
 }
 
-void generateRandomEnumValue(Command *cmd, ConfigEntry *entry, const char *config_name) {
+void generateRandomEnumValue(FuzzerCommand *cmd, ConfigEntry *entry, const char *config_name) {
     if (strcasecmp(config_name, "maxmemory-policy") == 0) {
         static const char *policies[] = {"volatile-lru", "volatile-lfu", "volatile-random",
                                          "volatile-ttl", "allkeys-lru", "allkeys-lfu",
@@ -493,7 +493,7 @@ void generateRandomEnumValue(Command *cmd, ConfigEntry *entry, const char *confi
     }
 }
 
-void generateRandomSpecialValue(Command *cmd, ConfigEntry *entry, const char *config_name) {
+void generateRandomSpecialValue(FuzzerCommand *cmd, ConfigEntry *entry, const char *config_name) {
     if (strcasecmp(config_name, "save") == 0) {
         /* Generate a valid save configuration: <seconds> <changes> */
         int seconds = 60 * (1 + rand() % 60); /* 60 to 3600 seconds */
@@ -557,7 +557,7 @@ void generateRandomSpecialValue(Command *cmd, ConfigEntry *entry, const char *co
 }
 
 /* Generate a random value for a config entry based on its type */
-void generateRandomConfigValue(Command *cmd, ConfigEntry *entry) {
+void generateRandomConfigValue(FuzzerCommand *cmd, ConfigEntry *entry) {
     const char *config_name = cmd->argv[2];
 
     switch (entry->type) {
@@ -601,7 +601,7 @@ void generateRandomConfigValue(Command *cmd, ConfigEntry *entry) {
     }
 }
 
-void generateConfigSetCommand(Command *cmd) {
+void generateConfigSetCommand(FuzzerCommand *cmd) {
     dict *configDict = fuzz_ctx->configDict;
 
     /* Get a random key from the dictionary */
@@ -1161,7 +1161,7 @@ static void ensureSlotTag(void) {
 }
 
 /* Add keys to the command based on command group/type */
-static void addKeysToCommand(Command *cmd, int numkeys, CommandArgument *arg) {
+static void addKeysToCommand(FuzzerCommand *cmd, int numkeys, CommandArgument *arg) {
     /* Default prefix if we can't determine the type */
     const char *keyPrefix = "key";
 
@@ -1227,8 +1227,8 @@ static void addKeysToCommand(Command *cmd, int numkeys, CommandArgument *arg) {
     }
 }
 
-void generateSingleCmd(Command *cmd);
-void generateCommandsWithLua(Command *cmd);
+void generateSingleCmd(FuzzerCommand *cmd);
+void generateCommandsWithLua(FuzzerCommand *cmd);
 
 /* Check if the current command is a lexicographical range command */
 static int isLexicographicalCommand(CommandArgument *arg) {
@@ -1246,7 +1246,7 @@ static int isLexicographicalCommand(CommandArgument *arg) {
 }
 
 /* Generate a lexicographical range value (for commands like ZLEXCOUNT, ZRANGEBYLEX, etc.) */
-static void generateLexRangeValue(Command *cmd, const char *argName, int r) {
+static void generateLexRangeValue(FuzzerCommand *cmd, const char *argName, int r) {
     /* Lexicographical range values can be:
      * - [value] (inclusive)
      * - (value) (exclusive)
@@ -1273,7 +1273,7 @@ static void generateLexRangeValue(Command *cmd, const char *argName, int r) {
 }
 
 /* Generate a random ACL rule */
-static void generateAclRule(Command *cmd, int r) {
+static void generateAclRule(FuzzerCommand *cmd, int r) {
     /* Generate valid ACL rules dynamically using fetched categories */
     int rule_type = r % 10;
 
@@ -1375,7 +1375,7 @@ static sds generateRandomAddress(int r) {
 }
 
 /* Generate plausible string values for Valkey command arguments */
-static void generateStringArgValue(Command *cmd, const char *argName, CommandArgument *arg) {
+static void generateStringArgValue(FuzzerCommand *cmd, const char *argName, CommandArgument *arg) {
     static const char *usernames[] = {"alice", "bob", "charlie", "dave", "eve"};
     static const char *commands[] = {"GET", "SET", "DEL", "HSET", "LPUSH", "ZADD", "PUBLISH"};
     static const char *types[] = {"string", "list", "set", "zset", "hash", "stream"};
@@ -1496,7 +1496,7 @@ static void generateStringArgValue(Command *cmd, const char *argName, CommandArg
     } else if (strcmp(argName, "prefix") == 0) {
         appendArg(cmd, sdscatprintf(sdsempty(), "prefix:%d:", r % 5));
     } else if (strcmp(argName, "script") == 0) {
-        Command *luaCmd = allocCommand();
+        FuzzerCommand *luaCmd = allocCommand();
         generateCommandsWithLua(luaCmd);
         /* Extract just the script part (second argument of EVAL command) */
         appendArg(cmd, sdsdup(luaCmd->argv[1]));
@@ -1610,7 +1610,7 @@ static int isBlockingTimeout(CommandArgument *arg) {
     return isBlockingCommand(arg->parent);
 }
 
-static void addArgumentToCommand(Command *cmd, CommandArgument *arg) {
+static void addArgumentToCommand(FuzzerCommand *cmd, CommandArgument *arg) {
     /* Skip optional arguments randomly */
     if (shouldSkipOptionalArgument(arg)) return;
 
@@ -1700,7 +1700,7 @@ static void addArgumentToCommand(Command *cmd, CommandArgument *arg) {
     }
 }
 
-static void generateCommandArguments(Command *cmd, CommandEntry *selectedCommand) {
+static void generateCommandArguments(FuzzerCommand *cmd, CommandEntry *selectedCommand) {
     /* Reset numkeys for each new command */
     client_ctx->numkeys = 1;
 
@@ -1741,7 +1741,7 @@ static void checkAndUpdateSubscribeMode(const char *commandName) {
     client_ctx->in_subscribe_mode = 1;
 }
 
-void generateSingleCmd(Command *cmd) {
+void generateSingleCmd(FuzzerCommand *cmd) {
     /* Ensure we have a slot tag for cluster mode to keep all keys in the same slot */
     ensureSlotTag();
 
@@ -1787,7 +1787,7 @@ void generateSingleCmd(Command *cmd) {
 }
 
 /* Generates multiple commands and wraps them in a Lua script.*/
-void generateCommandsWithLua(Command *cmd) {
+void generateCommandsWithLua(FuzzerCommand *cmd) {
     /* Determine how many commands to include (between 1 and MAX_NUM_PER_LUA) */
     int numCommands = 1 + (rand() % MAX_NUM_PER_LUA);
 
@@ -1800,7 +1800,7 @@ void generateCommandsWithLua(Command *cmd) {
 
     /* Generate and add commands to the Lua script */
     for (int i = 0; i < numCommands; i++) {
-        Command *subCommand = allocCommand();
+        FuzzerCommand *subCommand = allocCommand();
         generateSingleCmd(subCommand);
         script = sdscatprintf(script, "result[%d] = redis.call(", i + 1);
         /* concatenate the command to the buffer */
@@ -1826,7 +1826,7 @@ void generateCommandsWithLua(Command *cmd) {
 }
 
 /* Shuffle arguments (excluding command name) */
-static void shuffleArguments(Command *cmd) {
+static void shuffleArguments(FuzzerCommand *cmd) {
     if (cmd->argc <= 2) return;
 
     for (int j = 0; j < 2; j++) {
@@ -1871,7 +1871,7 @@ static sds createCorruptedArg(void) {
 }
 
 /* Corrupt an argument's content */
-static void corruptArgument(Command *cmd) {
+static void corruptArgument(FuzzerCommand *cmd) {
     int idx = (rand() % cmd->argc);
     /* 70% chance to preserve command name */
     if (idx == 0 && (rand() % 10 < 7)) return;
@@ -1881,7 +1881,7 @@ static void corruptArgument(Command *cmd) {
 }
 
 /* Remove a random argument */
-static void removeArgument(Command *cmd) {
+static void removeArgument(FuzzerCommand *cmd) {
     if (cmd->argc <= 1) return;
 
     int idx = (rand() % (cmd->argc - 1)) + 1; /* Don't remove command name */
@@ -1894,7 +1894,7 @@ static void removeArgument(Command *cmd) {
     cmd->argc--;
 }
 
-static void addRandomArgument(Command *cmd) {
+static void addRandomArgument(FuzzerCommand *cmd) {
     if (cmd->argc >= cmd->size) return;
 
     sds new_arg = NULL;
@@ -1920,7 +1920,7 @@ static void addRandomArgument(Command *cmd) {
 }
 
 /* Generate a malformed command by corrupting a legitimate command */
-void generateMalformedCommand(Command *cmd) {
+void generateMalformedCommand(FuzzerCommand *cmd) {
     /* First generate a legitimate command */
     generateSingleCmd(cmd);
     if (!cmd || cmd->argc <= 1) return;
@@ -1999,8 +1999,8 @@ void freeClientCtx(void) {
 }
 
 /* Generates a random command or a Lua script with commands */
-Command *generateCmd(void) {
-    Command *cmd = allocCommand();
+FuzzerCommand *generateCmd(void) {
+    FuzzerCommand *cmd = allocCommand();
 
     /* In aggressive mode, generate malformed commands 5% of the time */
     if (client_ctx->fuzz_level == AGGRESSIVE && (rand() % 20 == 0)) {

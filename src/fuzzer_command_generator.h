@@ -4,11 +4,11 @@
 #include <valkey/valkey.h>
 #include "sds.h"
 
-typedef struct Command {
+typedef struct FuzzerCommand {
     sds *argv;
     int argc;
     int size;
-} Command;
+} FuzzerCommand;
 
 /* Fuzzing mode types */
 typedef enum {
@@ -21,8 +21,8 @@ void cleanupFuzzer(void);
 void initThreadClientCtx(FuzzMode fuzz_level);
 void resetClientFuzzCtx(void);
 void freeClientCtx(void);
-Command *generateCmd(void);
-void freeCommand(Command *args);
-char *printCommand(Command *cmd);
+FuzzerCommand *generateCmd(void);
+void freeCommand(FuzzerCommand *args);
+char *printCommand(FuzzerCommand *cmd);
 
 #endif /* FUZZER_COMMAND_GENERATOR_H */

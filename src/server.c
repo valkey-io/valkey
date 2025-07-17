@@ -1392,7 +1392,7 @@ void checkChildrenDone(void) {
         } else if (pid == server.child_pid) {
             if (server.child_type == CHILD_TYPE_RDB) {
                 backgroundSaveDoneHandler(exitcode, bysignal);
-            } else if (server.child_type == CHILD_TYPE_AOF) {
+            } else if (isAofRewriteInProgress()) {
                 backgroundRewriteDoneHandler(exitcode, bysignal);
             } else if (server.child_type == CHILD_TYPE_MODULE) {
                 ModuleForkDoneHandler(exitcode, bysignal);
@@ -2624,6 +2624,10 @@ int createSocketAcceptHandler(connListener *sfd, aeFileProc *accept_handler) {
         }
     }
     return C_OK;
+}
+
+int isAofRewriteInProgress(void) {
+    return server.child_type == CHILD_TYPE_AOF;
 }
 
 /* Initialize a set of file descriptors to listen to the specified 'port'
@@ -4656,7 +4660,7 @@ int finishShutdown(void) {
 
     /* Kill the AOF saving child as the AOF we already have may be longer
      * but contains the full dataset anyway. */
-    if (server.child_type == CHILD_TYPE_AOF) {
+    if (isAofRewriteInProgress()) {
         /* If we have AOF enabled but haven't written the AOF yet, don't
          * shutdown or else the dataset will be lost. */
         if (server.aof_state == AOF_WAIT_REWRITE) {
@@ -4769,17 +4773,13 @@ int writeCommandsDeniedByDiskError(void) {
     return DISK_ERROR_TYPE_NONE;
 }
 
-char *getAofWriteErrStr(int error_code) {
-    return (error_code == EFBIG) ? "Reached aof-max-size" : strerror(error_code);
-}
-
 sds writeCommandsGetDiskErrorMessage(int error_code) {
     sds ret = NULL;
     if (error_code == DISK_ERROR_TYPE_RDB) {
         ret = sdsdup(shared.bgsaveerr->ptr);
     } else {
         ret = sdscatfmt(sdsempty(), "-MISCONF Errors writing to the AOF file: %s\r\n",
-                        getAofWriteErrStr(server.aof_last_write_errno));
+                        strerror(server.aof_last_write_errno));
     }
     return ret;
 }
@@ -5981,10 +5981,10 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                 "rdb_last_load_keys_expired:%lld\r\n", server.rdb_last_load_keys_expired,
                 "rdb_last_load_keys_loaded:%lld\r\n", server.rdb_last_load_keys_loaded,
                 "aof_enabled:%d\r\n", server.aof_state != AOF_OFF,
-                "aof_rewrite_in_progress:%d\r\n", server.child_type == CHILD_TYPE_AOF,
+                "aof_rewrite_in_progress:%d\r\n", isAofRewriteInProgress(),
                 "aof_rewrite_scheduled:%d\r\n", server.aof_rewrite_scheduled,
                 "aof_last_rewrite_time_sec:%jd\r\n", (intmax_t)server.aof_rewrite_time_last,
-                "aof_current_rewrite_time_sec:%jd\r\n", (intmax_t)((server.child_type != CHILD_TYPE_AOF) ? -1 : time(NULL) - server.aof_rewrite_time_start),
+                "aof_current_rewrite_time_sec:%jd\r\n", (intmax_t)((!isAofRewriteInProgress()) ? -1 : time(NULL) - server.aof_rewrite_time_start),
                 "aof_last_bgrewrite_status:%s\r\n", (server.aof_lastbgrewrite_status == C_OK ? "ok" : "err"),
                 "aof_rewrites:%lld\r\n", server.stat_aof_rewrites,
                 "aof_rewrites_consecutive_failures:%lld\r\n", server.stat_aofrw_consecutive_failures,
@@ -5997,13 +5997,13 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
             char aof_current_size_hdsk[64];
             char aof_max_size_hdsk[64];
             bytesToHuman(aof_current_size_hdsk, sizeof(aof_current_size_hdsk), (unsigned long long)server.aof_current_size);
-            bytesToHuman(aof_max_size_hdsk, sizeof(aof_max_size_hdsk), server.aof_max_size);
+            bytesToHuman(aof_max_size_hdsk, sizeof(aof_max_size_hdsk), (unsigned long long)server.aof_max_size);
             info = sdscatprintf(
                 info,
                 FMTARGS(
                     "aof_current_size:%lld\r\n", (long long)server.aof_current_size,
                     "aof_current_size_human:%s\r\n", aof_current_size_hdsk,
-                    "aof_max_size:%lld\r\n", server.aof_max_size,
+                    "aof_max_size:%lld\r\n", (long long)server.aof_max_size,
                     "aof_max_size_human:%s\r\n", aof_max_size_hdsk,
                     "aof_base_size:%lld\r\n", (long long)server.aof_rewrite_base_size,
                     "aof_pending_rewrite:%d\r\n", server.aof_rewrite_scheduled,
@@ -7325,9 +7325,9 @@ __attribute__((weak)) int main(int argc, char **argv) {
     /* Warning the user about suspicious aof-max-size setting. */
     if (server.aof_max_size > 0 && server.aof_max_size < 1024 * 1024) {
         serverLog(LL_WARNING,
-                  "WARNING: You specified a aof-max-size value that is less than 1MB (current value is %llu bytes). Are "
+                  "WARNING: You specified a aof-max-size value that is less than 1MB (current value is %lld bytes). Are "
                   "you sure this is what you really want?",
-                  server.aof_max_size);
+                  (long long)server.aof_max_size);
     }
 
     serverSetCpuAffinity(server.server_cpulist);

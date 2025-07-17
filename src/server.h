@@ -1857,7 +1857,7 @@ struct valkeyServer {
     off_t aof_rewrite_min_size;         /* the AOF file is at least N bytes. */
     off_t aof_rewrite_base_size;        /* AOF size on latest startup or rewrite. */
     off_t aof_current_size;             /* AOF current size (Including BASE + INCRs). */
-    unsigned long long aof_max_size;    /* Max number of disk bytes to use for AOF */
+    off_t aof_max_size;                 /* Max number of disk bytes to use for AOF */
     off_t aof_last_incr_size;           /* The size of the latest incr AOF. */
     off_t aof_last_incr_fsync_offset;   /* AOF offset which is already requested to be synced to disk.
                                          * Compare with the aof_last_incr_size. */
@@ -3032,7 +3032,6 @@ int allPersistenceDisabled(void);
 #define DISK_ERROR_TYPE_RDB 2  /* Don't accept writes: RDB errors. */
 #define DISK_ERROR_TYPE_NONE 0 /* No problems, we can accept writes. */
 int writeCommandsDeniedByDiskError(void);
-char *getAofWriteErrStr(int);
 sds writeCommandsGetDiskErrorMessage(int);
 
 /* RDB persistence */
@@ -3045,6 +3044,7 @@ void flushAppendOnlyFile(int force);
 void feedAppendOnlyFile(int dictid, robj **argv, int argc);
 void aofRemoveTempFile(pid_t childpid, int from_signal);
 int rewriteAppendOnlyFileBackground(void);
+int isAofRewriteInProgress(void);
 int loadAppendOnlyFiles(aofManifest *am);
 void stopAppendOnly(void);
 int startAppendOnly(void);

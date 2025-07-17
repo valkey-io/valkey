@@ -5398,6 +5398,11 @@ static int clusterNodeCronHandleReconnect(clusterNode *node, mstime_t now, int *
 
     if (node->link == NULL) {
         mstime_t reconnect_interval = server.cluster_node_timeout / 2;
+        /* Skip this outbound connection attempt when all three are true:
+         *  1. No inbound link from the peer exists.
+         *  2. The back‑off window since the last try is still active
+         *  3. The cluster has already exceeded its retry budget for this cron cycle
+         */
         if (!node->inbound_link && (now - node->outbound_link_attempt_time < reconnect_interval / NODE_CONNECTION_RETRIES_PER_TIMEOUT && *cluster_conn_attempts > max_conn_attempts)) {
             return 1;
         }
@@ -5452,7 +5457,7 @@ static void clusterNodeCronFreeLinkOnBufferLimitReached(clusterNode *node) {
  * Compute the maximum number of connection attempts the cluster-cron
  * loop should schedule in a single cron.
  *
- * We want to guarantee that every node is contacted twice within cluster node timeout.
+ * We want to guarantee that every node is contacted 10 times within node timeout.
  */
 static long long maxConnectionAttemptsPerCron(void) {
     long long reconnect_interval = server.cluster_node_timeout / 2;
@@ -5462,7 +5467,7 @@ static long long maxConnectionAttemptsPerCron(void) {
      * We run the cron loop every 100 ms.  To reach 100 % of the nodes
      * within the timeout, we need: ceil(nodes * 100 / reconnect_interval)
      */
-    const long long min_nodes_for_coverage = (dictSize(server.cluster->nodes) * CLUSTER_CRON_PERIOD_MS + reconnect_interval - 1) / reconnect_interval;
+    const long long min_nodes_for_coverage = ceil(dictSize(server.cluster->nodes) * CLUSTER_CRON_PERIOD_MS / reconnect_interval);
     /*
      * Increase the coverage budget so each node can be probed 10 times
      * inside the timeout.
@@ -5502,7 +5507,6 @@ void clusterCron(void) {
          */
         if (!server.debug_cluster_disable_reconnection && clusterNodeCronHandleReconnect(node, now, &cluster_node_conn_attempts, max_conn_attempts)) continue;
     }
-    cluster_node_conn_attempts = 0;
     dictReleaseIterator(di);
 
     /* Ping some random node 1 time every 10 iterations, so that we usually ping

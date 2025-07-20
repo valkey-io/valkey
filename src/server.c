@@ -32,6 +32,7 @@
  * SPDX-License-Identifier: BSD-3-Clause
  */
 #include "server.h"
+#include "connection.h"
 #include "monotonic.h"
 #include "cluster.h"
 #include "cluster_slot_stats.h"
@@ -522,9 +523,6 @@ uint64_t dictEncObjHash(const void *key) {
 int hashtableResizeAllowed(size_t moreMem, double usedRatio) {
     UNUSED(usedRatio);
 
-    /* For debug purposes, not allowed to be resized. */
-    if (!server.dict_resizing) return 0;
-
     /* Avoid resizing over max memory. */
     return !overMaxmemoryAfterAlloc(moreMem);
 }
@@ -811,7 +809,7 @@ hashtableType clientHashtableType = {
  * for dict.c to resize or rehash the tables accordingly to the fact we have an
  * active fork child running. */
 void updateDictResizePolicy(void) {
-    if (server.in_fork_child != CHILD_TYPE_NONE) {
+    if (server.in_fork_child != CHILD_TYPE_NONE || !server.dict_resizing) {
         dictSetResizeEnabled(DICT_RESIZE_FORBID);
         hashtableSetResizePolicy(HASHTABLE_RESIZE_FORBID);
     } else if (hasActiveChildProcess()) {
@@ -2853,6 +2851,7 @@ void initServer(void) {
     server.thp_enabled = 0;
     server.cluster_drop_packet_filter = -1;
     server.debug_cluster_disable_random_ping = 0;
+    server.debug_cluster_disable_reconnection = 0;
     server.reply_buffer_peak_reset_time = REPLY_BUFFER_DEFAULT_PEAK_RESET_TIME;
     server.reply_buffer_resizing_enabled = 1;
     server.client_mem_usage_buckets = NULL;
@@ -2946,6 +2945,7 @@ void initServer(void) {
     server.acl_info.invalid_key_accesses = 0;
     server.acl_info.user_auth_failures = 0;
     server.acl_info.invalid_channel_accesses = 0;
+    server.acl_info.acl_access_denied_tls_cert = 0;
 
     /* Create the timer callback, this is our way to process many background
      * operations incrementally, like eviction of unaccessed expired keys, etc. */
@@ -3018,16 +3018,16 @@ void initServer(void) {
 
 void initListeners(void) {
     /* Setup listeners from server config for TCP/TLS/Unix */
-    int conn_index;
+    ConnectionType *ct;
     connListener *listener;
     if (server.port != 0) {
-        conn_index = connectionIndexByType(CONN_TYPE_SOCKET);
-        if (conn_index < 0) serverPanic("Failed finding connection listener of %s", CONN_TYPE_SOCKET);
-        listener = &server.listeners[conn_index];
+        ct = connectionByType(CONN_TYPE_SOCKET);
+        if (!ct) serverPanic("Failed finding connection listener of %s", getConnectionTypeName(CONN_TYPE_SOCKET));
+        listener = &server.listeners[CONN_TYPE_SOCKET];
         listener->bindaddr = server.bindaddr;
         listener->bindaddr_count = server.bindaddr_count;
         listener->port = server.port;
-        listener->ct = connectionByType(CONN_TYPE_SOCKET);
+        listener->ct = ct;
     }
 
     if (server.tls_port || server.tls_replication || server.tls_cluster) {
@@ -3043,32 +3043,32 @@ void initListeners(void) {
     }
 
     if (server.tls_port != 0) {
-        conn_index = connectionIndexByType(CONN_TYPE_TLS);
-        if (conn_index < 0) serverPanic("Failed finding connection listener of %s", CONN_TYPE_TLS);
-        listener = &server.listeners[conn_index];
+        ct = connectionByType(CONN_TYPE_TLS);
+        if (!ct) serverPanic("Failed finding connection listener of %s", getConnectionTypeName(CONN_TYPE_TLS));
+        listener = &server.listeners[CONN_TYPE_TLS];
         listener->bindaddr = server.bindaddr;
         listener->bindaddr_count = server.bindaddr_count;
         listener->port = server.tls_port;
-        listener->ct = connectionByType(CONN_TYPE_TLS);
+        listener->ct = ct;
     }
     if (server.unixsocket != NULL) {
-        conn_index = connectionIndexByType(CONN_TYPE_UNIX);
-        if (conn_index < 0) serverPanic("Failed finding connection listener of %s", CONN_TYPE_UNIX);
-        listener = &server.listeners[conn_index];
+        ct = connectionByType(CONN_TYPE_UNIX);
+        if (!ct) serverPanic("Failed finding connection listener of %s", getConnectionTypeName(CONN_TYPE_UNIX));
+        listener = &server.listeners[CONN_TYPE_UNIX];
         listener->bindaddr = &server.unixsocket;
         listener->bindaddr_count = 1;
-        listener->ct = connectionByType(CONN_TYPE_UNIX);
+        listener->ct = ct;
         listener->priv = &server.unix_ctx_config; /* Unix socket specified */
     }
 
     if (server.rdma_ctx_config.port != 0) {
-        conn_index = connectionIndexByType(CONN_TYPE_RDMA);
-        if (conn_index < 0) serverPanic("Failed finding connection listener of %s", CONN_TYPE_RDMA);
-        listener = &server.listeners[conn_index];
+        ct = connectionByType(CONN_TYPE_RDMA);
+        if (!ct) serverPanic("Failed finding connection listener of %s", getConnectionTypeName(CONN_TYPE_RDMA));
+        listener = &server.listeners[CONN_TYPE_RDMA];
         listener->bindaddr = server.rdma_ctx_config.bindaddr;
         listener->bindaddr_count = server.rdma_ctx_config.bindaddr_count;
         listener->port = server.rdma_ctx_config.port;
-        listener->ct = connectionByType(CONN_TYPE_RDMA);
+        listener->ct = ct;
         listener->priv = &server.rdma_ctx_config;
     }
 
@@ -3080,12 +3080,12 @@ void initListeners(void) {
 
         if (connListen(listener) == C_ERR) {
             serverLog(LL_WARNING, "Failed listening on port %u (%s), aborting.", listener->port,
-                      listener->ct->get_type(NULL));
+                      getConnectionTypeName(listener->ct->get_type()));
             exit(1);
         }
 
         if (createSocketAcceptHandler(listener, connAcceptHandler(listener->ct)) != C_OK)
-            serverPanic("Unrecoverable error creating %s listener accept handler.", listener->ct->get_type(NULL));
+            serverPanic("Unrecoverable error creating %s listener accept handler.", getConnectionTypeName(listener->ct->get_type()));
 
         listen_fds += listener->count;
     }
@@ -3786,7 +3786,7 @@ void call(client *c, int flags) {
     else
         duration = ustime() - call_timer;
 
-    valkey_commands_trace(valkey_commands, command_call, connGetTypeId(c->conn), getClientPeerId(c), getClientSockname(c), real_cmd->declared_name, duration);
+    valkey_commands_trace(valkey_commands, command_call, connGetType(c->conn), getClientPeerId(c), getClientSockname(c), real_cmd->declared_name, duration);
     c->duration += duration;
     dirty = server.dirty - dirty;
     if (dirty < 0) dirty = 0;
@@ -5604,9 +5604,11 @@ sds genValkeyInfoStringACLStats(sds info) {
                         "acl_access_denied_auth:%lld\r\n"
                         "acl_access_denied_cmd:%lld\r\n"
                         "acl_access_denied_key:%lld\r\n"
-                        "acl_access_denied_channel:%lld\r\n",
+                        "acl_access_denied_channel:%lld\r\n"
+                        "acl_access_denied_tls_cert:%lld\r\n",
                         server.acl_info.user_auth_failures, server.acl_info.invalid_cmd_accesses,
-                        server.acl_info.invalid_key_accesses, server.acl_info.invalid_channel_accesses);
+                        server.acl_info.invalid_key_accesses, server.acl_info.invalid_channel_accesses,
+                        server.acl_info.acl_access_denied_tls_cert);
     return info;
 }
 
@@ -6473,24 +6475,24 @@ sds getVersion(void) {
 }
 
 void usage(void) {
-    fprintf(stderr, "Usage: ./valkey-server [/path/to/valkey.conf] [options] [-]\n");
-    fprintf(stderr, "       ./valkey-server - (read config from stdin)\n");
-    fprintf(stderr, "       ./valkey-server -v or --version\n");
-    fprintf(stderr, "       ./valkey-server -h or --help\n");
-    fprintf(stderr, "       ./valkey-server --test-memory <megabytes>\n");
-    fprintf(stderr, "       ./valkey-server --check-system\n");
-    fprintf(stderr, "\n");
-    fprintf(stderr, "Examples:\n");
-    fprintf(stderr, "       ./valkey-server (run the server with default conf)\n");
-    fprintf(stderr, "       echo 'maxmemory 128mb' | ./valkey-server -\n");
-    fprintf(stderr, "       ./valkey-server /etc/valkey/6379.conf\n");
-    fprintf(stderr, "       ./valkey-server --port 7777\n");
-    fprintf(stderr, "       ./valkey-server --port 7777 --replicaof 127.0.0.1 8888\n");
-    fprintf(stderr, "       ./valkey-server /etc/myvalkey.conf --loglevel verbose -\n");
-    fprintf(stderr, "       ./valkey-server /etc/myvalkey.conf --loglevel verbose\n\n");
-    fprintf(stderr, "Sentinel mode:\n");
-    fprintf(stderr, "       ./valkey-server /etc/sentinel.conf --sentinel\n");
-    exit(1);
+    fprintf(stdout, "Usage: ./valkey-server [/path/to/valkey.conf] [options] [-]\n");
+    fprintf(stdout, "       ./valkey-server - (read config from stdin)\n");
+    fprintf(stdout, "       ./valkey-server -v or --version\n");
+    fprintf(stdout, "       ./valkey-server -h or --help\n");
+    fprintf(stdout, "       ./valkey-server --test-memory <megabytes>\n");
+    fprintf(stdout, "       ./valkey-server --check-system\n");
+    fprintf(stdout, "\n");
+    fprintf(stdout, "Examples:\n");
+    fprintf(stdout, "       ./valkey-server (run the server with default conf)\n");
+    fprintf(stdout, "       echo 'maxmemory 128mb' | ./valkey-server -\n");
+    fprintf(stdout, "       ./valkey-server /etc/valkey/6379.conf\n");
+    fprintf(stdout, "       ./valkey-server --port 7777\n");
+    fprintf(stdout, "       ./valkey-server --port 7777 --replicaof 127.0.0.1 8888\n");
+    fprintf(stdout, "       ./valkey-server /etc/myvalkey.conf --loglevel verbose -\n");
+    fprintf(stdout, "       ./valkey-server /etc/myvalkey.conf --loglevel verbose\n\n");
+    fprintf(stdout, "Sentinel mode:\n");
+    fprintf(stdout, "       ./valkey-server /etc/sentinel.conf --sentinel\n");
+    exit(0);
 }
 
 void serverAsciiArt(void) {
@@ -6522,13 +6524,10 @@ void serverAsciiArt(void) {
 }
 
 /* Get the server listener by type name */
-connListener *listenerByType(const char *typename) {
-    int conn_index;
+connListener *listenerByType(int type) {
+    if (!connectionByType(type)) return NULL;
 
-    conn_index = connectionIndexByType(typename);
-    if (conn_index < 0) return NULL;
-
-    return &server.listeners[conn_index];
+    return &server.listeners[type];
 }
 
 /* Close original listener, re-create a new listener from the updated bind address & port */
@@ -6549,7 +6548,7 @@ int changeListener(connListener *listener) {
 
     /* Create event handlers */
     if (createSocketAcceptHandler(listener, listener->ct->accept_handler) != C_OK) {
-        serverPanic("Unrecoverable error creating %s accept handler.", listener->ct->get_type(NULL));
+        serverPanic("Unrecoverable error creating %s accept handler.", getConnectionTypeName(listener->ct->get_type()));
     }
 
     if (server.set_proc_title) serverSetProcTitle(NULL);
@@ -7285,7 +7284,7 @@ __attribute__((weak)) int main(int argc, char **argv) {
             connListener *listener = &server.listeners[j];
             if (listener->ct == NULL) continue;
 
-            serverLog(LL_NOTICE, "Ready to accept connections %s", listener->ct->get_type(NULL));
+            serverLog(LL_NOTICE, "Ready to accept connections %s", getConnectionTypeName(listener->ct->get_type()));
         }
 
         if (server.supervised_mode == SUPERVISED_SYSTEMD) {

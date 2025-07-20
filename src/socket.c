@@ -323,6 +323,7 @@ static void connSocketAcceptHandler(aeEventLoop *el, int fd, void *privdata, int
     while (max--) {
         cfd = anetTcpAccept(server.neterr, fd, cip, sizeof(cip), &cport);
         if (cfd == ANET_ERR) {
+            if (anetRetryAcceptOnError(errno)) continue;
             if (errno != EWOULDBLOCK) serverLog(LL_WARNING, "Accepting client connection: %s", server.neterr);
             return;
         }
@@ -400,21 +401,12 @@ static ssize_t connSocketSyncReadLine(connection *conn, char *ptr, ssize_t size,
     return syncReadLine(conn->fd, ptr, size, timeout);
 }
 
-static const char *connSocketGetType(connection *conn) {
-    (void)conn;
-
+static int connSocketGetType(void) {
     return CONN_TYPE_SOCKET;
-}
-
-static int connSocketGetTypeId(connection *conn) {
-    (void)conn;
-
-    return CONN_TYPE_ID_SOCKET;
 }
 
 static ConnectionType CT_Socket = {
     /* connection type */
-    .get_type_id = connSocketGetTypeId,
     .get_type = connSocketGetType,
 
     /* connection type initialize & finalize & configure */

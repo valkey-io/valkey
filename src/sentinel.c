@@ -5381,8 +5381,11 @@ void sentinelHandleDictOfValkeyInstances(dict *instances) {
                 switch_to_promoted = ri;
             }
         }
+        if (switch_to_promoted) {
+            sentinelFailoverSwitchToPromotedReplica(switch_to_promoted);
+            switch_to_promoted = NULL;
+        }
     }
-    if (switch_to_promoted) sentinelFailoverSwitchToPromotedReplica(switch_to_promoted);
     dictReleaseIterator(di);
 }
 

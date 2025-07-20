@@ -34,12 +34,12 @@ LTTNG_UST_TRACEPOINT_ENUM(
     /* Tracepoint connection type enum */
     valkey_conn_type_enum,
 
-    /* Tracepoint connection type enum values, Source: ConnectionTypeId */
+    /* Tracepoint connection type enum values, Source: ConnectionType */
     LTTNG_UST_TP_ENUM_VALUES(
-        lttng_ust_field_enum_value("SOCKET", 1)
-        lttng_ust_field_enum_value("UNIX", 2)
-        lttng_ust_field_enum_value("TLS", 3)
-        lttng_ust_field_enum_value("RDMA", 4)
+        lttng_ust_field_enum_value("SOCKET", 0)
+        lttng_ust_field_enum_value("UNIX", 1)
+        lttng_ust_field_enum_value("TLS", 2)
+        lttng_ust_field_enum_value("RDMA", 3)
     )
 )
 

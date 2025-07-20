@@ -4391,7 +4391,7 @@ int VM_StringSet(ValkeyModuleKey *key, ValkeyModuleString *str) {
     VM_DeleteKey(key);
     /* Retain str so setKey copies it to db rather than reallocating it. */
     incrRefCount(str);
-    setKey(key->ctx->client, key->db, key->key, &str, SETKEY_NO_SIGNAL);
+    setKey(key->ctx->client, key->db, key->key, &str, SETKEY_NO_SIGNAL | SETKEY_DOESNT_EXIST);
     key->value = str;
     return VALKEYMODULE_OK;
 }
@@ -4471,7 +4471,7 @@ int VM_StringTruncate(ValkeyModuleKey *key, size_t newlen) {
     if (key->value == NULL) {
         /* Empty key: create it with the new size. */
         robj *o = createObject(OBJ_STRING, sdsnewlen(NULL, newlen));
-        setKey(key->ctx->client, key->db, key->key, &o, SETKEY_NO_SIGNAL);
+        setKey(key->ctx->client, key->db, key->key, &o, SETKEY_NO_SIGNAL | SETKEY_DOESNT_EXIST);
         key->value = o;
     } else {
         /* Unshare and resize. */
@@ -7038,7 +7038,7 @@ int VM_ModuleTypeSetValue(ValkeyModuleKey *key, moduleType *mt, void *value) {
     if (!(key->mode & VALKEYMODULE_WRITE) || key->iter) return VALKEYMODULE_ERR;
     VM_DeleteKey(key);
     robj *o = createModuleObject(mt, value);
-    setKey(key->ctx->client, key->db, key->key, &o, SETKEY_NO_SIGNAL);
+    setKey(key->ctx->client, key->db, key->key, &o, SETKEY_NO_SIGNAL | SETKEY_DOESNT_EXIST);
     key->value = o;
     return VALKEYMODULE_OK;
 }
@@ -9014,7 +9014,7 @@ typedef struct moduleClusterNodeInfo {
     char ip[NET_IP_STR_LEN];
     int port;
     char primary_id[40]; /* Only if flags & VALKEYMODULE_NODE_PRIMARY is true. */
-} mdouleClusterNodeInfo;
+} moduleClusterNodeInfo;
 
 /* We have an array of message types: each bucket is a linked list of
  * configured receivers. */

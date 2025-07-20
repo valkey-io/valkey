@@ -37,6 +37,7 @@
 #include "fmtargs.h"
 #include "io_threads.h"
 #include "module.h"
+#include "connection.h"
 #include <strings.h>
 #include <sys/socket.h>
 #include <sys/uio.h>
@@ -1680,6 +1681,21 @@ void clientAcceptHandler(connection *conn) {
             freeClientAsync(c);
             return;
         }
+    }
+
+    /* Auto-authenticate from cert_user field if set */
+    sds username = connGetPeerUsername(conn);
+    if (username != NULL) {
+        user *u = ACLGetUserByName(username, sdslen(username));
+        if (u) {
+            c->user = u;
+            c->flag.authenticated = true;
+            serverLog(LL_VERBOSE, "TLS: Auto-authenticated client as %s",
+                      server.hide_user_data_from_log ? "*redacted*" : u->name);
+        } else {
+            addACLLogEntry(c, ACL_INVALID_TLS_CERT_AUTH, ACL_LOG_CTX_TOPLEVEL, 0, username, NULL);
+        }
+        sdsfree(username);
     }
 
     server.stat_numconnections++;

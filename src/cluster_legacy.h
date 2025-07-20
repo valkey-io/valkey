@@ -4,7 +4,7 @@
 #define CLUSTER_PORT_INCR 10000 /* Cluster port = baseport + PORT_INCR */
 
 /* The following defines are amount of time, sometimes expressed as
- * multiplicators of the node timeout value (when ending with MULT). */
+ * multipliers of the node timeout value (when ending with MULT). */
 #define CLUSTER_FAIL_REPORT_VALIDITY_MULT 2  /* Fail report validity. */
 #define CLUSTER_FAIL_UNDO_TIME_MULT 2        /* Undo fail if primary is back. */
 #define CLUSTER_MF_PAUSE_MULT 2              /* Primary pause manual failover mult. */
@@ -38,7 +38,13 @@ typedef struct clusterLink {
     size_t rcvbuf_alloc;                   /* Allocated size of rcvbuf */
     clusterNode *node;                     /* Node related to this link. Initialized to NULL when unknown */
     int inbound;                           /* 1 if this link is an inbound link accepted from the related node */
+    int flags;                             /* We share CLUSTER_NODE_* with clusterNode->flags. */
 } clusterLink;
+
+/* Cluster link flags and macros. */
+#define CLUSTER_LINK_EXTENSIONS_SUPPORTED (1 << 0) /* This link supports extensions. */
+
+#define linkSupportsExtension(link) ((link)->flags & CLUSTER_LINK_EXTENSIONS_SUPPORTED)
 
 /* Cluster node flags and macros. */
 #define CLUSTER_NODE_PRIMARY (1 << 0)                      /* The node is a primary */

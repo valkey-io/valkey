@@ -78,6 +78,32 @@ jobs:
       - name: unittest
         if: true && !contains(github.event.inputs.skiptests, 'unittest')
         run: ./src/valkey-unit-tests --accurate
+      - name: install Redis OSS 6.2 server for compatibility testing
+        run: |
+          cd tests/tmp
+          wget https://download.redis.io/releases/redis-6.2.14.tar.gz
+          tar -xvf redis-6.2.14.tar.gz
+      - name: make Redis OSS 6.2 server
+        run: |
+          cd tests/tmp/redis-6.2.14
+          make
+      - name: backward compatibility tests with OSS Redis 6.2
+        run: |
+          sudo apt-get install tcl8.6 tclx
+          ./runtest --verbose --tags compatible-redis --dump-logs --other-server-path tests/tmp/redis-6.2.14/src/redis-server
+      - name: install Redis OSS 7.0 server for compatibility testing
+        run: |
+          cd tests/tmp
+          wget https://download.redis.io/releases/redis-7.0.15.tar.gz
+          tar -xvf redis-7.0.15.tar.gz
+      - name: make Redis OSS 7.0 server
+        run: |
+          cd tests/tmp/redis-7.0.15
+          make
+      - name: backward compatibility tests with OSS Redis 7.0
+        run: |
+          sudo apt-get install tcl8.6 tclx
+          ./runtest --verbose --tags compatible-redis --dump-logs --other-server-path tests/tmp/redis-7.0.15/src/redis-server
 
   test-ubuntu-arm:
     runs-on: ubuntu-24.04-arm

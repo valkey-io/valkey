@@ -631,9 +631,7 @@ void kvstoreTryResizeHashtables(kvstore *kvs, int limit) {
     for (int i = 0; i < limit; i++) {
         int didx = kvs->resize_cursor;
         hashtable *ht = kvstoreGetHashtable(kvs, didx);
-        if (ht && !hashtableShrinkIfNeeded(ht)) {
-            hashtableExpandIfNeeded(ht);
-        }
+        if (ht) hashtableRightsizeIfNeeded(ht);
         kvs->resize_cursor = (didx + 1) % kvs->num_hashtables;
     }
 }

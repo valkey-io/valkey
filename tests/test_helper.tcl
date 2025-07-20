@@ -95,6 +95,34 @@ set ::force_resp3 0
 set ::solo_tests_count 0
 set ::debug_defrag 0
 
+# Expand a unit specification (test name, file, or directory) into a list
+# of canonical unit names relative to the tests directory.
+proc expand_unit_spec {spec} {
+    set tests_dir [file normalize [file join [pwd] tests]]
+
+    if {[file isdirectory $spec]} {
+        set files [glob -nocomplain [file join [file normalize $spec] *.tcl]]
+    } elseif {[file exists $spec]} {
+        set files [list [file normalize $spec]]
+    } elseif {[file exists [file join $tests_dir "${spec}.tcl"]]} {
+        set files [list [file normalize [file join $tests_dir "${spec}.tcl"]]]
+    } else {
+        return [list $spec]
+    }
+
+    set result {}
+    foreach test_file $files {
+        set norm [file normalize $test_file]
+        if {[string match "$tests_dir/*" $norm]} {
+            set rel [string range $norm [expr {[string length $tests_dir]+1}] end]
+            lappend result [file rootname $rel]
+        } else {
+            lappend result [file rootname $norm]
+        }
+    }
+    return $result
+}
+
 # Set to 1 when we are running in client mode. The server test uses a
 # server-client model to run tests simultaneously. The server instance
 # runs the specified number of client instances that will actually run tests.
@@ -319,6 +347,7 @@ proc test_server_main {} {
     set ::idle_clients {}
     set ::active_clients {}
     array set ::active_clients_task {}
+    array set ::active_clients_file {}
     array set ::clients_start_time {}
     set ::clients_time_history {}
     set ::failed_tests {}
@@ -335,7 +364,25 @@ proc test_server_cron {} {
     if {$elapsed > $::timeout} {
         set err "\[[colorstr red TIMEOUT]\]: clients state report follows."
         puts $err
-        lappend ::failed_tests $err
+        foreach fd $::active_clients {
+            if {[info exist ::active_clients_task($fd)]} {
+                set task $::active_clients_task($fd)
+                set test_name [regsub {^\([^)]*\)\s*} $task {}]
+                set test_name [regsub {\s*\(pid\s+\d+\)\s*$} $test_name {}]
+                if {![string length [string trim $test_name]] && \
+                    [regexp {\(([^()]*)\)$} $task -> tn]} {
+                    set test_name $tn
+                }
+                set test_name [string trim $test_name]
+                if {[string length $test_name]} {
+                    set file {}
+                    if {[info exist ::active_clients_file($fd)]} {
+                        set file $::active_clients_file($fd)
+                    }
+                    lappend ::failed_tests "\[TIMEOUT]: $test_name in $file"
+                }
+            }
+        }
         show_clients_state
         kill_clients
         force_kill_all_servers
@@ -384,6 +431,7 @@ proc read_from_test_client fd {
         set completed_tests_count [expr {$::next_test-$running_tests_count+$completed_solo_tests_count}]
         puts "\[$completed_tests_count/$all_tests_count [colorstr yellow $status]\]: $data ($elapsed seconds)"
         lappend ::clients_time_history $elapsed $data
+        unset ::active_clients_file($fd)
         signal_idle_client $fd
         set ::active_clients_task($fd) "(DONE) $data"
     } elseif {$status eq {ok}} {
@@ -402,7 +450,8 @@ proc read_from_test_client fd {
     } elseif {$status eq {err}} {
         set err "\[[colorstr red $status]\]: $data"
         puts $err
-        lappend ::failed_tests $err
+        set test_name [lindex [split $data "\n"] 0]
+        lappend ::failed_tests $test_name
         set ::active_clients_task($fd) "(ERR) $data"
         if {$::exit_on_failure} {
             puts "(Fast fail: test will exit now)"
@@ -492,6 +541,7 @@ proc signal_idle_client fd {
             puts [colorstr bold-white "Testing [lindex $::all_tests $::next_test]"]
             set ::active_clients_task($fd) "ASSIGNED: $fd ([lindex $::all_tests $::next_test])"
         }
+        set ::active_clients_file($fd) "tests/[lindex $::all_tests $::next_test].tcl"
         set ::clients_start_time($fd) [clock seconds]
         send_data_packet $fd run [lindex $::all_tests $::next_test]
         lappend ::active_clients $fd
@@ -506,7 +556,9 @@ proc signal_idle_client fd {
             set ::active_clients_task($fd) "ASSIGNED: $fd solo test"
         }
         set ::clients_start_time($fd) [clock seconds]
-        send_data_packet $fd run_code [lpop ::run_solo_tests]
+        set solo_data [lpop ::run_solo_tests]
+        set ::active_clients_file($fd) [lindex $solo_data 1]
+        send_data_packet $fd run_code $solo_data
         lappend ::active_clients $fd
     } else {
         lappend ::idle_clients $fd
@@ -577,7 +629,7 @@ proc print_help_screen {} {
         "                   runtest-moduleapi which will build the test module."
         "--valgrind         Run the test over valgrind."
         "--durable          suppress test crashes and keep running"
-        "--stack-logging    Enable OSX leaks/malloc stack logging."
+        "--stack-logging    Enable macOS leaks/malloc stack logging."
         "--accurate         Run slow randomized tests for more iterations."
         "--quiet            Don't show individual tests."
         "--single <unit>    Just execute the specified unit (see next option). This"
@@ -709,13 +761,17 @@ for {set j 0} {$j < [llength $argv]} {incr j} {
     } elseif {$opt eq {--force-failure}} {
         set ::force_failure 1
     } elseif {$opt eq {--single}} {
-        lappend ::single_tests $arg
+        foreach unit [expand_unit_spec $arg] {
+            lappend ::single_tests $unit
+        }
         incr j
     } elseif {$opt eq {--only}} {
         lappend ::only_tests $arg
         incr j
     } elseif {$opt eq {--skipunit}} {
-        lappend ::skipunits $arg
+        foreach unit [expand_unit_spec $arg] {
+            lappend ::skipunits $unit
+        }
         incr j
     } elseif {$opt eq {--skip-till}} {
         set ::skip_till $arg

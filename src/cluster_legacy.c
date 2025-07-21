@@ -5368,7 +5368,7 @@ static int nodeExceedsHandshakeTimeout(clusterNode *node, mstime_t now) {
 /* Check if the node is disconnected and re-establish the connection.
  * Also update a few stats while we are here, that can be used to make
  * better decisions in other part of the code. */
-static int clusterNodeCronHandleReconnect(clusterNode *node, mstime_t now, int *cluster_conn_attempts, const long long max_conn_attempts) {
+static int clusterNodeCronHandleReconnect(clusterNode *node, mstime_t now, long long *cluster_conn_attempts) {
     /* Not interested in reconnecting the link with myself or nodes
      * for which we have no address. */
     if (node->flags & (CLUSTER_NODE_MYSELF | CLUSTER_NODE_NOADDR)) return 1;
@@ -5403,11 +5403,11 @@ static int clusterNodeCronHandleReconnect(clusterNode *node, mstime_t now, int *
          *  2. The back‑off window since the last try is still active
          *  3. The cluster has already exceeded its retry budget for this cron cycle
          */
-        if (!node->inbound_link && (now - node->outbound_link_attempt_time < reconnect_interval / NODE_CONNECTION_RETRIES_PER_TIMEOUT && *cluster_conn_attempts > max_conn_attempts)) {
+        if (!node->inbound_link && (now - node->outbound_link_attempt_time < reconnect_interval / NODE_CONNECTION_RETRIES_PER_TIMEOUT && *cluster_conn_attempts == 0)) {
             return 1;
         }
         node->outbound_link_attempt_time = now;
-        (*cluster_conn_attempts)++;
+        (*cluster_conn_attempts)--;
         clusterLink *link = createClusterLink(node);
         link->conn = connCreate(connTypeOfCluster());
         connSetPrivateData(link->conn, link);
@@ -5467,7 +5467,7 @@ static long long maxConnectionAttemptsPerCron(void) {
      * We run the cron loop every 100 ms.  To reach 100 % of the nodes
      * within the timeout, we need: ceil(nodes * 100 / reconnect_interval)
      */
-    const long long min_nodes_for_coverage = ceil(dictSize(server.cluster->nodes) * CLUSTER_CRON_PERIOD_MS / reconnect_interval);
+    const long long min_nodes_for_coverage = dictSize(server.cluster->nodes) * CLUSTER_CRON_PERIOD_MS / reconnect_interval;
     /*
      * Increase the coverage budget so each node can be probed 10 times
      * inside the timeout.
@@ -5486,8 +5486,6 @@ void clusterCron(void) {
     mstime_t min_pong = 0, now = mstime();
     clusterNode *min_pong_node = NULL;
     static unsigned long long iteration = 0;
-    int cluster_node_conn_attempts = 0;
-
     iteration++; /* Number of times this function was called so far. */
 
     clusterUpdateMyselfHostname();
@@ -5496,7 +5494,7 @@ void clusterCron(void) {
     server.cluster->stats_pfail_nodes = 0;
     /* Run through some of the operations we want to do on each cluster node. */
     di = dictGetSafeIterator(server.cluster->nodes);
-    const long long max_conn_attempts = maxConnectionAttemptsPerCron();
+    long long cluster_node_conn_attempts = maxConnectionAttemptsPerCron();
     while ((de = dictNext(di)) != NULL) {
         clusterNode *node = dictGetVal(de);
         /* We free the inbound or outboud link to the node if the link has an
@@ -5505,7 +5503,7 @@ void clusterCron(void) {
         /* The protocol is that function(s) below return non-zero if the node was
          * terminated.
          */
-        if (!server.debug_cluster_disable_reconnection && clusterNodeCronHandleReconnect(node, now, &cluster_node_conn_attempts, max_conn_attempts)) continue;
+        if (!server.debug_cluster_disable_reconnection && clusterNodeCronHandleReconnect(node, now, &cluster_node_conn_attempts)) continue;
     }
     dictReleaseIterator(di);
 

@@ -5461,7 +5461,7 @@ static void clusterNodeCronFreeLinkOnBufferLimitReached(clusterNode *node) {
  */
 static long long maxConnectionAttemptsPerCron(void) {
     long long reconnect_interval = server.cluster_node_timeout / 2;
-    if (dictSize(server.cluster->nodes) <= 0 || reconnect_interval <= 0)
+    if (reconnect_interval <= 0)
         return 0;
     /*
      * We run the cron loop every 100 ms.  To reach 100 % of the nodes

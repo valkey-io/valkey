@@ -293,6 +293,30 @@ proc CI {index field} {
     getInfoProperty [R $index cluster info] $field
 }
 
+# Provide easy access to CLIENT INFO properties from CLIENT INFO string.
+proc get_field_in_client_info {info field} {
+    set info [string trim $info]
+    foreach item [split $info " "] {
+        set kv [split $item "="]
+        set k [lindex $kv 0]
+        if {[string match $field $k]} {
+            return [lindex $kv 1]
+        }
+    }
+    return ""
+}
+
+# Provide easy access to CLIENT INFO properties from CLIENT LIST string.
+proc get_field_in_client_list {id client_list filed} {
+    set list [split $client_list "\r\n"]
+    foreach info $list {
+        if {[string match "id=$id *" $info] } {
+            return [get_field_in_client_info $info $filed]
+        }
+    }
+    return ""
+}
+
 # Test wrapped into run_solo are sent back from the client to the
 # test server, so that the test server will send them again to
 # clients once the clients are idle.

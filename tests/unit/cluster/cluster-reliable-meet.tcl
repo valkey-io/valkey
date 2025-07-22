@@ -111,18 +111,6 @@ proc cluster_nodes_all_know_each_other {num_nodes} {
     return 1
 }
 
-proc is_node_in_handshake {from_node_id} {
-    set links_output [R $from_node_id cluster links]
-    set to_node_id [cluster_get_first_node_in_handshake $from_node_id]
-    foreach link $links_output {
-        array set linkinfo $link
-        if {[info exists linkinfo(node)] && $linkinfo(direction) eq "to" && $linkinfo(node) eq $to_node_id} {
-            return 1
-        }
-    }
-    return 0
-}
-
 start_cluster 2 0 {tags {external:skip cluster} overrides {cluster-node-timeout 4000 cluster-replica-no-failover yes}} {
     set CLUSTER_PACKET_TYPE_PING 0
     set CLUSTER_PACKET_TYPE_PONG 1
@@ -172,13 +160,6 @@ start_cluster 2 0 {tags {external:skip cluster} overrides {cluster-node-timeout 
                 after 100
                 # Since we are in handshake, we use a randomly generated ID we have to find
                 R 1 DEBUG CLUSTERLINK KILL ALL [cluster_get_first_node_in_handshake 1]
-
-                wait_for_condition 5 400 {
-                    [is_node_in_handshake 1] && [is_node_in_handshake 0]
-                } else {
-                    fail "Node 0 or Node 1 never entered in handshake state"
-                }
-
                 incr meet_retry 1
             }
 

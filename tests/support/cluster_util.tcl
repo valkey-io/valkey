@@ -433,3 +433,21 @@ proc check_cluster_node_mark {flag ref_node_index instance_id_to_check} {
 proc get_slot_field {slot_output shard_id node_id attrib_id} {
     return [lindex [lindex [lindex $slot_output $shard_id] $node_id] $attrib_id]
 }
+
+proc get_open_slots {srv_idx} {
+    set slots [dict get [cluster_get_myself $srv_idx] slots]
+    if {[regexp {\[.*} $slots slots]} {
+        set slots [regsub -all {[{}]} $slots ""]
+        return $slots
+    } else {
+        return {}
+    }
+}
+
+proc wait_for_slot_state {srv_idx pattern} {
+    wait_for_condition 100 100 {
+        [get_open_slots $srv_idx] eq $pattern
+    } else {
+        fail "incorrect slot state on R $srv_idx: expected $pattern; got [get_open_slots $srv_idx]"
+    }
+}

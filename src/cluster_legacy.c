@@ -3686,14 +3686,14 @@ int clusterProcessPacket(clusterLink *link) {
                             }
                             if (importing_slots) {
                                 serverLog(LL_NOTICE,
-                                          "Failover occurred in migration source. Update importing "
+                                          "A failover occurred in migration source. Update importing "
                                           "source of %d slot(s) to node %.40s (%s) in shard %.40s.",
                                           importing_slots, sender_claimed_primary->name,
                                           sender_claimed_primary->human_nodename, sender_claimed_primary->shard_id);
                             }
                             if (migrating_slots) {
                                 serverLog(LL_NOTICE,
-                                          "Failover occurred in migration target. Update migrating "
+                                          "A failover occurred in migration target. Update migrating "
                                           "target of %d slot(s) to node %.40s (%s) in shard %.40s.",
                                           migrating_slots, sender_claimed_primary->name,
                                           sender_claimed_primary->human_nodename, sender_claimed_primary->shard_id);
@@ -5826,14 +5826,13 @@ int clusterDelNodeSlots(clusterNode *node) {
 
 /* Transfer slots from `from_node` to `to_node`.
  *
- * This function is only called after a failover occurs within a shard,
- * i.e. moving slots from the old primary to the new primary.
- *
  * Iterates over all cluster slots, transferring each slot covered
  * by `from_node` to `to_node`. */
 void clusterMoveNodeSlots(clusterNode *from_node, clusterNode *to_node,
                           int *slots, int *importing_slots, int *migrating_slots) {
-    debugServerAssert(areInSameShard(from_node, to_node));
+    /* This function currently only called after a failover occurs within a shard,
+     * i.e. moving slots from the old primary to the new primary. */
+    serverAssert(areInSameShard(from_node, to_node));
     int processed = 0, importing_processed = 0, migrating_processed = 0;
 
     for (int j = 0; j < CLUSTER_SLOTS; j++) {
@@ -5862,9 +5861,9 @@ void clusterMoveNodeSlots(clusterNode *from_node, clusterNode *to_node,
         }
     }
 
-    if (slots) (*slots) = processed;
-    if (importing_slots) (*importing_slots) = importing_processed;
-    if (migrating_slots) (*migrating_slots) = migrating_processed;
+    if (slots) *slots = processed;
+    if (importing_slots) *importing_slots = importing_processed;
+    if (migrating_slots) *migrating_slots = migrating_processed;
 }
 
 /* Clear the migrating / importing state for all the slots.

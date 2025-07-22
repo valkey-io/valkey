@@ -1,13 +1,3 @@
-proc get_open_slots {srv_idx} {
-    set slots [dict get [cluster_get_myself $srv_idx] slots]
-    if {[regexp {\[.*} $slots slots]} {
-        set slots [regsub -all {[{}]} $slots ""]
-        return $slots
-    } else {
-        return {}
-    }
-}
-
 proc get_cluster_role {srv_idx} {
     set flags [dict get [cluster_get_myself $srv_idx] flags]
     set role [lindex $flags 1]
@@ -78,14 +68,6 @@ proc wait_for_role {srv_idx role} {
     }
 
     wait_for_cluster_propagation
-}
-
-proc wait_for_slot_state {srv_idx pattern} {
-    wait_for_condition 100 100 {
-        [get_open_slots $srv_idx] eq $pattern
-    } else {
-        fail "incorrect slot state on R $srv_idx: expected $pattern; got [get_open_slots $srv_idx]"
-    }
 }
 
 # restart a server and wait for it to come back online

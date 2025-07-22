@@ -238,6 +238,10 @@ tags "modules" {
             $replica replicaof $master_host $master_port
 
             wait_replica_online $master
+            # In case of bio thread RDB download, there can be up to 1000ms
+            # (1 replication cron loop) delay until the rdb starts loading
+            after 1000
+            wait_done_loading r
 
             test {Test master link up hook} {
                 assert_equal [r hooks.event_count masterlink-up] 1

@@ -435,6 +435,13 @@ typedef enum {
     REPL_DUAL_CHANNEL_RDB_LOADED,
 } repl_rdb_channel_state;
 
+typedef enum {
+    REPL_BIO_DISK_SAVE_STATE_NONE = 0,    /* No active disk-saving Bio thread */
+    REPL_BIO_DISK_SAVE_STATE_IN_PROGRESS, /* The disk-saving Bio job has been created */
+    REPL_BIO_DISK_SAVE_STATE_FINISHED,    /* The disk-saving Bio job finished */
+    REPL_BIO_DISK_SAVE_STATE_FAIL         /* The disk-saving Bio job failed */
+} replica_bio_disk_save_state;
+
 /* The state of an in progress coordinated failover */
 typedef enum {
     NO_FAILOVER = 0,        /* No failover in progress */
@@ -442,6 +449,12 @@ typedef enum {
     FAILOVER_IN_PROGRESS    /* Waiting for target replica to accept
                              * PSYNC FAILOVER request. */
 } failover_state;
+
+/* Possible outcomes when inspecting a bulk payload received from the primary server */
+#define INSPECT_BULK_PAYLOAD_PRIMARY_ABORT -1
+#define INSPECT_BULK_PAYLOAD_PRIMARY_PING -2
+#define INSPECT_BULK_PAYLOAD_PRIMARY_BAD_PROTO -3
+#define INSPECT_BULK_PAYLOAD_PRIMARY_OK 1;
 
 /* State of replicas from the POV of the primary. Used in client->replstate.
  * In SEND_BULK and ONLINE state the replica receives new updates
@@ -514,6 +527,7 @@ typedef enum {
 #define ZSKIPLIST_MAX_SEARCH 10
 
 /* Append only defines */
+#define REPL_MAX_WRITTEN_BEFORE_FSYNC (1024 * 1024 * 8) /* 8 MB */
 #define AOF_FSYNC_NO 0
 #define AOF_FSYNC_ALWAYS 1
 #define AOF_FSYNC_EVERYSEC 2
@@ -1975,6 +1989,18 @@ struct valkeyServer {
                                                 * delay (start sooner if they all connect). */
     int dual_channel_replication;              /* Config used to determine if the replica should
                                                 * use dual channel replication for full syncs. */
+    _Atomic int replica_bio_disk_save_state;   /* Flag set by the bio thread to indicate that the
+                                                * RDB save to disk has completed, or failed */
+    _Atomic bool replica_bio_abort_save;       /* Flag set by main thread, used to signal to replica's
+                                                * disk-saving bio thread to abort the save */
+    long long bio_stat_net_repl_input_bytes;   /* Used to calculate stat_net_repl_input_bytes on the
+                                                * replica's bio thread without touching main thread vars */
+    off_t bio_repl_transfer_size;              /* Used to calculate bio_repl_transfer_size on the
+                                                * replica's bio thread without touching main thread vars */
+    off_t bio_repl_transfer_read;              /* Used to calculate bio_repl_transfer_read on the
+                                                * replica's bio thread without touching main thread vars */
+    connection *replica_bio_disk_save_conn;    /* Used to remember the connection we downloaded the RDB
+                                                * from, in order to finalize the sync later */
     int wait_before_rdb_client_free;           /* Grace period in seconds for replica main channel
                                                 * to establish psync. */
     int debug_pause_after_fork;                /* Debug param that pauses the main process
@@ -1997,33 +2023,33 @@ struct valkeyServer {
         long long read_reploff;
         int dbid;
     } repl_provisional_primary;
-    client *cached_primary;             /* Cached primary to be reused for PSYNC. */
-    rio *loading_rio;                   /* Pointer to the rio object currently used for loading data. */
-    int repl_syncio_timeout;            /* Timeout for synchronous I/O calls */
-    int repl_state;                     /* Replication status if the instance is a replica */
-    int repl_rdb_channel_state;         /* State of the replica's rdb channel during dual-channel-replication */
-    off_t repl_transfer_size;           /* Size of RDB to read from primary during sync. */
-    off_t repl_transfer_read;           /* Amount of RDB read from primary during sync. */
-    off_t repl_transfer_last_fsync_off; /* Offset when we fsync-ed last time. */
-    connection *repl_transfer_s;        /* Replica -> Primary SYNC connection */
-    connection *repl_rdb_transfer_s;    /* Primary FULL SYNC connection (RDB download) */
-    int repl_transfer_fd;               /* Replica -> Primary SYNC temp file descriptor */
-    char *repl_transfer_tmpfile;        /* Replica-> Primary SYNC temp file name */
-    time_t repl_transfer_lastio;        /* Unix time of the latest read, for timeout */
-    int repl_serve_stale_data;          /* Serve stale data when link is down? */
-    int repl_replica_ro;                /* Replica is read only? */
-    int repl_replica_ignore_maxmemory;  /* If true replicas do not evict. */
-    time_t repl_down_since;             /* Unix time at which link with primary went down */
-    int repl_disable_tcp_nodelay;       /* Disable TCP_NODELAY after SYNC? */
-    int repl_mptcp;                     /* Use Multipath TCP for replica on client side */
-    int replica_priority;               /* Reported in INFO and used by Sentinel. */
-    int replica_announced;              /* If true, replica is announced by Sentinel */
-    int replica_announce_port;          /* Give the primary this listening port. */
-    char *replica_announce_ip;          /* Give the primary this ip address. */
-    int propagation_error_behavior;     /* Configures the behavior of the replica
-                                         * when it receives an error on the replication stream */
-    int repl_ignore_disk_write_error;   /* Configures whether replicas panic when unable to
-                                         * persist writes to AOF. */
+    client *cached_primary;              /* Cached primary to be reused for PSYNC. */
+    rio *loading_rio;                    /* Pointer to the rio object currently used for loading data. */
+    int repl_syncio_timeout;             /* Timeout for synchronous I/O calls */
+    int repl_state;                      /* Replication status if the instance is a replica */
+    int repl_rdb_channel_state;          /* State of the replica's rdb channel during dual-channel-replication */
+    off_t repl_transfer_size;            /* Size of RDB to read from primary during sync. */
+    off_t repl_transfer_read;            /* Amount of RDB read from primary during sync. */
+    off_t repl_transfer_last_fsync_off;  /* Offset when we fsync-ed last time. */
+    connection *repl_transfer_s;         /* Replica -> Primary SYNC connection */
+    connection *repl_rdb_transfer_s;     /* Primary FULL SYNC connection (RDB download) */
+    int repl_transfer_fd;                /* Replica -> Primary SYNC temp file descriptor */
+    char *repl_transfer_tmpfile;         /* Replica-> Primary SYNC temp file name */
+    _Atomic time_t repl_transfer_lastio; /* Unix time of the latest read, for timeout */
+    int repl_serve_stale_data;           /* Serve stale data when link is down? */
+    int repl_replica_ro;                 /* Replica is read only? */
+    int repl_replica_ignore_maxmemory;   /* If true replicas do not evict. */
+    time_t repl_down_since;              /* Unix time at which link with primary went down */
+    int repl_disable_tcp_nodelay;        /* Disable TCP_NODELAY after SYNC? */
+    int repl_mptcp;                      /* Use Multipath TCP for replica on client side */
+    int replica_priority;                /* Reported in INFO and used by Sentinel. */
+    int replica_announced;               /* If true, replica is announced by Sentinel */
+    int replica_announce_port;           /* Give the primary this listening port. */
+    char *replica_announce_ip;           /* Give the primary this ip address. */
+    int propagation_error_behavior;      /* Configures the behavior of the replica
+                                          * when it receives an error on the replication stream */
+    int repl_ignore_disk_write_error;    /* Configures whether replicas panic when unable to
+                                          * persist writes to AOF. */
 
     /* The following two fields is where we store primary PSYNC replid/offset
      * while the PSYNC is in progress. At the end we'll copy the fields into
@@ -2080,7 +2106,7 @@ struct valkeyServer {
     int list_max_listpack_size;
     int list_compress_depth;
     /* time cache */
-    time_t unixtime;             /* Unix time sampled every cron cycle. */
+    _Atomic time_t unixtime;     /* Unix time sampled every cron cycle. */
     time_t timezone;             /* Cached timezone. As set by tzset(). */
     _Atomic int daylight_active; /* Currently in daylight saving time. */
     mstime_t mstime;             /* 'unixtime' in milliseconds. */
@@ -3015,6 +3041,13 @@ int sendCurrentOffsetToReplica(client *replica);
 void addRdbReplicaToPsyncWait(client *replica);
 void initClientReplicationData(client *c);
 void freeClientReplicationData(client *c);
+void replicaReceiveRDBFromPrimaryToMemory(connection *conn);
+int inspectBulkPayloadHeaderForErrors(char *buf);
+bool inspectBulkPayloadHeaderForEOF(char *buf, char *eofmark, char *lastbytes);
+bool inspectBulkPayloadForEOF(char *buf, ssize_t nread, char *eofmark, char *lastbytes);
+int tryReadBulkPayloadMetadata(connection *conn, char *buf, char *eofmark, char *lastbytes, int *usemark, off_t *repl_transfer_size);
+void replicaReceiveRDBFromPrimaryToDisk(connection *conn, int is_dual_channel);
+int shouldAbortSave(void);
 
 /* Generic persistence functions */
 void startLoadingFile(size_t size, char *filename, int rdbflags);
@@ -3992,6 +4025,8 @@ void debugPauseProcess(void);
  * This macro wraps the serverLog function, prepending "<Dual Channel>"
  * to the log message. */
 #define dualChannelServerLog(level, ...) serverLog(level, "Dual channel replication: " __VA_ARGS__)
+
+#define replicaBioSaveServerLog(level, ...) serverLog(level, "Replica bio thread: " __VA_ARGS__)
 
 #define serverDebug(fmt, ...) printf("DEBUG %s:%d > " fmt "\n", __FILE__, __LINE__, __VA_ARGS__)
 #define serverDebugMark() printf("-- MARK %s:%d --\n", __FILE__, __LINE__)

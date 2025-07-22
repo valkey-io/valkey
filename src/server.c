@@ -1315,7 +1315,7 @@ void databasesCron(void) {
 static inline void updateCachedTimeWithUs(int update_daylight_info, const long long ustime) {
     server.ustime = ustime;
     server.mstime = server.ustime / 1000;
-    server.unixtime = server.mstime / 1000;
+    atomic_store_explicit(&server.unixtime, server.mstime / 1000, memory_order_relaxed);
 
     /* To get information about daylight saving time, we need to call
      * localtime_r and cache the result. However calling localtime_r in this
@@ -1493,12 +1493,12 @@ long long serverCron(struct aeEventLoop *eventLoop, long long id, void *clientDa
         monotime current_time = getMonotonicUs();
         long long factor = 1000000; // us
         trackInstantaneousMetric(STATS_METRIC_COMMAND, server.stat_numcommands, current_time, factor);
-        trackInstantaneousMetric(STATS_METRIC_NET_INPUT, server.stat_net_input_bytes + server.stat_net_repl_input_bytes,
+        trackInstantaneousMetric(STATS_METRIC_NET_INPUT, server.stat_net_input_bytes + server.stat_net_repl_input_bytes + server.bio_stat_net_repl_input_bytes,
                                  current_time, factor);
         trackInstantaneousMetric(STATS_METRIC_NET_OUTPUT,
                                  server.stat_net_output_bytes + server.stat_net_repl_output_bytes, current_time,
                                  factor);
-        trackInstantaneousMetric(STATS_METRIC_NET_INPUT_REPLICATION, server.stat_net_repl_input_bytes, current_time,
+        trackInstantaneousMetric(STATS_METRIC_NET_INPUT_REPLICATION, server.stat_net_repl_input_bytes + server.bio_stat_net_repl_input_bytes, current_time,
                                  factor);
         trackInstantaneousMetric(STATS_METRIC_NET_OUTPUT_REPLICATION, server.stat_net_repl_output_bytes, current_time,
                                  factor);
@@ -2739,6 +2739,7 @@ void resetServerStats(void) {
     server.stat_net_input_bytes = 0;
     server.stat_net_output_bytes = 0;
     server.stat_net_repl_input_bytes = 0;
+    server.bio_stat_net_repl_input_bytes = 0;
     server.stat_net_repl_output_bytes = 0;
     server.stat_unexpected_error_replies = 0;
     server.stat_total_error_replies = 0;
@@ -6051,9 +6052,9 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                 "total_connections_received:%lld\r\n", server.stat_numconnections,
                 "total_commands_processed:%lld\r\n", server.stat_numcommands,
                 "instantaneous_ops_per_sec:%lld\r\n", getInstantaneousMetric(STATS_METRIC_COMMAND),
-                "total_net_input_bytes:%lld\r\n", server.stat_net_input_bytes + server.stat_net_repl_input_bytes,
+                "total_net_input_bytes:%lld\r\n", server.stat_net_input_bytes + server.stat_net_repl_input_bytes + server.bio_stat_net_repl_input_bytes,
                 "total_net_output_bytes:%lld\r\n", server.stat_net_output_bytes + server.stat_net_repl_output_bytes,
-                "total_net_repl_input_bytes:%lld\r\n", server.stat_net_repl_input_bytes,
+                "total_net_repl_input_bytes:%lld\r\n", server.stat_net_repl_input_bytes + server.bio_stat_net_repl_input_bytes,
                 "total_net_repl_output_bytes:%lld\r\n", server.stat_net_repl_output_bytes,
                 "instantaneous_input_kbps:%.2f\r\n", (float)getInstantaneousMetric(STATS_METRIC_NET_INPUT) / 1024,
                 "instantaneous_output_kbps:%.2f\r\n", (float)getInstantaneousMetric(STATS_METRIC_NET_OUTPUT) / 1024,
@@ -6147,16 +6148,25 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                     "replicas_repl_buffer_peak:%zu\r\n", server.pending_repl_data.peak));
 
             if (server.repl_state == REPL_STATE_TRANSFER) {
+                int repl_transfer_size_stat;
+                int repl_transfer_read_stat;
+                if (atomic_load_explicit(&server.replica_bio_disk_save_state, memory_order_acquire) != REPL_BIO_DISK_SAVE_STATE_NONE) {
+                    repl_transfer_size_stat = server.bio_repl_transfer_size;
+                    repl_transfer_read_stat = server.bio_repl_transfer_read;
+                } else {
+                    repl_transfer_size_stat = server.repl_transfer_size;
+                    repl_transfer_read_stat = server.repl_transfer_read;
+                }
                 double perc = 0;
-                if (server.repl_transfer_size) {
-                    perc = ((double)server.repl_transfer_read / server.repl_transfer_size) * 100;
+                if (repl_transfer_size_stat) {
+                    perc = ((double)repl_transfer_read_stat / repl_transfer_size_stat) * 100;
                 }
                 info = sdscatprintf(
                     info,
                     FMTARGS(
-                        "master_sync_total_bytes:%lld\r\n", (long long)server.repl_transfer_size,
-                        "master_sync_read_bytes:%lld\r\n", (long long)server.repl_transfer_read,
-                        "master_sync_left_bytes:%lld\r\n", (long long)(server.repl_transfer_size - server.repl_transfer_read),
+                        "master_sync_total_bytes:%lld\r\n", (long long)repl_transfer_size_stat,
+                        "master_sync_read_bytes:%lld\r\n", (long long)repl_transfer_read_stat,
+                        "master_sync_left_bytes:%lld\r\n", (long long)(repl_transfer_size_stat - repl_transfer_read_stat),
                         "master_sync_perc:%.2f\r\n", perc,
                         "master_sync_last_io_seconds_ago:%d\r\n", (int)(server.unixtime - server.repl_transfer_lastio)));
             }

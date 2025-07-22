@@ -57,9 +57,9 @@ start_server {tags {"tracking network logreqres:skip"}} {
 
         # In 64 bits, before we would consume about 20000 * (4 * 8), that is 640000.
         # And now we are 20000 * (4 + 8), that is 240000.
-        if {$arch_bits == "64"} {
+        if {$arch_bits == 64} {
             assert_lessthan $diff 300000
-        } elseif {$arch_bits == "32"} {
+        } elseif {$arch_bits == 32} {
             assert_lessthan $diff 200000
         }
 

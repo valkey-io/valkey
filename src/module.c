@@ -11794,14 +11794,11 @@ static uint64_t moduleEventVersions[] = {
  *     structure with the following fields:
  *
  *         uint64_t client_id;      // Client ID.
- *         char addr[46];           // IPv4 or IPv6 address.
- *         uint16_t port;           // TCP port.
  *         const char *username;    // Username used for authentication.
  *         const char *module_name; // Name of the module that is handling the
  *                                  // authentication. It is NULL if the
  *                                  // authentication is handled by the core.
- *         int success;             // Result of the authentication, 1 for success,
- *                                  // 0 for failure.
+ *         ValkeyModuleAuthenticationResult result;   // Result of the authentication.
  *
  * The function returns VALKEYMODULE_OK if the module was successfully subscribed
  * for the specified event. If the API is called from a wrong context or unsupported event

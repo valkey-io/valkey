@@ -72,8 +72,7 @@ int clusterNodeAddReplica(clusterNode *primary, clusterNode *replica);
 int clusterAddSlot(clusterNode *n, int slot);
 int clusterDelSlot(int slot);
 int clusterDelNodeSlots(clusterNode *node);
-void clusterMoveNodeSlots(clusterNode *from_node, clusterNode *to_node,
-                          int *slots, int *importing_slots, int *migrating_slots);
+void clusterMoveNodeSlots(clusterNode *from_node, clusterNode *to_node, int *slots, int *importing_slots, int *migrating_slots);
 void clusterNodeSetSlotBit(clusterNode *n, int slot);
 static void clusterSetPrimary(clusterNode *n, int closeSlots, int full_sync_required);
 void clusterHandleReplicaFailover(void);
@@ -5828,8 +5827,7 @@ int clusterDelNodeSlots(clusterNode *node) {
  *
  * Iterates over all cluster slots, transferring each slot covered
  * by `from_node` to `to_node`. */
-void clusterMoveNodeSlots(clusterNode *from_node, clusterNode *to_node,
-                          int *slots, int *importing_slots, int *migrating_slots) {
+void clusterMoveNodeSlots(clusterNode *from_node, clusterNode *to_node, int *slots, int *importing_slots, int *migrating_slots) {
     /* This function currently only called after a failover occurs within a shard,
      * i.e. moving slots from the old primary to the new primary. */
     serverAssert(areInSameShard(from_node, to_node));

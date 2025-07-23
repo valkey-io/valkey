@@ -3853,7 +3853,7 @@ int clusterProcessPacket(clusterLink *link) {
          * same shard and are both primaries, if myself is a empty primary and myself
          * config epoch is smaller, make it become a replica of sender. */
         if (sender && nodeIsPrimary(myself) && nodeIsPrimary(sender) && areInSameShard(myself, sender) &&
-            nodeEpoch(sender) > nodeEpoch(myself)) {
+            myself->numslots == 0 && nodeEpoch(sender) > nodeEpoch(myself)) {
             clusterHandlePrimariesSameShardCollision(sender);
         }
     } else if (type == CLUSTERMSG_TYPE_FAIL) {

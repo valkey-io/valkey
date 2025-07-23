@@ -1196,6 +1196,14 @@ void flushAppendOnlyFile(int force) {
                       "Can't recover from AOF write error when the AOF fsync policy is 'always'. Exiting...");
             exit(1);
         } else {
+            if (getGoodReplicasCount(0) >= server.replicas_to_fail_on_aof_short_write) {
+                serverLog(LL_WARNING,
+                          "Can't recover from AOF write error when replicas-to-fail-on-aof-short-write is '%d' "
+                          "and there are enough actual replicas. Exiting...",
+                          server.replicas_to_fail_on_aof_short_write);
+                exit(1);
+            }
+
             /* Recover from failed write leaving data into the buffer. However
              * set an error to stop accepting writes as long as the error
              * condition is not cleared. */

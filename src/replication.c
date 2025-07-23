@@ -4842,24 +4842,28 @@ void replicationResurrectProvisionalPrimary(void) {
 
 /* ------------------------- MIN-REPLICAS-TO-WRITE  --------------------------- */
 
-/* This function counts the number of replicas with lag <= min-replicas-max-lag.
- * If the option is active, the server will prevent writes if there are not
- * enough connected replicas with the specified lag (or less). */
-void refreshGoodReplicasCount(void) {
+int getGoodReplicasCount(int max_lag) {
     listIter li;
     listNode *ln;
     int good = 0;
-
-    if (!server.repl_min_replicas_to_write || !server.repl_min_replicas_max_lag) return;
 
     listRewind(server.replicas, &li);
     while ((ln = listNext(&li))) {
         client *replica = ln->value;
         time_t lag = server.unixtime - replica->repl_data->repl_ack_time;
 
-        if (replica->repl_data->repl_state == REPLICA_STATE_ONLINE && lag <= server.repl_min_replicas_max_lag) good++;
+        if (replica->repl_data->repl_state == REPLICA_STATE_ONLINE && lag <= max_lag) good++;
     }
-    server.repl_good_replicas_count = good;
+    return good;
+}
+
+/* This function counts the number of replicas with lag <= min-replicas-max-lag.
+ * If the option is active, the server will prevent writes if there are not
+ * enough connected replicas with the specified lag (or less). */
+void refreshGoodReplicasCount(void) {
+    if (!server.repl_min_replicas_to_write || !server.repl_min_replicas_max_lag) return;
+
+    server.repl_good_replicas_count = getGoodReplicasCount(server.repl_min_replicas_max_lag);
 }
 
 /* return true if status of good replicas is OK. otherwise false */

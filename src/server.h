@@ -1999,8 +1999,6 @@ struct valkeyServer {
                                                 * replica's bio thread without touching main thread vars */
     off_t bio_repl_transfer_read;              /* Used to calculate bio_repl_transfer_read on the
                                                 * replica's bio thread without touching main thread vars */
-    connection *replica_bio_disk_save_conn;    /* Used to remember the connection we downloaded the RDB
-                                                * from, in order to finalize the sync later */
     int wait_before_rdb_client_free;           /* Grace period in seconds for replica main channel
                                                 * to establish psync. */
     int debug_pause_after_fork;                /* Debug param that pauses the main process

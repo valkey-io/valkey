@@ -1315,7 +1315,7 @@ void databasesCron(void) {
 static inline void updateCachedTimeWithUs(int update_daylight_info, const long long ustime) {
     server.ustime = ustime;
     server.mstime = server.ustime / 1000;
-    atomic_store_explicit(&server.unixtime, server.mstime / 1000, memory_order_relaxed);
+    server.unixtime = server.mstime / 1000;
 
     /* To get information about daylight saving time, we need to call
      * localtime_r and cache the result. However calling localtime_r in this

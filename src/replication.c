@@ -2206,7 +2206,7 @@ int tryReadBulkPayloadMetadata(connection *conn, char *buf, char *eofmark, char 
         /* At this stage just a newline works as a PING in order to take
          * the connection live. So we refresh our last interaction
          * timestamp. */
-        atomic_store_explicit(&server.repl_transfer_lastio, atomic_load_explicit(&server.unixtime, memory_order_relaxed), memory_order_relaxed);
+        server.repl_transfer_lastio = server.unixtime;
         return C_RETRY;
     } else if (ret == INSPECT_BULK_PAYLOAD_PRIMARY_BAD_PROTO) {
         serverLog(LL_WARNING,
@@ -2641,7 +2641,7 @@ void replicaReceiveRDBFromPrimaryToDisk(connection *conn, int is_dual_channel) {
 
         /* Update the last I/O time for the replication transfer (used in
          * order to detect timeouts during replication). */
-        atomic_store_explicit(&server.repl_transfer_lastio, atomic_load_explicit(&server.unixtime, memory_order_relaxed), memory_order_relaxed);
+        server.repl_transfer_lastio = server.unixtime;
 
         /* Write what we got from the socket to the dump file on disk */
         if ((nwritten = write(server.repl_transfer_fd, buf, nread)) != nread) {
@@ -2700,7 +2700,6 @@ done:
         atomic_store_explicit(&server.replica_bio_disk_save_state, REPL_BIO_DISK_SAVE_STATE_FAIL, memory_order_release);
     } else {
         replicaBioSaveServerLog(LL_NOTICE, "Done downloading RDB");
-        server.replica_bio_disk_save_conn = conn;
         atomic_store_explicit(&server.replica_bio_disk_save_state, REPL_BIO_DISK_SAVE_STATE_FINISHED, memory_order_release);
     }
 }
@@ -3000,7 +2999,7 @@ static int dualChannelReplHandleEndOffsetResponse(connection *conn, sds *err) {
     server.bio_repl_transfer_read = 0;
     if (!useDisklessLoad()) {
         /* Only create the Bio thread once the first piece of data is sent by the primary */
-        connSetReadHandler(server.repl_rdb_transfer_s, receiveRDBinBioThreadDualChannel);
+        serverAssert(connSetReadHandler(server.repl_rdb_transfer_s, receiveRDBinBioThreadDualChannel) != C_ERR);
     } else {
         serverAssert(connSetReadHandler(server.repl_rdb_transfer_s, replicaReceiveRDBFromPrimaryToMemory) != C_ERR);
     }
@@ -4137,7 +4136,13 @@ void syncWithPrimary(connection *conn) {
 
     if (!useDisklessLoad()) {
         /* Only create the Bio thread once the first piece of data is sent by the primary */
-        connSetReadHandler(conn, receiveRDBinBioThreadSingleChannel);
+        if (connSetReadHandler(conn, receiveRDBinBioThreadSingleChannel) == C_ERR) {
+            char conninfo[CONN_INFO_LEN];
+            serverLog(LL_WARNING, "Can't create readable event for Bio SYNC: %s (%s)", strerror(errno),
+                      connGetInfo(conn, conninfo, sizeof(conninfo)));
+            syncWithPrimaryHandleError(&conn);
+            return;
+        }
     } else {
         /* Setup the non blocking download of the bulk file. */
         if (connSetReadHandler(conn, replicaReceiveRDBFromPrimaryToMemory) == C_ERR) {
@@ -4995,7 +5000,6 @@ long long replicationGetReplicaOffset(void) {
 void resetBioRDBSaveState(void) {
     server.bio_repl_transfer_size = 0;
     server.bio_repl_transfer_read = 0;
-    server.replica_bio_disk_save_conn = NULL;
     server.replica_bio_disk_save_state = REPL_BIO_DISK_SAVE_STATE_NONE;
 }
 
@@ -5021,14 +5025,20 @@ void handleBioThreadFinishedRDBDownload(void) {
     /* Handle Bio sync success */
     serverLog(LL_NOTICE, "Loading the RDB and finalizing primary-replica sync...");
     rdbSaveInfo rsi = RDB_SAVE_INFO_INIT;
-    replicaBeforeLoadPrimaryRDB(server.replica_bio_disk_save_conn, 0);
+    connection *conn;
+    if (server.repl_rdb_channel_state != REPL_DUAL_CHANNEL_STATE_NONE) {
+        conn = server.repl_rdb_transfer_s;
+    } else {
+        conn = server.repl_transfer_s;
+    }
+    replicaBeforeLoadPrimaryRDB(conn, 0);
     if (replicaLoadPrimaryRDBFromDisk(&rsi) == C_ERR) {
         serverLog(LL_WARNING, "Failed to load RDB");
         resetBioRDBSaveState();
         cancelReplicationHandshake(1);
         return;
     }
-    replicaAfterLoadPrimaryRDB(server.replica_bio_disk_save_conn, &rsi);
+    replicaAfterLoadPrimaryRDB(conn, &rsi);
     server.repl_transfer_size = server.bio_repl_transfer_size;
     server.repl_transfer_read = server.bio_repl_transfer_read;
     resetBioRDBSaveState();

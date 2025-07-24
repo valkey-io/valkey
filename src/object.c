@@ -136,8 +136,8 @@ robj *createRawStringObject(const char *ptr, size_t len) {
     return createObject(OBJ_STRING, sdsnewlen(ptr, len));
 }
 
-/* Creates a new embedded string object and copies the content of key, val and
- * expire to the new object. LRU is set to 0. */
+/* Creates a new embedded string object and copies the content of key, val_ptr
+ * and expire to the new object. LRU is set to 0. */
 static robj *createEmbeddedStringObjectWithKeyAndExpire(const char *val_ptr,
                                                         size_t val_len,
                                                         const sds key,
@@ -242,13 +242,17 @@ robj *createStringObjectWithKeyAndExpire(const char *ptr, size_t len, const sds 
     }
 }
 
-sds objectGetKey(const robj *val) {
-    unsigned char *data = (void *)(val + 1);
-    if (val->hasexpire) {
+void *objectGetVal(const robj *o) {
+    return o->ptr;
+}
+
+sds objectGetKey(const robj *o) {
+    unsigned char *data = (void *)(o + 1);
+    if (o->hasexpire) {
         /* Skip expire field */
         data += sizeof(long long);
     }
-    if (val->hasembkey) {
+    if (o->hasembkey) {
         uint8_t hdr_size = *(uint8_t *)data;
         data += 1 + hdr_size;
         return (sds)data;
@@ -258,9 +262,9 @@ sds objectGetKey(const robj *val) {
 
 /* Return the expire time of the specified robj, or -1 if no expire
  * is associated with this robj (i.e. the robj is non volatile) */
-long long objectGetExpire(const robj *val) {
-    if (val->hasexpire) {
-        unsigned char *data = (void *)(val + 1);
+long long objectGetExpire(const robj *o) {
+    if (o->hasexpire) {
+        unsigned char *data = (void *)(o + 1);
         return *(long long *)data;
     } else {
         return -1;
@@ -269,53 +273,57 @@ long long objectGetExpire(const robj *val) {
 
 /* This functions may reallocate the value. The new allocation is returned and
  * the old object's reference counter is decremented and possibly freed. Use the
- * returned object instead of 'val' after calling this function. */
-robj *objectSetExpire(robj *val, long long expire) {
-    if (val->hasexpire) {
+ * returned object instead of 'o' after calling this function. */
+robj *objectSetExpire(robj *o, long long expire) {
+    if (o->hasexpire) {
         /* Update existing expire field. */
-        unsigned char *data = (void *)(val + 1);
+        unsigned char *data = (void *)(o + 1);
         *(long long *)data = expire;
-        return val;
+        return o;
     } else if (expire == -1) {
-        return val;
+        return o;
     } else {
-        return objectSetKeyAndExpire(val, objectGetKey(val), expire);
+        return objectSetKeyAndExpire(o, objectGetKey(o), expire);
     }
+}
+
+void objectSetVal(robj *o, void *val) {
+    o->ptr = val;
 }
 
 /* This functions may reallocate the value. The new allocation is returned and
  * the old object's reference counter is decremented and possibly freed. Use the
- * returned object instead of 'val' after calling this function. */
-robj *objectSetKeyAndExpire(robj *val, sds key, long long expire) {
-    if (val->type == OBJ_STRING && val->encoding == OBJ_ENCODING_EMBSTR) {
-        robj *new = createStringObjectWithKeyAndExpire(val->ptr, sdslen(val->ptr), key, expire);
-        new->lru = val->lru;
-        decrRefCount(val);
+ * returned object instead of 'o' after calling this function. */
+robj *objectSetKeyAndExpire(robj *o, sds key, long long expire) {
+    if (o->type == OBJ_STRING && o->encoding == OBJ_ENCODING_EMBSTR) {
+        robj *new = createStringObjectWithKeyAndExpire(o->ptr, sdslen(o->ptr), key, expire);
+        new->lru = o->lru;
+        decrRefCount(o);
         return new;
     }
 
     /* Create a new object with embedded key. Reuse ptr if possible. */
     void *ptr;
-    if (val->refcount == 1) {
-        /* Reuse the ptr. There are no other references to val. */
-        ptr = val->ptr;
-        val->ptr = NULL;
-    } else if (val->type == OBJ_STRING && val->encoding == OBJ_ENCODING_INT) {
+    if (o->refcount == 1) {
+        /* Reuse the ptr. There are no other references to o. */
+        ptr = o->ptr;
+        o->ptr = NULL;
+    } else if (o->type == OBJ_STRING && o->encoding == OBJ_ENCODING_INT) {
         /* The pointer is not allocated memory. We can just copy the pointer. */
-        ptr = val->ptr;
-    } else if (val->type == OBJ_STRING && val->encoding == OBJ_ENCODING_RAW) {
+        ptr = o->ptr;
+    } else if (o->type == OBJ_STRING && o->encoding == OBJ_ENCODING_RAW) {
         /* Dup the string. */
-        ptr = sdsdup(val->ptr);
+        ptr = sdsdup(o->ptr);
     } else {
-        serverAssert(val->type != OBJ_STRING);
+        serverAssert(o->type != OBJ_STRING);
         /* There are multiple references to this non-string object. Most types
          * can be duplicated, but for a module type is not always possible. */
         serverPanic("Not implemented");
     }
-    robj *new = createObjectWithKeyAndExpire(val->type, ptr, key, expire);
-    new->encoding = val->encoding;
-    new->lru = val->lru;
-    decrRefCount(val);
+    robj *new = createObjectWithKeyAndExpire(o->type, ptr, key, expire);
+    new->encoding = o->encoding;
+    new->lru = o->lru;
+    decrRefCount(o);
     return new;
 }
 

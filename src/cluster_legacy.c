@@ -1679,32 +1679,41 @@ clusterNode *createClusterNode(char *nodename, int flags) {
 }
 
 /* 8 bytes mstime + 8 bytes cluster node */
-#define FAILURE_REPORT_ST_KEYLEN 16
+#define FAILURE_REPORT_KEYLEN 16
 
-/* The expiry time is rounded up (ceiled) to the nearest second in order to bucket
+/* The report time is rounded up (ceiled) to the nearest second in order to bucket
  * timestamps and keep the radix‐tree keys compact.  The resulting timestamp is stored
  * in big‑endian format, followed by the pointer to the clusterNode. */
-static void encodeFailureReportKey(unsigned char *buf, mstime_t expiry, clusterNode *node) {
-    mstime_t bt = ((expiry + 999) / 1000) * 1000;
-    uint64_t be = htonu64((uint64_t)bt);
-    memcpy(buf, &be, 8);
-    memcpy(buf + 8, &node, sizeof(node));
-    if (sizeof(node) == 4) memset(buf + 12, 0, 4);
+static void encodeFailureReportKey(unsigned char *buf, mstime_t report_time, clusterNode *node) {
+    const uint64_t sec_in_ms = 1000ULL;
+    const uint64_t ceil_offset_ms = sec_in_ms - 1;
+    const size_t node_ptr_pad_bytes = (sizeof(clusterNode *) == 4) ? 4 : 0; // pad on 32-bit
+
+    /* Round up to the next second for fewer key splits and quorum grace */
+    mstime_t bucketed_time = ((report_time + ceil_offset_ms) / sec_in_ms) * sec_in_ms;
+
+    /* Big endian timestamp for numeric time order in rax */
+    uint64_t big_endian_time = htonu64((uint64_t)bucketed_time);
+    memcpy(buf, &big_endian_time, sizeof(uint64_t));
+
+    /* Append the node pointer, plus padding if necessary */
+    memcpy(buf + sizeof(uint64_t), &node, sizeof(node));
+    if (node_ptr_pad_bytes) memset(buf + sizeof(uint64_t) + sizeof(node), 0, node_ptr_pad_bytes);
 }
 
 /* Reverses the operation of encodeFailureReportKey, reading back a timestamp
  * and the pointer to the associated clusterNode. */
-static void decodeFailureReportKey(unsigned char *buf, mstime_t *expiry_ptr, clusterNode **node_ptr) {
-    uint64_t be;
-    memcpy(&be, buf, 8);
-    *expiry_ptr = (mstime_t)ntohu64(be);
-    memcpy(node_ptr, buf + 8, sizeof(*node_ptr));
+static void decodeFailureReportKey(unsigned char *buf, mstime_t *report_time, clusterNode **node_ptr) {
+    uint64_t big_endian_time;
+    memcpy(&big_endian_time, buf, sizeof(uint64_t));
+    *report_time = (mstime_t)ntohu64(big_endian_time);
+    memcpy(node_ptr, buf + sizeof(uint64_t), sizeof(*node_ptr));
 }
 
 /* This function is called every time we get a failure report from a node.
- * We maintain fail_reports as a radix tree keyed by bucketed expiry timestamp
+ * We maintain fail_reports as a radix tree keyed by bucketed timestamp
  * (ceiled to the next second) and the sender pointer, which naturally orders
- * entries by expiry time.
+ * entries by time.
  *
  * 'failing' is the node that is in failure state according to the
  * 'sender' node.
@@ -1713,7 +1722,7 @@ static void decodeFailureReportKey(unsigned char *buf, mstime_t *expiry_ptr, clu
  * failure report from the same sender. 1 is returned if a new failure
  * report is created. */
 int clusterNodeAddFailureReport(clusterNode *failing, clusterNode *sender) {
-    unsigned char buf[FAILURE_REPORT_ST_KEYLEN];
+    unsigned char buf[FAILURE_REPORT_KEYLEN];
     mstime_t now = mstime();
     int is_new = 1;
 
@@ -1722,10 +1731,10 @@ int clusterNodeAddFailureReport(clusterNode *failing, clusterNode *sender) {
     raxStart(&ri, failing->fail_reports);
     raxSeek(&ri, "^", NULL, 0);
     while (raxNext(&ri)) {
-        mstime_t stored_ts;
-        clusterNode *stored_sender;
-        decodeFailureReportKey(ri.key, &stored_ts, &stored_sender);
-        if (stored_sender == sender) {
+        mstime_t reported_time;
+        clusterNode *reported_node;
+        decodeFailureReportKey(ri.key, &reported_time, &reported_node);
+        if (reported_node == sender) {
             raxRemove(failing->fail_reports,
                       ri.key, ri.key_len, NULL);
             is_new = 0;
@@ -1748,7 +1757,7 @@ int clusterNodeAddFailureReport(clusterNode *failing, clusterNode *sender) {
  * older than the global node timeout, so we don't just trust the number
  * of failure reports from other nodes.
  *
- * This function scans the radix tree of failure reports (keyed by bucketed expiry
+ * This function scans the radix tree of failure reports (keyed by bucketed
  * timestamps plus sender pointer) for the given node and removes any entries that
  * have expired beyond the cutoff window
  *
@@ -1764,10 +1773,10 @@ void clusterNodeCleanupFailureReports(clusterNode *node) {
     raxSeek(&ri, "^", NULL, 0);
 
     while (raxNext(&ri)) {
-        mstime_t stored_ts;
-        clusterNode *stored_sender;
-        decodeFailureReportKey(ri.key, &stored_ts, &stored_sender);
-        if (stored_ts > cutoff) break;
+        mstime_t reported_time;
+        clusterNode *reported_node;
+        decodeFailureReportKey(ri.key, &reported_time, &reported_node);
+        if (reported_time > cutoff) break;
         if (raxRemove(node->fail_reports, ri.key, ri.key_len, NULL)) {
             /* Move directly to the next element after the tree mutation due to removal */
             raxSeek(&ri, ">=", ri.key, ri.key_len);
@@ -1794,10 +1803,10 @@ int clusterNodeDelFailureReport(clusterNode *node, clusterNode *sender) {
     raxSeek(&ri, "^", NULL, 0);
 
     while (raxNext(&ri)) {
-        mstime_t stored_ts;
-        clusterNode *stored_sender;
-        decodeFailureReportKey(ri.key, &stored_ts, &stored_sender);
-        if (stored_sender == sender) {
+        mstime_t reported_time;
+        clusterNode *reported_node;
+        decodeFailureReportKey(ri.key, &reported_time, &reported_node);
+        if (reported_node == sender) {
             raxRemove(node->fail_reports,
                       ri.key, ri.key_len, NULL);
             raxStop(&ri);

@@ -238,7 +238,13 @@ int evalExtractShebangFlags(sds body,
         }
 
         if (out_engine) {
-            size_t engine_name_len = sdslen(parts[0]) - 2;
+            size_t part0_len = sdslen(parts[0]);
+            if (part0_len < 2) {
+                if (err) *err = sdsnew("Invalid engine in script shebang: too short");
+                sdsfreesplitres(parts, numparts);
+                return C_ERR;
+            }
+            size_t engine_name_len = part0_len - 2;
             *out_engine = zcalloc(engine_name_len + 1);
             valkey_strlcpy(*out_engine, parts[0] + 2, engine_name_len + 1);
         }

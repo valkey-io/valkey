@@ -3426,6 +3426,7 @@ void updateCommandLatencyHistogram(struct hdr_histogram **latency_histogram, int
 int prepareForShutdown(client *c, int flags);
 void replyToClientsBlockedOnShutdown(void);
 int abortShutdown(void);
+void clusterAutoFailoverOnShutdown(void);
 void afterCommand(client *c);
 int isReplicatedClient(client *c);
 int mustObeyClient(client *c);
@@ -4209,7 +4210,6 @@ void debugPauseProcess(void);
 #define serverDebugMark() printf("-- MARK %s:%d --\n", __FILE__, __LINE__)
 
 int iAmPrimary(void);
-int isPrimaryWithEnoughActualReplicas(void);
 
 #define STRINGIFY_(x) #x
 #define STRINGIFY(x) STRINGIFY_(x)

@@ -1201,6 +1201,7 @@ void flushAppendOnlyFile(int force) {
                           "Can't recover from AOF write error when replicas-to-fail-on-aof-short-write is '%d' "
                           "and there are enough actual replicas. Exiting...",
                           server.replicas_to_fail_on_aof_short_write);
+                if (server.cluster_enabled) clusterAutoFailoverOnShutdown();
                 exit(1);
             }
 

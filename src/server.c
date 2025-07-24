@@ -7208,12 +7208,6 @@ int iAmPrimary(void) {
             (server.cluster_enabled && clusterNodeIsPrimary(getMyClusterNode())));
 }
 
-int isPrimaryWithEnoughActualReplicas(void) {
-    if (!iAmPrimary()) {
-        return 0;
-    }
-}
-
 /* Main is marked as weak so that unit tests can use their own main function. */
 __attribute__((weak)) int main(int argc, char **argv) {
     struct timeval tv;

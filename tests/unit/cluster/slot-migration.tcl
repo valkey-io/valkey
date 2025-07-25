@@ -535,6 +535,18 @@ start_cluster 3 3 {tags {external:skip cluster} } {
         set result [catch {R $primary_id_src exec} err]
         assert_match "ERR DB index is out of range" $err
 
+        # Multi/Exec on source before migration, mixed key existence
+        R $primary_id_src select 0
+        R $primary_id_src multi
+        R $primary_id_src exists "{3560}key1"
+        R $primary_id_src select 1
+        R $primary_id_src exists "{3560}key2"
+        R $primary_id_src select 2
+        R $primary_id_src exists "{3560}no_key"
+        assert_error "TRYAGAIN Multiple keys*" {R $primary_id_src exec}
+        # Connection must still be on db 0 after aborted MULTI
+        assert_equal [R $primary_id_src get "{3560}key1"] "value1_db0"
+
         # Multi/Exec on target before migration should fail at EXEC
         R $primary_id_target ASKING
         R $primary_id_target multi

@@ -38,6 +38,7 @@
 #include <sys/time.h>
 #include <unistd.h>
 #include <sys/stat.h>
+#include <fcntl.h>
 
 void createSharedObjects(void);
 void rdbLoadProgressCallback(rio *r, const void *buf, size_t len);
@@ -444,13 +445,17 @@ void rdbShowGenericInfo(void) {
     }
 
     char buffer[64];
-    FILE *stats_fp = NULL;
+    int stats_fd = -1;
+    int saved_stdout = -1;
     if (rdbCheckStats) {
         if (rdbCheckOutput) {
-            stats_fp = freopen(rdbstate.stats_output, "w", stdout);
-            if (stats_fp == NULL) {
-                printf("Cannot open output file: %s\n", rdbstate.stats_output);
-                exit(0);
+            saved_stdout = dup(STDOUT_FILENO);
+            stats_fd = open(rdbstate.stats_output, O_WRONLY | O_CREAT, 0644);
+            if (stats_fd == -1) {
+                fprintf(stderr, "Cannot open output file: '%s': %s\n", rdbstate.stats_output, strerror(errno));
+                exit(1);
+            } else {
+                dup2(stats_fd, STDOUT_FILENO);
             }
         }
 
@@ -494,8 +499,9 @@ void rdbShowGenericInfo(void) {
             }
         }
         if (rdbCheckOutput) {
-            fclose(stats_fp);
-            stdout = fdopen(1, "w");
+            dup2(saved_stdout, STDOUT_FILENO);
+            close(stats_fd);
+            close(saved_stdout);
         }
     }
 }

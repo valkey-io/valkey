@@ -45,7 +45,7 @@ void clusterInitLast(void);
 void clusterCron(void);
 void clusterBeforeSleep(void);
 int verifyClusterConfigWithData(void);
-void clusterHandleServerShutdown(void);
+void clusterHandleServerShutdown(bool auto_failover);
 
 int clusterSendModuleMessageToTarget(const char *target,
                                      uint64_t module_id,
@@ -92,6 +92,7 @@ int getClusterSize(void);
 int getMyShardSlotCount(void);
 int clusterNodePending(clusterNode *node);
 int clusterNodeIsPrimary(clusterNode *n);
+int clusterNodeIsVotingPrimary(clusterNode *n);
 char **getClusterNodesList(size_t *numnodes);
 char *clusterNodeIp(clusterNode *node, client *c);
 int clusterNodeIsReplica(clusterNode *node);

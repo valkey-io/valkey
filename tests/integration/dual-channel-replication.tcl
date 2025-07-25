@@ -935,7 +935,7 @@ start_server {tags {"dual-channel-replication external:skip"}} {
                     [status $primary sync_full] == 2 &&
                     ([status $primary sync_partial_ok] == 2)
                 } else {
-                    fail "Sync session interapted\n
+                    fail "Sync session interrupted\n
                         sync_full:[status $primary sync_full]\n
                         sync_partial_ok:[status $primary sync_partial_ok]"
                 }

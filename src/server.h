@@ -529,6 +529,10 @@ typedef enum {
 #define TLS_CLIENT_AUTH_YES 1
 #define TLS_CLIENT_AUTH_OPTIONAL 2
 
+/* TLS Client Certfiicate Authentication */
+#define TLS_CLIENT_FIELD_OFF 0
+#define TLS_CLIENT_FIELD_CN 1
+
 /* Sanitize dump payload */
 #define SANITIZE_DUMP_NO 0
 #define SANITIZE_DUMP_YES 1
@@ -570,12 +574,13 @@ typedef enum {
 #define UNIT_MILLISECONDS 1
 
 /* SHUTDOWN flags */
-#define SHUTDOWN_NOFLAGS 0 /* No flags. */
-#define SHUTDOWN_SAVE 1    /* Force SAVE on SHUTDOWN even if no save \
-                              points are configured. */
-#define SHUTDOWN_NOSAVE 2  /* Don't SAVE on SHUTDOWN. */
-#define SHUTDOWN_NOW 4     /* Don't wait for replicas to catch up. */
-#define SHUTDOWN_FORCE 8   /* Don't let errors prevent shutdown. */
+#define SHUTDOWN_NOFLAGS 0         /* No flags. */
+#define SHUTDOWN_SAVE (1 << 0)     /* Force SAVE on SHUTDOWN even if no save points are configured. */
+#define SHUTDOWN_NOSAVE (1 << 1)   /* Don't SAVE on SHUTDOWN. */
+#define SHUTDOWN_NOW (1 << 2)      /* Don't wait for replicas to catch up. */
+#define SHUTDOWN_FORCE (1 << 3)    /* Don't let errors prevent shutdown. */
+#define SHUTDOWN_SAFE (1 << 4)     /* Shutdown only when safe. */
+#define SHUTDOWN_FAILOVER (1 << 5) /* Trigger failover when shutting down a primary. */
 
 /* Command call flags, see call() function */
 #define CMD_CALL_NONE 0
@@ -660,6 +665,9 @@ typedef enum {
 #define NOTIFY_ALL                                                                                            \
     (NOTIFY_GENERIC | NOTIFY_STRING | NOTIFY_LIST | NOTIFY_SET | NOTIFY_HASH | NOTIFY_ZSET | NOTIFY_EXPIRED | \
      NOTIFY_EVICTED | NOTIFY_STREAM | NOTIFY_MODULE) /* A flag */
+
+/* Period in milliseconds between successive clusterCron() executions */
+#define CLUSTER_CRON_PERIOD_MS 100
 
 /* Using the following macro you can run code inside serverCron() with the
  * specified period, specified in milliseconds.
@@ -1311,10 +1319,11 @@ typedef struct writePreparedClient writePreparedClient;
 
 /* ACL information */
 typedef struct aclInfo {
-    long long user_auth_failures;       /* Auth failure counts on user level */
-    long long invalid_cmd_accesses;     /* Invalid command accesses that user doesn't have permission to */
-    long long invalid_key_accesses;     /* Invalid key accesses that user doesn't have permission to */
-    long long invalid_channel_accesses; /* Invalid channel accesses that user doesn't have permission to */
+    long long user_auth_failures;         /* Auth failure counts on user level */
+    long long invalid_cmd_accesses;       /* Invalid command accesses that user doesn't have permission to */
+    long long invalid_key_accesses;       /* Invalid key accesses that user doesn't have permission to */
+    long long invalid_channel_accesses;   /* Invalid channel accesses that user doesn't have permission to */
+    long long acl_access_denied_tls_cert; /* TLS clients with cert not matching any existing user. */
 } aclInfo;
 
 struct saveparam {
@@ -1509,6 +1518,7 @@ typedef struct serverTLSContextConfig {
     char *client_cert_file;     /* Certificate to use as a client; if none, use cert_file */
     char *client_key_file;      /* Private key filename for client_cert_file */
     char *client_key_file_pass; /* Optional password for client_key_file */
+    int client_auth_user;       /* Field to be used for automatic TLS authentication based on client TLS certificate */
     char *dh_params_file;
     char *ca_cert_file;
     char *ca_cert_dir;
@@ -2126,12 +2136,13 @@ struct valkeyServer {
     unsigned long cluster_blacklist_ttl;                   /* Duration in seconds that a node is denied re-entry into
                                                             * the cluster after it is forgotten with CLUSTER FORGET. */
     int cluster_slot_stats_enabled;                        /* Cluster slot usage statistics tracking enabled. */
-    int auto_failover_on_shutdown;                         /* Trigger manual failover on shutdown to primary. */
     mstime_t cluster_mf_timeout;                           /* Milliseconds to do a manual failover. */
     /* Debug config that goes along with cluster_drop_packet_filter. When set, the link is closed on packet drop. */
     uint32_t debug_cluster_close_link_on_packet_drop : 1;
     /* Debug config to control the random ping. When set, we will disable the random ping in clusterCron. */
     uint32_t debug_cluster_disable_random_ping : 1;
+    /* Debug config to control the reconnection. When set, we will disable the reconnection in clusterCron. */
+    uint32_t debug_cluster_disable_reconnection : 1;
     sds cached_cluster_slot_info[CACHE_CONN_TYPE_MAX]; /* Index in array is a bitwise or of CACHE_CONN_TYPE_* */
     /* Scripting */
     mstime_t busy_reply_threshold;  /* Script / module timeout in milliseconds */
@@ -2754,8 +2765,8 @@ void deferredAfterErrorReply(client *c, list *errors);
 size_t getStringObjectSdsUsedMemory(robj *o);
 void freeClientReplyValue(void *o);
 void *dupClientReplyValue(void *o);
-char *getClientPeerId(client *client);
-char *getClientSockName(client *client);
+char *getClientPeerId(client *c);
+char *getClientSockname(client *c);
 int isClientConnIpV6(client *c);
 sds catClientInfoString(sds s, client *client, int hide_user_data);
 sds catClientInfoShortString(sds s, client *client, int hide_user_data);
@@ -3033,7 +3044,7 @@ int bg_unlink(const char *filename);
 /* AOF persistence */
 void flushAppendOnlyFile(int force);
 void feedAppendOnlyFile(int dictid, robj **argv, int argc);
-void aofRemoveTempFile(pid_t childpid);
+void aofRemoveTempFile(pid_t childpid, int from_signal);
 int rewriteAppendOnlyFileBackground(void);
 int loadAppendOnlyFiles(aofManifest *am);
 void stopAppendOnly(void);
@@ -3069,8 +3080,9 @@ void ACLInit(void);
 #define ACL_OK 0
 #define ACL_DENIED_CMD 1
 #define ACL_DENIED_KEY 2
-#define ACL_DENIED_AUTH 3    /* Only used for ACL LOG entries. */
-#define ACL_DENIED_CHANNEL 4 /* Only used for pub/sub commands */
+#define ACL_DENIED_AUTH 3           /* Only used for ACL LOG entries. */
+#define ACL_DENIED_CHANNEL 4        /* Only used for pub/sub commands */
+#define ACL_INVALID_TLS_CERT_AUTH 5 /* Only used for TLS Auto-authentication */
 
 /* Context values for addACLLogEntry(). */
 #define ACL_LOG_CTX_TOPLEVEL 0
@@ -3202,7 +3214,7 @@ int processPendingCommandAndInputBuffer(client *c);
 int processCommandAndResetClient(client *c);
 void setupSignalHandlers(void);
 int createSocketAcceptHandler(connListener *sfd, aeFileProc *accept_handler);
-connListener *listenerByType(const char *typename);
+connListener *listenerByType(int type);
 int changeListener(connListener *listener);
 struct serverCommand *lookupSubcommand(struct serverCommand *container, sds sub_name);
 struct serverCommand *lookupCommand(robj **argv, int argc);

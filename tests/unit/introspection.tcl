@@ -398,28 +398,6 @@ start_server {tags {"introspection"}} {
         assert_error "ERR *greater than 0*" {r client list maxage -1}
     }
 
-    proc get_field_in_client_info {info field} {
-        set info [string trim $info]
-        foreach item [split $info " "] {
-            set kv [split $item "="]
-            set k [lindex $kv 0]
-            if {[string match $field $k]} {
-                return [lindex $kv 1]
-            }
-        }
-        return ""
-    }
-
-    proc get_field_in_client_list {id client_list filed} {
-        set list [split $client_list "\r\n"]
-        foreach info $list {
-            if {[string match "id=$id *" $info] } {
-                return [get_field_in_client_info $info $filed]
-            }
-        }
-        return ""
-    }
-
     proc get_client_tot_in_out_cmds {id} {
         set info_list [r client list]
         set in [get_field_in_client_list $id $info_list "tot-net-in"]
@@ -1105,7 +1083,7 @@ start_server {tags {"introspection"}} {
         set qbl_backup [lindex [r config get client-query-buffer-limit] 1]
         # Set some value to maxmemory
         assert_equal [r config set maxmemory 10000002] "OK"
-        # Set another value to maxmeory together with another invalid config
+        # Set another value to maxmemory together with another invalid config
         assert_error "ERR CONFIG SET failed (possibly related to argument 'maxmemory-clients') - percentage argument must be less or equal to 100" {
             r config set maxmemory 10000001 maxmemory-clients 200% client-query-buffer-limit invalid
         }
@@ -1438,8 +1416,17 @@ start_server {tags {"introspection"}} {
     # known keywords. Might be a good idea to avoid adding tests here.
 }
 
-start_server {tags {"introspection external:skip"} overrides {enable-protected-configs {no} enable-debug-command {no}}} {
+start_server {tags {"introspection external:skip"} overrides {requirepass mypass enable-protected-configs {no} enable-debug-command {no}}} {
+    test {auth check before command existence check and command arity check} {
+        assert_error "NOAUTH *" {r non-existing-command}
+        assert_error "NOAUTH *" {r set key value wrong_arg}
+    }
+
     test {cannot modify protected configuration - no} {
+        assert_error "NOAUTH *" {r config set dir somedir}
+        assert_error "NOAUTH *" {r DEBUG HELP}
+
+        r auth mypass
         assert_error "ERR *protected*" {r config set dir somedir}
         assert_error "ERR *DEBUG command not allowed*" {r DEBUG HELP}
     } {} {needs:debug}
@@ -1458,6 +1445,7 @@ start_server {config "minimal.conf" tags {"introspection external:skip"} overrid
             set r2 [get_nonloopback_client]
             assert_error "ERR *protected*" {$r2 config set dir somedir}
             assert_error "ERR *DEBUG command not allowed*" {$r2 DEBUG HELP}
+            assert_equal [$r2 close] 0
         }
     } {} {needs:debug}
 }

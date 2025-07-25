@@ -37,6 +37,7 @@
 #include "fmtargs.h"
 #include "io_threads.h"
 #include "module.h"
+#include "connection.h"
 #include <strings.h>
 #include <sys/socket.h>
 #include <sys/uio.h>
@@ -1682,6 +1683,21 @@ void clientAcceptHandler(connection *conn) {
         }
     }
 
+    /* Auto-authenticate from cert_user field if set */
+    sds username = connGetPeerUsername(conn);
+    if (username != NULL) {
+        user *u = ACLGetUserByName(username, sdslen(username));
+        if (u && (u->flags & USER_FLAG_ENABLED)) {
+            clientSetUser(c, u, 1);
+            moduleNotifyUserChanged(c);
+            serverLog(LL_VERBOSE, "TLS: Auto-authenticated client as %s",
+                      server.hide_user_data_from_log ? "*redacted*" : u->name);
+        } else {
+            addACLLogEntry(c, ACL_INVALID_TLS_CERT_AUTH, ACL_LOG_CTX_TOPLEVEL, 0, username, NULL);
+        }
+        sdsfree(username);
+    }
+
     server.stat_numconnections++;
     moduleFireServerEvent(VALKEYMODULE_EVENT_CLIENT_CHANGE, VALKEYMODULE_SUBEVENT_CLIENT_CHANGE_CONNECTED, c);
 }
@@ -1690,8 +1706,8 @@ void acceptCommonHandler(connection *conn, struct ClientFlags flags, char *ip) {
     client *c;
     UNUSED(ip);
 
-    char addr[NET_ADDR_STR_LEN] = {0};
-    char laddr[NET_ADDR_STR_LEN] = {0};
+    char addr[CONN_ADDR_STR_LEN] = {0};
+    char laddr[CONN_ADDR_STR_LEN] = {0};
     connFormatAddr(conn, addr, sizeof(addr), 1);
     connFormatAddr(conn, laddr, sizeof(addr), 0);
 
@@ -3806,22 +3822,16 @@ void readQueryFromClient(connection *conn) {
 /* An "Address String" is a colon separated ip:port pair.
  * For IPv4 it's in the form x.y.z.k:port, example: "127.0.0.1:1234".
  * For IPv6 addresses we use [] around the IP part, like in "[::1]:1234".
- * For Unix sockets we use path:0, like in "/tmp/redis:0".
+ * For Unix sockets we use path:0, like in "/tmp/valkey:0".
  *
- * An Address String always fits inside a buffer of NET_ADDR_STR_LEN bytes,
+ * An Address String always fits inside a buffer of CONN_ADDR_STR_LEN bytes,
  * including the null term.
  *
  * On failure the function still populates 'addr' with the "?:0" string in case
  * you want to relax error checking or need to display something anyway (see
  * anetFdToString implementation for more info). */
 void genClientAddrString(client *client, char *addr, size_t addr_len, int remote) {
-    if (client->flag.unix_socket) {
-        /* Unix socket client. */
-        snprintf(addr, addr_len, "%s:0", server.unixsocket);
-    } else {
-        /* TCP client. */
-        connFormatAddr(client->conn, addr, addr_len, remote);
-    }
+    connFormatAddr(client->conn, addr, addr_len, remote);
 }
 
 /* This function returns the client peer id, by creating and caching it
@@ -3829,7 +3839,7 @@ void genClientAddrString(client *client, char *addr, size_t addr_len, int remote
  * The Peer ID never changes during the life of the client, however it
  * is expensive to compute. */
 char *getClientPeerId(client *c) {
-    char peerid[NET_ADDR_STR_LEN] = {0};
+    char peerid[CONN_ADDR_STR_LEN] = {0};
 
     if (c->peerid == NULL) {
         genClientAddrString(c, peerid, sizeof(peerid), 1);
@@ -3843,7 +3853,7 @@ char *getClientPeerId(client *c) {
  * The Socket Name never changes during the life of the client, however it
  * is expensive to compute. */
 char *getClientSockname(client *c) {
-    char sockname[NET_ADDR_STR_LEN] = {0};
+    char sockname[CONN_ADDR_STR_LEN] = {0};
 
     if (c->sockname == NULL) {
         genClientAddrString(c, sockname, sizeof(sockname), 0);
@@ -5387,7 +5397,7 @@ size_t getClientMemoryUsage(client *c, size_t *output_buffer_mem_usage) {
     /* Add memory overhead of the tracking prefixes, this is an underestimation so we don't need to traverse the entire
      * rax */
     if (c->pubsub_data && c->pubsub_data->client_tracking_prefixes)
-        mem += c->pubsub_data->client_tracking_prefixes->numnodes * (sizeof(raxNode) * sizeof(raxNode *));
+        mem += c->pubsub_data->client_tracking_prefixes->numnodes * (sizeof(raxNode) + sizeof(raxNode *));
 
     return mem;
 }

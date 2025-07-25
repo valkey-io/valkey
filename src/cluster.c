@@ -544,7 +544,7 @@ try_again:
     /* Create RESTORE payload and generate the protocol to call the command. */
     for (j = 0; j < num_keys; j++) {
         long long ttl = 0;
-        long long expireat = getExpire(c->db, kv[j]);
+        long long expireat = objectGetExpire(ov[j]);
 
         if (expireat != -1) {
             ttl = expireat - commandTimeSnapshot();
@@ -1135,7 +1135,8 @@ clusterNode *getNodeByQuery(client *c, int *error_code) {
         mc.cmd = c->cmd;
     }
 
-    serverDb *currentDb = c->db;
+    serverDb *origDb = c->db;
+    serverDb *currentDb = origDb;
 
     /* Check for multiple keys, existing keys, missing keys. */
     for (i = 0; i < ms->count; i++) {
@@ -1155,7 +1156,6 @@ clusterNode *getNodeByQuery(client *c, int *error_code) {
 
         if (mcmd->proc == selectCommand) {
             /* Failed SELECT is ignored since it doesn't modify the database. */
-            serverDb *origDb = currentDb;
             long long id;
             if (getLongLongFromObject(margv[1], &id) == C_OK && selectDb(c, id) == C_OK) {
                 currentDb = c->db;
@@ -1373,7 +1373,7 @@ int clusterRedirectBlockedClientIfNeeded(client *c) {
 
             /* We send an error and unblock the client if:
              * 1) The slot is unassigned, emitting a cluster down error.
-             * 2) The slot is not handled by this node, nor being imported. */
+             * 2) The slot is neither handled by this node, nor being imported. */
             if (node != myself && getImportingSlotSource(slot) == NULL) {
                 if (node == NULL) {
                     clusterRedirectClient(c, NULL, 0, CLUSTER_REDIR_DOWN_UNBOUND);

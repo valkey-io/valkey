@@ -33,8 +33,8 @@ jobs:
         run: |
           touch src/commands/ping.json
           make commands.def
-          dirty=$(git diff)
-          if [[ ! -z  $dirty ]]; then echo $dirty; exit 1; fi
+          dirty="$(git diff)"
+          if [[ ! -z "$dirty" ]]; then echo "$dirty"; exit 1; fi
       - name: unit tests
         run: |
           ./src/valkey-unit-tests
@@ -106,7 +106,7 @@ jobs:
 
   build-debian-old:
     runs-on: ubuntu-latest
-    container: debian:buster
+    container: debian:bullseye
     steps:
       - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
       - name: make

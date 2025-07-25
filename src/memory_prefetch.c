@@ -71,14 +71,16 @@ void prefetchCommandsBatchInit(void) {
     batch->prefetch_info = zcalloc(max_prefetch_size * sizeof(KeyPrefetchInfo));
 }
 
-void onMaxBatchSizeChange(void) {
+int onMaxBatchSizeChange(const char **err) {
+    UNUSED(err);
     if (batch && batch->client_count > 0) {
         /* We need to process the current batch before updating the size */
-        return;
+        return 1;
     }
 
     freePrefetchCommandsBatch();
     prefetchCommandsBatchInit();
+    return 1;
 }
 
 /* Move to the next key in the batch. */
@@ -236,7 +238,7 @@ void processClientsCommandsBatch(void) {
 
     /* Handle the case where the max prefetch size has been changed. */
     if (batch->max_prefetch_size != (size_t)server.prefetch_batch_max_size) {
-        onMaxBatchSizeChange();
+        onMaxBatchSizeChange(NULL);
     }
 }
 

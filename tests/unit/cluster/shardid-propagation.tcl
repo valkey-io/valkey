@@ -27,7 +27,6 @@ tags {tls:skip external:skip cluster singledb} {
             cluster_allocate_slots 1 1
         }
 
-
         test "Restart of node in cluster mode doesn't cause nodes.conf corruption due to shard id mismatch" {
             set primary_id [R 0 CLUSTER MYID]
             R 1 CLUSTER MEET 127.0.0.1 [srv 0 port]
@@ -50,6 +49,23 @@ tags {tls:skip external:skip cluster singledb} {
             } else {
                 fail "Server didn't come back online in time"
             }
+        }
+    }
+}
+
+start_cluster 3 1 {tags {external:skip cluster}} {
+    test "The replica will have a new shard_id after cluster reset soft" {
+        assert_equal [R 0 cluster myshardid] [R 3 cluster myshardid]
+
+        R 3 cluster reset
+        assert_not_equal [R 0 cluster myshardid] [R 3 cluster myshardid]
+
+        wait_for_condition 1000 50 {
+            [llength [R 0 cluster shards]] == 4 &&
+            [llength [R 1 cluster shards]] == 4 &&
+            [llength [R 2 cluster shards]] == 4
+        } else {
+            fail "R 3 does not become a new shard"
         }
     }
 }

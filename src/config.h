@@ -196,7 +196,7 @@
 
 /* Check if we can use setproctitle().
  * BSD systems have support for it, we provide an implementation for
- * Linux and osx. */
+ * Linux and macOS. */
 #if (defined __NetBSD__ || defined __FreeBSD__ || defined __OpenBSD__)
 #define USE_SETPROCTITLE
 #endif

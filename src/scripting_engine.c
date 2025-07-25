@@ -25,7 +25,7 @@ enum {
     COMMON_MODULE_CTX_INDEX = 0,        /* Common module context used by the scripting engine. */
     GET_MEMORY_MODULE_CTX_INDEX = 1,    /* Module context used by `scriptingEngineCallGetMemoryInfo`. */
     FREE_FUNCTION_MODULE_CTX_INDEX = 2, /* Module context used by `scriptingEngineCallFreeFunction`. */
-    _MODULE_CTX_CACHE_SIZE = 3          /* Total number of module contexts in the cache. */
+    MODULE_CTX_CACHE_SIZE = 3           /* Total number of module contexts in the cache. */
 };
 
 typedef struct scriptingEngineImpl {
@@ -37,11 +37,11 @@ typedef struct scriptingEngineImpl {
 } scriptingEngineImpl;
 
 typedef struct scriptingEngine {
-    sds name;                                                  /* Name of the engine */
-    ValkeyModule *module;                                      /* the module that implements the scripting engine */
-    scriptingEngineImpl impl;                                  /* engine context and callbacks to interact with the engine */
-    client *client;                                            /* Client that is used to run commands */
-    ValkeyModuleCtx *module_ctx_cache[_MODULE_CTX_CACHE_SIZE]; /* Cache of module context objects */
+    sds name;                                                 /* Name of the engine */
+    ValkeyModule *module;                                     /* the module that implements the scripting engine */
+    scriptingEngineImpl impl;                                 /* engine context and callbacks to interact with the engine */
+    client *client;                                           /* Client that is used to run commands */
+    ValkeyModuleCtx *module_ctx_cache[MODULE_CTX_CACHE_SIZE]; /* Cache of module context objects */
 } scriptingEngine;
 
 
@@ -135,7 +135,7 @@ int scriptingEngineManagerRegister(const char *engine_name,
         .module_ctx_cache = {0},
     };
 
-    for (size_t i = 0; i < _MODULE_CTX_CACHE_SIZE; i++) {
+    for (size_t i = 0; i < MODULE_CTX_CACHE_SIZE; i++) {
         e->module_ctx_cache[i] = moduleAllocateContext();
     }
 
@@ -171,7 +171,7 @@ int scriptingEngineManagerUnregister(const char *engine_name) {
 
     sdsfree(e->name);
     freeClient(e->client);
-    for (size_t i = 0; i < _MODULE_CTX_CACHE_SIZE; i++) {
+    for (size_t i = 0; i < MODULE_CTX_CACHE_SIZE; i++) {
         serverAssert(e->module_ctx_cache[i] != NULL);
         zfree(e->module_ctx_cache[i]);
     }
@@ -227,9 +227,7 @@ static ValkeyModuleCtx *engineSetupModuleCtx(int module_ctx_cache_index,
                                              scriptingEngine *e,
                                              client *c) {
     debugServerAssert(e != NULL);
-    if (e->module == NULL) {
-        return NULL;
-    }
+    if (e->module == NULL) return NULL;
 
     ValkeyModuleCtx *ctx = e->module_ctx_cache[module_ctx_cache_index];
     moduleScriptingEngineInitContext(ctx, e->module, c);

@@ -2020,7 +2020,7 @@ struct valkeyServer {
     aofManifest *aof_manifest;                                     /* Used to track AOFs. */
     int aof_disable_auto_gc;                                       /* If disable automatically deleting HISTORY type AOFs?
                                                                     * default no. (for testings). */
-    int replicas_to_fail_on_aof_short_write;                       /* Fail primary on AOF short write error if there are enough actual replicas. */
+    int replicas_to_fail_on_aof_write_error;                       /* Fail primary on AOF write error if there are enough actual replicas. */
 
     /* RDB persistence */
     long long dirty;                      /* Changes to DB from the last save */

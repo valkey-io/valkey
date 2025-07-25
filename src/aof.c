@@ -1196,12 +1196,16 @@ void flushAppendOnlyFile(int force) {
                       "Can't recover from AOF write error when the AOF fsync policy is 'always'. Exiting...");
             exit(1);
         } else {
-            if (getGoodReplicasCount(0) >= server.replicas_to_fail_on_aof_short_write) {
+            if (server.replicas_to_fail_on_aof_write_error >= 0 &&
+                getGoodReplicasCount(0) >= server.replicas_to_fail_on_aof_write_error) {
                 serverLog(LL_WARNING,
-                          "Can't recover from AOF write error when replicas-to-fail-on-aof-short-write is '%d' "
+                          "Can't recover from AOF write error when replicas-to-fail-on-aof-write-error is '%d' "
                           "and there are enough actual replicas. Exiting...",
-                          server.replicas_to_fail_on_aof_short_write);
-                if (server.cluster_enabled) clusterAutoFailoverOnShutdown();
+                          server.replicas_to_fail_on_aof_write_error);
+                if (server.cluster_enabled) {
+                    usleep(server.cluster_node_timeout * 1000);
+                    clusterAutoFailoverOnShutdown();
+                }
                 exit(1);
             }
 

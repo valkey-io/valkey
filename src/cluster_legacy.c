@@ -1680,17 +1680,17 @@ clusterNode *createClusterNode(char *nodename, int flags) {
 
 /* 8 bytes mstime + 8 bytes cluster node */
 #define FAILURE_REPORT_KEYLEN 16
+#define SEC_IN_MS 1000ULL
+#define CEIL_OFFSET_MS (SEC_IN_MS - 1)
 
 /* The report time is rounded up (ceiled) to the nearest second in order to bucket
  * timestamps and keep the radix‐tree keys compact.  The resulting timestamp is stored
  * in big‑endian format, followed by the pointer to the clusterNode. */
 static void encodeFailureReportKey(unsigned char *buf, mstime_t report_time, clusterNode *node) {
-    const uint64_t sec_in_ms = 1000ULL;
-    const uint64_t ceil_offset_ms = sec_in_ms - 1;
     const size_t node_ptr_pad_bytes = (sizeof(clusterNode *) == 4) ? 4 : 0; // pad on 32-bit
 
     /* Round up to the next second for fewer key splits and quorum grace */
-    mstime_t bucketed_time = ((report_time + ceil_offset_ms) / sec_in_ms) * sec_in_ms;
+    mstime_t bucketed_time = ((report_time + CEIL_OFFSET_MS) / SEC_IN_MS) * SEC_IN_MS;
 
     /* Big endian timestamp for numeric time order in rax */
     uint64_t big_endian_time = htonu64((uint64_t)bucketed_time);
@@ -1718,12 +1718,13 @@ static void decodeFailureReportKey(unsigned char *buf, mstime_t *report_time, cl
  * 'failing' is the node that is in failure state according to the
  * 'sender' node.
  *
- * The function returns 0 if it just updates a timestamp of an existing
- * failure report from the same sender. 1 is returned if a new failure
- * report is created. */
+ * The function returns 0 if it early‐exits (same sender & time bucket)
+ * or updates a timestamp of an existing failure report from the same sender.
+ * 1 is returned if a new failure report is created. */
 int clusterNodeAddFailureReport(clusterNode *failing, clusterNode *sender) {
     unsigned char buf[FAILURE_REPORT_KEYLEN];
     mstime_t now = mstime();
+    const mstime_t bucketed_time = ((now + CEIL_OFFSET_MS) / SEC_IN_MS) * SEC_IN_MS;
     int is_new = 1;
 
     /* Look for any existing entry from this sender and remove it */
@@ -1735,6 +1736,12 @@ int clusterNodeAddFailureReport(clusterNode *failing, clusterNode *sender) {
         clusterNode *reported_node;
         decodeFailureReportKey(ri.key, &reported_time, &reported_node);
         if (reported_node == sender) {
+            if (reported_time == bucketed_time) {
+                /* Early exit if it is the exact same sender and bucket */
+                raxStop(&ri);
+                return 0;
+            }
+
             raxRemove(failing->fail_reports,
                       ri.key, ri.key_len, NULL);
             is_new = 0;

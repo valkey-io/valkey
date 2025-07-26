@@ -941,7 +941,6 @@ static doneStatus defragStageDbKeys(monotime endtime, void *target, void *privda
     UNUSED(privdata);
     int dbid = (uintptr_t)target;
     serverDb *db = server.db[dbid];
-    if (db == NULL) return DEFRAG_DONE;
 
     static defragKeysCtx ctx; // STATIC - this persists
     if (endtime == 0) {
@@ -960,7 +959,6 @@ static doneStatus defragStageExpiresKvstore(monotime endtime, void *target, void
     UNUSED(privdata);
     int dbid = (uintptr_t)target;
     serverDb *db = server.db[dbid];
-    if (db == NULL) return DEFRAG_DONE;
     return defragStageKvstoreHelper(endtime, db->expires,
                                     scanHashtableCallbackCountScanned, NULL, NULL);
 }
@@ -1229,6 +1227,11 @@ static void beginDefragCycle(void) {
     defrag.remaining_stages = listCreate();
 
     for (int dbid = 0; dbid < server.dbnum; dbid++) {
+        /* Skip the non-existent dbs but not empty dbs since hashtableDefragTables
+         * still defrags the internal allocations of the hashtables structs if they
+         * exist. */
+        if (server.db[dbid] == NULL) continue;
+
         addDefragStage(defragStageDbKeys, (void *)(uintptr_t)dbid, NULL);
         addDefragStage(defragStageExpiresKvstore, (void *)(uintptr_t)dbid, NULL);
     }

@@ -177,18 +177,20 @@ static int add_find_delete_test_helper(int flags) {
 int test_add_find_delete(int argc, char **argv, int flags) {
     UNUSED(argc);
     UNUSED(argv);
+    size_t used_memory_before = zmalloc_used_memory();
     TEST_ASSERT(add_find_delete_test_helper(flags) == 0);
-    TEST_ASSERT(zmalloc_used_memory() == 0);
+    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
     return 0;
 }
 
 int test_add_find_delete_avoid_resize(int argc, char **argv, int flags) {
     UNUSED(argc);
     UNUSED(argv);
+    size_t used_memory_before = zmalloc_used_memory();
     hashtableSetResizePolicy(HASHTABLE_RESIZE_AVOID);
     TEST_ASSERT(add_find_delete_test_helper(flags) == 0);
     hashtableSetResizePolicy(HASHTABLE_RESIZE_ALLOW);
-    TEST_ASSERT(zmalloc_used_memory() == 0);
+    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
     return 0;
 }
 
@@ -318,6 +320,7 @@ int test_replace_reallocated_entry(int argc, char **argv, int flags) {
     UNUSED(argc);
     UNUSED(argv);
     UNUSED(flags);
+    size_t used_memory_before = zmalloc_used_memory();
 
     int count = 100, j;
     hashtable *ht = hashtableCreate(&keyval_type);
@@ -364,7 +367,7 @@ int test_replace_reallocated_entry(int argc, char **argv, int flags) {
     }
 
     hashtableRelease(ht);
-    TEST_ASSERT(zmalloc_used_memory() == 0);
+    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
     return 0;
 }
 
@@ -639,6 +642,7 @@ int test_compact_bucket_chain(int argc, char **argv, int flags) {
     UNUSED(argc);
     UNUSED(argv);
     UNUSED(flags);
+    size_t used_memory_before = zmalloc_used_memory();
 
     /* Create a table with only one bucket chain. */
     hashtableSetResizePolicy(HASHTABLE_RESIZE_AVOID);
@@ -686,7 +690,7 @@ int test_compact_bucket_chain(int argc, char **argv, int flags) {
 
     hashtableRelease(ht);
     hashtableSetResizePolicy(HASHTABLE_RESIZE_ALLOW);
-    TEST_ASSERT(zmalloc_used_memory() == 0);
+    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
     return 0;
 }
 
@@ -937,13 +941,5 @@ int test_random_entry_sparse_table(int argc, char **argv, int flags) {
     }
     hashtableRelease(ht);
     zfree(values);
-    return 0;
-}
-
-int test_all_memory_freed(int argc, char **argv, int flags) {
-    UNUSED(argc);
-    UNUSED(argv);
-    UNUSED(flags);
-    TEST_ASSERT(zmalloc_used_memory() == 0);
     return 0;
 }

@@ -29,16 +29,8 @@
 
 static ConnectionType CT_Unix;
 
-static const char *connUnixGetType(connection *conn) {
-    UNUSED(conn);
-
+static int connUnixGetType(void) {
     return CONN_TYPE_UNIX;
-}
-
-static int connUnixGetTypeId(connection *conn) {
-    UNUSED(conn);
-
-    return CONN_TYPE_ID_UNIX;
 }
 
 static void connUnixEventHandler(struct aeEventLoop *el, int fd, void *clientData, int mask) {
@@ -118,6 +110,7 @@ static void connUnixAcceptHandler(aeEventLoop *el, int fd, void *privdata, int m
     while (max--) {
         cfd = anetUnixAccept(server.neterr, fd);
         if (cfd == ANET_ERR) {
+            if (anetRetryAcceptOnError(errno)) continue;
             if (errno != EWOULDBLOCK) serverLog(LL_WARNING, "Accepting client connection: %s", server.neterr);
             return;
         }
@@ -176,7 +169,6 @@ static ssize_t connUnixSyncReadLine(connection *conn, char *ptr, ssize_t size, l
 
 static ConnectionType CT_Unix = {
     /* connection type */
-    .get_type_id = connUnixGetTypeId,
     .get_type = connUnixGetType,
 
     /* connection type initialize & finalize & configure */

@@ -398,28 +398,6 @@ start_server {tags {"introspection"}} {
         assert_error "ERR *greater than 0*" {r client list maxage -1}
     }
 
-    proc get_field_in_client_info {info field} {
-        set info [string trim $info]
-        foreach item [split $info " "] {
-            set kv [split $item "="]
-            set k [lindex $kv 0]
-            if {[string match $field $k]} {
-                return [lindex $kv 1]
-            }
-        }
-        return ""
-    }
-
-    proc get_field_in_client_list {id client_list filed} {
-        set list [split $client_list "\r\n"]
-        foreach info $list {
-            if {[string match "id=$id *" $info] } {
-                return [get_field_in_client_info $info $filed]
-            }
-        }
-        return ""
-    }
-
     proc get_client_tot_in_out_cmds {id} {
         set info_list [r client list]
         set in [get_field_in_client_list $id $info_list "tot-net-in"]
@@ -1105,7 +1083,7 @@ start_server {tags {"introspection"}} {
         set qbl_backup [lindex [r config get client-query-buffer-limit] 1]
         # Set some value to maxmemory
         assert_equal [r config set maxmemory 10000002] "OK"
-        # Set another value to maxmeory together with another invalid config
+        # Set another value to maxmemory together with another invalid config
         assert_error "ERR CONFIG SET failed (possibly related to argument 'maxmemory-clients') - percentage argument must be less or equal to 100" {
             r config set maxmemory 10000001 maxmemory-clients 200% client-query-buffer-limit invalid
         }

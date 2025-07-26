@@ -344,7 +344,7 @@ start_cluster 3 1 {tags {external:skip cluster} overrides {cluster-ping-interval
 
         # Make sure we don't send PINGs for a short period of time.
         for {set j 0} {$j < [llength $::servers]} {incr j} {
-            R $j debug disable-cluster-random-ping 0
+            R $j debug disable-cluster-random-ping 1
             R $j config set cluster-ping-interval 300000
         }
 
@@ -395,3 +395,80 @@ start_cluster 3 1 {tags {external:skip cluster} overrides {cluster-ping-interval
         }
     }
 } ;# start_cluster
+
+start_cluster 3 1 {tags {external:skip cluster}} {
+    # In the R0/R3 shard, R0 is the primary node and R3 is the replica.
+    #
+    # We trigger a manually failover on R3.
+    #
+    # When R3 becomes the new primary node, it will broadcast a message to all
+    # nodes in the cluster.
+    # When R0 receives the message, it becomes the new replica and also will
+    # broadcast the message to all nodes in the cluster.
+    #
+    # Let's assume that R1 and R2 receive the message from R0 (new replica) first
+    # and then the message from R3 (new primary) later.
+    #
+    # The purpose of this test is to verify the behavior of R1 and R2 after receiving
+    # the message from R0 (new replica) first. R1 and R2 will update R0 as a replica
+    # and R3 as a primary, and transfer all slots of R0 to R3.
+    test "The role change and the slot ownership change should be an atomic operation" {
+        set R0_nodeid [R 0 cluster myid]
+        set R1_nodeid [R 1 cluster myid]
+        set R2_nodeid [R 2 cluster myid]
+        set R3_nodeid [R 3 cluster myid]
+
+        set R0_shardid [R 0 cluster myshardid]
+        set R3_shardid [R 3 cluster myshardid]
+        assert_equal $R0_shardid $R3_shardid
+
+        # Ensure that related nodes do not reconnect.
+        R 1 debug disable-cluster-reconnection 1
+        R 2 debug disable-cluster-reconnection 1
+        R 3 debug disable-cluster-reconnection 1
+
+        # After killing the cluster link, ensure that R1 and R2 do not receive
+        # messages from R3 (new primary).
+        R 1 debug clusterlink kill all $R3_nodeid
+        R 2 debug clusterlink kill all $R3_nodeid
+        R 3 debug clusterlink kill all $R1_nodeid
+        R 3 debug clusterlink kill all $R2_nodeid
+
+        set loglines1 [count_log_lines -1]
+        set loglines2 [count_log_lines -2]
+
+        R 3 cluster failover takeover
+
+        # Check that from the perspectives of R1 and R2, R0 becomes a replica and
+        # R3 becomes the new primary.
+        wait_for_condition 1000 10 {
+            [cluster_has_flag [cluster_get_node_by_id 1 $R0_nodeid] slave] eq 1 &&
+            [cluster_has_flag [cluster_get_node_by_id 1 $R3_nodeid] master] eq 1 &&
+
+            [cluster_has_flag [cluster_get_node_by_id 2 $R0_nodeid] slave] eq 1 &&
+            [cluster_has_flag [cluster_get_node_by_id 2 $R3_nodeid] master] eq 1
+        } else {
+            fail "The node is not marked with the correct flag"
+        }
+
+        # Check that R0 (replica) does not own any slots and R3 (new primary) owns
+        # the slots.
+        assert_equal {} [dict get [cluster_get_node_by_id 1 $R0_nodeid] slots]
+        assert_equal {} [dict get [cluster_get_node_by_id 2 $R0_nodeid] slots]
+        assert_equal {0-5461} [dict get [cluster_get_node_by_id 1 $R3_nodeid] slots]
+        assert_equal {0-5461} [dict get [cluster_get_node_by_id 2 $R3_nodeid] slots]
+
+        # A failover occurred in shard, we will only go to this code branch,
+        # verify we print the logs.
+        set R0_slots 5462
+        set pattern "*A failover occurred in shard $R3_shardid; node $R0_nodeid () lost $R0_slots slot(s) and failed over to node $R3_nodeid*"
+        verify_log_message -1 $pattern $loglines1
+        verify_log_message -2 $pattern $loglines2
+
+        R 1 debug disable-cluster-reconnection 0
+        R 2 debug disable-cluster-reconnection 0
+        R 3 debug disable-cluster-reconnection 0
+
+        wait_for_cluster_propagation
+    }
+}

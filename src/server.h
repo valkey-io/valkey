@@ -3470,9 +3470,9 @@ int objectSetLRUOrLFU(robj *val, long long lfu_freq, long long lru_idle, long lo
     (LOOKUP_NONOTIFY | LOOKUP_NOSTATS | LOOKUP_NOTOUCH | LOOKUP_NOEXPIRE) /* Avoid any effects from fetching the key */
 
 void dbAdd(serverDb *db, robj *key, robj **valref);
-int dbAddRDBLoad(serverDb *db, sds key, robj **valref);
+int dbAddRDBLoad(serverDb *db, sds key, robj **valref, uint64_t hash, int dict_index);
 void dbReplaceValue(serverDb *db, robj *key, robj **valref);
-void dbPrefetch(serverDb *db, sds key);
+void dbPrefetch(serverDb *db, sds key, uint64_t *cached_hash, int *cached_dict_index);
 
 #define SETKEY_KEEPTTL 1
 #define SETKEY_NO_SIGNAL 2

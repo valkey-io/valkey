@@ -2708,7 +2708,7 @@ static void zunionInterDiffGenericCommand(client *c, robj *dstkey, int numkeysIn
                 hashtablePosition position;
                 /* If we don't have it, we need to create a new entry. */
                 void *existing;
-                if (hashtableFindPositionForInsert(dstzset->ht, sdsval, &position, &existing)) {
+                if (hashtableFindPositionForInsert(dstzset->ht, sdsval, NULL, &position, &existing)) {
                     zskiplistNode *new_node = zslCreateNode(zslRandomLevel(), score, zuiNewSdsFromValue(&zval));
                     hashtableInsertAtPosition(dstzset->ht, new_node, &position);
                     /* Remember the longest single element encountered,

@@ -296,7 +296,7 @@ int pubsubSubscribeChannel(client *c, robj *channel, pubsubtype type) {
 
     /* Add the channel to the client -> channels hash table */
     hashtablePosition position;
-    if (hashtableFindPositionForInsert(type.clientPubSubChannels(c), channel, &position, NULL)) {
+    if (hashtableFindPositionForInsert(type.clientPubSubChannels(c), channel, NULL, &position, NULL)) {
         /* Not yet subscribed to this channel */
         retval = 1;
         /* Add the client to the channel -> list of clients hash table */
@@ -306,7 +306,7 @@ int pubsubSubscribeChannel(client *c, robj *channel, pubsubtype type) {
 
         hashtablePosition pos;
         void *existing;
-        if (!kvstoreHashtableFindPositionForInsert(*type.serverPubSubChannels, slot, channel, &pos, &existing)) {
+        if (!kvstoreHashtableFindPositionForInsert(*type.serverPubSubChannels, slot, channel, NULL, &pos, &existing)) {
             clients = existing;
             channel = *(robj **)hashtableMetadata(clients);
         } else {

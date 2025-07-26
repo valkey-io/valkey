@@ -145,7 +145,7 @@ int setTypeAddAux(robj *set, char *str, size_t len, int64_t llval, int str_is_sd
         sds sdsval = str_is_sds ? (sds)str : sdsnewlen(str, len);
         hashtable *ht = set->ptr;
         hashtablePosition position;
-        if (hashtableFindPositionForInsert(ht, sdsval, &position, NULL)) {
+        if (hashtableFindPositionForInsert(ht, sdsval, NULL, &position, NULL)) {
             /* Key doesn't already exist in the set. Add it but dup the key. */
             if (sdsval == str) sdsval = sdsdup(sdsval);
             hashtableInsertAtPosition(ht, sdsval, &position);

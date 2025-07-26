@@ -284,10 +284,9 @@ int getKeySlot(sds key) {
  *
  * The function returns 1 if the key was added to the database, otherwise 0 is returned.
  */
-int dbAddRDBLoad(serverDb *db, sds key, robj **valref) {
-    int dict_index = getKVStoreIndexForKey(key);
+int dbAddRDBLoad(serverDb *db, sds key, robj **valref, uint64_t hash, int dict_index) {
     hashtablePosition pos;
-    if (!kvstoreHashtableFindPositionForInsert(db->keys, dict_index, key, &pos, NULL)) {
+    if (!kvstoreHashtableFindPositionForInsert(db->keys, dict_index, key, &hash, &pos, NULL)) {
         return 0;
     }
     robj *val = *valref;
@@ -299,10 +298,15 @@ int dbAddRDBLoad(serverDb *db, sds key, robj **valref) {
 }
 
 /* It is a helper function that prefetches the corresponding hashtable bucket
- * into the CPU cache before batch key insertion operations, reducing memory latency. */
-void dbPrefetch(serverDb *db, sds key) {
+ * into the CPU cache before key insertion operations, reducing memory latency.
+ * Moreover key's hash and dict_index will be cached in 'cached_hash' and 'cached_dict_index',
+ * to reduce redundant computations in subsequent operations. */
+void dbPrefetch(serverDb *db, sds key, uint64_t *cached_hash, int *cache_dict_index) {
     int dict_index = getKVStoreIndexForKey(key);
-    kvstoreHashtablePrefetch(db->keys, dict_index, key);
+    if (cache_dict_index) {
+        *cache_dict_index = dict_index;
+    }
+    kvstoreHashtablePrefetch(db->keys, dict_index, key, cached_hash);
 }
 
 /* Overwrite an existing key with a new value.

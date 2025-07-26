@@ -1373,7 +1373,7 @@ int hashtableAddOrFind(hashtable *ht, void *entry, void **existing) {
  *
  *     hashtablePosition position;
  *     void *existing;
- *     if (hashtableFindPositionForInsert(ht, key, &position, &existing)) {
+ *     if (hashtableFindPositionForInsert(ht, key, NULL, &position, &existing)) {
  *         // Position found where we can insert an entry with this key.
  *         void *entry = createNewEntryWithKeyAndValue(key, some_value);
  *         hashtableInsertAtPosition(ht, entry, &position);
@@ -1382,9 +1382,15 @@ int hashtableAddOrFind(hashtable *ht, void *entry, void **existing) {
  *         doSomethingWithExistingEntry(existing);
  *     }
  */
-int hashtableFindPositionForInsert(hashtable *ht, void *key, hashtablePosition *pos, void **existing) {
+int hashtableFindPositionForInsert(hashtable *ht, void *key, const uint64_t *cached_hash, hashtablePosition *pos, void **existing) {
     position *p = positionFromOpaque(pos);
-    uint64_t hash = hashKey(ht, key);
+    uint64_t hash;
+    /* If a cached hash is provided, use it instead of computing the hash again. */
+    if (cached_hash) {
+        hash = *cached_hash;
+    } else {
+        hash = hashKey(ht, key);
+    }
     int pos_in_bucket, table_index;
     bucket *b = findBucket(ht, hash, key, &pos_in_bucket, NULL);
     if (b != NULL) {
@@ -1434,21 +1440,25 @@ void hashtableInsertAtPosition(hashtable *ht, void *entry, hashtablePosition *po
  *     hashtablePosition position;
  *     void *existing;
  *
+ *     //cached_hash is used to store the hash of the key, so that it can be reused
+ *     uint64_t cached_hash;
  *     //Start to prefetch bucket
- *     hashtablePrefetchBucket(hashtable, key);
+ *     hashtablePrefetchBucket(hashtable, key, &cached_hash);
  *
  *     perform_heavy_computation();
  *
  *     //The execution of hashtableFindPositionForInsert is accelerated due to
  *     //reduced cache misses when accessing the target bucket.
- *     if (hashtableFindPositionForInsert(hashtable, key, &position, &existing)) {
+ *     if (hashtableFindPositionForInsert(hashtable, key, &cached_hash, &position, &existing)) {
  *         void *entry = createNewEntryWithKeyAndValue(key, some_value);
  *         hashtableInsertAtPosition(ht, entry, &position);
  *     }
  */
-void hashtablePrefetchBucket(hashtable *ht, const void *key) {
-    if (hashtableSize(ht) == 0) return;
+void hashtablePrefetchBucket(hashtable *ht, const void *key, uint64_t *cached_hash) {
     uint64_t hash = hashKey(ht, key);
+    if (cached_hash) {
+        *cached_hash = hash;
+    }
 
     for (int table = 0; table <= 1; table++) {
         if (ht->used[table] == 0) continue;

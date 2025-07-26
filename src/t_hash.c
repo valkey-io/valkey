@@ -467,7 +467,7 @@ int hashTypeSet(robj *o, sds field, sds value, int flags) {
 
         hashtablePosition position;
         void *existing;
-        if (hashtableFindPositionForInsert(ht, field, &position, &existing)) {
+        if (hashtableFindPositionForInsert(ht, field, NULL, &position, &existing)) {
             /* does not exist yet */
             hashTypeEntry *entry = hashTypeCreateEntry(field, v);
             hashtableInsertAtPosition(ht, entry, &position);

@@ -4179,6 +4179,12 @@ int connectWithPrimary(void) {
     return C_OK;
 }
 
+void resetBioRDBSaveState(void) {
+    server.bio_repl_transfer_size = 0;
+    server.bio_repl_transfer_read = 0;
+    server.replica_bio_disk_save_state = REPL_BIO_DISK_SAVE_STATE_NONE;
+}
+
 /* In disk-based replication, replica will open a temp db file to store the RDB file.
  * Before entering the REPL_STATE_TRANSFER or after entering the REPL_STATE_TRANSFER,
  * if an error occurs, we need to clean up related resources, such as closing the tmp
@@ -4232,6 +4238,7 @@ int cancelReplicationHandshake(int reconnect) {
         bioDrainWorker(BIO_RDB_SAVE);
         atomic_store_explicit(&server.replica_bio_abort_save, 0, memory_order_relaxed);
     }
+    resetBioRDBSaveState();
     if (server.repl_rdb_channel_state != REPL_DUAL_CHANNEL_STATE_NONE) {
         replicationAbortDualChannelSyncTransfer();
     }
@@ -4997,12 +5004,6 @@ long long replicationGetReplicaOffset(void) {
     return offset;
 }
 
-void resetBioRDBSaveState(void) {
-    server.bio_repl_transfer_size = 0;
-    server.bio_repl_transfer_read = 0;
-    server.replica_bio_disk_save_state = REPL_BIO_DISK_SAVE_STATE_NONE;
-}
-
 void handleBioThreadFinishedRDBDownload(void) {
     int bio_save_state = atomic_load_explicit(&server.replica_bio_disk_save_state, memory_order_acquire);
 
@@ -5031,6 +5032,11 @@ void handleBioThreadFinishedRDBDownload(void) {
     } else {
         conn = server.repl_transfer_s;
     }
+
+    /* If the connection was cleared then the bio_save_state should've also been cleared, so we shouldn't have
+     * gotten here in the first place */
+    debugServerAssert(conn);
+
     replicaBeforeLoadPrimaryRDB(conn, 0);
     if (replicaLoadPrimaryRDBFromDisk(&rsi) == C_ERR) {
         serverLog(LL_WARNING, "Failed to load RDB");

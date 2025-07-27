@@ -866,6 +866,7 @@ int redis_check_rdb_main(int argc, char **argv, FILE *fp) {
     gettimeofday(&tv, NULL);
     init_genrand64(((long long)tv.tv_sec * 1000000 + tv.tv_usec) ^ getpid());
 
+    rdbstate.key_type = -1;
     rdbstate.stats = initRdbStats(OBJ_TYPE_MAX);
     rdbstate.stats_num = OBJ_TYPE_MAX;
     rdbstate.databases = 1;

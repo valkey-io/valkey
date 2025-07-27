@@ -5841,7 +5841,7 @@ void clusterMoveNodeSlots(clusterNode *from_node, clusterNode *to_node, int *slo
         }
 
         if (server.cluster->importing_slots_from[j] == from_node) {
-            serverLog(LL_NOTICE,
+            serverLog(LL_VERBOSE,
                       "Failover occurred in migration source. Update importing "
                       "source for slot %d to node %.40s (%s) in shard %.40s.",
                       j, to_node->name, to_node->human_nodename, to_node->shard_id);
@@ -5850,7 +5850,7 @@ void clusterMoveNodeSlots(clusterNode *from_node, clusterNode *to_node, int *slo
         }
 
         if (server.cluster->migrating_slots_to[j] == from_node) {
-            serverLog(LL_NOTICE,
+            serverLog(LL_VERBOSE,
                       "Failover occurred in migration target."
                       " Slot %d is now being migrated to node %.40s (%s) in shard %.40s.",
                       j, to_node->name, to_node->human_nodename, to_node->shard_id);

@@ -1291,7 +1291,7 @@ start_server {tags {"dual-channel-replication external:skip"}} {
 
     # Generating RDB will take 100 sec to generate
     $primary debug populate 1000000 primary 1
-    $primary config set rdb-key-save-delay -10
+    $primary config set rdb-key-save-delay 10
     
     start_server {} {
         set replica [srv 0 client]

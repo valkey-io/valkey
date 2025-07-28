@@ -2734,7 +2734,7 @@ void clusterUpdateSlotsConfigWith(clusterNode *sender, uint64_t senderConfigEpoc
                     /* Update importing_slots_from to point to the sender, if it is in the
                      * same shard as the previous slot owner */
                     if (areInSameShard(sender, server.cluster->importing_slots_from[j])) {
-                        serverLog(LL_NOTICE,
+                        serverLog(LL_VERBOSE,
                                   "Failover occurred in migration source. Update importing "
                                   "source for slot %d to node %.40s (%s) in shard %.40s.",
                                   j, sender->name, sender->human_nodename, sender->shard_id);
@@ -2776,7 +2776,7 @@ void clusterUpdateSlotsConfigWith(clusterNode *sender, uint64_t senderConfigEpoc
                 (server.cluster->migrating_slots_to[j]->configEpoch < senderConfigEpoch ||
                  nodeIsReplica(server.cluster->migrating_slots_to[j])) &&
                 areInSameShard(server.cluster->migrating_slots_to[j], sender)) {
-                serverLog(LL_NOTICE,
+                serverLog(LL_VERBOSE,
                           "Failover occurred in migration target."
                           " Slot %d is now being migrated to node %.40s (%s) in shard %.40s.",
                           j, sender->name, sender->human_nodename, sender->shard_id);
@@ -5826,10 +5826,11 @@ int clusterDelNodeSlots(clusterNode *node) {
 /* Transfer slots from `from_node` to `to_node`.
  *
  * Iterates over all cluster slots, transferring each slot covered
- * by `from_node` to `to_node`. */
+ * by `from_node` to `to_node`. Includes importing slots and migrating
+ * slots. This function currently only called after a failover occurs
+ * within a shard, i.e. moving slots from the old primary to the new
+ * primary. It is a special case of clusterUpdateSlotsConfigWith. */
 void clusterMoveNodeSlots(clusterNode *from_node, clusterNode *to_node, int *slots, int *importing_slots, int *migrating_slots) {
-    /* This function currently only called after a failover occurs within a shard,
-     * i.e. moving slots from the old primary to the new primary. */
     serverAssert(areInSameShard(from_node, to_node));
     int processed = 0, importing_processed = 0, migrating_processed = 0;
 

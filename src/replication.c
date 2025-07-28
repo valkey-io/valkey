@@ -2124,11 +2124,6 @@ void replicationAttachToNewPrimary(void) {
     freeReplicationBacklog(); /* Don't allow our chained replicas to PSYNC. */
 }
 
-/* Did the main thread signal to the Bio thread to abort the save? */
-int shouldAbortSave(void) {
-    return atomic_load_explicit(&server.replica_bio_abort_save, memory_order_relaxed);
-}
-
 int inspectBulkPayloadHeaderForErrors(char *buf) {
     if (buf[0] == '-')
         return INSPECT_BULK_PAYLOAD_PRIMARY_ABORT;
@@ -2597,7 +2592,7 @@ void replicaReceiveRDBFromPrimaryToDisk(connection *conn, int is_dual_channel) {
     atomic_store_explicit(&server.replica_bio_disk_save_state, REPL_BIO_DISK_SAVE_STATE_IN_PROGRESS, memory_order_release);
     /* Loop until we can read the sync metadata or fail */
     do {
-        if (shouldAbortSave()) {
+        if (server.replica_bio_abort_save) {
             replicaBioSaveServerLog(LL_WARNING, "Main thread asked to abort the save while Bio thread is reading the sync metadata");
             error = 1;
             goto done;
@@ -2620,7 +2615,7 @@ void replicaReceiveRDBFromPrimaryToDisk(connection *conn, int is_dual_channel) {
 
     /* Now read the actual sync data and save it to disk */
     do {
-        if (shouldAbortSave()) {
+        if (server.replica_bio_abort_save) {
             replicaBioSaveServerLog(LL_WARNING, "Main thread asked to abort the save while Bio thread is reading the sync payload");
             error = 1;
             goto done;
@@ -4234,9 +4229,9 @@ void replicationAbortSyncTransfer(void) {
  * Otherwise zero is returned and no operation is performed at all. */
 int cancelReplicationHandshake(int reconnect) {
     if (bioPendingJobsOfType(BIO_RDB_SAVE)) {
-        atomic_store_explicit(&server.replica_bio_abort_save, 1, memory_order_relaxed);
+        server.replica_bio_abort_save = 1;
         bioDrainWorker(BIO_RDB_SAVE);
-        atomic_store_explicit(&server.replica_bio_abort_save, 0, memory_order_relaxed);
+        server.replica_bio_abort_save = 0;
     }
     resetBioRDBSaveState();
     if (server.repl_rdb_channel_state != REPL_DUAL_CHANNEL_STATE_NONE) {

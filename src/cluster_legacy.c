@@ -5469,7 +5469,7 @@ static int clusterNodeCronHandleReconnect(clusterNode *node, mstime_t now, long 
          *  2. The back‑off window since the last try is still active
          *  3. The node has already exceeded its retry budget for this cron cycle
          */
-        if (!node->inbound_link && (now - node->outbound_link_attempt_time < reconnect_interval / NODE_CONNECTION_RETRIES_PER_TIMEOUT && *cluster_conn_attempts == 0)) {
+        if (!node->inbound_link && (now - node->outbound_link_attempt_time < reconnect_interval / NODE_CONNECTION_RETRIES_PER_TIMEOUT && *cluster_conn_attempts <= 0)) {
             return 1;
         }
         node->outbound_link_attempt_time = now;

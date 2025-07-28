@@ -2126,41 +2126,8 @@ void replicationAttachToNewPrimary(void) {
 
 
 
-/* There are two possible forms for the bulk payload. One is the
- * usual $<count> bulk format. The other is used for diskless transfers
- * when the primary does not know beforehand the size of the file to
- * transfer. In the latter case, the following format is used:
- *
- * $EOF:<40 bytes delimiter>
- *
- * At the end of the file the announced delimiter is transmitted. The
- * delimiter is long and random enough that the probability of a
- * collision with the actual file content can be ignored.
- * For the latter case, where a EOF mark is used, we return 1,
- * and otherwise 0. */
-bool inspectBulkPayloadHeaderForEOF(char *buf, char *eofmark, char *lastbytes) {
-    if (strncmp(buf + 1, "EOF:", 4) == 0 && strlen(buf + 5) >= RDB_EOF_MARK_SIZE) {
-        memcpy(eofmark, buf + 5, RDB_EOF_MARK_SIZE);
-        memset(lastbytes, 0, RDB_EOF_MARK_SIZE);
-        return 1;
-    }
-    return 0;
-}
 
-/* Check if the bulk payload contains the EOF delimiter.
- * Updates lastbytes with the most recent bytes and returns 1 if EOF is found. */
-bool inspectBulkPayloadForEOF(char *buf, ssize_t nread, char *eofmark, char *lastbytes) {
-    /* Update the last bytes array, and check if it matches our
-     * delimiter. */
-    if (nread >= RDB_EOF_MARK_SIZE) {
-        memcpy(lastbytes, buf + nread - RDB_EOF_MARK_SIZE, RDB_EOF_MARK_SIZE);
-    } else {
-        int rem = RDB_EOF_MARK_SIZE - nread;
-        memmove(lastbytes, lastbytes + nread, rem);
-        memcpy(lastbytes + rem, buf, nread);
-    }
-    return (memcmp(lastbytes, eofmark, RDB_EOF_MARK_SIZE) == 0);
-}
+
 
 /* During replication, the primary sends sync metadata as the first line
  * which can be either a standard bulk format ($<count>) or an EOF-delimited
@@ -2203,11 +2170,18 @@ int tryReadBulkPayloadMetadata(connection *conn, char *buf, char *eofmark, char 
         return C_ERR;
     }
 
-    *usemark = inspectBulkPayloadHeaderForEOF(buf, eofmark, lastbytes);
-    if (*usemark)
+    /* Check if this is an EOF-based transfer ($EOF:<delimiter>) or size-based ($<size>) */
+    if (strncmp(buf + 1, "EOF:", 4) == 0 && strlen(buf + 5) >= RDB_EOF_MARK_SIZE) {
+        /* EOF-based transfer: extract the delimiter */
+        memcpy(eofmark, buf + 5, RDB_EOF_MARK_SIZE);
+        memset(lastbytes, 0, RDB_EOF_MARK_SIZE);
+        *usemark = true;
         *repl_transfer_size = 0;
-    else
+    } else {
+        /* Size-based transfer: parse the size */
+        *usemark = false;
         *repl_transfer_size = strtol(buf + 1, NULL, 10);
+    }
 
     return C_OK;
 }
@@ -2624,7 +2598,16 @@ void replicaReceiveRDBFromPrimaryToDisk(connection *conn, int is_dual_channel) {
 
         /* When a mark is used, we want to detect EOF asap in order to avoid
          * writing the EOF mark into the file... */
-        if (usemark) eof_reached = inspectBulkPayloadForEOF(buf, nread, eofmark, lastbytes);
+        if (usemark) {
+            if (nread >= RDB_EOF_MARK_SIZE) {
+                memcpy(lastbytes, buf + nread - RDB_EOF_MARK_SIZE, RDB_EOF_MARK_SIZE);
+            } else {
+                int rem = RDB_EOF_MARK_SIZE - nread;
+                memmove(lastbytes, lastbytes + nread, rem);
+                memcpy(lastbytes + rem, buf, nread);
+            }
+            eof_reached = (memcmp(lastbytes, eofmark, RDB_EOF_MARK_SIZE) == 0);
+        }
 
         /* Update the last I/O time for the replication transfer (used in
          * order to detect timeouts during replication). */

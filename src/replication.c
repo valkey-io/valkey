@@ -2124,15 +2124,7 @@ void replicationAttachToNewPrimary(void) {
     freeReplicationBacklog(); /* Don't allow our chained replicas to PSYNC. */
 }
 
-int inspectBulkPayloadHeaderForErrors(char *buf) {
-    if (buf[0] == '-')
-        return INSPECT_BULK_PAYLOAD_PRIMARY_ABORT;
-    if (buf[0] == '\0')
-        return INSPECT_BULK_PAYLOAD_PRIMARY_PING;
-    if (buf[0] != '$')
-        return INSPECT_BULK_PAYLOAD_PRIMARY_BAD_PROTO;
-    return INSPECT_BULK_PAYLOAD_PRIMARY_OK;
-}
+
 
 /* There are two possible forms for the bulk payload. One is the
  * usual $<count> bulk format. The other is used for diskless transfers
@@ -2193,17 +2185,17 @@ int tryReadBulkPayloadMetadata(connection *conn, char *buf, char *eofmark, char 
             server.stat_net_repl_input_bytes += nread + 1;
     }
 
-    int ret = inspectBulkPayloadHeaderForErrors(buf);
-    if (ret == INSPECT_BULK_PAYLOAD_PRIMARY_ABORT) {
+    /* Check the bulk payload header for errors */
+    if (buf[0] == '-') {
         serverLog(LL_WARNING, "PRIMARY aborted replication with an error: %s", buf + 1);
         return C_ERR;
-    } else if (ret == INSPECT_BULK_PAYLOAD_PRIMARY_PING) {
+    } else if (buf[0] == '\0') {
         /* At this stage just a newline works as a PING in order to take
          * the connection live. So we refresh our last interaction
          * timestamp. */
         server.repl_transfer_lastio = server.unixtime;
         return C_RETRY;
-    } else if (ret == INSPECT_BULK_PAYLOAD_PRIMARY_BAD_PROTO) {
+    } else if (buf[0] != '$') {
         serverLog(LL_WARNING,
                   "Bad protocol from PRIMARY, the first byte is not '$' (we received '%s'), are you sure the host "
                   "and port are right?",

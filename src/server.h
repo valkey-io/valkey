@@ -450,11 +450,7 @@ typedef enum {
                              * PSYNC FAILOVER request. */
 } failover_state;
 
-/* Possible outcomes when inspecting a bulk payload received from the primary server */
-#define INSPECT_BULK_PAYLOAD_PRIMARY_ABORT -1
-#define INSPECT_BULK_PAYLOAD_PRIMARY_PING -2
-#define INSPECT_BULK_PAYLOAD_PRIMARY_BAD_PROTO -3
-#define INSPECT_BULK_PAYLOAD_PRIMARY_OK 1;
+
 
 /* State of replicas from the POV of the primary. Used in client->replstate.
  * In SEND_BULK and ONLINE state the replica receives new updates

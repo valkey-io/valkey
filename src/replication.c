@@ -5062,14 +5062,14 @@ void replicationCron(void) {
 
     /* Non blocking connection timeout? */
     if (server.primary_host && (server.repl_state == REPL_STATE_CONNECTING || replicaIsInHandshakeState()) &&
-        (time(NULL) - atomic_load_explicit(&server.repl_transfer_lastio, memory_order_relaxed)) > server.repl_timeout) {
+        (time(NULL) - server.repl_transfer_lastio) > server.repl_timeout) {
         serverLog(LL_WARNING, "Timeout connecting to the PRIMARY...");
         cancelReplicationHandshake(1);
     }
 
     /* Bulk transfer I/O timeout? */
     if (server.primary_host && server.repl_state == REPL_STATE_TRANSFER &&
-        (time(NULL) - atomic_load_explicit(&server.repl_transfer_lastio, memory_order_relaxed)) > server.repl_timeout) {
+        (time(NULL) - server.repl_transfer_lastio) > server.repl_timeout) {
         serverLog(LL_WARNING, "Timeout receiving bulk data from PRIMARY... If the problem persists try to set the "
                               "'repl-timeout' parameter in valkey.conf to a larger value.");
         cancelReplicationHandshake(1);

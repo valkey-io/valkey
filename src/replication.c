@@ -2125,10 +2125,6 @@ void replicationAttachToNewPrimary(void) {
 }
 
 
-
-
-
-
 /* During replication, the primary sends sync metadata as the first line
  * which can be either a standard bulk format ($<count>) or an EOF-delimited
  * format ($EOF:<delimiter>) for diskless transfers. We need this data in order

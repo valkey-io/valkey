@@ -451,7 +451,6 @@ typedef enum {
 } failover_state;
 
 
-
 /* State of replicas from the POV of the primary. Used in client->replstate.
  * In SEND_BULK and ONLINE state the replica receives new updates
  * in its output queue. In the WAIT_BGSAVE states instead the server is waiting

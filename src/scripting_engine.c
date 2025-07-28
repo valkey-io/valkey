@@ -21,7 +21,7 @@
  *    called when the server needs to reset the evaluation environment in the
  *    asynchronous mode.
  */
-enum {
+enum moduleCtxCacheIndex {
     COMMON_MODULE_CTX_INDEX = 0,        /* Common module context used by the scripting engine. */
     GET_MEMORY_MODULE_CTX_INDEX = 1,    /* Module context used by `scriptingEngineCallGetMemoryInfo`. */
     FREE_FUNCTION_MODULE_CTX_INDEX = 2, /* Module context used by `scriptingEngineCallFreeFunction`. */
@@ -226,7 +226,7 @@ void scriptingEngineManagerForEachEngine(engineIterCallback callback,
 static ValkeyModuleCtx *engineSetupModuleCtx(int module_ctx_cache_index,
                                              scriptingEngine *e,
                                              client *c) {
-    debugServerAssert(e != NULL);
+    serverAssert(e != NULL);
     if (e->module == NULL) return NULL;
 
     ValkeyModuleCtx *ctx = e->module_ctx_cache[module_ctx_cache_index];
@@ -235,7 +235,7 @@ static ValkeyModuleCtx *engineSetupModuleCtx(int module_ctx_cache_index,
 }
 
 static void engineTeardownModuleCtx(int module_ctx_cache_index, scriptingEngine *e) {
-    debugServerAssert(e != NULL);
+    serverAssert(e != NULL);
     if (e->module != NULL) {
         ValkeyModuleCtx *ctx = e->module_ctx_cache[module_ctx_cache_index];
         moduleFreeContext(ctx);

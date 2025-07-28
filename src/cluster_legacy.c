@@ -1678,7 +1678,7 @@ clusterNode *createClusterNode(char *nodename, int flags) {
     return node;
 }
 
-/* 8 bytes mstime + 8 bytes cluster node */
+/* 8 bytes mstime + 8 bytes cluster node pointer (padded with zeros on 32-bit systems). */
 #define FAILURE_REPORT_KEYLEN 16
 #define SEC_IN_MS 1000ULL
 #define CEIL_OFFSET_MS (SEC_IN_MS - 1)
@@ -1686,19 +1686,19 @@ clusterNode *createClusterNode(char *nodename, int flags) {
 /* The report time is rounded up (ceiled) to the nearest second in order to bucket
  * timestamps and keep the radix‐tree keys compact.  The resulting timestamp is stored
  * in big‑endian format, followed by the pointer to the clusterNode. */
-static void encodeFailureReportKey(unsigned char *buf, mstime_t report_time, clusterNode *node) {
+static void encodeFailureReportKey(clusterNode *node, mstime_t report_time, unsigned char *buf_out) {
     const size_t node_ptr_pad_bytes = (sizeof(clusterNode *) == 4) ? 4 : 0; // pad on 32-bit
 
     /* Round up to the next second for fewer key splits and quorum grace */
-    mstime_t bucketed_time = ((report_time + CEIL_OFFSET_MS) / SEC_IN_MS) * SEC_IN_MS;
+    mstime_t bucketed_time = (report_time / SEC_IN_MS) * SEC_IN_MS + SEC_IN_MS;
 
     /* Big endian timestamp for numeric time order in rax */
     uint64_t big_endian_time = htonu64((uint64_t)bucketed_time);
-    memcpy(buf, &big_endian_time, sizeof(uint64_t));
+    memcpy(buf_out, &big_endian_time, sizeof(uint64_t));
 
     /* Append the node pointer, plus padding if necessary */
-    memcpy(buf + sizeof(uint64_t), &node, sizeof(node));
-    if (node_ptr_pad_bytes) memset(buf + sizeof(uint64_t) + sizeof(node), 0, node_ptr_pad_bytes);
+    memcpy(buf_out + sizeof(uint64_t), &node, sizeof(node));
+    if (node_ptr_pad_bytes) memset(buf_out + sizeof(uint64_t) + sizeof(node), 0, node_ptr_pad_bytes);
 }
 
 /* Reverses the operation of encodeFailureReportKey, reading back a timestamp
@@ -1724,7 +1724,7 @@ static void decodeFailureReportKey(unsigned char *buf, mstime_t *report_time, cl
 int clusterNodeAddFailureReport(clusterNode *failing, clusterNode *sender) {
     unsigned char buf[FAILURE_REPORT_KEYLEN];
     mstime_t now = mstime();
-    const mstime_t bucketed_time = ((now + CEIL_OFFSET_MS) / SEC_IN_MS) * SEC_IN_MS;
+    const mstime_t bucketed_time = (now / SEC_IN_MS) * SEC_IN_MS + SEC_IN_MS;
     int is_new = 1;
 
     /* Look for any existing entry from this sender and remove it */
@@ -1751,7 +1751,7 @@ int clusterNodeAddFailureReport(clusterNode *failing, clusterNode *sender) {
     raxStop(&ri);
 
     /* Encode new key (now + sender) and store the fresh timestamp */
-    encodeFailureReportKey(buf, now, sender);
+    encodeFailureReportKey(sender, now, buf);
     raxInsert(failing->fail_reports,
               buf, sizeof(buf), NULL, NULL);
 
@@ -1784,10 +1784,11 @@ void clusterNodeCleanupFailureReports(clusterNode *node) {
         clusterNode *reported_node;
         decodeFailureReportKey(ri.key, &reported_time, &reported_node);
         if (reported_time > cutoff) break;
-        if (raxRemove(node->fail_reports, ri.key, ri.key_len, NULL)) {
-            /* Move directly to the next element after the tree mutation due to removal */
-            raxSeek(&ri, ">=", ri.key, ri.key_len);
-        }
+
+        int retval = raxRemove(node->fail_reports, ri.key, ri.key_len, NULL);
+        serverAssert(retval == 1);
+        /* Move directly to the next element after the tree mutation due to removal */
+        raxSeek(&ri, ">=", ri.key, ri.key_len);
     }
 
     raxStop(&ri);

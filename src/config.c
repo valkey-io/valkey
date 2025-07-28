@@ -2490,6 +2490,27 @@ static int updatePort(const char **err) {
     return 1;
 }
 
+static int updateDatabases(const char **err) {
+    int old_dbnum = server.dbnum;
+    int new_dbnum = server.cluster_enabled ? server.config_databases_cluster : server.config_databases;
+    if (old_dbnum == new_dbnum) return 1;
+
+    /* If it is adjusted smaller, then we need to check whether the
+     * database has been used. */
+    if (new_dbnum < old_dbnum) {
+        for (int dbid = new_dbnum; dbid < old_dbnum; dbid++) {
+            if (server.db[dbid] != NULL) {
+                *err = "The database has been used and cannot be adjusted "
+                       "to a smaller number.";
+                return 0;
+            }
+        }
+    }
+    server.dbnum = new_dbnum;
+    server.db = zrealloc(server.db, sizeof(serverDb *) * server.dbnum);
+    return 1;
+}
+
 static int updateDefragConfiguration(const char **err) {
     UNUSED(err);
     server.active_defrag_configuration_changed = 1;
@@ -3265,8 +3286,8 @@ standardConfig static_configs[] = {
     createEnumConfig("rdb-version-check", NULL, MODIFIABLE_CONFIG, rdb_version_check_enum, server.rdb_version_check, RDB_VERSION_CHECK_STRICT, NULL, NULL),
 
     /* Integer configs */
-    createIntConfig("databases", NULL, IMMUTABLE_CONFIG, 1, INT_MAX, server.config_databases, 16, INTEGER_CONFIG, NULL, NULL),
-    createIntConfig("cluster-databases", NULL, IMMUTABLE_CONFIG, 1, INT_MAX, server.config_databases_cluster, 1, INTEGER_CONFIG, NULL, NULL),
+    createIntConfig("databases", NULL, MODIFIABLE_CONFIG, 1, INT_MAX, server.config_databases, 16, INTEGER_CONFIG, NULL, updateDatabases),
+    createIntConfig("cluster-databases", NULL, MODIFIABLE_CONFIG, 1, INT_MAX, server.config_databases_cluster, 1, INTEGER_CONFIG, NULL, updateDatabases),
     createIntConfig("port", NULL, MODIFIABLE_CONFIG, 0, 65535, server.port, 6379, INTEGER_CONFIG, NULL, updatePort),                                               /* TCP port. */
     createIntConfig("io-threads", NULL, DEBUG_CONFIG | MODIFIABLE_CONFIG, 1, IO_THREADS_MAX_NUM, server.io_threads_num, 1, INTEGER_CONFIG, NULL, updateIOThreads), /* Single threaded by default */
     createIntConfig("events-per-io-thread", NULL, MODIFIABLE_CONFIG | HIDDEN_CONFIG, 0, INT_MAX, server.events_per_io_thread, 2, INTEGER_CONFIG, NULL, NULL),

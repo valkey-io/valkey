@@ -1692,8 +1692,6 @@ clusterNode *createClusterNode(char *nodename, int flags) {
  * timestamps and keep the radix‐tree keys compact.  The resulting timestamp is stored
  * in big‑endian format, followed by the pointer to the clusterNode. */
 static void encodeFailureReportKey(clusterNode *node, mstime_t report_time, unsigned char *buf_out) {
-    const size_t node_ptr_pad_bytes = (sizeof(clusterNode *) == 4) ? 4 : 0; // pad on 32-bit
-
     /* Round up to the next second for fewer key splits and quorum grace */
     mstime_t bucketed_time = (report_time / SEC_IN_MS) * SEC_IN_MS + SEC_IN_MS;
 
@@ -1702,8 +1700,7 @@ static void encodeFailureReportKey(clusterNode *node, mstime_t report_time, unsi
     memcpy(buf_out, &big_endian_time, sizeof(uint64_t));
 
     /* Append the node pointer, plus padding if necessary */
-    memcpy(buf_out + sizeof(uint64_t), &node, sizeof(node));
-    if (node_ptr_pad_bytes) memset(buf_out + sizeof(uint64_t) + sizeof(node), 0, node_ptr_pad_bytes);
+    writePointerWithPadding(buf_out + sizeof(uint64_t), node);
 }
 
 /* Reverses the operation of encodeFailureReportKey, reading back a timestamp

@@ -5010,12 +5010,17 @@ void handleBioThreadFinishedRDBDownload(void) {
     /* Error during transfer */
     if (bio_save_state == REPL_BIO_DISK_SAVE_STATE_FAIL) {
         serverLog(LL_WARNING, "Replica main thread detected RDB download failure in Bio thread");
-        resetBioRDBSaveState();
         cancelReplicationHandshake(1);
         return;
     }
 
     debugServerAssert(bio_save_state == REPL_BIO_DISK_SAVE_STATE_FINISHED);
+    
+    /* Bio termination detected - we can get rid of the state vars */
+    int bio_repl_transfer_size = server.bio_repl_transfer_size;
+    int bio_repl_transfer_read = server.bio_repl_transfer_read;
+    resetBioRDBSaveState();
+
     serverLog(LL_NOTICE, "Replica main thread detected RDB download completion in Bio thread");
 
     /* Handle Bio sync success */
@@ -5035,14 +5040,12 @@ void handleBioThreadFinishedRDBDownload(void) {
     replicaBeforeLoadPrimaryRDB(conn, 0);
     if (replicaLoadPrimaryRDBFromDisk(&rsi) == C_ERR) {
         serverLog(LL_WARNING, "Failed to load RDB");
-        resetBioRDBSaveState();
         cancelReplicationHandshake(1);
         return;
     }
     replicaAfterLoadPrimaryRDB(conn, &rsi);
-    server.repl_transfer_size = server.bio_repl_transfer_size;
-    server.repl_transfer_read = server.bio_repl_transfer_read;
-    resetBioRDBSaveState();
+    server.repl_transfer_size = bio_repl_transfer_size;
+    server.repl_transfer_read = bio_repl_transfer_read;
 }
 
 /* --------------------------- REPLICATION CRON  ---------------------------- */

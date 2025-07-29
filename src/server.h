@@ -3034,10 +3034,7 @@ int sendCurrentOffsetToReplica(client *replica);
 void addRdbReplicaToPsyncWait(client *replica);
 void initClientReplicationData(client *c);
 void freeClientReplicationData(client *c);
-void replicaReceiveRDBFromPrimaryToMemory(connection *conn);
-int tryReadBulkPayloadMetadata(connection *conn, char *buf, char *eofmark, char *lastbytes, int *usemark, off_t *repl_transfer_size);
 void replicaReceiveRDBFromPrimaryToDisk(connection *conn, int is_dual_channel);
-int shouldAbortSave(void);
 
 /* Generic persistence functions */
 void startLoadingFile(size_t size, char *filename, int rdbflags);

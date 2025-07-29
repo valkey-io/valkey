@@ -3344,6 +3344,7 @@ standardConfig static_configs[] = {
     createLongLongConfig("stream-node-max-entries", NULL, MODIFIABLE_CONFIG, 0, LLONG_MAX, server.stream_node_max_entries, 100, INTEGER_CONFIG, NULL, NULL),
     createLongLongConfig("repl-backlog-size", NULL, MODIFIABLE_CONFIG, 1, LLONG_MAX, server.repl_backlog_size, 10 * 1024 * 1024, MEMORY_CONFIG, NULL, updateReplBacklogSize), /* Default: 10mb */
     createLongLongConfig("cluster-manual-failover-timeout", NULL, MODIFIABLE_CONFIG, 1, INT_MAX, server.cluster_mf_timeout, 5000, INTEGER_CONFIG, NULL, NULL),
+    createLongLongConfig("max-rand-count", NULL, MODIFIABLE_CONFIG, 0, LONG_MAX/2, server.max_rand_count, LONG_MAX/2, INTEGER_CONFIG, NULL, NULL),
 
     /* Unsigned Long Long configs */
     createULongLongConfig("maxmemory", NULL, MODIFIABLE_CONFIG, 0, ULLONG_MAX, server.maxmemory, 0, MEMORY_CONFIG, NULL, updateMaxmemory),

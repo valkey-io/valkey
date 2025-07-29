@@ -1009,6 +1009,10 @@ void srandmemberWithCountCommand(client *c) {
     int64_t llele;
 
     if (getRangeLongFromObjectOrReply(c, c->argv[2], -LONG_MAX, LONG_MAX, &l, NULL) != C_OK) return;
+    if (l < -server.max_rand_count || l > server.max_rand_count) {
+        addReplyError(c, "value is out of range");
+        return;
+    }
     if (l >= 0) {
         count = (unsigned long)l;
     } else {

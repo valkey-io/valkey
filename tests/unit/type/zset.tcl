@@ -2463,6 +2463,28 @@ start_server {tags {"zset"}} {
         assert_error {*value is out of range*} {r zrandmember myzset -9223372036854775808}
     } {}
 
+    test "ZRANDMEMBER count max-rand-count config is handled correctly" {
+        r zadd testzset 1 a 2 b
+        r config set max-rand-count 10
+
+        assert_error {*value is out of range*} {r zrandmember testzset 11}
+        assert_error {*value is out of range*} {r zrandmember testzset -11}
+        assert_error {*value is out of range*} {r zrandmember testzset 11 withscores}
+        assert_error {*value is out of range*} {r zrandmember testzset -11 withscores}
+
+        set res [r zrandmember testzset 10 withscores]
+        assert_equal [llength $res] 4
+
+        set res [r zrandmember testzset -10 withscores]
+        assert_equal [llength $res] 20
+        
+        set res [r zrandmember testzset 10]
+        assert_equal [llength $res] 2
+
+        set res [r zrandmember testzset -10]
+        assert_equal [llength $res] 10
+    }
+
     # Make sure we can distinguish between an empty array and a null response
     r readraw 1
 

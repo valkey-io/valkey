@@ -77,6 +77,28 @@ start_server {tags {"hash"}} {
         assert_error {*value is out of range*} {r hrandfield myhash -9223372036854775808 withvalues}
         assert_error {*value is out of range*} {r hrandfield myhash -9223372036854775808}
     } {}
+    
+    test "HRANDFIELD count max-rand-count config is handled correctly" {
+        r hmset testhash a 1 b 2
+        r config set max-rand-count 10
+
+        assert_error {*value is out of range*} {r hrandfield testhash 11}
+        assert_error {*value is out of range*} {r hrandfield testhash -11}
+        assert_error {*value is out of range*} {r hrandfield testhash 11 withvalues}
+        assert_error {*value is out of range*} {r hrandfield testhash -11 withvalues}
+
+        set res [r hrandfield testhash 10 withvalues]
+        assert_equal [llength $res] 4
+
+        set res [r hrandfield testhash -10 withvalues]
+        assert_equal [llength $res] 20
+        
+        set res [r hrandfield testhash 10]
+        assert_equal [llength $res] 2
+
+        set res [r hrandfield testhash -10]
+        assert_equal [llength $res] 10
+    }
 
     test "HRANDFIELD with <count> against non existing key" {
         r hrandfield nonexisting_key 100

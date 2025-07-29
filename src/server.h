@@ -1850,6 +1850,7 @@ struct valkeyServer {
                                                  invocation of the event loop. */
     unsigned int max_new_conns_per_cycle;     /* The maximum number of tcp connections that will be accepted during each
                                                  invocation of the event loop. */
+    long long max_rand_count;                 /* The maximum number of random values to retrieve. */
     /* AOF persistence */
     int aof_enabled;                    /* AOF configuration */
     int aof_state;                      /* AOF_(ON|OFF|WAIT_REWRITE) */

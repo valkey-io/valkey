@@ -827,6 +827,20 @@ foreach type {single multiple single_multiple} {
         assert_error {*value is out of range*} {r srandmember myset -9223372036854775808}
     } {}
 
+    test "SRANDMEMBER count max-rand-count config is handled correctly" {
+        r sadd testset a b
+        r config set max-rand-count 10
+
+        assert_error {*value is out of range*} {r srandmember testset 11}
+        assert_error {*value is out of range*} {r srandmember testset -11}
+        
+        set res [r srandmember testset 10]
+        assert_equal [llength $res] 2
+
+        set res [r srandmember testset -10]
+        assert_equal [llength $res] 10
+    }
+
     # Make sure we can distinguish between an empty array and a null response
     r readraw 1
 

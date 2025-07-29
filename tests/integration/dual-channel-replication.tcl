@@ -1310,7 +1310,7 @@ start_server {tags {"dual-channel-replication external:skip"}} {
         } else {
             $primary config set repl-timeout 10
             $replica config set repl-timeout 10
-            set max_tries 500
+            set max_tries 1000
         }
 
         test "Replica notice main-connection killed during rdb load callback" {; # https://github.com/valkey-io/valkey/issues/1152

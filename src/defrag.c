@@ -219,12 +219,6 @@ static robj *activeDefragStringObWithoutFree(robj *ob, size_t *allocation_size) 
     }
 
     robj *new_robj = activeDefragAllocWithoutFree(ob, allocation_size);
-
-    if (new_robj && ob->type == OBJ_STRING && ob->encoding == OBJ_ENCODING_EMBSTR) {
-        // If the robj is moved, correct the internal pointer
-        long embstr_offset = (intptr_t)objectGetVal(ob) - (intptr_t)ob;
-        objectSetVal(new_robj, (void *)((intptr_t)new_robj + embstr_offset));
-    }
     return new_robj;
 }
 

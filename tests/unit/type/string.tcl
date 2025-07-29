@@ -816,22 +816,24 @@ if {[string match {*jemalloc*} [s mem_allocator]]} {
 
 if {[string match {*jemalloc*} [s mem_allocator]]} {
     test {Memory usage of embedded string value} {
-        # Check that we can fit 9 bytes of key + value into a 32 byte
+        # Check that we can fit 9 bytes of key + value into a 24 byte
         # allocation, including the serverObject itself.
         r set quux xyzzy
-        assert_lessthan_equal [r memory usage quux] 32
+        assert_lessthan_equal [r memory usage quux] 24
 
         # Check that the SDS overhead of the embedded key and value is 6 bytes
         # (sds5 + sds8). This is the memory layout:
         #
-        # +--------------+--------------+---------------+----------------+
-        # | serverObject |              | sds5 key      | sds8 value     |
-        # | header       | key-hdr-size | hdr "quux" \0 | hdr "xyzzy" \0 |
-        # | 16 bytes     | 1            | 1  + 4    + 1 | 3  + 5     + 1 |
-        # +--------------+--------------+---------------+----------------+
+        # +----------+---------------+----------+---------------+----------------+
+        # | robj     | embval reused | key sds  | sds5 key      | sds8 value     |
+        # | header   | void *ptr     | hdr size | hdr "quux" \0 | hdr "xyzzy" \0 |
+        # | 16 bytes | -8            | 1        | 1  + 4    + 1 | 3  + 5     + 1 |
+        # +----------+---------------+----------+---------------+----------------+
         #
         set content_size [expr {[string length quux] + [string length xyzzy]}]
         regexp {robj:(\d+)} [r debug structsize] _ obj_header_size
+        # remove the size of the void *ptr (which is reused when value is embedded)
+        set obj_header_size [expr {$obj_header_size - $::tcl_platform(pointerSize)}]
         set debug_sdslen [r debug sdslen quux]
         regexp {key_sds_len:4 key_sds_avail:0 obj_alloc:(\d+)} $debug_sdslen _ obj_alloc
         regexp {val_sds_len:5 val_sds_avail:(\d+) val_alloc:(\d+)} $debug_sdslen _ avail val_alloc

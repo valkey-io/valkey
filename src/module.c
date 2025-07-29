@@ -3062,7 +3062,7 @@ int VM_StringCompare(const ValkeyModuleString *a, const ValkeyModuleString *b) {
 
 /* Return the (possibly modified in encoding) input 'str' object if
  * the string is unshared, otherwise NULL is returned. */
-ValkeyModuleString *moduleAssertUnsharedString(ValkeyModuleString *str) {
+static ValkeyModuleString *moduleAssertUnsharedString(ValkeyModuleString *str) {
     if (str->refcount != 1) {
         serverLog(LL_WARNING, "Module attempted to use an in-place string modify operation "
                               "with a string referenced multiple times. Please check the code "
@@ -3072,8 +3072,7 @@ ValkeyModuleString *moduleAssertUnsharedString(ValkeyModuleString *str) {
     if (str->encoding == OBJ_ENCODING_EMBSTR) {
         /* Note: here we "leak" the additional allocation that was
          * used in order to store the embedded string in the object. */
-        objectSetVal(str, sdsnewlen(objectGetVal(str), sdslen(objectGetVal(str))));
-        str->encoding = OBJ_ENCODING_RAW;
+        objectUnembedVal(str, sdsnewlen(objectGetVal(str), sdslen(objectGetVal(str))));
     } else if (str->encoding == OBJ_ENCODING_INT) {
         /* Convert the string from integer to raw encoding. */
         objectSetVal(str, sdsfromlonglong((long)objectGetVal(str)));

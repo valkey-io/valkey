@@ -542,7 +542,7 @@ int hllDenseSet(uint8_t *registers, long index, uint8_t count) {
  *
  * This is just a wrapper to hllDenseSet(), performing the hashing of the
  * element in order to retrieve the index and zero-run count. */
-int hllDenseAdd(uint8_t *registers, unsigned char *ele, size_t elesize) {
+static int hllDenseAdd(uint8_t *registers, unsigned char *ele, size_t elesize) {
     long index;
     uint8_t count = hllPatLen(ele, elesize, &index);
     /* Update the register if this element produced a longer run of zeroes. */
@@ -696,7 +696,7 @@ int hllSparseToDense(robj *o) {
  * sparse to dense: this happens when a register requires to be set to a value
  * not representable with the sparse representation, or when the resulting
  * size would be greater than server.hll_sparse_max_bytes. */
-int hllSparseSet(robj *o, long index, uint8_t count) {
+static bool hllSparseSet(robj *o, long index, uint8_t count) {
     struct hllhdr *hdr;
     uint8_t oldcount, *sparse, *end, *p, *prev, *next;
     long first, span;
@@ -956,7 +956,7 @@ promote:                                         /* Promote to dense representat
  *
  * This function is actually a wrapper for hllSparseSet(), it only performs
  * the hashing of the element to obtain the index and zeros run length. */
-int hllSparseAdd(robj *o, unsigned char *ele, size_t elesize) {
+static int hllSparseAdd(robj *o, unsigned char *ele, size_t elesize) {
     long index;
     uint8_t count = hllPatLen(ele, elesize, &index);
     /* Update the register if this element produced a longer run of zeroes. */
@@ -1116,7 +1116,7 @@ uint64_t hllCount(struct hllhdr *hdr, int *invalid) {
 }
 
 /* Call hllDenseAdd() or hllSparseAdd() according to the HLL encoding. */
-int hllAdd(robj *o, unsigned char *ele, size_t elesize) {
+static int hllAdd(robj *o, unsigned char *ele, size_t elesize) {
     struct hllhdr *hdr = objectGetVal(o);
     switch (hdr->encoding) {
     case HLL_DENSE: return hllDenseAdd(hdr->registers, ele, elesize);

@@ -51,8 +51,9 @@
 /* ===================== Creation and parsing of objects ==================== */
 
 /* Creates an object, optionally with embedded key and expire fields. The key
- * and expire fields can be omitted by passing NULL and -1, respectively. */
-robj *createObjectWithKeyAndExpire(int type, void *ptr, const sds key, long long expire) {
+ * and expire fields can be omitted by passing NULL and -1, respectively.
+ * This function never embeds value. */
+static robj *createUnembeddedObjectWithKeyAndExpire(int type, void *val, const sds key, long long expire) {
     /* Calculate sizes */
     int has_embkey = key != NULL;
     int has_expire = (expire != -1 ||
@@ -73,10 +74,11 @@ robj *createObjectWithKeyAndExpire(int type, void *ptr, const sds key, long long
     robj *o = zmalloc_usable(min_size, &bufsize);
     o->type = type;
     o->encoding = OBJ_ENCODING_RAW;
-    objectSetVal(o, ptr);
     o->refcount = 1;
     o->lru = 0;
     o->hasembkey = has_embkey;
+    o->hasembval = 0;
+    o->val_ptr = val;
 
     /* If the allocation has enough space for an expire field, add it even if we
      * don't need it now. Then we don't need to realloc if it's needed later. */
@@ -104,8 +106,9 @@ robj *createObjectWithKeyAndExpire(int type, void *ptr, const sds key, long long
     return o;
 }
 
-robj *createObject(int type, void *ptr) {
-    return createObjectWithKeyAndExpire(type, ptr, NULL, -1);
+/* Creates an object of the specified type. The value is never embedded. */
+robj *createObject(int type, void *val) {
+    return createUnembeddedObjectWithKeyAndExpire(type, val, NULL, -1);
 }
 
 void initObjectLRUOrLFU(robj *o) {
@@ -136,6 +139,13 @@ robj *createRawStringObject(const char *ptr, size_t len) {
     return createObject(OBJ_STRING, sdsnewlen(ptr, len));
 }
 
+/* get beginning of embedded data. embedded data flags must be accurate when called. */
+static unsigned char *objectEmbeddedData(const robj *o) {
+    unsigned char *data = (void *)(o + 1);
+    if (o->hasembval) data -= sizeof(void *);
+    return data;
+}
+
 /* Creates a new embedded string object and copies the content of key, val_ptr
  * and expire to the new object. LRU is set to 0. */
 static robj *createEmbeddedStringObjectWithKeyAndExpire(const char *val_ptr,
@@ -148,7 +158,11 @@ static robj *createEmbeddedStringObjectWithKeyAndExpire(const char *val_ptr,
     char key_sds_type = has_embkey ? sdsReqType(key_sds_len) : 0;
     size_t key_sds_size = has_embkey ? sdsReqSize(key_sds_len, key_sds_type) : 0;
     size_t val_sds_size = sdsReqSize(val_len, SDS_TYPE_8);
-    size_t min_size = sizeof(robj) + val_sds_size;
+    if (val_sds_size < sizeof(void *)) {
+        val_sds_size = sizeof(void *); /* Ensure it's possible to "unembed" value later */
+    }
+
+    ptrdiff_t min_size = sizeof(robj) - sizeof(void *) + val_sds_size; /* reusing 'ptr' memory */
     if (expire != -1) {
         min_size += sizeof(long long);
     }
@@ -166,6 +180,7 @@ static robj *createEmbeddedStringObjectWithKeyAndExpire(const char *val_ptr,
     o->lru = 0;
     o->hasexpire = (expire != -1);
     o->hasembkey = has_embkey;
+    o->hasembval = 1;
 
     /* If the allocation has enough space for an expire field, add it even if we
      * don't need it now. Then we don't need to realloc if it's needed later. */
@@ -175,7 +190,7 @@ static robj *createEmbeddedStringObjectWithKeyAndExpire(const char *val_ptr,
     }
 
     /* The memory after the struct where we embedded data. */
-    char *data = (void *)(o + 1);
+    char *data = (char *)objectEmbeddedData(o);
 
     /* Set the expire field. */
     if (o->hasexpire) {
@@ -192,8 +207,14 @@ static robj *createEmbeddedStringObjectWithKeyAndExpire(const char *val_ptr,
 
     /* Copy embedded value (EMBSTR) always as SDS TYPE 8. Account for unused
      * memory in the SDS alloc field. */
-    size_t remaining_size = bufsize - (data - (char *)(void *)o);
-    objectSetVal(o, sdswrite(data, remaining_size, SDS_TYPE_8, val_ptr, val_len));
+    ptrdiff_t remaining_size = bufsize - (data - (char *)(void *)o);
+
+    /* max bufsize for SDS_TYPE_8 is 255 */
+    assert(val_len <= 255);
+    if (remaining_size > 255) {
+        remaining_size = 255;
+    }
+    sdswrite(data, remaining_size, SDS_TYPE_8, val_ptr, val_len);
 
     return o;
 }
@@ -201,19 +222,29 @@ static robj *createEmbeddedStringObjectWithKeyAndExpire(const char *val_ptr,
 /* Create a string object with encoding OBJ_ENCODING_EMBSTR, that is
  * an object where the sds string is actually an unmodifiable string
  * allocated in the same chunk as the object itself. */
-robj *createEmbeddedStringObject(const char *ptr, size_t len) {
+static robj *createEmbeddedStringObject(const char *ptr, size_t len) {
     return createEmbeddedStringObjectWithKeyAndExpire(ptr, len, NULL, -1);
 }
 
-/* Create a string object with EMBSTR encoding if it is smaller than
- * OBJ_ENCODING_EMBSTR_SIZE_LIMIT, otherwise the RAW encoding is
- * used.
- *
- * The current limit of 44 is chosen so that the biggest string object
- * we allocate as EMBSTR will still fit into the 64 byte arena of jemalloc. */
-#define OBJ_ENCODING_EMBSTR_SIZE_LIMIT 44
+static bool shouldEmbedStringObject(size_t val_len, sds key, long long expire) {
+    /* When to embed? Embed when the sum is up to 64 bytes. There may be better
+     * heuristics, e.g. we can look at the jemalloc sizes (16-byte intervals up
+     * to 128 bytes). */
+    if (val_len > 255) return false; /* SDS_TYPE_8 max size is 255 */
+
+    size_t size = sizeof(robj) - sizeof(void *); /* reusing 'ptr' memory when embedding */
+    if (key) {
+        size_t key_len = sdslen(key);
+        size += sdsReqSize(key_len, sdsReqType(key_len)) + 1; /* 1 byte for prefixed sds hdr size */
+    }
+    size += (expire != -1) * sizeof(long long);
+    size += sdsReqSize(val_len, SDS_TYPE_8);
+    return size <= 64;
+}
+
+/* Create a string object with EMBSTR encoding if it is small, otherwise RAW encoding */
 robj *createStringObject(const char *ptr, size_t len) {
-    if (len <= OBJ_ENCODING_EMBSTR_SIZE_LIMIT)
+    if (shouldEmbedStringObject(len, NULL, -1))
         return createEmbeddedStringObject(ptr, len);
     else
         return createRawStringObject(ptr, len);
@@ -224,30 +255,39 @@ robj *createStringObjectFromSds(const sds s) {
     return createStringObject(s, sdslen(s));
 }
 
-robj *createStringObjectWithKeyAndExpire(const char *ptr, size_t len, const sds key, long long expire) {
-    /* When to embed? Embed when the sum is up to 64 bytes. There may be better
-     * heuristics, e.g. we can look at the jemalloc sizes (16-byte intervals up
-     * to 128 bytes). */
-    size_t size = sizeof(robj);
-    if (key) {
-        size_t key_len = sdslen(key);
-        size += sdsReqSize(key_len, sdsReqType(key_len)) + 1; /* 1 byte for prefixed sds hdr size */
-    }
-    size += (expire != -1) * sizeof(long long);
-    size += sdsReqSize(len, SDS_TYPE_8);
-    if (size <= 64) {
+static robj *createStringObjectWithKeyAndExpire(const char *ptr, size_t len, const sds key, long long expire) {
+    if (shouldEmbedStringObject(len, key, expire)) {
         return createEmbeddedStringObjectWithKeyAndExpire(ptr, len, key, expire);
     } else {
-        return createObjectWithKeyAndExpire(OBJ_STRING, sdsnewlen(ptr, len), key, expire);
+        return createUnembeddedObjectWithKeyAndExpire(OBJ_STRING, sdsnewlen(ptr, len), key, expire);
     }
 }
 
 void *objectGetVal(const robj *o) {
-    return o->val_ptr;
+    if (o->hasembval) {
+        unsigned char *data = objectEmbeddedData(o);
+        if (o->hasexpire) {
+            /* Skip expire field */
+            data += sizeof(long long);
+        }
+        if (o->hasembkey) {
+            /* Skip embedded key */
+            uint8_t hdr_size = *(uint8_t *)data;
+            data += 1 + hdr_size;                /* +1 for header size byte */
+            data += sdslen((const_sds)data) + 1; /* +1 for null terminator */
+        }
+        if (o->encoding == OBJ_ENCODING_EMBSTR) {
+            return data + sdsHdrSize(SDS_TYPE_8);
+        } else {
+            return data;
+        }
+    } else {
+        return o->val_ptr;
+    }
 }
 
 sds objectGetKey(const robj *o) {
-    unsigned char *data = (void *)(o + 1);
+    const unsigned char *data = objectEmbeddedData((robj *)o);
     if (o->hasexpire) {
         /* Skip expire field */
         data += sizeof(long long);
@@ -264,7 +304,7 @@ sds objectGetKey(const robj *o) {
  * is associated with this robj (i.e. the robj is non volatile) */
 long long objectGetExpire(const robj *o) {
     if (o->hasexpire) {
-        unsigned char *data = (void *)(o + 1);
+        const unsigned char *data = objectEmbeddedData((robj *)o);
         return *(long long *)data;
     } else {
         return -1;
@@ -277,7 +317,7 @@ long long objectGetExpire(const robj *o) {
 robj *objectSetExpire(robj *o, long long expire) {
     if (o->hasexpire) {
         /* Update existing expire field. */
-        unsigned char *data = (void *)(o + 1);
+        unsigned char *data = objectEmbeddedData(o);
         *(long long *)data = expire;
         return o;
     } else if (expire == -1) {
@@ -287,8 +327,29 @@ robj *objectSetExpire(robj *o, long long expire) {
     }
 }
 
+/* Caller is responsible for ensuring that robj does not have an embedded value */
 void objectSetVal(robj *o, void *val) {
+    assert(!o->hasembval);
     o->val_ptr = val;
+}
+
+/* Sometimes it's necessary to grow an object's value without reallocating it.
+ * The old embedded value memory becomes wasted for the remaining lifetime of this
+ * object. Consider using dbUnshareStringValue() or similar if at all possible */
+void objectUnembedVal(robj *o, void *new_val) {
+    assert(o->hasembval);
+
+    assert(sdsAllocSize(objectGetVal(o)) >= sizeof(void *));
+
+    /* shift remaining embedded data out of val_ptr location */
+    ptrdiff_t embedded_data_size = (unsigned char *)objectGetVal(o) - objectEmbeddedData(o);
+    assert(o->encoding == OBJ_ENCODING_EMBSTR);
+    embedded_data_size -= sdsHdrSize(SDS_TYPE_8);
+    memmove(objectEmbeddedData(o) + sizeof(void *), objectEmbeddedData(o), embedded_data_size);
+
+    o->hasembval = 0;
+    o->encoding = OBJ_ENCODING_RAW;
+    o->val_ptr = new_val;
 }
 
 /* This functions may reallocate the value. The new allocation is returned and
@@ -306,21 +367,21 @@ robj *objectSetKeyAndExpire(robj *o, sds key, long long expire) {
     void *ptr;
     if (o->refcount == 1) {
         /* Reuse the ptr. There are no other references to o. */
-        ptr = objectGetVal(o);
-        objectSetVal(o, NULL);
+        ptr = o->val_ptr;
+        o->val_ptr = NULL;
     } else if (o->type == OBJ_STRING && o->encoding == OBJ_ENCODING_INT) {
         /* The pointer is not allocated memory. We can just copy the pointer. */
-        ptr = objectGetVal(o);
+        ptr = o->val_ptr;
     } else if (o->type == OBJ_STRING && o->encoding == OBJ_ENCODING_RAW) {
         /* Dup the string. */
-        ptr = sdsdup(objectGetVal(o));
+        ptr = sdsdup(o->val_ptr);
     } else {
         serverAssert(o->type != OBJ_STRING);
         /* There are multiple references to this non-string object. Most types
          * can be duplicated, but for a module type is not always possible. */
         serverPanic("Not implemented");
     }
-    robj *new = createObjectWithKeyAndExpire(o->type, ptr, key, expire);
+    robj *new = createUnembeddedObjectWithKeyAndExpire(o->type, ptr, key, expire);
     new->encoding = o->encoding;
     new->lru = o->lru;
     decrRefCount(o);
@@ -336,7 +397,7 @@ robj *tryCreateRawStringObject(const char *ptr, size_t len) {
 
 /* Same as createStringObject, can return NULL if allocation fails */
 robj *tryCreateStringObject(const char *ptr, size_t len) {
-    if (len <= OBJ_ENCODING_EMBSTR_SIZE_LIMIT)
+    if (shouldEmbedStringObject(len, NULL, -1))
         return createEmbeddedStringObject(ptr, len);
     else
         return tryCreateRawStringObject(ptr, len);
@@ -355,7 +416,7 @@ robj *createStringObjectFromLongLongWithOptions(long long value, int flag) {
         if ((value >= LONG_MIN && value <= LONG_MAX) && flag != LL2STROBJ_NO_INT_ENC) {
             o = createObject(OBJ_STRING, NULL);
             o->encoding = OBJ_ENCODING_INT;
-            objectSetVal(o, (void *)((long)value));
+            o->val_ptr = (void *)((long)value);
         } else {
             char buf[LONG_STR_SIZE];
             int len = ll2string(buf, sizeof(buf), value);
@@ -414,7 +475,7 @@ robj *dupStringObject(const robj *o) {
     case OBJ_ENCODING_INT:
         d = createObject(OBJ_STRING, NULL);
         d->encoding = OBJ_ENCODING_INT;
-        objectSetVal(d, objectGetVal(o));
+        d->val_ptr = o->val_ptr;
         return d;
     default: serverPanic("Wrong encoding."); break;
     }
@@ -794,11 +855,11 @@ void trimStringObjectIfNeeded(robj *o, int trim_small_values) {
      * 1. When an arg len is greater than PROTO_MBULK_BIG_ARG the query buffer may be used directly as the SDS string.
      * 2. When utilizing the argument caching mechanism in Lua.
      * 3. When calling from RM_TrimStringAllocation (trim_small_values is true). */
-    size_t len = sdslen(objectGetVal(o));
+    size_t len = sdslen(o->val_ptr);
     if (len >= PROTO_MBULK_BIG_ARG || trim_small_values ||
         (server.executing_client && server.executing_client->flag.script && len < LUA_CMD_OBJCACHE_MAX_LEN)) {
-        if (sdsavail(objectGetVal(o)) > len / 10) {
-            objectSetVal(o, sdsRemoveFreeSpace(objectGetVal(o), 0));
+        if (sdsavail(o->val_ptr) > len / 10) {
+            o->val_ptr = sdsRemoveFreeSpace(o->val_ptr, 0);
         }
     }
 }
@@ -834,7 +895,7 @@ robj *tryObjectEncodingEx(robj *o, int try_trim) {
         if (o->encoding == OBJ_ENCODING_RAW) {
             sdsfree(objectGetVal(o));
             o->encoding = OBJ_ENCODING_INT;
-            objectSetVal(o, (void *)value);
+            o->val_ptr = (void *)value;
             return o;
         } else if (o->encoding == OBJ_ENCODING_EMBSTR) {
             decrRefCount(o);
@@ -846,11 +907,9 @@ robj *tryObjectEncodingEx(robj *o, int try_trim) {
      * try the EMBSTR encoding which is more efficient.
      * In this representation the object and the SDS string are allocated
      * in the same chunk of memory to save space and cache misses. */
-    if (len <= OBJ_ENCODING_EMBSTR_SIZE_LIMIT) {
-        robj *emb;
-
+    if (shouldEmbedStringObject(len, NULL, -1)) {
         if (o->encoding == OBJ_ENCODING_EMBSTR) return o;
-        emb = createEmbeddedStringObject(s, sdslen(s));
+        robj *emb = createEmbeddedStringObject(s, sdslen(s));
         decrRefCount(o);
         return emb;
     }

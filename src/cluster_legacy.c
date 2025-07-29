@@ -7554,9 +7554,9 @@ const char **clusterCommandExtendedHelp(void) {
         "    Return information about all network links between this node and its peers.",
         "    Output format is an array where each array element is a map containing attributes of a link",
         "MIGRATE SLOTSRANGE <start slot> <end slot> [<start slot> <end slot> ...] NODE <node id>",
-        "    Import the specified slot ranges from their owner.",
+        "    Migrate the specified slot ranges from this node to the specified node.",
         "CANCELMIGRATION (ALL | LINK <link name>)",
-        "    Cancel all ongoing imports.",
+        "    Cancel the selected migration links.",
         "MIGRATIONS",
         "    Get information about ongoing and recently finished slot imports and exports.",
         NULL};

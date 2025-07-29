@@ -992,16 +992,16 @@ static void prefetchBucketEntries(bucket *b) {
     }
 }
 
-/* Returns the child bucket if chained, otherwise the next bucket in the table. returns NULL if neither exists. */
-static bucket *getNextBucket(bucket *current_bucket, size_t bucket_index, hashtable *ht, int table_index) {
+/* Returns the child bucket if 'current_bucket' is chained. Otherwise, returns the bucket
+ * at 'next_top_level_index' in the table. Returns NULL if neither exists. */
+static bucket *getNextBucket(bucket *current_bucket, size_t next_top_level_index, hashtable *ht, int table_index) {
     bucket *next_bucket = NULL;
     if (current_bucket->chained) {
         next_bucket = getChildBucket(current_bucket);
     } else {
         size_t table_size = numBuckets(ht->bucket_exp[table_index]);
-        size_t next_index = bucket_index + 1;
-        if (next_index < table_size) {
-            next_bucket = &ht->tables[table_index][next_index];
+        if (next_top_level_index < table_size) {
+            next_bucket = &ht->tables[table_index][next_top_level_index];
         }
     }
     return next_bucket;
@@ -1012,7 +1012,7 @@ static bucket *getNextBucket(bucket *current_bucket, size_t bucket_index, hashta
  * - The next of the next bucket
  * It attempts to bring this data closer to the L1 cache to reduce future memory access latency.
  *
- * Cache state before this function is called(due to last call for this function):
+ * Cache state before this function is called (due to last call for this function):
  * 1. The current bucket and its entries are likely already in cache.
  * 2. The next bucket is in cache.
  */
@@ -1021,7 +1021,9 @@ static void prefetchNextBucketEntries(iter *iter, bucket *current_bucket) {
     bucket *next_bucket = getNextBucket(current_bucket, next_index, iter->hashtable, iter->table);
     if (next_bucket) {
         prefetchBucketEntries(next_bucket);
-        bucket *next_next_bucket = getNextBucket(next_bucket, next_index + 1, iter->hashtable, iter->table);
+        /* Calculate the target top-level index for the next-next bucket. */
+        if (!current_bucket->chained) next_index++;
+        bucket *next_next_bucket = getNextBucket(next_bucket, next_index, iter->hashtable, iter->table);
         if (next_next_bucket) {
             valkey_prefetch(next_next_bucket);
         }

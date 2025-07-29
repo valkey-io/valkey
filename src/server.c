@@ -2786,6 +2786,9 @@ serverDb *createDatabase(int id) {
     serverDb *db = zmalloc(sizeof(serverDb));
     db->keys = kvstoreCreate(&kvstoreKeysHashtableType, slot_count_bits, flags);
     db->expires = kvstoreCreate(&kvstoreExpiresHashtableType, slot_count_bits, flags);
+    if (server.cluster_enabled && server.cluster && clusterIsAnySlotImporting()) {
+        clusterMarkImportingSlotsInDb(db);
+    }
     db->expires_cursor = 0;
     db->blocking_keys = dictCreate(&keylistDictType);
     db->blocking_keys_unblock_on_nokey = dictCreate(&objectKeyPointerValueDictType);
@@ -3478,6 +3481,7 @@ static int shouldPropagate(int target) {
         if (server.aof_state != AOF_OFF) return 1;
     }
     if (target & PROPAGATE_REPL) {
+        if (server.cluster_enabled && clusterIsAnySlotExporting()) return 1;
         if (server.primary_host == NULL && (server.repl_backlog || listLength(server.replicas) != 0)) return 1;
     }
 
@@ -3490,7 +3494,7 @@ static int shouldPropagate(int target) {
  * flags are an xor between:
  * + PROPAGATE_NONE (no propagation of command at all)
  * + PROPAGATE_AOF (propagate into the AOF file if is enabled)
- * + PROPAGATE_REPL (propagate into the replication link)
+ * + PROPAGATE_REPL (propagate into replication links, including slot migration links)
  *
  * This is an internal low-level function and should not be called!
  *
@@ -3528,7 +3532,9 @@ static void propagateNow(int dbid, robj **argv, int argc, int target, int slot) 
 
     if (server.aof_state != AOF_OFF && target & PROPAGATE_AOF) feedAppendOnlyFile(dbid, argv, argc);
     if (target & PROPAGATE_REPL) {
-        replicationFeedReplicas(dbid, argv, argc);
+        if (server.primary_host == NULL && (server.repl_backlog || listLength(server.replicas) != 0)) {
+            replicationFeedReplicas(dbid, argv, argc);
+        }
         if (server.cluster_enabled && clusterIsAnySlotExporting()) {
             clusterFeedSlotExportLinks(dbid, argv, argc, slot);
         }

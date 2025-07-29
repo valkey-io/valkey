@@ -3,7 +3,7 @@
         "summary": "A container for internal slot migration commands.",
         "complexity": "Depends on subcommand.",
         "group": "cluster",
-        "since": "8.1.0",
+        "since": "9.0.0",
         "container": "CLUSTER",
         "function": "clusterCommand",
         "arity": -3,

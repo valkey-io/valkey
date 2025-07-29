@@ -3148,12 +3148,11 @@ static int applyClientMaxMemoryUsage(const char **err) {
 }
 
 static int applyClusterSlotMigrationLogConfig(const char **err) {
+    UNUSED(err);
     if (server.cluster_enabled) {
         clusterCleanupSlotMigrationLog();
-        return 1;
     }
-    *err = "Cluster mode is not enabled";
-    return 0;
+    return 1;
 }
 
 standardConfig static_configs[] = {

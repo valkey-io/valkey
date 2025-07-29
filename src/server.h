@@ -184,15 +184,17 @@ struct hdr_histogram;
 #define RIO_CONNSET_WRITE_MAX_CHUNK_SIZE 16384
 
 /* Instantaneous metrics tracking. */
-#define STATS_METRIC_SAMPLES 16               /* Number of samples per metric. */
-#define STATS_METRIC_COMMAND 0                /* Number of commands executed. */
-#define STATS_METRIC_NET_INPUT 1              /* Bytes read to network. */
-#define STATS_METRIC_NET_OUTPUT 2             /* Bytes written to network. */
-#define STATS_METRIC_NET_INPUT_REPLICATION 3  /* Bytes read to network during replication. */
-#define STATS_METRIC_NET_OUTPUT_REPLICATION 4 /* Bytes written to network during replication. */
-#define STATS_METRIC_EL_CYCLE 5               /* Number of eventloop cycled. */
-#define STATS_METRIC_EL_DURATION 6            /* Eventloop duration. */
-#define STATS_METRIC_COUNT 9
+#define STATS_METRIC_SAMPLES 16 /* Number of samples per metric. */
+typedef enum {
+    STATS_METRIC_COMMAND = 0,            /* Number of commands executed. */
+    STATS_METRIC_NET_INPUT,              /* Bytes read to network. */
+    STATS_METRIC_NET_OUTPUT,             /* Bytes written to network. */
+    STATS_METRIC_NET_INPUT_REPLICATION,  /* Bytes read to network during replication. */
+    STATS_METRIC_NET_OUTPUT_REPLICATION, /* Bytes written to network during replication. */
+    STATS_METRIC_EL_CYCLE,               /* Number of eventloop cycled. */
+    STATS_METRIC_EL_DURATION,            /* Eventloop duration. */
+    STATS_METRIC_COUNT                   /* Total count */
+} instantaneous_metric_type;
 
 /* Protocol and I/O related defines */
 #define PROTO_IOBUF_LEN (1024 * 16)         /* Generic I/O buffer size */
@@ -1233,8 +1235,7 @@ typedef struct client {
     ClientModuleData *module_data;    /* Required for Module operations. lazily initialized when first needed */
     multiState *mstate;               /* MULTI/EXEC state, lazily initialized when first needed */
     blockingState *bstate;            /* Blocking state, lazily initialized when first needed */
-    /* Slotsync data, todo maybe need to move it into ClientReplicationData or a new struct. */
-    void *slot_migration_link; /* Pointer to the slot migration link, or NULL. */
+    void *slot_migration_link;        /* Pointer to the slot migration link, or NULL. */
     /* Output buffer and reply handling */
     long duration;                       /* Current command duration. Used for measuring latency of blocking/non-blocking cmds */
     char *buf;                           /* Output buffer */
@@ -3533,7 +3534,6 @@ size_t lazyfreeGetFreedObjectsCount(void);
 void lazyfreeResetStats(void);
 void freeObjAsync(robj *key, robj *obj, int dbid);
 void freeReplicationBacklogRefMemAsync(list *blocks, rax *index);
-kvstoreHashtablePredicate *getOwnedSlotsHashtablePredicate(void);
 
 /* API to get key arguments from commands */
 #define GET_KEYSPEC_DEFAULT 0

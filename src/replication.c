@@ -2725,7 +2725,6 @@ sds replicationSendAuth(connection *conn) {
 robj *generateSelectCommand(int dictid) {
     /* For a few DBs we have pre-computed SELECT command. */
     if (dictid >= 0 && dictid < PROTO_SHARED_SELECT_CMDS) {
-        incrRefCount(shared.select[dictid]);
         return shared.select[dictid];
     }
     char llstr[LONG_STR_SIZE];

@@ -127,7 +127,6 @@ void clearCachedClusterSlotsResponse(void);
 unsigned int countKeysInSlotForDb(unsigned int hashslot, serverDb *db);
 unsigned int countKeysInSlot(unsigned int hashslot);
 int getSlotOrReply(client *c, robj *o);
-int getSlotOrError(robj *o, sds *err);
 int getNodeDefaultReplicationPort(clusterNode *node);
 
 /* functions with shared implementations */

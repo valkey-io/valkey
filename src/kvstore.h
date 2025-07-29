@@ -26,7 +26,7 @@ unsigned long long kvstoreScan(kvstore *kvs,
                                kvstoreHashtablePredicate *skip_cb,
                                void *privdata);
 int kvstoreExpand(kvstore *kvs, uint64_t newsize, int try_expand, kvstoreExpandShouldSkipHashtableIndex *skip_cb);
-int kvstoreGetFairRandomHashtableIndex(kvstore *kvs, kvstoreHashtablePredicate *predicate);
+int kvstoreGetFairRandomHashtableIndex(kvstore *kvs);
 void kvstoreGetStats(kvstore *kvs, char *buf, size_t bufsize, int full);
 
 int kvstoreFindHashtableIndexByKeyIndex(kvstore *kvs, unsigned long target);
@@ -65,6 +65,7 @@ int kvstoreHashtableRandomEntry(kvstore *kvs, int didx, void **found);
 int kvstoreHashtableFairRandomEntry(kvstore *kvs, int didx, void **found);
 unsigned int kvstoreHashtableSampleEntries(kvstore *kvs, int didx, void **dst, unsigned int count);
 int kvstoreHashtableExpand(kvstore *kvs, int didx, unsigned long size);
+void kvstoreSetIsImporting(kvstore *kvs, int didx, int is_importing);
 unsigned long kvstoreHashtableScanDefrag(kvstore *kvs,
                                          int didx,
                                          unsigned long v,

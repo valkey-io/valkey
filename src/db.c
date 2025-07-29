@@ -440,7 +440,7 @@ robj *dbRandomKey(serverDb *db) {
 
     while (1) {
         void *entry;
-        int randomDictIndex = kvstoreGetFairRandomHashtableIndex(db->keys, getOwnedSlotsHashtablePredicate());
+        int randomDictIndex = kvstoreGetFairRandomHashtableIndex(db->keys);
         if (randomDictIndex == -1) return NULL;
         int ok = kvstoreHashtableFairRandomEntry(db->keys, randomDictIndex, &entry);
         if (!ok) return NULL;
@@ -914,10 +914,8 @@ void keysCommand(client *c) {
     kvstoreIterator *kvs_it = NULL;
     if (pslot != -1) {
         kvs_di = kvstoreGetHashtableIterator(c->db->keys, pslot, HASHTABLE_ITER_SAFE);
-    } else if (!server.cluster_enabled || !clusterIsAnySlotImporting()) {
-        kvs_it = kvstoreIteratorInit(c->db->keys, HASHTABLE_ITER_SAFE);
     } else {
-        kvs_it = kvstoreFilteredIteratorInit(c->db->keys, HASHTABLE_ITER_SAFE, getOwnedSlotsHashtablePredicate(), NULL);
+        kvs_it = kvstoreIteratorInit(c->db->keys, HASHTABLE_ITER_SAFE);
     }
     void *next;
     while (kvs_di ? kvstoreHashtableIteratorNext(kvs_di, &next) : kvstoreIteratorNext(kvs_it, &next)) {
@@ -1107,25 +1105,6 @@ char *getObjectTypeName(robj *o) {
     }
 }
 
-/* Predicate that will exclude any importing slots from hashtable operations. */
-int excludeImportingSlotsPredicate(int didx, hashtable *ht, void *privdata) {
-    UNUSED(ht);
-    UNUSED(privdata);
-    return !server.cluster_enabled || !clusterIsSlotImporting(didx);
-}
-
-/* Return a predicate that will filter hashtables to to only owned slots.
- * If cluster mode is not enabled or all hashtables are owned slots, then this
- * function returns NULL. A NULL predicate is preferred over a predicate that
- * returns true for all hashtables, as it allows functions to optimize for the
- * unfiltered case. */
-kvstoreHashtablePredicate *getOwnedSlotsHashtablePredicate(void) {
-    if (server.cluster_enabled && clusterIsAnySlotImporting()) {
-        return excludeImportingSlotsPredicate;
-    }
-    return NULL;
-}
-
 /* This command implements SCAN, HSCAN and SSCAN commands.
  * If object 'o' is passed, then it must be a Hash, Set or Zset object, otherwise
  * if 'o' is NULL the command will operate on the dictionary associated with
@@ -1275,7 +1254,7 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {
             /* In cluster mode there is a separate dictionary for each slot.
              * If cursor is empty, we should try exploring next non-empty slot. */
             if (o == NULL) {
-                cursor = kvstoreScan(c->db->keys, cursor, onlydidx, keysScanCallback, getOwnedSlotsHashtablePredicate(), &data);
+                cursor = kvstoreScan(c->db->keys, cursor, onlydidx, keysScanCallback, NULL, &data);
             } else {
                 cursor = hashtableScan(ht, cursor, hashtableScanCallback, &data);
             }
@@ -2160,7 +2139,7 @@ unsigned long long dbSize(serverDb *db) {
 }
 
 unsigned long long dbScan(serverDb *db, unsigned long long cursor, hashtableScanFunction scan_cb, void *privdata) {
-    return kvstoreScan(db->keys, cursor, -1, scan_cb, getOwnedSlotsHashtablePredicate(), privdata);
+    return kvstoreScan(db->keys, cursor, -1, scan_cb, NULL, privdata);
 }
 
 /* -----------------------------------------------------------------------------

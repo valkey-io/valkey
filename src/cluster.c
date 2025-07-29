@@ -1282,7 +1282,7 @@ after_checking_each_key:
      * is serving, we can reply without redirection. */
     int is_write_command =
         (cmd_flags & CMD_WRITE) || (c->cmd->proc == execCommand && (c->mstate->cmd_flags & CMD_WRITE));
-    if (((c->flag.readonly) || pubsubshard_included) && !is_write_command && clusterNodeIsReplica(myself) &&
+    if ((c->flag.readonly || pubsubshard_included) && !is_write_command && clusterNodeIsReplica(myself) &&
         clusterNodeGetPrimary(myself) == n) {
         return myself;
     }

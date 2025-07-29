@@ -45,6 +45,7 @@
 #include "zmalloc.h"
 #include "kvstore.h"
 #include "serverassert.h"
+#include "dict.h"
 #include "monotonic.h"
 
 #define UNUSED(V) ((void)V)
@@ -67,6 +68,7 @@ struct _kvstore {
                                                * given hashtable-index. */
     size_t overhead_hashtable_lut;            /* Overhead of all hashtables in bytes. */
     size_t overhead_hashtable_rehashing;      /* Overhead of hash tables rehashing in bytes. */
+    dict *importing;                          /* The set of hashtable indexes that are being imported */
 };
 
 /* Structure for kvstore iterator that allows iterating across multiple hashtables. */
@@ -91,6 +93,25 @@ typedef struct {
     listNode *rehashing_node; /* list node in rehashing list */
     kvstore *kvs;
 } kvstoreHashtableMetadata;
+
+/**********************************/
+/*** Static Helpers ***************/
+/**********************************/
+
+/* A dict type for just storing integers as keys, without values. */
+static uint64_t dictIntHash(const void *key) {
+    /* We hash the pointer value itself. */
+    return dictGenHashFunction(&key, sizeof(key));
+}
+
+static int dictIntCompare(const void *key1, const void *key2) {
+    return key1 == key2;
+}
+
+static dictType kvstoreImportingDictType = {
+    .hashFunction = dictIntHash,
+    .keyCompare = dictIntCompare,
+};
 
 /**********************************/
 /*** Helpers **********************/
@@ -140,10 +161,19 @@ static int getAndClearHashtableIndexFromCursor(kvstore *kvs, unsigned long long 
     return didx;
 }
 
+int kvstoreIsImporting(kvstore *kvs, int didx) {
+    assert(didx < kvs->num_hashtables);
+    return dictFind(kvs->importing, (void *)(long)didx) != NULL;
+}
+
 /* Updates binary index tree (also known as Fenwick tree), increasing key count for a given hashtable.
  * You can read more about this data structure here https://en.wikipedia.org/wiki/Fenwick_tree
  * Time complexity is O(log(kvs->num_hashtables)). */
 static void cumulativeKeyCountAdd(kvstore *kvs, int didx, long delta) {
+    /* Fast return for importing dictionaries, which will be accumulated in
+     * metrics once we are done importing. */
+    if (kvstoreIsImporting(kvs, didx)) return;
+
     kvs->key_count += delta;
 
     hashtable *ht = kvstoreGetHashtable(kvs, didx);
@@ -296,6 +326,7 @@ kvstore *kvstoreCreate(hashtableType *type, int num_hashtables_bits, int flags) 
     kvs->num_hashtables_bits = num_hashtables_bits;
     kvs->num_hashtables = 1 << kvs->num_hashtables_bits;
     kvs->hashtables = zcalloc(sizeof(hashtable *) * kvs->num_hashtables);
+    kvs->importing = dictCreate(&kvstoreImportingDictType);
     kvs->rehashing = listCreate();
     kvs->hashtable_size_index = kvs->num_hashtables > 1 ? zcalloc(sizeof(unsigned long long) * (kvs->num_hashtables + 1)) : NULL;
     if (!(kvs->flags & KVSTORE_ALLOCATE_HASHTABLES_ON_DEMAND)) {
@@ -315,7 +346,7 @@ void kvstoreEmpty(kvstore *kvs, void(callback)(hashtable *)) {
         freeHashtableIfNeeded(kvs, didx);
     }
 
-    kvs->resize_cursor = 0;
+    dictEmpty(kvs->importing, NULL);
 
     listEmpty(kvs->rehashing);
 
@@ -337,6 +368,7 @@ void kvstoreRelease(kvstore *kvs) {
     }
     assert(kvs->overhead_hashtable_lut == 0);
     zfree(kvs->hashtables);
+    dictRelease(kvs->importing);
 
     listRelease(kvs->rehashing);
     if (kvs->hashtable_size_index) zfree(kvs->hashtable_size_index);
@@ -413,7 +445,7 @@ unsigned long long kvstoreScan(kvstore *kvs,
 
     hashtable *ht = kvstoreGetHashtable(kvs, didx);
 
-    int skip = !ht || (predicate && !predicate(didx, ht, privdata));
+    int skip = !ht || (predicate && !predicate(didx, ht, privdata)) || kvstoreIsImporting(kvs, didx);
     if (!skip) {
         next_cursor = hashtableScan(ht, cursor, scan_cb, privdata);
         /* In hashtableScan, scan_cb may delete entries (e.g., in active expire case). */
@@ -457,55 +489,15 @@ int kvstoreExpand(kvstore *kvs, uint64_t newsize, int try_expand, kvstoreExpandS
     return 1;
 }
 
-/* Get the index of a key (1 indexed) within the kvstore, excluding any hashtables filtered by
- * predicate. If no such key exists, return 0. */
-unsigned long kvstoreGetRandomKeyIndex(kvstore *kvs, kvstoreHashtablePredicate *predicate) {
-    if (!predicate) {
-        return kvstoreSize(kvs) ? random() % kvstoreSize(kvs) + 1 : 0;
-    }
-
-    /* Get the size of all non-filtered hashtables */
-    unsigned long long non_filtered_count = 0;
-    for (int i = 0; i < kvs->num_hashtables; i++) {
-        hashtable *ht = kvstoreGetHashtable(kvs, i);
-        if (ht && predicate(i, ht, NULL)) {
-            non_filtered_count += hashtableSize(ht);
-        }
-    }
-    if (non_filtered_count == 0) return 0;
-
-    /* We compute a random index, excluding filtered hashtables. We can then convert this back by
-     * iterating over the hashtables and adding back all skipped hashtables until we arrive at the
-     * logical index chosen here. */
-    unsigned long long logical_index = random() % non_filtered_count;
-    unsigned long long actual_index = 0;
-    for (int i = 0; i < kvs->num_hashtables; i++) {
-        hashtable *ht = kvstoreGetHashtable(kvs, i);
-        if (!ht) continue;
-
-        if (!predicate(i, ht, NULL)) {
-            actual_index += hashtableSize(ht);
-            continue;
-        }
-        unsigned long long to_add = logical_index < hashtableSize(ht) ? logical_index : hashtableSize(ht);
-        actual_index += to_add;
-        logical_index -= to_add;
-        if (logical_index == 0) break;
-    }
-    return actual_index + 1;
-}
-
 /* Returns fair random hashtable index, probability of each hashtable being
  * returned is proportional to the number of elements that hash table holds.
  * This function guarantees that it returns a hashtable-index of a non-empty
  * hashtable, unless the entire kvstore is empty. Time complexity of this
  * function is O(log(kvs->num_hashtables)).
  *
- * If all hashtables are empty, this function returns -1.
- *
- * An optional predicate can be provided, ensuring the hashtables would be skipped. */
-int kvstoreGetFairRandomHashtableIndex(kvstore *kvs, kvstoreHashtablePredicate *predicate) {
-    unsigned long target = kvstoreGetRandomKeyIndex(kvs, predicate);
+ * Note that importing hashtables are excluded from random hashtable lookups. */
+int kvstoreGetFairRandomHashtableIndex(kvstore *kvs) {
+    unsigned long target = kvstoreSize(kvs) ? (random() % kvstoreSize(kvs)) + 1 : 0;
     return kvstoreFindHashtableIndexByKeyIndex(kvs, target);
 }
 
@@ -634,7 +626,10 @@ kvstoreIterator *kvstoreIteratorInit(kvstore *kvs, uint8_t flags) {
     return kvstoreFilteredIteratorInit(kvs, flags, NULL, NULL);
 }
 
-/* Returns kvstore iterator that filters out hash tables based on the predicate.*/
+/* Returns kvstore iterator that filters out hash tables based on the predicate.
+ *
+ * Note that importing keys will be excluded from iteration regardless of
+ * predicate. */
 kvstoreIterator *kvstoreFilteredIteratorInit(kvstore *kvs, uint8_t flags, kvstoreHashtablePredicate *predicate, void *privdata) {
     kvstoreIterator *kvs_it = zmalloc(sizeof(*kvs_it));
     kvs_it->kvs = kvs;
@@ -923,4 +918,27 @@ int kvstoreHashtableDelete(kvstore *kvs, int didx, const void *key) {
         freeHashtableIfNeeded(kvs, didx);
     }
     return ret;
+}
+
+/* kvstoreSetIsImporting sets a hashtable as importing. Importing hashtables
+ * are not included in hashtable metrics and are excluded from scanning and
+ * random key lookup. */
+void kvstoreSetIsImporting(kvstore *kvs, int didx, int is_importing) {
+    assert(didx < kvs->num_hashtables);
+
+    hashtable *ht = kvstoreGetHashtable(kvs, didx);
+
+    if (is_importing) {
+        /* Importing should only be marked on empty hashtables */
+        assert(!ht || hashtableSize(ht) == 0);
+        dictAdd(kvs->importing, (void *)(long)didx, NULL);
+        return;
+    }
+
+    dictDelete(kvs->importing, (void *)(long)didx);
+    /* Once we mark a hashtable as not importing, we need to begin tracking in
+     * the kvstore metadata */
+    if (ht && hashtableSize(ht) != 0) {
+        cumulativeKeyCountAdd(kvs, didx, hashtableSize(ht));
+    }
 }

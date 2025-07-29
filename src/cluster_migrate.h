@@ -70,6 +70,7 @@ int clusterIsSlotImporting(int slot);
 int clusterIsSlotExporting(int slot);
 int clusterIsAnySlotImporting(void);
 int clusterIsAnySlotExporting(void);
+void clusterMarkImportingSlotsInDb(serverDb *db);
 int clusterSlotMigrationShouldInstallWriteHandler(client *c);
 void initClusterSlotMigrationLinkList(void);
 void clusterSlotMigrationCron(void);

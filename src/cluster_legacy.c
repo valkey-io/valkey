@@ -6377,24 +6377,13 @@ const char *clusterGetMessageTypeString(int type) {
     return "unknown";
 }
 
-int getSlotOrError(robj *o, sds *err_out) {
-    long long slot;
-
-    if (getLongLongFromObject(o, &slot) != C_OK || slot < 0 || slot >= CLUSTER_SLOTS) {
-        *err_out = sdsnew("Invalid or out of range slot");
-        return -1;
-    }
-
-    return (int)slot;
-}
-
 /* Get the slot from robj and return it. If the slot is not valid,
  * return -1 and send an error to the client. */
 int getSlotOrReply(client *c, robj *o) {
-    sds err = NULL;
-    int slot = getSlotOrError(o, &err);
-    if (err) {
-        addReplyErrorSds(c, err);
+    long long slot;
+
+    if (getLongLongFromObject(o, &slot) != C_OK || slot < 0 || slot >= CLUSTER_SLOTS) {
+        addReplyError(c, "Invalid or out of range slot");
         return -1;
     }
     return (int)slot;
@@ -7300,8 +7289,13 @@ int clusterCommandSpecial(client *c) {
             serverLog(LL_NOTICE, "Stop replication and turning myself into empty primary (request from '%s').", client);
             sdsfree(client);
             clusterSetNodeAsPrimary(myself);
+
+            /* Flush the data before promoting myself, since promotion will try
+             * to delete data in unowned slots, and we know all data will be
+             * removed anyways. */
             flushAllDataAndResetRDB(server.repl_replica_lazy_flush ? EMPTYDB_ASYNC : EMPTYDB_NO_FLAGS);
             clusterPromoteSelfToPrimary();
+
             clusterCloseAllSlots();
             resetManualFailover();
 
@@ -7559,14 +7553,9 @@ const char **clusterCommandExtendedHelp(void) {
         "LINKS",
         "    Return information about all network links between this node and its peers.",
         "    Output format is an array where each array element is a map containing attributes of a link",
-        "IMPORT SLOTSRANGE <start slot> <end slot> [<start slot> <end slot> ...]",
+        "MIGRATE SLOTSRANGE <start slot> <end slot> [<start slot> <end slot> ...] NODE <node id>",
         "    Import the specified slot ranges from their owner.",
-        "IMPORT-PREPARE SLOTSRANGE <start slot> <end slot> [<start slot> <end slot> ...]",
-        "    Begin import of the specified slot ranges from their owner, but do not takeover "
-        "    ownership until IMPORT-COMMIT is run.",
-        "IMPORT-COMMIT LINK <link-name>",
-        "    Commit a previous import started with IMPORT-PREPARE.",
-        "IMPORT-CANCEL ALL",
+        "CANCELMIGRATION (ALL | LINK <link name>)",
         "    Cancel all ongoing imports.",
         "MIGRATIONS",
         "    Get information about ongoing and recently finished slot imports and exports.",

@@ -9,6 +9,7 @@
 #include "module.h"
 #include "functions.h"
 
+static int isSlotMigrationLinkFinished(slotMigrationLink *link);
 static int isSlotMigrationLinkInProgress(slotMigrationLink *link);
 static slotMigrationLink *createSlotImportLink(client *c, clusterNode *source_node, char *linkname, list *slot_ranges);
 static void connectSlotExportLink(slotMigrationLink *link);
@@ -130,6 +131,27 @@ void delKeysNotOwnedByMyself(list *slot_ranges) {
     }
 }
 
+void setSlotImportingStateInDb(serverDb *db, list *slot_ranges, int is_importing) {
+    listNode *ln;
+    listIter li;
+    listRewind(slot_ranges, &li);
+    while ((ln = listNext(&li)) != NULL) {
+        slotRange *range = ln->value;
+        for (int slot = range->start_slot; slot <= range->end_slot; slot++) {
+            if (db == NULL) continue;
+            kvstoreSetIsImporting(db->keys, slot, is_importing);
+            kvstoreSetIsImporting(db->expires, slot, is_importing);
+        }
+    }
+}
+
+void setSlotImportingStateInAllDbs(list *slot_ranges, int is_importing) {
+    for (int i = 0; i < server.dbnum; i++) {
+        serverDb *db = server.db[i];
+        setSlotImportingStateInDb(db, slot_ranges, is_importing);
+    }
+}
+
 /* Returns if any slot has been put in IMPORTING state via SETSLOT command. */
 int isAnySlotInManualImportingState(void) {
     for (int i = 0; i < CLUSTER_SLOTS; i++) {
@@ -156,7 +178,7 @@ int isAnySlotInManualMigratingState(void) {
  *
  * Note that all slots in the slot range should belong to a sole node in the cluster topology.
  * node_out will be set to the node that owns all the slots. */
-list *parseSlotRanges(client *c, int start_index, int *end_index_out, clusterNode **node_out, sds *err_out) {
+list *parseSlotRangesOrReply(client *c, int start_index, int *end_index_out, clusterNode **node_out) {
     list *slot_ranges = createSlotRangeList();
     int startslot, endslot;
     *node_out = NULL;
@@ -168,38 +190,37 @@ list *parseSlotRanges(client *c, int start_index, int *end_index_out, clusterNod
             break;
         }
         /* Get the current slot range. */
-        if ((startslot = getSlotOrError(c->argv[i], err_out)) == -1) {
+        if ((startslot = getSlotOrReply(c, c->argv[i])) == -1) {
             listRelease(slot_ranges);
             return NULL;
         }
         if (i + 1 >= c->argc) {
-            *err_out = sdsnew("No end slot for final slot range");
+            addReplyError(c, "No end slot for final slot range");
             listRelease(slot_ranges);
             return NULL;
         }
-        if ((endslot = getSlotOrError(c->argv[i + 1], err_out)) == -1) {
+        if ((endslot = getSlotOrReply(c, c->argv[i + 1])) == -1) {
             listRelease(slot_ranges);
             return NULL;
         }
         if (startslot > endslot) {
-            *err_out = sdscatprintf(sdsempty(),
-                                    "Start slot number %d is greater than end slot number %d.",
-                                    startslot, endslot);
+            addReplyErrorFormat(c, "Start slot number %d is greater than end slot number %d.",
+                                startslot, endslot);
             listRelease(slot_ranges);
             return NULL;
         }
         /* Check if the current slot range is ready to do the slot sync. */
         for (int j = startslot; j <= endslot; j++) {
             if (server.cluster->slots[j] == NULL) {
-                *err_out = sdscatprintf(sdsempty(), "Slot %d has no node served.", j);
+                addReplyErrorFormat(c, "Slot %d has no node served.", j);
                 listRelease(slot_ranges);
                 return NULL;
             }
             if (!*node_out) {
                 *node_out = server.cluster->slots[j];
             } else if (*node_out != server.cluster->slots[j]) {
-                *err_out = sdsnew("The slot ranges are not all owned by the same node, "
-                                  "please check slots and try again.");
+                addReplyError(c, "The slot ranges are not all owned by the same node, "
+                                 "please check slots and try again.");
                 listRelease(slot_ranges);
                 return NULL;
             }
@@ -216,12 +237,11 @@ list *parseSlotRanges(client *c, int start_index, int *end_index_out, clusterNod
         while ((ln = listNext(&li)) != NULL) {
             slotRange *prev_range = ln->value;
             if (doSlotRangesOverlap(new_range, prev_range)) {
-                *err_out = sdscatprintf(sdsempty(),
-                                        "Slot range %d-%d overlaps with previous range %d-%d.",
-                                        startslot,
-                                        endslot,
-                                        prev_range->start_slot,
-                                        prev_range->end_slot);
+                addReplyErrorFormat(c, "Slot range %d-%d overlaps with previous range %d-%d.",
+                                    startslot,
+                                    endslot,
+                                    prev_range->start_slot,
+                                    prev_range->end_slot);
                 listRelease(slot_ranges);
                 zfree(new_range);
                 return NULL;
@@ -232,7 +252,7 @@ list *parseSlotRanges(client *c, int start_index, int *end_index_out, clusterNod
         listAddNodeTail(slot_ranges, new_range);
     }
     if (slot_ranges->len == 0) {
-        *err_out = sdsnew("No slot ranges specified");
+        addReplyError(c, "No slot ranges specified");
         listRelease(slot_ranges);
         return NULL;
     }
@@ -295,7 +315,7 @@ int clusterIsSlotImporting(int slot) {
     while ((ln = listNext(&li)) != NULL) {
         slotMigrationLink *link = ln->value;
         if (link->type != SLOT_MIGRATION_IMPORT) continue;
-        if (!isSlotMigrationLinkInProgress(link)) continue;
+        if (isSlotMigrationLinkFinished(link)) continue;
         if (isSlotInSlotRanges(slot, link->slot_ranges)) return 1;
     }
     return 0;
@@ -312,7 +332,6 @@ void clusterCommandSyncSlotsEstablish(client *c) {
     char *link_name = NULL;
     clusterNode *source_node = NULL;
     clusterNode *owning_node = NULL;
-    sds err = NULL;
     list *slot_ranges = NULL;
 
     if (!nodeIsPrimary(server.cluster->myself)) {
@@ -361,10 +380,8 @@ void clusterCommandSyncSlotsEstablish(client *c) {
                 goto cleanup;
             }
             /* parseSlotRanges will set i for the next iteration */
-            slot_ranges = parseSlotRanges(c, i + 1, &i, &owning_node, &err);
-            if (err) {
-                addReplyErrorSds(c, sdscatfmt(sdsempty(), "Failed to parse slot ranges on target node: %S", err));
-                sdsfree(err);
+            slot_ranges = parseSlotRangesOrReply(c, i + 1, &i, &owning_node);
+            if (slot_ranges == NULL) {
                 goto cleanup;
             }
 
@@ -521,6 +538,9 @@ slotMigrationLink *createSlotImportLink(client *c, clusterNode *source_node, cha
     initClientReplicationData(link->client);
     link->client->querybuf = sdsempty();
 
+    /* Mark all the slots as importing in the kvstore */
+    setSlotImportingStateInAllDbs(slot_ranges, 1);
+
     serverLog(LL_NOTICE,
               "New slot import link created: %s.",
               link->description);
@@ -587,7 +607,10 @@ void performSlotImportLinkFailover(slotMigrationLink *link) {
      *    and detect that we switched to master role. */
     clusterBroadcastPong(CLUSTER_BROADCAST_ALL);
 
-    /* 5) Reflect the failover in the slot migration link state */
+    /* 5) Mark all slots as stable in the kvstore (for SCAN/KEYS/RANDOMKEY) */
+    setSlotImportingStateInAllDbs(link->slot_ranges, 0);
+
+    /* 6) Reflect the failover in the slot migration link state */
     serverLog(LL_NOTICE,
               "Slot migration %s completed successfully. "
               "This node is now the owner of the slots",
@@ -602,9 +625,21 @@ int clusterIsAnySlotImporting(void) {
     while ((ln = listNext(&li)) != NULL) {
         slotMigrationLink *link = ln->value;
         if (link->type != SLOT_MIGRATION_IMPORT) continue;
-        if (isSlotMigrationLinkInProgress(link)) return 1;
+        if (!isSlotMigrationLinkFinished(link)) return 1;
     }
     return 0;
+}
+
+void clusterMarkImportingSlotsInDb(serverDb *db) {
+    listNode *ln;
+    listIter li;
+    listRewind(server.cluster->slot_migration_links, &li);
+    while ((ln = listNext(&li)) != NULL) {
+        slotMigrationLink *link = ln->value;
+        if (link->type != SLOT_MIGRATION_IMPORT) continue;
+        if (isSlotMigrationLinkFinished(link)) continue;
+        setSlotImportingStateInDb(db, link->slot_ranges, 1);
+    }
 }
 
 /* Called within topology updates to update any slot imports immediately
@@ -717,7 +752,7 @@ int clusterIsSlotExporting(int slot) {
     while ((ln = listNext(&li)) != NULL) {
         slotMigrationLink *link = ln->value;
         if (link->type != SLOT_MIGRATION_EXPORT) continue;
-        if (!isSlotMigrationLinkInProgress(link)) continue;
+        if (isSlotMigrationLinkFinished(link)) continue;
         if (isSlotInSlotRanges(slot, link->slot_ranges)) return 1;
     }
     return 0;
@@ -758,7 +793,6 @@ void clusterCommandMigrate(client *c) {
     }
 
     int curr_index = 2;
-    sds err = NULL;
     list *new_slot_migrations = listCreate();
     listSetFreeMethod(new_slot_migrations, freeSlotMigrationLink);
 
@@ -771,9 +805,8 @@ void clusterCommandMigrate(client *c) {
         curr_index++;
 
         clusterNode *source_node = NULL;
-        list *slot_ranges = parseSlotRanges(c, curr_index, &curr_index, &source_node, &err);
-        if (err != NULL) {
-            addReplyErrorSds(c, err);
+        list *slot_ranges = parseSlotRangesOrReply(c, curr_index, &curr_index, &source_node);
+        if (slot_ranges == NULL) {
             listRelease(new_slot_migrations);
             return;
         }
@@ -868,7 +901,7 @@ void clusterCommandCancelMigration(client *c) {
     listNode *ln;
     listIter li;
 
-    if (!strcasecmp(c->argv[2]->ptr, "all")) {
+    if (!strcasecmp(c->argv[2]->ptr, "all") && c->argc == 3) {
         if (!clusterIsAnySlotExporting()) {
             addReplyError(c, "No migrations ongoing");
             return;
@@ -981,7 +1014,7 @@ void performSlotExportLinkAuthentication(slotMigrationLink *link) {
     if (err) {
         serverLog(LL_NOTICE, "Failed to send AUTH command for slot migration %s: %s",
                   link->description, err);
-        status_msg = sdscatfmt(sdsempty(), "Failed to send AUTH to target node: %s", err);
+        status_msg = sdscatfmt(sdsempty(), "Failed to send AUTH to target node: %S", err);
         finishSlotMigrationLink(link, SLOT_MIGRATION_LINK_FAILED, status_msg);
         sdsfree(err);
         sdsfree(status_msg);
@@ -1233,8 +1266,6 @@ int clusterSlotMigrationShouldInstallWriteHandler(client *c) {
 /* Feed the slot export links with the given argv and argc from the replication
  * log. Slot is pre-populated using the original command that was run. */
 void clusterFeedSlotExportLinks(int dbid, robj **argv, int argc, int slot) {
-    UNUSED(dbid);
-
     if (slot == -1) {
         /* We can safely ignore any commands with no keys. This includes
          * MULTI/EXEC. This isn't a problem since the entire slot migration is
@@ -1336,7 +1367,7 @@ int clusterIsAnySlotExporting(void) {
     while ((ln = listNext(&li)) != NULL) {
         slotMigrationLink *link = ln->value;
         if (link->type != SLOT_MIGRATION_EXPORT) continue;
-        if (isSlotMigrationLinkInProgress(link)) {
+        if (!isSlotMigrationLinkFinished(link)) {
             return 1;
         }
     }
@@ -1482,6 +1513,7 @@ void proceedWithSlotMigration(slotMigrationLink *link) {
             return;
         case SLOT_IMPORT_FINISHED_WAITING_TO_CLEANUP:
             delKeysNotOwnedByMyself(link->slot_ranges);
+            setSlotImportingStateInAllDbs(link->slot_ranges, 0);
             updateSlotMigrationLinkState(link, link->post_cleanup_state);
             return;
 
@@ -1630,13 +1662,6 @@ void initClusterSlotMigrationLinkList(void) {
     listSetFreeMethod(server.cluster->slot_migration_links, freeSlotMigrationLink);
 }
 
-/* Return 1 if the given link could be cleaned from the log, or 0 if it should be kept. */
-int shouldCleanupSlotMigrationLink(slotMigrationLink *link) {
-    return (link->state == SLOT_MIGRATION_LINK_CANCELLED ||
-            link->state == SLOT_MIGRATION_LINK_FAILED ||
-            link->state == SLOT_MIGRATION_LINK_SUCCESS);
-}
-
 /* Convert a slotMigrationLinkState enum to a user presentable string. */
 const char *slotMigrationLinkStateToString(slotMigrationLinkState state) {
     switch (state) {
@@ -1745,7 +1770,7 @@ void finishSlotMigrationLink(slotMigrationLink *link, slotMigrationLinkState sta
         link->mf_end = 0;
         slotExportTryUnpause();
     }
-    if (link->type == SLOT_MIGRATION_IMPORT) {
+    if (link->type == SLOT_MIGRATION_IMPORT && link->state != SLOT_MIGRATION_LINK_SUCCESS) {
         /* Defer cleanup until beforeSleep. */
         link->post_cleanup_state = state;
         state = SLOT_IMPORT_FINISHED_WAITING_TO_CLEANUP;
@@ -1755,12 +1780,20 @@ void finishSlotMigrationLink(slotMigrationLink *link, slotMigrationLinkState sta
     resetSlotMigrationLink(link);
 }
 
-/* In progress may be different than terminated, if we still need to track some cleanup work. */
+/* Finished means we are completely done with all work and this entry is just
+ * a log for tracking purposes. */
+int isSlotMigrationLinkFinished(slotMigrationLink *link) {
+    return link->state == SLOT_MIGRATION_LINK_SUCCESS ||
+           link->state == SLOT_MIGRATION_LINK_CANCELLED ||
+           link->state == SLOT_MIGRATION_LINK_FAILED;
+}
+
+/* In progress means we are still trying to perform the migration. It is
+ * possible that we are not trying to perform the migration, but we are not
+ * finished yet, e.g. if we are still pending cleanup. */
 int isSlotMigrationLinkInProgress(slotMigrationLink *link) {
     return link->state != SLOT_IMPORT_FINISHED_WAITING_TO_CLEANUP &&
-           link->state != SLOT_MIGRATION_LINK_SUCCESS &&
-           link->state != SLOT_MIGRATION_LINK_CANCELLED &&
-           link->state != SLOT_MIGRATION_LINK_FAILED;
+           !isSlotMigrationLinkFinished(link);
 }
 
 /* Since slotMigrationLink is stored as void* in the client object, this allows
@@ -1824,7 +1857,7 @@ void clusterCleanupSlotMigrationLog(void) {
     while (server.cluster->slot_migration_links->len > server.cluster_slot_migration_log_max_len &&
            (ln = listNext(&li)) != NULL) {
         slotMigrationLink *link = ln->value;
-        if (shouldCleanupSlotMigrationLink(link)) {
+        if (isSlotMigrationLinkFinished(link)) {
             listDelNode(server.cluster->slot_migration_links, ln);
         }
     }

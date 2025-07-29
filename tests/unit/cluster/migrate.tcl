@@ -1689,6 +1689,34 @@ start_cluster 3 0 {tags {external:skip cluster}} {
     set node1_id [R 1 CLUSTER MYID]
     set node2_id [R 2 CLUSTER MYID]
 
+    set 16383_slot_tag "{6ZJ}"
+
+    test "Migration with no replicas" {
+        set_debug_prevent_pause 1
+
+        # Load data before the snapshot
+        populate 333 "$16383_slot_tag:1:" 1000 -2
+
+        # Load data while the snapshot is ongoing
+        assert_match "OK" [R 2 CLUSTER MIGRATE SLOTSRANGE 16383 16383 NODE $node0_id]
+        set linkname [get_link_name 2 16383]
+        populate 333 "$16383_slot_tag:2:" 1000 -2
+
+        # Load data after the snapshot
+        wait_for_migration_field 2 $linkname state waiting-to-pause
+        populate 334 "$16383_slot_tag:3:" 1000 -2
+
+        # Allow migration to complete and verify
+        set_debug_prevent_pause 0
+        wait_for_migration 0 16383
+        assert_match "1000" [R 0 CLUSTER COUNTKEYSINSLOT 16383]
+        assert_match "0" [R 2 CLUSTER COUNTKEYSINSLOT 16383]
+
+        # Cleanup
+        assert_match "OK" [R 0 FLUSHALL SYNC]
+        assert_match "OK" [R 0 CLUSTER MIGRATE SLOTSRANGE 16383 16383 NODE $node2_id]
+    }
+
     test "Migration cannot connect to target" {
         # Shutdown to prevent connection success
         catch {R 2 shutdown nosave}

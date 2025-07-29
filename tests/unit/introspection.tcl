@@ -192,7 +192,7 @@ start_server {tags {"introspection"}} {
         $c3 multi
 
         # Wait 1 second to ensure idle time
-        after 1000  ;
+        after 1000
 
         # Fetch the client list filtered by name and flags
         set cl [split [r client list name client1 flags N] "\r\n"]
@@ -365,7 +365,7 @@ start_server {tags {"introspection"}} {
         $c2 client setname client2
 
         # Wait 1 second to ensure idle time
-        after 1000 ;# Wait 1 second
+        after 1000
 
         # Kill the client with name and idle time filters
         r client kill name client1 idle 1
@@ -447,7 +447,7 @@ start_server {tags {"introspection"}} {
         $c3 multi
 
         # Wait 1 second to ensure idle time
-        after 1000  ;
+        after 1000
 
         # Fetch the client list filtered by name and not-flags
         set cl [split [r client list name client1 not-flags x] "\r\n"]
@@ -512,9 +512,9 @@ start_server {tags {"introspection"}} {
         assert_error "*I/O error*" {$c1 ping}
         catch {$c1 close}
 
-        set cl [r client list]
-        assert_match "*name=client-normal*" $cl
-        assert_no_match "*name=killme-not-ip*" $cl
+        set list_reply [r client list]
+        assert_match "*name=client-normal*" $list_reply
+        assert_no_match "*name=killme-not-ip*" $list_reply
     }
 
     test {CLIENT KILL with NOT-CAPA filter} {
@@ -611,7 +611,7 @@ start_server {tags {"introspection"}} {
         catch {$c2 close}
     }
 
-    test {CLIENT KILL with multiple negative filters including idle time} {
+    test {CLIENT KILL with both positive and negative filters including idle time} {
         # Create two clients
         set c1 [valkey_client]
         set c2 [valkey_client]
@@ -619,10 +619,10 @@ start_server {tags {"introspection"}} {
         $c2 client setname client2
 
         # Wait 1 second to ensure idle time
-        after 1000 ;# Wait 1 second
+        after 1000
 
-        # Kill the client with not-name and not-idle filters
-        r client kill not-name client2 not-idle 10
+        # Kill the client with not-name and idle filters
+        r client kill not-name client2 idle 1
 
         # Assert client1 was killed
         set err1 [catch {$c1 ping} error_message1]
@@ -662,10 +662,6 @@ start_server {tags {"introspection"}} {
         assert_error "ERR Unknown client type*" {r client list not-type wrong_type}
 
         assert_error "ERR No such user*" {r client list not-user wrong_user}
-
-        assert_error "ERR *not an integer or out of range*" {r client list not-maxage str}
-        assert_error "ERR *not an integer or out of range*" {r client list not-maxage 9999999999999999999}
-        assert_error "ERR *greater than 0*" {r client list not-maxage -1}
     }
 
     proc get_field_in_client_info {info field} {
@@ -1658,7 +1654,8 @@ start_server {tags {"introspection"}} {
         r client kill not-db 0
 
         assert {[string match "*db=2*" [r client list]] == 0}
-    } {} {external:skip}
+        catch {$c1 close}
+    } {0} {external:skip}
 
     test {CLIENT KILL can filter by NOT-LIB-NAME} {
         set c1 [valkey_client]

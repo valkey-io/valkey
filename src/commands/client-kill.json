@@ -42,7 +42,7 @@
             ],
             [
                 "9.0.0",
-                "Added filters NAME, IDLE, FLAGS, LIB-NAME, LIB-VER, DB, CAPA, and IP. And negative filters NOT-ID, NOT-MAXAGE, NOT-TYPE, NOT-ADDR, NOT-LADDR, NOT-USER, NOT-IDLE, NOT-FLAGS, NOT-NAME, NOT-LIB-NAME, NOT-LIB-VER, NOT-DB, NOT-CAPA, NOT-IP."
+                "Added filters NAME, IDLE, FLAGS, LIB-NAME, LIB-VER, DB, CAPA, and IP. And negative filters NOT-ID, NOT-TYPE, NOT-ADDR, NOT-LADDR, NOT-USER, NOT-FLAGS, NOT-NAME, NOT-LIB-NAME, NOT-LIB-VER, NOT-DB, NOT-CAPA, NOT-IP."
             ]
         ],
         "command_flags": [
@@ -294,23 +294,9 @@
                                 "since": "9.0.0"
                             },
                             {
-                                "token": "NOT-MAXAGE",
-                                "name": "not-maxage",
-                                "type": "integer",
-                                "optional": true,
-                                "since": "9.0.0"
-                            },
-                            {
                                 "token": "NOT-NAME",
                                 "name": "not-name",
                                 "type": "string",
-                                "optional": true,
-                                "since": "9.0.0"
-                            },
-                            {
-                                "token": "NOT-IDLE",
-                                "name": "not-idle",
-                                "type": "integer",
                                 "optional": true,
                                 "since": "9.0.0"
                             },

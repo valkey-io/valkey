@@ -57,7 +57,6 @@ typedef struct {
      * Connections younger than this value will not match.
      * A value of 0 means no age filtering. */
     long long max_age;
-    long long not_max_age;
     /* Address/port of the client. If NULL, no address filtering is applied. */
     char *addr;
     char *not_addr;
@@ -79,7 +78,6 @@ typedef struct {
      * Connections with idle time more than this value will match.
      * A value of 0 means no idle time filtering. */
     long long idle;
-    long long not_idle;
     /* Client flags for filtering. If NULL, no filtering is applied. */
     sds flags;
     sds not_flags;
@@ -4217,19 +4215,6 @@ static int parseClientFiltersOrReply(client *c, int index, clientFilter *filter)
 
             filter->max_age = maxage;
             index += 2;
-        } else if (!strcasecmp(c->argv[index]->ptr, "not-maxage") && moreargs) {
-            long long not_maxage;
-
-            if (getLongLongFromObjectOrReply(c, c->argv[index + 1], &not_maxage,
-                                             "not-maxage is not an integer or out of range") != C_OK)
-                return C_ERR;
-            if (not_maxage <= 0) {
-                addReplyError(c, "not-maxage should be greater than 0");
-                return C_ERR;
-            }
-
-            filter->not_max_age = not_maxage;
-            index += 2;
         } else if (!strcasecmp(c->argv[index]->ptr, "type") && moreargs) {
             filter->type = getClientTypeByName(c->argv[index + 1]->ptr);
             if (filter->type == -1) {
@@ -4292,19 +4277,6 @@ static int parseClientFiltersOrReply(client *c, int index, clientFilter *filter)
             }
 
             filter->idle = idle_time;
-            index += 2;
-        } else if (!strcasecmp(c->argv[index]->ptr, "not-idle") && moreargs) {
-            long long not_idle_time;
-
-            if (getLongLongFromObjectOrReply(c, c->argv[index + 1], &not_idle_time,
-                                             "not-idle is not an integer or out of range") != C_OK)
-                return C_ERR;
-            if (not_idle_time <= 0) {
-                addReplyError(c, "idle should be greater than 0");
-                return C_ERR;
-            }
-
-            filter->not_idle = not_idle_time;
             index += 2;
         } else if (!strcasecmp(c->argv[index]->ptr, "flags") && moreargs) {
             filter->flags = sdsnew(c->argv[index + 1]->ptr);
@@ -4467,8 +4439,6 @@ static int clientMatchesFilter(client *client, clientFilter *client_filter) {
     if (client_filter->not_type != -1 && getClientType(client) == client_filter->not_type) return 0;
     if (client_filter->not_ids && intsetFind(client_filter->not_ids, client->id)) return 0;
     if (client_filter->not_user && client->user == client_filter->not_user) return 0;
-    if (client_filter->not_max_age != 0 && (long long)(commandTimeSnapshot() / 1000 - client->ctime) >= client_filter->not_max_age) return 0;
-    if (client_filter->not_idle != 0 && (long long)(commandTimeSnapshot() / 1000 - client->last_interaction) >= client_filter->not_idle) return 0;
     if (client_filter->not_flags && clientMatchesFlagFilter(client, client_filter->not_flags) != 0) return 0;
     if (client_filter->not_name) {
         if (client->name && client->name->ptr && strcmp(client->name->ptr, client_filter->not_name) == 0) {

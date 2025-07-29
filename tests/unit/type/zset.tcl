@@ -2465,6 +2465,7 @@ start_server {tags {"zset"}} {
 
     test "ZRANDMEMBER count max-rand-count config is handled correctly" {
         r zadd testzset 1 a 2 b
+        set orig_max_rand_count [lindex [r config get max-rand-count] 1]
         r config set max-rand-count 10
 
         assert_error {*value is out of range*} {r zrandmember testzset 11}
@@ -2483,6 +2484,8 @@ start_server {tags {"zset"}} {
 
         set res [r zrandmember testzset -10]
         assert_equal [llength $res] 10
+
+        r config set max-rand-count $orig_max_rand_count
     }
 
     # Make sure we can distinguish between an empty array and a null response

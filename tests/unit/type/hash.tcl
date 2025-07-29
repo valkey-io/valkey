@@ -80,6 +80,7 @@ start_server {tags {"hash"}} {
     
     test "HRANDFIELD count max-rand-count config is handled correctly" {
         r hmset testhash a 1 b 2
+        set orig_max_rand_count [lindex [r config get max-rand-count] 1]
         r config set max-rand-count 10
 
         assert_error {*value is out of range*} {r hrandfield testhash 11}
@@ -98,6 +99,8 @@ start_server {tags {"hash"}} {
 
         set res [r hrandfield testhash -10]
         assert_equal [llength $res] 10
+
+        r config set max-rand-count $orig_max_rand_count
     }
 
     test "HRANDFIELD with <count> against non existing key" {

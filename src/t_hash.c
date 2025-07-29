@@ -1324,7 +1324,8 @@ void hrandfieldCommand(client *c) {
         if (c->argc > 4 || (c->argc == 4 && strcasecmp(c->argv[3]->ptr, "withvalues"))) {
             addReplyErrorObject(c, shared.syntaxerr);
             return;
-        } else if (c->argc == 4) withvalues = 1;
+        } else if (c->argc == 4)
+            withvalues = 1;
         hrandfieldWithCountCommand(c, l, withvalues);
         return;
     }

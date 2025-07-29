@@ -4253,7 +4253,8 @@ void zrandmemberCommand(client *c) {
         if (c->argc > 4 || (c->argc == 4 && strcasecmp(c->argv[3]->ptr, "withscores"))) {
             addReplyErrorObject(c, shared.syntaxerr);
             return;
-        } else if (c->argc == 4) withscores = 1;
+        } else if (c->argc == 4)
+            withscores = 1;
         zrandmemberWithCountCommand(c, l, withscores);
         return;
     }

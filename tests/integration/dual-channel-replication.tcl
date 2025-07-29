@@ -1298,10 +1298,11 @@ start_server {tags {"dual-channel-replication external:skip"}} {
         set replica_host [srv 0 host]
         set replica_port [srv 0 port]
         set replica_log [srv 0 stdout]
-        
+
         $replica config set dual-channel-replication-enabled yes
         $replica config set loglevel debug
         $replica config set repl-diskless-load flush-before-load
+        $replica config set loading-process-events-interval-bytes 1024
 
         if {$::valgrind} {
             $primary config set repl-timeout 100

@@ -156,9 +156,9 @@ static inline int isExpiryTableValidForSamplingCb(hashtable *ht) {
      * space is expensive, so stop here waiting for better times...
      * The dictionary will be resized asap. */
     if (buckets > 0 && (numkeys * 100 / buckets < 1)) {
-        return C_ERR;
+        return 1;
     }
-    return C_OK;
+    return 0;
 }
 
 void activeExpireCycle(int type) {

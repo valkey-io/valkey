@@ -9032,7 +9032,7 @@ static void findBigKeys(int memkeys, unsigned memkeys_samples) {
     if (sizes) zfree(sizes);
 
     /* We're done */
-    printf("\n-------- summary -------\n\n");
+    printf("\n-------- Summary --------\n\n");
     if (force_cancel_loop) printf("[%05.2f%%] ", pct);
     printf("Sampled %llu keys in the keyspace!\n", sampled);
     printf("Total key length in bytes is %llu (avg len %.2f)\n\n", totlen, totlen ? (double)totlen / sampled : 0);
@@ -9188,7 +9188,7 @@ static void findHotKeys(void) {
     if (freqs) zfree(freqs);
 
     /* We're done */
-    printf("\n-------- summary -------\n\n");
+    printf("\n-------- Summary --------\n\n");
     if (force_cancel_loop) printf("[%05.2f%%] ", pct);
     printf("Sampled %llu keys in the keyspace!\n", sampled);
 

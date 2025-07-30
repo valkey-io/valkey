@@ -3530,15 +3530,20 @@ static void propagateNow(int dbid, robj **argv, int argc, int target, int slot) 
     serverAssert(!isPausedActions(PAUSE_ACTION_REPLICA) || server.client_pause_in_transaction ||
                  server.server_del_keys_in_slot);
 
-    if (server.aof_state != AOF_OFF && target & PROPAGATE_AOF) feedAppendOnlyFile(dbid, argv, argc);
-    if (target & PROPAGATE_REPL) {
-        if (server.primary_host == NULL && (server.repl_backlog || listLength(server.replicas) != 0)) {
-            replicationFeedReplicas(dbid, argv, argc);
-        }
-        if (server.cluster_enabled && clusterIsAnySlotExporting()) {
-            clusterFeedSlotExportLinks(dbid, argv, argc, slot);
-        }
+    int propagate_to_aof = server.aof_state != AOF_OFF && target & PROPAGATE_AOF;
+
+    /* When AOF is on, we want to propagate to replicas even when we have no
+     * replicas for the WAITAOF implementation. But otherwise, we only propagate
+     * when we have replicas. */
+    int propagate_to_repl = target & PROPAGATE_REPL;
+    if (propagate_to_repl && !propagate_to_aof) {
+        propagate_to_repl = server.primary_host == NULL && (server.repl_backlog || listLength(server.replicas) != 0);
     }
+    int propagate_to_slot_migration = target & PROPAGATE_REPL && server.cluster_enabled && clusterIsAnySlotExporting();
+
+    if (propagate_to_aof) feedAppendOnlyFile(dbid, argv, argc);
+    if (propagate_to_repl) replicationFeedReplicas(dbid, argv, argc);
+    if (propagate_to_slot_migration) clusterFeedSlotExportLinks(dbid, argv, argc, slot);
 }
 
 /* Used inside commands to schedule the propagation of additional commands

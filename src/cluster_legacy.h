@@ -435,6 +435,6 @@ typedef struct {
     uint64_t module_id;
     long long sent_bytes;
     long long received_bytes;
-} moduleTrafficEntry;
+} moduleClusterTrafficEntry;
 
 #endif // CLUSTER_LEGACY_H

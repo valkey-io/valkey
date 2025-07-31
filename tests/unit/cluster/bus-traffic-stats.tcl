@@ -91,4 +91,4 @@ test "Module cluster message traffic tracking" {
     assert {$recv_found == 1}
 }
 
-} ;# start_cluster
+}

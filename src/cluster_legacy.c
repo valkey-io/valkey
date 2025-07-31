@@ -3978,26 +3978,26 @@ void handleLinkIOError(clusterLink *link) {
 }
 
 /* Helper function to update module traffic in hashtable */
-static void updateModuleTraffic(hashtable *ht, uint64_t module_id, long long bytes, bool isSendTraffic) {
-    moduleTrafficEntry *entry;
+static void updateModuleTraffic(hashtable *ht, uint64_t module_id, long long bytes, bool is_send_traffic) {
+    moduleClusterTrafficEntry *entry;
     if (hashtableFind(ht, &module_id, (void **)&entry)) {
-        if (isSendTraffic) {
+        if (is_send_traffic) {
             entry->sent_bytes += bytes;
         } else {
             entry->received_bytes += bytes;
         }
     } else {
-        entry = zmalloc(sizeof(moduleTrafficEntry));
+        entry = zmalloc(sizeof(moduleClusterTrafficEntry));
         entry->module_id = module_id;
-        entry->sent_bytes = isSendTraffic ? bytes : 0;
-        entry->received_bytes = !isSendTraffic ? bytes : 0;
+        entry->sent_bytes = is_send_traffic ? bytes : 0;
+        entry->received_bytes = !is_send_traffic ? bytes : 0;
         hashtableAdd(ht, entry);
     }
 }
 
 /* Cleanup module traffic entries for a specific module ID */
 void clusterCleanupModuleTraffic(uint64_t module_id) {
-    moduleTrafficEntry *entry;
+    moduleClusterTrafficEntry *entry;
     if (server.cluster_bus_module_id_traffic && hashtableFind(server.cluster_bus_module_id_traffic, &module_id, (void **)&entry)) {
         hashtableDelete(server.cluster_bus_module_id_traffic, &module_id);
         zfree(entry);
@@ -4024,17 +4024,17 @@ void clusterWriteHandler(connection *conn) {
             handleLinkIOError(link);
             return;
         }
-        // Get message type to differentiate traffic
+        /* Get message type to differentiate traffic */
         uint16_t type = ntohs(msg->type) & ~CLUSTERMSG_MODIFIER_MASK;
-        // Update counters based on message type
+        /* Update counters based on message type */
         if (type == CLUSTERMSG_TYPE_PUBLISH || type == CLUSTERMSG_TYPE_PUBLISHSHARD) {
-            // This is pub/sub traffic
+            /* This is pub/sub traffic */
             server.cluster_bus_pubsub_bytes_sent += nwritten;
         } else if (type == CLUSTERMSG_TYPE_MODULE) {
-            // This is for any module-related traffic
+            /* This is for any module-related traffic */
             updateModuleTraffic(server.cluster_bus_module_id_traffic, ntohu64(msg->data.module.msg.module_id), nwritten, true);
         } else {
-            // This is admin traffic (PING, PONG, MEET, FAIL, etc.)
+            /* This is admin traffic (PING, PONG, MEET, FAIL, etc.) */
             server.cluster_bus_admin_bytes_sent += nwritten;
         }
         if (msg_offset + nwritten < msg_len) {
@@ -4187,17 +4187,17 @@ void clusterReadHandler(connection *conn) {
 
         /* Total length obtained? Process this packet. */
         if (rcvbuflen >= RCVBUF_MIN_READ_LEN && rcvbuflen == ntohl(hdr->totlen)) {
-            // Get message type to differentiate traffic
+            /* Get message type to differentiate traffic */
             uint16_t type = ntohs(hdr->type) & ~CLUSTERMSG_MODIFIER_MASK;
-            // Update counters based on message type
+            /* Update counters based on message type */
             if (type == CLUSTERMSG_TYPE_PUBLISH || type == CLUSTERMSG_TYPE_PUBLISHSHARD) {
-                // This is pub/sub traffic
+                /* This is pub/sub traffic */
                 server.cluster_bus_pubsub_bytes_received += rcvbuflen;
             } else if (type == CLUSTERMSG_TYPE_MODULE) {
-                // This is for any module-related traffic
+                /* This is for any module-related traffic */
                 updateModuleTraffic(server.cluster_bus_module_id_traffic, ntohu64(hdr->data.module.msg.module_id), rcvbuflen, false);
             } else {
-                // This is admin traffic (PING, PONG, MEET, FAIL, etc.)
+                /* This is admin traffic (PING, PONG, MEET, FAIL, etc.) */
                 server.cluster_bus_admin_bytes_received += rcvbuflen;
             }
 
@@ -6735,7 +6735,7 @@ static sds appendModuleTrafficInfo(sds info, hashtable *ht) {
 
     hashtableIterator iter;
     hashtableInitIterator(&iter, ht, 0);
-    moduleTrafficEntry *entry;
+    moduleClusterTrafficEntry *entry;
 
     while (hashtableNext(&iter, (void **)&entry)) {
         const char *module_name = NULL;

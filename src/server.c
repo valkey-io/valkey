@@ -687,7 +687,7 @@ hashtableType sdsReplyHashtableType = {
 
 /* Entry structure for module traffic tracking */
 const void *moduleTrafficGetKey(const void *entry) {
-    const moduleTrafficEntry *traffic_entry = entry;
+    const moduleClusterTrafficEntry *traffic_entry = entry;
     return &traffic_entry->module_id;
 }
 

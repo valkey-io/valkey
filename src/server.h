@@ -583,12 +583,13 @@ typedef enum {
 #define UNIT_MILLISECONDS 1
 
 /* SHUTDOWN flags */
-#define SHUTDOWN_NOFLAGS 0       /* No flags. */
-#define SHUTDOWN_SAVE (1 << 0)   /* Force SAVE on SHUTDOWN even if no save points are configured. */
-#define SHUTDOWN_NOSAVE (1 << 1) /* Don't SAVE on SHUTDOWN. */
-#define SHUTDOWN_NOW (1 << 2)    /* Don't wait for replicas to catch up. */
-#define SHUTDOWN_FORCE (1 << 3)  /* Don't let errors prevent shutdown. */
-#define SHUTDOWN_SAFE (1 << 4)   /* Shutdown only when safe. */
+#define SHUTDOWN_NOFLAGS 0         /* No flags. */
+#define SHUTDOWN_SAVE (1 << 0)     /* Force SAVE on SHUTDOWN even if no save points are configured. */
+#define SHUTDOWN_NOSAVE (1 << 1)   /* Don't SAVE on SHUTDOWN. */
+#define SHUTDOWN_NOW (1 << 2)      /* Don't wait for replicas to catch up. */
+#define SHUTDOWN_FORCE (1 << 3)    /* Don't let errors prevent shutdown. */
+#define SHUTDOWN_SAFE (1 << 4)     /* Shutdown only when safe. */
+#define SHUTDOWN_FAILOVER (1 << 5) /* Trigger failover when shutting down a primary. */
 
 /* Command call flags, see call() function */
 #define CMD_CALL_NONE 0
@@ -673,6 +674,9 @@ typedef enum {
 #define NOTIFY_ALL                                                                                            \
     (NOTIFY_GENERIC | NOTIFY_STRING | NOTIFY_LIST | NOTIFY_SET | NOTIFY_HASH | NOTIFY_ZSET | NOTIFY_EXPIRED | \
      NOTIFY_EVICTED | NOTIFY_STREAM | NOTIFY_MODULE) /* A flag */
+
+/* Period in milliseconds between successive clusterCron() executions */
+#define CLUSTER_CRON_PERIOD_MS 100
 
 /* Using the following macro you can run code inside serverCron() with the
  * specified period, specified in milliseconds.
@@ -2151,7 +2155,6 @@ struct valkeyServer {
     unsigned long cluster_blacklist_ttl;                   /* Duration in seconds that a node is denied re-entry into
                                                             * the cluster after it is forgotten with CLUSTER FORGET. */
     int cluster_slot_stats_enabled;                        /* Cluster slot usage statistics tracking enabled. */
-    int auto_failover_on_shutdown;                         /* Trigger manual failover on shutdown to primary. */
     mstime_t cluster_mf_timeout;                           /* Milliseconds to do a manual failover. */
     /* Debug config that goes along with cluster_drop_packet_filter. When set, the link is closed on packet drop. */
     uint32_t debug_cluster_close_link_on_packet_drop : 1;

@@ -1687,9 +1687,9 @@ void clientAcceptHandler(connection *conn) {
     sds username = connGetPeerUsername(conn);
     if (username != NULL) {
         user *u = ACLGetUserByName(username, sdslen(username));
-        if (u) {
-            c->user = u;
-            c->flag.authenticated = true;
+        if (u && (u->flags & USER_FLAG_ENABLED)) {
+            clientSetUser(c, u, 1);
+            moduleNotifyUserChanged(c);
             serverLog(LL_VERBOSE, "TLS: Auto-authenticated client as %s",
                       server.hide_user_data_from_log ? "*redacted*" : u->name);
         } else {

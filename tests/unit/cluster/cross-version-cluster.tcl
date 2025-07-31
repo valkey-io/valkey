@@ -9,8 +9,8 @@
 tags {external:skip needs:other-server cluster singledb} {
     test "Cross version cluster - failover" {
 
-        # Test cross version compatibility of cluster module send message API.
-        start_cluster 3 1 {tags {external:skip cluster} overrides {auto-failover-on-shutdown yes cluster-ping-interval 1000}} {
+        # Test cluster failover on shutdown is prevented when old replicas exist
+        start_cluster 3 1 {tags {external:skip cluster} overrides {cluster-ping-interval 1000}} {
             set primary [srv 0 client]
             set primary_host [srv 0 host]
             set primary_port [srv 0 port]
@@ -24,7 +24,7 @@ tags {external:skip needs:other-server cluster singledb} {
                 wait_for_cluster_state "ok"
 
                 # Make sure the primary won't do the auto-failover.
-                catch {$primary shutdown nosave}
+                catch {$primary shutdown nosave failover}
                 verify_log_message -1 "*Unable to perform auto failover on shutdown since there are legacy replicas*" 0
             }
         }

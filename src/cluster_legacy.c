@@ -72,7 +72,7 @@ int clusterNodeAddReplica(clusterNode *primary, clusterNode *replica);
 int clusterAddSlot(clusterNode *n, int slot);
 int clusterDelSlot(int slot);
 int clusterDelNodeSlots(clusterNode *node);
-int clusterMoveNodeSlots(clusterNode *from_node, clusterNode *to_node);
+void clusterMoveNodeSlots(clusterNode *from_node, clusterNode *to_node, int *slots, int *importing_slots, int *migrating_slots);
 void clusterNodeSetSlotBit(clusterNode *n, int slot);
 static void clusterSetPrimary(clusterNode *n, int closeSlots, int full_sync_required);
 void clusterHandleReplicaFailover(void);
@@ -1294,7 +1294,7 @@ void clusterInitLast(void) {
 }
 
 void clusterAutoFailoverOnShutdown(void) {
-    if (!nodeIsPrimary(myself) || !server.auto_failover_on_shutdown) return;
+    if (!nodeIsPrimary(myself)) return;
 
     /* Find the first best replica, that is, the replica with the largest offset. */
     int legacy_replica = 0;
@@ -1351,9 +1351,9 @@ void clusterAutoFailoverOnShutdown(void) {
 }
 
 /* Called when a cluster node receives SHUTDOWN. */
-void clusterHandleServerShutdown(void) {
+void clusterHandleServerShutdown(bool auto_failover) {
     /* Check if we are able to do the auto failover on shutdown. */
-    clusterAutoFailoverOnShutdown();
+    if (auto_failover) clusterAutoFailoverOnShutdown();
 
     /* The error logs have been logged in the save function if the save fails. */
     serverLog(LL_NOTICE, "Saving the cluster configuration file before exiting.");
@@ -1661,6 +1661,7 @@ clusterNode *createClusterNode(char *nodename, int flags) {
     node->replicaof = NULL;
     node->last_in_ping_gossip = 0;
     node->ping_sent = node->pong_received = 0;
+    node->outbound_link_attempt_time = 0;
     node->data_received = 0;
     node->meet_sent = 0;
     node->fail_time = 0;
@@ -1675,48 +1676,88 @@ clusterNode *createClusterNode(char *nodename, int flags) {
     node->tcp_port = 0;
     node->cport = 0;
     node->tls_port = 0;
-    node->fail_reports = listCreate();
+    node->fail_reports = raxNew();
     node->orphaned_time = 0;
     node->repl_offset = 0;
-    listSetFreeMethod(node->fail_reports, zfree);
     node->is_node_healthy = 0;
     return node;
 }
 
+/* 8 bytes mstime + 8 bytes cluster node pointer (padded with zeros on 32-bit systems). */
+#define FAILURE_REPORT_KEYLEN 16
+#define SEC_IN_MS 1000ULL
+#define CEIL_OFFSET_MS (SEC_IN_MS - 1)
+
+/* The report time is rounded up (ceiled) to the nearest second in order to bucket
+ * timestamps and keep the radix‐tree keys compact.  The resulting timestamp is stored
+ * in big‑endian format, followed by the pointer to the clusterNode. */
+static void encodeFailureReportKey(clusterNode *node, mstime_t report_time, unsigned char *buf_out) {
+    /* Round up to the next second for fewer key splits and quorum grace */
+    mstime_t bucketed_time = (report_time / SEC_IN_MS) * SEC_IN_MS + SEC_IN_MS;
+
+    /* Big endian timestamp for numeric time order in rax */
+    uint64_t big_endian_time = htonu64((uint64_t)bucketed_time);
+    memcpy(buf_out, &big_endian_time, sizeof(uint64_t));
+
+    /* Append the node pointer, plus padding if necessary */
+    writePointerWithPadding(buf_out + sizeof(uint64_t), node);
+}
+
+/* Reverses the operation of encodeFailureReportKey, reading back a timestamp
+ * and the pointer to the associated clusterNode. */
+static void decodeFailureReportKey(unsigned char *buf, mstime_t *report_time, clusterNode **node_ptr) {
+    uint64_t big_endian_time;
+    memcpy(&big_endian_time, buf, sizeof(uint64_t));
+    *report_time = (mstime_t)ntohu64(big_endian_time);
+    memcpy(node_ptr, buf + sizeof(uint64_t), sizeof(*node_ptr));
+}
+
 /* This function is called every time we get a failure report from a node.
- * The side effect is to populate the fail_reports list (or to update
- * the timestamp of an existing report).
+ * We maintain fail_reports as a radix tree keyed by bucketed timestamp
+ * (ceiled to the next second) and the sender pointer, which naturally orders
+ * entries by time.
  *
  * 'failing' is the node that is in failure state according to the
  * 'sender' node.
  *
- * The function returns 0 if it just updates a timestamp of an existing
- * failure report from the same sender. 1 is returned if a new failure
- * report is created. */
+ * The function returns 0 if it early‐exits (same sender & time bucket)
+ * or updates a timestamp of an existing failure report from the same sender.
+ * 1 is returned if a new failure report is created. */
 int clusterNodeAddFailureReport(clusterNode *failing, clusterNode *sender) {
-    list *l = failing->fail_reports;
-    listNode *ln;
-    listIter li;
-    clusterNodeFailReport *fr;
-
-    /* If a failure report from the same sender already exists, just update
-     * the timestamp. */
-    listRewind(l, &li);
+    unsigned char buf[FAILURE_REPORT_KEYLEN];
     mstime_t now = mstime();
-    while ((ln = listNext(&li)) != NULL) {
-        fr = ln->value;
-        if (fr->node == sender) {
-            fr->time = now;
-            return 0;
+    const mstime_t bucketed_time = (now / SEC_IN_MS) * SEC_IN_MS + SEC_IN_MS;
+    int is_new = 1;
+
+    /* Look for any existing entry from this sender and remove it */
+    raxIterator ri;
+    raxStart(&ri, failing->fail_reports);
+    raxSeek(&ri, "^", NULL, 0);
+    while (raxNext(&ri)) {
+        mstime_t reported_time;
+        clusterNode *reported_node;
+        decodeFailureReportKey(ri.key, &reported_time, &reported_node);
+        if (reported_node == sender) {
+            if (reported_time == bucketed_time) {
+                /* Early exit if it is the exact same sender and bucket */
+                raxStop(&ri);
+                return 0;
+            }
+
+            raxRemove(failing->fail_reports,
+                      ri.key, ri.key_len, NULL);
+            is_new = 0;
+            break;
         }
     }
+    raxStop(&ri);
 
-    /* Otherwise create a new report. */
-    fr = zmalloc(sizeof(*fr));
-    fr->node = sender;
-    fr->time = now;
-    listAddNodeTail(l, fr);
-    return 1;
+    /* Encode new key (now + sender) and store the fresh timestamp */
+    encodeFailureReportKey(sender, now, buf);
+    raxInsert(failing->fail_reports,
+              buf, sizeof(buf), NULL, NULL);
+
+    return is_new;
 }
 
 /* Remove failure reports that are too old, where too old means reasonably
@@ -1725,27 +1766,34 @@ int clusterNodeAddFailureReport(clusterNode *failing, clusterNode *sender) {
  * older than the global node timeout, so we don't just trust the number
  * of failure reports from other nodes.
  *
- * If the reporting node loses its voting right during this time, we will
- * also clear its report. */
+ * This function scans the radix tree of failure reports (keyed by bucketed
+ * timestamps plus sender pointer) for the given node and removes any entries that
+ * have expired beyond the cutoff window
+ *
+ * By expiring entries older than the global node timeout window,
+ * we guarantee only fresh votes remain. */
 void clusterNodeCleanupFailureReports(clusterNode *node) {
-    list *l = node->fail_reports;
-    if (!listLength(l)) return;
-
-    listNode *ln;
-    listIter li;
-    clusterNodeFailReport *fr;
-    mstime_t maxtime = server.cluster_node_timeout * CLUSTER_FAIL_REPORT_VALIDITY_MULT;
     mstime_t now = mstime();
+    mstime_t timeout = server.cluster_node_timeout * CLUSTER_FAIL_REPORT_VALIDITY_MULT;
+    mstime_t cutoff = now - timeout;
 
-    listRewind(l, &li);
-    while ((ln = listNext(&li)) != NULL) {
-        fr = ln->value;
-        if (now - fr->time > maxtime) {
-            listDelNode(l, ln);
-        } else if (!clusterNodeIsVotingPrimary(fr->node)) {
-            listDelNode(l, ln);
-        }
+    raxIterator ri;
+    raxStart(&ri, node->fail_reports);
+    raxSeek(&ri, "^", NULL, 0);
+
+    while (raxNext(&ri)) {
+        mstime_t reported_time;
+        clusterNode *reported_node;
+        decodeFailureReportKey(ri.key, &reported_time, &reported_node);
+        if (reported_time > cutoff) break;
+
+        int retval = raxRemove(node->fail_reports, ri.key, ri.key_len, NULL);
+        serverAssert(retval == 1);
+        /* Move directly to the next element after the tree mutation due to removal */
+        raxSeek(&ri, ">=", ri.key, ri.key_len);
     }
+
+    raxStop(&ri);
 }
 
 /* Remove the failing report for 'node' if it was previously considered
@@ -1760,25 +1808,23 @@ void clusterNodeCleanupFailureReports(clusterNode *node) {
  * The function returns 1 if the failure report was found and removed.
  * Otherwise 0 is returned. */
 int clusterNodeDelFailureReport(clusterNode *node, clusterNode *sender) {
-    list *l = node->fail_reports;
-    if (!listLength(l)) return 0;
+    raxIterator ri;
+    raxStart(&ri, node->fail_reports);
+    raxSeek(&ri, "^", NULL, 0);
 
-    listNode *ln;
-    listIter li;
-    clusterNodeFailReport *fr;
-
-    /* Search for a failure report from this sender. */
-    listRewind(l, &li);
-    while ((ln = listNext(&li)) != NULL) {
-        fr = ln->value;
-        if (fr->node == sender) break;
+    while (raxNext(&ri)) {
+        mstime_t reported_time;
+        clusterNode *reported_node;
+        decodeFailureReportKey(ri.key, &reported_time, &reported_node);
+        if (reported_node == sender) {
+            raxRemove(node->fail_reports,
+                      ri.key, ri.key_len, NULL);
+            raxStop(&ri);
+            return 1;
+        }
     }
-    if (!ln) return 0; /* No failure report from this sender. */
-
-    /* Remove the failure report. */
-    listDelNode(l, ln);
-    clusterNodeCleanupFailureReports(node);
-    return 1;
+    raxStop(&ri);
+    return 0;
 }
 
 /* Return the number of external nodes that believe 'node' is failing,
@@ -1786,7 +1832,7 @@ int clusterNodeDelFailureReport(clusterNode *node, clusterNode *sender) {
  * node as well. */
 int clusterNodeFailureReportsCount(clusterNode *node) {
     clusterNodeCleanupFailureReports(node);
-    return listLength(node->fail_reports);
+    return raxSize(node->fail_reports);
 }
 
 static int clusterNodeNameComparator(const void *node1, const void *node2) {
@@ -1859,7 +1905,7 @@ void freeClusterNode(clusterNode *n) {
     sdsfree(n->human_nodename);
     sdsfree(n->announce_client_ipv4);
     sdsfree(n->announce_client_ipv6);
-    listRelease(n->fail_reports);
+    raxFree(n->fail_reports);
     zfree(n->replicas);
     zfree(n);
 }
@@ -2734,7 +2780,7 @@ void clusterUpdateSlotsConfigWith(clusterNode *sender, uint64_t senderConfigEpoc
                     /* Update importing_slots_from to point to the sender, if it is in the
                      * same shard as the previous slot owner */
                     if (areInSameShard(sender, server.cluster->importing_slots_from[j])) {
-                        serverLog(LL_NOTICE,
+                        serverLog(LL_VERBOSE,
                                   "Failover occurred in migration source. Update importing "
                                   "source for slot %d to node %.40s (%s) in shard %.40s.",
                                   j, sender->name, sender->human_nodename, sender->shard_id);
@@ -2776,7 +2822,7 @@ void clusterUpdateSlotsConfigWith(clusterNode *sender, uint64_t senderConfigEpoc
                 (server.cluster->migrating_slots_to[j]->configEpoch < senderConfigEpoch ||
                  nodeIsReplica(server.cluster->migrating_slots_to[j])) &&
                 areInSameShard(server.cluster->migrating_slots_to[j], sender)) {
-                serverLog(LL_NOTICE,
+                serverLog(LL_VERBOSE,
                           "Failover occurred in migration target."
                           " Slot %d is now being migrated to node %.40s (%s) in shard %.40s.",
                           j, sender->name, sender->human_nodename, sender->shard_id);
@@ -3668,17 +3714,35 @@ int clusterProcessPacket(clusterLink *link) {
                             /* A failover occurred in the shard where `sender` belongs to and `sender` is
                              * no longer a primary. Update slot assignment to `sender_claimed_config_epoch`,
                              * which is the new primary in the shard. */
-                            int slots = clusterMoveNodeSlots(sender, sender_claimed_primary);
+                            int slots = 0, importing_slots = 0, migrating_slots = 0;
+                            clusterMoveNodeSlots(sender, sender_claimed_primary,
+                                                 &slots, &importing_slots, &migrating_slots);
                             /* `primary` is still a `replica` in this observer node's view;
                              * update its role and configEpoch */
                             clusterSetNodeAsPrimary(sender_claimed_primary);
                             sender_claimed_primary->configEpoch = sender_claimed_config_epoch;
-                            serverLog(LL_NOTICE,
-                                      "A failover occurred in shard %.40s; node %.40s (%s) lost %d slot(s) and"
-                                      " failed over to node %.40s (%s) with a config epoch of %llu",
-                                      sender->shard_id, sender->name, sender->human_nodename, slots,
-                                      sender_claimed_primary->name, sender_claimed_primary->human_nodename,
-                                      (unsigned long long)sender_claimed_primary->configEpoch);
+                            if (slots) {
+                                serverLog(LL_NOTICE,
+                                          "A failover occurred in shard %.40s; node %.40s (%s) lost %d slot(s) and"
+                                          " failed over to node %.40s (%s) with a config epoch of %llu",
+                                          sender->shard_id, sender->name, sender->human_nodename, slots,
+                                          sender_claimed_primary->name, sender_claimed_primary->human_nodename,
+                                          (unsigned long long)sender_claimed_primary->configEpoch);
+                            }
+                            if (importing_slots) {
+                                serverLog(LL_NOTICE,
+                                          "A failover occurred in migration source. Update importing "
+                                          "source of %d slot(s) to node %.40s (%s) in shard %.40s.",
+                                          importing_slots, sender_claimed_primary->name,
+                                          sender_claimed_primary->human_nodename, sender_claimed_primary->shard_id);
+                            }
+                            if (migrating_slots) {
+                                serverLog(LL_NOTICE,
+                                          "A failover occurred in migration target. Update migrating "
+                                          "target of %d slot(s) to node %.40s (%s) in shard %.40s.",
+                                          migrating_slots, sender_claimed_primary->name,
+                                          sender_claimed_primary->human_nodename, sender_claimed_primary->shard_id);
+                            }
                             serverAssert(sender->numslots == 0);
                         }
                     } else {
@@ -3699,7 +3763,7 @@ int clusterProcessPacket(clusterLink *link) {
                     sender->flags |= CLUSTER_NODE_REPLICA;
 
                     /* Update config and state. */
-                    clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_UPDATE_STATE);
+                    clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_UPDATE_STATE | CLUSTER_TODO_FSYNC_CONFIG);
                 }
 
                 /* Primary node changed for this replica? */
@@ -5362,10 +5426,12 @@ static int nodeExceedsHandshakeTimeout(clusterNode *node, mstime_t now) {
     return now - node->ctime > getHandshakeTimeout() ? 1 : 0;
 }
 
+#define NODE_CONNECTION_RETRIES_PER_TIMEOUT 10
+
 /* Check if the node is disconnected and re-establish the connection.
  * Also update a few stats while we are here, that can be used to make
  * better decisions in other part of the code. */
-static int clusterNodeCronHandleReconnect(clusterNode *node, mstime_t now) {
+static int clusterNodeCronHandleReconnect(clusterNode *node, mstime_t now, long long *cluster_conn_attempts) {
     /* Not interested in reconnecting the link with myself or nodes
      * for which we have no address. */
     if (node->flags & (CLUSTER_NODE_MYSELF | CLUSTER_NODE_NOADDR)) return 1;
@@ -5394,6 +5460,17 @@ static int clusterNodeCronHandleReconnect(clusterNode *node, mstime_t now) {
     }
 
     if (node->link == NULL) {
+        mstime_t reconnect_interval = server.cluster_node_timeout / 2;
+        /* Skip this outbound connection attempt when all these conditions are true:
+         *  1. No inbound link from the peer exists.
+         *  2. The back‑off window since the last try is still active
+         *  3. The node has already exceeded its retry budget for this cron cycle
+         */
+        if (!node->inbound_link && (now - node->outbound_link_attempt_time < reconnect_interval / NODE_CONNECTION_RETRIES_PER_TIMEOUT && *cluster_conn_attempts == 0)) {
+            return 1;
+        }
+        node->outbound_link_attempt_time = now;
+        (*cluster_conn_attempts)--;
         clusterLink *link = createClusterLink(node);
         link->conn = connCreate(connTypeOfCluster());
         connSetPrivateData(link->conn, link);
@@ -5439,6 +5516,22 @@ static void clusterNodeCronFreeLinkOnBufferLimitReached(clusterNode *node) {
     freeClusterLinkOnBufferLimitReached(node->inbound_link);
 }
 
+/* Compute the maximum number of connection attempts the clusterCron
+ * loop should schedule in a single cron.
+ *
+ * We want to guarantee that every node is contacted 10 times within node timeout. */
+static long long maxConnectionAttemptsPerCron(void) {
+    long long reconnect_interval = server.cluster_node_timeout / 2;
+    if (reconnect_interval <= 0)
+        return 0;
+    /* We run the cron loop every 100 ms.  To reach 100 % of the nodes
+     * within the timeout, we need: ceil(nodes * 100 / reconnect_interval) */
+    const long long min_nodes_for_coverage = dictSize(server.cluster->nodes) * CLUSTER_CRON_PERIOD_MS / reconnect_interval;
+    /* Increase the coverage budget so each node can be probed 10 times
+     * inside the timeout. */
+    return min_nodes_for_coverage * NODE_CONNECTION_RETRIES_PER_TIMEOUT;
+}
+
 /* This is executed 10 times every second */
 void clusterCron(void) {
     dictIterator *di;
@@ -5450,7 +5543,6 @@ void clusterCron(void) {
     mstime_t min_pong = 0, now = mstime();
     clusterNode *min_pong_node = NULL;
     static unsigned long long iteration = 0;
-
     iteration++; /* Number of times this function was called so far. */
 
     clusterUpdateMyselfHostname();
@@ -5459,6 +5551,7 @@ void clusterCron(void) {
     server.cluster->stats_pfail_nodes = 0;
     /* Run through some of the operations we want to do on each cluster node. */
     di = dictGetSafeIterator(server.cluster->nodes);
+    long long cluster_node_conn_attempts = maxConnectionAttemptsPerCron();
     while ((de = dictNext(di)) != NULL) {
         clusterNode *node = dictGetVal(de);
         /* We free the inbound or outboud link to the node if the link has an
@@ -5467,7 +5560,7 @@ void clusterCron(void) {
         /* The protocol is that function(s) below return non-zero if the node was
          * terminated.
          */
-        if (!server.debug_cluster_disable_reconnection && clusterNodeCronHandleReconnect(node, now)) continue;
+        if (!server.debug_cluster_disable_reconnection && clusterNodeCronHandleReconnect(node, now, &cluster_node_conn_attempts)) continue;
     }
     dictReleaseIterator(di);
 
@@ -5808,18 +5901,43 @@ int clusterDelNodeSlots(clusterNode *node) {
 /* Transfer slots from `from_node` to `to_node`.
  *
  * Iterates over all cluster slots, transferring each slot covered
- * by `from_node` to `to_node`. Counts and returns the number of
- * slots transferred. */
-int clusterMoveNodeSlots(clusterNode *from_node, clusterNode *to_node) {
-    int processed = 0;
+ * by `from_node` to `to_node`. Includes importing slots and migrating
+ * slots. This function currently only called after a failover occurs
+ * within a shard, i.e. moving slots from the old primary to the new
+ * primary. It is a special case of clusterUpdateSlotsConfigWith. */
+void clusterMoveNodeSlots(clusterNode *from_node, clusterNode *to_node, int *slots, int *importing_slots, int *migrating_slots) {
+    serverAssert(areInSameShard(from_node, to_node));
+    int processed = 0, importing_processed = 0, migrating_processed = 0;
+
     for (int j = 0; j < CLUSTER_SLOTS; j++) {
         if (clusterNodeCoversSlot(from_node, j)) {
             clusterDelSlot(j);
             clusterAddSlot(to_node, j);
             processed++;
         }
+
+        if (server.cluster->importing_slots_from[j] == from_node) {
+            serverLog(LL_VERBOSE,
+                      "Failover occurred in migration source. Update importing "
+                      "source for slot %d to node %.40s (%s) in shard %.40s.",
+                      j, to_node->name, to_node->human_nodename, to_node->shard_id);
+            server.cluster->importing_slots_from[j] = to_node;
+            importing_processed++;
+        }
+
+        if (server.cluster->migrating_slots_to[j] == from_node) {
+            serverLog(LL_VERBOSE,
+                      "Failover occurred in migration target."
+                      " Slot %d is now being migrated to node %.40s (%s) in shard %.40s.",
+                      j, to_node->name, to_node->human_nodename, to_node->shard_id);
+            server.cluster->migrating_slots_to[j] = to_node;
+            migrating_processed++;
+        }
     }
-    return processed;
+
+    if (slots) *slots = processed;
+    if (importing_slots) *importing_slots = importing_processed;
+    if (migrating_slots) *migrating_slots = migrating_processed;
 }
 
 /* Clear the migrating / importing state for all the slots.

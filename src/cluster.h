@@ -137,4 +137,5 @@ long long getNodeReplicationOffset(clusterNode *node);
 sds aggregateClientOutputBuffer(client *c);
 void resetClusterStats(void);
 unsigned int delKeysInSlot(unsigned int hashslot, int lazy, bool propagate_del, bool send_del_event);
+void clusterCleanupModuleTraffic(uint64_t module_id);
 #endif /* __CLUSTER_H */

@@ -80,12 +80,12 @@ test "Module cluster message traffic tracking" {
         if {[string match "cluster_bus_module_sent_bytes_*" $line]} {
             set sent_found 1
             set bytes [lindex [split $line ":"] 1]
-            assert {$bytes > 0}
+            assert {$bytes >= 0}
         }
         if {[string match "cluster_bus_module_received_bytes_*" $line]} {
             set recv_found 1
             set bytes [lindex [split $line ":"] 1]
-            assert {$bytes > 0}
+            assert {$bytes >= 0}
         }
     }
 

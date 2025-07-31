@@ -696,7 +696,7 @@ void moduleTrafficDestructor(void *entry) {
 }
 
 uint64_t moduleTrafficHash(const void *key) {
-    return hashtableGenHashFunction((const char *)key, sizeof(uint64_t));
+    return *(const uint64_t *)key;
 }
 
 int moduleTrafficKeyCompare(const void *key1, const void *key2) {
@@ -2287,8 +2287,7 @@ void initServerConfig(void) {
     server.cluster_bus_admin_bytes_sent = 0;
     server.cluster_bus_pubsub_bytes_received = 0;
     server.cluster_bus_pubsub_bytes_sent = 0;
-    server.cluster_bus_module_id_sent = hashtableCreate(&moduleTrafficHashtableType);
-    server.cluster_bus_module_id_received = hashtableCreate(&moduleTrafficHashtableType);
+    server.cluster_bus_module_id_traffic = hashtableCreate(&moduleTrafficHashtableType);
     server.migrate_cached_sockets = dictCreate(&migrateCacheDictType);
     server.next_client_id = 1; /* Client IDs, start from 1 .*/
     server.page_size = sysconf(_SC_PAGESIZE);

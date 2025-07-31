@@ -2141,8 +2141,7 @@ struct valkeyServer {
     unsigned long long cluster_bus_admin_bytes_received;   /* Cluster bus admin traffic received. */
     unsigned long long cluster_bus_pubsub_bytes_sent;      /* Cluster bus pubsub traffic sent. */
     unsigned long long cluster_bus_pubsub_bytes_received;  /* Cluster bus pubsub traffic received. */
-    hashtable *cluster_bus_module_id_sent;                 /* Cluster bus traffic sent for each module. */
-    hashtable *cluster_bus_module_id_received;             /* Cluster bus traffic received for each module. */
+    hashtable *cluster_bus_module_id_traffic;              /* Cluster bus traffic for each module. */
     /* Debug config that goes along with cluster_drop_packet_filter. When set, the link is closed on packet drop. */
     uint32_t debug_cluster_close_link_on_packet_drop : 1;
     /* Debug config to control the random ping. When set, we will disable the random ping in clusterCron. */

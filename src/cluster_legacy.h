@@ -433,7 +433,8 @@ struct clusterState {
 /* Struct used for storing module traffic statistics. */
 typedef struct {
     uint64_t module_id;
-    long long traffic_bytes;
+    long long sent_bytes;
+    long long received_bytes;
 } moduleTrafficEntry;
 
 #endif // CLUSTER_LEGACY_H

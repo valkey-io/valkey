@@ -12554,6 +12554,17 @@ int moduleUnload(sds name, const char **errmsg) {
     /* Fire the unloaded modules event. */
     moduleFireServerEvent(VALKEYMODULE_EVENT_MODULE_CHANGE, VALKEYMODULE_SUBEVENT_MODULE_UNLOADED, module);
 
+    /* Clean up cluster traffic entries for this module's types */
+    if (server.cluster_enabled) {
+        listIter li;
+        listNode *ln;
+        listRewind(module->types, &li);
+        while ((ln = listNext(&li))) {
+            moduleType *mt = ln->value;
+            clusterCleanupModuleTraffic(mt->id);
+        }
+    }
+
     /* Remove from list of modules. */
     serverLog(LL_NOTICE, "Module %s unloaded", module->name);
     dictDelete(modules, module->name);

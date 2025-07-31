@@ -3980,7 +3980,7 @@ void handleLinkIOError(clusterLink *link) {
 /* Helper function to update module traffic in hashtable */
 static void updateModuleTraffic(hashtable *ht, uint64_t module_id, long long bytes) {
     moduleTrafficEntry *entry;
-    if (hashtableFind(ht, &module_id, (void**)&entry)) {
+    if (hashtableFind(ht, &module_id, (void **)&entry)) {
         entry->traffic_bytes += bytes;
     } else {
         entry = zmalloc(sizeof(moduleTrafficEntry));
@@ -6718,16 +6718,16 @@ void clusterCommandShards(client *c) {
 /* Helper function to append module traffic info to cluster info string */
 static sds appendModuleTrafficInfo(sds info, hashtable *ht, const char *direction) {
     if (!ht) return info;
-    
+
     hashtableIterator iter;
     hashtableInitIterator(&iter, ht, 0);
     moduleTrafficEntry *entry;
-    
-    while (hashtableNext(&iter, (void**)&entry)) {
+
+    while (hashtableNext(&iter, (void **)&entry)) {
         info = sdscatfmt(info, "cluster_bus_module_%s_bytes_%U:%I\r\n", 
                         direction, entry->module_id, entry->traffic_bytes);
     }
-    
+
     return info;
 }
 

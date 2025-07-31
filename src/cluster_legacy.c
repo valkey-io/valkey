@@ -3990,7 +3990,7 @@ static void updateModuleTraffic(hashtable *ht, uint64_t module_id, long long byt
         entry = zmalloc(sizeof(moduleTrafficEntry));
         entry->module_id = module_id;
         entry->sent_bytes = isSendTraffic ? bytes : 0;
-        entry->received_bytes= !isSendTraffic ? bytes : 0;
+        entry->received_bytes = !isSendTraffic ? bytes : 0;
         hashtableAdd(ht, entry);
     }
 }
@@ -6740,19 +6740,19 @@ static sds appendModuleTrafficInfo(sds info, hashtable *ht) {
     while (hashtableNext(&iter, (void **)&entry)) {
         const char *module_name = NULL;
         char type_name[10];
-        
+
         /* Try to get module name from module ID */
         moduleType *mt = moduleTypeLookupModuleByID(entry->module_id);
         if (mt) {
             module_name = moduleTypeModuleName(mt);
         }
-        
+
         /* Fallback to type name if module name not available */
         if (!module_name) {
             moduleTypeNameByID(type_name, entry->module_id);
             module_name = type_name;
         }
-        
+
         info = sdscatfmt(info, "cluster_bus_module_sent_bytes_%s:%I\r\n", module_name, entry->sent_bytes);
         info = sdscatfmt(info, "cluster_bus_module_received_bytes_%s:%I\r\n", module_name, entry->received_bytes);
     }
@@ -6837,7 +6837,7 @@ sds genClusterInfoString(void) {
 
     info = sdscatfmt(info, "total_cluster_links_buffer_limit_exceeded:%U\r\n",
                      (unsigned long long)server.cluster->stat_cluster_links_buffer_limit_exceeded);
-    
+
     /* Append cluster traffic stats */
     info = sdscatfmt(info,
                      "cluster_bus_admin_bytes_sent:%U\r\n"

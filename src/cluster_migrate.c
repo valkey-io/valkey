@@ -1866,9 +1866,13 @@ int canSlotMigrationSendAck(slotMigrationLink *link) {
     /* 1. We cannot send ACK from parent process while child is snapshotting
      * 2. We don't send an ACK from the import side until the export has first
      *    sent one (thus taking us out of SLOT_IMPORT_WAIT_ACK). This simplifies
-     *    parsing of the response to CLUSTER SYNCSLOTS ESTABLISH. */
+     *    parsing of the response to CLUSTER SYNCSLOTS ESTABLISH.
+     * 3. We can't send ACK if we are still connecting or sending establish link. */
     return link->state != SLOT_EXPORT_SNAPSHOTTING &&
-           link->state != SLOT_IMPORT_WAIT_ACK;
+           link->state != SLOT_IMPORT_WAIT_ACK &&
+           link->state != SLOT_EXPORT_CONNECTING &&
+           link->state != SLOT_EXPORT_ESTABLISH_LINK &&
+           link->state != SLOT_EXPORT_READ_ESTABLISH_LINK_RESPONSE;
 }
 
 /* Cron related tasks run in clusterCron to drive slot migrations. */

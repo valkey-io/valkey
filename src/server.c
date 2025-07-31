@@ -695,6 +695,7 @@ void moduleTrafficDestructor(void *entry) {
     zfree(entry);
 }
 
+/* Use the module ID directly as the hash */
 uint64_t moduleTrafficHash(const void *key) {
     return *(const uint64_t *)key;
 }

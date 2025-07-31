@@ -65,7 +65,6 @@ test "Module cluster message traffic tracking" {
     set testmodule [file normalize src/modules/hellocluster.so]
     $primary1 module load $testmodule
     $primary2 module load $testmodule
-    # $primary3 module load $testmodule
     
     # Send module cluster message to generate traffic
     $primary1 HELLOCLUSTER.PINGALL

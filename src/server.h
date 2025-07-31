@@ -1207,6 +1207,9 @@ typedef struct LastWrittenBuf {
                       * This length differs from bufpos in case of copy avoidance */
 } LastWrittenBuf;
 
+/* Forward declaration of slotMigrationLink */
+typedef struct slotMigrationLink slotMigrationLink;
+
 typedef struct client {
     /* Basic client information and connection. */
     uint64_t id; /* Client incremental unique ID. */
@@ -1230,12 +1233,12 @@ typedef struct client {
     time_t last_interaction;          /* Time of the last interaction, used for timeout */
     serverDb *db;                     /* Pointer to currently SELECTed DB. */
     /* Client state structs. */
-    ClientPubSubData *pubsub_data;    /* Required for: pubsub commands and tracking. lazily initialized when first needed */
-    ClientReplicationData *repl_data; /* Required for Replication operations. lazily initialized when first needed */
-    ClientModuleData *module_data;    /* Required for Module operations. lazily initialized when first needed */
-    multiState *mstate;               /* MULTI/EXEC state, lazily initialized when first needed */
-    blockingState *bstate;            /* Blocking state, lazily initialized when first needed */
-    void *slot_migration_link;        /* Pointer to the slot migration link, or NULL. */
+    ClientPubSubData *pubsub_data;          /* Required for: pubsub commands and tracking. lazily initialized when first needed */
+    ClientReplicationData *repl_data;       /* Required for Replication operations. lazily initialized when first needed */
+    ClientModuleData *module_data;          /* Required for Module operations. lazily initialized when first needed */
+    multiState *mstate;                     /* MULTI/EXEC state, lazily initialized when first needed */
+    blockingState *bstate;                  /* Blocking state, lazily initialized when first needed */
+    slotMigrationLink *slot_migration_link; /* Pointer to the slot migration link, or NULL. */
     /* Output buffer and reply handling */
     long duration;                       /* Current command duration. Used for measuring latency of blocking/non-blocking cmds */
     char *buf;                           /* Output buffer */

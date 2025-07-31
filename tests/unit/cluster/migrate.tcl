@@ -160,7 +160,7 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
         assert_error "*No slot ranges specified*" {R 0 CLUSTER MIGRATE SLOTSRANGE a 0}
         assert_error "*Invalid or out of range slot*" {R 0 CLUSTER MIGRATE SLOTSRANGE 0 a}
         assert_error "*Start slot number 1 is greater than end slot number 0*" {R 0 CLUSTER MIGRATE SLOTSRANGE 1 0}
-        assert_error "*The slot ranges are not all owned by the same node*" {R 0 CLUSTER MIGRATE SLOTSRANGE 0 16383}
+        assert_error "*Requested slots span multiple shards*" {R 0 CLUSTER MIGRATE SLOTSRANGE 0 16383}
         assert_error "*Slot range 3-6 overlaps with previous range 0-5*" {R 0 CLUSTER MIGRATE SLOTSRANGE 0 5 3 6}
         assert_error "*Slot range 0-5 overlaps with previous range 3-6*" {R 0 CLUSTER MIGRATE SLOTSRANGE 3 6 0 5}
         assert_error "*syntax error*" {R 0 CLUSTER MIGRATE SLOTSRANGE 0 0}
@@ -1165,24 +1165,14 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
 
     test "CLUSTER SYNCSLOTS invalid state machine traversal" {
         assert_does_not_resync {
-            assert_causes_conn_drop 0 {
-                $client CLUSTER SYNCSLOTS PAUSE
-            }
-            assert_causes_conn_drop 0 {
-                $client CLUSTER SYNCSLOTS REQUEST-FAILOVER
-            }
-            assert_causes_conn_drop 0 {
-                $client CLUSTER SYNCSLOTS SNAPSHOT-EOF
-            }
-            assert_causes_conn_drop 0 {
-                $client CLUSTER SYNCSLOTS PAUSED
-            }
-            assert_causes_conn_drop 0 {
-                $client CLUSTER SYNCSLOTS FAILOVER-GRANTED
-            }
-            assert_causes_conn_drop 0 {
-                $client CLUSTER SYNCSLOTS ACK
-            }
+            assert_error "*ERR CLUSTER SYNCSLOTS should only be used by slot migration clients*" {R 0 CLUSTER SYNCSLOTS REQUEST-PAUSE}
+            assert_error "*ERR CLUSTER SYNCSLOTS should only be used by slot migration clients*" {R 0 CLUSTER SYNCSLOTS REQUEST-FAILOVER}
+            assert_error "*ERR CLUSTER SYNCSLOTS should only be used by slot migration clients*" {R 0 CLUSTER SYNCSLOTS SNAPSHOT-EOF}
+            assert_error "*ERR CLUSTER SYNCSLOTS should only be used by slot migration clients*" {R 0 CLUSTER SYNCSLOTS PAUSED}
+            assert_error "*ERR CLUSTER SYNCSLOTS should only be used by slot migration clients*" {R 0 CLUSTER SYNCSLOTS FAILOVER-GRANTED}
+            assert_error "*ERR CLUSTER SYNCSLOTS should only be used by slot migration clients*" {R 0 CLUSTER SYNCSLOTS ACK}
+            assert_error "*syntax error*" {R 0 CLUSTER SYNCSLOTS UNKNOWN}
+
             assert_causes_conn_drop 0 {
                 $client CLUSTER SYNCSLOTS ESTABLISH SOURCE $node2_id LINKNAME $fake_linkname SLOTSRANGE 16383 16383
                 $client CLUSTER SYNCSLOTS SNAPSHOT-EOF
@@ -1465,7 +1455,7 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
             set import_client_id [get_client_id_by_last_cmd [srv -0 client] "cluster|syncslots"]
 
             # Use CLIENT KILL to drop the connection
-            R 0 CLIENT KILL ID $import_client_id
+            assert_match "1" [R 0 CLIENT KILL ID $import_client_id]
 
             # Migration should be failed
             wait_for_migration_field 2 $linkname state failed
@@ -1715,6 +1705,24 @@ start_cluster 3 0 {tags {external:skip cluster}} {
         # Cleanup
         assert_match "OK" [R 0 FLUSHALL SYNC]
         assert_match "OK" [R 0 CLUSTER MIGRATE SLOTSRANGE 16383 16383 NODE $node2_id]
+    }
+
+    test "Read establish link response timeout" {
+        R 0 CONFIG SET repl-timeout 2
+        
+        # Pause to prevent connection success
+        set target_pid  [srv -2 pid]
+        pause_process $target_pid
+
+        assert_match "OK" [R 0 CLUSTER MIGRATE SLOTSRANGE 0 0 NODE $node2_id]
+        set linkname [get_link_name 0 0]
+
+        # Connecting will fail
+        wait_for_migration_field 0 $linkname state failed
+        assert_match "*Timed out after too long with no interaction*" [dict get [get_migration_by_linkname 0 $linkname] message]
+
+        resume_process $target_pid
+        R 0 CONFIG SET repl-timeout 60
     }
 
     test "Migration cannot connect to target" {

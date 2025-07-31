@@ -62,9 +62,9 @@
                         "token": "SNAPSHOT-EOF"
                     },
                     {
-                        "name": "pause",
+                        "name": "request-pause",
                         "type": "pure-token",
-                        "token": "PAUSE"
+                        "token": "REQUEST-PAUSE"
                     },
                     {
                         "name": "stream",

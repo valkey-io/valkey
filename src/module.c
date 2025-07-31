@@ -3651,8 +3651,12 @@ int VM_Replicate(ValkeyModuleCtx *ctx, const char *cmdname, const char *fmt, ...
     va_list ap;
     int slot = -1;
 
-    if ((server.cluster_enabled && clusterIsAnySlotExporting()) || !ctx->module ||
-        !(ctx->module->options & VALKEYMODULE_OPTIONS_SKIP_COMMAND_VALIDATION)) {
+    int skip_validation = ctx->module &&
+                          (ctx->module->options & VALKEYMODULE_OPTIONS_SKIP_COMMAND_VALIDATION);
+    if (server.cluster_enabled && clusterIsAnySlotExporting()) {
+        skip_validation = 0;
+    }
+    if (!skip_validation) {
         cmd = lookupCommandByCString((char *)cmdname);
         if (!cmd) return VALKEYMODULE_ERR;
     }

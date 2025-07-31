@@ -685,6 +685,33 @@ hashtableType sdsReplyHashtableType = {
     .hashFunction = dictSdsCaseHash,
     .keyCompare = hashtableSdsKeyCompare};
 
+/* Entry structure for module traffic tracking */
+const void *moduleTrafficGetKey(const void *entry) {
+    const moduleTrafficEntry *traffic_entry = entry;
+    return &traffic_entry->module_id;
+}
+
+void moduleTrafficDestructor(void *entry) {
+    zfree(entry);
+}
+
+uint64_t moduleTrafficHash(const void *key) {
+    return hashtableGenHashFunction((const char *)key, sizeof(uint64_t));
+}
+
+int moduleTrafficKeyCompare(const void *key1, const void *key2) {
+    const uint64_t *id1 = key1, *id2 = key2;
+    return *id1 != *id2;
+}
+
+/* Hashtable type for tracking module traffic by module_id */
+hashtableType moduleTrafficHashtableType = {
+    .entryGetKey = moduleTrafficGetKey,
+    .hashFunction = moduleTrafficHash,
+    .keyCompare = moduleTrafficKeyCompare,
+    .entryDestructor = moduleTrafficDestructor,
+};
+
 /* Keylist hash table type has unencoded Objects as keys and
  * lists as values. It's used for blocking operations (BLPOP) and to
  * map swapped keys to a list of clients waiting for this keys to be loaded. */
@@ -2256,6 +2283,12 @@ void initServerConfig(void) {
     server.shutdown_flags = 0;
     server.shutdown_mstime = 0;
     server.cluster_module_flags = CLUSTER_MODULE_FLAG_NONE;
+    server.cluster_bus_admin_bytes_received = 0;
+    server.cluster_bus_admin_bytes_sent = 0;
+    server.cluster_bus_pubsub_bytes_received = 0;
+    server.cluster_bus_pubsub_bytes_sent = 0;
+    server.cluster_bus_module_id_sent = hashtableCreate(&moduleTrafficHashtableType);
+    server.cluster_bus_module_id_received = hashtableCreate(&moduleTrafficHashtableType);
     server.migrate_cached_sockets = dictCreate(&migrateCacheDictType);
     server.next_client_id = 1; /* Client IDs, start from 1 .*/
     server.page_size = sysconf(_SC_PAGESIZE);

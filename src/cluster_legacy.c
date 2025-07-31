@@ -3977,6 +3977,19 @@ void handleLinkIOError(clusterLink *link) {
     freeClusterLink(link);
 }
 
+/* Helper function to update module traffic in hashtable */
+static void updateModuleTraffic(hashtable *ht, uint64_t module_id, long long bytes) {
+    moduleTrafficEntry *entry;
+    if (hashtableFind(ht, &module_id, (void**)&entry)) {
+        entry->traffic_bytes += bytes;
+    } else {
+        entry = zmalloc(sizeof(moduleTrafficEntry));
+        entry->module_id = module_id;
+        entry->traffic_bytes = bytes;
+        hashtableAdd(ht, entry);
+    }
+}
+
 /* Send the messages queued for the link. */
 void clusterWriteHandler(connection *conn) {
     clusterLink *link = connGetPrivateData(conn);
@@ -3996,6 +4009,19 @@ void clusterWriteHandler(connection *conn) {
                       (nwritten == -1) ? connGetLastError(conn) : "short write");
             handleLinkIOError(link);
             return;
+        }
+        // Get message type to differentiate traffic
+        uint16_t type = ntohs(msg->type) & ~CLUSTERMSG_MODIFIER_MASK;
+        // Update counters based on message type
+        if (type == CLUSTERMSG_TYPE_PUBLISH || type == CLUSTERMSG_TYPE_PUBLISHSHARD) {
+            // This is pub/sub traffic
+            server.cluster_bus_pubsub_bytes_sent += nwritten;
+        } else if (type == CLUSTERMSG_TYPE_MODULE) {
+            // This is for any module-related traffic
+            updateModuleTraffic(server.cluster_bus_module_id_sent, ntohu64(msg->data.module.msg.module_id), nwritten);
+        } else {
+            // This is admin traffic (PING, PONG, MEET, FAIL, etc.)
+            server.cluster_bus_admin_bytes_sent += nwritten;
         }
         if (msg_offset + nwritten < msg_len) {
             /* If full message wasn't written, record the offset
@@ -4147,6 +4173,20 @@ void clusterReadHandler(connection *conn) {
 
         /* Total length obtained? Process this packet. */
         if (rcvbuflen >= RCVBUF_MIN_READ_LEN && rcvbuflen == ntohl(hdr->totlen)) {
+            // Get message type to differentiate traffic
+            uint16_t type = ntohs(hdr->type) & ~CLUSTERMSG_MODIFIER_MASK;
+            // Update counters based on message type
+            if (type == CLUSTERMSG_TYPE_PUBLISH || type == CLUSTERMSG_TYPE_PUBLISHSHARD) {
+                // This is pub/sub traffic
+                server.cluster_bus_pubsub_bytes_received += rcvbuflen;
+            } else if (type == CLUSTERMSG_TYPE_MODULE) {
+                // This is for any module-related traffic
+                updateModuleTraffic(server.cluster_bus_module_id_received, ntohu64(hdr->data.module.msg.module_id), rcvbuflen);
+            } else {
+                // This is admin traffic (PING, PONG, MEET, FAIL, etc.)
+                server.cluster_bus_admin_bytes_received += rcvbuflen;
+            }
+
             if (clusterProcessPacket(link)) {
                 if (link->rcvbuf_alloc > RCVBUF_INIT_LEN) {
                     size_t prev_rcvbuf_alloc = link->rcvbuf_alloc;
@@ -6675,6 +6715,22 @@ void clusterCommandShards(client *c) {
     dictReleaseIterator(di);
 }
 
+/* Helper function to append module traffic info to cluster info string */
+static sds appendModuleTrafficInfo(sds info, hashtable *ht, const char *direction) {
+    if (!ht) return info;
+    
+    hashtableIterator iter;
+    hashtableInitIterator(&iter, ht, 0);
+    moduleTrafficEntry *entry;
+    
+    while (hashtableNext(&iter, (void**)&entry)) {
+        info = sdscatfmt(info, "cluster_bus_module_%s_bytes_%U:%I\r\n", 
+                        direction, entry->module_id, entry->traffic_bytes);
+    }
+    
+    return info;
+}
+
 sds genClusterInfoString(void) {
     sds info = sdsempty();
     char *statestr[] = {"ok", "fail"};
@@ -6724,11 +6780,17 @@ sds genClusterInfoString(void) {
                      "cluster_known_nodes:%U\r\n"
                      "cluster_size:%i\r\n"
                      "cluster_current_epoch:%U\r\n"
-                     "cluster_my_epoch:%U\r\n",
+                     "cluster_my_epoch:%U\r\n"
+                     "cluster_bus_admin_bytes_sent:%U\r\n"
+                     "cluster_bus_admin_bytes_received:%U\r\n"
+                     "cluster_bus_pubsub_bytes_sent:%U\r\n"
+                     "cluster_bus_pubsub_bytes_received:%U\r\n",
                      statestr[server.cluster->state], slots_assigned, slots_ok, slots_pfail, slots_fail,
                      nodes_pfail, nodes_fail, voting_nodes_pfail, voting_nodes_fail,
                      (unsigned long long)dictSize(server.cluster->nodes), server.cluster->size,
-                     (unsigned long long)server.cluster->currentEpoch, (unsigned long long)nodeEpoch(myself));
+                     (unsigned long long)server.cluster->currentEpoch, (unsigned long long)nodeEpoch(myself),
+                     server.cluster_bus_admin_bytes_sent, server.cluster_bus_admin_bytes_received,
+                     server.cluster_bus_pubsub_bytes_sent, server.cluster_bus_pubsub_bytes_received);
 
     /* Show stats about messages sent and received. */
     long long tot_msg_sent = 0;
@@ -6753,9 +6815,12 @@ sds genClusterInfoString(void) {
     info = sdscatfmt(info, "total_cluster_links_buffer_limit_exceeded:%U\r\n",
                      (unsigned long long)server.cluster->stat_cluster_links_buffer_limit_exceeded);
 
+    /* Show module traffic stats */
+    info = appendModuleTrafficInfo(info, server.cluster_bus_module_id_sent, "sent");
+    info = appendModuleTrafficInfo(info, server.cluster_bus_module_id_received, "received");
+
     return info;
 }
-
 
 void removeChannelsInSlot(unsigned int slot) {
     if (countChannelsInSlot(slot) == 0) return;

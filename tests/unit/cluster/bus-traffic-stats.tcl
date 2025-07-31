@@ -65,14 +65,15 @@ test "Module cluster message traffic tracking" {
     r module load $testmodule
     
     # Send module cluster message to generate traffic
-    $primary1 HELLOCLUSTER.PINGALL
+    r HELLOCLUSTER.PINGALL
     
     # Wait for message processing
     after 100
     
     # Check sent bytes on sender (primary1)
-    set cluster_info_sender [$primary1 cluster info]
+    set cluster_info_sender [r cluster info]
     set sent_found 0
+    set recv_found 0
     foreach line [split $cluster_info_sender "\r\n"] {
         if {[string match "cluster_bus_module_sent_bytes_*" $line]} {
             set sent_found 1
@@ -89,6 +90,31 @@ test "Module cluster message traffic tracking" {
     # Verify that both sent and received module traffic were tracked
     assert {$sent_found == 1}
     assert {$recv_found == 1}
+
+    r module unload hellocluster
+
+    # Verify module was unloaded successfully
+    set modules [r module list]
+    set hellocluster_found 0
+    foreach module $modules {
+        if {[dict get $module name] eq "hellocluster"} {
+            set hellocluster_found 1
+        }
+    }
+    assert {$hellocluster_found == 0}
+
+    # Check that module traffic entries are cleaned up after unload
+    set cluster_info_after [r cluster info]
+    set module_traffic_found_after 0
+    foreach line [split $cluster_info_after "\r\n"] {
+        if {[string match "cluster_bus_module_*_bytes_*" $line]} {
+            set module_traffic_found_after 1
+            break
+        }
+    }
+
+    # Verify module traffic was present before and absent after unload
+    assert {$module_traffic_found_after == 0}
 }
 
 }

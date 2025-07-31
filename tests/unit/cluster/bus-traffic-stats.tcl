@@ -59,12 +59,10 @@ test "Pub/sub traffic increases with publish operations" {
     $sub_client close
 }
 
-set testmodule [file normalize src/modules/hellocluster.so]
-
 test "Module cluster message traffic tracking" {
     # Load the hellocluster module on all nodes
-    $primary1 module load $testmodule
-    $primary2 module load $testmodule
+    set testmodule [file normalize src/modules/hellocluster.so]
+    r module load $testmodule
     
     # Send module cluster message to generate traffic
     $primary1 HELLOCLUSTER.PINGALL

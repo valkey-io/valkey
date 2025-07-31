@@ -1227,7 +1227,11 @@ static void beginDefragCycle(void) {
     defrag.remaining_stages = listCreate();
 
     for (int dbid = 0; dbid < server.dbnum; dbid++) {
-        if (dbHasNoKeys(dbid)) continue;
+        /* Skip the non-existent dbs but not empty dbs since hashtableDefragTables
+         * still defrags the internal allocations of the hashtables structs if they
+         * exist. */
+        if (server.db[dbid] == NULL) continue;
+
         addDefragStage(defragStageDbKeys, (void *)(uintptr_t)dbid, NULL);
         addDefragStage(defragStageExpiresKvstore, (void *)(uintptr_t)dbid, NULL);
     }

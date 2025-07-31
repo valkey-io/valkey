@@ -19,6 +19,11 @@ start_server {tags {needs:repl external:skip}} {
             r replicaof $primary_host $primary_port
             wait_replica_online $primary
 
+            # In case of bio thread RDB download, there can be up to 1000ms 
+            # (1 replication cron loop) delay until the rdb starts loading
+            after 1000 
+            wait_done_loading r
+
             assert_error "REDIRECT*" {$rr exec}
             $rr close
         }

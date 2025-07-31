@@ -31,8 +31,6 @@
 #include <netdb.h>
 #include <sys/mman.h>
 
-#define CONN_TYPE_RDMA "rdma"
-
 typedef struct ValkeyRdmaFeature {
     /* defined as following Opcodes */
     uint16_t opcode;
@@ -1514,16 +1512,8 @@ copy:
     return size;
 }
 
-static const char *connRdmaGetType(connection *conn) {
-    UNUSED(conn);
-
+static int connRdmaGetType(void) {
     return CONN_TYPE_RDMA;
-}
-
-static int connRdmaGetTypeId(connection *conn) {
-    UNUSED(conn);
-
-    return CONN_TYPE_ID_RDMA;
 }
 
 static int rdmaServer(char *err, int port, char *bindaddr, int af, rdma_listener *rdma_listener) {
@@ -1820,7 +1810,6 @@ static void updateRdmaState(struct connection *conn) {
 
 static ConnectionType CT_RDMA = {
     /* connection type */
-    .get_type_id = connRdmaGetTypeId,
     .get_type = connRdmaGetType,
 
     /* connection type initialize & finalize & configure */
@@ -1886,7 +1875,7 @@ int RegisterConnectionTypeRdma(void) {
 #else
 
 int RegisterConnectionTypeRdma(void) {
-    serverLog(LL_VERBOSE, "Connection type %s not builtin", CONN_TYPE_RDMA);
+    serverLog(LL_VERBOSE, "Connection type %s not builtin", getConnectionTypeName(CONN_TYPE_RDMA));
     return C_ERR;
 }
 
@@ -1903,15 +1892,15 @@ int ValkeyModule_OnLoad(void *ctx, ValkeyModuleString **argv, int argc) {
 
     /* Connection modules MUST be part of the same build as valkey. */
     if (strcmp(REDIS_BUILD_ID_RAW, serverBuildIdRaw())) {
-        serverLog(LL_NOTICE, "Connection type %s was not built together with the valkey-server used.", CONN_TYPE_RDMA);
+        serverLog(LL_NOTICE, "Connection type %s was not built together with the valkey-server used.", getConnectionTypeName(CONN_TYPE_RDMA));
         return VALKEYMODULE_ERR;
     }
 
-    if (ValkeyModule_Init(ctx, CONN_TYPE_RDMA, 1, VALKEYMODULE_APIVER_1) == VALKEYMODULE_ERR) return VALKEYMODULE_ERR;
+    if (ValkeyModule_Init(ctx, getConnectionTypeName(CONN_TYPE_RDMA), 1, VALKEYMODULE_APIVER_1) == VALKEYMODULE_ERR) return VALKEYMODULE_ERR;
 
     /* Connection modules is available only bootup. */
     if ((ValkeyModule_GetContextFlags(ctx) & VALKEYMODULE_CTX_FLAGS_SERVER_STARTUP) == 0) {
-        serverLog(LL_NOTICE, "Connection type %s can be loaded only during bootup", CONN_TYPE_RDMA);
+        serverLog(LL_NOTICE, "Connection type %s can be loaded only during bootup", getConnectionTypeName(CONN_TYPE_RDMA));
         return VALKEYMODULE_ERR;
     }
 
@@ -1924,7 +1913,7 @@ int ValkeyModule_OnLoad(void *ctx, ValkeyModuleString **argv, int argc) {
 
 int ValkeyModule_OnUnload(void *arg) {
     UNUSED(arg);
-    serverLog(LL_NOTICE, "Connection type %s can not be unloaded", CONN_TYPE_RDMA);
+    serverLog(LL_NOTICE, "Connection type %s can not be unloaded", getConnectionTypeName(CONN_TYPE_RDMA));
     return VALKEYMODULE_ERR;
 }
 
@@ -1933,7 +1922,7 @@ int ValkeyModule_OnUnload(void *arg) {
 #else /* __linux__ */
 
 int RegisterConnectionTypeRdma(void) {
-    serverLog(LL_VERBOSE, "Connection type %s is supported on Linux only", CONN_TYPE_RDMA);
+    serverLog(LL_VERBOSE, "Connection type %s is supported on Linux only", getConnectionTypeName(CONN_TYPE_RDMA));
     return C_ERR;
 }
 

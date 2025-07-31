@@ -1346,7 +1346,7 @@ void typeCommand(client *c) {
     addReplyStatus(c, getObjectTypeName(o));
 }
 
-/* SHUTDOWN [[NOSAVE | SAVE] [NOW] [FORCE] [SAFE] | ABORT] */
+/* SHUTDOWN [[NOSAVE | SAVE] [NOW] [FORCE] [SAFE] [FAILOVER] | ABORT] */
 void shutdownCommand(client *c) {
     int flags = SHUTDOWN_NOFLAGS;
     int abort = 0;
@@ -1363,6 +1363,8 @@ void shutdownCommand(client *c) {
             abort = 1;
         } else if (!strcasecmp(c->argv[i]->ptr, "safe")) {
             flags |= SHUTDOWN_SAFE;
+        } else if (!strcasecmp(c->argv[i]->ptr, "failover")) {
+            flags |= SHUTDOWN_FAILOVER;
         } else {
             addReplyErrorObject(c, shared.syntaxerr);
             return;
@@ -1371,6 +1373,11 @@ void shutdownCommand(client *c) {
     if ((abort && flags != SHUTDOWN_NOFLAGS) || (flags & SHUTDOWN_NOSAVE && flags & SHUTDOWN_SAVE)) {
         /* Illegal combo. */
         addReplyErrorObject(c, shared.syntaxerr);
+        return;
+    }
+
+    if (flags & SHUTDOWN_FAILOVER && !server.cluster_enabled) {
+        addReplyError(c, "SHUTDOWN FAILOVER is only supported in cluster mode.");
         return;
     }
 

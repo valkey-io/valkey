@@ -439,6 +439,13 @@ typedef enum {
     REPL_DUAL_CHANNEL_RDB_LOADED,
 } repl_rdb_channel_state;
 
+typedef enum {
+    REPL_BIO_DISK_SAVE_STATE_NONE = 0,    /* No active disk-saving Bio thread */
+    REPL_BIO_DISK_SAVE_STATE_IN_PROGRESS, /* The disk-saving Bio job has been created */
+    REPL_BIO_DISK_SAVE_STATE_FINISHED,    /* The disk-saving Bio job finished */
+    REPL_BIO_DISK_SAVE_STATE_FAIL         /* The disk-saving Bio job failed */
+} replica_bio_disk_save_state;
+
 /* The state of an in progress coordinated failover */
 typedef enum {
     NO_FAILOVER = 0,        /* No failover in progress */
@@ -446,6 +453,7 @@ typedef enum {
     FAILOVER_IN_PROGRESS    /* Waiting for target replica to accept
                              * PSYNC FAILOVER request. */
 } failover_state;
+
 
 /* State of replicas from the POV of the primary. Used in client->replstate.
  * In SEND_BULK and ONLINE state the replica receives new updates
@@ -518,6 +526,7 @@ typedef enum {
 #define ZSKIPLIST_MAX_SEARCH 10
 
 /* Append only defines */
+#define REPL_MAX_WRITTEN_BEFORE_FSYNC (1024 * 1024 * 8) /* 8 MB */
 #define AOF_FSYNC_NO 0
 #define AOF_FSYNC_ALWAYS 1
 #define AOF_FSYNC_EVERYSEC 2
@@ -532,6 +541,10 @@ typedef enum {
 #define TLS_CLIENT_AUTH_NO 0
 #define TLS_CLIENT_AUTH_YES 1
 #define TLS_CLIENT_AUTH_OPTIONAL 2
+
+/* TLS Client Certfiicate Authentication */
+#define TLS_CLIENT_FIELD_OFF 0
+#define TLS_CLIENT_FIELD_CN 1
 
 /* Sanitize dump payload */
 #define SANITIZE_DUMP_NO 0
@@ -574,12 +587,13 @@ typedef enum {
 #define UNIT_MILLISECONDS 1
 
 /* SHUTDOWN flags */
-#define SHUTDOWN_NOFLAGS 0       /* No flags. */
-#define SHUTDOWN_SAVE (1 << 0)   /* Force SAVE on SHUTDOWN even if no save points are configured. */
-#define SHUTDOWN_NOSAVE (1 << 1) /* Don't SAVE on SHUTDOWN. */
-#define SHUTDOWN_NOW (1 << 2)    /* Don't wait for replicas to catch up. */
-#define SHUTDOWN_FORCE (1 << 3)  /* Don't let errors prevent shutdown. */
-#define SHUTDOWN_SAFE (1 << 4)   /* Shutdown only when safe. */
+#define SHUTDOWN_NOFLAGS 0         /* No flags. */
+#define SHUTDOWN_SAVE (1 << 0)     /* Force SAVE on SHUTDOWN even if no save points are configured. */
+#define SHUTDOWN_NOSAVE (1 << 1)   /* Don't SAVE on SHUTDOWN. */
+#define SHUTDOWN_NOW (1 << 2)      /* Don't wait for replicas to catch up. */
+#define SHUTDOWN_FORCE (1 << 3)    /* Don't let errors prevent shutdown. */
+#define SHUTDOWN_SAFE (1 << 4)     /* Shutdown only when safe. */
+#define SHUTDOWN_FAILOVER (1 << 5) /* Trigger failover when shutting down a primary. */
 
 /* Command call flags, see call() function */
 #define CMD_CALL_NONE 0
@@ -665,6 +679,9 @@ typedef enum {
 #define NOTIFY_ALL                                                                                            \
     (NOTIFY_GENERIC | NOTIFY_STRING | NOTIFY_LIST | NOTIFY_SET | NOTIFY_HASH | NOTIFY_ZSET | NOTIFY_EXPIRED | \
      NOTIFY_EVICTED | NOTIFY_STREAM | NOTIFY_MODULE) /* A flag */
+
+/* Period in milliseconds between successive clusterCron() executions */
+#define CLUSTER_CRON_PERIOD_MS 100
 
 /* Using the following macro you can run code inside serverCron() with the
  * specified period, specified in milliseconds.
@@ -1320,10 +1337,11 @@ typedef struct writePreparedClient writePreparedClient;
 
 /* ACL information */
 typedef struct aclInfo {
-    long long user_auth_failures;       /* Auth failure counts on user level */
-    long long invalid_cmd_accesses;     /* Invalid command accesses that user doesn't have permission to */
-    long long invalid_key_accesses;     /* Invalid key accesses that user doesn't have permission to */
-    long long invalid_channel_accesses; /* Invalid channel accesses that user doesn't have permission to */
+    long long user_auth_failures;         /* Auth failure counts on user level */
+    long long invalid_cmd_accesses;       /* Invalid command accesses that user doesn't have permission to */
+    long long invalid_key_accesses;       /* Invalid key accesses that user doesn't have permission to */
+    long long invalid_channel_accesses;   /* Invalid channel accesses that user doesn't have permission to */
+    long long acl_access_denied_tls_cert; /* TLS clients with cert not matching any existing user. */
 } aclInfo;
 
 struct saveparam {
@@ -1521,6 +1539,7 @@ typedef struct serverTLSContextConfig {
     char *client_cert_file;     /* Certificate to use as a client; if none, use cert_file */
     char *client_key_file;      /* Private key filename for client_cert_file */
     char *client_key_file_pass; /* Optional password for client_key_file */
+    int client_auth_user;       /* Field to be used for automatic TLS authentication based on client TLS certificate */
     char *dh_params_file;
     char *ca_cert_file;
     char *ca_cert_dir;
@@ -1983,6 +2002,16 @@ struct valkeyServer {
                                                 * delay (start sooner if they all connect). */
     int dual_channel_replication;              /* Config used to determine if the replica should
                                                 * use dual channel replication for full syncs. */
+    _Atomic int replica_bio_disk_save_state;   /* Flag set by the bio thread to indicate that the
+                                                * RDB save to disk has completed, or failed */
+    _Atomic bool replica_bio_abort_save;       /* Flag set by main thread, used to signal to replica's
+                                                * disk-saving bio thread to abort the save */
+    long long bio_stat_net_repl_input_bytes;   /* Used to calculate stat_net_repl_input_bytes on the
+                                                * replica's bio thread without touching main thread vars */
+    off_t bio_repl_transfer_size;              /* Used to calculate bio_repl_transfer_size on the
+                                                * replica's bio thread without touching main thread vars */
+    off_t bio_repl_transfer_read;              /* Used to calculate bio_repl_transfer_read on the
+                                                * replica's bio thread without touching main thread vars */
     int wait_before_rdb_client_free;           /* Grace period in seconds for replica main channel
                                                 * to establish psync. */
     int debug_pause_after_fork;                /* Debug param that pauses the main process
@@ -2005,33 +2034,33 @@ struct valkeyServer {
         long long read_reploff;
         int dbid;
     } repl_provisional_primary;
-    client *cached_primary;             /* Cached primary to be reused for PSYNC. */
-    rio *loading_rio;                   /* Pointer to the rio object currently used for loading data. */
-    int repl_syncio_timeout;            /* Timeout for synchronous I/O calls */
-    int repl_state;                     /* Replication status if the instance is a replica */
-    int repl_rdb_channel_state;         /* State of the replica's rdb channel during dual-channel-replication */
-    off_t repl_transfer_size;           /* Size of RDB to read from primary during sync. */
-    off_t repl_transfer_read;           /* Amount of RDB read from primary during sync. */
-    off_t repl_transfer_last_fsync_off; /* Offset when we fsync-ed last time. */
-    connection *repl_transfer_s;        /* Replica -> Primary SYNC connection */
-    connection *repl_rdb_transfer_s;    /* Primary FULL SYNC connection (RDB download) */
-    int repl_transfer_fd;               /* Replica -> Primary SYNC temp file descriptor */
-    char *repl_transfer_tmpfile;        /* Replica-> Primary SYNC temp file name */
-    time_t repl_transfer_lastio;        /* Unix time of the latest read, for timeout */
-    int repl_serve_stale_data;          /* Serve stale data when link is down? */
-    int repl_replica_ro;                /* Replica is read only? */
-    int repl_replica_ignore_maxmemory;  /* If true replicas do not evict. */
-    time_t repl_down_since;             /* Unix time at which link with primary went down */
-    int repl_disable_tcp_nodelay;       /* Disable TCP_NODELAY after SYNC? */
-    int repl_mptcp;                     /* Use Multipath TCP for replica on client side */
-    int replica_priority;               /* Reported in INFO and used by Sentinel. */
-    int replica_announced;              /* If true, replica is announced by Sentinel */
-    int replica_announce_port;          /* Give the primary this listening port. */
-    char *replica_announce_ip;          /* Give the primary this ip address. */
-    int propagation_error_behavior;     /* Configures the behavior of the replica
-                                         * when it receives an error on the replication stream */
-    int repl_ignore_disk_write_error;   /* Configures whether replicas panic when unable to
-                                         * persist writes to AOF. */
+    client *cached_primary;              /* Cached primary to be reused for PSYNC. */
+    rio *loading_rio;                    /* Pointer to the rio object currently used for loading data. */
+    int repl_syncio_timeout;             /* Timeout for synchronous I/O calls */
+    int repl_state;                      /* Replication status if the instance is a replica */
+    int repl_rdb_channel_state;          /* State of the replica's rdb channel during dual-channel-replication */
+    off_t repl_transfer_size;            /* Size of RDB to read from primary during sync. */
+    off_t repl_transfer_read;            /* Amount of RDB read from primary during sync. */
+    off_t repl_transfer_last_fsync_off;  /* Offset when we fsync-ed last time. */
+    connection *repl_transfer_s;         /* Replica -> Primary SYNC connection */
+    connection *repl_rdb_transfer_s;     /* Primary FULL SYNC connection (RDB download) */
+    int repl_transfer_fd;                /* Replica -> Primary SYNC temp file descriptor */
+    char *repl_transfer_tmpfile;         /* Replica-> Primary SYNC temp file name */
+    _Atomic time_t repl_transfer_lastio; /* Unix time of the latest read, for timeout */
+    int repl_serve_stale_data;           /* Serve stale data when link is down? */
+    int repl_replica_ro;                 /* Replica is read only? */
+    int repl_replica_ignore_maxmemory;   /* If true replicas do not evict. */
+    time_t repl_down_since;              /* Unix time at which link with primary went down */
+    int repl_disable_tcp_nodelay;        /* Disable TCP_NODELAY after SYNC? */
+    int repl_mptcp;                      /* Use Multipath TCP for replica on client side */
+    int replica_priority;                /* Reported in INFO and used by Sentinel. */
+    int replica_announced;               /* If true, replica is announced by Sentinel */
+    int replica_announce_port;           /* Give the primary this listening port. */
+    char *replica_announce_ip;           /* Give the primary this ip address. */
+    int propagation_error_behavior;      /* Configures the behavior of the replica
+                                          * when it receives an error on the replication stream */
+    int repl_ignore_disk_write_error;    /* Configures whether replicas panic when unable to
+                                          * persist writes to AOF. */
 
     /* The following two fields is where we store primary PSYNC replid/offset
      * while the PSYNC is in progress. At the end we'll copy the fields into
@@ -2088,7 +2117,7 @@ struct valkeyServer {
     int list_max_listpack_size;
     int list_compress_depth;
     /* time cache */
-    time_t unixtime;             /* Unix time sampled every cron cycle. */
+    _Atomic time_t unixtime;     /* Unix time sampled every cron cycle. */
     time_t timezone;             /* Cached timezone. As set by tzset(). */
     _Atomic int daylight_active; /* Currently in daylight saving time. */
     mstime_t mstime;             /* 'unixtime' in milliseconds. */
@@ -2140,7 +2169,6 @@ struct valkeyServer {
     unsigned long cluster_blacklist_ttl;                   /* Duration in seconds that a node is denied re-entry into
                                                             * the cluster after it is forgotten with CLUSTER FORGET. */
     int cluster_slot_stats_enabled;                        /* Cluster slot usage statistics tracking enabled. */
-    int auto_failover_on_shutdown;                         /* Trigger manual failover on shutdown to primary. */
     mstime_t cluster_mf_timeout;                           /* Milliseconds to do a manual failover. */
     unsigned long cluster_slot_migration_log_max_len;      /* Maximum count of migrations to display in the
                                                             * migration log, after which we will clear finished
@@ -2151,6 +2179,8 @@ struct valkeyServer {
     uint32_t debug_cluster_close_link_on_packet_drop : 1;
     /* Debug config to control the random ping. When set, we will disable the random ping in clusterCron. */
     uint32_t debug_cluster_disable_random_ping : 1;
+    /* Debug config to control the reconnection. When set, we will disable the reconnection in clusterCron. */
+    uint32_t debug_cluster_disable_reconnection : 1;
     /* Debug config to expose intermediary slot migration states. */
     uint32_t debug_slot_migration_prevent_pause : 1;
     uint32_t debug_slot_migration_prevent_failover : 1;
@@ -3031,6 +3061,7 @@ int sendCurrentOffsetToReplica(client *replica);
 void addRdbReplicaToPsyncWait(client *replica);
 void initClientReplicationData(client *c);
 void freeClientReplicationData(client *c);
+void replicaReceiveRDBFromPrimaryToDisk(connection *conn, int is_dual_channel);
 sds replicationSendAuth(connection *conn);
 sds receiveSynchronousResponse(connection *conn);
 ConnectionType *connTypeOfReplication(void);
@@ -3098,8 +3129,9 @@ void ACLInit(void);
 #define ACL_OK 0
 #define ACL_DENIED_CMD 1
 #define ACL_DENIED_KEY 2
-#define ACL_DENIED_AUTH 3    /* Only used for ACL LOG entries. */
-#define ACL_DENIED_CHANNEL 4 /* Only used for pub/sub commands */
+#define ACL_DENIED_AUTH 3           /* Only used for ACL LOG entries. */
+#define ACL_DENIED_CHANNEL 4        /* Only used for pub/sub commands */
+#define ACL_INVALID_TLS_CERT_AUTH 5 /* Only used for TLS Auto-authentication */
 
 /* Context values for addACLLogEntry(). */
 #define ACL_LOG_CTX_TOPLEVEL 0
@@ -3231,7 +3263,7 @@ int processPendingCommandAndInputBuffer(client *c);
 int processCommandAndResetClient(client *c);
 void setupSignalHandlers(void);
 int createSocketAcceptHandler(connListener *sfd, aeFileProc *accept_handler);
-connListener *listenerByType(const char *typename);
+connListener *listenerByType(int type);
 int changeListener(connListener *listener);
 struct serverCommand *lookupSubcommand(struct serverCommand *container, sds sub_name);
 struct serverCommand *lookupCommand(robj **argv, int argc);
@@ -4015,6 +4047,8 @@ void debugPauseProcess(void);
  * This macro wraps the serverLog function, prepending "<Dual Channel>"
  * to the log message. */
 #define dualChannelServerLog(level, ...) serverLog(level, "Dual channel replication: " __VA_ARGS__)
+
+#define replicaBioSaveServerLog(level, ...) serverLog(level, "Replica bio thread: " __VA_ARGS__)
 
 #define serverDebug(fmt, ...) printf("DEBUG %s:%d > " fmt "\n", __FILE__, __LINE__, __VA_ARGS__)
 #define serverDebugMark() printf("-- MARK %s:%d --\n", __FILE__, __LINE__)

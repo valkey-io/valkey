@@ -59,6 +59,45 @@ test "Pub/sub traffic increases with publish operations" {
     $sub_client close
 }
 
+proc check_module_traffic_exists {} {
+    set cluster_info [r cluster info]
+    set sent_found 0
+    set recv_found 0
+    foreach line [split $cluster_info "\r\n"] {
+        if {[string match "cluster_bus_module_sent_bytes_*" $line]} {
+            set sent_found 1
+            set bytes [lindex [split $line ":"] 1]
+            assert {$bytes >= 0}
+        }
+        if {[string match "cluster_bus_module_received_bytes_*" $line]} {
+            set recv_found 1
+            set bytes [lindex [split $line ":"] 1]
+            assert {$bytes >= 0}
+        }
+    }
+    return [expr {$sent_found && $recv_found}]
+}
+
+proc check_module_traffic_absent {} {
+    set cluster_info [r cluster info]
+    foreach line [split $cluster_info "\r\n"] {
+        if {[string match "cluster_bus_module_*_bytes_*" $line]} {
+            return 0
+        }
+    }
+    return 1
+}
+
+proc retry_until {condition {max_retries 10} {delay 100}} {
+    for {set retry 0} {$retry < $max_retries} {incr retry} {
+        if {[uplevel 1 $condition]} {
+            return 1
+        }
+        after $delay
+    }
+    return 0
+}
+
 test "Module cluster message traffic tracking" {
     # Build the cluster module if it doesn't exist
     set testmodule [file normalize tests/modules/cluster.so]
@@ -76,27 +115,10 @@ test "Module cluster message traffic tracking" {
     r test.pingall
     
     # Wait longer for message processing in sanitizer builds
-    after 3000
+    after 1000
     
-    # Check sent bytes on sender (primary1) with retry for sanitizer builds
-    set sent_found 0
-    set recv_found 0
-    foreach line [split [r cluster info] "\r\n"] {
-        if {[string match "cluster_bus_module_sent_bytes_*" $line]} {
-            set sent_found 1
-            set bytes [lindex [split $line ":"] 1]
-            assert {$bytes >= 0}
-        }
-        if {[string match "cluster_bus_module_received_bytes_*" $line]} {
-            set recv_found 1
-            set bytes [lindex [split $line ":"] 1]
-            assert {$bytes >= 0}
-        }
-    }
-
-    # Verify that both sent and received module traffic were tracked
-    assert {$sent_found == 1}
-    assert {$recv_found == 1}
+    # Check that module traffic entries exist with retries
+    assert {[retry_until check_module_traffic_exists]}
 
     # Unload module from all nodes
     r module unload cluster
@@ -114,17 +136,8 @@ test "Module cluster message traffic tracking" {
     }
     assert {$cluster_found == 0}
 
-    # Check that module traffic entries are cleaned up after unload with retry
-    set module_traffic_found_after 0
-    foreach line [split [r cluster info] "\r\n"] {
-        if {[string match "cluster_bus_module_*_bytes_*" $line]} {
-            set module_traffic_found_after 1
-            break
-        }
-    }
-
-    # Verify module traffic was present before and absent after unload
-    assert {$module_traffic_found_after == 0}
+    # Check that module traffic entries are cleaned up after unload with retries
+    assert {[retry_until check_module_traffic_absent]}
 }
 
 }

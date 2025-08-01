@@ -386,8 +386,8 @@ struct clusterState {
     dict *nodes;            /* Hash table of name -> clusterNode structures */
     dict *shards;           /* Hash table of shard_id -> list (of nodes) structures */
     dict *nodes_black_list; /* Nodes we don't re-add for a few seconds. */
-    clusterNode *migrating_slots_to[CLUSTER_SLOTS];
-    clusterNode *importing_slots_from[CLUSTER_SLOTS];
+    dict *migrating_slots_to;
+    dict *importing_slots_from;
     clusterNode *slots[CLUSTER_SLOTS];
     /* The following fields are used to take the replica state on elections. */
     mstime_t failover_auth_time;      /* Time of previous or next election. */

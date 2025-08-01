@@ -1094,9 +1094,9 @@ clusterNode *getNodeByQuery(client *c, int *error_code) {
      * error). To do so we set the importing/migrating state and
      * increment a counter for every missing key. */
     if (clusterNodeIsPrimary(myself) || c->flag.readonly) {
-        if (n == clusterNodeGetPrimary(myself) && getMigratingSlotDest(c->slot) != NULL) {
+        if (n == clusterNodeGetPrimary(myself) && getMigratingSlot(c->slot) != NULL) {
             migrating_slot = 1;
-        } else if (getImportingSlotSource(c->slot) != NULL) {
+        } else if (getImportingSlot(c->slot) != NULL) {
             importing_slot = 1;
         }
     }
@@ -1260,7 +1260,7 @@ after_checking_each_key:
             return NULL;
         } else {
             if (error_code) *error_code = CLUSTER_REDIR_ASK;
-            return getMigratingSlotDest(c->slot);
+            return getMigratingSlot(c->slot);
         }
     }
 
@@ -1374,7 +1374,7 @@ int clusterRedirectBlockedClientIfNeeded(client *c) {
             /* We send an error and unblock the client if:
              * 1) The slot is unassigned, emitting a cluster down error.
              * 2) The slot is neither handled by this node, nor being imported. */
-            if (node != myself && getImportingSlotSource(slot) == NULL) {
+            if (node != myself && getImportingSlot(slot) == NULL) {
                 if (node == NULL) {
                     clusterRedirectClient(c, NULL, 0, CLUSTER_REDIR_DOWN_UNBOUND);
                 } else {

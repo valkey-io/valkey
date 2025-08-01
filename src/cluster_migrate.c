@@ -1448,6 +1448,9 @@ createSlotExportLink(clusterNode *target_node, list *slot_ranges) {
 void slotMigrationLinkReadEstablishResponse(connection *conn) {
     client *c = (client *)connGetPrivateData(conn);
     slotMigrationLink *link = c->slot_migration_link;
+    if (c->flag.close_asap || !isSlotMigrationLinkInProgress(link)) {
+        return;
+    }
     if (!link->response_buf) {
         link->response_buf = sdsempty();
         link->response_buf = sdsMakeRoomForNonGreedy(link->response_buf, PROTO_IOBUF_LEN);

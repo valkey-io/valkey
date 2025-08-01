@@ -1671,6 +1671,69 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
         }
     }
 
+    test "Resynchronization during migration" {
+        set_debug_prevent_pause 1
+
+        # Load data before the snapshot
+        populate 333 "$16379_slot_tag:1:" 1000 -2
+
+        # Load data while the snapshot is ongoing
+        assert_match "OK" [R 2 CLUSTER MIGRATE SLOTSRANGE 16379 16383 NODE $node0_id]
+        set linkname [get_link_name 2 16383]
+        populate 333 "$16381_slot_tag:2:" 1000 -2
+
+        # Load data after the snapshot
+        wait_for_migration_field 2 $linkname state waiting-to-pause
+        populate 334 "$16383_slot_tag:3:" 1000 -2
+
+        # Resync the replicas on both ends
+        assert_match "OK" [R 0 SAVE]
+        assert_match "OK" [R 3 CLUSTER REPLICATE NO ONE]
+        assert_match "OK" [R 5 CLUSTER REPLICATE NO ONE]
+        assert_match "OK" [R 3 CLUSTER REPLICATE $node0_id]
+        assert_match "OK" [R 5 CLUSTER REPLICATE $node2_id]
+        
+
+        # Wait for resync
+        wait_for_condition 50 1000 {
+            [status [srv -3 client] master_link_status] == "up"
+        } else {
+            fail "Node 3 is not synced"
+        }
+        wait_for_condition 50 1000 {
+            [status [srv -5 client] master_link_status] == "up"
+        } else {
+            fail "Node 5 is not synced"
+        }
+
+        # Allow migration to complete and verify
+        set_debug_prevent_pause 0
+        wait_for_migration 0 16383
+        assert_match "333" [R 0 CLUSTER COUNTKEYSINSLOT 16379]
+        assert_match "333" [R 0 CLUSTER COUNTKEYSINSLOT 16381]
+        assert_match "334" [R 0 CLUSTER COUNTKEYSINSLOT 16383]
+        assert_match "0" [R 2 CLUSTER COUNTKEYSINSLOT 16379]
+        assert_match "0" [R 2 CLUSTER COUNTKEYSINSLOT 16381]
+        assert_match "0" [R 2 CLUSTER COUNTKEYSINSLOT 16383]
+
+        # Also eventually reflected in replicas
+        wait_for_countkeysinslot 3 16379 333
+        wait_for_countkeysinslot 3 16381 333
+        wait_for_countkeysinslot 3 16383 334
+        wait_for_countkeysinslot 5 16379 0
+        wait_for_countkeysinslot 5 16381 0
+        wait_for_countkeysinslot 5 16383 0
+
+        # Migration log shows success on both ends
+        assert {[dict get [get_migration_by_linkname 0 $linkname] state] eq "success"}
+        assert {[dict get [get_migration_by_linkname 2 $linkname] state] eq "success"}
+
+        # Cleanup for the next test
+        assert_match "OK" [R 0 FLUSHDB SYNC]
+        assert_match "OK" [R 0 CLUSTER MIGRATE SLOTSRANGE 16379 16383 NODE $node2_id]
+        wait_for_migration 2 16383
+    }
+
 }
 
 start_cluster 3 0 {tags {external:skip cluster}} {

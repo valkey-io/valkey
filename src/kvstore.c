@@ -69,6 +69,7 @@ struct _kvstore {
     size_t overhead_hashtable_lut;            /* Overhead of all hashtables in bytes. */
     size_t overhead_hashtable_rehashing;      /* Overhead of hash tables rehashing in bytes. */
     dict *importing;                          /* The set of hashtable indexes that are being imported */
+    unsigned long long importing_key_count;   /* Total number of importing keys in this kvstore. */
 };
 
 /* Structure for kvstore iterator that allows iterating across multiple hashtables. */
@@ -79,6 +80,8 @@ struct _kvstoreIterator {
     kvstoreHashtablePredicate *predicate;
     void *predicate_privdata;
     hashtableIterator di;
+    int flags;
+    dictIterator *importing_iter;
 };
 
 /* Structure for kvstore hashtable iterator that allows iterating the corresponding hashtable. */
@@ -172,7 +175,10 @@ int kvstoreIsImporting(kvstore *kvs, int didx) {
 static void cumulativeKeyCountAdd(kvstore *kvs, int didx, long delta) {
     /* Fast return for importing dictionaries, which will be accumulated in
      * metrics once we are done importing. */
-    if (kvstoreIsImporting(kvs, didx)) return;
+    if (kvstoreIsImporting(kvs, didx)) {
+        kvs->importing_key_count += delta;
+        return;
+    }
 
     kvs->key_count += delta;
 
@@ -347,6 +353,7 @@ void kvstoreEmpty(kvstore *kvs, void(callback)(hashtable *)) {
     }
 
     dictEmpty(kvs->importing, NULL);
+    kvs->importing_key_count = 0;
 
     listEmpty(kvs->rehashing);
 
@@ -382,6 +389,10 @@ unsigned long long int kvstoreSize(kvstore *kvs) {
     } else {
         return kvs->hashtables[0] ? hashtableSize(kvs->hashtables[0]) : 0;
     }
+}
+
+unsigned long long int kvstoreImportingSize(kvstore *kvs) {
+    return kvs->importing_key_count;
 }
 
 /* This method provides the cumulative sum of all the hash table buckets
@@ -629,7 +640,7 @@ kvstoreIterator *kvstoreIteratorInit(kvstore *kvs, uint8_t flags) {
 /* Returns kvstore iterator that filters out hash tables based on the predicate.
  *
  * Note that importing keys will be excluded from iteration regardless of
- * predicate. */
+ * predicate unless HASHTABLE_ITER_INCLUDE_IMPORTING is set in flags. */
 kvstoreIterator *kvstoreFilteredIteratorInit(kvstore *kvs, uint8_t flags, kvstoreHashtablePredicate *predicate, void *privdata) {
     kvstoreIterator *kvs_it = zmalloc(sizeof(*kvs_it));
     kvs_it->kvs = kvs;
@@ -640,6 +651,8 @@ kvstoreIterator *kvstoreFilteredIteratorInit(kvstore *kvs, uint8_t flags, kvstor
     }
     kvs_it->predicate = predicate;
     kvs_it->predicate_privdata = privdata;
+    kvs_it->flags = flags;
+    kvs_it->importing_iter = NULL;
     hashtableInitIterator(&kvs_it->di, NULL, flags);
     return kvs_it;
 }
@@ -652,12 +665,41 @@ void kvstoreIteratorRelease(kvstoreIterator *kvs_it) {
     if (kvs_it->didx != -1) {
         freeHashtableIfNeeded(kvs_it->kvs, kvs_it->didx);
     }
+    if (kvs_it->importing_iter) {
+        dictReleaseIterator(kvs_it->importing_iter);
+    }
     zfree(kvs_it);
+}
+
+static int kvstoreIteratorNextImportingHashtableIndex(kvstoreIterator *kvs_it) {
+    dictEntry *de;
+    if (kvs_it->importing_iter == NULL) {
+        kvs_it->importing_iter = dictGetSafeIterator(kvs_it->kvs->importing);
+    }
+    while ((de = dictNext(kvs_it->importing_iter)) != NULL) {
+        long didx = (long)dictGetKey(de);
+        if (kvstoreHashtableSize(kvs_it->kvs, didx)) {
+            return didx;
+        }
+    }
+    return -1;
 }
 
 /* Returns next hash table from the iterator, or NULL if iteration is complete. */
 static hashtable *kvstoreIteratorNextHashtable(kvstoreIterator *kvs_it) {
-    if (kvs_it->next_didx == -1) return NULL;
+    int next_hashtable_index = kvs_it->next_didx;
+
+    /* Since importing dictionaries are removed from the binary index tree,
+     * we will not iterate over them during normal iteration. However, if the
+     * iterator requested iteration over importing keys, we do those after we
+     * have exhausted all other hashtables. */
+    if (next_hashtable_index == -1 && kvs_it->flags & HASHTABLE_ITER_INCLUDE_IMPORTING) {
+        next_hashtable_index = kvstoreIteratorNextImportingHashtableIndex(kvs_it);
+    }
+
+    if (next_hashtable_index == -1) {
+        return NULL;
+    }
 
     /* The hashtable may be deleted during the iteration process, so here need to check for NULL. */
     if (kvs_it->didx != -1 && kvstoreGetHashtable(kvs_it->kvs, kvs_it->didx)) {
@@ -668,10 +710,15 @@ static hashtable *kvstoreIteratorNextHashtable(kvstoreIterator *kvs_it) {
         freeHashtableIfNeeded(kvs_it->kvs, kvs_it->didx);
     }
 
-    kvs_it->didx = kvs_it->next_didx;
-    do {
+    kvs_it->didx = next_hashtable_index;
+
+    while (kvs_it->next_didx != -1) {
         kvs_it->next_didx = kvstoreGetNextNonEmptyHashtableIndex(kvs_it->kvs, kvs_it->next_didx);
-    } while (kvs_it->next_didx != -1 && kvs_it->predicate && !kvs_it->predicate(kvs_it->next_didx, kvstoreGetHashtable(kvs_it->kvs, kvs_it->next_didx), kvs_it->predicate_privdata));
+        if (kvs_it->predicate && !kvs_it->predicate(kvs_it->next_didx, kvstoreGetHashtable(kvs_it->kvs, kvs_it->next_didx), kvs_it->predicate_privdata)) {
+            continue;
+        }
+        break;
+    }
     return kvs_it->kvs->hashtables[kvs_it->didx];
 }
 

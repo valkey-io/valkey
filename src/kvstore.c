@@ -646,9 +646,17 @@ kvstoreIterator *kvstoreFilteredIteratorInit(kvstore *kvs, uint8_t flags, kvstor
     kvs_it->kvs = kvs;
     kvs_it->didx = -1;
     kvs_it->next_didx = kvstoreGetFirstNonEmptyHashtableIndex(kvs_it->kvs);
-    while (kvs_it->next_didx != -1 && predicate && !predicate(kvs_it->next_didx, kvstoreGetHashtable(kvs, kvs_it->next_didx), privdata)) {
-        kvs_it->next_didx = kvstoreGetNextNonEmptyHashtableIndex(kvs_it->kvs, kvs_it->next_didx);
+    
+    /* If predicate is being used, we may need to skip a few dictionaries */
+    if (predicate) {
+        while (1) {
+            if (kvs_it->next_didx == -1) break;
+            hashtable *ht = kvstoreGetHashtable(kvs, kvs_it->next_didx);
+            if (predicate(kvs_it->next_didx, ht, privdata)) break;
+            kvs_it->next_didx = kvstoreGetNextNonEmptyHashtableIndex(kvs_it->kvs, kvs_it->next_didx);
+        }
     }
+
     kvs_it->predicate = predicate;
     kvs_it->predicate_privdata = privdata;
     kvs_it->flags = flags;
@@ -711,15 +719,19 @@ static hashtable *kvstoreIteratorNextHashtable(kvstoreIterator *kvs_it) {
     }
 
     kvs_it->didx = next_hashtable_index;
+    hashtable *result = kvs_it->kvs->hashtables[kvs_it->didx];
 
-    while (kvs_it->next_didx != -1) {
+    if (kvs_it->next_didx == -1) return result;
+
+    /* Loop until we find a next_didx that satisfies the predicate */
+    while (1) {
         kvs_it->next_didx = kvstoreGetNextNonEmptyHashtableIndex(kvs_it->kvs, kvs_it->next_didx);
-        if (kvs_it->predicate && !kvs_it->predicate(kvs_it->next_didx, kvstoreGetHashtable(kvs_it->kvs, kvs_it->next_didx), kvs_it->predicate_privdata)) {
-            continue;
-        }
-        break;
+        if (kvs_it->next_didx == -1) break;
+        if (!kvs_it->predicate) break;
+        hashtable *ht = kvstoreGetHashtable(kvs_it->kvs, kvs_it->next_didx);
+        if (kvs_it->predicate(kvs_it->next_didx, ht, kvs_it->predicate_privdata)) break;
     }
-    return kvs_it->kvs->hashtables[kvs_it->didx];
+    return result;
 }
 
 int kvstoreIteratorGetCurrentHashtableIndex(kvstoreIterator *kvs_it) {

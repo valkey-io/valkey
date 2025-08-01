@@ -65,66 +65,23 @@ test "Module cluster message traffic tracking" {
     if {![file exists $testmodule]} {
         exec make -C tests/modules cluster.so
     }
-    
-    # Load the cluster module on all nodes with error handling
-    set load_success 0
-    for {set i 0} {$i < 10} {incr i} {
-        if {[catch {r module load $testmodule} err]} {
-            after 500
-            continue
-        }
-        set load_success 1
-        break
-    }
-    if {!$load_success} {
-        fail "Failed to load cluster module after retries"
-    }
+
+    # Load the cluster module on all nodes
+    r module load $testmodule
 
     # Wait longer for module load and cluster stabilization
-    after 2000
-    
-    # Verify cluster is still healthy before proceeding
-    set cluster_ok 0
-    for {set i 0} {$i < 10} {incr i} {
-        if {[catch {r cluster info} cluster_info]} {
-            after 500
-            continue
-        }
-        if {[string match "*cluster_state:ok*" $cluster_info]} {
-            set cluster_ok 1
-            break
-        }
-        after 500
-    }
-    if {!$cluster_ok} {
-        fail "Cluster not healthy after retries"
-    }
+    after 1000
 
-    # Send module cluster message to generate traffic with error handling
-    if {[catch {r test.pingall} err]} {
-        fail "Failed to send cluster message: $err"
-    }
+    # Send module cluster message to generate traffic
+    r test.pingall
     
     # Wait longer for message processing in sanitizer builds
     after 3000
     
     # Check sent bytes on sender (primary1) with retry for sanitizer builds
-    set cluster_info_sender {}
-    set retry_count 0
-    while {$cluster_info_sender eq {} && $retry_count < 10} {
-        if {[catch {r cluster info} cluster_info_sender]} {
-            incr retry_count
-            after 500
-            continue
-        }
-        break
-    }
-    if {$cluster_info_sender eq {}} {
-        fail "Failed to get cluster info after retries"
-    }
     set sent_found 0
     set recv_found 0
-    foreach line [split $cluster_info_sender "\r\n"] {
+    foreach line [split [r cluster info] "\r\n"] {
         if {[string match "cluster_bus_module_sent_bytes_*" $line]} {
             set sent_found 1
             set bytes [lindex [split $line ":"] 1]
@@ -141,22 +98,11 @@ test "Module cluster message traffic tracking" {
     assert {$sent_found == 1}
     assert {$recv_found == 1}
 
-    # Unload module from all nodes with error handling
-    set unload_success 0
-    for {set i 0} {$i < 10} {incr i} {
-        if {[catch {r module unload cluster} err]} {
-            after 500
-            continue
-        }
-        set unload_success 1
-        break
-    }
-    if {!$unload_success} {
-        fail "Failed to unload cluster module after retries"
-    }
+    # Unload module from all nodes
+    r module unload cluster
 
     # Wait longer for cleanup to propagate after module unload
-    after 2000
+    after 1000
 
     # Verify module was unloaded successfully
     set modules [r module list]
@@ -169,27 +115,16 @@ test "Module cluster message traffic tracking" {
     assert {$cluster_found == 0}
 
     # Check that module traffic entries are cleaned up after unload with retry
-    set cluster_info_after {}
-    set retry_count 0
-    while {$cluster_info_after eq {} && $retry_count < 10} {
-        if {[catch {r cluster info} cluster_info_after]} {
-            incr retry_count
-            after 500
-            continue
+    set module_traffic_found_after 0
+    foreach line [split [r cluster info] "\r\n"] {
+        if {[string match "cluster_bus_module_*_bytes_*" $line]} {
+            set module_traffic_found_after 1
+            break
         }
-        break
     }
-    if {$cluster_info_after ne {}} {
-        set module_traffic_found_after 0
-        foreach line [split $cluster_info_after "\r\n"] {
-            if {[string match "cluster_bus_module_*_bytes_*" $line]} {
-                set module_traffic_found_after 1
-                break
-            }
-        }
-        # Verify module traffic was present before and absent after unload
-        assert {$module_traffic_found_after == 0}
-    }
+
+    # Verify module traffic was present before and absent after unload
+    assert {$module_traffic_found_after == 0}
 }
 
 }

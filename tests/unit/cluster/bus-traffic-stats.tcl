@@ -60,8 +60,13 @@ test "Pub/sub traffic increases with publish operations" {
 }
 
 test "Module cluster message traffic tracking" {
-    # Load the cluster module on all nodes
+    # Build the cluster module if it doesn't exist
     set testmodule [file normalize tests/modules/cluster.so]
+    if {![file exists $testmodule]} {
+        exec make -C tests/modules cluster.so
+    }
+    
+    # Load the cluster module on all nodes
     r module load $testmodule
     
     # Send module cluster message to generate traffic

@@ -68,6 +68,9 @@ test "Module cluster message traffic tracking" {
     
     # Load the cluster module on all nodes
     r module load $testmodule
+
+    # Wait for module load if needed
+    after 100
     
     # Send module cluster message to generate traffic
     r test.pingall

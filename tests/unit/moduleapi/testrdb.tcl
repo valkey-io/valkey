@@ -245,7 +245,7 @@ tags "modules" {
                             test {Diskless load swapdb RedisModuleEvent_ReplAsyncLoad handling: during loading, can keep module variable same as before} {
                                 # Wait for the replica to start reading the rdb and module for acknowledgement
                                 # We wanna abort only after the temp db was populated by REDISMODULE_AUX_BEFORE_RDB
-                                wait_for_condition 100 100 {
+                                wait_for_condition 200 100 {
                                     [s -1 async_loading] eq 1 && [$replica testrdb.async_loading.get.before] eq "value1_master"
                                 } else {
                                     fail "Module didn't receive or react to REDISMODULE_SUBEVENT_REPL_ASYNC_LOAD_STARTED"

@@ -69,14 +69,14 @@ test "Module cluster message traffic tracking" {
     # Load the cluster module on all nodes
     r module load $testmodule
 
-    # Wait for module load if needed
-    after 100
+    # Wait for module load on all nodes
+    after 200
     
     # Send module cluster message to generate traffic
     r test.pingall
     
-    # Wait for message processing
-    after 100
+    # Wait longer for message processing in sanitizer builds
+    after 500
     
     # Check sent bytes on sender (primary1) with retry for sanitizer builds
     set cluster_info_sender {}
@@ -111,7 +111,11 @@ test "Module cluster message traffic tracking" {
     assert {$sent_found == 1}
     assert {$recv_found == 1}
 
+    # Unload module from all nodes
     r module unload cluster
+
+    # Wait for cleanup to propagate after module unload
+    after 200
 
     # Verify module was unloaded successfully
     set modules [r module list]

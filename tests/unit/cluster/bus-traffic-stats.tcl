@@ -76,7 +76,7 @@ test "Module cluster message traffic tracking" {
     r test.pingall
     
     # Wait longer for message processing in sanitizer builds
-    after 100
+    after 1000
     
     # Check sent bytes on sender (primary1) with retry for sanitizer builds
     set cluster_info_sender {}

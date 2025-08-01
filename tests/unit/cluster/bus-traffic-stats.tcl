@@ -78,8 +78,20 @@ test "Module cluster message traffic tracking" {
     # Wait for message processing
     after 100
     
-    # Check sent bytes on sender (primary1)
-    set cluster_info_sender [r cluster info]
+    # Check sent bytes on sender (primary1) with retry for sanitizer builds
+    set cluster_info_sender {}
+    set retry_count 0
+    while {$cluster_info_sender eq {} && $retry_count < 5} {
+        if {[catch {r cluster info} cluster_info_sender]} {
+            incr retry_count
+            after 200
+            continue
+        }
+        break
+    }
+    if {$cluster_info_sender eq {}} {
+        fail "Failed to get cluster info after retries"
+    }
     set sent_found 0
     set recv_found 0
     foreach line [split $cluster_info_sender "\r\n"] {
@@ -111,8 +123,20 @@ test "Module cluster message traffic tracking" {
     }
     assert {$cluster_found == 0}
 
-    # Check that module traffic entries are cleaned up after unload
-    set cluster_info_after [r cluster info]
+    # Check that module traffic entries are cleaned up after unload with retry
+    set cluster_info_after {}
+    set retry_count 0
+    while {$cluster_info_after eq {} && $retry_count < 5} {
+        if {[catch {r cluster info} cluster_info_after]} {
+            incr retry_count
+            after 200
+            continue
+        }
+        break
+    }
+    if {$cluster_info_after eq {}} {
+        fail "Failed to get cluster info after module unload"
+    }
     set module_traffic_found_after 0
     foreach line [split $cluster_info_after "\r\n"] {
         if {[string match "cluster_bus_module_*_bytes_*" $line]} {

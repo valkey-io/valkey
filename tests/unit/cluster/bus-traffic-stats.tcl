@@ -1,6 +1,6 @@
 # Test cluster bus traffic statistics
 
-start_cluster 3 0 {tags {external:skip cluster "modules"}} {
+start_cluster 3 0 {tags {external:skip cluster modules}} {
 
 test "Cluster should start ok" {
     wait_for_cluster_state ok

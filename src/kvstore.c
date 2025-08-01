@@ -646,7 +646,7 @@ kvstoreIterator *kvstoreFilteredIteratorInit(kvstore *kvs, uint8_t flags, kvstor
     kvs_it->kvs = kvs;
     kvs_it->didx = -1;
     kvs_it->next_didx = kvstoreGetFirstNonEmptyHashtableIndex(kvs_it->kvs);
-    
+
     /* If predicate is being used, we may need to skip a few dictionaries */
     if (predicate) {
         while (1) {

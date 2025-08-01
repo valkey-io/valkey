@@ -60,12 +60,12 @@ test "Pub/sub traffic increases with publish operations" {
 }
 
 test "Module cluster message traffic tracking" {
-    # Load the hellocluster module on all nodes
-    set testmodule [file normalize src/modules/hellocluster.so]
+    # Load the cluster module on all nodes
+    set testmodule [file normalize tests/modules/cluster.so]
     r module load $testmodule
     
     # Send module cluster message to generate traffic
-    r HELLOCLUSTER.PINGALL
+    r test.pingall
     
     # Wait for message processing
     after 100
@@ -91,17 +91,17 @@ test "Module cluster message traffic tracking" {
     assert {$sent_found == 1}
     assert {$recv_found == 1}
 
-    r module unload hellocluster
+    r module unload cluster
 
     # Verify module was unloaded successfully
     set modules [r module list]
-    set hellocluster_found 0
+    set cluster_found 0
     foreach module $modules {
-        if {[dict get $module name] eq "hellocluster"} {
-            set hellocluster_found 1
+        if {[dict get $module name] eq "cluster"} {
+            set cluster_found 1
         }
     }
-    assert {$hellocluster_found == 0}
+    assert {$cluster_found == 0}
 
     # Check that module traffic entries are cleaned up after unload
     set cluster_info_after [r cluster info]

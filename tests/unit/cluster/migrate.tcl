@@ -319,10 +319,10 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
         assert_match "OK" [R 2 CLUSTER MIGRATE SLOTSRANGE 16383 16383 NODE $node0_id]
         set linkname [get_link_name 2 16383]
         wait_for_migration_field 2 $linkname state waiting-to-pause
-        assert_error "*A slot is currently being imported via CLUSTER IMPORT*" {R 0 CLUSTER SETSLOT 0 MIGRATING $node1_id}
-        assert_error "*A slot is currently being imported via CLUSTER IMPORT*" {R 0 CLUSTER SETSLOT 0 IMPORTING $node1_id}
-        assert_error "*A slot is currently being exported via CLUSTER IMPORT*" {R 2 CLUSTER SETSLOT 0 MIGRATING $node1_id}
-        assert_error "*A slot is currently being exported via CLUSTER IMPORT*" {R 2 CLUSTER SETSLOT 0 IMPORTING $node1_id}
+        assert_error "*A slot is currently being imported via CLUSTER MIGRATE*" {R 0 CLUSTER SETSLOT 0 MIGRATING $node1_id}
+        assert_error "*A slot is currently being imported via CLUSTER MIGRATE*" {R 0 CLUSTER SETSLOT 0 IMPORTING $node1_id}
+        assert_error "*A slot is currently being exported via CLUSTER MIGRATE*" {R 2 CLUSTER SETSLOT 0 MIGRATING $node1_id}
+        assert_error "*A slot is currently being exported via CLUSTER MIGRATE*" {R 2 CLUSTER SETSLOT 0 IMPORTING $node1_id}
         assert_match "OK" [R 2 CLUSTER CANCELMIGRATION ALL]
         wait_for_migration_field 0 $linkname state failed
 

@@ -3105,7 +3105,7 @@ void aofOpenIfNeededOnServerStart(void);
 void aofManifestFree(aofManifest *am);
 int aofDelHistoryFiles(void);
 int aofRewriteLimited(void);
-int rewriteAppendOnlyFileRio(rio *aof, int skip_timestamp, kvstoreHashtablePredicate predicate, void *privdata);
+int rewriteSlotToAppendOnlyFileRio(rio *aof, int db_num, int hashslot, int *key_count);
 
 /* Child info */
 void openChildInfoPipe(void);

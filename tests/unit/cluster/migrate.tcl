@@ -555,6 +555,12 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
 
             assert_match "1000" [R $target_idx CLUSTER COUNTKEYSINSLOT $slot_to_migrate]
         }
+        test "Importing key containment (slot $slot_to_migrate from node $source_idx to $target_idx) - DBSIZE command excludes importing keys" {
+            assert_match "0" [R $target_idx DBSIZE]
+            assert_match "OK" [R $target_idx SET $slot_to_test_tag:my_key my_value]
+            assert_match "1" [R $target_idx DBSIZE]
+            assert_match "1" [R $target_idx DEL $slot_to_test_tag:my_key]
+        }
         test "Importing key containment (slot $slot_to_migrate from node $source_idx to $target_idx) - KEYS command excludes importing keys" {
             assert_match "" [R $target_idx KEYS *]
             assert_match "" [R $target_idx KEYS $slot_to_migrate_tag:*]

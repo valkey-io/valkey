@@ -1236,12 +1236,24 @@ int shouldRewriteHashtableIndex(int didx, hashtable *ht, void *privdata) {
 /* Contains the logic run on the child process during the snapshot phase. */
 int childSnapshotForSyncSlot(int req, rio *rdb, void *privdata) {
     UNUSED(req);
-    int retval = rewriteAppendOnlyFileRio(rdb, 1, shouldRewriteHashtableIndex, privdata);
+    list *slot_ranges = privdata;
+    int key_count = 0;
+    for (int db_num = 0; db_num < server.dbnum; db_num++) {
+        listIter li;
+        listNode *ln;
+        listRewind(slot_ranges, &li);
+        while ((ln = listNext(&li))) {
+            slotRange *range = (slotRange *)ln->value;
+            for (int slot = range->start_slot; slot <= range->end_slot; slot++) {
+                if (rewriteSlotToAppendOnlyFileRio(rdb, db_num, slot, &key_count) == C_ERR) return C_ERR;
+            }
+        }
+    }
     rioWrite(rdb, "*3\r\n", 4);
     rioWriteBulkString(rdb, "CLUSTER", 7);
     rioWriteBulkString(rdb, "SYNCSLOTS", 9);
     rioWriteBulkString(rdb, "SNAPSHOT-EOF", 12);
-    return retval;
+    return C_OK;
 }
 
 /* Begin the snapshot for the provided link in a child process. */

@@ -77,10 +77,8 @@ struct _kvstoreIterator {
     kvstore *kvs;
     long long didx;
     long long next_didx;
-    kvstoreHashtablePredicate *predicate;
-    void *predicate_privdata;
     hashtableIterator di;
-    int flags;
+    uint8_t flags;
     dictIterator *importing_iter;
 };
 
@@ -434,7 +432,7 @@ unsigned long long kvstoreScan(kvstore *kvs,
                                unsigned long long cursor,
                                int onlydidx,
                                hashtableScanFunction scan_cb,
-                               kvstoreHashtablePredicate *predicate,
+                               kvstoreScanShouldSkipHashtable *skip_cb,
                                void *privdata) {
     unsigned long long next_cursor = 0;
     /* During hash table traversal, 48 upper bits in the cursor are used for positioning in the HT.
@@ -456,7 +454,7 @@ unsigned long long kvstoreScan(kvstore *kvs,
 
     hashtable *ht = kvstoreGetHashtable(kvs, didx);
 
-    int skip = !ht || (predicate && !predicate(didx, ht, privdata)) || kvstoreIsImporting(kvs, didx);
+    int skip = !ht || (skip_cb && skip_cb(ht)) || kvstoreIsImporting(kvs, didx);
     if (!skip) {
         next_cursor = hashtableScan(ht, cursor, scan_cb, privdata);
         /* In hashtableScan, scan_cb may delete entries (e.g., in active expire case). */
@@ -634,31 +632,10 @@ int kvstoreNumHashtables(kvstore *kvs) {
  *
  * The caller should free the resulting kvs_it with kvstoreIteratorRelease. */
 kvstoreIterator *kvstoreIteratorInit(kvstore *kvs, uint8_t flags) {
-    return kvstoreFilteredIteratorInit(kvs, flags, NULL, NULL);
-}
-
-/* Returns kvstore iterator that filters out hash tables based on the predicate.
- *
- * Note that importing keys will be excluded from iteration regardless of
- * predicate unless HASHTABLE_ITER_INCLUDE_IMPORTING is set in flags. */
-kvstoreIterator *kvstoreFilteredIteratorInit(kvstore *kvs, uint8_t flags, kvstoreHashtablePredicate *predicate, void *privdata) {
     kvstoreIterator *kvs_it = zmalloc(sizeof(*kvs_it));
     kvs_it->kvs = kvs;
     kvs_it->didx = -1;
-    kvs_it->next_didx = kvstoreGetFirstNonEmptyHashtableIndex(kvs_it->kvs);
-
-    /* If predicate is being used, we may need to skip a few dictionaries */
-    if (predicate) {
-        while (1) {
-            if (kvs_it->next_didx == -1) break;
-            hashtable *ht = kvstoreGetHashtable(kvs, kvs_it->next_didx);
-            if (predicate(kvs_it->next_didx, ht, privdata)) break;
-            kvs_it->next_didx = kvstoreGetNextNonEmptyHashtableIndex(kvs_it->kvs, kvs_it->next_didx);
-        }
-    }
-
-    kvs_it->predicate = predicate;
-    kvs_it->predicate_privdata = privdata;
+    kvs_it->next_didx = kvstoreGetFirstNonEmptyHashtableIndex(kvs_it->kvs); /* Finds first non-empty hashtable index. */
     kvs_it->flags = flags;
     kvs_it->importing_iter = NULL;
     hashtableInitIterator(&kvs_it->di, NULL, flags);
@@ -719,19 +696,10 @@ static hashtable *kvstoreIteratorNextHashtable(kvstoreIterator *kvs_it) {
     }
 
     kvs_it->didx = next_hashtable_index;
-    hashtable *result = kvs_it->kvs->hashtables[kvs_it->didx];
-
-    if (kvs_it->next_didx == -1) return result;
-
-    /* Loop until we find a next_didx that satisfies the predicate */
-    while (1) {
-        kvs_it->next_didx = kvstoreGetNextNonEmptyHashtableIndex(kvs_it->kvs, kvs_it->next_didx);
-        if (kvs_it->next_didx == -1) break;
-        if (!kvs_it->predicate) break;
-        hashtable *ht = kvstoreGetHashtable(kvs_it->kvs, kvs_it->next_didx);
-        if (kvs_it->predicate(kvs_it->next_didx, ht, kvs_it->predicate_privdata)) break;
+    if (kvs_it->next_didx != -1) {
+        kvs_it->next_didx = kvstoreGetNextNonEmptyHashtableIndex(kvs_it->kvs, kvs_it->didx);
     }
-    return result;
+    return kvs_it->kvs->hashtables[kvs_it->didx];
 }
 
 int kvstoreIteratorGetCurrentHashtableIndex(kvstoreIterator *kvs_it) {

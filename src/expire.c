@@ -536,7 +536,7 @@ int checkAlreadyExpired(long long when) {
      *
      * If the server is a primary and in the import mode, we also add the already
      * expired key and wait for an explicit DEL from the import source. */
-    if (server.current_client && server.current_client->slot_migration_link) return 0;
+    if (server.current_client && server.current_client->slot_migration_job) return 0;
     return (when <= commandTimeSnapshot() && !server.loading && !server.primary_host && !server.import_mode);
 }
 

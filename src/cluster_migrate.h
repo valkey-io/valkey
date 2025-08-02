@@ -6,19 +6,19 @@
 #include "cluster_legacy.h"
 
 /* Forward declaration to allow use as an argument below */
-typedef struct slotMigrationLink slotMigrationLink;
+typedef struct slotMigrationJob slotMigrationJob;
 
-int isImportSlotMigrationLink(slotMigrationLink *link);
-void clusterHandleSlotMigrationLinkClientClose(slotMigrationLink *link);
-void clusterHandleSlotMigrationLinkClientOOM(slotMigrationLink *link);
-void clusterFeedSlotExportLinks(int dbid, robj **argv, int argc, int slot);
+int isImportSlotMigrationJob(slotMigrationJob *job);
+void clusterHandleSlotMigrationClientClose(slotMigrationJob *job);
+void clusterHandleSlotMigrationClientOOM(slotMigrationJob *job);
+void clusterFeedSlotExportJobs(int dbid, robj **argv, int argc, int slot);
 int clusterIsSlotImporting(int slot);
 int clusterIsSlotExporting(int slot);
 int clusterIsAnySlotImporting(void);
 int clusterIsAnySlotExporting(void);
 void clusterMarkImportingSlotsInDb(serverDb *db);
 int clusterSlotMigrationShouldInstallWriteHandler(client *c);
-void initClusterSlotMigrationLinkList(void);
+void initClusterSlotMigrationJobList(void);
 void clusterSlotMigrationCron(void);
 void clusterCommandMigrate(client *c);
 void clusterCommandSyncSlots(client *c);

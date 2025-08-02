@@ -3470,7 +3470,7 @@ struct serverCommand *lookupCommandOrOriginal(robj **argv, int argc) {
 
 /* Determines if commands on this client are replicated from some source */
 int isReplicatedClient(client *c) {
-    return c->flag.primary || (c->slot_migration_link && isImportSlotMigrationLink(c->slot_migration_link));
+    return c->flag.primary || (c->slot_migration_job && isImportSlotMigrationJob(c->slot_migration_job));
 }
 
 /* Commands arriving from the primary client or AOF client, should never be rejected. */
@@ -3498,7 +3498,7 @@ static int shouldPropagate(int target) {
  * flags are an xor between:
  * + PROPAGATE_NONE (no propagation of command at all)
  * + PROPAGATE_AOF (propagate into the AOF file if is enabled)
- * + PROPAGATE_REPL (propagate into replication links, including slot migration links)
+ * + PROPAGATE_REPL (propagate into replication links, including slot migration jobs)
  *
  * This is an internal low-level function and should not be called!
  *
@@ -3547,7 +3547,7 @@ static void propagateNow(int dbid, robj **argv, int argc, int target, int slot) 
 
     if (propagate_to_aof) feedAppendOnlyFile(dbid, argv, argc);
     if (propagate_to_repl) replicationFeedReplicas(dbid, argv, argc);
-    if (propagate_to_slot_migration) clusterFeedSlotExportLinks(dbid, argv, argc, slot);
+    if (propagate_to_slot_migration) clusterFeedSlotExportJobs(dbid, argv, argc, slot);
 }
 
 /* Used inside commands to schedule the propagation of additional commands
@@ -3567,9 +3567,9 @@ void alsoPropagate(int dbid, robj **argv, int argc, int target, int slot) {
 
     if (!shouldPropagate(target)) return;
 
-    /* Don't propagate slot migration links, these will be proxied in
-     * replicationFeedStreamFromPrimaryStream() */
-    if (server.current_client != NULL && server.current_client->slot_migration_link) return;
+    /* Don't propagate commands on slot migration clients, these will be proxied
+     * in replicationFeedStreamFromPrimaryStream() */
+    if (server.current_client != NULL && server.current_client->slot_migration_job) return;
 
     argvcopy = zmalloc(sizeof(robj *) * argc);
     for (j = 0; j < argc; j++) {
@@ -4327,8 +4327,8 @@ int processCommand(client *c) {
         if (server.current_client == NULL) return C_ERR;
 
         if (out_of_memory && is_denyoom_command) {
-            if (c->slot_migration_link != NULL) {
-                clusterHandleSlotMigrationLinkClientOOM(c->slot_migration_link);
+            if (c->slot_migration_job != NULL) {
+                clusterHandleSlotMigrationClientOOM(c->slot_migration_job);
                 return C_ERR;
             }
 

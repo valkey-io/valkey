@@ -23,9 +23,9 @@
                         "token": "ALL"
                     },
                     {
-                        "name": "link-name",
+                        "name": "name",
                         "type": "string",
-                        "token": "LINK"
+                        "token": "NAME"
                     }
                 ]
             }

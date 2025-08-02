@@ -25,33 +25,33 @@ proc is_slot_migrated {node_idx slot} {
     return 0
 }
 
-proc get_link_name {node_idx slot} {
+proc get_job_name {node_idx slot} {
     set migrations [R $node_idx CLUSTER MIGRATIONS]
     foreach migration $migrations {
         set slot_ranges [dict get $migration slot_ranges]
         if {[slot_ranges_contains_slot $slot_ranges $slot]} {
-            return [dict get $migration link_name]
+            return [dict get $migration name]
         }
     }
     return ""
 }
 
-proc get_migration_by_linkname {node_idx linkname} {
+proc get_migration_by_name {node_idx name} {
     set migrations [R $node_idx CLUSTER MIGRATIONS]
     foreach migration $migrations {
-        if {[dict get $migration link_name] eq $linkname} {
+        if {[dict get $migration name] eq $name} {
             return $migration
         }
     }
     return ""
 }
 
-proc wait_for_migration_field {node_idx linkname field value} {
+proc wait_for_migration_field {node_idx jobname field value} {
     wait_for_condition 100 100 {
-        [get_migration_by_linkname $node_idx $linkname] ne "" && [dict get [get_migration_by_linkname $node_idx $linkname] $field] eq $value
+        [get_migration_by_name $node_idx $jobname] ne "" && [dict get [get_migration_by_name $node_idx $jobname] $field] eq $value
     } else {
-        set curr_state [get_migration_by_linkname $node_idx $linkname]
-        fail "Migration $linkname on node $node_idx did not have $field == $value (currently $curr_state) within 10000 ms"
+        set curr_state [get_migration_by_name $node_idx $jobname]
+        fail "Migration $jobname on node $node_idx did not have $field == $value (currently $curr_state) within 10000 ms"
     }
 }
 
@@ -148,7 +148,7 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
     set node0_id [R 0 CLUSTER MYID]
     set node1_id [R 1 CLUSTER MYID]
     set node2_id [R 2 CLUSTER MYID]
-    set fake_linkname "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    set fake_jobname "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
     test "General command interface" {
         assert_error "*wrong number of arguments*" {R 0 CLUSTER MIGRATE}
@@ -166,7 +166,7 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
         assert_error "*syntax error*" {R 0 CLUSTER MIGRATE SLOTSRANGE 0 0}
         assert_error "*syntax error*" {R 0 CLUSTER MIGRATE SLOTSRANGE 0 0 NODE}
         assert_error "*Invalid node name*" {R 0 CLUSTER MIGRATE SLOTSRANGE 0 0 NODE blah}
-        assert_error "*Unknown node name*" {R 0 CLUSTER MIGRATE SLOTSRANGE 0 0 NODE $fake_linkname}
+        assert_error "*Unknown node name*" {R 0 CLUSTER MIGRATE SLOTSRANGE 0 0 NODE $fake_jobname}
         assert_error "*Slot ranges in migrations overlap*" {R 0 CLUSTER MIGRATE SLOTSRANGE 1 1 NODE $node1_id SLOTSRANGE 0 2 NODE $node2_id} 
 
         set source_node_id [R 0 CLUSTER MYID]
@@ -187,29 +187,29 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
 
         assert_error "*wrong number of arguments*" {R 0 CLUSTER CANCELMIGRATION}
         assert_error "*No migrations ongoing*" {R 0 CLUSTER CANCELMIGRATION ALL}
-        assert_error "*syntax error*" {R 0 CLUSTER CANCELMIGRATION LINK}
-        assert_error "*No outgoing migration with link name found*" {R 0 CLUSTER CANCELMIGRATION LINK abcdef}
+        assert_error "*syntax error*" {R 0 CLUSTER CANCELMIGRATION NAME}
+        assert_error "*No outgoing migration with name found*" {R 0 CLUSTER CANCELMIGRATION NAME abcdef}
     }
 
     test "CLUSTER MIGRATE already migrating" {
         set_debug_prevent_pause 1
         assert_match "OK" [R 2 CLUSTER MIGRATE SLOTSRANGE 16383 16383 NODE $node0_id]
-        set linkname [get_link_name 2 16383]
+        set jobname [get_job_name 2 16383]
         assert_error "*I am already migrating slot 16383*" {R 2 CLUSTER MIGRATE SLOTSRANGE 16383 16383 NODE $node0_id}
-        R 2 CLUSTER CANCELMIGRATION LINK $linkname
-        wait_for_migration_field 0 $linkname state failed
+        R 2 CLUSTER CANCELMIGRATION NAME $jobname
+        wait_for_migration_field 0 $jobname state failed
 
         assert_match "OK" [R 2 CLUSTER MIGRATE SLOTSRANGE 16381 16383 NODE $node0_id]
-        set linkname [get_link_name 2 16381]
+        set jobname [get_job_name 2 16381]
         assert_error "*I am already migrating slot 16382*" {R 2 CLUSTER MIGRATE SLOTSRANGE 16382 16382 NODE $node0_id}
-        R 2 CLUSTER CANCELMIGRATION LINK $linkname
-        wait_for_migration_field 0 $linkname state failed
+        R 2 CLUSTER CANCELMIGRATION NAME $jobname
+        wait_for_migration_field 0 $jobname state failed
 
         assert_match "OK" [R 2 CLUSTER MIGRATE SLOTSRANGE 16382 16382 NODE $node0_id]
-        set linkname [get_link_name 2 16382]
+        set jobname [get_job_name 2 16382]
         assert_error "*I am already migrating slot 16382*" {R 2 CLUSTER MIGRATE SLOTSRANGE 16381 16383 NODE $node0_id}
-        R 2 CLUSTER CANCELMIGRATION LINK $linkname
-        wait_for_migration_field 0 $linkname state failed
+        R 2 CLUSTER CANCELMIGRATION NAME $jobname
+        wait_for_migration_field 0 $jobname state failed
         set_debug_prevent_pause 0
     }
 
@@ -227,11 +227,11 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
         set_debug_prevent_pause 1
 
         assert_match "OK" [R 2 CLUSTER MIGRATE SLOTSRANGE 16383 16383 NODE $node0_id]
-        set linkname [get_link_name 2 16383]
-        wait_for_migration_field 2 $linkname state waiting-to-pause
+        set jobname [get_job_name 2 16383]
+        wait_for_migration_field 2 $jobname state waiting-to-pause
 
-        set import_migration [get_migration_by_linkname 0 $linkname]
-        set export_migration [get_migration_by_linkname 2 $linkname]
+        set import_migration [get_migration_by_name 0 $jobname]
+        set export_migration [get_migration_by_name 2 $jobname]
 
         assert_equal [dict get $import_migration operation] IMPORT
         assert_equal [dict get $export_migration operation] EXPORT
@@ -258,12 +258,12 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
         assert {$export_last_ack_time ne ""}
         
         wait_for_condition 100 50 {
-            [dict get [get_migration_by_linkname 0 $linkname] last_ack_time] ne $import_last_ack_time
+            [dict get [get_migration_by_name 0 $jobname] last_ack_time] ne $import_last_ack_time
         } else {
             fail "Import operation last ack time was not updated within 5 seconds"
         }
         wait_for_condition 100 50 {
-            [dict get [get_migration_by_linkname 2 $linkname] last_ack_time] ne $export_last_ack_time
+            [dict get [get_migration_by_name 2 $jobname] last_ack_time] ne $export_last_ack_time
         } else {
             fail "Export operation last ack time was not updated within 5 seconds"
         }
@@ -271,10 +271,10 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
         # Wait for some time to make sure update time will change (since it is in seconds)
         after 2000
         assert_match "OK" [R 2 CLUSTER CANCELMIGRATION ALL]
-        wait_for_migration_field 0 $linkname state failed
+        wait_for_migration_field 0 $jobname state failed
 
-        set import_migration [get_migration_by_linkname 0 $linkname]
-        set export_migration [get_migration_by_linkname 2 $linkname]
+        set import_migration [get_migration_by_name 0 $jobname]
+        set export_migration [get_migration_by_name 2 $jobname]
 
         assert {[dict get $import_migration last_update_time] ne $import_last_update_time}
         assert {[dict get $export_migration last_update_time] ne $export_last_update_time}
@@ -290,18 +290,18 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
 
         # Add a new entry and the old should get popped
         assert_match "OK" [R 2 CLUSTER MIGRATE SLOTSRANGE 16383 16383 NODE $node0_id]
-        set linkname2 [get_link_name 2 16383]
-        wait_for_migration_field 2 $linkname2 state waiting-to-pause
+        set jobname2 [get_job_name 2 16383]
+        wait_for_migration_field 2 $jobname2 state waiting-to-pause
         assert_match "OK" [R 2 CLUSTER CANCELMIGRATION ALL]
 
-        set import_migration [get_migration_by_linkname 0 $linkname2]
-        set export_migration [get_migration_by_linkname 2 $linkname2]
+        set import_migration [get_migration_by_name 0 $jobname2]
+        set export_migration [get_migration_by_name 2 $jobname2]
         assert {$import_migration ne ""}
         assert {$export_migration ne ""}
 
         # We enforce limits only in serverCron
         wait_for_condition 100 50 {
-            [get_migration_by_linkname 0 $linkname] eq "" && [get_migration_by_linkname 2 $linkname] eq ""
+            [get_migration_by_name 0 $jobname] eq "" && [get_migration_by_name 2 $jobname] eq ""
         } else {
             fail "Old CLUSTER MIGRATIONS entry not removed after 5 seconds of max-len reached"
         }
@@ -317,14 +317,14 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
 
         # Shouldn't be able to use SETSLOT when CLUSTER MIGRATE is running
         assert_match "OK" [R 2 CLUSTER MIGRATE SLOTSRANGE 16383 16383 NODE $node0_id]
-        set linkname [get_link_name 2 16383]
-        wait_for_migration_field 2 $linkname state waiting-to-pause
+        set jobname [get_job_name 2 16383]
+        wait_for_migration_field 2 $jobname state waiting-to-pause
         assert_error "*A slot is currently being imported via CLUSTER MIGRATE*" {R 0 CLUSTER SETSLOT 0 MIGRATING $node1_id}
         assert_error "*A slot is currently being imported via CLUSTER MIGRATE*" {R 0 CLUSTER SETSLOT 0 IMPORTING $node1_id}
         assert_error "*A slot is currently being exported via CLUSTER MIGRATE*" {R 2 CLUSTER SETSLOT 0 MIGRATING $node1_id}
         assert_error "*A slot is currently being exported via CLUSTER MIGRATE*" {R 2 CLUSTER SETSLOT 0 IMPORTING $node1_id}
         assert_match "OK" [R 2 CLUSTER CANCELMIGRATION ALL]
-        wait_for_migration_field 0 $linkname state failed
+        wait_for_migration_field 0 $jobname state failed
 
         # Shouldn't be able to use CLUSTER MIGRATE when SETSLOT was used on source
         assert_match "OK" [R 2 CLUSTER SETSLOT 0 IMPORTING $node0_id]
@@ -334,9 +334,9 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
         # Same for the target
         assert_match "OK" [R 0 CLUSTER SETSLOT 16383 IMPORTING $node2_id]
         assert_match "OK" [R 2 CLUSTER MIGRATE SLOTSRANGE 16383 16383 NODE $node0_id]
-        set linkname [get_link_name 2 16383]
-        wait_for_migration_field 2 $linkname state failed
-        assert {[string match {*A slot on the target node is being manually imported or migrated*} [dict get [get_migration_by_linkname 2 $linkname] message]]}
+        set jobname [get_job_name 2 16383]
+        wait_for_migration_field 2 $jobname state failed
+        assert {[string match {*A slot on the target node is being manually imported or migrated*} [dict get [get_migration_by_name 2 $jobname] message]]}
         assert_match "OK" [R 0 CLUSTER SETSLOT 16383 STABLE]
 
         # Cleanup
@@ -347,56 +347,56 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
         set_debug_prevent_pause 1
         assert_match "OK" [R 2 CLUSTER MIGRATE SLOTSRANGE 16382 16382 NODE $node0_id]
         assert_match "OK" [R 2 CLUSTER MIGRATE SLOTSRANGE 16383 16383 NODE $node0_id]
-        set linkname1 [get_link_name 2 16382]
-        set linkname2 [get_link_name 2 16383]
-        wait_for_migration_field 2 $linkname1 state waiting-to-pause
-        wait_for_migration_field 2 $linkname2 state waiting-to-pause
+        set jobname1 [get_job_name 2 16382]
+        set jobname2 [get_job_name 2 16383]
+        wait_for_migration_field 2 $jobname1 state waiting-to-pause
+        wait_for_migration_field 2 $jobname2 state waiting-to-pause
 
         # Also up on the target
-        assert {[dict get [get_migration_by_linkname 0 $linkname1] state] eq "waiting-for-paused"}
-        assert {[dict get [get_migration_by_linkname 0 $linkname2] state] eq "waiting-for-paused"}
+        assert {[dict get [get_migration_by_name 0 $jobname1] state] eq "waiting-for-paused"}
+        assert {[dict get [get_migration_by_name 0 $jobname2] state] eq "waiting-for-paused"}
 
         assert_match "OK" [R 2 CLUSTER CANCELMIGRATION ALL]
 
-        # Links are no longer up, migration logs say cancelled
-        assert {[dict get [get_migration_by_linkname 2 $linkname1] state] eq "cancelled"}
-        assert {[dict get [get_migration_by_linkname 2 $linkname2] state] eq "cancelled"}
-        wait_for_migration_field 0 $linkname1 state failed
-        wait_for_migration_field 0 $linkname2 state failed
+        # Jobs are no longer up, migration logs say cancelled
+        assert {[dict get [get_migration_by_name 2 $jobname1] state] eq "cancelled"}
+        assert {[dict get [get_migration_by_name 2 $jobname2] state] eq "cancelled"}
+        wait_for_migration_field 0 $jobname1 state failed
+        wait_for_migration_field 0 $jobname2 state failed
 
         # Cleanup
         set_debug_prevent_pause 0
     }
 
-    test "Test CLUSTER CANCELMIGRATION LINK" {
+    test "Test CLUSTER CANCELMIGRATION NAME" {
         set_debug_prevent_pause 1
         assert_match "OK" [R 2 CLUSTER MIGRATE SLOTSRANGE 16382 16382 NODE $node0_id]
         assert_match "OK" [R 2 CLUSTER MIGRATE SLOTSRANGE 16383 16383 NODE $node0_id]
-        set linkname1 [get_link_name 2 16382]
-        set linkname2 [get_link_name 2 16383]
-        wait_for_migration_field 2 $linkname1 state waiting-to-pause
-        wait_for_migration_field 2 $linkname2 state waiting-to-pause
+        set jobname1 [get_job_name 2 16382]
+        set jobname2 [get_job_name 2 16383]
+        wait_for_migration_field 2 $jobname1 state waiting-to-pause
+        wait_for_migration_field 2 $jobname2 state waiting-to-pause
 
         # Also up on the target
-        assert {[dict get [get_migration_by_linkname 0 $linkname1] state] eq "waiting-for-paused"}
-        assert {[dict get [get_migration_by_linkname 0 $linkname2] state] eq "waiting-for-paused"}
+        assert {[dict get [get_migration_by_name 0 $jobname1] state] eq "waiting-for-paused"}
+        assert {[dict get [get_migration_by_name 0 $jobname2] state] eq "waiting-for-paused"}
 
-        assert_error "*Migrations must be cancelled on the node that currently owns the slots*" {R 0 CLUSTER CANCELMIGRATION LINK $linkname1}
-        assert_match "OK" [R 2 CLUSTER CANCELMIGRATION LINK $linkname1]
+        assert_error "*Migrations must be cancelled on the node that currently owns the slots*" {R 0 CLUSTER CANCELMIGRATION NAME $jobname1}
+        assert_match "OK" [R 2 CLUSTER CANCELMIGRATION NAME $jobname1]
 
-        # One link is closed, migration log says "cancelled"
-        assert {[dict get [get_migration_by_linkname 2 $linkname1] state] eq "cancelled"}
-        assert {[dict get [get_migration_by_linkname 2 $linkname2] state] eq "waiting-to-pause"}
-        wait_for_migration_field 0 $linkname1 state failed
-        assert {[dict get [get_migration_by_linkname 0 $linkname2] state] eq "waiting-for-paused"}
+        # One job is closed, migration log says "cancelled"
+        assert {[dict get [get_migration_by_name 2 $jobname1] state] eq "cancelled"}
+        assert {[dict get [get_migration_by_name 2 $jobname2] state] eq "waiting-to-pause"}
+        wait_for_migration_field 0 $jobname1 state failed
+        assert {[dict get [get_migration_by_name 0 $jobname2] state] eq "waiting-for-paused"}
 
-        assert_match "OK" [R 2 CLUSTER CANCELMIGRATION LINK $linkname2]
+        assert_match "OK" [R 2 CLUSTER CANCELMIGRATION NAME $jobname2]
 
-        # Now both links are closed with logs in state "cancelled"
-        assert {[dict get [get_migration_by_linkname 2 $linkname1] state] eq "cancelled"}
-        assert {[dict get [get_migration_by_linkname 2 $linkname2] state] eq "cancelled"}
-        assert {[dict get [get_migration_by_linkname 0 $linkname1] state] eq "failed"}
-        wait_for_migration_field 0 $linkname2 state failed
+        # Now both jobs are closed with logs in state "cancelled"
+        assert {[dict get [get_migration_by_name 2 $jobname1] state] eq "cancelled"}
+        assert {[dict get [get_migration_by_name 2 $jobname2] state] eq "cancelled"}
+        assert {[dict get [get_migration_by_name 0 $jobname1] state] eq "failed"}
+        wait_for_migration_field 0 $jobname2 state failed
         set_debug_prevent_pause 0
     }
 
@@ -415,7 +415,7 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
 
             # Perform one-shot import
             assert_match "OK" [R 2 CLUSTER MIGRATE SLOTSRANGE 16383 16383 NODE $node0_id]
-            set linkname [get_link_name 2 16383]
+            set jobname [get_job_name 2 16383]
             wait_for_migration 0 16383
 
             # Keys successfully migrated
@@ -427,8 +427,8 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
             wait_for_countkeysinslot 5 16383 0
 
             # Migration log shows success on both ends
-            assert {[dict get [get_migration_by_linkname 0 $linkname] state] eq "success"}
-            assert {[dict get [get_migration_by_linkname 2 $linkname] state] eq "success"}
+            assert {[dict get [get_migration_by_name 0 $jobname] state] eq "success"}
+            assert {[dict get [get_migration_by_name 2 $jobname] state] eq "success"}
 
             # Cleanup for next test
             assert_match "OK" [R 0 FLUSHDB SYNC]
@@ -446,11 +446,11 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
 
             # Load data while the snapshot is ongoing
             assert_match "OK" [R 2 CLUSTER MIGRATE SLOTSRANGE 16383 16383 NODE $node0_id]
-            set linkname [get_link_name 2 16383]
+            set jobname [get_job_name 2 16383]
             populate 333 "$16383_slot_tag:2:" 1000 -2
 
             # Load data after the snapshot
-            wait_for_migration_field 2 $linkname state waiting-to-pause
+            wait_for_migration_field 2 $jobname state waiting-to-pause
             populate 334 "$16383_slot_tag:3:" 1000 -2
 
             # Allow migration to complete and verify
@@ -464,8 +464,8 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
             wait_for_countkeysinslot 5 16383 0
 
             # Migration log shows success on both ends
-            assert {[dict get [get_migration_by_linkname 0 $linkname] state] eq "success"}
-            assert {[dict get [get_migration_by_linkname 2 $linkname] state] eq "success"}
+            assert {[dict get [get_migration_by_name 0 $jobname] state] eq "success"}
+            assert {[dict get [get_migration_by_name 2 $jobname] state] eq "success"}
 
             # Cleanup for the next test
             assert_match "OK" [R 0 FLUSHDB SYNC]
@@ -481,8 +481,8 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
 
             # Do the snapshot
             assert_match "OK" [R 2 CLUSTER MIGRATE SLOTSRANGE 16383 16383 NODE $node0_id]
-            set linkname [get_link_name 2 16383]
-            wait_for_migration_field 2 $linkname state waiting-to-pause
+            set jobname [get_job_name 2 16383]
+            wait_for_migration_field 2 $jobname state waiting-to-pause
 
             # Multi/Exec should propagate without issue
             assert_match "OK" [R 2 MULTI]
@@ -529,8 +529,8 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
             assert_match "OK" [R 5 SELECT 0]
 
             # Migration log shows success on both ends
-            assert {[dict get [get_migration_by_linkname 0 $linkname] state] eq "success"}
-            assert {[dict get [get_migration_by_linkname 2 $linkname] state] eq "success"}
+            assert {[dict get [get_migration_by_name 0 $jobname] state] eq "success"}
+            assert {[dict get [get_migration_by_name 2 $jobname] state] eq "success"}
 
             # Cleanup for the next test
             assert_match "OK" [R 0 FLUSHALL SYNC]
@@ -550,8 +550,8 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
         test "Importing key containment (slot $slot_to_migrate from node $source_idx to $target_idx) - start migration" {
             populate 1000 "$slot_to_migrate_tag:1:" 1000 -$source_idx false 1000
             assert_match "OK" [R $source_idx CLUSTER MIGRATE SLOTSRANGE $slot_to_migrate $slot_to_migrate NODE $target_id]
-            set linkname [get_link_name $source_idx $slot_to_migrate]
-            wait_for_migration_field $source_idx $linkname state waiting-to-pause
+            set jobname [get_job_name $source_idx $slot_to_migrate]
+            wait_for_migration_field $source_idx $jobname state waiting-to-pause
 
             assert_match "1000" [R $target_idx CLUSTER COUNTKEYSINSLOT $slot_to_migrate]
         }
@@ -621,8 +621,8 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
             populate 1000 "$slot_to_migrate_tag:1:" 1000 -$source_idx false 0.5
             populate 1000 "$slot_to_test_tag:1:" 1000 -$target_idx false 0.5
             assert_match "OK" [R $source_idx CLUSTER MIGRATE SLOTSRANGE $slot_to_migrate $slot_to_migrate NODE $target_id]
-            set linkname [get_link_name $source_idx $slot_to_migrate]
-            wait_for_migration_field $source_idx $linkname state waiting-to-pause
+            set jobname [get_job_name $source_idx $slot_to_migrate]
+            wait_for_migration_field $source_idx $jobname state waiting-to-pause
             assert_match "1000" [R $target_idx CLUSTER COUNTKEYSINSLOT $slot_to_migrate]
 
             # Pause the source
@@ -649,8 +649,8 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
             # Cleanup for the next test
             assert_match "OK" [R $source_idx FLUSHALL SYNC]
             assert_match "OK" [R $target_idx FLUSHALL SYNC]
-            wait_for_migration_field $source_idx $linkname state failed
-            wait_for_migration_field $target_idx $linkname state failed
+            wait_for_migration_field $source_idx $jobname state failed
+            wait_for_migration_field $target_idx $jobname state failed
         }
         set_debug_prevent_pause 0
     }
@@ -665,12 +665,12 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
             set_debug_prevent_pause 1
             assert_match "OK" [R 1 CLUSTER MIGRATE SLOTSRANGE 5462 5462 NODE $node0_id]
             assert_match "OK" [R 2 CLUSTER MIGRATE SLOTSRANGE 16383 16383 NODE $node0_id]
-            set linkname1 [get_link_name 1 5462]
-            set linkname2 [get_link_name 2 16383]
+            set jobname1 [get_job_name 1 5462]
+            set jobname2 [get_job_name 2 16383]
             populate 100 "$5462_slot_tag:2:" 1000 -1
             populate 100 "$16383_slot_tag:2:" 1000 -2
-            wait_for_migration_field 1 $linkname1 state waiting-to-pause
-            wait_for_migration_field 2 $linkname2 state waiting-to-pause
+            wait_for_migration_field 1 $jobname1 state waiting-to-pause
+            wait_for_migration_field 2 $jobname2 state waiting-to-pause
             populate 100 "$5462_slot_tag:3:" 1000 -1
             populate 100 "$16383_slot_tag:3:" 1000 -2
 
@@ -690,10 +690,10 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
             wait_for_countkeysinslot 5 16383 0
 
             # Migration logs shows success on both ends
-            assert {[dict get [get_migration_by_linkname 0 $linkname1] state] eq "success"}
-            assert {[dict get [get_migration_by_linkname 1 $linkname1] state] eq "success"}
-            assert {[dict get [get_migration_by_linkname 0 $linkname2] state] eq "success"}
-            assert {[dict get [get_migration_by_linkname 2 $linkname2] state] eq "success"}
+            assert {[dict get [get_migration_by_name 0 $jobname1] state] eq "success"}
+            assert {[dict get [get_migration_by_name 1 $jobname1] state] eq "success"}
+            assert {[dict get [get_migration_by_name 0 $jobname2] state] eq "success"}
+            assert {[dict get [get_migration_by_name 2 $jobname2] state] eq "success"}
 
             # Cleanup for next test
             assert_match "OK" [R 0 FLUSHDB SYNC]
@@ -714,12 +714,12 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
             set_debug_prevent_pause 1
             assert_match "OK" [R 2 CLUSTER MIGRATE SLOTSRANGE 16382 16382 NODE $node0_id]
             assert_match "OK" [R 2 CLUSTER MIGRATE SLOTSRANGE 16383 16383 NODE $node1_id]
-            set linkname1 [get_link_name 2 16382]
-            set linkname2 [get_link_name 2 16383]
+            set jobname1 [get_job_name 2 16382]
+            set jobname2 [get_job_name 2 16383]
             populate 100 "$16382_slot_tag:2:" 1000 -2
             populate 100 "$16383_slot_tag:2:" 1000 -2
-            wait_for_migration_field 2 $linkname1 state waiting-to-pause
-            wait_for_migration_field 2 $linkname2 state waiting-to-pause
+            wait_for_migration_field 2 $jobname1 state waiting-to-pause
+            wait_for_migration_field 2 $jobname2 state waiting-to-pause
             populate 100 "$16382_slot_tag:3:" 1000 -2
             populate 100 "$16383_slot_tag:3:" 1000 -2
 
@@ -740,10 +740,10 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
             wait_for_countkeysinslot 5 16383 0
 
             # Migration logs shows success on both ends
-            assert {[dict get [get_migration_by_linkname 0 $linkname1] state] eq "success"}
-            assert {[dict get [get_migration_by_linkname 2 $linkname1] state] eq "success"}
-            assert {[dict get [get_migration_by_linkname 1 $linkname2] state] eq "success"}
-            assert {[dict get [get_migration_by_linkname 2 $linkname2] state] eq "success"}
+            assert {[dict get [get_migration_by_name 0 $jobname1] state] eq "success"}
+            assert {[dict get [get_migration_by_name 2 $jobname1] state] eq "success"}
+            assert {[dict get [get_migration_by_name 1 $jobname2] state] eq "success"}
+            assert {[dict get [get_migration_by_name 2 $jobname2] state] eq "success"}
 
             # Cleanup for next test
             assert_match "OK" [R 0 FLUSHDB SYNC]
@@ -765,12 +765,12 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
             set_debug_prevent_pause 1
             assert_match "OK" [R 2 CLUSTER MIGRATE SLOTSRANGE 16382 16382 NODE $node0_id]
             assert_match "OK" [R 2 CLUSTER MIGRATE SLOTSRANGE 16383 16383 NODE $node0_id]
-            set linkname1 [get_link_name 2 16382]
-            set linkname2 [get_link_name 2 16383]
+            set jobname1 [get_job_name 2 16382]
+            set jobname2 [get_job_name 2 16383]
             populate 100 "$16382_slot_tag:2:" 1000 -2
             populate 100 "$16383_slot_tag:2:" 1000 -2
-            wait_for_migration_field 2 $linkname1 state waiting-to-pause
-            wait_for_migration_field 2 $linkname2 state waiting-to-pause
+            wait_for_migration_field 2 $jobname1 state waiting-to-pause
+            wait_for_migration_field 2 $jobname2 state waiting-to-pause
             populate 100 "$16382_slot_tag:3:" 1000 -2
             populate 100 "$16383_slot_tag:3:" 1000 -2
 
@@ -790,10 +790,10 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
             wait_for_countkeysinslot 5 16383 0
 
             # Migration logs shows success on both ends
-            assert {[dict get [get_migration_by_linkname 0 $linkname1] state] eq "success"}
-            assert {[dict get [get_migration_by_linkname 2 $linkname1] state] eq "success"}
-            assert {[dict get [get_migration_by_linkname 0 $linkname2] state] eq "success"}
-            assert {[dict get [get_migration_by_linkname 2 $linkname2] state] eq "success"}
+            assert {[dict get [get_migration_by_name 0 $jobname1] state] eq "success"}
+            assert {[dict get [get_migration_by_name 2 $jobname1] state] eq "success"}
+            assert {[dict get [get_migration_by_name 0 $jobname2] state] eq "success"}
+            assert {[dict get [get_migration_by_name 2 $jobname2] state] eq "success"}
 
             # Cleanup for next test
             assert_match "OK" [R 0 FLUSHDB SYNC]
@@ -810,7 +810,7 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
 
             # Perform one-shot import
             assert_match "OK" [R 2 CLUSTER MIGRATE SLOTSRANGE 16382 16383 NODE $node0_id]
-            set linkname [get_link_name 2 16382]
+            set jobname [get_job_name 2 16382]
             wait_for_migration 0 16382
 
             # Keys successfully migrated
@@ -826,8 +826,8 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
             wait_for_countkeysinslot 5 16383 0
 
             # Migration logs shows success on both ends
-            assert {[dict get [get_migration_by_linkname 0 $linkname] state] eq "success"}
-            assert {[dict get [get_migration_by_linkname 2 $linkname] state] eq "success"}
+            assert {[dict get [get_migration_by_name 0 $jobname] state] eq "success"}
+            assert {[dict get [get_migration_by_name 2 $jobname] state] eq "success"}
 
             # Cleanup for next test
             assert_match "OK" [R 0 FLUSHDB SYNC]
@@ -846,7 +846,7 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
 
             # Perform one-shot import
             assert_match "OK" [R 2 CLUSTER MIGRATE SLOTSRANGE 16379 16380 16382 16383 NODE $node0_id]
-            set linkname [get_link_name 2 16383]
+            set jobname [get_job_name 2 16383]
             wait_for_migration 0 16383
 
             # Keys successfully migrated
@@ -858,8 +858,8 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
             }
 
             # Migration logs shows success on both ends
-            assert {[dict get [get_migration_by_linkname 0 $linkname] state] eq "success"}
-            assert {[dict get [get_migration_by_linkname 2 $linkname] state] eq "success"}
+            assert {[dict get [get_migration_by_name 0 $jobname] state] eq "success"}
+            assert {[dict get [get_migration_by_name 2 $jobname] state] eq "success"}
 
             # Cleanup for next test
             assert_match "OK" [R 0 FLUSHDB SYNC]
@@ -875,7 +875,7 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
 
             # Perform one-shot import
             assert_match "OK" [R 2 CLUSTER MIGRATE SLOTSRANGE 10924 16383 NODE $node0_id]
-            set linkname [get_link_name 2 10924]
+            set jobname [get_job_name 2 10924]
             wait_for_migration 0 10924
 
             # Keys successfully migrated
@@ -887,8 +887,8 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
             wait_for_countkeysinslot 5 16383 0
 
             # Migration logs shows success on both ends
-            assert {[dict get [get_migration_by_linkname 0 $linkname] state] eq "success"}
-            assert {[dict get [get_migration_by_linkname 2 $linkname] state] eq "success"}
+            assert {[dict get [get_migration_by_name 0 $jobname] state] eq "success"}
+            assert {[dict get [get_migration_by_name 2 $jobname] state] eq "success"}
 
             # Cleanup for next test
             assert_match "OK" [R 0 FLUSHDB SYNC]
@@ -903,7 +903,7 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
 
             # Perform one-shot import
             assert_match "OK" [R 0 CLUSTER MIGRATE SLOTSRANGE 10924 16383 NODE $node2_id]
-            set linkname [get_link_name 0 10924]
+            set jobname [get_job_name 0 10924]
             wait_for_migration 2 10924
 
             # Keys successfully migrated
@@ -915,8 +915,8 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
             wait_for_countkeysinslot 3 16383 0
 
             # Migration logs shows success on both ends
-            assert {[dict get [get_migration_by_linkname 0 $linkname] state] eq "success"}
-            assert {[dict get [get_migration_by_linkname 2 $linkname] state] eq "success"}
+            assert {[dict get [get_migration_by_name 0 $jobname] state] eq "success"}
+            assert {[dict get [get_migration_by_name 2 $jobname] state] eq "success"}
 
             # Cleanup for next test
             assert_match "OK" [R 2 FLUSHDB SYNC]
@@ -931,17 +931,17 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
             # Load data while the snapshot is ongoing
             set_debug_prevent_pause 1
             assert_match "OK" [R 2 CLUSTER MIGRATE SLOTSRANGE 16383 16383 NODE $node0_id]
-            set linkname [get_link_name 2 16383]
+            set jobname [get_job_name 2 16383]
             populate 333 "$16383_slot_tag:2:" 1000 -2
 
             # Load data after the snapshot
-            wait_for_migration_field 2 $linkname state waiting-to-pause
+            wait_for_migration_field 2 $jobname state waiting-to-pause
             populate 334 "$16383_slot_tag:3:" 1000 -2
 
             # Cancel and the data should be dropped
-            assert_match "OK" [R 2 CLUSTER CANCELMIGRATION LINK $linkname]
-            assert {[dict get [get_migration_by_linkname 2 $linkname] state] eq "cancelled"}
-            wait_for_migration_field 0 $linkname state failed
+            assert_match "OK" [R 2 CLUSTER CANCELMIGRATION NAME $jobname]
+            assert {[dict get [get_migration_by_name 2 $jobname] state] eq "cancelled"}
+            wait_for_migration_field 0 $jobname state failed
             assert_match "0" [R 0 CLUSTER COUNTKEYSINSLOT 16383]
             assert_match "1000" [R 2 CLUSTER COUNTKEYSINSLOT 16383]
 
@@ -962,16 +962,16 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
             populate 500 "$16383_slot_tag:1:" 1000 -2
             set_debug_prevent_pause 1
             assert_match "OK" [R 2 CLUSTER MIGRATE SLOTSRANGE 16383 16383 NODE $node0_id]
-            set linkname [get_link_name 2 16383]
-            wait_for_migration_field 2 $linkname state waiting-to-pause
+            set jobname [get_job_name 2 16383]
+            wait_for_migration_field 2 $jobname state waiting-to-pause
 
             # Set maxmemory to simulate OOM
             assert_match "OK" [R 0 CONFIG SET maxmemory 1]
 
             # Loading more data should cause a failure
             populate 500 "$16383_slot_tag:3:" 1000 -2
-            wait_for_migration_field 2 $linkname state failed
-            wait_for_migration_field 0 $linkname state failed
+            wait_for_migration_field 2 $jobname state failed
+            wait_for_migration_field 0 $jobname state failed
 
             # Verify the keys are eventually dropped on target
             assert_match "1000" [R 2 CLUSTER COUNTKEYSINSLOT 16383]
@@ -982,8 +982,8 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
             wait_for_countkeysinslot 3 16383 0
 
             # Migration logs shows failure on both ends
-            assert {[string match {*OOM*} [dict get [get_migration_by_linkname 0 $linkname] message]]}
-            assert {[string match {*Connection lost to target*} [dict get [get_migration_by_linkname 2 $linkname] message]]}
+            assert {[string match {*OOM*} [dict get [get_migration_by_name 0 $jobname] message]]}
+            assert {[string match {*Connection lost to target*} [dict get [get_migration_by_name 2 $jobname] message]]}
 
             # Cleanup for the next test
             assert_match "OK" [R 0 CONFIG SET maxmemory 0]
@@ -999,8 +999,8 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
         # Prepare and wait for ready
         set_debug_prevent_pause 1
         assert_match "OK" [R 2 CLUSTER MIGRATE SLOTSRANGE 16383 16383 NODE $node0_id]
-        set linkname [get_link_name 2 16383]
-        wait_for_migration_field 2 $linkname state waiting-to-pause
+        set jobname [get_job_name 2 16383]
+        wait_for_migration_field 2 $jobname state waiting-to-pause
 
         # Make sure the replica has it
         wait_for_countkeysinslot 3 16383 500
@@ -1008,9 +1008,9 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
         # Trigger failover
         assert_match "OK" [R 3 CLUSTER FAILOVER]
 
-        # Links should be dropped on both ends
-        wait_for_migration_field 2 $linkname state failed
-        wait_for_migration_field 0 $linkname state failed
+        # Jobs should be dropped on both ends
+        wait_for_migration_field 2 $jobname state failed
+        wait_for_migration_field 0 $jobname state failed
 
         # Keys should be dropped in target shard
         assert_match "0" [R 3 CLUSTER COUNTKEYSINSLOT 16383]
@@ -1021,8 +1021,8 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
         assert_match "500" [R 5 CLUSTER COUNTKEYSINSLOT 16383]
 
         # Expect error messages
-        assert {[string match {*I was demoted to a replica*} [dict get [get_migration_by_linkname 0 $linkname] message]]}
-        assert {[string match {*Connection lost to target*} [dict get [get_migration_by_linkname 2 $linkname] message]]}
+        assert {[string match {*I was demoted to a replica*} [dict get [get_migration_by_name 0 $jobname] message]]}
+        assert {[string match {*Connection lost to target*} [dict get [get_migration_by_name 2 $jobname] message]]}
 
         # Cleanup for the next test
         assert_match "OK" [R 2 FLUSHDB SYNC]
@@ -1036,15 +1036,15 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
         # Prepare and wait for ready
         set_debug_prevent_pause 1
         assert_match "OK" [R 3 CLUSTER MIGRATE SLOTSRANGE 0 0 NODE $node2_id]
-        set linkname [get_link_name 3 0]
-        wait_for_migration_field 3 $linkname state waiting-to-pause
+        set jobname [get_job_name 3 0]
+        wait_for_migration_field 3 $jobname state waiting-to-pause
 
         # Trigger failover
         assert_match "OK" [R 0 CLUSTER FAILOVER]
 
-        # Links should be dropped on both ends
-        wait_for_migration_field 3 $linkname state failed
-        wait_for_migration_field 2 $linkname state failed
+        # Jobs should be dropped on both ends
+        wait_for_migration_field 3 $jobname state failed
+        wait_for_migration_field 2 $jobname state failed
 
         # Keys should be dropped in target shard
         assert_match "0" [R 2 CLUSTER COUNTKEYSINSLOT 0]
@@ -1056,12 +1056,12 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
 
         # Expect error messages. There are two error messages we could see, depending on the order of events.
         assert {
-            [string match {*Slots are no longer owned by myself*} [dict get [get_migration_by_linkname 3 $linkname] message]] ||
-            [string match {*Connection lost to target*} [dict get [get_migration_by_linkname 3 $linkname] message]]
+            [string match {*Slots are no longer owned by myself*} [dict get [get_migration_by_name 3 $jobname] message]] ||
+            [string match {*Connection lost to target*} [dict get [get_migration_by_name 3 $jobname] message]]
         }
         assert {
-            [string match {*Slots are no longer owned by source node*} [dict get [get_migration_by_linkname 2 $linkname] message]] ||
-            [string match {*Connection lost to source*} [dict get [get_migration_by_linkname 2 $linkname] message]]
+            [string match {*Slots are no longer owned by source node*} [dict get [get_migration_by_name 2 $jobname] message]] ||
+            [string match {*Connection lost to source*} [dict get [get_migration_by_name 2 $jobname] message]]
         }
 
         # Cleanup for the next test
@@ -1077,24 +1077,24 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
             # Prepare and wait for ready
             set_debug_prevent_pause 1
             assert_match "OK" [R 0 CLUSTER MIGRATE SLOTSRANGE 0 1 NODE $node2_id]
-            set linkname [get_link_name 0 0]
-            wait_for_migration_field 0 $linkname state waiting-to-pause
+            set jobname [get_job_name 0 0]
+            wait_for_migration_field 0 $jobname state waiting-to-pause
 
             # Force slot takeover
             assert_match "*BUMPED*" [R 1 CLUSTER BUMPEPOCH]
             assert_match "OK" [R 1 CLUSTER SETSLOT 0 NODE $node1_id]
 
-            # Second link should get dropped on either end
-            wait_for_migration_field 0 $linkname state failed
-            wait_for_migration_field 2 $linkname state failed
+            # Second job should get dropped on either end
+            wait_for_migration_field 0 $jobname state failed
+            wait_for_migration_field 2 $jobname state failed
 
-            # Keys should be dropped on cancelled link
+            # Keys should be dropped on cancelled job
             assert_match "0" [R 2 CLUSTER COUNTKEYSINSLOT 0]
             assert_match "0" [R 5 CLUSTER COUNTKEYSINSLOT 0]
 
-            # Migration logs for linkname shows failure on both ends
-            # assert {[string match {*Slots are no longer owned by myself*} [dict get [get_migration_by_linkname 0 $linkname] message]]}
-            # assert {[string match {*Slots are no longer owned by source node*} [dict get [get_migration_by_linkname 2 $linkname] message]]}
+            # Migration logs for jobname shows failure on both ends
+            # assert {[string match {*Slots are no longer owned by myself*} [dict get [get_migration_by_name 0 $jobname] message]]}
+            # assert {[string match {*Slots are no longer owned by source node*} [dict get [get_migration_by_name 2 $jobname] message]]}
 
             # Cleanup for the next test
             set_debug_prevent_pause 0
@@ -1113,18 +1113,18 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
             # Use debug command to prevent failover
             set_debug_prevent_failover 1
             assert_match "OK" [R 0 CLUSTER MIGRATE SLOTSRANGE 0 0 NODE $node2_id]
-            set linkname [get_link_name 0 0]
-            wait_for_migration_field 0 $linkname state failover-granted
+            set jobname [get_job_name 0 0]
+            wait_for_migration_field 0 $jobname state failover-granted
 
             assert_match "slot_migration_in_progress" [s -0 paused_reason]
 
-            # Our link should get dropped after pause timeout expires
-            wait_for_migration_field 0 $linkname state failed
-            wait_for_migration_field 2 $linkname state failed
+            # Our job should get dropped after pause timeout expires
+            wait_for_migration_field 0 $jobname state failed
+            wait_for_migration_field 2 $jobname state failed
 
-            # Migration logs for link shows failure
-            assert {[string match {*Unpaused before migration completed*} [dict get [get_migration_by_linkname 0 $linkname] message]]}
-            assert {[string match {*Connection lost to source*} [dict get [get_migration_by_linkname 2 $linkname] message]]}
+            # Migration logs for job shows failure
+            assert {[string match {*Unpaused before migration completed*} [dict get [get_migration_by_name 0 $jobname] message]]}
+            assert {[string match {*Connection lost to source*} [dict get [get_migration_by_name 2 $jobname] message]]}
 
             # Validate no longer paused
             assert_match "none" [s -0 paused_reason]
@@ -1147,16 +1147,16 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
             # Use debug command to prevent failover
             set_debug_prevent_failover 1
             assert_match "OK" [R 0 CLUSTER MIGRATE SLOTSRANGE 0 0 NODE $node2_id]
-            set linkname [get_link_name 0 0]
-            wait_for_migration_field 0 $linkname state failover-granted
+            set jobname [get_job_name 0 0]
+            wait_for_migration_field 0 $jobname state failover-granted
 
             assert_match "slot_migration_in_progress" [s -0 paused_reason]
             assert_match "write" [s -0 paused_actions]
 
-            # Cancel the link
-            assert_match "OK" [R 0 CLUSTER CANCELMIGRATION LINK $linkname]
-            wait_for_migration_field 0 $linkname state cancelled
-            wait_for_migration_field 2 $linkname state failed
+            # Cancel the job
+            assert_match "OK" [R 0 CLUSTER CANCELMIGRATION NAME $jobname]
+            wait_for_migration_field 0 $jobname state cancelled
+            wait_for_migration_field 2 $jobname state failed
 
             assert_match "none" [s -0 paused_reason]
 
@@ -1180,16 +1180,16 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
             assert_error "*syntax error*" {R 0 CLUSTER SYNCSLOTS UNKNOWN}
 
             assert_causes_conn_drop 0 {
-                $client CLUSTER SYNCSLOTS ESTABLISH SOURCE $node2_id LINKNAME $fake_linkname SLOTSRANGE 16383 16383
+                $client CLUSTER SYNCSLOTS ESTABLISH SOURCE $node2_id NAME $fake_jobname SLOTSRANGE 16383 16383
                 $client CLUSTER SYNCSLOTS SNAPSHOT-EOF
                 $client CLUSTER SYNCSLOTS SNAPSHOT-EOF
             }
             assert_causes_conn_drop 0 {
-                $client CLUSTER SYNCSLOTS ESTABLISH SOURCE $node2_id LINKNAME $fake_linkname SLOTSRANGE 16383 16383
+                $client CLUSTER SYNCSLOTS ESTABLISH SOURCE $node2_id NAME $fake_jobname SLOTSRANGE 16383 16383
                 $client CLUSTER SYNCSLOTS PAUSED
             }
             assert_causes_conn_drop 0 {
-                $client CLUSTER SYNCSLOTS ESTABLISH SOURCE $node2_id LINKNAME $fake_linkname SLOTSRANGE 16383 16383
+                $client CLUSTER SYNCSLOTS ESTABLISH SOURCE $node2_id NAME $fake_jobname SLOTSRANGE 16383 16383
                 $client CLUSTER SYNCSLOTS FAILOVER-GRANTED
             }
         }
@@ -1201,48 +1201,48 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
             assert_error "*syntax error*" {R 0 CLUSTER SYNCSLOTS ESTABLISH}
 
             # No target
-            assert_error "*syntax error*" {R 0 CLUSTER SYNCSLOTS ESTABLISH LINKNAME $fake_linkname SLOTSRANGE 0 0}
+            assert_error "*syntax error*" {R 0 CLUSTER SYNCSLOTS ESTABLISH NAME $fake_jobname SLOTSRANGE 0 0}
 
-            # No linkname
+            # No jobname
             assert_error "*syntax error*" {R 0  CLUSTER SYNCSLOTS ESTABLISH SOURCE $node2_id SLOTSRANGE 0 0}
 
             # No slotsrange
-            assert_error "*syntax error*" {R 0 CLUSTER SYNCSLOTS ESTABLISH SOURCE $node2_id LINKNAME $fake_linkname}
+            assert_error "*syntax error*" {R 0 CLUSTER SYNCSLOTS ESTABLISH SOURCE $node2_id NAME $fake_jobname}
 
             # No end slot
-            assert_error "*No end slot for final slot range*" {R 0 CLUSTER SYNCSLOTS ESTABLISH SOURCE $node2_id LINKNAME $fake_linkname SLOTSRANGE 0}
+            assert_error "*No end slot for final slot range*" {R 0 CLUSTER SYNCSLOTS ESTABLISH SOURCE $node2_id NAME $fake_jobname SLOTSRANGE 0}
 
             # Unknown target
-            assert_error "*Target node does not know the source node*" {R 0 CLUSTER SYNCSLOTS ESTABLISH SOURCE $fake_linkname LINKNAME $fake_linkname SLOTSRANGE 16383 16383}
+            assert_error "*Target node does not know the source node*" {R 0 CLUSTER SYNCSLOTS ESTABLISH SOURCE $fake_jobname NAME $fake_jobname SLOTSRANGE 16383 16383}
 
             # Unowned slotsrange
-            assert_error "*Target node does not agree about current slot ownership*" {R 0 CLUSTER SYNCSLOTS ESTABLISH SOURCE $node1_id LINKNAME $fake_linkname SLOTSRANGE 16383 16383}
+            assert_error "*Target node does not agree about current slot ownership*" {R 0 CLUSTER SYNCSLOTS ESTABLISH SOURCE $node1_id NAME $fake_jobname SLOTSRANGE 16383 16383}
 
             # Not primary
-            assert_error "*Target node is not a primary*" {R 3 CLUSTER SYNCSLOTS ESTABLISH SOURCE $node2_id LINKNAME $fake_linkname SLOTSRANGE 16383 16383}
+            assert_error "*Target node is not a primary*" {R 3 CLUSTER SYNCSLOTS ESTABLISH SOURCE $node2_id NAME $fake_jobname SLOTSRANGE 16383 16383}
 
             # Invalid target name
-            assert_error "*syntax error*" {R 0 CLUSTER SYNCSLOTS ESTABLISH SOURCE invalid LINKNAME $fake_linkname SLOTSRANGE 16383 16383}
+            assert_error "*syntax error*" {R 0 CLUSTER SYNCSLOTS ESTABLISH SOURCE invalid NAME $fake_jobname SLOTSRANGE 16383 16383}
 
-            # Invalid link name
-            assert_error "*syntax error*" {R 0 CLUSTER SYNCSLOTS ESTABLISH SOURCE $node2_id LINKNAME invalid SLOTSRANGE 16383 16383}
+            # Invalid job name
+            assert_error "*syntax error*" {R 0 CLUSTER SYNCSLOTS ESTABLISH SOURCE $node2_id NAME invalid SLOTSRANGE 16383 16383}
 
             # Duplicated fields
-            assert_error "*syntax error*" {R 0 CLUSTER SYNCSLOTS ESTABLISH SOURCE $node2_id LINKNAME $fake_linkname SLOTSRANGE 16383 16383 SLOTSRANGE 16383 16383}
-            assert_error "*syntax error*" {R 0 CLUSTER SYNCSLOTS ESTABLISH SOURCE $node2_id LINKNAME $fake_linkname LINKNAME $fake_linkname SLOTSRANGE 16383 16383}
-            assert_error "*syntax error*" {R 0 CLUSTER SYNCSLOTS ESTABLISH SOURCE $node2_id SOURCE $node2_id LINKNAME $fake_linkname SLOTSRANGE 16383 16383}
+            assert_error "*syntax error*" {R 0 CLUSTER SYNCSLOTS ESTABLISH SOURCE $node2_id NAME $fake_jobname SLOTSRANGE 16383 16383 SLOTSRANGE 16383 16383}
+            assert_error "*syntax error*" {R 0 CLUSTER SYNCSLOTS ESTABLISH SOURCE $node2_id NAME $fake_jobname NAME $fake_jobname SLOTSRANGE 16383 16383}
+            assert_error "*syntax error*" {R 0 CLUSTER SYNCSLOTS ESTABLISH SOURCE $node2_id SOURCE $node2_id NAME $fake_jobname SLOTSRANGE 16383 16383}
 
             # Unknown field
-            assert_error "*syntax error*" {R 0 CLUSTER SYNCSLOTS ESTABLISH SOURCE $node2_id LINKNAME $fake_linkname SLOTSRANGE 16383 16383 BAD_FIELD bad_value}
+            assert_error "*syntax error*" {R 0 CLUSTER SYNCSLOTS ESTABLISH SOURCE $node2_id NAME $fake_jobname SLOTSRANGE 16383 16383 BAD_FIELD bad_value}
 
             # Already importing
             set_debug_prevent_pause 1
             assert_match "OK" [R 2 CLUSTER MIGRATE SLOTSRANGE 16383 16383 NODE $node0_id]
-            set linkname [get_link_name 2 16383]
-            wait_for_migration_field 0 $linkname state waiting-for-paused
-            assert_error "*Slot is already being imported on the target by a different migration*" {R 0 CLUSTER SYNCSLOTS ESTABLISH SOURCE $node2_id LINKNAME $fake_linkname SLOTSRANGE 16383 16383}
+            set jobname [get_job_name 2 16383]
+            wait_for_migration_field 0 $jobname state waiting-for-paused
+            assert_error "*Slot is already being imported on the target by a different migration*" {R 0 CLUSTER SYNCSLOTS ESTABLISH SOURCE $node2_id NAME $fake_jobname SLOTSRANGE 16383 16383}
             assert_match "OK" [R 2 CLUSTER CANCELMIGRATION ALL]
-            wait_for_migration_field 0 $linkname state failed
+            wait_for_migration_field 0 $jobname state failed
             set_debug_prevent_pause 0
         }
     }
@@ -1263,7 +1263,7 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
 
                 # Do the import
                 assert_match "OK" [R 2 CLUSTER MIGRATE SLOTSRANGE 16383 16383 NODE $node0_id]
-                set linkname [get_link_name 2 16383]
+                set jobname [get_job_name 2 16383]
 
                 # Keys should be on both source and destination
                 assert_match "1000" [R 2 CLUSTER COUNTKEYSINSLOT 16383]
@@ -1273,10 +1273,10 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
                 assert_match "OK" [eval R 0 $command]
 
                 # Target should fail the migration
-                wait_for_migration_field 2 $linkname state failed
-                wait_for_migration_field 0 $linkname state failed
-                assert {[string match {*Data was flushed*} [dict get [get_migration_by_linkname 0 $linkname] message]]}
-                assert {[string match {*Connection lost to target*} [dict get [get_migration_by_linkname 2 $linkname] message]]}
+                wait_for_migration_field 2 $jobname state failed
+                wait_for_migration_field 0 $jobname state failed
+                assert {[string match {*Data was flushed*} [dict get [get_migration_by_name 0 $jobname] message]]}
+                assert {[string match {*Connection lost to target*} [dict get [get_migration_by_name 2 $jobname] message]]}
                 wait_for_countkeysinslot 0 16383 0
                 wait_for_countkeysinslot 3 16383 0
             }
@@ -1302,7 +1302,7 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
 
                 # Do the import
                 assert_match "OK" [R 2 CLUSTER MIGRATE SLOTSRANGE 16383 16383 NODE $node0_id]
-                set linkname [get_link_name 2 16383]
+                set jobname [get_job_name 2 16383]
 
                 # Keys should be on both source and destination
                 assert_match "1000" [R 2 CLUSTER COUNTKEYSINSLOT 16383]
@@ -1310,10 +1310,10 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
 
                 # FLUSH on the source should fail the import
                 assert_match "OK" [eval R 2 $command]
-                wait_for_migration_field 2 $linkname state failed
-                wait_for_migration_field 0 $linkname state failed
-                assert {[string match {*Data was flushed*} [dict get [get_migration_by_linkname 2 $linkname] message]]}
-                assert {[string match {*Connection lost to source*} [dict get [get_migration_by_linkname 0 $linkname] message]]}
+                wait_for_migration_field 2 $jobname state failed
+                wait_for_migration_field 0 $jobname state failed
+                assert {[string match {*Data was flushed*} [dict get [get_migration_by_name 2 $jobname] message]]}
+                assert {[string match {*Connection lost to source*} [dict get [get_migration_by_name 0 $jobname] message]]}
                 assert_match "0" [R 2 CLUSTER COUNTKEYSINSLOT 16383]
                 wait_for_countkeysinslot 0 16383 0
                 wait_for_countkeysinslot 3 16383 0
@@ -1334,11 +1334,11 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
             # Load data while the snapshot is ongoing
             set_debug_prevent_pause 1
             assert_match "OK" [R 0 CLUSTER MIGRATE SLOTSRANGE 0 0 NODE $node2_id]
-            set linkname [get_link_name 0 0]
+            set jobname [get_job_name 0 0]
             populate 333 "$0_slot_tag:2:" 1000 -0
 
             # Load data after the snapshot
-            wait_for_migration_field 0 $linkname state waiting-to-pause
+            wait_for_migration_field 0 $jobname state waiting-to-pause
             populate 334 "$0_slot_tag:3:" 1000 -0
 
             # Now pause source
@@ -1346,13 +1346,13 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
             pause_process $node0_pid
 
             # The import should eventually fail due to no ACKs
-            wait_for_migration_field 2 $linkname state failed
-            assert {[string match {*Timed out after too long with no interaction*} [dict get [get_migration_by_linkname 2 $linkname] message]]}
+            wait_for_migration_field 2 $jobname state failed
+            assert {[string match {*Timed out after too long with no interaction*} [dict get [get_migration_by_name 2 $jobname] message]]}
 
             # After resuming, it should be reflected on source
             resume_process $node0_pid
-            wait_for_migration_field 0 $linkname state failed
-            assert {[string match {*Connection lost to target*} [dict get [get_migration_by_linkname 0 $linkname] message]]}
+            wait_for_migration_field 0 $jobname state failed
+            assert {[string match {*Connection lost to target*} [dict get [get_migration_by_name 0 $jobname] message]]}
 
             # Cleanup for the next test
             assert_match "OK" [R 0 FLUSHDB SYNC]
@@ -1371,11 +1371,11 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
             # Load data while the snapshot is ongoing
             set_debug_prevent_pause 1
             assert_match "OK" [R 0 CLUSTER MIGRATE SLOTSRANGE 0 0 NODE $node2_id]
-            set linkname [get_link_name 0 0]
+            set jobname [get_job_name 0 0]
             populate 333 "$0_slot_tag:2:" 1000 -0
 
             # Load data after the snapshot
-            wait_for_migration_field 0 $linkname state waiting-to-pause
+            wait_for_migration_field 0 $jobname state waiting-to-pause
             populate 334 "$0_slot_tag:3:" 1000 -0
 
             # Now pause target
@@ -1383,13 +1383,13 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
             pause_process $node2_pid
 
             # The export should eventually fail due to no ACKs
-            wait_for_migration_field 0 $linkname state failed
-            assert {[string match {*Timed out after too long with no interaction*} [dict get [get_migration_by_linkname 0 $linkname] message]]}
+            wait_for_migration_field 0 $jobname state failed
+            assert {[string match {*Timed out after too long with no interaction*} [dict get [get_migration_by_name 0 $jobname] message]]}
 
             # After resuming, it should be reflected on target
             resume_process $node2_pid
-            wait_for_migration_field 2 $linkname state failed
-            assert {[string match {*Connection lost to source*} [dict get [get_migration_by_linkname 2 $linkname] message]]}
+            wait_for_migration_field 2 $jobname state failed
+            assert {[string match {*Connection lost to source*} [dict get [get_migration_by_name 2 $jobname] message]]}
 
             # Cleanup for the next test
             assert_match "OK" [R 0 FLUSHDB SYNC]
@@ -1408,7 +1408,7 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
 
             # Perform one-shot import
             assert_match "OK" [R 2 CLUSTER MIGRATE SLOTSRANGE 16383 16383 NODE $node0_id]
-            set linkname [get_link_name 2 16383]
+            set jobname [get_job_name 2 16383]
             wait_for_migration 0 16383
 
             # Keys successfully migrated
@@ -1420,8 +1420,8 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
             wait_for_countkeysinslot 5 16383 0
 
             # Migration log shows success on both ends
-            assert {[dict get [get_migration_by_linkname 0 $linkname] state] eq "success"}
-            assert {[dict get [get_migration_by_linkname 2 $linkname] state] eq "success"}
+            assert {[dict get [get_migration_by_name 0 $jobname] state] eq "success"}
+            assert {[dict get [get_migration_by_name 2 $jobname] state] eq "success"}
 
             # Cleanup for next test
             assert_match "OK" [R 0 FLUSHDB SYNC]
@@ -1439,11 +1439,11 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
 
             # Perform one-shot import
             assert_match "OK" [R 2 CLUSTER MIGRATE SLOTSRANGE 16383 16383 NODE $node0_id]
-            set linkname [get_link_name 2 16383]
+            set jobname [get_job_name 2 16383]
 
             # Should be denied
-            wait_for_migration_field 2 $linkname state failed
-            assert {[string match {*Failed to AUTH to target node: -WRONGPASS*} [dict get [get_migration_by_linkname 2 $linkname] message]]}
+            wait_for_migration_field 2 $jobname state failed
+            assert {[string match {*Failed to AUTH to target node: -WRONGPASS*} [dict get [get_migration_by_name 2 $jobname] message]]}
 
             # Cleanup for next test
             R 0 CONFIG SET requirepass ""
@@ -1456,18 +1456,18 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
             # Start an import
             set_debug_prevent_pause 1
             assert_match "OK" [R 2 CLUSTER MIGRATE SLOTSRANGE 16383 16383 NODE $node0_id]
-            set linkname [get_link_name 2 16383]
-            wait_for_migration_field 2 $linkname state waiting-to-pause
+            set jobname [get_job_name 2 16383]
+            wait_for_migration_field 2 $jobname state waiting-to-pause
             set import_client_id [get_client_id_by_last_cmd [srv -0 client] "cluster|syncslots"]
 
             # Use CLIENT KILL to drop the connection
             assert_match "1" [R 0 CLIENT KILL ID $import_client_id]
 
             # Migration should be failed
-            wait_for_migration_field 2 $linkname state failed
-            wait_for_migration_field 0 $linkname state failed
-            assert {[string match {*Connection lost to source*} [dict get [get_migration_by_linkname 0 $linkname] message]]}
-            assert {[string match {*Connection lost to target*} [dict get [get_migration_by_linkname 2 $linkname] message]]}
+            wait_for_migration_field 2 $jobname state failed
+            wait_for_migration_field 0 $jobname state failed
+            assert {[string match {*Connection lost to source*} [dict get [get_migration_by_name 0 $jobname] message]]}
+            assert {[string match {*Connection lost to target*} [dict get [get_migration_by_name 2 $jobname] message]]}
 
             # Cleanup for next test
             set_debug_prevent_pause 0
@@ -1478,8 +1478,8 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
         assert_does_not_resync {
             set_debug_prevent_pause 1
             assert_match "OK" [R 2 CLUSTER MIGRATE SLOTSRANGE 16383 16383 NODE $node0_id]
-            set linkname [get_link_name 2 16383]
-            wait_for_migration_field 2 $linkname state waiting-to-pause
+            set jobname [get_job_name 2 16383]
+            wait_for_migration_field 2 $jobname state waiting-to-pause
             set old_cob [lindex [R 2 config get client-output-buffer-limit] 1]
             R 2 config set client-output-buffer-limit "replica 10k 0 0"
 
@@ -1487,11 +1487,11 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
             set node0_pid [srv -0 pid]
             pause_process $node0_pid
 
-            set migration [get_migration_by_linkname 2 $linkname]
+            set migration [get_migration_by_name 2 $jobname]
             # Accumulate a large backlog on the source, it should eventually kill the client
             for {set i 0} {$i < 100} {incr i} {
                 populate 1000 "$16383_slot_tag:" 1000 -2
-                set migration [get_migration_by_linkname 2 $linkname]
+                set migration [get_migration_by_name 2 $jobname]
                 if {[dict get $migration state] eq "failed"} {
                     break
                 }
@@ -1503,10 +1503,10 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
             resume_process $node0_pid
 
             # Migration should be failed
-            wait_for_migration_field 2 $linkname state failed
-            wait_for_migration_field 0 $linkname state failed
-            assert {[string match {*Connection lost to source*} [dict get [get_migration_by_linkname 0 $linkname] message]]}
-            assert {[string match {*Connection lost to target*} [dict get [get_migration_by_linkname 2 $linkname] message]]}
+            wait_for_migration_field 2 $jobname state failed
+            wait_for_migration_field 0 $jobname state failed
+            assert {[string match {*Connection lost to source*} [dict get [get_migration_by_name 0 $jobname] message]]}
+            assert {[string match {*Connection lost to target*} [dict get [get_migration_by_name 2 $jobname] message]]}
 
             # Cleanup for the next test
             assert_match "OK" [R 2 FLUSHDB SYNC]
@@ -1526,13 +1526,13 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
             # Load data while the snapshot is ongoing
             set_debug_prevent_pause 1
             assert_match "OK" [R 2 CLUSTER MIGRATE SLOTSRANGE 16381 16381 16383 16383 NODE $node0_id]
-            set linkname [get_link_name 2 16381]
+            set jobname [get_job_name 2 16381]
             foreach tag $tags {
                 populate 333 "$tag:2:" 1000 -2
             }
 
             # Load data after the snapshot
-            wait_for_migration_field 2 $linkname state waiting-to-pause
+            wait_for_migration_field 2 $jobname state waiting-to-pause
             foreach tag $tags {
                 populate 334 "$tag:3:" 1000 -2
             }
@@ -1569,8 +1569,8 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
             assert_match "0" [R 5 CLUSTER COUNTKEYSINSLOT 16383]
 
             # Migration log shows success on both ends
-            assert {[dict get [get_migration_by_linkname 0 $linkname] state] eq "success"}
-            assert {[dict get [get_migration_by_linkname 2 $linkname] state] eq "success"}
+            assert {[dict get [get_migration_by_name 0 $jobname] state] eq "success"}
+            assert {[dict get [get_migration_by_name 2 $jobname] state] eq "success"}
 
             # Cleanup for the next test
             assert_match "OK" [R 0 FLUSHDB SYNC]
@@ -1585,8 +1585,8 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
             set_debug_prevent_pause 1
             setup_eviction_test 2 allkeys-random {
                 assert_match "OK" [R 2 CLUSTER MIGRATE SLOTSRANGE 16383 16383 NODE $node0_id]
-                set linkname [get_link_name 2 16383]
-                wait_for_migration_field 2 $linkname state waiting-to-pause
+                set jobname [get_job_name 2 16383]
+                wait_for_migration_field 2 $jobname state waiting-to-pause
 
                 set prev_evictions [s -2 evicted_keys]
 
@@ -1611,7 +1611,7 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
                         populate 1000 "$16383_slot_tag:" 1000 -2
 
                         # Eventually the output buffer should go over the limit
-                        set migration [get_migration_by_linkname 2 $linkname]
+                        set migration [get_migration_by_name 2 $jobname]
                         if {[dict get $migration state] eq "failed"} {
                             break
                         }
@@ -1630,10 +1630,10 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
                 resume_process $node0_pid
 
                 # Import should be failed
-                wait_for_migration_field 2 $linkname state failed
-                wait_for_migration_field 0 $linkname state failed
-                assert_match "*Connection lost to source*" [dict get [get_migration_by_linkname 0 $linkname] message]
-                assert_match "*Connection lost to target*" [dict get [get_migration_by_linkname 2 $linkname] message]
+                wait_for_migration_field 2 $jobname state failed
+                wait_for_migration_field 0 $jobname state failed
+                assert_match "*Connection lost to source*" [dict get [get_migration_by_name 0 $jobname] message]
+                assert_match "*Connection lost to target*" [dict get [get_migration_by_name 2 $jobname] message]
 
                 # Cleanup for the next test
                 assert_match "OK" [R 2 FLUSHDB SYNC]
@@ -1652,7 +1652,7 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
             populate 50 "$0_slot_tag:1:" 1000 -0
 
             assert_match "OK" [R 0 CLUSTER MIGRATE SLOTSRANGE 0 0 NODE $node2_id]
-            set linkname [get_link_name 0 0]
+            set jobname [get_job_name 0 0]
 
             wait_for_migration 2 0
 
@@ -1665,8 +1665,8 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
             wait_for_countkeysinslot 3 0 0
 
             # Migration log shows success on both ends
-            assert {[dict get [get_migration_by_linkname 0 $linkname] state] eq "success"}
-            assert {[dict get [get_migration_by_linkname 2 $linkname] state] eq "success"}
+            assert {[dict get [get_migration_by_name 0 $jobname] state] eq "success"}
+            assert {[dict get [get_migration_by_name 2 $jobname] state] eq "success"}
 
             # Cleanup for next test
             assert_match "OK" [R 0 FLUSHDB SYNC]
@@ -1685,11 +1685,11 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
 
         # Load data while the snapshot is ongoing
         assert_match "OK" [R 2 CLUSTER MIGRATE SLOTSRANGE 16379 16383 NODE $node0_id]
-        set linkname [get_link_name 2 16383]
+        set jobname [get_job_name 2 16383]
         populate 333 "$16381_slot_tag:2:" 1000 -2
 
         # Load data after the snapshot
-        wait_for_migration_field 2 $linkname state waiting-to-pause
+        wait_for_migration_field 2 $jobname state waiting-to-pause
         populate 334 "$16383_slot_tag:3:" 1000 -2
 
         # Resync the replicas on both ends
@@ -1731,8 +1731,8 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
         wait_for_countkeysinslot 5 16383 0
 
         # Migration log shows success on both ends
-        assert {[dict get [get_migration_by_linkname 0 $linkname] state] eq "success"}
-        assert {[dict get [get_migration_by_linkname 2 $linkname] state] eq "success"}
+        assert {[dict get [get_migration_by_name 0 $jobname] state] eq "success"}
+        assert {[dict get [get_migration_by_name 2 $jobname] state] eq "success"}
 
         # Cleanup for the next test
         assert_match "OK" [R 0 FLUSHDB SYNC]
@@ -1758,11 +1758,11 @@ start_cluster 3 0 {tags {external:skip cluster}} {
 
         # Load data while the snapshot is ongoing
         assert_match "OK" [R 2 CLUSTER MIGRATE SLOTSRANGE 16383 16383 NODE $node0_id]
-        set linkname [get_link_name 2 16383]
+        set jobname [get_job_name 2 16383]
         populate 333 "$16383_slot_tag:2:" 1000 -2
 
         # Load data after the snapshot
-        wait_for_migration_field 2 $linkname state waiting-to-pause
+        wait_for_migration_field 2 $jobname state waiting-to-pause
         populate 334 "$16383_slot_tag:3:" 1000 -2
 
         # Allow migration to complete and verify
@@ -1776,7 +1776,7 @@ start_cluster 3 0 {tags {external:skip cluster}} {
         assert_match "OK" [R 0 CLUSTER MIGRATE SLOTSRANGE 16383 16383 NODE $node2_id]
     }
 
-    test "Read establish link response timeout" {
+    test "Read syncslots establish response timeout" {
         R 0 CONFIG SET repl-timeout 2
         
         # Pause to prevent connection success
@@ -1784,11 +1784,11 @@ start_cluster 3 0 {tags {external:skip cluster}} {
         pause_process $target_pid
 
         assert_match "OK" [R 0 CLUSTER MIGRATE SLOTSRANGE 0 0 NODE $node2_id]
-        set linkname [get_link_name 0 0]
+        set jobname [get_job_name 0 0]
 
         # Connecting will fail
-        wait_for_migration_field 0 $linkname state failed
-        assert_match "*Timed out after too long with no interaction*" [dict get [get_migration_by_linkname 0 $linkname] message]
+        wait_for_migration_field 0 $jobname state failed
+        assert_match "*Timed out after too long with no interaction*" [dict get [get_migration_by_name 0 $jobname] message]
 
         resume_process $target_pid
         R 0 CONFIG SET repl-timeout 60
@@ -1798,11 +1798,11 @@ start_cluster 3 0 {tags {external:skip cluster}} {
         # Shutdown to prevent connection success
         catch {R 2 shutdown nosave}
         assert_match "OK" [R 0 CLUSTER MIGRATE SLOTSRANGE 0 0 NODE $node2_id]
-        set linkname [get_link_name 0 0]
+        set jobname [get_job_name 0 0]
 
         # Connecting will fail
-        wait_for_migration_field 0 $linkname state failed
-        assert {[string match {*Unable to connect to target node: Connection refused*} [dict get [get_migration_by_linkname 0 $linkname] message]]}
+        wait_for_migration_field 0 $jobname state failed
+        assert {[string match {*Unable to connect to target node: Connection refused*} [dict get [get_migration_by_name 0 $jobname] message]]}
     }
 
 }

@@ -1991,8 +1991,8 @@ static keyStatus expireIfNeededWithDictIndex(serverDb *db, robj *key, robj *val,
     if (server.primary_host != NULL) {
         if (server.current_client && (server.current_client->flag.primary)) return KEY_VALID;
         if (!(flags & EXPIRE_FORCE_DELETE_EXPIRED)) return KEY_EXPIRED;
-    } else if (server.current_client && server.current_client->slot_migration_link) {
-        /* Slot migration link should be treated like a primary */
+    } else if (server.current_client && server.current_client->slot_migration_job) {
+        /* Slot migration client should be treated like a primary */
         return KEY_VALID;
     } else if (server.import_mode) {
         /* If we are running in the import mode on a primary, instead of

@@ -395,9 +395,9 @@ struct clusterState {
     clusterNode *migrating_slots_to[CLUSTER_SLOTS];
     clusterNode *importing_slots_from[CLUSTER_SLOTS];
     clusterNode *slots[CLUSTER_SLOTS];
-    list *slot_migration_links; /* List storing all slot migration links.
-                                 * Stored in order from most recent to least
-                                 * recently created. */
+    list *slot_migration_jobs; /* List storing all slot migration jobs. Stored
+                                * in order from most recent to least recently
+                                * created. */
     /* The following fields are used to take the replica state on elections. */
     mstime_t failover_auth_time;      /* Time of previous or next election. */
     int failover_auth_count;          /* Number of votes received so far. */

@@ -299,7 +299,7 @@ client *createClient(connection *conn) {
     c->ctime = c->last_interaction = server.unixtime;
     c->duration = 0;
     clientSetDefaultAuth(c);
-    c->slot_migration_link = NULL;
+    c->slot_migration_job = NULL;
     c->reply = listCreate();
     c->deferred_reply = NULL;
     c->deferred_reply_errors = NULL;
@@ -370,7 +370,7 @@ void putClientInPendingWriteQueue(client *c) {
         (!c->repl_data ||
          c->repl_data->repl_state == REPL_STATE_NONE ||
          (isReplicaReadyForReplData(c) && !c->repl_data->repl_start_cmd_stream_on_ack)) &&
-        (!c->slot_migration_link || clusterSlotMigrationShouldInstallWriteHandler(c))) {
+        (!c->slot_migration_job || clusterSlotMigrationShouldInstallWriteHandler(c))) {
         /* Here instead of installing the write handler, we just flag the
          * client and put it into a list of clients that have something
          * to write to the socket. This way before re-entering the event
@@ -1847,13 +1847,13 @@ void unlinkClient(client *c) {
         /* Check if this is a replica waiting for diskless replication (rdb pipe),
          * in which case it needs to be cleaned from that list.
          *
-         * Alternatively, if this is a slot migration link for an export operation, we need to
+         * Alternatively, if this is a slot migration job for an export operation, we need to
          * always check if this was the target. The state of the migration isn't relevant since the
          * snapshot child may take some time to die, during which the migration will continue past
          * the snapshot state. */
         if (c->repl_data && server.rdb_pipe_conns &&
             ((c->flag.replica && c->repl_data->repl_state == REPLICA_STATE_WAIT_BGSAVE_END) ||
-             (c->slot_migration_link && !isImportSlotMigrationLink(c->slot_migration_link)))) {
+             (c->slot_migration_job && !isImportSlotMigrationJob(c->slot_migration_job)))) {
             int i;
             int still_alive = 0;
             for (i = 0; i < server.rdb_pipe_numconns; i++) {
@@ -1925,7 +1925,7 @@ void clearClientConnectionState(client *c) {
         c->flag.replica = 0;
     }
 
-    serverAssert(!(c->flag.replica || c->flag.primary || c->slot_migration_link));
+    serverAssert(!(c->flag.replica || c->flag.primary || c->slot_migration_job));
 
     if (c->flag.tracking) disableTracking(c);
     selectDb(c, 0);
@@ -2012,9 +2012,9 @@ void freeClient(client *c) {
             serverLog(LL_NOTICE, "Connection with replica %s lost.", replicationGetReplicaName(c));
     }
 
-    /* Handle slot import connection closed. */
-    if (c->slot_migration_link) {
-        clusterHandleSlotMigrationLinkClientClose(c->slot_migration_link);
+    /* Handle slot migration connection closed. */
+    if (c->slot_migration_job) {
+        clusterHandleSlotMigrationClientClose(c->slot_migration_job);
     }
 
     /* Free the query buffer */
@@ -5452,7 +5452,7 @@ int getClientType(client *c) {
      * want the expose them as normal clients. */
     if (c->flag.replica && !c->flag.monitor) return CLIENT_TYPE_REPLICA;
     if (c->flag.pubsub) return CLIENT_TYPE_PUBSUB;
-    if (c->slot_migration_link) return isImportSlotMigrationLink(c->slot_migration_link) ? CLIENT_TYPE_SLOT_IMPORT : CLIENT_TYPE_SLOT_EXPORT;
+    if (c->slot_migration_job) return isImportSlotMigrationJob(c->slot_migration_job) ? CLIENT_TYPE_SLOT_IMPORT : CLIENT_TYPE_SLOT_EXPORT;
     return CLIENT_TYPE_NORMAL;
 }
 

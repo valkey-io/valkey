@@ -2278,7 +2278,7 @@ int rewriteSlotToAppendOnlyFileRio(rio *aof, int db_num, int hashslot, size_t *k
         /* Update info every 1 second (approximately).
          * in order to avoid calling mstime() on each iteration, we will
          * check the diff every 1024 keys */
-        if (key_count && ((*key_count++) & 1023) == 0) {
+        if (key_count && ((*key_count)++ & 1023) == 0) {
             long long now = mstime();
             if (now - updated_time >= 1000) {
                 sendChildInfo(CHILD_INFO_TYPE_CURRENT_INFO, *key_count, "AOF rewrite");

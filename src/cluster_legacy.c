@@ -1247,8 +1247,8 @@ void clusterInit(void) {
     serverAssert(rdbRegisterAuxField("cluster-slot-states", clusterEncodeOpenSlotsAuxField,
                                      clusterDecodeOpenSlotsAuxField) == C_OK);
 
-    /* Initialize list for slot migration links. */
-    initClusterSlotMigrationLinkList();
+    /* Initialize list for slot migration jobs. */
+    initClusterSlotMigrationJobList();
 
     /* Set myself->port/cport/pport to my listening ports, we'll just need to
      * discover the IP address via MEET messages. */

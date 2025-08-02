@@ -1237,7 +1237,7 @@ int shouldRewriteHashtableIndex(int didx, hashtable *ht, void *privdata) {
 int childSnapshotForSyncSlot(int req, rio *rdb, void *privdata) {
     UNUSED(req);
     list *slot_ranges = privdata;
-    int key_count = 0;
+    size_t key_count = 0;
     for (int db_num = 0; db_num < server.dbnum; db_num++) {
         listIter li;
         listNode *ln;

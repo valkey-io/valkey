@@ -2258,7 +2258,7 @@ int rewriteObjectRio(rio *aof, robj *o, int db_num) {
     return 1;
 }
 
-int rewriteSlotToAppendOnlyFileRio(rio *aof, int db_num, int hashslot, int *key_count) {
+int rewriteSlotToAppendOnlyFileRio(rio *aof, int db_num, int hashslot, size_t *key_count) {
     long long updated_time = 0;
 
     if (rewriteFunctions(aof) == 0) return C_ERR;

@@ -408,8 +408,8 @@ proc test_server_cron {} {
             }
         }
         show_clients_state
-        kill_clients
         force_kill_all_servers
+        kill_clients
         the_end
     }
 

@@ -43,7 +43,7 @@ typedef enum slotMigrationLinkType {
 
 /* A slotMigrationLink represents a link to another node for an ongoing slot
  * migration. A link is created on either end of a migration during the
- * duration of a CLUSTER IMPORT operation. */
+ * duration of a CLUSTER MIGRATE operation. */
 typedef struct slotMigrationLink {
     slotMigrationLinkType type;                /* Type of the migration link (either for import or export) */
     time_t ctime;                              /* Migration link creation time. */
@@ -317,7 +317,7 @@ list *parseSlotRangesOrReply(client *c, int start_index, int *end_index_out, clu
 /* -------------------------------------------- TARGET -----------------------------------------
  *
  * During a slot import, the target drives the main state machine and eventually performs the
- * slot takeover. Slot import is initiated when an operator sends a CLUSTER IMPORT request, after
+ * slot takeover. Slot import is initiated when an operator sends a CLUSTER MIGRATE request, after
  * which the target node will track the import in a slotMigrationLink.
  *
  * For transient errors like connections being dropped, the target will restart the import workflow
@@ -325,7 +325,7 @@ list *parseSlotRangesOrReply(client *c, int start_index, int *end_index_out, clu
  * intervention to retry.
  *
  * An operator can view the status of imports with CLUSTER MIGRATIONS, and cancel imports with
- * CLUSTER IMPORT-CANCEL.
+ * CLUSTER MIGRATE-CANCEL.
  *
  * State Machine:
  *

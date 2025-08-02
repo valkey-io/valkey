@@ -7026,11 +7026,11 @@ int clusterParseSetSlotCommand(client *c, int *slot_out, clusterNode **node_out,
     }
 
     if (clusterIsAnySlotImporting()) {
-        addReplyError(c, "A slot is currently being imported via CLUSTER IMPORT. Please cancel any ongoing import operations and try again.");
+        addReplyError(c, "A slot is currently being imported via CLUSTER MIGRATE. Please cancel any ongoing import operations and try again.");
         return 0;
     }
     if (clusterIsAnySlotExporting()) {
-        addReplyError(c, "A slot is currently being exported via CLUSTER IMPORT. Please cancel any ongoing import operations and try again.");
+        addReplyError(c, "A slot is currently being exported via CLUSTER MIGRATE. Please cancel any ongoing import operations and try again.");
         return 0;
     }
 

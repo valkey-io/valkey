@@ -1714,6 +1714,23 @@ void clientAcceptHandler(connection *conn) {
     moduleFireServerEvent(VALKEYMODULE_EVENT_CLIENT_CHANGE, VALKEYMODULE_SUBEVENT_CLIENT_CHANGE_CONNECTED, c);
 }
 
+static int shouldTunnelToPrimary(char *addr) {
+    if (!server.tunnel_primary || !server.primary_host ||
+        server.failover_state != NO_FAILOVER) return 0;
+
+    listIter li;
+    listNode *ln;
+    listRewind(server.tunnel_excluded_ips, &li);
+
+    while ((ln = listNext(&li))) {
+        sds exclude_ip = ln->value;
+        if (sdslen(exclude_ip) <= strlen(addr) && !strncmp(exclude_ip, addr, sdslen(exclude_ip))) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
 void acceptCommonHandler(connection *conn, struct ClientFlags flags, char *ip) {
     client *c;
     UNUSED(ip);
@@ -1729,7 +1746,10 @@ void acceptCommonHandler(connection *conn, struct ClientFlags flags, char *ip) {
         connClose(conn);
         return;
     }
-
+    if (shouldTunnelToPrimary(addr)) {
+        establishTunnelOrClose(conn);
+        return;
+    }
     /* Limit the number of connections we take at the same time.
      *
      * Admission control will happen before a client is created and connAccept()

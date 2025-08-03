@@ -71,7 +71,7 @@ void syncWithPrimary(connection *conn);
 int RDBGeneratedByReplication = 0;
 
 /* --------------------------- Utility functions ---------------------------- */
-static ConnectionType *connTypeOfReplication(void) {
+ConnectionType *connTypeOfReplication(void) {
     if (server.tls_replication) {
         return connectionTypeTls();
     }
@@ -4297,6 +4297,7 @@ void replicationUnsetPrimary(void) {
     sdsfree(server.primary_host);
     server.primary_host = NULL;
     if (server.primary) freeClient(server.primary);
+    server.tunnel_primary = 0;
     replicationDiscardCachedPrimary();
     cancelReplicationHandshake(0);
     /* When a replica is turned into a primary, the current replication ID
@@ -5325,10 +5326,39 @@ void abortFailover(const char *err) {
         replicationUnsetPrimary();
     }
     clearFailoverState();
+    server.tunnel_primary = 0;
 }
 
+sds getClientPeerIP(client *c) {
+    sds id = getClientPeerId(c);
+    char *last_colon = strrchr(id, ':');
+    if (!last_colon) {
+        return sdsnew(id);
+    }
+    return sdsnewlen(id, last_colon - id);
+}
+
+static void releaseTunnelExcludedIps(void) {
+    listIter li;
+    listNode *ln;
+    listRewind(server.tunnel_excluded_ips, &li);
+    while ((ln = listNext(&li)) != NULL) {
+        sds ip = listNodeValue(ln);
+        listDelNode(server.tunnel_excluded_ips, ln);
+        sdsfree(ip);
+    }
+}
+
+static void setTunnelExcludedIps(client *c, int exclude_ip_start, int exclude_ip_end) {
+    for (int j = exclude_ip_start; j < exclude_ip_end; ++j) {
+        listAddNodeTail(server.tunnel_excluded_ips, sdsdup(c->argv[j]->ptr));
+    }
+    client *replica = findReplica(server.target_replica_host, server.target_replica_port);
+    listAddNodeTail(server.tunnel_excluded_ips, getClientPeerIP(replica));
+    listAddNodeTail(server.tunnel_excluded_ips, getClientPeerIP(c));
+}
 /*
- * FAILOVER [TO <HOST> <PORT> [FORCE]] [ABORT] [TIMEOUT <timeout>]
+ * FAILOVER [TO <HOST> <PORT> [FORCE] [TUNNEL [<EXCLUDE_IP> ...]]] [ABORT] [TIMEOUT <timeout>]
  *
  * This command will coordinate a failover between the primary and one
  * of its replicas. The happy path contains the following steps:
@@ -5353,6 +5383,10 @@ void abortFailover(const char *err) {
  * TIMEOUT <timeout> indicates how long should the primary wait for
  * a replica to sync up before aborting. If not specified, the failover
  * will attempt forever and must be manually aborted.
+ *
+ * TUNNEL flag indicates that after the failover is complete, new connections
+ * are tunneled to the new primary. The excluded IPs list specifies addresses
+ * for which tunneling should be disabled.
  */
 void failoverCommand(client *c) {
     if (!clusterAllowFailoverCmd(c)) {
@@ -5373,8 +5407,11 @@ void failoverCommand(client *c) {
 
     long timeout_in_ms = 0;
     int force_flag = 0;
+    int tunnel_flag = 0;
     long port = 0;
     char *host = NULL;
+    int exclude_ip_start = -1;
+    int exclude_ip_end = -1;
 
     /* Parse the command for syntax and arguments. */
     for (int j = 1; j < c->argc; j++) {
@@ -5391,6 +5428,17 @@ void failoverCommand(client *c) {
             j += 2;
         } else if (!strcasecmp(c->argv[j]->ptr, "force") && !force_flag) {
             force_flag = 1;
+        } else if (!strcasecmp(c->argv[j]->ptr, "tunnel") && !tunnel_flag) {
+            tunnel_flag = 1;
+            ++j;
+            for (; j < c->argc; ++j) {
+                if (!isValidIpV4(c->argv[j]->ptr, NULL) && !isValidIpV6(c->argv[j]->ptr, NULL)) {
+                    --j;
+                    break;
+                }
+                if (exclude_ip_start == -1) exclude_ip_start = j;
+                exclude_ip_end = j + 1;
+            }
         } else {
             addReplyErrorObject(c, shared.syntaxerr);
             return;
@@ -5415,6 +5463,14 @@ void failoverCommand(client *c) {
     if (force_flag && (!timeout_in_ms || !host)) {
         addReplyError(c, "FAILOVER with force option requires both a timeout "
                          "and target HOST and IP.");
+        return;
+    }
+    if (tunnel_flag && !host) {
+        addReplyError(c, "FAILOVER with tunnel option requires a target HOST");
+        return;
+    }
+    if (tunnel_flag && server.cluster_enabled) {
+        addReplyError(c, "FAILOVER with tunnel is not supported in cluster mode.");
         return;
     }
 
@@ -5447,6 +5503,11 @@ void failoverCommand(client *c) {
     }
 
     server.force_failover = force_flag;
+    server.tunnel_primary = tunnel_flag;
+    releaseTunnelExcludedIps();
+    if (tunnel_flag) {
+        setTunnelExcludedIps(c, exclude_ip_start, exclude_ip_end);
+    }
     server.failover_state = FAILOVER_WAIT_FOR_SYNC;
     /* Cluster failover will unpause eventually */
     pauseActions(PAUSE_DURING_FAILOVER, LLONG_MAX, PAUSE_ACTIONS_CLIENT_WRITE_SET);

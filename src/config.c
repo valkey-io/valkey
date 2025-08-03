@@ -2411,19 +2411,19 @@ static int isValidAnnouncedHostname(char *val, const char **err) {
     return 1;
 }
 
-static int isValidIpV4(char *val, const char **err) {
+int isValidIpV4(char *val, const char **err) {
     struct sockaddr_in sa;
     if (val[0] != '\0' && inet_pton(AF_INET, val, &(sa.sin_addr)) == 0) {
-        *err = "Invalid IPv4 address";
+        if (err) *err = "Invalid IPv4 address";
         return 0;
     }
     return 1;
 }
 
-static int isValidIpV6(char *val, const char **err) {
+int isValidIpV6(char *val, const char **err) {
     struct sockaddr_in6 sa;
     if (val[0] != '\0' && inet_pton(AF_INET6, val, &(sa.sin6_addr)) == 0) {
-        *err = "Invalid IPv6 address";
+        if (err) *err = "Invalid IPv6 address";
         return 0;
     }
     return 1;

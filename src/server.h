@@ -82,6 +82,7 @@ typedef long long ustime_t; /* microsecond time type. */
 #include "rax.h"        /* Radix tree */
 #include "connection.h" /* Connection abstraction */
 #include "memory_prefetch.h"
+#include "tunnel.h"
 #include "trace/trace.h"
 
 #ifdef USE_LTTNG
@@ -1674,6 +1675,7 @@ struct valkeyServer {
     uint32_t socket_mark_id;               /* ID for listen socket marking */
     connListener clistener;                /* Cluster bus listener */
     list *clients;                         /* List of active clients */
+    list *tunnels_to_close;                /* Tunnel sessions to close asynchronously */
     list *clients_to_close;                /* Clients to close asynchronously */
     list *clients_pending_write;           /* There is to write or install handler. */
     list *clients_pending_io_read;         /* List of clients with pending read to be process by I/O threads. */
@@ -1735,6 +1737,8 @@ struct valkeyServer {
     time_t stat_starttime;                         /* Server start time */
     long long stat_numcommands;                    /* Number of processed commands */
     long long stat_numconnections;                 /* Number of connections received */
+    long long stat_tunnel_sessions;                /* Number of tunnel sessions */
+    long long stat_active_tunnel_sessions;         /* Active tunnel sessions */
     long long stat_expiredkeys;                    /* Number of expired keys */
     double stat_expired_stale_perc;                /* Percentage of keys probably expired */
     long long stat_expired_time_cap_reached_count; /* Early expire cycle stops.*/
@@ -2203,9 +2207,12 @@ struct valkeyServer {
     /* Sentinel config */
     struct sentinelConfig *sentinel_config; /* sentinel config to load at startup time. */
     /* Coordinate failover info */
-    mstime_t failover_end_time;              /* Deadline for failover command. */
-    int force_failover;                      /* If true then failover will be forced at the
-                                              * deadline, otherwise failover is aborted. */
+    mstime_t failover_end_time; /* Deadline for failover command. */
+    int force_failover;         /* If true then failover will be forced at the
+                                 * deadline, otherwise failover is aborted. */
+    int tunnel_primary;         /* If true then once failover is completed, tunnel the existing and the new
+                                 * connections to the failover target. */
+    list *tunnel_excluded_ips;
     char *target_replica_host;               /* Failover target host. If null during a
                                               * failover then any replica can be used. */
     int target_replica_port;                 /* Failover target port */
@@ -2709,6 +2716,8 @@ void dictVanillaFree(void *val);
 #define WRITE_FLAGS_WRITE_ERROR (1 << 0)
 #define WRITE_FLAGS_IS_REPLICA (1 << 1)
 
+int isValidIpV4(char *val, const char **err);
+int isValidIpV6(char *val, const char **err);
 client *createClient(connection *conn);
 void freeClient(client *c);
 void freeClientAsync(client *c);
@@ -2798,6 +2807,7 @@ void redactClientCommandArgument(client *c, int argc);
 size_t getClientOutputBufferMemoryUsage(client *c);
 size_t getClientMemoryUsage(client *c, size_t *output_buffer_mem_usage);
 int freeClientsInAsyncFreeQueue(void);
+void freeTunnelsInAsyncFreeQueue(void);
 int closeClientOnOutputBufferLimitReached(client *c, int async);
 int getClientType(client *c);
 int getClientTypeByName(char *name);
@@ -3014,6 +3024,7 @@ int replicationCountAOFAcksByOffset(long long offset);
 void replicationSendNewlineToPrimary(void);
 long long replicationGetReplicaOffset(void);
 char *replicationGetReplicaName(client *c);
+ConnectionType *connTypeOfReplication(void);
 long long getPsyncInitialOffset(void);
 int replicationSetupReplicaForFullResync(client *replica, long long offset);
 void changeReplicationId(void);

@@ -1922,6 +1922,8 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
 
     /* Close clients that need to be closed asynchronous */
     freeClientsInAsyncFreeQueue();
+    /* Close tunnel sessions that need to be closed asynchronous */
+    freeTunnelsInAsyncFreeQueue();
 
     /* Incrementally trim replication backlog, 10 times the normal speed is
      * to free replication backlog as much as possible. */
@@ -2303,6 +2305,8 @@ void initServerConfig(void) {
     /* Failover related */
     server.failover_end_time = 0;
     server.force_failover = 0;
+    server.tunnel_primary = 0;
+    server.tunnel_excluded_ips = listCreate();
     server.target_replica_host = NULL;
     server.target_replica_port = 0;
     server.failover_state = NO_FAILOVER;
@@ -2749,6 +2753,8 @@ void resetServerStats(void) {
     server.stat_reply_buffer_expands = 0;
     memset(server.duration_stats, 0, sizeof(durationStats) * EL_DURATION_TYPE_NUM);
     server.el_cmd_cnt_max = 0;
+    server.stat_tunnel_sessions = 0;
+    server.stat_active_tunnel_sessions = 0;
     lazyfreeResetStats();
 }
 
@@ -2826,6 +2832,7 @@ void initServer(void) {
     server.clients = listCreate();
     server.clients_index = raxNew();
     server.clients_to_close = listCreate();
+    server.tunnels_to_close = listCreate();
     server.replicas = listCreate();
     server.monitors = listCreate();
     server.replicas_waiting_psync = raxNew();
@@ -4257,12 +4264,12 @@ int processCommand(client *c) {
              * and then resume the execution. */
             blockPostponeClient(c);
         } else {
+            c->duration = 0;
             if (c->cmd->proc == execCommand) {
                 discardTransaction(c);
             } else {
                 flagTransaction(c);
             }
-            c->duration = 0;
             c->cmd->rejected_calls++;
             addReplyErrorSds(c, sdscatprintf(sdsempty(), "-REDIRECT %s:%d", server.primary_host, server.primary_port));
         }
@@ -5847,7 +5854,9 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                 "total_blocking_keys_on_nokey:%lu\r\n", blocking_keys_on_nokey,
                 "paused_reason:%s\r\n", paused_reason,
                 "paused_actions:%s\r\n", paused_actions,
-                "paused_timeout_milliseconds:%lld\r\n", paused_timeout));
+                "paused_timeout_milliseconds:%lld\r\n", paused_timeout,
+                "total_tunnel_sessions:%lld\r\n", server.stat_tunnel_sessions,
+                "active_tunnel_sessions:%lld\r\n", server.stat_active_tunnel_sessions));
     }
 
     /* Memory */

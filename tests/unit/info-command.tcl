@@ -65,5 +65,9 @@ start_server {tags {"info and its relative command"}} {
         # check that we didn't get the same info twice
         assert { ![string match "*used_cpu_user_children*used_cpu_user_children*" $info] }
     }
-   
+
+    test {info server section contains rdb_version} {
+        set info [r info server]
+        assert { [string match "*rdb_version*" $info] }
+    }
 }

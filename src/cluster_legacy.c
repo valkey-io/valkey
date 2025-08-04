@@ -197,23 +197,24 @@ dictType clusterSdsToListType = {
     NULL                /* allow to expand */
 };
 
-static uint64_t dictIntHash(const void *key) {
-    return dictGenHashFunction(key, sizeof(int));
+static uint64_t dictPtrHash(const void *key) {
+    /* We hash the pointer value itself. */
+    return dictGenHashFunction(&key, sizeof(key));
 }
 
-static int dictIntKeyCompare(const void *key1, const void *key2) {
-    return *(int *)key1 == *(int *)key2;
+static int dictPtrCompare(const void *key1, const void *key2) {
+    return key1 == key2;
 }
 
 /* Dictionary type for mapping hash slots to cluster nodes.
- * Keys are allocated integers representing the slot number, values are clusterNode pointers. */
+ * Keys are slot numbers encoded directly as pointer values, values are clusterNode pointers. */
 dictType clusterSlotDictType = {
-    dictIntHash,       /* hash function */
-    NULL,              /* key dup */
-    dictIntKeyCompare, /* key compare */
-    zfree,             /* key destructor */
-    NULL,              /* val destructor */
-    NULL               /* allow to expand */
+    dictPtrHash,    /* hash function */
+    NULL,           /* key dup */
+    dictPtrCompare, /* key compare */
+    NULL,           /* key destructor */
+    NULL,           /* val destructor */
+    NULL            /* allow to expand */
 };
 
 typedef struct {
@@ -283,42 +284,38 @@ static void clusterNodeIterReset(ClusterNodeIterator *iter) {
 
 /* Helpers to access the migrating/importing slot dictionaries. */
 clusterNode *getMigratingSlotDest(int slot) {
-    dictEntry *de = dictFind(server.cluster->migrating_slots_to, &slot);
+    dictEntry *de = dictFind(server.cluster->migrating_slots_to, (void *)(long)slot);
     return de ? dictGetVal(de) : NULL;
 }
 
 static void setMigratingSlotDest(int slot, clusterNode *node) {
-    dictEntry *de = dictFind(server.cluster->migrating_slots_to, &slot);
+    dictEntry *de = dictFind(server.cluster->migrating_slots_to, (void *)(long)slot);
     if (node == NULL) {
-        if (de) dictDelete(server.cluster->migrating_slots_to, &slot);
+        if (de) dictDelete(server.cluster->migrating_slots_to, (void *)(long)slot);
         return;
     }
     if (de) {
         dictSetVal(server.cluster->migrating_slots_to, de, node);
     } else {
-        int *k = zmalloc(sizeof(int));
-        *k = slot;
-        dictAdd(server.cluster->migrating_slots_to, k, node);
+        dictAdd(server.cluster->migrating_slots_to, (void *)(long)slot, node);
     }
 }
 
 clusterNode *getImportingSlotSource(int slot) {
-    dictEntry *de = dictFind(server.cluster->importing_slots_from, &slot);
+    dictEntry *de = dictFind(server.cluster->importing_slots_from, (void *)(long)slot);
     return de ? dictGetVal(de) : NULL;
 }
 
 static void setImportingSlotSource(int slot, clusterNode *node) {
-    dictEntry *de = dictFind(server.cluster->importing_slots_from, &slot);
+    dictEntry *de = dictFind(server.cluster->importing_slots_from, (void *)(long)slot);
     if (node == NULL) {
-        if (de) dictDelete(server.cluster->importing_slots_from, &slot);
+        if (de) dictDelete(server.cluster->importing_slots_from, (void *)(long)slot);
         return;
     }
     if (de) {
         dictSetVal(server.cluster->importing_slots_from, de, node);
     } else {
-        int *k = zmalloc(sizeof(int));
-        *k = slot;
-        dictAdd(server.cluster->importing_slots_from, k, node);
+        dictAdd(server.cluster->importing_slots_from, (void *)(long)slot, node);
     }
 }
 
@@ -7800,7 +7797,7 @@ sds clusterEncodeOpenSlotsAuxField(int rdbflags) {
         dictIterator *di = dictGetIterator(d);
         dictEntry *de;
         while ((de = dictNext(di)) != NULL) {
-            int slot = *(int *)dictGetKey(de);
+            int slot = (int)(uintptr_t)dictGetKey(de);
             clusterNode *node = dictGetVal(de);
             if (s == NULL) s = sdsempty();
             s = sdscatfmt(s, "%i%s", slot, (i == 0) ? "<" : ">");

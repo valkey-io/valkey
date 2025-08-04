@@ -77,78 +77,80 @@ test "Pub/sub traffic increases with publish operations" {
     $sub_client close
 }
 
-# test "Module cluster message traffic tracking" {
-#     # Build the cluster module if it doesn't exist
-#     set testmodule [file normalize tests/modules/cluster.so]
-#     if {![file exists $testmodule]} {
-#         exec make -C tests/modules cluster.so
-#     }
+test "Module cluster message traffic tracking" {
+    # Build the cluster module if it doesn't exist
+    set testmodule [file normalize tests/modules/cluster.so]
+    if {![file exists $testmodule]} {
+        exec make -C tests/modules cluster.so
+    }
 
-#     # Load the cluster module on all nodes
-#     r module load $testmodule
+    # Load the cluster module on all nodes
+    r module load $testmodule
 
-#     # Wait longer for module load and cluster stabilization
-#     after 1000
+    # Wait longer for module load and cluster stabilization
+    after 1000
 
-#     # Send module cluster message to generate traffic
-#     r test.pingall
+    # Send module cluster message to generate traffic
+    r test.pingall
     
-#     # Wait longer for message processing in sanitizer builds
-#     after 1000
+    # Wait longer for message processing in sanitizer builds
+    after 1000
 
-#     # Check cluster info with retries
-#     set cluster_info [get_cluster_info_with_retries r]
+    # Check cluster info with retries
+    set cluster_info [get_cluster_info_with_retries r]
     
-#     # Check that module traffic entries exist
-#     set sent_found 0
-#     set recv_found 0
-#     foreach line [split $cluster_info "\r\n"] {
-#         if {[string match "cluster_bus_module_sent_bytes_*" $line]} {
-#             set sent_found 1
-#             set bytes [lindex [split $line ":"] 1]
-#             assert {$bytes >= 0}
-#         }
-#         if {[string match "cluster_bus_module_received_bytes_*" $line]} {
-#             set recv_found 1
-#             set bytes [lindex [split $line ":"] 1]
-#             assert {$bytes >= 0}
-#         }
-#     }
+    # Check that module traffic entries exist
+    set sent_found 0
+    set recv_found 0
+    foreach line [split $cluster_info "\r\n"] {
+        if {[string match "cluster_bus_module_sent_bytes_*" $line]} {
+            set sent_found 1
+            set bytes [lindex [split $line ":"] 1]
+            assert {$bytes >= 0}
+        }
+        if {[string match "cluster_bus_module_received_bytes_*" $line]} {
+            set recv_found 1
+            set bytes [lindex [split $line ":"] 1]
+            assert {$bytes >= 0}
+        }
+    }
 
-#     # Verify that both sent and received module traffic were tracked
-#     assert {$sent_found == 1}
-#     assert {$recv_found == 1}
+    # Verify that both sent and received module traffic were tracked
+    assert {$sent_found == 1}
+    assert {$recv_found == 1}
 
-#     # Unload module from all nodes
-#     r module unload cluster
+    # Unload module from all nodes
+    if {[catch {r module unload cluster} err]} {
+        puts "Warning: Module unload failed: $err"
+    }
 
-#     # Wait longer for cleanup to propagate after module unload
-#     after 1000
+    # Wait longer for cleanup to propagate after module unload
+    after 1000
 
-#     # Verify module was unloaded successfully
-#     set modules [r module list]
-#     set cluster_found 0
-#     foreach module $modules {
-#         if {[dict get $module name] eq "cluster"} {
-#             set cluster_found 1
-#         }
-#     }
-#     assert {$cluster_found == 0}
+    # Verify module was unloaded successfully
+    set modules [r module list]
+    set cluster_found 0
+    foreach module $modules {
+        if {[dict get $module name] eq "cluster"} {
+            set cluster_found 1
+        }
+    }
+    assert {$cluster_found == 0}
 
-#     # Check cluster info with retries
-#     set cluster_info [get_cluster_info_with_retries r]
+    # Check cluster info with retries
+    set cluster_info [get_cluster_info_with_retries r]
 
-#     # Check that module traffic entries are cleaned up after unload
-#     set module_traffic_found_after 0
-#     foreach line [split $cluster_info "\r\n"] {
-#         if {[string match "cluster_bus_module_*_bytes_*" $line]} {
-#             set module_traffic_found_after 1
-#             break
-#         }
-#     }
+    # Check that module traffic entries are cleaned up after unload
+    set module_traffic_found_after 0
+    foreach line [split $cluster_info "\r\n"] {
+        if {[string match "cluster_bus_module_*_bytes_*" $line]} {
+            set module_traffic_found_after 1
+            break
+        }
+    }
 
-#     # Verify module traffic was present before and absent after unload
-#     assert {$module_traffic_found_after == 0}
-# }
+    # Verify module traffic was present before and absent after unload
+    assert {$module_traffic_found_after == 0}
+}
 
 }

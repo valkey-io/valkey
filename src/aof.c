@@ -1440,7 +1440,6 @@ int loadSingleAppendOnlyFile(char *filename) {
     char sig[6]; /* "REDIS" or "VALKEY" */
     if (fread(sig, 1, 6, fp) != 6 || (memcmp(sig, "REDIS", 5) != 0 && memcmp(sig, "VALKEY", 6) != 0)) {
         /* Not in RDB format, seek back at 0 offset. */
-        serverLog(LL_WARNING, "Error reading the RDB preamble signature of the AOF file, AOF loading aborted");
         if (fseek(fp, 0, SEEK_SET) == -1) goto readerr;
     } else {
         /* RDB format. Pass loading the RDB functions. */

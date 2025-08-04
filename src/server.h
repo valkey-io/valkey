@@ -2218,6 +2218,16 @@ struct valkeyServer {
     /* Local environment */
     char *locale_collate;
     char *debug_context; /* A free-form string that has no impact on server except being included in a crash report. */
+    unsigned long long lists_count;
+    unsigned long long lists_memory;
+    unsigned long long strings_count;
+    unsigned long long strings_memory;
+    unsigned long long hashes_count;
+    unsigned long long hashes_memory;
+    unsigned long long sets_count;
+    unsigned long long sets_memory;
+    unsigned long long zsets_count;
+    unsigned long long zsets_memory;
 };
 
 #define MAX_KEYS_BUFFER 256
@@ -3298,6 +3308,12 @@ void *activeDefragAlloc(void *ptr);
 robj *activeDefragStringOb(robj *ob);
 void dismissSds(sds s);
 void dismissMemoryInChild(void);
+size_t getKeyMemoryUsage(robj *obj);
+size_t getStringValueMemoryUsage(robj *obj);
+size_t getListValueMemoryUsage(robj *obj);
+size_t getHashValueMemoryUsage(robj *obj);
+size_t getSetValueMemoryUsage(robj *obj);
+size_t getZsetValueMemoryUsage(robj *obj);
 
 #define RESTART_SERVER_NONE 0
 #define RESTART_SERVER_GRACEFULLY (1 << 0)     /* Do proper shutdown. */

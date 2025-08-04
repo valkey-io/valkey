@@ -62,6 +62,8 @@
 
 #include "server.h"
 #include "intset.h" /* Compact integer set structure */
+#include "cluster.h"
+#include "cluster_legacy.h"
 #include <math.h>
 
 #include "valkey_strtod.h"
@@ -1731,6 +1733,12 @@ static void zaddGenericCommand(client *c, int flags) {
     size_t maxelelen = 0;
     int scoreidx = 0;
     int reply_err = 0;
+    /*
+    int slot_number = 0;
+    unsigned long long update_key_memory_usage = 0;
+    size_t previous_value_memory_usage = 0;
+    size_t new_value_memory_usage = 0;
+    */
 
     /* The following vars are used in order to track what the command actually
      * did during the execution, to reply to the client and to trigger the
@@ -1813,8 +1821,11 @@ static void zaddGenericCommand(client *c, int flags) {
         if (xx) goto reply_to_client; /* No key + XX option: nothing to do. */
         zobj = zsetTypeCreate(elements, maxelelen);
         dbAdd(c->db, key, &zobj);
+        // server.zsets_count++;
+        // update_key_memory_usage = getKeyMemoryUsage(c->argv[1]);
     } else {
         zsetTypeMaybeConvert(zobj, elements, maxelelen);
+        // previous_value_memory_usage = getZsetValueMemoryUsage(zobj);
     }
 
     for (j = 0; j < elements; j++) {
@@ -1839,6 +1850,14 @@ static void zaddGenericCommand(client *c, int flags) {
     if (added || updated) {
         signalModifiedKey(c, c->db, key);
         notifyKeyspaceEvent(NOTIFY_ZSET, incr ? "zincr" : "zadd", key, c->db->id);
+        /*
+            new_value_memory_usage = getZsetValueMemoryUsage(zobj);
+            server.zsets_memory += update_key_memory_usage + new_value_memory_usage - previous_value_memory_usage;
+            if (server.cluster_enabled) {
+                slot_number = getKeySlot(c->argv[1]->ptr);
+                server.cluster->myself->memory_usage[slot_number] += update_key_memory_usage + new_value_memory_usage - previous_value_memory_usage;
+            }
+        */
     }
 
 reply_to_client:

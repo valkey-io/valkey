@@ -35,6 +35,8 @@
 #include "server.h"
 #include "hashtable.h"
 #include "intset.h" /* Compact integer set structure */
+#include "cluster.h"
+#include "cluster_legacy.h"
 
 /*-----------------------------------------------------------------------------
  * Set Commands
@@ -597,6 +599,12 @@ robj *setTypeDup(robj *o) {
 void saddCommand(client *c) {
     robj *set;
     int j, added = 0;
+    /*
+    int slot_number = 0;
+    unsigned long long update_key_memory_usage = 0;
+    size_t previous_value_memory_usage = 0;
+    size_t new_value_memory_usage = 0;
+    */
 
     set = lookupKeyWrite(c->db, c->argv[1]);
     if (checkType(c, set, OBJ_SET)) return;
@@ -604,8 +612,11 @@ void saddCommand(client *c) {
     if (set == NULL) {
         set = setTypeCreate(c->argv[2]->ptr, c->argc - 2);
         dbAdd(c->db, c->argv[1], &set);
+        // server.sets_count++;
+        // update_key_memory_usage = getKeyMemoryUsage(c->argv[1]);
     } else {
         setTypeMaybeConvert(set, c->argc - 2);
+        // previous_value_memory_usage = getSetValueMemoryUsage(set);
     }
 
     for (j = 2; j < c->argc; j++) {
@@ -615,6 +626,14 @@ void saddCommand(client *c) {
         signalModifiedKey(c, c->db, c->argv[1]);
         notifyKeyspaceEvent(NOTIFY_SET, "sadd", c->argv[1], c->db->id);
         server.dirty += added;
+        /*
+            new_value_memory_usage = getSetValueMemoryUsage(set);
+            server.sets_memory += update_key_memory_usage + new_value_memory_usage - previous_value_memory_usage;
+            if (server.cluster_enabled) {
+                slot_number = getKeySlot(c->argv[1]->ptr);
+                server.cluster->myself->memory_usage[slot_number] += update_key_memory_usage + new_value_memory_usage - previous_value_memory_usage;
+            }
+        */
     }
     addReplyLongLong(c, added);
 }

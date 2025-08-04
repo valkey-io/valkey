@@ -33,6 +33,8 @@
  */
 
 #include "server.h"
+#include "cluster.h"
+#include "cluster_legacy.h"
 #include <math.h>
 #include <stdbool.h>
 
@@ -813,12 +815,30 @@ void hsetCommand(client *c) {
     int i, created = 0;
     robj *o;
 
+    int slot_number = 0;
+    unsigned long long update_key_memory_usage = 0;
+    size_t previous_value_memory_usage = 0;
+    size_t new_value_memory_usage = 0;
+
+
     if ((c->argc % 2) == 1) {
         addReplyErrorArity(c);
         return;
     }
 
-    if ((o = hashTypeLookupWriteOrCreate(c, c->argv[1])) == NULL) return;
+    if ((o = hashTypeLookupWriteOrCreate(c, c->argv[1])) == NULL) return; // Add for compile
+
+    o = lookupKeyWrite(c->db, c->argv[1]);
+    if (checkType(c, o, OBJ_HASH)) return;
+    if (o == NULL) {
+        o = createHashObject();
+        dbAdd(c->db, c->argv[1], &o);
+        server.hashes_count++;
+        update_key_memory_usage = getKeyMemoryUsage(c->argv[1]);
+    } else {
+        previous_value_memory_usage = getHashValueMemoryUsage(o);
+    }
+
     hashTypeTryConversion(o, c->argv, 2, c->argc - 1);
 
     for (i = 2; i < c->argc; i += 2) created += !hashTypeSet(o, c->argv[i]->ptr, c->argv[i + 1]->ptr, HASH_SET_COPY);
@@ -826,6 +846,14 @@ void hsetCommand(client *c) {
     signalModifiedKey(c, c->db, c->argv[1]);
     notifyKeyspaceEvent(NOTIFY_HASH, "hset", c->argv[1], c->db->id);
     server.dirty += (c->argc - 2) / 2;
+
+    new_value_memory_usage = getHashValueMemoryUsage(o);
+    server.hashes_memory += update_key_memory_usage + new_value_memory_usage - previous_value_memory_usage;
+    if (server.cluster_enabled) {
+        slot_number = getKeySlot(c->argv[1]->ptr);
+        server.cluster->myself->memory_usage[slot_number] += update_key_memory_usage + new_value_memory_usage - previous_value_memory_usage;
+    }
+
 
     /* HMSET (deprecated) and HSET return value is different. */
     char *cmdname = c->argv[0]->ptr;

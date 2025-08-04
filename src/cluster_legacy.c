@@ -1680,6 +1680,9 @@ clusterNode *createClusterNode(char *nodename, int flags) {
     node->orphaned_time = 0;
     node->repl_offset = 0;
     node->is_node_healthy = 0;
+    for (int j = 0; j < CLUSTER_SLOTS; j++) {
+        node->memory_usage[j] = 0;
+    }
     return node;
 }
 

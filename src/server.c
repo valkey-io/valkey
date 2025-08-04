@@ -2940,6 +2940,16 @@ void initServer(void) {
     server.aof_last_write_errno = 0;
     server.repl_good_replicas_count = 0;
     server.last_sig_received = 0;
+    server.strings_count = 0;
+    server.strings_memory = 0;
+    server.lists_count = 0;
+    server.lists_memory = 0;
+    server.hashes_count = 0;
+    server.hashes_memory = 0;
+    server.sets_count = 0;
+    server.sets_count = 0;
+    server.zsets_memory = 0;
+    server.zsets_memory = 0;
 
     /* Initiate acl info struct */
     server.acl_info.invalid_cmd_accesses = 0;
@@ -5668,6 +5678,7 @@ dict *genInfoSectionDict(robj **argv, int argc, char **defaults, int *out_all, i
         "errorstats",
         "cluster",
         "keyspace",
+        "keystats",
         NULL,
     };
     if (!defaults) defaults = default_sections;
@@ -6334,6 +6345,23 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
         }
     }
 
+    /* Key stats */
+    if (all_sections || (dictFind(section_dict, "keystats") != NULL)) {
+        if (sections++) info = sdscat(info, "\r\n");
+        info = sdscatprintf(info, "# Keystats\r\n");
+        info = sdscatprintf(info, "string_count:%lld\r\n", server.strings_count);
+        info = sdscatprintf(info, "string_tot_memory:%lld\r\n", server.strings_memory);
+        info = sdscatprintf(info, "list_count:%lld\r\n", server.lists_count);
+        info = sdscatprintf(info, "list_tot_memory:%lld\r\n", server.lists_memory);
+        info = sdscatprintf(info, "hash_count:%lld\r\n", server.hashes_count);
+        info = sdscatprintf(info, "hash_tot_memory:%lld\r\n", server.hashes_memory);
+        info = sdscatprintf(info, "set_count:%lld\r\n", server.sets_count);
+        info = sdscatprintf(info, "set_tot_memory:%lld\r\n", server.sets_memory);
+        info = sdscatprintf(info, "zset_count:%lld\r\n", server.zsets_count);
+        info = sdscatprintf(info, "zset_tot_memory:%lld\r\n", server.zsets_memory);
+    }
+
+
     /* Get info from modules.
      * Returned when the user asked for "everything", "modules", or a specific module section.
      * We're not aware of the module section names here, and we rather avoid the search when we can.
@@ -6875,6 +6903,118 @@ void loadDataFromDisk(void) {
 void serverOutOfMemoryHandler(size_t allocation_size) {
     serverLog(LL_WARNING, "Out Of Memory allocating %zu bytes!", allocation_size);
     serverPanic("Valkey aborting for OUT OF MEMORY. Allocating %zu bytes!", allocation_size);
+}
+
+size_t getKeyMemoryUsage(robj *obj) {
+    size_t asize = 0;
+    if (obj->encoding == OBJ_ENCODING_INT) {
+        asize = sizeof(*obj);
+    } else if (obj->encoding == OBJ_ENCODING_RAW) {
+        asize = sdsAllocSize(obj->ptr) + sizeof(*obj);
+    } else if (obj->encoding == OBJ_ENCODING_EMBSTR) {
+        asize = zmalloc_size((void *)obj);
+    }
+    return asize;
+}
+
+size_t getStringValueMemoryUsage(robj *obj) {
+    size_t asize = 0;
+    if (obj->encoding == OBJ_ENCODING_INT) {
+        asize = sizeof(*obj);
+    } else if (obj->encoding == OBJ_ENCODING_RAW) {
+        asize = sdsAllocSize(obj->ptr) + sizeof(*obj);
+    } else if (obj->encoding == OBJ_ENCODING_EMBSTR) {
+        asize = zmalloc_size((void *)obj);
+    }
+    return asize;
+}
+
+size_t getListValueMemoryUsage(robj *obj) {
+    size_t asize = 0, elesize = 0;
+    if (obj->encoding == OBJ_ENCODING_QUICKLIST) {
+        quicklist *ql = obj->ptr;
+        quicklistNode *node = ql->head;
+        asize = sizeof(*obj) + sizeof(quicklist);
+        elesize += sizeof(quicklistNode) + zmalloc_size(node->entry);
+        node = node->next;
+        while (node) {
+            elesize += sizeof(quicklistNode) + zmalloc_size(node->entry);
+            node = node->next;
+        }
+        asize += elesize;
+    } else {
+        asize = sizeof(*obj) + zmalloc_size(obj->ptr);
+    }
+    return asize;
+}
+
+size_t getHashValueMemoryUsage(robj *obj) {
+    size_t asize = 0, elesize = 0, samples = 0;
+
+    if (obj->encoding == OBJ_ENCODING_LISTPACK) {
+        asize = sizeof(*obj) + zmalloc_size(obj->ptr);
+    } else if (obj->encoding == OBJ_ENCODING_HASHTABLE) {
+        hashtable *ht = obj->ptr;
+        hashtableIterator iter;
+        hashtableInitIterator(&iter, ht, 0);
+        void *next;
+
+        asize = sizeof(*obj) + hashtableMemUsage(ht);
+        while (hashtableNext(&iter, &next)) {
+            elesize += hashTypeEntryMemUsage(next);
+            samples++;
+        }
+        hashtableResetIterator(&iter);
+        if (samples) asize += (double)elesize / samples * hashtableSize(ht);
+    }
+    return asize;
+}
+
+size_t getSetValueMemoryUsage(robj *obj) {
+    size_t asize = 0, elesize = 0, samples = 0;
+
+    if (obj->encoding == OBJ_ENCODING_HASHTABLE) {
+        hashtable *ht = obj->ptr;
+        asize = sizeof(*obj) + hashtableMemUsage(ht);
+
+        hashtableIterator iter;
+        hashtableInitIterator(&iter, ht, 0);
+        void *next;
+        while (hashtableNext(&iter, &next)) {
+            sds element = next;
+            elesize += sdsAllocSize(element);
+            samples++;
+        }
+        hashtableResetIterator(&iter);
+        if (samples) asize += (double)elesize / samples * hashtableSize(ht);
+    } else if (obj->encoding == OBJ_ENCODING_INTSET) {
+        asize = sizeof(*obj) + zmalloc_size(obj->ptr);
+    } else if (obj->encoding == OBJ_ENCODING_LISTPACK) {
+        asize = sizeof(*obj) + zmalloc_size(obj->ptr);
+    }
+    return asize;
+}
+
+size_t getZsetValueMemoryUsage(robj *obj) {
+    size_t asize = 0, elesize = 0, samples = 0;
+
+    if (obj->encoding == OBJ_ENCODING_LISTPACK) {
+        asize = sizeof(*obj) + zmalloc_size(obj->ptr);
+    } else if (obj->encoding == OBJ_ENCODING_SKIPLIST) {
+        hashtable *ht = ((zset *)obj->ptr)->ht;
+        zskiplist *zsl = ((zset *)obj->ptr)->zsl;
+        zskiplistNode *znode = zsl->header->level[0].forward;
+        asize = sizeof(*obj) + sizeof(zset) + sizeof(zskiplist) +
+                hashtableMemUsage(ht) + zmalloc_size(zsl->header);
+        while (znode != NULL) {
+            elesize += sdsAllocSize(znode->ele);
+            elesize += zmalloc_size(znode);
+            samples++;
+            znode = znode->level[0].forward;
+        }
+        if (samples) asize += (double)elesize / samples * hashtableSize(ht);
+    }
+    return asize;
 }
 
 /* Callback for sdstemplate on proc-title-template. See valkey.conf for

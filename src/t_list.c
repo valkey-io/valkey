@@ -28,6 +28,8 @@
  */
 
 #include "server.h"
+#include "cluster.h"
+#include "cluster_legacy.h"
 
 /*-----------------------------------------------------------------------------
  * List API
@@ -461,6 +463,13 @@ void listTypeDelRange(robj *subject, long start, long count) {
  * 'xx': push if key exists. */
 void pushGenericCommand(client *c, int where, int xx) {
     int j;
+    /*
+    int found = 1;
+    int slot_number = 0;
+    unsigned long long update_key_memory_usage = 0;
+    size_t previous_value_memory_usage = 0;
+    size_t new_value_memory_usage = 0;
+    */
 
     robj *lobj = lookupKeyWrite(c->db, c->argv[1]);
     if (checkType(c, lobj, OBJ_LIST)) return;
@@ -469,10 +478,19 @@ void pushGenericCommand(client *c, int where, int xx) {
             addReply(c, shared.czero);
             return;
         }
-
         lobj = createListListpackObject();
         dbAdd(c->db, c->argv[1], &lobj);
+        // found = 0;
     }
+
+    /*
+    if (found) {
+        previous_value_memory_usage = getListValueMemoryUsage(lobj);
+    } else {
+        server.lists_count++;
+        update_key_memory_usage = getKeyMemoryUsage(c->argv[1]);
+    }
+    */
 
     listTypeTryConversionAppend(lobj, c->argv, 2, c->argc - 1, NULL, NULL);
     for (j = 2; j < c->argc; j++) {
@@ -480,6 +498,14 @@ void pushGenericCommand(client *c, int where, int xx) {
         server.dirty++;
     }
 
+    /*
+    new_value_memory_usage = getListValueMemoryUsage(lobj);
+    server.lists_memory += update_key_memory_usage + new_value_memory_usage - previous_value_memory_usage;
+    if (server.cluster_enabled) {
+        slot_number = getKeySlot(c->argv[1]->ptr);
+        server.cluster->myself->memory_usage[slot_number] += update_key_memory_usage + new_value_memory_usage - previous_value_memory_usage;
+    }
+    */
     signalModifiedKey(c, c->db, c->argv[1]);
     char *event = (where == LIST_HEAD) ? "lpush" : "rpush";
     notifyKeyspaceEvent(NOTIFY_LIST, event, c->argv[1], c->db->id);
@@ -533,6 +559,7 @@ void linsertCommand(client *c) {
      * to do the actual insert), so we assume this value can be inserted
      * and convert the listpack to a regular list if necessary. */
     listTypeTryConversionAppend(subject, c->argv, 4, 4, NULL, NULL);
+    // size_t previous_memory = getListValueMemoryUsage(subject);
 
     /* Seek pivot from head to tail */
     iter = listTypeInitIterator(subject, 0, LIST_TAIL);
@@ -549,6 +576,7 @@ void linsertCommand(client *c) {
         signalModifiedKey(c, c->db, c->argv[1]);
         notifyKeyspaceEvent(NOTIFY_LIST, "linsert", c->argv[1], c->db->id);
         server.dirty++;
+        // server.lists_memory += getListValueMemoryUsage(subject) - previous_memory;
     } else {
         /* Notify client of a failed insert */
         addReplyLongLong(c, -1);
@@ -603,11 +631,13 @@ void lsetCommand(client *c) {
     if ((getLongFromObjectOrReply(c, c->argv[2], &index, NULL) != C_OK)) return;
 
     listTypeTryConversionAppend(o, c->argv, 3, 3, NULL, NULL);
+    // size_t previous_memory = getListValueMemoryUsage(o);
     if (listTypeReplaceAtIndex(o, index, value)) {
         /* We might replace a big item with a small one or vice versa, but we've
          * already handled the growing case in listTypeTryConversionAppend()
          * above, so here we just need to try the conversion for shrinking. */
         listTypeTryConversion(o, LIST_CONV_SHRINKING, NULL, NULL);
+        // server.lists_memory = server.lists_memory - previous_memory + getListValueMemoryUsage(o);
         signalModifiedKey(c, c->db, c->argv[1]);
         notifyKeyspaceEvent(NOTIFY_LIST, "lset", c->argv[1], c->db->id);
         server.dirty++;
@@ -890,6 +920,8 @@ void ltrimCommand(client *c) {
         ltrim = start;
         rtrim = llen - end - 1;
     }
+    // size_t previous_memory = getListValueMemoryUsage(o);
+    // size_t key_memory = getKeyMemoryUsage(c->argv[1]);
 
     /* Remove list elements to perform the trim */
     if (o->encoding == OBJ_ENCODING_QUICKLIST) {
@@ -906,8 +938,11 @@ void ltrimCommand(client *c) {
     if (listTypeLength(o) == 0) {
         dbDelete(c->db, c->argv[1]);
         notifyKeyspaceEvent(NOTIFY_GENERIC, "del", c->argv[1], c->db->id);
+        // server.lists_memory = server.lists_memory - previous_memory - key_memory;
+        // server.lists_count--;
     } else {
         listTypeTryConversion(o, LIST_CONV_SHRINKING, NULL, NULL);
+        // server.lists_memory += previous_memory - getListValueMemoryUsage(o);
     }
     signalModifiedKey(c, c->db, c->argv[1]);
     server.dirty += (ltrim + rtrim);
@@ -1041,6 +1076,8 @@ void lremCommand(client *c) {
         li = listTypeInitIterator(subject, 0, LIST_TAIL);
     }
 
+    // size_t previous_memory = getListValueMemoryUsage(subject);
+    // size_t key_memory = getKeyMemoryUsage(c->argv[1]);
     listTypeEntry entry;
     while (listTypeNext(li, &entry)) {
         if (listTypeEqual(&entry, obj)) {
@@ -1057,8 +1094,11 @@ void lremCommand(client *c) {
         if (listTypeLength(subject) == 0) {
             dbDelete(c->db, c->argv[1]);
             notifyKeyspaceEvent(NOTIFY_GENERIC, "del", c->argv[1], c->db->id);
+            // server.lists_memory = server.lists_memory - previous_memory - key_memory;
+            // server.lists_count--;
         } else {
             listTypeTryConversion(subject, LIST_CONV_SHRINKING, NULL, NULL);
+            // server.lists_memory -= previous_memory - getListValueMemoryUsage(subject);
         }
         signalModifiedKey(c, c->db, c->argv[1]);
     }

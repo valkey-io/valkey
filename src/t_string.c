@@ -33,6 +33,8 @@
  */
 
 #include "server.h"
+#include "cluster.h"
+#include "cluster_legacy.h"
 #include <math.h> /* isnan(), isinf() */
 
 /* Forward declarations */
@@ -100,6 +102,12 @@ void setGenericCommand(client *c,
     long long milliseconds = 0; /* initialized to avoid any harmness warning */
     int found = 0;
     int setkey_flags = 0;
+    /*
+    int slot_number = 0;
+    unsigned long long update_key_memory_usage = 0;
+    size_t previous_value_memory_usage = 0;
+    size_t new_value_memory_usage = 0;
+    */
 
     if (expire && getExpireMillisecondsOrReply(c, expire, flags, unit, &milliseconds) != C_OK) {
         return;
@@ -110,6 +118,7 @@ void setGenericCommand(client *c,
         if (getGenericCommand(c) == C_ERR) goto cleanup;
     }
 
+    // slot_number = server.cluster_enabled ? getKeySlot(key->ptr) : 0;
     robj *existing_value = lookupKeyWrite(c->db, key);
     found = existing_value != NULL;
 
@@ -152,8 +161,26 @@ void setGenericCommand(client *c,
      * created again. */
     setkey_flags |= ((flags & OBJ_KEEPTTL) || expire) ? SETKEY_KEEPTTL : 0;
     setkey_flags |= found ? SETKEY_ALREADY_EXIST : SETKEY_DOESNT_EXIST;
+    /*
+    if (found) {
+        previous_value_memory_usage = getStringValueMemoryUsage(existing_value);
+    }
+    */
 
     setKey(c, c->db, key, &val, setkey_flags);
+
+    /*
+    if (!found) {
+        server.strings_count++;
+        update_key_memory_usage = getKeyMemoryUsage(key);
+    }
+    new_value_memory_usage = getStringValueMemoryUsage(val);
+    server.strings_memory += update_key_memory_usage + new_value_memory_usage - previous_value_memory_usage;
+    if (server.cluster_enabled) {
+        server.cluster->myself->memory_usage[slot_number] += update_key_memory_usage + new_value_memory_usage - previous_value_memory_usage;
+    }
+    */
+
     if (expire) val = setExpire(c, c->db, key, milliseconds);
 
     /* By setting the reallocated value back into argv, we can avoid duplicating

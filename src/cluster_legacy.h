@@ -368,6 +368,7 @@ struct _clusterNode {
     rax *fail_reports;                      /* Radix tree for failure reports with sorted order by timestamp */
     int is_node_healthy;                    /* Boolean indicating the cached node health.
                                                Update with updateAndCountChangedNodeHealth(). */
+    unsigned long long memory_usage[CLUSTER_SLOTS];
 };
 
 /* Struct used for storing slot statistics. */

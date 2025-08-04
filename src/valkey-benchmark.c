@@ -75,11 +75,14 @@
 
 #define CLIENT_GET_EVENTLOOP(c) (c->thread_id >= 0 ? config.threads[c->thread_id]->el : config.el)
 
-#define PLACEHOLDER_COUNT 10
+#define PLACEHOLDER_COUNT 14
+#define VECTOR_PLACEHOLDER_LEN 16 // length of "__rand_vec_f32__" string
 static const size_t PLACEHOLDER_LEN = 12; // length of BENCHMARK_PLACEHOLDERS strings
 static const char *PLACEHOLDERS[PLACEHOLDER_COUNT] = {
     "__rand_int__", "__rand_1st__", "__rand_2nd__", "__rand_3rd__", "__rand_4th__",
-    "__rand_5th__", "__rand_6th__", "__rand_7th__", "__rand_8th__", "__rand_9th__"};
+    "__rand_5th__", "__rand_6th__", "__rand_7th__", "__rand_8th__", "__rand_9th__",
+    "__rand_vec_f32__", "__rand_vec_1st__", "__rand_vec_2nd__", "__rand_vec_3rd__"};
+#define VECTOR_PLACEHOLDER_INDEX 10 // index of vector placeholder in PLACEHOLDERS array
 
 struct benchmarkThread;
 struct clusterNode;
@@ -91,6 +94,34 @@ typedef enum readFromReplica {
     FROM_REPLICA_ONLY,
     FROM_ALL
 } readFromReplica;
+
+typedef struct searchIndex {
+    sds name;               /* Index name */
+    sds create_cmd_args;    /* Command to create the index */
+    sds prefix;             /* Index key prefix */
+    sds vector_field;       /* Vector field name */
+    int vector_dim;         /* Vector dimension */    
+    sds tag_field;          /* Tag field name if exists*/
+    sds numeric_field;      /* Numeric field name if exists */
+    int ef_construction;    /* EF Construction for vector search */
+    int m;                  /* HNSW M parameter */
+    int ef_search;          /* EF Search for vector search */
+    int k;                  /* Number of nearest neighbors to return */
+    int initial_prefill_nvec;
+    int num_random_dimensions; /* Number of random dimensions to use for vector generation */
+} searchIndex;
+
+/* Vector placeholder callback information */
+typedef enum {
+    VECTOR_PHASE_PREFILL,
+    VECTOR_PHASE_INSERT,
+    VECTOR_PHASE_QUERY
+} VectorPhase;
+
+/* Callback function type for vector placeholder replacement */
+typedef void (*VectorPlaceholderCallback)(char *vector_data, const char *key, VectorPhase phase, int dim);
+
+
 
 static struct config {
     aeEventLoop *el;
@@ -149,7 +180,14 @@ static struct config {
     atomic_uint_fast64_t last_time_ns;
     uint64_t time_per_token;
     uint64_t time_per_burst;
+    int use_search_index; /* Use search indexes */
+    searchIndex search_index;
+    int vsearch_prefill_count; /* Number of vectors to prefill before benchmarking */
 } config;
+
+/* Base vector for efficient vector generation */
+static float *base_vector = NULL;
+static int base_vector_dim = 0;
 
 /* Locations of the placeholders __rand_int__, __rand_1st__,
  * __rand_2nd, etc. within the RESP encoded command buffer. */
@@ -191,6 +229,16 @@ typedef struct benchmarkThread {
     list *paused_clients;
 } benchmarkThread;
 
+/* Prefill thread data */
+typedef struct prefillThreadData {
+    int thread_id;
+    int start_index;
+    int end_index;
+    int total_count;
+    pthread_mutex_t *progress_mutex;
+    int *global_progress;
+} prefillThreadData;
+
 /* Cluster. */
 typedef struct clusterNode {
     char *ip;
@@ -218,6 +266,7 @@ static benchmarkThread *createBenchmarkThread(int index);
 static void freeBenchmarkThread(benchmarkThread *thread);
 static void freeBenchmarkThreads(void);
 static void *execBenchmarkThread(void *ptr);
+static void benchmark(const char *title, char *cmd, int len);
 static clusterNode *createClusterNode(char *ip, int port);
 static serverConfig *getServerConfig(enum valkeyConnectionType ct, const char *ip_or_path, int port);
 static valkeyContext *getValkeyContext(enum valkeyConnectionType ct, const char *ip_or_path, int port);
@@ -229,6 +278,217 @@ static long long showThroughput(struct aeEventLoop *eventLoop, long long id, voi
 /* Dict callbacks */
 static uint64_t dictSdsHash(const void *key);
 static int dictSdsKeyCompare(const void *key1, const void *key2);
+
+/* valkey-search specific parsing of attributes */
+static void parseIndexAttributes(valkeyReply *attrs, int indent, char **algorithm_type) {
+    if (!config.use_search_index) return;
+    if (!attrs || attrs->type != VALKEY_REPLY_ARRAY) return;
+    
+    int print_output = (indent > 0 && algorithm_type == NULL);  // Only print if not extracting algorithm
+    
+    for (size_t i = 0; i < attrs->elements; i++) {
+        valkeyReply *attr = attrs->element[i];
+        if (attr->type != VALKEY_REPLY_ARRAY) continue;
+        
+        if (print_output) printf("%*sAttribute %zu:\n", indent, "", i + 1);
+        
+        for (size_t j = 0; j < attr->elements; j += 2) {
+            if (j + 1 >= attr->elements) break;
+            
+            char *attrKey = attr->element[j]->str;
+            valkeyReply *attrVal = attr->element[j + 1];
+            
+            if (strcmp(attrKey, "index") == 0 && attrVal->type == VALKEY_REPLY_ARRAY) {
+                if (print_output) printf("%*s  index:\n", indent, "");
+                
+                for (size_t k = 0; k < attrVal->elements; k += 2) {
+                    if (k + 1 >= attrVal->elements) break;
+                    char *idxKey = attrVal->element[k]->str;
+                    valkeyReply *idxVal = attrVal->element[k + 1];
+                    
+                    if (strcmp(idxKey, "algorithm") == 0 && idxVal->type == VALKEY_REPLY_ARRAY) {
+                        if (print_output) printf("%*s    algorithm:\n", indent, "");
+                        
+                        for (size_t m = 0; m < idxVal->elements; m += 2) {
+                            if (m + 1 >= idxVal->elements) break;
+                            char *algKey = idxVal->element[m]->str;
+                            valkeyReply *algVal = idxVal->element[m + 1];
+                            
+                            if (strcmp(algKey, "name") == 0 && algVal->type == VALKEY_REPLY_STRING) {
+                                if (print_output) {
+                                    printf("%*s      %s: %s\n", indent, "", algKey, algVal->str);
+                                }
+                                if (algorithm_type && *algorithm_type == NULL) {
+                                    *algorithm_type = algVal->str;
+                                }
+                            } else if (print_output) {
+                                if (algVal->type == VALKEY_REPLY_STRING) {
+                                    printf("%*s      %s: %s\n", indent, "", algKey, algVal->str);
+                                } else if (algVal->type == VALKEY_REPLY_INTEGER) {
+                                    printf("%*s      %s: %lld\n", indent, "", algKey, algVal->integer);
+                                }
+                            }
+                        }
+                    } else if (print_output) {
+                        if (idxVal->type == VALKEY_REPLY_STRING) {
+                            printf("%*s    %s: %s\n", indent, "", idxKey, idxVal->str);
+                        } else if (idxVal->type == VALKEY_REPLY_INTEGER) {
+                            printf("%*s    %s: %lld\n", indent, "", idxKey, idxVal->integer);
+                        }
+                    }
+                }
+            } else if (print_output && attrVal->type == VALKEY_REPLY_STRING) {
+                printf("%*s  %s: %s\n", indent, "", attrKey, attrVal->str);
+            }
+        }
+    }
+}
+
+static void getSearchIndexInfo(void) {
+    if (!config.use_search_index) return;
+    valkeyContext *ctx = getValkeyContext(config.ct, config.conn_info.hostip, config.conn_info.hostport);
+    if (ctx == NULL) {
+        fprintf(stderr, "Failed to connect to Valkey server for search info.\n");
+        return;
+    }
+    
+    sds cmd = sdscatprintf(sdsempty(), "FT.INFO %s", config.search_index.name);
+    valkeyReply *reply = valkeyCommand(ctx, cmd);
+    sdsfree(cmd);
+    
+    if (reply == NULL || reply->type != VALKEY_REPLY_ARRAY) {
+        fprintf(stderr, "Failed to get search index info\n");
+        if (reply) freeReplyObject(reply);
+        valkeyFree(ctx);
+        return;
+    }
+    
+    char *algorithm_type = NULL;
+    
+    printf("\nSearch Index: %s\n", config.search_index.name);
+    printf("========================================\n");
+    
+    // First pass: collect algorithm type and print basic stats
+    for (size_t i = 0; i < reply->elements; i += 2) {
+        if (i + 1 >= reply->elements) break;
+        
+        char *key = reply->element[i]->str;
+        valkeyReply *value = reply->element[i + 1];
+        
+        if (!key || !value) continue;
+        
+        // Print all fields that aren't arrays (except attributes which we handle specially)
+        if (value->type == VALKEY_REPLY_INTEGER) {
+            printf("%s: %lld\n", key, value->integer);
+        } else if (value->type == VALKEY_REPLY_STRING) {
+            if (strstr(key, "percent") != NULL) {
+                // Special handling for percentage fields
+                printf("%s: %s (%.1f%%)\n", key, value->str, atof(value->str) * 100);
+            } else {
+                printf("%s: %s\n", key, value->str);
+            }
+        } else if (strcmp(key, "index_definition") == 0 && value->type == VALKEY_REPLY_ARRAY) {
+            // Parse index definition for useful fields
+            for (size_t j = 0; j < value->elements; j += 2) {
+                if (j + 1 >= value->elements) break;
+                char *defKey = value->element[j]->str;
+                valkeyReply *defVal = value->element[j + 1];
+                if (defKey && strcmp(defKey, "default_score") == 0 && defVal->type == VALKEY_REPLY_STRING) {
+                    printf("default_score: %s\n", defVal->str);
+                }
+            }
+        } else if (strcmp(key, "attributes") == 0 && value->type == VALKEY_REPLY_ARRAY) {
+            // Just extract algorithm type during first pass (don't print attributes yet)
+            char *temp_algo = NULL;
+            parseIndexAttributes(value, 2, &temp_algo);
+            if (temp_algo && !algorithm_type) {
+                algorithm_type = strdup(temp_algo);
+            }
+        } else if (value->type == VALKEY_REPLY_ARRAY && strcmp(key, "attributes") != 0 && strcmp(key, "index_definition") != 0) {
+            // Print other arrays we haven't handled
+            printf("%s: [array with %zu elements]\n", key, value->elements);
+        }
+    }
+    
+    // Display algorithm type prominently
+    if (algorithm_type) {
+        printf("\n*** INDEX TYPE: %s ***\n", algorithm_type);
+        if (strcmp(algorithm_type, "HNSW") == 0) {
+            printf("Using Hierarchical Navigable Small World graph for approximate nearest neighbor search\n");
+        } else if (strcmp(algorithm_type, "FLAT") == 0) {
+            printf("Using brute-force exact nearest neighbor search\n");
+        }
+    }
+    
+    // Second pass: print vector attributes
+    printf("\nVector Attributes:\n");
+    for (size_t i = 0; i < reply->elements; i += 2) {
+        if (i + 1 >= reply->elements) break;
+        char *key = reply->element[i]->str;
+        valkeyReply *value = reply->element[i + 1];
+        if (key && strcmp(key, "attributes") == 0 && value->type == VALKEY_REPLY_ARRAY) {
+            parseIndexAttributes(value, 2, NULL);  // NULL means print, don't extract
+            break;
+        }
+    }
+    
+    if (algorithm_type) free(algorithm_type);
+    freeReplyObject(reply);
+    valkeyFree(ctx);
+}
+
+static void getSearchInfo(long long *search_memory, long long *search_reclaimable, 
+                          long long *search_total_docs, long long *search_ingest_field_vector, 
+                          long long *search_background_indexing_status) {
+    if (!config.use_search_index) return;
+    valkeyContext *ctx = getValkeyContext(config.ct, config.conn_info.hostip, config.conn_info.hostport);
+    if (ctx == NULL) {
+        fprintf(stderr, "Failed to connect to Valkey server for search info.\n");
+        return;
+    }
+    
+    valkeyReply *reply = valkeyCommand(ctx, "INFO SEARCH");
+    if (reply == NULL || reply->type != VALKEY_REPLY_STRING) {
+        fprintf(stderr, "Failed to get search index info\n");
+        if (reply) freeReplyObject(reply);
+        valkeyFree(ctx);
+        return;
+    }
+    
+    printf("Search index info:\n");
+    
+    char *info = strdup(reply->str);
+    char *line = strtok(info, "\r\n");
+    
+    while (line != NULL) {
+        if (*line && *line != '#') {
+            char *colon = strchr(line, ':');
+            if (colon) {
+                *colon = '\0';
+                char *key = line;
+                char *value = colon + 1;
+                if (strcmp(key, "search_used_memory_bytes") == 0) {
+                    *search_memory = atoll(value);
+                } else if (strcmp(key, "search_index_reclaimable_memory") == 0) {
+                    *search_reclaimable = atoll(value);
+                } else if (strcmp(key, "search_total_indexed_documents") == 0) {
+                    *search_total_docs = atoll(value);
+                } else if (strcmp(key, "search_ingest_field_vector") == 0) {
+                    *search_ingest_field_vector = atoll(value);
+                } else if (strcmp(key, "search_background_indexing_status") == 0) {
+                    *search_background_indexing_status = atoll(value);
+                }
+            }
+        }
+        line = strtok(NULL, "\r\n");
+    }
+
+    free(info);
+    freeReplyObject(reply);
+    valkeyFree(ctx);
+    getSearchIndexInfo(); /* Fetch index info after getting search info */
+}
+
 
 /* Implementation */
 static long long ustime(void) {
@@ -322,6 +582,319 @@ cleanup:
     return NULL;
 }
 
+/* Fast vector generation using MT19937-64 */
+static inline void generate_vector_fast(float *vector, unsigned int key_idx) {
+    /* Use key index to seed global RNG */
+    init_genrand64(key_idx * 2654435761U);
+    
+    /* Generate vector components */
+    for (int i = 0; i < config.search_index.vector_dim; i++) {
+        uint64_t r = genrand64_int64();
+        /* Convert to float in range [-1, 1] */
+        vector[i] = ((float)(r & 0x7FFFFFFF) / 0x40000000) - 1.0f;
+    }
+}
+
+/* Initialize base vector for efficient generation */
+static void initBaseVector(int dim) {
+    if (base_vector && base_vector_dim != dim) {
+        zfree(base_vector);
+        base_vector = NULL;
+    }
+    
+    if (!base_vector) {
+        base_vector_dim = dim;
+        base_vector = zmalloc(sizeof(float) * dim);
+        
+        /* Initialize with random values */
+        init_genrand64(42); /* Fixed seed for reproducibility */
+        
+        for (int i = 0; i < dim; i++) {
+            uint64_t r = genrand64_int64();
+            base_vector[i] = ((float)(r & 0x7FFFFFFF) / 0x40000000) - 1.0f;
+        }
+    }
+}
+
+/* Efficiently generate vector by manipulating base vector */
+static void generateVectorEfficient(float *vector, int dim, uint64_t key_idx) {
+    /* Copy base vector */
+    memcpy(vector, base_vector, sizeof(float) * dim);
+    
+    /* Use key index to seed global RNG */
+    init_genrand64(key_idx);
+    
+    /* Modify only a subset of coordinates (10% of dimensions) */
+    int modifications = dim / 10;
+    if (modifications < 1) modifications = 1;
+    
+    for (int i = 0; i < modifications; i++) {
+        /* Select random coordinate to modify */
+        int coord = genrand64_int64() % dim;
+        
+        /* Generate new value for this coordinate */
+        uint64_t r = genrand64_int64();
+        vector[coord] = ((float)(r & 0x7FFFFFFF) / 0x40000000) - 1.0f;
+    }
+}
+
+/* Convert float array to binary format for vector search queries */
+static sds vectorToBinary(float *vector, int dim) {
+    sds result = sdsnewlen(NULL, dim * sizeof(float));
+    memcpy(result, vector, dim * sizeof(float));
+    return result;
+}
+
+/* Simplified vector benchmark that uses the existing benchmark infrastructure */
+static void benchmarkVectorOp(const char *title, int is_insert) {
+    char *cmd;
+    int len;
+    int vec_dim = config.search_index.vector_dim;
+    if (!config.use_search_index) return;
+    if (vec_dim <= 0) {
+        fprintf(stderr, "Error: Vector dimension must be greater than 0.\n");
+        return;
+    }    
+    static __thread float *sample_vector = NULL;
+    if (!sample_vector) {
+        sample_vector = zmalloc(sizeof(float) * vec_dim);
+        generate_vector_fast(sample_vector, 0); // Generate a sample vector
+    }
+    int dim_with_placeholder = vec_dim - config.search_index.num_random_dimensions; // Adjust for placeholder length
+    /* Generate a sample vector for the command template */
+    generateVectorEfficient(sample_vector, dim_with_placeholder, 0);
+    /* Convert to binary format for HSET (same as search expects) */
+    sds vector_binary = vectorToBinary(sample_vector, dim_with_placeholder);
+
+    if (is_insert) {
+        /* Generate HSET command template */
+        sds key = sdscatprintf(sdsempty(), "%s__rand_int__", config.search_index.prefix);
+        /* Convert to binary format for HSET (same as search expects) */
+        len = valkeyFormatCommand(&cmd, "HSET %b %s __rand_vec_f32____rand_vec_1st____rand_vec_2nd____rand_vec_3nd__%b", 
+                                  key, sdslen(key), 
+                                  config.search_index.vector_field, vector_binary, sdslen(vector_binary));
+        sdsfree(key);
+    } else {
+        /* Generate FT.SEARCH command template */
+        /* Create query string */
+        sds query = sdscatprintf(sdsempty(), "*=>[KNN %d @%s $query_vector EF_RUNTIME %d]", config.search_index.k, config.search_index.vector_field, config.search_index.ef_search);
+        len = valkeyFormatCommand(&cmd, "FT.SEARCH %b %b PARAMS 2 query_vector __rand_vec_f32____rand_vec_1st____rand_vec_2nd____rand_vec_3nd__%b DIALECT 2", 
+                                  config.search_index.name, sdslen(config.search_index.name), 
+                                  query, sdslen(query), 
+                                  vector_binary, sdslen(vector_binary));      
+        sdsfree(query);    
+    }
+    
+    /* Use the existing benchmark infrastructure */
+    benchmark(title, cmd, len);
+    
+    /* Cleanup */
+    sdsfree(vector_binary);
+    // zfree(sample_vector);
+    free(cmd);
+}
+
+/* Thread worker function for prefill */
+static void *prefillWorkerThread(void *arg) {
+    if (!config.use_search_index) return NULL;
+    prefillThreadData *data = (prefillThreadData *)arg;
+    
+    valkeyContext *ctx = getValkeyContext(config.ct, config.conn_info.hostip, config.conn_info.hostport);
+    if (ctx == NULL) {
+        fprintf(stderr, "Thread %d: Failed to connect to Valkey server.\n", data->thread_id);
+        return NULL;
+    }
+
+    int vec_dim = config.search_index.vector_dim;
+    sds prefix = config.search_index.prefix;
+    sds vector_field = config.search_index.vector_field;
+    
+    /* Process assigned range */
+    for (int i = data->start_index; i <= data->end_index; i++) {
+        /* Generate key using same format as vec-insert benchmark */
+        sds key = sdscatprintf(sdsempty(), "%s%012d", prefix, i);
+        /* Generate vector efficiently */
+        float *vector = zmalloc(vec_dim * sizeof(float));
+        generateVectorEfficient(vector, vec_dim, i);
+        /* Convert to binary format for HSET (same as search expects) */
+        sds vector_binary = vectorToBinary(vector, vec_dim);
+        
+        /* Insert vector using HSET with binary data */
+        valkeyReply *reply = valkeyCommand(ctx, "HSET %b %s %b", 
+                                            key, sdslen(key), 
+                                            vector_field, 
+                                            vector_binary, sdslen(vector_binary));
+        if (!reply || reply->type == VALKEY_REPLY_ERROR) {
+            fprintf(stderr, "Thread %d: Failed to insert vector %d: %s\n", 
+                   data->thread_id, i, reply ? reply->str : "Connection error");
+            if (reply) freeReplyObject(reply);
+            sdsfree(key);
+            sdsfree(vector_binary);
+            zfree(vector);
+            break;
+        }
+        
+        freeReplyObject(reply);
+        sdsfree(key);
+        sdsfree(vector_binary);
+        zfree(vector);
+        
+        /* Update global progress thread-safely */
+        pthread_mutex_lock(data->progress_mutex);
+        (*data->global_progress)++;
+        pthread_mutex_unlock(data->progress_mutex);
+    }
+    
+    valkeyFree(ctx);
+    return NULL;
+}
+
+/* Prefill vector index with specified number of vectors */
+static void prefillVectorIndex(int count) {
+    if (!config.use_search_index) return;
+    if (count <= 0) return;
+    int vec_dim = config.search_index.vector_dim;
+    /* Ensure base vector is initialized */
+    if (!base_vector) {
+        initBaseVector(vec_dim);
+    }
+    
+    /* Determine number of threads to use */
+    int num_threads = (config.num_threads > 0) ? config.num_threads : 1;
+    if (count < num_threads) {
+        num_threads = count; /* Don't use more threads than vectors */
+    }
+    
+    printf("Prefilling index with %d vectors using %d thread(s)...\n", count, num_threads);
+        
+    /* Use multithreaded approach */
+    pthread_t *threads = zmalloc(num_threads * sizeof(pthread_t));
+    prefillThreadData *thread_data = zmalloc(num_threads * sizeof(prefillThreadData));
+    pthread_mutex_t progress_mutex = PTHREAD_MUTEX_INITIALIZER;
+    int global_progress = 0;
+    
+    long long start_time = mstime();
+    int progress_interval = count >= 10000 ? 1000 : (count >= 1000 ? 100 : 10);
+    
+    /* Calculate work distribution */
+    int vectors_per_thread = count / num_threads;
+    int remaining_vectors = count % num_threads;
+    
+    /* Create and start threads */
+    int current_start = 1;
+    for (int i = 0; i < num_threads; i++) {
+        thread_data[i].thread_id = i;
+        thread_data[i].start_index = current_start;
+        thread_data[i].end_index = current_start + vectors_per_thread - 1;
+        
+        /* Distribute remaining vectors to first few threads */
+        if (i < remaining_vectors) {
+            thread_data[i].end_index++;
+        }
+        
+        thread_data[i].total_count = count;
+        thread_data[i].progress_mutex = &progress_mutex;
+        thread_data[i].global_progress = &global_progress;
+        
+        current_start = thread_data[i].end_index + 1;
+        
+        if (pthread_create(&threads[i], NULL, prefillWorkerThread, &thread_data[i])) {
+            fprintf(stderr, "Failed to create prefill thread %d\n", i);
+            exit(1);
+        }
+    }
+    
+    /* Monitor progress while threads are working */
+    int last_progress = 0;
+    while (global_progress < count) {
+        usleep(100000); /* Sleep 100ms */
+        
+        pthread_mutex_lock(&progress_mutex);
+        int current_progress = global_progress;
+        pthread_mutex_unlock(&progress_mutex);
+        
+        if (current_progress >= last_progress + progress_interval || current_progress == count) {
+            float progress = (float)current_progress / count * 100.0f;
+            long long search_memory = 0;
+            long long search_reclaimable = 0;
+            long long search_total_docs = 0;
+            long long search_ingest_field_vector = 0;
+            long long search_background_indexing_status = 0;
+            getSearchInfo(&search_memory, &search_reclaimable, &search_total_docs, 
+                          &search_ingest_field_vector, &search_background_indexing_status);
+            printf("Prefilled %d vectors (%.1f%%)...[s_mem=%lldMB][s_recl=%lld][s_docs=%lld][s_ingest_vecs=%lld][s_bg_index_stat=%lld]\n", current_progress, progress, search_memory/(1024*1024), search_reclaimable/(1024*1024), search_total_docs, search_ingest_field_vector, search_background_indexing_status);
+            last_progress = current_progress;
+        }
+    }
+    
+    /* Wait for all threads to complete */
+    for (int i = 0; i < num_threads; i++) {
+        pthread_join(threads[i], NULL);
+    }
+    
+    long long elapsed_ms = mstime() - start_time;
+    float rate = elapsed_ms > 0 ? (float)count / elapsed_ms * 1000.0f : 0.0f;
+    
+    printf("Prefilled %d vectors in %.2f seconds (%.0f vectors/sec) using %d threads\n\n", 
+            count, elapsed_ms / 1000.0f, rate, num_threads);
+    
+    pthread_mutex_destroy(&progress_mutex);
+    zfree(threads);
+    zfree(thread_data);
+    
+}
+
+
+static void createDefaultSearchIndexes(void) {    
+    if (!config.use_search_index) return;
+    valkeyContext *ctx = getValkeyContext(config.ct, config.conn_info.hostip, config.conn_info.hostport);
+    if (ctx == NULL) {
+        fprintf(stderr, "Failed to connect to Valkey server for creating search indexes.\n");
+        return;
+    }
+    /* Check if any indexes exist */
+    valkeyReply *list_reply = valkeyCommand(ctx, "FT._LIST");
+    int index_exists = 0;
+    
+    if (list_reply && list_reply->type == VALKEY_REPLY_ARRAY) {
+        printf("Found %zu existing indexes: ", list_reply->elements);
+        for (size_t j = 0; j < list_reply->elements; j++) {
+            printf("found index '%s' ", list_reply->element[j]->str);
+            if (strcmp(list_reply->element[j]->str, config.search_index.name) == 0) {
+                index_exists = 1;
+            }            
+        }
+        printf("\n");
+    } else {
+        printf("Found 0 existing indexes: \n");
+    }
+    
+    if (list_reply) {
+        freeReplyObject(list_reply);
+    }
+
+    valkeyReply *reply = valkeyCommand(ctx, "FT.CREATE %s PREFIX 1 %s SCHEMA %s VECTOR HNSW 12 TYPE FLOAT32 DIM %d DISTANCE_METRIC COSINE M %d EF_CONSTRUCTION %d EF_RUNTIME %d",
+        config.search_index.name, config.search_index.prefix, config.search_index.vector_field, config.search_index.vector_dim, config.search_index.m,
+        config.search_index.ef_construction, config.search_index.ef_search);
+    if (reply && reply->type == VALKEY_REPLY_STATUS) {
+        printf("Index created successfully\n");
+    } else {
+        fprintf(stderr, "Failed to create index: %s\n", 
+                reply ? reply->str : "Unknown error");
+        // if index already exists, we can ignore the error
+        if (reply && reply->type == VALKEY_REPLY_ERROR && index_exists) {
+            printf("Index '%s' already exists, ignoring error.\n", config.search_index.name);
+        } else {
+            fprintf(stderr, "Error creating index: %s\n", reply ? reply->str : "Unknown error");
+            exit(1);
+        }
+    }
+    if (reply) freeReplyObject(reply);        
+    
+
+    valkeyFree(ctx);
+}
+
 
 static serverConfig *getServerConfig(enum valkeyConnectionType ct, const char *ip_or_path, int port) {
     serverConfig *cfg = zcalloc(sizeof(*cfg));
@@ -408,7 +981,12 @@ void initPlaceholders(const char *cmd, size_t cmd_len) {
             temp_indices[placeholder][*count] = index;
             (*count)++;
             total_count++;
-            p += PLACEHOLDER_LEN; // Move past the placeholder
+            /* Move past the placeholder - vector placeholder has different length */
+            if (placeholder >= VECTOR_PLACEHOLDER_INDEX) {
+                p += VECTOR_PLACEHOLDER_LEN;
+            } else {
+                p += PLACEHOLDER_LEN;
+            }
         }
     }
 
@@ -428,7 +1006,60 @@ void initPlaceholders(const char *cmd, size_t cmd_len) {
     return;
 }
 
-static void replacePlaceholder(const size_t *indices, const size_t count, char *cmd, _Atomic uint64_t *key_counter) {
+static void replacePlaceholderFloat32(const size_t *indices, const size_t count, char *cmd, _Atomic uint64_t *key_counter, unsigned placeholder_len) {
+    if (!config.use_search_index) return;
+    // Replace __rand_vec_f32__ placeholder with a float vector in range of -1.0 to 1.0
+    if (count == 0) return;
+    
+    uint64_t key = 0;
+    if (config.keyspacelen != 0) {
+        if (config.sequential_replacement) {
+            key = atomic_fetch_add_explicit(key_counter, 1, memory_order_relaxed);
+        } else {
+            key = random();
+        }
+        key %= config.keyspacelen;
+    }
+    
+    // Generate float vector with improved randomness
+    unsigned num_floats = placeholder_len / 4;
+    float vector[num_floats];
+    
+    // Use xorshift64* for better quality random numbers
+    uint64_t state = key ? key : 0x123456789ABCDEF0ULL;
+    
+    for (unsigned i = 0; i < num_floats; i++) {
+        // xorshift64* algorithm - much better than linear congruential
+        state ^= state >> 12;
+        state ^= state << 25;
+        state ^= state >> 27;
+        state *= 0x2545F4914F6CDD1DULL;
+        
+        // Mix with index for additional entropy
+        uint64_t mixed = state ^ ((uint64_t)i * 0x9E3779B97F4A7C15ULL);
+        
+        // Convert to float in range [-1, 1] with better distribution
+        // Use upper 32 bits for better quality
+        uint32_t bits = (uint32_t)(mixed >> 32);
+        vector[i] = ((float)bits / (float)0xFFFFFFFF) * 2.0f - 1.0f;
+        if ((key + i) % 3 == 0) {
+            vector[i] += vector[i]*(float)key;
+        } else if (key) {
+            vector[i] /= (float)key;
+        }
+    }
+
+    char *placeholder = cmd + indices[0];
+    memcpy(placeholder, vector, placeholder_len);
+    
+    // Copy the first instance to the other locations
+    for (size_t j = 1; j < count; j++) {
+        char *copy_placeholder = cmd + indices[j];
+        memcpy(copy_placeholder, placeholder, placeholder_len);
+    }
+}
+
+static void replacePlaceholder(const size_t *indices, const size_t count, char *cmd, _Atomic uint64_t *key_counter, unsigned placeholder_len) {
     if (count == 0) return;
 
     uint64_t key = 0;
@@ -442,8 +1073,8 @@ static void replacePlaceholder(const size_t *indices, const size_t count, char *
     }
 
     /* convert key to string at first location */
-    char *p = cmd + indices[0] + PLACEHOLDER_LEN - 1;
-    for (size_t j = 0; j < PLACEHOLDER_LEN; j++) {
+    char *p = cmd + indices[0] + placeholder_len - 1;
+    for (size_t j = 0; j < placeholder_len; j++) {
         *p = '0' + key % 10;
         key /= 10;
         p--;
@@ -452,7 +1083,7 @@ static void replacePlaceholder(const size_t *indices, const size_t count, char *
     /* copy the first instance to the other locations */
     for (size_t i = 1; i < count; i++) {
         char *placeholder = cmd + indices[i];
-        memcpy(placeholder, cmd + indices[0], PLACEHOLDER_LEN);
+        memcpy(placeholder, cmd + indices[0], placeholder_len);
     }
 }
 
@@ -461,12 +1092,12 @@ static void replacePlaceholders(char *cmd_data, int cmd_count) {
 
     for (int cmd_index = 0; cmd_index < cmd_count; cmd_index++) {
         char *cmd = cmd_data + cmd_index * placeholders.cmd_len;
-
+        // printf("Replacing placeholders in command %d: %.*s\n", cmd_index, (int)placeholders.cmd_len, cmd);
         /* for __rand_int__, multiple instances will have different values */
         size_t *indices = placeholders.indices[0];
         _Atomic uint64_t *key_counter = &seq_key[0];
         for (size_t i = 0; i < placeholders.count[0]; i++) {
-            replacePlaceholder(indices + i, 1, cmd, key_counter);
+            replacePlaceholder(indices + i, 1, cmd, key_counter, PLACEHOLDER_LEN);
         }
 
         /* For other placeholders, multiple occurrences within the command will
@@ -474,9 +1105,16 @@ static void replacePlaceholders(char *cmd_data, int cmd_count) {
         for (size_t placeholder = 1; placeholder < PLACEHOLDER_COUNT; placeholder++) {
             size_t *indices = placeholders.indices[placeholder];
             size_t count = placeholders.count[placeholder];
-            _Atomic uint64_t *key_counter = &seq_key[placeholder];
-            replacePlaceholder(indices, count, cmd, key_counter);
+            
+            if (placeholder >= VECTOR_PLACEHOLDER_INDEX) {
+                replacePlaceholderFloat32(indices, count, cmd, &seq_key[placeholder], VECTOR_PLACEHOLDER_LEN);
+            } else {
+                /* Handle regular placeholders */
+                _Atomic uint64_t *key_counter = &seq_key[placeholder];
+                replacePlaceholder(indices, count, cmd, key_counter, PLACEHOLDER_LEN);
+            }
         }
+
     }
 }
 
@@ -1086,10 +1724,25 @@ static void showLatencyReport(void) {
     const float p99 = hdr_value_at_percentile(config.latency_histogram, 99.0) / 1000.0f;
     const float p100 = ((float)hdr_max(config.latency_histogram)) / 1000.0f;
     const float avg = hdr_mean(config.latency_histogram) / 1000.0f;
-
+    long long search_memory = 0;
+    long long search_reclaimable = 0;
+    long long search_total_docs = 0;
+    long long search_ingest_field_vector = 0;
+    long long search_background_indexing_status = 0;
+    if (config.use_search_index) {
+        getSearchInfo(&search_memory, &search_reclaimable, &search_total_docs, 
+                        &search_ingest_field_vector, &search_background_indexing_status);
+    }
     if (!config.quiet && !config.csv) {
         printf("%*s\r", config.last_printed_bytes, " "); // ensure there is a clean line
         printf("====== %s ======\n", config.title);
+        if (config.use_search_index) {
+            printf("  Search index memory: %lld MB\n", search_memory/ (1024 * 1024));
+            printf("  Search index reclaimable: %lld MB\n", search_reclaimable/ (1024 * 1024));
+            printf("  Search total documents: %lld\n", search_total_docs);
+            printf("  Search ingest field vector: %lld\n", search_ingest_field_vector);
+            printf("  Search background indexing status: %lld\n", search_background_indexing_status);
+        }
         printf("  %d requests completed in %.2f seconds\n", config.requests_finished, (float)config.totlatency / 1000);
         printf("  %d parallel clients\n", config.numclients);
         printf("  %d bytes payload\n", config.datasize);
@@ -1547,6 +2200,20 @@ static void genBenchmarkRandomData(char *data, int count) {
     }
 }
 
+void setDefaultSearchConfig(void) {
+    config.search_index.name = sdsnew("test_vector_index");
+    config.search_index.prefix = sdsnew("vec:");
+    config.search_index.vector_field = sdsnew("vector_field");
+    config.search_index.vector_dim = 128; // Default vector dimension
+    config.search_index.ef_construction = 200; // Default EF Construction
+    config.search_index.ef_search = 200; // Default EF Search
+    config.search_index.m = 16; // Default HNSW M parameter
+    config.search_index.tag_field = NULL; // No tag field by default
+    config.search_index.numeric_field = NULL; // No numeric field by default
+    config.search_index.k = 10; // Default K for KNN queries
+    config.search_index.num_random_dimensions = 16; // Default number of random dimensions
+
+}
 /* Returns number of consumed options. */
 int parseOptions(int argc, char **argv) {
     int i;
@@ -1690,6 +2357,55 @@ int parseOptions(int argc, char **argv) {
                 goto invalid;
         } else if (!strcmp(argv[i], "--enable-tracking")) {
             config.enable_tracking = 1;
+        } else if (!strcmp(argv[i], "--search")) {
+            config.use_search_index = 1;
+        } else if (!strcmp(argv[i], "--search-prefill")) {
+            if (i + 1 >= argc) {
+                fprintf(stderr, "Missing argument for --search-prefill\n");
+                exit(1);
+            }
+            config.search_index.initial_prefill_nvec = atoi(argv[++i]);
+            if (config.search_index.initial_prefill_nvec < 0) {
+                fprintf(stderr, "Invalid prefill count: %d\n", config.search_index.initial_prefill_nvec);
+                exit(1);
+            }
+            /* Enable search indexes automatically when prefill is used */
+            config.use_search_index = 1;           
+        } else if (!strcmp(argv[i], "--search-prefix")) {
+            if (lastarg) goto invalid;
+            if (config.search_index.prefix) sdsfree(config.search_index.prefix);
+            config.search_index.prefix = sdsnew(argv[++i]);
+        } else if (!strcmp(argv[i], "--vector-field")) {
+            if (lastarg) goto invalid;
+            if (config.search_index.vector_field) sdsfree(config.search_index.vector_field);
+            config.search_index.vector_field = sdsnew(argv[++i]);
+        } else if (!strcmp(argv[i], "--search-name")) {
+            if (lastarg) goto invalid;
+            if (config.search_index.name) sdsfree(config.search_index.name);
+            config.search_index.name = sdsnew(argv[++i]);
+        } else if (!strcmp(argv[i], "--vector-dim")) {
+            if (lastarg) goto invalid;
+            config.search_index.vector_dim = atoi(argv[++i]);
+        } else if (!strcmp(argv[i], "--ef-search")) {
+            if (lastarg) goto invalid;
+            config.search_index.ef_search = atoi(argv[++i]);
+        } else if (!strcmp(argv[i], "--ef-construction")) {
+            if (lastarg) goto invalid;
+            config.search_index.ef_construction = atoi(argv[++i]);
+        } else if (!strcmp(argv[i], "--m")) {
+            if (lastarg) goto invalid;
+            config.search_index.m = atoi(argv[++i]);
+        } else if (!strcmp(argv[i], "--tag-field")) {
+            if (lastarg) goto invalid;
+            if (config.search_index.tag_field) sdsfree(config.search_index.tag_field);
+            config.search_index.tag_field = sdsnew(argv[++i]);
+        } else if (!strcmp(argv[i], "--numeric-field")) {
+            if (lastarg) goto invalid;
+            if (config.search_index.numeric_field) sdsfree(config.search_index.numeric_field);
+            config.search_index.numeric_field = sdsnew(argv[++i]);
+        } else if (!strcmp(argv[i], "--k")) {
+            if (lastarg) goto invalid;
+            config.search_index.k = atoi(argv[++i]);
         } else if (!strcmp(argv[i], "--num-functions")) {
             config.num_functions = atoi(argv[++i]);
         } else if (!strcmp(argv[i], "--num-keys-in-fcall")) {
@@ -1877,7 +2593,20 @@ usage:
         "                    loaded when running the 'function_load' test. (default 10).\n"
         " --num-keys-in-fcall <num>\n"
         "                    Sets the number of keys passed to FCALL command when running\n"
-        "                    the 'fcall' test. (default 1)\n",
+        "                    the 'fcall' test. (default 1)\n"
+        " --search           Enable search indexes for vec-insert, vec-query, and vec-del tests.\n"
+        "                    Creates a vector index when starting benchmarks.\n"
+        " --ef-search <value> Set the EF_RUNTIME parameter for KNN queries. (default 200)\n"
+        " --vector-dim <dim> Set the dimension of the vector index. (default 128)\n"
+        " --ef-construction <value> Set the EF_CONSTRUCTION parameter for KNN queries. (default 200)\n"
+        " --k <value>       Set the number of nearest neighbors to return in KNN queries. (default 10)\n"
+        " --search-name <name> Set the name of the search index to use for vec-query and vec-del tests.\n"
+        "                    If not set, the default index name 'test_vector_index' is used.\n"
+        " --search-prefix <prefix>\n"
+        "                    Set the prefix for vector keys. (default 'vec:')\n"
+        " --vector-field <name>\n"
+        "                    Set the name for vector values. (default 'vector_field')\n"        
+        " --vprefill <count>  Prefill vector index with <count> vectors before benchmarking.\n",
         tls_usage,
         rdma_usage,
         " --mptcp            Enable an MPTCP connection.\n"
@@ -2029,6 +2758,8 @@ int main(int argc, char **argv) {
     config.paused_clients = listCreate();
     config.conn_info.hostip = sdsnew("127.0.0.1");
     config.conn_info.hostport = 6379;
+    config.use_search_index = 0;
+    config.search_index.initial_prefill_nvec = 0;
     config.tests = NULL;
     config.conn_info.input_dbnum = 0;
     config.stdinarg = 0;
@@ -2050,7 +2781,7 @@ int main(int argc, char **argv) {
     config.num_keys_in_fcall = 1;
     config.resp3 = 0;
     resetPlaceholders();
-
+    setDefaultSearchConfig();
     i = parseOptions(argc, argv);
     argc -= i;
     argv += i;
@@ -2241,7 +2972,16 @@ int main(int argc, char **argv) {
         zfree(argvlen);
         return 0;
     }
+    if (config.use_search_index) {
+        printf("Using search indexes for the benchmark.\n");
+        createDefaultSearchIndexes();
+        
+        /* Prefill vector index if requested */
+        if (config.search_index.initial_prefill_nvec > 0) {
+            prefillVectorIndex(config.search_index.initial_prefill_nvec);
+        }
 
+    }
     /* Run default benchmark suite. */
     data = zmalloc(config.datasize + 1);
     do {
@@ -2309,7 +3049,35 @@ int main(int argc, char **argv) {
             benchmark("HSET", cmd, len);
             free(cmd);
         }
+        if (config.use_search_index) {
+            if (test_is_selected("vec-insert")) {
+                int vec_dim = config.search_index.vector_dim;
+                
+                /* Initialize base vector */
+                initBaseVector(vec_dim);
+                
+                /* Use custom vector benchmark function */
+                benchmarkVectorOp("VEC-INSERT", 1);
+            }
 
+            if (test_is_selected("vec-query")) {
+                int vec_dim = config.search_index.vector_dim;
+                
+                /* Initialize base vector if not already done */
+                initBaseVector(vec_dim);
+                
+                /* Use custom vector benchmark function */
+                benchmarkVectorOp("VEC-QUERY", 0);
+            }
+
+            if (test_is_selected("vec-del")) {
+                /* Use DEL command to delete keys from vector index */
+                sds prefix = config.search_index.prefix;
+                len = valkeyFormatCommand(&cmd, "DEL %s__rand_int__", prefix);
+                benchmark("VEC-DEL", cmd, len);
+                free(cmd);
+            }
+        }
         if (test_is_selected("spop")) {
             len = valkeyFormatCommand(&cmd, "SPOP myset%s", tag);
             benchmark("SPOP", cmd, len);
@@ -2445,6 +3213,7 @@ int main(int argc, char **argv) {
     zfree(data);
     freeCliConnInfo(config.conn_info);
     if (config.server_config != NULL) freeServerConfig(config.server_config);
+    if (base_vector != NULL) zfree(base_vector);
     resetPlaceholders();
 
     return 0;

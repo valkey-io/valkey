@@ -2286,7 +2286,7 @@ int rewriteSlotToAppendOnlyFileRio(rio *aof, int db_num, int hashslot, size_t *k
             }
         }
 
-        rewriteObjectRio(aof, o, db_num);
+        if (rewriteObjectRio(aof, o, db_num) == 0) return C_ERR;
     }
 
     kvstoreReleaseHashtableIterator(iter);
@@ -2335,7 +2335,7 @@ int rewriteAppendOnlyFileRio(rio *aof) {
                 }
             }
 
-            rewriteObjectRio(aof, o, j);
+            if (rewriteObjectRio(aof, o, j) == 0) goto werr;
         }
         kvstoreIteratorRelease(kvs_it);
     }

@@ -1171,12 +1171,12 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
 
     test "CLUSTER SYNCSLOTS invalid state machine traversal" {
         assert_does_not_resync {
-            assert_error "*ERR CLUSTER SYNCSLOTS should only be used by slot migration clients*" {R 0 CLUSTER SYNCSLOTS REQUEST-PAUSE}
-            assert_error "*ERR CLUSTER SYNCSLOTS should only be used by slot migration clients*" {R 0 CLUSTER SYNCSLOTS REQUEST-FAILOVER}
-            assert_error "*ERR CLUSTER SYNCSLOTS should only be used by slot migration clients*" {R 0 CLUSTER SYNCSLOTS SNAPSHOT-EOF}
-            assert_error "*ERR CLUSTER SYNCSLOTS should only be used by slot migration clients*" {R 0 CLUSTER SYNCSLOTS PAUSED}
-            assert_error "*ERR CLUSTER SYNCSLOTS should only be used by slot migration clients*" {R 0 CLUSTER SYNCSLOTS FAILOVER-GRANTED}
-            assert_error "*ERR CLUSTER SYNCSLOTS should only be used by slot migration clients*" {R 0 CLUSTER SYNCSLOTS ACK}
+            assert_error "*ERR CLUSTER SYNCSLOTS REQUEST-PAUSE should only be used by slot migration clients*" {R 0 CLUSTER SYNCSLOTS REQUEST-PAUSE}
+            assert_error "*ERR CLUSTER SYNCSLOTS REQUEST-FAILOVER should only be used by slot migration clients*" {R 0 CLUSTER SYNCSLOTS REQUEST-FAILOVER}
+            assert_error "*ERR CLUSTER SYNCSLOTS SNAPSHOT-EOF should only be used by slot migration clients*" {R 0 CLUSTER SYNCSLOTS SNAPSHOT-EOF}
+            assert_error "*ERR CLUSTER SYNCSLOTS PAUSED should only be used by slot migration clients*" {R 0 CLUSTER SYNCSLOTS PAUSED}
+            assert_error "*ERR CLUSTER SYNCSLOTS FAILOVER-GRANTED should only be used by slot migration clients*" {R 0 CLUSTER SYNCSLOTS FAILOVER-GRANTED}
+            assert_error "*ERR CLUSTER SYNCSLOTS ACK should only be used by slot migration clients*" {R 0 CLUSTER SYNCSLOTS ACK}
             assert_error "*syntax error*" {R 0 CLUSTER SYNCSLOTS UNKNOWN}
 
             assert_causes_conn_drop 0 {

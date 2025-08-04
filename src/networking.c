@@ -835,9 +835,11 @@ void afterErrorReply(client *c, const char *s, size_t len, int flags) {
         } else if (ctype == CLIENT_TYPE_SLOT_IMPORT) {
             to = "slot-import-source";
             from = "slot-import-target";
-        } else {
+        } else if (ctype == CLIENT_TYPE_SLOT_EXPORT) {
             to = "slot-export-target";
             from = "slot-export-source";
+        } else {
+            serverAssert(0);
         }
 
         if (len > 4096) len = 4096;
@@ -1864,7 +1866,11 @@ void unlinkClient(client *c) {
                 if (server.rdb_pipe_conns[i]) still_alive++;
             }
             if (still_alive == 0) {
-                serverLog(LL_NOTICE, "Diskless rdb transfer, last replica dropped, killing fork child.");
+                if (c->slot_migration_job && !isImportSlotMigrationJob(c->slot_migration_job)) {
+                    serverLog(LL_NOTICE, "Slot migration snapshot, migration target dropped, killing fork child.");
+                } else {
+                    serverLog(LL_NOTICE, "Diskless rdb transfer, last replica dropped, killing fork child.");
+                }
                 killRDBChild();
             }
         }

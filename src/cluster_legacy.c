@@ -7888,3 +7888,24 @@ int clusterDecodeOpenSlotsAuxField(int rdbflags, sds s) {
     }
     return C_OK;
 }
+
+
+/* Returns if any slot has been put in IMPORTING state via SETSLOT command. */
+int isAnySlotInManualImportingState(void) {
+    for (int i = 0; i < CLUSTER_SLOTS; i++) {
+        if (server.cluster->importing_slots_from[i] != NULL) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* Returns if any slot has been put in MIGRATING state via SETSLOT command. */
+int isAnySlotInManualMigratingState(void) {
+    for (int i = 0; i < CLUSTER_SLOTS; i++) {
+        if (server.cluster->migrating_slots_to[i] != NULL) {
+            return 1;
+        }
+    }
+    return 0;
+}

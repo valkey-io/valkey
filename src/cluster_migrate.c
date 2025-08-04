@@ -181,20 +181,20 @@ void delKeysNotOwnedByMyself(list *slot_ranges) {
         slotRange *range = ln->value;
         for (int i = range->start_slot; i <= range->end_slot; i++) {
             if (server.cluster->slots[i] != server.cluster->myself) {
-                delKeysInSlot(i, 1, 1, 0);
+                delKeysInSlot(i, 1, true, false);
             }
         }
     }
 }
 
 void setSlotImportingStateInDb(serverDb *db, list *slot_ranges, int is_importing) {
+    if (db == NULL) return;
     listNode *ln;
     listIter li;
     listRewind(slot_ranges, &li);
     while ((ln = listNext(&li)) != NULL) {
         slotRange *range = ln->value;
         for (int slot = range->start_slot; slot <= range->end_slot; slot++) {
-            if (db == NULL) continue;
             kvstoreSetIsImporting(db->keys, slot, is_importing);
             kvstoreSetIsImporting(db->expires, slot, is_importing);
         }
@@ -206,26 +206,6 @@ void setSlotImportingStateInAllDbs(list *slot_ranges, int is_importing) {
         serverDb *db = server.db[i];
         setSlotImportingStateInDb(db, slot_ranges, is_importing);
     }
-}
-
-/* Returns if any slot has been put in IMPORTING state via SETSLOT command. */
-int isAnySlotInManualImportingState(void) {
-    for (int i = 0; i < CLUSTER_SLOTS; i++) {
-        if (server.cluster->importing_slots_from[i] != NULL) {
-            return 1;
-        }
-    }
-    return 0;
-}
-
-/* Returns if any slot has been put in MIGRATING state via SETSLOT command. */
-int isAnySlotInManualMigratingState(void) {
-    for (int i = 0; i < CLUSTER_SLOTS; i++) {
-        if (server.cluster->migrating_slots_to[i] != NULL) {
-            return 1;
-        }
-    }
-    return 0;
 }
 
 /* Parse as many slot ranges starting from start_index, returning a list of parsed slot ranges, or
@@ -316,16 +296,12 @@ list *parseSlotRangesOrReply(client *c, int start_index, int *end_index_out, clu
 
 /* -------------------------------------------- TARGET -----------------------------------------
  *
- * During a slot import, the target drives the main state machine and eventually performs the
- * slot takeover. Slot import is initiated when an operator sends a CLUSTER MIGRATE request, after
- * which the target node will track the import in a slotMigrationJob.
+ * During a slot migration, the target is informed of a migration by the source through the CLUSTER
+ * SYNCSLOTS ESTABLISH command. From here, the target tracks the migration via its own
+ * slotMigrationJob.
  *
- * For transient errors like connections being dropped, the target will restart the import workflow
- * from the beginning. For other errors, the import will be marked as failed and require operator
- * intervention to retry.
- *
- * An operator can view the status of imports with CLUSTER MIGRATIONS, and cancel imports with
- * CLUSTER MIGRATE-CANCEL.
+ * If we encounter an error, the import will be marked as failed and the connection to the source
+ * will be closed. From here, the operator will need to restart the migration from the source side.
  *
  * State Machine:
  *
@@ -489,7 +465,7 @@ cleanup:
 /* Sent by the source to the target after dumping the snapshot in AOF format. */
 void clusterCommandSyncSlotsSnapshotEof(client *c) {
     if (!c->slot_migration_job) {
-        addReplyError(c, "CLUSTER SYNCSLOTS should only be used by slot migration clients");
+        addReplyError(c, "CLUSTER SYNCSLOTS SNAPSHOT-EOF should only be used by slot migration clients");
         return;
     }
     if (!isSlotMigrationJobInProgress(c->slot_migration_job)) {
@@ -515,7 +491,7 @@ void clusterCommandSyncSlotsSnapshotEof(client *c) {
  * began (therefore, target is caught up once read). */
 void clusterCommandSyncSlotsPaused(client *c) {
     if (!c->slot_migration_job) {
-        addReplyError(c, "CLUSTER SYNCSLOTS should only be used by slot migration clients");
+        addReplyError(c, "CLUSTER SYNCSLOTS PAUSED should only be used by slot migration clients");
         return;
     }
     if (!isSlotMigrationJobInProgress(c->slot_migration_job)) {
@@ -523,8 +499,8 @@ void clusterCommandSyncSlotsPaused(client *c) {
     }
     if (c->slot_migration_job->state != SLOT_IMPORT_WAITING_FOR_PAUSED) {
         serverLog(LL_WARNING,
-                  "Received CLUSTER SYNCSLOTS PAUSED from slot migration %s, "
-                  "but client is not currently in paused state locally. Failing migration.",
+                  "Received unexpected CLUSTER SYNCSLOTS PAUSED from slot "
+                  "migration %s, . Failing migration.",
                   c->slot_migration_job->description);
         finishSlotMigrationJob(c->slot_migration_job, SLOT_MIGRATION_JOB_FAILED,
                                "Unexpected state machine transition");
@@ -538,7 +514,7 @@ void clusterCommandSyncSlotsPaused(client *c) {
  * failover. */
 void clusterCommandSyncSlotsFailoverGranted(client *c) {
     if (!c->slot_migration_job) {
-        addReplyError(c, "CLUSTER SYNCSLOTS should only be used by slot migration clients");
+        addReplyError(c, "CLUSTER SYNCSLOTS FAILOVER-GRANTED should only be used by slot migration clients");
         return;
     }
     if (!isSlotMigrationJobInProgress(c->slot_migration_job)) {
@@ -581,9 +557,7 @@ slotMigrationJob *createSlotImportJob(client *c, clusterNode *source_node, char 
     /* Mark all the slots as importing in the kvstore */
     setSlotImportingStateInAllDbs(slot_ranges, 1);
 
-    serverLog(LL_NOTICE,
-              "New slot import job created: %s.",
-              job->description);
+    serverLog(LL_NOTICE, "New slot import job created: %s.", job->description);
     return job;
 }
 
@@ -638,11 +612,11 @@ void performSlotImportJobFailover(slotMigrationJob *job) {
     /* 3) Update state and save config. */
     clearCachedClusterSlotsResponse();
     clusterUpdateState();
-    clusterSaveConfigOrDie(1);
+    clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG);
 
     /* 4) Pong all the other nodes so that they can update the state accordingly
      *    and detect that we have taken over the slots. */
-    clusterBroadcastPong(CLUSTER_BROADCAST_ALL);
+    clusterDoBeforeSleep(CLUSTER_TODO_BROADCAST_ALL);
 
     /* 5) Mark all slots as stable in the kvstore (for SCAN/KEYS/RANDOMKEY) */
     setSlotImportingStateInAllDbs(job->slot_ranges, 0);
@@ -909,14 +883,16 @@ void clusterCommandMigrate(client *c) {
     listIter li;
     listRewind(new_slot_migrations, &li);
     listNode *ln;
+    sds client_info = catClientInfoShortString(sdsempty(), c, server.hide_user_data_from_log);
     while ((ln = listNext(&li))) {
         slotMigrationJob *job = ln->value;
         listAddNodeHead(server.cluster->slot_migration_jobs, job);
-        serverLog(LL_NOTICE, "New slot export job created: %s", job->description);
+        serverLog(LL_NOTICE, "Slot migration initiated through CLUSTER MIGRATE command: %s (user request from '%s')", job->description, client_info);
         proceedWithSlotMigration(job);
     }
     listSetFreeMethod(new_slot_migrations, NULL);
     listRelease(new_slot_migrations);
+    sdsfree(client_info);
     addReply(c, shared.ok);
 }
 
@@ -932,7 +908,7 @@ slotMigrationJob *clusterLookupMigrationJob(sds name) {
     return NULL;
 }
 
-/* Cancels one or all ongoing imports. */
+/* Cancels one or all ongoing migrations. */
 void clusterCommandCancelMigration(client *c) {
     listNode *ln;
     listIter li;
@@ -951,7 +927,9 @@ void clusterCommandCancelMigration(client *c) {
             }
             finishSlotMigrationJob(job, SLOT_MIGRATION_JOB_CANCELLED, NULL);
         }
-        serverLog(LL_NOTICE, "Canceled all in progress slot migrations due to operator's request.");
+        sds client_info = catClientInfoShortString(sdsempty(), c, server.hide_user_data_from_log);
+        serverLog(LL_NOTICE, "Canceled all in progress slot migrations (user request from '%s')", client_info);
+        sdsfree(client_info);
         addReply(c, shared.ok);
         return;
     } else if (!strcasecmp(c->argv[2]->ptr, "name") && c->argc > 3) {
@@ -964,9 +942,12 @@ void clusterCommandCancelMigration(client *c) {
             addReplyErrorFormat(c, "Migrations must be cancelled on the node that currently owns the slots.");
             return;
         }
+
+        sds client_info = catClientInfoShortString(sdsempty(), c, server.hide_user_data_from_log);
         serverLog(LL_NOTICE,
-                  "Cancelling slot migration %s due to operator's request.",
-                  job->description);
+                  "Cancelling slot migration %s (user request from '%s').",
+                  job->description, client_info);
+        sdsfree(client_info);
         finishSlotMigrationJob(job, SLOT_MIGRATION_JOB_CANCELLED, NULL);
         addReply(c, shared.ok);
         return;
@@ -995,7 +976,7 @@ void connectSlotExportJob(slotMigrationJob *job) {
 
     job->conn = connCreate(connTypeOfReplication());
     if (connConnect(job->conn, n->ip, port, server.bind_source_addr,
-                    /*multipath=*/0, slotExportConnectHandler) == C_ERR) {
+                    0, slotExportConnectHandler) == C_ERR) {
         serverLog(LL_WARNING,
                   "Failed to connect slot migration %s: %s",
                   job->description,
@@ -1048,7 +1029,7 @@ void performSlotExportJobAuthentication(slotMigrationJob *job) {
     }
     sds err = replicationSendAuth(job->conn);
     if (err) {
-        serverLog(LL_NOTICE, "Failed to send AUTH command for slot migration %s: %s",
+        serverLog(LL_WARNING, "Failed to send AUTH command for slot migration %s: %s",
                   job->description, err);
         status_msg = sdscatfmt(sdsempty(), "Failed to send AUTH to target node: %S", err);
         finishSlotMigrationJob(job, SLOT_MIGRATION_JOB_FAILED, status_msg);
@@ -1157,7 +1138,7 @@ void slotExportTryDoPause(slotMigrationJob *job) {
  * failover. */
 void clusterCommandSyncSlotsRequestPause(client *c) {
     if (!c->slot_migration_job) {
-        addReplyError(c, "CLUSTER SYNCSLOTS should only be used by slot migration clients");
+        addReplyError(c, "CLUSTER SYNCSLOTS REQUEST-PAUSE should only be used by slot migration clients");
         return;
     }
     if (!isSlotMigrationJobInProgress(c->slot_migration_job)) {
@@ -1187,7 +1168,7 @@ void clusterCommandSyncSlotsRequestPause(client *c) {
  * now. */
 void clusterCommandSyncSlotsRequestFailover(client *c) {
     if (!c->slot_migration_job) {
-        addReplyError(c, "CLUSTER SYNCSLOTS should only be used by slot migration clients");
+        addReplyError(c, "CLUSTER SYNCSLOTS REQUEST-FAILOVER should only be used by slot migration clients");
         return;
     }
     if (!isSlotMigrationJobInProgress(c->slot_migration_job)) {
@@ -1287,9 +1268,6 @@ void clusterHandleSlotExportBackgroundSaveDone(int bgsaveerr) {
             continue;
         }
         if (bgsaveerr == C_OK) {
-            serverLog(LL_NOTICE,
-                      "Finished snapshotting slot migration %s, beginning incremental stream...",
-                      job->description);
             slotExportBeginStreaming(job);
         } else {
             serverLog(LL_WARNING,
@@ -1437,8 +1415,7 @@ size_t clusterGetTotalSlotExportBufferMemory(void) {
 }
 
 /* Create a slot export job with the given target and slot ranges. */
-slotMigrationJob *
-createSlotExportJob(clusterNode *target_node, list *slot_ranges) {
+slotMigrationJob *createSlotExportJob(clusterNode *target_node, list *slot_ranges) {
     slotMigrationJob *job = zcalloc(sizeof(slotMigrationJob));
 
     job->ctime = server.unixtime;
@@ -1510,9 +1487,7 @@ void slotMigrationJobReadEstablishResponse(connection *conn) {
 
 /* Updates the associated status message for the job, which will be seen in CLUSTER MIGRATIONS. */
 void updateSlotMigrationJobStatusMessage(slotMigrationJob *job, char *message) {
-    if (job->status_msg) {
-        sdsfree(job->status_msg);
-    }
+    if (job->status_msg) sdsfree(job->status_msg);
     job->status_msg = sdsnew(message);
 }
 
@@ -1664,12 +1639,8 @@ void freeSlotMigrationJob(void *o) {
     resetSlotMigrationJob(job);
     listRelease(job->slot_ranges);
     sdsfree(job->slot_ranges_str);
-    if (job->status_msg) {
-        sdsfree(job->status_msg);
-    }
-    if (job->response_buf) {
-        sdsfree(job->response_buf);
-    }
+    if (job->status_msg) sdsfree(job->status_msg);
+    if (job->response_buf) sdsfree(job->response_buf);
     zfree(o);
 }
 
@@ -1682,7 +1653,7 @@ void initClusterSlotMigrationJobList(void) {
 const char *slotMigrationJobStateToString(slotMigrationJobState state) {
     switch (state) {
     case SLOT_IMPORT_WAIT_ACK: return "waiting-for-ack";
-    case SLOT_IMPORT_RECEIVE_SNAPSHOT: return "snapshotting";
+    case SLOT_IMPORT_RECEIVE_SNAPSHOT: return "receiving-snapshot";
     case SLOT_IMPORT_WAITING_FOR_PAUSED: return "waiting-for-paused";
     case SLOT_IMPORT_FAILOVER_REQUESTED: return "failover-requested";
     case SLOT_IMPORT_FAILOVER_GRANTED: return "failover-granted";
@@ -1765,7 +1736,7 @@ void clusterHandleSlotMigrationClientOOM(slotMigrationJob *job) {
     if (!isSlotMigrationJobInProgress(job)) {
         return;
     }
-    serverLog(LL_WARNING, "Slot migration %s failed due due to OOM", job->description);
+    serverLog(LL_WARNING, "Slot migration %s failed due to OOM", job->description);
     finishSlotMigrationJob(job, SLOT_MIGRATION_JOB_FAILED,
                            "Ran out of memory (OOM) during slot import");
 }
@@ -1951,7 +1922,7 @@ void slotExportTryUnpause(void) {
 /* Sent by either the target or the source as a liveness check. */
 void clusterCommandSyncSlotsAck(client *c) {
     if (!c->slot_migration_job) {
-        addReplyError(c, "CLUSTER SYNCSLOTS should only be used by slot migration clients");
+        addReplyError(c, "CLUSTER SYNCSLOTS ACK should only be used by slot migration clients");
         return;
     }
     c->slot_migration_job->last_ack = server.unixtime;

@@ -536,7 +536,7 @@ int checkAlreadyExpired(long long when) {
      *
      * If the server is a primary and in the import mode, we also add the already
      * expired key and wait for an explicit DEL from the import source.
-     * 
+     *
      * If the server is receiving the key from a slot migration, we will accept
      * expired keys and wait for the source to propagate deletion. */
     if (server.current_client && server.current_client->slot_migration_job) return 0;

@@ -120,24 +120,13 @@ test "Module cluster message traffic tracking" {
     assert {$recv_found == 1}
 
     # Unload module from all nodes
-    if {[catch {r module unload cluster} err]} {
-        puts "Warning: Module unload failed: $err"
-    }
+    r module unload cluster
 
     # Wait longer for cleanup to propagate after module unload
     after 1000
 
     # Verify module was unloaded successfully with retries
-    set modules {}
-    set retry_count 0
-    while {$retry_count < 5} {
-        if {[catch {r module list} modules]} {
-            incr retry_count
-            after 200
-        } else {
-            break
-        }
-    }
+    set modules [r module list]
     set cluster_found 0
     foreach module $modules {
         if {[dict get $module name] eq "cluster"} {

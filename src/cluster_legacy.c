@@ -4027,7 +4027,7 @@ void clusterWriteHandler(connection *conn) {
         uint16_t raw_type = ntohs(msg->type);
         uint16_t type = raw_type & ~CLUSTERMSG_MODIFIER_MASK;
         int is_light = IS_LIGHT_MESSAGE(raw_type);
-        
+
         /* Update counters based on message type */
         if (type == CLUSTERMSG_TYPE_PUBLISH || type == CLUSTERMSG_TYPE_PUBLISHSHARD) {
             /* This is pub/sub traffic */
@@ -4039,7 +4039,7 @@ void clusterWriteHandler(connection *conn) {
             if (msg_offset == 0) {
                 size_t required_len;
                 uint64_t module_id;
-                
+
                 if (is_light) {
                     /* Light message structure */
                     clusterMsgLight *light_msg = (clusterMsgLight *)msg;
@@ -4233,7 +4233,7 @@ void clusterReadHandler(connection *conn) {
             } else {
                 /* This is admin traffic (PING, PONG, MEET, FAIL, etc.) */
                 server.cluster_bus_admin_bytes_received += rcvbuflen;
-            } 
+            }
 
             if (clusterProcessPacket(link)) {
                 if (link->rcvbuf_alloc > RCVBUF_INIT_LEN) {

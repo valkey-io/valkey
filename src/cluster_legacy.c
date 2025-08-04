@@ -4032,7 +4032,7 @@ void clusterWriteHandler(connection *conn) {
             server.cluster_bus_pubsub_bytes_sent += nwritten;
         } else if (type == CLUSTERMSG_TYPE_MODULE) {
             /* This is for any module-related traffic */
-            uint64_t module_id = ntohu64(((clusterMsg*)msgblock->data)->data.module.msg.module_id);
+            uint64_t module_id = ntohu64(((clusterMsg *)msgblock->data)->data.module.msg.module_id);
             updateModuleTraffic(server.cluster_bus_module_id_traffic, module_id, nwritten, true);
         } else {
             /* This is admin traffic (PING, PONG, MEET, FAIL, etc.) */

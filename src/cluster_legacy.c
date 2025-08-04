@@ -284,38 +284,38 @@ static void clusterNodeIterReset(ClusterNodeIterator *iter) {
 
 /* Helpers to access the migrating/importing slot dictionaries. */
 clusterNode *getMigratingSlotDest(int slot) {
-    dictEntry *de = dictFind(server.cluster->migrating_slots_to, (void *)(long)slot);
+    dictEntry *de = dictFind(server.cluster->migrating_slots_to, (void *)(intptr_t)slot);
     return de ? dictGetVal(de) : NULL;
 }
 
 static void setMigratingSlotDest(int slot, clusterNode *node) {
-    dictEntry *de = dictFind(server.cluster->migrating_slots_to, (void *)(long)slot);
+    dictEntry *de = dictFind(server.cluster->migrating_slots_to, (void *)(intptr_t)slot);
     if (node == NULL) {
-        if (de) dictDelete(server.cluster->migrating_slots_to, (void *)(long)slot);
+        if (de) dictDelete(server.cluster->migrating_slots_to, (void *)(intptr_t)slot);
         return;
     }
     if (de) {
         dictSetVal(server.cluster->migrating_slots_to, de, node);
     } else {
-        dictAdd(server.cluster->migrating_slots_to, (void *)(long)slot, node);
+        dictAdd(server.cluster->migrating_slots_to, (void *)(intptr_t)slot, node);
     }
 }
 
 clusterNode *getImportingSlotSource(int slot) {
-    dictEntry *de = dictFind(server.cluster->importing_slots_from, (void *)(long)slot);
+    dictEntry *de = dictFind(server.cluster->importing_slots_from, (void *)(intptr_t)slot);
     return de ? dictGetVal(de) : NULL;
 }
 
 static void setImportingSlotSource(int slot, clusterNode *node) {
-    dictEntry *de = dictFind(server.cluster->importing_slots_from, (void *)(long)slot);
+    dictEntry *de = dictFind(server.cluster->importing_slots_from, (void *)(intptr_t)slot);
     if (node == NULL) {
-        if (de) dictDelete(server.cluster->importing_slots_from, (void *)(long)slot);
+        if (de) dictDelete(server.cluster->importing_slots_from, (void *)(intptr_t)slot);
         return;
     }
     if (de) {
         dictSetVal(server.cluster->importing_slots_from, de, node);
     } else {
-        dictAdd(server.cluster->importing_slots_from, (void *)(long)slot, node);
+        dictAdd(server.cluster->importing_slots_from, (void *)(intptr_t)slot, node);
     }
 }
 

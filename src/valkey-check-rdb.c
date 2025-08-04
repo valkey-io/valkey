@@ -618,7 +618,7 @@ int redis_check_rdb(char *rdbfilename, FILE *fp) {
     }
     rdbver = atoi(buf + 6);
 
-    if (rdbver < 1 || rdbver > RDB_VERSION) {
+    if (rdbver < 1 || rdbver > RDB_VERSION || (rdbver >= RDB_FOREIGN_VERSION_MIN && rdbver <= RDB_FOREIGN_VERSION_MAX)) {
         rdbCheckError("Can't handle RDB format version %d", rdbver);
         goto err;
     }

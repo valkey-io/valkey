@@ -379,8 +379,9 @@ run_solo {defrag} {
             r config set list-max-listpack-size 3 ;# only 3 items per listpack node to generate more frag
             # number of total fields.  lists are progressively increasing sizes.
             set n 200000
+            set count 0
 
-            perform_defrag_test $title latency 30 populate {
+            perform_defrag_test $title latency 5 populate {
                 set rd [valkey_deferring_client]
                 set val [string repeat A 350]
                 set k 0
@@ -388,17 +389,33 @@ run_solo {defrag} {
                 for {set j 0} {$j < $n} {incr j} {
                     $rd lpush k$k $val
                     lassign [next_exp_kf $k $f] k f
+
+                    incr count
+                    if {$count % 10000 == 0} {
+                        for {set k 0} {$k < 10000} {incr k} {
+                            $rd read ; # Discard replies
+                        }
                 }
-                for {set j 0} {$j < $n} {incr j} { $rd read } ; # Discard replies
+            }
+            # for {set j 0} {$j < $n} {incr j} { $rd read } ; # Discard replies
             } fragment {
                 set k 0
                 set f 0
+                set count 0
                 for {set j 0} {$j < $n} {incr j 2} {
                     $rd ltrim k$k 1 -1 ;# deletes the leftmost item
                     $rd lmove k$k k$k LEFT RIGHT ;# rotates the leftmost item to the right side
                     lassign [next_exp_kf $k $f 2] k f
+
+                    incr count
+                    if {$count % 10000 == 0} {
+                        for {set k 0} {$k < 10000} {incr k 2} {
+                            $rd read ; # Discard replies
+                            $rd read ; # Discard replies
+                        }
                 }
-                for {set j 0} {$j < $n} {incr j 2} { $rd read; $rd read } ; # Discard replies
+            }
+            # for {set j 0} {$j < $n} {incr j 2} { $rd read; $rd read } ; # Discard replies
                 $rd close
             }
         }

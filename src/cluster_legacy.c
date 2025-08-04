@@ -4213,18 +4213,28 @@ void clusterReadHandler(connection *conn) {
         /* Total length obtained? Process this packet. */
         if (rcvbuflen >= RCVBUF_MIN_READ_LEN && rcvbuflen == ntohl(hdr->totlen)) {
             /* Get message type to differentiate traffic */
-            uint16_t type = ntohs(hdr->type) & ~CLUSTERMSG_MODIFIER_MASK;
+            uint16_t raw_type = ntohs(hdr->type);
+            uint16_t type = raw_type & ~CLUSTERMSG_MODIFIER_MASK;
+            int is_light = IS_LIGHT_MESSAGE(raw_type);
+
             /* Update counters based on message type */
             if (type == CLUSTERMSG_TYPE_PUBLISH || type == CLUSTERMSG_TYPE_PUBLISHSHARD) {
                 /* This is pub/sub traffic */
                 server.cluster_bus_pubsub_bytes_received += rcvbuflen;
             } else if (type == CLUSTERMSG_TYPE_MODULE) {
                 /* This is for any module-related traffic */
-                updateModuleTraffic(server.cluster_bus_module_id_traffic, ntohu64(hdr->data.module.msg.module_id), rcvbuflen, false);
+                uint64_t module_id = 0;
+                if (is_light) {
+                    clusterMsgLight *hdr_light = (clusterMsgLight *)hdr;
+                    module_id = ntohu64(hdr_light->data.module.msg.module_id);
+                } else {
+                    module_id = ntohu64(hdr->data.module.msg.module_id);
+                }
+                updateModuleTraffic(server.cluster_bus_module_id_traffic, module_id, rcvbuflen, false);
             } else {
                 /* This is admin traffic (PING, PONG, MEET, FAIL, etc.) */
                 server.cluster_bus_admin_bytes_received += rcvbuflen;
-            }
+            } 
 
             if (clusterProcessPacket(link)) {
                 if (link->rcvbuf_alloc > RCVBUF_INIT_LEN) {

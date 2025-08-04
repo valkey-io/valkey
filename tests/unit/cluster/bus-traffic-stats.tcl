@@ -127,8 +127,17 @@ test "Module cluster message traffic tracking" {
     # Wait longer for cleanup to propagate after module unload
     after 1000
 
-    # Verify module was unloaded successfully
-    set modules [r module list]
+    # Verify module was unloaded successfully with retries
+    set modules {}
+    set retry_count 0
+    while {$retry_count < 5} {
+        if {[catch {r module list} modules]} {
+            incr retry_count
+            after 200
+        } else {
+            break
+        }
+    }
     set cluster_found 0
     foreach module $modules {
         if {[dict get $module name] eq "cluster"} {

@@ -2084,14 +2084,14 @@ int replicationSupportSkipRDBChecksum(connection *conn, int is_replica_stream_ve
     return is_replica_stream_verified && is_primary_stream_verified && connIsIntegrityChecked(conn);
 }
 
-/* Helper function for readSyncBulkPayload() to initialize tempDb
+/* Helper function for replicaLoadPrimaryRDBFromSocket() to initialize tempDb
  * before socket-loading the new db from primary. The tempDb may be populated
  * by swapMainDbWithTempDb or freed by disklessLoadDiscardTempDb later. */
 serverDb **disklessLoadInitTempDb(void) {
     return zcalloc(sizeof(serverDb *) * server.dbnum);
 }
 
-/* Helper function for readSyncBulkPayload() to discard our tempDb
+/* Helper function for replicaLoadPrimaryRDBFromSocket() to discard our tempDb
  * when the loading succeeded or failed. */
 void disklessLoadDiscardTempDb(serverDb **tempDb) {
     discardTempDb(tempDb);
@@ -2113,7 +2113,7 @@ void disklessLoadDiscardFunctionsLibCtx(functionsLibCtx *temp_functions_lib_ctx)
 /* If we know we got an entirely different data set from our primary
  * we have no way to incrementally feed our replicas after that.
  * We want our replicas to resync with us as well, if we have any sub-replicas.
- * This is useful on readSyncBulkPayload in places where we just finished transferring db. */
+ * This is useful on replicaLoadPrimaryRDBFromSocket/Disk in places where we just finished transferring db. */
 void replicationAttachToNewPrimary(void) {
     /* Replica starts to apply data from new primary, we must discard the cached
      * primary structure. */
@@ -2124,173 +2124,65 @@ void replicationAttachToNewPrimary(void) {
     freeReplicationBacklog(); /* Don't allow our chained replicas to PSYNC. */
 }
 
-/* Asynchronously read the SYNC payload we receive from a primary */
-#define REPL_MAX_WRITTEN_BEFORE_FSYNC (1024 * 1024 * 8) /* 8 MB */
-void readSyncBulkPayload(connection *conn) {
-    char buf[PROTO_IOBUF_LEN];
-    ssize_t nread, readlen, nwritten;
-    int use_diskless_load = useDisklessLoad();
-    serverDb **diskless_load_tempDb = NULL;
-    functionsLibCtx *temp_functions_lib_ctx = NULL;
-    int empty_db_flags = server.repl_replica_lazy_flush ? EMPTYDB_ASYNC : EMPTYDB_NO_FLAGS;
-    off_t left;
 
-    /* Static vars used to hold the EOF mark, and the last bytes received
-     * from the server: when they match, we reached the end of the transfer. */
-    static char eofmark[RDB_EOF_MARK_SIZE];
-    static char lastbytes[RDB_EOF_MARK_SIZE];
-    static int usemark = 0;
-
-    /* If repl_transfer_size == -1 we still have to read the bulk length
-     * from the primary reply. */
-    if (server.repl_transfer_size == -1) {
-        nread = connSyncReadLine(conn, buf, 1024, server.repl_syncio_timeout * 1000);
-        if (nread == -1) {
-            serverLog(LL_WARNING, "I/O error reading bulk count from PRIMARY: %s", connGetLastError(conn));
-            goto error;
-        } else {
-            /* nread here is returned by connSyncReadLine(), which calls syncReadLine() and
-             * convert "\r\n" to '\0' so 1 byte is lost. */
+/* During replication, the primary sends sync metadata as the first line
+ * which can be either a standard bulk format ($<count>) or an EOF-delimited
+ * format ($EOF:<delimiter>) for diskless transfers. We need this data in order
+ * to detect transfer completion. This function reads and parses that
+ * metadata line.
+ * The primary may also send an error message starting with '-' or a ping
+ * (newline) to keep the connection alive, in which case this function
+ * should be called again later.
+ * Returns C_OK on success, C_ERR on error, or C_RETRY for primary ping. */
+int tryReadBulkPayloadMetadata(connection *conn, char *buf, char *eofmark, char *lastbytes, int *usemark, off_t *repl_transfer_size) {
+    ssize_t nread = connSyncReadLine(conn, buf, 1024, server.repl_syncio_timeout * 1000);
+    if (nread == -1) {
+        serverLog(LL_WARNING, "I/O error reading bulk count from PRIMARY: %s", connGetLastError(conn));
+        return C_ERR;
+    } else {
+        /* nread here is returned by connSyncReadLine(), which calls syncReadLine() and
+         * convert "\r\n" to '\0' so 1 byte is lost. */
+        if (inBioThread())
+            server.bio_stat_net_repl_input_bytes += nread + 1;
+        else
             server.stat_net_repl_input_bytes += nread + 1;
-        }
-
-        if (buf[0] == '-') {
-            serverLog(LL_WARNING, "PRIMARY aborted replication with an error: %s", buf + 1);
-            goto error;
-        } else if (buf[0] == '\0') {
-            /* At this stage just a newline works as a PING in order to take
-             * the connection live. So we refresh our last interaction
-             * timestamp. */
-            server.repl_transfer_lastio = server.unixtime;
-            return;
-        } else if (buf[0] != '$') {
-            serverLog(LL_WARNING,
-                      "Bad protocol from PRIMARY, the first byte is not '$' (we received '%s'), are you sure the host "
-                      "and port are right?",
-                      buf);
-            goto error;
-        }
-
-        /* There are two possible forms for the bulk payload. One is the
-         * usual $<count> bulk format. The other is used for diskless transfers
-         * when the primary does not know beforehand the size of the file to
-         * transfer. In the latter case, the following format is used:
-         *
-         * $EOF:<40 bytes delimiter>
-         *
-         * At the end of the file the announced delimiter is transmitted. The
-         * delimiter is long and random enough that the probability of a
-         * collision with the actual file content can be ignored. */
-        if (strncmp(buf + 1, "EOF:", 4) == 0 && strlen(buf + 5) >= RDB_EOF_MARK_SIZE) {
-            usemark = 1;
-            memcpy(eofmark, buf + 5, RDB_EOF_MARK_SIZE);
-            memset(lastbytes, 0, RDB_EOF_MARK_SIZE);
-            /* Set any repl_transfer_size to avoid entering this code path
-             * at the next call. */
-            server.repl_transfer_size = 0;
-            serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync: receiving streamed RDB from primary with EOF %s",
-                      use_diskless_load ? "to parser" : "to disk");
-        } else {
-            usemark = 0;
-            server.repl_transfer_size = strtol(buf + 1, NULL, 10);
-            serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync: receiving %lld bytes from primary %s",
-                      (long long)server.repl_transfer_size, use_diskless_load ? "to parser" : "to disk");
-        }
-        return;
     }
 
-    if (!use_diskless_load) {
-        /* Read the data from the socket, store it to a file and search
-         * for the EOF. */
-        if (usemark) {
-            readlen = sizeof(buf);
-        } else {
-            left = server.repl_transfer_size - server.repl_transfer_read;
-            readlen = (left < (signed)sizeof(buf)) ? left : (signed)sizeof(buf);
-        }
-
-        nread = connRead(conn, buf, readlen);
-        if (nread <= 0) {
-            if (connGetState(conn) == CONN_STATE_CONNECTED) {
-                /* equivalent to EAGAIN */
-                return;
-            }
-            serverLog(LL_WARNING, "I/O error trying to sync with PRIMARY: %s",
-                      (nread == -1) ? connGetLastError(conn) : "connection lost");
-            goto error;
-        }
-        server.stat_net_repl_input_bytes += nread;
-
-        /* When a mark is used, we want to detect EOF asap in order to avoid
-         * writing the EOF mark into the file... */
-        int eof_reached = 0;
-
-        if (usemark) {
-            /* Update the last bytes array, and check if it matches our
-             * delimiter. */
-            if (nread >= RDB_EOF_MARK_SIZE) {
-                memcpy(lastbytes, buf + nread - RDB_EOF_MARK_SIZE, RDB_EOF_MARK_SIZE);
-            } else {
-                int rem = RDB_EOF_MARK_SIZE - nread;
-                memmove(lastbytes, lastbytes + nread, rem);
-                memcpy(lastbytes + rem, buf, nread);
-            }
-            if (memcmp(lastbytes, eofmark, RDB_EOF_MARK_SIZE) == 0) eof_reached = 1;
-        }
-
-        /* Update the last I/O time for the replication transfer (used in
-         * order to detect timeouts during replication), and write what we
-         * got from the socket to the dump file on disk. */
+    /* Check the bulk payload header for errors */
+    if (buf[0] == '-') {
+        serverLog(LL_WARNING, "PRIMARY aborted replication with an error: %s", buf + 1);
+        return C_ERR;
+    } else if (buf[0] == '\0') {
+        /* At this stage just a newline works as a PING in order to take
+         * the connection live. So we refresh our last interaction
+         * timestamp. */
         server.repl_transfer_lastio = server.unixtime;
-        if ((nwritten = write(server.repl_transfer_fd, buf, nread)) != nread) {
-            serverLog(LL_WARNING,
-                      "Write error or short write writing to the DB dump file "
-                      "needed for PRIMARY <-> REPLICA synchronization: %s",
-                      (nwritten == -1) ? strerror(errno) : "short write");
-            goto error;
-        }
-        server.repl_transfer_read += nread;
-
-        /* Delete the last 40 bytes from the file if we reached EOF. */
-        if (usemark && eof_reached) {
-            if (ftruncate(server.repl_transfer_fd, server.repl_transfer_read - RDB_EOF_MARK_SIZE) == -1) {
-                serverLog(LL_WARNING,
-                          "Error truncating the RDB file received from the primary "
-                          "for SYNC: %s",
-                          strerror(errno));
-                goto error;
-            }
-        }
-
-        /* Sync data on disk from time to time, otherwise at the end of the
-         * transfer we may suffer a big delay as the memory buffers are copied
-         * into the actual disk. */
-        if (server.repl_transfer_read >= server.repl_transfer_last_fsync_off + REPL_MAX_WRITTEN_BEFORE_FSYNC) {
-            off_t sync_size = server.repl_transfer_read - server.repl_transfer_last_fsync_off;
-            rdb_fsync_range(server.repl_transfer_fd, server.repl_transfer_last_fsync_off, sync_size);
-            server.repl_transfer_last_fsync_off += sync_size;
-        }
-
-        /* Check if the transfer is now complete */
-        if (!usemark) {
-            if (server.repl_transfer_read == server.repl_transfer_size) eof_reached = 1;
-        }
-
-        /* If the transfer is yet not complete, we need to read more, so
-         * return ASAP and wait for the handler to be called again. */
-        if (!eof_reached) return;
+        return C_RETRY;
+    } else if (buf[0] != '$') {
+        serverLog(LL_WARNING,
+                  "Bad protocol from PRIMARY, the first byte is not '$' (we received '%s'), are you sure the host "
+                  "and port are right?",
+                  buf);
+        return C_ERR;
     }
 
-    /* We reach this point in one of the following cases:
-     *
-     * 1. The replica is using diskless replication, that is, it reads data
-     *    directly from the socket to the server memory, without using
-     *    a temporary RDB file on disk. In that case we just block and
-     *    read everything from the socket.
-     *
-     * 2. Or when we are done reading from the socket to the RDB file, in
-     *    such case we want just to read the RDB file in memory. */
+    /* Check if this is an EOF-based transfer ($EOF:<delimiter>) or size-based ($<size>) */
+    if (strncmp(buf + 1, "EOF:", 4) == 0 && strlen(buf + 5) >= RDB_EOF_MARK_SIZE) {
+        /* EOF-based transfer: extract the delimiter */
+        memcpy(eofmark, buf + 5, RDB_EOF_MARK_SIZE);
+        memset(lastbytes, 0, RDB_EOF_MARK_SIZE);
+        *usemark = true;
+        *repl_transfer_size = 0;
+    } else {
+        /* Size-based transfer: parse the size */
+        *usemark = false;
+        *repl_transfer_size = strtol(buf + 1, NULL, 10);
+    }
 
+    return C_OK;
+}
+
+void replicaBeforeLoadPrimaryRDB(connection *conn, int use_diskless_load) {
     /* We need to stop any AOF rewriting child before flushing and parsing
      * the RDB, otherwise we'll create a copy-on-write disaster. */
     if (server.aof_state != AOF_OFF) stopAppendOnly();
@@ -2309,213 +2201,19 @@ void readSyncBulkPayload(connection *conn) {
         killRDBChild();
     }
 
-    if (use_diskless_load && server.repl_diskless_load == REPL_DISKLESS_LOAD_SWAPDB) {
-        /* Initialize empty tempDb dictionaries. */
-        diskless_load_tempDb = disklessLoadInitTempDb();
-        temp_functions_lib_ctx = disklessLoadFunctionsLibCtxCreate();
-
-        moduleFireServerEvent(VALKEYMODULE_EVENT_REPL_ASYNC_LOAD, VALKEYMODULE_SUBEVENT_REPL_ASYNC_LOAD_STARTED, NULL);
-    }
-
     /* Before loading the DB into memory we need to delete the readable
      * handler, otherwise it will get called recursively since
      * rdbLoad() will call the event loop to process events from time to
      * time for non blocking loading. */
     connSetReadHandler(conn, NULL);
+}
 
-    rdbSaveInfo rsi = RDB_SAVE_INFO_INIT;
-    if (use_diskless_load) {
-        rio rdb;
-        serverDb **dbarray;
-        functionsLibCtx *functions_lib_ctx;
-        int asyncLoading = 0;
-
-        if (server.repl_diskless_load == REPL_DISKLESS_LOAD_SWAPDB) {
-            /* Async loading means we continue serving read commands during full resync, and
-             * "swap" the new db with the old db only when loading is done.
-             * It is enabled only on SWAPDB diskless replication when primary replication ID hasn't changed,
-             * because in that state the old content of the db represents a different point in time of the same
-             * data set we're currently receiving from the primary. */
-            if (memcmp(server.replid, server.primary_replid, CONFIG_RUN_ID_SIZE) == 0) {
-                asyncLoading = 1;
-            }
-            dbarray = diskless_load_tempDb;
-            functions_lib_ctx = temp_functions_lib_ctx;
-        } else {
-            /* We will soon start loading the RDB from socket, the replication history is changed,
-             * we must discard the cached primary structure and force resync of sub-replicas. */
-            replicationAttachToNewPrimary();
-
-            /* Even though we are on-empty-db and the database is empty, we still call emptyData. */
-            serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync: Flushing old data");
-            emptyData(-1, empty_db_flags, replicationEmptyDbCallback);
-
-            dbarray = server.db;
-            functions_lib_ctx = functionsLibCtxGetCurrent();
-        }
-
-        rioInitWithConn(&rdb, conn, server.repl_transfer_size);
-
-        /* Put the socket in blocking mode to simplify RDB transfer.
-         * We'll restore it when the RDB is received. */
-        connBlock(conn);
-        connRecvTimeout(conn, server.repl_timeout * 1000);
-
-        serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync: Loading DB in memory");
-        startLoading(server.repl_transfer_size, RDBFLAGS_REPLICATION, asyncLoading);
-        if (replicationSupportSkipRDBChecksum(conn, use_diskless_load, usemark)) rdb.flags |= RIO_FLAG_SKIP_RDB_CHECKSUM;
-        int loadingFailed = 0;
-        rdbLoadingCtx loadingCtx = {.dbarray = dbarray, .functions_lib_ctx = functions_lib_ctx};
-        if (rdbLoadRioWithLoadingCtxScopedRdb(&rdb, RDBFLAGS_REPLICATION, &rsi, &loadingCtx) != C_OK) {
-            /* RDB loading failed. */
-            serverLog(LL_WARNING, "Failed trying to load the PRIMARY synchronization DB "
-                                  "from socket, check server logs.");
-            loadingFailed = 1;
-        } else if (usemark) {
-            /* Verify the end mark is correct. */
-            if (!rioRead(&rdb, buf, RDB_EOF_MARK_SIZE) || memcmp(buf, eofmark, RDB_EOF_MARK_SIZE) != 0) {
-                serverLog(LL_WARNING, "Replication stream EOF marker is broken");
-                loadingFailed = 1;
-            }
-        }
-
-        if (loadingFailed) {
-            stopLoading(0);
-            rioFreeConn(&rdb, NULL);
-
-            if (server.repl_diskless_load == REPL_DISKLESS_LOAD_SWAPDB) {
-                /* Discard potentially partially loaded tempDb. */
-                moduleFireServerEvent(VALKEYMODULE_EVENT_REPL_ASYNC_LOAD, VALKEYMODULE_SUBEVENT_REPL_ASYNC_LOAD_ABORTED,
-                                      NULL);
-
-                disklessLoadDiscardTempDb(diskless_load_tempDb);
-                disklessLoadDiscardFunctionsLibCtx(temp_functions_lib_ctx);
-                serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync: Discarding temporary DB in background");
-            } else {
-                /* Remove the half-loaded data in case we started with an empty replica. */
-                serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync: Discarding the half-loaded data");
-                emptyData(-1, empty_db_flags, replicationEmptyDbCallback);
-            }
-
-            /* Note that there's no point in restarting the AOF on SYNC
-             * failure, it'll be restarted when sync succeeds or the replica
-             * gets promoted. */
-            goto error;
-        }
-
-        /* RDB loading succeeded if we reach this point. */
-        if (server.repl_diskless_load == REPL_DISKLESS_LOAD_SWAPDB) {
-            /* We will soon swap main db with tempDb and replicas will start
-             * to apply data from new primary, we must discard the cached
-             * primary structure and force resync of sub-replicas. */
-            replicationAttachToNewPrimary();
-
-            serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync: Swapping active DB with loaded DB");
-            swapMainDbWithTempDb(diskless_load_tempDb);
-
-            /* swap existing functions ctx with the temporary one */
-            functionsLibCtxSwapWithCurrent(temp_functions_lib_ctx, 1);
-
-            moduleFireServerEvent(VALKEYMODULE_EVENT_REPL_ASYNC_LOAD, VALKEYMODULE_SUBEVENT_REPL_ASYNC_LOAD_COMPLETED,
-                                  NULL);
-
-            /* Delete the old db as it's useless now. */
-            disklessLoadDiscardTempDb(diskless_load_tempDb);
-            serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync: Discarding old DB in background");
-        }
-
-        /* Inform about db change, as replication was diskless and didn't cause a save. */
-        server.dirty++;
-
-        stopLoading(1);
-
-        /* Cleanup and restore the socket to the original state to continue
-         * with the normal replication. */
-        rioFreeConn(&rdb, NULL);
-        connNonBlock(conn);
-        connRecvTimeout(conn, 0);
-    } else {
-        /* Make sure the new file (also used for persistence) is fully synced
-         * (not covered by earlier calls to rdb_fsync_range). */
-        if (fsync(server.repl_transfer_fd) == -1) {
-            serverLog(LL_WARNING,
-                      "Failed trying to sync the temp DB to disk in "
-                      "PRIMARY <-> REPLICA synchronization: %s",
-                      strerror(errno));
-            goto error;
-        }
-
-        /* Rename rdb like renaming rewrite aof asynchronously. */
-        int old_rdb_fd = open(server.rdb_filename, O_RDONLY | O_NONBLOCK);
-        if (rename(server.repl_transfer_tmpfile, server.rdb_filename) == -1) {
-            serverLog(LL_WARNING,
-                      "Failed trying to rename the temp DB into %s in "
-                      "PRIMARY <-> REPLICA synchronization: %s",
-                      server.rdb_filename, strerror(errno));
-            if (old_rdb_fd != -1) close(old_rdb_fd);
-            goto error;
-        }
-        /* Close old rdb asynchronously. */
-        if (old_rdb_fd != -1) bioCreateCloseJob(old_rdb_fd, 0, 0);
-
-        /* Sync the directory to ensure rename is persisted */
-        if (fsyncFileDir(server.rdb_filename) == -1) {
-            serverLog(LL_WARNING,
-                      "Failed trying to sync DB directory %s in "
-                      "PRIMARY <-> REPLICA synchronization: %s",
-                      server.rdb_filename, strerror(errno));
-            goto error;
-        }
-
-        /* We will soon start loading the RDB from disk, the replication history is changed,
-         * we must discard the cached primary structure and force resync of sub-replicas. */
-        replicationAttachToNewPrimary();
-
-        /* Empty the databases only after the RDB file is ok, that is, before the RDB file
-         * is actually loaded, in case we encounter an error and drop the replication stream
-         * and leave an empty database. */
-        serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync: Flushing old data");
-        emptyData(-1, empty_db_flags, replicationEmptyDbCallback);
-
-        serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync: Loading DB in memory");
-        if (rdbLoad(server.rdb_filename, &rsi, RDBFLAGS_REPLICATION) != RDB_OK) {
-            serverLog(LL_WARNING, "Failed trying to load the PRIMARY synchronization "
-                                  "DB from disk, check server logs.");
-            if (server.rdb_del_sync_files && allPersistenceDisabled()) {
-                serverLog(LL_NOTICE, "Removing the RDB file obtained from "
-                                     "the primary. This replica has persistence "
-                                     "disabled");
-                bg_unlink(server.rdb_filename);
-            }
-
-            /* If disk-based RDB loading fails, remove the half-loaded dataset. */
-            serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync: Discarding the half-loaded data");
-            emptyData(-1, empty_db_flags, replicationEmptyDbCallback);
-
-            /* Note that there's no point in restarting the AOF on sync failure,
-               it'll be restarted when sync succeeds or replica promoted. */
-            goto error;
-        }
-
-        /* Cleanup. */
-        if (server.rdb_del_sync_files && allPersistenceDisabled()) {
-            serverLog(LL_NOTICE, "Removing the RDB file obtained from "
-                                 "the primary. This replica has persistence "
-                                 "disabled");
-            bg_unlink(server.rdb_filename);
-        }
-
-        zfree(server.repl_transfer_tmpfile);
-        close(server.repl_transfer_fd);
-        server.repl_transfer_fd = -1;
-        server.repl_transfer_tmpfile = NULL;
-    }
-
+void replicaAfterLoadPrimaryRDB(connection *conn, rdbSaveInfo *rsi) {
     /* Final setup of the connected replica <- primary link */
     if (conn == server.repl_rdb_transfer_s) {
         dualChannelSyncHandleRdbLoadCompletion();
     } else {
-        replicationCreatePrimaryClient(server.repl_transfer_s, rsi.repl_stream_db);
+        replicationCreatePrimaryClient(server.repl_transfer_s, rsi->repl_stream_db);
         server.repl_state = REPL_STATE_CONNECTED;
         server.repl_down_since = 0;
         /* Send the initial ACK immediately to put this replica in online state. */
@@ -2556,11 +2254,420 @@ void readSyncBulkPayload(connection *conn) {
         connClose(conn);
         server.repl_rdb_transfer_s = NULL;
     }
-    return;
+}
 
-error:
-    cancelReplicationHandshake(1);
-    return;
+int replicaLoadPrimaryRDBFromSocket(connection *conn, char *buf, char *eofmark, int *usemark, rdbSaveInfo *rsi) {
+    rio rdb;
+    serverDb **dbarray;
+    functionsLibCtx *functions_lib_ctx;
+    serverDb **diskless_load_tempDb = NULL;
+    functionsLibCtx *temp_functions_lib_ctx = NULL;
+    int empty_db_flags = server.repl_replica_lazy_flush ? EMPTYDB_ASYNC : EMPTYDB_NO_FLAGS;
+    int asyncLoading = 0;
+
+    if (server.repl_diskless_load == REPL_DISKLESS_LOAD_SWAPDB) {
+        /* Initialize empty tempDb dictionaries. */
+        diskless_load_tempDb = disklessLoadInitTempDb();
+        temp_functions_lib_ctx = disklessLoadFunctionsLibCtxCreate();
+
+        moduleFireServerEvent(VALKEYMODULE_EVENT_REPL_ASYNC_LOAD, VALKEYMODULE_SUBEVENT_REPL_ASYNC_LOAD_STARTED, NULL);
+        /* Async loading means we continue serving read commands during full resync, and
+         * "swap" the new db with the old db only when loading is done.
+         * It is enabled only on SWAPDB diskless replication when primary replication ID hasn't changed,
+         * because in that state the old content of the db represents a different point in time of the same
+         * data set we're currently receiving from the primary. */
+        if (memcmp(server.replid, server.primary_replid, CONFIG_RUN_ID_SIZE) == 0) {
+            asyncLoading = 1;
+        }
+        dbarray = diskless_load_tempDb;
+        functions_lib_ctx = temp_functions_lib_ctx;
+    } else {
+        /* We will soon start loading the RDB from socket, the replication history is changed,
+         * we must discard the cached primary structure and force resync of sub-replicas. */
+        replicationAttachToNewPrimary();
+
+        /* Even though we are on-empty-db and the database is empty, we still call emptyData. */
+        serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync: Flushing old data");
+        emptyData(-1, empty_db_flags, replicationEmptyDbCallback);
+
+        dbarray = server.db;
+        functions_lib_ctx = functionsLibCtxGetCurrent();
+    }
+
+    rioInitWithConn(&rdb, conn, server.repl_transfer_size);
+
+    /* Put the socket in blocking mode to simplify RDB transfer.
+     * We'll restore it when the RDB is received. */
+    connBlock(conn);
+    connRecvTimeout(conn, server.repl_timeout * 1000);
+
+    serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync: Loading DB in memory");
+    startLoading(server.repl_transfer_size, RDBFLAGS_REPLICATION, asyncLoading);
+    if (replicationSupportSkipRDBChecksum(conn, 1, *usemark)) rdb.flags |= RIO_FLAG_SKIP_RDB_CHECKSUM;
+    int loadingFailed = 0;
+    rdbLoadingCtx loadingCtx = {.dbarray = dbarray, .functions_lib_ctx = functions_lib_ctx};
+    if (rdbLoadRioWithLoadingCtxScopedRdb(&rdb, RDBFLAGS_REPLICATION, rsi, &loadingCtx) != C_OK) {
+        /* RDB loading failed. */
+        serverLog(LL_WARNING, "Failed trying to load the PRIMARY synchronization DB "
+                              "from socket, check server logs.");
+        loadingFailed = 1;
+    } else if (*usemark) {
+        /* Verify the end mark is correct. */
+        if (!rioRead(&rdb, buf, RDB_EOF_MARK_SIZE) || memcmp(buf, eofmark, RDB_EOF_MARK_SIZE) != 0) {
+            serverLog(LL_WARNING, "Replication stream EOF marker is broken");
+            loadingFailed = 1;
+        }
+    }
+
+    if (loadingFailed) {
+        stopLoading(0);
+        rioFreeConn(&rdb, NULL);
+
+        if (server.repl_diskless_load == REPL_DISKLESS_LOAD_SWAPDB) {
+            /* Discard potentially partially loaded tempDb. */
+            moduleFireServerEvent(VALKEYMODULE_EVENT_REPL_ASYNC_LOAD, VALKEYMODULE_SUBEVENT_REPL_ASYNC_LOAD_ABORTED,
+                                  NULL);
+
+            disklessLoadDiscardTempDb(diskless_load_tempDb);
+            disklessLoadDiscardFunctionsLibCtx(temp_functions_lib_ctx);
+            serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync: Discarding temporary DB in background");
+        } else {
+            /* Remove the half-loaded data in case we started with an empty replica. */
+            serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync: Discarding the half-loaded data");
+            emptyData(-1, empty_db_flags, replicationEmptyDbCallback);
+        }
+
+        /* Note that there's no point in restarting the AOF on SYNC
+         * failure, it'll be restarted when sync succeeds or the replica
+         * gets promoted. */
+        return C_ERR;
+    }
+
+    /* RDB loading succeeded if we reach this point. */
+    if (server.repl_diskless_load == REPL_DISKLESS_LOAD_SWAPDB) {
+        /* We will soon swap main db with tempDb and replicas will start
+         * to apply data from new primary, we must discard the cached
+         * primary structure and force resync of sub-replicas. */
+        replicationAttachToNewPrimary();
+
+        serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync: Swapping active DB with loaded DB");
+        swapMainDbWithTempDb(diskless_load_tempDb);
+
+        /* swap existing functions ctx with the temporary one */
+        functionsLibCtxSwapWithCurrent(temp_functions_lib_ctx, 1);
+
+        moduleFireServerEvent(VALKEYMODULE_EVENT_REPL_ASYNC_LOAD, VALKEYMODULE_SUBEVENT_REPL_ASYNC_LOAD_COMPLETED,
+                              NULL);
+
+        /* Delete the old db as it's useless now. */
+        disklessLoadDiscardTempDb(diskless_load_tempDb);
+        serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync: Discarding old DB in background");
+    }
+
+    /* Inform about db change, as replication was diskless and didn't cause a save. */
+    server.dirty++;
+
+    stopLoading(1);
+
+    /* Cleanup and restore the socket to the original state to continue
+     * with the normal replication. */
+    rioFreeConn(&rdb, NULL);
+    connNonBlock(conn);
+    connRecvTimeout(conn, 0);
+    return C_OK;
+}
+
+int replicaLoadPrimaryRDBFromDisk(rdbSaveInfo *rsi) {
+    int empty_db_flags = server.repl_replica_lazy_flush ? EMPTYDB_ASYNC : EMPTYDB_NO_FLAGS;
+    /* Make sure the new file (also used for persistence) is fully synced
+     * (not covered by earlier calls to rdb_fsync_range). */
+    if (fsync(server.repl_transfer_fd) == -1) {
+        serverLog(LL_WARNING,
+                  "Failed trying to sync the temp DB to disk in "
+                  "PRIMARY <-> REPLICA synchronization: %s",
+                  strerror(errno));
+        return C_ERR;
+    }
+
+    /* Rename rdb like renaming rewrite aof asynchronously. */
+    int old_rdb_fd = open(server.rdb_filename, O_RDONLY | O_NONBLOCK);
+    if (rename(server.repl_transfer_tmpfile, server.rdb_filename) == -1) {
+        serverLog(LL_WARNING,
+                  "Failed trying to rename the temp DB into %s in "
+                  "PRIMARY <-> REPLICA synchronization: %s",
+                  server.rdb_filename, strerror(errno));
+        if (old_rdb_fd != -1) close(old_rdb_fd);
+        return C_ERR;
+    }
+    /* Close old rdb asynchronously. */
+    if (old_rdb_fd != -1) bioCreateCloseJob(old_rdb_fd, 0, 0);
+
+    /* Sync the directory to ensure rename is persisted */
+    if (fsyncFileDir(server.rdb_filename) == -1) {
+        serverLog(LL_WARNING,
+                  "Failed trying to sync DB directory %s in "
+                  "PRIMARY <-> REPLICA synchronization: %s",
+                  server.rdb_filename, strerror(errno));
+        return C_ERR;
+    }
+
+    /* We will soon start loading the RDB from disk, the replication history is changed,
+     * we must discard the cached primary structure and force resync of sub-replicas. */
+    replicationAttachToNewPrimary();
+
+    /* Empty the databases only after the RDB file is ok, that is, before the RDB file
+     * is actually loaded, in case we encounter an error and drop the replication stream
+     * and leave an empty database. */
+    serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync: Flushing old data");
+    emptyData(-1, empty_db_flags, replicationEmptyDbCallback);
+
+    serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync: Loading DB in memory");
+    if (rdbLoad(server.rdb_filename, rsi, RDBFLAGS_REPLICATION) != RDB_OK) {
+        serverLog(LL_WARNING, "Failed trying to load the PRIMARY synchronization "
+                              "DB from disk, check server logs.");
+        if (server.rdb_del_sync_files && allPersistenceDisabled()) {
+            serverLog(LL_NOTICE, "Removing the RDB file obtained from "
+                                 "the primary. This replica has persistence "
+                                 "disabled");
+            bg_unlink(server.rdb_filename);
+        }
+
+        /* If disk-based RDB loading fails, remove the half-loaded dataset. */
+        serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync: Discarding the half-loaded data");
+        emptyData(-1, empty_db_flags, replicationEmptyDbCallback);
+
+        /* Note that there's no point in restarting the AOF on sync failure,
+         * it'll be restarted when sync succeeds or replica promoted. */
+        return C_ERR;
+    }
+
+    /* Cleanup. */
+    if (server.rdb_del_sync_files && allPersistenceDisabled()) {
+        serverLog(LL_NOTICE, "Removing the RDB file obtained from "
+                             "the primary. This replica has persistence "
+                             "disabled");
+        bg_unlink(server.rdb_filename);
+    }
+
+    zfree(server.repl_transfer_tmpfile);
+    close(server.repl_transfer_fd);
+    server.repl_transfer_fd = -1;
+    server.repl_transfer_tmpfile = NULL;
+    return C_OK;
+}
+
+/* Asynchronously read the SYNC payload we receive from a primary, parse it,
+ * and load it directly to memory without going through the disk */
+void replicaReceiveRDBFromPrimaryToMemory(connection *conn) {
+    char buf[PROTO_IOBUF_LEN];
+    int ret;
+    rdbSaveInfo rsi = RDB_SAVE_INFO_INIT;
+
+    /* Static vars used to hold the EOF mark, and the last bytes received
+     * from the server: when they match, we reached the end of the transfer. */
+    static char eofmark[RDB_EOF_MARK_SIZE];
+    static char lastbytes[RDB_EOF_MARK_SIZE];
+    static int usemark = 0;
+
+    /* If repl_transfer_size != -1 then we have already read the metadata
+     * from the primary reply in a previous call to this handler. */
+    if (server.repl_transfer_size != -1) goto read_from_socket;
+
+    ret = tryReadBulkPayloadMetadata(conn, buf, eofmark, lastbytes, &usemark, &server.repl_transfer_size);
+    /* If we got C_RETRY, then tryReadBulkPayloadMetadata will be re-attempted in the next call to this handler,
+     * since server.repl_transfer_size is still -1. If we got C_OK, then server.repl_transfer_size is not -1, and we
+     * will skip directly to the read-from-socket part. */
+    if (ret == C_OK) {
+        serverAssert(server.repl_transfer_size >= 0);
+        return;
+    } else if (ret == C_RETRY) {
+        serverAssert(server.repl_transfer_size == -1);
+        return;
+    } else if (ret == C_ERR) {
+        serverLog(LL_WARNING, "Failed to read sync metadata");
+        cancelReplicationHandshake(1);
+        return;
+    }
+
+read_from_socket:
+    if (server.repl_transfer_size == 0) {
+        serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync: receiving streamed RDB from primary with EOF to parser");
+    } else {
+        serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync: receiving %lld bytes from primary to parser", (long long)server.repl_transfer_size);
+    }
+
+    replicaBeforeLoadPrimaryRDB(conn, 1);
+    if (replicaLoadPrimaryRDBFromSocket(conn, buf, eofmark, &usemark, &rsi) == C_ERR) {
+        serverLog(LL_WARNING, "Failed to load RDB");
+        cancelReplicationHandshake(1);
+        return;
+    }
+    replicaAfterLoadPrimaryRDB(conn, &rsi);
+}
+
+int tryReadBulkPayload(connection *conn, char *buf, int usemark, ssize_t *nread_out) {
+    ssize_t readlen, nread;
+    off_t left;
+
+    if (usemark) {
+        readlen = sizeof(buf[0]) * PROTO_IOBUF_LEN;
+    } else {
+        left = server.bio_repl_transfer_size - server.bio_repl_transfer_read;
+        readlen = (left < (signed)(sizeof(buf[0]) * PROTO_IOBUF_LEN)) ? left : (signed)(sizeof(buf[0]) * PROTO_IOBUF_LEN);
+    }
+
+    nread = connRead(conn, buf, readlen);
+    if (nread <= 0) {
+        if (connGetState(conn) == CONN_STATE_CONNECTED) {
+            /* equivalent to EAGAIN */
+            memset(buf, 0, PROTO_IOBUF_LEN);
+            return C_RETRY;
+        }
+        replicaBioSaveServerLog(LL_WARNING, "I/O error trying to sync with PRIMARY: %s",
+                                (nread == -1) ? connGetLastError(conn) : "connection lost");
+        return C_ERR;
+    }
+
+    server.bio_stat_net_repl_input_bytes += nread;
+    *nread_out = nread;
+    return C_OK;
+}
+
+void replicaReceiveRDBFromPrimaryToDisk(connection *conn, int is_dual_channel) {
+    int usemark;
+    char lastbytes[RDB_EOF_MARK_SIZE];
+    char buf[PROTO_IOBUF_LEN];
+    char eofmark[RDB_EOF_MARK_SIZE];
+    ssize_t nread, nwritten;
+    off_t repl_transfer_last_fsync_off = 0;
+    bool error = 0, eof_reached = 0;
+    int ret = 0;
+
+    /* There is currently only a background thread implementation for replica disk-based sync */
+    debugServerAssert(inBioThread());
+
+    /* Put the socket in blocking mode to simplify RDB transfer.
+     * We'll restore it when the RDB is received. */
+    connBlock(conn);
+    connRecvTimeout(conn, server.repl_syncio_timeout * 1000);
+
+    atomic_store_explicit(&server.replica_bio_disk_save_state, REPL_BIO_DISK_SAVE_STATE_IN_PROGRESS, memory_order_release);
+    /* Loop until we can read the sync metadata or fail */
+    do {
+        if (server.replica_bio_abort_save) {
+            replicaBioSaveServerLog(LL_WARNING, "Main thread asked to abort the save while Bio thread is reading the sync metadata");
+            error = 1;
+            goto done;
+        }
+        ret = tryReadBulkPayloadMetadata(conn, buf, eofmark, lastbytes, &usemark, &server.bio_repl_transfer_size);
+        if (ret == C_ERR) {
+            replicaBioSaveServerLog(LL_WARNING, "Error reading sync metadata");
+            error = 1;
+            goto done;
+        }
+    } while (ret == C_RETRY);
+    debugServerAssert(ret == C_OK);
+
+    if (server.bio_repl_transfer_size == 0) {
+        /* 0 bytes means we don't know the size of the payload beforehand, we will read until we see EOF */
+        replicaBioSaveServerLog(LL_NOTICE, "PRIMARY <-> REPLICA sync: receiving streamed RDB from primary with EOF to disk");
+    } else {
+        replicaBioSaveServerLog(LL_NOTICE, "PRIMARY <-> REPLICA sync: receiving %lld bytes from primary to disk", (long long)server.bio_repl_transfer_size);
+    }
+
+    /* Now read the actual sync data and save it to disk */
+    do {
+        if (server.replica_bio_abort_save) {
+            replicaBioSaveServerLog(LL_WARNING, "Main thread asked to abort the save while Bio thread is reading the sync payload");
+            error = 1;
+            goto done;
+        }
+
+        ret = tryReadBulkPayload(conn, buf, usemark, &nread);
+        if (ret == C_RETRY) {
+            continue;
+        } else if (ret == C_ERR) {
+            replicaBioSaveServerLog(LL_WARNING, "Error reading sync payload");
+            error = 1;
+            goto done;
+        }
+
+        /* When a mark is used, we want to detect EOF asap in order to avoid
+         * writing the EOF mark into the file... */
+        if (usemark) {
+            if (nread >= RDB_EOF_MARK_SIZE) {
+                memcpy(lastbytes, buf + nread - RDB_EOF_MARK_SIZE, RDB_EOF_MARK_SIZE);
+            } else {
+                int rem = RDB_EOF_MARK_SIZE - nread;
+                memmove(lastbytes, lastbytes + nread, rem);
+                memcpy(lastbytes + rem, buf, nread);
+            }
+            eof_reached = (memcmp(lastbytes, eofmark, RDB_EOF_MARK_SIZE) == 0);
+        }
+
+        /* Update the last I/O time for the replication transfer (used in
+         * order to detect timeouts during replication). */
+        server.repl_transfer_lastio = server.unixtime;
+
+        /* Write what we got from the socket to the dump file on disk */
+        if ((nwritten = write(server.repl_transfer_fd, buf, nread)) != nread) {
+            replicaBioSaveServerLog(LL_WARNING,
+                                    "Write error or short write writing to the DB dump file "
+                                    "needed for PRIMARY <-> REPLICA synchronization: %s",
+                                    (nwritten == -1) ? strerror(errno) : "short write");
+            error = 1;
+            goto done;
+        }
+        server.bio_repl_transfer_read += nread;
+
+        /* Delete the last 40 bytes from the file if we reached EOF. */
+        if (usemark && eof_reached) {
+            if (ftruncate(server.repl_transfer_fd, server.bio_repl_transfer_read - RDB_EOF_MARK_SIZE) == -1) {
+                replicaBioSaveServerLog(LL_WARNING,
+                                        "Error truncating the RDB file received from the primary "
+                                        "for SYNC: %s",
+                                        strerror(errno));
+                error = 1;
+                goto done;
+            }
+        }
+
+        /* Sync data on disk from time to time, otherwise at the end of the
+         * transfer we may suffer a big delay as the memory buffers are copied
+         * into the actual disk. */
+        if (server.bio_repl_transfer_read >= repl_transfer_last_fsync_off + REPL_MAX_WRITTEN_BEFORE_FSYNC) {
+            off_t sync_size = server.bio_repl_transfer_read - repl_transfer_last_fsync_off;
+            rdb_fsync_range(server.repl_transfer_fd, repl_transfer_last_fsync_off, sync_size);
+            repl_transfer_last_fsync_off += sync_size;
+        }
+
+        /* Check if the transfer is now complete */
+        if (!usemark) {
+            if (server.bio_repl_transfer_read == server.bio_repl_transfer_size) eof_reached = 1;
+        }
+    } while (!eof_reached);
+
+done:
+    /* Restore the socket to the original state to continue
+     * with normal replication. */
+    connNonBlock(conn);
+    connRecvTimeout(conn, 0);
+
+    /* We will not use the primary's connection any more, it is now safe to restore the main thread's access to it */
+    if (is_dual_channel) {
+        server.repl_rdb_transfer_s = conn;
+    } else {
+        server.repl_transfer_s = conn;
+    }
+
+    /* Handle completion */
+    if (error) {
+        replicaBioSaveServerLog(LL_WARNING, "Error downloading RDB");
+        atomic_store_explicit(&server.replica_bio_disk_save_state, REPL_BIO_DISK_SAVE_STATE_FAIL, memory_order_release);
+    } else {
+        replicaBioSaveServerLog(LL_NOTICE, "Done downloading RDB");
+        atomic_store_explicit(&server.replica_bio_disk_save_state, REPL_BIO_DISK_SAVE_STATE_FINISHED, memory_order_release);
+    }
 }
 
 char *receiveSynchronousResponse(connection *conn) {
@@ -2671,6 +2778,32 @@ void freePendingReplDataBuf(void) {
     listRelease(server.pending_repl_data.blocks);
     server.pending_repl_data.blocks = NULL;
     server.pending_repl_data.len = 0;
+}
+
+void receiveRDBinBioThread(bool is_dual_channel) {
+    serverLog(LL_NOTICE, "Replica main thread creating Bio thread to save RDB to disk");
+    connection *conn;
+    /* Thread safety: revoke the main thread's access to the connection while the Bio thread uses it.
+     * We'll restore it once the Bio thread terminates */
+    if (is_dual_channel) {
+        conn = server.repl_rdb_transfer_s;
+        server.repl_rdb_transfer_s = NULL;
+    } else {
+        conn = server.repl_transfer_s;
+        server.repl_transfer_s = NULL;
+    }
+    connSetReadHandler(conn, NULL);
+    bioCreateSaveRDBToDiskJob(conn, is_dual_channel);
+}
+
+void receiveRDBinBioThreadSingleChannel(connection *conn) {
+    UNUSED(conn);
+    receiveRDBinBioThread(0);
+}
+
+void receiveRDBinBioThreadDualChannel(connection *conn) {
+    UNUSED(conn);
+    receiveRDBinBioThread(1);
 }
 
 /* Replication: Replica side.
@@ -2824,11 +2957,18 @@ static int dualChannelReplHandleEndOffsetResponse(connection *conn, sds *err) {
 
     /* As the next block we will receive using this connection is the rdb, we need to prepare
      * the connection accordingly */
-    serverAssert(connSetReadHandler(server.repl_rdb_transfer_s, readSyncBulkPayload) != C_ERR);
     server.repl_transfer_size = -1;
     server.repl_transfer_read = 0;
     server.repl_transfer_last_fsync_off = 0;
     server.repl_transfer_lastio = server.unixtime;
+    server.bio_repl_transfer_size = -1;
+    server.bio_repl_transfer_read = 0;
+    if (!useDisklessLoad()) {
+        /* Only create the Bio thread once the first piece of data is sent by the primary */
+        serverAssert(connSetReadHandler(server.repl_rdb_transfer_s, receiveRDBinBioThreadDualChannel) != C_ERR);
+    } else {
+        serverAssert(connSetReadHandler(server.repl_rdb_transfer_s, replicaReceiveRDBFromPrimaryToMemory) != C_ERR);
+    }
 
     return C_OK;
 }
@@ -3959,20 +4099,33 @@ void syncWithPrimary(connection *conn) {
         server.repl_rdb_channel_state = REPL_DUAL_CHANNEL_SEND_HANDSHAKE;
         return;
     }
-    /* Setup the non blocking download of the bulk file. */
-    if (connSetReadHandler(conn, readSyncBulkPayload) == C_ERR) {
-        char conninfo[CONN_INFO_LEN];
-        serverLog(LL_WARNING, "Can't create readable event for SYNC: %s (%s)", strerror(errno),
-                  connGetInfo(conn, conninfo, sizeof(conninfo)));
-        syncWithPrimaryHandleError(&conn);
-        return;
-    }
 
+    if (!useDisklessLoad()) {
+        /* Only create the Bio thread once the first piece of data is sent by the primary */
+        if (connSetReadHandler(conn, receiveRDBinBioThreadSingleChannel) == C_ERR) {
+            char conninfo[CONN_INFO_LEN];
+            serverLog(LL_WARNING, "Can't create readable event for Bio SYNC: %s (%s)", strerror(errno),
+                      connGetInfo(conn, conninfo, sizeof(conninfo)));
+            syncWithPrimaryHandleError(&conn);
+            return;
+        }
+    } else {
+        /* Setup the non blocking download of the bulk file. */
+        if (connSetReadHandler(conn, replicaReceiveRDBFromPrimaryToMemory) == C_ERR) {
+            char conninfo[CONN_INFO_LEN];
+            serverLog(LL_WARNING, "Can't create readable event for SYNC: %s (%s)", strerror(errno),
+                      connGetInfo(conn, conninfo, sizeof(conninfo)));
+            syncWithPrimaryHandleError(&conn);
+            return;
+        }
+    }
     server.repl_state = REPL_STATE_TRANSFER;
     server.repl_transfer_size = -1;
     server.repl_transfer_read = 0;
     server.repl_transfer_last_fsync_off = 0;
     server.repl_transfer_lastio = server.unixtime;
+    server.bio_repl_transfer_size = -1;
+    server.bio_repl_transfer_read = 0;
 }
 
 int connectWithPrimary(void) {
@@ -3990,6 +4143,12 @@ int connectWithPrimary(void) {
     server.repl_state = REPL_STATE_CONNECTING;
     serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync started");
     return C_OK;
+}
+
+void resetBioRDBSaveState(void) {
+    server.bio_repl_transfer_size = 0;
+    server.bio_repl_transfer_read = 0;
+    server.replica_bio_disk_save_state = REPL_BIO_DISK_SAVE_STATE_NONE;
 }
 
 /* In disk-based replication, replica will open a temp db file to store the RDB file.
@@ -4040,6 +4199,12 @@ void replicationAbortSyncTransfer(void) {
  *
  * Otherwise zero is returned and no operation is performed at all. */
 int cancelReplicationHandshake(int reconnect) {
+    if (bioPendingJobsOfType(BIO_RDB_SAVE)) {
+        server.replica_bio_abort_save = 1;
+        bioDrainWorker(BIO_RDB_SAVE);
+        server.replica_bio_abort_save = 0;
+    }
+    resetBioRDBSaveState();
     if (server.repl_rdb_channel_state != REPL_DUAL_CHANNEL_STATE_NONE) {
         replicationAbortDualChannelSyncTransfer();
     }
@@ -4805,6 +4970,55 @@ long long replicationGetReplicaOffset(void) {
     return offset;
 }
 
+void handleBioThreadFinishedRDBDownload(void) {
+    int bio_save_state = atomic_load_explicit(&server.replica_bio_disk_save_state, memory_order_acquire);
+
+    /* Either no Bio sync started, or it's still in progress */
+    if (bio_save_state == REPL_BIO_DISK_SAVE_STATE_NONE || bio_save_state == REPL_BIO_DISK_SAVE_STATE_IN_PROGRESS) {
+        return;
+    }
+
+    /* Error during transfer */
+    if (bio_save_state == REPL_BIO_DISK_SAVE_STATE_FAIL) {
+        serverLog(LL_WARNING, "Replica main thread detected RDB download failure in Bio thread");
+        cancelReplicationHandshake(1);
+        return;
+    }
+
+    debugServerAssert(bio_save_state == REPL_BIO_DISK_SAVE_STATE_FINISHED);
+
+    /* Bio termination detected - we can get rid of the state vars */
+    int bio_repl_transfer_size = server.bio_repl_transfer_size;
+    int bio_repl_transfer_read = server.bio_repl_transfer_read;
+    resetBioRDBSaveState();
+
+    serverLog(LL_NOTICE, "Replica main thread detected RDB download completion in Bio thread");
+
+    /* Handle Bio sync success */
+    serverLog(LL_NOTICE, "Loading the RDB and finalizing primary-replica sync...");
+    rdbSaveInfo rsi = RDB_SAVE_INFO_INIT;
+    connection *conn;
+    if (server.repl_rdb_channel_state != REPL_DUAL_CHANNEL_STATE_NONE) {
+        conn = server.repl_rdb_transfer_s;
+    } else {
+        conn = server.repl_transfer_s;
+    }
+
+    /* If the connection was cleared then the bio_save_state should've also been cleared, so we shouldn't have
+     * gotten here in the first place */
+    debugServerAssert(conn);
+
+    replicaBeforeLoadPrimaryRDB(conn, 0);
+    if (replicaLoadPrimaryRDBFromDisk(&rsi) == C_ERR) {
+        serverLog(LL_WARNING, "Failed to load RDB");
+        cancelReplicationHandshake(1);
+        return;
+    }
+    replicaAfterLoadPrimaryRDB(conn, &rsi);
+    server.repl_transfer_size = bio_repl_transfer_size;
+    server.repl_transfer_read = bio_repl_transfer_read;
+}
+
 /* --------------------------- REPLICATION CRON  ---------------------------- */
 
 /* Replication cron function, called 1 time per second. */
@@ -4970,6 +5184,9 @@ void replicationCron(void) {
     }
 
     replicationStartPendingFork();
+
+    /* Handle completion of RDB downloaded that was offloaded to a Bio thread */
+    handleBioThreadFinishedRDBDownload();
 
     /* Remove the RDB file used for replication if the server is not running
      * with any persistence. */

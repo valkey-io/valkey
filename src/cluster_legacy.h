@@ -38,7 +38,13 @@ typedef struct clusterLink {
     size_t rcvbuf_alloc;                   /* Allocated size of rcvbuf */
     clusterNode *node;                     /* Node related to this link. Initialized to NULL when unknown */
     int inbound;                           /* 1 if this link is an inbound link accepted from the related node */
+    int flags;                             /* We share CLUSTER_NODE_* with clusterNode->flags. */
 } clusterLink;
+
+/* Cluster link flags and macros. */
+#define CLUSTER_LINK_EXTENSIONS_SUPPORTED (1 << 0) /* This link supports extensions. */
+
+#define linkSupportsExtension(link) ((link)->flags & CLUSTER_LINK_EXTENSIONS_SUPPORTED)
 
 /* Cluster node flags and macros. */
 #define CLUSTER_NODE_PRIMARY (1 << 0)                      /* The node is a primary */
@@ -76,12 +82,6 @@ typedef struct clusterLink {
 #define nodeSupportsLightMsgHdrForModule(n) ((n)->flags & CLUSTER_NODE_LIGHT_HDR_MODULE_SUPPORTED)
 #define nodeInNormalState(n) (!((n)->flags & (CLUSTER_NODE_HANDSHAKE | CLUSTER_NODE_MEET | CLUSTER_NODE_PFAIL | CLUSTER_NODE_FAIL)))
 #define nodePrimaryIsFail(n) ((n)->flags & CLUSTER_NODE_MY_PRIMARY_FAIL)
-
-/* This structure represent elements of node->fail_reports. */
-typedef struct clusterNodeFailReport {
-    clusterNode *node; /* Node reporting the failure condition. */
-    mstime_t time;     /* Time of the last report from this node. */
-} clusterNodeFailReport;
 
 /* Cluster messages header */
 
@@ -357,6 +357,7 @@ struct _clusterNode {
     mstime_t meet_sent;                     /* Unix time we sent latest meet packet */
     mstime_t fail_time;                     /* Unix time when FAIL flag was set */
     mstime_t orphaned_time;                 /* Starting time of orphaned primary condition */
+    mstime_t outbound_link_attempt_time;    /* Unix time we last tried to establish an outgoing link */
     mstime_t inbound_link_freed_time;       /* Last time we freed the inbound link for this node.
                                                If it was never freed, it is the same as ctime */
     long long repl_offset;                  /* Last known repl offset for this node. */
@@ -370,7 +371,7 @@ struct _clusterNode {
     int cport;                              /* Latest known cluster port of this node. */
     clusterLink *link;                      /* TCP/IP link established toward this node */
     clusterLink *inbound_link;              /* TCP/IP link accepted from this node */
-    list *fail_reports;                     /* List of nodes signaling this as failing */
+    rax *fail_reports;                      /* Radix tree for failure reports with sorted order by timestamp */
     int is_node_healthy;                    /* Boolean indicating the cached node health.
                                                Update with updateAndCountChangedNodeHealth(). */
 };

@@ -687,9 +687,10 @@ tags {"aof cluster external:skip singledb"} {
             append_to_manifest "file appendonly.aof.1.incr.aof seq 1 type i\n"
         }
 
-        start_server_aof [list dir $server_path cluster-enabled yes] {
+        start_server_aof [list dir $server_path cluster-enabled yes cluster-port [find_available_port $::baseport $::portcount]] {
             assert_equal [r ping] {PONG}
         }
+        clean_aof_persistence $aof_dirpath
     }
 
     test {Test command check in aof won't crash} {

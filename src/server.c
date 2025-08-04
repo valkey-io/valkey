@@ -32,6 +32,7 @@
  * SPDX-License-Identifier: BSD-3-Clause
  */
 #include "server.h"
+#include "connection.h"
 #include "monotonic.h"
 #include "cluster.h"
 #include "cluster_slot_stats.h"
@@ -1492,12 +1493,12 @@ long long serverCron(struct aeEventLoop *eventLoop, long long id, void *clientDa
         monotime current_time = getMonotonicUs();
         long long factor = 1000000; // us
         trackInstantaneousMetric(STATS_METRIC_COMMAND, server.stat_numcommands, current_time, factor);
-        trackInstantaneousMetric(STATS_METRIC_NET_INPUT, server.stat_net_input_bytes + server.stat_net_repl_input_bytes,
+        trackInstantaneousMetric(STATS_METRIC_NET_INPUT, server.stat_net_input_bytes + server.stat_net_repl_input_bytes + server.bio_stat_net_repl_input_bytes,
                                  current_time, factor);
         trackInstantaneousMetric(STATS_METRIC_NET_OUTPUT,
                                  server.stat_net_output_bytes + server.stat_net_repl_output_bytes, current_time,
                                  factor);
-        trackInstantaneousMetric(STATS_METRIC_NET_INPUT_REPLICATION, server.stat_net_repl_input_bytes, current_time,
+        trackInstantaneousMetric(STATS_METRIC_NET_INPUT_REPLICATION, server.stat_net_repl_input_bytes + server.bio_stat_net_repl_input_bytes, current_time,
                                  factor);
         trackInstantaneousMetric(STATS_METRIC_NET_OUTPUT_REPLICATION, server.stat_net_repl_output_bytes, current_time,
                                  factor);
@@ -1652,7 +1653,7 @@ long long serverCron(struct aeEventLoop *eventLoop, long long id, void *clientDa
 
     /* Run the Cluster cron. */
     if (server.cluster_enabled) {
-        run_with_period(100) clusterCron();
+        run_with_period(CLUSTER_CRON_PERIOD_MS) clusterCron();
     }
 
     /* Run the Sentinel timer if we are in sentinel mode. */
@@ -2738,6 +2739,7 @@ void resetServerStats(void) {
     server.stat_net_input_bytes = 0;
     server.stat_net_output_bytes = 0;
     server.stat_net_repl_input_bytes = 0;
+    server.bio_stat_net_repl_input_bytes = 0;
     server.stat_net_repl_output_bytes = 0;
     server.stat_unexpected_error_replies = 0;
     server.stat_total_error_replies = 0;
@@ -2850,6 +2852,7 @@ void initServer(void) {
     server.thp_enabled = 0;
     server.cluster_drop_packet_filter = -1;
     server.debug_cluster_disable_random_ping = 0;
+    server.debug_cluster_disable_reconnection = 0;
     server.reply_buffer_peak_reset_time = REPLY_BUFFER_DEFAULT_PEAK_RESET_TIME;
     server.reply_buffer_resizing_enabled = 1;
     server.client_mem_usage_buckets = NULL;
@@ -2943,6 +2946,7 @@ void initServer(void) {
     server.acl_info.invalid_key_accesses = 0;
     server.acl_info.user_auth_failures = 0;
     server.acl_info.invalid_channel_accesses = 0;
+    server.acl_info.acl_access_denied_tls_cert = 0;
 
     /* Create the timer callback, this is our way to process many background
      * operations incrementally, like eviction of unaccessed expired keys, etc. */
@@ -3015,16 +3019,16 @@ void initServer(void) {
 
 void initListeners(void) {
     /* Setup listeners from server config for TCP/TLS/Unix */
-    int conn_index;
+    ConnectionType *ct;
     connListener *listener;
     if (server.port != 0) {
-        conn_index = connectionIndexByType(CONN_TYPE_SOCKET);
-        if (conn_index < 0) serverPanic("Failed finding connection listener of %s", CONN_TYPE_SOCKET);
-        listener = &server.listeners[conn_index];
+        ct = connectionByType(CONN_TYPE_SOCKET);
+        if (!ct) serverPanic("Failed finding connection listener of %s", getConnectionTypeName(CONN_TYPE_SOCKET));
+        listener = &server.listeners[CONN_TYPE_SOCKET];
         listener->bindaddr = server.bindaddr;
         listener->bindaddr_count = server.bindaddr_count;
         listener->port = server.port;
-        listener->ct = connectionByType(CONN_TYPE_SOCKET);
+        listener->ct = ct;
     }
 
     if (server.tls_port || server.tls_replication || server.tls_cluster) {
@@ -3040,32 +3044,32 @@ void initListeners(void) {
     }
 
     if (server.tls_port != 0) {
-        conn_index = connectionIndexByType(CONN_TYPE_TLS);
-        if (conn_index < 0) serverPanic("Failed finding connection listener of %s", CONN_TYPE_TLS);
-        listener = &server.listeners[conn_index];
+        ct = connectionByType(CONN_TYPE_TLS);
+        if (!ct) serverPanic("Failed finding connection listener of %s", getConnectionTypeName(CONN_TYPE_TLS));
+        listener = &server.listeners[CONN_TYPE_TLS];
         listener->bindaddr = server.bindaddr;
         listener->bindaddr_count = server.bindaddr_count;
         listener->port = server.tls_port;
-        listener->ct = connectionByType(CONN_TYPE_TLS);
+        listener->ct = ct;
     }
     if (server.unixsocket != NULL) {
-        conn_index = connectionIndexByType(CONN_TYPE_UNIX);
-        if (conn_index < 0) serverPanic("Failed finding connection listener of %s", CONN_TYPE_UNIX);
-        listener = &server.listeners[conn_index];
+        ct = connectionByType(CONN_TYPE_UNIX);
+        if (!ct) serverPanic("Failed finding connection listener of %s", getConnectionTypeName(CONN_TYPE_UNIX));
+        listener = &server.listeners[CONN_TYPE_UNIX];
         listener->bindaddr = &server.unixsocket;
         listener->bindaddr_count = 1;
-        listener->ct = connectionByType(CONN_TYPE_UNIX);
+        listener->ct = ct;
         listener->priv = &server.unix_ctx_config; /* Unix socket specified */
     }
 
     if (server.rdma_ctx_config.port != 0) {
-        conn_index = connectionIndexByType(CONN_TYPE_RDMA);
-        if (conn_index < 0) serverPanic("Failed finding connection listener of %s", CONN_TYPE_RDMA);
-        listener = &server.listeners[conn_index];
+        ct = connectionByType(CONN_TYPE_RDMA);
+        if (!ct) serverPanic("Failed finding connection listener of %s", getConnectionTypeName(CONN_TYPE_RDMA));
+        listener = &server.listeners[CONN_TYPE_RDMA];
         listener->bindaddr = server.rdma_ctx_config.bindaddr;
         listener->bindaddr_count = server.rdma_ctx_config.bindaddr_count;
         listener->port = server.rdma_ctx_config.port;
-        listener->ct = connectionByType(CONN_TYPE_RDMA);
+        listener->ct = ct;
         listener->priv = &server.rdma_ctx_config;
     }
 
@@ -3077,12 +3081,12 @@ void initListeners(void) {
 
         if (connListen(listener) == C_ERR) {
             serverLog(LL_WARNING, "Failed listening on port %u (%s), aborting.", listener->port,
-                      listener->ct->get_type(NULL));
+                      getConnectionTypeName(listener->ct->get_type()));
             exit(1);
         }
 
         if (createSocketAcceptHandler(listener, connAcceptHandler(listener->ct)) != C_OK)
-            serverPanic("Unrecoverable error creating %s listener accept handler.", listener->ct->get_type(NULL));
+            serverPanic("Unrecoverable error creating %s listener accept handler.", getConnectionTypeName(listener->ct->get_type()));
 
         listen_fds += listener->count;
     }
@@ -3783,7 +3787,7 @@ void call(client *c, int flags) {
     else
         duration = ustime() - call_timer;
 
-    valkey_commands_trace(valkey_commands, command_call, connGetTypeId(c->conn), getClientPeerId(c), getClientSockname(c), real_cmd->declared_name, duration);
+    valkey_commands_trace(valkey_commands, command_call, connGetType(c->conn), getClientPeerId(c), getClientSockname(c), real_cmd->declared_name, duration);
     c->duration += duration;
     dirty = server.dirty - dirty;
     if (dirty < 0) dirty = 0;
@@ -4191,7 +4195,7 @@ int processCommand(client *c) {
     const int obey_client = mustObeyClient(c);
 
     if (c->flag.multi && c->cmd->flags & CMD_NO_MULTI) {
-        rejectCommandFormat(c, "Command not allowed inside a transaction");
+        rejectCommandFormat(c, "Command '%s' not allowed inside a transaction", c->cmd->fullname);
         return C_OK;
     }
 
@@ -4590,10 +4594,11 @@ int abortShutdown(void) {
  * sequence was successful and it's OK to call exit(). If C_ERR is returned,
  * it's not safe to call exit(). */
 int finishShutdown(void) {
-    int save = server.shutdown_flags & SHUTDOWN_SAVE;
-    int nosave = server.shutdown_flags & SHUTDOWN_NOSAVE;
-    int force = server.shutdown_flags & SHUTDOWN_FORCE;
-    int safe = server.shutdown_flags & SHUTDOWN_SAFE;
+    bool save = (server.shutdown_flags & SHUTDOWN_SAVE) != 0;
+    bool nosave = (server.shutdown_flags & SHUTDOWN_NOSAVE) != 0;
+    bool force = (server.shutdown_flags & SHUTDOWN_FORCE) != 0;
+    bool safe = (server.shutdown_flags & SHUTDOWN_SAFE) != 0;
+    bool failover = (server.shutdown_flags & SHUTDOWN_FAILOVER) != 0;
 
     /* Log a warning for each replica that is lagging. */
     listIter replicas_iter;
@@ -4717,7 +4722,7 @@ int finishShutdown(void) {
     }
 
     /* Handle cluster-related matters when shutdown. */
-    if (server.cluster_enabled) clusterHandleServerShutdown();
+    if (server.cluster_enabled) clusterHandleServerShutdown(failover);
 
     /* Best effort flush of replica output buffers, so that we hopefully
      * send them pending writes. */
@@ -5600,9 +5605,11 @@ sds genValkeyInfoStringACLStats(sds info) {
                         "acl_access_denied_auth:%lld\r\n"
                         "acl_access_denied_cmd:%lld\r\n"
                         "acl_access_denied_key:%lld\r\n"
-                        "acl_access_denied_channel:%lld\r\n",
+                        "acl_access_denied_channel:%lld\r\n"
+                        "acl_access_denied_tls_cert:%lld\r\n",
                         server.acl_info.user_auth_failures, server.acl_info.invalid_cmd_accesses,
-                        server.acl_info.invalid_key_accesses, server.acl_info.invalid_channel_accesses);
+                        server.acl_info.invalid_key_accesses, server.acl_info.invalid_channel_accesses,
+                        server.acl_info.acl_access_denied_tls_cert);
     return info;
 }
 
@@ -6046,9 +6053,9 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                 "total_connections_received:%lld\r\n", server.stat_numconnections,
                 "total_commands_processed:%lld\r\n", server.stat_numcommands,
                 "instantaneous_ops_per_sec:%lld\r\n", getInstantaneousMetric(STATS_METRIC_COMMAND),
-                "total_net_input_bytes:%lld\r\n", server.stat_net_input_bytes + server.stat_net_repl_input_bytes,
+                "total_net_input_bytes:%lld\r\n", server.stat_net_input_bytes + server.stat_net_repl_input_bytes + server.bio_stat_net_repl_input_bytes,
                 "total_net_output_bytes:%lld\r\n", server.stat_net_output_bytes + server.stat_net_repl_output_bytes,
-                "total_net_repl_input_bytes:%lld\r\n", server.stat_net_repl_input_bytes,
+                "total_net_repl_input_bytes:%lld\r\n", server.stat_net_repl_input_bytes + server.bio_stat_net_repl_input_bytes,
                 "total_net_repl_output_bytes:%lld\r\n", server.stat_net_repl_output_bytes,
                 "instantaneous_input_kbps:%.2f\r\n", (float)getInstantaneousMetric(STATS_METRIC_NET_INPUT) / 1024,
                 "instantaneous_output_kbps:%.2f\r\n", (float)getInstantaneousMetric(STATS_METRIC_NET_OUTPUT) / 1024,
@@ -6142,16 +6149,25 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                     "replicas_repl_buffer_peak:%zu\r\n", server.pending_repl_data.peak));
 
             if (server.repl_state == REPL_STATE_TRANSFER) {
+                int repl_transfer_size_stat;
+                int repl_transfer_read_stat;
+                if (atomic_load_explicit(&server.replica_bio_disk_save_state, memory_order_acquire) != REPL_BIO_DISK_SAVE_STATE_NONE) {
+                    repl_transfer_size_stat = server.bio_repl_transfer_size;
+                    repl_transfer_read_stat = server.bio_repl_transfer_read;
+                } else {
+                    repl_transfer_size_stat = server.repl_transfer_size;
+                    repl_transfer_read_stat = server.repl_transfer_read;
+                }
                 double perc = 0;
-                if (server.repl_transfer_size) {
-                    perc = ((double)server.repl_transfer_read / server.repl_transfer_size) * 100;
+                if (repl_transfer_size_stat) {
+                    perc = ((double)repl_transfer_read_stat / repl_transfer_size_stat) * 100;
                 }
                 info = sdscatprintf(
                     info,
                     FMTARGS(
-                        "master_sync_total_bytes:%lld\r\n", (long long)server.repl_transfer_size,
-                        "master_sync_read_bytes:%lld\r\n", (long long)server.repl_transfer_read,
-                        "master_sync_left_bytes:%lld\r\n", (long long)(server.repl_transfer_size - server.repl_transfer_read),
+                        "master_sync_total_bytes:%lld\r\n", (long long)repl_transfer_size_stat,
+                        "master_sync_read_bytes:%lld\r\n", (long long)repl_transfer_read_stat,
+                        "master_sync_left_bytes:%lld\r\n", (long long)(repl_transfer_size_stat - repl_transfer_read_stat),
                         "master_sync_perc:%.2f\r\n", perc,
                         "master_sync_last_io_seconds_ago:%d\r\n", (int)(server.unixtime - server.repl_transfer_lastio)));
             }
@@ -6518,13 +6534,10 @@ void serverAsciiArt(void) {
 }
 
 /* Get the server listener by type name */
-connListener *listenerByType(const char *typename) {
-    int conn_index;
+connListener *listenerByType(int type) {
+    if (!connectionByType(type)) return NULL;
 
-    conn_index = connectionIndexByType(typename);
-    if (conn_index < 0) return NULL;
-
-    return &server.listeners[conn_index];
+    return &server.listeners[type];
 }
 
 /* Close original listener, re-create a new listener from the updated bind address & port */
@@ -6545,7 +6558,7 @@ int changeListener(connListener *listener) {
 
     /* Create event handlers */
     if (createSocketAcceptHandler(listener, listener->ct->accept_handler) != C_OK) {
-        serverPanic("Unrecoverable error creating %s accept handler.", listener->ct->get_type(NULL));
+        serverPanic("Unrecoverable error creating %s accept handler.", getConnectionTypeName(listener->ct->get_type()));
     }
 
     if (server.set_proc_title) serverSetProcTitle(NULL);
@@ -6680,7 +6693,11 @@ int serverFork(int purpose) {
         server.stat_fork_rate =
             (double)zmalloc_used_memory() * 1000000 / server.stat_fork_time / (1024 * 1024 * 1024); /* GB per second. */
         latencyAddSampleIfNeeded("fork", server.stat_fork_time);
-        latencyTraceIfNeeded(bgsave, fork, server.stat_fork_time);
+        if (purpose == CHILD_TYPE_RDB) {
+            latencyTraceIfNeeded(rdb, fork, server.stat_fork_time);
+        } else if (purpose == CHILD_TYPE_AOF) {
+            latencyTraceIfNeeded(aof, fork, server.stat_fork_time);
+        }
 
         /* The child_pid and child_type are only for mutually exclusive children.
          * other child types should handle and store their pid's in dedicated variables.
@@ -7281,7 +7298,7 @@ __attribute__((weak)) int main(int argc, char **argv) {
             connListener *listener = &server.listeners[j];
             if (listener->ct == NULL) continue;
 
-            serverLog(LL_NOTICE, "Ready to accept connections %s", listener->ct->get_type(NULL));
+            serverLog(LL_NOTICE, "Ready to accept connections %s", getConnectionTypeName(listener->ct->get_type()));
         }
 
         if (server.supervised_mode == SUPERVISED_SYSTEMD) {

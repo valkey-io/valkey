@@ -868,7 +868,7 @@ int redis_check_rdb_main(int argc, char **argv, FILE *fp) {
 
     rdbstate.stats = initRdbStats(OBJ_TYPE_MAX);
     rdbstate.stats_num = OBJ_TYPE_MAX;
-    rdbstate.databases = 1;
+    rdbstate.databases = 0;
     rdbstate.functions_num = 0;
     rdbstate.lua_scripts = 0;
 

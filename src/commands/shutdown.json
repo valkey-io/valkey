@@ -10,6 +10,10 @@
             [
                 "7.0.0",
                 "Added the `NOW`, `FORCE` and `ABORT` modifiers."
+            ],
+            [
+                "9.0.0",
+                "Added the `SAFE` and `FAILOVER` modifiers."
             ]
         ],
         "command_flags": [
@@ -66,6 +70,13 @@
                                 "name": "safe",
                                 "type": "pure-token",
                                 "token": "SAFE",
+                                "optional": true,
+                                "since": "9.0.0"
+                            },
+                            {
+                                "name": "failover",
+                                "type": "pure-token",
+                                "token": "FAILOVER",
                                 "optional": true,
                                 "since": "9.0.0"
                             }

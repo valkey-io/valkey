@@ -4,6 +4,21 @@ proc get_function_code {args} {
 
 tags {"check-rdb network external:skip logreqres:skip"} {
     start_server {} {
+        test "test valkey-check-rdb stats with empty RDB" {
+            r flushall
+            r save
+            set dump_rdb [file join [lindex [r config get dir] 1] dump.rdb]
+            catch {
+                exec src/valkey-check-rdb $dump_rdb --stats --format info
+            } result
+            assert_match "*db.0.type.string.keys.total:0*" $result
+            assert_match "*db.0.type.list.keys.total:0*" $result
+            assert_match "*db.0.type.set.keys.total:0*" $result
+            assert_match "*db.0.type.zset.keys.total:0*" $result
+            assert_match "*db.0.type.hash.keys.total:0*" $result
+            assert_match "*db.0.type.stream.keys.total:0*" $result
+        }
+
         test "test valkey-check-rdb stats function" {
             set function_num 11
             for {set i 0} {$i < $function_num} {incr i} {

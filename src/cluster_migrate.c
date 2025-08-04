@@ -717,7 +717,7 @@ void clusterHandleFlushDuringSlotMigration(void) {
  *         └──────────────────┬────────────────┘   │
  *    Full response read (+OK)│                    │
  *           ┌────────────────▼──────────────┐     │ Error Conditions:
- *           │SLOT_EXPORT_WAITING_TO_SNAPSHOT┼─────┤  1. User sends CANCELMIGRATION
+ *           │SLOT_EXPORT_WAITING_TO_SNAPSHOT┼─────┤  1. User sends CANCELMIGRATIONS
  *           └────────────────┬──────────────┘     │  2. Slot ownership change
  *      No other child process│                    │  3. Demotion to replica
  *               ┌────────────▼───────────┐        │  4. FLUSHDB
@@ -909,52 +909,28 @@ slotMigrationJob *clusterLookupMigrationJob(sds name) {
 }
 
 /* Cancels one or all ongoing migrations. */
-void clusterCommandCancelMigration(client *c) {
+void clusterCommandCancelMigrations(client *c) {
     listNode *ln;
     listIter li;
 
-    if (!strcasecmp(c->argv[2]->ptr, "all") && c->argc == 3) {
-        if (!clusterIsAnySlotExporting()) {
-            addReplyError(c, "No migrations ongoing");
-            return;
-        }
-
-        listRewind(server.cluster->slot_migration_jobs, &li);
-        while ((ln = listNext(&li)) != NULL) {
-            slotMigrationJob *job = ln->value;
-            if (!isSlotMigrationJobInProgress(job) || job->type == SLOT_MIGRATION_IMPORT) {
-                continue;
-            }
-            finishSlotMigrationJob(job, SLOT_MIGRATION_JOB_CANCELLED, NULL);
-        }
-        sds client_info = catClientInfoShortString(sdsempty(), c, server.hide_user_data_from_log);
-        serverLog(LL_NOTICE, "Canceled all in progress slot migrations (user request from '%s')", client_info);
-        sdsfree(client_info);
-        addReply(c, shared.ok);
-        return;
-    } else if (!strcasecmp(c->argv[2]->ptr, "name") && c->argc > 3) {
-        slotMigrationJob *job = clusterLookupMigrationJob(c->argv[3]->ptr);
-        if (!job || !isSlotMigrationJobInProgress(job)) {
-            addReplyErrorFormat(c, "No outgoing migration with name found.");
-            return;
-        }
-        if (job->type == SLOT_MIGRATION_IMPORT) {
-            addReplyErrorFormat(c, "Migrations must be cancelled on the node that currently owns the slots.");
-            return;
-        }
-
-        sds client_info = catClientInfoShortString(sdsempty(), c, server.hide_user_data_from_log);
-        serverLog(LL_NOTICE,
-                  "Cancelling slot migration %s (user request from '%s').",
-                  job->description, client_info);
-        sdsfree(client_info);
-        finishSlotMigrationJob(job, SLOT_MIGRATION_JOB_CANCELLED, NULL);
-        addReply(c, shared.ok);
-        return;
-    } else {
-        addReplyErrorObject(c, shared.syntaxerr);
+    if (!clusterIsAnySlotExporting()) {
+        addReplyError(c, "No migrations ongoing");
         return;
     }
+
+    listRewind(server.cluster->slot_migration_jobs, &li);
+    while ((ln = listNext(&li)) != NULL) {
+        slotMigrationJob *job = ln->value;
+        if (!isSlotMigrationJobInProgress(job) || job->type == SLOT_MIGRATION_IMPORT) {
+            continue;
+        }
+        finishSlotMigrationJob(job, SLOT_MIGRATION_JOB_CANCELLED, NULL);
+    }
+    sds client_info = catClientInfoShortString(sdsempty(), c, server.hide_user_data_from_log);
+    serverLog(LL_NOTICE, "Canceled all in progress slot migrations (user request from '%s')", client_info);
+    sdsfree(client_info);
+    addReply(c, shared.ok);
+    return;
 }
 
 /* Handler for connect callbacks during slot migration job connection. */

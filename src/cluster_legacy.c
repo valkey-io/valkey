@@ -7680,9 +7680,9 @@ int clusterCommandSpecial(client *c) {
     } else if (!strcasecmp(c->argv[1]->ptr, "migrations") && c->argc == 2) {
         /* CLUSTER MIGRATIONS */
         clusterCommandMigrations(c);
-    } else if (!strcasecmp(c->argv[1]->ptr, "cancelmigration") && c->argc > 2) {
-        /* CLUSTER CANCELMIGRATION (LINK <link-name>|ALL) */
-        clusterCommandCancelMigration(c);
+    } else if (!strcasecmp(c->argv[1]->ptr, "cancelmigrations") && c->argc == 2) {
+        /* CLUSTER CANCELMIGRATIONS */
+        clusterCommandCancelMigrations(c);
     } else if (!strcasecmp(c->argv[1]->ptr, "syncslots") && c->argc > 2) {
         /* CLUSTER SYNCSLOTS <subcommand>*/
         clusterCommandSyncSlots(c);
@@ -7730,7 +7730,7 @@ const char **clusterCommandExtendedHelp(void) {
         "    Output format is an array where each array element is a map containing attributes of a link",
         "MIGRATE SLOTSRANGE <start slot> <end slot> [<start slot> <end slot> ...] NODE <node id>",
         "    Migrate the specified slot ranges from this node to the specified node.",
-        "CANCELMIGRATION (ALL | LINK <link name>)",
+        "CANCELMIGRATIONS (ALL | LINK <link name>)",
         "    Cancel the selected migration links.",
         "MIGRATIONS",
         "    Get information about ongoing and recently finished slot imports and exports.",

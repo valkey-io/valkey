@@ -2196,14 +2196,14 @@ werr:
     return 0;
 }
 
-int rewriteSelectDbRio(rio *aof, int db_num) {
+bool rewriteSelectDbRio(rio *aof, int db_num) {
     char selectcmd[] = "*2\r\n$6\r\nSELECT\r\n";
-    if (rioWrite(aof, selectcmd, sizeof(selectcmd) - 1) == 0) return 0;
-    if (rioWriteBulkLongLong(aof, db_num) == 0) return 0;
-    return 1;
+    if (rioWrite(aof, selectcmd, sizeof(selectcmd) - 1) == 0) return false;
+    if (rioWriteBulkLongLong(aof, db_num) == 0) return false;
+    return true;
 }
 
-int rewriteObjectRio(rio *aof, robj *o, int db_num) {
+bool rewriteObjectRio(rio *aof, robj *o, int db_num) {
     size_t aof_bytes_before_key = aof->processed_bytes;
     sds keystr;
     robj key;
@@ -2218,22 +2218,22 @@ int rewriteObjectRio(rio *aof, robj *o, int db_num) {
     if (o->type == OBJ_STRING) {
         /* Emit a SET command */
         char cmd[] = "*3\r\n$3\r\nSET\r\n";
-        if (rioWrite(aof, cmd, sizeof(cmd) - 1) == 0) return 0;
+        if (rioWrite(aof, cmd, sizeof(cmd) - 1) == 0) return false;
         /* Key and value */
-        if (rioWriteBulkObject(aof, &key) == 0) return 0;
-        if (rioWriteBulkObject(aof, o) == 0) return 0;
+        if (rioWriteBulkObject(aof, &key) == 0) return false;
+        if (rioWriteBulkObject(aof, o) == 0) return false;
     } else if (o->type == OBJ_LIST) {
-        if (rewriteListObject(aof, &key, o) == 0) return 0;
+        if (rewriteListObject(aof, &key, o) == 0) return false;
     } else if (o->type == OBJ_SET) {
-        if (rewriteSetObject(aof, &key, o) == 0) return 0;
+        if (rewriteSetObject(aof, &key, o) == 0) return false;
     } else if (o->type == OBJ_ZSET) {
-        if (rewriteSortedSetObject(aof, &key, o) == 0) return 0;
+        if (rewriteSortedSetObject(aof, &key, o) == 0) return false;
     } else if (o->type == OBJ_HASH) {
-        if (rewriteHashObject(aof, &key, o) == 0) return 0;
+        if (rewriteHashObject(aof, &key, o) == 0) return false;
     } else if (o->type == OBJ_STREAM) {
-        if (rewriteStreamObject(aof, &key, o) == 0) return 0;
+        if (rewriteStreamObject(aof, &key, o) == 0) return false;
     } else if (o->type == OBJ_MODULE) {
-        if (rewriteModuleObject(aof, &key, o, db_num) == 0) return 0;
+        if (rewriteModuleObject(aof, &key, o, db_num) == 0) return false;
     } else {
         serverPanic("Unknown object type");
     }
@@ -2247,15 +2247,15 @@ int rewriteObjectRio(rio *aof, robj *o, int db_num) {
     /* Save the expire time */
     if (expiretime != -1) {
         char cmd[] = "*3\r\n$9\r\nPEXPIREAT\r\n";
-        if (rioWrite(aof, cmd, sizeof(cmd) - 1) == 0) return 0;
-        if (rioWriteBulkObject(aof, &key) == 0) return 0;
-        if (rioWriteBulkLongLong(aof, expiretime) == 0) return 0;
+        if (rioWrite(aof, cmd, sizeof(cmd) - 1) == 0) return false;
+        if (rioWriteBulkObject(aof, &key) == 0) return false;
+        if (rioWriteBulkLongLong(aof, expiretime) == 0) return false;
     }
 
     /* Delay before next key if required (for testing) */
     if (server.rdb_key_save_delay) debugDelay(server.rdb_key_save_delay);
 
-    return 1;
+    return true;
 }
 
 int rewriteSlotToAppendOnlyFileRio(rio *aof, int db_num, int hashslot, size_t *key_count) {

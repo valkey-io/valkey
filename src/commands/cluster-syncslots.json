@@ -6,108 +6,14 @@
         "since": "9.0.0",
         "container": "CLUSTER",
         "function": "clusterCommand",
+        "doc_flags": [
+            "SYSCMD"
+        ],
         "arity": -3,
         "command_flags": [
             "NO_ASYNC_LOADING",
             "ADMIN",
             "STALE"
-        ],
-        "arguments": [
-            {
-                "name": "operation",
-                "type": "oneof",
-                "optional": false,
-                "arguments": [
-                    {
-                        "name": "snapshot-block",
-                        "type": "block",
-                        "token": "SNAPSHOT",
-                        "arguments": [
-                            {
-                               "name": "node",
-                               "type": "string",
-                               "token": "NODE"
-                            },
-                            {
-                              "name": "linkname",
-                              "type": "string",
-                              "token": "LINKNAME"
-                            },
-                            {
-                              "name": "slotsrange",
-                              "type": "pure-token",
-                              "token": "SLOTSRANGE"
-                            },
-                            {
-                                "name": "slot-range",
-                                "type": "block",
-                                "multiple": true,
-                                "arguments":[
-                                    {
-                                        "name": "start-slot",
-                                        "type": "integer"
-                                    },
-                                    {
-                                        "name": "end-slot",
-                                        "type": "integer"
-                                    }
-                                ]
-                            }
-                          
-                        ]
-                    },
-                    {
-                        "name": "snapshot-eof",
-                        "type": "pure-token",
-                        "token": "SNAPSHOT-EOF"
-                    },
-                    {
-                        "name": "request-pause",
-                        "type": "pure-token",
-                        "token": "REQUEST-PAUSE"
-                    },
-                    {
-                        "name": "stream",
-                        "type": "pure-token",
-                        "token": "STREAM"
-                    },
-                    {
-                        "name": "paused",
-                        "type": "pure-token",
-                        "token": "PAUSED"
-                    },
-                    {
-                        "name": "request-failover",
-                        "type": "pure-token",
-                        "token": "REQUEST-FAILOVER"
-                    },
-                    {
-                        "name": "failover-granted",
-                        "type": "pure-token",
-                        "token": "FAILOVER-GRANTED"
-                    },
-                    {
-                        "name": "failover-denied",
-                        "type": "pure-token",
-                        "token": "failover-denied"
-                    },
-                    {
-                        "name": "ack",
-                        "type": "pure-token",
-                        "token": "ACK"
-                    },
-                    {
-                        "name": "cancel",
-                        "type": "pure-token",
-                        "token": "CANCEL"
-                    },
-                    {
-                        "name": "fail",
-                        "type": "pure-token",
-                        "token": "FAIL"
-                    }
-                ]
-            }
         ]
     }
 }

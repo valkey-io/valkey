@@ -4000,7 +4000,6 @@ void clusterCleanupModuleTraffic(uint64_t module_id) {
     moduleClusterTrafficEntry *entry;
     if (server.cluster_bus_module_id_traffic && hashtableFind(server.cluster_bus_module_id_traffic, &module_id, (void **)&entry)) {
         hashtableDelete(server.cluster_bus_module_id_traffic, &module_id);
-        zfree(entry);
     }
 }
 

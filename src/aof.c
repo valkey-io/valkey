@@ -1438,7 +1438,7 @@ int loadSingleAppendOnlyFile(char *filename) {
      * or old style RDB-preamble AOF). In that case we need to load the RDB file
      * and later continue loading the AOF tail if it is an old style RDB-preamble AOF. */
     char sig[6]; /* "REDIS" or "VALKEY" */
-    if (fread(sig, 1, 6, fp) != 6 || (memcmp(sig, "REDIS", 5) != 0 && memcmp(sig, "VALKEY", 6) != 0)) {
+    if (fread(sig, 1, 6, fp) != 6 || (memcmp(sig, "REDIS0", 6) != 0 && memcmp(sig, "VALKEY", 6) != 0)) {
         /* Not in RDB format, seek back at 0 offset. */
         if (fseek(fp, 0, SEEK_SET) == -1) goto readerr;
     } else {

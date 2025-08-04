@@ -599,7 +599,6 @@ int redis_check_rdb(char *rdbfilename, FILE *fp) {
     long long expiretime;
     static rio rdb; /* Pointed by global struct riostate. */
     struct stat sb;
-    int rdb_version_offset;
 
     now = mstime();
     int closefile = (fp == NULL);
@@ -613,16 +612,12 @@ int redis_check_rdb(char *rdbfilename, FILE *fp) {
     rdb.update_cksum = rdbLoadProgressCallback;
     if (rioRead(&rdb, buf, 9) == 0) goto eoferr;
     buf[9] = '\0';
-    if (memcmp(buf, "REDIS", 5) == 0) {
-        rdb_version_offset = 5;
-    } else if (memcmp(buf, "VALKEY", 6) == 0) {
-        rdb_version_offset = 6;
-    } else {
+    if (memcmp(buf, "REDIS0", 6) != 0 && memcmp(buf, "VALKEY", 6) != 0) {
         rdbCheckError("Wrong signature trying to load DB from file");
         goto err;
     }
+    rdbver = atoi(buf + 6);
 
-    rdbver = atoi(buf + rdb_version_offset);
     if (rdbver < 1 || rdbver > RDB_VERSION) {
         rdbCheckError("Can't handle RDB format version %d", rdbver);
         goto err;

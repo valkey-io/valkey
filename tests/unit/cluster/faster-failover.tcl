@@ -142,23 +142,8 @@ proc test_best_ranked_replica {} {
 }
 
 # This change and test is quite important, so we want to run it a few more times.
-
-start_cluster 5 7 {tags {external:skip cluster} overrides {cluster-ping-interval 1000 cluster-node-timeout 5000}} {
-    test_best_ranked_replica
-} my_slot_allocation cluster_allocate_replicas ;# start_cluster
-
-start_cluster 5 7 {tags {external:skip cluster} overrides {cluster-ping-interval 1000 cluster-node-timeout 5000}} {
-    test_best_ranked_replica
-} my_slot_allocation cluster_allocate_replicas ;# start_cluster
-
-start_cluster 5 7 {tags {external:skip cluster} overrides {cluster-ping-interval 1000 cluster-node-timeout 5000}} {
-    test_best_ranked_replica
-} my_slot_allocation cluster_allocate_replicas ;# start_cluster
-
-start_cluster 5 7 {tags {external:skip cluster} overrides {cluster-ping-interval 1000 cluster-node-timeout 5000}} {
-    test_best_ranked_replica
-} my_slot_allocation cluster_allocate_replicas ;# start_cluster
-
-start_cluster 5 7 {tags {external:skip cluster} overrides {cluster-ping-interval 1000 cluster-node-timeout 5000}} {
-    test_best_ranked_replica
-} my_slot_allocation cluster_allocate_replicas ;# start_cluster
+for {set i 0} {$i < 5} {incr i} {
+    start_cluster 5 7 {tags {external:skip cluster} overrides {cluster-ping-interval 1000 cluster-node-timeout 5000}} {
+        test_best_ranked_replica
+    } my_slot_allocation cluster_allocate_replicas ;# start_cluster
+}

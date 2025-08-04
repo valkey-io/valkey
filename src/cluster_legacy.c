@@ -4025,15 +4025,38 @@ void clusterWriteHandler(connection *conn) {
             return;
         }
         /* Get message type to differentiate traffic */
-        uint16_t type = ntohs(msg->type) & ~CLUSTERMSG_MODIFIER_MASK;
+        uint16_t raw_type = ntohs(msg->type);
+        uint16_t type = raw_type & ~CLUSTERMSG_MODIFIER_MASK;
+        int is_light = IS_LIGHT_MESSAGE(raw_type);
+        
         /* Update counters based on message type */
         if (type == CLUSTERMSG_TYPE_PUBLISH || type == CLUSTERMSG_TYPE_PUBLISHSHARD) {
             /* This is pub/sub traffic */
             server.cluster_bus_pubsub_bytes_sent += nwritten;
         } else if (type == CLUSTERMSG_TYPE_MODULE) {
             /* This is for any module-related traffic */
+            /* Only track module traffic when we have the complete message header with module_id */
+            /* This means this condition is only true when this is the first write of a given message */
             if (msg_offset == 0) {
-                updateModuleTraffic(server.cluster_bus_module_id_traffic, ntohu64(msg->data.module.msg.module_id), msg_len, true);
+                size_t required_len;
+                uint64_t module_id;
+                
+                if (is_light) {
+                    /* Light message structure */
+                    clusterMsgLight *light_msg = (clusterMsgLight *)msg;
+                    required_len = offsetof(clusterMsgLight, data.module.msg.module_id) + sizeof(uint64_t);
+                    if (msg_len >= required_len) {
+                        module_id = ntohu64(light_msg->data.module.msg.module_id);
+                        updateModuleTraffic(server.cluster_bus_module_id_traffic, module_id, msg_len, true);
+                    }
+                } else {
+                    /* Regular message structure */
+                    required_len = offsetof(clusterMsg, data.module.msg.module_id) + sizeof(uint64_t);
+                    if (msg_len >= required_len) {
+                        module_id = ntohu64(msg->data.module.msg.module_id);
+                        updateModuleTraffic(server.cluster_bus_module_id_traffic, module_id, msg_len, true);
+                    }
+                }
             }
         } else {
             /* This is admin traffic (PING, PONG, MEET, FAIL, etc.) */

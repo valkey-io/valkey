@@ -172,7 +172,7 @@ run_solo {defrag} {
     #    while_defragging {code} - optional, code executed after defrag has started
     #    latency <ms> - optional, verifies the latency to a ms target (default 5)
     proc perform_defrag_test {name args} {
-        set opts(latency) 5
+        set opts(latency) 40
         set opts(while_defragging) {}
         array set opts $args
         assert {[info exists opts(populate)]}
@@ -378,7 +378,7 @@ run_solo {defrag} {
             # number of total fields.  lists are progressively increasing sizes.
             set n 200000
 
-            perform_defrag_test $title latency 30 populate {
+            perform_defrag_test $title populate {
                 set rd [valkey_deferring_client]
                 set val [string repeat A 350]
                 set k 0

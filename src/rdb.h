@@ -41,7 +41,7 @@
  *
  * RDB 11 is the last open-source Redis RDB version, used by Valkey 7.x and 8.x.
  *
- * RDB 12-79 are reserved for Redis non-compatible RDB formats  
+ * RDB 12-79 are reserved for Redis non-compatible RDB formats
  *
  * We start using high rdb version numbers since Valkey 9.0. This is in order to avoid
  * collisions with non-OSS Redis RDB versions.

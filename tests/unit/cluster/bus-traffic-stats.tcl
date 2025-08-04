@@ -45,7 +45,7 @@ test "Admin traffic increases with cluster operations" {
     $primary2 cluster nodes
     
     # Wait a bit for cluster bus activity
-    after 100
+    after 500
     
     set admin_sent_after [CI 0 cluster_bus_admin_bytes_sent]
     set admin_recv_after [CI 0 cluster_bus_admin_bytes_received]

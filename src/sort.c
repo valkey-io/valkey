@@ -302,13 +302,27 @@ void sortCommandGeneric(client *c, int readonly) {
         return;
     }
 
+    /* If we have nothing to sort (the specified key doesn't exist), we return
+     * an empty array, or, if STORE is used, delete the target key and return 0. */
+    if (!sortval) {
+        listRelease(operations);
+        if (storekey == NULL) {
+            addReplyArrayLen(c, 0);
+        } else {
+            if (dbDelete(c->db, storekey)) {
+                signalModifiedKey(c, c->db, storekey);
+                notifyKeyspaceEvent(NOTIFY_GENERIC, "del", storekey, c->db->id);
+                server.dirty++;
+            }
+            addReplyLongLong(c, 0);
+        }
+        return;
+    }
+
     /* Now we need to protect sortval incrementing its count, in the future
      * SORT may have options able to overwrite/delete keys during the sorting
      * and the sorted key itself may get destroyed */
-    if (sortval)
-        incrRefCount(sortval);
-    else
-        sortval = createQuicklistObject(server.list_max_listpack_size, server.list_compress_depth);
+    incrRefCount(sortval);
 
     /* When sorting a set with no sort specified, we must sort the output
      * so the result is consistent across scripting and replication.

@@ -164,7 +164,7 @@ static int getAndClearHashtableIndexFromCursor(kvstore *kvs, unsigned long long 
 
 int kvstoreIsImporting(kvstore *kvs, int didx) {
     assert(didx < kvs->num_hashtables);
-    return dictFind(kvs->importing, (void *)(long)didx) != NULL;
+    return dictFind(kvs->importing, (void *)(intptr_t)didx) != NULL;
 }
 
 /* Updates binary index tree (also known as Fenwick tree), increasing key count for a given hashtable.
@@ -662,7 +662,7 @@ static int kvstoreIteratorNextImportingHashtableIndex(kvstoreIterator *kvs_it) {
         kvs_it->importing_iter = dictGetSafeIterator(kvs_it->kvs->importing);
     }
     while ((de = dictNext(kvs_it->importing_iter)) != NULL) {
-        long didx = (long)dictGetKey(de);
+        intptr_t didx = (intptr_t)dictGetKey(de);
         if (kvstoreHashtableSize(kvs_it->kvs, didx)) {
             return didx;
         }
@@ -958,11 +958,11 @@ void kvstoreSetIsImporting(kvstore *kvs, int didx, int is_importing) {
     if (is_importing) {
         /* Importing should only be marked on empty hashtables */
         assert(!ht || hashtableSize(ht) == 0);
-        dictAdd(kvs->importing, (void *)(long)didx, NULL);
+        dictAdd(kvs->importing, (void *)(intptr_t)didx, NULL);
         return;
     }
 
-    dictDelete(kvs->importing, (void *)(long)didx);
+    dictDelete(kvs->importing, (void *)(intptr_t)didx);
     /* Once we mark a hashtable as not importing, we need to begin tracking in
      * the kvstore metadata */
     if (ht && hashtableSize(ht) != 0) {

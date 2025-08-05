@@ -74,7 +74,7 @@
 #define SHOW_THROUGHPUT_INTERVAL 250                        /* 250ms */
 
 #define CLIENT_GET_EVENTLOOP(c) (c->thread_id >= 0 ? config.threads[c->thread_id]->el : config.el)
-
+// TODO: Use existing vectors\fields in the index as base for vector\tag\numeric generation
 #define PLACEHOLDER_COUNT 14
 #define VECTOR_PLACEHOLDER_LEN 16 // length of "__rand_vec_f32__" string
 static const size_t PLACEHOLDER_LEN = 12; // length of BENCHMARK_PLACEHOLDERS strings
@@ -88,6 +88,99 @@ struct benchmarkThread;
 struct clusterNode;
 struct serverConfig;
 
+/* 
+FT,INFO index_name
+Response:
+[ARR][array with 26 elements]
+[STA]  Status: index_name
+[STA]  Status: grocery_products
+[STA]  Status: index_options
+[ARR]  [array with 0 elements]
+[STA]  Status: index_definition
+[ARR]  [array with 6 elements]
+[STA]    Status: key_type
+[STA]    Status: HASH
+[STA]    Status: prefixes
+[ARR]    [array with 1 elements]
+[STA]      Status: vec:
+[STA]    Status: default_score
+[STR]    1
+[STA]  Status: attributes
+[ARR]  [array with 2 elements]
+[ARR]    [array with 8 elements]
+[STA]      Status: identifier
+[STA]      Status: vector_field
+[STA]      Status: attribute
+[STA]      Status: vector_field
+[STA]      Status: type
+[STA]      Status: VECTOR
+[STA]      Status: index
+[ARR]      [array with 12 elements]
+[STA]        Status: capacity
+[INT]        102400
+[STA]        Status: dimensions
+[INT]        768
+[STA]        Status: distance_metric
+[STA]        Status: COSINE
+[STA]        Status: size
+[STR]        2
+[STA]        Status: data_type
+[STA]        Status: FLOAT32
+[STA]        Status: algorithm
+[ARR]        [array with 8 elements]
+[STA]          Status: name
+[STA]          Status: HNSW
+[STA]          Status: m
+[INT]          16
+[STA]          Status: ef_construction
+[INT]          200
+[STA]          Status: ef_runtime
+[INT]          200
+[STA]    Status: curr_vectors
+[INT]  100230
+[STA]  Status: curr_deleted_vectors
+[INT]  100228
+[ARR]  [array with 10 elements]
+[STA]    Status: identifier
+[STA]    Status: category
+[STA]    Status: attribute
+[STA]    Status: category
+[STA]    Status: type
+[STA]    Status: TAG
+[STA]    Status: SEPARATOR
+[STA]    Status: ,
+[STA]    Status: size
+[STR]    2
+[STA]  Status: num_docs
+[STR]  2
+[STA]  Status: num_terms
+[STR]  0
+[STA]  Status: num_records
+[STR]  4
+[STA]  Status: hash_indexing_failures
+[STR]  0
+[STA]  Status: backfill_in_progress
+[STR]  0
+[STA]  Status: backfill_complete_percent
+[STR]  1.000000
+[STA]  Status: mutation_queue_size
+[STR]  0
+*/
+/* struct to hold exact ft.info response data */
+typedef struct searchFtInfoResponse {
+    sds index_name;          /* Index name */
+    /* Index options, currently unused */
+    sds key_type;           /* Key type (e.g., HASH) */
+    sds* prefixes;           /* Key prefixes for the index */
+    int prefixes_count; /* Number of prefixes */
+    sds default_score;      /* Default score for documents */
+    sds identifier;         /* Identifier for the index */
+    sds attribute;        /* Attributes of the index */
+    sds type;              /* Type of the index (e.g., VECTOR) */
+
+
+} searchFtInfoResponse;
+
 /* Read from replica options */
 typedef enum readFromReplica {
     FROM_PRIMARY_ONLY = 0, /* default option */
@@ -95,9 +188,25 @@ typedef enum readFromReplica {
     FROM_ALL
 } readFromReplica;
 
+/* Tag distribution structure */
+typedef struct tagDistribution {
+    sds pattern;            /* Tag pattern with optional placeholders */
+    double percentage;      /* Percentage of keys with this tag */
+    double cumulative;      /* Cumulative percentage for selection */
+} tagDistribution;
+
+typedef struct searchRuntimeConfig {
+    int n_prefill; /* Number of vectors to prefill before benchmarking */
+    int n_rnd_dim; /* Number of random dimensions to use for vector generation */
+    /* Tag distribution fields */
+    tagDistribution *tag_dists; /* Array of tag distributions */
+    int n_dists;               /* Number of distributions */
+    sds tag_filter;                      /* Filter pattern for queries */
+} searchRuntimeConfig;
+/* Search index configuration */
 typedef struct searchIndex {
     sds name;               /* Index name */
-    sds create_cmd_args;    /* Command to create the index */
+    sds algorithm;          /* Index algorithm type (e.g., HNSW, FLAT) */
     sds prefix;             /* Index key prefix */
     sds vector_field;       /* Vector field name */
     int vector_dim;         /* Vector dimension */    
@@ -107,8 +216,8 @@ typedef struct searchIndex {
     int m;                  /* HNSW M parameter */
     int ef_search;          /* EF Search for vector search */
     int k;                  /* Number of nearest neighbors to return */
-    int initial_prefill_nvec;
-    int num_random_dimensions; /* Number of random dimensions to use for vector generation */
+    sds metric;            /* Distance metric (e.g., L2, COSINE) */
+    searchRuntimeConfig curr_conf; /* Runtime configuration for search */
 } searchIndex;
 
 /* Vector placeholder callback information */
@@ -180,9 +289,9 @@ static struct config {
     atomic_uint_fast64_t last_time_ns;
     uint64_t time_per_token;
     uint64_t time_per_burst;
-    int use_search_index; /* Use search indexes */
-    searchIndex search_index;
-    int vsearch_prefill_count; /* Number of vectors to prefill before benchmarking */
+    int use_search; /* Use search indexes */
+    searchIndex search;
+    int print_search_results; /* Print FT.SEARCH results */
 } config;
 
 /* Base vector for efficient vector generation */
@@ -269,6 +378,8 @@ static void *execBenchmarkThread(void *ptr);
 static void benchmark(const char *title, char *cmd, int len);
 static clusterNode *createClusterNode(char *ip, int port);
 static serverConfig *getServerConfig(enum valkeyConnectionType ct, const char *ip_or_path, int port);
+static sds selectTagByDistribution(void);
+static void parseTagDistributions(const char *distributions_str);
 static valkeyContext *getValkeyContext(enum valkeyConnectionType ct, const char *ip_or_path, int port);
 static void freeServerConfig(serverConfig *cfg);
 static int fetchClusterSlotsConfiguration(client c);
@@ -279,9 +390,70 @@ static long long showThroughput(struct aeEventLoop *eventLoop, long long id, voi
 static uint64_t dictSdsHash(const void *key);
 static int dictSdsKeyCompare(const void *key1, const void *key2);
 
+/* Print FT.SEARCH results in a user-friendly format */
+static void printSearchResults(valkeyReply *reply) {
+    if (!reply || reply->type != VALKEY_REPLY_ARRAY) {
+        printf("Invalid search result format\n");
+        return;
+    }
+    
+    if (reply->elements < 1) {
+        printf("No search results\n");
+        return;
+    }
+    
+    /* First element is the total number of results */
+    if (reply->element[0]->type == VALKEY_REPLY_INTEGER) {
+        printf("\n=== Search Results (Total: %lld) ===\n", reply->element[0]->integer);
+    }
+    
+    /* Results come in pairs: key, fields */
+    for (size_t i = 1; i < reply->elements; i += 2) {
+        if (i + 1 >= reply->elements) break;
+        
+        valkeyReply *keyReply = reply->element[i];
+        valkeyReply *fieldsReply = reply->element[i + 1];
+        
+        /* Print the key */
+        if ((keyReply->type == VALKEY_REPLY_STRING || keyReply->type == VALKEY_REPLY_STATUS)) {
+            printf("\n  Result %zu: %s\n", (i + 1) / 2, keyReply->str);
+        }
+        
+        /* Print the fields */
+        if (fieldsReply && fieldsReply->type == VALKEY_REPLY_ARRAY) {
+            for (size_t j = 0; j < fieldsReply->elements; j += 2) {
+                if (j + 1 >= fieldsReply->elements) break;
+                
+                valkeyReply *fieldName = fieldsReply->element[j];
+                valkeyReply *fieldValue = fieldsReply->element[j + 1];
+                
+                if ((fieldName->type == VALKEY_REPLY_STRING || fieldName->type == VALKEY_REPLY_STATUS) && (fieldValue->type == VALKEY_REPLY_STRING || fieldValue->type == VALKEY_REPLY_STATUS)) {
+                    /* Check if it's a vector field (binary data) */
+                    if (strstr(fieldName->str, "vector") != NULL || strstr(fieldName->str, "embedding") != NULL) {                        
+                        printf("    %s: [binary vector data, %zu bytes]\n", fieldName->str, fieldValue->len);
+                        // data is float32, print first 24 floats if available
+                        if (fieldValue->len >= 96) { // 24 floats * 4 bytes each
+                            printf("    First 24 floats: ");
+                            for (size_t k = 0; k < 96; k += 4) {
+                                float value;
+                                memcpy(&value, fieldValue->str + k, sizeof(float));
+                                printf("%f ", value);
+                            }
+                            printf("\n");
+                        }
+                    } else {
+                        printf("    %s: %s\n", fieldName->str, fieldValue->str);
+                    }
+                }
+            }
+        }
+    }
+    printf("\n");
+}
+
 /* valkey-search specific parsing of attributes */
 static void parseIndexAttributes(valkeyReply *attrs, int indent, char **algorithm_type) {
-    if (!config.use_search_index) return;
+    if (!config.use_search) return;
     if (!attrs || attrs->type != VALKEY_REPLY_ARRAY) return;
     
     int print_output = (indent > 0 && algorithm_type == NULL);  // Only print if not extracting algorithm
@@ -290,39 +462,67 @@ static void parseIndexAttributes(valkeyReply *attrs, int indent, char **algorith
         valkeyReply *attr = attrs->element[i];
         if (attr->type != VALKEY_REPLY_ARRAY) continue;
         
-        if (print_output) printf("%*sAttribute %zu:\n", indent, "", i + 1);
+        // Check attribute type first
+        char *attr_type = NULL;
+        char *attr_identifier = NULL;
+        for (size_t j = 0; j < attr->elements; j += 2) {
+            if (j + 1 >= attr->elements) break;
+            valkeyReply *keyReply = attr->element[j];
+            valkeyReply *val = attr->element[j + 1];
+            if (keyReply && (keyReply->type == VALKEY_REPLY_STRING || keyReply->type == VALKEY_REPLY_STATUS)) {
+                char *key = keyReply->str;
+                if (strcmp(key, "type") == 0 && (val->type == VALKEY_REPLY_STRING || val->type == VALKEY_REPLY_STATUS)) {
+                    attr_type = val->str;
+                } else if (strcmp(key, "identifier") == 0 && (val->type == VALKEY_REPLY_STRING || val->type == VALKEY_REPLY_STATUS)) {
+                    attr_identifier = val->str;
+                }
+            }
+        }
+        
+        if (print_output) {
+            printf("%*sAttribute %zu", indent, "", i + 1);
+            if (attr_identifier) printf(" (%s)", attr_identifier);
+            if (attr_type) printf(" - Type: %s", attr_type);
+            printf(":\n");
+        }
         
         for (size_t j = 0; j < attr->elements; j += 2) {
             if (j + 1 >= attr->elements) break;
             
-            char *attrKey = attr->element[j]->str;
+            valkeyReply *attrKeyReply = attr->element[j];
             valkeyReply *attrVal = attr->element[j + 1];
+            if (!attrKeyReply || attrKeyReply->type != VALKEY_REPLY_STATUS) continue;
+            char *attrKey = attrKeyReply->str;
             
             if (strcmp(attrKey, "index") == 0 && attrVal->type == VALKEY_REPLY_ARRAY) {
                 if (print_output) printf("%*s  index:\n", indent, "");
                 
                 for (size_t k = 0; k < attrVal->elements; k += 2) {
                     if (k + 1 >= attrVal->elements) break;
-                    char *idxKey = attrVal->element[k]->str;
+                    valkeyReply *idxKeyReply = attrVal->element[k];
                     valkeyReply *idxVal = attrVal->element[k + 1];
+                    if (!idxKeyReply || idxKeyReply->type != VALKEY_REPLY_STATUS) continue;
+                    char *idxKey = idxKeyReply->str;
                     
                     if (strcmp(idxKey, "algorithm") == 0 && idxVal->type == VALKEY_REPLY_ARRAY) {
                         if (print_output) printf("%*s    algorithm:\n", indent, "");
                         
                         for (size_t m = 0; m < idxVal->elements; m += 2) {
                             if (m + 1 >= idxVal->elements) break;
-                            char *algKey = idxVal->element[m]->str;
+                            valkeyReply *algKeyReply = idxVal->element[m];
                             valkeyReply *algVal = idxVal->element[m + 1];
+                            if (!algKeyReply || algKeyReply->type != VALKEY_REPLY_STATUS) continue;
+                            char *algKey = algKeyReply->str;
                             
-                            if (strcmp(algKey, "name") == 0 && algVal->type == VALKEY_REPLY_STRING) {
+                            if (strcmp(algKey, "name") == 0 && (algVal->type == VALKEY_REPLY_STRING || algVal->type == VALKEY_REPLY_STATUS)) {
                                 if (print_output) {
                                     printf("%*s      %s: %s\n", indent, "", algKey, algVal->str);
                                 }
                                 if (algorithm_type && *algorithm_type == NULL) {
-                                    *algorithm_type = algVal->str;
+                                    *algorithm_type = strdup(algVal->str);
                                 }
                             } else if (print_output) {
-                                if (algVal->type == VALKEY_REPLY_STRING) {
+                                if ((algVal->type == VALKEY_REPLY_STRING || algVal->type == VALKEY_REPLY_STATUS)) {
                                     printf("%*s      %s: %s\n", indent, "", algKey, algVal->str);
                                 } else if (algVal->type == VALKEY_REPLY_INTEGER) {
                                     printf("%*s      %s: %lld\n", indent, "", algKey, algVal->integer);
@@ -330,57 +530,64 @@ static void parseIndexAttributes(valkeyReply *attrs, int indent, char **algorith
                             }
                         }
                     } else if (print_output) {
-                        if (idxVal->type == VALKEY_REPLY_STRING) {
+                        if ((idxVal->type == VALKEY_REPLY_STRING || idxVal->type == VALKEY_REPLY_STATUS)) {
                             printf("%*s    %s: %s\n", indent, "", idxKey, idxVal->str);
                         } else if (idxVal->type == VALKEY_REPLY_INTEGER) {
                             printf("%*s    %s: %lld\n", indent, "", idxKey, idxVal->integer);
                         }
                     }
                 }
-            } else if (print_output && attrVal->type == VALKEY_REPLY_STRING) {
+            } else if (print_output && (attrVal->type == VALKEY_REPLY_STRING || attrVal->type == VALKEY_REPLY_STATUS)) {
                 printf("%*s  %s: %s\n", indent, "", attrKey, attrVal->str);
+            } else if (print_output && attrVal->type == VALKEY_REPLY_INTEGER) {
+                printf("%*s  %s: %lld\n", indent, "", attrKey, attrVal->integer);
+            } else if (print_output && attrVal->type == VALKEY_REPLY_ARRAY) {
+                printf("%*s  %s: [array with %zu elements]\n", indent, "", attrKey, attrVal->elements);
             }
         }
     }
 }
 
-static void getSearchIndexInfo(void) {
-    if (!config.use_search_index) return;
+static int getSearchIndexInfo(sds index_name, searchIndex *index) {
+    UNUSED(index); // TODO: for future validation of index configuration if index exists
+    if (!config.use_search) return -1;
     valkeyContext *ctx = getValkeyContext(config.ct, config.conn_info.hostip, config.conn_info.hostport);
     if (ctx == NULL) {
         fprintf(stderr, "Failed to connect to Valkey server for search info.\n");
-        return;
+        return -1;
     }
     
-    sds cmd = sdscatprintf(sdsempty(), "FT.INFO %s", config.search_index.name);
+    sds cmd = sdscatprintf(sdsempty(), "FT.INFO %s", index_name);
     valkeyReply *reply = valkeyCommand(ctx, cmd);
     sdsfree(cmd);
     
     if (reply == NULL || reply->type != VALKEY_REPLY_ARRAY) {
-        fprintf(stderr, "Failed to get search index info\n");
         if (reply) freeReplyObject(reply);
         valkeyFree(ctx);
-        return;
+        return -1;
     }
-    
+
     char *algorithm_type = NULL;
     
-    printf("\nSearch Index: %s\n", config.search_index.name);
+    printf("\nSearch Index: %s\n", config.search.name);
     printf("========================================\n");
     
     // First pass: collect algorithm type and print basic stats
     for (size_t i = 0; i < reply->elements; i += 2) {
         if (i + 1 >= reply->elements) break;
         
-        char *key = reply->element[i]->str;
+        valkeyReply *keyReply = reply->element[i];
         valkeyReply *value = reply->element[i + 1];
         
-        if (!key || !value) continue;
+        if (!keyReply || !value) continue;
+        if (keyReply->type != VALKEY_REPLY_STATUS) continue;
+        
+        char *key = keyReply->str;
         
         // Print all fields that aren't arrays (except attributes which we handle specially)
         if (value->type == VALKEY_REPLY_INTEGER) {
-            printf("%s: %lld\n", key, value->integer);
-        } else if (value->type == VALKEY_REPLY_STRING) {
+            printf("%s: %lld, ", key, value->integer);
+        } else if ((value->type == VALKEY_REPLY_STRING || value->type == VALKEY_REPLY_STATUS)) {
             if (strstr(key, "percent") != NULL) {
                 // Special handling for percentage fields
                 printf("%s: %s (%.1f%%)\n", key, value->str, atof(value->str) * 100);
@@ -391,19 +598,16 @@ static void getSearchIndexInfo(void) {
             // Parse index definition for useful fields
             for (size_t j = 0; j < value->elements; j += 2) {
                 if (j + 1 >= value->elements) break;
-                char *defKey = value->element[j]->str;
+                valkeyReply *defKeyReply = value->element[j];
                 valkeyReply *defVal = value->element[j + 1];
-                if (defKey && strcmp(defKey, "default_score") == 0 && defVal->type == VALKEY_REPLY_STRING) {
+                if (defKeyReply && (defKeyReply->type == VALKEY_REPLY_STRING || defKeyReply->type == VALKEY_REPLY_STATUS) && 
+                    strcmp(defKeyReply->str, "default_score") == 0 && (defVal->type == VALKEY_REPLY_STRING || defVal->type == VALKEY_REPLY_STATUS)) {
                     printf("default_score: %s\n", defVal->str);
                 }
             }
         } else if (strcmp(key, "attributes") == 0 && value->type == VALKEY_REPLY_ARRAY) {
             // Just extract algorithm type during first pass (don't print attributes yet)
-            char *temp_algo = NULL;
-            parseIndexAttributes(value, 2, &temp_algo);
-            if (temp_algo && !algorithm_type) {
-                algorithm_type = strdup(temp_algo);
-            }
+            parseIndexAttributes(value, 2, &algorithm_type);
         } else if (value->type == VALKEY_REPLY_ARRAY && strcmp(key, "attributes") != 0 && strcmp(key, "index_definition") != 0) {
             // Print other arrays we haven't handled
             printf("%s: [array with %zu elements]\n", key, value->elements);
@@ -420,13 +624,14 @@ static void getSearchIndexInfo(void) {
         }
     }
     
-    // Second pass: print vector attributes
-    printf("\nVector Attributes:\n");
+    // Second pass: print all attributes
+    printf("\nIndex Attributes:\n");
     for (size_t i = 0; i < reply->elements; i += 2) {
         if (i + 1 >= reply->elements) break;
-        char *key = reply->element[i]->str;
+        valkeyReply *keyReply = reply->element[i];
         valkeyReply *value = reply->element[i + 1];
-        if (key && strcmp(key, "attributes") == 0 && value->type == VALKEY_REPLY_ARRAY) {
+        if (keyReply && (keyReply->type == VALKEY_REPLY_STRING || keyReply->type == VALKEY_REPLY_STATUS) && 
+            strcmp(keyReply->str, "attributes") == 0 && value->type == VALKEY_REPLY_ARRAY) {
             parseIndexAttributes(value, 2, NULL);  // NULL means print, don't extract
             break;
         }
@@ -435,12 +640,13 @@ static void getSearchIndexInfo(void) {
     if (algorithm_type) free(algorithm_type);
     freeReplyObject(reply);
     valkeyFree(ctx);
+    return 0; // Success
 }
 
 static void getSearchInfo(long long *search_memory, long long *search_reclaimable, 
                           long long *search_total_docs, long long *search_ingest_field_vector, 
                           long long *search_background_indexing_status) {
-    if (!config.use_search_index) return;
+    if (!config.use_search) return;
     valkeyContext *ctx = getValkeyContext(config.ct, config.conn_info.hostip, config.conn_info.hostport);
     if (ctx == NULL) {
         fprintf(stderr, "Failed to connect to Valkey server for search info.\n");
@@ -486,7 +692,7 @@ static void getSearchInfo(long long *search_memory, long long *search_reclaimabl
     free(info);
     freeReplyObject(reply);
     valkeyFree(ctx);
-    getSearchIndexInfo(); /* Fetch index info after getting search info */
+    getSearchIndexInfo(config.search.name, NULL); /* Fetch index info after getting search info */
 }
 
 
@@ -588,7 +794,7 @@ static inline void generate_vector_fast(float *vector, unsigned int key_idx) {
     init_genrand64(key_idx * 2654435761U);
     
     /* Generate vector components */
-    for (int i = 0; i < config.search_index.vector_dim; i++) {
+    for (int i = 0; i < config.search.vector_dim; i++) {
         uint64_t r = genrand64_int64();
         /* Convert to float in range [-1, 1] */
         vector[i] = ((float)(r & 0x7FFFFFFF) / 0x40000000) - 1.0f;
@@ -649,8 +855,8 @@ static sds vectorToBinary(float *vector, int dim) {
 static void benchmarkVectorOp(const char *title, int is_insert) {
     char *cmd;
     int len;
-    int vec_dim = config.search_index.vector_dim;
-    if (!config.use_search_index) return;
+    int vec_dim = config.search.vector_dim;
+    if (!config.use_search) return;
     if (vec_dim <= 0) {
         fprintf(stderr, "Error: Vector dimension must be greater than 0.\n");
         return;
@@ -660,7 +866,7 @@ static void benchmarkVectorOp(const char *title, int is_insert) {
         sample_vector = zmalloc(sizeof(float) * vec_dim);
         generate_vector_fast(sample_vector, 0); // Generate a sample vector
     }
-    int dim_with_placeholder = vec_dim - config.search_index.num_random_dimensions; // Adjust for placeholder length
+    int dim_with_placeholder = vec_dim - config.search.curr_conf.n_rnd_dim; // Adjust for placeholder length
     /* Generate a sample vector for the command template */
     generateVectorEfficient(sample_vector, dim_with_placeholder, 0);
     /* Convert to binary format for HSET (same as search expects) */
@@ -668,18 +874,47 @@ static void benchmarkVectorOp(const char *title, int is_insert) {
 
     if (is_insert) {
         /* Generate HSET command template */
-        sds key = sdscatprintf(sdsempty(), "%s__rand_int__", config.search_index.prefix);
-        /* Convert to binary format for HSET (same as search expects) */
-        len = valkeyFormatCommand(&cmd, "HSET %b %s __rand_vec_f32____rand_vec_1st____rand_vec_2nd____rand_vec_3nd__%b", 
-                                  key, sdslen(key), 
-                                  config.search_index.vector_field, vector_binary, sdslen(vector_binary));
+        sds key = sdscatprintf(sdsempty(), "%s__rand_int__", config.search.prefix);
+        
+        /* Check if we need to include tag field */
+        if (config.search.tag_field && config.search.curr_conf.tag_dists) {
+            /* Include tag field in HSET */
+            sds selected_tag = selectTagByDistribution();
+            if (selected_tag) {
+                len = valkeyFormatCommand(&cmd, "HSET %b %s __rand_vec_f32____rand_vec_1st____rand_vec_2nd____rand_vec_3nd__%b %s %s", 
+                                          key, sdslen(key), 
+                                          config.search.vector_field, vector_binary, sdslen(vector_binary),
+                                          config.search.tag_field, selected_tag);
+                sdsfree(selected_tag);
+            } else {
+                /* No tags selected, just insert vector */
+                len = valkeyFormatCommand(&cmd, "HSET %b %s __rand_vec_f32____rand_vec_1st____rand_vec_2nd____rand_vec_3nd__%b", 
+                                          key, sdslen(key), 
+                                          config.search.vector_field, vector_binary, sdslen(vector_binary));
+            }
+        } else {
+            /* Vector only HSET */
+            len = valkeyFormatCommand(&cmd, "HSET %b %s __rand_vec_f32____rand_vec_1st____rand_vec_2nd____rand_vec_3nd__%b", 
+                                      key, sdslen(key), 
+                                      config.search.vector_field, vector_binary, sdslen(vector_binary));
+        }
         sdsfree(key);
     } else {
         /* Generate FT.SEARCH command template */
-        /* Create query string */
-        sds query = sdscatprintf(sdsempty(), "*=>[KNN %d @%s $query_vector EF_RUNTIME %d]", config.search_index.k, config.search_index.vector_field, config.search_index.ef_search);
+        /* Create query string with optional tag filter */
+        sds query;
+        if (config.search.curr_conf.tag_filter && config.search.tag_field) {
+            /* Include tag filter in query */
+            query = sdscatprintf(sdsempty(), "@%s:{%s}=>[KNN %d @%s $query_vector EF_RUNTIME %d]", 
+                                config.search.tag_field, config.search.curr_conf.tag_filter,
+                                config.search.k, config.search.vector_field, config.search.ef_search);
+        } else {
+            /* KNN query only */
+            query = sdscatprintf(sdsempty(), "*=>[KNN %d @%s $query_vector EF_RUNTIME %d]", 
+                                config.search.k, config.search.vector_field, config.search.ef_search);
+        }
         len = valkeyFormatCommand(&cmd, "FT.SEARCH %b %b PARAMS 2 query_vector __rand_vec_f32____rand_vec_1st____rand_vec_2nd____rand_vec_3nd__%b DIALECT 2", 
-                                  config.search_index.name, sdslen(config.search_index.name), 
+                                  config.search.name, sdslen(config.search.name), 
                                   query, sdslen(query), 
                                   vector_binary, sdslen(vector_binary));      
         sdsfree(query);    
@@ -696,7 +931,7 @@ static void benchmarkVectorOp(const char *title, int is_insert) {
 
 /* Thread worker function for prefill */
 static void *prefillWorkerThread(void *arg) {
-    if (!config.use_search_index) return NULL;
+    if (!config.use_search) return NULL;
     prefillThreadData *data = (prefillThreadData *)arg;
     
     valkeyContext *ctx = getValkeyContext(config.ct, config.conn_info.hostip, config.conn_info.hostport);
@@ -705,9 +940,9 @@ static void *prefillWorkerThread(void *arg) {
         return NULL;
     }
 
-    int vec_dim = config.search_index.vector_dim;
-    sds prefix = config.search_index.prefix;
-    sds vector_field = config.search_index.vector_field;
+    int vec_dim = config.search.vector_dim;
+    sds prefix = config.search.prefix;
+    sds vector_field = config.search.vector_field;
     
     /* Process assigned range */
     for (int i = data->start_index; i <= data->end_index; i++) {
@@ -719,11 +954,30 @@ static void *prefillWorkerThread(void *arg) {
         /* Convert to binary format for HSET (same as search expects) */
         sds vector_binary = vectorToBinary(vector, vec_dim);
         
-        /* Insert vector using HSET with binary data */
-        valkeyReply *reply = valkeyCommand(ctx, "HSET %b %s %b", 
-                                            key, sdslen(key), 
-                                            vector_field, 
-                                            vector_binary, sdslen(vector_binary));
+        /* Insert vector using HSET with binary data and optional tag */
+        valkeyReply *reply;
+        if (config.search.tag_field && config.search.curr_conf.tag_dists) {
+            sds selected_tag = selectTagByDistribution();
+            if (selected_tag) {
+                reply = valkeyCommand(ctx, "HSET %b %s %b %s %s", 
+                                     key, sdslen(key), 
+                                     vector_field, 
+                                     vector_binary, sdslen(vector_binary),
+                                     config.search.tag_field, selected_tag);
+                sdsfree(selected_tag);
+            } else {
+                /* No tags selected, just insert vector */
+                reply = valkeyCommand(ctx, "HSET %b %s %b", 
+                                     key, sdslen(key), 
+                                     vector_field, 
+                                     vector_binary, sdslen(vector_binary));
+            }
+        } else {
+            reply = valkeyCommand(ctx, "HSET %b %s %b", 
+                                 key, sdslen(key), 
+                                 vector_field, 
+                                 vector_binary, sdslen(vector_binary));
+        }
         if (!reply || reply->type == VALKEY_REPLY_ERROR) {
             fprintf(stderr, "Thread %d: Failed to insert vector %d: %s\n", 
                    data->thread_id, i, reply ? reply->str : "Connection error");
@@ -751,9 +1005,9 @@ static void *prefillWorkerThread(void *arg) {
 
 /* Prefill vector index with specified number of vectors */
 static void prefillVectorIndex(int count) {
-    if (!config.use_search_index) return;
+    if (!config.use_search) return;
     if (count <= 0) return;
-    int vec_dim = config.search_index.vector_dim;
+    int vec_dim = config.search.vector_dim;
     /* Ensure base vector is initialized */
     if (!base_vector) {
         initBaseVector(vec_dim);
@@ -844,9 +1098,11 @@ static void prefillVectorIndex(int count) {
     
 }
 
-
+// TODO: If index already exists, we shuld check if it matches the current configuration.
+// If it does not match, we should drop the index and recreate it.
+// If it matches, we can skip index creation.
 static void createDefaultSearchIndexes(void) {    
-    if (!config.use_search_index) return;
+    if (!config.use_search) return;
     valkeyContext *ctx = getValkeyContext(config.ct, config.conn_info.hostip, config.conn_info.hostport);
     if (ctx == NULL) {
         fprintf(stderr, "Failed to connect to Valkey server for creating search indexes.\n");
@@ -860,7 +1116,7 @@ static void createDefaultSearchIndexes(void) {
         printf("Found %zu existing indexes: ", list_reply->elements);
         for (size_t j = 0; j < list_reply->elements; j++) {
             printf("found index '%s' ", list_reply->element[j]->str);
-            if (strcmp(list_reply->element[j]->str, config.search_index.name) == 0) {
+            if (strcmp(list_reply->element[j]->str, config.search.name) == 0) {
                 index_exists = 1;
             }            
         }
@@ -873,17 +1129,26 @@ static void createDefaultSearchIndexes(void) {
         freeReplyObject(list_reply);
     }
 
-    valkeyReply *reply = valkeyCommand(ctx, "FT.CREATE %s PREFIX 1 %s SCHEMA %s VECTOR HNSW 12 TYPE FLOAT32 DIM %d DISTANCE_METRIC COSINE M %d EF_CONSTRUCTION %d EF_RUNTIME %d",
-        config.search_index.name, config.search_index.prefix, config.search_index.vector_field, config.search_index.vector_dim, config.search_index.m,
-        config.search_index.ef_construction, config.search_index.ef_search);
-    if (reply && reply->type == VALKEY_REPLY_STATUS) {
+    valkeyReply *reply = NULL;
+    /* Add TAG field if configured */
+    if (config.search.tag_field) {
+        reply = valkeyCommand(ctx, "FT.CREATE %s PREFIX 1 %s SCHEMA %s TAG %s VECTOR %s 12 TYPE FLOAT32 DIM %d DISTANCE_METRIC %s M %d EF_CONSTRUCTION %d EF_RUNTIME %d",
+        config.search.name, config.search.prefix, config.search.tag_field, config.search.vector_field, config.search.algorithm, config.search.vector_dim, config.search.metric, config.search.m,
+        config.search.ef_construction, config.search.ef_search);
+    } else {
+        reply = valkeyCommand(ctx, "FT.CREATE %s PREFIX 1 %s SCHEMA %s VECTOR %s 12 TYPE FLOAT32 DIM %d DISTANCE_METRIC %s M %d EF_CONSTRUCTION %d EF_RUNTIME %d",
+        config.search.name, config.search.prefix, config.search.vector_field, config.search.algorithm, config.search.vector_dim, config.search.metric, config.search.m,
+        config.search.ef_construction, config.search.ef_search);
+    }
+    
+    if (reply && (reply->type == VALKEY_REPLY_STRING || reply->type == VALKEY_REPLY_STATUS)) {
         printf("Index created successfully\n");
     } else {
         fprintf(stderr, "Failed to create index: %s\n", 
                 reply ? reply->str : "Unknown error");
         // if index already exists, we can ignore the error
         if (reply && reply->type == VALKEY_REPLY_ERROR && index_exists) {
-            printf("Index '%s' already exists, ignoring error.\n", config.search_index.name);
+            printf("Index '%s' already exists, ignoring error.\n", config.search.name);
         } else {
             fprintf(stderr, "Error creating index: %s\n", reply ? reply->str : "Unknown error");
             exit(1);
@@ -1007,7 +1272,7 @@ void initPlaceholders(const char *cmd, size_t cmd_len) {
 }
 
 static void replacePlaceholderFloat32(const size_t *indices, const size_t count, char *cmd, _Atomic uint64_t *key_counter, unsigned placeholder_len) {
-    if (!config.use_search_index) return;
+    if (!config.use_search) return;
     // Replace __rand_vec_f32__ placeholder with a float vector in range of -1.0 to 1.0
     if (count == 0) return;
     
@@ -1338,7 +1603,9 @@ static void readHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
                         exit(1);
                     }
                 }
-
+                if (config.print_search_results) {
+                    printSearchResults(reply);
+                }
                 freeReplyObject(reply);
                 /* This is an OK for prefix commands such as auth and select.*/
                 if (c->prefix_pending > 0) {
@@ -1729,14 +1996,14 @@ static void showLatencyReport(void) {
     long long search_total_docs = 0;
     long long search_ingest_field_vector = 0;
     long long search_background_indexing_status = 0;
-    if (config.use_search_index) {
+    if (config.use_search) {
         getSearchInfo(&search_memory, &search_reclaimable, &search_total_docs, 
                         &search_ingest_field_vector, &search_background_indexing_status);
     }
     if (!config.quiet && !config.csv) {
         printf("%*s\r", config.last_printed_bytes, " "); // ensure there is a clean line
         printf("====== %s ======\n", config.title);
-        if (config.use_search_index) {
+        if (config.use_search) {
             printf("  Search index memory: %lld MB\n", search_memory/ (1024 * 1024));
             printf("  Search index reclaimable: %lld MB\n", search_reclaimable/ (1024 * 1024));
             printf("  Search total documents: %lld\n", search_total_docs);
@@ -2200,19 +2467,124 @@ static void genBenchmarkRandomData(char *data, int count) {
     }
 }
 
-void setDefaultSearchConfig(void) {
-    config.search_index.name = sdsnew("test_vector_index");
-    config.search_index.prefix = sdsnew("vec:");
-    config.search_index.vector_field = sdsnew("vector_field");
-    config.search_index.vector_dim = 128; // Default vector dimension
-    config.search_index.ef_construction = 200; // Default EF Construction
-    config.search_index.ef_search = 200; // Default EF Search
-    config.search_index.m = 16; // Default HNSW M parameter
-    config.search_index.tag_field = NULL; // No tag field by default
-    config.search_index.numeric_field = NULL; // No numeric field by default
-    config.search_index.k = 10; // Default K for KNN queries
-    config.search_index.num_random_dimensions = 16; // Default number of random dimensions
+/* Parse tag distributions from command line */
+static void parseTagDistributions(const char *distributions_str) {
+    sds str = sdsnew(distributions_str);
+    int count = 0;
+    char *token;
+    double cumulative = 0.0;
+    
+    /* First pass: count distributions */
+    sds temp = sdsdup(str);
+    char *saveptr;
+    token = strtok_r(temp, ",", &saveptr);
+    while (token) {
+        count++;
+        token = strtok_r(NULL, ",", &saveptr);
+    }
+    sdsfree(temp);
+    
+    /* Allocate array */
+    config.search.curr_conf.tag_dists = zmalloc(sizeof(tagDistribution) * count);
+    config.search.curr_conf.n_dists = count;
+    
+    /* Second pass: parse distributions */
+    int i = 0;
+    token = strtok_r(str, ",", &saveptr);
+    while (token) {
+        char *colon = strchr(token, ':');
+        if (!colon) {
+            fprintf(stderr, "Invalid tag distribution format: %s\n", token);
+            exit(1);
+        }
+        
+        *colon = '\0';
+        char *tag = token;
+        double percentage = atof(colon + 1);
+        
+        cumulative += percentage;
+        config.search.curr_conf.tag_dists[i].pattern = sdsnew(tag);
+        config.search.curr_conf.tag_dists[i].percentage = percentage;
+        config.search.curr_conf.tag_dists[i].cumulative = cumulative;
+        
+        i++;
+        token = strtok_r(NULL, ",", &saveptr);
+    }
+    
+    sdsfree(str);
+    
+    /* Note: Percentages are independent probabilities, they don't need to sum to 100% */
+    /* Each percentage represents the probability that tag will be included */
+}
 
+/* Select tags based on independent probabilities - each tag has its own probability */
+static sds selectTagByDistribution(void) {
+    if (!config.search.curr_conf.tag_dists || config.search.curr_conf.n_dists == 0) {
+        return NULL;
+    }
+    
+    sds tags = sdsempty();
+    int first = 1;
+    
+    /* Each tag has an independent probability of being included */
+    for (int i = 0; i < config.search.curr_conf.n_dists; i++) {
+        double random_percent = ((double)rand() / RAND_MAX) * 100.0;
+        
+        /* Include this tag if random falls within its percentage */
+        if (random_percent <= config.search.curr_conf.tag_dists[i].percentage) {
+            /* Process pattern with placeholders */
+            sds tag = sdsdup(config.search.curr_conf.tag_dists[i].pattern);
+            
+            /* Replace __rand_int__ placeholder if present */
+            if (strstr(tag, "__rand_int__")) {
+                char rand_str[32];
+                snprintf(rand_str, sizeof(rand_str), "%d", rand() % 1000000);
+                char *pos = strstr(tag, "__rand_int__");
+                if (pos) {
+                    sds prefix = sdsnewlen(tag, pos - tag);
+                    sds suffix = sdsnew(pos + strlen("__rand_int__"));
+                    sdsfree(tag);
+                    tag = sdscatprintf(prefix, "%s%s", rand_str, suffix);
+                    sdsfree(suffix);
+                }
+            }
+            
+            /* Add tag to list with comma separator */
+            if (!first) {
+                tags = sdscat(tags, ",");
+            }
+            tags = sdscat(tags, tag);
+            sdsfree(tag);
+            first = 0;
+        }
+    }
+    
+    /* Return NULL if no tags selected, otherwise return tag list */
+    if (sdslen(tags) == 0) {
+        sdsfree(tags);
+        return NULL;
+    }
+    
+    return tags;
+}
+
+void setDefaultSearchConfig(void) {
+    config.search.name = sdsnew("test_vector_index");
+    config.search.prefix = sdsnew("vec:");
+    config.search.vector_field = sdsnew("vector_field");
+    config.search.vector_dim = 128; // Default vector dimension
+    config.search.ef_construction = 200; // Default EF Construction
+    config.search.ef_search = 200; // Default EF Search
+    config.search.m = 16; // Default HNSW M parameter
+    config.search.tag_field = NULL; // No tag field by default
+    config.search.numeric_field = NULL; // No numeric field by default
+    config.search.k = 10; // Default K for KNN queries
+    config.search.curr_conf.n_rnd_dim = 16; // Default number of random dimensions
+    config.search.curr_conf.tag_dists = NULL;
+    config.search.curr_conf.n_dists = 0;
+    config.search.curr_conf.tag_filter = NULL;
+    config.search.metric = sdsnew("L2");
+    config.search.algorithm = sdsnew("hnsw"); // Default algorithm
 }
 /* Returns number of consumed options. */
 int parseOptions(int argc, char **argv) {
@@ -2358,54 +2730,83 @@ int parseOptions(int argc, char **argv) {
         } else if (!strcmp(argv[i], "--enable-tracking")) {
             config.enable_tracking = 1;
         } else if (!strcmp(argv[i], "--search")) {
-            config.use_search_index = 1;
+            // TODO: Is search is enabled and -t is not, do not run default tests
+            config.use_search = 1;
+        } else if (!strcmp(argv[i], "--search-print-results")) {
+            config.print_search_results = 1;
         } else if (!strcmp(argv[i], "--search-prefill")) {
             if (i + 1 >= argc) {
                 fprintf(stderr, "Missing argument for --search-prefill\n");
                 exit(1);
             }
-            config.search_index.initial_prefill_nvec = atoi(argv[++i]);
-            if (config.search_index.initial_prefill_nvec < 0) {
-                fprintf(stderr, "Invalid prefill count: %d\n", config.search_index.initial_prefill_nvec);
+            // TODO: verify that prefill is a valid integer
+            config.search.curr_conf.n_prefill = atoi(argv[++i]);
+            if (config.search.curr_conf.n_prefill < 0) {
+                fprintf(stderr, "Invalid prefill count: %d\n", config.search.curr_conf.n_prefill);
                 exit(1);
             }
             /* Enable search indexes automatically when prefill is used */
-            config.use_search_index = 1;           
+            config.use_search = 1;           
         } else if (!strcmp(argv[i], "--search-prefix")) {
             if (lastarg) goto invalid;
-            if (config.search_index.prefix) sdsfree(config.search_index.prefix);
-            config.search_index.prefix = sdsnew(argv[++i]);
+            if (config.search.prefix) sdsfree(config.search.prefix);
+            config.search.prefix = sdsnew(argv[++i]);
         } else if (!strcmp(argv[i], "--vector-field")) {
             if (lastarg) goto invalid;
-            if (config.search_index.vector_field) sdsfree(config.search_index.vector_field);
-            config.search_index.vector_field = sdsnew(argv[++i]);
+            if (config.search.vector_field) sdsfree(config.search.vector_field);
+            config.search.vector_field = sdsnew(argv[++i]);
         } else if (!strcmp(argv[i], "--search-name")) {
             if (lastarg) goto invalid;
-            if (config.search_index.name) sdsfree(config.search_index.name);
-            config.search_index.name = sdsnew(argv[++i]);
+            if (config.search.name) sdsfree(config.search.name);
+            config.search.name = sdsnew(argv[++i]);
         } else if (!strcmp(argv[i], "--vector-dim")) {
             if (lastarg) goto invalid;
-            config.search_index.vector_dim = atoi(argv[++i]);
+            config.search.vector_dim = atoi(argv[++i]);
+            if (config.search.vector_dim <= config.search.curr_conf.n_rnd_dim) {
+                fprintf(stderr, "Invalid vector dimension: %d\n", config.search.vector_dim);
+                goto invalid;
+            }
         } else if (!strcmp(argv[i], "--ef-search")) {
             if (lastarg) goto invalid;
-            config.search_index.ef_search = atoi(argv[++i]);
+            config.search.ef_search = atoi(argv[++i]);
         } else if (!strcmp(argv[i], "--ef-construction")) {
             if (lastarg) goto invalid;
-            config.search_index.ef_construction = atoi(argv[++i]);
+            config.search.ef_construction = atoi(argv[++i]);
         } else if (!strcmp(argv[i], "--m")) {
             if (lastarg) goto invalid;
-            config.search_index.m = atoi(argv[++i]);
+            config.search.m = atoi(argv[++i]);
         } else if (!strcmp(argv[i], "--tag-field")) {
             if (lastarg) goto invalid;
-            if (config.search_index.tag_field) sdsfree(config.search_index.tag_field);
-            config.search_index.tag_field = sdsnew(argv[++i]);
+            if (config.search.tag_field) sdsfree(config.search.tag_field);
+            config.search.tag_field = sdsnew(argv[++i]);
+        } else if (!strcmp(argv[i], "--tag-filter")) {
+            if (lastarg) goto invalid;
+            if (config.search.curr_conf.tag_filter) sdsfree(config.search.curr_conf.tag_filter);
+            config.search.curr_conf.tag_filter = sdsnew(argv[++i]);
+        } else if (!strcmp(argv[i], "--search-tags")) {
+            if (lastarg) goto invalid;
+            parseTagDistributions(argv[++i]);
         } else if (!strcmp(argv[i], "--numeric-field")) {
             if (lastarg) goto invalid;
-            if (config.search_index.numeric_field) sdsfree(config.search_index.numeric_field);
-            config.search_index.numeric_field = sdsnew(argv[++i]);
+            if (config.search.numeric_field) sdsfree(config.search.numeric_field);
+            config.search.numeric_field = sdsnew(argv[++i]);
+        } else if (!strcmp(argv[i], "--search-alg")) {
+            if (lastarg) goto invalid;
+            if (strcmp(argv[i + 1], "hnsw") && strcmp(argv[i + 1], "flat")) {
+                goto invalid;
+            }
+            if (config.search.algorithm) sdsfree(config.search.algorithm);
+            config.search.algorithm = sdsnew(argv[++i]);
+        } else if (!strcmp(argv[i], "--metric")) {            
+            if (lastarg) goto invalid;
+            if (strcmp(argv[i + 1], "L2") && strcmp(argv[i + 1], "IP") && strcmp(argv[i + 1], "COSINE")) {
+                goto invalid;
+            }
+            if (config.search.metric) sdsfree(config.search.metric);
+            config.search.metric = sdsnew(argv[++i]);
         } else if (!strcmp(argv[i], "--k")) {
             if (lastarg) goto invalid;
-            config.search_index.k = atoi(argv[++i]);
+            config.search.k = atoi(argv[++i]);
         } else if (!strcmp(argv[i], "--num-functions")) {
             config.num_functions = atoi(argv[++i]);
         } else if (!strcmp(argv[i], "--num-keys-in-fcall")) {
@@ -2596,16 +2997,28 @@ usage:
         "                    the 'fcall' test. (default 1)\n"
         " --search           Enable search indexes for vec-insert, vec-query, and vec-del tests.\n"
         "                    Creates a vector index when starting benchmarks.\n"
+        " --search-print-results Print the search results returned by FT.SEARCH queries.\n"
         " --ef-search <value> Set the EF_RUNTIME parameter for KNN queries. (default 200)\n"
-        " --vector-dim <dim> Set the dimension of the vector index. (default 128)\n"
+        " --vector-dim <dim> Set the dimension of the vector index. Dim must be > 16. (default 128)\n"
         " --ef-construction <value> Set the EF_CONSTRUCTION parameter for KNN queries. (default 200)\n"
+        " --m <value>        Set the HNSW M parameter for KNN queries. (default 16)\n"
+        " --search-alg <name> Set the search algorithm to use for KNN queries. (default 'hnsw')\n"
+        "                    Supported algorithms: 'hnsw', 'flat'.\n"
+        " --metric <name>    Set the metric for KNN queries. (default 'L2')\n"
+        "                    Supported metrics: 'L2', 'IP', 'COSINE'\n"
         " --k <value>       Set the number of nearest neighbors to return in KNN queries. (default 10)\n"
         " --search-name <name> Set the name of the search index to use for vec-query and vec-del tests.\n"
         "                    If not set, the default index name 'test_vector_index' is used.\n"
         " --search-prefix <prefix>\n"
         "                    Set the prefix for vector keys. (default 'vec:')\n"
         " --vector-field <name>\n"
-        "                    Set the name for vector values. (default 'vector_field')\n"        
+        "                    Set the name for vector values. (default 'vector_field')\n"
+        " --tag-field <name> Set the tag field name for the index.\n"
+        " --tag-filter <pattern>\n"
+        "                    Set tag filter pattern for vec-query operations (e.g., 'category_*').\n"
+        " --search-tags <distribution>\n"
+        "                    Comma-separated tag:percentage pairs for vec-insert operations.\n"
+        "                    Example: 'fruits:8.5,vegetables:7.2,dairy:32.1,meat:52.2'\n"
         " --vprefill <count>  Prefill vector index with <count> vectors before benchmarking.\n",
         tls_usage,
         rdma_usage,
@@ -2627,7 +3040,15 @@ usage:
         "   $ valkey-benchmark -r 10000 -n 10000 lpush mylist __rand_int__\n\n"
         " Benchmark a specific transaction:\n"
         "   $ valkey-benchmark -- multi ';' set key:__rand_int__ __data__ ';' \\\n"
-        "                         incr counter ';' exec\n\n");
+        "                         incr counter ';' exec\n\n"
+        " Search index tests:\n"
+        "   $ valkey-benchmark --search  --search-prefill 1000   --search-name grocery_products --vector-dim 768 "
+        "--tag-field \"category\" --search-tags 'fruits:100,vegetables:100,dairy:100,meat:52.2,fruitsppo:99,fruitsppod:99' -t vec-insert -n 100 -r 1000\n"
+        " Query and filter vector data:\n"
+        "   $ valkey-benchmark --search  --search-name grocery_products     --vector-dim 768     --tag-field \"category\"\n"
+         "--search-tags 'fruits:5.7,vegetables:0.3,dairy:10.1,meat:52.2,fruitsppo:99,fruitsppod:99' --tag-filter 'fruits*'\n"
+         "   -t vec-query  --search-print-results   -n 1 -r 10000000\n\n"
+        " For more information, see the Valkey documentation at https://valkey.io.\n");
     exit(exit_status);
 }
 
@@ -2758,8 +3179,9 @@ int main(int argc, char **argv) {
     config.paused_clients = listCreate();
     config.conn_info.hostip = sdsnew("127.0.0.1");
     config.conn_info.hostport = 6379;
-    config.use_search_index = 0;
-    config.search_index.initial_prefill_nvec = 0;
+    config.use_search = 0;
+    config.search.curr_conf.n_prefill = 0;
+    config.print_search_results = 0;
     config.tests = NULL;
     config.conn_info.input_dbnum = 0;
     config.stdinarg = 0;
@@ -2972,13 +3394,13 @@ int main(int argc, char **argv) {
         zfree(argvlen);
         return 0;
     }
-    if (config.use_search_index) {
+    if (config.use_search) {
         printf("Using search indexes for the benchmark.\n");
         createDefaultSearchIndexes();
         
         /* Prefill vector index if requested */
-        if (config.search_index.initial_prefill_nvec > 0) {
-            prefillVectorIndex(config.search_index.initial_prefill_nvec);
+        if (config.search.curr_conf.n_prefill > 0) {
+            prefillVectorIndex(config.search.curr_conf.n_prefill);
         }
 
     }
@@ -3049,9 +3471,9 @@ int main(int argc, char **argv) {
             benchmark("HSET", cmd, len);
             free(cmd);
         }
-        if (config.use_search_index) {
+        if (config.use_search) {
             if (test_is_selected("vec-insert")) {
-                int vec_dim = config.search_index.vector_dim;
+                int vec_dim = config.search.vector_dim;
                 
                 /* Initialize base vector */
                 initBaseVector(vec_dim);
@@ -3061,7 +3483,7 @@ int main(int argc, char **argv) {
             }
 
             if (test_is_selected("vec-query")) {
-                int vec_dim = config.search_index.vector_dim;
+                int vec_dim = config.search.vector_dim;
                 
                 /* Initialize base vector if not already done */
                 initBaseVector(vec_dim);
@@ -3072,7 +3494,7 @@ int main(int argc, char **argv) {
 
             if (test_is_selected("vec-del")) {
                 /* Use DEL command to delete keys from vector index */
-                sds prefix = config.search_index.prefix;
+                sds prefix = config.search.prefix;
                 len = valkeyFormatCommand(&cmd, "DEL %s__rand_int__", prefix);
                 benchmark("VEC-DEL", cmd, len);
                 free(cmd);

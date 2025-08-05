@@ -16,7 +16,7 @@ tags {external:skip needs:other-server cluster singledb} {
             set primary_port [srv 0 port]
             set primary_id [$primary cluster myid]
 
-            start_server {config "minimal-cluster.conf" start-other-server 1 overrides {cluster-ping-interval 1000}} {
+            start_server {config "minimal-cluster.conf" start-other-server 1 overrides {cluster-ping-interval 1000 rdb-version-check relaxed}} {
                 # Add a replica of the old version to the cluster
                 r cluster meet $primary_host $primary_port
                 wait_for_cluster_propagation

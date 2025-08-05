@@ -2425,8 +2425,7 @@ typedef int serverGetKeysProc(struct serverCommand *cmd, robj **argv, int argc, 
  *                       sync swapdb, and allows access to the old dataset)
  *
  * CMD_STALE:       Allow the command while a replica has stale data but is not
- *                  allowed to serve this data. Normally no command is accepted
- *                  in this condition but just a few.
+ *                  allowed to serve this data.
  *
  * CMD_SKIP_MONITOR:  Do not automatically propagate the command on MONITOR.
  *

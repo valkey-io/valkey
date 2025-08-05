@@ -403,6 +403,51 @@ proc are_cluster_announced_ips_propagated {match_string {clients {}}} {
     return 1
 }
 
+# Check if cluster's announced ports are consistent and come from a predefined list
+# Optionally, a list of clients can be supplied.
+proc are_cluster_announced_ports_propagated {expected_ports {clients {}}} {
+    for {set j 0} {$j < [llength $::servers]} {incr j} {
+        if {$clients eq {}} {
+            set client [srv [expr -1*$j] "client"]
+        } else {
+            set client [lindex $clients $j]
+        }
+        set cfg [$client cluster slots]
+        foreach node $cfg {
+            for {set i 2} {$i < [llength $node]} {incr i} {
+                if {[lsearch -exact $expected_ports [lindex [lindex $node $i] 1]] < 0} {
+                    return 0
+                }
+            }
+        }
+    }
+    return 1
+}
+
+# Check if cluster's announced bus ports are consistent and come from a predefined list
+# Optionally, a list of clients can be supplied.
+proc are_cluster_announced_bus_ports_propagated {expected_ports {clients {}}} {
+    for {set j 0} {$j < [llength $::servers]} {incr j} {
+        if {$clients eq {}} {
+            set client [srv [expr -1*$j] "client"]
+        } else {
+            set client [lindex $clients $j]
+        }
+        set lines [split [$client CLUSTER NODES] "\r\n"]
+        foreach l $lines {
+            set l [string trim $l]
+            if {$l eq {}} continue
+            if {! [regexp {^.+@([0-9]+)} $l -> cluster_bus_port]} {
+                return 0
+            }
+            if {[lsearch -exact $expected_ports $cluster_bus_port] < 0} {
+                return 0
+            }
+        }
+    }
+    return 1
+}
+
 proc wait_node_marked_fail {ref_node_index instance_id_to_check} {
     wait_for_condition 1000 50 {
         [check_cluster_node_mark fail $ref_node_index $instance_id_to_check]

@@ -3036,14 +3036,14 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
     char buf[1024];
     int error;
     long long empty_keys_skipped = 0;
-    bool is_valkey_magic;
+    bool is_valkey_magic = false, is_redis_magic = false;
 
     rdb->update_cksum = rdbLoadProgressCallback;
     rdb->max_processing_chunk = server.loading_process_events_interval_bytes;
     if (rioRead(rdb, buf, 9) == 0) goto eoferr;
     buf[9] = '\0';
     if (memcmp(buf, "REDIS0", 6) == 0) {
-        is_valkey_magic = false;
+        is_redis_magic = true;
     } else if (memcmp(buf, "VALKEY", 6) == 0) {
         is_valkey_magic = true;
     } else {
@@ -3051,7 +3051,7 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
         return C_ERR;
     }
     rdbver = atoi(buf + 6);
-    if (rdbver < 1 ||
+    if (rdbver < 1 || (rdbver < RDB_FOREIGN_VERSION_MIN && !is_redis_magic) ||
         (rdbver >= RDB_FOREIGN_VERSION_MIN && rdbver <= RDB_FOREIGN_VERSION_MAX) ||
         (rdbver > RDB_FOREIGN_VERSION_MAX && !is_valkey_magic) ||
         (rdbver > RDB_VERSION && server.rdb_version_check == RDB_VERSION_CHECK_STRICT)) {

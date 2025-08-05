@@ -27,7 +27,7 @@ unsigned long long kvstoreScan(kvstore *kvs,
                                hashtableScanFunction scan_cb,
                                kvstoreScanShouldSkipHashtable *skip_cb,
                                void *privdata);
-int kvstoreExpand(kvstore *kvs, uint64_t newsize, int try_expand, kvstoreExpandShouldSkipHashtableIndex *skip_cb);
+bool kvstoreExpand(kvstore *kvs, uint64_t newsize, int try_expand, kvstoreExpandShouldSkipHashtableIndex *skip_cb);
 int kvstoreGetFairRandomHashtableIndex(kvstore *kvs);
 void kvstoreGetStats(kvstore *kvs, char *buf, size_t bufsize, int full);
 
@@ -48,7 +48,7 @@ size_t kvstoreHashtableMetadataSize(void);
 kvstoreIterator *kvstoreIteratorInit(kvstore *kvs, uint8_t flags);
 void kvstoreIteratorRelease(kvstoreIterator *kvs_it);
 int kvstoreIteratorGetCurrentHashtableIndex(kvstoreIterator *kvs_it);
-int kvstoreIteratorNext(kvstoreIterator *kvs_it, void **next);
+bool kvstoreIteratorNext(kvstoreIterator *kvs_it, void **next);
 
 /* Rehashing */
 void kvstoreTryResizeHashtables(kvstore *kvs, int limit);
@@ -61,11 +61,11 @@ unsigned long kvstoreHashtableRehashingCount(kvstore *kvs);
 unsigned long kvstoreHashtableSize(kvstore *kvs, int didx);
 kvstoreHashtableIterator *kvstoreGetHashtableIterator(kvstore *kvs, int didx, uint8_t flags);
 void kvstoreReleaseHashtableIterator(kvstoreHashtableIterator *kvs_id);
-int kvstoreHashtableIteratorNext(kvstoreHashtableIterator *kvs_di, void **next);
-int kvstoreHashtableRandomEntry(kvstore *kvs, int didx, void **found);
-int kvstoreHashtableFairRandomEntry(kvstore *kvs, int didx, void **found);
+bool kvstoreHashtableIteratorNext(kvstoreHashtableIterator *kvs_di, void **next);
+bool kvstoreHashtableRandomEntry(kvstore *kvs, int didx, void **found);
+bool kvstoreHashtableFairRandomEntry(kvstore *kvs, int didx, void **found);
 unsigned int kvstoreHashtableSampleEntries(kvstore *kvs, int didx, void **dst, unsigned int count);
-int kvstoreHashtableExpand(kvstore *kvs, int didx, unsigned long size);
+bool kvstoreHashtableExpand(kvstore *kvs, int didx, unsigned long size);
 unsigned long kvstoreHashtableScanDefrag(kvstore *kvs,
                                          int didx,
                                          unsigned long v,
@@ -74,18 +74,17 @@ unsigned long kvstoreHashtableScanDefrag(kvstore *kvs,
                                          void *(*defragfn)(void *),
                                          int flags);
 unsigned long kvstoreHashtableDefragTables(kvstore *kvs, unsigned long cursor, void *(*defragfn)(void *));
-int kvstoreHashtableFind(kvstore *kvs, int didx, void *key, void **found);
+bool kvstoreHashtableFind(kvstore *kvs, int didx, void *key, void **found);
 void **kvstoreHashtableFindRef(kvstore *kvs, int didx, const void *key);
-int kvstoreHashtableAddOrFind(kvstore *kvs, int didx, void *key, void **existing);
-int kvstoreHashtableAdd(kvstore *kvs, int didx, void *entry);
+bool kvstoreHashtableAdd(kvstore *kvs, int didx, void *entry);
 
-int kvstoreHashtableFindPositionForInsert(kvstore *kvs, int didx, void *key, hashtablePosition *position, void **existing);
+bool kvstoreHashtableFindPositionForInsert(kvstore *kvs, int didx, void *key, hashtablePosition *position, void **existing);
 void kvstoreHashtableInsertAtPosition(kvstore *kvs, int didx, void *entry, void *position);
 
 void **kvstoreHashtableTwoPhasePopFindRef(kvstore *kvs, int didx, const void *key, void *position);
 void kvstoreHashtableTwoPhasePopDelete(kvstore *kvs, int didx, void *position);
-int kvstoreHashtablePop(kvstore *kvs, int didx, const void *key, void **popped);
-int kvstoreHashtableDelete(kvstore *kvs, int didx, const void *key);
+bool kvstoreHashtablePop(kvstore *kvs, int didx, const void *key, void **popped);
+bool kvstoreHashtableDelete(kvstore *kvs, int didx, const void *key);
 hashtable *kvstoreGetHashtable(kvstore *kvs, int didx);
 
 #endif /* KVSTORE_H */

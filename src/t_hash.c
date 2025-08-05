@@ -403,8 +403,7 @@ int hashTypeSet(robj *o, sds field, sds value, long long expiry, int flags) {
             void *new_entry = entryUpdate(existing, v, expiry);
             if (new_entry != existing) {
                 /* It has been reallocated. */
-                int replaced = hashtableReplaceReallocatedEntry(ht, existing, new_entry);
-                serverAssert(replaced);
+                serverAssert(hashtableReplaceReallocatedEntry(ht, existing, new_entry));
             }
 
             hashTypeTrackUpdateEntry(o, existing, new_entry, entry_expiry, expiry);
@@ -529,9 +528,9 @@ static expiryModificationResult hashTypePersist(robj *o, sds field) {
 }
 
 /* Delete an element from a hash.
- * Return 1 on deleted and 0 on not found. */
-int hashTypeDelete(robj *o, sds field) {
-    int deleted = 0;
+ * Return true on deleted and false on not found. */
+bool hashTypeDelete(robj *o, sds field) {
+    bool deleted = false;
 
     if (o->encoding == OBJ_ENCODING_LISTPACK) {
         unsigned char *zl, *fptr;
@@ -544,7 +543,7 @@ int hashTypeDelete(robj *o, sds field) {
                 /* Delete both field and value. */
                 zl = lpDeleteRangeWithEntry(zl, &fptr, 2);
                 o->ptr = zl;
-                deleted = 1;
+                deleted = true;
             }
         }
     } else if (o->encoding == OBJ_ENCODING_HASHTABLE) {
@@ -1425,14 +1424,14 @@ void hgetexCommand(client *c) {
         }
     }
     for (i = fields_index; i < c->argc; i++) {
-        int changed = 0;
+        bool changed = false;
         addHashFieldToReply(c, o, c->argv[i]->ptr);
         if (set_expired) {
             changed = hashTypeDelete(o, c->argv[i]->ptr);
         } else if (set_expiry) {
-            changed = (hashTypeSetExpire(o, c->argv[i]->ptr, when, 0) == EXPIRATION_MODIFICATION_SUCCESSFUL) ? 1 : 0;
+            changed = hashTypeSetExpire(o, c->argv[i]->ptr, when, 0) == EXPIRATION_MODIFICATION_SUCCESSFUL;
         } else if (persist) {
-            changed = (hashTypePersist(o, c->argv[i]->ptr) == EXPIRATION_MODIFICATION_SUCCESSFUL) ? 1 : 0;
+            changed = hashTypePersist(o, c->argv[i]->ptr) == EXPIRATION_MODIFICATION_SUCCESSFUL;
         }
         if (changed) {
             changes++;
@@ -2111,7 +2110,7 @@ static int hashTypeExpireEntry(void *entry, void *c) {
 
     hashtable *ht = o->ptr;
     void *entry_ptr = NULL;
-    int deleted = hashtablePop(ht, entry, &entry_ptr);
+    bool deleted = hashtablePop(ht, entry, &entry_ptr);
 
     if (deleted) {
         if (ctx->fields)

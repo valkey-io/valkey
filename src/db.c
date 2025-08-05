@@ -447,8 +447,7 @@ robj *dbRandomKey(serverDb *db) {
     while (1) {
         void *entry;
         int randomDictIndex = kvstoreGetFairRandomHashtableIndex(db->keys);
-        int ok = kvstoreHashtableFairRandomEntry(db->keys, randomDictIndex, &entry);
-        if (!ok) return NULL;
+        if (!kvstoreHashtableFairRandomEntry(db->keys, randomDictIndex, &entry)) return NULL;
         robj *valkey = entry;
         sds key = objectGetKey(valkey);
         robj *keyobj = createStringObject(key, sdslen(key));
@@ -494,10 +493,9 @@ int dbGenericDeleteWithDictIndex(serverDb *db, robj *key, int async, int flags, 
          * (The expires table has no destructor callback.) */
         kvstoreHashtableTwoPhasePopDelete(db->keys, dict_index, &pos);
         if (objectGetExpire(val) != -1) {
-            int deleted = kvstoreHashtableDelete(db->expires, dict_index, key->ptr);
-            serverAssert(deleted);
+            serverAssert(kvstoreHashtableDelete(db->expires, dict_index, key->ptr));
         } else {
-            debugServerAssert(0 == kvstoreHashtableDelete(db->expires, dict_index, key->ptr));
+            debugServerAssert(!kvstoreHashtableDelete(db->expires, dict_index, key->ptr));
         }
 
         /* If deleting a hash object, un-track it from the volatile items tracking if it contains volatile items.*/
@@ -1850,8 +1848,7 @@ robj *setExpire(client *c, serverDb *db, robj *key, long long when) {
         /* Replace the pointer in the keys_with_volatile_items table without accessing the old pointer. */
         int dict_index = getKVStoreIndexForKey(objectGetKey(newval));
         hashtable *volatile_items_ht = kvstoreGetHashtable(db->keys_with_volatile_items, dict_index);
-        int replaced = hashtableReplaceReallocatedEntry(volatile_items_ht, val, newval);
-        serverAssert(replaced);
+        serverAssert(hashtableReplaceReallocatedEntry(volatile_items_ht, val, newval));
     }
     if (old_when != -1) {
         /* Val already had an expire field, so it was not reallocated. */
@@ -1864,8 +1861,7 @@ robj *setExpire(client *c, serverDb *db, robj *key, long long when) {
         if (newval != val) {
             val = *valref = newval;
         }
-        int added = kvstoreHashtableAdd(db->expires, dict_index, newval);
-        serverAssert(added);
+        serverAssert(kvstoreHashtableAdd(db->expires, dict_index, newval));
     }
 
     int writable_replica = server.primary_host && server.repl_replica_ro == 0;
@@ -2160,7 +2156,7 @@ static int dbExpandSkipSlot(int slot) {
  * signifies that no expansion was performed.
  */
 static int dbExpandGeneric(kvstore *kvs, uint64_t db_size, int try_expand) {
-    int ret;
+    bool ret;
     if (server.cluster_enabled) {
         /* We don't know exact number of keys that would fall into each slot, but we can
          * approximate it, assuming even distribution, divide it by the number of slots. */

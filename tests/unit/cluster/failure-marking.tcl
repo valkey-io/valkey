@@ -58,54 +58,57 @@ start_cluster 2 1 {tags {external:skip cluster}} {
 
 tags {external:skip tls:skip cluster singledb} {
     set base_conf [list cluster-enabled yes cluster-ping-interval 100 cluster-node-timeout 3000 save ""]
-    start_multiple_servers 5 [list overrides $base_conf] {
+    start_multiple_servers 7 [list overrides $base_conf] {
         test "Only primary with slots has the right to mark a node as failed" {
             set primary_host [srv 0 host]
             set primary_port [srv 0 port]
             set primary_pid [srv 0 pid]
             set primary_id [R 0 CLUSTER MYID]
-            set replica_id [R 1 CLUSTER MYID]
-            set replica_pid [srv -1 pid]
+
+            set primary2_host [srv -1 host]
+            set primary2_port [srv -1 port]
+            set primary2_pid [srv -1 pid]
+            set primary2_id [R 1 CLUSTER MYID]
+
+            set replica_id [R 2 CLUSTER MYID]
+            set replica_pid [srv -2 pid]
 
             # Meet others nodes.
             R 1 CLUSTER MEET $primary_host $primary_port
             R 2 CLUSTER MEET $primary_host $primary_port
             R 3 CLUSTER MEET $primary_host $primary_port
             R 4 CLUSTER MEET $primary_host $primary_port
+            R 5 CLUSTER MEET $primary_host $primary_port
+            R 6 CLUSTER MEET $primary_host $primary_port
 
             # Build a single primary cluster.
-            cluster_allocate_slots 1 1
+            cluster_allocate_slots 2 2
             wait_for_cluster_propagation
-            R 1 CLUSTER REPLICATE $primary_id
+            R 2 CLUSTER REPLICATE $primary_id
+            R 3 CLUSTER REPLICATE $primary2_id
             wait_for_cluster_propagation
             wait_for_cluster_state "ok"
 
             # Pause the primary, marking the primary as pfail.
             pause_process $primary_pid
-            wait_node_marked_pfail 1 $primary_id
-            wait_node_marked_pfail 2 $primary_id
             wait_node_marked_pfail 3 $primary_id
             wait_node_marked_pfail 4 $primary_id
+            wait_node_marked_pfail 5 $primary_id
+            wait_node_marked_pfail 6 $primary_id
 
             # Pause the replica, marking the replica as pfail.
             pause_process $replica_pid
-            wait_node_marked_pfail 2 $replica_id
             wait_node_marked_pfail 3 $replica_id
             wait_node_marked_pfail 4 $replica_id
-
-            # Resume the primary, marking the replica as fail.
-            resume_process $primary_pid
-            wait_node_marked_fail 0 $replica_id
-            wait_node_marked_fail 2 $replica_id
-            wait_node_marked_fail 3 $replica_id
-            wait_node_marked_fail 4 $replica_id
+            wait_node_marked_pfail 5 $replica_id
+            wait_node_marked_pfail 6 $replica_id
 
             # Check if we got the right failure reports.
             wait_for_condition 1000 50 {
-                [R 0 CLUSTER COUNT-FAILURE-REPORTS $replica_id] == 0 &&
-                [R 2 CLUSTER COUNT-FAILURE-REPORTS $replica_id] == 1 &&
                 [R 3 CLUSTER COUNT-FAILURE-REPORTS $replica_id] == 1 &&
-                [R 4 CLUSTER COUNT-FAILURE-REPORTS $replica_id] == 1
+                [R 4 CLUSTER COUNT-FAILURE-REPORTS $replica_id] == 1 &&
+                [R 5 CLUSTER COUNT-FAILURE-REPORTS $replica_id] == 1 &&
+                [R 6 CLUSTER COUNT-FAILURE-REPORTS $replica_id] == 1
             } else {
                 fail "Cluster COUNT-FAILURE-REPORTS is not right."
             }
@@ -114,13 +117,90 @@ tags {external:skip tls:skip cluster singledb} {
 
             # Check there are no failure reports left.
             wait_for_condition 1000 50 {
-                [R 0 CLUSTER COUNT-FAILURE-REPORTS $replica_id] == 0 &&
-                [R 2 CLUSTER COUNT-FAILURE-REPORTS $replica_id] == 0 &&
                 [R 3 CLUSTER COUNT-FAILURE-REPORTS $replica_id] == 0 &&
-                [R 4 CLUSTER COUNT-FAILURE-REPORTS $replica_id] == 0
+                [R 4 CLUSTER COUNT-FAILURE-REPORTS $replica_id] == 0 &&
+                [R 5 CLUSTER COUNT-FAILURE-REPORTS $replica_id] == 0 &&
+                [R 6 CLUSTER COUNT-FAILURE-REPORTS $replica_id] == 0
             } else {
                 fail "Cluster COUNT-FAILURE-REPORTS is not right."
             }
+        }
+    }
+}
+
+# Test that no new failure-report is added once the node is already marked as FAIL
+start_cluster 4 1 {tags {external:skip cluster}} {
+    test "Primaries do not add failure-report after replica is already marked FAIL" {
+        # Primary nodes
+        set primary0 [srv 0 client];
+        set primary0_pid [srv 0 pid]
+        set primary1 [srv -1 client];
+        set primary1_pid [srv -1 pid]
+        set primary2 [srv -2 client];
+        set primary2_pid [srv -2 pid]
+        set primary3 [srv -3 client];
+        # Replica node
+        set replica0 [srv -4 client];
+        set replica0_pid [srv -4 pid]
+        set replica0_id [dict get [cluster_get_myself 4] id]
+
+        assert {[lindex [$primary0 role] 0] eq {master}}
+        assert {[lindex [$primary1 role] 0] eq {master}}
+        assert {[lindex [$primary2 role] 0] eq {master}}
+        assert {[lindex [$primary3 role] 0] eq {master}}
+        assert {[lindex [$replica0 role] 0] eq {slave}}
+
+        # Ensure replica is synced before simulating failure
+        wait_for_sync $replica0
+
+        # This prevents a quorum of alive masters from reaching FAIL immediately,
+        # so we can observe the PFAIL gossip and ensure failure reports get added.
+        pause_process $replica0_pid
+        pause_process $primary0_pid
+        pause_process $primary1_pid
+
+        # The two active primaries (primary2, primary3) should mark the replica PFAIL
+        wait_node_marked_pfail 2 $replica0_id
+        wait_node_marked_pfail 3 $replica0_id
+
+        # Verify each primary recorded exactly one failure report
+        wait_for_condition 1000 50 {
+            [R 2 CLUSTER COUNT-FAILURE-REPORTS $replica0_id] == 1 &&
+            [R 3 CLUSTER COUNT-FAILURE-REPORTS $replica0_id] == 1
+        } else {
+            fail "Active primaries primary2 and primary3 should record one failure report"
+        }
+
+        # Resume one paused primary (primary0) to reach quorum of 3 masters
+        resume_process $primary0_pid
+
+        # Now the replica should transition to FAIL on those three primaries
+        wait_node_marked_fail 0 $replica0_id
+        wait_node_marked_fail 2 $replica0_id
+        wait_node_marked_fail 3 $replica0_id
+
+        # Resume the final paused primary (primary1)
+        resume_process $primary1_pid
+
+        # Ensure no primary has more than two reports
+        wait_for_condition 1000 50 {
+            [R 0 CLUSTER COUNT-FAILURE-REPORTS $replica0_id] < 3 &&
+            [R 1 CLUSTER COUNT-FAILURE-REPORTS $replica0_id] < 3 &&
+            [R 2 CLUSTER COUNT-FAILURE-REPORTS $replica0_id] < 3 &&
+            [R 3 CLUSTER COUNT-FAILURE-REPORTS $replica0_id] < 3
+        } else {
+            fail "No primary should exceed two failure reports"
+        }
+
+        # Bring the replica back online and verify cleanup
+        resume_process $replica0_pid
+        wait_for_condition 1000 50 {
+            [R 0 CLUSTER COUNT-FAILURE-REPORTS $replica0_id] == 0 &&
+            [R 1 CLUSTER COUNT-FAILURE-REPORTS $replica0_id] == 0 &&
+            [R 2 CLUSTER COUNT-FAILURE-REPORTS $replica0_id] == 0 &&
+            [R 3 CLUSTER COUNT-FAILURE-REPORTS $replica0_id] == 0
+        } else {
+            fail "Failure-report lists were not cleared after replica recovery"
         }
     }
 }

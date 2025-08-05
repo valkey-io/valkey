@@ -664,20 +664,34 @@ hashtableType subcommandSetType = {.entryGetKey = hashtableSubcommandGetKey,
 
 /* Hash type hash table (note that small hashes are represented with listpacks) */
 const void *hashHashtableTypeGetKey(const void *entry) {
-    const hashTypeEntry *hash_entry = entry;
-    return (const void *)hashTypeEntryGetField(hash_entry);
+    return (const void *)entryGetField(entry);
 }
 
 void hashHashtableTypeDestructor(void *entry) {
-    hashTypeEntry *hash_entry = entry;
-    freeHashTypeEntry(hash_entry);
+    entryFree(entry);
 }
+
+size_t hashHashtableTypeMetadataSize(void) {
+    return sizeof(void *);
+}
+
+extern bool hashHashtableTypeValidate(hashtable *ht, void *entry);
 
 hashtableType hashHashtableType = {
     .hashFunction = dictSdsHash,
     .entryGetKey = hashHashtableTypeGetKey,
     .keyCompare = hashtableSdsKeyCompare,
     .entryDestructor = hashHashtableTypeDestructor,
+    .getMetadataSize = hashHashtableTypeMetadataSize,
+};
+
+hashtableType hashWithVolatileItemsHashtableType = {
+    .hashFunction = dictSdsHash,
+    .entryGetKey = hashHashtableTypeGetKey,
+    .keyCompare = hashtableSdsKeyCompare,
+    .entryDestructor = hashHashtableTypeDestructor,
+    .getMetadataSize = hashHashtableTypeMetadataSize,
+    .validateEntry = hashHashtableTypeValidate,
 };
 
 /* Hashtable type without destructor */
@@ -2135,6 +2149,9 @@ void createSharedObjects(void) {
     shared.multi = createSharedString("MULTI");
     shared.exec = createSharedString("EXEC");
     shared.hset = createSharedString("HSET");
+    shared.hdel = createSharedString("HDEL");
+    shared.hpexpireat = createSharedString("HPEXPIREAT");
+    shared.hpersist = createSharedString("HPERSIST");
     shared.srem = createSharedString("SREM");
     shared.xgroup = createSharedString("XGROUP");
     shared.xclaim = createSharedString("XCLAIM");
@@ -2167,6 +2184,7 @@ void createSharedObjects(void) {
     shared.special_asterisk = createSharedString("*");
     shared.special_equals = createSharedString("=");
     shared.redacted = createSharedString("(redacted)");
+    shared.fields = createSharedString("FIELDS");
 
     for (j = 0; j < OBJ_SHARED_INTEGERS; j++) {
         shared.integers[j] = makeObjectShared(createObject(OBJ_STRING, (void *)(long)j));
@@ -7333,4 +7351,131 @@ __attribute__((weak)) int main(int argc, char **argv) {
     aeDeleteEventLoop(server.el);
     return 0;
 }
+
+/*
+ * The parseExtendedCommandArgumentsOrReply() function performs the common validation for extended
+ * command arguments used in STRING and HASH commands.
+ *
+ * Get specific command extended options - PERSIST/DEL
+ * Set specific command extended options - XX/NX/GET/IFEQ
+ * HSET specific command extended options - FXX/FNX
+ * Common command extended options - EX/EXAT/PX/PXAT/KEEPTTL
+ *
+ * Function takes pointers to client, flags, unit, pointer to pointer of expire obj if needed
+ * to be determined and command_type which can be COMMAND_GET or COMMAND_SET.
+ *
+ * If there are any syntax violations C_ERR is returned else C_OK is returned.
+ *
+ * Input flags are updated upon parsing the arguments. Unit and expire are updated if there are any
+ * EX/EXAT/PX/PXAT arguments. Unit is updated to millisecond if PX/PXAT is set.
+ *
+ * max_args provides a way to limit the scan to a specific range of arguments.
+ */
+int parseExtendedCommandArgumentsOrReply(client *c, int *flags, int *unit, robj **expire, robj **compare_val, int command_type, int max_args) {
+    int j = command_type == COMMAND_SET ? 3 : 2;
+    for (; j < max_args; j++) {
+        char *opt = c->argv[j]->ptr;
+        robj *next = (j == max_args - 1) ? NULL : c->argv[j + 1];
+
+        /* clang-format off */
+        if ((opt[0] == 'n' || opt[0] == 'N') &&
+            (opt[1] == 'x' || opt[1] == 'X') && opt[2] == '\0' &&
+            !(*flags & ARGS_SET_XX || *flags & ARGS_SET_IFEQ) && (command_type == COMMAND_SET))
+        {
+            *flags |= ARGS_SET_NX;
+        } else if ((opt[0] == 'x' || opt[0] == 'X') &&
+                   (opt[1] == 'x' || opt[1] == 'X') && opt[2] == '\0' &&
+                   !(*flags & ARGS_SET_NX || *flags & ARGS_SET_IFEQ) && (command_type == COMMAND_SET))
+        {
+            *flags |= ARGS_SET_XX;
+        } else if ((opt[0] == 'f' || opt[0] == 'F') &&
+                   (opt[1] == 'n' || opt[1] == 'N') &&
+                   (opt[2] == 'x' || opt[2] == 'X') && opt[3] == '\0' &&
+                   !(*flags & ARGS_SET_FXX || *flags & ARGS_SET_IFEQ) && (command_type == COMMAND_HSET))
+        {
+            *flags |= ARGS_SET_FNX;
+        } else if ((opt[0] == 'f' || opt[0] == 'F') &&
+                   (opt[1] == 'x' || opt[1] == 'X') &&
+                   (opt[2] == 'x' || opt[2] == 'X') && opt[3] == '\0' &&
+                   !(*flags & ARGS_SET_FNX || *flags & ARGS_SET_IFEQ) && (command_type == COMMAND_HSET))
+        {
+            *flags |= ARGS_SET_FXX;
+        } else if ((opt[0] == 'i' || opt[0] == 'I') &&
+                   (opt[1] == 'f' || opt[1] == 'F') &&
+                   (opt[2] == 'e' || opt[2] == 'E') &&
+                   (opt[3] == 'q' || opt[3] == 'Q') && opt[4] == '\0' &&
+                   next && 
+                   !(*flags & ARGS_SET_NX || *flags & ARGS_SET_XX || *flags & ARGS_SET_IFEQ) && (command_type == COMMAND_SET))
+        {
+            *flags |= ARGS_SET_IFEQ;
+            *compare_val = next;
+            j++;
+        } else if ((opt[0] == 'g' || opt[0] == 'G') &&
+                   (opt[1] == 'e' || opt[1] == 'E') &&
+                   (opt[2] == 't' || opt[2] == 'T') && opt[3] == '\0' &&
+                   (command_type == COMMAND_SET))
+        {
+            *flags |= ARGS_SET_GET;
+        } else if (!strcasecmp(opt, "KEEPTTL") && !(*flags & ARGS_PERSIST) &&
+                   !(*flags & ARGS_EX) && !(*flags & ARGS_EXAT) &&
+                   !(*flags & ARGS_PX) && !(*flags & ARGS_PXAT) && (command_type == COMMAND_SET || command_type == COMMAND_HSET))
+        {
+            *flags |= ARGS_KEEPTTL;
+        } else if (!strcasecmp(opt,"PERSIST") && (command_type == COMMAND_GET || command_type == COMMAND_HGET) &&
+                   !(*flags & ARGS_EX) && !(*flags & ARGS_EXAT) &&
+                   !(*flags & ARGS_PX) && !(*flags & ARGS_PXAT) &&
+                   !(*flags & ARGS_KEEPTTL))
+        {
+            *flags |= ARGS_PERSIST;
+        } else if ((opt[0] == 'e' || opt[0] == 'E') &&
+                   (opt[1] == 'x' || opt[1] == 'X') && opt[2] == '\0' &&
+                   !(*flags & ARGS_KEEPTTL) && !(*flags & ARGS_PERSIST) &&
+                   !(*flags & ARGS_EXAT) && !(*flags & ARGS_PX) &&
+                   !(*flags & ARGS_PXAT) && next)
+        {
+            *flags |= ARGS_EX;
+            *expire = next;
+            j++;
+        } else if ((opt[0] == 'p' || opt[0] == 'P') &&
+                   (opt[1] == 'x' || opt[1] == 'X') && opt[2] == '\0' &&
+                   !(*flags & ARGS_KEEPTTL) && !(*flags & ARGS_PERSIST) &&
+                   !(*flags & ARGS_EX) && !(*flags & ARGS_EXAT) &&
+                   !(*flags & ARGS_PXAT) && next)
+        {
+            *flags |= ARGS_PX;
+            *unit = UNIT_MILLISECONDS;
+            *expire = next;
+            j++;
+        } else if ((opt[0] == 'e' || opt[0] == 'E') &&
+                   (opt[1] == 'x' || opt[1] == 'X') &&
+                   (opt[2] == 'a' || opt[2] == 'A') &&
+                   (opt[3] == 't' || opt[3] == 'T') && opt[4] == '\0' &&
+                   !(*flags & ARGS_KEEPTTL) && !(*flags & ARGS_PERSIST) &&
+                   !(*flags & ARGS_EX) && !(*flags & ARGS_PX) &&
+                   !(*flags & ARGS_PXAT) && next)
+        {
+            *flags |= ARGS_EXAT;
+            *expire = next;
+            j++;
+        } else if ((opt[0] == 'p' || opt[0] == 'P') &&
+                   (opt[1] == 'x' || opt[1] == 'X') &&
+                   (opt[2] == 'a' || opt[2] == 'A') &&
+                   (opt[3] == 't' || opt[3] == 'T') && opt[4] == '\0' &&
+                   !(*flags & ARGS_KEEPTTL) && !(*flags & ARGS_PERSIST) &&
+                   !(*flags & ARGS_EX) && !(*flags & ARGS_EXAT) &&
+                   !(*flags & ARGS_PX) && next)
+        {
+            *flags |= ARGS_PXAT;
+            *unit = UNIT_MILLISECONDS;
+            *expire = next;
+            j++;
+        } else {
+            addReplyErrorObject(c,shared.syntaxerr);
+            return C_ERR;
+        }
+        /* clang-format on */
+    }
+    return C_OK;
+}
+
 /* The End */

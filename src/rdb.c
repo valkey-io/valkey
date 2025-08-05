@@ -32,6 +32,7 @@
  * SPDX-License-Identifier: BSD-3-Clause
  */
 
+#include "hashtable.h"
 #include "server.h"
 #include "lzf.h" /* LZF compression library */
 #include "zipmap.h"
@@ -717,7 +718,10 @@ int rdbSaveObjectType(rio *rdb, robj *o) {
         if (o->encoding == OBJ_ENCODING_LISTPACK)
             return rdbSaveType(rdb, RDB_TYPE_HASH_LISTPACK);
         else if (o->encoding == OBJ_ENCODING_HASHTABLE)
-            return rdbSaveType(rdb, RDB_TYPE_HASH);
+            if (hashTypeHasVolatileElements(o))
+                return rdbSaveType(rdb, RDB_TYPE_HASH_2);
+            else
+                return rdbSaveType(rdb, RDB_TYPE_HASH);
         else
             serverPanic("Unknown hash encoding");
     case OBJ_STREAM: return rdbSaveType(rdb, RDB_TYPE_STREAM_LISTPACKS_3);
@@ -840,7 +844,6 @@ size_t rdbSaveStreamConsumers(rio *rdb, streamCG *cg) {
  * Returns -1 on error, number of bytes written on success. */
 ssize_t rdbSaveObject(rio *rdb, robj *o, robj *key, int dbid) {
     ssize_t n = 0, nwritten = 0;
-
     if (o->type == OBJ_STRING) {
         /* Save a string value */
         if ((n = rdbSaveStringObject(rdb, o)) == -1) return -1;
@@ -963,13 +966,14 @@ ssize_t rdbSaveObject(rio *rdb, robj *o, robj *key, int dbid) {
                 return -1;
             }
             nwritten += n;
-
+            /* check if need to add expired time for the hash elements */
+            bool add_expiry = hashTypeHasVolatileElements(o);
             hashtableIterator iter;
-            hashtableInitIterator(&iter, ht, 0);
+            hashtableInitIterator(&iter, ht, HASHTABLE_ITER_SKIP_VALIDATION);
             void *next;
             while (hashtableNext(&iter, &next)) {
-                sds field = hashTypeEntryGetField(next);
-                sds value = hashTypeEntryGetValue(next);
+                sds field = entryGetField(next);
+                sds value = entryGetValue(next);
 
                 if ((n = rdbSaveRawString(rdb, (unsigned char *)field, sdslen(field))) == -1) {
                     hashtableResetIterator(&iter);
@@ -981,8 +985,17 @@ ssize_t rdbSaveObject(rio *rdb, robj *o, robj *key, int dbid) {
                     return -1;
                 }
                 nwritten += n;
+                if (add_expiry) {
+                    long long expiry = entryGetExpiry(next);
+                    if ((n = rdbSaveMillisecondTime(rdb, expiry) == -1)) {
+                        hashtableResetIterator(&iter);
+                        return -1;
+                    }
+                    nwritten += n;
+                }
             }
             hashtableResetIterator(&iter);
+
         } else {
             serverPanic("Unknown hash encoding");
         }
@@ -2073,7 +2086,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error) {
             lpSafeToAdd(NULL, totelelen)) {
             zsetConvert(o, OBJ_ENCODING_LISTPACK);
         }
-    } else if (rdbtype == RDB_TYPE_HASH) {
+    } else if (rdbtype == RDB_TYPE_HASH || rdbtype == RDB_TYPE_HASH_2) {
         uint64_t len;
         sds field, value;
         hashtable *dupSearchHashtable = NULL;
@@ -2084,8 +2097,8 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error) {
 
         o = createHashObject();
 
-        /* Too many entries? Use a hash table right from the start. */
-        if (len > server.hash_max_listpack_entries)
+        /* Too many entries or hash object contains elements with expiry? Use a hash table right from the start. */
+        if (len > server.hash_max_listpack_entries || rdbtype == RDB_TYPE_HASH_2)
             hashTypeConvert(o, OBJ_ENCODING_HASHTABLE);
         else if (deep_integrity_validation) {
             /* In this mode, we need to guarantee that the server won't crash
@@ -2126,20 +2139,22 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error) {
             }
 
             /* Convert to hash table if size threshold is exceeded */
-            if (sdslen(field) > server.hash_max_listpack_value || sdslen(value) > server.hash_max_listpack_value ||
-                !lpSafeToAdd(o->ptr, sdslen(field) + sdslen(value))) {
+            if (o->encoding != OBJ_ENCODING_HASHTABLE &&
+                (sdslen(field) > server.hash_max_listpack_value || sdslen(value) > server.hash_max_listpack_value ||
+                 !lpSafeToAdd(o->ptr, sdslen(field) + sdslen(value)))) {
                 hashTypeConvert(o, OBJ_ENCODING_HASHTABLE);
-                hashTypeEntry *entry = hashTypeCreateEntry(field, value);
+                entry *entry = entryCreate(field, value, EXPIRY_NONE);
                 sdsfree(field);
                 if (!hashtableAdd((hashtable *)o->ptr, entry)) {
                     rdbReportCorruptRDB("Duplicate hash fields detected");
                     if (dupSearchHashtable) hashtableRelease(dupSearchHashtable);
-                    freeHashTypeEntry(entry);
+                    entryFree(entry);
                     decrRefCount(o);
                     return NULL;
                 }
                 break;
             }
+
 
             /* Add pair to listpack */
             o->ptr = lpAppend(o->ptr, (unsigned char *)field, sdslen(field));
@@ -2178,14 +2193,25 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error) {
                 return NULL;
             }
 
+            /* Also load the entry expiry */
+            long long itemexpiry = EXPIRY_NONE;
+            if (rdbtype == RDB_TYPE_HASH_2) {
+                itemexpiry = rdbLoadMillisecondTime(rdb, RDB_VERSION);
+                if (itemexpiry < EXPIRY_NONE || rioGetReadError(rdb)) return NULL;
+            }
+
             /* Add pair to hash table */
-            hashTypeEntry *entry = hashTypeCreateEntry(field, value);
+            entry *entry = entryCreate(field, value, itemexpiry);
             sdsfree(field);
             if (!hashtableAdd((hashtable *)o->ptr, entry)) {
                 rdbReportCorruptRDB("Duplicate hash fields detected");
-                freeHashTypeEntry(entry);
+                entryFree(entry);
                 decrRefCount(o);
                 return NULL;
+            }
+
+            if (rdbtype == RDB_TYPE_HASH_2 && itemexpiry > 0) {
+                hashTypeTrackEntry(o, entry);
             }
         }
 

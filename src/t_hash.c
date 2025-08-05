@@ -32,233 +32,127 @@
  * SPDX-License-Identifier: BSD-3-Clause
  */
 
+#include "hashtable.h"
+#include "rax.h"
+#include "sds.h"
+#include "volatile_set.h"
 #include "server.h"
+#include "zmalloc.h"
 #include <math.h>
-#include <stdbool.h>
+#include <string.h>
+#include "entry.h"
+
+/* enumeration of all the possible return values of commands manipulating fields expiration. */
+typedef enum {
+    /* SDS aux flag. If set, it indicates that the entry has TTL metadata set. */
+    EXPIRATION_MODIFICATION_NOT_EXIST = -2,       /* in case the provided object is NULL or the specific field was not found */
+    EXPIRATION_MODIFICATION_SUCCESSFUL = 1,       /* if the expiration time was applied or modified */
+    EXPIRATION_MODIFICATION_FAILED_CONDITION = 0, /* if the some predefined conditions (e.g hexpire conditional flags) has not been met */
+    EXPIRATION_MODIFICATION_FAILED = -1,          /* if apply of the expiration modification failed (e.g hpersist on item without expiration) */
+    EXPIRATION_MODIFICATION_EXPIRE_ASAP = 2,      /* if apply of the expiration modification was set to a time in the past (i.e field is immediately expired) */
+} expiryModificationResult;
+
+volatileEntryType hashVolatileEntryType = {
+    .entryGetKey = (sds(*)(const void *entry))entryGetField,
+    .getExpiry = (long long (*)(const void *entry))entryGetExpiry,
+};
 
 /*-----------------------------------------------------------------------------
- * Hash Entry API
+ * Hash type Expiry API
  *----------------------------------------------------------------------------*/
 
-/* The hashTypeEntry pointer is the field sds. We encode the entry layout type
- * in the field SDS header. Field type SDS_TYPE_5 doesn't have any spare bits to
- * encode this so we use it only for the first layout type.
- *
- * Entry with embedded value, used for small sizes. The value is stored as
- * SDS_TYPE_8. The field can use any SDS type.
- *
- *     +--------------+---------------+
- *     | field        | value         |
- *     | hdr "foo" \0 | hdr8 "bar" \0 |
- *     +------^-------+---------------+
- *            |
- *            |
- *          entry pointer = field sds
- *
- * Entry with value pointer, used for larger fields and values. The field is SDS
- * type 8 or higher.
- *
- *     +-------+--------------+
- *     | value | field        |
- *     | ptr   | hdr "foo" \0 |
- *     +-------+------^-------+
- *                    |
- *                    |
- *                 entry pointer = field sds
- */
-
-/* The maximum allocation size we want to use for entries with embedded
- * values. */
-#define EMBED_VALUE_MAX_ALLOC_SIZE 128
-
-/* SDS aux flag. If set, it indicates that the entry has an embedded value
- * pointer located in memory before the embedded field. If unset, the entry
- * instead has an embedded value located after the embedded field. */
-#define FIELD_SDS_AUX_BIT_ENTRY_HAS_VALUE_PTR 0
-
-static inline bool entryHasValuePtr(const hashTypeEntry *entry) {
-    return sdsGetAuxBit(entry, FIELD_SDS_AUX_BIT_ENTRY_HAS_VALUE_PTR);
+static volatile_set *hashTypeGetVolatileSet(robj *o) {
+    serverAssert(o->encoding == OBJ_ENCODING_HASHTABLE);
+    return *(volatile_set **)hashtableMetadata(o->ptr);
 }
 
-/* Returns the location of a pointer to a separately allocated value. Only for
- * an entry without an embedded value. */
-static sds *hashTypeEntryGetValueRef(const hashTypeEntry *entry) {
-    serverAssert(entryHasValuePtr(entry));
-    char *field_data = sdsAllocPtr(entry);
-    field_data -= sizeof(sds *);
-    return (sds *)field_data;
+void hashTypeFreeVolatileSet(robj *o) {
+    volatile_set *set = hashTypeGetVolatileSet(o);
+    if (set) freeVolatileSet(set);
 }
 
-/* takes ownership of value, does not take ownership of field */
-hashTypeEntry *hashTypeCreateEntry(sds field, sds value) {
-    size_t field_len = sdslen(field);
-    int field_sds_type = sdsReqType(field_len);
-    size_t field_size = sdsReqSize(field_len, field_sds_type);
-    size_t value_len = sdslen(value);
-    size_t value_size = sdsReqSize(value_len, SDS_TYPE_8);
-    sds embedded_field_sds;
-    if (field_size + value_size <= EMBED_VALUE_MAX_ALLOC_SIZE) {
-        /* Embed field and value. Value is fixed to SDS_TYPE_8. Unused
-         * allocation space is recorded in the embedded value's SDS header.
-         *
-         *     +--------------+---------------+
-         *     | field        | value         |
-         *     | hdr "foo" \0 | hdr8 "bar" \0 |
-         *     +--------------+---------------+
-         */
-        size_t min_size = field_size + value_size;
-        size_t buf_size;
-        char *buf = zmalloc_usable(min_size, &buf_size);
-        embedded_field_sds = sdswrite(buf, field_size, field_sds_type, field, field_len);
-        sdswrite(buf + field_size, buf_size - field_size, SDS_TYPE_8, value, value_len);
-        /* Field sds aux bits are zero, which we use for this entry encoding. */
-        sdsSetAuxBit(embedded_field_sds, FIELD_SDS_AUX_BIT_ENTRY_HAS_VALUE_PTR, 0);
-        serverAssert(!entryHasValuePtr(embedded_field_sds));
-        sdsfree(value);
-    } else {
-        /* Embed field, but not value. Field must be >= SDS_TYPE_8 to encode to
-         * indicate this type of entry.
-         *
-         *     +-------+---------------+
-         *     | value | field         |
-         *     | ptr   | hdr8 "foo" \0 |
-         *     +-------+---------------+
-         */
-        char field_sds_type = sdsReqType(field_len);
-        if (field_sds_type == SDS_TYPE_5) field_sds_type = SDS_TYPE_8;
-        field_size = sdsReqSize(field_len, field_sds_type);
-        size_t alloc_size = sizeof(sds *) + field_size;
-        char *buf = zmalloc(alloc_size);
-        *(sds *)buf = value;
-        embedded_field_sds = sdswrite(buf + sizeof(sds *), field_size, field_sds_type, field, field_len);
-        /* Store the entry encoding type in sds aux bits. */
-        sdsSetAuxBit(embedded_field_sds, FIELD_SDS_AUX_BIT_ENTRY_HAS_VALUE_PTR, 1);
-        serverAssert(entryHasValuePtr(embedded_field_sds));
-    }
-    return (void *)embedded_field_sds;
+bool hashTypeHasVolatileElements(robj *o) {
+    return ((o->encoding == OBJ_ENCODING_HASHTABLE) && (hashTypeGetVolatileSet(o) != NULL));
 }
 
-/* The entry pointer is the field sds, but that's an implementation detail. */
-sds hashTypeEntryGetField(const hashTypeEntry *entry) {
-    return (sds)entry;
-}
-
-sds hashTypeEntryGetValue(const hashTypeEntry *entry) {
-    if (entryHasValuePtr(entry)) {
-        return *hashTypeEntryGetValueRef(entry);
-    } else {
-        /* Skip field content, field null terminator and value sds8 hdr. */
-        size_t offset = sdslen(entry) + 1 + sdsHdrSize(SDS_TYPE_8);
-        return (char *)entry + offset;
-    }
-}
-
-/* Returns the address of the entry allocation. */
-static void *hashTypeEntryAllocPtr(hashTypeEntry *entry) {
-    char *buf = sdsAllocPtr(entry);
-    if (entryHasValuePtr(entry)) {
-        buf -= sizeof(sds *);
-    }
-    return buf;
-}
-
-/* Frees previous value, takes ownership of new value, returns entry (may be
- * reallocated). */
-static hashTypeEntry *hashTypeEntryReplaceValue(hashTypeEntry *entry, sds value) {
-    sds field = (sds)entry;
-    size_t field_size = sdsHdrSize(sdsType(field)) + sdsalloc(field) + 1;
-    size_t value_len = sdslen(value);
-    size_t value_size = sdsReqSize(value_len, SDS_TYPE_8);
-    if (!entryHasValuePtr(entry)) {
-        /* Reuse the allocation if the new value fits and leaves no more than
-         * 25% unused space after replacing the value. */
-        char *alloc_ptr = sdsAllocPtr(entry);
-        size_t required_size = field_size + value_size;
-        size_t alloc_size;
-        if (required_size <= EMBED_VALUE_MAX_ALLOC_SIZE &&
-            required_size <= (alloc_size = hashTypeEntryMemUsage(entry)) &&
-            required_size >= alloc_size * 3 / 4) {
-            /* It fits in the allocation and leaves max 25% unused space. */
-            sdswrite(alloc_ptr + field_size, alloc_size - field_size, SDS_TYPE_8, value, value_len);
-            sdsfree(value);
-            return entry;
+/* make any access to the hash object elements ignore the specific elements expiration.
+ * This is mainly in order to be able to access hash elements which are already expired. */
+static inline void hashTypeIgnoreTTL(robj *o, bool ignore) {
+    if (o->encoding == OBJ_ENCODING_HASHTABLE) {
+        /* prevent placing access function if not needed */
+        if (!ignore && !hashTypeHasVolatileElements(o)) {
+            ignore = true;
         }
-        hashTypeEntry *new_entry = hashTypeCreateEntry(hashTypeEntryGetField(entry), value);
-        freeHashTypeEntry(entry);
-        return new_entry;
+        hashtableSetType(o->ptr, ignore ? &hashHashtableType : &hashWithVolatileItemsHashtableType);
+    }
+}
+
+static volatile_set *hashTypeGetOrcreateVolatileSet(robj *o) {
+    serverAssert(o->encoding == OBJ_ENCODING_HASHTABLE);
+    volatile_set **volatile_set_ref = hashtableMetadata(o->ptr);
+    if (*volatile_set_ref == NULL) {
+        *volatile_set_ref = createVolatileSet(&hashVolatileEntryType);
+        /* serves mainly for optimization. Use type which supports access function only when needed. */
+        hashTypeIgnoreTTL(o, false);
+    }
+    return *volatile_set_ref;
+}
+
+static void hashTypeDeleteVolatileSet(robj *o) {
+    volatile_set **volatile_set_ref = hashtableMetadata(o->ptr);
+    freeVolatileSet(*volatile_set_ref);
+    *volatile_set_ref = NULL;
+    /* serves mainly for optimization. by changing the hashtable type we can avoid extra function call in hashtable access */
+    hashTypeIgnoreTTL(o, true);
+}
+
+void hashTypeTrackEntry(robj *o, void *entry) {
+    volatile_set *set = hashTypeGetOrcreateVolatileSet(o);
+    serverAssert(volatileSetAddEntry(set, entry, entryGetExpiry(entry)));
+}
+
+void hashTypeUntrackEntry(robj *o, void *entry) {
+    if (!entryHasExpiry(entry)) return;
+    volatile_set *set = hashTypeGetVolatileSet(o);
+    debugServerAssert(set);
+    serverAssert(volatileSetRemoveEntry(set, entry, entryGetExpiry(entry)));
+    if (volatileSetNumEntries(set) == 0) {
+        hashTypeDeleteVolatileSet(o);
+    }
+}
+
+void hashTypeTrackUpdateEntry(robj *o, void *old_entry, void *new_entry, long long old_expiry, long long new_expiry) {
+    int old_tracked = (old_entry && old_expiry != EXPIRY_NONE);
+    int new_tracked = (new_entry && new_expiry != EXPIRY_NONE);
+    /* If entry was not tracked before and not going to be tracked now, we can simply return */
+    if (!old_tracked && !new_tracked)
+        return;
+
+    volatile_set *set = hashTypeGetOrcreateVolatileSet(o);
+    debugServerAssert(set);
+
+    if (old_tracked && !new_tracked) {
+        serverAssert(volatileSetRemoveEntry(set, old_entry, old_expiry));
+    } else if (new_tracked && !old_tracked) {
+        serverAssert(volatileSetAddEntry(set, new_entry, new_expiry));
     } else {
-        /* The value pointer is located before the embedded field. */
-        if (field_size + value_size <= EMBED_VALUE_MAX_ALLOC_SIZE) {
-            /* Convert to entry with embedded value. */
-            hashTypeEntry *new_entry = hashTypeCreateEntry(field, value);
-            freeHashTypeEntry(entry);
-            return new_entry;
-        } else {
-            /* Not embedded value. */
-            sds *value_ref = hashTypeEntryGetValueRef(entry);
-            sdsfree(*value_ref);
-            *value_ref = value;
-            return entry;
-        }
+        volatile_set *set = hashTypeGetVolatileSet(o);
+        debugServerAssert(set);
+        serverAssert(volatileSetUpdateEntry(set, old_entry, new_entry, old_expiry, new_expiry) == 1);
+    }
+    if (volatileSetNumEntries(set) == 0) {
+        hashTypeDeleteVolatileSet(o);
     }
 }
 
-/* Returns memory usage of a hashTypeEntry, including all allocations owned by
- * the hashTypeEntry. */
-size_t hashTypeEntryMemUsage(hashTypeEntry *entry) {
-    size_t mem = 0;
-    if (entryHasValuePtr(entry)) {
-        /* Alloc size is not stored in the embedded field. */
-        mem = zmalloc_usable_size(hashTypeEntryAllocPtr(entry));
-        mem += sdsAllocSize(*hashTypeEntryGetValueRef(entry));
-    } else {
-        /* Remaining alloc size is encoded in the embedded value SDS header. */
-        sds field = entry;
-        sds value = (char *)entry + sdslen(field) + 1 + sdsHdrSize(SDS_TYPE_8);
-        size_t field_size = sdsHdrSize(sdsType(field)) + sdslen(field) + 1;
-        size_t value_size = sdsHdrSize(SDS_TYPE_8) + sdsalloc(value) + 1;
-        mem = field_size + value_size;
-    }
-    return mem;
-}
+bool hashHashtableTypeValidate(hashtable *ht, void *entry) {
+    UNUSED(ht);
+    expirationPolicy policy = getExpirationPolicyWithFlags(0);
+    if (policy == POLICY_IGNORE_EXPIRE) return true;
 
-/* Defragments a hashtable entry (field-value pair) if needed, using the
- * provided defrag functions. The defrag functions return NULL if the allocation
- * was not moved, otherwise they return a pointer to the new memory location.
- * A separate sds defrag function is needed because of the unique memory layout
- * of sds strings.
- * If the location of the hashTypeEntry changed we return the new location,
- * otherwise we return NULL. */
-hashTypeEntry *hashTypeEntryDefrag(hashTypeEntry *entry, void *(*defragfn)(void *), sds (*sdsdefragfn)(sds)) {
-    if (entryHasValuePtr(entry)) {
-        sds *value_ref = hashTypeEntryGetValueRef(entry);
-        sds new_value = sdsdefragfn(*value_ref);
-        if (new_value) *value_ref = new_value;
-    }
-    char *allocation = hashTypeEntryAllocPtr(entry);
-    char *new_allocation = defragfn(allocation);
-    if (new_allocation != NULL) {
-        /* Return the same offset into the new allocation as the entry's offset
-         * in the old allocation. */
-        return new_allocation + ((char *)entry - allocation);
-    }
-    return NULL;
-}
+    if (!entryIsExpired(entry)) return true;
 
-/* Used for releasing memory to OS to avoid unnecessary CoW. Called when we've
- * forked and memory won't be used again. See zmadvise_dontneed() */
-void dismissHashTypeEntry(hashTypeEntry *entry) {
-    /* Only dismiss values memory since the field size usually is small. */
-    if (entryHasValuePtr(entry)) {
-        dismissSds(*hashTypeEntryGetValueRef(entry));
-    }
-}
-
-void freeHashTypeEntry(hashTypeEntry *entry) {
-    if (entryHasValuePtr(entry)) {
-        sdsfree(*hashTypeEntryGetValueRef(entry));
-    }
-    zfree(hashTypeEntryAllocPtr(entry));
+    return false;
 }
 
 /*-----------------------------------------------------------------------------
@@ -322,16 +216,6 @@ int hashTypeGetFromListpack(robj *o, sds field, unsigned char **vstr, unsigned i
     return -1;
 }
 
-/* Get the value from a hash table encoded hash, identified by field.
- * Returns NULL when the field cannot be found, otherwise the SDS value
- * is returned. */
-sds hashTypeGetFromHashTable(robj *o, sds field) {
-    serverAssert(o->encoding == OBJ_ENCODING_HASHTABLE);
-    void *found_element;
-    if (!hashtableFind(o->ptr, field, &found_element)) return NULL;
-    return hashTypeEntryGetValue(found_element);
-}
-
 /* Higher level function of hashTypeGet*() that returns the hash value
  * associated with the specified field. If the field is found C_OK
  * is returned, otherwise C_ERR. The returned object is returned by
@@ -340,16 +224,48 @@ sds hashTypeGetFromHashTable(robj *o, sds field) {
  *
  * If *vll is populated *vstr is set to NULL, so the caller
  * can always check the function return by checking the return value
- * for C_OK and checking if vll (or vstr) is NULL. */
-int hashTypeGetValue(robj *o, sds field, unsigned char **vstr, unsigned int *vlen, long long *vll) {
+ * for C_OK and checking if vll (or vstr) is NULL.
+ *
+ * If *expiry is populated than the function will also provide the current field expiration time
+ * or EXPIRY_NONE in case the field has no expiration time defined. */
+int hashTypeGetValue(robj *o, sds field, unsigned char **vstr, unsigned int *vlen, long long *vll, long long *expiry) {
     if (o->encoding == OBJ_ENCODING_LISTPACK) {
         *vstr = NULL;
-        if (hashTypeGetFromListpack(o, field, vstr, vlen, vll) == 0) return C_OK;
+        if (hashTypeGetFromListpack(o, field, vstr, vlen, vll) == 0) {
+            if (expiry) *expiry = EXPIRY_NONE;
+            return C_OK;
+        }
     } else if (o->encoding == OBJ_ENCODING_HASHTABLE) {
-        sds value = hashTypeGetFromHashTable(o, field);
-        if (value != NULL) {
+        void *entry = NULL;
+        hashtableFind(o->ptr, field, &entry);
+        if (entry) {
+            sds value = entryGetValue(entry);
+            serverAssert(value != NULL);
             *vstr = (unsigned char *)value;
             *vlen = sdslen(value);
+            if (expiry) *expiry = entryGetExpiry(entry);
+            return C_OK;
+        }
+    } else {
+        serverPanic("Unknown hash encoding");
+    }
+    return C_ERR;
+}
+
+/* Returns the expiration time associated with the specified field.
+ * If the field is found C_OK is returned, otherwise C_ERR.
+ * The matching item expiration time is assigned to `expiry` memory location, if specified.
+ * In case the item has no assigned expiration time, -1 is returned. */
+int hashTypeGetExpiry(robj *o, sds field, long long *expiry) {
+    if (o->encoding == OBJ_ENCODING_LISTPACK) {
+        if (hashTypeExists(o, field)) {
+            if (expiry) *expiry = EXPIRY_NONE;
+            return C_OK;
+        }
+    } else if (o->encoding == OBJ_ENCODING_HASHTABLE) {
+        void *found_element = NULL;
+        if (hashtableFind(o->ptr, field, &found_element)) {
+            if (expiry) *expiry = entryGetExpiry(found_element);
             return C_OK;
         }
     } else {
@@ -367,7 +283,7 @@ robj *hashTypeGetValueObject(robj *o, sds field) {
     unsigned int vlen;
     long long vll;
 
-    if (hashTypeGetValue(o, field, &vstr, &vlen, &vll) == C_ERR) return NULL;
+    if (hashTypeGetValue(o, field, &vstr, &vlen, &vll, NULL) == C_ERR) return NULL;
     if (vstr)
         return createStringObject((char *)vstr, vlen);
     else
@@ -383,7 +299,7 @@ size_t hashTypeGetValueLength(robj *o, sds field) {
     unsigned int vlen = UINT_MAX;
     long long vll = LLONG_MAX;
 
-    if (hashTypeGetValue(o, field, &vstr, &vlen, &vll) == C_OK) len = vstr ? vlen : sdigits10(vll);
+    if (hashTypeGetValue(o, field, &vstr, &vlen, &vll, NULL) == C_OK) len = vstr ? vlen : sdigits10(vll);
 
     return len;
 }
@@ -395,7 +311,7 @@ int hashTypeExists(robj *o, sds field) {
     unsigned int vlen = UINT_MAX;
     long long vll = LLONG_MAX;
 
-    return hashTypeGetValue(o, field, &vstr, &vlen, &vll) == C_OK;
+    return hashTypeGetValue(o, field, &vstr, &vlen, &vll, NULL) == C_OK;
 }
 
 /* Add a new field, overwrite the old with the new value if it already exists.
@@ -416,14 +332,14 @@ int hashTypeExists(robj *o, sds field) {
  * semantics of copying the values if needed.
  *
  */
-int hashTypeSet(robj *o, sds field, sds value, int flags) {
+int hashTypeSet(robj *o, sds field, sds value, long long expiry, int flags) {
     int update = 0;
 
     /* Check if the field is too long for listpack, and convert before adding the item.
      * This is needed for HINCRBY* case since in other commands this is handled early by
      * hashTypeTryConversion, so this check will be a NOP. */
     if (o->encoding == OBJ_ENCODING_LISTPACK) {
-        if (sdslen(field) > server.hash_max_listpack_value || sdslen(value) > server.hash_max_listpack_value)
+        if (expiry > 0 || sdslen(field) > server.hash_max_listpack_value || sdslen(value) > server.hash_max_listpack_value)
             hashTypeConvert(o, OBJ_ENCODING_HASHTABLE);
     }
 
@@ -465,22 +381,40 @@ int hashTypeSet(robj *o, sds field, sds value, int flags) {
             v = sdsdup(value);
         }
 
+        /* We have to ignore the TTL when setting an element. this is mainly in order to be able to update an existing expired
+         * entry and not have it remain in the hashtable with the same field/value. */
+        hashTypeIgnoreTTL(o, true);
         hashtablePosition position;
         void *existing;
         if (hashtableFindPositionForInsert(ht, field, &position, &existing)) {
             /* does not exist yet */
-            hashTypeEntry *entry = hashTypeCreateEntry(field, v);
+            entry *entry = entryCreate(field, v, expiry);
             hashtableInsertAtPosition(ht, entry, &position);
+            /* In case an expiry is set on the new entry, we need to track it */
+            if (expiry != EXPIRY_NONE) {
+                hashTypeTrackEntry(o, entry);
+            }
         } else {
             /* exists: replace value */
-            void *new_entry = hashTypeEntryReplaceValue(existing, v);
+            long long entry_expiry = entryGetExpiry(existing);
+            /* It is possible that the entry is already expired. In this case we can override it, but we need to make sure to expire it first
+             * and treat it like it did not exist. */
+            bool is_expired = timestampIsExpired(entry_expiry);
+            if (!is_expired && flags & HASH_SET_KEEP_EXPIRY) {
+                /* In case the HASH_SET_KEEP_EXPIRY will force keeping the existing entry expiry. */
+                expiry = entry_expiry;
+            }
+            void *new_entry = entryUpdate(existing, v, expiry);
             if (new_entry != existing) {
                 /* It has been reallocated. */
                 int replaced = hashtableReplaceReallocatedEntry(ht, existing, new_entry);
                 serverAssert(replaced);
             }
-            update = 1;
+            hashTypeTrackUpdateEntry(o, existing, new_entry, entry_expiry, expiry);
+            /* since we are exposed to expired entries, we must NOT reflect them as being "updated" */
+            update = is_expired ? 0 : 1;
         }
+        hashTypeIgnoreTTL(o, false);
     } else {
         serverPanic("Unknown hash encoding");
     }
@@ -490,6 +424,110 @@ int hashTypeSet(robj *o, sds field, sds value, int flags) {
     if (flags & HASH_SET_TAKE_FIELD && field) sdsfree(field);
     if (flags & HASH_SET_TAKE_VALUE && value) sdsfree(value);
     return update;
+}
+
+/* Set expiration on the specific HASH object 'o' item indicated by 'field'.
+ * returns -2 in case the provided object is NULL or the specific field was not found.
+ * returns 0 if the specified flag conditions has not been met.
+ * returns 1 if the expiration time was applied.
+ * returns 2 when 'expire' indicate a past Unix time. In this case, if the item exists in the HASH, it will also be expired. */
+static expiryModificationResult hashTypeSetExpire(robj *o, sds field, long long expiry, int flag) {
+    /* If no object we will return -2 */
+    if (o == NULL) return EXPIRATION_MODIFICATION_NOT_EXIST;
+
+    if (o->encoding == OBJ_ENCODING_LISTPACK) {
+        unsigned char *vstr;
+        unsigned int vlen;
+        long long vll;
+        /* We do not want to convert to listpack for no good reason.
+         * So we first check if the item exists.*/
+        if (hashTypeGetFromListpack(o, field, &vstr, &vlen, &vll) < 0) {
+            return EXPIRATION_MODIFICATION_NOT_EXIST;
+        }
+        /* When listpack representation is used, we consider it as infinite TTL,
+         * so expire command with gt always fail the GT as well as existence(XX).
+         * Else, we already know we are going to set an expiration so we expend to hashtable encoding. */
+        if (flag & EXPIRE_XX || flag & EXPIRE_GT) {
+            return EXPIRATION_MODIFICATION_FAILED_CONDITION;
+        } else {
+            hashTypeConvert(o, OBJ_ENCODING_HASHTABLE);
+        }
+    }
+
+    /* we must be hashtable encoded */
+    serverAssert(o->encoding == OBJ_ENCODING_HASHTABLE);
+
+    hashtable *ht = o->ptr;
+    void **entry_ref = NULL;
+    if ((entry_ref = hashtableFindRef(ht, field))) {
+        entry *current_entry = *entry_ref;
+        long long current_expire = entryGetExpiry(current_entry);
+        if (flag) {
+            /* NX option is set, check no current expiry */
+            if (flag & EXPIRE_NX) {
+                if (current_expire != EXPIRY_NONE) {
+                    return EXPIRATION_MODIFICATION_FAILED_CONDITION;
+                }
+            }
+
+            /* XX option is set, check current expiry */
+            if (flag & EXPIRE_XX) {
+                if (current_expire == EXPIRY_NONE) {
+                    return EXPIRATION_MODIFICATION_FAILED_CONDITION;
+                }
+            }
+
+            /* GT option is set, check current expiry */
+            if (flag & EXPIRE_GT) {
+                /* When current_expire is -1, we consider it as infinite TTL,
+                 * so expire command with gt always fail the GT. */
+                if (expiry <= current_expire || current_expire == EXPIRY_NONE) {
+                    return EXPIRATION_MODIFICATION_FAILED_CONDITION;
+                }
+            }
+
+            /* LT option is set, check current expiry */
+            if (flag & EXPIRE_LT) {
+                /* When current_expire -1, we consider it as infinite TTL,
+                 * so if there is an expiry on the key and it's not less than current, we fail the LT. */
+                if (current_expire != EXPIRY_NONE && expiry >= current_expire) {
+                    return EXPIRATION_MODIFICATION_FAILED_CONDITION;
+                }
+            }
+        }
+        *entry_ref = entrySetExpiry(current_entry, expiry);
+        hashTypeTrackUpdateEntry(o, current_entry, *entry_ref, current_expire, expiry);
+        return EXPIRATION_MODIFICATION_SUCCESSFUL;
+    }
+    return EXPIRATION_MODIFICATION_NOT_EXIST; // we did not find anything to do. return -2
+}
+
+
+static expiryModificationResult hashTypePersist(robj *o, sds field) {
+    /* NULL object returns -2 */
+    if (o == NULL || o->type != OBJ_HASH) return EXPIRATION_MODIFICATION_NOT_EXIST;
+
+    if (o->encoding == OBJ_ENCODING_LISTPACK) {
+        if (hashTypeExists(o, field))
+            /* When listpack representation is used, All items are without expiry */
+            return EXPIRATION_MODIFICATION_FAILED;
+        else
+            return EXPIRATION_MODIFICATION_NOT_EXIST; // Did not find any element return -2
+    }
+
+    hashtable *ht = o->ptr;
+    void **entry_ref = NULL;
+    if ((entry_ref = hashtableFindRef(ht, field))) {
+        entry *current_entry = *entry_ref;
+        long long current_expire = entryGetExpiry(current_entry);
+        if (current_expire != EXPIRY_NONE) {
+            hashTypeUntrackEntry(o, current_entry);
+            *entry_ref = entryUpdate(current_entry, NULL, EXPIRY_NONE);
+            return EXPIRATION_MODIFICATION_SUCCESSFUL;
+        }
+        return EXPIRATION_MODIFICATION_FAILED; // If the found element has no expiration set, return -1
+    }
+    return EXPIRATION_MODIFICATION_NOT_EXIST; // Did not find any element return -2
 }
 
 /* Delete an element from a hash.
@@ -513,7 +551,12 @@ int hashTypeDelete(robj *o, sds field) {
         }
     } else if (o->encoding == OBJ_ENCODING_HASHTABLE) {
         hashtable *ht = o->ptr;
-        deleted = hashtableDelete(ht, field);
+        void *entry = NULL;
+        deleted = hashtablePop(ht, field, &entry);
+        if (deleted) {
+            hashTypeUntrackEntry(o, entry);
+            entryFree(entry);
+        }
     } else {
         serverPanic("Unknown hash encoding");
     }
@@ -536,6 +579,7 @@ unsigned long hashTypeLength(const robj *o) {
 void hashTypeInitIterator(robj *subject, hashTypeIterator *hi) {
     hi->subject = subject;
     hi->encoding = subject->encoding;
+    hi->volatile_items_iter = false;
 
     if (hi->encoding == OBJ_ENCODING_LISTPACK) {
         hi->fptr = NULL;
@@ -547,8 +591,27 @@ void hashTypeInitIterator(robj *subject, hashTypeIterator *hi) {
     }
 }
 
+void hashTypeInitVolatileIterator(robj *subject, hashTypeIterator *hi) {
+    hi->subject = subject;
+    hi->encoding = subject->encoding;
+    hi->volatile_items_iter = true;
+
+    if (hi->encoding == OBJ_ENCODING_LISTPACK) {
+        return;
+    } else if (hi->encoding == OBJ_ENCODING_HASHTABLE) {
+        volatileSetStart(hashTypeGetVolatileSet(subject), &hi->viter);
+    } else {
+        serverPanic("Unknown hash encoding");
+    }
+}
+
 void hashTypeResetIterator(hashTypeIterator *hi) {
-    if (hi->encoding == OBJ_ENCODING_HASHTABLE) hashtableResetIterator(&hi->iter);
+    if (hi->encoding == OBJ_ENCODING_HASHTABLE) {
+        if (!hi->volatile_items_iter)
+            hashtableResetIterator(&hi->iter);
+        else
+            volatileSetReset(&hi->viter);
+    }
 }
 
 /* Move to the next entry in the hash. Return C_OK when the next entry
@@ -557,6 +620,9 @@ int hashTypeNext(hashTypeIterator *hi) {
     if (hi->encoding == OBJ_ENCODING_LISTPACK) {
         unsigned char *zl;
         unsigned char *fptr, *vptr;
+
+        /* listpack encoding does not have volatile items, so return as iteration end */
+        if (hi->volatile_items_iter) return C_ERR;
 
         zl = hi->subject->ptr;
         fptr = hi->fptr;
@@ -581,7 +647,11 @@ int hashTypeNext(hashTypeIterator *hi) {
         hi->fptr = fptr;
         hi->vptr = vptr;
     } else if (hi->encoding == OBJ_ENCODING_HASHTABLE) {
-        if (!hashtableNext(&hi->iter, &hi->next)) return C_ERR;
+        if (!hi->volatile_items_iter) {
+            if (!hashtableNext(&hi->iter, &hi->next)) return C_ERR;
+        } else {
+            if (!volatileSetNext(&hi->viter, &hi->next)) return C_ERR;
+        }
     } else {
         serverPanic("Unknown hash encoding");
     }
@@ -611,9 +681,9 @@ sds hashTypeCurrentFromHashTable(hashTypeIterator *hi, int what) {
     serverAssert(hi->encoding == OBJ_ENCODING_HASHTABLE);
 
     if (what & OBJ_HASH_FIELD) {
-        return hashTypeEntryGetField(hi->next);
+        return entryGetField(hi->next);
     } else {
-        return hashTypeEntryGetValue(hi->next);
+        return entryGetValue(hi->next);
     }
 }
 
@@ -682,10 +752,10 @@ void hashTypeConvertListpack(robj *o, int enc) {
         while (hashTypeNext(&hi) != C_ERR) {
             sds field = hashTypeCurrentObjectNewSds(&hi, OBJ_HASH_FIELD);
             sds value = hashTypeCurrentObjectNewSds(&hi, OBJ_HASH_VALUE);
-            hashTypeEntry *entry = hashTypeCreateEntry(field, value);
+            entry *entry = entryCreate(field, value, EXPIRY_NONE);
             sdsfree(field);
             if (!hashtableAdd(ht, entry)) {
-                freeHashTypeEntry(entry);
+                entryFree(entry);
                 hashTypeResetIterator(&hi); /* Needed for gcc ASAN */
                 serverLogHexDump(LL_WARNING, "listpack with dup elements dump", o->ptr, lpBytes(o->ptr));
                 serverPanic("Listpack corruption detected");
@@ -731,21 +801,22 @@ robj *hashTypeDup(robj *o) {
     } else if (o->encoding == OBJ_ENCODING_HASHTABLE) {
         hashtable *ht = hashtableCreate(&hashHashtableType);
         hashtableExpand(ht, hashtableSize((const hashtable *)o->ptr));
+        hobj = createObject(OBJ_HASH, ht);
+        hobj->encoding = OBJ_ENCODING_HASHTABLE;
 
         hashTypeInitIterator(o, &hi);
         while (hashTypeNext(&hi) != C_ERR) {
             /* Extract a field-value pair from an original hash object.*/
             sds field = hashTypeCurrentFromHashTable(&hi, OBJ_HASH_FIELD);
             sds value = hashTypeCurrentFromHashTable(&hi, OBJ_HASH_VALUE);
-
+            long long expiry = entryGetExpiry(hi.next);
             /* Add a field-value pair to a new hash object. */
-            hashTypeEntry *entry = hashTypeCreateEntry(field, sdsdup(value));
+            entry *entry = entryCreate(field, sdsdup(value), expiry);
             hashtableAdd(ht, entry);
+            if (expiry != EXPIRY_NONE)
+                hashTypeTrackEntry(hobj, entry);
         }
         hashTypeResetIterator(&hi);
-
-        hobj = createObject(OBJ_HASH, ht);
-        hobj->encoding = OBJ_ENCODING_HASHTABLE;
     } else {
         serverPanic("Unknown hash encoding");
     }
@@ -771,16 +842,33 @@ void hashReplyFromListpackEntry(client *c, listpackEntry *e) {
  * 'val' can be NULL in which case it's not extracted. */
 static void hashTypeRandomElement(robj *hashobj, unsigned long hashsize, listpackEntry *field, listpackEntry *val) {
     if (hashobj->encoding == OBJ_ENCODING_HASHTABLE) {
-        void *entry;
-        hashtableFairRandomEntry(hashobj->ptr, &entry);
-        sds sds_field = hashTypeEntryGetField(entry);
-        field->sval = (unsigned char *)sds_field;
-        field->slen = sdslen(sds_field);
-        if (val) {
-            sds sds_val = hashTypeEntryGetValue(entry);
-            val->sval = (unsigned char *)sds_val;
-            val->slen = sdslen(sds_val);
+        void *e = NULL;
+        int maxtries = 100;
+        hashTypeIgnoreTTL(hashobj, true);
+        while (!e) {
+            hashtableFairRandomEntry(hashobj->ptr, &e);
+            if (entryIsExpired(e) && --maxtries) {
+                e = NULL;
+                continue;
+            } else if (maxtries == 0) {
+                /* in case we will not be able to locate an entry which is not expired, we will just not return any
+                 * result. An alternative would have been that we end up returning an expired entry. */
+                field->sval = NULL;
+                if (val) val->sval = NULL;
+                break;
+            }
+            sds sds_field = entryGetField(e);
+            field->sval = (unsigned char *)sds_field;
+            field->slen = sdslen(sds_field);
+            if (val) {
+                entry *hash_entry = e;
+                sds sds_val = entryGetValue(hash_entry);
+                val->sval = (unsigned char *)sds_val;
+                val->slen =
+                    sdslen(sds_val);
+            }
         }
+        hashTypeIgnoreTTL(hashobj, false);
     } else if (hashobj->encoding == OBJ_ENCODING_LISTPACK) {
         lpRandomPair(hashobj->ptr, hashsize, field, val);
     } else {
@@ -793,61 +881,16 @@ static void hashTypeRandomElement(robj *hashobj, unsigned long hashsize, listpac
  * Hash type commands
  *----------------------------------------------------------------------------*/
 
-void hsetnxCommand(client *c) {
-    robj *o;
-    if ((o = hashTypeLookupWriteOrCreate(c, c->argv[1])) == NULL) return;
-
-    if (hashTypeExists(o, c->argv[2]->ptr)) {
-        addReply(c, shared.czero);
-    } else {
-        hashTypeTryConversion(o, c->argv, 2, 3);
-        hashTypeSet(o, c->argv[2]->ptr, c->argv[3]->ptr, HASH_SET_COPY);
-        signalModifiedKey(c, c->db, c->argv[1]);
-        notifyKeyspaceEvent(NOTIFY_HASH, "hset", c->argv[1], c->db->id);
-        server.dirty++;
-        addReply(c, shared.cone);
-    }
-}
-
-void hsetCommand(client *c) {
-    int i, created = 0;
-    robj *o;
-
-    if ((c->argc % 2) == 1) {
-        addReplyErrorArity(c);
-        return;
-    }
-
-    if ((o = hashTypeLookupWriteOrCreate(c, c->argv[1])) == NULL) return;
-    hashTypeTryConversion(o, c->argv, 2, c->argc - 1);
-
-    for (i = 2; i < c->argc; i += 2) created += !hashTypeSet(o, c->argv[i]->ptr, c->argv[i + 1]->ptr, HASH_SET_COPY);
-
-    signalModifiedKey(c, c->db, c->argv[1]);
-    notifyKeyspaceEvent(NOTIFY_HASH, "hset", c->argv[1], c->db->id);
-    server.dirty += (c->argc - 2) / 2;
-
-    /* HMSET (deprecated) and HSET return value is different. */
-    char *cmdname = c->argv[0]->ptr;
-    if (cmdname[1] == 's' || cmdname[1] == 'S') {
-        /* HSET */
-        addReplyLongLong(c, created);
-    } else {
-        /* HMSET */
-        addReply(c, shared.ok);
-    }
-}
-
 void hincrbyCommand(client *c) {
     long long value, incr, oldvalue;
     robj *o;
     sds new;
     unsigned char *vstr;
     unsigned int vlen;
-
+    long long expiry = EXPIRY_NONE;
     if (getLongLongFromObjectOrReply(c, c->argv[3], &incr, NULL) != C_OK) return;
     if ((o = hashTypeLookupWriteOrCreate(c, c->argv[1])) == NULL) return;
-    if (hashTypeGetValue(o, c->argv[2]->ptr, &vstr, &vlen, &value) == C_OK) {
+    if (hashTypeGetValue(o, c->argv[2]->ptr, &vstr, &vlen, &value, &expiry) == C_OK) {
         if (vstr) {
             if (string2ll((char *)vstr, vlen, &value) == 0) {
                 addReplyError(c, "hash value is not an integer");
@@ -866,7 +909,7 @@ void hincrbyCommand(client *c) {
     }
     value += incr;
     new = sdsfromlonglong(value);
-    hashTypeSet(o, c->argv[2]->ptr, new, HASH_SET_TAKE_VALUE);
+    hashTypeSet(o, c->argv[2]->ptr, new, expiry, HASH_SET_TAKE_VALUE);
     signalModifiedKey(c, c->db, c->argv[1]);
     notifyKeyspaceEvent(NOTIFY_HASH, "hincrby", c->argv[1], c->db->id);
     server.dirty++;
@@ -880,6 +923,7 @@ void hincrbyfloatCommand(client *c) {
     sds new;
     unsigned char *vstr;
     unsigned int vlen;
+    long long expiry = EXPIRY_NONE;
 
     if (getLongDoubleFromObjectOrReply(c, c->argv[3], &incr, NULL) != C_OK) return;
     if (isnan(incr) || isinf(incr)) {
@@ -887,7 +931,8 @@ void hincrbyfloatCommand(client *c) {
         return;
     }
     if ((o = hashTypeLookupWriteOrCreate(c, c->argv[1])) == NULL) return;
-    if (hashTypeGetValue(o, c->argv[2]->ptr, &vstr, &vlen, &ll) == C_OK) {
+
+    if (hashTypeGetValue(o, c->argv[2]->ptr, &vstr, &vlen, &ll, &expiry) == C_OK) {
         if (vstr) {
             if (string2ld((char *)vstr, vlen, &value) == 0) {
                 addReplyError(c, "hash value is not a float");
@@ -909,7 +954,7 @@ void hincrbyfloatCommand(client *c) {
     char buf[MAX_LONG_DOUBLE_CHARS];
     int len = ld2string(buf, sizeof(buf), value, LD_STR_HUMAN);
     new = sdsnewlen(buf, len);
-    hashTypeSet(o, c->argv[2]->ptr, new, HASH_SET_TAKE_VALUE);
+    hashTypeSet(o, c->argv[2]->ptr, new, expiry, HASH_SET_TAKE_VALUE);
     signalModifiedKey(c, c->db, c->argv[1]);
     notifyKeyspaceEvent(NOTIFY_HASH, "hincrbyfloat", c->argv[1], c->db->id);
     server.dirty++;
@@ -935,7 +980,7 @@ static void addHashFieldToReply(client *c, robj *o, sds field) {
     unsigned int vlen = UINT_MAX;
     long long vll = LLONG_MAX;
 
-    if (hashTypeGetValue(o, field, &vstr, &vlen, &vll) == C_OK) {
+    if (hashTypeGetValue(o, field, &vstr, &vlen, &vll, NULL) == C_OK) {
         if (vstr) {
             addReplyBulkCBuffer(c, vstr, vlen);
         } else {
@@ -950,7 +995,6 @@ void hgetCommand(client *c) {
     robj *o;
 
     if ((o = lookupKeyReadOrReply(c, c->argv[1], shared.null[c->resp])) == NULL || checkType(c, o, OBJ_HASH)) return;
-
     addHashFieldToReply(c, o, c->argv[2]->ptr);
 }
 
@@ -961,11 +1005,15 @@ void hmgetCommand(client *c) {
     /* Don't abort when the key cannot be found. Non-existing keys are empty
      * hashes, where HMGET should respond with a series of null bulks. */
     o = lookupKeyRead(c->db, c->argv[1]);
+
     if (checkType(c, o, OBJ_HASH)) return;
 
     addReplyArrayLen(c, c->argc - 2);
     for (i = 2; i < c->argc; i++) {
         addHashFieldToReply(c, o, c->argv[i]->ptr);
+    }
+    if (o && hashTypeLength(o) == 0) {
+        dbDelete(c->db, c->argv[1]);
     }
 }
 
@@ -974,7 +1022,6 @@ void hdelCommand(client *c) {
     int j, deleted = 0, keyremoved = 0;
 
     if ((o = lookupKeyWriteOrReply(c, c->argv[1], shared.czero)) == NULL || checkType(c, o, OBJ_HASH)) return;
-
     for (j = 2; j < c->argc; j++) {
         if (hashTypeDelete(o, c->argv[j]->ptr)) {
             deleted++;
@@ -1028,10 +1075,395 @@ static void addHashIteratorCursorToReply(writePreparedClient *wpc, hashTypeItera
     }
 }
 
+void hsetnxCommand(client *c) {
+    robj *o;
+    if ((o = hashTypeLookupWriteOrCreate(c, c->argv[1])) == NULL) return;
+    if (hashTypeExists(o, c->argv[2]->ptr)) {
+        addReply(c, shared.czero);
+    } else {
+        hashTypeTryConversion(o, c->argv, 2, 3);
+        hashTypeSet(o, c->argv[2]->ptr, c->argv[3]->ptr, EXPIRY_NONE, HASH_SET_COPY | HASH_SET_KEEP_EXPIRY);
+        signalModifiedKey(c, c->db, c->argv[1]);
+        notifyKeyspaceEvent(NOTIFY_HASH, "hset", c->argv[1], c->db->id);
+        server.dirty++;
+        addReply(c, shared.cone);
+    }
+}
+
+void hsetCommand(client *c) {
+    int i, created = 0;
+    robj *o;
+
+    if ((c->argc % 2) == 1) {
+        addReplyErrorArity(c);
+        return;
+    }
+
+    if ((o = hashTypeLookupWriteOrCreate(c, c->argv[1])) == NULL) return;
+    hashTypeTryConversion(o, c->argv, 2, c->argc - 1);
+
+    for (i = 2; i < c->argc; i += 2) created += !hashTypeSet(o, c->argv[i]->ptr, c->argv[i + 1]->ptr, EXPIRY_NONE, HASH_SET_COPY);
+
+    signalModifiedKey(c, c->db, c->argv[1]);
+    notifyKeyspaceEvent(NOTIFY_HASH, "hset", c->argv[1], c->db->id);
+    server.dirty += (c->argc - 2) / 2;
+
+    /* HMSET (deprecated) and HSET return value is different. */
+    char *cmdname = c->argv[0]->ptr;
+    if (cmdname[1] == 's' || cmdname[1] == 'S') {
+        /* HSET */
+        addReplyLongLong(c, created);
+    } else {
+        /* HMSET */
+        addReply(c, shared.ok);
+    }
+}
+
+/* High-Level Algorithm of HSETEX Command:
+ *
+ * - Parse arguments and options:
+ *   Parses optional flags such as NX, XX, FNX, FXX, KEEPTTL, and expiration time options.
+ *   Ensures the number of specified fields matches the actual provided key-value pairs.
+ *
+ * - Check object existence conditions:
+ *   Depending on NX/XX flags, verifies whether the hash key must or must not exist.
+ *   Exits early with a zero reply if conditions aren't met.
+ *
+ * - Create the hash object if needed:
+ *   If the key does not exist and creation is permitted, allocates a new hash.
+ *
+ * - Handle expiration logic:
+ *   Computes the expiry time (relative or absolute).
+ *   If the expiration is in the past, the command proceeds to delete the relevant fields.
+ *
+ * - Enforce per-field conditions:
+ *   If FNX (field must not exist) or FXX (field must exist) flags are set,
+ *   ensures all fields satisfy these conditions before proceeding.
+ *
+ * - Apply changes:
+ *   Either deletes expired fields or sets fields with optional expiration.
+ *
+ * - Clean up and notify:
+ *   Deletes the key if the hash becomes empty.
+ *   Emits keyspace notifications for changes (see below).
+ *   Modifies the command vector for AOF propagation if necessary.
+ *
+ *
+ * Return Value:
+ * - Returns integer 1 if all fields were successfully updated or deleted.
+ * - Returns integer 0 if no fields were updated due to condition failures.
+ *
+ *
+ * Keyspace Notifications (if enabled):
+ * - "hset"      — Emitted when fields are added or updated.
+ * - "hexpire"   — Emitted when expiration is set on fields.
+ * - "hexpired"  — Emitted when fields are immediately expired and deleted.
+ * - "del"       — Emitted if the entire key is removed (empty hash).
+ *
+ *
+ * Client Reply:
+ * - Integer reply: 1 if all changes succeeded, 0 if no changes occurred. */
+void hsetexCommand(client *c) {
+    robj *o;
+    robj *expire = NULL;
+    robj *comparison = NULL;
+    int unit = UNIT_SECONDS;
+    int flags = ARGS_NO_FLAGS;
+    int fields_index = 0;
+    long long num_fields = 0;
+    long long when = EXPIRY_NONE;
+    int i = 0;
+    int set_flags = HASH_SET_COPY, set_expired = 0;
+    int changes = 0;
+    robj **new_argv = NULL;
+    int new_argc = 0;
+
+    for (; fields_index < c->argc; fields_index++) {
+        if (!strcasecmp(c->argv[fields_index]->ptr, "fields")) {
+            /* checking optional flags */
+            if (parseExtendedCommandArgumentsOrReply(c, &flags, &unit, &expire, &comparison, COMMAND_HSET, fields_index++) != C_OK) return;
+            if (getLongLongFromObjectOrReply(c, c->argv[fields_index++], &num_fields, NULL) != C_OK) return;
+            break;
+        }
+    }
+    /* Check that the parsed fields number matches the real provided number of fields */
+    if (!num_fields || num_fields != (c->argc - fields_index) / 2) {
+        addReplyError(c, "numfields should be greater than 0 and match the provided number of fields");
+        return;
+    }
+
+    o = lookupKeyWrite(c->db, c->argv[1]);
+    if (checkType(c, o, OBJ_HASH))
+        return;
+
+    if (o == NULL) {
+        o = createHashObject();
+        dbAdd(c->db, c->argv[1], &o);
+    }
+
+    /* Handle parsing and calculating the expiration time. */
+    if (flags & ARGS_KEEPTTL)
+        set_flags |= HASH_SET_KEEP_EXPIRY;
+    else if (expire) {
+        long long basetime = (flags & (ARGS_EXAT | ARGS_PXAT)) ? 0 : commandTimeSnapshot();
+
+        if (convertExpireArgumentToUnixTime(c, expire, basetime, unit, &when) == C_ERR)
+            return;
+
+        if (checkAlreadyExpired(when)) {
+            set_expired = 1;
+        }
+    }
+
+    /* Check for all fields condition */
+    if (flags & (ARGS_SET_FNX | ARGS_SET_FXX)) {
+        for (i = fields_index; i < c->argc; i += 2) {
+            if (((flags & ARGS_SET_FNX) && hashTypeExists(o, c->argv[i]->ptr)) ||
+                ((flags & ARGS_SET_FXX) && !hashTypeExists(o, c->argv[i]->ptr))) {
+                addReply(c, shared.czero);
+                return;
+            }
+        }
+    }
+
+    /* In case we are expiring all the elements prepare a new argv since we are going to delete all the expired fields. */
+    if (set_expired) {
+        new_argv = zmalloc(sizeof(robj *) * (num_fields + 2));
+        new_argv[new_argc++] = shared.hdel;
+        incrRefCount(shared.hdel);
+        new_argv[new_argc++] = c->argv[1];
+        incrRefCount(c->argv[1]);
+    }
+
+    for (i = fields_index; i < c->argc; i += 2) {
+        if (set_expired) {
+            if (hashTypeDelete(o, c->argv[i]->ptr)) {
+                new_argv[new_argc++] = c->argv[i];
+                incrRefCount(c->argv[i]);
+                changes++;
+            }
+        } else {
+            hashTypeSet(o, c->argv[i]->ptr, c->argv[i + 1]->ptr, when, set_flags);
+            changes++;
+        }
+    }
+
+
+    if (changes) {
+        notifyKeyspaceEvent(NOTIFY_HASH, "hset", c->argv[1], c->db->id);
+        if (set_expired) {
+            replaceClientCommandVector(c, new_argc, new_argv);
+            /* We would like to reduce the number of hexpired events in case there are potential many expired fields. */
+            notifyKeyspaceEvent(NOTIFY_HASH, "hexpired", c->argv[1], c->db->id);
+        } else if (expire) {
+            /* Propagate as HSETEX Key Value PXAT millisecond-timestamp if there is
+             * EX/PX/EXAT flag. */
+            if (!(flags & ARGS_PXAT)) {
+                for (int i = 2; i < fields_index; i++) {
+                    if (c->argv[i + 1] == expire) {
+                        robj *milliseconds_obj = createStringObjectFromLongLong(when);
+                        rewriteClientCommandArgument(c, i, shared.pxat);
+                        rewriteClientCommandArgument(c, i + 1, milliseconds_obj);
+                        decrRefCount(milliseconds_obj);
+                        break;
+                    }
+                }
+            }
+            notifyKeyspaceEvent(NOTIFY_HASH, "hexpire", c->argv[1], c->db->id);
+        }
+        signalModifiedKey(c, c->db, c->argv[1]);
+        /* Delete the object in case it was left empty */
+        if (hashTypeLength(o) == 0) {
+            dbDelete(c->db, c->argv[1]);
+            notifyKeyspaceEvent(NOTIFY_GENERIC, "del", c->argv[1], c->db->id);
+        }
+        server.dirty += changes;
+    } else {
+        /* If no changes were done we still need to free the new argv array and the refcount of the first argument. */
+        if (set_expired)
+            decrRefCount(c->argv[1]);
+        if (new_argv) zfree(new_argv);
+    }
+    addReplyLongLong(c, changes == num_fields ? 1 : 0);
+}
+
+/* High-Level Algorithm of HGETEX Command:
+ *
+ * - Parses the command for optional arguments, including expiration options,
+ *   persistence flags, and the list of hash fields to retrieve.
+ *
+ * - Verifies that the number of fields specified matches the actual arguments,
+ *   and ensures the key exists and is a valid hash type.
+ *
+ * - Computes the expiration behavior:
+ *   - If `PERSIST` is provided, removes the expiration from the fields.
+ *   - If an expiration time is specified, calculates it relative or absolute.
+ *     - If already expired, deletes the fields immediately.
+ *     - Otherwise, schedules new expiration timestamps.
+ *
+ * - Retrieves and replies with the values for each requested field.
+ *
+ * - For each field:
+ *   - If expiration is due: deletes the field.
+ *   - If an expiry is scheduled: updates the field's expiration timestamp.
+ *   - If persisting: clears the field's expiration.
+ *
+ * - If any changes were made (deletes, expires, or persists):
+ *   - Rewrites the command vector (for AOF and replication) using HDEL, HPEXPIREAT, or HPERSIST.
+ *   - Issues keyspace notifications accordingly.
+ *   - If the hash becomes empty as a result, deletes the key and notifies.
+ *
+ *
+ * Return Value:
+ * - Always replies with an array of values for the requested fields (including NULLs for missing fields).
+ *
+ *
+ * Keyspace Notifications (if enabled):
+ * - "hexpire"   — When expiration is added to hash fields.
+ * - "hexpired"  — When fields are immediately expired and deleted.
+ * - "hpersist"  — When expiration is removed from fields.
+ * - "del"       — If the hash becomes empty and is removed entirely. */
+void hgetexCommand(client *c) {
+    robj *o;
+    robj *expire = NULL;
+    robj *comparison = NULL;
+    int unit = UNIT_SECONDS;
+    int flags = ARGS_NO_FLAGS;
+    int fields_index = 0;
+    long long num_fields = -1;
+    long long when = EXPIRY_NONE;
+    int i = 0;
+    int set_expiry = 0, set_expired = 0, persist = 0;
+    int changes = 0;
+    robj **new_argv = NULL;
+    robj *milliseconds_obj = NULL, *numitems_obj = NULL;
+    int new_argc = 0;
+    int milliseconds_index = -1, numitems_index = -1;
+
+    for (; fields_index < c->argc; fields_index++) {
+        if (!strcasecmp(c->argv[fields_index]->ptr, "fields")) {
+            /* checking optional flags */
+            if (parseExtendedCommandArgumentsOrReply(c, &flags, &unit, &expire, &comparison, COMMAND_HGET, fields_index++) != C_OK) return;
+            if (getLongLongFromObjectOrReply(c, c->argv[fields_index++], &num_fields, NULL) != C_OK) return;
+            break;
+        }
+    }
+
+    /* Check that the parsed fields number matches the real provided number of fields */
+    if (!num_fields || num_fields != (c->argc - fields_index)) {
+        addReplyError(c, "numfields should be greater than 0 and match the provided number of fields");
+        return;
+    }
+
+    if ((o = lookupKeyReadOrReply(c, c->argv[1], shared.null[c->resp])) == NULL || checkType(c, o, OBJ_HASH)) return;
+
+    /* Handle parsing and calculating the expiration time. */
+    if (flags & ARGS_PERSIST) {
+        persist = 1;
+    } else if (expire) {
+        long long basetime = (flags & (ARGS_EXAT | ARGS_PXAT)) ? 0 : commandTimeSnapshot();
+
+        if (convertExpireArgumentToUnixTime(c, expire, basetime, unit, &when) == C_ERR)
+            return;
+
+        if (checkAlreadyExpired(when)) {
+            set_expired = 1;
+            when = 0;
+        } else {
+            set_expiry = 1;
+        }
+    }
+
+    initDeferredReplyBuffer(c);
+
+    addReplyArrayLen(c, num_fields);
+    /* This command is never propagated as is. It is either propagated as HDEL, HPEXPIREAT or PERSIST.
+     * This why it doesn't need special handling in feedAppendOnlyFile to convert relative expire time to absolute one. */
+    if (set_expiry || set_expired || persist) {
+        /* allocate a new client argv for replicating the command. */
+        new_argv = zmalloc(sizeof(robj *) * (num_fields + 5));
+        if (set_expired)
+            new_argv[new_argc++] = shared.hdel;
+        else if (persist)
+            new_argv[new_argc++] = shared.hpersist;
+        else
+            new_argv[new_argc++] = shared.hpexpireat;
+
+        new_argv[new_argc++] = c->argv[1];
+        incrRefCount(c->argv[1]);
+
+        if (set_expiry) {
+            new_argv[new_argc++] = NULL; // placeholder for the expiration time
+            milliseconds_index = new_argc - 1;
+        }
+
+        if (set_expiry || persist) {
+            new_argv[new_argc++] = shared.fields;
+            new_argv[new_argc++] = NULL; // placeholder for the number of objects
+            numitems_index = new_argc - 1;
+        }
+    }
+    for (i = fields_index; i < c->argc; i++) {
+        int changed = 0;
+        addHashFieldToReply(c, o, c->argv[i]->ptr);
+        if (set_expired) {
+            changed = hashTypeDelete(o, c->argv[i]->ptr);
+        } else if (set_expiry) {
+            changed = (hashTypeSetExpire(o, c->argv[i]->ptr, when, 0) == EXPIRATION_MODIFICATION_SUCCESSFUL) ? 1 : 0;
+        } else if (persist) {
+            changed = (hashTypePersist(o, c->argv[i]->ptr) == EXPIRATION_MODIFICATION_SUCCESSFUL) ? 1 : 0;
+        }
+        if (changed) {
+            changes++;
+            new_argv[new_argc++] = c->argv[i];
+            incrRefCount(c->argv[i]);
+        }
+    }
+
+    /* rewrite the command vector and persist in case there are changes.
+     * Also notify keyspace notifications and signal the key was changed. */
+    if (changes) {
+        if (milliseconds_index > 0) {
+            milliseconds_obj = createStringObjectFromLongLong(when);
+            new_argv[milliseconds_index] = milliseconds_obj;
+            incrRefCount(milliseconds_obj);
+        }
+        if (numitems_index > 0) {
+            numitems_obj = createStringObjectFromLongLong(changes);
+            new_argv[numitems_index] = numitems_obj;
+            incrRefCount(numitems_obj);
+        }
+        replaceClientCommandVector(c, new_argc, new_argv);
+        if (set_expired)
+            notifyKeyspaceEvent(NOTIFY_HASH, "hexpired", c->argv[1], c->db->id);
+        else
+            notifyKeyspaceEvent(NOTIFY_HASH, set_expiry ? "hexpire" : "hpersist", c->argv[1], c->db->id);
+        if (milliseconds_obj) decrRefCount(milliseconds_obj);
+        if (numitems_obj) decrRefCount(numitems_obj);
+
+        server.dirty += changes;
+        signalModifiedKey(c, c->db, c->argv[1]);
+
+        /* Delete the object in case it was left empty */
+        if (hashTypeLength(o) == 0) {
+            dbDelete(c->db, c->argv[1]);
+            notifyKeyspaceEvent(NOTIFY_GENERIC, "del", c->argv[1], c->db->id);
+        }
+    } else {
+        /* If no changes were done we still need to free the new argv array and the refcount of the first argument. */
+        if (set_expiry || set_expired || persist) {
+            decrRefCount(c->argv[1]);
+        }
+        if (new_argv) zfree(new_argv);
+    }
+
+    commitDeferredReplyBuffer(c, 1);
+}
+
 void genericHgetallCommand(client *c, int flags) {
     robj *o;
     hashTypeIterator hi;
-    int length, count = 0;
+    int count = 0;
 
     robj *emptyResp = (flags & OBJ_HASH_FIELD && flags & OBJ_HASH_VALUE) ? shared.emptymap[c->resp] : shared.emptyarray;
     if ((o = lookupKeyReadOrReply(c, c->argv[1], emptyResp)) == NULL || checkType(c, o, OBJ_HASH)) return;
@@ -1040,13 +1472,7 @@ void genericHgetallCommand(client *c, int flags) {
     if (!wpc) return;
     /* We return a map if the user requested fields and values, like in the
      * HGETALL case. Otherwise to use a flat array makes more sense. */
-    length = hashTypeLength(o);
-    if (flags & OBJ_HASH_FIELD && flags & OBJ_HASH_VALUE) {
-        addWritePreparedReplyMapLen(wpc, length);
-    } else {
-        addWritePreparedReplyArrayLen(wpc, length);
-    }
-
+    void *replylen = addReplyDeferredLen(c);
     hashTypeInitIterator(o, &hi);
     while (hashTypeNext(&hi) != C_ERR) {
         if (flags & OBJ_HASH_FIELD) {
@@ -1060,10 +1486,13 @@ void genericHgetallCommand(client *c, int flags) {
     }
 
     hashTypeResetIterator(&hi);
-
     /* Make sure we returned the right number of elements. */
-    if (flags & OBJ_HASH_FIELD && flags & OBJ_HASH_VALUE) count /= 2;
-    serverAssert(count == length);
+    if (flags & OBJ_HASH_FIELD && flags & OBJ_HASH_VALUE) {
+        setDeferredMapLen(c, replylen, count /= 2);
+        count /= 2;
+    } else {
+        setDeferredArrayLen(c, replylen, count);
+    }
 }
 
 void hkeysCommand(client *c) {
@@ -1081,7 +1510,6 @@ void hgetallCommand(client *c) {
 void hexistsCommand(client *c) {
     robj *o;
     if ((o = lookupKeyReadOrReply(c, c->argv[1], shared.czero)) == NULL || checkType(c, o, OBJ_HASH)) return;
-
     addReply(c, hashTypeExists(o, c->argv[2]->ptr) ? shared.cone : shared.czero);
 }
 
@@ -1109,6 +1537,281 @@ static void hrandfieldReplyWithListpack(writePreparedClient *wpc, unsigned int c
                 addWritePreparedReplyBulkLongLong(wpc, vals[i].lval);
         }
     }
+}
+
+
+/* High-Level Algorithm of hexpireGenericCommand (used by HEXPIRE, HPEXPIRE, HEXPIREAT, HPEXPIREAT):
+ *
+ * - Parses optional flags and the number of hash fields to apply expiration to.
+ *
+ * - Converts the given expiration time (relative or absolute) into a Unix timestamp.
+ *
+ * - Determines if the given timestamp is already expired:
+ *   - If so, immediately deletes the specified hash fields.
+ *   - If not, updates their expiration metadata.
+ *
+ * - Responds with an array of integers:
+ *   - 1 if the expiration was set.
+ *   - 0 if it was unchanged (due to provided condition check failing).
+ *   - -2 if the field does not exist or the hash is empty.
+ *   - 2 if the field was immediately expired and deleted due to provided expiration is 0 or in the past.
+ *
+ * - If fields were deleted due to expiration:
+ *   - Rewrites the command as HDEL for replication/AOF.
+ *   - Emits a "hexpired" keyspace event.
+ *
+ * - If expiration was newly set:
+ *   - May rewrite the command as HPEXPIREAT if needed.
+ *   - Emits a "hexpire" keyspace event.
+ *
+ * - If the hash becomes empty after deletions:
+ *   - Deletes the hash key.
+ *   - Emits a "del" event for the key.
+ *
+ * Return Value:
+ * - An array of integers corresponding to the result for each field.
+ *
+ * Keyspace Notifications (if enabled):
+ * - "hexpired" — when fields are immediately expired and deleted.
+ * - "hexpire"  — when fields receive new expiration timestamps.
+ * - "del"      — when the hash key becomes empty and is removed. */
+void hexpireGenericCommand(client *c, long long basetime, int unit) {
+    robj *key = c->argv[1], *param = c->argv[2];
+    long long when; /* unix time in milliseconds when the key will expire. */
+    int flag = 0;
+    int fields_index = 3;
+    long long num_fields = 0;
+    int i, expired = 0, updated = 0;
+    int set_expired = 0;
+    robj **new_argv = NULL;
+    int new_argc = 0;
+
+    for (; fields_index < c->argc; fields_index++) {
+        if (!strcasecmp(c->argv[fields_index]->ptr, "fields")) {
+            /* checking optional flags */
+            if (parseExtendedExpireArgumentsOrReply(c, &flag, fields_index++) != C_OK) return;
+            if (getLongLongFromObjectOrReply(c, c->argv[fields_index++], &num_fields, NULL) != C_OK) return;
+            break;
+        }
+    }
+
+    /* Check that the parsed fields number matches the real provided number of fields */
+    if (!num_fields || num_fields != (c->argc - fields_index)) {
+        addReplyError(c, "numfields should be greater than 0 and match the provided number of fields");
+        return;
+    }
+
+    if (convertExpireArgumentToUnixTime(c, param, basetime, unit, &when) == C_ERR)
+        return;
+
+    if (checkAlreadyExpired(when))
+        set_expired = 1;
+
+    robj *obj = lookupKeyWrite(c->db, key);
+
+    /* Non HASH type return simple error */
+    if (checkType(c, obj, OBJ_HASH)) {
+        return;
+    }
+    /* From this point we would return array reply */
+    addReplyArrayLen(c, num_fields);
+
+    /* In case we are expiring all the elements prepare a new argv since we are going to delete all the expired fields. */
+    if (set_expired) {
+        new_argv = zmalloc(sizeof(robj *) * (num_fields + 3));
+        new_argv[new_argc++] = shared.hdel;
+        incrRefCount(shared.hdel);
+        new_argv[new_argc++] = c->argv[1];
+        incrRefCount(c->argv[1]);
+    }
+
+    for (i = 0; i < num_fields; i++) {
+        expiryModificationResult result = EXPIRATION_MODIFICATION_NOT_EXIST;
+        if (set_expired) {
+            if (obj && hashTypeDelete(obj, c->argv[fields_index + i]->ptr)) {
+                /* In case we deleted the field, add it to the new hdel command vector. */
+                new_argv[new_argc++] = c->argv[fields_index + i];
+                incrRefCount(c->argv[fields_index + i]);
+                result = EXPIRATION_MODIFICATION_EXPIRE_ASAP;
+                expired++;
+            }
+        } else {
+            result = hashTypeSetExpire(obj, c->argv[fields_index + i]->ptr, when, flag);
+            if (result == EXPIRATION_MODIFICATION_SUCCESSFUL) updated++;
+        }
+        addReplyLongLong(c, result);
+    }
+
+    if (expired || updated) {
+        if (expired) {
+            replaceClientCommandVector(c, new_argc, new_argv);
+            /* We would like to reduce the number of hexpired events in case there are potential many expired fields. */
+            notifyKeyspaceEvent(NOTIFY_HASH, "hexpired", c->argv[1], c->db->id);
+        } else if (updated) {
+            /* Propagate as HPEXPIREAT millisecond-timestamp
+             * Only rewrite the command arg if not already HPEXPIREAT */
+            if (c->cmd->proc != hpexpireatCommand) {
+                rewriteClientCommandArgument(c, 0, shared.hpexpireat);
+            }
+
+            /* Avoid creating a string object when it's the same as argv[2] parameter  */
+            if (basetime != 0 || unit == UNIT_SECONDS) {
+                robj *when_obj = createStringObjectFromLongLong(when);
+                rewriteClientCommandArgument(c, 2, when_obj);
+                decrRefCount(when_obj);
+            }
+            notifyKeyspaceEvent(NOTIFY_HASH, "hexpire", c->argv[1], c->db->id);
+        }
+        server.dirty += (expired + updated); // in case there was a change increment the dirty
+        signalModifiedKey(c, c->db, c->argv[1]);
+        /* Delete the object in case it was left empty */
+        if (hashTypeLength(obj) == 0) {
+            dbDelete(c->db, c->argv[1]);
+            notifyKeyspaceEvent(NOTIFY_GENERIC, "del", c->argv[1], c->db->id);
+        }
+    }
+}
+
+void hexpireCommand(client *c) {
+    hexpireGenericCommand(c, commandTimeSnapshot(), UNIT_SECONDS);
+}
+
+void hexpireatCommand(client *c) {
+    hexpireGenericCommand(c, 0, UNIT_SECONDS);
+}
+
+void hpexpireCommand(client *c) {
+    hexpireGenericCommand(c, commandTimeSnapshot(), UNIT_MILLISECONDS);
+}
+
+void hpexpireatCommand(client *c) {
+    hexpireGenericCommand(c, 0, UNIT_MILLISECONDS);
+}
+
+/* High-Level Algorithm of HPERSIST Command:
+ *
+ * - Expects a key and a list of hash fields whose expiration metadata should be removed.
+ * - Validates that the number of provided fields matches the declared count.
+ *
+ * - For each specified field attempts to remove any existing expiration.
+ * - Replies to the client with an array of integers, each representing the result of persistence for one field:
+ *   - 1 if the expiration for the field was removed.
+ *   - -1 if the field exists, but has no expiration time set.
+ *   - -2 if the field does not exist or the hash is empty.
+ *
+ * - If any expirations were removed:
+ *   - Marks the key as modified (for replication/AOF consistency).
+ *   - Emits a "hpersist" keyspace notification.
+ *
+ * Keyspace Notifications (if enabled):
+ * - "hpersist" — emitted once if any field had its expiration removed. */
+void hpersistCommand(client *c) {
+    int fields_index = 4, result = 0, changes = 0;
+    long long num_fields = 0;
+
+    if (getLongLongFromObjectOrReply(c, c->argv[fields_index - 1], &num_fields, NULL) != C_OK) return;
+
+    /* Check that the parsed fields number matches the real provided number of fields */
+    if (!num_fields || num_fields != (c->argc - fields_index)) {
+        addReplyError(c, "numfields should be greater than 0 and match the provided number of fields");
+        return;
+    }
+
+    /* From this point we would return array reply */
+    addReplyArrayLen(c, num_fields);
+
+    robj *hash = lookupKeyWrite(c->db, c->argv[1]);
+    if (checkType(c, hash, OBJ_HASH))
+        return;
+
+    for (int i = 0; i < num_fields; i++, fields_index++) {
+        result = hashTypePersist(hash, c->argv[fields_index]->ptr);
+        if (result == EXPIRATION_MODIFICATION_SUCCESSFUL) {
+            server.dirty++;
+            changes++;
+        }
+        addReplyLongLong(c, result);
+    }
+    if (changes) {
+        notifyKeyspaceEvent(NOTIFY_HASH, "hpersist", c->argv[1], c->db->id);
+        signalModifiedKey(c, c->db, c->argv[1]);
+    }
+}
+
+/* High-Level Algorithm of HTTL / HPTTL / HEXPIRETIME / HPEXPIRETIME Commands:
+ *
+ * - These commands return the remaining time to live (TTL) or absolute expiry time
+ *   of one or more fields in a hash.
+ *
+ * - HTTL / HPTTL:
+ *   - Return relative TTL of each field (in seconds or milliseconds).
+ *   - TTL is computed as the difference between current time and expiry time.
+ *
+ * - HEXPIRETIME / HPEXPIRETIME:
+ *   - Return the absolute Unix time at which each field will expire
+ *     (in seconds or milliseconds, depending on the variant).
+ *
+ * For each field requested:
+ *   - If the field or hash does not exist: reply with -2.
+ *   - If the field exists but has no expiration: reply with -1.
+ *   - If the field has an expiration:
+ *     - HTTL / HPTTL: reply with remaining TTL (clamped at 0 if negative).
+ *     - HEXPIRETIME / HPEXPIRETIME: reply with the absolute expiry time.
+ *
+ * Return Value:
+ * - An array of integers, one per field:
+ *   - -2 = hash or field does not exist.
+ *   - -1 = field exists but has no expiration.
+ *   - >=0 = TTL or expiry time, depending on the command variant.
+ *
+ * Keyspace Notifications:
+ * - None emitted; this command is read-only. */
+void httlGenericCommand(client *c, long long basetime, int unit) {
+    int fields_index = 4;
+    long long num_fields = 0, result = -2;
+
+    if (getLongLongFromObjectOrReply(c, c->argv[fields_index - 1], &num_fields, NULL) != C_OK) return;
+
+    /* Check that the parsed fields number matches the real provided number of fields */
+    if (!num_fields || num_fields != (c->argc - fields_index)) {
+        addReplyErrorObject(c, shared.syntaxerr);
+        return;
+    }
+
+    robj *hash = lookupKeyRead(c->db, c->argv[1]);
+
+    if (checkType(c, hash, OBJ_HASH)) return;
+
+    /* From this point we would return array reply */
+    addReplyArrayLen(c, num_fields);
+
+    for (int i = 0; i < num_fields; i++) {
+        if (!hash || hashTypeGetExpiry(hash, c->argv[fields_index + i]->ptr, &result) == C_ERR) {
+            addReplyLongLong(c, -2);
+        } else if (result == EXPIRY_NONE) {
+            addReplyLongLong(c, -1);
+        } else {
+            result = result - basetime;
+            if (result < 0) result = 0;
+            addReplyLongLong(c, unit == UNIT_MILLISECONDS ? result : ((result + 500) / 1000));
+        }
+    }
+}
+
+void httlCommand(client *c) {
+    httlGenericCommand(c, commandTimeSnapshot(), UNIT_SECONDS);
+}
+
+void hpttlCommand(client *c) {
+    httlGenericCommand(c, commandTimeSnapshot(), UNIT_MILLISECONDS);
+}
+
+void hexpiretimeCommand(client *c) {
+    httlGenericCommand(c, 0, UNIT_SECONDS);
+}
+
+void hpexpiretimeCommand(client *c) {
+    httlGenericCommand(c, 0, UNIT_MILLISECONDS);
 }
 
 /* How many times bigger should be the hash compared to the requested size
@@ -1144,26 +1847,30 @@ void hrandfieldWithCountCommand(client *c, long l, int withvalues) {
 
     writePreparedClient *wpc = prepareClientForFutureWrites(c);
     if (!wpc) return;
+
+    void *replylen = addReplyDeferredLen(c);
+    unsigned long reply_size = 0;
+
     /* CASE 1: The count was negative, so the extraction method is just:
      * "return N random elements" sampling the whole set every time.
      * This case is trivial and can be served without auxiliary data
      * structures. This case is the only one that also needs to return the
      * elements in random order. */
     if (!uniq || count == 1) {
-        if (withvalues && c->resp == 2)
-            addWritePreparedReplyArrayLen(wpc, count * 2);
-        else
-            addWritePreparedReplyArrayLen(wpc, count);
         if (hash->encoding == OBJ_ENCODING_HASHTABLE) {
             while (count--) {
-                void *entry;
-                hashtableFairRandomEntry(hash->ptr, &entry);
-                sds field = hashTypeEntryGetField(entry);
-                sds value = hashTypeEntryGetValue(entry);
+                listpackEntry field, value;
+                hashTypeRandomElement(hash, size, &field, &value);
+
+                /* In case we were unable to locate random element, it is probably because there is no such element
+                 * since all elements are expired. */
+                if (!field.sval) break;
+
                 if (withvalues && c->resp > 2) addWritePreparedReplyArrayLen(wpc, 2);
-                addWritePreparedReplyBulkCBuffer(wpc, field, sdslen(field));
-                if (withvalues) addWritePreparedReplyBulkCBuffer(wpc, value, sdslen(value));
+                addWritePreparedReplyBulkCBuffer(wpc, field.sval, field.slen);
+                if (withvalues) addWritePreparedReplyBulkCBuffer(wpc, value.sval, value.slen);
                 if (c->flag.close_asap) break;
+                reply_size++;
             }
         } else if (hash->encoding == OBJ_ENCODING_LISTPACK) {
             listpackEntry *fields, *vals = NULL;
@@ -1175,6 +1882,7 @@ void hrandfieldWithCountCommand(client *c, long l, int withvalues) {
             while (count) {
                 sample_count = count > limit ? limit : count;
                 count -= sample_count;
+                reply_size += sample_count;
                 lpRandomPairs(hash->ptr, sample_count, fields, vals);
                 hrandfieldReplyWithListpack(wpc, sample_count, fields, vals);
                 if (c->flag.close_asap) break;
@@ -1182,15 +1890,8 @@ void hrandfieldWithCountCommand(client *c, long l, int withvalues) {
             zfree(fields);
             zfree(vals);
         }
-        return;
+        goto set_deferred_response;
     }
-
-    /* Initiate reply count, RESP3 responds with nested array, RESP2 with flat one. */
-    long reply_size = count < size ? count : size;
-    if (withvalues && c->resp == 2)
-        addWritePreparedReplyArrayLen(wpc, reply_size * 2);
-    else
-        addWritePreparedReplyArrayLen(wpc, reply_size);
 
     /* CASE 2:
      * The number of requested elements is greater than the number of
@@ -1202,10 +1903,13 @@ void hrandfieldWithCountCommand(client *c, long l, int withvalues) {
             if (withvalues && c->resp > 2) addWritePreparedReplyArrayLen(wpc, 2);
             addHashIteratorCursorToReply(wpc, &hi, OBJ_HASH_FIELD);
             if (withvalues) addHashIteratorCursorToReply(wpc, &hi, OBJ_HASH_VALUE);
+            reply_size++;
         }
         hashTypeResetIterator(&hi);
-        return;
+
+        goto set_deferred_response;
     }
+
 
     /* CASE 2.5 listpack only. Sampling unique elements, in non-random order.
      * Listpack encoded hashes are meant to be relatively small, so
@@ -1216,6 +1920,7 @@ void hrandfieldWithCountCommand(client *c, long l, int withvalues) {
      * And it is inefficient to repeatedly pick one random element from a
      * listpack in CASE 4. So we use this instead. */
     if (hash->encoding == OBJ_ENCODING_LISTPACK) {
+        reply_size = count < size ? count : size;
         listpackEntry *fields, *vals = NULL;
         fields = zmalloc(sizeof(listpackEntry) * count);
         if (withvalues) vals = zmalloc(sizeof(listpackEntry) * count);
@@ -1223,7 +1928,7 @@ void hrandfieldWithCountCommand(client *c, long l, int withvalues) {
         hrandfieldReplyWithListpack(wpc, count, fields, vals);
         zfree(fields);
         zfree(vals);
-        return;
+        goto set_deferred_response;
     }
 
     /* CASE 3:
@@ -1247,24 +1952,25 @@ void hrandfieldWithCountCommand(client *c, long l, int withvalues) {
         while (hashtableNext(&iter, &entry)) {
             int res = hashtableAdd(ht, entry);
             serverAssert(res);
+            reply_size++;
         }
-        serverAssert(hashtableSize(ht) == size);
+        serverAssert(hashtableSize(ht) == reply_size);
         hashtableResetIterator(&iter);
 
         /* Remove random elements to reach the right count. */
-        while (size > count) {
+        while (reply_size > count) {
             void *element;
             hashtableFairRandomEntry(ht, &element);
             hashtableDelete(ht, element);
-            size--;
+            reply_size--;
         }
 
         /* Reply with what's in the temporary hashtable and release memory */
         hashtableInitIterator(&iter, ht, 0);
         void *next;
         while (hashtableNext(&iter, &next)) {
-            sds field = hashTypeEntryGetField(next);
-            sds value = hashTypeEntryGetValue(next);
+            sds field = entryGetField(next);
+            sds value = entryGetValue(next);
             if (withvalues && c->resp > 2) addWritePreparedReplyArrayLen(wpc, 2);
             addWritePreparedReplyBulkCBuffer(wpc, field, sdslen(field));
             if (withvalues) addWritePreparedReplyBulkCBuffer(wpc, value, sdslen(value));
@@ -1287,8 +1993,12 @@ void hrandfieldWithCountCommand(client *c, long l, int withvalues) {
         while (added < count) {
             hashTypeRandomElement(hash, size, &field, withvalues ? &value : NULL);
 
-            /* Try to add the object to the hashtable. If it already exists
-             * free it, otherwise increment the number of objects we have
+            /* In case we were unable to locate random element, it is probably because there is no such element
+             * since all elements are expired. */
+            if (!field.sval) break;
+
+            /* Try to add the object to the hashtable. If expired, stop adding (there are probably non left).
+             * If it already exists free it, otherwise increment the number of objects we have
              * in the result hashtable. */
             sds sfield = hashSdsFromListpackEntry(&field);
             if (!hashtableAdd(ht, sfield)) {
@@ -1305,7 +2015,15 @@ void hrandfieldWithCountCommand(client *c, long l, int withvalues) {
 
         /* Release memory */
         hashtableRelease(ht);
+        reply_size = added;
     }
+
+set_deferred_response:
+    /* Set the reply count, RESP3 responds with nested array, RESP2 with flat one. */
+    if (withvalues && c->resp == 2)
+        setDeferredArrayLen(c, replylen, reply_size * 2);
+    else
+        setDeferredArrayLen(c, replylen, reply_size);
 }
 
 /* HRANDFIELD key [<count> [WITHVALUES]] */
@@ -1328,6 +2046,7 @@ void hrandfieldCommand(client *c) {
             }
         }
         hrandfieldWithCountCommand(c, l, withvalues);
+
         return;
     }
 
@@ -1335,7 +2054,6 @@ void hrandfieldCommand(client *c) {
     if ((hash = lookupKeyReadOrReply(c, c->argv[1], shared.null[c->resp])) == NULL || checkType(c, hash, OBJ_HASH)) {
         return;
     }
-
     hashTypeRandomElement(hash, hashTypeLength(hash), &ele, NULL);
     hashReplyFromListpackEntry(c, &ele);
 }

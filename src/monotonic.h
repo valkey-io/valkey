@@ -20,6 +20,8 @@
  * variable is associated with the monotonic clock and should not be confused
  * with other types of time.*/
 typedef uint64_t monotime;
+typedef long long mstime_t; /* millisecond time type. */
+typedef long long ustime_t; /* microsecond time type. */
 
 /* Retrieve counter of micro-seconds relative to an arbitrary point in time.  */
 extern monotime (*getMonotonicUs)(void);

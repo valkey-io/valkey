@@ -31,6 +31,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <unistd.h>
+#include <stdbool.h>
 
 /* --- Opaque types --- */
 
@@ -57,6 +58,8 @@ typedef struct {
     /* Compare function, returns 0 if the keys are equal. Defaults to just
      * comparing the pointers for equality. */
     int (*keyCompare)(const void *key1, const void *key2);
+    /* Check for entry access should be masked or not. Masked access will just treat the entry as not-exist. */
+    bool (*validateEntry)(hashtable *ht, void *entry);
     /* Callback to free an entry when it's overwritten or deleted.
      * Optional. */
     void (*entryDestructor)(void *entry);
@@ -77,6 +80,7 @@ typedef struct {
     size_t (*getMetadataSize)(void);
     /* Flag to disable incremental rehashing */
     unsigned instant_rehashing : 1;
+
 } hashtableType;
 
 typedef enum {
@@ -96,6 +100,7 @@ typedef void (*hashtableScanFunction)(void *privdata, void *entry);
 /* Iterator flags */
 #define HASHTABLE_ITER_SAFE (1 << 0)
 #define HASHTABLE_ITER_PREFETCH_VALUES (1 << 1)
+#define HASHTABLE_ITER_SKIP_VALIDATION (1 << 2)
 
 /* --- Prototypes --- */
 
@@ -113,6 +118,7 @@ hashtable *hashtableCreate(hashtableType *type);
 void hashtableRelease(hashtable *ht);
 void hashtableEmpty(hashtable *ht, void(callback)(hashtable *));
 hashtableType *hashtableGetType(hashtable *ht);
+hashtableType *hashtableSetType(hashtable *ht, hashtableType *type);
 void *hashtableMetadata(hashtable *ht);
 size_t hashtableSize(const hashtable *ht);
 size_t hashtableBuckets(hashtable *ht);

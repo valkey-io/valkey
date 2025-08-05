@@ -117,7 +117,10 @@ set(VALKEY_SERVER_SRCS
     ${CMAKE_SOURCE_DIR}/src/connection.c
     ${CMAKE_SOURCE_DIR}/src/unix.c
     ${CMAKE_SOURCE_DIR}/src/server.c
-    ${CMAKE_SOURCE_DIR}/src/logreqres.c)
+    ${CMAKE_SOURCE_DIR}/src/logreqres.c
+    ${CMAKE_SOURCE_DIR}/src/entry.c
+    ${CMAKE_SOURCE_DIR}/src/volatile_set.c)
+
 
 # valkey-cli
 set(VALKEY_CLI_SRCS

@@ -59,8 +59,6 @@
 #include <immintrin.h>
 #endif
 
-#define UNUSED(x) ((void)(x))
-
 /* Glob-style pattern matching. */
 static int stringmatchlen_impl(const char *pattern,
                                int patternLen,

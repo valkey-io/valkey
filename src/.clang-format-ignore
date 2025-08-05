@@ -1,5 +1,6 @@
 # Don't format files copied from other sources.
 lzf*
+lz4*
 crccombine.*
 crc16.c
 crc16_slottable.h

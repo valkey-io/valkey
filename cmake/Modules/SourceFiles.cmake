@@ -17,6 +17,7 @@ set(VALKEY_SERVER_SRCS
     ${CMAKE_SOURCE_DIR}/src/zmalloc.c
     ${CMAKE_SOURCE_DIR}/src/lzf_c.c
     ${CMAKE_SOURCE_DIR}/src/lzf_d.c
+    ${CMAKE_SOURCE_DIR}/src/lz4.c
     ${CMAKE_SOURCE_DIR}/src/pqsort.c
     ${CMAKE_SOURCE_DIR}/src/zipmap.c
     ${CMAKE_SOURCE_DIR}/src/sha1.c

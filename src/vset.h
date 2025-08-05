@@ -6,8 +6,7 @@
 
 #include "hashtable.h"
 #include "rax.h"
-#include "sds.h"
-#include "monotonic.h" /* for mstime_t*/
+#include "util.h"
 
 /*
  *-----------------------------------------------------------------------------
@@ -71,7 +70,7 @@
 
 /* Return the absolute expiration time in milliseconds for the provided entry */
 typedef long long (*vsetGetExpiryFunc)(const void *entry);
-/* Callback to be optionally provided to vsetPopExpired. when item is removed from the vset this callback will also be applied. */
+/* Callback to be optionally provided to vsetRemoveExpired. when item is removed from the vset this callback will also be applied. */
 typedef int (*vsetExpiryFunc)(void *entry, void *ctx);
 // vset is just a pointer to a bucket
 typedef void *vset;
@@ -92,6 +91,6 @@ bool vsetIsValid(vset *set);
 long long vsetEstimatedEarliestExpiry(vset *set, vsetGetExpiryFunc getExpiry);
 size_t vsetRemoveExpired(vset *set, vsetGetExpiryFunc getExpiry, vsetExpiryFunc expiryFunc, mstime_t now, size_t max_count, void *ctx);
 size_t vsetMemUsage(vset *set);
-size_t vsetScanDefrag(vset *set, size_t cursor, void *(*defragfn)(void *), int (*defragRaxNode)(raxNode **));
+size_t vsetScanDefrag(vset *set, size_t cursor, void *(*defragfn)(void *));
 
 #endif

@@ -5,6 +5,7 @@
 #include "hashtable.h"
 #include "util.h"
 #include "zmalloc.h"
+#include "server.h" // for activeDefragAlloc
 
 #include <string.h>
 #include <stdint.h>
@@ -762,6 +763,7 @@ static inline void *vsetBucketSingle(vsetBucket *b) {
 }
 
 static inline vsetBucket *vsetBucketFromRawPtr(void *ptr, int type) {
+    assert(ptr != NULL);
     uintptr_t p = (uintptr_t)ptr;
     return (vsetBucket *)(p | (type & VSET_TAG_MASK));
 }
@@ -1430,9 +1432,12 @@ static inline size_t vsetBucketRemoveExpired_VECTOR(vsetBucket **bucket, vsetGet
             break;
         if (expiryFunc) expiryFunc(entry, ctx);
     }
-    pVector *new_pv = pvSplit(&pv, i);
-    *bucket = (new_pv ? vsetBucketFromVector(new_pv) : vsetBucketFromNone());
-    pvFree(pv);
+    /* If no expiry occurred, no need to split. */
+    if (i > 0) {
+        pVector *new_pv = pvSplit(&pv, i);
+        *bucket = (new_pv ? vsetBucketFromVector(new_pv) : vsetBucketFromNone());
+        pvFree(pv);
+    }
     return i;
 }
 
@@ -1858,18 +1863,9 @@ static inline vsetBucket *vsetBucketUpdateEntry_HASHTABLE(vsetBucket *bucket, vs
     if (old_entry == new_entry)
         return bucket;
 
-    hashtablePosition pos;
     hashtable *ht = vsetBucketHashtable(bucket);
-    /* We do a two stage pop in order to avoid rehashing. */
-    void **ref = hashtableTwoPhasePopFindRef(ht, old_entry, &pos);
-    if (!ref) {
-        /* In case no entry found, the rehashing did not pause, so it is safe to return. */
-        return vsetBucketFromNone();
-    } else {
-        /* We know for sure the two entries are not the same, so it is safe to add the new and remove the old */
-        assert(hashtableAdd(ht, new_entry));
-        hashtableTwoPhasePopDelete(ht, &pos);
-    }
+    hashtableDelete(ht, old_entry);
+    assert(hashtableAdd(ht, new_entry));
     return bucket;
 }
 
@@ -2085,7 +2081,7 @@ long long vsetEstimatedEarliestExpiry(vset *set, vsetGetExpiryFunc getExpiry) {
         return -1;
         break;
     case VSET_BUCKET_RAX: {
-        rax *r = vsetBucketRax(set);
+        rax *r = vsetBucketRax(*set);
         raxIterator it;
         raxStart(&it, r);
         expiry = decodeExpiryKey(it.key);
@@ -2376,7 +2372,18 @@ static size_t vsetBucketDefrag_RAX(vsetBucket **bucket, size_t cursor, void *(*d
     return (size_t)state;
 }
 
-size_t vsetScanDefrag(vset *set, size_t cursor, void *(*defragfn)(void *), int (*defragRaxNode)(raxNode **)) {
+/* Defrag callback for radix tree iterator, called for each node,
+ * used in order to defrag the nodes allocations. */
+static int defragRaxNode(raxNode **noderef) {
+    raxNode *newnode = activeDefragAlloc(*noderef);
+    if (newnode) {
+        *noderef = newnode;
+        return 1;
+    }
+    return 0;
+}
+
+size_t vsetScanDefrag(vset *set, size_t cursor, void *(*defragfn)(void *)) {
     switch (vsetBucketType(*set)) {
     case VSET_BUCKET_NONE:
     case VSET_BUCKET_SINGLE:

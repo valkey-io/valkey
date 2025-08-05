@@ -1,9 +1,8 @@
 #ifndef EXPIRE_H
 #define EXPIRE_H
 
-#include <time.h>
 #include <stdbool.h>
-#include "monotonic.h"
+#include "util.h"
 
 /* Special Expiry values */
 #define EXPIRY_NONE -1
@@ -35,13 +34,38 @@ typedef enum {
     POLICY_DELETE_EXPIRED /* Delete expired keys on access. */
 } expirationPolicy;
 
+/* Types of active expiry jobs. Used to track and orchestrate
+ * separate expiry mechanisms within the same database.
+ *
+ * KEYS:   Expiry of top-level keys via db->expires.
+ * FIELDS: Expiry of hash fields stored in volatile sets (e.g., per-field TTLs).
+ *
+ * ACTIVE_EXPIRY_TYPE_COUNT: Number of expiry types, used for sizing arrays and iteration. */
+enum activeExpiryType {
+    KEYS,
+    FIELDS,
+    ACTIVE_EXPIRY_TYPE_COUNT
+};
+
 /* Forward declarations */
 typedef struct client client;
 typedef struct serverObject robj;
+typedef struct serverDb serverDb;
 
-bool timestampIsExpired(mstime_t when);
+/* return the relevant expiration policy based on the current server state and the provided flags.
+ * FLAGS can indicate either:
+ * EXPIRE_AVOID_DELETE_EXPIRED - which indicate the command is explicitly executed with the NO_EXPIRE flag.
+ * EXPIRE_FORCE_DELETE_EXPIRED - which indicate to delete expired keys even in case of a replica (for the writable replicas case) */
 expirationPolicy getExpirationPolicyWithFlags(int flags);
 int parseExtendedExpireArgumentsOrReply(client *c, int *flags, int max_args);
 int convertExpireArgumentToUnixTime(client *c, robj *arg, long long basetime, int unit, long long *unixtime);
+
+/* Handling of expired keys and hash fields */
+void activeExpireCycle(int type);
+void expireReplicaKeys(void);
+void rememberReplicaKeyWithExpire(serverDb *db, robj *key);
+void flushReplicaKeysWithExpireList(void);
+size_t getReplicaKeyWithExpireCount(void);
+bool timestampIsExpired(mstime_t when);
 
 #endif

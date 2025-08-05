@@ -39,7 +39,6 @@
  */
 
 #include "server.h"
-#include "entry.h"
 #include "hashtable.h"
 #include "eval.h"
 #include "script.h"
@@ -197,7 +196,7 @@ void *activeDefragAlloc(void *ptr) {
  * Returns NULL in case the allocation wasn't moved.
  * When it returns a non-null value, the old pointer was already released
  * and should NOT be accessed. */
-static sds activeDefragSds(sds sdsptr) {
+sds activeDefragSds(sds sdsptr) {
     void *ptr = sdsAllocPtr(sdsptr);
     void *newptr = activeDefragAlloc(ptr);
     if (newptr) {
@@ -442,28 +441,9 @@ static void scanLaterSet(robj *ob, unsigned long *cursor) {
     *cursor = hashtableScanDefrag(ht, *cursor, activeDefragSdsHashtableCallback, NULL, activeDefragAlloc, HASHTABLE_SCAN_EMIT_REF);
 }
 
-/* Hashtable scan callback for hash datatype */
-static void activeDefragEntry(void *privdata, void *element_ref) {
-    entry **entry_ref = (entry **)element_ref;
-    entry *old_entry = *entry_ref, *new_entry = NULL;
-    long long old_expiry = entryGetExpiry(old_entry);
-
-    new_entry = entryDefrag(*entry_ref, activeDefragAlloc, activeDefragSds);
-    if (new_entry) {
-        /* In case the entry is tracked we need to update it in the volatile set */
-        if (entryHasExpiry(new_entry)) {
-            robj *obj = (robj *)privdata;
-            serverAssert(obj);
-            hashTypeTrackUpdateEntry(obj, old_entry, new_entry, old_expiry, entryGetExpiry(new_entry));
-        }
-        *entry_ref = new_entry;
-    }
-}
-
 static void scanLaterHash(robj *ob, unsigned long *cursor) {
     serverAssert(ob->type == OBJ_HASH && ob->encoding == OBJ_ENCODING_HASHTABLE);
-    hashtable *ht = ob->ptr;
-    *cursor = hashtableScanDefrag(ht, *cursor, activeDefragEntry, ob, activeDefragAlloc, HASHTABLE_SCAN_EMIT_REF);
+    *cursor = hashTypeScanDefrag(ob, *cursor, activeDefragAlloc);
 }
 
 static void defragQuicklist(robj *ob) {
@@ -500,20 +480,24 @@ static void defragZsetSkiplist(robj *ob) {
     }
 }
 
+/* Defragment a hash object.
+ *
+ * Large hashtable-encoded hashes are deferred via `defrag_later`.
+ * Smaller ones are defragmented immediately, possibly over multiple passes.
+ * Listpack-encoded hashes are always handled in a single pass. */
 static void defragHash(robj *ob) {
-    serverAssert(ob->type == OBJ_HASH && ob->encoding == OBJ_ENCODING_HASHTABLE);
     hashtable *ht = ob->ptr;
-    if (hashtableSize(ht) > server.active_defrag_max_scan_fields) {
+    if (ob->encoding == OBJ_ENCODING_HASHTABLE && hashtableSize(ht) > server.active_defrag_max_scan_fields) {
+        /* Large hashtable-encoded hashes are deferred via `defrag_later` */
         defragLater(ob);
     } else {
+        /* Smaller hashtables are defragmented immediately, possibly over multiple passes.
+         * Listpack-encoded hashes are always handled in a single pass in hashTypeScanDefrag. */
         unsigned long cursor = 0;
         do {
-            cursor = hashtableScanDefrag(ht, cursor, activeDefragEntry, ob, activeDefragAlloc, HASHTABLE_SCAN_EMIT_REF);
+            cursor = hashTypeScanDefrag(ob, cursor, activeDefragAlloc);
         } while (cursor != 0);
     }
-    /* defrag the hashtable struct and tables */
-    hashtable *new_hashtable = hashtableDefragTables(ht, activeDefragAlloc);
-    if (new_hashtable) ob->ptr = new_hashtable;
 }
 
 static void defragSet(robj *ob) {
@@ -710,6 +694,13 @@ static void defragKey(defragKeysCtx *ctx, robj **elemref) {
             int replaced = hashtableReplaceReallocatedEntry(expires_ht, ob, newob);
             serverAssert(replaced);
         }
+        if (newob->type == OBJ_HASH && hashTypeHasVolatileFields(newob)) {
+            /* Check if this is a hash object containing volatile fields.
+             * and update keys_with_volatile_items after defrag. */
+            hashtable *keys_with_volatile_items_ht = kvstoreGetHashtable(db->keys_with_volatile_items, slot);
+            int replaced = hashtableReplaceReallocatedEntry(keys_with_volatile_items_ht, ob, newob);
+            serverAssert(replaced);
+        }
         ob = newob;
     }
 
@@ -741,13 +732,7 @@ static void defragKey(defragKeysCtx *ctx, robj **elemref) {
             serverPanic("Unknown sorted set encoding");
         }
     } else if (ob->type == OBJ_HASH) {
-        if (ob->encoding == OBJ_ENCODING_LISTPACK) {
-            if ((newzl = activeDefragAlloc(ob->ptr))) ob->ptr = newzl;
-        } else if (ob->encoding == OBJ_ENCODING_HASHTABLE) {
-            defragHash(ob);
-        } else {
-            serverPanic("Unknown hash encoding");
-        }
+        defragHash(ob);
     } else if (ob->type == OBJ_STREAM) {
         defragStream(ob);
     } else if (ob->type == OBJ_MODULE) {
@@ -970,6 +955,15 @@ static doneStatus defragStageExpiresKvstore(monotime endtime, void *target, void
     int dbid = (uintptr_t)target;
     serverDb *db = server.db[dbid];
     return defragStageKvstoreHelper(endtime, db->expires,
+                                    scanHashtableCallbackCountScanned, NULL, NULL);
+}
+
+// Target is a DBID
+static doneStatus defragStageKeysWithvolaItemsKvstore(monotime endtime, void *target, void *privdata) {
+    UNUSED(privdata);
+    int dbid = (uintptr_t)target;
+    serverDb *db = server.db[dbid];
+    return defragStageKvstoreHelper(endtime, db->keys_with_volatile_items,
                                     scanHashtableCallbackCountScanned, NULL, NULL);
 }
 
@@ -1244,6 +1238,7 @@ static void beginDefragCycle(void) {
 
         addDefragStage(defragStageDbKeys, (void *)(uintptr_t)dbid, NULL);
         addDefragStage(defragStageExpiresKvstore, (void *)(uintptr_t)dbid, NULL);
+        addDefragStage(defragStageKeysWithvolaItemsKvstore, (void *)(uintptr_t)dbid, NULL);
     }
 
     static getClientChannelsFnWrapper getClientPubSubChannelsFn = {getClientPubSubChannels};
@@ -1329,6 +1324,10 @@ robj *activeDefragStringOb(robj *ob) {
 }
 
 void defragWhileBlocked(void) {
+}
+
+sds activeDefragSds(sds sdsptr) {
+    return sdsptr;
 }
 
 #endif

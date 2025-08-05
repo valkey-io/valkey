@@ -68,6 +68,9 @@ typedef enum {
     LD_STR_HEX    /* %La */
 } ld2string_mode;
 
+typedef long long mstime_t; /* millisecond time type. */
+typedef long long ustime_t; /* microsecond time type. */
+
 int stringmatchlen(const char *p, int plen, const char *s, int slen, int nocase);
 int stringmatch(const char *p, const char *s, int nocase);
 int stringmatchlen_fuzz_test(void);
@@ -114,6 +117,8 @@ void getRandomSeedCString(char *buff, size_t len);
 void setRandomSeedCString(char *seed_str, size_t len);
 void getRandomHexChars(char *p, size_t len);
 void getRandomBytes(unsigned char *p, size_t len);
+long long ustime(void);
+mstime_t mstime(void);
 void writePointerWithPadding(unsigned char *buf, const void *ptr);
 
 #endif

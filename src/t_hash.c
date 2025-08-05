@@ -62,7 +62,9 @@ static vset *hashTypeGetVolatileSet(robj *o) {
     return vsetIsValid(set) ? set : NULL;
 }
 
-bool hashTypeHasVolatileElements(robj *o) {
+bool hashTypeHasVolatileFields(robj *o) {
+    if (o == NULL) return false;
+    serverAssert(o->type == OBJ_HASH);
     if (o->encoding == OBJ_ENCODING_HASHTABLE) {
         vset *set = hashTypeGetVolatileSet(o);
         if (set && !vsetIsEmpty(set))
@@ -102,11 +104,17 @@ void hashTypeFreeVolatileSet(robj *o) {
 }
 
 void hashTypeTrackEntry(robj *o, void *entry) {
-    vset *set = hashTypeGetOrcreateVolatileSet(o);
-    serverAssert(vsetAddEntry(set, entryGetExpiry, entry));
+    vset *set;
+    if (hashTypeHasVolatileFields(o)) {
+        set = hashTypeGetVolatileSet(o);
+    } else {
+        set = hashTypeGetOrcreateVolatileSet(o);
+    }
+    bool added = vsetAddEntry(set, entryGetExpiry, entry);
+    serverAssert(added);
 }
 
-void hashTypeUntrackEntry(robj *o, void *entry) {
+static void hashTypeUntrackEntry(robj *o, void *entry) {
     if (!entryHasExpiry(entry)) return;
     vset *set = hashTypeGetVolatileSet(o);
     debugServerAssert(set);
@@ -116,7 +124,7 @@ void hashTypeUntrackEntry(robj *o, void *entry) {
     }
 }
 
-void hashTypeTrackUpdateEntry(robj *o, void *old_entry, void *new_entry, long long old_expiry, long long new_expiry) {
+static void hashTypeTrackUpdateEntry(robj *o, void *old_entry, void *new_entry, long long old_expiry, long long new_expiry) {
     int old_tracked = (old_entry && old_expiry != EXPIRY_NONE);
     int new_tracked = (new_entry && new_expiry != EXPIRY_NONE);
     /* If entry was not tracked before and not going to be tracked now, we can simply return */
@@ -398,7 +406,9 @@ int hashTypeSet(robj *o, sds field, sds value, long long expiry, int flags) {
                 int replaced = hashtableReplaceReallocatedEntry(ht, existing, new_entry);
                 serverAssert(replaced);
             }
+
             hashTypeTrackUpdateEntry(o, existing, new_entry, entry_expiry, expiry);
+
             /* since we are exposed to expired entries, we must NOT reflect them as being "updated" */
             update = is_expired ? 0 : 1;
         }
@@ -1007,20 +1017,27 @@ void hmgetCommand(client *c) {
 
 void hdelCommand(client *c) {
     robj *o;
-    int j, deleted = 0, keyremoved = 0;
+    int j, deleted = 0;
+    bool keyremoved = false;
 
     if ((o = lookupKeyWriteOrReply(c, c->argv[1], shared.czero)) == NULL || checkType(c, o, OBJ_HASH)) return;
+
+    bool hash_volatile_items = hashTypeHasVolatileFields(o);
     for (j = 2; j < c->argc; j++) {
         if (hashTypeDelete(o, c->argv[j]->ptr)) {
             deleted++;
             if (hashTypeLength(o) == 0) {
-                dbDelete(c->db, c->argv[1]);
-                keyremoved = 1;
+                if (hash_volatile_items) dbUntrackKeyWithVolatileItems(c->db, o);
+                dbDelete(c->db, c->argv[1]); /* Please note that this will also remove the tracking from the kvstore */
+                keyremoved = true;
                 break;
             }
         }
     }
     if (deleted) {
+        if (!keyremoved && hash_volatile_items != hashTypeHasVolatileFields(o)) {
+            dbUpdateObjectWithVolatileItemsTracking(c->db, o);
+        }
         signalModifiedKey(c, c->db, c->argv[1]);
         notifyKeyspaceEvent(NOTIFY_HASH, "hdel", c->argv[1], c->db->id);
         if (keyremoved) notifyKeyspaceEvent(NOTIFY_GENERIC, "del", c->argv[1], c->db->id);
@@ -1070,7 +1087,11 @@ void hsetnxCommand(client *c) {
         addReply(c, shared.czero);
     } else {
         hashTypeTryConversion(o, c->argv, 2, 3);
+        bool has_volatile_fields = hashTypeHasVolatileFields(o);
         hashTypeSet(o, c->argv[2]->ptr, c->argv[3]->ptr, EXPIRY_NONE, HASH_SET_COPY | HASH_SET_KEEP_EXPIRY);
+        if (has_volatile_fields != hashTypeHasVolatileFields(o)) {
+            dbUpdateObjectWithVolatileItemsTracking(c->db, o);
+        }
         signalModifiedKey(c, c->db, c->argv[1]);
         notifyKeyspaceEvent(NOTIFY_HASH, "hset", c->argv[1], c->db->id);
         server.dirty++;
@@ -1089,9 +1110,13 @@ void hsetCommand(client *c) {
 
     if ((o = hashTypeLookupWriteOrCreate(c, c->argv[1])) == NULL) return;
     hashTypeTryConversion(o, c->argv, 2, c->argc - 1);
-
-    for (i = 2; i < c->argc; i += 2) created += !hashTypeSet(o, c->argv[i]->ptr, c->argv[i + 1]->ptr, EXPIRY_NONE, HASH_SET_COPY);
-
+    bool has_volatile_fields = hashTypeHasVolatileFields(o);
+    for (i = 2; i < c->argc; i += 2) {
+        created += !hashTypeSet(o, c->argv[i]->ptr, c->argv[i + 1]->ptr, EXPIRY_NONE, HASH_SET_COPY);
+    }
+    if (has_volatile_fields != hashTypeHasVolatileFields(o)) {
+        dbUpdateObjectWithVolatileItemsTracking(c->db, o);
+    }
     signalModifiedKey(c, c->db, c->argv[1]);
     notifyKeyspaceEvent(NOTIFY_HASH, "hset", c->argv[1], c->db->id);
     server.dirty += (c->argc - 2) / 2;
@@ -1189,6 +1214,8 @@ void hsetexCommand(client *c) {
         dbAdd(c->db, c->argv[1], &o);
     }
 
+    bool has_volatile_fields = hashTypeHasVolatileFields(o);
+
     /* Handle parsing and calculating the expiration time. */
     if (flags & ARGS_KEEPTTL)
         set_flags |= HASH_SET_KEEP_EXPIRY;
@@ -1238,6 +1265,9 @@ void hsetexCommand(client *c) {
 
 
     if (changes) {
+        if (has_volatile_fields != hashTypeHasVolatileFields(o)) {
+            dbUpdateObjectWithVolatileItemsTracking(c->db, o);
+        }
         notifyKeyspaceEvent(NOTIFY_HASH, "hset", c->argv[1], c->db->id);
         if (set_expired) {
             replaceClientCommandVector(c, new_argc, new_argv);
@@ -1345,6 +1375,9 @@ void hgetexCommand(client *c) {
 
     if ((o = lookupKeyReadOrReply(c, c->argv[1], shared.null[c->resp])) == NULL || checkType(c, o, OBJ_HASH)) return;
 
+    /* Check if the hash object has volatile fields, used for active-expiry tracking */
+    bool has_volatile_fields = hashTypeHasVolatileFields(o);
+
     /* Handle parsing and calculating the expiration time. */
     if (flags & ARGS_PERSIST) {
         persist = 1;
@@ -1431,6 +1464,10 @@ void hgetexCommand(client *c) {
 
         server.dirty += changes;
         signalModifiedKey(c, c->db, c->argv[1]);
+
+        if (has_volatile_fields != hashTypeHasVolatileFields(o)) {
+            dbUpdateObjectWithVolatileItemsTracking(c->db, o);
+        }
 
         /* Delete the object in case it was left empty */
         if (hashTypeLength(o) == 0) {
@@ -1601,6 +1638,9 @@ void hexpireGenericCommand(client *c, long long basetime, int unit) {
     if (checkType(c, obj, OBJ_HASH)) {
         return;
     }
+
+    bool has_volatile_fields = hashTypeHasVolatileFields(obj);
+
     /* From this point we would return array reply */
     addReplyArrayLen(c, num_fields);
 
@@ -1631,6 +1671,9 @@ void hexpireGenericCommand(client *c, long long basetime, int unit) {
     }
 
     if (expired || updated) {
+        if (has_volatile_fields != hashTypeHasVolatileFields(obj)) {
+            dbUpdateObjectWithVolatileItemsTracking(c->db, obj);
+        }
         if (expired) {
             replaceClientCommandVector(c, new_argc, new_argv);
             /* We would like to reduce the number of hexpired events in case there are potential many expired fields. */
@@ -1712,6 +1755,8 @@ void hpersistCommand(client *c) {
     if (checkType(c, hash, OBJ_HASH))
         return;
 
+    bool has_volatile_fields = hashTypeHasVolatileFields(hash);
+
     for (int i = 0; i < num_fields; i++, fields_index++) {
         result = hashTypePersist(hash, c->argv[fields_index]->ptr);
         if (result == EXPIRATION_MODIFICATION_SUCCESSFUL) {
@@ -1721,6 +1766,9 @@ void hpersistCommand(client *c) {
         addReplyLongLong(c, result);
     }
     if (changes) {
+        if (has_volatile_fields != hashTypeHasVolatileFields(hash)) {
+            dbUpdateObjectWithVolatileItemsTracking(c->db, hash);
+        }
         notifyKeyspaceEvent(NOTIFY_HASH, "hpersist", c->argv[1], c->db->id);
         signalModifiedKey(c, c->db, c->argv[1]);
     }
@@ -2044,4 +2092,126 @@ void hrandfieldCommand(client *c) {
     }
     hashTypeRandomElement(hash, hashTypeLength(hash), &ele, NULL);
     hashReplyFromListpackEntry(c, &ele);
+}
+
+/* Context structure for tracking expiry operations on hash fields. */
+typedef struct {
+    robj *key;              /* the hash object */
+    unsigned long n_fields; /* number of entries processed */
+    robj **fields;          /* array of expired entries to replicate later */
+} expiryContext;
+
+/* Callback for popping expired entries from the volatile set.
+ * Deletes the entry from the hash table and tracks it in the expiry context.
+ * Returns 1 if deleted, 0 if nothing to do. */
+static int hashTypeExpireEntry(void *entry, void *c) {
+    expiryContext *ctx = c;
+    robj *o = ctx->key;
+    serverAssert(o->encoding == OBJ_ENCODING_HASHTABLE);
+
+    hashtable *ht = o->ptr;
+    void *entry_ptr = NULL;
+    int deleted = hashtablePop(ht, entry, &entry_ptr);
+
+    if (deleted) {
+        if (ctx->fields)
+            ctx->fields[ctx->n_fields++] = createStringObjectFromSds(entryGetField(entry));
+        server.stat_expiredfields++;
+        entryFree(entry);
+        return 1;
+    }
+    return 0;
+}
+
+/* Extract expired entries from a hash object's volatile set.
+ * Returns number of expired entries, populates `out_entries`. */
+size_t hashTypeDeleteExpiredFields(robj *o, mstime_t now, unsigned long max_fields, robj **out_entries) {
+    serverAssert(o->encoding == OBJ_ENCODING_HASHTABLE);
+
+    /* skip TTL checks temporarily (to allow hashtable lookup) */
+    hashTypeIgnoreTTL(o, 1);
+
+    vset *vset = hashTypeGetVolatileSet(o);
+    if (!vset || vsetIsEmpty(vset)) {
+        hashTypeIgnoreTTL(o, 0);
+        return 0;
+    }
+
+    expiryContext ctx = {.key = o, .fields = out_entries, .n_fields = 0};
+    size_t expired = vsetRemoveExpired(vset, entryGetExpiry, hashTypeExpireEntry, now, max_fields, &ctx);
+    serverAssert(ctx.n_fields <= max_fields);
+    hashTypeIgnoreTTL(o, 0);
+    if (!hashTypeHasVolatileFields(o)) {
+        hashTypeFreeVolatileSet(o);
+    }
+    return expired;
+}
+
+/* Hashtable scan callback for hash datatype */
+static void defragHashTypeEntry(void *privdata, void *element_ref) {
+    entry **entry_ref = (entry **)element_ref;
+    entry *old_entry = *entry_ref;
+
+    entry *new_entry = entryDefrag(old_entry, activeDefragAlloc, activeDefragSds);
+    if (new_entry) {
+        long long expiry = entryGetExpiry(new_entry);
+        /* In case the entry is tracked we need to update it in the volatile set */
+        if (expiry != EXPIRY_NONE) {
+            // We don't need to pass the db because db-level tracking isn't going to change for this update.
+            hashTypeTrackUpdateEntry(privdata, old_entry, new_entry, expiry, expiry);
+        }
+        *entry_ref = new_entry;
+    }
+}
+
+size_t hashTypeScanDefrag(robj *ob, size_t cursor, void *(*defragAllocfn)(void *)) {
+    if (ob->encoding == OBJ_ENCODING_LISTPACK) {
+        unsigned char *newzl;
+        if ((newzl = activeDefragAlloc(ob->ptr))) ob->ptr = newzl;
+        return 0;
+    }
+    serverAssert(ob->encoding == OBJ_ENCODING_HASHTABLE);
+    static struct volatileSetCursor {
+        size_t cursor;
+        bool is_vsetDefrag;
+    } volaSetIter;
+    static struct volatileSetCursor *vset_cursor = NULL;
+
+    vset_cursor = (struct volatileSetCursor *)cursor;
+
+    if (!vset_cursor) {
+        /* New object scan */
+        hashtable *ht = ob->ptr;
+        /* defrag the hashtable struct and tables */
+        hashtable *new_hashtable = hashtableDefragTables(ht, defragAllocfn);
+        if (new_hashtable) ob->ptr = new_hashtable;
+        vset_cursor = &volaSetIter;
+        vset_cursor->cursor = 0;
+        vset_cursor->is_vsetDefrag = false;
+    }
+
+    if (!vset_cursor->is_vsetDefrag) {
+        hashtable *ht = ob->ptr;
+        vset_cursor->cursor = hashtableScanDefrag(ht, vset_cursor->cursor, defragHashTypeEntry, ob,
+                                                  defragAllocfn,
+                                                  HASHTABLE_SCAN_EMIT_REF);
+        if (vset_cursor->cursor == 0) {
+            if (hashTypeHasVolatileFields(ob)) {
+                /* We're done scanning the hash table, continue to defrag the volatile set only if there's one. */
+                vset_cursor->is_vsetDefrag = true;
+            } else {
+                /* We're done with this object. */
+                return 0;
+            }
+        }
+    } else {
+        /* We're already defraging volatile set. */
+        vset *vset = hashTypeGetVolatileSet(ob);
+        vset_cursor->cursor = vsetScanDefrag(vset, vset_cursor->cursor, activeDefragAlloc);
+        if (vset_cursor->cursor == 0) {
+            /* We're done with this hash object. */
+            return 0;
+        }
+    }
+    return (long)vset_cursor;
 }

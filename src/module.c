@@ -5364,6 +5364,7 @@ int VM_HashSet(ValkeyModuleKey *key, int flags, ...) {
             decrRefCount(field);
         }
     }
+    dbUpdateObjectWithVolatileItemsTracking(key->db, key->value);
     va_end(ap);
     moduleDelKeyIfEmpty(key);
     if (count == 0) errno = ENOENT;

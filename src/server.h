@@ -868,9 +868,9 @@ typedef struct replBufBlock {
  * by integers from 0 (the default database) up to the max configured
  * database. The database number is the 'id' field in the structure. */
 typedef struct serverDb {
-    kvstore *keys;    /* The keyspace for this DB */
-    kvstore *expires; /* Timeout of keys with a timeout set */
-    kvstore *object_with_volatile_elements;
+    kvstore *keys;                        /* The keyspace for this DB */
+    kvstore *expires;                     /* Timeout of keys with a timeout set */
+    kvstore *keys_with_volatile_items;    /* Keys with volatile items */
     dict *blocking_keys;                  /* Keys with clients waiting for data (BLPOP)*/
     dict *blocking_keys_unblock_on_nokey; /* Keys with clients waiting for
                                            * data, and should be unblocked if key is deleted (XREADEDGROUP).
@@ -878,8 +878,10 @@ typedef struct serverDb {
     dict *ready_keys;                     /* Blocked keys that received a PUSH */
     dict *watched_keys;                   /* WATCHED keys for MULTI/EXEC CAS */
     int id;                               /* Database ID */
-    long long avg_ttl;                    /* Average TTL, just for stats */
-    unsigned long expires_cursor;         /* Cursor of the active expire cycle. */
+    struct {
+        long long avg_ttl;    /* Average TTL, just for stats */
+        unsigned long cursor; /* Cursor of the active expire cycle. */
+    } expiry[ACTIVE_EXPIRY_TYPE_COUNT];
 } serverDb;
 
 /* forward declaration for functions ctx */
@@ -1626,6 +1628,7 @@ typedef enum childInfoType {
     CHILD_INFO_TYPE_RDB_COW_SIZE,
     CHILD_INFO_TYPE_MODULE_COW_SIZE
 } childInfoType;
+
 struct valkeyServer {
     /* General */
     pid_t pid;                /* Main process pid. */
@@ -1752,7 +1755,9 @@ struct valkeyServer {
     long long stat_numcommands;                    /* Number of processed commands */
     long long stat_numconnections;                 /* Number of connections received */
     long long stat_expiredkeys;                    /* Number of expired keys */
-    double stat_expired_stale_perc;                /* Percentage of keys probably expired */
+    long long stat_expiredfields;                  /* Number of expired hash fields */
+    double stat_expired_keys_stale_perc;           /* Percentage of keys probably expired */
+    double stat_expired_keys_with_vola_stale_perc; /* Percentage of keys probably expired */
     long long stat_expired_time_cap_reached_count; /* Early expire cycle stops.*/
     long long stat_expire_cycle_time_used;         /* Cumulative microseconds used. */
     long long stat_evictedkeys;                    /* Number of evicted keys (maxmemory) */
@@ -2673,8 +2678,6 @@ extern dict *modules;
 void populateCommandLegacyRangeSpec(struct serverCommand *c);
 
 /* Utils */
-long long ustime(void);
-mstime_t mstime(void);
 mstime_t commandTimeSnapshot(void);
 uint64_t crc64(uint64_t crc, const unsigned char *s, uint64_t l);
 void exitFromChild(int retcode);
@@ -2954,6 +2957,7 @@ void dismissObject(robj *o, size_t dump_size);
 robj *createObject(int type, void *ptr);
 void initObjectLRUOrLFU(robj *o);
 robj *createStringObject(const char *ptr, size_t len);
+robj *createStringObjectFromSds(const sds s);
 robj *createRawStringObject(const char *ptr, size_t len);
 robj *tryCreateRawStringObject(const char *ptr, size_t len);
 robj *tryCreateStringObject(const char *ptr, size_t len);
@@ -3315,6 +3319,7 @@ void checkChildrenDone(void);
 int setOOMScoreAdj(int process_class);
 void rejectCommandFormat(client *c, const char *fmt, ...);
 void *activeDefragAlloc(void *ptr);
+sds activeDefragSds(sds sdsptr);
 robj *activeDefragStringOb(robj *ob);
 void dismissSds(sds s);
 void dismissMemoryInChild(void);
@@ -3359,10 +3364,10 @@ robj *setTypeDup(robj *o);
 #define HASH_SET_COPY 0
 
 
-void hashTypeFreeVolatileSet(robj *o);
-void hashTypeTrackEntry(robj *o, void *entry);
-void hashTypeUntrackEntry(robj *o, void *entry);
-void hashTypeTrackUpdateEntry(robj *o, void *old_entry, void *new_entry, long long old_expiry, long long new_expiry);
+void hashTypeFreeVolatileSet(robj *o);         /* needed only for freeHashObject */
+void hashTypeTrackEntry(robj *o, void *entry); /* needed only for rdbLoadObject */
+size_t hashTypeScanDefrag(robj *ob, size_t cursor, void *(*defragAlloc)(void *));
+size_t hashTypeDeleteExpiredFields(robj *o, mstime_t now, unsigned long max_fields, robj **out_fields);
 
 void hashTypeConvert(robj *o, int enc);
 void hashTypeTryConversion(robj *subject, robj **argv, int start, int end);
@@ -3384,8 +3389,7 @@ robj *hashTypeLookupWriteOrCreate(client *c, robj *key);
 robj *hashTypeGetValueObject(robj *o, sds field);
 int hashTypeSet(robj *o, sds field, sds value, long long expiry, int flags);
 robj *hashTypeDup(robj *o);
-bool hashTypeHasVolatileElements(robj *o);
-size_t hashTypeNumVolatileElements(robj *o);
+bool hashTypeHasVolatileFields(robj *o);
 
 /* Pub / Sub */
 int pubsubUnsubscribeAllChannels(client *c, int notify);
@@ -3500,6 +3504,7 @@ int removeExpire(serverDb *db, robj *key);
 void deleteExpiredKeyAndPropagate(serverDb *db, robj *keyobj);
 void deleteExpiredKeyFromOverwriteAndPropagate(client *c, robj *keyobj);
 void propagateDeletion(serverDb *db, robj *key, int lazy);
+size_t dbReclaimExpiredFields(robj *o, serverDb *db, mstime_t now, unsigned long max_entries);
 int keyIsExpired(serverDb *db, robj *key);
 long long getExpire(serverDb *db, robj *key);
 robj *setExpire(client *c, serverDb *db, robj *key, long long when);
@@ -3543,6 +3548,7 @@ robj *dbUnshareStringValue(serverDb *db, robj *key, robj *o);
 #define EMPTYDB_NOFUNCTIONS (1 << 1) /* Indicate not to flush the functions. */
 long long emptyData(int dbnum, int flags, void(callback)(hashtable *));
 long long emptyDbStructure(serverDb **dbarray, int dbnum, int async, void(callback)(hashtable *));
+void resetDbExpiryState(serverDb *db);
 void flushAllDataAndResetRDB(int flags);
 long long dbTotalServerKeyCount(void);
 serverDb *initTempDb(int id);
@@ -3559,6 +3565,9 @@ size_t lazyfreeGetFreedObjectsCount(void);
 void lazyfreeResetStats(void);
 void freeObjAsync(robj *key, robj *obj, int dbid);
 void freeReplicationBacklogRefMemAsync(list *blocks, rax *index);
+void dbUntrackKeyWithVolatileItems(serverDb *db, robj *o);
+void dbTrackKeyWithVolatileItems(serverDb *db, robj *o);
+void dbUpdateObjectWithVolatileItemsTracking(serverDb *db, robj *o);
 
 /* API to get key arguments from commands */
 #define GET_KEYSPEC_DEFAULT 0
@@ -3664,13 +3673,6 @@ void addClientToTimeoutTable(client *c);
 void removeClientFromTimeoutTable(client *c);
 void handleBlockedClientsTimeout(void);
 int clientsCronHandleTimeout(client *c, mstime_t now_ms);
-
-/* expire.c -- Handling of expired keys */
-void activeExpireCycle(int type);
-void expireReplicaKeys(void);
-void rememberReplicaKeyWithExpire(serverDb *db, robj *key);
-void flushReplicaKeysWithExpireList(void);
-size_t getReplicaKeyWithExpireCount(void);
 
 /* evict.c -- maxmemory handling and LRU eviction. */
 void evictionPoolAlloc(void);

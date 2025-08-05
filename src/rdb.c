@@ -718,7 +718,7 @@ int rdbSaveObjectType(rio *rdb, robj *o) {
         if (o->encoding == OBJ_ENCODING_LISTPACK)
             return rdbSaveType(rdb, RDB_TYPE_HASH_LISTPACK);
         else if (o->encoding == OBJ_ENCODING_HASHTABLE)
-            if (hashTypeHasVolatileElements(o))
+            if (hashTypeHasVolatileFields(o))
                 return rdbSaveType(rdb, RDB_TYPE_HASH_2);
             else
                 return rdbSaveType(rdb, RDB_TYPE_HASH);
@@ -966,8 +966,8 @@ ssize_t rdbSaveObject(rio *rdb, robj *o, robj *key, int dbid) {
                 return -1;
             }
             nwritten += n;
-            /* check if need to add expired time for the hash elements */
-            bool add_expiry = hashTypeHasVolatileElements(o);
+            /* check if need to add expired time for the hash fields */
+            bool add_expiry = hashTypeHasVolatileFields(o);
             hashtableIterator iter;
             hashtableInitIterator(&iter, ht, HASHTABLE_ITER_SKIP_VALIDATION);
             void *next;

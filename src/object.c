@@ -226,6 +226,11 @@ robj *createStringObject(const char *ptr, size_t len) {
         return createRawStringObject(ptr, len);
 }
 
+/* Similar to createStringObject() but takes an existing SDS as input. */
+robj *createStringObjectFromSds(const sds s) {
+    return createStringObject(s, sdslen(s));
+}
+
 robj *createStringObjectWithKeyAndExpire(const char *ptr, size_t len, const sds key, long long expire) {
     /* When to embed? Embed when the sum is up to 64 bytes. There may be better
      * heuristics, e.g. we can look at the jemalloc sizes (16-byte intervals up

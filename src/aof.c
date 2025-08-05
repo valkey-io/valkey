@@ -1957,7 +1957,7 @@ int rewriteHashObject(rio *r, robj *key, robj *o) {
     hashTypeIterator hi;
     long long count = 0, volatile_items = 0, non_volatile_items;
     /* First serialize volatile items if exist */
-    if (hashTypeHasVolatileElements(o)) {
+    if (hashTypeHasVolatileFields(o)) {
         hashTypeInitVolatileIterator(o, &hi);
         while (hashTypeNext(&hi) != C_ERR) {
             long long expiry = entryGetExpiry(hi.next);

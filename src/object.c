@@ -28,10 +28,12 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
+#include "hashtable.h"
 #include "server.h"
 #include "serverassert.h"
 #include "functions.h"
 #include "intset.h" /* Compact integer set structure */
+#include "vset.h"
 #include "zmalloc.h"
 #include "sds.h"
 #include "module.h"
@@ -1201,6 +1203,7 @@ size_t objectComputeSize(robj *key, robj *o, size_t sample_size, int dbid) {
         } else if (o->encoding == OBJ_ENCODING_HASHTABLE) {
             hashtable *ht = o->ptr;
             hashtableIterator iter;
+            vset *volatile_fields = hashtableMetadata(ht);
             hashtableInitIterator(&iter, ht, 0);
             void *next;
 
@@ -1211,6 +1214,7 @@ size_t objectComputeSize(robj *key, robj *o, size_t sample_size, int dbid) {
             }
             hashtableResetIterator(&iter);
             if (samples) asize += (double)elesize / samples * hashtableSize(ht);
+            if (vsetIsValid(volatile_fields)) asize += vsetMemUsage(volatile_fields);
         } else {
             serverPanic("Unknown hash encoding");
         }

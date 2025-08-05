@@ -35,7 +35,7 @@
 #include "hashtable.h"
 #include "rax.h"
 #include "sds.h"
-#include "volatile_set.h"
+#include "vset.h"
 #include "server.h"
 #include "zmalloc.h"
 #include <math.h>
@@ -52,27 +52,23 @@ typedef enum {
     EXPIRATION_MODIFICATION_EXPIRE_ASAP = 2,      /* if apply of the expiration modification was set to a time in the past (i.e field is immediately expired) */
 } expiryModificationResult;
 
-volatileEntryType hashVolatileEntryType = {
-    .entryGetKey = (sds(*)(const void *entry))entryGetField,
-    .getExpiry = (long long (*)(const void *entry))entryGetExpiry,
-};
-
 /*-----------------------------------------------------------------------------
  * Hash type Expiry API
  *----------------------------------------------------------------------------*/
 
-static volatile_set *hashTypeGetVolatileSet(robj *o) {
+static vset *hashTypeGetVolatileSet(robj *o) {
     serverAssert(o->encoding == OBJ_ENCODING_HASHTABLE);
-    return *(volatile_set **)hashtableMetadata(o->ptr);
-}
-
-void hashTypeFreeVolatileSet(robj *o) {
-    volatile_set *set = hashTypeGetVolatileSet(o);
-    if (set) freeVolatileSet(set);
+    vset *set = (vset *)hashtableMetadata(o->ptr);
+    return vsetIsValid(set) ? set : NULL;
 }
 
 bool hashTypeHasVolatileElements(robj *o) {
-    return ((o->encoding == OBJ_ENCODING_HASHTABLE) && (hashTypeGetVolatileSet(o) != NULL));
+    if (o->encoding == OBJ_ENCODING_HASHTABLE) {
+        vset *set = hashTypeGetVolatileSet(o);
+        if (set && !vsetIsEmpty(set))
+            return true;
+    }
+    return false;
 }
 
 /* make any access to the hash object elements ignore the specific elements expiration.
@@ -80,44 +76,43 @@ bool hashTypeHasVolatileElements(robj *o) {
 static inline void hashTypeIgnoreTTL(robj *o, bool ignore) {
     if (o->encoding == OBJ_ENCODING_HASHTABLE) {
         /* prevent placing access function if not needed */
-        if (!ignore && !hashTypeHasVolatileElements(o)) {
+        if (!ignore && hashTypeGetVolatileSet(o) == NULL) {
             ignore = true;
         }
         hashtableSetType(o->ptr, ignore ? &hashHashtableType : &hashWithVolatileItemsHashtableType);
     }
 }
 
-static volatile_set *hashTypeGetOrcreateVolatileSet(robj *o) {
+static vset *hashTypeGetOrcreateVolatileSet(robj *o) {
     serverAssert(o->encoding == OBJ_ENCODING_HASHTABLE);
-    volatile_set **volatile_set_ref = hashtableMetadata(o->ptr);
-    if (*volatile_set_ref == NULL) {
-        *volatile_set_ref = createVolatileSet(&hashVolatileEntryType);
+    vset *set = (vset *)hashtableMetadata(o->ptr);
+    if (!vsetIsValid(set)) {
+        vsetInit(set);
         /* serves mainly for optimization. Use type which supports access function only when needed. */
         hashTypeIgnoreTTL(o, false);
     }
-    return *volatile_set_ref;
+    return set;
 }
 
-static void hashTypeDeleteVolatileSet(robj *o) {
-    volatile_set **volatile_set_ref = hashtableMetadata(o->ptr);
-    freeVolatileSet(*volatile_set_ref);
-    *volatile_set_ref = NULL;
+void hashTypeFreeVolatileSet(robj *o) {
+    vset *set = (vset *)hashtableMetadata(o->ptr);
+    if (vsetIsValid(set)) vsetRelease(set);
     /* serves mainly for optimization. by changing the hashtable type we can avoid extra function call in hashtable access */
     hashTypeIgnoreTTL(o, true);
 }
 
 void hashTypeTrackEntry(robj *o, void *entry) {
-    volatile_set *set = hashTypeGetOrcreateVolatileSet(o);
-    serverAssert(volatileSetAddEntry(set, entry, entryGetExpiry(entry)));
+    vset *set = hashTypeGetOrcreateVolatileSet(o);
+    serverAssert(vsetAddEntry(set, entryGetExpiry, entry));
 }
 
 void hashTypeUntrackEntry(robj *o, void *entry) {
     if (!entryHasExpiry(entry)) return;
-    volatile_set *set = hashTypeGetVolatileSet(o);
+    vset *set = hashTypeGetVolatileSet(o);
     debugServerAssert(set);
-    serverAssert(volatileSetRemoveEntry(set, entry, entryGetExpiry(entry)));
-    if (volatileSetNumEntries(set) == 0) {
-        hashTypeDeleteVolatileSet(o);
+    serverAssert(vsetRemoveEntry(set, entryGetExpiry, entry));
+    if (vsetIsEmpty(set)) {
+        hashTypeFreeVolatileSet(o);
     }
 }
 
@@ -128,20 +123,13 @@ void hashTypeTrackUpdateEntry(robj *o, void *old_entry, void *new_entry, long lo
     if (!old_tracked && !new_tracked)
         return;
 
-    volatile_set *set = hashTypeGetOrcreateVolatileSet(o);
-    debugServerAssert(set);
+    vset *set = hashTypeGetOrcreateVolatileSet(o);
+    debugServerAssert(!old_tracked || !vsetIsEmpty(set));
 
-    if (old_tracked && !new_tracked) {
-        serverAssert(volatileSetRemoveEntry(set, old_entry, old_expiry));
-    } else if (new_tracked && !old_tracked) {
-        serverAssert(volatileSetAddEntry(set, new_entry, new_expiry));
-    } else {
-        volatile_set *set = hashTypeGetVolatileSet(o);
-        debugServerAssert(set);
-        serverAssert(volatileSetUpdateEntry(set, old_entry, new_entry, old_expiry, new_expiry) == 1);
-    }
-    if (volatileSetNumEntries(set) == 0) {
-        hashTypeDeleteVolatileSet(o);
+    serverAssert(vsetUpdateEntry(set, entryGetExpiry, old_entry, new_entry, old_expiry, new_expiry) == 1);
+
+    if (vsetIsEmpty(set)) {
+        hashTypeFreeVolatileSet(o);
     }
 }
 
@@ -599,7 +587,7 @@ void hashTypeInitVolatileIterator(robj *subject, hashTypeIterator *hi) {
     if (hi->encoding == OBJ_ENCODING_LISTPACK) {
         return;
     } else if (hi->encoding == OBJ_ENCODING_HASHTABLE) {
-        volatileSetStart(hashTypeGetVolatileSet(subject), &hi->viter);
+        vsetInitIterator(hashTypeGetVolatileSet(subject), &hi->viter);
     } else {
         serverPanic("Unknown hash encoding");
     }
@@ -610,7 +598,7 @@ void hashTypeResetIterator(hashTypeIterator *hi) {
         if (!hi->volatile_items_iter)
             hashtableResetIterator(&hi->iter);
         else
-            volatileSetReset(&hi->viter);
+            vsetResetIterator(&hi->viter);
     }
 }
 
@@ -650,7 +638,7 @@ int hashTypeNext(hashTypeIterator *hi) {
         if (!hi->volatile_items_iter) {
             if (!hashtableNext(&hi->iter, &hi->next)) return C_ERR;
         } else {
-            if (!volatileSetNext(&hi->viter, &hi->next)) return C_ERR;
+            if (!vsetNext(&hi->viter, &hi->next)) return C_ERR;
         }
     } else {
         serverPanic("Unknown hash encoding");

@@ -201,6 +201,14 @@ int test_reclaimFilePageCache(int argc, char **argv, int flags);
 int test_writePointerWithPadding(int argc, char **argv, int flags);
 int test_valkey_strtod(int argc, char **argv, int flags);
 int test_vector(int argc, char **argv, int flags);
+int test_vset_add_and_iterate(int argc, char **argv, int flags);
+int test_vset_large_batch_same_expiry(int argc, char **argv, int flags);
+int test_vset_large_batch_update_entry_same_expiry(int argc, char **argv, int flags);
+int test_vset_large_batch_update_entry_multiple_expiries(int argc, char **argv, int flags);
+int test_vset_iterate_multiple_expiries(int argc, char **argv, int flags);
+int test_vset_add_and_remove_all(int argc, char **argv, int flags);
+int test_vset_defrag(int argc, char **argv, int flags);
+int test_vset_fuzzer(int argc, char **argv, int flags);
 int test_ziplistCreateIntList(int argc, char **argv, int flags);
 int test_ziplistPop(int argc, char **argv, int flags);
 int test_ziplistGetElementAtIndex3(int argc, char **argv, int flags);
@@ -261,6 +269,7 @@ unitTest __test_sha1_c[] = {{"test_sha1", test_sha1}, {NULL, NULL}};
 unitTest __test_util_c[] = {{"test_string2ll", test_string2ll}, {"test_string2l", test_string2l}, {"test_ll2string", test_ll2string}, {"test_ld2string", test_ld2string}, {"test_fixedpoint_d2string", test_fixedpoint_d2string}, {"test_version2num", test_version2num}, {"test_reclaimFilePageCache", test_reclaimFilePageCache}, {"test_writePointerWithPadding", test_writePointerWithPadding}, {NULL, NULL}};
 unitTest __test_valkey_strtod_c[] = {{"test_valkey_strtod", test_valkey_strtod}, {NULL, NULL}};
 unitTest __test_vector_c[] = {{"test_vector", test_vector}, {NULL, NULL}};
+unitTest __test_vset_c[] = {{"test_vset_add_and_iterate", test_vset_add_and_iterate}, {"test_vset_large_batch_same_expiry", test_vset_large_batch_same_expiry}, {"test_vset_large_batch_update_entry_same_expiry", test_vset_large_batch_update_entry_same_expiry}, {"test_vset_large_batch_update_entry_multiple_expiries", test_vset_large_batch_update_entry_multiple_expiries}, {"test_vset_iterate_multiple_expiries", test_vset_iterate_multiple_expiries}, {"test_vset_add_and_remove_all", test_vset_add_and_remove_all}, {"test_vset_defrag", test_vset_defrag}, {"test_vset_fuzzer", test_vset_fuzzer}, {NULL, NULL}};
 unitTest __test_ziplist_c[] = {{"test_ziplistCreateIntList", test_ziplistCreateIntList}, {"test_ziplistPop", test_ziplistPop}, {"test_ziplistGetElementAtIndex3", test_ziplistGetElementAtIndex3}, {"test_ziplistGetElementOutOfRange", test_ziplistGetElementOutOfRange}, {"test_ziplistGetLastElement", test_ziplistGetLastElement}, {"test_ziplistGetFirstElement", test_ziplistGetFirstElement}, {"test_ziplistGetElementOutOfRangeReverse", test_ziplistGetElementOutOfRangeReverse}, {"test_ziplistIterateThroughFullList", test_ziplistIterateThroughFullList}, {"test_ziplistIterateThroughListFrom1ToEnd", test_ziplistIterateThroughListFrom1ToEnd}, {"test_ziplistIterateThroughListFrom2ToEnd", test_ziplistIterateThroughListFrom2ToEnd}, {"test_ziplistIterateThroughStartOutOfRange", test_ziplistIterateThroughStartOutOfRange}, {"test_ziplistIterateBackToFront", test_ziplistIterateBackToFront}, {"test_ziplistIterateBackToFrontDeletingAllItems", test_ziplistIterateBackToFrontDeletingAllItems}, {"test_ziplistDeleteInclusiveRange0To0", test_ziplistDeleteInclusiveRange0To0}, {"test_ziplistDeleteInclusiveRange0To1", test_ziplistDeleteInclusiveRange0To1}, {"test_ziplistDeleteInclusiveRange1To2", test_ziplistDeleteInclusiveRange1To2}, {"test_ziplistDeleteWithStartIndexOutOfRange", test_ziplistDeleteWithStartIndexOutOfRange}, {"test_ziplistDeleteWithNumOverflow", test_ziplistDeleteWithNumOverflow}, {"test_ziplistDeleteFooWhileIterating", test_ziplistDeleteFooWhileIterating}, {"test_ziplistReplaceWithSameSize", test_ziplistReplaceWithSameSize}, {"test_ziplistReplaceWithDifferentSize", test_ziplistReplaceWithDifferentSize}, {"test_ziplistRegressionTestForOver255ByteStrings", test_ziplistRegressionTestForOver255ByteStrings}, {"test_ziplistRegressionTestDeleteNextToLastEntries", test_ziplistRegressionTestDeleteNextToLastEntries}, {"test_ziplistCreateLongListAndCheckIndices", test_ziplistCreateLongListAndCheckIndices}, {"test_ziplistCompareStringWithZiplistEntries", test_ziplistCompareStringWithZiplistEntries}, {"test_ziplistMergeTest", test_ziplistMergeTest}, {"test_ziplistStressWithRandomPayloadsOfDifferentEncoding", test_ziplistStressWithRandomPayloadsOfDifferentEncoding}, {"test_ziplistCascadeUpdateEdgeCases", test_ziplistCascadeUpdateEdgeCases}, {"test_ziplistInsertEdgeCase", test_ziplistInsertEdgeCase}, {"test_ziplistStressWithVariableSize", test_ziplistStressWithVariableSize}, {"test_BenchmarkziplistFind", test_BenchmarkziplistFind}, {"test_BenchmarkziplistIndex", test_BenchmarkziplistIndex}, {"test_BenchmarkziplistValidateIntegrity", test_BenchmarkziplistValidateIntegrity}, {"test_BenchmarkziplistCompareWithString", test_BenchmarkziplistCompareWithString}, {"test_BenchmarkziplistCompareWithNumber", test_BenchmarkziplistCompareWithNumber}, {"test_ziplistStress__ziplistCascadeUpdate", test_ziplistStress__ziplistCascadeUpdate}, {NULL, NULL}};
 unitTest __test_zipmap_c[] = {{"test_zipmapIterateWithLargeKey", test_zipmapIterateWithLargeKey}, {"test_zipmapIterateThroughElements", test_zipmapIterateThroughElements}, {NULL, NULL}};
 unitTest __test_zmalloc_c[] = {{"test_zmallocAllocReallocCallocAndFree", test_zmallocAllocReallocCallocAndFree}, {"test_zmallocAllocZeroByteAndFree", test_zmallocAllocZeroByteAndFree}, {NULL, NULL}};
@@ -288,6 +297,7 @@ struct unitTestSuite {
     {"test_util.c", __test_util_c},
     {"test_valkey_strtod.c", __test_valkey_strtod_c},
     {"test_vector.c", __test_vector_c},
+    {"test_vset.c", __test_vset_c},
     {"test_ziplist.c", __test_ziplist_c},
     {"test_zipmap.c", __test_zipmap_c},
     {"test_zmalloc.c", __test_zmalloc_c},

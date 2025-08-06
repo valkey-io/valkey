@@ -23,10 +23,17 @@ jobs:
     runs-on: ubuntu-latest ## [self-hosted, ec2-perf-ubuntu-24]
     if: github.event.label.name == 'run-benchmark' || github.event.label.name == 'run-cluster-benchmark'
     steps:
+
+      - name: Checkout valkey
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+        with:
+          path: valkey
+          fetch-depth: 0
+
       - name: Checkout valkey-perf-benchmark
         uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
         with:
-          repository: roshkhatri/valkey-perf-benchmark
+          repository: valkey-io/valkey-perf-benchmark
           path: valkey-perf-benchmark
           fetch-depth: 1
 
@@ -51,6 +58,7 @@ jobs:
             "--commits" "${{ github.event.pull_request.head.sha }}"
             "--baseline" "unstable"
             "--results-dir" "results"
+            "--valkey-path" "../valkey"
             # "--server-cpu-range" "92-93" should be added for self hosted
             # "--client-cpu-range" "94-95" should be added for self hosted
           )
@@ -102,13 +110,10 @@ jobs:
 
       - name: Remove ${{ github.event.label.name }} label
         if: always() && (github.event.label.name == 'run-benchmark' || github.event.label.name == 'run-cluster-benchmark')
-        uses: actions/github-script@5c56fde4671bc2d3592fb0f2c5b5bab9ddae03b1 # v7
-        with:
-          github-token: ${{ github.token }}
-          script: |
-            await github.rest.issues.removeLabel({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              name: '${{ github.event.label.name }}'
-            }).catch(err => console.log('label not present', err.message));
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh api \
+            --method DELETE \
+            /repos/${{ github.repository }}/issues/${{ github.event.number }}/labels/${{ github.event.label.name }} \
+            || echo "Label not present or already removed"

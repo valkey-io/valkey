@@ -1167,16 +1167,8 @@ exit:
     return nread;
 }
 
-static const char *connTLSGetType(connection *conn_) {
-    (void)conn_;
-
+static int connTLSGetType(void) {
     return CONN_TYPE_TLS;
-}
-
-static int connTLSGetTypeId(connection *conn_) {
-    (void)conn_;
-
-    return CONN_TYPE_ID_TLS;
 }
 
 static int tlsHasPendingData(void) {
@@ -1225,7 +1217,6 @@ static sds connTLSGetPeerCert(connection *conn_) {
 
 static ConnectionType CT_TLS = {
     /* connection type */
-    .get_type_id = connTLSGetTypeId,
     .get_type = connTLSGetType,
 
     /* connection type initialize & finalize & configure */
@@ -1285,7 +1276,7 @@ int RedisRegisterConnectionTypeTLS(void) {
 #else /* USE_OPENSSL */
 
 int RedisRegisterConnectionTypeTLS(void) {
-    serverLog(LL_VERBOSE, "Connection type %s not builtin", CONN_TYPE_TLS);
+    serverLog(LL_VERBOSE, "Connection type %s not builtin", getConnectionTypeName(CONN_TYPE_TLS));
     return C_ERR;
 }
 
@@ -1301,7 +1292,7 @@ int ValkeyModule_OnLoad(void *ctx, ValkeyModuleString **argv, int argc) {
 
     /* Connection modules must be part of the same build as the server. */
     if (strcmp(REDIS_BUILD_ID_RAW, serverBuildIdRaw())) {
-        serverLog(LL_NOTICE, "Connection type %s was not built together with the valkey-server used.", CONN_TYPE_TLS);
+        serverLog(LL_NOTICE, "Connection type %s was not built together with the valkey-server used.", getConnectionTypeName(CONN_TYPE_TLS));
         return VALKEYMODULE_ERR;
     }
 
@@ -1309,7 +1300,7 @@ int ValkeyModule_OnLoad(void *ctx, ValkeyModuleString **argv, int argc) {
 
     /* Connection modules is available only bootup. */
     if ((ValkeyModule_GetContextFlags(ctx) & VALKEYMODULE_CTX_FLAGS_SERVER_STARTUP) == 0) {
-        serverLog(LL_NOTICE, "Connection type %s can be loaded only during bootup", CONN_TYPE_TLS);
+        serverLog(LL_NOTICE, "Connection type %s can be loaded only during bootup", getConnectionTypeName(CONN_TYPE_TLS));
         return VALKEYMODULE_ERR;
     }
 
@@ -1322,7 +1313,7 @@ int ValkeyModule_OnLoad(void *ctx, ValkeyModuleString **argv, int argc) {
 
 int ValkeyModule_OnUnload(void *arg) {
     UNUSED(arg);
-    serverLog(LL_NOTICE, "Connection type %s can not be unloaded", CONN_TYPE_TLS);
+    serverLog(LL_NOTICE, "Connection type %s can not be unloaded", getConnectionTypeName(CONN_TYPE_TLS));
     return VALKEYMODULE_ERR;
 }
 #endif

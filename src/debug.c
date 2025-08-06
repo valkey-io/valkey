@@ -1697,7 +1697,7 @@ static void setupStacktracePipe(void) { /* we don't need a pipe to write the sta
 #include <sys/syscall.h>
 #include <dirent.h>
 
-#define TIDS_MAX_SIZE 50
+#define TIDS_MAX_SIZE 150
 static size_t get_ready_to_signal_threads_tids(int sig_num, pid_t tids[TIDS_MAX_SIZE]);
 
 typedef struct {

@@ -363,7 +363,7 @@ size_t kvstoreMemUsage(kvstore *kvs) {
  * It's a three pronged approach.
  *
  * 1. It uses the provided cursor `cursor` to retrieve the hashtable index from it.
- * 2. If the hash table is in a valid state checked through the provided callback `hashtableScanValidFunction`,
+ * 2. If the hash table is in a valid state checked through the provided callback `kvstoreScanShouldSkipHashtable`,
  *    it performs a hashtableScan over the appropriate `keyType` hash table of `db`.
  * 3. If the hashtable is entirely scanned i.e. the cursor has reached 0, the next non empty hashtable is discovered.
  *    The hashtable information is embedded into the cursor and returned.

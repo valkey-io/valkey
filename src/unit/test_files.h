@@ -20,6 +20,11 @@ int test_dictDisableResizeReduceTo3(int argc, char **argv, int flags);
 int test_dictDeleteOneKeyTriggerResizeAgain(int argc, char **argv, int flags);
 int test_dictBenchmark(int argc, char **argv, int flags);
 int test_endianconv(int argc, char *argv[], int flags);
+int test_entryCreate(int argc, char **argv, int flags);
+int test_entryUpdate(int argc, char **argv, int flags);
+int test_entryHasexpiry_entrySetExpiry(int argc, char **argv, int flags);
+int test_entryIsExpired(int argc, char **argv, int flags);
+int test_entryMemUsage_entrySetExpiry_entrySetValue(int argc, char **argv, int flags);
 int test_cursor(int argc, char **argv, int flags);
 int test_set_hash_function_seed(int argc, char **argv, int flags);
 int test_add_find_delete(int argc, char **argv, int flags);
@@ -193,8 +198,17 @@ int test_ld2string(int argc, char **argv, int flags);
 int test_fixedpoint_d2string(int argc, char **argv, int flags);
 int test_version2num(int argc, char **argv, int flags);
 int test_reclaimFilePageCache(int argc, char **argv, int flags);
+int test_writePointerWithPadding(int argc, char **argv, int flags);
 int test_valkey_strtod(int argc, char **argv, int flags);
 int test_vector(int argc, char **argv, int flags);
+int test_vset_add_and_iterate(int argc, char **argv, int flags);
+int test_vset_large_batch_same_expiry(int argc, char **argv, int flags);
+int test_vset_large_batch_update_entry_same_expiry(int argc, char **argv, int flags);
+int test_vset_large_batch_update_entry_multiple_expiries(int argc, char **argv, int flags);
+int test_vset_iterate_multiple_expiries(int argc, char **argv, int flags);
+int test_vset_add_and_remove_all(int argc, char **argv, int flags);
+int test_vset_defrag(int argc, char **argv, int flags);
+int test_vset_fuzzer(int argc, char **argv, int flags);
 int test_ziplistCreateIntList(int argc, char **argv, int flags);
 int test_ziplistPop(int argc, char **argv, int flags);
 int test_ziplistGetElementAtIndex3(int argc, char **argv, int flags);
@@ -241,6 +255,7 @@ unitTest __test_crc64_c[] = {{"test_crc64", test_crc64}, {NULL, NULL}};
 unitTest __test_crc64combine_c[] = {{"test_crc64combine", test_crc64combine}, {NULL, NULL}};
 unitTest __test_dict_c[] = {{"test_dictCreate", test_dictCreate}, {"test_dictAdd16Keys", test_dictAdd16Keys}, {"test_dictDisableResize", test_dictDisableResize}, {"test_dictAddOneKeyTriggerResize", test_dictAddOneKeyTriggerResize}, {"test_dictDeleteKeys", test_dictDeleteKeys}, {"test_dictDeleteOneKeyTriggerResize", test_dictDeleteOneKeyTriggerResize}, {"test_dictEmptyDirAdd128Keys", test_dictEmptyDirAdd128Keys}, {"test_dictDisableResizeReduceTo3", test_dictDisableResizeReduceTo3}, {"test_dictDeleteOneKeyTriggerResizeAgain", test_dictDeleteOneKeyTriggerResizeAgain}, {"test_dictBenchmark", test_dictBenchmark}, {NULL, NULL}};
 unitTest __test_endianconv_c[] = {{"test_endianconv", test_endianconv}, {NULL, NULL}};
+unitTest __test_entry_c[] = {{"test_entryCreate", test_entryCreate}, {"test_entryUpdate", test_entryUpdate}, {"test_entryHasexpiry_entrySetExpiry", test_entryHasexpiry_entrySetExpiry}, {"test_entryIsExpired", test_entryIsExpired}, {"test_entryMemUsage_entrySetExpiry_entrySetValue", test_entryMemUsage_entrySetExpiry_entrySetValue}, {NULL, NULL}};
 unitTest __test_hashtable_c[] = {{"test_cursor", test_cursor}, {"test_set_hash_function_seed", test_set_hash_function_seed}, {"test_add_find_delete", test_add_find_delete}, {"test_add_find_delete_avoid_resize", test_add_find_delete_avoid_resize}, {"test_instant_rehashing", test_instant_rehashing}, {"test_bucket_chain_length", test_bucket_chain_length}, {"test_two_phase_insert_and_pop", test_two_phase_insert_and_pop}, {"test_replace_reallocated_entry", test_replace_reallocated_entry}, {"test_incremental_find", test_incremental_find}, {"test_scan", test_scan}, {"test_iterator", test_iterator}, {"test_safe_iterator", test_safe_iterator}, {"test_compact_bucket_chain", test_compact_bucket_chain}, {"test_random_entry", test_random_entry}, {"test_random_entry_with_long_chain", test_random_entry_with_long_chain}, {"test_random_entry_sparse_table", test_random_entry_sparse_table}, {NULL, NULL}};
 unitTest __test_intset_c[] = {{"test_intsetValueEncodings", test_intsetValueEncodings}, {"test_intsetBasicAdding", test_intsetBasicAdding}, {"test_intsetLargeNumberRandomAdd", test_intsetLargeNumberRandomAdd}, {"test_intsetUpgradeFromint16Toint32", test_intsetUpgradeFromint16Toint32}, {"test_intsetUpgradeFromint16Toint64", test_intsetUpgradeFromint16Toint64}, {"test_intsetUpgradeFromint32Toint64", test_intsetUpgradeFromint32Toint64}, {"test_intsetStressLookups", test_intsetStressLookups}, {"test_intsetStressAddDelete", test_intsetStressAddDelete}, {NULL, NULL}};
 unitTest __test_kvstore_c[] = {{"test_kvstoreAdd16Keys", test_kvstoreAdd16Keys}, {"test_kvstoreIteratorRemoveAllKeysNoDeleteEmptyHashtable", test_kvstoreIteratorRemoveAllKeysNoDeleteEmptyHashtable}, {"test_kvstoreIteratorRemoveAllKeysDeleteEmptyHashtable", test_kvstoreIteratorRemoveAllKeysDeleteEmptyHashtable}, {"test_kvstoreHashtableIteratorRemoveAllKeysNoDeleteEmptyHashtable", test_kvstoreHashtableIteratorRemoveAllKeysNoDeleteEmptyHashtable}, {"test_kvstoreHashtableIteratorRemoveAllKeysDeleteEmptyHashtable", test_kvstoreHashtableIteratorRemoveAllKeysDeleteEmptyHashtable}, {NULL, NULL}};
@@ -251,9 +266,10 @@ unitTest __test_quicklist_c[] = {{"test_quicklistCreateList", test_quicklistCrea
 unitTest __test_rax_c[] = {{"test_raxRandomWalk", test_raxRandomWalk}, {"test_raxIteratorUnitTests", test_raxIteratorUnitTests}, {"test_raxTryInsertUnitTests", test_raxTryInsertUnitTests}, {"test_raxRegressionTest1", test_raxRegressionTest1}, {"test_raxRegressionTest2", test_raxRegressionTest2}, {"test_raxRegressionTest3", test_raxRegressionTest3}, {"test_raxRegressionTest4", test_raxRegressionTest4}, {"test_raxRegressionTest5", test_raxRegressionTest5}, {"test_raxRegressionTest6", test_raxRegressionTest6}, {"test_raxBenchmark", test_raxBenchmark}, {"test_raxHugeKey", test_raxHugeKey}, {"test_raxFuzz", test_raxFuzz}, {"test_raxRecompressHugeKey", test_raxRecompressHugeKey}, {NULL, NULL}};
 unitTest __test_sds_c[] = {{"test_sds", test_sds}, {"test_typesAndAllocSize", test_typesAndAllocSize}, {"test_sdsHeaderSizes", test_sdsHeaderSizes}, {"test_sdssplitargs", test_sdssplitargs}, {NULL, NULL}};
 unitTest __test_sha1_c[] = {{"test_sha1", test_sha1}, {NULL, NULL}};
-unitTest __test_util_c[] = {{"test_string2ll", test_string2ll}, {"test_string2l", test_string2l}, {"test_ll2string", test_ll2string}, {"test_ld2string", test_ld2string}, {"test_fixedpoint_d2string", test_fixedpoint_d2string}, {"test_version2num", test_version2num}, {"test_reclaimFilePageCache", test_reclaimFilePageCache}, {NULL, NULL}};
+unitTest __test_util_c[] = {{"test_string2ll", test_string2ll}, {"test_string2l", test_string2l}, {"test_ll2string", test_ll2string}, {"test_ld2string", test_ld2string}, {"test_fixedpoint_d2string", test_fixedpoint_d2string}, {"test_version2num", test_version2num}, {"test_reclaimFilePageCache", test_reclaimFilePageCache}, {"test_writePointerWithPadding", test_writePointerWithPadding}, {NULL, NULL}};
 unitTest __test_valkey_strtod_c[] = {{"test_valkey_strtod", test_valkey_strtod}, {NULL, NULL}};
 unitTest __test_vector_c[] = {{"test_vector", test_vector}, {NULL, NULL}};
+unitTest __test_vset_c[] = {{"test_vset_add_and_iterate", test_vset_add_and_iterate}, {"test_vset_large_batch_same_expiry", test_vset_large_batch_same_expiry}, {"test_vset_large_batch_update_entry_same_expiry", test_vset_large_batch_update_entry_same_expiry}, {"test_vset_large_batch_update_entry_multiple_expiries", test_vset_large_batch_update_entry_multiple_expiries}, {"test_vset_iterate_multiple_expiries", test_vset_iterate_multiple_expiries}, {"test_vset_add_and_remove_all", test_vset_add_and_remove_all}, {"test_vset_defrag", test_vset_defrag}, {"test_vset_fuzzer", test_vset_fuzzer}, {NULL, NULL}};
 unitTest __test_ziplist_c[] = {{"test_ziplistCreateIntList", test_ziplistCreateIntList}, {"test_ziplistPop", test_ziplistPop}, {"test_ziplistGetElementAtIndex3", test_ziplistGetElementAtIndex3}, {"test_ziplistGetElementOutOfRange", test_ziplistGetElementOutOfRange}, {"test_ziplistGetLastElement", test_ziplistGetLastElement}, {"test_ziplistGetFirstElement", test_ziplistGetFirstElement}, {"test_ziplistGetElementOutOfRangeReverse", test_ziplistGetElementOutOfRangeReverse}, {"test_ziplistIterateThroughFullList", test_ziplistIterateThroughFullList}, {"test_ziplistIterateThroughListFrom1ToEnd", test_ziplistIterateThroughListFrom1ToEnd}, {"test_ziplistIterateThroughListFrom2ToEnd", test_ziplistIterateThroughListFrom2ToEnd}, {"test_ziplistIterateThroughStartOutOfRange", test_ziplistIterateThroughStartOutOfRange}, {"test_ziplistIterateBackToFront", test_ziplistIterateBackToFront}, {"test_ziplistIterateBackToFrontDeletingAllItems", test_ziplistIterateBackToFrontDeletingAllItems}, {"test_ziplistDeleteInclusiveRange0To0", test_ziplistDeleteInclusiveRange0To0}, {"test_ziplistDeleteInclusiveRange0To1", test_ziplistDeleteInclusiveRange0To1}, {"test_ziplistDeleteInclusiveRange1To2", test_ziplistDeleteInclusiveRange1To2}, {"test_ziplistDeleteWithStartIndexOutOfRange", test_ziplistDeleteWithStartIndexOutOfRange}, {"test_ziplistDeleteWithNumOverflow", test_ziplistDeleteWithNumOverflow}, {"test_ziplistDeleteFooWhileIterating", test_ziplistDeleteFooWhileIterating}, {"test_ziplistReplaceWithSameSize", test_ziplistReplaceWithSameSize}, {"test_ziplistReplaceWithDifferentSize", test_ziplistReplaceWithDifferentSize}, {"test_ziplistRegressionTestForOver255ByteStrings", test_ziplistRegressionTestForOver255ByteStrings}, {"test_ziplistRegressionTestDeleteNextToLastEntries", test_ziplistRegressionTestDeleteNextToLastEntries}, {"test_ziplistCreateLongListAndCheckIndices", test_ziplistCreateLongListAndCheckIndices}, {"test_ziplistCompareStringWithZiplistEntries", test_ziplistCompareStringWithZiplistEntries}, {"test_ziplistMergeTest", test_ziplistMergeTest}, {"test_ziplistStressWithRandomPayloadsOfDifferentEncoding", test_ziplistStressWithRandomPayloadsOfDifferentEncoding}, {"test_ziplistCascadeUpdateEdgeCases", test_ziplistCascadeUpdateEdgeCases}, {"test_ziplistInsertEdgeCase", test_ziplistInsertEdgeCase}, {"test_ziplistStressWithVariableSize", test_ziplistStressWithVariableSize}, {"test_BenchmarkziplistFind", test_BenchmarkziplistFind}, {"test_BenchmarkziplistIndex", test_BenchmarkziplistIndex}, {"test_BenchmarkziplistValidateIntegrity", test_BenchmarkziplistValidateIntegrity}, {"test_BenchmarkziplistCompareWithString", test_BenchmarkziplistCompareWithString}, {"test_BenchmarkziplistCompareWithNumber", test_BenchmarkziplistCompareWithNumber}, {"test_ziplistStress__ziplistCascadeUpdate", test_ziplistStress__ziplistCascadeUpdate}, {NULL, NULL}};
 unitTest __test_zipmap_c[] = {{"test_zipmapIterateWithLargeKey", test_zipmapIterateWithLargeKey}, {"test_zipmapIterateThroughElements", test_zipmapIterateThroughElements}, {NULL, NULL}};
 unitTest __test_zmalloc_c[] = {{"test_zmallocAllocReallocCallocAndFree", test_zmallocAllocReallocCallocAndFree}, {"test_zmallocAllocZeroByteAndFree", test_zmallocAllocZeroByteAndFree}, {NULL, NULL}};
@@ -267,6 +283,7 @@ struct unitTestSuite {
     {"test_crc64combine.c", __test_crc64combine_c},
     {"test_dict.c", __test_dict_c},
     {"test_endianconv.c", __test_endianconv_c},
+    {"test_entry.c", __test_entry_c},
     {"test_hashtable.c", __test_hashtable_c},
     {"test_intset.c", __test_intset_c},
     {"test_kvstore.c", __test_kvstore_c},
@@ -280,6 +297,7 @@ struct unitTestSuite {
     {"test_util.c", __test_util_c},
     {"test_valkey_strtod.c", __test_valkey_strtod_c},
     {"test_vector.c", __test_vector_c},
+    {"test_vset.c", __test_vset_c},
     {"test_ziplist.c", __test_ziplist_c},
     {"test_zipmap.c", __test_zipmap_c},
     {"test_zmalloc.c", __test_zmalloc_c},

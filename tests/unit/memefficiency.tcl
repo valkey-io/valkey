@@ -308,7 +308,7 @@ run_solo {defrag} {
                 # Make sure we had defrag hits during AOF loading.  Note that we don't worry about
                 # the actual fragmentation ratio here.  It will vary based on when defrag stopped
                 # mid-cycle.  Just check that we are defragging by the number of hits.
-                assert {[s active_defrag_hits] > 100000}
+                assert {[s active_defrag_hits] > 80000}
             }
             } ;# Active defrag - AOF loading
         }

@@ -422,6 +422,16 @@ start_cluster 3 1 {tags {external:skip cluster}} {
         set R3_shardid [R 3 cluster myshardid]
         assert_equal $R0_shardid $R3_shardid
 
+        # We also take this opportunity to verify slot migration.
+        # Move slot 0 from R0 to R1. Move slot 5462 from R1 to R0.
+        R 0 cluster setslot 0 migrating $R1_nodeid
+        R 1 cluster setslot 0 importing $R0_nodeid
+        R 1 cluster setslot 5462 migrating $R0_nodeid
+        R 0 cluster setslot 5462 importing $R1_nodeid
+        assert_equal [get_open_slots 0] "\[0->-$R1_nodeid\] \[5462-<-$R1_nodeid\]"
+        assert_equal [get_open_slots 1] "\[0-<-$R0_nodeid\] \[5462->-$R0_nodeid\]"
+        wait_for_slot_state 3 "\[0->-$R1_nodeid\] \[5462-<-$R1_nodeid\]"
+
         # Ensure that related nodes do not reconnect.
         R 1 debug disable-cluster-reconnection 1
         R 2 debug disable-cluster-reconnection 1
@@ -458,12 +468,32 @@ start_cluster 3 1 {tags {external:skip cluster}} {
         assert_equal {0-5461} [dict get [cluster_get_node_by_id 1 $R3_nodeid] slots]
         assert_equal {0-5461} [dict get [cluster_get_node_by_id 2 $R3_nodeid] slots]
 
+        # Check that in the R1 perspective, both migration-source and migration-target
+        # have moved from R0 to R1.
+        assert_equal [get_open_slots 0] "\[0->-$R1_nodeid\] \[5462-<-$R1_nodeid\]"
+        assert_equal [get_open_slots 1] "\[0-<-$R3_nodeid\] \[5462->-$R3_nodeid\]"
+        assert_equal [get_open_slots 3] "\[0->-$R1_nodeid\] \[5462-<-$R1_nodeid\]"
+
         # A failover occurred in shard, we will only go to this code branch,
         # verify we print the logs.
+
+        # Both importing slots and migrating slots are move to R3.
+        set pattern "*Failover occurred in migration source. Update importing source for slot 0 to node $R3_nodeid () in shard $R3_shardid*"
+        verify_log_message -1 $pattern $loglines1
+        set pattern "*Failover occurred in migration target. Slot 5462 is now being migrated to node $R3_nodeid () in shard $R3_shardid*"
+        verify_log_message -1 $pattern $loglines1
+
+        # Both slots are move to R3.
         set R0_slots 5462
         set pattern "*A failover occurred in shard $R3_shardid; node $R0_nodeid () lost $R0_slots slot(s) and failed over to node $R3_nodeid*"
         verify_log_message -1 $pattern $loglines1
         verify_log_message -2 $pattern $loglines2
+
+        # Both importing slots and migrating slots are move to R3.
+        set pattern "*A failover occurred in migration source. Update importing source of 1 slot(s) to node $R3_nodeid () in shard $R3_shardid*"
+        verify_log_message -1 $pattern $loglines1
+        set pattern "*A failover occurred in migration target. Update migrating target of 1 slot(s) to node $R3_nodeid () in shard $R3_shardid*"
+        verify_log_message -1 $pattern $loglines1
 
         R 1 debug disable-cluster-reconnection 0
         R 2 debug disable-cluster-reconnection 0

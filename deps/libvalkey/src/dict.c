@@ -289,10 +289,8 @@ void dictSetKey(dict *d, dictEntry *de, void *key) {
 }
 
 void dictSetVal(dict *d, dictEntry *de, void *val) {
-    if (d->type->valDup)
-        de->val = d->type->valDup(val);
-    else
-        de->val = val;
+    UNUSED(d);
+    de->val = val;
 }
 
 void *dictGetKey(const dictEntry *de) {

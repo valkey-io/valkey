@@ -157,7 +157,7 @@ static inline int getNodeDefaultReplicationPort(clusterNode *n) {
 int clusterNodeClientPort(clusterNode *n, int use_tls, client *c) {
     int port = n->tcp_port;
     int tlsport = n->tls_port;
-    
+
     if (c != NULL) {
         if (n->announce_client_tcp_port) {
             port = n->announce_client_tcp_port;
@@ -166,7 +166,7 @@ int clusterNodeClientPort(clusterNode *n, int use_tls, client *c) {
             port = n->announce_client_tls_port;
         }
     }
-    
+
     return use_tls ? tlsport : port;
 }
 
@@ -174,7 +174,7 @@ int clusterNodeClientBusPort(clusterNode *n, client *c) {
     if (c == NULL) {
         return n->cport;
     }
-    
+
     return n->announce_client_cport ? n->announce_client_cport : n->cport;
 }
 

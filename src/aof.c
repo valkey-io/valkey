@@ -1481,6 +1481,7 @@ int loadSingleAppendOnlyFile(char *filename) {
                     /* If this is a primary, we can save the replication info
                      * as secondary ID and offset, in order to allow replicas
                      * to partial resynchronizations with primaries. */
+                    if (server.repl_backlog == NULL) createReplicationBacklog();
                     memcpy(server.replid2, rsi.repl_id, sizeof(server.replid));
                     server.second_replid_offset = rsi.repl_offset + 1;
                     /* Rebase primary_repl_offset from rsi.repl_offset. */

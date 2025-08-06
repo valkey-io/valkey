@@ -12,6 +12,9 @@ extern long long popcountScalar(void *s, long count);
 extern long long popcountAVX512(void *s, long count);
 extern long long popcountAVX2(void *s, long count);
 #endif
+#if defined(__aarch64__)
+extern long long popcountNEON(void *s, long count);
+#endif
 
 static long long bitcount(void *s, long count) {
     long long bits = 0;

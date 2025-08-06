@@ -163,7 +163,7 @@ int clusterNodeClientPort(clusterNode *n, int use_tls, client *c) {
             port = n->announce_client_tcp_port;
         }
         if (n->announce_client_tls_port) {
-            port = n->announce_client_tls_port;
+            tlsport = n->announce_client_tls_port;
         }
     }
 

@@ -401,7 +401,7 @@ int expire_mock_entries(vset *set, mstime_t now) {
 }
 
 void *mock_defragfn(void *ptr) {
-    size_t size = zmalloc_size(ptr);
+    size_t size = zmalloc_usable_size(ptr);
     void *newptr = zmalloc(size);
     memcpy(newptr, ptr, size);
     zfree(ptr);

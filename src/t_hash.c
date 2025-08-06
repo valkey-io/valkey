@@ -403,7 +403,8 @@ int hashTypeSet(robj *o, sds field, sds value, long long expiry, int flags) {
             void *new_entry = entryUpdate(existing, v, expiry);
             if (new_entry != existing) {
                 /* It has been reallocated. */
-                serverAssert(hashtableReplaceReallocatedEntry(ht, existing, new_entry));
+                bool replaced = hashtableReplaceReallocatedEntry(ht, existing, new_entry);
+                serverAssert(replaced);
             }
 
             hashTypeTrackUpdateEntry(o, existing, new_entry, entry_expiry, expiry);

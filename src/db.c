@@ -493,7 +493,8 @@ int dbGenericDeleteWithDictIndex(serverDb *db, robj *key, int async, int flags, 
          * (The expires table has no destructor callback.) */
         kvstoreHashtableTwoPhasePopDelete(db->keys, dict_index, &pos);
         if (objectGetExpire(val) != -1) {
-            serverAssert(kvstoreHashtableDelete(db->expires, dict_index, key->ptr));
+            bool deleted = kvstoreHashtableDelete(db->expires, dict_index, key->ptr);
+            serverAssert(deleted);
         } else {
             debugServerAssert(!kvstoreHashtableDelete(db->expires, dict_index, key->ptr));
         }
@@ -1848,7 +1849,8 @@ robj *setExpire(client *c, serverDb *db, robj *key, long long when) {
         /* Replace the pointer in the keys_with_volatile_items table without accessing the old pointer. */
         int dict_index = getKVStoreIndexForKey(objectGetKey(newval));
         hashtable *volatile_items_ht = kvstoreGetHashtable(db->keys_with_volatile_items, dict_index);
-        serverAssert(hashtableReplaceReallocatedEntry(volatile_items_ht, val, newval));
+        bool replaced = hashtableReplaceReallocatedEntry(volatile_items_ht, val, newval);
+        serverAssert(replaced);
     }
     if (old_when != -1) {
         /* Val already had an expire field, so it was not reallocated. */
@@ -1861,7 +1863,8 @@ robj *setExpire(client *c, serverDb *db, robj *key, long long when) {
         if (newval != val) {
             val = *valref = newval;
         }
-        serverAssert(kvstoreHashtableAdd(db->expires, dict_index, newval));
+        bool added = kvstoreHashtableAdd(db->expires, dict_index, newval);
+        serverAssert(added);
     }
 
     int writable_replica = server.primary_host && server.repl_replica_ro == 0;

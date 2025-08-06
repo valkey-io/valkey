@@ -603,6 +603,7 @@ typedef enum {
 #define SHUTDOWN_FORCE (1 << 3)    /* Don't let errors prevent shutdown. */
 #define SHUTDOWN_SAFE (1 << 4)     /* Shutdown only when safe. */
 #define SHUTDOWN_FAILOVER (1 << 5) /* Trigger failover when shutting down a primary. */
+#define SHUTDOWN_RO (1 << 6)       /* Don't write to disk on shutdown. */
 
 /* Command call flags, see call() function */
 #define CMD_CALL_NONE 0
@@ -1765,16 +1766,16 @@ struct valkeyServer {
     int thp_enabled;                     /* If true, THP is enabled. */
     size_t page_size;                    /* The page size of OS. */
     /* Modules */
-    dict *moduleapi;                                               /* Exported core APIs dictionary for modules. */
-    dict *sharedapi;                                               /* Like moduleapi but containing the APIs that
-                                                                      modules share with each other. */
-    dict *module_configs_queue;                                    /* Dict that stores module configurations from .conf file until after modules are loaded
-                                                                      during startup or arguments to loadex. */
-    list *loadmodule_queue;                                        /* List of modules to load at startup. */
-    int module_pipe[2];                                            /* Pipe used to awake the event loop by module threads. */
-    pid_t child_pid;                                               /* PID of current child */
-    int child_type;                                                /* Type of current child */
-    _Atomic int module_gil_acquiring __attribute__((aligned(32))); /* Indicates whether the GIL is being acquiring by the main thread. */
+    dict *moduleapi;                                                             /* Exported core APIs dictionary for modules. */
+    dict *sharedapi;                                                             /* Like moduleapi but containing the APIs that
+                                                                                    modules share with each other. */
+    dict *module_configs_queue;                                                  /* Dict that stores module configurations from .conf file until after modules are loaded
+                                                                                    during startup or arguments to loadex. */
+    list *loadmodule_queue;                                                      /* List of modules to load at startup. */
+    int module_pipe[2];                                                          /* Pipe used to awake the event loop by module threads. */
+    pid_t child_pid;                                                             /* PID of current child */
+    int child_type;                                                              /* Type of current child */
+    _Atomic int module_gil_acquiring __attribute__((aligned(__alignof__(int)))); /* Indicates whether the GIL is being acquiring by the main thread. */
     /* Networking */
     int port;                              /* TCP listening port */
     int tls_port;                          /* TLS listening port */
@@ -1818,20 +1819,20 @@ struct valkeyServer {
     uint32_t paused_actions;    /* Bitmask of actions that are currently paused */
     list *postponed_clients;    /* List of postponed clients */
     pause_event client_pause_per_purpose[NUM_PAUSE_PURPOSES];
-    char neterr[ANET_ERR_LEN];                                    /* Error buffer for anet.c */
-    dict *migrate_cached_sockets;                                 /* MIGRATE cached sockets */
-    _Atomic uint64_t next_client_id __attribute__((aligned(64))); /* Next client unique ID. Incremental. */
-    int protected_mode;                                           /* Don't accept external connections. */
-    int io_threads_num;                                           /* Number of IO threads to use. */
-    int active_io_threads_num;                                    /* Current number of active IO threads, includes main thread. */
-    int events_per_io_thread;                                     /* Number of events on the event loop to trigger IO threads activation. */
-    int prefetch_batch_max_size;                                  /* Maximum number of keys to prefetch in a single batch */
-    long long events_processed_while_blocked;                     /* processEventsWhileBlocked() */
-    int enable_protected_configs;                                 /* Enable the modification of protected configs, see PROTECTED_ACTION_ALLOWED_* */
-    int enable_debug_cmd;                                         /* Enable DEBUG commands, see PROTECTED_ACTION_ALLOWED_* */
-    int enable_module_cmd;                                        /* Enable MODULE commands, see PROTECTED_ACTION_ALLOWED_* */
-    int enable_debug_assert;                                      /* Enable debug asserts */
-    int debug_client_enforce_reply_list;                          /* Force client to always use the reply list */
+    char neterr[ANET_ERR_LEN];                                                       /* Error buffer for anet.c */
+    dict *migrate_cached_sockets;                                                    /* MIGRATE cached sockets */
+    _Atomic uint64_t next_client_id __attribute__((aligned(__alignof__(uint64_t)))); /* Next client unique ID. Incremental. */
+    int protected_mode;                                                              /* Don't accept external connections. */
+    int io_threads_num;                                                              /* Number of IO threads to use. */
+    int active_io_threads_num;                                                       /* Current number of active IO threads, includes main thread. */
+    int events_per_io_thread;                                                        /* Number of events on the event loop to trigger IO threads activation. */
+    int prefetch_batch_max_size;                                                     /* Maximum number of keys to prefetch in a single batch */
+    long long events_processed_while_blocked;                                        /* processEventsWhileBlocked() */
+    int enable_protected_configs;                                                    /* Enable the modification of protected configs, see PROTECTED_ACTION_ALLOWED_* */
+    int enable_debug_cmd;                                                            /* Enable DEBUG commands, see PROTECTED_ACTION_ALLOWED_* */
+    int enable_module_cmd;                                                           /* Enable MODULE commands, see PROTECTED_ACTION_ALLOWED_* */
+    int enable_debug_assert;                                                         /* Enable debug asserts */
+    int debug_client_enforce_reply_list;                                             /* Force client to always use the reply list */
     /* Reply construction copy avoidance */
     int min_io_threads_copy_avoid;           /* Minimum number of IO threads for copy avoidance in reply construction */
     int min_string_size_copy_avoid_threaded; /* Minimum bulk string size for copy avoidance in reply construction when IO threads enabled */
@@ -1982,45 +1983,45 @@ struct valkeyServer {
     unsigned int max_new_conns_per_cycle;     /* The maximum number of tcp connections that will be accepted during each
                                                  invocation of the event loop. */
     /* AOF persistence */
-    int aof_enabled;                                               /* AOF configuration */
-    int aof_state;                                                 /* AOF_(ON|OFF|WAIT_REWRITE) */
-    int aof_fsync;                                                 /* Kind of fsync() policy */
-    char *aof_filename;                                            /* Basename of the AOF file and manifest file */
-    char *aof_dirname;                                             /* Name of the AOF directory */
-    int aof_no_fsync_on_rewrite;                                   /* Don't fsync if a rewrite is in prog. */
-    int aof_rewrite_perc;                                          /* Rewrite AOF if % growth is > M and... */
-    off_t aof_rewrite_min_size;                                    /* the AOF file is at least N bytes. */
-    off_t aof_rewrite_base_size;                                   /* AOF size on latest startup or rewrite. */
-    off_t aof_current_size;                                        /* AOF current size (Including BASE + INCRs). */
-    off_t aof_last_incr_size;                                      /* The size of the latest incr AOF. */
-    off_t aof_last_incr_fsync_offset;                              /* AOF offset which is already requested to be synced to disk.
-                                                                    * Compare with the aof_last_incr_size. */
-    int aof_flush_sleep;                                           /* Micros to sleep before flush. (used by tests) */
-    int aof_rewrite_scheduled;                                     /* Rewrite once BGSAVE terminates. */
-    sds aof_buf;                                                   /* AOF buffer, written before entering the event loop */
-    int aof_fd;                                                    /* File descriptor of currently selected AOF file */
-    int aof_selected_db;                                           /* Currently selected DB in AOF */
-    mstime_t aof_flush_postponed_start;                            /* mstime of postponed AOF flush */
-    mstime_t aof_last_fsync;                                       /* mstime of last fsync() */
-    time_t aof_rewrite_time_last;                                  /* Time used by last AOF rewrite run. */
-    time_t aof_rewrite_time_start;                                 /* Current AOF rewrite start time. */
-    time_t aof_cur_timestamp;                                      /* Current record timestamp in AOF */
-    int aof_timestamp_enabled;                                     /* Enable record timestamp in AOF */
-    int aof_lastbgrewrite_status;                                  /* C_OK or C_ERR */
-    unsigned long aof_delayed_fsync;                               /* delayed AOF fsync() counter */
-    int aof_rewrite_incremental_fsync;                             /* fsync incrementally while aof rewriting? */
-    int rdb_save_incremental_fsync;                                /* fsync incrementally while rdb saving? */
-    int aof_last_write_status;                                     /* C_OK or C_ERR */
-    int aof_last_write_errno;                                      /* Valid if aof write/fsync status is ERR */
-    int aof_load_truncated;                                        /* Don't stop on unexpected AOF EOF. */
-    int aof_use_rdb_preamble;                                      /* Specify base AOF to use RDB encoding on AOF rewrites. */
-    int aof_rewrite_use_rdb_preamble;                              /* Base AOF to use RDB encoding on AOF rewrites start. */
-    _Atomic int aof_bio_fsync_status __attribute__((aligned(32))); /* Status of AOF fsync in bio job. */
-    _Atomic int aof_bio_fsync_errno __attribute__((aligned(32)));  /* Errno of AOF fsync in bio job. */
-    aofManifest *aof_manifest;                                     /* Used to track AOFs. */
-    int aof_disable_auto_gc;                                       /* If disable automatically deleting HISTORY type AOFs?
-                                                                    * default no. (for testings). */
-    int replicas_to_fail_on_aof_write_error;                       /* Fail primary on AOF write error if there are enough actual replicas. */
+    int aof_enabled;                                                             /* AOF configuration */
+    int aof_state;                                                               /* AOF_(ON|OFF|WAIT_REWRITE) */
+    int aof_fsync;                                                               /* Kind of fsync() policy */
+    char *aof_filename;                                                          /* Basename of the AOF file and manifest file */
+    char *aof_dirname;                                                           /* Name of the AOF directory */
+    int aof_no_fsync_on_rewrite;                                                 /* Don't fsync if a rewrite is in prog. */
+    int aof_rewrite_perc;                                                        /* Rewrite AOF if % growth is > M and... */
+    off_t aof_rewrite_min_size;                                                  /* the AOF file is at least N bytes. */
+    off_t aof_rewrite_base_size;                                                 /* AOF size on latest startup or rewrite. */
+    off_t aof_current_size;                                                      /* AOF current size (Including BASE + INCRs). */
+    off_t aof_last_incr_size;                                                    /* The size of the latest incr AOF. */
+    off_t aof_last_incr_fsync_offset;                                            /* AOF offset which is already requested to be synced to disk.
+                                                                                  * Compare with the aof_last_incr_size. */
+    int aof_flush_sleep;                                                         /* Micros to sleep before flush. (used by tests) */
+    int aof_rewrite_scheduled;                                                   /* Rewrite once BGSAVE terminates. */
+    sds aof_buf;                                                                 /* AOF buffer, written before entering the event loop */
+    int aof_fd;                                                                  /* File descriptor of currently selected AOF file */
+    int aof_selected_db;                                                         /* Currently selected DB in AOF */
+    mstime_t aof_flush_postponed_start;                                          /* mstime of postponed AOF flush */
+    mstime_t aof_last_fsync;                                                     /* mstime of last fsync() */
+    time_t aof_rewrite_time_last;                                                /* Time used by last AOF rewrite run. */
+    time_t aof_rewrite_time_start;                                               /* Current AOF rewrite start time. */
+    time_t aof_cur_timestamp;                                                    /* Current record timestamp in AOF */
+    int aof_timestamp_enabled;                                                   /* Enable record timestamp in AOF */
+    int aof_lastbgrewrite_status;                                                /* C_OK or C_ERR */
+    unsigned long aof_delayed_fsync;                                             /* delayed AOF fsync() counter */
+    int aof_rewrite_incremental_fsync;                                           /* fsync incrementally while aof rewriting? */
+    int rdb_save_incremental_fsync;                                              /* fsync incrementally while rdb saving? */
+    int aof_last_write_status;                                                   /* C_OK or C_ERR */
+    int aof_last_write_errno;                                                    /* Valid if aof write/fsync status is ERR */
+    int aof_load_truncated;                                                      /* Don't stop on unexpected AOF EOF. */
+    int aof_use_rdb_preamble;                                                    /* Specify base AOF to use RDB encoding on AOF rewrites. */
+    int aof_rewrite_use_rdb_preamble;                                            /* Base AOF to use RDB encoding on AOF rewrites start. */
+    _Atomic int aof_bio_fsync_status __attribute__((aligned(__alignof__(int)))); /* Status of AOF fsync in bio job. */
+    _Atomic int aof_bio_fsync_errno __attribute__((aligned(__alignof__(int))));  /* Errno of AOF fsync in bio job. */
+    aofManifest *aof_manifest;                                                   /* Used to track AOFs. */
+    int aof_disable_auto_gc;                                                     /* If disable automatically deleting HISTORY type AOFs?
+                                                                                  * default no. (for testings). */
+    int shutdown_on_aof_error;                                                   /* Fail primary on AOF write error. */
 
     /* RDB persistence */
     long long dirty;                      /* Changes to DB from the last save */
@@ -2082,52 +2083,52 @@ struct valkeyServer {
     int shutdown_on_sigterm; /* Shutdown flags configured for SIGTERM. */
 
     /* Replication (primary) */
-    char replid[CONFIG_RUN_ID_SIZE + 1];                                    /* My current replication ID. */
-    char replid2[CONFIG_RUN_ID_SIZE + 1];                                   /* replid inherited from primary*/
-    long long primary_repl_offset;                                          /* My current replication offset */
-    long long second_replid_offset;                                         /* Accept offsets up to this for replid2. */
-    _Atomic long long fsynced_reploff_pending __attribute__((aligned(64))); /* Largest replication offset to
+    char replid[CONFIG_RUN_ID_SIZE + 1];                                                        /* My current replication ID. */
+    char replid2[CONFIG_RUN_ID_SIZE + 1];                                                       /* replid inherited from primary*/
+    long long primary_repl_offset;                                                              /* My current replication offset */
+    long long second_replid_offset;                                                             /* Accept offsets up to this for replid2. */
+    _Atomic long long fsynced_reploff_pending __attribute__((aligned(__alignof__(long long)))); /* Largest replication offset to
                                       * potentially have been fsynced, applied to
                                         fsynced_reploff only when AOF state is AOF_ON
                                         (not during the initial rewrite) */
-    long long fsynced_reploff;                 /* Largest replication offset that has been confirmed to be fsynced */
-    int replicas_eldb;                         /* Last SELECTed DB in replication output */
-    int repl_ping_replica_period;              /* Primary pings the replica every N seconds */
-    replBacklog *repl_backlog;                 /* Replication backlog for partial syncs */
-    long long repl_backlog_size;               /* Backlog circular buffer size */
-    replDataBuf pending_repl_data;             /* Replication data buffer for dual-channel-replication */
-    time_t repl_backlog_time_limit;            /* Time without replicas after the backlog
-                                                  gets released. */
-    time_t repl_no_replicas_since;             /* We have no replicas since that time.
-                                                Only valid if server.replicas len is 0. */
-    int repl_min_replicas_to_write;            /* Min number of replicas to write. */
-    int repl_min_replicas_max_lag;             /* Max lag of <count> replicas to write. */
-    int repl_good_replicas_count;              /* Number of replicas with lag <= max_lag. */
-    int repl_diskless_sync;                    /* Primary send RDB to replicas sockets directly. */
-    int repl_diskless_load;                    /* Replica parse RDB directly from the socket.
-                                                * see REPL_DISKLESS_LOAD_* enum */
-    int repl_diskless_sync_delay;              /* Delay to start a diskless repl BGSAVE. */
-    int repl_diskless_sync_max_replicas;       /* Max replicas for diskless repl BGSAVE
-                                                * delay (start sooner if they all connect). */
-    int dual_channel_replication;              /* Config used to determine if the replica should
-                                                * use dual channel replication for full syncs. */
-    _Atomic int replica_bio_disk_save_state __attribute__((aligned(32)));   /* Flag set by the bio thread to indicate that the
-                                                * RDB save to disk has completed, or failed */
-    _Atomic bool replica_bio_abort_save __attribute__((aligned(8)));       /* Flag set by main thread, used to signal to replica's
-                                                * disk-saving bio thread to abort the save */
-    long long bio_stat_net_repl_input_bytes;   /* Used to calculate stat_net_repl_input_bytes on the
-                                                * replica's bio thread without touching main thread vars */
-    off_t bio_repl_transfer_size;              /* Used to calculate bio_repl_transfer_size on the
-                                                * replica's bio thread without touching main thread vars */
-    off_t bio_repl_transfer_read;              /* Used to calculate bio_repl_transfer_read on the
-                                                * replica's bio thread without touching main thread vars */
-    int wait_before_rdb_client_free;           /* Grace period in seconds for replica main channel
-                                                * to establish psync. */
-    int debug_pause_after_fork;                /* Debug param that pauses the main process
-                                                * after a replication fork() (for bgsave). */
-    size_t repl_buffer_mem;                    /* The memory of replication buffer. */
-    list *repl_buffer_blocks;                  /* Replication buffers blocks list
-                                                * (serving replica clients and repl backlog) */
+    long long fsynced_reploff;                                                                  /* Largest replication offset that has been confirmed to be fsynced */
+    int replicas_eldb;                                                                          /* Last SELECTed DB in replication output */
+    int repl_ping_replica_period;                                                               /* Primary pings the replica every N seconds */
+    replBacklog *repl_backlog;                                                                  /* Replication backlog for partial syncs */
+    long long repl_backlog_size;                                                                /* Backlog circular buffer size */
+    replDataBuf pending_repl_data;                                                              /* Replication data buffer for dual-channel-replication */
+    time_t repl_backlog_time_limit;                                                             /* Time without replicas after the backlog
+                                                                                                   gets released. */
+    time_t repl_no_replicas_since;                                                              /* We have no replicas since that time.
+                                                                                                 Only valid if server.replicas len is 0. */
+    int repl_min_replicas_to_write;                                                             /* Min number of replicas to write. */
+    int repl_min_replicas_max_lag;                                                              /* Max lag of <count> replicas to write. */
+    int repl_good_replicas_count;                                                               /* Number of replicas with lag <= max_lag. */
+    int repl_diskless_sync;                                                                     /* Primary send RDB to replicas sockets directly. */
+    int repl_diskless_load;                                                                     /* Replica parse RDB directly from the socket.
+                                                                                                 * see REPL_DISKLESS_LOAD_* enum */
+    int repl_diskless_sync_delay;                                                               /* Delay to start a diskless repl BGSAVE. */
+    int repl_diskless_sync_max_replicas;                                                        /* Max replicas for diskless repl BGSAVE
+                                                                                                 * delay (start sooner if they all connect). */
+    int dual_channel_replication;                                                               /* Config used to determine if the replica should
+                                                                                                 * use dual channel replication for full syncs. */
+    _Atomic int replica_bio_disk_save_state __attribute__((aligned(__alignof__(int))));         /* Flag set by the bio thread to indicate that the
+                                                                                                 * RDB save to disk has completed, or failed */
+    _Atomic bool replica_bio_abort_save __attribute__((aligned(__alignof__(bool))));            /* Flag set by main thread, used to signal to replica's
+                                                                                                 * disk-saving bio thread to abort the save */
+    long long bio_stat_net_repl_input_bytes;                                                    /* Used to calculate stat_net_repl_input_bytes on the
+                                                                                                 * replica's bio thread without touching main thread vars */
+    off_t bio_repl_transfer_size;                                                               /* Used to calculate bio_repl_transfer_size on the
+                                                                                                 * replica's bio thread without touching main thread vars */
+    off_t bio_repl_transfer_read;                                                               /* Used to calculate bio_repl_transfer_read on the
+                                                                                                 * replica's bio thread without touching main thread vars */
+    int wait_before_rdb_client_free;                                                            /* Grace period in seconds for replica main channel
+                                                                                                 * to establish psync. */
+    int debug_pause_after_fork;                                                                 /* Debug param that pauses the main process
+                                                                                                 * after a replication fork() (for bgsave). */
+    size_t repl_buffer_mem;                                                                     /* The memory of replication buffer. */
+    list *repl_buffer_blocks;                                                                   /* Replication buffers blocks list
+                                                                                                 * (serving replica clients and repl backlog) */
     /* Replication (replica) */
     char *primary_user;     /* AUTH with this user and primary_auth with primary */
     sds primary_auth;       /* AUTH with this password with primary */
@@ -3161,7 +3162,6 @@ void replicationCachePrimary(client *c);
 void resizeReplicationBacklog(void);
 void replicationSetPrimary(char *ip, int port, int full_sync_required, bool disconnect_blocked);
 void replicationUnsetPrimary(void);
-int getGoodReplicasCount(int max_lag);
 void refreshGoodReplicasCount(void);
 int checkGoodReplicasStatus(void);
 void processClientsWaitingReplicas(void);
@@ -3425,10 +3425,10 @@ void preventCommandAOF(client *c);
 void preventCommandReplication(client *c);
 void commandlogPushCurrentCommand(client *c, struct serverCommand *cmd);
 void updateCommandLatencyHistogram(struct hdr_histogram **latency_histogram, int64_t duration_hist);
+int prepareReplicasForShutdown(int flags);
 int prepareForShutdown(client *c, int flags);
 void replyToClientsBlockedOnShutdown(void);
 int abortShutdown(void);
-void clusterAutoFailoverOnShutdown(void);
 void afterCommand(client *c);
 int isReplicatedClient(client *c);
 int mustObeyClient(client *c);

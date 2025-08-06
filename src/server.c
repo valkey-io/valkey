@@ -4567,6 +4567,20 @@ void closeListeningSockets(int unlink_unix_socket) {
     }
 }
 
+int prepareReplicasForShutdown(int flags) {
+    server.shutdown_flags = flags;
+    /* If we have any replicas, let them catch up the replication offset before
+     * we shut down, to avoid data loss. */
+    if (!(server.shutdown_flags & SHUTDOWN_NOW) && server.shutdown_timeout != 0 && !isReadyToShutdown()) {
+        server.shutdown_mstime = server.mstime + server.shutdown_timeout * 1000;
+        if (!isPausedActions(PAUSE_ACTION_REPLICA)) sendGetackToReplicas();
+        pauseActions(PAUSE_DURING_SHUTDOWN, LLONG_MAX, PAUSE_ACTIONS_CLIENT_WRITE_SET);
+        serverLog(LL_NOTICE, "Waiting for replicas before shutting down.");
+        return C_ERR;
+    }
+    return C_OK;
+}
+
 /* Prepare for shutting down the server.
  *
  * The client *c can be NULL, it may come from a signal. If client is passed in,
@@ -4612,8 +4626,6 @@ int prepareForShutdown(client *c, int flags) {
      * Also when in Sentinel mode clear the SAVE flag and force NOSAVE. */
     if (server.loading || server.sentinel_mode) flags = (flags & ~SHUTDOWN_SAVE) | SHUTDOWN_NOSAVE;
 
-    server.shutdown_flags = flags;
-
     if (c != NULL) {
         sds client = catClientInfoShortString(sdsempty(), c, server.hide_user_data_from_log);
         serverLog(LL_NOTICE, "User requested shutdown... (user request from '%s')", client);
@@ -4623,13 +4635,7 @@ int prepareForShutdown(client *c, int flags) {
     }
     if (server.supervised_mode == SUPERVISED_SYSTEMD) serverCommunicateSystemd("STOPPING=1\n");
 
-    /* If we have any replicas, let them catch up the replication offset before
-     * we shut down, to avoid data loss. */
-    if (!(flags & SHUTDOWN_NOW) && server.shutdown_timeout != 0 && !isReadyToShutdown()) {
-        server.shutdown_mstime = server.mstime + server.shutdown_timeout * 1000;
-        if (!isPausedActions(PAUSE_ACTION_REPLICA)) sendGetackToReplicas();
-        pauseActions(PAUSE_DURING_SHUTDOWN, LLONG_MAX, PAUSE_ACTIONS_CLIENT_WRITE_SET);
-        serverLog(LL_NOTICE, "Waiting for replicas before shutting down.");
+    if (prepareReplicasForShutdown(flags) == C_ERR) {
         return C_ERR;
     }
 
@@ -4686,7 +4692,8 @@ int abortShutdown(void) {
  * it's not safe to call exit(). */
 int finishShutdown(void) {
     bool save = (server.shutdown_flags & SHUTDOWN_SAVE) != 0;
-    bool nosave = (server.shutdown_flags & SHUTDOWN_NOSAVE) != 0;
+    bool ro = (server.shutdown_flags & SHUTDOWN_RO) != 0;
+    bool nosave = (server.shutdown_flags & SHUTDOWN_NOSAVE) != 0 || ro;
     bool force = (server.shutdown_flags & SHUTDOWN_FORCE) != 0;
     bool safe = (server.shutdown_flags & SHUTDOWN_SAFE) != 0;
     bool failover = (server.shutdown_flags & SHUTDOWN_FAILOVER) != 0;
@@ -4765,7 +4772,7 @@ int finishShutdown(void) {
         serverLog(LL_WARNING, "There is a child rewriting the AOF. Killing it!");
         killAppendOnlyChild();
     }
-    if (server.aof_state != AOF_OFF) {
+    if (server.aof_state != AOF_OFF && !ro) {
         /* Append only file: flush buffers and fsync() the AOF at exit */
         serverLog(LL_NOTICE, "Calling fsync() on the AOF file.");
         flushAppendOnlyFile(1);

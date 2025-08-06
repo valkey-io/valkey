@@ -45,6 +45,7 @@
 
 #include "sds.h"
 #include "ae.h"
+#include <valkey/valkey.h>
 #ifdef USE_OPENSSL
 #include <openssl/ssl.h>
 #include <openssl/err.h>

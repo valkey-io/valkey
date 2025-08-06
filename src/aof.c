@@ -1196,17 +1196,14 @@ void flushAppendOnlyFile(int force) {
                       "Can't recover from AOF write error when the AOF fsync policy is 'always'. Exiting...");
             exit(1);
         } else {
-            if (server.replicas_to_fail_on_aof_write_error >= 0 &&
-                getGoodReplicasCount(0) >= server.replicas_to_fail_on_aof_write_error) {
-                serverLog(LL_WARNING,
-                          "Can't recover from AOF write error when replicas-to-fail-on-aof-write-error is '%d' "
-                          "and there are enough actual replicas. Exiting...",
-                          server.replicas_to_fail_on_aof_write_error);
-                if (server.cluster_enabled) {
-                    usleep(server.cluster_node_timeout * 1000);
-                    clusterAutoFailoverOnShutdown();
+            if (server.shutdown_on_aof_error) {
+                int flags = SHUTDOWN_RO | SHUTDOWN_FORCE | SHUTDOWN_FAILOVER;
+                if (prepareReplicasForShutdown(flags) == C_OK) {
+                    serverLog(LL_WARNING, "Can't recover from AOF write error with shutdown-on-aof-error=yes. Exiting...");
+                    exit(1);
+                } else {
+                    return; /* Shutdown gonna be processed in serverCron. */
                 }
-                exit(1);
             }
 
             /* Recover from failed write leaving data into the buffer. However

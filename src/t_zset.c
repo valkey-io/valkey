@@ -4245,16 +4245,13 @@ void zrandmemberCommand(client *c) {
     listpackEntry ele;
 
     if (c->argc >= 3) {
-        if (getRangeLongFromObjectOrReply(c, c->argv[2], -LONG_MAX, LONG_MAX, &l, NULL) != C_OK) return;
-        if (l < -server.max_rand_count || l > server.max_rand_count) {
-            addReplyError(c, "value is out of range");
-            return;
-        }
+        if (getRangeLongFromObjectOrReply(c, c->argv[2], -server.max_rand_count, server.max_rand_count, &l, NULL) != C_OK) return;
         if (c->argc > 4 || (c->argc == 4 && strcasecmp(c->argv[3]->ptr, "withscores"))) {
             addReplyErrorObject(c, shared.syntaxerr);
             return;
-        } else if (c->argc == 4)
+        } else if (c->argc == 4) {
             withscores = 1;
+        }
         zrandmemberWithCountCommand(c, l, withscores);
         return;
     }

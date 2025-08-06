@@ -54,7 +54,7 @@ jobs:
             # "--server-cpu-range" "92-93" should be added for self hosted
             # "--client-cpu-range" "94-95" should be added for self hosted
           )
-          
+
           # Label-specific config file
           if [[ "${{ github.event.label.name }}" == "run-benchmark" ]]; then
             EXTRA_PARAMS=(
@@ -65,7 +65,7 @@ jobs:
               "--config" "configs/benchmark-configs-cluster-tls.json"
             )
           fi
-          
+
           # Run benchmark with combined parameters
           python ./benchmark.py "${BASE_PARAMS[@]}" "${EXTRA_PARAMS[@]}"
 

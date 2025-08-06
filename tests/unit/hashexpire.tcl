@@ -4275,7 +4275,7 @@ foreach command {HEXPIRE HPEXPIRE HEXPIREAT HPEXPIREAT} {
             
             # For each key, set expire for 5 fields
             for {set i 1} {$i <= 5} {incr i} {
-                r $command myhash$i [get_short_expire_value $command] FIELDS 5 f1 f2 f3 f4 f5
+                assert_equal {1 1 1 1 1} [r $command myhash$i [get_short_expire_value $command] FIELDS 5 f1 f2 f3 f4 f5]
             }
             
             # Wait for expiry

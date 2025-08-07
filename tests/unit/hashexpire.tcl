@@ -1430,24 +1430,24 @@ start_server {tags {"hashexpire"}} {
         test "$cmd Preserves Field TTLs" {
             r FLUSHALL
             r DEBUG SET-ACTIVE-EXPIRE 0
-            r HSET myhash f1 v1 f2 v2
-            r HEXPIRE myhash 200 FIELDS 1 f1
+            r HSET {t}myhash f1 v1 f2 v2
+            r HEXPIRE {t}myhash 200 FIELDS 1 f1
 
             # Verify initial TTL state
-            set mem_before [r MEMORY USAGE myhash]
-            assert_equal "v1 v2" [r HMGET myhash f1 f2]
-            assert_morethan [r HTTL myhash FIELDS 1 f1] 100
-            assert_equal -1 [r HTTL myhash FIELDS 1 f2]
-            assert_equal 2 [r HLEN myhash]
+            set mem_before [r MEMORY USAGE {t}myhash]
+            assert_equal "v1 v2" [r HMGET {t}myhash f1 f2]
+            assert_morethan [r HTTL {t}myhash FIELDS 1 f1] 100
+            assert_equal -1 [r HTTL {t}myhash FIELDS 1 f2]
+            assert_equal 2 [r HLEN {t}myhash]
             assert_equal 1 [get_keys r]
             assert_equal 1 [get_keys_with_volatile_items r]
 
             # Run the command
             if {$cmd eq "RENAME"} {
-                r rename myhash nwhash
-                set newhash nwhash
+                r rename {t}myhash {t}nwhash
+                set newhash {t}nwhash
             } elseif {$cmd eq "RESTORE"} {
-                set serialized [r DUMP myhash]
+                set serialized [r DUMP {t}myhash]
                 r RESTORE rstrhs 0 $serialized
                 set newhash rstrhs
             }
@@ -1474,63 +1474,63 @@ start_server {tags {"hashexpire"}} {
         r DEBUG SET-ACTIVE-EXPIRE 0
         
         # Create hash with fields
-        r HSET myhash f1 v1 f3 v3 f4 v4
+        r HSET {t}myhash f1 v1 f3 v3 f4 v4
 
         # Set TTL on f1 only
-        r HEXPIRE myhash 200 FIELDS 1 f1
-        r HEXPIRE myhash 2 FIELDS 1 f3
+        r HEXPIRE {t}myhash 200 FIELDS 1 f1
+        r HEXPIRE {t}myhash 2 FIELDS 1 f3
 
         # Verify initial TTL state
-        set mem_before [r MEMORY USAGE myhash]
-        assert_equal "v1 v3 v4" [r HMGET myhash f1 f3 f4]
-        assert_morethan [r HTTL myhash FIELDS 1 f1] 100
-        assert_morethan [r HTTL myhash FIELDS 1 f3] 0
-        assert_equal -1 [r HTTL myhash FIELDS 1 f4]
-        assert_equal 3 [r HLEN myhash]
+        set mem_before [r MEMORY USAGE {t}myhash]
+        assert_equal "v1 v3 v4" [r HMGET {t}myhash f1 f3 f4]
+        assert_morethan [r HTTL {t}myhash FIELDS 1 f1] 100
+        assert_morethan [r HTTL {t}myhash FIELDS 1 f3] 0
+        assert_equal -1 [r HTTL {t}myhash FIELDS 1 f4]
+        assert_equal 3 [r HLEN {t}myhash]
         assert_equal 1 [get_keys r]
         assert_equal 1 [get_keys_with_volatile_items r]
 
         # Copy hash to new key
-        r copy myhash newhash1
+        r copy {t}myhash {t}newhash1
 
-        # Verify myhash is the same
-        assert_equal "v1 v3 v4" [r HMGET myhash f1 f3 f4]
-        assert_morethan [r HTTL myhash FIELDS 1 f1] 100
-        assert_morethan [r HTTL myhash FIELDS 1 f3] 0
-        assert_equal -1 [r HTTL myhash FIELDS 1 f4]
-        assert_equal 3 [r HLEN myhash]
+        # Verify {t}myhash is the same
+        assert_equal "v1 v3 v4" [r HMGET {t}myhash f1 f3 f4]
+        assert_morethan [r HTTL {t}myhash FIELDS 1 f1] 100
+        assert_morethan [r HTTL {t}myhash FIELDS 1 f3] 0
+        assert_equal -1 [r HTTL {t}myhash FIELDS 1 f4]
+        assert_equal 3 [r HLEN {t}myhash]
 
         # Verify new hash got same values
-        set mem_after [r MEMORY USAGE myhash]
-        assert_equal "v1 v3 v4" [r HMGET myhash f1 f3 f4]
-        assert_morethan [r HTTL newhash1 FIELDS 1 f1] 100
-        assert_morethan [r HTTL newhash1 FIELDS 1 f3] 0
-        assert_equal -1 [r HTTL newhash1 FIELDS 1 f4]
-        assert_equal 3 [r HLEN newhash1]
+        set mem_after [r MEMORY USAGE {t}myhash]
+        assert_equal "v1 v3 v4" [r HMGET {t}myhash f1 f3 f4]
+        assert_morethan [r HTTL {t}newhash1 FIELDS 1 f1] 100
+        assert_morethan [r HTTL {t}newhash1 FIELDS 1 f3] 0
+        assert_equal -1 [r HTTL {t}newhash1 FIELDS 1 f4]
+        assert_equal 3 [r HLEN {t}newhash1]
         assert_equal 2 [get_keys r]
         assert_equal 2 [get_keys_with_volatile_items r]
 
         assert_equal $mem_before $mem_after
         
         # Modify TTL in original hash
-        r HEXPIRE myhash 5 FIELDS 1 f3
+        r HEXPIRE {t}myhash 5 FIELDS 1 f3
 
         # Wait for original TTL to expire in copy
         after 2000
-        assert_equal "v1 {}" [r HMGET newhash1 f1 f3]
-        assert_equal "v1 v3" [r HMGET myhash f1 f3]
+        assert_equal "v1 {}" [r HMGET {t}newhash1 f1 f3]
+        assert_equal "v1 v3" [r HMGET {t}myhash f1 f3]
 
-        r HSETEX myhash EX 2 FIELDS 1 f3 v3
+        r HSETEX {t}myhash EX 2 FIELDS 1 f3 v3
         # Create second copy
-        r copy myhash newhash2
+        r copy {t}myhash {t}newhash2
 
         # Modify TTL in second copy
-        r HEXPIRE newhash2 500 FIELDS 1 f3
+        r HEXPIRE {t}newhash2 500 FIELDS 1 f3
 
         # Wait for original hash TTL to expire
         after 2000
-        assert_equal "v1 {}" [r HMGET myhash f1 f3]
-        assert_equal "v1 v3" [r HMGET newhash2 f1 f3]
+        assert_equal "v1 {}" [r HMGET {t}myhash f1 f3]
+        assert_equal "v1 v3" [r HMGET {t}newhash2 f1 f3]
         # Re-enable active expiry
         r DEBUG SET-ACTIVE-EXPIRE 1
     } {OK} {needs:debug}

@@ -2242,6 +2242,7 @@ start_server {tags {"hashexpire external:skip"}} {
             # Change TTL of f2 to 0 (immediate expiry)
             $replica_1 HGETEX myhash EX 0 FIELDS 1 f2 ;# will trigger hexpired for replica_1 and hdel for primary
             # Verify final state
+            wait_for_ofs_sync $replica_1 $primary
             foreach instance [list $primary $replica_1] {
                 assert_equal 2 [$instance HLEN myhash]
                 assert_equal "{} {} v3" [r HMGET myhash f1 f2 f3]

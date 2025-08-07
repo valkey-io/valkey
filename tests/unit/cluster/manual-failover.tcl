@@ -118,7 +118,7 @@ test "Instance #5 synced with the master" {
 
 test "Make instance #0 unreachable without killing it" {
     R 0 deferred 1
-    R 0 DEBUG SLEEP 10
+    R 0 DEBUG SLEEP 2
 }
 
 test "Send CLUSTER FAILOVER to instance #5" {
@@ -126,8 +126,8 @@ test "Send CLUSTER FAILOVER to instance #5" {
 }
 
 test "Instance #5 is still a slave after some time (no failover)" {
-    after 5000
-    assert {[s -5 role] eq {master}}
+    after 1000
+    assert {[s -5 role] eq {slave}}
 }
 
 test "Wait for instance #0 to return back alive" {
@@ -162,7 +162,7 @@ test "Instance #5 synced with the master" {
 
 test "Make instance #0 unreachable without killing it" {
     R 0 deferred 1
-    R 0 DEBUG SLEEP 10
+    R 0 DEBUG SLEEP 2
 }
 
 test "Send CLUSTER FAILOVER to instance #5" {

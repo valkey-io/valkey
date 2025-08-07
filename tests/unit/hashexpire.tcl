@@ -1466,7 +1466,7 @@ start_server {tags {"hashexpire"}} {
                 assert_equal 1 [get_keys_with_volatile_items r]
             }
             assert_equal $mem_before $memory_after
-        }
+        } {} {needs:debug}
     }
 
     test {COPY Preserves TTLs} {

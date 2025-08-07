@@ -40,7 +40,7 @@
 #include "cluster.h"
 #include "cluster_legacy.h"
 #include "cluster_slot_stats.h"
-#include "cluster_migrate.h"
+#include "cluster_migrateslots.h"
 #include "endianconv.h"
 #include "connection.h"
 #include "module.h"
@@ -7026,11 +7026,11 @@ int clusterParseSetSlotCommand(client *c, int *slot_out, clusterNode **node_out,
     }
 
     if (clusterIsAnySlotImporting()) {
-        addReplyError(c, "A slot is currently being imported via CLUSTER MIGRATE. Please cancel any ongoing import operations and try again.");
+        addReplyError(c, "A slot is currently being imported via CLUSTER MIGRATESLOTS. Please cancel any ongoing import operations and try again.");
         return 0;
     }
     if (clusterIsAnySlotExporting()) {
-        addReplyError(c, "A slot is currently being exported via CLUSTER MIGRATE. Please cancel any ongoing import operations and try again.");
+        addReplyError(c, "A slot is currently being exported via CLUSTER MIGRATESLOTS. Please cancel any ongoing import operations and try again.");
         return 0;
     }
 
@@ -7674,12 +7674,12 @@ int clusterCommandSpecial(client *c) {
     } else if (!strcasecmp(c->argv[1]->ptr, "flushslot") && (c->argc == 3 || c->argc == 4)) {
         /* CLUSTER FLUSHSLOT <slot> [ASYNC|SYNC] */
         clusterCommandFlushslot(c);
-    } else if (!strcasecmp(c->argv[1]->ptr, "migrate") && c->argc > 3) {
-        /* CLUSTER MIGRATE SLOTSRANGE <start slot> <end slot> [<start slot> <end slot> ...] NODE <node> [SLOTSRANGE ... NODE ...] */
-        clusterCommandMigrate(c);
-    } else if (!strcasecmp(c->argv[1]->ptr, "migrations") && c->argc == 2) {
-        /* CLUSTER MIGRATIONS */
-        clusterCommandMigrations(c);
+    } else if (!strcasecmp(c->argv[1]->ptr, "migrateslots") && c->argc > 3) {
+        /* CLUSTER MIGRATESLOTS SLOTSRANGE <start slot> <end slot> [<start slot> <end slot> ...] NODE <node> [SLOTSRANGE ... NODE ...] */
+        clusterCommandMigrateSlots(c);
+    } else if (!strcasecmp(c->argv[1]->ptr, "slotmigrations") && c->argc == 2) {
+        /* CLUSTER SLOTMIGRATIONS */
+        clusterCommandSlotMigrations(c);
     } else if (!strcasecmp(c->argv[1]->ptr, "cancelmigrations") && c->argc == 2) {
         /* CLUSTER CANCELMIGRATIONS */
         clusterCommandCancelMigrations(c);
@@ -7728,11 +7728,11 @@ const char **clusterCommandExtendedHelp(void) {
         "LINKS",
         "    Return information about all network links between this node and its peers.",
         "    Output format is an array where each array element is a map containing attributes of a link",
-        "MIGRATE SLOTSRANGE <start slot> <end slot> [<start slot> <end slot> ...] NODE <node id>",
+        "MIGRATESLOTS SLOTSRANGE <start slot> <end slot> [<start slot> <end slot> ...] NODE <node id>",
         "    Migrate the specified slot ranges from this node to the specified node.",
         "CANCELMIGRATIONS (ALL | LINK <link name>)",
         "    Cancel the selected migration links.",
-        "MIGRATIONS",
+        "SLOTMIGRATIONS",
         "    Get information about ongoing and recently finished slot imports and exports.",
         NULL};
 

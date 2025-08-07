@@ -1,7 +1,7 @@
 {
     "CANCELMIGRATIONS": {
-        "summary": "Cancel some or all current ongoing slot migration operations.",
-        "complexity": "O(n), where N is the number of slot migration operations being cancelled.",
+        "summary": "Cancel all current ongoing slot migration operations.",
+        "complexity": "O(N), where N is the number of slot migration operations being cancelled.",
         "group": "cluster",
         "since": "9.0.0",
         "container": "CLUSTER",

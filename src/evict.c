@@ -33,7 +33,7 @@
 #include "server.h"
 #include "bio.h"
 #include "script.h"
-#include "cluster_migrate.h"
+#include "cluster_migrateslots.h"
 #include <math.h>
 
 /* ----------------------------------------------------------------------------

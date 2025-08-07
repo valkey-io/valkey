@@ -1,5 +1,5 @@
 {
-    "MIGRATE": {
+    "MIGRATESLOTS": {
         "summary": "Migrate the given slots from this node to the specified nodes.",
         "complexity": "O(N) where N is the total number of the slots between all start slot and end slot arguments.",
         "group": "cluster",

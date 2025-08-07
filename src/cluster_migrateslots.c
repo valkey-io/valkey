@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: BSD 3-Clause
  */
 
-#include "cluster_migrate.h"
+#include "cluster_migrateslots.h"
 #include "bio.h"
 #include "module.h"
 #include "functions.h"
@@ -43,7 +43,7 @@ typedef enum slotMigrationJobType {
 
 /* A slotMigrationJob represents an export or import of a slot to/from another
  * node for an ongoing slot migration. A job is created on either end of a
- * migration during the duration of a CLUSTER MIGRATE operation. */
+ * migration during the duration of a CLUSTER MIGRATESLOTS operation. */
 typedef struct slotMigrationJob {
     slotMigrationJobType type;                /* Type of the migration job (either for import or export) */
     time_t ctime;                             /* Migration job creation time. */
@@ -216,10 +216,10 @@ void setSlotImportingStateInAllDbs(list *slot_ranges, int is_importing) {
  * node_out will be set to the node that owns all the slots. */
 list *parseSlotRangesOrReply(client *c, int start_index, int *end_index_out, clusterNode **node_out) {
     list *slot_ranges = createSlotRangeList();
-    int startslot, endslot;
+    int i, startslot, endslot;
     *node_out = NULL;
     *end_index_out = c->argc;
-    for (int i = start_index; i < c->argc; i += 2) {
+    for (i = start_index; i < c->argc; i += 2) {
         if (getLongLongFromObject(c->argv[i], NULL) != C_OK) {
             /* If we encounter a non-integer parameter, we assume that this is the next argument. */
             *end_index_out = i;
@@ -227,37 +227,31 @@ list *parseSlotRangesOrReply(client *c, int start_index, int *end_index_out, clu
         }
         /* Get the current slot range. */
         if ((startslot = getSlotOrReply(c, c->argv[i])) == -1) {
-            listRelease(slot_ranges);
-            return NULL;
+            goto cleanup;
         }
         if (i + 1 >= c->argc) {
             addReplyError(c, "No end slot for final slot range");
-            listRelease(slot_ranges);
-            return NULL;
+            goto cleanup;
         }
         if ((endslot = getSlotOrReply(c, c->argv[i + 1])) == -1) {
-            listRelease(slot_ranges);
-            return NULL;
+            goto cleanup;
         }
         if (startslot > endslot) {
             addReplyErrorFormat(c, "Start slot number %d is greater than end slot number %d.",
                                 startslot, endslot);
-            listRelease(slot_ranges);
-            return NULL;
+            goto cleanup;
         }
         /* Check if the current slot range is ready to do the migration. */
         for (int j = startslot; j <= endslot; j++) {
             if (server.cluster->slots[j] == NULL) {
                 addReplyErrorFormat(c, "Slot %d has no node served.", j);
-                listRelease(slot_ranges);
-                return NULL;
+                goto cleanup;
             }
             if (!*node_out) {
                 *node_out = server.cluster->slots[j];
             } else if (*node_out != server.cluster->slots[j]) {
                 addReplyError(c, "Requested slots span multiple shards");
-                listRelease(slot_ranges);
-                return NULL;
+                goto cleanup;
             }
         }
 
@@ -277,9 +271,8 @@ list *parseSlotRangesOrReply(client *c, int start_index, int *end_index_out, clu
                                     endslot,
                                     prev_range->start_slot,
                                     prev_range->end_slot);
-                listRelease(slot_ranges);
                 zfree(new_range);
-                return NULL;
+                goto cleanup;
             }
         }
 
@@ -288,10 +281,13 @@ list *parseSlotRangesOrReply(client *c, int start_index, int *end_index_out, clu
     }
     if (slot_ranges->len == 0) {
         addReplyError(c, "No slot ranges specified");
-        listRelease(slot_ranges);
-        return NULL;
+        goto cleanup;
     }
     return slot_ranges;
+
+cleanup:
+    listRelease(slot_ranges);
+    return NULL;
 }
 
 /* -------------------------------------------- TARGET -----------------------------------------
@@ -448,11 +444,8 @@ void clusterCommandSyncSlotsEstablish(client *c) {
 
     clusterDoBeforeSleep(CLUSTER_TODO_HANDLE_SLOT_MIGRATION);
 
-    /* Push the reply, which will allow the migration to continue */
-    ClientFlags old_flags = c->flag;
-    c->flag.pushing = 1;
     addReply(c, shared.ok);
-    c->flag = old_flags;
+    job->client->flag.reply_off = 1;
     return;
 
 cleanup:
@@ -546,7 +539,6 @@ slotMigrationJob *createSlotImportJob(client *c, clusterNode *source_node, char 
     job->state = SLOT_IMPORT_WAIT_ACK;
     job->client = c;
     job->client->slot_migration_job = job;
-    job->client->flag.reply_off = 1;
     job->description = generateSlotMigrationJobDescription(job, source_node);
 
     /* We treat slot imports like primaries. Primaries are expected to have a
@@ -692,7 +684,7 @@ void clusterHandleFlushDuringSlotMigration(void) {
 /* ------------------------------------------- SOURCE ------------------------------------------
  *
  * During a slot import, the source node tracks ongoing export operations as slotMigrationJobs.
- * A slotMigrationJob is initially created when the operator issues CLUSTER MIGRATE. After this, we
+ * A slotMigrationJob is initially created when the operator issues CLUSTER MIGRATESLOTS. After this, we
  * ensure that all data in the requested slots are sent to the target node.
  *
  * If at any time we detect an error, the connection will be closed, causing the slot migration to
@@ -785,7 +777,7 @@ char *getNameOfSlotExportTarget(int slot) {
 
 /* Sent by an operator to the current owner of one or more slot ranges. The
  * source will attempt to migrate the slot ranges to the specified target node. */
-void clusterCommandMigrate(client *c) {
+void clusterCommandMigrateSlots(client *c) {
     if (!nodeIsPrimary(server.cluster->myself)) {
         addReplyError(c, "Slot migration can only be used on primary nodes.");
         return;
@@ -805,26 +797,23 @@ void clusterCommandMigrate(client *c) {
     int curr_index = 2;
     list *new_slot_migrations = listCreate();
     listSetFreeMethod(new_slot_migrations, freeSlotMigrationJob);
+    list *slot_ranges = NULL;
 
     while (curr_index < c->argc) {
         if (strcasecmp(c->argv[curr_index]->ptr, "slotsrange")) {
             addReplyErrorObject(c, shared.syntaxerr);
-            listRelease(new_slot_migrations);
-            return;
+            goto cleanup;
         }
         curr_index++;
 
         clusterNode *source_node = NULL;
-        list *slot_ranges = parseSlotRangesOrReply(c, curr_index, &curr_index, &source_node);
+        slot_ranges = parseSlotRangesOrReply(c, curr_index, &curr_index, &source_node);
         if (slot_ranges == NULL) {
-            listRelease(new_slot_migrations);
-            return;
+            goto cleanup;
         }
         if (source_node != server.cluster->myself) {
             addReplyErrorFormat(c, "Slots are not served by myself.");
-            listRelease(slot_ranges);
-            listRelease(new_slot_migrations);
-            return;
+            goto cleanup;
         }
 
         listIter li;
@@ -835,9 +824,7 @@ void clusterCommandMigrate(client *c) {
             for (int j = range->start_slot; j <= range->end_slot; j++) {
                 if (clusterIsSlotExporting(j)) {
                     addReplyErrorFormat(c, "I am already migrating slot %d.", j);
-                    listRelease(slot_ranges);
-                    listRelease(new_slot_migrations);
-                    return;
+                    goto cleanup;
                 }
             }
         }
@@ -847,36 +834,29 @@ void clusterCommandMigrate(client *c) {
             slotMigrationJob *job = (slotMigrationJob *)ln->value;
             if (doSlotRangeListsOverlap(job->slot_ranges, slot_ranges)) {
                 addReplyError(c, "Slot ranges in migrations overlap");
-                listRelease(slot_ranges);
-                listRelease(new_slot_migrations);
-                return;
+                goto cleanup;
             }
         }
 
         if (curr_index + 1 >= c->argc || strcasecmp(c->argv[curr_index]->ptr, "node")) {
             addReplyErrorObject(c, shared.syntaxerr);
-            listRelease(slot_ranges);
-            listRelease(new_slot_migrations);
-            return;
+            goto cleanup;
         }
         curr_index++;
         if (sdslen(c->argv[curr_index]->ptr) != CLUSTER_NAMELEN) {
             addReplyErrorFormat(c, "Invalid node name");
-            listRelease(slot_ranges);
-            listRelease(new_slot_migrations);
-            return;
+            goto cleanup;
         }
         clusterNode *target_node = clusterLookupNode(c->argv[curr_index]->ptr, CLUSTER_NAMELEN);
         if (!target_node) {
             addReplyErrorFormat(c, "Unknown node name");
-            listRelease(slot_ranges);
-            listRelease(new_slot_migrations);
-            return;
+            goto cleanup;
         }
         curr_index++;
 
         slotMigrationJob *job = createSlotExportJob(target_node, slot_ranges);
         listAddNodeHead(new_slot_migrations, job);
+        slot_ranges = NULL;
     }
 
     /* If we reach here, we have successfully parsed all arguments */
@@ -887,13 +867,18 @@ void clusterCommandMigrate(client *c) {
     while ((ln = listNext(&li))) {
         slotMigrationJob *job = ln->value;
         listAddNodeHead(server.cluster->slot_migration_jobs, job);
-        serverLog(LL_NOTICE, "Slot migration initiated through CLUSTER MIGRATE command: %s (user request from '%s')", job->description, client_info);
+        serverLog(LL_NOTICE, "Slot migration initiated through CLUSTER MIGRATESLOTS command: %s (user request from '%s')", job->description, client_info);
         proceedWithSlotMigration(job);
     }
     listSetFreeMethod(new_slot_migrations, NULL);
     listRelease(new_slot_migrations);
     sdsfree(client_info);
     addReply(c, shared.ok);
+    return;
+
+cleanup:
+    if (slot_ranges) listRelease(slot_ranges);
+    listRelease(new_slot_migrations);
 }
 
 slotMigrationJob *clusterLookupMigrationJob(sds name) {
@@ -1377,6 +1362,18 @@ int clusterIsAnySlotExporting(void) {
     return 0;
 }
 
+void clusterFailAllSlotExportsWithMessage(char *message) {
+    listNode *ln;
+    listIter li;
+    listRewind(server.cluster->slot_migration_jobs, &li);
+    while ((ln = listNext(&li)) != NULL) {
+        slotMigrationJob *job = ln->value;
+        if (job->type != SLOT_MIGRATION_EXPORT) continue;
+        if (!isSlotMigrationJobInProgress(job)) continue;
+        finishSlotMigrationJob(job, SLOT_MIGRATION_JOB_FAILED, message);
+    }
+}
+
 size_t clusterGetTotalSlotExportBufferMemory(void) {
     listNode *ln;
     listIter li;
@@ -1461,7 +1458,7 @@ void slotMigrationJobReadEstablishResponse(connection *conn) {
 
 /* -------------------------------------- TARGET & SOURCE -------------------------------------- */
 
-/* Updates the associated status message for the job, which will be seen in CLUSTER MIGRATIONS. */
+/* Updates the associated status message for the job, which will be seen in CLUSTER SLOTMIGRATIONS. */
 void updateSlotMigrationJobStatusMessage(slotMigrationJob *job, char *message) {
     if (job->status_msg) sdsfree(job->status_msg);
     job->status_msg = sdsnew(message);
@@ -1599,15 +1596,12 @@ void resetSlotMigrationJob(slotMigrationJob *job) {
         job->conn = NULL;
     }
 
-    if (job->response_buf) {
-        sdsfree(job->response_buf);
-        job->response_buf = NULL;
-    }
-    if (job->description) {
-        /* Description is not needed once migration is finished */
-        sdsfree(job->description);
-        job->description = NULL;
-    }
+    sdsfree(job->response_buf);
+    job->response_buf = NULL;
+
+    /* Description is not needed once migration is finished */
+    sdsfree(job->description);
+    job->description = NULL;
 }
 
 void freeSlotMigrationJob(void *o) {
@@ -1615,8 +1609,8 @@ void freeSlotMigrationJob(void *o) {
     resetSlotMigrationJob(job);
     listRelease(job->slot_ranges);
     sdsfree(job->slot_ranges_str);
-    if (job->status_msg) sdsfree(job->status_msg);
-    if (job->response_buf) sdsfree(job->response_buf);
+    sdsfree(job->status_msg);
+    sdsfree(job->response_buf);
     zfree(o);
 }
 
@@ -1698,9 +1692,9 @@ void clusterHandleSlotMigrationClientClose(slotMigrationJob *job) {
      * Otherwise, we can mark it failed. */
     if (job->state != SLOT_EXPORT_FAILOVER_GRANTED) {
         if (job->type == SLOT_MIGRATION_EXPORT) {
-            finishSlotMigrationJob(job, SLOT_MIGRATION_JOB_FAILED, "Connection lost to target. Check CLUSTER MIGRATIONS on the target node for more information.");
+            finishSlotMigrationJob(job, SLOT_MIGRATION_JOB_FAILED, "Connection lost to target. Check CLUSTER SLOTMIGRATIONS on the target node for more information.");
         } else {
-            finishSlotMigrationJob(job, SLOT_MIGRATION_JOB_FAILED, "Connection lost to source. Check CLUSTER MIGRATIONS on the source node for more information.");
+            finishSlotMigrationJob(job, SLOT_MIGRATION_JOB_FAILED, "Connection lost to source. Check CLUSTER SLOTMIGRATIONS on the source node for more information.");
         }
     }
     clusterDoBeforeSleep(CLUSTER_TODO_HANDLE_SLOT_MIGRATION);
@@ -1765,7 +1759,7 @@ int isImportSlotMigrationJob(slotMigrationJob *job) {
 }
 
 /* Synthesizes a view of ongoing and recently completed imports for an operator. */
-void clusterCommandMigrations(client *c) {
+void clusterCommandSlotMigrations(client *c) {
     listNode *ln;
     listIter li;
     addReplyArrayLen(c, listLength(server.cluster->slot_migration_jobs));
@@ -1800,6 +1794,8 @@ void sendSyncSlotsMessage(slotMigrationJob *job, const char *subcommand) {
     serverAssert(job->client);
     ClientFlags old_flags = job->client->flag;
     if (job->type == SLOT_MIGRATION_IMPORT) {
+        /* Since the slot migration import has replies off, we use the pushing
+         * flag to bypass this. */
         job->client->flag.pushing = 1;
     }
     addReplyArrayLen(job->client, 3);

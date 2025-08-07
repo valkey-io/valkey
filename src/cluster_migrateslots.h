@@ -1,5 +1,5 @@
-#ifndef __CLUSTER_MIGRATE_H
-#define __CLUSTER_MIGRATE_H
+#ifndef __CLUSTER_MIGRATESLOTS_H
+#define __CLUSTER_MIGRATESLOTS_H
 
 #include "server.h"
 #include "cluster.h"
@@ -20,9 +20,9 @@ void clusterMarkImportingSlotsInDb(serverDb *db);
 int clusterSlotMigrationShouldInstallWriteHandler(client *c);
 void initClusterSlotMigrationJobList(void);
 void clusterSlotMigrationCron(void);
-void clusterCommandMigrate(client *c);
+void clusterCommandMigrateSlots(client *c);
 void clusterCommandSyncSlots(client *c);
-void clusterCommandMigrations(client *c);
+void clusterCommandSlotMigrations(client *c);
 void clusterCommandCancelMigrations(client *c);
 void clusterHandleSlotExportBackgroundSaveDone(int bgsaveerr);
 void clusterUpdateSlotExportsOnOwnershipChange(void);
@@ -31,5 +31,6 @@ void clusterCleanupSlotMigrationLog(void);
 void clusterHandleFlushDuringSlotMigration(void);
 size_t clusterGetTotalSlotExportBufferMemory(void);
 char *getNameOfSlotExportTarget(int slot);
+void clusterFailAllSlotExportsWithMessage(char *message);
 
-#endif /* __CLUSTER_MIGRATE_H */
+#endif /* __CLUSTER_MIGRATESLOTS_H */

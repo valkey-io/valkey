@@ -68,7 +68,7 @@ struct _kvstore {
                                                * given hashtable-index. */
     size_t overhead_hashtable_lut;            /* Overhead of all hashtables in bytes. */
     size_t overhead_hashtable_rehashing;      /* Overhead of hash tables rehashing in bytes. */
-    dict *importing;                          /* The set of hashtable indexes that are being imported */
+    hashtable *importing;                     /* The set of hashtable indexes that are being imported */
     unsigned long long importing_key_count;   /* Total number of importing keys in this kvstore. */
 };
 
@@ -79,7 +79,7 @@ struct _kvstoreIterator {
     long long next_didx;
     hashtableIterator di;
     uint8_t flags;
-    dictIterator *importing_iter;
+    hashtableIterator *importing_iter;
 };
 
 /* Structure for kvstore hashtable iterator that allows iterating the corresponding hashtable. */
@@ -95,24 +95,7 @@ typedef struct {
     kvstore *kvs;
 } kvstoreHashtableMetadata;
 
-/**********************************/
-/*** Static Helpers ***************/
-/**********************************/
-
-/* A dict type for just storing integers as keys, without values. */
-static uint64_t dictIntHash(const void *key) {
-    /* We hash the pointer value itself. */
-    return dictGenHashFunction(&key, sizeof(key));
-}
-
-static int dictIntCompare(const void *key1, const void *key2) {
-    return key1 == key2;
-}
-
-static dictType kvstoreImportingDictType = {
-    .hashFunction = dictIntHash,
-    .keyCompare = dictIntCompare,
-};
+hashtableType intHashtableType = {.instant_rehashing = 1};
 
 /**********************************/
 /*** Helpers **********************/
@@ -164,7 +147,7 @@ static int getAndClearHashtableIndexFromCursor(kvstore *kvs, unsigned long long 
 
 int kvstoreIsImporting(kvstore *kvs, int didx) {
     assert(didx < kvs->num_hashtables);
-    return dictFind(kvs->importing, (void *)(intptr_t)didx) != NULL;
+    return hashtableFind(kvs->importing, (void *)(intptr_t)didx, NULL);
 }
 
 /* Updates binary index tree (also known as Fenwick tree), increasing key count for a given hashtable.
@@ -330,7 +313,7 @@ kvstore *kvstoreCreate(hashtableType *type, int num_hashtables_bits, int flags) 
     kvs->num_hashtables_bits = num_hashtables_bits;
     kvs->num_hashtables = 1 << kvs->num_hashtables_bits;
     kvs->hashtables = zcalloc(sizeof(hashtable *) * kvs->num_hashtables);
-    kvs->importing = dictCreate(&kvstoreImportingDictType);
+    kvs->importing = hashtableCreate(&intHashtableType);
     kvs->rehashing = listCreate();
     kvs->hashtable_size_index = kvs->num_hashtables > 1 ? zcalloc(sizeof(unsigned long long) * (kvs->num_hashtables + 1)) : NULL;
     if (!(kvs->flags & KVSTORE_ALLOCATE_HASHTABLES_ON_DEMAND)) {
@@ -350,7 +333,7 @@ void kvstoreEmpty(kvstore *kvs, void(callback)(hashtable *)) {
         freeHashtableIfNeeded(kvs, didx);
     }
 
-    dictEmpty(kvs->importing, NULL);
+    hashtableEmpty(kvs->importing, NULL);
     kvs->importing_key_count = 0;
 
     listEmpty(kvs->rehashing);
@@ -373,7 +356,7 @@ void kvstoreRelease(kvstore *kvs) {
     }
     assert(kvs->overhead_hashtable_lut == 0);
     zfree(kvs->hashtables);
-    dictRelease(kvs->importing);
+    hashtableRelease(kvs->importing);
 
     listRelease(kvs->rehashing);
     if (kvs->hashtable_size_index) zfree(kvs->hashtable_size_index);
@@ -504,7 +487,8 @@ int kvstoreExpand(kvstore *kvs, uint64_t newsize, int try_expand, kvstoreExpandS
  * hashtable, unless the entire kvstore is empty. Time complexity of this
  * function is O(log(kvs->num_hashtables)).
  *
- * Note that importing hashtables are excluded from random hashtable lookups. */
+ * Note that importing hashtables are excluded from random hashtable lookups. If
+ * there is no viable hashtable, -1 is returned. */
 int kvstoreGetFairRandomHashtableIndex(kvstore *kvs) {
     unsigned long target = kvstoreSize(kvs) ? (random() % kvstoreSize(kvs)) + 1 : 0;
     return kvstoreFindHashtableIndexByKeyIndex(kvs, target);
@@ -651,18 +635,17 @@ void kvstoreIteratorRelease(kvstoreIterator *kvs_it) {
         freeHashtableIfNeeded(kvs_it->kvs, kvs_it->didx);
     }
     if (kvs_it->importing_iter) {
-        dictReleaseIterator(kvs_it->importing_iter);
+        hashtableReleaseIterator(kvs_it->importing_iter);
     }
     zfree(kvs_it);
 }
 
 static int kvstoreIteratorNextImportingHashtableIndex(kvstoreIterator *kvs_it) {
-    dictEntry *de;
     if (kvs_it->importing_iter == NULL) {
-        kvs_it->importing_iter = dictGetSafeIterator(kvs_it->kvs->importing);
+        kvs_it->importing_iter = hashtableCreateIterator(kvs_it->kvs->importing, 0);
     }
-    while ((de = dictNext(kvs_it->importing_iter)) != NULL) {
-        intptr_t didx = (intptr_t)dictGetKey(de);
+    intptr_t didx;
+    while (hashtableNext(kvs_it->importing_iter, (void **)&didx)) {
         if (kvstoreHashtableSize(kvs_it->kvs, didx)) {
             return didx;
         }
@@ -958,11 +941,11 @@ void kvstoreSetIsImporting(kvstore *kvs, int didx, int is_importing) {
     if (is_importing) {
         /* Importing should only be marked on empty hashtables */
         assert(!ht || hashtableSize(ht) == 0);
-        dictAdd(kvs->importing, (void *)(intptr_t)didx, NULL);
+        hashtableAdd(kvs->importing, (void *)(intptr_t)didx);
         return;
     }
 
-    dictDelete(kvs->importing, (void *)(intptr_t)didx);
+    hashtableDelete(kvs->importing, (void *)(intptr_t)didx);
     /* Once we mark a hashtable as not importing, we need to begin tracking in
      * the kvstore metadata */
     if (ht && hashtableSize(ht) != 0) {

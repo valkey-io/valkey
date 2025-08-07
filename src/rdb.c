@@ -44,7 +44,7 @@
 #include "zmalloc.h"
 #include "module.h"
 #include "cluster.h"
-#include "cluster_migrate.h"
+#include "cluster_migrateslots.h"
 
 #include <math.h>
 #include <fcntl.h>

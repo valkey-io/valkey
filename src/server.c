@@ -36,7 +36,7 @@
 #include "monotonic.h"
 #include "cluster.h"
 #include "cluster_slot_stats.h"
-#include "cluster_migrate.h"
+#include "cluster_migrateslots.h"
 #include "commandlog.h"
 #include "bio.h"
 #include "latency.h"

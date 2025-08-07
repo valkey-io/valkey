@@ -26,7 +26,7 @@ proc is_slot_migrated {node_idx slot} {
 }
 
 proc get_job_name {node_idx slot} {
-    set migrations [R $node_idx CLUSTER MIGRATIONS]
+    set migrations [R $node_idx CLUSTER SLOTMIGRATIONS]
     foreach migration $migrations {
         set slot_ranges [dict get $migration slot_ranges]
         if {[slot_ranges_contains_slot $slot_ranges $slot]} {
@@ -37,7 +37,7 @@ proc get_job_name {node_idx slot} {
 }
 
 proc get_migration_by_name {node_idx name} {
-    set migrations [R $node_idx CLUSTER MIGRATIONS]
+    set migrations [R $node_idx CLUSTER SLOTMIGRATIONS]
     foreach migration $migrations {
         if {[dict get $migration name] eq $name} {
             return $migration
@@ -151,80 +151,88 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
     set fake_jobname "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
     test "General command interface" {
-        assert_error "*wrong number of arguments*" {R 0 CLUSTER MIGRATE}
-        assert_error "*syntax error*" {R 0 CLUSTER MIGRATE INVALID 0 1}
-        assert_error "*wrong number of arguments*" {R 0 CLUSTER MIGRATE SLOTSRANGE}
-        assert_error "*No end slot for final slot range*" {R 0 CLUSTER MIGRATE SLOTSRANGE 0}
-        assert_error "*Invalid or out of range slot*" {R 0 CLUSTER MIGRATE SLOTSRANGE 16385 16388}
-        assert_error "*Invalid or out of range slot*" {R 0 CLUSTER MIGRATE SLOTSRANGE 16380 16388}
-        assert_error "*No slot ranges specified*" {R 0 CLUSTER MIGRATE SLOTSRANGE a 0}
-        assert_error "*Invalid or out of range slot*" {R 0 CLUSTER MIGRATE SLOTSRANGE 0 a}
-        assert_error "*Start slot number 1 is greater than end slot number 0*" {R 0 CLUSTER MIGRATE SLOTSRANGE 1 0}
-        assert_error "*Requested slots span multiple shards*" {R 0 CLUSTER MIGRATE SLOTSRANGE 0 16383}
-        assert_error "*Slot range 3-6 overlaps with previous range 0-5*" {R 0 CLUSTER MIGRATE SLOTSRANGE 0 5 3 6}
-        assert_error "*Slot range 0-5 overlaps with previous range 3-6*" {R 0 CLUSTER MIGRATE SLOTSRANGE 3 6 0 5}
-        assert_error "*syntax error*" {R 0 CLUSTER MIGRATE SLOTSRANGE 0 0}
-        assert_error "*syntax error*" {R 0 CLUSTER MIGRATE SLOTSRANGE 0 0 NODE}
-        assert_error "*Invalid node name*" {R 0 CLUSTER MIGRATE SLOTSRANGE 0 0 NODE blah}
-        assert_error "*Unknown node name*" {R 0 CLUSTER MIGRATE SLOTSRANGE 0 0 NODE $fake_jobname}
-        assert_error "*Slot ranges in migrations overlap*" {R 0 CLUSTER MIGRATE SLOTSRANGE 1 1 NODE $node1_id SLOTSRANGE 0 2 NODE $node2_id} 
+        assert_error "*wrong number of arguments*" {R 0 CLUSTER MIGRATESLOTS}
+        assert_error "*syntax error*" {R 0 CLUSTER MIGRATESLOTS INVALID 0 1}
+        assert_error "*wrong number of arguments*" {R 0 CLUSTER MIGRATESLOTS SLOTSRANGE}
+        assert_error "*No end slot for final slot range*" {R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 0}
+        assert_error "*Invalid or out of range slot*" {R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 16385 16388}
+        assert_error "*Invalid or out of range slot*" {R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 16380 16388}
+        assert_error "*No slot ranges specified*" {R 0 CLUSTER MIGRATESLOTS SLOTSRANGE a 0}
+        assert_error "*Invalid or out of range slot*" {R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 0 a}
+        assert_error "*Start slot number 1 is greater than end slot number 0*" {R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 1 0}
+        assert_error "*Requested slots span multiple shards*" {R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 0 16383}
+        assert_error "*Slot range 3-6 overlaps with previous range 0-5*" {R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 0 5 3 6}
+        assert_error "*Slot range 0-5 overlaps with previous range 3-6*" {R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 3 6 0 5}
+        assert_error "*syntax error*" {R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 0 0}
+        assert_error "*syntax error*" {R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 0 0 NODE}
+        assert_error "*Invalid node name*" {R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 0 0 NODE blah}
+        assert_error "*Unknown node name*" {R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 0 0 NODE $fake_jobname}
+        assert_error "*Slot ranges in migrations overlap*" {R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 1 1 NODE $node1_id SLOTSRANGE 0 2 NODE $node2_id} 
 
         set source_node_id [R 0 CLUSTER MYID]
         set target_node_id [R 1 CLUSTER MYID]
         R 0 CLUSTER SETSLOT 0 MIGRATING $target_node_id
         R 1 CLUSTER SETSLOT 0 IMPORTING $source_node_id
-        assert_error "*Some slots are being manually migrated*" {R 0 CLUSTER MIGRATE SLOTSRANGE 16383 16383}
-        assert_error "*Some slots are being manually imported*" {R 1 CLUSTER MIGRATE SLOTSRANGE 16383 16383}
+        assert_error "*Some slots are being manually migrated*" {R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383}
+        assert_error "*Some slots are being manually imported*" {R 1 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383}
         R 0 CLUSTER SETSLOT 0 STABLE
         R 1 CLUSTER SETSLOT 0 STABLE
 
         R 0 CLUSTER DELSLOTS 0
-        assert_error "*Slot 0 has no node served*" {R 0 CLUSTER MIGRATE SLOTSRANGE 0 0}
+        assert_error "*Slot 0 has no node served*" {R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 0 0}
         R 0 CLUSTER ADDSLOTS 0
 
-        assert_error "*Slot migration can only be used on primary nodes*" {R 3 CLUSTER MIGRATE SLOTSRANGE 0 0}
-        assert_error "*Slots are not served by myself*" {R 2 CLUSTER MIGRATE SLOTSRANGE 0 0 NODE $node0_id}
+        assert_error "*Slot migration can only be used on primary nodes*" {R 3 CLUSTER MIGRATESLOTS SLOTSRANGE 0 0}
+        assert_error "*Slots are not served by myself*" {R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 0 0 NODE $node0_id}
 
         assert_error "*wrong number of arguments*" {R 0 CLUSTER CANCELMIGRATIONS ARG}
         assert_error "*No migrations ongoing*" {R 0 CLUSTER CANCELMIGRATIONS}
     }
 
-    test "CLUSTER MIGRATE already migrating" {
+    test "CLUSTER MIGRATESLOTS already migrating" {
         set_debug_prevent_pause 1
-        assert_match "OK" [R 2 CLUSTER MIGRATE SLOTSRANGE 16383 16383 NODE $node0_id]
+        assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node0_id]
         set jobname [get_job_name 2 16383]
-        assert_error "*I am already migrating slot 16383*" {R 2 CLUSTER MIGRATE SLOTSRANGE 16383 16383 NODE $node0_id}
+        assert_error "*I am already migrating slot 16383*" {R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node0_id}
         R 2 CLUSTER CANCELMIGRATIONS
         wait_for_migration_field 0 $jobname state failed
 
-        assert_match "OK" [R 2 CLUSTER MIGRATE SLOTSRANGE 16381 16383 NODE $node0_id]
+        assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16381 16383 NODE $node0_id]
         set jobname [get_job_name 2 16381]
-        assert_error "*I am already migrating slot 16382*" {R 2 CLUSTER MIGRATE SLOTSRANGE 16382 16382 NODE $node0_id}
+        assert_error "*I am already migrating slot 16382*" {R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16382 16382 NODE $node0_id}
         R 2 CLUSTER CANCELMIGRATIONS
         wait_for_migration_field 0 $jobname state failed
 
-        assert_match "OK" [R 2 CLUSTER MIGRATE SLOTSRANGE 16382 16382 NODE $node0_id]
+        assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16382 16382 NODE $node0_id]
         set jobname [get_job_name 2 16382]
-        assert_error "*I am already migrating slot 16382*" {R 2 CLUSTER MIGRATE SLOTSRANGE 16381 16383 NODE $node0_id}
+        assert_error "*I am already migrating slot 16382*" {R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16381 16383 NODE $node0_id}
         R 2 CLUSTER CANCELMIGRATIONS
         wait_for_migration_field 0 $jobname state failed
         set_debug_prevent_pause 0
     }
 
-    test "CLUSTER MIGRATIONS command config enforced on update" {
+    test "CLUSTER SLOTMIGRATIONS command config enforced" {
         # Clear the migrations and ensure there are none
         assert_match "OK" [R 0 CONFIG SET cluster-slot-migration-log-max-len 0]
-        assert_match "" [R 0 CLUSTER MIGRATIONS]
+        wait_for_condition 100 100 {
+            [R 0 CLUSTER SLOTMIGRATIONS] eq ""
+        } else {
+            fail "SLOTMIGRATIONS was not cleared within 10 seconds"
+        }
         assert_match "OK" [R 2 CONFIG SET cluster-slot-migration-log-max-len 0]
-        assert_match "" [R 2 CLUSTER MIGRATIONS]
+        wait_for_condition 100 100 {
+            [R 2 CLUSTER SLOTMIGRATIONS] eq ""
+        } else {
+            fail "SLOTMIGRATIONS was not cleared within 10 seconds"
+        }
     }
 
-    test "CLUSTER MIGRATIONS command reported fields" {
+    test "CLUSTER SLOTMIGRATIONS command reported fields" {
         assert_match "OK" [R 0 CONFIG SET cluster-slot-migration-log-max-len 1]
         assert_match "OK" [R 2 CONFIG SET cluster-slot-migration-log-max-len 1]
         set_debug_prevent_pause 1
 
-        assert_match "OK" [R 2 CLUSTER MIGRATE SLOTSRANGE 16383 16383 NODE $node0_id]
+        assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node0_id]
         set jobname [get_job_name 2 16383]
         wait_for_migration_field 2 $jobname state waiting-to-pause
 
@@ -283,11 +291,11 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
         set_debug_prevent_pause 0
     }
 
-    test "CLUSTER MIGRATIONS command log removed over max len" {
+    test "CLUSTER SLOTMIGRATIONS command log removed over max len" {
         set_debug_prevent_pause 1
 
         # Add a new entry and the old should get popped
-        assert_match "OK" [R 2 CLUSTER MIGRATE SLOTSRANGE 16383 16383 NODE $node0_id]
+        assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node0_id]
         set jobname2 [get_job_name 2 16383]
         wait_for_migration_field 2 $jobname2 state waiting-to-pause
         assert_match "OK" [R 2 CLUSTER CANCELMIGRATIONS]
@@ -301,8 +309,8 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
         wait_for_condition 100 50 {
             [get_migration_by_name 0 $jobname] eq "" && [get_migration_by_name 2 $jobname] eq ""
         } else {
-            fail "Old CLUSTER MIGRATIONS entry not removed after 5 seconds of max-len reached"
-        }
+            fail "Old CLUSTER SLOTMIGRATIONS entry not removed after 5 seconds of max-len reached"
+    }
 
         # Cleanup
         set_debug_prevent_pause 0
@@ -313,25 +321,25 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
     test "Manual and atomic slot migration are mutually exclusive" {
         set_debug_prevent_pause 1
 
-        # Shouldn't be able to use SETSLOT when CLUSTER MIGRATE is running
-        assert_match "OK" [R 2 CLUSTER MIGRATE SLOTSRANGE 16383 16383 NODE $node0_id]
+        # Shouldn't be able to use SETSLOT when CLUSTER MIGRATESLOTS is running
+        assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node0_id]
         set jobname [get_job_name 2 16383]
         wait_for_migration_field 2 $jobname state waiting-to-pause
-        assert_error "*A slot is currently being imported via CLUSTER MIGRATE*" {R 0 CLUSTER SETSLOT 0 MIGRATING $node1_id}
-        assert_error "*A slot is currently being imported via CLUSTER MIGRATE*" {R 0 CLUSTER SETSLOT 0 IMPORTING $node1_id}
-        assert_error "*A slot is currently being exported via CLUSTER MIGRATE*" {R 2 CLUSTER SETSLOT 0 MIGRATING $node1_id}
-        assert_error "*A slot is currently being exported via CLUSTER MIGRATE*" {R 2 CLUSTER SETSLOT 0 IMPORTING $node1_id}
+        assert_error "*A slot is currently being imported via CLUSTER MIGRATESLOTS*" {R 0 CLUSTER SETSLOT 0 MIGRATING $node1_id}
+        assert_error "*A slot is currently being imported via CLUSTER MIGRATESLOTS*" {R 0 CLUSTER SETSLOT 0 IMPORTING $node1_id}
+        assert_error "*A slot is currently being exported via CLUSTER MIGRATESLOTS*" {R 2 CLUSTER SETSLOT 0 MIGRATING $node1_id}
+        assert_error "*A slot is currently being exported via CLUSTER MIGRATESLOTS*" {R 2 CLUSTER SETSLOT 0 IMPORTING $node1_id}
         assert_match "OK" [R 2 CLUSTER CANCELMIGRATIONS]
         wait_for_migration_field 0 $jobname state failed
 
-        # Shouldn't be able to use CLUSTER MIGRATE when SETSLOT was used on source
+        # Shouldn't be able to use CLUSTER MIGRATESLOTS when SETSLOT was used on source
         assert_match "OK" [R 2 CLUSTER SETSLOT 0 IMPORTING $node0_id]
-        assert_error "*Some slots are being manually imported*" {R 2 CLUSTER MIGRATE SLOTSRANGE 16383 16383 NODE $node0_id}
+        assert_error "*Some slots are being manually imported*" {R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node0_id}
         assert_match "OK" [R 2 CLUSTER SETSLOT 0 STABLE]
 
         # Same for the target
         assert_match "OK" [R 0 CLUSTER SETSLOT 16383 IMPORTING $node2_id]
-        assert_match "OK" [R 2 CLUSTER MIGRATE SLOTSRANGE 16383 16383 NODE $node0_id]
+        assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node0_id]
         set jobname [get_job_name 2 16383]
         wait_for_migration_field 2 $jobname state failed
         assert {[string match {*A slot on the target node is being manually imported or migrated*} [dict get [get_migration_by_name 2 $jobname] message]]}
@@ -343,8 +351,8 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
 
     test "Test CLUSTER CANCELMIGRATIONS" {
         set_debug_prevent_pause 1
-        assert_match "OK" [R 2 CLUSTER MIGRATE SLOTSRANGE 16382 16382 NODE $node0_id]
-        assert_match "OK" [R 2 CLUSTER MIGRATE SLOTSRANGE 16383 16383 NODE $node0_id]
+        assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16382 16382 NODE $node0_id]
+        assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node0_id]
         set jobname1 [get_job_name 2 16382]
         set jobname2 [get_job_name 2 16383]
         wait_for_migration_field 2 $jobname1 state waiting-to-pause
@@ -380,7 +388,7 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
             populate 1000 "$16383_slot_tag:" 1000 -2
 
             # Perform one-shot import
-            assert_match "OK" [R 2 CLUSTER MIGRATE SLOTSRANGE 16383 16383 NODE $node0_id]
+            assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node0_id]
             set jobname [get_job_name 2 16383]
             wait_for_migration 0 16383
 
@@ -398,7 +406,7 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
 
             # Cleanup for next test
             assert_match "OK" [R 0 FLUSHDB SYNC]
-            assert_match "OK" [R 0 CLUSTER MIGRATE SLOTSRANGE 16383 16383 NODE $node2_id]
+            assert_match "OK" [R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node2_id]
             wait_for_migration 2 16383
         }
     }
@@ -411,7 +419,7 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
             populate 333 "$16383_slot_tag:1:" 1000 -2
 
             # Load data while the snapshot is ongoing
-            assert_match "OK" [R 2 CLUSTER MIGRATE SLOTSRANGE 16383 16383 NODE $node0_id]
+            assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node0_id]
             set jobname [get_job_name 2 16383]
             populate 333 "$16383_slot_tag:2:" 1000 -2
 
@@ -435,7 +443,7 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
 
             # Cleanup for the next test
             assert_match "OK" [R 0 FLUSHDB SYNC]
-            assert_match "OK" [R 0 CLUSTER MIGRATE SLOTSRANGE 16383 16383 NODE $node2_id]
+            assert_match "OK" [R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node2_id]
             wait_for_migration 2 16383
         }
     }
@@ -446,7 +454,7 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
             set_debug_prevent_pause 1
 
             # Do the snapshot
-            assert_match "OK" [R 2 CLUSTER MIGRATE SLOTSRANGE 16383 16383 NODE $node0_id]
+            assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node0_id]
             set jobname [get_job_name 2 16383]
             wait_for_migration_field 2 $jobname state waiting-to-pause
 
@@ -500,7 +508,7 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
 
             # Cleanup for the next test
             assert_match "OK" [R 0 FLUSHALL SYNC]
-            assert_match "OK" [R 0 CLUSTER MIGRATE SLOTSRANGE 16383 16383 NODE $node2_id]
+            assert_match "OK" [R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node2_id]
             wait_for_migration 2 16383
         }
     }
@@ -515,7 +523,7 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
         set_debug_prevent_pause 1
         test "Importing key containment (slot $slot_to_migrate from node $source_idx to $target_idx) - start migration" {
             populate 1000 "$slot_to_migrate_tag:1:" 1000 -$source_idx false 1000
-            assert_match "OK" [R $source_idx CLUSTER MIGRATE SLOTSRANGE $slot_to_migrate $slot_to_migrate NODE $target_id]
+            assert_match "OK" [R $source_idx CLUSTER MIGRATESLOTS SLOTSRANGE $slot_to_migrate $slot_to_migrate NODE $target_id]
             set jobname [get_job_name $source_idx $slot_to_migrate]
             wait_for_migration_field $source_idx $jobname state waiting-to-pause
 
@@ -586,7 +594,7 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
             assert_match "OK" [R $target_idx DEBUG SET-ACTIVE-EXPIRE 0]
             populate 1000 "$slot_to_migrate_tag:1:" 1000 -$source_idx false 0.5
             populate 1000 "$slot_to_test_tag:1:" 1000 -$target_idx false 0.5
-            assert_match "OK" [R $source_idx CLUSTER MIGRATE SLOTSRANGE $slot_to_migrate $slot_to_migrate NODE $target_id]
+            assert_match "OK" [R $source_idx CLUSTER MIGRATESLOTS SLOTSRANGE $slot_to_migrate $slot_to_migrate NODE $target_id]
             set jobname [get_job_name $source_idx $slot_to_migrate]
             wait_for_migration_field $source_idx $jobname state waiting-to-pause
             assert_match "1000" [R $target_idx CLUSTER COUNTKEYSINSLOT $slot_to_migrate]
@@ -629,8 +637,8 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
 
             # Prepare imports
             set_debug_prevent_pause 1
-            assert_match "OK" [R 1 CLUSTER MIGRATE SLOTSRANGE 5462 5462 NODE $node0_id]
-            assert_match "OK" [R 2 CLUSTER MIGRATE SLOTSRANGE 16383 16383 NODE $node0_id]
+            assert_match "OK" [R 1 CLUSTER MIGRATESLOTS SLOTSRANGE 5462 5462 NODE $node0_id]
+            assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node0_id]
             set jobname1 [get_job_name 1 5462]
             set jobname2 [get_job_name 2 16383]
             populate 100 "$5462_slot_tag:2:" 1000 -1
@@ -663,9 +671,9 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
 
             # Cleanup for next test
             assert_match "OK" [R 0 FLUSHDB SYNC]
-            assert_match "OK" [R 0 CLUSTER MIGRATE SLOTSRANGE 5462 5462 NODE $node1_id]
+            assert_match "OK" [R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 5462 5462 NODE $node1_id]
             wait_for_migration 1 5462
-            assert_match "OK" [R 0 CLUSTER MIGRATE SLOTSRANGE 16383 16383 NODE $node2_id]
+            assert_match "OK" [R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node2_id]
             wait_for_migration 2 16383
         }
     }
@@ -678,8 +686,8 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
 
             # Prepare imports
             set_debug_prevent_pause 1
-            assert_match "OK" [R 2 CLUSTER MIGRATE SLOTSRANGE 16382 16382 NODE $node0_id]
-            assert_match "OK" [R 2 CLUSTER MIGRATE SLOTSRANGE 16383 16383 NODE $node1_id]
+            assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16382 16382 NODE $node0_id]
+            assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node1_id]
             set jobname1 [get_job_name 2 16382]
             set jobname2 [get_job_name 2 16383]
             populate 100 "$16382_slot_tag:2:" 1000 -2
@@ -714,9 +722,9 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
             # Cleanup for next test
             assert_match "OK" [R 0 FLUSHDB SYNC]
             assert_match "OK" [R 1 FLUSHDB SYNC]
-            assert_match "OK" [R 0 CLUSTER MIGRATE SLOTSRANGE 16382 16382 NODE $node2_id]
+            assert_match "OK" [R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 16382 16382 NODE $node2_id]
             wait_for_migration 2 16382
-            assert_match "OK" [R 1 CLUSTER MIGRATE SLOTSRANGE 16383 16383 NODE $node2_id]
+            assert_match "OK" [R 1 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node2_id]
             wait_for_migration 2 16383
         }
     }
@@ -729,8 +737,8 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
 
             # Prepare imports
             set_debug_prevent_pause 1
-            assert_match "OK" [R 2 CLUSTER MIGRATE SLOTSRANGE 16382 16382 NODE $node0_id]
-            assert_match "OK" [R 2 CLUSTER MIGRATE SLOTSRANGE 16383 16383 NODE $node0_id]
+            assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16382 16382 NODE $node0_id]
+            assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node0_id]
             set jobname1 [get_job_name 2 16382]
             set jobname2 [get_job_name 2 16383]
             populate 100 "$16382_slot_tag:2:" 1000 -2
@@ -763,7 +771,7 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
 
             # Cleanup for next test
             assert_match "OK" [R 0 FLUSHDB SYNC]
-            assert_match "OK" [R 0 CLUSTER MIGRATE SLOTSRANGE 16382 16383 NODE $node2_id]
+            assert_match "OK" [R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 16382 16383 NODE $node2_id]
             wait_for_migration 2 16383
         }
     }
@@ -775,7 +783,7 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
             populate 500 "$16383_slot_tag:" 1000 -2
 
             # Perform one-shot import
-            assert_match "OK" [R 2 CLUSTER MIGRATE SLOTSRANGE 16382 16383 NODE $node0_id]
+            assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16382 16383 NODE $node0_id]
             set jobname [get_job_name 2 16382]
             wait_for_migration 0 16382
 
@@ -797,7 +805,7 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
 
             # Cleanup for next test
             assert_match "OK" [R 0 FLUSHDB SYNC]
-            assert_match "OK" [R 0 CLUSTER MIGRATE SLOTSRANGE 16382 16383 NODE $node2_id]
+            assert_match "OK" [R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 16382 16383 NODE $node2_id]
             wait_for_migration 2 16383
         }
     }
@@ -811,7 +819,7 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
             populate 250 "$16383_slot_tag:" 1000 -2
 
             # Perform one-shot import
-            assert_match "OK" [R 2 CLUSTER MIGRATE SLOTSRANGE 16379 16380 16382 16383 NODE $node0_id]
+            assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16379 16380 16382 16383 NODE $node0_id]
             set jobname [get_job_name 2 16383]
             wait_for_migration 0 16383
 
@@ -829,7 +837,7 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
 
             # Cleanup for next test
             assert_match "OK" [R 0 FLUSHDB SYNC]
-            assert_match "OK" [R 0 CLUSTER MIGRATE SLOTSRANGE 16379 16380 16382 16383 NODE $node2_id]
+            assert_match "OK" [R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 16379 16380 16382 16383 NODE $node2_id]
             wait_for_migration 2 16383
         }
     }
@@ -840,7 +848,7 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
             populate 1000 "$16383_slot_tag:" 1000 -2
 
             # Perform one-shot import
-            assert_match "OK" [R 2 CLUSTER MIGRATE SLOTSRANGE 10924 16383 NODE $node0_id]
+            assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 10924 16383 NODE $node0_id]
             set jobname [get_job_name 2 10924]
             wait_for_migration 0 10924
 
@@ -868,7 +876,7 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
             populate 1000 "$16383_slot_tag:" 1000 -0
 
             # Perform one-shot import
-            assert_match "OK" [R 0 CLUSTER MIGRATE SLOTSRANGE 10924 16383 NODE $node2_id]
+            assert_match "OK" [R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 10924 16383 NODE $node2_id]
             set jobname [get_job_name 0 10924]
             wait_for_migration 2 10924
 
@@ -896,7 +904,7 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
 
             # Load data while the snapshot is ongoing
             set_debug_prevent_pause 1
-            assert_match "OK" [R 2 CLUSTER MIGRATE SLOTSRANGE 16383 16383 NODE $node0_id]
+            assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node0_id]
             set jobname [get_job_name 2 16383]
             populate 333 "$16383_slot_tag:2:" 1000 -2
 
@@ -927,7 +935,7 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
             # Load some data before the snapshot
             populate 500 "$16383_slot_tag:1:" 1000 -2
             set_debug_prevent_pause 1
-            assert_match "OK" [R 2 CLUSTER MIGRATE SLOTSRANGE 16383 16383 NODE $node0_id]
+            assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node0_id]
             set jobname [get_job_name 2 16383]
             wait_for_migration_field 2 $jobname state waiting-to-pause
 
@@ -964,7 +972,7 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
 
         # Prepare and wait for ready
         set_debug_prevent_pause 1
-        assert_match "OK" [R 2 CLUSTER MIGRATE SLOTSRANGE 16383 16383 NODE $node0_id]
+        assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node0_id]
         set jobname [get_job_name 2 16383]
         wait_for_migration_field 2 $jobname state waiting-to-pause
 
@@ -1001,7 +1009,7 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
 
         # Prepare and wait for ready
         set_debug_prevent_pause 1
-        assert_match "OK" [R 3 CLUSTER MIGRATE SLOTSRANGE 0 0 NODE $node2_id]
+        assert_match "OK" [R 3 CLUSTER MIGRATESLOTS SLOTSRANGE 0 0 NODE $node2_id]
         set jobname [get_job_name 3 0]
         wait_for_migration_field 3 $jobname state waiting-to-pause
 
@@ -1042,7 +1050,7 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
 
             # Prepare and wait for ready
             set_debug_prevent_pause 1
-            assert_match "OK" [R 0 CLUSTER MIGRATE SLOTSRANGE 0 1 NODE $node2_id]
+            assert_match "OK" [R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 0 1 NODE $node2_id]
             set jobname [get_job_name 0 0]
             wait_for_migration_field 0 $jobname state waiting-to-pause
 
@@ -1078,7 +1086,7 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
 
             # Use debug command to prevent failover
             set_debug_prevent_failover 1
-            assert_match "OK" [R 0 CLUSTER MIGRATE SLOTSRANGE 0 0 NODE $node2_id]
+            assert_match "OK" [R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 0 0 NODE $node2_id]
             set jobname [get_job_name 0 0]
             wait_for_migration_field 0 $jobname state failover-granted
 
@@ -1112,7 +1120,7 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
 
             # Use debug command to prevent failover
             set_debug_prevent_failover 1
-            assert_match "OK" [R 0 CLUSTER MIGRATE SLOTSRANGE 0 0 NODE $node2_id]
+            assert_match "OK" [R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 0 0 NODE $node2_id]
             set jobname [get_job_name 0 0]
             wait_for_migration_field 0 $jobname state failover-granted
 
@@ -1203,7 +1211,7 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
 
             # Already importing
             set_debug_prevent_pause 1
-            assert_match "OK" [R 2 CLUSTER MIGRATE SLOTSRANGE 16383 16383 NODE $node0_id]
+            assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node0_id]
             set jobname [get_job_name 2 16383]
             wait_for_migration_field 0 $jobname state waiting-for-paused
             assert_error "*Slot is already being imported on the target by a different migration*" {R 0 CLUSTER SYNCSLOTS ESTABLISH SOURCE $node2_id NAME $fake_jobname SLOTSRANGE 16383 16383}
@@ -1228,7 +1236,7 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
             } {
 
                 # Do the import
-                assert_match "OK" [R 2 CLUSTER MIGRATE SLOTSRANGE 16383 16383 NODE $node0_id]
+                assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node0_id]
                 set jobname [get_job_name 2 16383]
 
                 # Keys should be on both source and destination
@@ -1267,7 +1275,7 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
                 populate 1000 "$16383_slot_tag:1:" 1000 -2
 
                 # Do the import
-                assert_match "OK" [R 2 CLUSTER MIGRATE SLOTSRANGE 16383 16383 NODE $node0_id]
+                assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node0_id]
                 set jobname [get_job_name 2 16383]
 
                 # Keys should be on both source and destination
@@ -1299,7 +1307,7 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
 
             # Load data while the snapshot is ongoing
             set_debug_prevent_pause 1
-            assert_match "OK" [R 0 CLUSTER MIGRATE SLOTSRANGE 0 0 NODE $node2_id]
+            assert_match "OK" [R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 0 0 NODE $node2_id]
             set jobname [get_job_name 0 0]
             populate 333 "$0_slot_tag:2:" 1000 -0
 
@@ -1336,7 +1344,7 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
 
             # Load data while the snapshot is ongoing
             set_debug_prevent_pause 1
-            assert_match "OK" [R 0 CLUSTER MIGRATE SLOTSRANGE 0 0 NODE $node2_id]
+            assert_match "OK" [R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 0 0 NODE $node2_id]
             set jobname [get_job_name 0 0]
             populate 333 "$0_slot_tag:2:" 1000 -0
 
@@ -1373,7 +1381,7 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
             populate 1000 "$16383_slot_tag:" 1000 -2
 
             # Perform one-shot import
-            assert_match "OK" [R 2 CLUSTER MIGRATE SLOTSRANGE 16383 16383 NODE $node0_id]
+            assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node0_id]
             set jobname [get_job_name 2 16383]
             wait_for_migration 0 16383
 
@@ -1391,7 +1399,7 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
 
             # Cleanup for next test
             assert_match "OK" [R 0 FLUSHDB SYNC]
-            assert_match "OK" [R 0 CLUSTER MIGRATE SLOTSRANGE 16383 16383 NODE $node2_id]
+            assert_match "OK" [R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node2_id]
             wait_for_migration 2 16383
             R 2 CONFIG SET requirepass ""
             R 0 CONFIG SET primaryauth ""
@@ -1404,7 +1412,7 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
             R 2 CONFIG SET primaryauth "mypassword-different"
 
             # Perform one-shot import
-            assert_match "OK" [R 2 CLUSTER MIGRATE SLOTSRANGE 16383 16383 NODE $node0_id]
+            assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node0_id]
             set jobname [get_job_name 2 16383]
 
             # Should be denied
@@ -1421,7 +1429,7 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
         assert_does_not_resync {
             # Start an import
             set_debug_prevent_pause 1
-            assert_match "OK" [R 2 CLUSTER MIGRATE SLOTSRANGE 16383 16383 NODE $node0_id]
+            assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node0_id]
             set jobname [get_job_name 2 16383]
             wait_for_migration_field 2 $jobname state waiting-to-pause
             set import_client_id [get_client_id_by_last_cmd [srv -0 client] "cluster|syncslots"]
@@ -1443,7 +1451,7 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
     test "Export client buffer enforcement" {
         assert_does_not_resync {
             set_debug_prevent_pause 1
-            assert_match "OK" [R 2 CLUSTER MIGRATE SLOTSRANGE 16383 16383 NODE $node0_id]
+            assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node0_id]
             set jobname [get_job_name 2 16383]
             wait_for_migration_field 2 $jobname state waiting-to-pause
             set old_cob [lindex [R 2 config get client-output-buffer-limit] 1]
@@ -1491,7 +1499,7 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
 
             # Load data while the snapshot is ongoing
             set_debug_prevent_pause 1
-            assert_match "OK" [R 2 CLUSTER MIGRATE SLOTSRANGE 16381 16381 16383 16383 NODE $node0_id]
+            assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16381 16381 16383 16383 NODE $node0_id]
             set jobname [get_job_name 2 16381]
             foreach tag $tags {
                 populate 333 "$tag:2:" 1000 -2
@@ -1541,7 +1549,7 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
             # Cleanup for the next test
             assert_match "OK" [R 0 FLUSHDB SYNC]
             assert_match "OK" [R 2 FLUSHDB SYNC]
-            assert_match "OK" [R 0 CLUSTER MIGRATE SLOTSRANGE 16381 16381 16383 16383 NODE $node2_id]
+            assert_match "OK" [R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 16381 16381 16383 16383 NODE $node2_id]
             wait_for_migration 2 16381
         }
     }
@@ -1550,7 +1558,7 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
         assert_does_not_resync {
             set_debug_prevent_pause 1
             setup_eviction_test 2 allkeys-random {
-                assert_match "OK" [R 2 CLUSTER MIGRATE SLOTSRANGE 16383 16383 NODE $node0_id]
+                assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node0_id]
                 set jobname [get_job_name 2 16383]
                 wait_for_migration_field 2 $jobname state waiting-to-pause
 
@@ -1617,7 +1625,7 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
             R 2 CONFIG SET rdb-key-save-delay 100000
             populate 50 "$0_slot_tag:1:" 1000 -0
 
-            assert_match "OK" [R 0 CLUSTER MIGRATE SLOTSRANGE 0 0 NODE $node2_id]
+            assert_match "OK" [R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 0 0 NODE $node2_id]
             set jobname [get_job_name 0 0]
 
             wait_for_migration 2 0
@@ -1636,7 +1644,7 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
 
             # Cleanup for next test
             assert_match "OK" [R 0 FLUSHDB SYNC]
-            assert_match "OK" [R 2 CLUSTER MIGRATE SLOTSRANGE 0 0 NODE $node0_id]
+            assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 0 0 NODE $node0_id]
             wait_for_migration 0 0
             R 2 CONFIG SET repl-timeout 60
             R 2 CONFIG SET rdb-key-save-delay 0
@@ -1650,7 +1658,7 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
         populate 333 "$16379_slot_tag:1:" 1000 -2
 
         # Load data while the snapshot is ongoing
-        assert_match "OK" [R 2 CLUSTER MIGRATE SLOTSRANGE 16379 16383 NODE $node0_id]
+        assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16379 16383 NODE $node0_id]
         set jobname [get_job_name 2 16383]
         populate 333 "$16381_slot_tag:2:" 1000 -2
 
@@ -1702,7 +1710,7 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
 
         # Cleanup for the next test
         assert_match "OK" [R 0 FLUSHDB SYNC]
-        assert_match "OK" [R 0 CLUSTER MIGRATE SLOTSRANGE 16379 16383 NODE $node2_id]
+        assert_match "OK" [R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 16379 16383 NODE $node2_id]
         wait_for_migration 2 16383
     }
 
@@ -1723,7 +1731,7 @@ start_cluster 3 0 {tags {external:skip cluster}} {
         populate 333 "$16383_slot_tag:1:" 1000 -2
 
         # Load data while the snapshot is ongoing
-        assert_match "OK" [R 2 CLUSTER MIGRATE SLOTSRANGE 16383 16383 NODE $node0_id]
+        assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node0_id]
         set jobname [get_job_name 2 16383]
         populate 333 "$16383_slot_tag:2:" 1000 -2
 
@@ -1739,7 +1747,7 @@ start_cluster 3 0 {tags {external:skip cluster}} {
 
         # Cleanup
         assert_match "OK" [R 0 FLUSHALL SYNC]
-        assert_match "OK" [R 0 CLUSTER MIGRATE SLOTSRANGE 16383 16383 NODE $node2_id]
+        assert_match "OK" [R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node2_id]
     }
 
     test "Read syncslots establish response timeout" {
@@ -1749,7 +1757,7 @@ start_cluster 3 0 {tags {external:skip cluster}} {
         set target_pid  [srv -2 pid]
         pause_process $target_pid
 
-        assert_match "OK" [R 0 CLUSTER MIGRATE SLOTSRANGE 0 0 NODE $node2_id]
+        assert_match "OK" [R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 0 0 NODE $node2_id]
         set jobname [get_job_name 0 0]
 
         # Connecting will fail
@@ -1763,7 +1771,7 @@ start_cluster 3 0 {tags {external:skip cluster}} {
     test "Migration cannot connect to target" {
         # Shutdown to prevent connection success
         catch {R 2 shutdown nosave}
-        assert_match "OK" [R 0 CLUSTER MIGRATE SLOTSRANGE 0 0 NODE $node2_id]
+        assert_match "OK" [R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 0 0 NODE $node2_id]
         set jobname [get_job_name 0 0]
 
         # Connecting will fail

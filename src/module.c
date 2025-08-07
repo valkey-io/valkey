@@ -69,7 +69,7 @@
 #include "module.h"
 #include "io_threads.h"
 #include "scripting_engine.h"
-#include "cluster_migrate.h"
+#include "cluster_migrateslots.h"
 #include <dlfcn.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
@@ -3653,12 +3653,15 @@ int VM_Replicate(ValkeyModuleCtx *ctx, const char *cmdname, const char *fmt, ...
 
     int skip_validation = ctx->module &&
                           (ctx->module->options & VALKEYMODULE_OPTIONS_SKIP_COMMAND_VALIDATION);
-    if (server.cluster_enabled && clusterIsAnySlotExporting()) {
-        skip_validation = 0;
-    }
-    if (!skip_validation) {
+    int slot_export_in_progress = server.cluster_enabled && clusterIsAnySlotExporting();
+    if (!skip_validation || slot_export_in_progress) {
         cmd = lookupCommandByCString((char *)cmdname);
-        if (!cmd) return VALKEYMODULE_ERR;
+        if (!cmd) {
+            if (!skip_validation) return VALKEYMODULE_ERR;
+            /* For modules that skip validation, instead of making them fail
+             * only when a slot migration is active, we just fail the migration. */
+            clusterFailAllSlotExportsWithMessage("A module replicated an unknown command");
+        }
     }
 
     /* Create the client and dispatch the command. */
@@ -3667,11 +3670,11 @@ int VM_Replicate(ValkeyModuleCtx *ctx, const char *cmdname, const char *fmt, ...
     va_end(ap);
     if (argv == NULL) return VALKEYMODULE_ERR;
 
-    if (cmd) {
+    if (cmd && slot_export_in_progress) {
         int read_flags;
         slot = clusterSlotByCommand(cmd, argv, argc, &read_flags);
         if (slot == -1 && read_flags & READ_FLAGS_CROSSSLOT) {
-            return VALKEYMODULE_ERR;
+            clusterFailAllSlotExportsWithMessage("A module replicated a cross-slot command");
         }
     }
 

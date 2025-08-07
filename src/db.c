@@ -29,7 +29,7 @@
 
 #include "server.h"
 #include "cluster.h"
-#include "cluster_migrate.h"
+#include "cluster_migrateslots.h"
 #include "latency.h"
 #include "script.h"
 #include "functions.h"

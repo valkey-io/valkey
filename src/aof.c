@@ -2196,14 +2196,14 @@ werr:
     return 0;
 }
 
-bool rewriteSelectDbRio(rio *aof, int db_num) {
+int rewriteSelectDbRio(rio *aof, int db_num) {
     char selectcmd[] = "*2\r\n$6\r\nSELECT\r\n";
-    if (rioWrite(aof, selectcmd, sizeof(selectcmd) - 1) == 0) return false;
-    if (rioWriteBulkLongLong(aof, db_num) == 0) return false;
-    return true;
+    if (rioWrite(aof, selectcmd, sizeof(selectcmd) - 1) == 0) return C_ERR;
+    if (rioWriteBulkLongLong(aof, db_num) == 0) return C_ERR;
+    return C_OK;
 }
 
-bool rewriteObjectRio(rio *aof, robj *o, int db_num) {
+int rewriteObjectRio(rio *aof, robj *o, int db_num) {
     size_t aof_bytes_before_key = aof->processed_bytes;
     sds keystr;
     robj key;
@@ -2218,22 +2218,22 @@ bool rewriteObjectRio(rio *aof, robj *o, int db_num) {
     if (o->type == OBJ_STRING) {
         /* Emit a SET command */
         char cmd[] = "*3\r\n$3\r\nSET\r\n";
-        if (rioWrite(aof, cmd, sizeof(cmd) - 1) == 0) return false;
+        if (rioWrite(aof, cmd, sizeof(cmd) - 1) == 0) return C_ERR;
         /* Key and value */
-        if (rioWriteBulkObject(aof, &key) == 0) return false;
-        if (rioWriteBulkObject(aof, o) == 0) return false;
+        if (rioWriteBulkObject(aof, &key) == 0) return C_ERR;
+        if (rioWriteBulkObject(aof, o) == 0) return C_ERR;
     } else if (o->type == OBJ_LIST) {
-        if (rewriteListObject(aof, &key, o) == 0) return false;
+        if (rewriteListObject(aof, &key, o) == 0) return C_ERR;
     } else if (o->type == OBJ_SET) {
-        if (rewriteSetObject(aof, &key, o) == 0) return false;
+        if (rewriteSetObject(aof, &key, o) == 0) return C_ERR;
     } else if (o->type == OBJ_ZSET) {
-        if (rewriteSortedSetObject(aof, &key, o) == 0) return false;
+        if (rewriteSortedSetObject(aof, &key, o) == 0) return C_ERR;
     } else if (o->type == OBJ_HASH) {
-        if (rewriteHashObject(aof, &key, o) == 0) return false;
+        if (rewriteHashObject(aof, &key, o) == 0) return C_ERR;
     } else if (o->type == OBJ_STREAM) {
-        if (rewriteStreamObject(aof, &key, o) == 0) return false;
+        if (rewriteStreamObject(aof, &key, o) == 0) return C_ERR;
     } else if (o->type == OBJ_MODULE) {
-        if (rewriteModuleObject(aof, &key, o, db_num) == 0) return false;
+        if (rewriteModuleObject(aof, &key, o, db_num) == 0) return C_ERR;
     } else {
         serverPanic("Unknown object type");
     }
@@ -2247,15 +2247,15 @@ bool rewriteObjectRio(rio *aof, robj *o, int db_num) {
     /* Save the expire time */
     if (expiretime != -1) {
         char cmd[] = "*3\r\n$9\r\nPEXPIREAT\r\n";
-        if (rioWrite(aof, cmd, sizeof(cmd) - 1) == 0) return false;
-        if (rioWriteBulkObject(aof, &key) == 0) return false;
-        if (rioWriteBulkLongLong(aof, expiretime) == 0) return false;
+        if (rioWrite(aof, cmd, sizeof(cmd) - 1) == 0) return C_ERR;
+        if (rioWriteBulkObject(aof, &key) == 0) return C_ERR;
+        if (rioWriteBulkLongLong(aof, expiretime) == 0) return C_ERR;
     }
 
     /* Delay before next key if required (for testing) */
     if (server.rdb_key_save_delay) debugDelay(server.rdb_key_save_delay);
 
-    return true;
+    return C_OK;
 }
 
 int rewriteSlotToAppendOnlyFileRio(rio *aof, int db_num, int hashslot, size_t *key_count) {
@@ -2268,7 +2268,7 @@ int rewriteSlotToAppendOnlyFileRio(rio *aof, int db_num, int hashslot, size_t *k
     if (kvstoreHashtableSize(db->keys, hashslot) == 0) return C_OK;
 
     /* SELECT the DB */
-    if (rewriteSelectDbRio(aof, db_num) == 0) return C_ERR;
+    if (rewriteSelectDbRio(aof, db_num) == C_ERR) return C_ERR;
 
     kvstoreHashtableIterator *iter = kvstoreGetHashtableIterator(db->keys, hashslot, HASHTABLE_ITER_SAFE | HASHTABLE_ITER_PREFETCH_VALUES);
     void *next;
@@ -2286,7 +2286,7 @@ int rewriteSlotToAppendOnlyFileRio(rio *aof, int db_num, int hashslot, size_t *k
             }
         }
 
-        if (rewriteObjectRio(aof, o, db_num) == 0) return C_ERR;
+        if (rewriteObjectRio(aof, o, db_num) == C_ERR) return C_ERR;
     }
 
     kvstoreReleaseHashtableIterator(iter);
@@ -2309,14 +2309,14 @@ int rewriteAppendOnlyFileRio(rio *aof) {
         sdsfree(ts);
     }
 
-    if (rewriteFunctions(aof) == 0) goto werr;
+    if (rewriteFunctions(aof) == C_ERR) goto werr;
 
     for (j = 0; j < server.dbnum; j++) {
         if (dbHasNoKeys(j)) continue;
         serverDb *db = server.db[j];
 
         /* SELECT the new DB */
-        if (rewriteSelectDbRio(aof, j) == 0) goto werr;
+        if (rewriteSelectDbRio(aof, j) == C_ERR) goto werr;
 
         kvs_it = kvstoreIteratorInit(db->keys, HASHTABLE_ITER_SAFE | HASHTABLE_ITER_PREFETCH_VALUES);
         /* Iterate this DB writing every entry */
@@ -2335,7 +2335,7 @@ int rewriteAppendOnlyFileRio(rio *aof) {
                 }
             }
 
-            if (rewriteObjectRio(aof, o, j) == 0) goto werr;
+            if (rewriteObjectRio(aof, o, j) == C_ERR) goto werr;
         }
         kvstoreIteratorRelease(kvs_it);
     }

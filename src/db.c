@@ -35,24 +35,11 @@
 #include "io_threads.h"
 #include "module.h"
 #include "vector.h"
-
-#include <signal.h>
-#include <ctype.h>
+#include "expire.h"
 
 /*-----------------------------------------------------------------------------
  * C-level DB API
  *----------------------------------------------------------------------------*/
-
-/* Flags for expireIfNeeded */
-#define EXPIRE_FORCE_DELETE_EXPIRED 1
-#define EXPIRE_AVOID_DELETE_EXPIRED 2
-
-/* Return values for expireIfNeeded */
-typedef enum {
-    KEY_VALID = 0, /* Could be volatile and not yet expired, non-volatile, or even non-existing key. */
-    KEY_EXPIRED,   /* Logically expired but not yet deleted. */
-    KEY_DELETED    /* The key was deleted now. */
-} keyStatus;
 
 static keyStatus expireIfNeededWithDictIndex(serverDb *db, robj *key, robj *val, int flags, int dict_index);
 static keyStatus expireIfNeeded(serverDb *db, robj *key, robj *val, int flags);
@@ -125,8 +112,9 @@ robj *lookupKey(serverDb *db, robj *key, int flags) {
         /* Update the access time for the ageing algorithm.
          * Don't do it if we have a saving child, as this will trigger
          * a copy on write madness. */
-        if (server.current_client && server.current_client->flag.no_touch &&
-            server.executing_client->cmd->proc != touchCommand)
+        if ((flags & LOOKUP_NOTOUCH) == 0 &&
+            server.current_client && server.current_client->flag.no_touch &&
+            server.executing_client && server.executing_client->cmd->proc != touchCommand)
             flags |= LOOKUP_NOTOUCH;
         if (!hasActiveChildProcess() && !(flags & LOOKUP_NOTOUCH)) {
             /* Shared objects can't be stored in the database. */
@@ -195,6 +183,18 @@ robj *lookupKeyWriteOrReply(client *c, robj *key, robj *reply) {
     return o;
 }
 
+/* For hash keys, checks if they contain volatile items and updates tracking accordingly.
+ * Always accesses the tracking kvstore, even if the tracking state doesn't change. */
+void dbUpdateObjectWithVolatileItemsTracking(serverDb *db, robj *o) {
+    if (o->type == OBJ_HASH) {
+        if (hashTypeHasVolatileFields(o)) {
+            dbTrackKeyWithVolatileItems(db, o);
+        } else {
+            dbUntrackKeyWithVolatileItems(db, o);
+        }
+    }
+}
+
 /* Add a key-value entry to the DB.
  *
  * A copy of 'key' is stored in the database. The caller must ensure the
@@ -227,6 +227,9 @@ static void dbAddInternal(serverDb *db, robj *key, robj **valref, int update_if_
     /* Not existing. Convert val to valkey object and insert. */
     robj *val = *valref;
     val = objectSetKeyAndExpire(val, key->ptr, -1);
+    /* Track hash object if it has volatile fields (for active expiry).
+     * For example, this is needed when a hash is moved to a new DB (e.g. MOVE). */
+    dbTrackKeyWithVolatileItems(db, val);
     initObjectLRUOrLFU(val);
     kvstoreHashtableAdd(db->keys, dict_index, val);
     signalKeyAsReady(db, key, val->type);
@@ -294,6 +297,10 @@ int dbAddRDBLoad(serverDb *db, sds key, robj **valref) {
     val = objectSetKeyAndExpire(val, key, -1);
     kvstoreHashtableInsertAtPosition(db->keys, dict_index, val, &pos);
     initObjectLRUOrLFU(val);
+
+    /* Track hash objects containing volatile items, created by rdbLoadObject (which lacks DB context). */
+    dbTrackKeyWithVolatileItems(db, val);
+
     *valref = val;
     return 1;
 }
@@ -493,6 +500,11 @@ int dbGenericDeleteWithDictIndex(serverDb *db, robj *key, int async, int flags, 
             debugServerAssert(0 == kvstoreHashtableDelete(db->expires, dict_index, key->ptr));
         }
 
+        /* If deleting a hash object, un-track it from the volatile items tracking if it contains volatile items.*/
+        if (val->type == OBJ_HASH && hashTypeHasVolatileFields(val)) {
+            dbUntrackKeyWithVolatileItems(db, val);
+        }
+
         if (async) {
             freeObjAsync(key, val, db->id);
         } else {
@@ -509,6 +521,20 @@ int dbGenericDeleteWithDictIndex(serverDb *db, robj *key, int async, int flags, 
 int dbGenericDelete(serverDb *db, robj *key, int async, int flags) {
     int dict_index = getKVStoreIndexForKey(key->ptr);
     return dbGenericDeleteWithDictIndex(db, key, async, flags, dict_index);
+}
+
+/* Add a key with volatile items to the tracking kvstore. */
+void dbTrackKeyWithVolatileItems(serverDb *db, robj *o) {
+    if (o->type == OBJ_HASH && hashTypeHasVolatileFields(o)) {
+        int dict_index = getKVStoreIndexForKey(objectGetKey(o));
+        kvstoreHashtableAdd(db->keys_with_volatile_items, dict_index, o);
+    }
+}
+
+/* Delete a key from the keys with volatile entries tracking kvstore */
+void dbUntrackKeyWithVolatileItems(serverDb *db, robj *o) {
+    int dict_index = getKVStoreIndexForKey(objectGetKey(o));
+    kvstoreHashtableDelete(db->keys_with_volatile_items, dict_index, objectGetKey(o));
 }
 
 /* Delete a key, value, and associated expiration entry if any, from the DB */
@@ -566,6 +592,17 @@ robj *dbUnshareStringValue(serverDb *db, robj *key, robj *o) {
     return o;
 }
 
+/* Reset the expiry tracking state of a database.
+ *
+ * This clears the `expiry` array, which holds per-expiry-type
+ * data such as average TTL (for stats) and scan cursors used by
+ * the active expiration cycle.
+ *
+ * Should be called whenever the database is emptied or reinitialized. */
+void resetDbExpiryState(serverDb *db) {
+    memset(db->expiry, 0, sizeof(db->expiry));
+}
+
 /* Remove all keys from the database(s) structure. The dbarray argument
  * may not be the server main DBs (could be a temporary DB).
  *
@@ -592,10 +629,10 @@ long long emptyDbStructure(serverDb **dbarray, int dbnum, int async, void(callba
         } else {
             kvstoreEmpty(dbarray[j]->keys, callback);
             kvstoreEmpty(dbarray[j]->expires, callback);
+            kvstoreEmpty(dbarray[j]->keys_with_volatile_items, callback);
         }
         /* Because all keys of database are removed, reset average ttl. */
-        dbarray[j]->avg_ttl = 0;
-        dbarray[j]->expires_cursor = 0;
+        resetDbExpiryState(dbarray[j]);
     }
 
     return removed;
@@ -661,6 +698,7 @@ void discardTempDb(serverDb **tempDb) {
         if (tempDb[i]) {
             kvstoreRelease(tempDb[i]->keys);
             kvstoreRelease(tempDb[i]->expires);
+            kvstoreRelease(tempDb[i]->keys_with_volatile_items);
 
             /* These are expected to be empty on temporary databases */
             serverAssert(dictSize(tempDb[i]->blocking_keys) == 0);
@@ -1004,9 +1042,9 @@ void hashtableScanCallback(void *privdata, void *entry) {
         key = node->ele;
         /* zset data is copied after filtering by key */
     } else if (o->type == OBJ_HASH) {
-        key = hashTypeEntryGetField(entry);
+        key = entryGetField(entry);
         if (!data->only_keys) {
-            val = hashTypeEntryGetValue(entry);
+            val = entryGetValue(entry);
         }
     } else {
         serverPanic("Type not handled in hashtable SCAN callback.");
@@ -1638,6 +1676,15 @@ void scanDatabaseForDeletedKeys(serverDb *emptied, serverDb *replaced_with) {
     dictReleaseIterator(di);
 }
 
+/* Copy expiry tracking state from one DB to another.
+ *
+ * This copies the `expiry` array, which contains per-expiry-type
+ * metadata such as the average TTL (for stats) and the active
+ * expiry scan cursor. */
+static void copyDbExpiry(serverDb *target, const serverDb *source) {
+    memcpy(target->expiry, source->expiry, sizeof(target->expiry));
+}
+
 /* Swap two databases at runtime so that all clients will magically see
  * the new database even if already connected. Note that the client
  * structure c->db points to a given DB, so we need to be smarter and
@@ -1667,13 +1714,14 @@ int dbSwapDatabases(int id1, int id2) {
      * remain in the same DB they were. */
     db1->keys = db2->keys;
     db1->expires = db2->expires;
-    db1->avg_ttl = db2->avg_ttl;
-    db1->expires_cursor = db2->expires_cursor;
+    db1->keys_with_volatile_items = db2->keys_with_volatile_items;
+    copyDbExpiry(db1, db2);
+
 
     db2->keys = aux.keys;
     db2->expires = aux.expires;
-    db2->avg_ttl = aux.avg_ttl;
-    db2->expires_cursor = aux.expires_cursor;
+    db2->keys_with_volatile_items = aux.keys_with_volatile_items;
+    copyDbExpiry(db2, &aux);
 
     /* Now we need to handle clients blocked on lists: as an effect
      * of swapping the two DBs, a client that was waiting for list
@@ -1712,13 +1760,13 @@ void swapMainDbWithTempDb(serverDb **tempDb) {
          * remain in the same DB they were. */
         activedb->keys = newdb->keys;
         activedb->expires = newdb->expires;
-        activedb->avg_ttl = newdb->avg_ttl;
-        activedb->expires_cursor = newdb->expires_cursor;
+        activedb->keys_with_volatile_items = newdb->keys_with_volatile_items;
+        copyDbExpiry(activedb, newdb);
 
         newdb->keys = aux.keys;
         newdb->expires = aux.expires;
-        newdb->avg_ttl = aux.avg_ttl;
-        newdb->expires_cursor = aux.expires_cursor;
+        newdb->keys_with_volatile_items = aux.keys_with_volatile_items;
+        copyDbExpiry(newdb, &aux);
 
         /* Now we need to handle clients blocked on lists: as an effect
          * of swapping the two DBs, a client that was waiting for list
@@ -1796,7 +1844,15 @@ robj *setExpire(client *c, serverDb *db, robj *key, long long when) {
     serverAssertWithInfo(NULL, key, valref != NULL);
     val = *valref;
     long long old_when = objectGetExpire(val);
+
     robj *newval = objectSetExpire(val, when);
+    if (newval->type == OBJ_HASH && hashTypeHasVolatileFields(newval)) {
+        /* Replace the pointer in the keys_with_volatile_items table without accessing the old pointer. */
+        int dict_index = getKVStoreIndexForKey(objectGetKey(newval));
+        hashtable *volatile_items_ht = kvstoreGetHashtable(db->keys_with_volatile_items, dict_index);
+        int replaced = hashtableReplaceReallocatedEntry(volatile_items_ht, val, newval);
+        serverAssert(replaced);
+    }
     if (old_when != -1) {
         /* Val already had an expire field, so it was not reallocated. */
         serverAssert(newval == val);
@@ -1900,14 +1956,87 @@ void propagateDeletion(serverDb *db, robj *key, int lazy) {
     server.replication_allowed = prev_replication_allowed;
 }
 
-/* Returns 1 if the expire value is expired, 0 otherwise. */
-static int timestampIsExpired(mstime_t when) {
-    if (when < 0) return 0; /* no expire */
-    mstime_t now = commandTimeSnapshot();
+static const size_t EXPIRE_BULK_LIMIT = 1024; /* Maximum number of fields to active-expire (per replicated HDEL command */
 
-    /* The key expired if the current (virtual or real) time is greater
-     * than the expire time of the key. */
-    return now > when;
+/* Propagate HDEL commands for deleted hash fields to AOF and replicas.
+ *
+ * This function builds and propagates a single HDEL command with multiple fields
+ * for the given hash object `o`. It temporarily enables replication (if needed),
+ * constructs the command using the field names, and sends it via alsoPropagate(). */
+static void propagateFieldsDeletion(serverDb *db, robj *o, size_t n_fields, robj *fields[]) {
+    int prev_replication_allowed = server.replication_allowed;
+    server.replication_allowed = 1;
+
+    robj *argv[EXPIRE_BULK_LIMIT + 2]; /* HDEL + key + fields */
+    int argc = 0;
+    robj *keyobj = createStringObjectFromSds(objectGetKey(o));
+    argv[argc++] = shared.hdel; // HDEL command
+    argv[argc++] = keyobj;      // key name
+    for (size_t i = 0; i < n_fields; i++) {
+        // field to delete
+        argv[argc++] = fields[i];
+    }
+
+    alsoPropagate(db->id, argv, argc, PROPAGATE_AOF | PROPAGATE_REPL);
+    server.replication_allowed = prev_replication_allowed;
+    for (int i = 0; i < argc; i++) {
+        decrRefCount(argv[i]);
+    }
+}
+
+/* Process expired fields for a hash delete them and propagate changes to replicas and AOF.
+ *
+ * This routine:
+ *  - iteratively identifies expired hash fields from the volatile set (batching up to 1024 at a time)
+ *  - deletes the expired fields
+ *  - deletes the entire key if the hash becomes empty
+ *  - propagates HDEL commands for deleted fields if the key remains, or DEL if the key is fully deleted
+ *
+ * Batching avoids large stack allocations while allowing max_entries to be arbitrarily large.
+ * Returns the total number of expired fields removed. */
+size_t dbReclaimExpiredFields(robj *o, serverDb *db, mstime_t now, unsigned long max_entries) {
+    size_t total_expired = 0;
+    bool deleteKey = false;
+
+    while (max_entries > 0) {
+        /* Process in batches to avoid large stack allocations. */
+        unsigned long batch_size = max_entries > EXPIRE_BULK_LIMIT ? EXPIRE_BULK_LIMIT : max_entries;
+        robj *entries[EXPIRE_BULK_LIMIT];
+        size_t expired = hashTypeDeleteExpiredFields(o, now, batch_size, entries);
+        if (expired == 0) break;
+
+        /* Clean up volatile set if no more volatile fields remain */
+        if (!hashTypeHasVolatileFields(o)) {
+            dbUntrackKeyWithVolatileItems(db, o);
+        }
+
+        /* Check if key is now empty after removing expired fields */
+        deleteKey = hashTypeLength(o) == 0;
+
+        enterExecutionUnit(1, 0);
+        robj *keyobj = createStringObjectFromSds(objectGetKey(o));
+        /* Note that even though if might have been more efficient to only propagate del in case the key has no more items left,
+         * we must keep consistency in order to allow the replica to report hdel notifications before del. */
+        propagateFieldsDeletion(db, o, expired, entries);
+        notifyKeyspaceEvent(NOTIFY_EXPIRED, "hexpired", keyobj, db->id);
+        if (deleteKey) {
+            dbDelete(db, keyobj);
+            propagateDeletion(db, keyobj, server.lazyfree_lazy_expire);
+            notifyKeyspaceEvent(NOTIFY_GENERIC, "del", keyobj, db->id);
+        } else {
+            if (!hashTypeHasVolatileFields(o)) dbUntrackKeyWithVolatileItems(db, o);
+        }
+        signalModifiedKey(NULL, db, keyobj);
+        exitExecutionUnit();
+        postExecutionUnitOperations();
+        decrRefCount(keyobj);
+
+        total_expired += expired;
+        max_entries -= expired;
+        if (deleteKey) break; /* Stop if key was deleted */
+    }
+
+    return total_expired;
 }
 
 /* Use this instead of keyIsExpired if you already have the value object. */
@@ -1925,7 +2054,7 @@ static int keyIsExpiredWithDictIndexImpl(serverDb *db, robj *key, int dict_index
     /* Don't expire anything while loading. It will be done later. */
     if (server.loading) return 0;
     mstime_t when = getExpireWithDictIndex(db, key, dict_index);
-    return timestampIsExpired(when);
+    return timestampIsExpired(when) ? 1 : 0;
 }
 
 /* Check if the key is expired. */
@@ -1953,52 +2082,11 @@ static keyStatus expireIfNeededWithDictIndex(serverDb *db, robj *key, robj *val,
     } else {
         if (!keyIsExpiredWithDictIndexImpl(db, key, dict_index)) return KEY_VALID;
     }
-
-    /* If we are running in the context of a replica, instead of
-     * evicting the expired key from the database, we return ASAP:
-     * the replica key expiration is controlled by the primary that will
-     * send us synthesized DEL operations for expired keys. The
-     * exception is when write operations are performed on writable
-     * replicas.
-     *
-     * Still we try to return the right information to the caller,
-     * that is, KEY_VALID if we think the key should still be valid,
-     * KEY_EXPIRED if we think the key is expired but don't want to delete it at this time.
-     *
-     * When replicating commands from the primary, keys are never considered
-     * expired. */
-    if (server.primary_host != NULL) {
-        if (server.current_client && (server.current_client->flag.primary)) return KEY_VALID;
-        if (!(flags & EXPIRE_FORCE_DELETE_EXPIRED)) return KEY_EXPIRED;
-    } else if (server.import_mode) {
-        /* If we are running in the import mode on a primary, instead of
-         * evicting the expired key from the database, we return ASAP:
-         * the key expiration is controlled by the import source that will
-         * send us synthesized DEL operations for expired keys. The
-         * exception is when write operations are performed on this server
-         * because it's a primary.
-         *
-         * Notice: other clients, apart from the import source, should not access
-         * the data imported by import source.
-         *
-         * Still we try to return the right information to the caller,
-         * that is, KEY_VALID if we think the key should still be valid,
-         * KEY_EXPIRED if we think the key is expired but don't want to delete it at this time.
-         *
-         * When receiving commands from the import source, keys are never considered
-         * expired. */
-        if (server.current_client && (server.current_client->flag.import_source)) return KEY_VALID;
-        if (!(flags & EXPIRE_FORCE_DELETE_EXPIRED)) return KEY_EXPIRED;
-    }
-
-    /* In some cases we're explicitly instructed to return an indication of a
-     * missing key without actually deleting it, even on primaries. */
-    if (flags & EXPIRE_AVOID_DELETE_EXPIRED) return KEY_EXPIRED;
-
-    /* If 'expire' action is paused, for whatever reason, then don't expire any key.
-     * Typically, at the end of the pause we will properly expire the key OR we
-     * will have failed over and the new primary will send us the expire. */
-    if (isPausedActionsWithUpdate(PAUSE_ACTION_EXPIRE)) return KEY_EXPIRED;
+    expirationPolicy policy = getExpirationPolicyWithFlags(flags);
+    if (policy == POLICY_IGNORE_EXPIRE) /* Ignore keys expiration. treat all keys as valid. */
+        return KEY_VALID;
+    else if (policy == POLICY_KEEP_EXPIRED) /* Treat expired keys as invalid, but do not delete them. */
+        return KEY_EXPIRED;
 
     /* The key needs to be converted from static to heap before deleted */
     int static_key = key->refcount == OBJ_STATIC_REFCOUNT;

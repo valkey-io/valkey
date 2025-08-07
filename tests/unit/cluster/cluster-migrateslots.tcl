@@ -26,7 +26,7 @@ proc is_slot_migrated {node_idx slot} {
 }
 
 proc get_job_name {node_idx slot} {
-    set migrations [R $node_idx CLUSTER SLOTMIGRATIONS]
+    set migrations [R $node_idx CLUSTER GETSLOTMIGRATIONS]
     foreach migration $migrations {
         set slot_ranges [dict get $migration slot_ranges]
         if {[slot_ranges_contains_slot $slot_ranges $slot]} {
@@ -37,7 +37,7 @@ proc get_job_name {node_idx slot} {
 }
 
 proc get_migration_by_name {node_idx name} {
-    set migrations [R $node_idx CLUSTER SLOTMIGRATIONS]
+    set migrations [R $node_idx CLUSTER GETSLOTMIGRATIONS]
     foreach migration $migrations {
         if {[dict get $migration name] eq $name} {
             return $migration
@@ -211,23 +211,23 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
         set_debug_prevent_pause 0
     }
 
-    test "CLUSTER SLOTMIGRATIONS command config enforced" {
+    test "CLUSTER GETSLOTMIGRATIONS command config enforced" {
         # Clear the migrations and ensure there are none
         assert_match "OK" [R 0 CONFIG SET cluster-slot-migration-log-max-len 0]
         wait_for_condition 100 100 {
-            [R 0 CLUSTER SLOTMIGRATIONS] eq ""
+            [R 0 CLUSTER GETSLOTMIGRATIONS] eq ""
         } else {
-            fail "SLOTMIGRATIONS was not cleared within 10 seconds"
+            fail "GETSLOTMIGRATIONS was not cleared within 10 seconds"
         }
         assert_match "OK" [R 2 CONFIG SET cluster-slot-migration-log-max-len 0]
         wait_for_condition 100 100 {
-            [R 2 CLUSTER SLOTMIGRATIONS] eq ""
+            [R 2 CLUSTER GETSLOTMIGRATIONS] eq ""
         } else {
-            fail "SLOTMIGRATIONS was not cleared within 10 seconds"
+            fail "GETSLOTMIGRATIONS was not cleared within 10 seconds"
         }
     }
 
-    test "CLUSTER SLOTMIGRATIONS command reported fields" {
+    test "CLUSTER GETSLOTMIGRATIONS command reported fields" {
         assert_match "OK" [R 0 CONFIG SET cluster-slot-migration-log-max-len 1]
         assert_match "OK" [R 2 CONFIG SET cluster-slot-migration-log-max-len 1]
         set_debug_prevent_pause 1
@@ -291,7 +291,7 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
         set_debug_prevent_pause 0
     }
 
-    test "CLUSTER SLOTMIGRATIONS command log removed over max len" {
+    test "CLUSTER GETSLOTMIGRATIONS command log removed over max len" {
         set_debug_prevent_pause 1
 
         # Add a new entry and the old should get popped
@@ -309,7 +309,7 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
         wait_for_condition 100 50 {
             [get_migration_by_name 0 $jobname] eq "" && [get_migration_by_name 2 $jobname] eq ""
         } else {
-            fail "Old CLUSTER SLOTMIGRATIONS entry not removed after 5 seconds of max-len reached"
+            fail "Old CLUSTER GETSLOTMIGRATIONS entry not removed after 5 seconds of max-len reached"
     }
 
         # Cleanup

@@ -1458,7 +1458,7 @@ void slotMigrationJobReadEstablishResponse(connection *conn) {
 
 /* -------------------------------------- TARGET & SOURCE -------------------------------------- */
 
-/* Updates the associated status message for the job, which will be seen in CLUSTER SLOTMIGRATIONS. */
+/* Updates the associated status message for the job, which will be seen in CLUSTER GETSLOTMIGRATIONS. */
 void updateSlotMigrationJobStatusMessage(slotMigrationJob *job, char *message) {
     if (job->status_msg) sdsfree(job->status_msg);
     job->status_msg = sdsnew(message);
@@ -1692,9 +1692,9 @@ void clusterHandleSlotMigrationClientClose(slotMigrationJob *job) {
      * Otherwise, we can mark it failed. */
     if (job->state != SLOT_EXPORT_FAILOVER_GRANTED) {
         if (job->type == SLOT_MIGRATION_EXPORT) {
-            finishSlotMigrationJob(job, SLOT_MIGRATION_JOB_FAILED, "Connection lost to target. Check CLUSTER SLOTMIGRATIONS on the target node for more information.");
+            finishSlotMigrationJob(job, SLOT_MIGRATION_JOB_FAILED, "Connection lost to target. Check CLUSTER GETSLOTMIGRATIONS on the target node for more information.");
         } else {
-            finishSlotMigrationJob(job, SLOT_MIGRATION_JOB_FAILED, "Connection lost to source. Check CLUSTER SLOTMIGRATIONS on the source node for more information.");
+            finishSlotMigrationJob(job, SLOT_MIGRATION_JOB_FAILED, "Connection lost to source. Check CLUSTER GETSLOTMIGRATIONS on the source node for more information.");
         }
     }
     clusterDoBeforeSleep(CLUSTER_TODO_HANDLE_SLOT_MIGRATION);
@@ -1759,7 +1759,7 @@ int isImportSlotMigrationJob(slotMigrationJob *job) {
 }
 
 /* Synthesizes a view of ongoing and recently completed imports for an operator. */
-void clusterCommandSlotMigrations(client *c) {
+void clusterCommandGetSlotMigrations(client *c) {
     listNode *ln;
     listIter li;
     addReplyArrayLen(c, listLength(server.cluster->slot_migration_jobs));

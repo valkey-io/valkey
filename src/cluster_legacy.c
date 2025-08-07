@@ -7677,9 +7677,9 @@ int clusterCommandSpecial(client *c) {
     } else if (!strcasecmp(c->argv[1]->ptr, "migrateslots") && c->argc > 3) {
         /* CLUSTER MIGRATESLOTS SLOTSRANGE <start slot> <end slot> [<start slot> <end slot> ...] NODE <node> [SLOTSRANGE ... NODE ...] */
         clusterCommandMigrateSlots(c);
-    } else if (!strcasecmp(c->argv[1]->ptr, "slotmigrations") && c->argc == 2) {
-        /* CLUSTER SLOTMIGRATIONS */
-        clusterCommandSlotMigrations(c);
+    } else if (!strcasecmp(c->argv[1]->ptr, "getslotmigrations") && c->argc == 2) {
+        /* CLUSTER GETSLOTMIGRATIONS */
+        clusterCommandGetSlotMigrations(c);
     } else if (!strcasecmp(c->argv[1]->ptr, "cancelmigrations") && c->argc == 2) {
         /* CLUSTER CANCELMIGRATIONS */
         clusterCommandCancelMigrations(c);
@@ -7732,7 +7732,7 @@ const char **clusterCommandExtendedHelp(void) {
         "    Migrate the specified slot ranges from this node to the specified node.",
         "CANCELMIGRATIONS (ALL | LINK <link name>)",
         "    Cancel the selected migration links.",
-        "SLOTMIGRATIONS",
+        "GETSLOTMIGRATIONS",
         "    Get information about ongoing and recently finished slot imports and exports.",
         NULL};
 

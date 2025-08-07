@@ -59,7 +59,6 @@
 #include <signal.h>
 #include <sys/wait.h>
 #include <errno.h>
-#include <ctype.h>
 #include <stdarg.h>
 #include <arpa/inet.h>
 #include <sys/stat.h>
@@ -71,7 +70,6 @@
 #include <sys/un.h>
 #include <limits.h>
 #include <float.h>
-#include <math.h>
 #include <sys/utsname.h>
 #include <locale.h>
 #include <sys/socket.h>

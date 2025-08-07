@@ -45,7 +45,6 @@
 #include <time.h>
 #include <limits.h>
 #include <unistd.h>
-#include <errno.h>
 #include <stdbool.h>
 #include <inttypes.h>
 #include <pthread.h>

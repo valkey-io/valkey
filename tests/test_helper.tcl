@@ -403,7 +403,7 @@ proc test_server_cron {} {
                     if {[info exist ::active_clients_file($fd)]} {
                         set file $::active_clients_file($fd)
                     }
-                    lappend ::failed_tests "\[TIMEOUT]: $test_name in $file"
+                    lappend ::failed_tests "\[[colorstr red TIMEOUT]\]: $test_name in $file"
                 }
             }
         }
@@ -474,8 +474,7 @@ proc read_from_test_client fd {
     } elseif {$status eq {err}} {
         set err "\[[colorstr red $status]\]: $data"
         puts $err
-        set test_name [lindex [split $data "\n"] 0]
-        lappend ::failed_tests $test_name
+        lappend ::failed_tests $err
         set ::active_clients_task($fd) "(ERR) $data"
         if {$::exit_on_failure} {
             puts "(Fast fail: test will exit now)"

@@ -29,6 +29,7 @@ jobs:
         with:
           path: valkey
           fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
 
       - name: Checkout valkey-perf-benchmark
         uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
@@ -53,29 +54,20 @@ jobs:
       - name: Run benchmarks
         working-directory: valkey-perf-benchmark
         run: |
-          # Base parameters
-          BASE_PARAMS=(
-            "--commits" "${{ github.event.pull_request.head.sha }}"
-            "--baseline" "unstable"
-            "--results-dir" "results"
-            "--valkey-path" "../valkey"
-            # "--server-cpu-range" "92-93" should be added for self hosted
-            # "--client-cpu-range" "94-95" should be added for self hosted
-          )
-
           # Label-specific config file
           if [[ "${{ github.event.label.name }}" == "run-benchmark" ]]; then
-            EXTRA_PARAMS=(
-              "--config" "./configs/benchmark-configs.json"
-            )
+            CONFIG_FILE="./configs/benchmark-configs.json"
           elif [[ "${{ github.event.label.name }}" == "run-cluster-benchmark" ]]; then
-            EXTRA_PARAMS=(
-              "--config" "configs/benchmark-configs-cluster-tls.json"
-            )
+            CONFIG_FILE="configs/benchmark-configs-cluster-tls.json"
           fi
 
-          # Run benchmark with combined parameters
-          python ./benchmark.py "${BASE_PARAMS[@]}" "${EXTRA_PARAMS[@]}"
+          # Run benchmark
+          python ./benchmark.py \
+            --commits "${{ github.event.pull_request.head.sha }}" \
+            --baseline "unstable" \
+            --results-dir "results" \
+            --valkey-path "../valkey" \
+            --config "$CONFIG_FILE"
 
       - name: Compare results
         working-directory: valkey-perf-benchmark
@@ -86,6 +78,8 @@ jobs:
             ../comparison.md
 
       - name: Upload artifacts
+        if: always()
+        continue-on-error: true
         uses: actions/upload-artifact@6f51ac03b9356f520e9adb1b1b7802705f340c2b # v4.5.0
         with:
           name: benchmark-results
@@ -110,10 +104,13 @@ jobs:
 
       - name: Remove ${{ github.event.label.name }} label
         if: always() && (github.event.label.name == 'run-benchmark' || github.event.label.name == 'run-cluster-benchmark')
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh api \
-            --method DELETE \
-            /repos/${{ github.repository }}/issues/${{ github.event.number }}/labels/${{ github.event.label.name }} \
-            || echo "Label not present or already removed"
+        uses: actions/github-script@5c56fde4671bc2d3592fb0f2c5b5bab9ddae03b1 # v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            await github.rest.issues.removeLabel({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              name: '${{ github.event.label.name }}'
+            }).catch(err => console.log('label not present', err.message));

@@ -21,7 +21,7 @@
 #include "trace_cluster.h"
 #include "trace_server.h"
 #include "trace_db.h"
-#include "trace_bgsave.h"
+#include "trace_rdb.h"
 #include "trace_commands.h"
 
 #ifdef USE_LTTNG

@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: BSD-3-Clause
  */
 /* ==========================================================================
- * trace_sys.c - support lttng tracing for system events.
+ * trace_rdb.c - support lttng tracing for rdb events.
  * --------------------------------------------------------------------------
  * Copyright (C) 2025  zhenwei pi <zhenwei.pi@linux.dev>
  * Copyright (C) 2025  zhiqiang li <lizhiqiang.sf@bytedance.com>
@@ -17,4 +17,4 @@
 #define LTTNG_UST_TRACEPOINT_CREATE_PROBES
 #define LTTNG_UST_TRACEPOINT_DEFINE
 
-#include "trace_bgsave.h"
+#include "trace_rdb.h"

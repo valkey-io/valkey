@@ -21,14 +21,14 @@ jobs:
       - name: install old server for compatibility testing
         run: |
           cd tests/tmp
-          wget https://download.valkey.io/releases/valkey-7.2.7-noble-x86_64.tar.gz
-          tar -xvf valkey-7.2.7-noble-x86_64.tar.gz
+          wget https://download.valkey.io/releases/valkey-8.1.3-noble-x86_64.tar.gz
+          tar -xvf valkey-8.1.3-noble-x86_64.tar.gz
       - name: test
         run: |
           sudo apt-get install tcl8.6 tclx
-          ./runtest --verbose --tags -slow --dump-logs --other-server-path tests/tmp/valkey-7.2.7-noble-x86_64/bin/valkey-server
+          ./runtest --verbose --tags -slow --dump-logs --other-server-path tests/tmp/valkey-8.1.3-noble-x86_64/bin/valkey-server
       - name: module api test
-        run: CFLAGS='-Werror' ./runtest-moduleapi --verbose --dump-logs --other-server-path tests/tmp/valkey-7.2.7-noble-x86_64/bin/valkey-server
+        run: CFLAGS='-Werror' ./runtest-moduleapi --verbose --dump-logs --other-server-path tests/tmp/valkey-8.1.3-noble-x86_64/bin/valkey-server
       - name: validate commands.def up to date
         run: |
           touch src/commands/ping.json

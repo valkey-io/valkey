@@ -1,0 +1,84 @@
+{
+    "HPERSIST": {
+        "summary": "Remove the existing expiration on a hash key's field(s).",
+        "complexity": "O(1) for each field assigned with TTL, so O(N) to persist N items when the command is called with multiple fields.",
+        "group": "hash",
+        "since": "9.0.0",
+        "arity": -5,
+        "function": "hpersistCommand",
+        "command_flags": [
+            "WRITE",
+            "FAST"
+        ],
+        "acl_categories": [
+            "HASH"
+        ],
+        "key_specs": [
+            {
+                "flags": [
+                    "RW",
+                    "UPDATE"
+                ],
+                "begin_search": {
+                    "index": {
+                        "pos": 1
+                    }
+                },
+                "find_keys": {
+                    "range": {
+                        "lastkey": 0,
+                        "step": 1,
+                        "limit": 0
+                    }
+                }
+            }
+        ],
+        "reply_schema": {
+            "description": "List of integer codes indicating the result of setting expiry on each specified field, in the same order as the fields are requested.",
+            "type": "array",
+            "minItems": 1,
+            "items": {
+                "oneOf": [
+                    {
+                        "description": "Field does not exist in the provided hash key, or the hash key does not exist.",
+                        "const": -2
+                    },
+                    {
+                        "description": "Field exists in the provided hash key, but has no expiration associated with it.",
+                        "const": -1
+                    },
+                    {
+                        "description": "The expiration time was removed from the hash key field.",
+                        "const": 1
+                    }
+                ]
+            }
+        },
+        "arguments": [
+            {
+                "name": "key",
+                "type": "key",
+                "key_spec_index": 0
+            },
+            {
+                "name": "fields",
+                "token": "FIELDS",
+                "type": "block",
+                "arguments": [
+                    {
+                        "name": "numfields",
+                        "type": "integer",
+                        "key_spec_index": 0,
+                        "multiple": false,
+                        "minimum": 1
+                    },
+                    {
+                        "name": "field",
+                        "type": "string",
+                        "multiple": true
+                    }
+                ]
+            }
+        ]
+    }
+}

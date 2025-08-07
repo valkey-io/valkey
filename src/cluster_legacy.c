@@ -195,6 +195,26 @@ dictType clusterSdsToListType = {
     NULL                /* allow to expand */
 };
 
+static uint64_t dictPtrHash(const void *key) {
+    /* We hash the pointer value itself. */
+    return dictGenHashFunction(&key, sizeof(key));
+}
+
+static int dictPtrCompare(const void *key1, const void *key2) {
+    return key1 == key2;
+}
+
+/* Dictionary type for mapping hash slots to cluster nodes.
+ * Keys are slot numbers encoded directly as pointer values, values are clusterNode pointers. */
+dictType clusterSlotDictType = {
+    dictPtrHash,    /* hash function */
+    NULL,           /* key dup */
+    dictPtrCompare, /* key compare */
+    NULL,           /* key destructor */
+    NULL,           /* val destructor */
+    NULL            /* allow to expand */
+};
+
 typedef struct {
     enum {
         ITER_DICT,
@@ -257,6 +277,43 @@ static void clusterNodeIterReset(ClusterNodeIterator *iter) {
         dictResetIterator(&iter->di);
     } else if (iter->type == ITER_NODE) {
         iter->node = NULL;
+    }
+}
+
+/* Helpers to access the migrating/importing slot dictionaries. */
+clusterNode *getMigratingSlotDest(int slot) {
+    dictEntry *de = dictFind(server.cluster->migrating_slots_to, (void *)(intptr_t)slot);
+    return de ? dictGetVal(de) : NULL;
+}
+
+static void setMigratingSlotDest(int slot, clusterNode *node) {
+    dictEntry *de = dictFind(server.cluster->migrating_slots_to, (void *)(intptr_t)slot);
+    if (node == NULL) {
+        if (de) dictDelete(server.cluster->migrating_slots_to, (void *)(intptr_t)slot);
+        return;
+    }
+    if (de) {
+        dictSetVal(server.cluster->migrating_slots_to, de, node);
+    } else {
+        dictAdd(server.cluster->migrating_slots_to, (void *)(intptr_t)slot, node);
+    }
+}
+
+clusterNode *getImportingSlotSource(int slot) {
+    dictEntry *de = dictFind(server.cluster->importing_slots_from, (void *)(intptr_t)slot);
+    return de ? dictGetVal(de) : NULL;
+}
+
+static void setImportingSlotSource(int slot, clusterNode *node) {
+    dictEntry *de = dictFind(server.cluster->importing_slots_from, (void *)(intptr_t)slot);
+    if (node == NULL) {
+        if (de) dictDelete(server.cluster->importing_slots_from, (void *)(intptr_t)slot);
+        return;
+    }
+    if (de) {
+        dictSetVal(server.cluster->importing_slots_from, de, node);
+    } else {
+        dictAdd(server.cluster->importing_slots_from, (void *)(intptr_t)slot, node);
     }
 }
 
@@ -788,9 +845,9 @@ int clusterLoadConfig(char *filename) {
                     clusterAddNode(cn);
                 }
                 if (direction == '>') {
-                    server.cluster->migrating_slots_to[slot] = cn;
+                    setMigratingSlotDest(slot, cn);
                 } else {
-                    server.cluster->importing_slots_from[slot] = cn;
+                    setImportingSlotSource(slot, cn);
                 }
                 continue;
             } else if ((p = strchr(argv[j], '-')) != NULL) {
@@ -1186,6 +1243,8 @@ void clusterInit(void) {
     server.cluster->nodes = dictCreate(&clusterNodesDictType);
     server.cluster->shards = dictCreate(&clusterSdsToListType);
     server.cluster->nodes_black_list = dictCreate(&clusterNodesBlackListDictType);
+    server.cluster->migrating_slots_to = dictCreate(&clusterSlotDictType);
+    server.cluster->importing_slots_from = dictCreate(&clusterSlotDictType);
     server.cluster->failover_auth_time = 0;
     server.cluster->failover_auth_count = 0;
     server.cluster->failover_auth_rank = 0;
@@ -1945,8 +2004,8 @@ void clusterDelNode(clusterNode *delnode) {
 
     /* 1) Mark slots as unassigned. */
     for (j = 0; j < CLUSTER_SLOTS; j++) {
-        if (server.cluster->importing_slots_from[j] == delnode) server.cluster->importing_slots_from[j] = NULL;
-        if (server.cluster->migrating_slots_to[j] == delnode) server.cluster->migrating_slots_to[j] = NULL;
+        if (getImportingSlotSource(j) == delnode) setImportingSlotSource(j, NULL);
+        if (getMigratingSlotDest(j) == delnode) setMigratingSlotDest(j, NULL);
         if (server.cluster->slots[j] == delnode) clusterDelSlot(j);
     }
 
@@ -2786,36 +2845,34 @@ void clusterUpdateSlotsConfigWith(clusterNode *sender, uint64_t senderConfigEpoc
                  * state for the slot. Otherwise, we are looking at a failover within
                  * the same shard and we should retain the migrating_slots_to state
                  * for the slot in question */
-                if (server.cluster->migrating_slots_to[j] != NULL) {
+                clusterNode *mn = getMigratingSlotDest(j);
+                if (mn != NULL) {
                     if (!are_in_same_shard) {
                         serverLog(LL_NOTICE, "Slot %d is no longer being migrated to node %.40s (%s) in shard %.40s.",
-                                  j, server.cluster->migrating_slots_to[j]->name,
-                                  server.cluster->migrating_slots_to[j]->human_nodename,
-                                  server.cluster->migrating_slots_to[j]->shard_id);
-                        server.cluster->migrating_slots_to[j] = NULL;
+                                  j, mn->name, mn->human_nodename, mn->shard_id);
+                        setMigratingSlotDest(j, NULL);
                     }
                 }
 
                 /* Handle the case where we are importing this slot and the ownership changes */
-                if (server.cluster->importing_slots_from[j] != NULL &&
-                    server.cluster->importing_slots_from[j] != sender) {
+                clusterNode *in = getImportingSlotSource(j);
+                if (in != NULL &&
+                    in != sender) {
                     /* Update importing_slots_from to point to the sender, if it is in the
                      * same shard as the previous slot owner */
-                    if (areInSameShard(sender, server.cluster->importing_slots_from[j])) {
+                    if (areInSameShard(sender, in)) {
                         serverLog(LL_VERBOSE,
                                   "Failover occurred in migration source. Update importing "
                                   "source for slot %d to node %.40s (%s) in shard %.40s.",
                                   j, sender->name, sender->human_nodename, sender->shard_id);
-                        server.cluster->importing_slots_from[j] = sender;
+                        setImportingSlotSource(j, sender);
                     } else {
                         /* If the sender is from a different shard, it must be a result
                          * of deliberate operator actions. We should clear the importing
                          * state to conform to the operator's will. */
                         serverLog(LL_NOTICE, "Slot %d is no longer being imported from node %.40s (%s) in shard %.40s.",
-                                  j, server.cluster->importing_slots_from[j]->name,
-                                  server.cluster->importing_slots_from[j]->human_nodename,
-                                  server.cluster->importing_slots_from[j]->shard_id);
-                        server.cluster->importing_slots_from[j] = NULL;
+                                  j, in->name, in->human_nodename, in->shard_id);
+                        setImportingSlotSource(j, NULL);
                     }
                 }
 
@@ -2840,15 +2897,16 @@ void clusterUpdateSlotsConfigWith(clusterNode *sender, uint64_t senderConfigEpoc
              * any slot to its shard and if there is a primaryship change in
              * the shard. Update the migrating_slots_to state to point to the
              * sender if it has just taken over the primary role. */
-            if (server.cluster->migrating_slots_to[j] != NULL && server.cluster->migrating_slots_to[j] != sender &&
-                (server.cluster->migrating_slots_to[j]->configEpoch < senderConfigEpoch ||
-                 nodeIsReplica(server.cluster->migrating_slots_to[j])) &&
-                areInSameShard(server.cluster->migrating_slots_to[j], sender)) {
+            clusterNode *mn = getMigratingSlotDest(j);
+            if (mn != NULL && mn != sender &&
+                (mn->configEpoch < senderConfigEpoch ||
+                 nodeIsReplica(mn)) &&
+                areInSameShard(mn, sender)) {
                 serverLog(LL_VERBOSE,
                           "Failover occurred in migration target."
                           " Slot %d is now being migrated to node %.40s (%s) in shard %.40s.",
                           j, sender->name, sender->human_nodename, sender->shard_id);
-                server.cluster->migrating_slots_to[j] = sender;
+                setMigratingSlotDest(j, sender);
                 clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_UPDATE_STATE | CLUSTER_TODO_FSYNC_CONFIG);
             }
 
@@ -2868,12 +2926,12 @@ void clusterUpdateSlotsConfigWith(clusterNode *sender, uint64_t senderConfigEpoc
              * 1. Remove the importing state for the specific slot.
              * 2. Finalize the slot's ownership, if I am not already the owner of
              *    the slot. */
-            if (nodeIsPrimary(myself) && server.cluster->importing_slots_from[j] == sender) {
+            if (nodeIsPrimary(myself) && getImportingSlotSource(j) == sender) {
                 serverLog(LL_NOTICE,
                           "Slot %d is no longer being imported from node %.40s (%s) in shard %.40s;"
                           " Clear my importing source for the slot.",
                           j, sender->name, sender->human_nodename, sender->shard_id);
-                server.cluster->importing_slots_from[j] = NULL;
+                setImportingSlotSource(j, NULL);
                 /* Take over the slot ownership if I am not the owner yet*/
                 if (server.cluster->slots[j] != myself) {
                     /* A primary reason why we are here is likely due to my primary crashing during the
@@ -5957,21 +6015,21 @@ void clusterMoveNodeSlots(clusterNode *from_node, clusterNode *to_node, int *slo
             processed++;
         }
 
-        if (server.cluster->importing_slots_from[j] == from_node) {
+        if (getImportingSlotSource(j) == from_node) {
             serverLog(LL_VERBOSE,
                       "Failover occurred in migration source. Update importing "
                       "source for slot %d to node %.40s (%s) in shard %.40s.",
                       j, to_node->name, to_node->human_nodename, to_node->shard_id);
-            server.cluster->importing_slots_from[j] = to_node;
+            setImportingSlotSource(j, to_node);
             importing_processed++;
         }
 
-        if (server.cluster->migrating_slots_to[j] == from_node) {
+        if (getMigratingSlotDest(j) == from_node) {
             serverLog(LL_VERBOSE,
                       "Failover occurred in migration target."
                       " Slot %d is now being migrated to node %.40s (%s) in shard %.40s.",
                       j, to_node->name, to_node->human_nodename, to_node->shard_id);
-            server.cluster->migrating_slots_to[j] = to_node;
+            setMigratingSlotDest(j, to_node);
             migrating_processed++;
         }
     }
@@ -5984,8 +6042,8 @@ void clusterMoveNodeSlots(clusterNode *from_node, clusterNode *to_node, int *slo
 /* Clear the migrating / importing state for all the slots.
  * This is useful at initialization and when turning a primary into replica. */
 void clusterCloseAllSlots(void) {
-    memset(server.cluster->migrating_slots_to, 0, sizeof(server.cluster->migrating_slots_to));
-    memset(server.cluster->importing_slots_from, 0, sizeof(server.cluster->importing_slots_from));
+    dictEmpty(server.cluster->migrating_slots_to, NULL);
+    dictEmpty(server.cluster->importing_slots_from, NULL);
 }
 
 /* -----------------------------------------------------------------------------
@@ -6158,7 +6216,7 @@ int verifyClusterConfigWithData(void) {
         /* Check if we are assigned to this slot or if we are importing it.
          * In both cases check the next slot as the configuration makes
          * sense. */
-        if (server.cluster->slots[j] == myself || server.cluster->importing_slots_from[j] != NULL) continue;
+        if (server.cluster->slots[j] == myself || getImportingSlotSource(j) != NULL) continue;
 
         /* If we are here data and cluster config don't agree, and we have
          * slot 'j' populated even if we are not importing it, nor we are
@@ -6166,14 +6224,15 @@ int verifyClusterConfigWithData(void) {
 
         update_config++;
         /* slot is unassigned. Take responsibility for it. */
+        clusterNode *in = getImportingSlotSource(j);
         if (server.cluster->slots[j] == NULL) {
             serverLog(LL_NOTICE,
                       "I have keys for unassigned slot %d. "
                       "Taking responsibility for it.",
                       j);
             clusterAddSlot(myself, j);
-        } else if (server.cluster->importing_slots_from[j] != server.cluster->slots[j]) {
-            if (server.cluster->importing_slots_from[j] == NULL) {
+        } else if (in != server.cluster->slots[j]) {
+            if (in == NULL) {
                 serverLog(LL_NOTICE,
                           "I have keys for slot %d, but the slot is "
                           "assigned to another node. Deleting keys in the slot.",
@@ -6182,9 +6241,9 @@ int verifyClusterConfigWithData(void) {
                 serverLog(LL_NOTICE,
                           "I am importing keys from node %.40s (%s) in shard %.40s to slot %d, "
                           "but the slot is now owned by node %.40s (%s) in shard %.40s. Deleting keys in the slot",
-                          server.cluster->importing_slots_from[j]->name,
-                          server.cluster->importing_slots_from[j]->human_nodename,
-                          server.cluster->importing_slots_from[j]->shard_id, j, server.cluster->slots[j]->name,
+                          in->name,
+                          in->human_nodename,
+                          in->shard_id, j, server.cluster->slots[j]->name,
                           server.cluster->slots[j]->human_nodename, server.cluster->slots[j]->shard_id);
             }
             delKeysInSlot(j, server.lazyfree_lazy_server_del, true, false);
@@ -6372,13 +6431,15 @@ sds clusterGenNodeDescription(client *c, clusterNode *node, int tls_primary) {
      * instances. */
     if (node->flags & CLUSTER_NODE_MYSELF) {
         for (j = 0; j < CLUSTER_SLOTS; j++) {
-            if (server.cluster->migrating_slots_to[j]) {
+            clusterNode *mn = getMigratingSlotDest(j);
+            clusterNode *in = getImportingSlotSource(j);
+            if (mn) {
                 ci = sdscatfmt(ci, " [%i->-", j);
-                ci = sdscatlen(ci, server.cluster->migrating_slots_to[j]->name, CLUSTER_NAMELEN);
+                ci = sdscatlen(ci, mn->name, CLUSTER_NAMELEN);
                 ci = sdscat(ci, "]");
-            } else if (server.cluster->importing_slots_from[j]) {
+            } else if (in) {
                 ci = sdscatfmt(ci, " [%i-<-", j);
-                ci = sdscatlen(ci, server.cluster->importing_slots_from[j]->name, CLUSTER_NAMELEN);
+                ci = sdscatlen(ci, in->name, CLUSTER_NAMELEN);
                 ci = sdscat(ci, "]");
             }
         }
@@ -6590,7 +6651,7 @@ void clusterUpdateSlots(client *c, unsigned char *slots, int del) {
 
             /* If this slot was set as importing we can clear this
              * state as now we are the real owner of the slot. */
-            if (server.cluster->importing_slots_from[j]) server.cluster->importing_slots_from[j] = NULL;
+            if (getImportingSlotSource(j)) setImportingSlotSource(j, NULL);
 
             retval = del ? clusterDelSlot(j) : clusterAddSlot(myself, j);
             serverAssertWithInfo(c, NULL, retval == C_OK);
@@ -7204,15 +7265,15 @@ void clusterCommandSetSlot(client *c) {
      * Now execute the command on the primary. */
     if (!strcasecmp(c->argv[3]->ptr, "migrating")) {
         serverLog(LL_NOTICE, "Migrating slot %d to node %.40s (%s)", slot, n->name, n->human_nodename);
-        server.cluster->migrating_slots_to[slot] = n;
+        setMigratingSlotDest(slot, n);
     } else if (!strcasecmp(c->argv[3]->ptr, "importing")) {
         serverLog(LL_NOTICE, "Importing slot %d from node %.40s (%s)", slot, n->name, n->human_nodename);
-        server.cluster->importing_slots_from[slot] = n;
+        setImportingSlotSource(slot, n);
     } else if (!strcasecmp(c->argv[3]->ptr, "stable")) {
         /* CLUSTER SETSLOT <SLOT> STABLE */
         serverLog(LL_NOTICE, "Marking slot %d stable", slot);
-        server.cluster->importing_slots_from[slot] = NULL;
-        server.cluster->migrating_slots_to[slot] = NULL;
+        setImportingSlotSource(slot, NULL);
+        setMigratingSlotDest(slot, NULL);
     } else if (!strcasecmp(c->argv[3]->ptr, "node")) {
         /* CLUSTER SETSLOT <SLOT> NODE <NODE ID> */
         serverLog(LL_NOTICE, "Assigning slot %d to node %.40s (%s) in shard %.40s", slot, n->name, n->human_nodename,
@@ -7221,8 +7282,8 @@ void clusterCommandSetSlot(client *c) {
         /* If this slot is in migrating status but we have no keys
          * for it assigning the slot to another node will clear
          * the migrating status. */
-        if (countKeysInSlot(slot) == 0 && server.cluster->migrating_slots_to[slot]) {
-            server.cluster->migrating_slots_to[slot] = NULL;
+        if (countKeysInSlot(slot) == 0 && getMigratingSlotDest(slot)) {
+            setMigratingSlotDest(slot, NULL);
         }
 
         clusterNode *my_primary = clusterNodeGetPrimary(myself);
@@ -7263,8 +7324,8 @@ void clusterCommandSetSlot(client *c) {
 
         /* If this node or this node's primary was importing this slot,
          * assigning the slot to itself also clears the importing status. */
-        if ((n == myself || n == myself->replicaof) && server.cluster->importing_slots_from[slot]) {
-            server.cluster->importing_slots_from[slot] = NULL;
+        if ((n == myself || n == myself->replicaof) && getImportingSlotSource(slot)) {
+            setImportingSlotSource(slot, NULL);
 
             /* Only primary broadcasts the updates */
             if (n == myself) {
@@ -7747,14 +7808,6 @@ clusterNode *clusterNodeGetReplica(clusterNode *node, int replica_idx) {
     return node->replicas[replica_idx];
 }
 
-clusterNode *getMigratingSlotDest(int slot) {
-    return server.cluster->migrating_slots_to[slot];
-}
-
-clusterNode *getImportingSlotSource(int slot) {
-    return server.cluster->importing_slots_from[slot];
-}
-
 int isClusterHealthy(void) {
     return server.cluster->state == CLUSTER_OK;
 }
@@ -7820,20 +7873,18 @@ sds clusterEncodeOpenSlotsAuxField(int rdbflags) {
     sds s = NULL;
 
     for (int i = 0; i < 2; i++) {
-        clusterNode **nodes_ptr;
-        if (i == 0) {
-            nodes_ptr = server.cluster->importing_slots_from;
-        } else {
-            nodes_ptr = server.cluster->migrating_slots_to;
-        }
-
-        for (int j = 0; j < CLUSTER_SLOTS; j++) {
-            if (nodes_ptr[j] == NULL) continue;
+        dict *d = (i == 0) ? server.cluster->importing_slots_from : server.cluster->migrating_slots_to;
+        dictIterator *di = dictGetIterator(d);
+        dictEntry *de;
+        while ((de = dictNext(di)) != NULL) {
+            int slot = (int)(uintptr_t)dictGetKey(de);
+            clusterNode *node = dictGetVal(de);
             if (s == NULL) s = sdsempty();
-            s = sdscatfmt(s, "%i%s", j, (i == 0) ? "<" : ">");
-            s = sdscatlen(s, nodes_ptr[j]->name, CLUSTER_NAMELEN);
+            s = sdscatfmt(s, "%i%s", slot, (i == 0) ? "<" : ">");
+            s = sdscatlen(s, node->name, CLUSTER_NAMELEN);
             s = sdscatlen(s, ",", 1);
         }
+        dictReleaseIterator(di);
     }
 
     return s;
@@ -7881,9 +7932,9 @@ int clusterDecodeOpenSlotsAuxField(int rdbflags, sds s) {
 
         /* Set the slot state */
         if (is_importing) {
-            server.cluster->importing_slots_from[slot] = node;
+            setImportingSlotSource(slot, node);
         } else {
-            server.cluster->migrating_slots_to[slot] = node;
+            setMigratingSlotDest(slot, node);
         }
     }
     return C_OK;

@@ -368,6 +368,12 @@ typedef struct {
 
 /* --- Internal functions --- */
 
+/* --- Access API --- */
+static inline bool validateElementIfNeeded(hashtable *ht, void *elem) {
+    if (ht->type->validateEntry == NULL) return true;
+    return ht->type->validateEntry(ht, elem);
+}
+
 static bucket *findBucketForInsert(hashtable *ht, uint64_t hash, int *pos_in_bucket, int *table_index);
 
 static inline void freeEntry(hashtable *ht, void *entry) {
@@ -690,6 +696,9 @@ static inline int checkCandidateInBucket(hashtable *ht, bucket *b, int pos, cons
     if (compareKeys(ht, key, elem_key) == 0) {
         /* It's a match. */
         assert(pos_in_bucket != NULL);
+        if (!validateElementIfNeeded(ht, entry)) {
+            return 0;
+        }
         *pos_in_bucket = pos;
         if (table_index) *table_index = table;
         return 1;
@@ -992,16 +1001,16 @@ static void prefetchBucketEntries(bucket *b) {
     }
 }
 
-/* Returns the child bucket if chained, otherwise the next bucket in the table. returns NULL if neither exists. */
-static bucket *getNextBucket(bucket *current_bucket, size_t bucket_index, hashtable *ht, int table_index) {
+/* Returns the child bucket if 'current_bucket' is chained. Otherwise, returns the bucket
+ * at 'next_top_level_index' in the table. Returns NULL if neither exists. */
+static bucket *getNextBucket(bucket *current_bucket, size_t next_top_level_index, hashtable *ht, int table_index) {
     bucket *next_bucket = NULL;
     if (current_bucket->chained) {
         next_bucket = getChildBucket(current_bucket);
     } else {
         size_t table_size = numBuckets(ht->bucket_exp[table_index]);
-        size_t next_index = bucket_index + 1;
-        if (next_index < table_size) {
-            next_bucket = &ht->tables[table_index][next_index];
+        if (next_top_level_index < table_size) {
+            next_bucket = &ht->tables[table_index][next_top_level_index];
         }
     }
     return next_bucket;
@@ -1012,7 +1021,7 @@ static bucket *getNextBucket(bucket *current_bucket, size_t bucket_index, hashta
  * - The next of the next bucket
  * It attempts to bring this data closer to the L1 cache to reduce future memory access latency.
  *
- * Cache state before this function is called(due to last call for this function):
+ * Cache state before this function is called (due to last call for this function):
  * 1. The current bucket and its entries are likely already in cache.
  * 2. The next bucket is in cache.
  */
@@ -1021,7 +1030,9 @@ static void prefetchNextBucketEntries(iter *iter, bucket *current_bucket) {
     bucket *next_bucket = getNextBucket(current_bucket, next_index, iter->hashtable, iter->table);
     if (next_bucket) {
         prefetchBucketEntries(next_bucket);
-        bucket *next_next_bucket = getNextBucket(next_bucket, next_index + 1, iter->hashtable, iter->table);
+        /* Calculate the target top-level index for the next-next bucket. */
+        if (!current_bucket->chained) next_index++;
+        bucket *next_next_bucket = getNextBucket(next_bucket, next_index, iter->hashtable, iter->table);
         if (next_next_bucket) {
             valkey_prefetch(next_next_bucket);
         }
@@ -1130,6 +1141,15 @@ void hashtableRelease(hashtable *ht) {
 /* Returns the type of the hashtable. */
 hashtableType *hashtableGetType(hashtable *ht) {
     return ht->type;
+}
+
+/* Set the hashtable type and returns the old type of the hashtable.
+ * NOTE that changing the hashtable type can lead to unexpected results.
+ * For example, changing the hash function can impact the ability to correctly fetch elements. */
+hashtableType *hashtableSetType(hashtable *ht, hashtableType *type) {
+    hashtableType *oldtype = ht->type;
+    ht->type = type;
+    return oldtype;
 }
 
 /* Returns a pointer to the table's metadata (userdata) section. */
@@ -1782,10 +1802,10 @@ size_t hashtableScanDefrag(hashtable *ht, size_t cursor, hashtableScanFunction f
         size_t used_before = ht->used[0];
         bucket *b = &ht->tables[0][idx];
         do {
-            if (b->presence != 0) {
+            if (fn && b->presence != 0) {
                 int pos;
                 for (pos = 0; pos < ENTRIES_PER_BUCKET; pos++) {
-                    if (isPositionFilled(b, pos)) {
+                    if (isPositionFilled(b, pos) && validateElementIfNeeded(ht, b->entries[pos])) {
                         void *emit = emit_ref ? &b->entries[pos] : b->entries[pos];
                         fn(privdata, emit);
                     }
@@ -1825,9 +1845,9 @@ size_t hashtableScanDefrag(hashtable *ht, size_t cursor, hashtableScanFunction f
             size_t used_before = ht->used[table_small];
             bucket *b = &ht->tables[table_small][idx];
             do {
-                if (b->presence) {
+                if (fn && b->presence) {
                     for (int pos = 0; pos < ENTRIES_PER_BUCKET; pos++) {
-                        if (isPositionFilled(b, pos)) {
+                        if (isPositionFilled(b, pos) && validateElementIfNeeded(ht, b->entries[pos])) {
                             void *emit = emit_ref ? &b->entries[pos] : b->entries[pos];
                             fn(privdata, emit);
                         }
@@ -1855,9 +1875,9 @@ size_t hashtableScanDefrag(hashtable *ht, size_t cursor, hashtableScanFunction f
                 size_t used_before = ht->used[table_large];
                 bucket *b = &ht->tables[table_large][idx];
                 do {
-                    if (b->presence) {
+                    if (fn && b->presence) {
                         for (int pos = 0; pos < ENTRIES_PER_BUCKET; pos++) {
-                            if (isPositionFilled(b, pos)) {
+                            if (isPositionFilled(b, pos) && validateElementIfNeeded(ht, b->entries[pos])) {
                                 void *emit = emit_ref ? &b->entries[pos] : b->entries[pos];
                                 fn(privdata, emit);
                             }
@@ -2045,6 +2065,9 @@ int hashtableNext(hashtableIterator *iterator, void **elemptr) {
         }
         if (!isPositionFilled(b, iter->pos_in_bucket)) {
             /* No entry here. */
+            continue;
+        }
+        if (!(iter->flags & HASHTABLE_ITER_SKIP_VALIDATION) && !validateElementIfNeeded(iter->hashtable, b->entries[iter->pos_in_bucket])) {
             continue;
         }
         /* Return the entry at this position. */

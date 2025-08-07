@@ -60,7 +60,6 @@
 #include <signal.h>
 #include <sys/wait.h>
 #include <errno.h>
-#include <ctype.h>
 #include <stdarg.h>
 #include <arpa/inet.h>
 #include <sys/stat.h>
@@ -72,7 +71,6 @@
 #include <sys/un.h>
 #include <limits.h>
 #include <float.h>
-#include <math.h>
 #include <sys/utsname.h>
 #include <locale.h>
 #include <sys/socket.h>
@@ -315,22 +313,6 @@ void serverLogFromHandler(int level, const char *fmt, ...) {
     va_end(ap);
 
     serverLogRawFromHandler(level, msg);
-}
-
-/* Return the UNIX time in microseconds */
-long long ustime(void) {
-    struct timeval tv;
-    long long ust;
-
-    gettimeofday(&tv, NULL);
-    ust = ((long long)tv.tv_sec) * 1000000;
-    ust += tv.tv_usec;
-    return ust;
-}
-
-/* Return the UNIX time in milliseconds */
-mstime_t mstime(void) {
-    return ustime() / 1000;
 }
 
 /* Return the command time snapshot in milliseconds.
@@ -665,20 +647,34 @@ hashtableType subcommandSetType = {.entryGetKey = hashtableSubcommandGetKey,
 
 /* Hash type hash table (note that small hashes are represented with listpacks) */
 const void *hashHashtableTypeGetKey(const void *entry) {
-    const hashTypeEntry *hash_entry = entry;
-    return (const void *)hashTypeEntryGetField(hash_entry);
+    return (const void *)entryGetField(entry);
 }
 
 void hashHashtableTypeDestructor(void *entry) {
-    hashTypeEntry *hash_entry = entry;
-    freeHashTypeEntry(hash_entry);
+    entryFree(entry);
 }
+
+size_t hashHashtableTypeMetadataSize(void) {
+    return sizeof(void *);
+}
+
+extern bool hashHashtableTypeValidate(hashtable *ht, void *entry);
 
 hashtableType hashHashtableType = {
     .hashFunction = dictSdsHash,
     .entryGetKey = hashHashtableTypeGetKey,
     .keyCompare = hashtableSdsKeyCompare,
     .entryDestructor = hashHashtableTypeDestructor,
+    .getMetadataSize = hashHashtableTypeMetadataSize,
+};
+
+hashtableType hashWithVolatileItemsHashtableType = {
+    .hashFunction = dictSdsHash,
+    .entryGetKey = hashHashtableTypeGetKey,
+    .keyCompare = hashtableSdsKeyCompare,
+    .entryDestructor = hashHashtableTypeDestructor,
+    .getMetadataSize = hashHashtableTypeMetadataSize,
+    .validateEntry = hashHashtableTypeValidate,
 };
 
 /* Hashtable type without destructor */
@@ -2136,6 +2132,9 @@ void createSharedObjects(void) {
     shared.multi = createSharedString("MULTI");
     shared.exec = createSharedString("EXEC");
     shared.hset = createSharedString("HSET");
+    shared.hdel = createSharedString("HDEL");
+    shared.hpexpireat = createSharedString("HPEXPIREAT");
+    shared.hpersist = createSharedString("HPERSIST");
     shared.srem = createSharedString("SREM");
     shared.xgroup = createSharedString("XGROUP");
     shared.xclaim = createSharedString("XCLAIM");
@@ -2168,6 +2167,7 @@ void createSharedObjects(void) {
     shared.special_asterisk = createSharedString("*");
     shared.special_equals = createSharedString("=");
     shared.redacted = createSharedString("(redacted)");
+    shared.fields = createSharedString("FIELDS");
 
     for (j = 0; j < OBJ_SHARED_INTEGERS; j++) {
         shared.integers[j] = makeObjectShared(createObject(OBJ_STRING, (void *)(long)j));
@@ -2695,7 +2695,9 @@ void resetServerStats(void) {
     server.stat_numcommands = 0;
     server.stat_numconnections = 0;
     server.stat_expiredkeys = 0;
-    server.stat_expired_stale_perc = 0;
+    server.stat_expiredfields = 0;
+    server.stat_expired_keys_stale_perc = 0;
+    server.stat_expired_keys_with_vola_stale_perc = 0;
     server.stat_expired_time_cap_reached_count = 0;
     server.stat_expire_cycle_time_used = 0;
     server.stat_evictedkeys = 0;
@@ -2788,16 +2790,16 @@ serverDb *createDatabase(int id) {
     serverDb *db = zmalloc(sizeof(serverDb));
     db->keys = kvstoreCreate(&kvstoreKeysHashtableType, slot_count_bits, flags);
     db->expires = kvstoreCreate(&kvstoreExpiresHashtableType, slot_count_bits, flags);
+    db->keys_with_volatile_items = kvstoreCreate(&kvstoreExpiresHashtableType, slot_count_bits, flags);
     if (server.cluster_enabled && server.cluster && clusterIsAnySlotImporting()) {
         clusterMarkImportingSlotsInDb(db);
     }
-    db->expires_cursor = 0;
     db->blocking_keys = dictCreate(&keylistDictType);
     db->blocking_keys_unblock_on_nokey = dictCreate(&objectKeyPointerValueDictType);
     db->ready_keys = dictCreate(&objectKeyPointerValueDictType);
     db->watched_keys = dictCreate(&keylistDictType);
     db->id = id;
-    db->avg_ttl = 0;
+    resetDbExpiryState(db);
     return db;
 }
 
@@ -6104,7 +6106,9 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                 "sync_partial_ok:%lld\r\n", server.stat_sync_partial_ok,
                 "sync_partial_err:%lld\r\n", server.stat_sync_partial_err,
                 "expired_keys:%lld\r\n", server.stat_expiredkeys,
-                "expired_stale_perc:%.2f\r\n", server.stat_expired_stale_perc * 100,
+                "expired_fields:%lld\r\n", server.stat_expiredfields,
+                "expired_stale_perc:%.2f\r\n", server.stat_expired_keys_stale_perc * 100,
+                "expired_keys_with_volatile_items_stale_perc:%.2f\r\n", server.stat_expired_keys_with_vola_stale_perc * 100,
                 "expired_time_cap_reached_count:%lld\r\n", server.stat_expired_time_cap_reached_count,
                 "expire_cycle_cpu_milliseconds:%lld\r\n", server.stat_expire_cycle_time_used / 1000,
                 "evicted_keys:%lld\r\n", server.stat_evictedkeys,
@@ -6361,13 +6365,15 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
         for (j = 0; j < server.dbnum; j++) {
             serverDb *db = server.db[j];
             if (db == NULL) continue;
-            long long keys, vkeys;
+            long long keys, vkeys, keysvitems;
 
             keys = kvstoreSize(db->keys);
             vkeys = kvstoreSize(db->expires);
+            keysvitems = kvstoreSize(db->keys_with_volatile_items);
+
             if (keys || vkeys) {
-                info = sdscatprintf(info, "db%d:keys=%lld,expires=%lld,avg_ttl=%lld\r\n", j, keys, vkeys,
-                                    db->avg_ttl);
+                info = sdscatprintf(info, "db%d:keys=%lld,expires=%lld,avg_ttl=%lld,keys_with_volatile_items=%lld\r\n", j, keys, vkeys,
+                                    db->expiry[KEYS].avg_ttl, keysvitems);
             }
         }
     }
@@ -6731,7 +6737,11 @@ int serverFork(int purpose) {
         server.stat_fork_rate =
             (double)zmalloc_used_memory() * 1000000 / server.stat_fork_time / (1024 * 1024 * 1024); /* GB per second. */
         latencyAddSampleIfNeeded("fork", server.stat_fork_time);
-        latencyTraceIfNeeded(bgsave, fork, server.stat_fork_time);
+        if (purpose == CHILD_TYPE_RDB) {
+            latencyTraceIfNeeded(rdb, fork, server.stat_fork_time);
+        } else if (purpose == CHILD_TYPE_AOF) {
+            latencyTraceIfNeeded(aof, fork, server.stat_fork_time);
+        }
 
         /* The child_pid and child_type are only for mutually exclusive children.
          * other child types should handle and store their pid's in dedicated variables.
@@ -7367,4 +7377,131 @@ __attribute__((weak)) int main(int argc, char **argv) {
     aeDeleteEventLoop(server.el);
     return 0;
 }
+
+/*
+ * The parseExtendedCommandArgumentsOrReply() function performs the common validation for extended
+ * command arguments used in STRING and HASH commands.
+ *
+ * Get specific command extended options - PERSIST/DEL
+ * Set specific command extended options - XX/NX/GET/IFEQ
+ * HSET specific command extended options - FXX/FNX
+ * Common command extended options - EX/EXAT/PX/PXAT/KEEPTTL
+ *
+ * Function takes pointers to client, flags, unit, pointer to pointer of expire obj if needed
+ * to be determined and command_type which can be COMMAND_GET or COMMAND_SET.
+ *
+ * If there are any syntax violations C_ERR is returned else C_OK is returned.
+ *
+ * Input flags are updated upon parsing the arguments. Unit and expire are updated if there are any
+ * EX/EXAT/PX/PXAT arguments. Unit is updated to millisecond if PX/PXAT is set.
+ *
+ * max_args provides a way to limit the scan to a specific range of arguments.
+ */
+int parseExtendedCommandArgumentsOrReply(client *c, int *flags, int *unit, robj **expire, robj **compare_val, int command_type, int max_args) {
+    int j = command_type == COMMAND_SET ? 3 : 2;
+    for (; j < max_args; j++) {
+        char *opt = c->argv[j]->ptr;
+        robj *next = (j == max_args - 1) ? NULL : c->argv[j + 1];
+
+        /* clang-format off */
+        if ((opt[0] == 'n' || opt[0] == 'N') &&
+            (opt[1] == 'x' || opt[1] == 'X') && opt[2] == '\0' &&
+            !(*flags & ARGS_SET_XX || *flags & ARGS_SET_IFEQ) && (command_type == COMMAND_SET))
+        {
+            *flags |= ARGS_SET_NX;
+        } else if ((opt[0] == 'x' || opt[0] == 'X') &&
+                   (opt[1] == 'x' || opt[1] == 'X') && opt[2] == '\0' &&
+                   !(*flags & ARGS_SET_NX || *flags & ARGS_SET_IFEQ) && (command_type == COMMAND_SET))
+        {
+            *flags |= ARGS_SET_XX;
+        } else if ((opt[0] == 'f' || opt[0] == 'F') &&
+                   (opt[1] == 'n' || opt[1] == 'N') &&
+                   (opt[2] == 'x' || opt[2] == 'X') && opt[3] == '\0' &&
+                   !(*flags & ARGS_SET_FXX || *flags & ARGS_SET_IFEQ) && (command_type == COMMAND_HSET))
+        {
+            *flags |= ARGS_SET_FNX;
+        } else if ((opt[0] == 'f' || opt[0] == 'F') &&
+                   (opt[1] == 'x' || opt[1] == 'X') &&
+                   (opt[2] == 'x' || opt[2] == 'X') && opt[3] == '\0' &&
+                   !(*flags & ARGS_SET_FNX || *flags & ARGS_SET_IFEQ) && (command_type == COMMAND_HSET))
+        {
+            *flags |= ARGS_SET_FXX;
+        } else if ((opt[0] == 'i' || opt[0] == 'I') &&
+                   (opt[1] == 'f' || opt[1] == 'F') &&
+                   (opt[2] == 'e' || opt[2] == 'E') &&
+                   (opt[3] == 'q' || opt[3] == 'Q') && opt[4] == '\0' &&
+                   next && 
+                   !(*flags & ARGS_SET_NX || *flags & ARGS_SET_XX || *flags & ARGS_SET_IFEQ) && (command_type == COMMAND_SET))
+        {
+            *flags |= ARGS_SET_IFEQ;
+            *compare_val = next;
+            j++;
+        } else if ((opt[0] == 'g' || opt[0] == 'G') &&
+                   (opt[1] == 'e' || opt[1] == 'E') &&
+                   (opt[2] == 't' || opt[2] == 'T') && opt[3] == '\0' &&
+                   (command_type == COMMAND_SET))
+        {
+            *flags |= ARGS_SET_GET;
+        } else if (!strcasecmp(opt, "KEEPTTL") && !(*flags & ARGS_PERSIST) &&
+                   !(*flags & ARGS_EX) && !(*flags & ARGS_EXAT) &&
+                   !(*flags & ARGS_PX) && !(*flags & ARGS_PXAT) && (command_type == COMMAND_SET || command_type == COMMAND_HSET))
+        {
+            *flags |= ARGS_KEEPTTL;
+        } else if (!strcasecmp(opt,"PERSIST") && (command_type == COMMAND_GET || command_type == COMMAND_HGET) &&
+                   !(*flags & ARGS_EX) && !(*flags & ARGS_EXAT) &&
+                   !(*flags & ARGS_PX) && !(*flags & ARGS_PXAT) &&
+                   !(*flags & ARGS_KEEPTTL))
+        {
+            *flags |= ARGS_PERSIST;
+        } else if ((opt[0] == 'e' || opt[0] == 'E') &&
+                   (opt[1] == 'x' || opt[1] == 'X') && opt[2] == '\0' &&
+                   !(*flags & ARGS_KEEPTTL) && !(*flags & ARGS_PERSIST) &&
+                   !(*flags & ARGS_EXAT) && !(*flags & ARGS_PX) &&
+                   !(*flags & ARGS_PXAT) && next)
+        {
+            *flags |= ARGS_EX;
+            *expire = next;
+            j++;
+        } else if ((opt[0] == 'p' || opt[0] == 'P') &&
+                   (opt[1] == 'x' || opt[1] == 'X') && opt[2] == '\0' &&
+                   !(*flags & ARGS_KEEPTTL) && !(*flags & ARGS_PERSIST) &&
+                   !(*flags & ARGS_EX) && !(*flags & ARGS_EXAT) &&
+                   !(*flags & ARGS_PXAT) && next)
+        {
+            *flags |= ARGS_PX;
+            *unit = UNIT_MILLISECONDS;
+            *expire = next;
+            j++;
+        } else if ((opt[0] == 'e' || opt[0] == 'E') &&
+                   (opt[1] == 'x' || opt[1] == 'X') &&
+                   (opt[2] == 'a' || opt[2] == 'A') &&
+                   (opt[3] == 't' || opt[3] == 'T') && opt[4] == '\0' &&
+                   !(*flags & ARGS_KEEPTTL) && !(*flags & ARGS_PERSIST) &&
+                   !(*flags & ARGS_EX) && !(*flags & ARGS_PX) &&
+                   !(*flags & ARGS_PXAT) && next)
+        {
+            *flags |= ARGS_EXAT;
+            *expire = next;
+            j++;
+        } else if ((opt[0] == 'p' || opt[0] == 'P') &&
+                   (opt[1] == 'x' || opt[1] == 'X') &&
+                   (opt[2] == 'a' || opt[2] == 'A') &&
+                   (opt[3] == 't' || opt[3] == 'T') && opt[4] == '\0' &&
+                   !(*flags & ARGS_KEEPTTL) && !(*flags & ARGS_PERSIST) &&
+                   !(*flags & ARGS_EX) && !(*flags & ARGS_EXAT) &&
+                   !(*flags & ARGS_PX) && next)
+        {
+            *flags |= ARGS_PXAT;
+            *unit = UNIT_MILLISECONDS;
+            *expire = next;
+            j++;
+        } else {
+            addReplyErrorObject(c,shared.syntaxerr);
+            return C_ERR;
+        }
+        /* clang-format on */
+    }
+    return C_OK;
+}
+
 /* The End */

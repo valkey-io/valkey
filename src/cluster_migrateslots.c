@@ -197,6 +197,7 @@ void setSlotImportingStateInDb(serverDb *db, list *slot_ranges, int is_importing
         for (int slot = range->start_slot; slot <= range->end_slot; slot++) {
             kvstoreSetIsImporting(db->keys, slot, is_importing);
             kvstoreSetIsImporting(db->expires, slot, is_importing);
+            kvstoreSetIsImporting(db->keys_with_volatile_items, slot, is_importing);
         }
     }
 }

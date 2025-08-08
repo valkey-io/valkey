@@ -273,10 +273,10 @@ int addCommandToBatchAndProcessIfFull(client *c) {
 
     /* Commands in the queue. */
     for (int j = c->cmd_queue.off; j < c->cmd_queue.len && batch->key_count < batch->max_prefetch_size; j++) {
-        commandParserState *st = &c->cmd_queue.cmds[j];
-        if (!st->cmd) continue; /* Error or incomplete command. */
-        st->read_flags |= READ_FLAGS_PREFETCHED;
-        addCommandToBatch(st->cmd, st->argv, st->argc, c->db, st->slot);
+        parsedCommand *p = &c->cmd_queue.cmds[j];
+        if (!p->cmd) continue; /* Error or incomplete command. */
+        p->read_flags |= READ_FLAGS_PREFETCHED;
+        addCommandToBatch(p->cmd, p->argv, p->argc, c->db, p->slot);
     }
 
     /* If the batch is full, process it.

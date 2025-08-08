@@ -1230,7 +1230,7 @@ typedef struct ClientModuleData {
 } ClientModuleData;
 
 /* Parser state and parse result of a command from a client's input buffer. */
-typedef struct commandParserState {
+typedef struct parsedCommand {
     int read_flags; /* complete, error or 0 (parsing not complete) */
     int argc;
     robj **argv;
@@ -1239,11 +1239,11 @@ typedef struct commandParserState {
     size_t argv_len_sum;
     unsigned long long input_bytes;
     struct serverCommand *cmd;
-} commandParserState;
+} parsedCommand;
 
 /* Queue of parsed commands. */
 typedef struct {
-    commandParserState *cmds;
+    parsedCommand *cmds;
     short len; /* Number of elements in the queue. */
     short off; /* Offset to the next element to execute. */
     short cap; /* Allocation size (capacity) of the ps array. */

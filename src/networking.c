@@ -3372,14 +3372,14 @@ void processMultibulkBuffer(client *c) {
             } else {
                 break; /* Growing the capacity more would overflow. */
             }
-            queue->cmds = zrealloc(queue->cmds, queue->cap * sizeof(commandParserState));
+            queue->cmds = zrealloc(queue->cmds, queue->cap * sizeof(parsedCommand));
         }
-        commandParserState *st = &queue->cmds[queue->len++];
-        memset(st, 0, sizeof(*st));
-        flag = parseMultibulk(c, &st->argc, &st->argv, &st->argv_len,
-                              &st->argv_len_sum, &st->input_bytes);
-        st->read_flags = flag;
-        st->slot = -1;
+        parsedCommand *p = &queue->cmds[queue->len++];
+        memset(p, 0, sizeof(*p));
+        flag = parseMultibulk(c, &p->argc, &p->argv, &p->argv_len,
+                              &p->argv_len_sum, &p->input_bytes);
+        p->read_flags = flag;
+        p->slot = -1;
     }
 }
 
@@ -3753,16 +3753,17 @@ int canParseCommand(client *c) {
 static bool consumeCommandQueue(client *c) {
     cmdQueue *queue = &c->cmd_queue;
     if (queue->off >= queue->len) return false;
-    commandParserState *st = &queue->cmds[queue->off++];
-    c->read_flags |= st->read_flags;
-    c->argc = st->argc;
-    c->argv = st->argv;
-    c->argv_len = st->argv_len;
-    c->argv_len_sum = st->argv_len_sum;
-    c->net_input_bytes_curr_cmd = st->input_bytes;
-    c->parsed_cmd = st->cmd;
-    c->slot = st->slot;
+    parsedCommand *p = &queue->cmds[queue->off++];
+    c->read_flags |= p->read_flags;
+    c->argc = p->argc;
+    c->argv = p->argv;
+    c->argv_len = p->argv_len;
+    c->argv_len_sum = p->argv_len_sum;
+    c->net_input_bytes_curr_cmd = p->input_bytes;
+    c->parsed_cmd = p->cmd;
+    c->slot = p->slot;
     if (queue->off == queue->len) {
+        /* FIXME: Don't free in main thread when parsing in IO threads. */
         zfree(queue->cmds);
         queue->cmds = NULL;
         queue->cap = queue->off = queue->len = 0;
@@ -3773,11 +3774,11 @@ static bool consumeCommandQueue(client *c) {
 static void discardCommandQueue(client *c) {
     cmdQueue *queue = &c->cmd_queue;
     while (queue->off < queue->len) {
-        commandParserState *st = &queue->cmds[queue->off++];
-        for (int j = 0; j < st->argc; j++) {
-            decrRefCount(st->argv[j]);
+        parsedCommand *p = &queue->cmds[queue->off++];
+        for (int j = 0; j < p->argc; j++) {
+            decrRefCount(p->argv[j]);
         }
-        zfree(st->argv);
+        zfree(p->argv);
     }
     zfree(queue->cmds);
     queue->cmds = NULL;
@@ -3844,17 +3845,17 @@ static void prefetchCommandQueueKeys(client *c) {
 
     cmdQueue *queue = &c->cmd_queue;
     for (int i = queue->off; i < queue->len; i++) {
-        commandParserState *st = &queue->cmds[i];
-        if (!(st->read_flags & READ_FLAGS_PARSING_COMPLETED) || c->argc == 0) continue;
+        parsedCommand *p = &queue->cmds[i];
+        if (!(p->read_flags & READ_FLAGS_PARSING_COMPLETED) || c->argc == 0) continue;
         if (num_keys >= soft_max_keys) break;
-        st->read_flags |= READ_FLAGS_PREFETCHED;
-        if (!st->cmd) {
-            struct serverCommand *cmd = lookupCommand(st->argv, st->argc);
+        p->read_flags |= READ_FLAGS_PREFETCHED;
+        if (!p->cmd) {
+            struct serverCommand *cmd = lookupCommand(p->argv, p->argc);
             /* Wrong arity. Reset command so it will be handled later. */
-            if (!cmd || !commandCheckArity(cmd, st->argc, NULL)) continue;
-            st->cmd = cmd;
+            if (!cmd || !commandCheckArity(cmd, p->argc, NULL)) continue;
+            p->cmd = cmd;
         }
-        num_keys = addKeysToIncrFindBatch(c, st->cmd, st->argv, st->argc,
+        num_keys = addKeysToIncrFindBatch(c, p->cmd, p->argv, p->argc,
                                           key_incr_states, num_keys, max_keys);
     }
     if (num_keys <= 1) return; /* No point to batch-lookup a single key */
@@ -6293,19 +6294,19 @@ void ioThreadReadQueryFromClient(void *data) {
 
     /* Lookup commands in command queue. */
     for (int i = c->cmd_queue.off; i < c->cmd_queue.len; i++) {
-        commandParserState *st = &c->cmd_queue.cmds[i];
-        if (!(st->read_flags & READ_FLAGS_PARSING_COMPLETED) || c->argc == 0) continue;
-        struct serverCommand *cmd = lookupCommand(st->argv, st->argc);
+        parsedCommand *p = &c->cmd_queue.cmds[i];
+        if (!(p->read_flags & READ_FLAGS_PARSING_COMPLETED) || c->argc == 0) continue;
+        struct serverCommand *cmd = lookupCommand(p->argv, p->argc);
         if (!cmd || !commandCheckArity(c->parsed_cmd, c->argc, NULL)) continue;
-        st->cmd = cmd;
+        p->cmd = cmd;
         if (server.cluster_enabled) {
             /* Offload slot calculation to I/O thread */
             getKeysResult result;
             initGetKeysResult(&result);
-            int numkeys = getKeysFromCommand(st->cmd, st->argv, st->argc, &result);
+            int numkeys = getKeysFromCommand(p->cmd, p->argv, p->argc, &result);
             if (numkeys) {
-                robj *first_key = st->argv[result.keys[0].pos];
-                st->slot = (int)keyHashSlot(first_key->ptr, sdslen(first_key->ptr));
+                robj *first_key = p->argv[result.keys[0].pos];
+                p->slot = (int)keyHashSlot(first_key->ptr, sdslen(first_key->ptr));
             }
             getKeysFreeResult(&result);
         }

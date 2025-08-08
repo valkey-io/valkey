@@ -7931,7 +7931,7 @@ static int clusterManagerCommandBackup(int argc, char **argv) {
     config.cluster_manager_command.backup_dir = argv[1];
     struct stat sb;
     if (stat(config.cluster_manager_command.backup_dir, &sb) != 0 || !S_ISDIR(sb.st_mode)) {
-        clusterManagerLogErr("ERR: %s is not a valid directory\n", config.cluster_manager_command.backup_dir);
+        clusterManagerLogErr("[ERR] %s is not a valid directory\n", config.cluster_manager_command.backup_dir);
         return 0;
     }
     sds json = sdsnew("[\n");

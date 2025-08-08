@@ -738,7 +738,7 @@ void moduleReleaseTempClient(client *c) {
     c->flag.module = 1;
     c->flag.fake = 1;
     c->user = NULL; /* Root user */
-    c->cmd = c->lastcmd = c->realcmd = c->io_parsed_cmd = NULL;
+    c->cmd = c->lastcmd = c->realcmd = c->parsed_cmd = NULL;
     if (c->bstate && c->bstate->async_rm_call_handle) {
         ValkeyModuleAsyncRMCallPromise *promise = c->bstate->async_rm_call_handle;
         promise->c = NULL; /* Remove the client from the promise so it will no longer be possible to abort it. */
@@ -4279,8 +4279,8 @@ int VM_UnlinkKey(ValkeyModuleKey *key) {
  * If no TTL is associated with the key or if the key is empty,
  * VALKEYMODULE_NO_EXPIRE is returned. */
 mstime_t VM_GetExpire(ValkeyModuleKey *key) {
-    mstime_t expire = getExpire(key->db, key->key);
-    if (expire == -1 || key->value == NULL) return VALKEYMODULE_NO_EXPIRE;
+    mstime_t expire = key->value ? objectGetExpire(key->value) : -1;
+    if (expire == -1) return VALKEYMODULE_NO_EXPIRE;
     expire -= commandTimeSnapshot();
     return expire >= 0 ? expire : 0;
 }
@@ -4310,8 +4310,8 @@ int VM_SetExpire(ValkeyModuleKey *key, mstime_t expire) {
  * If no TTL is associated with the key or if the key is empty,
  * VALKEYMODULE_NO_EXPIRE is returned. */
 mstime_t VM_GetAbsExpire(ValkeyModuleKey *key) {
-    mstime_t expire = getExpire(key->db, key->key);
-    if (expire == -1 || key->value == NULL) return VALKEYMODULE_NO_EXPIRE;
+    mstime_t expire = key->value ? objectGetExpire(key->value) : -1;
+    if (expire == -1) return VALKEYMODULE_NO_EXPIRE;
     return expire;
 }
 
@@ -4391,7 +4391,7 @@ int VM_StringSet(ValkeyModuleKey *key, ValkeyModuleString *str) {
     VM_DeleteKey(key);
     /* Retain str so setKey copies it to db rather than reallocating it. */
     incrRefCount(str);
-    setKey(key->ctx->client, key->db, key->key, &str, SETKEY_NO_SIGNAL);
+    setKey(key->ctx->client, key->db, key->key, &str, SETKEY_NO_SIGNAL | SETKEY_DOESNT_EXIST);
     key->value = str;
     return VALKEYMODULE_OK;
 }
@@ -4471,7 +4471,7 @@ int VM_StringTruncate(ValkeyModuleKey *key, size_t newlen) {
     if (key->value == NULL) {
         /* Empty key: create it with the new size. */
         robj *o = createObject(OBJ_STRING, sdsnewlen(NULL, newlen));
-        setKey(key->ctx->client, key->db, key->key, &o, SETKEY_NO_SIGNAL);
+        setKey(key->ctx->client, key->db, key->key, &o, SETKEY_NO_SIGNAL | SETKEY_DOESNT_EXIST);
         key->value = o;
     } else {
         /* Unshare and resize. */
@@ -4981,7 +4981,7 @@ int zsetInitScoreRange(ValkeyModuleKey *key, double min, double max, int minex, 
     } else if (key->value->encoding == OBJ_ENCODING_SKIPLIST) {
         zset *zs = key->value->ptr;
         zskiplist *zsl = zs->zsl;
-        key->u.zset.current = first ? zslNthInRange(zsl, zrs, 0) : zslNthInRange(zsl, zrs, -1);
+        key->u.zset.current = first ? zslNthInRange(zsl, zrs, 0, NULL) : zslNthInRange(zsl, zrs, -1, NULL);
     } else {
         serverPanic("Unsupported zset encoding");
     }
@@ -5350,11 +5350,11 @@ int VM_HashSet(ValkeyModuleKey *key, int flags, ...) {
         /* If CFIELDS is active, we can pass the ownership of the
          * SDS object to the low level function that sets the field
          * to avoid a useless copy. */
-        if (flags & VALKEYMODULE_HASH_CFIELDS) low_flags |= HASH_SET_TAKE_FIELD;
+        if (flags & VALKEYMODULE_HASH_CFIELDS) low_flags |= (HASH_SET_TAKE_FIELD);
 
         robj *argv[2] = {field, value};
         hashTypeTryConversion(key->value, argv, 0, 1);
-        int updated = hashTypeSet(key->value, field->ptr, value->ptr, low_flags);
+        int updated = hashTypeSet(key->value, field->ptr, value->ptr, EXPIRY_NONE, low_flags);
         count += (flags & VALKEYMODULE_HASH_COUNT_ALL) ? 1 : updated;
 
         /* If CFIELDS is active, SDS string ownership is now of hashTypeSet(),
@@ -5364,6 +5364,7 @@ int VM_HashSet(ValkeyModuleKey *key, int flags, ...) {
             decrRefCount(field);
         }
     }
+    dbUpdateObjectWithVolatileItemsTracking(key->db, key->value);
     va_end(ap);
     moduleDelKeyIfEmpty(key);
     if (count == 0) errno = ENOENT;
@@ -6551,7 +6552,8 @@ ValkeyModuleCallReply *VM_Call(ValkeyModuleCtx *ctx, const char *cmdname, const 
         /* Duplicate relevant flags in the module client. */
         c->flag.readonly = ctx->client->flag.readonly;
         c->flag.asking = ctx->client->flag.asking;
-        if (getNodeByQuery(c, c->cmd, c->argv, c->argc, NULL, &error_code) != getMyClusterNode()) {
+        c->slot = clusterSlotByCommand(c->cmd, c->argv, c->argc, &c->read_flags);
+        if (getNodeByQuery(c, &error_code) != getMyClusterNode()) {
             sds msg = NULL;
             if (error_code == CLUSTER_REDIR_DOWN_RO_STATE) {
                 if (error_as_call_replies) {
@@ -7037,7 +7039,7 @@ int VM_ModuleTypeSetValue(ValkeyModuleKey *key, moduleType *mt, void *value) {
     if (!(key->mode & VALKEYMODULE_WRITE) || key->iter) return VALKEYMODULE_ERR;
     VM_DeleteKey(key);
     robj *o = createModuleObject(mt, value);
-    setKey(key->ctx->client, key->db, key->key, &o, SETKEY_NO_SIGNAL);
+    setKey(key->ctx->client, key->db, key->key, &o, SETKEY_NO_SIGNAL | SETKEY_DOESNT_EXIST);
     key->value = o;
     return VALKEYMODULE_OK;
 }
@@ -7716,7 +7718,7 @@ void VM__Assert(const char *estr, const char *file, int line) {
  * command. The call is skipped if the latency is smaller than the configured
  * latency-monitor-threshold. */
 void VM_LatencyAddSample(const char *event, mstime_t latency) {
-    latencyAddSampleIfNeeded(event, latency);
+    latencyAddSampleIfNeeded(event, latency * 1000);
 }
 
 /* --------------------------------------------------------------------------
@@ -9013,7 +9015,7 @@ typedef struct moduleClusterNodeInfo {
     char ip[NET_IP_STR_LEN];
     int port;
     char primary_id[40]; /* Only if flags & VALKEYMODULE_NODE_PRIMARY is true. */
-} mdouleClusterNodeInfo;
+} moduleClusterNodeInfo;
 
 /* We have an array of message types: each bucket is a linked list of
  * configured receivers. */
@@ -10943,9 +10945,9 @@ void moduleCallCommandFilters(client *c) {
     c->argv_len = filter.argv_len;
     c->argc = filter.argc;
     if (tmp != c->argv[0]) {
-        /* With I/O thread command-lookup offload, we set c->io_parsed_cmd to the command corresponding to c->argv[0].
-         * Since the command filter just changed it, we need to reset c->io_parsed_cmd to null. */
-        c->io_parsed_cmd = NULL;
+        /* Reset and lookup the command and cluster slot again. */
+        unprepareCommand(c);
+        prepareCommand(c);
     }
     decrRefCount(tmp);
 }
@@ -11223,8 +11225,8 @@ static void moduleScanKeyHashtableCallback(void *privdata, void *entry) {
         key = node->ele;
         value = createStringObjectFromLongDouble(node->score, 0);
     } else if (o->type == OBJ_HASH) {
-        key = hashTypeEntryGetField(entry);
-        sds val = hashTypeEntryGetValue(entry);
+        key = entryGetField(entry);
+        sds val = entryGetValue(entry);
         value = createStringObject(val, sdslen(val));
     } else {
         serverPanic("unexpected object type");
@@ -13438,7 +13440,7 @@ int VM_GetLRU(ValkeyModuleKey *key, mstime_t *lru_idle) {
 /* Set the key access frequency. only relevant if the server's maxmemory policy
  * is LFU based.
  * The frequency is a logarithmic counter that provides an indication of
- * the access frequencyonly (must be <= 255).
+ * the access frequency (must be <= 255).
  * returns VALKEYMODULE_OK if the LFU was updated, VALKEYMODULE_ERR otherwise. */
 int VM_SetLFU(ValkeyModuleKey *key, long long lfu_freq) {
     if (!key->value) return VALKEYMODULE_ERR;

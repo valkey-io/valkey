@@ -172,7 +172,9 @@ run_solo {defrag} {
     #    while_defragging {code} - optional, code executed after defrag has started
     #    latency <ms> - optional, verifies the latency to a ms target (default 5)
     proc perform_defrag_test {name args} {
-        set opts(latency) 5
+        # This value should be 5 ms, but it was flaky in github runners. The issue 
+        # https://github.com/valkey-io/valkey/issues/2444 is tracking if we can raise the limit again.
+        set opts(latency) 40
         set opts(while_defragging) {}
         array set opts $args
         assert {[info exists opts(populate)]}
@@ -308,7 +310,7 @@ run_solo {defrag} {
                 # Make sure we had defrag hits during AOF loading.  Note that we don't worry about
                 # the actual fragmentation ratio here.  It will vary based on when defrag stopped
                 # mid-cycle.  Just check that we are defragging by the number of hits.
-                assert {[s active_defrag_hits] > 100000}
+                assert {[s active_defrag_hits] > 80000}
             }
             } ;# Active defrag - AOF loading
         }

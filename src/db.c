@@ -34,24 +34,12 @@
 #include "functions.h"
 #include "io_threads.h"
 #include "module.h"
-
-#include <signal.h>
-#include <ctype.h>
+#include "vector.h"
+#include "expire.h"
 
 /*-----------------------------------------------------------------------------
  * C-level DB API
  *----------------------------------------------------------------------------*/
-
-/* Flags for expireIfNeeded */
-#define EXPIRE_FORCE_DELETE_EXPIRED 1
-#define EXPIRE_AVOID_DELETE_EXPIRED 2
-
-/* Return values for expireIfNeeded */
-typedef enum {
-    KEY_VALID = 0, /* Could be volatile and not yet expired, non-volatile, or even non-existing key. */
-    KEY_EXPIRED,   /* Logically expired but not yet deleted. */
-    KEY_DELETED    /* The key was deleted now. */
-} keyStatus;
 
 static keyStatus expireIfNeededWithDictIndex(serverDb *db, robj *key, robj *val, int flags, int dict_index);
 static keyStatus expireIfNeeded(serverDb *db, robj *key, robj *val, int flags);
@@ -124,8 +112,9 @@ robj *lookupKey(serverDb *db, robj *key, int flags) {
         /* Update the access time for the ageing algorithm.
          * Don't do it if we have a saving child, as this will trigger
          * a copy on write madness. */
-        if (server.current_client && server.current_client->flag.no_touch &&
-            server.executing_client->cmd->proc != touchCommand)
+        if ((flags & LOOKUP_NOTOUCH) == 0 &&
+            server.current_client && server.current_client->flag.no_touch &&
+            server.executing_client && server.executing_client->cmd->proc != touchCommand)
             flags |= LOOKUP_NOTOUCH;
         if (!hasActiveChildProcess() && !(flags & LOOKUP_NOTOUCH)) {
             /* Shared objects can't be stored in the database. */
@@ -194,6 +183,18 @@ robj *lookupKeyWriteOrReply(client *c, robj *key, robj *reply) {
     return o;
 }
 
+/* For hash keys, checks if they contain volatile items and updates tracking accordingly.
+ * Always accesses the tracking kvstore, even if the tracking state doesn't change. */
+void dbUpdateObjectWithVolatileItemsTracking(serverDb *db, robj *o) {
+    if (o->type == OBJ_HASH) {
+        if (hashTypeHasVolatileFields(o)) {
+            dbTrackKeyWithVolatileItems(db, o);
+        } else {
+            dbUntrackKeyWithVolatileItems(db, o);
+        }
+    }
+}
+
 /* Add a key-value entry to the DB.
  *
  * A copy of 'key' is stored in the database. The caller must ensure the
@@ -226,6 +227,9 @@ static void dbAddInternal(serverDb *db, robj *key, robj **valref, int update_if_
     /* Not existing. Convert val to valkey object and insert. */
     robj *val = *valref;
     val = objectSetKeyAndExpire(val, key->ptr, -1);
+    /* Track hash object if it has volatile fields (for active expiry).
+     * For example, this is needed when a hash is moved to a new DB (e.g. MOVE). */
+    dbTrackKeyWithVolatileItems(db, val);
     initObjectLRUOrLFU(val);
     kvstoreHashtableAdd(db->keys, dict_index, val);
     signalKeyAsReady(db, key, val->type);
@@ -293,6 +297,10 @@ int dbAddRDBLoad(serverDb *db, sds key, robj **valref) {
     val = objectSetKeyAndExpire(val, key, -1);
     kvstoreHashtableInsertAtPosition(db->keys, dict_index, val, &pos);
     initObjectLRUOrLFU(val);
+
+    /* Track hash objects containing volatile items, created by rdbLoadObject (which lacks DB context). */
+    dbTrackKeyWithVolatileItems(db, val);
+
     *valref = val;
     return 1;
 }
@@ -492,6 +500,11 @@ int dbGenericDeleteWithDictIndex(serverDb *db, robj *key, int async, int flags, 
             debugServerAssert(0 == kvstoreHashtableDelete(db->expires, dict_index, key->ptr));
         }
 
+        /* If deleting a hash object, un-track it from the volatile items tracking if it contains volatile items.*/
+        if (val->type == OBJ_HASH && hashTypeHasVolatileFields(val)) {
+            dbUntrackKeyWithVolatileItems(db, val);
+        }
+
         if (async) {
             freeObjAsync(key, val, db->id);
         } else {
@@ -508,6 +521,20 @@ int dbGenericDeleteWithDictIndex(serverDb *db, robj *key, int async, int flags, 
 int dbGenericDelete(serverDb *db, robj *key, int async, int flags) {
     int dict_index = getKVStoreIndexForKey(key->ptr);
     return dbGenericDeleteWithDictIndex(db, key, async, flags, dict_index);
+}
+
+/* Add a key with volatile items to the tracking kvstore. */
+void dbTrackKeyWithVolatileItems(serverDb *db, robj *o) {
+    if (o->type == OBJ_HASH && hashTypeHasVolatileFields(o)) {
+        int dict_index = getKVStoreIndexForKey(objectGetKey(o));
+        kvstoreHashtableAdd(db->keys_with_volatile_items, dict_index, o);
+    }
+}
+
+/* Delete a key from the keys with volatile entries tracking kvstore */
+void dbUntrackKeyWithVolatileItems(serverDb *db, robj *o) {
+    int dict_index = getKVStoreIndexForKey(objectGetKey(o));
+    kvstoreHashtableDelete(db->keys_with_volatile_items, dict_index, objectGetKey(o));
 }
 
 /* Delete a key, value, and associated expiration entry if any, from the DB */
@@ -565,13 +592,24 @@ robj *dbUnshareStringValue(serverDb *db, robj *key, robj *o) {
     return o;
 }
 
+/* Reset the expiry tracking state of a database.
+ *
+ * This clears the `expiry` array, which holds per-expiry-type
+ * data such as average TTL (for stats) and scan cursors used by
+ * the active expiration cycle.
+ *
+ * Should be called whenever the database is emptied or reinitialized. */
+void resetDbExpiryState(serverDb *db) {
+    memset(db->expiry, 0, sizeof(db->expiry));
+}
+
 /* Remove all keys from the database(s) structure. The dbarray argument
  * may not be the server main DBs (could be a temporary DB).
  *
  * The dbnum can be -1 if all the DBs should be emptied, or the specified
  * DB index if we want to empty only a single database.
  * The function returns the number of keys removed from the database(s). */
-long long emptyDbStructure(serverDb *dbarray, int dbnum, int async, void(callback)(hashtable *)) {
+long long emptyDbStructure(serverDb **dbarray, int dbnum, int async, void(callback)(hashtable *)) {
     long long removed = 0;
     int startdb, enddb;
 
@@ -583,16 +621,18 @@ long long emptyDbStructure(serverDb *dbarray, int dbnum, int async, void(callbac
     }
 
     for (int j = startdb; j <= enddb; j++) {
-        removed += kvstoreSize(dbarray[j].keys);
+        if (dbarray[j] == NULL || kvstoreSize(dbarray[j]->keys) == 0) continue;
+
+        removed += kvstoreSize(dbarray[j]->keys);
         if (async) {
-            emptyDbAsync(&dbarray[j]);
+            emptyDbAsync(dbarray[j]);
         } else {
-            kvstoreEmpty(dbarray[j].keys, callback);
-            kvstoreEmpty(dbarray[j].expires, callback);
+            kvstoreEmpty(dbarray[j]->keys, callback);
+            kvstoreEmpty(dbarray[j]->expires, callback);
+            kvstoreEmpty(dbarray[j]->keys_with_volatile_items, callback);
         }
         /* Because all keys of database are removed, reset average ttl. */
-        dbarray[j].avg_ttl = 0;
-        dbarray[j].expires_cursor = 0;
+        resetDbExpiryState(dbarray[j]);
     }
 
     return removed;
@@ -650,39 +690,36 @@ long long emptyData(int dbnum, int flags, void(callback)(hashtable *)) {
     return removed;
 }
 
-/* Initialize temporary db on replica for use during diskless replication. */
-serverDb *initTempDb(void) {
-    int slot_count_bits = 0;
-    int flags = KVSTORE_ALLOCATE_HASHTABLES_ON_DEMAND;
-    if (server.cluster_enabled) {
-        slot_count_bits = CLUSTER_SLOT_MASK_BITS;
-        flags |= KVSTORE_FREE_EMPTY_HASHTABLES;
-    }
-    serverDb *tempDb = zcalloc(sizeof(serverDb) * server.dbnum);
-    for (int i = 0; i < server.dbnum; i++) {
-        tempDb[i].id = i;
-        tempDb[i].keys = kvstoreCreate(&kvstoreKeysHashtableType, slot_count_bits, flags);
-        tempDb[i].expires = kvstoreCreate(&kvstoreExpiresHashtableType, slot_count_bits, flags);
-    }
-
-    return tempDb;
-}
-
-/* Discard tempDb, it's always async. */
-void discardTempDb(serverDb *tempDb) {
+/* Discard tempDb array. It's always async. */
+void discardTempDb(serverDb **tempDb) {
     /* Release temp DBs. */
     emptyDbStructure(tempDb, -1, 1, NULL);
     for (int i = 0; i < server.dbnum; i++) {
-        kvstoreRelease(tempDb[i].keys);
-        kvstoreRelease(tempDb[i].expires);
-    }
+        if (tempDb[i]) {
+            kvstoreRelease(tempDb[i]->keys);
+            kvstoreRelease(tempDb[i]->expires);
+            kvstoreRelease(tempDb[i]->keys_with_volatile_items);
 
+            /* These are expected to be empty on temporary databases */
+            serverAssert(dictSize(tempDb[i]->blocking_keys) == 0);
+            serverAssert(dictSize(tempDb[i]->blocking_keys_unblock_on_nokey) == 0);
+            serverAssert(dictSize(tempDb[i]->ready_keys) == 0);
+            serverAssert(dictSize(tempDb[i]->watched_keys) == 0);
+
+            dictRelease(tempDb[i]->blocking_keys);
+            dictRelease(tempDb[i]->blocking_keys_unblock_on_nokey);
+            dictRelease(tempDb[i]->ready_keys);
+            dictRelease(tempDb[i]->watched_keys);
+            zfree(tempDb[i]);
+            tempDb[i] = NULL;
+        }
+    }
     zfree(tempDb);
 }
 
 int selectDb(client *c, int id) {
     if (id < 0 || id >= server.dbnum) return C_ERR;
-    c->db = &server.db[id];
+    c->db = createDatabaseIfNeeded(id);
     return C_OK;
 }
 
@@ -690,7 +727,8 @@ long long dbTotalServerKeyCount(void) {
     long long total = 0;
     int j;
     for (j = 0; j < server.dbnum; j++) {
-        total += kvstoreSize(server.db[j].keys);
+        if (dbHasNoKeys(j)) continue;
+        total += kvstoreSize(server.db[j]->keys);
     }
     return total;
 }
@@ -721,8 +759,9 @@ void signalFlushedDb(int dbid, int async) {
     }
 
     for (int j = startdb; j <= enddb; j++) {
-        scanDatabaseForDeletedKeys(&server.db[j], NULL);
-        touchAllWatchedKeysInDb(&server.db[j], NULL);
+        if (server.db[j] == NULL) continue;
+        scanDatabaseForDeletedKeys(server.db[j], NULL);
+        touchAllWatchedKeysInDb(server.db[j], NULL);
     }
 
     trackingInvalidateKeysOnFlush(async);
@@ -789,7 +828,7 @@ void flushdbCommand(client *c) {
     server.dirty += emptyData(c->db->id, flags | EMPTYDB_NOFUNCTIONS, NULL);
 
     /* Without the forceCommandPropagation, when DB was already empty,
-     * FLUSHDB will not be replicated nor put into the AOF. */
+     * FLUSHDB will neither be replicated nor put into the AOF. */
     forceCommandPropagation(c, PROPAGATE_REPL | PROPAGATE_AOF);
 
     addReply(c, shared.ok);
@@ -812,7 +851,7 @@ void flushallCommand(client *c) {
     flushAllDataAndResetRDB(flags | EMPTYDB_NOFUNCTIONS);
 
     /* Without the forceCommandPropagation, when DBs were already empty,
-     * FLUSHALL will not be replicated nor put into the AOF. */
+     * FLUSHALL will neither be replicated nor put into the AOF. */
     forceCommandPropagation(c, PROPAGATE_REPL | PROPAGATE_AOF);
 
     addReply(c, shared.ok);
@@ -912,9 +951,17 @@ void keysCommand(client *c) {
     setDeferredArrayLen(c, replylen, numkeys);
 }
 
+#define DEFAULT_SCAN_COMMAND_COUNT 10
+
+/* The SCAN command's default COUNT is 10.
+ * Since it may store keys + values, the
+ * buffer size is roughly 10 * 2 = 20.
+ * Adding a 20% buffer (20 * 1.2) gives 24. */
+#define SCAN_VECTOR_INITIAL_ALLOC 24
+
 /* Data used by the dict scan callback. */
 typedef struct {
-    list *keys;     /* elements that collect from dict */
+    vector *result; /* elements that collect from dict */
     robj *o;        /* o must be a hash/set/zset object, NULL means current db */
     serverDb *db;   /* database currently being scanned */
     long long type; /* the particular type when scan the db */
@@ -969,8 +1016,8 @@ void keysScanCallback(void *privdata, void *entry) {
     }
 
     /* Keep this key. */
-    list *keys = data->keys;
-    listAddNodeTail(keys, key);
+    sds *item = vectorPush(data->result);
+    *item = key;
 }
 
 /* This callback is used by scanGenericCommand in order to collect elements
@@ -981,7 +1028,6 @@ void hashtableScanCallback(void *privdata, void *entry) {
     sds key = NULL;
 
     robj *o = data->o;
-    list *keys = data->keys;
     data->sampled++;
 
     /* This callback is only used for scanning elements within a key (hash
@@ -996,9 +1042,9 @@ void hashtableScanCallback(void *privdata, void *entry) {
         key = node->ele;
         /* zset data is copied after filtering by key */
     } else if (o->type == OBJ_HASH) {
-        key = hashTypeEntryGetField(entry);
+        key = entryGetField(entry);
         if (!data->only_keys) {
-            val = hashTypeEntryGetValue(entry);
+            val = entryGetValue(entry);
         }
     } else {
         serverPanic("Type not handled in hashtable SCAN callback.");
@@ -1024,8 +1070,12 @@ void hashtableScanCallback(void *privdata, void *entry) {
         }
     }
 
-    listAddNodeTail(keys, key);
-    if (val) listAddNodeTail(keys, val);
+    sds *item = vectorPush(data->result);
+    *item = key;
+    if (val) {
+        item = vectorPush(data->result);
+        *item = val;
+    }
 }
 
 /* Try to parse a SCAN cursor stored at buffer 'buf':
@@ -1085,12 +1135,12 @@ char *getObjectTypeName(robj *o) {
  * of every element on the Hash. */
 void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {
     int i, j;
-    listNode *node;
-    long count = 10;
+    long count = DEFAULT_SCAN_COMMAND_COUNT;
     sds pat = NULL;
     sds typename = NULL;
     long long type = LLONG_MAX;
     int patlen = 0, use_pattern = 0, only_keys = 0;
+    vector result;
 
     /* Object must be NULL (to iterate keys names), or the type of the object
      * must be Set, Sorted Set, or Hash. */
@@ -1161,29 +1211,25 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {
 
     /* Handle the case of kvstore, dict or hashtable. */
     hashtable *ht = NULL;
-    int shallow_copied_list_items = 0;
+    /* Set a free callback for the contents of the collected keys list if they
+     * are deep copied temporary strings. We must not free them if they are just
+     * a shallow copy - a pointer to the actual data in the data structure */
+    void (*free_callback)(sds) = sdsfree;
     if (o == NULL) {
-        shallow_copied_list_items = 1;
+        free_callback = NULL;
     } else if (o->type == OBJ_SET && o->encoding == OBJ_ENCODING_HASHTABLE) {
         ht = o->ptr;
-        shallow_copied_list_items = 1;
+        free_callback = NULL;
     } else if (o->type == OBJ_HASH && o->encoding == OBJ_ENCODING_HASHTABLE) {
         ht = o->ptr;
-        shallow_copied_list_items = 1;
+        free_callback = NULL;
     } else if (o->type == OBJ_ZSET && o->encoding == OBJ_ENCODING_SKIPLIST) {
         zset *zs = o->ptr;
         ht = zs->ht;
         /* scanning ZSET allocates temporary strings even though it's a dict */
-        shallow_copied_list_items = 0;
+        free_callback = sdsfree;
     }
-
-    list *keys = listCreate();
-    /* Set a free callback for the contents of the collected keys list if they
-     * are deep copied temporary strings. We must not free them if they are just
-     * a shallow copy - a pointer to the actual data in the data structure */
-    if (!shallow_copied_list_items) {
-        listSetFreeMethod(keys, sdsfreeVoid);
-    }
+    vectorInit(&result, SCAN_VECTOR_INITIAL_ALLOC, sizeof(sds));
 
     /* For main hash table scan or scannable data structure. */
     if (!o || ht) {
@@ -1191,7 +1237,7 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {
          * COUNT, so if the hash table is in a pathological state (very
          * sparsely populated) we avoid to block too much time at the cost
          * of returning no or very few elements. */
-        long maxiterations = count * 10;
+        unsigned long maxiterations = (unsigned long)count * 10UL;
 
         /* We pass scanData which have three pointers to the callback:
          * 1. data.keys: the list to which it will add new elements;
@@ -1207,7 +1253,7 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {
          * 6. data.only_keys: to control whether values will be returned or
          * only keys are returned. */
         scanData data = {
-            .keys = keys,
+            .result = &result,
             .db = c->db,
             .o = o,
             .type = type,
@@ -1244,7 +1290,8 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {
             if (use_pattern && !stringmatchlen(pat, sdslen(pat), key, len, 0)) {
                 continue;
             }
-            listAddNodeTail(keys, sdsnewlen(key, len));
+            sds *item = vectorPush(&result);
+            *item = sdsnewlen(key, len);
         }
         setTypeReleaseIterator(si);
         cursor = 0;
@@ -1264,11 +1311,13 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {
                 continue;
             }
             /* add key object */
-            listAddNodeTail(keys, sdsnewlen(str, len));
+            sds *item = vectorPush(&result);
+            *item = sdsnewlen(str, len);
             /* add value object */
             if (!only_keys) {
                 str = lpGet(p, &len, intbuf);
-                listAddNodeTail(keys, sdsnewlen(str, len));
+                item = vectorPush(&result);
+                *item = sdsnewlen(str, len);
             }
             p = lpNext(o->ptr, p);
         }
@@ -1281,14 +1330,16 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {
     addReplyArrayLen(c, 2);
     addReplyBulkLongLong(c, cursor);
 
-    addReplyArrayLen(c, listLength(keys));
-    while ((node = listFirst(keys)) != NULL) {
-        sds key = listNodeValue(node);
-        addReplyBulkCBuffer(c, key, sdslen(key));
-        listDelNode(keys, node);
+    addReplyArrayLen(c, vectorLen(&result));
+    for (uint32_t i = 0; i < vectorLen(&result); i++) {
+        sds *key = vectorGet(&result, i);
+        addReplyBulkCBuffer(c, *key, sdslen(*key));
+        if (free_callback) {
+            free_callback(*key);
+        }
     }
 
-    listRelease(keys);
+    vectorCleanup(&result);
 }
 
 /* The SCAN command completely relies on scanGenericCommand. */
@@ -1312,7 +1363,7 @@ void typeCommand(client *c) {
     addReplyStatus(c, getObjectTypeName(o));
 }
 
-/* SHUTDOWN [[NOSAVE | SAVE] [NOW] [FORCE] | ABORT] */
+/* SHUTDOWN [[NOSAVE | SAVE] [NOW] [FORCE] [SAFE] [FAILOVER] | ABORT] */
 void shutdownCommand(client *c) {
     int flags = SHUTDOWN_NOFLAGS;
     int abort = 0;
@@ -1327,6 +1378,10 @@ void shutdownCommand(client *c) {
             flags |= SHUTDOWN_FORCE;
         } else if (!strcasecmp(c->argv[i]->ptr, "abort")) {
             abort = 1;
+        } else if (!strcasecmp(c->argv[i]->ptr, "safe")) {
+            flags |= SHUTDOWN_SAFE;
+        } else if (!strcasecmp(c->argv[i]->ptr, "failover")) {
+            flags |= SHUTDOWN_FAILOVER;
         } else {
             addReplyErrorObject(c, shared.syntaxerr);
             return;
@@ -1335,6 +1390,11 @@ void shutdownCommand(client *c) {
     if ((abort && flags != SHUTDOWN_NOFLAGS) || (flags & SHUTDOWN_NOSAVE && flags & SHUTDOWN_SAVE)) {
         /* Illegal combo. */
         addReplyErrorObject(c, shared.syntaxerr);
+        return;
+    }
+
+    if (flags & SHUTDOWN_FAILOVER && !server.cluster_enabled) {
+        addReplyError(c, "SHUTDOWN FAILOVER is only supported in cluster mode.");
         return;
     }
 
@@ -1389,7 +1449,7 @@ void renameGenericCommand(client *c, int nx) {
     }
 
     incrRefCount(o);
-    expire = getExpire(c->db, c->argv[1]);
+    expire = objectGetExpire(o);
     if (lookupKeyWrite(c->db, c->argv[2]) != NULL) {
         if (nx) {
             decrRefCount(o);
@@ -1451,7 +1511,7 @@ void moveCommand(client *c) {
         addReply(c, shared.czero);
         return;
     }
-    expire = getExpire(c->db, c->argv[1]);
+    expire = objectGetExpire(o);
 
     /* Return zero if the key already exists in the target DB */
     if (lookupKeyWrite(dst, c->argv[1]) != NULL) {
@@ -1525,7 +1585,7 @@ void copyCommand(client *c) {
         addReply(c, shared.czero);
         return;
     }
-    expire = getExpire(c->db, key);
+    expire = objectGetExpire(o);
 
     /* Return zero if the key already exists in the target DB.
      * If REPLACE option is selected, delete newkey from targetDB. */
@@ -1616,6 +1676,15 @@ void scanDatabaseForDeletedKeys(serverDb *emptied, serverDb *replaced_with) {
     dictReleaseIterator(di);
 }
 
+/* Copy expiry tracking state from one DB to another.
+ *
+ * This copies the `expiry` array, which contains per-expiry-type
+ * metadata such as the average TTL (for stats) and the active
+ * expiry scan cursor. */
+static void copyDbExpiry(serverDb *target, const serverDb *source) {
+    memcpy(target->expiry, source->expiry, sizeof(target->expiry));
+}
+
 /* Swap two databases at runtime so that all clients will magically see
  * the new database even if already connected. Note that the client
  * structure c->db points to a given DB, so we need to be smarter and
@@ -1627,8 +1696,9 @@ void scanDatabaseForDeletedKeys(serverDb *emptied, serverDb *replaced_with) {
 int dbSwapDatabases(int id1, int id2) {
     if (id1 < 0 || id1 >= server.dbnum || id2 < 0 || id2 >= server.dbnum) return C_ERR;
     if (id1 == id2) return C_OK;
-    serverDb aux = server.db[id1];
-    serverDb *db1 = &server.db[id1], *db2 = &server.db[id2];
+    serverDb *db1 = createDatabaseIfNeeded(id1);
+    serverDb *db2 = createDatabaseIfNeeded(id2);
+    serverDb aux = *db1;
 
     /* Swapdb should make transaction fail if there is any
      * client watching keys */
@@ -1644,13 +1714,14 @@ int dbSwapDatabases(int id1, int id2) {
      * remain in the same DB they were. */
     db1->keys = db2->keys;
     db1->expires = db2->expires;
-    db1->avg_ttl = db2->avg_ttl;
-    db1->expires_cursor = db2->expires_cursor;
+    db1->keys_with_volatile_items = db2->keys_with_volatile_items;
+    copyDbExpiry(db1, db2);
+
 
     db2->keys = aux.keys;
     db2->expires = aux.expires;
-    db2->avg_ttl = aux.avg_ttl;
-    db2->expires_cursor = aux.expires_cursor;
+    db2->keys_with_volatile_items = aux.keys_with_volatile_items;
+    copyDbExpiry(db2, &aux);
 
     /* Now we need to handle clients blocked on lists: as an effect
      * of swapping the two DBs, a client that was waiting for list
@@ -1669,10 +1740,13 @@ int dbSwapDatabases(int id1, int id2) {
 /* Logically, this discards (flushes) the old main database, and apply the newly loaded
  * database (temp) as the main (active) database, the actual freeing of old database
  * (which will now be placed in the temp one) is done later. */
-void swapMainDbWithTempDb(serverDb *tempDb) {
+void swapMainDbWithTempDb(serverDb **tempDb) {
     for (int i = 0; i < server.dbnum; i++) {
-        serverDb aux = server.db[i];
-        serverDb *activedb = &server.db[i], *newdb = &tempDb[i];
+        if (tempDb[i] == NULL && server.db[i] == NULL) continue;
+        if (tempDb[i] == NULL) tempDb[i] = createDatabase(i);
+        if (server.db[i] == NULL) server.db[i] = createDatabase(i);
+        serverDb aux = *server.db[i];
+        serverDb *activedb = server.db[i], *newdb = tempDb[i];
 
         /* Swapping databases should make transaction fail if there is any
          * client watching keys. */
@@ -1686,13 +1760,13 @@ void swapMainDbWithTempDb(serverDb *tempDb) {
          * remain in the same DB they were. */
         activedb->keys = newdb->keys;
         activedb->expires = newdb->expires;
-        activedb->avg_ttl = newdb->avg_ttl;
-        activedb->expires_cursor = newdb->expires_cursor;
+        activedb->keys_with_volatile_items = newdb->keys_with_volatile_items;
+        copyDbExpiry(activedb, newdb);
 
         newdb->keys = aux.keys;
         newdb->expires = aux.expires;
-        newdb->avg_ttl = aux.avg_ttl;
-        newdb->expires_cursor = aux.expires_cursor;
+        newdb->keys_with_volatile_items = aux.keys_with_volatile_items;
+        copyDbExpiry(newdb, &aux);
 
         /* Now we need to handle clients blocked on lists: as an effect
          * of swapping the two DBs, a client that was waiting for list
@@ -1714,7 +1788,7 @@ void swapMainDbWithTempDb(serverDb *tempDb) {
 void swapdbCommand(client *c) {
     int id1, id2;
 
-    /* Not allowed in cluster mode: we have just DB 0 there. */
+    /* Not allowed in cluster mode: atomicity cross shards is challenging in cluster mode. */
     if (server.cluster_enabled) {
         addReplyError(c, "SWAPDB is not allowed in cluster mode");
         return;
@@ -1770,7 +1844,15 @@ robj *setExpire(client *c, serverDb *db, robj *key, long long when) {
     serverAssertWithInfo(NULL, key, valref != NULL);
     val = *valref;
     long long old_when = objectGetExpire(val);
+
     robj *newval = objectSetExpire(val, when);
+    if (newval->type == OBJ_HASH && hashTypeHasVolatileFields(newval)) {
+        /* Replace the pointer in the keys_with_volatile_items table without accessing the old pointer. */
+        int dict_index = getKVStoreIndexForKey(objectGetKey(newval));
+        hashtable *volatile_items_ht = kvstoreGetHashtable(db->keys_with_volatile_items, dict_index);
+        int replaced = hashtableReplaceReallocatedEntry(volatile_items_ht, val, newval);
+        serverAssert(replaced);
+    }
     if (old_when != -1) {
         /* Val already had an expire field, so it was not reallocated. */
         serverAssert(newval == val);
@@ -1814,6 +1896,7 @@ void deleteExpiredKeyAndPropagateWithDictIndex(serverDb *db, robj *keyobj, int d
     dbGenericDeleteWithDictIndex(db, keyobj, server.lazyfree_lazy_expire, DB_FLAG_KEY_EXPIRED, dict_index);
     latencyEndMonitor(expire_latency);
     latencyAddSampleIfNeeded("expire-del", expire_latency);
+    latencyTraceIfNeeded(db, expire_del, expire_latency);
     notifyKeyspaceEvent(NOTIFY_EXPIRED, "expired", keyobj, db->id);
     signalModifiedKey(NULL, db, keyobj);
     propagateDeletion(db, keyobj, server.lazyfree_lazy_expire);
@@ -1864,8 +1947,6 @@ void propagateDeletion(serverDb *db, robj *key, int lazy) {
 
     argv[0] = lazy ? shared.unlink : shared.del;
     argv[1] = key;
-    incrRefCount(argv[0]);
-    incrRefCount(argv[1]);
 
     /* If the primary decided to delete a key we must propagate it to replicas no matter what.
      * Even if module executed a command without asking for propagation. */
@@ -1873,19 +1954,89 @@ void propagateDeletion(serverDb *db, robj *key, int lazy) {
     server.replication_allowed = 1;
     alsoPropagate(db->id, argv, 2, PROPAGATE_AOF | PROPAGATE_REPL);
     server.replication_allowed = prev_replication_allowed;
-
-    decrRefCount(argv[0]);
-    decrRefCount(argv[1]);
 }
 
-/* Returns 1 if the expire value is expired, 0 otherwise. */
-static int timestampIsExpired(mstime_t when) {
-    if (when < 0) return 0; /* no expire */
-    mstime_t now = commandTimeSnapshot();
+static const size_t EXPIRE_BULK_LIMIT = 1024; /* Maximum number of fields to active-expire (per replicated HDEL command */
 
-    /* The key expired if the current (virtual or real) time is greater
-     * than the expire time of the key. */
-    return now > when;
+/* Propagate HDEL commands for deleted hash fields to AOF and replicas.
+ *
+ * This function builds and propagates a single HDEL command with multiple fields
+ * for the given hash object `o`. It temporarily enables replication (if needed),
+ * constructs the command using the field names, and sends it via alsoPropagate(). */
+static void propagateFieldsDeletion(serverDb *db, robj *o, size_t n_fields, robj *fields[]) {
+    int prev_replication_allowed = server.replication_allowed;
+    server.replication_allowed = 1;
+
+    robj *argv[EXPIRE_BULK_LIMIT + 2]; /* HDEL + key + fields */
+    int argc = 0;
+    robj *keyobj = createStringObjectFromSds(objectGetKey(o));
+    argv[argc++] = shared.hdel; // HDEL command
+    argv[argc++] = keyobj;      // key name
+    for (size_t i = 0; i < n_fields; i++) {
+        // field to delete
+        argv[argc++] = fields[i];
+    }
+
+    alsoPropagate(db->id, argv, argc, PROPAGATE_AOF | PROPAGATE_REPL);
+    server.replication_allowed = prev_replication_allowed;
+    for (int i = 0; i < argc; i++) {
+        decrRefCount(argv[i]);
+    }
+}
+
+/* Process expired fields for a hash delete them and propagate changes to replicas and AOF.
+ *
+ * This routine:
+ *  - iteratively identifies expired hash fields from the volatile set (batching up to 1024 at a time)
+ *  - deletes the expired fields
+ *  - deletes the entire key if the hash becomes empty
+ *  - propagates HDEL commands for deleted fields if the key remains, or DEL if the key is fully deleted
+ *
+ * Batching avoids large stack allocations while allowing max_entries to be arbitrarily large.
+ * Returns the total number of expired fields removed. */
+size_t dbReclaimExpiredFields(robj *o, serverDb *db, mstime_t now, unsigned long max_entries) {
+    size_t total_expired = 0;
+    bool deleteKey = false;
+
+    while (max_entries > 0) {
+        /* Process in batches to avoid large stack allocations. */
+        unsigned long batch_size = max_entries > EXPIRE_BULK_LIMIT ? EXPIRE_BULK_LIMIT : max_entries;
+        robj *entries[EXPIRE_BULK_LIMIT];
+        size_t expired = hashTypeDeleteExpiredFields(o, now, batch_size, entries);
+        if (expired == 0) break;
+
+        /* Clean up volatile set if no more volatile fields remain */
+        if (!hashTypeHasVolatileFields(o)) {
+            dbUntrackKeyWithVolatileItems(db, o);
+        }
+
+        /* Check if key is now empty after removing expired fields */
+        deleteKey = hashTypeLength(o) == 0;
+
+        enterExecutionUnit(1, 0);
+        robj *keyobj = createStringObjectFromSds(objectGetKey(o));
+        /* Note that even though if might have been more efficient to only propagate del in case the key has no more items left,
+         * we must keep consistency in order to allow the replica to report hdel notifications before del. */
+        propagateFieldsDeletion(db, o, expired, entries);
+        notifyKeyspaceEvent(NOTIFY_EXPIRED, "hexpired", keyobj, db->id);
+        if (deleteKey) {
+            dbDelete(db, keyobj);
+            propagateDeletion(db, keyobj, server.lazyfree_lazy_expire);
+            notifyKeyspaceEvent(NOTIFY_GENERIC, "del", keyobj, db->id);
+        } else {
+            if (!hashTypeHasVolatileFields(o)) dbUntrackKeyWithVolatileItems(db, o);
+        }
+        signalModifiedKey(NULL, db, keyobj);
+        exitExecutionUnit();
+        postExecutionUnitOperations();
+        decrRefCount(keyobj);
+
+        total_expired += expired;
+        max_entries -= expired;
+        if (deleteKey) break; /* Stop if key was deleted */
+    }
+
+    return total_expired;
 }
 
 /* Use this instead of keyIsExpired if you already have the value object. */
@@ -1903,7 +2054,7 @@ static int keyIsExpiredWithDictIndexImpl(serverDb *db, robj *key, int dict_index
     /* Don't expire anything while loading. It will be done later. */
     if (server.loading) return 0;
     mstime_t when = getExpireWithDictIndex(db, key, dict_index);
-    return timestampIsExpired(when);
+    return timestampIsExpired(when) ? 1 : 0;
 }
 
 /* Check if the key is expired. */
@@ -1931,52 +2082,11 @@ static keyStatus expireIfNeededWithDictIndex(serverDb *db, robj *key, robj *val,
     } else {
         if (!keyIsExpiredWithDictIndexImpl(db, key, dict_index)) return KEY_VALID;
     }
-
-    /* If we are running in the context of a replica, instead of
-     * evicting the expired key from the database, we return ASAP:
-     * the replica key expiration is controlled by the primary that will
-     * send us synthesized DEL operations for expired keys. The
-     * exception is when write operations are performed on writable
-     * replicas.
-     *
-     * Still we try to return the right information to the caller,
-     * that is, KEY_VALID if we think the key should still be valid,
-     * KEY_EXPIRED if we think the key is expired but don't want to delete it at this time.
-     *
-     * When replicating commands from the primary, keys are never considered
-     * expired. */
-    if (server.primary_host != NULL) {
-        if (server.current_client && (server.current_client->flag.primary)) return KEY_VALID;
-        if (!(flags & EXPIRE_FORCE_DELETE_EXPIRED)) return KEY_EXPIRED;
-    } else if (server.import_mode) {
-        /* If we are running in the import mode on a primary, instead of
-         * evicting the expired key from the database, we return ASAP:
-         * the key expiration is controlled by the import source that will
-         * send us synthesized DEL operations for expired keys. The
-         * exception is when write operations are performed on this server
-         * because it's a primary.
-         *
-         * Notice: other clients, apart from the import source, should not access
-         * the data imported by import source.
-         *
-         * Still we try to return the right information to the caller,
-         * that is, KEY_VALID if we think the key should still be valid,
-         * KEY_EXPIRED if we think the key is expired but don't want to delete it at this time.
-         *
-         * When receiving commands from the import source, keys are never considered
-         * expired. */
-        if (server.current_client && (server.current_client->flag.import_source)) return KEY_VALID;
-        if (!(flags & EXPIRE_FORCE_DELETE_EXPIRED)) return KEY_EXPIRED;
-    }
-
-    /* In some cases we're explicitly instructed to return an indication of a
-     * missing key without actually deleting it, even on primaries. */
-    if (flags & EXPIRE_AVOID_DELETE_EXPIRED) return KEY_EXPIRED;
-
-    /* If 'expire' action is paused, for whatever reason, then don't expire any key.
-     * Typically, at the end of the pause we will properly expire the key OR we
-     * will have failed over and the new primary will send us the expire. */
-    if (isPausedActionsWithUpdate(PAUSE_ACTION_EXPIRE)) return KEY_EXPIRED;
+    expirationPolicy policy = getExpirationPolicyWithFlags(flags);
+    if (policy == POLICY_IGNORE_EXPIRE) /* Ignore keys expiration. treat all keys as valid. */
+        return KEY_VALID;
+    else if (policy == POLICY_KEEP_EXPIRED) /* Treat expired keys as invalid, but do not delete them. */
+        return KEY_EXPIRED;
 
     /* The key needs to be converted from static to heap before deleted */
     int static_key = key->refcount == OBJ_STATIC_REFCOUNT;
@@ -2836,13 +2946,4 @@ int bitfieldGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysRes
         keys[0].flags = CMD_KEY_RW | CMD_KEY_ACCESS | CMD_KEY_UPDATE;
     }
     return 1;
-}
-
-bool dbHasNoKeys(void) {
-    for (int i = 0; i < server.dbnum; i++) {
-        if (kvstoreSize(server.db[i].keys) != 0) {
-            return false;
-        }
-    }
-    return true;
 }

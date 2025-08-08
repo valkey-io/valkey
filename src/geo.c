@@ -87,6 +87,13 @@ void geoArrayCleanup(geoArray *ga) {
     }
 }
 
+/* Free the GEO BYPOLYGON array created with georadiusGeneric(). */
+void geoPolygonPointsFree(GeoShape *shape) {
+    if (shape->type == POLYGON_TYPE && shape->t.polygon.points != NULL) {
+        zfree(shape->t.polygon.points);
+    }
+}
+
 /* ====================================================================
  * Helpers
  * ==================================================================== */
@@ -115,11 +122,17 @@ int extractLongLatOrReply(client *c, robj **argv, double *xy) {
 /* Input Argument Helper */
 /* Decode lat/long from a zset member's score.
  * Returns C_OK on successful decoding, otherwise C_ERR is returned. */
-int longLatFromMember(robj *zobj, robj *member, double *xy) {
+int longLatFromMemberOrReply(client *c, robj *zobj, robj *member, double *xy) {
     double score = 0;
 
-    if (zsetScore(zobj, member->ptr, &score) == C_ERR) return C_ERR;
-    if (!decodeGeohash(score, xy)) return C_ERR;
+    if (zsetScore(zobj, member->ptr, &score) == C_ERR) {
+        addReplyErrorFormat(c, "member %s does not exist", (char *)member->ptr);
+        return C_ERR;
+    }
+    if (!decodeGeohash(score, xy)) {
+        addReplyErrorFormat(c, "failed to decode, member %s is not a valid geohash", (char *)member->ptr);
+        return C_ERR;
+    }
     return C_OK;
 }
 
@@ -236,6 +249,10 @@ int geoWithinShape(GeoShape *shape, double score, double *xy, double *distance) 
                                              shape->t.r.height * shape->conversion, shape->xy[0], shape->xy[1], xy[0],
                                              xy[1], distance))
             return C_ERR;
+    } else if (shape->type == POLYGON_TYPE) {
+        if (!geohashGetDistanceIfInPolygon(shape->xy[0], shape->xy[1], xy, shape->t.polygon.points, shape->t.polygon.num_vertices, distance)) {
+            return C_ERR;
+        }
     }
     return C_OK;
 }
@@ -293,7 +310,7 @@ int geoGetPointsInRange(robj *zobj, double min, double max, GeoShape *shape, geo
         zskiplist *zsl = zs->zsl;
         zskiplistNode *ln;
 
-        if ((ln = zslNthInRange(zsl, &range, 0)) == NULL) {
+        if ((ln = zslNthInRange(zsl, &range, 0, NULL)) == NULL) {
             /* Nothing exists starting at our min.  No results. */
             return 0;
         }
@@ -538,8 +555,7 @@ void georadiusGeneric(client *c, int srcKeyIndex, int flags) {
         base_args = 5;
         shape.type = CIRCULAR_TYPE;
         robj *member = c->argv[2];
-        if (longLatFromMember(zobj, member, shape.xy) == C_ERR) {
-            addReplyError(c, "could not decode requested zset member");
+        if (longLatFromMemberOrReply(c, zobj, member, shape.xy) == C_ERR) {
             return;
         }
         if (extractDistanceOrReply(c, c->argv + base_args - 2, &shape.conversion, &shape.t.radius) != C_OK) return;
@@ -557,7 +573,7 @@ void georadiusGeneric(client *c, int srcKeyIndex, int flags) {
 
     /* Discover and populate all optional parameters. */
     int withdist = 0, withhash = 0, withcoords = 0;
-    int frommember = 0, fromloc = 0, byradius = 0, bybox = 0;
+    int frommember = 0, fromloc = 0, byradius = 0, bybox = 0, bypolygon = 0;
     int sort = SORT_NONE;
     int any = 0;         /* any=1 means a limited search, stop as soon as enough results were found. */
     long long count = 0; /* Max number of results to return. 0 means unlimited. */
@@ -596,39 +612,63 @@ void georadiusGeneric(client *c, int srcKeyIndex, int flags) {
                 i++;
             } else if (!strcasecmp(arg, "storedist") && (flags & GEOSEARCH) && (flags & GEOSEARCHSTORE)) {
                 storedist = 1;
-            } else if (!strcasecmp(arg, "frommember") && (i + 1) < remaining && flags & GEOSEARCH && !fromloc) {
+            } else if (!strcasecmp(arg, "frommember") && (i + 1) < remaining && flags & GEOSEARCH && !fromloc && !bypolygon) {
                 /* No source key, proceed with argument parsing and return an error when done. */
                 if (zobj == NULL) {
                     frommember = 1;
                     i++;
                     continue;
                 }
-
-                if (longLatFromMember(zobj, c->argv[base_args + i + 1], shape.xy) == C_ERR) {
-                    addReplyError(c, "could not decode requested zset member");
+                robj *member = c->argv[base_args + i + 1];
+                if (longLatFromMemberOrReply(c, zobj, member, shape.xy) == C_ERR) {
                     return;
                 }
                 frommember = 1;
                 i++;
-            } else if (!strcasecmp(arg, "fromlonlat") && (i + 2) < remaining && flags & GEOSEARCH && !frommember) {
+            } else if (!strcasecmp(arg, "fromlonlat") && (i + 2) < remaining && flags & GEOSEARCH && !frommember && !bypolygon) {
                 if (extractLongLatOrReply(c, c->argv + base_args + i + 1, shape.xy) == C_ERR) return;
                 fromloc = 1;
                 i += 2;
-            } else if (!strcasecmp(arg, "byradius") && (i + 2) < remaining && flags & GEOSEARCH && !bybox) {
+            } else if (!strcasecmp(arg, "byradius") && (i + 2) < remaining && flags & GEOSEARCH && !bybox && !bypolygon) {
                 if (extractDistanceOrReply(c, c->argv + base_args + i + 1, &shape.conversion, &shape.t.radius) != C_OK)
                     return;
                 shape.type = CIRCULAR_TYPE;
                 byradius = 1;
                 i += 2;
-            } else if (!strcasecmp(arg, "bybox") && (i + 3) < remaining && flags & GEOSEARCH && !byradius) {
+            } else if (!strcasecmp(arg, "bybox") && (i + 3) < remaining && flags & GEOSEARCH && !byradius && !bypolygon) {
                 if (extractBoxOrReply(c, c->argv + base_args + i + 1, &shape.conversion, &shape.t.r.width,
                                       &shape.t.r.height) != C_OK)
                     return;
                 shape.type = RECTANGLE_TYPE;
                 bybox = 1;
                 i += 3;
+            } else if (!strcasecmp(arg, "bypolygon") && (i + 2) < remaining && flags & GEOSEARCH && !byradius && !bybox && !frommember && !fromloc) {
+                int num_vertices = 0;
+                if (getIntFromObjectOrReply(c, c->argv[base_args + i + 1], &num_vertices, "invalid number of vertices") != C_OK) {
+                    return;
+                }
+                /* Check how many args are remaining. Divide by 2 to see the possible number of vertices. */
+                int possible_vertices = (remaining - i - 2) / 2;
+                if (num_vertices < 3 || possible_vertices < num_vertices) {
+                    addReplyError(c, "GEOSEARCH BYPOLYGON must have at least 3 vertices");
+                    return;
+                }
+                /* Extract polygon vertices. */
+                shape.conversion = 1;
+                shape.t.polygon.num_vertices = num_vertices;
+                shape.t.polygon.points = zmalloc(num_vertices * sizeof(double[2]));
+                for (int j = 0; j < num_vertices * 2; j += 2) {
+                    if (extractLongLatOrReply(c, c->argv + base_args + i + 2 + j, shape.t.polygon.points[j / 2]) == C_ERR) {
+                        zfree(shape.t.polygon.points);
+                        return;
+                    }
+                }
+                shape.type = POLYGON_TYPE;
+                bypolygon = 1;
+                i += (1 + num_vertices * 2);
             } else {
                 addReplyErrorObject(c, shared.syntaxerr);
+                geoPolygonPointsFree(&shape);
                 return;
             }
         }
@@ -638,22 +678,26 @@ void georadiusGeneric(client *c, int srcKeyIndex, int flags) {
     if (storekey && (withdist || withhash || withcoords)) {
         addReplyErrorFormat(c, "%s is not compatible with WITHDIST, WITHHASH and WITHCOORD options",
                             flags & GEOSEARCHSTORE ? "GEOSEARCHSTORE" : "STORE option in GEORADIUS");
+        geoPolygonPointsFree(&shape);
         return;
     }
 
-    if ((flags & GEOSEARCH) && !(frommember || fromloc)) {
+    if ((flags & GEOSEARCH) && !(frommember || fromloc) && !bypolygon) {
         addReplyErrorFormat(c, "exactly one of FROMMEMBER or FROMLONLAT can be specified for %s",
                             (char *)c->argv[0]->ptr);
+        geoPolygonPointsFree(&shape);
         return;
     }
 
-    if ((flags & GEOSEARCH) && !(byradius || bybox)) {
-        addReplyErrorFormat(c, "exactly one of BYRADIUS and BYBOX can be specified for %s", (char *)c->argv[0]->ptr);
+    if ((flags & GEOSEARCH) && !(byradius || bybox || bypolygon)) {
+        addReplyErrorFormat(c, "exactly one of BYRADIUS, BYBOX and BYPOLYGON can be specified for %s", (char *)c->argv[0]->ptr);
+        geoPolygonPointsFree(&shape);
         return;
     }
 
     if (any && !count) {
         addReplyError(c, "the ANY argument requires COUNT argument");
+        geoPolygonPointsFree(&shape);
         return;
     }
 
@@ -671,6 +715,7 @@ void georadiusGeneric(client *c, int srcKeyIndex, int flags) {
             /* Otherwise we return an empty array. */
             addReply(c, shared.emptyarray);
         }
+        geoPolygonPointsFree(&shape);
         return;
     }
 
@@ -692,6 +737,7 @@ void georadiusGeneric(client *c, int srcKeyIndex, int flags) {
     if (ga.used == 0 && storekey == NULL) {
         addReply(c, shared.emptyarray);
         geoArrayCleanup(&ga);
+        geoPolygonPointsFree(&shape);
         return;
     }
 
@@ -796,6 +842,7 @@ void georadiusGeneric(client *c, int srcKeyIndex, int flags) {
         addReplyLongLong(c, returned_items);
     }
     geoArrayCleanup(&ga);
+    geoPolygonPointsFree(&shape);
 }
 
 /* GEORADIUS wrapper function. */

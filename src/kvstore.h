@@ -8,7 +8,9 @@ typedef struct _kvstore kvstore;
 typedef struct _kvstoreIterator kvstoreIterator;
 typedef struct _kvstoreHashtableIterator kvstoreHashtableIterator;
 
+/* Return 1 if we should skip the hashtable in scan. */
 typedef int(kvstoreScanShouldSkipHashtable)(hashtable *d);
+/* Return 1 if we should skip the hashtable in expand. */
 typedef int(kvstoreExpandShouldSkipHashtableIndex)(int didx);
 
 #define KVSTORE_ALLOCATE_HASHTABLES_ON_DEMAND (1 << 0)

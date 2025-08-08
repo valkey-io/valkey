@@ -10,6 +10,7 @@
 
 #include "memory_prefetch.h"
 #include "server.h"
+#include "io_threads.h"
 
 typedef enum {
     PREFETCH_ENTRY, /* Initial state, prefetch entries associated with the given key's hash */
@@ -54,7 +55,7 @@ void freePrefetchCommandsBatch(void) {
 }
 
 void prefetchCommandsBatchInit(void) {
-    serverAssert(!batch);
+    if (batch) return;
     size_t max_prefetch_size = server.prefetch_batch_max_size;
 
     if (max_prefetch_size == 0) {
@@ -70,14 +71,16 @@ void prefetchCommandsBatchInit(void) {
     batch->prefetch_info = zcalloc(max_prefetch_size * sizeof(KeyPrefetchInfo));
 }
 
-void onMaxBatchSizeChange(void) {
+int onMaxBatchSizeChange(const char **err) {
+    UNUSED(err);
     if (batch && batch->client_count > 0) {
         /* We need to process the current batch before updating the size */
-        return;
+        return 1;
     }
 
     freePrefetchCommandsBatch();
     prefetchCommandsBatchInit();
+    return 1;
 }
 
 /* Move to the next key in the batch. */
@@ -120,6 +123,10 @@ static void prefetchEntry(KeyPrefetchInfo *info) {
     if (hashtableIncrementalFindStep(&info->hashtab_state) == 1) {
         /* Not done yet */
         moveToNextKey();
+    } else if (server.io_threads_num >= server.min_io_threads_copy_avoid) {
+        /* Copy avoidance should be more efficient without value prefetch
+         * starting certain number of I/O threads */
+        markKeyAsdone(info);
     } else {
         info->state = PREFETCH_VALUE;
     }
@@ -231,7 +238,7 @@ void processClientsCommandsBatch(void) {
 
     /* Handle the case where the max prefetch size has been changed. */
     if (batch->max_prefetch_size != (size_t)server.prefetch_batch_max_size) {
-        onMaxBatchSizeChange();
+        onMaxBatchSizeChange(NULL);
     }
 }
 
@@ -259,9 +266,9 @@ int addCommandToBatchAndProcessIfFull(client *c) {
     batch->clients[batch->client_count++] = c;
 
     /* Client's next command */
-    if (c->io_parsed_cmd) {
+    if (c->parsed_cmd && !(c->read_flags & READ_FLAGS_BAD_ARITY)) {
         c->read_flags |= READ_FLAGS_PREFETCHED;
-        addCommandToBatch(c->io_parsed_cmd, c->argv, c->argc, c->db, c->slot);
+        addCommandToBatch(c->parsed_cmd, c->argv, c->argc, c->db, c->slot);
     }
 
     /* Commands in the queue. */

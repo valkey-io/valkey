@@ -33,6 +33,17 @@
 #include <stdint.h>
 #include "sds.h"
 
+/* Anti-warning macro... */
+#ifndef UNUSED
+#define UNUSED(V) ((void)V)
+#endif
+
+/* min/max */
+#undef min
+#undef max
+#define min(a, b) ((a) < (b) ? (a) : (b))
+#define max(a, b) ((a) > (b) ? (a) : (b))
+
 /* The maximum number of characters needed to represent a long double
  * as a string (long double has a huge range of some 4952 chars, see LDBL_MAX).
  * This should be the size of the buffer given to ld2string */
@@ -56,6 +67,9 @@ typedef enum {
     LD_STR_HUMAN, /* %.17Lf + Trimming of trailing zeros */
     LD_STR_HEX    /* %La */
 } ld2string_mode;
+
+typedef long long mstime_t; /* millisecond time type. */
+typedef long long ustime_t; /* microsecond time type. */
 
 int stringmatchlen(const char *p, int plen, const char *s, int slen, int nocase);
 int stringmatch(const char *p, const char *s, int nocase);
@@ -103,5 +117,8 @@ void getRandomSeedCString(char *buff, size_t len);
 void setRandomSeedCString(char *seed_str, size_t len);
 void getRandomHexChars(char *p, size_t len);
 void getRandomBytes(unsigned char *p, size_t len);
+long long ustime(void);
+mstime_t mstime(void);
+void writePointerWithPadding(unsigned char *buf, const void *ptr);
 
 #endif

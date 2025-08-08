@@ -244,7 +244,7 @@ int scriptPrepareForRun(scriptRunCtx *run_ctx,
     if (client_allow_oom ||
         (!(script_flags & SCRIPT_FLAG_EVAL_COMPAT_MODE) && (script_flags & SCRIPT_FLAG_ALLOW_OOM))) {
         /* Note: we don't need to test the no-writes flag here and set this run_ctx flag,
-         * since only write commands can are deny-oom. */
+         * since only write commands can deny-oom. */
         run_ctx->flags |= SCRIPT_ALLOW_OOM;
     }
 
@@ -431,8 +431,8 @@ static int scriptVerifyClusterState(scriptRunCtx *run_ctx, client *c, client *or
     /* Duplicate relevant flags in the script client. */
     c->flag.readonly = original_c->flag.readonly;
     c->flag.asking = original_c->flag.asking;
-    int hashslot = -1;
-    if (getNodeByQuery(c, c->cmd, c->argv, c->argc, &hashslot, &error_code) != getMyClusterNode()) {
+    int hashslot = c->slot = clusterSlotByCommand(c->cmd, c->argv, c->argc, &c->read_flags);
+    if (getNodeByQuery(c, &error_code) != getMyClusterNode()) {
         if (error_code == CLUSTER_REDIR_DOWN_RO_STATE) {
             *err = sdsnew("Script attempted to execute a write command while the "
                           "cluster is down and readonly");
@@ -474,7 +474,6 @@ static int scriptVerifyClusterState(scriptRunCtx *run_ctx, client *c, client *or
         }
     }
 
-    c->slot = hashslot;
     original_c->slot = hashslot;
 
     return C_OK;

@@ -14,6 +14,7 @@ exat = "exat"
 optin = "optin"
 smove = "smove"
 Parth = "Parth" # seems like the spellchecker does not like it is similar to "Path"
+nd = "nd"
 
 [type.c]
 extend-ignore-re = [
@@ -33,7 +34,6 @@ extend-ignore-re = [
 advices = "advices"
 clen = "clen"
 fle = "fle"
-nd = "nd"
 ot = "ot"
 
 [type.tcl.extend-identifiers]

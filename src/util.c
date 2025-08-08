@@ -52,14 +52,11 @@
 #include "config.h"
 #include "zmalloc.h"
 #include "serverassert.h"
-
 #include "valkey_strtod.h"
 
 #if HAVE_X86_SIMD
 #include <immintrin.h>
 #endif
-
-#define UNUSED(x) ((void)(x))
 
 /* Glob-style pattern matching. */
 static int stringmatchlen_impl(const char *pattern,
@@ -1569,4 +1566,29 @@ int snprintf_async_signal_safe(char *to, size_t n, const char *fmt, ...) {
     result = vsnprintf_async_signal_safe(to, n, fmt, args);
     va_end(args);
     return result;
+}
+
+/* Return the UNIX time in microseconds */
+long long ustime(void) {
+    struct timeval tv;
+    long long ust;
+
+    gettimeofday(&tv, NULL);
+    ust = ((long long)tv.tv_sec) * 1000000;
+    ust += tv.tv_usec;
+    return ust;
+}
+
+/* Return the UNIX time in milliseconds */
+mstime_t mstime(void) {
+    return ustime() / 1000;
+}
+
+/* Writes a pointer into an 8 bytes field, padding with zeros on 32bit targets
+ * to ensure a consistent fixed width encoding. */
+void writePointerWithPadding(unsigned char *buf, const void *ptr) {
+    size_t ptr_size = sizeof(ptr); /* 4 on 32‑bit, 8 on 64‑bit */
+    memcpy(buf, &ptr, ptr_size);
+    /* if it is 32-bit system, pad the remaining 4 bytes with zero */
+    if (ptr_size == 4) memset(buf + ptr_size, 0, ptr_size);
 }

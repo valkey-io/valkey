@@ -6,13 +6,17 @@ on:
       # any PR to a release branch.
       - "[0-9].[0-9]"
       - "unstable"
+    paths-ignore:
+      - '**/*.md'
+      - '**/00-RELEASENOTES'
+      - '**/COPYING'
   schedule:
     - cron: "0 0 * * *"
   workflow_dispatch:
     inputs:
       skipjobs:
         description: "jobs to skip (delete the ones you wanna keep, do not leave empty)"
-        default: "valgrind,sanitizer,tls,freebsd,macos,alpine,32bit,iothreads,ubuntu,rpm-distros,malloc,specific,fortify,reply-schema,arm"
+        default: "valgrind,sanitizer,tls,freebsd,macos,alpine,32bit,iothreads,ubuntu,rpm-distros,malloc,specific,fortify,reply-schema,arm,lttng"
       skiptests:
         description: "tests to skip (delete the ones you wanna keep, do not leave empty)"
         default: "valkey,modules,sentinel,cluster,unittest,large-memory"
@@ -78,6 +82,32 @@ jobs:
       - name: unittest
         if: true && !contains(github.event.inputs.skiptests, 'unittest')
         run: ./src/valkey-unit-tests --accurate
+      - name: install Redis OSS 6.2 server for compatibility testing
+        run: |
+          cd tests/tmp
+          wget https://download.redis.io/releases/redis-6.2.14.tar.gz
+          tar -xvf redis-6.2.14.tar.gz
+      - name: make Redis OSS 6.2 server
+        run: |
+          cd tests/tmp/redis-6.2.14
+          make
+      - name: backward compatibility tests with OSS Redis 6.2
+        run: |
+          sudo apt-get install tcl8.6 tclx
+          ./runtest --verbose --tags compatible-redis --dump-logs --other-server-path tests/tmp/redis-6.2.14/src/redis-server
+      - name: install Redis OSS 7.0 server for compatibility testing
+        run: |
+          cd tests/tmp
+          wget https://download.redis.io/releases/redis-7.0.15.tar.gz
+          tar -xvf redis-7.0.15.tar.gz
+      - name: make Redis OSS 7.0 server
+        run: |
+          cd tests/tmp/redis-7.0.15
+          make
+      - name: backward compatibility tests with OSS Redis 7.0
+        run: |
+          sudo apt-get install tcl8.6 tclx
+          ./runtest --verbose --tags compatible-redis --dump-logs --other-server-path tests/tmp/redis-7.0.15/src/redis-server
 
   test-ubuntu-arm:
     runs-on: ubuntu-24.04-arm
@@ -827,6 +857,47 @@ jobs:
         if: true && !contains(github.event.inputs.skiptests, 'unittest')
         run: ./src/valkey-unit-tests
 
+  test-ubuntu-lttng:
+    runs-on: ubuntu-latest
+    if: |
+      (github.event_name == 'workflow_dispatch' ||
+        (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey') ||
+        (github.event_name == 'pull_request' && (contains(github.event.pull_request.labels.*.name, 'run-extra-tests') || github.event.pull_request.base.ref != 'unstable'))) &&
+      !contains(github.event.inputs.skipjobs, 'lttng')
+    timeout-minutes: 1440
+    steps:
+      - name: prep
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          echo "GITHUB_REPOSITORY=${{github.event.inputs.use_repo}}" >> $GITHUB_ENV
+          echo "GITHUB_HEAD_REF=${{github.event.inputs.use_git_ref}}" >> $GITHUB_ENV
+          echo "skipjobs: ${{github.event.inputs.skipjobs}}"
+          echo "skiptests: ${{github.event.inputs.skiptests}}"
+          echo "test_args: ${{github.event.inputs.test_args}}"
+          echo "cluster_test_args: ${{github.event.inputs.cluster_test_args}}"
+      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+        with:
+          repository: ${{ env.GITHUB_REPOSITORY }}
+          ref: ${{ env.GITHUB_HEAD_REF }}
+      - name: make
+        run: |
+          sudo apt-get update && sudo apt-get install lttng-tools lttng-modules-dkms liblttng-ust-dev
+          make -j4 USE_LTTNG=yes
+      - name: testprep
+        run: sudo apt-get install tcl8.6 tclx
+      - name: test
+        if: true && !contains(github.event.inputs.skiptests, 'valkey')
+        run: ./runtest ${{ github.event_name != 'pull_request' && '--accurate' || '' }} --verbose --dump-logs ${{github.event.inputs.test_args}}
+      - name: module api test
+        if: true && !contains(github.event.inputs.skiptests, 'modules')
+        run: CFLAGS='-Werror' ./runtest-moduleapi --verbose --dump-logs ${{github.event.inputs.test_args}}
+      - name: sentinel tests
+        if: true && !contains(github.event.inputs.skiptests, 'sentinel')
+        run: ./runtest-sentinel ${{github.event.inputs.cluster_test_args}}
+      - name: cluster tests
+        if: true && !contains(github.event.inputs.skiptests, 'cluster')
+        run: ./runtest-cluster ${{github.event.inputs.cluster_test_args}}
+
   test-rpm-distros-jemalloc:
     if: |
       (github.event_name == 'workflow_dispatch' ||
@@ -1337,6 +1408,7 @@ jobs:
       - test-sanitizer-address
       - test-sanitizer-undefined
       - test-sanitizer-force-defrag
+      - test-ubuntu-lttng
       - test-rpm-distros-jemalloc
       - test-rpm-distros-tls-module
       - test-rpm-distros-tls-module-no-tls

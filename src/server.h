@@ -1244,9 +1244,9 @@ typedef struct parsedCommand {
 /* Queue of parsed commands. */
 typedef struct {
     parsedCommand *cmds;
-    short len; /* Number of elements in the queue. */
-    short off; /* Offset to the next element to execute. */
-    short cap; /* Allocation size (capacity) of the ps array. */
+    uint16_t len; /* Number of elements in the queue. */
+    uint16_t off; /* Offset to the next element to execute. */
+    uint16_t cap; /* Allocation size (capacity) of the ps array. */
 } cmdQueue;
 
 typedef struct LastWrittenBuf {
@@ -3272,6 +3272,7 @@ size_t freeMemoryGetNotCountedMemory(void);
 int overMaxmemoryAfterAlloc(size_t moremem);
 uint64_t getCommandFlags(client *c);
 void prepareCommand(client *c);
+void prepareCommandQueue(client *c);
 void unprepareCommand(client *c);
 int processCommand(client *c);
 int processPendingCommandAndInputBuffer(client *c);

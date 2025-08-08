@@ -156,6 +156,8 @@ typedef enum {
     PARSE_NEEDMORE = -2,
 } parseResult;
 
+#define COMMAND_QUEUE_MIN_CAPACITY 16
+
 /* Return the amount of memory used by the sds string at object->ptr
  * for a string object. This includes internal fragmentation. */
 size_t getStringObjectSdsUsedMemory(robj *o) {
@@ -3357,20 +3359,18 @@ void processMultibulkBuffer(client *c) {
     /* Try parsing pipelined commands. */
     cmdQueue *queue = &c->cmd_queue;
     debugServerAssert(queue->len == 0);
-    while (flag != 0 &&
+    while ((flag & READ_FLAGS_PARSING_COMPLETED) &&
            sdslen(c->querybuf) > c->qb_pos &&
            c->querybuf[c->qb_pos] == '*') {
         c->reqtype = PROTO_REQ_MULTIBULK;
         /* Push a new parser state to the command queue */
         if (queue->len == queue->cap) {
             if (queue->cap == 0) {
-                queue->cap = 16;
-            } else if (queue->cap <= 256) {
+                queue->cap = COMMAND_QUEUE_MIN_CAPACITY;
+            } else if (queue->cap <= 512) {
                 queue->cap *= 2;
-            } else if (queue->cap <= SHRT_MAX - 32) {
-                queue->cap += 32;
             } else {
-                break; /* Growing the capacity more would overflow. */
+                break; /* Limit the length of the command queue. */
             }
             queue->cmds = zrealloc(queue->cmds, queue->cap * sizeof(parsedCommand));
         }
@@ -3392,7 +3392,7 @@ void processMultibulkBuffer(client *c) {
  * which are also used for returning the parsed command or error: argv,
  * argv_len, argc, read_flag.
  *
- * Returns a non-zero if parsing is complete (wither error or success) and zero
+ * Returns a non-zero if parsing is complete (either error or success) and zero
  * if the input buffer doesn't contain a enough data to parse a complete
  * command. If non-zero is returned, the returned value is a read flag, either
  * READ_FLAGS_PARSING_COMPLETED on success or one of the READ_FLAGS_ERROR_(...)
@@ -3722,6 +3722,30 @@ void parseCommand(client *c) {
     }
 }
 
+/* Free unused memory in a client's queue of parsed commands. */
+void trimCommandQueue(client *c) {
+    if (c->flag.close_asap) return; /* Prevent concurrent access with
+                                       freeClientAsync(). */
+    cmdQueue *queue = &c->cmd_queue;
+    if (queue->cmds != NULL) {
+        if (queue->len == 0) {
+            zfree(queue->cmds);
+            queue->cmds = NULL;
+            queue->cap = 0;
+        } else {
+            /* Try shrink to the next power of two >= len */
+            const int bits = CHAR_BIT * sizeof(unsigned int);
+            uint16_t cap = queue->len == 1 ? 1 : 1 << (bits - __builtin_clz(queue->len - 1));
+            if (cap == 0) return; /* overflow */
+            cap = max(cap, COMMAND_QUEUE_MIN_CAPACITY);
+            if (cap < queue->cap) {
+                queue->cap = cap;
+                queue->cmds = zrealloc(queue->cmds, cap * sizeof(parsedCommand));
+            }
+        }
+    }
+}
+
 int canParseCommand(client *c) {
     if (c->cmd != NULL) return 0;
 
@@ -3763,10 +3787,10 @@ static bool consumeCommandQueue(client *c) {
     c->parsed_cmd = p->cmd;
     c->slot = p->slot;
     if (queue->off == queue->len) {
-        /* FIXME: Don't free in main thread when parsing in IO threads. */
-        zfree(queue->cmds);
-        queue->cmds = NULL;
-        queue->cap = queue->off = queue->len = 0;
+        /* The queue is empty. Don't free it here, because if parsing is done in
+         * I/O threads, we want to free it in I/O threads too, to avoid
+         * fragmentation. */
+        queue->off = queue->len = 0;
     }
     return true;
 }
@@ -3815,50 +3839,49 @@ static int addKeysToIncrFindBatch(client *c,
     return num;
 }
 
-/* Prefetches the keys for the commands queued up in the client. */
+/* Prefetches the keys for the commands queued up in the client.
+ *
+ * TODO: Avoid the logic duplicated with the code in memory_prefetch.c which
+ * is used with I/O threading. */
 static void prefetchCommandQueueKeys(client *c) {
     if (c->read_flags & READ_FLAGS_PREFETCHED) return;
+    c->read_flags |= READ_FLAGS_PREFETCHED;
 
     /* Prefetching states */
-    const int max_keys = 32;
-    const int soft_max_keys = 16; /* Threshold to continue to the next command
-                                   * and prefetch its keys */
+    const int max_keys = server.prefetch_batch_max_size;
     int num_keys = 0;
     hashtableIncrementalFindState key_incr_states[max_keys];
+    if (max_keys <= 1) return; /* No point to prefetch a single key */
 
-    /* Lookup commands and add keys to incremental find batch. */
-    if (c->read_flags & READ_FLAGS_PARSING_COMPLETED && c->argc != 0) {
-        c->read_flags |= READ_FLAGS_PREFETCHED;
-        if (!c->parsed_cmd) {
-            struct serverCommand *cmd = lookupCommand(c->argv, c->argc);
-            if (!cmd || !commandCheckArity(cmd, c->argc, NULL)) {
-                /* Wrong arity. This case is handled later. */
-            } else {
-                c->parsed_cmd = cmd;
-            }
-        }
-        if (c->parsed_cmd) {
-            num_keys = addKeysToIncrFindBatch(c, c->parsed_cmd, c->argv, c->argc,
-                                              key_incr_states, num_keys, max_keys);
-        }
+    /* If the command is valid, add keys to incremental find batch. */
+    if (c->parsed_cmd != NULL && !(c->read_flags & READ_FLAGS_BAD_ARITY)) {
+        num_keys = addKeysToIncrFindBatch(c, c->parsed_cmd, c->argv, c->argc,
+                                          key_incr_states, num_keys, max_keys);
+    } else {
+        /* Command is already found to be incomplete, non-existing, etc. */
+        debugServerAssert(!(c->read_flags & READ_FLAGS_PARSING_COMPLETED) ||
+                          c->argc == 0 ||
+                          (c->read_flags & READ_FLAGS_COMMAND_NOT_FOUND) ||
+                          (c->read_flags & READ_FLAGS_BAD_ARITY));
     }
 
     cmdQueue *queue = &c->cmd_queue;
     for (int i = queue->off; i < queue->len; i++) {
+        if (num_keys >= max_keys) break;
         parsedCommand *p = &queue->cmds[i];
-        if (!(p->read_flags & READ_FLAGS_PARSING_COMPLETED) || c->argc == 0) continue;
-        if (num_keys >= soft_max_keys) break;
         p->read_flags |= READ_FLAGS_PREFETCHED;
-        if (!p->cmd) {
-            struct serverCommand *cmd = lookupCommand(p->argv, p->argc);
-            /* Wrong arity. Reset command so it will be handled later. */
-            if (!cmd || !commandCheckArity(cmd, p->argc, NULL)) continue;
-            p->cmd = cmd;
+        if (p->cmd == NULL || p->read_flags & READ_FLAGS_BAD_ARITY) {
+            /* Command is already found to be incomplete, non-existing, etc. */
+            debugServerAssert(!(p->read_flags & READ_FLAGS_PARSING_COMPLETED) ||
+                              p->argc == 0 ||
+                              (p->read_flags & READ_FLAGS_COMMAND_NOT_FOUND) ||
+                              (p->read_flags & READ_FLAGS_BAD_ARITY));
+            continue;
         }
         num_keys = addKeysToIncrFindBatch(c, p->cmd, p->argv, p->argc,
                                           key_incr_states, num_keys, max_keys);
     }
-    if (num_keys <= 1) return; /* No point to batch-lookup a single key */
+    if (num_keys <= 1) return; /* No point to prefetch a single key */
 
     /* Batch-lookup the keys. */
     int not_complete_count;
@@ -3897,6 +3920,7 @@ int processInputBuffer(client *c) {
         /* If commands are queued up, pop from the queue first */
         if (!consumeCommandQueue(c)) {
             parseCommand(c);
+            prepareCommandQueue(c);
         }
 
         /* Prefetch keys for the next commands in queue, if not already done. */
@@ -3917,9 +3941,6 @@ int processInputBuffer(client *c) {
              * the shared qb for other clients during processEventsWhileBlocked */
             resetSharedQueryBuf(c);
         }
-
-        /* Lookup command, check arity, calculate cluster slot. */
-        prepareCommand(c);
 
         /* We are finally ready to execute the command. */
         if (processCommandAndResetClient(c) == C_ERR) {
@@ -4033,6 +4054,7 @@ void readQueryFromClient(connection *conn) {
         bool full_read = readToQueryBuf(c);
         if (handleReadResult(c) == C_OK) {
             if (processInputBuffer(c) == C_ERR) return;
+            trimCommandQueue(c);
         }
         repeat = (c->flag.primary &&
                   !c->flag.close_asap &&
@@ -6278,6 +6300,8 @@ void ioThreadReadQueryFromClient(void *data) {
     }
 
     parseCommand(c);
+    trimCommandQueue(c);
+    prepareCommandQueue(c);
 
     /* Parsing was not completed - let the main-thread handle it. */
     if (!(c->read_flags & READ_FLAGS_PARSING_COMPLETED)) {
@@ -6287,29 +6311,6 @@ void ioThreadReadQueryFromClient(void *data) {
     /* Empty command - Multibulk processing could see a <= 0 length. */
     if (c->argc == 0) {
         goto done;
-    }
-
-    /* Lookup command and cluster slot calculation. */
-    prepareCommand(c);
-
-    /* Lookup commands in command queue. */
-    for (int i = c->cmd_queue.off; i < c->cmd_queue.len; i++) {
-        parsedCommand *p = &c->cmd_queue.cmds[i];
-        if (!(p->read_flags & READ_FLAGS_PARSING_COMPLETED) || c->argc == 0) continue;
-        struct serverCommand *cmd = lookupCommand(p->argv, p->argc);
-        if (!cmd || !commandCheckArity(c->parsed_cmd, c->argc, NULL)) continue;
-        p->cmd = cmd;
-        if (server.cluster_enabled) {
-            /* Offload slot calculation to I/O thread */
-            getKeysResult result;
-            initGetKeysResult(&result);
-            int numkeys = getKeysFromCommand(p->cmd, p->argv, p->argc, &result);
-            if (numkeys) {
-                robj *first_key = p->argv[result.keys[0].pos];
-                p->slot = (int)keyHashSlot(first_key->ptr, sdslen(first_key->ptr));
-            }
-            getKeysFreeResult(&result);
-        }
     }
 
 done:

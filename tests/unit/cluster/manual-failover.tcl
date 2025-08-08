@@ -502,3 +502,84 @@ start_cluster 3 1 {tags {external:skip cluster}} {
         wait_for_cluster_propagation
     }
 }
+
+start_cluster 3 2 {tags {external:skip cluster}} {
+    # In the R0/R3/R4 shard, R0 is the primary node, R3 and R4 are the replicas.
+    #
+    # We trigger a manually failover on R3.
+    #
+    # When R3 becomes the new primary node, it will broadcast a message to all
+    # nodes in the cluster.
+    # When R0 receives the message, it becomes the new replica and also will
+    # broadcast the message to all nodes in the cluster.
+    #
+    # Let's assume that R4 receive the message from R0 (new replica) first
+    # and then the message from R3 (new primary) later. In the past it would
+    # have created a replication loop, that is R4->R0->R3->R0.
+    #
+    # The purpose of this test is to verify the behavior of R4 after receiving
+    # the message from R0 (new replica) first. R4 will set R3 as the primary node
+    # and set R0 as a replica of R3. After it realizes that a sub-replica has appeared
+    # in this case R4->R0->R3, it will set itself as a replica of R3.
+    test "Node will fix the replicaof when it finds that it is a sub-replica" {
+        # We make R4 become a fresh new node.
+        isolate_node 4
+
+        # Add R4 and wait for R4 to become a replica of R0.
+        R 4 cluster meet [srv 0 host] [srv 0 port]
+        wait_for_condition 50 100 {
+            [cluster_get_node_by_id 4 [R 0 cluster myid]] != {}
+        } else {
+            fail "Node R4 never learned about node R0"
+        }
+        R 4 cluster replicate [R 0 cluster myid]
+        wait_for_sync [srv -4 client]
+
+        wait_for_cluster_propagation
+
+        set R0_nodeid [R 0 cluster myid]
+        set R3_nodeid [R 3 cluster myid]
+        set R4_nodeid [R 4 cluster myid]
+
+        # Ensure that related nodes do not reconnect.
+        R 3 debug disable-cluster-reconnection 1
+        R 4 debug disable-cluster-reconnection 1
+
+        # After killing the cluster link, ensure that R4 do not receive messages
+        # from R3 (new primary), but can receive message from R0 (new replica).
+        R 4 debug clusterlink kill all $R3_nodeid
+        R 3 debug clusterlink kill all $R4_nodeid
+
+        R 3 cluster failover takeover
+
+        # Wait for the failover to success in R4's view.
+        wait_for_condition 1000 10 {
+            [cluster_has_flag [cluster_get_node_by_id 4 $R3_nodeid] master] eq 1 &&
+            [dict get [cluster_get_node_by_id 4 $R3_nodeid] slaveof] eq "-" &&
+
+            [cluster_has_flag [cluster_get_node_by_id 4 $R0_nodeid] slave] eq 1 &&
+            [dict get [cluster_get_node_by_id 4 $R0_nodeid] slaveof] eq $R3_nodeid &&
+
+            [cluster_has_flag [cluster_get_node_by_id 4 $R4_nodeid] slave] eq 1 &&
+            [dict get [cluster_get_node_by_id 4 $R4_nodeid] slaveof] eq $R3_nodeid
+        } else {
+            puts "R 4 cluster nodes:"
+            puts [R 4 cluster nodes]
+            fail "The node is not marked with the correct flag"
+        }
+
+        # Make sure R4 indeed detect the sub-replica and fixed the replicaof.
+        set pattern "*I'm a sub-replica! Reconfiguring myself as a replica of $R3_nodeid from $R0_nodeid*"
+        verify_log_message -4 $pattern 0
+
+        R 3 debug disable-cluster-reconnection 0
+        R 4 debug disable-cluster-reconnection 0
+
+        wait_for_cluster_propagation
+
+        # Finally, assert one more times that each replicaof is correct.
+        assert_equal [dict get [cluster_get_node_by_id 4 $R3_nodeid] slaveof] "-"
+        assert_equal [dict get [cluster_get_node_by_id 4 $R0_nodeid] slaveof] $R3_nodeid
+        assert_equal [dict get [cluster_get_node_by_id 4 $R4_nodeid] slaveof] $R3_nodeid
+    }
+}

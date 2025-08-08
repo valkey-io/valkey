@@ -11112,7 +11112,8 @@ typedef struct ValkeyModuleScanCursor {
     int done;
 } ValkeyModuleScanCursor;
 
-static void moduleScanCallback(void *privdata, void *element) {
+static void moduleScanCallback(void *privdata, void *element, int didx) {
+    UNUSED(didx);
     ScanCBData *data = privdata;
     robj *val = element;
     sds key = objectGetKey(val);

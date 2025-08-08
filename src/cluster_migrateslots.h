@@ -32,5 +32,6 @@ void clusterHandleFlushDuringSlotMigration(void);
 size_t clusterGetTotalSlotExportBufferMemory(void);
 char *getNameOfSlotExportTarget(int slot);
 void clusterFailAllSlotExportsWithMessage(char *message);
+void clusterHandleSlotMigrationErrorResponse(slotMigrationJob *job);
 
 #endif /* __CLUSTER_MIGRATESLOTS_H */

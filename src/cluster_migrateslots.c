@@ -1677,6 +1677,13 @@ void updateSlotMigrationJobState(slotMigrationJob *job, slotMigrationJobState st
     job->state = state;
 }
 
+void clusterHandleSlotMigrationErrorResponse(slotMigrationJob *job) {
+    if (!job || !isSlotMigrationJobInProgress(job)) {
+        return;
+    }
+    finishSlotMigrationJob(job, SLOT_MIGRATION_JOB_FAILED, "Failed to process command during slot migration. Check logs for more information");
+}
+
 /* Callback triggered when a client with a slot migration client is closed. */
 void clusterHandleSlotMigrationClientClose(slotMigrationJob *job) {
     job->client = NULL;

@@ -594,27 +594,27 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
             assert_match "OK" [R $target_idx DEBUG SET-ACTIVE-EXPIRE 0]
             populate 1000 "$slot_to_migrate_tag:1:" 1000 -$source_idx false 0.5
             populate 1000 "$slot_to_test_tag:1:" 1000 -$target_idx false 0.5
+            assert_match "1" [R $source_idx HSETEX $slot_to_migrate_tag:hfe PX 500 FIELDS 1 field value]
+            assert_match "1" [R $target_idx HSETEX $slot_to_test_tag:hfe PX 500 FIELDS 1 field value]
             assert_match "OK" [R $source_idx CLUSTER MIGRATESLOTS SLOTSRANGE $slot_to_migrate $slot_to_migrate NODE $target_id]
             set jobname [get_job_name $source_idx $slot_to_migrate]
             wait_for_migration_field $source_idx $jobname state waiting-to-pause
-            assert_match "1000" [R $target_idx CLUSTER COUNTKEYSINSLOT $slot_to_migrate]
+            assert_match "1001" [R $target_idx CLUSTER COUNTKEYSINSLOT $slot_to_migrate]
 
             # Pause the source
             set source_pid  [srv -$source_idx pid]
-            pause_process $source_pid
             assert_match "OK" [R $target_idx DEBUG SET-ACTIVE-EXPIRE 1]
 
             # Wait for active expiration
             wait_for_countkeysinslot $target_idx $slot_to_test 0
 
             # Validate keys are still there
-            assert_match "1000" [R $target_idx CLUSTER COUNTKEYSINSLOT $slot_to_migrate]
+            assert_match "1001" [R $target_idx CLUSTER COUNTKEYSINSLOT $slot_to_migrate]
 
             # Active expiration of non-importing keys is functioning
             assert_match "0" [R $target_idx CLUSTER COUNTKEYSINSLOT $slot_to_test]
 
             # Resume the source
-            resume_process $source_pid
             assert_match "OK" [R $source_idx DEBUG SET-ACTIVE-EXPIRE 1]
 
             # Wait for the expirations to be propagated

@@ -398,6 +398,17 @@ size_t kvstoreMemUsage(kvstore *kvs) {
     return mem;
 }
 
+typedef struct kvstoreScanCallbackData {
+    kvstoreScanFunction scan_cb;
+    void *privdata;
+    int didx;
+} kvstoreScanCallbackData;
+
+void hashtableScanToKvstoreScanCallback(void *privdata, void *entry) {
+    kvstoreScanCallbackData *cb_data = privdata;
+    cb_data->scan_cb(cb_data->privdata, entry, cb_data->didx);
+}
+
 /*
  * This method is used to iterate over the elements of the entire kvstore specifically across hashtables.
  * It's a three pronged approach.
@@ -414,7 +425,7 @@ size_t kvstoreMemUsage(kvstore *kvs) {
 unsigned long long kvstoreScan(kvstore *kvs,
                                unsigned long long cursor,
                                int onlydidx,
-                               hashtableScanFunction scan_cb,
+                               kvstoreScanFunction scan_cb,
                                kvstoreScanShouldSkipHashtable *skip_cb,
                                void *privdata) {
     unsigned long long next_cursor = 0;
@@ -436,10 +447,11 @@ unsigned long long kvstoreScan(kvstore *kvs,
     }
 
     hashtable *ht = kvstoreGetHashtable(kvs, didx);
+    kvstoreScanCallbackData cb_data = {.scan_cb = scan_cb, .privdata = privdata, .didx = didx};
 
     int skip = !ht || (skip_cb && skip_cb(ht)) || kvstoreIsImporting(kvs, didx);
     if (!skip) {
-        next_cursor = hashtableScan(ht, cursor, scan_cb, privdata);
+        next_cursor = hashtableScan(ht, cursor, hashtableScanToKvstoreScanCallback, &cb_data);
         /* In hashtableScan, scan_cb may delete entries (e.g., in active expire case). */
         freeHashtableIfNeeded(kvs, didx);
     }

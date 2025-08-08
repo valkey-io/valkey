@@ -880,6 +880,9 @@ void afterErrorReply(client *c, const char *s, size_t len, int flags) {
                         " after processing the command '%s'",
                         from, to, cmdname ? cmdname : "<unknown>");
         }
+        if (ctype == CLIENT_TYPE_SLOT_IMPORT || ctype == CLIENT_TYPE_SLOT_EXPORT) {
+            clusterHandleSlotMigrationErrorResponse(c->slot_migration_job);
+        }
     }
 }
 

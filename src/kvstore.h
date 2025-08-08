@@ -12,6 +12,7 @@ typedef struct _kvstoreHashtableIterator kvstoreHashtableIterator;
 typedef int(kvstoreScanShouldSkipHashtable)(hashtable *d);
 /* Return 1 if we should skip the hashtable in expand. */
 typedef int(kvstoreExpandShouldSkipHashtableIndex)(int didx);
+typedef void (*kvstoreScanFunction)(void *privdata, void *entry, int didx);
 
 #define KVSTORE_ALLOCATE_HASHTABLES_ON_DEMAND (1 << 0)
 #define KVSTORE_FREE_EMPTY_HASHTABLES (1 << 1)
@@ -25,7 +26,7 @@ size_t kvstoreMemUsage(kvstore *kvs);
 unsigned long long kvstoreScan(kvstore *kvs,
                                unsigned long long cursor,
                                int onlydidx,
-                               hashtableScanFunction scan_cb,
+                               kvstoreScanFunction scan_cb,
                                kvstoreScanShouldSkipHashtable *skip_cb,
                                void *privdata);
 int kvstoreExpand(kvstore *kvs, uint64_t newsize, int try_expand, kvstoreExpandShouldSkipHashtableIndex *skip_cb);

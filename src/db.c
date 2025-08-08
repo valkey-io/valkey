@@ -47,9 +47,7 @@ static keyStatus expireIfNeeded(serverDb *db, robj *key, robj *val, int flags);
 static int keyIsExpiredWithDictIndex(serverDb *db, robj *key, int dict_index);
 static int objectIsExpired(robj *val);
 static void dbSetValue(serverDb *db, robj *key, robj **valref, int overwrite, void **oldref);
-static int getKVStoreIndexForKey(sds key);
 static robj *dbFindWithDictIndex(serverDb *db, sds key, int dict_index);
-static robj *dbFindExpiresWithDictIndex(serverDb *db, sds key, int dict_index);
 
 /* Update LFU when an object is accessed.
  * Firstly, decrement the counter if the decrement time is reached.
@@ -243,7 +241,7 @@ void dbAdd(serverDb *db, robj *key, robj **valref) {
 }
 
 /* Returns which dict index should be used with kvstore for a given key. */
-static int getKVStoreIndexForKey(sds key) {
+int getKVStoreIndexForKey(sds key) {
     return server.cluster_enabled ? getKeySlot(key) : 0;
 }
 
@@ -1008,7 +1006,7 @@ int objectTypeCompare(robj *o, long long target) {
 }
 
 /* Hashtable scan callback used by scanCallback when scanning the keyspace. */
-void keysScanCallback(void *privdata, void *entry) {
+void keysScanCallback(void *privdata, void *entry, int didx) {
     scanData *data = (scanData *)privdata;
     robj *obj = entry;
     data->sampled++;
@@ -1031,7 +1029,7 @@ void keysScanCallback(void *privdata, void *entry) {
     if (objectIsExpired(obj)) {
         robj kobj;
         initStaticStringObject(kobj, key);
-        if (expireIfNeeded(data->db, &kobj, obj, 0) != KEY_VALID) {
+        if (expireIfNeededWithDictIndex(data->db, &kobj, obj, 0, didx) != KEY_VALID) {
             return;
         }
     }
@@ -1984,7 +1982,7 @@ static const size_t EXPIRE_BULK_LIMIT = 1024; /* Maximum number of fields to act
  * This function builds and propagates a single HDEL command with multiple fields
  * for the given hash object `o`. It temporarily enables replication (if needed),
  * constructs the command using the field names, and sends it via alsoPropagate(). */
-static void propagateFieldsDeletion(serverDb *db, robj *o, size_t n_fields, robj *fields[]) {
+static void propagateFieldsDeletion(serverDb *db, robj *o, size_t n_fields, robj *fields[], int didx) {
     int prev_replication_allowed = server.replication_allowed;
     server.replication_allowed = 1;
 
@@ -1998,7 +1996,7 @@ static void propagateFieldsDeletion(serverDb *db, robj *o, size_t n_fields, robj
         argv[argc++] = fields[i];
     }
 
-    alsoPropagate(db->id, argv, argc, PROPAGATE_AOF | PROPAGATE_REPL);
+    alsoPropagate(db->id, argv, argc, PROPAGATE_AOF | PROPAGATE_REPL, didx);
     server.replication_allowed = prev_replication_allowed;
     for (int i = 0; i < argc; i++) {
         decrRefCount(argv[i]);
@@ -2015,7 +2013,7 @@ static void propagateFieldsDeletion(serverDb *db, robj *o, size_t n_fields, robj
  *
  * Batching avoids large stack allocations while allowing max_entries to be arbitrarily large.
  * Returns the total number of expired fields removed. */
-size_t dbReclaimExpiredFields(robj *o, serverDb *db, mstime_t now, unsigned long max_entries) {
+size_t dbReclaimExpiredFields(robj *o, serverDb *db, mstime_t now, unsigned long max_entries, int didx) {
     size_t total_expired = 0;
     bool deleteKey = false;
 
@@ -2038,11 +2036,11 @@ size_t dbReclaimExpiredFields(robj *o, serverDb *db, mstime_t now, unsigned long
         robj *keyobj = createStringObjectFromSds(objectGetKey(o));
         /* Note that even though if might have been more efficient to only propagate del in case the key has no more items left,
          * we must keep consistency in order to allow the replica to report hdel notifications before del. */
-        propagateFieldsDeletion(db, o, expired, entries);
+        propagateFieldsDeletion(db, o, expired, entries, didx);
         notifyKeyspaceEvent(NOTIFY_EXPIRED, "hexpired", keyobj, db->id);
         if (deleteKey) {
             dbDelete(db, keyobj);
-            propagateDeletion(db, keyobj, server.lazyfree_lazy_expire);
+            propagateDeletion(db, keyobj, server.lazyfree_lazy_expire, didx);
             notifyKeyspaceEvent(NOTIFY_GENERIC, "del", keyobj, db->id);
         } else {
             if (!hashTypeHasVolatileFields(o)) dbUntrackKeyWithVolatileItems(db, o);
@@ -2215,7 +2213,7 @@ robj *dbFind(serverDb *db, sds key) {
     return dbFindWithDictIndex(db, key, dict_index);
 }
 
-static robj *dbFindExpiresWithDictIndex(serverDb *db, sds key, int dict_index) {
+robj *dbFindExpiresWithDictIndex(serverDb *db, sds key, int dict_index) {
     void *existing = NULL;
     kvstoreHashtableFind(db->expires, dict_index, key, &existing);
     return existing;
@@ -2230,7 +2228,7 @@ unsigned long long dbSize(serverDb *db) {
     return kvstoreSize(db->keys);
 }
 
-unsigned long long dbScan(serverDb *db, unsigned long long cursor, hashtableScanFunction scan_cb, void *privdata) {
+unsigned long long dbScan(serverDb *db, unsigned long long cursor, kvstoreScanFunction scan_cb, void *privdata) {
     return kvstoreScan(db->keys, cursor, -1, scan_cb, NULL, privdata);
 }
 

@@ -91,7 +91,7 @@ jobs:
       - name: Comment PR with results
         uses: actions/github-script@5c56fde4671bc2d3592fb0f2c5b5bab9ddae03b1 # v7
         with:
-          github-token: ${{ github.token }}
+          github-token: ${{ secrets.PERFORMANCE_BENCHMARK_PAT }}
           script: |
             const fs = require('fs');
             const body = fs.readFileSync('comparison.md', 'utf8');
@@ -106,7 +106,7 @@ jobs:
         if: always() && (github.event.label.name == 'run-benchmark' || github.event.label.name == 'run-cluster-benchmark')
         uses: actions/github-script@5c56fde4671bc2d3592fb0f2c5b5bab9ddae03b1 # v7
         with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+          github-token: ${{ secrets.PERFORMANCE_BENCHMARK_PAT }}
           script: |
             await github.rest.issues.removeLabel({
               issue_number: context.issue.number,

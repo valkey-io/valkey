@@ -128,8 +128,8 @@ unsigned int countKeysInSlotForDb(unsigned int hashslot, serverDb *db);
 unsigned int countKeysInSlot(unsigned int hashslot);
 int getSlotOrReply(client *c, robj *o);
 int getNodeDefaultReplicationPort(clusterNode *node);
-int isAnySlotInManualImportingState(void);
-int isAnySlotInManualMigratingState(void);
+bool isAnySlotInManualImportingState(void);
+bool isAnySlotInManualMigratingState(void);
 
 /* functions with shared implementations */
 int clusterNodeIsMyself(clusterNode *n);

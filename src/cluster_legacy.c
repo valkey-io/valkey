@@ -2801,15 +2801,19 @@ void clusterUpdateSlotsConfigWith(clusterNode *sender, uint64_t senderConfigEpoc
                 continue;
             }
 
-            /* We rebind the slot to the new node claiming it if
-             * the slot was unassigned or the new node claims it with a
-             * greater configEpoch. Additionally, we always allow slots we are
-             * migrating to be claimed by the new node, regardless of epoch. */
-            char *slotExportTargetName = getNameOfSlotExportTarget(j);
+            /* We rebind the slot to the new node claiming it if the slot was
+             * unassigned or the new node claims it with a greater configEpoch.
+             *
+             * Additionally, note that during slot migration, if we have bumped
+             * our epoch recently (e.g. due to our own slot import) then it is
+             * possible the epoch on the target after bumping is <= our epoch.
+             * This would normally cause our node to prevent the topology change
+             * from being accepted. To counter this, if our node is aware of the
+             * migration, we will accept the topology update regardless of the
+             * epoch. */
             if (isSlotUnclaimed(j) ||
                 server.cluster->slots[j]->configEpoch < senderConfigEpoch ||
-                (slotExportTargetName &&
-                 !memcmp(slotExportTargetName, sender->name, CLUSTER_NAMELEN))) {
+                clusterSlotFailoverGranted(j)) {
                 if (!isSlotUnclaimed(j) && !areInSameShard(server.cluster->slots[j], sender)) {
                     serverLog(LL_NOTICE,
                               "Slot %d is migrated from node %.40s (%s) in shard %.40s"
@@ -2826,13 +2830,9 @@ void clusterUpdateSlotsConfigWith(clusterNode *sender, uint64_t senderConfigEpoc
                     dirty_slots_count++;
                 }
 
-                if (slotExportTargetName) {
-                    exporting_slots_count++;
-                }
+                if (clusterIsSlotExporting(j)) exporting_slots_count++;
 
-                if (clusterIsSlotImporting(j)) {
-                    importing_slots_count++;
-                }
+                if (clusterIsSlotImporting(j)) importing_slots_count++;
 
                 if (server.cluster->slots[j] == cur_primary) {
                     new_primary = sender;
@@ -7942,11 +7942,11 @@ int clusterDecodeOpenSlotsAuxField(int rdbflags, sds s) {
 
 
 /* Returns if any slot has been put in IMPORTING state via SETSLOT command. */
-int isAnySlotInManualImportingState(void) {
+bool isAnySlotInManualImportingState(void) {
     return dictSize(server.cluster->importing_slots_from) > 0;
 }
 
 /* Returns if any slot has been put in MIGRATING state via SETSLOT command. */
-int isAnySlotInManualMigratingState(void) {
+bool isAnySlotInManualMigratingState(void) {
     return dictSize(server.cluster->migrating_slots_to) > 0;
 }

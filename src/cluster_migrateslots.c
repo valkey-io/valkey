@@ -79,8 +79,8 @@ typedef struct slotMigrationJob {
     sds response_buf;
 } slotMigrationJob;
 
-static int isSlotMigrationJobFinished(slotMigrationJob *job);
-static int isSlotMigrationJobInProgress(slotMigrationJob *job);
+static bool isSlotMigrationJobFinished(slotMigrationJob *job);
+static bool isSlotMigrationJobInProgress(slotMigrationJob *job);
 static slotMigrationJob *createSlotImportJob(client *c,
                                              clusterNode *source_node,
                                              char *name,
@@ -93,7 +93,7 @@ static void sendSyncSlotsMessage(slotMigrationJob *job, const char *subcommand);
 static void proceedWithSlotMigration(slotMigrationJob *job);
 static slotMigrationJob *createSlotExportJob(clusterNode *target_node,
                                              list *slot_ranges);
-static int isSlotExportPauseTimedOut(slotMigrationJob *job);
+static bool isSlotExportPauseTimedOut(slotMigrationJob *job);
 static void resetSlotMigrationJob(slotMigrationJob *job);
 static void finishSlotMigrationJob(slotMigrationJob *job,
                                    slotMigrationJobState state,
@@ -155,7 +155,7 @@ clusterNode *getClusterNodeBySlotRanges(list *slot_ranges, int *cross_node) {
 }
 
 /* Return whether or not a given slot is in the list of slot ranges. */
-int isSlotInSlotRanges(int slot, list *slot_ranges) {
+bool isSlotInSlotRanges(int slot, list *slot_ranges) {
     /* Loop to check if the slot in any slot range. */
     listNode *ln;
     listIter li;
@@ -170,14 +170,14 @@ int isSlotInSlotRanges(int slot, list *slot_ranges) {
 }
 
 /* Return whether or not the two slot ranges overlap or are distinct. */
-int doSlotRangesOverlap(slotRange *range1, slotRange *range2) {
+bool doSlotRangesOverlap(slotRange *range1, slotRange *range2) {
     return range1->end_slot >= range2->start_slot &&
            range1->start_slot <= range2->end_slot;
 }
 
 /* Return whether or not the two lists of slot ranges overlap or are
  * distinct. */
-int doSlotRangeListsOverlap(list *ranges1, list *ranges2) {
+bool doSlotRangeListsOverlap(list *ranges1, list *ranges2) {
     /* Since they aren't guaranteed to be sorted, just use a nested loop. */
     listIter li1, li2;
     listNode *ln1, *ln2;
@@ -375,7 +375,7 @@ cleanup:
  *
  */
 
-int clusterIsSlotImporting(int slot) {
+bool clusterIsSlotImporting(int slot) {
     listNode *ln;
     listIter li;
     listRewind(server.cluster->slot_migration_jobs, &li);
@@ -641,7 +641,7 @@ void performSlotImportJobFailover(slotMigrationJob *job) {
     setSlotImportingStateInAllDbs(job->slot_ranges, 0);
 }
 
-int clusterIsAnySlotImporting(void) {
+bool clusterIsAnySlotImporting(void) {
     listNode *ln;
     listIter li;
     listRewind(server.cluster->slot_migration_jobs, &li);
@@ -780,7 +780,7 @@ void clusterHandleFlushDuringSlotMigration(void) {
  */
 
 /* Returns 1 if the given slot is being exported, 0 otherwise. */
-int clusterIsSlotExporting(int slot) {
+bool clusterIsSlotExporting(int slot) {
     listNode *ln;
     listIter li;
     listRewind(server.cluster->slot_migration_jobs, &li);
@@ -795,7 +795,7 @@ int clusterIsSlotExporting(int slot) {
 
 /* Returns the name of the slot export target for the given slot, or NULL if the
  * slot is not being exported. */
-char *getNameOfSlotExportTarget(int slot) {
+bool clusterSlotFailoverGranted(int slot) {
     listNode *ln;
     listIter li;
     listRewind(server.cluster->slot_migration_jobs, &li);
@@ -803,9 +803,10 @@ char *getNameOfSlotExportTarget(int slot) {
         slotMigrationJob *job = ln->value;
         if (job->type != SLOT_MIGRATION_EXPORT) continue;
         if (!isSlotMigrationJobInProgress(job)) continue;
-        if (isSlotInSlotRanges(slot, job->slot_ranges)) return job->nodename;
+        if (!isSlotInSlotRanges(slot, job->slot_ranges)) continue;
+        return job->state == SLOT_EXPORT_FAILOVER_GRANTED;
     }
-    return NULL;
+    return false;
 }
 
 /* Sent by an operator to the current owner of one or more slot ranges. The
@@ -1209,7 +1210,7 @@ void clusterCommandSyncSlotsRequestFailover(client *c) {
 
 /* Predicate function supplied to rewriteAppendOnlyFileRio to filter to only
  * slots in this migration. */
-int shouldRewriteHashtableIndex(int didx, hashtable *ht, void *privdata) {
+bool shouldRewriteHashtableIndex(int didx, hashtable *ht, void *privdata) {
     UNUSED(ht);
     return isSlotInSlotRanges(didx, (list *)privdata);
 }
@@ -1286,7 +1287,7 @@ void clusterHandleSlotExportBackgroundSaveDone(int bgsaveerr) {
  * the data from the output buffer. Returns 0 otherwise. While this returns 0,
  * replicated data for this slot migration will accumulate in the client output
  * buffer. */
-int clusterSlotMigrationShouldInstallWriteHandler(client *c) {
+bool clusterSlotMigrationShouldInstallWriteHandler(client *c) {
     slotMigrationJob *job = c->slot_migration_job;
     if (!job || job->type != SLOT_MIGRATION_EXPORT) {
         return 1;
@@ -1336,7 +1337,7 @@ void clusterFeedSlotExportJobs(int dbid, robj **argv, int argc, int slot) {
     }
 }
 
-int isSlotExportPauseTimedOut(slotMigrationJob *job) {
+bool isSlotExportPauseTimedOut(slotMigrationJob *job) {
     return job->mf_end < mstime() ||
            !getPausedActionsWithPurpose(PAUSE_DURING_SLOT_MIGRATION);
 }
@@ -1396,7 +1397,7 @@ void clusterUpdateSlotExportsOnOwnershipChange(void) {
     }
 }
 
-int clusterIsAnySlotExporting(void) {
+bool clusterIsAnySlotExporting(void) {
     listNode *ln;
     listIter li;
     listRewind(server.cluster->slot_migration_jobs, &li);
@@ -1897,7 +1898,7 @@ void finishSlotMigrationJob(slotMigrationJob *job,
 
 /* Finished means we are completely done with all work and this entry is just
  * a log for tracking purposes. */
-int isSlotMigrationJobFinished(slotMigrationJob *job) {
+bool isSlotMigrationJobFinished(slotMigrationJob *job) {
     return job->state == SLOT_MIGRATION_JOB_SUCCESS ||
            job->state == SLOT_MIGRATION_JOB_CANCELLED ||
            job->state == SLOT_MIGRATION_JOB_FAILED;
@@ -1906,7 +1907,7 @@ int isSlotMigrationJobFinished(slotMigrationJob *job) {
 /* In progress means we are still trying to perform the migration. It is
  * possible that we are not trying to perform the migration, but we are not
  * finished yet, e.g. if we are still pending cleanup. */
-int isSlotMigrationJobInProgress(slotMigrationJob *job) {
+bool isSlotMigrationJobInProgress(slotMigrationJob *job) {
     return job->state != SLOT_IMPORT_FINISHED_WAITING_TO_CLEANUP &&
            !isSlotMigrationJobFinished(job);
 }
@@ -1914,7 +1915,7 @@ int isSlotMigrationJobInProgress(slotMigrationJob *job) {
 /* Since slotMigrationJob is stored as void* in the client object, this allows
  * other files to determine if a migration is an import or export without
  * knowing the details of the migration job struct. */
-int isImportSlotMigrationJob(slotMigrationJob *job) {
+bool isImportSlotMigrationJob(slotMigrationJob *job) {
     return job->type == SLOT_MIGRATION_IMPORT;
 }
 
@@ -1985,7 +1986,7 @@ void clusterCleanupSlotMigrationLog(void) {
 
 /* Returns 1 if the slot migration is okay to periodically send ACKs, or 0
  * otherwise. */
-int canSlotMigrationJobSendAck(slotMigrationJob *job) {
+bool canSlotMigrationJobSendAck(slotMigrationJob *job) {
     /* 1. We cannot send ACK from parent process while child is snapshotting
      * 2. We don't send an ACK from the import side until the export has first
      *    sent one (thus taking us out of SLOT_IMPORT_WAIT_ACK). This simplifies

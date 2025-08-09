@@ -8,16 +8,16 @@
 /* Forward declaration to allow use as an argument below */
 typedef struct slotMigrationJob slotMigrationJob;
 
-int isImportSlotMigrationJob(slotMigrationJob *job);
+bool isImportSlotMigrationJob(slotMigrationJob *job);
 void clusterHandleSlotMigrationClientClose(slotMigrationJob *job);
 void clusterHandleSlotMigrationClientOOM(slotMigrationJob *job);
 void clusterFeedSlotExportJobs(int dbid, robj **argv, int argc, int slot);
-int clusterIsSlotImporting(int slot);
-int clusterIsSlotExporting(int slot);
-int clusterIsAnySlotImporting(void);
-int clusterIsAnySlotExporting(void);
+bool clusterIsSlotImporting(int slot);
+bool clusterIsSlotExporting(int slot);
+bool clusterIsAnySlotImporting(void);
+bool clusterIsAnySlotExporting(void);
 void clusterMarkImportingSlotsInDb(serverDb *db);
-int clusterSlotMigrationShouldInstallWriteHandler(client *c);
+bool clusterSlotMigrationShouldInstallWriteHandler(client *c);
 void initClusterSlotMigrationJobList(void);
 void clusterSlotMigrationCron(void);
 void clusterCommandMigrateSlots(client *c);
@@ -30,7 +30,7 @@ void clusterUpdateSlotImportsOnOwnershipChange(void);
 void clusterCleanupSlotMigrationLog(void);
 void clusterHandleFlushDuringSlotMigration(void);
 size_t clusterGetTotalSlotExportBufferMemory(void);
-char *getNameOfSlotExportTarget(int slot);
+bool clusterSlotFailoverGranted(int slot);
 void clusterFailAllSlotExportsWithMessage(char *message);
 void clusterHandleSlotMigrationErrorResponse(slotMigrationJob *job);
 

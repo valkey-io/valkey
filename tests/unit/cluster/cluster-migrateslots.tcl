@@ -1413,7 +1413,7 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
 
             # Should be denied
             wait_for_migration_field 2 $jobname state failed
-            assert {[string match {*Failed to AUTH to target node: -WRONGPASS*} [dict get [get_migration_by_name 2 $jobname] message]]}
+            assert_match {*Failed to AUTH to target node*} [dict get [get_migration_by_name 2 $jobname] message]
 
             # Cleanup for next test
             R 0 CONFIG SET requirepass ""

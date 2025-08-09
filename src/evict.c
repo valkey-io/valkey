@@ -147,10 +147,8 @@ int evictionPoolPopulate(serverDb *db, kvstore *samplekvs, struct evictionPoolEn
     void *samples[server.maxmemory_samples];
 
     int slot = kvstoreGetFairRandomHashtableIndex(samplekvs);
-    if (slot == -1) {
-        /* Either there are no keys, or they are all not owned by this node */
-        return 0;
-    }
+    /* We may get not found if there are no keys */
+    if (slot == KVSTORE_INDEX_NOT_FOUND) return 0;
     count = kvstoreHashtableSampleEntries(samplekvs, slot, &samples[0], server.maxmemory_samples);
     for (j = 0; j < count; j++) {
         unsigned long long idle;
@@ -663,8 +661,9 @@ int performEvictions(void) {
                     kvs = db->expires;
                 }
                 int slot = kvstoreGetFairRandomHashtableIndex(kvs);
+                if (slot == KVSTORE_INDEX_NOT_FOUND) continue; /* No keys in this DB. */
                 void *entry;
-                if (slot != -1 && kvstoreHashtableRandomEntry(kvs, slot, &entry)) {
+                if (kvstoreHashtableRandomEntry(kvs, slot, &entry)) {
                     bestkey = objectGetKey((robj *)entry);
                     bestdbid = j;
                     bestslot = slot;

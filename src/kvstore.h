@@ -16,6 +16,9 @@ typedef void (*kvstoreScanFunction)(void *privdata, void *entry, int didx);
 
 #define KVSTORE_ALLOCATE_HASHTABLES_ON_DEMAND (1 << 0)
 #define KVSTORE_FREE_EMPTY_HASHTABLES (1 << 1)
+
+#define KVSTORE_INDEX_NOT_FOUND (-1)
+
 kvstore *kvstoreCreate(hashtableType *type, int num_hashtables_bits, int flags);
 void kvstoreEmpty(kvstore *kvs, void(callback)(hashtable *));
 void kvstoreRelease(kvstore *kvs);

@@ -574,7 +574,7 @@ void kvstoreGetStats(kvstore *kvs, char *buf, size_t bufsize, int full) {
  */
 int kvstoreFindHashtableIndexByKeyIndex(kvstore *kvs, unsigned long target) {
     if (kvs->num_hashtables == 1) return 0;
-    if (kvstoreSize(kvs) == 0 || target == 0) return -1;
+    if (kvstoreSize(kvs) == 0 || target == 0) return KVSTORE_INDEX_NOT_FOUND;
     assert(target <= kvstoreSize(kvs));
 
     int result = 0, bit_mask = 1 << kvs->num_hashtables_bits;

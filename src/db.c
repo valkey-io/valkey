@@ -446,7 +446,7 @@ robj *dbRandomKey(serverDb *db) {
     while (1) {
         void *entry;
         int randomDictIndex = kvstoreGetFairRandomHashtableIndex(db->keys);
-        if (randomDictIndex == -1) return NULL;
+        if (randomDictIndex == KVSTORE_INDEX_NOT_FOUND) return NULL;
         int ok = kvstoreHashtableFairRandomEntry(db->keys, randomDictIndex, &entry);
         if (!ok) return NULL;
         robj *valkey = entry;

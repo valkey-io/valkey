@@ -173,8 +173,8 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
         set target_node_id [R 1 CLUSTER MYID]
         R 0 CLUSTER SETSLOT 0 MIGRATING $target_node_id
         R 1 CLUSTER SETSLOT 0 IMPORTING $source_node_id
-        assert_error "*Some slots are being manually migrated*" {R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383}
-        assert_error "*Some slots are being manually imported*" {R 1 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383}
+        assert_error "*Slots are being manually migrated*" {R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383}
+        assert_error "*Slots are being manually imported*" {R 1 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383}
         R 0 CLUSTER SETSLOT 0 STABLE
         R 1 CLUSTER SETSLOT 0 STABLE
 
@@ -325,16 +325,16 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
         assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node0_id]
         set jobname [get_job_name 2 16383]
         wait_for_migration_field 2 $jobname state waiting-to-pause
-        assert_error "*A slot is currently being imported via CLUSTER MIGRATESLOTS*" {R 0 CLUSTER SETSLOT 0 MIGRATING $node1_id}
-        assert_error "*A slot is currently being imported via CLUSTER MIGRATESLOTS*" {R 0 CLUSTER SETSLOT 0 IMPORTING $node1_id}
-        assert_error "*A slot is currently being exported via CLUSTER MIGRATESLOTS*" {R 2 CLUSTER SETSLOT 0 MIGRATING $node1_id}
-        assert_error "*A slot is currently being exported via CLUSTER MIGRATESLOTS*" {R 2 CLUSTER SETSLOT 0 IMPORTING $node1_id}
+        assert_error "*Slot import in progress*" {R 0 CLUSTER SETSLOT 0 MIGRATING $node1_id}
+        assert_error "*Slot import in progress*" {R 0 CLUSTER SETSLOT 0 IMPORTING $node1_id}
+        assert_error "*Slot export in progress*" {R 2 CLUSTER SETSLOT 0 MIGRATING $node1_id}
+        assert_error "*Slot export in progress*" {R 2 CLUSTER SETSLOT 0 IMPORTING $node1_id}
         assert_match "OK" [R 2 CLUSTER CANCELMIGRATIONS]
         wait_for_migration_field 0 $jobname state failed
 
         # Shouldn't be able to use CLUSTER MIGRATESLOTS when SETSLOT was used on source
         assert_match "OK" [R 2 CLUSTER SETSLOT 0 IMPORTING $node0_id]
-        assert_error "*Some slots are being manually imported*" {R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node0_id}
+        assert_error "*Slots are being manually imported*" {R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node0_id}
         assert_match "OK" [R 2 CLUSTER SETSLOT 0 STABLE]
 
         # Same for the target

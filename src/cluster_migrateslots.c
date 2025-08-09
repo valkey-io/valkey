@@ -250,16 +250,16 @@ list *parseSlotRangesOrReply(client *c,
                              int *end_index_out,
                              clusterNode **node_out) {
     list *slot_ranges = createSlotRangeList();
-    int i, startslot, endslot;
     *node_out = NULL;
     *end_index_out = c->argc;
-    for (i = start_index; i < c->argc; i += 2) {
+    for (int i = start_index; i < c->argc; i += 2) {
         if (getLongLongFromObject(c->argv[i], NULL) != C_OK) {
             /* If we encounter a non-integer parameter, we assume that this is
              * the next argument. */
             *end_index_out = i;
             break;
         }
+        int startslot, endslot;
         /* Get the current slot range. */
         if ((startslot = getSlotOrReply(c, c->argv[i])) == -1) {
             goto cleanup;
@@ -414,8 +414,8 @@ void clusterCommandSyncSlotsEstablish(client *c) {
     }
 
     if (c->slot_migration_job) {
-        addReplyError(c,
-                      "Slot migration client is already a slot migration job");
+        addReplyError(c, "Slot migration client is already a slot migration "
+                         "job");
         return;
     }
 
@@ -631,7 +631,7 @@ void performSlotImportJobFailover(slotMigrationJob *job) {
     /* 3) Update state and save config. */
     clearCachedClusterSlotsResponse();
     clusterUpdateState();
-    clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG);
+    clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_FSYNC_CONFIG);
 
     /* 4) Pong all the other nodes so that they can update the state accordingly
      *    and detect that we have taken over the slots. */
@@ -765,9 +765,9 @@ void clusterHandleFlushDuringSlotMigration(void) {
  *            │SLOT_EXPORT_FAILOVER_GRANTED┼───────┤
  *            └───────────────┬────────────┘       │
  *       New topology received│                    │
- *             ┌──────────────▼────────────┐       │
- *             │SLOT_MIGRATION_JOB_SUCCESS│       │
- *             └───────────────────────────┘       │
+ *             ┌──────────────▼───────────┐        │
+ *             │SLOT_MIGRATION_JOB_SUCCESS│        │
+ *             └──────────────────────────┘        │
  *                                                 │
  *             ┌──────────────────────────┐        │
  *             │SLOT_MIGRATION_JOB_FAILED│◄───────┤
@@ -819,15 +819,11 @@ void clusterCommandMigrateSlots(client *c) {
     }
 
     if (isAnySlotInManualImportingState()) {
-        addReplyError(c, "Some slots are being manually imported. Please get "
-                         "all slots to a stable state before attempting "
-                         "import.");
+        addReplyError(c, "Slots are being manually imported");
         return;
     }
     if (isAnySlotInManualMigratingState()) {
-        addReplyError(c, "Some slots are being manually migrated. Please get "
-                         "all slots to a stable state before attempting "
-                         "import.");
+        addReplyError(c, "Slots are being manually migrated");
         return;
     }
 
@@ -884,13 +880,15 @@ void clusterCommandMigrateSlots(client *c) {
         }
         curr_index++;
         if (sdslen(c->argv[curr_index]->ptr) != CLUSTER_NAMELEN) {
-            addReplyErrorFormat(c, "Invalid node name");
+            addReplyErrorFormat(c, "Invalid node name: %s",
+                                (sds) c->argv[curr_index]->ptr);
             goto cleanup;
         }
         clusterNode *target_node = clusterLookupNode(c->argv[curr_index]->ptr,
                                                      CLUSTER_NAMELEN);
         if (!target_node) {
-            addReplyErrorFormat(c, "Unknown node name");
+            addReplyErrorFormat(c, "Unknown node name: %s",
+                                (sds) c->argv[curr_index]->ptr);
             goto cleanup;
         }
         curr_index++;
@@ -938,7 +936,7 @@ slotMigrationJob *clusterLookupMigrationJob(sds name) {
     return NULL;
 }
 
-/* Cancels one or all ongoing migrations. */
+/* Cancels all ongoing migrations. */
 void clusterCommandCancelMigrations(client *c) {
     listNode *ln;
     listIter li;

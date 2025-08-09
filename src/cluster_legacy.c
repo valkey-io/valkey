@@ -7087,11 +7087,11 @@ int clusterParseSetSlotCommand(client *c, int *slot_out, clusterNode **node_out,
     }
 
     if (clusterIsAnySlotImporting()) {
-        addReplyError(c, "A slot is currently being imported via CLUSTER MIGRATESLOTS. Please cancel any ongoing import operations and try again.");
+        addReplyError(c, "Slot import in progress.");
         return 0;
     }
     if (clusterIsAnySlotExporting()) {
-        addReplyError(c, "A slot is currently being exported via CLUSTER MIGRATESLOTS. Please cancel any ongoing import operations and try again.");
+        addReplyError(c, "Slot export in progress.");
         return 0;
     }
 
@@ -7791,7 +7791,7 @@ const char **clusterCommandExtendedHelp(void) {
         "    Output format is an array where each array element is a map containing attributes of a link",
         "MIGRATESLOTS SLOTSRANGE <start slot> <end slot> [<start slot> <end slot> ...] NODE <node id>",
         "    Migrate the specified slot ranges from this node to the specified node.",
-        "CANCELMIGRATIONS",
+        "CANCELMIGRATIONS ALL",
         "    Cancel all migrations.",
         "GETSLOTMIGRATIONS",
         "    Get information about ongoing and recently finished slot imports and exports.",

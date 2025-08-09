@@ -7791,8 +7791,8 @@ const char **clusterCommandExtendedHelp(void) {
         "    Output format is an array where each array element is a map containing attributes of a link",
         "MIGRATESLOTS SLOTSRANGE <start slot> <end slot> [<start slot> <end slot> ...] NODE <node id>",
         "    Migrate the specified slot ranges from this node to the specified node.",
-        "CANCELMIGRATIONS (ALL | LINK <link name>)",
-        "    Cancel the selected migration links.",
+        "CANCELMIGRATIONS",
+        "    Cancel all migrations.",
         "GETSLOTMIGRATIONS",
         "    Get information about ongoing and recently finished slot imports and exports.",
         NULL};

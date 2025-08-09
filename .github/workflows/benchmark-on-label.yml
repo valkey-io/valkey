@@ -56,7 +56,7 @@ jobs:
         run: |
           # Label-specific config file
           if [[ "${{ github.event.label.name }}" == "run-benchmark" ]]; then
-            CONFIG_FILE="..valkey/.github/benchmark_configs/test_config.json"
+            CONFIG_FILE="../valkey/.github/benchmark_configs/test_config.json"
           elif [[ "${{ github.event.label.name }}" == "run-cluster-benchmark" ]]; then
             CONFIG_FILE="configs/benchmark-configs-cluster-tls.json"
           fi

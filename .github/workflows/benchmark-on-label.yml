@@ -1,7 +1,7 @@
 name: On-demand Benchmark
 
 on:
-  pull_request:
+  pull_request_target:
     types: [labeled]
 
 concurrency:
@@ -20,7 +20,7 @@ permissions:
 jobs:
 
   benchmark:
-    runs-on: ubuntu-latest ## [self-hosted, ec2-perf-ubuntu-24]
+    runs-on: [self-hosted, ec2-ubuntu-24.04-benchmarking]
     if: github.event.label.name == 'run-benchmark' || github.event.label.name == 'run-cluster-benchmark'
     steps:
 
@@ -56,7 +56,7 @@ jobs:
         run: |
           # Label-specific config file
           if [[ "${{ github.event.label.name }}" == "run-benchmark" ]]; then
-            CONFIG_FILE="./configs/benchmark-configs.json"
+            CONFIG_FILE="..valkey/.github/benchmark_configs/test_config.json"
           elif [[ "${{ github.event.label.name }}" == "run-cluster-benchmark" ]]; then
             CONFIG_FILE="configs/benchmark-configs-cluster-tls.json"
           fi
@@ -67,7 +67,9 @@ jobs:
             --baseline "unstable" \
             --results-dir "results" \
             --valkey-path "../valkey" \
-            --config "$CONFIG_FILE"
+            --config "$CONFIG_FILE" \
+            --server-cpu-range 92-93 \
+            --client-cpu-range 94-95
 
       - name: Compare results
         working-directory: valkey-perf-benchmark

@@ -49,10 +49,6 @@
                             }
                         ]
                     }
-                },
-                {
-                    "description": "Key does not exist.",
-                    "type": "null"
                 }
             ]
         },

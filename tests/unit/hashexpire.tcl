@@ -211,7 +211,7 @@ start_server {tags {"hashexpire"}} {
 
         test "HGETEX $command on non-exist key" {
             r FLUSHALL
-            assert_equal "" [r HGETEX myhash $command [get_long_expire_value $command] FIELDS 1 f2]
+            assert_equal {{} {} {}} [r HGETEX myhash $command [get_long_expire_value $command] FIELDS 3 f1 f2 f3]
         }
 
         test "HGETEX $command with duplicate field names" {

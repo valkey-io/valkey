@@ -3,6 +3,11 @@
 
 #include "server.h"
 
+static inline long long timespec_diff_us(struct timespec start_time, struct timespec end_time) {
+    return ((long long)end_time.tv_sec - (long long)start_time.tv_sec) * 1000000LL +
+           ((long long)end_time.tv_nsec - (long long)start_time.tv_nsec) / 1000LL;
+}
+
 void initIOThreads(void);
 void killIOThreads(void);
 int inMainThread(void);
@@ -15,5 +20,7 @@ void drainIOThreadsQueue(void);
 void trySendPollJobToIOThreads(void);
 int trySendAcceptToIOThreads(connection *conn);
 int updateIOThreads(const char **err);
+long long getIOThreadUsefulTimeMicroseconds(int id);
+long long getIOThreadUptimeMicroseconds(int id);
 
 #endif /* IO_THREADS_H */

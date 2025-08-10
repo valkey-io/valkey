@@ -24,6 +24,8 @@ typedef struct IOJobQueue {
     _Atomic size_t tail __attribute__((aligned(CACHE_LINE_SIZE))); /* Next read index for consumer  (IO-thread) */
 } IOJobQueue;
 IOJobQueue io_jobs[IO_THREADS_MAX_NUM] = {0};
+_Atomic long long io_threads_useful_time_us[IO_THREADS_MAX_NUM] = {0};
+_Atomic long long io_threads_uptime_us[IO_THREADS_MAX_NUM] = {0};
 
 /* Initialize the job queue with a specified number of items. */
 static void IOJobQueue_init(IOJobQueue *jq, size_t item_count) {
@@ -225,6 +227,8 @@ static void *IOThreadMain(void *myid) {
     size_t jobs_to_process = 0;
     IOJobQueue *jq = &io_jobs[id];
     while (1) {
+        struct timespec thread_uptime_start, thread_uptime_end;
+        clock_gettime(CLOCK_THREAD_CPUTIME_ID, &thread_uptime_start);
         /* Cancellation point so that pthread_cancel() from main thread is honored. */
         pthread_testcancel();
 
@@ -238,8 +242,13 @@ static void *IOThreadMain(void *myid) {
         if (jobs_to_process == 0) {
             pthread_mutex_lock(&io_threads_mutex[id]);
             pthread_mutex_unlock(&io_threads_mutex[id]);
+            clock_gettime(CLOCK_THREAD_CPUTIME_ID, &thread_uptime_end);
+            atomic_fetch_add_explicit(&io_threads_uptime_us[id], timespec_diff_us(thread_uptime_start, thread_uptime_end), memory_order_relaxed);
             continue;
         }
+
+        struct timespec work_start_time, work_end_time;
+        clock_gettime(CLOCK_THREAD_CPUTIME_ID, &work_start_time);
 
         for (size_t j = 0; j < jobs_to_process; j++) {
             job_handler handler;
@@ -255,9 +264,20 @@ static void *IOThreadMain(void *myid) {
          * We do it once per loop and not per tail-update for optimization reasons.
          * As the main-thread main concern is to check if the queue is empty, it's enough to do it once at the end. */
         atomic_thread_fence(memory_order_release);
+        clock_gettime(CLOCK_THREAD_CPUTIME_ID, &work_end_time);
+        atomic_fetch_add_explicit(&io_threads_useful_time_us[id], timespec_diff_us(work_start_time, work_end_time), memory_order_relaxed);
+        atomic_fetch_add_explicit(&io_threads_uptime_us[id], timespec_diff_us(thread_uptime_start, work_end_time), memory_order_relaxed);
     }
     pthread_cleanup_pop(0);
     return NULL;
+}
+
+long long getIOThreadUsefulTimeMicroseconds(int id) {
+    return atomic_load_explicit(&io_threads_useful_time_us[id], memory_order_acquire);
+}
+
+long long getIOThreadUptimeMicroseconds(int id) {
+    return atomic_load_explicit(&io_threads_uptime_us[id], memory_order_acquire);
 }
 
 #define IO_JOB_QUEUE_SIZE 2048

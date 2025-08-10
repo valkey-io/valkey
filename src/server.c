@@ -6248,6 +6248,12 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                             (long)m_ru.ru_stime.tv_sec, (long)m_ru.ru_stime.tv_usec, (long)m_ru.ru_utime.tv_sec,
                             (long)m_ru.ru_utime.tv_usec);
 #endif /* RUSAGE_THREAD */
+        for (int i = 1; i < server.active_io_threads_num; i++) {
+            long long useful_time_us = getIOThreadUsefulTimeMicroseconds(i);
+            long long uptime_us = getIOThreadUptimeMicroseconds(i);
+            info = sdscatprintf(info, "usefultime_cpu_io_thread_%d:%lld.%06lld\r\n", i, useful_time_us / 1000000, useful_time_us % 1000000);
+            info = sdscatprintf(info, "uptime_cpu_io_thread_%d:%lld.%06lld\r\n", i, uptime_us / 1000000, uptime_us % 1000000);
+        }
     }
 
     /* Modules */

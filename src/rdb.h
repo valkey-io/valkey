@@ -198,7 +198,7 @@ ssize_t rdbSaveSingleModuleAux(rio *rdb, int when, moduleType *mt);
 robj *rdbLoadCheckModuleValue(rio *rdb, char *modulename);
 robj *rdbLoadStringObject(rio *rdb);
 ssize_t rdbSaveStringObject(rio *rdb, robj *obj);
-void freeThreadCompressionBuffer(void* dummy);
+void freeThreadCompressionBuffer(void *dummy);
 ssize_t rdbSaveRawString(rio *rdb, unsigned char *s, size_t len);
 void *rdbGenericLoadStringObject(rio *rdb, int flags, size_t *lenptr);
 int rdbSaveBinaryDoubleValue(rio *rdb, double val);

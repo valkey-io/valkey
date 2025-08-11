@@ -429,12 +429,10 @@ bool kvstoreExpand(kvstore *kvs, uint64_t newsize, int try_expand, kvstoreExpand
     if (newsize == 0) return true;
     for (int i = 0; i < kvs->num_hashtables; i++) {
         if (skip_cb && skip_cb(i)) continue;
-        /* If the hash table doesn't exist, create it. */
-        hashtable *ht = createHashtableIfNeeded(kvs, i);
         if (try_expand) {
-            if (!hashtableTryExpand(ht, newsize)) return false;
+            if (!kvstoreHashtableTryExpand(kvs, i, newsize)) return false;
         } else {
-            hashtableExpand(ht, newsize);
+            kvstoreHashtableExpand(kvs, i, newsize);
         }
     }
 
@@ -682,6 +680,12 @@ unsigned long kvstoreHashtableSize(kvstore *kvs, int didx) {
     return hashtableSize(ht);
 }
 
+unsigned long kvstoreHashtableBuckets(kvstore *kvs, int didx) {
+    hashtable *ht = kvstoreGetHashtable(kvs, didx);
+    if (!ht) return 0;
+    return hashtableBuckets(ht);
+}
+
 kvstoreHashtableIterator *kvstoreGetHashtableIterator(kvstore *kvs, int didx, uint8_t flags) {
     kvstoreHashtableIterator *kvs_di = zmalloc(sizeof(*kvs_di));
     kvs_di->kvs = kvs;
@@ -729,9 +733,13 @@ unsigned int kvstoreHashtableSampleEntries(kvstore *kvs, int didx, void **dst, u
 }
 
 bool kvstoreHashtableExpand(kvstore *kvs, int didx, unsigned long size) {
-    hashtable *ht = kvstoreGetHashtable(kvs, didx);
-    if (!ht) return false;
+    hashtable *ht = createHashtableIfNeeded(kvs, didx);
     return hashtableExpand(ht, size);
+}
+
+bool kvstoreHashtableTryExpand(kvstore *kvs, int didx, unsigned long size) {
+    hashtable *ht = createHashtableIfNeeded(kvs, didx);
+    return hashtableTryExpand(ht, size);
 }
 
 unsigned long kvstoreHashtableScanDefrag(kvstore *kvs,

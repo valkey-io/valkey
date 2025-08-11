@@ -5166,7 +5166,7 @@ void clusterHandleReplicaFailover(void) {
          * exist with a much better replication offset. Add an extra delay to make
          * it less likely that this replica will win the election. */
         if (server.cluster->failover_auth_rank == 0 && getNodeReplicationOffset(myself) == 0) {
-            server.cluster->failover_auth_time += 500;
+            server.cluster->failover_auth_time += 1000;
         }
         /* We add another delay that is proportional to the failed primary rank.
          * By default, 0.5 second * rank. This way those failed primaries will be

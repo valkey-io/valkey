@@ -1291,17 +1291,18 @@ start_server {tags {"dual-channel-replication external:skip"}} {
 
     # Generating RDB will take 100 sec to generate
     $primary debug populate 1000000 primary 1
-    $primary config set rdb-key-save-delay -10
+    $primary config set rdb-key-save-delay 10
     
     start_server {} {
         set replica [srv 0 client]
         set replica_host [srv 0 host]
         set replica_port [srv 0 port]
         set replica_log [srv 0 stdout]
-        
+
         $replica config set dual-channel-replication-enabled yes
         $replica config set loglevel debug
         $replica config set repl-diskless-load flush-before-load
+        $replica config set loading-process-events-interval-bytes 1024
 
         if {$::valgrind} {
             $primary config set repl-timeout 100
@@ -1310,7 +1311,7 @@ start_server {tags {"dual-channel-replication external:skip"}} {
         } else {
             $primary config set repl-timeout 10
             $replica config set repl-timeout 10
-            set max_tries 500
+            set max_tries 1000
         }
 
         test "Replica notice main-connection killed during rdb load callback" {; # https://github.com/valkey-io/valkey/issues/1152

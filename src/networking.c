@@ -52,38 +52,50 @@
 typedef struct {
     /* A set of client IDs to filter. If NULL, no ID filtering is applied. */
     intset *ids;
+    intset *not_ids;
     /* Maximum age (in seconds) of a client connection for filtering.
      * Connections younger than this value will not match.
      * A value of 0 means no age filtering. */
     long long max_age;
     /* Address/port of the client. If NULL, no address filtering is applied. */
     char *addr;
+    char *not_addr;
     /* Remote address/port of the client. If NULL, no address filtering is applied. */
     char *laddr;
+    char *not_laddr;
     /* Filtering clients by authentication user. If NULL, no user-based filtering is applied. */
     user *user;
+    user *not_user;
     /* Client type to filter. If set to -1, no type filtering is applied. */
     int type;
+    int not_type;
     /* Boolean flag to determine if the current client (`me`) should be filtered. 1 means "skip me", 0 means otherwise. */
     int skipme;
     /* Client name to filter. If NULL, no name filtering is applied. */
     char *name;
+    char *not_name;
     /* Idle time (in seconds) of a client connection for filtering.
      * Connections with idle time more than this value will match.
      * A value of 0 means no idle time filtering. */
     long long idle;
     /* Client flags for filtering. If NULL, no filtering is applied. */
     sds flags;
+    sds not_flags;
     /* Library name to filter. If NULL, no library name filtering is applied. */
     robj *lib_name;
+    robj *not_lib_name;
     /* Library version to filter. If NULL, no library version filtering is applied. */
     robj *lib_ver;
+    robj *not_lib_ver;
     /* Database index to filter. If set to -1, no DB number filtering is applied. */
     int db_number;
+    int not_db_number;
     /* Client capa for filtering. If NULL, no filtering is applied. */
     sds capa;
+    sds not_capa;
     /* Client ip for filtering. If NULL, no filtering is applied. */
     sds ip;
+    sds not_ip;
 } clientFilter;
 
 /* Types of payloads in reply buffers (c->buf and c->reply)
@@ -4168,6 +4180,28 @@ static int parseClientFiltersOrReply(client *c, int index, clientFilter *filter)
                 filter->ids = intsetAdd(filter->ids, id, &added);
                 index++; /* Move to the next argument */
             }
+        } else if (!strcasecmp(c->argv[index]->ptr, "not-id")) {
+            if (filter->not_ids == NULL) {
+                /* Initialize the intset for NOT-IDs */
+                filter->not_ids = intsetNew();
+            }
+            index++; /* Move to the first ID after "NOT-ID" */
+
+            /* Process all NOT-IDs until a non-numeric argument or end of args */
+            while (index < c->argc) {
+                long long not_id;
+                if (!string2ll(c->argv[index]->ptr, sdslen(c->argv[index]->ptr), &not_id)) {
+                    break; /* Stop processing NOT-IDs if a non-numeric argument is encountered */
+                }
+                if (not_id < 1) {
+                    addReplyError(c, "client-id should be greater than 0");
+                    return C_ERR;
+                }
+
+                uint8_t added;
+                filter->not_ids = intsetAdd(filter->not_ids, not_id, &added);
+                index++; /* Move to the next argument */
+            }
         } else if (!strcasecmp(c->argv[index]->ptr, "maxage") && moreargs) {
             long long maxage;
 
@@ -4188,15 +4222,35 @@ static int parseClientFiltersOrReply(client *c, int index, clientFilter *filter)
                 return C_ERR;
             }
             index += 2;
+        } else if (!strcasecmp(c->argv[index]->ptr, "not-type") && moreargs) {
+            filter->not_type = getClientTypeByName(c->argv[index + 1]->ptr);
+            if (filter->not_type == -1) {
+                addReplyErrorFormat(c, "Unknown client type '%s'", (char *)c->argv[index + 1]->ptr);
+                return C_ERR;
+            }
+            index += 2;
         } else if (!strcasecmp(c->argv[index]->ptr, "addr") && moreargs) {
             filter->addr = c->argv[index + 1]->ptr;
+            index += 2;
+        } else if (!strcasecmp(c->argv[index]->ptr, "not-addr") && moreargs) {
+            filter->not_addr = c->argv[index + 1]->ptr;
             index += 2;
         } else if (!strcasecmp(c->argv[index]->ptr, "laddr") && moreargs) {
             filter->laddr = c->argv[index + 1]->ptr;
             index += 2;
+        } else if (!strcasecmp(c->argv[index]->ptr, "not-laddr") && moreargs) {
+            filter->not_laddr = c->argv[index + 1]->ptr;
+            index += 2;
         } else if (!strcasecmp(c->argv[index]->ptr, "user") && moreargs) {
             filter->user = ACLGetUserByName(c->argv[index + 1]->ptr, sdslen(c->argv[index + 1]->ptr));
             if (filter->user == NULL) {
+                addReplyErrorFormat(c, "No such user '%s'", (char *)c->argv[index + 1]->ptr);
+                return C_ERR;
+            }
+            index += 2;
+        } else if (!strcasecmp(c->argv[index]->ptr, "not-user") && moreargs) {
+            filter->not_user = ACLGetUserByName(c->argv[index + 1]->ptr, sdslen(c->argv[index + 1]->ptr));
+            if (filter->not_user == NULL) {
                 addReplyErrorFormat(c, "No such user '%s'", (char *)c->argv[index + 1]->ptr);
                 return C_ERR;
             }
@@ -4231,16 +4285,34 @@ static int parseClientFiltersOrReply(client *c, int index, clientFilter *filter)
                 return C_ERR;
             }
             index += 2;
+        } else if (!strcasecmp(c->argv[index]->ptr, "not-flags") && moreargs) {
+            filter->not_flags = sdsnew(c->argv[index + 1]->ptr);
+            if (validateClientFlagFilter(filter->not_flags) == C_ERR) {
+                addReplyErrorFormat(c, "Unknown flags found in the NOT-FLAGS filter: %s", filter->not_flags);
+                return C_ERR;
+            }
+            index += 2;
         } else if (!strcasecmp(c->argv[index]->ptr, "name") && moreargs) {
             filter->name = c->argv[index + 1]->ptr;
+            index += 2;
+        } else if (!strcasecmp(c->argv[index]->ptr, "not-name") && moreargs) {
+            filter->not_name = c->argv[index + 1]->ptr;
             index += 2;
         } else if (!strcasecmp(c->argv[index]->ptr, "lib-name") && moreargs) {
             filter->lib_name = c->argv[index + 1];
             incrRefCount(filter->lib_name);
             index += 2;
+        } else if (!strcasecmp(c->argv[index]->ptr, "not-lib-name") && moreargs) {
+            filter->not_lib_name = c->argv[index + 1];
+            incrRefCount(filter->not_lib_name);
+            index += 2;
         } else if (!strcasecmp(c->argv[index]->ptr, "lib-ver") && moreargs) {
             filter->lib_ver = c->argv[index + 1];
             incrRefCount(filter->lib_ver);
+            index += 2;
+        } else if (!strcasecmp(c->argv[index]->ptr, "not-lib-ver") && moreargs) {
+            filter->not_lib_ver = c->argv[index + 1];
+            incrRefCount(filter->not_lib_ver);
             index += 2;
         } else if (!strcasecmp(c->argv[index]->ptr, "db") && moreargs) {
             int db_id;
@@ -4253,6 +4325,17 @@ static int parseClientFiltersOrReply(client *c, int index, clientFilter *filter)
             }
             filter->db_number = db_id;
             index += 2;
+        } else if (!strcasecmp(c->argv[index]->ptr, "not-db") && moreargs) {
+            int not_db_id;
+            if (getIntFromObjectOrReply(c, c->argv[index + 1], &not_db_id,
+                                        "NOT-DB is not an integer or out of range") != C_OK)
+                return C_ERR;
+            if (not_db_id < 0 || not_db_id >= server.dbnum) {
+                addReplyErrorFormat(c, "NOT-DB number should be between 0 and %d", server.dbnum - 1);
+                return C_ERR;
+            }
+            filter->not_db_number = not_db_id;
+            index += 2;
         } else if (!strcasecmp(c->argv[index]->ptr, "capa") && moreargs) {
             filter->capa = sdsnew(c->argv[index + 1]->ptr);
             if (validateClientCapaFilter(filter->capa) == C_ERR) {
@@ -4260,8 +4343,18 @@ static int parseClientFiltersOrReply(client *c, int index, clientFilter *filter)
                 return C_ERR;
             }
             index += 2;
+        } else if (!strcasecmp(c->argv[index]->ptr, "not-capa") && moreargs) {
+            filter->not_capa = sdsnew(c->argv[index + 1]->ptr);
+            if (validateClientCapaFilter(filter->not_capa) == C_ERR) {
+                addReplyErrorFormat(c, "Unknown capa found in the NOT-CAPA filter: %s", filter->not_capa);
+                return C_ERR;
+            }
+            index += 2;
         } else if (!strcasecmp(c->argv[index]->ptr, "ip") && moreargs) {
             filter->ip = sdsnew(c->argv[index + 1]->ptr);
+            index += 2;
+        } else if (!strcasecmp(c->argv[index]->ptr, "not-ip") && moreargs) {
+            filter->not_ip = sdsnew(c->argv[index + 1]->ptr);
             index += 2;
         } else {
             addReplyErrorObject(c, shared.syntaxerr);
@@ -4339,6 +4432,24 @@ static int clientMatchesFilter(client *client, clientFilter *client_filter) {
     if (client_filter->db_number != -1 && client->db->id != client_filter->db_number) return 0;
     if (client_filter->capa && clientMatchesCapaFilter(client, client_filter->capa) == 0) return 0;
     if (client_filter->ip && clientMatchesIpFilter(client, client_filter->ip) == 0) return 0;
+
+    /* Check each negative filter condition and return false if the client matches. */
+    if (client_filter->not_addr && strcmp(getClientPeerId(client), client_filter->not_addr) == 0) return 0;
+    if (client_filter->not_laddr && strcmp(getClientSockname(client), client_filter->not_laddr) == 0) return 0;
+    if (client_filter->not_type != -1 && getClientType(client) == client_filter->not_type) return 0;
+    if (client_filter->not_ids && intsetFind(client_filter->not_ids, client->id)) return 0;
+    if (client_filter->not_user && client->user == client_filter->not_user) return 0;
+    if (client_filter->not_flags && clientMatchesFlagFilter(client, client_filter->not_flags) != 0) return 0;
+    if (client_filter->not_name) {
+        if (client->name && client->name->ptr && strcmp(client->name->ptr, client_filter->not_name) == 0) {
+            return 0;
+        }
+    }
+    if (client_filter->not_lib_name && (client->lib_name && compareStringObjects(client->lib_name, client_filter->not_lib_name) == 0)) return 0;
+    if (client_filter->not_lib_ver && (client->lib_ver && compareStringObjects(client->lib_ver, client_filter->not_lib_ver) == 0)) return 0;
+    if (client_filter->not_db_number != -1 && client->db->id == client_filter->not_db_number) return 0;
+    if (client_filter->not_capa && clientMatchesCapaFilter(client, client_filter->not_capa) != 0) return 0;
+    if (client_filter->not_ip && clientMatchesIpFilter(client, client_filter->not_ip) != 0) return 0;
 
     /* If all conditions are satisfied, the client matches the filter. */
     return 1;
@@ -4444,15 +4555,15 @@ static int clientMatchesFlagFilter(client *c, sds flag_filter) {
             if (!c->flag.import_source) return 0;
             break;
         case 'N': /* Check for no flags */
-            if (!c->flag.replica && !c->flag.primary && !c->flag.pubsub &&
-                !c->flag.multi && !c->flag.blocked && !c->flag.tracking &&
-                !c->flag.tracking_broken_redir && !c->flag.tracking_bcast &&
-                !c->flag.dirty_cas && !c->flag.close_after_reply &&
-                !c->flag.unblocked && !c->flag.close_asap &&
-                !c->flag.unix_socket && !c->flag.readonly &&
-                !c->flag.no_evict && !c->flag.no_touch &&
-                !c->flag.import_source) {
-                return 1; /* Matches 'N' */
+            if (c->flag.replica || c->flag.primary || c->flag.pubsub ||
+                c->flag.multi || c->flag.blocked || c->flag.tracking ||
+                c->flag.tracking_broken_redir || c->flag.tracking_bcast ||
+                c->flag.dirty_cas || c->flag.close_after_reply ||
+                c->flag.unblocked || c->flag.close_asap ||
+                c->flag.unix_socket || c->flag.readonly ||
+                c->flag.no_evict || c->flag.no_touch ||
+                c->flag.import_source) {
+                return 0;
             }
             break;
         default:
@@ -4594,7 +4705,11 @@ void clientListCommand(client *c) {
     sds response = NULL;
 
     if (c->argc > 3) {
-        clientFilter filter = {.ids = NULL, .max_age = 0, .idle = 0, .addr = NULL, .laddr = NULL, .user = NULL, .type = -1, .skipme = 0, .db_number = -1};
+        clientFilter filter = {0};
+        filter.type = -1;
+        filter.not_type = -1;
+        filter.db_number = -1;
+        filter.not_db_number = -1;
         int i = 2;
 
         if (parseClientFiltersOrReply(c, i, &filter) != C_OK) {
@@ -4652,15 +4767,12 @@ void clientKillCommand(client *c) {
     listNode *ln;
     listIter li;
 
-    clientFilter client_filter = {.ids = NULL,
-                                  .max_age = 0,
-                                  .idle = 0,
-                                  .addr = NULL,
-                                  .laddr = NULL,
-                                  .user = NULL,
-                                  .type = -1,
-                                  .skipme = 1,
-                                  .db_number = -1};
+    clientFilter client_filter = {0};
+    client_filter.type = -1;
+    client_filter.not_type = -1;
+    client_filter.db_number = -1;
+    client_filter.not_db_number = -1;
+    client_filter.skipme = 1;
 
     int killed = 0, close_this_client = 0;
 
@@ -4738,6 +4850,31 @@ static void freeClientFilter(clientFilter *filter) {
     if (filter->lib_ver) {
         decrRefCount(filter->lib_ver);
         filter->lib_ver = NULL;
+    }
+
+    if (filter->not_ids != NULL) {
+        zfree(filter->not_ids);
+        filter->not_ids = NULL;
+    }
+    if (filter->not_flags != NULL) {
+        sdsfree(filter->not_flags);
+        filter->not_flags = NULL;
+    }
+    if (filter->not_capa != NULL) {
+        sdsfree(filter->not_capa);
+        filter->not_capa = NULL;
+    }
+    if (filter->not_ip != NULL) {
+        sdsfree(filter->not_ip);
+        filter->not_ip = NULL;
+    }
+    if (filter->not_lib_name) {
+        decrRefCount(filter->not_lib_name);
+        filter->not_lib_name = NULL;
+    }
+    if (filter->not_lib_ver) {
+        decrRefCount(filter->not_lib_ver);
+        filter->not_lib_ver = NULL;
     }
 }
 

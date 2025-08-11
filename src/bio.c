@@ -61,6 +61,7 @@
 
 
 #include "server.h"
+#include "connection.h"
 #include "bio.h"
 #include <stdatomic.h>
 
@@ -68,6 +69,7 @@ static char *bio_worker_title[] = {
     "bio_close_file",
     "bio_aof",
     "bio_lazy_free",
+    "bio_rdb_save",
 };
 
 #define BIO_WORKER_NUM (sizeof(bio_worker_title) / sizeof(*bio_worker_title))
@@ -77,6 +79,7 @@ static unsigned int bio_job_to_worker[] = {
     [BIO_AOF_FSYNC] = 1,
     [BIO_CLOSE_AOF] = 1,
     [BIO_LAZY_FREE] = 2,
+    [BIO_RDB_SAVE] = 3,
 };
 
 static pthread_t bio_threads[BIO_WORKER_NUM];
@@ -84,6 +87,7 @@ static pthread_mutex_t bio_mutex[BIO_WORKER_NUM];
 static pthread_cond_t bio_newjob_cond[BIO_WORKER_NUM];
 static list *bio_jobs[BIO_WORKER_NUM];
 static unsigned long bio_jobs_counter[BIO_NUM_OPS] = {0};
+static __thread unsigned long bio_thread_id = 0;
 
 /* This structure represents a background Job. It is only used locally to this
  * file as the API does not expose the internals at all. */
@@ -108,6 +112,12 @@ typedef union bio_job {
         lazy_free_fn *free_fn; /* Function that will free the provided arguments */
         void *free_args[];     /* List of arguments to be passed to the free function */
     } free_args;
+
+    struct {
+        int type;
+        connection *conn;    /* Connection to download the RDB from */
+        int is_dual_channel; /* Single vs dual channel */
+    } save_to_disk_args;
 } bio_job;
 
 void *bioProcessBackgroundJobs(void *arg);
@@ -203,6 +213,13 @@ void bioCreateFsyncJob(int fd, long long offset, int need_reclaim_cache) {
     bioSubmitJob(BIO_AOF_FSYNC, job);
 }
 
+void bioCreateSaveRDBToDiskJob(connection *conn, int is_dual_channel) {
+    bio_job *job = zmalloc(sizeof(*job));
+    job->save_to_disk_args.conn = conn;
+    job->save_to_disk_args.is_dual_channel = is_dual_channel;
+    bioSubmitJob(BIO_RDB_SAVE, job);
+}
+
 void *bioProcessBackgroundJobs(void *arg) {
     bio_job *job;
     unsigned long worker = (unsigned long)arg;
@@ -224,6 +241,8 @@ void *bioProcessBackgroundJobs(void *arg) {
     sigaddset(&sigset, SIGALRM);
     if (pthread_sigmask(SIG_BLOCK, &sigset, NULL))
         serverLog(LL_WARNING, "Warning: can't mask SIGALRM in bio.c thread: %s", strerror(errno));
+
+    bio_thread_id = worker;
 
     while (1) {
         listNode *ln;
@@ -278,6 +297,8 @@ void *bioProcessBackgroundJobs(void *arg) {
             if (job_type == BIO_CLOSE_AOF) close(job->fd_args.fd);
         } else if (job_type == BIO_LAZY_FREE) {
             job->free_args.free_fn(job->free_args.free_args);
+        } else if (job_type == BIO_RDB_SAVE) {
+            replicaReceiveRDBFromPrimaryToDisk(job->save_to_disk_args.conn, job->save_to_disk_args.is_dual_channel);
         } else {
             serverPanic("Wrong job type in bioProcessBackgroundJobs().");
         }
@@ -332,4 +353,8 @@ void bioKillThreads(void) {
             }
         }
     }
+}
+
+int inBioThread(void) {
+    return bio_thread_id != 0;
 }

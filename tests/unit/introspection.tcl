@@ -192,7 +192,7 @@ start_server {tags {"introspection"}} {
         $c3 multi
 
         # Wait 1 second to ensure idle time
-        after 1000  ;
+        after 1000
 
         # Fetch the client list filtered by name and flags
         set cl [split [r client list name client1 flags N] "\r\n"]
@@ -241,12 +241,14 @@ start_server {tags {"introspection"}} {
     }
 
     test {CLIENT LIST with CAPA filter} {
-        r client setname "client-with-r"
-        r client capa redirect
+        set c1 [valkey_client]
+        $c1 client setname "client-with-r"
+        $c1 client capa redirect
 
         set output [r client list capa r]
         assert_match *client-with-r* $output
-    } {}
+        catch {$c1 close}
+    }
 
     test {CLIENT KILL with IP filter} {
         set c1 [valkey_client]
@@ -363,10 +365,264 @@ start_server {tags {"introspection"}} {
         $c2 client setname client2
 
         # Wait 1 second to ensure idle time
-        after 1000 ;# Wait 1 second
+        after 1000
 
         # Kill the client with name and idle time filters
         r client kill name client1 idle 1
+
+        # Assert client1 was killed
+        set err1 [catch {$c1 ping} error_message1]
+        assert {$err1 == 1}
+        assert {[string match "*I/O error*" $error_message1]}
+
+        # Assert client2 is still alive
+        assert {[catch {$c2 ping}] == 0}
+
+        # Cleanup
+        catch {$c2 close}
+    }
+
+    # Test CLIENT LIST with NOT-NAME filter
+    test {CLIENT LIST with NOT-NAME filter} {
+        r client setname mytestclient
+        set c1 [valkey_client]
+        $c1 client setname client1
+        set cl [r client list not-name mytestclient]
+        assert_match "*name=client1*" $cl
+        assert_no_match "*name=mytestclient*" $cl
+        catch {$c1 close}
+    }
+
+    # Test CLIENT LIST with NOT-FLAGS filter
+    test {CLIENT LIST with NOT-FLAGS filter} {
+        set c1 [valkey_client]
+        $c1 readonly
+        set cl [r client list not-flags N]
+        assert_match "*flags=r*" $cl
+        assert_no_match "*flags=N*" $cl
+        catch {$c1 close}
+    }
+
+    # Test CLIENT LIST with NOT-TYPE filter
+    test {CLIENT LIST with NOT-TYPE filter} {
+        r client setname mytestclient
+        set c1 [valkey_client]
+        $c1 client setname client1
+        $c1 subscribe x
+        set cl [r client list not-type normal]
+        assert_match "*name=client1*" $cl
+        assert_no_match "*name=mytestclient*" $cl
+        catch {$c1 close}
+    }
+
+    # Test CLIENT LIST with multiple negative filters
+    test {CLIENT LIST with multiple negative filters} {
+        r client setname mytestclient
+        set client_info [r client info]
+        set fields [split $client_info " "]
+        foreach pair $fields {
+            lassign [split $pair "="] key val
+            if {$key eq "id"} { set myid $val }
+            if {$key eq "name"} { set myname $val }
+        }
+
+        set c1 [valkey_client]
+        $c1 client setname client1
+
+        set cl [r client list not-id $myid not-name $myname]
+
+        assert_match "*name=client1*" $cl
+        assert_no_match "*name=mytestclient*" $cl
+        catch {$c1 close}
+    }
+
+    test {CLIENT LIST with multiple negative filters} {
+        # Create multiple clients with different names and flags
+        set c1 [valkey_client]
+        set c2 [valkey_client]
+        set c3 [valkey_client]
+        $c1 client setname client1
+        $c2 client setname client1
+        $c3 client setname client2
+        $c3 multi
+
+        # Wait 1 second to ensure idle time
+        after 1000
+
+        # Fetch the client list filtered by name and not-flags
+        set cl [split [r client list name client1 not-flags x] "\r\n"]
+
+        # Assert the clients returned match the filters
+        foreach line $cl {
+            regexp {name=([^ ]+) .* flags=([^ ]+)} $line _ actual_name flags
+            assert {[string match *client1* $actual_name] || [string match *client2* $actual_name]}
+            assert {[string match *N* $flags]}
+        }
+
+        # Close clients
+        $c1 close
+        $c2 close
+        $c3 close
+    }
+
+    test {CLIENT LIST with NOT-IP filter} {
+        r client setname "not-ip"
+
+        set client_info [r client info]
+        regexp {addr=([^:]+):} $client_info -> not_ip
+
+        # Use the extracted IP for filtering.
+        r client list not-ip $not_ip
+    } {}
+
+    start_server {tags {"ipv6"} overrides {bind {127.0.0.1 ::1}}} {
+        test {CLIENT LIST with IPv6 negative filter} {
+            set c [valkey ::1 [srv 0 port] 0 $::tls]
+            $c client setname "client-ipv6"
+
+            set client_info [$c client info]
+
+            regexp {addr=\[([a-fA-F0-9:]+)\]:\d+} $client_info -> ipv6only
+            set filtered [$c client list not-ip $ipv6only]
+            assert_no_match *client-ipv6* $filtered
+
+            $c close
+        }
+    }
+
+    test {CLIENT LIST with NOT-CAPA filter} {
+        r client setname mytestclient
+        set c1 [valkey_client]
+        $c1 client setname client-with-r
+        $c1 client capa redirect
+        set cl [r client list not-capa r]
+        assert_match "*name=mytestclient*" $cl
+        assert_no_match "*name=client-with-r*" $cl
+        catch {$c1 close}
+    }
+
+    test {CLIENT KILL with NOT-IP filter} {
+        set c1 [valkey_client]
+        $c1 client setname "killme-not-ip"
+        r client setname "client-normal"
+
+        # Kill client by NOT-IP
+        r client kill not-ip "1.2.3.4" skipme yes
+
+        assert_error "*I/O error*" {$c1 ping}
+        catch {$c1 close}
+
+        set list_reply [r client list]
+        assert_match "*name=client-normal*" $list_reply
+        assert_no_match "*name=killme-not-ip*" $list_reply
+    }
+
+    test {CLIENT KILL with NOT-CAPA filter} {
+        set c1 [valkey_client]
+        $c1 client setname "killme-not-capa"
+        r client setname "client-normal"
+
+        # Kill using not-capa filter
+        r client kill not-capa r skipme yes
+
+        assert_error "*I/O error*" {$c1 ping}
+        catch {$c1 close}
+
+        set cl [r client list]
+        assert_match "*name=client-normal*" $cl
+        assert_no_match "*name=killme-not-capa*" $cl
+    }
+
+    test {CLIENT KILL with NOT-NAME filter} {
+        r client setname "client-normal"
+        # Create a client and set its name
+        set c1 [valkey_client]
+        $c1 client setname "killme-not-name"
+
+        # Kill the client by not-name
+        r client kill not-name client-normal
+
+        # Assert the client was killed
+        assert_error "*I/O error*" {$c1 ping}
+        catch {$c1 close}
+
+        set cl [r client list]
+        assert_match "*name=client-normal*" $cl
+        assert_no_match "*name=killme-not-name*" $cl
+    }
+
+    test {CLIENT KILL with NOT-FLAGS filter} {
+        r client setname "client-normal"
+        # Create a client and set its name
+        set c1 [valkey_client]
+        $c1 client setname "killme-not-flags"
+        $c1 readonly
+
+        # Kill the client by not-flag
+        r client kill not-flags N
+
+        # Assert the client was killed
+        assert_error "*I/O error*" {$c1 ping}
+        catch {$c1 close}
+
+        set cl [r client list]
+        assert_match "*name=client-normal*" $cl
+        assert_no_match "*name=killme-not-flags*" $cl
+    }
+
+    test {CLIENT KILL with NOT-TYPE filter} {
+        r client setname "client-normal"
+        # Create a client
+        set c1 [valkey_client]
+        $c1 client setname "killme-not-type"
+        $c1 subscribe x
+
+        # Kill the client by not-type
+        r client kill not-type normal
+
+        # Assert the client was killed
+        assert_error "*I/O error*" {$c1 ping}
+        catch {$c1 close}
+
+        set cl [r client list]
+        assert_match "*name=client-normal*" $cl
+        assert_no_match "*name=killme-not-type*" $cl
+    }
+
+    test {CLIENT KILL with multiple negative filters} {
+        # Create two clients
+        set c1 [valkey_client]
+        set c2 [valkey_client]
+        $c1 client setname client1
+        $c2 client setname client2
+
+        # Kill the client with not-name and not-flag filters
+        r client kill not-name client2 not-flags x
+
+        # Assert client1 was killed
+        set err1 [catch {$c1 ping} error_message1]
+        assert {$err1 == 1}
+        assert {[string match "*I/O error*" $error_message1]}
+
+        # Assert client2 is still alive
+        assert {[catch {$c2 ping}] == 0}
+
+        # Cleanup
+        catch {$c2 close}
+    }
+
+    test {CLIENT KILL with both positive and negative filters including idle time} {
+        # Create two clients
+        set c1 [valkey_client]
+        set c2 [valkey_client]
+        $c1 client setname client1
+        $c2 client setname client2
+
+        # Wait 1 second to ensure idle time
+        after 1000
+
+        # Kill the client with not-name and idle filters
+        r client kill not-name client2 idle 1
 
         # Assert client1 was killed
         set err1 [catch {$c1 ping} error_message1]
@@ -396,6 +652,16 @@ start_server {tags {"introspection"}} {
         assert_error "ERR *not an integer or out of range*" {r client list maxage str}
         assert_error "ERR *not an integer or out of range*" {r client list maxage 9999999999999999999}
         assert_error "ERR *greater than 0*" {r client list maxage -1}
+
+        assert_error "ERR syntax error" {r client list not-id 10 wrong_arg}
+
+        assert_error "ERR syntax error" {r client list not-id str}
+        assert_error "ERR *greater than 0*" {r client list not-id -1}
+        assert_error "ERR *greater than 0*" {r client list not-id 0}
+
+        assert_error "ERR Unknown client type*" {r client list not-type wrong_type}
+
+        assert_error "ERR No such user*" {r client list not-user wrong_user}
     }
 
     proc get_client_tot_in_out_cmds {id} {
@@ -1315,6 +1581,8 @@ start_server {tags {"introspection"}} {
     } {} {external:skip}
 
     test {CLIENT KILL can filter by LIB-NAME} {
+        r client setinfo lib-name ""
+        r client setinfo lib-ver ""
         set c1 [valkey_client]
         set c2 [valkey_client]
 
@@ -1333,6 +1601,59 @@ start_server {tags {"introspection"}} {
 
         $c1 client setinfo lib-ver 1.2.3
         $c2 client kill lib-ver 1.2.3
+
+        set result [$c2 client list]
+        assert {[string match {*lib-ver=1.2.3*} $result] == 0}
+
+        catch {$c2 close}
+    }
+
+    test {CLIENT LIST can filter by NOT-LIB-NAME} {
+        r CLIENT SETINFO lib-name mylib
+        r client list not-lib-name mylib
+    } {}
+
+    test {CLIENT LIST can filter by NOT-LIB-VER} {
+        r CLIENT SETINFO lib-ver 1.2.3
+        r client list not-lib-ver 1.2.3
+    } {}
+
+    test {CLIENT LIST can filter by NOT-DB number} {
+        r select 2
+        r client list not-db 2
+    } {} {external:skip}
+
+    test {CLIENT KILL can filter by NOT-DB} {
+        set c1 [valkey_client]
+
+        $c1 select 2
+        r select 0
+
+        r client kill not-db 0
+
+        assert {[string match "*db=2*" [r client list]] == 0}
+        catch {$c1 close}
+    } {0} {external:skip}
+
+    test {CLIENT KILL can filter by NOT-LIB-NAME} {
+        set c1 [valkey_client]
+        set c2 [valkey_client]
+
+        $c1 client setinfo lib-name mylib
+        $c2 client kill not-lib-name not-mylib
+
+        set result [$c2 client list]
+        assert {[string match {*lib-name=mylib*} $result] == 0}
+
+        catch {$c2 close}
+    }
+
+    test {CLIENT KILL can filter by NOT-LIB-VER} {
+        set c1 [valkey_client]
+        set c2 [valkey_client]
+
+        $c1 client setinfo lib-ver 1.2.3
+        $c2 client kill not-lib-ver 0.0.0
 
         set result [$c2 client list]
         assert {[string match {*lib-ver=1.2.3*} $result] == 0}

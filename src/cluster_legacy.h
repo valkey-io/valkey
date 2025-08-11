@@ -77,12 +77,6 @@ typedef struct clusterLink {
 #define nodeSupportsLightMsgHdrForModule(n) ((n)->flags & CLUSTER_NODE_LIGHT_HDR_MODULE_SUPPORTED)
 #define nodeInNormalState(n) (!((n)->flags & (CLUSTER_NODE_HANDSHAKE | CLUSTER_NODE_MEET | CLUSTER_NODE_PFAIL | CLUSTER_NODE_FAIL)))
 
-/* This structure represent elements of node->fail_reports. */
-typedef struct clusterNodeFailReport {
-    clusterNode *node; /* Node reporting the failure condition. */
-    mstime_t time;     /* Time of the last report from this node. */
-} clusterNodeFailReport;
-
 /* Cluster messages header */
 
 /* Message types.
@@ -371,7 +365,7 @@ struct _clusterNode {
     int cport;                              /* Latest known cluster port of this node. */
     clusterLink *link;                      /* TCP/IP link established toward this node */
     clusterLink *inbound_link;              /* TCP/IP link accepted from this node */
-    list *fail_reports;                     /* List of nodes signaling this as failing */
+    rax *fail_reports;                      /* Radix tree for failure reports with sorted order by timestamp */
     int is_node_healthy;                    /* Boolean indicating the cached node health.
                                                Update with updateAndCountChangedNodeHealth(). */
 };
@@ -392,8 +386,8 @@ struct clusterState {
     dict *nodes;            /* Hash table of name -> clusterNode structures */
     dict *shards;           /* Hash table of shard_id -> list (of nodes) structures */
     dict *nodes_black_list; /* Nodes we don't re-add for a few seconds. */
-    clusterNode *migrating_slots_to[CLUSTER_SLOTS];
-    clusterNode *importing_slots_from[CLUSTER_SLOTS];
+    dict *migrating_slots_to;
+    dict *importing_slots_from;
     clusterNode *slots[CLUSTER_SLOTS];
     /* The following fields are used to take the replica state on elections. */
     mstime_t failover_auth_time;      /* Time of previous or next election. */

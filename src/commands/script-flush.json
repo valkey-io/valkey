@@ -14,7 +14,8 @@
             ]
         ],
         "command_flags": [
-            "NOSCRIPT"
+            "NOSCRIPT",
+            "STALE"
         ],
         "acl_categories": [
             "SCRIPTING"

@@ -395,11 +395,11 @@ void pubsubShardUnsubscribeAllChannelsInSlot(unsigned int slot) {
     kvstoreReleaseHashtableIterator(kvs_di);
 }
 
-/* Subscribe a client to a pattern. Returns 1 if the operation succeeded, or 0 if the client was already subscribed to
- * that pattern. */
-int pubsubSubscribePattern(client *c, robj *pattern) {
+/* Subscribe a client to a pattern. Returns true if the operation succeeded,
+ * or false if the client was already subscribed to that pattern. */
+bool pubsubSubscribePattern(client *c, robj *pattern) {
     if (!c->pubsub_data) initClientPubSubData(c);
-    int pattern_added = hashtableAdd(c->pubsub_data->pubsub_patterns, pattern);
+    bool pattern_added = hashtableAdd(c->pubsub_data->pubsub_patterns, pattern);
     if (pattern_added) {
         incrRefCount(pattern);
         /* Add the client to the pattern -> list of clients hash table */

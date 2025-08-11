@@ -89,19 +89,18 @@ int clientsCronHandleTimeout(client *c, mstime_t now_ms) {
 #define CLIENT_ST_KEYLEN 16 /* 8 bytes mstime + 8 bytes client ID. */
 
 /* Given client ID and timeout, write the resulting radix tree key in buf. */
-void encodeTimeoutKey(unsigned char *buf, uint64_t timeout, client *c) {
+void encodeTimeoutKey(client *c, uint64_t timeout, unsigned char *buf_out) {
     timeout = htonu64(timeout);
-    memcpy(buf, &timeout, sizeof(timeout));
-    memcpy(buf + 8, &c, sizeof(c));
-    if (sizeof(c) == 4) memset(buf + 12, 0, 4); /* Zero padding for 32bit target. */
+    memcpy(buf_out, &timeout, sizeof(timeout));
+    writePointerWithPadding(buf_out + sizeof(timeout), c);
 }
 
 /* Given a key encoded with encodeTimeoutKey(), resolve the fields and write
  * the timeout into *toptr and the client pointer into *cptr. */
-void decodeTimeoutKey(unsigned char *buf, uint64_t *toptr, client **cptr) {
-    memcpy(toptr, buf, sizeof(*toptr));
-    *toptr = ntohu64(*toptr);
-    memcpy(cptr, buf + 8, sizeof(*cptr));
+void decodeTimeoutKey(unsigned char *buf, uint64_t *timeout_ptr, client **client_ptr) {
+    memcpy(timeout_ptr, buf, sizeof(*timeout_ptr));
+    *timeout_ptr = ntohu64(*timeout_ptr);
+    memcpy(client_ptr, buf + sizeof(*timeout_ptr), sizeof(*client_ptr));
 }
 
 /* Add the specified client id / timeout as a key in the radix tree we use
@@ -111,7 +110,7 @@ void addClientToTimeoutTable(client *c) {
     if (c->bstate->timeout == 0) return;
     uint64_t timeout = c->bstate->timeout;
     unsigned char buf[CLIENT_ST_KEYLEN];
-    encodeTimeoutKey(buf, timeout, c);
+    encodeTimeoutKey(c, timeout, buf);
     if (raxTryInsert(server.clients_timeout_table, buf, sizeof(buf), NULL, NULL)) c->flag.in_to_table = 1;
 }
 
@@ -122,7 +121,7 @@ void removeClientFromTimeoutTable(client *c) {
     c->flag.in_to_table = 0;
     uint64_t timeout = c->bstate->timeout;
     unsigned char buf[CLIENT_ST_KEYLEN];
-    encodeTimeoutKey(buf, timeout, c);
+    encodeTimeoutKey(c, timeout, buf);
     raxRemove(server.clients_timeout_table, buf, sizeof(buf), NULL);
 }
 

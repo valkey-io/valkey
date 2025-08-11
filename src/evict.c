@@ -607,7 +607,7 @@ int performEvictions(void) {
                         kvs = server.db[bestdbid]->expires;
                     }
                     void *entry = NULL;
-                    int found = kvstoreHashtableFind(kvs, pool[k].slot, pool[k].key, &entry);
+                    bool found = kvstoreHashtableFind(kvs, pool[k].slot, pool[k].key, &entry);
 
                     /* Remove the entry from the pool. */
                     if (pool[k].key != pool[k].cached) sdsfree(pool[k].key);

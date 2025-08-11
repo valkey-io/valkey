@@ -552,6 +552,10 @@ proc start_server {options {code undefined}} {
         dict set config "min-io-threads-avoid-copy-reply" 2
     }
 
+    if {$::rdb_threads} {
+        dict set config "rdb-threads" 2
+    }
+
     foreach line $data {
         if {[string length $line] > 0 && [string index $line 0] ne "#"} {
             set elements [split $line " "]

@@ -576,6 +576,123 @@ int test_iterator(int argc, char **argv, int flags) {
     return 0;
 }
 
+int test_hashtableStrideNext_stride1(int argc, char **argv, int flags) {
+    UNUSED(argc);
+    UNUSED(argv);
+    UNUSED(flags);
+
+    size_t count = 2000000;
+    uint8_t entry_array[count];
+    memset(entry_array, 0, sizeof entry_array);
+
+    /* A set of uint8_t pointers */
+    hashtableType type = {0};
+    hashtable *ht = hashtableCreate(&type);
+
+    /* Populate */
+    for (size_t j = 0; j < count; j++) {
+        TEST_ASSERT(hashtableAdd(ht, entry_array + j));
+    }
+
+    size_t num_returned = 0;
+    hashtableIterator iter;
+    void *next;
+    hashtableInitIterator(&iter, ht, 0);
+
+    /* Iterate using hashtableStrideNext with logical_start_index = 0 and stride = 1 */
+    size_t logical_start_index = 0;
+    size_t stride = 1; // Stride = 1 should be behave the same as the standard iterator
+    while (hashtableStrideNext(&iter, &next, logical_start_index, stride)) {
+        uint8_t *entry = next;
+        num_returned++;
+        TEST_ASSERT(entry >= entry_array && entry < entry_array + count);
+        /* increment entry at this position as a counter */
+        (*entry)++;
+    }
+    hashtableResetIterator(&iter);
+
+    /* Check that all entries were returned exactly once. */
+    TEST_ASSERT(num_returned == count);
+    for (size_t j = 0; j < count; j++) {
+        if (entry_array[j] != 1) {
+            printf("Entry %zu returned %d times\n", j, entry_array[j]);
+            return 0;
+        }
+    }
+
+    hashtableRelease(ht);
+    return 0;
+}
+
+int test_hashtableStrideNext_stride2(int argc, char **argv, int flags) {
+    UNUSED(argc);
+    UNUSED(argv);
+    UNUSED(flags);
+
+    size_t count = 2000000;
+    uint8_t entry_array[count];
+    memset(entry_array, 0, sizeof entry_array);
+
+    /* A set of uint8_t pointers */
+    hashtableType type = {0};
+    hashtable *ht = hashtableCreate(&type);
+
+    /* Populate */
+    for (size_t j = 0; j < count; j++) {
+        TEST_ASSERT(hashtableAdd(ht, entry_array + j));
+    }
+
+    /* --- Scenario: Iterate with stride = 2 two times and make sure we cover all elements --- */
+
+    size_t num_returned_pass1 = 0;
+    hashtableIterator iter_pass1;
+    void *next_pass1;
+
+    /* Pass 1: StrideIterate starting at logical_index 0, stride 2 */
+    hashtableInitIterator(&iter_pass1, ht, 0);
+    size_t logical_start_index = 0;
+    size_t stride = 2;
+    while (hashtableStrideNext(&iter_pass1, &next_pass1, logical_start_index, stride)) {
+        uint8_t *entry = next_pass1;
+        num_returned_pass1++;
+        TEST_ASSERT(entry >= entry_array && entry < entry_array + count);
+        (*entry)++;
+    }
+    hashtableResetIterator(&iter_pass1);
+    TEST_PRINT_INFO("Pass 1 returned %zu entries.", num_returned_pass1);
+
+    size_t num_returned_pass2 = 0;
+    hashtableIterator iter_pass2;
+    void *next_pass2;
+
+    /* Pass 2: StrideIterate starting at logical_index 1, stride 2 */
+    hashtableInitIterator(&iter_pass2, ht, 0);
+    logical_start_index = 1;
+    stride = 2;
+    while (hashtableStrideNext(&iter_pass2, &next_pass2, logical_start_index, stride)) {
+        uint8_t *entry = next_pass2;
+        num_returned_pass2++;
+        TEST_ASSERT(entry >= entry_array && entry < entry_array + count);
+        (*entry)++;
+    }
+    hashtableResetIterator(&iter_pass2);
+    TEST_PRINT_INFO("Pass 2 returned %zu entries.", num_returned_pass2);
+
+
+    /* Check that all entries combined from both stride 2 passes were returned exactly once. */
+    size_t total_returned_s2 = num_returned_pass1 + num_returned_pass2;
+    TEST_ASSERT(total_returned_s2 == count);
+    for (size_t j = 0; j < count; j++) {
+        if (entry_array[j] != 1) {
+            printf("Entry %zu returned %d times\n", j, entry_array[j]);
+            return 0;
+        }
+    }
+
+    hashtableRelease(ht);
+    return 0;
+}
+
 int test_safe_iterator(int argc, char **argv, int flags) {
     UNUSED(argc);
     UNUSED(argv);

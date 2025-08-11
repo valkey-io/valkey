@@ -1250,11 +1250,11 @@ bool hashtableExpand(hashtable *ht, size_t size) {
     return expand(ht, size, NULL);
 }
 
-/* Returns false if expand failed due to memory allocation failure. */
+/* Returns true if expand was performed or if expand is not needed. Returns false if
+ * expand failed due to memory allocation failure. */
 bool hashtableTryExpand(hashtable *ht, size_t size) {
     int malloc_failed = 0;
-    expand(ht, size, &malloc_failed);
-    return malloc_failed ? false : true;
+    return expand(ht, size, &malloc_failed) || !malloc_failed;
 }
 
 /* Expanding is done automatically on insertion, but less eagerly if resize

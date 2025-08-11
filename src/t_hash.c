@@ -532,7 +532,7 @@ static expiryModificationResult hashTypePersist(robj *o, sds field) {
  * Return true on deleted and false on not found. */
 bool hashTypeDelete(robj *o, sds field) {
     bool deleted = false;
-
+    serverAssert(o && o->type == OBJ_HASH);
     if (o->encoding == OBJ_ENCODING_LISTPACK) {
         unsigned char *zl, *fptr;
 
@@ -1373,7 +1373,9 @@ void hgetexCommand(client *c) {
         return;
     }
 
-    if ((o = lookupKeyReadOrReply(c, c->argv[1], shared.null[c->resp])) == NULL || checkType(c, o, OBJ_HASH)) return;
+    o = lookupKeyRead(c->db, c->argv[1]);
+
+    if (checkType(c, o, OBJ_HASH)) return;
 
     /* Check if the hash object has volatile fields, used for active-expiry tracking */
     bool has_volatile_fields = hashTypeHasVolatileFields(o);
@@ -1427,7 +1429,7 @@ void hgetexCommand(client *c) {
     for (i = fields_index; i < c->argc; i++) {
         bool changed = false;
         addHashFieldToReply(c, o, c->argv[i]->ptr);
-        if (set_expired) {
+        if (o && set_expired) {
             changed = hashTypeDelete(o, c->argv[i]->ptr);
         } else if (set_expiry) {
             changed = hashTypeSetExpire(o, c->argv[i]->ptr, when, 0) == EXPIRATION_MODIFICATION_SUCCESSFUL;

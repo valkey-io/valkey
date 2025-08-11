@@ -46,6 +46,7 @@
 #include "module.h"
 #include "cluster.h"
 #include "cluster_migrateslots.h"
+#include "rdb_threads.h"
 
 #include <math.h>
 #include <fcntl.h>
@@ -1384,6 +1385,13 @@ ssize_t rdbSaveDb(rio *rdb, int dbid, int rdbflags, long *key_counter) {
     if ((res = rdbSaveLen(rdb, expires_size)) < 0) goto werr;
     written += res;
 
+    /* Save the DB using RDB Threads if enabled */
+    if (server.rdb_threads_num > 1) {
+        if ((res = rdbSaveDbMultiThreaded(rdb, dbid, key_counter, pname)) < 0) goto werr;
+        written += res;
+        return written;
+    }
+
     kvs_it = kvstoreIteratorInit(db->keys, HASHTABLE_ITER_SAFE | HASHTABLE_ITER_PREFETCH_VALUES | HASHTABLE_ITER_INCLUDE_IMPORTING);
     int last_slot = -1;
     /* Iterate this DB writing every entry */
@@ -1461,11 +1469,21 @@ int rdbSaveRio(int req, rio *rdb, int *error, int rdbflags, rdbSaveInfo *rsi) {
     /* save functions */
     if (!(req & REPLICA_REQ_RDB_EXCLUDE_FUNCTIONS) && rdbSaveFunctions(rdb) == -1) goto werr;
 
+    /* Start the RDB Threads that will be used for Saving */
+    if (server.rdb_threads_num > 1) {
+        initRDBThreads(RDB_SAVE_JOB_QUEUE_SIZE);
+    }
+
     /* save all databases, skip this if we're in functions-only mode */
     if (!(req & REPLICA_REQ_RDB_EXCLUDE_DATA)) {
         for (j = 0; j < server.dbnum; j++) {
             if (rdbSaveDb(rdb, j, rdbflags, &key_counter) == -1) goto werr;
         }
+    }
+
+    /* Kill the RDB threads if they were initialized */
+    if (server.rdb_threads_num > 1) {
+        killRDBThreads();
     }
 
     if (!(req & REPLICA_REQ_RDB_EXCLUDE_DATA) && rdbSaveModulesAux(rdb, VALKEYMODULE_AUX_AFTER_RDB) == -1) goto werr;

@@ -130,6 +130,8 @@ void hashtablePauseAutoShrink(hashtable *ht);
 void hashtableResumeAutoShrink(hashtable *ht);
 bool hashtableIsRehashing(hashtable *ht);
 bool hashtableIsRehashingPaused(hashtable *ht);
+void hashtablePauseRehashing(hashtable *ht);
+void hashtableResumeRehashing(hashtable *ht);
 void hashtableRehashingInfo(hashtable *ht, size_t *from_size, size_t *to_size);
 int hashtableRehashMicroseconds(hashtable *ht, uint64_t us);
 bool hashtableExpand(hashtable *ht, size_t size);
@@ -165,6 +167,7 @@ void hashtableResetIterator(hashtableIterator *iter);
 hashtableIterator *hashtableCreateIterator(hashtable *ht, uint8_t flags);
 void hashtableReleaseIterator(hashtableIterator *iter);
 bool hashtableNext(hashtableIterator *iter, void **elemptr);
+bool hashtableStrideNext(hashtableIterator *iterator, void **elemptr, size_t logical_start_index, size_t stride);
 
 /* Random entries */
 bool hashtableRandomEntry(hashtable *ht, void **found);

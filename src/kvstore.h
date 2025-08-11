@@ -54,6 +54,7 @@ kvstoreIterator *kvstoreIteratorInit(kvstore *kvs, uint8_t flags);
 void kvstoreIteratorRelease(kvstoreIterator *kvs_it);
 int kvstoreIteratorGetCurrentHashtableIndex(kvstoreIterator *kvs_it);
 bool kvstoreIteratorNext(kvstoreIterator *kvs_it, void **next);
+hashtable *kvstoreIteratorNextHashtable(kvstoreIterator *kvs_it);
 
 /* Rehashing */
 void kvstoreTryResizeHashtables(kvstore *kvs, int limit);

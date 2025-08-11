@@ -63,24 +63,24 @@
 /* Returns 1 or 0 for success/failure. */
 static size_t rioBufferToTargetWrite(rio *r, const void *buf, size_t len) {
     /* Attempt to buffer data in memory if capacity allows. */
-    if (!r->io.buf_to_target.cap_reached && ((size_t)r->io.buf_to_target.pos + len) <= r->io.buf_to_target.max_buffer_size){
+    if (!r->io.buf_to_target.cap_reached && ((size_t)r->io.buf_to_target.pos + len) <= r->io.buf_to_target.max_buffer_size) {
         r->io.buf_to_target.ptr = sdscatlen(r->io.buf_to_target.ptr, (char *)buf, len);
         r->io.buf_to_target.pos += len;
         return 1; /* Data Successfully Buffered */
     }
 
     /* Transition to direct write if buffer cap reached or current write overflows. */
-    if (!r->io.buf_to_target.cap_reached) { 
-        /* First time hitting the memory cap. 
+    if (!r->io.buf_to_target.cap_reached) {
+        /* First time hitting the memory cap.
          * We enter this block a maximum of 1 time per rdbSaveKeyValuePair() call in rdbEncodedHashtableRange */
         r->io.buf_to_target.cap_reached = 1;
 
 
-        /* Aquire underlying rio mutex. The caller (rdbEncodedHashtableRange) is responsible 
-         * for unlocking the mutex once the current key has been fully streamed out.  
+        /* Acquire underlying rio mutex. The caller (rdbEncodedHashtableRange) is responsible
+         * for unlocking the mutex once the current key has been fully streamed out.
          * The caller knows to release the mutex if cap_reached = 1.
          */
-        pthread_mutex_lock(r->io.buf_to_target.target_rio_mutex); 
+        pthread_mutex_lock(r->io.buf_to_target.target_rio_mutex);
 
         /* Dump existing buffered data to underlying RIO. */
         if (r->io.buf_to_target.pos > 0) {
@@ -120,7 +120,7 @@ static int rioBufferToTargetFlush(rio *r) {
     if (rdbWriteRaw(r->io.buf_to_target.target_rio, r->io.buf_to_target.ptr, r->io.buf_to_target.pos) < 0) {
         pthread_mutex_unlock(r->io.buf_to_target.target_rio_mutex);
         return 0;
-    } 
+    }
     pthread_mutex_unlock(r->io.buf_to_target.target_rio_mutex);
 
     /* Buffer successfully flushed, clear its state. */
@@ -143,7 +143,7 @@ static const rio rioBufferToTargetIO = {
     {{NULL, 0}} /* union for io-specific vars */
 };
 
-void rioInitWithBufferToTarget(rio *r, sds s, size_t max_buffer_size, rio* target_rio, pthread_mutex_t *target_rio_mutex) {
+void rioInitWithBufferToTarget(rio *r, sds s, size_t max_buffer_size, rio *target_rio, pthread_mutex_t *target_rio_mutex) {
     *r = rioBufferToTargetIO;
     r->io.buf_to_target.ptr = s;
     r->io.buf_to_target.pos = 0;

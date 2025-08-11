@@ -80,10 +80,10 @@ struct _rio {
         struct {
             sds ptr;
             off_t pos;
-            size_t max_buffer_size;             /* Max capacity of buffer in Bytes */
-            uint8_t cap_reached;                /* set to 1 if buffer capacity was reached on last write */
-            rio* target_rio;                    /* The underlying target rio destination for the data. */
-            pthread_mutex_t* target_rio_mutex;  /* Mutex for thread-safe access to target_rio. */
+            size_t max_buffer_size;            /* Max capacity of buffer in Bytes */
+            uint8_t cap_reached;               /* set to 1 if buffer capacity was reached on last write */
+            rio *target_rio;                   /* The underlying target rio destination for the data. */
+            pthread_mutex_t *target_rio_mutex; /* Mutex for thread-safe access to target_rio. */
         } buf_to_target;
         /* In-memory buffer target. */
         struct {
@@ -196,7 +196,7 @@ static inline void rioClearErrors(rio *r) {
 
 void rioInitWithFile(rio *r, FILE *fp);
 void rioInitWithBuffer(rio *r, sds s);
-void rioInitWithBufferToTarget(rio *r, sds s, size_t max_buffer_size, rio* target_rio, pthread_mutex_t *target_rio_mutex);
+void rioInitWithBufferToTarget(rio *r, sds s, size_t max_buffer_size, rio *target_rio, pthread_mutex_t *target_rio_mutex);
 void rioInitWithConn(rio *r, connection *conn, size_t read_limit);
 void rioInitWithFd(rio *r, int fd);
 

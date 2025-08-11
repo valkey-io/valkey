@@ -1019,7 +1019,7 @@ static bucket *getNextBucket(bucket *current_bucket, size_t next_top_level_index
  * Cache state before this function is called (due to last call for this function):
  * 1. The current bucket and its entries are likely already in cache.
  * 2. The next bucket is in cache.
- * 
+ *
  * The 'stride' parameter determines how many top level buckets to jump forward. If we complete
  * a bucket chain, we "stride forward" to the next top-level bucket index.
  */
@@ -2095,14 +2095,14 @@ static BucketLocation logicalBucketIndexToBucketLocation(hashtable *ht, size_t l
 
     if (logical_index >= total_live) {
         /* Logical index is out of bounds. */
-        bucket_loc.table_index = 0; 
+        bucket_loc.table_index = 0;
         bucket_loc.bucket_index = 0;
         bucket_loc.valid = 0; /* This signals to hashtableStrideNext that we have finished the range */
         return bucket_loc;
     }
 
     if (logical_index < live_buckets_table_0) {
-         /* Physical location for a bucket in tables[0] is at rehash_idx plus its logical offset.
+        /* Physical location for a bucket in tables[0] is at rehash_idx plus its logical offset.
          * Example: if rehash_idx=3, logical_index=0 (1st live logical bucket) maps to tables[0][3]. */
         bucket_loc.table_index = 0;
         bucket_loc.bucket_index = rehash_idx + logical_index;
@@ -2181,11 +2181,11 @@ static size_t BucketLocationToLogicalBucketIndex(hashtable *ht, BucketLocation b
  * (At this point, B4's entire chain is processed.)
  *
  * This pattern continues until no more valid buckets are found within the stride.
- * 
+ *
  * Returns 'true' if an element was found and 'false' otherwise.
- * 
+ *
  * Important Note: It is strongly advised to call hashtablePauseRehashing in the
- * Main Thread before allowing multiple threads to call this function concurrently. 
+ * Main Thread before allowing multiple threads to call this function concurrently.
  */
 bool hashtableStrideNext(hashtableIterator *iterator, void **elemptr, size_t logical_start_index, size_t stride) {
     iter *iter = iteratorFromOpaque(iterator);
@@ -2200,7 +2200,7 @@ bool hashtableStrideNext(hashtableIterator *iterator, void **elemptr, size_t log
                 break;
             }
             BucketLocation start_loc = logicalBucketIndexToBucketLocation(iter->hashtable, logical_start_index);
-            if (!start_loc.valid){
+            if (!start_loc.valid) {
                 /* The start index is out of bounds. Nothing to process.*/
                 break;
             }
@@ -2220,8 +2220,7 @@ bool hashtableStrideNext(hashtableIterator *iterator, void **elemptr, size_t log
                 /* Current bucket (and its entire chain) is fully processed. Calculate the next logical bucket to stride to. */
                 BucketLocation curr_bucket_loc = {
                     .table_index = iter->table,
-                    .bucket_index = iter->index
-                };
+                    .bucket_index = iter->index};
                 size_t curr_logical_index = BucketLocationToLogicalBucketIndex(iter->hashtable, curr_bucket_loc);
                 size_t next_logical_index = curr_logical_index + stride;
 

@@ -1191,7 +1191,7 @@ void hsetexCommand(client *c) {
     robj **new_argv = NULL;
     int new_argc = 0;
 
-    for (; fields_index < c->argc; fields_index++) {
+    for (; fields_index < c->argc - 1; fields_index++) {
         if (!strcasecmp(c->argv[fields_index]->ptr, "fields")) {
             /* checking optional flags */
             if (parseExtendedCommandArgumentsOrReply(c, &flags, &unit, &expire, &comparison, COMMAND_HSET, fields_index++) != C_OK) return;
@@ -1358,7 +1358,7 @@ void hgetexCommand(client *c) {
     int new_argc = 0;
     int milliseconds_index = -1, numitems_index = -1;
 
-    for (; fields_index < c->argc; fields_index++) {
+    for (; fields_index < c->argc - 1; fields_index++) {
         if (!strcasecmp(c->argv[fields_index]->ptr, "fields")) {
             /* checking optional flags */
             if (parseExtendedCommandArgumentsOrReply(c, &flags, &unit, &expire, &comparison, COMMAND_HGET, fields_index++) != C_OK) return;
@@ -1611,7 +1611,7 @@ void hexpireGenericCommand(client *c, long long basetime, int unit) {
     robj **new_argv = NULL;
     int new_argc = 0;
 
-    for (; fields_index < c->argc; fields_index++) {
+    for (; fields_index < c->argc - 1; fields_index++) {
         if (!strcasecmp(c->argv[fields_index]->ptr, "fields")) {
             /* checking optional flags */
             if (parseExtendedExpireArgumentsOrReply(c, &flag, fields_index++) != C_OK) return;

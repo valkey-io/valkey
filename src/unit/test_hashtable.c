@@ -274,7 +274,7 @@ int test_two_phase_insert_and_pop(int argc, char **argv, int flags) {
         snprintf(val, sizeof(val), "%d", count - j + 42);
         hashtablePosition position;
         bool ret = hashtableFindPositionForInsert(ht, key, NULL, &position, NULL);
-        TEST_ASSERT(ret == 1);
+        TEST_ASSERT(ret);
         keyval *e = create_keyval(key, val);
         hashtableInsertAtPosition(ht, e, &position);
     }

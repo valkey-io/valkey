@@ -597,7 +597,8 @@ static inline void rehashStepOnWriteIfNeeded(hashtable *ht) {
 /* Allocates a new table and initiates incremental rehashing if necessary.
  * Returns true on resize (success), false on no resize (failure). If false is returned and
  * 'malloc_failed' is provided, it is set to true if allocation failed. If
- * 'malloc_failed' is not provided, an allocation failure triggers a panic. */
+ * 'malloc_failed' is not provided, an allocation failure triggers a panic.
+ * If rehashing is in progress, resize cannot be called. */
 static bool resize(hashtable *ht, size_t min_capacity, int *malloc_failed) {
     if (malloc_failed) *malloc_failed = 0;
 

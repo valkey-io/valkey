@@ -4,8 +4,8 @@
  * SPDX-License-Identifier: BSD-3-Clause
  */
 
+ #include "thread_common.h"
 #include "rdb_threads.h"
-#include "thread_common.h"
 #include "rdb.h"
 
 static pthread_t rdb_threads[RDB_THREADS_MAX_NUM] = {0};
@@ -207,7 +207,7 @@ void rdbEncodeHashtableRange(void *arg) {
         size_t processed_bytes_after = buf_to_target_rio->processed_bytes;
 
         if (res < 0) {
-            /* Release shared lock if we aquired it */
+            /* Release shared lock if we acquired it */
             if (buf_to_target_rio->io.buf_to_target.cap_reached) {
                 pthread_mutex_unlock(buf_to_target_rio->io.buf_to_target.target_rio_mutex);
             }
@@ -216,8 +216,8 @@ void rdbEncodeHashtableRange(void *arg) {
         /* Our write was successful. Check if we hit the memory cap while writing this key */
         if (buf_to_target_rio->io.buf_to_target.cap_reached) {
             /* If we hit the memory cap during the call to rdbSaveKeyValuePair we need too:
-                1. Unlock the mutex that was aquired in rioBufferToUnderlyingWrite
-                2. Clear the buffer since it was already written to the file in rioBufferToUnderlyingWrite
+                1. Unlock the mutex that was acquired in rioBufferToTargetWrite
+                2. Clear the buffer since it was already written to the file in rioBufferToTargetWrite
             */
             pthread_mutex_unlock(args->rdb_write_mutex);
 

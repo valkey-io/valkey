@@ -36,6 +36,7 @@
 #include "sds.h"
 #include "fpconv_dtoa.h"
 #include "fmtargs.h"
+#include "thread_common.h"
 #include "io_threads.h"
 #include "module.h"
 #include "connection.h"

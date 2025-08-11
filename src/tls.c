@@ -32,6 +32,7 @@
 #include "server.h"
 #include "connhelpers.h"
 #include "adlist.h"
+#include "thread_common.h"
 #include "io_threads.h"
 
 #if defined(USE_OPENSSL) &&                    \

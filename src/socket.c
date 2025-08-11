@@ -29,6 +29,7 @@
 
 #include "server.h"
 #include "connhelpers.h"
+#include "thread_common.h"
 #include "io_threads.h"
 
 /* The connections module provides a lean abstraction of network connections

@@ -55,6 +55,7 @@ set ::valgrind 0
 set ::durable 0
 set ::tls 0
 set ::io_threads 0
+set ::rdb_threads 0
 set ::tls_module 0
 set ::stack_logging 0
 set ::verbose 0
@@ -754,6 +755,8 @@ for {set j 0} {$j < [llength $argv]} {incr j} {
         set ::quiet 1
     } elseif {$opt eq {--io-threads}} {
         set ::io_threads 1
+    } elseif {$opt eq {--rdb-threads}} {
+        set ::rdb_threads 1
     } elseif {$opt eq {--tls} || $opt eq {--tls-module}} {
         package require tls 1.6
         set ::tls 1

@@ -2183,6 +2183,9 @@ static size_t BucketLocationToLogicalBucketIndex(hashtable *ht, BucketLocation b
  * This pattern continues until no more valid buckets are found within the stride.
  * 
  * Returns 'true' if an element was found and 'false' otherwise.
+ * 
+ * Important Note: It is strongly advised to call hashtablePauseRehashing in the
+ * Main Thread before allowing multiple threads to call this function concurrently. 
  */
 bool hashtableStrideNext(hashtableIterator *iterator, void **elemptr, size_t logical_start_index, size_t stride) {
     iter *iter = iteratorFromOpaque(iterator);

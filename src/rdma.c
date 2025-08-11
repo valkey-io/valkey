@@ -14,7 +14,7 @@
  */
 
 #define VALKEYMODULE_CORE_MODULE
-#include "server.h"
+#include "server.h" // Include server.h to use serverLog and serverAssert.
 #include "connection.h"
 
 #if defined __linux__ && defined USE_RDMA /* currently RDMA is only supported on Linux */
@@ -22,7 +22,6 @@
     ((USE_RDMA == 2 /* BUILD_MODULE */) && defined(BUILD_RDMA_MODULE) && (BUILD_RDMA_MODULE == 2))
 #include "connhelpers.h"
 
-#include <assert.h>
 #include <arpa/inet.h>
 #include <rdma/rdma_cma.h>
 #include <signal.h>
@@ -448,7 +447,7 @@ static int rdmaSendCommand(RdmaContext *ctx, struct rdma_cm_id *cm_id, ValkeyRdm
         }
     }
 
-    assert(i < 2 * VALKEY_RDMA_MAX_WQE);
+    serverAssert(i < 2 * VALKEY_RDMA_MAX_WQE);
 
     memcpy(_cmd, cmd, sizeof(ValkeyRdmaCmd));
     sge.addr = (uint64_t)_cmd;
@@ -574,7 +573,7 @@ static int connRdmaHandleSend(ValkeyRdmaCmd *cmd) {
 }
 
 static int connRdmaHandleRecvImm(RdmaContext *ctx, struct rdma_cm_id *cm_id, ValkeyRdmaCmd *cmd, uint32_t byte_len) {
-    assert(byte_len + ctx->rx.offset <= ctx->rx.length);
+    serverAssert(byte_len + ctx->rx.offset <= ctx->rx.length);
 
     ctx->rx.offset += byte_len;
 
@@ -1190,7 +1189,7 @@ static int connRdmaConnect(connection *conn,
     RdmaContext *ctx;
 
     /* RDMA does not support multipath, and there is no outgoing RDMA connection at the current stage */
-    assert(!multipath);
+    serverAssert(!multipath);
 
     if (rdmaResolveAddr(rdma_conn, addr, port, src_addr) == C_ERR) {
         return C_ERR;
@@ -1332,7 +1331,7 @@ static int connRdmaWrite(connection *conn, const void *data, size_t data_len) {
         return C_ERR;
     }
 
-    assert(ctx->tx.offset <= ctx->tx.length);
+    serverAssert(ctx->tx.offset <= ctx->tx.length);
     towrite = MIN(ctx->tx.length - ctx->tx.offset, data_len);
     if (!towrite) {
         return 0;
@@ -1358,7 +1357,7 @@ static inline uint32_t rdmaRead(RdmaContext *ctx, void *buf, size_t buf_len) {
 
     toread = MIN(ctx->rx.offset - ctx->rx.pos, buf_len);
 
-    assert(ctx->rx.pos + toread <= ctx->rx.length);
+    serverAssert(ctx->rx.pos + toread <= ctx->rx.length);
     memcpy(buf, ctx->rx.addr + ctx->rx.pos, toread);
 
     ctx->rx.pos += toread;
@@ -1380,7 +1379,7 @@ static int connRdmaRead(connection *conn, void *buf, size_t buf_len) {
         return -1;
     }
 
-    assert(ctx->rx.pos < ctx->rx.offset);
+    serverAssert(ctx->rx.pos < ctx->rx.offset);
 
     return rdmaRead(ctx, buf, buf_len);
 }
@@ -1397,7 +1396,7 @@ static ssize_t connRdmaSyncWrite(connection *conn, char *ptr, ssize_t size, long
         return C_ERR;
     }
 
-    assert(ctx->tx.offset <= ctx->tx.length);
+    serverAssert(ctx->tx.offset <= ctx->tx.length);
     if (ctx->tx.offset < ctx->tx.length) {
         /* TX buffer is available */
         goto copy;
@@ -1440,7 +1439,7 @@ static ssize_t connRdmaSyncRead(connection *conn, char *ptr, ssize_t size, long 
         return C_ERR;
     }
 
-    assert(ctx->rx.pos <= ctx->rx.offset);
+    serverAssert(ctx->rx.pos <= ctx->rx.offset);
     if (ctx->rx.pos < ctx->rx.offset) {
         goto copy;
     }
@@ -1475,7 +1474,7 @@ static ssize_t connRdmaSyncReadLine(connection *conn, char *ptr, ssize_t size, l
         return C_ERR;
     }
 
-    assert(ctx->rx.pos <= ctx->rx.offset);
+    serverAssert(ctx->rx.pos <= ctx->rx.offset);
     if (ctx->rx.pos < ctx->rx.offset) {
         goto copy;
     }
@@ -1620,7 +1619,7 @@ int connRdmaListen(connListener *listener) {
     char *default_bindaddr[2] = {"*", "-::*"};
     rdma_listener *rdma_listener;
 
-    assert(server.proto_max_bulk_len <= 512ll * 1024 * 1024);
+    serverAssert(server.proto_max_bulk_len <= 512ll * 1024 * 1024);
 
     /* Force binding of 0.0.0.0 if no bind address is specified. */
     if (listener->bindaddr_count == 0) {

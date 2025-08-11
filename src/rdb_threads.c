@@ -130,7 +130,7 @@ void initRDBThreads(int per_thread_queue_size) {
 
 /* --------- Multithreaded RDB Save: Thread Argument Management --------- */
 
-static RdbSaveThreadArgs *createRdbSaveThreadArgs(int num_threads, int dbid, rio *rdb, long *key_counter, char *pname, long long *info_updated_time) {
+static RdbSaveThreadArgs *createRdbSaveThreadArgs(int num_threads, int dbid, rio *target_rio, long *key_counter, char *pname, long long *info_updated_time) {
     RdbSaveThreadArgs *threadArgs = zcalloc(num_threads * sizeof(RdbSaveThreadArgs));
 
     pthread_mutex_t *shared_rdb_write_mutex = zmalloc(sizeof(pthread_mutex_t)); /* Shared access to the rdb */
@@ -141,7 +141,7 @@ static RdbSaveThreadArgs *createRdbSaveThreadArgs(int num_threads, int dbid, rio
         threadArgs[i].ht = NULL; // Set by the main thread in rdbSaveDbMultiThreaded for each hashtable in the database
         threadArgs[i].bucket_stride = (BucketStride){.start_index = i, .stride_size = num_threads};
         atomic_init(&threadArgs[i].keys_processed, 0);
-        rioInitWithBufferToUnderlying(&threadArgs[i].buf_to_target_rio, sdsnewlen(SDS_NOINIT, WORKER_BUFFER_DEFAULT_SIZE), WORKER_BUFFER_CAPACITY_LIMIT, rdb, shared_rdb_write_mutex);
+        rioInitWithBufferToTarget(&threadArgs[i].buf_to_target_rio, sdsnewlen(SDS_NOINIT, WORKER_BUFFER_DEFAULT_SIZE), WORKER_BUFFER_CAPACITY_LIMIT, target_rio, shared_rdb_write_mutex);
         threadArgs[i].rdb_write_mutex = shared_rdb_write_mutex;
         threadArgs[i].save_status = C_OK;
 

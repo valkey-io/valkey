@@ -50,7 +50,6 @@
 
 #define UNUSED(V) ((void)V)
 
-static hashtable *kvstoreIteratorNextHashtable(kvstoreIterator *kvs_it);
 
 struct _kvstore {
     int flags;
@@ -653,7 +652,7 @@ static int kvstoreIteratorNextImportingHashtableIndex(kvstoreIterator *kvs_it) {
 }
 
 /* Returns next hash table from the iterator, or NULL if iteration is complete. */
-static hashtable *kvstoreIteratorNextHashtable(kvstoreIterator *kvs_it) {
+hashtable *kvstoreIteratorNextHashtable(kvstoreIterator *kvs_it) {
     int next_hashtable_index = kvs_it->next_didx;
 
     /* Since importing dictionaries are removed from the binary index tree,

@@ -211,7 +211,7 @@ start_server {tags {"hashexpire"}} {
 
         test "HGETEX $command on non-exist key" {
             r FLUSHALL
-            assert_equal "" [r HGETEX myhash $command [get_long_expire_value $command] FIELDS 1 f2]
+            assert_equal {{} {} {}} [r HGETEX myhash $command [get_long_expire_value $command] FIELDS 3 f1 f2 f3]
         }
 
         test "HGETEX $command with duplicate field names" {
@@ -2729,7 +2729,7 @@ tags {"aof external:skip"} {
                 for {set i 1} {$i <= 10} {incr i} {
                     r HSETEX myhash EXAT $long_expire FIELDS 1 f$i v$i ;# 10 PXAT to aof
                 }
-                
+
                 # Create 10 fields with short expiry
                 for {set i 11} {$i <= 20} {incr i} {
                     r HSETEX myhash PXAT [expr {[clock milliseconds] + 10}] FIELDS 1 f$i v$i ;# 10 PXAT to aof
@@ -2777,8 +2777,8 @@ tags {"aof external:skip"} {
 
                 # Restart the server and load the AOF
                 restart_server 0 true false
-                r debug loadaof
                 r DEBUG SET-ACTIVE-EXPIRE 0
+                r debug loadaof
 
                 set hlen [r HLEN myhash]
                 set expired_fields [info_field [r info stats] expired_fields]
@@ -2820,8 +2820,8 @@ tags {"aof external:skip"} {
 
                 # Restart the server and load the AOF
                 restart_server 0 true false
-                r debug loadaof
                 r DEBUG SET-ACTIVE-EXPIRE 0
+                r debug loadaof
 
                 set hlen [r HLEN myhash]
                 set expired_fields [info_field [r info stats] expired_fields]

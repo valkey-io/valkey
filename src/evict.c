@@ -354,7 +354,7 @@ size_t freeMemoryGetNotCountedMemory(void) {
         overhead += sdsAllocSize(server.aof_buf);
     }
 
-    if (server.cluster_enabled && clusterIsAnySlotExporting()) {
+    if (clusterIsAnySlotExporting()) {
         overhead += clusterGetTotalSlotExportBufferMemory();
     }
 
@@ -616,12 +616,6 @@ int performEvictions(void) {
                         kvs = server.db[bestdbid]->expires;
                     }
                     void *entry = NULL;
-
-                    /* Keys in importing slots will not be evicted since they
-                     * are owned by the source node still. */
-                    if (server.cluster_enabled && clusterIsSlotImporting(pool[k].slot)) {
-                        continue;
-                    }
 
                     int found = kvstoreHashtableFind(kvs, pool[k].slot, pool[k].key, &entry);
 

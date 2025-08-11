@@ -825,7 +825,7 @@ void flushdbCommand(client *c) {
 
     if (getFlushCommandFlags(c, &flags) == C_ERR) return;
 
-    if (server.cluster_enabled && (clusterIsAnySlotImporting() || clusterIsAnySlotExporting())) {
+    if (clusterIsAnySlotImporting() || clusterIsAnySlotExporting()) {
         /* In progress migrations will be cancelled, and should be retried by
          * operators. */
         clusterHandleFlushDuringSlotMigration();
@@ -855,7 +855,7 @@ void flushallCommand(client *c) {
     int flags;
     if (getFlushCommandFlags(c, &flags) == C_ERR) return;
 
-    if (server.cluster_enabled && (clusterIsAnySlotImporting() || clusterIsAnySlotExporting())) {
+    if (clusterIsAnySlotImporting() || clusterIsAnySlotExporting()) {
         /* In progress migrations will be cancelled, and should be retried by
          * operators. */
         clusterHandleFlushDuringSlotMigration();

@@ -2791,7 +2791,7 @@ serverDb *createDatabase(int id) {
     db->keys = kvstoreCreate(&kvstoreKeysHashtableType, slot_count_bits, flags);
     db->expires = kvstoreCreate(&kvstoreExpiresHashtableType, slot_count_bits, flags);
     db->keys_with_volatile_items = kvstoreCreate(&kvstoreExpiresHashtableType, slot_count_bits, flags);
-    if (server.cluster_enabled && server.cluster && clusterIsAnySlotImporting()) {
+    if (clusterIsAnySlotImporting()) {
         clusterMarkImportingSlotsInDb(db);
     }
     db->blocking_keys = dictCreate(&keylistDictType);
@@ -3487,7 +3487,7 @@ static int shouldPropagate(int target) {
         if (server.aof_state != AOF_OFF) return 1;
     }
     if (target & PROPAGATE_REPL) {
-        if (server.cluster_enabled && clusterIsAnySlotExporting()) return 1;
+        if (clusterIsAnySlotExporting()) return 1;
         if (server.primary_host == NULL && (server.repl_backlog || listLength(server.replicas) != 0)) return 1;
     }
 
@@ -3545,7 +3545,7 @@ static void propagateNow(int dbid, robj **argv, int argc, int target, int slot) 
     if (propagate_to_repl && !propagate_to_aof) {
         propagate_to_repl = server.primary_host == NULL && (server.repl_backlog || listLength(server.replicas) != 0);
     }
-    int propagate_to_slot_migration = target & PROPAGATE_REPL && server.cluster_enabled && clusterIsAnySlotExporting();
+    int propagate_to_slot_migration = target & PROPAGATE_REPL && clusterIsAnySlotExporting();
 
     if (propagate_to_aof) feedAppendOnlyFile(dbid, argv, argc);
     if (propagate_to_repl) replicationFeedReplicas(dbid, argv, argc);

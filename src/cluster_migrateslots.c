@@ -163,10 +163,10 @@ bool isSlotInSlotRanges(int slot, list *slot_ranges) {
     while ((ln = listNext(&li)) != NULL) {
         slotRange *range = ln->value;
         if (slot >= range->start_slot && slot <= range->end_slot) {
-            return 1;
+            return true;
         }
     }
-    return 0;
+    return false;
 }
 
 /* Return whether or not the two slot ranges overlap or are distinct. */
@@ -188,11 +188,11 @@ bool doSlotRangeListsOverlap(list *ranges1, list *ranges2) {
             slotRange *range1 = ln1->value;
             slotRange *range2 = ln2->value;
             if (doSlotRangesOverlap(range1, range2)) {
-                return 1;
+                return true;
             }
         }
     }
-    return 0;
+    return false;
 }
 
 /* Remove all the keys in the hash slots that are in the given slot range list
@@ -383,9 +383,9 @@ bool clusterIsSlotImporting(int slot) {
         slotMigrationJob *job = ln->value;
         if (job->type != SLOT_MIGRATION_IMPORT) continue;
         if (isSlotMigrationJobFinished(job)) continue;
-        if (isSlotInSlotRanges(slot, job->slot_ranges)) return 1;
+        if (isSlotInSlotRanges(slot, job->slot_ranges)) return true;
     }
-    return 0;
+    return false;
 }
 
 /* Sent by the source to the target to initiate the AOF formatted snapshot.
@@ -642,15 +642,16 @@ void performSlotImportJobFailover(slotMigrationJob *job) {
 }
 
 bool clusterIsAnySlotImporting(void) {
+    if (!server.cluster_enabled || !server.cluster) return false;
     listNode *ln;
     listIter li;
     listRewind(server.cluster->slot_migration_jobs, &li);
     while ((ln = listNext(&li)) != NULL) {
         slotMigrationJob *job = ln->value;
         if (job->type != SLOT_MIGRATION_IMPORT) continue;
-        if (!isSlotMigrationJobFinished(job)) return 1;
+        if (!isSlotMigrationJobFinished(job)) return true;
     }
-    return 0;
+    return false;
 }
 
 void clusterMarkImportingSlotsInDb(serverDb *db) {
@@ -769,13 +770,13 @@ void clusterHandleFlushDuringSlotMigration(void) {
  *             │SLOT_MIGRATION_JOB_SUCCESS│        │
  *             └──────────────────────────┘        │
  *                                                 │
- *             ┌──────────────────────────┐        │
- *             │SLOT_MIGRATION_JOB_FAILED│◄───────┤
- *             └──────────────────────────┘        │
+ *             ┌─────────────────────────┐         │
+ *             │SLOT_MIGRATION_JOB_FAILED│◄────────┤
+ *             └─────────────────────────┘         │
  *                                                 │
- *            ┌─────────────────────────────┐      │
- *            │SLOT_MIGRATION_JOB_CANCELLED│◄─────┘
- *            └─────────────────────────────┘
+ *            ┌────────────────────────────┐       │
+ *            │SLOT_MIGRATION_JOB_CANCELLED│◄──────┘
+ *            └────────────────────────────┘
  *
  */
 
@@ -788,9 +789,9 @@ bool clusterIsSlotExporting(int slot) {
         slotMigrationJob *job = ln->value;
         if (job->type != SLOT_MIGRATION_EXPORT) continue;
         if (isSlotMigrationJobFinished(job)) continue;
-        if (isSlotInSlotRanges(slot, job->slot_ranges)) return 1;
+        if (isSlotInSlotRanges(slot, job->slot_ranges)) return true;
     }
-    return 0;
+    return false;
 }
 
 /* Returns the name of the slot export target for the given slot, or NULL if the
@@ -881,14 +882,14 @@ void clusterCommandMigrateSlots(client *c) {
         curr_index++;
         if (sdslen(c->argv[curr_index]->ptr) != CLUSTER_NAMELEN) {
             addReplyErrorFormat(c, "Invalid node name: %s",
-                                (sds) c->argv[curr_index]->ptr);
+                                (sds)c->argv[curr_index]->ptr);
             goto cleanup;
         }
         clusterNode *target_node = clusterLookupNode(c->argv[curr_index]->ptr,
                                                      CLUSTER_NAMELEN);
         if (!target_node) {
             addReplyErrorFormat(c, "Unknown node name: %s",
-                                (sds) c->argv[curr_index]->ptr);
+                                (sds)c->argv[curr_index]->ptr);
             goto cleanup;
         }
         curr_index++;
@@ -1288,7 +1289,7 @@ void clusterHandleSlotExportBackgroundSaveDone(int bgsaveerr) {
 bool clusterSlotMigrationShouldInstallWriteHandler(client *c) {
     slotMigrationJob *job = c->slot_migration_job;
     if (!job || job->type != SLOT_MIGRATION_EXPORT) {
-        return 1;
+        return true;
     }
     return job->state != SLOT_EXPORT_SNAPSHOTTING;
 }
@@ -1396,6 +1397,7 @@ void clusterUpdateSlotExportsOnOwnershipChange(void) {
 }
 
 bool clusterIsAnySlotExporting(void) {
+    if (!server.cluster_enabled || !server.cluster) return false;
     listNode *ln;
     listIter li;
     listRewind(server.cluster->slot_migration_jobs, &li);
@@ -1403,10 +1405,10 @@ bool clusterIsAnySlotExporting(void) {
         slotMigrationJob *job = ln->value;
         if (job->type != SLOT_MIGRATION_EXPORT) continue;
         if (!isSlotMigrationJobFinished(job)) {
-            return 1;
+            return true;
         }
     }
-    return 0;
+    return false;
 }
 
 void clusterFailAllSlotExportsWithMessage(char *message) {
@@ -1882,6 +1884,9 @@ void finishSlotMigrationJob(slotMigrationJob *job,
         /* If we finish the export, we should not remain paused */
         job->mf_end = 0;
         slotExportTryUnpause();
+        /* Fast fail the child process, which will be cleaned up fully in
+         * checkChildrenDone. */
+        if (job->state == SLOT_EXPORT_SNAPSHOTTING) killRDBChild();
     }
     if (job->type == SLOT_MIGRATION_IMPORT &&
         job->state != SLOT_MIGRATION_JOB_SUCCESS) {
@@ -1982,8 +1987,8 @@ void clusterCleanupSlotMigrationLog(void) {
     }
 }
 
-/* Returns 1 if the slot migration is okay to periodically send ACKs, or 0
- * otherwise. */
+/* Returns true if the slot migration is okay to periodically send ACKs, or
+ * false otherwise. */
 bool canSlotMigrationJobSendAck(slotMigrationJob *job) {
     /* 1. We cannot send ACK from parent process while child is snapshotting
      * 2. We don't send an ACK from the import side until the export has first
@@ -2077,8 +2082,10 @@ void clusterCommandSyncSlotsAck(client *c) {
  * with slot import. */
 void clusterCommandSyncSlots(client *c) {
     if (c->flag.primary) {
-        /* Due to primary proxying slot migration source commands to replicas,
-         * SYNCSLOTS should be ignored from our primary. */
+        /* Since target primaries proxy slot migration source commands to
+         * replicas through chaining replication (direct bytewise copy, not
+         * commandwise propagation), SYNCSLOTS should be ignored from our
+         * primary. */
         return;
     }
     if (!strcasecmp(c->argv[2]->ptr, "establish")) {

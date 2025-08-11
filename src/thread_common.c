@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: BSD-3-Clause
  */
 
- #include "thread_common.h"
+#include "thread_common.h"
 
 __thread int thread_id = 0; /*Thread local var*/
 
@@ -17,7 +17,7 @@ int getThreadID(void) {
     return thread_id;
 }
 
- /* Initialize the job queue with a specified number of items. */
+/* Initialize the job queue with a specified number of items. */
 void JobQueue_init(JobQueue *jq, size_t item_count) {
     debugServerAssertWithInfo(NULL, NULL, inMainThread());
     jq->ring_buffer = zcalloc(item_count * sizeof(job));

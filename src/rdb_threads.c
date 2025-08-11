@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: BSD-3-Clause
  */
 
- #include "thread_common.h"
+#include "thread_common.h"
 #include "rdb_threads.h"
 #include "rdb.h"
 

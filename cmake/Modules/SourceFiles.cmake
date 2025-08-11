@@ -23,12 +23,14 @@ set(VALKEY_SERVER_SRCS
     ${CMAKE_SOURCE_DIR}/src/ziplist.c
     ${CMAKE_SOURCE_DIR}/src/release.c
     ${CMAKE_SOURCE_DIR}/src/memory_prefetch.c
+    ${CMAKE_SOURCE_DIR}/src/thread_common.c
     ${CMAKE_SOURCE_DIR}/src/io_threads.c
     ${CMAKE_SOURCE_DIR}/src/networking.c
     ${CMAKE_SOURCE_DIR}/src/util.c
     ${CMAKE_SOURCE_DIR}/src/object.c
     ${CMAKE_SOURCE_DIR}/src/db.c
     ${CMAKE_SOURCE_DIR}/src/replication.c
+    ${CMAKE_SOURCE_DIR}/src/rdb_threads.c
     ${CMAKE_SOURCE_DIR}/src/rdb.c
     ${CMAKE_SOURCE_DIR}/src/t_string.c
     ${CMAKE_SOURCE_DIR}/src/t_list.c

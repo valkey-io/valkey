@@ -171,7 +171,7 @@ typedef struct rdbSnapshotOptions {
 #define RDB_LOAD_ERR_EMPTY_KEY 1 /* Error of empty key */
 #define RDB_LOAD_ERR_OTHER 2     /* Any other errors */
 
-ssize_t rdbWriteRaw(rio *rdb, void *p, size_t len);
+ssize_t rdbWriteRaw(rio *rdb, const void *p, size_t len);
 int rdbSaveType(rio *rdb, unsigned char type);
 int rdbLoadType(rio *rdb);
 time_t rdbLoadTime(rio *rdb);
@@ -192,11 +192,13 @@ ssize_t rdbSaveObject(rio *rdb, robj *o, robj *key, int dbid);
 size_t rdbSavedObjectLen(robj *o, robj *key, int dbid);
 robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error);
 void backgroundSaveDoneHandler(int exitcode, int bysignal);
+ssize_t rdbSaveAuxFieldStrStr(rio *rdb, char *key, char *val);
 int rdbSaveKeyValuePair(rio *rdb, robj *key, robj *val, long long expiretime, int dbid);
 ssize_t rdbSaveSingleModuleAux(rio *rdb, int when, moduleType *mt);
 robj *rdbLoadCheckModuleValue(rio *rdb, char *modulename);
 robj *rdbLoadStringObject(rio *rdb);
 ssize_t rdbSaveStringObject(rio *rdb, robj *obj);
+void freeThreadCompressionBuffer(void* dummy);
 ssize_t rdbSaveRawString(rio *rdb, unsigned char *s, size_t len);
 void *rdbGenericLoadStringObject(rio *rdb, int flags, size_t *lenptr);
 int rdbSaveBinaryDoubleValue(rio *rdb, double val);

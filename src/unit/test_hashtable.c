@@ -236,8 +236,10 @@ int test_bucket_chain_length(int argc, char **argv, int flags) {
     for (j = 0; j < count; j++) {
         TEST_ASSERT(hashtableAdd(ht, (void *)j));
     }
-    /* If it's rehashing, add a few more until rehashing is complete. */
+    /* If it's rehashing, add a few more until rehashing is complete.
+     * We also make sure that we won't resize during the rehashing. */
     while (hashtableIsRehashing(ht)) {
+        TEST_ASSERT(!hashtableExpand(ht, count * 2));
         j++;
         TEST_ASSERT(hashtableAdd(ht, (void *)j));
     }

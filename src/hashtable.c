@@ -601,6 +601,9 @@ static inline void rehashStepOnWriteIfNeeded(hashtable *ht) {
 static bool resize(hashtable *ht, size_t min_capacity, int *malloc_failed) {
     if (malloc_failed) *malloc_failed = 0;
 
+    /* We can't resize twice if rehashing is ongoing. */
+    assert(!hashtableIsRehashing(ht));
+
     /* Adjust minimum size. We don't resize to zero currently. */
     if (min_capacity == 0) min_capacity = 1;
 
@@ -618,17 +621,6 @@ static bool resize(hashtable *ht, size_t min_capacity, int *malloc_failed) {
     if (exp == old_exp) {
         /* Can't resize to same size. */
         return false;
-    }
-
-    /* We can't resize if rehashing is already ongoing. Fast-forward ongoing
-     * rehashing before we continue. This can happen only in exceptional
-     * scenarios, such as when many insertions are made while rehashing is
-     * paused. */
-    if (hashtableIsRehashing(ht)) {
-        if (hashtableIsRehashingPaused(ht)) return false;
-        while (hashtableIsRehashing(ht)) {
-            rehashStep(ht);
-        }
     }
 
     if (resize_policy == HASHTABLE_RESIZE_FORBID && ht->tables[0]) {
@@ -674,10 +666,9 @@ static bool resize(hashtable *ht, size_t min_capacity, int *malloc_failed) {
 }
 
 /* Returns true if the table is expanded, false if not expanded. If false is returned and
- * 'malloc_failed' is provided, it is set to true if malloc failed and false
- * otherwise. */
+ * 'malloc_failed' is provided, it is set to 1 if malloc failed and 0 otherwise. */
 static bool expand(hashtable *ht, size_t size, int *malloc_failed) {
-    if (size < hashtableSize(ht)) {
+    if (hashtableIsRehashing(ht) || size < hashtableSize(ht)) {
         return false;
     }
     return resize(ht, size, malloc_failed);
@@ -1259,17 +1250,22 @@ bool hashtableExpand(hashtable *ht, size_t size) {
     return expand(ht, size, NULL);
 }
 
-/* Returns true if expand was performed or if expand is not needed. Returns false if
- * expand failed due to memory allocation failure. */
+/* Returns false if expand failed due to memory allocation failure. */
 bool hashtableTryExpand(hashtable *ht, size_t size) {
     int malloc_failed = 0;
-    return expand(ht, size, &malloc_failed) || !malloc_failed;
+    expand(ht, size, &malloc_failed);
+    return malloc_failed ? false : true;
 }
 
 /* Expanding is done automatically on insertion, but less eagerly if resize
  * policy is set to AVOID and not at all if set to FORBID.
  * Returns true if expanding, false if not expanding. */
 bool hashtableExpandIfNeeded(hashtable *ht) {
+    /* Don't expand if rehashing is already in progress. */
+    if (hashtableIsRehashing(ht)) {
+        return false;
+    }
+
     size_t min_capacity = ht->used[0] + ht->used[1] + 1;
     size_t num_buckets = numBuckets(ht->bucket_exp[hashtableIsRehashing(ht) ? 1 : 0]);
     size_t current_capacity = num_buckets * ENTRIES_PER_BUCKET;

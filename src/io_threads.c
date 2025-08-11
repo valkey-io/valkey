@@ -5,141 +5,18 @@
  */
 
 #include "io_threads.h"
+#include "thread_common.h"
 
-static _Thread_local int thread_id = 0; /* Thread local var */
 static pthread_t io_threads[IO_THREADS_MAX_NUM] = {0};
 static pthread_mutex_t io_threads_mutex[IO_THREADS_MAX_NUM];
-
-/* IO jobs queue functions - Used to send jobs from the main-thread to the IO thread. */
-typedef void (*job_handler)(void *);
-typedef struct iojob {
-    job_handler handler;
-    void *data;
-} iojob;
-
-typedef struct IOJobQueue {
-    iojob *ring_buffer;
-    size_t size;
-    _Atomic size_t head __attribute__((aligned(CACHE_LINE_SIZE))); /* Next write index for producer (main-thread) */
-    _Atomic size_t tail __attribute__((aligned(CACHE_LINE_SIZE))); /* Next read index for consumer  (IO-thread) */
-} IOJobQueue;
-IOJobQueue io_jobs[IO_THREADS_MAX_NUM] = {0};
-
-/* Initialize the job queue with a specified number of items. */
-static void IOJobQueue_init(IOJobQueue *jq, size_t item_count) {
-    debugServerAssertWithInfo(NULL, NULL, inMainThread());
-    jq->ring_buffer = zcalloc(item_count * sizeof(iojob));
-    jq->size = item_count; /* Total number of items */
-    jq->head = 0;
-    jq->tail = 0;
-}
-
-/* Clean up the job queue and free allocated memory. */
-static void IOJobQueue_cleanup(IOJobQueue *jq) {
-    debugServerAssertWithInfo(NULL, NULL, inMainThread());
-    zfree(jq->ring_buffer);
-    memset(jq, 0, sizeof(*jq));
-}
-
-static int IOJobQueue_isFull(const IOJobQueue *jq) {
-    debugServerAssertWithInfo(NULL, NULL, inMainThread());
-    size_t current_head = atomic_load_explicit(&jq->head, memory_order_relaxed);
-    /* We don't use memory_order_acquire for the tail due to performance reasons,
-     * In the worst case we will just assume wrongly the buffer is full and the main thread will do the job by itself. */
-    size_t current_tail = atomic_load_explicit(&jq->tail, memory_order_relaxed);
-    size_t next_head = (current_head + 1) % jq->size;
-    return next_head == current_tail;
-}
-
-/* Attempt to push a new job to the queue from the main thread.
- * the caller must ensure the queue is not full before calling this function. */
-static void IOJobQueue_push(IOJobQueue *jq, job_handler handler, void *data) {
-    debugServerAssertWithInfo(NULL, NULL, inMainThread());
-    /* Assert the queue is not full - should not happen as the caller should check for it before. */
-    serverAssert(!IOJobQueue_isFull(jq));
-
-    /* No need to use atomic acquire for the head, as the main thread is the only one that writes to the head index. */
-    size_t current_head = atomic_load_explicit(&jq->head, memory_order_relaxed);
-    size_t next_head = (current_head + 1) % jq->size;
-
-    /* We store directly the job's fields to avoid allocating a new iojob structure. */
-    serverAssert(jq->ring_buffer[current_head].data == NULL);
-    serverAssert(jq->ring_buffer[current_head].handler == NULL);
-    jq->ring_buffer[current_head].data = data;
-    jq->ring_buffer[current_head].handler = handler;
-
-    /* memory_order_release to make sure the data is visible to the consumer (the IO thread). */
-    atomic_store_explicit(&jq->head, next_head, memory_order_release);
-}
-
-/* Returns the number of jobs currently available for consumption in the given job queue.
- *
- * This function  ensures memory visibility for the jobs by
- * using a memory acquire fence when there are jobs available. */
-static size_t IOJobQueue_availableJobs(const IOJobQueue *jq) {
-    debugServerAssertWithInfo(NULL, NULL, !inMainThread());
-    /* We use memory_order_acquire to make sure the head and the job's fields are visible to the consumer (IO thread). */
-    size_t current_head = atomic_load_explicit(&jq->head, memory_order_acquire);
-    size_t current_tail = atomic_load_explicit(&jq->tail, memory_order_relaxed);
-
-    if (current_head >= current_tail) {
-        return current_head - current_tail;
-    } else {
-        return jq->size - (current_tail - current_head);
-    }
-}
-
-/* Checks if the job Queue is empty.
- * returns 1 if the buffer is currently empty, 0 otherwise.
- * Called by the main-thread only.
- * This function uses relaxed memory order, so the caller need to use an acquire
- * memory fence before calling this function to be sure it has the latest index
- * from the other thread, especially when called repeatedly. */
-static int IOJobQueue_isEmpty(const IOJobQueue *jq) {
-    size_t current_head = atomic_load_explicit(&jq->head, memory_order_relaxed);
-    size_t current_tail = atomic_load_explicit(&jq->tail, memory_order_relaxed);
-    return current_head == current_tail;
-}
-
-/* Removes the next job from the given job queue by advancing the tail index.
- * Called by the IO thread.
- * The caller must ensure that the queue is not empty before calling this function.
- * This function uses relaxed memory order, so the caller need to use an release memory fence
- * after calling this function to make sure the updated tail is visible to the producer (main thread). */
-static void IOJobQueue_removeJob(IOJobQueue *jq) {
-    debugServerAssertWithInfo(NULL, NULL, !inMainThread());
-    size_t current_tail = atomic_load_explicit(&jq->tail, memory_order_relaxed);
-    jq->ring_buffer[current_tail].data = NULL;
-    jq->ring_buffer[current_tail].handler = NULL;
-    atomic_store_explicit(&jq->tail, (current_tail + 1) % jq->size, memory_order_relaxed);
-}
-
-/* Retrieves the next job handler and data from the job queue without removal.
- * Called by the consumer (IO thread). Caller must ensure queue is not empty.*/
-static void IOJobQueue_peek(const IOJobQueue *jq, job_handler *handler, void **data) {
-    debugServerAssertWithInfo(NULL, NULL, !inMainThread());
-    size_t current_tail = atomic_load_explicit(&jq->tail, memory_order_relaxed);
-    iojob *job = &jq->ring_buffer[current_tail];
-    *handler = job->handler;
-    *data = job->data;
-}
-
-/* End of IO job queue functions */
-
-int inMainThread(void) {
-    return thread_id == 0;
-}
-
-int getIOThreadID(void) {
-    return thread_id;
-}
+JobQueue io_jobs[IO_THREADS_MAX_NUM] = {0};
 
 /* Drains the I/O threads queue by waiting for all jobs to be processed.
  * This function must be called from the main thread. */
 void drainIOThreadsQueue(void) {
     serverAssert(inMainThread());
     for (int i = 1; i < IO_THREADS_MAX_NUM; i++) { /* No need to drain thread 0, which is the main thread. */
-        while (!IOJobQueue_isEmpty(&io_jobs[i])) {
+        while (!JobQueue_isEmpty(&io_jobs[i])) {
             /* memory barrier acquire to get the latest job queue state */
             atomic_thread_fence(memory_order_acquire);
         }
@@ -184,9 +61,9 @@ void adjustIOThreadsByEventLoad(int numevents, int increase_only) {
         int threads_to_deactivate_num = server.active_io_threads_num - target_threads;
         for (int i = 0; i < threads_to_deactivate_num; i++) {
             int tid = server.active_io_threads_num - 1;
-            IOJobQueue *jq = &io_jobs[tid];
+            JobQueue *jq = &io_jobs[tid];
             /* We can't lock the thread if it may have pending jobs */
-            if (!IOJobQueue_isEmpty(jq)) return;
+            if (!JobQueue_isEmpty(jq)) return;
             pthread_mutex_lock(&io_threads_mutex[tid]);
             server.active_io_threads_num--;
         }
@@ -223,14 +100,14 @@ static void *IOThreadMain(void *myid) {
 
     thread_id = (int)id;
     size_t jobs_to_process = 0;
-    IOJobQueue *jq = &io_jobs[id];
+    JobQueue *jq = &io_jobs[id];
     while (1) {
         /* Cancellation point so that pthread_cancel() from main thread is honored. */
         pthread_testcancel();
 
         /* Wait for jobs */
         for (int j = 0; j < 1000000; j++) {
-            jobs_to_process = IOJobQueue_availableJobs(jq);
+            jobs_to_process = JobQueue_availableJobs(jq);
             if (jobs_to_process) break;
         }
 
@@ -246,10 +123,10 @@ static void *IOThreadMain(void *myid) {
             void *data;
             /* We keep the job in the queue until it's processed. This ensures that if the main thread checks
              * and finds the queue empty, it can be certain that the IO thread is not currently handling any job. */
-            IOJobQueue_peek(jq, &handler, &data);
+            JobQueue_peek(jq, &handler, &data);
             handler(data);
             /* Remove the job after it was processed */
-            IOJobQueue_removeJob(jq);
+            JobQueue_removeJob(jq);
         }
         /* Memory barrier to make sure the main thread sees the updated tail index.
          * We do it once per loop and not per tail-update for optimization reasons.
@@ -267,7 +144,7 @@ static void createIOThread(int id) {
 
     pthread_t tid;
     pthread_mutex_init(&io_threads_mutex[id], NULL);
-    IOJobQueue_init(&io_jobs[id], IO_JOB_QUEUE_SIZE);
+    JobQueue_init(&io_jobs[id], IO_JOB_QUEUE_SIZE);
     pthread_mutex_lock(&io_threads_mutex[id]); /* Thread will be stopped. */
     int err = pthread_create(&tid, NULL, IOThreadMain, (void *)(long)id);
     if (err) {
@@ -293,7 +170,7 @@ static void shutdownIOThread(int id) {
         serverLog(LL_NOTICE, "IO thread(tid:%lu) terminated", (unsigned long)tid);
     }
     pthread_mutex_destroy(&io_threads_mutex[id]);
-    IOJobQueue_cleanup(&io_jobs[id]);
+    JobQueue_cleanup(&io_jobs[id]);
 }
 
 void killIOThreads(void) {
@@ -383,8 +260,8 @@ int trySendReadToIOThreads(client *c) {
      * thread to ensure the same thread handles the client's I/O operations. */
     if (c->io_write_state == CLIENT_PENDING_IO && c->cur_tid != (uint8_t)tid) tid = c->cur_tid;
 
-    IOJobQueue *jq = &io_jobs[tid];
-    if (IOJobQueue_isFull(jq)) return C_ERR;
+    JobQueue *jq = &io_jobs[tid];
+    if (JobQueue_isFull(jq)) return C_ERR;
 
     c->cur_tid = tid;
     c->read_flags = canParseCommand(c) ? 0 : READ_FLAGS_DONT_PARSE;
@@ -393,7 +270,7 @@ int trySendReadToIOThreads(client *c) {
 
     c->io_read_state = CLIENT_PENDING_IO;
     connSetPostponeUpdateState(c->conn, 1);
-    IOJobQueue_push(jq, ioThreadReadQueryFromClient, c);
+    JobQueue_push(jq, ioThreadReadQueryFromClient, c);
     c->flag.pending_read = 1;
     listLinkNodeTail(server.clients_pending_io_read, &c->pending_read_list_node);
     return C_OK;
@@ -423,8 +300,8 @@ int trySendWriteToIOThreads(client *c) {
      * thread to ensure the same thread handles the client's I/O operations. */
     if (c->io_read_state == CLIENT_PENDING_IO && c->cur_tid != (uint8_t)tid) tid = c->cur_tid;
 
-    IOJobQueue *jq = &io_jobs[tid];
-    if (IOJobQueue_isFull(jq)) return C_ERR;
+    JobQueue *jq = &io_jobs[tid];
+    if (JobQueue_isFull(jq)) return C_ERR;
 
     c->cur_tid = tid;
     if (c->flag.pending_write) {
@@ -466,7 +343,7 @@ int trySendWriteToIOThreads(client *c) {
     c->write_flags = is_replica ? WRITE_FLAGS_IS_REPLICA : 0;
     c->io_write_state = CLIENT_PENDING_IO;
 
-    IOJobQueue_push(jq, ioThreadWriteToClient, c);
+    JobQueue_push(jq, ioThreadWriteToClient, c);
     return C_OK;
 }
 
@@ -506,8 +383,8 @@ int tryOffloadFreeArgvToIOThreads(client *c, int argc, robj **argv) {
 
     size_t tid = (c->id % (server.active_io_threads_num - 1)) + 1;
 
-    IOJobQueue *jq = &io_jobs[tid];
-    if (IOJobQueue_isFull(jq)) {
+    JobQueue *jq = &io_jobs[tid];
+    if (JobQueue_isFull(jq)) {
         return C_ERR;
     }
 
@@ -536,7 +413,7 @@ int tryOffloadFreeArgvToIOThreads(client *c, int argc, robj **argv) {
     argv[last_arg_to_free]->refcount = 0;
 
     /* Must succeed as we checked the free space before. */
-    IOJobQueue_push(jq, IOThreadFreeArgv, argv);
+    JobQueue_push(jq, IOThreadFreeArgv, argv);
 
     return C_OK;
 }
@@ -556,14 +433,14 @@ int tryOffloadFreeObjToIOThreads(robj *obj) {
     /* We select the thread ID in a round-robin fashion. */
     size_t tid = (server.stat_io_freed_objects % (server.active_io_threads_num - 1)) + 1;
 
-    IOJobQueue *jq = &io_jobs[tid];
-    if (IOJobQueue_isFull(jq)) {
+    JobQueue *jq = &io_jobs[tid];
+    if (JobQueue_isFull(jq)) {
         return C_ERR;
     }
 
     /* We offload only the free of the ptr that may be allocated by the I/O thread.
      * The object itself was allocated by the main thread and will be freed by the main thread. */
-    IOJobQueue_push(jq, sdsfreeVoid, obj->ptr);
+    JobQueue_push(jq, sdsfreeVoid, obj->ptr);
     obj->ptr = NULL;
     decrRefCount(obj);
 
@@ -611,13 +488,13 @@ void trySendPollJobToIOThreads(void) {
      * the last thread has a slightly better chance of being less loaded compared to other threads,
      * As we activate the lowest threads first. */
     int tid = server.active_io_threads_num - 1;
-    IOJobQueue *jq = &io_jobs[tid];
-    if (IOJobQueue_isFull(jq)) return; /* The main thread will handle the poll itself. */
+    JobQueue *jq = &io_jobs[tid];
+    if (JobQueue_isFull(jq)) return; /* The main thread will handle the poll itself. */
 
     server.io_poll_state = AE_IO_STATE_POLL;
     aeSetCustomPollProc(server.el, getIOThreadPollResults);
     aeSetPollProtect(server.el, 1);
-    IOJobQueue_push(jq, IOThreadPoll, server.el);
+    JobQueue_push(jq, IOThreadPoll, server.el);
 }
 
 static void ioThreadAccept(void *data) {
@@ -657,9 +534,9 @@ int trySendAcceptToIOThreads(connection *conn) {
     }
 
     size_t thread_id = (c->id % (server.active_io_threads_num - 1)) + 1;
-    IOJobQueue *job_queue = &io_jobs[thread_id];
+    JobQueue *job_queue = &io_jobs[thread_id];
 
-    if (IOJobQueue_isFull(job_queue)) {
+    if (JobQueue_isFull(job_queue)) {
         return C_ERR;
     }
 
@@ -668,7 +545,7 @@ int trySendAcceptToIOThreads(connection *conn) {
     listLinkNodeTail(server.clients_pending_io_read, &c->pending_read_list_node);
     connSetPostponeUpdateState(c->conn, 1);
     server.stat_io_accept_offloaded++;
-    IOJobQueue_push(job_queue, ioThreadAccept, c);
+    JobQueue_push(job_queue, ioThreadAccept, c);
 
     return C_OK;
 }

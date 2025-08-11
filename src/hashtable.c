@@ -2085,7 +2085,7 @@ bool hashtableNext(hashtableIterator *iterator, void **elemptr) {
     return false;
 }
 
-/* --- Hastable Stride Itereator */
+/* --- Hashtable Stride Iterator */
 
 /* Converts a logical, global bucket index to its physical BucketLocation.
  * This handles hashtables undergoing rehashing by mapping the logical index

@@ -790,13 +790,6 @@ void **kvstoreHashtableFindRef(kvstore *kvs, int didx, const void *key) {
 
 bool kvstoreHashtableAdd(kvstore *kvs, int didx, void *entry) {
     hashtable *ht = createHashtableIfNeeded(kvs, didx);
-    bool ret = hashtableAdd(ht, entry);
-    if (ret) cumulativeKeyCountAdd(kvs, didx, 1);
-    return ret;
-}
-
-bool kvstoreHashtableAdd(kvstore *kvs, int didx, void *entry) {
-    hashtable *ht = createHashtableIfNeeded(kvs, didx);
     int ret = hashtableAdd(ht, entry);
     if (ret) cumulativeKeyCountAdd(kvs, didx, 1);
     return ret;

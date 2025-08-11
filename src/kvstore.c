@@ -733,11 +733,13 @@ unsigned int kvstoreHashtableSampleEntries(kvstore *kvs, int didx, void **dst, u
 }
 
 bool kvstoreHashtableExpand(kvstore *kvs, int didx, unsigned long size) {
+    if (size == 0) return false;
     hashtable *ht = createHashtableIfNeeded(kvs, didx);
     return hashtableExpand(ht, size);
 }
 
 bool kvstoreHashtableTryExpand(kvstore *kvs, int didx, unsigned long size) {
+    if (size == 0) return false;
     hashtable *ht = createHashtableIfNeeded(kvs, didx);
     return hashtableTryExpand(ht, size);
 }

@@ -5161,12 +5161,12 @@ void clusterHandleReplicaFailover(void) {
          * By default, 1 second * rank. This way replicas that have a probably
          * less updated replication offset, are penalized. */
         server.cluster->failover_auth_time += server.cluster->failover_auth_rank * (delay * 2);
-        /* If this is a newly added replica, there is a risk it doesn't know about
-         * other replicas yet, so it may think it has rank #0 even if other replicas
-         * exist with a much better replication offset. Add an extra delay to make
-         * it less likely that this replica will win the election. */
-        if (server.cluster->failover_auth_rank == 0 && getNodeReplicationOffset(myself) == 0) {
-            server.cluster->failover_auth_time += 1000;
+        /* If this is a newly added replica, there is a risk it doesn't know
+         * about other replicas yet, so it may think it's the best replica even
+         * if there are others with a better replication offsets. Add an extra
+         * delay to make it less likely to will win the failover. */
+        if (getNodeReplicationOffset(myself) == 0) {
+            server.cluster->failover_auth_time += 500;
         }
         /* We add another delay that is proportional to the failed primary rank.
          * By default, 0.5 second * rank. This way those failed primaries will be

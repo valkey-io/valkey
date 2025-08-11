@@ -1961,6 +1961,7 @@ struct valkeyServer {
     struct saveparam *saveparams;         /* Save points array for RDB */
     int saveparamslen;                    /* Number of saving points */
     char *rdb_filename;                   /* Name of RDB file */
+    int rdb_threads_num;                  /* Number of threads to use for RDB Save and RDB Load. */
     int rdb_compression;                  /* Use compression in RDB? */
     int rdb_checksum;                     /* Use RDB checksum? */
     int rdb_del_sync_files;               /* Remove RDB files used only for SYNC if

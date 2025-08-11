@@ -3326,6 +3326,7 @@ standardConfig static_configs[] = {
     createIntConfig("repl-ping-replica-period", "repl-ping-slave-period", MODIFIABLE_CONFIG, 1, INT_MAX, server.repl_ping_replica_period, 10, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("list-compress-depth", NULL, DEBUG_CONFIG | MODIFIABLE_CONFIG, 0, INT_MAX, server.list_compress_depth, 0, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("rdb-key-save-delay", NULL, MODIFIABLE_CONFIG | HIDDEN_CONFIG, INT_MIN, INT_MAX, server.rdb_key_save_delay, 0, INTEGER_CONFIG, NULL, NULL),
+    createIntConfig("rdb-threads", NULL, DEBUG_CONFIG | MODIFIABLE_CONFIG, 1, RDB_THREADS_MAX_NUM, server.rdb_threads_num, 1, INTEGER_CONFIG, NULL, NULL), /* Single threaded rdb save and load by default */
     createIntConfig("key-load-delay", NULL, MODIFIABLE_CONFIG | HIDDEN_CONFIG, INT_MIN, INT_MAX, server.key_load_delay, 0, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("active-expire-effort", NULL, MODIFIABLE_CONFIG, 1, 10, server.active_expire_effort, 1, INTEGER_CONFIG, NULL, NULL), /* From 1 to 10. */
     createIntConfig("hz", NULL, MODIFIABLE_CONFIG, 0, INT_MAX, server.hz, CONFIG_DEFAULT_HZ, INTEGER_CONFIG, NULL, updateHZ),

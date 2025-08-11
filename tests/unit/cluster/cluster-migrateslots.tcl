@@ -143,7 +143,7 @@ proc set_debug_prevent_failover {value} {
 }
 
 # Disable replica migration to prevent empty nodes from joining other shards.
-start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica-migration no cluster-node-timeout 15000 cluster-databases 16}} {
+start_cluster 3 3 {tags {logreqres:skip external:skip cluster} overrides {cluster-allow-replica-migration no cluster-node-timeout 15000 cluster-databases 16}} {
 
     set node0_id [R 0 CLUSTER MYID]
     set node1_id [R 1 CLUSTER MYID]
@@ -193,18 +193,21 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
         set_debug_prevent_pause 1
         assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node0_id]
         set jobname [get_job_name 2 16383]
+        wait_for_migration_field 2 $jobname state waiting-to-pause
         assert_error "*I am already migrating slot 16383*" {R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node0_id}
         R 2 CLUSTER CANCELSLOTMIGRATIONS
         wait_for_migration_field 0 $jobname state failed
 
         assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16381 16383 NODE $node0_id]
         set jobname [get_job_name 2 16381]
+        wait_for_migration_field 2 $jobname state waiting-to-pause
         assert_error "*I am already migrating slot 16382*" {R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16382 16382 NODE $node0_id}
         R 2 CLUSTER CANCELSLOTMIGRATIONS
         wait_for_migration_field 0 $jobname state failed
 
         assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16382 16382 NODE $node0_id]
         set jobname [get_job_name 2 16382]
+        wait_for_migration_field 2 $jobname state waiting-to-pause
         assert_error "*I am already migrating slot 16382*" {R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16381 16383 NODE $node0_id}
         R 2 CLUSTER CANCELSLOTMIGRATIONS
         wait_for_migration_field 0 $jobname state failed
@@ -1712,7 +1715,7 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
 
 }
 
-start_cluster 3 0 {tags {external:skip cluster}} {
+start_cluster 3 0 {tags {logreqres:skip external:skip cluster}} {
 
     set node0_id [R 0 CLUSTER MYID]
     set node1_id [R 1 CLUSTER MYID]
@@ -1772,7 +1775,7 @@ start_cluster 3 0 {tags {external:skip cluster}} {
 
         # Connecting will fail
         wait_for_migration_field 0 $jobname state failed
-        assert {[string match {*Unable to connect to target node: Connection refused*} [dict get [get_migration_by_name 0 $jobname] message]]}
+        assert_match "*Unable to connect to target node: Connection refused*" [dict get [get_migration_by_name 0 $jobname] message]
     }
 
 }

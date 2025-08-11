@@ -45,7 +45,6 @@ struct clusterState;
 #define CLUSTER_BROADCAST_ALL 0            /* All known instances. */
 #define CLUSTER_BROADCAST_LOCAL_REPLICAS 1 /* All replicas in my primary-replicas ring. */
 
-
 /* ---------------------- API exported outside cluster.c -------------------- */
 /* functions requiring mechanism specific implementations */
 void clusterInit(void);

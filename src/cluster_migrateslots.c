@@ -743,7 +743,7 @@ void clusterHandleFlushDuringSlotMigration(void) {
  *         └──────────────────┬────────────────┘   │
  *    Full response read (+OK)│                    │
  *           ┌────────────────▼──────────────┐     │ Error Conditions:
- *           │SLOT_EXPORT_WAITING_TO_SNAPSHOT┼─────┤  1. User sends CANCELMIGRATIONS
+ *           │SLOT_EXPORT_WAITING_TO_SNAPSHOT┼─────┤  1. User sends CANCELSLOTMIGRATIONS
  *           └────────────────┬──────────────┘     │  2. Slot ownership change
  *      No other child process│                    │  3. Demotion to replica
  *               ┌────────────▼───────────┐        │  4. FLUSHDB
@@ -938,7 +938,7 @@ slotMigrationJob *clusterLookupMigrationJob(sds name) {
 }
 
 /* Cancels all ongoing migrations. */
-void clusterCommandCancelMigrations(client *c) {
+void clusterCommandCancelSlotMigrations(client *c) {
     listNode *ln;
     listIter li;
 

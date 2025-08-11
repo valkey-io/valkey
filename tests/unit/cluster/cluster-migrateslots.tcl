@@ -185,8 +185,8 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
         assert_error "*Slot migration can only be used on primary nodes*" {R 3 CLUSTER MIGRATESLOTS SLOTSRANGE 0 0}
         assert_error "*Slots are not served by myself*" {R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 0 0 NODE $node0_id}
 
-        assert_error "*wrong number of arguments*" {R 0 CLUSTER CANCELMIGRATIONS ARG}
-        assert_error "*No migrations ongoing*" {R 0 CLUSTER CANCELMIGRATIONS}
+        assert_error "*wrong number of arguments*" {R 0 CLUSTER CANCELSLOTMIGRATIONS ARG}
+        assert_error "*No migrations ongoing*" {R 0 CLUSTER CANCELSLOTMIGRATIONS}
     }
 
     test "CLUSTER MIGRATESLOTS already migrating" {
@@ -194,19 +194,19 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
         assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node0_id]
         set jobname [get_job_name 2 16383]
         assert_error "*I am already migrating slot 16383*" {R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node0_id}
-        R 2 CLUSTER CANCELMIGRATIONS
+        R 2 CLUSTER CANCELSLOTMIGRATIONS
         wait_for_migration_field 0 $jobname state failed
 
         assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16381 16383 NODE $node0_id]
         set jobname [get_job_name 2 16381]
         assert_error "*I am already migrating slot 16382*" {R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16382 16382 NODE $node0_id}
-        R 2 CLUSTER CANCELMIGRATIONS
+        R 2 CLUSTER CANCELSLOTMIGRATIONS
         wait_for_migration_field 0 $jobname state failed
 
         assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16382 16382 NODE $node0_id]
         set jobname [get_job_name 2 16382]
         assert_error "*I am already migrating slot 16382*" {R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16381 16383 NODE $node0_id}
-        R 2 CLUSTER CANCELMIGRATIONS
+        R 2 CLUSTER CANCELSLOTMIGRATIONS
         wait_for_migration_field 0 $jobname state failed
         set_debug_prevent_pause 0
     }
@@ -276,7 +276,7 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
 
         # Wait for some time to make sure update time will change (since it is in seconds)
         after 2000
-        assert_match "OK" [R 2 CLUSTER CANCELMIGRATIONS]
+        assert_match "OK" [R 2 CLUSTER CANCELSLOTMIGRATIONS]
         wait_for_migration_field 0 $jobname state failed
 
         set import_migration [get_migration_by_name 0 $jobname]
@@ -298,7 +298,7 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
         assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node0_id]
         set jobname2 [get_job_name 2 16383]
         wait_for_migration_field 2 $jobname2 state waiting-to-pause
-        assert_match "OK" [R 2 CLUSTER CANCELMIGRATIONS]
+        assert_match "OK" [R 2 CLUSTER CANCELSLOTMIGRATIONS]
 
         set import_migration [get_migration_by_name 0 $jobname2]
         set export_migration [get_migration_by_name 2 $jobname2]
@@ -329,7 +329,7 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
         assert_error "*Slot import in progress*" {R 0 CLUSTER SETSLOT 0 IMPORTING $node1_id}
         assert_error "*Slot export in progress*" {R 2 CLUSTER SETSLOT 0 MIGRATING $node1_id}
         assert_error "*Slot export in progress*" {R 2 CLUSTER SETSLOT 0 IMPORTING $node1_id}
-        assert_match "OK" [R 2 CLUSTER CANCELMIGRATIONS]
+        assert_match "OK" [R 2 CLUSTER CANCELSLOTMIGRATIONS]
         wait_for_migration_field 0 $jobname state failed
 
         # Shouldn't be able to use CLUSTER MIGRATESLOTS when SETSLOT was used on source
@@ -349,7 +349,7 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
         set_debug_prevent_pause 0
     }
 
-    test "Test CLUSTER CANCELMIGRATIONS" {
+    test "Test CLUSTER CANCELSLOTMIGRATIONS" {
         set_debug_prevent_pause 1
         assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16382 16382 NODE $node0_id]
         assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node0_id]
@@ -362,7 +362,7 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
         assert {[dict get [get_migration_by_name 0 $jobname1] state] eq "waiting-for-paused"}
         assert {[dict get [get_migration_by_name 0 $jobname2] state] eq "waiting-for-paused"}
 
-        assert_match "OK" [R 2 CLUSTER CANCELMIGRATIONS]
+        assert_match "OK" [R 2 CLUSTER CANCELSLOTMIGRATIONS]
 
         # Jobs are no longer up, migration logs say cancelled
         assert {[dict get [get_migration_by_name 2 $jobname1] state] eq "cancelled"}
@@ -909,7 +909,7 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
             populate 334 "$16383_slot_tag:3:" 1000 -2
 
             # Cancel and the data should be dropped
-            assert_match "OK" [R 2 CLUSTER CANCELMIGRATIONS]
+            assert_match "OK" [R 2 CLUSTER CANCELSLOTMIGRATIONS]
             assert {[dict get [get_migration_by_name 2 $jobname] state] eq "cancelled"}
             wait_for_migration_field 0 $jobname state failed
             assert_match "0" [R 0 CLUSTER COUNTKEYSINSLOT 16383]
@@ -1124,7 +1124,7 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
             assert_match "write" [s -0 paused_actions]
 
             # Cancel the job
-            assert_match "OK" [R 0 CLUSTER CANCELMIGRATIONS]
+            assert_match "OK" [R 0 CLUSTER CANCELSLOTMIGRATIONS]
             wait_for_migration_field 0 $jobname state cancelled
             wait_for_migration_field 2 $jobname state failed
 
@@ -1211,7 +1211,7 @@ start_cluster 3 3 {tags {external:skip cluster} overrides {cluster-allow-replica
             set jobname [get_job_name 2 16383]
             wait_for_migration_field 0 $jobname state waiting-for-paused
             assert_error "*Slot is already being imported on the target by a different migration*" {R 0 CLUSTER SYNCSLOTS ESTABLISH SOURCE $node2_id NAME $fake_jobname SLOTSRANGE 16383 16383}
-            assert_match "OK" [R 2 CLUSTER CANCELMIGRATIONS]
+            assert_match "OK" [R 2 CLUSTER CANCELSLOTMIGRATIONS]
             wait_for_migration_field 0 $jobname state failed
             set_debug_prevent_pause 0
         }

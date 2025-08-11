@@ -23,7 +23,7 @@ void clusterSlotMigrationCron(void);
 void clusterCommandMigrateSlots(client *c);
 void clusterCommandSyncSlots(client *c);
 void clusterCommandGetSlotMigrations(client *c);
-void clusterCommandCancelMigrations(client *c);
+void clusterCommandCancelSlotMigrations(client *c);
 void clusterHandleSlotExportBackgroundSaveDone(int bgsaveerr);
 void clusterUpdateSlotExportsOnOwnershipChange(void);
 void clusterUpdateSlotImportsOnOwnershipChange(void);

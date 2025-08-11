@@ -242,7 +242,7 @@ tags "modules" {
                             # 10ms per key, with 1000 keys is 10 seconds
                             $master config set rdb-key-save-delay 10000
 
-                            test {Diskless load swapdb RedisModuleEvent_ReplAsyncLoad handling: during loading, can keep module variable same as before} {
+                            test "Diskless load swapdb RedisModuleEvent_ReplAsyncLoad handling ($testType): during loading, can keep module variable same as before" {
                                 # Wait for the replica to start reading the rdb and module for acknowledgement
                                 # We wanna abort only after the temp db was populated by REDISMODULE_AUX_BEFORE_RDB
                                 wait_for_condition 100 100 {
@@ -261,7 +261,7 @@ tags "modules" {
                             # Kill the replica connection on the master
                             set killed [$master client kill type replica]
 
-                            test {Diskless load swapdb RedisModuleEvent_ReplAsyncLoad handling: when loading aborted, can keep module variable same as before} {
+                            test "Diskless load swapdb RedisModuleEvent_ReplAsyncLoad handling ($testType): when loading aborted, can keep module variable same as before" {
                                 # Wait for loading to stop (fail) and module for acknowledgement
                                 wait_for_condition 100 100 {
                                     [s -1 async_loading] eq 0 && [$replica testrdb.async_loading.get.before] eq ""
@@ -284,7 +284,7 @@ tags "modules" {
                                 fail "Master <-> Replica didn't finish sync"
                             }
 
-                            test {Diskless load swapdb RedisModuleEvent_ReplAsyncLoad handling: after db loaded, can set module variable with new value} {
+                            test "Diskless load swapdb RedisModuleEvent_ReplAsyncLoad handling ($testType): after db loaded, can set module variable with new value" {
                                 assert_equal [$replica dbsize] 1010
                                 assert_equal value1_master [$replica testrdb.get.before]
                             }

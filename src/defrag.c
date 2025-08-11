@@ -691,14 +691,14 @@ static void defragKey(defragKeysCtx *ctx, robj **elemref) {
             /* Replace the pointer in the expire table without accessing the old
              * pointer. */
             hashtable *expires_ht = kvstoreGetHashtable(db->expires, slot);
-            int replaced = hashtableReplaceReallocatedEntry(expires_ht, ob, newob);
+            bool replaced = hashtableReplaceReallocatedEntry(expires_ht, ob, newob);
             serverAssert(replaced);
         }
         if (newob->type == OBJ_HASH && hashTypeHasVolatileFields(newob)) {
             /* Check if this is a hash object containing volatile fields.
              * and update keys_with_volatile_items after defrag. */
             hashtable *keys_with_volatile_items_ht = kvstoreGetHashtable(db->keys_with_volatile_items, slot);
-            int replaced = hashtableReplaceReallocatedEntry(keys_with_volatile_items_ht, ob, newob);
+            bool replaced = hashtableReplaceReallocatedEntry(keys_with_volatile_items_ht, ob, newob);
             serverAssert(replaced);
         }
         ob = newob;
@@ -774,7 +774,7 @@ static void defragPubsubScanCallback(void *privdata, void *elemref) {
         void *c;
         while (hashtableNext(&iter, &c)) {
             hashtable *client_channels = ctx->getPubSubChannels(c);
-            int replaced = hashtableReplaceReallocatedEntry(client_channels, channel, newchannel);
+            bool replaced = hashtableReplaceReallocatedEntry(client_channels, channel, newchannel);
             serverAssert(replaced);
         }
         hashtableResetIterator(&iter);

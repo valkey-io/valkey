@@ -403,7 +403,7 @@ int hashTypeSet(robj *o, sds field, sds value, long long expiry, int flags) {
             void *new_entry = entryUpdate(existing, v, expiry);
             if (new_entry != existing) {
                 /* It has been reallocated. */
-                int replaced = hashtableReplaceReallocatedEntry(ht, existing, new_entry);
+                bool replaced = hashtableReplaceReallocatedEntry(ht, existing, new_entry);
                 serverAssert(replaced);
             }
 
@@ -529,9 +529,9 @@ static expiryModificationResult hashTypePersist(robj *o, sds field) {
 }
 
 /* Delete an element from a hash.
- * Return 1 on deleted and 0 on not found. */
-int hashTypeDelete(robj *o, sds field) {
-    int deleted = 0;
+ * Return true on deleted and false on not found. */
+bool hashTypeDelete(robj *o, sds field) {
+    bool deleted = false;
     serverAssert(o && o->type == OBJ_HASH);
     if (o->encoding == OBJ_ENCODING_LISTPACK) {
         unsigned char *zl, *fptr;
@@ -544,7 +544,7 @@ int hashTypeDelete(robj *o, sds field) {
                 /* Delete both field and value. */
                 zl = lpDeleteRangeWithEntry(zl, &fptr, 2);
                 o->ptr = zl;
-                deleted = 1;
+                deleted = true;
             }
         }
     } else if (o->encoding == OBJ_ENCODING_HASHTABLE) {
@@ -1191,7 +1191,7 @@ void hsetexCommand(client *c) {
     robj **new_argv = NULL;
     int new_argc = 0;
 
-    for (; fields_index < c->argc; fields_index++) {
+    for (; fields_index < c->argc - 1; fields_index++) {
         if (!strcasecmp(c->argv[fields_index]->ptr, "fields")) {
             /* checking optional flags */
             if (parseExtendedCommandArgumentsOrReply(c, &flags, &unit, &expire, &comparison, COMMAND_HSET, fields_index++) != C_OK) return;
@@ -1358,7 +1358,7 @@ void hgetexCommand(client *c) {
     int new_argc = 0;
     int milliseconds_index = -1, numitems_index = -1;
 
-    for (; fields_index < c->argc; fields_index++) {
+    for (; fields_index < c->argc - 1; fields_index++) {
         if (!strcasecmp(c->argv[fields_index]->ptr, "fields")) {
             /* checking optional flags */
             if (parseExtendedCommandArgumentsOrReply(c, &flags, &unit, &expire, &comparison, COMMAND_HGET, fields_index++) != C_OK) return;
@@ -1427,14 +1427,14 @@ void hgetexCommand(client *c) {
         }
     }
     for (i = fields_index; i < c->argc; i++) {
-        int changed = 0;
+        bool changed = false;
         addHashFieldToReply(c, o, c->argv[i]->ptr);
         if (o && set_expired) {
             changed = hashTypeDelete(o, c->argv[i]->ptr);
         } else if (set_expiry) {
-            changed = (hashTypeSetExpire(o, c->argv[i]->ptr, when, 0) == EXPIRATION_MODIFICATION_SUCCESSFUL) ? 1 : 0;
+            changed = hashTypeSetExpire(o, c->argv[i]->ptr, when, 0) == EXPIRATION_MODIFICATION_SUCCESSFUL;
         } else if (persist) {
-            changed = (hashTypePersist(o, c->argv[i]->ptr) == EXPIRATION_MODIFICATION_SUCCESSFUL) ? 1 : 0;
+            changed = hashTypePersist(o, c->argv[i]->ptr) == EXPIRATION_MODIFICATION_SUCCESSFUL;
         }
         if (changed) {
             changes++;
@@ -1613,7 +1613,7 @@ void hexpireGenericCommand(client *c, long long basetime, int unit) {
     robj **new_argv = NULL;
     int new_argc = 0;
 
-    for (; fields_index < c->argc; fields_index++) {
+    for (; fields_index < c->argc - 1; fields_index++) {
         if (!strcasecmp(c->argv[fields_index]->ptr, "fields")) {
             /* checking optional flags */
             if (parseExtendedExpireArgumentsOrReply(c, &flag, fields_index++) != C_OK) return;
@@ -2113,7 +2113,7 @@ static int hashTypeExpireEntry(void *entry, void *c) {
 
     hashtable *ht = o->ptr;
     void *entry_ptr = NULL;
-    int deleted = hashtablePop(ht, entry, &entry_ptr);
+    bool deleted = hashtablePop(ht, entry, &entry_ptr);
 
     if (deleted) {
         if (ctx->fields)

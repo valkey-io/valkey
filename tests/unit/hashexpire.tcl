@@ -2053,6 +2053,16 @@ start_server {tags {"hashexpire"}} {
         assert_morethan [r HTTL myhash FIELDS 1 f1] 0
         assert_equal 1 [get_keys_with_volatile_items r]
     }
+
+    test {Verify error when hash expire commands num fields is not provided} {
+        r FLUSHALL
+        catch {r hsetex myhash KEEPTTL KEEPTTL KEEPTTL FIELDS} e
+        assert_match $e {ERR numfields should be greater than 0 and match the provided number of fields}
+        catch {r hexpire myhash 10 NX NX FIELDS} e
+        assert_match $e {ERR numfields should be greater than 0 and match the provided number of fields}
+        catch {r hgetex myhash PERSIST PERSIST FIELDS} e
+        assert_match $e {ERR numfields should be greater than 0 and match the provided number of fields}
+    }
 }
 
 ####### Test info

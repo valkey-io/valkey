@@ -273,8 +273,8 @@ int test_two_phase_insert_and_pop(int argc, char **argv, int flags) {
         snprintf(key, sizeof(key), "%d", j);
         snprintf(val, sizeof(val), "%d", count - j + 42);
         hashtablePosition position;
-        int ret = hashtableFindPositionForInsert(ht, key, &position, NULL);
-        TEST_ASSERT(ret == 1);
+        bool ret = hashtableFindPositionForInsert(ht, key, &position, NULL);
+        TEST_ASSERT(ret);
         keyval *e = create_keyval(key, val);
         hashtableInsertAtPosition(ht, e, &position);
     }
@@ -419,7 +419,7 @@ int test_incremental_find(int argc, char **argv, int flags) {
             do {
                 num_left = batch_size;
                 for (size_t i = 0; i < batch_size; i++) {
-                    if (hashtableIncrementalFindStep(&states[i]) == 0) {
+                    if (!hashtableIncrementalFindStep(&states[i])) {
                         num_left--;
                     }
                 }

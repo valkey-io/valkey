@@ -3366,12 +3366,11 @@ void serverOpArrayFree(serverOpArray *oa) {
 
 /* ====================== Commands lookup and execution ===================== */
 
-int isContainerCommandBySds(sds s) {
+bool isContainerCommandBySds(sds s) {
     void *entry;
-    int found_command = hashtableFind(server.commands, s, &entry);
+    bool found_command = hashtableFind(server.commands, s, &entry);
     struct serverCommand *base_cmd = entry;
-    int has_subcommands = found_command && base_cmd->subcommands_ht;
-    return has_subcommands;
+    return found_command && base_cmd->subcommands_ht;
 }
 
 struct serverCommand *lookupSubcommand(struct serverCommand *container, sds sub_name) {
@@ -3391,9 +3390,9 @@ struct serverCommand *lookupSubcommand(struct serverCommand *container, sds sub_
  */
 struct serverCommand *lookupCommandLogic(hashtable *commands, robj **argv, int argc, int strict) {
     void *entry = NULL;
-    int found_command = hashtableFind(commands, argv[0]->ptr, &entry);
+    bool found_command = hashtableFind(commands, argv[0]->ptr, &entry);
     struct serverCommand *base_cmd = entry;
-    int has_subcommands = found_command && base_cmd->subcommands_ht;
+    bool has_subcommands = found_command && base_cmd->subcommands_ht;
     if (argc == 1 || !has_subcommands) {
         if (strict && argc != 1) return NULL;
         /* Note: It is possible that base_cmd->proc==NULL (e.g. CONFIG) */

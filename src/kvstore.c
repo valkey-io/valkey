@@ -103,9 +103,9 @@ static hashtable **kvstoreGetHashtableRef(kvstore *kvs, int didx) {
     return &kvs->hashtables[didx];
 }
 
-static int kvstoreHashtableIsRehashingPaused(kvstore *kvs, int didx) {
+static bool kvstoreHashtableIsRehashingPaused(kvstore *kvs, int didx) {
     hashtable *ht = kvstoreGetHashtable(kvs, didx);
-    return ht ? hashtableIsRehashingPaused(ht) : 0;
+    return ht ? hashtableIsRehashingPaused(ht) : false;
 }
 
 /* Returns total (cumulative) number of keys up until given hashtable-index (inclusive).
@@ -421,24 +421,24 @@ unsigned long long kvstoreScan(kvstore *kvs,
  *
  * Based on the parameter `try_expand`, appropriate hashtable expand API is invoked.
  * if try_expand is set to 1, `hashtableTryExpand` is used else `hashtableExpand`.
- * The return code is either 1 or 0 for both the API(s).
- * 1 response is for successful expansion. However, 0 response signifies failure in allocation in
+ * The return code is either true or false for both the API(s).
+ * true response is for successful expansion. However, false response signifies failure in allocation in
  * `hashtableTryExpand` call and in case of `hashtableExpand` call it signifies no expansion was performed.
  */
-int kvstoreExpand(kvstore *kvs, uint64_t newsize, int try_expand, kvstoreExpandShouldSkipHashtableIndex *skip_cb) {
-    if (newsize == 0) return 1;
+bool kvstoreExpand(kvstore *kvs, uint64_t newsize, int try_expand, kvstoreExpandShouldSkipHashtableIndex *skip_cb) {
+    if (newsize == 0) return true;
     for (int i = 0; i < kvs->num_hashtables; i++) {
         if (skip_cb && skip_cb(i)) continue;
         /* If the hash table doesn't exist, create it. */
         hashtable *ht = createHashtableIfNeeded(kvs, i);
         if (try_expand) {
-            if (!hashtableTryExpand(ht, newsize)) return 0;
+            if (!hashtableTryExpand(ht, newsize)) return false;
         } else {
             hashtableExpand(ht, newsize);
         }
     }
 
-    return 1;
+    return true;
 }
 
 /* Returns fair random hashtable index, probability of each hashtable being
@@ -610,14 +610,14 @@ int kvstoreIteratorGetCurrentHashtableIndex(kvstoreIterator *kvs_it) {
     return kvs_it->didx;
 }
 
-/* Fetches the next element and returns 1. Returns 0 if there are no more elements. */
-int kvstoreIteratorNext(kvstoreIterator *kvs_it, void **next) {
+/* Fetches the next element and returns true. Returns false if there are no more elements. */
+bool kvstoreIteratorNext(kvstoreIterator *kvs_it, void **next) {
     if (kvs_it->didx != -1 && hashtableNext(&kvs_it->di, next)) {
-        return 1;
+        return true;
     } else {
         /* No current hashtable or reached the end of the hash table. */
         hashtable *ht = kvstoreIteratorNextHashtable(kvs_it);
-        if (!ht) return 0;
+        if (!ht) return false;
         hashtableReinitIterator(&kvs_it->di, ht);
         return hashtableNext(&kvs_it->di, next);
     }
@@ -703,22 +703,22 @@ void kvstoreReleaseHashtableIterator(kvstoreHashtableIterator *kvs_di) {
 }
 
 /* Get the next element of the hashtable through kvstoreHashtableIterator and hashtableNext. */
-int kvstoreHashtableIteratorNext(kvstoreHashtableIterator *kvs_di, void **next) {
+bool kvstoreHashtableIteratorNext(kvstoreHashtableIterator *kvs_di, void **next) {
     /* The hashtable may be deleted during the iteration process, so here need to check for NULL. */
     hashtable *ht = kvstoreGetHashtable(kvs_di->kvs, kvs_di->didx);
-    if (!ht) return 0;
+    if (!ht) return false;
     return hashtableNext(&kvs_di->di, next);
 }
 
-int kvstoreHashtableRandomEntry(kvstore *kvs, int didx, void **entry) {
+bool kvstoreHashtableRandomEntry(kvstore *kvs, int didx, void **entry) {
     hashtable *ht = kvstoreGetHashtable(kvs, didx);
-    if (!ht) return 0;
+    if (!ht) return false;
     return hashtableRandomEntry(ht, entry);
 }
 
-int kvstoreHashtableFairRandomEntry(kvstore *kvs, int didx, void **entry) {
+bool kvstoreHashtableFairRandomEntry(kvstore *kvs, int didx, void **entry) {
     hashtable *ht = kvstoreGetHashtable(kvs, didx);
-    if (!ht) return 0;
+    if (!ht) return false;
     return hashtableFairRandomEntry(ht, entry);
 }
 
@@ -728,9 +728,9 @@ unsigned int kvstoreHashtableSampleEntries(kvstore *kvs, int didx, void **dst, u
     return hashtableSampleEntries(ht, dst, count);
 }
 
-int kvstoreHashtableExpand(kvstore *kvs, int didx, unsigned long size) {
+bool kvstoreHashtableExpand(kvstore *kvs, int didx, unsigned long size) {
     hashtable *ht = kvstoreGetHashtable(kvs, didx);
-    if (!ht) return 0;
+    if (!ht) return false;
     return hashtableExpand(ht, size);
 }
 
@@ -776,9 +776,9 @@ uint64_t kvstoreGetHash(kvstore *kvs, const void *key) {
     return kvs->dtype->hashFunction(key);
 }
 
-int kvstoreHashtableFind(kvstore *kvs, int didx, void *key, void **found) {
+bool kvstoreHashtableFind(kvstore *kvs, int didx, void *key, void **found) {
     hashtable *ht = kvstoreGetHashtable(kvs, didx);
-    if (!ht) return 0;
+    if (!ht) return false;
     return hashtableFind(ht, key, found);
 }
 
@@ -788,21 +788,14 @@ void **kvstoreHashtableFindRef(kvstore *kvs, int didx, const void *key) {
     return hashtableFindRef(ht, key);
 }
 
-int kvstoreHashtableAddOrFind(kvstore *kvs, int didx, void *key, void **existing) {
+bool kvstoreHashtableAdd(kvstore *kvs, int didx, void *entry) {
     hashtable *ht = createHashtableIfNeeded(kvs, didx);
-    int ret = hashtableAddOrFind(ht, key, existing);
+    bool ret = hashtableAdd(ht, entry);
     if (ret) cumulativeKeyCountAdd(kvs, didx, 1);
     return ret;
 }
 
-int kvstoreHashtableAdd(kvstore *kvs, int didx, void *entry) {
-    hashtable *ht = createHashtableIfNeeded(kvs, didx);
-    int ret = hashtableAdd(ht, entry);
-    if (ret) cumulativeKeyCountAdd(kvs, didx, 1);
-    return ret;
-}
-
-int kvstoreHashtableFindPositionForInsert(kvstore *kvs, int didx, void *key, hashtablePosition *position, void **existing) {
+bool kvstoreHashtableFindPositionForInsert(kvstore *kvs, int didx, void *key, hashtablePosition *position, void **existing) {
     hashtable *ht = createHashtableIfNeeded(kvs, didx);
     return hashtableFindPositionForInsert(ht, key, position, existing);
 }
@@ -828,10 +821,10 @@ void kvstoreHashtableTwoPhasePopDelete(kvstore *kvs, int didx, void *position) {
     freeHashtableIfNeeded(kvs, didx);
 }
 
-int kvstoreHashtablePop(kvstore *kvs, int didx, const void *key, void **popped) {
+bool kvstoreHashtablePop(kvstore *kvs, int didx, const void *key, void **popped) {
     hashtable *ht = kvstoreGetHashtable(kvs, didx);
-    if (!ht) return 0;
-    int ret = hashtablePop(ht, key, popped);
+    if (!ht) return false;
+    bool ret = hashtablePop(ht, key, popped);
     if (ret) {
         cumulativeKeyCountAdd(kvs, didx, -1);
         freeHashtableIfNeeded(kvs, didx);
@@ -839,10 +832,10 @@ int kvstoreHashtablePop(kvstore *kvs, int didx, const void *key, void **popped) 
     return ret;
 }
 
-int kvstoreHashtableDelete(kvstore *kvs, int didx, const void *key) {
+bool kvstoreHashtableDelete(kvstore *kvs, int didx, const void *key) {
     hashtable *ht = kvstoreGetHashtable(kvs, didx);
-    if (!ht) return 0;
-    int ret = hashtableDelete(ht, key);
+    if (!ht) return false;
+    bool ret = hashtableDelete(ht, key);
     if (ret) {
         cumulativeKeyCountAdd(kvs, didx, -1);
         freeHashtableIfNeeded(kvs, didx);

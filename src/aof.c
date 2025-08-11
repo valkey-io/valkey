@@ -1979,6 +1979,9 @@ int rewriteHashObject(rio *r, robj *key, robj *o) {
     non_volatile_items = hashTypeLength(o) - volatile_items;
     hashTypeInitIterator(o, &hi);
     while (hashTypeNext(&hi) != C_ERR) {
+        if (volatile_items > 0 && entryHasExpiry(hi.next))
+            continue;
+
         if (count == 0) {
             int cmd_items = (non_volatile_items > AOF_REWRITE_ITEMS_PER_CMD) ? AOF_REWRITE_ITEMS_PER_CMD : non_volatile_items;
 
@@ -1988,9 +1991,6 @@ int rewriteHashObject(rio *r, robj *key, robj *o) {
                 return 0;
             }
         }
-
-        if (volatile_items > 0 && entryHasExpiry(hi.next))
-            continue;
 
         if (!rioWriteHashIteratorCursor(r, &hi, OBJ_HASH_FIELD) || !rioWriteHashIteratorCursor(r, &hi, OBJ_HASH_VALUE)) {
             hashTypeResetIterator(&hi);

@@ -43,6 +43,17 @@
  * - Used for large value sizes. */
 typedef void entry;
 
+/* Structure representing an externalized string.
+ * This allows modules to store a char* and length directly in a hash field,
+ * bypassing normal SDS string allocation for the value.
+ * The module using this structure is responsible for the lifetime management
+ * of the memory pointed to by 'buf'. Valkey core will not free 'buf'.
+ */
+typedef struct StringViewValue {
+    const char *buf; /* Pointer to the externalized buffer */
+    size_t len;      /* Length of the buffer */
+} StringViewValue;
+
 /* The maximum allocation size we want to use for entries with embedded
  * values. */
 #define EMBED_VALUE_MAX_ALLOC_SIZE 128
@@ -51,7 +62,7 @@ typedef void entry;
 sds entryGetField(const entry *entry);
 
 /* Returns the value string (sds) from the entry. */
-sds entryGetValue(const entry *entry);
+char *entryGetValue(const entry *entry, size_t *len);
 
 /* Sets or replaces the value string in the entry. May reallocate and return a new pointer. */
 entry *entrySetValue(entry *entry, sds value);
@@ -61,6 +72,9 @@ long long entryGetExpiry(const entry *entry);
 
 /* Returns true if the entry has an expiration timestamp set. */
 bool entryHasExpiry(const entry *entry);
+
+/* Returns true if the entry value is externalized. */
+bool entryIsStringViewValue(const entry *e);
 
 /* Sets the expiration timestamp. */
 entry *entrySetExpiry(entry *entry, long long expiry);
@@ -72,7 +86,9 @@ bool entryIsExpired(entry *entry);
 void entryFree(entry *entry);
 
 /* Creates a new entry with the given field, value, and optional expiry. */
-entry *entryCreate(const_sds field, sds value, long long expiry);
+entry *entryCreate(const char *field, size_t field_len, sds value, long long expiry);
+entry *createStringViewEntry(sds field, const char *buf, size_t len);
+StringViewValue *entryGetViewValueRef(const entry *e);
 
 /* Updates the value and/or expiry of an existing entry.
  * In case value is NULL, will use the existing entry value.

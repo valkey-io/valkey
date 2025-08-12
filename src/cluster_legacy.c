@@ -5222,7 +5222,7 @@ void clusterHandleReplicaFailover(void) {
                   "(rank #%d, primary rank #%d, offset %lld, node config epoch is %llu).",
                   server.cluster->failover_auth_time - now, server.cluster->failover_auth_rank,
                   server.cluster->failover_failed_primary_rank, replicationGetReplicaOffset(),
-                  server.cluster->failover_config_epoch);
+                  (unsigned long long)server.cluster->failover_config_epoch);
         /* Now that we have a scheduled election, broadcast our offset
          * to all the other replicas so that they'll updated their offsets
          * if our offset is better. */

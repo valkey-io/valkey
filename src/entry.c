@@ -299,10 +299,9 @@ entry *entryCreate(const char *field, size_t field_len, sds value, long long exp
 /* Create an entry with a view value. The view value structure is stored as an embedded field.  */
 entry *createViewValueEntry(sds field, const char *buf, size_t len, long long expiry) {
     viewValue view_value = {buf, len};
-    sds value = sdsnewlen(&view_value, sizeof (viewValue));
+    sds value = sdsnewlen(&view_value, sizeof(viewValue));
     entry *new_entry = entryCreate(field, sdslen(field), value, expiry);
-    sdsSetAuxBit(new_entry, FIELD_SDS_AUX_BIT_VIEW_VALUE, 1);          // Mark as view value
-                                                                                //
+    sdsSetAuxBit(new_entry, FIELD_SDS_AUX_BIT_VIEW_VALUE, 1); // Mark as view value
     debugServerAssert(sdsGetAuxBit(new_entry, FIELD_SDS_AUX_BIT_ENTRY_HAS_VALUE_PTR) == 0);
     debugServerAssert(sdsGetAuxBit(new_entry, FIELD_SDS_AUX_BIT_VIEW_VALUE) == 1);
     return new_entry;

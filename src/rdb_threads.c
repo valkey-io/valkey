@@ -352,7 +352,7 @@ ssize_t rdbSaveDbMultiThreaded(rio *rdb, int dbid, long *key_counter, char *pnam
         for (int i = 0; i < server.rdb_threads_num; i++) {
             if (threadArgs[i].save_status == C_ERR) goto werr;
         }
-        
+
         /* 2.7. Allow rehashing now */
         hashtableResumeRehashing(ht);
     }

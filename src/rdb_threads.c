@@ -305,7 +305,10 @@ ssize_t rdbSaveDbMultiThreaded(rio *rdb, int dbid, long *key_counter, char *pnam
 
     /* 2. Iterate through the hashtables (slots) in the kvstore (in standalone mode there is 1 hashtable). */
     while ((ht = kvstoreIteratorNextHashtable(kvs_it)) != NULL) {
-        /* 2.1. Write metadata (e.g., "slot-info") to RDB file if in cluster mode. */
+        /* 2.1. Ensure the hashtable will not rehash while being processed */
+        hashtablePauseRehashing(ht);
+
+        /* 2.2. Write metadata (e.g., "slot-info") to RDB file if in cluster mode. */
         int curr_slot = kvstoreIteratorGetCurrentHashtableIndex(kvs_it);
         if (server.cluster_enabled && curr_slot != last_slot) {
             sds slot_info = sdscatprintf(sdsempty(), "%i,%lu,%lu", curr_slot,
@@ -316,9 +319,7 @@ ssize_t rdbSaveDbMultiThreaded(rio *rdb, int dbid, long *key_counter, char *pnam
             last_slot = curr_slot;
         }
 
-        hashtablePauseRehashing(ht);
-
-        /* 2.2. Assign a range of the current hashtable to each RDB thread. */
+        /* 2.3. Assign a range of the current hashtable to each RDB thread. */
         for (int i = 0; i < server.rdb_threads_num; i++) {
             RdbSaveThreadArgs *ta = &threadArgs[i];
             ta->ht = ht;
@@ -339,19 +340,21 @@ ssize_t rdbSaveDbMultiThreaded(rio *rdb, int dbid, long *key_counter, char *pnam
         /* Main thread processes its portion of the hashtable. */
         rdbEncodeHashtableRange(&threadArgs[0]);
 
-        /* 2.3. Wait for all threads to complete their jobs. */
+        /* 2.4. Wait for all threads to complete their jobs. */
         drainRDBThreadsQueue();
-        hashtableResumeRehashing(ht);
 
-        /* 2.4. Pause worker threads until their next job assignment. */
+        /* 2.5. Pause worker threads until their next job assignment. */
         for (int i = 1; i < server.rdb_threads_num; i++) {
             pthread_mutex_lock(&rdb_threads_mutex[i]);
         }
 
-        /* 2.5. Check for errors reported by any thread. */
+        /* 2.6. Check for errors reported by any thread. */
         for (int i = 0; i < server.rdb_threads_num; i++) {
             if (threadArgs[i].save_status == C_ERR) goto werr;
         }
+        
+        /* 2.7. Allow rehashing now */
+        hashtableResumeRehashing(ht);
     }
 
     /* 4. Aggregate total bytes written and keys processed from all threads. */
@@ -367,6 +370,7 @@ ssize_t rdbSaveDbMultiThreaded(rio *rdb, int dbid, long *key_counter, char *pnam
     return written;
 
 werr:
+    hashtableResumeRehashing(ht);
     kvstoreIteratorRelease(kvs_it);
     freeRdbSaveThreadArgs(server.rdb_threads_num, threadArgs);
     return -1;

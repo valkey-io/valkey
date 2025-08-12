@@ -7929,7 +7929,11 @@ static int clusterManagerCommandBackup(int argc, char **argv) {
     int no_issues = clusterManagerCheckCluster(0);
     int cluster_errors_count = (no_issues ? 0 : listLength(cluster_manager.errors));
     config.cluster_manager_command.backup_dir = argv[1];
-    /* TODO: check if backup_dir is a valid directory. */
+    struct stat sb;
+    if (stat(config.cluster_manager_command.backup_dir, &sb) != 0 || !S_ISDIR(sb.st_mode)) {
+        clusterManagerLogErr("[ERR] %s is not a valid directory\n", config.cluster_manager_command.backup_dir);
+        return 0;
+    }
     sds json = sdsnew("[\n");
     int first_node = 0;
     listIter li;

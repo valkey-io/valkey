@@ -28,6 +28,9 @@
 #define CLUSTER_REDIR_DOWN_UNBOUND 6  /* -CLUSTERDOWN, unbound slot. */
 #define CLUSTER_REDIR_DOWN_RO_STATE 7 /* -CLUSTERDOWN, allow reads. */
 
+/* Fixed timeout value for cluster operations (milliseconds) */
+#define CLUSTER_OPERATION_TIMEOUT 2000
+
 typedef struct _clusterNode clusterNode;
 struct clusterState;
 
@@ -37,6 +40,10 @@ struct clusterState;
 #define CLUSTER_MODULE_FLAG_NONE 0
 #define CLUSTER_MODULE_FLAG_NO_FAILOVER (1 << 1)
 #define CLUSTER_MODULE_FLAG_NO_REDIRECTION (1 << 2)
+
+/* For clusterBroadcastPong */
+#define CLUSTER_BROADCAST_ALL 0            /* All known instances. */
+#define CLUSTER_BROADCAST_LOCAL_REPLICAS 1 /* All replicas in my primary-replicas ring. */
 
 /* ---------------------- API exported outside cluster.c -------------------- */
 /* functions requiring mechanism specific implementations */
@@ -62,6 +69,7 @@ void clusterUpdateMyselfAnnouncedPorts(void);
 void clusterUpdateMyselfHumanNodename(void);
 
 void clusterPropagatePublish(robj *channel, robj *message, int sharded);
+void clusterBroadcastPong(int target);
 
 unsigned long getClusterConnectionsCount(void);
 int isClusterHealthy(void);
@@ -118,6 +126,9 @@ void clearCachedClusterSlotsResponse(void);
 unsigned int countKeysInSlotForDb(unsigned int hashslot, serverDb *db);
 unsigned int countKeysInSlot(unsigned int hashslot);
 int getSlotOrReply(client *c, robj *o);
+int getNodeDefaultReplicationPort(clusterNode *node);
+bool isAnySlotInManualImportingState(void);
+bool isAnySlotInManualMigratingState(void);
 
 /* functions with shared implementations */
 int clusterNodeIsMyself(clusterNode *n);
@@ -137,4 +148,13 @@ long long getNodeReplicationOffset(clusterNode *node);
 sds aggregateClientOutputBuffer(client *c);
 void resetClusterStats(void);
 unsigned int delKeysInSlot(unsigned int hashslot, int lazy, bool propagate_del, bool send_del_event);
+
+unsigned int propagateSlotDeletionByKeys(unsigned int hashslot);
+void clusterUpdateState(void);
+void clusterSaveConfigOrDie(int do_fsync);
+int clusterDelSlot(int slot);
+int clusterAddSlot(clusterNode *n, int slot);
+int clusterBumpConfigEpochWithoutConsensus(void);
+void clusterDoBeforeSleep(int flags);
+
 #endif /* __CLUSTER_H */

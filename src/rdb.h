@@ -117,6 +117,17 @@ enum RdbType {
 };
 /* NOTE: WHEN ADDING NEW RDB TYPE, UPDATE rdb_type_string[] */
 
+typedef int (*ChildSnapshotFunc)(int req, rio *rdb, void *privdata);
+typedef struct rdbSnapshotOptions {
+    int connsnum;                    /* Number of connections. */
+    connection **conns;              /* Connections to send the snapshot to. */
+    int use_pipe;                    /* Use pipe to send the snapshot. */
+    int req;                         /* See REPLICA_REQ_* in server.h. */
+    int skip_checksum;               /* Skip checksum when sending the snapshot. */
+    ChildSnapshotFunc snapshot_func; /* Function to call to take the snapshot. */
+    void *privdata;                  /* Private data to pass to snapshot_func. */
+} rdbSnapshotOptions;
+
 /* Test if a type is an object type. */
 #define rdbIsObjectType(t) (((t) >= 0 && (t) <= 7) || ((t) >= 9 && (t) < RDB_TYPE_LAST))
 
@@ -198,5 +209,6 @@ int rdbFunctionLoad(rio *rdb, int ver, functionsLibCtx *lib_ctx, int rdbflags, s
 int rdbSaveRio(int req, rio *rdb, int *error, int rdbflags, rdbSaveInfo *rsi);
 ssize_t rdbSaveFunctions(rio *rdb);
 rdbSaveInfo *rdbPopulateSaveInfo(rdbSaveInfo *rsi);
+int saveSnapshotToConnectionSockets(rdbSnapshotOptions options);
 
 #endif

@@ -44,6 +44,7 @@ set(VALKEY_SERVER_SRCS
     ${CMAKE_SOURCE_DIR}/src/intset.c
     ${CMAKE_SOURCE_DIR}/src/syncio.c
     ${CMAKE_SOURCE_DIR}/src/cluster.c
+    ${CMAKE_SOURCE_DIR}/src/cluster_migrateslots.c
     ${CMAKE_SOURCE_DIR}/src/cluster_legacy.c
     ${CMAKE_SOURCE_DIR}/src/cluster_slot_stats.c
     ${CMAKE_SOURCE_DIR}/src/crc16.c

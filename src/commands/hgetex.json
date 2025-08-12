@@ -34,27 +34,19 @@
             }
         ],
         "reply_schema": {
-            "oneOf": [
-                {
-                    "description": "List of values associated with the given fields, in the same order as they are requested.",
-                    "type": "array",
-                    "minItems": 1,
-                    "items": {
-                        "oneOf": [
-                            {
-                                "type": "string"
-                            },
-                            {
-                                "type": "null"
-                            }
-                        ]
+            "description": "List of values associated with the given fields, in the same order as they are requested.",
+            "type": "array",
+            "minItems": 1,
+            "items": {
+                "oneOf": [
+                    {
+                        "type": "string"
+                    },
+                    {
+                        "type": "null"
                     }
-                },
-                {
-                    "description": "Key does not exist.",
-                    "type": "null"
-                }
-            ]
+                ]
+            }
         },
         "arguments": [
             {

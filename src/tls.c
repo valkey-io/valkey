@@ -1040,7 +1040,8 @@ static const char *connTLSGetLastError(connection *conn_) {
     tls_connection *conn = (tls_connection *)conn_;
 
     if (conn->ssl_error) return conn->ssl_error;
-    return NULL;
+    /* If no SSL error is set, return the last errno string. */
+    return strerror(conn_->last_errno);
 }
 
 static int connTLSSetWriteHandler(connection *conn, ConnectionCallbackFunc func, int barrier) {

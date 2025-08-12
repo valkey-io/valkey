@@ -1361,6 +1361,10 @@ struct serverMemOverhead *getMemoryOverheadData(void) {
                          server.stat_clients_type_memory[CLIENT_TYPE_NORMAL];
     mem_total += mh->clients_normal;
 
+    mh->cluster_slot_import = server.stat_clients_type_memory[CLIENT_TYPE_SLOT_IMPORT];
+    mh->cluster_slot_export = server.stat_clients_type_memory[CLIENT_TYPE_SLOT_EXPORT];
+    mem_total += mh->cluster_slot_import + mh->cluster_slot_export;
+
     mh->cluster_links = server.stat_cluster_links_memory;
     mem_total += mh->cluster_links;
 
@@ -1725,7 +1729,7 @@ void memoryCommand(client *c) {
     } else if (!strcasecmp(c->argv[1]->ptr, "stats") && c->argc == 2) {
         struct serverMemOverhead *mh = getMemoryOverheadData();
 
-        addReplyMapLen(c, 31 + mh->num_dbs);
+        addReplyMapLen(c, 33 + mh->num_dbs);
 
         addReplyBulkCString(c, "peak.allocated");
         addReplyLongLong(c, mh->peak_allocated);
@@ -1747,6 +1751,12 @@ void memoryCommand(client *c) {
 
         addReplyBulkCString(c, "cluster.links");
         addReplyLongLong(c, mh->cluster_links);
+
+        addReplyBulkCString(c, "cluster.slot_import");
+        addReplyLongLong(c, mh->cluster_slot_import);
+
+        addReplyBulkCString(c, "cluster.slot_export");
+        addReplyLongLong(c, mh->cluster_slot_export);
 
         addReplyBulkCString(c, "aof.buffer");
         addReplyLongLong(c, mh->aof_buffer);

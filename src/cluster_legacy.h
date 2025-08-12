@@ -405,7 +405,6 @@ struct clusterState {
     int failover_auth_rank;           /* This replica rank for current auth request. */
     int failover_failed_primary_rank; /* The rank of this instance in the context of all failed primary list. */
     uint64_t failover_auth_epoch;     /* Epoch of the current election. */
-    uint64_t failover_config_epoch;   /* Epoch of the current primary config epoch. */
     int cant_failover_reason;         /* Why a replica is currently not able to
                                        * failover. See the CANT_FAILOVER_* macros. */
     /* Manual failover state in common. */

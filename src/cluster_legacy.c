@@ -1251,7 +1251,6 @@ void clusterInit(void) {
     server.cluster->failover_auth_sent = 0;
     server.cluster->failover_failed_primary_rank = 0;
     server.cluster->failover_auth_epoch = 0;
-    server.cluster->failover_config_epoch = 0;
     server.cluster->cant_failover_reason = CLUSTER_CANT_FAILOVER_NONE;
     server.cluster->lastVoteEpoch = 0;
 
@@ -5216,13 +5215,11 @@ void clusterHandleReplicaFailover(void) {
              * check in the next state and start the election ASAP. */
             auth_age = 0;
         }
-        server.cluster->failover_config_epoch = nodeEpoch(myself);
         serverLog(LL_NOTICE,
                   "Start of election delayed for %lld milliseconds "
-                  "(rank #%d, primary rank #%d, offset %lld, node config epoch is %llu).",
+                  "(rank #%d, primary rank #%d, offset %lld).",
                   server.cluster->failover_auth_time - now, server.cluster->failover_auth_rank,
-                  server.cluster->failover_failed_primary_rank, replicationGetReplicaOffset(),
-                  server.cluster->failover_config_epoch);
+                  server.cluster->failover_failed_primary_rank, replicationGetReplicaOffset());
         /* Now that we have a scheduled election, broadcast our offset
          * to all the other replicas so that they'll updated their offsets
          * if our offset is better. */
@@ -5276,18 +5273,6 @@ void clusterHandleReplicaFailover(void) {
 
     /* Ask for votes if needed. */
     if (server.cluster->failover_auth_sent == 0) {
-        /* Because we may update the node config epoch in processPacket function,
-         * in order to avoid us starting an old election with a new node config epoch,
-         * we will cancel it here. */
-        if (nodeEpoch(myself) > server.cluster->failover_config_epoch) {
-            server.cluster->failover_auth_time = 0;
-            serverLog(LL_WARNING, "Cancel the election that has not yet started because the node config epoch "
-                                  "has changed while waiting for the delay, which may mean that another replica "
-                                  "may have already won the election, now the node config epoch is %llu",
-                                  (unsigned long long)server.cluster->failover_auth_epoch);
-            return;
-        }
-
         server.cluster->currentEpoch++;
         server.cluster->failover_auth_epoch = server.cluster->currentEpoch;
         serverLog(LL_NOTICE, "Starting a failover election for epoch %llu, node config epoch is %llu",

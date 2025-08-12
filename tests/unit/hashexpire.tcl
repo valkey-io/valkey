@@ -475,7 +475,7 @@ start_server {tags {"hashexpire"}} {
     foreach command {EX PX EXAT PXAT} {
         test "HGETEX $command 0/past time works correctly with 1 field" {
             r FLUSHALL
-
+            r config resetstat
             # Create hash with field
             r HSET myhash f1 v1
             assert_equal 1 [r HLEN myhash]
@@ -493,6 +493,7 @@ start_server {tags {"hashexpire"}} {
             assert_equal 0 [r EXISTS myhash]
             assert_equal 0 [get_keys r]
             assert_equal 0 [get_keys_with_volatile_items r]
+            assert_equal 1 [info_field [r info stats] expired_fields]
             $rd close
         }
 
@@ -627,13 +628,6 @@ start_server {tags {"hashexpire"}} {
         assert_equal newval [r HGET myhash field1]
     }
 
-    test {HSETEX EX - test zero ttl expires immediately} {
-        r FLUSHALL
-        r HSETEX myhash EX 0 FIELDS 1 field1 val1
-        after 10
-        assert_equal 0 [r HEXISTS myhash field1]
-    }
-
     test {HSETEX EX - test mix of expiring and persistent fields} {
         r FLUSHALL
         r HSET myhash field2 "persistent"
@@ -654,7 +648,31 @@ start_server {tags {"hashexpire"}} {
         set e
     } {ERR *}
 
+    foreach command {EX PX EXAT PXAT} {
+        test "HSETEX $command 0/past time works correctly with 1 field" {
+            r FLUSHALL
+            r config resetstat
+            # Create hash with field
+            r HSET myhash f1 v1
+            assert_equal 1 [r HLEN myhash]
+            assert_equal 0 [get_keys_with_volatile_items r]
+            assert_equal 1 [get_keys r]
+            set rd [setup_single_keyspace_notification r]
+            
+            # Set field to expire immediately
+            assert_equal {1} [r HSETEX myhash $command [get_past_zero_expire_value $command] FIELDS 1 f1 v1]
 
+            # Verify field and keys are deleted
+            assert_keyevent_patterns $rd myhash hset hexpired del
+            assert_equal -2 [r HTTL myhash FIELDS 1 f1]
+            assert_equal 0 [r HLEN myhash]
+            assert_equal 0 [r EXISTS myhash]
+            assert_equal 0 [get_keys r]
+            assert_equal 0 [get_keys_with_volatile_items r]
+            assert_equal 1 [info_field [r info stats] expired_fields]
+            $rd close
+        }
+    }
 
     ###### PX #######
 

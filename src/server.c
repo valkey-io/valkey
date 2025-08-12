@@ -4121,15 +4121,10 @@ void prepareCommandQueue(client *c) {
         } else if (!commandCheckArity(p->cmd, p->argc, NULL)) {
             p->read_flags |= READ_FLAGS_BAD_ARITY;
         } else if (server.cluster_enabled) {
-            /* Compute cluster slot */
-            getKeysResult result;
-            initGetKeysResult(&result);
-            int numkeys = getKeysFromCommand(p->cmd, p->argv, p->argc, &result);
-            if (numkeys) {
-                robj *first_key = p->argv[result.keys[0].pos];
-                p->slot = (int)keyHashSlot(first_key->ptr, sdslen(first_key->ptr));
-            }
-            getKeysFreeResult(&result);
+            debugServerAssert(p->slot == -1 &&
+                              !(p->read_flags & READ_FLAGS_CROSSSLOT) &&
+                              !(p->read_flags & READ_FLAGS_NO_KEYS));
+            p->slot = clusterSlotByCommand(p->cmd, p->argv, p->argc, &p->read_flags);
         }
     }
 }

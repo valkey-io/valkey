@@ -6,7 +6,7 @@ start_server {tags {"protocol network"}} {
         assert_equal "PONG" [r ping]
     }
 
-    test "Handle an empty query in pipline" {
+    test "Handle an empty query in pipeline" {
         reconnect
         r write "\r\n*1\r\n\$4\r\nping\r\n"
         r flush
@@ -20,7 +20,7 @@ start_server {tags {"protocol network"}} {
         assert_equal PONG [r ping]
     }
 
-    test "Negative multibulk length in pipline" {
+    test "Negative multibulk length in pipeline" {
         reconnect
         r write "*-10\r\n*1\r\n\$4\r\nping\r\n"
         r flush

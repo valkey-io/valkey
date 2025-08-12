@@ -504,7 +504,7 @@ start_cluster 3 1 {tags {external:skip cluster}} {
 }
 
 start_cluster 3 2 {tags {external:skip cluster}} {
-    # This test consists of two blocks.
+    # This test consists of two phases.
     # The first block, we will create a scenario where two primary are on the same shard. See #2279 for more details.
     # The second block, we will test the behavior of the node when packets arrive out of order. See #2301 for more details.
     #
@@ -529,9 +529,9 @@ start_cluster 3 2 {tags {external:skip cluster}} {
     # 1. We will perform a failover on R3, and perform a replicate on R0 to make R0 a replica of R3.
     # 2. When R3 becomes the new primary node, it will broadcast a message to all nodes in the cluster.
     # 3. When R4 receives the message, it becomes the new replica and also will broadcast the message to all nodes in the cluster.
-    # 4. When R0 becomes a replica after the replicate, it will broadcast a message to all nodes in the cluster.
+    # 4. When R0 becomes a replica after the replication, it will broadcast a message to all nodes in the cluster.
     # 5. Let's assume that R1 and R2 receive the message from R0 and R4 first and then the message from R3 (new primary) later.
-    # 6. R1 will receive messages from R0 after the replicate, R0 is a replica, and its primary is R3.
+    # 6. R1 will receive messages from R0 after the replication, R0 is a replica, and its primary is R3.
     # 7. R2 will receive messages from R4 after the failover, R4 is a replica, and its primary is R3.
     test "Combined the test cases of #2279 and #2301 to test #2431" {
         # ============== Block 1 start ==============

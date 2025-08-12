@@ -49,10 +49,10 @@ typedef void entry;
  * The module is responsible for the lifetime management of the memory pointed
  * to by 'buf'. Valkey core will not free 'buf'.
  */
-typedef struct ViewValue {
+typedef struct viewValue {
     const char *buf; /* Pointer to the externalized buffer */
     size_t len;      /* Length of the buffer */
-} ViewValue;
+} viewValue;
 
 /* The maximum allocation size we want to use for entries with embedded
  * values. */
@@ -88,7 +88,7 @@ void entryFree(entry *entry);
 /* Creates a new entry with the given field, value, and optional expiry. */
 entry *entryCreate(const char *field, size_t field_len, sds value, long long expiry);
 entry *createViewValueEntry(sds field, const char *buf, size_t len, long long expiry);
-ViewValue *entryGetViewValueRef(const entry *e);
+viewValue *entryGetViewValueRef(const entry *e);
 
 /* Updates the value and/or expiry of an existing entry.
  * In case value is NULL, will use the existing entry value.

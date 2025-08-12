@@ -1004,13 +1004,8 @@ int objectTypeCompare(robj *o, long long target) {
         return 1;
 }
 
-typedef struct {
-    const char *buf;
-    size_t len;
-} scanDataItem;
-
 static void addScanDataItem(vector *result, const char *buf, size_t len) {
-    scanDataItem *item = vectorPush(result);
+    viewValue *item = vectorPush(result);
     item->buf = buf;
     item->len = len;
 }
@@ -1256,7 +1251,7 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {
         /* scanning ZSET allocates temporary strings even though it's a dict */
         free_callback = sdsfree;
     }
-    vectorInit(&result, SCAN_VECTOR_INITIAL_ALLOC, sizeof(scanDataItem));
+    vectorInit(&result, SCAN_VECTOR_INITIAL_ALLOC, sizeof(viewValue));
 
     /* For main hash table scan or scannable data structure. */
     if (!o || ht) {
@@ -1359,7 +1354,7 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {
 
     addReplyArrayLen(c, vectorLen(&result));
     for (uint32_t i = 0; i < vectorLen(&result); i++) {
-        scanDataItem *key = vectorGet(&result, i);
+        viewValue *key = vectorGet(&result, i);
         addReplyBulkCBuffer(c, key->buf, key->len);
         if (free_callback) {
             free_callback((sds)(key->buf));

@@ -89,10 +89,10 @@ static sds *entryGetValueRef(const entry *entry) {
     return (sds *)field_data;
 }
 
-ViewValue *entryGetViewValueRef(const entry *entry) {
+viewValue *entryGetViewValueRef(const entry *entry) {
     serverAssert(entryHasViewValue(entry));
     size_t offset = sdslen(entry) + 1 + sdsHdrSize(SDS_TYPE_8);
-    return (ViewValue *)entry + offset;
+    return (viewValue *)entry + offset;
 }
 
 /* Returns the entry's value. */
@@ -107,7 +107,7 @@ char *entryGetValue(const entry *entry, size_t *len) {
     /* Skip field content, field null terminator and value sds8 hdr. */
     size_t offset = sdslen(entry) + 1 + sdsHdrSize(SDS_TYPE_8);
     if (entryHasViewValue(entry)) {
-        ViewValue *value = (ViewValue *)entry + offset;
+        viewValue *value = (viewValue *)entry + offset;
         *len = value->len;
         return (char *)value->buf;
     }
@@ -133,9 +133,7 @@ entry *entrySetValue(entry *e, sds value) {
 /* Returns the address of the entry allocation. */
 void *entryGetAllocPtr(const entry *entry) {
     char *buf = sdsAllocPtr(entry);
-    if (entryHasValuePtr(entry)) {
-        buf -= sizeof(sds);
-    }
+    if (entryHasValuePtr(entry)) buf -= sizeof(sds);
     if (entryHasExpiry(entry)) buf -= sizeof(long long);
     return buf;
 }
@@ -178,8 +176,7 @@ bool entryIsExpired(entry *entry) {
 
 void entryFree(entry *entry) {
     if (entryHasValuePtr(entry)) {
-        size_t len;
-        sdsfree(entryGetValue(entry, &len));
+        sdsfree(*entryGetValueRef(entry));
     }
     zfree(entryGetAllocPtr(entry));
 }
@@ -301,8 +298,8 @@ entry *entryCreate(const char *field, size_t field_len, sds value, long long exp
 
 /* Create an entry with a view value. The view value structure is stored as an embedded field.  */
 entry *createViewValueEntry(sds field, const char *buf, size_t len, long long expiry) {
-    ViewValue view_value = {buf, len};
-    sds value = sdsnewlen(&view_value, sizeof (ViewValue));
+    viewValue view_value = {buf, len};
+    sds value = sdsnewlen(&view_value, sizeof (viewValue));
     entry *new_entry = entryCreate(field, sdslen(field), value, expiry);
     sdsSetAuxBit(new_entry, FIELD_SDS_AUX_BIT_VIEW_VALUE, 1);          // Mark as view value
                                                                                 //

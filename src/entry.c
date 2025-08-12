@@ -43,9 +43,10 @@ enum {
      * pointer located in memory before the embedded field. If unset, the entry
      * instead has an embedded value located after the embedded field. */
     FIELD_SDS_AUX_BIT_ENTRY_HAS_VALUE_PTR = 1,
-    /* SDS aux flag. If set, it indicates that the hash entry's value is a StringViewValue,
-     * meaning it's a char* and size_t managed externally by a module.
-     * This bit is mutually exclusive with the actual value being a normal sds. */
+    /* SDS aux flag.  If set, it indicates that the hash entry's value is a **view** of the data.
+     * The hash entry does not own the view buffer and will not free it upon
+     * entry destruction. This is useful for avoiding memory duplication
+     * between the core and a module. */
     FIELD_SDS_AUX_BIT_VIEW_VALUE = 2,
     FIELD_SDS_AUX_BIT_MAX
 };
@@ -79,31 +80,6 @@ sds entryGetField(const entry *entry) {
     return (sds)entry;
 }
 
-/* Create an entry for a view value.
- * The 'value' (buf and len) is not owned by hash but keeps just a view of the
- * buffer. */
-entry *createStringViewEntry(sds field, const char *buf, size_t len) {
-    StringViewValue *ext_value = zmalloc(sizeof(StringViewValue));
-    ext_value->buf = buf;
-    ext_value->len = len;
-
-    size_t field_len = sdslen(field);
-    char field_sds_type = sdsReqType(field_len);
-    if (field_sds_type == SDS_TYPE_5) field_sds_type = SDS_TYPE_8; // Ensure we can set aux bits
-    size_t field_size = sdsReqSize(field_len, field_sds_type);
-
-    size_t alloc_size = sizeof(void *) + field_size; // Store pointer to StringViewValue
-    char *alloc_buf = zmalloc(alloc_size);
-
-    *(void **)alloc_buf = ext_value; // Store the pointer to our struct
-
-    sds embedded_field_sds = sdswrite(alloc_buf + sizeof(void *), field_size, field_sds_type, field, field_len);
-
-    sdsSetAuxBit(embedded_field_sds, FIELD_SDS_AUX_BIT_VIEW_VALUE, 1);          // Mark as view value
-    serverAssert(entryHasViewValue(embedded_field_sds));
-
-    return (entry *)embedded_field_sds;
-}
 /* Returns the location of a pointer to a separately allocated value. Only for
  * an entry without an embedded value. */
 static sds *entryGetValueRef(const entry *entry) {
@@ -113,21 +89,14 @@ static sds *entryGetValueRef(const entry *entry) {
     return (sds *)field_data;
 }
 
-StringViewValue *entryGetViewValueRef(const entry *entry) {
+ViewValue *entryGetViewValueRef(const entry *entry) {
     serverAssert(entryHasViewValue(entry));
-    char *field_data = sdsAllocPtr(entry);
-    field_data -= sizeof(StringViewValue);
-    return (StringViewValue *)field_data;
+    size_t offset = sdslen(entry) + 1 + sdsHdrSize(SDS_TYPE_8);
+    return (ViewValue *)entry + offset;
 }
 
 /* Returns the entry's value. */
 char *entryGetValue(const entry *entry, size_t *len) {
-    if (entryHasViewValue(entry)) {
-        serverAssert(entryHasValuePtr(entry)); // StringView must use value pointer
-        StringViewValue *ext_value = entryGetViewValueRef(entry);
-        *len = ext_value->len;
-        return (char *)ext_value->buf;
-    }
     if (entryHasValuePtr(entry)) {
         sds *value = entryGetValueRef(entry);
         if (*value) {
@@ -137,6 +106,11 @@ char *entryGetValue(const entry *entry, size_t *len) {
     }
     /* Skip field content, field null terminator and value sds8 hdr. */
     size_t offset = sdslen(entry) + 1 + sdsHdrSize(SDS_TYPE_8);
+    if (entryHasViewValue(entry)) {
+        ViewValue *value = (ViewValue *)entry + offset;
+        *len = value->len;
+        return (char *)value->buf;
+    }
     sds value = (char *)entry + offset;
     *len = sdslen(value);
     return value;
@@ -159,9 +133,7 @@ entry *entrySetValue(entry *e, sds value) {
 /* Returns the address of the entry allocation. */
 void *entryGetAllocPtr(const entry *entry) {
     char *buf = sdsAllocPtr(entry);
-    if (entryHasViewValue(entry)) {
-        buf -= sizeof(StringViewValue *);
-    } else if (entryHasValuePtr(entry)) {
+    if (entryHasValuePtr(entry)) {
         buf -= sizeof(sds);
     }
     if (entryHasExpiry(entry)) buf -= sizeof(long long);
@@ -205,17 +177,10 @@ bool entryIsExpired(entry *entry) {
 /**************************************** Entry Expiry API - End *****************************************/
 
 void entryFree(entry *entry) {
-    if (entryHasViewValue(entry)) {
-        StringViewValue *ext_value = entryGetViewValueRef(entry);
-        zfree(ext_value);
-    } else if (entryHasValuePtr(entry)) {
+    if (entryHasValuePtr(entry)) {
         size_t len;
         sdsfree(entryGetValue(entry, &len));
     }
-    /*else if (entryHasValuePtr(entry)) {
-        sdsfree(*entryGetValueRef(entry));
-    }
-    */
     zfree(entryGetAllocPtr(entry));
 }
 
@@ -334,6 +299,17 @@ entry *entryCreate(const char *field, size_t field_len, sds value, long long exp
     return entryWrite(buf, buf_size, field, field_len, value, expiry, embed_value, embedded_field_sds_type, embedded_field_sds_size, embedded_value_sds_size, expiry_size);
 }
 
+/* Create an entry with a view value. The view value structure is stored as an embedded field.  */
+entry *createViewValueEntry(sds field, const char *buf, size_t len, long long expiry) {
+    ViewValue view_value = {buf, len};
+    sds value = sdsnewlen(&view_value, sizeof (ViewValue));
+    entry *new_entry = entryCreate(field, sdslen(field), value, expiry);
+    sdsSetAuxBit(new_entry, FIELD_SDS_AUX_BIT_VIEW_VALUE, 1);          // Mark as view value
+                                                                                //
+    debugServerAssert(sdsGetAuxBit(new_entry, FIELD_SDS_AUX_BIT_ENTRY_HAS_VALUE_PTR) == 0);
+    debugServerAssert(sdsGetAuxBit(new_entry, FIELD_SDS_AUX_BIT_VIEW_VALUE) == 1);
+    return new_entry;
+}
 /* Modify the entry's value and/or expiration time.
  * In case the provided value is NULL, will use the existing value.
  * Note that the value ownership is moved to this function and the caller should assume the
@@ -398,7 +374,6 @@ entry *entryUpdate(entry *e, sds value, long long expiry) {
                 size_t value_size = sdsHdrSize(SDS_TYPE_8) + sdsalloc(old_value) + 1;
                 sdswrite(sdsAllocPtr(old_value), value_size, SDS_TYPE_8, value, sdslen(value));
                 sdsfree(value);
-                sdsSetAuxBit(e, FIELD_SDS_AUX_BIT_VIEW_VALUE, 0);
             }
         }
         new_entry = e;
@@ -423,6 +398,7 @@ entry *entryUpdate(entry *e, sds value, long long expiry) {
         debugServerAssert(new_entry != e);
         entryFree(e);
     }
+    sdsSetAuxBit(new_entry, FIELD_SDS_AUX_BIT_VIEW_VALUE, 0);
     /* Check that the new entry was built correctly */
     debugServerAssert(sdsGetAuxBit(new_entry, FIELD_SDS_AUX_BIT_ENTRY_HAS_VALUE_PTR) == (embed_value ? 0 : 1));
     debugServerAssert(sdsGetAuxBit(new_entry, FIELD_SDS_AUX_BIT_ENTRY_HAS_EXPIRY) == (expiry_size > 0 ? 1 : 0));
@@ -434,13 +410,6 @@ entry *entryUpdate(entry *e, sds value, long long expiry) {
 /* Returns memory usage of a entry, including all allocations owned by
  * the entry. */
 size_t entryMemUsage(entry *entry) {
-    if (entryHasViewValue(entry)) {
-        size_t mem = zmalloc_usable_size(entryGetAllocPtr(entry));
-        StringViewValue *ext_value = entryGetViewValueRef(entry);
-        mem += zmalloc_usable_size(ext_value);
-        return mem;
-    }
-
     size_t mem = 0;
     if (entryHasValuePtr(entry)) {
         /* In case the value is not embedded we might not be able to sum all the allocation sizes since the field
@@ -482,7 +451,6 @@ entry *entryDefrag(entry *entry, void *(*defragfn)(void *), sds (*sdsdefragfn)(s
 /* Used for releasing memory to OS to avoid unnecessary CoW. Called when we've
  * forked and memory won't be used again. See zmadvise_dontneed() */
 void entryDismissMemory(entry *entry) {
-    if (entryHasViewValue(entry)) return;
     /* Only dismiss values memory since the field size usually is small. */
     if (entryHasValuePtr(entry)) {
         dismissSds(*entryGetValueRef(entry));

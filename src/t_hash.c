@@ -311,14 +311,14 @@ int hashTypeExists(robj *o, sds field) {
     return hashTypeGetValue(o, field, &vstr, &vlen, &vll, NULL) == C_OK;
 }
 
-/* Set an externalized string field in a hash.
+/* Set a view value field in a hash.
  * Returns 0 on insert, 1 on update.
  * Assumes the key 'o' is already a hash or a new key.
  * The 'field' sds is consumed by this function.
  */
-int hashTypeSetValueView(robj *o, sds field, const char *buf, size_t len) {
+int hashTypeSetViewValue(robj *o, sds field, const char *buf, size_t len) {
     if (o->encoding == OBJ_ENCODING_LISTPACK) {
-        // StringView require HASHTABLE encoding due to aux bits and pointer storage.
+        // require HASHTABLE encoding due to aux bits and pointer storage.
         hashTypeConvert(o, OBJ_ENCODING_HASHTABLE);
     }
 
@@ -327,17 +327,18 @@ int hashTypeSetValueView(robj *o, sds field, const char *buf, size_t len) {
     void *existing;
     if (hashtableFindPositionForInsert(ht, field, &position, &existing)) {
         /* does not exist yet */
-        entry *e = createStringViewEntry(field, buf, len);
+        entry *e = createViewValueEntry(field, buf, len, EXPIRY_NONE);
         hashtableInsertAtPosition(ht, e, &position);
         return 0;
     }
     if (entryHasViewValue(existing)) {
-        StringViewValue *ext_value = entryGetViewValueRef(existing);
+        ViewValue *ext_value = entryGetViewValueRef(existing);
         ext_value->buf = (char *)buf;
         ext_value->len = len;
         return 1;
     }
-    entry *new_entry = createStringViewEntry(field, buf, len);
+    long long entry_expiry = entryGetExpiry(existing);
+    entry *new_entry = createViewValueEntry(field, buf, len, entry_expiry);
     int replaced = hashtableReplaceReallocatedEntry(ht, existing, new_entry);
     serverAssert(replaced);
     entryFree(existing);

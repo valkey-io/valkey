@@ -5256,7 +5256,7 @@ int VM_ZsetRangePrev(ValkeyModuleKey *key) {
 int VM_HashSetValueView(ValkeyModuleKey *key, ValkeyModuleString *field, const char *buf, size_t len) {
     if (key->value == NULL) moduleCreateEmptyKey(key, VALKEYMODULE_KEYTYPE_HASH);
     if (!key || key->value->type != OBJ_HASH || !field || !buf) return VALKEYMODULE_ERR;
-    return hashTypeSetValueView(key->value, field->ptr, buf, len);
+    return hashTypeSetViewValue(key->value, field->ptr, buf, len);
 }
 /* Set the field of the specified hash field to the specified value.
  * If the key is an empty key open for writing, it is created with an empty

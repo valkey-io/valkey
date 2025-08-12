@@ -43,16 +43,16 @@
  * - Used for large value sizes. */
 typedef void entry;
 
-/* Structure representing an externalized string.
+/* Structure representing a view value.
  * This allows modules to store a char* and length directly in a hash field,
  * bypassing normal SDS string allocation for the value.
- * The module using this structure is responsible for the lifetime management
- * of the memory pointed to by 'buf'. Valkey core will not free 'buf'.
+ * The module is responsible for the lifetime management of the memory pointed
+ * to by 'buf'. Valkey core will not free 'buf'.
  */
-typedef struct StringViewValue {
+typedef struct ViewValue {
     const char *buf; /* Pointer to the externalized buffer */
     size_t len;      /* Length of the buffer */
-} StringViewValue;
+} ViewValue;
 
 /* The maximum allocation size we want to use for entries with embedded
  * values. */
@@ -87,8 +87,8 @@ void entryFree(entry *entry);
 
 /* Creates a new entry with the given field, value, and optional expiry. */
 entry *entryCreate(const char *field, size_t field_len, sds value, long long expiry);
-entry *createStringViewEntry(sds field, const char *buf, size_t len);
-StringViewValue *entryGetViewValueRef(const entry *e);
+entry *createViewValueEntry(sds field, const char *buf, size_t len, long long expiry);
+ViewValue *entryGetViewValueRef(const entry *e);
 
 /* Updates the value and/or expiry of an existing entry.
  * In case value is NULL, will use the existing entry value.

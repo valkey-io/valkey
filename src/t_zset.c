@@ -4209,7 +4209,7 @@ void zrandmemberWithCountCommand(client *c, long l, int withscores) {
         void *entry;
         /* Add all the elements into the temporary hashtable. */
         while (hashtableNext(&iter, &entry)) {
-            int res = hashtableAdd(ht, entry);
+            bool res = hashtableAdd(ht, entry);
             serverAssert(res);
         }
         serverAssert(hashtableSize(ht) == size);

@@ -7929,7 +7929,11 @@ static int clusterManagerCommandBackup(int argc, char **argv) {
     int no_issues = clusterManagerCheckCluster(0);
     int cluster_errors_count = (no_issues ? 0 : listLength(cluster_manager.errors));
     config.cluster_manager_command.backup_dir = argv[1];
-    /* TODO: check if backup_dir is a valid directory. */
+    struct stat sb;
+    if (stat(config.cluster_manager_command.backup_dir, &sb) != 0 || !S_ISDIR(sb.st_mode)) {
+        clusterManagerLogErr("[ERR] %s is not a valid directory\n", config.cluster_manager_command.backup_dir);
+        return 0;
+    }
     sds json = sdsnew("[\n");
     int first_node = 0;
     listIter li;
@@ -9032,7 +9036,7 @@ static void findBigKeys(int memkeys, unsigned memkeys_samples) {
     if (sizes) zfree(sizes);
 
     /* We're done */
-    printf("\n-------- summary -------\n\n");
+    printf("\n-------- Summary --------\n\n");
     if (force_cancel_loop) printf("[%05.2f%%] ", pct);
     printf("Sampled %llu keys in the keyspace!\n", sampled);
     printf("Total key length in bytes is %llu (avg len %.2f)\n\n", totlen, totlen ? (double)totlen / sampled : 0);
@@ -9188,7 +9192,7 @@ static void findHotKeys(void) {
     if (freqs) zfree(freqs);
 
     /* We're done */
-    printf("\n-------- summary -------\n\n");
+    printf("\n-------- Summary --------\n\n");
     if (force_cancel_loop) printf("[%05.2f%%] ", pct);
     printf("Sampled %llu keys in the keyspace!\n", sampled);
 

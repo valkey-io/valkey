@@ -6,6 +6,10 @@ on:
       # any PR to a release branch.
       - "[0-9].[0-9]"
       - "unstable"
+    paths-ignore:
+      - '**/*.md'
+      - '**/00-RELEASENOTES'
+      - '**/COPYING'
   schedule:
     - cron: "0 0 * * *"
   workflow_dispatch:

@@ -31,6 +31,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <unistd.h>
+#include <stdbool.h>
 
 /* --- Opaque types --- */
 
@@ -57,6 +58,8 @@ typedef struct {
     /* Compare function, returns 0 if the keys are equal. Defaults to just
      * comparing the pointers for equality. */
     int (*keyCompare)(const void *key1, const void *key2);
+    /* Check for entry access should be masked or not. Masked access will just treat the entry as not-exist. */
+    bool (*validateEntry)(hashtable *ht, void *entry);
     /* Callback to free an entry when it's overwritten or deleted.
      * Optional. */
     void (*entryDestructor)(void *entry);
@@ -77,6 +80,7 @@ typedef struct {
     size_t (*getMetadataSize)(void);
     /* Flag to disable incremental rehashing */
     unsigned instant_rehashing : 1;
+
 } hashtableType;
 
 typedef enum {
@@ -96,6 +100,8 @@ typedef void (*hashtableScanFunction)(void *privdata, void *entry);
 /* Iterator flags */
 #define HASHTABLE_ITER_SAFE (1 << 0)
 #define HASHTABLE_ITER_PREFETCH_VALUES (1 << 1)
+#define HASHTABLE_ITER_SKIP_VALIDATION (1 << 2)
+#define HASHTABLE_ITER_INCLUDE_IMPORTING (1 << 3)
 
 /* --- Prototypes --- */
 
@@ -113,6 +119,7 @@ hashtable *hashtableCreate(hashtableType *type);
 void hashtableRelease(hashtable *ht);
 void hashtableEmpty(hashtable *ht, void(callback)(hashtable *));
 hashtableType *hashtableGetType(hashtable *ht);
+hashtableType *hashtableSetType(hashtable *ht, hashtableType *type);
 void *hashtableMetadata(hashtable *ht);
 size_t hashtableSize(const hashtable *ht);
 size_t hashtableBuckets(hashtable *ht);
@@ -121,33 +128,33 @@ unsigned hashtableEntriesPerBucket(void);
 size_t hashtableMemUsage(hashtable *ht);
 void hashtablePauseAutoShrink(hashtable *ht);
 void hashtableResumeAutoShrink(hashtable *ht);
-int hashtableIsRehashing(hashtable *ht);
-int hashtableIsRehashingPaused(hashtable *ht);
+bool hashtableIsRehashing(hashtable *ht);
+bool hashtableIsRehashingPaused(hashtable *ht);
 void hashtableRehashingInfo(hashtable *ht, size_t *from_size, size_t *to_size);
 int hashtableRehashMicroseconds(hashtable *ht, uint64_t us);
-int hashtableExpand(hashtable *ht, size_t size);
-int hashtableTryExpand(hashtable *ht, size_t size);
-int hashtableExpandIfNeeded(hashtable *ht);
-int hashtableShrinkIfNeeded(hashtable *ht);
-int hashtableRightsizeIfNeeded(hashtable *ht);
+bool hashtableExpand(hashtable *ht, size_t size);
+bool hashtableTryExpand(hashtable *ht, size_t size);
+bool hashtableExpandIfNeeded(hashtable *ht);
+bool hashtableShrinkIfNeeded(hashtable *ht);
+bool hashtableRightsizeIfNeeded(hashtable *ht);
 hashtable *hashtableDefragTables(hashtable *ht, void *(*defragfn)(void *));
 void dismissHashtable(hashtable *ht);
 
 /* Entries */
-int hashtableFind(hashtable *ht, const void *key, void **found);
+bool hashtableFind(hashtable *ht, const void *key, void **found);
 void **hashtableFindRef(hashtable *ht, const void *key);
-int hashtableAdd(hashtable *ht, void *entry);
-int hashtableAddOrFind(hashtable *ht, void *entry, void **existing);
-int hashtableFindPositionForInsert(hashtable *ht, void *key, hashtablePosition *position, void **existing);
+bool hashtableAdd(hashtable *ht, void *entry);
+bool hashtableAddOrFind(hashtable *ht, void *entry, void **existing);
+bool hashtableFindPositionForInsert(hashtable *ht, void *key, hashtablePosition *position, void **existing);
 void hashtableInsertAtPosition(hashtable *ht, void *entry, hashtablePosition *position);
-int hashtablePop(hashtable *ht, const void *key, void **popped);
-int hashtableDelete(hashtable *ht, const void *key);
+bool hashtablePop(hashtable *ht, const void *key, void **popped);
+bool hashtableDelete(hashtable *ht, const void *key);
 void **hashtableTwoPhasePopFindRef(hashtable *ht, const void *key, hashtablePosition *position);
 void hashtableTwoPhasePopDelete(hashtable *ht, hashtablePosition *position);
-int hashtableReplaceReallocatedEntry(hashtable *ht, const void *old_entry, void *new_entry);
+bool hashtableReplaceReallocatedEntry(hashtable *ht, const void *old_entry, void *new_entry);
 void hashtableIncrementalFindInit(hashtableIncrementalFindState *state, hashtable *ht, const void *key);
-int hashtableIncrementalFindStep(hashtableIncrementalFindState *state);
-int hashtableIncrementalFindGetResult(hashtableIncrementalFindState *state, void **found);
+bool hashtableIncrementalFindStep(hashtableIncrementalFindState *state);
+bool hashtableIncrementalFindGetResult(hashtableIncrementalFindState *state, void **found);
 
 /* Iteration & scan */
 size_t hashtableScan(hashtable *ht, size_t cursor, hashtableScanFunction fn, void *privdata);
@@ -157,11 +164,11 @@ void hashtableReinitIterator(hashtableIterator *iterator, hashtable *ht);
 void hashtableResetIterator(hashtableIterator *iter);
 hashtableIterator *hashtableCreateIterator(hashtable *ht, uint8_t flags);
 void hashtableReleaseIterator(hashtableIterator *iter);
-int hashtableNext(hashtableIterator *iter, void **elemptr);
+bool hashtableNext(hashtableIterator *iter, void **elemptr);
 
 /* Random entries */
-int hashtableRandomEntry(hashtable *ht, void **found);
-int hashtableFairRandomEntry(hashtable *ht, void **found);
+bool hashtableRandomEntry(hashtable *ht, void **found);
+bool hashtableFairRandomEntry(hashtable *ht, void **found);
 unsigned hashtableSampleEntries(hashtable *ht, void **dst, unsigned count);
 
 /* Debug & stats */

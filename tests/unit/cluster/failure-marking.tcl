@@ -111,6 +111,16 @@ tags {external:skip tls:skip cluster singledb} {
             }
 
             resume_process $replica_pid
+
+            # Check there are no failure reports left.
+            wait_for_condition 1000 50 {
+                [R 0 CLUSTER COUNT-FAILURE-REPORTS $replica_id] == 0 &&
+                [R 2 CLUSTER COUNT-FAILURE-REPORTS $replica_id] == 0 &&
+                [R 3 CLUSTER COUNT-FAILURE-REPORTS $replica_id] == 0 &&
+                [R 4 CLUSTER COUNT-FAILURE-REPORTS $replica_id] == 0
+            } else {
+                fail "Cluster COUNT-FAILURE-REPORTS is not right."
+            }
         }
     }
 }

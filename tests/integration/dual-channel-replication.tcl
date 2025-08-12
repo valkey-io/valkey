@@ -5,24 +5,6 @@ proc log_file_matches {log pattern} {
     string match $pattern $content
 }
 
-proc get_client_id_by_last_cmd {r cmd} {
-    set client_list [$r client list]
-    set client_id ""
-    set lines [split $client_list "\n"]
-    foreach line $lines {
-        if {[string match *cmd=$cmd* $line]} {
-            set parts [split $line " "]
-            foreach part $parts {
-                if {[string match id=* $part]} {
-                    set client_id [lindex [split $part "="] 1]
-                    return $client_id
-                }
-            }
-        }
-    }
-    return $client_id
-}
-
 # Wait until the process enters a paused state.
 proc wait_process_paused idx {
     set pid [srv $idx pid]
@@ -1291,17 +1273,18 @@ start_server {tags {"dual-channel-replication external:skip"}} {
 
     # Generating RDB will take 100 sec to generate
     $primary debug populate 1000000 primary 1
-    $primary config set rdb-key-save-delay -10
+    $primary config set rdb-key-save-delay 10
     
     start_server {} {
         set replica [srv 0 client]
         set replica_host [srv 0 host]
         set replica_port [srv 0 port]
         set replica_log [srv 0 stdout]
-        
+
         $replica config set dual-channel-replication-enabled yes
         $replica config set loglevel debug
         $replica config set repl-diskless-load flush-before-load
+        $replica config set loading-process-events-interval-bytes 1024
 
         if {$::valgrind} {
             $primary config set repl-timeout 100
@@ -1310,7 +1293,7 @@ start_server {tags {"dual-channel-replication external:skip"}} {
         } else {
             $primary config set repl-timeout 10
             $replica config set repl-timeout 10
-            set max_tries 500
+            set max_tries 1000
         }
 
         test "Replica notice main-connection killed during rdb load callback" {; # https://github.com/valkey-io/valkey/issues/1152

@@ -1,0 +1,19 @@
+{
+    "CANCELSLOTMIGRATIONS": {
+        "summary": "Cancel all current ongoing slot migration operations.",
+        "complexity": "O(N), where N is the number of slot migration operations being cancelled.",
+        "group": "cluster",
+        "since": "9.0.0",
+        "container": "CLUSTER",
+        "function": "clusterCommand",
+        "arity": 2,
+        "command_flags": [
+            "NO_ASYNC_LOADING",
+            "ADMIN",
+            "STALE"
+        ],
+        "reply_schema": {
+            "const": "OK"
+        }
+    }
+}

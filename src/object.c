@@ -647,21 +647,11 @@ void dismissSetObject(robj *o, size_t size_hint) {
 }
 
 /* See dismissObject() */
-void dismissZsetObject(robj *o, size_t size_hint) {
+void dismissZsetObject(robj *o) {
     if (o->encoding == OBJ_ENCODING_SKIPLIST) {
         zset *zs = o->ptr;
-        zskiplist *zsl = zs->zsl;
-        serverAssert(zsl->length != 0);
-        /* We iterate all nodes only when average member size is bigger than a
-         * page size, and there's a high chance we'll actually dismiss something. */
-        if (size_hint / zsl->length >= server.page_size) {
-            zskiplistNode *zn = zsl->tail;
-            while (zn != NULL) {
-                dismissSds(zn->ele);
-                zn = zn->backward;
-            }
-        }
-
+        /* In rare cases, the key of the skiplist may exceed the page size(typically 4KB),
+         * so we skip releasing the skiplist and only release the hashtable. */
         dismissHashtable(zs->ht);
     } else if (o->encoding == OBJ_ENCODING_LISTPACK) {
         dismissMemory(o->ptr, lpBytes((unsigned char *)o->ptr));
@@ -732,15 +722,15 @@ void dismissObject(robj *o, size_t size_hint) {
     /* madvise(MADV_DONTNEED) may not work if Transparent Huge Pages is enabled. */
     if (server.thp_enabled) return;
 
-        /* Currently we use zmadvise_dontneed only when we use jemalloc with Linux.
-         * so we avoid these pointless loops when they're not going to do anything. */
+    /* Currently we use zmadvise_dontneed only when we use jemalloc with Linux.
+     * so we avoid these pointless loops when they're not going to do anything. */
 #if defined(USE_JEMALLOC) && defined(__linux__)
     if (o->refcount != 1) return;
     switch (o->type) {
     case OBJ_STRING: dismissStringObject(o); break;
     case OBJ_LIST: dismissListObject(o, size_hint); break;
     case OBJ_SET: dismissSetObject(o, size_hint); break;
-    case OBJ_ZSET: dismissZsetObject(o, size_hint); break;
+    case OBJ_ZSET: dismissZsetObject(o); break;
     case OBJ_HASH: dismissHashObject(o, size_hint); break;
     case OBJ_STREAM: dismissStreamObject(o, size_hint); break;
     default: break;
@@ -1183,7 +1173,6 @@ size_t objectComputeSize(robj *key, robj *o, size_t sample_size, int dbid) {
             asize = zmalloc_size((void *)o) + sizeof(zset) + sizeof(zskiplist) +
                     hashtableMemUsage(ht) + zmalloc_size(zsl->header);
             while (znode != NULL && samples < sample_size) {
-                elesize += sdsAllocSize(znode->ele);
                 elesize += zmalloc_size(znode);
                 samples++;
                 znode = znode->level[0].forward;

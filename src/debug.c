@@ -215,7 +215,8 @@ void xorObjectDigest(serverDb *db, robj *keyobj, unsigned char *digest, robj *o)
                 const int len = fpconv_dtoa(node->score, buf);
                 buf[len] = '\0';
                 memset(eledigest, 0, 20);
-                mixDigest(eledigest, node->ele, sdslen(node->ele));
+                sds ele = zslGetNodeElement(node);
+                mixDigest(eledigest, ele, sdslen(ele));
                 mixDigest(eledigest, buf, strlen(buf));
                 xorDigest(digest, eledigest, 20);
             }

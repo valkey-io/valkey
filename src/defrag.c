@@ -266,12 +266,8 @@ static void activeDefragZsetNode(void *privdata, void *entry_ref) {
     zskiplistNode **node_ref = (zskiplistNode **)entry_ref;
     zskiplistNode *node = *node_ref;
 
-    /* defragment node internals */
-    sds newsds = activeDefragSds(node->ele);
-    if (newsds) node->ele = newsds;
-
     const double score = node->score;
-    const sds ele = node->ele;
+    const sds ele = zslGetNodeElement(node);
 
     /* find skiplist pointers that need to be updated if we end up moving the
      * skiplist node. */
@@ -283,7 +279,7 @@ static void activeDefragZsetNode(void *privdata, void *entry_ref) {
         zskiplistNode *next = x->level[i].forward;
         while (next &&
                (next->score < score ||
-                (next->score == score && sdscmp(next->ele, ele) < 0))) {
+                (next->score == score && sdscmp(zslGetNodeElement(next), ele) < 0))) {
             x = next;
             next = x->level[i].forward;
         }

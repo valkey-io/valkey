@@ -5095,7 +5095,8 @@ ValkeyModuleString *VM_ZsetRangeCurrentElement(ValkeyModuleKey *key, double *sco
     } else if (key->value->encoding == OBJ_ENCODING_SKIPLIST) {
         zskiplistNode *ln = key->u.zset.current;
         if (score) *score = ln->score;
-        str = createStringObject(ln->ele, sdslen(ln->ele));
+        sds ele = zslGetNodeElement(ln);
+        str = createStringObject(ele, sdslen(ele));
     } else {
         serverPanic("Unsupported zset encoding");
     }
@@ -5152,7 +5153,7 @@ int VM_ZsetRangeNext(ValkeyModuleKey *key) {
                 key->u.zset.er = 1;
                 return 0;
             } else if (key->u.zset.type == VALKEYMODULE_ZSET_RANGE_LEX) {
-                if (!zslLexValueLteMax(next->ele, &key->u.zset.lrs)) {
+                if (!zslLexValueLteMax(zslGetNodeElement(next), &key->u.zset.lrs)) {
                     key->u.zset.er = 1;
                     return 0;
                 }
@@ -5214,7 +5215,7 @@ int VM_ZsetRangePrev(ValkeyModuleKey *key) {
                 key->u.zset.er = 1;
                 return 0;
             } else if (key->u.zset.type == VALKEYMODULE_ZSET_RANGE_LEX) {
-                if (!zslLexValueGteMin(prev->ele, &key->u.zset.lrs)) {
+                if (!zslLexValueGteMin(zslGetNodeElement(prev), &key->u.zset.lrs)) {
                     key->u.zset.er = 1;
                     return 0;
                 }
@@ -11221,7 +11222,7 @@ static void moduleScanKeyHashtableCallback(void *privdata, void *entry) {
         /* no value */
     } else if (o->type == OBJ_ZSET) {
         zskiplistNode *node = (zskiplistNode *)entry;
-        key = node->ele;
+        key = zslGetNodeElement(node);
         value = createStringObjectFromLongDouble(node->score, 0);
     } else if (o->type == OBJ_HASH) {
         key = hashTypeEntryGetField(entry);

@@ -1544,7 +1544,7 @@ void streamPropagateXCLAIM(client *c, robj *key, streamCG *group, robj *groupnam
     argv[12] = shared.lastid;
     argv[13] = createObjectFromStreamID(&group->last_id);
 
-    alsoPropagate(c->db->id, argv, 14, PROPAGATE_AOF | PROPAGATE_REPL);
+    alsoPropagate(c->db->id, argv, 14, PROPAGATE_AOF | PROPAGATE_REPL, c->slot);
 
     decrRefCount(argv[3]);
     decrRefCount(argv[7]);
@@ -1568,7 +1568,7 @@ void streamPropagateGroupID(client *c, robj *key, streamCG *group, robj *groupna
     argv[5] = shared.entriesread;
     argv[6] = createStringObjectFromLongLong(group->entries_read);
 
-    alsoPropagate(c->db->id, argv, 7, PROPAGATE_AOF | PROPAGATE_REPL);
+    alsoPropagate(c->db->id, argv, 7, PROPAGATE_AOF | PROPAGATE_REPL, c->slot);
 
     decrRefCount(argv[4]);
     decrRefCount(argv[6]);
@@ -1588,7 +1588,7 @@ void streamPropagateConsumerCreation(client *c, robj *key, robj *groupname, sds 
     argv[3] = groupname;
     argv[4] = createObject(OBJ_STRING, sdsdup(consumername));
 
-    alsoPropagate(c->db->id, argv, 5, PROPAGATE_AOF | PROPAGATE_REPL);
+    alsoPropagate(c->db->id, argv, 5, PROPAGATE_AOF | PROPAGATE_REPL, c->slot);
 
     decrRefCount(argv[4]);
 }

@@ -14,7 +14,8 @@
  */
 
 #define VALKEYMODULE_CORE_MODULE
-#include "server.h"
+#include "server.h" // Include server.h to use serverLog.
+#include "serverassert.h"
 #include "connection.h"
 
 #if defined __linux__ && defined USE_RDMA /* currently RDMA is only supported on Linux */
@@ -22,7 +23,6 @@
     ((USE_RDMA == 2 /* BUILD_MODULE */) && defined(BUILD_RDMA_MODULE) && (BUILD_RDMA_MODULE == 2))
 #include "connhelpers.h"
 
-#include <assert.h>
 #include <arpa/inet.h>
 #include <rdma/rdma_cma.h>
 #include <signal.h>

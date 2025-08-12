@@ -71,7 +71,7 @@ void syncWithPrimary(connection *conn);
 int RDBGeneratedByReplication = 0;
 
 /* --------------------------- Utility functions ---------------------------- */
-static ConnectionType *connTypeOfReplication(void) {
+ConnectionType *connTypeOfReplication(void) {
     if (server.tls_replication) {
         return connectionTypeTls();
     }
@@ -533,7 +533,6 @@ void feedReplicationBuffer(char *s, size_t len) {
  * replicationFeedStreamFromPrimaryStream() */
 void replicationFeedReplicas(int dictid, robj **argv, int argc) {
     int j, len;
-    char llstr[LONG_STR_SIZE];
 
     /* In case we propagate a command that doesn't touch keys (PING, REPLCONF) we
      * pass dbid=-1 that indicate there is no need to replicate `select` command. */
@@ -565,19 +564,7 @@ void replicationFeedReplicas(int dictid, robj **argv, int argc) {
 
     /* Send SELECT command to every replica if needed. */
     if (dictid != -1 && server.replicas_eldb != dictid) {
-        robj *selectcmd;
-
-        /* For a few DBs we have pre-computed SELECT command. */
-        if (dictid >= 0 && dictid < PROTO_SHARED_SELECT_CMDS) {
-            selectcmd = shared.select[dictid];
-        } else {
-            int dictid_len;
-
-            dictid_len = ll2string(llstr, sizeof(llstr), dictid);
-            selectcmd = createObject(
-                OBJ_STRING, sdscatprintf(sdsempty(), "*2\r\n$6\r\nSELECT\r\n$%d\r\n%s\r\n", dictid_len, llstr));
-        }
-
+        robj *selectcmd = generateSelectCommand(dictid);
         feedReplicationBufferWithObject(selectcmd);
 
         /* Although the SELECT command is not associated with any slot,
@@ -585,7 +572,7 @@ void replicationFeedReplicas(int dictid, robj **argv, int argc) {
          * To cancel-out this accumulation, below adjustment is made. */
         clusterSlotStatsDecrNetworkBytesOutForReplication(sdslen(selectcmd->ptr));
 
-        if (dictid < 0 || dictid >= PROTO_SHARED_SELECT_CMDS) decrRefCount(selectcmd);
+        decrRefCount(selectcmd);
 
         server.replicas_eldb = dictid;
     }
@@ -1732,7 +1719,11 @@ void rdbPipeWriteHandler(struct connection *conn) {
         return;
     } else {
         replica->repl_data->repldboff += nwritten;
-        server.stat_net_repl_output_bytes += nwritten;
+        if (getClientType(replica) == CLIENT_TYPE_SLOT_EXPORT) {
+            server.stat_net_cluster_slot_export_bytes += nwritten;
+        } else {
+            server.stat_net_repl_output_bytes += nwritten;
+        }
         if (replica->repl_data->repldboff < server.rdb_pipe_bufflen) {
             replica->repl_data->repl_last_partial_write = server.unixtime;
             return; /* more data to write.. */
@@ -1806,7 +1797,11 @@ void rdbPipeReadHandler(struct aeEventLoop *eventLoop, int fd, void *clientData,
                 /* Note: when use diskless replication, 'repldboff' is the offset
                  * of 'rdb_pipe_buff' sent rather than the offset of entire RDB. */
                 replica->repl_data->repldboff = nwritten;
-                server.stat_net_repl_output_bytes += nwritten;
+                if (getClientType(replica) == CLIENT_TYPE_SLOT_EXPORT) {
+                    server.stat_net_cluster_slot_export_bytes += nwritten;
+                } else {
+                    server.stat_net_repl_output_bytes += nwritten;
+                }
             }
             /* If we were unable to write all the data to one of the replicas,
              * setup write handler (and disable pipe read handler, below) */
@@ -2670,7 +2665,7 @@ done:
     }
 }
 
-char *receiveSynchronousResponse(connection *conn) {
+sds receiveSynchronousResponse(connection *conn) {
     char buf[256];
     /* Read the reply from the server. */
     if (connSyncReadLine(conn, buf, sizeof(buf), server.repl_syncio_timeout * 1000) == -1) {
@@ -2682,7 +2677,7 @@ char *receiveSynchronousResponse(connection *conn) {
 }
 
 /* Send a pre-formatted multi-bulk command to the connection. */
-char *sendCommandRaw(connection *conn, sds cmd) {
+sds sendCommandRaw(connection *conn, sds cmd) {
     if (connSyncWrite(conn, cmd, sdslen(cmd), server.repl_syncio_timeout * 1000) == -1) {
         return sdscatprintf(sdsempty(), "-Writing to master: %s", connGetLastError(conn));
     }
@@ -2698,7 +2693,7 @@ char *sendCommandRaw(connection *conn, sds cmd) {
  * The command returns an sds string representing the result of the
  * operation. On error the first byte is a "-".
  */
-char *sendCommand(connection *conn, ...) {
+sds sendCommand(connection *conn, ...) {
     va_list ap;
     sds cmd = sdsempty();
     sds cmdargs = sdsempty();
@@ -2721,7 +2716,7 @@ char *sendCommand(connection *conn, ...) {
     sdsfree(cmdargs);
 
     va_end(ap);
-    char *err = sendCommandRaw(conn, cmd);
+    sds err = sendCommandRaw(conn, cmd);
     sdsfree(cmd);
     if (err) return err;
     return NULL;
@@ -2736,7 +2731,7 @@ char *sendCommand(connection *conn, ...) {
  * The command returns an sds string representing the result of the
  * operation. On error the first byte is a "-".
  */
-char *sendCommandArgv(connection *conn, int argc, char **argv, size_t *argv_lens) {
+sds sendCommandArgv(connection *conn, int argc, char **argv, size_t *argv_lens) {
     sds cmd = sdsempty();
     char *arg;
     int i;
@@ -2751,7 +2746,7 @@ char *sendCommandArgv(connection *conn, int argc, char **argv, size_t *argv_lens
         cmd = sdscatlen(cmd, arg, len);
         cmd = sdscatlen(cmd, "\r\n", 2);
     }
-    char *err = sendCommandRaw(conn, cmd);
+    sds err = sendCommandRaw(conn, cmd);
     sdsfree(cmd);
     if (err) return err;
     return NULL;
@@ -2845,22 +2840,38 @@ int sendCurrentOffsetToReplica(client *replica) {
     return C_OK;
 }
 
+sds replicationSendAuth(connection *conn) {
+    char *args[] = {"AUTH", NULL, NULL};
+    size_t lens[] = {4, 0, 0};
+    int argc = 1;
+    if (server.primary_user) {
+        args[argc] = server.primary_user;
+        lens[argc] = strlen(server.primary_user);
+        argc++;
+    }
+    args[argc] = server.primary_auth;
+    lens[argc] = sdslen(server.primary_auth);
+    argc++;
+    return sendCommandArgv(conn, argc, args, lens);
+}
+
+robj *generateSelectCommand(int dictid) {
+    /* For a few DBs we have pre-computed SELECT command. */
+    if (dictid >= 0 && dictid < PROTO_SHARED_SELECT_CMDS) {
+        return shared.select[dictid];
+    }
+    char llstr[LONG_STR_SIZE];
+    int dictid_len;
+    dictid_len = ll2string(llstr, sizeof(llstr), dictid);
+    return createObject(
+        OBJ_STRING, sdscatfmt(sdsempty(), "*2\r\n$6\r\nSELECT\r\n$%i\r\n%s\r\n", dictid_len, llstr));
+}
+
 static int dualChannelReplHandleHandshake(connection *conn, sds *err) {
     dualChannelServerLog(LL_DEBUG, "Received first reply from primary using rdb connection.");
     /* AUTH with the primary if required. */
     if (server.primary_auth) {
-        char *args[] = {"AUTH", NULL, NULL};
-        size_t lens[] = {4, 0, 0};
-        int argc = 1;
-        if (server.primary_user) {
-            args[argc] = server.primary_user;
-            lens[argc] = strlen(server.primary_user);
-            argc++;
-        }
-        args[argc] = server.primary_auth;
-        lens[argc] = sdslen(server.primary_auth);
-        argc++;
-        *err = sendCommandArgv(conn, argc, args, lens);
+        *err = replicationSendAuth(conn);
         if (*err) {
             dualChannelServerLog(LL_WARNING, "Sending command to primary in dual channel replication handshake: %s", *err);
             return C_ERR;
@@ -3604,18 +3615,7 @@ int syncWithPrimaryHandleSendHandshakeState(connection *conn) {
     sds err;
     /* AUTH with the primary if required. */
     if (server.primary_auth) {
-        char *args[3] = {"AUTH", NULL, NULL};
-        size_t lens[3] = {4, 0, 0};
-        int argc = 1;
-        if (server.primary_user) {
-            args[argc] = server.primary_user;
-            lens[argc] = strlen(server.primary_user);
-            argc++;
-        }
-        args[argc] = server.primary_auth;
-        lens[argc] = sdslen(server.primary_auth);
-        argc++;
-        err = sendCommandArgv(conn, argc, args, lens);
+        err = replicationSendAuth(conn);
         if (err) goto err;
     }
 

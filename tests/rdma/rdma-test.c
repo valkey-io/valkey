@@ -379,7 +379,12 @@ static int connRdmaHandleCq(RdmaContext *ctx) {
             rdmaFatal("RDMA: get cq event failed");
             return -1;
         }
-    } else if (ibv_req_notify_cq(ev_cq, 0)) {
+
+        return 0;
+    }
+
+    ibv_ack_cq_events(ctx->cq, 1);
+    if (ibv_req_notify_cq(ev_cq, 0)) {
         rdmaFatal("RDMA: notify cq failed");
         return -1;
     }
@@ -392,8 +397,6 @@ pollcq:
     } else if (ret == 0) {
         return 0;
     }
-
-    ibv_ack_cq_events(ctx->cq, 1);
 
     if (wc.status != IBV_WC_SUCCESS) {
         rdmaFatal("RDMA: send/recv failed");

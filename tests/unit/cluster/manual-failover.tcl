@@ -399,7 +399,7 @@ start_cluster 3 1 {tags {external:skip cluster} overrides {cluster-ping-interval
 start_cluster 3 1 {tags {external:skip cluster}} {
     # In the R0/R3 shard, R0 is the primary node and R3 is the replica.
     #
-    # We trigger a manually failover on R3.
+    # We trigger a manual failover on R3.
     #
     # When R3 becomes the new primary node, it will broadcast a message to all
     # nodes in the cluster.
@@ -506,7 +506,7 @@ start_cluster 3 1 {tags {external:skip cluster}} {
 start_cluster 3 2 {tags {external:skip cluster}} {
     # In the R0/R3/R4 shard, R0 is the primary node, R3 and R4 are the replicas.
     #
-    # We trigger a manually failover on R3.
+    # We trigger a manual failover on R3.
     #
     # When R3 becomes the new primary node, it will broadcast a message to all
     # nodes in the cluster.
@@ -525,21 +525,21 @@ start_cluster 3 2 {tags {external:skip cluster}} {
         # We make R4 become a fresh new node.
         isolate_node 4
 
-        # Add R4 and wait for R4 to become a replica of R0.
-        R 4 cluster meet [srv 0 host] [srv 0 port]
-        wait_for_condition 50 100 {
-            [cluster_get_node_by_id 4 [R 0 cluster myid]] != {}
-        } else {
-            fail "Node R4 never learned about node R0"
-        }
-        R 4 cluster replicate [R 0 cluster myid]
-        wait_for_sync [srv -4 client]
-
-        wait_for_cluster_propagation
-
         set R0_nodeid [R 0 cluster myid]
         set R3_nodeid [R 3 cluster myid]
         set R4_nodeid [R 4 cluster myid]
+
+        # Add R4 and wait for R4 to become a replica of R0.
+        R 4 cluster meet [srv 0 host] [srv 0 port]
+        wait_for_condition 50 100 {
+            [cluster_get_node_by_id 4 $R0_nodeid] != {}
+        } else {
+            fail "Node R4 never learned about node R0"
+        }
+        R 4 cluster replicate $R0_nodeid
+        wait_for_sync [srv -4 client]
+
+        wait_for_cluster_propagation
 
         # Ensure that related nodes do not reconnect.
         R 3 debug disable-cluster-reconnection 1

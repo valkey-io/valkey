@@ -3541,7 +3541,7 @@ int clusterProcessPacket(clusterLink *link) {
                  * with an epoch smaller than or equal to the incoming claim. This
                  * allows us to start a new election as soon as possible. */
                 server.cluster->failover_auth_time = 0;
-                serverLog(LL_WARNING,
+                serverLog(LL_NOTICE,
                           "Failover election in progress for epoch %llu, but received a claim from "
                           "node %.40s (%s) with an equal or higher epoch %llu. Resetting the election "
                           "since we cannot win an election in the past.",
@@ -3858,6 +3858,16 @@ int clusterProcessPacket(clusterLink *link) {
                 }
 
                 if (sender_claimed_primary && nodeIsReplica(sender_claimed_primary)) {
+                    if (nodeIsReplica(myself) && areInSameShard(myself, sender_claimed_primary) &&
+                        server.cluster->failover_auth_time && !server.cluster->failover_auth_sent) {
+                        server.cluster->failover_auth_time = 0;
+                        serverLog(LL_NOTICE,
+                                  "A failover occurred in my shard %.40s, node %.40s (%s) now is the new primary."
+                                  "Resetting the election that have not yet begun due to delays.",
+                                  myself->shard_id, sender_claimed_primary->name, sender_claimed_primary->human_nodename);
+                        clusterDoBeforeSleep(CLUSTER_TODO_HANDLE_FAILOVER);
+                    }
+
                     /* `primary` is still a `replica` in this observer node's view;
                      * update its role and configEpoch */
                     clusterSetNodeAsPrimary(sender_claimed_primary);

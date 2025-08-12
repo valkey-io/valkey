@@ -3781,7 +3781,7 @@ int clusterProcessPacket(clusterLink *link) {
                 /* Node is a replica. */
                 clusterNode *sender_claimed_primary = clusterLookupNode(hdr->replicaof, CLUSTER_NAMELEN);
 
-                if (nodeEpoch(sender_claimed_primary) > sender_claimed_config_epoch) {
+                if (sender_claimed_primary && nodeEpoch(sender_claimed_primary) > sender_claimed_config_epoch) {
                     serverLog(LL_NOTICE,
                               "Ignore stale message from %.40s (%s) in shard %.40s;"
                               " gossip config epoch: %llu, current config epoch: %llu",

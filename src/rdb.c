@@ -975,14 +975,15 @@ ssize_t rdbSaveObject(rio *rdb, robj *o, robj *key, int dbid) {
             void *next;
             while (hashtableNext(&iter, &next)) {
                 sds field = entryGetField(next);
-                sds value = entryGetValue(next);
+                size_t value_len;
+                unsigned char *value = (unsigned char *)entryGetValue(next, &value_len);
 
                 if ((n = rdbSaveRawString(rdb, (unsigned char *)field, sdslen(field))) == -1) {
                     hashtableResetIterator(&iter);
                     return -1;
                 }
                 nwritten += n;
-                if ((n = rdbSaveRawString(rdb, (unsigned char *)value, sdslen(value))) == -1) {
+                if ((n = rdbSaveRawString(rdb, value, value_len)) == -1) {
                     hashtableResetIterator(&iter);
                     return -1;
                 }
@@ -2144,7 +2145,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error) {
                 (sdslen(field) > server.hash_max_listpack_value || sdslen(value) > server.hash_max_listpack_value ||
                  !lpSafeToAdd(o->ptr, sdslen(field) + sdslen(value)))) {
                 hashTypeConvert(o, OBJ_ENCODING_HASHTABLE);
-                entry *entry = entryCreate(field, value, EXPIRY_NONE);
+                entry *entry = entryCreate(field, sdslen(field), value, EXPIRY_NONE);
                 sdsfree(field);
                 if (!hashtableAdd((hashtable *)o->ptr, entry)) {
                     rdbReportCorruptRDB("Duplicate hash fields detected");
@@ -2202,7 +2203,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error) {
             }
 
             /* Add pair to hash table */
-            entry *entry = entryCreate(field, value, itemexpiry);
+            entry *entry = entryCreate(field, sdslen(field), value, itemexpiry);
             sdsfree(field);
             if (!hashtableAdd((hashtable *)o->ptr, entry)) {
                 rdbReportCorruptRDB("Duplicate hash fields detected");

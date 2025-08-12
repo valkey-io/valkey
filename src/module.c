@@ -5251,6 +5251,13 @@ int VM_ZsetRangePrev(ValkeyModuleKey *key) {
  * See also VM_ValueLength(), which returns the number of fields in a hash.
  * -------------------------------------------------------------------------- */
 
+/* Sets a view of a buffer to a hash field.
+ * The function takes the hash key, hash field, and a buffer along with its length. */
+int VM_HashSetValueView(ValkeyModuleKey *key, ValkeyModuleString *field, const char *buf, size_t len) {
+    if (key->value == NULL) moduleCreateEmptyKey(key, VALKEYMODULE_KEYTYPE_HASH);
+    if (!key || key->value->type != OBJ_HASH || !field || !buf) return VALKEYMODULE_ERR;
+    return hashTypeSetValueView(key->value, field->ptr, buf, len);
+}
 /* Set the field of the specified hash field to the specified value.
  * If the key is an empty key open for writing, it is created with an empty
  * hash value, in order to set the specified field.
@@ -11245,8 +11252,9 @@ static void moduleScanKeyHashtableCallback(void *privdata, void *entry) {
         value = createStringObjectFromLongDouble(node->score, 0);
     } else if (o->type == OBJ_HASH) {
         key = entryGetField(entry);
-        sds val = entryGetValue(entry);
-        value = createStringObject(val, sdslen(val));
+        size_t val_len;
+        char *val = entryGetValue(entry, &val_len);
+        value = createStringObject(val, val_len);
     } else {
         serverPanic("unexpected object type");
     }
@@ -13989,6 +13997,7 @@ void moduleRegisterCoreAPI(void) {
     REGISTER_API(ZsetRangeEndReached);
     REGISTER_API(HashSet);
     REGISTER_API(HashGet);
+    REGISTER_API(HashSetValueView);
     REGISTER_API(StreamAdd);
     REGISTER_API(StreamDelete);
     REGISTER_API(StreamIteratorStart);

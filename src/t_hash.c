@@ -235,10 +235,11 @@ int hashTypeGetValue(robj *o, sds field, unsigned char **vstr, unsigned int *vle
         void *entry = NULL;
         hashtableFind(o->ptr, field, &entry);
         if (entry) {
-            sds value = entryGetValue(entry);
+            size_t len = 0;
+            char *value = entryGetValue(entry, &len);
             serverAssert(value != NULL);
             *vstr = (unsigned char *)value;
-            *vlen = sdslen(value);
+            *vlen = len;
             if (expiry) *expiry = entryGetExpiry(entry);
             return C_OK;
         }
@@ -308,6 +309,39 @@ int hashTypeExists(robj *o, sds field) {
     long long vll = LLONG_MAX;
 
     return hashTypeGetValue(o, field, &vstr, &vlen, &vll, NULL) == C_OK;
+}
+
+/* Set an externalized string field in a hash.
+ * Returns 0 on insert, 1 on update.
+ * Assumes the key 'o' is already a hash or a new key.
+ * The 'field' sds is consumed by this function.
+ */
+int hashTypeSetValueView(robj *o, sds field, const char *buf, size_t len) {
+    if (o->encoding == OBJ_ENCODING_LISTPACK) {
+        // StringView require HASHTABLE encoding due to aux bits and pointer storage.
+        hashTypeConvert(o, OBJ_ENCODING_HASHTABLE);
+    }
+
+    hashtable *ht = o->ptr;
+    hashtablePosition position;
+    void *existing;
+    if (hashtableFindPositionForInsert(ht, field, &position, &existing)) {
+        /* does not exist yet */
+        entry *e = createStringViewEntry(field, buf, len);
+        hashtableInsertAtPosition(ht, e, &position);
+        return 0;
+    }
+    if (entryHasViewValue(existing)) {
+        StringViewValue *ext_value = entryGetViewValueRef(existing);
+        ext_value->buf = (char *)buf;
+        ext_value->len = len;
+        return 1;
+    }
+    entry *new_entry = createStringViewEntry(field, buf, len);
+    int replaced = hashtableReplaceReallocatedEntry(ht, existing, new_entry);
+    serverAssert(replaced);
+    entryFree(existing);
+    return 1;
 }
 
 /* Add a new field, overwrite the old with the new value if it already exists.
@@ -384,7 +418,7 @@ int hashTypeSet(robj *o, sds field, sds value, long long expiry, int flags) {
         void *existing;
         if (hashtableFindPositionForInsert(ht, field, &position, &existing)) {
             /* does not exist yet */
-            entry *entry = entryCreate(field, v, expiry);
+            entry *entry = entryCreate(field, sdslen(field), v, expiry);
             hashtableInsertAtPosition(ht, entry, &position);
             /* In case an expiry is set on the new entry, we need to track it */
             if (expiry != EXPIRY_NONE) {
@@ -675,49 +709,31 @@ void hashTypeCurrentFromListpack(hashTypeIterator *hi,
 /* Get the field or value at iterator cursor, for an iterator on a hash value
  * encoded as a hash table. Prototype is similar to
  * `hashTypeGetFromHashTable`. */
-sds hashTypeCurrentFromHashTable(hashTypeIterator *hi, int what) {
+char *hashTypeCurrentFromHashTable(hashTypeIterator *hi, int what, size_t *len) {
     serverAssert(hi->encoding == OBJ_ENCODING_HASHTABLE);
 
     if (what & OBJ_HASH_FIELD) {
-        return entryGetField(hi->next);
-    } else {
-        return entryGetValue(hi->next);
+        sds key = entryGetField(hi->next);
+        *len = sdslen(key);
+        return key;
     }
-}
-
-/* Higher level function of hashTypeCurrent*() that returns the hash value
- * at current iterator position.
- *
- * The returned element is returned by reference in either *vstr and *vlen if
- * it's returned in string form, or stored in *vll if it's returned as
- * a number.
- *
- * If *vll is populated *vstr is set to NULL, so the caller
- * can always check the function return by checking the return value
- * type checking if vstr == NULL. */
-static void hashTypeCurrentObject(hashTypeIterator *hi, int what, unsigned char **vstr, unsigned int *vlen, long long *vll) {
-    if (hi->encoding == OBJ_ENCODING_LISTPACK) {
-        *vstr = NULL;
-        hashTypeCurrentFromListpack(hi, what, vstr, vlen, vll);
-    } else if (hi->encoding == OBJ_ENCODING_HASHTABLE) {
-        sds ele = hashTypeCurrentFromHashTable(hi, what);
-        *vstr = (unsigned char *)ele;
-        *vlen = sdslen(ele);
-    } else {
-        serverPanic("Unknown hash encoding");
-    }
+    return entryGetValue(hi->next, len);
 }
 
 /* Return the field or value at the current iterator position as a new
  * SDS string. */
 sds hashTypeCurrentObjectNewSds(hashTypeIterator *hi, int what) {
-    unsigned char *vstr;
-    unsigned int vlen;
-    long long vll;
-
-    hashTypeCurrentObject(hi, what, &vstr, &vlen, &vll);
-    if (vstr) return sdsnewlen(vstr, vlen);
-    return sdsfromlonglong(vll);
+    unsigned char *vstr = NULL;
+    if (hi->encoding == OBJ_ENCODING_LISTPACK) {
+        long long vll;
+        unsigned int vlen;
+        hashTypeCurrentFromListpack(hi, what, &vstr, &vlen, &vll);
+        if (vstr) return sdsnewlen(vstr, vlen);
+        return sdsfromlonglong(vll);
+    }
+    size_t vlen;
+    vstr = (unsigned char *)hashTypeCurrentFromHashTable(hi, what, &vlen);
+    return sdsnewlen(vstr, vlen);
 }
 
 robj *hashTypeLookupWriteOrCreate(client *c, robj *key) {
@@ -750,7 +766,7 @@ void hashTypeConvertListpack(robj *o, int enc) {
         while (hashTypeNext(&hi) != C_ERR) {
             sds field = hashTypeCurrentObjectNewSds(&hi, OBJ_HASH_FIELD);
             sds value = hashTypeCurrentObjectNewSds(&hi, OBJ_HASH_VALUE);
-            entry *entry = entryCreate(field, value, EXPIRY_NONE);
+            entry *entry = entryCreate(field, sdslen(field), value, EXPIRY_NONE);
             sdsfree(field);
             if (!hashtableAdd(ht, entry)) {
                 entryFree(entry);
@@ -805,11 +821,13 @@ robj *hashTypeDup(robj *o) {
         hashTypeInitIterator(o, &hi);
         while (hashTypeNext(&hi) != C_ERR) {
             /* Extract a field-value pair from an original hash object.*/
-            sds field = hashTypeCurrentFromHashTable(&hi, OBJ_HASH_FIELD);
-            sds value = hashTypeCurrentFromHashTable(&hi, OBJ_HASH_VALUE);
+            size_t field_str_len, value_str_len;
+            char *field_str = hashTypeCurrentFromHashTable(&hi, OBJ_HASH_FIELD, &field_str_len);
+            char *value_str = hashTypeCurrentFromHashTable(&hi, OBJ_HASH_VALUE, &value_str_len);
             long long expiry = entryGetExpiry(hi.next);
             /* Add a field-value pair to a new hash object. */
-            entry *entry = entryCreate(field, sdsdup(value), expiry);
+            sds value = sdsnewlen(value_str, value_str_len);
+            entry *entry = entryCreate(field_str, field_str_len, value, expiry);
             hashtableAdd(ht, entry);
             if (expiry != EXPIRY_NONE)
                 hashTypeTrackEntry(hobj, entry);
@@ -859,11 +877,7 @@ static void hashTypeRandomElement(robj *hashobj, unsigned long hashsize, listpac
             field->sval = (unsigned char *)sds_field;
             field->slen = sdslen(sds_field);
             if (val) {
-                entry *hash_entry = e;
-                sds sds_val = entryGetValue(hash_entry);
-                val->sval = (unsigned char *)sds_val;
-                val->slen =
-                    sdslen(sds_val);
+                val->sval = (unsigned char *)entryGetValue(e, (size_t *)&val->slen);
             }
         }
         hashTypeIgnoreTTL(hashobj, false);
@@ -1073,8 +1087,9 @@ static void addHashIteratorCursorToReply(writePreparedClient *wpc, hashTypeItera
         else
             addWritePreparedReplyBulkLongLong(wpc, vll);
     } else if (hi->encoding == OBJ_ENCODING_HASHTABLE) {
-        sds value = hashTypeCurrentFromHashTable(hi, what);
-        addWritePreparedReplyBulkCBuffer(wpc, value, sdslen(value));
+        size_t len;
+        char *value = hashTypeCurrentFromHashTable(hi, what, &len);
+        addWritePreparedReplyBulkCBuffer(wpc, value, len);
     } else {
         serverPanic("Unknown hash encoding");
     }
@@ -2008,10 +2023,11 @@ void hrandfieldWithCountCommand(client *c, long l, int withvalues) {
         void *next;
         while (hashtableNext(&iter, &next)) {
             sds field = entryGetField(next);
-            sds value = entryGetValue(next);
+            size_t value_len;
+            char *value = entryGetValue(next, &value_len);
             if (withvalues && c->resp > 2) addWritePreparedReplyArrayLen(wpc, 2);
             addWritePreparedReplyBulkCBuffer(wpc, field, sdslen(field));
-            if (withvalues) addWritePreparedReplyBulkCBuffer(wpc, value, sdslen(value));
+            if (withvalues) addWritePreparedReplyBulkCBuffer(wpc, value, value_len);
         }
 
         hashtableResetIterator(&iter);

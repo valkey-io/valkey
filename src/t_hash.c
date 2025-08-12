@@ -1255,6 +1255,8 @@ void hsetexCommand(client *c) {
             if (hashTypeDelete(o, c->argv[i]->ptr)) {
                 new_argv[new_argc++] = c->argv[i];
                 incrRefCount(c->argv[i]);
+                /* we treat this case exactly as active expiration. */
+                server.stat_expiredfields++;
                 changes++;
             }
         } else {
@@ -1431,6 +1433,8 @@ void hgetexCommand(client *c) {
         addHashFieldToReply(c, o, c->argv[i]->ptr);
         if (o && set_expired) {
             changed = hashTypeDelete(o, c->argv[i]->ptr);
+            /* we treat this case exactly as active expiration. */
+            if (changed) server.stat_expiredfields++;
         } else if (set_expiry) {
             changed = hashTypeSetExpire(o, c->argv[i]->ptr, when, 0) == EXPIRATION_MODIFICATION_SUCCESSFUL;
         } else if (persist) {
@@ -1663,6 +1667,8 @@ void hexpireGenericCommand(client *c, long long basetime, int unit) {
                 new_argv[new_argc++] = c->argv[fields_index + i];
                 incrRefCount(c->argv[fields_index + i]);
                 result = EXPIRATION_MODIFICATION_EXPIRE_ASAP;
+                /* we treat this case exactly as active expiration. */
+                server.stat_expiredfields++;
                 expired++;
             }
         } else {

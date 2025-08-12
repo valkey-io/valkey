@@ -586,10 +586,10 @@ start_cluster 3 2 {tags {external:skip cluster}} {
 
 start_cluster 3 2 {tags {external:skip cluster}} {
     # This test consists of two phases.
-    # The first block, we will create a scenario where two primary are on the same shard. See #2279 for more details.
-    # The second block, we will test the behavior of the node when packets arrive out of order. See #2301 for more details.
+    # The first phase, we will create a scenario where two primary are on the same shard. See #2279 for more details.
+    # The second phase, we will test the behavior of the node when packets arrive out of order. See #2301 for more details.
     #
-    # The first block.
+    # The first phase.
     # In the R0/R3/R4 shard, R0 is the primary (cluster-allow-replica-migration no), R3 is the replica, R4 will be a replica later.
     # 1. R0 goes down, and R3 trigger a failover and become the new primary.
     # 2. R0 (old primary) continues to be down while another R4 is added as a replica of R3 (new primary).
@@ -605,7 +605,7 @@ start_cluster 3 2 {tags {external:skip cluster}} {
     #    c. R0 (empty primary) then updates the actual shard_id of R4 (new primary) while processing the ping extensions.
     # 9. R0 (empty primary) and R4 (new primary) end up being primaries in the same shard while R4 continues to own slots.
     #
-    # The second block.
+    # The second phase.
     # In the R0/R3/R4 shard, R4 is the primary, R3 is the replica, and R0 is en empty primary.
     # 1. We will perform a failover on R3, and perform a replicate on R0 to make R0 a replica of R3.
     # 2. When R3 becomes the new primary node, it will broadcast a message to all nodes in the cluster.
@@ -615,7 +615,7 @@ start_cluster 3 2 {tags {external:skip cluster}} {
     # 6. R1 will receive messages from R0 after the replication, R0 is a replica, and its primary is R3.
     # 7. R2 will receive messages from R4 after the failover, R4 is a replica, and its primary is R3.
     test "Combined the test cases of #2279 and #2301 to test #2431" {
-        # ============== Block 1 start ==============
+        # ============== Phase 1 start ==============
         R 0 config set cluster-allow-replica-migration no
 
         set CLUSTER_PACKET_TYPE_NONE -1
@@ -673,11 +673,11 @@ start_cluster 3 2 {tags {external:skip cluster}} {
         R 0 debug close-cluster-link-on-packet-drop 0
         R 0 debug drop-cluster-packet-filter $CLUSTER_PACKET_TYPE_NONE
 
-        # ============== Block 1 end ==============
+        # ============== Phase 1 end ==============
 
         wait_for_cluster_propagation
 
-        # ============== Block 2 start ==============
+        # ============== Phase 2 start ==============
 
         set R0_nodeid [R 0 cluster myid]
         set R1_nodeid [R 1 cluster myid]
@@ -766,7 +766,7 @@ start_cluster 3 2 {tags {external:skip cluster}} {
             fail "The node is not marked with the correct flag in R2's view"
         }
 
-        # ============== Block 2 end ==============
+        # ============== Phase 2 end ==============
 
         R 0 debug disable-cluster-reconnection 0
         R 1 debug disable-cluster-reconnection 0

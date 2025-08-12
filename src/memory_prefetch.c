@@ -120,7 +120,7 @@ static void initBatchInfo(hashtable **tables) {
 }
 
 static void prefetchEntry(KeyPrefetchInfo *info) {
-    if (hashtableIncrementalFindStep(&info->hashtab_state) == 1) {
+    if (hashtableIncrementalFindStep(&info->hashtab_state)) {
         /* Not done yet */
         moveToNextKey();
     } else if (server.io_threads_num >= server.min_io_threads_copy_avoid) {

@@ -65,7 +65,7 @@ bool entryHasEmbeddedValue(entry *entry) {
 
 /* Returns true in case the entry holds a view of the value.
  * Returns false otherwise. */
-bool entryIsStringViewValue(const entry *e) {
+bool entryHasViewValue(const entry *e) {
     return sdsGetAuxBit(e, FIELD_SDS_AUX_BIT_VIEW_VALUE);
 }
 /* Returns true in case the entry has expiration timestamp.
@@ -100,7 +100,7 @@ entry *createStringViewEntry(sds field, const char *buf, size_t len) {
     sds embedded_field_sds = sdswrite(alloc_buf + sizeof(void *), field_size, field_sds_type, field, field_len);
 
     sdsSetAuxBit(embedded_field_sds, FIELD_SDS_AUX_BIT_VIEW_VALUE, 1);          // Mark as view value
-    serverAssert(entryIsStringViewValue(embedded_field_sds));
+    serverAssert(entryHasViewValue(embedded_field_sds));
 
     return (entry *)embedded_field_sds;
 }
@@ -114,7 +114,7 @@ static sds *entryGetValueRef(const entry *entry) {
 }
 
 StringViewValue *entryGetViewValueRef(const entry *entry) {
-    serverAssert(entryIsStringViewValue(entry));
+    serverAssert(entryHasViewValue(entry));
     char *field_data = sdsAllocPtr(entry);
     field_data -= sizeof(StringViewValue);
     return (StringViewValue *)field_data;
@@ -122,7 +122,7 @@ StringViewValue *entryGetViewValueRef(const entry *entry) {
 
 /* Returns the entry's value. */
 char *entryGetValue(const entry *entry, size_t *len) {
-    if (entryIsStringViewValue(entry)) {
+    if (entryHasViewValue(entry)) {
         serverAssert(entryHasValuePtr(entry)); // StringView must use value pointer
         StringViewValue *ext_value = entryGetViewValueRef(entry);
         *len = ext_value->len;
@@ -130,7 +130,9 @@ char *entryGetValue(const entry *entry, size_t *len) {
     }
     if (entryHasValuePtr(entry)) {
         sds *value = entryGetValueRef(entry);
-        *len = sdslen(*value);
+        if (*value) {
+            *len = sdslen(*value);
+        }
         return *value;
     }
     /* Skip field content, field null terminator and value sds8 hdr. */
@@ -157,7 +159,7 @@ entry *entrySetValue(entry *e, sds value) {
 /* Returns the address of the entry allocation. */
 void *entryGetAllocPtr(const entry *entry) {
     char *buf = sdsAllocPtr(entry);
-    if (entryIsStringViewValue(entry)) {
+    if (entryHasViewValue(entry)) {
         buf -= sizeof(StringViewValue *);
     } else if (entryHasValuePtr(entry)) {
         buf -= sizeof(sds);
@@ -203,12 +205,10 @@ bool entryIsExpired(entry *entry) {
 /**************************************** Entry Expiry API - End *****************************************/
 
 void entryFree(entry *entry) {
-  /*
-    if (entryIsStringViewValue(entry)) {
+    if (entryHasViewValue(entry)) {
         StringViewValue *ext_value = entryGetViewValueRef(entry);
         zfree(ext_value);
-    } else */
-    if (entryHasValuePtr(entry)) {
+    } else if (entryHasValuePtr(entry)) {
         size_t len;
         sdsfree(entryGetValue(entry, &len));
     }
@@ -434,7 +434,7 @@ entry *entryUpdate(entry *e, sds value, long long expiry) {
 /* Returns memory usage of a entry, including all allocations owned by
  * the entry. */
 size_t entryMemUsage(entry *entry) {
-    if (entryIsStringViewValue(entry)) {
+    if (entryHasViewValue(entry)) {
         size_t mem = zmalloc_usable_size(entryGetAllocPtr(entry));
         StringViewValue *ext_value = entryGetViewValueRef(entry);
         mem += zmalloc_usable_size(ext_value);
@@ -463,7 +463,7 @@ size_t entryMemUsage(entry *entry) {
  * If the location of the entry changed we return the new location,
  * otherwise we return NULL. */
 entry *entryDefrag(entry *entry, void *(*defragfn)(void *), sds (*sdsdefragfn)(sds)) {
-    if (entryIsStringViewValue(entry)) return NULL;
+    if (entryHasViewValue(entry)) return NULL;
     if (entryHasValuePtr(entry)) {
         sds *value_ref = entryGetValueRef(entry);
         sds new_value = sdsdefragfn(*value_ref);
@@ -482,7 +482,7 @@ entry *entryDefrag(entry *entry, void *(*defragfn)(void *), sds (*sdsdefragfn)(s
 /* Used for releasing memory to OS to avoid unnecessary CoW. Called when we've
  * forked and memory won't be used again. See zmadvise_dontneed() */
 void entryDismissMemory(entry *entry) {
-    if (entryIsStringViewValue(entry)) return;
+    if (entryHasViewValue(entry)) return;
     /* Only dismiss values memory since the field size usually is small. */
     if (entryHasValuePtr(entry)) {
         dismissSds(*entryGetValueRef(entry));

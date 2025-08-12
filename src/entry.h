@@ -74,7 +74,7 @@ long long entryGetExpiry(const entry *entry);
 bool entryHasExpiry(const entry *entry);
 
 /* Returns true if the entry value is externalized. */
-bool entryIsStringViewValue(const entry *e);
+bool entryHasViewValue(const entry *e);
 
 /* Sets the expiration timestamp. */
 entry *entrySetExpiry(entry *entry, long long expiry);

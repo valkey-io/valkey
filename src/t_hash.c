@@ -331,7 +331,7 @@ int hashTypeSetValueView(robj *o, sds field, const char *buf, size_t len) {
         hashtableInsertAtPosition(ht, e, &position);
         return 0;
     }
-    if (entryIsStringViewValue(existing)) {
+    if (entryHasViewValue(existing)) {
         StringViewValue *ext_value = entryGetViewValueRef(existing);
         ext_value->buf = (char *)buf;
         ext_value->len = len;

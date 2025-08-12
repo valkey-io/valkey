@@ -39,9 +39,9 @@ proc check_myhash_and_expired_subkeys {r myhash expected_len initial_expired exp
 proc get_short_expire_value {command} {
     expr {
         ($command eq "HEXPIRE" || $command eq "EX") ? 1 :
-        ($command eq "HPEXPIRE" || $command eq "PX") ? 10 :
+        ($command eq "HPEXPIRE" || $command eq "PX") ? 1000 :
         ($command eq "HEXPIREAT" || $command eq "EXAT") ? [clock seconds] + 1 :
-        [clock milliseconds] + 10
+        [clock milliseconds] + 1000
     }
 }
 
@@ -2385,13 +2385,29 @@ start_server {tags {"hashexpire external:skip"}} {
                 assert_equal {1} [psubscribe $rd_replica_2 __keyevent@*]
     
                 # Create hash and timing - f1 < f2 < f3 expiry times
-                set f1_exp [expr {[clock seconds] + 10000}]
+                set f1_exp [expr {[clock seconds] + 1000000}]
+
+                wait_for_ofs_sync $primary $replica_1
+                wait_for_ofs_sync $replica_1 $replica_2
 
                 ############################################# STEUP HASH #############################################
-                $primary HSET myhash f1 v1 f2 v2 ;# Should trigger 3 hset
+                $primary HSETEX myhash FIELDS 2 f1 v1 f2 v2 ;# Should trigger 3 hset
+                wait_for_ofs_sync $primary $replica_1
+                wait_for_ofs_sync $replica_1 $replica_2
+
+                # Verify hset event was generated on all 3 nodes
+                foreach rd [list $rd_primary $rd_replica_1 $rd_replica_2] {
+                    assert_keyevent_patterns $rd myhash hset
+                }
+
                 $primary HEXPIREAT myhash $f1_exp FIELDS 1 f1 ;# Should trigger 3 hexpire
                 wait_for_ofs_sync $primary $replica_1
                 wait_for_ofs_sync $replica_1 $replica_2
+
+                # Verify hexpire event was generated on all 3 nodes
+                foreach rd [list $rd_primary $rd_replica_1 $rd_replica_2] {
+                    assert_keyevent_patterns $rd myhash hexpire
+                }
                 
                 $primary HPEXPIRE myhash 0 FIELDS 1 f1 ;# Should trigger 1 hexpired (for primary) and 2 hdel (for replicas)
                 wait_for_ofs_sync $primary $replica_1
@@ -2408,9 +2424,6 @@ start_server {tags {"hashexpire external:skip"}} {
                 }
                 
                 # primary gets hexpired and replicas get hdel
-                foreach rd [list $rd_primary $rd_replica_1 $rd_replica_2] {
-                    assert_keyevent_patterns $rd myhash hset hexpire
-                }
                 assert_keyevent_patterns $rd_primary myhash hexpired
                 assert_keyevent_patterns $rd_replica_1 myhash hdel
                 assert_keyevent_patterns $rd_replica_2 myhash hdel

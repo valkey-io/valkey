@@ -36,6 +36,8 @@
  */
 
 #include "server.h"
+#include "cluster.h"
+#include "cluster_migrateslots.h"
 
 /*-----------------------------------------------------------------------------
  * Incremental collection of expired keys.
@@ -60,14 +62,14 @@ static double avg_ttl_factor[16] = {0.98, 0.9604, 0.941192, 0.922368, 0.903921, 
  *
  * The parameter 'now' is the current time in milliseconds as is passed
  * to the function to avoid too many gettimeofday() syscalls. */
-int activeExpireCycleTryExpire(serverDb *db, robj *val, long long now) {
+int activeExpireCycleTryExpire(serverDb *db, robj *val, long long now, int didx) {
     long long t = objectGetExpire(val);
     serverAssert(t >= 0);
     if (now > t) {
         enterExecutionUnit(1, 0);
         sds key = objectGetKey(val);
         robj *keyobj = createStringObject(key, sdslen(key));
-        deleteExpiredKeyAndPropagate(db, keyobj);
+        deleteExpiredKeyAndPropagateWithDictIndex(db, keyobj, didx);
         decrRefCount(keyobj);
         exitExecutionUnit();
         return 1;
@@ -140,11 +142,11 @@ typedef struct activeExpireFieldIterator {
     unsigned long cursor; /* Cursor for keys with volatile items (field-level TTL) */
 } activeExpireFieldIterator;
 
-void expireScanCallback(void *privdata, void *entry) {
+void expireScanCallback(void *privdata, void *entry, int didx) {
     robj *val = entry;
     expireScanData *data = privdata;
     long long ttl = objectGetExpire(val) - data->now;
-    if (activeExpireCycleTryExpire(data->db, val, data->now)) {
+    if (activeExpireCycleTryExpire(data->db, val, data->now, didx)) {
         data->expired++;
         /* Propagate the DEL command */
         postExecutionUnitOperations();
@@ -159,13 +161,13 @@ void expireScanCallback(void *privdata, void *entry) {
 
 /* Expires up to `max_entries` fields from a hash with volatile fields.
  * Sets `has_more_expired_entries` if more remain. Updates stats. */
-void fieldExpireScanCallback(void *privdata, void *volaKey) {
+void fieldExpireScanCallback(void *privdata, void *volaKey, int didx) {
     expireScanData *data = privdata;
     robj *o = volaKey;
     serverAssert(o);
     serverAssert(hashTypeHasVolatileFields(o));
     mstime_t now = server.mstime;
-    size_t expired_fields = dbReclaimExpiredFields(o, data->db, now, data->max_entries);
+    size_t expired_fields = dbReclaimExpiredFields(o, data->db, now, data->max_entries, didx);
     if (expired_fields) {
         data->has_more_expired_entries = (expired_fields == data->max_entries);
         data->expired++;
@@ -265,7 +267,7 @@ static long long activeExpireCycleJob(enum activeExpiryType jobType, int cycleTy
         int db_done = 0; /* The scan of the current DB is done? */
         int update_avg_ttl_times = 0, repeat = 0;
 
-        hashtableScanFunction scan_cb;
+        kvstoreScanFunction scan_cb;
 
         kvstore *kvs = NULL;
         if (db) {
@@ -548,10 +550,11 @@ void expireReplicaKeys(void) {
         while (dbids && dbid < server.dbnum) {
             if ((dbids & 1) != 0) {
                 serverDb *db = server.db[dbid];
-                robj *expire = db == NULL ? NULL : dbFindExpires(db, keyname);
+                int didx = getKVStoreIndexForKey(keyname);
+                robj *expire = db == NULL ? NULL : dbFindExpiresWithDictIndex(db, keyname, didx);
                 int expired = 0;
 
-                if (expire && activeExpireCycleTryExpire(db, expire, start)) {
+                if (expire && activeExpireCycleTryExpire(db, expire, start, didx)) {
                     expired = 1;
                     /* Propagate the DEL (writable replicas do not propagate anything to other replicas,
                      * but they might propagate to AOF) and trigger module hooks. */
@@ -649,7 +652,11 @@ int checkAlreadyExpired(long long when) {
      * (possibly in the past) and wait for an explicit DEL from the primary.
      *
      * If the server is a primary and in the import mode, we also add the already
-     * expired key and wait for an explicit DEL from the import source. */
+     * expired key and wait for an explicit DEL from the import source.
+     *
+     * If the server is receiving the key from a slot migration, we will accept
+     * expired keys and wait for the source to propagate deletion. */
+    if (server.current_client && server.current_client->slot_migration_job) return 0;
     return (when <= commandTimeSnapshot() && !server.loading && !server.primary_host && !server.import_mode);
 }
 
@@ -966,6 +973,9 @@ expirationPolicy getExpirationPolicyWithFlags(int flags) {
     if (server.primary_host != NULL) {
         if (server.current_client && (server.current_client->flag.primary)) return POLICY_IGNORE_EXPIRE;
         if (!(flags & EXPIRE_FORCE_DELETE_EXPIRED)) return POLICY_KEEP_EXPIRED;
+    } else if (server.current_client && server.current_client->slot_migration_job) {
+        /* Slot migration client should be treated like a primary */
+        return POLICY_IGNORE_EXPIRE;
     } else if (server.import_mode) {
         /* If we are running in the import mode on a primary, instead of
          * evicting the expired key from the database, we return ASAP:

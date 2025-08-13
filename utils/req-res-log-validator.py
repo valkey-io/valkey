@@ -58,6 +58,11 @@ IGNORED_COMMANDS = {
     # Commands to which we decided not write a reply schema
     "pfdebug",
     "lolwut",
+    # Slot migration commands are not tested for RC1
+    "cluster|syncslots",
+    "cluster|cancelslotmigrations",
+    "cluster|getslotmigrations",
+    "cluster|migrateslots",
 }
 
 class Request(object):

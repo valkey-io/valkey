@@ -180,15 +180,17 @@ struct hdr_histogram;
 #define RIO_CONNSET_WRITE_MAX_CHUNK_SIZE 16384
 
 /* Instantaneous metrics tracking. */
-#define STATS_METRIC_SAMPLES 16               /* Number of samples per metric. */
-#define STATS_METRIC_COMMAND 0                /* Number of commands executed. */
-#define STATS_METRIC_NET_INPUT 1              /* Bytes read to network. */
-#define STATS_METRIC_NET_OUTPUT 2             /* Bytes written to network. */
-#define STATS_METRIC_NET_INPUT_REPLICATION 3  /* Bytes read to network during replication. */
-#define STATS_METRIC_NET_OUTPUT_REPLICATION 4 /* Bytes written to network during replication. */
-#define STATS_METRIC_EL_CYCLE 5               /* Number of eventloop cycled. */
-#define STATS_METRIC_EL_DURATION 6            /* Eventloop duration. */
-#define STATS_METRIC_COUNT 7
+#define STATS_METRIC_SAMPLES 16 /* Number of samples per metric. */
+typedef enum {
+    STATS_METRIC_COMMAND = 0,            /* Number of commands executed. */
+    STATS_METRIC_NET_INPUT,              /* Bytes read to network. */
+    STATS_METRIC_NET_OUTPUT,             /* Bytes written to network. */
+    STATS_METRIC_NET_INPUT_REPLICATION,  /* Bytes read to network during replication. */
+    STATS_METRIC_NET_OUTPUT_REPLICATION, /* Bytes written to network during replication. */
+    STATS_METRIC_EL_CYCLE,               /* Number of eventloop cycled. */
+    STATS_METRIC_EL_DURATION,            /* Eventloop duration. */
+    STATS_METRIC_COUNT                   /* Total count */
+} instantaneous_metric_type;
 
 /* Protocol and I/O related defines */
 #define PROTO_IOBUF_LEN (1024 * 16)         /* Generic I/O buffer size */
@@ -377,14 +379,16 @@ typedef enum blocking_type {
 
 /* Client classes for client limits, currently used only for
  * the max-client-output-buffer limit implementation. */
-#define CLIENT_TYPE_NORMAL 0     /* Normal req-reply clients + MONITORs */
-#define CLIENT_TYPE_REPLICA 1    /* Replicas. */
-#define CLIENT_TYPE_PUBSUB 2     /* Clients subscribed to PubSub channels. */
-#define CLIENT_TYPE_PRIMARY 3    /* Primary. */
-#define CLIENT_TYPE_COUNT 4      /* Total number of client types. */
-#define CLIENT_TYPE_OBUF_COUNT 3 /* Number of clients to expose to output \
-                                    buffer configuration. Just the first  \
-                                    three: normal, replica, pubsub. */
+#define CLIENT_TYPE_NORMAL 0      /* Normal req-reply clients + MONITORs */
+#define CLIENT_TYPE_REPLICA 1     /* Replicas. */
+#define CLIENT_TYPE_PUBSUB 2      /* Clients subscribed to PubSub channels. */
+#define CLIENT_TYPE_PRIMARY 3     /* Primary. */
+#define CLIENT_TYPE_SLOT_IMPORT 4 /* Slot import. */
+#define CLIENT_TYPE_SLOT_EXPORT 5 /* Slot export. */
+#define CLIENT_TYPE_COUNT 6       /* Total number of client types. */
+#define CLIENT_TYPE_OBUF_COUNT 3  /* Number of clients to expose to output \
+                                     buffer configuration. Just the first  \
+                                     three: normal, replica, pubsub. */
 
 /* Type of commandlog */
 typedef enum {
@@ -632,6 +636,7 @@ typedef enum {
     PAUSE_BY_CLIENT_COMMAND = 0,
     PAUSE_DURING_SHUTDOWN,
     PAUSE_DURING_FAILOVER,
+    PAUSE_DURING_SLOT_MIGRATION,
     NUM_PAUSE_PURPOSES /* This value is the number of purposes above. */
 } pause_purpose;
 
@@ -1237,6 +1242,9 @@ typedef struct LastWrittenBuf {
                       * This length differs from bufpos in case of copy avoidance */
 } LastWrittenBuf;
 
+/* Forward declaration of slotMigrationJob */
+typedef struct slotMigrationJob slotMigrationJob;
+
 typedef struct client {
     /* Basic client information and connection. */
     uint64_t id; /* Client incremental unique ID. */
@@ -1260,11 +1268,12 @@ typedef struct client {
     time_t last_interaction;          /* Time of the last interaction, used for timeout */
     serverDb *db;                     /* Pointer to currently SELECTed DB. */
     /* Client state structs. */
-    ClientPubSubData *pubsub_data;    /* Required for: pubsub commands and tracking. lazily initialized when first needed */
-    ClientReplicationData *repl_data; /* Required for Replication operations. lazily initialized when first needed */
-    ClientModuleData *module_data;    /* Required for Module operations. lazily initialized when first needed */
-    multiState *mstate;               /* MULTI/EXEC state, lazily initialized when first needed */
-    blockingState *bstate;            /* Blocking state, lazily initialized when first needed */
+    ClientPubSubData *pubsub_data;        /* Required for: pubsub commands and tracking. lazily initialized when first needed */
+    ClientReplicationData *repl_data;     /* Required for Replication operations. lazily initialized when first needed */
+    ClientModuleData *module_data;        /* Required for Module operations. lazily initialized when first needed */
+    multiState *mstate;                   /* MULTI/EXEC state, lazily initialized when first needed */
+    blockingState *bstate;                /* Blocking state, lazily initialized when first needed */
+    slotMigrationJob *slot_migration_job; /* Pointer to the slot migration job, or NULL. */
     /* Output buffer and reply handling */
     long duration;                       /* Current command duration. Used for measuring latency of blocking/non-blocking cmds */
     char *buf;                           /* Output buffer */
@@ -1387,7 +1396,7 @@ struct sharedObjectsStruct {
         *mbulkhdr[OBJ_SHARED_BULKHDR_LEN], /* "*<value>\r\n" */
         *bulkhdr[OBJ_SHARED_BULKHDR_LEN],  /* "$<value>\r\n" */
         *maphdr[OBJ_SHARED_BULKHDR_LEN],   /* "%<value>\r\n" */
-        *sethdr[OBJ_SHARED_BULKHDR_LEN];   /* "~<value>\r\n" */
+        *sethdr[OBJ_SHARED_BULKHDR_LEN];
     sds minstring, maxstring;
 };
 
@@ -1433,7 +1442,7 @@ extern clientBufferLimitsConfig clientBufferLimitsDefaults[CLIENT_TYPE_OBUF_COUN
  * after the propagation of the executed command. */
 typedef struct serverOp {
     robj **argv;
-    int argc, dbid, target;
+    int argc, dbid, target, slot;
 } serverOp;
 
 /* Defines an array of Operations. There is an API to add to this
@@ -1458,6 +1467,8 @@ struct serverMemOverhead {
     size_t clients_replicas;
     size_t clients_normal;
     size_t cluster_links;
+    size_t cluster_slot_import;
+    size_t cluster_slot_export;
     size_t aof_buffer;
     size_t lua_caches;
     size_t functions_caches;
@@ -1791,6 +1802,8 @@ struct valkeyServer {
     long long stat_net_repl_input_bytes;           /* Bytes read during replication, added to stat_net_input_bytes in 'info'. */
     /* Bytes written during replication, added to stat_net_output_bytes in 'info'. */
     long long stat_net_repl_output_bytes;
+    long long stat_net_cluster_slot_import_bytes;       /* Bytes read from slot import sources. */
+    long long stat_net_cluster_slot_export_bytes;       /* Bytes written to slot export sources. */
     size_t stat_current_cow_peak;                       /* Peak size of copy on write bytes. */
     size_t stat_current_cow_bytes;                      /* Copy on write bytes while child is active. */
     monotime stat_current_cow_updated;                  /* Last update time of stat_current_cow_bytes */
@@ -2176,12 +2189,20 @@ struct valkeyServer {
                                                             * the cluster after it is forgotten with CLUSTER FORGET. */
     int cluster_slot_stats_enabled;                        /* Cluster slot usage statistics tracking enabled. */
     mstime_t cluster_mf_timeout;                           /* Milliseconds to do a manual failover. */
+    unsigned long cluster_slot_migration_log_max_len;      /* Maximum count of migrations to display in the
+                                                            * migration log, after which we will clear finished
+                                                            * migrations. */
+    ssize_t slot_migration_max_failover_repl_bytes;        /* Maximum amount of in flight bytes for a slot migration
+                                                            * failover to be attempted. */
     /* Debug config that goes along with cluster_drop_packet_filter. When set, the link is closed on packet drop. */
     uint32_t debug_cluster_close_link_on_packet_drop : 1;
     /* Debug config to control the random ping. When set, we will disable the random ping in clusterCron. */
     uint32_t debug_cluster_disable_random_ping : 1;
     /* Debug config to control the reconnection. When set, we will disable the reconnection in clusterCron. */
     uint32_t debug_cluster_disable_reconnection : 1;
+    /* Debug config to expose intermediary slot migration states. */
+    uint32_t debug_slot_migration_prevent_pause : 1;
+    uint32_t debug_slot_migration_prevent_failover : 1;
     sds cached_cluster_slot_info[CACHE_CONN_TYPE_MAX]; /* Index in array is a bitwise or of CACHE_CONN_TYPE_* */
     /* Scripting */
     mstime_t busy_reply_threshold;  /* Script / module timeout in milliseconds */
@@ -2712,12 +2733,12 @@ void dictVanillaFree(void *val);
 #define READ_FLAGS_ERROR_BIG_BULK_COUNT (1 << 6)
 #define READ_FLAGS_ERROR_MBULK_UNEXPECTED_CHARACTER (1 << 7)
 #define READ_FLAGS_ERROR_MBULK_INVALID_BULK_LEN (1 << 8)
-#define READ_FLAGS_ERROR_UNEXPECTED_INLINE_FROM_PRIMARY (1 << 9)
+#define READ_FLAGS_ERROR_UNEXPECTED_INLINE_FROM_REPLICATED_CLIENT (1 << 9)
 #define READ_FLAGS_ERROR_UNBALANCED_QUOTES (1 << 10)
 #define READ_FLAGS_INLINE_ZERO_QUERY_LEN (1 << 11)
 #define READ_FLAGS_PARSING_NEGATIVE_MBULK_LEN (1 << 12)
 #define READ_FLAGS_PARSING_COMPLETED (1 << 13)
-#define READ_FLAGS_PRIMARY (1 << 14)
+#define READ_FLAGS_REPLICATED (1 << 14)
 #define READ_FLAGS_DONT_PARSE (1 << 15)
 #define READ_FLAGS_AUTH_REQUIRED (1 << 16)
 #define READ_FLAGS_COMMAND_NOT_FOUND (1 << 17)
@@ -2831,6 +2852,7 @@ void unpauseActions(pause_purpose purpose);
 uint32_t isPausedActions(uint32_t action_bitmask);
 uint32_t isPausedActionsWithUpdate(uint32_t action_bitmask);
 char *getPausedReason(pause_purpose purpose);
+uint32_t getPausedActionsWithPurpose(pause_purpose purpose);
 mstime_t getPausedActionTimeout(uint32_t action, pause_purpose *purpose);
 void updatePausedActions(void);
 void unblockPostponedClients(void);
@@ -3055,11 +3077,16 @@ void clearFailoverState(void);
 void updateFailoverStatus(void);
 void abortFailover(const char *err);
 const char *getFailoverStateString(void);
+sds getReplicaPortString(void);
 int sendCurrentOffsetToReplica(client *replica);
 void addRdbReplicaToPsyncWait(client *replica);
 void initClientReplicationData(client *c);
 void freeClientReplicationData(client *c);
 void replicaReceiveRDBFromPrimaryToDisk(connection *conn, int is_dual_channel);
+sds replicationSendAuth(connection *conn);
+sds receiveSynchronousResponse(connection *conn);
+ConnectionType *connTypeOfReplication(void);
+robj *generateSelectCommand(int dictid);
 
 /* Generic persistence functions */
 void startLoadingFile(size_t size, char *filename, int rdbflags);
@@ -3099,6 +3126,7 @@ void aofOpenIfNeededOnServerStart(void);
 void aofManifestFree(aofManifest *am);
 int aofDelHistoryFiles(void);
 int aofRewriteLimited(void);
+int rewriteSlotToAppendOnlyFileRio(rio *aof, int db_num, int hashslot, size_t *key_count);
 
 /* Child info */
 void openChildInfoPipe(void);
@@ -3270,7 +3298,7 @@ int commandCheckArity(struct serverCommand *cmd, int argc, sds *err);
 void startCommandExecution(void);
 int incrCommandStatsOnError(struct serverCommand *cmd, int flags);
 void call(client *c, int flags);
-void alsoPropagate(int dbid, robj **argv, int argc, int target);
+void alsoPropagate(int dbid, robj **argv, int argc, int target, int slot);
 void postExecutionUnitOperations(void);
 void serverOpArrayFree(serverOpArray *oa);
 void forceCommandPropagation(client *c, int flags);
@@ -3283,6 +3311,7 @@ int prepareForShutdown(client *c, int flags);
 void replyToClientsBlockedOnShutdown(void);
 int abortShutdown(void);
 void afterCommand(client *c);
+int isReplicatedClient(client *c);
 int mustObeyClient(client *c);
 #ifdef __GNUC__
 void _serverLog(int level, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
@@ -3330,12 +3359,14 @@ int getKeySlot(sds key);
 int calculateKeySlot(sds key);
 
 /* kvstore wrappers */
+int getKVStoreIndexForKey(sds key);
 int dbExpand(serverDb *db, uint64_t db_size, int try_expand);
 int dbExpandExpires(serverDb *db, uint64_t db_size, int try_expand);
 robj *dbFind(serverDb *db, sds key);
 robj *dbFindExpires(serverDb *db, sds key);
+robj *dbFindExpiresWithDictIndex(serverDb *db, sds key, int dict_index);
 unsigned long long dbSize(serverDb *db);
-unsigned long long dbScan(serverDb *db, unsigned long long cursor, hashtableScanFunction scan_cb, void *privdata);
+unsigned long long dbScan(serverDb *db, unsigned long long cursor, kvstoreScanFunction scan_cb, void *privdata);
 
 /* Set data type */
 robj *setTypeCreate(sds value, size_t size_hint);
@@ -3500,9 +3531,10 @@ int setModuleNumericConfig(ModuleConfig *config, long long val, const char **err
 /* db.c -- Keyspace access API */
 int removeExpire(serverDb *db, robj *key);
 void deleteExpiredKeyAndPropagate(serverDb *db, robj *keyobj);
+void deleteExpiredKeyAndPropagateWithDictIndex(serverDb *db, robj *keyobj, int dict_index);
 void deleteExpiredKeyFromOverwriteAndPropagate(client *c, robj *keyobj);
-void propagateDeletion(serverDb *db, robj *key, int lazy);
-size_t dbReclaimExpiredFields(robj *o, serverDb *db, mstime_t now, unsigned long max_entries);
+void propagateDeletion(serverDb *db, robj *key, int lazy, int slot);
+size_t dbReclaimExpiredFields(robj *o, serverDb *db, mstime_t now, unsigned long max_entries, int didx);
 int keyIsExpired(serverDb *db, robj *key);
 long long getExpire(serverDb *db, robj *key);
 robj *setExpire(client *c, serverDb *db, robj *key, long long when);
@@ -3544,6 +3576,7 @@ robj *dbUnshareStringValue(serverDb *db, robj *key, robj *o);
 #define EMPTYDB_NO_FLAGS 0           /* No flags. */
 #define EMPTYDB_ASYNC (1 << 0)       /* Reclaim memory in another thread. */
 #define EMPTYDB_NOFUNCTIONS (1 << 1) /* Indicate not to flush the functions. */
+typedef int(emptyDataHashtableFilter)(int didx);
 long long emptyData(int dbnum, int flags, void(callback)(hashtable *));
 long long emptyDbStructure(serverDb **dbarray, int dbnum, int async, void(callback)(hashtable *));
 void resetDbExpiryState(serverDb *db);
@@ -3898,6 +3931,7 @@ void sunsubscribeCommand(client *c);
 void watchCommand(client *c);
 void unwatchCommand(client *c);
 void clusterCommand(client *c);
+void clusterFlushslotCommand(client *c);
 void clusterSlotStatsCommand(client *c);
 void restoreCommand(client *c);
 void migrateCommand(client *c);

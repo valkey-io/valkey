@@ -1047,9 +1047,7 @@ static client createClient(char *cmd, int len, int seqlen, client from, int thre
         el = thread->el;
     }
     if (config.idlemode == 0) {
-        if (config.ct == VALKEY_CONN_RDMA) {
-            writeHandler(el, c->context->fd, c, 0);
-        } else {
+        if (config.ct != VALKEY_CONN_RDMA) {
             aeCreateFileEvent(el, c->context->fd, AE_WRITABLE, writeHandler, c);
         }
     } else
@@ -1193,6 +1191,20 @@ static void startBenchmarkThreads(void) {
     for (i = 0; i < config.num_threads; i++) pthread_join(config.threads[i]->thread, NULL);
 }
 
+#ifdef USE_RDMA
+static void issueFirstRequestForClients(aeEventLoop *el, int this_thread, int nt) {
+    listNode *ln = config.clients->head;
+    int count = 0;
+    while (ln) {
+        if (count++ % nt == this_thread) {
+            client c = ln->value;
+            writeHandler(el, c->context->fd, c, 0);
+        }
+        ln = ln->next;
+    }
+}
+#endif
+
 /* Benchmark a sequence of commands. The cmd is RESP encoded of length len and
  * seqlen is the number of commands included in cmd. */
 static void benchmarkSequence(const char *title, char *cmd, int len, int seqlen) {
@@ -1226,9 +1238,14 @@ static void benchmarkSequence(const char *title, char *cmd, int len, int seqlen)
     createMissingClients(c);
 
     config.start = mstime();
-    if (!config.num_threads)
+    if (!config.num_threads) {
+#ifdef USE_RDMA
+        if (config.idlemode == 0 && config.ct == VALKEY_CONN_RDMA) {
+            issueFirstRequestForClients(config.el, 0, 1);
+        }
+#endif
         aeMain(config.el);
-    else
+    } else
         startBenchmarkThreads();
     config.totlatency = mstime() - config.start;
 
@@ -1274,6 +1291,11 @@ static void freeBenchmarkThreads(void) {
 
 static void *execBenchmarkThread(void *ptr) {
     benchmarkThread *thread = (benchmarkThread *)ptr;
+#ifdef USE_RDMA
+    if (config.idlemode == 0 && config.ct == VALKEY_CONN_RDMA) {
+        issueFirstRequestForClients(thread->el, thread->index, config.num_threads);
+    }
+#endif
     aeMain(thread->el);
     return NULL;
 }

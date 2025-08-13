@@ -1596,7 +1596,6 @@ void resetClusterStats(void) {
     clusterSlotStatResetAll();
 }
 
-
 void clusterCommandFlushslot(client *c) {
     int slot;
     int lazy = server.lazyfree_lazy_user_flush;

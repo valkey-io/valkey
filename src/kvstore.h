@@ -12,19 +12,24 @@ typedef struct _kvstoreHashtableIterator kvstoreHashtableIterator;
 typedef int(kvstoreScanShouldSkipHashtable)(hashtable *d);
 /* Return 1 if we should skip the hashtable in expand. */
 typedef int(kvstoreExpandShouldSkipHashtableIndex)(int didx);
+typedef void (*kvstoreScanFunction)(void *privdata, void *entry, int didx);
 
 #define KVSTORE_ALLOCATE_HASHTABLES_ON_DEMAND (1 << 0)
 #define KVSTORE_FREE_EMPTY_HASHTABLES (1 << 1)
+
+#define KVSTORE_INDEX_NOT_FOUND (-1)
+
 kvstore *kvstoreCreate(hashtableType *type, int num_hashtables_bits, int flags);
 void kvstoreEmpty(kvstore *kvs, void(callback)(hashtable *));
 void kvstoreRelease(kvstore *kvs);
 unsigned long long kvstoreSize(kvstore *kvs);
+unsigned long long kvstoreImportingSize(kvstore *kvs);
 unsigned long kvstoreBuckets(kvstore *kvs);
 size_t kvstoreMemUsage(kvstore *kvs);
 unsigned long long kvstoreScan(kvstore *kvs,
                                unsigned long long cursor,
                                int onlydidx,
-                               hashtableScanFunction scan_cb,
+                               kvstoreScanFunction scan_cb,
                                kvstoreScanShouldSkipHashtable *skip_cb,
                                void *privdata);
 bool kvstoreExpand(kvstore *kvs, uint64_t newsize, int try_expand, kvstoreExpandShouldSkipHashtableIndex *skip_cb);
@@ -66,6 +71,7 @@ bool kvstoreHashtableRandomEntry(kvstore *kvs, int didx, void **found);
 bool kvstoreHashtableFairRandomEntry(kvstore *kvs, int didx, void **found);
 unsigned int kvstoreHashtableSampleEntries(kvstore *kvs, int didx, void **dst, unsigned int count);
 bool kvstoreHashtableExpand(kvstore *kvs, int didx, unsigned long size);
+void kvstoreSetIsImporting(kvstore *kvs, int didx, int is_importing);
 unsigned long kvstoreHashtableScanDefrag(kvstore *kvs,
                                          int didx,
                                          unsigned long v,

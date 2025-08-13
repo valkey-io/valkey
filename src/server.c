@@ -36,6 +36,7 @@
 #include "monotonic.h"
 #include "cluster.h"
 #include "cluster_slot_stats.h"
+#include "cluster_migrateslots.h"
 #include "commandlog.h"
 #include "bio.h"
 #include "latency.h"
@@ -911,8 +912,8 @@ int clientsCronResizeQueryBuffer(client *c) {
         if (idletime > 2) {
             /* 1) Query is idle for a long time. */
             size_t remaining = sdslen(c->querybuf) - c->qb_pos;
-            if (!c->flag.primary && !remaining) {
-                /* If the client is not a primary and no data is pending,
+            if (!isReplicatedClient(c) && !remaining) {
+                /* If the client is not replicated and no data is pending,
                  * The client can safely use the shared query buffer in the next read - free the client's querybuf. */
                 sdsfree(c->querybuf);
                 /* By setting the querybuf to NULL, the client will use the shared query buffer in the next read.
@@ -1489,10 +1490,10 @@ long long serverCron(struct aeEventLoop *eventLoop, long long id, void *clientDa
         monotime current_time = getMonotonicUs();
         long long factor = 1000000; // us
         trackInstantaneousMetric(STATS_METRIC_COMMAND, server.stat_numcommands, current_time, factor);
-        trackInstantaneousMetric(STATS_METRIC_NET_INPUT, server.stat_net_input_bytes + server.stat_net_repl_input_bytes + server.bio_stat_net_repl_input_bytes,
+        trackInstantaneousMetric(STATS_METRIC_NET_INPUT, server.stat_net_input_bytes + server.stat_net_repl_input_bytes + server.bio_stat_net_repl_input_bytes + server.stat_net_cluster_slot_import_bytes,
                                  current_time, factor);
         trackInstantaneousMetric(STATS_METRIC_NET_OUTPUT,
-                                 server.stat_net_output_bytes + server.stat_net_repl_output_bytes, current_time,
+                                 server.stat_net_output_bytes + server.stat_net_repl_output_bytes + server.stat_net_cluster_slot_export_bytes, current_time,
                                  factor);
         trackInstantaneousMetric(STATS_METRIC_NET_INPUT_REPLICATION, server.stat_net_repl_input_bytes + server.bio_stat_net_repl_input_bytes, current_time,
                                  factor);
@@ -2743,6 +2744,8 @@ void resetServerStats(void) {
     server.stat_net_repl_input_bytes = 0;
     server.bio_stat_net_repl_input_bytes = 0;
     server.stat_net_repl_output_bytes = 0;
+    server.stat_net_cluster_slot_export_bytes = 0;
+    server.stat_net_cluster_slot_import_bytes = 0;
     server.stat_unexpected_error_replies = 0;
     server.stat_total_error_replies = 0;
     server.stat_dump_payload_sanitizations = 0;
@@ -2788,6 +2791,9 @@ serverDb *createDatabase(int id) {
     db->keys = kvstoreCreate(&kvstoreKeysHashtableType, slot_count_bits, flags);
     db->expires = kvstoreCreate(&kvstoreExpiresHashtableType, slot_count_bits, flags);
     db->keys_with_volatile_items = kvstoreCreate(&kvstoreExpiresHashtableType, slot_count_bits, flags);
+    if (clusterIsAnySlotImporting()) {
+        clusterMarkImportingSlotsInDb(db);
+    }
     db->blocking_keys = dictCreate(&keylistDictType);
     db->blocking_keys_unblock_on_nokey = dictCreate(&objectKeyPointerValueDictType);
     db->ready_keys = dictCreate(&objectKeyPointerValueDictType);
@@ -3330,7 +3336,7 @@ void resetErrorTableStats(void) {
 
 /* ========================== OP Array API ============================ */
 
-int serverOpArrayAppend(serverOpArray *oa, int dbid, robj **argv, int argc, int target) {
+int serverOpArrayAppend(serverOpArray *oa, int dbid, robj **argv, int argc, int target, int slot) {
     serverOp *op;
     int prev_capacity = oa->capacity;
 
@@ -3346,6 +3352,7 @@ int serverOpArrayAppend(serverOpArray *oa, int dbid, robj **argv, int argc, int 
     op->argv = argv;
     op->argc = argc;
     op->target = target;
+    op->slot = slot;
     oa->numops++;
     return oa->numops;
 }
@@ -3462,9 +3469,14 @@ struct serverCommand *lookupCommandOrOriginal(robj **argv, int argc) {
     return cmd;
 }
 
+/* Determines if commands on this client are replicated from some source */
+int isReplicatedClient(client *c) {
+    return c->flag.primary || (c->slot_migration_job && isImportSlotMigrationJob(c->slot_migration_job));
+}
+
 /* Commands arriving from the primary client or AOF client, should never be rejected. */
 int mustObeyClient(client *c) {
-    return c->id == CLIENT_ID_AOF || c->flag.primary;
+    return c->id == CLIENT_ID_AOF || isReplicatedClient(c);
 }
 
 static int shouldPropagate(int target) {
@@ -3474,6 +3486,7 @@ static int shouldPropagate(int target) {
         if (server.aof_state != AOF_OFF) return 1;
     }
     if (target & PROPAGATE_REPL) {
+        if (clusterIsAnySlotExporting()) return 1;
         if (server.primary_host == NULL && (server.repl_backlog || listLength(server.replicas) != 0)) return 1;
     }
 
@@ -3486,7 +3499,7 @@ static int shouldPropagate(int target) {
  * flags are an xor between:
  * + PROPAGATE_NONE (no propagation of command at all)
  * + PROPAGATE_AOF (propagate into the AOF file if is enabled)
- * + PROPAGATE_REPL (propagate into the replication link)
+ * + PROPAGATE_REPL (propagate into replication links, including slot migration jobs)
  *
  * This is an internal low-level function and should not be called!
  *
@@ -3495,7 +3508,7 @@ static int shouldPropagate(int target) {
  * dbid value of -1 is saved to indicate that the called do not want
  * to replicate SELECT for this command (used for database neutral commands).
  */
-static void propagateNow(int dbid, robj **argv, int argc, int target) {
+static void propagateNow(int dbid, robj **argv, int argc, int target, int slot) {
     if (!shouldPropagate(target)) return;
 
     /* This needs to be unreachable since the dataset should be fixed during
@@ -3522,8 +3535,20 @@ static void propagateNow(int dbid, robj **argv, int argc, int target) {
     serverAssert(!isPausedActions(PAUSE_ACTION_REPLICA) || server.client_pause_in_transaction ||
                  server.server_del_keys_in_slot);
 
-    if (server.aof_state != AOF_OFF && target & PROPAGATE_AOF) feedAppendOnlyFile(dbid, argv, argc);
-    if (target & PROPAGATE_REPL) replicationFeedReplicas(dbid, argv, argc);
+    int propagate_to_aof = server.aof_state != AOF_OFF && target & PROPAGATE_AOF;
+
+    /* When AOF is on, we want to propagate to replicas even when we have no
+     * replicas for the WAITAOF implementation. But otherwise, we only propagate
+     * when we have replicas. */
+    int propagate_to_repl = target & PROPAGATE_REPL;
+    if (propagate_to_repl && !propagate_to_aof) {
+        propagate_to_repl = server.primary_host == NULL && (server.repl_backlog || listLength(server.replicas) != 0);
+    }
+    int propagate_to_slot_migration = target & PROPAGATE_REPL && clusterIsAnySlotExporting();
+
+    if (propagate_to_aof) feedAppendOnlyFile(dbid, argv, argc);
+    if (propagate_to_repl) replicationFeedReplicas(dbid, argv, argc);
+    if (propagate_to_slot_migration) clusterFeedSlotExportJobs(dbid, argv, argc, slot);
 }
 
 /* Used inside commands to schedule the propagation of additional commands
@@ -3537,18 +3562,22 @@ static void propagateNow(int dbid, robj **argv, int argc, int target) {
  * so it is up to the caller to release the passed argv (but it is usually
  * stack allocated).  The function automatically increments ref count of
  * passed objects, so the caller does not need to. */
-void alsoPropagate(int dbid, robj **argv, int argc, int target) {
+void alsoPropagate(int dbid, robj **argv, int argc, int target, int slot) {
     robj **argvcopy;
     int j;
 
     if (!shouldPropagate(target)) return;
+
+    /* Don't propagate commands on slot migration clients, these will be proxied
+     * in replicationFeedStreamFromPrimaryStream() */
+    if (server.current_client != NULL && server.current_client->slot_migration_job) return;
 
     argvcopy = zmalloc(sizeof(robj *) * argc);
     for (j = 0; j < argc; j++) {
         argvcopy[j] = argv[j];
         incrRefCount(argv[j]);
     }
-    serverOpArrayAppend(&server.also_propagate, dbid, argvcopy, argc, target);
+    serverOpArrayAppend(&server.also_propagate, dbid, argvcopy, argc, target, slot);
 }
 
 /* It is possible to call the function forceCommandPropagation() inside a
@@ -3614,18 +3643,18 @@ static void propagatePendingCommands(void) {
     if (transaction) {
         /* We use dbid=-1 to indicate we do not want to replicate SELECT.
          * It'll be inserted together with the next command (inside the MULTI) */
-        propagateNow(-1, &shared.multi, 1, PROPAGATE_AOF | PROPAGATE_REPL);
+        propagateNow(-1, &shared.multi, 1, PROPAGATE_AOF | PROPAGATE_REPL, -1);
     }
 
     for (j = 0; j < server.also_propagate.numops; j++) {
         rop = &server.also_propagate.ops[j];
         serverAssert(rop->target);
-        propagateNow(rop->dbid, rop->argv, rop->argc, rop->target);
+        propagateNow(rop->dbid, rop->argv, rop->argc, rop->target, rop->slot);
     }
 
     if (transaction) {
         /* We use dbid=-1 to indicate we do not want to replicate select */
-        propagateNow(-1, &shared.exec, 1, PROPAGATE_AOF | PROPAGATE_REPL);
+        propagateNow(-1, &shared.exec, 1, PROPAGATE_AOF | PROPAGATE_REPL, -1);
     }
 
     serverOpArrayFree(&server.also_propagate);
@@ -3885,7 +3914,7 @@ void call(client *c, int flags) {
 
         /* Call alsoPropagate() only if at least one of AOF / replication
          * propagation is needed. */
-        if (propagate_flags != PROPAGATE_NONE) alsoPropagate(c->db->id, c->argv, c->argc, propagate_flags);
+        if (propagate_flags != PROPAGATE_NONE) alsoPropagate(c->db->id, c->argv, c->argc, propagate_flags, c->slot);
     }
 
     /* Restore the old replication flags, since call() can be executed
@@ -4299,6 +4328,11 @@ int processCommand(client *c) {
         if (server.current_client == NULL) return C_ERR;
 
         if (out_of_memory && is_denyoom_command) {
+            if (c->slot_migration_job != NULL) {
+                clusterHandleSlotMigrationClientOOM(c->slot_migration_job);
+                return C_ERR;
+            }
+
             rejectCommand(c, shared.oomerr);
             return C_OK;
         }
@@ -5938,6 +5972,8 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                 "mem_clients_slaves:%zu\r\n", mh->clients_replicas,
                 "mem_clients_normal:%zu\r\n", mh->clients_normal,
                 "mem_cluster_links:%zu\r\n", mh->cluster_links,
+                "mem_cluster_slot_import:%zu\r\n", mh->cluster_slot_import,
+                "mem_cluster_slot_export:%zu\r\n", mh->cluster_slot_export,
                 "mem_aof_buffer:%zu\r\n", mh->aof_buffer,
                 "mem_allocator:%s\r\n", ZMALLOC_LIB,
                 "mem_overhead_db_hashtable_rehashing:%zu\r\n", mh->overhead_db_hashtable_rehashing,
@@ -6054,10 +6090,12 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                 "total_connections_received:%lld\r\n", server.stat_numconnections,
                 "total_commands_processed:%lld\r\n", server.stat_numcommands,
                 "instantaneous_ops_per_sec:%lld\r\n", getInstantaneousMetric(STATS_METRIC_COMMAND),
-                "total_net_input_bytes:%lld\r\n", server.stat_net_input_bytes + server.stat_net_repl_input_bytes + server.bio_stat_net_repl_input_bytes,
-                "total_net_output_bytes:%lld\r\n", server.stat_net_output_bytes + server.stat_net_repl_output_bytes,
+                "total_net_input_bytes:%lld\r\n", server.stat_net_input_bytes + server.stat_net_repl_input_bytes + server.bio_stat_net_repl_input_bytes + server.stat_net_cluster_slot_import_bytes,
+                "total_net_output_bytes:%lld\r\n", server.stat_net_output_bytes + server.stat_net_repl_output_bytes + server.stat_net_cluster_slot_export_bytes,
                 "total_net_repl_input_bytes:%lld\r\n", server.stat_net_repl_input_bytes + server.bio_stat_net_repl_input_bytes,
                 "total_net_repl_output_bytes:%lld\r\n", server.stat_net_repl_output_bytes,
+                "total_net_cluster_slot_import_bytes:%lld\r\n", server.stat_net_cluster_slot_import_bytes,
+                "total_net_cluster_slot_export_bytes:%lld\r\n", server.stat_net_cluster_slot_export_bytes,
                 "instantaneous_input_kbps:%.2f\r\n", (float)getInstantaneousMetric(STATS_METRIC_NET_INPUT) / 1024,
                 "instantaneous_output_kbps:%.2f\r\n", (float)getInstantaneousMetric(STATS_METRIC_NET_OUTPUT) / 1024,
                 "instantaneous_input_repl_kbps:%.2f\r\n", (float)getInstantaneousMetric(STATS_METRIC_NET_INPUT_REPLICATION) / 1024,

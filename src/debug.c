@@ -513,6 +513,10 @@ void debugCommand(client *c) {
             "CLIENT-ENFORCE-REPLY-LIST <0|1>",
             "When set to 1, it enforces the use of the client reply list directly",
             "    and avoids using the client's static buffer.",
+            "SLOTMIGRATION PREVENT-PAUSE <0|1>",
+            "    When set to 1, slot migrations will be prevented from pausing on the source node.",
+            "SLOTMIGRATION PREVENT-FAILOVER <0|1>",
+            "    When set to 1, slot migrations will be prevented from performing the slot-level failover on the target node.",
             NULL};
         addExtendedReplyHelp(c, help, clusterDebugCommandExtendedHelp());
     } else if (!strcasecmp(c->argv[1]->ptr, "segfault")) {
@@ -621,6 +625,16 @@ void debugCommand(client *c) {
         addReply(c, shared.ok);
     } else if (!strcasecmp(c->argv[1]->ptr, "disable-cluster-reconnection") && c->argc == 3) {
         server.debug_cluster_disable_reconnection = atoi(c->argv[2]->ptr);
+        addReply(c, shared.ok);
+    } else if (!strcasecmp(c->argv[1]->ptr, "slotmigration")) {
+        if (!strcasecmp(c->argv[2]->ptr, "prevent-pause")) {
+            server.debug_slot_migration_prevent_pause = atoi(c->argv[3]->ptr);
+        } else if (!strcasecmp(c->argv[2]->ptr, "prevent-failover")) {
+            server.debug_slot_migration_prevent_failover = atoi(c->argv[3]->ptr);
+        } else {
+            addReplySubcommandSyntaxError(c);
+            return;
+        }
         addReply(c, shared.ok);
     } else if (!strcasecmp(c->argv[1]->ptr, "object") && (c->argc == 3 || c->argc == 4)) {
         robj *val;

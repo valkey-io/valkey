@@ -88,7 +88,7 @@ as well as a whole host of new items as listed below.
 * Fix panic in primary when blocking shutdown after previous block with timeout by @murphyjacob4 (#1948)
 * fix cluster slot stats assertion during promotion of replica by @Fusl (#1950)
 * Fix crash during TLS handshake with I/O threads by @uriyage (#1955)
-* In LOLWUT's reply, change "Redis ver." to "Valkey ver." by @sarthakaggarwal97 (#1559)
+* Change "Redis ver." to "Valkey ver." in LOLWUT output by @sarthakaggarwal97 (#1559)
 * Fix RANDOMKEY infinite loop during CLIENT PAUSE by @li-benson (#1850)
 * Fix ACL LOAD crash on replica since the primary client don't has a user by @bogdanp05 (#1842)
 * Save config file and brocast the PONG when configEpoch changed by @enjoy-binbin (#1813)

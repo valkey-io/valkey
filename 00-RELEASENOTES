@@ -32,7 +32,7 @@ as well as a whole host of new items as listed below.
 * Optimize scan/sscan/hscan/zscan commands by replacing list with vector by @chzhoo (#2160)
 * Allow shrinking hashtables in low memory situations by @Fusl (#2095)
 * Improve performance of network operations by directly writing responses to clients by @xbasel (#2078)
-* Combine range element ranks calculation with range elements search to improve zcount performance by @SoftlyRaining (#2129)
+* Improve zcount performance by combing range element ranks calculation with range elements search to @SoftlyRaining (#2129)
 * Replication Flow Control – Prioritizing replication traffic in the replica by @xbasel (#1838)
 * Optimize GEORADIUS command performance with  pre-allocated buffer by @chzhoo (#2116)
 * Optimize string2ll with load-time CPU feature check using IFUNC resolver by @zhulipeng (#2099)

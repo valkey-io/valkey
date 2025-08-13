@@ -28,7 +28,7 @@ as well as a whole host of new items as listed below.
 * Add DELIFEQ command by @LinusU (#1975)
 * Add multi-database support to cluster mode by @xbasel (#1671)
 * Introduce MPTCP for replica by @pizhenwei (#1961)
-* Add --hotkeys-count option for Valkey-cli by @hwware (#1933)
+* Add --hotkeys-count option for valkey-cli by @hwware (#1933)
 * Add sentinel_total_tilt to sentinel INFO sentinel by @carlosfu (#1904)
 * Introduce MPTCP by @pizhenwei (#1811)
 * Allow dynamic modification of io-threads num by @ayush933 (#2033)

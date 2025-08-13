@@ -32,6 +32,7 @@ as well as a whole host of new items as listed below.
 * Add sentinel_total_tilt to sentinel INFO sentinel by @carlosfu (#1904)
 * Introduce MPTCP by @pizhenwei (#1811)
 * Allow dynamic modification of io-threads num by @ayush933 (#2033)
+* Client Commands Extended Filtering by @sarthakaggarwal97 (#1466)
 
 ### New Configs
 * Auto-failover on shutdown unified config by @zuiderkwast (#2292)
@@ -108,6 +109,8 @@ as well as a whole host of new items as listed below.
 * Fix raxRemove crash at memcpy() due to key size exceeds max Rax size by @VoletiRam (#1722)
 * Fix random element in skewed sparse hash table by @zuiderkwast (#2085)
 * Fix error "SSL routines::bad length" when connTLSWrite is called second time with smaller buffer by @zori-janea (#1737)
+* Converge divergent shard-id persisted in nodes.conf to primary's shard ID by @hpatro (#2174)
+
 
 ### Build and Tooling
 * Allow valkey-benchmark to support multiple random (or sequential) placeholders  by @SoftlyRaining (#2102)

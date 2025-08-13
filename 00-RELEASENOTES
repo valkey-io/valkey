@@ -59,7 +59,7 @@ as well as a whole host of new items as listed below.
 * Redact user data when a module crashes for not handling I/O errors enabled by @YueTang-Vanessa (#2274)
 * Prevent bad memory access when NOTOUCH client gets unblocked by @uriyage (#2347)
 * Fix large allocations crashing Valkey during active defrag by @Fusl (#2353)
-* Fix replica (the old primary) claims to sitll have slots after manual failover by @enjoy-binbin (#2301)
+* Fix replicas claiming to still have slots after manual failover by @enjoy-binbin (#2301)
 * Change default values of valkey-cli to use valkey naming, and added fallback to old values by @avifenesh (#2334)
 * Generate a new shard_id when the replica executes CLUSTER RESET SOFT by @enjoy-binbin (#2283)
 * Fix leak when shrinking a hashtable without entries by @yzc-yzc (#2288)

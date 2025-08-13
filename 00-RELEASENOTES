@@ -79,7 +79,7 @@ as well as a whole host of new items as listed below.
 * Fix memory corruption in sharded pubsub unsubscribe by @uriyage (#2137)
 * Respect process umask when creating data files by @kronwerk (#1725)
 * Allow mixing quoted and unquoted inline args by @Fusl (#2098)
-* Disallowing Client Reply is On / Off / Skip when Client is Multi by @sarthakaggarwal97 (#1966)
+* Disallow sending REPLY ON / OFF / SKIP inside a multi-exec transaction by @sarthakaggarwal97 (#1966)
 * Environment variable REDISCLI_AUTH to VALKEYCLI_AUTH conversion by @HiranmoyChowdhury (#1995)
 * Avoid shard id update of replica if not matching with primary shard id by @hpatro (#573)
 * Fix engine crash on module client blocking during keyspace events by @yairgott (#1819)

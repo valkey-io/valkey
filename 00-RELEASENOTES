@@ -10,7 +10,6 @@ as well as a whole host of new items as listed below.
 * support negative filtering for client command filters by @soloestoy (#2378)
 * Add support for automatic client authentication via TLS certificate fields by @omanges (#1920)
 * Add SAFE option to SHUTDOWN to reject shutdown in unsafe situations by @enjoy-binbin (#2195)
-* Support for RDB analysis reports by @artikell (#1743)
 * Support BYPOLYGON option for GEOSEARCH by @KarthikSubbarao (#1809)
 * Add DELIFEQ command by @LinusU (#1975)
 * Add multi-database support to cluster mode by @xbasel (#1671)
@@ -110,45 +109,90 @@ as well as a whole host of new items as listed below.
 * Support RDMA for valkey-cli and benchmark by @pizhenwei (#2059)
 * Change default values of valkey-cli to use valkey naming, and added fallback to old values by @avifenesh (#2334)
 * valkey-cli: ensure output ends with a newline if missing when printing reply by @xbasel (#1782)
-
+* Support for RDB analysis reports by @artikell (#1743)
 
 ### Behavior Change
 * Add STALE command flag to SCRIPT-EXISTS, SCRIPT-SHOW and SCRIPT-FLUSH by @enjoy-binbin (#2419)
 * Include command fullname in error message when returning errors in multi-execs by @enjoy-binbin (#2286)
 * Move auth check to the front, before command exist/arity/protected check by @enjoy-binbin (#1475)
 
+## Contributors
 ## New Contributors
-* @YueTang-Vanessa made their first contribution in (#2274)
-* @cxljs made their first contribution in (#2467)
-* @amanosme made their first contribution in (#2453)
-* @hanxizh9910 made their first contribution in (#2455)
-* @Fusl made their first contribution in (#2418)
-* @Nicky-2000 made their first contribution in (#2394)
-* @allenss-amazon made their first contribution in (#2417)
-* @yzc-yzc made their first contribution in (#2412)
-* @asagege made their first contribution in (#2402)
-* @utdrmac made their first contribution in (#2397)
-* @omanges made their first contribution in (#2364)
-* @avifenesh made their first contribution in (#2334)
-* @jsoref made their first contribution in (#2245)
-* @youngmore1024 made their first contribution in (#2308)
-* @yulazariy made their first contribution in (#2290)
-* @gusakovy made their first contribution in (#2257)
-* @chzhoo made their first contribution in (#2160)
-* @wuranxx made their first contribution in (#1384)
-* @huseyinacacak-janea made their first contribution in (#2115)
-* @odaysec made their first contribution in (#2101)
-* @LinusU made their first contribution in (#1975)
-* @DoozkuV made their first contribution in (#2061)
-* @HiranmoyChowdhury made their first contribution in (#2038)
-* @yairgott made their first contribution in (#1989)
-* @nesty92 made their first contribution in (#1952)
-* @skolosov-snap made their first contribution in (#1674)
-* @lucasyonge made their first contribution in (#1919)
-* @WelongZuo made their first contribution in (#1891)
-* @jeon1226 made their first contribution in (#1885)
-* @li-benson made their first contribution in (#1850)
-* @MeinhardZhou made their first contribution in (#1817)
-* @bogdanp05 made their first contribution in (#1842)
-* @nastena1606 made their first contribution in (#1773)
-* @zori-janea made their first contribution in (#1737)
+* Ran Shidlansik @ranshid
+* Binbin @enjoy-binbin
+* Jacob Murphy @murphyjacob4
+* Madelyn Olson @madolson
+* YueTang-Vanessa  @YueTang-Vanessa
+* cxljs @cxljs
+* Sarthak Aggarwal @sarthakaggarwal97
+* amanosme @amanosme
+* Hanxi Zhang @hanxizh9910
+* Seungmin Lee @sungming2
+* uriyage @uriyage
+* Katie Holly @Fusl
+* Nicky-2000 @Nicky-2000
+* Allen Samuels @allenss-amazon
+* yzc-yzc @yzc-yzc
+* zhaozhao.zz @soloestoy
+* asagegeLiu @asagege
+* nitaicaro @nitaicaro
+* Matthew @utdrmac
+* Omkar Mestry @omanges
+* Viktor Söderqvist @zuiderkwast
+* kukey @kukey
+* Harkrishn Patro @hpatro
+* Avi Fenesh @avifenesh
+* Amit Nagler @naglera
+* Josh Soref @jsoref
+* youngmore1024 @youngmore1024
+* Rain Valentine @SoftlyRaining
+* skyfirelee @artikell
+* Wen Hui @hwware
+* yulazariy @yulazariy
+* Yakov Gusakov @gusakovy
+* charsyam @charsyam
+* Simon Baatz @gmbnomis
+* Thalia Archibald @thaliaarchi
+* chzhoo @chzhoo
+* xbasel @xbasel
+* Stav Ben-Tov @stav-bentov
+* wuranxx @wuranxx
+* Ayush Sharma @ayush933
+* chx9 @chx9
+* KarthikSubbarao @KarthikSubbarao
+* Hüseyin Açacak @huseyinacacak-janea
+* アンドリー・アンドリ @odaysec
+* Ping Xie @PingXie
+* Lipeng Zhu @zhulipeng
+* Linus Unnebäck @LinusU
+* Vitah Lin @vitahlin
+* kronwerk @kronwerk
+* Vadym Khoptynets @poiuj
+* muelstefamzn @muelstefamzn
+* zhenwei pi @pizhenwei
+* George Padron @DoozkuV
+* Björn Svensson @bjosv
+* aradz44 @aradz44
+* Hiranmoy Das Chowdhury @HiranmoyChowdhury
+* Yair Gottdenker @yairgott
+* Roshan Khatri @roshkhatri
+* nesty92 @nesty92
+* carlosfu @carlosfu
+* Arthur Lee @arthurkiller
+* Shai Zarka @zarkash-aws
+* Sergey Kolosov @skolosov-snap
+* Nathan Scott @natoscott
+* lucasyonge @lucasyonge
+* WelongZuo @WelongZuo
+* Jim Brunner @JimB123
+* jeon1226 @jeon1226
+* Benson-li @li-benson
+* Meinhard Zhou @MeinhardZhou
+* Nikhil Manglore @Nikhil-Manglore
+* Bogdan Petre @bogdanp05
+* eifrah-aws @eifrah-aws
+* Ricardo Dias @rjd15372
+* secwall @secwall
+* Anastasia Alexandrova @nastena1606
+* Marek Zoremba @zori-janea
+* VoletiRam @VoletiRam

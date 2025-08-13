@@ -584,7 +584,7 @@ start_cluster 3 2 {tags {external:skip cluster}} {
     }
 }
 
-# Disable this case due to #2441.
+# Disable this test case due to #2441.
 if {false} {
 start_cluster 3 2 {tags {external:skip cluster}} {
     # This test consists of two phases.

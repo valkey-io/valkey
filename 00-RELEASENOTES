@@ -43,7 +43,7 @@ as well as a whole host of new items as listed below.
 * Improve system responsiveness by limiting number of new cluster link connections per cycle by @hpatro (#2009)
 * Optimize string-to-integer performance using AVX512 by @zhulipeng (#1944)
 * Optimize bitcount command by SIMD by @chzhoo (#1741)
-* Embed hash value in hash type entry by @zuiderkwast (#1579)
+* Improve hash table performance efficiency by embedding hash value in hash type entry by @zuiderkwast (#1579)
 
 ### Cluster
 * Add CLUSTER FLUSHSLOT command by @wuranxx (#1384)

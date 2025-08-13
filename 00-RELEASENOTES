@@ -25,7 +25,7 @@ as well as a whole host of new items as listed below.
 * Auto-failover on shutdown unified config by @zuiderkwast (#2292)
 
 ### New info fields and Logging
-* [NEW] Introduce lttng based tracing by @artikell (#2070)
+* Introduce support for lttng based tracing by @artikell (#2070)
 * Add node pfail and fail count to cluster info metrics by @hpatro (#1910)
 
 ### Performance/Efficiency Improvements

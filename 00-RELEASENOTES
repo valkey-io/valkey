@@ -13,13 +13,12 @@ as well as a whole host of new items as listed below.
 * Support for RDB analysis reports by @artikell (#1743)
 * Support BYPOLYGON option for GEOSEARCH by @KarthikSubbarao (#1809)
 * Add DELIFEQ command by @LinusU (#1975)
-* Support MPTCP for valkey-cli and benchmark by @pizhenwei (#2067)
-* Support RDMA for valkey-cli and benchmark by @pizhenwei (#2059)
 * Add multi-database support to cluster mode by @xbasel (#1671)
 * Introduce MPTCP for replica by @pizhenwei (#1961)
 * Add --hotkeys-count option for Valkey-cli by @hwware (#1933)
 * Add sentinel_total_tilt to sentinel INFO sentinel by @carlosfu (#1904)
 * Introduce MPTCP by @pizhenwei (#1811)
+* Allow dynamic modification of io-threads num by @ayush933 (#2033)
 
 ### New Configs
 * Auto-failover on shutdown unified config by @zuiderkwast (#2292)
@@ -43,7 +42,7 @@ as well as a whole host of new items as listed below.
 * Improve system responsiveness by limiting number of new cluster link connections per cycle by @hpatro (#2009)
 * Optimize string-to-integer performance using AVX512 by @zhulipeng (#1944)
 * Optimize bitcount command by SIMD by @chzhoo (#1741)
-* Improve hash table performance efficiency by embedding hash value in hash type entry by @zuiderkwast (#1579)
+* Save to Disk in Bio Thread and refactor readSyncBulkPayload (#1784)
 
 ### Cluster
 * Add CLUSTER FLUSHSLOT command by @wuranxx (#1384)
@@ -60,7 +59,6 @@ as well as a whole host of new items as listed below.
 * Prevent bad memory access when NOTOUCH client gets unblocked by @uriyage (#2347)
 * Fix large allocations crashing Valkey during active defrag by @Fusl (#2353)
 * Fix replicas claiming to still have slots after manual failover by @enjoy-binbin (#2301)
-* Change default values of valkey-cli to use valkey naming, and added fallback to old values by @avifenesh (#2334)
 * Generate a new shard_id when the replica executes CLUSTER RESET SOFT by @enjoy-binbin (#2283)
 * Fix memory leak when shrinking a hashtable without entries by @yzc-yzc (#2288)
 * Fix missing response when AUTH returns an error inside a transaction by @enjoy-binbin (#2287)
@@ -69,9 +67,6 @@ as well as a whole host of new items as listed below.
 * Fix CLUSTER SLOTS/NODES showing wrong port after updating port/tls-port by @enjoy-binbin (#2186)
 * CLIENT UNBLOCK should't be able to unpause paused clients by @enjoy-binbin (#2117)
 * Fix replica can't finish failover when config epoch is outdated by @enjoy-binbin (#2178)
-* CVE-2025-32023 prevent out-of-bounds write during hyperloglog operations (#2146)
-* CVE-2025-48367 retry accept on transient errors (#2315)
-* Allow dynamic modification of io-threads num by @ayush933 (#2033)
 * Correctly handle large cluster bus extensions which may have resulted in dropped cluster packets by @madolson (#2144)
 * Improve clarity of errors for GEO commands when member does not exist by @chx9 (#1943)
 * Detect SSL_new() returning NULL in outgoing connections by @zuiderkwast (#2140)
@@ -80,7 +75,6 @@ as well as a whole host of new items as listed below.
 * Respect process umask when creating data files by @kronwerk (#1725)
 * Allow mixing quoted and unquoted inline args by @Fusl (#2098)
 * Disallow sending REPLY ON / OFF / SKIP inside a multi-exec transaction by @sarthakaggarwal97 (#1966)
-* Environment variable REDISCLI_AUTH to VALKEYCLI_AUTH conversion by @HiranmoyChowdhury (#1995)
 * Avoid shard id update of replica if it doesn't match with primary shard id by @hpatro (#573)
 * Fix engine crash on module client blocking during keyspace events by @yairgott (#1819)
 * Fix incorrect lag reported in XINFO GROUPS by @nesty92 (#1952)
@@ -94,12 +88,13 @@ as well as a whole host of new items as listed below.
 * Save config file and brocast the PONG when configEpoch changed by @enjoy-binbin (#1813)
 * Fix bug where invalidation messages were getting sent to closing clients by @madolson (#1823)
 * cmd's out bytes need count deferred reply by @soloestoy (#1760)
-* valkey-cli: ensure output ends with a newline if missing when printing reply by @xbasel (#1782)
 * Remove unicode optimization in Lua cjson library by @rjd15372 (#1785)
 * Fix temp file leak druing replication error handling by @enjoy-binbin (#1721)
 * Enable TCP_NODELAY by default in incoming and outgoing connections by @sungming2 (#1763)
 * Move TCP/TLS specific options from generic client to connection type by @sungming2 (#1706)
 * Fix raxRemove crash at memcpy() due to key size exceeds max Rax size by @VoletiRam (#1722)
+* Fix random element in skewed sparse hash table by @zuiderkwast (#2085)
+* Fix error "SSL routines::bad length" when connTLSWrite is called second time with smaller buffer by @zori-janea (#1737)
 
 ### Build and Tooling
 * Allow valkey-benchmark to support multiple random (or sequential) placeholders  by @SoftlyRaining (#2102)
@@ -109,13 +104,18 @@ as well as a whole host of new items as listed below.
 * Add --sequential option to valkey-benchmark to support populating entire keyspace by @SoftlyRaining (#1839)
 * Check both arm64 and aarch64 for ARM based system architecture by @eifrah-aws (#1829)
 * Drop lua object files on clean by @secwall (#1812)
-* Fix error "SSL routines::bad length" when connTLSWrite is called second time with smaller buffer by @zori-janea (#1737)
+* Support environment variable VALKEYCLI_AUTH alongside REDISCLI_AUTH in valkey-cli by @HiranmoyChowdhury (#1995)
+* Fix duplicate Acks for RDMA events and fix extremely large max latency for RDMA benchmark (#2430)
+* Support MPTCP for valkey-cli and benchmark by @pizhenwei (#2067)
+* Support RDMA for valkey-cli and benchmark by @pizhenwei (#2059)
+* Change default values of valkey-cli to use valkey naming, and added fallback to old values by @avifenesh (#2334)
+* valkey-cli: ensure output ends with a newline if missing when printing reply by @xbasel (#1782)
+
 
 ### Behavior Change
 * Add STALE command flag to SCRIPT-EXISTS, SCRIPT-SHOW and SCRIPT-FLUSH by @enjoy-binbin (#2419)
 * Include command fullname in error message when returning errors in multi-execs by @enjoy-binbin (#2286)
 * Move auth check to the front, before command exist/arity/protected check by @enjoy-binbin (#1475)
-* Fix random element in skewed sparse hash table by @zuiderkwast (#2085)
 
 ## New Contributors
 * @YueTang-Vanessa made their first contribution in (#2274)

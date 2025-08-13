@@ -2790,6 +2790,8 @@ void clusterUpdateSlotsConfigWith(clusterNode *sender, uint64_t senderConfigEpoc
 
     /* Sender and myself in the same shard? */
     int are_in_same_shard = areInSameShard(sender, myself);
+    int first_migrating_slot = -1, last_migrating_slot = -1;
+    clusterNode *from_node = NULL;
 
     for (j = 0; j < CLUSTER_SLOTS; j++) {
         if (bitmapTestBit(slots, j)) {
@@ -2815,12 +2817,24 @@ void clusterUpdateSlotsConfigWith(clusterNode *sender, uint64_t senderConfigEpoc
                 server.cluster->slots[j]->configEpoch < senderConfigEpoch ||
                 clusterSlotFailoverGranted(j)) {
                 if (!isSlotUnclaimed(j) && !areInSameShard(server.cluster->slots[j], sender)) {
-                    serverLog(LL_NOTICE,
-                              "Slot %d is migrated from node %.40s (%s) in shard %.40s"
-                              " to node %.40s (%s) in shard %.40s.",
-                              j, server.cluster->slots[j]->name, server.cluster->slots[j]->human_nodename,
-                              server.cluster->slots[j]->shard_id, sender->name, sender->human_nodename,
-                              sender->shard_id);
+                    if (from_node == NULL) from_node = server.cluster->slots[j];
+                    if (first_migrating_slot == -1) first_migrating_slot = j;
+                    if (last_migrating_slot == -1) {
+                        last_migrating_slot = j;
+                    } else if (from_node == server.cluster->slots[j] && j == last_migrating_slot + 1) {
+                        last_migrating_slot = j;
+                    } else {
+                        serverLog(LL_NOTICE,
+                                  "Slot range [%d, %d] is migrated from node %.40s (%s) in shard %.40s"
+                                  " to node %.40s (%s) in shard %.40s.",
+                                  first_migrating_slot, last_migrating_slot,
+                                  from_node->name, from_node->human_nodename, from_node->shard_id,
+                                  sender->name, sender->human_nodename,
+                                  sender->shard_id);
+                        first_migrating_slot = -1;
+                        last_migrating_slot = -1;
+                        from_node = NULL;
+                    }
                 }
 
                 /* Was this slot mine, and still contains keys? Mark it as
@@ -2954,6 +2968,13 @@ void clusterUpdateSlotsConfigWith(clusterNode *sender, uint64_t senderConfigEpoc
                 }
             }
         }
+    }
+
+    if (from_node != NULL && first_migrating_slot != -1 && last_migrating_slot != -1) {
+        serverLog(LL_NOTICE,
+                  "Slot range [%d, %d] is migrated from node %.40s (%s) in shard %.40s to node %.40s (%s) in shard %.40s.",
+                  first_migrating_slot, last_migrating_slot, from_node->name, from_node->human_nodename,
+                  from_node->shard_id, sender->name, sender->human_nodename, sender->shard_id);
     }
 
     /* After updating the slots configuration, don't do any actual change

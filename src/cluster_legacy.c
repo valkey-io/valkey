@@ -3798,8 +3798,7 @@ int clusterProcessPacket(clusterLink *link) {
                             /* This packet is stale so we avoid processing it anymore. Otherwise
                              * this may cause a primary-replica chain issue. */
                             return 1;
-                        } else if (nodeIsReplica(sender_claimed_primary) &&
-                                   sender_claimed_primary->replicaof == sender) {
+                        } else if (nodeIsReplica(sender_claimed_primary)) {
                             /* A failover occurred in the shard where `sender` belongs to and `sender` is
                              * no longer a primary. Update slot assignment to `sender_claimed_config_epoch`,
                              * which is the new primary in the shard. */

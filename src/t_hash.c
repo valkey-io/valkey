@@ -1270,26 +1270,28 @@ void hsetexCommand(client *c) {
         if (has_volatile_fields != hashTypeHasVolatileFields(o)) {
             dbUpdateObjectWithVolatileItemsTracking(c->db, o);
         }
-        notifyKeyspaceEvent(NOTIFY_HASH, "hset", c->argv[1], c->db->id);
         if (set_expired) {
             replaceClientCommandVector(c, new_argc, new_argv);
             /* We would like to reduce the number of hexpired events in case there are potential many expired fields. */
             notifyKeyspaceEvent(NOTIFY_HASH, "hexpired", c->argv[1], c->db->id);
-        } else if (expire) {
-            /* Propagate as HSETEX Key Value PXAT millisecond-timestamp if there is
-             * EX/PX/EXAT flag. */
-            if (!(flags & ARGS_PXAT)) {
-                for (int i = 2; i < fields_index; i++) {
-                    if (c->argv[i + 1] == expire) {
-                        robj *milliseconds_obj = createStringObjectFromLongLong(when);
-                        rewriteClientCommandArgument(c, i, shared.pxat);
-                        rewriteClientCommandArgument(c, i + 1, milliseconds_obj);
-                        decrRefCount(milliseconds_obj);
-                        break;
+        } else {
+            notifyKeyspaceEvent(NOTIFY_HASH, "hset", c->argv[1], c->db->id);
+            if (expire) {
+                /* Propagate as HSETEX Key Value PXAT millisecond-timestamp if there is
+                 * EX/PX/EXAT flag. */
+                if (!(flags & ARGS_PXAT)) {
+                    for (int i = 2; i < fields_index; i++) {
+                        if (c->argv[i + 1] == expire) {
+                            robj *milliseconds_obj = createStringObjectFromLongLong(when);
+                            rewriteClientCommandArgument(c, i, shared.pxat);
+                            rewriteClientCommandArgument(c, i + 1, milliseconds_obj);
+                            decrRefCount(milliseconds_obj);
+                            break;
+                        }
                     }
                 }
+                notifyKeyspaceEvent(NOTIFY_HASH, "hexpire", c->argv[1], c->db->id);
             }
-            notifyKeyspaceEvent(NOTIFY_HASH, "hexpire", c->argv[1], c->db->id);
         }
         signalModifiedKey(c, c->db, c->argv[1]);
         /* Delete the object in case it was left empty */

@@ -98,7 +98,7 @@ as well as a whole host of new items as listed below.
 * Change "Redis ver." to "Valkey ver." in LOLWUT output by @sarthakaggarwal97 (#1559)
 * Fix RANDOMKEY infinite loop during CLIENT PAUSE by @li-benson (#1850)
 * Fix ACL LOAD crash on replica since the primary client don't has a user by @bogdanp05 (#1842)
-* Save config file and brocast the PONG when configEpoch changed by @enjoy-binbin (#1813)
+* Save config file and broadcast PONG message on configEpoch change by @enjoy-binbin (#1813)
 * Fix bug where invalidation messages were getting sent to closing clients by @madolson (#1823)
 * cmd's out bytes need count deferred reply by @soloestoy (#1760)
 * Remove unicode optimization in Lua cjson library by @rjd15372 (#1785)

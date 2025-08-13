@@ -39,7 +39,7 @@ as well as a whole host of new items as listed below.
 * Optimize WATCH by equalStringObjects early length check by @vitahlin (#2107)
 * Optimize BITCOUNT using ARM NEON SIMD by @xbasel (#1867)
 * Optimize findBucket performance using SIMD by @zhulipeng (#2030)
-* Hyperloglog ARM NEON SIMD optimization by @xbasel (#1859)
+* Optimize hyperloglog commands with ARM NEON SIMD instructions by @xbasel (#1859)
 * Accept limited number of new cluster link connections per cycle by @hpatro (#2009)
 * Optimize string-to-integer performance using AVX512 by @zhulipeng (#1944)
 * Optimize bitcount command by SIMD by @chzhoo (#1741)

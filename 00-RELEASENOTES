@@ -50,7 +50,7 @@ as well as a whole host of new items as listed below.
 * Trigger manual failover on SIGTERM / shutdown to cluster primary by @enjoy-binbin (#1091)
 * Allow replicas to become primaries without data by using CLUSTER REPLICATE NO ONE by @skolosov-snap (#1674)
 * Add cluster-manual-failover-timeout to configure the timeout for manual failover by @enjoy-binbin (#1690)
-* Add Cluster Bus Port out of range error message for Cluster Meet command by @hwware (#1686)
+* Add cluster bus port out of range error message for CLUSTER MEET command by @hwware (#1686)
 
 ### Module
 * Add new module API flag to bypass command validation by @sungming2 (#1357)

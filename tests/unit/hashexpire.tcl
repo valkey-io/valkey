@@ -567,7 +567,7 @@ start_server {tags {"hashexpire"}} {
             assert_equal {1} [r HSETEX myhash $command [get_past_zero_expire_value $command] FIELDS 1 f1 v1]
 
             # Verify field and keys are deleted
-            assert_keyevent_patterns $rd myhash hset hexpired del
+            assert_keyevent_patterns $rd myhash hexpired del
             assert_equal -2 [r HTTL myhash FIELDS 1 f1]
             assert_equal 0 [r HLEN myhash]
             assert_equal 0 [r EXISTS myhash]

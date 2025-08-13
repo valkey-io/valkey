@@ -66,7 +66,6 @@ as well as a whole host of new items as listed below.
 * Fix missing response when AUTH returns an error inside a transaction by @enjoy-binbin (#2287)
 * Fix MEMORY USAGE to consider embedded keys by @yulazariy (#2290)
 * Fix use-after-free when active expiration triggers hashtable to shrink by @gusakovy (#2257)
-* On-demand database allocation instead of preallocation by @xbasel (#1609)
 * Fix cluster myself CLUSTER SLOTS/NODES wrong port after updating port/tls-port by @enjoy-binbin (#2186)
 * CLIENT UNBLOCK should't be able to unpause paused clients by @enjoy-binbin (#2117)
 * Fix replica can't finish failover when config epoch is outdated by @enjoy-binbin (#2178)

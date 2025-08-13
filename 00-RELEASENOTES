@@ -1,4 +1,18 @@
-## Valkey 9.0.0-rc1 - August 12, 2025
+Valkey 9.0 release notes
+========================
+
+Upgrade urgency levels:
+
+| Level    | Meaning                                                             |
+|----------|---------------------------------------------------------------------|
+| LOW      | No need to upgrade unless there are new features you want to use.   |
+| MODERATE | Program an upgrade of the server, but it's not urgent.              |
+| HIGH     | There is a critical bug that may affect a subset of users. Upgrade! |
+| CRITICAL | There is a critical bug affecting MOST USERS. Upgrade ASAP.         |
+| SECURITY | There are security fixes in the release.                            |
+
+Valkey 9.0.0-rc1 - August 12, 2025
+----------------------------------
 
 Upgrade urgency LOW: This is the first release candidate of Valkey 9.0.0, with
 performance improvements, atomic slot migrations, hash field expiration, and numbered databases in cluster mode,
@@ -36,7 +50,7 @@ as well as a whole host of new items as listed below.
 * Optimize string2ll with load-time CPU feature check using IFUNC resolver by @zhulipeng (#2099)
 * Optimize WATCH by equalStringObjects early length check by @vitahlin (#2107)
 * Optimize BITCOUNT using ARM NEON SIMD by @xbasel (#1867)
-* Optimize findBucket performance using SIMD by @zhulipeng (#2030)
+* Optimize hash table performance using SIMD by @zhulipeng (#2030)
 * Optimize hyperloglog commands with ARM NEON SIMD instructions by @xbasel (#1859)
 * Improve system responsiveness by limiting number of new cluster link connections per cycle by @hpatro (#2009)
 * Optimize string-to-integer performance using AVX512 by @zhulipeng (#1944)

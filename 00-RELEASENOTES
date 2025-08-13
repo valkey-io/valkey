@@ -106,7 +106,7 @@ as well as a whole host of new items as listed below.
 * [valkey-benchmark] Allow multiple random (or sequential) placeholders and fix zadd --sequential to create expected data by @SoftlyRaining (#2102)
 * Implement rps control for benchmark using token bucket algorithm by @artikell (#1761)
 * valkey-benchmark: Arbitrary command sequence by @zuiderkwast (#2057)
-* valkey-benchmark: Add test for MGET by @zuiderkwast (#2015)
+* Add MGET test to valkey-benchmark by @zuiderkwast (#2015)
 * Add --sequential option to valkey-benchmark to support populating entire keyspace by @SoftlyRaining (#1839)
 * Check both arm64 and aarch64 for ARM based system architecture by @eifrah-aws (#1829)
 * Drop lua object files on clean by @secwall (#1812)

@@ -48,7 +48,7 @@ as well as a whole host of new items as listed below.
 ### Cluster
 * Add CLUSTER FLUSHSLOT command by @wuranxx (#1384)
 * Trigger manual failover on SIGTERM / shutdown to cluster primary by @enjoy-binbin (#1091)
-* Implement: CLUSTER REPLICATE NO ONE by @skolosov-snap (#1674)
+* Allow replicas to become primaries without data by using CLUSTER REPLICATE NO ONE by @skolosov-snap (#1674)
 * Add cluster-manual-failover-timeout to configure the timeout for manual failover by @enjoy-binbin (#1690)
 * Add Cluster Bus Port out of range error message for Cluster Meet command by @hwware (#1686)
 

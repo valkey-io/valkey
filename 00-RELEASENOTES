@@ -109,7 +109,6 @@ as well as a whole host of new items as listed below.
 * Add --sequential to valkey-benchmark (for populating entire keyspace) by @SoftlyRaining (#1839)
 * [CMake] Check both arm64 and aarch64 for ARM based system architecture by @eifrah-aws (#1829)
 * Drop lua object files on clean by @secwall (#1812)
-* Fixed build error with CMake by @eifrah-aws (#1806)
 * Fix error "SSL routines::bad length" when connTLSWrite is called second time with smaller buffer by @zori-janea (#1737)
 
 ### Behavior Change

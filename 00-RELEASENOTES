@@ -105,7 +105,6 @@ as well as a whole host of new items as listed below.
 * Remove unicode optimization in Lua cjson library by @rjd15372 (#1785)
 * Fix temp file leak druing replication error handling by @enjoy-binbin (#1721)
 * Enable TCP_NODELAY by default in incoming and outgoing connections by @sungming2 (#1763)
-* Move TCP/TLS specific options from generic client to connection type by @sungming2 (#1706)
 * Fix raxRemove crash at memcpy() due to key size exceeds max Rax size by @VoletiRam (#1722)
 * Fix random element in skewed sparse hash table by @zuiderkwast (#2085)
 * Fix error "SSL routines::bad length" when connTLSWrite is called second time with smaller buffer by @zori-janea (#1737)

@@ -72,7 +72,7 @@ as well as a whole host of new items as listed below.
 * Fix replica can't finish failover when config epoch is outdated by @enjoy-binbin (#2178)
 * Incorporate Redis CVE for CVE-2025-27151 by @madolson (#2146)
 * Allow dynamic modification of io-threads num by @ayush933 (#2033)
-* Correctly cast the extension lengths by @madolson (#2144)
+* Correctly handle large cluster bus extensions which may have resulted in dropped cluster packets by @madolson (#2144)
 * Improve clarity of errors for GEO commands when member does not exist by @chx9 (#1943)
 * Detect SSL_new() returning NULL in outgoing connections by @zuiderkwast (#2140)
 * Only mark the client reprocessing flag when unblocked on keys by @ranshid (#2109)

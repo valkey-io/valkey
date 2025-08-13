@@ -117,7 +117,6 @@ as well as a whole host of new items as listed below.
 * Move auth check to the front, before command exist/arity/protected check by @enjoy-binbin (#1475)
 
 ## Contributors
-## New Contributors
 * Ran Shidlansik @ranshid
 * Binbin @enjoy-binbin
 * Jacob Murphy @murphyjacob4

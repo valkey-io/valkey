@@ -56,7 +56,7 @@ as well as a whole host of new items as listed below.
 * Add new module API flag to bypass command validation by @sungming2 (#1357)
 
 ### Bug Fixes
-* Redact user data when hide-user-data-from-log enabled by @YueTang-Vanessa (#2274)
+* Redact user data when a module crashes for not handling I/O errors enabled by @YueTang-Vanessa (#2274)
 * Prevent bad memory access when NOTOUCH client gets unblocked by @uriyage (#2347)
 * Fix large allocations crashing Valkey during active defrag by @Fusl (#2353)
 * Fix replica (the old primary) claims to sitll have slots after manual failover by @enjoy-binbin (#2301)

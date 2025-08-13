@@ -130,7 +130,7 @@ as well as a whole host of new items as listed below.
 * Include command fullname in error message when returning errors in multi-execs by @enjoy-binbin (#2286)
 * Move auth check to the front, before command exist/arity/protected check by @enjoy-binbin (#1475)
 
-## Contributors
+### Contributors
 * Ran Shidlansik @ranshid
 * Binbin @enjoy-binbin
 * Jacob Murphy @murphyjacob4

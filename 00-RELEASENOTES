@@ -103,7 +103,7 @@ as well as a whole host of new items as listed below.
 * Fix raxRemove crash at memcpy() due to key size exceeds max Rax size by @VoletiRam (#1722)
 
 ### Build and Tooling
-* [valkey-benchmark] Allow multiple random (or sequential) placeholders and fix zadd --sequential to create expected data by @SoftlyRaining (#2102)
+* Allow valkey-benchmark to support multiple random (or sequential) placeholders  by @SoftlyRaining (#2102)
 * Implement RPS control for valkey-benchmark by @artikell (#1761)
 * Add support to send multiple arbitrary commands to valkey-benchmark by @zuiderkwast (#2057)
 * Add MGET test to valkey-benchmark by @zuiderkwast (#2015)

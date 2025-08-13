@@ -114,7 +114,7 @@ as well as a whole host of new items as listed below.
 
 ### Behavior Change
 * Add STALE command flag to SCRIPT-EXISTS, SCRIPT-SHOW and SCRIPT-FLUSH by @enjoy-binbin (#2419)
-* Include command fullname in error message when returning NO_MULTI error by @enjoy-binbin (#2286)
+* Include command fullname in error message when returning errors in multi-execs by @enjoy-binbin (#2286)
 * Move auth check to the front, before command exist/arity/protected check by @enjoy-binbin (#1475)
 * Fix random element in skewed sparse hash table by @zuiderkwast (#2085)
 

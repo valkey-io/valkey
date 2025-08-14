@@ -2790,8 +2790,8 @@ void clusterUpdateSlotsConfigWith(clusterNode *sender, uint64_t senderConfigEpoc
 
     /* Sender and myself in the same shard? */
     int are_in_same_shard = areInSameShard(sender, myself);
-    int first_migrating_slot = -1, last_migrating_slot = -1;
-    clusterNode *from_node = NULL;
+    int first_migrated_slot = -1, last_migrated_slot = -1;
+    clusterNode *migration_source_node = NULL;
 
     for (j = 0; j < CLUSTER_SLOTS; j++) {
         if (bitmapTestBit(slots, j)) {
@@ -2817,23 +2817,28 @@ void clusterUpdateSlotsConfigWith(clusterNode *sender, uint64_t senderConfigEpoc
                 server.cluster->slots[j]->configEpoch < senderConfigEpoch ||
                 clusterSlotFailoverGranted(j)) {
                 if (!isSlotUnclaimed(j) && !areInSameShard(server.cluster->slots[j], sender)) {
-                    if (from_node == NULL) from_node = server.cluster->slots[j];
-                    if (first_migrating_slot == -1) first_migrating_slot = j;
-                    if (last_migrating_slot == -1) {
-                        last_migrating_slot = j;
-                    } else if (from_node == server.cluster->slots[j] && j == last_migrating_slot + 1) {
-                        last_migrating_slot = j;
+                    if (first_migrated_slot == -1) {
+                        /* Delay-initialize the range of migrated slots. */
+                        first_migrated_slot = j;
+                        last_migrated_slot = j;
+                        migration_source_node = server.cluster->slots[j];
+                    } else if (migration_source_node == server.cluster->slots[j] && j == last_migrated_slot + 1) {
+                        /* Extend the range of migrated slots. */
+                        last_migrated_slot = j;
                     } else {
+                        /* We have a gap in the range of migrated slots.
+                         * Log the previous range and start a new one. */
                         serverLog(LL_NOTICE,
                                   "Slot range [%d, %d] is migrated from node %.40s (%s) in shard %.40s"
                                   " to node %.40s (%s) in shard %.40s.",
-                                  first_migrating_slot, last_migrating_slot,
-                                  from_node->name, from_node->human_nodename, from_node->shard_id,
+                                  first_migrated_slot, last_migrated_slot,
+                                  migration_source_node->name, migration_source_node->human_nodename, migration_source_node->shard_id,
                                   sender->name, sender->human_nodename,
                                   sender->shard_id);
-                        first_migrating_slot = -1;
-                        last_migrating_slot = -1;
-                        from_node = NULL;
+                        /* Reset the range for the next slot. */
+                        first_migrated_slot = j;
+                        last_migrated_slot = j;
+                        migration_source_node = server.cluster->slots[j];
                     }
                 }
 
@@ -2970,11 +2975,12 @@ void clusterUpdateSlotsConfigWith(clusterNode *sender, uint64_t senderConfigEpoc
         }
     }
 
-    if (from_node != NULL && first_migrating_slot != -1 && last_migrating_slot != -1) {
+    if (migration_source_node != NULL && first_migrated_slot != -1 && last_migrated_slot != -1) {
         serverLog(LL_NOTICE,
-                  "Slot range [%d, %d] is migrated from node %.40s (%s) in shard %.40s to node %.40s (%s) in shard %.40s.",
-                  first_migrating_slot, last_migrating_slot, from_node->name, from_node->human_nodename,
-                  from_node->shard_id, sender->name, sender->human_nodename, sender->shard_id);
+                  "Slot range [%d, %d] is migrated from node %.40s (%s) in shard %.40s"
+                  " to node %.40s (%s) in shard %.40s.",
+                  first_migrated_slot, last_migrated_slot, migration_source_node->name, migration_source_node->human_nodename,
+                  migration_source_node->shard_id, sender->name, sender->human_nodename, sender->shard_id);
     }
 
     /* After updating the slots configuration, don't do any actual change

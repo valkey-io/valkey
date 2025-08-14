@@ -11,7 +11,7 @@ Upgrade urgency levels:
 | CRITICAL | There is a critical bug affecting MOST USERS. Upgrade ASAP.         |
 | SECURITY | There are security fixes in the release.                            |
 
-Valkey 9.0.0-rc1 - August 12, 2025
+Valkey 9.0.0-rc1 - August 14, 2025
 ----------------------------------
 
 Upgrade urgency LOW: This is the first release candidate of Valkey 9.0.0, with

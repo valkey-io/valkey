@@ -37,7 +37,7 @@ as well as a whole host of new items as listed below.
 ### New Configs
 * Auto-failover on shutdown unified config by @zuiderkwast (#2292)
 
-### New info fields and Logging
+### Logging and Tooling Improvements
 * Introduce support for lttng based tracing by @artikell (#2070)
 * Add node pfail and fail count to cluster info metrics by @hpatro (#1910)
 
@@ -109,7 +109,6 @@ as well as a whole host of new items as listed below.
 * Fix random element in skewed sparse hash table by @zuiderkwast (#2085)
 * Fix error "SSL routines::bad length" when connTLSWrite is called second time with smaller buffer by @zori-janea (#1737)
 * Converge divergent shard-id persisted in nodes.conf to primary's shard ID by @hpatro (#2174)
-
 
 ### Build and Tooling
 * Allow valkey-benchmark to support multiple random (or sequential) placeholders  by @SoftlyRaining (#2102)

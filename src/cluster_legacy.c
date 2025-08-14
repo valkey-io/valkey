@@ -2743,6 +2743,18 @@ void clusterSetNodeAsPrimary(clusterNode *n) {
     clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_UPDATE_STATE);
 }
 
+static void clusterLogSlotRangeMigration(int first_slot,
+                                         int last_slot,
+                                         clusterNode *source_node,
+                                         clusterNode *target_node) {
+    serverLog(LL_NOTICE,
+              "Slot range [%d, %d] is migrated from node %.40s (%s) in shard %.40s"
+              " to node %.40s (%s) in shard %.40s.",
+              first_slot, last_slot,
+              source_node->name, source_node->human_nodename, source_node->shard_id,
+              target_node->name, target_node->human_nodename, target_node->shard_id);
+}
+
 /* This function is called when we receive a primary configuration via a
  * PING, PONG or UPDATE packet. What we receive is a node, a configEpoch of the
  * node, and the set of slots claimed under this configEpoch.
@@ -2828,13 +2840,8 @@ void clusterUpdateSlotsConfigWith(clusterNode *sender, uint64_t senderConfigEpoc
                     } else {
                         /* We have a gap in the range of migrated slots.
                          * Log the previous range and start a new one. */
-                        serverLog(LL_NOTICE,
-                                  "Slot range [%d, %d] is migrated from node %.40s (%s) in shard %.40s"
-                                  " to node %.40s (%s) in shard %.40s.",
-                                  first_migrated_slot, last_migrated_slot,
-                                  migration_source_node->name, migration_source_node->human_nodename, migration_source_node->shard_id,
-                                  sender->name, sender->human_nodename,
-                                  sender->shard_id);
+                        clusterLogSlotRangeMigration(first_migrated_slot, last_migrated_slot,
+                                                     migration_source_node, sender);
                         /* Reset the range for the next slot. */
                         first_migrated_slot = j;
                         last_migrated_slot = j;
@@ -2975,12 +2982,9 @@ void clusterUpdateSlotsConfigWith(clusterNode *sender, uint64_t senderConfigEpoc
         }
     }
 
-    if (migration_source_node != NULL && first_migrated_slot != -1 && last_migrated_slot != -1) {
-        serverLog(LL_NOTICE,
-                  "Slot range [%d, %d] is migrated from node %.40s (%s) in shard %.40s"
-                  " to node %.40s (%s) in shard %.40s.",
-                  first_migrated_slot, last_migrated_slot, migration_source_node->name, migration_source_node->human_nodename,
-                  migration_source_node->shard_id, sender->name, sender->human_nodename, sender->shard_id);
+    if (first_migrated_slot != -1) {
+        clusterLogSlotRangeMigration(first_migrated_slot, last_migrated_slot,
+                                     migration_source_node, sender);
     }
 
     /* After updating the slots configuration, don't do any actual change

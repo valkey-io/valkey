@@ -617,7 +617,7 @@ static bool resize(hashtable *ht, size_t min_capacity, int *malloc_failed) {
         return false;
     }
 
-    signed char old_exp = ht->bucket_exp[hashtableIsRehashing(ht) ? 1 : 0];
+    signed char old_exp = ht->bucket_exp[0];
     size_t alloc_size = num_buckets * sizeof(bucket);
     if (exp == old_exp) {
         /* Can't resize to same size. */

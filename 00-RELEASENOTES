@@ -21,7 +21,7 @@ as well as a whole host of new items as listed below.
 ### New Features
 * Introduce atomic slot migration by @murphyjacob4 (#1949)
 * Introduce HASH items expiration by @ranshid (#2089)
-* support negative filtering for client command filters by @soloestoy (#2378)
+* Support negative filtering for client command filters by @soloestoy (#2378)
 * Add support for automatic client authentication via TLS certificate fields by @omanges (#1920)
 * Add SAFE option to SHUTDOWN to reject shutdown in unsafe situations by @enjoy-binbin (#2195)
 * Support BYPOLYGON option for GEOSEARCH by @KarthikSubbarao (#1809)

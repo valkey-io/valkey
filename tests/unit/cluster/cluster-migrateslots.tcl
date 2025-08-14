@@ -1550,6 +1550,7 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster} overrides {cluste
             assert_match "OK" [R 2 FLUSHDB SYNC]
             assert_match "OK" [R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 16381 16381 16383 16383 NODE $node2_id]
             wait_for_migration 2 16381
+            wait_for_migration 2 16383
         }
     }
 

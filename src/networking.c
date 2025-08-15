@@ -2337,7 +2337,7 @@ static void writeToReplica(client *c) {
         len -= start;
 
         /* For TLS, we should not call SSL_write() with num=0 */
-        if (len == 0) {
+        if (unlikely(len == 0)) {
             continue;
         }
 

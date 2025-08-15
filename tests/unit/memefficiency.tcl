@@ -194,14 +194,17 @@ run_solo {defrag} {
             # Populate memory with interleaving script-key pattern of same size
             set dummy_script "--[string repeat x 400]\nreturn "
             set rd [valkey_deferring_client]
+            $rd client reply off
             for {set j 0} {$j < $n} {incr j} {
                 set val "$dummy_script[format "%06d" $j]"
                 $rd script load $val
                 $rd set k$j $val
-            }
-            for {set j 0} {$j < $n} {incr j} {
-                $rd read ; # Discard script load replies
-                $rd read ; # Discard set replies
+                if {$j % 1000 == 999} {
+                    # Wait for server before we send more.
+                    $rd client reply on
+                    assert_equal OK [$rd read]
+                    $rd client reply off
+                }
             }
             after 120 ;# serverCron only updates the info once in 100ms
             if {$::verbose} {
@@ -213,8 +216,15 @@ run_solo {defrag} {
             assert_lessthan [s allocator_frag_ratio] 1.05
 
             # Delete all the keys to create fragmentation
-            for {set j 0} {$j < $n} {incr j} { $rd del k$j }
-            for {set j 0} {$j < $n} {incr j} { $rd read } ; # Discard del replies
+            for {set j 0} {$j < $n} {incr j} {
+                $rd del k$j
+                if {$j % 1000 == 999} {
+                    # Wait for server
+                    $rd client reply on
+                    assert_equal OK [$rd read]
+                    $rd client reply off
+                }
+            }
             $rd close
             after 120 ;# serverCron only updates the info once in 100ms
             if {$::verbose} {
@@ -287,15 +297,19 @@ run_solo {defrag} {
 
             # create big keys with 10k items
             set rd [valkey_deferring_client]
+            $rd client reply off
             for {set j 0} {$j < 10000} {incr j} {
                 $rd hset bighash $j [concat "asdfasdfasdf" $j]
                 $rd lpush biglist [concat "asdfasdfasdf" $j]
                 $rd zadd bigzset $j [concat "asdfasdfasdf" $j]
                 $rd sadd bigset [concat "asdfasdfasdf" $j]
                 $rd xadd bigstream * item 1 value a
-            }
-            for {set j 0} {$j < 50000} {incr j} {
-                $rd read ; # Discard replies
+                if {$j % 100 == 99} {
+                    # Wait for server
+                    $rd client reply on
+                    assert_equal OK [$rd read]
+                    $rd client reply off
+                }
             }
 
             # create some small items (effective in cluster-enabled)
@@ -311,9 +325,12 @@ run_solo {defrag} {
                 # scale the hash to 1m fields in order to have a measurable the latency
                 for {set j 10000} {$j < 1000000} {incr j} {
                     $rd hset bighash $j [concat "asdfasdfasdf" $j]
-                }
-                for {set j 10000} {$j < 1000000} {incr j} {
-                    $rd read ; # Discard replies
+                    if {$j % 1000 == 999} {
+                        # Wait for server before we send more.
+                        $rd client reply on
+                        assert_equal OK [$rd read]
+                        $rd client reply off
+                    }
                 }
                 # creating that big hash, increased used_memory, so the relative frag goes down
                 set expected_frag 1.3
@@ -322,19 +339,26 @@ run_solo {defrag} {
             # add a mass of string keys
             for {set j 0} {$j < 500000} {incr j} {
                 $rd setrange $j 150 a
-            }
-            for {set j 0} {$j < 500000} {incr j} {
-                $rd read ; # Discard replies
+                if {$j % 1000 == 999} {
+                    # Wait for server before we send more.
+                    $rd client reply on
+                    assert_equal OK [$rd read]
+                    $rd client reply off
+                }
             }
             assert_equal [r dbsize] 500015
 
             # create some fragmentation
             for {set j 0} {$j < 500000} {incr j 2} {
                 $rd del $j
+                if {$j % 1000 == 998} {
+                    # Wait for server before we send more.
+                    $rd client reply on
+                    assert_equal OK [$rd read]
+                    $rd client reply off
+                }
             }
-            for {set j 0} {$j < 500000} {incr j 2} {
-                $rd read ; # Discard replies
-            }
+            $rd close
             assert_equal [r dbsize] 250015
 
             # start defrag

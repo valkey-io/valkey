@@ -78,13 +78,13 @@ proc wait_for_migration {node_idx slot} {
 # Ensure that a given hash slot is served by the specified node.
 # If the slot is currently owned by a different node, move it to the target
 # and wait for the migration to complete.
-proc ensure_slot_on_node {slot target_idx} {
-    if {[is_slot_migrated $target_idx $slot]} {return}
-    set target_id [R $target_idx CLUSTER MYID]
+proc ensure_slot_on_node {node_idx slot} {
+    if {[is_slot_migrated $node_idx $slot]} {return}
+    set target_id [R $node_idx CLUSTER MYID]
     for {set i 0} {$i < 3} {incr i} {
         if {[is_slot_migrated $i $slot]} {
             assert_match "OK" [R $i CLUSTER MIGRATESLOTS SLOTSRANGE $slot $slot NODE $target_id]
-            wait_for_migration $target_idx $slot
+            wait_for_migration $node_idx $slot
             return
         }
     }
@@ -694,8 +694,8 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster} overrides {cluste
     }
 
     test "Simultaneous exports" {
-        ensure_slot_on_node 16382 2
-        ensure_slot_on_node 16383 2
+        ensure_slot_on_node 2 16382
+        ensure_slot_on_node 2 16383
         assert_does_not_resync {
             # Populate data before migration
             populate 100 "$16382_slot_tag:1:" 1000 -2
@@ -794,8 +794,8 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster} overrides {cluste
     }
 
     test "Import slot range with multiple slots" {
-        ensure_slot_on_node 16382 2
-        ensure_slot_on_node 16383 2
+        ensure_slot_on_node 2 16382
+        ensure_slot_on_node 2 16383
         assert_does_not_resync {
             # Populate data before migration
             populate 500 "$16382_slot_tag:" 1000 -2

@@ -42,16 +42,16 @@ int test_entryCreate(int argc, char **argv, int flags) {
     sds field1 = sdsnew(SHORT_FIELD);
     sds value1 = sdsnew(SHORT_VALUE);
     sds value_copy1 = sdsdup(value1); // Keep a copy since entryCreate takes ownership of value
-    long long expiry1 = 100;
-    entry *e1 = entryCreate(field1, sdslen(field1), value1, expiry1);
-    verify_entry_properties(e1, field1, value_copy1, expiry1, true, false);
+    long long expiry1 = EXPIRY_NONE;
+    entry *e1 = entryCreate(field1, value1, expiry1);
+    verify_entry_properties(e1, field1, value_copy1, expiry1, false, false);
 
     // Test with embedded value with no expiry
     sds field2 = sdsnew(SHORT_FIELD);
     sds value2 = sdsnew(SHORT_VALUE);
     sds value_copy2 = sdsdup(value2);
     long long expiry2 = EXPIRY_NONE;
-    entry *e2 = entryCreate(field2, sdslen(field2), value2, expiry2);
+    entry *e2 = entryCreate(field2, value2, expiry2);
     verify_entry_properties(e2, field2, value_copy2, expiry2, false, false);
 
     // Test with non-embedded field and value with expiry
@@ -59,7 +59,7 @@ int test_entryCreate(int argc, char **argv, int flags) {
     sds value3 = sdsnew(LONG_VALUE);
     sds value_copy3 = sdsdup(value3);
     long long expiry3 = 100;
-    entry *e3 = entryCreate(field3, sdslen(field3), value3, expiry3);
+    entry *e3 = entryCreate(field3, value3, expiry3);
     verify_entry_properties(e3, field3, value_copy3, expiry3, true, true);
 
     // Test with non-embedded field and value with no expiry
@@ -67,7 +67,7 @@ int test_entryCreate(int argc, char **argv, int flags) {
     sds value4 = sdsnew(LONG_VALUE);
     sds value_copy4 = sdsdup(value4);
     long long expiry4 = EXPIRY_NONE;
-    entry *e4 = entryCreate(field4, sdslen(field4), value4, expiry4);
+    entry *e4 = entryCreate(field4, value4, expiry4);
     verify_entry_properties(e4, field4, value_copy4, expiry4, false, true);
 
     entryFree(e1);
@@ -112,7 +112,7 @@ int test_entryUpdate(int argc, char **argv, int flags) {
     sds field = sdsnew(SHORT_FIELD);
     sds value_copy1 = sdsdup(value1);
     long long expiry1 = 100;
-    entry *e1 = entryCreate(field, sdslen(field), value1, expiry1);
+    entry *e1 = entryCreate(field, value1, expiry1);
     verify_entry_properties(e1, field, value_copy1, expiry1, true, false);
 
     // Update only value (keeping embedded)
@@ -233,7 +233,7 @@ int test_entryHasexpiry_entrySetExpiry(int argc, char **argv, int flags) {
     // No expiry
     sds field1 = sdsnew(SHORT_FIELD);
     sds value1 = sdsnew(SHORT_VALUE);
-    entry *e1 = entryCreate(field1, sdslen(field1), value1, EXPIRY_NONE);
+    entry *e1 = entryCreate(field1, value1, EXPIRY_NONE);
     TEST_ASSERT(entryHasExpiry(e1) == false);
     TEST_ASSERT(entryGetExpiry(e1) == EXPIRY_NONE);
 
@@ -253,7 +253,7 @@ int test_entryHasexpiry_entrySetExpiry(int argc, char **argv, int flags) {
     // Test with non-embedded entry
     sds field4 = sdsnew(LONG_FIELD);
     sds value4 = sdsnew(LONG_VALUE);
-    entry *e4 = entryCreate(field4, sdslen(field4), value4, EXPIRY_NONE);
+    entry *e4 = entryCreate(field4, value4, EXPIRY_NONE);
     TEST_ASSERT(entryHasExpiry(e4) == false);
     TEST_ASSERT(entryHasEmbeddedValue(e4) == false);
 
@@ -301,7 +301,7 @@ int test_entryIsExpired(int argc, char **argv, int flags) {
     // No expiry
     sds field1 = sdsnew(SHORT_FIELD);
     sds value1 = sdsnew(SHORT_VALUE);
-    entry *e1 = entryCreate(field1, sdslen(field1), value1, EXPIRY_NONE);
+    entry *e1 = entryCreate(field1, value1, EXPIRY_NONE);
     TEST_ASSERT(entryGetExpiry(e1) == EXPIRY_NONE);
     TEST_ASSERT(entryIsExpired(e1) == false);
 
@@ -309,14 +309,14 @@ int test_entryIsExpired(int argc, char **argv, int flags) {
     sds field2 = sdsnew(SHORT_FIELD);
     sds value2 = sdsnew(SHORT_VALUE);
     long long future_time = current_time + 10000; // 10 seconds in future
-    entry *e2 = entryCreate(field2, sdslen(field2), value2, future_time);
+    entry *e2 = entryCreate(field2, value2, future_time);
     TEST_ASSERT(entryGetExpiry(e2) == future_time);
     TEST_ASSERT(entryIsExpired(e2) == false);
 
     // Current time expiry
     sds field3 = sdsnew(SHORT_FIELD);
     sds value3 = sdsnew(SHORT_VALUE);
-    entry *e3 = entryCreate(field3, sdslen(field3), value3, current_time);
+    entry *e3 = entryCreate(field3, value3, current_time);
     TEST_ASSERT(entryGetExpiry(e3) == current_time);
     TEST_ASSERT(entryIsExpired(e3) == false);
 
@@ -324,7 +324,7 @@ int test_entryIsExpired(int argc, char **argv, int flags) {
     sds field4 = sdsnew(SHORT_FIELD);
     sds value4 = sdsnew(SHORT_VALUE);
     long long past_time = current_time - 10000; // 10 seconds ago
-    entry *e4 = entryCreate(field4, sdslen(field4), value4, past_time);
+    entry *e4 = entryCreate(field4, value4, past_time);
     TEST_ASSERT(entryGetExpiry(e4) == past_time);
     TEST_ASSERT(entryIsExpired(e4) == true);
 
@@ -369,7 +369,7 @@ int test_entryMemUsage_entrySetExpiry_entrySetValue(int argc, char **argv, int f
     sds value1 = sdsnew(SHORT_VALUE);
     sds value_copy1 = sdsdup(value1);
     long long expiry1 = EXPIRY_NONE;
-    entry *e1 = entryCreate(field1, sdslen(field1), value1, expiry1);
+    entry *e1 = entryCreate(field1, value1, expiry1);
     size_t e1_entryMemUsage = entryMemUsage(e1);
     verify_entry_properties(e1, field1, value_copy1, expiry1, false, false);
     TEST_ASSERT(e1_entryMemUsage > 0);
@@ -416,7 +416,7 @@ int test_entryMemUsage_entrySetExpiry_entrySetValue(int argc, char **argv, int f
     sds value6 = sdsnew(LONG_VALUE);
     sds value_copy6 = sdsdup(value6);
     long long expiry6 = EXPIRY_NONE;
-    entry *e6 = entryCreate(field6, sdslen(field6), value6, EXPIRY_NONE);
+    entry *e6 = entryCreate(field6, value6, EXPIRY_NONE);
     size_t e6_entryMemUsage = entryMemUsage(e6);
     verify_entry_properties(e6, field6, value_copy6, expiry6, false, true);
     TEST_ASSERT(e6_entryMemUsage > 0);

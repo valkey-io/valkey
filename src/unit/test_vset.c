@@ -16,7 +16,7 @@ typedef entry mock_entry;
 
 static mock_entry *mockCreateEntry(const char *keystr, long long expiry) {
     sds field = sdsnew(keystr);
-    mock_entry *e = entryCreate(field, sdslen(field), sdsnew("value"), expiry);
+    mock_entry *e = entryCreate(field, sdsnew("value"), expiry);
     sdsfree(field);
     return e;
 }
@@ -29,7 +29,7 @@ static void mockFreeEntry(void *entry) {
 static mock_entry *mockEntryUpdate(mock_entry *entry, long long expiry) {
     sds field = entryGetField(entry);
     size_t len;
-    mock_entry *new_entry = entryCreate(field, sdslen(field), sdsdup(entryGetValue(entry, &len)), expiry);
+    mock_entry *new_entry = entryCreate(field, sdsdup(entryGetValue(entry, &len)), expiry);
     entryFree(entry);
     return new_entry;
 }

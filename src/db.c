@@ -1005,7 +1005,7 @@ int objectTypeCompare(robj *o, long long target) {
 }
 
 static void addScanDataItem(vector *result, const char *buf, size_t len) {
-    viewValue *item = vectorPush(result);
+    bufferView *item = vectorPush(result);
     item->buf = buf;
     item->len = len;
 }
@@ -1047,8 +1047,7 @@ void keysScanCallback(void *privdata, void *entry, int didx) {
  * returned by the dictionary iterator into a list. */
 void hashtableScanCallback(void *privdata, void *entry) {
     scanData *data = (scanData *)privdata;
-    const char *val = NULL;
-    size_t val_len = 0;
+    bufferView val = {NULL, 0};
     sds key = NULL;
 
     robj *o = data->o;
@@ -1068,7 +1067,7 @@ void hashtableScanCallback(void *privdata, void *entry) {
     } else if (o->type == OBJ_HASH) {
         key = entryGetField(entry);
         if (!data->only_keys) {
-            val = entryGetValue(entry, &val_len);
+            val.buf = entryGetValue(entry, &val.len);
         }
     } else {
         serverPanic("Type not handled in hashtable SCAN callback.");
@@ -1089,14 +1088,16 @@ void hashtableScanCallback(void *privdata, void *entry) {
         key = sdsdup(node->ele);
         if (!data->only_keys) {
             char buf[MAX_LONG_DOUBLE_CHARS];
-            val_len = ld2string(buf, sizeof(buf), node->score, LD_STR_AUTO);
-            val = (const char *)sdsnewlen(buf, val_len);
+            int len = ld2string(buf, sizeof(buf), node->score, LD_STR_AUTO);
+            sds tmp = sdsnewlen(buf, len);
+            val.buf = (const char *)tmp;
+            val.len = sdslen(tmp);
         }
     }
 
     addScanDataItem(data->result, (const char *)key, sdslen(key));
-    if (val) {
-        addScanDataItem(data->result, val, sdslen(val));
+    if (val.buf) {
+        addScanDataItem(data->result, val.buf, val.len);
     }
 }
 
@@ -1251,7 +1252,7 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {
         /* scanning ZSET allocates temporary strings even though it's a dict */
         free_callback = sdsfree;
     }
-    vectorInit(&result, SCAN_VECTOR_INITIAL_ALLOC, sizeof(viewValue));
+    vectorInit(&result, SCAN_VECTOR_INITIAL_ALLOC, sizeof(bufferView));
 
     /* For main hash table scan or scannable data structure. */
     if (!o || ht) {
@@ -1354,7 +1355,7 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {
 
     addReplyArrayLen(c, vectorLen(&result));
     for (uint32_t i = 0; i < vectorLen(&result); i++) {
-        viewValue *key = vectorGet(&result, i);
+        bufferView *key = vectorGet(&result, i);
         addReplyBulkCBuffer(c, key->buf, key->len);
         if (free_callback) {
             free_callback((sds)(key->buf));

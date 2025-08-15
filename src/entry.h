@@ -4,6 +4,15 @@
 #include "sds.h"
 #include <stdbool.h>
 
+/* Structure representing a non-owning view of a buffer.
+ * The view does not manage the underlying memory, so its destruction
+ * will not free the buffer.
+ */
+typedef struct bufferView {
+    const char *buf; /* Pointer to the externalized buffer */
+    size_t len;      /* Length of the buffer */
+} bufferView;
+
 /*-----------------------------------------------------------------------------
  * Entry
  *----------------------------------------------------------------------------*/
@@ -43,17 +52,6 @@
  * - Used for large value sizes. */
 typedef void entry;
 
-/* Structure representing a view value.
- * This allows modules to store a char* and length directly in a hash field,
- * bypassing normal SDS string allocation for the value.
- * The module is responsible for the lifetime management of the memory pointed
- * to by 'buf'. Valkey core will not free 'buf'.
- */
-typedef struct viewValue {
-    const char *buf; /* Pointer to the externalized buffer */
-    size_t len;      /* Length of the buffer */
-} viewValue;
-
 /* The maximum allocation size we want to use for entries with embedded
  * values. */
 #define EMBED_VALUE_MAX_ALLOC_SIZE 128
@@ -74,7 +72,7 @@ long long entryGetExpiry(const entry *entry);
 bool entryHasExpiry(const entry *entry);
 
 /* Returns true if the entry value is externalized. */
-bool entryHasViewValue(const entry *e);
+bool entryHasValueView(const entry *entry);
 
 /* Sets the expiration timestamp. */
 entry *entrySetExpiry(entry *entry, long long expiry);
@@ -86,9 +84,8 @@ bool entryIsExpired(entry *entry);
 void entryFree(entry *entry);
 
 /* Creates a new entry with the given field, value, and optional expiry. */
-entry *entryCreate(const char *field, size_t field_len, sds value, long long expiry);
-entry *createViewValueEntry(sds field, const char *buf, size_t len, long long expiry);
-viewValue *entryGetViewValueRef(const entry *e);
+entry *entryCreate(const_sds field, sds value, long long expiry);
+entry *entrySetValueView(entry *entry, const char *buf, size_t len, long long expiry);
 
 /* Updates the value and/or expiry of an existing entry.
  * In case value is NULL, will use the existing entry value.
@@ -105,6 +102,6 @@ entry *entryDefrag(entry *entry, void *(*defragfn)(void *), sds (*sdsdefragfn)(s
 void entryDismissMemory(entry *entry);
 
 /* Internal used for debug. No need to use this function except in tests */
-bool entryHasEmbeddedValue(entry *entry);
+bool entryHasEmbeddedValue(const entry *entry);
 
 #endif

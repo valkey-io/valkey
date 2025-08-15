@@ -2032,7 +2032,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error) {
         zs = o->ptr;
 
         if (!hashtableTryExpand(zs->ht, zsetlen)) {
-            rdbReportCorruptRDB("OOM in dictTryExpand %llu", (unsigned long long)zsetlen);
+            rdbReportCorruptRDB("OOM in hashtableTryExpand %llu", (unsigned long long)zsetlen);
             decrRefCount(o);
             return NULL;
         }

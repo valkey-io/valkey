@@ -2336,6 +2336,11 @@ static void writeToReplica(client *c) {
         size_t len = (cur_node == last_node) ? bufpos : cur_block->used;
         len -= start;
 
+        /* For TLS, we should not call SSL_write() with num=0 */
+        if (unlikely(len == 0)) {
+            continue;
+        }
+
         iov[iovcnt].iov_base = cur_block->buf + start;
         iov[iovcnt].iov_len = len;
         total_bytes += len;

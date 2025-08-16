@@ -59,6 +59,15 @@ run_solo {defrag} {
         return [list $key $field]
     }
 
+    # Make a deferring client with CLIENT REPLY OFF sync with the server by
+    # temporarily setting CLIENT REPLY ON and waiting for the reply, then
+    # switching back to CLIENT REPLY OFF.
+    proc client_reply_off_wait_for_server {rd} {
+        $rd client reply on
+        assert_equal OK [$rd read]
+        $rd client reply off
+    }
+
     # Logs defragging state if ::verbose is true
     proc log_frag {title} {
         # Note, this delay is outside of the "if" so that behavior is the same, with and
@@ -240,27 +249,23 @@ run_solo {defrag} {
             perform_defrag_test $title populate {
                 # add a mass of string keys
                 set rd [valkey_deferring_client]
+                $rd client reply off
                 for {set j 0} {$j < $n} {incr j} {
                     $rd setrange $j 250 a
                     if {$j % 3 == 0} {
                         $rd expire $j 1000 ;# put expiration on some
                     }
-                }
-                for {set j 0} {$j < $n} {incr j} {
-                    $rd read ; # Discard replies
-                    if {$j % 3 == 0} {
-                        $rd read
-                    }
+                    if {$j % 1000 == 999} {client_reply_off_wait_for_server $rd}
                 }
                 assert {[scan [regexp -inline {expires\=([\d]*)} [r info keyspace]] expires=%d] > 0}
             } fragment {
                 # delete half of the keys
                 for {set j 0} {$j < $n} {incr j 2} {
                     $rd del $j
+                    if {$j % 1000 == 998} {client_reply_off_wait_for_server $rd}
                 }
-                for {set j 0} {$j < $n} {incr j 2} { $rd read } ; # Discard replies
                 $rd close
-                
+
                 # use custom slower defrag speed to start so that while_defragging has time
                 r config set active-defrag-cycle-min 2
                 r config set active-defrag-cycle-max 3
@@ -326,19 +331,19 @@ run_solo {defrag} {
                 # Populate memory with interleaving script-key pattern of same size
                 set dummy_script "--[string repeat x 450]\nreturn "
                 set rd [valkey_deferring_client]
+                $rd client reply off
                 for {set j 0} {$j < $n} {incr j} {
                     set val "$dummy_script[format "%06d" $j]"
                     $rd script load $val
                     $rd set k$j $val
-                }
-                for {set j 0} {$j < $n} {incr j} {
-                    $rd read ; # Discard script load replies
-                    $rd read ; # Discard set replies
+                    if {$j % 1000 == 999} {client_reply_off_wait_for_server $rd}
                 }
             } fragment {
                 # Delete all the keys to create fragmentation
-                for {set j 0} {$j < $n} {incr j} { $rd del k$j }
-                for {set j 0} {$j < $n} {incr j} { $rd read } ; # Discard del replies
+                for {set j 0} {$j < $n} {incr j} {
+                    $rd del k$j
+                    if {$j % 1000 == 999} {client_reply_off_wait_for_server $rd}
+                }
                 $rd close
             }
         }
@@ -352,22 +357,23 @@ run_solo {defrag} {
 
             perform_defrag_test $title populate {
                 set rd [valkey_deferring_client]
+                $rd client reply off
                 set val [string repeat A 250]
                 set k 0
                 set f 0
                 for {set j 0} {$j < $n} {incr j} {
                     $rd hset k$k f$f $val
                     lassign [next_exp_kf $k $f] k f
+                    if {$j % 1000 == 999} {client_reply_off_wait_for_server $rd}
                 }
-                for {set j 0} {$j < $n} {incr j} { $rd read } ; # Discard replies
             } fragment {
                 set k 0
                 set f 0
                 for {set j 0} {$j < $n} {incr j 2} {
                     $rd hdel k$k f$f
                     lassign [next_exp_kf $k $f 2] k f
+                    if {$j % 1000 == 998} {client_reply_off_wait_for_server $rd}
                 }
-                for {set j 0} {$j < $n} {incr j 2} { $rd read } ; # Discard replies
                 $rd close
             }
         }
@@ -382,14 +388,15 @@ run_solo {defrag} {
 
             perform_defrag_test $title populate {
                 set rd [valkey_deferring_client]
+                $rd client reply off
                 set val [string repeat A 350]
                 set k 0
                 set f 0
                 for {set j 0} {$j < $n} {incr j} {
                     $rd lpush k$k $val
                     lassign [next_exp_kf $k $f] k f
+                    if {$j % 1000 == 999} {client_reply_off_wait_for_server $rd}
                 }
-                for {set j 0} {$j < $n} {incr j} { $rd read } ; # Discard replies
             } fragment {
                 set k 0
                 set f 0
@@ -397,8 +404,8 @@ run_solo {defrag} {
                     $rd ltrim k$k 1 -1 ;# deletes the leftmost item
                     $rd lmove k$k k$k LEFT RIGHT ;# rotates the leftmost item to the right side
                     lassign [next_exp_kf $k $f 2] k f
+                    if {$j % 1000 == 998} {client_reply_off_wait_for_server $rd}
                 }
-                for {set j 0} {$j < $n} {incr j 2} { $rd read; $rd read } ; # Discard replies
                 $rd close
             }
         }
@@ -412,22 +419,23 @@ run_solo {defrag} {
 
             perform_defrag_test $title populate {
                 set rd [valkey_deferring_client]
+                $rd client reply off
                 set val [string repeat A 300]
                 set k 0
                 set f 0
                 for {set j 0} {$j < $n} {incr j} {
                     $rd sadd k$k $val$f
                     lassign [next_exp_kf $k $f] k f
+                    if {$j % 1000 == 999} {client_reply_off_wait_for_server $rd}
                 }
-                for {set j 0} {$j < $n} {incr j} { $rd read } ; # Discard replies
             } fragment {
                 set k 0
                 set f 0
                 for {set j 0} {$j < $n} {incr j 2} {
                     $rd srem k$k $val$f
                     lassign [next_exp_kf $k $f 2] k f
+                    if {$j % 1000 == 998} {client_reply_off_wait_for_server $rd}
                 }
-                for {set j 0} {$j < $n} {incr j 2} { $rd read } ; # Discard replies
                 $rd close
             }
         }
@@ -441,22 +449,23 @@ run_solo {defrag} {
 
             perform_defrag_test $title populate {
                 set rd [valkey_deferring_client]
+                $rd client reply off
                 set val [string repeat A 250]
                 set k 0
                 set f 0
                 for {set j 0} {$j < $n} {incr j} {
                     $rd zadd k$k [expr rand()] $val$f
                     lassign [next_exp_kf $k $f] k f
+                    if {$j % 1000 == 999} {client_reply_off_wait_for_server $rd}
                 }
-                for {set j 0} {$j < $n} {incr j} { $rd read } ; # Discard replies
             } fragment {
                 set k 0
                 set f 0
                 for {set j 0} {$j < $n} {incr j 2} {
                     $rd zrem k$k $val$f
                     lassign [next_exp_kf $k $f 2] k f
+                    if {$j % 1000 == 998} {client_reply_off_wait_for_server $rd}
                 }
-                for {set j 0} {$j < $n} {incr j 2} { $rd read } ; # Discard replies
                 $rd close
             }
         }
@@ -471,16 +480,17 @@ run_solo {defrag} {
 
             perform_defrag_test $title populate {
                 set rd [valkey_deferring_client]
+                $rd client reply off
                 set val [string repeat A 50]
                 for {set j 0} {$j < $n} {incr j} {
                     $rd xadd k$j * field1 $val field2 $val
+                    if {$j % 1000 == 999} {client_reply_off_wait_for_server $rd}
                 }
-                for {set j 0} {$j < $n} {incr j} { $rd read } ; # Discard replies
             } fragment {
                 for {set j 0} {$j < $n} {incr j 2} {
                     $rd del k$j
+                    if {$j % 1000 == 998} {client_reply_off_wait_for_server $rd}
                 }
-                for {set j 0} {$j < $n} {incr j 2} { $rd read } ; # Discard replies
                 $rd close
             }
         }

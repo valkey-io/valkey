@@ -948,6 +948,13 @@ end:
     listRelease(module_configs_apply);
 }
 
+/* Used by configGetCommand */
+static int configKeyCompare(const void *a, const void *b) {
+    const char *key_a = *(const char **)a;
+    const char *key_b = *(const char **)b;
+    return strcmp(key_a, key_b);
+}
+
 /*-----------------------------------------------------------------------------
  * CONFIG GET implementation
  *----------------------------------------------------------------------------*/
@@ -990,12 +997,27 @@ void configGetCommand(client *c) {
     }
 
     di = dictGetIterator(matches);
-    addReplyMapLen(c, dictSize(matches));
+    unsigned long matchesSize = dictSize(matches);
+    addReplyMapLen(c, matchesSize);
+
+    struct {
+        const char *key;
+        sds value;
+    } *sorted = zmalloc(sizeof(*sorted) * matchesSize);
+    unsigned long sortedIndex = 0;
     while ((de = dictNext(di)) != NULL) {
         standardConfig *config = (standardConfig *)dictGetVal(de);
-        addReplyBulkCString(c, dictGetKey(de));
-        addReplyBulkSds(c, config->interface.get(config));
+        sorted[sortedIndex].key = dictGetKey(de);
+        sorted[sortedIndex].value = config->interface.get(config);
+        sortedIndex++;
     }
+    qsort(sorted, matchesSize, sizeof(*sorted), configKeyCompare);
+
+    for (sortedIndex = 0; sortedIndex < matchesSize; sortedIndex++) {
+        addReplyBulkCString(c, sorted[sortedIndex].key);
+        addReplyBulkSds(c, sorted[sortedIndex].value);
+    }
+    zfree(sorted);
     dictReleaseIterator(di);
     dictRelease(matches);
 }

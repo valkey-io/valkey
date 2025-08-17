@@ -2012,6 +2012,7 @@ bool canSlotMigrationJobSendAck(slotMigrationJob *job) {
      *    job. */
     return job->state != SLOT_EXPORT_SNAPSHOTTING &&
            job->state != SLOT_IMPORT_WAIT_ACK &&
+           job->state != SLOT_EXPORT_CONNECTING &&
            job->state != SLOT_EXPORT_SEND_AUTH &&
            job->state != SLOT_EXPORT_READ_AUTH_RESPONSE &&
            job->state != SLOT_EXPORT_SEND_ESTABLISH &&

@@ -3120,15 +3120,15 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
     long long lru_clock = LRU_CLOCK();
 
     pthread_mutex_t *key_insert_mutex = NULL;
-    key_insert_mutex = zmalloc(sizeof(pthread_mutex_t));
 
     if (server.rdb_threads_num > 1) {
+        atomic_store_explicit(&rdb_load_thread_error, 0, memory_order_relaxed); /* Allows threads to report errors */
+        key_insert_mutex = zmalloc(sizeof(pthread_mutex_t));
         serverLog(LL_NOTICE, "Starting RDB Threads for Load. rdb-threads: %d", server.rdb_threads_num);
-        initRDBThreads(2048); // Random number of tasks for now
+        initRDBThreads(4); // Random number of tasks for now
         pthread_mutex_init(key_insert_mutex, NULL);
         startRDBThreads();
     }
-    long long rdb_thread_tasks_counter = 0;
 
     while (1) {
         sds key;
@@ -3261,17 +3261,26 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
                 }
 
             } else if (!strcasecmp(auxkey->ptr, "rdb-thread-chunk")) {
-                if (server.rdb_threads_num <= 1) continue;
-
                 unsigned long chunk_size;
                 if (sscanf(auxval->ptr, "%lu", &chunk_size) < 1) {
                     decrRefCount(auxkey);
                     decrRefCount(auxval);
                     goto eoferr;
                 }
-                // serverLog(LL_NOTICE, "Found Chunk Size: %lu", chunk_size);
-                // rioRead(rdb, new buf, chunk_size);
-                offloadRDBChunkToThread(rdb, chunk_size, rdbver, db, rdbflags, key_insert_mutex, dbid, rdb_thread_tasks_counter);
+
+                if (server.rdb_threads_num > 1) {
+                    serverAssert(chunk_size > 0);
+                    if (offloadRDBChunkToThread(rdb, chunk_size, rdbver, db, rdbflags, key_insert_mutex, dbid, lru_clock, now) == C_ERR) {
+                        serverLog(LL_WARNING, "Failed to offload RDB chunk to thread");
+                        decrRefCount(auxkey);
+                        decrRefCount(auxval);
+                        goto eoferr;
+                    }
+                    expiretime = -1;
+                    lfu_freq   = -1;
+                    lru_idle   = -1;
+                }
+
             } else {
                 /* Check if this is a dynamic aux field */
                 int handled = 0;
@@ -3385,9 +3394,7 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
         /* Read value */
         val = rdbLoadObject(type, rdb, key, db->id, &error);
 
-        if (server.rdb_threads_num > 1) {
-            pthread_mutex_lock(key_insert_mutex);
-        }
+        if (server.rdb_threads_num > 1) pthread_mutex_lock(key_insert_mutex);
 
         /* Check if the key already expired. This function is used when loading
          * an RDB file from disk, either at startup, or when an RDB was
@@ -3470,9 +3477,7 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
         expiretime = -1;
         lfu_freq = -1;
         lru_idle = -1;
-        if (server.rdb_threads_num > 1) {
-            pthread_mutex_unlock(key_insert_mutex);
-        }
+        if (server.rdb_threads_num > 1) pthread_mutex_unlock(key_insert_mutex);
     }
     /* Verify the checksum if RDB version is >= 5 */
     if (rdbver >= 5) {
@@ -3497,9 +3502,13 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
     }
     if (server.rdb_threads_num > 1) {
         drainRDBThreadsQueue();
+        if (atomic_load_explicit(&rdb_load_thread_error, memory_order_relaxed)) {
+            serverLog(LL_WARNING, "RDB load failed in worker thread(s).");
+            goto eoferr;
+        }
+        killRDBThreads();
         pthread_mutex_destroy(key_insert_mutex);
         zfree(key_insert_mutex);
-        killRDBThreads();
     }
     if (empty_keys_skipped) {
         serverLog(LL_NOTICE, "Done loading RDB, keys loaded: %lld, keys expired: %lld, empty keys skipped: %lld.",
@@ -3521,9 +3530,10 @@ eoferr:
     rdbReportReadError("Unexpected EOF reading RDB file");
 
     if (server.rdb_threads_num > 1) {
+        drainRDBThreadsQueue();
+        killRDBThreads();
         pthread_mutex_destroy(key_insert_mutex);
         zfree(key_insert_mutex);
-        killRDBThreads();
     }
 
     return C_ERR;

@@ -62,23 +62,27 @@ ssize_t rdbSaveDbMultiThreaded(rio *rdb, int dbid, long *key_counter, char *pnam
 
 typedef struct RdbChunkLoadThreadArgs {
     int rdbver;
-    rio *chunk_rio;
+    rio chunk_rio;
     serverDb *db;
     int rdbflags;
-    long long lru_clock;
-    long long current_dbid;
+    int current_dbid;
     pthread_mutex_t *insert_mutex;
+    long long lru_clock;
+    long long now;
 } RdbChunkLoadThreadArgs;
 
 
-void offloadRDBChunkToThread(
+int offloadRDBChunkToThread(
     rio *rdb_main_stream,         
     unsigned long chunk_size,     
     int rdbver,                   
     serverDb *current_db,         
     int rdbflags,                 
     pthread_mutex_t *db_insert_mutex,
-    int current_dbid,              
-    long long num_thread_tasks
+    int current_dbid,
+    long long lru_clock,
+    long long now
 );
+extern _Atomic int rdb_load_thread_error;
+
 #endif // __RDB_THREADS_H__

@@ -738,7 +738,7 @@ void clusterHandleFlushDuringSlotMigration(void) {
  *              ┌─────────────▼────────────────┐   │
  *              │SLOT_EXPORT_READ_AUTH_RESPONSE┼───┤
  *              └─────────────┬────────────────┘   │
-  *              Authenticated│                    │
+ *               Authenticated│                    │
  *              ┌─────────────▼────────────┐       │
  *              │SLOT_EXPORT_SEND_ESTABLISH┼───────┤
  *              └─────────────┬────────────┘       │
@@ -1046,10 +1046,7 @@ void slotMigrationJobReadAuthResponse(connection *conn) {
  * job's connection. */
 void slotMigrationJobSendAuth(slotMigrationJob *job) {
     serverAssert(job->type == SLOT_MIGRATION_EXPORT);
-    if (!server.primary_auth) {
-        updateSlotMigrationJobState(job, SLOT_EXPORT_SEND_ESTABLISH);
-        return;
-    }
+    serverAssert(server.primary_auth);
 
     sds err = replicationSendAuth(job->conn);
     if (err) {
@@ -1597,7 +1594,11 @@ void proceedWithSlotMigration(slotMigrationJob *job) {
             if (!completed) return;
             serverLog(LL_NOTICE, "Slot migration %s connection established.",
                       job->description);
-            updateSlotMigrationJobState(job, SLOT_EXPORT_SEND_AUTH);
+            if (server.primary_auth) {
+                updateSlotMigrationJobState(job, SLOT_EXPORT_SEND_AUTH);
+            } else {
+                updateSlotMigrationJobState(job, SLOT_EXPORT_SEND_ESTABLISH);
+            }
             continue;
         }
         case SLOT_EXPORT_SEND_AUTH:

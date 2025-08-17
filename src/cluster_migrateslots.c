@@ -474,8 +474,6 @@ void clusterCommandSyncSlotsEstablish(client *c) {
 
             continue;
         }
-        addReplyErrorObject(c, shared.syntaxerr);
-        goto cleanup;
     }
     if (!source_node || !name || !slot_ranges) {
         addReplyErrorObject(c, shared.syntaxerr);

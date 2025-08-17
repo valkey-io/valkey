@@ -20,3 +20,5 @@ A short description of the failure.
 **Error stack trace**
 
 A relevant stack trace for the test failure.
+
+> **Tip:** Copy and paste the full stack trace from the CI output into your issue, as CI links may expire over time.

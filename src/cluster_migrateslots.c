@@ -892,6 +892,10 @@ void clusterCommandMigrateSlots(client *c) {
                                 (sds)c->argv[curr_index]->ptr);
             goto cleanup;
         }
+        if (target_node == server.cluster->myself) {
+            addReplyErrorFormat(c, "Slots are served by myself.");
+            goto cleanup;
+        }
         curr_index++;
 
         slotMigrationJob *job = createSlotExportJob(target_node, slot_ranges);

@@ -200,6 +200,7 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster} overrides {cluste
 
         assert_error "*Slot migration can only be used on primary nodes*" {R 3 CLUSTER MIGRATESLOTS SLOTSRANGE 0 0}
         assert_error "*Slots are not served by myself*" {R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 0 0 NODE $node0_id}
+        assert_error "*Slots are served by myself*" {R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 0 0 NODE $node0_id}
 
         assert_error "*wrong number of arguments*" {R 0 CLUSTER CANCELSLOTMIGRATIONS ARG}
         assert_error "*No migrations ongoing*" {R 0 CLUSTER CANCELSLOTMIGRATIONS}

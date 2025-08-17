@@ -997,29 +997,30 @@ void configGetCommand(client *c) {
     }
 
     di = dictGetIterator(matches);
-    unsigned long matchesSize = dictSize(matches);
-    addReplyMapLen(c, matchesSize);
+    int n = dictSize(matches);
+    addReplyMapLen(c, n);
 
     struct {
         const char *key;
         sds value;
-    } *sorted = zmalloc(sizeof(*sorted) * matchesSize);
-    unsigned long sortedIndex = 0;
+    } *sorted = zmalloc(sizeof(*sorted) * n);
+
+    i = 0;
     while ((de = dictNext(di)) != NULL) {
         standardConfig *config = (standardConfig *)dictGetVal(de);
-        sorted[sortedIndex].key = dictGetKey(de);
-        sorted[sortedIndex].value = config->interface.get(config);
-        sortedIndex++;
+        sorted[i].key = dictGetKey(de);
+        sorted[i].value = config->interface.get(config);
+        i++;
     }
-    qsort(sorted, matchesSize, sizeof(*sorted), configKeyCompare);
-
-    for (sortedIndex = 0; sortedIndex < matchesSize; sortedIndex++) {
-        addReplyBulkCString(c, sorted[sortedIndex].key);
-        addReplyBulkSds(c, sorted[sortedIndex].value);
-    }
-    zfree(sorted);
     dictReleaseIterator(di);
     dictRelease(matches);
+
+    qsort(sorted, n, sizeof(*sorted), configKeyCompare);
+    for (i = 0; i < n; i++) {
+        addReplyBulkCString(c, sorted[i].key);
+        addReplyBulkSds(c, sorted[i].value);
+    }
+    zfree(sorted);
 }
 
 /*-----------------------------------------------------------------------------

@@ -118,13 +118,17 @@ static int rioBufferToTargetFlush(rio *r) {
 
     pthread_mutex_lock(r->io.buf_to_target.target_rio_mutex);
     /* Write out the chunk size metadata*/
-    /* Write out the aux field that details the size of the aux field */
+
     size_t chunk_size_bytes = r->io.buf_to_target.pos;
     sds chunk_size_str = sdscatprintf(sdsempty(), "%lu", chunk_size_bytes);
-    serverLog(LL_NOTICE, "Thread Chunk Size: %lu", chunk_size_bytes);
-    serverLog(LL_NOTICE, "Chunk Size String: %s", chunk_size_str);
 
-    rdbSaveAuxFieldStrStr(r->io.buf_to_target.target_rio, "rdb-thread-chunk", chunk_size_str);
+    if (rdbSaveAuxFieldStrStr(r->io.buf_to_target.target_rio, "rdb-thread-chunk", chunk_size_str) < 0) {
+        sdsfree(chunk_size_str);
+        pthread_mutex_unlock(r->io.buf_to_target.target_rio_mutex);
+        return 0;
+    }
+    sdsfree(chunk_size_str);
+    
     if (rdbWriteRaw(r->io.buf_to_target.target_rio, r->io.buf_to_target.ptr, r->io.buf_to_target.pos) < 0) {
         pthread_mutex_unlock(r->io.buf_to_target.target_rio_mutex);
         return 0;

@@ -51,7 +51,34 @@ typedef struct RdbSaveThreadArgs {
 
 void initRDBThreads(int per_thread_queue_size);
 void killRDBThreads(void);
+void drainRDBThreadsQueue(void);
+
+void startRDBThreads(void);
+void stopRDBThreads(void);
+
+
 
 ssize_t rdbSaveDbMultiThreaded(rio *rdb, int dbid, long *key_counter, char *pname);
 
+typedef struct RdbChunkLoadThreadArgs {
+    int rdbver;
+    rio *chunk_rio;
+    serverDb *db;
+    int rdbflags;
+    long long lru_clock;
+    long long current_dbid;
+    pthread_mutex_t *insert_mutex;
+} RdbChunkLoadThreadArgs;
+
+
+void offloadRDBChunkToThread(
+    rio *rdb_main_stream,         
+    unsigned long chunk_size,     
+    int rdbver,                   
+    serverDb *current_db,         
+    int rdbflags,                 
+    pthread_mutex_t *db_insert_mutex,
+    int current_dbid,              
+    long long num_thread_tasks
+);
 #endif // __RDB_THREADS_H__

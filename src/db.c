@@ -2053,7 +2053,6 @@ size_t dbReclaimExpiredFields(robj *o, serverDb *db, mstime_t now, unsigned long
         max_entries -= expired;
         if (deleteKey) break; /* Stop if key was deleted */
     }
-
     return total_expired;
 }
 

@@ -426,6 +426,42 @@ int free_mock_entries(void) {
     return 0;
 }
 
+int test_vset_remove_expire_shrink(int argc, char **argv, int flags) {
+    (void)argc;
+    (void)argv;
+    (void)flags;
+
+    vset set;
+    vsetInit(&set);
+
+    const long long expiry_time = 1000LL;
+    const int total_entries = 200;
+
+    for (int i = 0; i < total_entries; i++) {
+        insert_mock_entry_with_expiry(&set, expiry_time);
+    }
+
+    // Verify set is not empty
+    TEST_ASSERT(!vsetIsEmpty(&set));
+    mstime_t now = expiry_time + 10000;
+    size_t count = vsetRemoveExpired(&set, mockGetExpiry, mock_entry_expire, now, mock_entry_count - 1, &now);
+
+    TEST_ASSERT(count == total_entries - 1);
+
+    // Verify set is not empty
+    TEST_ASSERT(!vsetIsEmpty(&set));
+
+    // Now complete the expiration
+    TEST_ASSERT(vsetRemoveExpired(&set, mockGetExpiry, mock_entry_expire, now, mock_entry_count, &now) == 1);
+
+    // Verify set is empty
+    TEST_ASSERT(vsetIsEmpty(&set));
+
+    vsetRelease(&set);
+    free_mock_entries();
+    return 0;
+}
+
 /* --------- Defrag Test --------- */
 int test_vset_defrag(int argc, char **argv, int flags) {
     UNUSED(argc);

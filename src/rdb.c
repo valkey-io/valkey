@@ -3586,8 +3586,9 @@ void killRDBChild(void) {
 /* Save snapshot to the provided connections, spawning a child process and
  * running the provided function.
  *
- * Connections array provided will be freed after the save is completed, and
- * should not be freed by the caller. */
+ * The connections array (the conns field in the rdbSnapshotOptions) is a
+ * heap-allocated array that will be freed by this function and shall not be
+ * freed by the caller. */
 int saveSnapshotToConnectionSockets(rdbSnapshotOptions options) {
     pid_t childpid;
     int pipefds[2], rdb_pipe_write = -1, safe_to_exit_pipe = -1;

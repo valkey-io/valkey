@@ -120,7 +120,7 @@ enum RdbType {
 typedef int (*ChildSnapshotFunc)(int req, rio *rdb, void *privdata);
 typedef struct rdbSnapshotOptions {
     int connsnum;                    /* Number of connections. */
-    connection **conns;              /* Connections to send the snapshot to. */
+    connection **conns;              /* A heap-allocated array of connections to send the snapshot to. */
     int use_pipe;                    /* Use pipe to send the snapshot. */
     int req;                         /* See REPLICA_REQ_* in server.h. */
     int skip_checksum;               /* Skip checksum when sending the snapshot. */

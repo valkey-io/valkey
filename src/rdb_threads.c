@@ -415,81 +415,74 @@ typedef struct RdbLoadedKey {
 /* set to 1 by any worker on error; caller should check after drain */
 _Atomic int rdb_load_thread_error = 0;
 
-/* ---- batched insert ---- */
 void flush_rdb_batch(
-    RdbLoadedKey **batch_buffer,
+    RdbLoadedKey *batch_buffer,
     int batch_count,
     serverDb *db,
     int rdbflags,
     int current_dbid,
     pthread_mutex_t *insert_mutex, /* may be NULL */
-    long long lru_clock) {
+    long long lru_clock)
+{
     if (batch_count == 0) return;
 
     if (insert_mutex) pthread_mutex_lock(insert_mutex);
 
     for (int i = 0; i < batch_count; i++) {
-        RdbLoadedKey *item = batch_buffer[i];
+        RdbLoadedKey *item = &batch_buffer[i];
 
-        if (item->val_obj == NULL) { /* skipped/errored */
+        /* skipped/errored */
+        if (item->val_obj == NULL) {
             if (item->key_sds) sdsfree(item->key_sds);
-            zfree(item);
             continue;
         }
 
+        /* expired fast-path */
         if (iAmPrimary() &&
-            !(rdbflags & RDBFLAGS_AOF_PREAMBLE) && item->expiretime != -1 && item->expiretime < item->now) {
+            !(rdbflags & RDBFLAGS_AOF_PREAMBLE) &&
+            item->expiretime != -1 &&
+            item->expiretime < item->now)
+        {
             if (rdbflags & RDBFLAGS_FEED_REPL) {
                 serverAssert(server.repl_backlog != NULL && listLength(server.replicas) == 0);
-                robj keyobj;
-                initStaticStringObject(keyobj, item->key_sds);
-                robj *argv[2];
-                argv[0] = server.lazyfree_lazy_expire ? shared.unlink : shared.del;
-                argv[1] = &keyobj;
+                robj keyobj; initStaticStringObject(keyobj, item->key_sds);
+                robj *argv[2] = { server.lazyfree_lazy_expire ? shared.unlink : shared.del, &keyobj };
                 replicationFeedReplicas(current_dbid, argv, 2);
             }
-            /* expired path: free both */
             sdsfree(item->key_sds);
             decrRefCount(item->val_obj);
             server.rdb_last_load_keys_expired++;
-            zfree(item);
-            // continue;
-        } else {
-            /* insert path */
-            robj keyobj_temp;
-            initStaticStringObject(keyobj_temp, item->key_sds);
-
-            int added = dbAddRDBLoad(db, item->key_sds, &item->val_obj);
-            server.rdb_last_load_keys_loaded++;
-
-            if (!added) {
-                if (rdbflags & RDBFLAGS_ALLOW_DUP) {
-                    dbSyncDelete(db, &keyobj_temp);
-                    added = dbAddRDBLoad(db, item->key_sds, &item->val_obj);
-                    serverAssert(added);
-                } else {
-                    serverLog(LL_WARNING, "RDB has duplicated key '%s' in DB %d",
-                              item->key_sds, db->id);
-                    serverPanic("Duplicated key found in RDB file");
-                }
-            }
-            /* Keep pointer up to date like the ST path */
-            if (item->expiretime != -1) {
-                item->val_obj = setExpire(NULL, db, &keyobj_temp, item->expiretime);
-            }
-
-            objectSetLRUOrLFU(item->val_obj, item->lfu_freq, item->lru_idle, lru_clock, 1000);
-            moduleNotifyKeyspaceEvent(NOTIFY_LOADED, "loaded", &keyobj_temp, db->id);
-
-            /* DB kept its own copy → free our SDS */
-            sdsfree(item->key_sds);
-            item->key_sds = NULL;
-
-            /* DB owns val_obj; we won't touch it again */
-            item->val_obj = NULL;
-
-            zfree(item);
+            continue;
         }
+
+        /* insert path */
+        robj keyobj_temp; initStaticStringObject(keyobj_temp, item->key_sds);
+        int added = dbAddRDBLoad(db, item->key_sds, &item->val_obj);
+        server.rdb_last_load_keys_loaded++;
+
+        if (!added) {
+            if (rdbflags & RDBFLAGS_ALLOW_DUP) {
+                dbSyncDelete(db, &keyobj_temp);
+                added = dbAddRDBLoad(db, item->key_sds, &item->val_obj);
+                serverAssert(added);
+            } else {
+                serverLog(LL_WARNING, "RDB duplicated key '%s' in DB %d", item->key_sds, db->id);
+                serverPanic("Duplicated key found in RDB file");
+            }
+        }
+
+        if (item->expiretime != -1) {
+            item->val_obj = setExpire(NULL, db, &keyobj_temp, item->expiretime);
+        }
+
+        objectSetLRUOrLFU(item->val_obj, item->lfu_freq, item->lru_idle, lru_clock, 1000);
+        moduleNotifyKeyspaceEvent(NOTIFY_LOADED, "loaded", &keyobj_temp, db->id);
+
+        /* DB kept its own copy → free our SDS; DB owns val_obj now */
+        sdsfree(item->key_sds);
+        item->key_sds = NULL;
+        item->val_obj = NULL;
+
         if (server.key_load_delay) debugDelay(server.key_load_delay);
     }
 
@@ -510,7 +503,7 @@ void processRDBChunk(void *arg) {
     const int rdbver = ta->rdbver;
     long long lru_clock = ta->lru_clock;
 
-    RdbLoadedKey *batch_buffer[RDB_LOAD_BATCH_SIZE];
+    RdbLoadedKey batch_buffer[RDB_LOAD_BATCH_SIZE];
     int batch_count = 0;
 
     int type, error;
@@ -584,7 +577,7 @@ void processRDBChunk(void *arg) {
             }
         } else {
             /* Queue into local batch */
-            RdbLoadedKey *item = zmalloc(sizeof(*item));
+            RdbLoadedKey *item = &batch_buffer[batch_count];
             item->key_sds = key_sds; /* ownership moves to item */
             item->val_obj = val_obj;
             item->expiretime = expiretime;
@@ -592,8 +585,8 @@ void processRDBChunk(void *arg) {
             item->lru_idle = lru_idle;
             item->lru_clock = lru_clock;
             item->now = ta->now;
-
-            batch_buffer[batch_count++] = item;
+            
+            batch_count++;
             key_sds = NULL;
             val_obj = NULL;
 
@@ -616,22 +609,18 @@ void processRDBChunk(void *arg) {
 chunk_err:
     rdb_load_thread_error = 1;
 
+    /* free any staged items */
     for (int i = 0; i < batch_count; i++) {
-        RdbLoadedKey *item = batch_buffer[i];
-        if (!item) continue;
-        if (item->key_sds) sdsfree(item->key_sds);
-        if (item->val_obj) decrRefCount(item->val_obj);
-        zfree(item);
+        if (batch_buffer[i].key_sds) sdsfree(batch_buffer[i].key_sds);
+        if (batch_buffer[i].val_obj) decrRefCount(batch_buffer[i].val_obj);
     }
     if (key_sds) sdsfree(key_sds);
     if (val_obj) decrRefCount(val_obj);
 
     if (rioGetReadError(rdb)) {
-        serverLog(LL_WARNING, "Thread %d: RDB chunk read error: %s",
-                  getThreadID(), strerror(errno));
+        serverLog(LL_WARNING, "Thread %d: RDB chunk read error: %s", getThreadID(), strerror(errno));
     } else {
-        serverLog(LL_WARNING, "Thread %d: RDB chunk processing stopped due to internal error.",
-                  getThreadID());
+        serverLog(LL_WARNING, "Thread %d: RDB chunk processing stopped due to internal error.", getThreadID());
     }
 
     freeRdbChunkLoadThreadArgs(ta);

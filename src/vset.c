@@ -1456,17 +1456,11 @@ static inline size_t vsetBucketRemoveExpired_HASHTABLE(vsetBucket **bucket, vset
     }
     hashtableResetIterator(&it);
 
-    /* in case we completed scanning the hashtable is empty or a single element is left, we can convert the hashtable. */
+    /* in case we completed scanning the hashtable which is now empty */
     size_t ht_size = hashtableSize(ht);
     if (ht_size == 0) {
         hashtableRelease(ht);
         *bucket = vsetBucketFromNone();
-    } else if (ht_size == 1) {
-        hashtableInitIterator(&it, ht, 0);
-        assert(hashtableNext(&it, &entry));
-        hashtableResetIterator(&it);
-        hashtableRelease(ht);
-        *bucket = vsetBucketFromSingle(entry);
     }
     return count;
 }

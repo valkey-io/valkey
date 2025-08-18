@@ -2118,12 +2118,9 @@ static int hashTypeExpireEntry(void *entry, void *c) {
     expiryContext *ctx = c;
     robj *o = ctx->key;
     serverAssert(o->encoding == OBJ_ENCODING_HASHTABLE && hashtableSize(o->ptr) > 0);
-    /* skip TTL checks temporarily (to allow hashtable lookup) */
-    hashTypeIgnoreTTL(o, true);
     hashtable *ht = o->ptr;
     void *entry_ptr = NULL;
     bool deleted = hashtablePop(ht, entry, &entry_ptr);
-    hashTypeIgnoreTTL(o, false);
     if (deleted) {
         if (ctx->fields)
             ctx->fields[ctx->n_fields++] = createStringObjectFromSds(entryGetField(entry));
@@ -2145,12 +2142,15 @@ size_t hashTypeDeleteExpiredFields(robj *o, mstime_t now, unsigned long max_fiel
     }
 
     serverAssert(!vsetIsEmpty(vset));
-
+    /* skip TTL checks temporarily (to allow hashtable pops) */
+    hashTypeIgnoreTTL(o, true);
     expiryContext ctx = {.key = o, .fields = out_entries, .n_fields = 0};
     size_t expired = vsetRemoveExpired(vset, entryGetExpiry, hashTypeExpireEntry, now, max_fields, &ctx);
     serverAssert(ctx.n_fields <= max_fields);
     if (vsetIsEmpty(vset)) {
         hashTypeFreeVolatileSet(o);
+    } else {
+        hashTypeIgnoreTTL(o, false);
     }
     return expired;
 }

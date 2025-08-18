@@ -78,48 +78,6 @@ start_cluster 2 2 {tags {external:skip cluster} overrides {cluster-replica-no-fa
     }
 }
 
-start_cluster 2 2 {tags {external:skip cluster} overrides {cluster-replica-no-failover yes}} {
-
-    test "Set cluster announced client bus port and check that it propagates" {
-        set announced_ports {}
-        for {set j 0} {$j < [llength $::servers]} {incr j} {
-            set res [R $j config set cluster-announce-client-bus-port "640$j"]
-            lset announced_ports $j "640$j"
-        }
-
-        # CLUSTER NODES
-        wait_for_condition 50 100 {
-            [are_cluster_announced_bus_ports_propagated $announced_ports]
-        } else {
-            fail "cluster-announce-client-bus-port were not propagated"
-        }
-
-        # Now that everything is propagated, assert everyone agrees
-        wait_for_cluster_propagation
-    }
-
-    test "Clear announced client bus port and check that it propagates" {
-        set original_ports {}
-        for {set j 0} {$j < [llength $::servers]} {incr j} {
-            R $j config set cluster-announce-client-bus-port 0
-            if {$::tls} {
-                lset original_ports $j [expr [lindex [R $j config get tls-port] 1] + 10000]
-            } else {
-                lset original_ports $j [expr [lindex [R $j config get port] 1] + 10000]
-            }
-        }
-
-        wait_for_condition 50 100 {
-            [are_cluster_announced_bus_ports_propagated $original_ports] eq 1
-        } else {
-            fail "Cleared cluster-announce-client-bus-port were not propagated"
-        }
-
-        # Now that everything is propagated, assert everyone agrees
-        wait_for_cluster_propagation
-    }
-}
-
 start_cluster 1 0 {tags {external:skip cluster} overrides {cluster-replica-no-failover yes bind {127.0.0.1 ::1}}} {
     test "Load cluster announced client port config on server start" {
         R 0 config set cluster-announce-client-port 6380
@@ -130,13 +88,6 @@ start_cluster 1 0 {tags {external:skip cluster} overrides {cluster-replica-no-fa
 start_cluster 1 0 {tags {external:skip cluster} overrides {cluster-replica-no-failover yes bind {127.0.0.1 ::1}}} {
     test "Load cluster announced client TLS port config on server start" {
         R 0 config set cluster-announce-client-tls-port 6380
-        restart_server 0 true false
-    }
-}
-
-start_cluster 1 0 {tags {external:skip cluster} overrides {cluster-replica-no-failover yes bind {127.0.0.1 ::1}}} {
-    test "Load cluster announced client bus port config on server start" {
-        R 0 config set cluster-announce-client-bus-port 6380
         restart_server 0 true false
     }
 }

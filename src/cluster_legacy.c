@@ -127,9 +127,6 @@ int auxAnnounceClientTlsPortSetter(clusterNode *n, void *value, size_t length);
 sds auxAnnounceClientTlsPortGetter(clusterNode *n, sds s);
 int auxAnnounceClientTlsPortPresent(clusterNode *n);
 int auxAnnounceClientTlsPortPresent(clusterNode *n);
-int auxAnnounceClientBusPortSetter(clusterNode *n, void *value, size_t length);
-sds auxAnnounceClientBusPortGetter(clusterNode *n, sds s);
-int auxAnnounceClientBusPortPresent(clusterNode *n);
 static void clusterBuildMessageHdrLight(clusterMsgLight *hdr, int type, size_t msglen);
 static void clusterBuildMessageHdr(clusterMsg *hdr, int type, size_t msglen);
 void freeClusterLink(clusterLink *link);
@@ -167,14 +164,6 @@ int clusterNodeClientPort(clusterNode *n, int use_tls, client *c) {
     }
 
     return use_tls ? tlsport : port;
-}
-
-int clusterNodeClientBusPort(clusterNode *n, client *c) {
-    if (c == NULL) {
-        return n->cport;
-    }
-
-    return n->announce_client_cport ? n->announce_client_cport : n->cport;
 }
 
 static inline int defaultClientPort(void) {
@@ -327,7 +316,6 @@ typedef enum {
     af_announce_client_ipv6,
     af_announce_client_tcp_port,
     af_announce_client_tls_port,
-    af_announce_client_bus_port,
     af_count, /* must be the last field */
 } auxFieldIndex;
 
@@ -344,7 +332,6 @@ auxFieldHandler auxFieldHandlers[] = {
     {"client-ipv6", auxAnnounceClientIpV6Setter, auxAnnounceClientIpV6Getter, auxAnnounceClientIpV6Present},
     {"client-tcp-port", auxAnnounceClientTcpPortSetter, auxAnnounceClientTcpPortGetter, auxAnnounceClientTcpPortPresent},
     {"client-tls-port", auxAnnounceClientTlsPortSetter, auxAnnounceClientTlsPortGetter, auxAnnounceClientTlsPortPresent},
-    {"client-bus-port", auxAnnounceClientBusPortSetter, auxAnnounceClientBusPortGetter, auxAnnounceClientBusPortPresent},
 };
 
 int auxShardIdSetter(clusterNode *n, void *value, size_t length) {
@@ -520,25 +507,6 @@ sds auxAnnounceClientTlsPortGetter(clusterNode *n, sds s) {
 
 int auxAnnounceClientTlsPortPresent(clusterNode *n) {
     return n->announce_client_tls_port > 0 && n->announce_client_tls_port < 65536;
-}
-
-int auxAnnounceClientBusPortSetter(clusterNode *n, void *value, size_t length) {
-    if (length > 5 || length < 1) {
-        return C_ERR;
-    }
-    char buf[length + 1];
-    memcpy(buf, (char *)value, length);
-    buf[length] = '\0';
-    n->announce_client_cport = atoi(buf);
-    return (n->announce_client_cport < 0 || n->announce_client_cport >= 65536) ? C_ERR : C_OK;
-}
-
-sds auxAnnounceClientBusPortGetter(clusterNode *n, sds s) {
-    return sdscatfmt(s, "%i", n->announce_client_cport);
-}
-
-int auxAnnounceClientBusPortPresent(clusterNode *n) {
-    return n->announce_client_cport > 0 && n->announce_client_cport < 65536;
 }
 
 /* clusterLink send queue blocks */
@@ -1093,7 +1061,7 @@ int clusterLockConfig(char *filename) {
 }
 
 /* Derives our ports to be announced in the cluster bus. */
-void deriveAnnouncedPorts(int *announced_tcp_port, int *announced_tls_port, int *announced_cport, int *announced_client_tcp_port, int *announced_client_tls_port, int *announced_client_cport) {
+void deriveAnnouncedPorts(int *announced_tcp_port, int *announced_tls_port, int *announced_cport, int *announced_client_tcp_port, int *announced_client_tls_port) {
     /* Config overriding announced ports. */
     *announced_tcp_port = server.cluster_announce_port ? server.cluster_announce_port : server.port;
     *announced_tls_port = server.cluster_announce_tls_port ? server.cluster_announce_tls_port : server.tls_port;
@@ -1108,7 +1076,6 @@ void deriveAnnouncedPorts(int *announced_tcp_port, int *announced_tls_port, int 
 
     *announced_client_tcp_port = server.cluster_announce_client_port;
     *announced_client_tls_port = server.cluster_announce_client_tls_port;
-    *announced_client_cport = server.cluster_announce_client_bus_port;
 }
 
 /* Some flags (currently just the NOFAILOVER flag) may need to be updated
@@ -1135,7 +1102,7 @@ void clusterUpdateMyselfFlags(void) {
  * The option can be set at runtime via CONFIG SET. */
 void clusterUpdateMyselfAnnouncedPorts(void) {
     if (!myself) return;
-    deriveAnnouncedPorts(&myself->tcp_port, &myself->tls_port, &myself->cport, &myself->announce_client_tcp_port, &myself->announce_client_tls_port, &myself->announce_client_cport);
+    deriveAnnouncedPorts(&myself->tcp_port, &myself->tls_port, &myself->cport, &myself->announce_client_tcp_port, &myself->announce_client_tls_port);
     clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG);
 }
 
@@ -1218,15 +1185,6 @@ static void updateAnnouncedClientTlsPort(clusterNode *node, int value) {
     }
 
     node->announce_client_tls_port = value;
-    clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG);
-}
-
-static void updateAnnouncedClientBusPort(clusterNode *node, int value) {
-    if (value == node->announce_client_cport) {
-        return;
-    }
-
-    node->announce_client_cport = value;
     clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG);
 }
 
@@ -1375,7 +1333,7 @@ void clusterInit(void) {
 
     /* Set myself->port/cport/pport to my listening ports, we'll just need to
      * discover the IP address via MEET messages. */
-    deriveAnnouncedPorts(&myself->tcp_port, &myself->tls_port, &myself->cport, &myself->announce_client_tcp_port, &myself->announce_client_tls_port, &myself->announce_client_cport);
+    deriveAnnouncedPorts(&myself->tcp_port, &myself->tls_port, &myself->cport, &myself->announce_client_tcp_port, &myself->announce_client_tls_port);
 
     server.cluster->mf_end = 0;
     server.cluster->mf_replica = NULL;
@@ -1801,7 +1759,6 @@ clusterNode *createClusterNode(char *nodename, int flags) {
     node->cport = 0;
     node->tls_port = 0;
     node->announce_client_tcp_port = 0;
-    node->announce_client_cport = 0;
     node->announce_client_tls_port = 0;
     node->fail_reports = raxNew();
     node->orphaned_time = 0;
@@ -3190,8 +3147,6 @@ static uint32_t writePingExtensions(clusterMsg *hdr, int gossipcount) {
         writePortPingExtIfNonzero(&totlen, &cursor, CLUSTERMSG_EXT_TYPE_CLIENT_PORT, myself->announce_client_tcp_port);
     extensions +=
         writePortPingExtIfNonzero(&totlen, &cursor, CLUSTERMSG_EXT_TYPE_CLIENT_TLS_PORT, myself->announce_client_tls_port);
-    extensions +=
-        writePortPingExtIfNonzero(&totlen, &cursor, CLUSTERMSG_EXT_TYPE_CLIENT_BUS_PORT, myself->announce_client_cport);
 
     /* Gossip forgotten nodes */
     if (dictSize(server.cluster->nodes_black_list) > 0) {
@@ -3245,7 +3200,6 @@ void clusterProcessPingExtensions(clusterMsg *hdr, clusterLink *link) {
     char *ext_clientipv6 = NULL;
     int ext_clientport = 0;
     int ext_clienttlsport = 0;
-    int ext_clientcport = 0;
     char *ext_shardid = NULL;
     uint16_t extensions = ntohs(hdr->extensions);
     /* Loop through all the extensions and process them */
@@ -3275,10 +3229,6 @@ void clusterProcessPingExtensions(clusterMsg *hdr, clusterLink *link) {
             clusterMsgPingExtClientTlsPort *clienttlsport_ext =
                 (clusterMsgPingExtClientTlsPort *)&(ext->ext[0].announce_client_tls_port);
             ext_clienttlsport = clienttlsport_ext->announce_client_tls_port;
-        } else if (type == CLUSTERMSG_EXT_TYPE_CLIENT_BUS_PORT) {
-            clusterMsgPingExtClientBusPort *clientbusport_ext =
-                (clusterMsgPingExtClientBusPort *)&(ext->ext[0].announce_client_bus_port);
-            ext_clientcport = clientbusport_ext->announce_client_bus_port;
         } else if (type == CLUSTERMSG_EXT_TYPE_FORGOTTEN_NODE) {
             clusterMsgPingExtForgottenNode *forgotten_node_ext = &(ext->ext[0].forgotten_node);
             clusterNode *n = clusterLookupNode(forgotten_node_ext->name, CLUSTER_NAMELEN);
@@ -3315,7 +3265,6 @@ void clusterProcessPingExtensions(clusterMsg *hdr, clusterLink *link) {
     updateAnnouncedClientIpV6(sender, ext_clientipv6);
     updateAnnouncedClientPort(sender, ext_clientport);
     updateAnnouncedClientTlsPort(sender, ext_clienttlsport);
-    updateAnnouncedClientBusPort(sender, ext_clientcport);
     /* If the node did not send us a shard-id extension, it means the sender
      * does not support it (old version), node->shard_id is randomly generated.
      * A cluster-wide consensus for the node's shard_id is not necessary.
@@ -4408,8 +4357,8 @@ static void clusterBuildMessageHdr(clusterMsg *hdr, int type, size_t msglen) {
     }
 
     /* Handle cluster-announce-[tls-|bus-]port. */
-    int announced_tcp_port, announced_tls_port, announced_cport, announced_client_tcp_port, announced_client_tls_port, announced_client_cport;
-    deriveAnnouncedPorts(&announced_tcp_port, &announced_tls_port, &announced_cport, &announced_client_tcp_port, &announced_client_tls_port, &announced_client_cport);
+    int announced_tcp_port, announced_tls_port, announced_cport, announced_client_tcp_port, announced_client_tls_port;
+    deriveAnnouncedPorts(&announced_tcp_port, &announced_tls_port, &announced_cport, &announced_client_tcp_port, &announced_client_tls_port);
 
     memcpy(hdr->myslots, primary->slots, sizeof(hdr->myslots));
     memset(hdr->replicaof, 0, CLUSTER_NAMELEN);
@@ -6421,12 +6370,11 @@ sds clusterGenNodeDescription(client *c, clusterNode *node, int tls_primary) {
     int j, start;
     sds ci;
     int port = clusterNodeClientPort(node, tls_primary, c);
-    int cport = clusterNodeClientBusPort(node, c);
     char *ip = clusterNodeIp(node, c);
 
     /* Node coordinates */
     ci = sdscatlen(sdsempty(), node->name, CLUSTER_NAMELEN);
-    ci = sdscatfmt(ci, " %s:%i@%i", ip, port, cport);
+    ci = sdscatfmt(ci, " %s:%i@%i", ip, port, node->cport);
     if (sdslen(node->hostname) != 0) {
         ci = sdscatfmt(ci, ",%s", node->hostname);
     }

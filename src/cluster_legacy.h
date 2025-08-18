@@ -163,7 +163,6 @@ typedef enum {
     CLUSTERMSG_EXT_TYPE_CLIENT_IPV6,
     CLUSTERMSG_EXT_TYPE_CLIENT_PORT,
     CLUSTERMSG_EXT_TYPE_CLIENT_TLS_PORT,
-    CLUSTERMSG_EXT_TYPE_CLIENT_BUS_PORT,
 } clusterMsgPingtypes;
 
 /* Helper function for making sure extensions are eight byte aligned. */
@@ -205,10 +204,6 @@ typedef struct {
 } clusterMsgPingExtClientTlsPort;
 
 typedef struct {
-    uint16_t announce_client_bus_port; /* Announced client cluster bus port. */
-} clusterMsgPingExtClientBusPort;
-
-typedef struct {
     uint32_t length; /* Total length of this extension message (including this header) */
     uint16_t type;   /* Type of this extension message (see clusterMsgPingtypes) */
     uint16_t unused; /* 16 bits of padding to make this structure 8 byte aligned. */
@@ -221,7 +216,6 @@ typedef struct {
         clusterMsgPingExtClientIpV6 announce_client_ipv6;
         clusterMsgPingExtClientPort announce_client_port;
         clusterMsgPingExtClientTlsPort announce_client_tls_port;
-        clusterMsgPingExtClientBusPort announce_client_bus_port;
     } ext[]; /* Actual extension information, formatted so that the data is 8
               * byte aligned, regardless of its content. */
 } clusterMsgPingExt;
@@ -384,7 +378,6 @@ struct _clusterNode {
     int cport;                              /* Latest known cluster port of this node. */
     int announce_client_tcp_port;           /* Port for clients only. */
     int announce_client_tls_port;           /* TLS port for clients only. */
-    int announce_client_cport;              /* Cluster port for clients only. */
     clusterLink *link;                      /* TCP/IP link established toward this node */
     clusterLink *inbound_link;              /* TCP/IP link accepted from this node */
     rax *fail_reports;                      /* Radix tree for failure reports with sorted order by timestamp */

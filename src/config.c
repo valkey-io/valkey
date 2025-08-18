@@ -3298,7 +3298,6 @@ standardConfig static_configs[] = {
     createIntConfig("cluster-announce-bus-port", NULL, MODIFIABLE_CONFIG, 0, 65535, server.cluster_announce_bus_port, 0, INTEGER_CONFIG, NULL, updateClusterAnnouncedPort), /* Default: Use +10000 offset. */
     createIntConfig("cluster-announce-port", NULL, MODIFIABLE_CONFIG, 0, 65535, server.cluster_announce_port, 0, INTEGER_CONFIG, NULL, updateClusterAnnouncedPort),         /* Use server.port */
     createIntConfig("cluster-announce-tls-port", NULL, MODIFIABLE_CONFIG, 0, 65535, server.cluster_announce_tls_port, 0, INTEGER_CONFIG, NULL, updateClusterAnnouncedPort), /* Use server.tls_port */
-    createIntConfig("cluster-announce-client-bus-port", NULL, MODIFIABLE_CONFIG, 0, 65535, server.cluster_announce_client_bus_port, 0, INTEGER_CONFIG, NULL, updateClusterAnnouncedPort),
     createIntConfig("cluster-announce-client-port", NULL, MODIFIABLE_CONFIG, 0, 65535, server.cluster_announce_client_port, 0, INTEGER_CONFIG, NULL, updateClusterAnnouncedPort),
     createIntConfig("cluster-announce-client-tls-port", NULL, MODIFIABLE_CONFIG, 0, 65535, server.cluster_announce_client_tls_port, 0, INTEGER_CONFIG, NULL, updateClusterAnnouncedPort),
     createIntConfig("repl-timeout", NULL, MODIFIABLE_CONFIG, 1, INT_MAX, server.repl_timeout, 60, INTEGER_CONFIG, NULL, NULL),

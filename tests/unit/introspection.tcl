@@ -1143,7 +1143,7 @@ start_server {tags {"introspection"}} {
         r client info
     } {*lib-name= *}
 
-    test {CONFIG get should return sorted output} {
+    test {CONFIG GET should return sorted output} {
         set config [r config get *]
         set keys {}
         foreach {key value} $config {

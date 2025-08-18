@@ -754,7 +754,7 @@ void debugCommand(client *c) {
         }
 
         if (dbExpand(c->db, keys, 1) == C_ERR) {
-            addReplyError(c, "OOM in dictTryExpand");
+            addReplyError(c, "OOM in dbExpand");
             return;
         }
         long valsize = 0;

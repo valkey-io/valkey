@@ -2032,7 +2032,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error) {
         zs = o->ptr;
 
         if (!hashtableTryExpand(zs->ht, zsetlen)) {
-            rdbReportCorruptRDB("OOM in dictTryExpand %llu", (unsigned long long)zsetlen);
+            rdbReportCorruptRDB("OOM in hashtableTryExpand %llu", (unsigned long long)zsetlen);
             decrRefCount(o);
             return NULL;
         }
@@ -2198,7 +2198,12 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error) {
             long long itemexpiry = EXPIRY_NONE;
             if (rdbtype == RDB_TYPE_HASH_2) {
                 itemexpiry = rdbLoadMillisecondTime(rdb, RDB_VERSION);
-                if (itemexpiry < EXPIRY_NONE || rioGetReadError(rdb)) return NULL;
+                if (itemexpiry < EXPIRY_NONE || rioGetReadError(rdb)) {
+                    sdsfree(field);
+                    sdsfree(value);
+                    decrRefCount(o);
+                    return NULL;
+                }
             }
 
             /* Add pair to hash table */

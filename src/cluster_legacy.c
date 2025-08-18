@@ -2743,6 +2743,18 @@ void clusterSetNodeAsPrimary(clusterNode *n) {
     clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_UPDATE_STATE);
 }
 
+static void clusterLogSlotRangeMigration(int first_slot,
+                                         int last_slot,
+                                         clusterNode *source_node,
+                                         clusterNode *target_node) {
+    serverLog(LL_NOTICE,
+              "Slot range [%d, %d] is migrated from node %.40s (%s) in shard %.40s"
+              " to node %.40s (%s) in shard %.40s.",
+              first_slot, last_slot,
+              source_node->name, source_node->human_nodename, source_node->shard_id,
+              target_node->name, target_node->human_nodename, target_node->shard_id);
+}
+
 /* This function is called when we receive a primary configuration via a
  * PING, PONG or UPDATE packet. What we receive is a node, a configEpoch of the
  * node, and the set of slots claimed under this configEpoch.
@@ -2790,6 +2802,8 @@ void clusterUpdateSlotsConfigWith(clusterNode *sender, uint64_t senderConfigEpoc
 
     /* Sender and myself in the same shard? */
     int are_in_same_shard = areInSameShard(sender, myself);
+    int first_migrated_slot = -1, last_migrated_slot = -1;
+    clusterNode *migration_source_node = NULL;
 
     for (j = 0; j < CLUSTER_SLOTS; j++) {
         if (bitmapTestBit(slots, j)) {
@@ -2815,12 +2829,24 @@ void clusterUpdateSlotsConfigWith(clusterNode *sender, uint64_t senderConfigEpoc
                 server.cluster->slots[j]->configEpoch < senderConfigEpoch ||
                 clusterSlotFailoverGranted(j)) {
                 if (!isSlotUnclaimed(j) && !areInSameShard(server.cluster->slots[j], sender)) {
-                    serverLog(LL_NOTICE,
-                              "Slot %d is migrated from node %.40s (%s) in shard %.40s"
-                              " to node %.40s (%s) in shard %.40s.",
-                              j, server.cluster->slots[j]->name, server.cluster->slots[j]->human_nodename,
-                              server.cluster->slots[j]->shard_id, sender->name, sender->human_nodename,
-                              sender->shard_id);
+                    if (first_migrated_slot == -1) {
+                        /* Delay-initialize the range of migrated slots. */
+                        first_migrated_slot = j;
+                        last_migrated_slot = j;
+                        migration_source_node = server.cluster->slots[j];
+                    } else if (migration_source_node == server.cluster->slots[j] && j == last_migrated_slot + 1) {
+                        /* Extend the range of migrated slots. */
+                        last_migrated_slot = j;
+                    } else {
+                        /* We have a gap in the range of migrated slots.
+                         * Log the previous range and start a new one. */
+                        clusterLogSlotRangeMigration(first_migrated_slot, last_migrated_slot,
+                                                     migration_source_node, sender);
+                        /* Reset the range for the next slot. */
+                        first_migrated_slot = j;
+                        last_migrated_slot = j;
+                        migration_source_node = server.cluster->slots[j];
+                    }
                 }
 
                 /* Was this slot mine, and still contains keys? Mark it as
@@ -2954,6 +2980,11 @@ void clusterUpdateSlotsConfigWith(clusterNode *sender, uint64_t senderConfigEpoc
                 }
             }
         }
+    }
+
+    if (first_migrated_slot != -1) {
+        clusterLogSlotRangeMigration(first_migrated_slot, last_migrated_slot,
+                                     migration_source_node, sender);
     }
 
     /* After updating the slots configuration, don't do any actual change

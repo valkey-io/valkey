@@ -847,7 +847,7 @@ void clusterCommandMigrateSlots(client *c) {
             goto cleanup;
         }
         if (source_node != server.cluster->myself) {
-            addReplyError(c, "Slots are not served by myself.");
+            addReplyError(c, "Slots are not served by this node.");
             goto cleanup;
         }
 
@@ -893,7 +893,7 @@ void clusterCommandMigrateSlots(client *c) {
             goto cleanup;
         }
         if (target_node == server.cluster->myself) {
-            addReplyError(c, "Slots are served by myself.");
+            addReplyError(c, "Slots are served by this node.");
             goto cleanup;
         }
         curr_index++;

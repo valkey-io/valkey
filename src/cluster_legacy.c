@@ -131,7 +131,6 @@ int auxAnnounceClientBusPortSetter(clusterNode *n, void *value, size_t length);
 sds auxAnnounceClientBusPortGetter(clusterNode *n, sds s);
 int auxAnnounceClientBusPortPresent(clusterNode *n);
 static void clusterBuildMessageHdrLight(clusterMsgLight *hdr, int type, size_t msglen);
-static void clusterBuildMessageHdrLight(clusterMsgLight *hdr, int type, size_t msglen);
 static void clusterBuildMessageHdr(clusterMsg *hdr, int type, size_t msglen);
 void freeClusterLink(clusterLink *link);
 int verifyClusterNodeId(const char *name, int length);

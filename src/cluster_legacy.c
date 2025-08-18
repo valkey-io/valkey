@@ -5167,6 +5167,10 @@ void clusterHandleReplicaFailover(void) {
     if (auth_timeout < CLUSTER_OPERATION_TIMEOUT) auth_timeout = CLUSTER_OPERATION_TIMEOUT;
     auth_retry_time = auth_timeout * 2;
 
+    /* Use a failover delay relative to node timeout: 500 for the default node
+     * timeout of 15000, less for lower node timeout, but not more. */
+    long long delay = min(server.cluster_node_timeout / 30, 500);
+
     /* Pre conditions to run the function, that must be met both in case
      * of an automatic or manual failover:
      * 1) We are a replica.
@@ -5212,20 +5216,27 @@ void clusterHandleReplicaFailover(void) {
      * elapsed, we can setup a new one. */
     if (auth_age > auth_retry_time) {
         server.cluster->failover_auth_time = now +
-                                             500 +           /* Fixed delay of 500 milliseconds, let FAIL msg propagate. */
-                                             random() % 500; /* Random delay between 0 and 500 milliseconds. */
+                                             delay +           /* Fixed delay to let FAIL msg propagate. */
+                                             random() % delay; /* Random delay between 0 and the fixed delay. */
         server.cluster->failover_auth_count = 0;
         server.cluster->failover_auth_sent = 0;
         server.cluster->failover_auth_rank = clusterGetReplicaRank();
         /* We add another delay that is proportional to the replica rank.
-         * Specifically 1 second * rank. This way replicas that have a probably
+         * By default, 1 second * rank. This way replicas that have a probably
          * less updated replication offset, are penalized. */
-        server.cluster->failover_auth_time += server.cluster->failover_auth_rank * 1000;
+        server.cluster->failover_auth_time += server.cluster->failover_auth_rank * (delay * 2);
+        /* If this is a newly added replica, there is a risk it doesn't know
+         * about other replicas yet, so it may think it's the best replica even
+         * if there are others with a better replication offsets. Add an extra
+         * delay to make it less likely to will win the failover. */
+        if (getNodeReplicationOffset(myself) == 0) {
+            server.cluster->failover_auth_time += 500;
+        }
         /* We add another delay that is proportional to the failed primary rank.
-         * Specifically 0.5 second * rank. This way those failed primaries will be
+         * By default, 0.5 second * rank. This way those failed primaries will be
          * elected in rank to avoid the vote conflicts. */
         server.cluster->failover_failed_primary_rank = clusterGetFailedPrimaryRank();
-        server.cluster->failover_auth_time += server.cluster->failover_failed_primary_rank * 500;
+        server.cluster->failover_auth_time += server.cluster->failover_failed_primary_rank * delay;
         /* However if this is a manual failover, no delay is needed. */
         if (server.cluster->mf_end) {
             server.cluster->failover_auth_time = now;
@@ -5262,7 +5273,7 @@ void clusterHandleReplicaFailover(void) {
     if (server.cluster->failover_auth_sent == 0 && server.cluster->mf_end == 0) {
         int newrank = clusterGetReplicaRank();
         if (newrank != server.cluster->failover_auth_rank) {
-            long long added_delay = (newrank - server.cluster->failover_auth_rank) * 1000;
+            long long added_delay = (newrank - server.cluster->failover_auth_rank) * (delay * 2);
             server.cluster->failover_auth_time += added_delay;
             server.cluster->failover_auth_rank = newrank;
             serverLog(LL_NOTICE, "Replica rank updated to #%d, added %lld milliseconds of delay.", newrank,
@@ -5271,7 +5282,7 @@ void clusterHandleReplicaFailover(void) {
 
         int new_failed_primary_rank = clusterGetFailedPrimaryRank();
         if (new_failed_primary_rank != server.cluster->failover_failed_primary_rank) {
-            long long added_delay = (new_failed_primary_rank - server.cluster->failover_failed_primary_rank) * 500;
+            long long added_delay = (new_failed_primary_rank - server.cluster->failover_failed_primary_rank) * delay;
             server.cluster->failover_auth_time += added_delay;
             server.cluster->failover_failed_primary_rank = new_failed_primary_rank;
             serverLog(LL_NOTICE, "Failed primary rank updated to #%d, added %lld milliseconds of delay.",

@@ -2198,7 +2198,12 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error) {
             long long itemexpiry = EXPIRY_NONE;
             if (rdbtype == RDB_TYPE_HASH_2) {
                 itemexpiry = rdbLoadMillisecondTime(rdb, RDB_VERSION);
-                if (itemexpiry < EXPIRY_NONE || rioGetReadError(rdb)) return NULL;
+                if (itemexpiry < EXPIRY_NONE || rioGetReadError(rdb)) {
+                    sdsfree(field);
+                    sdsfree(value);
+                    decrRefCount(o);
+                    return NULL;
+                }
             }
 
             /* Add pair to hash table */

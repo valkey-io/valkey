@@ -3125,7 +3125,7 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
         atomic_store_explicit(&rdb_load_thread_error, 0, memory_order_relaxed); /* Allows threads to report errors */
         key_insert_mutex = zmalloc(sizeof(pthread_mutex_t));
         serverLog(LL_NOTICE, "Starting RDB Threads for Load. rdb-threads: %d", server.rdb_threads_num);
-        initRDBThreads(10); // Random number of tasks for now
+        initRDBThreads(2048); // Random number of tasks for now
         pthread_mutex_init(key_insert_mutex, NULL);
         startRDBThreads();
     }

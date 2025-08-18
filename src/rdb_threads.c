@@ -491,7 +491,7 @@ void flush_rdb_batch(
 
 
 /* ---- worker: decode a buffer chunk until it's exhausted ---- */
-#define RDB_LOAD_BATCH_SIZE 2048
+#define RDB_LOAD_BATCH_SIZE 10 * 1024
 void processRDBChunk(void *arg) {
     RdbChunkLoadThreadArgs *ta = (RdbChunkLoadThreadArgs *)arg;
 

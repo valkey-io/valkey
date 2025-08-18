@@ -3591,19 +3591,28 @@ void killRDBChild(void) {
 int saveSnapshotToConnectionSockets(rdbSnapshotOptions options) {
     pid_t childpid;
     int pipefds[2], rdb_pipe_write = -1, safe_to_exit_pipe = -1;
-    if (hasActiveChildProcess()) return C_ERR;
+    if (hasActiveChildProcess()) {
+        zfree(options.conns);
+        return C_ERR;
+    }
     serverAssert(server.rdb_pipe_read == -1 && server.rdb_child_exit_pipe == -1);
 
     /* Even if the previous fork child exited, don't start a new one until we
      * drained the pipe. */
-    if (server.rdb_pipe_conns) return C_ERR;
+    if (server.rdb_pipe_conns) {
+        zfree(options.conns);
+        return C_ERR;
+    }
 
     if (options.use_pipe) {
         /* Before to fork, create a pipe that is used to transfer the rdb bytes to
          * the parent, we can't let it write directly to the sockets, since in case
          * of TLS we must let the parent handle a continuous TLS state when the
          * child terminates and parent takes over. */
-        if (anetPipe(pipefds, O_NONBLOCK, 0) == -1) return C_ERR;
+        if (anetPipe(pipefds, O_NONBLOCK, 0) == -1) {
+            zfree(options.conns);
+            return C_ERR;
+        }
         server.rdb_pipe_read = pipefds[0]; /* read end */
         rdb_pipe_write = pipefds[1];       /* write end */
 
@@ -3612,6 +3621,7 @@ int saveSnapshotToConnectionSockets(rdbSnapshotOptions options) {
         if (anetPipe(pipefds, 0, 0) == -1) {
             close(rdb_pipe_write);
             close(server.rdb_pipe_read);
+            zfree(options.conns);
             return C_ERR;
         }
         safe_to_exit_pipe = pipefds[0];          /* read end */

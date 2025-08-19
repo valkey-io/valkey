@@ -223,3 +223,20 @@ int test_kvstoreHashtableIteratorRemoveAllKeysDeleteEmptyHashtable(int argc, cha
     kvstoreRelease(kvs2);
     return 0;
 }
+
+int test_kvstoreHashtableExpand(int argc, char **argv, int flags) {
+    UNUSED(argc);
+    UNUSED(argv);
+    UNUSED(flags);
+
+    kvstore *kvs = kvstoreCreate(&KvstoreHashtableTestType, 0, KVSTORE_ALLOCATE_HASHTABLES_ON_DEMAND | KVSTORE_FREE_EMPTY_HASHTABLES);
+
+    TEST_ASSERT(kvstoreGetHashtable(kvs, 0) == NULL);
+    TEST_ASSERT(kvstoreHashtableExpand(kvs, 0, 10000));
+    TEST_ASSERT(kvstoreGetHashtable(kvs, 0) != NULL);
+    TEST_ASSERT(kvstoreBuckets(kvs) > 0);
+    TEST_ASSERT(kvstoreBuckets(kvs) == kvstoreHashtableBuckets(kvs, 0));
+
+    kvstoreRelease(kvs);
+    return 0;
+}

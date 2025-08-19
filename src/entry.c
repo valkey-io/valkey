@@ -43,11 +43,11 @@ enum {
      * pointer located in memory before the embedded field. If unset, the entry
      * instead has an embedded value located after the embedded field. */
     FIELD_SDS_AUX_BIT_ENTRY_HAS_VALUE_PTR = 1,
-    /* SDS aux flag.  If set, it indicates that the hash entry's value is a **view** of the data.
-     * The hash entry does not own the view buffer and will not free it upon
+    /* SDS aux flag.  If set, it indicates that the hash entry reference the value.
+     * The hash entry does not own the string reference and will not free it upon
      * entry destruction. This is useful for avoiding memory duplication
      * between the core and a module. */
-    FIELD_SDS_AUX_BIT_ENTRY_HAS_VALUE_VIEW = 2,
+    FIELD_SDS_AUX_BIT_ENTRY_HAS_STRING_REF = 2,
     FIELD_SDS_AUX_BIT_MAX
 };
 static_assert(FIELD_SDS_AUX_BIT_MAX < sizeof(char) - SDS_TYPE_BITS, "too many sds bits are used for entry metadata");
@@ -64,10 +64,10 @@ bool entryHasEmbeddedValue(const entry *entry) {
     return (!entryHasValuePtr(entry));
 }
 
-/* Returns true in case the entry holds a view of the value.
+/* Returns true in case the entry holds a reference of the value.
  * Returns false otherwise. */
-bool entryHasValueView(const entry *entry) {
-    return entryHasValuePtr(entry) && sdsGetAuxBit(entry, FIELD_SDS_AUX_BIT_ENTRY_HAS_VALUE_VIEW);
+bool entryHasStringRef(const entry *entry) {
+    return entryHasValuePtr(entry) && sdsGetAuxBit(entry, FIELD_SDS_AUX_BIT_ENTRY_HAS_STRING_REF);
 }
 /* Returns true in case the entry has expiration timestamp.
  * Returns false otherwise. */
@@ -100,10 +100,10 @@ char *entryGetValue(const entry *entry, size_t *len) {
     }
     void **value_ref = entryGetValueRef(entry);
     if (!value_ref) return NULL;
-    if (entryHasValueView(entry)) {
-        bufferView *buffer_view = (bufferView *)*value_ref;
-        if (len) *len = buffer_view->len;
-        return (char *)buffer_view->buf;
+    if (entryHasStringRef(entry)) {
+        stringRef *string_ref = (stringRef *)*value_ref;
+        if (len) *len = string_ref->len;
+        return (char *)string_ref->buf;
     }
     if (len) *len = sdslen(*value_ref);
     return *value_ref;
@@ -112,10 +112,10 @@ char *entryGetValue(const entry *entry, size_t *len) {
 static void entrySetValuePtr(entry *e, sds value) {
     serverAssert(entryHasValuePtr(e));
     void **value_ref = entryGetValueRef(e);
-    if (entryHasValueView(e)) {
+    if (entryHasStringRef(e)) {
         zfree(*value_ref);
-        *value_ref = (bufferView *)value;
-        sdsSetAuxBit(e, FIELD_SDS_AUX_BIT_ENTRY_HAS_VALUE_VIEW, 0);
+        *value_ref = (stringRef *)value;
+        sdsSetAuxBit(e, FIELD_SDS_AUX_BIT_ENTRY_HAS_STRING_REF, 0);
     } else {
         sdsfree(*value_ref);
     }
@@ -138,29 +138,26 @@ static void *entryGetAllocPtr(const entry *entry) {
 }
 
 /**************************************** Entry Expiry API *****************************************/
+static inline long long *entryGetExpiryRef(const entry *entry) {
+    debugServerAssert(entryHasExpiry(entry));
+    char *buf = entryGetAllocPtr(entry);
+    debugServerAssert((((uintptr_t)buf & 0x7) == 0)); /* Test that the allocation is indeed 8 bytes aligned
+                                                       * This is needed since we access the expiry as with pointer casting
+                                                       * which require the access to be 8 bytes aligned. */
+    return (long long *)buf;
+}
 
 /* Returns the entry expiration timestamp.
  * In case this entry has no expiration time, will return EXPIRE_NONE. */
 long long entryGetExpiry(const entry *entry) {
-    long long expiry = EXPIRY_NONE;
-    if (entryHasExpiry(entry)) {
-        char *buf = entryGetAllocPtr(entry);
-        debugServerAssert((((uintptr_t)buf & 0x7) == 0)); /* Test that the allocation is indeed 8 bytes aligned
-                                                           * This is needed since we access the expiry as with pointer casting
-                                                           * which require the access to be 8 bytes aligned. */
-        expiry = *(long long *)buf;
-    }
-    return expiry;
+    if (entryHasExpiry(entry)) return *entryGetExpiryRef(entry);
+    return EXPIRY_NONE;
 }
 
 /* Modify the expiration time of this entry and return a pointer to the (potentially new) entry. */
 entry *entrySetExpiry(entry *e, long long expiry) {
     if (entryHasExpiry(e)) {
-        char *buf = entryGetAllocPtr(e);
-        debugServerAssert((((uintptr_t)buf & 0x7) == 0)); /* Test that the allocation is indeed 8 bytes aligned
-                                                           * This is needed since we access the expiry as with pointer casting
-                                                           * which require the access to be 8 bytes aligned. */
-        *(long long *)buf = expiry;
+        *entryGetExpiryRef(e) = expiry;
         return e;
     }
     return entryUpdate(e, NULL, expiry);
@@ -175,7 +172,7 @@ bool entryIsExpired(entry *entry) {
 static inline void entryFreeValuePtr(entry *entry) {
     serverAssert(entryHasValuePtr(entry));
     void **value_ref = entryGetValueRef(entry);
-    if (entryHasValueView(entry)) {
+    if (entryHasStringRef(entry)) {
         zfree(*value_ref);
         return;
     }
@@ -301,24 +298,26 @@ entry *entryCreate(const_sds field, sds value, long long expiry) {
     return entryWrite(buf, buf_size, field, value, expiry, embed_value, embedded_field_sds_type, embedded_field_sds_size, embedded_value_sds_size, expiry_size);
 }
 
-entry *entrySetValueView(entry *entry, const char *buf, size_t len, long long expiry) {
+entry *entrySetStringRef(entry *entry, const char *buf, size_t len, long long expiry) {
     long long entry_expiry = entryGetExpiry(entry);
     // Check for toggling expiration
     bool expiry_add_remove = (expiry != entry_expiry) && (entry_expiry == EXPIRY_NONE || expiry == EXPIRY_NONE);
-    if (entryHasValueView(entry) && !expiry_add_remove) {
-        bufferView *value = *entryGetValueRef(entry);
+    if (entryHasStringRef(entry) && !expiry_add_remove) {
+        stringRef *value = *entryGetValueRef(entry);
         value->buf = buf;
         value->len = len;
+        if (expiry != EXPIRY_NONE) *entryGetExpiryRef(entry) = expiry;
         return entry;
     }
-    bufferView *value = zmalloc(sizeof(bufferView));
+    stringRef *value = zmalloc(sizeof(stringRef));
     value->buf = buf;
     value->len = len;
     if (entryHasValuePtr(entry) && !expiry_add_remove) {
         sds *value_ref = (sds *)entryGetValueRef(entry);
         sdsfree(*value_ref);
         *value_ref = (sds)value;
-        sdsSetAuxBit(entry, FIELD_SDS_AUX_BIT_ENTRY_HAS_VALUE_VIEW, 1);
+        sdsSetAuxBit(entry, FIELD_SDS_AUX_BIT_ENTRY_HAS_STRING_REF, 1);
+        if (expiry != EXPIRY_NONE) *entryGetExpiryRef(entry) = expiry;
         return entry;
     }
     sds field = entryGetField(entry);
@@ -335,15 +334,16 @@ entry *entrySetValueView(entry *entry, const char *buf, size_t len, long long ex
         buf_sds += sizeof(expiry);
         buf_size -= sizeof(expiry);
     }
-    *(bufferView **)buf_sds = value;
+    *(stringRef **)buf_sds = value;
     buf_sds += sizeof(value);
     buf_size -= sizeof(value);
     /* Set the field data */
     sds new_entry = sdswrite(buf_sds, field_size, SDS_TYPE_8, field, sdslen(field));
     entryFree(entry);
 
-    sdsSetAuxBit(new_entry, FIELD_SDS_AUX_BIT_ENTRY_HAS_VALUE_VIEW, 1);
+    sdsSetAuxBit(new_entry, FIELD_SDS_AUX_BIT_ENTRY_HAS_STRING_REF, 1);
     sdsSetAuxBit(new_entry, FIELD_SDS_AUX_BIT_ENTRY_HAS_VALUE_PTR, 1);
+    sdsSetAuxBit(new_entry, FIELD_SDS_AUX_BIT_ENTRY_HAS_EXPIRY, expiry != EXPIRY_NONE);
     return new_entry;
 }
 /* Modify the entry's value and/or expiration time.
@@ -354,10 +354,9 @@ entry *entryUpdate(entry *e, sds value, long long expiry) {
     sds field = (sds)e;
     entry *new_entry = NULL;
 
-    if (entryHasValueView(e)) {
-        serverAssert(!value);
-        bufferView *value = (bufferView *)*entryGetValueRef(e);
-        return entrySetValueView(e, value->buf, value->len, expiry);
+    if (entryHasStringRef(e) && !value) {
+        stringRef *value = (stringRef *)*entryGetValueRef(e);
+        return entrySetStringRef(e, value->buf, value->len, expiry);
     }
     bool update_value = value ? true : false;
     long long curr_expiration_time = entryGetExpiry(e);
@@ -431,7 +430,6 @@ entry *entryUpdate(entry *e, sds value, long long expiry) {
         size_t buf_size;
         char *buf = zmalloc_usable(required_entry_size, &buf_size);
         new_entry = entryWrite(buf, buf_size, field, value, expiry, embed_value, embedded_field_sds_type, embedded_field_size, embedded_value_size, expiry_size);
-        sdsSetAuxBit(new_entry, FIELD_SDS_AUX_BIT_ENTRY_HAS_VALUE_VIEW, sdsGetAuxBit(e, FIELD_SDS_AUX_BIT_ENTRY_HAS_VALUE_VIEW));
         entryFree(e);
     }
     /* Check that the new entry was built correctly */
@@ -454,7 +452,7 @@ size_t entryMemUsage(entry *entry) {
          * header could be too small for holding the real allocation size. */
         mem += zmalloc_usable_size(entryGetAllocPtr(entry));
     }
-    mem += sdsAllocSize((sds)entryGetValue(entry, NULL));
+    if (!entryHasStringRef(entry)) mem += sdsAllocSize((sds)entryGetValue(entry, NULL));
     return mem;
 }
 
@@ -466,7 +464,7 @@ size_t entryMemUsage(entry *entry) {
  * If the location of the entry changed we return the new location,
  * otherwise we return NULL. */
 entry *entryDefrag(entry *entry, void *(*defragfn)(void *), sds (*sdsdefragfn)(sds)) {
-    if (entryHasValueView(entry)) return NULL;
+    if (entryHasStringRef(entry)) return NULL;
     if (entryHasValuePtr(entry)) {
         sds *value_ref = (sds *)entryGetValueRef(entry);
         sds new_value = sdsdefragfn(*value_ref);

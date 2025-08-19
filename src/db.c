@@ -1005,7 +1005,7 @@ int objectTypeCompare(robj *o, long long target) {
 }
 
 static void addScanDataItem(vector *result, const char *buf, size_t len) {
-    bufferView *item = vectorPush(result);
+    stringRef *item = vectorPush(result);
     item->buf = buf;
     item->len = len;
 }
@@ -1047,7 +1047,7 @@ void keysScanCallback(void *privdata, void *entry, int didx) {
  * returned by the dictionary iterator into a list. */
 void hashtableScanCallback(void *privdata, void *entry) {
     scanData *data = (scanData *)privdata;
-    bufferView val = {NULL, 0};
+    stringRef val = {NULL, 0};
     sds key = NULL;
 
     robj *o = data->o;
@@ -1252,7 +1252,7 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {
         /* scanning ZSET allocates temporary strings even though it's a dict */
         free_callback = sdsfree;
     }
-    vectorInit(&result, SCAN_VECTOR_INITIAL_ALLOC, sizeof(bufferView));
+    vectorInit(&result, SCAN_VECTOR_INITIAL_ALLOC, sizeof(stringRef));
 
     /* For main hash table scan or scannable data structure. */
     if (!o || ht) {
@@ -1355,7 +1355,7 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {
 
     addReplyArrayLen(c, vectorLen(&result));
     for (uint32_t i = 0; i < vectorLen(&result); i++) {
-        bufferView *key = vectorGet(&result, i);
+        stringRef *key = vectorGet(&result, i);
         addReplyBulkCBuffer(c, key->buf, key->len);
         if (free_callback) {
             free_callback((sds)(key->buf));

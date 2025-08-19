@@ -311,16 +311,16 @@ int hashTypeExists(robj *o, sds field) {
     return hashTypeGetValue(o, field, &vstr, &vlen, &vll, NULL) == C_OK;
 }
 
-int hashTypeHasValueView(robj *o, sds field) {
+int hashTypeHasStringRef(robj *o, sds field) {
     if (o->encoding == OBJ_ENCODING_LISTPACK) return 0;
     hashtable *ht = o->ptr;
     void **entry_ref = hashtableFindRef(ht, field);
-    return (entryHasValueView(*entry_ref));
+    return (entryHasStringRef(*entry_ref));
 }
-/* Set a view value field in a hash.
+/* Set a reference to the value.
  * Returns C_ERR on error, C_OK on update.
  */
-int hashTypeSetValueView(robj *o, sds field, const char *buf, size_t len) {
+int hashTypeSetStringRef(robj *o, sds field, const char *buf, size_t len) {
     unsigned char *vstr = NULL;
     unsigned int vlen = UINT_MAX;
     long long vll = LLONG_MAX;
@@ -333,8 +333,8 @@ int hashTypeSetValueView(robj *o, sds field, const char *buf, size_t len) {
     hashtable *ht = o->ptr;
     void **entry_ref = hashtableFindRef(ht, field);
     entry *entry = *entry_ref;
-    if (entryHasValueView(entry)) return C_ERR;
-    entrySetValueView(entry, buf, len, entryGetExpiry(entry));
+    if (entryHasStringRef(entry)) return C_ERR;
+    entrySetStringRef(entry, buf, len, entryGetExpiry(entry));
     return C_OK;
 }
 

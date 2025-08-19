@@ -470,3 +470,53 @@ int test_entryMemUsage_entrySetExpiry_entrySetValue(int argc, char **argv, int f
 
     return 0;
 }
+
+int test_entryStringRef(int argc, char **argv, int flags) {
+    UNUSED(argc);
+    UNUSED(argv);
+    UNUSED(flags);
+    sds field1 = sdsnew(SHORT_FIELD);
+    sds value1 = sdsnew(SHORT_VALUE);
+    sds value_copy1 = sdsdup(value1);
+    long long expiry1 = EXPIRY_NONE;
+    entry *e1 = entryCreate(field1, value1, expiry1);
+    entry *e2 = entrySetStringRef(e1, value_copy1, sdslen(value_copy1), entryGetExpiry(e1));
+    verify_entry_properties(e2, field1, value_copy1, expiry1, false, true);
+    TEST_ASSERT(entryHasStringRef(e2) == true);
+
+    long long expiry2 = 100;
+    entry *e3 = entrySetStringRef(e2, value_copy1, sdslen(value_copy1), expiry2);
+    TEST_ASSERT(e2 != e3);
+    verify_entry_properties(e3, field1, value_copy1, expiry2, true, true);
+    TEST_ASSERT(entryHasStringRef(e3) == true);
+
+    long long expiry3 = 200;
+    entry *e4 = entrySetStringRef(e3, value_copy1, sdslen(value_copy1), expiry3);
+    TEST_ASSERT(e3 == e4);
+    verify_entry_properties(e4, field1, value_copy1, expiry3, true, true);
+    TEST_ASSERT(entryHasStringRef(e4) == true);
+
+    sds value2 = sdsnew(SHORT_VALUE);
+    sds value_copy2 = sdsdup(value2);
+    entry *e5 = entryUpdate(e4, value2, expiry3);
+    verify_entry_properties(e5, field1, value_copy2, expiry3, true, false);
+    TEST_ASSERT(entryHasStringRef(e5) == false);
+
+    entry *e6 = entrySetStringRef(e5, value_copy1, sdslen(value_copy1), expiry2);
+    TEST_ASSERT(e5 != e6);
+    verify_entry_properties(e6, field1, value_copy1, expiry2, true, true);
+    TEST_ASSERT(entryHasStringRef(e6) == true);
+
+    sds value3 = sdsnew(LONG_VALUE);
+    sds value_copy3 = sdsdup(value3);
+    entry *e7 = entryUpdate(e6, value3, expiry1);
+    verify_entry_properties(e7, field1, value_copy3, expiry1, false, true);
+    TEST_ASSERT(entryHasStringRef(e7) == false);
+
+    entryFree(e7);
+    sdsfree(value_copy1);
+    sdsfree(value_copy2);
+    sdsfree(value_copy3);
+    sdsfree(field1);
+    return 0;
+}

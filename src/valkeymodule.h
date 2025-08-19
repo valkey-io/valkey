@@ -1384,8 +1384,8 @@ VALKEYMODULE_API int (*ValkeyModule_ZsetRangePrev)(ValkeyModuleKey *key) VALKEYM
 VALKEYMODULE_API int (*ValkeyModule_ZsetRangeEndReached)(ValkeyModuleKey *key) VALKEYMODULE_ATTR;
 VALKEYMODULE_API int (*ValkeyModule_HashSet)(ValkeyModuleKey *key, int flags, ...) VALKEYMODULE_ATTR;
 VALKEYMODULE_API int (*ValkeyModule_HashGet)(ValkeyModuleKey *key, int flags, ...) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*ValkeyModule_HashSetValueView)(ValkeyModuleKey *key, ValkeyModuleString *field, const char *buf, size_t len) VALKEYMODULE_ATTR;
-VALKEYMODULE_API int (*ValkeyModule_HashHasValueView)(ValkeyModuleKey *key, ValkeyModuleString *field) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_HashSetStringRef)(ValkeyModuleKey *key, ValkeyModuleString *field, const char *buf, size_t len) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_HashHasStringRef)(ValkeyModuleKey *key, ValkeyModuleString *field) VALKEYMODULE_ATTR;
 VALKEYMODULE_API int (*ValkeyModule_StreamAdd)(ValkeyModuleKey *key,
                                                int flags,
                                                ValkeyModuleStreamID *id,
@@ -2030,8 +2030,8 @@ static int ValkeyModule_Init(ValkeyModuleCtx *ctx, const char *name, int ver, in
     VALKEYMODULE_GET_API(ZsetRangeEndReached);
     VALKEYMODULE_GET_API(HashSet);
     VALKEYMODULE_GET_API(HashGet);
-    VALKEYMODULE_GET_API(HashSetValueView);
-    VALKEYMODULE_GET_API(HashHasValueView);
+    VALKEYMODULE_GET_API(HashSetStringRef);
+    VALKEYMODULE_GET_API(HashHasStringRef);
     VALKEYMODULE_GET_API(StreamAdd);
     VALKEYMODULE_GET_API(StreamDelete);
     VALKEYMODULE_GET_API(StreamIteratorStart);

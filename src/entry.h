@@ -8,10 +8,10 @@
  * The view does not manage the underlying memory, so its destruction
  * will not free the buffer.
  */
-typedef struct bufferView {
+typedef struct stringRef {
     const char *buf; /* Pointer to the externalized buffer */
     size_t len;      /* Length of the buffer */
-} bufferView;
+} stringRef;
 
 /*-----------------------------------------------------------------------------
  * Entry
@@ -72,7 +72,7 @@ long long entryGetExpiry(const entry *entry);
 bool entryHasExpiry(const entry *entry);
 
 /* Returns true if the entry value is externalized. */
-bool entryHasValueView(const entry *entry);
+bool entryHasStringRef(const entry *entry);
 
 /* Sets the expiration timestamp. */
 entry *entrySetExpiry(entry *entry, long long expiry);
@@ -85,7 +85,7 @@ void entryFree(entry *entry);
 
 /* Creates a new entry with the given field, value, and optional expiry. */
 entry *entryCreate(const_sds field, sds value, long long expiry);
-entry *entrySetValueView(entry *entry, const char *buf, size_t len, long long expiry);
+entry *entrySetStringRef(entry *entry, const char *buf, size_t len, long long expiry);
 
 /* Updates the value and/or expiry of an existing entry.
  * In case value is NULL, will use the existing entry value.

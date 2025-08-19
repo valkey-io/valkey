@@ -1964,7 +1964,7 @@ int rewriteHashObject(rio *r, robj *key, robj *o) {
             long long expiry = entryGetExpiry(hi.next);
             sds field = entryGetField(hi.next);
             size_t value_len;
-            sds value = entryGetValue(hi.next, &value_len);
+            char *value = entryGetValue(hi.next, &value_len);
             if (rioWriteBulkCount(r, '*', 8) == 0) return 0;
             if (rioWriteBulkString(r, "HSETEX", 6) == 0) return 0;
             if (rioWriteBulkObject(r, key) == 0) return 0;

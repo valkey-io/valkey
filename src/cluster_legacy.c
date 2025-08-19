@@ -1785,7 +1785,7 @@ static void decodeFailureReportKey(unsigned char *buf, mstime_t *report_time, cl
  * 'sender' node.
  *
  * Returns 0:
- *   - Early exit when the node is already in FAIL state
+ *   - The node is already in FAIL state
  *   - The same sender has already reported within the same time bucket
  *   - An existing report from 'sender' was refreshed (timestamp updated)
  * Returns 1 if a brand new failure report entry is created. */

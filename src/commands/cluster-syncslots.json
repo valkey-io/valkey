@@ -1,0 +1,19 @@
+{
+    "SYNCSLOTS": {
+        "summary": "A container for internal slot migration commands.",
+        "complexity": "Depends on subcommand.",
+        "group": "cluster",
+        "since": "9.0.0",
+        "container": "CLUSTER",
+        "function": "clusterCommand",
+        "doc_flags": [
+            "SYSCMD"
+        ],
+        "arity": -3,
+        "command_flags": [
+            "NO_ASYNC_LOADING",
+            "ADMIN",
+            "STALE"
+        ]
+    }
+}

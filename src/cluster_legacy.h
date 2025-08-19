@@ -25,6 +25,7 @@
 #define CLUSTER_TODO_FSYNC_CONFIG (1 << 3)
 #define CLUSTER_TODO_HANDLE_MANUALFAILOVER (1 << 4)
 #define CLUSTER_TODO_BROADCAST_ALL (1 << 5)
+#define CLUSTER_TODO_HANDLE_SLOT_MIGRATION (1 << 6)
 
 /* clusterLink encapsulates everything needed to talk with a remote node. */
 typedef struct clusterLink {
@@ -377,6 +378,11 @@ typedef struct slotStat {
     uint64_t network_bytes_out;
 } slotStat;
 
+typedef struct slotRange {
+    int start_slot;
+    int end_slot;
+} slotRange;
+
 struct clusterState {
     clusterNode *myself; /* This node */
     uint64_t currentEpoch;
@@ -389,6 +395,9 @@ struct clusterState {
     dict *migrating_slots_to;
     dict *importing_slots_from;
     clusterNode *slots[CLUSTER_SLOTS];
+    list *slot_migration_jobs; /* List storing all slot migration jobs. Stored
+                                * in order from most recent to least recently
+                                * created. */
     /* The following fields are used to take the replica state on elections. */
     mstime_t failover_auth_time;      /* Time of previous or next election. */
     int failover_auth_count;          /* Number of votes received so far. */

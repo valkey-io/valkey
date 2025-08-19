@@ -1143,6 +1143,15 @@ start_server {tags {"introspection"}} {
         r client info
     } {*lib-name= *}
 
+    test {CONFIG GET should return sorted output} {
+        set config [r config get *]
+        set keys {}
+        foreach {key value} $config {
+            lappend keys $key
+        }
+        assert_equal [lsort $keys] $keys
+    }
+
     test {CONFIG save params special case handled properly} {
         # No "save" keyword - defaults should apply
         start_server {config "minimal.conf"} {

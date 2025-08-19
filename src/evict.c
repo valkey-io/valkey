@@ -33,6 +33,7 @@
 #include "server.h"
 #include "bio.h"
 #include "script.h"
+#include "cluster_migrateslots.h"
 #include <math.h>
 
 /* ----------------------------------------------------------------------------
@@ -146,6 +147,8 @@ int evictionPoolPopulate(serverDb *db, kvstore *samplekvs, struct evictionPoolEn
     void *samples[server.maxmemory_samples];
 
     int slot = kvstoreGetFairRandomHashtableIndex(samplekvs);
+    /* We may get not found if there are no keys */
+    if (slot == KVSTORE_INDEX_NOT_FOUND) return 0;
     count = kvstoreHashtableSampleEntries(samplekvs, slot, &samples[0], server.maxmemory_samples);
     for (j = 0; j < count; j++) {
         unsigned long long idle;
@@ -350,6 +353,11 @@ size_t freeMemoryGetNotCountedMemory(void) {
     if (server.aof_state != AOF_OFF) {
         overhead += sdsAllocSize(server.aof_buf);
     }
+
+    if (clusterIsAnySlotExporting()) {
+        overhead += clusterGetTotalSlotExportBufferMemory();
+    }
+
     return overhead;
 }
 
@@ -555,6 +563,7 @@ int performEvictions(void) {
         static unsigned int next_db = 0;
         sds bestkey = NULL;
         int bestdbid;
+        int bestslot;
         serverDb *db;
         robj *valkey;
 
@@ -607,6 +616,7 @@ int performEvictions(void) {
                         kvs = server.db[bestdbid]->expires;
                     }
                     void *entry = NULL;
+
                     bool found = kvstoreHashtableFind(kvs, pool[k].slot, pool[k].key, &entry);
 
                     /* Remove the entry from the pool. */
@@ -619,6 +629,7 @@ int performEvictions(void) {
                     if (found) {
                         valkey = entry;
                         bestkey = objectGetKey(valkey);
+                        bestslot = pool[k].slot;
                         break;
                     } else {
                         /* Ghost... Iterate again. */
@@ -644,10 +655,12 @@ int performEvictions(void) {
                     kvs = db->expires;
                 }
                 int slot = kvstoreGetFairRandomHashtableIndex(kvs);
+                if (slot == KVSTORE_INDEX_NOT_FOUND) continue; /* No keys in this DB. */
                 void *entry;
                 if (kvstoreHashtableRandomEntry(kvs, slot, &entry)) {
                     bestkey = objectGetKey((robj *)entry);
                     bestdbid = j;
+                    bestslot = slot;
                     break;
                 }
             }
@@ -679,7 +692,7 @@ int performEvictions(void) {
             server.stat_evictedkeys++;
             signalModifiedKey(NULL, db, keyobj);
             notifyKeyspaceEvent(NOTIFY_EVICTED, "evicted", keyobj, db->id);
-            propagateDeletion(db, keyobj, server.lazyfree_lazy_eviction);
+            propagateDeletion(db, keyobj, server.lazyfree_lazy_eviction, bestslot);
             exitExecutionUnit();
             postExecutionUnitOperations();
             decrRefCount(keyobj);

@@ -1784,14 +1784,20 @@ static void decodeFailureReportKey(unsigned char *buf, mstime_t *report_time, cl
  * 'failing' is the node that is in failure state according to the
  * 'sender' node.
  *
- * The function returns 0 if it early‐exits (same sender & time bucket)
- * or updates a timestamp of an existing failure report from the same sender.
- * 1 is returned if a new failure report is created. */
+ * Returns 0:
+ *   - The node is already in FAIL state
+ *   - The same sender has already reported within the same time bucket
+ *   - An existing report from 'sender' was refreshed (timestamp updated)
+ * Returns 1 if a brand new failure report entry is created. */
 int clusterNodeAddFailureReport(clusterNode *failing, clusterNode *sender) {
     unsigned char buf[FAILURE_REPORT_KEYLEN];
     mstime_t now = mstime();
     const mstime_t bucketed_time = (now / SEC_IN_MS) * SEC_IN_MS + SEC_IN_MS;
     int is_new = 1;
+
+    /* This avoids unnecessary iteration and memory ops, improving performance
+     * when handling repeated reports for already failed nodes. */
+    if (nodeFailed(failing)) return 0;
 
     /* Look for any existing entry from this sender and remove it */
     raxIterator ri;

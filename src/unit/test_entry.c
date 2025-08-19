@@ -42,9 +42,9 @@ int test_entryCreate(int argc, char **argv, int flags) {
     sds field1 = sdsnew(SHORT_FIELD);
     sds value1 = sdsnew(SHORT_VALUE);
     sds value_copy1 = sdsdup(value1); // Keep a copy since entryCreate takes ownership of value
-    long long expiry1 = EXPIRY_NONE;
+    long long expiry1 = 100;
     entry *e1 = entryCreate(field1, value1, expiry1);
-    verify_entry_properties(e1, field1, value_copy1, expiry1, false, false);
+    verify_entry_properties(e1, field1, value_copy1, expiry1, true, false);
 
     // Test with embedded value with no expiry
     sds field2 = sdsnew(SHORT_FIELD);

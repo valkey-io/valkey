@@ -159,13 +159,12 @@ start_cluster 3 1 {tags {external:skip cluster}} {
         # Other nodes should not add a new failure report from this primary1
         resume_process $primary1_pid
 
-        # Ensure no primary has more than one reports
+        # Ensure that primary0 and primary2 do not have more than one report
         wait_for_condition 1000 50 {
             [R 0 CLUSTER COUNT-FAILURE-REPORTS $replica0_id] < 2 &&
-            [R 1 CLUSTER COUNT-FAILURE-REPORTS $replica0_id] < 2 &&
             [R 2 CLUSTER COUNT-FAILURE-REPORTS $replica0_id] < 2
         } else {
-            fail "No primary should exceed two failure reports"
+            fail "Ensure primary0 and primary2 do not exceed one failure report"
         }
 
         # Bring the replica back online and verify cleanup

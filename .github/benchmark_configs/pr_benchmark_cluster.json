@@ -19,7 +19,7 @@
       "XADD"
     ],
     "cluster_mode": true,
-    "tls_mode": true,
+    "tls_mode": false,
     "warmup": 10
   }
 ]

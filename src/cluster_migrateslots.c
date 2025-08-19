@@ -434,6 +434,10 @@ void clusterCommandSyncSlotsEstablish(client *c) {
                 addReplyError(c, "Target node does not know the source node");
                 goto cleanup;
             }
+            if (source_node == server.cluster->myself) {
+                addReplyError(c, "Source node is target node itself");
+                goto cleanup;
+            }
             i += 2;
             continue;
         }

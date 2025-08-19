@@ -3821,7 +3821,7 @@ int canParseCommand(client *c) {
     return 1;
 }
 
-/* Pops a commands from the command queue and sets it as the client's current
+/* Pops a command from the command queue and sets it as the client's current
  * command. Returns true on success and false if the queue was empty. */
 static bool consumeCommandQueue(client *c) {
     cmdQueue *queue = &c->cmd_queue;

@@ -3258,11 +3258,11 @@ void unprotectClient(client *c) {
     }
 }
 
-/* Like processMultibulkBuffer(), but for the inline protocol instead of RESP,
+/* Like parseMultibulkBuffer(), but for the inline protocol instead of RESP,
  * this function consumes the client query buffer and creates a command ready
  * to be executed inside the client structure.
  * Sets the client read_flags to indicate the parsing outcome. */
-void processInlineBuffer(client *c) {
+void parseInlineBuffer(client *c) {
     char *newline;
     int argc, j, linefeed_chars = 1;
     sds *argv, aux;
@@ -3393,8 +3393,8 @@ static void setProtocolError(const char *errstr, client *c) {
  *
  * This function is called if processInputBuffer() detects that the next
  * command is in RESP format, so the first byte in the command is found
- * to be '*'. Otherwise for inline commands processInlineBuffer() is called. */
-void processMultibulkBuffer(client *c) {
+ * to be '*'. Otherwise for inline commands parseInlineBuffer() is called. */
+void parseMultibulkBuffer(client *c) {
     int flag = parseMultibulk(c, &c->argc, &c->argv, &c->argv_len,
                               &c->argv_len_sum, &c->net_input_bytes_curr_cmd);
     c->read_flags |= flag;
@@ -3744,12 +3744,14 @@ int processPendingCommandAndInputBuffer(client *c) {
     return C_OK;
 }
 
-/* Parse a single command from the query buf.
+/* Parse one or more commands from the query buf.
  *
  * This function may be called from the main thread or from the I/O thread.
  *
- * Sets the client's read_flags to indicate the parsing outcome */
-void parseCommand(client *c) {
+ * Sets the client's read_flags to indicate the parsing outcome. If multiple
+ * commands could be parsed, additional parsed commands are stored in the
+ * client's command queue. */
+void parseInputBuffer(client *c) {
     /* The command queue must be emptied before parsing. */
     serverAssert(c->cmd_queue.len == 0);
 
@@ -3763,9 +3765,9 @@ void parseCommand(client *c) {
     }
 
     if (c->reqtype == PROTO_REQ_INLINE) {
-        processInlineBuffer(c);
+        parseInlineBuffer(c);
     } else if (c->reqtype == PROTO_REQ_MULTIBULK) {
-        processMultibulkBuffer(c);
+        parseMultibulkBuffer(c);
     } else {
         serverPanic("Unknown request type");
     }
@@ -3956,7 +3958,7 @@ static void prefetchCommandQueueKeys(client *c) {
 }
 
 int processInputBuffer(client *c) {
-    /* Parse the query buffer. */
+    /* Parse the query buffer and/or execute already parsed commands. */
     while ((c->querybuf && c->qb_pos < sdslen(c->querybuf)) ||
            c->cmd_queue.off < c->cmd_queue.len) {
         if (!canParseCommand(c)) {
@@ -3968,7 +3970,7 @@ int processInputBuffer(client *c) {
 
         /* If commands are queued up, pop from the queue first */
         if (!consumeCommandQueue(c)) {
-            parseCommand(c);
+            parseInputBuffer(c);
             prepareCommandQueue(c);
         }
 
@@ -4022,7 +4024,7 @@ static bool readToQueryBuf(client *c) {
      * that is large enough, try to maximize the probability that the query
      * buffer contains exactly the SDS string representing the object, even
      * at the risk of requiring more read(2) calls. This way the function
-     * processMultibulkBuffer() can avoid copying buffers to create the
+     * parseMultibulkBuffer() can avoid copying buffers to create the
      * robj representing the argument. */
 
     if (c->reqtype == PROTO_REQ_MULTIBULK && c->multibulklen && c->bulklen != -1 && c->bulklen >= PROTO_MBULK_BIG_ARG) {
@@ -6363,7 +6365,7 @@ void ioThreadReadQueryFromClient(void *data) {
         goto done;
     }
 
-    parseCommand(c);
+    parseInputBuffer(c);
     trimCommandQueue(c);
     prepareCommandQueue(c);
 

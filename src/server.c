@@ -4085,25 +4085,30 @@ uint64_t getCommandFlags(client *c) {
     return cmd_flags;
 }
 
-/* Prepare the client's current command for processing, including looking up the
- * command, checking arity and calculating cluster slot. This should be done
- * before calling processCommand() and can be done by I/O threads to offload the
- * main-thread. */
-void prepareCommand(client *c) {
-    if (!(c->read_flags & READ_FLAGS_PARSING_COMPLETED) || c->argc == 0) return;
+/* Helper for prepareCommand() and prepareCommandQueue(). Prepares a command for
+ * processing, including looking up the command, checking arity and calculating
+ * cluster slot. This should be done before calling processCommand() and can be
+ * done by I/O threads to offload the main-thread. */
+static void prepareCommandGeneric(robj **argv, int argc, int *read_flags, struct serverCommand **cmd, int *slot) {
+    if (!(*read_flags & READ_FLAGS_PARSING_COMPLETED) || argc == 0) return;
     /* Make sure we don't do this twice. */
-    debugServerAssert(c->parsed_cmd == NULL && !(c->read_flags & READ_FLAGS_COMMAND_NOT_FOUND));
-    c->parsed_cmd = lookupCommand(c->argv, c->argc);
-    if (!c->parsed_cmd) {
-        c->read_flags |= READ_FLAGS_COMMAND_NOT_FOUND;
-    } else if (!commandCheckArity(c->parsed_cmd, c->argc, NULL)) {
-        c->read_flags |= READ_FLAGS_BAD_ARITY;
+    debugServerAssert(*cmd == NULL && !(*read_flags & READ_FLAGS_COMMAND_NOT_FOUND));
+    *cmd = lookupCommand(argv, argc);
+    if (!*cmd) {
+        *read_flags |= READ_FLAGS_COMMAND_NOT_FOUND;
+    } else if (!commandCheckArity(*cmd, argc, NULL)) {
+        *read_flags |= READ_FLAGS_BAD_ARITY;
     } else if (server.cluster_enabled) {
-        debugServerAssert(c->slot == -1 &&
-                          !(c->read_flags & READ_FLAGS_CROSSSLOT) &&
-                          !(c->read_flags & READ_FLAGS_NO_KEYS));
-        c->slot = clusterSlotByCommand(c->parsed_cmd, c->argv, c->argc, &c->read_flags);
+        debugServerAssert(*slot == -1 &&
+                          !(*read_flags & READ_FLAGS_CROSSSLOT) &&
+                          !(*read_flags & READ_FLAGS_NO_KEYS));
+        *slot = clusterSlotByCommand(*cmd, argv, argc, read_flags);
     }
+}
+
+/* Prepare the client's current command. See prepareCommandGeneric(). */
+void prepareCommand(client *c) {
+    prepareCommandGeneric(c->argv, c->argc, &c->read_flags, &c->parsed_cmd, &c->slot);
 }
 
 /* Prepare all parsed commands in the client's queue. See prepareCommand(). */
@@ -4114,18 +4119,7 @@ void prepareCommandQueue(client *c) {
     /* Commands in client's command queue. */
     for (int i = c->cmd_queue.off; i < c->cmd_queue.len; i++) {
         parsedCommand *p = &c->cmd_queue.cmds[i];
-        if (!(p->read_flags & READ_FLAGS_PARSING_COMPLETED) || p->argc == 0) continue;
-        p->cmd = lookupCommand(p->argv, p->argc);
-        if (!p->cmd) {
-            p->read_flags |= READ_FLAGS_COMMAND_NOT_FOUND;
-        } else if (!commandCheckArity(p->cmd, p->argc, NULL)) {
-            p->read_flags |= READ_FLAGS_BAD_ARITY;
-        } else if (server.cluster_enabled) {
-            debugServerAssert(p->slot == -1 &&
-                              !(p->read_flags & READ_FLAGS_CROSSSLOT) &&
-                              !(p->read_flags & READ_FLAGS_NO_KEYS));
-            p->slot = clusterSlotByCommand(p->cmd, p->argv, p->argc, &p->read_flags);
-        }
+        prepareCommandGeneric(p->argv, p->argc, &p->read_flags, &p->cmd, &p->slot);
     }
 }
 

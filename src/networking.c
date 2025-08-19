@@ -3407,7 +3407,7 @@ void processMultibulkBuffer(client *c) {
 
     /* Try parsing pipelined commands. */
     cmdQueue *queue = &c->cmd_queue;
-    debugServerAssert(queue->len == 0);
+    serverAssert(queue->len == 0);
     while ((flag & READ_FLAGS_PARSING_COMPLETED) &&
            sdslen(c->querybuf) > c->qb_pos &&
            c->querybuf[c->qb_pos] == '*') {
@@ -3751,7 +3751,7 @@ int processPendingCommandAndInputBuffer(client *c) {
  * Sets the client's read_flags to indicate the parsing outcome */
 void parseCommand(client *c) {
     /* The command queue must be emptied before parsing. */
-    debugServerAssert(!consumeCommandQueue(c));
+    serverAssert(c->cmd_queue.len == 0);
 
     /* Determine request type when unknown. */
     if (!c->reqtype) {
@@ -3785,7 +3785,7 @@ void trimCommandQueue(client *c) {
             /* Try shrink to the next power of two >= len */
             const int bits = CHAR_BIT * sizeof(unsigned int);
             uint16_t cap = queue->len == 1 ? 1 : 1 << (bits - __builtin_clz(queue->len - 1));
-            if (cap == 0) return; /* overflow */
+            serverAssert(cap >= queue->len);
             cap = max(cap, COMMAND_QUEUE_MIN_CAPACITY);
             if (cap < queue->cap) {
                 queue->cap = cap;

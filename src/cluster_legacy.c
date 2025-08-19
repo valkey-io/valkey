@@ -2731,6 +2731,8 @@ int nodeUpdateAddressIfNeeded(clusterNode *node, clusterLink *link, clusterMsg *
 void clusterSetNodeAsPrimary(clusterNode *n) {
     if (clusterNodeIsPrimary(n)) return;
 
+    serverLog(LL_NOTICE, "Reconfiguring node %.40s (%s) as primary for shard %.40s", n->name, n->human_nodename, n->shard_id);
+
     if (n->replicaof) {
         clusterNodeRemoveReplica(n->replicaof, n);
         if (n != myself) n->flags |= CLUSTER_NODE_MIGRATE_TO;
@@ -2738,6 +2740,10 @@ void clusterSetNodeAsPrimary(clusterNode *n) {
     n->flags &= ~CLUSTER_NODE_REPLICA;
     n->flags |= CLUSTER_NODE_PRIMARY;
     n->replicaof = NULL;
+
+    if (n == myself) {
+        replicationUnsetPrimary();
+    }
 
     /* Update config and state. */
     clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_UPDATE_STATE);
@@ -3921,6 +3927,9 @@ int clusterProcessPacket(clusterLink *link) {
             /* Make sure CLUSTER_NODE_PRIMARY has already been set by now on sender */
             serverAssert(nodeIsPrimary(sender));
 
+            serverLog(LL_NOTICE, "Mismatch in topology information for sender node %.40s (%s) in shard %.40s", sender->name,
+                      sender->human_nodename, sender->shard_id);
+
             /* 1) If the sender of the message is a primary, and we detected that
              *    the set of slots it claims changed, scan the slots to see if we
              *    need to update our configuration. */
@@ -4033,6 +4042,10 @@ int clusterProcessPacket(clusterLink *link) {
         n = clusterLookupNode(hdr->data.update.nodecfg.nodename, CLUSTER_NAMELEN);
         if (!n) return 1;                                    /* We don't know the reported node. */
         if (n->configEpoch >= reportedConfigEpoch) return 1; /* Nothing new. */
+
+        serverLog(LL_NOTICE, "Processing UPDATE message received from %.40s (%s) in shard %s about node %.40s (%s) in shard %s. old configEpoch %llu, new configEpoch %llu",
+                  sender->name, sender->human_nodename, sender->shard_id, n->name, n->human_nodename, n->shard_id,
+                  (unsigned long long)n->configEpoch, (unsigned long long)reportedConfigEpoch);
 
         /* If in our current config the node is a replica, set it as a primary. */
         if (nodeIsReplica(n)) clusterSetNodeAsPrimary(n);

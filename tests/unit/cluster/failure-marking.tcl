@@ -131,10 +131,10 @@ start_cluster 3 1 {tags {external:skip cluster}} {
         set replica0_pid [srv -3 pid]
         set replica0_id [dict get [cluster_get_myself 3] id]
 
-        assert {[lindex [$primary0 role] 0] eq {master}}
-        assert {[lindex [$primary1 role] 0] eq {master}}
-        assert {[lindex [$primary2 role] 0] eq {master}}
-        assert {[lindex [$replica0 role] 0] eq {slave}}
+        assert_equal [lindex [$primary0 role] 0] {master}
+        assert_equal [lindex [$primary1 role] 0] {master}
+        assert_equal [lindex [$primary2 role] 0] {master}
+        assert_equal [lindex [$replica0 role] 0] {slave}
 
         # Ensure replica is synced before simulating failure
         wait_for_sync $replica0

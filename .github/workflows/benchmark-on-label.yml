@@ -21,8 +21,7 @@ jobs:
   benchmark:
     runs-on: ${{ github.repository == 'valkey-io/valkey' && fromJSON('["self-hosted","ec2-ubuntu-24.04-benchmarking"]') || 'ubuntu-latest' }}
     if: |
-      github.event.action == 'labeled' &&
-      (github.event.label.name == 'run-benchmark' || github.event.label.name == 'run-cluster-benchmark')
+      github.event.action == 'labeled' && github.event.label.name == 'run-benchmark'
     steps:
       - name: Checkout valkey
         uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
@@ -56,12 +55,7 @@ jobs:
       - name: Run benchmarks
         working-directory: valkey-perf-benchmark
         run: |
-          # Label-specific config file
-          if [[ "${{ github.event.label.name }}" == "run-benchmark" ]]; then
-            CONFIG_FILE="../valkey/.github/benchmark_configs/pr_benchmark_standalone.json"
-          elif [[ "${{ github.event.label.name }}" == "run-cluster-benchmark" ]]; then
-            CONFIG_FILE="../valkey/.github/benchmark_configs/pr_benchmark_cluster.json"
-          fi
+          CONFIG_FILE="../valkey/.github/benchmark_configs/pr_benchmark.json"
 
           # Base benchmark arguments
           BENCHMARK_ARGS=(

@@ -1289,6 +1289,7 @@ void databasesCron(void) {
             if (db == NULL) continue;
             kvstoreTryResizeHashtables(db->keys, CRON_DICTS_PER_DB);
             kvstoreTryResizeHashtables(db->expires, CRON_DICTS_PER_DB);
+            kvstoreTryResizeHashtables(db->keys_with_volatile_items, CRON_DICTS_PER_DB);
         }
 
         /* Rehash */
@@ -1301,6 +1302,8 @@ void databasesCron(void) {
                     elapsed_us += kvstoreIncrementallyRehash(db->keys, threshold_us - elapsed_us);
                     if (elapsed_us >= threshold_us) break;
                     elapsed_us += kvstoreIncrementallyRehash(db->expires, threshold_us - elapsed_us);
+                    if (elapsed_us >= threshold_us) break;
+                    elapsed_us += kvstoreIncrementallyRehash(db->keys_with_volatile_items, threshold_us - elapsed_us);
                     if (elapsed_us >= threshold_us) break;
                 }
                 rehash_db++;

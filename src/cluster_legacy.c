@@ -1453,7 +1453,6 @@ void clusterReset(int hard) {
     if (nodeIsReplica(myself)) {
         was_replica = 1;
         clusterSetNodeAsPrimary(myself);
-        replicationUnsetPrimary();
         flushAllDataAndResetRDB(server.lazyfree_lazy_user_flush ? EMPTYDB_ASYNC : EMPTYDB_NO_FLAGS);
     }
 
@@ -5085,7 +5084,6 @@ void clusterFailoverReplaceYourPrimary(void) {
 
     /* 1) Turn this node into a primary. */
     clusterSetNodeAsPrimary(myself);
-    replicationUnsetPrimary();
 
     int remaining = old_primary->numslots;
     /* 2) Claim all the slots assigned to our primary. */
@@ -7537,13 +7535,8 @@ int clusterCommandSpecial(client *c) {
             serverLog(LL_NOTICE, "Stop replication and turning myself into empty primary (request from '%s').", client);
             sdsfree(client);
             clusterSetNodeAsPrimary(myself);
-
-            /* Flush the data before promoting myself, since promotion will try
-             * to delete data in unowned slots, and we know all data will be
-             * removed anyways. */
             flushAllDataAndResetRDB(server.repl_replica_lazy_flush ? EMPTYDB_ASYNC : EMPTYDB_NO_FLAGS);
-            clusterPromoteSelfToPrimary();
-
+            verifyClusterConfigWithData();
             clusterCloseAllSlots();
             resetManualFailover();
 

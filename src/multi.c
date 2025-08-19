@@ -164,6 +164,7 @@ void execCommand(client *c) {
     int j;
     robj **orig_argv;
     int orig_argc, orig_argv_len;
+    mstime_t latency;
     struct serverCommand *orig_cmd;
 
     if (!c->flag.multi) {
@@ -200,6 +201,8 @@ void execCommand(client *c) {
 
     /* Exec all the queued commands */
     unwatchAllKeys(c); /* Unwatch ASAP otherwise we'll waste CPU cycles */
+
+    latencyStartMonitor(latency);
 
     server.in_exec = 1;
 
@@ -264,6 +267,11 @@ void execCommand(client *c) {
     c->argc = orig_argc;
     c->cmd = c->realcmd = orig_cmd;
     discardTransaction(c);
+
+    latencyEndMonitor(latency);
+    if (!server.loading) {
+        latencyAddSampleIfNeeded("transaction", latency);
+    }
 
     server.in_exec = 0;
 }

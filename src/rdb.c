@@ -3210,56 +3210,6 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
                  * information fields and are logged at startup with a log
                  * level of NOTICE. */
                 serverLog(LL_NOTICE, "RDB '%s': %s", (char *)auxkey->ptr, (char *)auxval->ptr);
-            } else if (!strcasecmp(auxkey->ptr, "repl-stream-db")) {
-                if (rsi) rsi->repl_stream_db = atoi(auxval->ptr);
-            } else if (!strcasecmp(auxkey->ptr, "repl-id")) {
-                if (rsi && sdslen(auxval->ptr) == CONFIG_RUN_ID_SIZE) {
-                    memcpy(rsi->repl_id, auxval->ptr, CONFIG_RUN_ID_SIZE + 1);
-                    rsi->repl_id_is_set = 1;
-                }
-            } else if (!strcasecmp(auxkey->ptr, "repl-offset")) {
-                if (rsi) rsi->repl_offset = strtoll(auxval->ptr, NULL, 10);
-            } else if (!strcasecmp(auxkey->ptr, "lua")) {
-                /* Won't load the script back in memory anymore. */
-            } else if (!strcasecmp(auxkey->ptr, "redis-ver")) {
-                serverLog(LL_NOTICE, "Loading RDB produced by Redis version %s", (char *)auxval->ptr);
-            } else if (!strcasecmp(auxkey->ptr, "valkey-ver")) {
-                serverLog(LL_NOTICE, "Loading RDB produced by Valkey version %s", (char *)auxval->ptr);
-            } else if (!strcasecmp(auxkey->ptr, "ctime")) {
-                time_t age = time(NULL) - strtol(auxval->ptr, NULL, 10);
-                if (age < 0) age = 0;
-                serverLog(LL_NOTICE, "RDB age %ld seconds", (unsigned long)age);
-            } else if (!strcasecmp(auxkey->ptr, "used-mem")) {
-                long long usedmem = strtoll(auxval->ptr, NULL, 10);
-                serverLog(LL_NOTICE, "RDB memory usage when created %.2f Mb", (double)usedmem / (1024 * 1024));
-                server.loading_rdb_used_mem = usedmem;
-            } else if (!strcasecmp(auxkey->ptr, "aof-preamble")) {
-                long long haspreamble = strtoll(auxval->ptr, NULL, 10);
-                if (haspreamble) serverLog(LL_NOTICE, "RDB has an AOF tail");
-            } else if (!strcasecmp(auxkey->ptr, "aof-base")) {
-                long long isbase = strtoll(auxval->ptr, NULL, 10);
-                if (isbase) serverLog(LL_NOTICE, "RDB is base AOF");
-            } else if (!strcasecmp(auxkey->ptr, "redis-bits")) {
-                /* Just ignored. */
-            } else if (!strcasecmp(auxkey->ptr, "slot-info")) {
-                int slot_id;
-                unsigned long slot_size, expires_slot_size;
-                /* Try to parse the slot information. In case the number of parsed arguments is smaller than expected
-                 * we'll fail the RDB load. */
-                if (sscanf(auxval->ptr, "%i,%lu,%lu", &slot_id, &slot_size, &expires_slot_size) < 3) {
-                    decrRefCount(auxkey);
-                    decrRefCount(auxval);
-                    goto eoferr;
-                }
-
-                if (server.cluster_enabled) {
-                    /* In cluster mode we resize individual slot specific dictionaries based on the number of keys that
-                     * slot holds. */
-                    kvstoreHashtableExpand(db->keys, slot_id, slot_size);
-                    kvstoreHashtableExpand(db->expires, slot_id, expires_slot_size);
-                    should_expand_db = 0;
-                }
-
             } else if (!strcasecmp(auxkey->ptr, "rdb-thread-chunk")) {
                 unsigned long chunk_size;
                 if (sscanf(auxval->ptr, "%lu", &chunk_size) < 1) {
@@ -3277,8 +3227,56 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
                         goto eoferr;
                     }
                     expiretime = -1;
-                    lfu_freq   = -1;
-                    lru_idle   = -1;
+                    lfu_freq = -1;
+                    lru_idle = -1;
+                } else if (!strcasecmp(auxkey->ptr, "repl-stream-db")) {
+                    if (rsi) rsi->repl_stream_db = atoi(auxval->ptr);
+                } else if (!strcasecmp(auxkey->ptr, "repl-id")) {
+                    if (rsi && sdslen(auxval->ptr) == CONFIG_RUN_ID_SIZE) {
+                        memcpy(rsi->repl_id, auxval->ptr, CONFIG_RUN_ID_SIZE + 1);
+                        rsi->repl_id_is_set = 1;
+                    }
+                } else if (!strcasecmp(auxkey->ptr, "repl-offset")) {
+                    if (rsi) rsi->repl_offset = strtoll(auxval->ptr, NULL, 10);
+                } else if (!strcasecmp(auxkey->ptr, "lua")) {
+                    /* Won't load the script back in memory anymore. */
+                } else if (!strcasecmp(auxkey->ptr, "redis-ver")) {
+                    serverLog(LL_NOTICE, "Loading RDB produced by Redis version %s", (char *)auxval->ptr);
+                } else if (!strcasecmp(auxkey->ptr, "valkey-ver")) {
+                    serverLog(LL_NOTICE, "Loading RDB produced by Valkey version %s", (char *)auxval->ptr);
+                } else if (!strcasecmp(auxkey->ptr, "ctime")) {
+                    time_t age = time(NULL) - strtol(auxval->ptr, NULL, 10);
+                    if (age < 0) age = 0;
+                    serverLog(LL_NOTICE, "RDB age %ld seconds", (unsigned long)age);
+                } else if (!strcasecmp(auxkey->ptr, "used-mem")) {
+                    long long usedmem = strtoll(auxval->ptr, NULL, 10);
+                    serverLog(LL_NOTICE, "RDB memory usage when created %.2f Mb", (double)usedmem / (1024 * 1024));
+                    server.loading_rdb_used_mem = usedmem;
+                } else if (!strcasecmp(auxkey->ptr, "aof-preamble")) {
+                    long long haspreamble = strtoll(auxval->ptr, NULL, 10);
+                    if (haspreamble) serverLog(LL_NOTICE, "RDB has an AOF tail");
+                } else if (!strcasecmp(auxkey->ptr, "aof-base")) {
+                    long long isbase = strtoll(auxval->ptr, NULL, 10);
+                    if (isbase) serverLog(LL_NOTICE, "RDB is base AOF");
+                } else if (!strcasecmp(auxkey->ptr, "redis-bits")) {
+                    /* Just ignored. */
+                } else if (!strcasecmp(auxkey->ptr, "slot-info")) {
+                    int slot_id;
+                    unsigned long slot_size, expires_slot_size;
+                    /* Try to parse the slot information. In case the number of parsed arguments is smaller than expected
+                     * we'll fail the RDB load. */
+                    if (sscanf(auxval->ptr, "%i,%lu,%lu", &slot_id, &slot_size, &expires_slot_size) < 3) {
+                        decrRefCount(auxkey);
+                        decrRefCount(auxval);
+                        goto eoferr;
+                    }
+                    if (server.cluster_enabled) {
+                        /* In cluster mode we resize individual slot specific dictionaries based on the number of keys that
+                         * slot holds. */
+                        kvstoreHashtableExpand(db->keys, slot_id, slot_size);
+                        kvstoreHashtableExpand(db->expires, slot_id, expires_slot_size);
+                        should_expand_db = 0;
+                    }
                 }
 
             } else {

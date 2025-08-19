@@ -3120,12 +3120,13 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
     long long lru_clock = LRU_CLOCK();
 
     pthread_mutex_t *key_insert_mutex = NULL;
+    long long start_time = ustime(); 
 
     if (server.rdb_threads_num > 1) {
         atomic_store_explicit(&rdb_load_thread_error, 0, memory_order_relaxed); /* Allows threads to report errors */
         key_insert_mutex = zmalloc(sizeof(pthread_mutex_t));
         serverLog(LL_NOTICE, "Starting RDB Threads for Load. rdb-threads: %d", server.rdb_threads_num);
-        initRDBThreads(2048); // Random number of tasks for now
+        initRDBThreads(RDB_LOAD_JOB_QUEUE_SIZE); // Random number of tasks for now
         pthread_mutex_init(key_insert_mutex, NULL);
         startRDBThreads();
     }
@@ -3498,6 +3499,8 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
             }
         }
     }
+    long long end_time = ustime();
+    serverLog(LL_NOTICE, "Done Reading File. Time Taken: %llu us", end_time - start_time);
     if (server.rdb_threads_num > 1) {
         drainRDBThreadsQueue();
         if (atomic_load_explicit(&rdb_load_thread_error, memory_order_relaxed)) {

@@ -5855,6 +5855,14 @@ void clusterBeforeSleep(void) {
          * regular ping. */
         clusterBroadcastPong(CLUSTER_BROADCAST_ALL);
     }
+
+    /* Crash on divergence in cluster bus view and replication layer view */
+    if (nodeIsPrimary(myself)) {
+        serverAssert(server.primary_host == NULL);
+    }
+    if (nodeIsReplica(myself)) {
+        serverAssert(server.primary_host != NULL);
+    }
 }
 
 void clusterDoBeforeSleep(int flags) {

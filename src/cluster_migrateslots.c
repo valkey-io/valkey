@@ -893,7 +893,7 @@ void clusterCommandMigrateSlots(client *c) {
             goto cleanup;
         }
         if (target_node == server.cluster->myself) {
-            addReplyError(c, "Slots are served by this node.");
+            addReplyError(c, "Target node can not be this node.");
             goto cleanup;
         }
         curr_index++;

@@ -31,7 +31,17 @@ void freeBufferList(void) {
     }
 }
 
-int hashSetValueView(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+int hashHasStringRef(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    if (argc != 3) return ValkeyModule_WrongArity(ctx);
+
+    ValkeyModule_AutoMemory(ctx);
+    ValkeyModuleKey *key = ValkeyModule_OpenKey(ctx, argv[1], VALKEYMODULE_WRITE);
+
+    int result = ValkeyModule_HashHasStringRef(key, argv[2]);
+    return ValkeyModule_ReplyWithLongLong(ctx, result);
+}
+
+int hashSetStringRef(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     if (argc != 4) return ValkeyModule_WrongArity(ctx);
 
     ValkeyModule_AutoMemory(ctx);
@@ -41,16 +51,19 @@ int hashSetValueView(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) 
     const char *buf = ValkeyModule_StringPtrLen(argv[3], &buf_len);
     bufferNode *node = addBuffer(buf, buf_len);
 
-    int result = ValkeyModule_HashSetValueView(key, argv[2], node->buf, node->len);
-    return ValkeyModule_ReplyWithLongLong(ctx, result);
+    int result = ValkeyModule_HashSetStringRef(key, argv[2], node->buf, node->len);
+    if (result == 0) return ValkeyModule_ReplyWithLongLong(ctx, result);
+    return ValkeyModule_ReplyWithError(ctx, "Err");
 }
 
 int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     VALKEYMODULE_NOT_USED(argv);
     VALKEYMODULE_NOT_USED(argc);
-    if (ValkeyModule_Init(ctx, "hash.set_view", 1, VALKEYMODULE_APIVER_1) ==
+    if (ValkeyModule_Init(ctx, "hash.stringref", 1, VALKEYMODULE_APIVER_1) ==
         VALKEYMODULE_OK &&
-        ValkeyModule_CreateCommand(ctx, "hash.set_view", hashSetValueView, "write",
+        ValkeyModule_CreateCommand(ctx, "hash.set_stringref", hashSetStringRef, "write",
+                                  1, 1, 1) == VALKEYMODULE_OK &&
+        ValkeyModule_CreateCommand(ctx, "hash.has_stringref", hashHasStringRef, "write",
                                   1, 1, 1) == VALKEYMODULE_OK) {
         return VALKEYMODULE_OK;
     }

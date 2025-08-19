@@ -334,7 +334,10 @@ int hashTypeSetStringRef(robj *o, sds field, const char *buf, size_t len) {
     void **entry_ref = hashtableFindRef(ht, field);
     entry *entry = *entry_ref;
     if (entryHasStringRef(entry)) return C_ERR;
-    entrySetStringRef(entry, buf, len, entryGetExpiry(entry));
+    long long expiry = entryGetExpiry(entry);
+    void *new_entry = entrySetStringRef(entry, buf, len, expiry);
+    serverAssert(hashtableReplaceReallocatedEntry(ht, entry, new_entry));
+    hashTypeTrackUpdateEntry(o, entry, new_entry, expiry, expiry);
     return C_OK;
 }
 

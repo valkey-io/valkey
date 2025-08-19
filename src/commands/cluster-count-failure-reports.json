@@ -7,6 +7,12 @@
         "arity": 3,
         "container": "CLUSTER",
         "function": "clusterCommand",
+        "history": [
+            [
+                "9.0.0",
+                "Avoid accepting failure reports for nodes already marked as failed."
+            ]
+        ],
         "command_flags": [
             "ADMIN",
             "STALE"

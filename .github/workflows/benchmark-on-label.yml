@@ -60,7 +60,7 @@ jobs:
           # Base benchmark arguments
           BENCHMARK_ARGS=(
             --commits "${{ github.event.pull_request.merge_commit_sha }}"
-            --baseline "${{ github.event.pull_request.base.sha }}"
+            --baseline "${{ github.event.pull_request.base.ref }}"
             --results-dir "results"
             --valkey-path "../valkey"
             --config "$CONFIG_FILE"
@@ -79,8 +79,8 @@ jobs:
         working-directory: valkey-perf-benchmark
         run: |
           python ./utils/compare_benchmark_results.py \
-            ./results/unstable/metrics.json \
-            ./results/${{ github.event.pull_request.head.sha }}/metrics.json \
+            ./results/${{ github.event.pull_request.base.ref }}/metrics.json \
+            ./results/${{ github.event.pull_request.merge_commit_sha }}/metrics.json \
             ../comparison.md
 
       - name: Upload artifacts
@@ -90,8 +90,8 @@ jobs:
         with:
           name: benchmark-results
           path: |
-            ./valkey-perf-benchmark/results/${{ github.event.pull_request.head.sha }}/metrics.json
-            ./valkey-perf-benchmark/results/unstable/metrics.json
+            ./valkey-perf-benchmark/results/${{ github.event.pull_request.merge_commit_sha }}/metrics.json
+            ./valkey-perf-benchmark/results/${{ github.event.pull_request.base.ref }}/metrics.json
             comparison.md
 
       - name: Comment PR with results

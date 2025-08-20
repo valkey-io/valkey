@@ -34,7 +34,7 @@ jobs:
       - name: Checkout valkey-perf-benchmark
         uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
         with:
-          repository: valkey-io/valkey-perf-benchmark
+          repository: ${{ github.repository_owner }}/valkey-perf-benchmark
           path: valkey-perf-benchmark
           fetch-depth: 1
           persist-credentials: false

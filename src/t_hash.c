@@ -1200,7 +1200,7 @@ void hsetexCommand(client *c) {
         }
     }
     /* Check that the parsed fields number matches the real provided number of fields */
-    if (!num_fields || num_fields != (c->argc - fields_index) / 2) {
+    if (!num_fields || num_fields > LLONG_MAX / 2 || (num_fields * 2) != (c->argc - fields_index)) {
         addReplyError(c, "numfields should be greater than 0 and match the provided number of fields");
         return;
     }

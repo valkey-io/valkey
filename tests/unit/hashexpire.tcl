@@ -623,10 +623,9 @@ start_server {tags {"hashexpire"}} {
         set e
     } {ERR *}
 
-    # test {HSETEX PX - mismatched field/value count} {
-    #     catch {r HSETEX myhash PX 100 FIELDS 2 field1 val1} e
-    #     set e
-    # } {ERR wrong number of arguments for 'hsetex' command}
+    test {HSETEX PX - mismatched field/value count} {
+         assert_error {ERR numfields should be greater than 0 and match the provided number of fields} {r HSETEX myhash PX 100 FIELDS 1 field1 val1 extra}
+    } 
 
 
     ## FNX/FXX

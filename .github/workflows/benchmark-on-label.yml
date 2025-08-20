@@ -53,6 +53,7 @@ jobs:
           pip install -r requirements.txt
 
       - name: Run benchmarks
+        timeout-minutes: 60
         working-directory: valkey-perf-benchmark
         run: |
           CONFIG_FILE="../valkey/.github/benchmark_configs/pr_benchmark.json"

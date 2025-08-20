@@ -660,7 +660,7 @@ void dismissSetObject(robj *o, size_t size_hint) {
 void dismissZsetObject(robj *o) {
     if (o->encoding == OBJ_ENCODING_SKIPLIST) {
         zset *zs = o->ptr;
-        /* In rare cases, the key of the skiplist may exceed the page size(typically 4KB),
+        /* The skiplist nodes are usually smaller than the page size (typically 4KB),
          * so we skip releasing the skiplist and only release the hashtable. */
         dismissHashtable(zs->ht);
     } else if (o->encoding == OBJ_ENCODING_LISTPACK) {

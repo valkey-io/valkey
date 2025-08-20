@@ -120,9 +120,9 @@ static inline void zslSetNodeHeight(zskiplistNode *x, int height) {
  *
  * The memory layout is as follows:
  *
- *     +--------------------------+---------+-----+---------+-------------+
- *     + score | backward-pointer | level-0 | ... | level-N | element-sds |
- *     +--------------------------+---------+-----+---------+-------------+
+ *     +-------+------------------+---------+-----+---------+-------------+
+ *     | score | backward-pointer | level-0 | ... | level-N | element-sds |
+ *     +-------+------------------+---------+-----+---------+-------------+
  */
 static zskiplistNode *zslCreateNode(int height, double score, sds ele) {
     size_t ele_sds_len = ele ? sdslen(ele) : 0;
@@ -167,9 +167,8 @@ zskiplist *zslCreate(void) {
     return zsl;
 }
 
-/* Free the specified skiplist node. The referenced SDS string representation
- * of the element is freed too, unless node->ele is set to NULL before calling
- * this function. */
+/* Free the specified skiplist node. No need to explicitly free the SDS string 'ele',
+ * as it is embedded within the structure. */
 static void zslFreeNode(zskiplistNode *node) {
     zfree(node);
 }
@@ -216,8 +215,7 @@ static int zslCompareNodes(const zskiplistNode *a, const zskiplistNode *b) {
 }
 
 /* Insert a node in the skiplist. Assumes the element does not already exist in
- * the skiplist (up to the caller to enforce that). The skiplist takes ownership
- * of the passed node. */
+ * the skiplist (up to the caller to enforce that). */
 static zskiplistNode *zslInsertNode(zskiplist *zsl, zskiplistNode *node) {
     zskiplistNode *update[ZSKIPLIST_MAXLEVEL];
     unsigned long rank[ZSKIPLIST_MAXLEVEL];
@@ -271,8 +269,7 @@ static zskiplistNode *zslInsertNode(zskiplist *zsl, zskiplistNode *node) {
 }
 
 /* Insert a new node in the skiplist. Assumes the element does not already
- * exist (up to the caller to enforce that). The skiplist takes ownership
- * of the passed SDS string 'ele'. */
+ * exist (up to the caller to enforce that). */
 zskiplistNode *zslInsert(zskiplist *zsl, double score, sds ele) {
     const int level = zslRandomLevel();
     zskiplistNode *node = zslCreateNode(level, score, ele);

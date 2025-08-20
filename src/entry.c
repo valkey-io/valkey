@@ -43,9 +43,9 @@ enum {
      * pointer located in memory before the embedded field. If unset, the entry
      * instead has an embedded value located after the embedded field. */
     FIELD_SDS_AUX_BIT_ENTRY_HAS_VALUE_PTR = 1,
-    /* SDS aux flag.  If set, it indicates that the hash entry reference the value.
+    /* SDS aux flag.  If set, it indicates that the hash entry has a reference to the value.
      * The hash entry does not own the string reference and will not free it upon
-     * entry destruction. This is useful for avoiding memory duplication
+     * entry destruction. The primary usecase is to avoid memory duplication
      * between the core and a module. */
     FIELD_SDS_AUX_BIT_ENTRY_HAS_STRING_REF = 2,
     FIELD_SDS_AUX_BIT_MAX
@@ -138,6 +138,7 @@ static void *entryGetAllocPtr(const entry *entry) {
 }
 
 /**************************************** Entry Expiry API *****************************************/
+/* Returns the location of a pointer to the expiry */
 static inline long long *entryGetExpiryRef(const entry *entry) {
     debugServerAssert(entryHasExpiry(entry));
     char *buf = entryGetAllocPtr(entry);
@@ -168,7 +169,7 @@ bool entryIsExpired(entry *entry) {
     return timestampIsExpired(entryGetExpiry(entry));
 }
 /**************************************** Entry Expiry API - End *****************************************/
-
+/* Frees the entry non-embedded value */
 static inline void entryFreeValuePtr(entry *entry) {
     serverAssert(entryHasValuePtr(entry));
     void **value_ref = entryGetValueRef(entry);

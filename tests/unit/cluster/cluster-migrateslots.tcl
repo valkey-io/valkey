@@ -183,7 +183,8 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster} overrides {cluste
         assert_error "*syntax error*" {R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 0 0 NODE}
         assert_error "*Invalid node name*" {R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 0 0 NODE blah}
         assert_error "*Unknown node name*" {R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 0 0 NODE $fake_jobname}
-        assert_error "*Slot ranges in migrations overlap*" {R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 1 1 NODE $node1_id SLOTSRANGE 0 2 NODE $node2_id} 
+        assert_error "*Slot ranges in migrations overlap*" {R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 1 1 NODE $node1_id SLOTSRANGE 0 2 NODE $node2_id}
+        assert_error "*Slot ranges in migrations overlap*" {R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 0 0 2 2 NODE $node1_id SLOTSRANGE 2 2 NODE $node2_id}
 
         set source_node_id [R 0 CLUSTER MYID]
         set target_node_id [R 1 CLUSTER MYID]

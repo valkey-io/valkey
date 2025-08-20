@@ -182,10 +182,10 @@ bool doSlotRangeListsOverlap(list *ranges1, list *ranges2) {
     listIter li1, li2;
     listNode *ln1, *ln2;
     listRewind(ranges1, &li1);
-    listRewind(ranges2, &li2);
     while ((ln1 = listNext(&li1)) != NULL) {
+        slotRange *range1 = ln1->value;
+        listRewind(ranges2, &li2);
         while ((ln2 = listNext(&li2)) != NULL) {
-            slotRange *range1 = ln1->value;
             slotRange *range2 = ln2->value;
             if (doSlotRangesOverlap(range1, range2)) {
                 return true;

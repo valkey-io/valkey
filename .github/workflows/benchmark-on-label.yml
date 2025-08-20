@@ -28,7 +28,7 @@ jobs:
         with:
           path: valkey
           fetch-depth: 0
-          ref: refs/pull/${{ github.event.pull_request.number }}/merge
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
           persist-credentials: false
 
       - name: Checkout valkey-perf-benchmark
@@ -59,8 +59,8 @@ jobs:
 
           # Base benchmark arguments
           BENCHMARK_ARGS=(
-            --commits "${{ github.event.pull_request.head.sha }}"
-            --baseline "unstable"
+            --commits "${{ github.event.pull_request.merge_commit_sha }}"
+            --baseline "${{ github.event.pull_request.base.sha }}"
             --results-dir "results"
             --valkey-path "../valkey"
             --config "$CONFIG_FILE"

@@ -2585,7 +2585,9 @@ void clusterProcessGossipSection(clusterMsg *hdr, clusterLink *link) {
              * we have no pending ping for the node, nor we have failure
              * reports for this node, update the last pong time with the
              * one we see from the other nodes. */
-            if (!(flags & (CLUSTER_NODE_FAIL | CLUSTER_NODE_PFAIL)) && node->ping_sent == 0 &&
+            if (!(flags & (CLUSTER_NODE_FAIL | CLUSTER_NODE_PFAIL)) &&
+                nodeInNormalState(node) &&
+                node->ping_sent == 0 &&
                 clusterNodeFailureReportsCount(node) == 0) {
                 mstime_t pongtime = ntohl(g->pong_received);
                 pongtime *= 1000; /* Convert back to milliseconds. */

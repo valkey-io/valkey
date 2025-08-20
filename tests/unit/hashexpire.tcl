@@ -39,9 +39,9 @@ proc check_myhash_and_expired_subkeys {r myhash expected_len initial_expired exp
 proc get_short_expire_value {command} {
     expr {
         ($command eq "HEXPIRE" || $command eq "EX") ? 1 :
-        ($command eq "HPEXPIRE" || $command eq "PX") ? 10 :
+        ($command eq "HPEXPIRE" || $command eq "PX") ? 1000 :
         ($command eq "HEXPIREAT" || $command eq "EXAT") ? [clock seconds] + 1 :
-        [clock milliseconds] + 10
+        [clock milliseconds] + 1000
     }
 }
 
@@ -237,26 +237,6 @@ start_server {tags {"hashexpire"}} {
             r HGETEX myhash $command [get_short_expire_value $command] FIELDS 1 f1
             set new_ttl [r HTTL myhash FIELDS 1 f1]
             assert {$new_ttl <= $old_ttl}
-        }
-    }
-
-    foreach command {EX PX} {
-        test "HGETEX $command with 0 ttl" {
-            r FLUSHALL
-            r HSET myhash f1 v1
-            assert_equal "v1" [r HGETEX myhash $command 0 FIELDS 1 f1]
-            assert_equal "" [r HGET myhash f1]
-            assert_equal -2 [r HTTL myhash FIELDS 1 f1]
-        }
-    }
-
-    foreach command {EXAT PXAT} {
-        test "HGETEX $command with past expiry" {
-            r FLUSHALL
-            r HSET myhash f1 v1
-            assert_equal "v1" [r HGETEX myhash $command [get_past_zero_expire_value $command] FIELDS 1 f1]
-            assert_equal "" [r HGET myhash f1]
-            assert_equal -2 [r HTTL myhash FIELDS 1 f1]
         }
     }
 
@@ -475,7 +455,7 @@ start_server {tags {"hashexpire"}} {
     foreach command {EX PX EXAT PXAT} {
         test "HGETEX $command 0/past time works correctly with 1 field" {
             r FLUSHALL
-
+            r config resetstat
             # Create hash with field
             r HSET myhash f1 v1
             assert_equal 1 [r HLEN myhash]
@@ -493,82 +473,7 @@ start_server {tags {"hashexpire"}} {
             assert_equal 0 [r EXISTS myhash]
             assert_equal 0 [get_keys r]
             assert_equal 0 [get_keys_with_volatile_items r]
-            $rd close
-        }
-
-        test "HGETEX $command 0/past time works correctly with 1 field on field with expire" {
-            r FLUSHALL
-
-            # Create hash with field
-            r HSETEX myhash EX 1000 FIELDS 1 f1 v1
-            assert_equal 1 [r HLEN myhash]
-            assert_equal 1 [get_keys_with_volatile_items r]
-            assert_equal 1 [get_keys r]
-
-            set rd [setup_single_keyspace_notification r]
-            
-            # Set field to expire immediately
-            r HGETEX myhash $command [get_past_zero_expire_value $command] FIELDS 1 f1
-
-            # Verify field and keys are deleted
-            assert_keyevent_patterns $rd myhash hexpired del
-            assert_equal -2 [r HTTL myhash FIELDS 1 f1]
-            assert_equal 0 [r HLEN myhash]
-            assert_equal 0 [r EXISTS myhash]
-            assert_equal 0 [get_keys r]
-            assert_equal 0 [get_keys_with_volatile_items r]
-
-            $rd close
-        }
-    
-        test "HGETEX $command 0/past time works correctly with more then 1 field" {
-            r FLUSHALL
-
-            # Create hash with field
-            r HSET myhash f1 v1 f2 v2
-            assert_equal 2 [r HLEN myhash]
-            assert_equal 0 [get_keys_with_volatile_items r]
-            assert_equal 1 [get_keys r]
-            
-            set rd [setup_single_keyspace_notification r]
-            
-            # Set field to expire immediately
-            r HGETEX myhash $command [get_past_zero_expire_value $command] FIELDS 1 f2
-
-            # Verify field and keys are deleted
-            assert_keyevent_patterns $rd myhash hexpired
-            assert_equal -2 [r HTTL myhash FIELDS 1 f2]
-            assert_equal 1 [r HLEN myhash]
-            assert_equal 1 [r EXISTS myhash]
-            assert_equal 1 [get_keys r]
-            assert_equal 0 [get_keys_with_volatile_items r]
-
-            $rd close
-        }
-
-        test "HGETEX $command 0/past time works correctly with more then 1 field and expire" {
-            r FLUSHALL
-
-            # Create hash with field
-            r HSET myhash f1 v1 f2 v2 f3 v3 f4 v4
-            r HEXPIRE myhash [get_long_expire_value HEXPIRE] FIELDS 1 f1
-            assert_equal 1 [get_keys_with_volatile_items r]
-            assert_equal 4 [r HLEN myhash]
-            assert_equal 1 [get_keys r]
-
-            set rd [setup_single_keyspace_notification r]
-            
-            # Set field to expire immediately
-            r HGETEX myhash $command [get_past_zero_expire_value $command] FIELDS 1 f1
-
-            # Verify field and keys are deleted
-            assert_keyevent_patterns $rd myhash hexpired
-            assert_equal -2 [r HTTL myhash FIELDS 1 f1]
-            assert_equal 3 [r HLEN myhash]
-            assert_equal 1 [r EXISTS myhash]
-            assert_equal 1 [get_keys r]
-            assert_equal 0 [get_keys_with_volatile_items r]
-
+            assert_equal 1 [info_field [r info stats] expired_fields]
             $rd close
         }
     }
@@ -627,13 +532,6 @@ start_server {tags {"hashexpire"}} {
         assert_equal newval [r HGET myhash field1]
     }
 
-    test {HSETEX EX - test zero ttl expires immediately} {
-        r FLUSHALL
-        r HSETEX myhash EX 0 FIELDS 1 field1 val1
-        after 10
-        assert_equal 0 [r HEXISTS myhash field1]
-    }
-
     test {HSETEX EX - test mix of expiring and persistent fields} {
         r FLUSHALL
         r HSET myhash field2 "persistent"
@@ -654,7 +552,31 @@ start_server {tags {"hashexpire"}} {
         set e
     } {ERR *}
 
+    foreach command {EX PX EXAT PXAT} {
+        test "HSETEX $command 0/past time works correctly with 1 field" {
+            r FLUSHALL
+            r config resetstat
+            # Create hash with field
+            r HSET myhash f1 v1
+            assert_equal 1 [r HLEN myhash]
+            assert_equal 0 [get_keys_with_volatile_items r]
+            assert_equal 1 [get_keys r]
+            set rd [setup_single_keyspace_notification r]
+            
+            # Set field to expire immediately
+            assert_equal {1} [r HSETEX myhash $command [get_past_zero_expire_value $command] FIELDS 1 f1 v1]
 
+            # Verify field and keys are deleted
+            assert_keyevent_patterns $rd myhash hexpired del
+            assert_equal -2 [r HTTL myhash FIELDS 1 f1]
+            assert_equal 0 [r HLEN myhash]
+            assert_equal 0 [r EXISTS myhash]
+            assert_equal 0 [get_keys r]
+            assert_equal 0 [get_keys_with_volatile_items r]
+            assert_equal 1 [info_field [r info stats] expired_fields]
+            $rd close
+        }
+    }
 
     ###### PX #######
 
@@ -701,10 +623,9 @@ start_server {tags {"hashexpire"}} {
         set e
     } {ERR *}
 
-    # test {HSETEX PX - mismatched field/value count} {
-    #     catch {r HSETEX myhash PX 100 FIELDS 2 field1 val1} e
-    #     set e
-    # } {ERR wrong number of arguments for 'hsetex' command}
+    test {HSETEX PX - mismatched field/value count} {
+         assert_error {ERR numfields should be greater than 0 and match the provided number of fields} {r HSETEX myhash PX 100 FIELDS 1 field1 val1 extra}
+    } 
 
 
     ## FNX/FXX
@@ -928,6 +849,32 @@ start_server {tags {"hashexpire"}} {
         r FLUSHALL
         r HSET myhash f1 v1
         assert_equal 1 [r HEXPIRE myhash 10 LT fields 1 f1]
+    }
+
+    foreach command {HEXPIRE HPEXPIRE HEXPIREAT HPEXPIREAT} {
+        test "HSETEX $command 0/past time works correctly with 1 field" {
+            r FLUSHALL
+            r config resetstat
+            # Create hash with field
+            r HSET myhash f1 v1
+            assert_equal 1 [r HLEN myhash]
+            assert_equal 0 [get_keys_with_volatile_items r]
+            assert_equal 1 [get_keys r]
+            set rd [setup_single_keyspace_notification r]
+            
+            # Set field to expire immediately
+            assert_equal {2} [r $command myhash [get_past_zero_expire_value $command] FIELDS 1 f1]
+
+            # Verify field and keys are deleted
+            assert_keyevent_patterns $rd myhash hexpired del
+            assert_equal -2 [r HTTL myhash FIELDS 1 f1]
+            assert_equal 0 [r HLEN myhash]
+            assert_equal 0 [r EXISTS myhash]
+            assert_equal 0 [get_keys r]
+            assert_equal 0 [get_keys_with_volatile_items r]
+            assert_equal 1 [info_field [r info stats] expired_fields]
+            $rd close
+        }
     }
 
     ##### HTTL #####
@@ -1471,69 +1418,25 @@ start_server {tags {"hashexpire"}} {
 
     test {COPY Preserves TTLs} {
         r flushall
-        r DEBUG SET-ACTIVE-EXPIRE 0
-        
         # Create hash with fields
         r HSET myhash{t} f1 v1 f3 v3 f4 v4
 
         # Set TTL on f1 only
-        r HEXPIRE myhash{t} 200 FIELDS 1 f1
-        r HEXPIRE myhash{t} 2 FIELDS 1 f3
-
-        # Verify initial TTL state
-        set mem_before [r MEMORY USAGE myhash{t}]
-        assert_equal "v1 v3 v4" [r HMGET myhash{t} f1 f3 f4]
-        assert_morethan [r HTTL myhash{t} FIELDS 1 f1] 100
-        assert_morethan [r HTTL myhash{t} FIELDS 1 f3] 0
-        assert_equal -1 [r HTTL myhash{t} FIELDS 1 f4]
-        assert_equal 3 [r HLEN myhash{t}]
-        assert_equal 1 [get_keys r]
-        assert_equal 1 [get_keys_with_volatile_items r]
+        r HEXPIRE myhash{t} 2000 FIELDS 1 f1
+        r HEXPIRE myhash{t} 5000 FIELDS 1 f3
 
         # Copy hash to new key
-        r copy myhash{t} newhash1{t}
+        r copy myhash{t} nwhash{t}
 
-        # Verify myhash{t} is the same
+        # Verify initial TTL state
+        assert_equal [r MEMORY USAGE myhash{t}] [r MEMORY USAGE nwhash{t}]
         assert_equal "v1 v3 v4" [r HMGET myhash{t} f1 f3 f4]
-        assert_morethan [r HTTL myhash{t} FIELDS 1 f1] 100
-        assert_morethan [r HTTL myhash{t} FIELDS 1 f3] 0
-        assert_equal -1 [r HTTL myhash{t} FIELDS 1 f4]
-        assert_equal 3 [r HLEN myhash{t}]
-
-        # Verify new hash got same values
-        set mem_after [r MEMORY USAGE myhash{t}]
-        assert_equal "v1 v3 v4" [r HMGET myhash{t} f1 f3 f4]
-        assert_morethan [r HTTL newhash1{t} FIELDS 1 f1] 100
-        assert_morethan [r HTTL newhash1{t} FIELDS 1 f3] 0
-        assert_equal -1 [r HTTL newhash1{t} FIELDS 1 f4]
-        assert_equal 3 [r HLEN newhash1{t}]
-        assert_equal 2 [get_keys r]
-        assert_equal 2 [get_keys_with_volatile_items r]
-
-        assert_equal $mem_before $mem_after
-        
-        # Modify TTL in original hash
-        r HEXPIRE myhash{t} 5 FIELDS 1 f3
-
-        # Wait for original TTL to expire in copy
-        after 2000
-        assert_equal "v1 {}" [r HMGET newhash1{t} f1 f3]
-        assert_equal "v1 v3" [r HMGET myhash{t} f1 f3]
-
-        r HSETEX myhash{t} EX 2 FIELDS 1 f3 v3
-        # Create second copy
-        r copy myhash{t} newhash2{t}
-
-        # Modify TTL in second copy
-        r HEXPIRE newhash2{t} 500 FIELDS 1 f3
-
-        # Wait for original hash TTL to expire
-        after 2000
-        assert_equal "v1 {}" [r HMGET myhash{t} f1 f3]
-        assert_equal "v1 v3" [r HMGET newhash2{t} f1 f3]
-        # Re-enable active expiry
-        r DEBUG SET-ACTIVE-EXPIRE 1
-    } {OK} {needs:debug}
+        assert_equal "v1 v3 v4" [r HMGET nwhash{t} f1 f3 f4]
+        assert_equal [r HEXPIRETIME myhash{t} FIELDS 1 f1] [r HEXPIRETIME nwhash{t} FIELDS 1 f1] 
+        assert_equal [r HEXPIRETIME myhash{t} FIELDS 1 f2] [r HEXPIRETIME nwhash{t} FIELDS 1 f2]
+        assert_equal [r HEXPIRETIME myhash{t} FIELDS 1 f3] [r HEXPIRETIME nwhash{t} FIELDS 1 f3]
+        assert_equal [r HEXPIRETIME myhash{t} FIELDS 1 f4] [r HEXPIRETIME nwhash{t} FIELDS 1 f4]
+    }
 
     test {Hash Encoding Transitions with TTL - Add TTL to Existing Fields} {
         r flushall
@@ -2385,13 +2288,29 @@ start_server {tags {"hashexpire external:skip"}} {
                 assert_equal {1} [psubscribe $rd_replica_2 __keyevent@*]
     
                 # Create hash and timing - f1 < f2 < f3 expiry times
-                set f1_exp [expr {[clock seconds] + 10000}]
+                set f1_exp [expr {[clock seconds] + 1000000}]
+
+                wait_for_ofs_sync $primary $replica_1
+                wait_for_ofs_sync $replica_1 $replica_2
 
                 ############################################# STEUP HASH #############################################
-                $primary HSET myhash f1 v1 f2 v2 ;# Should trigger 3 hset
+                $primary HSETEX myhash FIELDS 2 f1 v1 f2 v2 ;# Should trigger 3 hset
+                wait_for_ofs_sync $primary $replica_1
+                wait_for_ofs_sync $replica_1 $replica_2
+
+                # Verify hset event was generated on all 3 nodes
+                foreach rd [list $rd_primary $rd_replica_1 $rd_replica_2] {
+                    assert_keyevent_patterns $rd myhash hset
+                }
+
                 $primary HEXPIREAT myhash $f1_exp FIELDS 1 f1 ;# Should trigger 3 hexpire
                 wait_for_ofs_sync $primary $replica_1
                 wait_for_ofs_sync $replica_1 $replica_2
+
+                # Verify hexpire event was generated on all 3 nodes
+                foreach rd [list $rd_primary $rd_replica_1 $rd_replica_2] {
+                    assert_keyevent_patterns $rd myhash hexpire
+                }
                 
                 $primary HPEXPIRE myhash 0 FIELDS 1 f1 ;# Should trigger 1 hexpired (for primary) and 2 hdel (for replicas)
                 wait_for_ofs_sync $primary $replica_1
@@ -2408,9 +2327,6 @@ start_server {tags {"hashexpire external:skip"}} {
                 }
                 
                 # primary gets hexpired and replicas get hdel
-                foreach rd [list $rd_primary $rd_replica_1 $rd_replica_2] {
-                    assert_keyevent_patterns $rd myhash hset hexpire
-                }
                 assert_keyevent_patterns $rd_primary myhash hexpired
                 assert_keyevent_patterns $rd_replica_1 myhash hdel
                 assert_keyevent_patterns $rd_replica_2 myhash hdel

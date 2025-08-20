@@ -1212,7 +1212,7 @@ void hsetexCommand(client *c) {
         }
     }
     /* Check that the parsed fields number matches the real provided number of fields */
-    if (!num_fields || num_fields != (c->argc - fields_index) / 2) {
+    if (!num_fields || num_fields > LLONG_MAX / 2 || (num_fields * 2) != (c->argc - fields_index)) {
         addReplyError(c, "numfields should be greater than 0 and match the provided number of fields");
         return;
     }
@@ -1267,6 +1267,8 @@ void hsetexCommand(client *c) {
             if (hashTypeDelete(o, c->argv[i]->ptr)) {
                 new_argv[new_argc++] = c->argv[i];
                 incrRefCount(c->argv[i]);
+                /* we treat this case exactly as active expiration. */
+                server.stat_expiredfields++;
                 changes++;
             }
         } else {
@@ -1280,26 +1282,28 @@ void hsetexCommand(client *c) {
         if (has_volatile_fields != hashTypeHasVolatileFields(o)) {
             dbUpdateObjectWithVolatileItemsTracking(c->db, o);
         }
-        notifyKeyspaceEvent(NOTIFY_HASH, "hset", c->argv[1], c->db->id);
         if (set_expired) {
             replaceClientCommandVector(c, new_argc, new_argv);
             /* We would like to reduce the number of hexpired events in case there are potential many expired fields. */
             notifyKeyspaceEvent(NOTIFY_HASH, "hexpired", c->argv[1], c->db->id);
-        } else if (expire) {
-            /* Propagate as HSETEX Key Value PXAT millisecond-timestamp if there is
-             * EX/PX/EXAT flag. */
-            if (!(flags & ARGS_PXAT)) {
-                for (int i = 2; i < fields_index; i++) {
-                    if (c->argv[i + 1] == expire) {
-                        robj *milliseconds_obj = createStringObjectFromLongLong(when);
-                        rewriteClientCommandArgument(c, i, shared.pxat);
-                        rewriteClientCommandArgument(c, i + 1, milliseconds_obj);
-                        decrRefCount(milliseconds_obj);
-                        break;
+        } else {
+            notifyKeyspaceEvent(NOTIFY_HASH, "hset", c->argv[1], c->db->id);
+            if (expire) {
+                /* Propagate as HSETEX Key Value PXAT millisecond-timestamp if there is
+                 * EX/PX/EXAT flag. */
+                if (!(flags & ARGS_PXAT)) {
+                    for (int i = 2; i < fields_index; i++) {
+                        if (c->argv[i + 1] == expire) {
+                            robj *milliseconds_obj = createStringObjectFromLongLong(when);
+                            rewriteClientCommandArgument(c, i, shared.pxat);
+                            rewriteClientCommandArgument(c, i + 1, milliseconds_obj);
+                            decrRefCount(milliseconds_obj);
+                            break;
+                        }
                     }
                 }
+                notifyKeyspaceEvent(NOTIFY_HASH, "hexpire", c->argv[1], c->db->id);
             }
-            notifyKeyspaceEvent(NOTIFY_HASH, "hexpire", c->argv[1], c->db->id);
         }
         signalModifiedKey(c, c->db, c->argv[1]);
         /* Delete the object in case it was left empty */
@@ -1443,6 +1447,8 @@ void hgetexCommand(client *c) {
         addHashFieldToReply(c, o, c->argv[i]->ptr);
         if (o && set_expired) {
             changed = hashTypeDelete(o, c->argv[i]->ptr);
+            /* we treat this case exactly as active expiration. */
+            if (changed) server.stat_expiredfields++;
         } else if (set_expiry) {
             changed = hashTypeSetExpire(o, c->argv[i]->ptr, when, 0) == EXPIRATION_MODIFICATION_SUCCESSFUL;
         } else if (persist) {
@@ -1675,6 +1681,8 @@ void hexpireGenericCommand(client *c, long long basetime, int unit) {
                 new_argv[new_argc++] = c->argv[fields_index + i];
                 incrRefCount(c->argv[fields_index + i]);
                 result = EXPIRATION_MODIFICATION_EXPIRE_ASAP;
+                /* we treat this case exactly as active expiration. */
+                server.stat_expiredfields++;
                 expired++;
             }
         } else {
@@ -2122,12 +2130,10 @@ typedef struct {
 static int hashTypeExpireEntry(void *entry, void *c) {
     expiryContext *ctx = c;
     robj *o = ctx->key;
-    serverAssert(o->encoding == OBJ_ENCODING_HASHTABLE);
-
+    serverAssert(o->encoding == OBJ_ENCODING_HASHTABLE && hashtableSize(o->ptr) > 0);
     hashtable *ht = o->ptr;
     void *entry_ptr = NULL;
     bool deleted = hashtablePop(ht, entry, &entry_ptr);
-
     if (deleted) {
         if (ctx->fields)
             ctx->fields[ctx->n_fields++] = createStringObjectFromSds(entryGetField(entry));
@@ -2143,21 +2149,21 @@ static int hashTypeExpireEntry(void *entry, void *c) {
 size_t hashTypeDeleteExpiredFields(robj *o, mstime_t now, unsigned long max_fields, robj **out_entries) {
     serverAssert(o->encoding == OBJ_ENCODING_HASHTABLE);
 
-    /* skip TTL checks temporarily (to allow hashtable lookup) */
-    hashTypeIgnoreTTL(o, 1);
-
     vset *vset = hashTypeGetVolatileSet(o);
-    if (!vset || vsetIsEmpty(vset)) {
-        hashTypeIgnoreTTL(o, 0);
+    if (!vset) {
         return 0;
     }
 
+    serverAssert(!vsetIsEmpty(vset));
+    /* skip TTL checks temporarily (to allow hashtable pops) */
+    hashTypeIgnoreTTL(o, true);
     expiryContext ctx = {.key = o, .fields = out_entries, .n_fields = 0};
     size_t expired = vsetRemoveExpired(vset, entryGetExpiry, hashTypeExpireEntry, now, max_fields, &ctx);
     serverAssert(ctx.n_fields <= max_fields);
-    hashTypeIgnoreTTL(o, 0);
-    if (!hashTypeHasVolatileFields(o)) {
+    if (vsetIsEmpty(vset)) {
         hashTypeFreeVolatileSet(o);
+    } else {
+        hashTypeIgnoreTTL(o, false);
     }
     return expired;
 }

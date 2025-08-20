@@ -13862,6 +13862,11 @@ int VM_GetDbIdFromDefragCtx(ValkeyModuleDefragCtx *ctx) {
     return ctx->dbid;
 }
 
+/* Returns if the current client is readonly */
+int VM_IsReadOnlyCtx(ValkeyModuleCtx *ctx) {
+    return ctx->client->flag.readonly;
+}
+
 /* Register all the APIs we export. Keep this function at the end of the
  * file so that's easy to seek it to add new entries. */
 void moduleRegisterCoreAPI(void) {
@@ -14230,4 +14235,5 @@ void moduleRegisterCoreAPI(void) {
     REGISTER_API(RegisterScriptingEngine);
     REGISTER_API(UnregisterScriptingEngine);
     REGISTER_API(GetFunctionExecutionState);
+    REGISTER_API(IsReadOnlyCtx);
 }

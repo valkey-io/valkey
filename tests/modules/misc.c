@@ -540,6 +540,10 @@ int test_keyslot(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     return ValkeyModule_ReplyWithLongLong(ctx, slot);
 }
 
+int test_readonly(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    return ValkeyModule_ReplyWithLongLong(ctx, ValkeyModule_IsReadOnlyCtx(ctx));
+}
+
 int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     VALKEYMODULE_NOT_USED(argv);
     VALKEYMODULE_NOT_USED(argc);
@@ -606,6 +610,8 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
     if (ValkeyModule_CreateCommand(ctx, "test.malloc_api", test_malloc_api,"", 0, 0, 0) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
     if (ValkeyModule_CreateCommand(ctx, "test.keyslot", test_keyslot, "", 0, 0, 0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+    if (ValkeyModule_CreateCommand(ctx, "test.readonly", test_readonly, "", 0, 0, 0) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
 
     return VALKEYMODULE_OK;

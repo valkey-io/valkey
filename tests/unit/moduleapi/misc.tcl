@@ -493,6 +493,12 @@ start_server {overrides {save {900 1}} tags {"modules"}} {
         r set x y
     } {OK}
 
+    test "IsReadOnlyCtx API" {
+        assert_equal [r test.readonly] 0
+        r readonly
+        assert_equal [r test.readonly] 1
+    } {OK}
+
     test "malloc API" {
         assert_equal {OK} [r test.malloc_api 0]
     }

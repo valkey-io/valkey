@@ -435,9 +435,9 @@ int test_vset_remove_expire_shrink(int argc, char **argv, int flags) {
     vsetInit(&set);
 
     const long long expiry_time = 1000LL;
-    const int total_entries = 200;
+    const size_t total_entries = 200;
 
-    for (int i = 0; i < total_entries; i++) {
+    for (size_t i = 0; i < total_entries; i++) {
         insert_mock_entry_with_expiry(&set, expiry_time);
     }
 

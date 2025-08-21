@@ -806,6 +806,43 @@ typedef struct ValkeyModuleType moduleType;
 #define OBJ_SHARED_REFCOUNT ((1 << OBJ_REFCOUNT_BITS) - 1) /* Global object never destroyed. */
 #define OBJ_STATIC_REFCOUNT ((1 << OBJ_REFCOUNT_BITS) - 2) /* Object allocated in the stack. */
 #define OBJ_FIRST_SPECIAL_REFCOUNT OBJ_STATIC_REFCOUNT
+
+/* The serverObject struct is variable in size. It has several static fields that are always present,
+ * followed by several optional variable-sized fields. The static fields are `type` through `refcount`
+ * in the struct-defined order:
+ *
+ *    +------+----------+-----+-----------+-----------+-----------+----------+----
+ *    | type | encoding | lru | hasexpire | hasembkey | hasembval | refcount | ...
+ *    +------+----------+-----+-----------+-----------+-----------+----------+----
+ *
+ * The optional variable-sized embedded data has 2 possible layouts. If value is embedded (hasembval == 1)
+ *  the `val_ptr` pointer is not used - instead the val data is embedded:
+ *
+ *    +------+----------+-----+------------+----------+--------+-----------------+---------+------------+
+ *    | type | encoding | lru | has* flags | refcount | expire | key_header_size | key sds | value data |
+ *    +------+----------+-----+------------+----------+--------+-----------------+---------+------------+
+ *                                                      ^        ^                 ^         ^
+ *                                                      |        |                 |         |
+ *                                                      |        |                 |         +--- present because hasembval == 1
+ *                                                      |        |                 |
+ *                                                      |        +-----------------+--- present if hasembkey == 1
+ *                                                      |
+ *                                                      +--- present if hasexpire == 1
+ *
+ * Otherwise value is not embedded and we use the `val_ptr` pointer:
+ *
+ *    +------+----------+-----+------------+----------+---------+--------+-----------------+---------+
+ *    | type | encoding | lru | has* flags | refcount | val_ptr | expire | key_header_size | key sds |
+ *    +------+----------+-----+------------+----------+---------+--------+-----------------+---------+
+ *                                                      ^         ^        ^                 ^
+ *                                                      |         |        |                 |
+ *                                                      |         |        +-----------------+--- present if hasembkey == 1
+ *                                                      |         |
+ *                                                      |         +--- present if hasexpire == 1
+ *                                                      |
+ *                                                      +--- present because hasembval == 0
+ */
+
 struct serverObject {
     unsigned type : 4;
     unsigned encoding : 4;
@@ -814,9 +851,10 @@ struct serverObject {
     unsigned hasembkey : 1;
     unsigned hasembval : 1;
     unsigned refcount : OBJ_REFCOUNT_BITS;
-    void *val_ptr;
+    void *val_ptr; /* Not always present. Use objectGetVal(obj) and
+                    * objectSetVal(obj, val) instead. */
 };
-static_assert(sizeof(struct serverObject) <= 16, "unexpected size - verify struct is packed correctly");
+static_assert(sizeof(struct serverObject) <= 8 + sizeof(void *), "unexpected size - verify struct is packed correctly");
 
 /* The string name for an object's type as listed above
  * Native types are checked against the OBJ_STRING, OBJ_LIST, OBJ_* defines,
@@ -3039,7 +3077,7 @@ void dismissObject(robj *o, size_t dump_size);
 robj *createObject(int type, void *ptr);
 void initObjectLRUOrLFU(robj *o);
 robj *createStringObject(const char *ptr, size_t len);
-robj *createStringObjectFromSds(const sds s);
+robj *createStringObjectFromSds(const_sds s);
 robj *createRawStringObject(const char *ptr, size_t len);
 robj *tryCreateRawStringObject(const char *ptr, size_t len);
 robj *tryCreateStringObject(const char *ptr, size_t len);
@@ -3083,10 +3121,10 @@ void trimStringObjectIfNeeded(robj *o, int trim_small_values);
 #define sdsEncodedObject(objptr) (objptr->encoding == OBJ_ENCODING_RAW || objptr->encoding == OBJ_ENCODING_EMBSTR)
 
 /* Objects with val and/or key embedded */
-robj *objectSetKeyAndExpire(robj *o, sds key, long long expire);
+robj *objectSetKeyAndExpire(robj *o, const_sds key, long long expire);
 robj *objectSetExpire(robj *o, long long expire);
 void objectSetVal(robj *o, void *val);
-void objectUnembedVal(robj *o, void *new_val);
+void objectUnembedVal(robj *o);
 void *objectGetVal(const robj *o);
 sds objectGetKey(const robj *o);
 long long objectGetExpire(const robj *o);

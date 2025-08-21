@@ -824,16 +824,23 @@ if {[string match {*jemalloc*} [s mem_allocator]]} {
         # Check that the SDS overhead of the embedded key and value is 6 bytes
         # (sds5 + sds8). This is the memory layout:
         #
-        # +----------+---------------+----------+---------------+----------------+
-        # | robj     | embval reused | key sds  | sds5 key      | sds8 value     |
-        # | header   | void *ptr     | hdr size | hdr "quux" \0 | hdr "xyzzy" \0 |
-        # | 16 bytes | -8            | 1        | 1  + 4    + 1 | 3  + 5     + 1 |
-        # +----------+---------------+----------+---------------+----------------+
+        # +-------------------+----------+---------------+----------------+
+        # | robj header       | key sds  | sds5 key      | sds8 value     |
+        # | excluding val_ptr | hdr size | hdr "quux" \0 | hdr "xyzzy" \0 |
+        # | 8 bytes           | 1        | 1  + 4    + 1 | 3  + 5     + 1 |
+        # +-------------------+----------+---------------+----------------+
         #
+        # The test must work when the server is compiled for 32 bit and TCL is
+        # compiled and run on a 64 bit system or vice versa. The size of a
+        # pointer in the server is what matters.
+        set info_server [r info server]
+        regexp {arch_bits:(\d+)} $info_server _ arch_bits
+        set pointer_size [expr {$arch_bits / 8}]
+
         set content_size [expr {[string length quux] + [string length xyzzy]}]
         regexp {robj:(\d+)} [r debug structsize] _ obj_header_size
         # remove the size of the void *ptr (which is reused when value is embedded)
-        set obj_header_size [expr {$obj_header_size - $::tcl_platform(pointerSize)}]
+        set obj_header_size [expr {$obj_header_size - $pointer_size}]
         set debug_sdslen [r debug sdslen quux]
         regexp {key_sds_len:4 key_sds_avail:0 obj_alloc:(\d+)} $debug_sdslen _ obj_alloc
         regexp {val_sds_len:5 val_sds_avail:(\d+) val_alloc:(\d+)} $debug_sdslen _ avail val_alloc

@@ -3072,7 +3072,7 @@ static ValkeyModuleString *moduleAssertUnsharedString(ValkeyModuleString *str) {
     if (str->encoding == OBJ_ENCODING_EMBSTR) {
         /* Note: here we "leak" the additional allocation that was
          * used in order to store the embedded string in the object. */
-        objectUnembedVal(str, sdsnewlen(objectGetVal(str), sdslen(objectGetVal(str))));
+        objectUnembedVal(str);
     } else if (str->encoding == OBJ_ENCODING_INT) {
         /* Convert the string from integer to raw encoding. */
         objectSetVal(str, sdsfromlonglong((long)objectGetVal(str)));

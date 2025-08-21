@@ -8,6 +8,7 @@
 #include "bio.h"
 #include "module.h"
 #include "functions.h"
+#include <sys/wait.h>
 
 typedef enum slotMigrationJobState {
     /* Importing states */
@@ -1219,9 +1220,8 @@ bool shouldRewriteHashtableIndex(int didx, hashtable *ht, void *privdata) {
 }
 
 /* Contains the logic run on the child process during the snapshot phase. */
-int childSnapshotForSyncSlot(int req, rio *rdb, void *privdata) {
-    UNUSED(req);
-    list *slot_ranges = privdata;
+int childSnapshotForSyncSlot(rio *rdb, slotMigrationJob *job) {
+    list *slot_ranges = job->slot_ranges;
     size_t key_count = 0;
     for (int db_num = 0; db_num < server.dbnum; db_num++) {
         listIter li;
@@ -1242,21 +1242,51 @@ int childSnapshotForSyncSlot(int req, rio *rdb, void *privdata) {
     return C_OK;
 }
 
+void killSlotMigrationChild(void) {
+    int statloc;
+    /* No slot migration child? return. */
+    if (server.child_type != CHILD_TYPE_SLOT_MIGRATION) return;
+    /* Kill slot migration child, wait for child exit. */
+    serverLog(LL_NOTICE, "Killing running slot migration child: %ld", (long)server.child_pid);
+    if (kill(server.child_pid, SIGUSR1) != -1) {
+        while (waitpid(-1, &statloc, 0) != server.child_pid);
+    }
+    resetChildState();
+    serverLog(LL_NOTICE, "Slot migration child %ld killed", (long)server.child_pid);
+    clusterHandleSlotExportBackgroundSaveDone(C_ERR);
+}
+
+
 /* Begin the snapshot for the provided job in a child process. */
 int slotExportJobBeginSnapshot(slotMigrationJob *job) {
-    connection **conns = zmalloc(sizeof(connection *));
-    *conns = job->client->conn;
-    rdbSnapshotOptions opts = {
-        .connsnum = 1,
-        .conns = conns,
-        .use_pipe = 1,
-        .req = REPLICA_REQ_NONE,
-        .skip_checksum = 1,
-        .snapshot_func = childSnapshotForSyncSlot,
-        .privdata = job->slot_ranges};
-    if (saveSnapshotToConnectionSockets(opts) != C_OK) {
+    pid_t childpid;
+    connSendTimeout(job->client->conn, server.repl_timeout * 1000);
+    connBlock(job->client->conn);
+    if ((childpid = serverFork(CHILD_TYPE_SLOT_MIGRATION)) == 0) {
+        /* Child */
+        rio rdb;
+        connection **conns = zmalloc(sizeof(connection *));
+        *conns = job->client->conn;
+        rioInitWithConnset(&rdb, conns, 1);
+        serverSetProcTitle("valkey-slot-migration-snapshot");
+        serverSetCpuAffinity(server.bgsave_cpulist);
+        int retval = childSnapshotForSyncSlot(&rdb, job);
+        if (retval == C_OK && rioFlush(&rdb) == 0) retval = C_ERR;
+        if (retval == C_OK) {
+            sendChildCowInfo(CHILD_INFO_TYPE_SLOT_MIGRATION_COW_SIZE, "slot migration");
+        }
+        rioFreeConnset(&rdb);
+        zfree(conns);
+        exitFromChild((retval == C_OK) ? 0 : 1);
+    }
+    /* Parent */
+    if (childpid == -1) {
+        closeChildInfoPipe();
         return C_ERR;
     }
+    serverLog(LL_NOTICE,
+                "Started child process %ld for slot migration %s",
+                (long)childpid, job->description);
     if (server.debug_pause_after_fork) debugPauseProcess();
     return C_OK;
 }
@@ -1275,6 +1305,7 @@ void clusterHandleSlotExportBackgroundSaveDone(int bgsaveerr) {
             continue;
         }
         if (bgsaveerr == C_OK) {
+            connNonBlock(job->client->conn);
             slotExportBeginStreaming(job);
         } else {
             serverLog(LL_WARNING,
@@ -1731,10 +1762,6 @@ void resetSlotMigrationJob(slotMigrationJob *job) {
 
     sdsfree(job->response_buf);
     job->response_buf = NULL;
-
-    /* Description is not needed once migration is finished */
-    sdsfree(job->description);
-    job->description = NULL;
 }
 
 void freeSlotMigrationJob(void *o) {
@@ -1744,6 +1771,7 @@ void freeSlotMigrationJob(void *o) {
     sdsfree(job->slot_ranges_str);
     sdsfree(job->status_msg);
     sdsfree(job->response_buf);
+    sdsfree(job->description);
     zfree(o);
 }
 

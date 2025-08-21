@@ -33,5 +33,6 @@ size_t clusterGetTotalSlotExportBufferMemory(void);
 bool clusterSlotFailoverGranted(int slot);
 void clusterFailAllSlotExportsWithMessage(char *message);
 void clusterHandleSlotMigrationErrorResponse(slotMigrationJob *job);
+void killSlotMigrationChild(void);
 
 #endif /* __CLUSTER_MIGRATESLOTS_H */

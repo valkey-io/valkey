@@ -6,7 +6,7 @@
 #include <semaphore.h> 
 
 /* Threshold for flushing a worker's buffer to the main RDB file (64 KB). */
-#define WORKER_BUFFER_DEFAULT_SIZE 1 * 1024 * (1024)
+#define WORKER_BUFFER_DEFAULT_SIZE 1024 * (1024)
 /* Maximum capacity for a worker's buffer. Keys causing this limit to be exceeded are streamed directly to RDB file (256 KB). */
 #define WORKER_BUFFER_CAPACITY_LIMIT  4 * 1024 * (1024)
 

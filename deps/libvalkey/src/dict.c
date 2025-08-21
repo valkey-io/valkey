@@ -43,6 +43,8 @@
 #include <limits.h>
 #include <stdlib.h>
 
+#define UNUSED(x) (void)(x)
+
 /* -------------------------- types ----------------------------------------- */
 struct dictEntry {
     void *key;
@@ -71,7 +73,7 @@ uint64_t dictGenHashFunction(const unsigned char *buf, int len) {
 
 /* ----------------------------- API implementation ------------------------- */
 
-/* Reset an hashtable already initialized with ht_init().
+/* Reset a hashtable already initialized with ht_init().
  * NOTE: This function should only called by ht_destroy(). */
 static void _dictReset(dict *ht) {
     ht->table = NULL;
@@ -116,7 +118,7 @@ int dictExpand(dict *ht, unsigned long size) {
 
     /* Copy all the elements from the old to the new table:
      * note that if the old hash table is empty ht->size is zero,
-     * so dictExpand just creates an hash table. */
+     * so dictExpand just creates a hash table. */
     n.used = ht->used;
     for (i = 0; i < ht->size && ht->used > 0; i++) {
         dictEntry *he, *nextHe;
@@ -356,7 +358,7 @@ static unsigned long _dictNextPower(unsigned long size) {
 }
 
 /* Returns the index of a free slot that can be populated with
- * an hash entry for the given 'key'.
+ * a hash entry for the given 'key'.
  * If the key already exists, -1 is returned. */
 static int _dictKeyIndex(dict *ht, const void *key) {
     unsigned int h;

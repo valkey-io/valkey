@@ -37,7 +37,7 @@ server=$!
 wait $syncpid;
 
 # Run client which will fetch the initial slotmap asynchronously using CLUSTER NODES.
-timeout 3s "$clientprog" --events --use-cluster-nodes --async-initial-update 127.0.0.1:7400 > "$testname.out" <<'EOF'
+timeout 3s "$clientprog" --events --use-cluster-nodes 127.0.0.1:7400 > "$testname.out" <<'EOF'
 SET foo bar
 EOF
 clientexit=$?

@@ -34,13 +34,14 @@
 #include "win32.h"
 
 #include "valkey.h"
+#include "visibility.h"
 
 #include <sds.h>
 
 #include <limits.h>
 #include <string.h>
 
-void valkeySetError(valkeyContext *c, int type, const char *str);
+LIBVALKEY_API void valkeySetError(valkeyContext *c, int type, const char *str);
 
 /* Helper function. Convert struct timeval to millisecond. */
 static inline int valkeyContextTimeoutMsec(const struct timeval *timeout, long *result) {

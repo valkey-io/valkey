@@ -139,9 +139,7 @@ void modifyKey(const char *key, const char *value) {
     valkeyClusterFree(cc);
 }
 
-int main(int argc, char **argv) {
-    (void)argc;
-    (void)argv;
+int main(void) {
     struct event_base *base = event_base_new();
 
     valkeyClusterOptions options = {0};

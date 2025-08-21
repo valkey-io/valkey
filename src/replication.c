@@ -1849,13 +1849,12 @@ void slotMigrationPipeReadHandler(struct aeEventLoop *eventLoop, int fd, void *c
     UNUSED(eventLoop);
     if (!server.slot_migration_pipe_buff) server.slot_migration_pipe_buff = zmalloc(PROTO_IOBUF_LEN);
 
-    connection *conn = server.slot_migration_pipe_conn;
-    client *target = connGetPrivateData(conn);
     while (1) {
         server.slot_migration_pipe_bufflen = read(fd, server.slot_migration_pipe_buff, PROTO_IOBUF_LEN);
         if (server.slot_migration_pipe_bufflen < 0) {
             if (errno == EAGAIN || errno == EWOULDBLOCK) return;
             serverLog(LL_WARNING, "Slot migration, read error sending snapshot to target: %s", strerror(errno));
+            client *target = connGetPrivateData(server.slot_migration_pipe_conn);
             freeClient(target);
             server.slot_migration_pipe_conn = NULL;
             killSlotMigrationChild();
@@ -1874,6 +1873,8 @@ void slotMigrationPipeReadHandler(struct aeEventLoop *eventLoop, int fd, void *c
         }
 
         ssize_t nwritten;
+        connection *conn = server.slot_migration_pipe_conn;
+        client *target = connGetPrivateData(conn);
         if ((nwritten = connWrite(conn, server.slot_migration_pipe_buff, server.slot_migration_pipe_bufflen)) == -1) {
             if (connGetState(conn) != CONN_STATE_CONNECTED) {
                 serverLog(LL_WARNING, "Slot migration transfer, write error sending DB to target: %s",

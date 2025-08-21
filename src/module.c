@@ -3849,6 +3849,7 @@ int modulePopulateReplicationInfoStructure(void *ri, int structver) {
  *     VALKEYMODULE_CLIENTINFO_FLAG_TRACKING     Client with keys tracking on.
  *     VALKEYMODULE_CLIENTINFO_FLAG_UNIXSOCKET   Client using unix domain socket.
  *     VALKEYMODULE_CLIENTINFO_FLAG_MULTI        Client in MULTI state.
+ *     VALKEYMODULE_CLIENTINFO_FLAG_READONLY     Client in ReadOnly state.
  *
  * However passing NULL is a way to just check if the client exists in case
  * we are not interested in any additional information.

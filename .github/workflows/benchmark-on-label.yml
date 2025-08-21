@@ -102,11 +102,15 @@ jobs:
           script: |
             const fs = require('fs');
             const body = fs.readFileSync('comparison.md', 'utf8');
+            const {owner, repo} = context.repo;
+            const sha = '${{ github.event.pull_request.head.sha }}';
+            const short = sha.slice(0,7);
+            const link = `[\`${short}\`](https://github.com/${owner}/${repo}/commit/${sha})`
             await github.rest.issues.createComment({
               issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              body
+              owner,
+              repo,
+              body: `**Benchmark ran on this commit:** ${link}\n\n${body}`
             });
 
       - name: Remove ${{ github.event.label.name }} label

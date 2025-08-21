@@ -3,15 +3,16 @@
 
 #include "server.h"
 #include "thread_common.h"
+#include <semaphore.h> 
 
 /* Threshold for flushing a worker's buffer to the main RDB file (64 KB). */
-#define WORKER_BUFFER_DEFAULT_SIZE 4 * 1024 * (1024)
+#define WORKER_BUFFER_DEFAULT_SIZE 1 * 1024 * (1024)
 /* Maximum capacity for a worker's buffer. Keys causing this limit to be exceeded are streamed directly to RDB file (256 KB). */
-#define WORKER_BUFFER_CAPACITY_LIMIT  256 * 1024 * (1024)
+#define WORKER_BUFFER_CAPACITY_LIMIT  4 * 1024 * (1024)
 
 #define RDB_SAVE_JOB_QUEUE_SIZE 2 /* Minimum size of JobQueue */
 
-#define RDB_LOAD_JOB_QUEUE_SIZE 10 // Minimum size of JobQueue
+#define RDB_LOAD_JOB_QUEUE_SIZE 200 // Minimum size of JobQueue
 
 typedef struct RdbSaveThreadArgs RdbSaveThreadArgs;
 
@@ -50,20 +51,45 @@ void startRDBThreads(void);
 void stopRDBThreads(void);
 
 
+#define RDB_LOAD_BATCH_SIZE 512
+#define NUM_LOCKS 4096
+#define RDB_BUFFER_POOL_SIZE 200
 
 ssize_t rdbSaveDbMultiThreaded(rio *rdb, int dbid, long *key_counter, char *pname);
 
+typedef struct RdbLoadedKey {
+    sds key_sds;
+    robj *val_obj;
+    long long expiretime;
+    long long lfu_freq;
+    long long lru_idle;
+    long long lru_clock;
+    long long now;
+} RdbLoadedKey;
+
+typedef struct RdbChunkBuffer {
+    rio buffer_rio;
+    sds sds_chunk_buf;
+    size_t buffer_size;
+    atomic_int state; // 0 for idle, 1 for busy.
+} RdbChunkBuffer;
+
 typedef struct RdbChunkLoadThreadArgs {
-    int rdbver;
-    rio chunk_rio;
+    RdbChunkBuffer *buffer;
     serverDb *db;
     int rdbflags;
     int current_dbid;
-    pthread_mutex_t *insert_mutex;
+    int rdbver;
     long long lru_clock;
     long long now;
-} RdbChunkLoadThreadArgs;
+    pthread_mutex_t *db_insert_mutexes;
 
+    RdbLoadedKey batch_buffers[NUM_LOCKS][RDB_LOAD_BATCH_SIZE];
+    int batch_counts[NUM_LOCKS];
+} __attribute__((aligned(CACHE_LINE_SIZE))) RdbChunkLoadThreadArgs;
+
+void initRdbBufferPool(void);
+void destroyRdbBufferPool(void);
 
 int offloadRDBChunkToThread(
     rio *rdb_main_stream,         
@@ -71,11 +97,13 @@ int offloadRDBChunkToThread(
     int rdbver,                   
     serverDb *current_db,         
     int rdbflags,                 
-    pthread_mutex_t *db_insert_mutex,
     int current_dbid,
     long long lru_clock,
-    long long now
+    long long now,
+    pthread_mutex_t *db_insert_mutexes
+
 );
+extern sem_t rdb_buffer_pool_sem;
 extern _Atomic int rdb_load_thread_error;
 
 #endif // __RDB_THREADS_H__

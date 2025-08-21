@@ -304,6 +304,25 @@ int dbAddRDBLoad(serverDb *db, sds key, robj **valref) {
     return 1;
 }
 
+int dbAddRDBLoadFast(serverDb *db, sds key, robj **valref) {
+    int dict_index = getKVStoreIndexForKey(key);
+    hashtablePosition pos;
+    if (!kvstoreHashtableFindPositionForInsert(db->keys, dict_index, key, &pos, NULL)) {
+        return 0;
+    }
+    robj *val = *valref;
+    val = objectSetKeyAndExpire(val, key, -1);
+    kvstoreHashtableInsertAtPosition(db->keys, dict_index, val, &pos);
+    initObjectLRUOrLFU(val);
+
+    /* Track hash objects containing volatile items, created by rdbLoadObject (which lacks DB context). */
+    dbTrackKeyWithVolatileItems(db, val);
+
+    *valref = val;
+    return 1;
+}
+
+
 /* Overwrite an existing key with a new value.
  *
  * The value may (if its reference counter == 1) be reallocated and become

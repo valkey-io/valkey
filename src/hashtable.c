@@ -50,6 +50,7 @@
 #include "mt19937-64.h"
 #include "monotonic.h"
 #include "config.h"
+#include "server.h"
 
 #include <limits.h>
 #include <stdint.h>
@@ -1439,6 +1440,32 @@ bool hashtableFindPositionForInsert(hashtable *ht, void *key, hashtablePosition 
     }
     hashtableExpandIfNeeded(ht);
     rehashStepOnWriteIfNeeded(ht);
+    b = findBucketForInsert(ht, hash, &pos_in_bucket, &table_index);
+    assert(!isPositionFilled(b, pos_in_bucket));
+
+    /* Store the hash bits now, so we don't need to compute the hash again
+     * when hashtableInsertAtPosition() is called. */
+    b->hashes[pos_in_bucket] = highBits(hash);
+
+    /* Populate position struct. */
+    assert(p != NULL);
+    p->bucket = b;
+    p->pos_in_bucket = pos_in_bucket;
+    p->table_index = table_index;
+    return true;
+}
+
+bool hashtableFindPositionForInsertFast(hashtable *ht, void *key, hashtablePosition *pos, void **existing) {
+    position *p = positionFromOpaque(pos);
+    uint64_t hash = hashKey(ht, key);
+    int pos_in_bucket, table_index;
+    bucket *b = findBucket(ht, hash, key, &pos_in_bucket, NULL);
+    if (b != NULL) {
+        if (existing) *existing = b->entries[pos_in_bucket];
+        return false;
+    }
+    // hashtableExpandIfNeeded(ht);
+    // rehashStepOnWriteIfNeeded(ht);
     b = findBucketForInsert(ht, hash, &pos_in_bucket, &table_index);
     assert(!isPositionFilled(b, pos_in_bucket));
 

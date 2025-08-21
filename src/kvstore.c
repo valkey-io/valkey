@@ -879,12 +879,24 @@ bool kvstoreHashtableFindPositionForInsert(kvstore *kvs, int didx, void *key, ha
     return hashtableFindPositionForInsert(ht, key, position, existing);
 }
 
+// bool kvstoreHashtableFindPositionForInsertFast(kvstore *kvs, int didx, void *key, hashtablePosition *position, void **existing) {
+//     hashtable *ht = createHashtableIfNeeded(kvs, didx);
+//     return hashtableFindPositionForInsertFast(ht, key, position, existing);
+// }
+
 /* Must be used together with kvstoreHashtableFindPositionForInsert, with returned
  * position and with the same didx. */
 void kvstoreHashtableInsertAtPosition(kvstore *kvs, int didx, void *entry, void *position) {
     hashtable *ht = kvstoreGetHashtable(kvs, didx);
     hashtableInsertAtPosition(ht, entry, position);
     cumulativeKeyCountAdd(kvs, didx, 1);
+}
+
+/* Must be used together with kvstoreHashtableFindPositionForInsert, with returned
+ * position and with the same didx. */
+void kvstoreHashtableInsertAtPositionFast(kvstore *kvs, int didx, void *entry, void *position) {
+    hashtable *ht = kvstoreGetHashtable(kvs, didx);
+    hashtableInsertAtPosition(ht, entry, position);
 }
 
 void **kvstoreHashtableTwoPhasePopFindRef(kvstore *kvs, int didx, const void *key, void *position) {

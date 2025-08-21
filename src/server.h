@@ -3721,6 +3721,7 @@ void startEvictionTimeProc(void);
 /* Keys hashing/comparison functions for dict.c and hashtable.c hash tables. */
 uint64_t dictSdsHash(const void *key);
 uint64_t dictSdsCaseHash(const void *key);
+uint64_t hashtableSdsHash(const void *key);
 int dictSdsKeyCompare(const void *key1, const void *key2);
 int hashtableSdsKeyCompare(const void *key1, const void *key2);
 int dictSdsKeyCaseCompare(const void *key1, const void *key2);

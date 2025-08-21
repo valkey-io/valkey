@@ -3119,16 +3119,20 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
     long long lru_idle = -1, lfu_freq = -1, expiretime = -1, now = mstime();
     long long lru_clock = LRU_CLOCK();
 
-    pthread_mutex_t *key_insert_mutex = NULL;
-    long long start_time = ustime(); 
+    pthread_mutex_t *db_insert_mutexes = NULL;
+
+    long long start_time = ustime();
 
     if (server.rdb_threads_num > 1) {
         atomic_store_explicit(&rdb_load_thread_error, 0, memory_order_relaxed); /* Allows threads to report errors */
-        key_insert_mutex = zmalloc(sizeof(pthread_mutex_t));
+        db_insert_mutexes = zmalloc(sizeof(pthread_mutex_t) * NUM_LOCKS);
+        for (int i = 0; i < NUM_LOCKS; i++) pthread_mutex_init(&db_insert_mutexes[i], NULL);
+        // sem_init(&rdb_buffer_pool_sem, 0, RDB_BUFFER_POOL_SIZE);
+
         serverLog(LL_NOTICE, "Starting RDB Threads for Load. rdb-threads: %d", server.rdb_threads_num);
         initRDBThreads(RDB_LOAD_JOB_QUEUE_SIZE); // Random number of tasks for now
-        pthread_mutex_init(key_insert_mutex, NULL);
         startRDBThreads();
+        // initRdbBufferPool();
     }
 
     while (1) {
@@ -3221,7 +3225,7 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
 
                 if (server.rdb_threads_num > 1) {
                     serverAssert(chunk_size > 0);
-                    if (offloadRDBChunkToThread(rdb, chunk_size, rdbver, db, rdbflags, key_insert_mutex, dbid, lru_clock, now) == C_ERR) {
+                    if (offloadRDBChunkToThread(rdb, chunk_size, rdbver, db, rdbflags, dbid, lru_clock, now, db_insert_mutexes) == C_ERR) {
                         serverLog(LL_WARNING, "Failed to offload RDB chunk to thread");
                         decrRefCount(auxkey);
                         decrRefCount(auxval);
@@ -3393,7 +3397,7 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
         /* Read value */
         val = rdbLoadObject(type, rdb, key, db->id, &error);
 
-        if (server.rdb_threads_num > 1) pthread_mutex_lock(key_insert_mutex);
+        // if (server.rdb_threads_num > 1) pthread_mutex_lock(key_insert_mutex);
 
         /* Check if the key already expired. This function is used when loading
          * an RDB file from disk, either at startup, or when an RDB was
@@ -3476,9 +3480,11 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
         expiretime = -1;
         lfu_freq = -1;
         lru_idle = -1;
-        if (server.rdb_threads_num > 1) pthread_mutex_unlock(key_insert_mutex);
+        // if (server.rdb_threads_num > 1) pthread_mutex_unlock(key_insert_mutex);
     }
     /* Verify the checksum if RDB version is >= 5 */
+    long long end_time = ustime();
+    serverLog(LL_NOTICE, "Done Reading File. Time Taken: %llu us", end_time - start_time);
     if (rdbver >= 5) {
         uint64_t cksum, expected = rdb->cksum;
 
@@ -3499,8 +3505,6 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
             }
         }
     }
-    long long end_time = ustime();
-    serverLog(LL_NOTICE, "Done Reading File. Time Taken: %llu us", end_time - start_time);
     if (server.rdb_threads_num > 1) {
         drainRDBThreadsQueue();
         if (atomic_load_explicit(&rdb_load_thread_error, memory_order_relaxed)) {
@@ -3508,8 +3512,10 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
             goto eoferr;
         }
         killRDBThreads();
-        pthread_mutex_destroy(key_insert_mutex);
-        zfree(key_insert_mutex);
+        for (int i = 0; i < NUM_LOCKS; i++) pthread_mutex_destroy(&db_insert_mutexes[i]);
+        zfree(db_insert_mutexes);
+        // destroyRdbBufferPool();
+        // sem_destroy(&rdb_buffer_pool_sem);
     }
     if (empty_keys_skipped) {
         serverLog(LL_NOTICE, "Done loading RDB, keys loaded: %lld, keys expired: %lld, empty keys skipped: %lld.",
@@ -3533,8 +3539,9 @@ eoferr:
     if (server.rdb_threads_num > 1) {
         drainRDBThreadsQueue();
         killRDBThreads();
-        pthread_mutex_destroy(key_insert_mutex);
-        zfree(key_insert_mutex);
+        for (int i = 0; i < NUM_LOCKS; i++) pthread_mutex_destroy(&db_insert_mutexes[i]);
+        zfree(db_insert_mutexes);
+        destroyRdbBufferPool();
     }
 
     return C_ERR;

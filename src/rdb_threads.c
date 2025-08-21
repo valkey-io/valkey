@@ -8,6 +8,7 @@
 #include "rdb_threads.h"
 #include "rdb.h"
 #include "module.h"
+#include "server.h"
 
 static pthread_t rdb_threads[RDB_THREADS_MAX_NUM] = {0};
 static pthread_mutex_t rdb_threads_mutex[RDB_THREADS_MAX_NUM];
@@ -390,27 +391,45 @@ werr:
 }
 
 /* --------- Multithreaded RDB Load --------- */
+#define RDB_BUFFER_MAX_CHUNK_SIZE WORKER_BUFFER_CAPACITY_LIMIT // 64MB example size
+RdbChunkBuffer rdb_buffer_pool[RDB_BUFFER_POOL_SIZE];
+_Atomic size_t next_buffer_idx = ATOMIC_VAR_INIT(0);
 
-static inline void freeRdbChunkLoadThreadArgs(RdbChunkLoadThreadArgs *args) {
-    if (!args) return;
-    if (args->chunk_rio.io.buffer.ptr) {
-        sdsfree(args->chunk_rio.io.buffer.ptr);
-        args->chunk_rio.io.buffer.ptr = NULL;
+void initRdbBufferPool(void) {
+    for (int i = 0; i < RDB_BUFFER_POOL_SIZE; ++i) {
+        // sdsnewlen(NULL, 0) is a quick way to create an empty, non-NULL SDS.
+        rdb_buffer_pool[i].sds_chunk_buf = sdsnewlen(NULL, RDB_BUFFER_MAX_CHUNK_SIZE);
+        if (!rdb_buffer_pool[i].sds_chunk_buf) {
+            serverPanic("Failed to allocate RDB buffer pool");
+        }
+        atomic_init(&rdb_buffer_pool[i].state, 0); // Initialize as idle.
     }
-    zfree(args);
+}
+
+// Cleans up the RDB buffer pool.
+void destroyRdbBufferPool(void) {
+    for (int i = 0; i < RDB_BUFFER_POOL_SIZE; ++i) {
+        sdsfree(rdb_buffer_pool[i].sds_chunk_buf);
+    }
 }
 
 
-/* Key/value decoded record used by the batcher */
-typedef struct RdbLoadedKey {
-    sds key_sds;
-    robj *val_obj;
-    long long expiretime;
-    long long lfu_freq;
-    long long lru_idle;
-    long long lru_clock;
-    long long now;
-} RdbLoadedKey;
+static inline void freeRdbChunkLoadThreadArgs(RdbChunkLoadThreadArgs *args) {
+    if (!args) return;
+
+    if (args->buffer) {
+        // serverLog(LL_NOTICE, "Clearnig buffer for future usuage");
+        sdsfree(args->buffer->sds_chunk_buf);
+        // atomic_store(&args->buffer->state, 0);
+        args->buffer->buffer_size = 0;
+        args->buffer = NULL;
+        // sem_post(&rdb_buffer_pool_sem); // signal that it's available
+
+    }
+
+    zfree(args);
+}
+
 
 /* set to 1 by any worker on error; caller should check after drain */
 _Atomic int rdb_load_thread_error = 0;
@@ -421,12 +440,8 @@ void flush_rdb_batch(
     serverDb *db,
     int rdbflags,
     int current_dbid,
-    pthread_mutex_t *insert_mutex, /* may be NULL */
-    long long lru_clock)
-{
+    long long lru_clock) {
     if (batch_count == 0) return;
-
-    if (insert_mutex) pthread_mutex_lock(insert_mutex);
 
     for (int i = 0; i < batch_count; i++) {
         RdbLoadedKey *item = &batch_buffer[i];
@@ -441,12 +456,12 @@ void flush_rdb_batch(
         if (iAmPrimary() &&
             !(rdbflags & RDBFLAGS_AOF_PREAMBLE) &&
             item->expiretime != -1 &&
-            item->expiretime < item->now)
-        {
+            item->expiretime < item->now) {
             if (rdbflags & RDBFLAGS_FEED_REPL) {
                 serverAssert(server.repl_backlog != NULL && listLength(server.replicas) == 0);
-                robj keyobj; initStaticStringObject(keyobj, item->key_sds);
-                robj *argv[2] = { server.lazyfree_lazy_expire ? shared.unlink : shared.del, &keyobj };
+                robj keyobj;
+                initStaticStringObject(keyobj, item->key_sds);
+                robj *argv[2] = {server.lazyfree_lazy_expire ? shared.unlink : shared.del, &keyobj};
                 replicationFeedReplicas(current_dbid, argv, 2);
             }
             sdsfree(item->key_sds);
@@ -456,7 +471,8 @@ void flush_rdb_batch(
         }
 
         /* insert path */
-        robj keyobj_temp; initStaticStringObject(keyobj_temp, item->key_sds);
+        robj keyobj_temp;
+        initStaticStringObject(keyobj_temp, item->key_sds);
         int added = dbAddRDBLoad(db, item->key_sds, &item->val_obj);
         server.rdb_last_load_keys_loaded++;
 
@@ -485,43 +501,42 @@ void flush_rdb_batch(
 
         if (server.key_load_delay) debugDelay(server.key_load_delay);
     }
-
-    if (insert_mutex) pthread_mutex_unlock(insert_mutex);
 }
 
 
-/* ---- worker: decode a buffer chunk until it's exhausted ---- */
-#define RDB_LOAD_BATCH_SIZE 10 * 1024
 void processRDBChunk(void *arg) {
     RdbChunkLoadThreadArgs *ta = (RdbChunkLoadThreadArgs *)arg;
 
-    rio *rdb = &ta->chunk_rio;
+    RdbChunkBuffer *buffer = ta->buffer;
     serverDb *db = ta->db;
-    const int rdbflags = ta->rdbflags;
-    pthread_mutex_t *insert_mutex = ta->insert_mutex; /* may be NULL */
     const int current_dbid = ta->current_dbid;
     const int rdbver = ta->rdbver;
     long long lru_clock = ta->lru_clock;
-
-    RdbLoadedKey batch_buffer[RDB_LOAD_BATCH_SIZE];
-    int batch_count = 0;
 
     int type, error;
     sds key_sds = NULL;
     robj *val_obj = NULL;
     int empty_keys_skipped = 0;
 
+    // Fix 1: Properly initialize the rio stream for the buffer.
+    rio *rdb = &buffer->buffer_rio;
+
+    int batch_element_counts[NUM_LOCKS] = {0};
+
+
+    // serverLog(LL_NOTICE, "Thread %ld processing a chunk", getThreadID());
     /* End offset of this finite buffer */
-    const size_t end_off = sdslen(rdb->io.buffer.ptr);
+    const size_t end_off = buffer->buffer_size;
 
     while ((size_t)rioTell(rdb) < end_off) {
         long long lru_idle = -1, lfu_freq = -1, expiretime = -1;
 
-        /* Must have enough bytes for a type here (object-aligned chunk). */
         type = rdbLoadType(rdb);
-        if (type == -1) goto chunk_err;
+        if (type == -1) {
+            serverLog(LL_NOTICE, "ERROR READING TYPE");
+            goto chunk_err;
+        }
 
-        /* Per-key metadata opcodes */
         while (type == RDB_OPCODE_EXPIRETIME ||
                type == RDB_OPCODE_EXPIRETIME_MS ||
                type == RDB_OPCODE_FREQ ||
@@ -542,25 +557,27 @@ void processRDBChunk(void *arg) {
                 lru_idle = qword;
             }
 
-            /* If we ended exactly after metadata, that’s a malformed chunk (mid-object). */
             if ((size_t)rioTell(rdb) >= end_off) goto chunk_err;
 
             type = rdbLoadType(rdb);
             if (type == -1) goto chunk_err;
         }
 
-        /* Now we must have a real object type */
         if (!rdbIsObjectType(type)) {
             serverLog(LL_WARNING, "Malformed RDB chunk in DB %d: got 0x%x where object type expected.",
                       current_dbid, type);
             goto chunk_err;
         }
 
-        /* Decode key + value (the chunk must contain both fully) */
         key_sds = rdbGenericLoadStringObject(rdb, RDB_LOAD_SDS, NULL);
-        if (key_sds == NULL) goto chunk_err;
+        if (key_sds == NULL) {
+            serverLog(LL_NOTICE, "ERROR Getting Key");
+            goto chunk_err;
+        }
+
 
         val_obj = rdbLoadObject(type, rdb, key_sds, db->id, &error);
+
 
         if (val_obj == NULL) {
             if (error == RDB_LOAD_ERR_EMPTY_KEY) {
@@ -568,7 +585,6 @@ void processRDBChunk(void *arg) {
                     serverLog(LL_NOTICE, "rdbLoadObject skipping empty key: %s (in chunk)", key_sds);
                 sdsfree(key_sds);
                 key_sds = NULL;
-                /* continue to next record */
             } else {
                 serverLog(LL_WARNING, "Error loading RDB object in chunk for key '%s'.", key_sds);
                 sdsfree(key_sds);
@@ -576,43 +592,87 @@ void processRDBChunk(void *arg) {
                 goto chunk_err;
             }
         } else {
-            /* Queue into local batch */
-            RdbLoadedKey *item = &batch_buffer[batch_count];
-            item->key_sds = key_sds; /* ownership moves to item */
+            /* Use the hash of the key to determine what lock to use*/
+            uint64_t hash = hashtableSdsHash(key_sds);
+            int lock_idx = hash % NUM_LOCKS;
+            batch_element_counts[lock_idx]++;
+
+
+            RdbLoadedKey *item = &ta->batch_buffers[lock_idx][ta->batch_counts[lock_idx]];
+            ta->batch_counts[lock_idx]++;
+            item->key_sds = key_sds;
             item->val_obj = val_obj;
             item->expiretime = expiretime;
             item->lfu_freq = lfu_freq;
             item->lru_idle = lru_idle;
             item->lru_clock = lru_clock;
             item->now = ta->now;
-            
-            batch_count++;
+
             key_sds = NULL;
             val_obj = NULL;
 
-            if (batch_count == RDB_LOAD_BATCH_SIZE) {
-                flush_rdb_batch(batch_buffer, batch_count, db, rdbflags, current_dbid, insert_mutex, lru_clock);
-                batch_count = 0;
+            if (ta->batch_counts[lock_idx] == RDB_LOAD_BATCH_SIZE) {
+                // This batch is full, we must try to flush it.
+                if (pthread_mutex_trylock(&ta->db_insert_mutexes[lock_idx]) == 0) {
+                    // Success! Flush it now.
+                    flush_rdb_batch(ta->batch_buffers[lock_idx], ta->batch_counts[lock_idx], ta->db, ta->rdbflags, ta->current_dbid, ta->lru_clock);
+                    pthread_mutex_unlock(&ta->db_insert_mutexes[lock_idx]);
+                    ta->batch_counts[lock_idx] = 0;
+                } else {
+                    /* The lock is busy. DON'T BLOCK.
+                     * Instead, opportunistically flush any OTHER non-empty, non-full batch
+                     * this thread owns to make progress while we wait.
+                     */
+                    for (int i = 0; i < NUM_LOCKS; i++) {
+                        if (i != lock_idx && ta->batch_counts[i] > 0) {
+                            if (pthread_mutex_trylock(&ta->db_insert_mutexes[i]) == 0) {
+                                flush_rdb_batch(ta->batch_buffers[i], ta->batch_counts[i], ta->db, ta->rdbflags, ta->current_dbid, ta->lru_clock);
+                                pthread_mutex_unlock(&ta->db_insert_mutexes[i]);
+                                ta->batch_counts[i] = 0;
+                            }
+                        }
+                    }
+                    // After trying to flush other batches, we MUST now block on the full one.
+                    pthread_mutex_lock(&ta->db_insert_mutexes[lock_idx]);
+                    flush_rdb_batch(ta->batch_buffers[lock_idx], ta->batch_counts[lock_idx], ta->db, ta->rdbflags, ta->current_dbid, ta->lru_clock);
+                    pthread_mutex_unlock(&ta->db_insert_mutexes[lock_idx]);
+                    ta->batch_counts[lock_idx] = 0;
+                }
             }
         }
     }
+    /* Final flush of remaining items in all private batches */
+    int still_unflushed = 0;
+    do {
+        still_unflushed = 0;
+        for (int i = 0; i < NUM_LOCKS; i++) {
+            if (ta->batch_counts[i] > 0) {
+                if (pthread_mutex_trylock(&ta->db_insert_mutexes[i]) == 0) {
+                    flush_rdb_batch(ta->batch_buffers[i], ta->batch_counts[i], ta->db, ta->rdbflags, ta->current_dbid, ta->lru_clock);
+                    pthread_mutex_unlock(&ta->db_insert_mutexes[i]);
+                    ta->batch_counts[i] = 0; // Mark this batch as flushed
+                } else {
+                    still_unflushed = 1; // We tried but couldn't flush. Will retry.
+                }
+            }
+        }
+    } while (still_unflushed);
 
-    /* Finished exactly at end-of-buffer → success */
-    if (batch_count > 0) {
-        flush_rdb_batch(batch_buffer, batch_count, db, rdbflags, current_dbid, insert_mutex, lru_clock);
-        batch_count = 0;
-    }
-    serverLog(LL_DEBUG, "Thread %d: chunk processed successfully.", getThreadID());
+    // serverLog(LL_DEBUG, "Thread %d: chunk processed successfully.", getThreadID());
     freeRdbChunkLoadThreadArgs(ta);
+    // for (int i = 0; i < NUM_LOCKS; i++) {
+    //     serverLog(LL_NOTICE, "Thread %d, Lock Index %d: Found %d elements",
+    //               getThreadID(), i, batch_element_counts[i]);
+    // }
     return;
 
 chunk_err:
     rdb_load_thread_error = 1;
-
-    /* free any staged items */
-    for (int i = 0; i < batch_count; i++) {
-        if (batch_buffer[i].key_sds) sdsfree(batch_buffer[i].key_sds);
-        if (batch_buffer[i].val_obj) decrRefCount(batch_buffer[i].val_obj);
+    for (int i = 0; i < NUM_LOCKS; i++) {
+        for (int j = 0; j < ta->batch_counts[i]; j++) {
+            if (ta->batch_buffers[i][j].key_sds) sdsfree(ta->batch_buffers[i][j].key_sds);
+            if (ta->batch_buffers[i][j].val_obj) decrRefCount(ta->batch_buffers[i][j].val_obj);
+        }
     }
     if (key_sds) sdsfree(key_sds);
     if (val_obj) decrRefCount(val_obj);
@@ -629,6 +689,7 @@ chunk_err:
 
 
 static size_t next_worker_thread_idx_to_try = 1; // valid: [1 .. server.rdb_threads_num-1]
+sem_t rdb_buffer_pool_sem;
 
 int offloadRDBChunkToThread(
     rio *rdb_main_stream,
@@ -636,72 +697,99 @@ int offloadRDBChunkToThread(
     int rdbver,
     serverDb *current_db,
     int rdbflags,
-    pthread_mutex_t *db_insert_mutex, // may be NULL
     int current_dbid,
     long long lru_clock,
-    long long now) {
+    long long now,
+    pthread_mutex_t *db_insert_mutexes) {
     serverAssert(server.rdb_threads_num >= 2);
     serverAssert(chunk_size > 0);
 
-    sds sds_chunk_buf = NULL;
-    RdbChunkLoadThreadArgs *thread_args = NULL;
+    if (chunk_size > RDB_BUFFER_MAX_CHUNK_SIZE) {
+        serverLog(LL_WARNING, "Chunk is too big (%lu) for pool capacity (%lu)", (size_t)chunk_size, (size_t)RDB_BUFFER_MAX_CHUNK_SIZE);
+        return C_ERR;
+    }
 
-    /* 1) Read payload into SDS */
-    sds_chunk_buf = sdsnewlen(NULL, chunk_size);
-    if (!sds_chunk_buf) {
-        serverLog(LL_WARNING, "OOM allocating %luB for RDB chunk", chunk_size);
-        goto err;
-    }
-    if (rioRead(rdb_main_stream, sds_chunk_buf, chunk_size) == 0) {
+    // RdbChunkBuffer *chunk_buf_wrapper = NULL;
+    // sem_wait(&rdb_buffer_pool_sem); 
+    // size_t tries = 0;
+    // size_t start_idx = atomic_load(&next_buffer_idx);
+
+    // while (1) {
+    //     size_t idx = (start_idx + tries) % RDB_BUFFER_POOL_SIZE;
+    //     if (atomic_compare_exchange_strong(&rdb_buffer_pool[idx].state, (int[]){0}, 1)) {
+    //         chunk_buf_wrapper = &rdb_buffer_pool[idx];
+    //         atomic_store(&next_buffer_idx, (idx + 1) % RDB_BUFFER_POOL_SIZE);
+    //         // serverLog(LL_NOTICE, "Found buffer! Tries: %lu, Buffer idx: %ld", tries, idx);
+    //         break;
+    //     }
+    //     tries++;
+    // }
+    // serverAssert(chunk_buf_wrapper != NULL); // Assuming we'll always find one.
+    RdbChunkBuffer *chunk_buf_wrapper = zmalloc(sizeof(RdbChunkBuffer));
+
+    chunk_buf_wrapper->sds_chunk_buf = sdsnewlen(NULL, chunk_size);
+    // FIX: Read payload into the SDS buffer directly, not into a pointer.
+    if (rioRead(rdb_main_stream, chunk_buf_wrapper->sds_chunk_buf, chunk_size) == 0) {
         serverLog(LL_WARNING, "Short read for RDB chunk of %lu bytes", chunk_size);
-        goto err;
+        atomic_store(&chunk_buf_wrapper->state, 0);
+        return C_ERR;
     }
+
+    // FIX: Set the buffer size after the read completes successfully.
+    chunk_buf_wrapper->buffer_size = chunk_size;
+
+
+    rioInitWithBuffer(&chunk_buf_wrapper->buffer_rio, chunk_buf_wrapper->sds_chunk_buf);
+
 
     /* 2) Build args */
-    thread_args = zmalloc(sizeof(*thread_args));
+    RdbChunkLoadThreadArgs *thread_args = zmalloc(sizeof(*thread_args));
     if (!thread_args) {
         serverLog(LL_WARNING, "OOM allocating chunk args");
-        goto err;
+        atomic_store(&chunk_buf_wrapper->state, 0);
+        return C_ERR;
     }
 
-    /* 3) Immediately wrap SDS into embedded rio (ownership transfers) */
-    rioInitWithBuffer(&thread_args->chunk_rio, sds_chunk_buf);
-    sds_chunk_buf = NULL; /* now owned by thread_args->chunk_rio */
-
-    /* 4) Fill fields */
+    /* 3) Fill fields */
     thread_args->rdbver = rdbver;
     thread_args->db = current_db;
     thread_args->rdbflags = rdbflags;
-    thread_args->insert_mutex = db_insert_mutex; /* may be NULL */
     thread_args->current_dbid = current_dbid;
     thread_args->lru_clock = lru_clock;
     thread_args->now = now;
+    thread_args->buffer = chunk_buf_wrapper;            // Pass the buffer pointer
+    thread_args->db_insert_mutexes = db_insert_mutexes; // Pass the mutexes here
 
-    /* 5) Round-robin enqueue across workers [1..num_workers] */
-    size_t num_workers = server.rdb_threads_num - 1; // >= 1
+    // Initialize the private batch counts
+    for (int i = 0; i < NUM_LOCKS; i++) {
+        thread_args->batch_counts[i] = 0;
+    }
+
+
+    /* 4) Round-robin enqueue across workers [1..num_workers] */
+    size_t num_workers = server.rdb_threads_num - 1;
     if (next_worker_thread_idx_to_try < 1 || next_worker_thread_idx_to_try > num_workers)
         next_worker_thread_idx_to_try = 1;
 
-    size_t start = next_worker_thread_idx_to_try;
-    for (size_t tries = 0; tries < num_workers; ++tries) {
-        size_t idx = 1 + ((start - 1 + tries) % num_workers);
-        JobQueue *jq = &rdb_jobs[idx];
-        if (!JobQueue_isFull(jq)) {
-            JobQueue_push(jq, processRDBChunk, thread_args); // worker frees args
-            next_worker_thread_idx_to_try = (idx % num_workers) + 1;
-            return C_OK;
+    while (1) {
+        size_t start = next_worker_thread_idx_to_try;
+        for (size_t tries = 0; tries < num_workers; ++tries) {
+            size_t idx = 1 + ((start - 1 + tries) % num_workers);
+            JobQueue *jq = &rdb_jobs[idx];
+            if (!JobQueue_isFull(jq)) {
+                JobQueue_push(jq, processRDBChunk, thread_args);
+                next_worker_thread_idx_to_try = (idx % num_workers) + 1;
+                return C_OK;
+            } else {
+                atomic_thread_fence(memory_order_acquire);
+            }
         }
+        // Check if there were errors:
+        if (atomic_load(&rdb_load_thread_error) == 1) return C_ERR;
     }
 
-    /* 6) All queues full → process synchronously in main thread */
+    /* 5) All queues full → process synchronously in main thread */
     serverLog(LL_DEBUG, "All worker queues busy; processing RDB chunk (%luB) in main thread", chunk_size);
-    processRDBChunk((void *)thread_args); // worker routine frees args
+    processRDBChunk((void *)thread_args);
     return C_OK;
-
-err:
-    if (thread_args)
-        freeRdbChunkLoadThreadArgs(thread_args); /* also frees embedded SDS if any */
-    else if (sds_chunk_buf)
-        sdsfree(sds_chunk_buf); /* SDS not moved yet */
-    return C_ERR;
 }

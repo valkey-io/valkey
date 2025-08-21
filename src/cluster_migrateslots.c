@@ -8,7 +8,9 @@
 #include "bio.h"
 #include "module.h"
 #include "functions.h"
+
 #include <sys/wait.h>
+#include <fcntl.h>
 
 typedef enum slotMigrationJobState {
     /* Importing states */
@@ -1294,7 +1296,7 @@ int slotExportJobBeginSnapshotToTargetSocket(slotMigrationJob *job) {
         close(server.rdb_pipe_read);
 
         serverSetProcTitle("valkey-slot-migration-to-target");
-        serverSetCpuAffinity(server.bgsave_cpulist); // todo see if we need a new cpulist
+        serverSetCpuAffinity(server.slot_migration_cpulist);
 
         int retval = childSnapshotForSyncSlot(&aof, job);
         if (retval == C_OK && rioFlush(&aof) == 0) retval = C_ERR;
@@ -1331,7 +1333,7 @@ int slotExportJobBeginSnapshotToTargetSocket(slotMigrationJob *job) {
     return C_OK; /* Unreached. */
 }
 
-/* When a background RDB saving/transfer terminates, call the right handler. */
+/* When a background slot migration terminates, call the right handler. */
 void backgroundSlotMigrationDoneHandler(int exitcode, int bysignal) {
     if (!bysignal && exitcode == 0) {
         serverLog(LL_NOTICE, "Background SLOT MIGRATION transfer terminated with success");

@@ -2245,10 +2245,11 @@ struct valkeyServer {
     serverUnixContextConfig unix_ctx_config;
     serverRdmaContextConfig rdma_ctx_config;
     /* cpu affinity */
-    char *server_cpulist;      /* cpu affinity list of server main/io thread. */
-    char *bio_cpulist;         /* cpu affinity list of bio thread. */
-    char *aof_rewrite_cpulist; /* cpu affinity list of aof rewrite process. */
-    char *bgsave_cpulist;      /* cpu affinity list of bgsave process. */
+    char *server_cpulist;         /* cpu affinity list of server main/io thread. */
+    char *bio_cpulist;            /* cpu affinity list of bio thread. */
+    char *aof_rewrite_cpulist;    /* cpu affinity list of aof rewrite process. */
+    char *bgsave_cpulist;         /* cpu affinity list of bgsave process. */
+    char *slot_migration_cpulist; /* cpu affinity list of slot migration process. */
     /* Sentinel config */
     struct sentinelConfig *sentinel_config; /* sentinel config to load at startup time. */
     /* Coordinate failover info */

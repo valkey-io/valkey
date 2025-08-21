@@ -198,7 +198,7 @@ static int string2ll(const char *s, size_t slen, long long *value) {
             return VALKEY_ERR;
     }
 
-    /* First digit should be 1-9, otherwise the string should just be 0. */
+    /* First digit should be 1-9; otherwise, the string should just be 0. */
     if (p[0] >= '1' && p[0] <= '9') {
         v = p[0] - '0';
         p++;

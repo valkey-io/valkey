@@ -38,8 +38,11 @@
 #include <errno.h>
 #include <string.h>
 #ifdef _WIN32
-#include <wincrypt.h>
+/* clang-format off */
+// wincrypt.h need macro defined in windows.h
 #include <windows.h>
+#include <wincrypt.h>
+/* clang-format on */
 #ifdef OPENSSL_IS_BORINGSSL
 #undef X509_NAME
 #undef X509_EXTENSIONS

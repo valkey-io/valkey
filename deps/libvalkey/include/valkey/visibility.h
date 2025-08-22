@@ -1,7 +1,5 @@
 /*
- * Copyright (c) 2015-2017, Ieshen Zheng <ieshen.zheng at 163 dot com>
- * Copyright (c) 2020, Nick <heronr1 at gmail dot com>
- * Copyright (c) 2020-2021, Bjorn Svensson <bjorn.a.svensson at est dot tech>
+ * Copyright (c) 2025-present, libvalkey contributors
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -12,9 +10,9 @@
  *   * Redistributions in binary form must reproduce the above copyright
  *     notice, this list of conditions and the following disclaimer in the
  *     documentation and/or other materials provided with the distribution.
- *   * Neither the name of Redis nor the names of its contributors may be used
- *     to endorse or promote products derived from this software without
- *     specific prior written permission.
+ *   * Neither the name of the copyright holder nor the names of its
+ *     contributors may be used to endorse or promote products derived
+ *     from this software without specific prior written permission.
  *
  * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
  * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
@@ -29,26 +27,23 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
-#include "vkutil.h"
+#ifndef VALKEY_VISIBILITY_H
+#define VALKEY_VISIBILITY_H
 
-int _vk_atoi(uint8_t *line, size_t n) {
-    int value;
+#ifdef __cplusplus
+extern "C" {
+#endif
 
-    if (n == 0) {
-        return -1;
-    }
+#if defined __GNUC__
+#define LIBVALKEY_API __attribute__((visibility("default")))
+#elif defined(_MSC_VER)
+#define LIBVALKEY_API __declspec(dllexport)
+#else
+#define LIBVALKEY_API /* Unknown compiler */
+#endif
 
-    for (value = 0; n--; line++) {
-        if (*line < '0' || *line > '9') {
-            return -1;
-        }
-
-        value = value * 10 + (*line - '0');
-    }
-
-    if (value < 0) {
-        return -1;
-    }
-
-    return value;
+#ifdef __cplusplus
 }
+#endif
+
+#endif /* VALKEY_VISIBILITY_H */

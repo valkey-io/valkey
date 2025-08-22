@@ -49,12 +49,6 @@ start_cluster 2 2 {tags {external:skip cluster}} {
         assert_equal [R 0 CLUSTER COUNTKEYSINSLOT $key_slot] 0
 
         # assert flush slot propagated to replica
-        for {set l 0} {$l < 4} {incr l} {
-            puts "R $l info:"
-            puts [R $l info replication]
-            puts [R $l info commandSTATS]
-        }
-
         set info [R 2 info commandSTATS]
         # not del cmd
         assert_no_match "*cmdstat_del*" $info

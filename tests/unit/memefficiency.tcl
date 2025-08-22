@@ -386,7 +386,7 @@ run_solo {defrag} {
             # number of total fields.  lists are progressively increasing sizes.
             set n 200000
 
-            perform_defrag_test $title populate {
+            perform_defrag_test $title latency 5 populate {
                 set rd [valkey_deferring_client]
                 $rd client reply off
                 set val [string repeat A 350]

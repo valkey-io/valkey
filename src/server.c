@@ -6756,6 +6756,8 @@ int serverFork(int purpose) {
             latencyTraceIfNeeded(rdb, fork, server.stat_fork_time);
         } else if (purpose == CHILD_TYPE_AOF) {
             latencyTraceIfNeeded(aof, fork, server.stat_fork_time);
+        } else if (purpose == CHILD_TYPE_SLOT_MIGRATION) {
+            latencyTraceIfNeeded(cluster, fork, server.stat_fork_time);
         }
 
         /* The child_pid and child_type are only for mutually exclusive children.

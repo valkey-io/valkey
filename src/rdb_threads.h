@@ -9,26 +9,26 @@
 * If the thread's buffer stores more than this amount of data AFTER an entire key-value pair has been
 * saved we will flush the buffer to the target RIO.
 */
-#define WORKER_BUFFER_DEFAULT_SIZE 64 * (1024)
+#define WORKER_BUFFER_DEFAULT_SIZE 4 * 1024 * (1024)
 /*
 * The maximum buffer size (256 KB).
 * If we exceed this limit during the saving of a single key value pair we 
 * will flush the buffer to the target RIO and stream the rest of the key value pair
 * directly to the RIO. This prevents "big keys" from consuming an unbounded amount of memory.
 */
-#define WORKER_BUFFER_CAPACITY_LIMIT 256 * (1024)
+#define WORKER_BUFFER_CAPACITY_LIMIT 8 * 1024 * (1024)
 
 /* Minimum size of JobQueue */
 #define RDB_SAVE_JOB_QUEUE_SIZE 2
 
 /* The size of the RDB load job queue. */
-#define RDB_LOAD_JOB_QUEUE_SIZE 200 
+#define RDB_LOAD_JOB_QUEUE_SIZE 5 
 
 /* The size of a batch of keys for loading. */
 #define RDB_LOAD_BATCH_SIZE 512
 
 /* The number of locks for managing concurrent DB insertions. */
-#define NUM_LOCKS 4096
+#define NUM_LOCKS 16
 
 
 /* ----- Multi-Threaded RDB Save ----- */

@@ -629,7 +629,7 @@ void processRDBChunk(void *arg) {
 
     // serverLog(LL_DEBUG, "Thread %d: chunk processed successfully.", getThreadID());
     freeRdbChunkLoadThreadArgs(ta);
-    // for (int i = 0; i < NUM_LOCKS; i++) {
+    // for (int i = 0; i < server.rdb_threads_num; i++) {server.rdb_threads_num
     //     serverLog(LL_NOTICE, "Thread %d, Lock Index %d: Found %d elements",
     //               getThreadID(), i, batch_element_counts[i]);
     // }
@@ -671,9 +671,12 @@ int offloadRDBChunkToThread(
     pthread_mutex_t *db_insert_mutexes) {
     serverAssert(server.rdb_threads_num >= 2);
     serverAssert(chunk_size > 0);
-
+    
+    /* 1: Check for any loading errors */
+    if (atomic_load(&rdb_load_thread_error) == 1) return C_ERR;
+    
+    /* 2: Load the chunk into a buffer for processing in a thread */
     rio *chunk_rio = zmalloc(sizeof(rio));
-
     sds sds_chunk_buf = sdsnewlen(NULL, chunk_size);
 
     if (rioRead(rdb_main_stream, sds_chunk_buf, chunk_size) == 0) {
@@ -682,18 +685,15 @@ int offloadRDBChunkToThread(
         zfree(chunk_rio);
         return C_ERR;
     }
-
     rioInitWithBuffer(chunk_rio, sds_chunk_buf);
 
-
-    /* 2) Build args */
+    /* 3: Build args */
     RdbChunkLoadThreadArgs *thread_args = zmalloc(sizeof(*thread_args));
     if (!thread_args) {
         serverLog(LL_WARNING, "OOM allocating chunk args");
         return C_ERR;
     }
 
-    /* 3) Fill fields */
     thread_args->rdbver = rdbver;
     thread_args->db = current_db;
     thread_args->rdbflags = rdbflags;
@@ -703,35 +703,31 @@ int offloadRDBChunkToThread(
     thread_args->rdb = chunk_rio;
     thread_args->db_insert_mutexes = db_insert_mutexes;
 
-    // Initialize the private batch counts
+    /* Initialize the private batch counts */
     for (int i = 0; i < NUM_LOCKS; i++) {
         thread_args->batch_counts[i] = 0;
     }
 
 
-    /* 4) Round-robin enqueue across workers [1..num_workers] */
+    /* 4: Round-robin enqueue across workers [1..num_workers] */
     size_t num_workers = server.rdb_threads_num - 1;
     if (next_worker_thread_idx_to_try < 1 || next_worker_thread_idx_to_try > num_workers)
         next_worker_thread_idx_to_try = 1;
 
-    while (1) {
-        size_t start = next_worker_thread_idx_to_try;
-        for (size_t tries = 0; tries < num_workers; ++tries) {
-            size_t idx = 1 + ((start - 1 + tries) % num_workers);
-            JobQueue *jq = &rdb_jobs[idx];
-            if (!JobQueue_isFull(jq)) {
-                JobQueue_push(jq, processRDBChunk, thread_args);
-                next_worker_thread_idx_to_try = (idx % num_workers) + 1;
-                return C_OK;
-            } else {
-                atomic_thread_fence(memory_order_acquire);
-            }
+    size_t start = next_worker_thread_idx_to_try;
+    for (size_t tries = 0; tries < num_workers; ++tries) {
+        size_t idx = 1 + ((start - 1 + tries) % num_workers);
+        JobQueue *jq = &rdb_jobs[idx];
+        if (!JobQueue_isFull(jq)) {
+            JobQueue_push(jq, processRDBChunk, thread_args);
+            next_worker_thread_idx_to_try = (idx % num_workers) + 1;
+            return C_OK;
+        } else {
+            atomic_thread_fence(memory_order_acquire);
         }
-        // Check if there were errors:
-        if (atomic_load(&rdb_load_thread_error) == 1) return C_ERR;
     }
 
-    /* 5) All queues full → process synchronously in main thread */
+    /* 5: All queues full → process synchronously in main thread */
     serverLog(LL_DEBUG, "All worker queues busy; processing RDB chunk (%luB) in main thread", chunk_size);
     processRDBChunk((void *)thread_args);
     return C_OK;

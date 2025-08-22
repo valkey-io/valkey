@@ -3836,6 +3836,9 @@ static bool consumeCommandQueue(client *c) {
     cmdQueue *queue = &c->cmd_queue;
     if (queue->off >= queue->len) return false;
     parsedCommand *p = &queue->cmds[queue->off++];
+    /* Combine the command's read flags with the client's read flags. Some read
+     * flags describe the client state (AUTH_REQUIRED) while others describe the
+     * command parsing outcome (PARSING_COMPLETED). */
     c->read_flags |= p->read_flags;
     c->argc = p->argc;
     c->argv = p->argv;

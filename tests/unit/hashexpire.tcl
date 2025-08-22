@@ -1487,9 +1487,11 @@ start_server {tags {"hashexpire"}} {
         for {set i 1} {$i <= 600} {incr i} {
             assert_equal "v$i" [r HGET myhash "f$i"]
             if {$i == 1 || $i == 10 || $i == 100 || $i == 200 || $i == 300} {
-                assert_equal 3 [r HTTL myhash FIELDS 1 "f$i"]
+                # nonzero time has passed so we should check for a range
+                assert_morethan [r HTTL myhash FIELDS 1 "f$i"] 1
+                assert_lessthan_equal [r HTTL myhash FIELDS 1 "f$i"] 3
             } else {
-                assert_equal -1 [r HTTL myhash FIELDS 1 "f$i"]
+                assert_equal [r HTTL myhash FIELDS 1 "f$i"] -1
             }
         }
         # Re-enable active expiry

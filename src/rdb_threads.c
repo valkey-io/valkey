@@ -391,42 +391,14 @@ werr:
 }
 
 /* --------- Multithreaded RDB Load --------- */
-#define RDB_BUFFER_MAX_CHUNK_SIZE WORKER_BUFFER_CAPACITY_LIMIT // 64MB example size
-RdbChunkBuffer rdb_buffer_pool[RDB_BUFFER_POOL_SIZE];
-_Atomic size_t next_buffer_idx = ATOMIC_VAR_INIT(0);
-
-void initRdbBufferPool(void) {
-    for (int i = 0; i < RDB_BUFFER_POOL_SIZE; ++i) {
-        // sdsnewlen(NULL, 0) is a quick way to create an empty, non-NULL SDS.
-        rdb_buffer_pool[i].sds_chunk_buf = sdsnewlen(NULL, RDB_BUFFER_MAX_CHUNK_SIZE);
-        if (!rdb_buffer_pool[i].sds_chunk_buf) {
-            serverPanic("Failed to allocate RDB buffer pool");
-        }
-        atomic_init(&rdb_buffer_pool[i].state, 0); // Initialize as idle.
-    }
-}
-
-// Cleans up the RDB buffer pool.
-void destroyRdbBufferPool(void) {
-    for (int i = 0; i < RDB_BUFFER_POOL_SIZE; ++i) {
-        sdsfree(rdb_buffer_pool[i].sds_chunk_buf);
-    }
-}
-
 
 static inline void freeRdbChunkLoadThreadArgs(RdbChunkLoadThreadArgs *args) {
     if (!args) return;
 
-    if (args->buffer) {
-        // serverLog(LL_NOTICE, "Clearnig buffer for future usuage");
-        sdsfree(args->buffer->sds_chunk_buf);
-        // atomic_store(&args->buffer->state, 0);
-        args->buffer->buffer_size = 0;
-        args->buffer = NULL;
-        // sem_post(&rdb_buffer_pool_sem); // signal that it's available
-
+    if (args->rdb) {
+        if (args->rdb->io.buffer.ptr) sdsfree(args->rdb->io.buffer.ptr);
+        zfree(args->rdb);
     }
-
     zfree(args);
 }
 
@@ -507,7 +479,7 @@ void flush_rdb_batch(
 void processRDBChunk(void *arg) {
     RdbChunkLoadThreadArgs *ta = (RdbChunkLoadThreadArgs *)arg;
 
-    RdbChunkBuffer *buffer = ta->buffer;
+    rio *rdb = ta->rdb;
     serverDb *db = ta->db;
     const int current_dbid = ta->current_dbid;
     const int rdbver = ta->rdbver;
@@ -518,15 +490,12 @@ void processRDBChunk(void *arg) {
     robj *val_obj = NULL;
     int empty_keys_skipped = 0;
 
-    // Fix 1: Properly initialize the rio stream for the buffer.
-    rio *rdb = &buffer->buffer_rio;
-
     int batch_element_counts[NUM_LOCKS] = {0};
 
 
     // serverLog(LL_NOTICE, "Thread %ld processing a chunk", getThreadID());
     /* End offset of this finite buffer */
-    const size_t end_off = buffer->buffer_size;
+    const size_t end_off = sdslen(rdb->io.buffer.ptr);
 
     while ((size_t)rioTell(rdb) < end_off) {
         long long lru_idle = -1, lfu_freq = -1, expiretime = -1;
@@ -689,7 +658,6 @@ chunk_err:
 
 
 static size_t next_worker_thread_idx_to_try = 1; // valid: [1 .. server.rdb_threads_num-1]
-sem_t rdb_buffer_pool_sem;
 
 int offloadRDBChunkToThread(
     rio *rdb_main_stream,
@@ -704,49 +672,24 @@ int offloadRDBChunkToThread(
     serverAssert(server.rdb_threads_num >= 2);
     serverAssert(chunk_size > 0);
 
-    if (chunk_size > RDB_BUFFER_MAX_CHUNK_SIZE) {
-        serverLog(LL_WARNING, "Chunk is too big (%lu) for pool capacity (%lu)", (size_t)chunk_size, (size_t)RDB_BUFFER_MAX_CHUNK_SIZE);
-        return C_ERR;
-    }
+    rio *chunk_rio = zmalloc(sizeof(rio));
 
-    // RdbChunkBuffer *chunk_buf_wrapper = NULL;
-    // sem_wait(&rdb_buffer_pool_sem); 
-    // size_t tries = 0;
-    // size_t start_idx = atomic_load(&next_buffer_idx);
+    sds sds_chunk_buf = sdsnewlen(NULL, chunk_size);
 
-    // while (1) {
-    //     size_t idx = (start_idx + tries) % RDB_BUFFER_POOL_SIZE;
-    //     if (atomic_compare_exchange_strong(&rdb_buffer_pool[idx].state, (int[]){0}, 1)) {
-    //         chunk_buf_wrapper = &rdb_buffer_pool[idx];
-    //         atomic_store(&next_buffer_idx, (idx + 1) % RDB_BUFFER_POOL_SIZE);
-    //         // serverLog(LL_NOTICE, "Found buffer! Tries: %lu, Buffer idx: %ld", tries, idx);
-    //         break;
-    //     }
-    //     tries++;
-    // }
-    // serverAssert(chunk_buf_wrapper != NULL); // Assuming we'll always find one.
-    RdbChunkBuffer *chunk_buf_wrapper = zmalloc(sizeof(RdbChunkBuffer));
-
-    chunk_buf_wrapper->sds_chunk_buf = sdsnewlen(NULL, chunk_size);
-    // FIX: Read payload into the SDS buffer directly, not into a pointer.
-    if (rioRead(rdb_main_stream, chunk_buf_wrapper->sds_chunk_buf, chunk_size) == 0) {
+    if (rioRead(rdb_main_stream, sds_chunk_buf, chunk_size) == 0) {
         serverLog(LL_WARNING, "Short read for RDB chunk of %lu bytes", chunk_size);
-        atomic_store(&chunk_buf_wrapper->state, 0);
+        sdsfree(sds_chunk_buf);
+        zfree(chunk_rio);
         return C_ERR;
     }
 
-    // FIX: Set the buffer size after the read completes successfully.
-    chunk_buf_wrapper->buffer_size = chunk_size;
-
-
-    rioInitWithBuffer(&chunk_buf_wrapper->buffer_rio, chunk_buf_wrapper->sds_chunk_buf);
+    rioInitWithBuffer(chunk_rio, sds_chunk_buf);
 
 
     /* 2) Build args */
     RdbChunkLoadThreadArgs *thread_args = zmalloc(sizeof(*thread_args));
     if (!thread_args) {
         serverLog(LL_WARNING, "OOM allocating chunk args");
-        atomic_store(&chunk_buf_wrapper->state, 0);
         return C_ERR;
     }
 
@@ -757,8 +700,8 @@ int offloadRDBChunkToThread(
     thread_args->current_dbid = current_dbid;
     thread_args->lru_clock = lru_clock;
     thread_args->now = now;
-    thread_args->buffer = chunk_buf_wrapper;            // Pass the buffer pointer
-    thread_args->db_insert_mutexes = db_insert_mutexes; // Pass the mutexes here
+    thread_args->rdb = chunk_rio;
+    thread_args->db_insert_mutexes = db_insert_mutexes;
 
     // Initialize the private batch counts
     for (int i = 0; i < NUM_LOCKS; i++) {

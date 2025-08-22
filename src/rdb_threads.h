@@ -3,7 +3,6 @@
 
 #include "server.h"
 #include "thread_common.h"
-#include <semaphore.h> 
 
 /*
 * Default threshold for flushing a worker's buffer to the target RIO (File or Replica Socket) (64 KB).
@@ -19,16 +18,27 @@
 */
 #define WORKER_BUFFER_CAPACITY_LIMIT 256 * (1024)
 
-#define RDB_SAVE_JOB_QUEUE_SIZE 2 /* Minimum size of JobQueue */
+/* Minimum size of JobQueue */
+#define RDB_SAVE_JOB_QUEUE_SIZE 2
 
-#define RDB_LOAD_JOB_QUEUE_SIZE 200 // Minimum size of JobQueue
+/* The size of the RDB load job queue. */
+#define RDB_LOAD_JOB_QUEUE_SIZE 200 
+
+/* The size of a batch of keys for loading. */
+#define RDB_LOAD_BATCH_SIZE 512
+
+/* The number of locks for managing concurrent DB insertions. */
+#define NUM_LOCKS 4096
+
+
+/* ----- Multi-Threaded RDB Save ----- */
 
 typedef struct RdbSaveThreadArgs RdbSaveThreadArgs;
 
 /* Describes a range buckets in a hashtable for a thread to process. */
 typedef struct BucketStride {
-    size_t start_index; // First logical bucket index for this thread
-    size_t stride_size; // Step size to find the next logical bucket (typically num_worker_threads)
+    size_t start_index; /* First logical bucket index for this thread */
+    size_t stride_size; /* Step size to find the next logical bucket (typically num_worker_threads) */
 } BucketStride;
 
 /* Info needed by main thread for reporting save progress*/
@@ -39,33 +49,25 @@ typedef struct MainThreadRdbInfo {
     char *pname;
 } MainThreadRdbInfo;
 
+/* Arguments for a worker thread responsible for saving a portion of a database. */
 typedef struct RdbSaveThreadArgs {
-    int dbid;                   /* Database ID being saved */
-    hashtable *ht;              /* hashtable to be saved */
-    BucketStride bucket_stride; /* Defines what buckets in a hashtable the thread is responsible for */
-    atomic_long keys_processed;
-    ssize_t bytes_written;
-    rio buf_to_target_rio;            /* In-memory buffer (with max capacity) for key/val serialization */
-    pthread_mutex_t *rdb_write_mutex; /* Protects access to underlying mutex in buf_to_underlying_rio */
-    int save_status;
-    MainThreadRdbInfo *main_thread_report_info; /* Reporting info (only set for main thread's args) */
+    int dbid;                                 /* Database ID being saved. */
+    hashtable *ht;                            /* Hashtable to be saved. */
+    BucketStride bucket_stride;               /* Defines what buckets the thread is responsible for. */
+    atomic_long keys_processed;               /* Number of keys processed by this thread. */
+    ssize_t bytes_written;                    /* Total bytes written by this thread. */
+    rio buf_to_target_rio;                    /* In-memory buffer (with max capacity) for key-value serialization. */
+    pthread_mutex_t *rdb_write_mutex;         /* Protects access to the shared RIO. */
+    int save_status;                          /* Thread's save status. */
+    MainThreadRdbInfo *main_thread_report_info; /* Reporting info (only set for the main thread's arguments). */
 } RdbSaveThreadArgs;
-
-
-void initRDBThreads(int per_thread_queue_size);
-void killRDBThreads(void);
-void drainRDBThreadsQueue(void);
-
-void startRDBThreads(void);
-void stopRDBThreads(void);
-
-
-#define RDB_LOAD_BATCH_SIZE 512
-#define NUM_LOCKS 4096
-#define RDB_BUFFER_POOL_SIZE 200
 
 ssize_t rdbSaveDbMultiThreaded(rio *rdb, int dbid, long *key_counter, char *pname);
 
+
+/* ----- Multi-Threaded RDB Load ----- */
+
+/* Represents a loaded key from an RDB file, ready for insertion into the database. */
 typedef struct RdbLoadedKey {
     sds key_sds;
     robj *val_obj;
@@ -76,15 +78,15 @@ typedef struct RdbLoadedKey {
     long long now;
 } RdbLoadedKey;
 
+/* A buffer for holding a chunk of RDB data. */
 typedef struct RdbChunkBuffer {
     rio buffer_rio;
     sds sds_chunk_buf;
-    size_t buffer_size;
-    atomic_int state; // 0 for idle, 1 for busy.
 } RdbChunkBuffer;
 
+/* Arguments for a worker thread responsible for loading an RDB chunk. */
 typedef struct RdbChunkLoadThreadArgs {
-    RdbChunkBuffer *buffer;
+    rio *rdb;
     serverDb *db;
     int rdbflags;
     int current_dbid;
@@ -92,13 +94,9 @@ typedef struct RdbChunkLoadThreadArgs {
     long long lru_clock;
     long long now;
     pthread_mutex_t *db_insert_mutexes;
-
     RdbLoadedKey batch_buffers[NUM_LOCKS][RDB_LOAD_BATCH_SIZE];
     int batch_counts[NUM_LOCKS];
 } __attribute__((aligned(CACHE_LINE_SIZE))) RdbChunkLoadThreadArgs;
-
-void initRdbBufferPool(void);
-void destroyRdbBufferPool(void);
 
 int offloadRDBChunkToThread(
     rio *rdb_main_stream,         
@@ -112,7 +110,16 @@ int offloadRDBChunkToThread(
     pthread_mutex_t *db_insert_mutexes
 
 );
-extern sem_t rdb_buffer_pool_sem;
+
+/* Global state variable to signal a loading error. */
 extern _Atomic int rdb_load_thread_error;
+
+/* ----- Thread Management Functions ----- */
+
+void initRDBThreads(int per_thread_queue_size);
+void killRDBThreads(void);
+void drainRDBThreadsQueue(void);
+void startRDBThreads(void);
+void stopRDBThreads(void);
 
 #endif // __RDB_THREADS_H__

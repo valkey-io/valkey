@@ -3514,8 +3514,7 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
         killRDBThreads();
         for (int i = 0; i < NUM_LOCKS; i++) pthread_mutex_destroy(&db_insert_mutexes[i]);
         zfree(db_insert_mutexes);
-        // destroyRdbBufferPool();
-        // sem_destroy(&rdb_buffer_pool_sem);
+
     }
     if (empty_keys_skipped) {
         serverLog(LL_NOTICE, "Done loading RDB, keys loaded: %lld, keys expired: %lld, empty keys skipped: %lld.",
@@ -3541,7 +3540,6 @@ eoferr:
         killRDBThreads();
         for (int i = 0; i < NUM_LOCKS; i++) pthread_mutex_destroy(&db_insert_mutexes[i]);
         zfree(db_insert_mutexes);
-        destroyRdbBufferPool();
     }
 
     return C_ERR;

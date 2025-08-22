@@ -3405,6 +3405,13 @@ void parseMultibulkBuffer(client *c) {
         return;
     }
 
+    if (isReplicatedClient(c)) {
+        /* TODO: some change is required for replication offset which is
+         * computed from c->qb_pos, assuming we only parse one command at a
+         * time. Disable multi-command parsing for replication for now. */
+        return;
+    }
+
     /* Try parsing pipelined commands. */
     cmdQueue *queue = &c->cmd_queue;
     serverAssert(queue->len == 0);

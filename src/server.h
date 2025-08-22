@@ -1234,6 +1234,26 @@ typedef struct ClientModuleData {
                                                 * unloaded for cleanup. Opaque for the Server Core.*/
 } ClientModuleData;
 
+/* Parser state and parse result of a command from a client's input buffer. */
+typedef struct parsedCommand {
+    int read_flags; /* complete, error or 0 (parsing not complete) */
+    int argc;
+    robj **argv;
+    int argv_len;
+    int slot;
+    size_t argv_len_sum;
+    unsigned long long input_bytes;
+    struct serverCommand *cmd;
+} parsedCommand;
+
+/* Queue of parsed commands. */
+typedef struct {
+    parsedCommand *cmds;
+    uint16_t len; /* Number of elements in the queue. */
+    uint16_t off; /* Offset to the next element to execute. */
+    uint16_t cap; /* Allocation size (capacity) of the ps array. */
+} cmdQueue;
+
 typedef struct LastWrittenBuf {
     char *buf;       /* Last buffer that has been written to the client connection
                       * Last buffer is either c->buf or c->reply list node (i.e. buf from a clientReplyBlock) */
@@ -1260,6 +1280,7 @@ typedef struct client {
     int multibulklen;    /* Number of multi bulk arguments left to read. */
     long bulklen;        /* Length of bulk argument in multi bulk request. */
     long long woff;      /* Last write global replication offset. */
+    cmdQueue cmd_queue;  /* Parsed commands queue */
     /* Command execution state and command information */
     struct serverCommand *cmd;        /* Current command. */
     struct serverCommand *lastcmd;    /* Last command executed. */
@@ -2745,6 +2766,7 @@ void dictVanillaFree(void *val);
 #define READ_FLAGS_BAD_ARITY (1 << 18)
 #define READ_FLAGS_NO_KEYS (1 << 19)
 #define READ_FLAGS_CROSSSLOT (1 << 20)
+#define READ_FLAGS_PREFETCHED (1 << 21)
 
 /* Write flags for various write errors and states */
 #define WRITE_FLAGS_WRITE_ERROR (1 << 0)
@@ -3278,6 +3300,7 @@ size_t freeMemoryGetNotCountedMemory(void);
 int overMaxmemoryAfterAlloc(size_t moremem);
 uint64_t getCommandFlags(client *c);
 void prepareCommand(client *c);
+void prepareCommandQueue(client *c);
 void unprepareCommand(client *c);
 int processCommand(client *c);
 int processPendingCommandAndInputBuffer(client *c);

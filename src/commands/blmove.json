@@ -60,7 +60,7 @@
                     "type": "string"
                 },
                 {
-                    "description": "Operation timed-out",
+                    "description": "Operation timed-out or the source does not exist.",
                     "type": "null"
                 }
             ]

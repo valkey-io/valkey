@@ -327,7 +327,7 @@ typedef struct {
 typedef struct BucketLocation {
     uint8_t table_index;
     size_t bucket_index;
-    uint8_t valid;
+    uint8_t valid; /* Is the bucket location valid? (1=yes, 0=no) */
 } BucketLocation;
 
 static_assert(sizeof(hashtablePosition) >= sizeof(position),
@@ -2176,13 +2176,13 @@ static size_t BucketLocationToLogicalBucketIndex(hashtable *ht, BucketLocation b
  * (At this point, B0's entire chain is processed.)
  *
  * 2. The NEXT call after B0's chain is exhausted:
- * - STRIIDE! Jumps 2 logical buckets forward.
+ * - STRIDE! Jumps 2 logical buckets forward.
  * - Starts returning elements from [B2].
  * - If [B2] is chained, subsequent calls return elements from (C2).
  * (At this point, B2's entire chain is processed.)
  *
  * 3. The NEXT call after B2's chain is exhausted:
- * - STRIIDE! Jumps 2 logical buckets forward.
+ * - STRIDE! Jumps 2 logical buckets forward.
  * - Starts returning elements from [B4].
  * - If [B4] is chained, subsequent calls return elements from (C4).
  * (At this point, B4's entire chain is processed.)

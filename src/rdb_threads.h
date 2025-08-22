@@ -4,12 +4,21 @@
 #include "server.h"
 #include "thread_common.h"
 
-/* Threshold for flushing a worker's buffer to the main RDB file (64 KB). */
+/*
+* Default threshold for flushing a worker's buffer to the target RIO (File or Replica Socket) (64 KB).
+* If the thread's buffer stores more than this amount of data AFTER an entire key-value pair has been
+* saved we will flush the buffer to the target RIO.
+*/
 #define WORKER_BUFFER_DEFAULT_SIZE 64 * (1024)
-/* Maximum capacity for a worker's buffer. Keys causing this limit to be exceeded are streamed directly to RDB file (256 KB). */
+/*
+* The maximum buffer size (256 KB).
+* If we exceed this limit during the saving of a single key value pair we 
+* will flush the buffer to the target RIO and stream the rest of the key value pair
+* directly to the RIO. This prevents "big keys" from consuming an unbounded amount of memory.
+*/
 #define WORKER_BUFFER_CAPACITY_LIMIT 256 * (1024)
 
-#define RDB_SAVE_JOB_QUEUE_SIZE 2 // Minimum size of JobQueue
+#define RDB_SAVE_JOB_QUEUE_SIZE 2 /* Minimum size of JobQueue */
 
 typedef struct RdbSaveThreadArgs RdbSaveThreadArgs;
 
@@ -28,15 +37,15 @@ typedef struct MainThreadRdbInfo {
 } MainThreadRdbInfo;
 
 typedef struct RdbSaveThreadArgs {
-    int dbid;                   // Database ID being saved
-    hashtable *ht;              // hashtable to be saved
-    BucketStride bucket_stride; // Defines what buckets in a hashtable the thread is responsible for
+    int dbid;                   /* Database ID being saved */
+    hashtable *ht;              /* hashtable to be saved */
+    BucketStride bucket_stride; /* Defines what buckets in a hashtable the thread is responsible for */
     atomic_long keys_processed;
     ssize_t bytes_written;
-    rio buf_to_target_rio;            // In-memory buffer (with max capacity) for key/val serialization
-    pthread_mutex_t *rdb_write_mutex; // Protects access to underlying mutex in buf_to_underlying_rio
+    rio buf_to_target_rio;            /* In-memory buffer (with max capacity) for key/val serialization */
+    pthread_mutex_t *rdb_write_mutex; /* Protects access to underlying mutex in buf_to_underlying_rio */
     int save_status;
-    MainThreadRdbInfo *main_thread_report_info; // Reporting info (only set for main thread's args)
+    MainThreadRdbInfo *main_thread_report_info; /* Reporting info (only set for main thread's args) */
 } RdbSaveThreadArgs;
 
 

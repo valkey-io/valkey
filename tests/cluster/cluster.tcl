@@ -133,6 +133,9 @@ proc create_cluster {masters slaves} {
 }
 
 proc cluster_allocate_with_continuous_slots {n} {
+    for {set j 0} {$j < $n} {incr j} {
+        unset -nocomplain slots_$j
+    }
     set slot 16383
     set avg [expr ($slot+1) / $n]
     while {$slot >= 0} {

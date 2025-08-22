@@ -851,7 +851,7 @@ void clusterCommandMigrateSlots(client *c) {
             goto cleanup;
         }
         if (source_node != server.cluster->myself) {
-            addReplyErrorFormat(c, "Slots are not served by myself.");
+            addReplyError(c, "Slots are not served by this node.");
             goto cleanup;
         }
 
@@ -894,6 +894,10 @@ void clusterCommandMigrateSlots(client *c) {
         if (!target_node) {
             addReplyErrorFormat(c, "Unknown node name: %s",
                                 (sds)c->argv[curr_index]->ptr);
+            goto cleanup;
+        }
+        if (target_node == server.cluster->myself) {
+            addReplyError(c, "Target node can not be this node.");
             goto cleanup;
         }
         curr_index++;

@@ -1371,7 +1371,6 @@ void clusterHandleSlotExportBackgroundSaveDone(int bgsaveerr) {
             continue;
         }
         if (bgsaveerr == C_OK) {
-            connNonBlock(job->client->conn);
             slotExportBeginStreaming(job);
         } else {
             serverLog(LL_WARNING,
@@ -1984,7 +1983,7 @@ void finishSlotMigrationJob(slotMigrationJob *job,
         slotExportTryUnpause();
         /* Fast fail the child process, which will be cleaned up fully in
          * checkChildrenDone. */
-        if (job->state == SLOT_EXPORT_SNAPSHOTTING) killRDBChild();
+        if (job->state == SLOT_EXPORT_SNAPSHOTTING) killSlotMigrationChild();
     }
     if (job->type == SLOT_MIGRATION_IMPORT &&
         job->state != SLOT_MIGRATION_JOB_SUCCESS) {

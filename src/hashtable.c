@@ -191,10 +191,6 @@ void hashtableSetResizePolicy(hashtableResizePolicy policy) {
 #error "Only 64-bit or 32-bit architectures are supported"
 #endif /* 64-bit vs 32-bit version */
 
-#ifndef static_assert
-#define static_assert _Static_assert
-#endif
-
 static_assert(100 * BUCKET_DIVISOR / BUCKET_FACTOR / ENTRIES_PER_BUCKET <= MAX_FILL_PERCENT_SOFT,
               "Expand must result in a fill below the soft max fill factor");
 static_assert(MAX_FILL_PERCENT_SOFT <= MAX_FILL_PERCENT_HARD, "Soft vs hard fill factor");

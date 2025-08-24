@@ -58,7 +58,7 @@
 #endif
 
 #ifndef static_assert
-#define static_assert(expr, lit) extern char __static_assert_failure[(expr) ? 1 : -1]
+#define static_assert _Static_assert
 #endif
 
 #include "ae.h"         /* Event driven programming library */

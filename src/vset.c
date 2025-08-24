@@ -11,10 +11,6 @@
 #include <stdint.h>
 #include <stdlib.h>
 
-#ifndef static_assert
-#define static_assert _Static_assert
-#endif
-
 /*
  *-----------------------------------------------------------------------------
  * Volatile Set - Adaptive, Expiry-aware Set Structure

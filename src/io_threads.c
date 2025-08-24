@@ -6,7 +6,7 @@
 
 #include "io_threads.h"
 
-static __thread int thread_id = 0; /* Thread local var */
+static _Thread_local int thread_id = 0; /* Thread local var */
 static pthread_t io_threads[IO_THREADS_MAX_NUM] = {0};
 static pthread_mutex_t io_threads_mutex[IO_THREADS_MAX_NUM];
 

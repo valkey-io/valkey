@@ -87,7 +87,7 @@ static pthread_mutex_t bio_mutex[BIO_WORKER_NUM];
 static pthread_cond_t bio_newjob_cond[BIO_WORKER_NUM];
 static list *bio_jobs[BIO_WORKER_NUM];
 static unsigned long bio_jobs_counter[BIO_NUM_OPS] = {0};
-static __thread unsigned long bio_thread_id = 0;
+static _Thread_local unsigned long bio_thread_id = 0;
 
 /* This structure represents a background Job. It is only used locally to this
  * file as the API does not expose the internals at all. */

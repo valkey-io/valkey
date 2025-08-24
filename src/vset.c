@@ -793,7 +793,7 @@ static inline vsetBucket *vsetBucketFromRax(rax *r) {
 /* Since we do not have native posix support for qsort_r, we use this variable to help the vset
  * compare function operate entry comparison given a dynamic getExpiry function is passed to
  * different vset functions. */
-static __thread vsetGetExpiryFunc current_getter_func;
+static _Thread_local vsetGetExpiryFunc current_getter_func;
 
 static inline void vsetSetExpiryGetter(vsetGetExpiryFunc f) {
     assert(current_getter_func == NULL);

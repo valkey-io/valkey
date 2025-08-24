@@ -149,7 +149,7 @@ static int parseMultibulk(client *c,
                           unsigned long long *net_input_bytes_curr_cmd);
 
 int ProcessingEventsWhileBlocked = 0; /* See processEventsWhileBlocked(). */
-__thread sds thread_shared_qb = NULL;
+_Thread_local sds thread_shared_qb = NULL;
 
 typedef enum {
     PARSE_OK = 0,

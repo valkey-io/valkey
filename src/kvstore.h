@@ -87,6 +87,11 @@ bool kvstoreHashtableAdd(kvstore *kvs, int didx, void *entry);
 
 bool kvstoreHashtableFindPositionForInsert(kvstore *kvs, int didx, void *key, hashtablePosition *position, void **existing);
 void kvstoreHashtableInsertAtPosition(kvstore *kvs, int didx, void *entry, void *position);
+typedef struct RdbLoadThreadContext RdbLoadThreadContext;
+void kvstoreHashtableInsertAtPosition_threadsafe(kvstore *kvs, int didx, void *entry, void *position, RdbLoadThreadContext *ctx, int counter_type);
+void trackKeyAdd_threadsafe(RdbLoadThreadContext *ctx, int didx, int counter_type);
+hashtable *createHashtableIfNeeded(kvstore *kvs, int didx);
+void cumulativeKeyCountAdd(kvstore *kvs, int didx, long delta);
 
 void **kvstoreHashtableTwoPhasePopFindRef(kvstore *kvs, int didx, const void *key, void *position);
 void kvstoreHashtableTwoPhasePopDelete(kvstore *kvs, int didx, void *position);

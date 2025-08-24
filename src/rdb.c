@@ -3075,6 +3075,41 @@ int rdbLoadRioWithLoadingCtxScopedRdb(rio *rdb, int rdbflags, rdbSaveInfo *rsi, 
     return retval;
 }
 
+
+/*
+ * Waits for worker threads to finish their in-flight jobs, aggregates the key
+ * counts for a specific slot from all thread contexts, and applies the final
+ * count to the database.
+ */
+static void aggregateSlotCounts(serverDb *db, int slot_id, RdbLoadThreadContext *contexts) {
+    if (slot_id < 0) return; // Nothing to aggregate yet.
+
+    serverLog(LL_VERBOSE, "Aggregating key counts for slot %d", slot_id);
+
+    /* 1. Wait for all in-flight jobs (chunks from the previous slot) to complete. */
+    drainRDBThreadsQueue();
+    if (atomic_load_explicit(&rdb_load_thread_error, memory_order_relaxed)) {
+        serverLog(LL_WARNING, "Worker thread error detected. Skipping aggregation for slot %d.", slot_id);
+        return;
+    }
+
+    /* 2. Aggregate the counts for the specific slot from all threads (including main at index 0). */
+    long long main_delta = 0;
+    long long volatile_delta = 0;
+    for (int i = 0; i < server.rdb_threads_num; i++) {
+        main_delta += contexts[i].main_keys_delta;
+        volatile_delta += contexts[i].volatile_keys_delta;
+    }
+
+    /* 3. Apply the final, aggregated counts to the correct slot/didx. */
+    if (main_delta != 0) {
+        cumulativeKeyCountAdd(db->keys, slot_id, main_delta);
+    }
+    if (volatile_delta != 0) {
+        cumulativeKeyCountAdd(db->keys_with_volatile_items, slot_id, volatile_delta);
+    }
+}
+
 /* Load an RDB file from the rio stream 'rdb'. On success C_OK is returned,
  * otherwise C_ERR is returned.
  * The rdb_loading_ctx argument holds objects to which the rdb will be loaded to,
@@ -3119,19 +3154,27 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
     long long lru_idle = -1, lfu_freq = -1, expiretime = -1, now = mstime();
     long long lru_clock = LRU_CLOCK();
 
-    pthread_mutex_t *db_insert_mutexes = NULL;
-
+    /* USED FOR TRACKING WILL BE REMOVED */
     long long start_time = ustime();
+
+    pthread_mutex_t *db_insert_mutexes = NULL;
+    RdbLoadThreadContext *rdb_thread_contexts = NULL;
+
 
     if (server.rdb_threads_num > 1) {
         atomic_store_explicit(&rdb_load_thread_error, 0, memory_order_relaxed); /* Allows threads to report errors */
         db_insert_mutexes = zmalloc(sizeof(pthread_mutex_t) * NUM_LOCKS);
         for (int i = 0; i < NUM_LOCKS; i++) pthread_mutex_init(&db_insert_mutexes[i], NULL);
 
+        rdb_thread_contexts = zmalloc(sizeof(RdbLoadThreadContext) * server.rdb_threads_num);
+            for (int i = 0; i < server.rdb_threads_num; i++) {
+                rdb_thread_contexts[i].current_slot = 0;
+        }
         serverLog(LL_NOTICE, "Starting RDB Threads for Load. rdb-threads: %d", server.rdb_threads_num);
         initRDBThreads(RDB_LOAD_JOB_QUEUE_SIZE); // Random number of tasks for now
         startRDBThreads();
     }
+    int slot_to_aggregate = -1;
 
     while (1) {
         sds key;
@@ -3223,7 +3266,7 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
 
                 if (server.rdb_threads_num > 1) {
                     serverAssert(chunk_size > 0);
-                    if (offloadRDBChunkToThread(rdb, chunk_size, rdbver, db, rdbflags, dbid, lru_clock, now, db_insert_mutexes) == C_ERR) {
+                    if (offloadRDBChunkToThread(rdb, chunk_size, rdbver, db, rdbflags, dbid, lru_clock, now, db_insert_mutexes, rdb_thread_contexts) == C_ERR) {
                         serverLog(LL_WARNING, "Failed to offload RDB chunk to thread");
                         decrRefCount(auxkey);
                         decrRefCount(auxval);
@@ -3276,6 +3319,18 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
                     if (server.cluster_enabled) {
                         /* In cluster mode we resize individual slot specific dictionaries based on the number of keys that
                          * slot holds. */
+                        if (server.rdb_threads_num > 1) {
+                            // Aggregate counts for the slot we just finished processing.
+                            aggregateSlotCounts(db, slot_to_aggregate, rdb_thread_contexts);
+
+                            // Reset all contexts for the new slot.
+                            for (int i = 0; i < server.rdb_threads_num; i++) {
+                                rdb_thread_contexts[i].current_slot = slot_id;
+                                rdb_thread_contexts[i].main_keys_delta = 0;
+                                rdb_thread_contexts[i].volatile_keys_delta = 0;
+                            }
+                            slot_to_aggregate = slot_id;
+                        }
                         kvstoreHashtableExpand(db->keys, slot_id, slot_size);
                         kvstoreHashtableExpand(db->expires, slot_id, expires_slot_size);
                         should_expand_db = 0;
@@ -3504,7 +3559,8 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
         }
     }
     if (server.rdb_threads_num > 1) {
-        drainRDBThreadsQueue();
+        aggregateSlotCounts(db, slot_to_aggregate, rdb_thread_contexts);
+
         if (atomic_load_explicit(&rdb_load_thread_error, memory_order_relaxed)) {
             serverLog(LL_WARNING, "RDB load failed in worker thread(s).");
             goto eoferr;
@@ -3512,7 +3568,7 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
         killRDBThreads();
         for (int i = 0; i < NUM_LOCKS; i++) pthread_mutex_destroy(&db_insert_mutexes[i]);
         zfree(db_insert_mutexes);
-
+        zfree(rdb_thread_contexts);
     }
     if (empty_keys_skipped) {
         serverLog(LL_NOTICE, "Done loading RDB, keys loaded: %lld, keys expired: %lld, empty keys skipped: %lld.",
@@ -3538,10 +3594,12 @@ eoferr:
         killRDBThreads();
         for (int i = 0; i < NUM_LOCKS; i++) pthread_mutex_destroy(&db_insert_mutexes[i]);
         zfree(db_insert_mutexes);
+        zfree(rdb_thread_contexts);
     }
 
     return C_ERR;
 }
+
 
 /* Like rdbLoadRio() but takes a filename instead of a rio stream. The
  * filename is open for reading and a rio stream object created in order

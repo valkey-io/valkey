@@ -47,6 +47,7 @@
 #include "serverassert.h"
 #include "dict.h"
 #include "monotonic.h"
+#include "rdb_threads.h"
 
 #define UNUSED(V) ((void)V)
 
@@ -152,7 +153,7 @@ int kvstoreIsImporting(kvstore *kvs, int didx) {
 /* Updates binary index tree (also known as Fenwick tree), increasing key count for a given hashtable.
  * You can read more about this data structure here https://en.wikipedia.org/wiki/Fenwick_tree
  * Time complexity is O(log(kvs->num_hashtables)). */
-static void cumulativeKeyCountAdd(kvstore *kvs, int didx, long delta) {
+void cumulativeKeyCountAdd(kvstore *kvs, int didx, long delta) {
     /* Fast return for importing dictionaries, which will be accumulated in
      * metrics once we are done importing. */
     if (kvstoreIsImporting(kvs, didx)) {
@@ -185,7 +186,7 @@ static void cumulativeKeyCountAdd(kvstore *kvs, int didx, long delta) {
 }
 
 /* Create the hashtable if it does not exist and return it. */
-static hashtable *createHashtableIfNeeded(kvstore *kvs, int didx) {
+hashtable *createHashtableIfNeeded(kvstore *kvs, int didx) {
     hashtable *ht = kvstoreGetHashtable(kvs, didx);
     if (ht) return ht;
 
@@ -879,11 +880,6 @@ bool kvstoreHashtableFindPositionForInsert(kvstore *kvs, int didx, void *key, ha
     return hashtableFindPositionForInsert(ht, key, position, existing);
 }
 
-// bool kvstoreHashtableFindPositionForInsertFast(kvstore *kvs, int didx, void *key, hashtablePosition *position, void **existing) {
-//     hashtable *ht = createHashtableIfNeeded(kvs, didx);
-//     return hashtableFindPositionForInsertFast(ht, key, position, existing);
-// }
-
 /* Must be used together with kvstoreHashtableFindPositionForInsert, with returned
  * position and with the same didx. */
 void kvstoreHashtableInsertAtPosition(kvstore *kvs, int didx, void *entry, void *position) {
@@ -892,11 +888,27 @@ void kvstoreHashtableInsertAtPosition(kvstore *kvs, int didx, void *entry, void 
     cumulativeKeyCountAdd(kvs, didx, 1);
 }
 
-/* Must be used together with kvstoreHashtableFindPositionForInsert, with returned
- * position and with the same didx. */
-void kvstoreHashtableInsertAtPositionFast(kvstore *kvs, int didx, void *entry, void *position) {
+#define KVS_TYPE_MAIN_KEYS 0
+#define KVS_TYPE_VOLATILE_KEYS 1
+
+/* This is the core thread-safe counting function. It simply increments
+ * the delta for the given 'didx' in the thread's private context. */
+void trackKeyAdd_threadsafe(RdbLoadThreadContext *ctx, int didx, int counter_type) {
+    serverAssert(didx == ctx->current_slot);
+    if (counter_type == KVS_TYPE_MAIN_KEYS) {
+        ctx->main_keys_delta++;
+    } else { // KVS_TYPE_VOLATILE_KEYS
+        ctx->volatile_keys_delta++;
+    }
+}
+
+/* Thread-safe version of kvstoreHashtableInsertAtPosition.
+ * It performs the hashtable insertion and then tracks the count locally. */
+void kvstoreHashtableInsertAtPosition_threadsafe(kvstore *kvs, int didx, void *entry, void *position, RdbLoadThreadContext *ctx, int counter_type) {
     hashtable *ht = kvstoreGetHashtable(kvs, didx);
     hashtableInsertAtPosition(ht, entry, position);
+    /* Track the addition in our thread-local context using the provided flag. */
+    trackKeyAdd_threadsafe(ctx, didx, counter_type);
 }
 
 void **kvstoreHashtableTwoPhasePopFindRef(kvstore *kvs, int didx, const void *key, void *position) {

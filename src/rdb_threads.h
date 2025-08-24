@@ -22,7 +22,7 @@
 #define RDB_SAVE_JOB_QUEUE_SIZE 2
 
 /* The size of the RDB load job queue. */
-#define RDB_LOAD_JOB_QUEUE_SIZE 5 
+#define RDB_LOAD_JOB_QUEUE_SIZE 10
 
 /* The size of a batch of keys for loading. */
 #define RDB_LOAD_BATCH_SIZE 512
@@ -84,9 +84,16 @@ typedef struct RdbChunkBuffer {
     sds sds_chunk_buf;
 } RdbChunkBuffer;
 
+typedef struct RdbLoadThreadContext {
+    long long main_keys_delta;      /* Delta for the currently active slot */
+    long long volatile_keys_delta;  /* Delta for the currently active slot */
+    int       current_slot;         /* The slot these deltas are for */
+} RdbLoadThreadContext;
+
 /* Arguments for a worker thread responsible for loading an RDB chunk. */
 typedef struct RdbChunkLoadThreadArgs {
     rio *rdb;
+    RdbLoadThreadContext *rdb_thread_context;
     serverDb *db;
     int rdbflags;
     int current_dbid;
@@ -107,9 +114,10 @@ int offloadRDBChunkToThread(
     int current_dbid,
     long long lru_clock,
     long long now,
-    pthread_mutex_t *db_insert_mutexes
-
+    pthread_mutex_t *db_insert_mutexes,
+    RdbLoadThreadContext *rdb_thread_contexts
 );
+
 
 /* Global state variable to signal a loading error. */
 extern _Atomic int rdb_load_thread_error;

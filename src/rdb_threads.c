@@ -412,7 +412,8 @@ void flush_rdb_batch(
     serverDb *db,
     int rdbflags,
     int current_dbid,
-    long long lru_clock) {
+    long long lru_clock,
+    RdbLoadThreadContext *ctx) {
     if (batch_count == 0) return;
 
     for (int i = 0; i < batch_count; i++) {
@@ -445,13 +446,13 @@ void flush_rdb_batch(
         /* insert path */
         robj keyobj_temp;
         initStaticStringObject(keyobj_temp, item->key_sds);
-        int added = dbAddRDBLoad(db, item->key_sds, &item->val_obj);
-        server.rdb_last_load_keys_loaded++;
+        int added = dbAddRDBLoad_threadsafe(db, item->key_sds, &item->val_obj, ctx);
+        // server.rdb_last_load_keys_loaded++;
 
         if (!added) {
             if (rdbflags & RDBFLAGS_ALLOW_DUP) {
                 dbSyncDelete(db, &keyobj_temp);
-                added = dbAddRDBLoad(db, item->key_sds, &item->val_obj);
+                added = dbAddRDBLoad_threadsafe(db, item->key_sds, &item->val_obj, ctx);
                 serverAssert(added);
             } else {
                 serverLog(LL_WARNING, "RDB duplicated key '%s' in DB %d", item->key_sds, db->id);
@@ -484,6 +485,9 @@ void processRDBChunk(void *arg) {
     const int current_dbid = ta->current_dbid;
     const int rdbver = ta->rdbver;
     long long lru_clock = ta->lru_clock;
+
+    RdbLoadThreadContext *ctx = ta->rdb_thread_context;
+    serverAssert(ctx != NULL);
 
     int type, error;
     sds key_sds = NULL;
@@ -584,7 +588,7 @@ void processRDBChunk(void *arg) {
                 // This batch is full, we must try to flush it.
                 if (pthread_mutex_trylock(&ta->db_insert_mutexes[lock_idx]) == 0) {
                     // Success! Flush it now.
-                    flush_rdb_batch(ta->batch_buffers[lock_idx], ta->batch_counts[lock_idx], ta->db, ta->rdbflags, ta->current_dbid, ta->lru_clock);
+                    flush_rdb_batch(ta->batch_buffers[lock_idx], ta->batch_counts[lock_idx], ta->db, ta->rdbflags, ta->current_dbid, ta->lru_clock, ctx);
                     pthread_mutex_unlock(&ta->db_insert_mutexes[lock_idx]);
                     ta->batch_counts[lock_idx] = 0;
                 } else {
@@ -595,7 +599,7 @@ void processRDBChunk(void *arg) {
                     for (int i = 0; i < NUM_LOCKS; i++) {
                         if (i != lock_idx && ta->batch_counts[i] > 0) {
                             if (pthread_mutex_trylock(&ta->db_insert_mutexes[i]) == 0) {
-                                flush_rdb_batch(ta->batch_buffers[i], ta->batch_counts[i], ta->db, ta->rdbflags, ta->current_dbid, ta->lru_clock);
+                                flush_rdb_batch(ta->batch_buffers[i], ta->batch_counts[i], ta->db, ta->rdbflags, ta->current_dbid, ta->lru_clock, ctx);
                                 pthread_mutex_unlock(&ta->db_insert_mutexes[i]);
                                 ta->batch_counts[i] = 0;
                             }
@@ -603,7 +607,7 @@ void processRDBChunk(void *arg) {
                     }
                     // After trying to flush other batches, we MUST now block on the full one.
                     pthread_mutex_lock(&ta->db_insert_mutexes[lock_idx]);
-                    flush_rdb_batch(ta->batch_buffers[lock_idx], ta->batch_counts[lock_idx], ta->db, ta->rdbflags, ta->current_dbid, ta->lru_clock);
+                    flush_rdb_batch(ta->batch_buffers[lock_idx], ta->batch_counts[lock_idx], ta->db, ta->rdbflags, ta->current_dbid, ta->lru_clock, ctx);
                     pthread_mutex_unlock(&ta->db_insert_mutexes[lock_idx]);
                     ta->batch_counts[lock_idx] = 0;
                 }
@@ -617,7 +621,7 @@ void processRDBChunk(void *arg) {
         for (int i = 0; i < NUM_LOCKS; i++) {
             if (ta->batch_counts[i] > 0) {
                 if (pthread_mutex_trylock(&ta->db_insert_mutexes[i]) == 0) {
-                    flush_rdb_batch(ta->batch_buffers[i], ta->batch_counts[i], ta->db, ta->rdbflags, ta->current_dbid, ta->lru_clock);
+                    flush_rdb_batch(ta->batch_buffers[i], ta->batch_counts[i], ta->db, ta->rdbflags, ta->current_dbid, ta->lru_clock, ctx);
                     pthread_mutex_unlock(&ta->db_insert_mutexes[i]);
                     ta->batch_counts[i] = 0; // Mark this batch as flushed
                 } else {
@@ -668,13 +672,15 @@ int offloadRDBChunkToThread(
     int current_dbid,
     long long lru_clock,
     long long now,
-    pthread_mutex_t *db_insert_mutexes) {
+    pthread_mutex_t *db_insert_mutexes,
+    RdbLoadThreadContext *rdb_thread_contexts /* CHANGED: Correctly takes the array of contexts */
+) {
     serverAssert(server.rdb_threads_num >= 2);
     serverAssert(chunk_size > 0);
-    
+
     /* 1: Check for any loading errors */
     if (atomic_load(&rdb_load_thread_error) == 1) return C_ERR;
-    
+
     /* 2: Load the chunk into a buffer for processing in a thread */
     rio *chunk_rio = zmalloc(sizeof(rio));
     sds sds_chunk_buf = sdsnewlen(NULL, chunk_size);
@@ -719,6 +725,9 @@ int offloadRDBChunkToThread(
         size_t idx = 1 + ((start - 1 + tries) % num_workers);
         JobQueue *jq = &rdb_jobs[idx];
         if (!JobQueue_isFull(jq)) {
+            /* Assign this worker's context to the job arguments */
+            thread_args->rdb_thread_context = &rdb_thread_contexts[idx];
+
             JobQueue_push(jq, processRDBChunk, thread_args);
             next_worker_thread_idx_to_try = (idx % num_workers) + 1;
             return C_OK;
@@ -729,6 +738,10 @@ int offloadRDBChunkToThread(
 
     /* 5: All queues full → process synchronously in main thread */
     serverLog(LL_DEBUG, "All worker queues busy; processing RDB chunk (%luB) in main thread", chunk_size);
+
+    /* ADDED: Assign the main thread's context (at index 0) */
+    thread_args->rdb_thread_context = &rdb_thread_contexts[0];
+
     processRDBChunk((void *)thread_args);
     return C_OK;
 }

@@ -37,6 +37,7 @@
 #include "module.h"
 #include "vector.h"
 #include "expire.h"
+#include "rdb_threads.h"
 
 /*-----------------------------------------------------------------------------
  * C-level DB API
@@ -304,24 +305,36 @@ int dbAddRDBLoad(serverDb *db, sds key, robj **valref) {
     return 1;
 }
 
-int dbAddRDBLoadFast(serverDb *db, sds key, robj **valref) {
+#define KVS_TYPE_MAIN_KEYS 0
+#define KVS_TYPE_VOLATILE_KEYS 1
+/*
+ * The main thread-safe function for adding a key from an RDB file.
+ * It coordinates calls to other thread-safe helpers.
+ */
+int dbAddRDBLoad_threadsafe(serverDb *db, sds key, robj **valref, RdbLoadThreadContext *ctx) {
     int dict_index = getKVStoreIndexForKey(key);
     hashtablePosition pos;
+
+    /* Find the insertion position. This is read-only and safe. */
     if (!kvstoreHashtableFindPositionForInsert(db->keys, dict_index, key, &pos, NULL)) {
-        return 0;
+        return 0; /* Key already exists */
     }
+
     robj *val = *valref;
     val = objectSetKeyAndExpire(val, key, -1);
-    kvstoreHashtableInsertAtPosition(db->keys, dict_index, val, &pos);
+
+    /* * Perform the insertion and pass the correct flag to track the count
+     * in the main keys delta array.
+     */
+    kvstoreHashtableInsertAtPosition_threadsafe(db->keys, dict_index, val, &pos, ctx, KVS_TYPE_MAIN_KEYS);
     initObjectLRUOrLFU(val);
 
-    /* Track hash objects containing volatile items, created by rdbLoadObject (which lacks DB context). */
-    dbTrackKeyWithVolatileItems(db, val);
+    /* Track hash objects with volatile items using the thread-safe version. */
+    dbTrackKeyWithVolatileItems_threadsafe(db, val, ctx);
 
     *valref = val;
     return 1;
 }
-
 
 /* Overwrite an existing key with a new value.
  *
@@ -546,6 +559,19 @@ void dbTrackKeyWithVolatileItems(serverDb *db, robj *o) {
     if (o->type == OBJ_HASH && hashTypeHasVolatileFields(o)) {
         int dict_index = getKVStoreIndexForKey(objectGetKey(o));
         kvstoreHashtableAdd(db->keys_with_volatile_items, dict_index, o);
+    }
+}
+
+/* Thread-safe version of dbTrackKeyWithVolatileItems. */
+void dbTrackKeyWithVolatileItems_threadsafe(serverDb *db, robj *o, RdbLoadThreadContext *ctx) {
+    if (o->type == OBJ_HASH && hashTypeHasVolatileFields(o)) {
+        int dict_index = getKVStoreIndexForKey(objectGetKey(o));
+        hashtable *ht = createHashtableIfNeeded(db->keys_with_volatile_items, dict_index);
+        
+        if (hashtableAdd(ht, o)) {
+            /* If added, track it locally in the volatile keys counter. */
+            trackKeyAdd_threadsafe(ctx, dict_index, KVS_TYPE_VOLATILE_KEYS);
+        }
     }
 }
 

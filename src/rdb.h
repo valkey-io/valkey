@@ -112,10 +112,15 @@ enum RdbType {
     RDB_TYPE_STREAM_LISTPACKS_2 = 19,
     RDB_TYPE_SET_LISTPACK = 20,
     RDB_TYPE_STREAM_LISTPACKS_3 = 21,
-    RDB_TYPE_HASH_2 = 22,
+    RDB_TYPE_HASH_2 = 22, /* Hash with field-level expiration (Valkey 9.0) */
     RDB_TYPE_LAST
 };
 /* NOTE: WHEN ADDING NEW RDB TYPE, UPDATE rdb_type_string[] */
+
+/* When our RDB format diverges, we need to reject types/opcodes for which we
+ * may have assigned a different meaning compared to other implementations. */
+#define RDB_LAST_SUPPORTED_FOREIGN_TYPE 21
+#define RDB_FIRST_SUPPORTED_FOREIGN_OPCODE 244
 
 typedef int (*ChildSnapshotFunc)(int req, rio *rdb, void *privdata);
 typedef struct rdbSnapshotOptions {
@@ -132,6 +137,7 @@ typedef struct rdbSnapshotOptions {
 #define rdbIsObjectType(t) (((t) >= 0 && (t) <= 7) || ((t) >= 9 && (t) < RDB_TYPE_LAST))
 
 /* Special RDB opcodes (saved/loaded with rdbSaveType/rdbLoadType). */
+#define RDB_OPCODE_SLOT_INFO 244       /* Slot info, to ignore (foreign rdb only) */
 #define RDB_OPCODE_FUNCTION2 245       /* function library data */
 #define RDB_OPCODE_FUNCTION_PRE_GA 246 /* old function library data for 7.0 rc1 and rc2 */
 #define RDB_OPCODE_MODULE_AUX 247      /* Module auxiliary data. */

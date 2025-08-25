@@ -166,8 +166,9 @@ int verifyDumpPayload(unsigned char *p, size_t len, uint16_t *rdbver_ptr) {
     if (rdbver_ptr) {
         *rdbver_ptr = rdbver;
     }
-    if ((rdbver >= RDB_FOREIGN_VERSION_MIN && rdbver <= RDB_FOREIGN_VERSION_MAX) ||
-        (rdbver > RDB_VERSION && server.rdb_version_check == RDB_VERSION_CHECK_STRICT)) {
+    if (server.rdb_version_check == RDB_VERSION_CHECK_STRICT &&
+        (rdbver > RDB_VERSION ||
+         (rdbver >= RDB_FOREIGN_VERSION_MIN && rdbver <= RDB_FOREIGN_VERSION_MAX))) {
         return C_ERR;
     }
 
@@ -203,6 +204,7 @@ void dumpCommand(client *c) {
 /* RESTORE key ttl serialized-value [REPLACE] [ABSTTL] [IDLETIME seconds] [FREQ frequency] */
 void restoreCommand(client *c) {
     long long ttl, lfu_freq = -1, lru_idle = -1, lru_clock = -1;
+    uint16_t rdbver = 0;
     rio payload;
     int j, type, replace = 0, absttl = 0;
     robj *obj;
@@ -251,14 +253,27 @@ void restoreCommand(client *c) {
     }
 
     /* Verify RDB version and data checksum. */
-    if (verifyDumpPayload(c->argv[3]->ptr, sdslen(c->argv[3]->ptr), NULL) == C_ERR) {
+    if (verifyDumpPayload(c->argv[3]->ptr, sdslen(c->argv[3]->ptr), &rdbver) == C_ERR) {
         addReplyError(c, "DUMP payload version or checksum are wrong");
         return;
     }
 
     rioInitWithBuffer(&payload, c->argv[3]->ptr);
-    if (((type = rdbLoadObjectType(&payload)) == -1) ||
-        ((obj = rdbLoadObject(type, &payload, key->ptr, c->db->id, NULL)) == NULL)) {
+    type = rdbLoadObjectType(&payload);
+    if (type == -1) {
+        addReplyError(c, "Bad data format");
+        return;
+    }
+
+    /* If it's a foreign RDB format, the type may mean different thing to our type. */
+    if (rdbver >= RDB_FOREIGN_VERSION_MIN && rdbver <= RDB_FOREIGN_VERSION_MAX &&
+        type > RDB_LAST_SUPPORTED_FOREIGN_TYPE) {
+        addReplyError(c, "Unsupported data format");
+        return;
+    }
+
+    obj = rdbLoadObject(type, &payload, key->ptr, c->db->id, NULL);
+    if (obj == NULL) {
         addReplyError(c, "Bad data format");
         return;
     }

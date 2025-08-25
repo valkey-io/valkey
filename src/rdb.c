@@ -3103,6 +3103,15 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
         /* Read type. */
         if ((type = rdbLoadType(rdb)) == -1) goto eoferr;
 
+        /* Safeguard for unknown foreign opcode interpretations. */
+        if (is_redis_magic &&
+            type > RDB_LAST_SUPPORTED_FOREIGN_TYPE &&
+            type < RDB_FIRST_SUPPORTED_FOREIGN_OPCODE) {
+            serverLog(LL_WARNING, "Can't handle foreign type or opcode %d in RDB %d",
+                      type, rdbver);
+            return C_ERR;
+        }
+
         /* Handle special types. */
         if (type == RDB_OPCODE_EXPIRETIME) {
             /* EXPIRETIME: load an expire associated with the next key
@@ -3155,6 +3164,13 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
             if ((expires_size = rdbLoadLen(rdb, NULL)) == RDB_LENERR) goto eoferr;
             should_expand_db = 1;
             continue; /* Read next opcode. */
+        } else if (type == RDB_OPCODE_SLOT_INFO) {
+            /* Ignore foreign RDB slot info size annotations.
+             * slot_id, slot_size, expires_slot_size. */
+            if (rdbLoadLen(rdb, NULL) == RDB_LENERR) goto eoferr;
+            if (rdbLoadLen(rdb, NULL) == RDB_LENERR) goto eoferr;
+            if (rdbLoadLen(rdb, NULL) == RDB_LENERR) goto eoferr;
+            continue; /* Ignore gracefully. */
         } else if (type == RDB_OPCODE_AUX) {
             /* AUX: generic string-string fields. Use to add state to RDB
              * which is backward compatible. Implementations of RDB loading

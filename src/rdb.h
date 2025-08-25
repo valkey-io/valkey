@@ -119,8 +119,8 @@ enum RdbType {
 
 /* When our RDB format diverges, we need to reject types/opcodes for which we
  * may have assigned a different meaning compared to other implementations. */
-#define RDB_LAST_SUPPORTED_FOREIGN_TYPE 21
-#define RDB_FIRST_SUPPORTED_FOREIGN_OPCODE 244
+#define RDB_FOREIGN_TYPE_MIN 22
+#define RDB_FOREIGN_TYPE_MAX 243
 
 typedef int (*ChildSnapshotFunc)(int req, rio *rdb, void *privdata);
 typedef struct rdbSnapshotOptions {
@@ -136,8 +136,9 @@ typedef struct rdbSnapshotOptions {
 /* Test if a type is an object type. */
 #define rdbIsObjectType(t) (((t) >= 0 && (t) <= 7) || ((t) >= 9 && (t) < RDB_TYPE_LAST))
 
-/* Special RDB opcodes (saved/loaded with rdbSaveType/rdbLoadType). */
-#define RDB_OPCODE_SLOT_INFO 244       /* Slot info, to ignore (foreign rdb only) */
+/* Special RDB opcodes (saved/loaded with rdbSaveType/rdbLoadType).
+ * These are special RDB types, but they start from 255 and grow down. */
+#define RDB_OPCODE_SLOT_INFO 244       /* Foreign slot info, safe to ignore. */
 #define RDB_OPCODE_FUNCTION2 245       /* function library data */
 #define RDB_OPCODE_FUNCTION_PRE_GA 246 /* old function library data for 7.0 rc1 and rc2 */
 #define RDB_OPCODE_MODULE_AUX 247      /* Module auxiliary data. */

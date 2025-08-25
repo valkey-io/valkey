@@ -265,10 +265,11 @@ void restoreCommand(client *c) {
         return;
     }
 
-    /* If it's a foreign RDB format, the type may mean different thing to our type. */
+    /* If it's a foreign RDB format. Only accept old data types that we know the
+     * meaning of. */
     if (rdbver >= RDB_FOREIGN_VERSION_MIN && rdbver <= RDB_FOREIGN_VERSION_MAX &&
-        type > RDB_LAST_SUPPORTED_FOREIGN_TYPE) {
-        addReplyError(c, "Unsupported data format");
+        type >= RDB_FOREIGN_TYPE_MIN) {
+        addReplyError(c, "Unsupported foreign data format");
         return;
     }
 

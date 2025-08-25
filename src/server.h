@@ -477,6 +477,7 @@ typedef enum {
 
 /* Replica capability strings */
 #define REPLICA_CAPA_SKIP_RDB_CHECKSUM_STR "skip-rdb-checksum" /* Supports skipping RDB checksum for sync requests. */
+#define REPLICA_CAPA_MULTI_THREAD_RDB_TRANSFER " diskless-repl-threads" /* Supports multiple threads for diskless RDB Transfer*/
 
 /* Replica requirements */
 #define REPLICA_REQ_NONE 0

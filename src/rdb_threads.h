@@ -3,7 +3,6 @@
 
 #include "server.h"
 #include "thread_common.h"
-
 /*
 * Default threshold for flushing a worker's buffer to the target RIO (File or Replica Socket) (64 KB).
 * If the thread's buffer stores more than this amount of data AFTER an entire key-value pair has been
@@ -16,7 +15,7 @@
 * will flush the buffer to the target RIO and stream the rest of the key value pair
 * directly to the RIO. This prevents "big keys" from consuming an unbounded amount of memory.
 */
-#define WORKER_BUFFER_CAPACITY_LIMIT 8 * 1024 * (1024)
+#define WORKER_BUFFER_CAPACITY_LIMIT 4 * 1024 * (1024)
 
 /* Minimum size of JobQueue */
 #define RDB_SAVE_JOB_QUEUE_SIZE 2

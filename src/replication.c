@@ -3645,13 +3645,14 @@ int syncWithPrimaryHandleSendHandshakeState(connection *conn) {
      *                    using a connection that has integrity checks (such as TLS).
      *                    In non-diskless sync, or non-integrity-checked connection, there is more
      *                    concern for data corruprion so we keep this extra layer of detection.
+     * diskless-repl-threads: supports opening multiple threads for diskless replication
      *
      * The primary will ignore capabilities it does not understand. */
 
     // we can ignore primary's conditions when sending capa (is_primary_stream_verified=1)
     int send_skip_rdb_checksum_capa = replicationSupportSkipRDBChecksum(conn, useDisklessLoad(), 1);
-    char *argv[9] = {"REPLCONF", "capa", "eof", "capa", "psync2", NULL, NULL, NULL, NULL};
-    size_t lens[9] = {8, 4, 3, 4, 6, 0, 0, 0, 0};
+    char *argv[11] = {"REPLCONF", "capa", "eof", "capa", "psync2", NULL, NULL, NULL, NULL, NULL, NULL};
+    size_t lens[11] = {8, 4, 3, 4, 6, 0, 0, 0, 0, 0, 0};
     int argc = 5;
     if (send_skip_rdb_checksum_capa) {
         argv[argc] = "capa";
@@ -3667,6 +3668,14 @@ int syncWithPrimaryHandleSendHandshakeState(connection *conn) {
         argc++;
         argv[argc] = "dual-channel";
         lens[argc] = strlen("dual-channel");
+        argc++;
+    }
+    if (server.rdb_threads_num > 1) {
+        argv[argc] = "capa";
+        lens[argc] = strlen("capa");
+        argc++;
+        argv[argc] = REPLICA_CAPA_MULTI_THREAD_RDB_TRANSFER;
+        lens[argc] = strlen(REPLICA_CAPA_MULTI_THREAD_RDB_TRANSFER);
         argc++;
     }
     err = sendCommandArgv(conn, argc, argv, lens);

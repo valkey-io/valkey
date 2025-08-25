@@ -6,7 +6,7 @@
 
 #include "thread_common.h"
 
-static _Thread_local int thread_id = 0; /* Thread local var */
+_Thread_local int thread_id = 0; /* Thread local var */
 
 
 int inMainThread(void) {

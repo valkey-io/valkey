@@ -1963,6 +1963,7 @@ struct valkeyServer {
     char *rdb_filename;                   /* Name of RDB file */
     int rdb_threads_num;                  /* Number of threads (including the main thread) to use for RDB Save and RDB Load. */
     int active_rdb_threads_num;           /* Number of active RDB worker threads. This does not include the main thread. */
+    size_t rdb_save_mt_flush_size;        /* The size threshold for flushing a worker's buffer to the RIO. */
     int rdb_compression;                  /* Use compression in RDB? */
     int rdb_checksum;                     /* Use RDB checksum? */
     int rdb_del_sync_files;               /* Remove RDB files used only for SYNC if

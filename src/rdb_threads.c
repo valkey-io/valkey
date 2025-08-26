@@ -147,7 +147,11 @@ static RdbSaveThreadArgs *createRdbSaveThreadArgs(int num_threads, int dbid, rio
         threadArgs[i].ht = NULL; // Set by the main thread in rdbSaveDbMultiThreaded for each hashtable in the database
         threadArgs[i].bucket_stride = (BucketStride){.start_index = i, .stride_size = num_threads};
         atomic_init(&threadArgs[i].keys_processed, 0);
-        rioInitWithBufferToTarget(&threadArgs[i].buf_to_target_rio, sdsnewlen(SDS_NOINIT, WORKER_BUFFER_DEFAULT_SIZE), WORKER_BUFFER_CAPACITY_LIMIT, target_rio, shared_rdb_write_mutex);
+        rioInitWithBufferToTarget(&threadArgs[i].buf_to_target_rio,
+                                  sdsnewlen(SDS_NOINIT, server.rdb_save_mt_flush_size),
+                                  RDB_WORKER_BUFFER_CAPACITY_LIMIT,
+                                  target_rio,
+                                  shared_rdb_write_mutex);
         threadArgs[i].rdb_write_mutex = shared_rdb_write_mutex;
         threadArgs[i].save_status = C_OK;
 
@@ -231,7 +235,7 @@ void rdbEncodeHashtableRange(void *arg) {
             buf_to_target_rio->io.buf_to_target.cap_reached = 0;
             buf_to_target_rio->io.buf_to_target.pos = 0;
 
-        } else if ((size_t)buf_to_target_rio->io.buf_to_target.pos > (size_t)WORKER_BUFFER_DEFAULT_SIZE) {
+        } else if ((size_t)buf_to_target_rio->io.buf_to_target.pos > server.rdb_save_mt_flush_size) {
             /* We did not hit the memory cap, but we have buffered enough data to write out*/
             if (rioFlush(buf_to_target_rio) == 0) goto werr;
         }

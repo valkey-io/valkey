@@ -5,18 +5,30 @@
 #include "thread_common.h"
 
 /*
- * Default threshold for flushing a worker's buffer to the target RIO (File or Replica Socket) (64 KB).
+ * Threshold for flushing a worker's buffer to the target RIO (File or Replica Socket) (64 KB).
  * If the thread's buffer stores more than this amount of data AFTER an entire key-value pair has been
  * saved we will flush the buffer to the target RIO.
+ *
+ * Impact on Multi-Thread RDB Save Performance: Above 64 KB the performance of RDB Save is consistent.
+ *
+ * Impact on Multi-Thread RDB Load Performance: Since the buffer flush size defines the minimum "rdb-data-segment" size,
+ * saving with larger values will improve multi-thread load becuase we can request larger reads from the OS.
  */
-#define WORKER_BUFFER_DEFAULT_SIZE 64 * (1024)
+#define RDB_WORKER_FLUSH_SIZE_MIN (64 * 1024)           /* Min = 64 KB */
+#define RDB_WORKER_FLUSH_SIZE_DEFAULT (4 * 1024 * 1024) /* Default = 4 MB */
+#define RDB_WORKER_FLUSH_SIZE_MAX (8 * 1024 * 1024)     /* Max = 8 MB */
+
 /*
- * The maximum buffer size (256 KB).
- * If we exceed this limit during the saving of a single key value pair we
- * will flush the buffer to the target RIO and stream the rest of the key value pair
- * directly to the RIO. This prevents "big keys" from consuming an unbounded amount of memory.
+ * The maximum memory a single worker thread's buffer can consume
+ * before streaming directly to the RIO. This determines the upper bound
+ * on memory usage for RDB threads during save operations, which is
+ * (capacity * thread_count).
+ * Larger values increase memory usage but can improve performance with large keys.
+ *
+ * Having this limit is essential for preventing "big keys" from consuming an unbounded amount of memory.
  */
-#define WORKER_BUFFER_CAPACITY_LIMIT 256 * (1024)
+#define RDB_WORKER_BUFFER_CAPACITY_LIMIT (16 * 1024 * 1024)
+
 
 #define RDB_SAVE_JOB_QUEUE_SIZE 2 /* Minimum size of JobQueue */
 

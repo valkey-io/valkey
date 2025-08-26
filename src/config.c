@@ -35,6 +35,7 @@
 #include "bio.h"
 #include "module.h"
 #include "cluster_migrateslots.h"
+#include "rdb_threads.h"
 
 #include <fcntl.h>
 #include <sys/stat.h>
@@ -3388,6 +3389,7 @@ standardConfig static_configs[] = {
     createSizeTConfig("hll-sparse-max-bytes", NULL, MODIFIABLE_CONFIG, 0, LONG_MAX, server.hll_sparse_max_bytes, 3000, MEMORY_CONFIG, NULL, NULL),
     createSizeTConfig("tracking-table-max-keys", NULL, MODIFIABLE_CONFIG, 0, LONG_MAX, server.tracking_table_max_keys, 1000000, INTEGER_CONFIG, NULL, NULL),                                      /* Default: 1 million keys max. */
     createSizeTConfig("client-query-buffer-limit", NULL, DEBUG_CONFIG | MODIFIABLE_CONFIG, 1024 * 1024, LONG_MAX, server.client_max_querybuf_len, 1024 * 1024 * 1024, MEMORY_CONFIG, NULL, NULL), /* Default: 1GB max query buffer. */
+    createSizeTConfig("rdb-threads-min-flush-threshold", NULL, DEBUG_CONFIG | MODIFIABLE_CONFIG, RDB_WORKER_FLUSH_SIZE_MIN, RDB_WORKER_FLUSH_SIZE_MAX, server.rdb_save_mt_flush_size, RDB_WORKER_FLUSH_SIZE_DEFAULT, INTEGER_CONFIG, NULL, NULL),
     createSSizeTConfig("maxmemory-clients", NULL, MODIFIABLE_CONFIG, -100, SSIZE_MAX, server.maxmemory_clients, 0, MEMORY_CONFIG | PERCENT_CONFIG, NULL, applyClientMaxMemoryUsage),
     createSSizeTConfig("slot-migration-max-failover-repl-bytes", NULL, MODIFIABLE_CONFIG, -1, SSIZE_MAX, server.slot_migration_max_failover_repl_bytes, 0, MEMORY_CONFIG, NULL, NULL),
 

@@ -403,6 +403,35 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster} overrides {cluste
     set 16382_slot_tag "{4oi}"
     set 16383_slot_tag "{6ZJ}"
 
+    test "Slot migration won't migrate the functions" {
+        assert_does_not_resync {
+            # R 2 load a function then trigger a slot migration to R 0
+            populate 1 "$16383_slot_tag:" 1000 -2
+            R 2 function load {#!lua name=test
+                server.register_function('test', function() return 'hello1' end)
+            }
+
+            assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node0_id]
+            wait_for_migration 0 16383
+
+            # Make sure R 0 does not have any function.
+            assert_match {} [R 0 function list]
+
+            # R 0 load a function then migrate the slot back to R 2
+            R 0 function load {#!lua name=test
+                server.register_function('test', function() return 'hello1' end)
+            }
+            assert_match "OK" [R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node2_id]
+            wait_for_migration 2 16383
+
+            # Cleanup for next test
+            assert_match "OK" [R 0 FLUSHDB SYNC]
+            assert_match "OK" [R 0 FUNCTION FLUSH SYNC]
+            assert_match "OK" [R 2 FLUSHDB SYNC]
+            assert_match "OK" [R 2 FUNCTION FLUSH SYNC]
+        }
+    }
+
     test "Single source import - one shot" {
         assert_does_not_resync {
             # Populate data before migration

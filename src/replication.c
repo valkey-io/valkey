@@ -4543,6 +4543,10 @@ void replicationCachePrimary(client *c) {
     c->bufpos = 0;
     resetClient(c);
     resetClientIOState(c);
+    c->reqtype = 0;
+    c->multibulklen = 0;
+    c->bulklen = -1;
+    discardCommandQueue(c);
 
     /* Save the primary. Server.primary will be set to null later by
      * replicationHandlePrimaryDisconnection(). */

@@ -140,7 +140,6 @@ static int clientMatchesIpFilter(client *c, sds ip);
 static int clientMatchesCapaFilter(client *c, sds capa_filter);
 static void freeClientFilter(clientFilter *filter);
 static bool consumeCommandQueue(client *c);
-static void discardCommandQueue(client *c);
 static int parseMultibulk(client *c,
                           int *argc,
                           robj ***argv,
@@ -3856,7 +3855,7 @@ static bool consumeCommandQueue(client *c) {
     return true;
 }
 
-static void discardCommandQueue(client *c) {
+void discardCommandQueue(client *c) {
     cmdQueue *queue = &c->cmd_queue;
     while (queue->off < queue->len) {
         parsedCommand *p = &queue->cmds[queue->off++];

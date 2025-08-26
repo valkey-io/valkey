@@ -2303,7 +2303,11 @@ int rewriteSlotToAppendOnlyFileRio(rio *aof, int db_num, int hashslot, size_t *k
         if (key_count && ((*key_count)++ & 1023) == 0) {
             long long now = mstime();
             if (now - updated_time >= 1000) {
-                sendChildInfo(CHILD_INFO_TYPE_CURRENT_INFO, *key_count, "AOF rewrite");
+                if (aof->flags & RIO_FLAG_SLOT_MIGRATION_AOF) {
+                    sendChildInfo(CHILD_INFO_TYPE_CURRENT_INFO, *key_count, "Slot migration");
+                } else {
+                    sendChildInfo(CHILD_INFO_TYPE_CURRENT_INFO, *key_count, "AOF rewrite");
+                }
                 updated_time = now;
             }
         }

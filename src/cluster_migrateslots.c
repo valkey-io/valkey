@@ -1244,18 +1244,18 @@ int childSnapshotForSyncSlot(rio *aof, slotMigrationJob *job) {
     return C_OK;
 }
 
+/* Kill the slot migration child using SIGUSR1 (so that the parent will know
+ * the child did not exit for an error, but because we wanted), and performs
+ * the cleanup needed. */
 void killSlotMigrationChild(void) {
-    int statloc;
     /* No slot migration child? return. */
     if (server.child_type != CHILD_TYPE_SLOT_MIGRATION) return;
-    /* Kill slot migration child, wait for child exit. */
     serverLog(LL_NOTICE, "Killing running slot migration child: %ld", (long)server.child_pid);
-    if (kill(server.child_pid, SIGUSR1) != -1) {
-        while (waitpid(-1, &statloc, 0) != server.child_pid);
-    }
-    serverLog(LL_NOTICE, "Slot migration child %ld killed", (long)server.child_pid);
-    resetChildState();
-    clusterHandleSlotExportBackgroundSaveDone(C_ERR);
+
+    /* Because we are not using here waitpid (like we have in killAppendOnlyChild
+     * and TerminateModuleForkChild), all the cleanup operations is done by
+     * checkChildrenDone, that later will find that the process killed. */
+    kill(server.child_pid, SIGUSR1);
 }
 
 /* Begin the snapshot for the provided job in a child process. */
@@ -1290,6 +1290,7 @@ int slotExportJobBeginSnapshotToTargetSocket(slotMigrationJob *job) {
     if ((childpid = serverFork(CHILD_TYPE_SLOT_MIGRATION)) == 0) {
         /* Child */
         rio aof;
+        aof.flags |= RIO_FLAG_SLOT_MIGRATION_AOF;
         rioInitWithFd(&aof, slot_migration_pipe_write);
         /* Close the reading part, so that if the parent crashes, the child will
          * get a write error and exit. */
@@ -1301,7 +1302,7 @@ int slotExportJobBeginSnapshotToTargetSocket(slotMigrationJob *job) {
         int retval = childSnapshotForSyncSlot(&aof, job);
         if (retval == C_OK && rioFlush(&aof) == 0) retval = C_ERR;
         if (retval == C_OK) {
-            sendChildCowInfo(CHILD_INFO_TYPE_SLOT_MIGRATION_COW_SIZE, "slot migration");
+            sendChildCowInfo(CHILD_INFO_TYPE_SLOT_MIGRATION_COW_SIZE, "Slot migration");
         }
         rioFreeFd(&aof);
         /* wake up the reader, tell it we're done. */
@@ -1354,13 +1355,6 @@ void backgroundSlotMigrationDoneHandler(int exitcode, int bysignal) {
     server.slot_migration_pipe_buff = NULL;
     server.slot_migration_pipe_bufflen = 0;
 
-    clusterHandleSlotExportBackgroundSaveDone((!bysignal && exitcode == 0) ? C_OK : C_ERR);
-}
-
-/* Callback triggered after snapshot is finished. We either begin sending the
- * incremental contents or fail the associated migration. */
-void clusterHandleSlotExportBackgroundSaveDone(int bgsaveerr) {
-    if (!server.cluster_enabled) return;
     listIter li;
     listNode *ln;
     listRewind(server.cluster->slot_migration_jobs, &li);
@@ -1370,7 +1364,7 @@ void clusterHandleSlotExportBackgroundSaveDone(int bgsaveerr) {
         if (job->state != SLOT_EXPORT_SNAPSHOTTING) {
             continue;
         }
-        if (bgsaveerr == C_OK) {
+        if (!bysignal && exitcode == 0) {
             slotExportBeginStreaming(job);
         } else {
             serverLog(LL_WARNING,

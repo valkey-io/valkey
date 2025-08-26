@@ -25,7 +25,6 @@ void clusterCommandSyncSlots(client *c);
 void clusterCommandGetSlotMigrations(client *c);
 void clusterCommandCancelSlotMigrations(client *c);
 void backgroundSlotMigrationDoneHandler(int exitcode, int bysignal);
-void clusterHandleSlotExportBackgroundSaveDone(int bgsaveerr);
 void clusterUpdateSlotExportsOnOwnershipChange(void);
 void clusterUpdateSlotImportsOnOwnershipChange(void);
 void clusterCleanupSlotMigrationLog(void);

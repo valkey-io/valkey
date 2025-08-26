@@ -3575,6 +3575,10 @@ void backgroundSaveDoneHandler(int exitcode, int bysignal) {
  * the child did not exit for an error, but because we wanted), and performs
  * the cleanup needed. */
 void killRDBChild(void) {
+    /* No rdb child? return. */
+    if (server.child_type != CHILD_TYPE_RDB) return;
+    serverLog(LL_NOTICE, "Killing running RDB child: %ld", (long)server.child_pid);
+
     kill(server.child_pid, SIGUSR1);
     /* Because we are not using here waitpid (like we have in killAppendOnlyChild
      * and TerminateModuleForkChild), all the cleanup operations is done by

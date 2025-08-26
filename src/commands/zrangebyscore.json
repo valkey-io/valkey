@@ -12,11 +12,8 @@
                 "Added the `WITHSCORES` modifier."
             ]
         ],
-        "deprecated_since": "6.2.0",
         "replaced_by": "`ZRANGE` with the `BYSCORE` argument",
-        "doc_flags": [
-            "DEPRECATED"
-        ],
+        "doc_flags": [ ],
         "command_flags": [
             "READONLY"
         ],

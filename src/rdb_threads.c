@@ -3,14 +3,21 @@
  * All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  */
-
 #include "thread_common.h"
 #include "rdb_threads.h"
 #include "rdb.h"
+#include "module.h"
+
+/* --- Global RDB Thread Variables --- */
 
 static pthread_t rdb_threads[RDB_THREADS_MAX_NUM] = {0};
 static pthread_mutex_t rdb_threads_mutex[RDB_THREADS_MAX_NUM];
-JobQueue rdb_jobs[RDB_THREADS_MAX_NUM] = {0}; // Job queues for each RDB worker thread.
+
+/* Job queues for each RDB worker thread. */
+JobQueue rdb_jobs[RDB_THREADS_MAX_NUM] = {0};
+
+/* Global atomic flag to signal a fatal loading error from any worker.*/
+_Atomic int rdb_load_thread_error = 0;
 
 
 /* --------- RDB Worker Threads Core Logic --------- */
@@ -130,6 +137,34 @@ void initRDBThreads(int per_thread_queue_size) {
     /* Spawn and initialize the RDB threads. */
     for (int i = 1; i < server.rdb_threads_num; i++) {
         createRDBThread(i, per_thread_queue_size);
+    }
+}
+
+/* Releases the lock for each RDB Thread allowing them to begin their tasks.
+ * Must be called after initRDBthreads.
+ */
+void startRDBThreads(void) {
+    for (int id = 1; id < server.rdb_threads_num; id++) {
+        pthread_mutex_unlock(&rdb_threads_mutex[id]);
+    }
+}
+
+/* Stops the RDB Threads by aquireing the locks */
+void stopRDBThreads(void) {
+    for (int id = 1; id < server.rdb_threads_num; id++) {
+        pthread_mutex_lock(&rdb_threads_mutex[id]);
+    }
+}
+
+/* Drains all RDB thread queues, ensuring all jobs are processed before proceeding.
+ * Must be called from the main thread. */
+void drainRDBThreadsQueue(void) {
+    serverAssert(inMainThread());
+    for (int i = 1; i < RDB_THREADS_MAX_NUM; i++) { /* No need to drain thread 0, which is the main thread. */
+        while (!JobQueue_isEmpty(&rdb_jobs[i])) {
+            /* memory barrier acquire to get the latest job queue state */
+            atomic_thread_fence(memory_order_acquire);
+        }
     }
 }
 
@@ -286,18 +321,6 @@ werr:
 
 /* --------- Multithreaded RDB Save: Main Thread Orchestration --------- */
 
-/* Drains all RDB thread queues, ensuring all jobs are processed before proceeding.
- * Must be called from the main thread. */
-void drainRDBThreadsQueue(void) {
-    serverAssert(inMainThread());
-    for (int i = 1; i < RDB_THREADS_MAX_NUM; i++) { /* No need to drain thread 0, which is the main thread. */
-        while (!JobQueue_isEmpty(&rdb_jobs[i])) {
-            /* memory barrier acquire to get the latest job queue state */
-            atomic_thread_fence(memory_order_acquire);
-        }
-    }
-}
-
 /* Performs a multithreaded RDB save for a specific database. */
 ssize_t rdbSaveDbMultiThreaded(rio *rdb, int dbid, long *key_counter, char *pname) {
     serverAssert(server.rdb_threads_num > 1);
@@ -384,4 +407,304 @@ werr:
     kvstoreIteratorRelease(kvs_it);
     freeRdbSaveThreadArgs(server.rdb_threads_num, threadArgs);
     return -1;
+}
+
+
+/* --------- Multithreaded RDB Load: Worker Job Handler & Helpers --------- */
+
+static inline void freeRdbChunkLoadThreadArgs(RdbDataSegmentLoadArgs *args) {
+    if (!args) return;
+
+    if (args->data_segment_rio) {
+        if (args->data_segment_rio->io.buffer.ptr) sdsfree(args->data_segment_rio->io.buffer.ptr);
+        zfree(args->data_segment_rio);
+    }
+    zfree(args);
+}
+
+/* Inserts a batch of keys into the hashtable. This function assumes
+ * the calling thread has already acquired the `db_insert_mutex`,
+ * ensuring exclusive access to the hashtable.
+ */
+static void insertRdbKeyBatch(
+    RdbLoadedKey *batch_buffer,
+    int batch_count,
+    serverDb *db,
+    int dbid,
+    int rdbflags,
+    long long lru_clock,
+    long long now) {
+    for (int i = 0; i < batch_count; i++) {
+        RdbLoadedKey *item = &batch_buffer[i];
+
+        /* Handle keys that are already expired. */
+        if (iAmPrimary() && !(rdbflags & RDBFLAGS_AOF_PREAMBLE) && item->expiretime != -1 && item->expiretime < now) {
+            if (rdbflags & RDBFLAGS_FEED_REPL) {
+                serverAssert(server.repl_backlog != NULL && listLength(server.replicas) == 0);
+                robj keyobj;
+                initStaticStringObject(keyobj, item->key);
+                robj *argv[2];
+                argv[0] = server.lazyfree_lazy_expire ? shared.unlink : shared.del;
+                argv[1] = &keyobj;
+                replicationFeedReplicas(dbid, argv, 2);
+            }
+            sdsfree(item->key);
+            decrRefCount(item->val);
+            server.rdb_last_load_keys_expired++;
+        } else {
+            robj keyobj;
+            initStaticStringObject(keyobj, item->key);
+
+            /* Add the new object in the hash table */
+            int added = dbAddRDBLoad(db, item->key, &item->val);
+            server.rdb_last_load_keys_loaded++;
+            if (!added) {
+                if (rdbflags & RDBFLAGS_ALLOW_DUP) {
+                    /* Replace existing key if duplicates are allowed. */
+                    dbSyncDelete(db, &keyobj);
+                    added = dbAddRDBLoad(db, item->key, &item->val);
+                    serverAssert(added);
+                } else {
+                    serverLog(LL_WARNING, "RDB has duplicated key '%s' in DB %d", item->key, db->id);
+                    serverPanic("Duplicated key found in RDB file");
+                }
+            }
+            /* Set the expire time if needed */
+            if (item->expiretime != -1) {
+                item->val = setExpire(NULL, db, &keyobj, item->expiretime);
+            }
+
+            /* Set usage information (for eviction). */
+            objectSetLRUOrLFU(item->val, item->lfu_freq, item->lru_idle, lru_clock, 1000);
+
+            /* call key space notification on key loaded for modules only */
+            moduleNotifyKeyspaceEvent(NOTIFY_LOADED, "loaded", &keyobj, db->id);
+
+            /* Release key (sds), dictEntry stores a copy of it in embedded data */
+            sdsfree(item->key);
+        }
+
+        /* Conditionally delay for testing purposes. */
+        if (server.key_load_delay) debugDelay(server.key_load_delay);
+    }
+}
+
+/* Handles an RDB data segment on a worker thread.
+ * This function parses keys and values from a from a local buffer,
+ * and inserts them into the database in batches.
+ * We only lock during insertion to maximize parsing concurrency. */
+void processRdbDataSegment(void *arg) {
+    RdbDataSegmentLoadArgs *ta = (RdbDataSegmentLoadArgs *)arg;
+
+    /* Extract arguments */
+    rio *rdb = ta->data_segment_rio;
+    serverDb *db = ta->db;
+    int dbid = ta->dbid;
+    int rdbver = ta->rdbver;
+    int rdbflags = ta->rdbflags;
+    long long lru_clock = ta->lru_clock;
+    long long now = ta->now;
+    pthread_mutex_t *db_insert_mutex = ta->db_insert_mutex;
+
+    /* Create array of structs holding the info needed to insert a key */
+    RdbLoadedKey key_batch[RDB_LOAD_BATCH_SIZE];
+    int batch_count = 0;
+
+
+    int type, error;
+    int empty_keys_skipped = 0;
+
+    sds key = NULL;
+    robj *val = NULL;
+
+    const size_t end_off = sdslen(rdb->io.buffer.ptr);
+    long long lru_idle = -1, lfu_freq = -1, expiretime = -1;
+
+    /* Parse keys from local buffer */
+    while ((size_t)rioTell(rdb) < end_off) {
+        type = rdbLoadType(rdb);
+        if (type == -1) {
+            serverLog(LL_NOTICE, "ERROR READING TYPE");
+            goto chunk_err;
+        }
+        /* Extract the key metadata */
+        while (type == RDB_OPCODE_EXPIRETIME ||
+               type == RDB_OPCODE_EXPIRETIME_MS ||
+               type == RDB_OPCODE_FREQ ||
+               type == RDB_OPCODE_IDLE) {
+            if (type == RDB_OPCODE_EXPIRETIME) {
+                expiretime = rdbLoadTime(rdb) * 1000;
+                if (rioGetReadError(rdb)) goto chunk_err;
+            } else if (type == RDB_OPCODE_EXPIRETIME_MS) {
+                expiretime = rdbLoadMillisecondTime(rdb, rdbver);
+                if (rioGetReadError(rdb)) goto chunk_err;
+            } else if (type == RDB_OPCODE_FREQ) {
+                uint8_t b;
+                if (rioRead(rdb, &b, 1) == 0) goto chunk_err;
+                lfu_freq = b;
+            } else { /* RDB_OPCODE_IDLE */
+                uint64_t qword;
+                if ((qword = rdbLoadLen(rdb, NULL)) == RDB_LENERR) goto chunk_err;
+                lru_idle = qword;
+            }
+
+            if ((size_t)rioTell(rdb) >= end_off) goto chunk_err;
+
+            type = rdbLoadType(rdb);
+            if (type == -1) goto chunk_err;
+        }
+
+        if (!rdbIsObjectType(type)) {
+            serverLog(LL_WARNING, "Malformed RDB chunk in DB %d: got 0x%x where object type expected.",
+                      dbid, type);
+            goto chunk_err;
+        }
+
+        /* Read key */
+        if ((key = rdbGenericLoadStringObject(rdb, RDB_LOAD_SDS, NULL)) == NULL) goto chunk_err;
+        /* Read value */
+        val = rdbLoadObject(type, rdb, key, db->id, &error);
+
+        /* Check for errors when loading the value. We skip empty values*/
+        if (val == NULL) {
+            if (error == RDB_LOAD_ERR_EMPTY_KEY) {
+                /* Log the first 10 skipped empty keys */
+                if (empty_keys_skipped++ < 10) serverLog(LL_NOTICE, "rdbLoadObject skipping empty key: %s (in chunk)", key);
+                sdsfree(key);
+            } else {
+                /* Fail on other error types */
+                serverLog(LL_WARNING, "Error loading RDB object in chunk for key '%s'.", key);
+                sdsfree(key);
+                goto chunk_err;
+            }
+        } else {
+            /* We have successfully loaded a key and value */
+            RdbLoadedKey *item = &key_batch[batch_count];
+            item->key = key;
+            item->val = val;
+            item->expiretime = expiretime;
+            item->lfu_freq = lfu_freq;
+            item->lru_idle = lru_idle;
+            batch_count++;
+        }
+        /* Opportunistically lock and insert if batch is large enough, or block when full. */
+        if (batch_count == RDB_LOAD_BATCH_SIZE) {
+            pthread_mutex_lock(db_insert_mutex);
+            insertRdbKeyBatch(key_batch, batch_count, db, dbid, rdbflags, lru_clock, now);
+            pthread_mutex_unlock(db_insert_mutex);
+            batch_count = 0;
+        } else if (batch_count > RDB_LOAD_BATCH_SIZE / 2 && pthread_mutex_trylock(db_insert_mutex) == 0) {
+            insertRdbKeyBatch(key_batch, batch_count, db, dbid, rdbflags, lru_clock, now);
+            pthread_mutex_unlock(db_insert_mutex);
+            batch_count = 0;
+        }
+
+        /* Reset the state that is key-specified and is populated by
+         * opcodes before the key, so that we start from scratch again. */
+
+        key = NULL;
+        val = NULL;
+        expiretime = -1;
+        lfu_freq = -1;
+        lru_idle = -1;
+    }
+
+    /* Insert any remaining keys in the batch */
+    if (batch_count > 0) {
+        pthread_mutex_lock(db_insert_mutex);
+        insertRdbKeyBatch(key_batch, batch_count, db, dbid, rdbflags, lru_clock, now);
+        pthread_mutex_unlock(db_insert_mutex);
+    }
+
+    freeRdbChunkLoadThreadArgs(ta);
+    return;
+
+chunk_err:
+    atomic_store_explicit(&rdb_load_thread_error, 1, memory_order_relaxed);
+    /* Clean up any items in a partial batch that were not inserted */
+    for (int i = 0; i < batch_count; i++) {
+        if (key_batch[i].key) sdsfree(key_batch[i].key);
+        if (key_batch[i].val) decrRefCount(key_batch[i].val);
+    }
+    if (key) sdsfree(key);
+    if (val) decrRefCount(val);
+    freeRdbChunkLoadThreadArgs(ta);
+    return;
+}
+
+
+/* --------- Multithreaded RDB Load: Main Thread Orchestration --------- */
+
+static size_t next_worker_thread_idx_to_try = 1; // valid: [1 .. server.rdb_threads_num-1]
+
+/*
+ * Offloads an RDB data segment to a worker thread for processing.
+ * This frees up the main thread to continue reading from the RIO stream
+ * which incresaes the IO throughput during rdb load.
+ */
+int offloadRdbDataSegment(
+    rio *rdb_main_stream,
+    unsigned long segment_size,
+    serverDb *db,
+    int dbid,
+    int rdbver,
+    int rdbflags,
+    long long lru_clock,
+    long long now,
+    pthread_mutex_t *db_insert_mutex) {
+    /* 1: Check for any loading errors */
+    if (atomic_load(&rdb_load_thread_error) == 1) return C_ERR;
+
+    /* 2: Read the RDB data segment into a memory buffer to be passed to a thread. */
+    rio *data_segment_rio = zmalloc(sizeof(rio));
+    sds data_segment_buffer = sdsnewlen(NULL, segment_size);
+
+    if (rioRead(rdb_main_stream, data_segment_buffer, segment_size) == 0) {
+        serverLog(LL_WARNING, "Short read for RDB chunk of %lu bytes", segment_size);
+        sdsfree(data_segment_buffer);
+        zfree(data_segment_rio);
+        return C_ERR;
+    }
+    rioInitWithBuffer(data_segment_rio, data_segment_buffer);
+
+    /* 3: Package the job arguments for the worker thread. */
+    RdbDataSegmentLoadArgs *thread_args = zmalloc(sizeof(RdbDataSegmentLoadArgs));
+    if (!thread_args) {
+        serverLog(LL_WARNING, "OOM allocating chunk args");
+        sdsfree(data_segment_buffer);
+        zfree(data_segment_rio);
+        return C_ERR;
+    }
+
+    thread_args->data_segment_rio = data_segment_rio;
+    thread_args->db = db;
+    thread_args->dbid = dbid;
+    thread_args->rdbver = rdbver;
+    thread_args->rdbflags = rdbflags;
+    thread_args->lru_clock = lru_clock;
+    thread_args->now = now;
+    thread_args->db_insert_mutex = db_insert_mutex;
+
+
+    /* 4: Assign the job to a worker thread in a round-robin fashion. */
+    size_t num_workers = server.rdb_threads_num - 1;
+    if (next_worker_thread_idx_to_try < 1 || next_worker_thread_idx_to_try > num_workers)
+        next_worker_thread_idx_to_try = 1;
+
+    size_t start = next_worker_thread_idx_to_try;
+    for (size_t tries = 0; tries < num_workers; ++tries) {
+        size_t worker_idx = 1 + ((start - 1 + tries) % num_workers);
+        JobQueue *jq = &rdb_jobs[worker_idx];
+        if (!JobQueue_isFull(jq)) {
+            JobQueue_push(jq, processRdbDataSegment, thread_args);
+            next_worker_thread_idx_to_try = (worker_idx % num_workers) + 1;
+            return C_OK;
+        } else {
+            atomic_thread_fence(memory_order_acquire);
+        }
+    }
+
+    /* 5: All worker queues are full. Process the data segment in the main thread */
+    processRdbDataSegment((void *)thread_args);
+    return C_OK;
 }

@@ -3088,6 +3088,7 @@ int rdbLoadRioWithLoadingCtxScopedRdb(rio *rdb, int rdbflags, rdbSaveInfo *rsi, 
  * currently it only allow to set db object and functionLibCtx to which the data
  * will be loaded (in the future it might contains more such objects). */
 int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadingCtx *rdb_loading_ctx) {
+    int result;
     uint64_t dbid = 0;
     int type, rdbver;
     uint64_t db_size = 0, expires_size = 0;
@@ -3125,6 +3126,16 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
     /* Key-specific attributes, set by opcodes before the key type. */
     long long lru_idle = -1, lfu_freq = -1, expiretime = -1, now = mstime();
     long long lru_clock = LRU_CLOCK();
+
+    /* Multi-Thread RDB Load Initialization */
+    pthread_mutex_t db_insert_mutex;
+    if (server.rdb_threads_num > 1) {
+        atomic_store_explicit(&rdb_load_thread_error, 0, memory_order_relaxed);
+        pthread_mutex_init(&db_insert_mutex, NULL);
+        serverLog(LL_NOTICE, "Starting %d RDB Worker Threads for load.", server.rdb_threads_num - 1);
+        initRDBThreads(RDB_LOAD_JOB_QUEUE_SIZE);
+        startRDBThreads();
+    }
 
     while (1) {
         sds key;
@@ -3252,6 +3263,35 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
                     if (expires_slot_size) kvstoreHashtableExpand(db->expires, slot_id, expires_slot_size);
                     should_expand_db = 0;
                 }
+            } else if (!strcasecmp(auxkey->ptr, "rdb-data-segment")) {
+                unsigned long data_segment_size;
+                if (sscanf(auxval->ptr, "%lu", &data_segment_size) < 1) {
+                    decrRefCount(auxkey);
+                    decrRefCount(auxval);
+                    goto eoferr;
+                }
+                /* Resize the hashtable if it has not already been done.
+                 * If we are in cluster mode we will have already resized
+                 * the slot when processing the slot-info Aux Field. */
+                if (should_expand_db) {
+                    dbExpand(db, db_size, 0);
+                    dbExpandExpires(db, expires_size, 0);
+                    should_expand_db = 0;
+                }
+
+                /* Offload the segment of data if multi-thread load is enabled */
+                if (server.rdb_threads_num > 1) {
+                    serverAssert(data_segment_size > 0);
+                    if (offloadRdbDataSegment(rdb, data_segment_size, db, dbid, rdbver, rdbflags, lru_clock, now, &db_insert_mutex) == C_ERR) {
+                        serverLog(LL_WARNING, "Failed to offload RDB chunk to thread");
+                        decrRefCount(auxkey);
+                        decrRefCount(auxval);
+                        goto eoferr;
+                    }
+                }
+                expiretime = -1;
+                lfu_freq = -1;
+                lru_idle = -1;
             } else {
                 /* Check if this is a dynamic aux field */
                 int handled = 0;
@@ -3366,6 +3406,8 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
         /* Read value */
         val = rdbLoadObject(type, rdb, key, db->id, &error);
 
+        if (server.rdb_threads_num > 1) pthread_mutex_lock(&db_insert_mutex);
+
         /* Check if the key already expired. This function is used when loading
          * an RDB file from disk, either at startup, or when an RDB was
          * received from the primary. In the latter case, the primary is
@@ -3384,6 +3426,7 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
                 sdsfree(key);
             } else {
                 sdsfree(key);
+                if (server.rdb_threads_num > 1) pthread_mutex_unlock(&db_insert_mutex);
                 goto eoferr;
             }
         } else if (iAmPrimary() && !(rdbflags & RDBFLAGS_AOF_PREAMBLE) && expiretime != -1 && expiretime < now) {
@@ -3418,6 +3461,7 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
                     added = dbAddRDBLoad(db, key, &val);
                     serverAssert(added);
                 } else {
+                    if (server.rdb_threads_num > 1) pthread_mutex_unlock(&db_insert_mutex);
                     serverLog(LL_WARNING, "RDB has duplicated key '%s' in DB %d", key, db->id);
                     serverPanic("Duplicated key found in RDB file");
                 }
@@ -3447,6 +3491,8 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
         expiretime = -1;
         lfu_freq = -1;
         lru_idle = -1;
+
+        if (server.rdb_threads_num > 1) pthread_mutex_unlock(&db_insert_mutex);
     }
     /* Verify the checksum if RDB version is >= 5 */
     if (rdbver >= 5) {
@@ -3465,19 +3511,14 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
                           "got (%llx). Aborting now.",
                           (unsigned long long)expected, (unsigned long long)cksum);
                 rdbReportCorruptRDB("RDB CRC error");
-                return C_ERR;
+                result = C_ERR;
+                goto cleanup;
             }
         }
     }
 
-    if (empty_keys_skipped) {
-        serverLog(LL_NOTICE, "Done loading RDB, keys loaded: %lld, keys expired: %lld, empty keys skipped: %lld.",
-                  server.rdb_last_load_keys_loaded, server.rdb_last_load_keys_expired, empty_keys_skipped);
-    } else {
-        serverLog(LL_NOTICE, "Done loading RDB, keys loaded: %lld, keys expired: %lld.",
-                  server.rdb_last_load_keys_loaded, server.rdb_last_load_keys_expired);
-    }
-    return C_OK;
+    result = C_OK;
+    goto cleanup;
 
     /* Unexpected end of file is handled here calling rdbReportReadError():
      * this will in turn either abort the server in most cases, or if we are loading
@@ -3486,7 +3527,31 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
 eoferr:
     serverLog(LL_WARNING, "Short read or OOM loading DB. Unrecoverable error, aborting now.");
     rdbReportReadError("Unexpected EOF reading RDB file");
-    return C_ERR;
+    result = C_ERR;
+cleanup:
+    /* Unified cleanup for multithreaded resources.
+    * Ensures worker threads and all allocated resources are released exactly once.
+    */    
+   if (server.rdb_threads_num > 1) {
+        drainRDBThreadsQueue();
+        if (atomic_load_explicit(&rdb_load_thread_error, memory_order_relaxed)) {
+            serverLog(LL_WARNING, "RDB load failed in worker thread(s).");
+            result = C_ERR;
+        }
+        killRDBThreads();
+        pthread_mutex_destroy(&db_insert_mutex);
+    }
+    /* Only Log results on success */
+    if (result == C_OK) {
+        if (empty_keys_skipped) {
+            serverLog(LL_NOTICE, "Done loading RDB, keys loaded: %lld, keys expired: %lld, empty keys skipped: %lld.",
+                      server.rdb_last_load_keys_loaded, server.rdb_last_load_keys_expired, empty_keys_skipped);
+        } else {
+            serverLog(LL_NOTICE, "Done loading RDB, keys loaded: %lld, keys expired: %lld.",
+                      server.rdb_last_load_keys_loaded, server.rdb_last_load_keys_expired);
+        }
+    }
+    return result;
 }
 
 /* Like rdbLoadRio() but takes a filename instead of a rio stream. The

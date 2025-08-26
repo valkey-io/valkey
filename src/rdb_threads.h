@@ -5,17 +5,17 @@
 #include "thread_common.h"
 
 /*
-* Default threshold for flushing a worker's buffer to the target RIO (File or Replica Socket) (64 KB).
-* If the thread's buffer stores more than this amount of data AFTER an entire key-value pair has been
-* saved we will flush the buffer to the target RIO.
-*/
+ * Default threshold for flushing a worker's buffer to the target RIO (File or Replica Socket) (64 KB).
+ * If the thread's buffer stores more than this amount of data AFTER an entire key-value pair has been
+ * saved we will flush the buffer to the target RIO.
+ */
 #define WORKER_BUFFER_DEFAULT_SIZE 64 * (1024)
 /*
-* The maximum buffer size (256 KB).
-* If we exceed this limit during the saving of a single key value pair we 
-* will flush the buffer to the target RIO and stream the rest of the key value pair
-* directly to the RIO. This prevents "big keys" from consuming an unbounded amount of memory.
-*/
+ * The maximum buffer size (256 KB).
+ * If we exceed this limit during the saving of a single key value pair we
+ * will flush the buffer to the target RIO and stream the rest of the key value pair
+ * directly to the RIO. This prevents "big keys" from consuming an unbounded amount of memory.
+ */
 #define WORKER_BUFFER_CAPACITY_LIMIT 256 * (1024)
 
 #define RDB_SAVE_JOB_QUEUE_SIZE 2 /* Minimum size of JobQueue */

@@ -1499,6 +1499,9 @@ int rdbSaveRio(int req, rio *rdb, int *error, int rdbflags, rdbSaveInfo *rsi) {
     return C_OK;
 
 werr:
+    if (server.active_rdb_threads_num > 0) {
+        killRDBThreads();
+    }
     if (error) *error = errno;
     return C_ERR;
 }

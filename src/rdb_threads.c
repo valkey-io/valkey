@@ -89,6 +89,7 @@ static void createRDBThread(int id, int job_queue_size) {
         exit(1);
     }
     rdb_threads[id] = tid;
+    server.active_rdb_threads_num++;
 }
 
 /* Terminates the RDB thread specified by id */
@@ -108,6 +109,7 @@ static void shutdownRDBThread(int id) {
     }
     pthread_mutex_destroy(&rdb_threads_mutex[id]);
     JobQueue_cleanup(&rdb_jobs[id]);
+    server.active_rdb_threads_num--;
 }
 
 /* Terminates all RDB Worker Threads. Called when RDB Save or Load has completed */
@@ -115,11 +117,15 @@ void killRDBThreads(void) {
     for (int j = 1; j < server.rdb_threads_num; j++) { /* We don't kill thread 0, which is the main thread. */
         shutdownRDBThread(j);
     }
+    serverAssert(server.active_rdb_threads_num == 0);
 }
 
 void initRDBThreads(int per_thread_queue_size) {
     if (server.rdb_threads_num == 1) return;
     serverAssert(server.rdb_threads_num <= RDB_THREADS_MAX_NUM);
+
+    /* Reset active worker threads counter before spawning. */
+    server.active_rdb_threads_num = 0;
 
     /* Spawn and initialize the RDB threads. */
     for (int i = 1; i < server.rdb_threads_num; i++) {

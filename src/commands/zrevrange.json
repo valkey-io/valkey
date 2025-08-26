@@ -7,7 +7,7 @@
         "arity": -4,
         "function": "zrevrangeCommand",
         "replaced_by": "`ZRANGE` with the `REV` argument",
-        "doc_flags": [ ],
+        "doc_flags": [  ],
         "command_flags": [
             "READONLY"
         ],

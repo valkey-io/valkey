@@ -410,7 +410,6 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster} overrides {cluste
             R 2 function load {#!lua name=test
                 server.register_function('test', function() return 'hello1' end)
             }
-
             assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node0_id]
             wait_for_migration 0 16383
 

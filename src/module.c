@@ -11756,7 +11756,7 @@ static uint64_t moduleEventVersions[] = {
  *     * `VALKEYMODULE_SUBEVENT_EVENTLOOP_BEFORE_SLEEP`
  *     * `VALKEYMODULE_SUBEVENT_EVENTLOOP_AFTER_SLEEP`
  *
- * * ValkeyModule_Event_Config
+ * * ValkeyModuleEvent_Config
  *
  *     Called when a configuration event happens
  *     The following sub events are available:
@@ -11770,7 +11770,7 @@ static uint64_t moduleEventVersions[] = {
  *                                    // name of each modified configuration item
  *         uint32_t num_changes;      // The number of elements in the config_names array
  *
- * * ValkeyModule_Event_Key
+ * * ValkeyModuleEvent_Key
  *
  *     Called when a key is removed from the keyspace. We can't modify any key in
  *     the event.
@@ -11786,7 +11786,7 @@ static uint64_t moduleEventVersions[] = {
  *
  *         ValkeyModuleKey *key;    // Key name
  *
- * * ValkeyModule_Authentication_Attempt
+ * * ValkeyModuleEvent_AuthenticationAttempt
  *
  *     Called when an authentication attempt is made, either successful or not.
  *

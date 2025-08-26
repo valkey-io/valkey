@@ -1253,8 +1253,8 @@ void killSlotMigrationChild(void) {
     if (kill(server.child_pid, SIGUSR1) != -1) {
         while (waitpid(-1, &statloc, 0) != server.child_pid);
     }
-    resetChildState();
     serverLog(LL_NOTICE, "Slot migration child %ld killed", (long)server.child_pid);
+    resetChildState();
     clusterHandleSlotExportBackgroundSaveDone(C_ERR);
 }
 

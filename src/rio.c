@@ -119,7 +119,7 @@ static int rioBufferToTargetFlush(rio *r) {
     pthread_mutex_lock(r->io.buf_to_target.target_rio_mutex);
 
     /* Write aux field describing the length (bytes) of the data segment. This enables multi-thread RDB Load */
-    sds data_segment_size_str = sdscatprintf(sdsempty(), "%lu", (size_t)r->io.buf_to_target.pos);
+    sds data_segment_size_str = sdscatprintf(sdsempty(), "%lu", (unsigned long)r->io.buf_to_target.pos);
     if (rdbSaveAuxFieldStrStr(r->io.buf_to_target.target_rio, "rdb-data-segment", data_segment_size_str) < 0) {
         sdsfree(data_segment_size_str);
         pthread_mutex_unlock(r->io.buf_to_target.target_rio_mutex);

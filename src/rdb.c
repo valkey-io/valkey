@@ -37,13 +37,14 @@
 #include <math.h>
 #include <fcntl.h>
 #include <sys/types.h>
+#include <stdbool.h>
 #include <sys/time.h>
 #include <sys/resource.h>
 #include <sys/wait.h>
 #include <arpa/inet.h>
 #include <sys/stat.h>
 #include <sys/param.h>
-
+#include "listpack.h"
 /* This macro is called when the internal RDB structure is corrupt */
 #define rdbReportCorruptRDB(...) rdbReportError(1, __LINE__,__VA_ARGS__)
 /* This macro is called when RDB read failed (possibly a short read) */
@@ -1720,6 +1721,90 @@ int lpPairsValidateIntegrityAndDups(unsigned char *lp, size_t size, int deep) {
     return ret;
 }
 
+/*
+ * This new function would be responsible for handling the RDB_TYPE_SET_LISTPACK
+ */
+robj *rdbLoadSetListpackObject(rio *rdb) {
+    // Step 1: Load the serialized listpack from the RDB stream.
+    robj *listpack_obj = rdbLoadStringObject(rdb);
+    if (listpack_obj == NULL) {
+        serverLog(LL_WARNING, "RDB: Failed to load string object for RDB_TYPE_SET_LISTPACK type.");
+        return NULL;
+    }
+
+    if (listpack_obj->type != OBJ_STRING || !sdsEncodedObject(listpack_obj)) {
+        serverLog(LL_WARNING, "RDB: Loaded object for RDB_TYPE_SET_LISTPACK is not a valid string type.");
+        decrRefCount(listpack_obj);
+        return NULL;
+    }
+
+    sds listpack_sds = sdsdup(listpack_obj->ptr);
+    decrRefCount(listpack_obj); // We have our own copy of the SDS now.
+
+    if (listpack_sds == NULL) {
+        serverLog(LL_WARNING, "RDB: OOM when duplicating SDS for RDB_TYPE_SET_LISTPACK.");
+        return NULL;
+    }
+
+    // Step 2: Create a new Set object for the older Redis version.
+    robj *set_obj = createSetObject();
+    if (set_obj == NULL) {
+        serverLog(LL_WARNING, "RDB: Failed to createSetObject for RDB_TYPE_SET_LISTPACK.");
+        sdsfree(listpack_sds);
+        return NULL;
+    }
+
+    // Step 3: Iterate through the listpack and add elements to the Set.
+    unsigned char *lp = (unsigned char *)listpack_sds;
+    unsigned char *fptr;
+    unsigned char *eptr;
+    unsigned char *vstr;
+    unsigned int vlen;
+    long long vlong;
+
+    fptr = lpFirst(lp);
+    eptr = fptr;
+
+    while (eptr) {
+        vstr = lpGetValue(eptr, &vlen, &vlong);
+        sds ele_sds;
+
+        if (vstr) {
+            ele_sds = sdsnewlen((const void *)vstr, vlen);
+        } else {
+            ele_sds = sdsfromlonglong(vlong);
+        }
+
+        if (ele_sds == NULL) {
+            serverLog(LL_WARNING, "RDB: OOM creating SDS for set element from RDB_TYPE_SET_LISTPACK .");
+            sdsfree(listpack_sds);
+            decrRefCount(set_obj);
+            return NULL;
+        }
+
+        // Add the element to the set.
+        // setTypeAdd in Redis 7.0.x (and similar versions) does NOT take ownership
+        // of the 'ele_sds' passed to it. It either uses the integer value directly
+        // (for intsets) or creates its own sdsdup for hashtables.
+        // Therefore, 'ele_sds' must always be freed by this function after the call.
+        setTypeAdd(set_obj, ele_sds);
+        // We don't strictly need to check the return value of setTypeAdd for freeing ele_sds,
+        // as it's never consumed by setTypeAdd. However, checking it could be useful
+        // for logging or other error handling if an element fails to be added for other reasons.
+
+        sdsfree(ele_sds); // Always free ele_sds as it's not consumed by setTypeAdd.
+
+        eptr = lpNext(lp, eptr);
+    }
+
+    // Step 4: Clean up the duplicated raw listpack SDS.
+    sdsfree(listpack_sds);
+
+    // Step 5: Return the created and populated set object.
+    serverLog(LL_VERBOSE, "RDB: Successfully loaded a RDB_TYPE_SET_LISTPACK and converted to OBJ_ENCODING_HT.");
+    return set_obj;
+}
+
 /* Load a Redis object of the specified type from the specified file.
  * On success a newly allocated object is returned, otherwise NULL.
  * When the function returns NULL and if 'error' is not NULL, the
@@ -1742,8 +1827,9 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error) {
             skip = !!(server.current_client->user->flags & USER_FLAG_SANITIZE_PAYLOAD_SKIP);
         deep_integrity_validation = !skip;
     }
-
-    if (rdbtype == RDB_TYPE_STRING) {
+    if (rdbtype == RDB_TYPE_SET_LISTPACK) {
+        o = rdbLoadSetListpackObject(rdb);
+    } else if (rdbtype == RDB_TYPE_STRING) {
         /* Read string value */
         if ((o = rdbLoadEncodedStringObject(rdb)) == NULL) return NULL;
         o = tryObjectEncoding(o);
@@ -2317,7 +2403,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error) {
                 rdbReportCorruptRDB("Unknown RDB encoding type %d",rdbtype);
                 break;
         }
-    } else if (rdbtype == RDB_TYPE_STREAM_LISTPACKS || rdbtype == RDB_TYPE_STREAM_LISTPACKS_2) {
+    } else if (rdbtype == RDB_TYPE_STREAM_LISTPACKS || rdbtype == RDB_TYPE_STREAM_LISTPACKS_2 || rdbtype == RDB_TYPE_STREAM_LISTPACKS_3) {
         o = createStreamObject();
         stream *s = o->ptr;
         uint64_t listpacks = rdbLoadLen(rdb,NULL);
@@ -2394,7 +2480,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error) {
         s->last_id.ms = rdbLoadLen(rdb,NULL);
         s->last_id.seq = rdbLoadLen(rdb,NULL);
         
-        if (rdbtype == RDB_TYPE_STREAM_LISTPACKS_2) {
+        if (rdbtype >= RDB_TYPE_STREAM_LISTPACKS_2) {
             /* Load the first entry ID. */
             s->first_id.ms = rdbLoadLen(rdb,NULL);
             s->first_id.seq = rdbLoadLen(rdb,NULL);
@@ -2461,7 +2547,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error) {
             
             /* Load group offset. */
             uint64_t cg_offset;
-            if (rdbtype == RDB_TYPE_STREAM_LISTPACKS_2) {
+            if (rdbtype >= RDB_TYPE_STREAM_LISTPACKS_2) {
                 cg_offset = rdbLoadLen(rdb,NULL);
                 if (rioGetReadError(rdb)) {
                     rdbReportReadError("Stream cgroup offset loading failed.");
@@ -2902,18 +2988,25 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
     char buf[1024];
     int error;
     long long empty_keys_skipped = 0;
+    bool is_valkey_magic;
 
     rdb->update_cksum = rdbLoadProgressCallback;
     rdb->max_processing_chunk = server.loading_process_events_interval_bytes;
     if (rioRead(rdb,buf,9) == 0) goto eoferr;
     buf[9] = '\0';
-    if (memcmp(buf,"REDIS",5) != 0) {
-        serverLog(LL_WARNING,"Wrong signature trying to load DB from file");
+    if (memcmp(buf, "REDIS0", 6) == 0) {
+        is_valkey_magic = false;
+    } else if (memcmp(buf, "VALKEY", 6) == 0) {
+        is_valkey_magic = true;
+    } else {
+        serverLog(LL_WARNING, "Wrong signature trying to load DB from file");
         errno = EINVAL;
         return C_ERR;
     }
-    rdbver = atoi(buf+5);
-    if (rdbver < 1 || rdbver > RDB_VERSION) {
+    rdbver = atoi(buf + 6);
+    if (rdbver < 1 ||
+        (rdbver >= RDB_FOREIGN_VERSION_MIN && !is_valkey_magic) ||
+        (rdbver > RDB_VERSION && server.rdb_version_check == RDB_VERSION_CHECK_STRICT)) {
         serverLog(LL_WARNING,"Can't handle RDB format version %d",rdbver);
         errno = EINVAL;
         return C_ERR;
@@ -3014,9 +3107,10 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
                 if (rsi) rsi->repl_offset = strtoll(auxval->ptr,NULL,10);
             } else if (!strcasecmp(auxkey->ptr,"lua")) {
                 /* Won't load the script back in memory anymore. */
-            } else if (!strcasecmp(auxkey->ptr,"redis-ver")) {
-                serverLog(LL_NOTICE,"Loading RDB produced by version %s",
-                    (char*)auxval->ptr);
+            } else if (!strcasecmp(auxkey->ptr, "redis-ver")) {
+                serverLog(LL_NOTICE, "Loading RDB produced by Redis version %s", (char *)auxval->ptr);
+            } else if (!strcasecmp(auxkey->ptr, "valkey-ver")) {
+                serverLog(LL_NOTICE, "Loading RDB produced by Valkey version %s", (char *)auxval->ptr);
             } else if (!strcasecmp(auxkey->ptr,"ctime")) {
                 time_t age = time(NULL)-strtol(auxval->ptr,NULL,10);
                 if (age < 0) age = 0;

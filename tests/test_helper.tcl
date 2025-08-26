@@ -52,6 +52,7 @@ set ::all_tests {
     integration/aof
     integration/aof-multi-part
     integration/rdb
+    integration/rdb_load_set_listpack
     integration/corrupt-dump
     integration/corrupt-dump-fuzzer
     integration/convert-zipmap-hash-on-load

@@ -469,6 +469,11 @@ typedef enum {
     CLIENT_PAUSE_ALL      /* Pause all commands */
 } pause_type;
 
+typedef enum {
+    RDB_VERSION_CHECK_STRICT = 0,
+    RDB_VERSION_CHECK_RELAXED
+} rdb_version_check_type;
+
 /* RDB active child save type. */
 #define RDB_CHILD_TYPE_NONE 0
 #define RDB_CHILD_TYPE_DISK 1     /* RDB is written to disk. */
@@ -1332,6 +1337,7 @@ struct redisServer {
     int sanitize_dump_payload;      /* Enables deep sanitization for ziplist and listpack in RDB and RESTORE. */
     int skip_checksum_validation;   /* Disables checksum validateion for RDB and RESTORE payload. */
     int jemalloc_bg_thread;         /* Enable jemalloc background thread */
+    int rdb_version_check;          /* Try to load RDB produced by a future version. */
     size_t active_defrag_ignore_bytes; /* minimum amount of fragmentation waste to start active defrag */
     int active_defrag_threshold_lower; /* minimum percentage of fragmentation to start active defrag */
     int active_defrag_threshold_upper; /* maximum percentage of fragmentation at which we use maximum effort */

@@ -32,9 +32,11 @@
 #include "zipmap.h"
 #include "endianconv.h"
 #include "stream.h"
+#include "rdb_downgrade_compat.h"  /* RDB downgrade compatibility */
 
 #include <math.h>
 #include <fcntl.h>
+#include <stdbool.h>
 #include <sys/types.h>
 #include <sys/time.h>
 #include <sys/resource.h>
@@ -2430,21 +2432,33 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
     char buf[1024];
     int error;
     long long empty_keys_skipped = 0, expired_keys_skipped = 0, keys_loaded = 0;
+    bool is_valkey_magic;
 
     rdb->update_cksum = rdbLoadProgressCallback;
     rdb->max_processing_chunk = server.loading_process_events_interval_bytes;
     if (rioRead(rdb,buf,9) == 0) goto eoferr;
     buf[9] = '\0';
-    if (memcmp(buf,"REDIS",5) != 0) {
-        serverLog(LL_WARNING,"Wrong signature trying to load DB from file");
+    if (memcmp(buf, "REDIS0", 6) == 0) {
+        is_valkey_magic = false;
+    } else if (memcmp(buf, "VALKEY", 6) == 0) {
+        is_valkey_magic = true;
+    } else {
+        serverLog(LL_WARNING, "Wrong signature trying to load DB from file");
         errno = EINVAL;
         return C_ERR;
     }
-    rdbver = atoi(buf+5);
-    if (rdbver < 1 || rdbver > RDB_VERSION) {
+    rdbver = atoi(buf + 6);
+    if (rdbver < 1 ||
+        (rdbver >= RDB_FOREIGN_VERSION_MIN && !is_valkey_magic) ||
+        (rdbver > RDB_VERSION && server.rdb_version_check == RDB_VERSION_CHECK_STRICT)) {
         serverLog(LL_WARNING,"Can't handle RDB format version %d",rdbver);
         errno = EINVAL;
         return C_ERR;
+    }
+    
+    /* Log compatibility mode for higher versions */
+    if (rdbver > RDB_VERSION) {
+        serverLog(LL_NOTICE,"Loading RDB version %d with downgrade compatibility (current version: %d)", rdbver, RDB_VERSION);
     }
 
     /* Key-specific attributes, set by opcodes before the key type. */
@@ -2547,9 +2561,10 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
                         "Can't load Lua script from RDB file! "
                         "BODY: %s", (char*)auxval->ptr);
                 }
-            } else if (!strcasecmp(auxkey->ptr,"redis-ver")) {
-                serverLog(LL_NOTICE,"Loading RDB produced by version %s",
-                    (char*)auxval->ptr);
+            } else if (!strcasecmp(auxkey->ptr, "redis-ver")) {
+                serverLog(LL_NOTICE, "Loading RDB produced by Redis version %s", (char *)auxval->ptr);
+            } else if (!strcasecmp(auxkey->ptr, "valkey-ver")) {
+                serverLog(LL_NOTICE, "Loading RDB produced by Valkey version %s", (char *)auxval->ptr);
             } else if (!strcasecmp(auxkey->ptr,"ctime")) {
                 time_t age = time(NULL)-strtol(auxval->ptr,NULL,10);
                 if (age < 0) age = 0;
@@ -2634,8 +2649,8 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
         /* Read key */
         if ((key = rdbGenericLoadStringObject(rdb,RDB_LOAD_SDS,NULL)) == NULL)
             goto eoferr;
-        /* Read value */
-        val = rdbLoadObject(type,rdb,key,&error);
+        /* Read value with compatibility support for higher RDB versions */
+        val = rdbLoadObjectCompat(type,rdb,key,&error,rdbver);
 
         /* Check if the key already expired. This function is used when loading
          * an RDB file from disk, either at startup, or when an RDB was

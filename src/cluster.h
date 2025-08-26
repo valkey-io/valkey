@@ -141,6 +141,7 @@ typedef struct clusterNode {
     int cport;                  /* Latest known cluster port of this node. */
     clusterLink *link;          /* TCP/IP link with this node */
     list *fail_reports;         /* List of nodes signaling this as failing */
+    sds hostname;
 } clusterNode;
 
 typedef struct clusterState {
@@ -270,7 +271,8 @@ typedef struct {
     unsigned char myslots[CLUSTER_SLOTS/8];
     char slaveof[CLUSTER_NAMELEN];
     char myip[NET_IP_STR_LEN];    /* Sender IP, if not all zeroed. */
-    char notused1[32];  /* 32 bytes reserved for future usage. */
+    uint16_t extensions; /* Number of extensions. */
+    char notused1[30];  /* 30 bytes reserved for future usage. */
     uint16_t pport;      /* Sender TCP plaintext port, if base port is TLS */
     uint16_t cport;      /* Sender TCP cluster bus port */
     uint16_t flags;      /* Sender node flags */

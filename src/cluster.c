@@ -171,13 +171,30 @@ int clusterLoadConfig(char *filename) {
             n = createClusterNode(argv[0],0);
             clusterAddNode(n);
         }
-        /* Address and port */
-        if ((p = strrchr(argv[1],':')) == NULL) {
+        /* Address and port. The format is ip:port[,hostname] */
+        int aux_argc;
+        sds *aux_argv = sdssplitlen(argv[1],sdslen(argv[1]),",",1,&aux_argc);
+        if (aux_argv == NULL) {
+            sdsfreesplitres(argv,argc);
+            goto fmterr;
+        }
+
+        if (aux_argc > 1) {
+            if (sdslen(aux_argv[1]) > 0) {
+                sdsfree(n->hostname);
+                n->hostname = sdsnew(aux_argv[1]);
+            } else {
+                if (n->hostname) sdsclear(n->hostname);
+            }
+        }
+
+        if ((p = strrchr(aux_argv[0],':')) == NULL) {
+            sdsfreesplitres(aux_argv,aux_argc);
             sdsfreesplitres(argv,argc);
             goto fmterr;
         }
         *p = '\0';
-        memcpy(n->ip,argv[1],strlen(argv[1])+1);
+        memcpy(n->ip,aux_argv[0],strlen(aux_argv[0])+1);
         char *port = p+1;
         char *busp = strchr(port,'@');
         if (busp) {
@@ -189,6 +206,7 @@ int clusterLoadConfig(char *filename) {
          * In this case we set it to the default offset of 10000 from the
          * base port. */
         n->cport = busp ? atoi(busp) : n->port + CLUSTER_PORT_INCR;
+        sdsfreesplitres(aux_argv,aux_argc);
 
         /* The plaintext port for client in a TLS cluster (n->pport) is not
          * stored in nodes.conf. It is received later over the bus protocol. */
@@ -801,6 +819,7 @@ clusterNode *createClusterNode(char *nodename, int flags) {
     node->data_received = 0;
     node->fail_time = 0;
     node->link = NULL;
+    node->hostname = NULL;
     memset(node->ip,0,sizeof(node->ip));
     node->port = 0;
     node->cport = 0;
@@ -972,6 +991,7 @@ void freeClusterNode(clusterNode *n) {
     if (n->link) freeClusterLink(n->link);
     listRelease(n->fail_reports);
     zfree(n->slaves);
+    if (n->hostname) sdsfree(n->hostname);
     zfree(n);
 }
 
@@ -1784,12 +1804,12 @@ int clusterProcessPacket(clusterLink *link) {
 
         explen = sizeof(clusterMsg)-sizeof(union clusterMsgData);
         explen += (sizeof(clusterMsgDataGossip)*count);
-        if (totlen != explen) return 1;
+        if (totlen < explen) return 1;
     } else if (type == CLUSTERMSG_TYPE_FAIL) {
         uint32_t explen = sizeof(clusterMsg)-sizeof(union clusterMsgData);
 
         explen += sizeof(clusterMsgDataFail);
-        if (totlen != explen) return 1;
+        if (totlen < explen) return 1;
     } else if (type == CLUSTERMSG_TYPE_PUBLISH) {
         uint32_t explen = sizeof(clusterMsg)-sizeof(union clusterMsgData);
 
@@ -2447,6 +2467,7 @@ void clusterBuildMessageHdr(clusterMsg *hdr, int type) {
               myself->slaveof : myself;
 
     memset(hdr,0,sizeof(*hdr));
+    hdr->extensions = 0;
     hdr->ver = htons(CLUSTER_PROTO_VER);
     hdr->sig[0] = 'R';
     hdr->sig[1] = 'C';
@@ -4179,10 +4200,14 @@ sds clusterGenNodeDescription(clusterNode *node, int use_pport) {
 
     /* Node coordinates */
     ci = sdscatlen(sdsempty(),node->name,CLUSTER_NAMELEN);
-    ci = sdscatfmt(ci," %s:%i@%i ",
+    ci = sdscatfmt(ci," %s:%i@%i",
         node->ip,
         port,
         node->cport);
+    if (node->hostname && sdslen(node->hostname) > 0) {
+        ci = sdscatfmt(ci,",%s",node->hostname);
+    }
+    ci = sdscat(ci," ");
 
     /* Flags */
     ci = representClusterNodeFlags(ci, node->flags);
@@ -5085,7 +5110,10 @@ int verifyDumpPayload(unsigned char *p, size_t len) {
 
     /* Verify RDB version */
     rdbver = (footer[1] << 8) | footer[0];
-    if (rdbver > RDB_VERSION) return C_ERR;
+    if ((rdbver >= RDB_FOREIGN_VERSION_MIN && rdbver <= RDB_FOREIGN_VERSION_MAX) ||
+        (rdbver > RDB_VERSION && server.rdb_version_check == RDB_VERSION_CHECK_STRICT)) {
+        return C_ERR;
+    }
 
     if (server.skip_checksum_validation)
         return C_OK;

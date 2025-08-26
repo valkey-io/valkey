@@ -8,6 +8,10 @@ proc errorstat {cmd} {
 
 start_server {tags {"info"}} {
     start_server {} {
+       test {INFO server contains rdb_version} {
+            set info [r info server]
+            assert_match "*rdb_version:*" $info
+        }
 
         test {errorstats: failed call authentication error} {
             r config resetstat

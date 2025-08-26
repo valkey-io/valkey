@@ -55,6 +55,7 @@ set ::all_tests {
     integration/failover
     integration/redis-cli
     integration/redis-benchmark
+    integration/rdb-downgrade-integration
     unit/pubsub
     unit/slowlog
     unit/scripting
@@ -78,6 +79,7 @@ set ::all_tests {
     unit/shutdown
     unit/networking
     unit/cluster
+    unit/rdb-downgrade-compat
 }
 # Index to the next test to run in the ::all_tests list.
 set ::next_test 0

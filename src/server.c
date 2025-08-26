@@ -35,6 +35,7 @@
 #include "latency.h"
 #include "atomicvar.h"
 #include "mt19937-64.h"
+#include "rdb_downgrade_compat.h"
 
 #include <time.h>
 #include <signal.h>
@@ -4724,6 +4725,7 @@ sds genRedisInfoString(const char *section) {
         info = sdscatfmt(info,
             "# Server\r\n"
             "redis_version:%s\r\n"
+            "rdb_version:%i\r\n"
             "redis_git_sha1:%s\r\n"
             "redis_git_dirty:%i\r\n"
             "redis_build_id:%s\r\n"
@@ -4748,6 +4750,7 @@ sds genRedisInfoString(const char *section) {
             "config_file:%s\r\n"
             "io_threads_active:%i\r\n",
             REDIS_VERSION,
+            RDB_VERSION,
             redisGitSHA1(),
             strtol(redisGitDirty(),NULL,10) > 0,
             redisBuildIdString(),
@@ -5044,6 +5047,11 @@ sds genRedisInfoString(const char *section) {
                 (intmax_t)eta
             );
         }
+        
+        /* Add RDB downgrade compatibility statistics */
+        sds rdb_compat_info = rdbDowngradeStatsInfoString();
+        info = sdscat(info, rdb_compat_info);
+        sdsfree(rdb_compat_info);
     }
 
     /* Stats */
@@ -5386,6 +5394,14 @@ sds genRedisInfoString(const char *section) {
                     j, keys, vkeys, server.db[j].avg_ttl);
             }
         }
+    }
+
+    /* RDB Downgrade Stats (standalone section) */
+    if (allsections || !strcasecmp(section,"RDBDowngradeStats")) {
+        if (sections++) info = sdscat(info,"\r\n");
+        sds rdb_compat_info = rdbDowngradeStatsInfoString();
+        info = sdscat(info, rdb_compat_info);
+        sdsfree(rdb_compat_info);
     }
 
     /* Get info from modules.

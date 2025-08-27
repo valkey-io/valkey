@@ -3163,12 +3163,18 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
             should_expand_db = 1;
             continue; /* Read next opcode. */
         } else if (type == RDB_OPCODE_SLOT_INFO) {
-            /* Ignore foreign RDB slot info size annotations.
-             * slot_id, slot_size, expires_slot_size. */
-            if (rdbLoadLen(rdb, NULL) == RDB_LENERR) goto eoferr;
-            if (rdbLoadLen(rdb, NULL) == RDB_LENERR) goto eoferr;
-            if (rdbLoadLen(rdb, NULL) == RDB_LENERR) goto eoferr;
-            continue; /* Ignore gracefully. */
+            /* RDB slot info size annotations used in pre-8.0 and foreign RDB.
+             * See the aux field "slot-info". */
+            uint64_t slot_id, slot_size, expires_slot_size;
+            if ((slot_id = rdbLoadLen(rdb, NULL)) == RDB_LENERR) goto eoferr;
+            if ((slot_size = rdbLoadLen(rdb, NULL)) == RDB_LENERR) goto eoferr;
+            if ((expires_slot_size = rdbLoadLen(rdb, NULL)) == RDB_LENERR) goto eoferr;
+            if (server.cluster_enabled) {
+                if (slot_size) kvstoreHashtableExpand(db->keys, slot_id, slot_size);
+                if (expires_slot_size) kvstoreHashtableExpand(db->expires, slot_id, expires_slot_size);
+                should_expand_db = 0;
+            }
+            continue; /* Read next opcode. */
         } else if (type == RDB_OPCODE_AUX) {
             /* AUX: generic string-string fields. Use to add state to RDB
              * which is backward compatible. Implementations of RDB loading

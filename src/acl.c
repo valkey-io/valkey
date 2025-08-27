@@ -30,7 +30,6 @@
 #include "server.h"
 #include "sha256.h"
 #include "module.h"
-#include "valkeymodule.h"
 #include <fcntl.h>
 #include <ctype.h>
 
@@ -1472,15 +1471,10 @@ static int checkPasswordBasedAuth(client *c, robj *username, robj *password) {
         result = AUTH_ERR;
     }
 
-    {
-        ValkeyModuleAuthenticationInfo info = VALKEYMODULE_AUTHENTICATIONINFO_INITIALIZER_V1;
-        info.client_id = c->id;
-        info.username = username->ptr;
-        info.module_name = NULL;
-        info.result = result == AUTH_OK ? VALKEYMODULE_AUTH_RESULT_GRANTED
-                                        : VALKEYMODULE_AUTH_RESULT_DENIED;
-        moduleFireServerEvent(VALKEYMODULE_EVENT_AUTHENTICATION_ATTEMPT, 0, &info);
-    }
+    moduleFireAuthenticationEvent(c->id,
+                                  username->ptr,
+                                  NULL,
+                                  result == AUTH_OK);
 
     return result;
 }

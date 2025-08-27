@@ -7988,7 +7988,7 @@ void moduleUnregisterAuthCBs(ValkeyModule *module) {
 
 /* Search for & attempt next module auth callback after skipping the ones already attempted.
  * Returns the result of the module auth callback. */
-int attemptNextAuthCb(client *c, robj *username, robj *password, robj **err) {
+static int attemptNextAuthCb(client *c, robj *username, robj *password, robj **err) {
     int handle_next_callback = (!c->module_data || c->module_data->module_auth_ctx == NULL);
     ValkeyModuleAuthCtx *cur_auth_ctx = NULL;
     listNode *ln;
@@ -8023,7 +8023,7 @@ int attemptNextAuthCb(client *c, robj *username, robj *password, robj **err) {
  * auth operation.
  * Otherwise, we attempt the auth reply callback & the free priv data callback, update fields and
  * return the result of the reply callback. */
-int attemptBlockedAuthReplyCallback(client *c, robj *username, robj *password, robj **err) {
+static int attemptBlockedAuthReplyCallback(client *c, robj *username, robj *password, robj **err) {
     int result = VALKEYMODULE_AUTH_NOT_HANDLED;
     if (!c->module_data || !c->module_data->module_blocked_client) return result;
     ValkeyModuleBlockedClient *bc = (ValkeyModuleBlockedClient *)c->module_data->module_blocked_client;
@@ -8085,21 +8085,26 @@ int checkModuleAuthentication(client *c, robj *username, robj *password, robj **
         }
     }
 
-    {
-        ValkeyModuleAuthenticationInfo info = VALKEYMODULE_AUTHENTICATIONINFO_INITIALIZER_V1;
-        info.client_id = c->id;
-        info.username = username->ptr;
-        if (auth_ctx) {
-            info.module_name = auth_ctx->module->name;
-        } else {
-            info.module_name = NULL;
-        }
-        info.result = auth_result == AUTH_OK ? VALKEYMODULE_AUTH_RESULT_GRANTED
-                                             : VALKEYMODULE_AUTH_RESULT_DENIED;
-        moduleFireServerEvent(VALKEYMODULE_EVENT_AUTHENTICATION_ATTEMPT, 0, &info);
-    }
+    const char *module_name = auth_ctx ? auth_ctx->module->name : NULL;
+    moduleFireAuthenticationEvent(c->id,
+                                  username->ptr,
+                                  module_name,
+                                  auth_result == AUTH_OK);
 
     return auth_result;
+}
+
+void moduleFireAuthenticationEvent(uint64_t client_id,
+                                   const char *username,
+                                   const char *module_name,
+                                   int is_granted) {
+    ValkeyModuleAuthenticationInfo info = VALKEYMODULE_AUTHENTICATIONINFO_INITIALIZER_V1;
+    info.client_id = client_id;
+    info.username = username;
+    info.module_name = module_name;
+    info.result = is_granted ? VALKEYMODULE_AUTH_RESULT_GRANTED
+                             : VALKEYMODULE_AUTH_RESULT_DENIED;
+    moduleFireServerEvent(VALKEYMODULE_EVENT_AUTHENTICATION_ATTEMPT, 0, &info);
 }
 
 /* This function is called from module.c in order to check if a module

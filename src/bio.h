@@ -42,6 +42,7 @@ void bioCreateCloseAofJob(int fd, long long offset, int need_reclaim_cache);
 void bioCreateFsyncJob(int fd, long long offset, int need_reclaim_cache);
 void bioCreateLazyFreeJob(lazy_free_fn free_fn, int arg_count, ...);
 void bioCreateSaveRDBToDiskJob(connection *conn, int is_dual_channel);
+void bioCreateClusterConfigSaveJob(sds content, int do_fsync);
 int inBioThread(void);
 
 /* Background job opcodes */
@@ -51,6 +52,7 @@ enum {
     BIO_LAZY_FREE,      /* Deferred objects freeing. */
     BIO_CLOSE_AOF,      /* Deferred close for AOF files. */
     BIO_RDB_SAVE,       /* Deferred save RDB to disk on replica */
+    BIO_CLUSTER_SAVE,   /* Deferred cluster config file save and fsync. */
     BIO_NUM_OPS
 };
 

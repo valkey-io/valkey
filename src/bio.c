@@ -62,6 +62,7 @@
 
 #include "server.h"
 #include "connection.h"
+#include "cluster.h"
 #include "bio.h"
 #include <stdatomic.h>
 
@@ -71,6 +72,7 @@ static unsigned int bio_job_to_worker[] = {
     [BIO_CLOSE_AOF] = 1,
     [BIO_LAZY_FREE] = 2,
     [BIO_RDB_SAVE] = 3,
+    [BIO_CLUSTER_SAVE] = 4,
 };
 
 typedef struct {
@@ -86,6 +88,7 @@ static bio_worker_data bio_workers[] = {
     {"bio_aof"},
     {"bio_lazy_free"},
     {"bio_rdb_save"},
+    {"bio_cluster_save_save"},
 };
 static const bio_worker_data *const bio_worker_end = bio_workers + (sizeof bio_workers / sizeof *bio_workers);
 
@@ -128,6 +131,12 @@ typedef union bio_job {
         connection *conn;    /* Connection to download the RDB from */
         int is_dual_channel; /* Single vs dual channel */
     } save_to_disk_args;
+
+    struct {
+        int type;
+        sds content;           /* Cluster config file content. */
+        unsigned do_fsync : 1; /* A flag to indicate that a fsync is required. */
+    } cluster_save_args;
 } bio_job;
 
 void *bioProcessBackgroundJobs(void *arg);
@@ -227,6 +236,14 @@ void bioCreateSaveRDBToDiskJob(connection *conn, int is_dual_channel) {
     bioSubmitJob(BIO_RDB_SAVE, job);
 }
 
+void bioCreateClusterConfigSaveJob(sds content, int do_fsync) {
+    bio_job *job = zmalloc(sizeof(*job));
+    job->cluster_save_args.content = content;
+    job->cluster_save_args.do_fsync = do_fsync;
+
+    bioSubmitJob(BIO_CLUSTER_SAVE, job);
+}
+
 void *bioProcessBackgroundJobs(void *arg) {
     bio_worker_data *const bwd = arg;
     bio_job *job;
@@ -304,6 +321,10 @@ void *bioProcessBackgroundJobs(void *arg) {
             job->free_args.free_fn(job->free_args.free_args);
         } else if (job_type == BIO_RDB_SAVE) {
             replicaReceiveRDBFromPrimaryToDisk(job->save_to_disk_args.conn, job->save_to_disk_args.is_dual_channel);
+        } else if (job_type == BIO_CLUSTER_SAVE) {
+            if (clusterSaveConfigFromBio(job->cluster_save_args.content, job->cluster_save_args.do_fsync) == C_ERR) {
+                serverLog(LL_WARNING, "Fail to save the cluster config file in bio.");
+            }
         } else {
             serverPanic("Wrong job type in bioProcessBackgroundJobs().");
         }

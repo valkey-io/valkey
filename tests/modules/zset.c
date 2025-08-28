@@ -128,6 +128,8 @@ int zset_revrangebylex(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc
 }
 
 static void zset_members_cb(ValkeyModuleKey *key, ValkeyModuleString *field, ValkeyModuleString *value, void *privdata) {
+    UNUSED(key);
+    UNUSED(value);
     ValkeyModuleCtx *ctx = (ValkeyModuleCtx *)privdata;
     ValkeyModule_ReplyWithString(ctx, field);
 }
@@ -161,27 +163,27 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
         return VALKEYMODULE_ERR;
 
     if (ValkeyModule_CreateCommand(ctx, "zset.rem", zset_rem, "write",
-                                   1, 1, 1) == VALKEYMODULE_ERR)
+                                  1, 1, 1) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
 
     if (ValkeyModule_CreateCommand(ctx, "zset.add", zset_add, "write",
-                                   1, 1, 1) == VALKEYMODULE_ERR)
+                                  1, 1, 1) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
 
     if (ValkeyModule_CreateCommand(ctx, "zset.incrby", zset_incrby, "write",
-                                   1, 1, 1) == VALKEYMODULE_ERR)
+                                  1, 1, 1) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
 
     if (ValkeyModule_CreateCommand(ctx, "zset.rangebylex", zset_rangebylex, "readonly",
-                                   1, 1, 1) == VALKEYMODULE_ERR)
+                                  1, 1, 1) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
 
     if (ValkeyModule_CreateCommand(ctx, "zset.revrangebylex", zset_revrangebylex, "readonly",
-                                   1, 1, 1) == VALKEYMODULE_ERR)
+                                  1, 1, 1) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
 
     if (ValkeyModule_CreateCommand(ctx, "zset.members", zset_members, "readonly",
-                                   1, 1, 1) == VALKEYMODULE_ERR)
+                                  1, 1, 1) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
 
     return VALKEYMODULE_OK;

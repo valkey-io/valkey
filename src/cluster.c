@@ -166,12 +166,7 @@ int verifyDumpPayload(unsigned char *p, size_t len, uint16_t *rdbver_ptr) {
     if (rdbver_ptr) {
         *rdbver_ptr = rdbver;
     }
-    if (server.rdb_version_check == RDB_VERSION_CHECK_STRICT &&
-        (rdbver > RDB_VERSION ||
-         (rdbver >= RDB_FOREIGN_VERSION_MIN && rdbver <= RDB_FOREIGN_VERSION_MAX))) {
-        return C_ERR;
-    }
-
+    if (!rdbIsVersionAccepted(rdbver, false, false)) return C_ERR;
     if (server.skip_checksum_validation) return C_OK;
 
     /* Verify CRC64 */
@@ -265,11 +260,10 @@ void restoreCommand(client *c) {
         return;
     }
 
-    /* If it's a foreign RDB format. Only accept old data types that we know the
-     * meaning of. */
-    if (rdbver >= RDB_FOREIGN_VERSION_MIN && rdbver <= RDB_FOREIGN_VERSION_MAX &&
-        type >= RDB_FOREIGN_TYPE_MIN) {
-        addReplyError(c, "Unsupported foreign data format");
+    /* If it's a foreign RDB format, only accept old data types that we know
+     * existed in the past and that don't clash with new types added later. */
+    if (rdbIsForeignVersion(rdbver) && type >= RDB_FOREIGN_TYPE_MIN) {
+        addReplyErrorFormat(c, "Unsupported foreign data type: %d", type);
         return;
     }
 

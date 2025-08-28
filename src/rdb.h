@@ -57,6 +57,10 @@
 static_assert(RDB_VERSION < RDB_FOREIGN_VERSION_MIN || RDB_VERSION > RDB_FOREIGN_VERSION_MAX,
               "RDB version in foreign version range");
 
+static inline bool rdbIsForeignVersion(int rdbver) {
+    return rdbver >= RDB_FOREIGN_VERSION_MIN && rdbver <= RDB_FOREIGN_VERSION_MAX;
+}
+
 /* Defines related to the dump file format. To store 32 bits lengths for short
  * keys requires a lot of space, so we check the most significant 2 bits of
  * the first byte to interpreter the length:
@@ -178,6 +182,7 @@ typedef struct rdbSnapshotOptions {
 #define RDB_LOAD_ERR_EMPTY_KEY 1 /* Error of empty key */
 #define RDB_LOAD_ERR_OTHER 2     /* Any other errors */
 
+bool rdbIsVersionAccepted(int rdbver, bool is_valkey_magic, bool is_redis_magic);
 ssize_t rdbWriteRaw(rio *rdb, void *p, size_t len);
 int rdbSaveType(rio *rdb, unsigned char type);
 int rdbLoadType(rio *rdb);

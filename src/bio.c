@@ -88,7 +88,7 @@ static bio_worker_data bio_workers[] = {
     {"bio_aof"},
     {"bio_lazy_free"},
     {"bio_rdb_save"},
-    {"bio_cluster_save_save"},
+    {"bio_cluster_config_save"},
 };
 static const bio_worker_data *const bio_worker_end = bio_workers + (sizeof bio_workers / sizeof *bio_workers);
 
@@ -240,7 +240,6 @@ void bioCreateClusterConfigSaveJob(sds content, int do_fsync) {
     bio_job *job = zmalloc(sizeof(*job));
     job->cluster_save_args.content = content;
     job->cluster_save_args.do_fsync = do_fsync;
-
     bioSubmitJob(BIO_CLUSTER_SAVE, job);
 }
 
@@ -323,7 +322,7 @@ void *bioProcessBackgroundJobs(void *arg) {
             replicaReceiveRDBFromPrimaryToDisk(job->save_to_disk_args.conn, job->save_to_disk_args.is_dual_channel);
         } else if (job_type == BIO_CLUSTER_SAVE) {
             if (clusterSaveConfigFromBio(job->cluster_save_args.content, job->cluster_save_args.do_fsync) == C_ERR) {
-                serverLog(LL_WARNING, "Fail to save the cluster config file in bio.");
+                serverLog(LL_WARNING, "Failed to save the cluster config file in background.");
             }
         } else {
             serverPanic("Wrong job type in bioProcessBackgroundJobs().");

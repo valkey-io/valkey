@@ -12,7 +12,7 @@
  * Impact on Multi-Thread RDB Save Performance: Above 64 KB the performance of RDB Save is consistent.
  *
  * Impact on Multi-Thread RDB Load Performance: Since the buffer flush size defines the minimum "rdb-data-segment" size,
- * saving with larger values will improve multi-thread load becuase we can request larger reads from the OS.
+ * saving with larger values will improve multi-thread load because we can request larger reads from the OS.
  */
 #define RDB_WORKER_FLUSH_SIZE_MIN (64 * 1024)           /* Min = 64 KB */
 #define RDB_WORKER_FLUSH_SIZE_DEFAULT (4 * 1024 * 1024) /* Default = 4 MB */

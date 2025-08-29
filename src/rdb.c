@@ -3530,9 +3530,9 @@ eoferr:
     result = C_ERR;
 cleanup:
     /* Unified cleanup for multithreaded resources.
-    * Ensures worker threads and all allocated resources are released exactly once.
-    */    
-   if (server.rdb_threads_num > 1) {
+     * Ensures worker threads and all allocated resources are released exactly once.
+     */
+    if (server.rdb_threads_num > 1) {
         drainRDBThreadsQueue();
         if (atomic_load_explicit(&rdb_load_thread_error, memory_order_relaxed)) {
             serverLog(LL_WARNING, "RDB load failed in worker thread(s).");

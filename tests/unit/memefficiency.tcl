@@ -183,7 +183,7 @@ run_solo {defrag} {
     proc perform_defrag_test {name args} {
         # This value should be 5 ms, but it was flaky in github runners. The issue 
         # https://github.com/valkey-io/valkey/issues/2444 is tracking if we can raise the limit again.
-        set opts(latency) 40
+        set opts(latency) 5
         set opts(while_defragging) {}
         array set opts $args
         assert {[info exists opts(populate)]}

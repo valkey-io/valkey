@@ -7899,7 +7899,7 @@ ValkeyModuleBlockedClient *moduleBlockClient(ValkeyModuleCtx *ctx,
 
     if (islua || ismulti) {
         c->bstate->module_blocked_handle = NULL;
-        addReplyError(c, islua ? "Blocking module command called from lua script"
+        addReplyError(c, islua ? "Blocking module command called from Lua script"
                                : "Blocking module command called from transaction");
     } else if (ctx->flags & VALKEYMODULE_CTX_BLOCKED_REPLY) {
         c->bstate->module_blocked_handle = NULL;
@@ -8195,7 +8195,7 @@ ValkeyModuleBlockedClient *VM_BlockClient(ValkeyModuleCtx *ctx,
  *
  * There are some cases where ValkeyModule_BlockClientOnAuth() cannot be used:
  *
- * 1. If the client is in the middle of module based authentication. This will not block the client
+ * 1. If the client is not in the middle of module based authentication. This will not block the client
  *    but instead produce a specific error reply.
  *
  * For details on other return values and error codes, see the comment block for

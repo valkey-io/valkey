@@ -52,10 +52,33 @@ static const unsigned char bitsinbyte[256] = {
     6, 7, 3, 4, 4, 5, 4, 5, 5, 6, 4, 5, 5, 6, 5, 6, 6, 7, 4, 5, 5, 6, 5, 6, 6, 7, 5, 6, 6, 7, 6, 7, 7, 8};
 
 #if HAVE_X86_SIMD
+#define AVX512_CHUNK_SIZE 64
+valkey_attribute_target("avx512f,avx512bw,avx512vpopcntdq") long long popcountAVX512(void *s, long count) {
+    const size_t chunks = count / AVX512_CHUNK_SIZE;
+    uint8_t *ptr = (uint8_t *)s;
+    const uint8_t *end = ptr + count;
+
+    __m512i accumulator = _mm512_setzero_si512();
+    for (size_t i = 0; i < chunks; i++, ptr += AVX512_CHUNK_SIZE) {
+        const __m512i v = _mm512_loadu_si512((const __m512i *)ptr);
+        const __m512i p = _mm512_popcnt_epi64(v);
+        accumulator = _mm512_add_epi64(accumulator, p);
+    }
+
+    if (ptr < end) {
+        const size_t remaining = end - ptr;
+        __mmask64 mask = (1ULL << remaining) - 1;
+        const __m512i v = _mm512_maskz_loadu_epi8(mask, ptr);
+        const __m512i p = _mm512_popcnt_epi64(v);
+        accumulator = _mm512_add_epi64(accumulator, p);
+    }
+
+    return _mm512_reduce_add_epi64(accumulator);
+}
+
 /* The SIMD version of popcount enhances performance through parallel lookup tables which is based on the following article:
  * https://arxiv.org/pdf/1611.07612 */
-ATTRIBUTE_TARGET_AVX2
-long long popcountAVX2(void *s, long count) {
+valkey_attribute_target("avx2") long long popcountAVX2(void *s, long count) {
     long i = 0;
     unsigned char *p = (unsigned char *)s;
     long long bits = 0;
@@ -240,9 +263,9 @@ long long popcountNEON(void *s, long n) {
  * work with an input string length up to 512 MB or more (server.proto_max_bulk_len) */
 long long serverPopcount(void *s, long count) {
 #if HAVE_X86_SIMD
-    /* If length of s >= 256 bits and the CPU supports AVX2,
-     * we prefer to use the SIMD version */
-    if (count >= 32) {
+    if (__builtin_cpu_supports("avx512f") && __builtin_cpu_supports("avx512bw") && __builtin_cpu_supports("avx512vpopcntdq")) {
+        return popcountAVX512(s, count);
+    } else if (__builtin_cpu_supports("avx2")) {
         return popcountAVX2(s, count);
     }
 #endif

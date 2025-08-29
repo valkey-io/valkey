@@ -6,8 +6,10 @@
 #include "../config.h"
 #include "../zmalloc.h"
 
+extern long long serverPopcount(void *s, long count);
 extern long long popcountScalar(void *s, long count);
 #if HAVE_X86_SIMD
+extern long long popcountAVX512(void *s, long count);
 extern long long popcountAVX2(void *s, long count);
 #endif
 #if defined(__aarch64__)
@@ -37,16 +39,29 @@ static int test_case(const char *msg, int size) {
         }
 
         long long expect = bitcount(buf, size);
-        long long ret_scalar = popcountScalar(buf, size);
-        TEST_ASSERT_MESSAGE(msg, expect == ret_scalar);
+        long long ret = serverPopcount(buf, size);
+        TEST_ASSERT_MESSAGE(msg, expect == ret);
+
+        /* Explicitly test special implementations. */
 #if HAVE_X86_SIMD
-        long long ret_avx2 = popcountAVX2(buf, size);
-        TEST_ASSERT_MESSAGE(msg, expect == ret_avx2);
+        if (__builtin_cpu_supports("avx512f") && __builtin_cpu_supports("avx512bw") && __builtin_cpu_supports("avx512vpopcntdq")) {
+            long long ret_avx512 = popcountAVX512(buf, size);
+            TEST_ASSERT_MESSAGE(msg, expect == ret_avx512);
+        }
+        if (__builtin_cpu_supports("avx2")) {
+            long long ret_avx2 = popcountAVX2(buf, size);
+            TEST_ASSERT_MESSAGE(msg, expect == ret_avx2);
+        }
 #endif
 #if defined(__aarch64__)
+        /* All 64-bit ARM CPUs support NEON. */
         long long ret_neon = popcountNEON(buf, size);
         TEST_ASSERT_MESSAGE(msg, expect == ret_neon);
 #endif
+        /* Test the fallback implementation used on CPUs that can't use
+         * any of the specialized implementations. */
+        long long ret_scalar = popcountScalar(buf, size);
+        TEST_ASSERT_MESSAGE(msg, expect == ret_scalar);
     }
 
     return 0;
@@ -76,6 +91,11 @@ int test_popcount(int argc, char **argv, int flags) {
     TEST_CASE("Popcount(Part A + Part C)", 8 * 32 * 11 + 7);
     TEST_CASE("Popcount(Part A + Part B + Part C)", 8 * 32 * 3 + 3 * 32 + 5);
     TEST_CASE("Popcount(Corner case)", 0);
+
+    /* Test cases for AVX512 */
+    TEST_CASE("Popcount(64-byte aligned)", 64 * 2);
+    TEST_CASE("Popcount(64-byte + small remainder)", 64 * 2 + 2);
+    TEST_CASE("Popcount(64-byte + small remainder)", 64 * 2 + 5);
 #undef TEST_CASE
 
     return 0;

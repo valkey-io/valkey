@@ -7853,6 +7853,7 @@ ValkeyModuleBlockedClient *moduleBlockClient(ValkeyModuleCtx *ctx,
     int is_keyspace_notification = ctx->flags & (VALKEYMODULE_CTX_KEYSPACE_NOTIFICATION);
     int islua = scriptIsRunning();
     int ismulti = server.in_exec;
+    serverAssert(!c->flag.deny_blocking || (islua || ismulti));
     if ((islua || ismulti) && is_keyspace_notification) {
         /* Avoid blocking within transactions when context initiated by
          * keyspace notification. */

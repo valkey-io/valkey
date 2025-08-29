@@ -88,11 +88,11 @@ extern _Atomic int rdb_load_thread_error;
 
 /* Represents a key loaded from an RDB file, ready for insertion. */
 typedef struct RdbLoadedKey {
-    sds key;                  /* The key string. */
-    robj *val;                /* The key's value object. */
-    long long expiretime;     /* The expiration timestamp. */
-    long long lfu_freq;       /* The LFU frequency. */
-    long long lru_idle;       /* The LRU idle time. */
+    sds key;              /* The key string. */
+    robj *val;            /* The key's value object. */
+    long long expiretime; /* The expiration timestamp. */
+    long long lfu_freq;   /* The LFU frequency. */
+    long long lru_idle;   /* The LRU idle time. */
 } RdbLoadedKey;
 
 /* Arguments for a worker thread responsible for loading an RDB data segment. */
@@ -117,7 +117,6 @@ int offloadRdbDataSegment(
     int rdbflags,
     long long lru_clock,
     long long now,
-    pthread_mutex_t *db_insert_mutex
-);
+    pthread_mutex_t *db_insert_mutex);
 
 #endif // __RDB_THREADS_H__

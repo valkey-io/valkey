@@ -5,6 +5,8 @@
 #include <winsock2.h> /* For struct timeval */
 #endif
 
+#define UNUSED(x) (void)(x)
+
 #define ASSERT_MSG(_x, _msg)                            \
     if (!(_x)) {                                        \
         fprintf(stderr, "ERROR: %s (%s)\n", _msg, #_x); \

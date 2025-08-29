@@ -52,7 +52,8 @@ void test_password_ok(void) {
     ASSERT_MSG(cc && cc->err == 0, cc ? cc->errstr : "OOM");
     assert(connect_success_counter == 1); // for CLUSTER SLOTS
     load_valkey_version(cc);
-    assert(connect_success_counter == 2); // for checking valkey version
+    // Check that the initial slotmap update connection is reused.
+    assert(connect_success_counter == 1);
 
     // Test connection
     valkeyReply *reply;
@@ -62,7 +63,7 @@ void test_password_ok(void) {
     valkeyClusterFree(cc);
 
     // Check counters incremented by connect callback
-    assert(connect_success_counter == 3); // for SET (to a different node)
+    assert(connect_success_counter == 2); // for SET (to a different node)
     assert(connect_failure_counter == 0);
     reset_counters();
 }

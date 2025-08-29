@@ -38,6 +38,12 @@
                 "cluster.links": {
                     "type": "integer"
                 },
+                "cluster.slot_import": {
+                    "type": "integer"
+                },
+                "cluster.slot_export": {
+                    "type": "integer"
+                },
                 "aof.buffer": {
                     "type": "integer"
                 },

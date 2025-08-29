@@ -312,7 +312,7 @@ void sendTrackingMessage(client *c, char *keyname, size_t keylen, int proto) {
          * that addReplyPubsubMessage() will not take a reference. */
         addReplyPubsubMessage(c, TrackingChannelName, NULL, shared.messagebulk);
     } else {
-        /* If are here, the client is not using RESP3, nor is
+        /* If are here, the client is neither using RESP3, nor is
          * redirecting to another client. We can't send anything to
          * it since RESP2 does not support push messages in the same
          * connection. */

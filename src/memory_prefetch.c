@@ -71,14 +71,16 @@ void prefetchCommandsBatchInit(void) {
     batch->prefetch_info = zcalloc(max_prefetch_size * sizeof(KeyPrefetchInfo));
 }
 
-void onMaxBatchSizeChange(void) {
+int onMaxBatchSizeChange(const char **err) {
+    UNUSED(err);
     if (batch && batch->client_count > 0) {
         /* We need to process the current batch before updating the size */
-        return;
+        return 1;
     }
 
     freePrefetchCommandsBatch();
     prefetchCommandsBatchInit();
+    return 1;
 }
 
 /* Move to the next key in the batch. */
@@ -118,7 +120,7 @@ static void initBatchInfo(hashtable **tables) {
 }
 
 static void prefetchEntry(KeyPrefetchInfo *info) {
-    if (hashtableIncrementalFindStep(&info->hashtab_state) == 1) {
+    if (hashtableIncrementalFindStep(&info->hashtab_state)) {
         /* Not done yet */
         moveToNextKey();
     } else if (server.io_threads_num >= server.min_io_threads_copy_avoid) {
@@ -236,8 +238,22 @@ void processClientsCommandsBatch(void) {
 
     /* Handle the case where the max prefetch size has been changed. */
     if (batch->max_prefetch_size != (size_t)server.prefetch_batch_max_size) {
-        onMaxBatchSizeChange();
+        onMaxBatchSizeChange(NULL);
     }
+}
+
+/* Get a command's keys and add them to the current prefetching batch. */
+static void addCommandToBatch(struct serverCommand *cmd, robj **argv, int argc, serverDb *db, int slot) {
+    getKeysResult result;
+    initGetKeysResult(&result);
+    int num_keys = getKeysFromCommand(cmd, argv, argc, &result);
+    for (int i = 0; i < num_keys && batch->key_count < batch->max_prefetch_size; i++) {
+        batch->keys[batch->key_count] = argv[result.keys[i].pos];
+        batch->slots[batch->key_count] = slot >= 0 ? slot : 0;
+        batch->keys_tables[batch->key_count] = kvstoreGetHashtable(db->keys, batch->slots[batch->key_count]);
+        batch->key_count++;
+    }
+    getKeysFreeResult(&result);
 }
 
 /* Adds the client's command to the current batch and processes the batch
@@ -249,18 +265,18 @@ int addCommandToBatchAndProcessIfFull(client *c) {
 
     batch->clients[batch->client_count++] = c;
 
-    /* Get command's keys positions */
+    /* Client's next command */
     if (c->parsed_cmd && !(c->read_flags & READ_FLAGS_BAD_ARITY)) {
-        getKeysResult result;
-        initGetKeysResult(&result);
-        int num_keys = getKeysFromCommand(c->parsed_cmd, c->argv, c->argc, &result);
-        for (int i = 0; i < num_keys && batch->key_count < batch->max_prefetch_size; i++) {
-            batch->keys[batch->key_count] = c->argv[result.keys[i].pos];
-            batch->slots[batch->key_count] = c->slot > 0 ? c->slot : 0;
-            batch->keys_tables[batch->key_count] = kvstoreGetHashtable(c->db->keys, batch->slots[batch->key_count]);
-            batch->key_count++;
-        }
-        getKeysFreeResult(&result);
+        c->read_flags |= READ_FLAGS_PREFETCHED;
+        addCommandToBatch(c->parsed_cmd, c->argv, c->argc, c->db, c->slot);
+    }
+
+    /* Commands in the queue. */
+    for (int j = c->cmd_queue.off; j < c->cmd_queue.len && batch->key_count < batch->max_prefetch_size; j++) {
+        parsedCommand *p = &c->cmd_queue.cmds[j];
+        if (!p->cmd) continue; /* Error or incomplete command. */
+        p->read_flags |= READ_FLAGS_PREFETCHED;
+        addCommandToBatch(p->cmd, p->argv, p->argc, c->db, p->slot);
     }
 
     /* If the batch is full, process it.

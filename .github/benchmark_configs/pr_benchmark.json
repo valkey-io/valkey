@@ -1,0 +1,32 @@
+[
+  {
+    "requests": [1000000],
+    "keyspacelen": [1000000],
+    "data_sizes": [16],
+    "pipelines": [10],
+    "clients": [50],
+    "commands": [
+      "SET",
+      "GET",
+      "MSET",
+      "MGET"
+    ],
+    "cluster_mode": false,
+    "tls_mode": false,
+    "warmup": 10
+  },
+  {
+    "requests": [1000000],
+    "keyspacelen": [1000000],
+    "data_sizes": [16],
+    "pipelines": [10],
+    "clients": [50],
+    "commands": [
+      "SET",
+      "GET"
+    ],
+    "cluster_mode": true,
+    "tls_mode": false,
+    "warmup": 10
+  }
+]

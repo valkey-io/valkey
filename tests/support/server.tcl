@@ -12,17 +12,23 @@ proc start_server_error {executable config_file error} {
     send_data_packet $::test_server_fd err $err
 }
 
-proc check_valgrind_errors stderr {
-    set res [find_valgrind_errors $stderr true]
+proc check_valgrind_errors srv {
+    set res [find_valgrind_errors [dict get $srv stderr] true]
     if {$res != ""} {
         send_data_packet $::test_server_fd err "Valgrind error: $res\n"
+        if {$::dump_logs} {
+            dump_server_log $srv
+        }
     }
 }
 
-proc check_sanitizer_errors stderr {
-    set res [sanitizer_errors_from_file $stderr]
+proc check_sanitizer_errors srv {
+    set res [sanitizer_errors_from_file [dict get $srv stderr]]
     if {$res != ""} {
         send_data_packet $::test_server_fd err "Sanitizer error: $res\n"
+        if {$::dump_logs} {
+            dump_server_log $srv
+        }
     }
 }
 
@@ -42,6 +48,7 @@ proc clean_persistence config {
     catch {exec rm -rf $rdb}
 }
 
+# config is actually a srv
 proc kill_server config {
     # nothing to kill when running against external server
     if {$::external} return
@@ -56,10 +63,10 @@ proc kill_server config {
     if {![is_alive $pid]} {
         # Check valgrind errors if needed
         if {$::valgrind} {
-            check_valgrind_errors [dict get $config stderr]
+            check_valgrind_errors $config
         }
 
-        check_sanitizer_errors [dict get $config stderr]
+        check_sanitizer_errors $config
 
         # Remove this pid from the set of active pids in the test server.
         send_data_packet $::test_server_fd server-killed $pid
@@ -120,10 +127,10 @@ proc kill_server config {
 
     # Check valgrind errors if needed
     if {$::valgrind} {
-        check_valgrind_errors [dict get $config stderr]
+        check_valgrind_errors $config
     }
 
-    check_sanitizer_errors [dict get $config stderr]
+    check_sanitizer_errors $config
 
     # Remove this pid from the set of active pids in the test server.
     send_data_packet $::test_server_fd server-killed $pid

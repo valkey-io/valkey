@@ -477,8 +477,10 @@ int test_addRepliesWithOffloadsToBuffer(int argc, char **argv, int flags) {
     TEST_ASSERT(header1->payload_type == BULK_STR_REF);
     TEST_ASSERT(header1->payload_len == PTRS_LEN);
 
-    robj **ptr = (robj **)(c->buf + sizeof(payloadHeader));
-    TEST_ASSERT(obj == *ptr);
+
+    robj *ptr;
+    memcpy(&ptr, c->buf + sizeof(payloadHeader), sizeof(ptr));
+    TEST_ASSERT(obj == ptr);
 
     robj *obj2 = createObject(OBJ_STRING, sdscatfmt(sdsempty(), "test2"));
     _addBulkStrRefToBufferOrList(c, obj2);
@@ -488,8 +490,8 @@ int test_addRepliesWithOffloadsToBuffer(int argc, char **argv, int flags) {
     TEST_ASSERT(header1->payload_type == BULK_STR_REF);
     TEST_ASSERT(header1->payload_len == 2 * PTRS_LEN);
 
-    ptr = (robj **)(c->buf + sizeof(payloadHeader) + PTRS_LEN);
-    TEST_ASSERT(obj2 == *ptr);
+    memcpy(&ptr, c->buf + sizeof(payloadHeader) + PTRS_LEN, sizeof(ptr));
+    TEST_ASSERT(obj2 == ptr);
 
     /* Test 2:  Add plain reply to the buffer */
     const char *plain = "+OK\r\n";
@@ -516,8 +518,8 @@ int test_addRepliesWithOffloadsToBuffer(int argc, char **argv, int flags) {
     TEST_ASSERT(c->bufpos == 3 * sizeof(payloadHeader) + 3 * PTRS_LEN + 10 * plain_len);
     payloadHeader *header3 = c->last_header;
     TEST_ASSERT(header3->payload_type == BULK_STR_REF);
-    ptr = (robj **)((char *)c->last_header + sizeof(payloadHeader));
-    TEST_ASSERT(obj == *ptr);
+    memcpy(&ptr, (char *)c->last_header + sizeof(payloadHeader), sizeof(ptr));
+    TEST_ASSERT(obj == ptr);
 
     releaseReplyReferences(c);
     decrRefCount(obj);
@@ -579,8 +581,9 @@ int test_addRepliesWithOffloadsToList(int argc, char **argv, int flags) {
     TEST_ASSERT(header1->payload_type == BULK_STR_REF);
     TEST_ASSERT(header1->payload_len == PTRS_LEN);
 
-    robj **ptr = (robj **)(blk->buf + sizeof(payloadHeader));
-    TEST_ASSERT(obj == *ptr);
+    robj *ptr;
+    memcpy(&ptr, blk->buf + sizeof(payloadHeader), sizeof(ptr));
+    TEST_ASSERT(obj == ptr);
 
     /* Test 2:  Add one more bulk offload to the reply list */
     _addBulkStrRefToBufferOrList(c, obj);

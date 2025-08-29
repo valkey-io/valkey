@@ -31,7 +31,11 @@ start_cluster 3 0 [list config_lines $modules] {
         } else {
             fail "node 1 didn't receive DONG messages"
         }
-        assert_equal 2 [count_log_message 0 "* <cluster> DONG (type 2) RECEIVED*"]
+        wait_for_condition 50 100 {
+            [count_log_message 0 "* <cluster> DONG (type 2) RECEIVED*"] eq 2
+        } else {
+            fail "node 1 didn't log DONG message twice"
+        }
     }
 }
 

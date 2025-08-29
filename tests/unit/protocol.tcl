@@ -6,11 +6,25 @@ start_server {tags {"protocol network"}} {
         assert_equal "PONG" [r ping]
     }
 
+    test "Handle an empty query in pipeline" {
+        reconnect
+        r write "\r\n*1\r\n\$4\r\nping\r\n"
+        r flush
+        assert_equal PONG [r read]
+    }
+
     test "Negative multibulk length" {
         reconnect
         r write "*-10\r\n"
         r flush
         assert_equal PONG [r ping]
+    }
+
+    test "Negative multibulk length in pipeline" {
+        reconnect
+        r write "*-10\r\n*1\r\n\$4\r\nping\r\n"
+        r flush
+        assert_equal PONG [r read]
     }
 
     test "Out of range multibulk length" {

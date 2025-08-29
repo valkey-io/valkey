@@ -35,7 +35,7 @@ start_server {tags {"multi"}} {
 
     test {Nested MULTI are not allowed} {
         r multi
-        assert_error "ERR*" {r multi}
+        assert_error "ERR Command 'multi' not allowed inside a transaction*" {r multi}
         assert_error "EXECABORT*" {r exec}
     }
 
@@ -48,7 +48,7 @@ start_server {tags {"multi"}} {
 
     test {WATCH inside MULTI is not allowed} {
         r multi
-        assert_error "ERR*" {r watch}
+        assert_error "ERR Command 'watch' not allowed inside a transaction*" {r watch x}
         assert_error "EXECABORT*" {r exec}
     }
 
@@ -657,7 +657,7 @@ start_server {tags {"multi"}} {
         # check that GET and PING are disallowed on stale replica, even if the replica becomes stale only after queuing.
         r multi
         r get xx
-        $r1 replicaof localhsot 0
+        $r1 replicaof localhost_ 0
         catch {r exec} e
         assert_match {*EXECABORT*MASTERDOWN*} $e
 
@@ -666,7 +666,7 @@ start_server {tags {"multi"}} {
 
         r multi
         r ping
-        $r1 replicaof localhsot 0
+        $r1 replicaof localhost_ 0
         catch {r exec} e
         assert_match {*EXECABORT*MASTERDOWN*} $e
 
@@ -836,12 +836,11 @@ start_server {tags {"multi"}} {
             r del foo
             r multi
             r set foo bar
-            catch {r $cmd} e1
-            catch {r exec} e2
-            assert_match {*Command not allowed inside a transaction*} $e1
-            assert_match {EXECABORT*} $e2
-            r get foo
-        } {}
+            set cmd_lower [string tolower $cmd]
+            assert_error "ERR Command '$cmd_lower' not allowed inside a transaction*" {r $cmd}
+            assert_error "EXECABORT Transaction discarded because of previous errors*" {r exec}
+            assert_equal [r get foo] {}
+        }
     }
 
     test "MULTI with BGREWRITEAOF" {
@@ -900,19 +899,20 @@ start_server {tags {"multi"}} {
         r watch b{t} a{t}
         r flushall
         r ping
+        r unwatch
      }
 
     test {MULTI is rejected when CLIENT REPLY is ON/OFF/SKIP} {
         r multi
-        assert_error "ERR Command not allowed inside a transaction" {r client reply on}
+        assert_error "ERR Command 'client|reply' not allowed inside a transaction" {r client reply on}
         assert_error "EXECABORT *" {r exec}
 
         r multi
-        assert_error "ERR Command not allowed inside a transaction" {r client reply skip}
+        assert_error "ERR Command 'client|reply' not allowed inside a transaction" {r client reply skip}
         assert_error "EXECABORT *" {r exec}
 
         r multi
-        assert_error "ERR Command not allowed inside a transaction" {r client reply off}
+        assert_error "ERR Command 'client|reply' not allowed inside a transaction" {r client reply off}
         assert_error "EXECABORT *" {r exec}
 
         r client reply on
@@ -955,6 +955,12 @@ start_server {tags {"multi"}} {
         $rd close
     }
 
+    test "AUTH errored inside MULTI will add the reply" {
+        r config set requirepass ""
+        r multi
+        r auth no-user foobar
+        assert_error {WRONGPASS invalid username-password pair or user is disabled.} {r exec}
+    }
 }
 
 start_server {overrides {appendonly {yes} appendfilename {appendonly.aof} appendfsync always} tags {external:skip}} {

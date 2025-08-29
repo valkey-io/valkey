@@ -191,97 +191,98 @@ start_server_and_kill_it [list "dir" $server_path] {
         }
     }
 }
-
-start_server {} {
-    test {Test FLUSHALL aborts bgsave} {
-        r config set save ""
-        # 5000 keys with 1ms sleep per key should take 5 second
-        r config set rdb-key-save-delay 1000
-        populate 5000
-        assert_lessthan 999 [s rdb_changes_since_last_save]
-        r bgsave
-        assert_equal [s rdb_bgsave_in_progress] 1
-        r flushall
-        # wait a second max (bgsave should take 5)
-        wait_for_condition 10 100 {
-            [s rdb_bgsave_in_progress] == 0
-        } else {
-            fail "bgsave not aborted"
+set rdb_thread_counts {1 2 4}
+foreach thread_count $rdb_thread_counts {
+    start_server {} {
+        r config set rdb-threads $thread_count
+        test {Test FLUSHALL aborts bgsave} {
+            r config set save ""
+            # 5000 keys with 1ms sleep per key should take 5 second
+            r config set rdb-key-save-delay 1000
+            populate 5000
+            assert_lessthan 999 [s rdb_changes_since_last_save]
+            r bgsave
+            assert_equal [s rdb_bgsave_in_progress] 1
+            r flushall
+            # wait a second max (bgsave should take 5)
+            wait_for_condition 10 100 {
+                [s rdb_bgsave_in_progress] == 0
+            } else {
+                fail "bgsave not aborted"
+            }
+            # verify that bgsave failed, by checking that the change counter is still high
+            assert_lessthan 999 [s rdb_changes_since_last_save]
+            # make sure the server is still writable
+            r set x xx
         }
-        # verify that bgsave failed, by checking that the change counter is still high
-        assert_lessthan 999 [s rdb_changes_since_last_save]
-        # make sure the server is still writable
-        r set x xx
+
+        test {bgsave resets the change counter} {
+            r config set rdb-key-save-delay 0
+            r bgsave
+            wait_for_condition 50 100 {
+                [s rdb_bgsave_in_progress] == 0
+            } else {
+                fail "bgsave not done"
+            }
+            assert_equal [s rdb_changes_since_last_save] 0
+        }
+
+        test {bgsave cancel aborts save} {
+            r config set save ""
+            # Generating RDB will take some 100 seconds
+            r config set rdb-key-save-delay 1000000
+            populate 100 "" 16
+
+            r bgsave
+            wait_for_condition 50 100 {
+                [s rdb_bgsave_in_progress] == 1
+            } else {
+                fail "bgsave did not start in time"
+            }
+            set fork_child_pid [get_child_pid 0]
+            
+            assert {[r bgsave cancel] eq {Background saving cancelled}}
+            set temp_rdb [file join [lindex [r config get dir] 1] temp-${fork_child_pid}.rdb]
+            # Temp rdb must be deleted
+            wait_for_condition 50 100 {
+                ![file exists $temp_rdb]
+            } else {
+                fail "bgsave temp file was not deleted after cancel"
+            }
+
+            # Make sure no save is running and that bgsave return an error
+            wait_for_condition 50 100 {
+                [s rdb_bgsave_in_progress] == 0
+            } else {
+                fail "bgsave is currently running"
+            }
+            assert_error "ERR Background saving is currently not in progress or scheduled" {r bgsave cancel}
+        }
+
+        test {bgsave cancel schedulled request} {
+            r config set save ""
+            # Generating RDB will take some 100 seconds
+            r config set rdb-key-save-delay 1000000
+            populate 100 "" 16
+
+            # start a long AOF child
+            r bgrewriteaof
+            wait_for_condition 50 100 {
+                [s aof_rewrite_in_progress] == 1
+            } else {
+                fail "aof not started"
+            }
+            
+            # Make sure cancel return valid status
+            assert {[r bgsave schedule] eq {Background saving scheduled}}
+
+            # Cancel the scheduled save
+            assert {[r bgsave cancel] eq {Scheduled background saving cancelled}}
+
+            # Make sure a second call to bgsave cancel return an error
+            assert_error "ERR Background saving is currently not in progress or scheduled" {r bgsave cancel}
+        }
     }
-
-    test {bgsave resets the change counter} {
-        r config set rdb-key-save-delay 0
-        r bgsave
-        wait_for_condition 50 100 {
-            [s rdb_bgsave_in_progress] == 0
-        } else {
-            fail "bgsave not done"
-        }
-        assert_equal [s rdb_changes_since_last_save] 0
-    }
-
-    test {bgsave cancel aborts save} {
-        r config set save ""
-        # Generating RDB will take some 100 seconds
-        r config set rdb-key-save-delay 1000000
-        populate 100 "" 16
-
-        r bgsave
-        wait_for_condition 50 100 {
-            [s rdb_bgsave_in_progress] == 1
-        } else {
-            fail "bgsave did not start in time"
-        }
-        set fork_child_pid [get_child_pid 0]
-        
-        assert {[r bgsave cancel] eq {Background saving cancelled}}
-        set temp_rdb [file join [lindex [r config get dir] 1] temp-${fork_child_pid}.rdb]
-        # Temp rdb must be deleted
-        wait_for_condition 50 100 {
-            ![file exists $temp_rdb]
-        } else {
-            fail "bgsave temp file was not deleted after cancel"
-        }
-
-         # Make sure no save is running and that bgsave return an error
-         wait_for_condition 50 100 {
-            [s rdb_bgsave_in_progress] == 0
-        } else {
-            fail "bgsave is currently running"
-        }
-        assert_error "ERR Background saving is currently not in progress or scheduled" {r bgsave cancel}
-    }
-
-    test {bgsave cancel schedulled request} {
-        r config set save ""
-        # Generating RDB will take some 100 seconds
-        r config set rdb-key-save-delay 1000000
-        populate 100 "" 16
-
-        # start a long AOF child
-        r bgrewriteaof
-        wait_for_condition 50 100 {
-            [s aof_rewrite_in_progress] == 1
-        } else {
-            fail "aof not started"
-        }
-        
-        # Make sure cancel return valid status
-        assert {[r bgsave schedule] eq {Background saving scheduled}}
-
-        # Cancel the scheduled save
-        assert {[r bgsave cancel] eq {Scheduled background saving cancelled}}
-
-        # Make sure a second call to bgsave cancel return an error
-        assert_error "ERR Background saving is currently not in progress or scheduled" {r bgsave cancel}
-    }
-
-
 }
 
 test {client freed during loading} {

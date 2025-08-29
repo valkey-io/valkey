@@ -1594,6 +1594,10 @@ void resetClusterStats(void) {
     if (!server.cluster_enabled) return;
 
     clusterSlotStatResetAll();
+
+    memset(server.cluster->stats_bus_messages_sent, 0, sizeof(server.cluster->stats_bus_messages_sent));
+    memset(server.cluster->stats_bus_messages_received, 0, sizeof(server.cluster->stats_bus_messages_received));
+    server.cluster->stat_cluster_links_buffer_limit_exceeded = 0;
 }
 
 void clusterCommandFlushslot(client *c) {

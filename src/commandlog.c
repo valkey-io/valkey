@@ -152,15 +152,21 @@ void commandlogPushCurrentCommand(client *c, struct serverCommand *cmd) {
     robj **argv = c->original_argv ? c->original_argv : c->argv;
     int argc = c->original_argv ? c->original_argc : c->argc;
 
+    /* In script, client will be replaced with its caller, so commandlog needs to use the metrics
+     * of the client that currently executing the command. */
+    long duration = c->duration;
+    unsigned long long net_input_bytes_curr_cmd = c->net_input_bytes_curr_cmd;
+    unsigned long long net_output_bytes_curr_cmd = c->net_output_bytes_curr_cmd;
+
     /* If a script is currently running, the client passed in is a
      * fake client. Or the client passed in is the original client
      * if this is a EVAL or alike, doesn't matter. In this case,
      * use the original client to get the client information. */
     c = scriptIsRunning() ? scriptGetCaller() : c;
 
-    commandlogPushEntryIfNeeded(c, argv, argc, c->duration, COMMANDLOG_TYPE_SLOW);
-    commandlogPushEntryIfNeeded(c, argv, argc, c->net_input_bytes_curr_cmd, COMMANDLOG_TYPE_LARGE_REQUEST);
-    commandlogPushEntryIfNeeded(c, argv, argc, c->net_output_bytes_curr_cmd, COMMANDLOG_TYPE_LARGE_REPLY);
+    commandlogPushEntryIfNeeded(c, argv, argc, duration, COMMANDLOG_TYPE_SLOW);
+    commandlogPushEntryIfNeeded(c, argv, argc, net_input_bytes_curr_cmd, COMMANDLOG_TYPE_LARGE_REQUEST);
+    commandlogPushEntryIfNeeded(c, argv, argc, net_output_bytes_curr_cmd, COMMANDLOG_TYPE_LARGE_REPLY);
 }
 
 /* The SLOWLOG command. Implements all the subcommands needed to handle the

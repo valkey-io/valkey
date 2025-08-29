@@ -436,7 +436,7 @@ static int simd_enabled = 1;
  * It was modified in order to provide the same result in
  * big and little endian archs (endian neutral). */
 VALKEY_NO_SANITIZE("alignment")
-uint64_t MurmurHash64A(const void *key, int len, unsigned int seed) {
+static uint64_t MurmurHash64A(const void *key, int len, unsigned int seed) {
     const uint64_t m = 0xc6a4a7935bd1e995;
     const int r = 47;
     uint64_t h = seed ^ (len * m);
@@ -490,7 +490,7 @@ uint64_t MurmurHash64A(const void *key, int len, unsigned int seed) {
 /* Given a string element to add to the HyperLogLog, returns the length
  * of the pattern 000..1 of the element hash. As a side effect 'regp' is
  * set to the register index this element hashes to. */
-int hllPatLen(unsigned char *ele, size_t elesize, long *regp) {
+static int hllPatLen(unsigned char *ele, size_t elesize, long *regp) {
     uint64_t hash, index;
     int count;
 
@@ -524,7 +524,7 @@ int hllPatLen(unsigned char *ele, size_t elesize, long *regp) {
  * The function always succeed, however if as a result of the operation
  * the approximated cardinality changed, 1 is returned. Otherwise 0
  * is returned. */
-int hllDenseSet(uint8_t *registers, long index, uint8_t count) {
+static int hllDenseSet(uint8_t *registers, long index, uint8_t count) {
     uint8_t oldcount;
 
     HLL_DENSE_GET_REGISTER(oldcount, registers, index);
@@ -542,7 +542,7 @@ int hllDenseSet(uint8_t *registers, long index, uint8_t count) {
  *
  * This is just a wrapper to hllDenseSet(), performing the hashing of the
  * element in order to retrieve the index and zero-run count. */
-int hllDenseAdd(uint8_t *registers, unsigned char *ele, size_t elesize) {
+static int hllDenseAdd(uint8_t *registers, unsigned char *ele, size_t elesize) {
     long index;
     uint8_t count = hllPatLen(ele, elesize, &index);
     /* Update the register if this element produced a longer run of zeroes. */
@@ -550,7 +550,7 @@ int hllDenseAdd(uint8_t *registers, unsigned char *ele, size_t elesize) {
 }
 
 /* Compute the register histogram in the dense representation. */
-void hllDenseRegHisto(uint8_t *registers, int *reghisto) {
+static void hllDenseRegHisto(uint8_t *registers, int *reghisto) {
     int j;
 
     /* Default is to use 16384 registers 6 bits each. The code works
@@ -614,7 +614,7 @@ void hllDenseRegHisto(uint8_t *registers, int *reghisto) {
  *
  * The function returns C_OK if the sparse representation was valid,
  * otherwise C_ERR is returned if the representation was corrupted. */
-int hllSparseToDense(robj *o) {
+static int hllSparseToDense(robj *o) {
     sds sparse = o->ptr, dense;
     struct hllhdr *hdr, *oldhdr = (struct hllhdr *)sparse;
     int idx = 0, runlen, regval;
@@ -696,7 +696,7 @@ int hllSparseToDense(robj *o) {
  * sparse to dense: this happens when a register requires to be set to a value
  * not representable with the sparse representation, or when the resulting
  * size would be greater than server.hll_sparse_max_bytes. */
-int hllSparseSet(robj *o, long index, uint8_t count) {
+static int hllSparseSet(robj *o, long index, uint8_t count) {
     struct hllhdr *hdr;
     uint8_t oldcount, *sparse, *end, *p, *prev, *next;
     long first, span;
@@ -956,7 +956,7 @@ promote:                                         /* Promote to dense representat
  *
  * This function is actually a wrapper for hllSparseSet(), it only performs
  * the hashing of the element to obtain the index and zeros run length. */
-int hllSparseAdd(robj *o, unsigned char *ele, size_t elesize) {
+static int hllSparseAdd(robj *o, unsigned char *ele, size_t elesize) {
     long index;
     uint8_t count = hllPatLen(ele, elesize, &index);
     /* Update the register if this element produced a longer run of zeroes. */
@@ -964,7 +964,7 @@ int hllSparseAdd(robj *o, unsigned char *ele, size_t elesize) {
 }
 
 /* Compute the register histogram in the sparse representation. */
-void hllSparseRegHisto(uint8_t *sparse, int sparselen, int *invalid, int *reghisto) {
+static void hllSparseRegHisto(uint8_t *sparse, int sparselen, int *invalid, int *reghisto) {
     int idx = 0, runlen, regval;
     uint8_t *end = sparse + sparselen, *p = sparse;
     int valid = 1;
@@ -1011,7 +1011,7 @@ void hllSparseRegHisto(uint8_t *sparse, int sparselen, int *invalid, int *reghis
 
 /* Implements the register histogram calculation for uint8_t data type
  * which is only used internally as speedup for PFCOUNT with multiple keys. */
-void hllRawRegHisto(uint8_t *registers, int *reghisto) {
+static void hllRawRegHisto(uint8_t *registers, int *reghisto) {
     uint64_t *word = (uint64_t *)registers;
     uint8_t *bytes;
     int j;
@@ -1037,7 +1037,7 @@ void hllRawRegHisto(uint8_t *registers, int *reghisto) {
 /* Helper function sigma as defined in
  * "New cardinality estimation algorithms for HyperLogLog sketches"
  * Otmar Ertl, arXiv:1702.01284 */
-double hllSigma(double x) {
+static double hllSigma(double x) {
     if (x == 1.) return INFINITY;
     double zPrime;
     double y = 1;
@@ -1054,7 +1054,7 @@ double hllSigma(double x) {
 /* Helper function tau as defined in
  * "New cardinality estimation algorithms for HyperLogLog sketches"
  * Otmar Ertl, arXiv:1702.01284 */
-double hllTau(double x) {
+static double hllTau(double x) {
     if (x == 0. || x == 1.) return 0.;
     double zPrime;
     double y = 1.0;
@@ -1079,7 +1079,7 @@ double hllTau(double x) {
  * is, hdr->registers will point to an uint8_t array of HLL_REGISTERS element.
  * This is useful in order to speedup PFCOUNT when called against multiple
  * keys (no need to work with 6-bit integers encoding). */
-uint64_t hllCount(struct hllhdr *hdr, int *invalid) {
+static uint64_t hllCount(struct hllhdr *hdr, int *invalid) {
     double m = HLL_REGISTERS;
     double E;
     int j;
@@ -1116,7 +1116,7 @@ uint64_t hllCount(struct hllhdr *hdr, int *invalid) {
 }
 
 /* Call hllDenseAdd() or hllSparseAdd() according to the HLL encoding. */
-int hllAdd(robj *o, unsigned char *ele, size_t elesize) {
+static int hllAdd(robj *o, unsigned char *ele, size_t elesize) {
     struct hllhdr *hdr = o->ptr;
     switch (hdr->encoding) {
     case HLL_DENSE: return hllDenseAdd(hdr->registers, ele, elesize);
@@ -1136,7 +1136,7 @@ int hllAdd(robj *o, unsigned char *ele, size_t elesize) {
  * reg_dense: pointer to the dense representation array (12288 bytes, 6 bits per register)
  */
 ATTRIBUTE_TARGET_AVX2
-void hllMergeDenseAVX2(uint8_t *reg_raw, const uint8_t *reg_dense) {
+static void hllMergeDenseAVX2(uint8_t *reg_raw, const uint8_t *reg_dense) {
     /* Shuffle indices for unpacking bytes of dense registers
      * From: {XXXX|AAAB|BBCC|CDDD|EEEF|FFGG|GHHH|XXXX}
      * To:   {AAA0|BBB0|CCC0|DDD0|EEE0|FFF0|GGG0|HHH0}
@@ -1246,7 +1246,7 @@ void hllMergeDenseAVX2(uint8_t *reg_raw, const uint8_t *reg_dense) {
  * - reg_raw: Pointer to the raw register array
  * - reg_dense: Pointer to the dense register array
  */
-void hllMergeDenseNEON(uint8_t *reg_raw, const uint8_t *reg_dense) {
+static void hllMergeDenseNEON(uint8_t *reg_raw, const uint8_t *reg_dense) {
     uint8_t *dense_ptr = (uint8_t *)reg_dense;
     uint8_t *raw_ptr = (uint8_t *)reg_raw;
 
@@ -1325,7 +1325,7 @@ void hllMergeDenseNEON(uint8_t *reg_raw, const uint8_t *reg_dense) {
 #endif // __aarch64__
 
 /* Merge dense-encoded registers to raw registers array. */
-void hllMergeDense(uint8_t *reg_raw, const uint8_t *reg_dense) {
+static void hllMergeDense(uint8_t *reg_raw, const uint8_t *reg_dense) {
 #if HAVE_X86_SIMD
     if (HLL_REGISTERS == 16384 && HLL_BITS == 6) {
         if (HLL_USE_AVX2) {
@@ -1360,7 +1360,7 @@ void hllMergeDense(uint8_t *reg_raw, const uint8_t *reg_dense) {
  *
  * If the HyperLogLog is sparse and is found to be invalid, C_ERR
  * is returned, otherwise the function always succeeds. */
-int hllMerge(uint8_t *max, robj *hll) {
+static int hllMerge(uint8_t *max, robj *hll) {
     struct hllhdr *hdr = hll->ptr;
     int i;
 
@@ -1420,7 +1420,7 @@ int hllMerge(uint8_t *max, robj *hll) {
  * reg_raw: pointer to the raw representation array (16384 bytes, one byte per register)
  */
 ATTRIBUTE_TARGET_AVX2
-void hllDenseCompressAVX2(uint8_t *reg_dense, const uint8_t *reg_raw) {
+static void hllDenseCompressAVX2(uint8_t *reg_dense, const uint8_t *reg_raw) {
     /* Shuffle indices for packing bytes of dense registers
      * From: {AAA0|BBB0|CCC0|DDD0|EEE0|FFF0|GGG0|HHH0}
      * To:   {AAAB|BBCC|CDDD|0000|EEEF|FFGG|GHHH|0000}
@@ -1519,7 +1519,7 @@ void hllDenseCompressAVX2(uint8_t *reg_dense, const uint8_t *reg_raw) {
  * - The second loop handles the remaining registers using a direct assignment macro.
  *
  */
-void hllDenseCompressNEON(uint8_t *reg_dense, const uint8_t *reg_raw) {
+static void hllDenseCompressNEON(uint8_t *reg_dense, const uint8_t *reg_raw) {
     /* Shuffle indices for packing bytes of dense registers
      * From: {AAA0|BBB0|CCC0|DDD0}
      * To:   {AAAB|BBCC|CDDD|0000}
@@ -1577,7 +1577,7 @@ void hllDenseCompressNEON(uint8_t *reg_dense, const uint8_t *reg_raw) {
 #endif // __aarch64__
 
 /* Compress raw registers to dense representation. */
-void hllDenseCompress(uint8_t *reg_dense, const uint8_t *reg_raw) {
+static void hllDenseCompress(uint8_t *reg_dense, const uint8_t *reg_raw) {
 #if HAVE_X86_SIMD
     if (HLL_REGISTERS == 16384 && HLL_BITS == 6) {
         if (HLL_USE_AVX2) {
@@ -1606,7 +1606,7 @@ void hllDenseCompress(uint8_t *reg_dense, const uint8_t *reg_raw) {
 
 /* Create an HLL object. We always create the HLL using sparse encoding.
  * This will be upgraded to the dense representation as needed. */
-robj *createHLLObject(void) {
+static robj *createHLLObject(void) {
     robj *o;
     struct hllhdr *hdr;
     sds s;
@@ -1639,7 +1639,7 @@ robj *createHLLObject(void) {
 /* Check if the object is a String with a valid HLL representation.
  * Return C_OK if this is true, otherwise reply to the client
  * with an error and return C_ERR. */
-int isHLLObjectOrReply(client *c, robj *o) {
+static int isHLLObjectOrReply(client *c, robj *o) {
     struct hllhdr *hdr;
 
     /* Key exists, check type */

@@ -42,11 +42,15 @@ set csv_dump {"0","compressible","string","aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 "0","zset_zipped","zset","a","1","b","2","c","3",
 }
 
-start_server [list overrides [list "dir" $server_path "dbfilename" "encodings.rdb"]] {
-  test "RDB encoding loading test" {
-    r select 0
-    csvdump r
-  } $csv_dump
+set rdb_thread_counts {1 2 4}
+foreach thread_count $rdb_thread_counts {
+    start_server [list overrides [list "dir" $server_path "dbfilename" "encodings.rdb"]] {
+    r config set rdb-threads $thread_count
+    test "RDB encoding loading test" {
+        r select 0
+        csvdump r
+    } $csv_dump
+    }
 }
 
 start_server_and_kill_it [list "dir" $server_path "dbfilename" "encodings-rdb987.rdb"] {
@@ -191,7 +195,7 @@ start_server_and_kill_it [list "dir" $server_path] {
         }
     }
 }
-set rdb_thread_counts {1 2 4}
+
 foreach thread_count $rdb_thread_counts {
     start_server {} {
         r config set rdb-threads $thread_count

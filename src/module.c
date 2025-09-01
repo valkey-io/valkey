@@ -11803,7 +11803,9 @@ static uint64_t moduleEventVersions[] = {
  *         const char *module_name; // Name of the module that is handling the
  *                                  // authentication. It is NULL if the
  *                                  // authentication is handled by the core.
- *         ValkeyModuleAuthenticationResult result;   // Result of the authentication.
+ *         ValkeyModuleAuthenticationResult result;   // Result of the authentication:
+ *                                                    // VALKEYMODULE_AUTH_RESULT_GRANTED or
+ *                                                    // VALKEYMODULE_AUTH_RESULT_DENIED
  *
  * The function returns VALKEYMODULE_OK if the module was successfully subscribed
  * for the specified event. If the API is called from a wrong context or unsupported event

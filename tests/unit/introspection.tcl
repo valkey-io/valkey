@@ -1209,7 +1209,6 @@ start_server {tags {"introspection"}} {
             bio-cpulist
             aof-rewrite-cpulist
             bgsave-cpulist
-            slot-migration-cpulist
             server_cpulist
             bio_cpulist
             aof_rewrite_cpulist

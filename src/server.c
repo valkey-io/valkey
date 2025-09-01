@@ -1391,6 +1391,7 @@ void checkChildrenDone(void) {
                       "child_type: %s, child_pid = %d",
                       strerror(errno), strChildType(server.child_type), (int)server.child_pid);
         } else if (pid == server.child_pid) {
+            if (!bysignal && exitcode == 0) receiveChildInfo();
             if (server.child_type == CHILD_TYPE_RDB) {
                 backgroundSaveDoneHandler(exitcode, bysignal);
             } else if (server.child_type == CHILD_TYPE_AOF) {
@@ -1403,7 +1404,6 @@ void checkChildrenDone(void) {
                 serverPanic("Unknown child type %d for child pid %d", server.child_type, server.child_pid);
                 exit(1);
             }
-            if (!bysignal && exitcode == 0) receiveChildInfo();
             resetChildState();
         } else {
             if (!ldbRemoveChild(pid)) {
@@ -6041,8 +6041,7 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                 "aof_last_cow_size:%zu\r\n", server.stat_aof_cow_bytes,
                 "module_fork_in_progress:%d\r\n", server.child_type == CHILD_TYPE_MODULE,
                 "module_fork_last_cow_size:%zu\r\n", server.stat_module_cow_bytes,
-                "slot_migration_fork_in_progress:%d\r\n", server.child_type == CHILD_TYPE_SLOT_MIGRATION,
-                "slot_migration_fork_last_cow_size:%zu\r\n", server.stat_slot_migration_cow_bytes));
+                "slot_migration_fork_in_progress:%d\r\n", server.child_type == CHILD_TYPE_SLOT_MIGRATION));
 
         if (server.aof_enabled) {
             info = sdscatprintf(

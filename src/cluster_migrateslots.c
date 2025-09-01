@@ -76,6 +76,7 @@ typedef struct slotMigrationJob {
                                                * cleanup is done. */
     sds description;                          /* Description, used for
                                                * logging. */
+    size_t stat_cow_bytes;                    /* Copy on write bytes during slot migration fork. */
 
     /* State needed during client establishment */
     connection *conn; /* Connection to slot import source node. */
@@ -1297,7 +1298,7 @@ int slotExportJobBeginSnapshotToTargetSocket(slotMigrationJob *job) {
         close(server.rdb_pipe_read);
 
         serverSetProcTitle("valkey-slot-migration-to-target");
-        serverSetCpuAffinity(server.slot_migration_cpulist);
+        serverSetCpuAffinity(server.bgsave_cpulist);
 
         int retval = childSnapshotForSyncSlot(&aof, job);
         if (retval == C_OK && rioFlush(&aof) == 0) retval = C_ERR;
@@ -1366,6 +1367,7 @@ void backgroundSlotMigrationDoneHandler(int exitcode, int bysignal) {
         }
         if (!bysignal && exitcode == 0) {
             slotExportBeginStreaming(job);
+            job->stat_cow_bytes = server.stat_slot_migration_cow_bytes;
         } else {
             serverLog(LL_WARNING,
                       "Child process failed to snapshot slot migration %s",
@@ -2022,7 +2024,7 @@ void clusterCommandGetSlotMigrations(client *c) {
     listRewind(server.cluster->slot_migration_jobs, &li);
     while ((ln = listNext(&li)) != NULL) {
         slotMigrationJob *job = ln->value;
-        addReplyMapLen(c, 9);
+        addReplyMapLen(c, 10);
         addReplyBulkCString(c, "name");
         addReplyBulkCBuffer(c, job->name, CLUSTER_NAMELEN);
         addReplyBulkCString(c, "operation");
@@ -2043,6 +2045,8 @@ void clusterCommandGetSlotMigrations(client *c) {
         addReplyBulkCString(c, slotMigrationJobStateToString(job->state));
         addReplyBulkCString(c, "message");
         addReplyBulkCString(c, job->status_msg ? job->status_msg : "");
+        addReplyBulkCString(c, "last_cow_size");
+        addReplyLongLong(c, (long long)job->stat_cow_bytes);
     }
 }
 

@@ -522,7 +522,8 @@ typedef void (*ValkeyModuleEventLoopOneShotFunc)(void *user_data);
 #define VALKEYMODULE_EVENT_EVENTLOOP 15
 #define VALKEYMODULE_EVENT_CONFIG 16
 #define VALKEYMODULE_EVENT_KEY 17
-#define _VALKEYMODULE_EVENT_NEXT 18 /* Next event flag, should be updated if a new event added. */
+#define VALKEYMODULE_EVENT_AUTHENTICATION_ATTEMPT 18
+#define _VALKEYMODULE_EVENT_NEXT 19 /* Next event flag, should be updated if a new event added. */
 
 typedef struct ValkeyModuleEvent {
     uint64_t id;      /* VALKEYMODULE_EVENT_... defines. */
@@ -579,7 +580,8 @@ static const ValkeyModuleEvent ValkeyModuleEvent_ReplicationRoleChanged = {VALKE
                                ValkeyModuleEvent_ForkChild = {VALKEYMODULE_EVENT_FORK_CHILD, 1},
                                ValkeyModuleEvent_EventLoop = {VALKEYMODULE_EVENT_EVENTLOOP, 1},
                                ValkeyModuleEvent_Config = {VALKEYMODULE_EVENT_CONFIG, 1},
-                               ValkeyModuleEvent_Key = {VALKEYMODULE_EVENT_KEY, 1};
+                               ValkeyModuleEvent_Key = {VALKEYMODULE_EVENT_KEY, 1},
+                               ValkeyModuleEvent_AuthenticationAttempt = {VALKEYMODULE_EVENT_AUTHENTICATION_ATTEMPT, 1};
 
 /* Those are values that are used for the 'subevent' callback argument. */
 #define VALKEYMODULE_SUBEVENT_PERSISTENCE_RDB_START 0
@@ -780,6 +782,25 @@ typedef struct ValkeyModuleKeyInfo {
 } ValkeyModuleKeyInfoV1;
 
 #define ValkeyModuleKeyInfo ValkeyModuleKeyInfoV1
+
+#define VALKEYMODULE_AUTHENTICATION_INFO_VERSION 1
+
+typedef enum {
+    VALKEYMODULE_AUTH_RESULT_GRANTED = 0, /* Authentication succeeded. */
+    VALKEYMODULE_AUTH_RESULT_DENIED = 1,  /* Authentication failed. */
+} ValkeyModuleAuthenticationResult;
+
+typedef struct ValkeyModuleAuthenticationInfo {
+    uint64_t version;                        /* Version of this structure for ABI compat. */
+    uint64_t client_id;                      /* Client ID. */
+    const char *username;                    /* Username used for authentication. */
+    const char *module_name;                 /* Name of the module that is handling the authentication. */
+    ValkeyModuleAuthenticationResult result; /* Result of the authentication */
+} ValkeyModuleAuthenticationInfoV1;
+
+#define ValkeyModuleAuthenticationInfo ValkeyModuleAuthenticationInfoV1
+
+#define VALKEYMODULE_AUTHENTICATIONINFO_INITIALIZER_V1 {.version = 1}
 
 typedef enum {
     VALKEYMODULE_ACL_LOG_AUTH = 0, /* Authentication failure */

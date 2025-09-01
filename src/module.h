@@ -230,5 +230,7 @@ void moduleDefragGlobals(void);
 void *moduleGetHandleByName(char *modulename);
 int moduleIsModuleCommand(void *module_handle, struct serverCommand *cmd);
 void freeClientModuleData(client *c);
+int checkModuleAuthentication(client *c, robj *username, robj *password, robj **err);
+void moduleFireAuthenticationEvent(uint64_t client_id, const char *username, const char *module_name, int is_granted);
 
 #endif /* _MODULE_H_ */

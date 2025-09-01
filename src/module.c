@@ -8012,7 +8012,7 @@ void moduleUnregisterAuthCBs(ValkeyModule *module) {
 
 /* Search for & attempt next module auth callback after skipping the ones already attempted.
  * Returns the result of the module auth callback. */
-int attemptNextAuthCb(client *c, robj *username, robj *password, robj **err) {
+static int attemptNextAuthCb(client *c, robj *username, robj *password, robj **err) {
     int handle_next_callback = (!c->module_data || c->module_data->module_auth_ctx == NULL);
     ValkeyModuleAuthCtx *cur_auth_ctx = NULL;
     listNode *ln;
@@ -8047,7 +8047,7 @@ int attemptNextAuthCb(client *c, robj *username, robj *password, robj **err) {
  * auth operation.
  * Otherwise, we attempt the auth reply callback & the free priv data callback, update fields and
  * return the result of the reply callback. */
-int attemptBlockedAuthReplyCallback(client *c, robj *username, robj *password, robj **err) {
+static int attemptBlockedAuthReplyCallback(client *c, robj *username, robj *password, robj **err) {
     int result = VALKEYMODULE_AUTH_NOT_HANDLED;
     if (!c->module_data || !c->module_data->module_blocked_client) return result;
     ValkeyModuleBlockedClient *bc = (ValkeyModuleBlockedClient *)c->module_data->module_blocked_client;
@@ -8091,17 +8091,44 @@ int checkModuleAuthentication(client *c, robj *username, robj *password, robj **
         serverAssert(result == VALKEYMODULE_AUTH_HANDLED);
         return AUTH_BLOCKED;
     }
+
+    ValkeyModuleAuthCtx *auth_ctx = c->module_data ? c->module_data->module_auth_ctx : NULL;
+
     if (c->module_data) c->module_data->module_auth_ctx = NULL;
     if (result == VALKEYMODULE_AUTH_NOT_HANDLED) {
         c->flag.module_auth_has_result = 0;
         return AUTH_NOT_HANDLED;
     }
 
+    int auth_result = AUTH_ERR;
+
     if (c->flag.module_auth_has_result) {
         c->flag.module_auth_has_result = 0;
-        if (c->flag.authenticated) return AUTH_OK;
+        if (c->flag.authenticated) {
+            auth_result = AUTH_OK;
+        }
     }
-    return AUTH_ERR;
+
+    const char *module_name = auth_ctx ? auth_ctx->module->name : NULL;
+    moduleFireAuthenticationEvent(c->id,
+                                  username->ptr,
+                                  module_name,
+                                  auth_result == AUTH_OK);
+
+    return auth_result;
+}
+
+void moduleFireAuthenticationEvent(uint64_t client_id,
+                                   const char *username,
+                                   const char *module_name,
+                                   int is_granted) {
+    ValkeyModuleAuthenticationInfo info = VALKEYMODULE_AUTHENTICATIONINFO_INITIALIZER_V1;
+    info.client_id = client_id;
+    info.username = username;
+    info.module_name = module_name;
+    info.result = is_granted ? VALKEYMODULE_AUTH_RESULT_GRANTED
+                             : VALKEYMODULE_AUTH_RESULT_DENIED;
+    moduleFireServerEvent(VALKEYMODULE_EVENT_AUTHENTICATION_ATTEMPT, 0, &info);
 }
 
 /* This function is called from module.c in order to check if a module
@@ -11480,24 +11507,25 @@ void ModuleForkDoneHandler(int exitcode, int bysignal) {
  * a data structure associated with it. We use MAX_UINT64 on purpose,
  * in order to pass the check in ValkeyModule_SubscribeToServerEvent. */
 static uint64_t moduleEventVersions[] = {
-    VALKEYMODULE_REPLICATIONINFO_VERSION,  /* VALKEYMODULE_EVENT_REPLICATION_ROLE_CHANGED */
-    -1,                                    /* VALKEYMODULE_EVENT_PERSISTENCE */
-    VALKEYMODULE_FLUSHINFO_VERSION,        /* VALKEYMODULE_EVENT_FLUSHDB */
-    -1,                                    /* VALKEYMODULE_EVENT_LOADING */
-    VALKEYMODULE_CLIENTINFO_VERSION,       /* VALKEYMODULE_EVENT_CLIENT_CHANGE */
-    -1,                                    /* VALKEYMODULE_EVENT_SHUTDOWN */
-    -1,                                    /* VALKEYMODULE_EVENT_REPLICA_CHANGE */
-    -1,                                    /* VALKEYMODULE_EVENT_PRIMARY_LINK_CHANGE */
-    VALKEYMODULE_CRON_LOOP_VERSION,        /* VALKEYMODULE_EVENT_CRON_LOOP */
-    VALKEYMODULE_MODULE_CHANGE_VERSION,    /* VALKEYMODULE_EVENT_MODULE_CHANGE */
-    VALKEYMODULE_LOADING_PROGRESS_VERSION, /* VALKEYMODULE_EVENT_LOADING_PROGRESS */
-    VALKEYMODULE_SWAPDBINFO_VERSION,       /* VALKEYMODULE_EVENT_SWAPDB */
-    -1,                                    /* VALKEYMODULE_EVENT_REPL_BACKUP */
-    -1,                                    /* VALKEYMODULE_EVENT_FORK_CHILD */
-    -1,                                    /* VALKEYMODULE_EVENT_REPL_ASYNC_LOAD */
-    -1,                                    /* VALKEYMODULE_EVENT_EVENTLOOP */
-    -1,                                    /* VALKEYMODULE_EVENT_CONFIG */
-    VALKEYMODULE_KEYINFO_VERSION,          /* VALKEYMODULE_EVENT_KEY */
+    VALKEYMODULE_REPLICATIONINFO_VERSION,     /* VALKEYMODULE_EVENT_REPLICATION_ROLE_CHANGED */
+    -1,                                       /* VALKEYMODULE_EVENT_PERSISTENCE */
+    VALKEYMODULE_FLUSHINFO_VERSION,           /* VALKEYMODULE_EVENT_FLUSHDB */
+    -1,                                       /* VALKEYMODULE_EVENT_LOADING */
+    VALKEYMODULE_CLIENTINFO_VERSION,          /* VALKEYMODULE_EVENT_CLIENT_CHANGE */
+    -1,                                       /* VALKEYMODULE_EVENT_SHUTDOWN */
+    -1,                                       /* VALKEYMODULE_EVENT_REPLICA_CHANGE */
+    -1,                                       /* VALKEYMODULE_EVENT_PRIMARY_LINK_CHANGE */
+    VALKEYMODULE_CRON_LOOP_VERSION,           /* VALKEYMODULE_EVENT_CRON_LOOP */
+    VALKEYMODULE_MODULE_CHANGE_VERSION,       /* VALKEYMODULE_EVENT_MODULE_CHANGE */
+    VALKEYMODULE_LOADING_PROGRESS_VERSION,    /* VALKEYMODULE_EVENT_LOADING_PROGRESS */
+    VALKEYMODULE_SWAPDBINFO_VERSION,          /* VALKEYMODULE_EVENT_SWAPDB */
+    -1,                                       /* VALKEYMODULE_EVENT_REPL_BACKUP */
+    -1,                                       /* VALKEYMODULE_EVENT_FORK_CHILD */
+    -1,                                       /* VALKEYMODULE_EVENT_REPL_ASYNC_LOAD */
+    -1,                                       /* VALKEYMODULE_EVENT_EVENTLOOP */
+    -1,                                       /* VALKEYMODULE_EVENT_CONFIG */
+    VALKEYMODULE_KEYINFO_VERSION,             /* VALKEYMODULE_EVENT_KEY */
+    VALKEYMODULE_AUTHENTICATION_INFO_VERSION, /* VALKEYMODULE_EVENT_AUTHENTICATION_ATTEMPT */
 };
 
 /* Register to be notified, via a callback, when the specified server event
@@ -11758,7 +11786,7 @@ static uint64_t moduleEventVersions[] = {
  *     * `VALKEYMODULE_SUBEVENT_EVENTLOOP_BEFORE_SLEEP`
  *     * `VALKEYMODULE_SUBEVENT_EVENTLOOP_AFTER_SLEEP`
  *
- * * ValkeyModule_Event_Config
+ * * ValkeyModuleEvent_Config
  *
  *     Called when a configuration event happens
  *     The following sub events are available:
@@ -11772,7 +11800,7 @@ static uint64_t moduleEventVersions[] = {
  *                                    // name of each modified configuration item
  *         uint32_t num_changes;      // The number of elements in the config_names array
  *
- * * ValkeyModule_Event_Key
+ * * ValkeyModuleEvent_Key
  *
  *     Called when a key is removed from the keyspace. We can't modify any key in
  *     the event.
@@ -11787,6 +11815,22 @@ static uint64_t moduleEventVersions[] = {
  *     structure with the following fields:
  *
  *         ValkeyModuleKey *key;    // Key name
+ *
+ * * ValkeyModuleEvent_AuthenticationAttempt
+ *
+ *     Called when an authentication attempt is made, either successful or not.
+ *
+ *     The data pointer can be casted to a ValkeyModuleAuthenticationInfo
+ *     structure with the following fields:
+ *
+ *         uint64_t client_id;      // Client ID.
+ *         const char *username;    // Username used for authentication.
+ *         const char *module_name; // Name of the module that is handling the
+ *                                  // authentication. It is NULL if the
+ *                                  // authentication is handled by the core.
+ *         ValkeyModuleAuthenticationResult result;   // Result of the authentication:
+ *                                                    // VALKEYMODULE_AUTH_RESULT_GRANTED or
+ *                                                    // VALKEYMODULE_AUTH_RESULT_DENIED
  *
  * The function returns VALKEYMODULE_OK if the module was successfully subscribed
  * for the specified event. If the API is called from a wrong context or unsupported event
@@ -11937,6 +11981,8 @@ void moduleFireServerEvent(uint64_t eid, int subid, void *data) {
                 selectDb(ctx.client, info->dbnum);
                 moduleInitKey(&key, &ctx, info->key, info->value, info->mode);
                 moduledata = &ki;
+            } else if (eid == VALKEYMODULE_EVENT_AUTHENTICATION_ATTEMPT) {
+                moduledata = data;
             }
 
             el->module->in_hook++;

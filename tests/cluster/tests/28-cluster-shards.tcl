@@ -285,3 +285,33 @@ test "CLUSTER MYSHARDID reports same shard id after cluster restart" {
         assert_equal [dict get $node_ids $i] [R $i cluster myshardid]
     }
 }
+
+test "CLUSTER SHARDS id response validation" {
+    # For each node in the cluster
+    for {set i 0} {$i < $::cluster_master_nodes + $::cluster_replica_nodes} {incr i} {
+        # Get the CLUSTER SHARDS output from this node
+        set shards [R $i CLUSTER SHARDS]
+        set seen_shard_ids {}
+
+        # For each shard in the output
+        foreach shard $shards {
+            set shard_dict [dict create {*}$shard]
+
+            # 1. Verify 'shard' key exists
+            assert {[dict exists $shard_dict shard]}
+            set shard_info [dict get $shard_dict shard]
+            set shard_info_dict [dict create {*}$shard_info]
+
+            # 2. Verify 'id' key exists in the nested shard info
+            assert {[dict exists $shard_info_dict id]}
+            set shard_id [dict get $shard_info_dict id]
+
+            # 3. Verify shard_id is a 40-char string
+            assert {[string length $shard_id] == 40}
+
+            # 4. Verify that for a given node's output, all shard IDs are unique
+            assert {[dict exists $seen_shard_ids $shard_id] == 0}
+            dict set seen_shard_ids $shard_id 1
+        }
+    }
+}

@@ -6906,9 +6906,11 @@ void addNodeDetailsToShardReply(client *c, clusterNode *node) {
     setDeferredMapLen(c, node_replylen, reply_count);
 }
 
-/* Add to the output buffer of the given client, an array of slot (start, end)
- * pair owned by the shard, also the primary and set of replica(s) along with
- * information about each node. */
+/* Add to the output buffer of the given client,
+ * an array of slot (start, end) pair owned by the shard,
+ * an array of the primary and set of replica(s) along with information about each node,
+ * an array of shard info, like shard-id and so on
+ */
 void clusterCommandShards(client *c) {
     addReplyArrayLen(c, dictSize(server.cluster->shards));
     /* This call will add slot_info_pairs to all nodes */
@@ -6917,7 +6919,7 @@ void clusterCommandShards(client *c) {
     for (dictEntry *de = dictNext(di); de != NULL; de = dictNext(di)) {
         list *nodes = dictGetVal(de);
         serverAssert(listLength(nodes) > 0);
-        addReplyMapLen(c, 2);
+        addReplyMapLen(c, 3);
         addReplyBulkCString(c, "slots");
 
         /* Find a node which has the slot information served by this shard. */
@@ -6950,6 +6952,10 @@ void clusterCommandShards(client *c) {
             addNodeDetailsToShardReply(c, n);
             clusterFreeNodesSlotsInfo(n);
         }
+        addReplyBulkCString(c, "shard");
+        addReplyMapLen(c, 1);
+        addReplyBulkCString(c, "id");
+        addReplyBulkCBuffer(c, dictGetKey(de), CLUSTER_NAMELEN);
     }
     dictReleaseIterator(di);
 }

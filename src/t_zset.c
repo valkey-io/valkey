@@ -167,8 +167,7 @@ zskiplist *zslCreate(void) {
     return zsl;
 }
 
-/* Free the specified skiplist node. No need to explicitly free the SDS string 'ele',
- * as it is embedded within the structure. */
+/* Free the specified skiplist node. */
 static void zslFreeNode(zskiplistNode *node) {
     zfree(node);
 }

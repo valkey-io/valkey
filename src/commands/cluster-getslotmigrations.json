@@ -64,7 +64,7 @@
                         "description": "Human readable status message with more details.",
                         "type": "string"
                     },
-                    "last_cow_size": {
+                    "cow_size": {
                         "description": "Copy on write bytes during slot migration fork.",
                         "type": "integer"
                     }

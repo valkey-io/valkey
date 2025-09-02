@@ -2045,7 +2045,7 @@ void clusterCommandGetSlotMigrations(client *c) {
         addReplyBulkCString(c, slotMigrationJobStateToString(job->state));
         addReplyBulkCString(c, "message");
         addReplyBulkCString(c, job->status_msg ? job->status_msg : "");
-        addReplyBulkCString(c, "last_cow_size");
+        addReplyBulkCString(c, "cow_size");
         addReplyLongLong(c, (long long)job->stat_cow_bytes);
     }
 }

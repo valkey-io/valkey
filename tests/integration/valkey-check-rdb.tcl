@@ -2,6 +2,51 @@ proc get_function_code {args} {
     return [format "#!%s name=%s\nserver.register_function('%s', function(KEYS, ARGV)\n %s \nend)" [lindex $args 0] [lindex $args 1] [lindex $args 2] [lindex $args 3]]
 }
 
+tags {"check-rdb external:skip logreqres:skip"} {
+    test {Check old valid RDB} {
+        catch {
+            exec src/valkey-check-rdb tests/assets/encodings.rdb
+        } result
+        assert_match {*\[offset ???\] \\o/ RDB looks OK! \\o/*} $result
+    }
+
+    test {Check foreign RDB without unknown data} {
+        catch {
+            exec src/valkey-check-rdb tests/assets/encodings-rdb12.rdb
+        } result
+        assert_match {*\[offset ?\] Foreign RDB version 12 detected*} $result
+        assert_match {*\[offset ???\] \\o/ RDB looks OK, but loading requires config 'rdb-version-check relaxed'*} $result
+    }
+
+    test {Check foreign RDB with unknown data} {
+        catch {
+            exec src/valkey-check-rdb tests/assets/encodings-rdb75-unknown-types.rdb
+        } result
+        assert_match {*\[offset ?\] Foreign RDB version 75 detected*} $result
+        assert_match {*--- RDB ERROR DETECTED ---*} $result
+        assert_match {*\[offset ??\] Unknown object type 150 in RDB file with foreign version 75*} $result
+        assert_no_match {*RDB looks OK*} $result
+    }
+
+    test {Check future RDB without unknown data} {
+        catch {
+            exec src/valkey-check-rdb tests/assets/encodings-rdb987.rdb
+        } result
+        assert_match {*\[offset ?\] Future RDB version 987 detected*} $result
+        assert_match {*\[offset ???\] \\o/ RDB looks OK, but loading requires config 'rdb-version-check relaxed'*} $result
+    }
+
+    test {Check future RDB with unknown data} {
+        catch {
+            exec src/valkey-check-rdb tests/assets/encodings-rdb987-unknown-types.rdb
+        } result
+        assert_match {*\[offset ?\] Future RDB version 987 detected*} $result
+        assert_match {*--- RDB ERROR DETECTED ---*} $result
+        assert_match {*\[offset ??\] Unknown object type 150 in RDB file with future version 987*} $result
+        assert_no_match {*RDB looks OK*} $result
+    }
+}
+
 tags {"check-rdb network external:skip logreqres:skip"} {
     start_server {} {
         test "test valkey-check-rdb stats with empty RDB" {

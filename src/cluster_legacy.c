@@ -3113,6 +3113,7 @@ writePortPingExtIfNonzero(uint32_t *totlen_ptr, clusterMsgPingExt **cursor_ptr, 
     size_t size = getAlignedPingExtSize(sizeof(clusterMsgPingExtClientPort));
     if (*cursor_ptr != NULL) {
         void *ext = preparePingExt(*cursor_ptr, type, size);
+        value = htons(value);
         memcpy(ext, &value, sizeof(value));
         *cursor_ptr = getNextPingExt(*cursor_ptr);
     }
@@ -3224,11 +3225,11 @@ void clusterProcessPingExtensions(clusterMsg *hdr, clusterLink *link) {
         } else if (type == CLUSTERMSG_EXT_TYPE_CLIENT_PORT) {
             clusterMsgPingExtClientPort *clientport_ext =
                 (clusterMsgPingExtClientPort *)&(ext->ext[0].announce_client_port);
-            ext_clientport = clientport_ext->announce_client_port;
+            ext_clientport = ntohs(clientport_ext->announce_client_port);
         } else if (type == CLUSTERMSG_EXT_TYPE_CLIENT_TLS_PORT) {
             clusterMsgPingExtClientTlsPort *clienttlsport_ext =
                 (clusterMsgPingExtClientTlsPort *)&(ext->ext[0].announce_client_tls_port);
-            ext_clienttlsport = clienttlsport_ext->announce_client_tls_port;
+            ext_clienttlsport = ntohs(clienttlsport_ext->announce_client_tls_port);
         } else if (type == CLUSTERMSG_EXT_TYPE_FORGOTTEN_NODE) {
             clusterMsgPingExtForgottenNode *forgotten_node_ext = &(ext->ext[0].forgotten_node);
             clusterNode *n = clusterLookupNode(forgotten_node_ext->name, CLUSTER_NAMELEN);

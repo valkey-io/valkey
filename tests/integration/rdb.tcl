@@ -58,7 +58,7 @@ start_server_and_kill_it [list "dir" $server_path "dbfilename" "encodings-rdb987
             [string match {*Fatal error loading*} \
                  [exec tail -1 < [dict get $srv stdout]]]
         } else {
-            fail "Server started even if RDB version check failed"
+            fail "Server started even though RDB version is unsupported"
         }
     }
 }
@@ -80,7 +80,7 @@ start_server_and_kill_it [list dir $server_path \
             [string match {*Fatal error loading*} \
                  [exec tail -1 < [dict get $srv stdout]]]
         } else {
-            fail "Server started even if RDB version check failed"
+            fail "Server started even though RDB contains unknown types"
         }
     }
 }
@@ -103,7 +103,7 @@ start_server_and_kill_it [list dir $server_path \
             [string match {*Fatal error loading*} \
                  [exec tail -1 < [dict get $srv stdout]]]
         } else {
-             fail "Server started even if RDB version check failed"
+            fail "Server started even though RDB contains unknown types"
         }
     }
 }

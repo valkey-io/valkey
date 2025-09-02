@@ -6,7 +6,7 @@ start_cluster 2 2 {tags {external:skip cluster} overrides {cluster-replica-no-fa
         for {set j 0} {$j < [llength $::servers]} {incr j} {
             set res [R $j config set cluster-announce-client-port "640$j"]
             set res [R $j config set cluster-announce-client-tls-port "640$j"]
-            lset announced_ports $j "640$j"
+            lappend announced_ports "640$j"
         }
 
         # CLUSTER SLOTS
@@ -55,9 +55,9 @@ start_cluster 2 2 {tags {external:skip cluster} overrides {cluster-replica-no-fa
             R $j config set cluster-announce-client-port 0
             R $j config set cluster-announce-client-tls-port 0
             if {$::tls} {
-                lset original_ports $j [lindex [R $j config get tls-port] 1]
+                lappend original_ports [lindex [R $j config get tls-port] 1]
             } else {
-                lset original_ports $j [lindex [R $j config get port] 1]
+                lappend original_ports [lindex [R $j config get port] 1]
             }
         }
 

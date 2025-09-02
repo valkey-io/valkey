@@ -57,7 +57,7 @@ int num_running = 0;
 int resend_failed_cmd = 0;
 int send_to_all = 0;
 int show_events = 0;
-int async_initial_update = 0;
+int blocking_initial_update = 0;
 
 void sendNextCommand(evutil_socket_t, short, void *);
 
@@ -80,7 +80,7 @@ void printReply(const valkeyReply *reply) {
 
 void replyCallback(valkeyClusterAsyncContext *acc, void *r, void *privdata) {
     valkeyReply *reply = (valkeyReply *)r;
-    intptr_t cmd_id = (intptr_t)privdata; /* Id to corresponding cmd */
+    intptr_t cmd_id = (intptr_t)privdata; /* ID for corresponding cmd */
 
     if (reply == NULL) {
         if (acc->err) {
@@ -251,8 +251,8 @@ int main(int argc, char **argv) {
             show_events = 1;
         } else if (strcmp(argv[optind], "--connection-events") == 0) {
             show_connection_events = 1;
-        } else if (strcmp(argv[optind], "--async-initial-update") == 0) {
-            async_initial_update = 1;
+        } else if (strcmp(argv[optind], "--blocking-initial-update") == 0) {
+            blocking_initial_update = 1;
         } else {
             fprintf(stderr, "Unknown argument: '%s'\n", argv[optind]);
         }
@@ -273,7 +273,7 @@ int main(int argc, char **argv) {
     options.command_timeout = &timeout;
     options.event_callback = eventCallback;
     options.max_retry = 1;
-    if (!async_initial_update) {
+    if (blocking_initial_update) {
         options.options = VALKEY_OPT_BLOCKING_INITIAL_UPDATE;
     }
     if (use_cluster_nodes) {

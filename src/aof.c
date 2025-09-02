@@ -2283,7 +2283,6 @@ int rewriteObjectRio(rio *aof, robj *o, int db_num) {
 int rewriteSlotToAppendOnlyFileRio(rio *aof, int db_num, int hashslot, size_t *key_count) {
     long long updated_time = 0;
 
-    if (rewriteFunctions(aof) == 0) return C_ERR;
     if (dbHasNoKeys(db_num)) return C_OK;
 
     serverDb *db = server.db[db_num];

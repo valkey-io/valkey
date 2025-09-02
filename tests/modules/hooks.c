@@ -365,6 +365,19 @@ void keyInfoCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent e, uint64_t sub, vo
     }
 }
 
+void authAttemptCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent e, uint64_t sub, void *data)
+{
+    VALKEYMODULE_NOT_USED(e);
+    VALKEYMODULE_NOT_USED(sub);
+
+    ValkeyModuleAuthenticationInfo *ai = data;
+    LogStringEvent(ctx, "auth-attempt", ai->username);
+    if (ai->module_name) {
+        LogStringEvent(ctx, "auth-attempt-module", ai->module_name);
+    }
+    LogNumericEvent(ctx, "auth-attempt-success", ai->result == VALKEYMODULE_AUTH_RESULT_GRANTED);
+}
+
 static int cmdIsKeyRemoved(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc){
     if(argc != 2){
         return ValkeyModule_WrongArity(ctx);
@@ -452,6 +465,9 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
 
     ValkeyModule_SubscribeToServerEvent(ctx,
         ValkeyModuleEvent_Key, keyInfoCallback);
+
+    ValkeyModule_SubscribeToServerEvent(ctx,
+        ValkeyModuleEvent_AuthenticationAttempt, authAttemptCallback);
 
     event_log = ValkeyModule_CreateDict(ctx);
     removed_event_log = ValkeyModule_CreateDict(ctx);

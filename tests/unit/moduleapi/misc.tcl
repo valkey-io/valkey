@@ -103,19 +103,25 @@ start_server {overrides {save {900 1}} tags {"modules"}} {
         set ssl_flag [expr $::tls ? {"ssl:"} : {":"}]
 
         assert { [dict get $info db] == 9 }
-        assert { [dict get $info flags] == "${ssl_flag}::::" }
+        assert { [dict get $info flags] == "${ssl_flag}:::::" }
 
         # Test MULTI flag
         r multi
         r test.clientinfo
         set info [lindex [r exec] 0]
-        assert { [dict get $info flags] == "${ssl_flag}::::multi" }
+        assert { [dict get $info flags] == "${ssl_flag}::::multi:" }
 
         # Test TRACKING flag
         r client tracking on
         set info [r test.clientinfo]
-        assert { [dict get $info flags] == "${ssl_flag}::tracking::" }
+        assert { [dict get $info flags] == "${ssl_flag}::tracking:::" }
         r CLIENT TRACKING off
+        r readonly
+        set info [r test.clientinfo]
+        assert { [dict get $info flags] == "${ssl_flag}:::::readonly" }
+        r readwrite
+        set info [r test.clientinfo]
+        assert { [dict get $info flags] == "${ssl_flag}:::::" }
     }
 
     test {tracking with rm_call sanity} {

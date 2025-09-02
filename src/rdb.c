@@ -3208,7 +3208,13 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
                 int slot_id;
                 unsigned long slot_size = 0, expires_slot_size = 0, keys_with_volatile_items_slot_size = 0;
                 /* Try to parse the slot information. In case the number of parsed arguments is smaller than expected
-                 * we'll fail the RDB load. */
+                 * we'll fail the RDB load. The use of sscanf was originally introduced in 8.0 to allow extending
+                 * the optional saved slot information in future versions without having to bump the rdb version.
+                 * This implementation should work in both upgrade and downgrade scenarios.
+                 * In case of upgrade, missing data will just be ignored an untouched by sscanf.
+                 * In case of relaxed rdb downgrade, the missing data will simply be ignored.
+                 * The verification only verifies we read the fields known to exist when we first introduced the slot-ino AUX field,
+                 * which are the slot number, number of keys in slot and the number of volatile keys. */
                 if (sscanf(auxval->ptr, "%i,%lu,%lu,%lu", &slot_id, &slot_size, &expires_slot_size, &keys_with_volatile_items_slot_size) < 3) {
                     decrRefCount(auxkey);
                     decrRefCount(auxval);

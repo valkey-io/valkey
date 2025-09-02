@@ -7839,9 +7839,8 @@ ValkeyModuleBlockedClient *moduleBlockClient(ValkeyModuleCtx *ctx,
                                              void *privdata,
                                              int flags) {
     client *c = ctx->client;
-    if (c->flag.blocked || getClientType(c) != CLIENT_TYPE_NORMAL || c->flag.deny_blocking) {
-        /* Early return if duplicate block attempt or client is not normal or
-         * client is set to deny blocking. */
+    if (c->flag.blocked || getClientType(c) != CLIENT_TYPE_NORMAL) {
+        /* Early return if duplicate block attempt or client is not normal. */
         errno = ENOTSUP;
         return NULL;
     }
@@ -7854,6 +7853,7 @@ ValkeyModuleBlockedClient *moduleBlockClient(ValkeyModuleCtx *ctx,
     int is_keyspace_notification = ctx->flags & (VALKEYMODULE_CTX_KEYSPACE_NOTIFICATION);
     int islua = scriptIsRunning();
     int ismulti = server.in_exec;
+    serverAssert(!c->flag.deny_blocking || (islua || ismulti));
     if ((islua || ismulti) && is_keyspace_notification) {
         /* Avoid blocking within transactions when context initiated by
          * keyspace notification. */
@@ -7951,9 +7951,10 @@ ValkeyModuleBlockedClient *moduleBlockClient(ValkeyModuleCtx *ctx,
  *
  * The following is an example of how non-blocking module based authentication can be used:
  *
- *      int auth_cb(ValkeyModuleCtx *ctx, ValkeyModuleString *username, ValkeyModuleString *password, ValkeyModuleString
- * **err) { const char *user = ValkeyModule_StringPtrLen(username, NULL); const char *pwd =
- * ValkeyModule_StringPtrLen(password, NULL); if (!strcmp(user,"foo") && !strcmp(pwd,"valid_password")) {
+ *      int auth_cb(ValkeyModuleCtx *ctx, ValkeyModuleString *username, ValkeyModuleString *password, ValkeyModuleString **err) {
+ *          const char *user = ValkeyModule_StringPtrLen(username, NULL);
+ *          const char *pwd = ValkeyModule_StringPtrLen(password, NULL);
+ *          if (!strcmp(user,"foo") && !strcmp(pwd,"valid_password")) {
  *              ValkeyModule_AuthenticateClientWithACLUser(ctx, "foo", 3, NULL, NULL, NULL);
  *              return VALKEYMODULE_AUTH_HANDLED;
  *          }
@@ -8183,7 +8184,7 @@ int moduleTryServeClientBlockedOnKey(client *c, robj *key) {
  *
  * There are some cases where ValkeyModule_BlockClient() cannot be used:
  *
- * 1. If the client is a Lua script.
+ * 1. If the client is executing a script.
  * 2. If the client is executing a MULTI block.
  * 3. If the client is a temporary module client.
  * 4. If the client is already blocked.
@@ -8195,9 +8196,6 @@ int moduleTryServeClientBlockedOnKey(client *c, robj *key) {
  *
  * In case 3 and 4, a call to ValkeyModule_BlockClient() are no-op, returning
  * nullptr. errno is set to EINVAL for case 3 while ENOTSUP for case 4.
- *
- * In these cases, a call to ValkeyModule_BlockClient() will **not** block the
- * client, but instead produce a specific error reply.
  *
  * A module that registers a timeout_callback function can also be unblocked
  * using the `CLIENT UNBLOCK` command, which will trigger the timeout callback.
@@ -8221,7 +8219,16 @@ ValkeyModuleBlockedClient *VM_BlockClient(ValkeyModuleCtx *ctx,
 /* Block the current client for module authentication in the background. If module auth is not in
  * progress on the client, the API returns NULL. Otherwise, the client is blocked and the VM_BlockedClient
  * is returned similar to the VM_BlockClient API.
- * Note: Only use this API from the context of a module auth callback. */
+ * Note: Only use this API from the context of a module auth callback.
+ *
+ * There are some cases where ValkeyModule_BlockClientOnAuth() cannot be used:
+ *
+ * 1. If the client is not in the middle of module based authentication. This will not block the client
+ *    but instead produce a specific error reply.
+ *
+ * For details on other return values and error codes, see the comment block for
+ * ValkeyModule_BlockClient().
+ * */
 ValkeyModuleBlockedClient *VM_BlockClientOnAuth(ValkeyModuleCtx *ctx,
                                                 ValkeyModuleAuthCallback reply_callback,
                                                 void (*free_privdata)(ValkeyModuleCtx *, void *)) {

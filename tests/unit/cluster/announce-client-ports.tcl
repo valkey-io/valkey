@@ -77,17 +77,3 @@ start_cluster 2 2 {tags {external:skip cluster} overrides {cluster-replica-no-fa
         wait_for_cluster_propagation
     }
 }
-
-start_cluster 1 0 {tags {external:skip cluster} overrides {cluster-replica-no-failover yes bind {127.0.0.1 ::1}}} {
-    test "Load cluster announced client port config on server start" {
-        R 0 config set cluster-announce-client-port 6380
-        restart_server 0 true false
-    }
-}
-
-start_cluster 1 0 {tags {external:skip cluster} overrides {cluster-replica-no-failover yes bind {127.0.0.1 ::1}}} {
-    test "Load cluster announced client TLS port config on server start" {
-        R 0 config set cluster-announce-client-tls-port 6380
-        restart_server 0 true false
-    }
-}

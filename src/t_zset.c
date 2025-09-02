@@ -346,11 +346,9 @@ static zskiplistNode *zslUpdateScore(zskiplist *zsl, zskiplistNode *node, double
     serverAssert(x->level[0].forward == node);
 
     zslDeleteNode(zsl, node, update);
-    /* update pointer inside hashtable with new node */
-    sds ele = zslGetNodeElement(node);
-    zskiplistNode *new_node = zslInsert(zsl, newscore, ele);
-    zslFreeNode(node);
-    return new_node;
+    node->score = newscore; /* reuse existing node to avoid memory allocation */
+    zslInsertNode(zsl, node);
+    return node;
 }
 
 int zslValueGteMin(double value, zrangespec *spec) {
@@ -475,7 +473,7 @@ static unsigned long zslDeleteRangeByScore(zskiplist *zsl, zrangespec *range, ha
         zskiplistNode *next = x->level[0].forward;
         zslDeleteNode(zsl, x, update);
         sds ele = zslGetNodeElement(x);
-        hashtableDelete(ht, ele);
+        hashtablePop(ht, ele, NULL);
         zslFreeNode(x);
         removed++;
         x = next;

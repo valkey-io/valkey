@@ -266,6 +266,10 @@ static void activeDefragZsetNode(void *privdata, void *entry_ref) {
     zskiplistNode **node_ref = (zskiplistNode **)entry_ref;
     zskiplistNode *node = *node_ref;
 
+    size_t allocation_size;
+    zskiplistNode *newnode = activeDefragAllocWithoutFree(node, &allocation_size);
+    if (newnode == NULL) return;
+
     const double score = node->score;
     const sds ele = zslGetNodeElement(node);
 
@@ -288,12 +292,9 @@ static void activeDefragZsetNode(void *privdata, void *entry_ref) {
     /* should have arrived at intended node */
     serverAssert(x->level[0].forward == node);
 
-    /* try to defrag the skiplist record itself */
-    zskiplistNode *newnode = activeDefragAlloc(node);
-    if (newnode) {
-        zslUpdateNode(zsl, node, newnode, update);
-        *node_ref = newnode; /* update hashtable pointer */
-    }
+    zslUpdateNode(zsl, node, newnode, update);
+    *node_ref = newnode; /* update hashtable pointer */
+    allocatorDefragFree(node, allocation_size);
 }
 
 #define DEFRAG_SDS_DICT_NO_VAL 0

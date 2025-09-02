@@ -15,7 +15,10 @@ set server_path [tmpdir "server.rdb-encoding-test"]
 
 # Copy RDB with different encodings in server path
 exec cp tests/assets/encodings.rdb $server_path
+exec cp tests/assets/encodings-rdb12.rdb $server_path
+exec cp tests/assets/encodings-rdb75-unknown-types.rdb $server_path
 exec cp tests/assets/encodings-rdb987.rdb $server_path
+exec cp tests/assets/encodings-rdb987-unknown-types.rdb $server_path
 exec cp tests/assets/list-quicklist.rdb $server_path
 
 start_server [list overrides [list "dir" $server_path "dbfilename" "list-quicklist.rdb" save ""]] {
@@ -67,6 +70,42 @@ start_server [list overrides [list "dir" $server_path \
         r select 0
         csvdump r
     } $csv_dump
+}
+
+start_server_and_kill_it [list dir $server_path \
+                              dbfilename "encodings-rdb987-unknown-types.rdb" \
+                              rdb-version-check relaxed] {
+    test "RDB future version loading with unknown types, relaxed version check" {
+        wait_for_condition 50 100 {
+            [string match {*Fatal error loading*} \
+                 [exec tail -1 < [dict get $srv stdout]]]
+        } else {
+            fail "Server started even if RDB version check failed"
+        }
+    }
+}
+
+start_server [list overrides [list dir $server_path \
+                                  dbfilename "encodings-rdb12.rdb" \
+                                  rdb-version-check relaxed]] {
+    test "RDB foreign version loading, relaxed version check" {
+        r select 0
+        assert_equal foo [r keys *]
+        assert_equal bar [r get foo]
+    }
+}
+
+start_server_and_kill_it [list dir $server_path \
+                              dbfilename "encodings-rdb75-unknown-types.rdb" \
+                              rdb-version-check relaxed] {
+    test "RDB foreign version loading with unknown types, relaxed version check" {
+        wait_for_condition 50 100 {
+            [string match {*Fatal error loading*} \
+                 [exec tail -1 < [dict get $srv stdout]]]
+        } else {
+             fail "Server started even if RDB version check failed"
+        }
+    }
 }
 
 set server_path [tmpdir "server.rdb-startup-test"]

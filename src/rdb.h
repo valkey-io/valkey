@@ -179,8 +179,9 @@ typedef struct rdbSnapshotOptions {
 
 /* When rdbLoadObject() returns NULL, the err flag is
  * set to hold the type of error that occurred */
-#define RDB_LOAD_ERR_EMPTY_KEY 1 /* Error of empty key */
-#define RDB_LOAD_ERR_OTHER 2     /* Any other errors */
+#define RDB_LOAD_ERR_EMPTY_KEY 1    /* Error of empty key */
+#define RDB_LOAD_ERR_UNKNOWN_TYPE 2 /* Unknown type in file */
+#define RDB_LOAD_ERR_OTHER 3        /* Any other errors */
 
 bool rdbIsVersionAccepted(int rdbver, bool is_valkey_magic, bool is_redis_magic);
 ssize_t rdbWriteRaw(rio *rdb, void *p, size_t len);

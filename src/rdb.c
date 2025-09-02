@@ -2891,6 +2891,10 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error) {
             return NULL;
         }
         o = createModuleObject(mt, ptr);
+    } else if (server.rdb_version_check == RDB_VERSION_CHECK_RELAXED) {
+        /* Future or foreign type. Don't report it as an internal error. */
+        if (error) *error = RDB_LOAD_ERR_UNKNOWN_TYPE;
+        return NULL;
     } else {
         rdbReportReadError("Unknown RDB encoding type %d", rdbtype);
         return NULL;
@@ -3182,7 +3186,7 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
             if ((slot_id = rdbLoadLen(rdb, NULL)) == RDB_LENERR) goto eoferr;
             if ((slot_size = rdbLoadLen(rdb, NULL)) == RDB_LENERR) goto eoferr;
             if ((expires_slot_size = rdbLoadLen(rdb, NULL)) == RDB_LENERR) goto eoferr;
-            if (server.cluster_enabled) {
+            if (server.cluster_enabled && slot_id < CLUSTER_SLOTS) {
                 if (slot_size) kvstoreHashtableExpand(db->keys, slot_id, slot_size);
                 if (expires_slot_size) kvstoreHashtableExpand(db->expires, slot_id, expires_slot_size);
                 should_expand_db = 0;
@@ -3248,7 +3252,7 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
                     goto eoferr;
                 }
 
-                if (server.cluster_enabled) {
+                if (server.cluster_enabled && slot_id >= 0 && slot_id < CLUSTER_SLOTS) {
                     /* In cluster mode we resize individual slot specific dictionaries based on the number of keys that
                      * slot holds. */
                     if (slot_size) kvstoreHashtableExpand(db->keys, slot_id, slot_size);
@@ -3385,6 +3389,10 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
             if (error == RDB_LOAD_ERR_EMPTY_KEY) {
                 if (empty_keys_skipped++ < 10) serverLog(LL_NOTICE, "rdbLoadObject skipping empty key: %s", key);
                 sdsfree(key);
+            } else if (error == RDB_LOAD_ERR_UNKNOWN_TYPE) {
+                sdsfree(key);
+                serverLog(LL_WARNING, "Unknown type or opcode when loading DB. Unrecoverable error, aborting now.");
+                return C_ERR;
             } else {
                 sdsfree(key);
                 goto eoferr;

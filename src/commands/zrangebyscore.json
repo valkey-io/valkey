@@ -12,7 +12,6 @@
                 "Added the `WITHSCORES` modifier."
             ]
         ],
-        "doc_flags": [ ],
         "command_flags": [
             "READONLY"
         ],

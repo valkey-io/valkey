@@ -102,6 +102,8 @@ static struct config {
     int numclients;
     _Atomic int liveclients;
     int requests;
+    int duration;
+    _Atomic int warmup_duration;
     _Atomic int requests_issued;
     _Atomic int requests_finished;
     _Atomic int previous_requests_finished;
@@ -250,6 +252,21 @@ static long long nstime(void) {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return (long long)ts.tv_sec * 1000000000LL + ts.tv_nsec;
+}
+
+static bool isBenchmarkFinished(int request_count) {
+    /* don't end in warmup period */
+    int warmup_duration = atomic_load_explicit(&config.warmup_duration, memory_order_relaxed);
+    if (warmup_duration > 0) return false;
+
+    if (config.duration > 0) {
+        /* end after the specified duration */
+        if ((mstime() - config.start) >= (config.duration * 1000LL)) return true;
+    } else {
+        /* end after the specified number of requests */
+        if (request_count >= config.requests) return true;
+    }
+    return false;
 }
 
 static uint64_t dictSdsHash(const void *key) {
@@ -503,7 +520,7 @@ static void freeClient(client c) {
     aeDeleteFileEvent(el, c->context->fd, AE_READABLE);
     if (c->thread_id >= 0) {
         int requests_finished = atomic_load_explicit(&config.requests_finished, memory_order_relaxed);
-        if (requests_finished >= config.requests) {
+        if (isBenchmarkFinished(requests_finished)) {
             aeStop(el);
         }
     }
@@ -627,7 +644,7 @@ static long long acquireTokenOrWait(int tokens) {
 
 static void clientDone(client c) {
     int requests_finished = atomic_load_explicit(&config.requests_finished, memory_order_relaxed);
-    if (requests_finished >= config.requests) {
+    if (isBenchmarkFinished(requests_finished)) {
         freeClient(c);
         if (!config.num_threads && config.el) aeStop(config.el);
         return;
@@ -718,7 +735,7 @@ static void readHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
                     continue;
                 }
                 int requests_finished = atomic_fetch_add_explicit(&config.requests_finished, 1, memory_order_relaxed);
-                if (requests_finished < config.requests) {
+                if (!isBenchmarkFinished(requests_finished)) {
                     if (config.num_threads == 0) {
                         hdr_record_value(config.latency_histogram, // Histogram to record to
                                          (long)c->latency <= CONFIG_LATENCY_HISTOGRAM_MAX_VALUE
@@ -836,7 +853,7 @@ static void writeHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
         int requests_issued = atomic_fetch_add_explicit(&config.requests_issued,
                                                         config.pipeline * c->seqlen,
                                                         memory_order_relaxed);
-        if (requests_issued >= config.requests) {
+        if (isBenchmarkFinished(requests_issued)) {
             return;
         }
 
@@ -1620,6 +1637,13 @@ int parseOptions(int argc, char **argv) {
         } else if (!strcmp(argv[i], "-n")) {
             if (lastarg) goto invalid;
             config.requests = atoi(argv[++i]);
+        } else if (!strcmp(argv[i], "--duration")) {
+            if (lastarg) goto invalid;
+            config.duration = atoi(argv[++i]);
+        } else if (!strcmp(argv[i], "--warmup")) {
+            if (lastarg) goto invalid;
+            config.warmup_duration = atoi(argv[++i]);
+            
         } else if (!strcmp(argv[i], "-k")) {
             if (lastarg) goto invalid;
             config.keepalive = atoi(argv[++i]);
@@ -1870,6 +1894,9 @@ usage:
         "                    Note: If --cluster is used then number of clients has to be\n"
         "                    the same or higher than the number of nodes.\n"
         " -n <requests>      Total number of requests (default 100000)\n"
+        " --duration <seconds>\n"
+        "                    Run benchmark for specified number of seconds (overrides -n)\n"
+        " --warmup <seconds> Run benchmark for specified warmup period before recording data\n"
         " -d <size>          Data size of SET/GET value in bytes (default 3)\n"
         " --dbnum <db>       SELECT the specified db number (default 0)\n"
         " -3                 Start session in RESP3 protocol mode.\n"
@@ -1957,16 +1984,28 @@ long long showThroughput(struct aeEventLoop *eventLoop, long long id, void *clie
     UNUSED(eventLoop);
     UNUSED(id);
     benchmarkThread *thread = (benchmarkThread *)clientData;
-    int liveclients = atomic_load_explicit(&config.liveclients, memory_order_relaxed);
     int requests_finished = atomic_load_explicit(&config.requests_finished, memory_order_relaxed);
     int previous_requests_finished = atomic_load_explicit(&config.previous_requests_finished, memory_order_relaxed);
     long long current_tick = mstime();
 
-    if (liveclients == 0 && requests_finished != config.requests) {
+    int liveclients = atomic_load_explicit(&config.liveclients, memory_order_relaxed);
+    if (liveclients == 0 && !isBenchmarkFinished(requests_finished)) {
         fprintf(stderr, "All clients disconnected... aborting.\n");
         exit(1);
     }
-    if (config.num_threads && requests_finished >= config.requests) {
+    int warmup_duration = atomic_load_explicit(&config.warmup_duration, memory_order_relaxed);
+    if (warmup_duration > 0) {
+        if ((current_tick - config.start) >= (warmup_duration * 1000LL)) {
+            /* exit the warmup period, clear all stats */
+            atomic_store_explicit(&config.warmup_duration, 0, memory_order_relaxed);
+
+            config.start = current_tick;
+            atomic_store_explicit(&config.requests_finished, 0, memory_order_relaxed);
+            atomic_store_explicit(&config.requests_issued, 0, memory_order_relaxed);
+            atomic_store_explicit(&config.previous_requests_finished, 0, memory_order_relaxed);
+            hdr_reset(config.latency_histogram);
+        }
+    } else if (config.num_threads && isBenchmarkFinished(requests_finished)) {
         aeStop(eventLoop);
         return AE_NOMORE;
     }
@@ -1991,11 +2030,21 @@ long long showThroughput(struct aeEventLoop *eventLoop, long long id, void *clie
 
     config.previous_tick = current_tick;
     atomic_store_explicit(&config.previous_requests_finished, requests_finished, memory_order_relaxed);
+
     printf("%*s\r", config.last_printed_bytes, " "); /* ensure there is a clean line */
-    int printed_bytes =
-        printf("%s: rps=%.1f (overall: %.1f) avg_msec=%.3f (overall: %.3f)\r", config.title, instantaneous_rps, rps,
-               hdr_mean(config.current_sec_latency_histogram) / 1000.0f, hdr_mean(config.latency_histogram) / 1000.0f);
-    config.last_printed_bytes = printed_bytes;
+    config.last_printed_bytes = 0;
+    if (warmup_duration > 0) {
+        config.last_printed_bytes += printf("Warming up ");
+    }
+    config.last_printed_bytes +=
+        printf("%s: rps=%.1f (overall: %.1f) avg_msec=%.3f (overall: %.3f)", config.title, instantaneous_rps, rps,
+            hdr_mean(config.current_sec_latency_histogram) / 1000.0f, hdr_mean(config.latency_histogram) / 1000.0f);
+    if (warmup_duration > 0 || config.duration > 0) {
+        config.last_printed_bytes += printf(" %.1f seconds\r", dt);
+    } else {
+        config.last_printed_bytes += printf(" %d requests\r", requests_finished);
+    }
+
     hdr_reset(config.current_sec_latency_histogram);
     fflush(stdout);
     return SHOW_THROUGHPUT_INTERVAL;
@@ -2068,6 +2117,8 @@ int main(int argc, char **argv) {
     config.ct = VALKEY_CONN_TCP;
     config.numclients = 50;
     config.requests = 100000;
+    config.duration = -1;
+    config.warmup_duration = -1;
     config.liveclients = 0;
     config.el = aeCreateEventLoop(1024 * 10);
     aeCreateTimeEvent(config.el, 1, showThroughput, NULL, NULL);

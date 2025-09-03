@@ -9,11 +9,12 @@ proc cmdstat {cmd} {
 proc common_bench_setup {cmd} {
     r config resetstat
     r flushall
-    if {[catch { exec {*}$cmd } error]} {
-        set first_line [lindex [split $error "\n"] 0]
-        puts [colorstr red "valkey-benchmark non zero code, the output is: $error"]
+    if {[catch { exec {*}$cmd } output]} {
+        set first_line [lindex [split $output "\n"] 0]
+        puts [colorstr red "valkey-benchmark non zero code, the output is: $output"]
         fail "valkey-benchmark non zero code. first line: $first_line"
     }
+    return $output
 }
 
 # we use this extra asserts on a simple set,get test for features like uri parsing
@@ -206,6 +207,52 @@ tags {"benchmark network external:skip logreqres:skip"} {
             # ensure the keyspace has the desired size
             assert_equal  {keys=1} [regexp -inline {keys=[\d]*} [r info keyspace]]
             assert_match  {50} [r zcard myzset]
+        }
+
+        test {benchmark: warmup and duration are cumulative} {
+            set start_time [clock seconds]
+            set cmd [valkeybenchmark $master_host $master_port "-r 5 --warmup 1 --duration 1 -t set"]
+            set output [common_bench_setup $cmd]
+            set end_time [clock seconds]
+
+            # Verify total duration was at least 2 seconds
+            set elapsed [expr {$end_time - $start_time}]
+            assert {$elapsed >= 2 && $elapsed <= 2.25}
+
+            # Check reported duration
+            lassign [regexp -inline {(\d+) requests completed in ([\d.]+) seconds} $output] -> requests duration
+            assert {$duration < 2.0 && $duration >= 1.0}
+        }
+
+        test {benchmark: warmup can be used with request count} {
+            set start_time [clock seconds]
+            set cmd [valkeybenchmark $master_host $master_port "-r 5 --warmup 1 -n 100 -t set"]
+            set output [common_bench_setup $cmd]
+            set end_time [clock seconds]
+
+            # Verify total duration was at least 2 seconds
+            set elapsed [expr {$end_time - $start_time}]
+            assert {$elapsed >= 1}
+
+            # Check reported duration and command count
+            lassign [regexp -inline {(\d+) requests completed in ([\d.]+) seconds} $output] -> requests duration
+            assert {$duration < 1.0}
+            assert {$requests >= 100 && $requests < 150}
+        }
+
+        test {benchmark: duration preempts request count} {
+            set start_time [clock seconds]
+            set cmd [valkeybenchmark $master_host $master_port "-r 5 -n 5 --duration 1 -t set"]
+            common_bench_setup $cmd
+            set end_time [clock seconds]
+
+            # Verify duration was approximately 1 second (allow some margin)
+            set elapsed [expr {$end_time - $start_time}]
+            assert {$elapsed >= 1 && $elapsed <= 1.25}
+
+             # Verify that more than 5 requests were made (proving -n was preempted)
+            set calls [regexp -inline {calls=(\d+),} [cmdstat set]]
+            assert {$calls > 100}
         }
 
         test {benchmark: clients idle mode should return error when reached maxclients limit} {

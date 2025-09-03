@@ -17,7 +17,6 @@
                 "Added support for uppercase unit names."
             ]
         ],
-        "doc_flags": [ ],
         "command_flags": [
             "WRITE",
             "DENYOOM"

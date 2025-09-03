@@ -5,6 +5,5 @@
         "group": "server",
         "since": "2.2.12",
         "arity": -2,
-        "doc_flags": [ ]
     }
 }

@@ -7,7 +7,6 @@
         "arity": 2,
         "container": "SLOWLOG",
         "function": "slowlogCommand",
-        "doc_flags": [ ],
         "command_flags": [
             "ADMIN",
             "LOADING",

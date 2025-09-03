@@ -6,7 +6,6 @@
         "since": "1.0.0",
         "arity": -1,
         "function": "quitCommand",
-        "doc_flags": [ ],
         "command_flags": [
             "ALLOW_BUSY",
             "NOSCRIPT",

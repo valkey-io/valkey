@@ -53,15 +53,13 @@ foreach thread_count $rdb_thread_counts {
     }
 }
 
-foreach thread_count $rdb_thread_counts {
-    start_server_and_kill_it [list "dir" $server_path "dbfilename" "encodings-rdb987.rdb"] {
-        test "RDB future version loading, strict version check" {
-            wait_for_condition 50 100 {
-                [string match {*Fatal error loading*} \
-                    [exec tail -1 < [dict get $srv stdout]]]
-            } else {
-                fail "Server started even if RDB version check failed"
-            }
+start_server_and_kill_it [list "dir" $server_path "dbfilename" "encodings-rdb987.rdb"] {
+    test "RDB future version loading, strict version check" {
+        wait_for_condition 50 100 {
+            [string match {*Fatal error loading*} \
+                [exec tail -1 < [dict get $srv stdout]]]
+        } else {
+            fail "Server started even if RDB version check failed"
         }
     }
 }
@@ -336,28 +334,31 @@ foreach thread_count $rdb_thread_counts {
     }
 }
 
-start_server {} {
-    test {Test RDB load info} {
-        r debug populate 1000
-        r save
-        assert {[r lastsave] <= [lindex [r time] 0]}
-        restart_server 0 true false
-        wait_done_loading r
-        assert {[s rdb_last_load_keys_expired] == 0}
-        assert {[s rdb_last_load_keys_loaded] == 1000}
+foreach thread_count $rdb_thread_counts {
+    start_server {} {
+        r config set rdb-threads $thread_count
+        test "Test RDB load info for $thread_count threads" {
+            r debug populate 1000
+            r save
+            assert {[r lastsave] <= [lindex [r time] 0]}
+            restart_server 0 true false
+            wait_done_loading r
+            assert {[s rdb_last_load_keys_expired] == 0}
+            assert {[s rdb_last_load_keys_loaded] == 1000}
 
-        r debug set-active-expire 0
-        for {set j 0} {$j < 1024} {incr j} {
-            r select [expr $j%16]
-            r set $j somevalue px 10
+            r debug set-active-expire 0
+            for {set j 0} {$j < 1024} {incr j} {
+                r select [expr $j%16]
+                r set $j somevalue px 10
+            }
+            after 20
+
+            r save
+            restart_server 0 true false
+            wait_done_loading r
+            assert {[s rdb_last_load_keys_expired] == 1024}
+            assert {[s rdb_last_load_keys_loaded] == 1000}
         }
-        after 20
-
-        r save
-        restart_server 0 true false
-        wait_done_loading r
-        assert {[s rdb_last_load_keys_expired] == 1024}
-        assert {[s rdb_last_load_keys_loaded] == 1000}
     }
 }
 

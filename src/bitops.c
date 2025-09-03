@@ -35,7 +35,7 @@
 #define __MM_MALLOC_H
 #include <immintrin.h>
 #endif
-#if defined(__aarch64__)
+#if HAVE_ARM_NEON
 #include <arm_neon.h>
 #endif
 /* -----------------------------------------------------------------------------
@@ -190,7 +190,7 @@ long long popcountScalar(void *s, long count) {
     return bits;
 }
 
-#if defined(__aarch64__)
+#if HAVE_ARM_NEON
 #include <arm_neon.h>
 
 /*  SIMD version of popcount for ARM NEON.

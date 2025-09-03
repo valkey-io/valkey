@@ -422,10 +422,10 @@ static inline void freeRdbChunkLoadThreadArgs(RdbDataSegmentLoadArgs *args) {
     zfree(args);
 }
 
-/* Inserts a batch of keys into the hashtable. This function assumes
- * the calling thread has already acquired the `db_insert_mutex`,
- * ensuring exclusive access to the hashtable.
- */
+/* Inserts a batch of keys into the hashtable.
+ * NOTE: This function assumes the calling thread has already
+ * acquired the `db_insert_mutex`  (ensuring exclusive hashtable access).
+ * Do not call this function from multiple threads without locking. */
 static void insertRdbKeyBatch(
     RdbLoadedKey *batch_buffer,
     int batch_count,

@@ -1384,8 +1384,10 @@ ssize_t rdbSaveDb(rio *rdb, int dbid, int rdbflags, long *key_counter) {
         int curr_slot = kvstoreIteratorGetCurrentHashtableIndex(kvs_it);
         /* Save slot info. */
         if (server.cluster_enabled && curr_slot != last_slot) {
-            sds slot_info = sdscatprintf(sdsempty(), "%i,%lu,%lu", curr_slot, kvstoreHashtableSize(db->keys, curr_slot),
-                                         kvstoreHashtableSize(db->expires, curr_slot));
+            sds slot_info = sdscatprintf(sdsempty(), "%i,%lu,%lu,%lu", curr_slot,
+                                         kvstoreHashtableSize(db->keys, curr_slot),
+                                         kvstoreHashtableSize(db->expires, curr_slot),
+                                         kvstoreHashtableSize(db->keys_with_volatile_items, curr_slot));
             if ((res = rdbSaveAuxFieldStrStr(rdb, "slot-info", slot_info)) < 0) {
                 sdsfree(slot_info);
                 goto werr;
@@ -3206,10 +3208,18 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
                 /* Just ignored. */
             } else if (!strcasecmp(auxkey->ptr, "slot-info")) {
                 int slot_id;
-                unsigned long slot_size, expires_slot_size;
+                unsigned long slot_size = 0, expires_slot_size = 0, keys_with_volatile_items_slot_size = 0;
                 /* Try to parse the slot information. In case the number of parsed arguments is smaller than expected
-                 * we'll fail the RDB load. */
-                if (sscanf(auxval->ptr, "%i,%lu,%lu", &slot_id, &slot_size, &expires_slot_size) < 3) {
+                 * we'll fail the RDB load. The use of sscanf was originally introduced in 8.0 to allow extending
+                 * the optional saved slot information in future versions without having to bump the rdb version.
+                 * This implementation should work in both upgrade and downgrade scenarios.
+                 * In case of upgrade, missing data will just be ignored an untouched by sscanf.
+                 * In case of relaxed rdb downgrade, trailing unknown data will simply be ignored.
+                 * The verification only verifies we read the fields known to exist when we first introduced the slot-info AUX field,
+                 * which are the slot number, number of keys in slot and the number of volatile keys. */
+                if (sscanf(auxval->ptr, "%i,%lu,%lu,%lu",
+                           &slot_id, &slot_size, &expires_slot_size,
+                           &keys_with_volatile_items_slot_size) < 3) {
                     decrRefCount(auxkey);
                     decrRefCount(auxval);
                     goto eoferr;
@@ -3220,6 +3230,11 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
                      * slot holds. */
                     if (slot_size) kvstoreHashtableExpand(db->keys, slot_id, slot_size);
                     if (expires_slot_size) kvstoreHashtableExpand(db->expires, slot_id, expires_slot_size);
+                    if (keys_with_volatile_items_slot_size) {
+                        kvstoreHashtableExpand(db->keys_with_volatile_items,
+                                               slot_id,
+                                               keys_with_volatile_items_slot_size);
+                    }
                     should_expand_db = 0;
                 }
             } else {

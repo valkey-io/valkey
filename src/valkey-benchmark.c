@@ -2338,6 +2338,12 @@ int main(int argc, char **argv) {
             free(cmd);
         }
 
+        if (test_is_selected("sismember")) {
+            len = valkeyFormatCommand(&cmd, "SISMEMBER myset%s element:__rand_int__", tag);
+            benchmark("SISMEMBER", cmd, len);
+            free(cmd);
+        }
+
         if (test_is_selected("zadd")) {
             char *score = "0";
             if (config.replace_placeholders) score = "__rand_int__";
@@ -2349,6 +2355,19 @@ int main(int argc, char **argv) {
         if (test_is_selected("zpopmin")) {
             len = valkeyFormatCommand(&cmd, "ZPOPMIN myzset%s", tag);
             benchmark("ZPOPMIN", cmd, len);
+            free(cmd);
+        }
+
+        if (test_is_selected("zscore")) {
+            len = valkeyFormatCommand(&cmd, "ZSCORE myzset%s element:__rand_1st__", tag);
+            benchmark("ZSCORE", cmd, len);
+            free(cmd);
+        }
+
+        if (test_is_selected("zrange")) {
+            int score_min = (config.keyspacelen != 0) ? (random() % config.keyspacelen) : 0;
+            len = valkeyFormatCommand(&cmd, "ZRANGE myzset%s %d +inf BYSCORE LIMIT 0 1", tag, score_min);
+            benchmark("ZRANGE", cmd, len);
             free(cmd);
         }
 

@@ -6,7 +6,6 @@
         "since": "1.0.0",
         "arity": 3,
         "function": "setnxCommand",
-        "doc_flags": [ ],
         "command_flags": [
             "WRITE",
             "DENYOOM",

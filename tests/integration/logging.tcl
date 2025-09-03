@@ -31,7 +31,8 @@ proc check_log_backtrace_for_debug {log_pattern} {
         if {!$::valgrind} {
             assert_equal [count_log_message 0 "wait_threads(): waiting threads timed out"] 0
             # make sure the server prints stack trace for all threads. we know 3 threads are idle in bio.c
-            assert_equal [count_log_message 0 "bioProcessBackgroundJobs"] 3
+            # waiting on a condition variable
+            assert_equal [count_log_message 0 "pthread_cond_wait"] 3
         }
     }
 

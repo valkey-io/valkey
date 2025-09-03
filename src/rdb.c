@@ -3215,7 +3215,7 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
                  * This implementation should work in both upgrade and downgrade scenarios.
                  * In case of upgrade, missing data will just be ignored an untouched by sscanf.
                  * In case of relaxed rdb downgrade, trailing unknown data will simply be ignored.
-                 * The verification only verifies we read the fields known to exist when we first introduced the slot-ino AUX field,
+                 * The verification only verifies we read the fields known to exist when we first introduced the slot-info AUX field,
                  * which are the slot number, number of keys in slot and the number of volatile keys. */
                 if (sscanf(auxval->ptr, "%i,%lu,%lu,%lu",
                            &slot_id, &slot_size, &expires_slot_size,

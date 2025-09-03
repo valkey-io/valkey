@@ -53,13 +53,15 @@ foreach thread_count $rdb_thread_counts {
     }
 }
 
-start_server_and_kill_it [list "dir" $server_path "dbfilename" "encodings-rdb987.rdb"] {
-    test "RDB future version loading, strict version check" {
-        wait_for_condition 50 100 {
-            [string match {*Fatal error loading*} \
-                 [exec tail -1 < [dict get $srv stdout]]]
-        } else {
-            fail "Server started even if RDB version check failed"
+foreach thread_count $rdb_thread_counts {
+    start_server_and_kill_it [list "dir" $server_path "dbfilename" "encodings-rdb987.rdb"] {
+        test "RDB future version loading, strict version check" {
+            wait_for_condition 50 100 {
+                [string match {*Fatal error loading*} \
+                    [exec tail -1 < [dict get $srv stdout]]]
+            } else {
+                fail "Server started even if RDB version check failed"
+            }
         }
     }
 }

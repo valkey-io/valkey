@@ -12,7 +12,6 @@
                 "`timeout` is interpreted as a double instead of an integer."
             ]
         ],
-        "doc_flags": [ ],
         "command_flags": [
             "WRITE",
             "DENYOOM",

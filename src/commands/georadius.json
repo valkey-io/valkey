@@ -17,7 +17,6 @@
                 "Added support for uppercase unit names."
             ]
         ],
-        "replaced_by": "`GEOSEARCH` and `GEOSEARCHSTORE` with the `BYRADIUS` argument",
         "doc_flags": [ ],
         "command_flags": [
             "WRITE",

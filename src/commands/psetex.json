@@ -6,7 +6,6 @@
         "since": "2.6.0",
         "arity": 4,
         "function": "psetexCommand",
-        "replaced_by": "`SET` with the `PX` argument",
         "doc_flags": [ ],
         "command_flags": [
             "WRITE",

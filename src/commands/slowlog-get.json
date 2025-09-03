@@ -7,7 +7,6 @@
         "arity": -2,
         "container": "SLOWLOG",
         "function": "slowlogCommand",
-        "replaced_by": "`COMMANDLOG GET <count> SLOW`",
         "doc_flags": [ ],
         "history": [
             [

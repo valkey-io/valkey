@@ -6,7 +6,6 @@
         "since": "1.0.0",
         "arity": 4,
         "function": "getrangeCommand",
-        "replaced_by": "`GETRANGE`",
         "doc_flags": [ ],
         "command_flags": [
             "READONLY"

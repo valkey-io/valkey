@@ -6,7 +6,6 @@
         "since": "1.0.0",
         "arity": 3,
         "function": "setnxCommand",
-        "replaced_by": "`SET` with the `NX` argument",
         "doc_flags": [ ],
         "command_flags": [
             "WRITE",

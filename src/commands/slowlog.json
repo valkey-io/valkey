@@ -5,7 +5,6 @@
         "group": "server",
         "since": "2.2.12",
         "arity": -2,
-        "replaced_by": "`COMMANDLOG`",
         "doc_flags": [ ]
     }
 }

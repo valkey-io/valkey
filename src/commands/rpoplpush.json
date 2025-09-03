@@ -6,7 +6,6 @@
         "since": "1.2.0",
         "arity": 3,
         "function": "rpoplpushCommand",
-        "replaced_by": "`LMOVE` with the `RIGHT` and `LEFT` arguments",
         "doc_flags": [ ],
         "command_flags": [
             "WRITE",

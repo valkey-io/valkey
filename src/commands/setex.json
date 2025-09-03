@@ -6,7 +6,6 @@
         "since": "2.0.0",
         "arity": 4,
         "function": "setexCommand",
-        "replaced_by": "`SET` with the `EX` argument",
         "doc_flags": [ ],
         "command_flags": [
             "WRITE",

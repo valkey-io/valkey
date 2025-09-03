@@ -6,7 +6,6 @@
         "since": "2.0.0",
         "arity": -4,
         "function": "hsetCommand",
-        "replaced_by": "`HSET` with multiple field-value pairs",
         "doc_flags": [ ],
         "command_flags": [
             "WRITE",

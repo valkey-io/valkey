@@ -7,7 +7,6 @@
         "arity": 2,
         "container": "SLOWLOG",
         "function": "slowlogCommand",
-        "replaced_by": "`COMMANDLOG RESET SLOW`",
         "doc_flags": [ ],
         "command_flags": [
             "ADMIN",

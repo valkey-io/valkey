@@ -12,7 +12,6 @@
                 "Added the `WITHSCORES` modifier."
             ]
         ],
-        "replaced_by": "`ZRANGE` with the `BYSCORE` argument",
         "doc_flags": [ ],
         "command_flags": [
             "READONLY"

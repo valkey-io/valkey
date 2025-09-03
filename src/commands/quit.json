@@ -6,7 +6,6 @@
         "since": "1.0.0",
         "arity": -1,
         "function": "quitCommand",
-        "replaced_by": "just closing the connection",
         "doc_flags": [ ],
         "command_flags": [
             "ALLOW_BUSY",

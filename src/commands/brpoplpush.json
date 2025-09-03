@@ -12,7 +12,6 @@
                 "`timeout` is interpreted as a double instead of an integer."
             ]
         ],
-        "replaced_by": "`BLMOVE` with the `RIGHT` and `LEFT` arguments",
         "doc_flags": [ ],
         "command_flags": [
             "WRITE",

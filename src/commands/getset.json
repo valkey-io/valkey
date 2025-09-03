@@ -6,7 +6,6 @@
         "since": "1.0.0",
         "arity": 3,
         "function": "getsetCommand",
-        "replaced_by": "`SET` with the `!GET` argument",
         "doc_flags": [ ],
         "command_flags": [
             "WRITE",

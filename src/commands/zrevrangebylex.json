@@ -6,7 +6,6 @@
         "since": "2.8.9",
         "arity": -4,
         "function": "zrevrangebylexCommand",
-        "doc_flags": [ ],
         "command_flags": [
             "READONLY"
         ],

@@ -77,8 +77,8 @@ start_server_and_kill_it [list dir $server_path \
                               rdb-version-check relaxed] {
     test "RDB future version loading with unknown types, relaxed version check" {
         wait_for_condition 50 100 {
-            [string match {*Fatal error loading*} \
-                 [exec tail -1 < [dict get $srv stdout]]]
+            [string match {*Unknown type or opcode when loading DB. Unrecoverable error, aborting now.*} \
+                 [exec tail -2 < [dict get $srv stdout]]]
         } else {
             fail "Server started even though RDB contains unknown types"
         }
@@ -100,8 +100,8 @@ start_server_and_kill_it [list dir $server_path \
                               rdb-version-check relaxed] {
     test "RDB foreign version loading with unknown types, relaxed version check" {
         wait_for_condition 50 100 {
-            [string match {*Fatal error loading*} \
-                 [exec tail -1 < [dict get $srv stdout]]]
+            [string match {*Can't handle foreign type or opcode 150 in RDB with version 75*} \
+                 [exec tail -2 < [dict get $srv stdout]]]
         } else {
             fail "Server started even though RDB contains unknown types"
         }

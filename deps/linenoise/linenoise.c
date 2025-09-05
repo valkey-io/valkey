@@ -718,7 +718,7 @@ void linenoiseEditMoveRight(struct linenoiseState *l) {
  * ESC b/f and ESC[1;5D/C diffrently.
  */
 static int isSubWordDelimiter(const char c) {
-    return !isalnum(c) && c != '_';
+    return !isalnum(c);
 }
 static int isBigWordDelimiter(const char c) {
     return isspace(c);

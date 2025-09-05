@@ -571,6 +571,10 @@ void processRdbDataSegment(void *arg) {
                 /* Log the first 10 skipped empty keys */
                 if (empty_keys_skipped++ < 10) serverLog(LL_NOTICE, "rdbLoadObject skipping empty key: %s (in chunk)", key);
                 sdsfree(key);
+            } else if (error == RDB_LOAD_ERR_UNKNOWN_TYPE) {
+                sdsfree(key);
+                serverLog(LL_WARNING, "Unknown type or opcode when loading DB. Unrecoverable error, aborting now.");
+                goto chunk_err;
             } else {
                 /* Fail on other error types */
                 serverLog(LL_WARNING, "Error loading RDB object in chunk for key '%s'.", key);

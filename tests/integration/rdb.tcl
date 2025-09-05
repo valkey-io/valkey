@@ -577,8 +577,6 @@ start_server {} {
     } {OK}
 }
 
-} ;# tags
-
 foreach thread_count $rdb_thread_counts {
     start_server [list overrides [list "dir" $server_path "dbfilename" "dump_$thread_count.rdb" "save" "" "rdb-threads" $thread_count]] {
         test "RDB round-trip keeps DB identical (rdb-threads=$thread_count)" {
@@ -610,3 +608,4 @@ foreach thread_count $rdb_thread_counts {
     }
 }
 
+} ;# tags

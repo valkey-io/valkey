@@ -1061,7 +1061,8 @@ int clusterLockConfig(char *filename) {
 }
 
 /* Derives our ports to be announced in the cluster bus. */
-void deriveAnnouncedPorts(int *announced_tcp_port, int *announced_tls_port, int *announced_cport, int *announced_client_tcp_port, int *announced_client_tls_port) {
+void deriveAnnouncedPorts(int *announced_tcp_port, int *announced_tls_port, int *announced_cport,
+                          int *announced_client_tcp_port, int *announced_client_tls_port) {
     /* Config overriding announced ports. */
     *announced_tcp_port = server.cluster_announce_port ? server.cluster_announce_port : server.port;
     *announced_tls_port = server.cluster_announce_tls_port ? server.cluster_announce_tls_port : server.tls_port;
@@ -1102,7 +1103,8 @@ void clusterUpdateMyselfFlags(void) {
  * The option can be set at runtime via CONFIG SET. */
 void clusterUpdateMyselfAnnouncedPorts(void) {
     if (!myself) return;
-    deriveAnnouncedPorts(&myself->tcp_port, &myself->tls_port, &myself->cport, &myself->announce_client_tcp_port, &myself->announce_client_tls_port);
+    deriveAnnouncedPorts(&myself->tcp_port, &myself->tls_port, &myself->cport,
+                         &myself->announce_client_tcp_port, &myself->announce_client_tls_port);
     clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG);
 }
 
@@ -1333,7 +1335,8 @@ void clusterInit(void) {
 
     /* Set myself->port/cport/pport to my listening ports, we'll just need to
      * discover the IP address via MEET messages. */
-    deriveAnnouncedPorts(&myself->tcp_port, &myself->tls_port, &myself->cport, &myself->announce_client_tcp_port, &myself->announce_client_tls_port);
+    deriveAnnouncedPorts(&myself->tcp_port, &myself->tls_port, &myself->cport,
+                         &myself->announce_client_tcp_port, &myself->announce_client_tls_port);
 
     server.cluster->mf_end = 0;
     server.cluster->mf_replica = NULL;

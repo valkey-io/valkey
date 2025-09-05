@@ -1025,29 +1025,47 @@ int proceedWithSlotExportJobConnecting(slotMigrationJob *job, bool *completed) {
     }
 }
 
+int slotMigrationJobReadOkResponse(slotMigrationJob *job, sds *err_out) {
+    client *c = job->client;
+    if (c->argv_len < 1) {
+        *err_out = sdsnew("No response received");
+        return C_ERR;
+    }
+    if (c->argv_len > 1) {
+        *err_out = sdsnew("Expected +OK, got:");
+        for (int i = 0; i < c->argv_len; i++) {
+            robj *dec = getDecodedObject(c->argv[i]);
+            *err_out = sdscatfmt(*err_out, " %S", dec->ptr);
+            decrRefCount(dec);
+        }
+        return C_ERR;
+    }
+    if (memcmp(c->argv[0]->ptr, "+OK", 4) != 0) {
+        *err_out = sdscatfmt(sdsempty(), "Expected +OK, got: %S", c->argv[0]->ptr);
+        return C_ERR;
+    }
+    return C_OK;
+}
+
 /* Read a response to the AUTH command, moving to the next stage of the migration
  * if the response is a success. If there is an error, fail the migration with the
  * error message. */
-void slotMigrationJobReadAuthResponse(connection *conn) {
-    slotMigrationJob *job = (slotMigrationJob *)connGetPrivateData(conn);
-
-    sds err = receiveSynchronousResponse(job->conn);
-    if (err == NULL) {
-        finishSlotMigrationJob(job, SLOT_MIGRATION_JOB_FAILED, "Target node did not respond to AUTH command");
+void slotMigrationJobReadAuthResponse(client *c) {
+    slotMigrationJob *job = c->slot_migration_job;
+    if (c->flag.close_asap || !isSlotMigrationJobInProgress(job)) {
         return;
     }
-    if (err[0] == '-') {
-        sds status_msg = sdscatfmt(sdsempty(), "Failed to AUTH to target node: %s", err);
-        finishSlotMigrationJob(job, SLOT_MIGRATION_JOB_FAILED, status_msg);
+    sds err;
+    if (slotMigrationJobReadOkResponse(job, &err) == C_ERR) {
+        sds status = sdscatfmt(sdsempty(), "Failed to AUTH to target node: %S", err);
+        finishSlotMigrationJob(job, SLOT_MIGRATION_JOB_FAILED, status);
+        sdsfree(status);
         sdsfree(err);
-        sdsfree(status_msg);
         return;
     }
-
-    sdsfree(err);
     serverLog(LL_NOTICE, "Successfully authenticated slot migration %s", job->description);
     updateSlotMigrationJobState(job, SLOT_EXPORT_SEND_ESTABLISH);
-    proceedWithSlotMigration(job);
+    clusterDoBeforeSleep(CLUSTER_TODO_HANDLE_SLOT_MIGRATION);
 }
 
 /* Perform the authentication steps needed to authenticate a slot migration
@@ -1055,18 +1073,18 @@ void slotMigrationJobReadAuthResponse(connection *conn) {
 void slotMigrationJobSendAuth(slotMigrationJob *job) {
     serverAssert(job->type == SLOT_MIGRATION_EXPORT);
     serverAssert(server.primary_auth);
-
-    sds err = replicationSendAuth(job->conn);
-    if (err) {
-        sds status_msg = sdscatfmt(sdsempty(), "Failed to send AUTH command to target node: %s", err);
-        finishSlotMigrationJob(job, SLOT_MIGRATION_JOB_FAILED, status_msg);
-        sdsfree(err);
-        sdsfree(status_msg);
-        return;
+    sds authCommand = sdsempty();
+    if (server.primary_user) {
+        authCommand = sdscatfmt(authCommand, "*3\r\n$4\r\nAUTH\r\n$%i\r\n%S\r\n$%i\r\n%S\r\n",
+                                   (int)sdslen(server.primary_user), server.primary_user,
+                                   (int)sdslen(server.primary_auth), server.primary_auth);
+    } else {
+        authCommand = sdscatfmt(authCommand, "*2\r\n$4\r\nAUTH\r\n$%i\r\n%S\r\n",
+                                   (int)sdslen(server.primary_auth), server.primary_auth);
     }
-
-    connSetReadHandler(job->conn, slotMigrationJobReadAuthResponse);
-    updateSlotMigrationJobState(job, SLOT_EXPORT_READ_AUTH_RESPONSE);
+    job->client->flag2.reading_response = 1;
+    job->client->read_response_callback = slotMigrationJobReadAuthResponse;
+    addReplySds(job->client, authCommand);
 }
 
 /* Initialize the client for the slot migration job, which should already be
@@ -1080,9 +1098,35 @@ void initSlotExportJobClient(slotMigrationJob *job) {
     initClientReplicationData(job->client);
 }
 
+/* Read a response to the SYNCSLOTS ESTABLISH response, accumulating it in a
+ * buffer, and moving to the next stage of the migration if the response is a
+ * success. If there is an error, fail the migration with the error message. */
+void slotMigrationJobReadEstablishResponse(client *c) {
+    slotMigrationJob *job = c->slot_migration_job;
+    if (c->flag.close_asap || !isSlotMigrationJobInProgress(job)) {
+        return;
+    }
+    sds err;
+    if (slotMigrationJobReadOkResponse(job, &err) == C_ERR) {
+        sds status = sdscatfmt(sdsempty(), "Failed to SYNCSLOTS ESTABLISH for slot migration: %S", err);
+        finishSlotMigrationJob(job, SLOT_MIGRATION_JOB_FAILED, status);
+        sdsfree(status);
+        sdsfree(err);
+        return;
+    }
+    serverLog(LL_NOTICE, "Successfully established outgoing slot migration client for %s", job->description);
+
+    updateSlotMigrationJobState(job, SLOT_EXPORT_WAITING_TO_SNAPSHOT);
+    clusterDoBeforeSleep(CLUSTER_TODO_HANDLE_SLOT_MIGRATION);
+
+    /* We need to send an ACK to take the import out of WAIT_ACK state. This
+     * will kickstart the health checks, effectively taking the job online. */
+    sendSyncSlotsMessage(job, "ACK");
+}
+
 /* Generate and store the SYNCSLOTS ESTABLISH command to send to the target for
  * the job. */
-sds generateSyncSlotsEstablishCommand(slotMigrationJob *job) {
+void slotMigrationJobSendEstablish(slotMigrationJob *job) {
     serverAssert(job->type == SLOT_MIGRATION_EXPORT);
     sds result = sdscatprintf(sdsempty(),
                               "*%ld\r\n$7\r\nCLUSTER\r\n$9\r\nSYNCSLOTS\r\n"
@@ -1101,7 +1145,9 @@ sds generateSyncSlotsEstablishCommand(slotMigrationJob *job) {
                   digits10(range->start_slot), range->start_slot,
                   digits10(range->end_slot), range->end_slot);
     }
-    return result;
+    job->client->flag2.reading_response = 1;
+    job->client->read_response_callback = slotMigrationJobReadEstablishResponse;
+    addReplySds(job->client, result);
 }
 
 /* There are two potential triggers for streaming (whichever happens first):
@@ -1474,67 +1520,6 @@ slotMigrationJob *createSlotExportJob(clusterNode *target_node,
     return job;
 }
 
-/* Read a response to the SYNCSLOTS ESTABLISH response, accumulating it in a
- * buffer, and moving to the next stage of the migration if the response is a
- * success. If there is an error, fail the migration with the error message. */
-void slotMigrationJobReadEstablishResponse(connection *conn) {
-    client *c = (client *)connGetPrivateData(conn);
-    slotMigrationJob *job = c->slot_migration_job;
-    if (c->flag.close_asap || !isSlotMigrationJobInProgress(job)) {
-        return;
-    }
-    if (!job->response_buf) {
-        job->response_buf = sdsempty();
-        job->response_buf = sdsMakeRoomForNonGreedy(job->response_buf,
-                                                    PROTO_IOBUF_LEN);
-    }
-
-    int result;
-    result = connRead(conn,
-                      ((char *)job->response_buf) + sdslen(job->response_buf),
-                      sdsavail(job->response_buf));
-    if (result > 0) {
-        sdsIncrLen(job->response_buf, result);
-    }
-    if (conn->state != CONN_STATE_CONNECTED) {
-        freeClientAsync(c);
-        return;
-    }
-    if (sdslen(job->response_buf) < 2 ||
-        job->response_buf[sdslen(job->response_buf) - 2] != '\r' ||
-        job->response_buf[sdslen(job->response_buf) - 1] != '\n') {
-        if (sdsavail(job->response_buf) == 0) {
-            /* We filled up the buffer, and we still have no response. Only
-             * choice is to stop the migration. */
-            finishSlotMigrationJob(job, SLOT_MIGRATION_JOB_FAILED,
-                                   "Response to establish job is larger than "
-                                   "buffer limit");
-            return;
-        }
-        connSetReadHandler(conn, slotMigrationJobReadEstablishResponse);
-        return;
-    }
-    if (job->response_buf[0] == '-') {
-        sds err_msg = sdscatfmt(sdsempty(), "Received error during handshake "
-                                            "to target: %S",
-                                job->response_buf);
-        finishSlotMigrationJob(job, SLOT_MIGRATION_JOB_FAILED, err_msg);
-        sdsfree(err_msg);
-        return;
-    }
-
-    updateSlotMigrationJobState(job, SLOT_EXPORT_WAITING_TO_SNAPSHOT);
-    connSetReadHandler(conn, readQueryFromClient);
-    clusterDoBeforeSleep(CLUSTER_TODO_HANDLE_SLOT_MIGRATION);
-
-    /* We need to send an ACK to take the import out of WAIT_ACK state. This
-     * will kickstart the health checks, effectively taking the job online. */
-    sendSyncSlotsMessage(job, "ACK");
-
-    sdsfree(job->response_buf);
-    job->response_buf = NULL;
-}
-
 /* ----------------------------- TARGET & SOURCE ---------------------------- */
 
 /* Updates the associated status message for the job, which will be seen in
@@ -1607,19 +1592,18 @@ void proceedWithSlotMigration(slotMigrationJob *job) {
             } else {
                 updateSlotMigrationJobState(job, SLOT_EXPORT_SEND_ESTABLISH);
             }
+            initSlotExportJobClient(job);
             continue;
         }
         case SLOT_EXPORT_SEND_AUTH:
             slotMigrationJobSendAuth(job);
-            continue;
+            updateSlotMigrationJobState(job, SLOT_EXPORT_READ_AUTH_RESPONSE);
+            return;
         case SLOT_EXPORT_READ_AUTH_RESPONSE:
             /* We are still reading back the response, nothing to do in cron */
             return;
         case SLOT_EXPORT_SEND_ESTABLISH:
-            initSlotExportJobClient(job);
-            addReplySds(job->client, generateSyncSlotsEstablishCommand(job));
-            connSetReadHandler(job->client->conn,
-                               slotMigrationJobReadEstablishResponse);
+            slotMigrationJobSendEstablish(job);
             updateSlotMigrationJobState(job,
                                         SLOT_EXPORT_READ_ESTABLISH_RESPONSE);
             return;

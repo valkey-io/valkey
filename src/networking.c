@@ -317,6 +317,7 @@ client *createClient(connection *conn) {
     c->multibulklen = 0;
     c->bulklen = -1;
     c->raw_flag = 0;
+    c->raw_flag2 = 0;
     c->capa = 0;
     c->slot = -1;
     c->ctime = c->last_interaction = server.unixtime;
@@ -360,6 +361,7 @@ client *createClient(connection *conn) {
     c->io_last_written.buf = NULL;
     c->io_last_written.bufpos = 0;
     c->io_last_written.data_len = 0;
+    c->read_response_callback = NULL;
     return c;
 }
 
@@ -3171,6 +3173,8 @@ void resetClient(client *c) {
     c->flag.buffered_reply = 0;
     c->flag.keyspace_notified = 0;
     c->net_output_bytes_curr_cmd = 0;
+    c->flag2.reading_response = 0;
+    c->read_response_callback = NULL;
 
     /* Make sure the duration has been recorded to some command. */
     serverAssert(c->duration == 0);
@@ -3353,7 +3357,7 @@ void parseInlineBuffer(client *c) {
  * CLIENT_PROTOCOL_ERROR. */
 #define PROTO_DUMP_LEN 128
 static void setProtocolError(const char *errstr, client *c) {
-    if (server.verbosity <= LL_VERBOSE || isReplicatedClient(c)) {
+    if (server.verbosity <= LL_VERBOSE || isReplicatedClient(c) || c->flag2.reading_response) {
         sds client = catClientInfoString(sdsempty(), c, server.hide_user_data_from_log);
 
         /* Sample some protocol to given an idea about what was inside. */
@@ -3378,7 +3382,7 @@ static void setProtocolError(const char *errstr, client *c) {
             }
         }
         /* Log all the client and protocol info. */
-        int loglevel = (isReplicatedClient(c)) ? LL_WARNING : LL_VERBOSE;
+        int loglevel = (isReplicatedClient(c) || c->flag2.reading_response) ? LL_WARNING : LL_VERBOSE;
         serverLog(loglevel, "Protocol error (%s) from client: %s. Query buffer: %s", errstr, client, buf);
         sdsfree(client);
     }
@@ -3980,6 +3984,11 @@ int processInputBuffer(client *c) {
         /* If commands are queued up, pop from the queue first */
         if (!consumeCommandQueue(c)) {
             parseInputBuffer(c);
+            if (c->flag2.reading_response) {
+                c->read_response_callback(c);
+                resetClient(c);
+                continue;
+            }
             prepareCommandQueue(c);
         }
 

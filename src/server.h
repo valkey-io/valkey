@@ -1170,6 +1170,12 @@ typedef struct ClientFlags {
                                               current command. */
 } ClientFlags;
 
+typedef struct ClientFlags2 {
+    uint64_t reading_response : 1;         /* The client has sent a command over this client and is expecting a response. The next
+                                            command from this client is expected to be a response to the previous request and
+                                            will not be processed as a command. */
+} ClientFlags2;
+
 typedef struct ClientPubSubData {
     hashtable *pubsub_channels;      /* channels a client is interested in (SUBSCRIBE) */
     hashtable *pubsub_patterns;      /* patterns a client is interested in (PSUBSCRIBE) */
@@ -1265,6 +1271,8 @@ typedef struct LastWrittenBuf {
 /* Forward declaration of slotMigrationJob */
 typedef struct slotMigrationJob slotMigrationJob;
 
+typedef void (*ClientReadResponseCallback)(struct client *c);
+
 typedef struct client {
     /* Basic client information and connection. */
     uint64_t id; /* Client incremental unique ID. */
@@ -1313,6 +1321,10 @@ typedef struct client {
     union {
         uint64_t raw_flag;
         struct ClientFlags flag;
+    };
+    union {
+        uint64_t raw_flag2;
+        struct ClientFlags2 flag2;
     };
     uint16_t write_flags;            /* Client Write flags - used to communicate the client write state. */
     volatile uint8_t io_read_state;  /* Indicate the IO read state of the client */
@@ -1363,6 +1375,8 @@ typedef struct client {
     list *deferred_reply;                    /* List of reply objects to be sent to the client, typically after
                                                 the client has been unblocked. */
     unsigned long long deferred_reply_bytes; /* Total bytes of objects in the blocked client pending list.*/
+    ClientReadResponseCallback read_response_callback; /* Callback to handle the response when the client is in
+                                                        * reading_response state. */
 #ifdef LOG_REQ_RES
     clientReqResInfo reqres;
 #endif

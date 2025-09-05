@@ -282,6 +282,13 @@ void initClientOutgoingData(client *c) {
     c->outgoing_data->push_message_callback = NULL;
 }
 
+void freeClientOutgoingData(client *c) {
+    if (!c->outgoing_data) return;
+    listRelease(c->outgoing_data->response_callbacks);
+    zfree(c->outgoing_data);
+    c->outgoing_data = NULL;
+}
+
 client *createOutgoingClient(connection *conn) {
     client *c = createClient(conn);
     c->flag.outgoing = 1;
@@ -2092,6 +2099,7 @@ void freeClient(client *c) {
 
     freeClientBlockingState(c);
     freeClientPubSubData(c);
+    freeClientOutgoingData(c);
 
     /* Free data structures. */
     releaseReplyReferences(c);

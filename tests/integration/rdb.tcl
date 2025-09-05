@@ -44,8 +44,7 @@ set csv_dump {"0","compressible","string","aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 
 set rdb_thread_counts {1 2 4}
 foreach thread_count $rdb_thread_counts {
-    start_server [list overrides [list "dir" $server_path "dbfilename" "encodings.rdb"]] {
-    r config set rdb-threads $thread_count
+    start_server [list overrides [list "dir" $server_path "dbfilename" "encodings.rdb" "rdb-threads" $thread_count]] {
     test "RDB encoding loading test" {
         r select 0
         csvdump r
@@ -199,8 +198,7 @@ start_server_and_kill_it [list "dir" $server_path] {
 }
 
 foreach thread_count $rdb_thread_counts {
-    start_server {} {
-        r config set rdb-threads $thread_count
+    start_server [list overrides [list rdb-threads $thread_count]] {
         test {Test FLUSHALL aborts bgsave} {
             r config set save ""
             # 5000 keys with 1ms sleep per key should take 5 second
@@ -293,8 +291,7 @@ foreach thread_count $rdb_thread_counts {
 
 foreach thread_count $rdb_thread_counts {
     test {client freed during loading} {
-        start_server [list overrides [list key-load-delay 50 loading-process-events-interval-bytes 1024 rdbcompression no save "900 1"]] {
-            r config set rdb-threads $thread_count
+        start_server [list overrides [list key-load-delay 50 loading-process-events-interval-bytes 1024 rdbcompression no save "900 1" rdb-threads $thread_count]] {
             # create a big rdb that will take long to load. it is important
             # for keys to be big since the server processes events only once in 2mb.
             # 100mb of rdb, 100k keys will load in more than 5 seconds
@@ -542,3 +539,35 @@ start_server {} {
 }
 
 } ;# tags
+
+foreach thread_count $rdb_thread_counts {
+    start_server [list overrides [list "dir" $server_path "dbfilename" "dump_$thread_count.rdb" "save" "" "rdb-threads" $thread_count]] {
+        test "RDB round-trip keeps DB identical (rdb-threads=$thread_count)" {
+            populate 20000 "k:small:" 16  0 false 0
+            populate 5000 "k:large:" 1024 0 false 0
+
+            set expected_keys 25000
+
+            set before_dbsize [r dbsize]
+            assert_equal $before_dbsize $expected_keys
+
+            set before_digest [r debug digest]
+
+            # Run Save and verify file exists
+            r save
+            set dump_path [file join [lindex [r config get dir] 1] [lindex [r config get dbfilename] 1]]
+            assert {[file exists $dump_path]}
+
+            restart_server 0 true false
+            wait_done_loading r
+
+            # Verify same number of keys and same digest.
+            set after_dbsize [s rdb_last_load_keys_loaded]
+            assert_equal $after_dbsize $expected_keys
+
+            set after_digest [r debug digest]
+            assert_equal $before_digest $after_digest
+        }
+    }
+}
+

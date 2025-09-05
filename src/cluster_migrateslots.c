@@ -1098,7 +1098,6 @@ void slotExportSendAuth(slotMigrationJob *job) {
         authCommand = sdscatfmt(authCommand, "*2\r\n$4\r\nAUTH\r\n$%i\r\n%S\r\n",
                                 (int)sdslen(server.primary_auth), server.primary_auth);
     }
-    addResponseCallback(job->client, slotExportReadAuthResponse);
     addReplySds(job->client, authCommand);
 }
 
@@ -1167,7 +1166,6 @@ void slotExportSendEstablish(slotMigrationJob *job) {
                   digits10(range->start_slot), range->start_slot,
                   digits10(range->end_slot), range->end_slot);
     }
-    addResponseCallback(job->client, slotExportReadEstablishResponse);
     addReplySds(job->client, result);
 }
 
@@ -1598,6 +1596,7 @@ void proceedWithSlotMigration(slotMigrationJob *job) {
         }
         case SLOT_EXPORT_SEND_AUTH:
             slotExportSendAuth(job);
+            addResponseCallback(job->client, slotExportReadAuthResponse);
             updateSlotMigrationJobState(job, SLOT_EXPORT_READ_AUTH_RESPONSE);
             return;
         case SLOT_EXPORT_READ_AUTH_RESPONSE:
@@ -1605,8 +1604,8 @@ void proceedWithSlotMigration(slotMigrationJob *job) {
             return;
         case SLOT_EXPORT_SEND_ESTABLISH:
             slotExportSendEstablish(job);
-            updateSlotMigrationJobState(job,
-                                        SLOT_EXPORT_READ_ESTABLISH_RESPONSE);
+            addResponseCallback(job->client, slotExportReadEstablishResponse);
+            updateSlotMigrationJobState(job, SLOT_EXPORT_READ_ESTABLISH_RESPONSE);
             return;
         case SLOT_EXPORT_READ_ESTABLISH_RESPONSE:
             /* We are still reading back the response, nothing to do in cron */

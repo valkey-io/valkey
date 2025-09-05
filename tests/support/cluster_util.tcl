@@ -382,30 +382,16 @@ proc are_hostnames_propagated {match_string} {
     return 1
 }
 
-# Check if cluster's announced IPs are consistent and match a pattern
+# Check if cluster's announced IPs or ports are consistent and come from a predefined list
 # Optionally, a list of clients can be supplied.
-proc are_cluster_announced_ips_propagated {match_string {clients {}}} {
-    for {set j 0} {$j < [llength $::servers]} {incr j} {
-        if {$clients eq {}} {
-            set client [srv [expr -1*$j] "client"]
-        } else {
-            set client [lindex $clients $j]
-        }
-        set cfg [$client cluster slots]
-        foreach node $cfg {
-            for {set i 2} {$i < [llength $node]} {incr i} {
-                if {! [string match $match_string [lindex [lindex $node $i] 0]] } {
-                    return 0
-                }
-            }
-        }
+proc are_cluster_announced_values_propagated {type expected_values {clients {}}} {
+    if {$type eq "ip"} {
+        set value_index 0
+    } elseif {$type eq "port"} {
+        set value_index 1
+    } else {
+        fail "Unknown announced value type $type for node"
     }
-    return 1
-}
-
-# Check if cluster's announced ports are consistent and come from a predefined list
-# Optionally, a list of clients can be supplied.
-proc are_cluster_announced_ports_propagated {expected_ports {clients {}}} {
     for {set j 0} {$j < [llength $::servers]} {incr j} {
         if {$clients eq {}} {
             set client [srv [expr -1*$j] "client"]
@@ -415,7 +401,7 @@ proc are_cluster_announced_ports_propagated {expected_ports {clients {}}} {
         set cfg [$client cluster slots]
         foreach node $cfg {
             for {set i 2} {$i < [llength $node]} {incr i} {
-                if {[lsearch -exact $expected_ports [lindex [lindex $node $i] 1]] < 0} {
+                if {[lsearch -exact $expected_values [lindex [lindex $node $i] $value_index]] < 0} {
                     return 0
                 }
             }

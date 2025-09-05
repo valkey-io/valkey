@@ -11,7 +11,7 @@ start_cluster 2 2 {tags {external:skip cluster} overrides {cluster-replica-no-fa
 
         # CLUSTER SLOTS
         wait_for_condition 50 100 {
-            [are_cluster_announced_ports_propagated $announced_ports]
+            [are_cluster_announced_values_propagated "port" $announced_ports]
         } else {
             fail "cluster-announce-client-(tls-)port were not propagated"
         }
@@ -62,7 +62,7 @@ start_cluster 2 2 {tags {external:skip cluster} overrides {cluster-replica-no-fa
         }
 
         wait_for_condition 50 100 {
-            [are_cluster_announced_ports_propagated $original_ports] eq 1
+            [are_cluster_announced_values_propagated "port" $original_ports] eq 1
         } else {
             fail "Cleared cluster-announce-client-(tls-)port were not propagated"
         }

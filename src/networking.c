@@ -3420,7 +3420,7 @@ void parseMultibulkBuffer(client *c) {
     while ((flag & READ_FLAGS_PARSING_COMPLETED) &&
            sdslen(c->querybuf) > c->qb_pos &&
            (c->querybuf[c->qb_pos] == '*' ||
-           (c->querybuf[c->qb_pos] == '>' && c->push_message_callback))) {
+            (c->querybuf[c->qb_pos] == '>' && c->push_message_callback))) {
         c->reqtype = PROTO_REQ_MULTIBULK;
         /* Push a new parser state to the command queue */
         if (queue->len == queue->cap) {
@@ -3997,7 +3997,7 @@ void processResponse(client *c) {
     c->response_callback(c);
     c->flag2.reading_response = 0;
     c->response_callback = NULL;
-    
+
     /* Ensure the client is reset for the next command */
     resetClient(c);
 }

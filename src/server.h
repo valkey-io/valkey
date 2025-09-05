@@ -1171,9 +1171,9 @@ typedef struct ClientFlags {
 } ClientFlags;
 
 typedef struct ClientFlags2 {
-    uint64_t reading_response : 1;         /* The client has sent a command over this client and is expecting a response. The next
-                                            command from this client is expected to be a response to the previous request and
-                                            will not be processed as a command. */
+    uint64_t reading_response : 1; /* The client has sent a command over this client and is expecting a response. The next
+                                    command from this client is expected to be a response to the previous request and
+                                    will not be processed as a command. */
 } ClientFlags2;
 
 typedef struct ClientPubSubData {
@@ -1365,18 +1365,18 @@ typedef struct client {
     dictEntry *cur_script;             /* Cached pointer to the dictEntry of the script being executed. */
     user *user;                        /* User associated with this connection */
     time_t obuf_soft_limit_reached_time;
-    list *deferred_reply_errors;             /* Used for module thread safe contexts. */
-    robj *name;                              /* As set by CLIENT SETNAME. */
-    robj *lib_name;                          /* The client library name as set by CLIENT SETINFO. */
-    robj *lib_ver;                           /* The client library version as set by CLIENT SETINFO. */
-    sds peerid;                              /* Cached peer ID. */
-    sds sockname;                            /* Cached connection target address. */
-    time_t ctime;                            /* Client creation time. */
-    list *deferred_reply;                    /* List of reply objects to be sent to the client, typically after
-                                                the client has been unblocked. */
-    unsigned long long deferred_reply_bytes; /* Total bytes of objects in the blocked client pending list.*/
-    ClientResponseCallback response_callback; /* Callback to handle the response when the client is in
-                                               * reading_response state. */
+    list *deferred_reply_errors;                  /* Used for module thread safe contexts. */
+    robj *name;                                   /* As set by CLIENT SETNAME. */
+    robj *lib_name;                               /* The client library name as set by CLIENT SETINFO. */
+    robj *lib_ver;                                /* The client library version as set by CLIENT SETINFO. */
+    sds peerid;                                   /* Cached peer ID. */
+    sds sockname;                                 /* Cached connection target address. */
+    time_t ctime;                                 /* Client creation time. */
+    list *deferred_reply;                         /* List of reply objects to be sent to the client, typically after
+                                                     the client has been unblocked. */
+    unsigned long long deferred_reply_bytes;      /* Total bytes of objects in the blocked client pending list.*/
+    ClientResponseCallback response_callback;     /* Callback to handle the response when the client is in
+                                                   * reading_response state. */
     ClientResponseCallback push_message_callback; /* Callback to handle RESP3 out-of-band push messages. */
 #ifdef LOG_REQ_RES
     clientReqResInfo reqres;

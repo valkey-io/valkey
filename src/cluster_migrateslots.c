@@ -1078,11 +1078,11 @@ void slotExportSendAuth(slotMigrationJob *job) {
     sds authCommand = sdsempty();
     if (server.primary_user) {
         authCommand = sdscatfmt(authCommand, "*3\r\n$4\r\nAUTH\r\n$%i\r\n%S\r\n$%i\r\n%S\r\n",
-                                   (int)sdslen(server.primary_user), server.primary_user,
-                                   (int)sdslen(server.primary_auth), server.primary_auth);
+                                (int)sdslen(server.primary_user), server.primary_user,
+                                (int)sdslen(server.primary_auth), server.primary_auth);
     } else {
         authCommand = sdscatfmt(authCommand, "*2\r\n$4\r\nAUTH\r\n$%i\r\n%S\r\n",
-                                   (int)sdslen(server.primary_auth), server.primary_auth);
+                                (int)sdslen(server.primary_auth), server.primary_auth);
     }
     setResponseCallback(job->client, slotExportReadAuthResponse);
     addReplySds(job->client, authCommand);
@@ -1186,9 +1186,9 @@ void slotExportBeginStreaming(slotMigrationJob *job) {
  * if the client output buffer is over the configured limit. */
 bool slotExportCanDoPause(slotMigrationJob *job) {
     return !server.debug_slot_migration_prevent_pause &&
-        (server.slot_migration_max_failover_repl_bytes < 0 ||
-         getClientOutputBufferMemoryUsage(job->client) <=
-             (size_t)server.slot_migration_max_failover_repl_bytes);
+           (server.slot_migration_max_failover_repl_bytes < 0 ||
+            getClientOutputBufferMemoryUsage(job->client) <=
+                (size_t)server.slot_migration_max_failover_repl_bytes);
 }
 
 /* Sent by the target to the source to pause writes to the slot for slot
@@ -1654,11 +1654,11 @@ void proceedWithSlotMigration(slotMigrationJob *job) {
                 return;
             }
             serverLog(LL_NOTICE,
-                    "Pausing writes to allow slot migration %s to finalize failover.",
-                    job->description);
+                      "Pausing writes to allow slot migration %s to finalize failover.",
+                      job->description);
             job->mf_end = mstime() + server.cluster_mf_timeout * CLUSTER_MF_PAUSE_MULT;
             pauseActions(PAUSE_DURING_SLOT_MIGRATION, job->mf_end,
-                        PAUSE_ACTIONS_CLIENT_WRITE_SET);
+                         PAUSE_ACTIONS_CLIENT_WRITE_SET);
             sendSyncSlotsMessage(job, "PAUSED");
             setResponseCallback(job->client, slotMigrationJobReadPausedResponse);
             updateSlotMigrationJobState(job, SLOT_EXPORT_FAILOVER_READ_PAUSED_RESPONSE);
@@ -1676,13 +1676,13 @@ void proceedWithSlotMigration(slotMigrationJob *job) {
             return;
         case SLOT_EXPORT_SEND_FAILOVER_GRANTED: {
             /* Renew our pause to help ensure we don't unpause before the gossip is
-            * propagated. If the existing pause is longer than this, it will be
-            * honored */
+             * propagated. If the existing pause is longer than this, it will be
+             * honored */
             mstime_t prop_deadline = mstime() + CLUSTER_OPERATION_TIMEOUT;
             if (job->mf_end < prop_deadline) {
                 job->mf_end = prop_deadline;
                 pauseActions(PAUSE_DURING_SLOT_MIGRATION, prop_deadline,
-                            PAUSE_ACTIONS_CLIENT_WRITE_SET);
+                             PAUSE_ACTIONS_CLIENT_WRITE_SET);
             }
 
             sendSyncSlotsMessage(job, "FAILOVER-GRANTED");
@@ -2061,14 +2061,14 @@ void clusterSlotMigrationCron(void) {
         proceedWithSlotMigration(job);
         if (canSlotMigrationJobSendAck(job)) {
             /* We send SYNCSLOTS ACK only from the source to the target, and only
-             * when we otherwise haven't enqueued some other message to write. */ 
+             * when we otherwise haven't enqueued some other message to write. */
             if (job->type == SLOT_MIGRATION_EXPORT &&
                 job->client &&
                 !job->client->flag.pending_write) {
                 run_with_period(1000) sendSyncSlotsMessage(job, "ACK");
             }
             /* For the target to ping the source, we send an out-of-band message
-            * using the pushing protocol. */
+             * using the pushing protocol. */
             if (job->type == SLOT_MIGRATION_IMPORT) {
                 run_with_period(1000) slotImportSendAck(job);
             }

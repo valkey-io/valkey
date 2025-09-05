@@ -754,6 +754,8 @@ int clusterLoadConfig(char *filename) {
                 n->fail_time = mstime();
             } else if (!strcasecmp(s, "nofailover")) {
                 n->flags |= CLUSTER_NODE_NOFAILOVER;
+            } else if (!strcasecmp(s, "unknownshard")) {
+                n->flags |= CLUSTER_NODE_SHARD_ID_UNINITIALIZED;
             } else if (!strcasecmp(s, "noflags")) {
                 /* nothing to do */
             } else {
@@ -910,7 +912,7 @@ int clusterSaveConfig(int do_fsync) {
 
     /* Get the nodes description and concatenate our "vars" directive to
      * save currentEpoch and lastVoteEpoch. */
-    ci = clusterGenNodesDescription(NULL, CLUSTER_NODE_HANDSHAKE, 0);
+    ci = clusterGenNodesDescription(NULL, CLUSTER_NODE_HANDSHAKE | CLUSTER_NODE_SHARD_ID_UNINITIALIZED, 0);
     ci = sdscatfmt(ci, "vars currentEpoch %U lastVoteEpoch %U\n",
                    (unsigned long long)server.cluster->currentEpoch,
                    (unsigned long long)server.cluster->lastVoteEpoch);
@@ -1186,6 +1188,7 @@ static void updateShardId(clusterNode *node, const char *shard_id) {
     if (shard_id && memcmp(node->shard_id, shard_id, CLUSTER_NAMELEN) != 0) {
         clusterRemoveNodeFromShard(node);
         memcpy(node->shard_id, shard_id, CLUSTER_NAMELEN);
+        node->flags &= ~CLUSTER_NODE_SHARD_ID_UNINITIALIZED;
         clusterAddNodeToShard(shard_id, node);
         clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG);
     }
@@ -1195,6 +1198,7 @@ static void updateShardId(clusterNode *node, const char *shard_id) {
              * from pre-7.2 releases */
             clusterRemoveNodeFromShard(myself);
             memcpy(myself->shard_id, shard_id, CLUSTER_NAMELEN);
+            node->flags &= ~CLUSTER_NODE_SHARD_ID_UNINITIALIZED;
             clusterAddNodeToShard(shard_id, myself);
             clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_FSYNC_CONFIG);
         }
@@ -2648,6 +2652,8 @@ void clusterProcessGossipSection(clusterMsg *hdr, clusterLink *link) {
              * joining another cluster. */
             if (sender && !(flags & CLUSTER_NODE_NOADDR) && !clusterBlacklistExists(g->nodename, CLUSTER_NAMELEN)) {
                 clusterNode *node;
+                // Since shard_ids are learnt only via direct PINGs, flag the node to have an uninitialized shard_id whenever a node entry was added as part of gossip.
+                flags |= CLUSTER_NODE_SHARD_ID_UNINITIALIZED;
                 node = createClusterNode(g->nodename, flags);
                 memcpy(node->ip, g->ip, NET_IP_STR_LEN);
                 node->tcp_port = msg_tcp_port;
@@ -2780,6 +2786,10 @@ static void clusterLogSlotRangeMigration(int first_slot,
  * Sometimes it is not actually the "Sender" of the information, like in the
  * case we receive the info via an UPDATE packet. */
 void clusterUpdateSlotsConfigWith(clusterNode *sender, uint64_t senderConfigEpoch, unsigned char *slots) {
+    if (sender->flags & CLUSTER_NODE_SHARD_ID_UNINITIALIZED) {
+        serverLog(LL_DEBUG, "Shard ID isn't yet initialized, ignoring slot updates");
+        return;
+    }
     int j;
     clusterNode *cur_primary = NULL, *new_primary = NULL;
     /* The dirty slots list is a list of slots for which we lose the ownership
@@ -3950,6 +3960,14 @@ int clusterProcessPacket(clusterLink *link) {
             }
         }
 
+        /* Get info from the gossip section. This is placed before the slots
+         * config processing, in order to have the sender's shard-id updated
+         * before processing the slots. */
+        if (sender) {
+            clusterProcessGossipSection(hdr, link);
+            clusterProcessPingExtensions(hdr, link);
+        }
+
         /* Update our info about served slots.
          *
          * Note: this MUST happen after we update the primary/replica state
@@ -4016,12 +4034,6 @@ int clusterProcessPacket(clusterLink *link) {
         if (sender && nodeIsPrimary(myself) && nodeIsPrimary(sender) &&
             sender_claimed_config_epoch == myself->configEpoch) {
             clusterHandleConfigEpochCollision(sender);
-        }
-
-        /* Get info from the gossip section */
-        if (sender) {
-            clusterProcessGossipSection(hdr, link);
-            clusterProcessPingExtensions(hdr, link);
         }
     } else if (type == CLUSTERMSG_TYPE_FAIL) {
         clusterNode *failing;
@@ -6377,7 +6389,9 @@ static struct clusterNodeFlags clusterNodeFlagsTable[] = {
     {CLUSTER_NODE_FAIL, "fail,"},
     {CLUSTER_NODE_HANDSHAKE, "handshake,"},
     {CLUSTER_NODE_NOADDR, "noaddr,"},
-    {CLUSTER_NODE_NOFAILOVER, "nofailover,"}};
+    {CLUSTER_NODE_NOFAILOVER, "nofailover,"},
+    {CLUSTER_NODE_SHARD_ID_UNINITIALIZED, "unknownshard,"},
+};
 
 /* Concatenate the comma separated list of node flags to the given SDS
  * string 'ci'. */

@@ -1168,9 +1168,9 @@ typedef struct ClientFlags {
                                               or client::buf. */
     uint64_t keyspace_notified : 1;        /* Indicates that a keyspace notification was triggered during the execution of the
                                               current command. */
-    uint64_t reading_response : 1;         /* The client has sent a command over this client and is expecting a response. The next
-                                              command from this client is expected to be a response to the previous request and
-                                              will not be processed as a command. */
+    uint64_t outgoing : 1;                 /* The client represents an outgoing connection. As opposed to other connections, we
+                                            * send commands to other nodes through this client, and parse the query buffer as
+                                            * responses. */
 } ClientFlags;
 
 typedef struct ClientPubSubData {
@@ -1237,6 +1237,15 @@ typedef struct ClientModuleData {
                                                 * unloaded for cleanup. Opaque for the Server Core.*/
 } ClientModuleData;
 
+typedef void (*ClientResponseCallback)(struct client *c);
+
+typedef struct outgoingClientData {
+    list *response_callbacks;                     /* Queue of callbacks for outgoing requests. As responses come in,
+                                                   * the front of the queue will be popped and notified. This allows
+                                                   * for pipelining outgoing requests. */
+    ClientResponseCallback push_message_callback; /* Callback to handle RESP3 out-of-band push messages. */
+} outgoingClientData;
+
 /* Parser state and parse result of a command from a client's input buffer. */
 typedef struct parsedCommand {
     int read_flags; /* complete, error or 0 (parsing not complete) */
@@ -1268,8 +1277,6 @@ typedef struct LastWrittenBuf {
 /* Forward declaration of slotMigrationJob */
 typedef struct slotMigrationJob slotMigrationJob;
 
-typedef void (*ClientResponseCallback)(struct client *c);
-
 typedef struct client {
     /* Basic client information and connection. */
     uint64_t id; /* Client incremental unique ID. */
@@ -1300,6 +1307,7 @@ typedef struct client {
     multiState *mstate;                   /* MULTI/EXEC state, lazily initialized when first needed */
     blockingState *bstate;                /* Blocking state, lazily initialized when first needed */
     slotMigrationJob *slot_migration_job; /* Pointer to the slot migration job, or NULL. */
+    outgoingClientData *outgoing_data;    /* Required for: outgoing connections that need to perform request/response parsing. */
     /* Output buffer and reply handling */
     long duration;                       /* Current command duration. Used for measuring latency of blocking/non-blocking cmds */
     char *buf;                           /* Output buffer */
@@ -1358,19 +1366,16 @@ typedef struct client {
     dictEntry *cur_script;             /* Cached pointer to the dictEntry of the script being executed. */
     user *user;                        /* User associated with this connection */
     time_t obuf_soft_limit_reached_time;
-    list *deferred_reply_errors;                  /* Used for module thread safe contexts. */
-    robj *name;                                   /* As set by CLIENT SETNAME. */
-    robj *lib_name;                               /* The client library name as set by CLIENT SETINFO. */
-    robj *lib_ver;                                /* The client library version as set by CLIENT SETINFO. */
-    sds peerid;                                   /* Cached peer ID. */
-    sds sockname;                                 /* Cached connection target address. */
-    time_t ctime;                                 /* Client creation time. */
-    list *deferred_reply;                         /* List of reply objects to be sent to the client, typically after
-                                                     the client has been unblocked. */
-    unsigned long long deferred_reply_bytes;      /* Total bytes of objects in the blocked client pending list.*/
-    ClientResponseCallback response_callback;     /* Callback to handle the response when the client is in
-                                                   * reading_response state. */
-    ClientResponseCallback push_message_callback; /* Callback to handle RESP3 out-of-band push messages. */
+    list *deferred_reply_errors;             /* Used for module thread safe contexts. */
+    robj *name;                              /* As set by CLIENT SETNAME. */
+    robj *lib_name;                          /* The client library name as set by CLIENT SETINFO. */
+    robj *lib_ver;                           /* The client library version as set by CLIENT SETINFO. */
+    sds peerid;                              /* Cached peer ID. */
+    sds sockname;                            /* Cached connection target address. */
+    time_t ctime;                            /* Client creation time. */
+    list *deferred_reply;                    /* List of reply objects to be sent to the client, typically after
+                                                the client has been unblocked. */
+    unsigned long long deferred_reply_bytes; /* Total bytes of objects in the blocked client pending list.*/
 #ifdef LOG_REQ_RES
     clientReqResInfo reqres;
 #endif
@@ -2783,6 +2788,7 @@ void dictVanillaFree(void *val);
 #define WRITE_FLAGS_IS_REPLICA (1 << 1)
 
 client *createClient(connection *conn);
+client *createOutgoingClient(connection *conn);
 void freeClient(client *c);
 void freeClientAsync(client *c);
 void logInvalidUseAndFreeClientAsync(client *c, const char *fmt, ...);
@@ -2920,7 +2926,7 @@ int processIOThreadsReadDone(void);
 int processIOThreadsWriteDone(void);
 void releaseReplyReferences(client *c);
 void resetLastWrittenBuf(client *c);
-void setResponseCallback(client *c, ClientResponseCallback cb);
+void addResponseCallback(client *c, ClientResponseCallback cb);
 
 int parseExtendedCommandArgumentsOrReply(client *c, int *flags, int *unit, robj **expire, robj **compare_val, int command_type, int max_args);
 

@@ -712,6 +712,16 @@ void clusterHandleFlushDuringSlotMigration(void) {
     }
 }
 
+/* The import side of the connection sends acks via out-of-band push messages.
+ * Out of band push messages can be differentiated from responses to requests
+ * and therefore simplify our response parsing for commands like SYNCSLOTS,
+ * preventing problems like:
+ *
+ * 1. Source sends SNAPSHOT-EOF
+ * 2. Target sends out of band "ack" while processing snapshot
+ * 3. Target processes SNAPSHOT-EOF and returns +OK
+ *
+ * In this case, "ack" can be processed even before the response is returned. */
 void slotImportSendAck(slotMigrationJob *job) {
     serverAssert(job->type == SLOT_MIGRATION_IMPORT && job->client != NULL);
     struct ClientFlags old_flags = job->client->flag;
@@ -744,7 +754,7 @@ void slotImportSendAck(slotMigrationJob *job) {
  *              ┌─────────────▼────────────────┐   │
  *              │SLOT_EXPORT_READ_AUTH_RESPONSE┼───┤
  *              └─────────────┬────────────────┘   │
- *               Authenticated│                    │
+ *    Full response read (+OK)│                    │
  *              ┌─────────────▼────────────┐       │
  *              │SLOT_EXPORT_SEND_ESTABLISH┼───────┤
  *              └─────────────┬────────────┘       │
@@ -760,19 +770,23 @@ void slotImportSendAck(slotMigrationJob *job) {
  *               ┌────────────▼───────────┐        │  4. FLUSHDB
  *               │SLOT_EXPORT_SNAPSHOTTING┼────────┤  5. Connection Lost
  *               └────────────┬───────────┘        │  6. AUTH failed
- *               Snapshot done│                    │  7. ERR from ESTABLISH command
+ *               Snapshot done│                    │  7. Any SYNCSLOTS command returns other than +OK
  *      ┌─────────────────────▼────────────────┐   │  8. Unpaused before failover completed
  *      │SLOT_EXPORT_READ_SNAPSHOT_EOF_RESPONSE┼───┤  9. Snapshot failed (e.g. Child OOM)
  *      └─────────────────────┬────────────────┘   │  10. No ack from target (timeout)
- *               REQUEST-PAUSE│                    │  11. Client output buffer overrun
+ *    Full response read (+OK)│                    │  11. Client output buffer overrun
  *             ┌──────────────▼─────────────┐      │
  *             │SLOT_EXPORT_WAITING_TO_PAUSE┼──────┤
  *             └──────────────┬─────────────┘      │
- *              Buffer drained│                    │
+ * Buffer drained, PAUSED sent│                    │
  *    ┌───────────────────────▼─────────────────┐  │
  *    │SLOT_EXPORT_FAILOVER_READ_PAUSED_RESPONSE┼──┤
  *    └───────────────────────┬─────────────────┘  │
- *    Failover request granted│                    │
+ *    Full response read (+OK)│                    │
+ *          ┌─────────────────▼───────────────┐    │
+ *          │SLOT_EXPORT_SEND_FAILOVER_GRANTED┼────┤
+ *          └─────────────────┬───────────────┘    │
+ *       FAILOVER-GRANTED sent│                    │
  *   ┌────────────────────────▼─────────────────┐  │
  *   │SLOT_EXPORT_WAIT_FOR_TOPOLOGY_FINALIZATION┼──┤
  *   └────────────────────────┬─────────────────┘  │
@@ -1084,7 +1098,7 @@ void slotExportSendAuth(slotMigrationJob *job) {
         authCommand = sdscatfmt(authCommand, "*2\r\n$4\r\nAUTH\r\n$%i\r\n%S\r\n",
                                 (int)sdslen(server.primary_auth), server.primary_auth);
     }
-    setResponseCallback(job->client, slotExportReadAuthResponse);
+    addResponseCallback(job->client, slotExportReadAuthResponse);
     addReplySds(job->client, authCommand);
 }
 
@@ -1103,12 +1117,10 @@ void slotExportHandlePushMessage(client *c) {
  * connected, authenticated, and established. */
 void initSlotExportJobClient(slotMigrationJob *job) {
     serverAssert(job->type == SLOT_MIGRATION_EXPORT);
-    job->client = createClient(job->conn);
+    job->client = createOutgoingClient(job->conn);
     job->conn = NULL;
-    job->client->flag.authenticated = 1;
     job->client->slot_migration_job = job;
-    job->client->resp = 3; /* Use RESP3 for the slot migration client. */
-    job->client->push_message_callback = slotExportHandlePushMessage;
+    job->client->outgoing_data->push_message_callback = slotExportHandlePushMessage;
     initClientReplicationData(job->client);
 }
 
@@ -1132,10 +1144,6 @@ void slotExportReadEstablishResponse(client *c) {
 
     updateSlotMigrationJobState(job, SLOT_EXPORT_WAITING_TO_SNAPSHOT);
     clusterDoBeforeSleep(CLUSTER_TODO_HANDLE_SLOT_MIGRATION);
-
-    /* We need to send an ACK to take the import out of WAIT_ACK state. This
-     * will kickstart the health checks, effectively taking the job online. */
-    sendSyncSlotsMessage(job, "ACK");
 }
 
 /* Generate and store the SYNCSLOTS ESTABLISH command to send to the target for
@@ -1159,7 +1167,7 @@ void slotExportSendEstablish(slotMigrationJob *job) {
                   digits10(range->start_slot), range->start_slot,
                   digits10(range->end_slot), range->end_slot);
     }
-    setResponseCallback(job->client, slotExportReadEstablishResponse);
+    addResponseCallback(job->client, slotExportReadEstablishResponse);
     addReplySds(job->client, result);
 }
 
@@ -1640,7 +1648,7 @@ void proceedWithSlotMigration(slotMigrationJob *job) {
             updateSlotMigrationJobState(job, SLOT_EXPORT_SNAPSHOTTING);
             /* The child process will send SNAPSHOT-EOF. We need to setup the
              * parent process to receive this response */
-            setResponseCallback(job->client, slotExportReadSnapshotEofResponse);
+            addResponseCallback(job->client, slotExportReadSnapshotEofResponse);
             return;
         case SLOT_EXPORT_SNAPSHOTTING:
             /* Waiting for child process to finish or response to SNAPSHOT-EOF
@@ -1660,7 +1668,7 @@ void proceedWithSlotMigration(slotMigrationJob *job) {
             pauseActions(PAUSE_DURING_SLOT_MIGRATION, job->mf_end,
                          PAUSE_ACTIONS_CLIENT_WRITE_SET);
             sendSyncSlotsMessage(job, "PAUSED");
-            setResponseCallback(job->client, slotMigrationJobReadPausedResponse);
+            addResponseCallback(job->client, slotMigrationJobReadPausedResponse);
             updateSlotMigrationJobState(job, SLOT_EXPORT_FAILOVER_READ_PAUSED_RESPONSE);
             return;
         case SLOT_EXPORT_FAILOVER_READ_PAUSED_RESPONSE:
@@ -1687,7 +1695,7 @@ void proceedWithSlotMigration(slotMigrationJob *job) {
 
             sendSyncSlotsMessage(job, "FAILOVER-GRANTED");
             updateSlotMigrationJobState(job, SLOT_EXPORT_WAIT_FOR_TOPOLOGY_FINALIZATION);
-            setResponseCallback(job->client, slotExportReadFailoverGrantedResponse);
+            addResponseCallback(job->client, slotExportReadFailoverGrantedResponse);
             return;
         }
         case SLOT_EXPORT_WAIT_FOR_TOPOLOGY_FINALIZATION:

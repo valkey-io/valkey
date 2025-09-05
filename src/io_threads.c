@@ -372,8 +372,6 @@ int trySendReadToIOThreads(client *c) {
     /* For simplicity let the main-thread handle the blocked clients */
     if (c->flag.blocked || c->flag.unblocked) return C_ERR;
     if (c->flag.close_asap) return C_ERR;
-    /* For simplicity, let the main-thread handle responses to outgoing requests */
-    if (c->flag.reading_response) return C_ERR;
     size_t tid = (c->id % (server.active_io_threads_num - 1)) + 1;
 
     /* Handle case where client has a pending IO write job on a different thread:
@@ -392,6 +390,7 @@ int trySendReadToIOThreads(client *c) {
     c->read_flags = canParseCommand(c) ? 0 : READ_FLAGS_DONT_PARSE;
     c->read_flags |= authRequired(c) ? READ_FLAGS_AUTH_REQUIRED : 0;
     c->read_flags |= isReplicatedClient(c) ? READ_FLAGS_REPLICATED : 0;
+    c->read_flags |= c->flag.outgoing ? READ_FLAGS_RESPONSE : 0;
 
     c->io_read_state = CLIENT_PENDING_IO;
     connSetPostponeUpdateState(c->conn, 1);

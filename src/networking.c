@@ -267,6 +267,33 @@ static int isCopyAvoidPreferred(client *c, robj *obj) {
     return server.min_string_size_copy_avoid_threaded && sdslen(obj->ptr) >= (size_t)server.min_string_size_copy_avoid_threaded;
 }
 
+void addResponseCallback(client *c, ClientResponseCallback cb) {
+    serverAssert(c->flag.outgoing && c->outgoing_data);
+    ClientResponseCallback *val = zmalloc(sizeof(ClientResponseCallback));
+    *val = cb;
+    listAddNodeTail(c->outgoing_data->response_callbacks, val);
+}
+
+void initClientOutgoingData(client *c) {
+    if (c->outgoing_data) return;
+    c->outgoing_data = zmalloc(sizeof(outgoingClientData));
+    c->outgoing_data->response_callbacks = listCreate();
+    listSetFreeMethod(c->outgoing_data->response_callbacks, zfree);
+    c->outgoing_data->push_message_callback = NULL;
+}
+
+client *createOutgoingClient(connection *conn) {
+    client *c = createClient(conn);
+    c->flag.outgoing = 1;
+
+    /* Outgoing clients are by default authenticated since we are starting them. */
+    c->flag.authenticated = 1;
+    c->resp = 3; /* Use RESP3 to support things like out-of-band pushes. */
+
+    initClientOutgoingData(c);
+    return c;
+}
+
 client *createClient(connection *conn) {
     client *c = zmalloc(sizeof(client));
 
@@ -360,8 +387,7 @@ client *createClient(connection *conn) {
     c->io_last_written.buf = NULL;
     c->io_last_written.bufpos = 0;
     c->io_last_written.data_len = 0;
-    c->response_callback = NULL;
-    c->push_message_callback = NULL;
+    c->outgoing_data = NULL;
     return c;
 }
 
@@ -3355,7 +3381,7 @@ void parseInlineBuffer(client *c) {
  * CLIENT_PROTOCOL_ERROR. */
 #define PROTO_DUMP_LEN 128
 static void setProtocolError(const char *errstr, client *c) {
-    if (server.verbosity <= LL_VERBOSE || isReplicatedClient(c) || c->flag.reading_response) {
+    if (server.verbosity <= LL_VERBOSE || isReplicatedClient(c) || c->flag.outgoing) {
         sds client = catClientInfoString(sdsempty(), c, server.hide_user_data_from_log);
 
         /* Sample some protocol to given an idea about what was inside. */
@@ -3380,7 +3406,7 @@ static void setProtocolError(const char *errstr, client *c) {
             }
         }
         /* Log all the client and protocol info. */
-        int loglevel = (isReplicatedClient(c) || c->flag.reading_response) ? LL_WARNING : LL_VERBOSE;
+        int loglevel = (isReplicatedClient(c) || c->flag.outgoing) ? LL_WARNING : LL_VERBOSE;
         serverLog(loglevel, "Protocol error (%s) from client: %s. Query buffer: %s", errstr, client, buf);
         sdsfree(client);
     }
@@ -3419,7 +3445,7 @@ void parseMultibulkBuffer(client *c) {
     while ((flag & READ_FLAGS_PARSING_COMPLETED) &&
            sdslen(c->querybuf) > c->qb_pos &&
            (c->querybuf[c->qb_pos] == '*' ||
-            (c->querybuf[c->qb_pos] == '>' && c->push_message_callback))) {
+            (c->querybuf[c->qb_pos] == '>' && c->flag.outgoing))) {
         c->reqtype = PROTO_REQ_MULTIBULK;
         /* Push a new parser state to the command queue */
         if (queue->len == queue->cap) {
@@ -3770,10 +3796,9 @@ void parseInputBuffer(client *c) {
     if (!c->reqtype) {
         if (c->querybuf[c->qb_pos] == '*') {
             c->reqtype = PROTO_REQ_MULTIBULK;
-        } else if (c->querybuf[c->qb_pos] == '>' && c->push_message_callback != NULL) {
-            /* We only handle pushes if there is a callback configured for them.
-             * Otherwise, we treat these as if they are inline for backwards
-             * compatibility. */
+        } else if (c->querybuf[c->qb_pos] == '>' && c->flag.outgoing) {
+            /* We only handle pushes if this is an outgoing client, otherwise it
+             * has no meaning */
             c->reqtype = PROTO_REQ_MULTIBULK;
         } else {
             c->reqtype = PROTO_REQ_INLINE;
@@ -3786,12 +3811,6 @@ void parseInputBuffer(client *c) {
         parseMultibulkBuffer(c);
     } else {
         serverPanic("Unknown request type");
-    }
-    if (c->flag.reading_response) {
-        /* If any commands were processed into the command queue, they will not
-         * have the response read flag, since it only applies to the first
-         * response.*/
-        c->read_flags |= READ_FLAGS_RESPONSE;
     }
 }
 
@@ -3982,29 +4001,18 @@ static void prefetchCommandQueueKeys(client *c) {
     }
 }
 
-/* Register for a response callback. The callback will be triggered after the
- * next response is parsed. The parsed response will be set in c->argv. While
- * waiting for a response, normal command parsing and execution will not be
- * performed. */
-void setResponseCallback(client *c, ClientResponseCallback cb) {
-    c->flag.reading_response = 1;
-    c->response_callback = cb;
-}
-
-void processResponse(client *c) {
-    serverAssert(c->flag.reading_response && c->response_callback != NULL);
-    c->response_callback(c);
-    c->flag.reading_response = 0;
-    c->response_callback = NULL;
-
-    /* Ensure the client is reset for the next command */
-    resetClient(c);
-}
-
-void processPushMessage(client *c) {
-    serverAssert(c->push_message_callback != NULL);
-    c->push_message_callback(c);
-    resetClient(c);
+void processOutgoingCommandResponse(client *c) {
+    if (c->read_flags & READ_FLAGS_PUSH_MESSAGE) {
+        if (c->outgoing_data->push_message_callback) c->outgoing_data->push_message_callback(c);
+        return;
+    }
+    if (listLength(c->outgoing_data->response_callbacks) == 0) {
+        return;
+    }
+    listNode *ln = listFirst(c->outgoing_data->response_callbacks);
+    ClientResponseCallback *cb = ln->value;
+    (*cb)(c);
+    listDelNode(c->outgoing_data->response_callbacks, ln);
 }
 
 int processInputBuffer(client *c) {
@@ -4017,18 +4025,19 @@ int processInputBuffer(client *c) {
 
         c->read_flags = isReplicatedClient(c) ? READ_FLAGS_REPLICATED : 0;
         c->read_flags |= authRequired(c) ? READ_FLAGS_AUTH_REQUIRED : 0;
+        c->read_flags |= c->flag.outgoing ? READ_FLAGS_RESPONSE : 0;
 
         /* If commands are queued up, pop from the queue first */
         if (!consumeCommandQueue(c)) {
             parseInputBuffer(c);
             prepareCommandQueue(c);
         }
-        if (c->read_flags & READ_FLAGS_PUSH_MESSAGE) {
-            processPushMessage(c);
-            continue;
-        }
-        if (c->read_flags & READ_FLAGS_RESPONSE) {
-            processResponse(c);
+
+        /* Responses don't require any additional parsing, fire the callbacks
+         * and continue to the next one. */
+        if (c->flag.outgoing) {
+            processOutgoingCommandResponse(c);
+            resetClient(c);
             continue;
         }
 

@@ -1222,16 +1222,16 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster} overrides {cluste
             assert_error "*syntax error*" {R 0 CLUSTER SYNCSLOTS UNKNOWN}
 
             assert_causes_conn_drop 0 {
-                $client CLUSTER SYNCSLOTS ESTABLISH SOURCE $node2_id NAME $fake_jobname SLOTSRANGE 16383 16383
-                $client CLUSTER SYNCSLOTS SNAPSHOT-EOF
+                assert_match "OK" [$client CLUSTER SYNCSLOTS ESTABLISH SOURCE $node2_id NAME $fake_jobname SLOTSRANGE 16383 16383]
+                assert_match "OK" [$client CLUSTER SYNCSLOTS SNAPSHOT-EOF]
                 $client CLUSTER SYNCSLOTS SNAPSHOT-EOF
             }
             assert_causes_conn_drop 0 {
-                $client CLUSTER SYNCSLOTS ESTABLISH SOURCE $node2_id NAME $fake_jobname SLOTSRANGE 16383 16383
+                assert_match "OK" [$client CLUSTER SYNCSLOTS ESTABLISH SOURCE $node2_id NAME $fake_jobname SLOTSRANGE 16383 16383]
                 $client CLUSTER SYNCSLOTS PAUSED
             }
             assert_causes_conn_drop 0 {
-                $client CLUSTER SYNCSLOTS ESTABLISH SOURCE $node2_id NAME $fake_jobname SLOTSRANGE 16383 16383
+                assert_match "OK" [$client CLUSTER SYNCSLOTS ESTABLISH SOURCE $node2_id NAME $fake_jobname SLOTSRANGE 16383 16383]
                 $client CLUSTER SYNCSLOTS FAILOVER-GRANTED
             }
         }

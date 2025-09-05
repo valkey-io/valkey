@@ -1168,13 +1168,10 @@ typedef struct ClientFlags {
                                               or client::buf. */
     uint64_t keyspace_notified : 1;        /* Indicates that a keyspace notification was triggered during the execution of the
                                               current command. */
+    uint64_t reading_response : 1;         /* The client has sent a command over this client and is expecting a response. The next
+                                              command from this client is expected to be a response to the previous request and
+                                              will not be processed as a command. */
 } ClientFlags;
-
-typedef struct ClientFlags2 {
-    uint64_t reading_response : 1; /* The client has sent a command over this client and is expecting a response. The next
-                                    command from this client is expected to be a response to the previous request and
-                                    will not be processed as a command. */
-} ClientFlags2;
 
 typedef struct ClientPubSubData {
     hashtable *pubsub_channels;      /* channels a client is interested in (SUBSCRIBE) */
@@ -1319,12 +1316,8 @@ typedef struct client {
     robj **original_argv;       /* Arguments of original command if arguments were rewritten. */
     /* Client flags and state indicators */
     union {
-        uint64_t raw_flag;
+        uint64_t raw_flag[2];
         struct ClientFlags flag;
-    };
-    union {
-        uint64_t raw_flag2;
-        struct ClientFlags2 flag2;
     };
     uint16_t write_flags;            /* Client Write flags - used to communicate the client write state. */
     volatile uint8_t io_read_state;  /* Indicate the IO read state of the client */

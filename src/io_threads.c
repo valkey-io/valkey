@@ -373,7 +373,7 @@ int trySendReadToIOThreads(client *c) {
     if (c->flag.blocked || c->flag.unblocked) return C_ERR;
     if (c->flag.close_asap) return C_ERR;
     /* For simplicity, let the main-thread handle responses to outgoing requests */
-    if (c->flag2.reading_response) return C_ERR;
+    if (c->flag.reading_response) return C_ERR;
     size_t tid = (c->id % (server.active_io_threads_num - 1)) + 1;
 
     /* Handle case where client has a pending IO write job on a different thread:

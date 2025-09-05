@@ -316,8 +316,7 @@ client *createClient(connection *conn) {
     c->cur_script = NULL;
     c->multibulklen = 0;
     c->bulklen = -1;
-    c->raw_flag = 0;
-    c->raw_flag2 = 0;
+    memset(c->raw_flag, 0, sizeof(c->raw_flag));
     c->capa = 0;
     c->slot = -1;
     c->ctime = c->last_interaction = server.unixtime;
@@ -3356,7 +3355,7 @@ void parseInlineBuffer(client *c) {
  * CLIENT_PROTOCOL_ERROR. */
 #define PROTO_DUMP_LEN 128
 static void setProtocolError(const char *errstr, client *c) {
-    if (server.verbosity <= LL_VERBOSE || isReplicatedClient(c) || c->flag2.reading_response) {
+    if (server.verbosity <= LL_VERBOSE || isReplicatedClient(c) || c->flag.reading_response) {
         sds client = catClientInfoString(sdsempty(), c, server.hide_user_data_from_log);
 
         /* Sample some protocol to given an idea about what was inside. */
@@ -3381,7 +3380,7 @@ static void setProtocolError(const char *errstr, client *c) {
             }
         }
         /* Log all the client and protocol info. */
-        int loglevel = (isReplicatedClient(c) || c->flag2.reading_response) ? LL_WARNING : LL_VERBOSE;
+        int loglevel = (isReplicatedClient(c) || c->flag.reading_response) ? LL_WARNING : LL_VERBOSE;
         serverLog(loglevel, "Protocol error (%s) from client: %s. Query buffer: %s", errstr, client, buf);
         sdsfree(client);
     }
@@ -3788,7 +3787,7 @@ void parseInputBuffer(client *c) {
     } else {
         serverPanic("Unknown request type");
     }
-    if (c->flag2.reading_response) {
+    if (c->flag.reading_response) {
         /* If any commands were processed into the command queue, they will not
          * have the response read flag, since it only applies to the first
          * response.*/
@@ -3988,14 +3987,14 @@ static void prefetchCommandQueueKeys(client *c) {
  * waiting for a response, normal command parsing and execution will not be
  * performed. */
 void setResponseCallback(client *c, ClientResponseCallback cb) {
-    c->flag2.reading_response = 1;
+    c->flag.reading_response = 1;
     c->response_callback = cb;
 }
 
 void processResponse(client *c) {
-    serverAssert(c->flag2.reading_response && c->response_callback != NULL);
+    serverAssert(c->flag.reading_response && c->response_callback != NULL);
     c->response_callback(c);
-    c->flag2.reading_response = 0;
+    c->flag.reading_response = 0;
     c->response_callback = NULL;
 
     /* Ensure the client is reset for the next command */

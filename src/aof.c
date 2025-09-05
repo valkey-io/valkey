@@ -1376,7 +1376,7 @@ struct client *createAOFClient(void) {
      * background processing there is a chance that the
      * command execution order will be violated.
      */
-    c->raw_flag = 0;
+    memset(c->raw_flag, 0, sizeof(c->raw_flag));
     c->flag.deny_blocking = 1;
     c->flag.fake = 1;
 

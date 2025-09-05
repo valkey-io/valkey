@@ -5255,7 +5255,7 @@ int VM_ZsetRangePrev(ValkeyModuleKey *key) {
  * The function takes the hash key, hash field, and a buffer along with its length. */
 int VM_HashSetStringRef(ValkeyModuleKey *key, ValkeyModuleString *field, const char *buf, size_t len) {
     if (!key || !key->value || key->value->type != OBJ_HASH || !field || !buf) return VALKEYMODULE_ERR;
-    return hashTypeSetStringRef(key->value, field->ptr, buf, len);
+    return hashTypeUpdateAsStringRef(key->value, field->ptr, buf, len);
 }
 
 int VM_HashHasStringRef(ValkeyModuleKey *key, ValkeyModuleString *field) {

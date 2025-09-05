@@ -317,15 +317,20 @@ int hashTypeHasStringRef(robj *o, sds field) {
     void **entry_ref = hashtableFindRef(ht, field);
     return (entryHasStringRef(*entry_ref));
 }
-/* Set a reference to the value.
- * Returns C_ERR on error, C_OK on update.
+/* Update a hash field value with a string reference value.
+ * Returns C_ERR if:
+ * 1. The hash field value not found.
+ * 2. The provided buffer doesn't match the hash field value.
+ * 3. The hash field value is already a string reference.
+ * Otherwise, returns C_OK.
  */
-int hashTypeSetStringRef(robj *o, sds field, const char *buf, size_t len) {
+int hashTypeUpdateAsStringRef(robj *o, sds field, const char *buf, size_t len) {
     unsigned char *vstr = NULL;
     unsigned int vlen = UINT_MAX;
     long long vll = LLONG_MAX;
 
     if (hashTypeGetValue(o, field, &vstr, &vlen, &vll, NULL) != C_OK || !vstr) return C_ERR;
+    // For safety, the provided buffer must match the entry field value
     if (len != vlen || memcmp(buf, vstr, len) != 0) return C_ERR;
     // require HASHTABLE encoding due to aux bits and pointer storage.
     if (o->encoding == OBJ_ENCODING_LISTPACK) hashTypeConvert(o, OBJ_ENCODING_HASHTABLE);
@@ -335,7 +340,7 @@ int hashTypeSetStringRef(robj *o, sds field, const char *buf, size_t len) {
     entry *entry = *entry_ref;
     if (entryHasStringRef(entry)) return C_ERR;
     long long expiry = entryGetExpiry(entry);
-    void *new_entry = entrySetStringRef(entry, buf, len, expiry);
+    void *new_entry = entryUpdateAsStringRef(entry, buf, len, expiry);
     serverAssert(hashtableReplaceReallocatedEntry(ht, entry, new_entry));
     hashTypeTrackUpdateEntry(o, entry, new_entry, expiry, expiry);
     return C_OK;
@@ -551,7 +556,7 @@ static expiryModificationResult hashTypePersist(robj *o, sds field) {
         long long current_expire = entryGetExpiry(current_entry);
         if (current_expire != EXPIRY_NONE) {
             hashTypeUntrackEntry(o, current_entry);
-            *entry_ref = entryUpdate(current_entry, NULL, EXPIRY_NONE);
+            *entry_ref = entrySetExpiry(current_entry, EXPIRY_NONE);
             return EXPIRATION_MODIFICATION_SUCCESSFUL;
         }
         return EXPIRATION_MODIFICATION_FAILED; // If the found element has no expiration set, return -1
@@ -728,9 +733,12 @@ sds hashTypeCurrentObjectNewSds(hashTypeIterator *hi, int what) {
         if (vstr) return sdsnewlen(vstr, vlen);
         return sdsfromlonglong(vll);
     }
-    size_t vlen = 0;
-    vstr = (unsigned char *)hashTypeCurrentFromHashTable(hi, what, &vlen);
-    return sdsnewlen(vstr, vlen);
+    if (hi->encoding == OBJ_ENCODING_HASHTABLE) {
+	size_t vlen = 0;
+	vstr = (unsigned char *)hashTypeCurrentFromHashTable(hi, what, &vlen);
+	return sdsnewlen(vstr, vlen);
+    }
+    serverPanic("Unknown hash encoding");
 }
 
 robj *hashTypeLookupWriteOrCreate(client *c, robj *key) {

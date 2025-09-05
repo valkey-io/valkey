@@ -4,15 +4,6 @@
 #include "sds.h"
 #include <stdbool.h>
 
-/* Structure representing a non-owning view of a buffer.
- * The view does not manage the underlying memory, so its destruction
- * will not free the buffer.
- */
-typedef struct stringRef {
-    const char *buf; /* Pointer to the externalized buffer */
-    size_t len;      /* Length of the buffer */
-} stringRef;
-
 /*-----------------------------------------------------------------------------
  * Entry
  *----------------------------------------------------------------------------*/
@@ -62,9 +53,6 @@ sds entryGetField(const entry *entry);
 /* Returns the value string (sds) from the entry. */
 char *entryGetValue(const entry *entry, size_t *len);
 
-/* Sets or replaces the value string in the entry. May reallocate and return a new pointer. */
-entry *entrySetValue(entry *entry, sds value);
-
 /* Gets the expiration timestamp (UNIX time in milliseconds). */
 long long entryGetExpiry(const entry *entry);
 
@@ -85,7 +73,7 @@ void entryFree(entry *entry);
 
 /* Creates a new entry with the given field, value, and optional expiry. */
 entry *entryCreate(const_sds field, sds value, long long expiry);
-entry *entrySetStringRef(entry *entry, const char *buf, size_t len, long long expiry);
+entry *entryUpdateAsStringRef(entry *entry, const char *buf, size_t len, long long expiry);
 
 /* Updates the value and/or expiry of an existing entry.
  * In case value is NULL, will use the existing entry value.

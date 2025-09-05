@@ -708,27 +708,37 @@ void linenoiseEditMoveRight(struct linenoiseState *l) {
     }
 }
 
-/* Consider letters/digits/underscore as “word”; others as delimiters. */
-static int isWordChar(char c) {
-    return (c == '_' || (c >= '0' && c <= '9') ||
-            (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z'));
+/* People have different preferences on what is considered a word
+ * when editing commandline. For example, in command
+ * `set business:department:product value`,
+ * somne might treat the entire long key as a word, while others
+ * treat it as 3 subwords and prefer granular word jumping navigation
+ * to make fixing a typo (e.g. "business:deaprtment:product") easier.
+ * In order to accommodate this, we treat escape sequences
+ * ESC b/f and ESC[1;5D/C diffrently.
+ */
+static int isSubWordDelimiter(const char c) {
+    return !isalnum(c) && c != '_';
+}
+static int isBigWordDelimiter(const char c) {
+    return isspace(c);
 }
 
-static void linenoiseEditMoveWordLeft(struct linenoiseState *l) {
+static void linenoiseEditMoveWordLeft(struct linenoiseState *l, int (*isDelimiter)(char c)) {
     if (l->pos == 0) return;
     /* Move cursor to the left over any delimiters */
-    while (l->pos > 0 && !isWordChar(l->buf[l->pos - 1])) l->pos--;
+    while (l->pos > 0 && isDelimiter(l->buf[l->pos - 1])) l->pos--;
     /* Then continue moving over a word */
-    while (l->pos > 0 && isWordChar(l->buf[l->pos - 1])) l->pos--;
+    while (l->pos > 0 && !isDelimiter(l->buf[l->pos - 1])) l->pos--;
     refreshLine(l);
 }
 
-static void linenoiseEditMoveWordRight(struct linenoiseState *l) {
+static void linenoiseEditMoveWordRight(struct linenoiseState *l, int (*isDelimiter)(char c)) {
     if (l->pos == l->len) return;
     /* Move cursor to the right over any delimiters */
-    while (l->pos < l->len &&  isWordChar(l->buf[l->pos])) l->pos++;
+    while (l->pos < l->len && isDelimiter(l->buf[l->pos])) l->pos++;
     /* Then continue moving over a word */
-    while (l->pos < l->len && !isWordChar(l->buf[l->pos])) l->pos++;
+    while (l->pos < l->len && !isDelimiter(l->buf[l->pos])) l->pos++;
     refreshLine(l);
 }
 
@@ -929,11 +939,11 @@ static int linenoiseEdit(int stdin_fd, int stdout_fd, char *buf, size_t buflen, 
 
             /* Handle Meta-b / Meta-f directly */
             if (seq[0] == 'b') {                 /* ESC b → word left */
-                linenoiseEditMoveWordLeft(&l);
+                linenoiseEditMoveWordLeft(&l, isSubWordDelimiter);
                 break;
             }
             if (seq[0] == 'f') {                 /* ESC f → word right */
-                linenoiseEditMoveWordRight(&l);
+                linenoiseEditMoveWordRight(&l, isSubWordDelimiter);
                 break;
             }
 
@@ -960,11 +970,11 @@ static int linenoiseEdit(int stdin_fd, int stdout_fd, char *buf, size_t buflen, 
                     }
 
                     if (strstr(seqBuffer, "1;5D") || strstr(seqBuffer, "5D")) {
-                        linenoiseEditMoveWordLeft(&l);
+                        linenoiseEditMoveWordLeft(&l, isBigWordDelimiter);
                         break;
                     }
                     if (strstr(seqBuffer, "1;5C") || strstr(seqBuffer, "5C")) {
-                        linenoiseEditMoveWordRight(&l);
+                        linenoiseEditMoveWordRight(&l, isBigWordDelimiter);
                         break;
                     }
                     if (strstr(seqBuffer, "3~")) {

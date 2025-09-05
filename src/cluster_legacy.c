@@ -1061,8 +1061,12 @@ int clusterLockConfig(char *filename) {
 }
 
 /* Derives our ports to be announced in the cluster bus. */
-void deriveAnnouncedPorts(int *announced_tcp_port, int *announced_tls_port, int *announced_cport,
-                          int *announced_client_tcp_port, int *announced_client_tls_port) {
+void deriveAnnouncedPorts(
+    int *announced_tcp_port,
+    int *announced_tls_port,
+    int *announced_cport,
+    int *announced_client_tcp_port,
+    int *announced_client_tls_port) {
     /* Config overriding announced ports. */
     *announced_tcp_port = server.cluster_announce_port ? server.cluster_announce_port : server.port;
     *announced_tls_port = server.cluster_announce_tls_port ? server.cluster_announce_tls_port : server.tls_port;

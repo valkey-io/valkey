@@ -1478,7 +1478,9 @@ start_server {tags {"hashexpire"}} {
             lappend pairs "f$i" "v$i"
         }
         r HSET myhash {*}$pairs
-        r HEXPIRE myhash 3 FIELDS 5 f1 f10 f100 f200 f300
+        
+        set expire_time [get_long_expire_value HEXPIREAT]
+        r HEXPIREAT myhash $expire_time FIELDS 5 f1 f10 f100 f200 f300
         
         # Verify encoding changed to hashtable
         set "hashtable" [r OBJECT ENCODING myhash]
@@ -1487,9 +1489,9 @@ start_server {tags {"hashexpire"}} {
         for {set i 1} {$i <= 600} {incr i} {
             assert_equal "v$i" [r HGET myhash "f$i"]
             if {$i == 1 || $i == 10 || $i == 100 || $i == 200 || $i == 300} {
-                assert_equal 3 [r HTTL myhash FIELDS 1 "f$i"]
+                assert_equal [r HEXPIRETIME myhash FIELDS 1 "f$i"] $expire_time
             } else {
-                assert_equal -1 [r HTTL myhash FIELDS 1 "f$i"]
+                assert_equal [r HTTL myhash FIELDS 1 "f$i"] -1
             }
         }
         # Re-enable active expiry

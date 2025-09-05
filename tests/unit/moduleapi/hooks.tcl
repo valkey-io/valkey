@@ -1,4 +1,5 @@
 set testmodule [file normalize tests/modules/hooks.so]
+set authmodule [file normalize tests/modules/auth.so]
 
 tags "modules" {
     start_server [list overrides [list loadmodule "$testmodule" appendonly yes]] {
@@ -224,6 +225,69 @@ tags "modules" {
             r flushall
             assert_equal [r hooks.event_last flush-start] -1
             assert_equal [r hooks.event_last flush-end] -1
+        }
+
+        test {Test success authentication attempt hooks} {
+            r acl setuser testuser on >testpass ~* +@all
+            r auth testuser testpass
+            assert_equal [r hooks.event_last auth-attempt] "testuser"
+            assert {[r hooks.event_count auth-attempt-module] < 1}
+            assert_equal [r hooks.event_last auth-attempt-success] "1"
+        }
+
+        test {Test failed authentication attempt hooks} {
+            r acl setuser testuser on >testpass ~* +@all
+            catch {r auth testuser wrongpass} e
+            assert_match {*WRONGPASS invalid username-password*} $e
+            assert_equal [r hooks.event_last auth-attempt] "testuser"
+            assert {[r hooks.event_count auth-attempt-module] < 1}
+            assert_equal [r hooks.event_last auth-attempt-success] "0"
+        }
+
+        test {Test success module authentication attempt hooks} {
+            r module load $authmodule
+            r testmoduleone.rm_register_auth_cb
+            r acl setuser foo on >testpass ~* +@all
+            r auth foo allow
+            assert_equal [r hooks.event_last auth-attempt] "foo"
+            assert_equal [r hooks.event_last auth-attempt-module] "testacl"
+            assert_equal [r hooks.event_last auth-attempt-success] "1"
+            r module unload testacl
+        }
+
+        test {Test failed module authentication attempt hooks} {
+            r module load $authmodule
+            r testmoduleone.rm_register_auth_cb
+            r acl setuser foo on ~* +@all
+            catch {r auth foo deny} e
+            assert_match {*Auth denied by Misc Module*} $e
+            assert_equal [r hooks.event_last auth-attempt] "foo"
+            assert_equal [r hooks.event_last auth-attempt-module] "testacl"
+            assert_equal [r hooks.event_last auth-attempt-success] "0"
+            r module unload testacl
+        }
+
+        test {Test success module blocking authentication attempt hooks} {
+            r module load $authmodule
+            r testmoduleone.rm_register_blocking_auth_cb
+            r acl setuser foo on ~* +@all
+            r auth foo block_allow
+            assert_equal [r hooks.event_last auth-attempt] "foo"
+            assert_equal [r hooks.event_last auth-attempt-module] "testacl"
+            assert_equal [r hooks.event_last auth-attempt-success] "1"
+            r module unload testacl
+        }
+
+        test {Test failed module blocking authentication attempt hooks} {
+            r module load $authmodule
+            r testmoduleone.rm_register_blocking_auth_cb
+            r acl setuser foo on ~* +@all
+            catch {r auth foo block_deny} e
+            assert_match {*Auth denied by Misc Module*} $e
+            assert_equal [r hooks.event_last auth-attempt] "foo"
+            assert_equal [r hooks.event_last auth-attempt-module] "testacl"
+            assert_equal [r hooks.event_last auth-attempt-success] "0"
+            r module unload testacl
         }
 
         # replication related tests

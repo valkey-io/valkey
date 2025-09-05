@@ -5121,7 +5121,7 @@ static int clusterManagerMigrateKeysInSlot(clusterManagerNode *source,
 static int
 clusterManagerMoveSlot(clusterManagerNode *source, clusterManagerNode *target, int slot, int opts, char **err) {
     if (!(opts & CLUSTER_MANAGER_OPT_QUIET)) {
-        printf("Moving slot %d from %s:%d to %s:%d: ", slot, source->ip, source->port, target->ip, target->port);
+        printf("Moving slot %d from %s:%d to %s:%d", slot, source->ip, source->port, target->ip, target->port);
         fflush(stdout);
     }
     if (err != NULL) *err = NULL;

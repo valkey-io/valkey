@@ -12,11 +12,6 @@
                 "`timeout` is interpreted as a double instead of an integer."
             ]
         ],
-        "deprecated_since": "6.2.0",
-        "replaced_by": "`BLMOVE` with the `RIGHT` and `LEFT` arguments",
-        "doc_flags": [
-            "DEPRECATED"
-        ],
         "command_flags": [
             "WRITE",
             "DENYOOM",

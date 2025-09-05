@@ -76,6 +76,7 @@ struct {
     rio *rio;
     robj *key;                     /* Current key we are reading. */
     int key_type;                  /* Current key type if != -1. */
+    int rdbver;                    /* RDB version. */
     unsigned long keys;            /* Number of keys processed. */
     unsigned long expires;         /* Number of keys with an expire. */
     unsigned long already_expired; /* Number of keys already expired. */
@@ -625,13 +626,17 @@ int redis_check_rdb(char *rdbfilename, FILE *fp) {
         goto err;
     }
     rdbver = atoi(buf + 6);
-    if (rdbver < 1 || rdbver > RDB_VERSION ||
+    if (rdbver < 1 ||
         (rdbver < RDB_FOREIGN_VERSION_MIN && !is_redis_magic) ||
-        (rdbver >= RDB_FOREIGN_VERSION_MIN && rdbver <= RDB_FOREIGN_VERSION_MAX) ||
         (rdbver > RDB_FOREIGN_VERSION_MAX && !is_valkey_magic)) {
         rdbCheckError("Can't handle RDB format version %d", rdbver);
         goto err;
+    } else if (rdbver > RDB_VERSION) {
+        rdbCheckInfo("Future RDB version %d detected", rdbver);
+    } else if (rdbIsForeignVersion(rdbver)) {
+        rdbCheckInfo("Foreign RDB version %d detected", rdbver);
     }
+    rdbstate.rdbver = rdbver;
 
     expiretime = -1;
     while (1) {
@@ -689,6 +694,12 @@ int redis_check_rdb(char *rdbfilename, FILE *fp) {
             if ((db_size = rdbLoadLen(&rdb, NULL)) == RDB_LENERR) goto eoferr;
             if ((expires_size = rdbLoadLen(&rdb, NULL)) == RDB_LENERR) goto eoferr;
             continue; /* Read type again. */
+        } else if (type == RDB_OPCODE_SLOT_INFO) {
+            /* Hint used in foreign RDB versions. */
+            if (rdbLoadLen(&rdb, NULL) == RDB_LENERR) goto eoferr;
+            if (rdbLoadLen(&rdb, NULL) == RDB_LENERR) goto eoferr;
+            if (rdbLoadLen(&rdb, NULL) == RDB_LENERR) goto eoferr;
+            continue; /* Read type again. */
         } else if (type == RDB_OPCODE_AUX) {
             /* AUX: generic string-string fields. Use to add state to RDB
              * which is backward compatible. Implementations of RDB loading
@@ -742,11 +753,19 @@ int redis_check_rdb(char *rdbfilename, FILE *fp) {
             }
             rdbstate.functions_num++;
             continue;
-        } else {
-            if (!rdbIsObjectType(type)) {
+        } else if (rdbIsForeignVersion(rdbver) &&
+                   type >= RDB_FOREIGN_TYPE_MIN &&
+                   type <= RDB_FOREIGN_TYPE_MAX) {
+            rdbCheckError("Unknown object type %d in RDB file with foreign version %d", type, rdbver);
+            goto err;
+        } else if (!rdbIsObjectType(type)) {
+            if (rdbver > RDB_VERSION) {
+                rdbCheckError("Unknown object type %d in RDB file with future version %d", type, rdbver);
+            } else {
                 rdbCheckError("Invalid object type: %d", type);
-                goto err;
             }
+            goto err;
+        } else {
             rdbstate.key_type = type;
         }
 
@@ -894,8 +913,13 @@ int redis_check_rdb_main(int argc, char **argv, FILE *fp) {
     rdbCheckInfo("Checking RDB file %s", argv[1]);
     rdbCheckSetupSignals();
     int retval = redis_check_rdb(argv[1], fp);
+    rdbCheckInfo("Check RDB returned error code %d (0 means success)", retval);
     if (retval == 0) {
-        rdbCheckInfo("\\o/ RDB looks OK! \\o/");
+        if (rdbIsForeignVersion(rdbstate.rdbver) || rdbstate.rdbver > RDB_VERSION) {
+            rdbCheckInfo("\\o/ RDB looks OK, but loading requires config 'rdb-version-check relaxed'");
+        } else {
+            rdbCheckInfo("\\o/ RDB looks OK! \\o/");
+        }
         rdbShowGenericInfo();
     }
     if (fp) return (retval == 0) ? C_OK : C_ERR;

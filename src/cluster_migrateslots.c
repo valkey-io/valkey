@@ -20,7 +20,8 @@ typedef enum slotMigrationJobState {
 
     /* Exporting states */
     SLOT_EXPORT_CONNECTING,
-    SLOT_EXPORT_AUTHENTICATING,
+    SLOT_EXPORT_SEND_AUTH,
+    SLOT_EXPORT_READ_AUTH_RESPONSE,
     SLOT_EXPORT_SEND_ESTABLISH,
     SLOT_EXPORT_READ_ESTABLISH_RESPONSE,
     SLOT_EXPORT_WAITING_TO_SNAPSHOT,
@@ -734,9 +735,13 @@ void clusterHandleFlushDuringSlotMigration(void) {
  *                │SLOT_EXPORT_CONNECTING├─────────┐
  *                └───────────┬──────────┘         │
  *                   Connected│                    │
- *              ┌─────────────▼────────────┐       │
- *              │SLOT_EXPORT_AUTHENTICATING┼───────┤
- *              └─────────────┬────────────┘       │
+ *                ┌───────────▼─────────┐          │
+ *                │SLOT_EXPORT_SEND_AUTH┼──────────┤
+ *                └───────────┬─────────┘          │
+ *        AUTH command written│                    │
+ *              ┌─────────────▼────────────────┐   │
+ *              │SLOT_EXPORT_READ_AUTH_RESPONSE┼───┤
+ *              └─────────────┬────────────────┘   │
  *               Authenticated│                    │
  *              ┌─────────────▼────────────┐       │
  *              │SLOT_EXPORT_SEND_ESTABLISH┼───────┤
@@ -1020,41 +1025,48 @@ int proceedWithSlotExportJobConnecting(slotMigrationJob *job, bool *completed) {
     }
 }
 
-/* Perform the authentication steps needed to authenticate a slot migration
- * job's connection. Return C_ERR if an error is encountered, or C_OK if the
- * authentication is done. */
-int performSlotExportJobAuthentication(slotMigrationJob *job) {
-    serverAssert(job->type == SLOT_MIGRATION_EXPORT);
-    if (!server.primary_auth) {
-        return C_OK;
-    }
-    sds err = replicationSendAuth(job->conn);
-    if (err) {
-        serverLog(LL_WARNING,
-                  "Failed to send AUTH command for slot migration %s: %s",
-                  job->description, err);
-        sdsfree(err);
-        return C_ERR;
-    }
-    err = receiveSynchronousResponse(job->conn);
+/* Read a response to the AUTH command, moving to the next stage of the migration
+ * if the response is a success. If there is an error, fail the migration with the
+ * error message. */
+void slotMigrationJobReadAuthResponse(connection *conn) {
+    slotMigrationJob *job = (slotMigrationJob *)connGetPrivateData(conn);
+
+    sds err = receiveSynchronousResponse(job->conn);
     if (err == NULL) {
-        serverLog(LL_WARNING,
-                  "Received no response to AUTH command for slot migration %s",
-                  job->description);
-        return C_ERR;
+        finishSlotMigrationJob(job, SLOT_MIGRATION_JOB_FAILED, "Target node did not respond to AUTH command");
+        return;
     }
     if (err[0] == '-') {
-        serverLog(LL_WARNING,
-                  "Failed to AUTH for slot migration %s: %s",
-                  job->description, err);
+        sds status_msg = sdscatfmt(sdsempty(), "Failed to AUTH to target node: %s", err);
+        finishSlotMigrationJob(job, SLOT_MIGRATION_JOB_FAILED, status_msg);
         sdsfree(err);
-        return C_ERR;
+        sdsfree(status_msg);
+        return;
     }
-    serverLog(LL_NOTICE,
-              "Successfully authenticated slot migration %s",
-              job->description);
+
     sdsfree(err);
-    return C_OK;
+    serverLog(LL_NOTICE, "Successfully authenticated slot migration %s", job->description);
+    updateSlotMigrationJobState(job, SLOT_EXPORT_SEND_ESTABLISH);
+    proceedWithSlotMigration(job);
+}
+
+/* Perform the authentication steps needed to authenticate a slot migration
+ * job's connection. */
+void slotMigrationJobSendAuth(slotMigrationJob *job) {
+    serverAssert(job->type == SLOT_MIGRATION_EXPORT);
+    serverAssert(server.primary_auth);
+
+    sds err = replicationSendAuth(job->conn);
+    if (err) {
+        sds status_msg = sdscatfmt(sdsempty(), "Failed to send AUTH command to target node: %s", err);
+        finishSlotMigrationJob(job, SLOT_MIGRATION_JOB_FAILED, status_msg);
+        sdsfree(err);
+        sdsfree(status_msg);
+        return;
+    }
+
+    connSetReadHandler(job->conn, slotMigrationJobReadAuthResponse);
+    updateSlotMigrationJobState(job, SLOT_EXPORT_READ_AUTH_RESPONSE);
 }
 
 /* Initialize the client for the slot migration job, which should already be
@@ -1590,17 +1602,19 @@ void proceedWithSlotMigration(slotMigrationJob *job) {
             if (!completed) return;
             serverLog(LL_NOTICE, "Slot migration %s connection established.",
                       job->description);
-            updateSlotMigrationJobState(job, SLOT_EXPORT_AUTHENTICATING);
+            if (server.primary_auth) {
+                updateSlotMigrationJobState(job, SLOT_EXPORT_SEND_AUTH);
+            } else {
+                updateSlotMigrationJobState(job, SLOT_EXPORT_SEND_ESTABLISH);
+            }
             continue;
         }
-        case SLOT_EXPORT_AUTHENTICATING:
-            if (performSlotExportJobAuthentication(job) == C_ERR) {
-                finishSlotMigrationJob(job, SLOT_MIGRATION_JOB_FAILED,
-                                       "Failed to AUTH to target node");
-                return;
-            }
-            updateSlotMigrationJobState(job, SLOT_EXPORT_SEND_ESTABLISH);
+        case SLOT_EXPORT_SEND_AUTH:
+            slotMigrationJobSendAuth(job);
             continue;
+        case SLOT_EXPORT_READ_AUTH_RESPONSE:
+            /* We are still reading back the response, nothing to do in cron */
+            return;
         case SLOT_EXPORT_SEND_ESTABLISH:
             initSlotExportJobClient(job);
             addReplySds(job->client, generateSyncSlotsEstablishCommand(job));
@@ -1768,7 +1782,8 @@ const char *slotMigrationJobStateToString(slotMigrationJobState state) {
     case SLOT_IMPORT_FINISHED_WAITING_TO_CLEANUP: return "cleaning-up";
 
     case SLOT_EXPORT_CONNECTING: return "connecting";
-    case SLOT_EXPORT_AUTHENTICATING: return "authenticating";
+    case SLOT_EXPORT_SEND_AUTH: return "sending-auth-command";
+    case SLOT_EXPORT_READ_AUTH_RESPONSE: return "reading-auth-response";
     case SLOT_EXPORT_SEND_ESTABLISH: return "sending-establish-command";
     case SLOT_EXPORT_READ_ESTABLISH_RESPONSE:
         return "reading-establish-response";
@@ -2007,6 +2022,8 @@ bool canSlotMigrationJobSendAck(slotMigrationJob *job) {
     return job->state != SLOT_EXPORT_SNAPSHOTTING &&
            job->state != SLOT_IMPORT_WAIT_ACK &&
            job->state != SLOT_EXPORT_CONNECTING &&
+           job->state != SLOT_EXPORT_SEND_AUTH &&
+           job->state != SLOT_EXPORT_READ_AUTH_RESPONSE &&
            job->state != SLOT_EXPORT_SEND_ESTABLISH &&
            job->state != SLOT_EXPORT_READ_ESTABLISH_RESPONSE;
 }

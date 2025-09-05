@@ -361,7 +361,8 @@ client *createClient(connection *conn) {
     c->io_last_written.buf = NULL;
     c->io_last_written.bufpos = 0;
     c->io_last_written.data_len = 0;
-    c->read_response_callback = NULL;
+    c->response_callback = NULL;
+    c->push_message_callback = NULL;
     return c;
 }
 
@@ -3173,8 +3174,6 @@ void resetClient(client *c) {
     c->flag.buffered_reply = 0;
     c->flag.keyspace_notified = 0;
     c->net_output_bytes_curr_cmd = 0;
-    c->flag2.reading_response = 0;
-    c->read_response_callback = NULL;
 
     /* Make sure the duration has been recorded to some command. */
     serverAssert(c->duration == 0);
@@ -3420,7 +3419,8 @@ void parseMultibulkBuffer(client *c) {
     serverAssert(queue->len == 0);
     while ((flag & READ_FLAGS_PARSING_COMPLETED) &&
            sdslen(c->querybuf) > c->qb_pos &&
-           c->querybuf[c->qb_pos] == '*') {
+           (c->querybuf[c->qb_pos] == '*' ||
+           (c->querybuf[c->qb_pos] == '>' && c->push_message_callback))) {
         c->reqtype = PROTO_REQ_MULTIBULK;
         /* Push a new parser state to the command queue */
         if (queue->len == queue->cap) {
@@ -3467,6 +3467,7 @@ static int parseMultibulk(client *c,
     long long ll;
     int is_replicated = c->read_flags & READ_FLAGS_REPLICATED;
     int auth_required = c->read_flags & READ_FLAGS_AUTH_REQUIRED;
+    int additional_flags = 0;
 
     if (c->multibulklen == 0) {
         /* The client (argc) should have been reset */
@@ -3476,7 +3477,7 @@ static int parseMultibulk(client *c,
         newline = memchr(c->querybuf + c->qb_pos, '\r', sdslen(c->querybuf) - c->qb_pos);
         if (newline == NULL) {
             if (sdslen(c->querybuf) - c->qb_pos > PROTO_INLINE_MAX_SIZE) {
-                return READ_FLAGS_ERROR_BIG_MULTIBULK;
+                return READ_FLAGS_ERROR_BIG_MULTIBULK | additional_flags;
             }
             return 0;
         }
@@ -3486,19 +3487,20 @@ static int parseMultibulk(client *c,
 
         /* We know for sure there is a whole line since newline != NULL,
          * so go ahead and find out the multi bulk length. */
-        serverAssertWithInfo(c, NULL, c->querybuf[c->qb_pos] == '*');
+        serverAssertWithInfo(c, NULL, c->querybuf[c->qb_pos] == '*' || c->querybuf[c->qb_pos] == '>');
+        if (c->querybuf[c->qb_pos] == '>') additional_flags |= READ_FLAGS_PUSH_MESSAGE;
         size_t multibulklen_slen = newline - (c->querybuf + 1 + c->qb_pos);
         ok = string2ll(c->querybuf + 1 + c->qb_pos, multibulklen_slen, &ll);
         if (!ok || ll > INT_MAX) {
-            return READ_FLAGS_ERROR_INVALID_MULTIBULK_LEN;
+            return READ_FLAGS_ERROR_INVALID_MULTIBULK_LEN | additional_flags;
         } else if (ll > 10 && auth_required) {
-            return READ_FLAGS_ERROR_UNAUTHENTICATED_MULTIBULK_LEN;
+            return READ_FLAGS_ERROR_UNAUTHENTICATED_MULTIBULK_LEN | additional_flags;
         }
 
         c->qb_pos = (newline - c->querybuf) + 2;
 
         if (ll <= 0) {
-            return READ_FLAGS_PARSING_NEGATIVE_MBULK_LEN;
+            return READ_FLAGS_PARSING_NEGATIVE_MBULK_LEN | additional_flags;
         }
 
         c->multibulklen = ll;
@@ -3551,7 +3553,7 @@ static int parseMultibulk(client *c,
             newline = memchr(c->querybuf + c->qb_pos, '\r', sdslen(c->querybuf) - c->qb_pos);
             if (newline == NULL) {
                 if (sdslen(c->querybuf) - c->qb_pos > PROTO_INLINE_MAX_SIZE) {
-                    return READ_FLAGS_ERROR_BIG_BULK_COUNT;
+                    return READ_FLAGS_ERROR_BIG_BULK_COUNT | additional_flags;
                 }
                 break;
             }
@@ -3560,15 +3562,15 @@ static int parseMultibulk(client *c,
             if (newline - (c->querybuf + c->qb_pos) > (ssize_t)(sdslen(c->querybuf) - c->qb_pos - 2)) return 0;
 
             if (c->querybuf[c->qb_pos] != '$') {
-                return READ_FLAGS_ERROR_MBULK_UNEXPECTED_CHARACTER;
+                return READ_FLAGS_ERROR_MBULK_UNEXPECTED_CHARACTER | additional_flags;
             }
 
             size_t bulklen_slen = newline - (c->querybuf + c->qb_pos + 1);
             ok = string2ll(c->querybuf + c->qb_pos + 1, bulklen_slen, &ll);
             if (!ok || ll < 0 || (!(is_replicated) && ll > server.proto_max_bulk_len)) {
-                return READ_FLAGS_ERROR_MBULK_INVALID_BULK_LEN;
+                return READ_FLAGS_ERROR_MBULK_INVALID_BULK_LEN | additional_flags;
             } else if (ll > 16384 && auth_required) {
-                return READ_FLAGS_ERROR_UNAUTHENTICATED_BULK_LEN;
+                return READ_FLAGS_ERROR_UNAUTHENTICATED_BULK_LEN | additional_flags;
             }
 
             c->qb_pos = newline - c->querybuf + 2;
@@ -3645,9 +3647,9 @@ static int parseMultibulk(client *c,
         /* Per-slot network bytes-in calculation, 3rd and 4th components. */
         *net_input_bytes_curr_cmd += (*argv_len_sum + (*argc * 2));
         c->reqtype = 0;
-        return READ_FLAGS_PARSING_COMPLETED;
+        return READ_FLAGS_PARSING_COMPLETED | additional_flags;
     }
-    return 0;
+    return additional_flags;
 }
 
 /* Perform necessary tasks after a command was executed:
@@ -3769,6 +3771,11 @@ void parseInputBuffer(client *c) {
     if (!c->reqtype) {
         if (c->querybuf[c->qb_pos] == '*') {
             c->reqtype = PROTO_REQ_MULTIBULK;
+        } else if (c->querybuf[c->qb_pos] == '>' && c->push_message_callback != NULL) {
+            /* We only handle pushes if there is a callback configured for them.
+             * Otherwise, we treat these as if they are inline for backwards
+             * compatibility. */
+            c->reqtype = PROTO_REQ_MULTIBULK;
         } else {
             c->reqtype = PROTO_REQ_INLINE;
         }
@@ -3780,6 +3787,12 @@ void parseInputBuffer(client *c) {
         parseMultibulkBuffer(c);
     } else {
         serverPanic("Unknown request type");
+    }
+    if (c->flag2.reading_response) {
+        /* If any commands were processed into the command queue, they will not
+         * have the response read flag, since it only applies to the first
+         * response.*/
+        c->read_flags |= READ_FLAGS_RESPONSE;
     }
 }
 
@@ -3970,6 +3983,31 @@ static void prefetchCommandQueueKeys(client *c) {
     }
 }
 
+/* Register for a response callback. The callback will be triggered after the
+ * next response is parsed. The parsed response will be set in c->argv. While
+ * waiting for a response, normal command parsing and execution will not be
+ * performed. */
+void setResponseCallback(client *c, ClientResponseCallback cb) {
+    c->flag2.reading_response = 1;
+    c->response_callback = cb;
+}
+
+void processResponse(client *c) {
+    serverAssert(c->flag2.reading_response && c->response_callback != NULL);
+    c->response_callback(c);
+    c->flag2.reading_response = 0;
+    c->response_callback = NULL;
+    
+    /* Ensure the client is reset for the next command */
+    resetClient(c);
+}
+
+void processPushMessage(client *c) {
+    serverAssert(c->push_message_callback != NULL);
+    c->push_message_callback(c);
+    resetClient(c);
+}
+
 int processInputBuffer(client *c) {
     /* Parse the query buffer and/or execute already parsed commands. */
     while ((c->querybuf && c->qb_pos < sdslen(c->querybuf)) ||
@@ -3984,12 +4022,15 @@ int processInputBuffer(client *c) {
         /* If commands are queued up, pop from the queue first */
         if (!consumeCommandQueue(c)) {
             parseInputBuffer(c);
-            if (c->flag2.reading_response) {
-                c->read_response_callback(c);
-                resetClient(c);
-                continue;
-            }
             prepareCommandQueue(c);
+        }
+        if (c->read_flags & READ_FLAGS_PUSH_MESSAGE) {
+            processPushMessage(c);
+            continue;
+        }
+        if (c->read_flags & READ_FLAGS_RESPONSE) {
+            processResponse(c);
+            continue;
         }
 
         /* Prefetch keys for the next commands in queue, if not already done. */

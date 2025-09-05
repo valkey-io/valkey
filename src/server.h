@@ -1271,7 +1271,7 @@ typedef struct LastWrittenBuf {
 /* Forward declaration of slotMigrationJob */
 typedef struct slotMigrationJob slotMigrationJob;
 
-typedef void (*ClientReadResponseCallback)(struct client *c);
+typedef void (*ClientResponseCallback)(struct client *c);
 
 typedef struct client {
     /* Basic client information and connection. */
@@ -1375,8 +1375,9 @@ typedef struct client {
     list *deferred_reply;                    /* List of reply objects to be sent to the client, typically after
                                                 the client has been unblocked. */
     unsigned long long deferred_reply_bytes; /* Total bytes of objects in the blocked client pending list.*/
-    ClientReadResponseCallback read_response_callback; /* Callback to handle the response when the client is in
-                                                        * reading_response state. */
+    ClientResponseCallback response_callback; /* Callback to handle the response when the client is in
+                                               * reading_response state. */
+    ClientResponseCallback push_message_callback; /* Callback to handle RESP3 out-of-band push messages. */
 #ifdef LOG_REQ_RES
     clientReqResInfo reqres;
 #endif
@@ -2781,6 +2782,8 @@ void dictVanillaFree(void *val);
 #define READ_FLAGS_NO_KEYS (1 << 19)
 #define READ_FLAGS_CROSSSLOT (1 << 20)
 #define READ_FLAGS_PREFETCHED (1 << 21)
+#define READ_FLAGS_RESPONSE (1 << 22)
+#define READ_FLAGS_PUSH_MESSAGE (1 << 23)
 
 /* Write flags for various write errors and states */
 #define WRITE_FLAGS_WRITE_ERROR (1 << 0)
@@ -2924,6 +2927,7 @@ int processIOThreadsReadDone(void);
 int processIOThreadsWriteDone(void);
 void releaseReplyReferences(client *c);
 void resetLastWrittenBuf(client *c);
+void setResponseCallback(client *c, ClientResponseCallback cb);
 
 int parseExtendedCommandArgumentsOrReply(client *c, int *flags, int *unit, robj **expire, robj **compare_val, int command_type, int max_args);
 

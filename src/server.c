@@ -4094,6 +4094,7 @@ uint64_t getCommandFlags(client *c) {
  * done by I/O threads to offload the main-thread. */
 static void prepareCommandGeneric(robj **argv, int argc, int *read_flags, struct serverCommand **cmd, int *slot) {
     if (!(*read_flags & READ_FLAGS_PARSING_COMPLETED) || argc == 0) return;
+    if (*read_flags & READ_FLAGS_PUSH_MESSAGE || *read_flags & READ_FLAGS_RESPONSE) return;
     /* Make sure we don't do this twice. */
     debugServerAssert(*cmd == NULL && !(*read_flags & READ_FLAGS_COMMAND_NOT_FOUND));
     *cmd = lookupCommand(argv, argc);

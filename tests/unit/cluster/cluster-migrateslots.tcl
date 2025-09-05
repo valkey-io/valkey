@@ -1158,7 +1158,7 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster} overrides {cluste
             set_debug_prevent_failover 1
             assert_match "OK" [R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 0 0 NODE $node2_id]
             set jobname [get_job_name 0 0]
-            wait_for_migration_field 0 $jobname state failover-granted
+            wait_for_migration_field 0 $jobname state waiting-for-topology-finalization
 
             assert_match "slot_migration_in_progress" [s -0 paused_reason]
 
@@ -1192,7 +1192,7 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster} overrides {cluste
             set_debug_prevent_failover 1
             assert_match "OK" [R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 0 0 NODE $node2_id]
             set jobname [get_job_name 0 0]
-            wait_for_migration_field 0 $jobname state failover-granted
+            wait_for_migration_field 0 $jobname state waiting-for-topology-finalization
 
             assert_match "slot_migration_in_progress" [s -0 paused_reason]
             assert_match "write" [s -0 paused_actions]
@@ -1215,8 +1215,6 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster} overrides {cluste
 
     test "CLUSTER SYNCSLOTS invalid state machine traversal" {
         assert_does_not_resync {
-            assert_error "*ERR CLUSTER SYNCSLOTS REQUEST-PAUSE should only be used by slot migration clients*" {R 0 CLUSTER SYNCSLOTS REQUEST-PAUSE}
-            assert_error "*ERR CLUSTER SYNCSLOTS REQUEST-FAILOVER should only be used by slot migration clients*" {R 0 CLUSTER SYNCSLOTS REQUEST-FAILOVER}
             assert_error "*ERR CLUSTER SYNCSLOTS SNAPSHOT-EOF should only be used by slot migration clients*" {R 0 CLUSTER SYNCSLOTS SNAPSHOT-EOF}
             assert_error "*ERR CLUSTER SYNCSLOTS PAUSED should only be used by slot migration clients*" {R 0 CLUSTER SYNCSLOTS PAUSED}
             assert_error "*ERR CLUSTER SYNCSLOTS FAILOVER-GRANTED should only be used by slot migration clients*" {R 0 CLUSTER SYNCSLOTS FAILOVER-GRANTED}
@@ -1487,7 +1485,7 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster} overrides {cluste
 
             # Should be denied
             wait_for_migration_field 2 $jobname state failed
-            assert_match {*Failed to AUTH to target node*} [dict get [get_migration_by_name 2 $jobname] message]
+            assert_match {*Target node AUTH response error*} [dict get [get_migration_by_name 2 $jobname] message]
 
             # Cleanup for next test
             R 0 CONFIG SET requirepass ""

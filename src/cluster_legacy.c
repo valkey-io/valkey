@@ -754,8 +754,6 @@ int clusterLoadConfig(char *filename) {
                 n->fail_time = mstime();
             } else if (!strcasecmp(s, "nofailover")) {
                 n->flags |= CLUSTER_NODE_NOFAILOVER;
-            } else if (!strcasecmp(s, "unknownshard")) {
-                n->flags |= CLUSTER_NODE_SHARD_ID_UNINITIALIZED;
             } else if (!strcasecmp(s, "noflags")) {
                 /* nothing to do */
             } else {
@@ -912,7 +910,7 @@ int clusterSaveConfig(int do_fsync) {
 
     /* Get the nodes description and concatenate our "vars" directive to
      * save currentEpoch and lastVoteEpoch. */
-    ci = clusterGenNodesDescription(NULL, CLUSTER_NODE_HANDSHAKE | CLUSTER_NODE_SHARD_ID_UNINITIALIZED, 0);
+    ci = clusterGenNodesDescription(NULL, CLUSTER_NODE_HANDSHAKE, 0);
     ci = sdscatfmt(ci, "vars currentEpoch %U lastVoteEpoch %U\n",
                    (unsigned long long)server.cluster->currentEpoch,
                    (unsigned long long)server.cluster->lastVoteEpoch);
@@ -3960,13 +3958,6 @@ int clusterProcessPacket(clusterLink *link) {
             }
         }
 
-        /* Get info from the gossip section. This is placed before the slots
-         * config processing, in order to have the sender's shard-id updated
-         * before processing the slots. */
-        if (sender) {
-            clusterProcessGossipSection(hdr, link);
-            clusterProcessPingExtensions(hdr, link);
-        }
 
         /* Update our info about served slots.
          *
@@ -4034,6 +4025,12 @@ int clusterProcessPacket(clusterLink *link) {
         if (sender && nodeIsPrimary(myself) && nodeIsPrimary(sender) &&
             sender_claimed_config_epoch == myself->configEpoch) {
             clusterHandleConfigEpochCollision(sender);
+        }
+
+        /* Get info from the gossip section */
+        if (sender) {
+            clusterProcessGossipSection(hdr, link);
+            clusterProcessPingExtensions(hdr, link);
         }
     } else if (type == CLUSTERMSG_TYPE_FAIL) {
         clusterNode *failing;
@@ -6390,7 +6387,6 @@ static struct clusterNodeFlags clusterNodeFlagsTable[] = {
     {CLUSTER_NODE_HANDSHAKE, "handshake,"},
     {CLUSTER_NODE_NOADDR, "noaddr,"},
     {CLUSTER_NODE_NOFAILOVER, "nofailover,"},
-    {CLUSTER_NODE_SHARD_ID_UNINITIALIZED, "unknownshard,"},
 };
 
 /* Concatenate the comma separated list of node flags to the given SDS
@@ -6578,6 +6574,8 @@ void clusterFreeNodesSlotsInfo(clusterNode *n) {
  * of the CLUSTER NODES function, and as format for the cluster
  * configuration file (nodes.conf) for a given node. */
 sds clusterGenNodesDescription(client *c, int filter, int tls_primary) {
+    /* There is no scenario where nodes with uninitialized shard_ids need to be visible to clients. Therefore detault to excluding them. */
+    filter |= CLUSTER_NODE_SHARD_ID_UNINITIALIZED;
     sds ci = sdsempty(), ni;
     dictIterator *di;
     dictEntry *de;

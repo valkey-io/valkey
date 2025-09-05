@@ -1,4 +1,3 @@
-if {0} {
 tags {tls:skip external:skip cluster singledb} {
     set base_conf [list cluster-enabled yes save ""] 
     start_multiple_servers 2 [list overrides $base_conf] {
@@ -70,7 +69,6 @@ start_cluster 3 1 {tags {external:skip cluster}} {
         }
     }
 }
-}
 
 proc partition_node {id} {
     R $id DEBUG DROP-CLUSTER-PACKET-FILTER -2
@@ -82,71 +80,94 @@ proc heal_partition {id} {
     R $id DEBUG PAUSE-CRON 0
 }
 
-start_cluster 3 6 {tags {external:skip cluster} overrides} {
-    test "Uninitialized shard_id flags are retained in nodes.conf" {
-        set to_forget [R 6 cluster myid]
-        assert_equal [R 6 cluster reset hard] {OK}
-        for {set i 0} {$i < 9} {incr i} {
-            if {$i == 6} continue
-            R $i CLUSTER FORGET $to_forget
+proc is_node_healthy_across_cluster {node_id_to_check nodes_to_exclude_idx} {
+    for {set i 0} {$i < 9} {incr i} {
+        if {[lsearch -exact $nodes_to_exclude_idx $i] != -1} {
+            continue
         }
-        partition_node 0
+        set node_info [cluster_get_node_by_id $i $node_id_to_check]
+        if {$node_info eq {} || [cluster_has_flag $node_info fail]} {
+            return 0
+        }
+    }
+    return 1
+}
 
+start_cluster 3 6 {tags {external:skip cluster} overrides} {
+    test "Nodes with uninitialized shard id are excluded from topology" {
+        cluster_forget_node 6 9
+        assert_equal [R 6 CLUSTER RESET HARD] {OK}
+        
+        partition_node 0
         wait_for_condition 1000 50 {
             [s -3 role] eq {master}
         } else {
             fail "Failover to node 3 didn't happen"
         }
-        assert_equal [R 6 cluster meet 127.0.0.1 [srv -3 port]] {OK}
-        after 3000
+        assert_equal [R 6 CLUSTER MEET 127.0.0.1 [srv -3 port]] {OK}
+        for {set i 0} {$i < 9} {incr i} {
+            if {$i == 0} continue
+            wait_for_condition 1000 50 {
+                [llength [get_cluster_nodes $i connected]] == 8
+            } else {
+                return 0
+            }
+        }
         assert_equal [R 6 CLUSTER REPLICATE [R 3 cluster myid]] {OK}
-        after 3000
+        wait_replica_online [srv -3 client]
+
+        set node6_id [R 6 CLUSTER MYID]
         
         partition_node 6
         heal_partition 0
-        after 3000
-        # Assert node 6 doesn't show up in the topology since the shard_id will be uninitialized?
-        puts [R 0 cluster nodes]
+        # Wait for node 0 to be healthy across all nodes
+        set node0_id [R 0 CLUSTER MYID]
+        wait_for_condition 5000 100 {
+            [is_node_healthy_across_cluster $node0_id {0 6}]
+        } else {
+            fail "Node 0 did not become healthy across all nodes"
+        }
+        # Since node 0 never receives a direct ping from node 6 and never learns its shard_id, node 6 should not be in the cluster nodes output.
+        assert {[cluster_get_node_by_id 0 $node6_id] eq {}}
 
+        # Restart and assert that node 6 is still not in the cluster nodes output and in nodes.conf.
         set result [catch {R 0 DEBUG RESTART 0} err]
         if {$result != 0 && $err ne "I/O error reading reply"} {
             fail "Unexpected error restarting server: $err"
         }
-    }
-}
-
-start_cluster 3 6 {tags {external:skip cluster} overrides {cluster-allow-replica-migration no loglevel debug}} {
-    test "Process shard_id before updating slots" {
-        # Remove one of the replicas from the cluster to be added back again later
-        set to_forget [R 6 cluster myid]
-        assert_equal [R 6 cluster reset hard] {OK}
-        set result [catch {R 0 DEBUG RESTART 0} err]
-        if {$result != 0 && $err ne "I/O error reading reply"} {
-            fail "Unexpected error restarting server: $err"
-        }
-
         wait_for_condition 100 100 {
             [check_server_response 0] eq 1
         } else {
             fail "Server didn't come back online in time"
         }
-        puts "server came back up"
+        assert {[cluster_get_node_by_id 0 $node6_id] eq {}}
+    }
+}
 
-        for {set i 0} {$i < 9} {incr i} {
-            if {$i == 6} continue
-            R $i CLUSTER FORGET $to_forget
-        }
-        
+start_cluster 3 6 {tags {external:skip cluster} overrides {cluster-allow-replica-migration no loglevel debug}} {
+    test "Don't process slot ownership updates until shard_id is initialized" {
+        # Remove one of the replicas from the cluster to be added back again later
+        cluster_forget_node 6 9
+        assert_equal [R 6 CLUSTER RESET HARD] {OK}
+
         partition_node 0
         wait_for_condition 1000 50 {
             [s -3 role] eq {master}
         } else {
             fail "Failover to node 3 didn't happen in time"
         }
-        assert_equal [R 6 cluster meet 127.0.0.1 [srv -3 port]] {OK}
-        after 3000
+        assert_equal [R 6 CLUSTER MEET 127.0.0.1 [srv -3 port]] {OK}
+        for {set i 0} {$i < 9} {incr i} {
+            if {$i == 0} continue
+            wait_for_condition 1000 50 {
+                [llength [get_cluster_nodes $i connected]] == 8
+            } else {
+                return 0
+            }
+        }
+
         assert_equal [R 6 CLUSTER REPLICATE [R 3 cluster myid]] {OK}
-        after 3000
+        wait_replica_online [srv -3 client]
 
         partition_node 3
         wait_for_condition 1000 50 {

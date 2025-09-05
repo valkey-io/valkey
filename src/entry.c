@@ -323,7 +323,7 @@ entry *entryUpdateAsStringRef(entry *entry, const char *buf, size_t len, long lo
 
     size_t expiry_size = 0;
     if (expiry != EXPIRY_NONE) expiry_size = sizeof(expiry);
-    sds new_entry = entryConstruct(alloc_size, field, value, expiry, false, SDS_TYPE_8, expiry_size, field_size, sizeof(value));
+    sds new_entry = entryConstruct(alloc_size, field, value, expiry, false, SDS_TYPE_8, expiry_size, sizeof(value), field_size);
     entryFree(entry);
 
     sdsSetAuxBit(new_entry, FIELD_SDS_AUX_BIT_ENTRY_HAS_STRING_REF, 1);

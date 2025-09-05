@@ -475,6 +475,7 @@ int test_entryStringRef(int argc, char **argv, int flags) {
     UNUSED(argc);
     UNUSED(argv);
     UNUSED(flags);
+
     sds field1 = sdsnew(SHORT_FIELD);
     sds value1 = sdsnew(SHORT_VALUE);
     sds value_copy1 = sdsdup(value1);

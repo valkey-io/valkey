@@ -6574,7 +6574,7 @@ void clusterFreeNodesSlotsInfo(clusterNode *n) {
  * of the CLUSTER NODES function, and as format for the cluster
  * configuration file (nodes.conf) for a given node. */
 sds clusterGenNodesDescription(client *c, int filter, int tls_primary) {
-    /* There is no scenario where nodes with uninitialized shard_ids need to be visible to clients. Therefore detault to excluding them. */
+    /* There is no scenario where nodes with uninitialized shard_ids need to be visible to clients. Therefore default to excluding them. */
     filter |= CLUSTER_NODE_SHARD_ID_UNINITIALIZED;
     sds ci = sdsempty(), ni;
     dictIterator *di;

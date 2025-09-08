@@ -266,8 +266,10 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster} overrides {cluste
         assert_equal [dict get $import_migration slot_ranges] 16383-16383
         assert_equal [dict get $export_migration slot_ranges] 16383-16383
 
-        assert_equal [dict get $import_migration node] [R 2 CLUSTER MYID]
-        assert_equal [dict get $export_migration node] [R 0 CLUSTER MYID]
+        assert_equal [dict get $import_migration source_node] [R 2 CLUSTER MYID]
+        assert_equal [dict get $import_migration target_node] [R 0 CLUSTER MYID]
+        assert_equal [dict get $export_migration source_node] [R 2 CLUSTER MYID]
+        assert_equal [dict get $export_migration target_node] [R 0 CLUSTER MYID]
 
         set import_create_time [dict get $import_migration create_time]
         assert {$import_create_time ne ""}

@@ -1,8 +1,9 @@
+
 [![codecov](https://codecov.io/gh/valkey-io/valkey/graph/badge.svg?token=KYYSJAYC5F)](https://codecov.io/gh/valkey-io/valkey)
 
 This project was forked from the open source Redis project right before the transition to their new source available licenses.
 
-This README is just a fast *quick start* document. More details can be found under [valkey.io](https://valkey.io/)
+This README is just a fast *quick start* document. More details can be found under [valkey.io](https://valkey.io/).
 
 # What is Valkey?
 
@@ -291,6 +292,74 @@ system reboots.
 
 You'll be able to stop and start Valkey using the script named
 `/etc/init.d/valkey_<portnumber>`, for instance `/etc/init.d/valkey_6379`.
+
+# Installing Valkey bundle
+The Valkey Bundle is a ready-to-use package that makes it easy to run Valkey in production. It includes the core Valkey server, popular modules like **ValkeySearch** (for full-text and vector search), **ValkeySON** (for working with JSON documents), and **ValkeyBloom** (for probabilistic data structures), along with default configs and tools for observability and security—so teams don’t have to piece everything together from scratch. Whether you're building a high-throughput cache, real-time pub/sub system, or experimenting with vector search, the bundle gives you a solid, pre-vetted starting point. It’s designed to reduce friction for developers while ensuring operational best practices are baked in.
+
+To get started with _valkey-bundle_:
+
+Get the latest version of the container image
+
+    docker pull valkey/valkey-bundle
+
+Run a standalone valkey using the default port
+```bash
+docker run --name my-valkey-bundle \
+    -p 6379:6379 \
+    -d valkey/valkey-bundle
+```
+
+Connect using the built-in valkey-cli:
+```bash
+docker exec -it my-valkey-bundle \
+    valkey-cli -h localhost -p 6379 -3
+```
+Once connected you can run JSON, Vector similarity search, or Bloom commands:
+
+JSON 
+```txt
+> JSON.SET user:6379 $ '{"name": "Val Key","address": {"city": "New York","zip": "10001"},"orders": [{"id": "ord1", "total": 99.99},{"id": "ord2", "total": 150.50}]}'
+OK
+```
+```txt
+> JSON.GET user:6379 '$.orders[?(@.total > 100)]'
+"[{\"id\":\"ord2\",\"total\":150.50}]"
+```
+
+Bloom
+```txt
+> BF.RESERVE non_scaling_filter 0.001 1000000 NONSCALING
+OK
+```
+```txt
+> BF.INSERT scaling_filter EXPANSION 4 ITEMS item1 item2
+1) (integer) 1
+2) (integer) 1
+```
+```txt
+> BF.INFO scaling_filter MAXSCALEDCAPACITY
+(integer) 34952500
+```
+
+Vector Similarity Search
+```txt
+> FT.CREATE productIndex \
+    ON JSON PREFIX 1 product: \
+    SCHEMA $.vector AS vector \
+    VECTOR HNSW 10 \
+        TYPE FLOAT32 \
+        DIM 20 \
+        DISTANCE_METRIC COSINE \
+        M 4 \
+        EF_CONSTRUCTION 100 \
+            $.category AS category TAG \
+            $.price AS price NUMERIC
+
+```
+```txt
+> FT.SEARCH productIndex "*=>[KNN 5 @vector $query_vector] @category:{electronics} @price:[100 500]" \
+    PARAMS 2 query_vector "$encoded_vector"
+```
 
 # Building using `CMake`
 

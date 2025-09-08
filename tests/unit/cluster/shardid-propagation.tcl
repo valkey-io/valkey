@@ -93,7 +93,7 @@ proc is_node_healthy_across_cluster {node_id_to_check nodes_to_exclude_idx} {
     return 1
 }
 
-start_cluster 3 6 {tags {external:skip cluster} overrides} {
+start_cluster 3 6 {tags {external:skip cluster} overrides {cluster-blacklist-ttl 1}} {
     test "Nodes with uninitialized shard id are excluded from topology" {
         cluster_forget_node 6 9
         assert_equal [R 6 CLUSTER RESET HARD] {OK}
@@ -127,8 +127,15 @@ start_cluster 3 6 {tags {external:skip cluster} overrides} {
         } else {
             fail "Node 0 did not become healthy across all nodes"
         }
-        # Since node 0 never receives a direct ping from node 6 and never learns its shard_id, node 6 should not be in the cluster nodes output.
-        assert {[cluster_get_node_by_id 0 $node6_id] eq {}}
+
+        # forget node 6 on all nodes other than node 0 and itself
+        for {set i 0} {$i < 9} {incr i} {
+            if {$i == 0 || $i == 6} continue
+            R $i CLUSTER FORGET $node6_id
+        }
+
+        # Assert that an entry exists for the node id with uninitialized shard.
+        assert_match "*connected*" [cluster_get_node_by_id 0 $node6_id]
 
         # Restart and assert that node 6 is still not in the cluster nodes output and in nodes.conf.
         set result [catch {R 0 DEBUG RESTART 0} err]
@@ -140,6 +147,8 @@ start_cluster 3 6 {tags {external:skip cluster} overrides} {
         } else {
             fail "Server didn't come back online in time"
         }
+
+        # Assert that nodes with uninitialized shards aren't present.
         assert {[cluster_get_node_by_id 0 $node6_id] eq {}}
     }
 }

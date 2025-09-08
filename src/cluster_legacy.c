@@ -966,7 +966,9 @@ int clusterSaveConfig(int do_fsync) {
     server.cluster->todo_before_sleep &= ~CLUSTER_TODO_SAVE_CONFIG;
 
     /* Get the nodes description and concatenate our "vars" directive to
-     * save currentEpoch and lastVoteEpoch. */
+     * save currentEpoch and lastVoteEpoch. For simplicity, uninitialized shards shouldn't be persisted in the config. 
+     * When a node bootstraps by reading the config, it can simply assume that all the nodes have shard-ids 
+     * initialized and actually learn new nodes and their shard ids via direct pings. */
     ci = clusterGenNodesDescription(NULL, CLUSTER_NODE_HANDSHAKE, 0);
     ci = sdscatfmt(ci, "vars currentEpoch %U lastVoteEpoch %U\n",
                    (unsigned long long)server.cluster->currentEpoch,
@@ -6690,8 +6692,6 @@ void clusterFreeNodesSlotsInfo(clusterNode *n) {
  * of the CLUSTER NODES function, and as format for the cluster
  * configuration file (nodes.conf) for a given node. */
 sds clusterGenNodesDescription(client *c, int filter, int tls_primary) {
-    /* There is no scenario where nodes with uninitialized shard_ids need to be visible to clients. Therefore default to excluding them. */
-    filter |= CLUSTER_NODE_SHARD_ID_UNINITIALIZED;
     sds ci = sdsempty(), ni;
     dictIterator *di;
     dictEntry *de;

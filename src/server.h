@@ -2196,6 +2196,8 @@ struct valkeyServer {
     int cluster_announce_port;                             /* base port to announce on cluster bus. */
     int cluster_announce_tls_port;                         /* TLS port to announce on cluster bus. */
     int cluster_announce_bus_port;                         /* bus port to announce on cluster bus. */
+    int cluster_announce_client_port;                      /* TCP port for clients to announce on cluster bus. */
+    int cluster_announce_client_tls_port;                  /* TLS port for clients to announce on cluster bus. */
     int cluster_module_flags;                              /* Set of flags that modules are able
                                                               to set in order to suppress certain
                                                               native Redis Cluster features. Check the

@@ -6,11 +6,6 @@
         "since": "1.2.0",
         "arity": -4,
         "function": "zrevrangeCommand",
-        "deprecated_since": "6.2.0",
-        "replaced_by": "`ZRANGE` with the `REV` argument",
-        "doc_flags": [
-            "DEPRECATED"
-        ],
         "command_flags": [
             "READONLY"
         ],

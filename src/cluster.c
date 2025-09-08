@@ -1326,7 +1326,7 @@ void clusterRedirectClient(client *c, clusterNode *n, int hashslot, int error_co
         addReplyError(c, "-CLUSTERDOWN Hash slot not served");
     } else if (error_code == CLUSTER_REDIR_MOVED || error_code == CLUSTER_REDIR_ASK) {
         /* Report TLS ports to TLS client, and report non-TLS port to non-TLS client. */
-        int port = clusterNodeClientPort(n, shouldReturnTlsInfo());
+        int port = clusterNodeClientPort(n, shouldReturnTlsInfo(), c);
         addReplyErrorSds(c,
                          sdscatprintf(sdsempty(), "-%s %d %s:%d", (error_code == CLUSTER_REDIR_ASK) ? "ASK" : "MOVED",
                                       hashslot, clusterNodePreferredEndpoint(n, c), port));
@@ -1417,7 +1417,7 @@ void addNodeToNodeReply(client *c, clusterNode *node) {
     }
 
     /* Report TLS ports to TLS client, and report non-TLS port to non-TLS client. */
-    addReplyLongLong(c, clusterNodeClientPort(node, shouldReturnTlsInfo()));
+    addReplyLongLong(c, clusterNodeClientPort(node, shouldReturnTlsInfo(), c));
     addReplyBulkCBuffer(c, clusterNodeGetName(node), CLUSTER_NAMELEN);
 
     /* Add the additional endpoint information, this is all the known networking information

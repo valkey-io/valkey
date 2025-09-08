@@ -151,19 +151,15 @@ static inline int getNodeDefaultReplicationPort(clusterNode *n) {
 }
 
 int clusterNodeClientPort(clusterNode *n, int use_tls, client *c) {
-    int port = n->tcp_port;
-    int tlsport = n->tls_port;
-
-    if (c != NULL) {
-        if (n->announce_client_tcp_port) {
-            port = n->announce_client_tcp_port;
-        }
-        if (n->announce_client_tls_port) {
-            tlsport = n->announce_client_tls_port;
-        }
+    if (use_tls && c != NULL && n->announce_client_tls_port) {
+        return n->announce_client_tls_port;
+    } else if (use_tls) {
+        return n->tls_port;
+    } else if (c != NULL && n->announce_client_tcp_port) {
+        return n->announce_client_tcp_port;
+    } else {
+        return n->tcp_port;
     }
-
-    return use_tls ? tlsport : port;
 }
 
 static inline int defaultClientPort(void) {
@@ -1061,12 +1057,11 @@ int clusterLockConfig(char *filename) {
 }
 
 /* Derives our ports to be announced in the cluster bus. */
-void deriveAnnouncedPorts(
-    int *announced_tcp_port,
-    int *announced_tls_port,
-    int *announced_cport,
-    int *announced_client_tcp_port,
-    int *announced_client_tls_port) {
+void deriveAnnouncedPorts(int *announced_tcp_port,
+                          int *announced_tls_port,
+                          int *announced_cport,
+                          int *announced_client_tcp_port,
+                          int *announced_client_tls_port) {
     /* Config overriding announced ports. */
     *announced_tcp_port = server.cluster_announce_port ? server.cluster_announce_port : server.port;
     *announced_tls_port = server.cluster_announce_tls_port ? server.cluster_announce_tls_port : server.tls_port;

@@ -1,4 +1,3 @@
-if {0} {
 tags {tls:skip external:skip cluster singledb} {
     set base_conf [list cluster-enabled yes save ""] 
     start_multiple_servers 2 [list overrides $base_conf] {
@@ -70,7 +69,7 @@ start_cluster 3 1 {tags {external:skip cluster}} {
         }
     }
 }
-}
+
 proc partition_node {id} {
     R $id DEBUG DROP-CLUSTER-PACKET-FILTER -2
     R $id DEBUG PAUSE-CRON 1

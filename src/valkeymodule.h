@@ -538,6 +538,7 @@ typedef struct ValkeyModuleEvent {
 
 struct ValkeyModuleCtx;
 struct ValkeyModuleDefragCtx;
+struct ValkeyModuleAsyncProcessingStatusCtx;
 typedef void (*ValkeyModuleEventCallback)(struct ValkeyModuleCtx *ctx,
                                           ValkeyModuleEvent eid,
                                           uint64_t subevent,
@@ -850,11 +851,13 @@ typedef struct ValkeyModuleIO ValkeyModuleIO;
 typedef struct ValkeyModuleDigest ValkeyModuleDigest;
 typedef struct ValkeyModuleInfoCtx ValkeyModuleInfoCtx;
 typedef struct ValkeyModuleDefragCtx ValkeyModuleDefragCtx;
+typedef struct ValkeyModuleAsyncProcessingStatusCtx ValkeyModuleAsyncProcessingStatusCtx;
 
 /* Function pointers needed by both the core and modules, these needs to be
  * exposed since you can't cast a function pointer to (void *). */
 typedef void (*ValkeyModuleInfoFunc)(ValkeyModuleInfoCtx *ctx, int for_crash_report);
 typedef void (*ValkeyModuleDefragFunc)(ValkeyModuleDefragCtx *ctx);
+typedef void (*ValkeyModuleAsyncProcessingStatusFunc)(ValkeyModuleAsyncProcessingStatusCtx *ctx);
 typedef void (*ValkeyModuleUserChangedFunc)(uint64_t client_id, void *privdata);
 
 /* Type definitions for implementing scripting engines modules. */
@@ -1955,6 +1958,13 @@ VALKEYMODULE_API int (*ValkeyModule_UnregisterScriptingEngine)(ValkeyModuleCtx *
 
 VALKEYMODULE_API ValkeyModuleScriptingEngineExecutionState (*ValkeyModule_GetFunctionExecutionState)(ValkeyModuleScriptingEngineServerRuntimeCtx *server_ctx) VALKEYMODULE_ATTR;
 
+VALKEYMODULE_API void (*ValkeyModule_RegisterAsyncProcessingStatusFunc)(ValkeyModuleAsyncProcessingStatusFunc func) VALKEYMODULE_ATTR;
+
+VALKEYMODULE_API void (*ValkeyModule_ReportAsyncProcessingLag)(ValkeyModuleAsyncProcessingStatusCtx *ctx, long long current_lag_millis) VALKEYMODULE_ATTR;
+
+VALKEYMODULE_API void (*ValkeyModule_ReportAsyncProcessingOffset)(ValkeyModuleAsyncProcessingStatusCtx *ctx, uint64_t accepted_offset, uint64_t applied_offset) VALKEYMODULE_ATTR;
+
+
 #define ValkeyModule_IsAOFClient(id) ((id) == UINT64_MAX)
 
 /* This is included inline inside each Valkey module. */
@@ -2326,6 +2336,9 @@ static int ValkeyModule_Init(ValkeyModuleCtx *ctx, const char *name, int ver, in
     VALKEYMODULE_GET_API(RegisterScriptingEngine);
     VALKEYMODULE_GET_API(UnregisterScriptingEngine);
     VALKEYMODULE_GET_API(GetFunctionExecutionState);
+    VALKEYMODULE_GET_API(RegisterAsyncProcessingStatusFunc);
+    VALKEYMODULE_GET_API(ReportAsyncProcessingLag);
+    VALKEYMODULE_GET_API(ReportAsyncProcessingOffset);
 
     if (ValkeyModule_IsModuleNameBusy && ValkeyModule_IsModuleNameBusy(name)) return VALKEYMODULE_ERR;
     ValkeyModule_SetModuleAttribs(ctx, name, ver, apiver);

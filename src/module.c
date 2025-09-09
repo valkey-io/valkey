@@ -503,6 +503,11 @@ typedef struct ValkeyModuleAsyncRMCallPromise {
     ValkeyModuleCtx *ctx;
 } ValkeyModuleAsyncRMCallPromise;
 
+struct ValkeyModuleAsyncProcessingStatusCtx {
+    struct ValkeyModule *module;
+    moduleAsyncProcessingReport *report;
+};
+
 /* --------------------------------------------------------------------------
  * Prototypes
  * -------------------------------------------------------------------------- */
@@ -13989,6 +13994,157 @@ int VM_GetDbIdFromDefragCtx(ValkeyModuleDefragCtx *ctx) {
     return ctx->dbid;
 }
 
+/* --------------------------------------------------------------------------
+ * ## Async Keyspace Processing Status API
+ * -------------------------------------------------------------------------- */
+
+/* Registers a callback for reporting asynchronous keyspace processing status.
+ * The callback should report on the processing status by calling the
+ * `ValkeyModule_ReportAsyncProcessing*()` functions.
+ *
+ * All modules that perform asynchronous work based on keyspace notifications or
+ * command execution should register progress functions if they wish to ensure
+ * that processing is not regressed during manual failovers and slot migrations.
+ */
+int VM_RegisterAsyncProcessingStatusFunc(ValkeyModuleCtx *ctx,
+                                         ValkeyModuleAsyncProcessingStatusFunc callback) {
+    if (!ctx->module) return VALKEYMODULE_ERR;
+    ctx->module->processing_cb = callback;
+    return VALKEYMODULE_OK;
+}
+
+/* Either create or return an existing moduleAsyncProcessingStatus for this
+ * context's module from the context's report. */
+moduleAsyncProcessingStatus *moduleAddOrFindAsyncProcessingStatus(ValkeyModuleAsyncProcessingStatusCtx *ctx) {
+    dictEntry *existing, *new;
+    new = dictAddRaw(ctx->report->module_to_processing_status, ctx->module->name, &existing);
+    if (!new) return dictGetVal(existing);
+    moduleAsyncProcessingStatus *status = zcalloc(sizeof(moduleAsyncProcessingStatus));
+    dictSetVal(ctx->report->module_to_processing_status, new, status);
+    return status;
+}
+
+/* Report an estimated number of milliseconds that new changes would take to be
+ * processed by this module.
+ *
+ * Modules may track this by periodically measuring how long new changes take to
+ * be processed. This indicator will allow the engine to estimate when it is
+ * safe to execute cross-node operations that require consistency, like manual
+ * failover and atomic slot migration.
+ *
+ * If no lag is reported, the lag is assumed to be zero.
+ */
+int VM_ReportAsyncProcessingLag(ValkeyModuleAsyncProcessingStatusCtx *ctx, long long current_lag_millis) {
+    moduleAsyncProcessingStatus *status = moduleAddOrFindAsyncProcessingStatus(ctx);
+    status->current_lag = current_lag_millis;
+    if (current_lag_millis > ctx->report->maximum_lag) ctx->report->maximum_lag = current_lag_millis;
+    return C_OK;
+}
+
+/* Report on the progress of the processing by indicating up to what change this
+ * module has accepted and what change this module has applied.
+ *
+ * The offset must adhere to the following characteristics:
+ *
+ *  1. Each change that needs to be processed by the module needs to increment
+ *     the accepted offset by at least one.
+ *  2. The applied offset must eventually converge to any previously reported
+ *     accepted offset.
+ *  3. If a module reports an accepted offset N at point in time T0, and at
+ *     time T1 reports an applied offset of N, then at time T1 the module must
+ *     have processed all changes up until time T0.
+ *
+ * Note that this offset does not need to be in any way comparable to the
+ * replication offset. The offset is only used in comparison to previously
+ * reported offsets, for example to ensure the module has fully caught up during
+ * operations that require consistency like manual failover and atomic slot
+ * migration.
+ *
+ * As an example, a module may increment the accepted offset by one whenever a
+ * change is reported by the engine, and increment the applied offset by one
+ * whenever a change is processed by the module.
+ *
+ * If no offsets are reported, the module is assumed to be fully caught up to
+ * the current state of the keyspace.
+ */
+int VM_ReportAsyncProcessingOffset(ValkeyModuleAsyncProcessingStatusCtx *ctx,
+                                   uint64_t accepted_offset,
+                                   uint64_t applied_offset) {
+    moduleAsyncProcessingStatus *status = moduleAddOrFindAsyncProcessingStatus(ctx);
+    status->accepted_offset = accepted_offset;
+    status->applied_offset = applied_offset;
+    return C_OK;
+}
+
+/* Returns a combined view of all module's current processing status, for all
+ * modules that are loaded and have set a processing status callback.
+ *
+ * The returned value should be freed with moduleReleaseAsyncProcessingReport
+ */
+moduleAsyncProcessingReport *moduleGenerateAsyncProcessingReport(void) {
+    dictIterator *di = dictGetIterator(modules);
+    dictEntry *de;
+    moduleAsyncProcessingReport *result = NULL;
+
+    while ((de = dictNext(di)) != NULL) {
+        struct ValkeyModule *module = dictGetVal(de);
+        if (!module->processing_cb) continue;
+        if (!result) {
+            result = zcalloc(sizeof(moduleAsyncProcessingReport));
+            result->module_to_processing_status = dictCreate(&sdsHashDictType);
+        }
+        ValkeyModuleAsyncProcessingStatusCtx processing_ctx = {module, result};
+        module->processing_cb(&processing_ctx);
+    }
+    dictReleaseIterator(di);
+
+    return result;
+}
+
+/* Release a previously retrieved moduleCombinedProcessingStatus. */
+void moduleReleaseAsyncProcessingReport(moduleAsyncProcessingReport *status) {
+    if (!status) return;
+    if (status->module_to_processing_status) dictRelease(status->module_to_processing_status);
+    zfree(status);
+}
+
+/* Determine if all modules have caught up to the accepted offsets in a
+ * previously generated moduleAsyncProcessingReport.
+ *
+ * Any modules that do not currently have processing callbacks or that do not
+ * report an offset in their processing callback will be skipped. Any modules
+ * not present in the previous report are skipped.
+ *
+ * This can be used to ensure modules have caught up to a point in time by:
+ *
+ *   1. Generating a processing report at time T0 and storing it somewhere
+ *   2. Polling this function with the saved report and the current report
+ *
+ * Using this pattern, when this function returns true, we know all mutations
+ * up until time T0 have been processed by all modules. */
+bool modulesAllAppliedPreviouslyAcceptedOffset(moduleAsyncProcessingReport *previous_status,
+                                               moduleAsyncProcessingReport *current_status) {
+    dictIterator *di = dictGetIterator(previous_status->module_to_processing_status);
+    dictEntry *prev_entry;
+    dictEntry *curr_entry;
+
+    bool result = true;
+    while ((prev_entry = dictNext(di)) != NULL) {
+        char *module_name = dictGetKey(prev_entry);
+        moduleAsyncProcessingStatus *prev_status = dictGetVal(prev_entry);
+        if ((curr_entry = dictFind(current_status->module_to_processing_status, module_name))) {
+            moduleAsyncProcessingStatus *curr_status = dictGetVal(curr_entry);
+            if (curr_status->applied_offset < prev_status->accepted_offset) {
+                result = false;
+                break;
+            }
+        }
+    }
+
+    dictReleaseIterator(di);
+    return result;
+}
+
 /* Register all the APIs we export. Keep this function at the end of the
  * file so that's easy to seek it to add new entries. */
 void moduleRegisterCoreAPI(void) {
@@ -14357,4 +14513,7 @@ void moduleRegisterCoreAPI(void) {
     REGISTER_API(RegisterScriptingEngine);
     REGISTER_API(UnregisterScriptingEngine);
     REGISTER_API(GetFunctionExecutionState);
+    REGISTER_API(RegisterAsyncProcessingStatusFunc);
+    REGISTER_API(ReportAsyncProcessingLag);
+    REGISTER_API(ReportAsyncProcessingOffset);
 }

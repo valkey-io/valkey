@@ -2215,8 +2215,9 @@ struct valkeyServer {
     unsigned long cluster_slot_migration_log_max_len;      /* Maximum count of migrations to display in the
                                                             * migration log, after which we will clear finished
                                                             * migrations. */
-    ssize_t slot_migration_max_failover_repl_bytes;        /* Maximum amount of in flight bytes for a slot migration
-                                                            * failover to be attempted. */
+    mstime_t slot_migration_max_lag_for_failover;          /* Maximum amount of acceptible lag between
+                                                            * source and target for a slot migration to
+                                                            * begin failover. */
     /* Debug config that goes along with cluster_drop_packet_filter. When set, the link is closed on packet drop. */
     uint32_t debug_cluster_close_link_on_packet_drop : 1;
     /* Debug config to control the random ping. When set, we will disable the random ping in clusterCron. */

@@ -323,8 +323,7 @@ int hashTypeHasStringRef(robj *o, sds field) {
  * 1. The hash field value not found.
  * 2. The provided buffer doesn't match the hash field value.
  * 3. The hash field value is already a string reference.
- * Otherwise, returns C_OK.
- */
+ * Otherwise, returns C_OK. */
 int hashTypeUpdateAsStringRef(robj *o, sds field, const char *buf, size_t len) {
     unsigned char *vstr = NULL;
     unsigned int vlen = UINT_MAX;

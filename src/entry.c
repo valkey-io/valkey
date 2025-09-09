@@ -436,7 +436,7 @@ size_t entryMemUsage(entry *entry) {
          * header could be too small for holding the real allocation size. */
         mem += zmalloc_usable_size(entryGetAllocPtr(entry));
     }
-    if (!entryHasStringRef(entry)) mem += sdsAllocSize((sds)entryGetValue(entry, NULL));
+    mem += sdsAllocSize((sds)entryGetValue(entry, NULL));
     return mem;
 }
 
@@ -448,7 +448,11 @@ size_t entryMemUsage(entry *entry) {
  * If the location of the entry changed we return the new location,
  * otherwise we return NULL. */
 entry *entryDefrag(entry *entry, void *(*defragfn)(void *), sds (*sdsdefragfn)(sds)) {
-    if (entryHasValuePtr(entry) && !entryHasStringRef(entry)) {
+    if (entryHasStringRef(entry)) {
+        stringRef **value_ref = (stringRef **)entryGetValueRef(entry);
+        stringRef *new_value = activeDefragAlloc(*value_ref);
+        if (new_value) *value_ref = new_value;
+    } else if (entryHasValuePtr(entry)) {
         sds *value_ref = (sds *)entryGetValueRef(entry);
         sds new_value = sdsdefragfn(*value_ref);
         if (new_value) *value_ref = new_value;

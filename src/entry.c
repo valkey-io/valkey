@@ -404,7 +404,7 @@ entry *entryUpdate(entry *e, sds value, long long expiry) {
         if (!update_value) {
             /* Check if the value can be reused. In case the original entry value is
              * embedded WE WILL HAVE TO DUPLICATE IT if not we have to duplicate it,
-             * remove it from the original entry since we are going to delete it.*/
+             * remove it from the original entry since we are going to delete it. */
             if (entryHasEmbeddedValue(e)) {
                 value = sdsdup(value);
             } else {

@@ -281,10 +281,11 @@ static long long activeExpireCycleJob(enum activeExpiryType jobType, int cycleTy
             case FIELDS:
                 kvs = db->keys_with_volatile_items;
                 scan_cb = fieldExpireScanCallback;
-                time_check_rate = 0x0; /* For field-level keys we check the time condition every loop iteration.
-                                        * This is required since we might perform much more operation per single key with many fields.
-                                        * Limiting the number of fields we scan in each field makes the overall process less efficient.
-                                        * So we just perform more clock checks after each iteration. */
+                /* For field-level keys we check the time condition every loop iteration.
+                 * This is required since we might perform much more operation per single key with many fields.
+                 * Limiting the number of fields we scan in each field makes the overall process less efficient.
+                 * So we just perform more clock checks after each iteration. */
+                time_check_rate = 0x0;
                 break;
             default:
                 serverPanic("Unknown active expiry job type %d.", jobType);

@@ -35,7 +35,6 @@
  * SPDX-License-Identifier: BSD-3-Clause
  */
 
-#include "expire.h"
 #include "server.h"
 #include "cluster.h"
 #include "cluster_migrateslots.h"

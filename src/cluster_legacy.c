@@ -1288,6 +1288,14 @@ static void updateShardId(clusterNode *node, const char *shard_id) {
     }
 }
 
+static void updateShardIdUsingTargetNode(clusterNode *node, clusterNode *target_shard_node) {
+    if (target_shard_node->flags & CLUSTER_NODE_SHARD_ID_UNINITIALIZED) {
+        serverLog(LL_NOTICE, "Shard id of target shard node %.40s is uninitialized. rejecting!", target_shard_node->name);
+        return;
+    }
+    updateShardId(node, target_shard_node->shard_id);
+}
+
 static inline int areInSameShard(clusterNode *node1, clusterNode *node2) {
     return memcmp(node1->shard_id, node2->shard_id, CLUSTER_NAMELEN) == 0;
 }
@@ -4069,7 +4077,7 @@ int clusterProcessPacket(clusterLink *link) {
 
                     /* Update the shard_id when a replica is connected to its
                      * primary in the very first time. */
-                    updateShardId(sender, sender_claimed_primary->shard_id);
+                    updateShardIdUsingTargetNode(sender, sender_claimed_primary);
 
                     /* Update config. */
                     clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG);
@@ -6470,7 +6478,7 @@ static void clusterSetPrimary(clusterNode *n, int closeSlots, int full_sync_requ
     }
     if (closeSlots) clusterCloseAllSlots();
     myself->replicaof = n;
-    updateShardId(myself, n->shard_id);
+    updateShardIdUsingTargetNode(myself, n);
     clusterNodeAddReplica(n, myself);
     replicationSetPrimary(n->ip, getNodeDefaultReplicationPort(n), full_sync_required);
     removeAllNotOwnedShardChannelSubscriptions();

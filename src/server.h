@@ -627,8 +627,7 @@ typedef enum { RDB_VERSION_CHECK_STRICT = 0,
 
 /* Structure representing a non-owning view of a buffer.
  * A stringRef struct does not manage the underlying memory, so its destruction
- * will not free the buffer.
- */
+ * will not free the buffer. */
 typedef struct stringRef {
     const char *buf; /* Pointer to the externalized buffer */
     size_t len;      /* Length of the buffer */

@@ -317,6 +317,7 @@ int hashTypeHasStringRef(robj *o, sds field) {
     void **entry_ref = hashtableFindRef(ht, field);
     return (entryHasStringRef(*entry_ref));
 }
+
 /* Update a hash field value with a string reference value.
  * Returns C_ERR if:
  * 1. The hash field value not found.

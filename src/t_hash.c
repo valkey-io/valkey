@@ -321,8 +321,7 @@ int hashTypeHasStringRef(robj *o, sds field) {
 /* Update a hash field value with a string reference value.
  * Returns C_ERR if:
  * 1. The hash field value not found.
- * 2. The provided buffer doesn't match the hash field value.
- * 3. The hash field value is already a string reference.
+ * 2. The hash field value is already a string reference.
  * Otherwise, returns C_OK. */
 int hashTypeUpdateAsStringRef(robj *o, sds field, const char *buf, size_t len) {
     unsigned char *vstr = NULL;
@@ -330,8 +329,6 @@ int hashTypeUpdateAsStringRef(robj *o, sds field, const char *buf, size_t len) {
     long long vll = LLONG_MAX;
 
     if (hashTypeGetValue(o, field, &vstr, &vlen, &vll, NULL) != C_OK || !vstr) return C_ERR;
-    // For safety, the provided buffer must match the entry field value
-    if (len != vlen || memcmp(buf, vstr, len) != 0) return C_ERR;
     // require HASHTABLE encoding due to aux bits and pointer storage.
     if (o->encoding == OBJ_ENCODING_LISTPACK) hashTypeConvert(o, OBJ_ENCODING_HASHTABLE);
 

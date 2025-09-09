@@ -730,7 +730,9 @@ static int isBigWordDelimiter(const char c) {
     return isspace(c);
 }
 
-static void linenoiseEditMoveWordLeft(struct linenoiseState *l, int (*isDelimiter)(char c)) {
+typedef int (*isDelimiterFunc)(char c);
+
+static void linenoiseEditMoveWordLeft(struct linenoiseState *l, const isDelimiterFunc isDelimiter) {
     if (l->pos == 0) return;
     /* Move cursor to the left over any delimiters */
     while (l->pos > 0 && isDelimiter(l->buf[l->pos - 1])) l->pos--;
@@ -739,7 +741,7 @@ static void linenoiseEditMoveWordLeft(struct linenoiseState *l, int (*isDelimite
     refreshLine(l);
 }
 
-static void linenoiseEditMoveWordRight(struct linenoiseState *l, int (*isDelimiter)(char c)) {
+static void linenoiseEditMoveWordRight(struct linenoiseState *l, const isDelimiterFunc isDelimiter) {
     if (l->pos == l->len) return;
     /* Move cursor to the right over any delimiters */
     while (l->pos < l->len && isDelimiter(l->buf[l->pos])) l->pos++;

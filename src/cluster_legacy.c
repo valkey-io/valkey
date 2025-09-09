@@ -969,7 +969,7 @@ int clusterSaveConfig(int do_fsync) {
      * save currentEpoch and lastVoteEpoch. For simplicity, uninitialized shards shouldn't be persisted in the config. 
      * When a node bootstraps by reading the config, it can simply assume that all the nodes have shard-ids 
      * initialized and actually learn new nodes and their shard ids via direct pings. */
-    ci = clusterGenNodesDescription(NULL, CLUSTER_NODE_HANDSHAKE, 0);
+    ci = clusterGenNodesDescription(NULL, CLUSTER_NODE_HANDSHAKE | CLUSTER_NODE_SHARD_ID_UNINITIALIZED, 0);
     ci = sdscatfmt(ci, "vars currentEpoch %U lastVoteEpoch %U\n",
                    (unsigned long long)server.cluster->currentEpoch,
                    (unsigned long long)server.cluster->lastVoteEpoch);

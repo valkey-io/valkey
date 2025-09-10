@@ -1643,7 +1643,7 @@ int parseOptions(int argc, char **argv) {
         } else if (!strcmp(argv[i], "--warmup")) {
             if (lastarg) goto invalid;
             config.warmup_duration = atoi(argv[++i]);
-            
+
         } else if (!strcmp(argv[i], "-k")) {
             if (lastarg) goto invalid;
             config.keepalive = atoi(argv[++i]);
@@ -2038,7 +2038,7 @@ long long showThroughput(struct aeEventLoop *eventLoop, long long id, void *clie
     }
     config.last_printed_bytes +=
         printf("%s: rps=%.1f (overall: %.1f) avg_msec=%.3f (overall: %.3f)", config.title, instantaneous_rps, rps,
-            hdr_mean(config.current_sec_latency_histogram) / 1000.0f, hdr_mean(config.latency_histogram) / 1000.0f);
+               hdr_mean(config.current_sec_latency_histogram) / 1000.0f, hdr_mean(config.latency_histogram) / 1000.0f);
     if (warmup_duration > 0 || config.duration > 0) {
         config.last_printed_bytes += printf(" %.1f seconds\r", dt);
     } else {

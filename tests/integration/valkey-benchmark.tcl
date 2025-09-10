@@ -210,13 +210,13 @@ tags {"benchmark network external:skip logreqres:skip"} {
         }
 
         test {benchmark: warmup and duration are cumulative} {
-            set start_time [clock seconds]
+            set start_time [clock clicks -millisec]
             set cmd [valkeybenchmark $master_host $master_port "-r 5 --warmup 1 --duration 1 -t set"]
             set output [common_bench_setup $cmd]
-            set end_time [clock seconds]
+            set end_time [clock clicks -millisec]
 
             # Verify total duration was at least 2 seconds
-            set elapsed [expr {$end_time - $start_time}]
+            set elapsed [expr {($end_time - $start_time)/1000.}]
             assert {$elapsed >= 2 && $elapsed <= 2.25}
 
             # Check reported duration
@@ -225,13 +225,13 @@ tags {"benchmark network external:skip logreqres:skip"} {
         }
 
         test {benchmark: warmup can be used with request count} {
-            set start_time [clock seconds]
+            set start_time [clock clicks -millisec]
             set cmd [valkeybenchmark $master_host $master_port "-r 5 --warmup 1 -n 100 -t set"]
             set output [common_bench_setup $cmd]
-            set end_time [clock seconds]
+            set end_time [clock clicks -millisec]
 
             # Verify total duration was at least 2 seconds
-            set elapsed [expr {$end_time - $start_time}]
+            set elapsed [expr {($end_time - $start_time)/1000.}]
             assert {$elapsed >= 1}
 
             # Check reported duration and command count
@@ -241,14 +241,14 @@ tags {"benchmark network external:skip logreqres:skip"} {
         }
 
         test {benchmark: duration preempts request count} {
-            set start_time [clock seconds]
+            set start_time [clock clicks -millisec]
             set cmd [valkeybenchmark $master_host $master_port "-r 5 -n 5 --duration 1 -t set"]
             common_bench_setup $cmd
-            set end_time [clock seconds]
+            set end_time [clock clicks -millisec]
 
             # Verify duration was approximately 1 second (allow some margin)
-            set elapsed [expr {$end_time - $start_time}]
-            assert {$elapsed >= 1 && $elapsed <= 1.25}
+            set elapsed [expr {($end_time - $start_time)/1000.}]
+            assert {$elapsed >= 1. && $elapsed <= 1.25}
 
              # Verify that more than 5 requests were made (proving -n was preempted)
             set calls [regexp -inline {calls=(\d+),} [cmdstat set]]

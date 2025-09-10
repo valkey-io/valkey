@@ -218,7 +218,7 @@ static long long activeExpireCycleJob(enum activeExpiryType jobType, int cycleTy
     int j, iteration = 0;
     int dbs_per_call = CRON_DBS_PER_CALL;
     int dbs_performed = 0;
-    int time_check_rate; /* Check time limit every 1/Xth of the loop. */
+    int time_check_mask; /* Check time limit when (i & mask) == 0, i.e. every (X+1)th of the loop. */
     monotime start = getMonotonicUs();
 
     if (cycleType == ACTIVE_EXPIRE_CYCLE_FAST) {

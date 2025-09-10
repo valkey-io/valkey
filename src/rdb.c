@@ -3080,6 +3080,15 @@ int rdbLoadRioWithLoadingCtxScopedRdb(rio *rdb, int rdbflags, rdbSaveInfo *rsi, 
     return retval;
 }
 
+//ven Temporary
+/* Callback used by emptyData() while flushing away old data to load
+ * the new dataset received by the primary and by discardTempDb()
+ * after loading succeeded or failed. */
+void replicationEmptyDbCallback(hashtable *d) {
+    UNUSED(d);
+    if (server.repl_state == REPL_STATE_TRANSFER) replicationSendNewlineToPrimary();
+}
+
 /* Load an RDB file from the rio stream 'rdb'. On success C_OK is returned,
  * otherwise C_ERR is returned.
  * The rdb_loading_ctx argument holds objects to which the rdb will be loaded to,
@@ -3109,12 +3118,20 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
         is_valkey_magic = true;
     } else {
         serverLog(LL_WARNING, "Wrong signature trying to load DB from file: %.9s", buf);
-        return C_ERR;
+        // Return this error so we know to terminate the sync gracefully without emptyData()
+        return RDB_INCOMPATIBLE; 
     }
     rdbver = atoi(buf + 6);
     if (!rdbIsVersionAccepted(rdbver, is_valkey_magic, is_redis_magic)) {
         serverLog(LL_WARNING, "Can't handle RDB format version %d", rdbver);
-        return C_ERR;
+        return RDB_INCOMPATIBLE;
+    }
+
+    // Only empty data if empty data flag is set
+    if (rdbflags & RDBFLAGS_EMPTY_DATA) {
+        int empty_db_flags = server.repl_replica_lazy_flush ? EMPTYDB_ASYNC : EMPTYDB_NO_FLAGS;
+        serverLog(LL_NOTICE, "RDB compatability check complete, flushing data %d", rdbver);
+        emptyData(-1, empty_db_flags, replicationEmptyDbCallback);
     }
 
     /* Key-specific attributes, set by opcodes before the key type. */

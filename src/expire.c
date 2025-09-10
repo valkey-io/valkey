@@ -276,7 +276,7 @@ static long long activeExpireCycleJob(enum activeExpiryType jobType, int cycleTy
             case KEYS:
                 kvs = db->expires;
                 scan_cb = expireScanCallback;
-                time_check_rate = 0xf; /* For regular keys we can check the time condition every 16 loop iterations */
+                time_check_mask = 0xf; /* For regular keys we can check the time condition every 16 loop iterations */
                 break;
             case FIELDS:
                 kvs = db->keys_with_volatile_items;
@@ -285,7 +285,7 @@ static long long activeExpireCycleJob(enum activeExpiryType jobType, int cycleTy
                  * This is required since we might perform much more operation per single key with many fields.
                  * Limiting the number of fields we scan in each field makes the overall process less efficient.
                  * So we just perform more clock checks after each iteration. */
-                time_check_rate = 0x0;
+                time_check_mask = 0x0;
                 break;
             default:
                 serverPanic("Unknown active expiry job type %d.", jobType);
@@ -398,7 +398,7 @@ static long long activeExpireCycleJob(enum activeExpiryType jobType, int cycleTy
                 }
             }
             /* check time limit for every FIELDS job iteration or every 16 iterations for KEYS. */
-            if ((iteration & time_check_rate) == 0) {
+            if ((iteration & time_check_mask) == 0) {
                 if (elapsedUs(start) > (uint64_t)timelimit_us) {
                     state->timelimit_exit = 1;
                     server.stat_expired_time_cap_reached_count++;

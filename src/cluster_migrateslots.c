@@ -421,6 +421,10 @@ void clusterCommandSyncSlotsEstablish(client *c) {
     clusterNode *owning_node = NULL;
     list *slot_ranges = NULL;
 
+    if (moduleVerifyAllModulesAllowAtomicSlotMigrationOrReply(c) == C_ERR) {
+        return;
+    }
+
     if (!nodeIsPrimary(server.cluster->myself)) {
         addReplyError(c, "Target node is not a primary");
         return;

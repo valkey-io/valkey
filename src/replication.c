@@ -2366,6 +2366,8 @@ int replicaLoadPrimaryRDBFromSocket(connection *conn, char *buf, char *eofmark, 
         /* We will soon start loading the RDB from socket, the replication history is changed,
          * we must discard the cached primary structure and force resync of sub-replicas. */
         replicationAttachToNewPrimary();
+        dbarray = server.db;
+        functions_lib_ctx = functionsLibCtxGetCurrent();
     }
 
     rioInitWithConn(&rdb, conn, server.repl_transfer_size);

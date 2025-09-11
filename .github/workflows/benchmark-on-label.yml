@@ -121,9 +121,9 @@ jobs:
           if [ $exit_code -eq 0 ]; then
             echo "✓ Killed running valkey processes"
           elif [ $exit_code -eq 1 ]; then
-            echo "ℹ No valkey processes found to kill"
+            echo "No valkey processes found to kill"
           else
-            echo "⚠️ Warning: pkill failed with exit code $exit_code"
+            echo "Warning: pkill failed with exit code $exit_code"
           fi
 
       - name: Remove ${{ github.event.label.name }} label

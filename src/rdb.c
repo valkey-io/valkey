@@ -3091,10 +3091,7 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
     int type, rdbver;
     uint64_t db_size = 0, expires_size = 0;
     int should_expand_db = 0;
-    if (rdb_loading_ctx->dbarray[0] == NULL) {
-        rdb_loading_ctx->dbarray[0] = createDatabase(0);
-    }
-    serverDb *db = rdb_loading_ctx->dbarray[0];
+
     char buf[1024];
     int error;
     long long empty_keys_skipped = 0;
@@ -3124,7 +3121,15 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
         int empty_db_flags = server.repl_replica_lazy_flush ? EMPTYDB_ASYNC : EMPTYDB_NO_FLAGS;
         serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync: RDB compatability check passed. Flushing old data");
         emptyData(-1, empty_db_flags, replicationEmptyDbCallback);
+
+        // Reinitialize rdbloadingcontext
+        rdb_loading_ctx->functions_lib_ctx = functionsLibCtxGetCurrent();
     }
+
+    if (rdb_loading_ctx->dbarray[0] == NULL) {
+        rdb_loading_ctx->dbarray[0] = createDatabase(0);
+    }
+    serverDb *db = rdb_loading_ctx->dbarray[0];
 
     /* Key-specific attributes, set by opcodes before the key type. */
     long long lru_idle = -1, lfu_freq = -1, expiretime = -1, now = mstime();

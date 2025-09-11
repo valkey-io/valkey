@@ -585,7 +585,9 @@ void debugCommand(client *c) {
         /* The default behavior is to remove the current dataset from
          * memory before loading the RDB file, however when MERGE is
          * used together with NOFLUSH, we are able to merge two datasets. */
-        if (flush) emptyData(-1, EMPTYDB_NO_FLAGS, NULL);
+        if (flush) {
+            flags = flags | RDBFLAGS_EMPTY_DATA;
+        }
 
         protectClient(c);
         int ret = rdbLoad(server.rdb_filename, NULL, flags);

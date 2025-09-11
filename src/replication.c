@@ -2366,13 +2366,6 @@ int replicaLoadPrimaryRDBFromSocket(connection *conn, char *buf, char *eofmark, 
         /* We will soon start loading the RDB from socket, the replication history is changed,
          * we must discard the cached primary structure and force resync of sub-replicas. */
         replicationAttachToNewPrimary();
-
-        /* Even though we are on-empty-db and the database is empty, we still call emptyData. */
-        serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync: Flushing old data");
-        emptyData(-1, empty_db_flags, replicationEmptyDbCallback);
-
-        dbarray = server.db;
-        functions_lib_ctx = functionsLibCtxGetCurrent();
     }
 
     rioInitWithConn(&rdb, conn, server.repl_transfer_size);
@@ -2386,12 +2379,19 @@ int replicaLoadPrimaryRDBFromSocket(connection *conn, char *buf, char *eofmark, 
     startLoading(server.repl_transfer_size, RDBFLAGS_REPLICATION, asyncLoading);
     if (replicationSupportSkipRDBChecksum(conn, 1, *usemark)) rdb.flags |= RIO_FLAG_SKIP_RDB_CHECKSUM;
     int loadingFailed = 0;
+    int dataFlushed = 0;
     rdbLoadingCtx loadingCtx = {.dbarray = dbarray, .functions_lib_ctx = functions_lib_ctx};
-    if (rdbLoadRioWithLoadingCtxScopedRdb(&rdb, RDBFLAGS_REPLICATION, rsi, &loadingCtx) != C_OK) {
+
+    // If we aren't using the swapdb method, then we want to empty the data before loading the rdb
+    int empty_data_flag = server.repl_diskless_load != REPL_DISKLESS_LOAD_SWAPDB ? RDBFLAGS_EMPTY_DATA : RDBFLAGS_NONE;
+    int retval = rdbLoadRioWithLoadingCtxScopedRdb(&rdb, RDBFLAGS_REPLICATION | empty_data_flag, rsi, &loadingCtx);
+    if (retval != C_OK) {
         /* RDB loading failed. */
         serverLog(LL_WARNING, "Failed trying to load the PRIMARY synchronization DB "
                               "from socket, check server logs.");
         loadingFailed = 1;
+        // If we received RDB_INCOMPATIBLE, the old data was preserved
+        dataFlushed = retval != RDB_INCOMPATIBLE;
     } else if (*usemark) {
         /* Verify the end mark is correct. */
         if (!rioRead(&rdb, buf, RDB_EOF_MARK_SIZE) || memcmp(buf, eofmark, RDB_EOF_MARK_SIZE) != 0) {
@@ -2413,9 +2413,13 @@ int replicaLoadPrimaryRDBFromSocket(connection *conn, char *buf, char *eofmark, 
             disklessLoadDiscardFunctionsLibCtx(temp_functions_lib_ctx);
             serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync: Discarding temporary DB in background");
         } else {
-            /* Remove the half-loaded data in case we started with an empty replica. */
-            serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync: Discarding the half-loaded data");
-            emptyData(-1, empty_db_flags, replicationEmptyDbCallback);
+            if (!dataFlushed) {
+                /* Remove the half-loaded data in case we started with an empty replica. */
+                serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync: Discarding the half-loaded data");
+                emptyData(-1, empty_db_flags, replicationEmptyDbCallback);
+            } else {
+                serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync: No data was loaded, skipping discard step");
+            }
         }
 
         /* Note that there's no point in restarting the AOF on SYNC

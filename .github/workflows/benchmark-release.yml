@@ -237,7 +237,7 @@ jobs:
           pkill -f valkey
           exit_code=$?
           if [ $exit_code -eq 0 ]; then
-            echo "✓ Killed running valkey processes"
+            echo "Killed running valkey processes"
           elif [ $exit_code -eq 1 ]; then
             echo "No valkey processes found to kill"
           else

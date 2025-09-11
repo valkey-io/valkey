@@ -2066,6 +2066,13 @@ void replicationSendNewlineToPrimary(void) {
     }
 }
 
+/* Callback used by emptyData() while flushing away old data to load
+ * the new dataset received by the primary and by discardTempDb()
+ * after loading succeeded or failed. */
+void replicationEmptyDbCallback(hashtable *d) {
+    UNUSED(d);
+    if (server.repl_state == REPL_STATE_TRANSFER) replicationSendNewlineToPrimary();
+}
 
 /* Once we have a link with the primary and the synchronization was
  * performed, this function materializes the primary client we store
@@ -2360,7 +2367,6 @@ int replicaLoadPrimaryRDBFromSocket(connection *conn, char *buf, char *eofmark, 
          * we must discard the cached primary structure and force resync of sub-replicas. */
         replicationAttachToNewPrimary();
 
-        //(ven) we move this logic to later
         /* Even though we are on-empty-db and the database is empty, we still call emptyData. */
         // serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync: Flushing old data");
         emptyData(-1, empty_db_flags, replicationEmptyDbCallback);
@@ -2490,13 +2496,8 @@ int replicaLoadPrimaryRDBFromDisk(rdbSaveInfo *rsi) {
      * we must discard the cached primary structure and force resync of sub-replicas. */
     replicationAttachToNewPrimary();
 
-    //(ven) we want to call this from within the rioload function
-    /* Empty the databases only after the RDB file is ok, that is, before the RDB file
-     * is actually loaded, in case we encounter an error and drop the replication stream
-     * and leave an empty database. */
-    // serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync: Flushing old data");
-    // emptyData(-1, empty_db_flags, replicationEmptyDbCallback);
-
+    /* We pass RDBFLAGS_EMPTY_DATA to call emptyData() after validating rdb compatbility 
+    * and before loading the data from the RDB */
     serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync: Loading DB in memory");
     int retval = rdbLoad(server.rdb_filename, rsi, RDBFLAGS_REPLICATION | RDBFLAGS_EMPTY_DATA);
     
@@ -2510,7 +2511,7 @@ int replicaLoadPrimaryRDBFromDisk(rdbSaveInfo *rsi) {
             bg_unlink(server.rdb_filename);
         }
 
-        //(ven) new case for handling when the rdbs were incompatible, so no data was loaded
+        /* If RDB failed compatability check, we did not load the new data set or flush our old data. */
         if (retval == RDB_INCOMPATIBLE) {
             serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync: Skipping flush, no new data was loaded.");
         } else {

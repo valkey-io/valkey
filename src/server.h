@@ -3095,6 +3095,7 @@ void unblockClientWaitingReplicas(client *c);
 int replicationCountAcksByOffset(long long offset);
 int replicationCountAOFAcksByOffset(long long offset);
 void replicationSendNewlineToPrimary(void);
+void replicationEmptyDbCallback(hashtable *d);
 long long replicationGetReplicaOffset(void);
 char *replicationGetReplicaName(client *c);
 long long getPsyncInitialOffset(void);

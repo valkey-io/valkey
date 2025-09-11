@@ -564,9 +564,6 @@ static size_t rioConnsetWrite(rio *r, const void *buf, size_t len) {
                     break;
                 }
                 nwritten += retval;
-                if (server.in_fork_child) {
-                    server.stat_net_repl_output_bytes = retval;
-                }
             }
 
             if (nwritten != count) {

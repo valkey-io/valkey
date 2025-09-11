@@ -36,6 +36,7 @@ typedef struct {
     size_t cow;
     monotime cow_updated;
     double progress;
+    size_t output;
     childInfoType information_type; /* Type of information */
 } child_info_data;
 
@@ -64,7 +65,7 @@ void closeChildInfoPipe(void) {
 }
 
 /* Send save data to parent. */
-void sendChildInfoGeneric(childInfoType info_type, size_t keys, double progress, char *pname) {
+void sendChildInfoGeneric(childInfoType info_type, size_t keys, size_t output, double progress, char *pname) {
     if (server.child_info_pipe[1] == -1) return;
 
     static monotime cow_updated = 0;
@@ -101,6 +102,7 @@ void sendChildInfoGeneric(childInfoType info_type, size_t keys, double progress,
 
     data.information_type = info_type;
     data.keys = keys;
+    data.output = output;
     data.cow = cow;
     data.cow_updated = cow_updated;
     data.progress = progress;
@@ -115,7 +117,7 @@ void sendChildInfoGeneric(childInfoType info_type, size_t keys, double progress,
 }
 
 /* Update Child info. */
-void updateChildInfo(childInfoType information_type, size_t cow, monotime cow_updated, size_t keys, double progress) {
+void updateChildInfo(childInfoType information_type, size_t cow, monotime cow_updated, size_t keys, size_t output, double progress) {
     if (cow > server.stat_current_cow_peak) server.stat_current_cow_peak = cow;
 
     if (information_type == CHILD_INFO_TYPE_CURRENT_INFO) {
@@ -130,7 +132,7 @@ void updateChildInfo(childInfoType information_type, size_t cow, monotime cow_up
     } else if (information_type == CHILD_INFO_TYPE_MODULE_COW_SIZE) {
         server.stat_module_cow_bytes = server.stat_current_cow_peak;
     } else if (information_type == CHILD_INFO_TYPE_REPL_OUTPUT_BYTES) {
-        server.stat_net_repl_output_bytes += (long long)keys;
+        server.stat_net_repl_output_bytes += (long long)output;
     }
 }
 
@@ -138,7 +140,7 @@ void updateChildInfo(childInfoType information_type, size_t cow, monotime cow_up
  * if complete data read into the buffer,
  * data is stored into *buffer, and returns 1.
  * otherwise, the partial data is left in the buffer, waiting for the next read, and returns 0. */
-int readChildInfo(childInfoType *information_type, size_t *cow, monotime *cow_updated, size_t *keys, double *progress) {
+int readChildInfo(childInfoType *information_type, size_t *cow, monotime *cow_updated, size_t *keys, size_t *output, double *progress) {
     /* We are using here a static buffer in combination with the server.child_info_nread to handle short reads */
     static child_info_data buffer;
     ssize_t wlen = sizeof(buffer);
@@ -158,6 +160,7 @@ int readChildInfo(childInfoType *information_type, size_t *cow, monotime *cow_up
         *cow = buffer.cow;
         *cow_updated = buffer.cow_updated;
         *keys = buffer.keys;
+        *output = buffer.output;
         *progress = buffer.progress;
         return 1;
     } else {
@@ -172,11 +175,12 @@ void receiveChildInfo(void) {
     size_t cow;
     monotime cow_updated;
     size_t keys;
+    size_t output;
     double progress;
     childInfoType information_type;
 
     /* Drain the pipe and update child info so that we get the final message. */
-    while (readChildInfo(&information_type, &cow, &cow_updated, &keys, &progress)) {
-        updateChildInfo(information_type, cow, cow_updated, keys, progress);
+    while (readChildInfo(&information_type, &cow, &cow_updated, &keys, &output, &progress)) {
+        updateChildInfo(information_type, cow, cow_updated, keys, output, progress);
     }
 }

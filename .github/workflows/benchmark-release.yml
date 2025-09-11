@@ -4,24 +4,24 @@ on:
   workflow_dispatch:
     inputs:
       version1:
-        description: 'First version to compare (commit SHA, branch, or tag)'
+        description: "First version to compare (commit SHA, branch, or tag)"
         required: true
         type: string
       version2:
-        description: 'Second version to compare (commit SHA, branch, or tag)'
+        description: "Second version to compare (commit SHA, branch, or tag)"
         required: true
         type: string
       issue_id:
-        description: 'Issue ID to comment results on'
+        description: "Issue ID to comment results on"
         required: true
         type: string
       config_file:
-        description: 'Benchmark configuration to use'
+        description: "Benchmark configuration to use"
         required: false
         type: choice
-        default: 'pr_benchmark.json'
+        default: "pr_benchmark.json"
         options:
-          - 'pr_benchmark.json'
+          - "pr_benchmark.json"
 
 concurrency:
   group: valkey-benchmark
@@ -46,7 +46,7 @@ jobs:
           echo "Version 2: ${{ github.event.inputs.version2 }}"
           echo "Issue ID: ${{ github.event.inputs.issue_id }}"
           echo "Config file: ${{ github.event.inputs.config_file }}"
-          
+
           # Validate issue ID is numeric
           if ! [[ "${{ github.event.inputs.issue_id }}" =~ ^[0-9]+$ ]]; then
             echo "Error: Issue ID must be a number"
@@ -65,13 +65,13 @@ jobs:
         working-directory: valkey_latest
         run: |
           echo "Building latest valkey-benchmark for latest benchmark executable..."
-          
+
           # Clean any previous builds
           make distclean || true
-          
+
           # Build valkey-benchmark with latest code
           make -j$(nproc)
-          
+
           # Verify the binary was created
           if [[ -f "src/valkey-benchmark" ]]; then
             echo "✓ Successfully built latest valkey-benchmark"
@@ -84,7 +84,7 @@ jobs:
             echo "Failed to build valkey-benchmark"
             exit 1
           fi
-          
+
           # Store the absolute path for later use
           VALKEY_BENCHMARK_PATH="$(pwd)/src/valkey-benchmark"
           echo "VALKEY_BENCHMARK_PATH=$VALKEY_BENCHMARK_PATH" >> $GITHUB_ENV
@@ -137,9 +137,9 @@ jobs:
             echo "Custom valkey-benchmark not found at: $VALKEY_BENCHMARK_PATH"
             exit 1
           fi
-          
+
           echo "Using custom valkey-benchmark from: $VALKEY_BENCHMARK_PATH"
-          
+
           # Base benchmark arguments with custom valkey-benchmark path
           BENCHMARK_ARGS=(
             --commits ${{ github.event.inputs.version1 }} ${{ github.event.inputs.version2 }}
@@ -164,25 +164,25 @@ jobs:
           # Find the actual result directories (they might have different names than input)
           VERSION1_DIR=$(find ./results -maxdepth 1 -type d -name "*${{ github.event.inputs.version1 }}*" | head -1)
           VERSION2_DIR=$(find ./results -maxdepth 1 -type d -name "*${{ github.event.inputs.version2 }}*" | head -1)
-          
+
           if [[ -z "$VERSION1_DIR" ]]; then
             echo "Could not find results for version1: ${{ github.event.inputs.version1 }}"
             echo "Available result directories:"
             ls -la ./results/
             exit 1
           fi
-          
+
           if [[ -z "$VERSION2_DIR" ]]; then
             echo "Could not find results for version2: ${{ github.event.inputs.version2 }}"
             echo "Available result directories:"
             ls -la ./results/
             exit 1
           fi
-          
+
           echo "Comparing results:"
           echo "Version 1 (${{ github.event.inputs.version1 }}): $VERSION1_DIR"
           echo "Version 2 (${{ github.event.inputs.version2 }}): $VERSION2_DIR"
-          
+
           python utils/compare_benchmark_results.py \
             "$VERSION1_DIR/metrics.json" \
             "$VERSION2_DIR/metrics.json" \
@@ -210,19 +210,19 @@ jobs:
             const version2 = '${{ github.event.inputs.version2 }}';
             const configFile = '${{ github.event.inputs.config_file }}';
             const runUrl = `https://github.com/${owner}/${repo}/actions/runs/${{ github.run_id }}`;
-            
+
             const header = `## Benchmark Comparison ${{ github.event.inputs.version1 }} vs ${{ github.event.inputs.version2 }}
-            
+
             **Versions Compared:**
             - Version 1: \`${version1}\`
             - Version 2: \`${version2}\`
-            
+
             **Config:** \`${configFile}\`
             **Workflow Run:** [View Details](${runUrl})
-            
+
             ---
             `;
-            
+
             await github.rest.issues.createComment({
               issue_number: ${{ github.event.inputs.issue_id }},
               owner,

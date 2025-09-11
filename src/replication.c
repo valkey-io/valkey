@@ -2368,7 +2368,7 @@ int replicaLoadPrimaryRDBFromSocket(connection *conn, char *buf, char *eofmark, 
         replicationAttachToNewPrimary();
 
         /* Even though we are on-empty-db and the database is empty, we still call emptyData. */
-        // serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync: Flushing old data");
+        serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync: Flushing old data");
         emptyData(-1, empty_db_flags, replicationEmptyDbCallback);
 
         dbarray = server.db;

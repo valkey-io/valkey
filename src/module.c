@@ -11880,21 +11880,21 @@ static uint64_t moduleEventVersions[] = {
  *     * `VALKEYMODULE_SUBEVENT_ATOMIC_SLOT_MIGRATION_EXPORT_ABORTED`
  *     * `VALKEYMODULE_SUBEVENT_ATOMIC_SLOT_MIGRATION_IMPORT_COMPLETED`
  *     * `VALKEYMODULE_SUBEVENT_ATOMIC_SLOT_MIGRATION_EXPORT_COMPLETED`
- * 
+ *
  *    The data pointer can be casted to ValkeyModuleAtomicSlotMigrationInfo
  *    structure with the following fields:
- * 
+ *
  *         char *job_name;                     // Unique ID for the operation (40 chars)
  *         ValkeyModuleSlotRange *slot_ranges; // Array of slot ranges involved in the operation
  *         uint32_t num_slot_ranges;           // Number of slot ranges in slot_ranges array
  *         char *source_node_id;               // Source node ID (40 chars)
  *         char *target_node_id;               // Target node ID (40 chars)
- * 
+ *
  *    The ValkeyModuleSlotRange structure has the following fields:
- * 
+ *
  *          int start; // First slot in this range, inclusive
  *          int end;   // Last slot in this range, inclusive
- * 
+ *
  *    Modules can use these notifications to track the start and end of slot
  *    migrations. Slot migrations will start with a STARTED subevent and end
  *    with a COMPLETED subevent if they are successful and ownership is

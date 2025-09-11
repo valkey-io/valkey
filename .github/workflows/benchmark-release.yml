@@ -76,7 +76,7 @@ jobs:
           if [[ -f "src/valkey-benchmark" ]]; then
             echo "✓ Successfully built latest valkey-benchmark"
             ls -la src/valkey-benchmark
-            
+
             # Test the binary
             echo "Testing valkey-benchmark binary..."
             ./src/valkey-benchmark --version || echo "Version check completed"

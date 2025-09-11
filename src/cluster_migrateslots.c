@@ -421,7 +421,7 @@ void clusterCommandSyncSlotsEstablish(client *c) {
     clusterNode *owning_node = NULL;
     list *slot_ranges = NULL;
 
-    if (moduleVerifyAllModulesAllowAtomicSlotMigrationOrReply(c) == C_ERR) {
+    if (moduleVerifyAllAllowAtomicSlotMigrationOrReply(c) == C_ERR) {
         return;
     }
 
@@ -848,7 +848,7 @@ bool clusterSlotFailoverGranted(int slot) {
  * source will attempt to migrate the slot ranges to the specified target
  * node. */
 void clusterCommandMigrateSlots(client *c) {
-    if (moduleVerifyAllModulesAllowAtomicSlotMigrationOrReply(c) == C_ERR) {
+    if (moduleVerifyAllAllowAtomicSlotMigrationOrReply(c) == C_ERR) {
         return;
     }
     if (!nodeIsPrimary(server.cluster->myself)) {

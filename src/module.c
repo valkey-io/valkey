@@ -7154,7 +7154,7 @@ int moduleAllModulesHandleReplAsyncLoad(void) {
     return 1;
 }
 
-int moduleVerifyAllModulesAllowAtomicSlotMigrationOrReply(client *c) {
+int moduleVerifyAllAllowAtomicSlotMigrationOrReply(client *c) {
     dictIterator *di = dictGetIterator(modules);
     dictEntry *de;
 
@@ -7165,6 +7165,7 @@ int moduleVerifyAllModulesAllowAtomicSlotMigrationOrReply(client *c) {
                                    "Please ensure all modules have declared support for "
                                    "atomic slot migration and try again",
                                 module->name);
+            dictReleaseIterator(di);
             return C_ERR;
         }
     }
@@ -11869,8 +11870,9 @@ static uint64_t moduleEventVersions[] = {
  * * ValkeyModuleEvent_AtomicSlotMigration
  *
  *    Called when an atomic slot migration (CLUSTER MIGRATESLOTS) is started or
- *    ended in this node. This node may be a target or a source node.
- *    The following sub events are available:
+ *    ended in this node. This node may be a target or a source node, or the
+ *    target or source might be this node's primary. The following sub events
+ *    are available:
  *
  *     * `VALKEYMODULE_SUBEVENT_ATOMIC_SLOT_MIGRATION_IMPORT_STARTED`
  *     * `VALKEYMODULE_SUBEVENT_ATOMIC_SLOT_MIGRATION_EXPORT_STARTED`
@@ -11878,6 +11880,29 @@ static uint64_t moduleEventVersions[] = {
  *     * `VALKEYMODULE_SUBEVENT_ATOMIC_SLOT_MIGRATION_EXPORT_ABORTED`
  *     * `VALKEYMODULE_SUBEVENT_ATOMIC_SLOT_MIGRATION_IMPORT_COMPLETED`
  *     * `VALKEYMODULE_SUBEVENT_ATOMIC_SLOT_MIGRATION_EXPORT_COMPLETED`
+ * 
+ *    The data pointer can be casted to ValkeyModuleAtomicSlotMigrationInfo
+ *    structure with the following fields:
+ * 
+ *         char *job_name;                     // Unique ID for the operation (40 chars)
+ *         ValkeyModuleSlotRange *slot_ranges; // Array of slot ranges involved in the operation
+ *         uint32_t num_slot_ranges;           // Number of slot ranges in slot_ranges array
+ *         char *source_node_id;               // Source node ID (40 chars)
+ *         char *target_node_id;               // Target node ID (40 chars)
+ * 
+ *    The ValkeyModuleSlotRange structure has the following fields:
+ * 
+ *          int start; // First slot in this range, inclusive
+ *          int end;   // Last slot in this range, inclusive
+ * 
+ *    Modules can use these notifications to track the start and end of slot
+ *    migrations. Slot migrations will start with a STARTED subevent and end
+ *    with a COMPLETED subevent if they are successful and ownership is
+ *    transferred, or an ABORTED subevent if they were not successful and no
+ *    ownership change was made. While a slot migration is active, modules will
+ *    see incoming commands and keyspace notifications for importing keys.
+ *    Importing keys will not be accessible to clients unless the slot migration
+ *    is COMPLETED.
  *
  * The function returns VALKEYMODULE_OK if the module was successfully subscribed
  * for the specified event. If the API is called from a wrong context or unsupported event

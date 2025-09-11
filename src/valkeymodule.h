@@ -333,7 +333,7 @@ typedef uint64_t ValkeyModuleTimerID;
 /* Declare that the module can handle atomic slot migration. When not set,
  * CLUSTER MIGRATESLOTS will return an error, and the CLUSTER SETSLOTS based
  * slot migration must be used. */
-#define VALKEYMODULE_OPTIONS_ALLOW_ATOMIC_SLOT_MIGRATION (1 << 5)
+#define VALKEYMODULE_OPTIONS_HANDLE_ATOMIC_SLOT_MIGRATION (1 << 5)
 
 /* Next option flag, must be updated when adding new module flags above!
  * This flag should not be used directly by the module.

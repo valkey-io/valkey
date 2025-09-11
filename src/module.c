@@ -2588,7 +2588,7 @@ void VM_Yield(ValkeyModuleCtx *ctx, int flags, const char *busy_reply) {
  * are affected by this option, allowing them to operate without
  * command validation check.
  *
- * VALKEYMODULE_OPTIONS_ALLOW_ATOMIC_SLOT_MIGRATION:
+ * VALKEYMODULE_OPTIONS_HANDLE_ATOMIC_SLOT_MIGRATION:
  * When set, this option indicates that the module is capable of handling
  * atomic slot migration. If not set, the module is assumed to not be aware of
  * atomic slot migration and CLUSTER MIGRATESLOTS will return an error. Modules
@@ -7160,7 +7160,7 @@ int moduleVerifyAllAllowAtomicSlotMigrationOrReply(client *c) {
 
     while ((de = dictNext(di)) != NULL) {
         struct ValkeyModule *module = dictGetVal(de);
-        if (!(module->options & VALKEYMODULE_OPTIONS_ALLOW_ATOMIC_SLOT_MIGRATION)) {
+        if (!(module->options & VALKEYMODULE_OPTIONS_HANDLE_ATOMIC_SLOT_MIGRATION)) {
             addReplyErrorFormat(c, "The module %s does not support atomic slot migrations. "
                                    "Please ensure all modules have declared support for "
                                    "atomic slot migration and try again",
@@ -12774,7 +12774,7 @@ sds genModulesInfoStringRenderModuleOptions(struct ValkeyModule *module) {
         output = sdscat(output, "handle-repl-async-load|");
     if (module->options & VALKEYMODULE_OPTION_NO_IMPLICIT_SIGNAL_MODIFIED)
         output = sdscat(output, "no-implicit-signal-modified|");
-    if (module->options & VALKEYMODULE_OPTIONS_ALLOW_ATOMIC_SLOT_MIGRATION)
+    if (module->options & VALKEYMODULE_OPTIONS_HANDLE_ATOMIC_SLOT_MIGRATION)
         output = sdscat(output, "handle-atomic-slot-migration|");
     output = sdstrim(output, "|");
     output = sdscat(output, "]");

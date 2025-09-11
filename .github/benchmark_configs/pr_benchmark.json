@@ -15,7 +15,7 @@
     "tls_mode": false,
     "warmup": 10,
     "server_cpu_range": "0",
-    "client_cpu_range": "48,49"
+    "client_cpu_range": "55,95"
   },
   {
     "requests": [1000000000],
@@ -31,7 +31,7 @@
     "tls_mode": false,
     "warmup": 10,
     "server_cpu_range": "0",
-    "client_cpu_range": "48,49"
+    "client_cpu_range": "55,95"
   },
   {
     "requests": [1000000000],
@@ -47,7 +47,7 @@
     "tls_mode": false,
     "warmup": 10,
     "io-threads": 8,
-    "server_cpu_range": "0-8",
-    "client_cpu_range": "48,49"
+    "server_cpu_range": "0-7",
+    "client_cpu_range": "55,95"
   }
 ]

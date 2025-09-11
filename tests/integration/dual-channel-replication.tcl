@@ -77,6 +77,48 @@ start_server {tags {"dual-channel-replication external:skip"}} {
                 fail "Replicas and primary offsets were unable to match."
             }
         }
+
+        test "Dual-channel replication counts snapshot bytes" {
+            wait_for_condition 50 100 {
+                [getInfoProperty [$primary info stats] "total_net_repl_output_bytes"] > 0
+            } else {
+                fail "Replication output bytes not updated"
+            }
+        }
+    }
+}
+
+start_server {tags {"dual-channel-replication external:skip"}} {
+    set replica [srv 0 client]
+    set replica_host [srv 0 host]
+    set replica_port [srv 0 port]
+    start_server {} {
+        set primary [srv 0 client]
+        set primary_host [srv 0 host]
+        set primary_port [srv 0 port]
+
+        $primary config set repl-diskless-sync yes
+        $primary config set repl-diskless-sync-delay 0
+        $primary config set dual-channel-replication-enabled yes
+
+        $replica config set repl-diskless-sync yes
+        $replica config set repl-diskless-load swapdb
+        $replica config set dual-channel-replication-enabled yes
+
+        for {set j 0} {$j < 100} {incr j} {
+            $primary set key$j [string repeat x 100]
+        }
+        $primary config resetstat
+
+        test "dual-channel replication reports rdb transfer bytes" {
+            $replica replicaof $primary_host $primary_port
+            verify_replica_online $primary 0 700
+            wait_for_condition 50 100 {
+                [getInfoProperty [$primary info stats] "total_net_repl_output_bytes"] > 1000
+            } else {
+                fail "Replication output bytes not updated"
+            }
+        }
     }
 }
 

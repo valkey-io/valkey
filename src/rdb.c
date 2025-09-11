@@ -3706,6 +3706,11 @@ int saveSnapshotToConnectionSockets(rdbSnapshotOptions options) {
             rioInitWithFd(&rdb, rdb_pipe_write);
         }
 
+        /* Child's replication output bytes starts fresh after fork. */
+        if (server.in_fork_child) {
+            server.stat_net_repl_output_bytes = 0;
+        }
+
         /* Close the reading part, so that if the parent crashes, the child will
          * get a write error and exit. */
         if (options.use_pipe) close(server.rdb_pipe_read);
@@ -3723,6 +3728,9 @@ int saveSnapshotToConnectionSockets(rdbSnapshotOptions options) {
 
         if (retval == C_OK) {
             sendChildCowInfo(CHILD_INFO_TYPE_RDB_COW_SIZE, "RDB");
+            if (!options.use_pipe) {
+                sendChildInfo(CHILD_INFO_TYPE_REPL_OUTPUT_BYTES, server.stat_net_repl_output_bytes, "RDB");
+            }
         }
         if (!options.use_pipe) {
             rioFreeConnset(&rdb);

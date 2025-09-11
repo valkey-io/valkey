@@ -129,6 +129,8 @@ void updateChildInfo(childInfoType information_type, size_t cow, monotime cow_up
         server.stat_rdb_cow_bytes = server.stat_current_cow_peak;
     } else if (information_type == CHILD_INFO_TYPE_MODULE_COW_SIZE) {
         server.stat_module_cow_bytes = server.stat_current_cow_peak;
+    } else if (information_type == CHILD_INFO_TYPE_REPL_OUTPUT_BYTES) {
+        server.stat_net_repl_output_bytes += (long long)keys;
     }
 }
 

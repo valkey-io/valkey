@@ -151,6 +151,10 @@ start_cluster 3 6 {tags {external:skip cluster}} {
 
         # Assert that nodes with uninitialized shards aren't present.
         assert {[cluster_get_node_by_id 0 $node6_id] eq {}}
+
+        for {set i 0} {$i < 9} {incr i} {
+            heal_partition $i
+        }
     }
 }
 
@@ -192,5 +196,6 @@ start_cluster 3 6 {tags {external:skip cluster} overrides {cluster-allow-replica
         } else {
             fail "node 0 hasn't learnt about the new master"
         }
+        heal_partition 3
     }
 }

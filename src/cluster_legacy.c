@@ -966,9 +966,10 @@ int clusterSaveConfig(int do_fsync) {
     server.cluster->todo_before_sleep &= ~CLUSTER_TODO_SAVE_CONFIG;
 
     /* Get the nodes description and concatenate our "vars" directive to
-     * save currentEpoch and lastVoteEpoch. For simplicity, uninitialized shards shouldn't be persisted in the config.
-     * When a node bootstraps by reading the config, it can simply assume that all the nodes have shard-ids
-     * initialized and actually learn new nodes and their shard ids via direct pings. */
+     * save currentEpoch and lastVoteEpoch. For simplicity, uninitialized shards shouldn't be
+     * persisted in the config. When a node bootstraps by reading the config, it can simply
+     * assume that all the nodes have shard-ids initialized and actually learn new nodes and
+     * their shard ids via direct pings. */
     ci = clusterGenNodesDescription(NULL, CLUSTER_NODE_HANDSHAKE | CLUSTER_NODE_SHARD_ID_UNINITIALIZED, 0);
     ci = sdscatfmt(ci, "vars currentEpoch %U lastVoteEpoch %U\n",
                    (unsigned long long)server.cluster->currentEpoch,
@@ -2746,8 +2747,9 @@ void clusterProcessGossipSection(clusterMsg *hdr, clusterLink *link) {
              * joining another cluster. */
             if (sender && !(flags & CLUSTER_NODE_NOADDR) && !clusterBlacklistExists(g->nodename, CLUSTER_NAMELEN)) {
                 clusterNode *node;
-                /* Since shard_ids are learnt only via direct PINGs, flag the node to have an uninitialized shard_id whenever a
-                 * node entry was added as part of gossip. */
+                /* Since shard_ids are learnt only via direct PINGs, flag the node to
+                 * have an uninitialized shard_id whenever a node entry was added as
+                 * part of gossip. */
                 flags |= CLUSTER_NODE_SHARD_ID_UNINITIALIZED;
                 node = createClusterNode(g->nodename, flags);
                 memcpy(node->ip, g->ip, NET_IP_STR_LEN);

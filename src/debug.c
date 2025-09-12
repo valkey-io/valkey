@@ -586,7 +586,7 @@ void debugCommand(client *c) {
          * memory before loading the RDB file, however when MERGE is
          * used together with NOFLUSH, we are able to merge two datasets. */
         if (flush) {
-            flags = flags | RDBFLAGS_EMPTY_DATA;
+            flags |= RDBFLAGS_EMPTY_DATA;
         }
 
         protectClient(c);

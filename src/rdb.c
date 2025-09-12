@@ -76,6 +76,22 @@ void rdbCheckError(const char *fmt, ...);
 void rdbCheckSetError(const char *fmt, ...);
 int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadingCtx *rdb_loading_ctx);
 
+/* Returns true if the RDB version is valid and accepted, false otherwise. This
+ * function takes configuration into account. The parameter `is_valkey_magic`
+ * indicates that an RDB file with the VALKEY magic string was parsed.
+ * `is_redis_magic` indicates a legacy RDB file with the REDIS magic string.
+ * When there is no magic string such as in DUMP/RESTORE, set both to false. */
+bool rdbIsVersionAccepted(int rdbver, bool is_valkey_magic, bool is_redis_magic) {
+    if (rdbver < 1) return false;
+    if (is_valkey_magic && rdbver <= RDB_FOREIGN_VERSION_MAX) return false;
+    if (is_redis_magic && rdbver > RDB_FOREIGN_VERSION_MAX) return false;
+    if (server.rdb_version_check == RDB_VERSION_CHECK_STRICT) {
+        if (rdbver > RDB_VERSION) return false; /* future version */
+        if (rdbIsForeignVersion(rdbver)) return false;
+    }
+    return true;
+}
+
 #ifdef __GNUC__
 void rdbReportError(int corruption_error, int linenum, char *reason, ...) __attribute__((format(printf, 3, 4)));
 #endif
@@ -1384,8 +1400,10 @@ ssize_t rdbSaveDb(rio *rdb, int dbid, int rdbflags, long *key_counter) {
         int curr_slot = kvstoreIteratorGetCurrentHashtableIndex(kvs_it);
         /* Save slot info. */
         if (server.cluster_enabled && curr_slot != last_slot) {
-            sds slot_info = sdscatprintf(sdsempty(), "%i,%lu,%lu", curr_slot, kvstoreHashtableSize(db->keys, curr_slot),
-                                         kvstoreHashtableSize(db->expires, curr_slot));
+            sds slot_info = sdscatprintf(sdsempty(), "%i,%lu,%lu,%lu", curr_slot,
+                                         kvstoreHashtableSize(db->keys, curr_slot),
+                                         kvstoreHashtableSize(db->expires, curr_slot),
+                                         kvstoreHashtableSize(db->keys_with_volatile_items, curr_slot));
             if ((res = rdbSaveAuxFieldStrStr(rdb, "slot-info", slot_info)) < 0) {
                 sdsfree(slot_info);
                 goto werr;
@@ -2875,6 +2893,10 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error) {
             return NULL;
         }
         o = createModuleObject(mt, ptr);
+    } else if (server.rdb_version_check == RDB_VERSION_CHECK_RELAXED) {
+        /* Future or foreign type. Don't report it as an internal error. */
+        if (error) *error = RDB_LOAD_ERR_UNKNOWN_TYPE;
+        return NULL;
     } else {
         rdbReportReadError("Unknown RDB encoding type %d", rdbtype);
         return NULL;
@@ -3084,10 +3106,7 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
         return C_ERR;
     }
     rdbver = atoi(buf + 6);
-    if (rdbver < 1 || (rdbver < RDB_FOREIGN_VERSION_MIN && !is_redis_magic) ||
-        (rdbver >= RDB_FOREIGN_VERSION_MIN && rdbver <= RDB_FOREIGN_VERSION_MAX) ||
-        (rdbver > RDB_FOREIGN_VERSION_MAX && !is_valkey_magic) ||
-        (rdbver > RDB_VERSION && server.rdb_version_check == RDB_VERSION_CHECK_STRICT)) {
+    if (!rdbIsVersionAccepted(rdbver, is_valkey_magic, is_redis_magic)) {
         serverLog(LL_WARNING, "Can't handle RDB format version %d", rdbver);
         return C_ERR;
     }
@@ -3102,6 +3121,13 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
 
         /* Read type. */
         if ((type = rdbLoadType(rdb)) == -1) goto eoferr;
+
+        /* Safeguard for unknown foreign opcode interpretations. */
+        if (is_redis_magic && type >= RDB_FOREIGN_TYPE_MIN && type <= RDB_FOREIGN_TYPE_MAX) {
+            serverLog(LL_WARNING, "Can't handle foreign type or opcode %d in RDB with version %d",
+                      type, rdbver);
+            return C_ERR;
+        }
 
         /* Handle special types. */
         if (type == RDB_OPCODE_EXPIRETIME) {
@@ -3155,6 +3181,19 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
             if ((expires_size = rdbLoadLen(rdb, NULL)) == RDB_LENERR) goto eoferr;
             should_expand_db = 1;
             continue; /* Read next opcode. */
+        } else if (type == RDB_OPCODE_SLOT_INFO) {
+            /* RDB slot info size annotations used in pre-8.0 and foreign RDB.
+             * See the aux field "slot-info". */
+            uint64_t slot_id, slot_size, expires_slot_size;
+            if ((slot_id = rdbLoadLen(rdb, NULL)) == RDB_LENERR) goto eoferr;
+            if ((slot_size = rdbLoadLen(rdb, NULL)) == RDB_LENERR) goto eoferr;
+            if ((expires_slot_size = rdbLoadLen(rdb, NULL)) == RDB_LENERR) goto eoferr;
+            if (server.cluster_enabled && slot_id < CLUSTER_SLOTS) {
+                if (slot_size) kvstoreHashtableExpand(db->keys, slot_id, slot_size);
+                if (expires_slot_size) kvstoreHashtableExpand(db->expires, slot_id, expires_slot_size);
+                should_expand_db = 0;
+            }
+            continue; /* Read next opcode. */
         } else if (type == RDB_OPCODE_AUX) {
             /* AUX: generic string-string fields. Use to add state to RDB
              * which is backward compatible. Implementations of RDB loading
@@ -3206,20 +3245,33 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
                 /* Just ignored. */
             } else if (!strcasecmp(auxkey->ptr, "slot-info")) {
                 int slot_id;
-                unsigned long slot_size, expires_slot_size;
+                unsigned long slot_size = 0, expires_slot_size = 0, keys_with_volatile_items_slot_size = 0;
                 /* Try to parse the slot information. In case the number of parsed arguments is smaller than expected
-                 * we'll fail the RDB load. */
-                if (sscanf(auxval->ptr, "%i,%lu,%lu", &slot_id, &slot_size, &expires_slot_size) < 3) {
+                 * we'll fail the RDB load. The use of sscanf was originally introduced in 8.0 to allow extending
+                 * the optional saved slot information in future versions without having to bump the rdb version.
+                 * This implementation should work in both upgrade and downgrade scenarios.
+                 * In case of upgrade, missing data will just be ignored an untouched by sscanf.
+                 * In case of relaxed rdb downgrade, trailing unknown data will simply be ignored.
+                 * The verification only verifies we read the fields known to exist when we first introduced the slot-info AUX field,
+                 * which are the slot number, number of keys in slot and the number of volatile keys. */
+                if (sscanf(auxval->ptr, "%i,%lu,%lu,%lu",
+                           &slot_id, &slot_size, &expires_slot_size,
+                           &keys_with_volatile_items_slot_size) < 3) {
                     decrRefCount(auxkey);
                     decrRefCount(auxval);
                     goto eoferr;
                 }
 
-                if (server.cluster_enabled) {
+                if (server.cluster_enabled && slot_id >= 0 && slot_id < CLUSTER_SLOTS) {
                     /* In cluster mode we resize individual slot specific dictionaries based on the number of keys that
                      * slot holds. */
                     if (slot_size) kvstoreHashtableExpand(db->keys, slot_id, slot_size);
                     if (expires_slot_size) kvstoreHashtableExpand(db->expires, slot_id, expires_slot_size);
+                    if (keys_with_volatile_items_slot_size) {
+                        kvstoreHashtableExpand(db->keys_with_volatile_items,
+                                               slot_id,
+                                               keys_with_volatile_items_slot_size);
+                    }
                     should_expand_db = 0;
                 }
             } else {
@@ -3352,6 +3404,10 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
             if (error == RDB_LOAD_ERR_EMPTY_KEY) {
                 if (empty_keys_skipped++ < 10) serverLog(LL_NOTICE, "rdbLoadObject skipping empty key: %s", key);
                 sdsfree(key);
+            } else if (error == RDB_LOAD_ERR_UNKNOWN_TYPE) {
+                sdsfree(key);
+                serverLog(LL_WARNING, "Unknown type or opcode when loading DB. Unrecoverable error, aborting now.");
+                return C_ERR;
             } else {
                 sdsfree(key);
                 goto eoferr;

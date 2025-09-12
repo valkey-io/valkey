@@ -121,6 +121,13 @@ int auxTcpPortPresent(clusterNode *n);
 int auxTlsPortSetter(clusterNode *n, void *value, size_t length);
 sds auxTlsPortGetter(clusterNode *n, sds s);
 int auxTlsPortPresent(clusterNode *n);
+int auxAnnounceClientTcpPortSetter(clusterNode *n, void *value, size_t length);
+sds auxAnnounceClientTcpPortGetter(clusterNode *n, sds s);
+int auxAnnounceClientTcpPortPresent(clusterNode *n);
+int auxAnnounceClientTlsPortSetter(clusterNode *n, void *value, size_t length);
+sds auxAnnounceClientTlsPortGetter(clusterNode *n, sds s);
+int auxAnnounceClientTlsPortPresent(clusterNode *n);
+int auxAnnounceClientTlsPortPresent(clusterNode *n);
 static void clusterBuildMessageHdrLight(clusterMsgLight *hdr, int type, size_t msglen);
 static void clusterBuildMessageHdr(clusterMsg *hdr, int type, size_t msglen);
 void freeClusterLink(clusterLink *link);
@@ -144,8 +151,16 @@ int getNodeDefaultReplicationPort(clusterNode *n) {
     return server.tls_replication ? n->tls_port : n->tcp_port;
 }
 
-int clusterNodeClientPort(clusterNode *n, int use_tls) {
-    return use_tls ? n->tls_port : n->tcp_port;
+int clusterNodeClientPort(clusterNode *n, int use_tls, client *c) {
+    if (use_tls && c != NULL && n->announce_client_tls_port) {
+        return n->announce_client_tls_port;
+    } else if (use_tls) {
+        return n->tls_port;
+    } else if (c != NULL && n->announce_client_tcp_port) {
+        return n->announce_client_tcp_port;
+    } else {
+        return n->tcp_port;
+    }
 }
 
 static inline int defaultClientPort(void) {
@@ -350,6 +365,8 @@ typedef enum {
     af_tls_port,
     af_announce_client_ipv4,
     af_announce_client_ipv6,
+    af_announce_client_tcp_port,
+    af_announce_client_tls_port,
     af_count, /* must be the last field */
 } auxFieldIndex;
 
@@ -364,6 +381,8 @@ auxFieldHandler auxFieldHandlers[] = {
     {"tls-port", auxTlsPortSetter, auxTlsPortGetter, auxTlsPortPresent},
     {"client-ipv4", auxAnnounceClientIpV4Setter, auxAnnounceClientIpV4Getter, auxAnnounceClientIpV4Present},
     {"client-ipv6", auxAnnounceClientIpV6Setter, auxAnnounceClientIpV6Getter, auxAnnounceClientIpV6Present},
+    {"client-tcp-port", auxAnnounceClientTcpPortSetter, auxAnnounceClientTcpPortGetter, auxAnnounceClientTcpPortPresent},
+    {"client-tls-port", auxAnnounceClientTlsPortSetter, auxAnnounceClientTlsPortGetter, auxAnnounceClientTlsPortPresent},
 };
 
 int auxShardIdSetter(clusterNode *n, void *value, size_t length) {
@@ -501,6 +520,44 @@ sds auxTlsPortGetter(clusterNode *n, sds s) {
 
 int auxTlsPortPresent(clusterNode *n) {
     return n->tls_port >= 0 && n->tls_port < 65536;
+}
+
+int auxAnnounceClientTcpPortSetter(clusterNode *n, void *value, size_t length) {
+    if (length > 5 || length < 1) {
+        return C_ERR;
+    }
+    char buf[length + 1];
+    memcpy(buf, (char *)value, length);
+    buf[length] = '\0';
+    n->announce_client_tcp_port = atoi(buf);
+    return (n->announce_client_tcp_port < 0 || n->announce_client_tcp_port >= 65536) ? C_ERR : C_OK;
+}
+
+sds auxAnnounceClientTcpPortGetter(clusterNode *n, sds s) {
+    return sdscatfmt(s, "%i", n->announce_client_tcp_port);
+}
+
+int auxAnnounceClientTcpPortPresent(clusterNode *n) {
+    return n->announce_client_tcp_port > 0 && n->announce_client_tcp_port < 65536;
+}
+
+int auxAnnounceClientTlsPortSetter(clusterNode *n, void *value, size_t length) {
+    if (length > 5 || length < 1) {
+        return C_ERR;
+    }
+    char buf[length + 1];
+    memcpy(buf, (char *)value, length);
+    buf[length] = '\0';
+    n->announce_client_tls_port = atoi(buf);
+    return (n->announce_client_tls_port < 0 || n->announce_client_tls_port >= 65536) ? C_ERR : C_OK;
+}
+
+sds auxAnnounceClientTlsPortGetter(clusterNode *n, sds s) {
+    return sdscatfmt(s, "%i", n->announce_client_tls_port);
+}
+
+int auxAnnounceClientTlsPortPresent(clusterNode *n) {
+    return n->announce_client_tls_port > 0 && n->announce_client_tls_port < 65536;
 }
 
 /* clusterLink send queue blocks */
@@ -1055,7 +1112,11 @@ int clusterLockConfig(char *filename) {
 }
 
 /* Derives our ports to be announced in the cluster bus. */
-void deriveAnnouncedPorts(int *announced_tcp_port, int *announced_tls_port, int *announced_cport) {
+void deriveAnnouncedPorts(int *announced_tcp_port,
+                          int *announced_tls_port,
+                          int *announced_cport,
+                          int *announced_client_tcp_port,
+                          int *announced_client_tls_port) {
     /* Config overriding announced ports. */
     *announced_tcp_port = server.cluster_announce_port ? server.cluster_announce_port : server.port;
     *announced_tls_port = server.cluster_announce_tls_port ? server.cluster_announce_tls_port : server.tls_port;
@@ -1067,6 +1128,9 @@ void deriveAnnouncedPorts(int *announced_tcp_port, int *announced_tls_port, int 
     } else {
         *announced_cport = defaultClientPort() + CLUSTER_PORT_INCR;
     }
+
+    *announced_client_tcp_port = server.cluster_announce_client_port;
+    *announced_client_tls_port = server.cluster_announce_client_tls_port;
 }
 
 /* Some flags (currently just the NOFAILOVER flag) may need to be updated
@@ -1093,7 +1157,8 @@ void clusterUpdateMyselfFlags(void) {
  * The option can be set at runtime via CONFIG SET. */
 void clusterUpdateMyselfAnnouncedPorts(void) {
     if (!myself) return;
-    deriveAnnouncedPorts(&myself->tcp_port, &myself->tls_port, &myself->cport);
+    deriveAnnouncedPorts(&myself->tcp_port, &myself->tls_port, &myself->cport,
+                         &myself->announce_client_tcp_port, &myself->announce_client_tls_port);
     clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG);
 }
 
@@ -1159,6 +1224,24 @@ static void updateAnnouncedClientIpV4(clusterNode *node, char *value) {
 
 static void updateAnnouncedClientIpV6(clusterNode *node, char *value) {
     updateSdsExtensionField(&node->announce_client_ipv6, value);
+}
+
+static void updateAnnouncedClientPort(clusterNode *node, int value) {
+    if (value == node->announce_client_tcp_port) {
+        return;
+    }
+
+    node->announce_client_tcp_port = value;
+    clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG);
+}
+
+static void updateAnnouncedClientTlsPort(clusterNode *node, int value) {
+    if (value == node->announce_client_tls_port) {
+        return;
+    }
+
+    node->announce_client_tls_port = value;
+    clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG);
 }
 
 static void updateShardId(clusterNode *node, const char *shard_id) {
@@ -1311,7 +1394,8 @@ void clusterInit(void) {
 
     /* Set myself->port/cport/pport to my listening ports, we'll just need to
      * discover the IP address via MEET messages. */
-    deriveAnnouncedPorts(&myself->tcp_port, &myself->tls_port, &myself->cport);
+    deriveAnnouncedPorts(&myself->tcp_port, &myself->tls_port, &myself->cport,
+                         &myself->announce_client_tcp_port, &myself->announce_client_tls_port);
 
     server.cluster->mf_end = 0;
     server.cluster->mf_replica = NULL;
@@ -1739,6 +1823,8 @@ clusterNode *createClusterNode(char *nodename, int flags) {
     node->tcp_port = 0;
     node->cport = 0;
     node->tls_port = 0;
+    node->announce_client_tcp_port = 0;
+    node->announce_client_tls_port = 0;
     node->fail_reports = raxNew();
     node->orphaned_time = 0;
     node->repl_offset = 0;
@@ -3156,6 +3242,20 @@ writeSdsPingExtIfNonempty(uint32_t *totlen_ptr, clusterMsgPingExt **cursor_ptr, 
     return 1;
 }
 
+static uint32_t
+writePortPingExtIfNonzero(uint32_t *totlen_ptr, clusterMsgPingExt **cursor_ptr, clusterMsgPingtypes type, uint16_t value) {
+    if (value == 0) return 0;
+    size_t size = getAlignedPingExtSize(sizeof(clusterMsgPingExtClientPort));
+    if (*cursor_ptr != NULL) {
+        void *ext = preparePingExt(*cursor_ptr, type, size);
+        value = htons(value);
+        memcpy(ext, &value, sizeof(value));
+        *cursor_ptr = getNextPingExt(*cursor_ptr);
+    }
+    *totlen_ptr += size;
+    return 1;
+}
+
 /* 1. If a NULL hdr is provided, compute the extension size;
  * 2. If a non-NULL hdr is provided, write the ping
  *    extensions at the start of the cursor. This function
@@ -3179,6 +3279,10 @@ static uint32_t writePingExtensions(clusterMsg *hdr, int gossipcount) {
         writeSdsPingExtIfNonempty(&totlen, &cursor, CLUSTERMSG_EXT_TYPE_CLIENT_IPV4, myself->announce_client_ipv4);
     extensions +=
         writeSdsPingExtIfNonempty(&totlen, &cursor, CLUSTERMSG_EXT_TYPE_CLIENT_IPV6, myself->announce_client_ipv6);
+    extensions +=
+        writePortPingExtIfNonzero(&totlen, &cursor, CLUSTERMSG_EXT_TYPE_CLIENT_PORT, myself->announce_client_tcp_port);
+    extensions +=
+        writePortPingExtIfNonzero(&totlen, &cursor, CLUSTERMSG_EXT_TYPE_CLIENT_TLS_PORT, myself->announce_client_tls_port);
 
     /* Gossip forgotten nodes */
     if (dictSize(server.cluster->nodes_black_list) > 0) {
@@ -3230,6 +3334,8 @@ void clusterProcessPingExtensions(clusterMsg *hdr, clusterLink *link) {
     char *ext_humannodename = NULL;
     char *ext_clientipv4 = NULL;
     char *ext_clientipv6 = NULL;
+    int ext_clientport = 0;
+    int ext_clienttlsport = 0;
     char *ext_shardid = NULL;
     uint16_t extensions = ntohs(hdr->extensions);
     /* Loop through all the extensions and process them */
@@ -3251,6 +3357,14 @@ void clusterProcessPingExtensions(clusterMsg *hdr, clusterLink *link) {
             clusterMsgPingExtClientIpV6 *clientipv6_ext =
                 (clusterMsgPingExtClientIpV6 *)&(ext->ext[0].announce_client_ipv6);
             ext_clientipv6 = clientipv6_ext->announce_client_ipv6;
+        } else if (type == CLUSTERMSG_EXT_TYPE_CLIENT_PORT) {
+            clusterMsgPingExtClientPort *clientport_ext =
+                (clusterMsgPingExtClientPort *)&(ext->ext[0].announce_client_port);
+            ext_clientport = ntohs(clientport_ext->announce_client_port);
+        } else if (type == CLUSTERMSG_EXT_TYPE_CLIENT_TLS_PORT) {
+            clusterMsgPingExtClientTlsPort *clienttlsport_ext =
+                (clusterMsgPingExtClientTlsPort *)&(ext->ext[0].announce_client_tls_port);
+            ext_clienttlsport = ntohs(clienttlsport_ext->announce_client_tls_port);
         } else if (type == CLUSTERMSG_EXT_TYPE_FORGOTTEN_NODE) {
             clusterMsgPingExtForgottenNode *forgotten_node_ext = &(ext->ext[0].forgotten_node);
             clusterNode *n = clusterLookupNode(forgotten_node_ext->name, CLUSTER_NAMELEN);
@@ -3285,6 +3399,8 @@ void clusterProcessPingExtensions(clusterMsg *hdr, clusterLink *link) {
     updateAnnouncedHumanNodename(sender, ext_humannodename);
     updateAnnouncedClientIpV4(sender, ext_clientipv4);
     updateAnnouncedClientIpV6(sender, ext_clientipv6);
+    updateAnnouncedClientPort(sender, ext_clientport);
+    updateAnnouncedClientTlsPort(sender, ext_clienttlsport);
     /* If the node did not send us a shard-id extension, it means the sender
      * does not support it (old version), node->shard_id is randomly generated.
      * A cluster-wide consensus for the node's shard_id is not necessary.
@@ -4383,8 +4499,8 @@ static void clusterBuildMessageHdr(clusterMsg *hdr, int type, size_t msglen) {
     }
 
     /* Handle cluster-announce-[tls-|bus-]port. */
-    int announced_tcp_port, announced_tls_port, announced_cport;
-    deriveAnnouncedPorts(&announced_tcp_port, &announced_tls_port, &announced_cport);
+    int announced_tcp_port, announced_tls_port, announced_cport, announced_client_tcp_port, announced_client_tls_port;
+    deriveAnnouncedPorts(&announced_tcp_port, &announced_tls_port, &announced_cport, &announced_client_tcp_port, &announced_client_tls_port);
 
     memcpy(hdr->myslots, primary->slots, sizeof(hdr->myslots));
     memset(hdr->replicaof, 0, CLUSTER_NAMELEN);
@@ -6420,7 +6536,7 @@ sds representSlotInfo(sds ci, uint16_t *slot_info_pairs, int slot_info_pairs_cou
 sds clusterGenNodeDescription(client *c, clusterNode *node, int tls_primary) {
     int j, start;
     sds ci;
-    int port = clusterNodeClientPort(node, tls_primary);
+    int port = clusterNodeClientPort(node, tls_primary, c);
     char *ip = clusterNodeIp(node, c);
 
     /* Node coordinates */
@@ -6741,13 +6857,13 @@ void addNodeDetailsToShardReply(client *c, clusterNode *node) {
 
     if (node->tcp_port) {
         addReplyBulkCString(c, "port");
-        addReplyLongLong(c, node->tcp_port);
+        addReplyLongLong(c, clusterNodeClientPort(node, false, c));
         reply_count++;
     }
 
     if (node->tls_port) {
         addReplyBulkCString(c, "tls-port");
-        addReplyLongLong(c, node->tls_port);
+        addReplyLongLong(c, clusterNodeClientPort(node, true, c));
         reply_count++;
     }
 

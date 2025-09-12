@@ -35,7 +35,7 @@
 #define __MM_MALLOC_H
 #include <immintrin.h>
 #endif
-#if defined(__aarch64__)
+#if HAVE_ARM_NEON
 #include <arm_neon.h>
 #endif
 /* -----------------------------------------------------------------------------
@@ -190,7 +190,7 @@ long long popcountScalar(void *s, long count) {
     return bits;
 }
 
-#if defined(__aarch64__)
+#if HAVE_ARM_NEON
 #include <arm_neon.h>
 
 /*  SIMD version of popcount for ARM NEON.
@@ -242,7 +242,7 @@ long long serverPopcount(void *s, long count) {
 #if HAVE_X86_SIMD
     /* If length of s >= 256 bits and the CPU supports AVX2,
      * we prefer to use the SIMD version */
-    if (count >= 32) {
+    if (count >= 32 && __builtin_cpu_supports("avx2")) {
         return popcountAVX2(s, count);
     }
 #endif

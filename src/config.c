@@ -3177,6 +3177,19 @@ static int applyClientMaxMemoryUsage(const char **err) {
     return 1;
 }
 
+#define DB_HASH_SEED_MAX_LEN 256
+static int isValidDbHashSeed(char *val, const char **err) {
+    if (val[0] == '\0') {
+        *err = "db-hash-seed can't be empty";
+        return 0;
+    }
+    if (strlen(val) > DB_HASH_SEED_MAX_LEN) {
+        *err = "db-hash-seed must be less than or equal to " STRINGIFY(DB_HASH_SEED_MAX_LEN) " characters";
+        return 0;
+    }
+    return 1;
+}
+
 standardConfig static_configs[] = {
     /* Bool configs */
     createBoolConfig("rdbchecksum", NULL, IMMUTABLE_CONFIG, server.rdb_checksum, 1, NULL, NULL),
@@ -3254,7 +3267,7 @@ standardConfig static_configs[] = {
     createStringConfig("bgsave-cpulist", "bgsave_cpulist", IMMUTABLE_CONFIG, EMPTY_STRING_IS_NULL, server.bgsave_cpulist, NULL, NULL, NULL),
     createStringConfig("ignore-warnings", NULL, MODIFIABLE_CONFIG, ALLOW_EMPTY_STRING, server.ignore_warnings, "", NULL, NULL),
     createStringConfig("proc-title-template", NULL, MODIFIABLE_CONFIG, ALLOW_EMPTY_STRING, server.proc_title_template, CONFIG_DEFAULT_PROC_TITLE_TEMPLATE, isValidProcTitleTemplate, updateProcTitleTemplate),
-    createStringConfig("db-hash-seed", NULL, IMMUTABLE_CONFIG, EMPTY_STRING_IS_NULL, server.db_hash_seed, NULL, NULL, NULL),
+    createStringConfig("db-hash-seed", NULL, IMMUTABLE_CONFIG, EMPTY_STRING_IS_NULL, server.db_hash_seed, NULL, isValidDbHashSeed, NULL),
     createStringConfig("bind-source-addr", NULL, MODIFIABLE_CONFIG, EMPTY_STRING_IS_NULL, server.bind_source_addr, NULL, NULL, NULL),
     createStringConfig("logfile", NULL, IMMUTABLE_CONFIG, ALLOW_EMPTY_STRING, server.logfile, "", NULL, NULL),
 #ifdef LOG_REQ_RES

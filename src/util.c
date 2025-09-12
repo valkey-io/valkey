@@ -1039,8 +1039,9 @@ err:
 
 void getHashSeedFromValue(unsigned char *seed_array, size_t len, const char *value) {
     size_t input_len = strlen(value);
-    size_t max_len = len > input_len ? len : input_len;
     memset(seed_array, 0, len);
+    if (input_len == 0) return;
+    size_t max_len = len > input_len ? len : input_len;
     for (size_t i = 0; i < max_len; i++) {
         seed_array[i % len] = value[i % input_len] ^ seed_array[i % len];
     }

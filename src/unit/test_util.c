@@ -348,6 +348,12 @@ int test_getHashSeedFromValue(int argc, char **argv, int flags) {
     getHashSeedFromValue(seed2, sizeof(seed2), "abc");
     TEST_ASSERT(memcmp(seed2, expected2, sizeof(seed2)) == 0);
 
+    unsigned char seed3[4];
+    getHashSeedFromValue(seed3, sizeof(seed3), "");
+    for (size_t i = 0; i < sizeof(seed3); i++) {
+        TEST_ASSERT(seed3[i] == 0);
+    }
+
     return 0;
 }
 

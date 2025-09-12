@@ -1,7 +1,7 @@
 [
   {
-    "requests": [1000000000],
-    "keyspacelen": [1000000000],
+    "requests": [100000000000],
+    "keyspacelen": [10000000],
     "data_sizes": [16],
     "pipelines": [10],
     "clients": [50],
@@ -18,8 +18,8 @@
     "client_cpu_range": "55,95"
   },
   {
-    "requests": [1000000000],
-    "keyspacelen": [1000000000],
+    "requests": [100000000000],
+    "keyspacelen": [10000000],
     "data_sizes": [16],
     "pipelines": [10],
     "clients": [50],
@@ -34,11 +34,11 @@
     "client_cpu_range": "55,95"
   },
   {
-    "requests": [1000000000],
-    "keyspacelen": [1000000000],
-    "data_sizes": [16],
+    "requests": [100000000000],
+    "keyspacelen": [3000000],
+    "data_sizes": [512],
     "pipelines": [10],
-    "clients": [50],
+    "clients": [650],
     "commands": [
       "SET",
       "GET"

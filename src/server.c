@@ -7119,7 +7119,11 @@ __attribute__((weak)) int main(int argc, char **argv) {
     umask(server.umask = umask(0777));
 
     uint8_t hashseed[16];
-    getRandomBytes(hashseed, sizeof(hashseed));
+    if (server.db_hash_seed) {
+        getHashSeedFromValue(hashseed, sizeof(hashseed), server.db_hash_seed);
+    } else {
+        getRandomBytes(hashseed, sizeof(hashseed));
+    }
     dictSetHashFunctionSeed(hashseed);
     hashtableSetHashFunctionSeed(hashseed);
 

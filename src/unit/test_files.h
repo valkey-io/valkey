@@ -199,6 +199,7 @@ int test_ld2string(int argc, char **argv, int flags);
 int test_fixedpoint_d2string(int argc, char **argv, int flags);
 int test_version2num(int argc, char **argv, int flags);
 int test_reclaimFilePageCache(int argc, char **argv, int flags);
+int test_getHashSeedFromValue(int argc, char **argv, int flags);
 int test_writePointerWithPadding(int argc, char **argv, int flags);
 int test_valkey_strtod(int argc, char **argv, int flags);
 int test_vector(int argc, char **argv, int flags);
@@ -268,7 +269,7 @@ unitTest __test_quicklist_c[] = {{"test_quicklistCreateList", test_quicklistCrea
 unitTest __test_rax_c[] = {{"test_raxRandomWalk", test_raxRandomWalk}, {"test_raxIteratorUnitTests", test_raxIteratorUnitTests}, {"test_raxTryInsertUnitTests", test_raxTryInsertUnitTests}, {"test_raxRegressionTest1", test_raxRegressionTest1}, {"test_raxRegressionTest2", test_raxRegressionTest2}, {"test_raxRegressionTest3", test_raxRegressionTest3}, {"test_raxRegressionTest4", test_raxRegressionTest4}, {"test_raxRegressionTest5", test_raxRegressionTest5}, {"test_raxRegressionTest6", test_raxRegressionTest6}, {"test_raxBenchmark", test_raxBenchmark}, {"test_raxHugeKey", test_raxHugeKey}, {"test_raxFuzz", test_raxFuzz}, {"test_raxRecompressHugeKey", test_raxRecompressHugeKey}, {NULL, NULL}};
 unitTest __test_sds_c[] = {{"test_sds", test_sds}, {"test_typesAndAllocSize", test_typesAndAllocSize}, {"test_sdsHeaderSizes", test_sdsHeaderSizes}, {"test_sdssplitargs", test_sdssplitargs}, {NULL, NULL}};
 unitTest __test_sha1_c[] = {{"test_sha1", test_sha1}, {NULL, NULL}};
-unitTest __test_util_c[] = {{"test_string2ll", test_string2ll}, {"test_string2l", test_string2l}, {"test_ll2string", test_ll2string}, {"test_ld2string", test_ld2string}, {"test_fixedpoint_d2string", test_fixedpoint_d2string}, {"test_version2num", test_version2num}, {"test_reclaimFilePageCache", test_reclaimFilePageCache}, {"test_writePointerWithPadding", test_writePointerWithPadding}, {NULL, NULL}};
+unitTest __test_util_c[] = {{"test_string2ll", test_string2ll}, {"test_string2l", test_string2l}, {"test_ll2string", test_ll2string}, {"test_ld2string", test_ld2string}, {"test_fixedpoint_d2string", test_fixedpoint_d2string}, {"test_version2num", test_version2num}, {"test_reclaimFilePageCache", test_reclaimFilePageCache}, {"test_getHashSeedFromValue", test_getHashSeedFromValue}, {"test_writePointerWithPadding", test_writePointerWithPadding}, {NULL, NULL}};
 unitTest __test_valkey_strtod_c[] = {{"test_valkey_strtod", test_valkey_strtod}, {NULL, NULL}};
 unitTest __test_vector_c[] = {{"test_vector", test_vector}, {NULL, NULL}};
 unitTest __test_vset_c[] = {{"test_vset_add_and_iterate", test_vset_add_and_iterate}, {"test_vset_large_batch_same_expiry", test_vset_large_batch_same_expiry}, {"test_vset_large_batch_update_entry_same_expiry", test_vset_large_batch_update_entry_same_expiry}, {"test_vset_large_batch_update_entry_multiple_expiries", test_vset_large_batch_update_entry_multiple_expiries}, {"test_vset_iterate_multiple_expiries", test_vset_iterate_multiple_expiries}, {"test_vset_add_and_remove_all", test_vset_add_and_remove_all}, {"test_vset_remove_expire_shrink", test_vset_remove_expire_shrink}, {"test_vset_defrag", test_vset_defrag}, {"test_vset_fuzzer", test_vset_fuzzer}, {NULL, NULL}};

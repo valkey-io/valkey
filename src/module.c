@@ -2586,7 +2586,15 @@ void VM_Yield(ValkeyModuleCtx *ctx, int flags, const char *busy_reply) {
  * to reduce overhead or handle trusted custom command logic.
  * ValkeyModule_Replicate and ValkeyModule_EmitAOF
  * are affected by this option, allowing them to operate without
- * command validation check. */
+ * command validation check.
+ *
+ * VALKEYMODULE_OPTIONS_HANDLE_ATOMIC_SLOT_MIGRATION:
+ * When set, this option indicates that the module is capable of handling
+ * atomic slot migration. If not set, the module is assumed to not be aware of
+ * atomic slot migration and CLUSTER MIGRATESLOTS will return an error. Modules
+ * should set this flag if they understand keys may be loaded during the
+ * migration but before ownership is transferred.
+ */
 void VM_SetModuleOptions(ValkeyModuleCtx *ctx, int options) {
     ctx->module->options = options;
 }
@@ -7146,6 +7154,25 @@ int moduleAllModulesHandleReplAsyncLoad(void) {
     return 1;
 }
 
+int moduleVerifyAllAllowAtomicSlotMigrationOrReply(client *c) {
+    dictIterator *di = dictGetIterator(modules);
+    dictEntry *de;
+
+    while ((de = dictNext(di)) != NULL) {
+        struct ValkeyModule *module = dictGetVal(de);
+        if (!(module->options & VALKEYMODULE_OPTIONS_HANDLE_ATOMIC_SLOT_MIGRATION)) {
+            addReplyErrorFormat(c, "The module %s does not support atomic slot migrations. "
+                                   "Please ensure all modules have declared support for "
+                                   "atomic slot migration and try again",
+                                module->name);
+            dictReleaseIterator(di);
+            return C_ERR;
+        }
+    }
+    dictReleaseIterator(di);
+    return C_OK;
+}
+
 /* Returns true if any previous IO API failed.
  * for `Load*` APIs the VALKEYMODULE_OPTIONS_HANDLE_IO_ERRORS flag must be set with
  * ValkeyModule_SetModuleOptions first. */
@@ -11514,25 +11541,26 @@ void ModuleForkDoneHandler(int exitcode, int bysignal) {
  * a data structure associated with it. We use MAX_UINT64 on purpose,
  * in order to pass the check in ValkeyModule_SubscribeToServerEvent. */
 static uint64_t moduleEventVersions[] = {
-    VALKEYMODULE_REPLICATIONINFO_VERSION,     /* VALKEYMODULE_EVENT_REPLICATION_ROLE_CHANGED */
-    -1,                                       /* VALKEYMODULE_EVENT_PERSISTENCE */
-    VALKEYMODULE_FLUSHINFO_VERSION,           /* VALKEYMODULE_EVENT_FLUSHDB */
-    -1,                                       /* VALKEYMODULE_EVENT_LOADING */
-    VALKEYMODULE_CLIENTINFO_VERSION,          /* VALKEYMODULE_EVENT_CLIENT_CHANGE */
-    -1,                                       /* VALKEYMODULE_EVENT_SHUTDOWN */
-    -1,                                       /* VALKEYMODULE_EVENT_REPLICA_CHANGE */
-    -1,                                       /* VALKEYMODULE_EVENT_PRIMARY_LINK_CHANGE */
-    VALKEYMODULE_CRON_LOOP_VERSION,           /* VALKEYMODULE_EVENT_CRON_LOOP */
-    VALKEYMODULE_MODULE_CHANGE_VERSION,       /* VALKEYMODULE_EVENT_MODULE_CHANGE */
-    VALKEYMODULE_LOADING_PROGRESS_VERSION,    /* VALKEYMODULE_EVENT_LOADING_PROGRESS */
-    VALKEYMODULE_SWAPDBINFO_VERSION,          /* VALKEYMODULE_EVENT_SWAPDB */
-    -1,                                       /* VALKEYMODULE_EVENT_REPL_BACKUP */
-    -1,                                       /* VALKEYMODULE_EVENT_FORK_CHILD */
-    -1,                                       /* VALKEYMODULE_EVENT_REPL_ASYNC_LOAD */
-    -1,                                       /* VALKEYMODULE_EVENT_EVENTLOOP */
-    -1,                                       /* VALKEYMODULE_EVENT_CONFIG */
-    VALKEYMODULE_KEYINFO_VERSION,             /* VALKEYMODULE_EVENT_KEY */
-    VALKEYMODULE_AUTHENTICATION_INFO_VERSION, /* VALKEYMODULE_EVENT_AUTHENTICATION_ATTEMPT */
+    VALKEYMODULE_REPLICATIONINFO_VERSION,          /* VALKEYMODULE_EVENT_REPLICATION_ROLE_CHANGED */
+    -1,                                            /* VALKEYMODULE_EVENT_PERSISTENCE */
+    VALKEYMODULE_FLUSHINFO_VERSION,                /* VALKEYMODULE_EVENT_FLUSHDB */
+    -1,                                            /* VALKEYMODULE_EVENT_LOADING */
+    VALKEYMODULE_CLIENTINFO_VERSION,               /* VALKEYMODULE_EVENT_CLIENT_CHANGE */
+    -1,                                            /* VALKEYMODULE_EVENT_SHUTDOWN */
+    -1,                                            /* VALKEYMODULE_EVENT_REPLICA_CHANGE */
+    -1,                                            /* VALKEYMODULE_EVENT_PRIMARY_LINK_CHANGE */
+    VALKEYMODULE_CRON_LOOP_VERSION,                /* VALKEYMODULE_EVENT_CRON_LOOP */
+    VALKEYMODULE_MODULE_CHANGE_VERSION,            /* VALKEYMODULE_EVENT_MODULE_CHANGE */
+    VALKEYMODULE_LOADING_PROGRESS_VERSION,         /* VALKEYMODULE_EVENT_LOADING_PROGRESS */
+    VALKEYMODULE_SWAPDBINFO_VERSION,               /* VALKEYMODULE_EVENT_SWAPDB */
+    -1,                                            /* VALKEYMODULE_EVENT_REPL_BACKUP */
+    -1,                                            /* VALKEYMODULE_EVENT_FORK_CHILD */
+    -1,                                            /* VALKEYMODULE_EVENT_REPL_ASYNC_LOAD */
+    -1,                                            /* VALKEYMODULE_EVENT_EVENTLOOP */
+    -1,                                            /* VALKEYMODULE_EVENT_CONFIG */
+    VALKEYMODULE_KEYINFO_VERSION,                  /* VALKEYMODULE_EVENT_KEY */
+    VALKEYMODULE_AUTHENTICATION_INFO_VERSION,      /* VALKEYMODULE_EVENT_AUTHENTICATION_ATTEMPT */
+    VALKEYMODULE_ATOMICSLOTMIGRATION_INFO_VERSION, /* VALKEYMODULE_EVENT_ATOMIC_SLOT_MIGRATION */
 };
 
 /* Register to be notified, via a callback, when the specified server event
@@ -11839,6 +11867,43 @@ static uint64_t moduleEventVersions[] = {
  *                                                    // VALKEYMODULE_AUTH_RESULT_GRANTED or
  *                                                    // VALKEYMODULE_AUTH_RESULT_DENIED
  *
+ * * ValkeyModuleEvent_AtomicSlotMigration
+ *
+ *    Called when an atomic slot migration (CLUSTER MIGRATESLOTS) is started or
+ *    ended in this node. This node may be a target or a source node, or the
+ *    target or source might be this node's primary. The following sub events
+ *    are available:
+ *
+ *     * `VALKEYMODULE_SUBEVENT_ATOMIC_SLOT_MIGRATION_IMPORT_STARTED`
+ *     * `VALKEYMODULE_SUBEVENT_ATOMIC_SLOT_MIGRATION_EXPORT_STARTED`
+ *     * `VALKEYMODULE_SUBEVENT_ATOMIC_SLOT_MIGRATION_IMPORT_ABORTED`
+ *     * `VALKEYMODULE_SUBEVENT_ATOMIC_SLOT_MIGRATION_EXPORT_ABORTED`
+ *     * `VALKEYMODULE_SUBEVENT_ATOMIC_SLOT_MIGRATION_IMPORT_COMPLETED`
+ *     * `VALKEYMODULE_SUBEVENT_ATOMIC_SLOT_MIGRATION_EXPORT_COMPLETED`
+ *
+ *    The data pointer can be casted to ValkeyModuleAtomicSlotMigrationInfo
+ *    structure with the following fields:
+ *
+ *         char *job_name;                     // Unique ID for the operation (40 chars)
+ *         ValkeyModuleSlotRange *slot_ranges; // Array of slot ranges involved in the operation
+ *         uint32_t num_slot_ranges;           // Number of slot ranges in slot_ranges array
+ *         char *source_node_id;               // Source node ID (40 chars)
+ *         char *target_node_id;               // Target node ID (40 chars)
+ *
+ *    The ValkeyModuleSlotRange structure has the following fields:
+ *
+ *          int start; // First slot in this range, inclusive
+ *          int end;   // Last slot in this range, inclusive
+ *
+ *    Modules can use these notifications to track the start and end of slot
+ *    migrations. Slot migrations will start with a STARTED subevent and end
+ *    with a COMPLETED subevent if they are successful and ownership is
+ *    transferred, or an ABORTED subevent if they were not successful and no
+ *    ownership change was made. While a slot migration is active, modules will
+ *    see incoming commands and keyspace notifications for importing keys.
+ *    Importing keys will not be accessible to clients unless the slot migration
+ *    is COMPLETED.
+ *
  * The function returns VALKEYMODULE_OK if the module was successfully subscribed
  * for the specified event. If the API is called from a wrong context or unsupported event
  * is given then VALKEYMODULE_ERR is returned. */
@@ -11989,6 +12054,8 @@ void moduleFireServerEvent(uint64_t eid, int subid, void *data) {
                 moduleInitKey(&key, &ctx, info->key, info->value, info->mode);
                 moduledata = &ki;
             } else if (eid == VALKEYMODULE_EVENT_AUTHENTICATION_ATTEMPT) {
+                moduledata = data;
+            } else if (eid == VALKEYMODULE_EVENT_ATOMIC_SLOT_MIGRATION) {
                 moduledata = data;
             }
 
@@ -12707,6 +12774,8 @@ sds genModulesInfoStringRenderModuleOptions(struct ValkeyModule *module) {
         output = sdscat(output, "handle-repl-async-load|");
     if (module->options & VALKEYMODULE_OPTION_NO_IMPLICIT_SIGNAL_MODIFIED)
         output = sdscat(output, "no-implicit-signal-modified|");
+    if (module->options & VALKEYMODULE_OPTIONS_HANDLE_ATOMIC_SLOT_MIGRATION)
+        output = sdscat(output, "handle-atomic-slot-migration|");
     output = sdstrim(output, "|");
     output = sdscat(output, "]");
     return output;

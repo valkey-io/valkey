@@ -53,7 +53,9 @@ typedef struct slotMigrationJob {
     time_t last_update;                       /* Migration job last update
                                                * time. */
     time_t last_ack;                          /* Migration job last ack time. */
-    char nodename[CLUSTER_NAMELEN];           /* Name of the slot import source
+    char target_node_name[CLUSTER_NAMELEN];   /* Name of the slot import target
+                                               * node, hex string, sha1-size. */
+    char source_node_name[CLUSTER_NAMELEN];   /* Name of the slot import source
                                                * node, hex string, sha1-size. */
     char name[CLUSTER_NAMELEN];               /* Unique name for the job, hex
                                                * string, sha1-size. */
@@ -330,6 +332,23 @@ cleanup:
     return NULL;
 }
 
+void fireModuleSlotMigrationEvent(slotMigrationJob *job, int subevent) {
+    ValkeyModuleAtomicSlotMigrationInfo info = VALKEYMODULE_ATOMICSLOTMIGRATIONINFO_INITIALIZER_V1;
+    info.num_slot_ranges = job->slot_ranges->len;
+    info.slot_ranges = zmalloc(sizeof(ValkeyModuleSlotRange) * info.num_slot_ranges);
+    for (uint32_t i = 0; i < info.num_slot_ranges; i++) {
+        listNode *ln = listIndex(job->slot_ranges, i);
+        slotRange *range = (slotRange *)ln->value;
+        info.slot_ranges[i].start = range->start_slot;
+        info.slot_ranges[i].end = range->end_slot;
+    }
+    memcpy(info.source_node_id, job->source_node_name, CLUSTER_NAMELEN);
+    memcpy(info.target_node_id, job->target_node_name, CLUSTER_NAMELEN);
+    memcpy(info.job_name, job->name, CLUSTER_NAMELEN);
+    moduleFireServerEvent(VALKEYMODULE_EVENT_ATOMIC_SLOT_MIGRATION, subevent, &info);
+    zfree(info.slot_ranges);
+}
+
 /* -------------------------------- TARGET -------------------------------------
  *
  * During a slot migration, the target is informed of a migration by the source
@@ -401,6 +420,10 @@ void clusterCommandSyncSlotsEstablish(client *c) {
     clusterNode *source_node = NULL;
     clusterNode *owning_node = NULL;
     list *slot_ranges = NULL;
+
+    if (moduleVerifyAllAllowAtomicSlotMigrationOrReply(c) == C_ERR) {
+        return;
+    }
 
     if (!nodeIsPrimary(server.cluster->myself)) {
         addReplyError(c, "Target node is not a primary");
@@ -494,6 +517,7 @@ void clusterCommandSyncSlotsEstablish(client *c) {
 
     slotMigrationJob *job = createSlotImportJob(c, source_node, name,
                                                 slot_ranges);
+    fireModuleSlotMigrationEvent(job, VALKEYMODULE_SUBEVENT_ATOMIC_SLOT_MIGRATION_IMPORT_STARTED);
     listAddNodeHead(server.cluster->slot_migration_jobs, job);
 
     clusterDoBeforeSleep(CLUSTER_TODO_HANDLE_SLOT_MIGRATION);
@@ -589,7 +613,8 @@ slotMigrationJob *createSlotImportJob(client *c,
                                       list *slot_ranges) {
     slotMigrationJob *job = zcalloc(sizeof(slotMigrationJob));
     memcpy(job->name, name, CLUSTER_NAMELEN);
-    memcpy(job->nodename, source_node->name, CLUSTER_NAMELEN);
+    memcpy(job->source_node_name, source_node->name, CLUSTER_NAMELEN);
+    memcpy(job->target_node_name, server.cluster->myself->name, CLUSTER_NAMELEN);
     job->ctime = server.unixtime;
     job->last_update = job->ctime;
     job->last_ack = job->ctime;
@@ -688,7 +713,7 @@ void clusterUpdateSlotImportsOnOwnershipChange(void) {
             continue;
         }
         clusterNode *n = getClusterNodeBySlotRanges(job->slot_ranges, NULL);
-        if (n && !memcmp(n->name, job->nodename, CLUSTER_NAMELEN)) continue;
+        if (n && !memcmp(n->name, job->source_node_name, CLUSTER_NAMELEN)) continue;
         if (n == server.cluster->myself) {
             finishSlotMigrationJob(job, SLOT_MIGRATION_JOB_FAILED,
                                    "Slots were unexpectedly assigned to myself "
@@ -823,6 +848,9 @@ bool clusterSlotFailoverGranted(int slot) {
  * source will attempt to migrate the slot ranges to the specified target
  * node. */
 void clusterCommandMigrateSlots(client *c) {
+    if (moduleVerifyAllAllowAtomicSlotMigrationOrReply(c) == C_ERR) {
+        return;
+    }
     if (!nodeIsPrimary(server.cluster->myself)) {
         addReplyError(c, "Slot migration can only be used on primary nodes.");
         return;
@@ -925,6 +953,7 @@ void clusterCommandMigrateSlots(client *c) {
                   "Slot migration initiated through CLUSTER MIGRATESLOTS "
                   "command: %s (user request from '%s')",
                   job->description, client_info);
+        fireModuleSlotMigrationEvent(job, VALKEYMODULE_SUBEVENT_ATOMIC_SLOT_MIGRATION_EXPORT_STARTED);
         proceedWithSlotMigration(job);
     }
     listSetFreeMethod(new_slot_migrations, NULL);
@@ -989,7 +1018,7 @@ void slotExportConnectHandler(connection *conn) {
 /* Connect the given job to the target node. The created connection will have
  * the job as private data. */
 int connectSlotExportJob(slotMigrationJob *job) {
-    clusterNode *n = clusterLookupNode(job->nodename, CLUSTER_NAMELEN);
+    clusterNode *n = clusterLookupNode(job->target_node_name, CLUSTER_NAMELEN);
     int port = getNodeDefaultReplicationPort(n);
     serverLog(LL_NOTICE, "Connecting slot migration %s (ip: %s, port %d)",
               job->description,
@@ -1373,7 +1402,7 @@ int checkSlotExportOwnership(slotMigrationJob *job, bool *migration_done) {
     if (n) {
         if (n == server.cluster->myself) {
             return C_OK;
-        } else if (!memcmp(n->name, job->nodename, CLUSTER_NAMELEN)) {
+        } else if (!memcmp(n->name, job->target_node_name, CLUSTER_NAMELEN)) {
             *migration_done = true;
             serverLog(LL_NOTICE,
                       "Slot migration %s slots are now owned by target node.",
@@ -1469,7 +1498,8 @@ slotMigrationJob *createSlotExportJob(clusterNode *target_node,
     job->slot_ranges = slot_ranges;
     job->slot_ranges_str = representSlotRangeList(slot_ranges);
     getRandomHexChars(job->name, sizeof(job->name));
-    memcpy(job->nodename, target_node->name, CLUSTER_NAMELEN);
+    memcpy(job->target_node_name, target_node->name, CLUSTER_NAMELEN);
+    memcpy(job->source_node_name, server.cluster->myself->name, CLUSTER_NAMELEN);
     job->description = generateSlotMigrationJobDescription(job, target_node);
     return job;
 }
@@ -1578,6 +1608,7 @@ void proceedWithSlotMigration(slotMigrationJob *job) {
             delKeysNotOwnedByMyself(job->slot_ranges);
             setSlotImportingStateInAllDbs(job->slot_ranges, 0);
             updateSlotMigrationJobState(job, job->post_cleanup_state);
+            fireModuleSlotMigrationEvent(job, VALKEYMODULE_SUBEVENT_ATOMIC_SLOT_MIGRATION_IMPORT_ABORTED);
             return;
 
         /* Exporting states */
@@ -1912,7 +1943,7 @@ void finishSlotMigrationJob(slotMigrationJob *job,
         if (job->state == SLOT_EXPORT_SNAPSHOTTING) killRDBChild();
     }
     if (job->type == SLOT_MIGRATION_IMPORT &&
-        job->state != SLOT_MIGRATION_JOB_SUCCESS) {
+        state != SLOT_MIGRATION_JOB_SUCCESS) {
         /* Defer cleanup until beforeSleep. */
         job->post_cleanup_state = state;
         state = SLOT_IMPORT_FINISHED_WAITING_TO_CLEANUP;
@@ -1920,6 +1951,18 @@ void finishSlotMigrationJob(slotMigrationJob *job,
     }
     updateSlotMigrationJobState(job, state);
     resetSlotMigrationJob(job);
+    if (job->type == SLOT_MIGRATION_EXPORT) {
+        if (state == SLOT_MIGRATION_JOB_SUCCESS) {
+            fireModuleSlotMigrationEvent(job, VALKEYMODULE_SUBEVENT_ATOMIC_SLOT_MIGRATION_EXPORT_COMPLETED);
+        } else {
+            fireModuleSlotMigrationEvent(job, VALKEYMODULE_SUBEVENT_ATOMIC_SLOT_MIGRATION_EXPORT_ABORTED);
+        }
+    } else {
+        if (state == SLOT_MIGRATION_JOB_SUCCESS) {
+            fireModuleSlotMigrationEvent(job, VALKEYMODULE_SUBEVENT_ATOMIC_SLOT_MIGRATION_IMPORT_COMPLETED);
+        }
+        /* Aborted notifications will be fired after cleanup completes. */
+    }
 }
 
 /* Finished means we are completely done with all work and this entry is just
@@ -1954,7 +1997,7 @@ void clusterCommandGetSlotMigrations(client *c) {
     listRewind(server.cluster->slot_migration_jobs, &li);
     while ((ln = listNext(&li)) != NULL) {
         slotMigrationJob *job = ln->value;
-        addReplyMapLen(c, 9);
+        addReplyMapLen(c, 10);
         addReplyBulkCString(c, "name");
         addReplyBulkCBuffer(c, job->name, CLUSTER_NAMELEN);
         addReplyBulkCString(c, "operation");
@@ -1963,8 +2006,10 @@ void clusterCommandGetSlotMigrations(client *c) {
                                    : "EXPORT");
         addReplyBulkCString(c, "slot_ranges");
         addReplyBulkCString(c, job->slot_ranges_str);
-        addReplyBulkCString(c, "node");
-        addReplyBulkCBuffer(c, job->nodename, CLUSTER_NAMELEN);
+        addReplyBulkCString(c, "target_node");
+        addReplyBulkCBuffer(c, job->target_node_name, CLUSTER_NAMELEN);
+        addReplyBulkCString(c, "source_node");
+        addReplyBulkCBuffer(c, job->source_node_name, CLUSTER_NAMELEN);
         addReplyBulkCString(c, "create_time");
         addReplyLongLong(c, job->ctime);
         addReplyBulkCString(c, "last_update_time");

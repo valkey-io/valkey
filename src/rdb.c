@@ -3108,7 +3108,7 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
         is_valkey_magic = true;
     } else {
         serverLog(LL_WARNING, "Wrong signature trying to load DB from file: %.9s", buf);
-        /* Signal to terminate gracefully without clearing existing data */
+        /* Signal to terminate the rdbLoad without clearing existing data */
         return RDB_INCOMPATIBLE; 
     }
     rdbver = atoi(buf + 6);
@@ -3120,7 +3120,7 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
     /* Only empty data if RDBFLAGS_EMPTY_DATA is set */
     if (rdbflags & RDBFLAGS_EMPTY_DATA) {
         int empty_db_flags = server.repl_replica_lazy_flush ? EMPTYDB_ASYNC : EMPTYDB_NO_FLAGS;
-        serverLog(LL_NOTICE, "RDB compatability check passed. Flushing old data");
+        serverLog(LL_NOTICE, "RDB signature and version check passed. Flushing old data");
         emptyData(-1, empty_db_flags, replicationEmptyDbCallback);
 
         /* functionsLibCtx is cleared when we call emptyData, reinitialize here. */

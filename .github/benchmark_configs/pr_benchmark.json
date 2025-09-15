@@ -13,7 +13,7 @@
     ],
     "cluster_mode": false,
     "tls_mode": false,
-    "warmup": 10,
+    "warmup": 180,
     "server_cpu_range": "0",
     "client_cpu_range": "55,95"
   },
@@ -29,7 +29,7 @@
     ],
     "cluster_mode": true,
     "tls_mode": false,
-    "warmup": 10,
+    "warmup": 180,
     "server_cpu_range": "0",
     "client_cpu_range": "55,95"
   },
@@ -45,7 +45,7 @@
     ],
     "cluster_mode": false,
     "tls_mode": false,
-    "warmup": 10,
+    "warmup": 300,
     "io-threads": 8,
     "server_cpu_range": "0-7",
     "client_cpu_range": "55,95"

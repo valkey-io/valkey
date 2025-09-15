@@ -148,6 +148,8 @@ void hashtableSetResizePolicy(hashtableResizePolicy policy) {
 #define ENTRIES_PER_BUCKET 7
 #define BUCKET_BITS_TYPE uint8_t
 #define BITS_NEEDED_TO_STORE_POS_WITHIN_BUCKET 3
+/* Iterator table value indicating iteration is complete */
+#define HASHTABLE_ITER_END_TABLE 2
 
 /* Selecting the number of buckets.
  *
@@ -2025,6 +2027,12 @@ void hashtableReleaseIterator(hashtableIterator *iterator) {
  * Returns false if there are no more entries. */
 bool hashtableNext(hashtableIterator *iterator, void **elemptr) {
     iter *iter = iteratorFromOpaque(iterator);
+
+    assert(iter->table <= HASHTABLE_ITER_END_TABLE);
+    if (iter->table == HASHTABLE_ITER_END_TABLE) {
+        return false;
+    }
+
     while (1) {
         if (iter->index == -1 && iter->table == 0) {
             /* It's the first call to next. */
@@ -2102,6 +2110,7 @@ bool hashtableNext(hashtableIterator *iterator, void **elemptr) {
         }
         return true;
     }
+    iter->table = HASHTABLE_ITER_END_TABLE;
     return false;
 }
 

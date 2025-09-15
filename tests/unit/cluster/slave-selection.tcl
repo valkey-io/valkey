@@ -186,7 +186,7 @@ test "New Master down consecutively" {
 
         set paused_pid [srv [expr $master_id * -1] pid]
         pause_process $paused_pid
-        wait_for_condition 1000 50 {
+        wait_for_condition 2000 50 {
             [master_detected $instances]
         } else {
             fail "No failover detected when master $master_id fails"

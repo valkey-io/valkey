@@ -39,8 +39,13 @@
                         "type": "string",
                         "pattern": "^([0-9]+-[0-9]+)( [0-9]+-[0-9]+)*$"
                     },
-                    "node": {
-                        "description": "The source node name in an import job or the target node name in an export job.",
+                    "target_node": {
+                        "description": "The target node name in the migration job.",
+                        "type": "string",
+                        "pattern": "^[0-9a-fA-F]{40}$"
+                    },
+                    "source_node": {
+                        "description": "The source node name in the migration job.",
                         "type": "string",
                         "pattern": "^[0-9a-fA-F]{40}$"
                     },

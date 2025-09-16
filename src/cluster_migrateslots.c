@@ -2085,7 +2085,7 @@ void clusterCommandGetSlotMigrations(client *c) {
     listRewind(server.cluster->slot_migration_jobs, &li);
     while ((ln = listNext(&li)) != NULL) {
         slotMigrationJob *job = ln->value;
-        addReplyMapLen(c, 10);
+        addReplyMapLen(c, 11);
         addReplyBulkCString(c, "name");
         addReplyBulkCBuffer(c, job->name, CLUSTER_NAMELEN);
         addReplyBulkCString(c, "operation");

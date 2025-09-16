@@ -1660,6 +1660,7 @@ typedef enum childInfoType {
     CHILD_INFO_TYPE_RDB_COW_SIZE,
     CHILD_INFO_TYPE_MODULE_COW_SIZE,
     CHILD_INFO_TYPE_SLOT_MIGRATION_COW_SIZE,
+    CHILD_INFO_TYPE_REPL_OUTPUT_BYTES
 } childInfoType;
 
 struct valkeyServer {
@@ -3166,7 +3167,7 @@ int rewriteSlotToAppendOnlyFileRio(rio *aof, int db_num, int hashslot, size_t *k
 /* Child info */
 void openChildInfoPipe(void);
 void closeChildInfoPipe(void);
-void sendChildInfoGeneric(childInfoType info_type, size_t keys, double progress, char *pname);
+void sendChildInfoGeneric(childInfoType info_type, size_t keys, size_t repl_output_bytes, double progress, char *pname);
 void sendChildCowInfo(childInfoType info_type, char *pname);
 void sendChildInfo(childInfoType info_type, size_t keys, char *pname);
 void receiveChildInfo(void);

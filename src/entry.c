@@ -149,7 +149,7 @@ long long entryGetExpiry(const entry *entry) {
 
 /* Modify the expiration time of this entry and return a pointer to the (potentially new) entry. */
 entry *entrySetExpiry(entry *e, long long expiry) {
-    if (entryHasExpiry(e)) {
+    if (expiry != EXPIRY_NONE && entryHasExpiry(e)) {
         *entryGetExpiryRef(e) = expiry;
         return e;
     }

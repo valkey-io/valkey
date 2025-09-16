@@ -5,7 +5,7 @@ on:
     types: [labeled]
 
 concurrency:
-  group: valkey-pr-benchmark
+  group: valkey-benchmark
   cancel-in-progress: false
 
 defaults:
@@ -58,6 +58,11 @@ jobs:
         run: |
           CONFIG_FILE="../valkey/.github/benchmark_configs/pr_benchmark.json"
 
+          # Removes server/client CPU range args if running in private repo
+          if [[ "${{ github.repository }}" != "valkey-io/valkey" ]]; then
+            jq 'map(del(.server_cpu_range, .client_cpu_range))' "$CONFIG_FILE" > tmp.json && mv tmp.json "$CONFIG_FILE"
+          fi
+
           # Base benchmark arguments
           BENCHMARK_ARGS=(
             --commits "${{ github.event.pull_request.merge_commit_sha }}"
@@ -66,12 +71,6 @@ jobs:
             --valkey-path "../valkey"
             --config "$CONFIG_FILE"
           )
-
-          # Add server and client CPU ranges for official repository as we are running on a metal instance
-          if [[ "${{ github.repository }}" == "valkey-io/valkey" ]]; then
-            BENCHMARK_ARGS+=(--server-cpu-range 92-93)
-            BENCHMARK_ARGS+=(--client-cpu-range 94-95)
-          fi
 
           # Run benchmark
           python ./benchmark.py "${BENCHMARK_ARGS[@]}"
@@ -112,6 +111,20 @@ jobs:
               repo,
               body: `**Benchmark ran on this commit:** ${link}\n\n${body}`
             });
+
+      - name: Cleanup any running valkey processes
+        if: always()
+        continue-on-error: true
+        run: |
+          pkill -f valkey
+          exit_code=$?
+          if [ $exit_code -eq 0 ]; then
+            echo "✓ Killed running valkey processes"
+          elif [ $exit_code -eq 1 ]; then
+            echo "No valkey processes found to kill"
+          else
+            echo "Warning: pkill failed with exit code $exit_code"
+          fi
 
       - name: Remove ${{ github.event.label.name }} label
         if: always() && github.event.label.name == 'run-benchmark'

@@ -1307,7 +1307,6 @@ int slotExportJobBeginSnapshotToTargetSocket(slotMigrationJob *job) {
     if ((childpid = serverFork(CHILD_TYPE_SLOT_MIGRATION)) == 0) {
         /* Child */
         rio aof;
-        aof.flags |= RIO_FLAG_SLOT_MIGRATION_AOF;
         rioInitWithFd(&aof, slot_migration_pipe_write);
         /* Close the reading part, so that if the parent crashes, the child will
          * get a write error and exit. */

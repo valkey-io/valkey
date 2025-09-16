@@ -3615,6 +3615,9 @@ int rdbSaveToReplicasSockets(int req, rdbSaveInfo *rsi) {
 
         if (retval == C_OK) {
             sendChildCowInfo(CHILD_INFO_TYPE_RDB_COW_SIZE, "RDB");
+            if (dual_channel) {
+                sendChildInfoGeneric(CHILD_INFO_TYPE_REPL_OUTPUT_BYTES, 0, rdb.processed_bytes, -1, "RDB");
+            }
         }
         if (dual_channel) {
             rioFreeConnset(&rdb);

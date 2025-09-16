@@ -101,6 +101,7 @@ typedef struct serverObject robj;
 #include "sha1.h"
 #include "endianconv.h"
 #include "crc64.h"
+#include "rdb_frame.h"
 
 struct hdr_histogram;
 
@@ -656,6 +657,19 @@ typedef enum {
 #define RDB_CHILD_TYPE_NONE 0
 #define RDB_CHILD_TYPE_DISK 1   /* RDB is written to disk. */
 #define RDB_CHILD_TYPE_SOCKET 2 /* RDB is written to replica socket. */
+
+/* RDB frame configuration modes. */
+#define RDB_FR_MODE_LEGACY 0
+#define RDB_FR_MODE_BLOCK 1
+#define RDB_FR_MODE_AUTO 2
+
+/* RDB frame file output modes. */
+#define RDB_FR_FILE_MODE_LEGACY 0
+#define RDB_FR_FILE_MODE_BLOCK 1
+
+/* RDB frame checksum options. */
+#define RDB_FR_CHECKSUM_CRC64 0
+#define RDB_FR_CHECKSUM_NONE 1
 
 /* Keyspace changes notification classes. Every class is associated with a
  * character for configuration purposes. */
@@ -1547,6 +1561,14 @@ typedef struct rdbSaveInfo {
 
 #define RDB_SAVE_INFO_INIT {-1, 0, "0000000000000000000000000000000000000000", -1}
 
+typedef struct rdb_frame_opts {
+    int mode;           /* legacy|block|auto */
+    int file_mode;      /* legacy|block */
+    int codec;          /* RAW/LZ4/ZSTD */
+    size_t block_bytes; /* target block size */
+    int checksum;       /* crc64|none */
+} rdb_frame_opts;
+
 struct malloc_stats {
     size_t zmalloc_used;
     size_t process_rss;
@@ -1964,6 +1986,7 @@ struct valkeyServer {
     char *rdb_filename;                   /* Name of RDB file */
     int rdb_compression;                  /* Use compression in RDB? */
     int rdb_checksum;                     /* Use RDB checksum? */
+    rdb_frame_opts rdb_frame_config;      /* Configured RDB framing options. */
     int rdb_del_sync_files;               /* Remove RDB files used only for SYNC if
                                              the instance does not use persistence. */
     time_t lastsave;                      /* Unix time of last successful save */

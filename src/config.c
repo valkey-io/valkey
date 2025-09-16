@@ -174,6 +174,31 @@ configEnum rdb_version_check_enum[] = {{"strict", RDB_VERSION_CHECK_STRICT},
                                        {"relaxed", RDB_VERSION_CHECK_RELAXED},
                                        {NULL, 0}};
 
+configEnum rdb_compression_mode_enum[] = {{"legacy", RDB_FR_MODE_LEGACY},
+                                          {"block", RDB_FR_MODE_BLOCK},
+                                          {"auto", RDB_FR_MODE_AUTO},
+                                          {NULL, 0}};
+
+configEnum rdb_compression_file_mode_enum[] = {{"legacy", RDB_FR_FILE_MODE_LEGACY},
+                                               {"block", RDB_FR_FILE_MODE_BLOCK},
+                                               {NULL, 0}};
+
+configEnum rdb_compression_codec_enum[] = {{"raw", RDB_FR_CODEC_RAW},
+                                           {"lz4", RDB_FR_CODEC_LZ4},
+                                           {"zstd", RDB_FR_CODEC_ZSTD},
+                                           {NULL, 0}};
+
+configEnum rdb_compression_checksum_enum[] = {{"crc64", RDB_FR_CHECKSUM_CRC64},
+                                              {"none", RDB_FR_CHECKSUM_NONE},
+                                              {NULL, 0}};
+
+static int applyRdbFrameConfig(const char **err) {
+    UNUSED(err);
+    serverLog(LL_NOTICE,
+              "RDB framing configuration updated. Changes apply to the next BGSAVE / next full resync.");
+    return 1;
+}
+
 /* Output buffer limits presets. */
 clientBufferLimitsConfig clientBufferLimitsDefaults[CLIENT_TYPE_OBUF_COUNT] = {
     {0, 0, 0},                                 /* normal */
@@ -3184,6 +3209,16 @@ standardConfig static_configs[] = {
     createBoolConfig("always-show-logo", NULL, IMMUTABLE_CONFIG, server.always_show_logo, 0, NULL, NULL),
     createBoolConfig("protected-mode", NULL, MODIFIABLE_CONFIG, server.protected_mode, 1, NULL, NULL),
     createBoolConfig("rdbcompression", NULL, MODIFIABLE_CONFIG, server.rdb_compression, 1, NULL, NULL),
+    createEnumConfig("rdb-compression-mode", NULL, MODIFIABLE_CONFIG, rdb_compression_mode_enum,
+                     server.rdb_frame_config.mode, RDB_FR_MODE_AUTO, NULL, applyRdbFrameConfig),
+    createEnumConfig("rdb-compression-file-mode", NULL, MODIFIABLE_CONFIG, rdb_compression_file_mode_enum,
+                     server.rdb_frame_config.file_mode, RDB_FR_FILE_MODE_LEGACY, NULL, applyRdbFrameConfig),
+    createEnumConfig("rdb-compression-codec", NULL, MODIFIABLE_CONFIG, rdb_compression_codec_enum,
+                     server.rdb_frame_config.codec, RDB_FR_CODEC_ZSTD, NULL, applyRdbFrameConfig),
+    createSizeTConfig("rdb-compression-block-bytes", NULL, MODIFIABLE_CONFIG, 1, LONG_MAX,
+                      server.rdb_frame_config.block_bytes, 262144, MEMORY_CONFIG, NULL, applyRdbFrameConfig),
+    createEnumConfig("rdb-compression-checksum", NULL, MODIFIABLE_CONFIG, rdb_compression_checksum_enum,
+                     server.rdb_frame_config.checksum, RDB_FR_CHECKSUM_CRC64, NULL, applyRdbFrameConfig),
     createBoolConfig("rdb-del-sync-files", NULL, MODIFIABLE_CONFIG, server.rdb_del_sync_files, 0, NULL, NULL),
     createBoolConfig("activerehashing", NULL, MODIFIABLE_CONFIG, server.activerehashing, 1, NULL, NULL),
     createBoolConfig("stop-writes-on-bgsave-error", NULL, MODIFIABLE_CONFIG, server.stop_writes_on_bgsave_err, 1, NULL, NULL),

@@ -1,6 +1,6 @@
 [
   {
-    "requests": [100000000000],
+    "requests": [1000000000],
     "keyspacelen": [10000000],
     "data_sizes": [16],
     "pipelines": [10],
@@ -18,7 +18,7 @@
     "client_cpu_range": "55,95"
   },
   {
-    "requests": [100000000000],
+    "requests": [1000000000],
     "keyspacelen": [10000000],
     "data_sizes": [16],
     "pipelines": [10],
@@ -34,7 +34,7 @@
     "client_cpu_range": "55,95"
   },
   {
-    "requests": [100000000000],
+    "requests": [1000000000],
     "keyspacelen": [3000000],
     "data_sizes": [512],
     "pipelines": [10],

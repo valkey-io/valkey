@@ -945,3 +945,32 @@ int test_random_entry_sparse_table(int argc, char **argv, int flags) {
     zfree(values);
     return 0;
 }
+
+int test_iterator_bounds_check(int argc, char **argv, int flags) {
+    UNUSED(argc);
+    UNUSED(argv);
+    UNUSED(flags);
+
+    hashtableType type = {0};
+    hashtable *ht = hashtableCreate(&type);
+
+    for (size_t j = 0; j < 100; j++) {
+        TEST_ASSERT(hashtableAdd(ht, (void *)j));
+    }
+
+    hashtableIterator iter;
+    void *entry;
+    hashtableInitIterator(&iter, ht, 0);
+
+    size_t count = 0;
+    while (hashtableNext(&iter, &entry)) count++;
+    TEST_ASSERT(count == 100);
+
+    /* Calling next again should return false */
+    TEST_ASSERT(!hashtableNext(&iter, &entry));
+    TEST_ASSERT(!hashtableNext(&iter, &entry));
+
+    hashtableResetIterator(&iter);
+    hashtableRelease(ht);
+    return 0;
+}

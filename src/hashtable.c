@@ -46,6 +46,7 @@
  */
 #include "hashtable.h"
 #include "serverassert.h"
+#include "server.h"
 #include "zmalloc.h"
 #include "mt19937-64.h"
 #include "monotonic.h"
@@ -148,8 +149,6 @@ void hashtableSetResizePolicy(hashtableResizePolicy policy) {
 #define ENTRIES_PER_BUCKET 7
 #define BUCKET_BITS_TYPE uint8_t
 #define BITS_NEEDED_TO_STORE_POS_WITHIN_BUCKET 3
-/* Iterator table value indicating iteration is complete */
-#define HASHTABLE_ITER_END_TABLE 2
 
 /* Selecting the number of buckets.
  *
@@ -1936,6 +1935,11 @@ size_t hashtableScanDefrag(hashtable *ht, size_t cursor, hashtableScanFunction f
 
 /* --- Iterator --- */
 
+#define HASHTABLE_ITER_UNINITIALIZED -1
+#define HASHTABLE_ITER_PRIMARY_TABLE 0
+#define HASHTABLE_ITER_REHASH_TABLE 1
+#define HASHTABLE_ITER_FINISHED 2
+
 /* Initialize an iterator for a hashtable.
  *
  * The 'flags' argument can be used to tweak the behaviour. It's a bitwise-or
@@ -1978,11 +1982,12 @@ size_t hashtableScanDefrag(hashtable *ht, size_t cursor, hashtableScanFunction f
  * Call hashtableNext to fetch each entry. You must call hashtableResetIterator
  * when you are done with the iterator.
  */
+
 void hashtableInitIterator(hashtableIterator *iterator, hashtable *ht, uint8_t flags) {
     iter *iter;
     iter = iteratorFromOpaque(iterator);
     iter->hashtable = ht;
-    iter->table = 0;
+    iter->table = HASHTABLE_ITER_PRIMARY_TABLE;
     iter->index = -1;
     iter->flags = flags;
 }
@@ -1997,7 +2002,7 @@ void hashtableReinitIterator(hashtableIterator *iterator, hashtable *ht) {
 /* Resets a stack-allocated iterator. */
 void hashtableResetIterator(hashtableIterator *iterator) {
     iter *iter = iteratorFromOpaque(iterator);
-    if (!(iter->index == -1 && iter->table == 0)) {
+    if (!(iter->index == -1 && iter->table == HASHTABLE_ITER_PRIMARY_TABLE)) {
         if (isSafe(iter)) {
             hashtableResumeRehashing(iter->hashtable);
             assert(iter->hashtable->pause_rehash >= 0);
@@ -2028,13 +2033,19 @@ void hashtableReleaseIterator(hashtableIterator *iterator) {
 bool hashtableNext(hashtableIterator *iterator, void **elemptr) {
     iter *iter = iteratorFromOpaque(iterator);
 
-    assert(iter->table <= HASHTABLE_ITER_END_TABLE);
-    if (iter->table == HASHTABLE_ITER_END_TABLE) {
+    if (iter->table == HASHTABLE_ITER_FINISHED) {
         return false;
     }
 
+    /* Check for unexpected iterator states that indicate bugs */
+    debugServerAssert(iter->table < HASHTABLE_ITER_FINISHED &&
+                      (iter->table != HASHTABLE_ITER_REHASH_TABLE || hashtableIsRehashing(iter->hashtable)) &&
+                      (iter->index < 0 || !iter->hashtable->tables[iter->table] ||
+                       (size_t)iter->index < numBuckets(iter->hashtable->bucket_exp[iter->table])));
+
+
     while (1) {
-        if (iter->index == -1 && iter->table == 0) {
+        if (iter->index == -1 && iter->table == HASHTABLE_ITER_PRIMARY_TABLE) {
             /* It's the first call to next. */
             if (isSafe(iter)) {
                 hashtablePauseRehashing(iter->hashtable);
@@ -2079,9 +2090,9 @@ bool hashtableNext(hashtableIterator *iterator, void **elemptr) {
                 iter->pos_in_bucket = 0;
                 iter->index++;
                 if ((size_t)iter->index >= numBuckets(iter->hashtable->bucket_exp[iter->table])) {
-                    if (hashtableIsRehashing(iter->hashtable) && iter->table == 0) {
+                    if (hashtableIsRehashing(iter->hashtable) && iter->table == HASHTABLE_ITER_PRIMARY_TABLE) {
                         iter->index = 0;
-                        iter->table++;
+                        iter->table = HASHTABLE_ITER_REHASH_TABLE;
                     } else {
                         /* Done. */
                         break;
@@ -2110,7 +2121,7 @@ bool hashtableNext(hashtableIterator *iterator, void **elemptr) {
         }
         return true;
     }
-    iter->table = HASHTABLE_ITER_END_TABLE;
+    iter->table = HASHTABLE_ITER_FINISHED;
     return false;
 }
 

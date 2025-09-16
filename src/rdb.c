@@ -3723,6 +3723,9 @@ int saveSnapshotToConnectionSockets(rdbSnapshotOptions options) {
 
         if (retval == C_OK) {
             sendChildCowInfo(CHILD_INFO_TYPE_RDB_COW_SIZE, "RDB");
+            if (!options.use_pipe) {
+                sendChildInfoGeneric(CHILD_INFO_TYPE_REPL_OUTPUT_BYTES, 0, rdb.processed_bytes, -1, "RDB");
+            }
         }
         if (!options.use_pipe) {
             rioFreeConnset(&rdb);

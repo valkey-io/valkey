@@ -40,6 +40,7 @@
 #include "functions.h"
 #include "connection.h"
 #include "module.h"
+#include "rio_decompress.h"
 
 #include <memory.h>
 #include <sys/time.h>
@@ -2253,6 +2254,9 @@ void replicaAfterLoadPrimaryRDB(connection *conn, rdbSaveInfo *rsi) {
 
 int replicaLoadPrimaryRDBFromSocket(connection *conn, char *buf, char *eofmark, int *usemark, rdbSaveInfo *rsi) {
     rio rdb;
+    rio *load_rio;
+    rio_decompress decomp;
+    int using_decompress = 0;
     serverDb **dbarray;
     functionsLibCtx *functions_lib_ctx;
     serverDb **diskless_load_tempDb = NULL;
@@ -2290,6 +2294,8 @@ int replicaLoadPrimaryRDBFromSocket(connection *conn, char *buf, char *eofmark, 
     }
 
     rioInitWithConn(&rdb, conn, server.repl_transfer_size);
+    memset(&decomp, 0, sizeof(decomp));
+    load_rio = &rdb;
 
     /* Put the socket in blocking mode to simplify RDB transfer.
      * We'll restore it when the RDB is received. */
@@ -2300,19 +2306,47 @@ int replicaLoadPrimaryRDBFromSocket(connection *conn, char *buf, char *eofmark, 
     startLoading(server.repl_transfer_size, RDBFLAGS_REPLICATION, asyncLoading);
     if (replicationSupportSkipRDBChecksum(conn, 1, *usemark)) rdb.flags |= RIO_FLAG_SKIP_RDB_CHECKSUM;
     int loadingFailed = 0;
+    unsigned char peek[9];
+    off_t saved_pos = rdb.io.conn.pos;
+    size_t saved_processed = rdb.processed_bytes;
+    size_t saved_read_so_far = rdb.io.conn.read_so_far;
+    if (rioRead(&rdb, peek, sizeof(peek)) == 0) {
+        serverLog(LL_WARNING, "PRIMARY <-> REPLICA sync: Failed reading RDB preamble from primary: %s", strerror(errno));
+        loadingFailed = 1;
+    } else {
+        size_t peeklen = (size_t)(rdb.io.conn.pos - saved_pos);
+        rdb.io.conn.pos = saved_pos;
+        rdb.io.conn.read_so_far = saved_read_so_far;
+        rdb.processed_bytes = saved_processed;
+        int has_frame_magic = peeklen >= 4 && rdbFrameHasMagicPrefix(peek, peeklen);
+        int has_redis_magic = peeklen >= 5 && memcmp(peek, "REDIS", 5) == 0;
+        int has_valkey_magic = peeklen >= 6 && memcmp(peek, "VALKEY", 6) == 0;
+        if (has_frame_magic || (server.rdb_frame_config.mode == RDB_FR_MODE_BLOCK && peeklen > 0 && !has_redis_magic && !has_valkey_magic)) {
+            if (rioInitDecompress(&decomp, &rdb) == C_ERR) {
+                serverLog(LL_WARNING, "PRIMARY <-> REPLICA sync: Failed initializing framed RDB reader: %s", strerror(errno));
+                loadingFailed = 1;
+            } else {
+                load_rio = &decomp.rio_itf;
+                using_decompress = 1;
+            }
+        }
+    }
+
     rdbLoadingCtx loadingCtx = {.dbarray = dbarray, .functions_lib_ctx = functions_lib_ctx};
-    if (rdbLoadRioWithLoadingCtxScopedRdb(&rdb, RDBFLAGS_REPLICATION, rsi, &loadingCtx) != C_OK) {
+    if (!loadingFailed && rdbLoadRioWithLoadingCtxScopedRdb(load_rio, RDBFLAGS_REPLICATION, rsi, &loadingCtx) != C_OK) {
         /* RDB loading failed. */
         serverLog(LL_WARNING, "Failed trying to load the PRIMARY synchronization DB "
                               "from socket, check server logs.");
         loadingFailed = 1;
-    } else if (*usemark) {
+    } else if (!loadingFailed && *usemark) {
         /* Verify the end mark is correct. */
         if (!rioRead(&rdb, buf, RDB_EOF_MARK_SIZE) || memcmp(buf, eofmark, RDB_EOF_MARK_SIZE) != 0) {
             serverLog(LL_WARNING, "Replication stream EOF marker is broken");
             loadingFailed = 1;
         }
     }
+
+    if (using_decompress) sdsfree(decomp.rawbuf);
 
     if (loadingFailed) {
         stopLoading(0);

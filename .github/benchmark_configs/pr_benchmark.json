@@ -1,6 +1,6 @@
 [
   {
-    "requests": [1000000000],
+    "requests": [100000000],
     "keyspacelen": [10000000],
     "data_sizes": [16],
     "pipelines": [10],
@@ -13,12 +13,12 @@
     ],
     "cluster_mode": false,
     "tls_mode": false,
-    "warmup": 180,
+    "warmup": 120,
     "server_cpu_range": "0",
     "client_cpu_range": "55,95"
   },
   {
-    "requests": [1000000000],
+    "requests": [100000000],
     "keyspacelen": [10000000],
     "data_sizes": [16],
     "pipelines": [10],
@@ -29,12 +29,12 @@
     ],
     "cluster_mode": true,
     "tls_mode": false,
-    "warmup": 180,
+    "warmup": 120,
     "server_cpu_range": "0",
     "client_cpu_range": "55,95"
   },
   {
-    "requests": [1000000000],
+    "requests": [100000000],
     "keyspacelen": [3000000],
     "data_sizes": [512],
     "pipelines": [10],
@@ -45,7 +45,7 @@
     ],
     "cluster_mode": false,
     "tls_mode": false,
-    "warmup": 300,
+    "warmup": 180,
     "io-threads": 8,
     "server_cpu_range": "0-7",
     "client_cpu_range": "55,95"

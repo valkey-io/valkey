@@ -39,6 +39,7 @@
 #include "io_threads.h"
 #include "module.h"
 #include "connection.h"
+#include "zmalloc.h"
 #include <strings.h>
 #include <sys/socket.h>
 #include <sys/uio.h>
@@ -179,16 +180,22 @@ size_t getStringObjectLen(robj *o) {
     }
 }
 
+/* Actual allocated size of a client reply block */
+static size_t clientReplyAllocSize(clientReplyBlock *block) {
+    return sizeof(clientReplyBlock) + block->size;
+}
+
 /* Client.reply list dup and free methods. */
 void *dupClientReplyValue(void *o) {
-    clientReplyBlock *old = o;
-    clientReplyBlock *buf = zmalloc(sizeof(clientReplyBlock) + old->size);
-    memcpy(buf, o, sizeof(clientReplyBlock) + old->size);
+    size_t bufsize = clientReplyAllocSize((clientReplyBlock *)o);
+    clientReplyBlock *buf = zmalloc(bufsize);
+    memcpy(buf, o, bufsize);
     return buf;
 }
 
 void freeClientReplyValue(void *o) {
-    zfree(o);
+    if (!o) return;
+    zfree_with_size(o, clientReplyAllocSize((clientReplyBlock *)o));
 }
 
 /* This function links the client to the global linked list of clients.

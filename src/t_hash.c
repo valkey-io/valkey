@@ -319,22 +319,19 @@ int hashTypeHasStringRef(robj *o, sds field) {
 }
 
 /* Update a hash field value with a string reference value.
- * Returns C_ERR if the hash field value not found. Otherwise, returns C_OK.
- * This function assumes, asserts, that the hash field value is not already
- * a string reference. */
+ * Returns C_ERR if the hash field value not found. Otherwise, returns C_OK. */
 int hashTypeUpdateAsStringRef(robj *o, sds field, const char *buf, size_t len) {
     unsigned char *vstr = NULL;
     unsigned int vlen = UINT_MAX;
     long long vll = LLONG_MAX;
 
-    if (hashTypeGetValue(o, field, &vstr, &vlen, &vll, NULL) != C_OK || !vstr) return C_ERR;
+    if (hashTypeGetValue(o, field, &vstr, &vlen, &vll, NULL) != C_OK) return C_ERR;
     // require HASHTABLE encoding due to aux bits and pointer storage.
     if (o->encoding == OBJ_ENCODING_LISTPACK) hashTypeConvert(o, OBJ_ENCODING_HASHTABLE);
 
     hashtable *ht = o->ptr;
     void **entry_ref = hashtableFindRef(ht, field);
     entry *entry = *entry_ref;
-    serverAssert(!entryHasStringRef(entry));
     long long expiry = entryGetExpiry(entry);
     void *new_entry = entryUpdateAsStringRef(entry, buf, len, expiry);
     serverAssert(hashtableReplaceReallocatedEntry(ht, entry, new_entry));

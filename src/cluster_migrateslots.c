@@ -14,8 +14,9 @@ typedef enum slotMigrationJobState {
     SLOT_IMPORT_WAIT_ACK,
     SLOT_IMPORT_RECEIVE_SNAPSHOT,
     SLOT_IMPORT_WAITING_FOR_PAUSED,
+    SLOT_IMPORT_WAITING_FOR_MODULES,
     SLOT_IMPORT_FAILOVER_REQUESTED,
-    SLOT_IMPORT_FAILOVER_GRANTED,
+    SLOT_IMPORT_WAITING_TO_FAILOVER,
     SLOT_IMPORT_FINISHED_WAITING_TO_CLEANUP,
 
     /* Exporting states */
@@ -76,6 +77,15 @@ typedef struct slotMigrationJob {
                                                * cleanup is done. */
     sds description;                          /* Description, used for
                                                * logging. */
+    mstime_t current_lag;                     /* Current estimated lag between
+                                               * source and target */
+    bool awaiting_lag_response;               /* True if we are currently
+                                                 waiting for a response to a
+                                                 GET-LAG command.*/
+
+    moduleAsyncProcessingReport *paused_module_report; /* Mapping of module to offset
+                                                        * accepted by that module when
+                                                        * we got the PAUSED command. */
 
     /* State needed during client establishment */
     connection *conn; /* Connection to slot import source node. */
@@ -92,7 +102,7 @@ static int connectSlotExportJob(slotMigrationJob *job);
 static const char *slotMigrationJobStateToString(slotMigrationJobState state);
 static void updateSlotMigrationJobState(slotMigrationJob *job,
                                         slotMigrationJobState state);
-static void sendSyncSlotsMessage(slotMigrationJob *job, const char *subcommand);
+static void sendSyncSlotsMessage(slotMigrationJob *job, ...);
 static void proceedWithSlotMigration(slotMigrationJob *job);
 static slotMigrationJob *createSlotExportJob(clusterNode *target_node,
                                              list *slot_ranges);
@@ -373,13 +383,17 @@ void fireModuleSlotMigrationEvent(slotMigrationJob *job, int subevent) {
  *         │SLOT_IMPORT_WAITING_FOR_PAUSED┼─┤
  *         └───────────────┬──────────────┘ │
  *                   PAUSED│                │
+ *        ┌────────────────▼──────────────┐ │
+ *        │SLOT_IMPORT_WAITING_FOR_MODULES┼─┤
+ *        └────────────────┬──────────────┘ │
+ *    Modules all caught up│                │
  *         ┌───────────────▼──────────────┐ │ Error Conditions:
  *         │SLOT_IMPORT_FAILOVER_REQUESTED┼─┤  1. OOM
  *         └───────────────┬──────────────┘ │  2. Slot Ownership Change
  *         FAILOVER-GRANTED│                │  3. Demotion to replica
- *          ┌──────────────▼─────────────┐  │  4. FLUSHDB
- *          │SLOT_IMPORT_FAILOVER_GRANTED┼──┤  5. Connection Lost
- *          └──────────────┬─────────────┘  │  6. No ACK from source (timeout)
+ *       ┌─────────────────▼─────────────┐  │  4. FLUSHDB
+ *       │SLOT_IMPORT_WAITING_TO_FAILOVER┼──┤  5. Connection Lost
+ *       └─────────────────┬─────────────┘  │  6. No ACK from source (timeout)
  *       Takeover Performed│                │
  *          ┌──────────────▼───────────┐    │
  *          │SLOT_MIGRATION_JOB_SUCCESS┼──-─┤
@@ -453,7 +467,7 @@ void clusterCommandSyncSlotsEstablish(client *c) {
                 addReplyErrorObject(c, shared.syntaxerr);
                 goto cleanup;
             }
-            source_node = clusterLookupNode(c->argv[4]->ptr, CLUSTER_NAMELEN);
+            source_node = clusterLookupNode(c->argv[i + 1]->ptr, CLUSTER_NAMELEN);
             if (!source_node) {
                 addReplyError(c, "Target node does not know the source node");
                 goto cleanup;
@@ -555,32 +569,108 @@ void clusterCommandSyncSlotsSnapshotEof(client *c) {
               "Slot migration %s successfully received slot snapshot. "
               "Beginning incremental stream...",
               c->slot_migration_job->description);
-    sendSyncSlotsMessage(c->slot_migration_job, "REQUEST-PAUSE");
+    sendSyncSlotsMessage(c->slot_migration_job, "REQUEST-PAUSE", NULL);
     updateSlotMigrationJobState(c->slot_migration_job,
                                 SLOT_IMPORT_WAITING_FOR_PAUSED);
 }
 
+/* Sent by the source to the target to retrieve the current processing lag for
+ * newly enqueued commands on this connection.
+ *
+ * Since the source is pipelining lots of commands to the target, the rate at
+ * which it processes them can vary widely. By inserting the GET-LAG command, we
+ * have a marker that we can use to measure the end-to-end latency before
+ * continuing with the failover. */
+void clusterCommandSyncSlotsGetLag(client *c) {
+    slotMigrationJob *job = c->slot_migration_job;
+    if (!job) {
+        addReplyError(c, "CLUSTER SYNCSLOTS GET-LAG should only be used "
+                         "by slot migration clients");
+        return;
+    }
+    serverAssert(isSlotMigrationJobInProgress(c->slot_migration_job));
+    if (job->type != SLOT_MIGRATION_IMPORT) {
+        serverLog(LL_WARNING,
+                  "Received CLUSTER SYNCSLOTS GET-LAG on exporting migration %s",
+                  job->description);
+        finishSlotMigrationJob(job, SLOT_MIGRATION_JOB_FAILED,
+                               "Received invalid SYNCSLOTS GET-LAG command");
+        return;
+    }
+    if (c->argc < 4) {
+        serverAssert(false);
+        serverLog(LL_WARNING,
+                  "Received malformatted SYNCSLOTS GET-LAG command on %s: "
+                  "No time argument provided",
+                  job->description);
+        finishSlotMigrationJob(job, SLOT_MIGRATION_JOB_FAILED,
+                               "Received invalid SYNCSLOTS GET-LAG command");
+        return;
+    }
+    /* Calculate the current lag */
+    mstime_t time;
+    if (getLongLongFromObject(c->argv[3], &time) != C_OK) {
+        serverLog(LL_WARNING,
+                  "Received malformatted SYNCSLOTS GET-LAG command on %s: "
+                  "Time argument is not an integer: %s",
+                  job->description, (sds)c->argv[3]->ptr);
+        finishSlotMigrationJob(job, SLOT_MIGRATION_JOB_FAILED,
+                               "Received invalid SYNCSLOTS GET-LAG command");
+        return;
+    }
+    mstime_t local_time = mstime();
+    if (local_time > time) {
+        job->current_lag = mstime() - time;
+    } else {
+        job->current_lag = 0;
+    }
+
+    /* Add on any module processing lag */
+    moduleAsyncProcessingReport *report = moduleGenerateAsyncProcessingReport();
+    if (report) {
+        job->current_lag += report->maximum_lag;
+        moduleReleaseAsyncProcessingReport(report);
+    }
+
+    /* Report the lag to the source */
+    char buf[LONG_STR_SIZE];
+    ll2string(buf, sizeof(buf), job->current_lag);
+    sendSyncSlotsMessage(job, "LAG", buf, NULL);
+}
+
+
 /* Sent by the source to the target as a marker of when the pause
  * began (therefore, target is caught up once read). */
 void clusterCommandSyncSlotsPaused(client *c) {
-    if (!c->slot_migration_job) {
+    slotMigrationJob *job = c->slot_migration_job;
+    if (!job) {
         addReplyError(c, "CLUSTER SYNCSLOTS PAUSED should only be used by slot "
                          "migration clients");
         return;
     }
-    serverAssert(isSlotMigrationJobInProgress(c->slot_migration_job));
-    if (c->slot_migration_job->state != SLOT_IMPORT_WAITING_FOR_PAUSED) {
+    serverAssert(isSlotMigrationJobInProgress(job));
+    if (job->state != SLOT_IMPORT_WAITING_FOR_PAUSED) {
         serverLog(LL_WARNING,
                   "Received unexpected CLUSTER SYNCSLOTS PAUSED from slot "
-                  "migration %s, . Failing migration.",
-                  c->slot_migration_job->description);
-        finishSlotMigrationJob(c->slot_migration_job, SLOT_MIGRATION_JOB_FAILED,
+                  "migration %s. Failing migration.",
+                  job->description);
+        finishSlotMigrationJob(job, SLOT_MIGRATION_JOB_FAILED,
                                "Unexpected state machine transition");
         return;
     }
-    sendSyncSlotsMessage(c->slot_migration_job, "REQUEST-FAILOVER");
-    updateSlotMigrationJobState(c->slot_migration_job,
-                                SLOT_IMPORT_FAILOVER_REQUESTED);
+
+    /* Check if any modules need to acknowledge the in-flight writes. Some
+     * modules may be configured for asynchronous processing of these changes.*/
+    job->paused_module_report = moduleGenerateAsyncProcessingReport();
+    if (job->paused_module_report &&
+        !modulesAllAppliedPreviouslyAcceptedOffset(job->paused_module_report,
+                                                   job->paused_module_report)) {
+        updateSlotMigrationJobState(job, SLOT_IMPORT_WAITING_FOR_MODULES);
+        return;
+    }
+    moduleReleaseAsyncProcessingReport(job->paused_module_report);
+    sendSyncSlotsMessage(job, "REQUEST-FAILOVER", NULL);
+    updateSlotMigrationJobState(job, SLOT_IMPORT_FAILOVER_REQUESTED);
 }
 
 /* Sent by the source to the target to grant final authorization for
@@ -603,7 +693,7 @@ void clusterCommandSyncSlotsFailoverGranted(client *c) {
         return;
     }
     updateSlotMigrationJobState(c->slot_migration_job,
-                                SLOT_IMPORT_FAILOVER_GRANTED);
+                                SLOT_IMPORT_WAITING_TO_FAILOVER);
     clusterDoBeforeSleep(CLUSTER_TODO_HANDLE_SLOT_MIGRATION);
 }
 
@@ -625,6 +715,7 @@ slotMigrationJob *createSlotImportJob(client *c,
     job->client = c;
     job->client->slot_migration_job = job;
     job->description = generateSlotMigrationJobDescription(job, source_node);
+    job->current_lag = -1;
 
     /* We treat slot imports like primaries. Primaries are expected to have a
      * dedicated query buffer and allocated replication data. */
@@ -1152,60 +1243,128 @@ void slotExportBeginStreaming(slotMigrationJob *job) {
               job->description);
 }
 
+/* Enqueue a GET-LAG command with the current time and track that we are waiting
+ * for a response. */
+void slotExportRequestLag(slotMigrationJob *job) {
+    char buf[LONG_STR_SIZE];
+    ll2string(buf, sizeof(buf), mstime());
+    sendSyncSlotsMessage(job, "GET-LAG", buf, NULL);
+    job->awaiting_lag_response = true;
+}
+
 /* Attempt to pause the provided slot export job. If we can pause, the state
  * will be updated to SLOT_EXPORT_FAILOVER_PAUSED and the PAUSED subcommand is
  * sent to the target. Otherwise, there is no effect. */
 int slotExportTryDoPause(slotMigrationJob *job) {
-    serverAssert(job->type == SLOT_MIGRATION_EXPORT);
+    if (server.debug_slot_migration_prevent_pause) return C_ERR;
 
-    if (server.debug_slot_migration_prevent_pause ||
-        (server.slot_migration_max_failover_repl_bytes >= 0 &&
-         getClientOutputBufferMemoryUsage(job->client) >
-             (size_t)server.slot_migration_max_failover_repl_bytes)) {
+    /* If there is no lag indicator, we need to get one */
+    if (job->current_lag == -1) {
+        slotExportRequestLag(job);
         return C_ERR;
     }
+
+    /* If there is a lag indicator, use it to determine if we can failover */
+    if (server.slot_migration_max_lag_for_failover >= 0 &&
+        job->current_lag > server.slot_migration_max_lag_for_failover) {
+        run_with_period(5000) {
+            serverLog(LL_NOTICE,
+                      "Waiting for slot migration to have lag less than %lld. "
+                      "Current lag is %lld for migration %s",
+                      server.slot_migration_max_lag_for_failover,
+                      job->current_lag,
+                      job->description);
+        }
+        /* Request a lag indicator only if we don't already have one outbound */
+        if (!job->awaiting_lag_response) slotExportRequestLag(job);
+        return C_ERR;
+    }
+
+    /* Lag is okay, we can continue */
     serverLog(LL_NOTICE,
               "Pausing writes to allow slot migration %s to finalize failover.",
               job->description);
     job->mf_end = mstime() + server.cluster_mf_timeout * CLUSTER_MF_PAUSE_MULT;
     pauseActions(PAUSE_DURING_SLOT_MIGRATION, job->mf_end,
                  PAUSE_ACTIONS_CLIENT_WRITE_SET);
-    sendSyncSlotsMessage(job, "PAUSED");
+    sendSyncSlotsMessage(job, "PAUSED", NULL);
     return C_OK;
 }
 
-/* Sent by the target to the source to pause writes to the slot for slot
- * failover. */
-void clusterCommandSyncSlotsRequestPause(client *c) {
-    if (!c->slot_migration_job) {
-        addReplyError(c, "CLUSTER SYNCSLOTS REQUEST-PAUSE should only be used "
+/* Sent by the target to the source as a response to a previous GET-LAG request.
+ * The source uses the lag to inform when it is ready to proceed with failover.
+ */
+void clusterCommandSyncSlotsLag(client *c) {
+    slotMigrationJob *job = c->slot_migration_job;
+    if (!job) {
+        addReplyError(c, "CLUSTER SYNCSLOTS LAG should only be used "
                          "by slot migration clients");
         return;
     }
     serverAssert(isSlotMigrationJobInProgress(c->slot_migration_job));
-    /* Child process may not have closed yet, so SNAPSHOTTING is okay here */
-    if (c->slot_migration_job->state != SLOT_EXPORT_STREAMING &&
-        c->slot_migration_job->state != SLOT_EXPORT_SNAPSHOTTING) {
+    if (job->type != SLOT_MIGRATION_EXPORT) {
+        serverLog(LL_WARNING,
+                  "Received CLUSTER SYNCSLOTS LAG on importing migration %s",
+                  job->description);
+        finishSlotMigrationJob(job, SLOT_MIGRATION_JOB_FAILED,
+                               "Received invalid SYNCSLOTS LAG command");
+        return;
+    }
+    if (c->argc < 4) {
+        serverLog(LL_WARNING,
+                  "Received malformatted SYNCSLOTS LAG command on %s: "
+                  "No lag argument provided",
+                  job->description);
+        finishSlotMigrationJob(job, SLOT_MIGRATION_JOB_FAILED,
+                               "Received invalid SYNCSLOTS LAG command");
+        return;
+    }
+    /* Extract the current lag */
+    mstime_t lag;
+    if (getLongLongFromObject(c->argv[3], &lag) != C_OK) {
+        serverLog(LL_WARNING,
+                  "Received malformatted SYNCSLOTS LAG command on %s: "
+                  "Lag argument is not an integer: %s",
+                  job->description, (sds)c->argv[3]->ptr);
+        finishSlotMigrationJob(job, SLOT_MIGRATION_JOB_FAILED,
+                               "Received invalid SYNCSLOTS LAG command");
+        return;
+    }
+    job->current_lag = lag;
+    job->awaiting_lag_response = false;
+
+    /* Check before sleep if we can now pause */
+    clusterDoBeforeSleep(CLUSTER_TODO_HANDLE_SLOT_MIGRATION);
+}
+
+
+/* Sent by the target to the source to pause writes to the slot for slot
+ * failover. */
+void clusterCommandSyncSlotsRequestPause(client *c) {
+    slotMigrationJob *job = c->slot_migration_job;
+    if (!job) {
+        addReplyError(c, "CLUSTER SYNCSLOTS REQUEST-PAUSE should only be used "
+                         "by slot migration clients");
+        return;
+    }
+    serverAssert(isSlotMigrationJobInProgress(job));
+    /* Child process may not have closed yet, so SNAPSHOTTING state is okay here */
+    if (job->state != SLOT_EXPORT_STREAMING && job->state != SLOT_EXPORT_SNAPSHOTTING) {
         serverLog(LL_WARNING,
                   "Received CLUSTER SYNCSLOTS REQUEST-PAUSE for slot migration "
                   "%s, but the client was not streaming incremental updates. "
                   "Failing migration.",
-                  c->slot_migration_job->description);
-        finishSlotMigrationJob(c->slot_migration_job, SLOT_MIGRATION_JOB_FAILED,
+                  job->description);
+        finishSlotMigrationJob(job, SLOT_MIGRATION_JOB_FAILED,
                                "Unexpected state machine transition");
         return;
     }
-    if (c->slot_migration_job->state != SLOT_EXPORT_STREAMING) {
-        slotExportBeginStreaming(c->slot_migration_job);
+    if (job->state != SLOT_EXPORT_STREAMING) {
+        slotExportBeginStreaming(job);
     }
 
-    if (slotExportTryDoPause(c->slot_migration_job) == C_ERR) {
-        updateSlotMigrationJobState(c->slot_migration_job,
-                                    SLOT_EXPORT_WAITING_TO_PAUSE);
-        return;
-    }
-    updateSlotMigrationJobState(c->slot_migration_job,
-                                SLOT_EXPORT_FAILOVER_PAUSED);
+    updateSlotMigrationJobState(job, SLOT_EXPORT_WAITING_TO_PAUSE);
+    proceedWithSlotMigration(job);
 }
 
 /* Sent by the target to the source to request final authorization for
@@ -1251,7 +1410,7 @@ void clusterCommandSyncSlotsRequestFailover(client *c) {
                      PAUSE_ACTIONS_CLIENT_WRITE_SET);
     }
 
-    sendSyncSlotsMessage(c->slot_migration_job, "FAILOVER-GRANTED");
+    sendSyncSlotsMessage(c->slot_migration_job, "FAILOVER-GRANTED", NULL);
     updateSlotMigrationJobState(c->slot_migration_job,
                                 SLOT_EXPORT_FAILOVER_GRANTED);
 }
@@ -1501,6 +1660,7 @@ slotMigrationJob *createSlotExportJob(clusterNode *target_node,
     memcpy(job->target_node_name, target_node->name, CLUSTER_NAMELEN);
     memcpy(job->source_node_name, server.cluster->myself->name, CLUSTER_NAMELEN);
     job->description = generateSlotMigrationJobDescription(job, target_node);
+    job->current_lag = -1;
     return job;
 }
 
@@ -1559,7 +1719,7 @@ void slotMigrationJobReadEstablishResponse(connection *conn) {
 
     /* We need to send an ACK to take the import out of WAIT_ACK state. This
      * will kickstart the health checks, effectively taking the job online. */
-    sendSyncSlotsMessage(job, "ACK");
+    sendSyncSlotsMessage(job, "ACK", NULL);
 
     sdsfree(job->response_buf);
     job->response_buf = NULL;
@@ -1590,19 +1750,34 @@ void proceedWithSlotMigration(slotMigrationJob *job) {
         case SLOT_IMPORT_WAITING_FOR_PAUSED:
             /* Waiting for PAUSED marker */
             return;
+        case SLOT_IMPORT_WAITING_FOR_MODULES: {
+            moduleAsyncProcessingReport *current = moduleGenerateAsyncProcessingReport();
+            if (!modulesAllAppliedPreviouslyAcceptedOffset(job->paused_module_report, current)) {
+                run_with_period(5000) {
+                    serverLog(LL_NOTICE,
+                              "Waiting for all modules to process up until PAUSED offset "
+                              "before taking over slots for %s",
+                              job->description);
+                }
+                moduleReleaseAsyncProcessingReport(current);
+                return;
+            }
+            moduleReleaseAsyncProcessingReport(current);
+            moduleReleaseAsyncProcessingReport(job->paused_module_report);
+            sendSyncSlotsMessage(job, "REQUEST-FAILOVER", NULL);
+            updateSlotMigrationJobState(job, SLOT_IMPORT_FAILOVER_REQUESTED);
+        }
         case SLOT_IMPORT_FAILOVER_REQUESTED:
             /* Waiting for FAILOVER-GRANTED response */
             return;
-        case SLOT_IMPORT_FAILOVER_GRANTED:
-            if (!server.debug_slot_migration_prevent_failover) {
-                performSlotImportJobFailover(job);
+        case SLOT_IMPORT_WAITING_TO_FAILOVER:
+            if (server.debug_slot_migration_prevent_failover) return;
+            performSlotImportJobFailover(job);
 
-                serverLog(LL_NOTICE,
-                          "Slot migration %s completed successfully. "
-                          "This node is now the owner of the slots",
-                          job->description);
-                finishSlotMigrationJob(job, SLOT_MIGRATION_JOB_SUCCESS, NULL);
-            }
+            serverLog(LL_NOTICE,
+                      "Slot migration %s completed successfully. This node is now the owner of the slots",
+                      job->description);
+            finishSlotMigrationJob(job, SLOT_MIGRATION_JOB_SUCCESS, NULL);
             return;
         case SLOT_IMPORT_FINISHED_WAITING_TO_CLEANUP:
             delKeysNotOwnedByMyself(job->slot_ranges);
@@ -1700,9 +1875,10 @@ void proceedWithSlotMigration(slotMigrationJob *job) {
             /* Waiting for PAUSE command to come in */
             return;
         case SLOT_EXPORT_WAITING_TO_PAUSE:
-            if (slotExportTryDoPause(job) == C_OK) {
-                updateSlotMigrationJobState(job, SLOT_EXPORT_FAILOVER_PAUSED);
+            if (slotExportTryDoPause(job) == C_ERR) {
+                return;
             }
+            updateSlotMigrationJobState(job, SLOT_EXPORT_FAILOVER_PAUSED);
             return;
         case SLOT_EXPORT_FAILOVER_PAUSED:
             if (isSlotExportPauseTimedOut(job)) {
@@ -1808,8 +1984,9 @@ const char *slotMigrationJobStateToString(slotMigrationJobState state) {
     case SLOT_IMPORT_WAIT_ACK: return "waiting-for-ack";
     case SLOT_IMPORT_RECEIVE_SNAPSHOT: return "receiving-snapshot";
     case SLOT_IMPORT_WAITING_FOR_PAUSED: return "waiting-for-paused";
+    case SLOT_IMPORT_WAITING_FOR_MODULES: return "waiting-for-modules";
     case SLOT_IMPORT_FAILOVER_REQUESTED: return "failover-requested";
-    case SLOT_IMPORT_FAILOVER_GRANTED: return "failover-granted";
+    case SLOT_IMPORT_WAITING_TO_FAILOVER: return "waiting-to-failover";
     case SLOT_IMPORT_FINISHED_WAITING_TO_CLEANUP: return "cleaning-up";
 
     case SLOT_EXPORT_CONNECTING: return "connecting";
@@ -1820,7 +1997,7 @@ const char *slotMigrationJobStateToString(slotMigrationJobState state) {
         return "reading-establish-response";
     case SLOT_EXPORT_WAITING_TO_SNAPSHOT: return "waiting-to-snapshot";
     case SLOT_EXPORT_SNAPSHOTTING: return "snapshotting";
-    case SLOT_EXPORT_STREAMING: return "replicating";
+    case SLOT_EXPORT_STREAMING: return "streaming";
     case SLOT_EXPORT_WAITING_TO_PAUSE: return "waiting-to-pause";
     case SLOT_EXPORT_FAILOVER_PAUSED: return "failover-paused";
     case SLOT_EXPORT_FAILOVER_GRANTED: return "failover-granted";
@@ -2024,8 +2201,9 @@ void clusterCommandGetSlotMigrations(client *c) {
 }
 
 
-/* Helper function to send a SYNCSLOTS subcommand for the provided job. */
-void sendSyncSlotsMessage(slotMigrationJob *job, const char *subcommand) {
+/* Helper function to send a SYNCSLOTS subcommand for the provided job. The
+ * provided variardic arguments should be castable to C strings. */
+void sendSyncSlotsMessage(slotMigrationJob *job, ...) {
     serverAssert(job->client);
     ClientFlags old_flags = job->client->flag;
     if (job->type == SLOT_MIGRATION_IMPORT) {
@@ -2033,10 +2211,19 @@ void sendSyncSlotsMessage(slotMigrationJob *job, const char *subcommand) {
          * flag to bypass this. */
         job->client->flag.pushing = 1;
     }
-    addReplyArrayLen(job->client, 3);
+    void *len_node = addReplyDeferredLen(job->client);
     addReplyBulkCString(job->client, "CLUSTER");
     addReplyBulkCString(job->client, "SYNCSLOTS");
-    addReplyBulkCString(job->client, subcommand);
+    size_t len = 2;
+    va_list ap;
+    va_start(ap, job);
+    char *arg;
+    while ((arg = va_arg(ap, char *))) {
+        addReplyBulkCString(job->client, arg);
+        len++;
+    }
+    va_end(ap);
+    setDeferredArrayLen(job->client, len_node, len);
     if (!old_flags.pushing) job->client->flag.pushing = 0;
 }
 
@@ -2135,7 +2322,8 @@ void slotExportTryUnpause(void) {
 
 /* Sent by either the target or the source as a liveness check. */
 void clusterCommandSyncSlotsAck(client *c) {
-    if (!c->slot_migration_job) {
+    slotMigrationJob *job = c->slot_migration_job;
+    if (!job) {
         addReplyError(c,
                       "CLUSTER SYNCSLOTS ACK should only be used by slot "
                       "migration clients");
@@ -2164,6 +2352,12 @@ void clusterCommandSyncSlots(client *c) {
     } else if (!strcasecmp(c->argv[2]->ptr, "snapshot-eof")) {
         /* CLUSTER SYNCSLOTS SNAPSHOT-EOF */
         clusterCommandSyncSlotsSnapshotEof(c);
+    } else if (!strcasecmp(c->argv[2]->ptr, "get-lag")) {
+        /* CLUSTER SYNCSLOTS GET-LAG <mstime> */
+        clusterCommandSyncSlotsGetLag(c);
+    } else if (!strcasecmp(c->argv[2]->ptr, "lag")) {
+        /* CLUSTER SYNCSLOTS LAG <mslag> */
+        clusterCommandSyncSlotsLag(c);
     } else if (!strcasecmp(c->argv[2]->ptr, "request-pause")) {
         /* CLUSTER SYNCSLOTS REQUEST-PAUSE */
         clusterCommandSyncSlotsRequestPause(c);

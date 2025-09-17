@@ -95,28 +95,42 @@ typedef struct moduleValue {
     void *value;
 } moduleValue;
 
+/* Current processing status, for modules that have asynchronous keyspace
+ * processing. */
+typedef struct moduleAsyncProcessingStatus {
+    mstime_t current_lag;
+    uint64_t accepted_offset;
+    uint64_t applied_offset;
+} moduleAsyncProcessingStatus;
+
+typedef struct moduleAsyncProcessingReport {
+    dict *module_to_processing_status; /* Dictionary from module name to moduleAsyncProcessingStatus */
+    mstime_t maximum_lag;
+} moduleAsyncProcessingReport;
+
 /* This structure represents a module inside the system. */
 typedef struct ValkeyModule {
-    void *handle;                         /* Module dlopen() handle. */
-    char *name;                           /* Module name. */
-    int ver;                              /* Module version. We use just progressive integers. */
-    int apiver;                           /* Module API version as requested during initialization.*/
-    list *types;                          /* Module data types. */
-    list *usedby;                         /* List of modules using APIs from this one. */
-    list *using;                          /* List of modules we use some APIs of. */
-    list *filters;                        /* List of filters the module has registered. */
-    list *module_configs;                 /* List of configurations the module has registered */
-    int configs_initialized;              /* Have the module configurations been initialized? */
-    int in_call;                          /* RM_Call() nesting level */
-    int in_hook;                          /* Hooks callback nesting level for this module (0 or 1). */
-    int options;                          /* Module options and capabilities. */
-    int blocked_clients;                  /* Count of ValkeyModuleBlockedClient in this module. */
-    ValkeyModuleInfoFunc info_cb;         /* Callback for module to add INFO fields. */
-    ValkeyModuleDefragFunc defrag_cb;     /* Callback for global data defrag. */
-    struct moduleLoadQueueEntry *loadmod; /* Module load arguments for config rewrite. */
-    int num_commands_with_acl_categories; /* Number of commands in this module included in acl categories */
-    int onload;                           /* Flag to identify if the call is being made from Onload (0 or 1) */
-    size_t num_acl_categories_added;      /* Number of acl categories added by this module. */
+    void *handle;                                        /* Module dlopen() handle. */
+    char *name;                                          /* Module name. */
+    int ver;                                             /* Module version. We use just progressive integers. */
+    int apiver;                                          /* Module API version as requested during initialization.*/
+    list *types;                                         /* Module data types. */
+    list *usedby;                                        /* List of modules using APIs from this one. */
+    list *using;                                         /* List of modules we use some APIs of. */
+    list *filters;                                       /* List of filters the module has registered. */
+    list *module_configs;                                /* List of configurations the module has registered */
+    int configs_initialized;                             /* Have the module configurations been initialized? */
+    int in_call;                                         /* RM_Call() nesting level */
+    int in_hook;                                         /* Hooks callback nesting level for this module (0 or 1). */
+    int options;                                         /* Module options and capabilities. */
+    int blocked_clients;                                 /* Count of ValkeyModuleBlockedClient in this module. */
+    ValkeyModuleInfoFunc info_cb;                        /* Callback for module to add INFO fields. */
+    ValkeyModuleDefragFunc defrag_cb;                    /* Callback for global data defrag. */
+    ValkeyModuleAsyncProcessingStatusFunc processing_cb; /* Callback for asynchronous keyspace processing status. */
+    struct moduleLoadQueueEntry *loadmod;                /* Module load arguments for config rewrite. */
+    int num_commands_with_acl_categories;                /* Number of commands in this module included in acl categories */
+    int onload;                                          /* Flag to identify if the call is being made from Onload (0 or 1) */
+    size_t num_acl_categories_added;                     /* Number of acl categories added by this module. */
 } ValkeyModule;
 
 /* This is a wrapper for the 'rio' streams used inside rdb.c in the server, so that
@@ -232,5 +246,9 @@ int moduleIsModuleCommand(void *module_handle, struct serverCommand *cmd);
 void freeClientModuleData(client *c);
 int checkModuleAuthentication(client *c, robj *username, robj *password, robj **err);
 void moduleFireAuthenticationEvent(uint64_t client_id, const char *username, const char *module_name, int is_granted);
+moduleAsyncProcessingReport *moduleGenerateAsyncProcessingReport(void);
+void moduleReleaseAsyncProcessingReport(moduleAsyncProcessingReport *status);
+bool modulesAllAppliedPreviouslyAcceptedOffset(moduleAsyncProcessingReport *previous_status,
+                                               moduleAsyncProcessingReport *current_status);
 
 #endif /* _MODULE_H_ */

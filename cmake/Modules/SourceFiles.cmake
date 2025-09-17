@@ -31,6 +31,7 @@ set(VALKEY_SERVER_SRCS
     ${CMAKE_SOURCE_DIR}/src/db.c
     ${CMAKE_SOURCE_DIR}/src/replication.c
     ${CMAKE_SOURCE_DIR}/src/rdb.c
+    ${CMAKE_SOURCE_DIR}/src/rdb_codec.c
     ${CMAKE_SOURCE_DIR}/src/t_string.c
     ${CMAKE_SOURCE_DIR}/src/t_list.c
     ${CMAKE_SOURCE_DIR}/src/t_set.c

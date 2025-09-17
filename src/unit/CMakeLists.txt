@@ -1,6 +1,6 @@
 project(valkey-unit-tests)
 
-file(GLOB UNIT_TEST_SRCS "${CMAKE_CURRENT_LIST_DIR}/*.c")
+file(GLOB UNIT_TEST_SRCS "${CMAKE_CURRENT_LIST_DIR}/*.c" "${CMAKE_CURRENT_LIST_DIR}/../../tests/unit/*.c")
 set(UNIT_TEST_SRCS "${UNIT_TEST_SRCS}")
 
 get_valkey_server_linker_option(VALKEY_SERVER_LDFLAGS)

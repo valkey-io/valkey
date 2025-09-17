@@ -329,7 +329,7 @@ if (PYTHON_EXE)
 
     # Rule for generating test_files.h
     message(STATUS "Adding target generate_test_files_h")
-    file(GLOB UNIT_TEST_SRCS "${CMAKE_SOURCE_DIR}/src/unit/*.c")
+    file(GLOB UNIT_TEST_SRCS "${CMAKE_SOURCE_DIR}/src/unit/*.c" "${CMAKE_SOURCE_DIR}/tests/unit/*.c")
     add_custom_command(
         OUTPUT ${CMAKE_BINARY_DIR}/test_files_generated
         DEPENDS "${UNIT_TEST_SRCS};${CMAKE_SOURCE_DIR}/utils/generate-unit-test-header.py"

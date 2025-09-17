@@ -2,7 +2,12 @@
 import os
 import re
 
-UNIT_DIR = os.path.abspath(os.path.dirname(os.path.abspath(__file__)) + '/../src/unit')
+BASE_DIR = os.path.abspath(os.path.dirname(os.path.abspath(__file__)))
+UNIT_DIR = os.path.abspath(BASE_DIR + '/../src/unit')
+EXTRA_UNIT_DIR = os.path.abspath(BASE_DIR + '/../tests/unit')
+UNIT_DIRS = [UNIT_DIR]
+if os.path.isdir(EXTRA_UNIT_DIR):
+    UNIT_DIRS.append(EXTRA_UNIT_DIR)
 TEST_FILE = UNIT_DIR + '/test_files.h'
 TEST_PROTOTYPE = r'(int (test_[a-zA-Z0-9_]*)\(.*\)).*{'
 
@@ -10,19 +15,20 @@ if __name__ == '__main__':
     with open(TEST_FILE, 'w') as output:
         # Find each test file and collect the test names.
         test_suites = []
-        for root, dirs, files in os.walk(UNIT_DIR):
-            for file in files:
-                file_path = UNIT_DIR + '/' + file
-                if not file.endswith('.c') or file == 'test_main.c':
-                    continue
-                tests = []
-                with open(file_path, 'r') as f:
-                    for line in f:
-                        match = re.match(TEST_PROTOTYPE, line)
-                        if match:
-                            function = match.group(1)
-                            test_name = match.group(2)
-                            tests.append((test_name, function))
+        for unit_dir in UNIT_DIRS:
+            for root, dirs, files in os.walk(unit_dir):
+                for file in files:
+                    if not file.endswith('.c') or file == 'test_main.c':
+                        continue
+                    file_path = os.path.join(root, file)
+                    tests = []
+                    with open(file_path, 'r') as f:
+                        for line in f:
+                            match = re.match(TEST_PROTOTYPE, line)
+                            if match:
+                                function = match.group(1)
+                                test_name = match.group(2)
+                                tests.append((test_name, function))
                     test_suites.append({'file': file, 'tests': tests})
         test_suites.sort(key=lambda test_suite: test_suite['file'])
         output.write("""/* Do not modify this file, it's automatically generated from utils/generate-unit-test-header.py */

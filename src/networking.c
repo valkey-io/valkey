@@ -1557,7 +1557,10 @@ inline int isDeferredReplyEnabled(client *c) {
  * callback. */
 void initDeferredReplyBuffer(client *c) {
     if (moduleNotifyKeyspaceSubscribersCnt() == 0) return;
-    if (c->deferred_reply == NULL) c->deferred_reply = listCreate();
+    if (c->deferred_reply == NULL) {
+        c->deferred_reply = listCreate();
+        listSetFreeMethod(c->deferred_reply, freeClientReplyValue);
+    }
     if (!isDeferredReplyEnabled(c)) c->deferred_reply_bytes = 0;
 }
 

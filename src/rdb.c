@@ -46,6 +46,8 @@
 #include "module.h"
 #include "cluster.h"
 #include "cluster_migrateslots.h"
+#include "rio_decompress.h"
+#include "rdb_frame.h"
 
 #include <math.h>
 #include <fcntl.h>
@@ -3525,6 +3527,9 @@ eoferr:
 int rdbLoad(char *filename, rdbSaveInfo *rsi, int rdbflags) {
     FILE *fp;
     rio rdb;
+    rio *reader;
+    rio_decompress decomp;
+    int use_decompress = 0;
     int retval;
     struct stat sb;
     int rdb_fd;
@@ -3540,12 +3545,36 @@ int rdbLoad(char *filename, rdbSaveInfo *rsi, int rdbflags) {
     if (fstat(fileno(fp), &sb) == -1) sb.st_size = 0;
 
     startLoadingFile(sb.st_size, filename, rdbflags);
-    rioInitWithFile(&rdb, fp);
 
-    retval = rdbLoadRio(&rdb, rdbflags, rsi);
+    unsigned char frame_hdr[4];
+    size_t hdr_len = fread(frame_hdr, 1, sizeof(frame_hdr), fp);
+    if (fseeko(fp, 0, SEEK_SET) == -1) {
+        serverLog(LL_WARNING, "Unable to rewind RDB file %s: %s", filename, strerror(errno));
+        fclose(fp);
+        stopLoading(0);
+        return RDB_FAILED;
+    }
+    clearerr(fp);
+
+    rioInitWithFile(&rdb, fp);
+    reader = &rdb;
+
+    if (hdr_len == sizeof(frame_hdr) && rdbFrameHasMagicPrefix(frame_hdr, hdr_len)) {
+        if (rioInitDecompress(&decomp, &rdb) == C_ERR) {
+            serverLog(LL_WARNING, "Failed to initialize RDB decompressor for %s: %s", filename, strerror(errno));
+            fclose(fp);
+            stopLoading(0);
+            return RDB_FAILED;
+        }
+        reader = &decomp.rio_itf;
+        use_decompress = 1;
+    }
+
+    retval = rdbLoadRio(reader, rdbflags, rsi);
 
     fclose(fp);
     stopLoading(retval == C_OK);
+    if (use_decompress) sdsfree(decomp.rawbuf);
     /* Reclaim the cache backed by rdb */
     if (retval == C_OK && !(rdbflags & RDBFLAGS_KEEP_CACHE)) {
         /* TODO: maybe we could combine the fopen and open into one in the future */

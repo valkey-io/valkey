@@ -29,6 +29,7 @@
  */
 
 #include "server.h"
+#include "rdb_frame.h"
 
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -359,9 +360,11 @@ int fileIsRDB(char *filepath) {
     }
 
     if (size >= 8) { /* There must be at least room for the RDB header. */
-        char sig[5];
-        int rdb_file = fread(sig, sizeof(sig), 1, fp) == 1 && memcmp(sig, "REDIS", sizeof(sig)) == 0;
-        if (rdb_file) {
+        unsigned char sig[5];
+        size_t got = fread(sig, 1, sizeof(sig), fp);
+        int rdb_file = got == sizeof(sig) && memcmp(sig, "REDIS", sizeof(sig)) == 0;
+        int frame_file = got >= 4 && rdbFrameHasMagicPrefix(sig, got);
+        if (rdb_file || frame_file) {
             fclose(fp);
             return 1;
         }

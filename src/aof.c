@@ -30,6 +30,8 @@
 #include "server.h"
 #include "bio.h"
 #include "rio.h"
+#include "rio_decompress.h"
+#include "rdb_frame.h"
 #include "functions.h"
 #include "module.h"
 
@@ -1438,12 +1440,19 @@ int loadSingleAppendOnlyFile(char *filename) {
      * or old style RDB-preamble AOF). In that case we need to load the RDB file
      * and later continue loading the AOF tail if it is an old style RDB-preamble AOF. */
     char sig[6]; /* "REDIS" or "VALKEY" */
-    if (fread(sig, 1, 6, fp) != 6 || (memcmp(sig, "REDIS0", 6) != 0 && memcmp(sig, "VALKEY", 6) != 0)) {
+    size_t siglen = fread(sig, 1, sizeof(sig), fp);
+    int is_rdb_magic = siglen == sizeof(sig) &&
+                       (memcmp(sig, "REDIS0", sizeof(sig)) == 0 || memcmp(sig, "VALKEY", sizeof(sig)) == 0);
+    int is_frame_magic = siglen >= 4 && rdbFrameHasMagicPrefix((unsigned char *)sig, siglen);
+    if (!is_rdb_magic && !is_frame_magic) {
         /* Not in RDB format, seek back at 0 offset. */
         if (fseek(fp, 0, SEEK_SET) == -1) goto readerr;
     } else {
         /* RDB format. Pass loading the RDB functions. */
         rio rdb;
+        rio *reader;
+        rio_decompress decomp;
+        int using_decompress = 0;
         int old_style = !strcmp(filename, server.aof_filename);
         if (old_style)
             serverLog(LL_NOTICE, "Reading RDB preamble from AOF file...");
@@ -1451,8 +1460,19 @@ int loadSingleAppendOnlyFile(char *filename) {
             serverLog(LL_NOTICE, "Reading RDB base file on AOF loading...");
 
         if (fseek(fp, 0, SEEK_SET) == -1) goto readerr;
+        clearerr(fp);
         rioInitWithFile(&rdb, fp);
-        if (rdbLoadRio(&rdb, RDBFLAGS_AOF_PREAMBLE, NULL) != C_OK) {
+        reader = &rdb;
+        if (is_frame_magic) {
+            if (rioInitDecompress(&decomp, &rdb) == C_ERR) {
+                serverLog(LL_WARNING, "Error initializing RDB decompressor for %s: %s", filename, strerror(errno));
+                ret = AOF_FAILED;
+                goto cleanup;
+            }
+            reader = &decomp.rio_itf;
+            using_decompress = 1;
+        }
+        if (rdbLoadRio(reader, RDBFLAGS_AOF_PREAMBLE, NULL) != C_OK) {
             if (old_style)
                 serverLog(LL_WARNING, "Error reading the RDB preamble of the AOF file %s, AOF loading aborted",
                           filename);
@@ -1460,12 +1480,14 @@ int loadSingleAppendOnlyFile(char *filename) {
                 serverLog(LL_WARNING, "Error reading the RDB base file %s, AOF loading aborted", filename);
 
             ret = AOF_FAILED;
+            if (using_decompress) sdsfree(decomp.rawbuf);
             goto cleanup;
         } else {
             loadingAbsProgress(ftello(fp));
             last_progress_report_size = ftello(fp);
             if (old_style) serverLog(LL_NOTICE, "Reading the remaining AOF tail...");
         }
+        if (using_decompress) sdsfree(decomp.rawbuf);
     }
 
     /* Read the actual AOF file, in REPL format, command by command. */

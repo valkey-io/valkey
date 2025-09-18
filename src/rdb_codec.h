@@ -11,10 +11,20 @@
 #include "sds.h"
 
 typedef enum {
-    RDBC_RAW = 0,
-    RDBC_LZ4 = 1,
-    RDBC_LZF = 2
+    RDBC_CODEC_RAW = 0,
+    RDBC_CODEC_LZF = 1,
+    RDBC_CODEC_LZ4 = 2
 } rdb_codec_t;
+
+#ifndef RDBC_RAW
+#define RDBC_RAW RDBC_CODEC_RAW
+#endif
+#ifndef RDBC_LZF
+#define RDBC_LZF RDBC_CODEC_LZF
+#endif
+#ifndef RDBC_LZ4
+#define RDBC_LZ4 RDBC_CODEC_LZ4
+#endif
 
 typedef struct rdb_codec_ctx rdb_codec_ctx;
 

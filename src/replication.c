@@ -43,6 +43,7 @@
 #include "rio_decompress.h"
 
 #include <memory.h>
+#include <stdint.h>
 #include <sys/time.h>
 #include <unistd.h>
 #include <fcntl.h>
@@ -128,6 +129,67 @@ int bg_unlink(const char *filename) {
         bioCreateCloseJob(fd, 0, 0);
         return 0; /* Success. */
     }
+}
+
+static int configured_rdbc_codec(void) {
+    switch (server.rdb_frame_config.codec) {
+    case RDB_FR_CODEC_LZF:
+        return RDBC_LZF;
+    case RDB_FR_CODEC_LZ4:
+        return RDBC_LZ4;
+    default:
+        break;
+    }
+    return RDBC_RAW;
+}
+
+static uint8_t config_codec_mask(void) {
+    uint8_t m = codec_to_mask(RDBC_RAW);
+    int configured = configured_rdbc_codec();
+    if (configured == RDBC_LZF) m |= codec_to_mask(RDBC_LZF);
+    if (configured == RDBC_LZ4) m |= codec_to_mask(RDBC_LZ4);
+    return m;
+}
+
+static int pick_codec(uint8_t master_mask, uint8_t replica_mask) {
+    uint8_t inter = master_mask & replica_mask;
+    int configured = configured_rdbc_codec();
+    if (configured != RDBC_RAW && (inter & codec_to_mask(configured))) return configured;
+    if (inter & codec_to_mask(RDBC_LZ4)) return RDBC_LZ4;
+    if (inter & codec_to_mask(RDBC_LZF)) return RDBC_LZF;
+    if (inter & codec_to_mask(RDBC_RAW)) return RDBC_RAW;
+    return -1;
+}
+
+static void decide_framing_for_replica(client *slave) {
+    slave->replx.rdb_framing_enabled = 0;
+    slave->replx.rdb_blk_selected = 0;
+    slave->replx.rdb_codec_selected = RDBC_RAW;
+
+    if (server.rdb_frame_config.mode == RDB_FR_MODE_LEGACY) return;
+    if (!slave->replx.rdb_framing_advertised) return;
+    if (!slave->replx.rdb_codec_mask) return;
+
+    uint8_t master_mask = config_codec_mask();
+    int codec = pick_codec(master_mask, slave->replx.rdb_codec_mask);
+    if (codec < 0) return;
+
+    size_t configured_block = server.rdb_frame_config.block_bytes;
+    if (configured_block == 0) configured_block = 65536;
+    if (configured_block > (size_t)UINT32_MAX) configured_block = UINT32_MAX;
+    uint32_t blk = (uint32_t)configured_block;
+
+    if (slave->replx.rdb_blkmax && slave->replx.rdb_blkmax < blk) blk = slave->replx.rdb_blkmax;
+    if (blk < 65536) blk = 65536;
+
+    slave->replx.rdb_codec_selected = (uint8_t)codec;
+    slave->replx.rdb_blk_selected = blk;
+    slave->replx.rdb_framing_enabled = 1;
+
+    serverLog(LL_NOTICE, "Selected framed RDB for replica %s: codec=%s blk=%u",
+              getClientPeerId(slave),
+              codec == RDBC_LZ4 ? "lz4" : codec == RDBC_LZF ? "lzf" : "raw",
+              blk);
 }
 
 /* ---------------------------------- PRIMARY -------------------------------- */
@@ -969,9 +1031,16 @@ int startBgsaveForReplication(int mincapa, int req) {
     /* Only do rdbSave* when rsiptr is not NULL,
      * otherwise replica will miss repl-stream-db. */
     if (rsiptr) {
-        if (socket_target)
+        if (socket_target) {
+            listRewind(server.replicas, &li);
+            while ((ln = listNext(&li))) {
+                client *replica = ln->value;
+                if (replica->repl_data->repl_state == REPLICA_STATE_WAIT_BGSAVE_START &&
+                    replica->repl_data->replica_req == req)
+                    decide_framing_for_replica(replica);
+            }
             retval = rdbSaveToReplicasSockets(req, rsiptr);
-        else {
+        } else {
             /* Keep the page cache since it'll get used soon */
             retval = rdbSaveBackground(req, server.rdb_filename, rsiptr, RDBFLAGS_REPLICATION | RDBFLAGS_KEEP_CACHE);
         }
@@ -1351,6 +1420,7 @@ void freeClientReplicationData(client *c) {
  * */
 void replconfCommand(client *c) {
     int j;
+    int sent_ok_reply = 0;
 
     if ((c->argc % 2) == 0) {
         /* Number of arguments must be odd to make sure that every
@@ -1473,6 +1543,58 @@ void replconfCommand(client *c) {
                 addReplyErrorFormat(c, "Unrecognized version format: %s", (char *)c->argv[j + 1]->ptr);
                 return;
             }
+        } else if (!strcasecmp(c->argv[j]->ptr, "rdb-framing")) {
+            if (!strcasecmp(c->argv[j + 1]->ptr, "yes")) {
+                c->replx.rdb_framing_advertised = 1;
+                serverLog(LL_VERBOSE, "Replica %s advertises rdb-framing", getClientPeerId(c));
+            } else if (!strcasecmp(c->argv[j + 1]->ptr, "no")) {
+                c->replx.rdb_framing_advertised = 0;
+            } else {
+                addReplyError(c, "ERR invalid rdb-framing value");
+                return;
+            }
+            if (!sent_ok_reply) addReplyStatus(c, "OK");
+            sent_ok_reply = 1;
+            continue;
+        } else if (!strcasecmp(c->argv[j]->ptr, "rdb-codecs")) {
+            sds csv = c->argv[j + 1]->ptr;
+            size_t csv_len = sdslen(csv);
+            uint8_t mask = 0;
+            int ntoks = 0;
+            sds *toks = sdssplitlen(csv, csv_len, ",", 1, &ntoks);
+            if (toks) {
+                for (int t = 0; t < ntoks; t++) {
+                    if (!strcasecmp(toks[t], "raw"))
+                        mask |= codec_to_mask(RDBC_RAW);
+                    else if (!strcasecmp(toks[t], "lzf"))
+                        mask |= codec_to_mask(RDBC_LZF);
+                    else if (!strcasecmp(toks[t], "lz4"))
+                        mask |= codec_to_mask(RDBC_LZ4);
+                }
+                sdsfreesplitres(toks, ntoks);
+            }
+            if (!mask) {
+                addReplyError(c, "ERR rdb-codecs empty/invalid");
+                return;
+            }
+            c->replx.rdb_codec_mask = mask;
+            serverLog(LL_VERBOSE, "Replica %s rdb-codecs mask=0x%02x", getClientPeerId(c), (unsigned)mask);
+            if (!sent_ok_reply) addReplyStatus(c, "OK");
+            sent_ok_reply = 1;
+            continue;
+        } else if (!strcasecmp(c->argv[j]->ptr, "rdb-blkmax")) {
+            long long v;
+            if (getLongLongFromObject(c->argv[j + 1], &v) != C_OK || v <= 0) {
+                addReplyError(c, "ERR invalid rdb-blkmax");
+                return;
+            }
+            if (v < 65536) v = 65536;
+            if (v > (1LL << 27)) v = (1LL << 27);
+            c->replx.rdb_blkmax = (uint32_t)v;
+            serverLog(LL_VERBOSE, "Replica %s rdb-blkmax=%u", getClientPeerId(c), (unsigned)c->replx.rdb_blkmax);
+            if (!sent_ok_reply) addReplyStatus(c, "OK");
+            sent_ok_reply = 1;
+            continue;
         } else if (!strcasecmp(c->argv[j]->ptr, "rdb-channel")) {
             long start_with_offset = 0;
             if (getRangeLongFromObjectOrReply(c, c->argv[j + 1], 0, 1, &start_with_offset, NULL) != C_OK) {
@@ -1517,7 +1639,7 @@ void replconfCommand(client *c) {
             return;
         }
     }
-    addReply(c, shared.ok);
+    if (!sent_ok_reply) addReply(c, shared.ok);
 }
 
 /* This function puts a replica in the online state, and should be called just
@@ -1903,6 +2025,7 @@ void updateReplicasWaitingBgsave(int bgsaveerr, int type) {
                     close(repldbfd);
                     continue;
                 }
+                decide_framing_for_replica(replica);
                 replica->repl_data->repldbfd = repldbfd;
                 replica->repl_data->repldboff = 0;
                 replica->repl_data->repldbsize = buf.st_size;

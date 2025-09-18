@@ -1377,6 +1377,14 @@ typedef struct client {
     list *deferred_reply;                    /* List of reply objects to be sent to the client, typically after
                                                 the client has been unblocked. */
     unsigned long long deferred_reply_bytes; /* Total bytes of objects in the blocked client pending list.*/
+    struct {
+        unsigned rdb_framing_advertised : 1; /* replica sent rdb-framing yes */
+        unsigned rdb_framing_enabled : 1;    /* master will use framing */
+        uint32_t rdb_blkmax;                 /* replica max block size (bytes) */
+        uint32_t rdb_blk_selected;           /* selected block size */
+        uint8_t rdb_codec_mask;              /* bitmask: RAW=1<<0, LZF=1<<1, LZ4=1<<2 */
+        uint8_t rdb_codec_selected;          /* 0=RAW, 1=LZF, 2=LZ4 */
+    } replx;
 #ifdef LOG_REQ_RES
     clientReqResInfo reqres;
 #endif
@@ -1568,6 +1576,15 @@ typedef struct rdb_frame_opts {
     size_t block_bytes; /* target block size */
     int checksum;       /* crc64|none */
 } rdb_frame_opts;
+
+#ifndef RDBC_RAW
+#define RDBC_RAW 0
+#define RDBC_LZF 1
+#define RDBC_LZ4 2
+#endif
+static inline uint8_t codec_to_mask(int c) {
+    return (uint8_t)(1u << c);
+}
 
 struct malloc_stats {
     size_t zmalloc_used;

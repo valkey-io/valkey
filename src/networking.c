@@ -332,6 +332,7 @@ client *createClient(connection *conn) {
     listSetFreeMethod(c->reply, freeClientReplyValue);
     listSetDupMethod(c->reply, dupClientReplyValue);
     c->repl_data = NULL;
+    memset(&c->replx, 0, sizeof(c->replx));
     c->bstate = NULL;
     c->pubsub_data = NULL;
     c->module_data = NULL;

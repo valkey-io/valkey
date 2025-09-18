@@ -1564,7 +1564,7 @@ typedef struct rdbSaveInfo {
 typedef struct rdb_frame_opts {
     int mode;           /* legacy|block|auto */
     int file_mode;      /* legacy|block */
-    int codec;          /* RAW/LZ4/ZSTD */
+    int codec;          /* RAW/LZ4/LZF */
     size_t block_bytes; /* target block size */
     int checksum;       /* crc64|none */
 } rdb_frame_opts;

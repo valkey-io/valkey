@@ -113,6 +113,9 @@ int test_rio_compress(int argc, char **argv, int flags) {
         case RDB_FR_CODEC_LZ4:
             block_codec = RDBC_LZ4;
             break;
+        case RDB_FR_CODEC_LZF:
+            block_codec = RDBC_LZF;
+            break;
         default:
             TEST_ASSERT_MESSAGE("Unsupported codec in frame header", 0);
             block_codec = RDBC_RAW;

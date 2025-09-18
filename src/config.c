@@ -185,7 +185,7 @@ configEnum rdb_compression_file_mode_enum[] = {{"legacy", RDB_FR_FILE_MODE_LEGAC
 
 configEnum rdb_compression_codec_enum[] = {{"raw", RDB_FR_CODEC_RAW},
                                            {"lz4", RDB_FR_CODEC_LZ4},
-                                           {"zstd", RDB_FR_CODEC_ZSTD},
+                                           {"lzf", RDB_FR_CODEC_LZF},
                                            {NULL, 0}};
 
 configEnum rdb_compression_checksum_enum[] = {{"crc64", RDB_FR_CHECKSUM_CRC64},
@@ -3214,7 +3214,7 @@ standardConfig static_configs[] = {
     createEnumConfig("rdb-compression-file-mode", NULL, MODIFIABLE_CONFIG, rdb_compression_file_mode_enum,
                      server.rdb_frame_config.file_mode, RDB_FR_FILE_MODE_LEGACY, NULL, applyRdbFrameConfig),
     createEnumConfig("rdb-compression-codec", NULL, MODIFIABLE_CONFIG, rdb_compression_codec_enum,
-                     server.rdb_frame_config.codec, RDB_FR_CODEC_ZSTD, NULL, applyRdbFrameConfig),
+                     server.rdb_frame_config.codec, RDB_FR_CODEC_LZ4, NULL, applyRdbFrameConfig),
     createSizeTConfig("rdb-compression-block-bytes", NULL, MODIFIABLE_CONFIG, 1, LONG_MAX,
                       server.rdb_frame_config.block_bytes, 262144, MEMORY_CONFIG, NULL, applyRdbFrameConfig),
     createEnumConfig("rdb-compression-checksum", NULL, MODIFIABLE_CONFIG, rdb_compression_checksum_enum,

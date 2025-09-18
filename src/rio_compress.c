@@ -39,6 +39,8 @@ static uint8_t rioCompressCodecToFrame(rdb_codec_t codec) {
         return RDB_FR_CODEC_RAW;
     case RDBC_LZ4:
         return RDB_FR_CODEC_LZ4;
+    case RDBC_LZF:
+        return RDB_FR_CODEC_LZF;
     default:
         break;
     }
@@ -123,6 +125,8 @@ static rdb_codec_t rioCompressSelectCodec(int frame_codec) {
         return RDBC_RAW;
     case RDB_FR_CODEC_LZ4:
         return RDBC_LZ4;
+    case RDB_FR_CODEC_LZF:
+        return RDBC_LZF;
     default:
         break;
     }
@@ -179,6 +183,9 @@ int rioCompressFlush(rio_compress *rc, int last) {
             payload = rc->rawbuf;
             payload_len = raw_len;
         } else if (actual_codec == RDBC_LZ4) {
+            payload = rc->cmpbuf;
+            payload_len = sdslen(rc->cmpbuf);
+        } else if (actual_codec == RDBC_LZF) {
             payload = rc->cmpbuf;
             payload_len = sdslen(rc->cmpbuf);
         } else {

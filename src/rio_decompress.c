@@ -61,6 +61,9 @@ static int rioDecompressFrameCodecToCodec(uint8_t frame_codec, rdb_codec_t *code
     case RDB_FR_CODEC_LZ4:
         *codec = RDBC_LZ4;
         return C_OK;
+    case RDB_FR_CODEC_LZF:
+        *codec = RDBC_LZF;
+        return C_OK;
     default:
         break;
     }

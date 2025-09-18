@@ -20,14 +20,14 @@
 /* Supported frame codecs. */
 #define RDB_FR_CODEC_RAW 0
 #define RDB_FR_CODEC_LZ4 1
-#define RDB_FR_CODEC_ZSTD 2
+#define RDB_FR_CODEC_LZF 2
 
 /* Frame flags. */
 #define RDB_FR_FLAG_LAST 1
 
 typedef struct __attribute__((packed)) RdbFrameBlockHdr {
     uint8_t magic[4];   /* RBC\1 */
-    uint8_t codec;      /* 0=RAW,1=LZ4,2=ZSTD */
+    uint8_t codec;      /* 0=RAW,1=LZ4,2=LZF */
     uint8_t flags;      /* bit0: last-block */
     uint32_t raw_len_le; /* uncompressed bytes */
     uint32_t cmp_len_le; /* compressed bytes */

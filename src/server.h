@@ -3349,7 +3349,7 @@ int abortShutdown(void);
 void afterCommand(client *c);
 int isReplicatedClient(client *c);
 int mustObeyClient(client *c);
-bool canRedirectClient(client *c);
+bool clientSupportStandAloneRedirect(client *c);
 #ifdef __GNUC__
 void _serverLog(int level, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
 void serverLogFromHandler(int level, const char *fmt, ...) __attribute__((format(printf, 2, 3)));

@@ -5548,7 +5548,7 @@ void failoverCommand(client *c) {
  *
  * Implementation note: The current implementation calls replicationSetPrimary()
  * to start the failover request, but blocked clients are no longer processed during
- * failover. Instead, they are deferred and handled later in clearFailoverState().
+ * failover. Instead, their handling is deferred and performed later in clearFailoverState().
  */
 void updateFailoverStatus(void) {
     if (server.failover_state != FAILOVER_WAIT_FOR_SYNC) return;

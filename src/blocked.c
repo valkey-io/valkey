@@ -341,7 +341,7 @@ void disconnectOrRedirectAllBlockedClients(void) {
                 if (clusterRedirectBlockedClientIfNeeded(c))
                     unblockClient(c, 1);
             } else {
-                if (canRedirectClient(c) && (c->bstate->btype == BLOCKED_LIST || c->bstate->btype == BLOCKED_ZSET ||
+                if (clientSupportStandAloneRedirect(c) && (c->bstate->btype == BLOCKED_LIST || c->bstate->btype == BLOCKED_ZSET ||
                                              c->bstate->btype == BLOCKED_STREAM || c->bstate->btype == BLOCKED_MODULE)) {
                     if (c->bstate->btype == BLOCKED_MODULE && !moduleClientIsBlockedOnKeys(c)) continue;
                     /* Client has redirect capability and blocked on keys */

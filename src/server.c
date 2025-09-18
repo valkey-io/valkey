@@ -3488,7 +3488,7 @@ int mustObeyClient(client *c) {
     return c->id == CLIENT_ID_AOF || isReplicatedClient(c);
 }
 
-bool canRedirectClient(client *c) {
+bool clientSupportStandAloneRedirect(client *c) {
     return !server.cluster_enabled && server.primary_host && c->capa & CLIENT_CAPA_REDIRECT;
 }
 
@@ -4295,7 +4295,7 @@ int processCommand(client *c) {
         }
     }
 
-    if (canRedirectClient(c) && !obey_client &&
+    if (clientSupportStandAloneRedirect(c) && !obey_client &&
         (is_write_command || (is_read_command && !c->flag.readonly))) {
         if (server.failover_state == FAILOVER_IN_PROGRESS) {
             /* During the FAILOVER process, when conditions are met (such as

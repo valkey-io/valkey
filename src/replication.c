@@ -40,6 +40,7 @@
 #include "functions.h"
 #include "connection.h"
 #include "module.h"
+#include "cluster_migrateslots.h"
 
 #include <memory.h>
 #include <sys/time.h>
@@ -1719,11 +1720,7 @@ void rdbPipeWriteHandler(struct connection *conn) {
         return;
     } else {
         replica->repl_data->repldboff += nwritten;
-        if (getClientType(replica) == CLIENT_TYPE_SLOT_EXPORT) {
-            server.stat_net_cluster_slot_export_bytes += nwritten;
-        } else {
-            server.stat_net_repl_output_bytes += nwritten;
-        }
+        server.stat_net_repl_output_bytes += nwritten;
         if (replica->repl_data->repldboff < server.rdb_pipe_bufflen) {
             replica->repl_data->repl_last_partial_write = server.unixtime;
             return; /* more data to write.. */
@@ -1797,11 +1794,7 @@ void rdbPipeReadHandler(struct aeEventLoop *eventLoop, int fd, void *clientData,
                 /* Note: when use diskless replication, 'repldboff' is the offset
                  * of 'rdb_pipe_buff' sent rather than the offset of entire RDB. */
                 replica->repl_data->repldboff = nwritten;
-                if (getClientType(replica) == CLIENT_TYPE_SLOT_EXPORT) {
-                    server.stat_net_cluster_slot_export_bytes += nwritten;
-                } else {
-                    server.stat_net_repl_output_bytes += nwritten;
-                }
+                server.stat_net_repl_output_bytes += nwritten;
             }
             /* If we were unable to write all the data to one of the replicas,
              * setup write handler (and disable pipe read handler, below) */
@@ -1816,6 +1809,94 @@ void rdbPipeReadHandler(struct aeEventLoop *eventLoop, int fd, void *clientData,
         if (server.rdb_pipe_numconns_writing) {
             aeDeleteFileEvent(server.el, server.rdb_pipe_read, AE_READABLE);
             break;
+        }
+    }
+}
+
+/* Called in slot migration source during transfer of data from the slot migration pipe, when
+ * the target becomes writable again. */
+void slotMigrationPipeWriteHandler(struct connection *conn) {
+    serverAssert(server.slot_migration_pipe_bufflen > 0);
+    client *target = connGetPrivateData(conn);
+    ssize_t nwritten;
+    if ((nwritten = connWrite(conn, server.slot_migration_pipe_buff + target->repl_data->repldboff,
+                              server.slot_migration_pipe_bufflen - target->repl_data->repldboff)) == -1) {
+        if (connGetState(conn) == CONN_STATE_CONNECTED) return; /* equivalent to EAGAIN */
+        serverLog(LL_WARNING, "Write error sending slot migration snapshot to target: %s", connGetLastError(conn));
+        freeClient(target);
+        return;
+    } else {
+        target->repl_data->repldboff += nwritten;
+        server.stat_net_cluster_slot_export_bytes += nwritten;
+        if (target->repl_data->repldboff < server.slot_migration_pipe_bufflen) {
+            target->repl_data->repl_last_partial_write = server.unixtime;
+            return; /* more data to write.. */
+        }
+    }
+
+    /* Remove the write handler and setup the pipe read handler. */
+    connSetWriteHandler(conn, NULL);
+    target->repl_data->repl_last_partial_write = 0;
+    if (aeCreateFileEvent(server.el, server.slot_migration_pipe_read, AE_READABLE, slotMigrationPipeReadHandler, NULL) == AE_ERR) {
+        serverPanic("Unrecoverable error creating server.slot_migration_pipe_read file event.");
+    }
+}
+
+/* Called in slot migration source, when there's data to read from the child's slot migration pipe. */
+void slotMigrationPipeReadHandler(struct aeEventLoop *eventLoop, int fd, void *clientData, int mask) {
+    UNUSED(mask);
+    UNUSED(clientData);
+    UNUSED(eventLoop);
+    if (!server.slot_migration_pipe_buff) server.slot_migration_pipe_buff = zmalloc(PROTO_IOBUF_LEN);
+
+    while (1) {
+        server.slot_migration_pipe_bufflen = read(fd, server.slot_migration_pipe_buff, PROTO_IOBUF_LEN);
+        if (server.slot_migration_pipe_bufflen < 0) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK) return;
+            serverLog(LL_WARNING, "Slot migration, read error sending snapshot to target: %s", strerror(errno));
+            client *target = connGetPrivateData(server.slot_migration_pipe_conn);
+            freeClient(target);
+            server.slot_migration_pipe_conn = NULL;
+            killSlotMigrationChild();
+            return;
+        }
+
+        if (server.slot_migration_pipe_bufflen == 0) {
+            /* EOF - write end was closed. */
+            aeDeleteFileEvent(server.el, server.slot_migration_pipe_read, AE_READABLE);
+            /* Now that the target have finished reading, notify the child that it's safe to exit.
+             * When the server detects the child has exited, it can mark the target as online, and
+             * start streaming the slot replication buffers. */
+            close(server.slot_migration_child_exit_pipe);
+            server.slot_migration_child_exit_pipe = -1;
+            return;
+        }
+
+        ssize_t nwritten;
+        connection *conn = server.slot_migration_pipe_conn;
+        client *target = connGetPrivateData(conn);
+        if ((nwritten = connWrite(conn, server.slot_migration_pipe_buff, server.slot_migration_pipe_bufflen)) == -1) {
+            if (connGetState(conn) != CONN_STATE_CONNECTED) {
+                serverLog(LL_WARNING, "Slot migration transfer, write error sending DB to target: %s",
+                          connGetLastError(conn));
+                freeClient(target);
+                server.slot_migration_pipe_conn = NULL;
+                return;
+            }
+            /* An error and still in connected state, is equivalent to EAGAIN */
+            target->repl_data->repldboff = 0;
+        } else {
+            /* Note: when use diskless replication, 'repldboff' is the offset
+             * of 'slot_migration_pipe_buff' sent rather than the offset of entire snapshot. */
+            target->repl_data->repldboff = nwritten;
+            server.stat_net_cluster_slot_export_bytes += nwritten;
+        }
+        /* If we were unable to write all the data to the target,
+         * setup write handler and disable pipe read handler. */
+        if (nwritten != server.slot_migration_pipe_bufflen) {
+            connSetWriteHandler(conn, slotMigrationPipeWriteHandler);
+            aeDeleteFileEvent(server.el, server.slot_migration_pipe_read, AE_READABLE);
+            return;
         }
     }
 }

@@ -1652,12 +1652,14 @@ typedef struct {
 #define CHILD_TYPE_AOF 2
 #define CHILD_TYPE_LDB 3
 #define CHILD_TYPE_MODULE 4
+#define CHILD_TYPE_SLOT_MIGRATION 5
 
 typedef enum childInfoType {
     CHILD_INFO_TYPE_CURRENT_INFO,
     CHILD_INFO_TYPE_AOF_COW_SIZE,
     CHILD_INFO_TYPE_RDB_COW_SIZE,
     CHILD_INFO_TYPE_MODULE_COW_SIZE,
+    CHILD_INFO_TYPE_SLOT_MIGRATION_COW_SIZE,
     CHILD_INFO_TYPE_REPL_OUTPUT_BYTES
 } childInfoType;
 
@@ -1834,6 +1836,7 @@ struct valkeyServer {
     size_t stat_rdb_cow_bytes;                          /* Copy on write bytes during RDB saving. */
     size_t stat_aof_cow_bytes;                          /* Copy on write bytes during AOF rewrite. */
     size_t stat_module_cow_bytes;                       /* Copy on write bytes during module fork. */
+    size_t stat_slot_migration_cow_bytes;               /* Copy on write bytes during slot migration fork. */
     double stat_module_progress;                        /* Module save progress. */
     size_t stat_clients_type_memory[CLIENT_TYPE_COUNT]; /* Mem usage by type */
     size_t stat_cluster_links_memory;                   /* Mem usage by cluster links */
@@ -2218,6 +2221,11 @@ struct valkeyServer {
                                                             * migrations. */
     ssize_t slot_migration_max_failover_repl_bytes;        /* Maximum amount of in flight bytes for a slot migration
                                                             * failover to be attempted. */
+    int slot_migration_pipe_read;                          /* Slot migration pipe used to transfer the slots data */
+    int slot_migration_child_exit_pipe;                    /* Used by the slot migration parent allow child exit. */
+    connection *slot_migration_pipe_conn;                  /* xxxx */
+    char *slot_migration_pipe_buff;                        /* In slot migration, this buffer holds slot snapshot data. */
+    ssize_t slot_migration_pipe_bufflen;                   /* that was read from the rdb pipe. */
     /* Debug config that goes along with cluster_drop_packet_filter. When set, the link is closed on packet drop. */
     uint32_t debug_cluster_close_link_on_packet_drop : 1;
     /* Debug config to control the random ping. When set, we will disable the random ping in clusterCron. */
@@ -2261,10 +2269,11 @@ struct valkeyServer {
     serverUnixContextConfig unix_ctx_config;
     serverRdmaContextConfig rdma_ctx_config;
     /* cpu affinity */
-    char *server_cpulist;      /* cpu affinity list of server main/io thread. */
-    char *bio_cpulist;         /* cpu affinity list of bio thread. */
-    char *aof_rewrite_cpulist; /* cpu affinity list of aof rewrite process. */
-    char *bgsave_cpulist;      /* cpu affinity list of bgsave process. */
+    char *server_cpulist;         /* cpu affinity list of server main/io thread. */
+    char *bio_cpulist;            /* cpu affinity list of bio thread. */
+    char *aof_rewrite_cpulist;    /* cpu affinity list of aof rewrite process. */
+    char *bgsave_cpulist;         /* cpu affinity list of bgsave process. */
+    char *slot_migration_cpulist; /* cpu affinity list of slot migration process. */
     /* Sentinel config */
     struct sentinelConfig *sentinel_config; /* sentinel config to load at startup time. */
     /* Coordinate failover info */
@@ -3099,6 +3108,7 @@ void showLatestBacklog(void);
 void rdbPipeReadHandler(struct aeEventLoop *eventLoop, int fd, void *clientData, int mask);
 void rdbPipeWriteHandlerConnRemoved(struct connection *conn);
 int rdbRegisterAuxField(char *auxfield, rdbAuxFieldEncoder encoder, rdbAuxFieldDecoder decoder);
+void slotMigrationPipeReadHandler(struct aeEventLoop *eventLoop, int fd, void *clientData, int mask);
 void clearFailoverState(void);
 void updateFailoverStatus(void);
 void abortFailover(const char *err);

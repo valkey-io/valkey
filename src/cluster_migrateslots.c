@@ -9,6 +9,9 @@
 #include "module.h"
 #include "functions.h"
 
+#include <sys/wait.h>
+#include <fcntl.h>
+
 typedef enum slotMigrationJobState {
     /* Importing states */
     SLOT_IMPORT_WAIT_ACK,
@@ -76,6 +79,7 @@ typedef struct slotMigrationJob {
                                                * cleanup is done. */
     sds description;                          /* Description, used for
                                                * logging. */
+    size_t stat_cow_bytes;                    /* Copy on write bytes during slot migration fork. */
 
     /* State needed during client establishment */
     connection *conn; /* Connection to slot import source node. */
@@ -1264,9 +1268,8 @@ bool shouldRewriteHashtableIndex(int didx, hashtable *ht, void *privdata) {
 }
 
 /* Contains the logic run on the child process during the snapshot phase. */
-int childSnapshotForSyncSlot(int req, rio *rdb, void *privdata) {
-    UNUSED(req);
-    list *slot_ranges = privdata;
+int childSnapshotForSyncSlot(rio *aof, slotMigrationJob *job) {
+    list *slot_ranges = job->slot_ranges;
     size_t key_count = 0;
     for (int db_num = 0; db_num < server.dbnum; db_num++) {
         listIter li;
@@ -1276,40 +1279,127 @@ int childSnapshotForSyncSlot(int req, rio *rdb, void *privdata) {
             slotRange *r = (slotRange *)ln->value;
             for (int slot = r->start_slot; slot <= r->end_slot; slot++) {
                 if (rewriteSlotToAppendOnlyFileRio(
-                        rdb, db_num, slot, &key_count) == C_ERR) return C_ERR;
+                        aof, db_num, slot, &key_count) == C_ERR) return C_ERR;
             }
         }
     }
-    rioWrite(rdb, "*3\r\n", 4);
-    rioWriteBulkString(rdb, "CLUSTER", 7);
-    rioWriteBulkString(rdb, "SYNCSLOTS", 9);
-    rioWriteBulkString(rdb, "SNAPSHOT-EOF", 12);
+    rioWrite(aof, "*3\r\n", 4);
+    rioWriteBulkString(aof, "CLUSTER", 7);
+    rioWriteBulkString(aof, "SYNCSLOTS", 9);
+    rioWriteBulkString(aof, "SNAPSHOT-EOF", 12);
     return C_OK;
+}
+
+/* Kill the slot migration child using SIGUSR1 (so that the parent will know
+ * the child did not exit for an error, but because we wanted), and performs
+ * the cleanup needed. */
+void killSlotMigrationChild(void) {
+    /* No slot migration child? return. */
+    if (server.child_type != CHILD_TYPE_SLOT_MIGRATION) return;
+    serverLog(LL_NOTICE, "Killing running slot migration child: %ld", (long)server.child_pid);
+
+    /* Because we are not using here waitpid (like we have in killAppendOnlyChild
+     * and TerminateModuleForkChild), all the cleanup operations is done by
+     * checkChildrenDone, that later will find that the process killed. */
+    kill(server.child_pid, SIGUSR1);
 }
 
 /* Begin the snapshot for the provided job in a child process. */
-int slotExportJobBeginSnapshot(slotMigrationJob *job) {
-    connection **conns = zmalloc(sizeof(connection *));
-    *conns = job->client->conn;
-    rdbSnapshotOptions opts = {
-        .connsnum = 1,
-        .conns = conns,
-        .use_pipe = 1,
-        .req = REPLICA_REQ_NONE,
-        .skip_checksum = 1,
-        .snapshot_func = childSnapshotForSyncSlot,
-        .privdata = job->slot_ranges};
-    if (saveSnapshotToConnectionSockets(opts) != C_OK) {
+int slotExportJobBeginSnapshotToTargetSocket(slotMigrationJob *job) {
+    if (hasActiveChildProcess()) return C_ERR;
+
+    pid_t childpid;
+    int pipefds[2], slot_migration_pipe_write = -1, safe_to_exit_pipe = -1;
+    serverAssert(server.slot_migration_pipe_read == -1 && server.slot_migration_child_exit_pipe == -1);
+
+    /* Before to fork, create a pipe that is used to transfer the slot data bytes to
+     * the parent, we can't let it write directly to the sockets, since in case
+     * of TLS we must let the parent handle a continuous TLS state when the
+     * child terminates and parent takes over. */
+    if (anetPipe(pipefds, O_NONBLOCK, 0) == -1) return C_ERR;
+    server.slot_migration_pipe_read = pipefds[0]; /* read end */
+    slot_migration_pipe_write = pipefds[1];       /* write end */
+
+    /* create another pipe that is used by the parent to signal to the child
+     * that it can exit. */
+    if (anetPipe(pipefds, 0, 0) == -1) {
+        close(slot_migration_pipe_write);
+        close(server.slot_migration_pipe_read);
+        server.slot_migration_pipe_read = -1;
         return C_ERR;
     }
-    if (server.debug_pause_after_fork) debugPauseProcess();
-    return C_OK;
+    safe_to_exit_pipe = pipefds[0];                     /* read end */
+    server.slot_migration_child_exit_pipe = pipefds[1]; /* write end */
+
+    server.slot_migration_pipe_conn = job->client->conn;
+
+    if ((childpid = serverFork(CHILD_TYPE_SLOT_MIGRATION)) == 0) {
+        /* Child */
+        rio aof;
+        rioInitWithFd(&aof, slot_migration_pipe_write);
+        /* Close the reading part, so that if the parent crashes, the child will
+         * get a write error and exit. */
+        close(server.rdb_pipe_read);
+
+        serverSetProcTitle("valkey-slot-migration-to-target");
+        serverSetCpuAffinity(server.bgsave_cpulist);
+
+        int retval = childSnapshotForSyncSlot(&aof, job);
+        if (retval == C_OK && rioFlush(&aof) == 0) retval = C_ERR;
+        if (retval == C_OK) {
+            sendChildCowInfo(CHILD_INFO_TYPE_SLOT_MIGRATION_COW_SIZE, "Slot migration");
+        }
+        rioFreeFd(&aof);
+        /* wake up the reader, tell it we're done. */
+        close(slot_migration_pipe_write);
+        close(server.slot_migration_child_exit_pipe); /* close write end so that we can detect the close on the parent. */
+        ssize_t dummy = read(safe_to_exit_pipe, pipefds, 1);
+        UNUSED(dummy);
+        exitFromChild((retval == C_OK) ? 0 : 1);
+    } else {
+        /* Parent */
+        if (childpid == -1) {
+            serverLog(LL_WARNING, "Can't begin slot migration snapshot in background: fork: %s", strerror(errno));
+            close(slot_migration_pipe_write);
+            close(server.slot_migration_pipe_read);
+            close(server.slot_migration_child_exit_pipe);
+            server.slot_migration_pipe_conn = NULL;
+            return C_ERR;
+        }
+
+        serverLog(LL_NOTICE, "Started child process %ld for slot migration %s", (long)childpid, job->description);
+        close(slot_migration_pipe_write); /* close write in parent so that it can detect the close on the child. */
+        if (aeCreateFileEvent(server.el, server.slot_migration_pipe_read, AE_READABLE, slotMigrationPipeReadHandler, NULL) == AE_ERR) {
+            serverPanic("Unrecoverable error creating server.rdb_pipe_read file event.");
+        }
+        close(safe_to_exit_pipe);
+        if (server.debug_pause_after_fork) debugPauseProcess();
+        return C_OK;
+    }
+    return C_OK; /* Unreached. */
 }
 
-/* Callback triggered after snapshot is finished. We either begin sending the
- * incremental contents or fail the associated migration. */
-void clusterHandleSlotExportBackgroundSaveDone(int bgsaveerr) {
-    if (!server.cluster_enabled) return;
+/* When a background slot migration terminates, call the right handler. */
+void backgroundSlotMigrationDoneHandler(int exitcode, int bysignal) {
+    if (!bysignal && exitcode == 0) {
+        serverLog(LL_NOTICE, "Background SLOT MIGRATION transfer terminated with success");
+    } else if (!bysignal && exitcode != 0) {
+        serverLog(LL_WARNING, "Background SLOT MIGRATION transfer error");
+    } else {
+        serverLog(LL_WARNING, "Background SLOT MIGRATION transfer terminated by signal %d", bysignal);
+    }
+    if (server.slot_migration_child_exit_pipe != -1) close(server.slot_migration_child_exit_pipe);
+    if (server.slot_migration_pipe_read > 0) {
+        aeDeleteFileEvent(server.el, server.slot_migration_pipe_read, AE_READABLE);
+        close(server.slot_migration_pipe_read);
+    }
+    server.slot_migration_child_exit_pipe = -1;
+    server.slot_migration_pipe_read = -1;
+    server.slot_migration_pipe_conn = NULL;
+    zfree(server.slot_migration_pipe_buff);
+    server.slot_migration_pipe_buff = NULL;
+    server.slot_migration_pipe_bufflen = 0;
+
     listIter li;
     listNode *ln;
     listRewind(server.cluster->slot_migration_jobs, &li);
@@ -1319,8 +1409,9 @@ void clusterHandleSlotExportBackgroundSaveDone(int bgsaveerr) {
         if (job->state != SLOT_EXPORT_SNAPSHOTTING) {
             continue;
         }
-        if (bgsaveerr == C_OK) {
+        if (!bysignal && exitcode == 0) {
             slotExportBeginStreaming(job);
+            job->stat_cow_bytes = server.stat_slot_migration_cow_bytes;
         } else {
             serverLog(LL_WARNING,
                       "Child process failed to snapshot slot migration %s",
@@ -1683,7 +1774,7 @@ void proceedWithSlotMigration(slotMigrationJob *job) {
             serverLog(LL_NOTICE,
                       "Beginning snapshot of slot migration %s.",
                       job->description);
-            if (slotExportJobBeginSnapshot(job) == C_ERR) {
+            if (slotExportJobBeginSnapshotToTargetSocket(job) == C_ERR) {
                 serverLog(LL_WARNING,
                           "Slot migration %s failed to start slot snapshot",
                           job->description);
@@ -1780,10 +1871,6 @@ void resetSlotMigrationJob(slotMigrationJob *job) {
 
     sdsfree(job->response_buf);
     job->response_buf = NULL;
-
-    /* Description is not needed once migration is finished */
-    sdsfree(job->description);
-    job->description = NULL;
 }
 
 void freeSlotMigrationJob(void *o) {
@@ -1793,6 +1880,7 @@ void freeSlotMigrationJob(void *o) {
     sdsfree(job->slot_ranges_str);
     sdsfree(job->status_msg);
     sdsfree(job->response_buf);
+    sdsfree(job->description);
     zfree(o);
 }
 
@@ -1940,7 +2028,7 @@ void finishSlotMigrationJob(slotMigrationJob *job,
         slotExportTryUnpause();
         /* Fast fail the child process, which will be cleaned up fully in
          * checkChildrenDone. */
-        if (job->state == SLOT_EXPORT_SNAPSHOTTING) killRDBChild();
+        if (job->state == SLOT_EXPORT_SNAPSHOTTING) killSlotMigrationChild();
     }
     if (job->type == SLOT_MIGRATION_IMPORT &&
         state != SLOT_MIGRATION_JOB_SUCCESS) {
@@ -1997,7 +2085,7 @@ void clusterCommandGetSlotMigrations(client *c) {
     listRewind(server.cluster->slot_migration_jobs, &li);
     while ((ln = listNext(&li)) != NULL) {
         slotMigrationJob *job = ln->value;
-        addReplyMapLen(c, 10);
+        addReplyMapLen(c, 11);
         addReplyBulkCString(c, "name");
         addReplyBulkCBuffer(c, job->name, CLUSTER_NAMELEN);
         addReplyBulkCString(c, "operation");
@@ -2020,6 +2108,8 @@ void clusterCommandGetSlotMigrations(client *c) {
         addReplyBulkCString(c, slotMigrationJobStateToString(job->state));
         addReplyBulkCString(c, "message");
         addReplyBulkCString(c, job->status_msg ? job->status_msg : "");
+        addReplyBulkCString(c, "cow_size");
+        addReplyLongLong(c, (long long)job->stat_cow_bytes);
     }
 }
 

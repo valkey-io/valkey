@@ -824,6 +824,7 @@ const char *strChildType(int type) {
     case CHILD_TYPE_AOF: return "AOF";
     case CHILD_TYPE_LDB: return "LDB";
     case CHILD_TYPE_MODULE: return "MODULE";
+    case CHILD_TYPE_SLOT_MIGRATION: return "SLOT_MIGRATION";
     default: return "Unknown";
     }
 }
@@ -850,7 +851,7 @@ void resetChildState(void) {
 
 /* Return if child type is mutually exclusive with other fork children */
 int isMutuallyExclusiveChildType(int type) {
-    return type == CHILD_TYPE_RDB || type == CHILD_TYPE_AOF || type == CHILD_TYPE_MODULE;
+    return type == CHILD_TYPE_RDB || type == CHILD_TYPE_AOF || type == CHILD_TYPE_MODULE || type == CHILD_TYPE_SLOT_MIGRATION;
 }
 
 /* Returns true when we're inside a long command that yielded to the event loop. */
@@ -1390,17 +1391,19 @@ void checkChildrenDone(void) {
                       "child_type: %s, child_pid = %d",
                       strerror(errno), strChildType(server.child_type), (int)server.child_pid);
         } else if (pid == server.child_pid) {
+            if (!bysignal && exitcode == 0) receiveChildInfo();
             if (server.child_type == CHILD_TYPE_RDB) {
                 backgroundSaveDoneHandler(exitcode, bysignal);
             } else if (server.child_type == CHILD_TYPE_AOF) {
                 backgroundRewriteDoneHandler(exitcode, bysignal);
             } else if (server.child_type == CHILD_TYPE_MODULE) {
                 ModuleForkDoneHandler(exitcode, bysignal);
+            } else if (server.child_type == CHILD_TYPE_SLOT_MIGRATION) {
+                backgroundSlotMigrationDoneHandler(exitcode, bysignal);
             } else {
                 serverPanic("Unknown child type %d for child pid %d", server.child_type, server.child_pid);
                 exit(1);
             }
-            if (!bysignal && exitcode == 0) receiveChildInfo();
             resetChildState();
         } else {
             if (!ldbRemoveChild(pid)) {
@@ -2830,6 +2833,8 @@ void initServer(void) {
     server.in_fork_child = CHILD_TYPE_NONE;
     server.rdb_pipe_read = -1;
     server.rdb_child_exit_pipe = -1;
+    server.slot_migration_pipe_read = -1;
+    server.slot_migration_child_exit_pipe = -1;
     server.main_thread_id = pthread_self();
     server.current_client = NULL;
     server.errors = raxNew();
@@ -2938,6 +2943,7 @@ void initServer(void) {
     server.stat_rdb_cow_bytes = 0;
     server.stat_aof_cow_bytes = 0;
     server.stat_module_cow_bytes = 0;
+    server.stat_slot_migration_cow_bytes = 0;
     server.stat_module_progress = 0;
     for (int j = 0; j < CLIENT_TYPE_COUNT; j++) server.stat_clients_type_memory[j] = 0;
     server.stat_cluster_links_memory = 0;
@@ -4740,6 +4746,11 @@ int finishShutdown(void) {
         }
     }
 
+    if (server.child_type == CHILD_TYPE_SLOT_MIGRATION) {
+        serverLog(LL_WARNING, "There is a slot migration child. Killing it!");
+        killSlotMigrationChild();
+    }
+
     /* Create a new RDB file before exiting. */
     if ((server.saveparamslen > 0 && !nosave) || save) {
         serverLog(LL_NOTICE, "Saving the final RDB snapshot before exiting.");
@@ -6048,7 +6059,8 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                 "aof_last_write_status:%s\r\n", (server.aof_last_write_status == C_OK && aof_bio_fsync_status == C_OK) ? "ok" : "err",
                 "aof_last_cow_size:%zu\r\n", server.stat_aof_cow_bytes,
                 "module_fork_in_progress:%d\r\n", server.child_type == CHILD_TYPE_MODULE,
-                "module_fork_last_cow_size:%zu\r\n", server.stat_module_cow_bytes));
+                "module_fork_last_cow_size:%zu\r\n", server.stat_module_cow_bytes,
+                "slot_migration_fork_in_progress:%d\r\n", server.child_type == CHILD_TYPE_SLOT_MIGRATION));
 
         if (server.aof_enabled) {
             info = sdscatprintf(
@@ -6762,6 +6774,8 @@ int serverFork(int purpose) {
             latencyTraceIfNeeded(rdb, fork, server.stat_fork_time);
         } else if (purpose == CHILD_TYPE_AOF) {
             latencyTraceIfNeeded(aof, fork, server.stat_fork_time);
+        } else if (purpose == CHILD_TYPE_SLOT_MIGRATION) {
+            latencyTraceIfNeeded(cluster, fork, server.stat_fork_time);
         }
 
         /* The child_pid and child_type are only for mutually exclusive children.

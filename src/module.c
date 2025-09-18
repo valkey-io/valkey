@@ -13355,6 +13355,10 @@ int VM_RdbLoad(ValkeyModuleCtx *ctx, ValkeyModuleRdbStream *stream, int flags) {
      * will prevent COW memory issue. */
     if (server.child_type == CHILD_TYPE_RDB) killRDBChild();
 
+    /* Kill existing slot migration fork as it is saving outdated data. Also killing it
+     * will prevent COW memory issue. */
+    if (server.child_type == CHILD_TYPE_SLOT_MIGRATION) killSlotMigrationChild();
+
     emptyData(-1, EMPTYDB_NO_FLAGS, NULL);
 
     /* rdbLoad() can go back to the networking and process network events. If

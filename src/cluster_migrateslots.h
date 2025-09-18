@@ -24,7 +24,7 @@ void clusterCommandMigrateSlots(client *c);
 void clusterCommandSyncSlots(client *c);
 void clusterCommandGetSlotMigrations(client *c);
 void clusterCommandCancelSlotMigrations(client *c);
-void clusterHandleSlotExportBackgroundSaveDone(int bgsaveerr);
+void backgroundSlotMigrationDoneHandler(int exitcode, int bysignal);
 void clusterUpdateSlotExportsOnOwnershipChange(void);
 void clusterUpdateSlotImportsOnOwnershipChange(void);
 void clusterCleanupSlotMigrationLog(void);
@@ -33,5 +33,6 @@ size_t clusterGetTotalSlotExportBufferMemory(void);
 bool clusterSlotFailoverGranted(int slot);
 void clusterFailAllSlotExportsWithMessage(char *message);
 void clusterHandleSlotMigrationErrorResponse(slotMigrationJob *job);
+void killSlotMigrationChild(void);
 
 #endif /* __CLUSTER_MIGRATESLOTS_H */

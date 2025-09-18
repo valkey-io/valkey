@@ -2280,6 +2280,8 @@ int rewriteObjectRio(rio *aof, robj *o, int db_num) {
     return C_OK;
 }
 
+/* This function is currently used in slot migration to rewrite the corresponding
+ * slot hashtable to rio. */
 int rewriteSlotToAppendOnlyFileRio(rio *aof, int db_num, int hashslot, size_t *key_count) {
     long long updated_time = 0;
 
@@ -2302,7 +2304,7 @@ int rewriteSlotToAppendOnlyFileRio(rio *aof, int db_num, int hashslot, size_t *k
         if (key_count && ((*key_count)++ & 1023) == 0) {
             long long now = mstime();
             if (now - updated_time >= 1000) {
-                sendChildInfo(CHILD_INFO_TYPE_CURRENT_INFO, *key_count, "AOF rewrite");
+                sendChildInfo(CHILD_INFO_TYPE_CURRENT_INFO, *key_count, "Slot migration");
                 updated_time = now;
             }
         }

@@ -161,12 +161,30 @@ static int pick_codec(uint8_t master_mask, uint8_t replica_mask) {
     return -1;
 }
 
-static void decide_framing_for_replica(client *slave) {
+static sds build_rdb_framing_preface(client *replica) {
+    if (!replica->replx.rdb_framing_enabled) return NULL;
+
+    const char *codec =
+        replica->replx.rdb_codec_selected == RDBC_LZ4
+            ? "lz4"
+            : replica->replx.rdb_codec_selected == RDBC_LZF ? "lzf" : "raw";
+    unsigned int blk = replica->replx.rdb_blk_selected ? replica->replx.rdb_blk_selected : 65536;
+    const char *checksum =
+        server.rdb_frame_config.checksum == RDB_FR_CHECKSUM_CRC64 ? "crc64" : "none";
+
+    return sdscatfmt(sdsempty(), "+RDBFRAMED codec=%s blk=%u checksum=%s\r\n", codec, blk, checksum);
+}
+
+static void decide_framing_for_replica(client *slave, int disk_transfer) {
     slave->replx.rdb_framing_enabled = 0;
     slave->replx.rdb_blk_selected = 0;
     slave->replx.rdb_codec_selected = RDBC_RAW;
 
-    if (server.rdb_frame_config.mode == RDB_FR_MODE_LEGACY) return;
+    if (disk_transfer) {
+        if (server.rdb_frame_config.file_mode != RDB_FR_FILE_MODE_BLOCK) return;
+    } else if (server.rdb_frame_config.mode == RDB_FR_MODE_LEGACY) {
+        return;
+    }
     if (!slave->replx.rdb_framing_advertised) return;
     if (!slave->replx.rdb_codec_mask) return;
 
@@ -1037,7 +1055,7 @@ int startBgsaveForReplication(int mincapa, int req) {
                 client *replica = ln->value;
                 if (replica->repl_data->repl_state == REPLICA_STATE_WAIT_BGSAVE_START &&
                     replica->repl_data->replica_req == req)
-                    decide_framing_for_replica(replica);
+                    decide_framing_for_replica(replica, 0);
             }
             retval = rdbSaveToReplicasSockets(req, rsiptr);
         } else {
@@ -2025,12 +2043,19 @@ void updateReplicasWaitingBgsave(int bgsaveerr, int type) {
                     close(repldbfd);
                     continue;
                 }
-                decide_framing_for_replica(replica);
+                decide_framing_for_replica(replica, 1);
                 replica->repl_data->repldbfd = repldbfd;
                 replica->repl_data->repldboff = 0;
                 replica->repl_data->repldbsize = buf.st_size;
                 replica->repl_data->repl_state = REPLICA_STATE_SEND_BULK;
-                replica->repl_data->replpreamble = sdscatprintf(sdsempty(), "$%lld\r\n", (unsigned long long)replica->repl_data->repldbsize);
+                sds preamble = sdsempty();
+                sds preface = build_rdb_framing_preface(replica);
+                if (preface) {
+                    preamble = sdscatsds(preamble, preface);
+                    sdsfree(preface);
+                }
+                preamble = sdscatprintf(preamble, "$%lld\r\n", (unsigned long long)replica->repl_data->repldbsize);
+                replica->repl_data->replpreamble = preamble;
 
                 /* When repl_state changes to REPLICA_STATE_SEND_BULK, we will release
                  * the resources in freeClient. */

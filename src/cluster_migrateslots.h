@@ -34,5 +34,9 @@ bool clusterSlotFailoverGranted(int slot);
 void clusterFailAllSlotExportsWithMessage(char *message);
 void clusterHandleSlotMigrationErrorResponse(slotMigrationJob *job);
 void killSlotMigrationChild(void);
+void clusterCleanSlotImportsOnPromotion(void);
+void clusterCleanSlotImportsOnResync(void);
+void clusterCleanSlotImportsOnReload(void);
+int clusterRegisterSlotImportsAuxFields(void);
 
 #endif /* __CLUSTER_MIGRATESLOTS_H */

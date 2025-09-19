@@ -2196,6 +2196,9 @@ void replicationAttachToNewPrimary(void) {
     serverAssert(server.primary == NULL);
     replicationDiscardCachedPrimary();
 
+    /* Cancel all in progress slot imports */
+    clusterCleanSlotImportsOnResync();
+
     disconnectReplicas();     /* Force our replicas to resync with us as well. */
     freeReplicationBacklog(); /* Don't allow our chained replicas to PSYNC. */
 }
@@ -4417,6 +4420,9 @@ void replicationUnsetPrimary(void) {
     /* Restart the AOF subsystem in case we shut it down during a sync when
      * we were still a replica. */
     if (server.aof_enabled && server.aof_state == AOF_OFF) restartAOFAfterSYNC();
+
+    /* Cancel any ongoing atomic slot migrations */
+    clusterCleanSlotImportsOnPromotion();
 }
 
 /* This function is called when the replica lose the connection with the

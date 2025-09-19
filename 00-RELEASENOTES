@@ -11,6 +11,50 @@ Upgrade urgency levels:
 | CRITICAL | There is a critical bug affecting MOST USERS. Upgrade ASAP.         |
 | SECURITY | There are security fixes in the release.                            |
 
+Valkey 9.0.0-rc2 - September 23, 2025
+-------------------------------------
+
+Upgrade urgency LOW: This is the second release candidate of Valkey 9.0.0,
+focused on stability, bug fixes, and incremental improvements.
+
+**Attention Valkey Module maintainers**: There is a new module option to
+indicate support for the Atomic Slot Migration (ASM) feature. Modules must
+explicitly opt in to ASM; otherwise, this feature will be disabled in clusters
+that load modules without ASM support.
+
+### Bug Fixes
+* Fix module context object re-use in scripting engines (#2358)
+* Fix pre-size hashtables per slot when reading RDB files (#2466)
+* Do not migrate script functions in atomic slot migration (#2547)
+* Don't use AVX2 instructions if the CPU don't support it (#2571)
+
+### Performance/Efficiency
+* Optimized pipelining by parsing and prefetching multiple commands (#2092)
+
+### Cluster and Replication
+* Make cluster failover delay relative to node timeout (#2449)
+* Separate RDB snapshotting from atomic slot migration (#2533)
+
+### Module API
+* Added new module API event for tracking authentication attempts (#2237)
+* Added READONLY flag to ClientInfo.flags output structure (#2522)
+* Make modules opt-in to atomic slot migration and add server events (#2593)
+
+### Configuration
+* Added new cluster-announce-client-(port|tls-port) configs (#2429)
+* CONFIG RESETSTATS now also resets cluster related stats (#2458)
+* Make CONFIG GET command return sorted output (#2493)
+
+### Commands
+* Update reply schema for LMOVE and BLMOVE (#2541)
+* Most deprecated commands are now un-deprecated (#2546)
+
+### Upgrade
+* Relaxed RDB check for foreign RDB formats (#2543)
+
+### CLI
+* Added word-jump navigation (Alt/Option/Ctrl + ←/→) to valkey-cli (#2583)
+
 Valkey 9.0.0-rc1 - August 14, 2025
 ----------------------------------
 

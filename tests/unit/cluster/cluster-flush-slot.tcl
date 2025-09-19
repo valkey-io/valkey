@@ -44,7 +44,7 @@ start_cluster 2 2 {tags {external:skip cluster}} {
         set after_keys_num [expr {$slot_keys_num + 1000}]
         assert_equal [R 0 CLUSTER COUNTKEYSINSLOT $key_slot] $after_keys_num
 
-        # open master replication stream so we can assert what gets propagated.
+        # open primary replication stream so we can assert what gets propagated.
         set repl [attach_to_replication_stream]
 
         # flush slot key

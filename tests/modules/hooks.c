@@ -378,6 +378,73 @@ void authAttemptCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent e, uint64_t sub
     LogNumericEvent(ctx, "auth-attempt-success", ai->result == VALKEYMODULE_AUTH_RESULT_GRANTED);
 }
 
+void logAtomicSlotMigrationInfo(ValkeyModuleCtx *ctx, const char *prefix, ValkeyModuleAtomicSlotMigrationInfo *asmi) {
+    ValkeyModuleString *target_keyname = ValkeyModule_CreateStringPrintf(ctx, "%s-target", prefix);
+    LogStringEvent(ctx, ValkeyModule_StringPtrLen(target_keyname, NULL), asmi->target_node_id);
+    ValkeyModule_FreeString(ctx, target_keyname);
+
+    ValkeyModuleString *source_keyname = ValkeyModule_CreateStringPrintf(ctx, "%s-source", prefix);
+    LogStringEvent(ctx, ValkeyModule_StringPtrLen(source_keyname, NULL), asmi->source_node_id);
+    ValkeyModule_FreeString(ctx, source_keyname);
+
+    ValkeyModuleString *job_keyname = ValkeyModule_CreateStringPrintf(ctx, "%s-jobname", prefix);
+    LogStringEvent(ctx, ValkeyModule_StringPtrLen(job_keyname, NULL), asmi->job_name);
+    ValkeyModule_FreeString(ctx, job_keyname);
+
+    ValkeyModuleString *numslotranges_keyname = ValkeyModule_CreateStringPrintf(ctx, "%s-numslotranges", prefix);
+    LogNumericEvent(ctx, ValkeyModule_StringPtrLen(numslotranges_keyname, NULL), asmi->num_slot_ranges);
+    ValkeyModule_FreeString(ctx, numslotranges_keyname);
+
+    ValkeyModuleString *joined_range_str = NULL;
+    for (size_t i = 0; i < asmi->num_slot_ranges; i++) {
+        ValkeyModuleString *range_str = ValkeyModule_CreateStringPrintf(ctx, "%d-%d",
+            asmi->slot_ranges[i].start, asmi->slot_ranges[i].end);
+        if (joined_range_str) {
+            ValkeyModule_StringAppendBuffer(ctx, range_str, " ", 1);
+            size_t range_str_len;
+            const char *range_buf = ValkeyModule_StringPtrLen(range_str, &range_str_len);
+            ValkeyModule_StringAppendBuffer(ctx, joined_range_str, range_buf, range_str_len);
+            ValkeyModule_FreeString(ctx, range_str);
+        } else {
+            joined_range_str = range_str;
+        }
+    }
+    if (!joined_range_str) {
+        joined_range_str = ValkeyModule_CreateString(ctx, "", 0);
+    }
+    ValkeyModuleString *slotranges_keyname = ValkeyModule_CreateStringPrintf(ctx, "%s-slotranges", prefix);
+    LogStringEvent(ctx, ValkeyModule_StringPtrLen(slotranges_keyname, NULL), ValkeyModule_StringPtrLen(joined_range_str, NULL));
+    ValkeyModule_FreeString(ctx, slotranges_keyname);
+    ValkeyModule_FreeString(ctx, joined_range_str);
+}
+
+void atomicSlotMigrationCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent e, uint64_t sub, void *data)
+{
+    VALKEYMODULE_NOT_USED(e);
+
+    ValkeyModuleAtomicSlotMigrationInfo *asmi = data;
+    switch (sub) {
+        case VALKEYMODULE_SUBEVENT_ATOMIC_SLOT_MIGRATION_IMPORT_STARTED:
+            logAtomicSlotMigrationInfo(ctx, "atomic-slot-migration-import-start", asmi);
+            break;
+        case VALKEYMODULE_SUBEVENT_ATOMIC_SLOT_MIGRATION_IMPORT_COMPLETED:
+            logAtomicSlotMigrationInfo(ctx, "atomic-slot-migration-import-complete", asmi);
+            break;
+        case VALKEYMODULE_SUBEVENT_ATOMIC_SLOT_MIGRATION_IMPORT_ABORTED:
+            logAtomicSlotMigrationInfo(ctx, "atomic-slot-migration-import-abort", asmi);
+            break;
+        case VALKEYMODULE_SUBEVENT_ATOMIC_SLOT_MIGRATION_EXPORT_STARTED:
+            logAtomicSlotMigrationInfo(ctx, "atomic-slot-migration-export-start", asmi);
+            break;
+        case VALKEYMODULE_SUBEVENT_ATOMIC_SLOT_MIGRATION_EXPORT_COMPLETED:
+            logAtomicSlotMigrationInfo(ctx, "atomic-slot-migration-export-complete", asmi);
+            break;
+        case VALKEYMODULE_SUBEVENT_ATOMIC_SLOT_MIGRATION_EXPORT_ABORTED:
+            logAtomicSlotMigrationInfo(ctx, "atomic-slot-migration-export-abort", asmi);
+            break;
+    }
+}
+
 static int cmdIsKeyRemoved(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc){
     if(argc != 2){
         return ValkeyModule_WrongArity(ctx);
@@ -469,6 +536,9 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
     ValkeyModule_SubscribeToServerEvent(ctx,
         ValkeyModuleEvent_AuthenticationAttempt, authAttemptCallback);
 
+    ValkeyModule_SubscribeToServerEvent(ctx,
+        ValkeyModuleEvent_AtomicSlotMigration, atomicSlotMigrationCallback);
+
     event_log = ValkeyModule_CreateDict(ctx);
     removed_event_log = ValkeyModule_CreateDict(ctx);
     removed_subevent_type = ValkeyModule_CreateDict(ctx);
@@ -496,6 +566,8 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
             return VALKEYMODULE_ERR;
         }
     }
+
+    ValkeyModule_SetModuleOptions(ctx, VALKEYMODULE_OPTIONS_HANDLE_ATOMIC_SLOT_MIGRATION);
 
     return VALKEYMODULE_OK;
 }

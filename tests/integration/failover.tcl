@@ -304,6 +304,8 @@ start_server {overrides {save {}}} {
             [s 0 master_failover_state] == "waiting-for-sync"
         } else {
             fail "failover did not start in time"
+        } debug {
+            puts [s 0 master_failover_state]
         }
 
         $rd_brpop_after BRPOP FOO_LIST 0

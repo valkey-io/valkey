@@ -171,7 +171,7 @@ static int zslRandomLevel(void) {
     uint64_t rand = genrand64_int64();
 
     /* The probability of gaining 2 additional leading zeros is 0.25.
-     * This matches the level calculation logic perfectly: each 
+     * This matches the level calculation logic perfectly: each
      * iteration has a 0.25 probability of increasing the level by 1.
      * Note: __builtin_clzll has undefined behavior when the input is 0. */
     int level = rand == 0 ? ZSKIPLIST_MAXLEVEL : (__builtin_clzll(rand) / 2 + 1);

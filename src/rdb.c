@@ -50,6 +50,7 @@
 #include "rio_decompress.h"
 #include "rdb_frame.h"
 
+#include <errno.h>
 #include <math.h>
 #include <fcntl.h>
 #include <stdatomic.h>
@@ -62,6 +63,8 @@
 #include <sys/stat.h>
 #include <sys/param.h>
 #include <stddef.h>
+
+#define RDB_FR_FILE_PREAMBLE "VKFRM\x01\n"
 
 /* Size of the static buffer used for rdbcompression */
 #define LZF_STATIC_BUFFER_SIZE (8 * 1024)
@@ -189,6 +192,47 @@ static void rdbReleaseFramedWrite(int framed, rio_compress *rc) {
         sdsfree(rc->cmpbuf);
         rc->cmpbuf = NULL;
     }
+}
+
+static const char *rdbFrameCodecToString(int codec) {
+    switch (codec) {
+    case RDB_FR_CODEC_RAW:
+        return "raw";
+    case RDB_FR_CODEC_LZ4:
+        return "lz4";
+    case RDB_FR_CODEC_LZF:
+        return "lzf";
+    default:
+        break;
+    }
+    return NULL;
+}
+
+static int rdbFrameCodecFromString(const char *token) {
+    if (token == NULL) return -1;
+    if (!strcasecmp(token, "raw")) return RDB_FR_CODEC_RAW;
+    if (!strcasecmp(token, "lz4")) return RDB_FR_CODEC_LZ4;
+    if (!strcasecmp(token, "lzf")) return RDB_FR_CODEC_LZF;
+    return -1;
+}
+
+static const char *rdbFrameChecksumToString(int checksum) {
+    switch (checksum) {
+    case RDB_FR_CHECKSUM_CRC64:
+        return "crc64";
+    case RDB_FR_CHECKSUM_NONE:
+        return "none";
+    default:
+        break;
+    }
+    return NULL;
+}
+
+static int rdbFrameChecksumFromString(const char *token) {
+    if (token == NULL) return -1;
+    if (!strcasecmp(token, "crc64")) return RDB_FR_CHECKSUM_CRC64;
+    if (!strcasecmp(token, "none")) return RDB_FR_CHECKSUM_NONE;
+    return -1;
 }
 
 static int rdbStartFramedWrite(rio *base, rio *out, const rdb_frame_opts *opts) {
@@ -1634,7 +1678,40 @@ static int rdbSaveInternal(int req, const char *filename, rdbSaveInfo *rsi, int 
     rio_compress rc;
     int framed = 0;
     const rdb_frame_opts *frame_opts = NULL;
-    if (server.rdb_frame_config.file_mode == RDB_FR_FILE_MODE_BLOCK) frame_opts = &server.rdb_frame_config;
+    rdb_frame_opts local_frame_opts;
+    if (server.rdb_frame_config.file_mode == RDB_FR_FILE_MODE_BLOCK) {
+        local_frame_opts = server.rdb_frame_config;
+        size_t block_bytes = local_frame_opts.block_bytes ? local_frame_opts.block_bytes : 262144;
+        if (block_bytes < 65536) block_bytes = 65536;
+        local_frame_opts.block_bytes = block_bytes;
+
+        const char *codec = rdbFrameCodecToString(local_frame_opts.codec);
+        const char *checksum = rdbFrameChecksumToString(local_frame_opts.checksum);
+        if (codec == NULL || checksum == NULL) {
+            serverLog(LL_WARNING, "Unsupported framed RDB configuration (codec or checksum)");
+            err_op = "framed configuration";
+            goto werr;
+        }
+
+        if (!rioWrite(&rdb, RDB_FR_FILE_PREAMBLE, sizeof(RDB_FR_FILE_PREAMBLE) - 1)) {
+            err_op = "write framed header";
+            goto werr;
+        }
+
+        char hdrline[128];
+        int hdrlen = snprintf(hdrline, sizeof(hdrline), "codec=%s blk=%zu checksum=%s\n", codec, block_bytes, checksum);
+        if (hdrlen < 0 || (size_t)hdrlen >= sizeof(hdrline)) {
+            err_op = "format framed header";
+            errno = EINVAL;
+            goto werr;
+        }
+        if (!rioWrite(&rdb, hdrline, hdrlen)) {
+            err_op = "write framed header";
+            goto werr;
+        }
+
+        frame_opts = &local_frame_opts;
+    }
     if (frame_opts) {
         int start = rdbStartFramedWrite(&rdb, &rc.rio_itf, frame_opts);
         if (start == -1) {
@@ -3183,13 +3260,89 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
             }
             clearerr(fp);
         }
-        int has_frame_magic = peeklen >= 4 && rdbFrameHasMagicPrefix(peek, peeklen);
-        int has_redis_magic = peeklen >= 5 && memcmp(peek, "REDIS", 5) == 0;
-        int has_valkey_magic = peeklen >= 6 && memcmp(peek, "VALKEY", 6) == 0;
-        if (has_frame_magic || (server.rdb_frame_config.file_mode == RDB_FR_FILE_MODE_BLOCK && peeklen > 0 && !has_redis_magic && !has_valkey_magic)) {
+        int has_preamble = peeklen >= sizeof(RDB_FR_FILE_PREAMBLE) - 1 &&
+                            memcmp(peek, RDB_FR_FILE_PREAMBLE, sizeof(RDB_FR_FILE_PREAMBLE) - 1) == 0;
+        if (has_preamble) {
+            unsigned char magicbuf[sizeof(RDB_FR_FILE_PREAMBLE) - 1];
+            if (rioRead(rdb, magicbuf, sizeof(magicbuf)) == 0) {
+                serverLog(LL_WARNING, "Failed reading framed RDB preamble");
+                return C_ERR;
+            }
+
+            char header_line[256];
+            size_t hdr_len = 0;
+            while (hdr_len + 1 < sizeof(header_line)) {
+                unsigned char ch;
+                if (rioRead(rdb, &ch, 1) == 0) {
+                    serverLog(LL_WARNING, "Failed reading framed RDB header line");
+                    return C_ERR;
+                }
+                header_line[hdr_len++] = (char)ch;
+                if (ch == '\n') break;
+            }
+            if (hdr_len == 0 || header_line[hdr_len - 1] != '\n') {
+                serverLog(LL_WARNING, "Failed loading RDB: invalid framed RDB header");
+                return C_ERR;
+            }
+            header_line[hdr_len - 1] = '\0';
+
+            const char *codec_token = NULL;
+            const char *blk_token = NULL;
+            const char *checksum_token = NULL;
+            char *saveptr = NULL;
+            char *field = strtok_r(header_line, " ", &saveptr);
+            int field_count = 0;
+            while (field) {
+                if (!strncmp(field, "codec=", 6)) {
+                    codec_token = field + 6;
+                } else if (!strncmp(field, "blk=", 4)) {
+                    blk_token = field + 4;
+                } else if (!strncmp(field, "checksum=", 9)) {
+                    checksum_token = field + 9;
+                } else {
+                    serverLog(LL_WARNING, "Failed loading RDB: invalid framed RDB header");
+                    return C_ERR;
+                }
+                field_count++;
+                field = strtok_r(NULL, " ", &saveptr);
+            }
+            if (field_count != 3 || codec_token == NULL || blk_token == NULL || checksum_token == NULL) {
+                serverLog(LL_WARNING, "Failed loading RDB: invalid framed RDB header");
+                return C_ERR;
+            }
+
+            if (rdbFrameCodecFromString(codec_token) == -1) {
+                serverLog(LL_WARNING, "Failed loading RDB: unsupported framed RDB codec '%s'", codec_token);
+                return C_ERR;
+            }
+
+            char *endptr = NULL;
+            errno = 0;
+            unsigned long long blk_val = strtoull(blk_token, &endptr, 10);
+            if (errno == ERANGE || endptr == blk_token || *endptr != '\0' || blk_val == 0) {
+                serverLog(LL_WARNING, "Failed loading RDB: invalid framed RDB header");
+                return C_ERR;
+            }
+
+            if (rdbFrameChecksumFromString(checksum_token) == -1) {
+                serverLog(LL_WARNING, "Failed loading RDB: invalid framed RDB header checksum '%s'", checksum_token);
+                return C_ERR;
+            }
+
             if (rioInitDecompress(&decomp, rdb) == C_ERR) return C_ERR;
             reader = &decomp.rio_itf;
             use_decompress = 1;
+        } else {
+            int has_frame_magic = peeklen >= 4 && rdbFrameHasMagicPrefix(peek, peeklen);
+            int has_redis_magic = peeklen >= 5 && memcmp(peek, "REDIS", 5) == 0;
+            int has_valkey_magic = peeklen >= 6 && memcmp(peek, "VALKEY", 6) == 0;
+            if (has_frame_magic ||
+                (server.rdb_frame_config.file_mode == RDB_FR_FILE_MODE_BLOCK && peeklen > 0 && !has_redis_magic &&
+                 !has_valkey_magic)) {
+                if (rioInitDecompress(&decomp, rdb) == C_ERR) return C_ERR;
+                reader = &decomp.rio_itf;
+                use_decompress = 1;
+            }
         }
     }
 

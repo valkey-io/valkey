@@ -28,16 +28,7 @@
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  * POSSIBILITY OF SUCH DAMAGE.
  */
-#include <stdio.h>
-#include <stdlib.h>
 
-#ifndef _WIN32
-#include <sys/time.h>
-#endif
-
-#include "win32.h"
-
-#include "alloc.h"
 #include "vkutil.h"
 
 int _vk_atoi(uint8_t *line, size_t n) {
@@ -60,33 +51,4 @@ int _vk_atoi(uint8_t *line, size_t n) {
     }
 
     return value;
-}
-
-/*
- * Return the current time in microseconds since Epoch
- */
-int64_t vk_usec_now(void) {
-    int64_t usec;
-#ifdef _WIN32
-    LARGE_INTEGER counter, frequency;
-
-    if (!QueryPerformanceCounter(&counter) ||
-        !QueryPerformanceFrequency(&frequency)) {
-        return -1;
-    }
-
-    usec = counter.QuadPart * 1000000 / frequency.QuadPart;
-#else
-    struct timeval now;
-    int status;
-
-    status = gettimeofday(&now, NULL);
-    if (status < 0) {
-        return -1;
-    }
-
-    usec = (int64_t)now.tv_sec * 1000000LL + (int64_t)now.tv_usec;
-#endif
-
-    return usec;
 }

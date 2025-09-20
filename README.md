@@ -167,7 +167,8 @@ line, with exactly the same name.
 
 ## Running manually
 
-To manually run a Valkey server with TLS mode (assuming `./gen-test-certs.sh` was invoked so sample certificates/keys are available):
+To manually run a Valkey server with TLS mode (assuming `./utils/gen-test-certs.sh`
+was invoked so sample certificates/keys are available):
 
 * TLS built-in mode:
     ```

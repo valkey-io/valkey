@@ -364,19 +364,19 @@ start_server {tags {"other"}} {
         # effect in 9.x and be deleted in 10.0.
         set hello [r hello 3]
         set version [dict get $hello version]
-        if {[string match "10.*" $version]} {
+        if {[string match "11.*" $version]} {
             # Check that the config doesn't exist anymore.
             assert_error "ERR Unknown*" {r config set extended-redis-compatibility yes}
             error "We shall also delete this test case"
-        } elseif {[string match "9.*" $version]} {
-            # This config is scheduled for removal. In 9.x it should still
+        } elseif {[string match "10.*" $version]} {
+            # This config is scheduled for removal. In 10.x it should still
             # exists but have no effect.
             r config set extended-redis-compatibility yes
             set hello [r hello 3]
             assert_equal valkey [dict get $hello server]
             assert_equal $version [dict get $hello version]
             r config set extended-redis-compatibility no
-        } elseif {[string match "8.*" $version] || ($version eq "255.255.255")} {
+        } elseif {[string match "8.*" $version] || [string match "9.*" $version] || ($version eq "255.255.255")} {
             # In 8.x, the config shall work and affect HELLO server and version.
             r config set extended-redis-compatibility yes
             set hello [r hello 3]
@@ -467,7 +467,7 @@ start_server {tags {"other external:skip"}} {
 
             assert_equal "TEST" [lindex $cmdline 0]
             assert_match "*/valkey-server" [lindex $cmdline 1]
-            
+
             if {$::tls} {
                 set expect_port [srv 0 pport]
                 set expect_tls_port [srv 0 port]
@@ -555,7 +555,7 @@ start_cluster 1 0 {tags {"other external:skip cluster slow"}} {
     test "CLUSTER FORGET with invalid node ID" {
          catch {r cluster forget 1} err
          set _ $err
-    } {*ERR Unknown node*} 
+    } {*ERR Unknown node*}
 }
 
 start_server {tags {"other external:skip"}} {
@@ -575,7 +575,7 @@ start_server {tags {"other external:skip"}} {
             [dict get [r memory stats] db.$dbnum overhead.hashtable.main] < 400
         } else {
             fail "dict did not resize in time"
-        }   
+        }
     }
 }
 

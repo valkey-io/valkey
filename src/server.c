@@ -32,9 +32,11 @@
  * SPDX-License-Identifier: BSD-3-Clause
  */
 #include "server.h"
+#include "connection.h"
 #include "monotonic.h"
 #include "cluster.h"
 #include "cluster_slot_stats.h"
+#include "cluster_migrateslots.h"
 #include "commandlog.h"
 #include "bio.h"
 #include "latency.h"
@@ -58,7 +60,6 @@
 #include <signal.h>
 #include <sys/wait.h>
 #include <errno.h>
-#include <ctype.h>
 #include <stdarg.h>
 #include <arpa/inet.h>
 #include <sys/stat.h>
@@ -70,7 +71,6 @@
 #include <sys/un.h>
 #include <limits.h>
 #include <float.h>
-#include <math.h>
 #include <sys/utsname.h>
 #include <locale.h>
 #include <sys/socket.h>
@@ -313,22 +313,6 @@ void serverLogFromHandler(int level, const char *fmt, ...) {
     va_end(ap);
 
     serverLogRawFromHandler(level, msg);
-}
-
-/* Return the UNIX time in microseconds */
-long long ustime(void) {
-    struct timeval tv;
-    long long ust;
-
-    gettimeofday(&tv, NULL);
-    ust = ((long long)tv.tv_sec) * 1000000;
-    ust += tv.tv_usec;
-    return ust;
-}
-
-/* Return the UNIX time in milliseconds */
-mstime_t mstime(void) {
-    return ustime() / 1000;
 }
 
 /* Return the command time snapshot in milliseconds.
@@ -663,20 +647,34 @@ hashtableType subcommandSetType = {.entryGetKey = hashtableSubcommandGetKey,
 
 /* Hash type hash table (note that small hashes are represented with listpacks) */
 const void *hashHashtableTypeGetKey(const void *entry) {
-    const hashTypeEntry *hash_entry = entry;
-    return (const void *)hashTypeEntryGetField(hash_entry);
+    return (const void *)entryGetField(entry);
 }
 
 void hashHashtableTypeDestructor(void *entry) {
-    hashTypeEntry *hash_entry = entry;
-    freeHashTypeEntry(hash_entry);
+    entryFree(entry);
 }
+
+size_t hashHashtableTypeMetadataSize(void) {
+    return sizeof(void *);
+}
+
+extern bool hashHashtableTypeValidate(hashtable *ht, void *entry);
 
 hashtableType hashHashtableType = {
     .hashFunction = dictSdsHash,
     .entryGetKey = hashHashtableTypeGetKey,
     .keyCompare = hashtableSdsKeyCompare,
     .entryDestructor = hashHashtableTypeDestructor,
+    .getMetadataSize = hashHashtableTypeMetadataSize,
+};
+
+hashtableType hashWithVolatileItemsHashtableType = {
+    .hashFunction = dictSdsHash,
+    .entryGetKey = hashHashtableTypeGetKey,
+    .keyCompare = hashtableSdsKeyCompare,
+    .entryDestructor = hashHashtableTypeDestructor,
+    .getMetadataSize = hashHashtableTypeMetadataSize,
+    .validateEntry = hashHashtableTypeValidate,
 };
 
 /* Hashtable type without destructor */
@@ -826,6 +824,7 @@ const char *strChildType(int type) {
     case CHILD_TYPE_AOF: return "AOF";
     case CHILD_TYPE_LDB: return "LDB";
     case CHILD_TYPE_MODULE: return "MODULE";
+    case CHILD_TYPE_SLOT_MIGRATION: return "SLOT_MIGRATION";
     default: return "Unknown";
     }
 }
@@ -852,7 +851,7 @@ void resetChildState(void) {
 
 /* Return if child type is mutually exclusive with other fork children */
 int isMutuallyExclusiveChildType(int type) {
-    return type == CHILD_TYPE_RDB || type == CHILD_TYPE_AOF || type == CHILD_TYPE_MODULE;
+    return type == CHILD_TYPE_RDB || type == CHILD_TYPE_AOF || type == CHILD_TYPE_MODULE || type == CHILD_TYPE_SLOT_MIGRATION;
 }
 
 /* Returns true when we're inside a long command that yielded to the event loop. */
@@ -914,8 +913,8 @@ int clientsCronResizeQueryBuffer(client *c) {
         if (idletime > 2) {
             /* 1) Query is idle for a long time. */
             size_t remaining = sdslen(c->querybuf) - c->qb_pos;
-            if (!c->flag.primary && !remaining) {
-                /* If the client is not a primary and no data is pending,
+            if (!isReplicatedClient(c) && !remaining) {
+                /* If the client is not replicated and no data is pending,
                  * The client can safely use the shared query buffer in the next read - free the client's querybuf. */
                 sdsfree(c->querybuf);
                 /* By setting the querybuf to NULL, the client will use the shared query buffer in the next read.
@@ -1291,6 +1290,7 @@ void databasesCron(void) {
             if (db == NULL) continue;
             kvstoreTryResizeHashtables(db->keys, CRON_DICTS_PER_DB);
             kvstoreTryResizeHashtables(db->expires, CRON_DICTS_PER_DB);
+            kvstoreTryResizeHashtables(db->keys_with_volatile_items, CRON_DICTS_PER_DB);
         }
 
         /* Rehash */
@@ -1303,6 +1303,8 @@ void databasesCron(void) {
                     elapsed_us += kvstoreIncrementallyRehash(db->keys, threshold_us - elapsed_us);
                     if (elapsed_us >= threshold_us) break;
                     elapsed_us += kvstoreIncrementallyRehash(db->expires, threshold_us - elapsed_us);
+                    if (elapsed_us >= threshold_us) break;
+                    elapsed_us += kvstoreIncrementallyRehash(db->keys_with_volatile_items, threshold_us - elapsed_us);
                     if (elapsed_us >= threshold_us) break;
                 }
                 rehash_db++;
@@ -1389,17 +1391,19 @@ void checkChildrenDone(void) {
                       "child_type: %s, child_pid = %d",
                       strerror(errno), strChildType(server.child_type), (int)server.child_pid);
         } else if (pid == server.child_pid) {
+            if (!bysignal && exitcode == 0) receiveChildInfo();
             if (server.child_type == CHILD_TYPE_RDB) {
                 backgroundSaveDoneHandler(exitcode, bysignal);
             } else if (server.child_type == CHILD_TYPE_AOF) {
                 backgroundRewriteDoneHandler(exitcode, bysignal);
             } else if (server.child_type == CHILD_TYPE_MODULE) {
                 ModuleForkDoneHandler(exitcode, bysignal);
+            } else if (server.child_type == CHILD_TYPE_SLOT_MIGRATION) {
+                backgroundSlotMigrationDoneHandler(exitcode, bysignal);
             } else {
                 serverPanic("Unknown child type %d for child pid %d", server.child_type, server.child_pid);
                 exit(1);
             }
-            if (!bysignal && exitcode == 0) receiveChildInfo();
             resetChildState();
         } else {
             if (!ldbRemoveChild(pid)) {
@@ -1492,12 +1496,12 @@ long long serverCron(struct aeEventLoop *eventLoop, long long id, void *clientDa
         monotime current_time = getMonotonicUs();
         long long factor = 1000000; // us
         trackInstantaneousMetric(STATS_METRIC_COMMAND, server.stat_numcommands, current_time, factor);
-        trackInstantaneousMetric(STATS_METRIC_NET_INPUT, server.stat_net_input_bytes + server.stat_net_repl_input_bytes,
+        trackInstantaneousMetric(STATS_METRIC_NET_INPUT, server.stat_net_input_bytes + server.stat_net_repl_input_bytes + server.bio_stat_net_repl_input_bytes + server.stat_net_cluster_slot_import_bytes,
                                  current_time, factor);
         trackInstantaneousMetric(STATS_METRIC_NET_OUTPUT,
-                                 server.stat_net_output_bytes + server.stat_net_repl_output_bytes, current_time,
+                                 server.stat_net_output_bytes + server.stat_net_repl_output_bytes + server.stat_net_cluster_slot_export_bytes, current_time,
                                  factor);
-        trackInstantaneousMetric(STATS_METRIC_NET_INPUT_REPLICATION, server.stat_net_repl_input_bytes, current_time,
+        trackInstantaneousMetric(STATS_METRIC_NET_INPUT_REPLICATION, server.stat_net_repl_input_bytes + server.bio_stat_net_repl_input_bytes, current_time,
                                  factor);
         trackInstantaneousMetric(STATS_METRIC_NET_OUTPUT_REPLICATION, server.stat_net_repl_output_bytes, current_time,
                                  factor);
@@ -1652,7 +1656,7 @@ long long serverCron(struct aeEventLoop *eventLoop, long long id, void *clientDa
 
     /* Run the Cluster cron. */
     if (server.cluster_enabled) {
-        run_with_period(100) clusterCron();
+        run_with_period(CLUSTER_CRON_PERIOD_MS) clusterCron();
     }
 
     /* Run the Sentinel timer if we are in sentinel mode. */
@@ -2134,6 +2138,9 @@ void createSharedObjects(void) {
     shared.multi = createSharedString("MULTI");
     shared.exec = createSharedString("EXEC");
     shared.hset = createSharedString("HSET");
+    shared.hdel = createSharedString("HDEL");
+    shared.hpexpireat = createSharedString("HPEXPIREAT");
+    shared.hpersist = createSharedString("HPERSIST");
     shared.srem = createSharedString("SREM");
     shared.xgroup = createSharedString("XGROUP");
     shared.xclaim = createSharedString("XCLAIM");
@@ -2166,6 +2173,7 @@ void createSharedObjects(void) {
     shared.special_asterisk = createSharedString("*");
     shared.special_equals = createSharedString("=");
     shared.redacted = createSharedString("(redacted)");
+    shared.fields = createSharedString("FIELDS");
 
     for (j = 0; j < OBJ_SHARED_INTEGERS; j++) {
         shared.integers[j] = makeObjectShared(createObject(OBJ_STRING, (void *)(long)j));
@@ -2693,7 +2701,9 @@ void resetServerStats(void) {
     server.stat_numcommands = 0;
     server.stat_numconnections = 0;
     server.stat_expiredkeys = 0;
-    server.stat_expired_stale_perc = 0;
+    server.stat_expiredfields = 0;
+    server.stat_expired_keys_stale_perc = 0;
+    server.stat_expired_keys_with_vola_stale_perc = 0;
     server.stat_expired_time_cap_reached_count = 0;
     server.stat_expire_cycle_time_used = 0;
     server.stat_evictedkeys = 0;
@@ -2738,7 +2748,10 @@ void resetServerStats(void) {
     server.stat_net_input_bytes = 0;
     server.stat_net_output_bytes = 0;
     server.stat_net_repl_input_bytes = 0;
+    server.bio_stat_net_repl_input_bytes = 0;
     server.stat_net_repl_output_bytes = 0;
+    server.stat_net_cluster_slot_export_bytes = 0;
+    server.stat_net_cluster_slot_import_bytes = 0;
     server.stat_unexpected_error_replies = 0;
     server.stat_total_error_replies = 0;
     server.stat_dump_payload_sanitizations = 0;
@@ -2783,13 +2796,16 @@ serverDb *createDatabase(int id) {
     serverDb *db = zmalloc(sizeof(serverDb));
     db->keys = kvstoreCreate(&kvstoreKeysHashtableType, slot_count_bits, flags);
     db->expires = kvstoreCreate(&kvstoreExpiresHashtableType, slot_count_bits, flags);
-    db->expires_cursor = 0;
+    db->keys_with_volatile_items = kvstoreCreate(&kvstoreExpiresHashtableType, slot_count_bits, flags);
+    if (clusterIsAnySlotImporting()) {
+        clusterMarkImportingSlotsInDb(db);
+    }
     db->blocking_keys = dictCreate(&keylistDictType);
     db->blocking_keys_unblock_on_nokey = dictCreate(&objectKeyPointerValueDictType);
     db->ready_keys = dictCreate(&objectKeyPointerValueDictType);
     db->watched_keys = dictCreate(&keylistDictType);
     db->id = id;
-    db->avg_ttl = 0;
+    resetDbExpiryState(db);
     return db;
 }
 
@@ -2817,6 +2833,8 @@ void initServer(void) {
     server.in_fork_child = CHILD_TYPE_NONE;
     server.rdb_pipe_read = -1;
     server.rdb_child_exit_pipe = -1;
+    server.slot_migration_pipe_read = -1;
+    server.slot_migration_child_exit_pipe = -1;
     server.main_thread_id = pthread_self();
     server.current_client = NULL;
     server.errors = raxNew();
@@ -2925,6 +2943,7 @@ void initServer(void) {
     server.stat_rdb_cow_bytes = 0;
     server.stat_aof_cow_bytes = 0;
     server.stat_module_cow_bytes = 0;
+    server.stat_slot_migration_cow_bytes = 0;
     server.stat_module_progress = 0;
     for (int j = 0; j < CLIENT_TYPE_COUNT; j++) server.stat_clients_type_memory[j] = 0;
     server.stat_cluster_links_memory = 0;
@@ -2944,6 +2963,7 @@ void initServer(void) {
     server.acl_info.invalid_key_accesses = 0;
     server.acl_info.user_auth_failures = 0;
     server.acl_info.invalid_channel_accesses = 0;
+    server.acl_info.acl_access_denied_tls_cert = 0;
 
     /* Create the timer callback, this is our way to process many background
      * operations incrementally, like eviction of unaccessed expired keys, etc. */
@@ -3016,16 +3036,16 @@ void initServer(void) {
 
 void initListeners(void) {
     /* Setup listeners from server config for TCP/TLS/Unix */
-    int conn_index;
+    ConnectionType *ct;
     connListener *listener;
     if (server.port != 0) {
-        conn_index = connectionIndexByType(CONN_TYPE_SOCKET);
-        if (conn_index < 0) serverPanic("Failed finding connection listener of %s", CONN_TYPE_SOCKET);
-        listener = &server.listeners[conn_index];
+        ct = connectionByType(CONN_TYPE_SOCKET);
+        if (!ct) serverPanic("Failed finding connection listener of %s", getConnectionTypeName(CONN_TYPE_SOCKET));
+        listener = &server.listeners[CONN_TYPE_SOCKET];
         listener->bindaddr = server.bindaddr;
         listener->bindaddr_count = server.bindaddr_count;
         listener->port = server.port;
-        listener->ct = connectionByType(CONN_TYPE_SOCKET);
+        listener->ct = ct;
     }
 
     if (server.tls_port || server.tls_replication || server.tls_cluster) {
@@ -3041,32 +3061,32 @@ void initListeners(void) {
     }
 
     if (server.tls_port != 0) {
-        conn_index = connectionIndexByType(CONN_TYPE_TLS);
-        if (conn_index < 0) serverPanic("Failed finding connection listener of %s", CONN_TYPE_TLS);
-        listener = &server.listeners[conn_index];
+        ct = connectionByType(CONN_TYPE_TLS);
+        if (!ct) serverPanic("Failed finding connection listener of %s", getConnectionTypeName(CONN_TYPE_TLS));
+        listener = &server.listeners[CONN_TYPE_TLS];
         listener->bindaddr = server.bindaddr;
         listener->bindaddr_count = server.bindaddr_count;
         listener->port = server.tls_port;
-        listener->ct = connectionByType(CONN_TYPE_TLS);
+        listener->ct = ct;
     }
     if (server.unixsocket != NULL) {
-        conn_index = connectionIndexByType(CONN_TYPE_UNIX);
-        if (conn_index < 0) serverPanic("Failed finding connection listener of %s", CONN_TYPE_UNIX);
-        listener = &server.listeners[conn_index];
+        ct = connectionByType(CONN_TYPE_UNIX);
+        if (!ct) serverPanic("Failed finding connection listener of %s", getConnectionTypeName(CONN_TYPE_UNIX));
+        listener = &server.listeners[CONN_TYPE_UNIX];
         listener->bindaddr = &server.unixsocket;
         listener->bindaddr_count = 1;
-        listener->ct = connectionByType(CONN_TYPE_UNIX);
+        listener->ct = ct;
         listener->priv = &server.unix_ctx_config; /* Unix socket specified */
     }
 
     if (server.rdma_ctx_config.port != 0) {
-        conn_index = connectionIndexByType(CONN_TYPE_RDMA);
-        if (conn_index < 0) serverPanic("Failed finding connection listener of %s", CONN_TYPE_RDMA);
-        listener = &server.listeners[conn_index];
+        ct = connectionByType(CONN_TYPE_RDMA);
+        if (!ct) serverPanic("Failed finding connection listener of %s", getConnectionTypeName(CONN_TYPE_RDMA));
+        listener = &server.listeners[CONN_TYPE_RDMA];
         listener->bindaddr = server.rdma_ctx_config.bindaddr;
         listener->bindaddr_count = server.rdma_ctx_config.bindaddr_count;
         listener->port = server.rdma_ctx_config.port;
-        listener->ct = connectionByType(CONN_TYPE_RDMA);
+        listener->ct = ct;
         listener->priv = &server.rdma_ctx_config;
     }
 
@@ -3078,12 +3098,12 @@ void initListeners(void) {
 
         if (connListen(listener) == C_ERR) {
             serverLog(LL_WARNING, "Failed listening on port %u (%s), aborting.", listener->port,
-                      listener->ct->get_type(NULL));
+                      getConnectionTypeName(listener->ct->get_type()));
             exit(1);
         }
 
         if (createSocketAcceptHandler(listener, connAcceptHandler(listener->ct)) != C_OK)
-            serverPanic("Unrecoverable error creating %s listener accept handler.", listener->ct->get_type(NULL));
+            serverPanic("Unrecoverable error creating %s listener accept handler.", getConnectionTypeName(listener->ct->get_type()));
 
         listen_fds += listener->count;
     }
@@ -3325,7 +3345,7 @@ void resetErrorTableStats(void) {
 
 /* ========================== OP Array API ============================ */
 
-int serverOpArrayAppend(serverOpArray *oa, int dbid, robj **argv, int argc, int target) {
+int serverOpArrayAppend(serverOpArray *oa, int dbid, robj **argv, int argc, int target, int slot) {
     serverOp *op;
     int prev_capacity = oa->capacity;
 
@@ -3341,6 +3361,7 @@ int serverOpArrayAppend(serverOpArray *oa, int dbid, robj **argv, int argc, int 
     op->argv = argv;
     op->argc = argc;
     op->target = target;
+    op->slot = slot;
     oa->numops++;
     return oa->numops;
 }
@@ -3361,12 +3382,11 @@ void serverOpArrayFree(serverOpArray *oa) {
 
 /* ====================== Commands lookup and execution ===================== */
 
-int isContainerCommandBySds(sds s) {
+bool isContainerCommandBySds(sds s) {
     void *entry;
-    int found_command = hashtableFind(server.commands, s, &entry);
+    bool found_command = hashtableFind(server.commands, s, &entry);
     struct serverCommand *base_cmd = entry;
-    int has_subcommands = found_command && base_cmd->subcommands_ht;
-    return has_subcommands;
+    return found_command && base_cmd->subcommands_ht;
 }
 
 struct serverCommand *lookupSubcommand(struct serverCommand *container, sds sub_name) {
@@ -3386,9 +3406,9 @@ struct serverCommand *lookupSubcommand(struct serverCommand *container, sds sub_
  */
 struct serverCommand *lookupCommandLogic(hashtable *commands, robj **argv, int argc, int strict) {
     void *entry = NULL;
-    int found_command = hashtableFind(commands, argv[0]->ptr, &entry);
+    bool found_command = hashtableFind(commands, argv[0]->ptr, &entry);
     struct serverCommand *base_cmd = entry;
-    int has_subcommands = found_command && base_cmd->subcommands_ht;
+    bool has_subcommands = found_command && base_cmd->subcommands_ht;
     if (argc == 1 || !has_subcommands) {
         if (strict && argc != 1) return NULL;
         /* Note: It is possible that base_cmd->proc==NULL (e.g. CONFIG) */
@@ -3458,9 +3478,14 @@ struct serverCommand *lookupCommandOrOriginal(robj **argv, int argc) {
     return cmd;
 }
 
+/* Determines if commands on this client are replicated from some source */
+int isReplicatedClient(client *c) {
+    return c->flag.primary || (c->slot_migration_job && isImportSlotMigrationJob(c->slot_migration_job));
+}
+
 /* Commands arriving from the primary client or AOF client, should never be rejected. */
 int mustObeyClient(client *c) {
-    return c->id == CLIENT_ID_AOF || c->flag.primary;
+    return c->id == CLIENT_ID_AOF || isReplicatedClient(c);
 }
 
 static int shouldPropagate(int target) {
@@ -3470,6 +3495,7 @@ static int shouldPropagate(int target) {
         if (server.aof_state != AOF_OFF) return 1;
     }
     if (target & PROPAGATE_REPL) {
+        if (clusterIsAnySlotExporting()) return 1;
         if (server.primary_host == NULL && (server.repl_backlog || listLength(server.replicas) != 0)) return 1;
     }
 
@@ -3482,7 +3508,7 @@ static int shouldPropagate(int target) {
  * flags are an xor between:
  * + PROPAGATE_NONE (no propagation of command at all)
  * + PROPAGATE_AOF (propagate into the AOF file if is enabled)
- * + PROPAGATE_REPL (propagate into the replication link)
+ * + PROPAGATE_REPL (propagate into replication links, including slot migration jobs)
  *
  * This is an internal low-level function and should not be called!
  *
@@ -3491,7 +3517,7 @@ static int shouldPropagate(int target) {
  * dbid value of -1 is saved to indicate that the called do not want
  * to replicate SELECT for this command (used for database neutral commands).
  */
-static void propagateNow(int dbid, robj **argv, int argc, int target) {
+static void propagateNow(int dbid, robj **argv, int argc, int target, int slot) {
     if (!shouldPropagate(target)) return;
 
     /* This needs to be unreachable since the dataset should be fixed during
@@ -3518,8 +3544,20 @@ static void propagateNow(int dbid, robj **argv, int argc, int target) {
     serverAssert(!isPausedActions(PAUSE_ACTION_REPLICA) || server.client_pause_in_transaction ||
                  server.server_del_keys_in_slot);
 
-    if (server.aof_state != AOF_OFF && target & PROPAGATE_AOF) feedAppendOnlyFile(dbid, argv, argc);
-    if (target & PROPAGATE_REPL) replicationFeedReplicas(dbid, argv, argc);
+    int propagate_to_aof = server.aof_state != AOF_OFF && target & PROPAGATE_AOF;
+
+    /* When AOF is on, we want to propagate to replicas even when we have no
+     * replicas for the WAITAOF implementation. But otherwise, we only propagate
+     * when we have replicas. */
+    int propagate_to_repl = target & PROPAGATE_REPL;
+    if (propagate_to_repl && !propagate_to_aof) {
+        propagate_to_repl = server.primary_host == NULL && (server.repl_backlog || listLength(server.replicas) != 0);
+    }
+    int propagate_to_slot_migration = target & PROPAGATE_REPL && clusterIsAnySlotExporting();
+
+    if (propagate_to_aof) feedAppendOnlyFile(dbid, argv, argc);
+    if (propagate_to_repl) replicationFeedReplicas(dbid, argv, argc);
+    if (propagate_to_slot_migration) clusterFeedSlotExportJobs(dbid, argv, argc, slot);
 }
 
 /* Used inside commands to schedule the propagation of additional commands
@@ -3533,18 +3571,22 @@ static void propagateNow(int dbid, robj **argv, int argc, int target) {
  * so it is up to the caller to release the passed argv (but it is usually
  * stack allocated).  The function automatically increments ref count of
  * passed objects, so the caller does not need to. */
-void alsoPropagate(int dbid, robj **argv, int argc, int target) {
+void alsoPropagate(int dbid, robj **argv, int argc, int target, int slot) {
     robj **argvcopy;
     int j;
 
     if (!shouldPropagate(target)) return;
+
+    /* Don't propagate commands on slot migration clients, these will be proxied
+     * in replicationFeedStreamFromPrimaryStream() */
+    if (server.current_client != NULL && server.current_client->slot_migration_job) return;
 
     argvcopy = zmalloc(sizeof(robj *) * argc);
     for (j = 0; j < argc; j++) {
         argvcopy[j] = argv[j];
         incrRefCount(argv[j]);
     }
-    serverOpArrayAppend(&server.also_propagate, dbid, argvcopy, argc, target);
+    serverOpArrayAppend(&server.also_propagate, dbid, argvcopy, argc, target, slot);
 }
 
 /* It is possible to call the function forceCommandPropagation() inside a
@@ -3610,18 +3652,18 @@ static void propagatePendingCommands(void) {
     if (transaction) {
         /* We use dbid=-1 to indicate we do not want to replicate SELECT.
          * It'll be inserted together with the next command (inside the MULTI) */
-        propagateNow(-1, &shared.multi, 1, PROPAGATE_AOF | PROPAGATE_REPL);
+        propagateNow(-1, &shared.multi, 1, PROPAGATE_AOF | PROPAGATE_REPL, -1);
     }
 
     for (j = 0; j < server.also_propagate.numops; j++) {
         rop = &server.also_propagate.ops[j];
         serverAssert(rop->target);
-        propagateNow(rop->dbid, rop->argv, rop->argc, rop->target);
+        propagateNow(rop->dbid, rop->argv, rop->argc, rop->target, rop->slot);
     }
 
     if (transaction) {
         /* We use dbid=-1 to indicate we do not want to replicate select */
-        propagateNow(-1, &shared.exec, 1, PROPAGATE_AOF | PROPAGATE_REPL);
+        propagateNow(-1, &shared.exec, 1, PROPAGATE_AOF | PROPAGATE_REPL, -1);
     }
 
     serverOpArrayFree(&server.also_propagate);
@@ -3784,7 +3826,7 @@ void call(client *c, int flags) {
     else
         duration = ustime() - call_timer;
 
-    valkey_commands_trace(valkey_commands, command_call, connGetTypeId(c->conn), getClientPeerId(c), getClientSockname(c), real_cmd->declared_name, duration);
+    valkey_commands_trace(valkey_commands, command_call, connGetType(c->conn), getClientPeerId(c), getClientSockname(c), real_cmd->declared_name, duration);
     c->duration += duration;
     dirty = server.dirty - dirty;
     if (dirty < 0) dirty = 0;
@@ -3881,7 +3923,7 @@ void call(client *c, int flags) {
 
         /* Call alsoPropagate() only if at least one of AOF / replication
          * propagation is needed. */
-        if (propagate_flags != PROPAGATE_NONE) alsoPropagate(c->db->id, c->argv, c->argc, propagate_flags);
+        if (propagate_flags != PROPAGATE_NONE) alsoPropagate(c->db->id, c->argv, c->argc, propagate_flags, c->slot);
     }
 
     /* Restore the old replication flags, since call() can be executed
@@ -4052,22 +4094,41 @@ uint64_t getCommandFlags(client *c) {
     return cmd_flags;
 }
 
-/* Prepare a parsed command for processing, including looking up the command,
- * checking arity and calculating cluster slot. This should be done before
- * calling processCommand() and can be done by I/O threads to offload the
- * main-thread. */
-void prepareCommand(client *c) {
+/* Helper for prepareCommand() and prepareCommandQueue(). Prepares a command for
+ * processing, including looking up the command, checking arity and calculating
+ * cluster slot. This should be done before calling processCommand() and can be
+ * done by I/O threads to offload the main-thread. */
+static void prepareCommandGeneric(robj **argv, int argc, int *read_flags, struct serverCommand **cmd, int *slot) {
+    if (!(*read_flags & READ_FLAGS_PARSING_COMPLETED) || argc == 0) return;
     /* Make sure we don't do this twice. */
-    debugServerAssert(c->parsed_cmd == NULL && !(c->read_flags & READ_FLAGS_COMMAND_NOT_FOUND));
-    c->parsed_cmd = lookupCommand(c->argv, c->argc);
-    if (c->parsed_cmd && !commandCheckArity(c->parsed_cmd, c->argc, NULL)) {
-        /* The command was found, but the arity is invalid. */
-        c->read_flags |= READ_FLAGS_BAD_ARITY;
-    } else if (c->parsed_cmd && server.cluster_enabled) {
-        debugServerAssert(c->slot == -1 &&
-                          !(c->read_flags & READ_FLAGS_CROSSSLOT) &&
-                          !(c->read_flags & READ_FLAGS_NO_KEYS));
-        c->slot = clusterSlotByCommand(c->parsed_cmd, c->argv, c->argc, &c->read_flags);
+    debugServerAssert(*cmd == NULL && !(*read_flags & READ_FLAGS_COMMAND_NOT_FOUND));
+    *cmd = lookupCommand(argv, argc);
+    if (!*cmd) {
+        *read_flags |= READ_FLAGS_COMMAND_NOT_FOUND;
+    } else if (!commandCheckArity(*cmd, argc, NULL)) {
+        *read_flags |= READ_FLAGS_BAD_ARITY;
+    } else if (server.cluster_enabled) {
+        debugServerAssert(*slot == -1 &&
+                          !(*read_flags & READ_FLAGS_CROSSSLOT) &&
+                          !(*read_flags & READ_FLAGS_NO_KEYS));
+        *slot = clusterSlotByCommand(*cmd, argv, argc, read_flags);
+    }
+}
+
+/* Prepare the client's current command. See prepareCommandGeneric(). */
+void prepareCommand(client *c) {
+    prepareCommandGeneric(c->argv, c->argc, &c->read_flags, &c->parsed_cmd, &c->slot);
+}
+
+/* Prepare all parsed commands in the client's queue. See prepareCommand(). */
+void prepareCommandQueue(client *c) {
+    /* First AKA current command (c->argv). */
+    prepareCommand(c);
+
+    /* Commands in client's command queue. */
+    for (int i = c->cmd_queue.off; i < c->cmd_queue.len; i++) {
+        parsedCommand *p = &c->cmd_queue.cmds[i];
+        prepareCommandGeneric(p->argv, p->argc, &p->read_flags, &p->cmd, &p->slot);
     }
 }
 
@@ -4129,9 +4190,9 @@ int processCommand(client *c) {
                 securityWarningCommand(c);
                 return C_ERR;
             }
-            /* Check that the command lookup should has been done before calling
-             * this function, by calling prepareCommand(). */
-            serverAssert(!(c->read_flags & READ_FLAGS_COMMAND_NOT_FOUND));
+            /* Check that the command lookup has been done before calling this
+             * function, by calling prepareCommand(). */
+            serverAssert(c->read_flags & READ_FLAGS_COMMAND_NOT_FOUND);
         }
         c->cmd = c->lastcmd = c->realcmd = cmd;
 
@@ -4192,7 +4253,7 @@ int processCommand(client *c) {
     const int obey_client = mustObeyClient(c);
 
     if (c->flag.multi && c->cmd->flags & CMD_NO_MULTI) {
-        rejectCommandFormat(c, "Command not allowed inside a transaction");
+        rejectCommandFormat(c, "Command '%s' not allowed inside a transaction", c->cmd->fullname);
         return C_OK;
     }
 
@@ -4295,6 +4356,11 @@ int processCommand(client *c) {
         if (server.current_client == NULL) return C_ERR;
 
         if (out_of_memory && is_denyoom_command) {
+            if (c->slot_migration_job != NULL) {
+                clusterHandleSlotMigrationClientOOM(c->slot_migration_job);
+                return C_ERR;
+            }
+
             rejectCommand(c, shared.oomerr);
             return C_OK;
         }
@@ -4591,10 +4657,11 @@ int abortShutdown(void) {
  * sequence was successful and it's OK to call exit(). If C_ERR is returned,
  * it's not safe to call exit(). */
 int finishShutdown(void) {
-    int save = server.shutdown_flags & SHUTDOWN_SAVE;
-    int nosave = server.shutdown_flags & SHUTDOWN_NOSAVE;
-    int force = server.shutdown_flags & SHUTDOWN_FORCE;
-    int safe = server.shutdown_flags & SHUTDOWN_SAFE;
+    bool save = (server.shutdown_flags & SHUTDOWN_SAVE) != 0;
+    bool nosave = (server.shutdown_flags & SHUTDOWN_NOSAVE) != 0;
+    bool force = (server.shutdown_flags & SHUTDOWN_FORCE) != 0;
+    bool safe = (server.shutdown_flags & SHUTDOWN_SAFE) != 0;
+    bool failover = (server.shutdown_flags & SHUTDOWN_FAILOVER) != 0;
 
     /* Log a warning for each replica that is lagging. */
     listIter replicas_iter;
@@ -4679,6 +4746,11 @@ int finishShutdown(void) {
         }
     }
 
+    if (server.child_type == CHILD_TYPE_SLOT_MIGRATION) {
+        serverLog(LL_WARNING, "There is a slot migration child. Killing it!");
+        killSlotMigrationChild();
+    }
+
     /* Create a new RDB file before exiting. */
     if ((server.saveparamslen > 0 && !nosave) || save) {
         serverLog(LL_NOTICE, "Saving the final RDB snapshot before exiting.");
@@ -4718,7 +4790,7 @@ int finishShutdown(void) {
     }
 
     /* Handle cluster-related matters when shutdown. */
-    if (server.cluster_enabled) clusterHandleServerShutdown();
+    if (server.cluster_enabled) clusterHandleServerShutdown(failover);
 
     /* Best effort flush of replica output buffers, so that we hopefully
      * send them pending writes. */
@@ -5601,9 +5673,11 @@ sds genValkeyInfoStringACLStats(sds info) {
                         "acl_access_denied_auth:%lld\r\n"
                         "acl_access_denied_cmd:%lld\r\n"
                         "acl_access_denied_key:%lld\r\n"
-                        "acl_access_denied_channel:%lld\r\n",
+                        "acl_access_denied_channel:%lld\r\n"
+                        "acl_access_denied_tls_cert:%lld\r\n",
                         server.acl_info.user_auth_failures, server.acl_info.invalid_cmd_accesses,
-                        server.acl_info.invalid_key_accesses, server.acl_info.invalid_channel_accesses);
+                        server.acl_info.invalid_key_accesses, server.acl_info.invalid_channel_accesses,
+                        server.acl_info.acl_access_denied_tls_cert);
     return info;
 }
 
@@ -5931,6 +6005,8 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                 "mem_clients_slaves:%zu\r\n", mh->clients_replicas,
                 "mem_clients_normal:%zu\r\n", mh->clients_normal,
                 "mem_cluster_links:%zu\r\n", mh->cluster_links,
+                "mem_cluster_slot_import:%zu\r\n", mh->cluster_slot_import,
+                "mem_cluster_slot_export:%zu\r\n", mh->cluster_slot_export,
                 "mem_aof_buffer:%zu\r\n", mh->aof_buffer,
                 "mem_allocator:%s\r\n", ZMALLOC_LIB,
                 "mem_overhead_db_hashtable_rehashing:%zu\r\n", mh->overhead_db_hashtable_rehashing,
@@ -5983,7 +6059,8 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                 "aof_last_write_status:%s\r\n", (server.aof_last_write_status == C_OK && aof_bio_fsync_status == C_OK) ? "ok" : "err",
                 "aof_last_cow_size:%zu\r\n", server.stat_aof_cow_bytes,
                 "module_fork_in_progress:%d\r\n", server.child_type == CHILD_TYPE_MODULE,
-                "module_fork_last_cow_size:%zu\r\n", server.stat_module_cow_bytes));
+                "module_fork_last_cow_size:%zu\r\n", server.stat_module_cow_bytes,
+                "slot_migration_fork_in_progress:%d\r\n", server.child_type == CHILD_TYPE_SLOT_MIGRATION));
 
         if (server.aof_enabled) {
             info = sdscatprintf(
@@ -6047,10 +6124,12 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                 "total_connections_received:%lld\r\n", server.stat_numconnections,
                 "total_commands_processed:%lld\r\n", server.stat_numcommands,
                 "instantaneous_ops_per_sec:%lld\r\n", getInstantaneousMetric(STATS_METRIC_COMMAND),
-                "total_net_input_bytes:%lld\r\n", server.stat_net_input_bytes + server.stat_net_repl_input_bytes,
-                "total_net_output_bytes:%lld\r\n", server.stat_net_output_bytes + server.stat_net_repl_output_bytes,
-                "total_net_repl_input_bytes:%lld\r\n", server.stat_net_repl_input_bytes,
+                "total_net_input_bytes:%lld\r\n", server.stat_net_input_bytes + server.stat_net_repl_input_bytes + server.bio_stat_net_repl_input_bytes + server.stat_net_cluster_slot_import_bytes,
+                "total_net_output_bytes:%lld\r\n", server.stat_net_output_bytes + server.stat_net_repl_output_bytes + server.stat_net_cluster_slot_export_bytes,
+                "total_net_repl_input_bytes:%lld\r\n", server.stat_net_repl_input_bytes + server.bio_stat_net_repl_input_bytes,
                 "total_net_repl_output_bytes:%lld\r\n", server.stat_net_repl_output_bytes,
+                "total_net_cluster_slot_import_bytes:%lld\r\n", server.stat_net_cluster_slot_import_bytes,
+                "total_net_cluster_slot_export_bytes:%lld\r\n", server.stat_net_cluster_slot_export_bytes,
                 "instantaneous_input_kbps:%.2f\r\n", (float)getInstantaneousMetric(STATS_METRIC_NET_INPUT) / 1024,
                 "instantaneous_output_kbps:%.2f\r\n", (float)getInstantaneousMetric(STATS_METRIC_NET_OUTPUT) / 1024,
                 "instantaneous_input_repl_kbps:%.2f\r\n", (float)getInstantaneousMetric(STATS_METRIC_NET_INPUT_REPLICATION) / 1024,
@@ -6060,7 +6139,9 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                 "sync_partial_ok:%lld\r\n", server.stat_sync_partial_ok,
                 "sync_partial_err:%lld\r\n", server.stat_sync_partial_err,
                 "expired_keys:%lld\r\n", server.stat_expiredkeys,
-                "expired_stale_perc:%.2f\r\n", server.stat_expired_stale_perc * 100,
+                "expired_fields:%lld\r\n", server.stat_expiredfields,
+                "expired_stale_perc:%.2f\r\n", server.stat_expired_keys_stale_perc * 100,
+                "expired_keys_with_volatile_items_stale_perc:%.2f\r\n", server.stat_expired_keys_with_vola_stale_perc * 100,
                 "expired_time_cap_reached_count:%lld\r\n", server.stat_expired_time_cap_reached_count,
                 "expire_cycle_cpu_milliseconds:%lld\r\n", server.stat_expire_cycle_time_used / 1000,
                 "evicted_keys:%lld\r\n", server.stat_evictedkeys,
@@ -6143,16 +6224,25 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                     "replicas_repl_buffer_peak:%zu\r\n", server.pending_repl_data.peak));
 
             if (server.repl_state == REPL_STATE_TRANSFER) {
+                int repl_transfer_size_stat;
+                int repl_transfer_read_stat;
+                if (atomic_load_explicit(&server.replica_bio_disk_save_state, memory_order_acquire) != REPL_BIO_DISK_SAVE_STATE_NONE) {
+                    repl_transfer_size_stat = server.bio_repl_transfer_size;
+                    repl_transfer_read_stat = server.bio_repl_transfer_read;
+                } else {
+                    repl_transfer_size_stat = server.repl_transfer_size;
+                    repl_transfer_read_stat = server.repl_transfer_read;
+                }
                 double perc = 0;
-                if (server.repl_transfer_size) {
-                    perc = ((double)server.repl_transfer_read / server.repl_transfer_size) * 100;
+                if (repl_transfer_size_stat) {
+                    perc = ((double)repl_transfer_read_stat / repl_transfer_size_stat) * 100;
                 }
                 info = sdscatprintf(
                     info,
                     FMTARGS(
-                        "master_sync_total_bytes:%lld\r\n", (long long)server.repl_transfer_size,
-                        "master_sync_read_bytes:%lld\r\n", (long long)server.repl_transfer_read,
-                        "master_sync_left_bytes:%lld\r\n", (long long)(server.repl_transfer_size - server.repl_transfer_read),
+                        "master_sync_total_bytes:%lld\r\n", (long long)repl_transfer_size_stat,
+                        "master_sync_read_bytes:%lld\r\n", (long long)repl_transfer_read_stat,
+                        "master_sync_left_bytes:%lld\r\n", (long long)(repl_transfer_size_stat - repl_transfer_read_stat),
                         "master_sync_perc:%.2f\r\n", perc,
                         "master_sync_last_io_seconds_ago:%d\r\n", (int)(server.unixtime - server.repl_transfer_lastio)));
             }
@@ -6314,13 +6404,15 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
         for (j = 0; j < server.dbnum; j++) {
             serverDb *db = server.db[j];
             if (db == NULL) continue;
-            long long keys, vkeys;
+            long long keys, vkeys, keysvitems;
 
             keys = kvstoreSize(db->keys);
             vkeys = kvstoreSize(db->expires);
+            keysvitems = kvstoreSize(db->keys_with_volatile_items);
+
             if (keys || vkeys) {
-                info = sdscatprintf(info, "db%d:keys=%lld,expires=%lld,avg_ttl=%lld\r\n", j, keys, vkeys,
-                                    db->avg_ttl);
+                info = sdscatprintf(info, "db%d:keys=%lld,expires=%lld,avg_ttl=%lld,keys_with_volatile_items=%lld\r\n", j, keys, vkeys,
+                                    db->expiry[KEYS].avg_ttl, keysvitems);
             }
         }
     }
@@ -6525,13 +6617,10 @@ void serverAsciiArt(void) {
 }
 
 /* Get the server listener by type name */
-connListener *listenerByType(const char *typename) {
-    int conn_index;
+connListener *listenerByType(int type) {
+    if (!connectionByType(type)) return NULL;
 
-    conn_index = connectionIndexByType(typename);
-    if (conn_index < 0) return NULL;
-
-    return &server.listeners[conn_index];
+    return &server.listeners[type];
 }
 
 /* Close original listener, re-create a new listener from the updated bind address & port */
@@ -6552,7 +6641,7 @@ int changeListener(connListener *listener) {
 
     /* Create event handlers */
     if (createSocketAcceptHandler(listener, listener->ct->accept_handler) != C_OK) {
-        serverPanic("Unrecoverable error creating %s accept handler.", listener->ct->get_type(NULL));
+        serverPanic("Unrecoverable error creating %s accept handler.", getConnectionTypeName(listener->ct->get_type()));
     }
 
     if (server.set_proc_title) serverSetProcTitle(NULL);
@@ -6687,7 +6776,13 @@ int serverFork(int purpose) {
         server.stat_fork_rate =
             (double)zmalloc_used_memory() * 1000000 / server.stat_fork_time / (1024 * 1024 * 1024); /* GB per second. */
         latencyAddSampleIfNeeded("fork", server.stat_fork_time);
-        latencyTraceIfNeeded(bgsave, fork, server.stat_fork_time);
+        if (purpose == CHILD_TYPE_RDB) {
+            latencyTraceIfNeeded(rdb, fork, server.stat_fork_time);
+        } else if (purpose == CHILD_TYPE_AOF) {
+            latencyTraceIfNeeded(aof, fork, server.stat_fork_time);
+        } else if (purpose == CHILD_TYPE_SLOT_MIGRATION) {
+            latencyTraceIfNeeded(cluster, fork, server.stat_fork_time);
+        }
 
         /* The child_pid and child_type are only for mutually exclusive children.
          * other child types should handle and store their pid's in dedicated variables.
@@ -6714,11 +6809,11 @@ int serverFork(int purpose) {
 }
 
 void sendChildCowInfo(childInfoType info_type, char *pname) {
-    sendChildInfoGeneric(info_type, 0, -1, pname);
+    sendChildInfoGeneric(info_type, 0, 0, -1, pname);
 }
 
 void sendChildInfo(childInfoType info_type, size_t keys, char *pname) {
-    sendChildInfoGeneric(info_type, keys, -1, pname);
+    sendChildInfoGeneric(info_type, keys, 0, -1, pname);
 }
 
 /* Dismiss big chunks of memory inside a client structure, see zmadvise_dontneed() */
@@ -7288,7 +7383,7 @@ __attribute__((weak)) int main(int argc, char **argv) {
             connListener *listener = &server.listeners[j];
             if (listener->ct == NULL) continue;
 
-            serverLog(LL_NOTICE, "Ready to accept connections %s", listener->ct->get_type(NULL));
+            serverLog(LL_NOTICE, "Ready to accept connections %s", getConnectionTypeName(listener->ct->get_type()));
         }
 
         if (server.supervised_mode == SUPERVISED_SYSTEMD) {
@@ -7323,4 +7418,131 @@ __attribute__((weak)) int main(int argc, char **argv) {
     aeDeleteEventLoop(server.el);
     return 0;
 }
+
+/*
+ * The parseExtendedCommandArgumentsOrReply() function performs the common validation for extended
+ * command arguments used in STRING and HASH commands.
+ *
+ * Get specific command extended options - PERSIST/DEL
+ * Set specific command extended options - XX/NX/GET/IFEQ
+ * HSET specific command extended options - FXX/FNX
+ * Common command extended options - EX/EXAT/PX/PXAT/KEEPTTL
+ *
+ * Function takes pointers to client, flags, unit, pointer to pointer of expire obj if needed
+ * to be determined and command_type which can be COMMAND_GET or COMMAND_SET.
+ *
+ * If there are any syntax violations C_ERR is returned else C_OK is returned.
+ *
+ * Input flags are updated upon parsing the arguments. Unit and expire are updated if there are any
+ * EX/EXAT/PX/PXAT arguments. Unit is updated to millisecond if PX/PXAT is set.
+ *
+ * max_args provides a way to limit the scan to a specific range of arguments.
+ */
+int parseExtendedCommandArgumentsOrReply(client *c, int *flags, int *unit, robj **expire, robj **compare_val, int command_type, int max_args) {
+    int j = command_type == COMMAND_SET ? 3 : 2;
+    for (; j < max_args; j++) {
+        char *opt = c->argv[j]->ptr;
+        robj *next = (j == max_args - 1) ? NULL : c->argv[j + 1];
+
+        /* clang-format off */
+        if ((opt[0] == 'n' || opt[0] == 'N') &&
+            (opt[1] == 'x' || opt[1] == 'X') && opt[2] == '\0' &&
+            !(*flags & ARGS_SET_XX || *flags & ARGS_SET_IFEQ) && (command_type == COMMAND_SET))
+        {
+            *flags |= ARGS_SET_NX;
+        } else if ((opt[0] == 'x' || opt[0] == 'X') &&
+                   (opt[1] == 'x' || opt[1] == 'X') && opt[2] == '\0' &&
+                   !(*flags & ARGS_SET_NX || *flags & ARGS_SET_IFEQ) && (command_type == COMMAND_SET))
+        {
+            *flags |= ARGS_SET_XX;
+        } else if ((opt[0] == 'f' || opt[0] == 'F') &&
+                   (opt[1] == 'n' || opt[1] == 'N') &&
+                   (opt[2] == 'x' || opt[2] == 'X') && opt[3] == '\0' &&
+                   !(*flags & ARGS_SET_FXX || *flags & ARGS_SET_IFEQ) && (command_type == COMMAND_HSET))
+        {
+            *flags |= ARGS_SET_FNX;
+        } else if ((opt[0] == 'f' || opt[0] == 'F') &&
+                   (opt[1] == 'x' || opt[1] == 'X') &&
+                   (opt[2] == 'x' || opt[2] == 'X') && opt[3] == '\0' &&
+                   !(*flags & ARGS_SET_FNX || *flags & ARGS_SET_IFEQ) && (command_type == COMMAND_HSET))
+        {
+            *flags |= ARGS_SET_FXX;
+        } else if ((opt[0] == 'i' || opt[0] == 'I') &&
+                   (opt[1] == 'f' || opt[1] == 'F') &&
+                   (opt[2] == 'e' || opt[2] == 'E') &&
+                   (opt[3] == 'q' || opt[3] == 'Q') && opt[4] == '\0' &&
+                   next && 
+                   !(*flags & ARGS_SET_NX || *flags & ARGS_SET_XX || *flags & ARGS_SET_IFEQ) && (command_type == COMMAND_SET))
+        {
+            *flags |= ARGS_SET_IFEQ;
+            *compare_val = next;
+            j++;
+        } else if ((opt[0] == 'g' || opt[0] == 'G') &&
+                   (opt[1] == 'e' || opt[1] == 'E') &&
+                   (opt[2] == 't' || opt[2] == 'T') && opt[3] == '\0' &&
+                   (command_type == COMMAND_SET))
+        {
+            *flags |= ARGS_SET_GET;
+        } else if (!strcasecmp(opt, "KEEPTTL") && !(*flags & ARGS_PERSIST) &&
+                   !(*flags & ARGS_EX) && !(*flags & ARGS_EXAT) &&
+                   !(*flags & ARGS_PX) && !(*flags & ARGS_PXAT) && (command_type == COMMAND_SET || command_type == COMMAND_HSET))
+        {
+            *flags |= ARGS_KEEPTTL;
+        } else if (!strcasecmp(opt,"PERSIST") && (command_type == COMMAND_GET || command_type == COMMAND_HGET) &&
+                   !(*flags & ARGS_EX) && !(*flags & ARGS_EXAT) &&
+                   !(*flags & ARGS_PX) && !(*flags & ARGS_PXAT) &&
+                   !(*flags & ARGS_KEEPTTL))
+        {
+            *flags |= ARGS_PERSIST;
+        } else if ((opt[0] == 'e' || opt[0] == 'E') &&
+                   (opt[1] == 'x' || opt[1] == 'X') && opt[2] == '\0' &&
+                   !(*flags & ARGS_KEEPTTL) && !(*flags & ARGS_PERSIST) &&
+                   !(*flags & ARGS_EXAT) && !(*flags & ARGS_PX) &&
+                   !(*flags & ARGS_PXAT) && next)
+        {
+            *flags |= ARGS_EX;
+            *expire = next;
+            j++;
+        } else if ((opt[0] == 'p' || opt[0] == 'P') &&
+                   (opt[1] == 'x' || opt[1] == 'X') && opt[2] == '\0' &&
+                   !(*flags & ARGS_KEEPTTL) && !(*flags & ARGS_PERSIST) &&
+                   !(*flags & ARGS_EX) && !(*flags & ARGS_EXAT) &&
+                   !(*flags & ARGS_PXAT) && next)
+        {
+            *flags |= ARGS_PX;
+            *unit = UNIT_MILLISECONDS;
+            *expire = next;
+            j++;
+        } else if ((opt[0] == 'e' || opt[0] == 'E') &&
+                   (opt[1] == 'x' || opt[1] == 'X') &&
+                   (opt[2] == 'a' || opt[2] == 'A') &&
+                   (opt[3] == 't' || opt[3] == 'T') && opt[4] == '\0' &&
+                   !(*flags & ARGS_KEEPTTL) && !(*flags & ARGS_PERSIST) &&
+                   !(*flags & ARGS_EX) && !(*flags & ARGS_PX) &&
+                   !(*flags & ARGS_PXAT) && next)
+        {
+            *flags |= ARGS_EXAT;
+            *expire = next;
+            j++;
+        } else if ((opt[0] == 'p' || opt[0] == 'P') &&
+                   (opt[1] == 'x' || opt[1] == 'X') &&
+                   (opt[2] == 'a' || opt[2] == 'A') &&
+                   (opt[3] == 't' || opt[3] == 'T') && opt[4] == '\0' &&
+                   !(*flags & ARGS_KEEPTTL) && !(*flags & ARGS_PERSIST) &&
+                   !(*flags & ARGS_EX) && !(*flags & ARGS_EXAT) &&
+                   !(*flags & ARGS_PX) && next)
+        {
+            *flags |= ARGS_PXAT;
+            *unit = UNIT_MILLISECONDS;
+            *expire = next;
+            j++;
+        } else {
+            addReplyErrorObject(c,shared.syntaxerr);
+            return C_ERR;
+        }
+        /* clang-format on */
+    }
+    return C_OK;
+}
+
 /* The End */

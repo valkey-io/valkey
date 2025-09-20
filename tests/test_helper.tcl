@@ -94,6 +94,8 @@ set ::log_req_res 0
 set ::force_resp3 0
 set ::solo_tests_count 0
 set ::debug_defrag 0
+set ::completed_tests 0
+set ::total_loops 1
 
 # Expand a unit specification (test name, file, or directory) into a list
 # of canonical unit names relative to the tests directory.
@@ -293,6 +295,30 @@ proc CI {index field} {
     getInfoProperty [R $index cluster info] $field
 }
 
+# Provide easy access to CLIENT INFO properties from CLIENT INFO string.
+proc get_field_in_client_info {info field} {
+    set info [string trim $info]
+    foreach item [split $info " "] {
+        set kv [split $item "="]
+        set k [lindex $kv 0]
+        if {[string match $field $k]} {
+            return [lindex $kv 1]
+        }
+    }
+    return ""
+}
+
+# Provide easy access to CLIENT INFO properties from CLIENT LIST string.
+proc get_field_in_client_list {id client_list filed} {
+    set list [split $client_list "\r\n"]
+    foreach info $list {
+        if {[string match "id=$id *" $info] } {
+            return [get_field_in_client_info $info $filed]
+        }
+    }
+    return ""
+}
+
 # Test wrapped into run_solo are sent back from the client to the
 # test server, so that the test server will send them again to
 # clients once the clients are idle.
@@ -379,13 +405,13 @@ proc test_server_cron {} {
                     if {[info exist ::active_clients_file($fd)]} {
                         set file $::active_clients_file($fd)
                     }
-                    lappend ::failed_tests "\[TIMEOUT]: $test_name in $file"
+                    lappend ::failed_tests "\[[colorstr red TIMEOUT]\]: $test_name in $file"
                 }
             }
         }
         show_clients_state
-        kill_clients
         force_kill_all_servers
+        kill_clients
         the_end
     }
 
@@ -425,10 +451,9 @@ proc read_from_test_client fd {
         signal_idle_client $fd
     } elseif {$status eq {done}} {
         set elapsed [expr {[clock seconds]-$::clients_start_time($fd)}]
-        set all_tests_count [expr {[llength $::all_tests]+$::solo_tests_count}]
-        set running_tests_count [expr {[llength $::active_clients]-1}]
-        set completed_solo_tests_count [expr {$::solo_tests_count-[llength $::run_solo_tests]}]
-        set completed_tests_count [expr {$::next_test-$running_tests_count+$completed_solo_tests_count}]
+        incr ::completed_tests
+        set all_tests_count [expr {[llength $::all_tests] * $::total_loops + $::solo_tests_count}]
+        set completed_tests_count $::completed_tests
         puts "\[$completed_tests_count/$all_tests_count [colorstr yellow $status]\]: $data ($elapsed seconds)"
         lappend ::clients_time_history $elapsed $data
         unset ::active_clients_file($fd)
@@ -450,8 +475,7 @@ proc read_from_test_client fd {
     } elseif {$status eq {err}} {
         set err "\[[colorstr red $status]\]: $data"
         puts $err
-        set test_name [lindex [split $data "\n"] 0]
-        lappend ::failed_tests $test_name
+        lappend ::failed_tests $err
         set ::active_clients_task($fd) "(ERR) $data"
         if {$::exit_on_failure} {
             puts "(Fast fail: test will exit now)"
@@ -808,12 +832,14 @@ for {set j 0} {$j < [llength $argv]} {incr j} {
         set ::stop_on_failure 1
     } elseif {$opt eq {--loop}} {
         set ::loop 2147483647
+        set ::total_loops $::loop
     } elseif {$opt eq {--loops}} {
         set ::loop $arg
         if {$::loop <= 0} {
             puts "Wrong argument: $opt, loops should be greater than 0"
             exit 1
         }
+        set ::total_loops $::loop
         incr j
     } elseif {$opt eq {--timeout}} {
         set ::timeout $arg

@@ -16,8 +16,6 @@ timeout 5s ./simulated-valkey.pl -p 7403 -d --sigcont $syncpid1 <<'EOF' &
 EXPECT CONNECT
 EXPECT ["CLUSTER", "SLOTS"]
 SEND [[0, 8383, ["127.0.0.1", 7403, "nodeid7403"]], [8384, 16383, ["127.0.0.1", 7404, "nodeid7404"]]]
-EXPECT CLOSE
-EXPECT CONNECT
 EXPECT ["DBSIZE"]
 SEND 11
 EXPECT CLOSE

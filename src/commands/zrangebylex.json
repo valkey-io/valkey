@@ -6,11 +6,6 @@
         "since": "2.8.9",
         "arity": -4,
         "function": "zrangebylexCommand",
-        "deprecated_since": "6.2.0",
-        "replaced_by": "`ZRANGE` with the `BYLEX` argument",
-        "doc_flags": [
-            "DEPRECATED"
-        ],
         "command_flags": [
             "READONLY"
         ],

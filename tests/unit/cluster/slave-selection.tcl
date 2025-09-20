@@ -105,7 +105,10 @@ test "Cluster should eventually be up again" {
 
 test "Node #10 should eventually replicate node #5" {
     set port5 [srv -5 port]
-    wait_for_condition 1000 50 {
+    # Valgrind runs are significantly slower and occasionally need more time
+    # for the cluster to propagate the new primary. Use a larger timeout to
+    # avoid spurious failures in slow environments.
+    wait_for_condition 2000 50 {
         ([lindex [R 10 role] 2] == $port5) &&
         ([lindex [R 10 role] 3] eq {connected})
     } else {
@@ -183,7 +186,7 @@ test "New Master down consecutively" {
 
         set paused_pid [srv [expr $master_id * -1] pid]
         pause_process $paused_pid
-        wait_for_condition 1000 50 {
+        wait_for_condition 2000 50 {
             [master_detected $instances]
         } else {
             fail "No failover detected when master $master_id fails"

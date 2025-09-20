@@ -24,10 +24,12 @@ void lazyfreeFreeObject(void *args[]) {
 void lazyfreeFreeDatabase(void *args[]) {
     kvstore *da1 = args[0];
     kvstore *da2 = args[1];
+    kvstore *da3 = args[2];
 
     size_t numkeys = kvstoreSize(da1);
     kvstoreRelease(da1);
     kvstoreRelease(da2);
+    kvstoreRelease(da3);
     atomic_fetch_sub_explicit(&lazyfree_objects, numkeys, memory_order_relaxed);
     atomic_fetch_add_explicit(&lazyfreed_objects, numkeys, memory_order_relaxed);
 }
@@ -192,11 +194,12 @@ void emptyDbAsync(serverDb *db) {
         slot_count_bits = CLUSTER_SLOT_MASK_BITS;
         flags |= KVSTORE_FREE_EMPTY_HASHTABLES;
     }
-    kvstore *oldkeys = db->keys, *oldexpires = db->expires;
+    kvstore *oldkeys = db->keys, *oldexpires = db->expires, *oldkeyswithexpires = db->keys_with_volatile_items;
     db->keys = kvstoreCreate(&kvstoreKeysHashtableType, slot_count_bits, flags);
     db->expires = kvstoreCreate(&kvstoreExpiresHashtableType, slot_count_bits, flags);
+    db->keys_with_volatile_items = kvstoreCreate(&kvstoreExpiresHashtableType, slot_count_bits, flags);
     atomic_fetch_add_explicit(&lazyfree_objects, kvstoreSize(oldkeys), memory_order_relaxed);
-    bioCreateLazyFreeJob(lazyfreeFreeDatabase, 2, oldkeys, oldexpires);
+    bioCreateLazyFreeJob(lazyfreeFreeDatabase, 3, oldkeys, oldexpires, oldkeyswithexpires);
 }
 
 /* Free the key tracking table.

@@ -1,0 +1,245 @@
+name: Benchmark Comparison (Dispatch)
+
+on:
+  workflow_dispatch:
+    inputs:
+      version1:
+        description: "First version to compare (commit SHA, branch, or tag)"
+        required: true
+        type: string
+      version2:
+        description: "Second version to compare (commit SHA, branch, or tag)"
+        required: true
+        type: string
+      issue_id:
+        description: "Issue ID to comment results on"
+        required: true
+        type: string
+      config_file:
+        description: "Benchmark configuration to use"
+        required: false
+        type: choice
+        default: "pr_benchmark.json"
+        options:
+          - "pr_benchmark.json"
+
+concurrency:
+  group: valkey-benchmark
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: "bash -Eeuo pipefail -x {0}"
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+jobs:
+  benchmark:
+    runs-on: ${{ github.repository == 'valkey-io/valkey' && fromJSON('["self-hosted","ec2-ubuntu-24.04-benchmarking"]') || 'ubuntu-latest' }}
+    steps:
+      - name: Validate inputs
+        run: |
+          echo "Version 1: ${{ github.event.inputs.version1 }}"
+          echo "Version 2: ${{ github.event.inputs.version2 }}"
+          echo "Issue ID: ${{ github.event.inputs.issue_id }}"
+          echo "Config file: ${{ github.event.inputs.config_file }}"
+
+          # Validate issue ID is numeric
+          if ! [[ "${{ github.event.inputs.issue_id }}" =~ ^[0-9]+$ ]]; then
+            echo "Error: Issue ID must be a number"
+            exit 1
+          fi
+
+      - name: Checkout valkey (latest)
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+        with:
+          repository: ${{ github.repository_owner }}/valkey
+          path: valkey_latest
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Build latest valkey_latest
+        working-directory: valkey_latest
+        run: |
+          echo "Building latest valkey-benchmark for latest benchmark executable..."
+
+          # Clean any previous builds
+          make distclean || true
+
+          # Build valkey-benchmark with latest code
+          make -j$(nproc)
+
+          # Verify the binary was created
+          if [[ -f "src/valkey-benchmark" ]]; then
+            echo "✓ Successfully built latest valkey-benchmark"
+            ls -la src/valkey-benchmark
+
+            # Test the binary
+            echo "Testing valkey-benchmark binary..."
+            ./src/valkey-benchmark --version || echo "Version check completed"
+          else
+            echo "Failed to build valkey-benchmark"
+            exit 1
+          fi
+
+          # Store the absolute path for later use
+          VALKEY_BENCHMARK_PATH="$(pwd)/src/valkey-benchmark"
+          echo "VALKEY_BENCHMARK_PATH=$VALKEY_BENCHMARK_PATH" >> $GITHUB_ENV
+          echo "Latest valkey-benchmark path: $VALKEY_BENCHMARK_PATH"
+
+      - name: Checkout valkey-perf-benchmark
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+        with:
+          repository: ${{ github.repository_owner }}/valkey-perf-benchmark
+          path: valkey-perf-benchmark
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.10"
+          cache: "pip"
+
+      - name: Install dependencies
+        working-directory: valkey-perf-benchmark
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential
+          pip install -r requirements.txt
+
+      - name: Validate config file exists
+        run: |
+          CONFIG_PATH="valkey_latest/.github/benchmark_configs/${{ github.event.inputs.config_file }}"
+          if [[ ! -f "$CONFIG_PATH" ]]; then
+            echo "Error: Config file $CONFIG_PATH does not exist"
+            echo "Available config files:"
+            ls -la valkey_latest/.github/benchmark_configs/
+            exit 1
+          fi
+          echo "Using config file: $CONFIG_PATH"
+
+      - name: Run benchmarks
+        working-directory: valkey-perf-benchmark
+        run: |
+          CONFIG_FILE="../valkey_latest/.github/benchmark_configs/${{ github.event.inputs.config_file }}"
+
+          # Removes server/client CPU range args if running in private repo
+          if [[ "${{ github.repository }}" != "valkey-io/valkey" ]]; then
+            jq 'map(del(.server_cpu_range, .client_cpu_range))' "$CONFIG_FILE" > tmp.json && mv tmp.json "$CONFIG_FILE"
+          fi
+
+          # Verify our custom valkey-benchmark exists
+          if [[ ! -f "$VALKEY_BENCHMARK_PATH" ]]; then
+            echo "Custom valkey-benchmark not found at: $VALKEY_BENCHMARK_PATH"
+            exit 1
+          fi
+
+          echo "Using custom valkey-benchmark from: $VALKEY_BENCHMARK_PATH"
+
+          # Base benchmark arguments with custom valkey-benchmark path
+          BENCHMARK_ARGS=(
+            --commits ${{ github.event.inputs.version1 }} ${{ github.event.inputs.version2 }}
+            --results-dir "results"
+            --config "$CONFIG_FILE"
+            --valkey-benchmark-path "$VALKEY_BENCHMARK_PATH"
+          )
+
+          echo "Running benchmarks with the following setup:"
+          echo "- Version 1: ${{ github.event.inputs.version1 }}"
+          echo "- Version 2: ${{ github.event.inputs.version2 }}"
+          echo "- Config: ${{ github.event.inputs.config_file }}"
+          echo "- Using latest valkey-benchmark: $VALKEY_BENCHMARK_PATH"
+          echo "- This ensures both versions use the same (latest) benchmark tool for consistent results"
+
+          # Run benchmark with custom valkey-benchmark executable
+          python ./benchmark.py "${BENCHMARK_ARGS[@]}"
+
+      - name: Compare results
+        working-directory: valkey-perf-benchmark
+        run: |
+          # Find the actual result directories (they might have different names than input)
+          VERSION1_DIR=$(find ./results -maxdepth 1 -type d -name "*${{ github.event.inputs.version1 }}*" | head -1)
+          VERSION2_DIR=$(find ./results -maxdepth 1 -type d -name "*${{ github.event.inputs.version2 }}*" | head -1)
+
+          if [[ -z "$VERSION1_DIR" ]]; then
+            echo "Could not find results for version1: ${{ github.event.inputs.version1 }}"
+            echo "Available result directories:"
+            ls -la ./results/
+            exit 1
+          fi
+
+          if [[ -z "$VERSION2_DIR" ]]; then
+            echo "Could not find results for version2: ${{ github.event.inputs.version2 }}"
+            echo "Available result directories:"
+            ls -la ./results/
+            exit 1
+          fi
+
+          echo "Comparing results:"
+          echo "Version 1 (${{ github.event.inputs.version1 }}): $VERSION1_DIR"
+          echo "Version 2 (${{ github.event.inputs.version2 }}): $VERSION2_DIR"
+
+          python utils/compare_benchmark_results.py \
+            "$VERSION1_DIR/metrics.json" \
+            "$VERSION2_DIR/metrics.json" \
+            ../comparison.md
+
+      - name: Upload artifacts
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@6f51ac03b9356f520e9adb1b1b7802705f340c2b # v4.5.0
+        with:
+          name: benchmark-results-${{ github.event.inputs.issue_id }}
+          path: |
+            ./valkey-perf-benchmark/results/*/metrics.json
+            comparison.md
+
+      - name: Comment on issue with results
+        uses: actions/github-script@5c56fde4671bc2d3592fb0f2c5b5bab9ddae03b1 # v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const fs = require('fs');
+            const body = fs.readFileSync('comparison.md', 'utf8');
+            const {owner, repo} = context.repo;
+            const version1 = '${{ github.event.inputs.version1 }}';
+            const version2 = '${{ github.event.inputs.version2 }}';
+            const configFile = '${{ github.event.inputs.config_file }}';
+            const runUrl = `https://github.com/${owner}/${repo}/actions/runs/${{ github.run_id }}`;
+
+            const header = `## Benchmark Comparison ${{ github.event.inputs.version1 }} vs ${{ github.event.inputs.version2 }}
+
+            **Versions Compared:**
+            - Version 1: \`${version1}\`
+            - Version 2: \`${version2}\`
+
+            **Config:** \`${configFile}\`
+            **Workflow Run:** [View Details](${runUrl})
+
+            ---
+            `;
+
+            await github.rest.issues.createComment({
+              issue_number: ${{ github.event.inputs.issue_id }},
+              owner,
+              repo,
+              body: header + body
+            });
+
+      - name: Cleanup any running valkey processes
+        if: always()
+        continue-on-error: true
+        run: |
+          pkill -f valkey
+          exit_code=$?
+          if [ $exit_code -eq 0 ]; then
+            echo "Killed running valkey processes"
+          elif [ $exit_code -eq 1 ]; then
+            echo "No valkey processes found to kill"
+          else
+            echo "Warning: pkill failed with exit code $exit_code"
+          fi

@@ -273,11 +273,11 @@ static void *IOThreadMain(void *myid) {
 }
 
 long long getIOThreadUsefulTimeMicroseconds(int id) {
-    return atomic_load_explicit(&io_threads_useful_time_us[id], memory_order_acquire);
+    return atomic_load_explicit(&io_threads_useful_time_us[id], memory_order_relaxed);
 }
 
 long long getIOThreadUptimeMicroseconds(int id) {
-    return atomic_load_explicit(&io_threads_uptime_us[id], memory_order_acquire);
+    return atomic_load_explicit(&io_threads_uptime_us[id], memory_order_relaxed);
 }
 
 #define IO_JOB_QUEUE_SIZE 2048

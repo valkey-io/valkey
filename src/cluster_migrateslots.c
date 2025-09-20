@@ -1339,7 +1339,7 @@ int slotExportJobBeginSnapshotToTargetSocket(slotMigrationJob *job) {
         rioInitWithFd(&aof, slot_migration_pipe_write);
         /* Close the reading part, so that if the parent crashes, the child will
          * get a write error and exit. */
-        close(server.rdb_pipe_read);
+        close(server.slot_migration_pipe_read);
 
         serverSetProcTitle("valkey-slot-migration-to-target");
         serverSetCpuAffinity(server.bgsave_cpulist);
@@ -1370,7 +1370,7 @@ int slotExportJobBeginSnapshotToTargetSocket(slotMigrationJob *job) {
         serverLog(LL_NOTICE, "Started child process %ld for slot migration %s", (long)childpid, job->description);
         close(slot_migration_pipe_write); /* close write in parent so that it can detect the close on the child. */
         if (aeCreateFileEvent(server.el, server.slot_migration_pipe_read, AE_READABLE, slotMigrationPipeReadHandler, NULL) == AE_ERR) {
-            serverPanic("Unrecoverable error creating server.rdb_pipe_read file event.");
+            serverPanic("Unrecoverable error creating server.slot_migration_pipe_read file event.");
         }
         close(safe_to_exit_pipe);
         if (server.debug_pause_after_fork) debugPauseProcess();

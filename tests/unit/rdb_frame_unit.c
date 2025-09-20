@@ -197,3 +197,41 @@ int test_rdb_frame_parse_triplet_null_args(int argc, char **argv, int flags) {
     TEST_ASSERT(rdbFrameParseConfigTriplet(base_checksum, &codec, &blk, NULL) == RDB_FRAME_PARSE_INVALID_FORMAT);
     return 0;
 }
+
+int test_rdb_frame_codec_defaults(int argc, char **argv, int flags) {
+    UNUSED(argc);
+    UNUSED(argv);
+    UNUSED(flags);
+
+    TEST_ASSERT(rdbFrameCodecFromRdbCodecOrDefault(RDBC_RAW, RDB_FR_CODEC_LZ4) == RDB_FR_CODEC_RAW);
+    TEST_ASSERT(rdbFrameCodecFromRdbCodecOrDefault(RDBC_LZ4, RDB_FR_CODEC_RAW) == RDB_FR_CODEC_LZ4);
+    TEST_ASSERT(rdbFrameCodecFromRdbCodecOrDefault(RDBC_LZF, RDB_FR_CODEC_RAW) == RDB_FR_CODEC_LZF);
+    TEST_ASSERT(rdbFrameCodecFromRdbCodecOrDefault(-1, RDB_FR_CODEC_LZF) == RDB_FR_CODEC_LZF);
+    TEST_ASSERT(rdbFrameCodecFromRdbCodecOrDefault(-1, -1) == RDB_FR_CODEC_RAW);
+    return 0;
+}
+
+int test_rdb_frame_checksum_defaults(int argc, char **argv, int flags) {
+    UNUSED(argc);
+    UNUSED(argv);
+    UNUSED(flags);
+
+    TEST_ASSERT(rdbFrameChecksumOrDefault(RDB_FR_CHECKSUM_CRC64, RDB_FR_CHECKSUM_NONE) == RDB_FR_CHECKSUM_CRC64);
+    TEST_ASSERT(rdbFrameChecksumOrDefault(RDB_FR_CHECKSUM_NONE, RDB_FR_CHECKSUM_CRC64) == RDB_FR_CHECKSUM_NONE);
+    TEST_ASSERT(rdbFrameChecksumOrDefault(-1, RDB_FR_CHECKSUM_NONE) == RDB_FR_CHECKSUM_NONE);
+    TEST_ASSERT(rdbFrameChecksumOrDefault(-1, -1) == RDB_FR_CHECKSUM_CRC64);
+    return 0;
+}
+
+int test_rdb_frame_block_defaults(int argc, char **argv, int flags) {
+    UNUSED(argc);
+    UNUSED(argv);
+    UNUSED(flags);
+
+    TEST_ASSERT(rdbFrameBlockSizeOrDefault(131072, 262144, 65536) == 131072);
+    TEST_ASSERT(rdbFrameBlockSizeOrDefault(0, 262144, 65536) == 262144);
+    TEST_ASSERT(rdbFrameBlockSizeOrDefault(32768, 0, 65536) == 65536);
+    TEST_ASSERT(rdbFrameBlockSizeOrDefault(0, 0, 65536) == 65536);
+    TEST_ASSERT(rdbFrameBlockSizeOrDefault(0, 131072, 0) == 131072);
+    return 0;
+}

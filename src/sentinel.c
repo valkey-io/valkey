@@ -4543,6 +4543,7 @@ void sentinelReceiveIsPrimaryDownReply(valkeyAsyncContext *c, void *reply, void 
  * in order to get the replies that allow to reach the quorum
  * needed to mark the primary in ODOWN state and trigger a failover. */
 void sentinelAskPrimaryStateToOtherSentinels(sentinelValkeyInstance *primary, int flags) {
+    /* We don't need to send requests when the primary is not SDOWN */
     if ((primary->flags & SRI_S_DOWN) == 0) return;
 
     char port[32];

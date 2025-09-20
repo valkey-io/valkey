@@ -165,20 +165,23 @@ static int pick_codec(uint8_t master_mask, uint8_t replica_mask) {
 static sds build_rdb_framing_preface(client *replica) {
     if (!replica->replx.rdb_framing_enabled) return NULL;
 
-    size_t blk = replica->replx.rdb_blk_selected ? replica->replx.rdb_blk_selected : 65536;
-    int frame_codec = rdbFrameCodecFromRdbCodec(replica->replx.rdb_codec_selected);
-    if (frame_codec < 0) frame_codec = RDB_FR_CODEC_RAW;
-    int checksum = server.rdb_frame_config.checksum;
-    if (rdbFrameChecksumToString(checksum) == NULL) checksum = RDB_FR_CHECKSUM_CRC64;
+    size_t blk = rdbFrameBlockSizeOrDefault(replica->replx.rdb_blk_selected, 65536, 65536);
+    int frame_codec = rdbFrameCodecFromRdbCodecOrDefault(replica->replx.rdb_codec_selected, RDB_FR_CODEC_RAW);
+    int checksum = rdbFrameChecksumOrDefault(server.rdb_frame_config.checksum, RDB_FR_CHECKSUM_CRC64);
 
     char config_line[128];
     ssize_t len = rdbFrameFormatConfigLine(config_line, sizeof(config_line), frame_codec, blk, checksum);
     if (len < 0) {
-        len = rdbFrameFormatConfigLine(config_line, sizeof(config_line), RDB_FR_CODEC_RAW, blk, RDB_FR_CHECKSUM_CRC64);
+        frame_codec = RDB_FR_CODEC_RAW;
+        checksum = RDB_FR_CHECKSUM_CRC64;
+        len = rdbFrameFormatConfigLine(config_line, sizeof(config_line), frame_codec, blk, checksum);
         if (len < 0) return NULL;
     }
 
-    return sdscatfmt(sdsempty(), "+RDBFRAMED %s\r\n", config_line);
+    sds preface = sdsempty();
+    if (preface == NULL) return NULL;
+    preface = sdscatfmt(preface, "+RDBFRAMED %s\r\n", config_line);
+    return preface;
 }
 
 static void decide_framing_for_replica(client *slave, int disk_transfer) {
@@ -198,20 +201,19 @@ static void decide_framing_for_replica(client *slave, int disk_transfer) {
     int codec = pick_codec(master_mask, slave->replx.rdb_codec_mask);
     if (codec < 0) return;
 
-    size_t configured_block = server.rdb_frame_config.block_bytes;
-    if (configured_block == 0) configured_block = 65536;
+    size_t configured_block = rdbFrameBlockSizeOrDefault(server.rdb_frame_config.block_bytes, 65536, 65536);
     if (configured_block > (size_t)UINT32_MAX) configured_block = UINT32_MAX;
     uint32_t blk = (uint32_t)configured_block;
 
     if (slave->replx.rdb_blkmax && slave->replx.rdb_blkmax < blk) blk = slave->replx.rdb_blkmax;
-    if (blk < 65536) blk = 65536;
+    blk = (uint32_t)rdbFrameBlockSizeOrDefault(blk, 65536, 65536);
 
     slave->replx.rdb_codec_selected = (uint8_t)codec;
     slave->replx.rdb_blk_selected = blk;
     slave->replx.rdb_framing_enabled = 1;
 
-    int frame_codec = rdbFrameCodecFromRdbCodec(codec);
-    const char *codec_name = frame_codec >= 0 ? rdbFrameCodecToString(frame_codec) : NULL;
+    int frame_codec = rdbFrameCodecFromRdbCodecOrDefault(codec, RDB_FR_CODEC_RAW);
+    const char *codec_name = rdbFrameCodecToString(frame_codec);
     if (codec_name == NULL) codec_name = "raw";
     serverLog(LL_NOTICE, "Selected framed RDB for replica %s: codec=%s blk=%u",
               getClientPeerId(slave), codec_name, blk);

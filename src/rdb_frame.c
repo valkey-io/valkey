@@ -103,6 +103,26 @@ ssize_t rdbFrameFormatConfigLine(char *buf, size_t buf_len, int codec, size_t bl
     return len;
 }
 
+int rdbFrameCodecFromRdbCodecOrDefault(int codec, int default_frame_codec) {
+    int frame_codec = rdbFrameCodecFromRdbCodec(codec);
+    if (frame_codec >= 0) return frame_codec;
+    if (rdbFrameCodecToString(default_frame_codec) == NULL) return RDB_FR_CODEC_RAW;
+    return default_frame_codec;
+}
+
+int rdbFrameChecksumOrDefault(int checksum, int default_checksum) {
+    if (rdbFrameChecksumToString(checksum) != NULL) return checksum;
+    if (rdbFrameChecksumToString(default_checksum) == NULL) return RDB_FR_CHECKSUM_CRC64;
+    return default_checksum;
+}
+
+size_t rdbFrameBlockSizeOrDefault(size_t requested_block, size_t default_block, size_t min_block) {
+    size_t block = requested_block ? requested_block : default_block;
+    if (block == 0) block = min_block ? min_block : default_block;
+    if (min_block && block < min_block) block = min_block;
+    return block;
+}
+
 rdbFrameParseResult rdbFrameParseConfigTriplet(char *buf,
                                                const char **codec_token,
                                                const char **blk_token,

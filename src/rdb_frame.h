@@ -64,4 +64,10 @@ rdbFrameParseResult rdbFrameParseConfigTriplet(char *buf,
                                                const char **blk_token,
                                                const char **checksum_token);
 
+int rdbFrameCodecFromRdbCodecOrDefault(int codec, int default_frame_codec);
+int rdbFrameChecksumOrDefault(int checksum, int default_checksum);
+size_t rdbFrameBlockSizeOrDefault(size_t requested_block,
+                                  size_t default_block,
+                                  size_t min_block);
+
 #endif /* RDB_FRAME_H */

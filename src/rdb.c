@@ -1624,8 +1624,7 @@ static int rdbSaveInternal(int req, const char *filename, rdbSaveInfo *rsi, int 
     rdb_frame_opts local_frame_opts;
     if (server.rdb_frame_config.file_mode == RDB_FR_FILE_MODE_BLOCK) {
         local_frame_opts = server.rdb_frame_config;
-        size_t block_bytes = local_frame_opts.block_bytes ? local_frame_opts.block_bytes : 262144;
-        if (block_bytes < 65536) block_bytes = 65536;
+        size_t block_bytes = rdbFrameBlockSizeOrDefault(local_frame_opts.block_bytes, 262144, 65536);
         local_frame_opts.block_bytes = block_bytes;
 
         const char *codec = rdbFrameCodecToString(local_frame_opts.codec);

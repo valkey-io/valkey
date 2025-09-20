@@ -191,8 +191,7 @@ int rioCompressFlush(rio_compress *rc, int last) {
     hdr.magic[1] = RDB_FR_MAGIC1;
     hdr.magic[2] = RDB_FR_MAGIC2;
     hdr.magic[3] = RDB_FR_MAGIC3;
-    int frame_codec = rdbFrameCodecFromRdbCodec(actual_codec);
-    if (frame_codec < 0) frame_codec = RDB_FR_CODEC_RAW;
+    int frame_codec = rdbFrameCodecFromRdbCodecOrDefault(actual_codec, RDB_FR_CODEC_RAW);
     hdr.codec = (uint8_t)frame_codec;
     hdr.flags = last ? RDB_FR_FLAG_LAST : 0;
     hdr.raw_len_le = (uint32_t)raw_len;

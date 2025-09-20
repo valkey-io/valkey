@@ -2454,31 +2454,161 @@ int replicaLoadPrimaryRDBFromSocket(connection *conn, char *buf, char *eofmark, 
     startLoading(server.repl_transfer_size, RDBFLAGS_REPLICATION, asyncLoading);
     if (replicationSupportSkipRDBChecksum(conn, 1, *usemark)) rdb.flags |= RIO_FLAG_SKIP_RDB_CHECKSUM;
     int loadingFailed = 0;
+    int use_framed_rdb = 0;
+    int preface_claimed_codec = RDBC_RAW;
+    uint32_t preface_claimed_blk = 0;
+    int preface_claimed_checksum_crc64 = 0;
     unsigned char peek[9];
     off_t saved_pos = rdb.io.conn.pos;
     size_t saved_processed = rdb.processed_bytes;
     size_t saved_read_so_far = rdb.io.conn.read_so_far;
-    if (rioRead(&rdb, peek, sizeof(peek)) == 0) {
+    unsigned char first_byte;
+    if (rioRead(&rdb, &first_byte, 1) == 0) {
         serverLog(LL_WARNING, "PRIMARY <-> REPLICA sync: Failed reading RDB preamble from primary: %s", strerror(errno));
         loadingFailed = 1;
     } else {
-        size_t peeklen = (size_t)(rdb.io.conn.pos - saved_pos);
-        rdb.io.conn.pos = saved_pos;
-        rdb.io.conn.read_so_far = saved_read_so_far;
-        rdb.processed_bytes = saved_processed;
-        int has_frame_magic = peeklen >= 4 && rdbFrameHasMagicPrefix(peek, peeklen);
-        int has_redis_magic = peeklen >= 5 && memcmp(peek, "REDIS", 5) == 0;
-        int has_valkey_magic = peeklen >= 6 && memcmp(peek, "VALKEY", 6) == 0;
-        if (has_frame_magic || (server.rdb_frame_config.mode == RDB_FR_MODE_BLOCK && peeklen > 0 && !has_redis_magic && !has_valkey_magic)) {
-            if (rioInitDecompress(&decomp, &rdb) == C_ERR) {
-                serverLog(LL_WARNING, "PRIMARY <-> REPLICA sync: Failed initializing framed RDB reader: %s", strerror(errno));
+        if (first_byte == '+') {
+            char first_char = (char)first_byte;
+            sds preface = sdsnewlen(&first_char, 1);
+            if (preface == NULL) {
+                serverLog(LL_WARNING, "PRIMARY <-> REPLICA sync: Out of memory parsing RDB preface");
                 loadingFailed = 1;
-            } else {
-                load_rio = &decomp.rio_itf;
-                using_decompress = 1;
             }
+            while (!loadingFailed && preface) {
+                unsigned char ch;
+                if (rioRead(&rdb, &ch, 1) == 0) {
+                    serverLog(LL_WARNING, "PRIMARY <-> REPLICA sync: Failed reading RDB preface from primary: %s",
+                              strerror(errno));
+                    loadingFailed = 1;
+                    break;
+                }
+                char c = (char)ch;
+                preface = sdscatlen(preface, &c, 1);
+                if (preface == NULL) {
+                    serverLog(LL_WARNING, "PRIMARY <-> REPLICA sync: Out of memory parsing RDB preface");
+                    loadingFailed = 1;
+                    break;
+                }
+                if (c == '\n') break;
+            }
+            if (!loadingFailed && preface) {
+                preface = sdstrim(preface, "\r\n");
+                char *line = preface;
+                if (strncmp(line, "+RDBFRAMED", 10) != 0) {
+                    serverLog(LL_WARNING, "PRIMARY <-> REPLICA sync: Unexpected preface line '%s'", line);
+                    loadingFailed = 1;
+                } else {
+                    const char *codec_str = NULL;
+                    const char *blk_str = NULL;
+                    const char *checksum_str = NULL;
+                    char *p = line + 10;
+                    while (*p == ' ') p++;
+                    while (*p) {
+                        char *token = p;
+                        while (*p && *p != ' ') p++;
+                        if (*p) {
+                            *p = '\0';
+                            p++;
+                            while (*p == ' ') p++;
+                        }
+                        if (!strncmp(token, "codec=", 6) && token[6] != '\0') {
+                            codec_str = token + 6;
+                        } else if (!strncmp(token, "blk=", 4) && token[4] != '\0') {
+                            blk_str = token + 4;
+                        } else if (!strncmp(token, "checksum=", 9) && token[9] != '\0') {
+                            checksum_str = token + 9;
+                        }
+                    }
+                    if (codec_str == NULL || blk_str == NULL || checksum_str == NULL) {
+                        serverLog(LL_WARNING, "PRIMARY <-> REPLICA sync: Incomplete RDB preface '%s'", line);
+                        loadingFailed = 1;
+                    } else {
+                        int codec = -1;
+                        if (!strcasecmp(codec_str, "raw")) codec = RDBC_RAW;
+                        else if (!strcasecmp(codec_str, "lzf")) codec = RDBC_LZF;
+                        else if (!strcasecmp(codec_str, "lz4")) codec = RDBC_LZ4;
+                        if (codec == -1) {
+                            serverLog(LL_WARNING,
+                                      "PRIMARY <-> REPLICA sync: RDB preface specified unsupported codec '%s'",
+                                      codec_str);
+                            loadingFailed = 1;
+                        }
+                        char *endptr = NULL;
+                        unsigned long blk_val = 0;
+                        if (!loadingFailed) {
+                            blk_val = strtoul(blk_str, &endptr, 10);
+                            if (blk_val == 0 || blk_val > UINT32_MAX || endptr == blk_str || *endptr != '\0') {
+                                serverLog(LL_WARNING,
+                                          "PRIMARY <-> REPLICA sync: RDB preface has invalid block size '%s'",
+                                          blk_str);
+                                loadingFailed = 1;
+                            }
+                        }
+                        if (!loadingFailed) {
+                            if (!strcasecmp(checksum_str, "crc64")) {
+                                preface_claimed_checksum_crc64 = 1;
+                            } else if (!strcasecmp(checksum_str, "none")) {
+                                preface_claimed_checksum_crc64 = 0;
+                            } else {
+                                serverLog(LL_WARNING,
+                                          "PRIMARY <-> REPLICA sync: RDB preface has unknown checksum '%s'",
+                                          checksum_str);
+                                loadingFailed = 1;
+                            }
+                        }
+                        if (!loadingFailed) {
+                            use_framed_rdb = 1;
+                            preface_claimed_codec = codec;
+                            preface_claimed_blk = (uint32_t)blk_val;
+                            serverLog(LL_DEBUG,
+                                      "PRIMARY <-> REPLICA sync: Received framed RDB preface codec=%s blk=%lu checksum=%s",
+                                      codec_str, blk_val, checksum_str);
+                        }
+                    }
+                }
+            }
+            if (preface) sdsfree(preface);
+        } else {
+            rdb.io.conn.pos = saved_pos;
+            rdb.io.conn.read_so_far = saved_read_so_far;
+            rdb.processed_bytes = saved_processed;
         }
     }
+    if (!loadingFailed && !use_framed_rdb) {
+        if (rioRead(&rdb, peek, sizeof(peek)) == 0) {
+            serverLog(LL_WARNING, "PRIMARY <-> REPLICA sync: Failed reading RDB preamble from primary: %s", strerror(errno));
+            loadingFailed = 1;
+        } else {
+            size_t peeklen = (size_t)(rdb.io.conn.pos - saved_pos);
+            rdb.io.conn.pos = saved_pos;
+            rdb.io.conn.read_so_far = saved_read_so_far;
+            rdb.processed_bytes = saved_processed;
+            int has_frame_magic = peeklen >= 4 && rdbFrameHasMagicPrefix(peek, peeklen);
+            int has_redis_magic = peeklen >= 5 && memcmp(peek, "REDIS", 5) == 0;
+            int has_valkey_magic = peeklen >= 6 && memcmp(peek, "VALKEY", 6) == 0;
+            if (has_frame_magic || (server.rdb_frame_config.mode == RDB_FR_MODE_BLOCK && peeklen > 0 && !has_redis_magic && !has_valkey_magic)) {
+                if (rioInitDecompress(&decomp, &rdb) == C_ERR) {
+                    serverLog(LL_WARNING, "PRIMARY <-> REPLICA sync: Failed initializing framed RDB reader: %s", strerror(errno));
+                    loadingFailed = 1;
+                } else {
+                    load_rio = &decomp.rio_itf;
+                    using_decompress = 1;
+                }
+            }
+        }
+    } else if (!loadingFailed) {
+        if (rioInitDecompress(&decomp, &rdb) == C_ERR) {
+            serverLog(LL_WARNING, "PRIMARY <-> REPLICA sync: Failed initializing framed RDB reader: %s", strerror(errno));
+            loadingFailed = 1;
+        } else {
+            load_rio = &decomp.rio_itf;
+            using_decompress = 1;
+        }
+    }
+
+    (void)preface_claimed_codec;
+    (void)preface_claimed_blk;
+    (void)preface_claimed_checksum_crc64;
 
     rdbLoadingCtx loadingCtx = {.dbarray = dbarray, .functions_lib_ctx = functions_lib_ctx};
     if (!loadingFailed && rdbLoadRioWithLoadingCtxScopedRdb(load_rio, RDBFLAGS_REPLICATION, rsi, &loadingCtx) != C_OK) {

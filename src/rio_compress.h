@@ -33,5 +33,6 @@ typedef struct rio_compress {
 
 int rioInitCompress(rio_compress *rc, rio *dst, const rdb_frame_opts *opts);
 int rioCompressFlush(rio_compress *rc, int last);
+void rioCompressCleanup(rio_compress *rc);
 
 #endif /* VALKEY_RIO_COMPRESS_H */

@@ -11,6 +11,7 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#include <sys/types.h>
 
 #define RDB_FR_MAGIC0 'R'
 #define RDB_FR_MAGIC1 'B'
@@ -25,6 +26,12 @@
 /* Frame flags. */
 #define RDB_FR_FLAG_LAST 1
 
+/* Frame checksums. */
+#ifndef RDB_FR_CHECKSUM_CRC64
+#define RDB_FR_CHECKSUM_CRC64 0
+#define RDB_FR_CHECKSUM_NONE 1
+#endif
+
 typedef struct __attribute__((packed)) RdbFrameBlockHdr {
     uint8_t magic[4];   /* RBC\1 */
     uint8_t codec;      /* 0=RAW,1=LZ4,2=LZF */
@@ -38,5 +45,23 @@ static inline int rdbFrameHasMagicPrefix(const unsigned char *buf, size_t len) {
     return len >= 4 && buf[0] == RDB_FR_MAGIC0 && buf[1] == RDB_FR_MAGIC1 && buf[2] == RDB_FR_MAGIC2 &&
            buf[3] == RDB_FR_MAGIC3;
 }
+
+typedef enum {
+    RDB_FRAME_PARSE_OK = 0,
+    RDB_FRAME_PARSE_INVALID_FORMAT,
+    RDB_FRAME_PARSE_UNKNOWN_FIELD
+} rdbFrameParseResult;
+
+const char *rdbFrameCodecToString(int codec);
+int rdbFrameCodecFromString(const char *token);
+int rdbFrameCodecFromRdbCodec(int codec);
+int rdbFrameCodecToRdbCodec(int frame_codec);
+const char *rdbFrameChecksumToString(int checksum);
+int rdbFrameChecksumFromString(const char *token);
+ssize_t rdbFrameFormatConfigLine(char *buf, size_t buf_len, int codec, size_t block_bytes, int checksum);
+rdbFrameParseResult rdbFrameParseConfigTriplet(char *buf,
+                                               const char **codec_token,
+                                               const char **blk_token,
+                                               const char **checksum_token);
 
 #endif /* RDB_FRAME_H */

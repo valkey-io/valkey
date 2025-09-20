@@ -40,6 +40,7 @@
 #include "functions.h"
 #include "connection.h"
 #include "module.h"
+#include "rdb_frame.h"
 #include "rio_decompress.h"
 
 #include <memory.h>
@@ -164,15 +165,20 @@ static int pick_codec(uint8_t master_mask, uint8_t replica_mask) {
 static sds build_rdb_framing_preface(client *replica) {
     if (!replica->replx.rdb_framing_enabled) return NULL;
 
-    const char *codec =
-        replica->replx.rdb_codec_selected == RDBC_LZ4
-            ? "lz4"
-            : replica->replx.rdb_codec_selected == RDBC_LZF ? "lzf" : "raw";
-    unsigned int blk = replica->replx.rdb_blk_selected ? replica->replx.rdb_blk_selected : 65536;
-    const char *checksum =
-        server.rdb_frame_config.checksum == RDB_FR_CHECKSUM_CRC64 ? "crc64" : "none";
+    size_t blk = replica->replx.rdb_blk_selected ? replica->replx.rdb_blk_selected : 65536;
+    int frame_codec = rdbFrameCodecFromRdbCodec(replica->replx.rdb_codec_selected);
+    if (frame_codec < 0) frame_codec = RDB_FR_CODEC_RAW;
+    int checksum = server.rdb_frame_config.checksum;
+    if (rdbFrameChecksumToString(checksum) == NULL) checksum = RDB_FR_CHECKSUM_CRC64;
 
-    return sdscatfmt(sdsempty(), "+RDBFRAMED codec=%s blk=%u checksum=%s\r\n", codec, blk, checksum);
+    char config_line[128];
+    ssize_t len = rdbFrameFormatConfigLine(config_line, sizeof(config_line), frame_codec, blk, checksum);
+    if (len < 0) {
+        len = rdbFrameFormatConfigLine(config_line, sizeof(config_line), RDB_FR_CODEC_RAW, blk, RDB_FR_CHECKSUM_CRC64);
+        if (len < 0) return NULL;
+    }
+
+    return sdscatfmt(sdsempty(), "+RDBFRAMED %s\r\n", config_line);
 }
 
 static void decide_framing_for_replica(client *slave, int disk_transfer) {
@@ -204,10 +210,11 @@ static void decide_framing_for_replica(client *slave, int disk_transfer) {
     slave->replx.rdb_blk_selected = blk;
     slave->replx.rdb_framing_enabled = 1;
 
+    int frame_codec = rdbFrameCodecFromRdbCodec(codec);
+    const char *codec_name = frame_codec >= 0 ? rdbFrameCodecToString(frame_codec) : NULL;
+    if (codec_name == NULL) codec_name = "raw";
     serverLog(LL_NOTICE, "Selected framed RDB for replica %s: codec=%s blk=%u",
-              getClientPeerId(slave),
-              codec == RDBC_LZ4 ? "lz4" : codec == RDBC_LZF ? "lzf" : "raw",
-              blk);
+              getClientPeerId(slave), codec_name, blk);
 }
 
 /* ---------------------------------- PRIMARY -------------------------------- */
@@ -2498,41 +2505,26 @@ int replicaLoadPrimaryRDBFromSocket(connection *conn, char *buf, char *eofmark, 
                     serverLog(LL_WARNING, "PRIMARY <-> REPLICA sync: Unexpected preface line '%s'", line);
                     loadingFailed = 1;
                 } else {
+                    char *config = line + 10;
+                    while (*config == ' ') config++;
+
                     const char *codec_str = NULL;
                     const char *blk_str = NULL;
                     const char *checksum_str = NULL;
-                    char *p = line + 10;
-                    while (*p == ' ') p++;
-                    while (*p) {
-                        char *token = p;
-                        while (*p && *p != ' ') p++;
-                        if (*p) {
-                            *p = '\0';
-                            p++;
-                            while (*p == ' ') p++;
-                        }
-                        if (!strncmp(token, "codec=", 6) && token[6] != '\0') {
-                            codec_str = token + 6;
-                        } else if (!strncmp(token, "blk=", 4) && token[4] != '\0') {
-                            blk_str = token + 4;
-                        } else if (!strncmp(token, "checksum=", 9) && token[9] != '\0') {
-                            checksum_str = token + 9;
-                        }
-                    }
-                    if (codec_str == NULL || blk_str == NULL || checksum_str == NULL) {
+                    rdbFrameParseResult parse_res =
+                        rdbFrameParseConfigTriplet(config, &codec_str, &blk_str, &checksum_str);
+                    if (parse_res != RDB_FRAME_PARSE_OK) {
                         serverLog(LL_WARNING, "PRIMARY <-> REPLICA sync: Incomplete RDB preface '%s'", line);
                         loadingFailed = 1;
                     } else {
-                        int codec = -1;
-                        if (!strcasecmp(codec_str, "raw")) codec = RDBC_RAW;
-                        else if (!strcasecmp(codec_str, "lzf")) codec = RDBC_LZF;
-                        else if (!strcasecmp(codec_str, "lz4")) codec = RDBC_LZ4;
+                        int codec = rdbFrameCodecFromString(codec_str);
                         if (codec == -1) {
                             serverLog(LL_WARNING,
                                       "PRIMARY <-> REPLICA sync: RDB preface specified unsupported codec '%s'",
                                       codec_str);
                             loadingFailed = 1;
                         }
+
                         char *endptr = NULL;
                         unsigned long blk_val = 0;
                         if (!loadingFailed) {
@@ -2544,18 +2536,19 @@ int replicaLoadPrimaryRDBFromSocket(connection *conn, char *buf, char *eofmark, 
                                 loadingFailed = 1;
                             }
                         }
+
                         if (!loadingFailed) {
-                            if (!strcasecmp(checksum_str, "crc64")) {
-                                preface_claimed_checksum_crc64 = 1;
-                            } else if (!strcasecmp(checksum_str, "none")) {
-                                preface_claimed_checksum_crc64 = 0;
-                            } else {
+                            int checksum = rdbFrameChecksumFromString(checksum_str);
+                            if (checksum == -1) {
                                 serverLog(LL_WARNING,
-                                          "PRIMARY <-> REPLICA sync: RDB preface has unknown checksum '%s'",
+                                          "PRIMARY <-> REPLICA sync: RDB preface specified unsupported checksum '%s'",
                                           checksum_str);
                                 loadingFailed = 1;
+                            } else {
+                                preface_claimed_checksum_crc64 = (checksum == RDB_FR_CHECKSUM_CRC64);
                             }
                         }
+
                         if (!loadingFailed) {
                             use_framed_rdb = 1;
                             preface_claimed_codec = codec;
@@ -2624,7 +2617,7 @@ int replicaLoadPrimaryRDBFromSocket(connection *conn, char *buf, char *eofmark, 
         }
     }
 
-    if (using_decompress) sdsfree(decomp.rawbuf);
+    if (using_decompress) rioDecompressCleanup(&decomp);
 
     if (loadingFailed) {
         stopLoading(0);

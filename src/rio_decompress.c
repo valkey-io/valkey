@@ -53,23 +53,6 @@ static int rioDecompressReadFromSrc(rio_decompress *rd, void *buf, size_t len) {
     return ok;
 }
 
-static int rioDecompressFrameCodecToCodec(uint8_t frame_codec, rdb_codec_t *codec) {
-    switch (frame_codec) {
-    case RDB_FR_CODEC_RAW:
-        *codec = RDBC_RAW;
-        return C_OK;
-    case RDB_FR_CODEC_LZ4:
-        *codec = RDBC_LZ4;
-        return C_OK;
-    case RDB_FR_CODEC_LZF:
-        *codec = RDBC_LZF;
-        return C_OK;
-    default:
-        break;
-    }
-    return C_ERR;
-}
-
 static int rioDecompressLoadBlock(rio_decompress *rd) {
     if (rd->src == NULL) return C_ERR;
 
@@ -99,11 +82,12 @@ static int rioDecompressLoadBlock(rio_decompress *rd) {
     uint64_t stored_crc = hdr.crc64_le;
     memrev64ifbe(&stored_crc);
 
-    rdb_codec_t codec;
-    if (rioDecompressFrameCodecToCodec(hdr.codec, &codec) == C_ERR) {
+    int codec_val = rdbFrameCodecToRdbCodec(hdr.codec);
+    if (codec_val == -1) {
         errno = EINVAL;
         return C_ERR;
     }
+    rdb_codec_t codec = (rdb_codec_t)codec_val;
 
     rd->eof = (hdr.flags & RDB_FR_FLAG_LAST) != 0;
     rd->pos = 0;
@@ -232,4 +216,15 @@ int rioInitDecompress(rio_decompress *rd, rio *src) {
     rd->rio_itf.flags = src->flags & RIO_FLAG_SKIP_RDB_CHECKSUM;
 
     return C_OK;
+}
+
+void rioDecompressCleanup(rio_decompress *rd) {
+    if (rd == NULL) return;
+    if (rd->rawbuf) {
+        sdsfree(rd->rawbuf);
+        rd->rawbuf = NULL;
+    }
+    rd->src = NULL;
+    rd->pos = 0;
+    rd->eof = 0;
 }

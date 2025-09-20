@@ -23,5 +23,6 @@ typedef struct rio_decompress {
 } rio_decompress;
 
 int rioInitDecompress(rio_decompress *rd, rio *src);
+void rioDecompressCleanup(rio_decompress *rd);
 
 #endif /* VALKEY_RIO_DECOMPRESS_H */

@@ -31,6 +31,7 @@ set(VALKEY_SERVER_SRCS
     ${CMAKE_SOURCE_DIR}/src/db.c
     ${CMAKE_SOURCE_DIR}/src/replication.c
     ${CMAKE_SOURCE_DIR}/src/rdb.c
+    ${CMAKE_SOURCE_DIR}/src/rdb_frame.c
     ${CMAKE_SOURCE_DIR}/src/rdb_codec.c
     ${CMAKE_SOURCE_DIR}/src/rio_compress.c
     ${CMAKE_SOURCE_DIR}/src/rio_decompress.c

@@ -837,7 +837,7 @@ int redis_check_rdb(char *rdbfilename, FILE *fp) {
         }
     }
 
-    if (using_decompress) sdsfree(decomp.rawbuf);
+    if (using_decompress) rioDecompressCleanup(&decomp);
     if (closefile) fclose(fp);
     stopLoading(1);
     return 0;
@@ -849,7 +849,7 @@ eoferr: /* unexpected end of file is handled here with a fatal exit */
         rdbCheckError("Unexpected EOF reading RDB file");
     }
 err:
-    if (using_decompress) sdsfree(decomp.rawbuf);
+    if (using_decompress) rioDecompressCleanup(&decomp);
     if (closefile) fclose(fp);
     stopLoading(0);
     return 1;

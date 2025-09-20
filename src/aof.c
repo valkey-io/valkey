@@ -1480,14 +1480,14 @@ int loadSingleAppendOnlyFile(char *filename) {
                 serverLog(LL_WARNING, "Error reading the RDB base file %s, AOF loading aborted", filename);
 
             ret = AOF_FAILED;
-            if (using_decompress) sdsfree(decomp.rawbuf);
+            if (using_decompress) rioDecompressCleanup(&decomp);
             goto cleanup;
         } else {
             loadingAbsProgress(ftello(fp));
             last_progress_report_size = ftello(fp);
             if (old_style) serverLog(LL_NOTICE, "Reading the remaining AOF tail...");
         }
-        if (using_decompress) sdsfree(decomp.rawbuf);
+        if (using_decompress) rioDecompressCleanup(&decomp);
     }
 
     /* Read the actual AOF file, in REPL format, command by command. */

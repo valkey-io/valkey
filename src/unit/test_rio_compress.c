@@ -122,6 +122,10 @@ int test_rio_compress(int argc, char **argv, int flags) {
             break;
         }
 
+        int expected_frame = rdbFrameCodecFromRdbCodec(block_codec);
+        TEST_ASSERT(expected_frame >= 0);
+        TEST_ASSERT(hdr.codec == (uint8_t)expected_frame);
+
         const unsigned char *payload_bytes = payload ? payload : (unsigned char *)"";
         if (block_codec == RDBC_RAW) {
             TEST_ASSERT(raw_len == cmp_len);
@@ -153,9 +157,7 @@ int test_rio_compress(int argc, char **argv, int flags) {
     sdsfree(chunk);
     sdsfree(expected);
     zfree(random);
-    rdbCodecFree(rc.cctx);
-    sdsfree(rc.rawbuf);
-    sdsfree(rc.cmpbuf);
+    rioCompressCleanup(&rc);
     fclose(fp);
 
     return 0;

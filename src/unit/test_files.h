@@ -8,6 +8,16 @@ typedef struct unitTest {
 
 int test_rdb_codec_roundtrip(int argc, char **argv, int flags);
 int test_rdb_codec_raw_fallback(int argc, char **argv, int flags);
+int test_rdb_frame_codec_helpers(int argc, char **argv, int flags);
+int test_rdb_frame_checksum_helpers(int argc, char **argv, int flags);
+int test_rdb_frame_parse_triplet_success(int argc, char **argv, int flags);
+int test_rdb_frame_parse_triplet_errors(int argc, char **argv, int flags);
+int test_rdb_frame_format_line(int argc, char **argv, int flags);
+int test_rdb_frame_codec_cross_conversion(int argc, char **argv, int flags);
+int test_rdb_frame_has_magic_prefix(int argc, char **argv, int flags);
+int test_rdb_frame_parse_triplet_whitespace(int argc, char **argv, int flags);
+int test_rdb_frame_parse_triplet_empty_values(int argc, char **argv, int flags);
+int test_rdb_frame_parse_triplet_null_args(int argc, char **argv, int flags);
 int test_popcount(int argc, char **argv, int flags);
 int test_crc64(int argc, char **argv, int flags);
 int test_crc64combine(int argc, char **argv, int flags);
@@ -257,6 +267,7 @@ int test_zmallocAllocReallocCallocAndFree(int argc, char **argv, int flags);
 int test_zmallocAllocZeroByteAndFree(int argc, char **argv, int flags);
 
 unitTest __rdb_codec_unit_c[] = {{"test_rdb_codec_roundtrip", test_rdb_codec_roundtrip}, {"test_rdb_codec_raw_fallback", test_rdb_codec_raw_fallback}, {NULL, NULL}};
+unitTest __rdb_frame_unit_c[] = {{"test_rdb_frame_codec_helpers", test_rdb_frame_codec_helpers}, {"test_rdb_frame_checksum_helpers", test_rdb_frame_checksum_helpers}, {"test_rdb_frame_parse_triplet_success", test_rdb_frame_parse_triplet_success}, {"test_rdb_frame_parse_triplet_errors", test_rdb_frame_parse_triplet_errors}, {"test_rdb_frame_format_line", test_rdb_frame_format_line}, {"test_rdb_frame_codec_cross_conversion", test_rdb_frame_codec_cross_conversion}, {"test_rdb_frame_has_magic_prefix", test_rdb_frame_has_magic_prefix}, {"test_rdb_frame_parse_triplet_whitespace", test_rdb_frame_parse_triplet_whitespace}, {"test_rdb_frame_parse_triplet_empty_values", test_rdb_frame_parse_triplet_empty_values}, {"test_rdb_frame_parse_triplet_null_args", test_rdb_frame_parse_triplet_null_args}, {NULL, NULL}};
 unitTest __test_bitops_c[] = {{"test_popcount", test_popcount}, {NULL, NULL}};
 unitTest __test_crc64_c[] = {{"test_crc64", test_crc64}, {NULL, NULL}};
 unitTest __test_crc64combine_c[] = {{"test_crc64combine", test_crc64combine}, {NULL, NULL}};
@@ -288,6 +299,7 @@ struct unitTestSuite {
     unitTest *tests;
 } unitTestSuite[] = {
     {"rdb_codec_unit.c", __rdb_codec_unit_c},
+    {"rdb_frame_unit.c", __rdb_frame_unit_c},
     {"test_bitops.c", __test_bitops_c},
     {"test_crc64.c", __test_crc64_c},
     {"test_crc64combine.c", __test_crc64combine_c},

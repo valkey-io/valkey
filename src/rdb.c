@@ -178,63 +178,6 @@ static inline void rdbCompressionBoundary(rio *rdb) {
     if (rdb && (rdb->flags & RIO_FLAG_FRAMED)) rioFlush(rdb);
 }
 
-static void rdbReleaseFramedWrite(int framed, rio_compress *rc) {
-    if (!framed || rc == NULL) return;
-    if (rc->cctx) {
-        rdbCodecFree(rc->cctx);
-        rc->cctx = NULL;
-    }
-    if (rc->rawbuf) {
-        sdsfree(rc->rawbuf);
-        rc->rawbuf = NULL;
-    }
-    if (rc->cmpbuf) {
-        sdsfree(rc->cmpbuf);
-        rc->cmpbuf = NULL;
-    }
-}
-
-static const char *rdbFrameCodecToString(int codec) {
-    switch (codec) {
-    case RDB_FR_CODEC_RAW:
-        return "raw";
-    case RDB_FR_CODEC_LZ4:
-        return "lz4";
-    case RDB_FR_CODEC_LZF:
-        return "lzf";
-    default:
-        break;
-    }
-    return NULL;
-}
-
-static int rdbFrameCodecFromString(const char *token) {
-    if (token == NULL) return -1;
-    if (!strcasecmp(token, "raw")) return RDB_FR_CODEC_RAW;
-    if (!strcasecmp(token, "lz4")) return RDB_FR_CODEC_LZ4;
-    if (!strcasecmp(token, "lzf")) return RDB_FR_CODEC_LZF;
-    return -1;
-}
-
-static const char *rdbFrameChecksumToString(int checksum) {
-    switch (checksum) {
-    case RDB_FR_CHECKSUM_CRC64:
-        return "crc64";
-    case RDB_FR_CHECKSUM_NONE:
-        return "none";
-    default:
-        break;
-    }
-    return NULL;
-}
-
-static int rdbFrameChecksumFromString(const char *token) {
-    if (token == NULL) return -1;
-    if (!strcasecmp(token, "crc64")) return RDB_FR_CHECKSUM_CRC64;
-    if (!strcasecmp(token, "none")) return RDB_FR_CHECKSUM_NONE;
-    return -1;
-}
-
 static int rdbStartFramedWrite(rio *base, rio *out, const rdb_frame_opts *opts) {
     if (base == NULL || out == NULL || opts == NULL) {
         if (base && out) *out = *base;
@@ -1635,13 +1578,13 @@ int rdbSaveRioWithEOFMark(int req, rio *rdb, int *error, rdbSaveInfo *rsi) {
         goto werr;
     }
     if (rioWrite(rdb, eofmark, RDB_EOF_MARK_SIZE) == 0) goto werr;
-    if (framed) rdbReleaseFramedWrite(framed, &rc);
+    if (framed) rioCompressCleanup(&rc);
     stopSaving(1);
     return C_OK;
 
 werr: /* Write error. */
     /* Set 'error' only if not already set by rdbSaveRio() call. */
-    if (framed) rdbReleaseFramedWrite(framed, &rc);
+    if (framed) rioCompressCleanup(&rc);
     if (error && *error == 0) *error = errno;
     stopSaving(0);
     return C_ERR;
@@ -1699,13 +1642,18 @@ static int rdbSaveInternal(int req, const char *filename, rdbSaveInfo *rsi, int 
         }
 
         char hdrline[128];
-        int hdrlen = snprintf(hdrline, sizeof(hdrline), "codec=%s blk=%zu checksum=%s\n", codec, block_bytes, checksum);
-        if (hdrlen < 0 || (size_t)hdrlen >= sizeof(hdrline)) {
+        ssize_t hdrlen = rdbFrameFormatConfigLine(hdrline, sizeof(hdrline), local_frame_opts.codec, block_bytes,
+                                                  local_frame_opts.checksum);
+        if (hdrlen < 0) {
             err_op = "format framed header";
             errno = EINVAL;
             goto werr;
         }
-        if (!rioWrite(&rdb, hdrline, hdrlen)) {
+        if (!rioWrite(&rdb, hdrline, (size_t)hdrlen)) {
+            err_op = "write framed header";
+            goto werr;
+        }
+        if (!rioWrite(&rdb, "\n", 1)) {
             err_op = "write framed header";
             goto werr;
         }
@@ -1735,7 +1683,7 @@ static int rdbSaveInternal(int req, const char *filename, rdbSaveInfo *rsi, int 
         goto werr;
     }
     if (framed) {
-        rdbReleaseFramedWrite(framed, &rc);
+        rioCompressCleanup(&rc);
         framed = 0;
     }
 
@@ -1762,7 +1710,7 @@ static int rdbSaveInternal(int req, const char *filename, rdbSaveInfo *rsi, int 
 werr:
     saved_errno = errno;
     if (framed) {
-        rdbReleaseFramedWrite(framed, &rc);
+        rioCompressCleanup(&rc);
         framed = 0;
     }
     serverLog(LL_WARNING, "Write error while saving DB to the disk(%s): %s", err_op, strerror(errno));
@@ -3289,24 +3237,9 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
             const char *codec_token = NULL;
             const char *blk_token = NULL;
             const char *checksum_token = NULL;
-            char *saveptr = NULL;
-            char *field = strtok_r(header_line, " ", &saveptr);
-            int field_count = 0;
-            while (field) {
-                if (!strncmp(field, "codec=", 6)) {
-                    codec_token = field + 6;
-                } else if (!strncmp(field, "blk=", 4)) {
-                    blk_token = field + 4;
-                } else if (!strncmp(field, "checksum=", 9)) {
-                    checksum_token = field + 9;
-                } else {
-                    serverLog(LL_WARNING, "Failed loading RDB: invalid framed RDB header");
-                    return C_ERR;
-                }
-                field_count++;
-                field = strtok_r(NULL, " ", &saveptr);
-            }
-            if (field_count != 3 || codec_token == NULL || blk_token == NULL || checksum_token == NULL) {
+            rdbFrameParseResult parse_res =
+                rdbFrameParseConfigTriplet(header_line, &codec_token, &blk_token, &checksum_token);
+            if (parse_res != RDB_FRAME_PARSE_OK) {
                 serverLog(LL_WARNING, "Failed loading RDB: invalid framed RDB header");
                 return C_ERR;
             }
@@ -3347,7 +3280,7 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
     }
 
     int retval = rdbLoadRioWithLoadingCtxScopedRdb(reader, rdbflags, rsi, &loading_ctx);
-    if (use_decompress) sdsfree(decomp.rawbuf);
+    if (use_decompress) rioDecompressCleanup(&decomp);
     return retval;
 }
 

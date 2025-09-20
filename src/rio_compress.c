@@ -33,20 +33,6 @@ static int rioCompressWriteToDst(rio_compress *rc, const void *buf, size_t len) 
     return ok;
 }
 
-static uint8_t rioCompressCodecToFrame(rdb_codec_t codec) {
-    switch (codec) {
-    case RDBC_RAW:
-        return RDB_FR_CODEC_RAW;
-    case RDBC_LZ4:
-        return RDB_FR_CODEC_LZ4;
-    case RDBC_LZF:
-        return RDB_FR_CODEC_LZF;
-    default:
-        break;
-    }
-    return RDB_FR_CODEC_RAW;
-}
-
 static size_t rioCompressWrite(rio *r, const void *buf, size_t len) {
     if (len == 0) return 1;
 
@@ -205,7 +191,9 @@ int rioCompressFlush(rio_compress *rc, int last) {
     hdr.magic[1] = RDB_FR_MAGIC1;
     hdr.magic[2] = RDB_FR_MAGIC2;
     hdr.magic[3] = RDB_FR_MAGIC3;
-    hdr.codec = rioCompressCodecToFrame(actual_codec);
+    int frame_codec = rdbFrameCodecFromRdbCodec(actual_codec);
+    if (frame_codec < 0) frame_codec = RDB_FR_CODEC_RAW;
+    hdr.codec = (uint8_t)frame_codec;
     hdr.flags = last ? RDB_FR_FLAG_LAST : 0;
     hdr.raw_len_le = (uint32_t)raw_len;
     hdr.cmp_len_le = (uint32_t)payload_len;
@@ -227,4 +215,22 @@ int rioCompressFlush(rio_compress *rc, int last) {
     sdsclear(rc->rawbuf);
     sdsclear(rc->cmpbuf);
     return C_OK;
+}
+
+void rioCompressCleanup(rio_compress *rc) {
+    if (rc == NULL) return;
+    if (rc->cctx) {
+        rdbCodecFree(rc->cctx);
+        rc->cctx = NULL;
+    }
+    if (rc->rawbuf) {
+        sdsfree(rc->rawbuf);
+        rc->rawbuf = NULL;
+    }
+    if (rc->cmpbuf) {
+        sdsfree(rc->cmpbuf);
+        rc->cmpbuf = NULL;
+    }
+    rc->dst = NULL;
+    rc->blocks = 0;
 }

@@ -97,10 +97,8 @@ int test_rio_decompress(int argc, char **argv, int flags) {
     zfree(decoded);
     sdsfree(expected);
     zfree(random);
-    rdbCodecFree(rc.cctx);
-    sdsfree(rc.rawbuf);
-    sdsfree(rc.cmpbuf);
-    sdsfree(rd.rawbuf);
+    rioCompressCleanup(&rc);
+    rioDecompressCleanup(&rd);
     fclose(fp);
 
     return 0;

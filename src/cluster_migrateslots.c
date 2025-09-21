@@ -501,38 +501,66 @@ int clusterRegisterSlotImportsAuxFields(void) {
  * restart the migration from the source side.
  *
  * State Machine:
+ *        SYNCSLOTS ESTABLISH│
+ *                ┌──────────▼─────────┐
+ *                │SLOT_IMPORT_WAIT_ACK┼──────┐
+ *                └──────────┬─────────┘      │
+ *              SYNCSLOTS ACK│                │
+ *            ┌──────────────▼─────────────┐  │
+ *            │SLOT_IMPORT_RECEIVE_SNAPSHOT┼──┤
+ *            └──────────────┬─────────────┘  │
+ *     SYNCSLOTS SNAPSHOT-EOF│                │
+ *           ┌───────────────▼──────────────┐ │
+ *           │SLOT_IMPORT_WAITING_FOR_PAUSED┼─┤
+ *           └───────────────┬──────────────┘ │
+ *           SYNCSLOTS PAUSED│                │
+ *           ┌───────────────▼──────────────┐ │ Error Conditions:
+ *           │SLOT_IMPORT_FAILOVER_REQUESTED┼─┤  1. OOM
+ *           └───────────────┬──────────────┘ │  2. Slot Ownership Change
+ * SYNCSLOTS FAILOVER-GRANTED│                │  3. FLUSHDB
+ *            ┌──────────────▼─────────────┐  │  4. Connection Lost
+ *            │SLOT_IMPORT_FAILOVER_GRANTED┼──┤  5. No ACK from source (timeout)
+ *            └──────────────┬─────────────┘  │  6. Demoted to replica
+ *         Takeover Performed│                │
+ *            ┌──────────────▼───────────┐    │
+ *            │SLOT_MIGRATION_JOB_SUCCESS┼────┼─────────────────┐
+ *            └──────────────────────────┘    │                 │
+ *                                            │Still primary?   │Demoted to replica?
+ *             ┌──────────────────────────────▼─┐               │
+ *             │SLOT_IMPORT_FINISHED_CLEANING_UP│               │
+ *             └─────────────┬──────────────────┘               │
+ *   Unowned Slots Cleaned Up│                                  │
+ *             ┌─────────────▼───────────┐                      │
+ *             │SLOT_MIGRATION_JOB_FAILED│                      │
+ *             └─────────────────────────┘                      │
+ *                                                              │
+ *        ┌────────────────────────────────┐                    │
+ *        │SLOT_IMPORT_OCCURRING_ON_PRIMARY◄────────────────────┘
+ *        └────────────────────────────────┘
+ *                     (see below)
+ * 
+ * State Machine (Replica):
  *
- *              ┌────────────────────┐
- *              │SLOT_IMPORT_WAIT_ACK┼──────┐
- *              └──────────┬─────────┘      │
- *                      ACK│                │
- *          ┌──────────────▼─────────────┐  │
- *          │SLOT_IMPORT_RECEIVE_SNAPSHOT┼──┤
- *          └──────────────┬─────────────┘  │
- *             SNAPSHOT-EOF│                │
- *         ┌───────────────▼──────────────┐ │
- *         │SLOT_IMPORT_WAITING_FOR_PAUSED┼─┤
- *         └───────────────┬──────────────┘ │
- *                   PAUSED│                │
- *         ┌───────────────▼──────────────┐ │ Error Conditions:
- *         │SLOT_IMPORT_FAILOVER_REQUESTED┼─┤  1. OOM
- *         └───────────────┬──────────────┘ │  2. Slot Ownership Change
- *         FAILOVER-GRANTED│                │  3. Demotion to replica
- *          ┌──────────────▼─────────────┐  │  4. FLUSHDB
- *          │SLOT_IMPORT_FAILOVER_GRANTED┼──┤  5. Connection Lost
- *          └──────────────┬─────────────┘  │  6. No ACK from source (timeout)
- *       Takeover Performed│                │
- *          ┌──────────────▼───────────┐    │
- *          │SLOT_MIGRATION_JOB_SUCCESS┼──-─┤
- *          └──────────────────────────┘    │
- *                                          │
- *           ┌──────────────────────────────▼─┐
- *           │SLOT_IMPORT_FINISHED_CLEANING_UP│
- *           └─────────────┬──────────────────┘
- * Unowned Slots Cleaned Up│
- *           ┌─────────────▼───────────┐
- *           │SLOT_MIGRATION_JOB_FAILED│
- *           └─────────────────────────┘
+ *    SYNCSLOTS ESTABLISH or │
+ *    RDB Aux field laod or  |
+ *    demotion during import |
+ *    ┌──────────────────────▼─────────┐
+ *    │SLOT_IMPORT_OCCURRING_ON_PRIMARY┼──────┐
+ *    └──────────────────────┬─────────┘      │ Error Conditions:
+ * SYNCSLOTS FINISH (SUCCESS)│                │  1. SYNCSLOTS FINISH (FAILURE)
+ *             ┌─────────────▼────────────┐   │  2. Full sync with any primary
+ *             │SLOT_MIGRATION_JOB_SUCCESS│   │  3. Promoted to primary
+ *             └──────────────────────────┘   │
+ *                                            │
+ *                      Promoted to primary?  │
+ *                           ┌────────────────┤
+ *          ┌────────────────▼───────────────┐│
+ *          │SLOT_IMPORT_FINISHED_CLEANING_UP││
+ *          └────────────────┬───────────────┘│
+ *   Unowned Slots Cleaned Up│                │ Still replica?
+ *             ┌─────────────▼───────────┐    │
+ *             │SLOT_MIGRATION_JOB_FAILED◄────┘
+ *             └─────────────────────────┘
  *
  */
 
@@ -756,7 +784,7 @@ void clusterCommandSyncSlotsFailoverGranted(client *c) {
 }
 
 /* Sent by a target primary to a replica in its shard to inform that an ongoing
- * slot import is not finished. */
+ * slot import is now finished. */
 void clusterCommandSyncSlotsFinish(client *c) {
     char *name = NULL;
     char *state = NULL;

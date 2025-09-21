@@ -1,4 +1,16 @@
-#include "../sha256.c"
+/*
+ * Comprehensive unit tests for SHA-256 implementation.
+ *
+ * These tests verify:
+ * 1. Basic functionality with known test vectors (e.g., "abc")
+ * 2. Handling of large input data (4KB repeated 1000 times)
+ * 3. Edge case with repeated single-byte input (1 million 'a' characters)
+ *
+ * The tests ensure compatibility with standard SHA-256 implementations
+ * and will help detect regressions during future code changes.
+ */
+
+#include "../sha256.h"
 #include "test_help.h"
 
 #define BUFSIZE 4096

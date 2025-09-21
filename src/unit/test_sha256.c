@@ -12,6 +12,7 @@
 
 #include "../sha256.h"
 #include "test_help.h"
+#include <string.h>
 
 #define BUFSIZE 4096
 

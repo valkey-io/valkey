@@ -625,6 +625,8 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster} overrides {cluste
         lassign $testcase source_idx target_idx source_repl_idx target_repl_idx target_id slot_to_migrate slot_to_migrate_tag slot_to_test slot_to_test_tag
         set_debug_prevent_pause 1
         test "Importing key containment (slot $slot_to_migrate from node $source_idx to $target_idx) - start migration" {
+            R $target_idx CONFIG RESETSTAT
+            R $target_repl_idx CONFIG RESETSTAT
             populate 1000 "$slot_to_migrate_tag:1:" 1000 -$source_idx false 1000
             assert_match "1" [R $source_idx HSETEX "$slot_to_migrate_tag:hfe" EX 1000 FIELDS 1 field value]
             assert_match "OK" [R $source_idx CLUSTER MIGRATESLOTS SLOTSRANGE $slot_to_migrate $slot_to_migrate NODE $target_id]
@@ -684,6 +686,17 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster} overrides {cluste
                 assert_match "1" [R $target_idx DEL $slot_to_test_tag:my_key]
                 assert_match "1" [R $target_idx DEL $slot_to_test_tag:hfe]
                 wait_for_countkeysinslot $node_idx $slot_to_test 0
+            }
+            test "$node_type importing key containment (slot $slot_to_migrate from node $source_idx to $target_idx) - slot stats" {
+                # Not visiblie in ORDERBY
+                foreach slot_stat {"key-count" "cpu-usec" "network-bytes-in" "network-bytes-out"} {
+                    foreach slot_info [R $node_idx CLUSTER SLOT-STATS ORDERBY $slot_stat LIMIT 16384 DESC] {
+                        set slot [lindex $slot_info 0]
+                        assert_not_equal $slot_to_migrate $slot
+                    }
+                }
+                # Not visible in SLOTSRANGE
+                assert_equal "" [R $node_idx CLUSTER SLOT-STATS SLOTSRANGE $slot_to_migrate $slot_to_migrate]
             }
         }
 

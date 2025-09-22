@@ -1224,6 +1224,7 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster} overrides {cluste
             set blpop_client [valkey_deferring_client_by_addr [srv 0 host] [srv 0 port]]
             $blpop_client BLPOP $0_slot_tag:mylist 0
             $blpop_client flush
+            wait_for_blocked_clients_count 1 100 10 0
 
             # Use debug command to prevent failover
             set_debug_prevent_failover 1

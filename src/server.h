@@ -102,6 +102,7 @@ typedef struct serverObject robj;
 #include "endianconv.h"
 #include "crc64.h"
 #include "rdb_frame.h"
+#include "rdb_codec.h"
 
 struct hdr_histogram;
 
@@ -666,10 +667,6 @@ typedef enum {
 /* RDB frame file output modes. */
 #define RDB_FR_FILE_MODE_LEGACY 0
 #define RDB_FR_FILE_MODE_BLOCK 1
-
-/* RDB frame checksum options. */
-#define RDB_FR_CHECKSUM_CRC64 0
-#define RDB_FR_CHECKSUM_NONE 1
 
 /* Keyspace changes notification classes. Every class is associated with a
  * character for configuration purposes. */
@@ -1577,11 +1574,6 @@ typedef struct rdb_frame_opts {
     int checksum;       /* crc64|none */
 } rdb_frame_opts;
 
-#ifndef RDBC_RAW
-#define RDBC_RAW 0
-#define RDBC_LZF 1
-#define RDBC_LZ4 2
-#endif
 static inline uint8_t codec_to_mask(int c) {
     return (uint8_t)(1u << c);
 }

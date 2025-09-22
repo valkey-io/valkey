@@ -106,17 +106,9 @@ static int rioCompressInitBuffers(rio_compress *rc) {
 }
 
 static rdb_codec_t rioCompressSelectCodec(int frame_codec) {
-    switch (frame_codec) {
-    case RDB_FR_CODEC_RAW:
-        return RDBC_RAW;
-    case RDB_FR_CODEC_LZ4:
-        return RDBC_LZ4;
-    case RDB_FR_CODEC_LZF:
-        return RDBC_LZF;
-    default:
-        break;
-    }
-    return RDBC_RAW;
+    int codec = rdbFrameCodecToRdbCodec(frame_codec);
+    if (codec == -1) return RDBC_RAW;
+    return codec;
 }
 
 int rioInitCompress(rio_compress *rc, rio *dst, const rdb_frame_opts *opts) {

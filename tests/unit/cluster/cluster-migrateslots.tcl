@@ -626,12 +626,13 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster} overrides {cluste
         set_debug_prevent_pause 1
         test "Importing key containment (slot $slot_to_migrate from node $source_idx to $target_idx) - start migration" {
             populate 1000 "$slot_to_migrate_tag:1:" 1000 -$source_idx false 1000
+            assert_match "1" [R $source_idx HSETEX "$slot_to_migrate_tag:hfe" EX 1000 FIELDS 1 field value]
             assert_match "OK" [R $source_idx CLUSTER MIGRATESLOTS SLOTSRANGE $slot_to_migrate $slot_to_migrate NODE $target_id]
             set jobname [get_job_name $source_idx $slot_to_migrate]
             wait_for_migration_field $source_idx $jobname state waiting-to-pause
 
-            assert_match "1000" [R $target_idx CLUSTER COUNTKEYSINSLOT $slot_to_migrate]
-            wait_for_countkeysinslot $target_repl_idx $slot_to_migrate 1000
+            assert_match "1001" [R $target_idx CLUSTER COUNTKEYSINSLOT $slot_to_migrate]
+            wait_for_countkeysinslot $target_repl_idx $slot_to_migrate 1001
         }
         foreach node_under_test [list \
             [list $target_idx "Primary"] \
@@ -672,6 +673,18 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster} overrides {cluste
                 assert_match "1" [R $target_idx DEL $slot_to_test_tag:my_key]
                 wait_for_countkeysinslot $node_idx $slot_to_test 0
             }
+            test "$node_type importing key containment (slot $slot_to_migrate from node $source_idx to $target_idx) - DB stats" {
+                set db_info_before [status [srv -$node_idx client] db0]
+                assert_match "" $db_info_before
+                assert_match "OK" [R $target_idx SET $slot_to_test_tag:my_key my_value EX 1000]
+                assert_match "1" [R $target_idx HSETEX "$slot_to_test_tag:hfe" EX 1000 FIELDS 1 field value]
+                wait_for_countkeysinslot $node_idx $slot_to_test 2
+                set db_info_after [status [srv -$node_idx client] db0]
+                assert_match "keys=2,expires=1,avg_ttl=*,keys_with_volatile_items=1" $db_info_after
+                assert_match "1" [R $target_idx DEL $slot_to_test_tag:my_key]
+                assert_match "1" [R $target_idx DEL $slot_to_test_tag:hfe]
+                wait_for_countkeysinslot $node_idx $slot_to_test 0
+            }
         }
 
         foreach eviction_policy {
@@ -697,7 +710,7 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster} overrides {cluste
                         }
                     }
                     # Validate keys are there
-                    assert_match "1000" [R $target_idx CLUSTER COUNTKEYSINSLOT $slot_to_migrate]
+                    assert_match "1001" [R $target_idx CLUSTER COUNTKEYSINSLOT $slot_to_migrate]
                 }
             }
         }

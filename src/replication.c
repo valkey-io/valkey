@@ -2069,8 +2069,8 @@ void replicationSendNewlineToPrimary(void) {
 /* Callback used by emptyData() while flushing away old data to load
  * the new dataset received by the primary and by discardTempDb()
  * after loading succeeded or failed. */
-void replicationEmptyDbCallback(hashtable *d) {
-    UNUSED(d);
+void replicationEmptyDbCallback(hashtable *ht) {
+    UNUSED(ht);
     if (server.repl_state == REPL_STATE_TRANSFER) replicationSendNewlineToPrimary();
 }
 
@@ -2413,7 +2413,7 @@ int replicaLoadPrimaryRDBFromSocket(connection *conn, char *buf, char *eofmark, 
         } else {
             /* If we received RDB_INCOMPATIBLE, the old data was preserved */
             if (retval == RDB_INCOMPATIBLE) { 
-                serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync: No data was loaded, skipping discard step");
+                serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync: RDB version or signature incompatible, old data preserved");
             } else {
                 /* Remove the half-loaded data in case the load failed for other reasons. */
                 serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync: Discarding the half-loaded data");
@@ -2499,7 +2499,7 @@ int replicaLoadPrimaryRDBFromDisk(rdbSaveInfo *rsi) {
      * we must discard the cached primary structure and force resync of sub-replicas. */
     replicationAttachToNewPrimary();
 
-    /* We pass RDBFLAGS_EMPTY_DATA to call emptyData() after validating rdb compatbility 
+    /* We pass RDBFLAGS_EMPTY_DATA to call emptyData() after validating rdb compatability 
     * and before loading the data from the RDB */
     serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync: Loading DB in memory");
     int retval = rdbLoad(server.rdb_filename, rsi, RDBFLAGS_REPLICATION | RDBFLAGS_EMPTY_DATA);
@@ -2514,7 +2514,7 @@ int replicaLoadPrimaryRDBFromDisk(rdbSaveInfo *rsi) {
             bg_unlink(server.rdb_filename);
         }
 
-        /* If RDB failed compatability check, we did not load the new data set or flush our old data. */
+        /* If RDB failed compatibility check, we did not load the new data set or flush our old data. */
         if (retval == RDB_INCOMPATIBLE) {
             serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync: Skipping flush, no new data was loaded.");
         } else {

@@ -75,6 +75,7 @@ extern int rdbCheckMode;
 void rdbCheckError(const char *fmt, ...);
 void rdbCheckSetError(const char *fmt, ...);
 int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadingCtx *rdb_loading_ctx);
+void replicationEmptyDbCallback(hashtable *ht);
 
 /* Returns true if the RDB version is valid and accepted, false otherwise. This
  * function takes configuration into account. The parameter `is_valkey_magic`
@@ -3082,9 +3083,8 @@ int rdbLoadRioWithLoadingCtxScopedRdb(rio *rdb, int rdbflags, rdbSaveInfo *rsi, 
 
 /* Load an RDB file from the rio stream 'rdb'. We return one of the following:
  * - RDB_OK On success
- * - RDB_INCOMPATIBLE If the RDB is has an invalid signature or version
- * - RDB_FAILED
- * if the RDB is has an invalid signature or version we return 
+ * - RDB_INCOMPATIBLE If the RDB has an invalid signature or version
+ * - RDB_FAILED in all other failure cases
  * The rdb_loading_ctx argument holds objects to which the rdb will be loaded to,
  * currently it only allow to set db object and functionLibCtx to which the data
  * will be loaded (in the future it might contains more such objects). */

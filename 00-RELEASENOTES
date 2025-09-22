@@ -10,6 +10,17 @@ SECURITY: There are security fixes in the release.
 --------------------------------------------------------------------------------
 
 ================================================================================
+Valkey 8.1.4
+================================================================================
+
+Upgrade urgency HIGH: This release includes bug fixes we recommend you
+apply as soon as possible.
+
+Bug fixes
+=========
+* Fix accounting for dual channel RDB bytes in replication stats (#2614)
+
+================================================================================
 Valkey 8.1.3  -  Released Sun 07 July 2025
 ================================================================================
 

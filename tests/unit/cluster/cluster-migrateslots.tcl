@@ -1937,9 +1937,20 @@ start_cluster 3 6 {tags {logreqres:skip external:skip cluster}} {
         assert_match "500" [R 8 CLUSTER COUNTKEYSINSLOT 16383]
 
         # Expect error messages
-        assert_match {*A failover occurred during slot import*} [dict get [get_migration_by_name 0 $jobname] message]
+        #
+        # Depending on whether replicas can PSYNC or not, the error message
+        # changes. They may not be able to PSYNC if the primary generates enough
+        # UNLINK events when cleaning up dirty slots on promotion to fill up the
+        # replication backlog.
+        assert {
+            [string match "*A failover occurred during slot import*" [dict get [get_migration_by_name 0 $jobname] message]] ||
+            [string match "*Full resynchronization occurred*" [dict get [get_migration_by_name 0 $jobname] message]]
+        }
         assert_match {*A failover occurred during slot import*} [dict get [get_migration_by_name 3 $jobname] message]
-        assert_match {*A failover occurred during slot import*} [dict get [get_migration_by_name 6 $jobname] message]
+        assert {
+            [string match "*A failover occurred during slot import*" [dict get [get_migration_by_name 6 $jobname] message]] ||
+            [string match "*Full resynchronization occurred*" [dict get [get_migration_by_name 6 $jobname] message]]
+        }
         assert_match {*Connection lost to target*} [dict get [get_migration_by_name 2 $jobname] message]
 
         # Cleanup for the next test

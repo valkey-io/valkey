@@ -435,9 +435,9 @@ int clusterDecodeSlotImportsAuxField(int rdbflags, sds s) {
     listSetFreeMethod(new_slot_migrations, freeSlotMigrationJob);
 
     int num_fields = 0;
-    sds* import_fields = NULL;
+    sds *import_fields = NULL;
     int num_imports = 0;
-    sds* import_strs = sdssplitlen(s, sdslen(s), "/", 1, &num_imports);
+    sds *import_strs = sdssplitlen(s, sdslen(s), "/", 1, &num_imports);
     for (int i = 0; i < num_imports; i++) {
         import_fields = sdssplitlen(import_strs[i], sdslen(import_strs[i]), ":", 1, &num_fields);
 
@@ -478,7 +478,7 @@ int clusterDecodeSlotImportsAuxField(int rdbflags, sds s) {
     sdsfreesplitres(import_strs, num_imports);
     return C_OK;
 
-  error:
+error:
     listRelease(new_slot_migrations);
     sdsfreesplitres(import_strs, num_imports);
     sdsfreesplitres(import_fields, num_fields);
@@ -538,11 +538,11 @@ int clusterRegisterSlotImportsAuxFields(void) {
  *        │SLOT_IMPORT_OCCURRING_ON_PRIMARY◄────────────────────┘
  *        └────────────────────────────────┘
  *                     (see below)
- * 
+ *
  * State Machine (Replica):
  *
  *    SYNCSLOTS ESTABLISH or │
- *    RDB Aux field laod or  |
+ *    RDB Aux field load or  |
  *    demotion during import |
  *    ┌──────────────────────▼─────────┐
  *    │SLOT_IMPORT_OCCURRING_ON_PRIMARY┼──────┐
@@ -610,7 +610,7 @@ void clusterCommandSyncSlotsEstablish(client *c) {
     clusterNode *owning_node = NULL;
     char *source_node_name = NULL;
     list *slot_ranges = NULL;
-    
+
     if (!mustObeyClient(c) && validateSlotMigrationCanStartOrReply(c) == C_ERR) {
         return;
     }
@@ -876,7 +876,7 @@ slotMigrationJob *createSlotImportJob(client *c,
     serverLog(LL_NOTICE, "New slot import job created: %s.", job->description);
 
     if (!c || c->flag.primary) {
-        /* If the client is a primary, we enter a special tracking state that 
+        /* If the client is a primary, we enter a special tracking state that
          * will only be used to hide the dirty keys during the import.
          *
          * If there is no client - it means that this is an RDB load. We create
@@ -1077,7 +1077,7 @@ void clusterCleanSlotImportsOnResync(void) {
 
 /* Cleanup all active imports on reloading from disk, if I am a primary. */
 void clusterCleanSlotImportsOnReload(void) {
-    /* Only primaries should clean up slot imports when loading. Replicas may 
+    /* Only primaries should clean up slot imports when loading. Replicas may
      * need to know about previously ongoing slot imports in order to properly
      * PSYNC with primaries. */
     if (!clusterNodeIsPrimary(server.cluster->myself)) return;
@@ -2634,11 +2634,11 @@ void clusterCommandSyncSlots(client *c) {
     if (c->slot_migration_job &&
         isSlotMigrationJobInProgress(c->slot_migration_job)) {
         serverLog(LL_WARNING, "Received unknown SYNCSLOTS subcommand from "
-                                "slot migration %s. Failing the migration.",
-                    c->slot_migration_job->description);
+                              "slot migration %s. Failing the migration.",
+                  c->slot_migration_job->description);
         finishSlotMigrationJob(c->slot_migration_job,
-                                SLOT_MIGRATION_JOB_FAILED,
-                                "Unknown SYNCSLOTS subcommand used");
+                               SLOT_MIGRATION_JOB_FAILED,
+                               "Unknown SYNCSLOTS subcommand used");
         return;
     }
     addReplyErrorObject(c, shared.syntaxerr);

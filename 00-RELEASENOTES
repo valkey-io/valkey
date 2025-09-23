@@ -10,7 +10,7 @@ SECURITY: There are security fixes in the release.
 --------------------------------------------------------------------------------
 
 ================================================================================
-Valkey 8.0.6
+Valkey 8.0.6  -  Not yet released
 ================================================================================
 
 Upgrade urgency HIGH: This release includes bug fixes we recommend you

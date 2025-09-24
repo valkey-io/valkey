@@ -131,4 +131,24 @@ start_server {tags {"modules"}} {
 
         assert_equal 1 [llength $keys]
     }
+
+    test {DataType: Dump Serialized Value correctly serializes strings} {
+        r set key value
+        set serialized [r datatype.save_object key]
+        r restore newkey 0 $serialized
+        r get newkey
+    } {value}
+
+    test {DataType: Dump Serialized Value correctly serializes hashes} {
+        r hset myhash field1 myvalue
+        set serialized [r datatype.save_object myhash]
+        r restore newhash 0 $serialized
+        r hgetall newhash
+    } {field1 myvalue}
+
+    test {DataType: Dump Serialized Value handles nonexistent keys} {
+        r del nonexistent_key
+        catch {r datatype.save_object nonexistent_key} result
+        set result
+    } {Failed to serialize}
 }

@@ -249,6 +249,7 @@ struct ValkeyModuleBlockedClient;
 typedef int (*ValkeyModuleCmdFunc)(ValkeyModuleCtx *ctx, void **argv, int argc);
 typedef int (*ValkeyModuleAuthCallback)(ValkeyModuleCtx *ctx, void *username, void *password, ValkeyModuleString **err);
 typedef void (*ValkeyModuleDisconnectFunc)(ValkeyModuleCtx *ctx, struct ValkeyModuleBlockedClient *bc);
+void createDumpPayload(rio *payload, robj *o, robj *key, int dbid);
 
 /* This struct holds the information about a command registered by a module.*/
 struct ValkeyModuleCommand {
@@ -7583,6 +7584,32 @@ ValkeyModuleString *VM_SaveDataTypeToString(ValkeyModuleCtx *ctx, void *data, co
     }
 }
 
+/**
+ * Serialize the value of a given key from the database of the module context's client.
+ * If the serialization fails for any reason (e.g. key doesn't exist, or rdbSaveObject() fails), return NULL
+ * Otherwise return ValkeyModuleString which contains the serialized value for the key.
+ */
+ValkeyModuleString *VM_DumpSerializedValue(ValkeyModuleCtx *ctx, ValkeyModuleString *key) {
+    if (!ctx || !key) {
+        return NULL;
+    }
+
+    int flags = LOOKUP_NOEFFECTS;
+    robj *value = lookupKeyReadWithFlags(ctx->client->db, key, flags);
+    if (!value) {
+        return NULL;
+    }
+    rio payload;
+    rioInitWithBuffer(&payload, sdsempty());
+    createDumpPayload(&payload, value, key, ctx->client->db->id);
+
+    // Create a ValkeyModuleString (robj*) with the result SDS and return it.
+    sds result = payload.io.buffer.ptr;
+    ValkeyModuleString *o = createObject(OBJ_STRING, result);
+    autoMemoryAdd(ctx, VALKEYMODULE_AM_STRING, o);
+    return o;
+}
+
 /* Returns the name of the key currently being processed. */
 const ValkeyModuleString *VM_GetKeyNameFromDigest(ValkeyModuleDigest *dig) {
     return dig->key;
@@ -14163,6 +14190,7 @@ void moduleRegisterCoreAPI(void) {
     REGISTER_API(SaveLongDouble);
     REGISTER_API(LoadLongDouble);
     REGISTER_API(SaveDataTypeToString);
+    REGISTER_API(DumpSerializedValue);
     REGISTER_API(LoadDataTypeFromString);
     REGISTER_API(LoadDataTypeFromStringEncver);
     REGISTER_API(EmitAOF);

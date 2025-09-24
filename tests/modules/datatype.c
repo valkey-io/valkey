@@ -141,6 +141,31 @@ static int datatype_restore(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int
     return VALKEYMODULE_OK;
 }
 
+/*
+* takes a key and returns its serialized value
+*/
+static int save_object(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc){
+    if (argc != 2) {
+        ValkeyModule_WrongArity(ctx);
+        return VALKEYMODULE_OK;
+    }
+
+    /* dumpserializedvalue opens and reads the original key and then serializes it */
+    ValkeyModuleString *serialized_value = ValkeyModule_DumpSerializedValue(ctx, argv[1]);
+    if (!serialized_value) {
+        ValkeyModule_ReplyWithError(ctx, "Failed to serialize");
+        return VALKEYMODULE_OK;
+    }
+
+    size_t len = 0;
+    const char *str = ValkeyModule_StringPtrLen(serialized_value, &len);
+
+    /* Reply with the string buffer and ensure we free the serialized value */
+    ValkeyModule_ReplyWithStringBuffer(ctx, str, len);
+    ValkeyModule_FreeString(ctx, serialized_value);
+    return VALKEYMODULE_OK;
+}
+
 static int datatype_get(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     if (argc != 2) {
         ValkeyModule_WrongArity(ctx);
@@ -293,6 +318,9 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
 
     if (ValkeyModule_CreateCommand(ctx,"datatype.restore", datatype_restore,
                                   "write deny-oom", 1, 1, 1) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+    
+    if (ValkeyModule_CreateCommand(ctx, "datatype.save_object", save_object, "write", 1, 1, 1) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
 
     if (ValkeyModule_CreateCommand(ctx,"datatype.dump", datatype_dump,"",1,1,1) == VALKEYMODULE_ERR)

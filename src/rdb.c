@@ -3243,21 +3243,11 @@ int rdbLoadRio(rio *rdb, int rdbflags, rdbSaveInfo *rsi) {
                 return C_ERR;
             }
 
-            if (rdbFrameCodecFromString(codec_token) == -1) {
-                serverLog(LL_WARNING, "Failed loading RDB: unsupported framed RDB codec '%s'", codec_token);
-                return C_ERR;
-            }
-
             char *endptr = NULL;
             errno = 0;
             unsigned long long blk_val = strtoull(blk_token, &endptr, 10);
             if (errno == ERANGE || endptr == blk_token || *endptr != '\0' || blk_val == 0) {
                 serverLog(LL_WARNING, "Failed loading RDB: invalid framed RDB header");
-                return C_ERR;
-            }
-
-            if (rdbFrameChecksumFromString(checksum_token) == -1) {
-                serverLog(LL_WARNING, "Failed loading RDB: invalid framed RDB header checksum '%s'", checksum_token);
                 return C_ERR;
             }
 

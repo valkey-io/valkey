@@ -188,10 +188,6 @@ configEnum rdb_compression_codec_enum[] = {{"raw", RDB_FR_CODEC_RAW},
                                            {"lzf", RDB_FR_CODEC_LZF},
                                            {NULL, 0}};
 
-configEnum rdb_compression_checksum_enum[] = {{"crc64", RDB_FR_CHECKSUM_CRC64},
-                                              {"none", RDB_FR_CHECKSUM_NONE},
-                                              {NULL, 0}};
-
 static int applyRdbFrameConfig(const char **err) {
     UNUSED(err);
     serverLog(LL_NOTICE,
@@ -3217,8 +3213,6 @@ standardConfig static_configs[] = {
                      server.rdb_frame_config.codec, RDB_FR_CODEC_LZ4, NULL, applyRdbFrameConfig),
     createSizeTConfig("rdb-compression-block-bytes", NULL, MODIFIABLE_CONFIG, 1, LONG_MAX,
                       server.rdb_frame_config.block_bytes, 262144, MEMORY_CONFIG, NULL, applyRdbFrameConfig),
-    createEnumConfig("rdb-compression-checksum", NULL, MODIFIABLE_CONFIG, rdb_compression_checksum_enum,
-                     server.rdb_frame_config.checksum, RDB_FR_CHECKSUM_CRC64, NULL, applyRdbFrameConfig),
     createBoolConfig("rdb-del-sync-files", NULL, MODIFIABLE_CONFIG, server.rdb_del_sync_files, 0, NULL, NULL),
     createBoolConfig("activerehashing", NULL, MODIFIABLE_CONFIG, server.activerehashing, 1, NULL, NULL),
     createBoolConfig("stop-writes-on-bgsave-error", NULL, MODIFIABLE_CONFIG, server.stop_writes_on_bgsave_err, 1, NULL, NULL),

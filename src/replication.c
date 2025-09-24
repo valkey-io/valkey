@@ -2509,42 +2509,12 @@ int replicaLoadPrimaryRDBFromSocket(connection *conn, char *buf, char *eofmark, 
                         serverLog(LL_WARNING, "PRIMARY <-> REPLICA sync: Incomplete RDB preface '%s'", line);
                         loadingFailed = 1;
                     } else {
-                        int codec = rdbFrameCodecFromString(codec_str);
-                        if (codec == -1) {
-                            serverLog(LL_WARNING,
-                                      "PRIMARY <-> REPLICA sync: RDB preface specified unsupported codec '%s'",
-                                      codec_str);
-                            loadingFailed = 1;
-                        }
-
-                        char *endptr = NULL;
-                        unsigned long blk_val = 0;
-                        if (!loadingFailed) {
-                            blk_val = strtoul(blk_str, &endptr, 10);
-                            if (blk_val == 0 || blk_val > UINT32_MAX || endptr == blk_str || *endptr != '\0') {
-                                serverLog(LL_WARNING,
-                                          "PRIMARY <-> REPLICA sync: RDB preface has invalid block size '%s'",
-                                          blk_str);
-                                loadingFailed = 1;
-                            }
-                        }
-
-                        if (!loadingFailed) {
-                            int checksum = rdbFrameChecksumFromString(checksum_str);
-                            if (checksum == -1) {
-                                serverLog(LL_WARNING,
-                                          "PRIMARY <-> REPLICA sync: RDB preface specified unsupported checksum '%s'",
-                                          checksum_str);
-                                loadingFailed = 1;
-                            }
-                        }
-
-                        if (!loadingFailed) {
-                            use_framed_rdb = 1;
-                            serverLog(LL_DEBUG,
-                                      "PRIMARY <-> REPLICA sync: Received framed RDB preface codec=%s blk=%lu checksum=%s",
-                                      codec_str, blk_val, checksum_str);
-                        }
+                        use_framed_rdb = 1;
+                        serverLog(LL_DEBUG,
+                                  "PRIMARY <-> REPLICA sync: Received framed RDB preface codec=%s blk=%s checksum=%s",
+                                  codec_str ? codec_str : "(null)",
+                                  blk_str ? blk_str : "(null)",
+                                  checksum_str ? checksum_str : "(null)");
                     }
                 }
             }

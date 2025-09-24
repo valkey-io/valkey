@@ -18,7 +18,6 @@ start_server {tags {"rdb"}} {
     }
 
     test "Framed RDB file encodes configured codec and block size" {
-        $master config set rdb-compression-checksum crc64
         $master config set rdb-compression-codec lzf
         $master config set rdb-compression-block-bytes 131072
 
@@ -31,9 +30,8 @@ start_server {tags {"rdb"}} {
         assert {[regexp {^codec=lzf blk=131072 checksum=crc64$} [dict get $header header]]}
     }
 
-    test "Framed RDB file header updates after codec and checksum changes" {
+    test "Framed RDB file header updates after codec changes" {
         $master config set rdb-compression-mode auto
-        $master config set rdb-compression-checksum none
         $master config set rdb-compression-codec raw
         $master config set rdb-compression-block-bytes 1048576
 
@@ -42,13 +40,12 @@ start_server {tags {"rdb"}} {
 
         set header [read_frame_header $master]
         assert_equal {86 75 70 82 77 1 10} [dict get $header preamble]
-        assert {[regexp {^codec=raw blk=1048576 checksum=none$} [dict get $header header]]}
+        assert {[regexp {^codec=raw blk=1048576 checksum=crc64$} [dict get $header header]]}
 
         $master config set rdb-compression-mode block
     }
 
     test "Framed RDB file enforces minimum block size" {
-        $master config set rdb-compression-checksum crc64
         $master config set rdb-compression-codec lz4
         $master config set rdb-compression-block-bytes 4096
 

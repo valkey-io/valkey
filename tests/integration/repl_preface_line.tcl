@@ -104,7 +104,6 @@ start_server {tags {"repl"}} {
         $master config set rdb-compression-mode block
         $master config set rdb-compression-file-mode block
         $master config set rdb-compression-codec lzf
-        $master config set rdb-compression-checksum crc64
 
         set preface_line [repl_preface_handshake_preface $master_host $master_port "raw,lzf,lz4"]
         assert {[regexp {^\+RDBFRAMED codec=lzf blk=[0-9]+ checksum=crc64$} $preface_line]}
@@ -114,24 +113,12 @@ start_server {tags {"repl"}} {
         $master config set rdb-compression-mode block
         $master config set rdb-compression-file-mode block
         $master config set rdb-compression-codec raw
-        $master config set rdb-compression-checksum crc64
 
         set preface_line [repl_preface_handshake_preface $master_host $master_port "raw,lzf,lz4"]
         assert {[regexp {^\+RDBFRAMED codec=raw blk=[0-9]+ checksum=crc64$} $preface_line]}
     }
 
-    test "Replication preface uses configured checksum option" {
-        $master config set rdb-compression-mode block
-        $master config set rdb-compression-file-mode block
-        $master config set rdb-compression-codec lz4
-        $master config set rdb-compression-checksum none
-
-        set preface_line [repl_preface_handshake_preface $master_host $master_port "raw,lzf,lz4"]
-        assert {[regexp {^\+RDBFRAMED codec=lz4 blk=[0-9]+ checksum=none$} $preface_line]}
-    }
-
     test "Replication preface updates after codec changes" {
-        $master config set rdb-compression-checksum crc64
         $master config set rdb-compression-block-bytes 262144
 
         foreach codec {raw lzf lz4} {
@@ -143,7 +130,6 @@ start_server {tags {"repl"}} {
     }
 
     test "Replication preface falls back to raw when replica lacks configured codec" {
-        $master config set rdb-compression-checksum crc64
         $master config set rdb-compression-codec lz4
 
         set preface_line [repl_preface_handshake_preface $master_host $master_port "raw"]
@@ -153,7 +139,6 @@ start_server {tags {"repl"}} {
     }
 
     test "Replication preface respects replica block limit" {
-        $master config set rdb-compression-checksum crc64
         $master config set rdb-compression-codec lz4
         $master config set rdb-compression-block-bytes 524288
 
@@ -164,7 +149,6 @@ start_server {tags {"repl"}} {
     }
 
     test "Replication preface enforces minimum block size" {
-        $master config set rdb-compression-checksum crc64
         $master config set rdb-compression-codec raw
         $master config set rdb-compression-block-bytes 32768
 
@@ -175,7 +159,6 @@ start_server {tags {"repl"}} {
     }
 
     test "Replication preface stays framed when switching between block and auto modes" {
-        $master config set rdb-compression-checksum crc64
         $master config set rdb-compression-codec lzf
         $master config set rdb-compression-mode auto
 

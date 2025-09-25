@@ -68,11 +68,11 @@ void lolwut9Command(client *c) {
     sds output_array = sdsnewlen(NULL, sizeof(char) * (cols + 1) * rows);
     for (int i = 0; i < rows; i++) {
         for (int j = 0; j < cols; j++) {
-            float x = (float) 4 * (2 * j) / (2 * cols + 1) - 2.0;
-            float y = (float) 4 * (2 * i) / (2 * rows + 1) - 2.0;
+            /* Center x and y to middle of the cell. */
+            float x = -2.0f + 4.0f * (j + 0.5f) / cols;
+            float y = 2.0f - 4.0f * (i + 0.5f) / rows;
 
             int iterations = juliaSetIteration(x, y, julia_r, julia_i, sizeof(ascii_array) - 1);
-            //int iterations = i + j; // Simple placeholder for testing
             output_array[i * (cols + 1) + j] = ascii_array[iterations % sizeof(ascii_array)];
         }
         output_array[i * (cols + 1) + cols] = '\n';

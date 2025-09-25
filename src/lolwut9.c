@@ -61,8 +61,8 @@ void lolwut9Command(client *c) {
         julia_i = input_i;
     } else {
         /* Use random values if the user didn't specify constants. */
-        julia_r = rand() / (float) RAND_MAX * 2 - 1;
-        julia_i = rand() / (float) RAND_MAX * 2 - 1;
+        julia_r = rand() / (float)RAND_MAX * 2 - 1;
+        julia_i = rand() / (float)RAND_MAX * 2 - 1;
     }
 
     sds output_array = sdsnewlen(NULL, sizeof(char) * (cols + 1) * rows);

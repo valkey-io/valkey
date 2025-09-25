@@ -38,9 +38,13 @@ void lolwut9Command(client *c) {
     long rows = 40;
     float julia_r, julia_i;
 
+    if (c->argc == 2 || c->argc == 4 || c->argc > 5) {
+        addReplyError(c, "Syntax error. Use: LOLWUT [columns rows] [real imaginary]");
+        return;
+    }
 
-    if (c->argc >= 3 && getLongFromObjectOrReply(c, c->argv[1], &cols, NULL) != C_OK) return;
-    if (c->argc >= 3 && getLongFromObjectOrReply(c, c->argv[2], &rows, NULL) != C_OK) return;
+    if (c->argc > 1 && getLongFromObjectOrReply(c, c->argv[1], &cols, NULL) != C_OK) return;
+    if (c->argc > 2 && getLongFromObjectOrReply(c, c->argv[2], &rows, NULL) != C_OK) return;
 
     /* Limits. We want LOLWUT to be always reasonably fast and cheap to execute
      * so we have maximum number of columns, rows, and output resolution. */

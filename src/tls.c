@@ -284,6 +284,8 @@ error:
     return NULL;
 }
 
+static long long lastTlsConfigureTime = 0LL;
+
 /* Attempt to configure/reconfigure TLS. This operation is atomic and will
  * leave the SSL_CTX unchanged if fails.
  * @priv: config of serverTLSContextConfig.
@@ -295,6 +297,9 @@ static int tlsConfigure(void *priv, int reconfigure) {
     char errbuf[256];
     SSL_CTX *ctx = NULL;
     SSL_CTX *client_ctx = NULL;
+
+    serverLog(LL_DEBUG, "Configuring TLS");
+    lastTlsConfigureTime = server.ustime;
 
     if (!reconfigure && valkey_tls_ctx) {
         return C_OK;
@@ -419,6 +424,18 @@ error:
     return C_ERR;
 }
 
+static void tlsReconfigureIfNeeded(void) {
+    if (server.tls_ctx_config.cert_reload_interval_mins > 0) {
+        const long long configAgeMicros = server.ustime - lastTlsConfigureTime;
+        const long long configAgeMinutes = ((configAgeMicros / 1000) / 1000) / 60;
+        if (configAgeMinutes > server.tls_ctx_config.cert_reload_interval_mins) {
+            if (tlsConfigure(&server.tls_ctx_config, 1) == C_ERR) {
+                serverLog(LL_WARNING, "Unable to update TLS configuration. Check server logs.");
+            }
+        }
+    }
+}
+
 static ConnectionType CT_TLS;
 
 /* Normal socket connections have a simple events/handler correlation.
@@ -465,6 +482,8 @@ static void updateTLSError(tls_connection *conn) {
 }
 
 static connection *createTLSConnection(int client_side) {
+    // Reload the cert if needed for new connections
+    tlsReconfigureIfNeeded();
     SSL_CTX *ctx = valkey_tls_ctx;
     if (client_side && valkey_tls_client_ctx) ctx = valkey_tls_client_ctx;
     tls_connection *conn = zcalloc(sizeof(tls_connection));

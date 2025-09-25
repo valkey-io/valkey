@@ -129,6 +129,9 @@ proc wait_for_cluster_propagation {} {
     wait_for_condition 1000 50 {
         [cluster_config_consistent] eq 1
     } else {
+        for {set j 0} {$j < [llength $::servers]} {incr j} {
+            puts "R $j cluster slots output: [R $j cluster slots]"
+        }
         fail "cluster config did not reach a consistent state"
     }
 }
@@ -145,6 +148,7 @@ proc wait_for_cluster_size {cluster_size} {
 # Check that cluster nodes agree about "state", or raise an error.
 proc wait_for_cluster_state {state} {
     for {set j 0} {$j < [llength $::servers]} {incr j} {
+        if {[process_is_paused [srv -$j pid]]} continue
         wait_for_condition 1000 50 {
             [CI $j cluster_state] eq $state
         } else {
@@ -206,6 +210,12 @@ proc cluster_allocate_replicas {masters replicas} {
 # Setup method to be executed to configure the cluster before the
 # tests run.
 proc cluster_setup {masters replicas node_count slot_allocator replica_allocator code} {
+    set config_epoch 1
+    for {set i 0} {$i < $node_count} {incr i} {
+        R $i CLUSTER SET-CONFIG-EPOCH $config_epoch
+        incr config_epoch
+    }
+
     # Have all nodes meet
     if {$::tls} {
         set tls_cluster [lindex [R 0 CONFIG GET tls-cluster] 1]
@@ -213,12 +223,12 @@ proc cluster_setup {masters replicas node_count slot_allocator replica_allocator
     if {$::tls && !$tls_cluster} {
         for {set i 1} {$i < $node_count} {incr i} {
             R 0 CLUSTER MEET [srv -$i host] [srv -$i pport]
-        }         
+        }
     } else {
         for {set i 1} {$i < $node_count} {incr i} {
             R 0 CLUSTER MEET [srv -$i host] [srv -$i port]
         }
-    }  
+    }
 
     $slot_allocator $masters $replicas
 
@@ -226,6 +236,15 @@ proc cluster_setup {masters replicas node_count slot_allocator replica_allocator
 
     # Setup master/replica relationships
     $replica_allocator $masters $replicas
+
+    # A helper debug log that can print the server id in the server logs.
+    # This can help us locate the corresponding server in the log file.
+    for {set i 0} {$i < $masters} {incr i} {
+        R $i DEBUG LOG "========== I am primary $i =========="
+    }
+    for {set i $i} {$i < [expr $masters+$replicas]} {incr i} {
+        R $i DEBUG LOG "========== I am replica $i =========="
+    }
 
     wait_for_cluster_propagation
     wait_for_cluster_state "ok"
@@ -242,12 +261,13 @@ proc start_cluster {masters replicas options code {slot_allocator continuous_slo
     set code [list cluster_setup $masters $replicas $node_count $slot_allocator $replica_allocator $code]
 
     # Configure the starting of multiple servers. Set cluster node timeout
-    # aggressively since many tests depend on ping/pong messages. 
-    set cluster_options [list overrides [list cluster-enabled yes cluster-ping-interval 100 cluster-node-timeout 3000]]
+    # aggressively since many tests depend on ping/pong messages.
+
+    set cluster_options [list overrides [list cluster-enabled yes cluster-ping-interval 100 cluster-node-timeout 3000 cluster-databases 16 cluster-slot-stats-enabled yes]]
     set options [concat $cluster_options $options]
 
     # Cluster mode only supports a single database, so before executing the tests
-    # it needs to be configured correctly and needs to be reset after the tests. 
+    # it needs to be configured correctly and needs to be reset after the tests.
     set old_singledb $::singledb
     set ::singledb 1
     start_multiple_servers $node_count $options $code
@@ -266,6 +286,14 @@ proc cluster_get_myself id {
         if {[cluster_has_flag $n myself]} {return $n}
     }
     return {}
+}
+
+# Returns the parsed "myself's primary" CLUSTER NODES entry as a dictionary.
+proc cluster_get_myself_primary id {
+    set myself [cluster_get_myself $id]
+    set replicaof [dict get $myself slaveof]
+    set node [cluster_get_node_by_id $id $replicaof]
+    return $node
 }
 
 # Get a specific node by ID by parsing the CLUSTER NODES output
@@ -303,6 +331,15 @@ proc get_cluster_nodes {id {status "*"}} {
         }
     }
     return $nodes
+}
+
+# Returns the parsed myself node entry as a dictionary.
+proc get_myself id {
+    set nodes [get_cluster_nodes $id]
+    foreach n $nodes {
+        if {[cluster_has_flag $n myself]} {return $n}
+    }
+    return {}
 }
 
 # Returns 1 if no node knows node_id, 0 if any node knows it.
@@ -345,6 +382,34 @@ proc are_hostnames_propagated {match_string} {
     return 1
 }
 
+# Check if cluster's announced IPs or ports are consistent and come from a predefined list
+# Optionally, a list of clients can be supplied.
+proc are_cluster_announced_values_propagated {type expected_values {clients {}}} {
+    if {$type eq "ip"} {
+        set value_index 0
+    } elseif {$type eq "port"} {
+        set value_index 1
+    } else {
+        fail "Unknown announced value type $type for node"
+    }
+    for {set j 0} {$j < [llength $::servers]} {incr j} {
+        if {$clients eq {}} {
+            set client [srv [expr -1*$j] "client"]
+        } else {
+            set client [lindex $clients $j]
+        }
+        set cfg [$client cluster slots]
+        foreach node $cfg {
+            for {set i 2} {$i < [llength $node]} {incr i} {
+                if {[lsearch -exact $expected_values [lindex [lindex $node $i] $value_index]] < 0} {
+                    return 0
+                }
+            }
+        }
+    }
+    return 1
+}
+
 proc wait_node_marked_fail {ref_node_index instance_id_to_check} {
     wait_for_condition 1000 50 {
         [check_cluster_node_mark fail $ref_node_index $instance_id_to_check]
@@ -374,4 +439,22 @@ proc check_cluster_node_mark {flag ref_node_index instance_id_to_check} {
 
 proc get_slot_field {slot_output shard_id node_id attrib_id} {
     return [lindex [lindex [lindex $slot_output $shard_id] $node_id] $attrib_id]
+}
+
+proc get_open_slots {srv_idx} {
+    set slots [dict get [cluster_get_myself $srv_idx] slots]
+    if {[regexp {\[.*} $slots slots]} {
+        set slots [regsub -all {[{}]} $slots ""]
+        return $slots
+    } else {
+        return {}
+    }
+}
+
+proc wait_for_slot_state {srv_idx pattern} {
+    wait_for_condition 100 100 {
+        [get_open_slots $srv_idx] eq $pattern
+    } else {
+        fail "incorrect slot state on R $srv_idx: expected $pattern; got [get_open_slots $srv_idx]"
+    }
 }

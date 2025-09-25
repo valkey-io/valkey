@@ -67,6 +67,8 @@
 #define SCRIPT_ALLOW_CROSS_SLOT (1ULL << 8) /* Indicate that the current script may access keys from multiple slots */
 typedef struct scriptRunCtx scriptRunCtx;
 
+/* This struct stores the necessary information to manage the execution of
+ * scripts using EVAL and FCALL. */
 struct scriptRunCtx {
     const char *funcname;
     client *c;

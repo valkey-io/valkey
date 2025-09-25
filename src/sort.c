@@ -1,6 +1,6 @@
 /* SORT command and helper functions.
  *
- * Copyright (c) 2009-2012, Salvatore Sanfilippo <antirez at gmail dot com>
+ * Copyright (c) 2009-2012, Redis Ltd.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -34,6 +34,8 @@
 #include <math.h>   /* isnan() */
 #include "cluster.h"
 
+#include "valkey_strtod.h"
+
 zskiplistNode *zslGetElementByRank(zskiplist *zsl, unsigned long rank);
 
 serverSortOperation *createSortOperation(int type, robj *pattern) {
@@ -41,6 +43,11 @@ serverSortOperation *createSortOperation(int type, robj *pattern) {
     so->type = type;
     so->pattern = pattern;
     return so;
+}
+
+/* Return 1 if pattern is the special pattern '#'. */
+static int isReturnSubstPattern(sds pattern) {
+    return pattern[0] == '#' && pattern[1] == '\0';
 }
 
 /* Return the value associated to the key with a name obtained using
@@ -68,7 +75,7 @@ robj *lookupKeyByPattern(serverDb *db, robj *pattern, robj *subst) {
     /* If the pattern is "#" return the substitution object itself in order
      * to implement the "SORT ... GET #" feature. */
     spat = pattern->ptr;
-    if (spat[0] == '#' && spat[1] == '\0') {
+    if (isReturnSubstPattern(spat)) {
         incrRefCount(subst);
         return subst;
     }
@@ -258,6 +265,7 @@ void sortCommandGeneric(client *c, int readonly) {
              * unless we can make sure the keys formed by the pattern are in the same slot
              * as the key to sort. */
             if (server.cluster_enabled &&
+                !isReturnSubstPattern(c->argv[j + 1]->ptr) &&
                 patternHashSlot(c->argv[j + 1]->ptr, sdslen(c->argv[j + 1]->ptr)) != getKeySlot(c->argv[1]->ptr)) {
                 addReplyError(c, "GET option of SORT denied in Cluster mode when "
                                  "keys formed by the pattern may be in different slots.");
@@ -308,7 +316,7 @@ void sortCommandGeneric(client *c, int readonly) {
      * The other types (list, sorted set) will retain their native order
      * even if no sort order is requested, so they remain stable across
      * scripting and replication. */
-    if (dontsort && sortval->type == OBJ_SET && (storekey || c->flags & CLIENT_SCRIPT)) {
+    if (dontsort && sortval->type == OBJ_SET && (storekey || c->flag.script)) {
         /* Force ALPHA sorting */
         dontsort = 0;
         alpha = 1;
@@ -322,7 +330,7 @@ void sortCommandGeneric(client *c, int readonly) {
     switch (sortval->type) {
     case OBJ_LIST: vectorlen = listTypeLength(sortval); break;
     case OBJ_SET: vectorlen = setTypeSize(sortval); break;
-    case OBJ_ZSET: vectorlen = dictSize(((zset *)sortval->ptr)->dict); break;
+    case OBJ_ZSET: vectorlen = hashtableSize(((zset *)sortval->ptr)->ht); break;
     default: vectorlen = 0; serverPanic("Bad SORT type"); /* Avoid GCC warning */
     }
 
@@ -415,7 +423,7 @@ void sortCommandGeneric(client *c, int readonly) {
 
         /* Check if starting point is trivial, before doing log(N) lookup. */
         if (desc) {
-            long zsetlen = dictSize(((zset *)sortval->ptr)->dict);
+            long zsetlen = hashtableSize(((zset *)sortval->ptr)->ht);
 
             ln = zsl->tail;
             if (start > 0) ln = zslGetElementByRank(zsl, zsetlen - start);
@@ -437,19 +445,18 @@ void sortCommandGeneric(client *c, int readonly) {
         end -= start;
         start = 0;
     } else if (sortval->type == OBJ_ZSET) {
-        dict *set = ((zset *)sortval->ptr)->dict;
-        dictIterator *di;
-        dictEntry *setele;
-        sds sdsele;
-        di = dictGetIterator(set);
-        while ((setele = dictNext(di)) != NULL) {
-            sdsele = dictGetKey(setele);
-            vector[j].obj = createStringObject(sdsele, sdslen(sdsele));
+        hashtable *ht = ((zset *)sortval->ptr)->ht;
+        hashtableIterator iter;
+        hashtableInitIterator(&iter, ht, 0);
+        void *next;
+        while (hashtableNext(&iter, &next)) {
+            zskiplistNode *node = next;
+            vector[j].obj = createStringObject(node->ele, sdslen(node->ele));
             vector[j].u.score = 0;
             vector[j].u.cmpobj = NULL;
             j++;
         }
-        dictReleaseIterator(di);
+        hashtableResetIterator(&iter);
     } else {
         serverPanic("Unknown type");
     }
@@ -473,9 +480,9 @@ void sortCommandGeneric(client *c, int readonly) {
             } else {
                 if (sdsEncodedObject(byval)) {
                     char *eptr;
-
-                    vector[j].u.score = strtod(byval->ptr, &eptr);
-                    if (eptr[0] != '\0' || errno == ERANGE || isnan(vector[j].u.score)) {
+                    errno = 0;
+                    vector[j].u.score = valkey_strtod(byval->ptr, &eptr);
+                    if (eptr[0] != '\0' || errno == ERANGE || errno == EINVAL || isnan(vector[j].u.score)) {
                         int_conversion_error = 1;
                     }
                 } else if (byval->encoding == OBJ_ENCODING_INT) {
@@ -571,7 +578,10 @@ void sortCommandGeneric(client *c, int readonly) {
         }
         if (outputlen) {
             listTypeTryConversion(sobj, LIST_CONV_AUTO, NULL, NULL);
-            setKey(c, c->db, storekey, sobj, 0);
+            setKey(c, c->db, storekey, &sobj, 0);
+            /* Ownership of sobj transferred to the db. Set to NULL to prevent
+             * freeing it below. */
+            sobj = NULL;
             notifyKeyspaceEvent(NOTIFY_LIST, "sortstore", storekey, c->db->id);
             server.dirty += outputlen;
         } else if (dbDelete(c->db, storekey)) {
@@ -579,7 +589,7 @@ void sortCommandGeneric(client *c, int readonly) {
             notifyKeyspaceEvent(NOTIFY_GENERIC, "del", storekey, c->db->id);
             server.dirty++;
         }
-        decrRefCount(sobj);
+        if (sobj != NULL) decrRefCount(sobj);
         addReplyLongLong(c, outputlen);
     }
 

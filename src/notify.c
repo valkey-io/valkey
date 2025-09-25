@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, Salvatore Sanfilippo <antirez at gmail dot com>
+ * Copyright (c) 2013, Redis Ltd.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -28,9 +28,10 @@
  */
 
 #include "server.h"
+#include "module.h"
 
 /* This file implements keyspace events notification via Pub/Sub and
- * described at https://redis.io/topics/notifications. */
+ * described at https://valkey.io/topics/notifications */
 
 /* Turn a string representing notification classes into an integer
  * representing notification classes flags xored.
@@ -106,12 +107,25 @@ void notifyKeyspaceEvent(int type, char *event, robj *key, int dbid) {
     robj *chanobj, *eventobj;
     int len = -1;
     char buf[24];
-
+    client *c = server.executing_client;
+    debugServerAssert(moduleNotifyKeyspaceSubscribersCnt() == 0 ||
+                      (type & (NOTIFY_GENERIC | NOTIFY_STRING | NOTIFY_LIST | NOTIFY_SET | NOTIFY_HASH | NOTIFY_ZSET | NOTIFY_STREAM)) == 0 ||
+                      c == NULL ||
+                      c->cmd == NULL ||
+                      (c->cmd->flags & CMD_WRITE) == 0 ||
+                      c->flag.buffered_reply == 0 ||
+                      c->flag.keyspace_notified == 1 ||
+                      c->id == UINT64_MAX || // AOF client
+                      getClientType(c) != CLIENT_TYPE_NORMAL);
     /* If any modules are interested in events, notify the module system now.
      * This bypasses the notifications configuration, but the module engine
      * will only call event subscribers if the event type matches the types
      * they are interested in. */
     moduleNotifyKeyspaceEvent(type, event, key, dbid);
+    if (c) {
+        c->flag.keyspace_notified = 1;
+        commitDeferredReplyBuffer(c, 1);
+    }
 
     /* If notifications for this class of events are off, return ASAP. */
     if (!(server.notify_keyspace_events & type)) return;

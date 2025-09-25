@@ -1,13 +1,13 @@
 #ifndef CLUSTER_LEGACY_H
 #define CLUSTER_LEGACY_H
 
+#include <stdint.h>
 #define CLUSTER_PORT_INCR 10000 /* Cluster port = baseport + PORT_INCR */
 
 /* The following defines are amount of time, sometimes expressed as
- * multiplicators of the node timeout value (when ending with MULT). */
+ * multipliers of the node timeout value (when ending with MULT). */
 #define CLUSTER_FAIL_REPORT_VALIDITY_MULT 2  /* Fail report validity. */
 #define CLUSTER_FAIL_UNDO_TIME_MULT 2        /* Undo fail if primary is back. */
-#define CLUSTER_MF_TIMEOUT 5000              /* Milliseconds to do a manual failover. */
 #define CLUSTER_MF_PAUSE_MULT 2              /* Primary pause manual failover mult. */
 #define CLUSTER_REPLICA_MIGRATION_DELAY 5000 /* Delay for replica migration. */
 
@@ -17,7 +17,7 @@
 #define CLUSTER_CANT_FAILOVER_WAITING_DELAY 2
 #define CLUSTER_CANT_FAILOVER_EXPIRED 3
 #define CLUSTER_CANT_FAILOVER_WAITING_VOTES 4
-#define CLUSTER_CANT_FAILOVER_RELOG_PERIOD (10) /* seconds. */
+#define CLUSTER_CANT_FAILOVER_RELOG_PERIOD 1 /* seconds. */
 
 /* clusterState todo_before_sleep flags. */
 #define CLUSTER_TODO_HANDLE_FAILOVER (1 << 0)
@@ -25,6 +25,8 @@
 #define CLUSTER_TODO_SAVE_CONFIG (1 << 2)
 #define CLUSTER_TODO_FSYNC_CONFIG (1 << 3)
 #define CLUSTER_TODO_HANDLE_MANUALFAILOVER (1 << 4)
+#define CLUSTER_TODO_BROADCAST_ALL (1 << 5)
+#define CLUSTER_TODO_HANDLE_SLOT_MIGRATION (1 << 6)
 
 /* clusterLink encapsulates everything needed to talk with a remote node. */
 typedef struct clusterLink {
@@ -38,20 +40,28 @@ typedef struct clusterLink {
     size_t rcvbuf_alloc;                   /* Allocated size of rcvbuf */
     clusterNode *node;                     /* Node related to this link. Initialized to NULL when unknown */
     int inbound;                           /* 1 if this link is an inbound link accepted from the related node */
+    int flags;                             /* We share CLUSTER_NODE_* with clusterNode->flags. */
 } clusterLink;
 
+/* Cluster link flags and macros. */
+#define CLUSTER_LINK_EXTENSIONS_SUPPORTED (1 << 0) /* This link supports extensions. */
+
+#define linkSupportsExtension(link) ((link)->flags & CLUSTER_LINK_EXTENSIONS_SUPPORTED)
+
 /* Cluster node flags and macros. */
-#define CLUSTER_NODE_PRIMARY (1 << 0)               /* The node is a primary */
-#define CLUSTER_NODE_REPLICA (1 << 1)               /* The node is a replica */
-#define CLUSTER_NODE_PFAIL (1 << 2)                 /* Failure? Need acknowledge */
-#define CLUSTER_NODE_FAIL (1 << 3)                  /* The node is believed to be malfunctioning */
-#define CLUSTER_NODE_MYSELF (1 << 4)                /* This node is myself */
-#define CLUSTER_NODE_HANDSHAKE (1 << 5)             /* We have still to exchange the first ping */
-#define CLUSTER_NODE_NOADDR (1 << 6)                /* We don't know the address of this node */
-#define CLUSTER_NODE_MEET (1 << 7)                  /* Send a MEET message to this node */
-#define CLUSTER_NODE_MIGRATE_TO (1 << 8)            /* Primary eligible for replica migration. */
-#define CLUSTER_NODE_NOFAILOVER (1 << 9)            /* replica will not try to failover. */
-#define CLUSTER_NODE_EXTENSIONS_SUPPORTED (1 << 10) /* This node supports extensions. */
+#define CLUSTER_NODE_PRIMARY (1 << 0)                      /* The node is a primary */
+#define CLUSTER_NODE_REPLICA (1 << 1)                      /* The node is a replica */
+#define CLUSTER_NODE_PFAIL (1 << 2)                        /* Failure? Need acknowledge */
+#define CLUSTER_NODE_FAIL (1 << 3)                         /* The node is believed to be malfunctioning */
+#define CLUSTER_NODE_MYSELF (1 << 4)                       /* This node is myself */
+#define CLUSTER_NODE_HANDSHAKE (1 << 5)                    /* We have still to exchange the first ping */
+#define CLUSTER_NODE_NOADDR (1 << 6)                       /* We don't know the address of this node */
+#define CLUSTER_NODE_MEET (1 << 7)                         /* Send a MEET message to this node */
+#define CLUSTER_NODE_MIGRATE_TO (1 << 8)                   /* Primary eligible for replica migration. */
+#define CLUSTER_NODE_NOFAILOVER (1 << 9)                   /* Replica will not try to failover. */
+#define CLUSTER_NODE_EXTENSIONS_SUPPORTED (1 << 10)        /* This node supports extensions. */
+#define CLUSTER_NODE_LIGHT_HDR_PUBLISH_SUPPORTED (1 << 11) /* This node supports light message header for publish type. */
+#define CLUSTER_NODE_LIGHT_HDR_MODULE_SUPPORTED (1 << 12)  /* This node supports light message header for module type. */
 #define CLUSTER_NODE_NULL_NAME                                                                                         \
     "\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000" \
     "\000\000\000\000\000\000\000\000\000\000\000\000"
@@ -59,17 +69,15 @@ typedef struct clusterLink {
 #define nodeIsPrimary(n) ((n)->flags & CLUSTER_NODE_PRIMARY)
 #define nodeIsReplica(n) ((n)->flags & CLUSTER_NODE_REPLICA)
 #define nodeInHandshake(n) ((n)->flags & CLUSTER_NODE_HANDSHAKE)
+#define nodeInMeetState(n) ((n)->flags & CLUSTER_NODE_MEET)
 #define nodeHasAddr(n) (!((n)->flags & CLUSTER_NODE_NOADDR))
 #define nodeTimedOut(n) ((n)->flags & CLUSTER_NODE_PFAIL)
 #define nodeFailed(n) ((n)->flags & CLUSTER_NODE_FAIL)
 #define nodeCantFailover(n) ((n)->flags & CLUSTER_NODE_NOFAILOVER)
 #define nodeSupportsExtensions(n) ((n)->flags & CLUSTER_NODE_EXTENSIONS_SUPPORTED)
-
-/* This structure represent elements of node->fail_reports. */
-typedef struct clusterNodeFailReport {
-    clusterNode *node; /* Node reporting the failure condition. */
-    mstime_t time;     /* Time of the last report from this node. */
-} clusterNodeFailReport;
+#define nodeSupportsLightMsgHdrForPubSub(n) ((n)->flags & CLUSTER_NODE_LIGHT_HDR_PUBLISH_SUPPORTED)
+#define nodeSupportsLightMsgHdrForModule(n) ((n)->flags & CLUSTER_NODE_LIGHT_HDR_MODULE_SUPPORTED)
+#define nodeInNormalState(n) (!((n)->flags & (CLUSTER_NODE_HANDSHAKE | CLUSTER_NODE_MEET | CLUSTER_NODE_PFAIL | CLUSTER_NODE_FAIL)))
 
 /* Cluster messages header */
 
@@ -91,6 +99,20 @@ typedef struct clusterNodeFailReport {
 #define CLUSTERMSG_TYPE_MODULE 9                /* Module cluster API message. */
 #define CLUSTERMSG_TYPE_PUBLISHSHARD 10         /* Pub/Sub Publish shard propagation */
 #define CLUSTERMSG_TYPE_COUNT 11                /* Total number of message types. */
+
+#define CLUSTERMSG_LIGHT 0x8000 /* Modifier bit for message types that support light header */
+
+#define CLUSTERMSG_MODIFIER_MASK (CLUSTERMSG_LIGHT) /* Modifier mask for header types. (if we add more in the future) */
+
+/* We check for the modifier bit to determine if the message is sent using light header.*/
+#define IS_LIGHT_MESSAGE(type) ((type) & CLUSTERMSG_LIGHT)
+
+/* Types of header supported over the cluster bus. */
+typedef enum {
+    CLUSTERMSG_HDR_NORMAL = 0, /* This corresponds to `clusterMsg` struct. */
+    CLUSTERMSG_HDR_LIGHT,      /* This corresponds to `clusterMsgLight` struct. */
+    CLUSTERMSG_HDR_NUM,        /* Overall count of header type supported. */
+} clusterMsgHdrType;
 
 /* Initially we don't know our "name", but we'll find it once we connect
  * to the first node, using the getsockname() function. Then we'll use this
@@ -138,6 +160,10 @@ typedef enum {
     CLUSTERMSG_EXT_TYPE_HUMAN_NODENAME,
     CLUSTERMSG_EXT_TYPE_FORGOTTEN_NODE,
     CLUSTERMSG_EXT_TYPE_SHARDID,
+    CLUSTERMSG_EXT_TYPE_CLIENT_IPV4,
+    CLUSTERMSG_EXT_TYPE_CLIENT_IPV6,
+    CLUSTERMSG_EXT_TYPE_CLIENT_PORT,
+    CLUSTERMSG_EXT_TYPE_CLIENT_TLS_PORT,
 } clusterMsgPingtypes;
 
 /* Helper function for making sure extensions are eight byte aligned. */
@@ -163,6 +189,22 @@ typedef struct {
 } clusterMsgPingExtShardId;
 
 typedef struct {
+    char announce_client_ipv4[1]; /* Announced client IPv4, ends with \0. */
+} clusterMsgPingExtClientIpV4;
+
+typedef struct {
+    char announce_client_ipv6[1]; /* Announced client IPv6, ends with \0. */
+} clusterMsgPingExtClientIpV6;
+
+typedef struct {
+    uint16_t announce_client_port; /* Announced client port. */
+} clusterMsgPingExtClientPort;
+
+typedef struct {
+    uint16_t announce_client_tls_port; /* Announced client TLS port. */
+} clusterMsgPingExtClientTlsPort;
+
+typedef struct {
     uint32_t length; /* Total length of this extension message (including this header) */
     uint16_t type;   /* Type of this extension message (see clusterMsgPingtypes) */
     uint16_t unused; /* 16 bits of padding to make this structure 8 byte aligned. */
@@ -171,6 +213,10 @@ typedef struct {
         clusterMsgPingExtHumanNodename human_nodename;
         clusterMsgPingExtForgottenNode forgotten_node;
         clusterMsgPingExtShardId shard_id;
+        clusterMsgPingExtClientIpV4 announce_client_ipv4;
+        clusterMsgPingExtClientIpV6 announce_client_ipv6;
+        clusterMsgPingExtClientPort announce_client_port;
+        clusterMsgPingExtClientTlsPort announce_client_tls_port;
     } ext[]; /* Actual extension information, formatted so that the data is 8
               * byte aligned, regardless of its content. */
 } clusterMsgPingExt;
@@ -271,11 +317,30 @@ static_assert(offsetof(clusterMsg, data) == 2256, "unexpected field offset");
 
 /* Message flags better specify the packet content or are used to
  * provide some information about the node state. */
-#define CLUSTERMSG_FLAG0_PAUSED (1 << 0) /* Primary paused for manual failover. */
-#define CLUSTERMSG_FLAG0_FORCEACK                                                                                      \
-    (1 << 1)                               /* Give ACK to AUTH_REQUEST even if                                         \
+#define CLUSTERMSG_FLAG0_PAUSED (1 << 0)   /* Primary paused for manual failover. */
+#define CLUSTERMSG_FLAG0_FORCEACK (1 << 1) /* Give ACK to AUTH_REQUEST even if \
                                               primary is up. */
 #define CLUSTERMSG_FLAG0_EXT_DATA (1 << 2) /* Message contains extension data */
+
+typedef struct {
+    char sig[4];     /* Signature "RCmb" (Cluster message bus). */
+    uint32_t totlen; /* Total length of this message */
+    uint16_t ver;    /* Protocol version, currently set to CLUSTER_PROTO_VER. */
+    uint16_t notused1;
+    uint16_t type; /* Message type */
+    uint16_t notused2;
+    union clusterMsgData data;
+} clusterMsgLight;
+
+static_assert(offsetof(clusterMsgLight, sig) == offsetof(clusterMsg, sig), "unexpected field offset");
+static_assert(offsetof(clusterMsgLight, totlen) == offsetof(clusterMsg, totlen), "unexpected field offset");
+static_assert(offsetof(clusterMsgLight, ver) == offsetof(clusterMsg, ver), "unexpected field offset");
+static_assert(offsetof(clusterMsgLight, notused1) == offsetof(clusterMsg, port), "unexpected field offset");
+static_assert(offsetof(clusterMsgLight, type) == offsetof(clusterMsg, type), "unexpected field offset");
+static_assert(offsetof(clusterMsgLight, notused2) == offsetof(clusterMsg, count), "unexpected field offset");
+static_assert(offsetof(clusterMsgLight, data) == 16, "unexpected field offset");
+
+#define CLUSTERMSG_LIGHT_MIN_LEN (sizeof(clusterMsgLight) - sizeof(union clusterMsgData))
 
 struct _clusterNode {
     mstime_t ctime;                         /* Node object creation time. */
@@ -287,53 +352,76 @@ struct _clusterNode {
     uint16_t *slot_info_pairs;              /* Slots info represented as (start/end) pair (consecutive index). */
     int slot_info_pairs_count;              /* Used number of slots in slot_info_pairs */
     int numslots;                           /* Number of slots handled by this node */
-    int num_replicas;                       /* Number of replica nodes, if this is a primar */
+    int num_replicas;                       /* Number of replica nodes, if this is a primary */
     clusterNode **replicas;                 /* pointers to replica nodes */
     clusterNode *replicaof;                 /* pointer to the primary node. Note that it
                                              may be NULL even if the node is a replica
-                                             if we don't have the parimary node in our
+                                             if we don't have the primary node in our
                                              tables. */
     unsigned long long last_in_ping_gossip; /* The number of the last carried in the ping gossip section */
     mstime_t ping_sent;                     /* Unix time we sent latest ping */
     mstime_t pong_received;                 /* Unix time we received the pong */
     mstime_t data_received;                 /* Unix time we received any data */
+    mstime_t meet_sent;                     /* Unix time we sent latest meet packet */
     mstime_t fail_time;                     /* Unix time when FAIL flag was set */
-    mstime_t voted_time;                    /* Last time we voted for a replica of this parimary */
-    mstime_t repl_offset_time;              /* Unix time we received offset for this node */
     mstime_t orphaned_time;                 /* Starting time of orphaned primary condition */
+    mstime_t outbound_link_attempt_time;    /* Unix time we last tried to establish an outgoing link */
+    mstime_t inbound_link_freed_time;       /* Last time we freed the inbound link for this node.
+                                               If it was never freed, it is the same as ctime */
     long long repl_offset;                  /* Last known repl offset for this node. */
     char ip[NET_IP_STR_LEN];                /* Latest known IP address of this node */
+    sds announce_client_ipv4;               /* IPv4 for clients only. */
+    sds announce_client_ipv6;               /* IPv6 for clients only. */
     sds hostname;                           /* The known hostname for this node */
     sds human_nodename;                     /* The known human readable nodename for this node */
     int tcp_port;                           /* Latest known clients TCP port. */
     int tls_port;                           /* Latest known clients TLS port */
     int cport;                              /* Latest known cluster port of this node. */
+    int announce_client_tcp_port;           /* Port for clients only. */
+    int announce_client_tls_port;           /* TLS port for clients only. */
     clusterLink *link;                      /* TCP/IP link established toward this node */
     clusterLink *inbound_link;              /* TCP/IP link accepted from this node */
-    list *fail_reports;                     /* List of nodes signaling this as failing */
+    rax *fail_reports;                      /* Radix tree for failure reports with sorted order by timestamp */
     int is_node_healthy;                    /* Boolean indicating the cached node health.
                                                Update with updateAndCountChangedNodeHealth(). */
 };
+
+/* Struct used for storing slot statistics. */
+typedef struct slotStat {
+    uint64_t cpu_usec;
+    uint64_t network_bytes_in;
+    uint64_t network_bytes_out;
+} slotStat;
+
+typedef struct slotRange {
+    int start_slot;
+    int end_slot;
+} slotRange;
 
 struct clusterState {
     clusterNode *myself; /* This node */
     uint64_t currentEpoch;
     int state;              /* CLUSTER_OK, CLUSTER_FAIL, ... */
+    int fail_reason;        /* Why the cluster state changes to fail. */
     int size;               /* Num of primary nodes with at least one slot */
     dict *nodes;            /* Hash table of name -> clusterNode structures */
     dict *shards;           /* Hash table of shard_id -> list (of nodes) structures */
     dict *nodes_black_list; /* Nodes we don't re-add for a few seconds. */
-    clusterNode *migrating_slots_to[CLUSTER_SLOTS];
-    clusterNode *importing_slots_from[CLUSTER_SLOTS];
+    dict *migrating_slots_to;
+    dict *importing_slots_from;
     clusterNode *slots[CLUSTER_SLOTS];
+    list *slot_migration_jobs; /* List storing all slot migration jobs. Stored
+                                * in order from most recent to least recently
+                                * created. */
     /* The following fields are used to take the replica state on elections. */
-    mstime_t failover_auth_time;  /* Time of previous or next election. */
-    int failover_auth_count;      /* Number of votes received so far. */
-    int failover_auth_sent;       /* True if we already asked for votes. */
-    int failover_auth_rank;       /* This replica rank for current auth request. */
-    uint64_t failover_auth_epoch; /* Epoch of the current election. */
-    int cant_failover_reason;     /* Why a replica is currently not able to
-                                     failover. See the CANT_FAILOVER_* macros. */
+    mstime_t failover_auth_time;      /* Time of previous or next election. */
+    int failover_auth_count;          /* Number of votes received so far. */
+    int failover_auth_sent;           /* True if we already asked for votes. */
+    int failover_auth_rank;           /* This replica rank for current auth request. */
+    int failover_failed_primary_rank; /* The rank of this instance in the context of all failed primary list. */
+    uint64_t failover_auth_epoch;     /* Epoch of the current election. */
+    int cant_failover_reason;         /* Why a replica is currently not able to
+                                       * failover. See the CANT_FAILOVER_* macros. */
     /* Manual failover state in common. */
     mstime_t mf_end; /* Manual failover time limit (ms unixtime).
                         It is zero if there is no MF in progress. */
@@ -362,7 +450,8 @@ struct clusterState {
      * stops claiming the slot. This prevents spreading incorrect information (that
      * source still owns the slot) using UPDATE messages. */
     unsigned char owner_not_claiming_slot[CLUSTER_SLOTS / 8];
+    /* Struct used for storing slot statistics, for all slots owned by the current shard. */
+    slotStat slot_stats[CLUSTER_SLOTS];
 };
-
 
 #endif // CLUSTER_LEGACY_H

@@ -5,7 +5,7 @@
  * tables of power of two in size are used, collisions are handled by
  * chaining. See the source code for more information... :)
  *
- * Copyright (c) 2006-2012, Salvatore Sanfilippo <antirez at gmail dot com>
+ * Copyright (c) 2006-2012, Redis Ltd.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -53,10 +53,10 @@ typedef struct dict dict;
 typedef struct dictType {
     /* Callbacks */
     uint64_t (*hashFunction)(const void *key);
-    void *(*keyDup)(dict *d, const void *key);
-    int (*keyCompare)(dict *d, const void *key1, const void *key2);
-    void (*keyDestructor)(dict *d, void *key);
-    void (*valDestructor)(dict *d, void *obj);
+    void *(*keyDup)(const void *key);
+    int (*keyCompare)(const void *key1, const void *key2);
+    void (*keyDestructor)(void *key);
+    void (*valDestructor)(void *obj);
     int (*resizeAllowed)(size_t moreMem, double usedRatio);
     /* Invoked at the start of dict initialization/rehashing (old and new ht are already created) */
     void (*rehashingStarted)(dict *d);
@@ -66,22 +66,6 @@ typedef struct dictType {
     /* Allow a dict to carry extra caller-defined metadata. The
      * extra memory is initialized to 0 when a dict is allocated. */
     size_t (*dictMetadataBytes)(dict *d);
-
-    /* Data */
-    void *userdata;
-
-    /* Flags */
-    /* The 'no_value' flag, if set, indicates that values are not used, i.e. the
-     * dict is a set. When this flag is set, it's not possible to access the
-     * value of a dictEntry and it's also impossible to use dictSetKey(). Entry
-     * metadata can also not be used. */
-    unsigned int no_value : 1;
-    /* If no_value = 1 and all keys are odd (LSB=1), setting keys_are_odd = 1
-     * enables one more optimization: to store a key without an allocated
-     * dictEntry. */
-    unsigned int keys_are_odd : 1;
-    /* TODO: Add a 'keys_are_even' flag and use a similar optimization if that
-     * flag is set. */
 } dictType;
 
 #define DICTHT_SIZE(exp) ((exp) == -1 ? 0 : (unsigned long)1 << (exp))
@@ -115,18 +99,9 @@ typedef struct dictIterator {
     unsigned long long fingerprint;
 } dictIterator;
 
-typedef struct dictStats {
-    int htidx;
-    unsigned long buckets;
-    unsigned long maxChainLen;
-    unsigned long totalChainLen;
-    unsigned long htSize;
-    unsigned long htUsed;
-    unsigned long *clvector;
-} dictStats;
-
 typedef void(dictScanFunction)(void *privdata, const dictEntry *de);
 typedef void *(dictDefragAllocFunction)(void *ptr);
+typedef void(dictDefragEntryCb)(void *privdata, void *ptr);
 typedef struct {
     dictDefragAllocFunction *defragAlloc; /* Used for entries etc. */
     dictDefragAllocFunction *defragKey;   /* Defrag-realloc keys (optional) */
@@ -138,16 +113,13 @@ typedef struct {
 #define DICT_HT_INITIAL_SIZE (1 << (DICT_HT_INITIAL_EXP))
 
 /* ------------------------------- Macros ------------------------------------*/
-#define dictFreeVal(d, entry)                                                                                          \
-    do {                                                                                                               \
-        if ((d)->type->valDestructor) (d)->type->valDestructor((d), dictGetVal(entry));                                \
-    } while (0)
-
-#define dictFreeKey(d, entry)                                                                                          \
-    if ((d)->type->keyDestructor) (d)->type->keyDestructor((d), dictGetKey(entry))
-
-#define dictCompareKeys(d, key1, key2)                                                                                 \
-    (((d)->type->keyCompare) ? (d)->type->keyCompare((d), key1, key2) : (key1) == (key2))
+static inline int dictCompareKeys(dict *d, const void *key1, const void *key2) {
+    if (d->type->keyCompare) {
+        return d->type->keyCompare(key1, key2);
+    } else {
+        return (key1 == key2);
+    }
+}
 
 #define dictMetadata(d) (&(d)->metadata)
 #define dictMetadataSize(d) ((d)->type->dictMetadataBytes ? (d)->type->dictMetadataBytes(d) : 0)
@@ -190,8 +162,6 @@ int dictReplace(dict *d, void *key, void *val);
 int dictDelete(dict *d, const void *key);
 dictEntry *dictUnlink(dict *d, const void *key);
 void dictFreeUnlinkedEntry(dict *d, dictEntry *he);
-dictEntry *dictTwoPhaseUnlinkFind(dict *d, const void *key, dictEntry ***plink, int *table_index);
-void dictTwoPhaseUnlinkFree(dict *d, dictEntry *he, dictEntry **plink, int table_index);
 void dictRelease(dict *d);
 dictEntry *dictFind(dict *d, const void *key);
 void *dictFetchValue(dict *d, const void *key);
@@ -212,13 +182,14 @@ uint64_t dictGetUnsignedIntegerVal(const dictEntry *de);
 double dictGetDoubleVal(const dictEntry *de);
 double *dictGetDoubleValPtr(dictEntry *de);
 size_t dictMemUsage(const dict *d);
-size_t dictEntryMemUsage(void);
+size_t dictEntryMemUsage(dictEntry *de);
 dictIterator *dictGetIterator(dict *d);
 dictIterator *dictGetSafeIterator(dict *d);
 void dictInitIterator(dictIterator *iter, dict *d);
 void dictInitSafeIterator(dictIterator *iter, dict *d);
 void dictResetIterator(dictIterator *iter);
 dictEntry *dictNext(dictIterator *iter);
+dictEntry *dictGetNext(const dictEntry *de);
 void dictReleaseIterator(dictIterator *iter);
 dictEntry *dictGetRandomKey(dict *d);
 dictEntry *dictGetFairRandomKey(dict *d);
@@ -234,18 +205,8 @@ void dictSetHashFunctionSeed(uint8_t *seed);
 uint8_t *dictGetHashFunctionSeed(void);
 unsigned long dictScan(dict *d, unsigned long v, dictScanFunction *fn, void *privdata);
 unsigned long
-dictScanDefrag(dict *d, unsigned long v, dictScanFunction *fn, dictDefragFunctions *defragfns, void *privdata);
+dictScanDefrag(dict *d, unsigned long v, dictScanFunction *fn, const dictDefragFunctions *defragfns, void *privdata);
 uint64_t dictGetHash(dict *d, const void *key);
-dictEntry *dictFindEntryByPtrAndHash(dict *d, const void *oldptr, uint64_t hash);
 void dictRehashingInfo(dict *d, unsigned long long *from_size, unsigned long long *to_size);
-
-size_t dictGetStatsMsg(char *buf, size_t bufsize, dictStats *stats, int full);
-dictStats *dictGetStatsHt(dict *d, int htidx, int full);
-void dictCombineStats(dictStats *from, dictStats *into);
-void dictFreeStats(dictStats *stats);
-
-#ifdef SERVER_TEST
-int dictTest(int argc, char *argv[], int flags);
-#endif
 
 #endif /* __DICT_H */

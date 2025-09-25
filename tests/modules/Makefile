@@ -39,6 +39,7 @@ TEST_MODULES = \
     datatype2.so \
     auth.so \
     keyspace_events.so \
+    block_keyspace_notification.so \
     blockedclient.so \
     getkeys.so \
     getchannels.so \
@@ -58,12 +59,16 @@ TEST_MODULES = \
     eventloop.so \
     moduleconfigs.so \
     moduleconfigstwo.so \
+    moduleparameter.so \
     publish.so \
     usercall.so \
     postnotifications.so \
     moduleauthtwo.so \
     rdbloadsave.so \
-    crash.so
+    crash.so \
+    cluster.so \
+    helloscripting.so \
+    unsupported_features.so
 
 .PHONY: all
 

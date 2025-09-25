@@ -3,7 +3,7 @@
 # basic capabilities for spawning and handling N parallel Server / Sentinel
 # instances.
 #
-# Copyright (C) 2014 Salvatore Sanfilippo antirez@gmail.com
+# Copyright (C) 2014 Redis Ltd.
 # This software is released under the BSD License. See the COPYING file for
 # more information.
 
@@ -20,6 +20,7 @@ set ::verbose 0
 set ::valgrind 0
 set ::tls 0
 set ::tls_module 0
+set ::io_threads 0
 set ::pause_on_error 0
 set ::dont_clean 0
 set ::simulate_error 0
@@ -107,6 +108,12 @@ proc spawn_instance {type base_port count {conf {}} {base_conf_file ""}} {
             puts $cfg "port $port"
         }
 
+        if {$::io_threads} {
+            puts $cfg "io-threads 2"
+            puts $cfg "events-per-io-thread 0"
+            puts $cfg "min-io-threads-avoid-copy-reply 2"
+        }
+
         if {$::log_req_res} {
             puts $cfg "req-res-logfile stdout.reqres"
         }
@@ -180,17 +187,15 @@ proc log_crashes {} {
     set logs [glob */log.txt]
     foreach log $logs {
         set fd [open $log]
-        set found 0
         while {[gets $fd line] >= 0} {
             if {[string match $start_pattern $line]} {
                 puts "\n*** Crash report found in $log ***"
-                set found 1
-            }
-            if {$found} {
-                puts $line
+                puts [exec cat $log]
                 incr ::failed
+                break
             }
         }
+        close $fd
     }
 
     set logs [glob */err.txt]
@@ -297,6 +302,8 @@ proc parse_options {} {
             if {$opt eq {--tls-module}} {
                 set ::tls_module 1
             }
+        } elseif {$opt eq {--io-threads}} {
+            set ::io_threads 1
         } elseif {$opt eq {--config}} {
             set val2 [lindex $::argv [expr $j+2]]
             dict set ::global_config $val $val2
@@ -319,6 +326,7 @@ proc parse_options {} {
             puts "--valgrind              Run with valgrind."
             puts "--tls                   Run tests in TLS mode."
             puts "--tls-module            Run tests in TLS mode with Valkey module."
+            puts "--io-threads            Run tests with IO threads."
             puts "--host <host>           Use hostname instead of 127.0.0.1."
             puts "--config <k> <v>        Extra config argument(s)."
             puts "--fast-fail             Exit immediately once the first test fails."
@@ -436,7 +444,7 @@ proc test {descr code} {
     }
 }
 
-# Check memory leaks when running on OSX using the "leaks" utility.
+# Check memory leaks when running on macOS using the "leaks" utility.
 proc check_leaks instance_types {
     if {[string match {*Darwin*} [exec uname -a]]} {
         puts -nonewline "Testing for memory leaks..."; flush stdout
@@ -490,8 +498,7 @@ while 1 {
             # letting the tests resume, so we'll eventually reach the cleanup and report crashes
 
             if {$::exit_on_failure} {
-                puts -nonewline "(Fast fail: test will exit now)"
-                flush stdout
+                puts "(Fast fail: test will exit now)"
                 exit 1
             }
             if {$::stop_on_failure} {

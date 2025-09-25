@@ -1,6 +1,6 @@
 /* anet.c -- Basic TCP socket stuff made a bit less boring
  *
- * Copyright (c) 2006-2012, Salvatore Sanfilippo <antirez at gmail dot com>
+ * Copyright (c) 2006-2012, Redis Ltd.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -45,12 +45,12 @@
 #include <errno.h>
 #include <stdarg.h>
 #include <stdio.h>
+#include <grp.h>
 
 #include "anet.h"
 #include "config.h"
 #include "util.h"
-
-#define UNUSED(x) (void)(x)
+#include "serverassert.h"
 
 static void anetSetError(char *err, const char *fmt, ...) {
     va_list ap;
@@ -69,14 +69,21 @@ int anetGetError(int fd) {
     return sockerr;
 }
 
-int anetSetBlock(char *err, int fd, int non_block) {
+static int anetGetSocketFlags(char *err, int fd) {
     int flags;
 
-    /* Set the socket blocking (if non_block is zero) or non-blocking.
-     * Note that fcntl(2) for F_GETFL and F_SETFL can't be
-     * interrupted by a signal. */
     if ((flags = fcntl(fd, F_GETFL)) == -1) {
         anetSetError(err, "fcntl(F_GETFL): %s", strerror(errno));
+        return ANET_ERR;
+    }
+
+    return flags;
+}
+
+int anetSetBlock(char *err, int fd, int non_block) {
+    int flags = anetGetSocketFlags(err, fd);
+
+    if (flags == ANET_ERR) {
         return ANET_ERR;
     }
 
@@ -102,6 +109,21 @@ int anetNonBlock(char *err, int fd) {
 
 int anetBlock(char *err, int fd) {
     return anetSetBlock(err, fd, 0);
+}
+
+int anetIsBlock(char *err, int fd) {
+    int flags = anetGetSocketFlags(err, fd);
+
+    if (flags == ANET_ERR) {
+        return ANET_ERR;
+    }
+
+    /* Check if the O_NONBLOCK flag is set */
+    if (flags & O_NONBLOCK) {
+        return 0; /* Socket is non-blocking */
+    } else {
+        return 1; /* Socket is blocking */
+    }
 }
 
 /* Enable the FD_CLOEXEC on the given fd to avoid fd leaks.
@@ -417,9 +439,25 @@ static int anetCreateSocket(char *err, int domain, int type, int protocol, int f
     return s;
 }
 
+/* XXX: Until glibc 2.41, getaddrinfo with hints.ai_protocol of IPPROTO_MPTCP leads error.
+ * Use hints.ai_protocol IPPROTO_IP (0) or IPPROTO_TCP (6) to resolve address and overwrite
+ * it when MPTCP is enabled.
+ * Ref: https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/tools/testing/selftests/net/mptcp/mptcp_connect.c
+ *      https://sourceware.org/git/?p=glibc.git;a=commit;h=a8e9022e0f829d44a818c642fc85b3bfbd26a514
+ */
+static int anetTcpGetProtocol(int is_mptcp_enabled) {
+#ifdef IPPROTO_MPTCP
+    return is_mptcp_enabled ? IPPROTO_MPTCP : IPPROTO_TCP;
+#else
+    assert(!is_mptcp_enabled);
+    return IPPROTO_TCP;
+#endif
+}
+
 #define ANET_CONNECT_NONE 0
 #define ANET_CONNECT_NONBLOCK 1
 #define ANET_CONNECT_BE_BINDING 2 /* Best effort binding. */
+#define ANET_CONNECT_MPTCP 4
 static int anetTcpGenericConnect(char *err, const char *addr, int port, const char *source_addr, int flags) {
     int s = ANET_ERR, rv;
     char portstr[6]; /* strlen("65535") + 1; */
@@ -442,9 +480,10 @@ static int anetTcpGenericConnect(char *err, const char *addr, int port, const ch
          * Make sure connection-intensive things like the benchmark tool
          * will be able to close/open sockets a zillion of times.
          */
+        int ai_protocol = anetTcpGetProtocol(flags & ANET_CONNECT_MPTCP);
         int sockflags = ANET_SOCKET_CLOEXEC | ANET_SOCKET_REUSEADDR;
         if (flags & ANET_CONNECT_NONBLOCK) sockflags |= ANET_SOCKET_NONBLOCK;
-        if ((s = anetCreateSocket(err, p->ai_family, p->ai_socktype, p->ai_protocol, sockflags)) == ANET_ERR) continue;
+        if ((s = anetCreateSocket(err, p->ai_family, p->ai_socktype, ai_protocol, sockflags)) == ANET_ERR) continue;
         if (source_addr) {
             int bound = 0;
             /* Using getaddrinfo saves us from self-determining IPv4 vs IPv6 */
@@ -472,6 +511,9 @@ static int anetTcpGenericConnect(char *err, const char *addr, int port, const ch
             s = ANET_ERR;
             continue;
         }
+
+        /* Enable TCP_NODELAY by default */
+        anetEnableTcpNoDelay(NULL, s);
 
         /* If we ended an iteration of the for loop without errors, we
          * have a connected socket. Let's return to the caller. */
@@ -501,11 +543,13 @@ int anetTcpNonBlockConnect(char *err, const char *addr, int port) {
     return anetTcpGenericConnect(err, addr, port, NULL, ANET_CONNECT_NONBLOCK);
 }
 
-int anetTcpNonBlockBestEffortBindConnect(char *err, const char *addr, int port, const char *source_addr) {
-    return anetTcpGenericConnect(err, addr, port, source_addr, ANET_CONNECT_NONBLOCK | ANET_CONNECT_BE_BINDING);
+int anetTcpNonBlockBestEffortBindConnect(char *err, const char *addr, int port, const char *source_addr, int mptcp) {
+    int flags = ANET_CONNECT_NONBLOCK | ANET_CONNECT_BE_BINDING;
+    if (mptcp) flags |= ANET_CONNECT_MPTCP;
+    return anetTcpGenericConnect(err, addr, port, source_addr, flags);
 }
 
-static int anetListen(char *err, int s, struct sockaddr *sa, socklen_t len, int backlog, mode_t perm) {
+static int anetListen(char *err, int s, struct sockaddr *sa, socklen_t len, int backlog, mode_t perm, char *group) {
     if (bind(s, sa, len) == -1) {
         anetSetError(err, "bind: %s", strerror(errno));
         close(s);
@@ -513,6 +557,22 @@ static int anetListen(char *err, int s, struct sockaddr *sa, socklen_t len, int 
     }
 
     if (sa->sa_family == AF_LOCAL && perm) chmod(((struct sockaddr_un *)sa)->sun_path, perm);
+
+    if (sa->sa_family == AF_LOCAL && group != NULL) {
+        struct group *grp;
+        if ((grp = getgrnam(group)) == NULL) {
+            anetSetError(err, "getgrnam error for group '%s': %s", group, strerror(errno));
+            close(s);
+            return ANET_ERR;
+        }
+
+        /* Owner of the socket remains same. */
+        if (chown(((struct sockaddr_un *)sa)->sun_path, -1, grp->gr_gid) == -1) {
+            anetSetError(err, "chown error for group '%s': %s", group, strerror(errno));
+            close(s);
+            return ANET_ERR;
+        }
+    }
 
     if (listen(s, backlog) == -1) {
         anetSetError(err, "listen: %s", strerror(errno));
@@ -531,7 +591,7 @@ static int anetV6Only(char *err, int s) {
     return ANET_OK;
 }
 
-static int _anetTcpServer(char *err, int port, char *bindaddr, int af, int backlog) {
+static int _anetTcpServer(char *err, int port, char *bindaddr, int af, int backlog, int mptcp) {
     int s = -1, rv;
     char _port[6]; /* strlen("65535") */
     struct addrinfo hints, *servinfo, *p;
@@ -549,11 +609,11 @@ static int _anetTcpServer(char *err, int port, char *bindaddr, int af, int backl
         return ANET_ERR;
     }
     for (p = servinfo; p != NULL; p = p->ai_next) {
-        if ((s = socket(p->ai_family, p->ai_socktype, p->ai_protocol)) == -1) continue;
+        if ((s = socket(p->ai_family, p->ai_socktype, anetTcpGetProtocol(mptcp))) == -1) continue;
 
         if (af == AF_INET6 && anetV6Only(err, s) == ANET_ERR) goto error;
         if (anetSetReuseAddr(err, s) == ANET_ERR) goto error;
-        if (anetListen(err, s, p->ai_addr, p->ai_addrlen, backlog, 0) == ANET_ERR) s = ANET_ERR;
+        if (anetListen(err, s, p->ai_addr, p->ai_addrlen, backlog, 0, NULL) == ANET_ERR) s = ANET_ERR;
         goto end;
     }
     if (p == NULL) {
@@ -569,15 +629,15 @@ end:
     return s;
 }
 
-int anetTcpServer(char *err, int port, char *bindaddr, int backlog) {
-    return _anetTcpServer(err, port, bindaddr, AF_INET, backlog);
+int anetTcpServer(char *err, int port, char *bindaddr, int backlog, int mptcp) {
+    return _anetTcpServer(err, port, bindaddr, AF_INET, backlog, mptcp);
 }
 
-int anetTcp6Server(char *err, int port, char *bindaddr, int backlog) {
-    return _anetTcpServer(err, port, bindaddr, AF_INET6, backlog);
+int anetTcp6Server(char *err, int port, char *bindaddr, int backlog, int mptcp) {
+    return _anetTcpServer(err, port, bindaddr, AF_INET6, backlog, mptcp);
 }
 
-int anetUnixServer(char *err, char *path, mode_t perm, int backlog) {
+int anetUnixServer(char *err, char *path, mode_t perm, int backlog, char *group) {
     int s;
     struct sockaddr_un sa;
 
@@ -593,8 +653,39 @@ int anetUnixServer(char *err, char *path, mode_t perm, int backlog) {
     memset(&sa, 0, sizeof(sa));
     sa.sun_family = AF_LOCAL;
     valkey_strlcpy(sa.sun_path, path, sizeof(sa.sun_path));
-    if (anetListen(err, s, (struct sockaddr *)&sa, sizeof(sa), backlog, perm) == ANET_ERR) return ANET_ERR;
+    if (anetListen(err, s, (struct sockaddr *)&sa, sizeof(sa), backlog, perm, group) == ANET_ERR) return ANET_ERR;
     return s;
+}
+
+/* For some error cases indicates transient errors and accept can be retried
+ * in order to serve other pending connections. This function should be called with the last errno,
+ * right after anetTcpaccept or anetUnixAccept returned an error in order to retry them. */
+int anetRetryAcceptOnError(int err) {
+    /* This is a transient error which can happen, for example, when
+     * a client initiates a TCP handshake (SYN),
+     * the server receives and queues it in the pending connections queue (the SYN queue),
+     * but before accept() is called, the connection is aborted.
+     * in such cases we can continue accepting other connections. ß*/
+    if (err == ECONNABORTED)
+        return 1;
+
+#if defined(__linux__)
+    /* https://www.man7.org/linux/man-pages/man2/accept4.2 suggests that:
+     * Linux accept() (and accept4()) passes already-pending network
+       errors on the new socket as an error code from accept().  This
+       behavior differs from other BSD socket implementations.  For
+       reliable operation the application should detect the network
+       errors defined for the protocol after accept() and treat them like
+       EAGAIN by retrying.  In the case of TCP/IP, these are ENETDOWN,
+       EPROTO, ENOPROTOOPT, EHOSTDOWN, ENONET, EHOSTUNREACH, EOPNOTSUPP,
+       and ENETUNREACH. */
+    if (err == ENETDOWN || err == EPROTO || err == ENOPROTOOPT ||
+        err == EHOSTDOWN || err == ENONET || err == EHOSTUNREACH ||
+        err == EOPNOTSUPP || err == ENETUNREACH) {
+        return 1;
+    }
+#endif
+    return 0;
 }
 
 /* Accept a connection and also make sure the socket is non-blocking, and CLOEXEC.
@@ -645,6 +736,10 @@ int anetTcpAccept(char *err, int serversock, char *ip, size_t ip_len, int *port)
         if (ip) inet_ntop(AF_INET6, (void *)&(s->sin6_addr), ip, ip_len);
         if (port) *port = ntohs(s->sin6_port);
     }
+
+    /* Enable TCP_NODELAY by default */
+    anetEnableTcpNoDelay(NULL, fd);
+
     return fd;
 }
 

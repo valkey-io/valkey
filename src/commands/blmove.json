@@ -60,7 +60,7 @@
                     "type": "string"
                 },
                 {
-                    "description": "Operation timed-out",
+                    "description": "Operation timed-out or the command is issued from a transaction or a script and the source does not exist.",
                     "type": "null"
                 }
             ]

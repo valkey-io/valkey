@@ -167,6 +167,7 @@ start_server {tags {"repl external:skip"}} {
         test {BLPOP followed by role change, issue #2473} {
             set rd [valkey_deferring_client]
             $rd blpop foo 0 ; # Block while B is a master
+            wait_for_blocked_clients_count 1
 
             # Turn B into master of A
             $A slaveof no one
@@ -191,7 +192,31 @@ start_server {tags {"repl external:skip"}} {
             } else {
                 fail "Master and replica have different digest: [$A debug digest] VS [$B debug digest]"
             }          
-            assert_match {*calls=1,*,rejected_calls=0,failed_calls=1*} [cmdrstat blpop $B]
+            assert_match {*calls=1,*,rejected_calls=1*,failed_calls=0} [cmdrstat blpop $B]
+        }
+        
+        test {Replica output bytes metric} {
+            # reset stats 
+            $A config resetstat
+            
+            set info [$A info stats]
+            set replica_bytes_output [getInfoProperty $info "total_net_repl_output_bytes"]
+            assert_equal $replica_bytes_output 0
+            
+            # sent set command to primary
+            $A set key value
+            
+            # wait for command propagation
+            wait_for_condition 50 100 {
+                [$B get key] eq {value}
+            } else {
+                fail "Replica did not receive the command"
+            }
+            
+            # get the new stats
+            set info [$A info stats]
+            set replica_bytes_output [getInfoProperty $info "total_net_repl_output_bytes"]
+            assert_morethan $replica_bytes_output 0
         }
     }
 }
@@ -300,7 +325,7 @@ start_server {tags {"repl external:skip"}} {
     }
 }
 
-foreach mdl {no yes} {
+foreach mdl {no yes} dualchannel {no yes} {
     foreach sdl {disabled swapdb} {
         start_server {tags {"repl external:skip"} overrides {save {}}} {
             set master [srv 0 client]
@@ -316,7 +341,7 @@ foreach mdl {no yes} {
                     lappend slaves [srv 0 client]
                     start_server {overrides {save {}}} {
                         lappend slaves [srv 0 client]
-                        test "Connect multiple replicas at the same time (issue #141), master diskless=$mdl, replica diskless=$sdl" {
+                        test "Connect multiple replicas at the same time (issue #141), master diskless=$mdl, replica diskless=$sdl dual-channel-replication-enabled=$dualchannel" {
                             # start load handles only inside the test, so that the test can be skipped
                             set load_handle0 [start_bg_complex_data $master_host $master_port 9 100000000]
                             set load_handle1 [start_bg_complex_data $master_host $master_port 11 100000000]
@@ -325,7 +350,11 @@ foreach mdl {no yes} {
                             set load_handle4 [start_write_load $master_host $master_port 4]
                             after 5000 ;# wait for some data to accumulate so that we have RDB part for the fork
 
+                            $master config set dual-channel-replication-enabled $dualchannel
                             # Send SLAVEOF commands to slaves
+                            [lindex $slaves 0] config set dual-channel-replication-enabled $dualchannel
+                            [lindex $slaves 1] config set dual-channel-replication-enabled $dualchannel
+                            [lindex $slaves 2] config set dual-channel-replication-enabled $dualchannel
                             [lindex $slaves 0] config set repl-diskless-load $sdl
                             [lindex $slaves 1] config set repl-diskless-load $sdl
                             [lindex $slaves 2] config set repl-diskless-load $sdl
@@ -335,7 +364,7 @@ foreach mdl {no yes} {
 
                             # Wait for all the three slaves to reach the "online"
                             # state from the POV of the master.
-                            set retry 500
+                            set retry 1000
                             while {$retry} {
                                 set info [r -3 info]
                                 if {[string match {*slave0:*state=online*slave1:*state=online*slave2:*state=online*} $info]} {
@@ -373,6 +402,8 @@ foreach mdl {no yes} {
                             wait_for_ofs_sync $master [lindex $slaves 0]
                             wait_for_ofs_sync $master [lindex $slaves 1]
                             wait_for_ofs_sync $master [lindex $slaves 2]
+
+                            assert [string match *replicas_waiting_psync:0* [$master info replication]]
 
                             # Check digests
                             set digest [$master debug digest]
@@ -435,7 +466,7 @@ start_server {tags {"repl external:skip"} overrides {save {}}} {
 }
 
 # Diskless load swapdb when NOT async_loading (different master replid)
-foreach testType {Successful Aborted} {
+foreach testType {Successful Aborted} dualchannel {yes no} {
     start_server {tags {"repl external:skip"}} {
         set replica [srv 0 client]
         set replica_host [srv 0 host]
@@ -450,8 +481,10 @@ foreach testType {Successful Aborted} {
             $master config set repl-diskless-sync yes
             $master config set repl-diskless-sync-delay 0
             $master config set save ""
+            $master config set dual-channel-replication-enabled $dualchannel
             $replica config set repl-diskless-load swapdb
             $replica config set save ""
+            $replica config set dual-channel-replication-enabled $dualchannel
 
             # Put different data sets on the master and replica
             # We need to put large keys on the master since the replica replies to info only once in 2mb
@@ -471,7 +504,7 @@ foreach testType {Successful Aborted} {
                     # Start the replication process
                     $replica replicaof $master_host $master_port
 
-                    test {Diskless load swapdb (different replid): replica enter loading} {
+                    test "Diskless load swapdb (different replid): replica enter loading dual-channel-replication-enabled=$dualchannel" {
                         # Wait for the replica to start reading the rdb
                         wait_for_condition 100 100 {
                             [s -1 loading] eq 1
@@ -495,7 +528,7 @@ foreach testType {Successful Aborted} {
                         fail "Replica didn't disconnect"
                     }
 
-                    test {Diskless load swapdb (different replid): old database is exposed after replication fails} {
+                    test "Diskless load swapdb (different replid): old database is exposed after replication fails dual-channel=$dualchannel" {
                         # Ensure we see old values from replica
                         assert_equal [$replica get mykey] "myvalue"
 
@@ -517,7 +550,7 @@ foreach testType {Successful Aborted} {
                         fail "Master <-> Replica didn't finish sync"
                     }
 
-                    test {Diskless load swapdb (different replid): new database is exposed after swapping} {
+                    test "Diskless load swapdb (different replid): new database is exposed after swapping dual-channel=$dualchannel" {
                         # Ensure we don't see anymore the key that was stored only to replica and also that we don't get LOADING status
                         assert_equal [$replica GET mykey] ""
 
@@ -548,6 +581,7 @@ foreach testType {Successful Aborted} {
             $master config set save ""
             $replica config set repl-diskless-load swapdb
             $replica config set save ""
+            $replica config set dual-channel-replication-enabled no; # Doesn't work with swapdb
 
             # Set replica writable so we can check that a key we manually added is served
             # during replication and after failure, but disappears on success
@@ -720,8 +754,6 @@ test {diskless loading short read} {
             $replica config set repl-diskless-load swapdb
             $master config set hz 500
             $replica config set hz 500
-            $master config set dynamic-hz no
-            $replica config set dynamic-hz no
             # Try to fill the master with all types of data types / encodings
             set start [clock clicks -milliseconds]
 
@@ -852,6 +884,7 @@ start_server {tags {"repl external:skip"} overrides {save ""}} {
     $master config set repl-diskless-sync yes
     $master config set repl-diskless-sync-delay 5
     $master config set repl-diskless-sync-max-replicas 2
+    $master config set dual-channel-replication-enabled "no"; # dual-channel-replication doesn't use pipe
     set master_host [srv 0 host]
     set master_port [srv 0 port]
     set master_pid [srv 0 pid]
@@ -1041,8 +1074,8 @@ test "diskless replication child being killed is collected" {
     }
 } {} {external:skip}
 
-foreach mdl {yes no} {
-    test "replication child dies when parent is killed - diskless: $mdl" {
+foreach mdl {yes no} dualchannel {yes no} {
+    test "replication child dies when parent is killed - diskless: $mdl dual-channel-replication-enabled: $dualchannel" {
         # when master is killed, make sure the fork child can detect that and exit
         start_server {tags {"repl"} overrides {save ""}} {
             set master [srv 0 client]
@@ -1056,6 +1089,7 @@ foreach mdl {yes no} {
             $master debug populate 10000
             start_server {overrides {save ""}} {
                 set replica [srv 0 client]
+                $replica config set dual-channel-replication-enabled $dualchannel
                 $replica replicaof $master_host $master_port
 
                 # wait for rdb child to start
@@ -1235,69 +1269,80 @@ test {Kill rdb child process if its dumping RDB is not useful} {
         }
     }
 } {} {external:skip}
-
-start_server {tags {"repl external:skip"}} {
-    set master1_host [srv 0 host]
-    set master1_port [srv 0 port]
-    r set a b
-
-    start_server {} {
-        set master2 [srv 0 client]
-        set master2_host [srv 0 host]
-        set master2_port [srv 0 port]
-        # Take 10s for dumping RDB
-        $master2 debug populate 10 master2 10
-        $master2 config set rdb-key-save-delay 1000000
+foreach dualchannel {yes no} {
+    start_server {tags {"repl external:skip"}} {
+        set master1 [srv 0 client]
+        set master1_host [srv 0 host]
+        set master1_port [srv 0 port]
+        $master1 config set dual-channel-replication-enabled $dualchannel
+        r set a b
 
         start_server {} {
-            set sub_replica [srv 0 client]
+            set master2 [srv 0 client]
+            set master2_host [srv 0 host]
+            set master2_port [srv 0 port]
+            # Take 10s for dumping RDB
+            $master2 debug populate 10 master2 10
+            $master2 config set rdb-key-save-delay 1000000
+            $master2 config set dual-channel-replication-enabled $dualchannel
 
             start_server {} {
-                # Full sync with master1
-                r slaveof $master1_host $master1_port
-                wait_for_sync r
-                assert_equal "b" [r get a]
+                set sub_replica [srv 0 client]
+                $sub_replica config set dual-channel-replication-enabled $dualchannel
 
-                # Let sub replicas sync with me
-                $sub_replica slaveof [srv 0 host] [srv 0 port]
-                wait_for_sync $sub_replica
-                assert_equal "b" [$sub_replica get a]
-
-                # Full sync with master2, and then kill master2 before finishing dumping RDB
-                r slaveof $master2_host $master2_port
-                wait_for_condition 50 100 {
-                    ([s -2 rdb_bgsave_in_progress] == 1) &&
-                    ([string match "*wait_bgsave*" [s -2 slave0]])
-                } else {
-                    fail "full sync didn't start"
-                }
-                catch {$master2 shutdown nosave}
-
-                test {Don't disconnect with replicas before loading transferred RDB when full sync} {
-                    assert ![log_file_matches [srv -1 stdout] "*Connection with master lost*"]
-                    # The replication id is not changed in entire replication chain
-                    assert_equal [s master_replid] [s -3 master_replid]
-                    assert_equal [s master_replid] [s -1 master_replid]
-                }
-
-                test {Discard cache master before loading transferred RDB when full sync} {
-                    set full_sync [s -3 sync_full]
-                    set partial_sync [s -3 sync_partial_ok]
-                    # Partial sync with master1
+                start_server {} {
+                    # Full sync with master1
+                    set replica [srv 0 client]
+                    $replica config set dual-channel-replication-enabled $dualchannel
                     r slaveof $master1_host $master1_port
                     wait_for_sync r
-                    # master1 accepts partial sync instead of full sync
-                    assert_equal $full_sync [s -3 sync_full]
-                    assert_equal [expr $partial_sync+1] [s -3 sync_partial_ok]
+                    assert_equal "b" [r get a]
 
-                    # Since master only partially sync replica, and repl id is not changed,
-                    # the replica doesn't disconnect with its sub-replicas
-                    assert_equal [s master_replid] [s -3 master_replid]
-                    assert_equal [s master_replid] [s -1 master_replid]
-                    assert ![log_file_matches [srv -1 stdout] "*Connection with master lost*"]
-                    # Sub replica just has one full sync, no partial resync.
-                    assert_equal 1 [s sync_full]
-                    assert_equal 0 [s sync_partial_ok]
+                    # Let sub replicas sync with me
+                    $sub_replica slaveof [srv 0 host] [srv 0 port]
+                    wait_for_sync $sub_replica
+                    assert_equal "b" [$sub_replica get a]
+
+                    # Full sync with master2, and then kill master2 before finishing dumping RDB
+                    r slaveof $master2_host $master2_port
+                    wait_for_condition 50 100 {
+                        ([s -2 rdb_bgsave_in_progress] == 1) &&
+                        ([string match "*wait_bgsave*" [s -2 slave0]])
+                    } else {
+                        fail "full sync didn't start"
+                    }
+                    catch {$master2 shutdown nosave}
+
+                    test "Don't disconnect with replicas before loading transferred RDB when full sync with dual-channel-replication $dualchannel" {
+                        assert ![log_file_matches [srv -1 stdout] "*Connection with master lost*"]
+                        # The replication id is not changed in entire replication chain
+                        assert_equal [s master_replid] [s -3 master_replid]
+                        assert_equal [s master_replid] [s -1 master_replid]
+                    }
+
+                    test "Discard cache master before loading transferred RDB when full sync with dual-channel-replication $dualchannel" {
+                        set full_sync [s -3 sync_full]
+                        set partial_sync [s -3 sync_partial_ok]
+                        # Partial sync with master1
+                        r slaveof $master1_host $master1_port
+                        wait_for_sync r
+                        # master1 accepts partial sync instead of full sync
+                        assert_equal $full_sync [s -3 sync_full]
+                        assert_equal [expr $partial_sync+1] [s -3 sync_partial_ok]
+
+                        # Since master only partially sync replica, and repl id is not changed,
+                        # the replica doesn't disconnect with its sub-replicas
+                        assert_equal [s master_replid] [s -3 master_replid]
+                        assert_equal [s master_replid] [s -1 master_replid]
+                        assert ![log_file_matches [srv -1 stdout] "*Connection with master lost*"]
+                        # Sub replica just has one full sync, no partial resync.
+                        assert_equal 1 [s sync_full]
+                        if {$dualchannel == "yes"} {
+                            assert_equal 1 [s sync_partial_ok]
+                        } else {
+                            assert_equal 0 [s sync_partial_ok]
+                        }
+                    }
                 }
             }
         }
@@ -1451,6 +1496,103 @@ start_server {tags {"repl external:skip"}} {
 
             assert_equal "set" [$master type s]
             assert_equal "set" [$slave type s]
+        }
+    }
+}
+
+foreach dualchannel {yes no} {
+    test "replica actually flushes db if use diskless load with flush-before-load dual-channel-replication-enabled=$dualchannel" {
+        start_server {tags {"repl"}} {
+            set replica [srv 0 client]
+            set replica_log [srv 0 stdout]
+            start_server {} {
+                set master [srv 0 client]
+                set master_host [srv 0 host]
+                set master_port [srv 0 port]
+
+                # Fill both replica and master with data
+                $master debug populate 100 master 100000
+                $replica debug populate 201 replica 100000
+                assert_equal [$replica dbsize] 201
+                # Set up master
+                $master config set save ""
+                $master config set rdbcompression no
+                $master config set repl-diskless-sync yes
+                $master config set repl-diskless-sync-delay 0
+                $master config set dual-channel-replication-enabled $dualchannel
+                # Set master with a slow rdb generation, so that we can easily intercept loading
+                # 10ms per key, with 1000 keys is 10 seconds
+                $master config set rdb-key-save-delay 10000
+                # Set up replica
+                $replica config set save ""
+                $replica config set repl-diskless-load flush-before-load
+                $replica config set dual-channel-replication-enabled $dualchannel
+                # Start the replication process...
+                $replica replicaof $master_host $master_port
+
+                wait_for_condition 100 100 {
+                    [s -1 loading] eq 1
+                } else {
+                    fail "Replica didn't start loading"
+                }
+
+                # Make sure that next sync will not start immediately so that we can catch the replica in between syncs
+                $master config set repl-diskless-sync-delay 5
+
+                # Kill the replica connection on the master
+                set killed [$master client kill type replica]
+
+                wait_for_condition 100 100 {
+                    [s -1 loading] eq 0
+                } else {
+                    fail "Replica didn't disconnect"
+                }
+
+                assert_equal [$replica dbsize] 0
+
+                # Speed up shutdown
+                $master config set rdb-key-save-delay 0
+            }
+        }
+    } {} {external:skip}
+}
+
+start_server {tags {"repl external:skip"}} {
+    set replica [srv 0 client]
+    $replica set replica_key replica_value
+
+    start_server {} {
+        set primary [srv 0 client]
+        set primary_host [srv 0 host]
+        set primary_port [srv 0 port]
+        $primary set primary_key primary_value
+
+        test {Replica keep the old data if RDB file save fails in disk-based replication} {
+            # Create a folder called 'dump.rdb' to trigger temp-rdb rename failure
+            # and it will cause RDB file save to fail at the rename.
+            set dump_rdb [file join [lindex [$replica config get dir] 1] dump.rdb]
+            if {[file exists $dump_rdb]} { exec rm -f $dump_rdb }
+            exec mkdir -p $dump_rdb
+
+            $replica replicaof $primary_host $primary_port
+
+            # Waiting for the rename to fail.
+            wait_for_log_messages -1 {"*Failed trying to rename the temp DB into dump.rdb*"} 0 1000 10
+
+            # Make sure the replica has not completed sync and keep the old data.
+            assert_equal {} [$replica get primary_key]
+            assert_equal {replica_value} [$replica get replica_key]
+
+            # Remove the test folder and make the rename success
+            exec rm -rf $dump_rdb
+            wait_for_condition 500 100 {
+                [$replica get primary_key] == {primary_value} &&
+                [$replica get replica_key] == {}
+            } else {
+                puts [$primary keys *]
+                puts [$replica keys *]
+                fail "Replication failed."
+            }
         }
     }
 }

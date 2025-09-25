@@ -124,8 +124,9 @@ proc assert_refcount_morethan {key ref} {
 
 # Wait for the specified condition to be true, with the specified number of
 # max retries and delay between retries. Otherwise the 'elsescript' is
-# executed.
-proc wait_for_condition {maxtries delay e _else_ elsescript} {
+# executed. If 'debugscript' is provided, it is executed after failure of
+# the confition (before the retry delay).
+proc wait_for_condition {maxtries delay e _else_ elsescript {_debug_ ""} {debugscript ""}} {
     while {[incr maxtries -1] >= 0} {
         set errcode [catch {uplevel 1 [list expr $e]} result]
         if {$errcode == 0} {
@@ -133,11 +134,42 @@ proc wait_for_condition {maxtries delay e _else_ elsescript} {
         } else {
             return -code $errcode $result
         }
+        if {$_debug_ == "debug"} {
+            uplevel 1 $debugscript
+        }
         after $delay
     }
     if {$maxtries == -1} {
         set errcode [catch [uplevel 1 $elsescript] result]
         return -code $errcode $result
+    }
+}
+
+proc verify_replica_online {master replica_idx max_retry} {
+    set pause 100
+    set count_down $max_retry
+    while {$count_down} {
+        set info [$master info]
+        set pattern *slave$replica_idx:*state=online*
+        if {[string match $pattern $info]} {
+            break
+        } else {
+            incr count_down -1
+            after $pause
+        }
+    }
+    if {$count_down == 0} {
+        set threshold [expr {$max_retry*$pause/1000}]
+        error "assertion:Replica is not in sync after $threshold seconds"
+    } 
+}
+
+proc wait_for_value_to_propagate_to_replica {master replica key} {
+    set val [$master get $key]
+    wait_for_condition 50 500 {
+                ([$replica get $key] eq $val)
+    } else {
+        error "Key $key did not propagate. Expected $val but got [$replica get $key]"
     }
 }
 
@@ -178,6 +210,7 @@ proc test {name code {okpattern undefined} {tags {}}} {
         return
     }
 
+    set old_singledb $::singledb
     set tags [concat $::tags $tags]
     if {![tags_acceptable $tags err]} {
         incr ::num_aborted
@@ -185,6 +218,9 @@ proc test {name code {okpattern undefined} {tags {}}} {
         return
     }
 
+    if {[lsearch $tags singledb] >= 0} {
+        set ::singledb 1
+    }
     incr ::num_tests
     set details {}
     lappend details "$name in $::curfile"
@@ -268,5 +304,6 @@ proc test {name code {okpattern undefined} {tags {}}} {
             send_data_packet $::test_server_fd err "Detected a memory leak in test '$name': $output"
         }
     }
+    set ::singledb $old_singledb
     set ::cur_test $prev_test
 }

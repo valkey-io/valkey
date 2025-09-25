@@ -71,7 +71,7 @@ test "Slave #5 should not be able to failover" {
 
 test "Cluster should be down" {
     for {set j 0} {$j < [llength $::servers]} {incr j} {
-        if {[process_is_paused $paused_pid]} continue
+        if {[process_is_paused [srv -$j pid]]} continue
         wait_for_condition 100 50 {
             [CI $j cluster_state] eq "fail"
         } else {

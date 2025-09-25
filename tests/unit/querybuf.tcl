@@ -92,7 +92,7 @@ start_server {tags {"querybuf slow"}} {
             # Write something smaller, so query buf peak can shrink
             $rd set x [string repeat A 100]
             set new_test_client_qbuf [client_query_buffer test_client]
-            if {$new_test_client_qbuf < $orig_test_client_qbuf} { break } 
+            if {$new_test_client_qbuf < $orig_test_client_qbuf && $new_test_client_qbuf > 0} { break } 
             if {[expr [clock milliseconds] - $t] > 1000} { break }
             after 10
         }

@@ -112,19 +112,19 @@ tags "modules" {
                         {incr notifications}
                         {incr notifications}
                         {incr testkeyspace:expired}
-                        {del asdf*}
+                        {unlink asdf*}
                         {exec}
                         {multi}
                         {incr notifications}
                         {incr notifications}
                         {incr testkeyspace:expired}
-                        {del asdf*}
+                        {unlink asdf*}
                         {exec}
                         {multi}
                         {incr notifications}
                         {incr notifications}
                         {incr testkeyspace:expired}
-                        {del asdf*}
+                        {unlink asdf*}
                         {exec}
                     }
                     close_replication_stream $repl
@@ -211,15 +211,15 @@ tags "modules" {
                         {exec}
                         {multi}
                         {incr notifications}
-                        {del asdf*}
+                        {unlink asdf*}
                         {exec}
                         {multi}
                         {incr notifications}
-                        {del asdf*}
+                        {unlink asdf*}
                         {exec}
                         {multi}
                         {incr notifications}
-                        {del asdf*}
+                        {unlink asdf*}
                         {exec}
                         {multi}
                         {incr notifications}
@@ -257,11 +257,11 @@ tags "modules" {
                         {exec}
                         {multi}
                         {incr notifications}
-                        {del timer-maxmemory-volatile-*}
+                        {unlink timer-maxmemory-volatile-*}
                         {exec}
                         {multi}
                         {incr notifications}
-                        {del timer-maxmemory-volatile-*}
+                        {unlink timer-maxmemory-volatile-*}
                         {exec}
                     }
                     close_replication_stream $repl
@@ -583,12 +583,13 @@ tags "modules" {
                     after 110
 
                     set repl [attach_to_replication_stream]
+                    assert_equal [$replica propagate-test.obeyed] 0
                     $master propagate-test.incr k1
 
                     assert_replication_stream $repl {
                         {multi}
                         {select *}
-                        {del k1}
+                        {unlink k1}
                         {propagate-test.incr k1}
                         {exec}
                     }
@@ -596,8 +597,14 @@ tags "modules" {
 
                     assert_equal [$master get k1] 1
                     assert_equal [$master ttl k1] -1
+                    wait_for_ofs_sync $master $replica
                     assert_equal [$replica get k1] 1
                     assert_equal [$replica ttl k1] -1
+                    # Validate that replicated commands were "obeyed" from primary.
+                    assert_equal [$replica propagate-test.obeyed] 1
+                    $master propagate-test.incr k1
+                    wait_for_ofs_sync $master $replica
+                    assert_equal [$replica propagate-test.obeyed] 2
                 }
 
                 test {module notification on set} {
@@ -619,9 +626,9 @@ tags "modules" {
                         fail "Failed to wait for set to be replicated"
                     }
 
-                    # Currently the `del` command comes after the notification.
+                    # Currently the `unlink` command comes after the notification.
                     # When we fix spop to fire notification at the end (like all other commands),
-                    # the `del` will come first.
+                    # the `unlink` will come first.
                     assert_replication_stream $repl {
                         {multi}
                         {select *}
@@ -631,7 +638,7 @@ tags "modules" {
                         {multi}
                         {incr notifications}
                         {incr notifications}
-                        {del s}
+                        {unlink s}
                         {exec}
                     }
                     close_replication_stream $repl

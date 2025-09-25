@@ -24,6 +24,15 @@ proc get_port_from_node_info {line} {
 
 proc cluster_response_tls {tls_cluster} {
 
+    test "CLUSTER SLOTS cached using EVAL over TLS -- tls-cluster $tls_cluster" {
+        set client_tcp [valkey 127.0.0.1 [srv 0 pport] 0 0]
+        set client_tls [valkey 127.0.0.1 [srv 0 port] 0 1]
+        set slots1 [$client_tls EVAL {return server.call('CLUSTER', 'SLOTS')} 0]
+        set slots2 [$client_tcp CLUSTER SLOTS]
+        # Compare the ports in the first row
+        assert_no_match [lindex $slots1 0 2 1] [lindex $slots2 0 2 1]
+    }
+
     test "CLUSTER SLOTS with different connection type -- tls-cluster $tls_cluster" {
         set slots1 [R 0 cluster slots]
         set pport [srv 0 pport]

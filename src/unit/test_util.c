@@ -6,6 +6,11 @@
 #include "../util.h"
 #include "test_help.h"
 
+#if defined(__linux__)
+#include <sys/statfs.h>
+#include <linux/magic.h>
+#endif
+
 int test_string2ll(int argc, char **argv, int flags) {
     UNUSED(argc);
     UNUSED(argv);
@@ -62,6 +67,9 @@ int test_string2ll(int argc, char **argv, int flags) {
     TEST_ASSERT(v == LLONG_MAX);
 
     valkey_strlcpy(buf, "9223372036854775808", sizeof(buf)); /* overflow */
+    TEST_ASSERT(string2ll(buf, strlen(buf), &v) == 0);
+
+    valkey_strlcpy(buf, "18446744073709551615", sizeof(buf)); /* overflow */
     TEST_ASSERT(string2ll(buf, strlen(buf), &v) == 0);
 
     return 0;
@@ -286,9 +294,20 @@ static int cache_exist(int fd) {
 int test_reclaimFilePageCache(int argc, char **argv, int flags) {
     UNUSED(argc);
     UNUSED(argv);
-    UNUSED(flags);
+
+    /* The test is incompatible with valgrind, skip it. */
+    if (flags & UNIT_TEST_VALGRIND) return 0;
 
 #if defined(__linux__)
+    struct statfs stats;
+
+    /* Check if /tmp is memory-backed (e.g., tmpfs) */
+    if (statfs("/tmp", &stats) == 0) {
+        if (stats.f_type != TMPFS_MAGIC) { // Not tmpfs, use /tmp
+            return 0;
+        }
+    }
+
     char *tmpfile = "/tmp/redis-reclaim-cache-test";
     int fd = open(tmpfile, O_RDWR | O_CREAT, 0644);
     TEST_ASSERT(fd >= 0);
@@ -309,5 +328,32 @@ int test_reclaimFilePageCache(int argc, char **argv, int flags) {
 
     unlink(tmpfile);
 #endif
+    return 0;
+}
+
+int test_writePointerWithPadding(int argc, char **argv, int flags) {
+    UNUSED(argc);
+    UNUSED(argv);
+    UNUSED(flags);
+
+    unsigned char buf[8];
+    static int dummy;
+    void *ptr = &dummy;
+    size_t ptr_size = sizeof(ptr);
+
+    /* Write the pointer and pad to 8 bytes */
+    writePointerWithPadding(buf, ptr);
+
+    /* The first ptr_size bytes must match the raw pointer bytes */
+    unsigned char expected[sizeof(ptr)];
+    memcpy(expected, &ptr, ptr_size);
+    TEST_ASSERT(memcmp(buf, expected, ptr_size) == 0);
+
+
+    /* The remaining bytes (if any) must be zero */
+    for (size_t i = ptr_size; i < sizeof(buf); i++) {
+        TEST_ASSERT(buf[i] == 0);
+    }
+
     return 0;
 }

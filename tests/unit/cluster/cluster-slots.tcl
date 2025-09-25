@@ -10,7 +10,7 @@ proc cluster_allocate_mixedSlots {masters replicas} {
     }
 }
 
-start_cluster 5 10 {tags {external:skip cluster}} {
+start_cluster 5 10 {overrides {cluster-ping-interval 1000 cluster-node-timeout 90000} tags {external:skip cluster}} {
 
 test "Cluster is up" {
     wait_for_cluster_state ok

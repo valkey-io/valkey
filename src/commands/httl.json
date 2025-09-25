@@ -1,0 +1,85 @@
+{
+    "HTTL": {
+        "summary": "Returns the remaining time to live (in seconds) of a hash key's field(s) that have an associated expiration.",
+        "complexity": "O(1) for each field, so O(N) for N items when the command is called with multiple fields.",
+        "group": "hash",
+        "since": "9.0.0",
+        "arity": -5,
+        "function": "httlCommand",
+        "command_flags": [
+            "READONLY",
+            "FAST"
+        ],
+        "acl_categories": [
+            "HASH"
+        ],
+        "key_specs": [
+            {
+                "flags": [
+                    "RO",
+                    "ACCESS"
+                ],
+                "begin_search": {
+                    "index": {
+                        "pos": 1
+                    }
+                },
+                "find_keys": {
+                    "range": {
+                        "lastkey": 0,
+                        "step": 1,
+                        "limit": 0
+                    }
+                }
+            }
+        ],
+        "reply_schema": {
+            "description": "List of values associated with the result of getting the remaining time-to-live of the specific fields, in the same order as they are requested.",
+            "type": "array",
+            "minItems": 1,
+            "items": {
+                "oneOf": [
+                    {
+                        "description": "Field does not exist in the provided hash key, or the hash key is empty",
+                        "const": -2
+                    },
+                    {
+                        "description": "Field exists in the provided hash key, but has no expiration associated with it.",
+                        "const": -1
+                    },
+                    {
+                        "description": "The expiration time associated with the hash key field, in seconds.",
+                        "type": "integer",
+                        "minimum": 0
+                    }
+                ]
+            }
+        },
+        "arguments": [
+            {
+                "name": "key",
+                "type": "key",
+                "key_spec_index": 0
+            },
+            {
+                "name": "fields",
+                "token": "FIELDS",
+                "type": "block",
+                "arguments": [
+                    {
+                        "name": "numfields",
+                        "type": "integer",
+                        "key_spec_index": 0,
+                        "multiple": false,
+                        "minimum": 1
+                    },
+                    {
+                        "name": "field",
+                        "type": "string",
+                        "multiple": true
+                    }
+                ]
+            }
+        ]
+    }
+}

@@ -29,9 +29,7 @@
 
 static ConnectionType CT_Unix;
 
-static const char *connUnixGetType(connection *conn) {
-    UNUSED(conn);
-
+static int connUnixGetType(void) {
     return CONN_TYPE_UNIX;
 }
 
@@ -40,7 +38,12 @@ static void connUnixEventHandler(struct aeEventLoop *el, int fd, void *clientDat
 }
 
 static int connUnixAddr(connection *conn, char *ip, size_t ip_len, int *port, int remote) {
-    return connectionTypeTcp()->addr(conn, ip, ip_len, port, remote);
+    UNUSED(conn);
+    UNUSED(remote);
+
+    snprintf(ip, ip_len, "%s:0", server.unixsocket);
+    if (port) *port = 0;
+    return 0;
 }
 
 static int connUnixIsLocal(connection *conn) {
@@ -51,7 +54,9 @@ static int connUnixIsLocal(connection *conn) {
 
 static int connUnixListen(connListener *listener) {
     int fd;
-    mode_t *perm = (mode_t *)listener->priv;
+    serverUnixContextConfig *ctx_cfg = listener->priv;
+    mode_t perm = ctx_cfg->perm;
+    char *group = ctx_cfg->group;
 
     if (listener->bindaddr_count == 0) return C_OK;
 
@@ -61,7 +66,7 @@ static int connUnixListen(connListener *listener) {
         char *addr = listener->bindaddr[j];
 
         unlink(addr); /* don't care if this fails */
-        fd = anetUnixServer(server.neterr, addr, *perm, server.tcp_backlog);
+        fd = anetUnixServer(server.neterr, addr, perm, server.tcp_backlog, group);
         if (fd == ANET_ERR) {
             serverLog(LL_WARNING, "Failed opening Unix socket: %s", server.neterr);
             exit(1);
@@ -70,6 +75,10 @@ static int connUnixListen(connListener *listener) {
     }
 
     return C_OK;
+}
+
+static void connUnixCloseListener(connListener *listener) {
+    connectionTypeTcp()->closeListener(listener);
 }
 
 static connection *connCreateUnix(void) {
@@ -92,6 +101,8 @@ static connection *connCreateAcceptedUnix(int fd, void *priv) {
 static void connUnixAcceptHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
     int cfd;
     int max = server.max_new_conns_per_cycle;
+    struct ClientFlags flags = {0};
+    flags.unix_socket = 1;
     UNUSED(el);
     UNUSED(mask);
     UNUSED(privdata);
@@ -99,11 +110,12 @@ static void connUnixAcceptHandler(aeEventLoop *el, int fd, void *privdata, int m
     while (max--) {
         cfd = anetUnixAccept(server.neterr, fd);
         if (cfd == ANET_ERR) {
+            if (anetRetryAcceptOnError(errno)) continue;
             if (errno != EWOULDBLOCK) serverLog(LL_WARNING, "Accepting client connection: %s", server.neterr);
             return;
         }
         serverLog(LL_VERBOSE, "Accepted connection to %s", server.unixsocket);
-        acceptCommonHandler(connCreateAcceptedUnix(cfd, NULL), CLIENT_UNIX_SOCKET, NULL);
+        acceptCommonHandler(connCreateAcceptedUnix(cfd, NULL), flags, NULL);
     }
 }
 
@@ -170,6 +182,7 @@ static ConnectionType CT_Unix = {
     .addr = connUnixAddr,
     .is_local = connUnixIsLocal,
     .listen = connUnixListen,
+    .closeListener = connUnixCloseListener,
 
     /* create/shutdown/close connection */
     .conn_create = connCreateUnix,
@@ -196,6 +209,11 @@ static ConnectionType CT_Unix = {
     /* pending data */
     .has_pending_data = NULL,
     .process_pending_data = NULL,
+    .postpone_update_state = NULL,
+    .update_state = NULL,
+
+    /* Miscellaneous */
+    .connIntegrityChecked = NULL,
 };
 
 int RedisRegisterConnectionTypeUnix(void) {

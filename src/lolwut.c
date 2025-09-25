@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, Salvatore Sanfilippo <antirez at gmail dot com>
+ * Copyright (c) 2018, Redis Ltd.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -44,8 +44,8 @@ void lolwut8Command(client *c);
 /* The default target for LOLWUT if no matching version was found.
  * This is what unstable versions of the server will display. */
 void lolwutUnstableCommand(client *c) {
-    sds rendered = sdsnew("Redis ver. ");
-    rendered = sdscat(rendered, VALKEY_VERSION);
+    sds rendered = sdscatprintf(sdsempty(), "%s ver.", server.extended_redis_compat ? "Redis" : "Valkey");
+    rendered = sdscat(rendered, server.extended_redis_compat ? REDIS_VERSION : VALKEY_VERSION);
     rendered = sdscatlen(rendered, "\n", 1);
     addReplyVerbatim(c, rendered, sdslen(rendered), "txt");
     sdsfree(rendered);

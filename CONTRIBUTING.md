@@ -16,6 +16,7 @@ The Valkey project is led by a Technical Steering Committee, whose responsibilit
 * Found a bug? [Report it here](https://github.com/valkey-io/valkey/issues/new?template=bug_report.md&title=%5BBUG%5D)
 * Valkey crashed? [Submit a crash report here](https://github.com/valkey-io/valkey/issues/new?template=crash_report.md&title=%5BCRASH%5D+%3Cshort+description%3E)
 * Suggest a new feature? [Post your detailed feature request here](https://github.com/valkey-io/valkey/issues/new?template=feature_request.md&title=%5BNEW%5D)
+* Report a test failure? [Report it here](https://github.com/valkey-io/valkey/issues/new?template=test-failure.md)
 * Want to help with documentation? [Move on to valkey-doc](https://github.com/valkey-io/valkey-doc)
 * Report a vulnerability? See [SECURITY.md](SECURITY.md)
 
@@ -79,10 +80,9 @@ you need to ensure that the contribution is in accordance with the DCO.
 
 1. If it is a major feature or a semantical change, please don't start coding
 straight away: if your feature is not a conceptual fit you'll lose a lot of
-time writing the code without any reason. Start by posting in the mailing list
-and creating an issue at Github with the description of, exactly, what you want
-to accomplish and why. Use cases are important for features to be accepted.
-Here you can see if there is consensus about your idea.
+time writing the code without any reason. Start by creating an issue at Github with the
+description of, exactly, what you want to accomplish and why. Use cases are important for
+features to be accepted. Here you can see if there is consensus about your idea.
 
 2. If in step 1 you get an acknowledgment from the project leaders, use the following
 procedure to submit a patch:

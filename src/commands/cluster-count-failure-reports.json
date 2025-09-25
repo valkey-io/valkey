@@ -1,12 +1,18 @@
 {
     "COUNT-FAILURE-REPORTS": {
-        "summary": "Returns the number of active failure reports active for a node.",
+        "summary": "Returns the number of active failure reports for a node. No new reports are created once the node is marked as failed.",
         "complexity": "O(N) where N is the number of failure reports",
         "group": "cluster",
         "since": "3.0.0",
         "arity": 3,
         "container": "CLUSTER",
         "function": "clusterCommand",
+        "history": [
+            [
+                "9.0.0",
+                "Ignore additional failure reports for a node which has been marked as failed."
+            ]
+        ],
         "command_flags": [
             "ADMIN",
             "STALE"

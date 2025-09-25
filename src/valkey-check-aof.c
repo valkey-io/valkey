@@ -1,6 +1,6 @@
 /*
  * Copyright (c) 2009-2012, Pieter Noordhuis <pcnoordhuis at gmail dot com>
- * Copyright (c) 2009-2012, Salvatore Sanfilippo <antirez at gmail dot com>
+ * Copyright (c) 2009-2012, Redis Ltd.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -50,11 +50,11 @@ aofManifest *aofManifestCreate(void);
 void aofManifestFree(aofManifest *am);
 aofManifest *aofLoadManifestFromFile(sds am_filepath);
 
-#define ERROR(...)                                                                                                     \
-    {                                                                                                                  \
-        char __buf[1024];                                                                                              \
-        snprintf(__buf, sizeof(__buf), __VA_ARGS__);                                                                   \
-        snprintf(error, sizeof(error), "0x%16llx: %s", (long long)epos, __buf);                                        \
+#define ERROR(...)                                                              \
+    {                                                                           \
+        char __buf[1024];                                                       \
+        snprintf(__buf, sizeof(__buf), __VA_ARGS__);                            \
+        snprintf(error, sizeof(error), "0x%16llx: %s", (long long)epos, __buf); \
     }
 
 static char error[1044];
@@ -553,6 +553,12 @@ int redis_check_aof_main(int argc, char **argv) {
             goto invalid_args;
         }
     } else {
+        goto invalid_args;
+    }
+
+    /* Check if filepath is longer than PATH_MAX */
+    if (strnlen(filepath, PATH_MAX + 1) > PATH_MAX) {
+        printf("Error: filepath is too long (exceeds PATH_MAX)\n");
         goto invalid_args;
     }
 

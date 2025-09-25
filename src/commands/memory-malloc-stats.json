@@ -12,6 +12,9 @@
             "REQUEST_POLICY:ALL_SHARDS",
             "RESPONSE_POLICY:SPECIAL"
         ],
+        "command_flags": [
+            "LOADING"
+        ],
         "reply_schema": {
             "type": "string",
             "description": "The memory allocator's internal statistics report."

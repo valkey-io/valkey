@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009-2012, Salvatore Sanfilippo <antirez at gmail dot com>
+ * Copyright (c) 2009-2012, Redis Ltd.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -471,7 +471,7 @@ void pushGenericCommand(client *c, int where, int xx) {
         }
 
         lobj = createListListpackObject();
-        dbAdd(c->db, c->argv[1], lobj);
+        dbAdd(c->db, c->argv[1], &lobj);
     }
 
     listTypeTryConversionAppend(lobj, c->argv, 2, c->argc - 1, NULL, NULL);
@@ -480,11 +480,11 @@ void pushGenericCommand(client *c, int where, int xx) {
         server.dirty++;
     }
 
-    addReplyLongLong(c, listTypeLength(lobj));
-
-    char *event = (where == LIST_HEAD) ? "lpush" : "rpush";
     signalModifiedKey(c, c->db, c->argv[1]);
+    char *event = (where == LIST_HEAD) ? "lpush" : "rpush";
     notifyKeyspaceEvent(NOTIFY_LIST, event, c->argv[1], c->db->id);
+
+    addReplyLongLong(c, listTypeLength(lobj));
 }
 
 /* LPUSH <key> <element> [<element> ...] */
@@ -608,10 +608,10 @@ void lsetCommand(client *c) {
          * already handled the growing case in listTypeTryConversionAppend()
          * above, so here we just need to try the conversion for shrinking. */
         listTypeTryConversion(o, LIST_CONV_SHRINKING, NULL, NULL);
-        addReply(c, shared.ok);
         signalModifiedKey(c, c->db, c->argv[1]);
         notifyKeyspaceEvent(NOTIFY_LIST, "lset", c->argv[1], c->db->id);
         server.dirty++;
+        addReply(c, shared.ok);
     } else {
         addReplyErrorObject(c, shared.outofrangeerr);
     }
@@ -628,13 +628,14 @@ void lsetCommand(client *c) {
  *
  * 'deleted' is an optional output argument to get an indication
  * if the key got deleted by this function. */
-void listPopRangeAndReplyWithKey(client *c, robj *o, robj *key, int where, long count, int signal, int *deleted) {
+void listPopRangeAndReplyWithKey(client *c, robj *o, robj *key, int where, long count, int *deleted) {
     long llen = listTypeLength(o);
     long rangelen = (count > llen) ? llen : count;
     long rangestart = (where == LIST_HEAD) ? 0 : -rangelen;
     long rangeend = (where == LIST_HEAD) ? rangelen - 1 : -1;
     int reverse = (where == LIST_HEAD) ? 0 : 1;
 
+    initDeferredReplyBuffer(c);
     /* We return key-name just once, and an array of elements */
     addReplyArrayLen(c, 2);
     addReplyBulk(c, key);
@@ -643,15 +644,18 @@ void listPopRangeAndReplyWithKey(client *c, robj *o, robj *key, int where, long 
     /* Pop these elements. */
     listTypeDelRange(o, rangestart, rangelen);
     /* Maintain the notifications and dirty. */
-    listElementsRemoved(c, key, where, o, rangelen, signal, deleted);
+    listElementsRemoved(c, key, where, o, rangelen, deleted);
+    commitDeferredReplyBuffer(c, 1);
 }
 
 /* Extracted from `addListRangeReply()` to reply with a quicklist list.
  * Note that the purpose is to make the methods small so that the
  * code in the loop can be inlined better to improve performance. */
 void addListQuicklistRangeReply(client *c, robj *o, int from, int rangelen, int reverse) {
+    writePreparedClient *wpc = prepareClientForFutureWrites(c);
+    if (!wpc) return;
     /* Return the result in form of a multi-bulk reply */
-    addReplyArrayLen(c, rangelen);
+    addWritePreparedReplyArrayLen(wpc, rangelen);
 
     int direction = reverse ? AL_START_TAIL : AL_START_HEAD;
     quicklistIter *iter = quicklistGetIteratorAtIdx(o->ptr, direction, from);
@@ -659,9 +663,9 @@ void addListQuicklistRangeReply(client *c, robj *o, int from, int rangelen, int 
         quicklistEntry qe;
         serverAssert(quicklistNext(iter, &qe)); /* fail on corrupt data */
         if (qe.value) {
-            addReplyBulkCBuffer(c, qe.value, qe.sz);
+            addWritePreparedReplyBulkCBuffer(wpc, qe.value, qe.sz);
         } else {
-            addReplyBulkLongLong(c, qe.longval);
+            addWritePreparedReplyBulkLongLong(wpc, qe.longval);
         }
     }
     quicklistReleaseIterator(iter);
@@ -671,21 +675,22 @@ void addListQuicklistRangeReply(client *c, robj *o, int from, int rangelen, int 
  * Note that the purpose is to make the methods small so that the
  * code in the loop can be inlined better to improve performance. */
 void addListListpackRangeReply(client *c, robj *o, int from, int rangelen, int reverse) {
+    writePreparedClient *wpc = prepareClientForFutureWrites(c);
+    if (!wpc) return;
+    /* Return the result in form of a multi-bulk reply */
+    addWritePreparedReplyArrayLen(wpc, rangelen);
     unsigned char *p = lpSeek(o->ptr, from);
     unsigned char *vstr;
     unsigned int vlen;
     long long lval;
 
-    /* Return the result in form of a multi-bulk reply */
-    addReplyArrayLen(c, rangelen);
-
     while (rangelen--) {
         serverAssert(p); /* fail on corrupt data */
         vstr = lpGetValue(p, &vlen, &lval);
         if (vstr) {
-            addReplyBulkCBuffer(c, vstr, vlen);
+            addWritePreparedReplyBulkCBuffer(wpc, vstr, vlen);
         } else {
-            addReplyBulkLongLong(c, lval);
+            addWritePreparedReplyBulkLongLong(wpc, lval);
         }
         p = reverse ? lpPrev(o->ptr, p) : lpNext(o->ptr, p);
     }
@@ -724,11 +729,9 @@ void addListRangeReply(client *c, robj *o, long start, long end, int reverse) {
 
 /* A housekeeping helper for list elements popping tasks.
  *
- * If 'signal' is 0, skip calling signalModifiedKey().
- *
  * 'deleted' is an optional output argument to get an indication
  * if the key got deleted by this function. */
-void listElementsRemoved(client *c, robj *key, int where, robj *o, long count, int signal, int *deleted) {
+void listElementsRemoved(client *c, robj *key, int where, robj *o, long count, int *deleted) {
     char *event = (where == LIST_HEAD) ? "lpop" : "rpop";
 
     notifyKeyspaceEvent(NOTIFY_LIST, event, key, c->db->id);
@@ -741,7 +744,7 @@ void listElementsRemoved(client *c, robj *key, int where, robj *o, long count, i
         listTypeTryConversion(o, LIST_CONV_SHRINKING, NULL, NULL);
         if (deleted) *deleted = 0;
     }
-    if (signal) signalModifiedKey(c, c->db, key);
+    signalModifiedKey(c, c->db, key);
     server.dirty += count;
 }
 
@@ -775,10 +778,10 @@ void popGenericCommand(client *c, int where) {
         /* Pop a single element. This is POP's original behavior that replies
          * with a bulk string. */
         value = listTypePop(o, where);
+        listElementsRemoved(c, c->argv[1], where, o, 1, NULL);
         serverAssert(value != NULL);
         addReplyBulk(c, value);
         decrRefCount(value);
-        listElementsRemoved(c, c->argv[1], where, o, 1, 1, NULL);
     } else {
         /* Pop a range of elements. An addition to the original POP command,
          *  which replies with a multi-bulk. */
@@ -788,9 +791,11 @@ void popGenericCommand(client *c, int where) {
         long rangeend = (where == LIST_HEAD) ? rangelen - 1 : -1;
         int reverse = (where == LIST_HEAD) ? 0 : 1;
 
+        initDeferredReplyBuffer(c);
         addListRangeReply(c, o, rangestart, rangeend, reverse);
         listTypeDelRange(o, rangestart, rangelen);
-        listElementsRemoved(c, c->argv[1], where, o, rangelen, 1, NULL);
+        listElementsRemoved(c, c->argv[1], where, o, rangelen, NULL);
+        commitDeferredReplyBuffer(c, 1);
     }
 }
 
@@ -820,7 +825,7 @@ void mpopGenericCommand(client *c, robj **keys, int numkeys, int where, long cou
         if (llen == 0) continue;
 
         /* Pop a range of elements in a nested arrays way. */
-        listPopRangeAndReplyWithKey(c, o, key, where, count, 1, NULL);
+        listPopRangeAndReplyWithKey(c, o, key, where, count, NULL);
 
         /* Replicate it as [LR]POP COUNT. */
         robj *count_obj = createStringObjectFromLongLong((count > llen) ? llen : count);
@@ -1065,7 +1070,7 @@ void lmoveHandlePush(client *c, robj *dstkey, robj *dstobj, robj *value, int whe
     /* Create the list if the key does not exist */
     if (!dstobj) {
         dstobj = createListListpackObject();
-        dbAdd(c->db, dstkey, dstobj);
+        dbAdd(c->db, dstkey, &dstobj);
     }
     listTypeTryConversionAppend(dstobj, &value, 0, 0, NULL, NULL);
     listTypePush(dstobj, value, where);
@@ -1113,7 +1118,7 @@ void lmoveGenericCommand(client *c, int wherefrom, int whereto) {
         value = listTypePop(sobj, wherefrom);
         serverAssert(value); /* assertion for valgrind (avoid NPD) */
         lmoveHandlePush(c, c->argv[2], dobj, value, whereto);
-        listElementsRemoved(c, touchedkey, wherefrom, sobj, 1, 1, NULL);
+        listElementsRemoved(c, touchedkey, wherefrom, sobj, 1, NULL);
 
         /* listTypePop returns an object with its refcount incremented */
         decrRefCount(value);
@@ -1187,7 +1192,7 @@ void blockingPopGenericCommand(client *c, robj **keys, int numkeys, int where, i
         if (count != -1) {
             /* BLMPOP, non empty list, like a normal [LR]POP with count option.
              * The difference here we pop a range of elements in a nested arrays way. */
-            listPopRangeAndReplyWithKey(c, o, key, where, count, 1, NULL);
+            listPopRangeAndReplyWithKey(c, o, key, where, count, NULL);
 
             /* Replicate it as [LR]POP COUNT. */
             robj *count_obj = createStringObjectFromLongLong((count > llen) ? llen : count);
@@ -1200,12 +1205,11 @@ void blockingPopGenericCommand(client *c, robj **keys, int numkeys, int where, i
         robj *value = listTypePop(o, where);
         serverAssert(value != NULL);
 
+        listElementsRemoved(c, key, where, o, 1, NULL);
         addReplyArrayLen(c, 2);
         addReplyBulk(c, key);
         addReplyBulk(c, value);
         decrRefCount(value);
-        listElementsRemoved(c, key, where, o, 1, 1, NULL);
-
         /* Replicate it as an [LR]POP instead of B[LR]POP. */
         rewriteClientCommandVector(c, 2, (where == LIST_HEAD) ? shared.lpop : shared.rpop, key);
         return;
@@ -1213,7 +1217,7 @@ void blockingPopGenericCommand(client *c, robj **keys, int numkeys, int where, i
 
     /* If we are not allowed to block the client, the only thing
      * we can do is treating it as a timeout (even with timeout 0). */
-    if (c->flags & CLIENT_DENY_BLOCKING) {
+    if (c->flag.deny_blocking) {
         addReplyNullArray(c);
         return;
     }
@@ -1237,7 +1241,7 @@ void blmoveGenericCommand(client *c, int wherefrom, int whereto, mstime_t timeou
     if (checkType(c, key, OBJ_LIST)) return;
 
     if (key == NULL) {
-        if (c->flags & CLIENT_DENY_BLOCKING) {
+        if (c->flag.deny_blocking) {
             /* Blocking against an empty list when blocking is not allowed
              * returns immediately. */
             addReplyNull(c);

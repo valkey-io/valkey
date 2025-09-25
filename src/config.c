@@ -1,6 +1,6 @@
 /* Configuration file parsing and CONFIG GET/SET commands implementation.
  *
- * Copyright (c) 2009-2012, Salvatore Sanfilippo <antirez at gmail dot com>
+ * Copyright (c) 2009-2012, Redis Ltd.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -28,13 +28,17 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
+#include "io_threads.h"
 #include "server.h"
 #include "cluster.h"
 #include "connection.h"
 #include "bio.h"
+#include "module.h"
+#include "cluster_migrateslots.h"
 
 #include <fcntl.h>
 #include <sys/stat.h>
+#include <arpa/inet.h>
 #include <glob.h>
 #include <string.h>
 #include <locale.h>
@@ -50,76 +54,125 @@ typedef struct deprecatedConfig {
     const int argc_max;
 } deprecatedConfig;
 
-configEnum maxmemory_policy_enum[] = {{"volatile-lru", MAXMEMORY_VOLATILE_LRU},
-                                      {"volatile-lfu", MAXMEMORY_VOLATILE_LFU},
-                                      {"volatile-random", MAXMEMORY_VOLATILE_RANDOM},
-                                      {"volatile-ttl", MAXMEMORY_VOLATILE_TTL},
-                                      {"allkeys-lru", MAXMEMORY_ALLKEYS_LRU},
-                                      {"allkeys-lfu", MAXMEMORY_ALLKEYS_LFU},
-                                      {"allkeys-random", MAXMEMORY_ALLKEYS_RANDOM},
-                                      {"noeviction", MAXMEMORY_NO_EVICTION},
-                                      {NULL, 0}};
+configEnum maxmemory_policy_enum[] = {
+    {"volatile-lru", MAXMEMORY_VOLATILE_LRU},
+    {"volatile-lfu", MAXMEMORY_VOLATILE_LFU},
+    {"volatile-random", MAXMEMORY_VOLATILE_RANDOM},
+    {"volatile-ttl", MAXMEMORY_VOLATILE_TTL},
+    {"allkeys-lru", MAXMEMORY_ALLKEYS_LRU},
+    {"allkeys-lfu", MAXMEMORY_ALLKEYS_LFU},
+    {"allkeys-random", MAXMEMORY_ALLKEYS_RANDOM},
+    {"noeviction", MAXMEMORY_NO_EVICTION},
+    {NULL, 0}};
 
-configEnum syslog_facility_enum[] = {{"user", LOG_USER},     {"local0", LOG_LOCAL0},
-                                     {"local1", LOG_LOCAL1}, {"local2", LOG_LOCAL2},
-                                     {"local3", LOG_LOCAL3}, {"local4", LOG_LOCAL4},
-                                     {"local5", LOG_LOCAL5}, {"local6", LOG_LOCAL6},
-                                     {"local7", LOG_LOCAL7}, {NULL, 0}};
+configEnum syslog_facility_enum[] = {
+    {"user", LOG_USER},
+    {"local0", LOG_LOCAL0},
+    {"local1", LOG_LOCAL1},
+    {"local2", LOG_LOCAL2},
+    {"local3", LOG_LOCAL3},
+    {"local4", LOG_LOCAL4},
+    {"local5", LOG_LOCAL5},
+    {"local6", LOG_LOCAL6},
+    {"local7", LOG_LOCAL7},
+    {NULL, 0}};
 
-configEnum loglevel_enum[] = {{"debug", LL_DEBUG},     {"verbose", LL_VERBOSE}, {"notice", LL_NOTICE},
-                              {"warning", LL_WARNING}, {"nothing", LL_NOTHING}, {NULL, 0}};
+configEnum loglevel_enum[] = {
+    {"debug", LL_DEBUG},
+    {"verbose", LL_VERBOSE},
+    {"notice", LL_NOTICE},
+    {"warning", LL_WARNING},
+    {"nothing", LL_NOTHING},
+    {NULL, 0}};
 
-configEnum supervised_mode_enum[] = {{"upstart", SUPERVISED_UPSTART},
-                                     {"systemd", SUPERVISED_SYSTEMD},
-                                     {"auto", SUPERVISED_AUTODETECT},
-                                     {"no", SUPERVISED_NONE},
-                                     {NULL, 0}};
+configEnum supervised_mode_enum[] = {
+    {"upstart", SUPERVISED_UPSTART},
+    {"systemd", SUPERVISED_SYSTEMD},
+    {"auto", SUPERVISED_AUTODETECT},
+    {"no", SUPERVISED_NONE},
+    {NULL, 0}};
 
-configEnum aof_fsync_enum[] = {{"everysec", AOF_FSYNC_EVERYSEC},
-                               {"always", AOF_FSYNC_ALWAYS},
-                               {"no", AOF_FSYNC_NO},
-                               {NULL, 0}};
+configEnum aof_fsync_enum[] = {
+    {"everysec", AOF_FSYNC_EVERYSEC},
+    {"always", AOF_FSYNC_ALWAYS},
+    {"no", AOF_FSYNC_NO},
+    {NULL, 0}};
 
-configEnum shutdown_on_sig_enum[] = {{"default", 0},        {"save", SHUTDOWN_SAVE},   {"nosave", SHUTDOWN_NOSAVE},
-                                     {"now", SHUTDOWN_NOW}, {"force", SHUTDOWN_FORCE}, {NULL, 0}};
+configEnum shutdown_on_sig_enum[] = {
+    {"default", SHUTDOWN_NOFLAGS},
+    {"save", SHUTDOWN_SAVE},
+    {"nosave", SHUTDOWN_NOSAVE},
+    {"now", SHUTDOWN_NOW},
+    {"force", SHUTDOWN_FORCE},
+    {"safe", SHUTDOWN_SAFE},
+    {"failover", SHUTDOWN_FAILOVER},
+    {NULL, 0}};
 
-configEnum repl_diskless_load_enum[] = {{"disabled", REPL_DISKLESS_LOAD_DISABLED},
-                                        {"on-empty-db", REPL_DISKLESS_LOAD_WHEN_DB_EMPTY},
-                                        {"swapdb", REPL_DISKLESS_LOAD_SWAPDB},
-                                        {NULL, 0}};
+configEnum repl_diskless_load_enum[] = {
+    {"disabled", REPL_DISKLESS_LOAD_DISABLED},
+    {"on-empty-db", REPL_DISKLESS_LOAD_WHEN_DB_EMPTY},
+    {"swapdb", REPL_DISKLESS_LOAD_SWAPDB},
+    {"flush-before-load", REPL_DISKLESS_LOAD_FLUSH_BEFORE_LOAD},
+    {NULL, 0}};
 
-configEnum tls_auth_clients_enum[] = {{"no", TLS_CLIENT_AUTH_NO},
-                                      {"yes", TLS_CLIENT_AUTH_YES},
-                                      {"optional", TLS_CLIENT_AUTH_OPTIONAL},
-                                      {NULL, 0}};
+configEnum tls_auth_clients_enum[] = {
+    {"no", TLS_CLIENT_AUTH_NO},
+    {"yes", TLS_CLIENT_AUTH_YES},
+    {"optional", TLS_CLIENT_AUTH_OPTIONAL},
+    {NULL, 0}};
 
-configEnum oom_score_adj_enum[] = {{"no", OOM_SCORE_ADJ_NO},
-                                   {"yes", OOM_SCORE_RELATIVE},
-                                   {"relative", OOM_SCORE_RELATIVE},
-                                   {"absolute", OOM_SCORE_ADJ_ABSOLUTE},
-                                   {NULL, 0}};
+configEnum tls_client_auth_user_enum[] = {
+    {"CN", TLS_CLIENT_FIELD_CN},
+    {"off", TLS_CLIENT_FIELD_OFF},
+    {NULL, 0} // terminator
+};
 
-configEnum acl_pubsub_default_enum[] = {{"allchannels", SELECTOR_FLAG_ALLCHANNELS}, {"resetchannels", 0}, {NULL, 0}};
+configEnum oom_score_adj_enum[] = {
+    {"no", OOM_SCORE_ADJ_NO},
+    {"yes", OOM_SCORE_RELATIVE},
+    {"relative", OOM_SCORE_RELATIVE},
+    {"absolute", OOM_SCORE_ADJ_ABSOLUTE},
+    {NULL, 0}};
 
-configEnum sanitize_dump_payload_enum[] = {{"no", SANITIZE_DUMP_NO},
-                                           {"yes", SANITIZE_DUMP_YES},
-                                           {"clients", SANITIZE_DUMP_CLIENTS},
-                                           {NULL, 0}};
+configEnum acl_pubsub_default_enum[] = {
+    {"allchannels", SELECTOR_FLAG_ALLCHANNELS},
+    {"resetchannels", 0},
+    {NULL, 0}};
 
-configEnum protected_action_enum[] = {{"no", PROTECTED_ACTION_ALLOWED_NO},
-                                      {"yes", PROTECTED_ACTION_ALLOWED_YES},
-                                      {"local", PROTECTED_ACTION_ALLOWED_LOCAL},
-                                      {NULL, 0}};
+configEnum sanitize_dump_payload_enum[] = {
+    {"no", SANITIZE_DUMP_NO},
+    {"yes", SANITIZE_DUMP_YES},
+    {"clients", SANITIZE_DUMP_CLIENTS},
+    {NULL, 0}};
 
-configEnum cluster_preferred_endpoint_type_enum[] = {{"ip", CLUSTER_ENDPOINT_TYPE_IP},
-                                                     {"hostname", CLUSTER_ENDPOINT_TYPE_HOSTNAME},
-                                                     {"unknown-endpoint", CLUSTER_ENDPOINT_TYPE_UNKNOWN_ENDPOINT},
-                                                     {NULL, 0}};
+configEnum protected_action_enum[] = {
+    {"no", PROTECTED_ACTION_ALLOWED_NO},
+    {"yes", PROTECTED_ACTION_ALLOWED_YES},
+    {"local", PROTECTED_ACTION_ALLOWED_LOCAL},
+    {NULL, 0}};
 
-configEnum propagation_error_behavior_enum[] = {{"ignore", PROPAGATION_ERR_BEHAVIOR_IGNORE},
-                                                {"panic", PROPAGATION_ERR_BEHAVIOR_PANIC},
-                                                {"panic-on-replicas", PROPAGATION_ERR_BEHAVIOR_PANIC_ON_REPLICAS},
-                                                {NULL, 0}};
+configEnum cluster_preferred_endpoint_type_enum[] = {
+    {"ip", CLUSTER_ENDPOINT_TYPE_IP},
+    {"hostname", CLUSTER_ENDPOINT_TYPE_HOSTNAME},
+    {"unknown-endpoint", CLUSTER_ENDPOINT_TYPE_UNKNOWN_ENDPOINT},
+    {NULL, 0}};
+
+configEnum propagation_error_behavior_enum[] = {
+    {"ignore", PROPAGATION_ERR_BEHAVIOR_IGNORE},
+    {"panic", PROPAGATION_ERR_BEHAVIOR_PANIC},
+    {"panic-on-replicas", PROPAGATION_ERR_BEHAVIOR_PANIC_ON_REPLICAS},
+    {NULL, 0}};
+
+configEnum log_format_enum[] = {{"legacy", LOG_FORMAT_LEGACY}, {"logfmt", LOG_FORMAT_LOGFMT}, {NULL, 0}};
+
+configEnum log_timestamp_format_enum[] = {{"legacy", LOG_TIMESTAMP_LEGACY},
+                                          {"iso8601", LOG_TIMESTAMP_ISO8601},
+                                          {"milliseconds", LOG_TIMESTAMP_MILLISECONDS},
+                                          {NULL, 0}};
+
+configEnum rdb_version_check_enum[] = {{"strict", RDB_VERSION_CHECK_STRICT},
+                                       {"relaxed", RDB_VERSION_CHECK_RELAXED},
+                                       {NULL, 0}};
 
 /* Output buffer limits presets. */
 clientBufferLimitsConfig clientBufferLimitsDefaults[CLIENT_TYPE_OBUF_COUNT] = {
@@ -245,7 +298,7 @@ struct standardConfig {
     void *privdata;          /* privdata for this config, for module configs this is a ModuleConfig struct */
 };
 
-dict *configs = NULL; /* Runtime config values */
+static dict *configs = NULL; /* Runtime config values */
 
 /* Lookup a config by the provided sds string name, or return NULL
  * if the config does not exist */
@@ -259,7 +312,7 @@ static standardConfig *lookupConfig(sds name) {
  *----------------------------------------------------------------------------*/
 
 /* Get enum value from name. If there is no match INT_MIN is returned. */
-int configEnumGetValue(configEnum *ce, sds *argv, int argc, int bitflags) {
+static int configEnumGetValue(configEnum *ce, sds *argv, int argc, int bitflags) {
     if (argc == 0 || (!bitflags && argc != 1)) return INT_MIN;
     int values = 0;
     for (int i = 0; i < argc; i++) {
@@ -333,20 +386,6 @@ void resetServerSaveParams(void) {
     server.saveparamslen = 0;
 }
 
-void queueLoadModule(sds path, sds *argv, int argc) {
-    int i;
-    struct moduleLoadQueueEntry *loadmod;
-
-    loadmod = zmalloc(sizeof(struct moduleLoadQueueEntry));
-    loadmod->argv = argc ? zmalloc(sizeof(robj *) * argc) : NULL;
-    loadmod->path = sdsnew(path);
-    loadmod->argc = argc;
-    for (i = 0; i < argc; i++) {
-        loadmod->argv[i] = createRawStringObject(argv[i], sdslen(argv[i]));
-    }
-    listAddNodeTail(server.loadmodule_queue, loadmod);
-}
-
 /* Parse an array of `arg_len` sds strings, validate and populate
  * server.client_obuf_limits if valid.
  * Used in CONFIG SET and configuration file parsing. */
@@ -409,11 +448,13 @@ static int updateClientOutputBufferLimit(sds *args, int arg_len, const char **er
  * abnormal aggregate `save T C` functionality. Remove in the future. */
 static int reading_config_file;
 
-void loadServerConfigFromString(char *config) {
+void loadServerConfigFromString(sds config) {
     deprecatedConfig deprecated_configs[] = {
         {"list-max-ziplist-entries", 2, 2},
         {"list-max-ziplist-value", 2, 2},
         {"lua-replicate-commands", 2, 2},
+        {"io-threads-do-reads", 2, 2},
+        {"dynamic-hz", 2, 2},
         {NULL, 0},
     };
     char buf[1024];
@@ -424,7 +465,7 @@ void loadServerConfigFromString(char *config) {
     int argc;
 
     reading_config_file = 1;
-    lines = sdssplitlen(config, strlen(config), "\n", 1, &totlines);
+    lines = sdssplitlen(config, sdslen(config), "\n", 1, &totlines);
 
     for (i = 0; i < totlines; i++) {
         linenum = i + 1;
@@ -500,7 +541,6 @@ void loadServerConfigFromString(char *config) {
             loadServerConfig(argv[1], 0, NULL);
         } else if (!strcasecmp(argv[0], "rename-command") && argc == 3) {
             struct serverCommand *cmd = lookupCommandBySds(argv[1]);
-            int retval;
 
             if (!cmd) {
                 err = "No such command in rename-command";
@@ -509,16 +549,15 @@ void loadServerConfigFromString(char *config) {
 
             /* If the target command name is the empty string we just
              * remove it from the command table. */
-            retval = dictDelete(server.commands, argv[1]);
-            serverAssert(retval == DICT_OK);
+            serverAssert(hashtableDelete(server.commands, argv[1]));
 
             /* Otherwise we re-add the command under a different name. */
             if (sdslen(argv[2]) != 0) {
-                sds copy = sdsdup(argv[2]);
-
-                retval = dictAdd(server.commands, copy, cmd);
-                if (retval != DICT_OK) {
-                    sdsfree(copy);
+                if (cmd->current_name != cmd->fullname) {
+                    sdsfree(cmd->current_name);
+                }
+                cmd->current_name = sdsdup(argv[2]);
+                if (!hashtableAdd(server.commands, cmd)) {
                     err = "Target command name already exists";
                     goto loaderr;
                 }
@@ -532,7 +571,7 @@ void loadServerConfigFromString(char *config) {
                 goto loaderr;
             }
         } else if (!strcasecmp(argv[0], "loadmodule") && argc >= 2) {
-            queueLoadModule(argv[1], &argv[2], argc - 2);
+            moduleEnqueueLoadModule(argv[1], &argv[2], argc - 2);
         } else if (strchr(argv[0], '.')) {
             if (argc < 2) {
                 err = "Module config specified without value";
@@ -579,16 +618,9 @@ void loadServerConfigFromString(char *config) {
         goto loaderr;
     }
 
-    /* in case cluster mode is enabled dbnum must be 1 */
-    if (server.cluster_enabled && server.dbnum > 1) {
-        serverLog(LL_WARNING, "WARNING: Changing databases number from %d to 1 since we are in cluster mode",
-                  server.dbnum);
-        server.dbnum = 1;
-    }
-
     /* To ensure backward compatibility and work while hz is out of range */
-    if (server.config_hz < CONFIG_MIN_HZ) server.config_hz = CONFIG_MIN_HZ;
-    if (server.config_hz > CONFIG_MAX_HZ) server.config_hz = CONFIG_MAX_HZ;
+    if (server.hz < CONFIG_MIN_HZ) server.hz = CONFIG_MIN_HZ;
+    if (server.hz > CONFIG_MAX_HZ) server.hz = CONFIG_MAX_HZ;
 
     sdsfreesplitres(lines, totlines);
     reading_config_file = 0;
@@ -796,7 +828,7 @@ void configSetCommand(client *c) {
 
         /* Note: it's important we run over ALL passed configs and check if we need to call
          * `redactClientCommandArgument()`. This is in order to avoid anyone using this command for a
-         * log/slowlog/monitor/etc. displaying sensitive info. So even if we encounter an error we still continue
+         * log/commandlog/monitor/etc. displaying sensitive info. So even if we encounter an error we still continue
          * running over the remaining arguments. */
         if (config->flags & SENSITIVE_CONFIG) {
             redactClientCommandArgument(c, 2 + i * 2 + 1);
@@ -916,6 +948,13 @@ end:
     listRelease(module_configs_apply);
 }
 
+/* Used by configGetCommand */
+static int configKeyCompare(const void *a, const void *b) {
+    const char *key_a = *(const char **)a;
+    const char *key_b = *(const char **)b;
+    return strcmp(key_a, key_b);
+}
+
 /*-----------------------------------------------------------------------------
  * CONFIG GET implementation
  *----------------------------------------------------------------------------*/
@@ -958,14 +997,30 @@ void configGetCommand(client *c) {
     }
 
     di = dictGetIterator(matches);
-    addReplyMapLen(c, dictSize(matches));
+    int n = dictSize(matches);
+    addReplyMapLen(c, n);
+
+    struct {
+        const char *key;
+        sds value;
+    } *sorted = zmalloc(sizeof(*sorted) * n);
+
+    i = 0;
     while ((de = dictNext(di)) != NULL) {
         standardConfig *config = (standardConfig *)dictGetVal(de);
-        addReplyBulkCString(c, dictGetKey(de));
-        addReplyBulkSds(c, config->interface.get(config));
+        sorted[i].key = dictGetKey(de);
+        sorted[i].value = config->interface.get(config);
+        i++;
     }
     dictReleaseIterator(di);
     dictRelease(matches);
+
+    qsort(sorted, n, sizeof(*sorted), configKeyCompare);
+    for (i = 0; i < n; i++) {
+        addReplyBulkCString(c, sorted[i].key);
+        addReplyBulkSds(c, sorted[i].value);
+    }
+    zfree(sorted);
 }
 
 /*-----------------------------------------------------------------------------
@@ -974,15 +1029,14 @@ void configGetCommand(client *c) {
 
 #define CONFIG_REWRITE_SIGNATURE "# Generated by CONFIG REWRITE"
 
-/* We use the following dictionary type to store where a configuration
- * option is mentioned in the old configuration file, so it's
- * like "maxmemory" -> list of line numbers (first line is zero). */
-void dictListDestructor(dict *d, void *val);
-
 /* Sentinel config rewriting is implemented inside sentinel.c by
  * rewriteConfigSentinelOption(). */
 void rewriteConfigSentinelOption(struct rewriteConfigState *state);
 
+/* We use the following dictionary type to store where a configuration
+ * option is mentioned in the old configuration file, so it's
+ * like "maxmemory" -> list of line numbers (first line is zero).
+ */
 dictType optionToLineDictType = {
     dictSdsCaseHash,       /* hash function */
     NULL,                  /* key dup */
@@ -1498,10 +1552,27 @@ void rewriteConfigOOMScoreAdjValuesOption(standardConfig *config, const char *na
 }
 
 /* Rewrite the bind option. */
-void rewriteConfigBindOption(standardConfig *config, const char *name, struct rewriteConfigState *state) {
+static void rewriteConfigBindOption(standardConfig *config, const char *name, struct rewriteConfigState *state, char **bindaddr, int bindaddr_count) {
     UNUSED(config);
     int force = 1;
     sds line, addresses;
+
+    /* Rewrite as bind <addr1> <addr2> ... <addrN> */
+    if (bindaddr_count > 0)
+        addresses = sdsjoin(bindaddr, bindaddr_count, " ");
+    else
+        addresses = sdsnew("\"\"");
+    line = sdsnew(name);
+    line = sdscatlen(line, " ", 1);
+    line = sdscatsds(line, addresses);
+    sdsfree(addresses);
+
+    rewriteConfigRewriteLine(state, name, line, force);
+}
+
+/* Rewrite the bind option. */
+static void rewriteConfigSocketBindOption(standardConfig *config, const char *name, struct rewriteConfigState *state) {
+    UNUSED(config);
     int is_default = 0;
 
     /* Compare server.bindaddr with CONFIG_DEFAULT_BINDADDR */
@@ -1521,17 +1592,7 @@ void rewriteConfigBindOption(standardConfig *config, const char *name, struct re
         return;
     }
 
-    /* Rewrite as bind <addr1> <addr2> ... <addrN> */
-    if (server.bindaddr_count > 0)
-        addresses = sdsjoin(server.bindaddr, server.bindaddr_count, " ");
-    else
-        addresses = sdsnew("\"\"");
-    line = sdsnew(name);
-    line = sdscatlen(line, " ", 1);
-    line = sdscatsds(line, addresses);
-    sdsfree(addresses);
-
-    rewriteConfigRewriteLine(state, name, line, force);
+    rewriteConfigBindOption(config, name, state, server.bindaddr, server.bindaddr_count);
 }
 
 /* Rewrite the loadmodule option. */
@@ -1542,12 +1603,7 @@ void rewriteConfigLoadmoduleOption(struct rewriteConfigState *state) {
     dictEntry *de;
     while ((de = dictNext(di)) != NULL) {
         struct ValkeyModule *module = dictGetVal(de);
-        line = sdsnew("loadmodule ");
-        line = sdscatsds(line, module->loadmod->path);
-        for (int i = 0; i < module->loadmod->argc; i++) {
-            line = sdscatlen(line, " ", 1);
-            line = sdscatsds(line, module->loadmod->argv[i]->ptr);
-        }
+        line = moduleLoadQueueEntryToLoadmoduleOptionStr(module, "loadmodule");
         rewriteConfigRewriteLine(state, "loadmodule", line, 1);
     }
     dictReleaseIterator(di);
@@ -1756,10 +1812,10 @@ int rewriteConfig(char *path, int force_write) {
 #define LOADBUF_SIZE 256
 static char loadbuf[LOADBUF_SIZE];
 
-#define embedCommonConfig(config_name, config_alias, config_flags)                                                     \
+#define embedCommonConfig(config_name, config_alias, config_flags) \
     .name = (config_name), .alias = (config_alias), .flags = (config_flags),
 
-#define embedConfigInterface(initfn, setfn, getfn, rewritefn, applyfn)                                                 \
+#define embedConfigInterface(initfn, setfn, getfn, rewritefn, applyfn) \
     .interface = {.init = (initfn), .set = (setfn), .get = (getfn), .rewrite = (rewritefn), .apply = (applyfn)},
 
 /* What follows is the generic config types that are supported. To add a new
@@ -1810,16 +1866,16 @@ static void boolConfigRewrite(standardConfig *config, const char *name, struct r
     rewriteConfigYesNoOption(state, name, val, config->data.yesno.default_value);
 }
 
-#define createBoolConfig(name, alias, flags, config_addr, default, is_valid, apply)                                    \
-    {                                                                                                                  \
-        embedCommonConfig(name, alias, flags)                                                                          \
-            embedConfigInterface(boolConfigInit, boolConfigSet, boolConfigGet, boolConfigRewrite, apply)               \
-                .type = BOOL_CONFIG,                                                                                   \
-          .data.yesno = {                                                                                              \
-              .config = &(config_addr),                                                                                \
-              .default_value = (default),                                                                              \
-              .is_valid_fn = (is_valid),                                                                               \
-          }                                                                                                            \
+#define createBoolConfig(name, alias, flags, config_addr, default, is_valid, apply)                      \
+    {                                                                                                    \
+        embedCommonConfig(name, alias, flags)                                                            \
+            embedConfigInterface(boolConfigInit, boolConfigSet, boolConfigGet, boolConfigRewrite, apply) \
+                .type = BOOL_CONFIG,                                                                     \
+          .data.yesno = {                                                                                \
+              .config = &(config_addr),                                                                  \
+              .default_value = (default),                                                                \
+              .is_valid_fn = (is_valid),                                                                 \
+          }                                                                                              \
     }
 
 /* String Configs */
@@ -1900,30 +1956,30 @@ static void sdsConfigRewrite(standardConfig *config, const char *name, struct re
 #define ALLOW_EMPTY_STRING 0
 #define EMPTY_STRING_IS_NULL 1
 
-#define createStringConfig(name, alias, flags, empty_to_null, config_addr, default, is_valid, apply)                   \
-    {                                                                                                                  \
-        embedCommonConfig(name, alias, flags)                                                                          \
-            embedConfigInterface(stringConfigInit, stringConfigSet, stringConfigGet, stringConfigRewrite, apply)       \
-                .type = STRING_CONFIG,                                                                                 \
-          .data.string = {                                                                                             \
-              .config = &(config_addr),                                                                                \
-              .default_value = (default),                                                                              \
-              .is_valid_fn = (is_valid),                                                                               \
-              .convert_empty_to_null = (empty_to_null),                                                                \
-          }                                                                                                            \
+#define createStringConfig(name, alias, flags, empty_to_null, config_addr, default, is_valid, apply)             \
+    {                                                                                                            \
+        embedCommonConfig(name, alias, flags)                                                                    \
+            embedConfigInterface(stringConfigInit, stringConfigSet, stringConfigGet, stringConfigRewrite, apply) \
+                .type = STRING_CONFIG,                                                                           \
+          .data.string = {                                                                                       \
+              .config = &(config_addr),                                                                          \
+              .default_value = (default),                                                                        \
+              .is_valid_fn = (is_valid),                                                                         \
+              .convert_empty_to_null = (empty_to_null),                                                          \
+          }                                                                                                      \
     }
 
-#define createSDSConfig(name, alias, flags, empty_to_null, config_addr, default, is_valid, apply)                      \
-    {                                                                                                                  \
-        embedCommonConfig(name, alias, flags)                                                                          \
-            embedConfigInterface(sdsConfigInit, sdsConfigSet, sdsConfigGet, sdsConfigRewrite, apply)                   \
-                .type = SDS_CONFIG,                                                                                    \
-          .data.sds = {                                                                                                \
-              .config = &(config_addr),                                                                                \
-              .default_value = (default),                                                                              \
-              .is_valid_fn = (is_valid),                                                                               \
-              .convert_empty_to_null = (empty_to_null),                                                                \
-          }                                                                                                            \
+#define createSDSConfig(name, alias, flags, empty_to_null, config_addr, default, is_valid, apply)    \
+    {                                                                                                \
+        embedCommonConfig(name, alias, flags)                                                        \
+            embedConfigInterface(sdsConfigInit, sdsConfigSet, sdsConfigGet, sdsConfigRewrite, apply) \
+                .type = SDS_CONFIG,                                                                  \
+          .data.sds = {                                                                              \
+              .config = &(config_addr),                                                              \
+              .default_value = (default),                                                            \
+              .is_valid_fn = (is_valid),                                                             \
+              .convert_empty_to_null = (empty_to_null),                                              \
+          }                                                                                          \
     }
 
 /* Enum configs */
@@ -1973,17 +2029,17 @@ static void enumConfigRewrite(standardConfig *config, const char *name, struct r
     rewriteConfigEnumOption(state, name, val, config);
 }
 
-#define createEnumConfig(name, alias, flags, enum, config_addr, default, is_valid, apply)                              \
-    {                                                                                                                  \
-        embedCommonConfig(name, alias, flags)                                                                          \
-            embedConfigInterface(enumConfigInit, enumConfigSet, enumConfigGet, enumConfigRewrite, apply)               \
-                .type = ENUM_CONFIG,                                                                                   \
-          .data.enumd = {                                                                                              \
-              .config = &(config_addr),                                                                                \
-              .default_value = (default),                                                                              \
-              .is_valid_fn = (is_valid),                                                                               \
-              .enum_value = (enum),                                                                                    \
-          }                                                                                                            \
+#define createEnumConfig(name, alias, flags, enum, config_addr, default, is_valid, apply)                \
+    {                                                                                                    \
+        embedCommonConfig(name, alias, flags)                                                            \
+            embedConfigInterface(enumConfigInit, enumConfigSet, enumConfigGet, enumConfigRewrite, apply) \
+                .type = ENUM_CONFIG,                                                                     \
+          .data.enumd = {                                                                                \
+              .config = &(config_addr),                                                                  \
+              .default_value = (default),                                                                \
+              .is_valid_fn = (is_valid),                                                                 \
+              .enum_value = (enum),                                                                      \
+          }                                                                                              \
     }
 
 /* Gets a 'long long val' and sets it into the union, using a macro to get
@@ -2018,30 +2074,30 @@ int setNumericType(standardConfig *config, long long val, const char **err) {
 
 /* Gets a 'long long val' and sets it with the value from the union, using a
  * macro to get compile time type check. */
-#define GET_NUMERIC_TYPE(val)                                                                                          \
-    if (config->data.numeric.numeric_type == NUMERIC_TYPE_INT) {                                                       \
-        val = *(config->data.numeric.config.i);                                                                        \
-    } else if (config->data.numeric.numeric_type == NUMERIC_TYPE_UINT) {                                               \
-        val = *(config->data.numeric.config.ui);                                                                       \
-    } else if (config->data.numeric.numeric_type == NUMERIC_TYPE_LONG) {                                               \
-        val = *(config->data.numeric.config.l);                                                                        \
-    } else if (config->data.numeric.numeric_type == NUMERIC_TYPE_ULONG) {                                              \
-        val = *(config->data.numeric.config.ul);                                                                       \
-    } else if (config->data.numeric.numeric_type == NUMERIC_TYPE_LONG_LONG) {                                          \
-        if (config->flags & MODULE_CONFIG)                                                                             \
-            val = getModuleNumericConfig(config->privdata);                                                            \
-        else                                                                                                           \
-            val = *(config->data.numeric.config.ll);                                                                   \
-    } else if (config->data.numeric.numeric_type == NUMERIC_TYPE_ULONG_LONG) {                                         \
-        val = *(config->data.numeric.config.ull);                                                                      \
-    } else if (config->data.numeric.numeric_type == NUMERIC_TYPE_SIZE_T) {                                             \
-        val = *(config->data.numeric.config.st);                                                                       \
-    } else if (config->data.numeric.numeric_type == NUMERIC_TYPE_SSIZE_T) {                                            \
-        val = *(config->data.numeric.config.sst);                                                                      \
-    } else if (config->data.numeric.numeric_type == NUMERIC_TYPE_OFF_T) {                                              \
-        val = *(config->data.numeric.config.ot);                                                                       \
-    } else if (config->data.numeric.numeric_type == NUMERIC_TYPE_TIME_T) {                                             \
-        val = *(config->data.numeric.config.tt);                                                                       \
+#define GET_NUMERIC_TYPE(val)                                                  \
+    if (config->data.numeric.numeric_type == NUMERIC_TYPE_INT) {               \
+        val = *(config->data.numeric.config.i);                                \
+    } else if (config->data.numeric.numeric_type == NUMERIC_TYPE_UINT) {       \
+        val = *(config->data.numeric.config.ui);                               \
+    } else if (config->data.numeric.numeric_type == NUMERIC_TYPE_LONG) {       \
+        val = *(config->data.numeric.config.l);                                \
+    } else if (config->data.numeric.numeric_type == NUMERIC_TYPE_ULONG) {      \
+        val = *(config->data.numeric.config.ul);                               \
+    } else if (config->data.numeric.numeric_type == NUMERIC_TYPE_LONG_LONG) {  \
+        if (config->flags & MODULE_CONFIG)                                     \
+            val = getModuleNumericConfig(config->privdata);                    \
+        else                                                                   \
+            val = *(config->data.numeric.config.ll);                           \
+    } else if (config->data.numeric.numeric_type == NUMERIC_TYPE_ULONG_LONG) { \
+        val = *(config->data.numeric.config.ull);                              \
+    } else if (config->data.numeric.numeric_type == NUMERIC_TYPE_SIZE_T) {     \
+        val = *(config->data.numeric.config.st);                               \
+    } else if (config->data.numeric.numeric_type == NUMERIC_TYPE_SSIZE_T) {    \
+        val = *(config->data.numeric.config.sst);                              \
+    } else if (config->data.numeric.numeric_type == NUMERIC_TYPE_OFF_T) {      \
+        val = *(config->data.numeric.config.ot);                               \
+    } else if (config->data.numeric.numeric_type == NUMERIC_TYPE_TIME_T) {     \
+        val = *(config->data.numeric.config.tt);                               \
     }
 
 /* Numeric configs */
@@ -2051,6 +2107,7 @@ static void numericConfigInit(standardConfig *config) {
 
 static int numericBoundaryCheck(standardConfig *config, long long ll, const char **err) {
     if (config->data.numeric.numeric_type == NUMERIC_TYPE_ULONG_LONG ||
+        config->data.numeric.numeric_type == NUMERIC_TYPE_ULONG ||
         config->data.numeric.numeric_type == NUMERIC_TYPE_UINT ||
         config->data.numeric.numeric_type == NUMERIC_TYPE_SIZE_T) {
         /* Boundary check for unsigned types */
@@ -2182,57 +2239,57 @@ static void numericConfigRewrite(standardConfig *config, const char *name, struc
     }
 }
 
-#define embedCommonNumericalConfig(name, alias, _flags, lower, upper, config_addr, default, num_conf_flags, is_valid,  \
-                                   apply)                                                                              \
-    {                                                                                                                  \
-        embedCommonConfig(name, alias, _flags)                                                                         \
-            embedConfigInterface(numericConfigInit, numericConfigSet, numericConfigGet, numericConfigRewrite, apply)   \
-                .type = NUMERIC_CONFIG,                                                                                \
-          .data.numeric = {                                                                                            \
-              .lower_bound = (lower),                                                                                  \
-              .upper_bound = (upper),                                                                                  \
-              .default_value = (default),                                                                              \
-              .is_valid_fn = (is_valid),                                                                               \
+#define embedCommonNumericalConfig(name, alias, _flags, lower, upper, config_addr, default, num_conf_flags, is_valid, \
+                                   apply)                                                                             \
+    {                                                                                                                 \
+        embedCommonConfig(name, alias, _flags)                                                                        \
+            embedConfigInterface(numericConfigInit, numericConfigSet, numericConfigGet, numericConfigRewrite, apply)  \
+                .type = NUMERIC_CONFIG,                                                                               \
+          .data.numeric = {                                                                                           \
+              .lower_bound = (lower),                                                                                 \
+              .upper_bound = (upper),                                                                                 \
+              .default_value = (default),                                                                             \
+              .is_valid_fn = (is_valid),                                                                              \
               .flags = (num_conf_flags),
 
-#define createIntConfig(name, alias, flags, lower, upper, config_addr, default, num_conf_flags, is_valid, apply)       \
-    embedCommonNumericalConfig(name, alias, flags, lower, upper, config_addr, default, num_conf_flags, is_valid,       \
-                               apply)                                                                                  \
-        .numeric_type = NUMERIC_TYPE_INT,                                                                              \
-  .config.i = &(config_addr)                                                                                           \
-    }                                                                                                                  \
+#define createIntConfig(name, alias, flags, lower, upper, config_addr, default, num_conf_flags, is_valid, apply) \
+    embedCommonNumericalConfig(name, alias, flags, lower, upper, config_addr, default, num_conf_flags, is_valid, \
+                               apply)                                                                            \
+        .numeric_type = NUMERIC_TYPE_INT,                                                                        \
+  .config.i = &(config_addr)                                                                                     \
+    }                                                                                                            \
     }
 
-#define createUIntConfig(name, alias, flags, lower, upper, config_addr, default, num_conf_flags, is_valid, apply)      \
-    embedCommonNumericalConfig(name, alias, flags, lower, upper, config_addr, default, num_conf_flags, is_valid,       \
-                               apply)                                                                                  \
-        .numeric_type = NUMERIC_TYPE_UINT,                                                                             \
-  .config.ui = &(config_addr)                                                                                          \
-    }                                                                                                                  \
+#define createUIntConfig(name, alias, flags, lower, upper, config_addr, default, num_conf_flags, is_valid, apply) \
+    embedCommonNumericalConfig(name, alias, flags, lower, upper, config_addr, default, num_conf_flags, is_valid,  \
+                               apply)                                                                             \
+        .numeric_type = NUMERIC_TYPE_UINT,                                                                        \
+  .config.ui = &(config_addr)                                                                                     \
+    }                                                                                                             \
     }
 
-#define createLongConfig(name, alias, flags, lower, upper, config_addr, default, num_conf_flags, is_valid, apply)      \
-    embedCommonNumericalConfig(name, alias, flags, lower, upper, config_addr, default, num_conf_flags, is_valid,       \
-                               apply)                                                                                  \
-        .numeric_type = NUMERIC_TYPE_LONG,                                                                             \
-  .config.l = &(config_addr)                                                                                           \
-    }                                                                                                                  \
+#define createLongConfig(name, alias, flags, lower, upper, config_addr, default, num_conf_flags, is_valid, apply) \
+    embedCommonNumericalConfig(name, alias, flags, lower, upper, config_addr, default, num_conf_flags, is_valid,  \
+                               apply)                                                                             \
+        .numeric_type = NUMERIC_TYPE_LONG,                                                                        \
+  .config.l = &(config_addr)                                                                                      \
+    }                                                                                                             \
     }
 
-#define createULongConfig(name, alias, flags, lower, upper, config_addr, default, num_conf_flags, is_valid, apply)     \
-    embedCommonNumericalConfig(name, alias, flags, lower, upper, config_addr, default, num_conf_flags, is_valid,       \
-                               apply)                                                                                  \
-        .numeric_type = NUMERIC_TYPE_ULONG,                                                                            \
-  .config.ul = &(config_addr)                                                                                          \
-    }                                                                                                                  \
+#define createULongConfig(name, alias, flags, lower, upper, config_addr, default, num_conf_flags, is_valid, apply) \
+    embedCommonNumericalConfig(name, alias, flags, lower, upper, config_addr, default, num_conf_flags, is_valid,   \
+                               apply)                                                                              \
+        .numeric_type = NUMERIC_TYPE_ULONG,                                                                        \
+  .config.ul = &(config_addr)                                                                                      \
+    }                                                                                                              \
     }
 
-#define createLongLongConfig(name, alias, flags, lower, upper, config_addr, default, num_conf_flags, is_valid, apply)  \
-    embedCommonNumericalConfig(name, alias, flags, lower, upper, config_addr, default, num_conf_flags, is_valid,       \
-                               apply)                                                                                  \
-        .numeric_type = NUMERIC_TYPE_LONG_LONG,                                                                        \
-  .config.ll = &(config_addr)                                                                                          \
-    }                                                                                                                  \
+#define createLongLongConfig(name, alias, flags, lower, upper, config_addr, default, num_conf_flags, is_valid, apply) \
+    embedCommonNumericalConfig(name, alias, flags, lower, upper, config_addr, default, num_conf_flags, is_valid,      \
+                               apply)                                                                                 \
+        .numeric_type = NUMERIC_TYPE_LONG_LONG,                                                                       \
+  .config.ll = &(config_addr)                                                                                         \
+    }                                                                                                                 \
     }
 
 #define createULongLongConfig(name, alias, flags, lower, upper, config_addr, default, num_conf_flags, is_valid, apply) \
@@ -2243,40 +2300,40 @@ static void numericConfigRewrite(standardConfig *config, const char *name, struc
     }                                                                                                                  \
     }
 
-#define createSizeTConfig(name, alias, flags, lower, upper, config_addr, default, num_conf_flags, is_valid, apply)     \
-    embedCommonNumericalConfig(name, alias, flags, lower, upper, config_addr, default, num_conf_flags, is_valid,       \
-                               apply)                                                                                  \
-        .numeric_type = NUMERIC_TYPE_SIZE_T,                                                                           \
-  .config.st = &(config_addr)                                                                                          \
-    }                                                                                                                  \
+#define createSizeTConfig(name, alias, flags, lower, upper, config_addr, default, num_conf_flags, is_valid, apply) \
+    embedCommonNumericalConfig(name, alias, flags, lower, upper, config_addr, default, num_conf_flags, is_valid,   \
+                               apply)                                                                              \
+        .numeric_type = NUMERIC_TYPE_SIZE_T,                                                                       \
+  .config.st = &(config_addr)                                                                                      \
+    }                                                                                                              \
     }
 
-#define createSSizeTConfig(name, alias, flags, lower, upper, config_addr, default, num_conf_flags, is_valid, apply)    \
-    embedCommonNumericalConfig(name, alias, flags, lower, upper, config_addr, default, num_conf_flags, is_valid,       \
-                               apply)                                                                                  \
-        .numeric_type = NUMERIC_TYPE_SSIZE_T,                                                                          \
-  .config.sst = &(config_addr)                                                                                         \
-    }                                                                                                                  \
+#define createSSizeTConfig(name, alias, flags, lower, upper, config_addr, default, num_conf_flags, is_valid, apply) \
+    embedCommonNumericalConfig(name, alias, flags, lower, upper, config_addr, default, num_conf_flags, is_valid,    \
+                               apply)                                                                               \
+        .numeric_type = NUMERIC_TYPE_SSIZE_T,                                                                       \
+  .config.sst = &(config_addr)                                                                                      \
+    }                                                                                                               \
     }
 
-#define createTimeTConfig(name, alias, flags, lower, upper, config_addr, default, num_conf_flags, is_valid, apply)     \
-    embedCommonNumericalConfig(name, alias, flags, lower, upper, config_addr, default, num_conf_flags, is_valid,       \
-                               apply)                                                                                  \
-        .numeric_type = NUMERIC_TYPE_TIME_T,                                                                           \
-  .config.tt = &(config_addr)                                                                                          \
-    }                                                                                                                  \
+#define createTimeTConfig(name, alias, flags, lower, upper, config_addr, default, num_conf_flags, is_valid, apply) \
+    embedCommonNumericalConfig(name, alias, flags, lower, upper, config_addr, default, num_conf_flags, is_valid,   \
+                               apply)                                                                              \
+        .numeric_type = NUMERIC_TYPE_TIME_T,                                                                       \
+  .config.tt = &(config_addr)                                                                                      \
+    }                                                                                                              \
     }
 
-#define createOffTConfig(name, alias, flags, lower, upper, config_addr, default, num_conf_flags, is_valid, apply)      \
-    embedCommonNumericalConfig(name, alias, flags, lower, upper, config_addr, default, num_conf_flags, is_valid,       \
-                               apply)                                                                                  \
-        .numeric_type = NUMERIC_TYPE_OFF_T,                                                                            \
-  .config.ot = &(config_addr)                                                                                          \
-    }                                                                                                                  \
+#define createOffTConfig(name, alias, flags, lower, upper, config_addr, default, num_conf_flags, is_valid, apply) \
+    embedCommonNumericalConfig(name, alias, flags, lower, upper, config_addr, default, num_conf_flags, is_valid,  \
+                               apply)                                                                             \
+        .numeric_type = NUMERIC_TYPE_OFF_T,                                                                       \
+  .config.ot = &(config_addr)                                                                                     \
+    }                                                                                                             \
     }
 
-#define createSpecialConfig(name, alias, modifiable, setfn, getfn, rewritefn, applyfn)                                 \
-    {.type = SPECIAL_CONFIG,                                                                                           \
+#define createSpecialConfig(name, alias, modifiable, setfn, getfn, rewritefn, applyfn) \
+    {.type = SPECIAL_CONFIG,                                                           \
      embedCommonConfig(name, alias, modifiable) embedConfigInterface(NULL, setfn, getfn, rewritefn, applyfn)}
 
 static int isValidActiveDefrag(int val, const char **err) {
@@ -2378,6 +2435,33 @@ static int isValidAnnouncedHostname(char *val, const char **err) {
     return 1;
 }
 
+static int isValidIpV4(char *val, const char **err) {
+    struct sockaddr_in sa;
+    if (val[0] != '\0' && inet_pton(AF_INET, val, &(sa.sin_addr)) == 0) {
+        *err = "Invalid IPv4 address";
+        return 0;
+    }
+    return 1;
+}
+
+static int isValidIpV6(char *val, const char **err) {
+    struct sockaddr_in6 sa;
+    if (val[0] != '\0' && inet_pton(AF_INET6, val, &(sa.sin6_addr)) == 0) {
+        *err = "Invalid IPv6 address";
+        return 0;
+    }
+    return 1;
+}
+
+static int isValidMptcp(int val, const char **err) {
+    if (val && !anetHasMptcp()) {
+        *err = "MPTCP is not supported on this platform";
+        return 0;
+    }
+
+    return 1;
+}
+
 /* Validate specified string is a valid proc-title-template */
 static int isValidProcTitleTemplate(char *val, const char **err) {
     if (!validateProcTitleTemplate(val)) {
@@ -2408,9 +2492,8 @@ static int updateHZ(const char **err) {
     UNUSED(err);
     /* Hz is more a hint from the user, so we accept values out of range
      * but cap them to reasonable values. */
-    if (server.config_hz < CONFIG_MIN_HZ) server.config_hz = CONFIG_MIN_HZ;
-    if (server.config_hz > CONFIG_MAX_HZ) server.config_hz = CONFIG_MAX_HZ;
-    server.hz = server.config_hz;
+    if (server.hz < CONFIG_MIN_HZ) server.hz = CONFIG_MIN_HZ;
+    if (server.hz > CONFIG_MAX_HZ) server.hz = CONFIG_MAX_HZ;
     return 1;
 }
 
@@ -2422,6 +2505,7 @@ static int updatePort(const char **err) {
     listener->bindaddr_count = server.bindaddr_count;
     listener->port = server.port;
     listener->ct = connectionByType(CONN_TYPE_SOCKET);
+    clusterUpdateMyselfAnnouncedPorts();
     if (changeListener(listener) == C_ERR) {
         *err = "Unable to listen on this port. Check server logs.";
         return 0;
@@ -2476,7 +2560,7 @@ static int updateWatchdogPeriod(const char **err) {
     return 1;
 }
 
-static int updateAppendonly(const char **err) {
+static int updateAppendOnly(const char **err) {
     if (!server.aof_enabled && server.aof_state != AOF_OFF) {
         stopAppendOnly();
     } else if (server.aof_enabled && server.aof_state == AOF_OFF) {
@@ -2499,7 +2583,7 @@ static int updateAofAutoGCEnabled(const char **err) {
 
 static int updateExtendedRedisCompat(const char **err) {
     UNUSED(err);
-    createSharedObjectsWithCompat();
+    updateSharedObjectsWithCompat();
     return 1;
 }
 
@@ -2580,7 +2664,7 @@ static int applyBind(const char **err) {
     tcp_listener->ct = connectionByType(CONN_TYPE_SOCKET);
     if (changeListener(tcp_listener) == C_ERR) {
         *err = "Failed to bind to specified addresses.";
-        if (tls_listener) closeListener(tls_listener); /* failed with TLS together */
+        if (tls_listener) connCloseListener(tls_listener); /* failed with TLS together */
         return 0;
     }
 
@@ -2592,7 +2676,7 @@ static int applyBind(const char **err) {
         tls_listener->ct = connectionByType(CONN_TYPE_TLS);
         if (changeListener(tls_listener) == C_ERR) {
             *err = "Failed to bind to specified addresses.";
-            closeListener(tcp_listener); /* failed with TCP together */
+            connCloseListener(tcp_listener); /* failed with TCP together */
             return 0;
         }
     }
@@ -2609,13 +2693,24 @@ int updateClusterFlags(const char **err) {
 static int updateClusterAnnouncedPort(const char **err) {
     UNUSED(err);
     clusterUpdateMyselfAnnouncedPorts();
-    clearCachedClusterSlotsResponse();
     return 1;
 }
 
 static int updateClusterIp(const char **err) {
     UNUSED(err);
     clusterUpdateMyselfIp();
+    return 1;
+}
+
+int updateClusterClientIpV4(const char **err) {
+    UNUSED(err);
+    clusterUpdateMyselfClientIpV4();
+    return 1;
+}
+
+int updateClusterClientIpV6(const char **err) {
+    UNUSED(err);
+    clusterUpdateMyselfClientIpV6();
     return 1;
 }
 
@@ -2656,6 +2751,7 @@ static int applyTLSPort(const char **err) {
     listener->bindaddr_count = server.bindaddr_count;
     listener->port = server.tls_port;
     listener->ct = connectionByType(CONN_TYPE_TLS);
+    clusterUpdateMyselfAnnouncedPorts();
     if (changeListener(listener) == C_ERR) {
         *err = "Unable to listen on this port. Check server logs.";
         return 0;
@@ -2853,8 +2949,9 @@ static sds getConfigNotifyKeyspaceEventsOption(standardConfig *config) {
     return keyspaceEventsFlagsToString(server.notify_keyspace_events);
 }
 
-static int setConfigBindOption(standardConfig *config, sds *argv, int argc, const char **err) {
+static int setConfigBindOption(standardConfig *config, sds *argv, int argc, const char **err, char **bindaddr, int *bindaddr_count) {
     UNUSED(config);
+    int orig_bindaddr_count = *bindaddr_count;
     int j;
 
     if (argc > CONFIG_BINDADDR_MAX) {
@@ -2866,11 +2963,73 @@ static int setConfigBindOption(standardConfig *config, sds *argv, int argc, cons
     if (argc == 1 && sdslen(argv[0]) == 0) argc = 0;
 
     /* Free old bind addresses */
-    for (j = 0; j < server.bindaddr_count; j++) {
-        zfree(server.bindaddr[j]);
+    for (j = 0; j < orig_bindaddr_count; j++) zfree(bindaddr[j]);
+    for (j = 0; j < argc; j++) bindaddr[j] = zstrdup(argv[j]);
+    *bindaddr_count = argc;
+
+    return 1;
+}
+
+static int setConfigSocketBindOption(standardConfig *config, sds *argv, int argc, const char **err) {
+    UNUSED(config);
+    return setConfigBindOption(config, argv, argc, err, server.bindaddr, &server.bindaddr_count);
+}
+
+static int setConfigRdmaBindOption(standardConfig *config, sds *argv, int argc, const char **err) {
+    UNUSED(config);
+    return setConfigBindOption(config, argv, argc, err, server.rdma_ctx_config.bindaddr, &server.rdma_ctx_config.bindaddr_count);
+}
+
+static sds getConfigRdmaBindOption(standardConfig *config) {
+    UNUSED(config);
+    return sdsjoin(server.rdma_ctx_config.bindaddr, server.rdma_ctx_config.bindaddr_count, " ");
+}
+
+static void rewriteConfigRdmaBindOption(standardConfig *config, const char *name, struct rewriteConfigState *state) {
+    UNUSED(config);
+
+    if (server.rdma_ctx_config.bindaddr_count) {
+        rewriteConfigBindOption(config, name, state, server.rdma_ctx_config.bindaddr,
+                                server.rdma_ctx_config.bindaddr_count);
     }
-    for (j = 0; j < argc; j++) server.bindaddr[j] = zstrdup(argv[j]);
-    server.bindaddr_count = argc;
+}
+
+static int applyRdmaBind(const char **err) {
+    connListener *rdma_listener = listenerByType(CONN_TYPE_RDMA);
+
+    if (!rdma_listener) {
+        *err = "No RDMA building support.";
+        return 0;
+    }
+
+    rdma_listener->bindaddr = server.rdma_ctx_config.bindaddr;
+    rdma_listener->bindaddr_count = server.rdma_ctx_config.bindaddr_count;
+    rdma_listener->port = server.rdma_ctx_config.port;
+    rdma_listener->ct = connectionByType(CONN_TYPE_RDMA);
+    if (changeListener(rdma_listener) == C_ERR) {
+        *err = "Failed to bind to specified addresses for RDMA.";
+        return 0;
+    }
+
+    return 1;
+}
+
+static int updateRdmaPort(const char **err) {
+    connListener *listener = listenerByType(CONN_TYPE_RDMA);
+
+    if (listener == NULL) {
+        *err = "No RDMA building support.";
+        return 0;
+    }
+
+    listener->bindaddr = server.rdma_ctx_config.bindaddr;
+    listener->bindaddr_count = server.rdma_ctx_config.bindaddr_count;
+    listener->port = server.rdma_ctx_config.port;
+    listener->ct = connectionByType(CONN_TYPE_RDMA);
+    if (changeListener(listener) == C_ERR) {
+        *err = "Unable to listen on this port for RDMA. Check server logs.";
+        return 0;
+    }
 
     return 1;
 }
@@ -3019,11 +3178,9 @@ static int applyClientMaxMemoryUsage(const char **err) {
 }
 
 standardConfig static_configs[] = {
-    /* clang-format off */
     /* Bool configs */
     createBoolConfig("rdbchecksum", NULL, IMMUTABLE_CONFIG, server.rdb_checksum, 1, NULL, NULL),
     createBoolConfig("daemonize", NULL, IMMUTABLE_CONFIG, server.daemonize, 0, NULL, NULL),
-    createBoolConfig("io-threads-do-reads", NULL, DEBUG_CONFIG | IMMUTABLE_CONFIG, server.io_threads_do_reads, 0, NULL, NULL), /* Read + parse from threads? */
     createBoolConfig("always-show-logo", NULL, IMMUTABLE_CONFIG, server.always_show_logo, 0, NULL, NULL),
     createBoolConfig("protected-mode", NULL, MODIFIABLE_CONFIG, server.protected_mode, 1, NULL, NULL),
     createBoolConfig("rdbcompression", NULL, MODIFIABLE_CONFIG, server.rdb_compression, 1, NULL, NULL),
@@ -3031,14 +3188,15 @@ standardConfig static_configs[] = {
     createBoolConfig("activerehashing", NULL, MODIFIABLE_CONFIG, server.activerehashing, 1, NULL, NULL),
     createBoolConfig("stop-writes-on-bgsave-error", NULL, MODIFIABLE_CONFIG, server.stop_writes_on_bgsave_err, 1, NULL, NULL),
     createBoolConfig("set-proc-title", NULL, IMMUTABLE_CONFIG, server.set_proc_title, 1, NULL, NULL), /* Should setproctitle be used? */
-    createBoolConfig("dynamic-hz", NULL, MODIFIABLE_CONFIG, server.dynamic_hz, 1, NULL, NULL), /* Adapt hz to # of clients.*/
-    createBoolConfig("lazyfree-lazy-eviction", NULL, DEBUG_CONFIG | MODIFIABLE_CONFIG, server.lazyfree_lazy_eviction, 0, NULL, NULL),
-    createBoolConfig("lazyfree-lazy-expire", NULL, DEBUG_CONFIG | MODIFIABLE_CONFIG, server.lazyfree_lazy_expire, 0, NULL, NULL),
-    createBoolConfig("lazyfree-lazy-server-del", NULL, DEBUG_CONFIG | MODIFIABLE_CONFIG, server.lazyfree_lazy_server_del, 0, NULL, NULL),
-    createBoolConfig("lazyfree-lazy-user-del", NULL, DEBUG_CONFIG | MODIFIABLE_CONFIG, server.lazyfree_lazy_user_del, 0, NULL, NULL),
-    createBoolConfig("lazyfree-lazy-user-flush", NULL, DEBUG_CONFIG | MODIFIABLE_CONFIG, server.lazyfree_lazy_user_flush, 0, NULL, NULL),
+    createBoolConfig("lazyfree-lazy-eviction", NULL, DEBUG_CONFIG | MODIFIABLE_CONFIG, server.lazyfree_lazy_eviction, 1, NULL, NULL),
+    createBoolConfig("lazyfree-lazy-expire", NULL, DEBUG_CONFIG | MODIFIABLE_CONFIG, server.lazyfree_lazy_expire, 1, NULL, NULL),
+    createBoolConfig("lazyfree-lazy-server-del", NULL, DEBUG_CONFIG | MODIFIABLE_CONFIG, server.lazyfree_lazy_server_del, 1, NULL, NULL),
+    createBoolConfig("lazyfree-lazy-user-del", NULL, DEBUG_CONFIG | MODIFIABLE_CONFIG, server.lazyfree_lazy_user_del, 1, NULL, NULL),
+    createBoolConfig("lazyfree-lazy-user-flush", NULL, DEBUG_CONFIG | MODIFIABLE_CONFIG, server.lazyfree_lazy_user_flush, 1, NULL, NULL),
     createBoolConfig("repl-disable-tcp-nodelay", NULL, MODIFIABLE_CONFIG, server.repl_disable_tcp_nodelay, 0, NULL, NULL),
+    createBoolConfig("repl-mptcp", NULL, IMMUTABLE_CONFIG, server.repl_mptcp, 0, isValidMptcp, NULL),
     createBoolConfig("repl-diskless-sync", NULL, DEBUG_CONFIG | MODIFIABLE_CONFIG, server.repl_diskless_sync, 1, NULL, NULL),
+    createBoolConfig("dual-channel-replication-enabled", NULL, DEBUG_CONFIG | MODIFIABLE_CONFIG, server.dual_channel_replication, 0, NULL, NULL),
     createBoolConfig("aof-rewrite-incremental-fsync", NULL, MODIFIABLE_CONFIG, server.aof_rewrite_incremental_fsync, 1, NULL, NULL),
     createBoolConfig("no-appendfsync-on-rewrite", NULL, MODIFIABLE_CONFIG, server.aof_no_fsync_on_rewrite, 0, NULL, NULL),
     createBoolConfig("cluster-require-full-coverage", NULL, MODIFIABLE_CONFIG, server.cluster_require_full_coverage, 1, NULL, NULL),
@@ -3047,15 +3205,15 @@ standardConfig static_configs[] = {
     createBoolConfig("aof-use-rdb-preamble", NULL, MODIFIABLE_CONFIG, server.aof_use_rdb_preamble, 1, NULL, NULL),
     createBoolConfig("aof-timestamp-enabled", NULL, MODIFIABLE_CONFIG, server.aof_timestamp_enabled, 0, NULL, NULL),
     createBoolConfig("cluster-replica-no-failover", "cluster-slave-no-failover", MODIFIABLE_CONFIG, server.cluster_replica_no_failover, 0, NULL, updateClusterFlags), /* Failover by default. */
-    createBoolConfig("replica-lazy-flush", "slave-lazy-flush", MODIFIABLE_CONFIG, server.repl_replica_lazy_flush, 0, NULL, NULL),
+    createBoolConfig("replica-lazy-flush", "slave-lazy-flush", MODIFIABLE_CONFIG, server.repl_replica_lazy_flush, 1, NULL, NULL),
     createBoolConfig("replica-serve-stale-data", "slave-serve-stale-data", MODIFIABLE_CONFIG, server.repl_serve_stale_data, 1, NULL, NULL),
     createBoolConfig("replica-read-only", "slave-read-only", DEBUG_CONFIG | MODIFIABLE_CONFIG, server.repl_replica_ro, 1, NULL, NULL),
     createBoolConfig("replica-ignore-maxmemory", "slave-ignore-maxmemory", MODIFIABLE_CONFIG, server.repl_replica_ignore_maxmemory, 1, NULL, NULL),
     createBoolConfig("jemalloc-bg-thread", NULL, MODIFIABLE_CONFIG, server.jemalloc_bg_thread, 1, NULL, updateJemallocBgThread),
-    createBoolConfig("activedefrag", NULL, DEBUG_CONFIG | MODIFIABLE_CONFIG, server.active_defrag_enabled, 0, isValidActiveDefrag, NULL),
+    createBoolConfig("activedefrag", NULL, DEBUG_CONFIG | MODIFIABLE_CONFIG, server.active_defrag_enabled, CONFIG_ACTIVE_DEFRAG_DEFAULT, isValidActiveDefrag, NULL),
     createBoolConfig("syslog-enabled", NULL, IMMUTABLE_CONFIG, server.syslog_enabled, 0, NULL, NULL),
     createBoolConfig("cluster-enabled", NULL, IMMUTABLE_CONFIG, server.cluster_enabled, 0, NULL, NULL),
-    createBoolConfig("appendonly", NULL, MODIFIABLE_CONFIG | DENY_LOADING_CONFIG, server.aof_enabled, 0, NULL, updateAppendonly),
+    createBoolConfig("appendonly", NULL, MODIFIABLE_CONFIG | DENY_LOADING_CONFIG, server.aof_enabled, 0, NULL, updateAppendOnly),
     createBoolConfig("cluster-allow-reads-when-down", NULL, MODIFIABLE_CONFIG, server.cluster_allow_reads_when_down, 0, NULL, NULL),
     createBoolConfig("cluster-allow-pubsubshard-when-down", NULL, MODIFIABLE_CONFIG, server.cluster_allow_pubsubshard_when_down, 1, NULL, NULL),
     createBoolConfig("crash-log-enabled", NULL, MODIFIABLE_CONFIG, server.crashlog_enabled, 1, NULL, updateSighandlerEnabled),
@@ -3069,14 +3227,20 @@ standardConfig static_configs[] = {
     createBoolConfig("replica-ignore-disk-write-errors", NULL, MODIFIABLE_CONFIG, server.repl_ignore_disk_write_error, 0, NULL, NULL),
     createBoolConfig("extended-redis-compatibility", NULL, MODIFIABLE_CONFIG, server.extended_redis_compat, 0, NULL, updateExtendedRedisCompat),
     createBoolConfig("enable-debug-assert", NULL, IMMUTABLE_CONFIG | HIDDEN_CONFIG, server.enable_debug_assert, 0, NULL, NULL),
+    createBoolConfig("cluster-slot-stats-enabled", NULL, MODIFIABLE_CONFIG, server.cluster_slot_stats_enabled, 0, NULL, NULL),
+    createBoolConfig("hide-user-data-from-log", NULL, MODIFIABLE_CONFIG, server.hide_user_data_from_log, 1, NULL, NULL),
+    createBoolConfig("import-mode", NULL, DEBUG_CONFIG | MODIFIABLE_CONFIG, server.import_mode, 0, NULL, NULL),
 
     /* String Configs */
     createStringConfig("aclfile", NULL, IMMUTABLE_CONFIG, ALLOW_EMPTY_STRING, server.acl_filename, "", NULL, NULL),
     createStringConfig("unixsocket", NULL, IMMUTABLE_CONFIG, EMPTY_STRING_IS_NULL, server.unixsocket, NULL, NULL, NULL),
+    createStringConfig("unixsocketgroup", NULL, IMMUTABLE_CONFIG, EMPTY_STRING_IS_NULL, server.unix_ctx_config.group, NULL, NULL, NULL),
     createStringConfig("pidfile", NULL, IMMUTABLE_CONFIG, EMPTY_STRING_IS_NULL, server.pidfile, NULL, NULL, NULL),
     createStringConfig("replica-announce-ip", "slave-announce-ip", MODIFIABLE_CONFIG, EMPTY_STRING_IS_NULL, server.replica_announce_ip, NULL, NULL, NULL),
     createStringConfig("primaryuser", "masteruser", MODIFIABLE_CONFIG | SENSITIVE_CONFIG, EMPTY_STRING_IS_NULL, server.primary_user, NULL, NULL, NULL),
     createStringConfig("cluster-announce-ip", NULL, MODIFIABLE_CONFIG, EMPTY_STRING_IS_NULL, server.cluster_announce_ip, NULL, NULL, updateClusterIp),
+    createStringConfig("cluster-announce-client-ipv4", NULL, MODIFIABLE_CONFIG, EMPTY_STRING_IS_NULL, server.cluster_announce_client_ipv4, NULL, isValidIpV4, updateClusterClientIpV4),
+    createStringConfig("cluster-announce-client-ipv6", NULL, MODIFIABLE_CONFIG, EMPTY_STRING_IS_NULL, server.cluster_announce_client_ipv6, NULL, isValidIpV6, updateClusterClientIpV6),
     createStringConfig("cluster-config-file", NULL, IMMUTABLE_CONFIG, ALLOW_EMPTY_STRING, server.cluster_configfile, "nodes.conf", isValidClusterConfigFile, NULL),
     createStringConfig("cluster-announce-hostname", NULL, MODIFIABLE_CONFIG, EMPTY_STRING_IS_NULL, server.cluster_announce_hostname, NULL, isValidAnnouncedHostname, updateClusterHostname),
     createStringConfig("cluster-announce-human-nodename", NULL, MODIFIABLE_CONFIG, EMPTY_STRING_IS_NULL, server.cluster_announce_human_nodename, NULL, isValidAnnouncedNodename, updateClusterHumanNodename),
@@ -3096,6 +3260,7 @@ standardConfig static_configs[] = {
     createStringConfig("req-res-logfile", NULL, IMMUTABLE_CONFIG | HIDDEN_CONFIG, EMPTY_STRING_IS_NULL, server.req_res_logfile, NULL, NULL, NULL),
 #endif
     createStringConfig("locale-collate", NULL, MODIFIABLE_CONFIG, ALLOW_EMPTY_STRING, server.locale_collate, "", NULL, updateLocaleCollate),
+    createStringConfig("debug-context", NULL, MODIFIABLE_CONFIG | DEBUG_CONFIG | HIDDEN_CONFIG, ALLOW_EMPTY_STRING, server.debug_context, "", NULL, NULL),
 
     /* SDS Configs */
     createSDSConfig("primaryauth", "masterauth", MODIFIABLE_CONFIG | SENSITIVE_CONFIG, EMPTY_STRING_IS_NULL, server.primary_auth, NULL, NULL, NULL),
@@ -3119,20 +3284,30 @@ standardConfig static_configs[] = {
     createEnumConfig("propagation-error-behavior", NULL, MODIFIABLE_CONFIG, propagation_error_behavior_enum, server.propagation_error_behavior, PROPAGATION_ERR_BEHAVIOR_IGNORE, NULL, NULL),
     createEnumConfig("shutdown-on-sigint", NULL, MODIFIABLE_CONFIG | MULTI_ARG_CONFIG, shutdown_on_sig_enum, server.shutdown_on_sigint, 0, isValidShutdownOnSigFlags, NULL),
     createEnumConfig("shutdown-on-sigterm", NULL, MODIFIABLE_CONFIG | MULTI_ARG_CONFIG, shutdown_on_sig_enum, server.shutdown_on_sigterm, 0, isValidShutdownOnSigFlags, NULL),
+    createEnumConfig("log-format", NULL, MODIFIABLE_CONFIG, log_format_enum, server.log_format, LOG_FORMAT_LEGACY, NULL, NULL),
+    createEnumConfig("log-timestamp-format", NULL, MODIFIABLE_CONFIG, log_timestamp_format_enum, server.log_timestamp_format, LOG_TIMESTAMP_LEGACY, NULL, NULL),
+    createEnumConfig("rdb-version-check", NULL, MODIFIABLE_CONFIG, rdb_version_check_enum, server.rdb_version_check, RDB_VERSION_CHECK_STRICT, NULL, NULL),
 
     /* Integer configs */
-    createIntConfig("databases", NULL, IMMUTABLE_CONFIG, 1, INT_MAX, server.dbnum, 16, INTEGER_CONFIG, NULL, NULL),
-    createIntConfig("port", NULL, MODIFIABLE_CONFIG, 0, 65535, server.port, 6379, INTEGER_CONFIG, NULL, updatePort), /* TCP port. */
-    createIntConfig("io-threads", NULL, DEBUG_CONFIG | IMMUTABLE_CONFIG, 1, 128, server.io_threads_num, 1, INTEGER_CONFIG, NULL, NULL), /* Single threaded by default */
+    createIntConfig("databases", NULL, IMMUTABLE_CONFIG, 1, INT_MAX, server.config_databases, 16, INTEGER_CONFIG, NULL, NULL),
+    createIntConfig("cluster-databases", NULL, IMMUTABLE_CONFIG, 1, INT_MAX, server.config_databases_cluster, 1, INTEGER_CONFIG, NULL, NULL),
+    createIntConfig("port", NULL, MODIFIABLE_CONFIG, 0, 65535, server.port, 6379, INTEGER_CONFIG, NULL, updatePort),                                               /* TCP port. */
+    createIntConfig("io-threads", NULL, DEBUG_CONFIG | MODIFIABLE_CONFIG, 1, IO_THREADS_MAX_NUM, server.io_threads_num, 1, INTEGER_CONFIG, NULL, updateIOThreads), /* Single threaded by default */
+    createIntConfig("events-per-io-thread", NULL, MODIFIABLE_CONFIG | HIDDEN_CONFIG, 0, INT_MAX, server.events_per_io_thread, 2, INTEGER_CONFIG, NULL, NULL),
+    createIntConfig("min-io-threads-avoid-copy-reply", NULL, MODIFIABLE_CONFIG | HIDDEN_CONFIG, 0, INT_MAX, server.min_io_threads_copy_avoid, 7, INTEGER_CONFIG, NULL, NULL),
+    createIntConfig("min-string-size-avoid-copy-reply", NULL, MODIFIABLE_CONFIG | HIDDEN_CONFIG, 0, INT_MAX, server.min_string_size_copy_avoid, 16384, INTEGER_CONFIG, NULL, NULL),
+    createIntConfig("min-string-size-avoid-copy-reply-threaded", NULL, MODIFIABLE_CONFIG | HIDDEN_CONFIG, 0, INT_MAX, server.min_string_size_copy_avoid_threaded, 65536, INTEGER_CONFIG, NULL, NULL),
+    createIntConfig("prefetch-batch-max-size", NULL, MODIFIABLE_CONFIG, 0, 128, server.prefetch_batch_max_size, 16, INTEGER_CONFIG, NULL, onMaxBatchSizeChange),
     createIntConfig("auto-aof-rewrite-percentage", NULL, MODIFIABLE_CONFIG, 0, INT_MAX, server.aof_rewrite_perc, 100, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("cluster-replica-validity-factor", "cluster-slave-validity-factor", MODIFIABLE_CONFIG, 0, INT_MAX, server.cluster_replica_validity_factor, 10, INTEGER_CONFIG, NULL, NULL), /* replica max data age factor. */
     createIntConfig("list-max-listpack-size", "list-max-ziplist-size", MODIFIABLE_CONFIG, INT_MIN, INT_MAX, server.list_max_listpack_size, -2, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("tcp-keepalive", NULL, MODIFIABLE_CONFIG, 0, INT_MAX, server.tcpkeepalive, 300, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("cluster-migration-barrier", NULL, MODIFIABLE_CONFIG, 0, INT_MAX, server.cluster_migration_barrier, 1, INTEGER_CONFIG, NULL, NULL),
-    createIntConfig("active-defrag-cycle-min", NULL, MODIFIABLE_CONFIG, 1, 99, server.active_defrag_cycle_min, 1, INTEGER_CONFIG, NULL, updateDefragConfiguration), /* Default: 1% CPU min (at lower threshold) */
-    createIntConfig("active-defrag-cycle-max", NULL, MODIFIABLE_CONFIG, 1, 99, server.active_defrag_cycle_max, 25, INTEGER_CONFIG, NULL, updateDefragConfiguration), /* Default: 25% CPU max (at upper threshold) */
-    createIntConfig("active-defrag-threshold-lower", NULL, MODIFIABLE_CONFIG, 0, 1000, server.active_defrag_threshold_lower, 10, INTEGER_CONFIG, NULL, NULL), /* Default: don't defrag when fragmentation is below 10% */
+    createIntConfig("active-defrag-cycle-min", NULL, MODIFIABLE_CONFIG, 1, 99, server.active_defrag_cpu_min, 1, INTEGER_CONFIG, NULL, updateDefragConfiguration),                   /* Default: 1% CPU min (at lower threshold) */
+    createIntConfig("active-defrag-cycle-max", NULL, MODIFIABLE_CONFIG, 1, 99, server.active_defrag_cpu_max, 25, INTEGER_CONFIG, NULL, updateDefragConfiguration),                  /* Default: 25% CPU max (at upper threshold) */
+    createIntConfig("active-defrag-threshold-lower", NULL, MODIFIABLE_CONFIG, 0, 1000, server.active_defrag_threshold_lower, 10, INTEGER_CONFIG, NULL, NULL),                       /* Default: don't defrag when fragmentation is below 10% */
     createIntConfig("active-defrag-threshold-upper", NULL, MODIFIABLE_CONFIG, 0, 1000, server.active_defrag_threshold_upper, 100, INTEGER_CONFIG, NULL, updateDefragConfiguration), /* Default: maximum defrag force at 100% fragmentation */
+    createIntConfig("active-defrag-cycle-us", NULL, MODIFIABLE_CONFIG, 0, 100000, server.active_defrag_cycle_us, 500, INTEGER_CONFIG, NULL, updateDefragConfiguration),
     createIntConfig("lfu-log-factor", NULL, MODIFIABLE_CONFIG, 0, INT_MAX, server.lfu_log_factor, 10, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("lfu-decay-time", NULL, MODIFIABLE_CONFIG, 0, INT_MAX, server.lfu_decay_time, 1, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("replica-priority", "slave-priority", MODIFIABLE_CONFIG, 0, INT_MAX, server.replica_priority, 100, INTEGER_CONFIG, NULL, NULL),
@@ -3142,26 +3317,32 @@ standardConfig static_configs[] = {
     createIntConfig("timeout", NULL, MODIFIABLE_CONFIG, 0, INT_MAX, server.maxidletime, 0, INTEGER_CONFIG, NULL, NULL), /* Default client timeout: infinite */
     createIntConfig("replica-announce-port", "slave-announce-port", MODIFIABLE_CONFIG, 0, 65535, server.replica_announce_port, 0, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("tcp-backlog", NULL, IMMUTABLE_CONFIG, 0, INT_MAX, server.tcp_backlog, 511, INTEGER_CONFIG, NULL, NULL), /* TCP listen backlog. */
+    createBoolConfig("mptcp", NULL, IMMUTABLE_CONFIG, server.mptcp, 0, isValidMptcp, NULL),                                  /* Multipath TCP. */
     createIntConfig("cluster-port", NULL, IMMUTABLE_CONFIG, 0, 65535, server.cluster_port, 0, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("cluster-announce-bus-port", NULL, MODIFIABLE_CONFIG, 0, 65535, server.cluster_announce_bus_port, 0, INTEGER_CONFIG, NULL, updateClusterAnnouncedPort), /* Default: Use +10000 offset. */
-    createIntConfig("cluster-announce-port", NULL, MODIFIABLE_CONFIG, 0, 65535, server.cluster_announce_port, 0, INTEGER_CONFIG, NULL, updateClusterAnnouncedPort), /* Use server.port */
+    createIntConfig("cluster-announce-port", NULL, MODIFIABLE_CONFIG, 0, 65535, server.cluster_announce_port, 0, INTEGER_CONFIG, NULL, updateClusterAnnouncedPort),         /* Use server.port */
     createIntConfig("cluster-announce-tls-port", NULL, MODIFIABLE_CONFIG, 0, 65535, server.cluster_announce_tls_port, 0, INTEGER_CONFIG, NULL, updateClusterAnnouncedPort), /* Use server.tls_port */
+    createIntConfig("cluster-announce-client-port", NULL, MODIFIABLE_CONFIG, 0, 65535, server.cluster_announce_client_port, 0, INTEGER_CONFIG, NULL, updateClusterAnnouncedPort),
+    createIntConfig("cluster-announce-client-tls-port", NULL, MODIFIABLE_CONFIG, 0, 65535, server.cluster_announce_client_tls_port, 0, INTEGER_CONFIG, NULL, updateClusterAnnouncedPort),
     createIntConfig("repl-timeout", NULL, MODIFIABLE_CONFIG, 1, INT_MAX, server.repl_timeout, 60, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("repl-ping-replica-period", "repl-ping-slave-period", MODIFIABLE_CONFIG, 1, INT_MAX, server.repl_ping_replica_period, 10, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("list-compress-depth", NULL, DEBUG_CONFIG | MODIFIABLE_CONFIG, 0, INT_MAX, server.list_compress_depth, 0, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("rdb-key-save-delay", NULL, MODIFIABLE_CONFIG | HIDDEN_CONFIG, INT_MIN, INT_MAX, server.rdb_key_save_delay, 0, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("key-load-delay", NULL, MODIFIABLE_CONFIG | HIDDEN_CONFIG, INT_MIN, INT_MAX, server.key_load_delay, 0, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("active-expire-effort", NULL, MODIFIABLE_CONFIG, 1, 10, server.active_expire_effort, 1, INTEGER_CONFIG, NULL, NULL), /* From 1 to 10. */
-    createIntConfig("hz", NULL, MODIFIABLE_CONFIG, 0, INT_MAX, server.config_hz, CONFIG_DEFAULT_HZ, INTEGER_CONFIG, NULL, updateHZ),
+    createIntConfig("hz", NULL, MODIFIABLE_CONFIG, 0, INT_MAX, server.hz, CONFIG_DEFAULT_HZ, INTEGER_CONFIG, NULL, updateHZ),
     createIntConfig("min-replicas-to-write", "min-slaves-to-write", MODIFIABLE_CONFIG, 0, INT_MAX, server.repl_min_replicas_to_write, 0, INTEGER_CONFIG, NULL, updateGoodReplicas),
     createIntConfig("min-replicas-max-lag", "min-slaves-max-lag", MODIFIABLE_CONFIG, 0, INT_MAX, server.repl_min_replicas_max_lag, 10, INTEGER_CONFIG, NULL, updateGoodReplicas),
     createIntConfig("watchdog-period", NULL, MODIFIABLE_CONFIG | HIDDEN_CONFIG, 0, INT_MAX, server.watchdog_period, 0, INTEGER_CONFIG, NULL, updateWatchdogPeriod),
     createIntConfig("shutdown-timeout", NULL, MODIFIABLE_CONFIG, 0, INT_MAX, server.shutdown_timeout, 10, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("repl-diskless-sync-max-replicas", NULL, MODIFIABLE_CONFIG, 0, INT_MAX, server.repl_diskless_sync_max_replicas, 0, INTEGER_CONFIG, NULL, NULL),
+    createIntConfig("rdma-port", NULL, MODIFIABLE_CONFIG, 0, 65535, server.rdma_ctx_config.port, 0, INTEGER_CONFIG, NULL, updateRdmaPort),
+    createIntConfig("rdma-rx-size", NULL, IMMUTABLE_CONFIG, 64 * 1024, 16 * 1024 * 1024, server.rdma_ctx_config.rx_size, 1024 * 1024, INTEGER_CONFIG, NULL, NULL),
+    createIntConfig("rdma-completion-vector", NULL, IMMUTABLE_CONFIG, -1, 1024, server.rdma_ctx_config.completion_vector, -1, INTEGER_CONFIG, NULL, NULL),
 
     /* Unsigned int configs */
     createUIntConfig("maxclients", NULL, MODIFIABLE_CONFIG, 1, UINT_MAX, server.maxclients, 10000, INTEGER_CONFIG, NULL, updateMaxclients),
-    createUIntConfig("unixsocketperm", NULL, IMMUTABLE_CONFIG, 0, 0777, server.unixsocketperm, 0, OCTAL_CONFIG, NULL, NULL),
+    createUIntConfig("unixsocketperm", NULL, IMMUTABLE_CONFIG, 0, 0777, server.unix_ctx_config.perm, 0, OCTAL_CONFIG, NULL, NULL),
     createUIntConfig("socket-mark-id", NULL, IMMUTABLE_CONFIG, 0, UINT_MAX, server.socket_mark_id, 0, INTEGER_CONFIG, NULL, NULL),
     createUIntConfig("max-new-connections-per-cycle", NULL, MODIFIABLE_CONFIG, 1, 1000, server.max_new_conns_per_cycle, 10, INTEGER_CONFIG, NULL, NULL),
     createUIntConfig("max-new-tls-connections-per-cycle", NULL, MODIFIABLE_CONFIG, 1, 1000, server.max_new_tls_conns_per_cycle, 1, INTEGER_CONFIG, NULL, NULL),
@@ -3171,18 +3352,25 @@ standardConfig static_configs[] = {
 
     /* Unsigned Long configs */
     createULongConfig("active-defrag-max-scan-fields", NULL, MODIFIABLE_CONFIG, 1, LONG_MAX, server.active_defrag_max_scan_fields, 1000, INTEGER_CONFIG, NULL, NULL), /* Default: keys with more than 1000 fields will be processed separately */
-    createULongConfig("slowlog-max-len", NULL, MODIFIABLE_CONFIG, 0, LONG_MAX, server.slowlog_max_len, 128, INTEGER_CONFIG, NULL, NULL),
+    createULongConfig("commandlog-slow-execution-max-len", "slowlog-max-len", MODIFIABLE_CONFIG, 0, LONG_MAX, server.commandlog[COMMANDLOG_TYPE_SLOW].max_len, 128, INTEGER_CONFIG, NULL, NULL),
+    createULongConfig("commandlog-large-request-max-len", NULL, MODIFIABLE_CONFIG, 0, LONG_MAX, server.commandlog[COMMANDLOG_TYPE_LARGE_REQUEST].max_len, 128, INTEGER_CONFIG, NULL, NULL),
+    createULongConfig("commandlog-large-reply-max-len", NULL, MODIFIABLE_CONFIG, 0, LONG_MAX, server.commandlog[COMMANDLOG_TYPE_LARGE_REPLY].max_len, 128, INTEGER_CONFIG, NULL, NULL),
     createULongConfig("acllog-max-len", NULL, MODIFIABLE_CONFIG, 0, LONG_MAX, server.acllog_max_len, 128, INTEGER_CONFIG, NULL, NULL),
+    createULongConfig("cluster-blacklist-ttl", NULL, MODIFIABLE_CONFIG, 0, ULONG_MAX, server.cluster_blacklist_ttl, 60, INTEGER_CONFIG, NULL, NULL),
+    createULongConfig("cluster-slot-migration-log-max-len", NULL, MODIFIABLE_CONFIG, 0, LONG_MAX, server.cluster_slot_migration_log_max_len, 1000, INTEGER_CONFIG, NULL, NULL),
 
     /* Long Long configs */
     createLongLongConfig("busy-reply-threshold", "lua-time-limit", MODIFIABLE_CONFIG, 0, LONG_MAX, server.busy_reply_threshold, 5000, INTEGER_CONFIG, NULL, NULL), /* milliseconds */
     createLongLongConfig("cluster-node-timeout", NULL, MODIFIABLE_CONFIG, 0, LLONG_MAX, server.cluster_node_timeout, 15000, INTEGER_CONFIG, NULL, NULL),
     createLongLongConfig("cluster-ping-interval", NULL, MODIFIABLE_CONFIG | HIDDEN_CONFIG, 0, LLONG_MAX, server.cluster_ping_interval, 0, INTEGER_CONFIG, NULL, NULL),
-    createLongLongConfig("slowlog-log-slower-than", NULL, MODIFIABLE_CONFIG, -1, LLONG_MAX, server.slowlog_log_slower_than, 10000, INTEGER_CONFIG, NULL, NULL),
+    createLongLongConfig("commandlog-execution-slower-than", "slowlog-log-slower-than", MODIFIABLE_CONFIG, -1, LLONG_MAX, server.commandlog[COMMANDLOG_TYPE_SLOW].threshold, 10000, INTEGER_CONFIG, NULL, NULL),
+    createLongLongConfig("commandlog-request-larger-than", NULL, MODIFIABLE_CONFIG, -1, LLONG_MAX, server.commandlog[COMMANDLOG_TYPE_LARGE_REQUEST].threshold, 1024 * 1024, INTEGER_CONFIG, NULL, NULL),
+    createLongLongConfig("commandlog-reply-larger-than", NULL, MODIFIABLE_CONFIG, -1, LLONG_MAX, server.commandlog[COMMANDLOG_TYPE_LARGE_REPLY].threshold, 1024 * 1024, INTEGER_CONFIG, NULL, NULL),
     createLongLongConfig("latency-monitor-threshold", NULL, MODIFIABLE_CONFIG, 0, LLONG_MAX, server.latency_monitor_threshold, 0, INTEGER_CONFIG, NULL, NULL),
     createLongLongConfig("proto-max-bulk-len", NULL, DEBUG_CONFIG | MODIFIABLE_CONFIG, 1024 * 1024, LONG_MAX, server.proto_max_bulk_len, 512ll * 1024 * 1024, MEMORY_CONFIG, NULL, NULL), /* Bulk request max size */
     createLongLongConfig("stream-node-max-entries", NULL, MODIFIABLE_CONFIG, 0, LLONG_MAX, server.stream_node_max_entries, 100, INTEGER_CONFIG, NULL, NULL),
-    createLongLongConfig("repl-backlog-size", NULL, MODIFIABLE_CONFIG, 1, LLONG_MAX, server.repl_backlog_size, 1024 * 1024, MEMORY_CONFIG, NULL, updateReplBacklogSize), /* Default: 1mb */
+    createLongLongConfig("repl-backlog-size", NULL, MODIFIABLE_CONFIG, 1, LLONG_MAX, server.repl_backlog_size, 10 * 1024 * 1024, MEMORY_CONFIG, NULL, updateReplBacklogSize), /* Default: 10mb */
+    createLongLongConfig("cluster-manual-failover-timeout", NULL, MODIFIABLE_CONFIG, 1, INT_MAX, server.cluster_mf_timeout, 5000, INTEGER_CONFIG, NULL, NULL),
 
     /* Unsigned Long Long configs */
     createULongLongConfig("maxmemory", NULL, MODIFIABLE_CONFIG, 0, ULLONG_MAX, server.maxmemory, 0, MEMORY_CONFIG, NULL, updateMaxmemory),
@@ -3199,9 +3387,10 @@ standardConfig static_configs[] = {
     createSizeTConfig("stream-node-max-bytes", NULL, MODIFIABLE_CONFIG, 0, LONG_MAX, server.stream_node_max_bytes, 4096, MEMORY_CONFIG, NULL, NULL),
     createSizeTConfig("zset-max-listpack-value", "zset-max-ziplist-value", MODIFIABLE_CONFIG, 0, LONG_MAX, server.zset_max_listpack_value, 64, MEMORY_CONFIG, NULL, NULL),
     createSizeTConfig("hll-sparse-max-bytes", NULL, MODIFIABLE_CONFIG, 0, LONG_MAX, server.hll_sparse_max_bytes, 3000, MEMORY_CONFIG, NULL, NULL),
-    createSizeTConfig("tracking-table-max-keys", NULL, MODIFIABLE_CONFIG, 0, LONG_MAX, server.tracking_table_max_keys, 1000000, INTEGER_CONFIG, NULL, NULL), /* Default: 1 million keys max. */
+    createSizeTConfig("tracking-table-max-keys", NULL, MODIFIABLE_CONFIG, 0, LONG_MAX, server.tracking_table_max_keys, 1000000, INTEGER_CONFIG, NULL, NULL),                                      /* Default: 1 million keys max. */
     createSizeTConfig("client-query-buffer-limit", NULL, DEBUG_CONFIG | MODIFIABLE_CONFIG, 1024 * 1024, LONG_MAX, server.client_max_querybuf_len, 1024 * 1024 * 1024, MEMORY_CONFIG, NULL, NULL), /* Default: 1GB max query buffer. */
     createSSizeTConfig("maxmemory-clients", NULL, MODIFIABLE_CONFIG, -100, SSIZE_MAX, server.maxmemory_clients, 0, MEMORY_CONFIG | PERCENT_CONFIG, NULL, applyClientMaxMemoryUsage),
+    createSSizeTConfig("slot-migration-max-failover-repl-bytes", NULL, MODIFIABLE_CONFIG, -1, SSIZE_MAX, server.slot_migration_max_failover_repl_bytes, 0, MEMORY_CONFIG, NULL, NULL),
 
     /* Other configs */
     createTimeTConfig("repl-backlog-ttl", NULL, MODIFIABLE_CONFIG, 0, LONG_MAX, server.repl_backlog_time_limit, 60 * 60, INTEGER_CONFIG, NULL, NULL), /* Default: 1 hour */
@@ -3215,6 +3404,7 @@ standardConfig static_configs[] = {
     createBoolConfig("tls-cluster", NULL, MODIFIABLE_CONFIG, server.tls_cluster, 0, NULL, applyTlsCfg),
     createBoolConfig("tls-replication", NULL, MODIFIABLE_CONFIG, server.tls_replication, 0, NULL, applyTlsCfg),
     createEnumConfig("tls-auth-clients", NULL, MODIFIABLE_CONFIG, tls_auth_clients_enum, server.tls_auth_clients, TLS_CLIENT_AUTH_YES, NULL, NULL),
+    createEnumConfig("tls-auth-clients-user", NULL, MODIFIABLE_CONFIG, tls_client_auth_user_enum, server.tls_ctx_config.client_auth_user, TLS_CLIENT_FIELD_OFF, NULL, NULL),
     createBoolConfig("tls-prefer-server-ciphers", NULL, MODIFIABLE_CONFIG, server.tls_ctx_config.prefer_server_ciphers, 0, NULL, applyTlsCfg),
     createBoolConfig("tls-session-caching", NULL, MODIFIABLE_CONFIG, server.tls_ctx_config.session_caching, 1, NULL, applyTlsCfg),
     createStringConfig("tls-cert-file", NULL, VOLATILE_CONFIG | MODIFIABLE_CONFIG, EMPTY_STRING_IS_NULL, server.tls_ctx_config.cert_file, NULL, NULL, applyTlsCfg),
@@ -3236,13 +3426,13 @@ standardConfig static_configs[] = {
     createSpecialConfig("client-output-buffer-limit", NULL, MODIFIABLE_CONFIG | MULTI_ARG_CONFIG, setConfigClientOutputBufferLimitOption, getConfigClientOutputBufferLimitOption, rewriteConfigClientOutputBufferLimitOption, NULL),
     createSpecialConfig("oom-score-adj-values", NULL, MODIFIABLE_CONFIG | MULTI_ARG_CONFIG, setConfigOOMScoreAdjValuesOption, getConfigOOMScoreAdjValuesOption, rewriteConfigOOMScoreAdjValuesOption, updateOOMScoreAdj),
     createSpecialConfig("notify-keyspace-events", NULL, MODIFIABLE_CONFIG, setConfigNotifyKeyspaceEventsOption, getConfigNotifyKeyspaceEventsOption, rewriteConfigNotifyKeyspaceEventsOption, NULL),
-    createSpecialConfig("bind", NULL, MODIFIABLE_CONFIG | MULTI_ARG_CONFIG, setConfigBindOption, getConfigBindOption, rewriteConfigBindOption, applyBind),
+    createSpecialConfig("bind", NULL, MODIFIABLE_CONFIG | MULTI_ARG_CONFIG, setConfigSocketBindOption, getConfigBindOption, rewriteConfigSocketBindOption, applyBind),
+    createSpecialConfig("rdma-bind", NULL, MODIFIABLE_CONFIG | MULTI_ARG_CONFIG, setConfigRdmaBindOption, getConfigRdmaBindOption, rewriteConfigRdmaBindOption, applyRdmaBind),
     createSpecialConfig("replicaof", "slaveof", IMMUTABLE_CONFIG | MULTI_ARG_CONFIG, setConfigReplicaOfOption, getConfigReplicaOfOption, rewriteConfigReplicaOfOption, NULL),
     createSpecialConfig("latency-tracking-info-percentiles", NULL, MODIFIABLE_CONFIG | MULTI_ARG_CONFIG, setConfigLatencyTrackingInfoPercentilesOutputOption, getConfigLatencyTrackingInfoPercentilesOutputOption, rewriteConfigLatencyTrackingInfoPercentilesOutputOption, NULL),
 
     /* NULL Terminator, this is dropped when we convert to the runtime array. */
-    {NULL}
-    /* clang-format on */
+    {NULL},
 };
 
 /* Create a new config by copying the passed in config. Returns 1 on success
@@ -3380,6 +3570,7 @@ void configHelpCommand(client *c) {
 
 void configResetStatCommand(client *c) {
     resetServerStats();
+    resetClusterStats();
     resetCommandTableStats(server.commands);
     resetErrorTableStats();
     addReply(c, shared.ok);

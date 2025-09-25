@@ -1,4 +1,30 @@
 start_server {tags {"hll"}} {
+    test {CVE-2025-32023: Sparse HLL XZERO overflow triggers crash} {
+        # Build a valid HLL header for sparse encoding
+        set hll [binary format cccc 72 89 76 76] ; # "HYLL"
+        append hll [binary format cccc 1 0 0 0] ; # encoding=sparse, 3 reserved
+        append hll [binary format cccccccc 0 0 0 0 0 0 0 0] ; # cached cardinality
+
+        # We need alternating XZERO and ZERO opcodes to build up a large enough
+        # HyperLogLog value that will overflow the runlength.
+        # 0x7f 0xff is the XZERO opcode that sets the index to 16384.
+        # 0x3f is the ZERO opcode that sets the index to 256.
+        # We repeat this pattern at least 33554432 times to overflow the runlength,
+        # 50331648 is just 33554432 * 1.5, which is just a round number.
+        append hll [string repeat [binary format ccc 0x7f 0xff 0x3f] 50331648]
+
+        # We need an actual value at the end to trigger the out of bounds write
+        append hll [binary format c 0x80]
+
+        # Set the raw value into the key
+        r set hll_overflow $hll
+        r pfadd hll_merge_source hi
+
+        # Test pfadd and pfmerge, these used to crash but now error
+        assert_error {*INVALIDOBJ*} {r pfmerge fail_target hll_overflow hll_merge_source}
+        assert_error {*INVALIDOBJ*} {r pfadd hll_overflow foo}
+    } {} {large-memory}
+
     test {HyperLogLog self test passes} {
         catch {r pfselftest} e
         set e
@@ -221,6 +247,46 @@ start_server {tags {"hll"}} {
         assert_equal 1 [r exists destkey]
         assert_equal 3 [r pfcount destkey]
     }
+
+    test {PFMERGE results with simd} {
+        r del hllscalar{t} hllsimd{t} hll1{t} hll2{t} hll3{t}
+        for {set x 1} {$x < 2000} {incr x} {
+            r pfadd hll1{t} [expr rand()]
+        }
+        for {set x 1} {$x < 4000} {incr x} {
+            r pfadd hll2{t} [expr rand()]
+        }
+        for {set x 1} {$x < 8000} {incr x} {
+            r pfadd hll3{t} [expr rand()]
+        }
+        assert {[r pfcount hll1{t}] > 0}
+        assert {[r pfcount hll2{t}] > 0}
+        assert {[r pfcount hll3{t}] > 0}
+
+        r pfdebug simd off
+        set scalar [r pfcount hll1{t} hll2{t} hll3{t}]
+        r pfdebug simd on
+        set simd [r pfcount hll1{t} hll2{t} hll3{t}]
+        assert {$scalar > 0}
+        assert {$simd > 0}
+        assert_equal $scalar $simd
+
+        r pfdebug simd off
+        r pfmerge hllscalar{t} hll1{t} hll2{t} hll3{t}
+        r pfdebug simd on
+        r pfmerge hllsimd{t} hll1{t} hll2{t} hll3{t}
+
+        set scalar [r pfcount hllscalar{t}]
+        set simd [r pfcount hllsimd{t}]
+        assert {$scalar > 0}
+        assert {$simd > 0}
+        assert_equal $scalar $simd
+
+        set scalar [r get hllscalar{t}]
+        set simd [r get hllsimd{t}]
+        assert_equal $scalar $simd
+
+    } {} {needs:pfdebug}
 
     test {PFCOUNT multiple-keys merge returns cardinality of union #1} {
         r del hll1{t} hll2{t} hll3{t}

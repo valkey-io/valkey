@@ -1,6 +1,6 @@
 /* Linux epoll(2) based ae.c module
  *
- * Copyright (c) 2009-2012, Salvatore Sanfilippo <antirez at gmail dot com>
+ * Copyright (c) 2009-2012, Redis Ltd.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -87,10 +87,12 @@ static int aeApiAddEvent(aeEventLoop *eventLoop, int fd, int mask) {
     return 0;
 }
 
-static void aeApiDelEvent(aeEventLoop *eventLoop, int fd, int delmask) {
+static void aeApiDelEvent(aeEventLoop *eventLoop, int fd, int mask) {
     aeApiState *state = eventLoop->apidata;
     struct epoll_event ee = {0}; /* avoid valgrind warning */
-    int mask = eventLoop->events[fd].mask & (~delmask);
+
+    /* We rely on the fact that our caller has already updated the mask in the eventLoop. */
+    mask = eventLoop->events[fd].mask;
 
     ee.events = 0;
     if (mask & AE_READABLE) ee.events |= EPOLLIN;

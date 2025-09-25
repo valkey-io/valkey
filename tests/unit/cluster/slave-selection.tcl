@@ -94,7 +94,7 @@ test "Wait for the node #10 to return alive before ending the test" {
 
 test "Cluster should eventually be up again" {
     for {set j 0} {$j < [llength $::servers]} {incr j} {
-        if {[process_is_paused $paused_pid]} continue
+        if {[process_is_paused [srv -$j pid]]} continue
         wait_for_condition 1000 50 {
             [CI $j cluster_state] eq "ok"
         } else {
@@ -105,7 +105,10 @@ test "Cluster should eventually be up again" {
 
 test "Node #10 should eventually replicate node #5" {
     set port5 [srv -5 port]
-    wait_for_condition 1000 50 {
+    # Valgrind runs are significantly slower and occasionally need more time
+    # for the cluster to propagate the new primary. Use a larger timeout to
+    # avoid spurious failures in slow environments.
+    wait_for_condition 2000 50 {
         ([lindex [R 10 role] 2] == $port5) &&
         ([lindex [R 10 role] 3] eq {connected})
     } else {
@@ -183,14 +186,14 @@ test "New Master down consecutively" {
 
         set paused_pid [srv [expr $master_id * -1] pid]
         pause_process $paused_pid
-        wait_for_condition 1000 50 {
+        wait_for_condition 2000 50 {
             [master_detected $instances]
         } else {
             fail "No failover detected when master $master_id fails"
         }
 
         for {set j 0} {$j < [llength $::servers]} {incr j} {
-            if {[process_is_paused $paused_pid]} continue
+            if {[process_is_paused [srv -$j pid]]} continue
             wait_for_condition 1000 50 {
                 [CI $j cluster_state] eq "ok"
             } else {

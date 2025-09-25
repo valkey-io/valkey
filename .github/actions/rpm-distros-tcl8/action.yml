@@ -1,0 +1,31 @@
+name: 'Install TCL8'
+description: 'Installs tcl8 and tcltls from source on Fedora-based or uses the system package on others.'
+
+inputs:
+  matrix_name:
+    description: 'The name of the matrix to check for fedora'
+    required: true
+
+runs:
+  using: "composite"
+  steps:
+    # Fedora 42 comes with Tcl 9 by default, but tcltls is currently incompatible with Tcl 9.
+    # As a workaround, we install Tcl 8 and manually build tcltls 1.7.22 from source.
+    # Once tcltls adds support for Tcl 9, this logic can be removed and system packages used instead.
+    - run: |
+        if [[ "${{ inputs.matrix_name }}" =~ "fedora" ]]; then
+          dnf -y install tcl8 tcl8-devel gcc make awk openssl openssl-devel
+          ln -s /usr/bin/tclsh8.6 /usr/bin/tclsh
+          curl -LO https://core.tcl-lang.org/tcltls/uv/tcltls-1.7.22.tar.gz
+          tar -xzf tcltls-1.7.22.tar.gz
+          pushd tcltls-1.7.22
+          ./configure --with-tcl=/usr/lib64/tcl8.6
+          make
+          mkdir -p /usr/lib64/tcl8.6/tls1.7.22
+          cp tcltls.so pkgIndex.tcl /usr/lib64/tcl8.6/tls1.7.22/
+          popd
+        else
+            dnf -y install tcl tcltls
+        fi
+        ./utils/gen-test-certs.sh
+      shell: bash

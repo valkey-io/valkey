@@ -52,6 +52,10 @@ proc kb {v} {
 start_server {} {
     set maxmemory_clients 3000000
     r config set maxmemory-clients $maxmemory_clients
+    # Disable copy avoidance because it affects memory usage
+    r config set min-io-threads-avoid-copy-reply 0
+    r config set min-string-size-avoid-copy-reply 0
+    r config set min-string-size-avoid-copy-reply-threaded 0
 
     test "client evicted due to large argv" {
         r flushdb
@@ -91,17 +95,31 @@ start_server {} {
         lassign [gen_client] rr cname
         # Attempt to fill the query buff with only half the percentage threshold verify we're not disconnected
         set n [expr $maxmemory_clients_actual / 2]
-        $rr write [join [list "*1\r\n\$$n\r\n" [string repeat v $n]] ""]
+        # send incomplete command (n - 1) to make sure we don't use the shared qb
+        $rr write [join [list "*1\r\n\$$n\r\n" [string repeat v [expr {$n - 1}]]] ""]
         $rr flush
+        # Wait for the client to start using a private query buffer. 
+        wait_for_condition 10 10 {
+            [client_field $cname qbuf] > 0
+        } else {
+            fail "client should start using a private query buffer"
+        }
         set tot_mem [client_field $cname tot-mem]
         assert {$tot_mem >= $n && $tot_mem < $maxmemory_clients_actual}
 
         # Attempt to fill the query buff with the percentage threshold of maxmemory and verify we're evicted
         $rr close
         lassign [gen_client] rr cname
+        # send incomplete command (maxmemory_clients_actual - 1) to make sure we don't use the shared qb
         catch {
-            $rr write [join [list "*1\r\n\$$maxmemory_clients_actual\r\n" [string repeat v $maxmemory_clients_actual]] ""]
+            $rr write [join [list "*1\r\n\$$maxmemory_clients_actual\r\n" [string repeat v [expr {$maxmemory_clients_actual - 1}]]] ""]
             $rr flush
+            # Wait for the client to start using a private query buffer. 
+            wait_for_condition 10 10 {
+                [client_field $cname qbuf] > 0
+            } else {
+                fail "client should start using a private query buffer"
+            }
         } e
         assert {![client_exists $cname]}
         $rr close
@@ -318,6 +336,10 @@ start_server {} {
     set obuf_limit [mb 3]
     r config set maxmemory-clients $maxmemory_clients
     r config set client-output-buffer-limit "normal $obuf_limit 0 0"
+    # Disable copy avoidance
+    r config set min-io-threads-avoid-copy-reply 0
+    r config set min-string-size-avoid-copy-reply 0
+    r config set min-string-size-avoid-copy-reply-threaded 0
 
     test "avoid client eviction when client is freed by output buffer limit" {
         r flushdb
@@ -371,12 +393,16 @@ start_server {} {
 }
 
 start_server {} {
+    # Disable copy avoidance
+    r config set min-io-threads-avoid-copy-reply 0
+    r config set min-string-size-avoid-copy-reply 0
+    r config set min-string-size-avoid-copy-reply-threaded 0
+
     test "decrease maxmemory-clients causes client eviction" {
         set maxmemory_clients [mb 4]
         set client_count 10
         set qbsize [expr ($maxmemory_clients - [mb 1]) / $client_count]
         r config set maxmemory-clients $maxmemory_clients
-
 
         # Make multiple clients consume together roughly 1mb less than maxmemory_clients
         set rrs {}
@@ -399,6 +425,11 @@ start_server {} {
 
         # Decrease maxmemory_clients and expect client eviction
         r config set maxmemory-clients [expr $maxmemory_clients / 2]
+        wait_for_condition 50 10 {
+            [llength [lsearch -all [split [string trim [r client list]] "\r\n"] *name=client*]] < $client_count
+        } else {
+            fail "Failed to evict clients"
+        }
         set connected_clients [llength [lsearch -all [split [string trim [r client list]] "\r\n"] *name=client*]]
         assert {$connected_clients > 0 && $connected_clients < $client_count}
 
@@ -407,6 +438,11 @@ start_server {} {
 }
 
 start_server {} {
+    # Disable copy avoidance
+    r config set min-io-threads-avoid-copy-reply 0
+    r config set min-string-size-avoid-copy-reply 0
+    r config set min-string-size-avoid-copy-reply-threaded 0
+
     test "evict clients only until below limit" {
         set client_count 10
         set client_mem [mb 1]
@@ -414,6 +450,7 @@ start_server {} {
         r config set maxmemory-clients 0
         r client setname control
         r client no-evict on
+
 
         # Make multiple clients consume together roughly 1mb less than maxmemory_clients
         set total_client_mem 0
@@ -469,6 +506,11 @@ start_server {} {
 }
 
 start_server {} {
+    # Disable copy avoidance
+    r config set min-io-threads-avoid-copy-reply 0
+    r config set min-string-size-avoid-copy-reply 0
+    r config set min-string-size-avoid-copy-reply-threaded 0
+
     test "evict clients in right order (large to small)" {
         # Note that each size step needs to be at least x2 larger than previous step
         # because of how the client-eviction size bucketing works
@@ -536,6 +578,11 @@ start_server {} {
 }
 
 start_server {} {
+    # Disable copy avoidance
+    r config set min-io-threads-avoid-copy-reply 0
+    r config set min-string-size-avoid-copy-reply 0
+    r config set min-string-size-avoid-copy-reply-threaded 0
+
     foreach type {"client no-evict" "maxmemory-clients disabled"} {
         r flushall
         r client no-evict on

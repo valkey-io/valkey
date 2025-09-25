@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017, Salvatore Sanfilippo <antirez at gmail dot com>
+ * Copyright (c) 2017, Redis Ltd.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -54,6 +54,7 @@
 #define STREAM_LISTPACK_MAX_SIZE (1 << 30)
 
 void streamFreeCG(streamCG *cg);
+void streamFreeCGVoid(void *cg);
 void streamFreeNACK(streamNACK *na);
 size_t streamReplyWithRangeFromConsumerPEL(client *c,
                                            stream *s,
@@ -86,8 +87,8 @@ stream *streamNew(void) {
 
 /* Free a stream, including the listpacks stored inside the radix tree. */
 void freeStream(stream *s) {
-    raxFreeWithCallback(s->rax, (void (*)(void *))lpFree);
-    if (s->cgroups) raxFreeWithCallback(s->cgroups, (void (*)(void *))streamFreeCG);
+    raxFreeWithCallback(s->rax, lpFreeVoid);
+    if (s->cgroups) raxFreeWithCallback(s->cgroups, streamFreeCGVoid);
     zfree(s);
 }
 
@@ -769,7 +770,7 @@ int64_t streamTrim(stream *s, streamAddTrimArgs *args) {
         int64_t primary_fields_count = lpGetInteger(p);
         p = lpNext(lp, p);                                                    /* Skip the first field. */
         for (int64_t j = 0; j < primary_fields_count; j++) p = lpNext(lp, p); /* Skip all primary fields. */
-        p = lpNext(lp, p); /* Skip the zero primary entry terminator. */
+        p = lpNext(lp, p);                                                    /* Skip the zero primary entry terminator. */
 
         /* 'p' is now pointing to the first entry inside the listpack.
          * We have to run entry after entry, marking entries as deleted
@@ -1393,11 +1394,6 @@ int streamRangeHasTombstones(stream *s, streamID *start, streamID *end) {
         return 0;
     }
 
-    if (streamCompareID(&s->first_id, &s->max_deleted_entry_id) > 0) {
-        /* The latest tombstone is before the first entry. */
-        return 0;
-    }
-
     if (start) {
         start_id = *start;
     } else {
@@ -1489,6 +1485,11 @@ long long streamEstimateDistanceFromFirstEverEntry(stream *s, streamID *id) {
         return s->entries_added;
     }
 
+    if (!streamIDEqZero(id) && streamCompareID(id, &s->max_deleted_entry_id) < 0) {
+        /* The ID is before the last tombstone, so the counter is unknown. */
+        return SCG_INVALID_ENTRIES_READ;
+    }
+
     int cmp_last = streamCompareID(id, &s->last_id);
     if (cmp_last == 0) {
         /* Return the exact counter of the last entry in the stream. */
@@ -1543,7 +1544,7 @@ void streamPropagateXCLAIM(client *c, robj *key, streamCG *group, robj *groupnam
     argv[12] = shared.lastid;
     argv[13] = createObjectFromStreamID(&group->last_id);
 
-    alsoPropagate(c->db->id, argv, 14, PROPAGATE_AOF | PROPAGATE_REPL);
+    alsoPropagate(c->db->id, argv, 14, PROPAGATE_AOF | PROPAGATE_REPL, c->slot);
 
     decrRefCount(argv[3]);
     decrRefCount(argv[7]);
@@ -1567,7 +1568,7 @@ void streamPropagateGroupID(client *c, robj *key, streamCG *group, robj *groupna
     argv[5] = shared.entriesread;
     argv[6] = createStringObjectFromLongLong(group->entries_read);
 
-    alsoPropagate(c->db->id, argv, 7, PROPAGATE_AOF | PROPAGATE_REPL);
+    alsoPropagate(c->db->id, argv, 7, PROPAGATE_AOF | PROPAGATE_REPL, c->slot);
 
     decrRefCount(argv[4]);
     decrRefCount(argv[6]);
@@ -1587,7 +1588,7 @@ void streamPropagateConsumerCreation(client *c, robj *key, robj *groupname, sds 
     argv[3] = groupname;
     argv[4] = createObject(OBJ_STRING, sdsdup(consumername));
 
-    alsoPropagate(c->db->id, argv, 5, PROPAGATE_AOF | PROPAGATE_REPL);
+    alsoPropagate(c->db->id, argv, 5, PROPAGATE_AOF | PROPAGATE_REPL, c->slot);
 
     decrRefCount(argv[4]);
 }
@@ -1641,8 +1642,8 @@ void streamPropagateConsumerCreation(client *c, robj *key, robj *groupname, sds 
  * flag.
  */
 #define STREAM_RWR_NOACK (1 << 0) /* Do not create entries in the PEL. */
-#define STREAM_RWR_RAWENTRIES                                                                                          \
-    (1 << 1)                        /* Do not emit protocol for array                                                  \
+#define STREAM_RWR_RAWENTRIES                                         \
+    (1 << 1)                        /* Do not emit protocol for array \
                                        boundaries, just the entries. */
 #define STREAM_RWR_HISTORY (1 << 2) /* Only serve consumer local PEL. */
 size_t streamReplyWithRange(client *c,
@@ -1677,10 +1678,11 @@ size_t streamReplyWithRange(client *c,
     while (streamIteratorGetID(&si, &id, &numfields)) {
         /* Update the group last_id if needed. */
         if (group && streamCompareID(&id, &group->last_id) > 0) {
-            if (group->entries_read != SCG_INVALID_ENTRIES_READ && !streamRangeHasTombstones(s, &id, NULL)) {
-                /* A valid counter and no future tombstones mean we can
-                 * increment the read counter to keep tracking the group's
-                 * progress. */
+            if (group->entries_read != SCG_INVALID_ENTRIES_READ &&
+                streamCompareID(&group->last_id, &s->first_id) >= 0 &&
+                !streamRangeHasTombstones(s, &group->last_id, NULL)) {
+                /* A valid counter and no tombstones in the group's last-delivered-id and the stream's last-generated-id,
+                 * we can increment the read counter to keep tracking the group's progress. */
                 group->entries_read++;
             } else if (s->entries_added) {
                 /* The group's counter may be invalid, so we try to obtain it. */
@@ -1839,7 +1841,7 @@ robj *streamTypeLookupWriteOrCreate(client *c, robj *key, int no_create) {
             return NULL;
         }
         o = createStreamObject();
-        dbAdd(c->db, key, o);
+        dbAdd(c->db, key, &o);
     }
     return o;
 }
@@ -1855,7 +1857,7 @@ robj *streamTypeLookupWriteOrCreate(client *c, robj *key, int no_create) {
  * that can be represented. If 'strict' is set to 1, "-" and "+" will be
  * treated as an invalid ID.
  *
- * The ID form <ms>-* specifies a millisconds-only ID, leaving the sequence part
+ * The ID form <ms>-* specifies a milliseconds-only ID, leaving the sequence part
  * to be autogenerated. When a non-NULL 'seq_given' argument is provided, this
  * form is accepted and the argument is set to 0 unless the sequence part is
  * specified.
@@ -1892,14 +1894,14 @@ int streamGenericParseIDOrReply(client *c,
     unsigned long long ms, seq;
     char *dot = strchr(buf, '-');
     if (dot) *dot = '\0';
-    if (string2ull(buf, &ms) == 0) goto invalid;
+    if (string2ull(buf, strlen(buf), &ms) == 0) goto invalid;
     if (dot) {
         size_t seqlen = strlen(dot + 1);
         if (seq_given != NULL && seqlen == 1 && *(dot + 1) == '*') {
             /* Handle the <ms>-* form. */
             seq = 0;
             *seq_given = 0;
-        } else if (string2ull(dot + 1, &seq) == 0) {
+        } else if (string2ull(dot + 1, seqlen, &seq) == 0) {
             goto invalid;
         }
     } else {
@@ -2026,10 +2028,10 @@ void xaddCommand(client *c) {
         return;
     }
     sds replyid = createStreamIDString(&id);
-    addReplyBulkCBuffer(c, replyid, sdslen(replyid));
 
     notifyKeyspaceEvent(NOTIFY_STREAM, "xadd", c->argv[1], c->db->id);
     server.dirty++;
+    addReplyBulkCBuffer(c, replyid, sdslen(replyid));
 
     /* Trim if needed. */
     if (parsed_args.trim_strategy != TRIM_STRATEGY_NONE) {
@@ -2388,7 +2390,7 @@ void xreadCommand(client *c) {
     if (timeout != -1) {
         /* If we are not allowed to block the client, the only thing
          * we can do is treating it as a timeout (even with timeout 0). */
-        if (c->flags & CLIENT_DENY_BLOCKING) {
+        if (c->flag.deny_blocking) {
             addReplyNullArray(c);
             goto cleanup;
         }
@@ -2454,6 +2456,11 @@ void streamFreeConsumer(streamConsumer *sc) {
     zfree(sc);
 }
 
+/* Used for generic free functions. */
+static void streamFreeConsumerVoid(void *sc) {
+    streamFreeConsumer((streamConsumer *)sc);
+}
+
 /* Create a new consumer group in the context of the stream 's', having the
  * specified name, last server ID and reads counter. If a consumer group with
  * the same name already exists NULL is returned, otherwise the pointer to the
@@ -2473,9 +2480,14 @@ streamCG *streamCreateCG(stream *s, char *name, size_t namelen, streamID *id, lo
 
 /* Free a consumer group and all its associated data. */
 void streamFreeCG(streamCG *cg) {
-    raxFreeWithCallback(cg->pel, (void (*)(void *))streamFreeNACK);
-    raxFreeWithCallback(cg->consumers, (void (*)(void *))streamFreeConsumer);
+    raxFreeWithCallback(cg->pel, zfree);
+    raxFreeWithCallback(cg->consumers, streamFreeConsumerVoid);
     zfree(cg);
+}
+
+/* Used for generic free functions. */
+void streamFreeCGVoid(void *cg) {
+    streamFreeCG((streamCG *)cg);
 }
 
 /* Lookup the consumer group in the specified stream and returns its
@@ -2610,25 +2622,23 @@ void xgroupCommand(client *c) {
 
     /* Dispatch the different subcommands. */
     if (c->argc == 2 && !strcasecmp(opt, "HELP")) {
-        /* clang-format off */
         const char *help[] = {
-"CREATE <key> <groupname> <id|$> [option]",
-"    Create a new consumer group. Options are:",
-"    * MKSTREAM",
-"      Create the empty stream if it does not exist.",
-"    * ENTRIESREAD entries_read",
-"      Set the group's entries_read counter (internal use).",
-"CREATECONSUMER <key> <groupname> <consumer>",
-"    Create a new consumer in the specified group.",
-"DELCONSUMER <key> <groupname> <consumer>",
-"    Remove the specified consumer.",
-"DESTROY <key> <groupname>",
-"    Remove the specified group.",
-"SETID <key> <groupname> <id|$> [ENTRIESREAD entries_read]",
-"    Set the current group ID and entries_read counter.",
-NULL
+            "CREATE <key> <groupname> <id|$> [option]",
+            "    Create a new consumer group. Options are:",
+            "    * MKSTREAM",
+            "      Create the empty stream if it does not exist.",
+            "    * ENTRIESREAD entries_read",
+            "      Set the group's entries_read counter (internal use).",
+            "CREATECONSUMER <key> <groupname> <consumer>",
+            "    Create a new consumer in the specified group.",
+            "DELCONSUMER <key> <groupname> <consumer>",
+            "    Remove the specified consumer.",
+            "DESTROY <key> <groupname>",
+            "    Remove the specified group.",
+            "SETID <key> <groupname> <id|$> [ENTRIESREAD entries_read]",
+            "    Set the current group ID and entries_read counter.",
+            NULL,
         };
-        /* clang-format on */
         addReplyHelp(c, help);
     } else if (!strcasecmp(opt, "CREATE") && (c->argc >= 5 && c->argc <= 8)) {
         streamID id;
@@ -2647,16 +2657,16 @@ NULL
         if (s == NULL) {
             serverAssert(mkstream);
             o = createStreamObject();
-            dbAdd(c->db, c->argv[2], o);
+            dbAdd(c->db, c->argv[2], &o);
             s = o->ptr;
             signalModifiedKey(c, c->db, c->argv[2]);
         }
 
         streamCG *cg = streamCreateCG(s, grpname, sdslen(grpname), &id, entries_read);
         if (cg) {
-            addReply(c, shared.ok);
             server.dirty++;
             notifyKeyspaceEvent(NOTIFY_STREAM, "xgroup-create", c->argv[2], c->db->id);
+            addReply(c, shared.ok);
         } else {
             addReplyError(c, "-BUSYGROUP Consumer Group name already exists");
         }
@@ -2669,16 +2679,16 @@ NULL
         }
         cg->last_id = id;
         cg->entries_read = entries_read;
-        addReply(c, shared.ok);
         server.dirty++;
         notifyKeyspaceEvent(NOTIFY_STREAM, "xgroup-setid", c->argv[2], c->db->id);
+        addReply(c, shared.ok);
     } else if (!strcasecmp(opt, "DESTROY") && c->argc == 4) {
         if (cg) {
             raxRemove(s->cgroups, (unsigned char *)grpname, sdslen(grpname), NULL);
             streamFreeCG(cg);
-            addReply(c, shared.cone);
             server.dirty++;
             notifyKeyspaceEvent(NOTIFY_STREAM, "xgroup-destroy", c->argv[2], c->db->id);
+            addReply(c, shared.cone);
             /* We want to unblock any XREADGROUP consumers with -NOGROUP. */
             signalKeyAsReady(c->db, c->argv[2], OBJ_STREAM);
         } else {
@@ -2771,9 +2781,9 @@ void xsetidCommand(client *c) {
     s->last_id = id;
     if (entries_added != -1) s->entries_added = entries_added;
     if (!streamIDEqZero(&max_xdel_id)) s->max_deleted_entry_id = max_xdel_id;
-    addReply(c, shared.ok);
     server.dirty++;
     notifyKeyspaceEvent(NOTIFY_STREAM, "xsetid", c->argv[1], c->db->id);
+    addReply(c, shared.ok);
 }
 
 /* XACK <key> <group> <id> <id> ... <id>
@@ -3798,17 +3808,15 @@ void xinfoCommand(client *c) {
 
     /* HELP is special. Handle it ASAP. */
     if (!strcasecmp(c->argv[1]->ptr, "HELP")) {
-        /* clang-format off */
         const char *help[] = {
-"CONSUMERS <key> <groupname>",
-"    Show consumers of <groupname>.",
-"GROUPS <key>",
-"    Show the stream consumer groups.",
-"STREAM <key> [FULL [COUNT <count>]",
-"    Show information about the stream.",
-NULL
+            "CONSUMERS <key> <groupname>",
+            "    Show consumers of <groupname>.",
+            "GROUPS <key>",
+            "    Show the stream consumer groups.",
+            "STREAM <key> [FULL [COUNT <count>]",
+            "    Show information about the stream.",
+            NULL,
         };
-        /* clang-format on */
         addReplyHelp(c, help);
         return;
     }

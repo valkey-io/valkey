@@ -8,7 +8,7 @@
 #include "lolwut.h"
 
 /* ASCII characters used to represent the number of iterations in the Julia set. */
-static char ascii_array[] = " .^:~=+*x%X#&@";
+static char ascii_array[] = " .:-=+*%#&@";
 
 /* The Julia set is defined as the set of points in the complex plane that
  * do not escape to infinity under repeated iteration of the function
@@ -72,11 +72,15 @@ void lolwut9Command(client *c) {
             float y = (float) 4 * (2 * i) / (2 * rows + 1) - 2.0;
 
             int iterations = juliaSetIteration(x, y, julia_r, julia_i, sizeof(ascii_array) - 1);
+            //int iterations = i + j; // Simple placeholder for testing
             output_array[i * (cols + 1) + j] = ascii_array[iterations % sizeof(ascii_array)];
         }
         output_array[i * (cols + 1) + cols] = '\n';
     }
     output_array = sdscatprintf(output_array, "Ascii representation of Julia set with constant %.2f + %.2fi\n", julia_r, julia_i);
+    output_array = sdscatprintf(output_array, "Don't forget to have fun! %s ver. ", server.extended_redis_compat ? "Redis" : "Valkey");
+    output_array = sdscat(output_array, server.extended_redis_compat ? REDIS_VERSION : VALKEY_VERSION);
+    output_array = sdscatlen(output_array, "\n", 1);
     addReplyVerbatim(c, output_array, sdslen(output_array), "txt");
     sdsfree(output_array);
 }

@@ -120,7 +120,9 @@ start_server {tags {"commandlog"} overrides {commandlog-execution-slower-than 10
 
         # for large-reply - without reply copy avoidance
         set copy_avoid [lindex [r config get min-string-size-avoid-copy-reply] 1]
-        assert_morethan $copy_avoid 1024
+        if {!$::external} {
+            assert_morethan $copy_avoid 1024
+        }
         r get testkey
         set e [lindex [r commandlog get -1 large-reply] 0]
         assert_equal [llength $e] 6

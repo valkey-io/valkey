@@ -1218,8 +1218,7 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster} overrides {cluste
 
     test "Blocked clients are sent MOVED after export completion" {
         assert_does_not_resync {
-            # Start with a BLPOP that will block for the duration of the
-            # migration
+            # Start with a BLPOP that will block for the duration of the migration,
             # BLPOP is expected to block since the list does not exist yet
             set blpop_client [valkey_deferring_client_by_addr [srv 0 host] [srv 0 port]]
             $blpop_client BLPOP $0_slot_tag:mylist 0

@@ -44,11 +44,7 @@ proc create_nodes_conf_folder {srv_idx} {
 }
 
 start_cluster 1 1 {tags {external:skip cluster}} {
-    test {Cluster cluster-ignore-disk-write-errors is work as expected} {
-        # If the save fails, R 0 will exit and R 1 will not exit.
-        R 0 config set cluster-ignore-disk-write-errors no
-        R 1 config set cluster-ignore-disk-write-errors yes
-
+    test {Fail to save the cluster configuration file will not exit the process} {
         # Create folder that can cause the rename fail.
         create_nodes_conf_folder 0
         create_nodes_conf_folder 1
@@ -56,16 +52,15 @@ start_cluster 1 1 {tags {external:skip cluster}} {
         # Trigger a takeover so that cluster will need to update the config file.
         R 1 cluster failover takeover
 
-        # Make sure R 0 is exit and R 1 isn't exit.
-        assert_error "*I/O error*" {R 0 ping}
+        assert_equal {PONG} [R 0 ping]
         assert_equal {PONG} [R 1 ping]
-        assert_equal 0 [process_is_alive [srv 0 pid]]
+        assert_equal 1 [process_is_alive [srv 0 pid]]
         assert_equal 1 [process_is_alive [srv -1 pid]]
 
         # Make sure relevant logs are printed.
         verify_log_message 0 "*Could not rename tmp cluster config file*" 0
         verify_log_message -1 "*Could not rename tmp cluster config file*" 0
-        verify_log_message 0 "*Fatal: can't update cluster config file*" 0
+        verify_log_message 0 "*Cluster config file is applying a change even though it is unable to write to disk*" 0
         verify_log_message -1 "*Cluster config file is applying a change even though it is unable to write to disk*" 0
     }
 }

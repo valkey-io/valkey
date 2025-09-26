@@ -1331,6 +1331,7 @@ void clusterInit(void) {
     server.cluster->currentEpoch = 0;
     server.cluster->state = CLUSTER_FAIL;
     server.cluster->fail_reason = CLUSTER_FAIL_NONE;
+    server.cluster->safe_to_join = 0;
     server.cluster->size = 0;
     server.cluster->todo_before_sleep = 0;
     server.cluster->nodes = dictCreate(&clusterNodesDictType);
@@ -5023,6 +5024,12 @@ void clusterSendFailoverAuthIfNeeded(clusterNode *node, clusterMsg *request) {
      * size + 1 */
     if (!clusterNodeIsVotingPrimary(myself)) return;
 
+    if (!server.cluster->safe_to_join) {
+        serverLog(LL_WARNING, "Failover auth denied to %.40s (%s): it is not safe to vote in this moment)",
+                  node->name, node->human_nodename);
+        return;
+    }
+
     /* Request epoch must be >= our currentEpoch.
      * Note that it is impossible for it to actually be greater since
      * our currentEpoch was updated as a side effect of receiving this
@@ -6277,8 +6284,12 @@ void clusterUpdateState(void) {
      * to not count the DB loading time. */
     if (first_call_time == 0) first_call_time = mstime();
     if (clusterNodeIsPrimary(myself) && server.cluster->state == CLUSTER_FAIL &&
-        mstime() - first_call_time < CLUSTER_WRITABLE_DELAY)
+        mstime() - first_call_time < CLUSTER_WRITABLE_DELAY) {
+        server.cluster->safe_to_join = 0;
         return;
+    } else {
+        server.cluster->safe_to_join = 1;
+    }
 
     /* Start assuming the state is OK. We'll turn it into FAIL if there
      * are the right conditions. */

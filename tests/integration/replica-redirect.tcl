@@ -102,3 +102,78 @@ start_server {tags {needs:repl external:skip}} {
         }
     }
 }
+
+start_server {tags {needs:repl external:skip}} {
+    start_server {} {
+        set primary [srv 0 client]
+        set primary_host [srv 0 host]
+        set primary_port [srv 0 port]
+        set replica [srv -1 client]
+        set replica_host [srv -1 host]
+        set replica_port [srv -1 port]
+
+        $replica replicaof $primary_host $primary_port
+        wait_for_condition 100 100 {
+            [string match *slave*online* [$primary info replication]] &&
+            [s -1 master_link_status] eq {up}
+        } else {
+            fail "Replica not online."
+        }
+
+        test {blocked clients behavior during failover} {
+            # Client blocking on primary
+            set rd0 [valkey_deferring_client 0]
+            $rd0 CLIENT CAPA REDIRECT
+            assert_match "OK" [$rd0 read]
+            $rd0 BLPOP mylist 0
+
+            # Readonly client blocking on primary
+            set rd0_ro [valkey_deferring_client 0]
+            $rd0_ro CLIENT CAPA REDIRECT
+            assert_match "OK" [$rd0_ro read]
+            $rd0_ro READONLY
+            assert_match "OK" [$rd0_ro read]
+            $rd0_ro XREAD BLOCK 0 STREAMS mystream 0-0
+
+            # Readonly client blocking on replica
+            set rd1 [valkey_deferring_client -1]
+            $rd1 CLIENT CAPA REDIRECT
+            assert_match "OK" [$rd1 read]
+            $rd1 READONLY
+            assert_equal OK [$rd1 read]
+            $rd1 XREAD BLOCK 0 STREAMS k 0-0
+
+            wait_for_condition 1000 50 {
+                [s 0 blocked_clients] eq 2 &&
+                [s -1 blocked_clients] eq 1
+            } else {
+                fail "client wasn't blocked"
+            }
+
+            r FAILOVER TO $replica_host $replica_port
+
+            wait_for_condition 50 100 {
+                [s master_failover_state] == "no-failover"
+            } else {
+                fail "Failover did not complete"
+            }
+
+            assert_match *slave* [r role]
+            assert_match *master* [r -1 role]
+            assert_error "UNBLOCKED *" {$rd0 read}
+            assert_error "UNBLOCKED *" {$rd0_ro read}
+            # assert_error "REDIRECT $replica_host:$replica_port"
+
+            # Check that the client blocked on the new primary (old replica) is still blocked.
+            assert_equal 1 [s -1 blocked_clients]
+
+            # Add an entry to the stream to unblock the blocking XREAD.
+            set stream_id [R 1 XADD k * foo bar]
+            assert_equal "{k {{$stream_id {foo bar}}}}" [$rd1 read]
+
+            $rd0 close
+            $rd0_ro close
+            $rd1 close
+        }
+    }
+}

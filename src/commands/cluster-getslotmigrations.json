@@ -1,0 +1,80 @@
+{
+    "GETSLOTMIGRATIONS": {
+        "summary": "Get the status of ongoing and recently finished slot import and export operations.",
+        "complexity": "O(N), where N is the number of active slot import and export jobs.",
+        "group": "cluster",
+        "since": "9.0.0",
+        "container": "CLUSTER",
+        "function": "clusterCommand",
+        "arity": 2,
+        "command_flags": [
+            "NO_ASYNC_LOADING",
+            "ADMIN",
+            "STALE"
+        ],
+        "reply_schema": {
+            "description": "A nested list of maps, one for each migration, with keys and values representing migration fields.",
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "link_name": {
+                        "type": "string",
+                        "description": "A 40-byte randomly generated hex string representing the migration.",  
+                        "pattern": "^[0-9a-fA-F]{40}$"
+                    },
+                    "operation": {
+                        "oneOf": [
+                            {
+                                "const": "IMPORT"
+                            },
+                            {
+                                "const": "EXPORT"
+                            }
+                        ]
+                    },
+                    "slot_ranges": {
+                        "description": "Slot ranges in the format <start>-<end> inclusive, each range separated by a space.",
+                        "type": "string",
+                        "pattern": "^([0-9]+-[0-9]+)( [0-9]+-[0-9]+)*$"
+                    },
+                    "target_node": {
+                        "description": "The target node name in the migration job.",
+                        "type": "string",
+                        "pattern": "^[0-9a-fA-F]{40}$"
+                    },
+                    "source_node": {
+                        "description": "The source node name in the migration job.",
+                        "type": "string",
+                        "pattern": "^[0-9a-fA-F]{40}$"
+                    },
+                    "create_time": {
+                        "description": "Creation time, in seconds since the unix epoch.",
+                        "type": "integer"
+                    },
+                    "last_update_time": {
+                        "description": "Last update time, in seconds since the unix epoch.",
+                        "type": "integer"
+                    },
+                    "last_ack_time": {
+                        "description": "Last received ack time, in seconds since the unix epoch.",
+                        "type": "integer"
+                    },
+                    "state": {
+                        "description": "Human readable string representing the migration job state.",
+                        "type": "string"
+                    },
+                    "message": {
+                        "description": "Human readable status message with more details.",
+                        "type": "string"
+                    },
+                    "cow_size": {
+                        "description": "Copy on write bytes during slot migration fork.",
+                        "type": "integer"
+                    }
+                }
+            }
+        }
+    }
+}

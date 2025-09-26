@@ -145,28 +145,33 @@ start_server {config "minimal.conf" tags {"external:skip"}} {
             set r2 [get_nonloopback_client]
             catch {$r2 ping} err
             assert_match {*DENIED*} $err
+            $r2 close
 
             # Bind configuration should not matter
             assert_equal {OK} [r config set bind "*"]
             set r2 [get_nonloopback_client]
             catch {$r2 ping} err
             assert_match {*DENIED*} $err
+            $r2 close
 
             # Setting a password should disable protected mode
             assert_equal {OK} [r config set requirepass "secret"]
             set r2 [valkey $myaddr [srv 0 "port"] 0 $::tls]
             assert_equal {OK} [$r2 auth secret]
             assert_equal {PONG} [$r2 ping]
+            $r2 close
 
             # Clearing the password re-enables protected mode
             assert_equal {OK} [r config set requirepass ""]
             set r2 [valkey $myaddr [srv 0 "port"] 0 $::tls]
             assert_match {*DENIED*} $err
+            $r2 close
 
             # Explicitly disabling protected-mode works
             assert_equal {OK} [r config set protected-mode no]
             set r2 [valkey $myaddr [srv 0 "port"] 0 $::tls]
             assert_equal {PONG} [$r2 ping]
+            $r2 close
         }
     }
 }
@@ -285,6 +290,46 @@ start_server {config "minimal.conf" tags {"external:skip"} overrides {enable-deb
             set info [r info stats]
             set new_prefetch_entries [getInfoProperty $info io_threaded_total_prefetch_entries]
             assert_equal $prefetch_entries $new_prefetch_entries
+      }
+
+      start_server {} {
+            test {replicas writes are offloaded to IO threads} {
+                set primary [srv -1 client]
+                set primary_host [srv -1 host]
+                set primary_port [srv -1 port]
+    
+                set replica [srv 0 client]
+                $replica replicaof $primary_host $primary_port
+    
+                wait_for_condition 500 100 {
+                    [s 0 master_link_status] eq {up}
+                } else {
+                    fail "Replication not started."
+                }
+                
+                # get the current io_threaded_writes_processed
+                set info [$primary info stats]
+                set io_threaded_writes_processed [getInfoProperty $info io_threaded_writes_processed]
+                
+                # Send a write command to the primary
+                $primary set a 1
+    
+                # Wait for the write to be propagated to the replica
+                wait_for_condition 50 100 {
+                    [$replica get a] eq {1}
+                } else {
+                    fail "Replication not propagated."
+                }
+                
+                # Get the new io_threaded_writes_processed
+                set info [$primary info stats]
+                set new_io_threaded_writes_processed [getInfoProperty $info io_threaded_writes_processed]
+                # Assert new is old + 3, 3 for the write to the info-client, set-client and to the replica.
+                assert {$new_io_threaded_writes_processed >= $io_threaded_writes_processed + 3} ;
+    
+                # Verify the write was propagated to the replica
+                assert_equal {1} [$replica get a]
+            }
         }
     }
 }

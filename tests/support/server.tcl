@@ -2,9 +2,9 @@ set ::global_overrides {}
 set ::tags {}
 set ::valgrind_errors {}
 
-proc start_server_error {config_file error} {
+proc start_server_error {executable config_file error} {
     set err {}
-    append err "Can't start the Valkey server\n"
+    append err "Can't start $executable\n"
     append err "CONFIGURATION:\n"
     append err [exec cat $config_file]
     append err "\nERROR:\n"
@@ -12,17 +12,23 @@ proc start_server_error {config_file error} {
     send_data_packet $::test_server_fd err $err
 }
 
-proc check_valgrind_errors stderr {
-    set res [find_valgrind_errors $stderr true]
+proc check_valgrind_errors srv {
+    set res [find_valgrind_errors [dict get $srv stderr] true]
     if {$res != ""} {
         send_data_packet $::test_server_fd err "Valgrind error: $res\n"
+        if {$::dump_logs} {
+            dump_server_log $srv
+        }
     }
 }
 
-proc check_sanitizer_errors stderr {
-    set res [sanitizer_errors_from_file $stderr]
+proc check_sanitizer_errors srv {
+    set res [sanitizer_errors_from_file [dict get $srv stderr]]
     if {$res != ""} {
         send_data_packet $::test_server_fd err "Sanitizer error: $res\n"
+        if {$::dump_logs} {
+            dump_server_log $srv
+        }
     }
 }
 
@@ -42,6 +48,7 @@ proc clean_persistence config {
     catch {exec rm -rf $rdb}
 }
 
+# config is actually a srv
 proc kill_server config {
     # nothing to kill when running against external server
     if {$::external} return
@@ -56,10 +63,10 @@ proc kill_server config {
     if {![is_alive $pid]} {
         # Check valgrind errors if needed
         if {$::valgrind} {
-            check_valgrind_errors [dict get $config stderr]
+            check_valgrind_errors $config
         }
 
-        check_sanitizer_errors [dict get $config stderr]
+        check_sanitizer_errors $config
 
         # Remove this pid from the set of active pids in the test server.
         send_data_packet $::test_server_fd server-killed $pid
@@ -120,10 +127,10 @@ proc kill_server config {
 
     # Check valgrind errors if needed
     if {$::valgrind} {
-        check_valgrind_errors [dict get $config stderr]
+        check_valgrind_errors $config
     }
 
-    check_sanitizer_errors [dict get $config stderr]
+    check_sanitizer_errors $config
 
     # Remove this pid from the set of active pids in the test server.
     send_data_packet $::test_server_fd server-killed $pid
@@ -216,6 +223,11 @@ proc tags_acceptable {tags err_return} {
         return 0
     }
 
+    if {$::other_server_path eq {} && [lsearch $tags "needs:other-server"] >= 0} {
+        set err "Other server path not provided"
+        return 0
+    }
+
     if {$::external && [lsearch $tags "external:skip"] >= 0} {
         set err "Not supported on external server"
         return 0
@@ -289,8 +301,8 @@ proc create_server_config_file {filename config config_lines} {
     close $fp
 }
 
-proc spawn_server {config_file stdout stderr args} {
-    set cmd [list src/valkey-server $config_file]
+proc spawn_server {executable config_file stdout stderr args} {
+    set cmd [list $executable $config_file]
     set args {*}$args
     if {[llength $args] > 0} {
         lappend cmd {*}$args
@@ -319,7 +331,7 @@ proc spawn_server {config_file stdout stderr args} {
 }
 
 # Wait for actual startup, return 1 if port is busy, 0 otherwise
-proc wait_server_started {config_file stdout stderr pid} {
+proc wait_server_started {executable config_file stdout stderr pid} {
     set checkperiod 100; # Milliseconds
     set maxiter [expr {120*1000/$checkperiod}] ; # Wait up to 2 minutes.
     set port_busy 0
@@ -330,7 +342,7 @@ proc wait_server_started {config_file stdout stderr pid} {
         after $checkperiod
         incr maxiter -1
         if {$maxiter == 0} {
-            start_server_error $config_file "No PID detected in log $stdout"
+            start_server_error $executable $config_file "No PID detected in log $stdout"
             puts "--- LOG CONTENT ---"
             puts [exec cat $stdout]
             puts "-------------------"
@@ -347,7 +359,7 @@ proc wait_server_started {config_file stdout stderr pid} {
         # Configuration errors are unexpected, but it's helpful to fail fast
         # to give the feedback to the test runner.
         if {[regexp {FATAL CONFIG FILE ERROR} [exec cat $stderr]]} {
-            start_server_error $config_file "Configuration issue prevented Valkey startup"
+            start_server_error $executable $config_file "Configuration issue prevented Valkey startup"
             break
         }
     }
@@ -441,6 +453,8 @@ proc start_server {options {code undefined}} {
     set args {}
     set keep_persistence false
     set config_lines {}
+    set start_other_server 0
+    set old_singledb $::singledb
 
     # Wait for the server to be ready and check for server liveness/client connectivity before starting the test.
     set wait_ready true
@@ -448,6 +462,9 @@ proc start_server {options {code undefined}} {
     # parse options
     foreach {option value} $options {
         switch $option {
+            "start-other-server" {
+                set start_other_server $value ; # boolean, 0 or 1
+            }
             "config" {
                 set baseconfig $value
             }
@@ -485,8 +502,14 @@ proc start_server {options {code undefined}} {
     if {![tags_acceptable $::tags err]} {
         incr ::num_aborted
         send_data_packet $::test_server_fd ignore $err
+        set ::singledb $old_singledb
         set ::tags [lrange $::tags 0 end-[llength $tags]]
         return
+    }
+
+    # Tags that override global options
+    if {[lsearch $::tags singledb] >= 0} {
+        set ::singledb 1
     }
 
     # If we are running against an external server, we just push the
@@ -494,8 +517,18 @@ proc start_server {options {code undefined}} {
     if {$::external} {
         run_external_server_test $code $overrides
 
+        set ::singledb $old_singledb
         set ::tags [lrange $::tags 0 end-[llength $tags]]
         return
+    }
+
+    if {$start_other_server} {
+        set executable $::other_server_path
+        if {![file executable $executable]} {
+            error "File not found or not executable: $executable"
+        }
+    } else {
+        set executable "src/valkey-server"
     }
 
     set data [split [exec cat "tests/assets/$baseconfig"] "\n"]
@@ -516,6 +549,7 @@ proc start_server {options {code undefined}} {
     if {$::io_threads} {
         dict set config "io-threads" 2
         dict set config "events-per-io-thread" 0
+        dict set config "min-io-threads-avoid-copy-reply" 2
     }
 
     foreach line $data {
@@ -588,15 +622,15 @@ proc start_server {options {code undefined}} {
     set server_started 0
     while {$server_started == 0} {
         if {$::verbose} {
-            puts -nonewline "=== ($tags) Starting server ${::host}:${port} "
+            puts -nonewline "=== ($tags) Starting server on ${::host}:${port} "
         }
 
         send_data_packet $::test_server_fd "server-spawning" "port $port"
 
-        set pid [spawn_server $config_file $stdout $stderr $args]
+        set pid [spawn_server $executable $config_file $stdout $stderr $args]
 
         # check that the server actually started
-        set port_busy [wait_server_started $config_file $stdout $stderr $pid]
+        set port_busy [wait_server_started $executable $config_file $stdout $stderr $pid]
 
         # Sometimes we have to try a different port, even if we checked
         # for availability. Other test clients may grab the port before we
@@ -634,7 +668,7 @@ proc start_server {options {code undefined}} {
         if {!$serverisup} {
             set err {}
             append err [exec cat $stdout] "\n" [exec cat $stderr]
-            start_server_error $config_file $err
+            start_server_error $executable $config_file $err
             return
         }
         set server_started 1
@@ -647,6 +681,7 @@ proc start_server {options {code undefined}} {
     if {[dict exists $config $port_param]} { set port [dict get $config $port_param] }
 
     # setup config dict
+    dict set srv "executable" $executable
     dict set srv "config_file" $config_file
     dict set srv "config" $config
     dict set srv "pid" $pid
@@ -754,6 +789,7 @@ proc start_server {options {code undefined}} {
         # pop the server object
         set ::servers [lrange $::servers 0 end-1]
 
+        set ::singledb $old_singledb
         set ::tags [lrange $::tags 0 end-[llength $tags]]
         kill_server $srv
         if {!$keep_persistence} {
@@ -761,6 +797,7 @@ proc start_server {options {code undefined}} {
         }
         set _ ""
     } else {
+        set ::singledb $old_singledb
         set ::tags [lrange $::tags 0 end-[llength $tags]]
         set _ $srv
     }
@@ -801,12 +838,13 @@ proc restart_server {level wait_ready rotate_logs {reconnect 1} {shutdown sigter
         close $fd
     }
 
+    set executable [dict get $srv "executable"]
     set config_file [dict get $srv "config_file"]
 
-    set pid [spawn_server $config_file $stdout $stderr {}]
+    set pid [spawn_server $executable $config_file $stdout $stderr {}]
 
     # check that the server actually started
-    wait_server_started $config_file $stdout $stderr $pid
+    wait_server_started $executable $config_file $stdout $stderr $pid
 
     # update the pid in the servers list
     dict set srv "pid" $pid

@@ -72,8 +72,11 @@ void *testrdb_type_load(ValkeyModuleIO *rdb, int encver) {
     ValkeyModuleString *str = ValkeyModule_LoadString(rdb);
     float f = ValkeyModule_LoadFloat(rdb);
     long double ld = ValkeyModule_LoadLongDouble(rdb);
+    /* Context creation is part of the test. Creating the context will force the
+     * core to allocate a context, which needs to be cleaned up when the
+     * ValkeyModuleIO is destructed. */
+    ValkeyModuleCtx *ctx = ValkeyModule_GetContextFromIO(rdb);
     if (ValkeyModule_IsIOError(rdb)) {
-        ValkeyModuleCtx *ctx = ValkeyModule_GetContextFromIO(rdb);
         if (str)
             ValkeyModule_FreeString(ctx, str);
         return NULL;
@@ -98,6 +101,11 @@ void testrdb_aux_save(ValkeyModuleIO *rdb, int when) {
     if (!(conf_aux_count & CONF_AUX_OPTION_BEFORE_KEYSPACE)) assert(when == VALKEYMODULE_AUX_AFTER_RDB);
     if (!(conf_aux_count & CONF_AUX_OPTION_AFTER_KEYSPACE)) assert(when == VALKEYMODULE_AUX_BEFORE_RDB);
     assert(conf_aux_count!=CONF_AUX_OPTION_NO_AUX);
+    /* Context creation is part of the test. Creating the context will force the
+     * core to allocate a context, which needs to be cleaned up when the
+     * ValkeyModuleIO is destructed. */
+    ValkeyModuleCtx *ctx = ValkeyModule_GetContextFromIO(rdb);
+    VALKEYMODULE_NOT_USED(ctx);
     if (when == VALKEYMODULE_AUX_BEFORE_RDB) {
         if (before_str) {
             ValkeyModule_SaveSigned(rdb, 1);
@@ -306,7 +314,7 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
     if (ValkeyModule_Init(ctx,"testrdb",1,VALKEYMODULE_APIVER_1) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
 
-    ValkeyModule_SetModuleOptions(ctx, VALKEYMODULE_OPTIONS_HANDLE_IO_ERRORS | VALKEYMODULE_OPTIONS_HANDLE_REPL_ASYNC_LOAD);
+    ValkeyModule_SetModuleOptions(ctx, VALKEYMODULE_OPTIONS_HANDLE_IO_ERRORS | VALKEYMODULE_OPTIONS_HANDLE_REPL_ASYNC_LOAD | VALKEYMODULE_OPTIONS_HANDLE_ATOMIC_SLOT_MIGRATION);
 
     if (argc > 0)
         ValkeyModule_StringToLongLong(argv[0], &conf_aux_count);

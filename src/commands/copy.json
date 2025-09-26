@@ -82,7 +82,7 @@
                     "const": 1
                 },
                 {
-                    "description": "Source was not copied.",
+                    "description": "Source was not copied when the destination key already exists",
                     "const": 0
                 }
             ]

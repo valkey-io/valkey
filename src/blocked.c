@@ -26,9 +26,13 @@
  * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  * POSSIBILITY OF SUCH DAMAGE.
- *
- * ---------------------------------------------------------------------------
- *
+ */
+/*
+ * Copyright (c) Valkey Contributors
+ * All rights reserved.
+ * SPDX-License-Identifier: BSD-3-Clause
+ */
+/*
  * API:
  *
  * blockClient() set the CLIENT_BLOCKED flag in the client, and set the
@@ -61,7 +65,7 @@
  */
 
 #include "server.h"
-#include "slowlog.h"
+#include "commandlog.h"
 #include "latency.h"
 #include "monotonic.h"
 #include "cluster_slot_stats.h"
@@ -100,8 +104,8 @@ void freeClientBlockingState(client *c) {
  * flag is set client query buffer is not longer processed, but accumulated,
  * and will be processed when the client is unblocked. */
 void blockClient(client *c, int btype) {
-    /* Primary client should never be blocked unless pause or module */
-    serverAssert(!(c->flag.primary && btype != BLOCKED_MODULE && btype != BLOCKED_POSTPONE));
+    /* Replicated clients should never be blocked unless pause or module */
+    serverAssert(!(isReplicatedClient(c) && btype != BLOCKED_MODULE && btype != BLOCKED_POSTPONE));
 
     initClientBlockingState(c);
 
@@ -117,15 +121,15 @@ void blockClient(client *c, int btype) {
  * he will attempt to reprocess the command which will update the statistics.
  * However in case the client was timed out or in case of module blocked client is being unblocked
  * the command will not be reprocessed and we need to make stats update.
- * This function will make updates to the commandstats, slot-stats, slowlog and monitors.
+ * This function will make updates to the commandstats, slot-stats, commandlog and monitors.
  * The failed_or_rejected parameter is an indication that the blocked command was either failed internally or
  * rejected/aborted externally. In case the command was rejected the value ERROR_COMMAND_REJECTED should be passed.
  * In case the command failed internally, ERROR_COMMAND_FAILED should be passed.
  * A value of zero indicate no error was reported after the command was unblocked  */
 void updateStatsOnUnblock(client *c, long blocked_us, long reply_us, int failed_or_rejected) {
-    const ustime_t total_cmd_duration = c->duration + blocked_us + reply_us;
-    c->lastcmd->microseconds += total_cmd_duration;
-    clusterSlotStatsAddCpuDuration(c, total_cmd_duration);
+    c->duration += blocked_us + reply_us;
+    c->lastcmd->microseconds += c->duration;
+    clusterSlotStatsAddCpuDuration(c, c->duration);
     c->lastcmd->calls++;
     c->commands_processed++;
     server.stat_numcommands++;
@@ -139,12 +143,13 @@ void updateStatsOnUnblock(client *c, long blocked_us, long reply_us, int failed_
             debugServerAssertWithInfo(c, NULL, 0);
     }
     if (server.latency_tracking_enabled)
-        updateCommandLatencyHistogram(&(c->lastcmd->latency_histogram), total_cmd_duration * 1000);
-    /* Log the command into the Slow log if needed. */
-    slowlogPushCurrentCommand(c, c->lastcmd, total_cmd_duration);
+        updateCommandLatencyHistogram(&(c->lastcmd->latency_histogram), c->duration * 1000);
+    /* Log the command into the commandlog if needed. */
+    commandlogPushCurrentCommand(c, c->lastcmd);
     c->duration = 0;
     /* Log the reply duration event. */
-    latencyAddSampleIfNeeded("command-unblocking", reply_us / 1000);
+    latencyAddSampleIfNeeded("command-unblocking", reply_us);
+    latencyTraceIfNeeded(server, command_unblocking, reply_us);
 }
 
 /* This function is called in the beforeSleep() function of the event loop
@@ -248,6 +253,22 @@ void unblockClient(client *c, int queue_for_reprocessing) {
     c->bstate->unblock_on_nokey = 0;
     removeClientFromTimeoutTable(c);
     if (queue_for_reprocessing) queueClientForReprocessing(c);
+}
+
+/* Check if the specified client can be safely timed out using
+ * unblockClientOnTimeout(). */
+int blockedClientMayTimeout(client *c) {
+    if (c->bstate->btype == BLOCKED_MODULE) {
+        return moduleBlockedClientMayTimeout(c);
+    }
+
+    if (c->bstate->btype == BLOCKED_LIST ||
+        c->bstate->btype == BLOCKED_ZSET ||
+        c->bstate->btype == BLOCKED_STREAM ||
+        c->bstate->btype == BLOCKED_WAIT) {
+        return 1;
+    }
+    return 0;
 }
 
 /* This function gets called when a blocked client timed out in order to
@@ -399,7 +420,7 @@ void blockForKeys(client *c, int btype, robj **keys, int numkeys, mstime_t timeo
 
     initClientBlockingState(c);
 
-    if (!c->flag.reprocessing_command) {
+    if (!c->flag.reexecuting_command) {
         /* If the client is re-processing the command, we do not set the timeout
          * because we need to retain the client's original timeout. */
         c->bstate->timeout = timeout;
@@ -649,6 +670,8 @@ void blockPostponeClient(client *c) {
 
 /* Block client due to shutdown command */
 void blockClientShutdown(client *c) {
+    initClientBlockingState(c);
+    c->bstate->timeout = 0;
     blockClient(c, BLOCKED_SHUTDOWN);
 }
 
@@ -674,6 +697,7 @@ static void unblockClientOnKey(client *c, robj *key) {
      * we need to re process the command again */
     if (c->flag.pending_command) {
         c->flag.pending_command = 0;
+        c->flag.reexecuting_command = 1;
         /* We want the command processing and the unblock handler (see RM_Call 'K' option)
          * to run atomically, this is why we must enter the execution unit here before
          * running the command, and exit the execution unit after calling the unblock handler (if exists).
@@ -692,6 +716,8 @@ static void unblockClientOnKey(client *c, robj *key) {
         }
         exitExecutionUnit();
         afterCommand(c);
+        /* Clear the reexecuting_command flag after the proc is executed. */
+        c->flag.reexecuting_command = 0;
         server.current_client = old_client;
     }
 }

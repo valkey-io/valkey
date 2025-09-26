@@ -1,0 +1,55 @@
+{
+    "MIGRATESLOTS": {
+        "summary": "Migrate the given slots from this node to the specified nodes.",
+        "complexity": "O(N) where N is the total number of the slots between all start slot and end slot arguments.",
+        "group": "cluster",
+        "since": "9.0.0",
+        "arity": -4,
+        "container": "CLUSTER",
+        "function": "clusterCommand",
+        "command_flags": [
+            "NO_ASYNC_LOADING",
+            "ADMIN",
+            "STALE"
+        ],
+        "arguments": [
+            {
+                "name": "migration-group",
+                "type": "block",
+                "multiple": true,
+                "arguments": [
+                    {
+                        "name": "slotsrange-token",
+                        "type": "pure-token",
+                        "token": "SLOTSRANGE",
+                        "description": "One or more ranges of slots to be migrated."
+                    },
+                    {
+                        "name": "range",
+                        "type": "block",
+                        "multiple": true,
+                        "arguments": [
+                            { "name": "start-slot", "type": "integer" },
+                            { "name": "end-slot", "type": "integer" }
+                        ],
+                        "description": "Start and end slot for single range"
+                    },
+                    {
+                        "name": "node-token",
+                        "type": "pure-token",
+                        "token": "NODE"
+                    },
+                    {
+                        "name": "node-id",
+                        "type": "string",
+                        "pattern": "^[0-9a-fA-F]{40}$",
+                        "description": "40 character node name of the node to migrate to"
+                    }
+                ]
+            }
+        ],
+        "reply_schema": {
+            "const": "OK"
+        }
+    }
+}

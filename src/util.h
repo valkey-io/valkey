@@ -33,6 +33,17 @@
 #include <stdint.h>
 #include "sds.h"
 
+/* Anti-warning macro... */
+#ifndef UNUSED
+#define UNUSED(V) ((void)V)
+#endif
+
+/* min/max */
+#undef min
+#undef max
+#define min(a, b) ((a) < (b) ? (a) : (b))
+#define max(a, b) ((a) > (b) ? (a) : (b))
+
 /* The maximum number of characters needed to represent a long double
  * as a string (long double has a huge range of some 4952 chars, see LDBL_MAX).
  * This should be the size of the buffer given to ld2string */
@@ -57,6 +68,9 @@ typedef enum {
     LD_STR_HEX    /* %La */
 } ld2string_mode;
 
+typedef long long mstime_t; /* millisecond time type. */
+typedef long long ustime_t; /* microsecond time type. */
+
 int stringmatchlen(const char *p, int plen, const char *s, int slen, int nocase);
 int stringmatch(const char *p, const char *s, int nocase);
 int stringmatchlen_fuzz_test(void);
@@ -68,7 +82,7 @@ uint32_t sdigits10(int64_t v);
 int ll2string(char *s, size_t len, long long value);
 int ull2string(char *s, size_t len, unsigned long long value);
 int string2ll(const char *s, size_t slen, long long *value);
-int string2ull(const char *s, unsigned long long *value);
+int string2ull(const char *s, size_t slen, unsigned long long *value);
 int string2l(const char *s, size_t slen, long *value);
 int string2ul_base16_async_signal_safe(const char *src, size_t slen, unsigned long *result_output);
 int string2ld(const char *s, size_t slen, long double *dp);
@@ -99,6 +113,12 @@ int snprintf_async_signal_safe(char *to, size_t n, const char *fmt, ...);
 #endif
 size_t valkey_strlcpy(char *dst, const char *src, size_t dsize);
 size_t valkey_strlcat(char *dst, const char *src, size_t dsize);
-char *valkey_asprintf(char const *fmt, ...);
+void getRandomSeedCString(char *buff, size_t len);
+void setRandomSeedCString(char *seed_str, size_t len);
+void getRandomHexChars(char *p, size_t len);
+void getRandomBytes(unsigned char *p, size_t len);
+long long ustime(void);
+mstime_t mstime(void);
+void writePointerWithPadding(unsigned char *buf, const void *ptr);
 
 #endif

@@ -323,7 +323,7 @@ int fuzzTest(int keymode, size_t count, double addprob, double remprob) {
 /* Redis Cluster alike fuzz testing.
  *
  * This test simulates the radix tree usage made by Redis Cluster in order
- * to maintain the hash slot -> keys mappig. The keys are alphanumerical
+ * to maintain the hash slot -> keys mapping. The keys are alphanumerical
  * but the first two bytes that are binary (and are the key hashed).
  *
  * In this test there is no comparison with the hash table, the only goal
@@ -332,6 +332,7 @@ int fuzzTest(int keymode, size_t count, double addprob, double remprob) {
 int fuzzTestCluster(size_t count, double addprob, double remprob) {
     unsigned char key[128];
     int keylen = 0;
+    size_t used_memory_before = zmalloc_used_memory();
 
     printf("Cluster Fuzz test [keys:%zu keylen:%d]: ", count, keylen);
     fflush(stdout);
@@ -365,13 +366,13 @@ int fuzzTestCluster(size_t count, double addprob, double remprob) {
         /* Insert element. */
         if ((double)genrand64_int64() / RAND_MAX < addprob) {
             raxInsert(rax, key, keylen, NULL, NULL);
-            TEST_ASSERT(raxAllocSize(rax) == zmalloc_used_memory());
+            TEST_ASSERT(raxAllocSize(rax) + used_memory_before == zmalloc_used_memory());
         }
 
         /* Remove element. */
         if ((double)genrand64_int64() / RAND_MAX < remprob) {
             raxRemove(rax, key, keylen, NULL);
-            TEST_ASSERT(raxAllocSize(rax) == zmalloc_used_memory());
+            TEST_ASSERT(raxAllocSize(rax) + used_memory_before == zmalloc_used_memory());
         }
     }
     size_t finalkeys = raxSize(rax);
@@ -491,7 +492,7 @@ int iteratorFuzzTest(int keymode, size_t count) {
             if (array_res) seekidx--;
         }
 
-        /* Both the iteratos should agree about EOF. */
+        /* Both the iterators should agree about EOF. */
         if (array_res != rax_res) {
             printf("Iter fuzz: iterators do not agree about EOF "
                    "at iteration %d:  "
@@ -537,6 +538,7 @@ int test_raxRandomWalk(int argc, char **argv, int flags) {
     UNUSED(argc);
     UNUSED(argv);
     UNUSED(flags);
+    size_t used_memory_before = zmalloc_used_memory();
 
     rax *t = raxNew();
     char *toadd[] = {"alligator", "alien", "byword", "chromodynamic", "romane", "romanus", "romulus", "rubens",
@@ -545,7 +547,7 @@ int test_raxRandomWalk(int argc, char **argv, int flags) {
     long numele;
     for (numele = 0; toadd[numele] != NULL; numele++) {
         raxInsert(t, (unsigned char *)toadd[numele], strlen(toadd[numele]), (void *)numele, NULL);
-        TEST_ASSERT(raxAllocSize(t) == zmalloc_used_memory());
+        TEST_ASSERT(raxAllocSize(t) + used_memory_before == zmalloc_used_memory());
     }
 
     raxIterator iter;
@@ -580,6 +582,7 @@ int test_raxIteratorUnitTests(int argc, char **argv, int flags) {
     UNUSED(argc);
     UNUSED(argv);
     UNUSED(flags);
+    size_t used_memory_before = zmalloc_used_memory();
 
     rax *t = raxNew();
     char *toadd[] = {"alligator", "alien", "byword", "chromodynamic", "romane", "romanus", "romulus", "rubens",
@@ -592,7 +595,7 @@ int test_raxIteratorUnitTests(int argc, char **argv, int flags) {
 
     for (long i = 0; i < items; i++) {
         raxInsert(t, (unsigned char *)toadd[i], strlen(toadd[i]), (void *)i, NULL);
-        TEST_ASSERT(raxAllocSize(t) == zmalloc_used_memory());
+        TEST_ASSERT(raxAllocSize(t) + used_memory_before == zmalloc_used_memory());
     }
 
     raxIterator iter;
@@ -842,6 +845,7 @@ int test_raxRegressionTest6(int argc, char **argv, int flags) {
 int test_raxBenchmark(int argc, char **argv, int flags) {
     UNUSED(argc);
     UNUSED(argv);
+    size_t used_memory_before = zmalloc_used_memory();
 
     if (!(flags & UNIT_TEST_SINGLE)) return 0;
 
@@ -853,7 +857,7 @@ int test_raxBenchmark(int argc, char **argv, int flags) {
             char buf[64];
             int len = int2key(buf, sizeof(buf), i, mode);
             raxInsert(t, (unsigned char *)buf, len, (void *)(long)i, NULL);
-            TEST_ASSERT(raxAllocSize(t) == zmalloc_used_memory());
+            TEST_ASSERT(raxAllocSize(t) + used_memory_before == zmalloc_used_memory());
         }
         printf("Insert: %f\n", (double)(_ustime() - start) / 1000000);
         printf("%llu total nodes\n", (unsigned long long)t->numnodes);
@@ -907,7 +911,7 @@ int test_raxBenchmark(int argc, char **argv, int flags) {
             int len = int2key(buf, sizeof(buf), i, mode);
             int retval = raxRemove(t, (unsigned char *)buf, len, NULL);
             TEST_ASSERT(retval == 1);
-            TEST_ASSERT(raxAllocSize(t) == zmalloc_used_memory());
+            TEST_ASSERT(raxAllocSize(t) + used_memory_before == zmalloc_used_memory());
         }
         printf("Deletion: %f\n", (double)(_ustime() - start) / 1000000);
 
@@ -1022,4 +1026,56 @@ int test_raxFuzz(int argc, char **argv, int flags) {
         printf("OK! \\o/\n");
     }
     return !!errors;
+}
+
+/* This test verifies that raxRemove correctly handles compression when two keys
+ * share a common prefix. Upon deletion of one key, rax attempts to recompress
+ * the structure back to its original form for other key. Historically, there was
+ * a crash when deleting one key because rax would attempt to recompress the
+ * structure without checking the 512MB size limit.
+ *
+ * This test is disabled by default because it uses a lot of memory. */
+int test_raxRecompressHugeKey(int argc, char **argv, int flags) {
+    UNUSED(argc);
+    UNUSED(argv);
+
+    if (!(flags & UNIT_TEST_LARGE_MEMORY)) return 0;
+
+    rax *rt = raxNew();
+
+    /* Insert small keys */
+    char small_key[32];
+    const char *small_prefix = ",({5oM}";
+    int i;
+    for (i = 1; i <= 20; i++) {
+        snprintf(small_key, sizeof(small_key), "%s%d", small_prefix, i);
+        size_t keylen = strlen(small_key);
+        raxInsert(rt, (unsigned char *)small_key, keylen,
+                  (void *)(long)i, NULL);
+    }
+
+    /* Insert large key exceeding compressed node size limit */
+    size_t max_keylen = ((1 << 29) - 1) + 100; // Compressed node limit + overflow
+    const char *large_prefix = ",({ABC}";
+    unsigned char *large_key = zmalloc(max_keylen + strlen(large_prefix));
+    if (!large_key) {
+        fprintf(stderr, "Failed to allocate memory for large key\n");
+        raxFree(rt);
+        return 1;
+    }
+
+    memcpy(large_key, large_prefix, strlen(large_prefix));
+    memset(large_key + strlen(large_prefix), '1', max_keylen);
+    raxInsert(rt, large_key, max_keylen + strlen(large_prefix), NULL, NULL);
+
+    /* Remove small keys to trigger recompression crash in raxRemove() */
+    for (i = 20; i >= 1; i--) {
+        snprintf(small_key, sizeof(small_key), "%s%d", small_prefix, i);
+        size_t keylen = strlen(small_key);
+        raxRemove(rt, (unsigned char *)small_key, keylen, NULL);
+    }
+
+    zfree(large_key);
+    raxFree(rt);
+    return 0;
 }

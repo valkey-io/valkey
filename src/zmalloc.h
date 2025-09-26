@@ -58,7 +58,7 @@
 #error "Newer version of jemalloc required"
 #endif
 
-#elif defined(__APPLE__)
+#elif defined(__APPLE__) && !defined(NO_MALLOC_USABLE_SIZE)
 #include <malloc/malloc.h>
 #define HAVE_MALLOC_SIZE 1
 #define zmalloc_size(p) malloc_size(p)

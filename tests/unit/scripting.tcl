@@ -865,7 +865,7 @@ start_server {tags {"scripting"}} {
         # still this test isn't able to trigger the issue, but we keep it anyway.
         start_server {tags {"scripting"}} {
             set repl [attach_to_replication_stream]
-            # a command with 5 argsument
+            # a command with 5 arguments
             r eval {redis.call('hmget', KEYS[1], 1, 2, 3)} 1 key
             # then a command with 3 that is replicated as one with 4
             r eval {redis.call('incrbyfloat', KEYS[1], 1)} 1 key
@@ -1021,11 +1021,11 @@ start_server {tags {"scripting"}} {
              return redis.call("EXISTS", "key")
         } 1 key] 0
     }
-    
+
     test "Script ACL check" {
         r acl setuser bob on {>123} {+@scripting} {+set} {~x*}
         assert_equal [r auth bob 123] {OK}
-        
+
         # Check permission granted
         assert_equal [run_script {
             return redis.acl_check_cmd('set','xx',1)
@@ -1035,7 +1035,7 @@ start_server {tags {"scripting"}} {
         assert_equal [run_script {
             return redis.acl_check_cmd('hset','xx','f',1)
         } 1 xx] {}
-        
+
         # Check permission denied unauthorised key
         # Note: we don't pass the "yy" key as an argument to the script so key acl checks won't block the script
         assert_equal [run_script {
@@ -1569,16 +1569,16 @@ start_server {tags {"scripting needs:debug external:skip"}} {
         reconnect
         assert_equal [r ping] {PONG}
     }
-    
+
     test {Test scripting debug lua server invocations} {
         r script debug sync
-        r eval {return 'hello'} 0 
+        r eval {return 'hello'} 0
         set cmd "*2\r\n\$6\r\nserver\r\n\$4\r\nping\r\n"
         r write $cmd
         r flush
         set ret [r read]
         assert_match {*PONG*} $ret
-        reconnect 
+        reconnect
         assert_equal [r ping] {PONG}
     }
 }
@@ -1962,7 +1962,7 @@ start_server {tags {"scripting"}} {
                 return 1
             } 0
         } e
-        assert_match {*Unexpected engine in script shebang*} $e
+        assert_match {*Could not find scripting engine*} $e
 
         assert_equal [r eval {#!lua
             return 1
@@ -1989,7 +1989,7 @@ start_server {tags {"scripting"}} {
 
     test "allow-oom shebang flag" {
         r set x 123
-    
+
         r config set maxmemory 1
 
         # Fail to execute deny-oom command in OOM condition (backwards compatibility mode without flags)
@@ -2062,7 +2062,7 @@ start_server {tags {"scripting"}} {
             } 1 x
         }
     }
-    
+
     start_server {tags {"external:skip"}} {
         r -1 set x "some value"
         test "no-writes shebang flag on replica" {
@@ -2235,13 +2235,13 @@ start_server {tags {"scripting"}} {
                 return redis.call('get','x')
             } 1 x
         }
-        
+
         assert_match {foobar} [
             r eval {#!lua flags=allow-stale,no-writes
                 return redis.call('echo','foobar')
             } 0
         ]
-        
+
         # Test again with EVALSHA
         set sha [
             r script load {#!lua flags=allow-stale,no-writes
@@ -2249,7 +2249,7 @@ start_server {tags {"scripting"}} {
             }
         ]
         assert_match {foobar} [r evalsha $sha 0]
-        
+
         r replicaof no one
         r config set replica-serve-stale-data yes
         set _ {}
@@ -2301,7 +2301,7 @@ start_server {tags {"scripting"}} {
         assert_equal [s total_error_replies] {1}
         assert_match {calls=0*rejected_calls=1,failed_calls=0*} [cmdrstat set r]
         assert_match {calls=1*rejected_calls=0,failed_calls=0*} [cmdrstat eval r]
-        
+
         # Returning an error object from lua is handled as a valid RESP error result.
         r config resetstat
         assert_error {OOM command not allowed when used memory > 'maxmemory'.} {
@@ -2323,7 +2323,7 @@ start_server {tags {"scripting"}} {
         assert_equal [s total_error_replies] {1}
         assert_match {calls=1*rejected_calls=0,failed_calls=1*} [cmdrstat select r]
         assert_match {calls=1*rejected_calls=0,failed_calls=1*} [cmdrstat eval r]
-        
+
         # redis.pcall() failure due to error in server command returns lua error table with server error message without '-' prefix
         r config resetstat
         assert_equal [
@@ -2379,7 +2379,7 @@ start_server {tags {"scripting"}} {
         assert_match {calls=1*rejected_calls=0,failed_calls=1*} [cmdrstat geoadd r]
         assert_match {calls=1*rejected_calls=0,failed_calls=1*} [cmdrstat eval r]
     } {} {cluster:skip}
-    
+
     test "LUA redis.error_reply API" {
         r config resetstat
         assert_error {MY_ERR_CODE custom msg} {
@@ -2456,6 +2456,29 @@ start_server {tags {"scripting"}} {
 
             # Assert the string has been trimmed and the 80 bytes from the previous alloc were not kept.
             assert { [r memory usage foo] <= $expected_memory};
+        }
+    }
+
+    test {EVAL - Scripts support NULL byte} {
+        assert_equal [r eval "return \"\x00\";" 0] "\x00"
+        # Using a null byte never seemed to work with functions, so
+        # we don't have a test for that case.
+    }
+
+    test {EVAL - explicit error() call handling} {
+        # error("simple string error")
+        assert_error {ERR user_script:1: simple string error script: *} {
+            r eval "error('simple string error')" 0
+        }
+
+        # error({"err": "ERR table error"})
+        assert_error {ERR table error script: *} {
+            r eval "error({err='ERR table error'})" 0
+        }
+
+        # error({})
+        assert_error {ERR unknown error script: *} {
+            r eval "error({})" 0
         }
     }
 }

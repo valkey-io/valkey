@@ -187,8 +187,6 @@ void AuthBlock_FreeData(ValkeyModuleCtx *ctx, void *privdata) {
  * of blocking module auth.
  */
 int blocking_auth_cb(ValkeyModuleCtx *ctx, ValkeyModuleString *username, ValkeyModuleString *password, ValkeyModuleString **err) {
-    VALKEYMODULE_NOT_USED(username);
-    VALKEYMODULE_NOT_USED(password);
     VALKEYMODULE_NOT_USED(err);
     /* Block the client from the Module. */
     ValkeyModuleBlockedClient *bc = ValkeyModule_BlockClientOnAuth(ctx, AuthBlock_Reply, AuthBlock_FreeData);

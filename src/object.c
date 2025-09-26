@@ -28,10 +28,12 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
+#include "hashtable.h"
 #include "server.h"
 #include "serverassert.h"
 #include "functions.h"
 #include "intset.h" /* Compact integer set structure */
+#include "vset.h"
 #include "zmalloc.h"
 #include "sds.h"
 #include "module.h"
@@ -52,16 +54,18 @@
  * and expire fields can be omitted by passing NULL and -1, respectively. */
 robj *createObjectWithKeyAndExpire(int type, void *ptr, const sds key, long long expire) {
     /* Calculate sizes */
+    int has_embkey = key != NULL;
     int has_expire = (expire != -1 ||
-                      (key != NULL && sdslen(key) >= KEY_SIZE_TO_INCLUDE_EXPIRE_THRESHOLD));
-    size_t key_sds_size = 0;
+                      (has_embkey && sdslen(key) >= KEY_SIZE_TO_INCLUDE_EXPIRE_THRESHOLD));
+    size_t key_sds_len = has_embkey ? sdslen(key) : 0;
+    char key_sds_type = has_embkey ? sdsReqType(key_sds_len) : 0;
+    size_t key_sds_size = has_embkey ? sdsReqSize(key_sds_len, key_sds_type) : 0;
     size_t min_size = sizeof(robj);
     if (has_expire) {
         min_size += sizeof(long long);
     }
-    if (key != NULL) {
+    if (has_embkey) {
         /* Size of embedded key, incl. 1 byte for prefixed sds hdr size. */
-        key_sds_size = sdscopytobuffer(NULL, 0, key, NULL);
         min_size += 1 + key_sds_size;
     }
     /* Allocate and set the declared fields. */
@@ -72,18 +76,18 @@ robj *createObjectWithKeyAndExpire(int type, void *ptr, const sds key, long long
     o->ptr = ptr;
     o->refcount = 1;
     o->lru = 0;
-    o->hasembkey = (key != NULL);
+    o->hasembkey = has_embkey;
 
     /* If the allocation has enough space for an expire field, add it even if we
      * don't need it now. Then we don't need to realloc if it's needed later. */
-    if (key != NULL && !has_expire && bufsize >= min_size + sizeof(long long)) {
+    if (has_embkey && !has_expire && bufsize >= min_size + sizeof(long long)) {
         has_expire = 1;
         min_size += sizeof(long long);
     }
     o->hasexpire = has_expire;
 
     /* The memory after the struct where we embedded data. */
-    unsigned char *data = (void *)(o + 1);
+    char *data = (void *)(o + 1);
 
     /* Set the expire field. */
     if (o->hasexpire) {
@@ -93,8 +97,8 @@ robj *createObjectWithKeyAndExpire(int type, void *ptr, const sds key, long long
 
     /* Copy embedded key. */
     if (o->hasembkey) {
-        sdscopytobuffer(data + 1, key_sds_size, key, data);
-        data += 1 + key_sds_size;
+        *data++ = sdsHdrSize(key_sds_type);
+        sdswrite(data, key_sds_size, key_sds_type, key, key_sds_len);
     }
 
     return o;
@@ -146,18 +150,19 @@ static robj *createEmbeddedStringObjectWithKeyAndExpire(const char *val_ptr,
                                                         const sds key,
                                                         long long expire) {
     /* Calculate sizes */
-    size_t key_sds_size = 0;
-    size_t min_size = sizeof(robj);
+    int has_embkey = (key != NULL);
+    size_t key_sds_len = has_embkey ? sdslen(key) : 0;
+    char key_sds_type = has_embkey ? sdsReqType(key_sds_len) : 0;
+    size_t key_sds_size = has_embkey ? sdsReqSize(key_sds_len, key_sds_type) : 0;
+    size_t val_sds_size = sdsReqSize(val_len, SDS_TYPE_8);
+    size_t min_size = sizeof(robj) + val_sds_size;
     if (expire != -1) {
         min_size += sizeof(long long);
     }
-    if (key != NULL) {
+    if (has_embkey) {
         /* Size of embedded key, incl. 1 byte for prefixed sds hdr size. */
-        key_sds_size = sdscopytobuffer(NULL, 0, key, NULL);
         min_size += 1 + key_sds_size;
     }
-    /* Size of embedded value (EMBSTR) including \0 term. */
-    min_size += sizeof(struct sdshdr8) + val_len + 1;
 
     /* Allocate and set the declared fields. */
     size_t bufsize = 0;
@@ -167,7 +172,7 @@ static robj *createEmbeddedStringObjectWithKeyAndExpire(const char *val_ptr,
     o->refcount = 1;
     o->lru = 0;
     o->hasexpire = (expire != -1);
-    o->hasembkey = (key != NULL);
+    o->hasembkey = has_embkey;
 
     /* If the allocation has enough space for an expire field, add it even if we
      * don't need it now. Then we don't need to realloc if it's needed later. */
@@ -177,7 +182,7 @@ static robj *createEmbeddedStringObjectWithKeyAndExpire(const char *val_ptr,
     }
 
     /* The memory after the struct where we embedded data. */
-    unsigned char *data = (void *)(o + 1);
+    char *data = (void *)(o + 1);
 
     /* Set the expire field. */
     if (o->hasexpire) {
@@ -187,26 +192,15 @@ static robj *createEmbeddedStringObjectWithKeyAndExpire(const char *val_ptr,
 
     /* Copy embedded key. */
     if (o->hasembkey) {
-        sdscopytobuffer(data + 1, key_sds_size, key, data);
-        data += 1 + key_sds_size;
+        *data++ = sdsHdrSize(key_sds_type);
+        sdswrite(data, key_sds_size, key_sds_type, key, key_sds_len);
+        data += key_sds_size;
     }
 
-    /* Copy embedded value (EMBSTR). */
-    struct sdshdr8 *sh = (void *)data;
-    sh->flags = SDS_TYPE_8;
-    sh->len = val_len;
-    size_t capacity = bufsize - (min_size - val_len);
-    sh->alloc = capacity;
-    serverAssert(capacity == sh->alloc); /* Overflow check. */
-    if (val_ptr == SDS_NOINIT) {
-        sh->buf[val_len] = '\0';
-    } else if (val_ptr != NULL) {
-        memcpy(sh->buf, val_ptr, val_len);
-        sh->buf[val_len] = '\0';
-    } else {
-        memset(sh->buf, 0, val_len + 1);
-    }
-    o->ptr = sh->buf;
+    /* Copy embedded value (EMBSTR) always as SDS TYPE 8. Account for unused
+     * memory in the SDS alloc field. */
+    size_t remaining_size = bufsize - (data - (char *)(void *)o);
+    o->ptr = sdswrite(data, remaining_size, SDS_TYPE_8, val_ptr, val_len);
 
     return o;
 }
@@ -232,14 +226,22 @@ robj *createStringObject(const char *ptr, size_t len) {
         return createRawStringObject(ptr, len);
 }
 
+/* Similar to createStringObject() but takes an existing SDS as input. */
+robj *createStringObjectFromSds(const sds s) {
+    return createStringObject(s, sdslen(s));
+}
+
 robj *createStringObjectWithKeyAndExpire(const char *ptr, size_t len, const sds key, long long expire) {
     /* When to embed? Embed when the sum is up to 64 bytes. There may be better
      * heuristics, e.g. we can look at the jemalloc sizes (16-byte intervals up
      * to 128 bytes). */
     size_t size = sizeof(robj);
-    size += (key != NULL) * (sdslen(key) + 3); /* hdr size (1) + hdr (1) + nullterm (1) */
+    if (key) {
+        size_t key_len = sdslen(key);
+        size += sdsReqSize(key_len, sdsReqType(key_len)) + 1; /* 1 byte for prefixed sds hdr size */
+    }
     size += (expire != -1) * sizeof(long long);
-    size += 4 + len; /* embstr header (3) + nullterm (1) */
+    size += sdsReqSize(len, SDS_TYPE_8);
     if (size <= 64) {
         return createEmbeddedStringObjectWithKeyAndExpire(ptr, len, key, expire);
     } else {
@@ -261,9 +263,11 @@ sds objectGetKey(const robj *val) {
     return NULL;
 }
 
+/* Return the expire time of the specified robj, or -1 if no expire
+ * is associated with this robj (i.e. the robj is non volatile) */
 long long objectGetExpire(const robj *val) {
-    unsigned char *data = (void *)(val + 1);
     if (val->hasexpire) {
+        unsigned char *data = (void *)(val + 1);
         return *(long long *)data;
     } else {
         return -1;
@@ -530,7 +534,10 @@ void freeZsetObject(robj *o) {
 
 void freeHashObject(robj *o) {
     switch (o->encoding) {
-    case OBJ_ENCODING_HT: dictRelease((dict *)o->ptr); break;
+    case OBJ_ENCODING_HASHTABLE:
+        hashTypeFreeVolatileSet(o);
+        hashtableRelease((hashtable *)o->ptr);
+        break;
     case OBJ_ENCODING_LISTPACK: lpFree(o->ptr); break;
     default: serverPanic("Unknown hash encoding type"); break;
     }
@@ -630,7 +637,7 @@ void dismissSetObject(robj *o, size_t size_hint) {
          * page size, and there's a high chance we'll actually dismiss something. */
         if (size_hint / hashtableSize(ht) >= server.page_size) {
             hashtableIterator iter;
-            hashtableInitIterator(&iter, ht);
+            hashtableInitIterator(&iter, ht, 0);
             void *next;
             while (hashtableNext(&iter, &next)) {
                 sds item = next;
@@ -675,25 +682,22 @@ void dismissZsetObject(robj *o, size_t size_hint) {
 
 /* See dismissObject() */
 void dismissHashObject(robj *o, size_t size_hint) {
-    if (o->encoding == OBJ_ENCODING_HT) {
-        dict *d = o->ptr;
-        serverAssert(dictSize(d) != 0);
+    if (o->encoding == OBJ_ENCODING_HASHTABLE) {
+        hashtable *ht = o->ptr;
+        serverAssert(hashtableSize(ht) != 0);
         /* We iterate all fields only when average field/value size is bigger than
          * a page size, and there's a high chance we'll actually dismiss something. */
-        if (size_hint / dictSize(d) >= server.page_size) {
-            dictEntry *de;
-            dictIterator *di = dictGetIterator(d);
-            while ((de = dictNext(di)) != NULL) {
-                /* Only dismiss values memory since the field size
-                 * usually is small. */
-                dismissSds(dictGetVal(de));
+        if (size_hint / hashtableSize(ht) >= server.page_size) {
+            hashtableIterator iter;
+            hashtableInitIterator(&iter, ht, 0);
+            void *next;
+            while (hashtableNext(&iter, &next)) {
+                entryDismissMemory(next);
             }
-            dictReleaseIterator(di);
+            hashtableResetIterator(&iter);
         }
 
-        /* Dismiss hash table memory. */
-        dismissMemory(d->ht_table[0], DICTHT_SIZE(d->ht_size_exp[0]) * sizeof(dictEntry *));
-        dismissMemory(d->ht_table[1], DICTHT_SIZE(d->ht_size_exp[1]) * sizeof(dictEntry *));
+        dismissHashtable(ht);
     } else if (o->encoding == OBJ_ENCODING_LISTPACK) {
         dismissMemory(o->ptr, lpBytes((unsigned char *)o->ptr));
     } else {
@@ -936,13 +940,17 @@ int collateStringObjects(const robj *a, const robj *b) {
 
 /* Equal string objects return 1 if the two objects are the same from the
  * point of view of a string comparison, otherwise 0 is returned. Note that
- * this function is faster then checking for (compareStringObject(a,b) == 0)
+ * this function is faster than checking for (compareStringObject(a,b) == 0)
  * because it can perform some more optimization. */
 int equalStringObjects(robj *a, robj *b) {
     if (a->encoding == OBJ_ENCODING_INT && b->encoding == OBJ_ENCODING_INT) {
         /* If both strings are integer encoded just check if the stored
          * long is the same. */
         return a->ptr == b->ptr;
+    } else if (a->encoding != OBJ_ENCODING_INT &&
+               b->encoding != OBJ_ENCODING_INT &&
+               sdslen(a->ptr) != sdslen(b->ptr)) {
+        return 0;
     } else {
         return compareStringObjects(a, b) == 0;
     }
@@ -1106,7 +1114,6 @@ char *strEncoding(int encoding) {
     switch (encoding) {
     case OBJ_ENCODING_RAW: return "raw";
     case OBJ_ENCODING_INT: return "int";
-    case OBJ_ENCODING_HT: return "hashtable";
     case OBJ_ENCODING_HASHTABLE: return "hashtable";
     case OBJ_ENCODING_QUICKLIST: return "quicklist";
     case OBJ_ENCODING_LISTPACK: return "listpack";
@@ -1127,17 +1134,13 @@ char *strEncoding(int encoding) {
  * are checked and averaged to estimate the total size. */
 #define OBJ_COMPUTE_SIZE_DEF_SAMPLES 5 /* Default sample size. */
 size_t objectComputeSize(robj *key, robj *o, size_t sample_size, int dbid) {
-    sds ele, ele2;
-    dict *d;
-    dictIterator *di;
-    struct dictEntry *de;
     size_t asize = 0, elesize = 0, samples = 0;
 
     if (o->type == OBJ_STRING) {
         if (o->encoding == OBJ_ENCODING_INT) {
-            asize = sizeof(*o);
+            asize = zmalloc_size((void *)o);
         } else if (o->encoding == OBJ_ENCODING_RAW) {
-            asize = sdsAllocSize(o->ptr) + sizeof(*o);
+            asize = sdsAllocSize(o->ptr) + zmalloc_size((void *)o);
         } else if (o->encoding == OBJ_ENCODING_EMBSTR) {
             asize = zmalloc_size((void *)o);
         } else {
@@ -1147,24 +1150,24 @@ size_t objectComputeSize(robj *key, robj *o, size_t sample_size, int dbid) {
         if (o->encoding == OBJ_ENCODING_QUICKLIST) {
             quicklist *ql = o->ptr;
             quicklistNode *node = ql->head;
-            asize = sizeof(*o) + sizeof(quicklist);
+            asize = zmalloc_size((void *)o) + sizeof(quicklist);
             do {
                 elesize += sizeof(quicklistNode) + zmalloc_size(node->entry);
                 samples++;
             } while ((node = node->next) && samples < sample_size);
             asize += (double)elesize / samples * ql->len;
         } else if (o->encoding == OBJ_ENCODING_LISTPACK) {
-            asize = sizeof(*o) + zmalloc_size(o->ptr);
+            asize = zmalloc_size((void *)o) + zmalloc_size(o->ptr);
         } else {
             serverPanic("Unknown list encoding");
         }
     } else if (o->type == OBJ_SET) {
         if (o->encoding == OBJ_ENCODING_HASHTABLE) {
             hashtable *ht = o->ptr;
-            asize = sizeof(*o) + hashtableMemUsage(ht);
+            asize = zmalloc_size((void *)o) + hashtableMemUsage(ht);
 
             hashtableIterator iter;
-            hashtableInitIterator(&iter, ht);
+            hashtableInitIterator(&iter, ht, 0);
             void *next;
             while (hashtableNext(&iter, &next) && samples < sample_size) {
                 sds element = next;
@@ -1174,20 +1177,20 @@ size_t objectComputeSize(robj *key, robj *o, size_t sample_size, int dbid) {
             hashtableResetIterator(&iter);
             if (samples) asize += (double)elesize / samples * hashtableSize(ht);
         } else if (o->encoding == OBJ_ENCODING_INTSET) {
-            asize = sizeof(*o) + zmalloc_size(o->ptr);
+            asize = zmalloc_size((void *)o) + zmalloc_size(o->ptr);
         } else if (o->encoding == OBJ_ENCODING_LISTPACK) {
-            asize = sizeof(*o) + zmalloc_size(o->ptr);
+            asize = zmalloc_size((void *)o) + zmalloc_size(o->ptr);
         } else {
             serverPanic("Unknown set encoding");
         }
     } else if (o->type == OBJ_ZSET) {
         if (o->encoding == OBJ_ENCODING_LISTPACK) {
-            asize = sizeof(*o) + zmalloc_size(o->ptr);
+            asize = zmalloc_size((void *)o) + zmalloc_size(o->ptr);
         } else if (o->encoding == OBJ_ENCODING_SKIPLIST) {
             hashtable *ht = ((zset *)o->ptr)->ht;
             zskiplist *zsl = ((zset *)o->ptr)->zsl;
             zskiplistNode *znode = zsl->header->level[0].forward;
-            asize = sizeof(*o) + sizeof(zset) + sizeof(zskiplist) +
+            asize = zmalloc_size((void *)o) + sizeof(zset) + sizeof(zskiplist) +
                     hashtableMemUsage(ht) + zmalloc_size(zsl->header);
             while (znode != NULL && samples < sample_size) {
                 elesize += sdsAllocSize(znode->ele);
@@ -1201,26 +1204,28 @@ size_t objectComputeSize(robj *key, robj *o, size_t sample_size, int dbid) {
         }
     } else if (o->type == OBJ_HASH) {
         if (o->encoding == OBJ_ENCODING_LISTPACK) {
-            asize = sizeof(*o) + zmalloc_size(o->ptr);
-        } else if (o->encoding == OBJ_ENCODING_HT) {
-            d = o->ptr;
-            di = dictGetIterator(d);
-            asize = sizeof(*o) + sizeof(dict) + (sizeof(struct dictEntry *) * dictBuckets(d));
-            while ((de = dictNext(di)) != NULL && samples < sample_size) {
-                ele = dictGetKey(de);
-                ele2 = dictGetVal(de);
-                elesize += sdsAllocSize(ele) + sdsAllocSize(ele2);
-                elesize += dictEntryMemUsage(de);
+            asize = zmalloc_size((void *)o) + zmalloc_size(o->ptr);
+        } else if (o->encoding == OBJ_ENCODING_HASHTABLE) {
+            hashtable *ht = o->ptr;
+            hashtableIterator iter;
+            vset *volatile_fields = hashtableMetadata(ht);
+            hashtableInitIterator(&iter, ht, 0);
+            void *next;
+
+            asize = zmalloc_size((void *)o) + hashtableMemUsage(ht);
+            while (hashtableNext(&iter, &next) && samples < sample_size) {
+                elesize += entryMemUsage(next);
                 samples++;
             }
-            dictReleaseIterator(di);
-            if (samples) asize += (double)elesize / samples * dictSize(d);
+            hashtableResetIterator(&iter);
+            if (samples) asize += (double)elesize / samples * hashtableSize(ht);
+            if (vsetIsValid(volatile_fields)) asize += vsetMemUsage(volatile_fields);
         } else {
             serverPanic("Unknown hash encoding");
         }
     } else if (o->type == OBJ_STREAM) {
         stream *s = o->ptr;
-        asize = sizeof(*o) + sizeof(*s);
+        asize = zmalloc_size((void *)o) + sizeof(*s);
         asize += raxAllocSize(s->rax);
 
         /* Now we have to add the listpacks. The last listpack is often non
@@ -1258,28 +1263,36 @@ size_t objectComputeSize(robj *key, robj *o, size_t sample_size, int dbid) {
         if (s->cgroups) {
             raxStart(&ri, s->cgroups);
             raxSeek(&ri, "^", NULL, 0);
-            while (raxNext(&ri)) {
+            samples = 0;
+            elesize = 0;
+            while (samples < sample_size && raxNext(&ri)) {
                 streamCG *cg = ri.data;
-                asize += sizeof(*cg);
-                asize += raxAllocSize(cg->pel);
-                asize += sizeof(streamNACK) * raxSize(cg->pel);
+                elesize += sizeof(*cg);
+                elesize += raxAllocSize(cg->pel);
+                elesize += sizeof(streamNACK) * raxSize(cg->pel);
 
                 /* For each consumer we also need to add the basic data
                  * structures and the PEL memory usage. */
                 raxIterator cri;
                 raxStart(&cri, cg->consumers);
                 raxSeek(&cri, "^", NULL, 0);
-                while (raxNext(&cri)) {
+                size_t inner_samples = 0;
+                size_t inner_elesize = 0;
+                while (inner_samples < sample_size && raxNext(&cri)) {
                     streamConsumer *consumer = cri.data;
-                    asize += sizeof(*consumer);
-                    asize += sdslen(consumer->name);
-                    asize += raxAllocSize(consumer->pel);
+                    inner_elesize += sizeof(*consumer);
+                    inner_elesize += sdslen(consumer->name);
+                    inner_elesize += raxAllocSize(consumer->pel);
                     /* Don't count NACKs again, they are shared with the
                      * consumer group PEL. */
+                    inner_samples++;
                 }
                 raxStop(&cri);
+                if (inner_samples) elesize += (double)inner_elesize / inner_samples * raxSize(cg->consumers);
+                samples++;
             }
             raxStop(&ri);
+            if (samples) asize += (double)elesize / samples * raxSize(s->cgroups);
         }
     } else if (o->type == OBJ_MODULE) {
         asize = moduleGetMemUsage(key, o, sample_size, dbid);
@@ -1348,6 +1361,10 @@ struct serverMemOverhead *getMemoryOverheadData(void) {
                          server.stat_clients_type_memory[CLIENT_TYPE_NORMAL];
     mem_total += mh->clients_normal;
 
+    mh->cluster_slot_import = server.stat_clients_type_memory[CLIENT_TYPE_SLOT_IMPORT];
+    mh->cluster_slot_export = server.stat_clients_type_memory[CLIENT_TYPE_SLOT_EXPORT];
+    mem_total += mh->cluster_slot_import + mh->cluster_slot_export;
+
     mh->cluster_links = server.stat_cluster_links_memory;
     mem_total += mh->cluster_links;
 
@@ -1365,8 +1382,8 @@ struct serverMemOverhead *getMemoryOverheadData(void) {
     mem_total += mh->functions_caches;
 
     for (j = 0; j < server.dbnum; j++) {
-        serverDb *db = server.db + j;
-        if (!kvstoreNumAllocatedHashtables(db->keys)) continue;
+        serverDb *db = server.db[j];
+        if (db == NULL || !kvstoreNumAllocatedHashtables(db->keys)) continue;
 
         unsigned long long keyscount = kvstoreSize(db->keys);
 
@@ -1712,7 +1729,7 @@ void memoryCommand(client *c) {
     } else if (!strcasecmp(c->argv[1]->ptr, "stats") && c->argc == 2) {
         struct serverMemOverhead *mh = getMemoryOverheadData();
 
-        addReplyMapLen(c, 31 + mh->num_dbs);
+        addReplyMapLen(c, 33 + mh->num_dbs);
 
         addReplyBulkCString(c, "peak.allocated");
         addReplyLongLong(c, mh->peak_allocated);
@@ -1734,6 +1751,12 @@ void memoryCommand(client *c) {
 
         addReplyBulkCString(c, "cluster.links");
         addReplyLongLong(c, mh->cluster_links);
+
+        addReplyBulkCString(c, "cluster.slot_import");
+        addReplyLongLong(c, mh->cluster_slot_import);
+
+        addReplyBulkCString(c, "cluster.slot_export");
+        addReplyLongLong(c, mh->cluster_slot_export);
 
         addReplyBulkCString(c, "aof.buffer");
         addReplyLongLong(c, mh->aof_buffer);

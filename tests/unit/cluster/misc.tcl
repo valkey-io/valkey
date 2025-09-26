@@ -24,6 +24,15 @@ start_cluster 2 2 {tags {external:skip cluster}} {
     }
 }
 
+start_cluster 1 1 {tags {external:skip cluster}} {
+    test {Cross-slot transaction} {
+        assert_equal OK [R 0 multi]
+        assert_equal QUEUED [r get foo]
+        assert_equal QUEUED [r get bar]
+        assert_error {CROSSSLOT *} {r exec}
+    }
+}
+
 # Create a folder called "nodes.conf" to trigger temp nodes.conf rename
 # failure and it will cause cluster config file save to fail at the rename.
 proc create_nodes_conf_folder {srv_idx} {

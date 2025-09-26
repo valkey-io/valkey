@@ -172,6 +172,16 @@
 #define VALKEY_NO_SANITIZE(sanitizer)
 #endif
 
+#if defined(__SANITIZE_ADDRESS__)
+/* GCC */
+#define VALKEY_ADDRESS_SANITIZER 1
+#elif defined(__has_feature)
+#if __has_feature(address_sanitizer)
+/* Clang */
+#define VALKEY_ADDRESS_SANITIZER 1
+#endif
+#endif
+
 /* Define rdb_fsync_range to sync_file_range() on Linux, otherwise we use
  * the plain fsync() call. */
 #if (defined(__linux__) && defined(SYNC_FILE_RANGE_WAIT_BEFORE))
@@ -186,7 +196,7 @@
 
 /* Check if we can use setproctitle().
  * BSD systems have support for it, we provide an implementation for
- * Linux and osx. */
+ * Linux and macOS. */
 #if (defined __NetBSD__ || defined __FreeBSD__ || defined __OpenBSD__)
 #define USE_SETPROCTITLE
 #endif
@@ -273,7 +283,7 @@ void setproctitle(const char *fmt, ...);
 #endif /* __aarch64__ && __APPLE__ */
 #endif /* CACHE_LINE_SIZE */
 
-#if (__i386 || __amd64 || __powerpc__) && __GNUC__
+#if (defined(__i386) || defined(__amd64) || defined(__powerpc__)) && defined(__GNUC__)
 #define GNUC_VERSION (__GNUC__ * 10000 + __GNUC_MINOR__ * 100 + __GNUC_PATCHLEVEL__)
 #if defined(__clang__)
 #define HAVE_ATOMIC
@@ -364,17 +374,34 @@ void setcpuaffinity(const char *cpulist);
 #define valkey_prefetch(addr) ((void)(addr))
 #endif
 
-/* Check if we can compile AVX2 code */
-#if defined(__x86_64__) && ((defined(__GNUC__) && __GNUC__ >= 5) || (defined(__clang__) && __clang_major__ >= 4))
-#if defined(__has_attribute) && __has_attribute(target)
-#define HAVE_AVX2
-#endif
+/* Check if we can compile x86 SIMD code */
+#if defined(__x86_64__) && ((defined(__GNUC__) && __GNUC__ >= 5) || (defined(__clang__) && __clang_major__ >= 4)) && defined(__has_attribute) && __has_attribute(target)
+#define HAVE_X86_SIMD 1
+#else
+#define HAVE_X86_SIMD 0
 #endif
 
-#if defined(HAVE_AVX2)
+#if HAVE_X86_SIMD
+#define ATTRIBUTE_TARGET_SSE2 __attribute__((target("sse2")))
 #define ATTRIBUTE_TARGET_AVX2 __attribute__((target("avx2")))
+#define ATTRIBUTE_TARGET_AVX512 __attribute__((target("avx512f,avx512bw,avx512vl")))
 #else
+#define ATTRIBUTE_TARGET_SSE2
 #define ATTRIBUTE_TARGET_AVX2
+#define ATTRIBUTE_TARGET_AVX512
+#endif
+
+/* Check if we can compile ARM SIMD code */
+#if defined(__ARM_NEON) || defined(__ARM_NEON__)
+#define HAVE_ARM_NEON 1
+#else
+#define HAVE_ARM_NEON 0
+#endif
+
+#if defined(__linux__) && defined(__GLIBC__) && (defined(__GNUC__) && (__GNUC__ > 4) || defined(__clang__) && (__clang_major__) > 5)
+#define HAVE_IFUNC 1
+#else
+#define HAVE_IFUNC 0
 #endif
 
 #endif

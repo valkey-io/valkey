@@ -37,8 +37,29 @@
 #include "server.h"
 
 /* The current RDB version. When the format changes in a way that is no longer
- * backward compatible this number gets incremented. */
-#define RDB_VERSION 11
+ * backward compatible this number gets incremented.
+ *
+ * RDB 11 is the last open-source Redis RDB version, used by Valkey 7.x and 8.x.
+ *
+ * RDB 12-79 are reserved for Redis non-compatible RDB formats
+ *
+ * We start using high rdb version numbers since Valkey 9.0. This is in order to avoid
+ * collisions with non-OSS Redis RDB versions.
+ *
+ * In an RDB file/stream, we also check the magic string REDIS or VALKEY but in
+ * the DUMP/RESTORE format, there is only the RDB version number and no magic
+ * string. */
+#define RDB_VERSION 80
+
+/* Reserved range for foreign (unsupported, non-OSS) RDB format. */
+#define RDB_FOREIGN_VERSION_MIN 12
+#define RDB_FOREIGN_VERSION_MAX 79
+static_assert(RDB_VERSION < RDB_FOREIGN_VERSION_MIN || RDB_VERSION > RDB_FOREIGN_VERSION_MAX,
+              "RDB version in foreign version range");
+
+static inline bool rdbIsForeignVersion(int rdbver) {
+    return rdbver >= RDB_FOREIGN_VERSION_MIN && rdbver <= RDB_FOREIGN_VERSION_MAX;
+}
 
 /* Defines related to the dump file format. To store 32 bits lengths for short
  * keys requires a lot of space, so we check the most significant 2 bits of
@@ -72,34 +93,45 @@
 /* Map object types to RDB object types. Macros starting with OBJ_ are for
  * memory storage and may change. Instead RDB types must be fixed because
  * we store them on disk. */
-#define RDB_TYPE_STRING 0
-#define RDB_TYPE_LIST 1
-#define RDB_TYPE_SET 2
-#define RDB_TYPE_ZSET 3
-#define RDB_TYPE_HASH 4
-#define RDB_TYPE_ZSET_2 5        /* ZSET version 2 with doubles stored in binary. */
-#define RDB_TYPE_MODULE_PRE_GA 6 /* Used in 4.0 release candidates */
-#define RDB_TYPE_MODULE_2 7      /* Module value with annotations for parsing without \
+enum RdbType {
+    RDB_TYPE_STRING = 0,
+    RDB_TYPE_LIST = 1,
+    RDB_TYPE_SET = 2,
+    RDB_TYPE_ZSET = 3,
+    RDB_TYPE_HASH = 4,
+    RDB_TYPE_ZSET_2 = 5,        /* ZSET version 2 with doubles stored in binary. */
+    RDB_TYPE_MODULE_PRE_GA = 6, /* Used in 4.0 release candidates */
+    RDB_TYPE_MODULE_2 = 7,      /* Module value with annotations for parsing without \
                                     the generating module being loaded. */
-#define RDB_TYPE_HASH_ZIPMAP 9
-#define RDB_TYPE_LIST_ZIPLIST 10
-#define RDB_TYPE_SET_INTSET 11
-#define RDB_TYPE_ZSET_ZIPLIST 12
-#define RDB_TYPE_HASH_ZIPLIST 13
-#define RDB_TYPE_LIST_QUICKLIST 14
-#define RDB_TYPE_STREAM_LISTPACKS 15
-#define RDB_TYPE_HASH_LISTPACK 16
-#define RDB_TYPE_ZSET_LISTPACK 17
-#define RDB_TYPE_LIST_QUICKLIST_2 18
-#define RDB_TYPE_STREAM_LISTPACKS_2 19
-#define RDB_TYPE_SET_LISTPACK 20
-#define RDB_TYPE_STREAM_LISTPACKS_3 21
-/* NOTE: WHEN ADDING NEW RDB TYPE, UPDATE rdbIsObjectType(), and rdb_type_string[] */
+    RDB_TYPE_HASH_ZIPMAP = 9,
+    RDB_TYPE_LIST_ZIPLIST = 10,
+    RDB_TYPE_SET_INTSET = 11,
+    RDB_TYPE_ZSET_ZIPLIST = 12,
+    RDB_TYPE_HASH_ZIPLIST = 13,
+    RDB_TYPE_LIST_QUICKLIST = 14,
+    RDB_TYPE_STREAM_LISTPACKS = 15,
+    RDB_TYPE_HASH_LISTPACK = 16,
+    RDB_TYPE_ZSET_LISTPACK = 17,
+    RDB_TYPE_LIST_QUICKLIST_2 = 18,
+    RDB_TYPE_STREAM_LISTPACKS_2 = 19,
+    RDB_TYPE_SET_LISTPACK = 20,
+    RDB_TYPE_STREAM_LISTPACKS_3 = 21,
+    RDB_TYPE_HASH_2 = 22, /* Hash with field-level expiration (Valkey 9.0) */
+    RDB_TYPE_LAST
+};
+/* NOTE: WHEN ADDING NEW RDB TYPE, UPDATE rdb_type_string[] */
+
+/* When our RDB format diverges, we need to reject types/opcodes for which we
+ * may have assigned a different meaning compared to other implementations. */
+#define RDB_FOREIGN_TYPE_MIN 22
+#define RDB_FOREIGN_TYPE_MAX 243
 
 /* Test if a type is an object type. */
-#define rdbIsObjectType(t) (((t) >= 0 && (t) <= 7) || ((t) >= 9 && (t) <= 21))
+#define rdbIsObjectType(t) (((t) >= 0 && (t) <= 7) || ((t) >= 9 && (t) < RDB_TYPE_LAST))
 
-/* Special RDB opcodes (saved/loaded with rdbSaveType/rdbLoadType). */
+/* Special RDB opcodes (saved/loaded with rdbSaveType/rdbLoadType).
+ * These are special RDB types, but they start from 255 and grow down. */
+#define RDB_OPCODE_SLOT_INFO 244       /* Foreign slot info, safe to ignore. */
 #define RDB_OPCODE_FUNCTION2 245       /* function library data */
 #define RDB_OPCODE_FUNCTION_PRE_GA 246 /* old function library data for 7.0 rc1 and rc2 */
 #define RDB_OPCODE_MODULE_AUX 247      /* Module auxiliary data. */
@@ -136,9 +168,11 @@
 
 /* When rdbLoadObject() returns NULL, the err flag is
  * set to hold the type of error that occurred */
-#define RDB_LOAD_ERR_EMPTY_KEY 1 /* Error of empty key */
-#define RDB_LOAD_ERR_OTHER 2     /* Any other errors */
+#define RDB_LOAD_ERR_EMPTY_KEY 1    /* Error of empty key */
+#define RDB_LOAD_ERR_UNKNOWN_TYPE 2 /* Unknown type in file */
+#define RDB_LOAD_ERR_OTHER 3        /* Any other errors */
 
+bool rdbIsVersionAccepted(int rdbver, bool is_valkey_magic, bool is_redis_magic);
 ssize_t rdbWriteRaw(rio *rdb, void *p, size_t len);
 int rdbSaveType(rio *rdb, unsigned char type);
 int rdbLoadType(rio *rdb);

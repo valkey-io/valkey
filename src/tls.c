@@ -34,10 +34,14 @@
 #include "adlist.h"
 #include "io_threads.h"
 
-#if (USE_OPENSSL == 1 /* BUILD_YES */) || ((USE_OPENSSL == 2 /* BUILD_MODULE */) && (BUILD_TLS_MODULE == 2))
+#if defined(USE_OPENSSL) &&                    \
+    ((USE_OPENSSL == 1 /* BUILD_YES */) ||     \
+     ((USE_OPENSSL == 2 /* BUILD_MODULE */) && \
+      (defined(BUILD_TLS_MODULE) && BUILD_TLS_MODULE == 2)))
 
 #include <openssl/conf.h>
 #include <openssl/ssl.h>
+#include <openssl/x509.h>
 #include <openssl/err.h>
 #include <openssl/rand.h>
 #include <openssl/pem.h>
@@ -415,12 +419,6 @@ error:
     return C_ERR;
 }
 
-#ifdef TLS_DEBUGGING
-#define TLSCONN_DEBUG(fmt, ...) serverLog(LL_DEBUG, "TLSCONN: " fmt, __VA_ARGS__)
-#else
-#define TLSCONN_DEBUG(fmt, ...)
-#endif
-
 static ConnectionType CT_TLS;
 
 /* Normal socket connections have a simple events/handler correlation.
@@ -452,7 +450,19 @@ typedef struct tls_connection {
     SSL *ssl;
     char *ssl_error;
     listNode *pending_list_node;
+    /* Per https://docs.openssl.org/master/man3/SSL_write, after a write call with partially written data,
+     * we must make subsequent write calls with the same length. We use this field to keep track of
+     * the previous write length. */
+    size_t last_failed_write_data_len;
 } tls_connection;
+
+/* Fetch the latest OpenSSL error and store it in the connection */
+static void updateTLSError(tls_connection *conn) {
+    conn->c.last_errno = 0;
+    if (conn->ssl_error) zfree(conn->ssl_error);
+    conn->ssl_error = zmalloc(512);
+    ERR_error_string_n(ERR_get_error(), conn->ssl_error, 512);
+}
 
 static connection *createTLSConnection(int client_side) {
     SSL_CTX *ctx = valkey_tls_ctx;
@@ -462,19 +472,15 @@ static connection *createTLSConnection(int client_side) {
     conn->c.fd = -1;
     conn->c.iovcnt = IOV_MAX;
     conn->ssl = SSL_new(ctx);
+    if (!conn->ssl) {
+        updateTLSError(conn);
+        conn->c.state = CONN_STATE_ERROR;
+    }
     return (connection *)conn;
 }
 
 static connection *connCreateTLS(void) {
     return createTLSConnection(1);
-}
-
-/* Fetch the latest OpenSSL error and store it in the connection */
-static void updateTLSError(tls_connection *conn) {
-    conn->c.last_errno = 0;
-    if (conn->ssl_error) zfree(conn->ssl_error);
-    conn->ssl_error = zmalloc(512);
-    ERR_error_string_n(ERR_get_error(), conn->ssl_error, 512);
 }
 
 /* Create a new TLS connection that is already associated with
@@ -490,13 +496,8 @@ static connection *connCreateAcceptedTLS(int fd, void *priv) {
     int require_auth = *(int *)priv;
     tls_connection *conn = (tls_connection *)createTLSConnection(0);
     conn->c.fd = fd;
+    if (conn->c.state == CONN_STATE_ERROR) return (connection *)conn;
     conn->c.state = CONN_STATE_ACCEPTING;
-
-    if (!conn->ssl) {
-        updateTLSError(conn);
-        conn->c.state = CONN_STATE_ERROR;
-        return (connection *)conn;
-    }
 
     switch (require_auth) {
     case TLS_CLIENT_AUTH_NO: SSL_set_verify(conn->ssl, SSL_VERIFY_NONE, NULL); break;
@@ -679,6 +680,57 @@ static void updateSSLState(connection *conn_) {
     updatePendingData(conn);
 }
 
+static int getCertFieldByName(X509 *cert, const char *field, char *out, size_t outlen) {
+    if (!cert || !field || !out) return 0;
+
+    int nid = -1;
+
+    if (!strcasecmp(field, "CN"))
+        nid = NID_commonName;
+    else if (!strcasecmp(field, "O"))
+        nid = NID_organizationName;
+    /* Add more mappings here as needed */
+
+    if (nid == -1) return 0;
+
+    X509_NAME *subject = X509_get_subject_name(cert);
+    if (!subject) return 0;
+
+    return X509_NAME_get_text_by_NID(subject, nid, out, outlen) > 0;
+}
+
+sds tlsGetPeerUsername(connection *conn_) {
+    tls_connection *conn = (tls_connection *)conn_;
+    if (!conn || !SSL_is_init_finished(conn->ssl)) return NULL;
+
+    /* Find the corresponding field name from the enum mapping */
+    const char *field = NULL;
+    switch (server.tls_ctx_config.client_auth_user) {
+    case TLS_CLIENT_FIELD_CN:
+        field = "CN";
+        break;
+    default:
+        return NULL;
+    }
+
+    if (!field) return NULL;
+
+    X509 *cert = SSL_get_peer_certificate(conn->ssl);
+    if (!cert) return NULL;
+
+    char field_value[256];
+    sds result = NULL;
+
+    if (getCertFieldByName(cert, field, field_value, sizeof(field_value))) {
+        result = sdsnew(field_value);
+    } else {
+        serverLog(LL_NOTICE, "TLS: Failed to extract field '%s' from certificate", field);
+    }
+
+    X509_free(cert);
+    return result;
+}
+
 static void TLSAccept(void *_conn) {
     tls_connection *conn = (tls_connection *)_conn;
     ERR_clear_error();
@@ -692,9 +744,6 @@ static void TLSAccept(void *_conn) {
 
 static void tlsHandleEvent(tls_connection *conn, int mask) {
     int ret, conn_error;
-
-    TLSCONN_DEBUG("tlsEventHandler(): fd=%d, state=%d, mask=%d, r=%d, w=%d, flags=%d", fd, conn->c.state, mask,
-                  conn->c.read_handler != NULL, conn->c.write_handler != NULL, conn->flags);
 
     switch (conn->c.state) {
     case CONN_STATE_CONNECTING:
@@ -794,10 +843,13 @@ static void tlsAcceptHandler(aeEventLoop *el, int fd, void *privdata, int mask) 
     while (max--) {
         cfd = anetTcpAccept(server.neterr, fd, cip, sizeof(cip), &cport);
         if (cfd == ANET_ERR) {
+            if (anetRetryAcceptOnError(errno)) continue;
             if (errno != EWOULDBLOCK) serverLog(LL_WARNING, "Accepting client connection: %s", server.neterr);
             return;
         }
         serverLog(LL_VERBOSE, "Accepted %s:%d", cip, cport);
+
+        if (server.tcpkeepalive) anetKeepAlive(NULL, cfd, server.tcpkeepalive);
         acceptCommonHandler(connCreateAcceptedTLS(cfd, &server.tls_auth_clients), flags, cip);
     }
 }
@@ -812,6 +864,10 @@ static int connTLSIsLocal(connection *conn) {
 
 static int connTLSListen(connListener *listener) {
     return listenToPort(listener);
+}
+
+static int connTLSIsIntegrityChecked(void) {
+    return 1;
 }
 
 static void connTLSCloseListener(connListener *listener) {
@@ -879,6 +935,7 @@ static int connTLSConnect(connection *conn_,
                           const char *addr,
                           int port,
                           const char *src_addr,
+                          int multipath,
                           ConnectionCallbackFunc connect_handler) {
     tls_connection *conn = (tls_connection *)conn_;
     unsigned char addr_buf[sizeof(struct in6_addr)];
@@ -892,7 +949,7 @@ static int connTLSConnect(connection *conn_,
     }
 
     /* Initiate Socket connection first */
-    if (connectionTypeTcp()->connect(conn_, addr, port, src_addr, connect_handler) == C_ERR) return C_ERR;
+    if (connectionTypeTcp()->connect(conn_, addr, port, src_addr, multipath, connect_handler) == C_ERR) return C_ERR;
 
     /* Return now, once the socket is connected we'll initiate
      * TLS connection from the event handler.
@@ -906,11 +963,23 @@ static int connTLSWrite(connection *conn_, const void *data, size_t data_len) {
 
     if (conn->c.state != CONN_STATE_CONNECTED) return -1;
     ERR_clear_error();
+    /* In case when last write failed due to some internal reason, retry has to provide
+     * at least the same amount of bytes (https://docs.openssl.org/master/man3/SSL_write).
+     * If that condition is not met, OpenSSL will return "SSL routines::bad length".
+     * Currently we only suspect this can happen during primary cron sending '\n'
+     * indication to the replica, so we silently return from this function without
+     * impacting the connection state. */
+    if (data_len < conn->last_failed_write_data_len) {
+        // TODO: place debugAssert for this case once the known issue described is resolved
+        return -1;
+    }
     ret = SSL_write(conn->ssl, data, data_len);
+    conn->last_failed_write_data_len = ret <= 0 ? data_len : 0;
     return updateStateAfterSSLIO(conn, ret, 1);
 }
 
 static int connTLSWritev(connection *conn_, const struct iovec *iov, int iovcnt) {
+    tls_connection *conn = (tls_connection *)conn_;
     if (iovcnt == 1) return connTLSWrite(conn_, iov[0].iov_base, iov[0].iov_len);
 
     /* Accumulate the amount of bytes of each buffer and check if it exceeds NET_MAX_WRITES_PER_EVENT. */
@@ -920,10 +989,15 @@ static int connTLSWritev(connection *conn_, const struct iovec *iov, int iovcnt)
         if (iov_bytes_len > NET_MAX_WRITES_PER_EVENT) break;
     }
 
-    /* The amount of all buffers is greater than NET_MAX_WRITES_PER_EVENT,
-     * which is not worth doing so much memory copying to reduce system calls,
-     * therefore, invoke connTLSWrite() multiple times to avoid memory copies. */
-    if (iov_bytes_len > NET_MAX_WRITES_PER_EVENT) {
+    /* In case the amount of all buffers is greater than NET_MAX_WRITES_PER_EVENT,
+     * it might not worth doing so much memory copying to reduce system calls,
+     * therefore, invoke connTLSWrite() multiple times to avoid memory copies.
+     * However, in case when last write failed we still have to repeat sending last_failed_write_data_len
+     * bytes. Because of openssl implementation we cannot repeat sending writes with length smaller than
+     * the last failed write (https://docs.openssl.org/master/man3/SSL_write) so in case the first io buffer
+     * does not provide at least the same amount of bytes as previous failed write, we will have to fallback to
+     * memory copy to a static buffer before calling SSL_write. */
+    if (iov_bytes_len > NET_MAX_WRITES_PER_EVENT && iovcnt > 0 && iov[0].iov_len >= conn->last_failed_write_data_len) {
         ssize_t tot_sent = 0;
         for (int i = 0; i < iovcnt; i++) {
             ssize_t sent = connTLSWrite(conn_, iov[i].iov_base, iov[i].iov_len);
@@ -937,10 +1011,14 @@ static int connTLSWritev(connection *conn_, const struct iovec *iov, int iovcnt)
     /* The amount of all buffers is less than NET_MAX_WRITES_PER_EVENT,
      * which is worth doing more memory copies in exchange for fewer system calls,
      * so concatenate these scattered buffers into a contiguous piece of memory
-     * and send it away by one call to connTLSWrite(). */
+     * and send it away by one call to connTLSWrite().
+     * However, code can fallback here in case when last write failed and first
+     * element of io is buffer not big enough to provide required amount of bytes
+     * to retry, so iov_bytes_len may exceed NET_MAX_WRITES_PER_EVENT by the amount
+     * of remaining bytes from last taken io. */
     char buf[iov_bytes_len];
     size_t offset = 0;
-    for (int i = 0; i < iovcnt; i++) {
+    for (int i = 0; i < iovcnt && offset < iov_bytes_len; i++) {
         memcpy(buf + offset, iov[i].iov_base, iov[i].iov_len);
         offset += iov[i].iov_len;
     }
@@ -962,7 +1040,8 @@ static const char *connTLSGetLastError(connection *conn_) {
     tls_connection *conn = (tls_connection *)conn_;
 
     if (conn->ssl_error) return conn->ssl_error;
-    return NULL;
+    /* If no SSL error is set, return the last errno string. */
+    return strerror(conn_->last_errno);
 }
 
 static int connTLSSetWriteHandler(connection *conn, ConnectionCallbackFunc func, int barrier) {
@@ -1089,9 +1168,7 @@ exit:
     return nread;
 }
 
-static const char *connTLSGetType(connection *conn_) {
-    (void)conn_;
-
+static int connTLSGetType(void) {
     return CONN_TYPE_TLS;
 }
 
@@ -1186,6 +1263,11 @@ static ConnectionType CT_TLS = {
 
     /* TLS specified methods */
     .get_peer_cert = connTLSGetPeerCert,
+    .get_peer_username = tlsGetPeerUsername,
+
+    /* Miscellaneous */
+    .connIntegrityChecked = connTLSIsIntegrityChecked,
+
 };
 
 int RedisRegisterConnectionTypeTLS(void) {
@@ -1195,13 +1277,13 @@ int RedisRegisterConnectionTypeTLS(void) {
 #else /* USE_OPENSSL */
 
 int RedisRegisterConnectionTypeTLS(void) {
-    serverLog(LL_VERBOSE, "Connection type %s not builtin", CONN_TYPE_TLS);
+    serverLog(LL_VERBOSE, "Connection type %s not builtin", getConnectionTypeName(CONN_TYPE_TLS));
     return C_ERR;
 }
 
 #endif
 
-#if BUILD_TLS_MODULE == 2 /* BUILD_MODULE */
+#if defined(BUILD_TLS_MODULE) && BUILD_TLS_MODULE == 2 /* BUILD_MODULE */
 
 #include "release.h"
 
@@ -1211,7 +1293,7 @@ int ValkeyModule_OnLoad(void *ctx, ValkeyModuleString **argv, int argc) {
 
     /* Connection modules must be part of the same build as the server. */
     if (strcmp(REDIS_BUILD_ID_RAW, serverBuildIdRaw())) {
-        serverLog(LL_NOTICE, "Connection type %s was not built together with the valkey-server used.", CONN_TYPE_TLS);
+        serverLog(LL_NOTICE, "Connection type %s was not built together with the valkey-server used.", getConnectionTypeName(CONN_TYPE_TLS));
         return VALKEYMODULE_ERR;
     }
 
@@ -1219,11 +1301,11 @@ int ValkeyModule_OnLoad(void *ctx, ValkeyModuleString **argv, int argc) {
 
     /* Connection modules is available only bootup. */
     if ((ValkeyModule_GetContextFlags(ctx) & VALKEYMODULE_CTX_FLAGS_SERVER_STARTUP) == 0) {
-        serverLog(LL_NOTICE, "Connection type %s can be loaded only during bootup", CONN_TYPE_TLS);
+        serverLog(LL_NOTICE, "Connection type %s can be loaded only during bootup", getConnectionTypeName(CONN_TYPE_TLS));
         return VALKEYMODULE_ERR;
     }
 
-    ValkeyModule_SetModuleOptions(ctx, VALKEYMODULE_OPTIONS_HANDLE_REPL_ASYNC_LOAD);
+    ValkeyModule_SetModuleOptions(ctx, VALKEYMODULE_OPTIONS_HANDLE_REPL_ASYNC_LOAD | VALKEYMODULE_OPTIONS_HANDLE_ATOMIC_SLOT_MIGRATION);
 
     if (connTypeRegister(&CT_TLS) != C_OK) return VALKEYMODULE_ERR;
 
@@ -1232,7 +1314,7 @@ int ValkeyModule_OnLoad(void *ctx, ValkeyModuleString **argv, int argc) {
 
 int ValkeyModule_OnUnload(void *arg) {
     UNUSED(arg);
-    serverLog(LL_NOTICE, "Connection type %s can not be unloaded", CONN_TYPE_TLS);
+    serverLog(LL_NOTICE, "Connection type %s can not be unloaded", getConnectionTypeName(CONN_TYPE_TLS));
     return VALKEYMODULE_ERR;
 }
 #endif

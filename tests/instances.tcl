@@ -111,6 +111,7 @@ proc spawn_instance {type base_port count {conf {}} {base_conf_file ""}} {
         if {$::io_threads} {
             puts $cfg "io-threads 2"
             puts $cfg "events-per-io-thread 0"
+            puts $cfg "min-io-threads-avoid-copy-reply 2"
         }
 
         if {$::log_req_res} {
@@ -186,17 +187,15 @@ proc log_crashes {} {
     set logs [glob */log.txt]
     foreach log $logs {
         set fd [open $log]
-        set found 0
         while {[gets $fd line] >= 0} {
             if {[string match $start_pattern $line]} {
                 puts "\n*** Crash report found in $log ***"
-                set found 1
-            }
-            if {$found} {
-                puts $line
+                puts [exec cat $log]
                 incr ::failed
+                break
             }
         }
+        close $fd
     }
 
     set logs [glob */err.txt]
@@ -445,7 +444,7 @@ proc test {descr code} {
     }
 }
 
-# Check memory leaks when running on OSX using the "leaks" utility.
+# Check memory leaks when running on macOS using the "leaks" utility.
 proc check_leaks instance_types {
     if {[string match {*Darwin*} [exec uname -a]]} {
         puts -nonewline "Testing for memory leaks..."; flush stdout
@@ -499,8 +498,7 @@ while 1 {
             # letting the tests resume, so we'll eventually reach the cleanup and report crashes
 
             if {$::exit_on_failure} {
-                puts -nonewline "(Fast fail: test will exit now)"
-                flush stdout
+                puts "(Fast fail: test will exit now)"
                 exit 1
             }
             if {$::stop_on_failure} {

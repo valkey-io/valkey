@@ -110,8 +110,8 @@ proc waitForBgrewriteaof r {
     }
 }
 
-proc wait_for_sync r {
-    wait_for_condition 50 100 {
+proc wait_for_sync {r {maxtries 50} {delay 100}} {
+    wait_for_condition $maxtries $delay {
         [status $r master_link_status] eq "up"
     } else {
         fail "replica didn't sync in time"
@@ -124,6 +124,31 @@ proc wait_replica_online r {
     } else {
         fail "replica didn't online in time"
     }
+}
+
+proc check_replica_acked_ofs {primary replica_host replica_port} {
+    set infostr [$primary info replication]
+    set master_repl_offset [getInfoProperty $infostr master_repl_offset]
+    if {[regexp -lineanchor "^slave\\d+:ip=$replica_host,port=$replica_port,state=online,offset=(\\d+).*\r\n" $infostr _ offset]} {
+        if {$master_repl_offset == $offset} {
+            return 1
+        }
+        return 0
+    }
+    return 0
+}
+
+proc wait_replica_acked_ofs {primary replica replica_host replica_port} {
+    $primary config set repl-ping-replica-period 3600
+    $replica config set hz 500
+    wait_for_condition 1000 50 {
+        [check_replica_acked_ofs $primary $replica_host $replica_port] eq 1
+    } else {
+        puts "INFO REPLICATION: [$primary info replication]"
+        fail "replica $replica_host:$replica_port acked offset didn't match in time"
+    }
+    $primary config set repl-ping-replica-period 10
+    $replica config set hz 10
 }
 
 proc wait_for_ofs_sync {r1 r2} {
@@ -564,7 +589,8 @@ proc find_valgrind_errors {stderr on_termination} {
 # of seconds to the specified the server instance.
 proc start_write_load {host port seconds} {
     set tclsh [info nameofexecutable]
-    exec $tclsh tests/helpers/gen_write_load.tcl $host $port $seconds $::tls "" &
+    set db [expr {$::singledb ? 0 : 9}]
+    exec $tclsh tests/helpers/gen_write_load.tcl $host $port $seconds $::tls $db "" &
 }
 
 # Execute a background process writing only one key for the specified number
@@ -572,7 +598,8 @@ proc start_write_load {host port seconds} {
 # tests which requires heavy replication stream but no memory load. 
 proc start_one_key_write_load {host port seconds key} {
     set tclsh [info nameofexecutable]
-    exec $tclsh tests/helpers/gen_write_load.tcl $host $port $seconds $::tls $key &
+    set db [expr {$::singledb ? 0 : 9}]
+    exec $tclsh tests/helpers/gen_write_load.tcl $host $port $seconds $::tls $db $key &
 }
 
 # Stop a process generating write load executed with start_write_load.
@@ -625,7 +652,12 @@ proc populate {num {prefix key:} {size 3} {idx 0} {prints false} {expires 0}} {
     set val [string repeat A $size]
     for {set j 0} {$j < $pipeline} {incr j} {
         if {$expires > 0} {
-            r $idx set $prefix$j $val ex $expires
+            if {$expires < 1} {
+                set pexpires [expr int($expires * 1000)]
+                r $idx set $prefix$j $val px $pexpires
+            } else {
+                r $idx set $prefix$j $val ex $expires
+            }
         } else {
             r $idx set $prefix$j $val
         }
@@ -633,7 +665,12 @@ proc populate {num {prefix key:} {size 3} {idx 0} {prints false} {expires 0}} {
     }
     for {} {$j < $num} {incr j} {
         if {$expires > 0} {
-            r $idx set $prefix$j $val ex $expires
+            if {$expires < 1} {
+                set pexpires [expr int($expires * 1000)]
+                r $idx set $prefix$j $val px $pexpires
+            } else {
+                r $idx set $prefix$j $val ex $expires
+            }
         } else {
             r $idx set $prefix$j $val
         }
@@ -1202,6 +1239,24 @@ proc generate_largevalue_test_array {} {
     set largevalue(listpack) "hello"
     set largevalue(quicklist) [string repeat "x" 8192]
     return [array get largevalue]
+}
+
+proc get_client_id_by_last_cmd {r cmd} {
+    set client_list [$r client list]
+    set client_id ""
+    set lines [split $client_list "\n"]
+    foreach line $lines {
+        if {[string match *cmd=$cmd* $line]} {
+            set parts [split $line " "]
+            foreach part $parts {
+                if {[string match id=* $part]} {
+                    set client_id [lindex [split $part "="] 1]
+                    return $client_id
+                }
+            }
+        }
+    }
+    return $client_id
 }
 
 # Breakpoint function, which invokes a minimal debugger.

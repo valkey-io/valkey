@@ -1942,7 +1942,7 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster} overrides {cluste
             wait_for_migration_field 2 $jobname state waiting-to-pause
             populate 334 "$16383_slot_tag:3:" 1000 -2
 
-            # Resync the replicas on both ends
+            # Save the data if needed
             if {$do_save} {
                 assert_match "OK" [R $idx_to_restart SAVE]
             }
@@ -2167,7 +2167,7 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster aofrw} overrides {
 
     set 16383_slot_tag "{6ZJ}"
 
-    test "Replica PSYNC after loading AOF does not lose migration" {
+    test "Replica migration persisted through AOF" {
         # Load some data before the snapshot
         populate 500 "$16383_slot_tag:1:" 1000 -2
 
@@ -2180,6 +2180,12 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster aofrw} overrides {
         # Make sure the replicas have it
         wait_for_countkeysinslot 3 16383 500
 
+        # First, reload the AOF, without restart. It should still keep the
+        # migration state.
+        assert_match "OK" [R 3 DEBUG LOADAOF]
+        wait_for_migration_field 3 $jobname state occurring-on-primary
+        assert_match "0" [R 3 DBSIZE]
+
         # Restart the replica
         do_node_restart 3
 
@@ -2187,11 +2193,34 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster aofrw} overrides {
         # persist the replication ID, this is because of a full resync.
         wait_for_migration_field 3 $jobname state occurring-on-primary
         assert_match "0" [R 3 DBSIZE]
+
+        # Fail the migration and reload the AOF. We should have no migrations on
+        # the replica
+        assert_match "OK" [R 2 CLUSTER CANCELSLOTMIGRATIONS]
+        wait_for_migration_field 3 $jobname state failed
+        assert_match "0" [R 3 DBSIZE]
+        assert_match "0" [R 3 CLUSTER COUNTKEYSINSLOT 16383]
+
+        # Load the AOF, it should still be in there. First ensure the AOF is
+        # done being rewritten with the latest full sync.
+        waitForBgrewriteaof [srv -3 client]
+        assert_match "OK" [R 3 DEBUG LOADAOF]
+        assert_match "failed" [dict get [get_migration_by_name 3 $jobname] state]
+        assert_match "0" [R 3 DBSIZE]
+        assert_match "0" [R 3 CLUSTER COUNTKEYSINSLOT 16383]
+
+        # Cleanup
+        set_debug_prevent_pause 0
+        assert_match "OK" [R 2 FLUSHALL SYNC]
     }
 
-    test "Importing keys are persisted through AOF" {
-        set_debug_prevent_pause 0
+    test "Imported keys are persisted through AOF" {
+        # Load some data before the migration
+        populate 500 "$16383_slot_tag:1:" 1000 -2
 
+        # Do the migration
+        assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node0_id]
+        set jobname [get_job_name 2 16383]
         wait_for_migration 0 16383
 
         assert_match "500" [R 0 CLUSTER COUNTKEYSINSLOT 16383]
@@ -2206,9 +2235,60 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster aofrw} overrides {
 
         assert_match "500" [R 0 CLUSTER COUNTKEYSINSLOT 16383]
 
+        # Reload the data on the replica
+        R 3 DEBUG LOADAOF
+        assert_match "500" [R 3 CLUSTER COUNTKEYSINSLOT 16383]
+
         # Cleanup for next test
         assert_match "OK" [R 0 FLUSHDB SYNC]
         assert_match "OK" [R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node2_id]
         wait_for_migration 2 16383
+    }
+
+    test "AOF maintains consistency through many migrations" {
+        # Load some data before the migration
+        populate 500 "$16383_slot_tag:1:" 1 -2
+        set slots_start [R 0 CLUSTER SLOTS]
+
+        # Do many migrations
+        for {set i 0} {$i < 10} {incr i} {
+            # Move a slot with content, an empty slot, a disjoint slot range
+            # with content, and an empty disjoint slot range
+            foreach migration_pair [list \
+                    [list [list 16383 16383] 2 0 $node2_id $node0_id] \
+                    [list [list 0 0] 0 2 $node0_id $node2_id] \
+                    [list [list 16200 16300 16350 16383] 2 0 $node2_id $node0_id] \
+                    [list [list 0 100 200 300] 0 2 $node0_id $node2_id] \
+                ] {
+                lassign $migration_pair slotranges source_idx target_idx source_id target_id
+                # Slot 16383: Node 2 -> Node 0 (success)
+                assert_match "OK" [R $source_idx CLUSTER MIGRATESLOTS SLOTSRANGE {*}$slotranges NODE $target_id]
+                wait_for_migration $target_idx [lindex $slotranges 0]
+                # Slot 16383: Node 0 -> Node 2 (success)
+                assert_match "OK" [R $target_idx CLUSTER MIGRATESLOTS SLOTSRANGE {*}$slotranges NODE $source_id]
+                wait_for_migration $source_idx [lindex $slotranges 0]
+                set_debug_prevent_pause 1
+                # Slot 16383: Node 2 -> Node 0 (cancelled)
+                assert_match "OK" [R $source_idx CLUSTER MIGRATESLOTS SLOTSRANGE {*}$slotranges NODE $target_id]
+                assert_match "OK" [R $source_idx CLUSTER CANCELSLOTMIGRATIONS]
+                set_debug_prevent_pause 0
+
+                # Make sure replicas have caught up
+                assert_match "1" [R $source_idx WAIT 1 0]
+                assert_match "1" [R $target_idx WAIT 1 0]
+            }
+        }
+
+        # Reload all the AOFs and validate we have the same state as the start
+        R 0 DEBUG LOADAOF
+        assert_match "0" [R 0 CLUSTER COUNTKEYSINSLOT 16383]
+        R 2 DEBUG LOADAOF
+        assert_match "500" [R 2 CLUSTER COUNTKEYSINSLOT 16383]
+        R 3 DEBUG LOADAOF
+        assert_match "0" [R 3 CLUSTER COUNTKEYSINSLOT 16383]
+        R 5 DEBUG LOADAOF
+        assert_match "500" [R 5 CLUSTER COUNTKEYSINSLOT 16383]
+        assert_equal $slots_start [R 0 CLUSTER SLOTS]
+        assert_match "OK" [R 2 FLUSHDB SYNC]
     }
 }

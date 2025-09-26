@@ -4491,10 +4491,10 @@ int processCommand(client *c) {
         return C_OK;
     }
 
-    /* If the server is paused, block the client until
-     * the pause has ended. Replicas are never paused. */
-    if (!c->flag.replica && ((isPausedActions(PAUSE_ACTION_CLIENT_ALL)) ||
-                             ((isPausedActions(PAUSE_ACTION_CLIENT_WRITE)) && is_may_replicate_command))) {
+    /* If the server is paused, block the client until the pause has ended. Replicas and slot
+     * export clients are never paused to allow failover/slot migration to succeed. */
+    if (!c->flag.replica && (!c->slot_migration_job || isImportSlotMigrationJob(c->slot_migration_job)) &&
+        ((isPausedActions(PAUSE_ACTION_CLIENT_ALL)) || ((isPausedActions(PAUSE_ACTION_CLIENT_WRITE)) && is_may_replicate_command))) {
         blockPostponeClient(c);
         return C_OK;
     }

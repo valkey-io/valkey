@@ -36,7 +36,7 @@ void clusterHandleSlotMigrationErrorResponse(slotMigrationJob *job);
 void killSlotMigrationChild(void);
 void clusterCleanSlotImportsOnPromotion(void);
 void clusterCleanSlotImportsOnResync(void);
-void clusterCleanSlotImportsOnReload(void);
-int clusterRegisterSlotImportsAuxFields(void);
+void clusterCleanSlotImportsAfterReload(void);
+int clusterRegisterSlotImportsRDBAuxFields(void);
 
 #endif /* __CLUSTER_MIGRATESLOTS_H */

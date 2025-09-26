@@ -1388,7 +1388,7 @@ void clusterInit(void) {
     /* Register our own rdb aux fields */
     serverAssert(rdbRegisterAuxField("cluster-slot-states", clusterEncodeOpenSlotsAuxField,
                                      clusterDecodeOpenSlotsAuxField) == C_OK);
-    serverAssert(clusterRegisterSlotImportsAuxFields() == C_OK);
+    serverAssert(clusterRegisterSlotImportsRDBAuxFields() == C_OK);
 
     /* Initialize list for slot migration jobs. */
     initClusterSlotMigrationJobList();
@@ -6387,7 +6387,7 @@ int verifyClusterConfigWithData(void) {
     if (nodeIsReplica(myself)) return C_OK;
 
     /* Allow slot migrations to clean up after reloading */
-    clusterCleanSlotImportsOnReload();
+    clusterCleanSlotImportsAfterReload();
 
     /* Check that all the slots we see populated memory have a corresponding
      * entry in the cluster table. Otherwise fix the table. */

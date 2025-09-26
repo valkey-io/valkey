@@ -167,7 +167,6 @@ start_server {tags {needs:repl external:skip}} {
             # i.e. when unblocking all clients after failover
             assert_error "REDIRECT $replica_host:$replica_port" {$rd_brpop_before read}
             assert_error "REDIRECT $replica_host:$replica_port" {$rd_brpop_after read}
-            assert_error "REDIRECT $replica_host:$replica_port" {$rd_xread read}
 
             # WAIT is unblocked in the main loop. Thus, it must have succeeded by now.
             assert_equal "1" [$rd_wait read]
@@ -175,6 +174,15 @@ start_server {tags {needs:repl external:skip}} {
             $rd_brpop_before close
             $rd_brpop_after close
             $rd_wait close
+
+            # As a reading command for a readonly client, XREAD should still be blocked
+            wait_for_blocked_clients_count 1 100 10 -1
+
+            r XADD k * foo bar ; # replica is the primary now
+            set res [$rd_xread read]
+            set res [lindex [lindex [lindex [lindex $res 0] 1] 0] 1]
+            assert_equal "foo bar" $res
+
             $rd_xread close
         }
     }

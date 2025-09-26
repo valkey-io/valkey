@@ -288,6 +288,7 @@ start_server {overrides {save {}}} {
         # reasons, respectively) will not be interrupted by the aborted
         # failover.
         pause_process $node_1_pid
+        $node_0 SET FOO BAR
         set rd_lpush [valkey_deferring_client]
         set rd_brpop_before [valkey_deferring_client]
         set rd_brpop_after [valkey_deferring_client]
@@ -306,6 +307,8 @@ start_server {overrides {save {}}} {
             fail "failover did not start in time"
         } debug {
             puts [s 0 master_failover_state]
+            puts [$node_0 info replication]
+            fail "failover did not start in time"
         }
 
         $rd_brpop_after BRPOP FOO_LIST 0

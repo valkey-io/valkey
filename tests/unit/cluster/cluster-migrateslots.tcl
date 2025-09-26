@@ -398,6 +398,7 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster} overrides {cluste
     }
 
     set 0_slot_tag "{06S}"
+    set 1_slot_tag "{Qi}"
     set 5462_slot_tag "{450}"
     set 16379_slot_tag "{YY}"
     set 16380_slot_tag "{wu}"
@@ -1212,6 +1213,57 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster} overrides {cluste
             # Cleanup for the next test
             set_debug_prevent_failover 0
             assert_match "OK" [R 0 FLUSHDB SYNC]
+        }
+    }
+
+    test "Blocked clients are sent MOVED after export completion" {
+        assert_does_not_resync {
+            # Start with a BLPOP that will block for the duration of the migration,
+            # BLPOP is expected to block since the list does not exist yet
+            set blpop_client [valkey_deferring_client_by_addr [srv 0 host] [srv 0 port]]
+            $blpop_client BLPOP $0_slot_tag:mylist 0
+            $blpop_client flush
+            wait_for_blocked_clients_count 1 100 10 0
+
+            # Use debug command to prevent failover
+            set_debug_prevent_failover 1
+            assert_match "OK" [R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 0 0 NODE $node2_id]
+            set jobname [get_job_name 0 0]
+            wait_for_migration_field 0 $jobname state failover-granted
+
+            assert_match "slot_migration_in_progress" [s -0 paused_reason]
+            assert_match "write" [s -0 paused_actions]
+
+            # While we are blocked, execute a SET on another client
+            set set_client [valkey_deferring_client_by_addr [srv 0 host] [srv 0 port]]
+            $set_client SET $0_slot_tag:test_key test_value
+            $set_client flush
+
+            # Also execute a SET that can be served after the migration
+            set set_client_2 [valkey_deferring_client_by_addr [srv 0 host] [srv 0 port]]
+            $set_client_2 SET $1_slot_tag:test_key test_value
+            $set_client_2 flush
+
+            # Complete the job
+            set_debug_prevent_failover 0
+            wait_for_migration_field 0 $jobname state success
+            wait_for_migration_field 2 $jobname state success
+            wait_for_migration 2 0
+            assert_match "none" [s -0 paused_reason]
+
+            # Read the result from the blocked clients (-MOVED)
+            assert_error "MOVED 0 *:*" {$blpop_client read}
+            assert_error "MOVED 0 *:*" {$set_client read}
+            assert_match "OK" [$set_client_2 read]
+
+            $blpop_client close
+            $set_client close
+            $set_client_2 close
+
+            # Cleanup for the next test
+            assert_match "OK" [R 2 FLUSHDB SYNC]
+            assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 0 0 NODE $node0_id]
+            wait_for_migration 0 0
         }
     }
 

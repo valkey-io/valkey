@@ -4092,7 +4092,8 @@ void syncWithPrimary(connection *conn) {
      * but there is nothing technically wrong with a full resync which
      * could happen in edge cases. */
     if (server.failover_state == FAILOVER_IN_PROGRESS) {
-        if (psync_result == PSYNC_CONTINUE || psync_result == PSYNC_FULLRESYNC) {
+        if (psync_result == PSYNC_CONTINUE || psync_result == PSYNC_FULLRESYNC ||
+            psync_result == PSYNC_FULLRESYNC_DUAL_CHANNEL) {
             clearFailoverState();
         } else {
             abortFailover("Failover target rejected psync request");

@@ -3616,7 +3616,7 @@ void syncWithPrimary(connection *conn) {
         server.repl_rdb_transfer_s = connCreate(connTypeOfReplication());
         if (connConnect(server.repl_rdb_transfer_s, server.primary_host, server.primary_port, server.bind_source_addr,
                         fullSyncWithPrimary) == C_ERR) {
-            serverLog(LL_WARNING, "Unable to connect to Primary: %s", connGetLastError(server.repl_transfer_s));
+            serverLog(LL_WARNING, "Unable to connect to Primary: %s", connGetLastError(server.repl_rdb_transfer_s));
             connClose(server.repl_rdb_transfer_s);
             server.repl_rdb_transfer_s = NULL;
             goto error;

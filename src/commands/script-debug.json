@@ -39,7 +39,7 @@
                 "name": "engine",
                 "type": "string",
                 "optional": true,
-                "since": "9.0.0"
+                "since": "9.1.0"
             }
         ],
         "reply_schema": {

@@ -379,14 +379,14 @@ debuggerEnableRet scriptingEngineCallDebuggerEnable(scriptingEngine *engine,
         return VMSE_DEBUG_NOT_SUPPORTED;
     }
 
-    engineSetupModuleCtx(engine, NULL);
+    ValkeyModuleCtx *module_ctx = engineSetupModuleCtx(COMMON_MODULE_CTX_INDEX, engine, NULL);
     debuggerEnableRet ret = engine->impl.methods.debugger_enable(
-        engine->module_ctx,
+        module_ctx,
         engine->impl.ctx,
         type,
         commands,
         commands_len);
-    engineTeardownModuleCtx(engine);
+    engineTeardownModuleCtx(COMMON_MODULE_CTX_INDEX, engine);
     return ret;
 }
 
@@ -395,12 +395,12 @@ void scriptingEngineCallDebuggerDisable(scriptingEngine *engine,
     serverAssert(engine->impl.methods.version >= 3);
     serverAssert(engine->impl.methods.debugger_disable != NULL);
 
-    engineSetupModuleCtx(engine, NULL);
+    ValkeyModuleCtx *module_ctx = engineSetupModuleCtx(COMMON_MODULE_CTX_INDEX, engine, NULL);
     engine->impl.methods.debugger_disable(
-        engine->module_ctx,
+        module_ctx,
         engine->impl.ctx,
         type);
-    engineTeardownModuleCtx(engine);
+    engineTeardownModuleCtx(COMMON_MODULE_CTX_INDEX, engine);
 }
 
 void scriptingEngineCallDebuggerStart(scriptingEngine *engine,
@@ -409,13 +409,13 @@ void scriptingEngineCallDebuggerStart(scriptingEngine *engine,
     serverAssert(engine->impl.methods.version >= 3);
     serverAssert(engine->impl.methods.debugger_start != NULL);
 
-    engineSetupModuleCtx(engine, NULL);
+    ValkeyModuleCtx *module_ctx = engineSetupModuleCtx(COMMON_MODULE_CTX_INDEX, engine, NULL);
     engine->impl.methods.debugger_start(
-        engine->module_ctx,
+        module_ctx,
         engine->impl.ctx,
         type,
         source);
-    engineTeardownModuleCtx(engine);
+    engineTeardownModuleCtx(COMMON_MODULE_CTX_INDEX, engine);
 }
 
 void scriptingEngineCallDebuggerEnd(scriptingEngine *engine,
@@ -423,12 +423,12 @@ void scriptingEngineCallDebuggerEnd(scriptingEngine *engine,
     serverAssert(engine->impl.methods.version >= 3);
     serverAssert(engine->impl.methods.debugger_end != NULL);
 
-    engineSetupModuleCtx(engine, NULL);
+    ValkeyModuleCtx *module_ctx = engineSetupModuleCtx(COMMON_MODULE_CTX_INDEX, engine, NULL);
     engine->impl.methods.debugger_end(
-        engine->module_ctx,
+        module_ctx,
         engine->impl.ctx,
         type);
-    engineTeardownModuleCtx(engine);
+    engineTeardownModuleCtx(COMMON_MODULE_CTX_INDEX, engine);
 }
 
 #define DS_MAX_LEN_DEFAULT 256 /* Default len limit for replies / var dumps. */

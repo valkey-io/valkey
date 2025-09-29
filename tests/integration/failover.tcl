@@ -181,11 +181,7 @@ start_server {overrides {save {}}} {
 
         assert_error "UNBLOCKED force unblock from blocking operation, instance state changed (master -> replica?)" {$rd_blocking read}
 
-        wait_for_condition 50 100 {
-            [s -2 blocked_clients] == 0
-        } else {
-            fail "rd_blocking client should still be unblocked"
-        }
+        assert_equal [s -2 blocked_clients] 0
 
         $rd_blocking close
 

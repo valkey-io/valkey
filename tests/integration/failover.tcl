@@ -167,11 +167,8 @@ start_server {overrides {save {}}} {
         assert_match *slave* [$node_1 role]
         assert_match *slave* [$node_2 role]
 
-        wait_for_condition 50 100 {
-            [s -2 blocked_clients] == 1
-        } else {
-            fail "rd_blocking client should still be blocked in failover-in-progress"
-        }
+        # rd_blocking client should still be blocked in failover-in-progress
+        assert_equal [s -2 blocked_clients] 1
 
         resume_process $node_0_pid
 

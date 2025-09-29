@@ -4093,7 +4093,7 @@ void syncWithPrimary(connection *conn) {
      * could happen in edge cases. */
     if (server.failover_state == FAILOVER_IN_PROGRESS) {
         if (psync_result == PSYNC_CONTINUE || psync_result == PSYNC_FULLRESYNC) {
-            clearFailoverState();
+            clearFailoverState(true);
         } else {
             abortFailover("Failover target rejected psync request");
             return;
@@ -4310,7 +4310,7 @@ int cancelReplicationHandshake(int reconnect) {
 }
 
 /* Set replication to the specified primary address and port. */
-void replicationSetPrimary(char *ip, int port, int full_sync_required) {
+void replicationSetPrimary(char *ip, int port, int full_sync_required, bool disconnect_blocked) {
     int was_primary = server.primary_host == NULL;
 
     sdsfree(server.primary_host);
@@ -4324,13 +4324,18 @@ void replicationSetPrimary(char *ip, int port, int full_sync_required) {
         server.primary->flag.dont_cache_primary = full_sync_required;
         freeClient(server.primary);
     }
-    disconnectAllBlockedClients(); /* Clients blocked in primary, now replica. */
 
     /* Setting primary_host only after the call to freeClient since it calls
      * replicationHandlePrimaryDisconnection which can trigger a re-connect
      * directly from within that call. */
     server.primary_host = sdsnew(ip);
     server.primary_port = port;
+
+    /* Clients blocked in primary, now replica.
+     * Note that we need to set the new primary first
+     * since unblocking clients require redirecting to the new primary */
+    if (disconnect_blocked)
+        disconnectOrRedirectAllBlockedClients();
 
     /* Update oom_score_adj */
     setOOMScoreAdj(-1);
@@ -4487,7 +4492,7 @@ void replicaofCommand(client *c) {
         }
         /* There was no previous primary or the user specified a different one,
          * we can continue. */
-        replicationSetPrimary(c->argv[1]->ptr, port, 0);
+        replicationSetPrimary(c->argv[1]->ptr, port, 0, true);
         sds client = catClientInfoShortString(sdsempty(), c, server.hide_user_data_from_log);
         serverLog(LL_NOTICE, "REPLICAOF %s:%d enabled (user request from '%s')", server.primary_host,
                   server.primary_port, client);
@@ -5386,13 +5391,14 @@ const char *getFailoverStateString(void) {
 /* Resets the internal failover configuration, this needs
  * to be called after a failover either succeeds or fails
  * as it includes the client unpause. */
-void clearFailoverState(void) {
+void clearFailoverState(bool success) {
     server.failover_end_time = 0;
     server.force_failover = 0;
     zfree(server.target_replica_host);
     server.target_replica_host = NULL;
     server.target_replica_port = 0;
     server.failover_state = NO_FAILOVER;
+    if (success) disconnectOrRedirectAllBlockedClients();
     unpauseActions(PAUSE_DURING_FAILOVER);
 }
 
@@ -5409,7 +5415,7 @@ void abortFailover(const char *err) {
     if (server.failover_state == FAILOVER_IN_PROGRESS) {
         replicationUnsetPrimary();
     }
-    clearFailoverState();
+    clearFailoverState(false);
 }
 
 /*
@@ -5541,9 +5547,8 @@ void failoverCommand(client *c) {
 /* Failover cron function, checks coordinated failover state.
  *
  * Implementation note: The current implementation calls replicationSetPrimary()
- * to start the failover request, this has some unintended side effects if the
- * failover doesn't work like blocked clients will be unblocked and replicas will
- * be disconnected. This could be optimized further.
+ * to start the failover request, but blocked clients are no longer processed during
+ * failover. Instead, their handling is deferred and performed later in clearFailoverState().
  */
 void updateFailoverStatus(void) {
     if (server.failover_state != FAILOVER_WAIT_FOR_SYNC) return;
@@ -5556,7 +5561,7 @@ void updateFailoverStatus(void) {
                       server.target_replica_port);
             server.failover_state = FAILOVER_IN_PROGRESS;
             /* If timeout has expired force a failover if requested. */
-            replicationSetPrimary(server.target_replica_host, server.target_replica_port, 0);
+            replicationSetPrimary(server.target_replica_host, server.target_replica_port, 0, false);
             return;
         } else {
             /* Force was not requested, so timeout. */
@@ -5599,6 +5604,6 @@ void updateFailoverStatus(void) {
         serverLog(LL_NOTICE, "Failover target %s:%d is synced, failing over.", server.target_replica_host,
                   server.target_replica_port);
         /* Designated replica is caught up, failover to it. */
-        replicationSetPrimary(server.target_replica_host, server.target_replica_port, 0);
+        replicationSetPrimary(server.target_replica_host, server.target_replica_port, 0, false);
     }
 }

@@ -38,6 +38,7 @@
 #include <sys/time.h>
 #include <unistd.h>
 #include <sys/stat.h>
+#include <fcntl.h>
 
 void createSharedObjects(void);
 void rdbLoadProgressCallback(rio *r, const void *buf, size_t len);
@@ -75,6 +76,7 @@ struct {
     rio *rio;
     robj *key;                     /* Current key we are reading. */
     int key_type;                  /* Current key type if != -1. */
+    int rdbver;                    /* RDB version. */
     unsigned long keys;            /* Number of keys processed. */
     unsigned long expires;         /* Number of keys with an expire. */
     unsigned long already_expired; /* Number of keys already expired. */
@@ -145,7 +147,10 @@ char *rdb_type_string[] = {
     "stream-v2",
     "set-listpack",
     "stream-v3",
+    "hash-volatile-items",
 };
+
+static_assert(sizeof(rdb_type_string) / sizeof(rdb_type_string[0]) == RDB_TYPE_LAST, "Mismatch between enum and string table");
 
 char *type_name[OBJ_TYPE_MAX] = {"string", "list", "set", "zset", "hash", "module", /* module type is special */
                                  "stream"};
@@ -444,13 +449,17 @@ void rdbShowGenericInfo(void) {
     }
 
     char buffer[64];
-    FILE *stats_fp = NULL;
+    int stats_fd = -1;
+    int saved_stdout = -1;
     if (rdbCheckStats) {
         if (rdbCheckOutput) {
-            stats_fp = freopen(rdbstate.stats_output, "w", stdout);
-            if (stats_fp == NULL) {
-                printf("Cannot open output file: %s\n", rdbstate.stats_output);
-                exit(0);
+            saved_stdout = dup(STDOUT_FILENO);
+            stats_fd = open(rdbstate.stats_output, O_WRONLY | O_CREAT, 0644);
+            if (stats_fd == -1) {
+                fprintf(stderr, "Cannot open output file: '%s': %s\n", rdbstate.stats_output, strerror(errno));
+                exit(1);
+            } else {
+                dup2(stats_fd, STDOUT_FILENO);
             }
         }
 
@@ -494,8 +503,9 @@ void rdbShowGenericInfo(void) {
             }
         }
         if (rdbCheckOutput) {
-            fclose(stats_fp);
-            stdout = fdopen(1, "w");
+            dup2(saved_stdout, STDOUT_FILENO);
+            close(stats_fd);
+            close(saved_stdout);
         }
     }
 }
@@ -606,15 +616,27 @@ int redis_check_rdb(char *rdbfilename, FILE *fp) {
     rdb.update_cksum = rdbLoadProgressCallback;
     if (rioRead(&rdb, buf, 9) == 0) goto eoferr;
     buf[9] = '\0';
-    if (memcmp(buf, "REDIS", 5) != 0) {
+    bool is_valkey_magic = false, is_redis_magic = false;
+    if (memcmp(buf, "REDIS0", 6) == 0) {
+        is_redis_magic = true;
+    } else if (memcmp(buf, "VALKEY", 6) == 0) {
+        is_valkey_magic = true;
+    } else {
         rdbCheckError("Wrong signature trying to load DB from file");
         goto err;
     }
-    rdbver = atoi(buf + 5);
-    if (rdbver < 1 || rdbver > RDB_VERSION) {
+    rdbver = atoi(buf + 6);
+    if (rdbver < 1 ||
+        (rdbver < RDB_FOREIGN_VERSION_MIN && !is_redis_magic) ||
+        (rdbver > RDB_FOREIGN_VERSION_MAX && !is_valkey_magic)) {
         rdbCheckError("Can't handle RDB format version %d", rdbver);
         goto err;
+    } else if (rdbver > RDB_VERSION) {
+        rdbCheckInfo("Future RDB version %d detected", rdbver);
+    } else if (rdbIsForeignVersion(rdbver)) {
+        rdbCheckInfo("Foreign RDB version %d detected", rdbver);
     }
+    rdbstate.rdbver = rdbver;
 
     expiretime = -1;
     while (1) {
@@ -672,6 +694,12 @@ int redis_check_rdb(char *rdbfilename, FILE *fp) {
             if ((db_size = rdbLoadLen(&rdb, NULL)) == RDB_LENERR) goto eoferr;
             if ((expires_size = rdbLoadLen(&rdb, NULL)) == RDB_LENERR) goto eoferr;
             continue; /* Read type again. */
+        } else if (type == RDB_OPCODE_SLOT_INFO) {
+            /* Hint used in foreign RDB versions. */
+            if (rdbLoadLen(&rdb, NULL) == RDB_LENERR) goto eoferr;
+            if (rdbLoadLen(&rdb, NULL) == RDB_LENERR) goto eoferr;
+            if (rdbLoadLen(&rdb, NULL) == RDB_LENERR) goto eoferr;
+            continue; /* Read type again. */
         } else if (type == RDB_OPCODE_AUX) {
             /* AUX: generic string-string fields. Use to add state to RDB
              * which is backward compatible. Implementations of RDB loading
@@ -725,11 +753,19 @@ int redis_check_rdb(char *rdbfilename, FILE *fp) {
             }
             rdbstate.functions_num++;
             continue;
-        } else {
-            if (!rdbIsObjectType(type)) {
+        } else if (rdbIsForeignVersion(rdbver) &&
+                   type >= RDB_FOREIGN_TYPE_MIN &&
+                   type <= RDB_FOREIGN_TYPE_MAX) {
+            rdbCheckError("Unknown object type %d in RDB file with foreign version %d", type, rdbver);
+            goto err;
+        } else if (!rdbIsObjectType(type)) {
+            if (rdbver > RDB_VERSION) {
+                rdbCheckError("Unknown object type %d in RDB file with future version %d", type, rdbver);
+            } else {
                 rdbCheckError("Invalid object type: %d", type);
-                goto err;
             }
+            goto err;
+        } else {
             rdbstate.key_type = type;
         }
 
@@ -860,9 +896,10 @@ int redis_check_rdb_main(int argc, char **argv, FILE *fp) {
     gettimeofday(&tv, NULL);
     init_genrand64(((long long)tv.tv_sec * 1000000 + tv.tv_usec) ^ getpid());
 
+    rdbstate.key_type = -1;
     rdbstate.stats = initRdbStats(OBJ_TYPE_MAX);
     rdbstate.stats_num = OBJ_TYPE_MAX;
-    rdbstate.databases = 1;
+    rdbstate.databases = 0;
     rdbstate.functions_num = 0;
     rdbstate.lua_scripts = 0;
 
@@ -876,8 +913,13 @@ int redis_check_rdb_main(int argc, char **argv, FILE *fp) {
     rdbCheckInfo("Checking RDB file %s", argv[1]);
     rdbCheckSetupSignals();
     int retval = redis_check_rdb(argv[1], fp);
+    rdbCheckInfo("Check RDB returned error code %d (0 means success)", retval);
     if (retval == 0) {
-        rdbCheckInfo("\\o/ RDB looks OK! \\o/");
+        if (rdbIsForeignVersion(rdbstate.rdbver) || rdbstate.rdbver > RDB_VERSION) {
+            rdbCheckInfo("\\o/ RDB looks OK, but loading requires config 'rdb-version-check relaxed'");
+        } else {
+            rdbCheckInfo("\\o/ RDB looks OK! \\o/");
+        }
         rdbShowGenericInfo();
     }
     if (fp) return (retval == 0) ? C_OK : C_ERR;

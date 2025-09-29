@@ -47,7 +47,7 @@
 #include <immintrin.h>
 #endif
 
-#ifdef __aarch64__
+#if HAVE_ARM_NEON
 #include <arm_neon.h>
 #endif
 
@@ -224,7 +224,7 @@ struct hllhdr {
 
 static char *invalid_hll_err = "-INVALIDOBJ Corrupted HLL object detected";
 
-#if HAVE_X86_SIMD || defined(__aarch64__)
+#if HAVE_X86_SIMD || HAVE_ARM_NEON
 #define SIMD_SUPPORTED 1
 static int simd_enabled = 1;
 #else
@@ -237,7 +237,7 @@ static int simd_enabled = 1;
 #define HLL_USE_AVX2 0
 #endif
 
-#ifdef __aarch64__
+#if defined(__aarch64__) && HAVE_ARM_NEON
 #define HLL_USE_NEON (simd_enabled)
 #else
 #define HLL_USE_NEON 0
@@ -619,6 +619,7 @@ int hllSparseToDense(robj *o) {
     struct hllhdr *hdr, *oldhdr = (struct hllhdr *)sparse;
     int idx = 0, runlen, regval;
     uint8_t *p = (uint8_t *)sparse, *end = p + sdslen(sparse);
+    int valid = 1;
 
     /* If the representation is already the right one return ASAP. */
     hdr = (struct hllhdr *)sparse;
@@ -638,16 +639,27 @@ int hllSparseToDense(robj *o) {
     while (p < end) {
         if (HLL_SPARSE_IS_ZERO(p)) {
             runlen = HLL_SPARSE_ZERO_LEN(p);
+            if ((runlen + idx) > HLL_REGISTERS) { /* Overflow. */
+                valid = 0;
+                break;
+            }
             idx += runlen;
             p++;
         } else if (HLL_SPARSE_IS_XZERO(p)) {
             runlen = HLL_SPARSE_XZERO_LEN(p);
+            if ((runlen + idx) > HLL_REGISTERS) { /* Overflow. */
+                valid = 0;
+                break;
+            }
             idx += runlen;
             p += 2;
         } else {
             runlen = HLL_SPARSE_VAL_LEN(p);
             regval = HLL_SPARSE_VAL_VALUE(p);
-            if ((runlen + idx) > HLL_REGISTERS) break; /* Overflow. */
+            if ((runlen + idx) > HLL_REGISTERS) { /* Overflow. */
+                valid = 0;
+                break;
+            }
             while (runlen--) {
                 HLL_DENSE_SET_REGISTER(hdr->registers, idx, regval);
                 idx++;
@@ -658,7 +670,7 @@ int hllSparseToDense(robj *o) {
 
     /* If the sparse representation was valid, we expect to find idx
      * set to HLL_REGISTERS. */
-    if (idx != HLL_REGISTERS) {
+    if (!valid || idx != HLL_REGISTERS) {
         sdsfree(dense);
         return C_ERR;
     }
@@ -955,27 +967,40 @@ int hllSparseAdd(robj *o, unsigned char *ele, size_t elesize) {
 void hllSparseRegHisto(uint8_t *sparse, int sparselen, int *invalid, int *reghisto) {
     int idx = 0, runlen, regval;
     uint8_t *end = sparse + sparselen, *p = sparse;
+    int valid = 1;
 
     while (p < end) {
         if (HLL_SPARSE_IS_ZERO(p)) {
             runlen = HLL_SPARSE_ZERO_LEN(p);
+            if ((runlen + idx) > HLL_REGISTERS) { /* Overflow. */
+                valid = 0;
+                break;
+            }
             idx += runlen;
             reghisto[0] += runlen;
             p++;
         } else if (HLL_SPARSE_IS_XZERO(p)) {
             runlen = HLL_SPARSE_XZERO_LEN(p);
+            if ((runlen + idx) > HLL_REGISTERS) { /* Overflow. */
+                valid = 0;
+                break;
+            }
             idx += runlen;
             reghisto[0] += runlen;
             p += 2;
         } else {
             runlen = HLL_SPARSE_VAL_LEN(p);
             regval = HLL_SPARSE_VAL_VALUE(p);
+            if ((runlen + idx) > HLL_REGISTERS) { /* Overflow. */
+                valid = 0;
+                break;
+            }
             idx += runlen;
             reghisto[regval] += runlen;
             p++;
         }
     }
-    if (idx != HLL_REGISTERS && invalid) *invalid = 1;
+    if ((!valid || idx != HLL_REGISTERS) && invalid) *invalid = 1;
 }
 
 /* ========================= HyperLogLog Count ==============================
@@ -1210,7 +1235,7 @@ void hllMergeDenseAVX2(uint8_t *reg_raw, const uint8_t *reg_dense) {
 }
 #endif
 
-#if defined(__aarch64__)
+#if HAVE_ARM_NEON
 /*
  * hllMergeDenseNEON is an ARM optimized version of hllMergeDense using NEON
  *
@@ -1297,7 +1322,7 @@ void hllMergeDenseNEON(uint8_t *reg_raw, const uint8_t *reg_dense) {
         }
     }
 }
-#endif // __aarch64__
+#endif /* HAVE_ARM_NEON */
 
 /* Merge dense-encoded registers to raw registers array. */
 void hllMergeDense(uint8_t *reg_raw, const uint8_t *reg_dense) {
@@ -1309,12 +1334,10 @@ void hllMergeDense(uint8_t *reg_raw, const uint8_t *reg_dense) {
         }
     }
 #endif
-#ifdef __aarch64__
-    if (HLL_REGISTERS == 16384 && HLL_BITS == 6) {
-        if (HLL_USE_NEON) {
-            hllMergeDenseNEON(reg_raw, reg_dense);
-            return;
-        }
+#if defined(__aarch64__) && HAVE_ARM_NEON && HLL_REGISTERS == 16384 && HLL_BITS == 6
+    if (HLL_USE_NEON) {
+        hllMergeDenseNEON(reg_raw, reg_dense);
+        return;
     }
 #endif
 
@@ -1344,22 +1367,34 @@ int hllMerge(uint8_t *max, robj *hll) {
     } else {
         uint8_t *p = hll->ptr, *end = p + sdslen(hll->ptr);
         long runlen, regval;
+        int valid = 1;
 
         p += HLL_HDR_SIZE;
         i = 0;
         while (p < end) {
             if (HLL_SPARSE_IS_ZERO(p)) {
                 runlen = HLL_SPARSE_ZERO_LEN(p);
+                if ((runlen + i) > HLL_REGISTERS) { /* Overflow. */
+                    valid = 0;
+                    break;
+                }
                 i += runlen;
                 p++;
             } else if (HLL_SPARSE_IS_XZERO(p)) {
                 runlen = HLL_SPARSE_XZERO_LEN(p);
+                if ((runlen + i) > HLL_REGISTERS) { /* Overflow. */
+                    valid = 0;
+                    break;
+                }
                 i += runlen;
                 p += 2;
             } else {
                 runlen = HLL_SPARSE_VAL_LEN(p);
                 regval = HLL_SPARSE_VAL_VALUE(p);
-                if ((runlen + i) > HLL_REGISTERS) break; /* Overflow. */
+                if ((runlen + i) > HLL_REGISTERS) { /* Overflow. */
+                    valid = 0;
+                    break;
+                }
                 while (runlen--) {
                     if (regval > max[i]) max[i] = regval;
                     i++;
@@ -1367,7 +1402,7 @@ int hllMerge(uint8_t *max, robj *hll) {
                 p++;
             }
         }
-        if (i != HLL_REGISTERS) return C_ERR;
+        if (!valid || i != HLL_REGISTERS) return C_ERR;
     }
     return C_OK;
 }
@@ -1471,7 +1506,7 @@ void hllDenseCompressAVX2(uint8_t *reg_dense, const uint8_t *reg_raw) {
 }
 #endif
 
-#if defined(__aarch64__)
+#if HAVE_ARM_NEON
 /*
  * hllDenseCompressNEON is ARM optimized version of hllDenseCompress using NEON.
  *
@@ -1537,26 +1572,22 @@ void hllDenseCompressNEON(uint8_t *reg_dense, const uint8_t *reg_raw) {
         HLL_DENSE_SET_REGISTER(reg_dense, i, reg_raw[i]);
     }
 }
-#endif // __aarch64__
+#endif /* HAVE_ARM_NEON */
 
 /* Compress raw registers to dense representation. */
 void hllDenseCompress(uint8_t *reg_dense, const uint8_t *reg_raw) {
-#if HAVE_X86_SIMD
-    if (HLL_REGISTERS == 16384 && HLL_BITS == 6) {
-        if (HLL_USE_AVX2) {
-            hllDenseCompressAVX2(reg_dense, reg_raw);
-            return;
-        }
+#if HAVE_X86_SIMD && HLL_REGISTERS == 16384 && HLL_BITS == 6
+    if (HLL_USE_AVX2) {
+        hllDenseCompressAVX2(reg_dense, reg_raw);
+        return;
     }
 
 #endif
 
-#ifdef __ARM_NEON
-    if (HLL_REGISTERS == 16384 && HLL_BITS == 6) {
-        if (HLL_USE_NEON) {
-            hllDenseCompressNEON(reg_dense, reg_raw);
-            return;
-        }
+#if HAVE_ARM_NEON && HLL_REGISTERS == 16384 && HLL_BITS == 6
+    if (HLL_USE_NEON) {
+        hllDenseCompressNEON(reg_dense, reg_raw);
+        return;
     }
 #endif
 

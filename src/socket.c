@@ -323,6 +323,7 @@ static void connSocketAcceptHandler(aeEventLoop *el, int fd, void *privdata, int
     while (max--) {
         cfd = anetTcpAccept(server.neterr, fd, cip, sizeof(cip), &cport);
         if (cfd == ANET_ERR) {
+            if (anetRetryAcceptOnError(errno)) continue;
             if (errno != EWOULDBLOCK) serverLog(LL_WARNING, "Accepting client connection: %s", server.neterr);
             return;
         }
@@ -334,16 +335,16 @@ static void connSocketAcceptHandler(aeEventLoop *el, int fd, void *privdata, int
 }
 
 static int connSocketAddr(connection *conn, char *ip, size_t ip_len, int *port, int remote) {
-    if (anetFdToString(conn->fd, ip, ip_len, port, remote) == 0) return C_OK;
+    if (anetFdToString(conn->fd, ip, ip_len, port, remote) == 0) return 0;
 
     conn->last_errno = errno;
-    return C_ERR;
+    return -1;
 }
 
 static int connSocketIsLocal(connection *conn) {
     char cip[NET_IP_STR_LEN + 1] = {0};
 
-    if (connSocketAddr(conn, cip, sizeof(cip) - 1, NULL, 1) == C_ERR) return -1;
+    if (connSocketAddr(conn, cip, sizeof(cip) - 1, NULL, 1) == -1) return -1;
 
     return !strncmp(cip, "127.", 4) || !strcmp(cip, "::1");
 }
@@ -400,21 +401,12 @@ static ssize_t connSocketSyncReadLine(connection *conn, char *ptr, ssize_t size,
     return syncReadLine(conn->fd, ptr, size, timeout);
 }
 
-static const char *connSocketGetType(connection *conn) {
-    (void)conn;
-
+static int connSocketGetType(void) {
     return CONN_TYPE_SOCKET;
-}
-
-static int connSocketGetTypeId(connection *conn) {
-    (void)conn;
-
-    return CONN_TYPE_ID_SOCKET;
 }
 
 static ConnectionType CT_Socket = {
     /* connection type */
-    .get_type_id = connSocketGetTypeId,
     .get_type = connSocketGetType,
 
     /* connection type initialize & finalize & configure */

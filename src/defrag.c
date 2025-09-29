@@ -196,7 +196,7 @@ void *activeDefragAlloc(void *ptr) {
  * Returns NULL in case the allocation wasn't moved.
  * When it returns a non-null value, the old pointer was already released
  * and should NOT be accessed. */
-static sds activeDefragSds(sds sdsptr) {
+sds activeDefragSds(sds sdsptr) {
     void *ptr = sdsAllocPtr(sdsptr);
     void *newptr = activeDefragAlloc(ptr);
     if (newptr) {
@@ -377,43 +377,41 @@ static void defragLater(robj *obj) {
 static long scanLaterList(robj *ob, unsigned long *cursor, monotime endtime) {
     quicklist *ql = ob->ptr;
     quicklistNode *node;
-    long iterations = 0;
-    int bookmark_failed = 0;
     serverAssert(ob->type == OBJ_LIST && ob->encoding == OBJ_ENCODING_QUICKLIST);
 
+    /* Find starting node */
     if (*cursor == 0) {
-        /* if cursor is 0, we start new iteration */
         node = ql->head;
     } else {
         node = quicklistBookmarkFind(ql, "_AD");
         if (!node) {
-            /* if the bookmark was deleted, it means we reached the end. */
             *cursor = 0;
-            return 0;
+            return 0; /* either bookmark failed to create or deleted, skip this one and continue with other quicklists*/
         }
         node = node->next;
     }
 
-    (*cursor)++;
+    /* Process nodes until time expires or list ends */
     while (node) {
         activeDefragQuickListNode(ql, &node);
         server.stat_active_defrag_scanned++;
-        if (++iterations > 128 && !bookmark_failed) {
-            if (getMonotonicUs() > endtime) {
-                if (!quicklistBookmarkCreate(&ql, "_AD", node)) {
-                    bookmark_failed = 1;
-                } else {
-                    ob->ptr = ql; /* bookmark creation may have re-allocated the quicklist */
-                    return 1;
-                }
+
+        /* Check time limit after processing each node */
+        if (getMonotonicUs() > endtime) {
+            if (quicklistBookmarkCreate(&ql, "_AD", node)) {
+                ob->ptr = ql; /* bookmark creation may have re-allocated the quicklist */
+                (*cursor)++;
+                return 1;
             }
-            iterations = 0;
+            break; /* bookmark creation failed - skip this one and continue with other quicklists */
         }
         node = node->next;
     }
+
+    /* Completed processing all nodes */
     quicklistBookmarkDelete(ql, "_AD");
     *cursor = 0;
-    return bookmark_failed ? 1 : 0;
+    return 0;
 }
 
 static void scanLaterZsetCallback(void *privdata, void *element_ref) {
@@ -441,19 +439,9 @@ static void scanLaterSet(robj *ob, unsigned long *cursor) {
     *cursor = hashtableScanDefrag(ht, *cursor, activeDefragSdsHashtableCallback, NULL, activeDefragAlloc, HASHTABLE_SCAN_EMIT_REF);
 }
 
-/* Hashtable scan callback for hash datatype */
-static void activeDefragHashTypeEntry(void *privdata, void *element_ref) {
-    UNUSED(privdata);
-    hashTypeEntry **entry_ref = (hashTypeEntry **)element_ref;
-
-    hashTypeEntry *new_entry = hashTypeEntryDefrag(*entry_ref, activeDefragAlloc, activeDefragSds);
-    if (new_entry) *entry_ref = new_entry;
-}
-
 static void scanLaterHash(robj *ob, unsigned long *cursor) {
     serverAssert(ob->type == OBJ_HASH && ob->encoding == OBJ_ENCODING_HASHTABLE);
-    hashtable *ht = ob->ptr;
-    *cursor = hashtableScanDefrag(ht, *cursor, activeDefragHashTypeEntry, NULL, activeDefragAlloc, HASHTABLE_SCAN_EMIT_REF);
+    *cursor = hashTypeScanDefrag(ob, *cursor, activeDefragAlloc);
 }
 
 static void defragQuicklist(robj *ob) {
@@ -490,20 +478,24 @@ static void defragZsetSkiplist(robj *ob) {
     }
 }
 
+/* Defragment a hash object.
+ *
+ * Large hashtable-encoded hashes are deferred via `defrag_later`.
+ * Smaller ones are defragmented immediately, possibly over multiple passes.
+ * Listpack-encoded hashes are always handled in a single pass. */
 static void defragHash(robj *ob) {
-    serverAssert(ob->type == OBJ_HASH && ob->encoding == OBJ_ENCODING_HASHTABLE);
     hashtable *ht = ob->ptr;
-    if (hashtableSize(ht) > server.active_defrag_max_scan_fields) {
+    if (ob->encoding == OBJ_ENCODING_HASHTABLE && hashtableSize(ht) > server.active_defrag_max_scan_fields) {
+        /* Large hashtable-encoded hashes are deferred via `defrag_later` */
         defragLater(ob);
     } else {
+        /* Smaller hashtables are defragmented immediately, possibly over multiple passes.
+         * Listpack-encoded hashes are always handled in a single pass in hashTypeScanDefrag. */
         unsigned long cursor = 0;
         do {
-            cursor = hashtableScanDefrag(ht, cursor, activeDefragHashTypeEntry, NULL, activeDefragAlloc, HASHTABLE_SCAN_EMIT_REF);
+            cursor = hashTypeScanDefrag(ob, cursor, activeDefragAlloc);
         } while (cursor != 0);
     }
-    /* defrag the hashtable struct and tables */
-    hashtable *new_hashtable = hashtableDefragTables(ht, activeDefragAlloc);
-    if (new_hashtable) ob->ptr = new_hashtable;
 }
 
 static void defragSet(robj *ob) {
@@ -697,7 +689,14 @@ static void defragKey(defragKeysCtx *ctx, robj **elemref) {
             /* Replace the pointer in the expire table without accessing the old
              * pointer. */
             hashtable *expires_ht = kvstoreGetHashtable(db->expires, slot);
-            int replaced = hashtableReplaceReallocatedEntry(expires_ht, ob, newob);
+            bool replaced = hashtableReplaceReallocatedEntry(expires_ht, ob, newob);
+            serverAssert(replaced);
+        }
+        if (newob->type == OBJ_HASH && hashTypeHasVolatileFields(newob)) {
+            /* Check if this is a hash object containing volatile fields.
+             * and update keys_with_volatile_items after defrag. */
+            hashtable *keys_with_volatile_items_ht = kvstoreGetHashtable(db->keys_with_volatile_items, slot);
+            bool replaced = hashtableReplaceReallocatedEntry(keys_with_volatile_items_ht, ob, newob);
             serverAssert(replaced);
         }
         ob = newob;
@@ -731,13 +730,7 @@ static void defragKey(defragKeysCtx *ctx, robj **elemref) {
             serverPanic("Unknown sorted set encoding");
         }
     } else if (ob->type == OBJ_HASH) {
-        if (ob->encoding == OBJ_ENCODING_LISTPACK) {
-            if ((newzl = activeDefragAlloc(ob->ptr))) ob->ptr = newzl;
-        } else if (ob->encoding == OBJ_ENCODING_HASHTABLE) {
-            defragHash(ob);
-        } else {
-            serverPanic("Unknown hash encoding");
-        }
+        defragHash(ob);
     } else if (ob->type == OBJ_STREAM) {
         defragStream(ob);
     } else if (ob->type == OBJ_MODULE) {
@@ -779,7 +772,7 @@ static void defragPubsubScanCallback(void *privdata, void *elemref) {
         void *c;
         while (hashtableNext(&iter, &c)) {
             hashtable *client_channels = ctx->getPubSubChannels(c);
-            int replaced = hashtableReplaceReallocatedEntry(client_channels, channel, newchannel);
+            bool replaced = hashtableReplaceReallocatedEntry(client_channels, channel, newchannel);
             serverAssert(replaced);
         }
         hashtableResetIterator(&iter);
@@ -829,7 +822,7 @@ static doneStatus defragLaterStep(monotime endtime, void *privdata) {
     defragKeysCtx *ctx = privdata;
 
     unsigned int iterations = 0;
-    unsigned long long prev_defragged = server.stat_active_defrag_hits;
+    long long prev_defragged = server.stat_active_defrag_hits;
     unsigned long long prev_scanned = server.stat_active_defrag_scanned;
 
     while (defrag_later && listLength(defrag_later) > 0) {
@@ -854,7 +847,7 @@ static doneStatus defragLaterStep(monotime endtime, void *privdata) {
             listDelNode(defrag_later, head);
         }
 
-        if (++iterations > 16 || server.stat_active_defrag_hits - prev_defragged > 512 ||
+        if (++iterations > 16 || server.stat_active_defrag_hits > prev_defragged ||
             server.stat_active_defrag_scanned - prev_scanned > 64) {
             if (getMonotonicUs() > endtime) break;
             iterations = 0;
@@ -889,7 +882,7 @@ static doneStatus defragStageKvstoreHelper(monotime endtime,
     }
 
     unsigned int iterations = 0;
-    unsigned long long prev_defragged = server.stat_active_defrag_hits;
+    long long prev_defragged = server.stat_active_defrag_hits;
     unsigned long long prev_scanned = server.stat_active_defrag_scanned;
 
     if (state.slot == KVS_SLOT_DEFRAG_LUT) {
@@ -902,7 +895,7 @@ static doneStatus defragStageKvstoreHelper(monotime endtime,
     }
 
     while (true) {
-        if (++iterations > 16 || server.stat_active_defrag_hits - prev_defragged > 512 || server.stat_active_defrag_scanned - prev_scanned > 64) {
+        if (++iterations > 16 || server.stat_active_defrag_hits > prev_defragged || server.stat_active_defrag_scanned - prev_scanned > 64) {
             if (getMonotonicUs() >= endtime) break;
             iterations = 0;
             prev_defragged = server.stat_active_defrag_hits;
@@ -960,6 +953,15 @@ static doneStatus defragStageExpiresKvstore(monotime endtime, void *target, void
     int dbid = (uintptr_t)target;
     serverDb *db = server.db[dbid];
     return defragStageKvstoreHelper(endtime, db->expires,
+                                    scanHashtableCallbackCountScanned, NULL, NULL);
+}
+
+// Target is a DBID
+static doneStatus defragStageKeysWithvolaItemsKvstore(monotime endtime, void *target, void *privdata) {
+    UNUSED(privdata);
+    int dbid = (uintptr_t)target;
+    serverDb *db = server.db[dbid];
+    return defragStageKvstoreHelper(endtime, db->keys_with_volatile_items,
                                     scanHashtableCallbackCountScanned, NULL, NULL);
 }
 
@@ -1227,9 +1229,14 @@ static void beginDefragCycle(void) {
     defrag.remaining_stages = listCreate();
 
     for (int dbid = 0; dbid < server.dbnum; dbid++) {
-        if (dbHasNoKeys(dbid)) continue;
+        /* Skip the non-existent dbs but not empty dbs since hashtableDefragTables
+         * still defrags the internal allocations of the hashtables structs if they
+         * exist. */
+        if (server.db[dbid] == NULL) continue;
+
         addDefragStage(defragStageDbKeys, (void *)(uintptr_t)dbid, NULL);
         addDefragStage(defragStageExpiresKvstore, (void *)(uintptr_t)dbid, NULL);
+        addDefragStage(defragStageKeysWithvolaItemsKvstore, (void *)(uintptr_t)dbid, NULL);
     }
 
     static getClientChannelsFnWrapper getClientPubSubChannelsFn = {getClientPubSubChannels};
@@ -1315,6 +1322,10 @@ robj *activeDefragStringOb(robj *ob) {
 }
 
 void defragWhileBlocked(void) {
+}
+
+sds activeDefragSds(sds sdsptr) {
+    return sdsptr;
 }
 
 #endif

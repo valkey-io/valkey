@@ -57,13 +57,13 @@ extern int __test_num;
             __failed_tests++;                   \
         }                                       \
     } while (0)
-#define test_report()                                                                                        \
-    do {                                                                                                     \
-        printf("%d tests, %d passed, %d failed\n", __test_num, __test_num - __failed_tests, __failed_tests); \
-        if (__failed_tests) {                                                                                \
-            printf("=== WARNING === We have failed tests here...\n");                                        \
-            exit(1);                                                                                         \
-        }                                                                                                    \
+#define test_report()                                                                                                                          \
+    do {                                                                                                                                       \
+        printf("%d tests, %d passed, %d failed\n", __test_num, __failed_tests < __test_num ? __test_num - __failed_tests : 0, __failed_tests); \
+        if (__failed_tests) {                                                                                                                  \
+            printf("=== WARNING === We have failed tests here...\n");                                                                          \
+            exit(1);                                                                                                                           \
+        }                                                                                                                                      \
     } while (0)
 
 #endif

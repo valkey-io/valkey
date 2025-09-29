@@ -187,17 +187,15 @@ proc log_crashes {} {
     set logs [glob */log.txt]
     foreach log $logs {
         set fd [open $log]
-        set found 0
         while {[gets $fd line] >= 0} {
             if {[string match $start_pattern $line]} {
                 puts "\n*** Crash report found in $log ***"
-                set found 1
-            }
-            if {$found} {
-                puts $line
+                puts [exec cat $log]
                 incr ::failed
+                break
             }
         }
+        close $fd
     }
 
     set logs [glob */err.txt]
@@ -446,7 +444,7 @@ proc test {descr code} {
     }
 }
 
-# Check memory leaks when running on OSX using the "leaks" utility.
+# Check memory leaks when running on macOS using the "leaks" utility.
 proc check_leaks instance_types {
     if {[string match {*Darwin*} [exec uname -a]]} {
         puts -nonewline "Testing for memory leaks..."; flush stdout

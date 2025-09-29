@@ -42,7 +42,7 @@
             ],
             [
                 "9.0.0",
-                "Added filters NAME, IDLE, FLAGS, LIB-NAME, LIB-VER, DB, CAPA, and IP."
+                "Added filters NAME, IDLE, FLAGS, LIB-NAME, LIB-VER, DB, CAPA, and IP. And negative filters NOT-ID, NOT-TYPE, NOT-ADDR, NOT-LADDR, NOT-USER, NOT-FLAGS, NOT-NAME, NOT-LIB-NAME, NOT-LIB-VER, NOT-DB, NOT-CAPA, NOT-IP."
             ]
         ],
         "command_flags": [
@@ -201,6 +201,115 @@
             {
                 "token": "IP",
                 "name": "ip",
+                "type": "string",
+                "optional": true,
+                "since": "9.0.0"
+            },
+            {
+                "token": "NOT-TYPE",
+                "name": "not-client-type",
+                "type": "oneof",
+                "optional": true,
+                "since": "9.0.0",
+                "arguments": [
+                    {
+                        "name": "normal",
+                        "type": "pure-token",
+                        "token": "normal"
+                    },
+                    {
+                        "name": "master",
+                        "type": "pure-token",
+                        "token": "master"
+                    },
+                    {
+                        "name": "replica",
+                        "type": "pure-token",
+                        "token": "replica"
+                    },
+                    {
+                        "name": "pubsub",
+                        "type": "pure-token",
+                        "token": "pubsub"
+                    }
+                ]
+            },
+            {
+                "name": "not-client-id",
+                "token": "NOT-ID",
+                "type": "integer",
+                "optional": true,
+                "multiple": true,
+                "since": "9.0.0"
+            },
+            {
+                "token": "NOT-USER",
+                "name": "not-username",
+                "type": "string",
+                "optional": true,
+                "since": "9.0.0"
+            },
+            {
+                "token": "NOT-ADDR",
+                "name": "not-addr",
+                "display": "ip:port",
+                "type": "string",
+                "optional": true,
+                "since": "9.0.0"
+            },
+            {
+                "token": "NOT-LADDR",
+                "name": "not-laddr",
+                "display": "ip:port",
+                "type": "string",
+                "optional": true,
+                "since": "9.0.0"
+            },
+            {
+                "token": "NOT-NAME",
+                "name": "not-name",
+                "type": "string",
+                "optional": true,
+                "since": "9.0.0"
+            },
+            {
+                "token": "NOT-FLAGS",
+                "name": "not-flags",
+                "type": "string",
+                "optional": true,
+                "since": "9.0.0"
+            },
+            {
+                "token": "NOT-LIB-NAME",
+                "name": "not-lib-name",
+                "type": "string",
+                "optional": true,
+                "since": "9.0.0"
+            },
+            {
+                "token": "NOT-LIB-VER",
+                "name": "not-lib-ver",
+                "type": "string",
+                "optional": true,
+                "since": "9.0.0"
+            },
+            {
+                "token": "NOT-DB",
+                "name": "not-db",
+                "type": "integer",
+                "optional": true,
+                "since": "9.0.0"
+            },
+            {
+                "token": "NOT-CAPA",
+                "name": "not-capa",
+                "type": "string",
+                "optional": true,
+                "since": "9.0.0"
+            },
+            {
+                "token": "NOT-IP",
+                "name": "not-ip",
                 "type": "string",
                 "optional": true,
                 "since": "9.0.0"

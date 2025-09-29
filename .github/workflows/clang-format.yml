@@ -2,9 +2,15 @@ name: Clang Format Check
 
 on:
   push:
+    paths-ignore:
+      - '**/*.md'
+      - '**/00-RELEASENOTES'
+      - '**/COPYING'
   pull_request:
-    paths:
-      - 'src/**'
+    paths-ignore:
+      - '**/*.md'
+      - '**/00-RELEASENOTES'
+      - '**/COPYING'
 
 concurrency:
   group: clang-${{ github.head_ref || github.ref }}

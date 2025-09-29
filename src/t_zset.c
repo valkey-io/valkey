@@ -168,10 +168,14 @@ void zslFree(zskiplist *zsl) {
  * (both inclusive), with a powerlaw-alike distribution where higher
  * levels are less likely to be returned. */
 static int zslRandomLevel(void) {
-    static const int threshold = ZSKIPLIST_P * RAND_MAX;
-    int level = 1;
-    while (random() < threshold) level += 1;
-    return (level < ZSKIPLIST_MAXLEVEL) ? level : ZSKIPLIST_MAXLEVEL;
+    uint64_t rand = genrand64_int64();
+
+    /* The probability of gaining 2 additional leading zeros is 0.25.
+     * This matches the level calculation logic perfectly: each
+     * iteration has a 0.25 probability of increasing the level by 1.
+     * Note: __builtin_clzll has undefined behavior when the input is 0. */
+    int level = rand == 0 ? ZSKIPLIST_MAXLEVEL : (__builtin_clzll(rand) / 2 + 1);
+    return level;
 }
 
 /* Compares node and score/ele; defines zset ordering. Return value:
@@ -4172,7 +4176,7 @@ void zrandmemberWithCountCommand(client *c, long l, int withscores) {
         void *entry;
         /* Add all the elements into the temporary hashtable. */
         while (hashtableNext(&iter, &entry)) {
-            int res = hashtableAdd(ht, entry);
+            bool res = hashtableAdd(ht, entry);
             serverAssert(res);
         }
         serverAssert(hashtableSize(ht) == size);

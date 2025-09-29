@@ -166,11 +166,7 @@ int verifyDumpPayload(unsigned char *p, size_t len, uint16_t *rdbver_ptr) {
     if (rdbver_ptr) {
         *rdbver_ptr = rdbver;
     }
-    if ((rdbver >= RDB_FOREIGN_VERSION_MIN && rdbver <= RDB_FOREIGN_VERSION_MAX) ||
-        (rdbver > RDB_VERSION && server.rdb_version_check == RDB_VERSION_CHECK_STRICT)) {
-        return C_ERR;
-    }
-
+    if (!rdbIsVersionAccepted(rdbver, false, false)) return C_ERR;
     if (server.skip_checksum_validation) return C_OK;
 
     /* Verify CRC64 */
@@ -203,6 +199,7 @@ void dumpCommand(client *c) {
 /* RESTORE key ttl serialized-value [REPLACE] [ABSTTL] [IDLETIME seconds] [FREQ frequency] */
 void restoreCommand(client *c) {
     long long ttl, lfu_freq = -1, lru_idle = -1, lru_clock = -1;
+    uint16_t rdbver = 0;
     rio payload;
     int j, type, replace = 0, absttl = 0;
     robj *obj;
@@ -251,14 +248,27 @@ void restoreCommand(client *c) {
     }
 
     /* Verify RDB version and data checksum. */
-    if (verifyDumpPayload(c->argv[3]->ptr, sdslen(c->argv[3]->ptr), NULL) == C_ERR) {
+    if (verifyDumpPayload(c->argv[3]->ptr, sdslen(c->argv[3]->ptr), &rdbver) == C_ERR) {
         addReplyError(c, "DUMP payload version or checksum are wrong");
         return;
     }
 
     rioInitWithBuffer(&payload, c->argv[3]->ptr);
-    if (((type = rdbLoadObjectType(&payload)) == -1) ||
-        ((obj = rdbLoadObject(type, &payload, key->ptr, c->db->id, NULL)) == NULL)) {
+    type = rdbLoadObjectType(&payload);
+    if (type == -1) {
+        addReplyError(c, "Bad data format");
+        return;
+    }
+
+    /* If it's a foreign RDB format, only accept old data types that we know
+     * existed in the past and that don't clash with new types added later. */
+    if (rdbIsForeignVersion(rdbver) && type >= RDB_FOREIGN_TYPE_MIN) {
+        addReplyErrorFormat(c, "Unsupported foreign data type: %d", type);
+        return;
+    }
+
+    obj = rdbLoadObject(type, &payload, key->ptr, c->db->id, NULL);
+    if (obj == NULL) {
         addReplyError(c, "Bad data format");
         return;
     }
@@ -544,7 +554,7 @@ try_again:
     /* Create RESTORE payload and generate the protocol to call the command. */
     for (j = 0; j < num_keys; j++) {
         long long ttl = 0;
-        long long expireat = getExpire(c->db, kv[j]);
+        long long expireat = objectGetExpire(ov[j]);
 
         if (expireat != -1) {
             ttl = expireat - commandTimeSnapshot();
@@ -1135,7 +1145,8 @@ clusterNode *getNodeByQuery(client *c, int *error_code) {
         mc.cmd = c->cmd;
     }
 
-    serverDb *currentDb = c->db;
+    serverDb *origDb = c->db;
+    serverDb *currentDb = origDb;
 
     /* Check for multiple keys, existing keys, missing keys. */
     for (i = 0; i < ms->count; i++) {
@@ -1155,7 +1166,6 @@ clusterNode *getNodeByQuery(client *c, int *error_code) {
 
         if (mcmd->proc == selectCommand) {
             /* Failed SELECT is ignored since it doesn't modify the database. */
-            serverDb *origDb = currentDb;
             long long id;
             if (getLongLongFromObject(margv[1], &id) == C_OK && selectDb(c, id) == C_OK) {
                 currentDb = c->db;
@@ -1316,7 +1326,7 @@ void clusterRedirectClient(client *c, clusterNode *n, int hashslot, int error_co
         addReplyError(c, "-CLUSTERDOWN Hash slot not served");
     } else if (error_code == CLUSTER_REDIR_MOVED || error_code == CLUSTER_REDIR_ASK) {
         /* Report TLS ports to TLS client, and report non-TLS port to non-TLS client. */
-        int port = clusterNodeClientPort(n, shouldReturnTlsInfo());
+        int port = clusterNodeClientPort(n, shouldReturnTlsInfo(), c);
         addReplyErrorSds(c,
                          sdscatprintf(sdsempty(), "-%s %d %s:%d", (error_code == CLUSTER_REDIR_ASK) ? "ASK" : "MOVED",
                                       hashslot, clusterNodePreferredEndpoint(n, c), port));
@@ -1373,7 +1383,7 @@ int clusterRedirectBlockedClientIfNeeded(client *c) {
 
             /* We send an error and unblock the client if:
              * 1) The slot is unassigned, emitting a cluster down error.
-             * 2) The slot is not handled by this node, nor being imported. */
+             * 2) The slot is neither handled by this node, nor being imported. */
             if (node != myself && getImportingSlotSource(slot) == NULL) {
                 if (node == NULL) {
                     clusterRedirectClient(c, NULL, 0, CLUSTER_REDIR_DOWN_UNBOUND);
@@ -1407,7 +1417,7 @@ void addNodeToNodeReply(client *c, clusterNode *node) {
     }
 
     /* Report TLS ports to TLS client, and report non-TLS port to non-TLS client. */
-    addReplyLongLong(c, clusterNodeClientPort(node, shouldReturnTlsInfo()));
+    addReplyLongLong(c, clusterNodeClientPort(node, shouldReturnTlsInfo(), c));
     addReplyBulkCBuffer(c, clusterNodeGetName(node), CLUSTER_NAMELEN);
 
     /* Add the additional endpoint information, this is all the known networking information
@@ -1594,8 +1604,11 @@ void resetClusterStats(void) {
     if (!server.cluster_enabled) return;
 
     clusterSlotStatResetAll();
-}
 
+    memset(server.cluster->stats_bus_messages_sent, 0, sizeof(server.cluster->stats_bus_messages_sent));
+    memset(server.cluster->stats_bus_messages_received, 0, sizeof(server.cluster->stats_bus_messages_received));
+    server.cluster->stat_cluster_links_buffer_limit_exceeded = 0;
+}
 
 void clusterCommandFlushslot(client *c) {
     int slot;

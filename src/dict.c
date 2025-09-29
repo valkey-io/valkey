@@ -54,10 +54,6 @@
 #include "monotonic.h"
 #include "config.h"
 
-#ifndef static_assert
-#define static_assert(expr, lit) _Static_assert(expr, lit)
-#endif
-
 #define UNUSED(V) ((void)V)
 
 /* Using dictSetResizeEnabled() we make possible to disable
@@ -816,7 +812,7 @@ unsigned long long dictFingerprint(dict *d) {
     return hash;
 }
 
-/* Initiaize a normal iterator. This function should be called when initializing
+/* Initialize a normal iterator. This function should be called when initializing
  * an iterator on the stack. */
 void dictInitIterator(dictIterator *iter, dict *d) {
     iter->d = d;
@@ -943,8 +939,8 @@ dictEntry *dictGetRandomKey(dict *d) {
 /* This function samples the dictionary to return a few keys from random
  * locations.
  *
- * It does not guarantee to return all the keys specified in 'count', nor
- * it does guarantee to return non-duplicated elements, however it will make
+ * It neither guarantees it will return all the keys specified in 'count', nor
+ * does it guarantee to return non-duplicated elements, however it will make
  * some effort to do both things.
  *
  * Returned pointers to hash table entries are stored into 'des' that

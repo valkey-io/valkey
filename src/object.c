@@ -28,10 +28,12 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
+#include "hashtable.h"
 #include "server.h"
 #include "serverassert.h"
 #include "functions.h"
 #include "intset.h" /* Compact integer set structure */
+#include "vset.h"
 #include "zmalloc.h"
 #include "sds.h"
 #include "module.h"
@@ -224,6 +226,11 @@ robj *createStringObject(const char *ptr, size_t len) {
         return createRawStringObject(ptr, len);
 }
 
+/* Similar to createStringObject() but takes an existing SDS as input. */
+robj *createStringObjectFromSds(const sds s) {
+    return createStringObject(s, sdslen(s));
+}
+
 robj *createStringObjectWithKeyAndExpire(const char *ptr, size_t len, const sds key, long long expire) {
     /* When to embed? Embed when the sum is up to 64 bytes. There may be better
      * heuristics, e.g. we can look at the jemalloc sizes (16-byte intervals up
@@ -256,9 +263,11 @@ sds objectGetKey(const robj *val) {
     return NULL;
 }
 
+/* Return the expire time of the specified robj, or -1 if no expire
+ * is associated with this robj (i.e. the robj is non volatile) */
 long long objectGetExpire(const robj *val) {
-    unsigned char *data = (void *)(val + 1);
     if (val->hasexpire) {
+        unsigned char *data = (void *)(val + 1);
         return *(long long *)data;
     } else {
         return -1;
@@ -525,7 +534,10 @@ void freeZsetObject(robj *o) {
 
 void freeHashObject(robj *o) {
     switch (o->encoding) {
-    case OBJ_ENCODING_HASHTABLE: hashtableRelease((hashtable *)o->ptr); break;
+    case OBJ_ENCODING_HASHTABLE:
+        hashTypeFreeVolatileSet(o);
+        hashtableRelease((hashtable *)o->ptr);
+        break;
     case OBJ_ENCODING_LISTPACK: lpFree(o->ptr); break;
     default: serverPanic("Unknown hash encoding type"); break;
     }
@@ -680,7 +692,7 @@ void dismissHashObject(robj *o, size_t size_hint) {
             hashtableInitIterator(&iter, ht, 0);
             void *next;
             while (hashtableNext(&iter, &next)) {
-                dismissHashTypeEntry(next);
+                entryDismissMemory(next);
             }
             hashtableResetIterator(&iter);
         }
@@ -1122,37 +1134,34 @@ char *strEncoding(int encoding) {
  * are checked and averaged to estimate the total size. */
 #define OBJ_COMPUTE_SIZE_DEF_SAMPLES 5 /* Default sample size. */
 size_t objectComputeSize(robj *key, robj *o, size_t sample_size, int dbid) {
-    size_t asize = 0, elesize = 0, samples = 0;
+    size_t elesize = 0, samples = 0;
+    size_t asize = zmalloc_size((void *)o);
 
     if (o->type == OBJ_STRING) {
-        if (o->encoding == OBJ_ENCODING_INT) {
-            asize = sizeof(*o);
-        } else if (o->encoding == OBJ_ENCODING_RAW) {
-            asize = sdsAllocSize(o->ptr) + sizeof(*o);
-        } else if (o->encoding == OBJ_ENCODING_EMBSTR) {
-            asize = zmalloc_size((void *)o);
-        } else {
+        if (o->encoding == OBJ_ENCODING_RAW) {
+            asize += sdsAllocSize(o->ptr);
+        } else if (o->encoding != OBJ_ENCODING_INT && o->encoding != OBJ_ENCODING_EMBSTR) {
             serverPanic("Unknown string encoding");
         }
     } else if (o->type == OBJ_LIST) {
         if (o->encoding == OBJ_ENCODING_QUICKLIST) {
             quicklist *ql = o->ptr;
             quicklistNode *node = ql->head;
-            asize = sizeof(*o) + sizeof(quicklist);
+            asize += sizeof(quicklist);
             do {
                 elesize += sizeof(quicklistNode) + zmalloc_size(node->entry);
                 samples++;
             } while ((node = node->next) && samples < sample_size);
             asize += (double)elesize / samples * ql->len;
         } else if (o->encoding == OBJ_ENCODING_LISTPACK) {
-            asize = sizeof(*o) + zmalloc_size(o->ptr);
+            asize += zmalloc_size(o->ptr);
         } else {
             serverPanic("Unknown list encoding");
         }
     } else if (o->type == OBJ_SET) {
         if (o->encoding == OBJ_ENCODING_HASHTABLE) {
             hashtable *ht = o->ptr;
-            asize = sizeof(*o) + hashtableMemUsage(ht);
+            asize += hashtableMemUsage(ht);
 
             hashtableIterator iter;
             hashtableInitIterator(&iter, ht, 0);
@@ -1165,21 +1174,21 @@ size_t objectComputeSize(robj *key, robj *o, size_t sample_size, int dbid) {
             hashtableResetIterator(&iter);
             if (samples) asize += (double)elesize / samples * hashtableSize(ht);
         } else if (o->encoding == OBJ_ENCODING_INTSET) {
-            asize = sizeof(*o) + zmalloc_size(o->ptr);
+            asize += zmalloc_size(o->ptr);
         } else if (o->encoding == OBJ_ENCODING_LISTPACK) {
-            asize = sizeof(*o) + zmalloc_size(o->ptr);
+            asize += zmalloc_size(o->ptr);
         } else {
             serverPanic("Unknown set encoding");
         }
     } else if (o->type == OBJ_ZSET) {
         if (o->encoding == OBJ_ENCODING_LISTPACK) {
-            asize = sizeof(*o) + zmalloc_size(o->ptr);
+            asize += zmalloc_size(o->ptr);
         } else if (o->encoding == OBJ_ENCODING_SKIPLIST) {
             hashtable *ht = ((zset *)o->ptr)->ht;
             zskiplist *zsl = ((zset *)o->ptr)->zsl;
             zskiplistNode *znode = zsl->header->level[0].forward;
-            asize = sizeof(*o) + sizeof(zset) + sizeof(zskiplist) +
-                    hashtableMemUsage(ht) + zmalloc_size(zsl->header);
+            asize += sizeof(zset) + sizeof(zskiplist) +
+                     hashtableMemUsage(ht) + zmalloc_size(zsl->header);
             while (znode != NULL && samples < sample_size) {
                 elesize += sdsAllocSize(znode->ele);
                 elesize += zmalloc_size(znode);
@@ -1192,26 +1201,28 @@ size_t objectComputeSize(robj *key, robj *o, size_t sample_size, int dbid) {
         }
     } else if (o->type == OBJ_HASH) {
         if (o->encoding == OBJ_ENCODING_LISTPACK) {
-            asize = sizeof(*o) + zmalloc_size(o->ptr);
+            asize += zmalloc_size(o->ptr);
         } else if (o->encoding == OBJ_ENCODING_HASHTABLE) {
             hashtable *ht = o->ptr;
             hashtableIterator iter;
+            vset *volatile_fields = hashtableMetadata(ht);
             hashtableInitIterator(&iter, ht, 0);
             void *next;
 
-            asize = sizeof(*o) + hashtableMemUsage(ht);
+            asize += hashtableMemUsage(ht);
             while (hashtableNext(&iter, &next) && samples < sample_size) {
-                elesize += hashTypeEntryMemUsage(next);
+                elesize += entryMemUsage(next);
                 samples++;
             }
             hashtableResetIterator(&iter);
             if (samples) asize += (double)elesize / samples * hashtableSize(ht);
+            if (vsetIsValid(volatile_fields)) asize += vsetMemUsage(volatile_fields);
         } else {
             serverPanic("Unknown hash encoding");
         }
     } else if (o->type == OBJ_STREAM) {
         stream *s = o->ptr;
-        asize = sizeof(*o) + sizeof(*s);
+        asize += sizeof(*s);
         asize += raxAllocSize(s->rax);
 
         /* Now we have to add the listpacks. The last listpack is often non
@@ -1281,7 +1292,7 @@ size_t objectComputeSize(robj *key, robj *o, size_t sample_size, int dbid) {
             if (samples) asize += (double)elesize / samples * raxSize(s->cgroups);
         }
     } else if (o->type == OBJ_MODULE) {
-        asize = moduleGetMemUsage(key, o, sample_size, dbid);
+        asize += moduleGetMemUsage(key, o, sample_size, dbid);
     } else {
         serverPanic("Unknown object type");
     }
@@ -1346,6 +1357,10 @@ struct serverMemOverhead *getMemoryOverheadData(void) {
                          server.stat_clients_type_memory[CLIENT_TYPE_PUBSUB] +
                          server.stat_clients_type_memory[CLIENT_TYPE_NORMAL];
     mem_total += mh->clients_normal;
+
+    mh->cluster_slot_import = server.stat_clients_type_memory[CLIENT_TYPE_SLOT_IMPORT];
+    mh->cluster_slot_export = server.stat_clients_type_memory[CLIENT_TYPE_SLOT_EXPORT];
+    mem_total += mh->cluster_slot_import + mh->cluster_slot_export;
 
     mh->cluster_links = server.stat_cluster_links_memory;
     mem_total += mh->cluster_links;
@@ -1711,7 +1726,7 @@ void memoryCommand(client *c) {
     } else if (!strcasecmp(c->argv[1]->ptr, "stats") && c->argc == 2) {
         struct serverMemOverhead *mh = getMemoryOverheadData();
 
-        addReplyMapLen(c, 31 + mh->num_dbs);
+        addReplyMapLen(c, 33 + mh->num_dbs);
 
         addReplyBulkCString(c, "peak.allocated");
         addReplyLongLong(c, mh->peak_allocated);
@@ -1733,6 +1748,12 @@ void memoryCommand(client *c) {
 
         addReplyBulkCString(c, "cluster.links");
         addReplyLongLong(c, mh->cluster_links);
+
+        addReplyBulkCString(c, "cluster.slot_import");
+        addReplyLongLong(c, mh->cluster_slot_import);
+
+        addReplyBulkCString(c, "cluster.slot_export");
+        addReplyLongLong(c, mh->cluster_slot_export);
 
         addReplyBulkCString(c, "aof.buffer");
         addReplyLongLong(c, mh->aof_buffer);

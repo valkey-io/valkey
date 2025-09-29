@@ -140,6 +140,16 @@ start_server {overrides {save {}}} {
         set initial_psyncs [s 0 sync_partial_ok]
         set initial_syncs [s 0 sync_full]
 
+        set rd_blocking [valkey_deferring_client -2]
+
+        $rd_blocking BRPOP FOO_LIST 0
+
+        wait_for_condition 50 100 {
+            [s -2 blocked_clients] == 1
+        } else {
+            fail "rd_blocking client should be blocked"
+        }
+
         pause_process $node_0_pid
         # node 0 will never acknowledge this write
         $node_2 set case 2
@@ -157,6 +167,9 @@ start_server {overrides {save {}}} {
         assert_match *slave* [$node_1 role]
         assert_match *slave* [$node_2 role]
 
+        # rd_blocking client should still be blocked in failover-in-progress
+        assert_equal [s -2 blocked_clients] 1
+
         resume_process $node_0_pid
 
         # Wait for failover to end
@@ -165,6 +178,13 @@ start_server {overrides {save {}}} {
         } else {
             fail "Failover from node 2 to node 0 did not finish"
         }
+
+        assert_error "UNBLOCKED force unblock from blocking operation, instance state changed (master -> replica?)" {$rd_blocking read}
+
+        assert_equal [s -2 blocked_clients] 0
+
+        $rd_blocking close
+
         $node_1 replicaof $node_0_host $node_0_port
 
         wait_for_sync $node_1
@@ -255,19 +275,47 @@ start_server {overrides {save {}}} {
         # We block psync, so the failover will fail
         $node_1 acl setuser default -psync
 
-        # We pause the target long enough to send a write command
-        # during the pause. This write will not be interrupted.
-        pause_process [srv -1 pid]
-        set rd [valkey_deferring_client]
-        # wait for the client creation
+        # We send a BRPOP command and pause the target long enough
+        # to send an LPUSH and another BRPOP command during the pause.
+        # This push and the two pops (which are blocked for different
+        # reasons, respectively) will not be interrupted by the aborted
+        # failover.
+        pause_process $node_1_pid
+        $node_0 SET FOO BAR
+        set rd_lpush [valkey_deferring_client]
+        set rd_brpop_before [valkey_deferring_client]
+        set rd_brpop_after [valkey_deferring_client]
+
+        $rd_brpop_before BRPOP FOO_LIST 0
         wait_for_condition 50 100 {
-            [s connected_clients] == 2
+            [s 0 blocked_clients] == 1
         } else {
-            fail "Client creation failed"
+            fail "rd_brpop_before should be blocked"
         }
-        $rd SET FOO BAR
+
         $node_0 failover to $node_1_host $node_1_port
-        resume_process [srv -1 pid]
+        wait_for_condition 50 100 {
+            [s 0 master_failover_state] == "waiting-for-sync"
+        } else {
+            fail "failover did not start in time"
+        } debug {
+            puts [s 0 master_failover_state]
+            puts [$node_0 info replication]
+            fail "failover did not start in time"
+        }
+
+        $rd_brpop_after BRPOP FOO_LIST 0
+        $rd_lpush LPUSH FOO_LIST BAR1 BAR2
+
+        wait_for_condition 100 100 {
+            [s 0 blocked_clients] == 3
+        } else {
+            fail "All deferring clients should be blocked"
+        }
+
+        assert_equal "waiting-for-sync" [s 0 master_failover_state]
+
+        resume_process $node_1_pid
 
         # Wait for failover to end
         wait_for_condition 50 100 {
@@ -276,8 +324,12 @@ start_server {overrides {save {}}} {
             fail "Failover from node_0 to replica did not finish"
         }
 
-        assert_equal [$rd read] "OK"
-        $rd close
+        assert_equal "2" [$rd_lpush read]
+        assert_equal "FOO_LIST BAR1" [$rd_brpop_before read]
+        assert_equal "FOO_LIST BAR2" [$rd_brpop_after read]
+        $rd_lpush close
+        $rd_brpop_before close
+        $rd_brpop_after close
 
         # restore access to psync
         $node_1 acl setuser default +psync

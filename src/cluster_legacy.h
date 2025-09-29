@@ -1,10 +1,11 @@
 #ifndef CLUSTER_LEGACY_H
 #define CLUSTER_LEGACY_H
 
+#include <stdint.h>
 #define CLUSTER_PORT_INCR 10000 /* Cluster port = baseport + PORT_INCR */
 
 /* The following defines are amount of time, sometimes expressed as
- * multiplicators of the node timeout value (when ending with MULT). */
+ * multipliers of the node timeout value (when ending with MULT). */
 #define CLUSTER_FAIL_REPORT_VALIDITY_MULT 2  /* Fail report validity. */
 #define CLUSTER_FAIL_UNDO_TIME_MULT 2        /* Undo fail if primary is back. */
 #define CLUSTER_MF_PAUSE_MULT 2              /* Primary pause manual failover mult. */
@@ -25,6 +26,7 @@
 #define CLUSTER_TODO_FSYNC_CONFIG (1 << 3)
 #define CLUSTER_TODO_HANDLE_MANUALFAILOVER (1 << 4)
 #define CLUSTER_TODO_BROADCAST_ALL (1 << 5)
+#define CLUSTER_TODO_HANDLE_SLOT_MIGRATION (1 << 6)
 
 /* clusterLink encapsulates everything needed to talk with a remote node. */
 typedef struct clusterLink {
@@ -38,7 +40,13 @@ typedef struct clusterLink {
     size_t rcvbuf_alloc;                   /* Allocated size of rcvbuf */
     clusterNode *node;                     /* Node related to this link. Initialized to NULL when unknown */
     int inbound;                           /* 1 if this link is an inbound link accepted from the related node */
+    int flags;                             /* We share CLUSTER_NODE_* with clusterNode->flags. */
 } clusterLink;
+
+/* Cluster link flags and macros. */
+#define CLUSTER_LINK_EXTENSIONS_SUPPORTED (1 << 0) /* This link supports extensions. */
+
+#define linkSupportsExtension(link) ((link)->flags & CLUSTER_LINK_EXTENSIONS_SUPPORTED)
 
 /* Cluster node flags and macros. */
 #define CLUSTER_NODE_PRIMARY (1 << 0)                      /* The node is a primary */
@@ -70,12 +78,6 @@ typedef struct clusterLink {
 #define nodeSupportsLightMsgHdrForPubSub(n) ((n)->flags & CLUSTER_NODE_LIGHT_HDR_PUBLISH_SUPPORTED)
 #define nodeSupportsLightMsgHdrForModule(n) ((n)->flags & CLUSTER_NODE_LIGHT_HDR_MODULE_SUPPORTED)
 #define nodeInNormalState(n) (!((n)->flags & (CLUSTER_NODE_HANDSHAKE | CLUSTER_NODE_MEET | CLUSTER_NODE_PFAIL | CLUSTER_NODE_FAIL)))
-
-/* This structure represent elements of node->fail_reports. */
-typedef struct clusterNodeFailReport {
-    clusterNode *node; /* Node reporting the failure condition. */
-    mstime_t time;     /* Time of the last report from this node. */
-} clusterNodeFailReport;
 
 /* Cluster messages header */
 
@@ -160,6 +162,8 @@ typedef enum {
     CLUSTERMSG_EXT_TYPE_SHARDID,
     CLUSTERMSG_EXT_TYPE_CLIENT_IPV4,
     CLUSTERMSG_EXT_TYPE_CLIENT_IPV6,
+    CLUSTERMSG_EXT_TYPE_CLIENT_PORT,
+    CLUSTERMSG_EXT_TYPE_CLIENT_TLS_PORT,
 } clusterMsgPingtypes;
 
 /* Helper function for making sure extensions are eight byte aligned. */
@@ -193,6 +197,14 @@ typedef struct {
 } clusterMsgPingExtClientIpV6;
 
 typedef struct {
+    uint16_t announce_client_port; /* Announced client port. */
+} clusterMsgPingExtClientPort;
+
+typedef struct {
+    uint16_t announce_client_tls_port; /* Announced client TLS port. */
+} clusterMsgPingExtClientTlsPort;
+
+typedef struct {
     uint32_t length; /* Total length of this extension message (including this header) */
     uint16_t type;   /* Type of this extension message (see clusterMsgPingtypes) */
     uint16_t unused; /* 16 bits of padding to make this structure 8 byte aligned. */
@@ -203,6 +215,8 @@ typedef struct {
         clusterMsgPingExtShardId shard_id;
         clusterMsgPingExtClientIpV4 announce_client_ipv4;
         clusterMsgPingExtClientIpV6 announce_client_ipv6;
+        clusterMsgPingExtClientPort announce_client_port;
+        clusterMsgPingExtClientTlsPort announce_client_tls_port;
     } ext[]; /* Actual extension information, formatted so that the data is 8
               * byte aligned, regardless of its content. */
 } clusterMsgPingExt;
@@ -351,6 +365,7 @@ struct _clusterNode {
     mstime_t meet_sent;                     /* Unix time we sent latest meet packet */
     mstime_t fail_time;                     /* Unix time when FAIL flag was set */
     mstime_t orphaned_time;                 /* Starting time of orphaned primary condition */
+    mstime_t outbound_link_attempt_time;    /* Unix time we last tried to establish an outgoing link */
     mstime_t inbound_link_freed_time;       /* Last time we freed the inbound link for this node.
                                                If it was never freed, it is the same as ctime */
     long long repl_offset;                  /* Last known repl offset for this node. */
@@ -362,9 +377,11 @@ struct _clusterNode {
     int tcp_port;                           /* Latest known clients TCP port. */
     int tls_port;                           /* Latest known clients TLS port */
     int cport;                              /* Latest known cluster port of this node. */
+    int announce_client_tcp_port;           /* Port for clients only. */
+    int announce_client_tls_port;           /* TLS port for clients only. */
     clusterLink *link;                      /* TCP/IP link established toward this node */
     clusterLink *inbound_link;              /* TCP/IP link accepted from this node */
-    list *fail_reports;                     /* List of nodes signaling this as failing */
+    rax *fail_reports;                      /* Radix tree for failure reports with sorted order by timestamp */
     int is_node_healthy;                    /* Boolean indicating the cached node health.
                                                Update with updateAndCountChangedNodeHealth(). */
 };
@@ -376,6 +393,11 @@ typedef struct slotStat {
     uint64_t network_bytes_out;
 } slotStat;
 
+typedef struct slotRange {
+    int start_slot;
+    int end_slot;
+} slotRange;
+
 struct clusterState {
     clusterNode *myself; /* This node */
     uint64_t currentEpoch;
@@ -385,9 +407,12 @@ struct clusterState {
     dict *nodes;            /* Hash table of name -> clusterNode structures */
     dict *shards;           /* Hash table of shard_id -> list (of nodes) structures */
     dict *nodes_black_list; /* Nodes we don't re-add for a few seconds. */
-    clusterNode *migrating_slots_to[CLUSTER_SLOTS];
-    clusterNode *importing_slots_from[CLUSTER_SLOTS];
+    dict *migrating_slots_to;
+    dict *importing_slots_from;
     clusterNode *slots[CLUSTER_SLOTS];
+    list *slot_migration_jobs; /* List storing all slot migration jobs. Stored
+                                * in order from most recent to least recently
+                                * created. */
     /* The following fields are used to take the replica state on elections. */
     mstime_t failover_auth_time;      /* Time of previous or next election. */
     int failover_auth_count;          /* Number of votes received so far. */

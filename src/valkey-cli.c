@@ -82,13 +82,16 @@
 #define OUTPUT_QUOTED_JSON 4
 #define CLI_KEEPALIVE_INTERVAL 15   /* seconds */
 #define CLI_DEFAULT_PIPE_TIMEOUT 30 /* seconds */
-#define CLI_HISTFILE_ENV "REDISCLI_HISTFILE"
+#define CLI_HISTFILE_ENV "VALKEYCLI_HISTFILE"
+#define OLD_CLI_HISTFILE_ENV "REDISCLI_HISTFILE"
 #define CLI_HISTFILE_DEFAULT ".valkeycli_history"
-#define CLI_RCFILE_ENV "REDISCLI_RCFILE"
+#define CLI_RCFILE_ENV "VALKEYCLI_RCFILE"
+#define OLD_CLI_RCFILE_ENV "REDISCLI_RCFILE"
 #define CLI_RCFILE_DEFAULT ".valkeyclirc"
 #define CLI_AUTH_ENV "VALKEYCLI_AUTH"
 #define OLD_CLI_AUTH_ENV "REDISCLI_AUTH"
-#define CLI_CLUSTER_YES_ENV "REDISCLI_CLUSTER_YES"
+#define CLI_CLUSTER_YES_ENV "VALKEYCLI_CLUSTER_YES"
+#define OLD_CLI_CLUSTER_YES_ENV "REDISCLI_CLUSTER_YES"
 
 #define CLUSTER_MANAGER_SLOTS 16384
 #define CLUSTER_MANAGER_PORT_INCR 10000 /* same as CLUSTER_PORT_INCR */
@@ -359,12 +362,16 @@ static void cliRefreshPrompt(void) {
  * The function returns NULL (if the file is /dev/null or cannot be
  * obtained for some error), or an SDS string that must be freed by
  * the user. */
-static sds getDotfilePath(char *envoverride, char *dotfilename) {
+static sds getDotfilePath(char *envoverride, char *envoverride_old, char *dotfilename) {
     char *path = NULL;
     sds dotPath = NULL;
 
-    /* Check the env for a dotfile override. */
+    /* Check the env for a dotfile override, with fallback to legacy env variable. */
     path = getenv(envoverride);
+    if (path == NULL && envoverride_old != NULL) {
+        path = getenv(envoverride_old);
+    }
+
     if (path != NULL && *path != '\0') {
         if (!strcmp("/dev/null", path)) {
             return NULL;
@@ -2934,7 +2941,11 @@ static void parseEnv(void) {
         config.conn_info.auth = auth;
     }
 
+    /* Check for cluster yes flag with fallback to legacy env variable */
     char *cluster_yes = getenv(CLI_CLUSTER_YES_ENV);
+    if (cluster_yes == NULL) {
+        cluster_yes = getenv(OLD_CLI_CLUSTER_YES_ENV);
+    }
     if (cluster_yes != NULL && !strcmp(cluster_yes, "1")) {
         config.cluster_manager_command.flags |= CLUSTER_MANAGER_CMD_FLAG_YES;
     }
@@ -3122,7 +3133,7 @@ static int confirmWithYes(char *msg, int ignore_force) {
 
 static int issueCommandRepeat(int argc, char **argv, long repeat) {
     /* In Lua debugging mode, we want to pass the "help" to the server to get
-     * it's own HELP message, rather than handle it by the CLI, see ldbRepl.
+     * its own HELP message, rather than handle it by the CLI, see ldbRepl.
      *
      * For the normal server HELP, we can process it without a connection. */
     if (!config.eval_ldb && (!strcasecmp(argv[0], "help") || !strcasecmp(argv[0], "?"))) {
@@ -3212,7 +3223,7 @@ void cliSetPreferences(char **argv, int argc, int interactive) {
 
 /* Load the ~/.valkeyclirc file if any. */
 void cliLoadPreferences(void) {
-    sds rcfile = getDotfilePath(CLI_RCFILE_ENV, CLI_RCFILE_DEFAULT);
+    sds rcfile = getDotfilePath(CLI_RCFILE_ENV, OLD_CLI_RCFILE_ENV, CLI_RCFILE_DEFAULT);
     if (rcfile == NULL) return;
     FILE *fp = fopen(rcfile, "r");
     char buf[1024];
@@ -3321,7 +3332,7 @@ static void repl(void) {
 
     /* Only use history and load the rc file when stdin is a tty. */
     if (isatty(fileno(stdin))) {
-        historyfile = getDotfilePath(CLI_HISTFILE_ENV, CLI_HISTFILE_DEFAULT);
+        historyfile = getDotfilePath(CLI_HISTFILE_ENV, OLD_CLI_HISTFILE_ENV, CLI_HISTFILE_DEFAULT);
         // keep in-memory history always regardless if history file can be determined
         history = 1;
         if (historyfile != NULL) {
@@ -3560,6 +3571,12 @@ static int evalMode(int argc, char **argv) {
         /* Call it */
         int eval_ldb = config.eval_ldb; /* Save it, may be reverted. */
         retval = issueCommand(argc + 3 - got_comma, argv2);
+
+        for (j = 0; j < argc + 3 - got_comma; j++) {
+            sdsfree(argv2[j]);
+        }
+        free(argv2);
+
         if (eval_ldb) {
             if (!config.eval_ldb) {
                 /* If the debugging session ended immediately, there was an
@@ -5119,7 +5136,7 @@ static int clusterManagerMigrateKeysInSlot(clusterManagerNode *source,
 static int
 clusterManagerMoveSlot(clusterManagerNode *source, clusterManagerNode *target, int slot, int opts, char **err) {
     if (!(opts & CLUSTER_MANAGER_OPT_QUIET)) {
-        printf("Moving slot %d from %s:%d to %s:%d: ", slot, source->ip, source->port, target->ip, target->port);
+        printf("Moving slot %d from %s:%d to %s:%d", slot, source->ip, source->port, target->ip, target->port);
         fflush(stdout);
     }
     if (err != NULL) *err = NULL;
@@ -5916,6 +5933,8 @@ static int clusterManagerFixSlotsCoverage(char *all_slots) {
                 if (!clusterManagerCheckValkeyReply(n, reply, NULL)) {
                     fixed = -1;
                     if (reply) freeReplyObject(reply);
+                    listRelease(slot_nodes);
+                    sdsfree(slot_nodes_str);
                     goto cleanup;
                 }
                 assert(reply->type == VALKEY_REPLY_ARRAY);
@@ -7925,7 +7944,11 @@ static int clusterManagerCommandBackup(int argc, char **argv) {
     int no_issues = clusterManagerCheckCluster(0);
     int cluster_errors_count = (no_issues ? 0 : listLength(cluster_manager.errors));
     config.cluster_manager_command.backup_dir = argv[1];
-    /* TODO: check if backup_dir is a valid directory. */
+    struct stat sb;
+    if (stat(config.cluster_manager_command.backup_dir, &sb) != 0 || !S_ISDIR(sb.st_mode)) {
+        clusterManagerLogErr("[ERR] %s is not a valid directory\n", config.cluster_manager_command.backup_dir);
+        return 0;
+    }
     sds json = sdsnew("[\n");
     int first_node = 0;
     listIter li;
@@ -9028,7 +9051,7 @@ static void findBigKeys(int memkeys, unsigned memkeys_samples) {
     if (sizes) zfree(sizes);
 
     /* We're done */
-    printf("\n-------- summary -------\n\n");
+    printf("\n-------- Summary --------\n\n");
     if (force_cancel_loop) printf("[%05.2f%%] ", pct);
     printf("Sampled %llu keys in the keyspace!\n", sampled);
     printf("Total key length in bytes is %llu (avg len %.2f)\n\n", totlen, totlen ? (double)totlen / sampled : 0);
@@ -9184,7 +9207,7 @@ static void findHotKeys(void) {
     if (freqs) zfree(freqs);
 
     /* We're done */
-    printf("\n-------- summary -------\n\n");
+    printf("\n-------- Summary --------\n\n");
     if (force_cancel_loop) printf("[%05.2f%%] ", pct);
     printf("Sampled %llu keys in the keyspace!\n", sampled);
 

@@ -23,6 +23,7 @@ Committers listed in alphabetical order by their github ID.
 | Committer           | GitHub ID                                       | Affiliation |
 | ------------------- | ----------------------------------------------- | ----------- |
 | Harkrishn Patro     | [hpatro](https://github.com/hpatro)             | Amazon      |
+| Jacob Murphy        | [murphyjacob4](https://github.com/murphyjacob4) | Google      |
 | Ran Shidlansik      | [ranshid](https://github.com/ranshid)           | Amazon      |
 | Ricardo Dias        | [rjd15372](https://github.com/rjd15372)         | Percona     |
 

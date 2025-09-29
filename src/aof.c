@@ -854,13 +854,13 @@ cleanup:
  * AOFRW, which may be that we have reached the 'next_rewrite_time' or the number of INCR
  * AOFs has not reached the limit threshold.
  * */
-#define AOF_REWRITE_LIMITE_THRESHOLD 3
-#define AOF_REWRITE_LIMITE_MAX_MINUTES 60 /* 1 hour */
+#define AOF_REWRITE_LIMIT_THRESHOLD 3
+#define AOF_REWRITE_LIMIT_MAX_MINUTES 60 /* 1 hour */
 int aofRewriteLimited(void) {
     static int next_delay_minutes = 0;
     static time_t next_rewrite_time = 0;
 
-    if (server.stat_aofrw_consecutive_failures < AOF_REWRITE_LIMITE_THRESHOLD) {
+    if (server.stat_aofrw_consecutive_failures < AOF_REWRITE_LIMIT_THRESHOLD) {
         /* We may be recovering from limited state, so reset all states. */
         next_delay_minutes = 0;
         next_rewrite_time = 0;
@@ -878,8 +878,8 @@ int aofRewriteLimited(void) {
     }
 
     next_delay_minutes = (next_delay_minutes == 0) ? 1 : (next_delay_minutes * 2);
-    if (next_delay_minutes > AOF_REWRITE_LIMITE_MAX_MINUTES) {
-        next_delay_minutes = AOF_REWRITE_LIMITE_MAX_MINUTES;
+    if (next_delay_minutes > AOF_REWRITE_LIMIT_MAX_MINUTES) {
+        next_delay_minutes = AOF_REWRITE_LIMIT_MAX_MINUTES;
     }
 
     next_rewrite_time = server.unixtime + next_delay_minutes * 60;
@@ -923,7 +923,7 @@ void killAppendOnlyChild(void) {
     if (kill(server.child_pid, SIGUSR1) != -1) {
         while (waitpid(-1, &statloc, 0) != server.child_pid);
     }
-    aofRemoveTempFile(server.child_pid);
+    aofRemoveTempFile(server.child_pid, 0);
     resetChildState();
     server.aof_rewrite_time_start = -1;
 }
@@ -1437,8 +1437,8 @@ int loadSingleAppendOnlyFile(char *filename) {
     /* Check if the AOF file is in RDB format (it may be RDB encoded base AOF
      * or old style RDB-preamble AOF). In that case we need to load the RDB file
      * and later continue loading the AOF tail if it is an old style RDB-preamble AOF. */
-    char sig[5]; /* "REDIS" */
-    if (fread(sig, 1, 5, fp) != 5 || memcmp(sig, "REDIS", 5) != 0) {
+    char sig[6]; /* "REDIS" or "VALKEY" */
+    if (fread(sig, 1, 6, fp) != 6 || (memcmp(sig, "REDIS0", 6) != 0 && memcmp(sig, "VALKEY", 6) != 0)) {
         /* Not in RDB format, seek back at 0 offset. */
         if (fseek(fp, 0, SEEK_SET) == -1) goto readerr;
     } else {
@@ -1955,12 +1955,35 @@ static int rioWriteHashIteratorCursor(rio *r, hashTypeIterator *hi, int what) {
  * The function returns 0 on error, 1 on success. */
 int rewriteHashObject(rio *r, robj *key, robj *o) {
     hashTypeIterator hi;
-    long long count = 0, items = hashTypeLength(o);
-
+    long long count = 0, volatile_items = 0, non_volatile_items;
+    /* First serialize volatile items if exist */
+    if (hashTypeHasVolatileFields(o)) {
+        hashTypeInitVolatileIterator(o, &hi);
+        while (hashTypeNext(&hi) != C_ERR) {
+            long long expiry = entryGetExpiry(hi.next);
+            sds field = entryGetField(hi.next);
+            sds value = entryGetValue(hi.next);
+            if (rioWriteBulkCount(r, '*', 8) == 0) return 0;
+            if (rioWriteBulkString(r, "HSETEX", 6) == 0) return 0;
+            if (rioWriteBulkObject(r, key) == 0) return 0;
+            if (rioWriteBulkString(r, "PXAT", 4) == 0) return 0;
+            if (rioWriteBulkLongLong(r, expiry) == 0) return 0;
+            if (rioWriteBulkString(r, "FIELDS", 6) == 0) return 0;
+            if (rioWriteBulkLongLong(r, 1) == 0) return 0;
+            if (rioWriteBulkString(r, field, sdslen(field)) == 0) return 0;
+            if (rioWriteBulkString(r, value, sdslen(value)) == 0) return 0;
+            volatile_items++;
+        }
+        hashTypeResetIterator(&hi);
+    }
+    non_volatile_items = hashTypeLength(o) - volatile_items;
     hashTypeInitIterator(o, &hi);
     while (hashTypeNext(&hi) != C_ERR) {
+        if (volatile_items > 0 && entryHasExpiry(hi.next))
+            continue;
+
         if (count == 0) {
-            int cmd_items = (items > AOF_REWRITE_ITEMS_PER_CMD) ? AOF_REWRITE_ITEMS_PER_CMD : items;
+            int cmd_items = (non_volatile_items > AOF_REWRITE_ITEMS_PER_CMD) ? AOF_REWRITE_ITEMS_PER_CMD : non_volatile_items;
 
             if (!rioWriteBulkCount(r, '*', 2 + cmd_items * 2) || !rioWriteBulkString(r, "HMSET", 5) ||
                 !rioWriteBulkObject(r, key)) {
@@ -1974,11 +1997,10 @@ int rewriteHashObject(rio *r, robj *key, robj *o) {
             return 0;
         }
         if (++count == AOF_REWRITE_ITEMS_PER_CMD) count = 0;
-        items--;
+        non_volatile_items--;
     }
 
     hashTypeResetIterator(&hi);
-
     return 1;
 }
 
@@ -2196,6 +2218,104 @@ werr:
     return 0;
 }
 
+int rewriteSelectDbRio(rio *aof, int db_num) {
+    char selectcmd[] = "*2\r\n$6\r\nSELECT\r\n";
+    if (rioWrite(aof, selectcmd, sizeof(selectcmd) - 1) == 0) return C_ERR;
+    if (rioWriteBulkLongLong(aof, db_num) == 0) return C_ERR;
+    return C_OK;
+}
+
+int rewriteObjectRio(rio *aof, robj *o, int db_num) {
+    size_t aof_bytes_before_key = aof->processed_bytes;
+    sds keystr;
+    robj key;
+    long long expiretime;
+
+    keystr = objectGetKey(o);
+    initStaticStringObject(key, keystr);
+
+    expiretime = objectGetExpire(o);
+
+    /* Save the key and associated value */
+    if (o->type == OBJ_STRING) {
+        /* Emit a SET command */
+        char cmd[] = "*3\r\n$3\r\nSET\r\n";
+        if (rioWrite(aof, cmd, sizeof(cmd) - 1) == 0) return C_ERR;
+        /* Key and value */
+        if (rioWriteBulkObject(aof, &key) == 0) return C_ERR;
+        if (rioWriteBulkObject(aof, o) == 0) return C_ERR;
+    } else if (o->type == OBJ_LIST) {
+        if (rewriteListObject(aof, &key, o) == 0) return C_ERR;
+    } else if (o->type == OBJ_SET) {
+        if (rewriteSetObject(aof, &key, o) == 0) return C_ERR;
+    } else if (o->type == OBJ_ZSET) {
+        if (rewriteSortedSetObject(aof, &key, o) == 0) return C_ERR;
+    } else if (o->type == OBJ_HASH) {
+        if (rewriteHashObject(aof, &key, o) == 0) return C_ERR;
+    } else if (o->type == OBJ_STREAM) {
+        if (rewriteStreamObject(aof, &key, o) == 0) return C_ERR;
+    } else if (o->type == OBJ_MODULE) {
+        if (rewriteModuleObject(aof, &key, o, db_num) == 0) return C_ERR;
+    } else {
+        serverPanic("Unknown object type");
+    }
+
+    /* In fork child process, we can try to release memory back to the
+     * OS and possibly avoid or decrease COW. We give the dismiss
+     * mechanism a hint about an estimated size of the object we stored. */
+    size_t dump_size = aof->processed_bytes - aof_bytes_before_key;
+    if (server.in_fork_child) dismissObject(o, dump_size);
+
+    /* Save the expire time */
+    if (expiretime != -1) {
+        char cmd[] = "*3\r\n$9\r\nPEXPIREAT\r\n";
+        if (rioWrite(aof, cmd, sizeof(cmd) - 1) == 0) return C_ERR;
+        if (rioWriteBulkObject(aof, &key) == 0) return C_ERR;
+        if (rioWriteBulkLongLong(aof, expiretime) == 0) return C_ERR;
+    }
+
+    /* Delay before next key if required (for testing) */
+    if (server.rdb_key_save_delay) debugDelay(server.rdb_key_save_delay);
+
+    return C_OK;
+}
+
+/* This function is currently used in slot migration to rewrite the corresponding
+ * slot hashtable to rio. */
+int rewriteSlotToAppendOnlyFileRio(rio *aof, int db_num, int hashslot, size_t *key_count) {
+    long long updated_time = 0;
+
+    if (dbHasNoKeys(db_num)) return C_OK;
+
+    serverDb *db = server.db[db_num];
+    if (kvstoreHashtableSize(db->keys, hashslot) == 0) return C_OK;
+
+    /* SELECT the DB */
+    if (rewriteSelectDbRio(aof, db_num) == C_ERR) return C_ERR;
+
+    kvstoreHashtableIterator *iter = kvstoreGetHashtableIterator(db->keys, hashslot, HASHTABLE_ITER_SAFE | HASHTABLE_ITER_PREFETCH_VALUES);
+    void *next;
+    while (kvstoreHashtableIteratorNext(iter, &next)) {
+        robj *o = next;
+
+        /* Update info every 1 second (approximately).
+         * in order to avoid calling mstime() on each iteration, we will
+         * check the diff every 1024 keys */
+        if (key_count && ((*key_count)++ & 1023) == 0) {
+            long long now = mstime();
+            if (now - updated_time >= 1000) {
+                sendChildInfo(CHILD_INFO_TYPE_CURRENT_INFO, *key_count, "Slot migration");
+                updated_time = now;
+            }
+        }
+
+        if (rewriteObjectRio(aof, o, db_num) == C_ERR) return C_ERR;
+    }
+
+    kvstoreReleaseHashtableIterator(iter);
+    return C_OK;
+}
+
 int rewriteAppendOnlyFileRio(rio *aof) {
     int j;
     long key_count = 0;
@@ -2212,69 +2332,20 @@ int rewriteAppendOnlyFileRio(rio *aof) {
         sdsfree(ts);
     }
 
-    if (rewriteFunctions(aof) == 0) goto werr;
+    if (rewriteFunctions(aof) == C_ERR) goto werr;
 
     for (j = 0; j < server.dbnum; j++) {
-        char selectcmd[] = "*2\r\n$6\r\nSELECT\r\n";
         if (dbHasNoKeys(j)) continue;
         serverDb *db = server.db[j];
 
         /* SELECT the new DB */
-        if (rioWrite(aof, selectcmd, sizeof(selectcmd) - 1) == 0) goto werr;
-        if (rioWriteBulkLongLong(aof, j) == 0) goto werr;
+        if (rewriteSelectDbRio(aof, j) == C_ERR) goto werr;
 
         kvs_it = kvstoreIteratorInit(db->keys, HASHTABLE_ITER_SAFE | HASHTABLE_ITER_PREFETCH_VALUES);
         /* Iterate this DB writing every entry */
         void *next;
         while (kvstoreIteratorNext(kvs_it, &next)) {
             robj *o = next;
-            sds keystr;
-            robj key;
-            long long expiretime;
-            size_t aof_bytes_before_key = aof->processed_bytes;
-
-            keystr = objectGetKey(o);
-            initStaticStringObject(key, keystr);
-
-            expiretime = objectGetExpire(o);
-
-            /* Save the key and associated value */
-            if (o->type == OBJ_STRING) {
-                /* Emit a SET command */
-                char cmd[] = "*3\r\n$3\r\nSET\r\n";
-                if (rioWrite(aof, cmd, sizeof(cmd) - 1) == 0) goto werr;
-                /* Key and value */
-                if (rioWriteBulkObject(aof, &key) == 0) goto werr;
-                if (rioWriteBulkObject(aof, o) == 0) goto werr;
-            } else if (o->type == OBJ_LIST) {
-                if (rewriteListObject(aof, &key, o) == 0) goto werr;
-            } else if (o->type == OBJ_SET) {
-                if (rewriteSetObject(aof, &key, o) == 0) goto werr;
-            } else if (o->type == OBJ_ZSET) {
-                if (rewriteSortedSetObject(aof, &key, o) == 0) goto werr;
-            } else if (o->type == OBJ_HASH) {
-                if (rewriteHashObject(aof, &key, o) == 0) goto werr;
-            } else if (o->type == OBJ_STREAM) {
-                if (rewriteStreamObject(aof, &key, o) == 0) goto werr;
-            } else if (o->type == OBJ_MODULE) {
-                if (rewriteModuleObject(aof, &key, o, j) == 0) goto werr;
-            } else {
-                serverPanic("Unknown object type");
-            }
-
-            /* In fork child process, we can try to release memory back to the
-             * OS and possibly avoid or decrease COW. We give the dismiss
-             * mechanism a hint about an estimated size of the object we stored. */
-            size_t dump_size = aof->processed_bytes - aof_bytes_before_key;
-            if (server.in_fork_child) dismissObject(o, dump_size);
-
-            /* Save the expire time */
-            if (expiretime != -1) {
-                char cmd[] = "*3\r\n$9\r\nPEXPIREAT\r\n";
-                if (rioWrite(aof, cmd, sizeof(cmd) - 1) == 0) goto werr;
-                if (rioWriteBulkObject(aof, &key) == 0) goto werr;
-                if (rioWriteBulkLongLong(aof, expiretime) == 0) goto werr;
-            }
 
             /* Update info every 1 second (approximately).
              * in order to avoid calling mstime() on each iteration, we will
@@ -2287,8 +2358,7 @@ int rewriteAppendOnlyFileRio(rio *aof) {
                 }
             }
 
-            /* Delay before next key if required (for testing) */
-            if (server.rdb_key_save_delay) debugDelay(server.rdb_key_save_delay);
+            if (rewriteObjectRio(aof, o, j) == C_ERR) goto werr;
         }
         kvstoreIteratorRelease(kvs_it);
     }
@@ -2477,14 +2547,37 @@ void bgrewriteaofCommand(client *c) {
     }
 }
 
-void aofRemoveTempFile(pid_t childpid) {
+/* Note that we may call this function in signal handler 'sigShutdownHandler',
+ * so we need guarantee all functions we call are async-signal-safe.
+ * If we call this function from signal handle, we won't call bg_unlink that
+ * is not async-signal-safe. */
+void aofRemoveTempFile(pid_t childpid, int from_signal) {
     char tmpfile[256];
+    char tmpfile2[256];
+    char pid[32];
 
-    snprintf(tmpfile, 256, "temp-rewriteaof-bg-%d.aof", (int)childpid);
-    bg_unlink(tmpfile);
+    /* Generate temp aof file name using async-signal safe functions. */
+    ll2string(pid, sizeof(pid), childpid);
+    valkey_strlcpy(tmpfile, "temp-rewriteaof-bg-", sizeof(tmpfile));
+    valkey_strlcat(tmpfile, pid, sizeof(tmpfile));
+    valkey_strlcat(tmpfile, ".aof", sizeof(tmpfile));
+    valkey_strlcpy(tmpfile2, "temp-rewriteaof-", sizeof(tmpfile2));
+    valkey_strlcat(tmpfile2, pid, sizeof(tmpfile2));
+    valkey_strlcat(tmpfile2, ".aof", sizeof(tmpfile2));
 
-    snprintf(tmpfile, 256, "temp-rewriteaof-%d.aof", (int)childpid);
-    bg_unlink(tmpfile);
+    if (from_signal) {
+        /* bg_unlink is not async-signal-safe, but in this case we don't really
+         * need to close the fd, it'll be released when the process exists. */
+        int fd = open(tmpfile, O_RDONLY | O_NONBLOCK);
+        int fd2 = open(tmpfile2, O_RDONLY | O_NONBLOCK);
+        UNUSED(fd);
+        UNUSED(fd2);
+        unlink(tmpfile);
+        unlink(tmpfile2);
+    } else {
+        bg_unlink(tmpfile);
+        bg_unlink(tmpfile2);
+    }
 }
 
 /* Get size of an AOF file.
@@ -2685,7 +2778,7 @@ void backgroundRewriteDoneHandler(int exitcode, int bysignal) {
     }
 
 cleanup:
-    aofRemoveTempFile(server.child_pid);
+    aofRemoveTempFile(server.child_pid, 0);
     /* Clear AOF buffer and delete temp incr aof for next rewrite. */
     if (server.aof_state == AOF_WAIT_REWRITE) {
         sdsfree(server.aof_buf);

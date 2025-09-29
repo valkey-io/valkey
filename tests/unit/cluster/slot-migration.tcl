@@ -1,13 +1,3 @@
-proc get_open_slots {srv_idx} {
-    set slots [dict get [cluster_get_myself $srv_idx] slots]
-    if {[regexp {\[.*} $slots slots]} {
-        set slots [regsub -all {[{}]} $slots ""]
-        return $slots
-    } else {
-        return {}
-    }
-}
-
 proc get_cluster_role {srv_idx} {
     set flags [dict get [cluster_get_myself $srv_idx] flags]
     set role [lindex $flags 1]
@@ -78,14 +68,6 @@ proc wait_for_role {srv_idx role} {
     }
 
     wait_for_cluster_propagation
-}
-
-proc wait_for_slot_state {srv_idx pattern} {
-    wait_for_condition 100 100 {
-        [get_open_slots $srv_idx] eq $pattern
-    } else {
-        fail "incorrect slot state on R $srv_idx: expected $pattern; got [get_open_slots $srv_idx]"
-    }
 }
 
 # restart a server and wait for it to come back online
@@ -534,6 +516,18 @@ start_cluster 3 3 {tags {external:skip cluster} } {
         R $primary_id_src exists "{3560}key2"
         set result [catch {R $primary_id_src exec} err]
         assert_match "ERR DB index is out of range" $err
+
+        # Multi/Exec on source before migration, mixed key existence
+        R $primary_id_src select 0
+        R $primary_id_src multi
+        R $primary_id_src exists "{3560}key1"
+        R $primary_id_src select 1
+        R $primary_id_src exists "{3560}key2"
+        R $primary_id_src select 2
+        R $primary_id_src exists "{3560}no_key"
+        assert_error "TRYAGAIN Multiple keys*" {R $primary_id_src exec}
+        # Connection must still be on db 0 after aborted MULTI
+        assert_equal [R $primary_id_src get "{3560}key1"] "value1_db0"
 
         # Multi/Exec on target before migration should fail at EXEC
         R $primary_id_target ASKING

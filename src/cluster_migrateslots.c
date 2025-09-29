@@ -2197,12 +2197,19 @@ void clusterSlotMigrationCron(void) {
                     "Timed out after too long with no interaction");
                 continue;
             }
-            /* Send acks only when the child process isn't writing to it. */
-            if (canSlotMigrationJobSendAck(job)) {
+        }
+        proceedWithSlotMigration(job);
+
+        if (isSlotMigrationJobInProgress(job) &&
+            job->state != SLOT_EXPORT_FAILOVER_GRANTED &&
+            canSlotMigrationJobSendAck(job)) {
+            /* For slot exports, the timer is refreshed on any interaction, so we
+             * don't need to send an ACK if we wrote this cron loop already. */
+            bool timer_already_refreshed = (job->type != SLOT_MIGRATION_IMPORT && job->client->flag.pending_write);
+            if (!timer_already_refreshed) {
                 run_with_period(1000) sendSyncSlotsMessage(job, "ACK");
             }
         }
-        proceedWithSlotMigration(job);
     }
 
     clusterCleanupSlotMigrationLog();

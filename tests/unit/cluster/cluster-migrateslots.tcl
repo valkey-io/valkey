@@ -521,6 +521,41 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster} overrides {cluste
         }
     }
 
+    test "Import with hz set to 1" {
+        assert_does_not_resync {
+            set old_hz [lindex [R 0 CONFIG GET hz] 1]
+            R 0 CONFIG SET hz 1
+            R 2 CONFIG SET hz 1
+
+            # Populate data before migration
+            populate 1000 "$16383_slot_tag:" 1000 -2
+
+            # Perform one-shot import
+            assert_equal "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node0_id]
+            set jobname [get_job_name 2 16383]
+            wait_for_migration 0 16383
+
+            # Keys successfully migrated
+            assert_equal 1000 [R 0 CLUSTER COUNTKEYSINSLOT 16383]
+            assert_equal 0 [R 2 CLUSTER COUNTKEYSINSLOT 16383]
+
+            # Also eventually reflected in replicas
+            wait_for_countkeysinslot 3 16383 1000
+            wait_for_countkeysinslot 5 16383 0
+
+            # Migration log shows success on both ends
+            assert_equal [dict get [get_migration_by_name 0 $jobname] state] "success"
+            assert_equal [dict get [get_migration_by_name 2 $jobname] state] "success"
+
+            # Cleanup for next test
+            assert_equal "OK" [R 0 FLUSHDB SYNC]
+            assert_equal "OK" [R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node2_id]
+            wait_for_migration 2 16383
+            R 0 CONFIG SET hz $old_hz
+            R 2 CONFIG SET hz $old_hz
+        }
+    }
+
     # Catch-all test for covering commands sent during incremental replication
     test "Single source import - Incremental Command Coverage" {
         assert_does_not_resync {

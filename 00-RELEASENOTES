@@ -19,6 +19,16 @@ apply as soon as possible.
 Bug fixes
 =========
 * Fix accounting for dual channel RDB bytes in replication stats (#2614)
+* Fix EVAL to report unknown error when empty error table is provided (#2229)
+* Fix use-after-free when active expiration triggers hashtable to shrink (#2257)
+* Fix MEMORY USAGE to account for embedded keys (#2290)
+* Fix memory leak when shrinking a hashtable without entries (#2288)
+* Prevent potential assertion in active defrag handling large allocations (#2353)
+* Prevent bad memory access when NOTOUCH client gets unblocked (#2347)
+* Converge divergent shard-id persisted in nodes.conf to primary's shard id (#2174)
+* Fix client tracking memory overhead calculation (#2360)
+* Fix RDB load per slot memory pre-allocation when loading from RDB snapshot (#2466)
+* Don't use AVX2 instructions if the CPU doesn't support it (#2571)
 
 ================================================================================
 Valkey 8.1.3  -  Released Sun 07 July 2025

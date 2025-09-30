@@ -12,6 +12,19 @@ SECURITY: There are security fixes in the release.
 --------------------------------------------------------------------------------
 
 ================================================================================
+Valkey 7.2.11  -  Released TBD (not released yet)
+================================================================================
+
+Upgrade urgency SECURITY: This release includes security fixes we recommend you
+apply as soon as possible.
+
+Bug fixes
+=========
+
+* Ensure empty error tables in Lua scripts don't crash Valkey (#2229)
+* Fix client tracking memory overhead calculation (#2360)
+
+================================================================================
 Valkey 7.2.10  -  Released Fri 20 June 2025
 ================================================================================
 

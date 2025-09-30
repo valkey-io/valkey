@@ -1195,61 +1195,46 @@ typedef void (*ValkeyModuleScriptingEngineDebuggerEndFunc)(
  */
 #define VALKEYMODULE_SCRIPTING_ENGINE_ABI_VERSION 3UL
 
+#define VALKEYMODULE_SCRIPTING_ENGINE_METHODS_STRUCT_FIELDS_V1                                 \
+    struct {                                                                                   \
+        /* Compile code function callback. When a new script is loaded, this                   \
+         * callback will be called with the script code, compiles it, and returns a            \
+         * list of `ValkeyModuleScriptingEngineCompiledFunc` objects. */                       \
+        union {                                                                                \
+            ValkeyModuleScriptingEngineCompileCodeFuncV1 compile_code_v1;                      \
+            ValkeyModuleScriptingEngineCompileCodeFunc compile_code;                           \
+        };                                                                                     \
+                                                                                               \
+        /* Function callback to free the memory of a registered engine function. */            \
+        ValkeyModuleScriptingEngineFreeFunctionFunc free_function;                             \
+                                                                                               \
+                                                                                               \
+        /* The callback function called when `FCALL` command is called on a function           \
+         * registered in this engine. */                                                       \
+        ValkeyModuleScriptingEngineCallFunctionFunc call_function;                             \
+                                                                                               \
+        /* Function callback to return memory overhead for a given function. */                \
+        ValkeyModuleScriptingEngineGetFunctionMemoryOverheadFunc get_function_memory_overhead; \
+                                                                                               \
+        /* The callback function used to reset the runtime environment used                    \
+         * by the scripting engine for EVAL scripts. */                                        \
+        ValkeyModuleScriptingEngineResetEvalEnvFunc reset_eval_env;                            \
+                                                                                               \
+        /* Function callback to get the used memory by the engine. */                          \
+        ValkeyModuleScriptingEngineGetMemoryInfoFunc get_memory_info;                          \
+    }
+
 typedef struct ValkeyModuleScriptingEngineMethods {
     uint64_t version; /* Version of this structure for ABI compat. */
 
-    /* Compile code function callback. When a new script is loaded, this
-     * callback will be called with the script code, compiles it, and returns a
-     * list of `ValkeyModuleScriptingEngineCompiledFunc` objects. */
-    union {
-        ValkeyModuleScriptingEngineCompileCodeFuncV1 compile_code_v1;
-        ValkeyModuleScriptingEngineCompileCodeFunc compile_code;
-    };
-    /* Function callback to free the memory of a registered engine function. */
-    ValkeyModuleScriptingEngineFreeFunctionFunc free_function;
-
-    /* The callback function called when `FCALL` command is called on a function
-     * registered in this engine. */
-    ValkeyModuleScriptingEngineCallFunctionFunc call_function;
-
-    /* Function callback to return memory overhead for a given function. */
-    ValkeyModuleScriptingEngineGetFunctionMemoryOverheadFunc get_function_memory_overhead;
-
-    /* The callback function used to reset the runtime environment used
-     * by the scripting engine for EVAL scripts. */
-    ValkeyModuleScriptingEngineResetEvalEnvFunc reset_eval_env;
-
-    /* Function callback to get the used memory by the engine. */
-    ValkeyModuleScriptingEngineGetMemoryInfoFunc get_memory_info;
+    VALKEYMODULE_SCRIPTING_ENGINE_METHODS_STRUCT_FIELDS_V1;
 
 } ValkeyModuleScriptingEngineMethodsV1;
 
 typedef struct ValkeyModuleScriptingEngineMethodsV2 {
     uint64_t version; /* Version of this structure for ABI compat. */
 
-    /* Compile code function callback. When a new script is loaded, this
-     * callback will be called with the script code, compiles it, and returns a
-     * list of `ValkeyModuleScriptingEngineCompiledFunc` objects. */
-    union {
-        ValkeyModuleScriptingEngineCompileCodeFuncV1 compile_code_v1;
-        ValkeyModuleScriptingEngineCompileCodeFunc compile_code;
-    };
-    /* Function callback to free the memory of a registered engine function. */
-    ValkeyModuleScriptingEngineFreeFunctionFunc free_function;
-
-    /* The callback function called when `FCALL` command is called on a function
-     * registered in this engine. */
-    ValkeyModuleScriptingEngineCallFunctionFunc call_function;
-
-    /* Function callback to return memory overhead for a given function. */
-    ValkeyModuleScriptingEngineGetFunctionMemoryOverheadFunc get_function_memory_overhead;
-
-    /* The callback function used to reset the runtime environment used
-     * by the scripting engine for EVAL scripts. */
-    ValkeyModuleScriptingEngineResetEvalEnvFunc reset_eval_env;
-
-    /* Function callback to get the used memory by the engine. */
-    ValkeyModuleScriptingEngineGetMemoryInfoFunc get_memory_info;
+    VALKEYMODULE_SCRIPTING_ENGINE_METHODS_STRUCT_FIELDS_V1;
 
     /* Function callback to enable the debugger for the future execution of scripts. */
     ValkeyModuleScriptingEngineDebuggerEnableFunc debugger_enable;

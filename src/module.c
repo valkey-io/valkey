@@ -13835,22 +13835,22 @@ ValkeyModuleScriptingEngineExecutionState VM_GetFunctionExecutionState(
     return ret == SCRIPT_CONTINUE ? VMSE_STATE_EXECUTING : VMSE_STATE_KILLED;
 }
 
-/* Registers a new external storage in the server.
+/* Registers a new external data module in the server.
  *
  * - `module_ctx`: the module context object.
  *
- * - `storage_name`: the name of the external storage. This name will match
- *   against the storage name specified in the script header using a shebang.
+ * - `module_name`: the name of the external data module. This name will match
+ *   against the module name specified in the script header using a shebang.
  *
  * Returns VALKEYMODULE_OK if the storage is successfully registered, and
  * VALKEYMODULE_ERR in case some failure occurs. In case of a failure, an error
  * message is logged.
  */
-int VM_RegisterExternalStorage(ValkeyModuleCtx *module_ctx,
-                               const char *storage_name,
-                               ValkeyModuleExternalStorageMethods *storage_methods) {
-    serverLog(LL_DEBUG, "Registering a new external storage: %s", storage_name);
-
+int VM_RegisterExternalDataModule(ValkeyModuleCtx *module_ctx,
+                                  const char *module_name,
+                                  ValkeyModuleExternalStorageMethods *storage_methods,
+                                  ValkeyModuleExternalFilterMethods *filter_methods) {
+    serverLog(LL_DEBUG, "Registering a new external data module: %s", module_name);
 
     if (storage_methods->version > VALKEYMODULE_EXTERNAL_STORAGE_ABI_VERSION) {
         serverLog(LL_WARNING, "The storage implementation version is greater "
@@ -13861,9 +13861,19 @@ int VM_RegisterExternalStorage(ValkeyModuleCtx *module_ctx,
         return VALKEYMODULE_ERR;
     }
 
-    if (externalStorageRegister(storage_name,
-                                module_ctx->module,
-                                storage_methods) != C_OK) {
+    if (filter_methods->version > VALKEYMODULE_EXTERNAL_FILTER_ABI_VERSION) {
+        serverLog(LL_WARNING, "The filter implementation version is greater "
+                              "than what this server supports. Server ABI "
+                              "Version: %lu, Filter ABI version: %lu",
+                  VALKEYMODULE_EXTERNAL_FILTER_ABI_VERSION,
+                  (unsigned long)filter_methods->version);
+        return VALKEYMODULE_ERR;
+    }
+
+    if (externalDataModuleRegister(module_name,
+                                   module_ctx->module,
+                                   storage_methods,
+                                   filter_methods) != C_OK) {
         return VALKEYMODULE_ERR;
     }
 
@@ -13877,9 +13887,9 @@ int VM_RegisterExternalStorage(ValkeyModuleCtx *module_ctx,
  * Returns VALKEYMODULE_OK.
  *
  */
-int VM_UnregisterExternalStorage(ValkeyModuleCtx *ctx, const char *storage_name) {
+int VM_UnregisterExternalDataModule(ValkeyModuleCtx *ctx, const char *module_name) {
     UNUSED(ctx);
-    if (externalStorageUnregister(storage_name) != C_OK) {
+    if (externalDataModuleUnregister(module_name) != C_OK) {
         return VALKEYMODULE_ERR;
     }
     return VALKEYMODULE_OK;
@@ -13916,55 +13926,6 @@ ValkeyModuleExternalStorageState VM_SetExternalStorageState(
 unsigned int VM_GetExternalStorageTimeout(
     ValkeyModuleExternalStorageCtx *storage_ctx) {
     return storage_ctx->ext_data_timeout;
-}
-
-/* Registers a new external filter in the server.
- *
- * - `module_ctx`: the module context object.
- *
- * - `filter_name`: the name of the external filter. This name will match
- *   against the filter name specified in the script header using a shebang.
- *
- * Returns VALKEYMODULE_OK if the filter is successfully registered, and
- * VALKEYMODULE_ERR in case some failure occurs. In case of a failure, an error
- * message is logged.
- */
-int VM_RegisterExternalFilter(ValkeyModuleCtx *module_ctx,
-                              const char *filter_name,
-                              ValkeyModuleExternalFilterMethods *filter_methods) {
-    serverLog(LL_DEBUG, "Registering a new external filter: %s", filter_name);
-
-    if (filter_methods->version > VALKEYMODULE_EXTERNAL_STORAGE_ABI_VERSION) {
-        serverLog(LL_WARNING, "The filter implementation version is greater "
-                              "than what this server supports. Server ABI "
-                              "Version: %lu, Filter ABI version: %lu",
-                  VALKEYMODULE_EXTERNAL_STORAGE_ABI_VERSION,
-                  (unsigned long)filter_methods->version);
-        return VALKEYMODULE_ERR;
-    }
-
-    if (externalFilterRegister(filter_name,
-                               module_ctx->module,
-                               filter_methods) != C_OK) {
-        return VALKEYMODULE_ERR;
-    }
-
-    return VALKEYMODULE_OK;
-}
-
-/* Removes the external filter from the server.
- *
- * `filter_name` is the name of the external filter.
- *
- * Returns VALKEYMODULE_OK.
- *
- */
-int VM_UnregisterExternalFilter(ValkeyModuleCtx *ctx, const char *filter_name) {
-    UNUSED(ctx);
-    if (externalFilterUnregister(filter_name) != C_OK) {
-        return VALKEYMODULE_ERR;
-    }
-    return VALKEYMODULE_OK;
 }
 
 /* Function to send string messages to the client during a debug session.
@@ -14973,13 +14934,11 @@ void moduleRegisterCoreAPI(void) {
     REGISTER_API(RegisterScriptingEngine);
     REGISTER_API(UnregisterScriptingEngine);
     REGISTER_API(GetFunctionExecutionState);
-    REGISTER_API(RegisterExternalStorage);
-    REGISTER_API(UnregisterExternalStorage);
+    REGISTER_API(RegisterExternalDataModule);
+    REGISTER_API(UnregisterExternalDataModule);
     REGISTER_API(GetExternalStorageState);
     REGISTER_API(SetExternalStorageState);
     REGISTER_API(GetExternalStorageTimeout);
-    REGISTER_API(RegisterExternalFilter);
-    REGISTER_API(UnregisterExternalFilter);
     REGISTER_API(GetExternalFilterState);
     REGISTER_API(SetExternalFilterState);
     REGISTER_API(GetExternalFilterTimeout);

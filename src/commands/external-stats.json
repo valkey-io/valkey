@@ -4,7 +4,7 @@
         "complexity": "O(1)",
         "group": "server",
         "since": "8.0.2",
-        "arity": 3,
+        "arity": 2,
         "container": "EXTERNAL_DATA",
         "function": "externalDataStatsCommand",
         "command_flags": [
@@ -19,26 +19,8 @@
         "command_tips": [
             "NONDETERMINISTIC_OUTPUT_ORDER"
         ],
-        "arguments": [
-            {
-                "name": "type",
-                "type": "oneof",
-                "arguments": [
-                    {
-                        "name": "storage",
-                        "type": "pure-token",
-                        "token": "STORAGE"
-                    },
-                    {
-                        "name": "filter",
-                        "type": "pure-token",
-                        "token": "FILTER"
-                    }
-                ]
-            }
-        ],
         "reply_schema": {
-            "description": "A map where each key is a db name, and each value is storage/filter used in it.",
+            "description": "A map where each key is a db name, and each value is a module used for this db.",
             "type": "string"
         }
     }

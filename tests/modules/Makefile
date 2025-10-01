@@ -70,10 +70,8 @@ TEST_MODULES = \
     cluster.so \
     helloscripting.so \
     unsupported_features.so \
-    extstorage/extstorage1.so \
-    extstorage/extstorage2.so \
-    extstorage/extfilter1.so \
-    extstorage/extfilter2.so
+    extstorage/extdata1.so \
+    extstorage/extdata2.so
 
 .PHONY: all
 

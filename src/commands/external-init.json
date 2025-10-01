@@ -4,7 +4,7 @@
         "complexity": "O(1)",
         "group": "server",
         "since": "8.0.2",
-        "arity": 7,
+        "arity": 4,
         "container": "EXTERNAL_DATA",
         "function": "externalDataInitCommand",
         "command_flags": [
@@ -25,13 +25,7 @@
                 "type": "string"
             },
             {
-                "name": "storage",
-                "token": "STORAGE",
-                "type": "string"
-            },
-            {
-                "name": "filter",
-                "token": "FILTER",
+                "name": "module",
                 "type": "string"
             }
         ],

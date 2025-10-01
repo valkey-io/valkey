@@ -174,6 +174,7 @@ typedef struct ValkeyModuleDigest {
 typedef struct ValkeyModuleExternalStorageCtx {
     ValkeyModuleExternalStorageState state;
     unsigned int ext_data_timeout;
+    atomic_uint last_iterator_id; /* Last storage scan/keys iterator id used */
 } ValkeyModuleExternalStorageCtx;
 
 typedef struct ValkeyModuleExternalFilterCtx {

@@ -4,7 +4,7 @@
         "complexity": "O(1)",
         "group": "server",
         "since": "8.0.2",
-        "arity": 3,
+        "arity": 2,
         "container": "EXTERNAL_DATA",
         "function": "externalDataLoadedCommand",
         "command_flags": [
@@ -19,41 +19,12 @@
         "command_tips": [
             "NONDETERMINISTIC_OUTPUT_ORDER"
         ],
-        "arguments": [
-            {
-                "name": "type",
-                "type": "oneof",
-                "arguments": [
-                    {
-                        "name": "storage",
-                        "type": "pure-token",
-                        "token": "STORAGE"
-                    },
-                    {
-                        "name": "filter",
-                        "type": "pure-token",
-                        "token": "FILTER"
-                    }
-                ]
-            }
-        ],
         "reply_schema": {
-            "anyOf": [
-                {
-                    "type": "array",
-                    "description": "In case `storage` was given, a list of loaded storages",
-                    "items": {
-                        "type": "string"
-                    }
-                },
-                {
-                    "type": "array",
-                    "description": "In case `filter` was given, a list of loaded filters",
-                    "items": {
-                        "type": "string"
-                    }
-                }
-            ]
+            "type": "array",
+            "description": "A list of loaded modules",
+            "items": {
+                "type": "string"
+            }
         }
     }
 }

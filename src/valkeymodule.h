@@ -1065,9 +1065,28 @@ typedef size_t (*ValkeyModuleScriptingEngineGetFunctionMemoryOverheadFunc)(
  * - `async`: if has value 1 then the reset is done asynchronously through
  * the callback structure returned by this function.
  */
-typedef ValkeyModuleScriptingEngineCallableLazyEnvReset *(*ValkeyModuleScriptingEngineResetEvalFuncV2)(
+
+ typedef ValkeyModuleScriptingEngineCallableLazyEnvReset *(*ValkeyModuleScriptingEngineResetEvalFuncV2)(
     ValkeyModuleCtx *module_ctx,
     ValkeyModuleScriptingEngineCtx *engine_ctx,
+    int async);
+
+/* The callback function called when `SCRIPT FLUSH` or `FUNCTION FLUSH` command is called.
+ * The engine should reset the runtime environment used for EVAL scripts or FUNCTION scripts.
+ *
+ * - `module_ctx`: the module runtime context.
+ *
+ * - `engine_ctx`: the scripting engine runtime context.
+ *
+ * - `type`: the subsystem type.
+ *
+ * - `async`: if has value 1 then the reset is done asynchronously through
+ * the callback structure returned by this function.
+ */
+typedef ValkeyModuleScriptingEngineCallableLazyEnvReset *(*ValkeyModuleScriptingEngineResetEnvFunc)(
+    ValkeyModuleCtx *module_ctx,
+    ValkeyModuleScriptingEngineCtx *engine_ctx,
+    ValkeyModuleScriptingEngineSubsystemType type,
     int async);
 
 /* The callback function called when `SCRIPT FLUSH` or `FUNCTION FLUSH` command is called.
@@ -1298,7 +1317,6 @@ typedef struct ValkeyModuleScriptingEngineMethodsV4 {
 
     /* Function callback to end the debugger on a particular script. */
     ValkeyModuleScriptingEngineDebuggerEndFunc debugger_end;
-
 
 } ValkeyModuleScriptingEngineMethodsV4;
 
@@ -2410,25 +2428,19 @@ VALKEYMODULE_API int (*ValkeyModule_UnregisterScriptingEngine)(ValkeyModuleCtx *
 
 VALKEYMODULE_API ValkeyModuleScriptingEngineExecutionState (*ValkeyModule_GetFunctionExecutionState)(ValkeyModuleScriptingEngineServerRuntimeCtx *server_ctx) VALKEYMODULE_ATTR;
 
-VALKEYMODULE_API int (*ValkeyModule_RegisterExternalStorage)(ValkeyModuleCtx *module_ctx,
-                                                             const char *storage_name,
-                                                             ValkeyModuleExternalStorageMethods *storage_methods) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_RegisterExternalDataModule)(ValkeyModuleCtx *module_ctx,
+                                                                const char *module_name,
+                                                                ValkeyModuleExternalStorageMethods *storage_methods,
+                                                                ValkeyModuleExternalFilterMethods *filter_methods) VALKEYMODULE_ATTR;
 
-VALKEYMODULE_API int (*ValkeyModule_UnregisterExternalStorage)(ValkeyModuleCtx *module_ctx,
-                                                               const char *storage_name) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_UnregisterExternalDataModule)(ValkeyModuleCtx *module_ctx,
+                                                                  const char *module_name) VALKEYMODULE_ATTR;
 
 VALKEYMODULE_API ValkeyModuleExternalStorageState (*ValkeyModule_GetExternalStorageState)(ValkeyModuleExternalStorageCtx *storage_ctx) VALKEYMODULE_ATTR;
 
 VALKEYMODULE_API ValkeyModuleExternalStorageState (*ValkeyModule_SetExternalStorageState)(ValkeyModuleExternalStorageCtx *storage_ctx, ValkeyModuleExternalStorageState state) VALKEYMODULE_ATTR;
 
 VALKEYMODULE_API unsigned int (*ValkeyModule_GetExternalStorageTimeout)(ValkeyModuleExternalStorageCtx *storage_ctx) VALKEYMODULE_ATTR;
-
-VALKEYMODULE_API int (*ValkeyModule_RegisterExternalFilter)(ValkeyModuleCtx *module_ctx,
-                                                            const char *filter_name,
-                                                            ValkeyModuleExternalFilterMethods *filter_methods) VALKEYMODULE_ATTR;
-
-VALKEYMODULE_API int (*ValkeyModule_UnregisterExternalFilter)(ValkeyModuleCtx *module_ctx,
-                                                              const char *filter_name) VALKEYMODULE_ATTR;
 
 VALKEYMODULE_API ValkeyModuleExternalFilterState (*ValkeyModule_GetExternalFilterState)(ValkeyModuleExternalFilterCtx *filter_ctx) VALKEYMODULE_ATTR;
 
@@ -2828,13 +2840,14 @@ static int ValkeyModule_Init(ValkeyModuleCtx *ctx, const char *name, int ver, in
     VALKEYMODULE_GET_API(RegisterScriptingEngine);
     VALKEYMODULE_GET_API(UnregisterScriptingEngine);
     VALKEYMODULE_GET_API(GetFunctionExecutionState);
-    VALKEYMODULE_GET_API(RegisterExternalStorage);
-    VALKEYMODULE_GET_API(UnregisterExternalStorage);
+    VALKEYMODULE_GET_API(RegisterExternalDataModule);
+    VALKEYMODULE_GET_API(UnregisterExternalDataModule);
     VALKEYMODULE_GET_API(GetExternalStorageState);
     VALKEYMODULE_GET_API(SetExternalStorageState);
     VALKEYMODULE_GET_API(GetExternalStorageTimeout);
-    VALKEYMODULE_GET_API(RegisterExternalFilter);
-    VALKEYMODULE_GET_API(UnregisterExternalFilter);
+    VALKEYMODULE_GET_API(GetExternalFilterState);
+    VALKEYMODULE_GET_API(SetExternalFilterState);
+    VALKEYMODULE_GET_API(GetExternalFilterTimeout);
     VALKEYMODULE_GET_API(ScriptingEngineDebuggerLog);
     VALKEYMODULE_GET_API(ScriptingEngineDebuggerLogRespReplyStr);
     VALKEYMODULE_GET_API(ScriptingEngineDebuggerLogRespReply);

@@ -123,6 +123,7 @@ struct AutoMemEntry {
 #define VALKEYMODULE_AM_FREED 3 /* Explicitly freed by user already. */
 #define VALKEYMODULE_AM_DICT 4
 #define VALKEYMODULE_AM_INFO 5
+#define VALKEYMODULE_AM_LIST 6
 
 /* The pool allocator block. Modules can allocate memory via this special
  * allocator that will automatically release it all once the callback returns.
@@ -368,6 +369,16 @@ typedef struct ValkeyModuleDictIter {
     raxIterator ri;
 } ValkeyModuleDictIter;
 
+/* Data structures related to the list data structure. */
+typedef struct ValkeyModuleList {
+    list *list;
+} ValkeyModuleList;
+
+typedef struct ValkeyModuleListIter {
+    ValkeyModuleList *list;
+    listIter *li;
+} ValkeyModuleListIter;
+
 typedef struct ValkeyModuleCommandFilterCtx {
     ValkeyModuleString **argv;
     int argv_len;
@@ -515,6 +526,7 @@ void VM_ZsetRangeStop(ValkeyModuleKey *kp);
 static void zsetKeyReset(ValkeyModuleKey *key);
 static void moduleInitKeyTypeSpecific(ValkeyModuleKey *key);
 void VM_FreeDict(ValkeyModuleCtx *ctx, ValkeyModuleDict *d);
+void VM_ListFree(ValkeyModuleCtx *ctx, ValkeyModuleList *l);
 void VM_FreeServerInfo(ValkeyModuleCtx *ctx, ValkeyModuleServerInfoData *data);
 
 /* Helpers for VM_SetCommandInfo. */
@@ -2696,6 +2708,7 @@ void autoMemoryCollect(ValkeyModuleCtx *ctx) {
         case VALKEYMODULE_AM_KEY: VM_CloseKey(ptr); break;
         case VALKEYMODULE_AM_DICT: VM_FreeDict(NULL, ptr); break;
         case VALKEYMODULE_AM_INFO: VM_FreeServerInfo(NULL, ptr); break;
+        case VALKEYMODULE_AM_LIST: VM_ListFree(NULL, ptr); break;
         }
     }
     ctx->flags |= VALKEYMODULE_CTX_AUTO_MEMORY;
@@ -10492,6 +10505,50 @@ int VM_DictCompare(ValkeyModuleDictIter *di, const char *op, ValkeyModuleString 
     return res ? VALKEYMODULE_OK : VALKEYMODULE_ERR;
 }
 
+/* --------------------------------------------------------------------------
+ * ## Modules List API
+ *
+ * Exports the engine singly linked list API implementation to modules,
+ * together with an iterator.
+ * -------------------------------------------------------------------------- */
+
+ValkeyModuleList *VM_ListCreate(ValkeyModuleCtx *ctx) {
+    ValkeyModuleList *list = zmalloc(sizeof(*list));
+    list->list = listCreate();
+    if (ctx != NULL) autoMemoryAdd(ctx, VALKEYMODULE_AM_LIST, list);
+    return list;
+}
+
+void VM_ListFree(ValkeyModuleCtx *ctx, ValkeyModuleList *list) {
+    if (ctx != NULL) autoMemoryFreed(ctx, VALKEYMODULE_AM_LIST, list);
+    listRelease(list->list);
+    zfree(list);
+}
+
+size_t VM_ListLength(ValkeyModuleList *list) {
+    return listLength(list->list);
+}
+
+void VM_ListAddToTail(ValkeyModuleList *list, void *val) {
+    listAddNodeTail(list->list, val);
+}
+
+ValkeyModuleListIter *VM_ListGetIter(ValkeyModuleList *list, int dir) {
+    ValkeyModuleListIter *iter = zmalloc(sizeof(*iter));
+    iter->list = list;
+    iter->li = listGetIterator(list->list, dir);
+    return iter;
+}
+
+void *VM_ListIterNext(ValkeyModuleListIter *iter) {
+    listNode *node = listNext(iter->li);
+    return node != NULL ? listNodeValue(node) : NULL;
+}
+
+void VM_ListReleaseIter(ValkeyModuleListIter *iter) {
+    listReleaseIterator(iter->li);
+    zfree(iter);
+}
 
 /* --------------------------------------------------------------------------
  * ## Modules Info fields
@@ -14257,6 +14314,13 @@ void moduleRegisterCoreAPI(void) {
     REGISTER_API(DictPrev);
     REGISTER_API(DictCompareC);
     REGISTER_API(DictCompare);
+    REGISTER_API(ListCreate);
+    REGISTER_API(ListFree);
+    REGISTER_API(ListLength);
+    REGISTER_API(ListAddToTail);
+    REGISTER_API(ListGetIter);
+    REGISTER_API(ListIterNext);
+    REGISTER_API(ListReleaseIter);
     REGISTER_API(ExportSharedAPI);
     REGISTER_API(GetSharedAPI);
     REGISTER_API(RegisterCommandFilter);

@@ -1128,6 +1128,8 @@ typedef struct ValkeyModuleBlockedClient ValkeyModuleBlockedClient;
 typedef struct ValkeyModuleClusterInfo ValkeyModuleClusterInfo;
 typedef struct ValkeyModuleDict ValkeyModuleDict;
 typedef struct ValkeyModuleDictIter ValkeyModuleDictIter;
+typedef struct ValkeyModuleList ValkeyModuleList;
+typedef struct ValkeyModuleListIter ValkeyModuleListIter;
 typedef struct ValkeyModuleCommandFilterCtx ValkeyModuleCommandFilterCtx;
 typedef struct ValkeyModuleCommandFilter ValkeyModuleCommandFilter;
 typedef struct ValkeyModuleServerInfoData ValkeyModuleServerInfoData;
@@ -1214,6 +1216,11 @@ typedef struct ValkeyModuleTypeMethods {
     ValkeyModuleTypeCopyFunc2 copy2;
     ValkeyModuleTypeAuxSaveFunc aux_save2;
 } ValkeyModuleTypeMethods;
+
+typedef enum ValkeyModuleListIterDirection {
+    START_HEAD = 0,
+    START_TAIL = 1,
+} ValkeyModuleListIterDirection;
 
 #define VALKEYMODULE_GET_API(name) ValkeyModule_GetApi("ValkeyModule_" #name, ((void **)&ValkeyModule_##name))
 
@@ -1623,6 +1630,13 @@ VALKEYMODULE_API int (*ValkeyModule_DictCompareC)(ValkeyModuleDictIter *di, cons
 VALKEYMODULE_API int (*ValkeyModule_DictCompare)(ValkeyModuleDictIter *di,
                                                  const char *op,
                                                  ValkeyModuleString *key) VALKEYMODULE_ATTR;
+VALKEYMODULE_API ValkeyModuleList *(*ValkeyModule_ListCreate)(ValkeyModuleCtx *ctx)VALKEYMODULE_ATTR;
+VALKEYMODULE_API void (*ValkeyModule_ListFree)(ValkeyModuleCtx *ctx, ValkeyModuleList *l) VALKEYMODULE_ATTR;
+VALKEYMODULE_API size_t (*ValkeyModule_ListLength)(ValkeyModuleList *list) VALKEYMODULE_ATTR;
+VALKEYMODULE_API void (*ValkeyModule_ListAddToTail)(ValkeyModuleList *list, void *val) VALKEYMODULE_ATTR;
+VALKEYMODULE_API ValkeyModuleListIter *(*ValkeyModule_ListGetIter)(ValkeyModuleList *list, ValkeyModuleListIterDirection dir)VALKEYMODULE_ATTR;
+VALKEYMODULE_API void *(*ValkeyModule_ListIterNext)(ValkeyModuleListIter *iter)VALKEYMODULE_ATTR;
+VALKEYMODULE_API void (*ValkeyModule_ListReleaseIter)(ValkeyModuleListIter *iter) VALKEYMODULE_ATTR;
 VALKEYMODULE_API int (*ValkeyModule_RegisterInfoFunc)(ValkeyModuleCtx *ctx, ValkeyModuleInfoFunc cb) VALKEYMODULE_ATTR;
 VALKEYMODULE_API void (*ValkeyModule_RegisterAuthCallback)(ValkeyModuleCtx *ctx,
                                                            ValkeyModuleAuthCallback cb) VALKEYMODULE_ATTR;
@@ -2180,6 +2194,13 @@ static int ValkeyModule_Init(ValkeyModuleCtx *ctx, const char *name, int ver, in
     VALKEYMODULE_GET_API(DictPrev);
     VALKEYMODULE_GET_API(DictCompare);
     VALKEYMODULE_GET_API(DictCompareC);
+    VALKEYMODULE_GET_API(ListCreate);
+    VALKEYMODULE_GET_API(ListAddToTail);
+    VALKEYMODULE_GET_API(ListFree);
+    VALKEYMODULE_GET_API(ListLength);
+    VALKEYMODULE_GET_API(ListGetIter);
+    VALKEYMODULE_GET_API(ListIterNext);
+    VALKEYMODULE_GET_API(ListReleaseIter);
     VALKEYMODULE_GET_API(RegisterInfoFunc);
     VALKEYMODULE_GET_API(RegisterAuthCallback);
     VALKEYMODULE_GET_API(InfoAddSection);

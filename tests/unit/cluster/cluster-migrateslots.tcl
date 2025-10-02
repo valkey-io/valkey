@@ -525,7 +525,7 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster} overrides {cluste
         set clients [split [string trim [R $idx client list]] "\r\n"]
         set found 0
         foreach client $clients {
-            if {[regexp "id=.*flags=\[a-zA-Z\]*$flag\[a-zA-Z\]* .*" $client]} {
+            if {[regexp "flags=\[a-zA-Z\]*$flag" $client]} {
                 incr found
             }
         }

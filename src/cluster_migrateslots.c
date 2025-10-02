@@ -998,7 +998,7 @@ void clusterUpdateSlotImportsOnOwnershipChange(void) {
              * track that the replication stream had a slot import ongoing at
              * the last point we were aware of. Once promotion completes, there
              * are two possible scenarios:
-             * 
+             *
              * 1) If the new primary is fully caught up, it will cancel the slot
              *    import upon promotion.
              * 2) If the new primary is not caught up and is unaware of the
@@ -2573,6 +2573,7 @@ void clusterSlotMigrationCron(void) {
                 continue;
             }
         }
+
         proceedWithSlotMigration(job);
 
         if (isSlotMigrationJobInProgress(job) &&

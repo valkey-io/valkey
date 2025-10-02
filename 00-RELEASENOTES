@@ -29,6 +29,7 @@ Bug fixes
 * Fix client tracking memory overhead calculation (#2360)
 * Fix RDB load per slot memory pre-allocation when loading from RDB snapshot (#2466)
 * Don't use AVX2 instructions if the CPU doesn't support it (#2571)
+* Fix bug where active defrag may be unable to defrag sparsely filled pages (#2656)
 
 ================================================================================
 Valkey 8.1.3  -  Released Sun 07 July 2025

@@ -20,57 +20,62 @@ permissions:
   contents: read
 
 jobs:
-  test-ubuntu-latest:
+  test-ubuntu-latest-compatibility:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        server:
+          - { version: "7.2.10", file: "valkey-7.2.10-noble-x86_64.tar.gz" }
+          - { version: "8.0.4",  file: "valkey-8.0.4-noble-x86_64.tar.gz" }
+          - { version: "8.1.3",  file: "valkey-8.1.3-noble-x86_64.tar.gz" }
     steps:
       - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
       - name: make
         # Fail build if there are warnings
         # build with TLS just for compilation coverage
         run: make -j4 all-with-unit-tests SERVER_CFLAGS='-Werror' BUILD_TLS=yes USE_FAST_FLOAT=yes
-      - name: install old server for compatibility testing
-        run: |
-          cd tests/tmp
-          wget https://download.valkey.io/releases/valkey-7.2.10-noble-x86_64.tar.gz
-          tar -xvf valkey-7.2.10-noble-x86_64.tar.gz
-      - name: test 7.2 compatibility
-        run: |
-          sudo apt-get install tcl8.6 tclx
-          ./runtest --verbose --tags -slow --dump-logs --other-server-path tests/tmp/valkey-7.2.10-noble-x86_64/bin/valkey-server
-      - name: module api test
-        run: CFLAGS='-Werror' ./runtest-moduleapi --verbose --dump-logs --other-server-path tests/tmp/valkey-7.2.10-noble-x86_64/bin/valkey-server
-      - name: install old server (8.0) for compatibility testing
-        run: |
-          cd tests/tmp
-          wget https://download.valkey.io/releases/valkey-8.0.4-noble-x86_64.tar.gz
-          tar -xvf valkey-8.0.4-noble-x86_64.tar.gz
-      - name: test 8.0 compatibility
-        run: |
-          sudo apt-get install tcl8.6 tclx
-          ./runtest --verbose --tags -slow --dump-logs --other-server-path tests/tmp/valkey-8.0.4-noble-x86_64/bin/valkey-server
-      - name: module api test
-        run: CFLAGS='-Werror' ./runtest-moduleapi --verbose --dump-logs --other-server-path tests/tmp/valkey-8.0.4-noble-x86_64/bin/valkey-server
-      - name: install old server (8.1) for compatibility testing
-        run: |
-          cd tests/tmp
-          wget https://download.valkey.io/releases/valkey-8.1.3-noble-x86_64.tar.gz
-          tar -xvf valkey-8.1.3-noble-x86_64.tar.gz
-      - name: test 8.1 compatibility
-        run: |
-          sudo apt-get install tcl8.6 tclx
-          ./runtest --verbose --tags -slow --dump-logs --other-server-path tests/tmp/valkey-8.1.3-noble-x86_64/bin/valkey-server
-      - name: module api test
-        run: CFLAGS='-Werror' ./runtest-moduleapi --verbose --dump-logs --other-server-path tests/tmp/valkey-8.1.3-noble-x86_64/bin/valkey-server
 
-      - name: validate commands.def up to date
+      - name: Install old server (${{ matrix.server.version }}) for compatibility testing
+        run: |
+          mkdir -p tests/tmp
+          cd tests/tmp
+          wget https://download.valkey.io/releases/${{ matrix.server.file }}
+          tar -xvf ${{ matrix.server.file }}
+
+      - name: Run compatibility tests against ${{ matrix.server.version }}
+        run: |
+          sudo apt-get install -y tcl8.6 tclx
+          ./runtest --verbose --tags -slow --dump-logs \
+            --other-server-path tests/tmp/valkey-${{ matrix.server.version }}-noble-x86_64/bin/valkey-server
+
+      - name: Module API tests against ${{ matrix.server.version }}
+        run: |
+          CFLAGS='-Werror' ./runtest-moduleapi --verbose --dump-logs \
+            --other-server-path tests/tmp/valkey-${{ matrix.server.version }}-noble-x86_64/bin/valkey-server
+
+  test-ubuntu-latest-unit-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+
+      - name: Build Valkey
+        run: make -j4 all-with-unit-tests SERVER_CFLAGS='-Werror' BUILD_TLS=yes USE_FAST_FLOAT=yes
+
+      - name: Unit tests
+        run: ./src/valkey-unit-tests
+
+  command-definition-verification:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+
+      - name: Validate commands.def up to date
         run: |
           touch src/commands/ping.json
           make commands.def
           dirty="$(git diff)"
-          if [[ ! -z "$dirty" ]]; then echo "$dirty"; exit 1; fi
-      - name: unit tests
-        run: |
-          ./src/valkey-unit-tests
+          if [[ -n "$dirty" ]]; then echo "$dirty"; exit 1; fi
 
   test-ubuntu-latest-cmake:
     runs-on: ubuntu-latest

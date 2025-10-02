@@ -71,8 +71,6 @@ typedef struct {
     int type;
     int not_type;
     /* Boolean flag to determine if the current client (`me`) should be filtered. 1 means "skip me", 0 means otherwise. */
-    /* Flag to determine if the current client (`me`) should be filtered. 1 means "skip me", 0 means otherwise.
-     * If set to -1, the filter is not applied. */
     int skipme;
     /* Client name to filter. If NULL, no name filtering is applied. */
     char *name;
@@ -4760,7 +4758,7 @@ static int clientMatchesFilter(client *client, clientFilter *client_filter) {
     if (client_filter->type != -1 && getClientType(client) != client_filter->type) return 0;
     if (client_filter->ids && !intsetFind(client_filter->ids, client->id)) return 0;
     if (client_filter->user && client->user != client_filter->user) return 0;
-    if (client_filter->skipme == 1 && client == server.current_client) return 0;
+    if (client_filter->skipme && client == server.current_client) return 0;
     if (client_filter->max_age != 0 && (long long)(commandTimeSnapshot() / 1000 - client->ctime) < client_filter->max_age) return 0;
     if (client_filter->idle != 0 && (long long)(commandTimeSnapshot() / 1000 - client->last_interaction) < client_filter->idle) return 0;
     if (client_filter->flags && clientMatchesFlagFilter(client, client_filter->flags) == 0) return 0;
@@ -5058,7 +5056,6 @@ void clientListCommand(client *c) {
         filter.not_type = -1;
         filter.db_number = -1;
         filter.not_db_number = -1;
-        filter.skipme = -1;
 
         int i = 2;
 
@@ -5137,11 +5134,6 @@ void clientKillCommand(client *c) {
         if (parseClientFiltersOrReply(c, i, &client_filter) != C_OK) {
             /* Free the intset on error */
             goto client_kill_done;
-        } else {
-            /* No skipme option provided, default behavior with the new syntax is to skip */
-            if (client_filter.skipme == -1) {
-                client_filter.skipme = 1;
-            }
         }
     } else {
         addReplyErrorObject(c, shared.syntaxerr);

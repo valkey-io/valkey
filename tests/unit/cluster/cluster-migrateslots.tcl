@@ -521,6 +521,55 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster} overrides {cluste
         }
     }
 
+    proc verify_client_flag {idx flag expected_count} {
+        set clients [split [string trim [R $idx client list]] "\r\n"]
+        set found 0
+        foreach client $clients {
+            if {[regexp "flags=\[a-zA-Z\]*$flag" $client]} {
+                incr found
+            }
+        }
+        if {$found ne $expected_count} {
+            fail "Expected $flag to appear in client list $expected_count times, got $found: $clients"
+        }
+    }
+
+    test "Slot migration seen in client flags" {
+        assert_does_not_resync {
+            set_debug_prevent_pause 1
+
+            assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node0_id]
+            set jobname [get_job_name 2 16383]
+
+            # Check the flags
+            verify_client_flag 0 "E" 0
+            verify_client_flag 2 "E" 1
+            verify_client_flag 0 "i" 1
+            verify_client_flag 2 "i" 0
+            assert_match "id=*" [R 2 CLIENT LIST FLAGS E]
+            assert_equal "" [R 2 CLIENT LIST FLAGS i]
+            assert_equal "" [R 0 CLIENT LIST FLAGS E]
+            assert_match "id=*" [R 0 CLIENT LIST FLAGS i]
+
+            set_debug_prevent_pause 0
+            wait_for_migration 0 16383
+
+            # Check the flags again
+            verify_client_flag 0 "E" 0
+            verify_client_flag 2 "E" 0
+            verify_client_flag 0 "i" 0
+            verify_client_flag 2 "i" 0
+            assert_equal "" [R 2 CLIENT LIST FLAGS E]
+            assert_equal "" [R 2 CLIENT LIST FLAGS i]
+            assert_equal "" [R 0 CLIENT LIST FLAGS E]
+            assert_equal "" [R 0 CLIENT LIST FLAGS i]
+
+            # Cleanup for the next test
+            assert_match "OK" [R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node2_id]
+            wait_for_migration 2 16383
+        }
+    }
+
     test "Import with hz set to 1" {
         assert_does_not_resync {
             set old_hz [lindex [R 0 CONFIG GET hz] 1]

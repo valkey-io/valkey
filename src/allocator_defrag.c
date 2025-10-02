@@ -385,7 +385,7 @@ int allocatorShouldDefrag(void *ptr) {
     assert(SLAB_NUM_REGS(out, 0) > 0);
     assert(SLAB_LEN(out, 0) > 0);
     assert(SLAB_NFREE(out, 0) != (size_t)-1);
-    unsigned region_size = SLAB_LEN(out, 0) / SLAB_NUM_REGS(out, 0);
+    size_t region_size = SLAB_LEN(out, 0) / SLAB_NUM_REGS(out, 0);
     /* check that the allocation size is in range of small bins */
     if (region_size > je_cb.bin_info[je_cb.nbins - 1].reg_size) {
         return 0;

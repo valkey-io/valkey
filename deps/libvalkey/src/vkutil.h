@@ -33,8 +33,14 @@
 #ifndef VALKEY_VKUTIL_H
 #define VALKEY_VKUTIL_H
 
+#include "win32.h"
+
+#include <stddef.h>
 #include <stdint.h>
-#include <sys/types.h>
+
+#ifndef _WIN32
+#include <sys/time.h>
+#endif
 
 /* Static assert macro for C99. */
 #define vk_static_assert(cond) extern char vk_static_assert[sizeof(char[(cond) ? 1 : -1])]
@@ -47,7 +53,25 @@
 
 int _vk_atoi(uint8_t *line, size_t n);
 
-int64_t vk_usec_now(void);
+/* Return the current time in microseconds since Epoch */
+static inline int64_t vk_usec_now(void) {
+    int64_t usec;
+#ifdef _WIN32
+    LARGE_INTEGER counter, frequency;
+    if (!QueryPerformanceCounter(&counter) ||
+        !QueryPerformanceFrequency(&frequency)) {
+        return -1;
+    }
+    usec = counter.QuadPart * 1000000 / frequency.QuadPart;
+#else
+    struct timeval now;
+    if (gettimeofday(&now, NULL) < 0) {
+        return -1;
+    }
+    usec = (int64_t)now.tv_sec * 1000000LL + (int64_t)now.tv_usec;
+#endif
+    return usec;
+}
 
 static inline int64_t vk_msec_now(void) {
     return vk_usec_now() / 1000;

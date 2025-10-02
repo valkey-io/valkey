@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: BSD-3-Clause
  */
 /* ==========================================================================
- * trace_bgsave.h - support lttng tracing for background Save.
+ * trace_rdb.h - support lttng tracing for rdb events.
  * --------------------------------------------------------------------------
  * Copyright (C) 2025  zhenwei pi <zhenwei.pi@linux.dev>
  * Copyright (C) 2025  zhiqiang li <lizhiqiang.sf@bytedance.com>
@@ -17,10 +17,10 @@
 #ifdef USE_LTTNG
 
 #undef LTTNG_UST_TRACEPOINT_PROVIDER
-#define LTTNG_UST_TRACEPOINT_PROVIDER valkey_bgsave
+#define LTTNG_UST_TRACEPOINT_PROVIDER valkey_rdb
 
 #undef LTTNG_UST_TRACEPOINT_INCLUDE
-#define LTTNG_UST_TRACEPOINT_INCLUDE "./trace_bgsave.h"
+#define LTTNG_UST_TRACEPOINT_INCLUDE "./trace_rdb.h"
 
 #if !defined(__VALKEY_TRACE_SYS_H__) || defined(LTTNG_UST_TRACEPOINT_HEADER_MULTI_READ)
 #define __VALKEY_TRACE_SYS_H__
@@ -29,10 +29,10 @@
 
 LTTNG_UST_TRACEPOINT_EVENT_CLASS(
     /* Tracepoint class provider name */
-    valkey_bgsave,
+    valkey_rdb,
 
     /* Tracepoint class name */
-    valkey_bgsave_class,
+    valkey_rdb_class,
 
     /* List of tracepoint arguments (input) */
     LTTNG_UST_TP_ARGS(
@@ -47,7 +47,7 @@ LTTNG_UST_TRACEPOINT_EVENT_CLASS(
 
 LTTNG_UST_TRACEPOINT_EVENT_INSTANCE(
     /* Name of the tracepoint class provider */
-    valkey_bgsave, valkey_bgsave_class, valkey_bgsave, fork,
+    valkey_rdb, valkey_rdb_class, valkey_rdb, fork,
 
     /* List of tracepoint arguments (input) */
     LTTNG_UST_TP_ARGS(
@@ -57,7 +57,7 @@ LTTNG_UST_TRACEPOINT_EVENT_INSTANCE(
 
 LTTNG_UST_TRACEPOINT_EVENT_INSTANCE(
     /* Name of the tracepoint class provider */
-    valkey_bgsave, valkey_bgsave_class, valkey_bgsave, rdb_unlink_temp_file,
+    valkey_rdb, valkey_rdb_class, valkey_rdb, rdb_unlink_temp_file,
 
     /* List of tracepoint arguments (input) */
     LTTNG_UST_TP_ARGS(
@@ -65,7 +65,7 @@ LTTNG_UST_TRACEPOINT_EVENT_INSTANCE(
     )
 )
 
-#define valkey_bgsave_trace(...) lttng_ust_tracepoint(__VA_ARGS__)
+#define valkey_rdb_trace(...) lttng_ust_tracepoint(__VA_ARGS__)
 
 #endif /* __VALKEY_TRACE_SYS_H__ */
 
@@ -77,10 +77,10 @@ LTTNG_UST_TRACEPOINT_EVENT_INSTANCE(
 #define __VALKEY_TRACE_SYS_H__
 
 /* avoid compiler warning on empty source file */
-static inline void __valkey_bgsave_trace(void) {
+static inline void __valkey_rdb_trace(void) {
 }
 
-#define valkey_bgsave_trace(...) \
+#define valkey_rdb_trace(...) \
     do {                     \
     } while (0)
 

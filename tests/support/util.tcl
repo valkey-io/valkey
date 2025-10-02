@@ -652,7 +652,12 @@ proc populate {num {prefix key:} {size 3} {idx 0} {prints false} {expires 0}} {
     set val [string repeat A $size]
     for {set j 0} {$j < $pipeline} {incr j} {
         if {$expires > 0} {
-            r $idx set $prefix$j $val ex $expires
+            if {$expires < 1} {
+                set pexpires [expr int($expires * 1000)]
+                r $idx set $prefix$j $val px $pexpires
+            } else {
+                r $idx set $prefix$j $val ex $expires
+            }
         } else {
             r $idx set $prefix$j $val
         }
@@ -660,7 +665,12 @@ proc populate {num {prefix key:} {size 3} {idx 0} {prints false} {expires 0}} {
     }
     for {} {$j < $num} {incr j} {
         if {$expires > 0} {
-            r $idx set $prefix$j $val ex $expires
+            if {$expires < 1} {
+                set pexpires [expr int($expires * 1000)]
+                r $idx set $prefix$j $val px $pexpires
+            } else {
+                r $idx set $prefix$j $val ex $expires
+            }
         } else {
             r $idx set $prefix$j $val
         }
@@ -1229,6 +1239,24 @@ proc generate_largevalue_test_array {} {
     set largevalue(listpack) "hello"
     set largevalue(quicklist) [string repeat "x" 8192]
     return [array get largevalue]
+}
+
+proc get_client_id_by_last_cmd {r cmd} {
+    set client_list [$r client list]
+    set client_id ""
+    set lines [split $client_list "\n"]
+    foreach line $lines {
+        if {[string match *cmd=$cmd* $line]} {
+            set parts [split $line " "]
+            foreach part $parts {
+                if {[string match id=* $part]} {
+                    set client_id [lindex [split $part "="] 1]
+                    return $client_id
+                }
+            }
+        }
+    }
+    return $client_id
 }
 
 # Breakpoint function, which invokes a minimal debugger.

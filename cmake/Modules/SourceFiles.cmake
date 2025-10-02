@@ -44,6 +44,7 @@ set(VALKEY_SERVER_SRCS
     ${CMAKE_SOURCE_DIR}/src/intset.c
     ${CMAKE_SOURCE_DIR}/src/syncio.c
     ${CMAKE_SOURCE_DIR}/src/cluster.c
+    ${CMAKE_SOURCE_DIR}/src/cluster_migrateslots.c
     ${CMAKE_SOURCE_DIR}/src/cluster_legacy.c
     ${CMAKE_SOURCE_DIR}/src/cluster_slot_stats.c
     ${CMAKE_SOURCE_DIR}/src/crc16.c
@@ -106,18 +107,21 @@ set(VALKEY_SERVER_SRCS
     ${CMAKE_SOURCE_DIR}/src/lua/engine_lua.c
     ${CMAKE_SOURCE_DIR}/src/lua/debug_lua.c
     ${CMAKE_SOURCE_DIR}/src/trace/trace.c
+    ${CMAKE_SOURCE_DIR}/src/trace/trace_rdb.c
     ${CMAKE_SOURCE_DIR}/src/trace/trace_aof.c
     ${CMAKE_SOURCE_DIR}/src/trace/trace_commands.c
     ${CMAKE_SOURCE_DIR}/src/trace/trace_db.c
     ${CMAKE_SOURCE_DIR}/src/trace/trace_cluster.c
     ${CMAKE_SOURCE_DIR}/src/trace/trace_server.c
-    ${CMAKE_SOURCE_DIR}/src/trace/trace_bgsave.c
     ${CMAKE_SOURCE_DIR}/src/commands.c
     ${CMAKE_SOURCE_DIR}/src/strl.c
     ${CMAKE_SOURCE_DIR}/src/connection.c
     ${CMAKE_SOURCE_DIR}/src/unix.c
     ${CMAKE_SOURCE_DIR}/src/server.c
-    ${CMAKE_SOURCE_DIR}/src/logreqres.c)
+    ${CMAKE_SOURCE_DIR}/src/logreqres.c
+    ${CMAKE_SOURCE_DIR}/src/entry.c
+    ${CMAKE_SOURCE_DIR}/src/vset.c)
+
 
 # valkey-cli
 set(VALKEY_CLI_SRCS

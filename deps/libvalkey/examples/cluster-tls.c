@@ -6,10 +6,7 @@
 
 #define CLUSTER_NODE_TLS "127.0.0.1:7301"
 
-int main(int argc, char **argv) {
-    UNUSED(argc);
-    UNUSED(argv);
-
+int main(void) {
     valkeyTLSContext *tls;
     valkeyTLSContextError tls_error;
 

@@ -1458,16 +1458,25 @@ void addAuthErrReply(client *c, robj *err) {
  *
  * The return value is AUTH_OK on success (valid username / password pair) & AUTH_ERR otherwise. */
 static int checkPasswordBasedAuth(client *c, robj *username, robj *password) {
+    int result;
+
     if (ACLCheckUserCredentials(username, password) == C_OK) {
         user *user = ACLGetUserByName(username->ptr, sdslen(username->ptr));
         clientSetUser(c, user, 1);
         moduleNotifyUserChanged(c);
-        return AUTH_OK;
+        result = AUTH_OK;
     } else {
         addACLLogEntry(c, ACL_DENIED_AUTH, (c->flag.multi) ? ACL_LOG_CTX_MULTI : ACL_LOG_CTX_TOPLEVEL, 0, username->ptr,
                        NULL);
-        return AUTH_ERR;
+        result = AUTH_ERR;
     }
+
+    moduleFireAuthenticationEvent(c->id,
+                                  username->ptr,
+                                  NULL,
+                                  result == AUTH_OK);
+
+    return result;
 }
 
 /* Attempt authenticating the user - first through module based authentication,
@@ -2580,6 +2589,8 @@ static void ACLUpdateInfoMetrics(int reason) {
         server.acl_info.invalid_key_accesses++;
     } else if (reason == ACL_DENIED_CHANNEL) {
         server.acl_info.invalid_channel_accesses++;
+    } else if (reason == ACL_INVALID_TLS_CERT_AUTH) {
+        server.acl_info.acl_access_denied_tls_cert++;
     } else {
         serverPanic("Unknown ACL_DENIED encoding");
     }
@@ -3021,6 +3032,7 @@ void aclCommand(client *c) {
             case ACL_DENIED_KEY: reasonstr = "key"; break;
             case ACL_DENIED_CHANNEL: reasonstr = "channel"; break;
             case ACL_DENIED_AUTH: reasonstr = "auth"; break;
+            case ACL_INVALID_TLS_CERT_AUTH: reasonstr = "tls-cert"; break;
             default: reasonstr = "unknown";
             }
             addReplyBulkCString(c, reasonstr);

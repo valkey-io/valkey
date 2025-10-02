@@ -236,8 +236,10 @@ int test_bucket_chain_length(int argc, char **argv, int flags) {
     for (j = 0; j < count; j++) {
         TEST_ASSERT(hashtableAdd(ht, (void *)j));
     }
-    /* If it's rehashing, add a few more until rehashing is complete. */
+    /* If it's rehashing, add a few more until rehashing is complete.
+     * We also make sure that we won't resize during the rehashing. */
     while (hashtableIsRehashing(ht)) {
+        TEST_ASSERT(!hashtableExpand(ht, count * 2));
         j++;
         TEST_ASSERT(hashtableAdd(ht, (void *)j));
     }
@@ -273,8 +275,8 @@ int test_two_phase_insert_and_pop(int argc, char **argv, int flags) {
         snprintf(key, sizeof(key), "%d", j);
         snprintf(val, sizeof(val), "%d", count - j + 42);
         hashtablePosition position;
-        int ret = hashtableFindPositionForInsert(ht, key, &position, NULL);
-        TEST_ASSERT(ret == 1);
+        bool ret = hashtableFindPositionForInsert(ht, key, &position, NULL);
+        TEST_ASSERT(ret);
         keyval *e = create_keyval(key, val);
         hashtableInsertAtPosition(ht, e, &position);
     }
@@ -419,7 +421,7 @@ int test_incremental_find(int argc, char **argv, int flags) {
             do {
                 num_left = batch_size;
                 for (size_t i = 0; i < batch_size; i++) {
-                    if (hashtableIncrementalFindStep(&states[i]) == 0) {
+                    if (!hashtableIncrementalFindStep(&states[i])) {
                         num_left--;
                     }
                 }

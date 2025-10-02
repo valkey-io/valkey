@@ -401,21 +401,12 @@ static ssize_t connSocketSyncReadLine(connection *conn, char *ptr, ssize_t size,
     return syncReadLine(conn->fd, ptr, size, timeout);
 }
 
-static const char *connSocketGetType(connection *conn) {
-    (void)conn;
-
+static int connSocketGetType(void) {
     return CONN_TYPE_SOCKET;
-}
-
-static int connSocketGetTypeId(connection *conn) {
-    (void)conn;
-
-    return CONN_TYPE_ID_SOCKET;
 }
 
 static ConnectionType CT_Socket = {
     /* connection type */
-    .get_type_id = connSocketGetTypeId,
     .get_type = connSocketGetType,
 
     /* connection type initialize & finalize & configure */

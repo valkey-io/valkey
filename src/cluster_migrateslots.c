@@ -992,10 +992,22 @@ void clusterUpdateSlotImportsOnOwnershipChange(void) {
         if (job->type != SLOT_MIGRATION_IMPORT) continue;
         if (!isSlotMigrationJobInProgress(job)) continue;
         if (!nodeIsPrimary(server.cluster->myself)) {
-            /* All we can do is mark the slot import as occurring on primary and
-             * wait for it to do the cleanup and finish the import. */
+            /* Performing the cleanup once we are demoted would cause desync
+             * with the primary. Instead, we reset the job (closing the outgoing
+             * client) and leave the job in "occurring on primary" state to
+             * track that the replication stream had a slot import ongoing at
+             * the last point we were aware of. Once promotion completes, there
+             * are two possible scenarios:
+             * 
+             * 1) If the new primary is fully caught up, it will cancel the slot
+             *    import upon promotion.
+             * 2) If the new primary is not caught up and is unaware of the
+             *    import, we will need to full resync anyways, which will remove
+             *    this tracking job.
+             */
             if (job->state != SLOT_IMPORT_OCCURRING_ON_PRIMARY) {
                 updateSlotMigrationJobState(job, SLOT_IMPORT_OCCURRING_ON_PRIMARY);
+                resetSlotMigrationJob(job);
             }
             continue;
         }
@@ -1033,23 +1045,26 @@ void clusterHandleFlushDuringSlotMigration(void) {
  * Also note, we propagate to AOF as well in this function, allowing us to know
  * the latest slot import states after restoring from just AOF. */
 void propagateSyncSlotsFinish(slotMigrationJob *job) {
-    /* CLUSTER SYNCSLOTS FINISH STATE <state> NAME <name> (MESSAGE <message>) */
+    /* CLUSTER SYNCSLOTS FINISH STATE <state> NAME <name> [MESSAGE <message>] */
+    robj *name_obj = NULL, *message_obj = NULL;
     int argc = job->status_msg ? 9 : 7;
     robj *argv[argc];
-    argv[0] = createStringObject("CLUSTER", 7);
-    argv[1] = createStringObject("SYNCSLOTS", 9);
-    argv[2] = createStringObject("FINISH", 6);
-    argv[3] = createStringObject("STATE", 5);
+    argv[0] = shared.cluster;
+    argv[1] = shared.syncslots;
+    argv[2] = shared.finish;
+    argv[3] = shared.state;
     if (job->state == SLOT_MIGRATION_JOB_SUCCESS) {
-        argv[4] = createStringObject("SUCCESS", 7);
+        argv[4] = shared.success;
     } else {
-        argv[4] = createStringObject("FAILED", 6);
+        argv[4] = shared.failed;
     }
-    argv[5] = createStringObject("NAME", 4);
-    argv[6] = createStringObject(job->name, CLUSTER_NAMELEN);
+    argv[5] = shared.name;
+    name_obj = createStringObject(job->name, CLUSTER_NAMELEN);
+    argv[6] = name_obj;
     if (job->status_msg) {
-        argv[7] = createStringObject("MESSAGE", 7);
-        argv[8] = createStringObject(job->status_msg, sdslen(job->status_msg));
+        argv[7] = shared.message;
+        message_obj = createStringObject(job->status_msg, sdslen(job->status_msg));
+        argv[8] = message_obj;
     }
 
     /* Perform the propagation. Notably, we may not already be in an execution
@@ -1059,7 +1074,8 @@ void propagateSyncSlotsFinish(slotMigrationJob *job) {
     exitExecutionUnit();
     postExecutionUnitOperations();
 
-    for (int i = 0; i < argc; i++) decrRefCount(argv[i]);
+    if (name_obj) decrRefCount(name_obj);
+    if (message_obj) decrRefCount(message_obj);
 }
 
 void cleanupSlotImportsWithReason(char *reason) {

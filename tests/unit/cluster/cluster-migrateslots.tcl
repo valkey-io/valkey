@@ -146,23 +146,6 @@ proc assert_causes_conn_drop {node_idx body} {
     assert_match "*I/O error reading reply*" $result
 }
 
-proc is_cluster_stable {} {
-    for {set i 0} {$i < [llength $::servers]} {incr i} {
-        if {![string match "*cluster_state:ok*" [R $i CLUSTER INFO]]} {
-            return 0
-        }
-    }
-    return 1
-}
-
-proc wait_for_cluster_stable {} {
-    wait_for_condition 100 100 {
-        [is_cluster_stable]
-    } else {
-        fail "Cluster did not become stable within 10 seconds"
-    }
-}
-
 proc set_debug_prevent_pause {value} {
     for {set i 0} {$i < [llength $::servers]} {incr i} {
         assert_match "OK" [R $i DEBUG SLOTMIGRATION PREVENT-PAUSE $value]
@@ -1180,7 +1163,10 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster} overrides {cluste
         # Make sure the replica has it
         wait_for_countkeysinslot 3 16383 500
 
-        # Trigger failover
+        # Trigger failover. Give a large repl backlog to ensure PSYNC will
+        # succeed even after the new primary cleans up the importing keys.
+        set old_repl_backlog [lindex [R 3 CONFIG GET repl-backlog-size] 1]
+        R 3 CONFIG SET repl-backlog-size 100mb
         assert_match "OK" [R 3 CLUSTER FAILOVER]
 
         # Jobs should be dropped on both ends
@@ -1195,16 +1181,13 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster} overrides {cluste
         assert_match "500" [R 2 CLUSTER COUNTKEYSINSLOT 16383]
         assert_match "500" [R 5 CLUSTER COUNTKEYSINSLOT 16383]
 
-        # Expect error messages. Either a failover, or if the PSYNC fails, it
-        # will be a full resync message.
-        assert {
-            [string match "*A failover occurred during slot import*" [dict get [get_migration_by_name 0 $jobname] message]] ||
-            [string match "*Full resynchronization occurred*" [dict get [get_migration_by_name 0 $jobname] message]]
-        }
+        # Expect error messages
+        assert_match "*A failover occurred during slot import*" [dict get [get_migration_by_name 0 $jobname] message]
         assert_match {*Connection lost to target*} [dict get [get_migration_by_name 2 $jobname] message]
 
         # Cleanup for the next test
         assert_match "OK" [R 2 FLUSHDB SYNC]
+        assert_equal "OK" [R 3 CONFIG SET repl-backlog-size $old_repl_backlog]
         set_debug_prevent_pause 0
     }
 
@@ -2027,7 +2010,7 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster} overrides {cluste
                 wait_for_migration 2 16383
             }
             # Since we are restarting primaries, we need to ensure the cluster becomes stable
-            wait_for_cluster_stable
+            wait_for_cluster_state ok
         }
     }
 }
@@ -2053,7 +2036,10 @@ start_cluster 3 6 {tags {logreqres:skip external:skip cluster}} {
         wait_for_countkeysinslot 3 16383 500
         wait_for_countkeysinslot 6 16383 500
 
-        # Trigger failover
+        # Trigger failover. Give a large repl backlog to ensure PSYNC will
+        # succeed even after the new primary cleans up the importing keys.
+        set old_repl_backlog [lindex [R 3 CONFIG GET repl-backlog-size] 1]
+        R 3 CONFIG SET repl-backlog-size 100mb
         assert_match "OK" [R 3 CLUSTER FAILOVER]
 
         # Jobs should be dropped on both ends
@@ -2073,25 +2059,15 @@ start_cluster 3 6 {tags {logreqres:skip external:skip cluster}} {
         assert_match "500" [R 8 CLUSTER COUNTKEYSINSLOT 16383]
 
         # Expect error messages
-        #
-        # Depending on whether replicas can PSYNC or not, the error message
-        # changes. They may not be able to PSYNC if the primary generates enough
-        # UNLINK events when cleaning up dirty slots on promotion to fill up the
-        # replication backlog.
-        assert {
-            [string match "*A failover occurred during slot import*" [dict get [get_migration_by_name 0 $jobname] message]] ||
-            [string match "*Full resynchronization occurred*" [dict get [get_migration_by_name 0 $jobname] message]]
-        }
+        assert_match "*A failover occurred during slot import*" [dict get [get_migration_by_name 0 $jobname] message]
         assert_match {*A failover occurred during slot import*} [dict get [get_migration_by_name 3 $jobname] message]
-        assert {
-            [string match "*A failover occurred during slot import*" [dict get [get_migration_by_name 6 $jobname] message]] ||
-            [string match "*Full resynchronization occurred*" [dict get [get_migration_by_name 6 $jobname] message]]
-        }
+        assert_match "*A failover occurred during slot import*" [dict get [get_migration_by_name 6 $jobname] message]
         assert_match {*Connection lost to target*} [dict get [get_migration_by_name 2 $jobname] message]
 
         # Cleanup for the next test
         assert_match "OK" [R 2 FLUSHDB SYNC]
         set_debug_prevent_pause 0
+        assert_equal "OK" [R 3 CONFIG SET repl-backlog-size $old_repl_backlog]
     }
 }
 

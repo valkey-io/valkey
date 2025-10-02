@@ -93,7 +93,7 @@ start_server {tags {"introspection"}} {
         set id3 [$c3 client id]
 
         # Filter by multiple IDs and TYPE
-        set cl [split [r client list id $id1 $id2 type normal] "\r\n"]
+        set cl [split [r client list id $id3 id $id1 $id2 type normal] "\r\n"]
 
         # Assert only c1 and c2 are present and match TYPE=N (NORMAL)
         foreach line $cl {
@@ -434,6 +434,41 @@ start_server {tags {"introspection"}} {
         assert_match "*name=client1*" $cl
         assert_no_match "*name=mytestclient*" $cl
         catch {$c1 close}
+    }
+
+    test {CLIENT LIST with multiple id filters} {
+        # Create multiple clients
+        set c1 [valkey_client]
+        set c2 [valkey_client]
+        set c3 [valkey_client]
+
+        # Fetch their IDs
+        set id1 [$c1 client id]
+        set id2 [$c2 client id]
+        set id3 [$c3 client id]
+
+        set result [r client list id $id1 id $id2 id $id3]
+        assert_no_match "*id=$id1*" $result
+        assert_no_match "*id=$id2*" $result
+        assert_match "*id=$id3*" $result
+
+        catch {$c1 close}
+        catch {$c2 close}
+        catch {$c3 close}
+    }
+
+    test {CLIENT KILL with multiple id filters} {
+        # Create multiple clients
+        set c1 [valkey_client]
+        set c2 [valkey_client]
+        set c3 [valkey_client]
+
+        # Fetch their IDs
+        set id1 [$c1 client id]
+        set id2 [$c2 client id]
+        set id3 [$c3 client id]
+
+        assert_equal [r client kill id $id1 id $id2 id $id3] 1
     }
 
     test {CLIENT LIST with multiple negative filters} {

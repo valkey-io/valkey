@@ -2245,6 +2245,13 @@ void clusterCommandSyncSlotsAck(client *c) {
     }
 }
 
+void clusterCommandSyncSlotsCapa(client *c) {
+    UNUSED(c);
+    /* As of now there are no supported capa fields. We ignore unknown CAPA
+     * fields. */
+    return;
+}
+
 /* Sent by either the target or the source as a control message for progressing
  * with slot import. */
 void clusterCommandSyncSlots(client *c) {
@@ -2276,6 +2283,9 @@ void clusterCommandSyncSlots(client *c) {
     } else if (!strcasecmp(c->argv[2]->ptr, "ack")) {
         /* CLUSTER SYNCSLOTS ACK */
         clusterCommandSyncSlotsAck(c);
+    } else if (!strcasecmp(c->argv[2]->ptr, "capa")) {
+        /* CLUSTER SYNCSLOTS CAPA <field> [CAPA <field>...] */
+        clusterCommandSyncSlotsCapa(c);
     } else {
         if (c->slot_migration_job &&
             isSlotMigrationJobInProgress(c->slot_migration_job)) {

@@ -618,13 +618,91 @@ start_server {tags {"scripting"}} {
         assert_error {NOSCRIPT*} {r evalsha fd758d1589d044dd850a6f05d52f2eefd27f033f 1 mykey}
     }
 
+
+    test {EVAL - Test table unpack with invalid indexes} {
+        catch {r eval { return {unpack({1,2,3}, -2, 2147483647)} } 0} e
+        assert_match {*too many results to unpack*} $e
+        catch {r eval { return {unpack({1,2,3}, 0, 2147483647)} } 0} e
+        assert_match {*too many results to unpack*} $e
+        catch {r eval { return {unpack({1,2,3}, -2147483648, -2)} } 0} e
+        assert_match {*too many results to unpack*} $e
+        set res [r eval { return {unpack({1,2,3}, -1, -2)} } 0]
+        assert_match {} $res
+        set res [r eval { return {unpack({1,2,3}, 1, -1)} } 0]
+        assert_match {} $res
+
+        # unpack with range -1 to 5, verify nil indexes
+        set res [r eval {
+             local function unpack_to_list(t, i, j)
+               local n, v = select('#', unpack(t, i, j)), {unpack(t, i, j)}
+               for i = 1, n do v[i] = v[i] or '_NIL_' end
+               v.n = n
+               return v
+             end
+
+            return unpack_to_list({1,2,3}, -1, 5)
+        } 0]
+        assert_match {_NIL_ _NIL_ 1 2 3 _NIL_ _NIL_} $res
+
+        # unpack with negative range, verify nil indexes
+        set res [r eval {
+             local function unpack_to_list(t, i, j)
+               local n, v = select('#', unpack(t, i, j)), {unpack(t, i, j)}
+               for i = 1, n do v[i] = v[i] or '_NIL_' end
+               v.n = n
+               return v
+             end
+
+            return unpack_to_list({1,2,3}, -2147483648, -2147483646)
+        } 0]
+        assert_match {_NIL_ _NIL_ _NIL_} $res
+    } {}
+
+    test "Try trick readonly table on basic types metatable" {
+        # Run the following scripts for basic types. Either getmetatable()
+        # should return nil or the metatable must be readonly.
+        set scripts {
+            {getmetatable(nil).__index = function() return 1 end}
+            {getmetatable('').__index = function() return 1 end}
+            {getmetatable(123.222).__index = function() return 1 end}
+            {getmetatable(true).__index = function() return 1 end}
+            {getmetatable(function() return 1 end).__index = function() return 1 end}
+            {getmetatable(coroutine.create(function() return 1 end)).__index = function() return 1 end}
+        }
+
+        foreach code $scripts {
+            catch {r eval $code 0} e
+            assert {
+                [string match "*attempt to index a nil value*" $e] ||
+                [string match "*Attempt to modify a readonly table*" $e]
+            }
+        }
+    }
+
+    test {Dynamic reset of lua engine with insecure API config change} {
+        # Ensure insecure API is not available by default
+        assert_error {*Script attempted to access nonexistent global variable 'getfenv'*} {
+            r eval "return getfenv()" 0
+        }
+
+        # Verify that enabling the config `lua-enable-insecure-api` allows insecure API access
+        r config set lua-enable-insecure-api yes
+        assert_equal {} [r eval "return getfenv()" 0]
+
+        r config set lua-enable-insecure-api no
+        assert_error {*Script attempted to access nonexistent global variable 'getfenv'*} {
+            r eval "return getfenv()" 0
+        }
+    }
+
     test {SCRIPTING FLUSH ASYNC} {
+        r script flush sync
         for {set j 0} {$j < 100} {incr j} {
             r script load "return $j"
         }
-        assert { [string match "*number_of_cached_scripts:100*" [r info Memory]] }
+        assert_match "*number_of_cached_scripts:100*" [r info Memory]
         r script flush async
-        assert { [string match "*number_of_cached_scripts:0*" [r info Memory]] }
+        assert_match "*number_of_cached_scripts:0*" [r info Memory]
     }
 
     test {SCRIPT EXISTS - can detect already defined scripts?} {
@@ -1153,6 +1231,45 @@ start_server {tags {"scripting"}} {
         } e
         set _ $e
     } {*Script attempted to access nonexistent global variable 'print'*}
+}
+
+# start a new server to test the large-memory tests
+start_server {tags {"scripting external:skip large-memory"}} {
+    test {EVAL - Test long escape sequences for strings} {
+        r eval {
+            -- Generate 1gb '==...==' separator
+            local s = string.rep('=', 1024 * 1024)
+            local t = {} for i=1,1024 do t[i] = s end
+            local sep = table.concat(t)
+            collectgarbage('collect')
+
+            local code = table.concat({'return [',sep,'[x]',sep,']'})
+            collectgarbage('collect')
+
+            -- Load the code and run it. Script will return the string length.
+            -- Escape sequence: [=....=[ to ]=...=] will be ignored
+            -- Actual string is a single character: 'x'. Script will return 1
+            local func = loadstring(code)
+            return #func()
+        } 0
+    } {1}
+
+    test {EVAL - Lua can parse string with too many new lines} {
+        # Create a long string consisting only of newline characters. When Lua
+        # fails to parse a string, it typically includes a snippet like
+        # "... near ..." in the error message to indicate the last recognizable
+        # token. In this test, since the input contains only newlines, there
+        # should be no identifiable token, so the error message should contain
+        # only the actual error, without a near clause.
+
+        r eval {
+           local s = string.rep('\n', 1024 * 1024)
+           local t = {} for i=1,2048 do t[#t+1] = s end
+           local lines = table.concat(t)
+           local fn, err = loadstring(lines)
+           return err
+        } 0
+    } {*chunk has too many lines}
 }
 
 # Start a new server since the last test in this stanza will kill the

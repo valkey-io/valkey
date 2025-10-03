@@ -4,8 +4,8 @@
  * similar. */
 #define SERVER_NAME "valkey"
 #define SERVER_TITLE "Valkey"
-#define VALKEY_VERSION "8.0.5"
-#define VALKEY_VERSION_NUM 0x00080005
+#define VALKEY_VERSION "8.0.6"
+#define VALKEY_VERSION_NUM 0x00080006
 
 /* Redis OSS compatibility version, should never
  * exceed 7.2.x. */

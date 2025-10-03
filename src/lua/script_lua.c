@@ -1411,19 +1411,18 @@ void luaSetTableProtectionForBasicTypes(lua_State *lua) {
         LUA_TNIL,
         LUA_TFUNCTION,
         LUA_TTHREAD,
-        LUA_TLIGHTUSERDATA
-    };
- 
+        LUA_TLIGHTUSERDATA};
+
     for (size_t i = 0; i < sizeof(types) / sizeof(types[0]); i++) {
         /* Push a dummy value of the type to get its metatable */
         switch (types[i]) {
-            case LUA_TSTRING: lua_pushstring(lua, ""); break;
-            case LUA_TNUMBER: lua_pushnumber(lua, 0); break;
-            case LUA_TBOOLEAN: lua_pushboolean(lua, 0); break;
-            case LUA_TNIL: lua_pushnil(lua); break;
-            case LUA_TFUNCTION: lua_pushcfunction(lua, NULL); break;
-            case LUA_TTHREAD: lua_newthread(lua); break;
-            case LUA_TLIGHTUSERDATA: lua_pushlightuserdata(lua, (void*)lua); break;
+        case LUA_TSTRING: lua_pushstring(lua, ""); break;
+        case LUA_TNUMBER: lua_pushnumber(lua, 0); break;
+        case LUA_TBOOLEAN: lua_pushboolean(lua, 0); break;
+        case LUA_TNIL: lua_pushnil(lua); break;
+        case LUA_TFUNCTION: lua_pushcfunction(lua, NULL); break;
+        case LUA_TTHREAD: lua_newthread(lua); break;
+        case LUA_TLIGHTUSERDATA: lua_pushlightuserdata(lua, (void *)lua); break;
         }
         if (lua_getmetatable(lua, -1)) {
             luaSetTableProtectionRecursively(lua);
@@ -1432,7 +1431,7 @@ void luaSetTableProtectionForBasicTypes(lua_State *lua) {
         lua_pop(lua, 1); /* pop dummy value */
     }
 }
- 
+
 void luaRegisterVersion(lua_State *lua) {
     /* For legacy compatibility reasons include Redis versions. */
     lua_pushstring(lua, "REDIS_VERSION_NUM");

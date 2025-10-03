@@ -693,7 +693,7 @@ start_server {tags {"scripting"}} {
         assert_error {*Script attempted to access nonexistent global variable 'getfenv'*} {
             r eval "return getfenv()" 0
         }
-    }
+    } {} {external:skip}
 
     test {SCRIPTING FLUSH ASYNC} {
         r script flush sync

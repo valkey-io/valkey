@@ -13,7 +13,7 @@ SECURITY: There are security fixes in the release.
 Valkey 8.0.6  -  Released Fri 03 October 2025
 ================================================================================
 
-Upgrade urgency HIGH: This release includes bug fixes we recommend you
+Upgrade urgency SECURITY: This release includes security fixes we recommend you
 apply as soon as possible.
 
 Security fixes

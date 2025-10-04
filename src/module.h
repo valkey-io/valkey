@@ -169,7 +169,7 @@ static inline void moduleInitDigestContext(ValkeyModuleDigest *mdvar) {
     memset(mdvar->x, 0, sizeof(mdvar->x));
 }
 
-void moduleEnqueueLoadModule(sds path, sds *argv, int argc);
+void moduleEnqueueLoadModule(sds path, sds *argv, int argc, int from_include);
 sds moduleLoadQueueEntryToLoadmoduleOptionStr(ValkeyModule *module,
                                               const char *config_option_str);
 ValkeyModuleCtx *moduleAllocateContext(void);
@@ -181,7 +181,7 @@ void moduleFreeContext(ValkeyModuleCtx *ctx);
 void moduleInitModulesSystem(void);
 void moduleInitModulesSystemLast(void);
 void modulesCron(void);
-int moduleLoad(const char *path, void **argv, int argc, int is_loadex);
+int moduleLoad(const char *path, void **argv, int argc, int is_loadex, int from_include);
 int moduleUnload(sds name, const char **errmsg);
 void moduleUnloadAllModules(void);
 void moduleLoadFromQueue(void);

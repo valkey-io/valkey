@@ -9993,6 +9993,32 @@ int VM_ACLCheckCommandPermissions(ValkeyModuleUser *user, ValkeyModuleString **a
     return VALKEYMODULE_OK;
 }
 
+/* Checks if the command can be executed by the module context user, according to the ACLs
+ * associated with it.
+ *
+ * On success a VALKEYMODULE_OK is returned, otherwise
+ * VALKEYMODULE_ERR is returned and errno is set to the following values:
+ *
+ * * ENOENT: Specified command does not exist.
+ * * EACCES: Command cannot be executed, according to ACL rules; or the user is not authenticated.
+ */
+int VM_ACLCheckCommandPermissionsForContextUser(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    serverAssert(ctx != NULL && ctx->client != NULL && ctx->client->user != NULL);
+
+    /* If the user is not authenticated, we cannot check permissions. */
+    if (ctx->client->user == DefaultUser) {
+        errno = EACCES;
+        return VALKEYMODULE_ERR;
+    }
+
+    ValkeyModuleUser user = {
+        .user = ctx->client->user,
+        .free_user = 0,
+    };
+
+    return VM_ACLCheckCommandPermissions(&user, argv, argc);
+}
+
 /* Check if the key can be accessed by the user according to the ACLs attached to the user
  * and the flags representing the key access. The flags are the same that are used in the
  * keyspec for logical operations. These flags are documented in ValkeyModule_SetCommandInfo as
@@ -14330,6 +14356,7 @@ void moduleRegisterCoreAPI(void) {
     REGISTER_API(GetCurrentUserName);
     REGISTER_API(GetModuleUserFromUserName);
     REGISTER_API(ACLCheckCommandPermissions);
+    REGISTER_API(ACLCheckCommandPermissionsForContextUser);
     REGISTER_API(ACLCheckKeyPermissions);
     REGISTER_API(ACLCheckChannelPermissions);
     REGISTER_API(ACLAddLogEntry);

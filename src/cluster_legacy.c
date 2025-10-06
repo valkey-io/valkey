@@ -6909,7 +6909,7 @@ void addNodeDetailsToShardReply(client *c, clusterNode *node) {
 /* Add to the output buffer of the given client,
  * an array of slot (start, end) pair owned by the shard,
  * an array of the primary and set of replica(s) along with information about each node,
- * an array of shard info, like shard-id and so on
+ * and shard id.
  */
 void clusterCommandShards(client *c) {
     addReplyArrayLen(c, dictSize(server.cluster->shards));
@@ -6952,8 +6952,6 @@ void clusterCommandShards(client *c) {
             addNodeDetailsToShardReply(c, n);
             clusterFreeNodesSlotsInfo(n);
         }
-        addReplyBulkCString(c, "shard");
-        addReplyMapLen(c, 1);
         addReplyBulkCString(c, "id");
         addReplyBulkCBuffer(c, dictGetKey(de), CLUSTER_NAMELEN);
     }

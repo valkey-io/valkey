@@ -297,19 +297,14 @@ test "CLUSTER SHARDS id response validation" {
         foreach shard $shards {
             set shard_dict [dict create {*}$shard]
 
-            # 1. Verify 'shard' key exists
-            assert {[dict exists $shard_dict shard]}
-            set shard_info [dict get $shard_dict shard]
-            set shard_info_dict [dict create {*}$shard_info]
+            # 1. Verify 'id' key exists
+            assert {[dict exists $shard_dict id]}
+            set shard_id [dict get $shard_dict id]
 
-            # 2. Verify 'id' key exists in the nested shard info
-            assert {[dict exists $shard_info_dict id]}
-            set shard_id [dict get $shard_info_dict id]
-
-            # 3. Verify shard_id is a 40-char string
+            # 2. Verify shard_id is a 40-char string
             assert {[string length $shard_id] == 40}
 
-            # 4. Verify that for a given node's output, all shard IDs are unique
+            # 3. Verify that for a given node's output, all shard IDs are unique
             assert {[dict exists $seen_shard_ids $shard_id] == 0}
             dict set seen_shard_ids $shard_id 1
         }

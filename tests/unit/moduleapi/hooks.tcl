@@ -396,21 +396,15 @@ tags "modules" {
             set job_name [dict get [lindex [R 2 CLUSTER GETSLOTMIGRATIONS] 0] name]
 
             wait_for_condition 50 100 {
-                [R 0 hooks.event_last atomic-slot-migration-import-start-target] ne ""
+                [R 0 hooks.event_last atomic-slot-migration-import-start-jobname] ne ""
             } else {
                 fail "Import start event never triggered on primary"
             }
             wait_for_condition 50 100 {
-                [R 3 hooks.event_last atomic-slot-migration-import-start-target] ne ""
+                [R 3 hooks.event_last atomic-slot-migration-import-start-jobname] ne ""
             } else {
                 fail "Import start event never triggered on replica"
             }
-            assert_equal [R 0 hooks.event_last atomic-slot-migration-import-start-target] $node0_id
-            assert_equal [R 0 hooks.event_last atomic-slot-migration-import-start-source] $node2_id
-            assert_equal [R 3 hooks.event_last atomic-slot-migration-import-start-target] $node0_id
-            assert_equal [R 3 hooks.event_last atomic-slot-migration-import-start-source] $node2_id
-            assert_equal [R 2 hooks.event_last atomic-slot-migration-export-start-target] $node0_id
-            assert_equal [R 2 hooks.event_last atomic-slot-migration-export-start-source] $node2_id
             assert_equal [R 0 hooks.event_last atomic-slot-migration-import-start-numslotranges] "1"
             assert_equal [R 0 hooks.event_last atomic-slot-migration-import-start-slotranges] "16383-16383"
             assert_equal [R 3 hooks.event_last atomic-slot-migration-import-start-numslotranges] "1"
@@ -425,21 +419,15 @@ tags "modules" {
             assert_match "OK" [R 2 CLUSTER CANCELSLOTMIGRATIONS]
 
             wait_for_condition 50 100 {
-                [R 0 hooks.event_last atomic-slot-migration-import-abort-target] ne ""
+                [R 0 hooks.event_last atomic-slot-migration-import-abort-jobname] ne ""
             } else {
                 fail "Import abort event never triggered on primary"
             }
             wait_for_condition 50 100 {
-                [R 3 hooks.event_last atomic-slot-migration-import-abort-target] ne ""
+                [R 3 hooks.event_last atomic-slot-migration-import-abort-jobname] ne ""
             } else {
                 fail "Import abort event never triggered on replica"
             }
-            assert_equal [R 0 hooks.event_last atomic-slot-migration-import-abort-target] $node0_id
-            assert_equal [R 0 hooks.event_last atomic-slot-migration-import-abort-source] $node2_id
-            assert_equal [R 3 hooks.event_last atomic-slot-migration-import-abort-target] $node0_id
-            assert_equal [R 3 hooks.event_last atomic-slot-migration-import-abort-source] $node2_id
-            assert_equal [R 2 hooks.event_last atomic-slot-migration-export-abort-target] $node0_id
-            assert_equal [R 2 hooks.event_last atomic-slot-migration-export-abort-source] $node2_id
             assert_equal [R 0 hooks.event_last atomic-slot-migration-import-abort-numslotranges] "1"
             assert_equal [R 0 hooks.event_last atomic-slot-migration-import-abort-slotranges] "16383-16383"
             assert_equal [R 3 hooks.event_last atomic-slot-migration-import-abort-numslotranges] "1"
@@ -458,21 +446,15 @@ tags "modules" {
             set job_name [dict get [lindex [R 2 CLUSTER GETSLOTMIGRATIONS] 0] name]
 
             wait_for_condition 50 100 {
-                [R 0 hooks.event_last atomic-slot-migration-import-complete-target] ne ""
+                [R 0 hooks.event_last atomic-slot-migration-import-complete-jobname] ne ""
             } else {
                 fail "Import complete event never triggered on primary"
             }
             wait_for_condition 50 100 {
-                [R 3 hooks.event_last atomic-slot-migration-import-complete-target] ne ""
+                [R 3 hooks.event_last atomic-slot-migration-import-complete-jobname] ne ""
             } else {
                 fail "Import complete event never triggered on replica"
             }
-            assert_equal [R 0 hooks.event_last atomic-slot-migration-import-complete-target] $node0_id
-            assert_equal [R 0 hooks.event_last atomic-slot-migration-import-complete-source] $node2_id
-            assert_equal [R 3 hooks.event_last atomic-slot-migration-import-complete-target] $node0_id
-            assert_equal [R 3 hooks.event_last atomic-slot-migration-import-complete-source] $node2_id
-            assert_equal [R 2 hooks.event_last atomic-slot-migration-export-complete-target] $node0_id
-            assert_equal [R 2 hooks.event_last atomic-slot-migration-export-complete-source] $node2_id
             assert_equal [R 0 hooks.event_last atomic-slot-migration-import-complete-numslotranges] "1"
             assert_equal [R 0 hooks.event_last atomic-slot-migration-import-complete-slotranges] "16383-16383"
             assert_equal [R 3 hooks.event_last atomic-slot-migration-import-complete-numslotranges] "1"

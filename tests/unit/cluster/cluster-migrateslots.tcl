@@ -1185,6 +1185,12 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster} overrides {cluste
         assert_match "*A failover occurred during slot import*" [dict get [get_migration_by_name 0 $jobname] message]
         assert_match {*Connection lost to target*} [dict get [get_migration_by_name 2 $jobname] message]
 
+        # Should not cause desync
+        assert_equal 0 [count_message_lines [srv -0 stdout] "inline protocol from primary"]
+        assert_equal 0 [count_message_lines [srv -2 stdout] "inline protocol from primary"]
+        assert_equal 0 [count_message_lines [srv -3 stdout] "inline protocol from primary"]
+        assert_equal 0 [count_message_lines [srv -5 stdout] "inline protocol from primary"]
+
         # Cleanup for the next test
         assert_match "OK" [R 2 FLUSHDB SYNC]
         assert_equal "OK" [R 3 CONFIG SET repl-backlog-size $old_repl_backlog]
@@ -1225,6 +1231,12 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster} overrides {cluste
             [string match {*Slots are no longer owned by source node*} [dict get [get_migration_by_name 2 $jobname] message]] ||
             [string match {*Connection lost to source*} [dict get [get_migration_by_name 2 $jobname] message]]
         }
+
+        # Should not cause desync
+        assert_equal 0 [count_message_lines [srv -0 stdout] "inline protocol from primary"]
+        assert_equal 0 [count_message_lines [srv -2 stdout] "inline protocol from primary"]
+        assert_equal 0 [count_message_lines [srv -3 stdout] "inline protocol from primary"]
+        assert_equal 0 [count_message_lines [srv -5 stdout] "inline protocol from primary"]
 
         # Cleanup for the next test
         assert_match "OK" [R 0 FLUSHDB SYNC]

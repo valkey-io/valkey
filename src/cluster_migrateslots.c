@@ -923,9 +923,9 @@ void clusterUpdateSlotImportsOnOwnershipChange(void) {
             if (job->state != SLOT_IMPORT_OCCURRING_ON_PRIMARY) {
                 updateSlotMigrationJobState(job, SLOT_IMPORT_OCCURRING_ON_PRIMARY);
                 job->is_tracking_only = true;
-                 /* Close the client, but first unlink this migration to prevent it from being
-                  * treated as a slot migration client from here on (e.g. preventing proxying
-                  * of any pending commands to our old replicas). */
+                /* Close the client, but first unlink this migration to prevent it from being
+                 * treated as a slot migration client from here on (e.g. preventing proxying
+                 * of any pending commands to our old replicas). */
                 job->client->slot_migration_job = NULL;
                 resetSlotMigrationJob(job);
             }

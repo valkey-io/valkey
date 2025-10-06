@@ -81,6 +81,11 @@
                                 }
                             }
                         }
+                    },
+                    "id": {
+                        "description": "The shard ID.",
+                        "type": "string",
+                        "since": "9.1.0"
                     }
                 }
             }

@@ -7,6 +7,12 @@
         "arity": 2,
         "container": "CLUSTER",
         "function": "clusterCommand",
+        "history": [
+            [
+                "9.1.0",
+                "Added shard id field to CLUSTER SHARDS response"
+            ]
+        ],
         "command_flags": [
             "LOADING",
             "STALE"

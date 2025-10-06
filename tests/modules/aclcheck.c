@@ -82,6 +82,33 @@ int publish_aclcheck_channel(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, in
 }
 
 /* A wrap for RM_Call that check first that the command can be executed */
+int rm_call_aclcheck_context_user_cmd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    if (argc < 2) {
+        return ValkeyModule_WrongArity(ctx);
+    }
+
+    /* Check that the command can be executed */
+    int ret = ValkeyModule_ACLCheckCommandPermissionsForContextUser(ctx, argv + 1, argc - 1);
+    if (ret != 0) {
+        ValkeyModule_ReplyWithError(ctx, "DENIED CMD");
+        /* Add entry to ACL log */
+        ValkeyModule_ACLAddLogEntry(ctx, user, argv[1], VALKEYMODULE_ACL_LOG_CMD);
+        return VALKEYMODULE_OK;
+    }
+
+    const char* cmd = ValkeyModule_StringPtrLen(argv[1], NULL);
+
+    ValkeyModuleCallReply* rep = ValkeyModule_Call(ctx, cmd, "v", argv + 2, (size_t)argc - 2);
+    if(!rep){
+        ValkeyModule_ReplyWithError(ctx, "NULL reply returned");
+    }else{
+        ValkeyModule_ReplyWithCallReply(ctx, rep);
+        ValkeyModule_FreeCallReply(rep);
+    }
+
+    return VALKEYMODULE_OK;
+}
+
 int rm_call_aclcheck_cmd(ValkeyModuleCtx *ctx, ValkeyModuleUser *user, ValkeyModuleString **argv, int argc) {
     if (argc < 2) {
         return ValkeyModule_WrongArity(ctx);
@@ -107,17 +134,6 @@ int rm_call_aclcheck_cmd(ValkeyModuleCtx *ctx, ValkeyModuleUser *user, ValkeyMod
     }
 
     return VALKEYMODULE_OK;
-}
-
-int rm_call_aclcheck_cmd_default_user(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
-    ValkeyModuleString *user_name = ValkeyModule_GetCurrentUserName(ctx);
-    ValkeyModuleUser *user = ValkeyModule_GetModuleUserFromUserName(user_name);
-
-    int res = rm_call_aclcheck_cmd(ctx, user, argv, argc);
-
-    ValkeyModule_FreeModuleUser(user);
-    ValkeyModule_FreeString(ctx, user_name);
-    return res;
 }
 
 int rm_call_aclcheck_cmd_module_user(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
@@ -199,14 +215,14 @@ int commandBlockCheck(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc)
 
     result = ValkeyModule_AddACLCategory(ctx,"blockedcategory");
     response_ok |= (result == VALKEYMODULE_OK);
-    
+
     ValkeyModuleCommand *parent = ValkeyModule_GetCommand(ctx,"block.commands.outside.onload");
     result = ValkeyModule_SetCommandACLCategories(parent, "write");
     response_ok |= (result == VALKEYMODULE_OK);
 
     result = ValkeyModule_CreateSubcommand(parent,"subcommand.that.should.fail",module_test_acl_category,"",0,0,0);
     response_ok |= (result == VALKEYMODULE_OK);
-    
+
     /* This validates that it's not possible to create commands or add
      * a new ACL Category outside OnLoad function.
      * thus returns an error if they succeed. */
@@ -224,7 +240,7 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
         return VALKEYMODULE_ERR;
 
     if (argc > 1) return ValkeyModule_WrongArity(ctx);
-    
+
     /* When that flag is passed, we try to create too many categories,
      * and the test expects this to fail. In this case the server returns VALKEYMODULE_ERR
      * and set errno to ENOMEM*/
@@ -274,7 +290,7 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
     if (ValkeyModule_CreateCommand(ctx,"aclcheck.publish.check.channel", publish_aclcheck_channel,"",0,0,0) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
 
-    if (ValkeyModule_CreateCommand(ctx,"aclcheck.rm_call.check.cmd", rm_call_aclcheck_cmd_default_user,"",0,0,0) == VALKEYMODULE_ERR)
+    if (ValkeyModule_CreateCommand(ctx,"aclcheck.rm_call.check.cmd", rm_call_aclcheck_context_user_cmd,"",0,0,0) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
 
     if (ValkeyModule_CreateCommand(ctx,"aclcheck.rm_call.check.cmd.module.user", rm_call_aclcheck_cmd_module_user,"",0,0,0) == VALKEYMODULE_ERR)
@@ -292,25 +308,25 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
      * the server returns VALKEYMODULE_ERR and set errno to `EINVAL` */
     if (ValkeyModule_AddACLCategory(ctx,"!nval!dch@r@cter$") == VALKEYMODULE_ERR)
         ValkeyModule_Assert(errno == EINVAL);
-    else 
+    else
         return VALKEYMODULE_ERR;
-    
+
     /* This validates that, when module tries to add a category that already exists,
      * the server returns VALKEYMODULE_ERR and set errno to `EBUSY` */
     if (ValkeyModule_AddACLCategory(ctx,"write") == VALKEYMODULE_ERR)
         ValkeyModule_Assert(errno == EBUSY);
-    else 
+    else
         return VALKEYMODULE_ERR;
-    
+
     if (ValkeyModule_AddACLCategory(ctx,"foocategory") == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
-    
+
     if (ValkeyModule_CreateCommand(ctx,"aclcheck.module.command.test.add.new.aclcategories", module_test_acl_category,"",0,0,0) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
     ValkeyModuleCommand *test_add_new_aclcategories = ValkeyModule_GetCommand(ctx,"aclcheck.module.command.test.add.new.aclcategories");
 
     if (ValkeyModule_SetCommandACLCategories(test_add_new_aclcategories, "foocategory") == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
-    
+
     return VALKEYMODULE_OK;
 }

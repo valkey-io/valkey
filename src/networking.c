@@ -4457,13 +4457,12 @@ static int parseClientFiltersOrReply(client *c, int index, clientFilter *filter)
         int moreargs = c->argc > index + 1;
 
         if (!strcasecmp(c->argv[index]->ptr, "id")) {
-            if (filter->ids == NULL) {
-                /* Initialize the intset for IDs */
-                filter->ids = intsetNew();
-            } else {
+            if (filter->ids) {
                 zfree(filter->ids);
-                filter->ids = intsetNew();
             }
+            /* Initialize the intset for IDs */
+            filter->ids = intsetNew();
+
             index++; /* Move to the first ID after "ID" */
 
             /* Process all IDs until a non-numeric argument or end of args */
@@ -4482,13 +4481,12 @@ static int parseClientFiltersOrReply(client *c, int index, clientFilter *filter)
                 index++; /* Move to the next argument */
             }
         } else if (!strcasecmp(c->argv[index]->ptr, "not-id")) {
-            if (filter->not_ids == NULL) {
-                /* Initialize the intset for NOT-IDs */
-                filter->not_ids = intsetNew();
-            } else {
+            if (filter->not_ids) {
                 zfree(filter->not_ids);
-                filter->not_ids = intsetNew();
             }
+            /* Initialize the intset for NOT-IDs */
+            filter->not_ids = intsetNew();
+
             index++; /* Move to the first ID after "NOT-ID" */
 
             /* Process all NOT-IDs until a non-numeric argument or end of args */

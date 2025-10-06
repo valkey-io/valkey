@@ -1,5 +1,8 @@
 #include "server.h"
 
+#include <smmintrin.h>
+#include <wmmintrin.h>
+
 /*
  * Copyright 2001-2010 Georges Menie (www.menie.org)
  * Copyright 2010-2012 Redis Ltd. (adapted to Redis coding style)
@@ -44,6 +47,54 @@
  * Output for "123456789"     : 31C3
  */
 
+#if HAVE_X86_SIMD
+ATTRIBUTE_TARGET_SSE2
+ATTRIBUTE_TARGET_PCLMUL
+static inline uint16_t crc16_base(uint16_t crc, uint8_t v) {
+	crc ^= v << 8;
+    __m128i orig = _mm_set_epi64x(0x0, (uint64_t)(crc) << (8));
+    __m128i tmp = orig;
+
+    uint64_t p = 0x11021;
+    //uint64_t p = 0x10811;
+
+    // 2^96 / p
+    // 0x111303471a041b343e569
+//#define mu 0x859b040b1c581911
+//#define mu 0x111303471a041b343e569
+    
+    // 0x111303471a041
+    // 1 0001 0001 0011 0000 0011 0100 0111 0001 1010 0000 0100 0001
+    // 1000 0010 0000 0101 1000 1110 0010 1100 0000 1100 1000 1000 1
+    // 1[000 0|010 0|000 0|101 1|000 1|110 0|010 1|100 0|000 1|100 1|000 1|000 1]
+    // 1  0      4     0     b    1     c      5    8      1     9     1    1
+    //uint64_t mu = 0x1040b1c581911; // 2^64 / p
+    uint64_t mu = 0x111303471a041;
+
+    // 0x11130
+    // 1 0001 0001 0011 0000
+    // 0000 1100 1000 1000 1
+    // 0[000 1|100 1|000 1|000 1]
+    // 0    1    9    1     1
+    //uint64_t mu = 0x101911; // 2^32 / p
+    //uint64_t mu = 0x11130;
+
+    __m128i mul = _mm_set_epi64x(p, mu);
+
+    tmp = _mm_clmulepi64_si128(
+            tmp,
+            mul, 0x00);
+
+    tmp = _mm_clmulepi64_si128(tmp, 
+            mul, 0x11);
+
+    tmp = _mm_xor_si128(tmp, orig);
+
+    uint16_t ret = (uint16_t)(_mm_extract_epi16(tmp, 0x0));
+
+    return ret;
+}
+#else
 static const uint16_t crc16tab[256]= {
     0x0000,0x1021,0x2042,0x3063,0x4084,0x50a5,0x60c6,0x70e7,
     0x8108,0x9129,0xa14a,0xb16b,0xc18c,0xd1ad,0xe1ce,0xf1ef,
@@ -78,11 +129,22 @@ static const uint16_t crc16tab[256]= {
     0xef1f,0xff3e,0xcf5d,0xdf7c,0xaf9b,0xbfba,0x8fd9,0x9ff8,
     0x6e17,0x7e36,0x4e55,0x5e74,0x2e93,0x3eb2,0x0ed1,0x1ef0
 };
+#endif
 
 uint16_t crc16(const char *buf, int len) {
+#if HAVE_X86_SIMD
+    int counter;
+    uint16_t crc = 0x0; 
+    for(counter = 0; counter < len; counter++) {
+        uint8_t tmp = (uint8_t)buf[counter];
+        crc = crc16_base(crc, tmp);
+    }   
+    return crc;
+#else
     int counter;
     uint16_t crc = 0;
     for (counter = 0; counter < len; counter++)
             crc = (crc<<8) ^ crc16tab[((crc>>8) ^ *buf++)&0x00FF];
     return crc;
+#endif
 }

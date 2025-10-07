@@ -2174,8 +2174,13 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster aofrw} overrides {
         wait_for_migration_field 3 $jobname state occurring-on-primary
         assert_match "0" [R 3 DBSIZE]
 
-        # Restart the replica
+        # Restart the replica and wait for resync
         do_node_restart 3
+        wait_for_condition 50 1000 {
+            [status [srv -3 client] master_link_status] == "up"
+        } else {
+            fail "Replica is not synced"
+        }
 
         # Replica should still see the migration. Note that since AOF does not
         # persist the replication ID, this is because of a full resync.

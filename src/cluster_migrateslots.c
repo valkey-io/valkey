@@ -2612,7 +2612,7 @@ void clusterCommandSyncSlots(client *c) {
         return;
     }
     if (!strcasecmp(c->argv[2]->ptr, "capa")) {
-        /* CLUSTER SYNCSLOTS CAPA <field> [CAPA <field>...] */
+        /* CLUSTER SYNCSLOTS CAPA <field> [<field>...] */
         clusterCommandSyncSlotsCapa(c);
         return;
     }

@@ -1472,6 +1472,9 @@ int rdbSaveRio(int req, rio *rdb, int *error, int rdbflags, rdbSaveInfo *rsi) {
 
     /* save all databases, skip this if we're in functions-only mode */
     if (!(req & REPLICA_REQ_RDB_EXCLUDE_DATA)) {
+        /* RDB slot import info is encoded in a required opcode since exposing
+         * importing slots is a consistency problem. */
+        if (clusterRDBSaveSlotImports(rdb) == C_ERR) goto werr;
         for (j = 0; j < server.dbnum; j++) {
             if (rdbSaveDb(rdb, j, rdbflags, &key_counter) == -1) goto werr;
         }
@@ -2923,6 +2926,9 @@ void startLoading(size_t size, int rdbflags, int async) {
     server.rdb_last_load_keys_loaded = 0;
     blockingOperationStarts();
 
+    /* Cleanup slot migrations (we need a clean state for the incoming load) */
+    clusterCleanSlotImportsBeforeLoad();
+
     /* Fire the loading modules start event. */
     int subevent;
     if (rdbflags & RDBFLAGS_AOF_PREAMBLE)
@@ -3193,6 +3199,9 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
                 if (expires_slot_size) kvstoreHashtableExpand(db->expires, slot_id, expires_slot_size);
                 should_expand_db = 0;
             }
+            continue; /* Read next opcode. */
+        } else if (type == RDB_OPCODE_SLOT_IMPORT) {
+            if (clusterRDBLoadSlotImport(rdb) == C_ERR) goto eoferr;
             continue; /* Read next opcode. */
         } else if (type == RDB_OPCODE_AUX) {
             /* AUX: generic string-string fields. Use to add state to RDB

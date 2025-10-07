@@ -19,7 +19,8 @@ typedef enum slotMigrationJobState {
     SLOT_IMPORT_WAITING_FOR_PAUSED,
     SLOT_IMPORT_FAILOVER_REQUESTED,
     SLOT_IMPORT_FAILOVER_GRANTED,
-    SLOT_IMPORT_FINISHED_WAITING_TO_CLEANUP,
+    SLOT_IMPORT_FINISHED_CLEANING_UP,
+    SLOT_IMPORT_OCCURRING_ON_PRIMARY,
 
     /* Exporting states */
     SLOT_EXPORT_CONNECTING,
@@ -80,6 +81,9 @@ typedef struct slotMigrationJob {
     sds description;                          /* Description, used for
                                                * logging. */
     size_t stat_cow_bytes;                    /* Copy on write bytes during slot migration fork. */
+    bool is_tracking_only;                    /* True, if this job is only for the purpose of
+                                               * tracking a slot migration occurring somewhere else
+                                               * (e.g. primary, or previous snapshot). */
 
     /* State needed during client establishment */
     connection *conn; /* Connection to slot import source node. */
@@ -106,9 +110,11 @@ static void finishSlotMigrationJob(slotMigrationJob *job,
                                    slotMigrationJobState state,
                                    char *message);
 static void freeSlotMigrationJob(void *o);
-static sds generateSlotMigrationJobDescription(slotMigrationJob *job,
-                                               clusterNode *node);
+static sds generateSlotMigrationJobDescription(slotMigrationJob *job, clusterNode *other_node);
 static void slotExportTryUnpause(void);
+static slotMigrationJob *clusterLookupMigrationJob(sds name);
+static sds generateSyncSlotsEstablishCommand(slotMigrationJob *job);
+static void clusterCleanupSlotMigrationLog(size_t max_len);
 
 /* Create an empty list of slot ranges. */
 list *createSlotRangeList(void) {
@@ -346,11 +352,65 @@ void fireModuleSlotMigrationEvent(slotMigrationJob *job, int subevent) {
         info.slot_ranges[i].start = range->start_slot;
         info.slot_ranges[i].end = range->end_slot;
     }
-    memcpy(info.source_node_id, job->source_node_name, CLUSTER_NAMELEN);
-    memcpy(info.target_node_id, job->target_node_name, CLUSTER_NAMELEN);
     memcpy(info.job_name, job->name, CLUSTER_NAMELEN);
     moduleFireServerEvent(VALKEYMODULE_EVENT_ATOMIC_SLOT_MIGRATION, subevent, &info);
     zfree(info.slot_ranges);
+}
+
+/* Save the active slot imports to the RDB file. The import job name and the
+ * slot ranges are saved. */
+int clusterRDBSaveSlotImports(rio *rdb) {
+    if (!server.cluster_enabled) return C_OK;
+    if (listLength(server.cluster->slot_migration_jobs) == 0) return C_OK;
+    listNode *ln;
+    listIter li;
+    listNode *ln2;
+    listIter li2;
+    listRewind(server.cluster->slot_migration_jobs, &li);
+    while ((ln = listNext(&li)) != NULL) {
+        slotMigrationJob *job = ln->value;
+        if (isSlotMigrationJobFinished(job)) continue;
+        if (job->type == SLOT_MIGRATION_EXPORT) continue;
+        if (rdbSaveType(rdb, RDB_OPCODE_SLOT_IMPORT) < 0) return C_ERR;
+        if (rdbSaveRawString(rdb, (unsigned char *)job->name, CLUSTER_NAMELEN) < 0) return C_ERR;
+        if (rdbSaveLen(rdb, listLength(job->slot_ranges)) < 0) return C_ERR;
+        listRewind(job->slot_ranges, &li2);
+        while ((ln2 = listNext(&li2)) != NULL) {
+            slotRange *range = ln2->value;
+            if (rdbSaveLen(rdb, range->start_slot) < 0) return C_ERR;
+            if (rdbSaveLen(rdb, range->end_slot) < 0) return C_ERR;
+        }
+    }
+    return C_OK;
+}
+
+/* Load a single slot import from the RDB. */
+int clusterRDBLoadSlotImport(rio *rdb) {
+    robj *job_name;
+    list *slot_ranges = createSlotRangeList();
+    uint64_t num_slot_ranges;
+    if ((job_name = rdbLoadStringObject(rdb)) == NULL) goto err;
+    if ((num_slot_ranges = rdbLoadLen(rdb, NULL)) == RDB_LENERR) goto err;
+    for (uint64_t i = 0; i < num_slot_ranges; i++) {
+        uint64_t start_slot;
+        uint64_t end_slot;
+        if ((start_slot = rdbLoadLen(rdb, NULL)) == RDB_LENERR) goto err;
+        if ((end_slot = rdbLoadLen(rdb, NULL)) == RDB_LENERR) goto err;
+
+        slotRange *slot_range = zmalloc(sizeof(slotRange));
+        slot_range->start_slot = start_slot;
+        slot_range->end_slot = end_slot;
+        listAddNodeTail(slot_ranges, slot_range);
+    }
+    slotMigrationJob *new_import = createSlotImportJob(NULL, NULL, job_name->ptr, slot_ranges);
+    listAddNodeTail(server.cluster->slot_migration_jobs, new_import);
+    decrRefCount(job_name);
+    return C_OK;
+
+err:
+    if (job_name) decrRefCount(job_name);
+    if (slot_ranges) listRelease(slot_ranges);
+    return C_ERR;
 }
 
 /* -------------------------------- TARGET -------------------------------------
@@ -364,38 +424,66 @@ void fireModuleSlotMigrationEvent(slotMigrationJob *job, int subevent) {
  * restart the migration from the source side.
  *
  * State Machine:
+ *        SYNCSLOTS ESTABLISH│
+ *                ┌──────────▼─────────┐
+ *                │SLOT_IMPORT_WAIT_ACK┼──────┐
+ *                └──────────┬─────────┘      │
+ *              SYNCSLOTS ACK│                │
+ *            ┌──────────────▼─────────────┐  │
+ *            │SLOT_IMPORT_RECEIVE_SNAPSHOT┼──┤
+ *            └──────────────┬─────────────┘  │
+ *     SYNCSLOTS SNAPSHOT-EOF│                │
+ *           ┌───────────────▼──────────────┐ │
+ *           │SLOT_IMPORT_WAITING_FOR_PAUSED┼─┤
+ *           └───────────────┬──────────────┘ │
+ *           SYNCSLOTS PAUSED│                │
+ *           ┌───────────────▼──────────────┐ │ Error Conditions:
+ *           │SLOT_IMPORT_FAILOVER_REQUESTED┼─┤  1. OOM
+ *           └───────────────┬──────────────┘ │  2. Slot Ownership Change
+ * SYNCSLOTS FAILOVER-GRANTED│                │  3. FLUSHDB
+ *            ┌──────────────▼─────────────┐  │  4. Connection Lost
+ *            │SLOT_IMPORT_FAILOVER_GRANTED┼──┤  5. No ACK from source (timeout)
+ *            └──────────────┬─────────────┘  │  6. Demoted to replica
+ *         Takeover Performed│                │
+ *            ┌──────────────▼───────────┐    │
+ *            │SLOT_MIGRATION_JOB_SUCCESS┼────┼─────────────────┐
+ *            └──────────────────────────┘    │                 │
+ *                                            │Still primary?   │Demoted to replica?
+ *             ┌──────────────────────────────▼─┐               │
+ *             │SLOT_IMPORT_FINISHED_CLEANING_UP│               │
+ *             └─────────────┬──────────────────┘               │
+ *   Unowned Slots Cleaned Up│                                  │
+ *             ┌─────────────▼───────────┐                      │
+ *             │SLOT_MIGRATION_JOB_FAILED│                      │
+ *             └─────────────────────────┘                      │
+ *                                                              │
+ *        ┌────────────────────────────────┐                    │
+ *        │SLOT_IMPORT_OCCURRING_ON_PRIMARY◄────────────────────┘
+ *        └────────────────────────────────┘
+ *                     (see below)
  *
- *              ┌────────────────────┐
- *              │SLOT_IMPORT_WAIT_ACK┼──────┐
- *              └──────────┬─────────┘      │
- *                      ACK│                │
- *          ┌──────────────▼─────────────┐  │
- *          │SLOT_IMPORT_RECEIVE_SNAPSHOT┼──┤
- *          └──────────────┬─────────────┘  │
- *             SNAPSHOT-EOF│                │
- *         ┌───────────────▼──────────────┐ │
- *         │SLOT_IMPORT_WAITING_FOR_PAUSED┼─┤
- *         └───────────────┬──────────────┘ │
- *                   PAUSED│                │
- *         ┌───────────────▼──────────────┐ │ Error Conditions:
- *         │SLOT_IMPORT_FAILOVER_REQUESTED┼─┤  1. OOM
- *         └───────────────┬──────────────┘ │  2. Slot Ownership Change
- *         FAILOVER-GRANTED│                │  3. Demotion to replica
- *          ┌──────────────▼─────────────┐  │  4. FLUSHDB
- *          │SLOT_IMPORT_FAILOVER_GRANTED┼──┤  5. Connection Lost
- *          └──────────────┬─────────────┘  │  6. No ACK from source (timeout)
- *       Takeover Performed│                │
- *          ┌──────────────▼───────────┐    │
- *          │SLOT_MIGRATION_JOB_SUCCESS┼──-─┤
- *          └──────────────────────────┘    │
- *                                          │
- *    ┌─────────────────────────────────────▼─┐
- *    │SLOT_IMPORT_FINISHED_WAITING_TO_CLEANUP│
- *    └────────────────────┬──────────────────┘
- * Unowned Slots Cleaned Up│
- *           ┌─────────────▼───────────┐
- *           │SLOT_MIGRATION_JOB_FAILED│
- *           └─────────────────────────┘
+ * State Machine (Replica):
+ *
+ *    SYNCSLOTS ESTABLISH or │
+ *    RDB Aux field load or  |
+ *    demotion during import |
+ *    ┌──────────────────────▼─────────┐
+ *    │SLOT_IMPORT_OCCURRING_ON_PRIMARY┼──────┐
+ *    └──────────────────────┬─────────┘      │ Error Conditions:
+ * SYNCSLOTS FINISH (SUCCESS)│                │  1. SYNCSLOTS FINISH (FAILURE)
+ *             ┌─────────────▼────────────┐   │  2. Full sync with any primary
+ *             │SLOT_MIGRATION_JOB_SUCCESS│   │  3. Promoted to primary
+ *             └──────────────────────────┘   │
+ *                                            │
+ *                      Promoted to primary?  │
+ *                           ┌────────────────┤
+ *          ┌────────────────▼───────────────┐│
+ *          │SLOT_IMPORT_FINISHED_CLEANING_UP││
+ *          └────────────────┬───────────────┘│
+ *   Unowned Slots Cleaned Up│                │ Still replica?
+ *             ┌─────────────▼───────────┐    │
+ *             │SLOT_MIGRATION_JOB_FAILED◄────┘
+ *             └─────────────────────────┘
  *
  */
 
@@ -412,6 +500,26 @@ bool clusterIsSlotImporting(int slot) {
     return false;
 }
 
+int validateSlotMigrationCanStartOrReply(client *c) {
+    if (moduleVerifyAllAllowAtomicSlotMigrationOrReply(c) == C_ERR) {
+        return C_ERR;
+    }
+    if (!nodeIsPrimary(server.cluster->myself)) {
+        addReplyError(c, "Slot migration can only be used on primary nodes.");
+        return C_ERR;
+    }
+
+    if (isAnySlotInManualImportingState()) {
+        addReplyError(c, "Slots are being manually imported");
+        return C_ERR;
+    }
+    if (isAnySlotInManualMigratingState()) {
+        addReplyError(c, "Slots are being manually migrated");
+        return C_ERR;
+    }
+    return C_OK;
+}
+
 /* Sent by the source to the target to initiate the AOF formatted snapshot.
  * Note that if there is an error in the request, we send a fail message in
  * order to prevent infinite retry in the case of incompatibility.
@@ -423,32 +531,16 @@ void clusterCommandSyncSlotsEstablish(client *c) {
     char *name = NULL;
     clusterNode *source_node = NULL;
     clusterNode *owning_node = NULL;
+    char *source_node_name = NULL;
     list *slot_ranges = NULL;
 
-    if (moduleVerifyAllAllowAtomicSlotMigrationOrReply(c) == C_ERR) {
-        return;
-    }
-
-    if (!nodeIsPrimary(server.cluster->myself)) {
-        addReplyError(c, "Target node is not a primary");
-        return;
-    }
-
-    if (isAnySlotInManualImportingState() ||
-        isAnySlotInManualMigratingState()) {
-        addReplyError(c, "A slot on the target node is being manually imported "
-                         "or migrated");
-        return;
-    }
-
-    if (c->slot_migration_job) {
-        addReplyError(c, "Slot migration client is already a slot migration "
-                         "job");
+    if (!mustObeyClient(c) && validateSlotMigrationCanStartOrReply(c) == C_ERR) {
         return;
     }
 
     /* Order agnostic. We skip unknown key/value pairs forwards
      * compatibility. */
+    bool is_tracking_only = c->flag.primary || c->id == CLIENT_ID_AOF;
     int i = 3;
     while (i < c->argc) {
         if (!strcasecmp(c->argv[i]->ptr, "source")) {
@@ -457,7 +549,18 @@ void clusterCommandSyncSlotsEstablish(client *c) {
                 addReplyErrorObject(c, shared.syntaxerr);
                 goto cleanup;
             }
-            source_node = clusterLookupNode(c->argv[4]->ptr, CLUSTER_NAMELEN);
+            if (is_tracking_only) {
+                /* If this is a primary or AOF client, we don't process the
+                 * source node. There is no guarantee the replica will have the
+                 * same view as the primary, and cluster configuration may have
+                 * changed since AOF save. */
+                i += 2;
+                continue;
+            }
+            source_node_name = c->argv[i + 1]->ptr;
+            source_node = clusterLookupNode(source_node_name, CLUSTER_NAMELEN);
+            i += 2;
+
             if (!source_node) {
                 addReplyError(c, "Target node does not know the source node");
                 goto cleanup;
@@ -466,7 +569,6 @@ void clusterCommandSyncSlotsEstablish(client *c) {
                 addReplyError(c, "Source node is target node itself");
                 goto cleanup;
             }
-            i += 2;
             continue;
         }
         if (!strcasecmp(c->argv[i]->ptr, "name")) {
@@ -509,25 +611,27 @@ void clusterCommandSyncSlotsEstablish(client *c) {
         addReplyErrorObject(c, shared.syntaxerr);
         goto cleanup;
     }
-    if (!source_node || !name || !slot_ranges) {
+    bool all_fields_found = name != NULL && slot_ranges != NULL;
+    if (!is_tracking_only) {
+        all_fields_found = all_fields_found && source_node != NULL;
+    }
+    if (!all_fields_found) {
         addReplyErrorObject(c, shared.syntaxerr);
         goto cleanup;
     }
-    if (source_node != owning_node) {
-        addReplyError(c, "Target node does not agree about current slot "
-                         "ownership");
+    if (source_node && source_node != owning_node) {
+        addReplyError(c, "Target node does not agree about current slot ownership");
         goto cleanup;
     }
 
-    slotMigrationJob *job = createSlotImportJob(c, source_node, name,
-                                                slot_ranges);
+    slotMigrationJob *job = createSlotImportJob(c, source_node, name, slot_ranges);
     fireModuleSlotMigrationEvent(job, VALKEYMODULE_SUBEVENT_ATOMIC_SLOT_MIGRATION_IMPORT_STARTED);
     listAddNodeHead(server.cluster->slot_migration_jobs, job);
 
     clusterDoBeforeSleep(CLUSTER_TODO_HANDLE_SLOT_MIGRATION);
-
+    forceCommandPropagation(c, PROPAGATE_REPL | PROPAGATE_AOF);
     addReply(c, shared.ok);
-    job->client->flag.reply_off = 1;
+    if (job->client) job->client->flag.reply_off = 1;
     return;
 
 cleanup:
@@ -611,34 +715,126 @@ void clusterCommandSyncSlotsFailoverGranted(client *c) {
     clusterDoBeforeSleep(CLUSTER_TODO_HANDLE_SLOT_MIGRATION);
 }
 
+/* Sent by a target primary to a replica in its shard to inform that an ongoing
+ * slot import is now finished. */
+void clusterCommandSyncSlotsFinish(client *c) {
+    char *name = NULL;
+    char *state = NULL;
+    char *message = NULL;
+    int i = 3;
+    while (i < c->argc) {
+        if (!strcasecmp(c->argv[i]->ptr, "state")) {
+            if (state || i + 1 >= c->argc) {
+                addReplyErrorObject(c, shared.syntaxerr);
+                return;
+            }
+            state = c->argv[i + 1]->ptr;
+            i += 2;
+            continue;
+        }
+        if (!strcasecmp(c->argv[i]->ptr, "name")) {
+            if (name || i + 1 >= c->argc ||
+                sdslen(c->argv[i + 1]->ptr) != CLUSTER_NAMELEN) {
+                addReplyErrorObject(c, shared.syntaxerr);
+                return;
+            }
+            name = c->argv[i + 1]->ptr;
+            i += 2;
+            continue;
+        }
+        if (!strcasecmp(c->argv[i]->ptr, "message")) {
+            if (message || i + 1 >= c->argc) {
+                addReplyErrorObject(c, shared.syntaxerr);
+                return;
+            }
+            message = c->argv[i + 1]->ptr;
+            i += 2;
+            continue;
+        }
+        addReplyErrorObject(c, shared.syntaxerr);
+        return;
+    }
+
+    /* Message is optional, state and name are required. */
+    if (!state || !name) {
+        addReplyErrorObject(c, shared.syntaxerr);
+        return;
+    }
+
+    addReply(c, shared.ok);
+    slotMigrationJob *job = clusterLookupMigrationJob(name);
+    if (!job) {
+        addReplyError(c, "No such slot migration job");
+        return;
+    }
+
+    slotMigrationJobState target_state;
+    if (!strcasecmp(state, "success")) {
+        target_state = SLOT_MIGRATION_JOB_SUCCESS;
+    } else if (!strcasecmp(state, "failed")) {
+        target_state = SLOT_MIGRATION_JOB_FAILED;
+    } else {
+        addReplyErrorObject(c, shared.syntaxerr);
+        return;
+    }
+
+    forceCommandPropagation(c, PROPAGATE_REPL | PROPAGATE_AOF);
+    finishSlotMigrationJob(job, target_state, message);
+}
+
 slotMigrationJob *createSlotImportJob(client *c,
                                       clusterNode *source_node,
                                       char *name,
                                       list *slot_ranges) {
     slotMigrationJob *job = zcalloc(sizeof(slotMigrationJob));
     memcpy(job->name, name, CLUSTER_NAMELEN);
-    memcpy(job->source_node_name, source_node->name, CLUSTER_NAMELEN);
-    memcpy(job->target_node_name, server.cluster->myself->name, CLUSTER_NAMELEN);
     job->ctime = server.unixtime;
     job->last_update = job->ctime;
     job->last_ack = job->ctime;
     job->type = SLOT_MIGRATION_IMPORT;
     job->slot_ranges = slot_ranges;
     job->slot_ranges_str = representSlotRangeList(slot_ranges);
-    job->state = SLOT_IMPORT_WAIT_ACK;
-    job->client = c;
-    job->client->slot_migration_job = job;
     job->description = generateSlotMigrationJobDescription(job, source_node);
-
-    /* We treat slot imports like primaries. Primaries are expected to have a
-     * dedicated query buffer and allocated replication data. */
-    initClientReplicationData(job->client);
-    job->client->querybuf = sdsempty();
 
     /* Mark all the slots as importing in the kvstore */
     setSlotImportingStateInAllDbs(slot_ranges, 1);
 
     serverLog(LL_NOTICE, "New slot import job created: %s.", job->description);
+
+    job->is_tracking_only = !c || c->flag.primary || c->id == CLIENT_ID_AOF;
+    if (job->is_tracking_only) {
+        /* If the client is a primary, we enter a special tracking state that
+         * will only be used to hide the dirty keys during the import.
+         *
+         * If there is no client (RDB load) or the client is the AOF - we create
+         * a tracking entry in case we use this snapshot to partial sync with
+         * our primary node. If we full sync the entry will be removed. If we
+         * are still a primary, or we end up being promoted, we still need this
+         * tracking entry to know to broadcast FINISH to our replicas. */
+        job->state = SLOT_IMPORT_OCCURRING_ON_PRIMARY;
+        return job;
+    }
+
+    serverAssert(source_node != NULL);
+    memcpy(job->source_node_name, source_node->name, CLUSTER_NAMELEN);
+    memcpy(job->target_node_name, server.cluster->myself->name, CLUSTER_NAMELEN);
+
+    job->state = SLOT_IMPORT_WAIT_ACK;
+    job->client = c;
+    job->client->slot_migration_job = job;
+
+    /* We treat slot imports like primaries. Primaries are expected to have a
+     * dedicated query buffer and allocated replication data.
+     *
+     * We also backfill this job's establish command (which would have been
+     * lost, as we did not have a dedicated query buffer before this point). */
+    initClientReplicationData(job->client);
+    if (!job->client->querybuf) {
+        job->client->querybuf = generateSyncSlotsEstablishCommand(job);
+        job->client->qb_pos = sdslen(job->client->querybuf);
+    }
+    job->client->repl_data->read_reploff = sdslen(job->client->querybuf);
+
     return job;
 }
 
@@ -712,10 +908,31 @@ void clusterUpdateSlotImportsOnOwnershipChange(void) {
         if (job->type != SLOT_MIGRATION_IMPORT) continue;
         if (!isSlotMigrationJobInProgress(job)) continue;
         if (!nodeIsPrimary(server.cluster->myself)) {
-            finishSlotMigrationJob(job, SLOT_MIGRATION_JOB_FAILED,
-                                   "I was demoted to a replica");
+            /* Performing the cleanup once we are demoted would cause desync
+             * with the primary. Instead, we reset the job (closing the outgoing
+             * client) and leave the job in "occurring on primary" state to
+             * track that the replication stream had a slot import ongoing at
+             * the last point we were aware of. Once promotion completes, there
+             * are two possible scenarios:
+             *
+             * 1) If the new primary is fully caught up, it will cancel the slot
+             *    import upon promotion.
+             * 2) If the new primary is not caught up and is unaware of the
+             *    import, we will need to full resync anyways, which will remove
+             *    this tracking job.
+             */
+            if (job->state != SLOT_IMPORT_OCCURRING_ON_PRIMARY) {
+                updateSlotMigrationJobState(job, SLOT_IMPORT_OCCURRING_ON_PRIMARY);
+                job->is_tracking_only = true;
+                /* Close the client, but first unlink this migration to prevent it from being
+                 * treated as a slot migration client from here on (e.g. preventing proxying
+                 * of any pending commands to our old replicas). */
+                job->client->slot_migration_job = NULL;
+                resetSlotMigrationJob(job);
+            }
             continue;
         }
+        if (strlen(job->source_node_name) == 0) continue;
         clusterNode *n = getClusterNodeBySlotRanges(job->slot_ranges, NULL);
         if (n && !memcmp(n->name, job->source_node_name, CLUSTER_NAMELEN)) continue;
         if (n == server.cluster->myself) {
@@ -737,15 +954,93 @@ void clusterHandleFlushDuringSlotMigration(void) {
     while ((ln = listNext(&li))) {
         slotMigrationJob *job = (slotMigrationJob *)ln->value;
         if (!isSlotMigrationJobInProgress(job)) continue;
-        /* Note that if we are exporting, we don't send a FAIL message, so the
-         * target should reconnect and complete the migration shortly after,
-         * since we now have no data.
-         *
-         * If we are importing, we fail the migration and expect the operator to
-         * retry. */
-        finishSlotMigrationJob(job, SLOT_MIGRATION_JOB_FAILED,
-                               "Data was flushed");
+        /* Since the data is now empty, the operator should retry and the next
+         * attempt will complete quickly. */
+        finishSlotMigrationJob(job, SLOT_MIGRATION_JOB_FAILED, "Data was flushed");
     }
+}
+
+/* As the final step of a slot import, once all cleanup is done (if needed), we
+ * ensure that replicas track the state transition through propagating SYNCSLOTS
+ * FINISH with the final state.
+ *
+ * Also note, we propagate to AOF as well in this function, allowing us to know
+ * the latest slot import states after restoring from just AOF. */
+void propagateSyncSlotsFinish(slotMigrationJob *job) {
+    /* CLUSTER SYNCSLOTS FINISH STATE <state> NAME <name> [MESSAGE <message>] */
+    robj *name_obj = NULL, *message_obj = NULL;
+    int argc = job->status_msg ? 9 : 7;
+    robj *argv[argc];
+    argv[0] = shared.cluster;
+    argv[1] = shared.syncslots;
+    argv[2] = shared.finish;
+    argv[3] = shared.state;
+    if (job->state == SLOT_MIGRATION_JOB_SUCCESS) {
+        argv[4] = shared.success;
+    } else {
+        argv[4] = shared.failed;
+    }
+    argv[5] = shared.name;
+    name_obj = createStringObject(job->name, CLUSTER_NAMELEN);
+    argv[6] = name_obj;
+    if (job->status_msg) {
+        argv[7] = shared.message;
+        message_obj = createStringObject(job->status_msg, sdslen(job->status_msg));
+        argv[8] = message_obj;
+    }
+
+    /* Perform the propagation. Notably, we may not already be in an execution
+     * unit (cron, beforeSleep). */
+    enterExecutionUnit(1, 0);
+    alsoPropagate(-1, argv, argc, PROPAGATE_REPL | PROPAGATE_AOF, -1);
+    exitExecutionUnit();
+    postExecutionUnitOperations();
+
+    if (name_obj) decrRefCount(name_obj);
+    if (message_obj) decrRefCount(message_obj);
+}
+
+void cleanupSlotImportsWithReason(char *reason) {
+    if (!server.cluster_enabled || !server.cluster) return;
+    listIter li;
+    listNode *ln = NULL;
+    listRewind(server.cluster->slot_migration_jobs, &li);
+    while ((ln = listNext(&li)) != NULL) {
+        slotMigrationJob *job = (slotMigrationJob *)ln->value;
+        if (job->type != SLOT_MIGRATION_IMPORT) continue;
+        if (!isSlotMigrationJobInProgress(job)) continue;
+        finishSlotMigrationJob(job, SLOT_MIGRATION_JOB_FAILED, reason);
+    }
+}
+
+/* Cleanup all active slot imports on becoming primary. Notably, this primary
+ * will perform any necessary key deletions in the importing slots, and only
+ * afterwards will it send a FINISH notification to its replicas. */
+void clusterCleanSlotImportsOnPromotion(void) {
+    cleanupSlotImportsWithReason("A failover occurred during slot import");
+}
+
+/* Cleanup all active imports on resyncing with a primary. */
+void clusterCleanSlotImportsOnFullSync(void) {
+    cleanupSlotImportsWithReason("Full resynchronization occurred");
+}
+
+/* Remove all slot migrations in anticipation for a load. */
+void clusterCleanSlotImportsBeforeLoad(void) {
+    /* Fail them first for a clean error message in the log */
+    cleanupSlotImportsWithReason("A new RDB is being loaded");
+    serverLog(LL_NOTICE, "Cleaning slot migration log in anticipation of a load operation.");
+    /* Also cleanup all the slot migrations so that we have a clean state. */
+    clusterCleanupSlotMigrationLog(0);
+}
+
+/* Cleanup all active imports after reloading from disk, if I am a primary. */
+void clusterCleanSlotImportsAfterLoad(void) {
+    /* Only primaries should clean up slot imports when loading. Replicas may
+     * need to know about previously ongoing slot imports in order to properly
+     * PSYNC with primaries. */
+    if (!clusterNodeIsPrimary(server.cluster->myself)) return;
+    cleanupSlotImportsWithReason("Process restarted");
 }
 
 /* ---------------------------------- SOURCE -----------------------------------
@@ -852,22 +1147,7 @@ bool clusterSlotFailoverGranted(int slot) {
  * source will attempt to migrate the slot ranges to the specified target
  * node. */
 void clusterCommandMigrateSlots(client *c) {
-    if (moduleVerifyAllAllowAtomicSlotMigrationOrReply(c) == C_ERR) {
-        return;
-    }
-    if (!nodeIsPrimary(server.cluster->myself)) {
-        addReplyError(c, "Slot migration can only be used on primary nodes.");
-        return;
-    }
-
-    if (isAnySlotInManualImportingState()) {
-        addReplyError(c, "Slots are being manually imported");
-        return;
-    }
-    if (isAnySlotInManualMigratingState()) {
-        addReplyError(c, "Slots are being manually migrated");
-        return;
-    }
+    if (validateSlotMigrationCanStartOrReply(c) == C_ERR) return;
 
     int curr_index = 2;
     list *new_slot_migrations = listCreate();
@@ -1116,14 +1396,14 @@ void initSlotExportJobClient(slotMigrationJob *job) {
 /* Generate and store the SYNCSLOTS ESTABLISH command to send to the target for
  * the job. */
 sds generateSyncSlotsEstablishCommand(slotMigrationJob *job) {
-    serverAssert(job->type == SLOT_MIGRATION_EXPORT);
+    serverAssert(strlen(job->source_node_name) > 0);
     sds result = sdscatprintf(sdsempty(),
                               "*%ld\r\n$7\r\nCLUSTER\r\n$9\r\nSYNCSLOTS\r\n"
                               "$9\r\nESTABLISH\r\n$6\r\nSOURCE\r\n$40\r\n"
                               "%.40s\r\n$4\r\nNAME\r\n$40\r\n%.40s\r\n"
                               "$10\r\nSLOTSRANGE\r\n",
                               8 + listLength(job->slot_ranges) * 2,
-                              server.cluster->myself->name,
+                              job->source_node_name,
                               job->name);
     listIter li;
     listNode *ln;
@@ -1661,8 +1941,9 @@ void slotMigrationJobReadEstablishResponse(connection *conn) {
 /* Updates the associated status message for the job, which will be seen in
  * CLUSTER GETSLOTMIGRATIONS. */
 void updateSlotMigrationJobStatusMessage(slotMigrationJob *job, char *message) {
-    if (job->status_msg) sdsfree(job->status_msg);
+    sds old_status = job->status_msg;
     job->status_msg = sdsnew(message);
+    if (old_status) sdsfree(old_status);
 }
 
 /* proceedWithSlotMigration contains the main logic for driving the slot
@@ -1695,11 +1976,14 @@ void proceedWithSlotMigration(slotMigrationJob *job) {
                 finishSlotMigrationJob(job, SLOT_MIGRATION_JOB_SUCCESS, NULL);
             }
             return;
-        case SLOT_IMPORT_FINISHED_WAITING_TO_CLEANUP:
+        case SLOT_IMPORT_FINISHED_CLEANING_UP:
+            serverLog(LL_NOTICE, "Cleaning up slot migration %s after %s", job->description,
+                      slotMigrationJobStateToString(job->post_cleanup_state));
             delKeysNotOwnedByMyself(job->slot_ranges);
-            setSlotImportingStateInAllDbs(job->slot_ranges, 0);
-            updateSlotMigrationJobState(job, job->post_cleanup_state);
-            fireModuleSlotMigrationEvent(job, VALKEYMODULE_SUBEVENT_ATOMIC_SLOT_MIGRATION_IMPORT_ABORTED);
+            finishSlotMigrationJob(job, job->post_cleanup_state, job->status_msg);
+            return;
+        case SLOT_IMPORT_OCCURRING_ON_PRIMARY:
+            /* Waiting for the primary to inform us of the result */
             return;
 
         /* Exporting states */
@@ -1898,7 +2182,8 @@ const char *slotMigrationJobStateToString(slotMigrationJobState state) {
     case SLOT_IMPORT_WAITING_FOR_PAUSED: return "waiting-for-paused";
     case SLOT_IMPORT_FAILOVER_REQUESTED: return "failover-requested";
     case SLOT_IMPORT_FAILOVER_GRANTED: return "failover-granted";
-    case SLOT_IMPORT_FINISHED_WAITING_TO_CLEANUP: return "cleaning-up";
+    case SLOT_IMPORT_FINISHED_CLEANING_UP: return "cleaning-up";
+    case SLOT_IMPORT_OCCURRING_ON_PRIMARY: return "occurring-on-primary";
 
     case SLOT_EXPORT_CONNECTING: return "connecting";
     case SLOT_EXPORT_SEND_AUTH: return "sending-auth-command";
@@ -1920,29 +2205,32 @@ const char *slotMigrationJobStateToString(slotMigrationJobState state) {
     return "unknown";
 }
 
-sds generateSlotMigrationJobDescription(slotMigrationJob *job,
-                                        clusterNode *node) {
-    char *other_node_desc =
-        job->type == SLOT_MIGRATION_EXPORT ? "target_node" : "source_node";
-    if (sdslen(node->human_nodename) > 0) {
+sds generateSlotMigrationJobDescription(slotMigrationJob *job, clusterNode *other_node) {
+    char *other_node_name;
+    char *other_node_human_name = NULL;
+    if (other_node) {
+        other_node_name = other_node->name;
+        if (other_node->human_nodename && sdslen(other_node->human_nodename) > 0) {
+            other_node_human_name = other_node->human_nodename;
+        }
+    } else {
+        other_node_name = "unknown";
+    }
+    char *job_type_str = job->type == SLOT_MIGRATION_EXPORT ? "export" : "import";
+    char *other_node_desc = job->type == SLOT_MIGRATION_EXPORT ? "target_node" : "source_node";
+    if (other_node_human_name) {
         return sdscatprintf(sdsempty(),
-                            "{name: %.40s, operation: %s, %s_id: %.40s, "
-                            "%s_human_name: %s, slots: %s}",
+                            "{name: %.40s, operation: %s, %s_id: %.40s, %s_human_name: %s, slots: %s}",
                             job->name,
-                            job->type == SLOT_MIGRATION_EXPORT
-                                ? "export"
-                                : "import",
-                            other_node_desc, node->name, other_node_desc,
-                            node->human_nodename, job->slot_ranges_str);
+                            job_type_str,
+                            other_node_desc, other_node_name, other_node_desc,
+                            other_node_human_name, job->slot_ranges_str);
     } else {
         return sdscatprintf(sdsempty(),
-                            "{name: %.40s, operation: %s, %s_id: %.40s, "
-                            "slots: %s}",
+                            "{name: %.40s, operation: %s, %s_id: %.40s, slots: %s}",
                             job->name,
-                            job->type == SLOT_MIGRATION_EXPORT
-                                ? "export"
-                                : "import",
-                            other_node_desc, node->name,
+                            job_type_str,
+                            other_node_desc, other_node_name,
                             job->slot_ranges_str);
     }
 }
@@ -1971,7 +2259,7 @@ void clusterHandleSlotMigrationErrorResponse(slotMigrationJob *job) {
 /* Callback triggered when a client with a slot migration client is closed. */
 void clusterHandleSlotMigrationClientClose(slotMigrationJob *job) {
     job->client = NULL;
-    if (!isSlotMigrationJobInProgress(job)) {
+    if (!isSlotMigrationJobInProgress(job) || job->is_tracking_only) {
         return;
     }
     serverLog(LL_NOTICE, "Slot migration %s connection lost", job->description);
@@ -2016,12 +2304,7 @@ void clusterHandleSlotMigrationClientOOM(slotMigrationJob *job) {
 void finishSlotMigrationJob(slotMigrationJob *job,
                             slotMigrationJobState state,
                             char *message) {
-    serverLog(state == SLOT_MIGRATION_JOB_FAILED ? LL_WARNING : LL_NOTICE,
-              "Slot migration %s finished. State: %s, Message: %s",
-              job->description,
-              slotMigrationJobStateToString(state), message ? message : "none");
     updateSlotMigrationJobStatusMessage(job, message);
-
     if (job->type == SLOT_MIGRATION_EXPORT) {
         /* If we finish the export, we should not remain paused */
         job->mf_end = 0;
@@ -2030,15 +2313,38 @@ void finishSlotMigrationJob(slotMigrationJob *job,
          * checkChildrenDone. */
         if (job->state == SLOT_EXPORT_SNAPSHOTTING) killSlotMigrationChild();
     }
-    if (job->type == SLOT_MIGRATION_IMPORT &&
-        state != SLOT_MIGRATION_JOB_SUCCESS) {
+
+    /* Imports that are not successful on primaries need to be cleaned up (if
+     * they haven't already). The only exception is if we finish a migration
+     * during our loading job (e.g. during AOF load). SYNCSLOTS FINISH in the
+     * AOF always means the keys have been cleaned up. */
+    bool cleanup_needed = job->type == SLOT_MIGRATION_IMPORT &&
+                          nodeIsPrimary(server.cluster->myself) &&
+                          job->state != SLOT_IMPORT_FINISHED_CLEANING_UP &&
+                          !server.loading &&
+                          state != SLOT_MIGRATION_JOB_SUCCESS;
+    if (cleanup_needed) {
         /* Defer cleanup until beforeSleep. */
         job->post_cleanup_state = state;
-        state = SLOT_IMPORT_FINISHED_WAITING_TO_CLEANUP;
+        state = SLOT_IMPORT_FINISHED_CLEANING_UP;
         clusterDoBeforeSleep(CLUSTER_TODO_HANDLE_SLOT_MIGRATION);
     }
     updateSlotMigrationJobState(job, state);
     resetSlotMigrationJob(job);
+
+    if (cleanup_needed) return; /* Wait to do the rest until after cleanup. */
+
+    serverLog(state == SLOT_MIGRATION_JOB_FAILED ? LL_WARNING : LL_NOTICE,
+              "Slot migration %s finished. State: %s, Message: %s",
+              job->description,
+              slotMigrationJobStateToString(state),
+              job->status_msg ? job->status_msg : "none");
+
+    if (job->type == SLOT_MIGRATION_IMPORT) {
+        setSlotImportingStateInAllDbs(job->slot_ranges, 0);
+        if (nodeIsPrimary(server.cluster->myself)) propagateSyncSlotsFinish(job);
+    }
+
     if (job->type == SLOT_MIGRATION_EXPORT) {
         if (state == SLOT_MIGRATION_JOB_SUCCESS) {
             fireModuleSlotMigrationEvent(job, VALKEYMODULE_SUBEVENT_ATOMIC_SLOT_MIGRATION_EXPORT_COMPLETED);
@@ -2048,8 +2354,9 @@ void finishSlotMigrationJob(slotMigrationJob *job,
     } else {
         if (state == SLOT_MIGRATION_JOB_SUCCESS) {
             fireModuleSlotMigrationEvent(job, VALKEYMODULE_SUBEVENT_ATOMIC_SLOT_MIGRATION_IMPORT_COMPLETED);
+        } else {
+            fireModuleSlotMigrationEvent(job, VALKEYMODULE_SUBEVENT_ATOMIC_SLOT_MIGRATION_IMPORT_ABORTED);
         }
-        /* Aborted notifications will be fired after cleanup completes. */
     }
 }
 
@@ -2065,7 +2372,7 @@ bool isSlotMigrationJobFinished(slotMigrationJob *job) {
  * possible that we are not trying to perform the migration, but we are not
  * finished yet, e.g. if we are still pending cleanup. */
 bool isSlotMigrationJobInProgress(slotMigrationJob *job) {
-    return job->state != SLOT_IMPORT_FINISHED_WAITING_TO_CLEANUP &&
+    return job->state != SLOT_IMPORT_FINISHED_CLEANING_UP &&
            !isSlotMigrationJobFinished(job);
 }
 
@@ -2085,7 +2392,7 @@ void clusterCommandGetSlotMigrations(client *c) {
     listRewind(server.cluster->slot_migration_jobs, &li);
     while ((ln = listNext(&li)) != NULL) {
         slotMigrationJob *job = ln->value;
-        addReplyMapLen(c, 11);
+        addReplyMapLen(c, job->is_tracking_only ? 9 : 11);
         addReplyBulkCString(c, "name");
         addReplyBulkCBuffer(c, job->name, CLUSTER_NAMELEN);
         addReplyBulkCString(c, "operation");
@@ -2094,10 +2401,12 @@ void clusterCommandGetSlotMigrations(client *c) {
                                    : "EXPORT");
         addReplyBulkCString(c, "slot_ranges");
         addReplyBulkCString(c, job->slot_ranges_str);
-        addReplyBulkCString(c, "target_node");
-        addReplyBulkCBuffer(c, job->target_node_name, CLUSTER_NAMELEN);
-        addReplyBulkCString(c, "source_node");
-        addReplyBulkCBuffer(c, job->source_node_name, CLUSTER_NAMELEN);
+        if (!job->is_tracking_only) {
+            addReplyBulkCString(c, "target_node");
+            addReplyBulkCBuffer(c, job->target_node_name, CLUSTER_NAMELEN);
+            addReplyBulkCString(c, "source_node");
+            addReplyBulkCBuffer(c, job->source_node_name, CLUSTER_NAMELEN);
+        }
         addReplyBulkCString(c, "create_time");
         addReplyLongLong(c, job->ctime);
         addReplyBulkCString(c, "last_update_time");
@@ -2131,12 +2440,12 @@ void sendSyncSlotsMessage(slotMigrationJob *job, const char *subcommand) {
 }
 
 /* Cleanup any finished slot migrations when we are over the max log length. */
-void clusterCleanupSlotMigrationLog(void) {
+void clusterCleanupSlotMigrationLog(size_t max_len) {
+    if (!server.cluster_enabled || !server.cluster) return;
     listNode *ln;
     listIter li;
     listRewindTail(server.cluster->slot_migration_jobs, &li);
-    while (server.cluster->slot_migration_jobs->len >
-               server.cluster_slot_migration_log_max_len &&
+    while (server.cluster->slot_migration_jobs->len > max_len &&
            (ln = listNext(&li)) != NULL) {
         slotMigrationJob *job = ln->value;
         if (isSlotMigrationJobFinished(job)) {
@@ -2160,7 +2469,8 @@ bool canSlotMigrationJobSendAck(slotMigrationJob *job) {
            job->state != SLOT_EXPORT_SEND_AUTH &&
            job->state != SLOT_EXPORT_READ_AUTH_RESPONSE &&
            job->state != SLOT_EXPORT_SEND_ESTABLISH &&
-           job->state != SLOT_EXPORT_READ_ESTABLISH_RESPONSE;
+           job->state != SLOT_EXPORT_READ_ESTABLISH_RESPONSE &&
+           job->state != SLOT_IMPORT_OCCURRING_ON_PRIMARY;
 }
 
 /* Cron related tasks run in clusterCron to drive slot migrations. */
@@ -2175,7 +2485,8 @@ void clusterSlotMigrationCron(void) {
         /* Note that after granting failover, we no longer care about the
          * connection timeout, since we will use pause timeout. */
         if (isSlotMigrationJobInProgress(job) &&
-            job->state != SLOT_EXPORT_FAILOVER_GRANTED) {
+            job->state != SLOT_EXPORT_FAILOVER_GRANTED &&
+            job->state != SLOT_IMPORT_OCCURRING_ON_PRIMARY) {
             serverAssert(job->type == SLOT_MIGRATION_EXPORT || job->client);
             /* For imports, last interaction will be set to the last
              * incoming command, as replicated clients don't set
@@ -2198,6 +2509,7 @@ void clusterSlotMigrationCron(void) {
                 continue;
             }
         }
+
         proceedWithSlotMigration(job);
 
         if (isSlotMigrationJobInProgress(job) &&
@@ -2212,7 +2524,7 @@ void clusterSlotMigrationCron(void) {
         }
     }
 
-    clusterCleanupSlotMigrationLog();
+    clusterCleanupSlotMigrationLog(server.cluster_slot_migration_log_max_len);
     slotExportTryUnpause();
 }
 
@@ -2248,45 +2560,59 @@ void clusterCommandSyncSlotsAck(client *c) {
 /* Sent by either the target or the source as a control message for progressing
  * with slot import. */
 void clusterCommandSyncSlots(client *c) {
-    if (c->flag.primary) {
-        /* Since target primaries proxy slot migration source commands to
-         * replicas through chaining replication (direct bytewise copy, not
-         * commandwise propagation), SYNCSLOTS should be ignored from our
-         * primary. */
-        return;
-    }
+    /* Commands used by primary and replica */
     if (!strcasecmp(c->argv[2]->ptr, "establish")) {
         /* CLUSTER SYNCSLOTS ESTABLISH <args> */
         clusterCommandSyncSlotsEstablish(c);
-    } else if (!strcasecmp(c->argv[2]->ptr, "snapshot-eof")) {
+        return;
+    }
+    if (!strcasecmp(c->argv[2]->ptr, "finish")) {
+        /* CLUSTER SYNCSLOTS FINISH <args> */
+        clusterCommandSyncSlotsFinish(c);
+        return;
+    }
+
+    /* Commands only used by primary (ignored on replica) */
+    if (c->flag.primary) return;
+    if (!strcasecmp(c->argv[2]->ptr, "snapshot-eof")) {
         /* CLUSTER SYNCSLOTS SNAPSHOT-EOF */
         clusterCommandSyncSlotsSnapshotEof(c);
-    } else if (!strcasecmp(c->argv[2]->ptr, "request-pause")) {
+        return;
+    }
+    if (!strcasecmp(c->argv[2]->ptr, "request-pause")) {
         /* CLUSTER SYNCSLOTS REQUEST-PAUSE */
         clusterCommandSyncSlotsRequestPause(c);
-    } else if (!strcasecmp(c->argv[2]->ptr, "paused")) {
+        return;
+    }
+    if (!strcasecmp(c->argv[2]->ptr, "paused")) {
         /* CLUSTER SYNCSLOTS PAUSED */
         clusterCommandSyncSlotsPaused(c);
-    } else if (!strcasecmp(c->argv[2]->ptr, "request-failover")) {
+        return;
+    }
+    if (!strcasecmp(c->argv[2]->ptr, "request-failover")) {
         /* CLUSTER SYNCSLOTS REQUEST-FAILOVER */
         clusterCommandSyncSlotsRequestFailover(c);
-    } else if (!strcasecmp(c->argv[2]->ptr, "failover-granted")) {
+        return;
+    }
+    if (!strcasecmp(c->argv[2]->ptr, "failover-granted")) {
         /* CLUSTER SYNCSLOTS FAILOVER-GRANTED */
         clusterCommandSyncSlotsFailoverGranted(c);
-    } else if (!strcasecmp(c->argv[2]->ptr, "ack")) {
+        return;
+    }
+    if (!strcasecmp(c->argv[2]->ptr, "ack")) {
         /* CLUSTER SYNCSLOTS ACK */
         clusterCommandSyncSlotsAck(c);
-    } else {
-        if (c->slot_migration_job &&
-            isSlotMigrationJobInProgress(c->slot_migration_job)) {
-            serverLog(LL_WARNING, "Received unknown SYNCSLOTS subcommand from "
-                                  "slot migration %s. Failing the migration.",
-                      c->slot_migration_job->description);
-            finishSlotMigrationJob(c->slot_migration_job,
-                                   SLOT_MIGRATION_JOB_FAILED,
-                                   "Unknown SYNCSLOTS subcommand used");
-            return;
-        }
-        addReplyErrorObject(c, shared.syntaxerr);
+        return;
     }
+    if (c->slot_migration_job &&
+        isSlotMigrationJobInProgress(c->slot_migration_job)) {
+        serverLog(LL_WARNING, "Received unknown SYNCSLOTS subcommand from "
+                              "slot migration %s. Failing the migration.",
+                  c->slot_migration_job->description);
+        finishSlotMigrationJob(c->slot_migration_job,
+                               SLOT_MIGRATION_JOB_FAILED,
+                               "Unknown SYNCSLOTS subcommand used");
+        return;
+    }
+    addReplyErrorObject(c, shared.syntaxerr);
 }

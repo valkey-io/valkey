@@ -2151,6 +2151,8 @@ void createSharedObjects(void) {
     shared.persist = createSharedString("PERSIST");
     shared.set = createSharedString("SET");
     shared.eval = createSharedString("EVAL");
+    shared.cluster = createSharedString("CLUSTER");
+    shared.syncslots = createSharedString("SYNCSLOTS");
 
     /* Shared command argument */
     shared.left = createSharedString("left");
@@ -2174,6 +2176,12 @@ void createSharedObjects(void) {
     shared.special_equals = createSharedString("=");
     shared.redacted = createSharedString("(redacted)");
     shared.fields = createSharedString("FIELDS");
+    shared.finish = createSharedString("FINISH");
+    shared.state = createSharedString("STATE");
+    shared.success = createSharedString("SUCCESS");
+    shared.failed = createSharedString("FAILED");
+    shared.name = createSharedString("NAME");
+    shared.message = createSharedString("MESSAGE");
 
     for (j = 0; j < OBJ_SHARED_INTEGERS; j++) {
         shared.integers[j] = makeObjectShared(createObject(OBJ_STRING, (void *)(long)j));
@@ -3582,8 +3590,15 @@ void alsoPropagate(int dbid, robj **argv, int argc, int target, int slot) {
     if (!shouldPropagate(target)) return;
 
     /* Don't propagate commands on slot migration clients, these will be proxied
-     * in replicationFeedStreamFromPrimaryStream() */
-    if (server.current_client != NULL && server.current_client->slot_migration_job) return;
+     * in replicationFeedStreamFromPrimaryStream().
+     *
+     * However, if we need to propagate to AOF, we should still do that. */
+    bool propagate_aof = (target & PROPAGATE_AOF) && server.aof_state != AOF_OFF;
+    if (server.current_client != NULL && server.current_client->slot_migration_job) {
+        if (!propagate_aof) return;
+        /* Disable propagation to replication (just do the AOF) */
+        target &= ~PROPAGATE_REPL;
+    }
 
     argvcopy = zmalloc(sizeof(robj *) * argc);
     for (j = 0; j < argc; j++) {
@@ -4484,10 +4499,10 @@ int processCommand(client *c) {
         return C_OK;
     }
 
-    /* If the server is paused, block the client until
-     * the pause has ended. Replicas are never paused. */
-    if (!c->flag.replica && ((isPausedActions(PAUSE_ACTION_CLIENT_ALL)) ||
-                             ((isPausedActions(PAUSE_ACTION_CLIENT_WRITE)) && is_may_replicate_command))) {
+    /* If the server is paused, block the client until the pause has ended. Replicas and slot
+     * export clients are never paused to allow failover/slot migration to succeed. */
+    if (!c->flag.replica && (!c->slot_migration_job || isImportSlotMigrationJob(c->slot_migration_job)) &&
+        ((isPausedActions(PAUSE_ACTION_CLIENT_ALL)) || ((isPausedActions(PAUSE_ACTION_CLIENT_WRITE)) && is_may_replicate_command))) {
         blockPostponeClient(c);
         return C_OK;
     }

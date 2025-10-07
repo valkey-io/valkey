@@ -11,6 +11,36 @@ Upgrade urgency levels:
 | CRITICAL | There is a critical bug affecting MOST USERS. Upgrade ASAP.         |
 | SECURITY | There are security fixes in the release.                            |
 
+Valkey 9.0.0-rc3 - October 7, 2025
+-------------------------------------
+
+Upgrade urgency LOW: This is the third release candidate of Valkey 9.0.0,
+focused on stability, bug fixes, and incremental improvements.
+
+### Security fixes
+* (CVE-2025-49844) A Lua script may lead to remote code execution
+* (CVE-2025-46817) A Lua script may lead to integer overflow and potential RCE
+* (CVE-2025-46818) A Lua script can be executed in the context of another user
+* (CVE-2025-46819) LUA out-of-bound read
+
+### Performance/Efficiency
+* Optimize skiplist random level generation logic (#2631)
+
+## Cluster and Replication
+* Redirect blocked clients after failover (#2329)
+* Prevent exposure of importing keys on replicas during atomic slot migration (#2635)
+* Add slot migration client flags and module context flags (#2639)
+* Introduce SYNCSLOTS CAPA for forwards compatibility (#2688)
+
+## Bug Fixes
+* Fix atomic slot migration snapshot never proceeding with hz 1 (#2636)
+* Defrag if slab 1/8 full to fix defrag didn't stop issue (#2656)
+* Fix module key memory usage accounting (#2661)
+* Fix dual rdb channel connection error log (#2658)
+
+## Commands
+* Implement a lolwut for version 9 (#2646)
+
 Valkey 9.0.0-rc2 - September 23, 2025
 -------------------------------------
 

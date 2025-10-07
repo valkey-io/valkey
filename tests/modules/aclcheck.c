@@ -92,7 +92,11 @@ int rm_call_aclcheck_context_user_cmd(ValkeyModuleCtx *ctx, ValkeyModuleString *
     if (ret != 0) {
         ValkeyModule_ReplyWithError(ctx, "DENIED CMD");
         /* Add entry to ACL log */
+        ValkeyModuleString *user_name = ValkeyModule_GetCurrentUserName(ctx);
+        ValkeyModuleUser *user = ValkeyModule_GetModuleUserFromUserName(user_name);
         ValkeyModule_ACLAddLogEntry(ctx, user, argv[1], VALKEYMODULE_ACL_LOG_CMD);
+        ValkeyModule_FreeModuleUser(user);
+        ValkeyModule_FreeString(ctx, user_name);
         return VALKEYMODULE_OK;
     }
 

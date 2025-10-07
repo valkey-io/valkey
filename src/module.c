@@ -10005,12 +10005,6 @@ int VM_ACLCheckCommandPermissions(ValkeyModuleUser *user, ValkeyModuleString **a
 int VM_ACLCheckCommandPermissionsForContextUser(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     serverAssert(ctx != NULL && ctx->client != NULL && ctx->client->user != NULL);
 
-    /* If the user is not authenticated, we cannot check permissions. */
-    if (ctx->client->user == DefaultUser) {
-        errno = EACCES;
-        return VALKEYMODULE_ERR;
-    }
-
     ValkeyModuleUser user = {
         .user = ctx->client->user,
         .free_user = 0,

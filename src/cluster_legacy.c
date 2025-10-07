@@ -6385,6 +6385,9 @@ int verifyClusterConfigWithData(void) {
      * completely depend on the replication stream. */
     if (nodeIsReplica(myself)) return C_OK;
 
+    /* Allow slot migrations to clean up after reloading */
+    clusterCleanSlotImportsAfterLoad();
+
     /* Check that all the slots we see populated memory have a corresponding
      * entry in the cluster table. Otherwise fix the table. */
     for (j = 0; j < CLUSTER_SLOTS; j++) {
@@ -6464,7 +6467,7 @@ static void clusterSetPrimary(clusterNode *n, int closeSlots, int full_sync_requ
     removeAllNotOwnedShardChannelSubscriptions();
     resetManualFailover();
 
-    /* Becoming a replica cancels all in progress imports and exports */
+    /* Perform needed slot migration state transitions */
     clusterUpdateSlotExportsOnOwnershipChange();
     clusterUpdateSlotImportsOnOwnershipChange();
 

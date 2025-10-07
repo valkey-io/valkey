@@ -671,6 +671,14 @@ long long emptyData(int dbnum, int flags, void(callback)(hashtable *)) {
      * there. */
     signalFlushedDb(dbnum, async);
 
+    if (clusterIsAnySlotImporting() || clusterIsAnySlotExporting()) {
+        /* On flush, in progress migrations will be cancelled, and should be
+         * retried by operators. We also may emptyData when reloading an RDB, in
+         * which case we will remove active slot imports. Replicas will get a
+         * new set of slot imports from their primary. */
+        clusterHandleFlushDuringSlotMigration();
+    }
+
     /* Empty the database structure. */
     removed = emptyDbStructure(server.db, dbnum, async, callback);
 
@@ -825,12 +833,6 @@ void flushdbCommand(client *c) {
 
     if (getFlushCommandFlags(c, &flags) == C_ERR) return;
 
-    if (clusterIsAnySlotImporting() || clusterIsAnySlotExporting()) {
-        /* In progress migrations will be cancelled, and should be retried by
-         * operators. */
-        clusterHandleFlushDuringSlotMigration();
-    }
-
     /* flushdb should not flush the functions */
     server.dirty += emptyData(c->db->id, flags | EMPTYDB_NOFUNCTIONS, NULL);
 
@@ -854,12 +856,6 @@ void flushdbCommand(client *c) {
 void flushallCommand(client *c) {
     int flags;
     if (getFlushCommandFlags(c, &flags) == C_ERR) return;
-
-    if (clusterIsAnySlotImporting() || clusterIsAnySlotExporting()) {
-        /* In progress migrations will be cancelled, and should be retried by
-         * operators. */
-        clusterHandleFlushDuringSlotMigration();
-    }
 
     /* flushall should not flush the functions */
     flushAllDataAndResetRDB(flags | EMPTYDB_NOFUNCTIONS);

@@ -131,6 +131,7 @@ enum RdbType {
 
 /* Special RDB opcodes (saved/loaded with rdbSaveType/rdbLoadType).
  * These are special RDB types, but they start from 255 and grow down. */
+#define RDB_OPCODE_SLOT_IMPORT 243     /* Slot import state. */
 #define RDB_OPCODE_SLOT_INFO 244       /* Foreign slot info, safe to ignore. */
 #define RDB_OPCODE_FUNCTION2 245       /* function library data */
 #define RDB_OPCODE_FUNCTION_PRE_GA 246 /* old function library data for 7.0 rc1 and rc2 */

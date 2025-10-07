@@ -93,7 +93,7 @@ start_server {tags {"introspection"}} {
         set id3 [$c3 client id]
 
         # Filter by multiple IDs and TYPE
-        set cl [split [r client list id $id3 id $id1 $id2 type normal] "\r\n"]
+        set cl [split [r client list id $id1 $id2 type normal] "\r\n"]
 
         # Assert only c1 and c2 are present and match TYPE=N (NORMAL)
         foreach line $cl {

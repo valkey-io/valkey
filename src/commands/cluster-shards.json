@@ -89,7 +89,7 @@
                         }
                     },
                     "id": {
-                        "description": "The shard ID.",
+                        "description": "A unique shard identifier.",
                         "type": "string"
                     }
                 }

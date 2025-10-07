@@ -385,9 +385,11 @@ start_server {tags {"other"}} {
             set info [r info server]
             assert_match "*redis_mode:*" $info
             assert_no_match "*server_mode:*" $info
-            set lolwut_output [r lolwut 5]
+            set lolwut_output [r lolwut version 5]
             assert_match {*Redis ver.*} $lolwut_output
-            set lolwut_output [r lolwut 6]
+            set lolwut_output [r lolwut version 6]
+            assert_match {*Redis ver.*} $lolwut_output
+            set lolwut_output [r lolwut version 9]
             assert_match {*Redis ver.*} $lolwut_output
             set lolwut_output [r lolwut]
             assert_match {*Redis ver.*} $lolwut_output
@@ -400,9 +402,11 @@ start_server {tags {"other"}} {
             assert_match "*server_mode:*" $info
             set lolwut_output [r lolwut]
             assert_match {*Valkey ver.*} $lolwut_output
-            set lolwut_output [r lolwut 5]
+            set lolwut_output [r lolwut version 5]
             assert_match {*Valkey ver.*} $lolwut_output
-            set lolwut_output [r lolwut 6]
+            set lolwut_output [r lolwut version 6]
+            assert_match {*Valkey ver.*} $lolwut_output
+            set lolwut_output [r lolwut version 9]
             assert_match {*Valkey ver.*} $lolwut_output
         }
     }

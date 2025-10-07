@@ -88,7 +88,7 @@ int rm_call_aclcheck_context_user_cmd(ValkeyModuleCtx *ctx, ValkeyModuleString *
     }
 
     /* Check that the command can be executed */
-    int ret = ValkeyModule_ACLCheckCommandPermissionsForContextUser(ctx, argv + 1, argc - 1);
+    int ret = ValkeyModule_ACLCheckCommandPermissionsForCurrentUser(ctx, argv + 1, argc - 1);
     if (ret != 0) {
         ValkeyModule_ReplyWithError(ctx, "DENIED CMD");
         /* Add entry to ACL log */

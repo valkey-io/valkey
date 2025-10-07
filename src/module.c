@@ -10002,7 +10002,7 @@ int VM_ACLCheckCommandPermissions(ValkeyModuleUser *user, ValkeyModuleString **a
  * * ENOENT: Specified command does not exist.
  * * EACCES: Command cannot be executed, according to ACL rules; or the user is not authenticated.
  */
-int VM_ACLCheckCommandPermissionsForContextUser(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+int VM_ACLCheckCommandPermissionsForCurrentUser(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     serverAssert(ctx != NULL && ctx->client != NULL && ctx->client->user != NULL);
 
     ValkeyModuleUser user = {
@@ -14350,7 +14350,7 @@ void moduleRegisterCoreAPI(void) {
     REGISTER_API(GetCurrentUserName);
     REGISTER_API(GetModuleUserFromUserName);
     REGISTER_API(ACLCheckCommandPermissions);
-    REGISTER_API(ACLCheckCommandPermissionsForContextUser);
+    REGISTER_API(ACLCheckCommandPermissionsForCurrentUser);
     REGISTER_API(ACLCheckKeyPermissions);
     REGISTER_API(ACLCheckChannelPermissions);
     REGISTER_API(ACLAddLogEntry);

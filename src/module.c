@@ -70,6 +70,7 @@
 #include "io_threads.h"
 #include "scripting_engine.h"
 #include "cluster_migrateslots.h"
+#include <cerrno>
 #include <dlfcn.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
@@ -10001,11 +10002,15 @@ int VM_ACLCheckCommandPermissions(ValkeyModuleUser *user, ValkeyModuleString **a
  *
  * * ENOENT: Specified command does not exist.
  * * EACCES: Command cannot be executed, according to ACL rules; or the user is not authenticated.
- * * EINVAL: There is no user associated with this module context.
+ * * EINVAL: Invalid module context.
+ * * ENOTSUP: There is no user associated with this module context.
  */
 int VM_ACLCheckCommandPermissionsForCurrentUser(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
-    if (ctx == NULL || (ctx->user == NULL && (ctx->client == NULL || ctx->client->user == NULL))) {
+    if (ctx == NULL) {
         errno = EINVAL;
+        return VALKEYMODULE_ERR;
+    } else if (ctx->user == NULL && (ctx->client == NULL || ctx->client->user == NULL)) {
+        errno = ENOTSUP;
         return VALKEYMODULE_ERR;
     }
 

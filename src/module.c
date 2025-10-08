@@ -70,7 +70,6 @@
 #include "io_threads.h"
 #include "scripting_engine.h"
 #include "cluster_migrateslots.h"
-#include <cerrno>
 #include <dlfcn.h>
 #include <sys/stat.h>
 #include <sys/wait.h>

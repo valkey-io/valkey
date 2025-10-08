@@ -130,9 +130,9 @@ int rm_call_aclcheck_cmd(ValkeyModuleCtx *ctx, ValkeyModuleUser *user, ValkeyMod
     const char* cmd = ValkeyModule_StringPtrLen(argv[1], NULL);
 
     ValkeyModuleCallReply* rep = ValkeyModule_Call(ctx, cmd, "v", argv + 2, (size_t)argc - 2);
-    if(!rep){
+    if (!rep) {
         ValkeyModule_ReplyWithError(ctx, "NULL reply returned");
-    }else{
+    } else {
         ValkeyModule_ReplyWithCallReply(ctx, rep);
         ValkeyModule_FreeCallReply(rep);
     }

@@ -448,8 +448,8 @@ start_server {tags {"introspection"}} {
         set id3 [$c3 client id]
 
         set result [r client list id $id1 id $id2 id $id3]
-        assert_no_match "*id=$id1*" $result
-        assert_no_match "*id=$id2*" $result
+        assert_match "*id=$id1*" $result
+        assert_match "*id=$id2*" $result
         assert_match "*id=$id3*" $result
 
         catch {$c1 close}
@@ -468,7 +468,7 @@ start_server {tags {"introspection"}} {
         set id2 [$c2 client id]
         set id3 [$c3 client id]
 
-        assert_equal [r client kill id $id1 id $id2 id $id3] 1
+        assert_equal [r client kill id $id1 id $id2 id $id3] 3
     }
 
     test {CLIENT LIST with multiple negative filters} {

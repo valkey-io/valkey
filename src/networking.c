@@ -4577,6 +4577,10 @@ static int parseClientFiltersOrReply(client *c, int index, clientFilter *filter)
             filter->idle = idle_time;
             index += 2;
         } else if (!strcasecmp(c->argv[index]->ptr, "flags") && moreargs) {
+            if (filter->flags) {
+                sdsfree(filter->flags);
+                filter->flags = NULL;
+            }
             filter->flags = sdsnew(c->argv[index + 1]->ptr);
             if (validateClientFlagFilter(filter->flags) == C_ERR) {
                 addReplyErrorFormat(c, "Unknown flags found in the provided filter: %s", filter->flags);
@@ -4584,6 +4588,10 @@ static int parseClientFiltersOrReply(client *c, int index, clientFilter *filter)
             }
             index += 2;
         } else if (!strcasecmp(c->argv[index]->ptr, "not-flags") && moreargs) {
+            if (filter->not_flags) {
+                sdsfree(filter->not_flags);
+                filter->not_flags = NULL;
+            }
             filter->not_flags = sdsnew(c->argv[index + 1]->ptr);
             if (validateClientFlagFilter(filter->not_flags) == C_ERR) {
                 addReplyErrorFormat(c, "Unknown flags found in the NOT-FLAGS filter: %s", filter->not_flags);
@@ -4597,18 +4605,34 @@ static int parseClientFiltersOrReply(client *c, int index, clientFilter *filter)
             filter->not_name = c->argv[index + 1]->ptr;
             index += 2;
         } else if (!strcasecmp(c->argv[index]->ptr, "lib-name") && moreargs) {
+            if (filter->lib_name) {
+                decrRefCount(filter->lib_name);
+                filter->lib_name = NULL;
+            }
             filter->lib_name = c->argv[index + 1];
             incrRefCount(filter->lib_name);
             index += 2;
         } else if (!strcasecmp(c->argv[index]->ptr, "not-lib-name") && moreargs) {
+            if (filter->not_lib_name) {
+                decrRefCount(filter->not_lib_name);
+                filter->not_lib_name = NULL;
+            }
             filter->not_lib_name = c->argv[index + 1];
             incrRefCount(filter->not_lib_name);
             index += 2;
         } else if (!strcasecmp(c->argv[index]->ptr, "lib-ver") && moreargs) {
+            if (filter->lib_ver) {
+                decrRefCount(filter->lib_ver);
+                filter->lib_ver = NULL;
+            }
             filter->lib_ver = c->argv[index + 1];
             incrRefCount(filter->lib_ver);
             index += 2;
         } else if (!strcasecmp(c->argv[index]->ptr, "not-lib-ver") && moreargs) {
+            if (filter->not_lib_ver) {
+                decrRefCount(filter->not_lib_ver);
+                filter->not_lib_ver = NULL;
+            }
             filter->not_lib_ver = c->argv[index + 1];
             incrRefCount(filter->not_lib_ver);
             index += 2;
@@ -4635,6 +4659,10 @@ static int parseClientFiltersOrReply(client *c, int index, clientFilter *filter)
             filter->not_db_number = not_db_id;
             index += 2;
         } else if (!strcasecmp(c->argv[index]->ptr, "capa") && moreargs) {
+            if (filter->capa) {
+                sdsfree(filter->capa);
+                filter->capa = NULL;
+            }
             filter->capa = sdsnew(c->argv[index + 1]->ptr);
             if (validateClientCapaFilter(filter->capa) == C_ERR) {
                 addReplyErrorFormat(c, "Unknown capa found in the provided filter: %s", filter->capa);
@@ -4642,6 +4670,10 @@ static int parseClientFiltersOrReply(client *c, int index, clientFilter *filter)
             }
             index += 2;
         } else if (!strcasecmp(c->argv[index]->ptr, "not-capa") && moreargs) {
+            if (filter->not_capa) {
+                sdsfree(filter->not_capa);
+                filter->not_capa = NULL;
+            }
             filter->not_capa = sdsnew(c->argv[index + 1]->ptr);
             if (validateClientCapaFilter(filter->not_capa) == C_ERR) {
                 addReplyErrorFormat(c, "Unknown capa found in the NOT-CAPA filter: %s", filter->not_capa);
@@ -4649,9 +4681,17 @@ static int parseClientFiltersOrReply(client *c, int index, clientFilter *filter)
             }
             index += 2;
         } else if (!strcasecmp(c->argv[index]->ptr, "ip") && moreargs) {
+            if (filter->ip) {
+                sdsfree(filter->ip);
+                filter->ip = NULL;
+            }
             filter->ip = sdsnew(c->argv[index + 1]->ptr);
             index += 2;
         } else if (!strcasecmp(c->argv[index]->ptr, "not-ip") && moreargs) {
+            if (filter->not_ip) {
+                sdsfree(filter->not_ip);
+                filter->not_ip = NULL;
+            }
             filter->not_ip = sdsnew(c->argv[index + 1]->ptr);
             index += 2;
         } else {
@@ -5016,6 +5056,7 @@ void clientListCommand(client *c) {
         filter.not_type = -1;
         filter.db_number = -1;
         filter.not_db_number = -1;
+
         int i = 2;
 
         if (parseClientFiltersOrReply(c, i, &filter) != C_OK) {

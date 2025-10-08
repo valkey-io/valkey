@@ -46,7 +46,7 @@ jobs:
       - name: Run compatibility tests against ${{ matrix.server.version }}
         run: |
           sudo apt-get install -y tcl8.6 tclx
-          ./runtest --verbose --tags -slow needs:other-server --dump-logs \
+          ./runtest --verbose --tags "-slow needs:other-server" --dump-logs \
             --other-server-path tests/tmp/valkey-${{ matrix.server.version }}-noble-x86_64/bin/valkey-server
 
       - name: Module API tests against ${{ matrix.server.version }}

@@ -10001,9 +10001,19 @@ int VM_ACLCheckCommandPermissions(ValkeyModuleUser *user, ValkeyModuleString **a
  *
  * * ENOENT: Specified command does not exist.
  * * EACCES: Command cannot be executed, according to ACL rules; or the user is not authenticated.
+ * * EINVAL: There is no user associated with this module context.
  */
 int VM_ACLCheckCommandPermissionsForCurrentUser(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
-    serverAssert(ctx != NULL && ctx->client != NULL && ctx->client->user != NULL);
+    if (ctx == NULL || (ctx->user == NULL && (ctx->client == NULL || ctx->client->user == NULL))) {
+        errno = EINVAL;
+        return VALKEYMODULE_ERR;
+    }
+
+    /* If the ctx->user was set by VM_SetContextUser then use that user instead
+     * of the ctx->client->user. */
+    if (ctx->user) {
+        return VM_ACLCheckCommandPermissions((ValkeyModuleUser *)ctx->user, argv, argc);
+    }
 
     ValkeyModuleUser user = {
         .user = ctx->client->user,

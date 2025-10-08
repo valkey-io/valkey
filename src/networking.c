@@ -4458,8 +4458,8 @@ static int parseClientFiltersOrReply(client *c, int index, clientFilter *filter)
 
         if (!strcasecmp(c->argv[index]->ptr, "id")) {
             if (filter->ids == NULL) {
-            /* Initialize the intset for IDs */
-            filter->ids = intsetNew();
+                /* Initialize the intset for IDs */
+                filter->ids = intsetNew();
             }
             index++; /* Move to the first ID after "ID" */
 
@@ -4480,8 +4480,8 @@ static int parseClientFiltersOrReply(client *c, int index, clientFilter *filter)
             }
         } else if (!strcasecmp(c->argv[index]->ptr, "not-id")) {
             if (filter->not_ids == NULL) {
-            /* Initialize the intset for NOT-IDs */
-            filter->not_ids = intsetNew();
+                /* Initialize the intset for NOT-IDs */
+                filter->not_ids = intsetNew();
             }
             index++; /* Move to the first ID after "NOT-ID" */
 

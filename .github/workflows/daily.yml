@@ -947,12 +947,10 @@ jobs:
         run: dnf -y install epel-release
       - name: make
         run: |
-          dnf -y install gcc make procps-ng openssl-devel openssl which /usr/bin/kill /usr/bin/awk
+          dnf -y install gcc make procps-ng which /usr/bin/kill /usr/bin/awk
           make -j SERVER_CFLAGS='-Werror'
       - name: testprep
-        uses: ./.github/actions/rpm-distros-tcl8
-        with:
-          matrix_name: ${{ matrix.name }}
+        run: dnf -y install tcl tcltls
       - name: test
         if: true && !contains(github.event.inputs.skiptests, 'valkey')
         run: ./runtest ${{ github.event_name != 'pull_request' && '--accurate' || '' }} --verbose --dump-logs ${{github.event.inputs.test_args}}
@@ -1018,9 +1016,9 @@ jobs:
           dnf -y install make gcc openssl-devel openssl procps-ng which /usr/bin/kill /usr/bin/awk
           make -j BUILD_TLS=module SERVER_CFLAGS='-Werror'
       - name: testprep
-        uses: ./.github/actions/rpm-distros-tcl8
-        with:
-          matrix_name: ${{ matrix.name }}
+        run: |
+          dnf -y install tcl tcltls
+          ./utils/gen-test-certs.sh
       - name: test
         if: true && !contains(github.event.inputs.skiptests, 'valkey')
         run: |
@@ -1090,9 +1088,9 @@ jobs:
           dnf -y install make gcc openssl-devel openssl procps-ng which /usr/bin/kill /usr/bin/awk
           make -j BUILD_TLS=module SERVER_CFLAGS='-Werror'
       - name: testprep
-        uses: ./.github/actions/rpm-distros-tcl8
-        with:
-          matrix_name: ${{ matrix.name }}
+        run: |
+          dnf -y install tcl tcltls
+          ./utils/gen-test-certs.sh
       - name: test
         if: true && !contains(github.event.inputs.skiptests, 'valkey')
         run: |

@@ -3108,7 +3108,7 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
     } else if (memcmp(buf, "VALKEY", 6) == 0) {
         is_valkey_magic = true;
     } else {
-        serverLog(LL_WARNING, "Wrong signature trying to load DB from file");
+        serverLog(LL_WARNING, "Wrong signature trying to load DB from file: %.9s", buf);
         return C_ERR;
     }
     rdbver = atoi(buf + 6);

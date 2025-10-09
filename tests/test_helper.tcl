@@ -1010,7 +1010,7 @@ proc close_replication_stream {s} {
 proc is_ipv6_available {} {
         if {[catch {
             set server [socket -server ::1 0]
-            set port [lindex [chan configure $server -sockname] 2]
+            set port [lindex [chan configure $server -sockname] 5]
             set client [socket ::1 $port]
             close $server
             close $client

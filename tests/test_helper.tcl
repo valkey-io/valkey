@@ -51,6 +51,7 @@ set ::portcount 8000; # we don't wanna use more than 10000 to avoid collision wi
 set ::traceleaks 0
 set ::valgrind 0
 set ::durable 0
+set ::require_ipv6 0
 set ::tls 0
 set ::io_threads 0
 set ::tls_module 0
@@ -867,6 +868,8 @@ for {set j 0} {$j < [llength $argv]} {incr j} {
     } elseif {$opt eq {--help}} {
         print_help_screen
         exit 0
+    } elseif {$opt eq {--require-ipv6}} {
+        set ::require_ipv6 1
     } else {
         puts "Wrong argument: $opt"
         exit 1
@@ -1001,6 +1004,29 @@ proc close_replication_stream {s} {
     r config set repl-ping-replica-period 10
     return
 }
+
+#IPv6 detection utilities
+#for this detaction: the socket connection on ::1 address
+proc is_ipv6_available {} {
+        if {[catch {
+            set server [socket -server ::1 0]
+            set port [lindex [chan configure $server -sockname] 2]
+            set client [socket ::1 $port]
+            close $server
+            close $client
+            return 1
+    }]} {
+            return 0
+    }
+}
+
+#Check if is required the flag to decide if run the tests or not
+if {!$::require_ipv6 && ![is_ipv6_available]} {
+    lappend ::denytags "ipv6"
+    puts "IPv6 not available on this system, skipping IPv6 tests"
+}
+
+
 
 # With the parallel test running multiple server instances at the same time
 # we need a fast enough computer, otherwise a lot of tests may generate

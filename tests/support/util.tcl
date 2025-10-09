@@ -499,48 +499,6 @@ proc roundFloat f {
     format "%.10g" $f
 }
 
-#IPv6 detection utilities
-#for this detaction there are 3 different attempts
-#1) running ifconfig and filter on 'inet6*::1' 
-#2) netstat -an and filter on '*::1*'
-#3) in the and if both of tham fail, the last is the socket connection on ::1 address
-proc is_ipv6_available {} {
-    if {[catch {exec ifconfig lo0} result] == 0} {
-        if {[string match "*inet6*::1*" $result]} {
-            return 1
-        }
-    }
-    
-    if {[catch {exec netstat -an} result] == 0} {
-        if {[string match "*::1*" $result]} {
-            return 1
-        }
-    }
-    
-    if {[catch {
-        set sock [socket -async ::1 22]
-        close $sock
-        return 1
-    }]} {
-        return 0
-    }
-    
-    return 0
-}
-
-#Check the presence of env variable VALKEY_REQUIRE_IPV6 to decide if run the tests or not
-proc should_skip_ipv6_tests {} {
-    if {[info exists ::env(VALKEY_REQUIRE_IPV6)] && $::env(VALKEY_REQUIRE_IPV6) == "1"} {
-        return 0
-    }
-    
-    if {![is_ipv6_available]} {
-        puts "Warning: IPv6 not available, skipping IPv6 tests"
-        return 1
-    }
-    return 0
-}
-
 set ::last_port_attempted 0
 proc find_available_port {start count} {
     set port [expr $::last_port_attempted + 1]

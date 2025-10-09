@@ -11,9 +11,7 @@ proc fail {msg} {
 }
 
 proc skip {msg} {
-    incr ::num_skipped
-    send_data_packet $::test_server_fd skip "$::cur_test: $msg"
-    error "skip:$msg"
+    error "skipped:$msg"
 }
 
 proc assert {condition} {
@@ -262,14 +260,11 @@ proc test {name code {okpattern undefined} {tags {}}} {
     set test_start_time [clock milliseconds]
     if {[catch {set retval [uplevel 1 $code]} error]} {
         set assertion [string match "assertion:*" $error]
-        set skip [string match "skip:*" $error]
+        set skip [string match "skipped:*" $error]
         if {$skip} {
-            # Test was skipped from within the test code
-            # The skip proc already incremented ::num_skipped and sent the packet
-            # Just return without doing anything else
-            set ::singledb $old_singledb
-            set ::cur_test $prev_test
-            return
+            incr ::num_skipped
+            set msg [string range $error 8 end]
+            send_data_packet $::test_server_fd skip "$::cur_test: $msg"
         } elseif {$assertion || $::durable} {
             # durable prevents the whole tcl test from exiting on an exception.
             # an assertion is handled gracefully anyway.

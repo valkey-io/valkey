@@ -20,6 +20,30 @@ permissions:
   contents: read
 
 jobs:
+  test-ubuntu-latest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - name: make
+        # Fail build if there are warnings
+        # build with TLS just for compilation coverage
+        run: make -j4 all-with-unit-tests SERVER_CFLAGS='-Werror' BUILD_TLS=yes USE_FAST_FLOAT=yes
+      - name: test
+        run: |
+          sudo apt-get install tcl8.6 tclx
+          ./runtest --verbose --tags -slow --dump-logs
+      - name: module api test
+        run: CFLAGS='-Werror' ./runtest-moduleapi --verbose --dump-logs
+      - name: validate commands.def up to date
+        run: |
+          touch src/commands/ping.json
+          make commands.def
+          dirty="$(git diff)"
+          if [[ ! -z "$dirty" ]]; then echo "$dirty"; exit 1; fi
+      - name: unit tests
+        run: |
+          ./src/valkey-unit-tests
+
   test-ubuntu-latest-compatibility:
     runs-on: ubuntu-latest
     strategy:
@@ -53,29 +77,6 @@ jobs:
         run: |
           CFLAGS='-Werror' ./runtest-moduleapi --tags needs:other-server --verbose --dump-logs \
             --other-server-path tests/tmp/valkey-${{ matrix.server.version }}-noble-x86_64/bin/valkey-server
-
-  test-ubuntu-latest-unit-tests:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
-
-      - name: Build Valkey
-        run: make -j4 all-with-unit-tests SERVER_CFLAGS='-Werror' BUILD_TLS=yes USE_FAST_FLOAT=yes
-
-      - name: Unit tests
-        run: ./src/valkey-unit-tests
-
-  command-definition-verification:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
-
-      - name: Validate commands.def up to date
-        run: |
-          touch src/commands/ping.json
-          make commands.def
-          dirty="$(git diff)"
-          if [[ -n "$dirty" ]]; then echo "$dirty"; exit 1; fi
 
   test-ubuntu-latest-cmake:
     runs-on: ubuntu-latest

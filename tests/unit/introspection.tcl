@@ -1,9 +1,4 @@
 start_server {tags {"introspection"}} {
-
-    test "PING dummy" {
-        skip "Not supported"
-    }
-
     test "PING" {
         assert_equal {PONG} [r ping]
         assert_equal {valkey} [r ping valkey]

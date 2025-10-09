@@ -21,18 +21,17 @@ tags {external:skip needs:other-server cluster singledb} {
                 assert [regexp {([0-9]+)\.([0-9]+)\.[0-9]+} $res -> major minor]
                 if {($major < 8) || ($major == 8 && $minor < 1)} {
                     skip "Requires Valkey 8.1 or above"
-                } else {
-                    r config set rdb-version-check relaxed
-                    # Add a replica of the old version to the cluster
-                    r cluster meet $primary_host $primary_port
-                    wait_for_cluster_propagation
-                    r cluster replicate $primary_id
-                    wait_for_cluster_state "ok"
-
-                    # Make sure the primary won't do the auto-failover.
-                    catch {$primary shutdown nosave failover}
-                    verify_log_message -1 "*Unable to perform auto failover on shutdown since there are legacy replicas*" 0
                 }
+                r config set rdb-version-check relaxed
+                # Add a replica of the old version to the cluster
+                r cluster meet $primary_host $primary_port
+                wait_for_cluster_propagation
+                r cluster replicate $primary_id
+                wait_for_cluster_state "ok"
+
+                # Make sure the primary won't do the auto-failover.
+                catch {$primary shutdown nosave failover}
+                verify_log_message -1 "*Unable to perform auto failover on shutdown since there are legacy replicas*" 0
             }
         }
     }

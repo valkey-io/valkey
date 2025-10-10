@@ -359,7 +359,7 @@ void fireModuleSlotMigrationEvent(slotMigrationJob *job, int subevent) {
 
 /* Save the active slot imports to the RDB file. The import job name and the
  * slot ranges are saved. */
-int clusterRDBSaveSlotImports(rio *rdb) {
+int clusterRDBSaveSlotImports(rio *rdb, int rdbver) {
     if (!server.cluster_enabled) return C_OK;
     if (listLength(server.cluster->slot_migration_jobs) == 0) return C_OK;
     listNode *ln;
@@ -371,6 +371,10 @@ int clusterRDBSaveSlotImports(rio *rdb) {
         slotMigrationJob *job = ln->value;
         if (isSlotMigrationJobFinished(job)) continue;
         if (job->type == SLOT_MIGRATION_EXPORT) continue;
+        if (rdbver < 80) {
+            serverLog(LL_WARNING, "Can't store slot migrations in RDB version %d", rdbver);
+            return C_ERR;
+        }
         if (rdbSaveType(rdb, RDB_OPCODE_SLOT_IMPORT) < 0) return C_ERR;
         if (rdbSaveRawString(rdb, (unsigned char *)job->name, CLUSTER_NAMELEN) < 0) return C_ERR;
         if (rdbSaveLen(rdb, listLength(job->slot_ranges)) < 0) return C_ERR;

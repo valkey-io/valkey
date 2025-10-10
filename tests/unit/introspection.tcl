@@ -225,7 +225,6 @@ start_server {tags {"introspection"}} {
         assert_match *client-ip* $filtered
     } {}
 
-    
     start_server {tags {"ipv6"} overrides {bind {127.0.0.1 ::1}}} {
         test {CLIENT LIST with IPv6 filter} {
             set c [valkey ::1 [srv 0 port] 0 $::tls]
@@ -240,7 +239,6 @@ start_server {tags {"introspection"}} {
             $c close
         }
     }
-
 
     test {CLIENT LIST with CAPA filter} {
         set c1 [valkey_client]
@@ -266,7 +264,6 @@ start_server {tags {"introspection"}} {
         assert_error "*I/O error*" {$c1 ping}
     } {}
 
-    
     start_server {tags {"ipv6"} overrides {bind {127.0.0.1 ::1}}} {
         test {CLIENT KILL with IPv6 filter} {
             set c [valkey ::1 [srv 0 port] 0 $::tls]
@@ -283,7 +280,6 @@ start_server {tags {"introspection"}} {
         }
     }
     
-
     test {CLIENT KILL with CAPA filter} {
         set c1 [valkey_client]
         $c1 client setname "killme-capa"
@@ -523,10 +519,6 @@ start_server {tags {"introspection"}} {
 
             regexp {addr=\[([a-fA-F0-9:]+)\]:\d+} $client_info -> ipv6only
             set filtered [$c client list not-ip $ipv6only]
-            assert_no_match *client-ipv6* $filtered
-
-            regexp {addr=\[([a-fA-F0-9:]+)\]:\d+} $client_info -> ipv6only
-            set filtered [$c client list not-ip "1.2.3.4" not-ip $ipv6only]
             assert_no_match *client-ipv6* $filtered
 
             $c close

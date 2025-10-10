@@ -698,6 +698,7 @@ proc print_help_screen {} {
         "--io-threads       Run tests with IO threads."
         "--tls              Run tests in TLS mode."
         "--tls-module       Run tests in TLS mode with Valkey module."
+        "--require-ipv6     Run tests forcing the ipv6."
         "--host <addr>      Run tests against an external host."
         "--port <port>      TCP port to use against external host."
         "--other-server-path <path>"
@@ -1005,28 +1006,20 @@ proc close_replication_stream {s} {
     return
 }
 
-#IPv6 detection utilities
-#for this detaction: the socket connection on ::1 address
+# IPv6 detection utilities
+# for this detaction: the socket connection on ::1 address
 proc is_ipv6_available {} {
-        if {[catch {
-            set server [socket -server ::1 0]
-            set port [lindex [chan configure $server -sockname] 5]
-            set client [socket ::1 $port]
-            close $server
-            close $client
-            return 1
+    if {[catch {
+        set server [socket -server dummy -myaddr ::1 0]
+        set port [lindex [chan configure $server -sockname] 2]
+        set client [socket ::1 $port]
+        close $server
+        close $client
+        return 1
     }]} {
-            return 0
+        return 0
     }
 }
-
-#Check if is required the flag to decide if run the tests or not
-if {!$::require_ipv6 && ![is_ipv6_available]} {
-    lappend ::denytags "ipv6"
-    puts "IPv6 not available on this system, skipping IPv6 tests"
-}
-
-
 
 # With the parallel test running multiple server instances at the same time
 # we need a fast enough computer, otherwise a lot of tests may generate

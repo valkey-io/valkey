@@ -554,6 +554,7 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster} overrides {cluste
 
             assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node0_id]
             set jobname [get_job_name 2 16383]
+            wait_for_migration_field 2 $jobname state waiting-to-pause
 
             # Check the flags
             verify_client_flag 0 "E" 0

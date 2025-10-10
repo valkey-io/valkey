@@ -1971,7 +1971,7 @@ void propagateDeletion(serverDb *db, robj *key, int lazy, int slot) {
     server.replication_allowed = prev_replication_allowed;
 }
 
-static const size_t EXPIRE_BULK_LIMIT = 1024; /* Maximum number of fields to active-expire (per replicated HDEL command */
+#define EXPIRE_BULK_LIMIT ((size_t)1024) /* Maximum number of fields to active-expire (per replicated HDEL command */
 
 /* Propagate HDEL commands for deleted hash fields to AOF and replicas.
  *

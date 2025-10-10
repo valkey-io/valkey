@@ -1209,13 +1209,6 @@ void hsetexCommand(client *c) {
     if (checkType(c, o, OBJ_HASH))
         return;
 
-    if (o == NULL) {
-        o = createHashObject();
-        dbAdd(c->db, c->argv[1], &o);
-    }
-
-    bool has_volatile_fields = hashTypeHasVolatileFields(o);
-
     /* Handle parsing and calculating the expiration time. */
     if (flags & ARGS_KEEPTTL)
         set_flags |= HASH_SET_KEEP_EXPIRY;
@@ -1230,16 +1223,34 @@ void hsetexCommand(client *c) {
         }
     }
 
-    /* Check for all fields condition */
+    /* Check FNX/FXX field-level conditions */
     if (flags & (ARGS_SET_FNX | ARGS_SET_FXX)) {
-        for (i = fields_index; i < c->argc; i += 2) {
-            if (((flags & ARGS_SET_FNX) && hashTypeExists(o, c->argv[i]->ptr)) ||
-                ((flags & ARGS_SET_FXX) && !hashTypeExists(o, c->argv[i]->ptr))) {
+        if (o) {
+            /* Key exists: check fields normally */
+            for (i = fields_index; i < c->argc; i += 2) {
+                if (((flags & ARGS_SET_FNX) && hashTypeExists(o, c->argv[i]->ptr)) ||
+                    ((flags & ARGS_SET_FXX) && !hashTypeExists(o, c->argv[i]->ptr))) {
+                    addReply(c, shared.czero);
+                    return;
+                }
+            }
+        } else {
+            /* Key does not exist */
+            if (flags & ARGS_SET_FXX) {
+                /* Any FXX fails because no fields exist */
                 addReply(c, shared.czero);
                 return;
             }
+            /* FNX automatically passes if key doesn't exist, nothing to check */
         }
     }
+
+    if (o == NULL) {
+        o = createHashObject();
+        dbAdd(c->db, c->argv[1], &o);
+    }
+
+    bool has_volatile_fields = hashTypeHasVolatileFields(o);
 
     /* In case we are expiring all the elements prepare a new argv since we are going to delete all the expired fields. */
     if (set_expired) {

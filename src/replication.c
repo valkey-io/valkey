@@ -1858,7 +1858,7 @@ void slotMigrationPipeReadHandler(struct aeEventLoop *eventLoop, int fd, void *c
             if (errno == EAGAIN || errno == EWOULDBLOCK) return;
             serverLog(LL_WARNING, "Slot migration, read error sending snapshot to target: %s", strerror(errno));
             client *target = connGetPrivateData(server.slot_migration_pipe_conn);
-            freeClient(target);  /* Free client will kill the slot migration child */
+            freeClient(target); /* Free client will kill the slot migration child */
             server.slot_migration_pipe_conn = NULL;
             return;
         }
@@ -1881,7 +1881,7 @@ void slotMigrationPipeReadHandler(struct aeEventLoop *eventLoop, int fd, void *c
             if (connGetState(conn) != CONN_STATE_CONNECTED) {
                 serverLog(LL_WARNING, "Slot migration transfer, write error sending DB to target: %s",
                           connGetLastError(conn));
-                freeClient(target);  /* Free client will kill the slot migration child */
+                freeClient(target); /* Free client will kill the slot migration child */
                 server.slot_migration_pipe_conn = NULL;
                 return;
             }

@@ -2309,9 +2309,6 @@ void finishSlotMigrationJob(slotMigrationJob *job,
         /* If we finish the export, we should not remain paused */
         job->mf_end = 0;
         slotExportTryUnpause();
-        /* Fast fail the child process, which will be cleaned up fully in
-         * checkChildrenDone. */
-        if (job->state == SLOT_EXPORT_SNAPSHOTTING) killSlotMigrationChild();
     }
 
     /* Imports that are not successful on primaries need to be cleaned up (if

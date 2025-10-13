@@ -386,6 +386,15 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster} overrides {cluste
         set_debug_prevent_pause 0
     }
 
+    set 0_slot_tag "{06S}"
+    set 1_slot_tag "{Qi}"
+    set 5462_slot_tag "{450}"
+    set 16379_slot_tag "{YY}"
+    set 16380_slot_tag "{wu}"
+    set 16381_slot_tag "{0TG}"
+    set 16382_slot_tag "{4oi}"
+    set 16383_slot_tag "{6ZJ}"
+
     test "Test CLUSTER CANCELSLOTMIGRATIONS" {
         set_debug_prevent_pause 1
         assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16382 16382 NODE $node0_id]
@@ -407,18 +416,23 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster} overrides {cluste
         wait_for_migration_field 0 $jobname1 state failed
         wait_for_migration_field 0 $jobname2 state failed
 
+        # Do it again, but during snapshotting
+        # 50 keys * 100ms/key = 5 sec snapshot time
+        R 2 CONFIG SET rdb-key-save-delay 100000
+        populate 50 "$16383_slot_tag:1:" 1000 -2
+        assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node0_id]
+        set jobname [get_job_name 2 16383]
+        wait_for_migration_field 2 $jobname state snapshotting
+        assert_match "OK" [R 2 CLUSTER CANCELSLOTMIGRATIONS]
+        R 2 CONFIG SET rdb-key-save-delay 0
+
+        # Jobs are no longer up, migration logs say cancelled
+        assert {[dict get [get_migration_by_name 2 $jobname] state] eq "cancelled"}
+        wait_for_migration_field 0 $jobname state failed
+
         # Cleanup
         set_debug_prevent_pause 0
     }
-
-    set 0_slot_tag "{06S}"
-    set 1_slot_tag "{Qi}"
-    set 5462_slot_tag "{450}"
-    set 16379_slot_tag "{YY}"
-    set 16380_slot_tag "{wu}"
-    set 16381_slot_tag "{0TG}"
-    set 16382_slot_tag "{4oi}"
-    set 16383_slot_tag "{6ZJ}"
 
     test "Slot migration won't migrate the functions" {
         assert_does_not_resync {

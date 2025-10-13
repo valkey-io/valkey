@@ -65,6 +65,8 @@ IGNORED_COMMANDS = {
     "cluster|migrateslots",
 }
 
+RESP_TYPE_PREFIXES = {"+", "-", "$", ":", ",", "_", "#", "!", "=", "(", "*", "~", ">", "%", "|"}
+
 class Request(object):
     """
     This class represents a Redis request (AKA command, argv)
@@ -78,11 +80,25 @@ class Request(object):
         self.argv = []
 
         while True:
+            pos = f.tell()
             line = f.readline()
             line_counter[0] += 1
             if not line:
                 break
-            length = int(line)
+            stripped = line.strip()
+            try:
+                length = int(stripped)
+            except ValueError:
+                if not self.argv and stripped and stripped[0] in RESP_TYPE_PREFIXES:
+                    # When blocked clients are redirected after a failover they may
+                    # receive an async MOVED error that is logged without their request.
+                    # These responses start with a RESP type prefix. Rewind the cursor
+                    # to skip it.
+                    f.seek(pos)
+                    line_counter[0] -= 1
+                    Response(f, line_counter)
+                    continue
+                raise
             arg = str(f.read(length))
             f.read(2)  # read \r\n
             line_counter[0] += 1

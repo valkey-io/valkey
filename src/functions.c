@@ -165,7 +165,7 @@ void functionsLibCtxClear(functionsLibCtx *lib_ctx, void(callback)(dict *)) {
     lib_ctx->cache_memory = 0;
 }
 
-static void resetEngineFunctionEnvCallback(scriptingEngine *engine, void *context) {
+static void resetEngineOrCollectResetCallbacks(scriptingEngine *engine, void *context) {
     int async = context != NULL;
     callableLazyEnvReset *callback = scriptingEngineCallResetEnvFunc(engine, VMSE_FUNCTION, async);
 
@@ -178,11 +178,11 @@ static void resetEngineFunctionEnvCallback(scriptingEngine *engine, void *contex
 void functionsLibCtxReleaseCurrent(int async, void(callback)(dict *)) {
     if (async) {
         list *engine_callbacks = listCreate();
-        scriptingEngineManagerForEachEngine(resetEngineFunctionEnvCallback, engine_callbacks);
+        scriptingEngineManagerForEachEngine(resetEngineOrCollectResetCallbacks, engine_callbacks);
         freeFunctionsAsync(curr_functions_lib_ctx, engine_callbacks);
     } else {
         functionsLibCtxFree(curr_functions_lib_ctx, callback, NULL);
-        scriptingEngineManagerForEachEngine(resetEngineFunctionEnvCallback, NULL);
+        scriptingEngineManagerForEachEngine(resetEngineOrCollectResetCallbacks, NULL);
     }
 }
 

@@ -28,11 +28,14 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
+#include "io_threads.h"
 #include "server.h"
 #include "cluster.h"
 #include "connection.h"
 #include "bio.h"
 #include "module.h"
+#include "cluster_migrateslots.h"
+#include "eval.h"
 
 #include <fcntl.h>
 #include <sys/stat.h>
@@ -97,11 +100,13 @@ configEnum aof_fsync_enum[] = {
     {NULL, 0}};
 
 configEnum shutdown_on_sig_enum[] = {
-    {"default", 0},
+    {"default", SHUTDOWN_NOFLAGS},
     {"save", SHUTDOWN_SAVE},
     {"nosave", SHUTDOWN_NOSAVE},
     {"now", SHUTDOWN_NOW},
     {"force", SHUTDOWN_FORCE},
+    {"safe", SHUTDOWN_SAFE},
+    {"failover", SHUTDOWN_FAILOVER},
     {NULL, 0}};
 
 configEnum repl_diskless_load_enum[] = {
@@ -116,6 +121,12 @@ configEnum tls_auth_clients_enum[] = {
     {"yes", TLS_CLIENT_AUTH_YES},
     {"optional", TLS_CLIENT_AUTH_OPTIONAL},
     {NULL, 0}};
+
+configEnum tls_client_auth_user_enum[] = {
+    {"CN", TLS_CLIENT_FIELD_CN},
+    {"off", TLS_CLIENT_FIELD_OFF},
+    {NULL, 0} // terminator
+};
 
 configEnum oom_score_adj_enum[] = {
     {"no", OOM_SCORE_ADJ_NO},
@@ -438,7 +449,7 @@ static int updateClientOutputBufferLimit(sds *args, int arg_len, const char **er
  * abnormal aggregate `save T C` functionality. Remove in the future. */
 static int reading_config_file;
 
-void loadServerConfigFromString(char *config) {
+void loadServerConfigFromString(sds config) {
     deprecatedConfig deprecated_configs[] = {
         {"list-max-ziplist-entries", 2, 2},
         {"list-max-ziplist-value", 2, 2},
@@ -455,7 +466,7 @@ void loadServerConfigFromString(char *config) {
     int argc;
 
     reading_config_file = 1;
-    lines = sdssplitlen(config, strlen(config), "\n", 1, &totlines);
+    lines = sdssplitlen(config, sdslen(config), "\n", 1, &totlines);
 
     for (i = 0; i < totlines; i++) {
         linenum = i + 1;
@@ -606,13 +617,6 @@ void loadServerConfigFromString(char *config) {
     if (server.cluster_enabled && server.primary_host) {
         err = "replicaof directive not allowed in cluster mode";
         goto loaderr;
-    }
-
-    /* in case cluster mode is enabled dbnum must be 1 */
-    if (server.cluster_enabled && server.dbnum > 1) {
-        serverLog(LL_WARNING, "WARNING: Changing databases number from %d to 1 since we are in cluster mode",
-                  server.dbnum);
-        server.dbnum = 1;
     }
 
     /* To ensure backward compatibility and work while hz is out of range */
@@ -945,6 +949,13 @@ end:
     listRelease(module_configs_apply);
 }
 
+/* Used by configGetCommand */
+static int configKeyCompare(const void *a, const void *b) {
+    const char *key_a = *(const char **)a;
+    const char *key_b = *(const char **)b;
+    return strcmp(key_a, key_b);
+}
+
 /*-----------------------------------------------------------------------------
  * CONFIG GET implementation
  *----------------------------------------------------------------------------*/
@@ -987,14 +998,30 @@ void configGetCommand(client *c) {
     }
 
     di = dictGetIterator(matches);
-    addReplyMapLen(c, dictSize(matches));
+    int n = dictSize(matches);
+    addReplyMapLen(c, n);
+
+    struct {
+        const char *key;
+        sds value;
+    } *sorted = zmalloc(sizeof(*sorted) * n);
+
+    i = 0;
     while ((de = dictNext(di)) != NULL) {
         standardConfig *config = (standardConfig *)dictGetVal(de);
-        addReplyBulkCString(c, dictGetKey(de));
-        addReplyBulkSds(c, config->interface.get(config));
+        sorted[i].key = dictGetKey(de);
+        sorted[i].value = config->interface.get(config);
+        i++;
     }
     dictReleaseIterator(di);
     dictRelease(matches);
+
+    qsort(sorted, n, sizeof(*sorted), configKeyCompare);
+    for (i = 0; i < n; i++) {
+        addReplyBulkCString(c, sorted[i].key);
+        addReplyBulkSds(c, sorted[i].value);
+    }
+    zfree(sorted);
 }
 
 /*-----------------------------------------------------------------------------
@@ -2427,6 +2454,15 @@ static int isValidIpV6(char *val, const char **err) {
     return 1;
 }
 
+static int isValidMptcp(int val, const char **err) {
+    if (val && !anetHasMptcp()) {
+        *err = "MPTCP is not supported on this platform";
+        return 0;
+    }
+
+    return 1;
+}
+
 /* Validate specified string is a valid proc-title-template */
 static int isValidProcTitleTemplate(char *val, const char **err) {
     if (!validateProcTitleTemplate(val)) {
@@ -2470,6 +2506,7 @@ static int updatePort(const char **err) {
     listener->bindaddr_count = server.bindaddr_count;
     listener->port = server.port;
     listener->ct = connectionByType(CONN_TYPE_SOCKET);
+    clusterUpdateMyselfAnnouncedPorts();
     if (changeListener(listener) == C_ERR) {
         *err = "Unable to listen on this port. Check server logs.";
         return 0;
@@ -2524,7 +2561,7 @@ static int updateWatchdogPeriod(const char **err) {
     return 1;
 }
 
-static int updateAppendonly(const char **err) {
+static int updateAppendOnly(const char **err) {
     if (!server.aof_enabled && server.aof_state != AOF_OFF) {
         stopAppendOnly();
     } else if (server.aof_enabled && server.aof_state == AOF_OFF) {
@@ -2547,7 +2584,7 @@ static int updateAofAutoGCEnabled(const char **err) {
 
 static int updateExtendedRedisCompat(const char **err) {
     UNUSED(err);
-    createSharedObjectsWithCompat();
+    updateSharedObjectsWithCompat();
     return 1;
 }
 
@@ -2592,6 +2629,15 @@ static int updateOOMScoreAdj(const char **err) {
 int invalidateClusterSlotsResp(const char **err) {
     UNUSED(err);
     clearCachedClusterSlotsResponse();
+    return 1;
+}
+
+static int updateLuaEnableInsecureApi(const char **err) {
+    UNUSED(err);
+    if (server.lua_insecure_api_current != server.lua_enable_insecure_api) {
+        evalReset(server.lazyfree_lazy_user_flush ? 1 : 0);
+    }
+    server.lua_insecure_api_current = server.lua_enable_insecure_api;
     return 1;
 }
 
@@ -2657,7 +2703,6 @@ int updateClusterFlags(const char **err) {
 static int updateClusterAnnouncedPort(const char **err) {
     UNUSED(err);
     clusterUpdateMyselfAnnouncedPorts();
-    clearCachedClusterSlotsResponse();
     return 1;
 }
 
@@ -2716,6 +2761,7 @@ static int applyTLSPort(const char **err) {
     listener->bindaddr_count = server.bindaddr_count;
     listener->port = server.tls_port;
     listener->ct = connectionByType(CONN_TYPE_TLS);
+    clusterUpdateMyselfAnnouncedPorts();
     if (changeListener(listener) == C_ERR) {
         *err = "Unable to listen on this port. Check server logs.";
         return 0;
@@ -3158,6 +3204,7 @@ standardConfig static_configs[] = {
     createBoolConfig("lazyfree-lazy-user-del", NULL, DEBUG_CONFIG | MODIFIABLE_CONFIG, server.lazyfree_lazy_user_del, 1, NULL, NULL),
     createBoolConfig("lazyfree-lazy-user-flush", NULL, DEBUG_CONFIG | MODIFIABLE_CONFIG, server.lazyfree_lazy_user_flush, 1, NULL, NULL),
     createBoolConfig("repl-disable-tcp-nodelay", NULL, MODIFIABLE_CONFIG, server.repl_disable_tcp_nodelay, 0, NULL, NULL),
+    createBoolConfig("repl-mptcp", NULL, IMMUTABLE_CONFIG, server.repl_mptcp, 0, isValidMptcp, NULL),
     createBoolConfig("repl-diskless-sync", NULL, DEBUG_CONFIG | MODIFIABLE_CONFIG, server.repl_diskless_sync, 1, NULL, NULL),
     createBoolConfig("dual-channel-replication-enabled", NULL, DEBUG_CONFIG | MODIFIABLE_CONFIG, server.dual_channel_replication, 0, NULL, NULL),
     createBoolConfig("aof-rewrite-incremental-fsync", NULL, MODIFIABLE_CONFIG, server.aof_rewrite_incremental_fsync, 1, NULL, NULL),
@@ -3176,7 +3223,7 @@ standardConfig static_configs[] = {
     createBoolConfig("activedefrag", NULL, DEBUG_CONFIG | MODIFIABLE_CONFIG, server.active_defrag_enabled, CONFIG_ACTIVE_DEFRAG_DEFAULT, isValidActiveDefrag, NULL),
     createBoolConfig("syslog-enabled", NULL, IMMUTABLE_CONFIG, server.syslog_enabled, 0, NULL, NULL),
     createBoolConfig("cluster-enabled", NULL, IMMUTABLE_CONFIG, server.cluster_enabled, 0, NULL, NULL),
-    createBoolConfig("appendonly", NULL, MODIFIABLE_CONFIG | DENY_LOADING_CONFIG, server.aof_enabled, 0, NULL, updateAppendonly),
+    createBoolConfig("appendonly", NULL, MODIFIABLE_CONFIG | DENY_LOADING_CONFIG, server.aof_enabled, 0, NULL, updateAppendOnly),
     createBoolConfig("cluster-allow-reads-when-down", NULL, MODIFIABLE_CONFIG, server.cluster_allow_reads_when_down, 0, NULL, NULL),
     createBoolConfig("cluster-allow-pubsubshard-when-down", NULL, MODIFIABLE_CONFIG, server.cluster_allow_pubsubshard_when_down, 1, NULL, NULL),
     createBoolConfig("crash-log-enabled", NULL, MODIFIABLE_CONFIG, server.crashlog_enabled, 1, NULL, updateSighandlerEnabled),
@@ -3192,6 +3239,7 @@ standardConfig static_configs[] = {
     createBoolConfig("enable-debug-assert", NULL, IMMUTABLE_CONFIG | HIDDEN_CONFIG, server.enable_debug_assert, 0, NULL, NULL),
     createBoolConfig("cluster-slot-stats-enabled", NULL, MODIFIABLE_CONFIG, server.cluster_slot_stats_enabled, 0, NULL, NULL),
     createBoolConfig("hide-user-data-from-log", NULL, MODIFIABLE_CONFIG, server.hide_user_data_from_log, 1, NULL, NULL),
+    createBoolConfig("lua-enable-insecure-api", "lua-enable-deprecated-api", MODIFIABLE_CONFIG | HIDDEN_CONFIG | PROTECTED_CONFIG, server.lua_enable_insecure_api, 0, NULL, updateLuaEnableInsecureApi),
     createBoolConfig("import-mode", NULL, DEBUG_CONFIG | MODIFIABLE_CONFIG, server.import_mode, 0, NULL, NULL),
 
     /* String Configs */
@@ -3252,11 +3300,15 @@ standardConfig static_configs[] = {
     createEnumConfig("rdb-version-check", NULL, MODIFIABLE_CONFIG, rdb_version_check_enum, server.rdb_version_check, RDB_VERSION_CHECK_STRICT, NULL, NULL),
 
     /* Integer configs */
-    createIntConfig("databases", NULL, IMMUTABLE_CONFIG, 1, INT_MAX, server.dbnum, 16, INTEGER_CONFIG, NULL, NULL),
-    createIntConfig("port", NULL, MODIFIABLE_CONFIG, 0, 65535, server.port, 6379, INTEGER_CONFIG, NULL, updatePort),                                   /* TCP port. */
-    createIntConfig("io-threads", NULL, DEBUG_CONFIG | IMMUTABLE_CONFIG, 1, IO_THREADS_MAX_NUM, server.io_threads_num, 1, INTEGER_CONFIG, NULL, NULL), /* Single threaded by default */
+    createIntConfig("databases", NULL, IMMUTABLE_CONFIG, 1, INT_MAX, server.config_databases, 16, INTEGER_CONFIG, NULL, NULL),
+    createIntConfig("cluster-databases", NULL, IMMUTABLE_CONFIG, 1, INT_MAX, server.config_databases_cluster, 1, INTEGER_CONFIG, NULL, NULL),
+    createIntConfig("port", NULL, MODIFIABLE_CONFIG, 0, 65535, server.port, 6379, INTEGER_CONFIG, NULL, updatePort),                                               /* TCP port. */
+    createIntConfig("io-threads", NULL, DEBUG_CONFIG | MODIFIABLE_CONFIG, 1, IO_THREADS_MAX_NUM, server.io_threads_num, 1, INTEGER_CONFIG, NULL, updateIOThreads), /* Single threaded by default */
     createIntConfig("events-per-io-thread", NULL, MODIFIABLE_CONFIG | HIDDEN_CONFIG, 0, INT_MAX, server.events_per_io_thread, 2, INTEGER_CONFIG, NULL, NULL),
-    createIntConfig("prefetch-batch-max-size", NULL, MODIFIABLE_CONFIG, 0, 128, server.prefetch_batch_max_size, 16, INTEGER_CONFIG, NULL, NULL),
+    createIntConfig("min-io-threads-avoid-copy-reply", NULL, MODIFIABLE_CONFIG | HIDDEN_CONFIG, 0, INT_MAX, server.min_io_threads_copy_avoid, 7, INTEGER_CONFIG, NULL, NULL),
+    createIntConfig("min-string-size-avoid-copy-reply", NULL, MODIFIABLE_CONFIG | HIDDEN_CONFIG, 0, INT_MAX, server.min_string_size_copy_avoid, 16384, INTEGER_CONFIG, NULL, NULL),
+    createIntConfig("min-string-size-avoid-copy-reply-threaded", NULL, MODIFIABLE_CONFIG | HIDDEN_CONFIG, 0, INT_MAX, server.min_string_size_copy_avoid_threaded, 65536, INTEGER_CONFIG, NULL, NULL),
+    createIntConfig("prefetch-batch-max-size", NULL, MODIFIABLE_CONFIG, 0, 128, server.prefetch_batch_max_size, 16, INTEGER_CONFIG, NULL, onMaxBatchSizeChange),
     createIntConfig("auto-aof-rewrite-percentage", NULL, MODIFIABLE_CONFIG, 0, INT_MAX, server.aof_rewrite_perc, 100, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("cluster-replica-validity-factor", "cluster-slave-validity-factor", MODIFIABLE_CONFIG, 0, INT_MAX, server.cluster_replica_validity_factor, 10, INTEGER_CONFIG, NULL, NULL), /* replica max data age factor. */
     createIntConfig("list-max-listpack-size", "list-max-ziplist-size", MODIFIABLE_CONFIG, INT_MIN, INT_MAX, server.list_max_listpack_size, -2, INTEGER_CONFIG, NULL, NULL),
@@ -3276,10 +3328,13 @@ standardConfig static_configs[] = {
     createIntConfig("timeout", NULL, MODIFIABLE_CONFIG, 0, INT_MAX, server.maxidletime, 0, INTEGER_CONFIG, NULL, NULL), /* Default client timeout: infinite */
     createIntConfig("replica-announce-port", "slave-announce-port", MODIFIABLE_CONFIG, 0, 65535, server.replica_announce_port, 0, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("tcp-backlog", NULL, IMMUTABLE_CONFIG, 0, INT_MAX, server.tcp_backlog, 511, INTEGER_CONFIG, NULL, NULL), /* TCP listen backlog. */
+    createBoolConfig("mptcp", NULL, IMMUTABLE_CONFIG, server.mptcp, 0, isValidMptcp, NULL),                                  /* Multipath TCP. */
     createIntConfig("cluster-port", NULL, IMMUTABLE_CONFIG, 0, 65535, server.cluster_port, 0, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("cluster-announce-bus-port", NULL, MODIFIABLE_CONFIG, 0, 65535, server.cluster_announce_bus_port, 0, INTEGER_CONFIG, NULL, updateClusterAnnouncedPort), /* Default: Use +10000 offset. */
     createIntConfig("cluster-announce-port", NULL, MODIFIABLE_CONFIG, 0, 65535, server.cluster_announce_port, 0, INTEGER_CONFIG, NULL, updateClusterAnnouncedPort),         /* Use server.port */
     createIntConfig("cluster-announce-tls-port", NULL, MODIFIABLE_CONFIG, 0, 65535, server.cluster_announce_tls_port, 0, INTEGER_CONFIG, NULL, updateClusterAnnouncedPort), /* Use server.tls_port */
+    createIntConfig("cluster-announce-client-port", NULL, MODIFIABLE_CONFIG, 0, 65535, server.cluster_announce_client_port, 0, INTEGER_CONFIG, NULL, updateClusterAnnouncedPort),
+    createIntConfig("cluster-announce-client-tls-port", NULL, MODIFIABLE_CONFIG, 0, 65535, server.cluster_announce_client_tls_port, 0, INTEGER_CONFIG, NULL, updateClusterAnnouncedPort),
     createIntConfig("repl-timeout", NULL, MODIFIABLE_CONFIG, 1, INT_MAX, server.repl_timeout, 60, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("repl-ping-replica-period", "repl-ping-slave-period", MODIFIABLE_CONFIG, 1, INT_MAX, server.repl_ping_replica_period, 10, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("list-compress-depth", NULL, DEBUG_CONFIG | MODIFIABLE_CONFIG, 0, INT_MAX, server.list_compress_depth, 0, INTEGER_CONFIG, NULL, NULL),
@@ -3313,6 +3368,7 @@ standardConfig static_configs[] = {
     createULongConfig("commandlog-large-reply-max-len", NULL, MODIFIABLE_CONFIG, 0, LONG_MAX, server.commandlog[COMMANDLOG_TYPE_LARGE_REPLY].max_len, 128, INTEGER_CONFIG, NULL, NULL),
     createULongConfig("acllog-max-len", NULL, MODIFIABLE_CONFIG, 0, LONG_MAX, server.acllog_max_len, 128, INTEGER_CONFIG, NULL, NULL),
     createULongConfig("cluster-blacklist-ttl", NULL, MODIFIABLE_CONFIG, 0, ULONG_MAX, server.cluster_blacklist_ttl, 60, INTEGER_CONFIG, NULL, NULL),
+    createULongConfig("cluster-slot-migration-log-max-len", NULL, MODIFIABLE_CONFIG, 0, LONG_MAX, server.cluster_slot_migration_log_max_len, 1000, INTEGER_CONFIG, NULL, NULL),
 
     /* Long Long configs */
     createLongLongConfig("busy-reply-threshold", "lua-time-limit", MODIFIABLE_CONFIG, 0, LONG_MAX, server.busy_reply_threshold, 5000, INTEGER_CONFIG, NULL, NULL), /* milliseconds */
@@ -3345,6 +3401,7 @@ standardConfig static_configs[] = {
     createSizeTConfig("tracking-table-max-keys", NULL, MODIFIABLE_CONFIG, 0, LONG_MAX, server.tracking_table_max_keys, 1000000, INTEGER_CONFIG, NULL, NULL),                                      /* Default: 1 million keys max. */
     createSizeTConfig("client-query-buffer-limit", NULL, DEBUG_CONFIG | MODIFIABLE_CONFIG, 1024 * 1024, LONG_MAX, server.client_max_querybuf_len, 1024 * 1024 * 1024, MEMORY_CONFIG, NULL, NULL), /* Default: 1GB max query buffer. */
     createSSizeTConfig("maxmemory-clients", NULL, MODIFIABLE_CONFIG, -100, SSIZE_MAX, server.maxmemory_clients, 0, MEMORY_CONFIG | PERCENT_CONFIG, NULL, applyClientMaxMemoryUsage),
+    createSSizeTConfig("slot-migration-max-failover-repl-bytes", NULL, MODIFIABLE_CONFIG, -1, SSIZE_MAX, server.slot_migration_max_failover_repl_bytes, 0, MEMORY_CONFIG, NULL, NULL),
 
     /* Other configs */
     createTimeTConfig("repl-backlog-ttl", NULL, MODIFIABLE_CONFIG, 0, LONG_MAX, server.repl_backlog_time_limit, 60 * 60, INTEGER_CONFIG, NULL, NULL), /* Default: 1 hour */
@@ -3358,6 +3415,7 @@ standardConfig static_configs[] = {
     createBoolConfig("tls-cluster", NULL, MODIFIABLE_CONFIG, server.tls_cluster, 0, NULL, applyTlsCfg),
     createBoolConfig("tls-replication", NULL, MODIFIABLE_CONFIG, server.tls_replication, 0, NULL, applyTlsCfg),
     createEnumConfig("tls-auth-clients", NULL, MODIFIABLE_CONFIG, tls_auth_clients_enum, server.tls_auth_clients, TLS_CLIENT_AUTH_YES, NULL, NULL),
+    createEnumConfig("tls-auth-clients-user", NULL, MODIFIABLE_CONFIG, tls_client_auth_user_enum, server.tls_ctx_config.client_auth_user, TLS_CLIENT_FIELD_OFF, NULL, NULL),
     createBoolConfig("tls-prefer-server-ciphers", NULL, MODIFIABLE_CONFIG, server.tls_ctx_config.prefer_server_ciphers, 0, NULL, applyTlsCfg),
     createBoolConfig("tls-session-caching", NULL, MODIFIABLE_CONFIG, server.tls_ctx_config.session_caching, 1, NULL, applyTlsCfg),
     createStringConfig("tls-cert-file", NULL, VOLATILE_CONFIG | MODIFIABLE_CONFIG, EMPTY_STRING_IS_NULL, server.tls_ctx_config.cert_file, NULL, NULL, applyTlsCfg),

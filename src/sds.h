@@ -99,7 +99,7 @@ static inline unsigned char sdsType(const_sds s) {
  * index is 0-4. Returns 0 or 1. Always returns 0 for SDS_TYPE_5. */
 static inline int sdsGetAuxBit(const_sds s, int bit) {
     unsigned char flags = s[-1];
-    return sdsType(s) == SDS_TYPE_5 ? 0 : flags >> (SDS_TYPE_BITS + bit);
+    return sdsType(s) == SDS_TYPE_5 ? 0 : (flags >> (SDS_TYPE_BITS + bit) & 1U);
 }
 
 /* Stores a bit in an unused area in the SDS header, except for SDS_TYPE_5. The

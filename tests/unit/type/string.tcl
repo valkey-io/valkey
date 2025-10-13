@@ -59,6 +59,31 @@ start_server {tags {"string"}} {
         } {10000}
     }
 
+    test {memoryusage of string} {
+        # Simple test
+        set key "key"
+        set value "value"
+        r set $key $value
+        assert_lessthan_equal [expr [string length $key] + [string length $value]] [r memory usage key]
+
+        # Big value
+        set key "key"
+        set value [string repeat A 100000]
+        r set $key $value
+        assert_lessthan_equal [expr [string length $key] + [string length $value]] [r memory usage key]
+
+        # Big key
+        set key [string repeat A 100000]
+        set value "value"
+        r set $key $value
+        assert_lessthan_equal [expr [string length $key] + [string length $value]] [r memory usage key]
+
+        # Big key for int
+        set key [string repeat B 100000]
+        r incr $key
+        assert_lessthan_equal [string length $key] [r memory usage $key]
+    }
+
     test "SETNX target key missing" {
         r del novar
         assert_equal 1 [r setnx novar foobared]
@@ -755,6 +780,39 @@ if {[string match {*jemalloc*} [s mem_allocator]]} {
         assert_encoding "int" bar
         lappend res [r get bar]
     } {12 12}
+
+    test {DELIFEQ non-existing key} {
+        r del foo
+        assert_equal 0 [r delifeq foo "test"]
+    }
+
+    test {DELIFEQ existing key, matching value} {
+        r set foo "test"
+        assert_equal 1 [r delifeq foo "test"]
+    }
+
+    test {DELIFEQ existing key, non-matching value} {
+        r set foo "nope"
+        assert_equal 0 [r delifeq foo "test"]
+    }
+
+    test {DELIFEQ existing key, non-string value} {
+        r del foo
+        r sadd foo "test"
+        assert_error "WRONGTYPE*" {r delifeq foo "test"}
+    }
+
+    test {DELIFEQ propagate as DEL command to replica} {
+        set repl [attach_to_replication_stream]
+        r set foo bar
+        r delifeq foo bar
+        assert_replication_stream $repl {
+            {select *}
+            {set foo bar}
+            {del foo}
+        }
+        close_replication_stream $repl
+    } {} {needs:repl}
 
 if {[string match {*jemalloc*} [s mem_allocator]]} {
     test {Memory usage of embedded string value} {

@@ -131,4 +131,11 @@ start_server {tags {"modules"}} {
 
         assert_equal 1 [llength $keys]
     }
+
+    test {DataType: check memory usage} {
+        r flushdb
+        set large_key [string repeat A 100000]
+        r datatype.set $large_key 111 bar
+        assert_morethan [r memory usage $large_key] 100000
+    }
 }

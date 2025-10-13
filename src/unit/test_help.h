@@ -1,4 +1,4 @@
-/* A very simple test framework for valkey. See unit/README.me for more information on usage.
+/* A very simple test framework for valkey. See unit/README.md for more information on usage.
  *
  * Example:
  *
@@ -45,8 +45,20 @@
 
 #define TEST_ASSERT(_c) TEST_ASSERT_MESSAGE("Failed assertion: " #_c, _c)
 
+#define TEST_EXPECT_MESSAGE(descr, _c) \
+    do {                               \
+        if (!(_c)) {                   \
+            TEST_PRINT_ERROR(descr);   \
+            failed_expects++;          \
+        }                              \
+    } while (0)
+
+#define TEST_EXPECT(_c) TEST_EXPECT_MESSAGE("Failed expect: " #_c, _c)
+
 #ifndef UNUSED
 #define UNUSED(x) (void)(x)
 #endif
+
+extern int failed_expects;
 
 #endif

@@ -11,13 +11,13 @@ It supports a wide range of native structures and an extensible plugin system fo
 
 # Building Valkey using `Makefile`
 
-Valkey can be compiled and used on Linux, OSX, OpenBSD, NetBSD, FreeBSD.
+Valkey can be compiled and used on Linux, macOS, OpenBSD, NetBSD, FreeBSD.
 We support big endian and little endian architectures, and both 32 bit
 and 64 bit systems.
 
 It may compile on Solaris derived systems (for instance SmartOS) but our
 support for this platform is *best effort* and Valkey is not guaranteed to
-work as well as in Linux, OSX, and \*BSD.
+work as well as in Linux, macOS, and \*BSD.
 
 It is as simple as:
 
@@ -87,7 +87,7 @@ command in order to really clean everything and rebuild from scratch:
 
     % make distclean
 
-This will clean: jemalloc, lua, hiredis, linenoise and other dependencies.
+This will clean: jemalloc, lua, libvalkey, linenoise and other dependencies.
 
 Also if you force certain build options like 32bit target, no C compiler
 optimizations (for debugging purposes), and other similar build time options,
@@ -167,7 +167,8 @@ line, with exactly the same name.
 
 ## Running manually
 
-To manually run a Valkey server with TLS mode (assuming `./gen-test-certs.sh` was invoked so sample certificates/keys are available):
+To manually run a Valkey server with TLS mode (assuming `./utils/gen-test-certs.sh`
+was invoked so sample certificates/keys are available):
 
 * TLS built-in mode:
     ```
@@ -282,7 +283,7 @@ for Ubuntu and Debian systems:
     % cd utils
     % ./install_server.sh
 
-_Note_: `install_server.sh` will not work on Mac OSX; it is built for Linux only.
+_Note_: `install_server.sh` will not work on macOS; it is built for Linux only.
 
 The script will ask you a few questions and will setup everything you need
 to run Valkey properly as a background daemon that will start again on

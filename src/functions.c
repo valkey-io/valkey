@@ -1042,6 +1042,7 @@ sds functionsCreateWithLibraryCtx(sds code, int replace, sds *err, functionsLibC
         scriptingEngineCallCompileCode(engine,
                                        VMSE_FUNCTION,
                                        md.code,
+                                       sdslen(md.code),
                                        timeout,
                                        &num_compiled_functions,
                                        &compile_error);

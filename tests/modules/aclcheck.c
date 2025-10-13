@@ -38,7 +38,7 @@ int set_aclcheck_key(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) 
         return VALKEYMODULE_OK;
     }
 
-    ValkeyModuleCallReply *rep = ValkeyModule_Call(ctx, "SET", "v", argv + 2, argc - 2);
+    ValkeyModuleCallReply *rep = ValkeyModule_Call(ctx, "SET", "v", argv + 2, (size_t)argc - 2);
     if (!rep) {
         ValkeyModule_ReplyWithError(ctx, "NULL reply returned");
     } else {
@@ -68,7 +68,7 @@ int publish_aclcheck_channel(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, in
         return VALKEYMODULE_OK;
     }
 
-    ValkeyModuleCallReply *rep = ValkeyModule_Call(ctx, "PUBLISH", "v", argv + 1, argc - 1);
+    ValkeyModuleCallReply *rep = ValkeyModule_Call(ctx, "PUBLISH", "v", argv + 1, (size_t)argc - 1);
     if (!rep) {
         ValkeyModule_ReplyWithError(ctx, "NULL reply returned");
     } else {
@@ -98,7 +98,7 @@ int rm_call_aclcheck_cmd(ValkeyModuleCtx *ctx, ValkeyModuleUser *user, ValkeyMod
 
     const char* cmd = ValkeyModule_StringPtrLen(argv[1], NULL);
 
-    ValkeyModuleCallReply* rep = ValkeyModule_Call(ctx, cmd, "v", argv + 2, argc - 2);
+    ValkeyModuleCallReply* rep = ValkeyModule_Call(ctx, cmd, "v", argv + 2, (size_t)argc - 2);
     if(!rep){
         ValkeyModule_ReplyWithError(ctx, "NULL reply returned");
     }else{
@@ -146,7 +146,7 @@ int rm_call_aclcheck_with_errors(ValkeyModuleCtx *ctx, ValkeyModuleString **argv
 
     const char* cmd = ValkeyModule_StringPtrLen(argv[1], NULL);
 
-    ValkeyModuleCallReply* rep = ValkeyModule_Call(ctx, cmd, "vEC", argv + 2, argc - 2);
+    ValkeyModuleCallReply* rep = ValkeyModule_Call(ctx, cmd, "vEC", argv + 2, (size_t)argc - 2);
     ValkeyModule_ReplyWithCallReply(ctx, rep);
     ValkeyModule_FreeCallReply(rep);
     return VALKEYMODULE_OK;
@@ -163,7 +163,7 @@ int rm_call_aclcheck(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc){
 
     const char* cmd = ValkeyModule_StringPtrLen(argv[1], NULL);
 
-    ValkeyModuleCallReply* rep = ValkeyModule_Call(ctx, cmd, "vC", argv + 2, argc - 2);
+    ValkeyModuleCallReply* rep = ValkeyModule_Call(ctx, cmd, "vC", argv + 2, (size_t)argc - 2);
     if(!rep) {
         char err[100];
         switch (errno) {

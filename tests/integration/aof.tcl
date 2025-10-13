@@ -8,7 +8,9 @@ set aof_base_file "$server_path/$aof_dirname/${aof_basename}.1$::base_aof_suffix
 set aof_file "$server_path/$aof_dirname/${aof_basename}.1$::incr_aof_suffix$::aof_format_suffix"
 set aof_manifest_file "$server_path/$aof_dirname/$aof_basename$::manifest_suffix"
 
-tags {"aof external:skip"} {
+tags {"aof external:skip logreqres:skip"} {
+    set db [expr {$::singledb ? 0 : 9}]
+
     # Server can start when aof-load-truncated is set to yes and AOF
     # is truncated, with an incomplete MULTI block.
     create_aof $aof_dirpath $aof_file {
@@ -435,7 +437,7 @@ tags {"aof external:skip"} {
             # generate a long running script that is propagated to the AOF as script
             # make sure that the script times out during loading
             create_aof $aof_dirpath $aof_file {
-                append_to_aof [formatCommand select 9]
+                append_to_aof [formatCommand select $db]
                 append_to_aof [formatCommand eval {redis.call('set',KEYS[1],'y'); for i=1,1500000 do redis.call('ping') end return 'ok'} 1 x]
             }
             set rd [valkey_deferring_client]
@@ -459,7 +461,7 @@ tags {"aof external:skip"} {
             append_to_manifest "file appendonly.aof.1.incr.aof seq 1 type i\n"
         }
         create_aof $aof_dirpath $aof_file {
-            append_to_aof [formatCommand select 9]
+            append_to_aof [formatCommand select $db]
             append_to_aof [formatCommand eval {redis.call("set",KEYS[1],"100")} 1 foo]
             append_to_aof [formatCommand eval {redis.call("incr",KEYS[1])} 1 foo]
             append_to_aof [formatCommand eval {redis.call("incr",KEYS[1])} 1 foo]
@@ -674,11 +676,7 @@ tags {"aof external:skip"} {
     }
 }
 
-# make sure the test infra won't use SELECT
-set old_singledb $::singledb
-set ::singledb 1
-
-tags {"aof cluster external:skip"} {
+tags {"aof cluster external:skip singledb"} {
     test {Test cluster slots / cluster shards in aof won't crash} {
         create_aof $aof_dirpath $aof_file {
             append_to_aof [formatCommand cluster slots]
@@ -689,9 +687,10 @@ tags {"aof cluster external:skip"} {
             append_to_manifest "file appendonly.aof.1.incr.aof seq 1 type i\n"
         }
 
-        start_server_aof [list dir $server_path cluster-enabled yes] {
+        start_server_aof [list dir $server_path cluster-enabled yes cluster-port [find_available_port $::baseport $::portcount]] {
             assert_equal [r ping] {PONG}
         }
+        clean_aof_persistence $aof_dirpath
     }
 
     test {Test command check in aof won't crash} {
@@ -735,5 +734,3 @@ tags {"aof cluster external:skip"} {
         clean_aof_persistence $aof_dirpath
     }
 }
-
-set ::singledb $old_singledb

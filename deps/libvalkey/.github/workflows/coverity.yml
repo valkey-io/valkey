@@ -1,0 +1,31 @@
+name: Coverity scan
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 10 * * 1' # Mon 10.00 UTC
+
+permissions:
+  contents: read
+
+jobs:
+  coverity:
+    if: github.repository == 'valkey-io/libvalkey'
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+    - name: Install dependencies
+      uses: awalsh128/cache-apt-pkgs-action@2c09a5e66da6c8016428a2172bd76e5e4f14bb17 # v1.5.3
+      with:
+        packages: libevent-dev
+        version: 1.0
+    - name: Prepare
+      run: |
+        mkdir build; cd build
+        cmake -DCMAKE_BUILD_TYPE=RelWithDebInfo -DENABLE_TLS=ON ..
+    - name: Build, scan and report
+      uses: vapier/coverity-scan-action@2068473c7bdf8c2fb984a6a40ae76ee7facd7a85 # v1.8.0
+      with:
+        project: libvalkey
+        token: ${{ secrets.COVERITY_TOKEN }}
+        email: bjorn.a.svensson@est.tech
+        working-directory: build

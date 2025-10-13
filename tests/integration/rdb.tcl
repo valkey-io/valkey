@@ -15,7 +15,10 @@ set server_path [tmpdir "server.rdb-encoding-test"]
 
 # Copy RDB with different encodings in server path
 exec cp tests/assets/encodings.rdb $server_path
+exec cp tests/assets/encodings-rdb12.rdb $server_path
+exec cp tests/assets/encodings-rdb75-unknown-types.rdb $server_path
 exec cp tests/assets/encodings-rdb987.rdb $server_path
+exec cp tests/assets/encodings-rdb987-unknown-types.rdb $server_path
 exec cp tests/assets/list-quicklist.rdb $server_path
 
 start_server [list overrides [list "dir" $server_path "dbfilename" "list-quicklist.rdb" save ""]] {
@@ -55,7 +58,7 @@ start_server_and_kill_it [list "dir" $server_path "dbfilename" "encodings-rdb987
             [string match {*Fatal error loading*} \
                  [exec tail -1 < [dict get $srv stdout]]]
         } else {
-            fail "Server started even if RDB version check failed"
+            fail "Server started even though RDB version is unsupported"
         }
     }
 }
@@ -67,6 +70,42 @@ start_server [list overrides [list "dir" $server_path \
         r select 0
         csvdump r
     } $csv_dump
+}
+
+start_server_and_kill_it [list dir $server_path \
+                              dbfilename "encodings-rdb987-unknown-types.rdb" \
+                              rdb-version-check relaxed] {
+    test "RDB future version loading with unknown types, relaxed version check" {
+        wait_for_condition 50 100 {
+            [string match {*Unknown type or opcode when loading DB. Unrecoverable error, aborting now.*} \
+                 [exec tail -2 < [dict get $srv stdout]]]
+        } else {
+            fail "Server started even though RDB contains unknown types"
+        }
+    }
+}
+
+start_server [list overrides [list dir $server_path \
+                                  dbfilename "encodings-rdb12.rdb" \
+                                  rdb-version-check relaxed]] {
+    test "RDB foreign version loading, relaxed version check" {
+        r select 0
+        assert_equal foo [r keys *]
+        assert_equal bar [r get foo]
+    }
+}
+
+start_server_and_kill_it [list dir $server_path \
+                              dbfilename "encodings-rdb75-unknown-types.rdb" \
+                              rdb-version-check relaxed] {
+    test "RDB foreign version loading with unknown types, relaxed version check" {
+        wait_for_condition 50 100 {
+            [string match {*Can't handle foreign type or opcode 150 in RDB with version 75*} \
+                 [exec tail -2 < [dict get $srv stdout]]]
+        } else {
+            fail "Server started even though RDB contains unknown types"
+        }
+    }
 }
 
 set server_path [tmpdir "server.rdb-startup-test"]
@@ -114,13 +153,44 @@ start_server [list overrides [list "dir" $server_path] keep_persistence true] {
     r del stream
 }
 
+set dump_path [file join $server_path dump.rdb]
+
+# Prepare custom umask test scenario
+if {[catch {package require Tclx}]} {
+    if {$::verbose} {
+        puts "Skipping umask test. Package Tclx not installed."
+    }
+} else {
+    # We have umask from the Tclx package.
+    set old_umask [umask]
+    set old_perm [expr {666 - $old_umask}]
+    assert_equal [file attributes $dump_path -permissions] 00$old_perm
+
+    if {$old_umask == 22} {
+        set new_umask 2
+    } else {
+        set new_umask 22
+    }
+    set new_perm [expr {666 - $new_umask}]
+
+    umask $new_umask
+    start_server [list overrides [list "dir" $server_path] keep_persistence true] {
+        test {Test nondefault umask applied} {
+            r save
+            # Use numeric comparison for compatibility with Tcl 8 and 9.
+            assert_range [file attributes $dump_path -permissions] 00$new_perm 00$new_perm
+        }
+    }
+    umask $old_umask
+}
+
 # Make the RDB file unreadable
-file attributes [file join $server_path dump.rdb] -permissions 0222
+file attributes $dump_path -permissions 0222
 
 # Detect root account (it is able to read the file even with 002 perm)
 set isroot 0
 catch {
-    open [file join $server_path dump.rdb]
+    open $dump_path
     set isroot 1
 }
 
@@ -139,11 +209,11 @@ if {!$isroot} {
 }
 
 # Fix permissions of the RDB file.
-file attributes [file join $server_path dump.rdb] -permissions 0666
+file attributes $dump_path -permissions 0666
 
 # Corrupt its CRC64 checksum.
-set filesize [file size [file join $server_path dump.rdb]]
-set fd [open [file join $server_path dump.rdb] r+]
+set filesize [file size $dump_path]
+set fd [open $dump_path r+]
 fconfigure $fd -translation binary
 seek $fd -8 end
 puts -nonewline $fd "foobar00"; # Corrupt the checksum

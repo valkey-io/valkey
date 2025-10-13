@@ -69,6 +69,9 @@ int test_string2ll(int argc, char **argv, int flags) {
     valkey_strlcpy(buf, "9223372036854775808", sizeof(buf)); /* overflow */
     TEST_ASSERT(string2ll(buf, strlen(buf), &v) == 0);
 
+    valkey_strlcpy(buf, "18446744073709551615", sizeof(buf)); /* overflow */
+    TEST_ASSERT(string2ll(buf, strlen(buf), &v) == 0);
+
     return 0;
 }
 
@@ -325,5 +328,32 @@ int test_reclaimFilePageCache(int argc, char **argv, int flags) {
 
     unlink(tmpfile);
 #endif
+    return 0;
+}
+
+int test_writePointerWithPadding(int argc, char **argv, int flags) {
+    UNUSED(argc);
+    UNUSED(argv);
+    UNUSED(flags);
+
+    unsigned char buf[8];
+    static int dummy;
+    void *ptr = &dummy;
+    size_t ptr_size = sizeof(ptr);
+
+    /* Write the pointer and pad to 8 bytes */
+    writePointerWithPadding(buf, ptr);
+
+    /* The first ptr_size bytes must match the raw pointer bytes */
+    unsigned char expected[sizeof(ptr)];
+    memcpy(expected, &ptr, ptr_size);
+    TEST_ASSERT(memcmp(buf, expected, ptr_size) == 0);
+
+
+    /* The remaining bytes (if any) must be zero */
+    for (size_t i = ptr_size; i < sizeof(buf); i++) {
+        TEST_ASSERT(buf[i] == 0);
+    }
+
     return 0;
 }

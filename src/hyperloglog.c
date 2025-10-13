@@ -40,11 +40,15 @@
 #include <stdint.h>
 #include <math.h>
 
-#ifdef HAVE_AVX2
+#if HAVE_X86_SIMD
 /* Define __MM_MALLOC_H to prevent importing the memory aligned
  * allocation functions, which we don't use. */
 #define __MM_MALLOC_H
 #include <immintrin.h>
+#endif
+
+#if HAVE_ARM_NEON
+#include <arm_neon.h>
 #endif
 
 /* The HyperLogLog implementation is based on the following ideas:
@@ -220,12 +224,25 @@ struct hllhdr {
 
 static char *invalid_hll_err = "-INVALIDOBJ Corrupted HLL object detected";
 
-#ifdef HAVE_AVX2
+#if HAVE_X86_SIMD || HAVE_ARM_NEON
+#define SIMD_SUPPORTED 1
 static int simd_enabled = 1;
+#else
+#define SIMD_SUPPORTED 0
+#endif
+
+#if HAVE_X86_SIMD
 #define HLL_USE_AVX2 (simd_enabled && __builtin_cpu_supports("avx2"))
 #else
 #define HLL_USE_AVX2 0
 #endif
+
+#if defined(__aarch64__) && HAVE_ARM_NEON
+#define HLL_USE_NEON (simd_enabled)
+#else
+#define HLL_USE_NEON 0
+#endif
+
 
 /* =========================== Low level bit macros ========================= */
 
@@ -602,6 +619,7 @@ int hllSparseToDense(robj *o) {
     struct hllhdr *hdr, *oldhdr = (struct hllhdr *)sparse;
     int idx = 0, runlen, regval;
     uint8_t *p = (uint8_t *)sparse, *end = p + sdslen(sparse);
+    int valid = 1;
 
     /* If the representation is already the right one return ASAP. */
     hdr = (struct hllhdr *)sparse;
@@ -621,16 +639,27 @@ int hllSparseToDense(robj *o) {
     while (p < end) {
         if (HLL_SPARSE_IS_ZERO(p)) {
             runlen = HLL_SPARSE_ZERO_LEN(p);
+            if ((runlen + idx) > HLL_REGISTERS) { /* Overflow. */
+                valid = 0;
+                break;
+            }
             idx += runlen;
             p++;
         } else if (HLL_SPARSE_IS_XZERO(p)) {
             runlen = HLL_SPARSE_XZERO_LEN(p);
+            if ((runlen + idx) > HLL_REGISTERS) { /* Overflow. */
+                valid = 0;
+                break;
+            }
             idx += runlen;
             p += 2;
         } else {
             runlen = HLL_SPARSE_VAL_LEN(p);
             regval = HLL_SPARSE_VAL_VALUE(p);
-            if ((runlen + idx) > HLL_REGISTERS) break; /* Overflow. */
+            if ((runlen + idx) > HLL_REGISTERS) { /* Overflow. */
+                valid = 0;
+                break;
+            }
             while (runlen--) {
                 HLL_DENSE_SET_REGISTER(hdr->registers, idx, regval);
                 idx++;
@@ -641,7 +670,7 @@ int hllSparseToDense(robj *o) {
 
     /* If the sparse representation was valid, we expect to find idx
      * set to HLL_REGISTERS. */
-    if (idx != HLL_REGISTERS) {
+    if (!valid || idx != HLL_REGISTERS) {
         sdsfree(dense);
         return C_ERR;
     }
@@ -938,27 +967,40 @@ int hllSparseAdd(robj *o, unsigned char *ele, size_t elesize) {
 void hllSparseRegHisto(uint8_t *sparse, int sparselen, int *invalid, int *reghisto) {
     int idx = 0, runlen, regval;
     uint8_t *end = sparse + sparselen, *p = sparse;
+    int valid = 1;
 
     while (p < end) {
         if (HLL_SPARSE_IS_ZERO(p)) {
             runlen = HLL_SPARSE_ZERO_LEN(p);
+            if ((runlen + idx) > HLL_REGISTERS) { /* Overflow. */
+                valid = 0;
+                break;
+            }
             idx += runlen;
             reghisto[0] += runlen;
             p++;
         } else if (HLL_SPARSE_IS_XZERO(p)) {
             runlen = HLL_SPARSE_XZERO_LEN(p);
+            if ((runlen + idx) > HLL_REGISTERS) { /* Overflow. */
+                valid = 0;
+                break;
+            }
             idx += runlen;
             reghisto[0] += runlen;
             p += 2;
         } else {
             runlen = HLL_SPARSE_VAL_LEN(p);
             regval = HLL_SPARSE_VAL_VALUE(p);
+            if ((runlen + idx) > HLL_REGISTERS) { /* Overflow. */
+                valid = 0;
+                break;
+            }
             idx += runlen;
             reghisto[regval] += runlen;
             p++;
         }
     }
-    if (idx != HLL_REGISTERS && invalid) *invalid = 1;
+    if ((!valid || idx != HLL_REGISTERS) && invalid) *invalid = 1;
 }
 
 /* ========================= HyperLogLog Count ==============================
@@ -1083,7 +1125,7 @@ int hllAdd(robj *o, unsigned char *ele, size_t elesize) {
     }
 }
 
-#ifdef HAVE_AVX2
+#if HAVE_X86_SIMD
 /* A specialized version of hllMergeDense, optimized for default configurations.
  *
  * Requirements:
@@ -1193,14 +1235,109 @@ void hllMergeDenseAVX2(uint8_t *reg_raw, const uint8_t *reg_dense) {
 }
 #endif
 
+#if HAVE_ARM_NEON
+/*
+ * hllMergeDenseNEON is an ARM optimized version of hllMergeDense using NEON
+ *
+ * This function merges HyperLogLog (HLL) dense registers using ARM NEON SIMD instructions.
+ * It extracts 6 bits registers from a dense format, and stores them in raw format
+ *
+ * Parameters:
+ * - reg_raw: Pointer to the raw register array
+ * - reg_dense: Pointer to the dense register array
+ */
+void hllMergeDenseNEON(uint8_t *reg_raw, const uint8_t *reg_dense) {
+    uint8_t *dense_ptr = (uint8_t *)reg_dense;
+    uint8_t *raw_ptr = (uint8_t *)reg_raw;
+
+    uint8x16_t idx = {0, 1, 2, 0xFF,
+                      3, 4, 5, 0xFF,
+                      6, 7, 8, 0xFF,
+                      9, 10, 11, 0xFF};
+
+    // Bit masks for extracting specific bit ranges
+    uint8x16_t mask1 = vreinterpretq_u8_u32(vdupq_n_u32(0x0000003f)); // Bits 0-5
+    uint8x16_t mask2 = vreinterpretq_u8_u32(vdupq_n_u32(0x00000fc0)); // Bits 6-11
+    uint8x16_t mask3 = vreinterpretq_u8_u32(vdupq_n_u32(0x0003f000)); // Bits 12-17
+    uint8x16_t mask4 = vreinterpretq_u8_u32(vdupq_n_u32(0x00fc0000)); // Bits 18-23
+
+    for (int i = 0; i < HLL_REGISTERS / 16 - 1; ++i) {
+        /* Load 16 bytes from dense registers but only the first 12 bytes are processed because they contain
+         * 16 registers, which is copied into 16 bytes raw registers.
+         * The last 4 bytes are ignored because (1) they do not form a complete number of registers, and do not fit
+         * in the 16 bytes. The unprocessed 4 bytes are processed in the next iteration.
+         */
+        uint8x16_t r = vld1q_u8(dense_ptr);
+
+        /* Reorder bytes based on index mapping
+         * Lookup indices
+         *From: {AAAB|BBCC|CDDD}
+         *To:   {AAA0|BBB0|CCC0|DDD0}
+         */
+        uint8x16_t x = vqtbl1q_u8(r, idx);
+
+        // Extract and isolate registers
+        uint8x16_t a1 = vandq_u8(x, mask1);
+        uint8x16_t a2 = vandq_u8(x, mask2);
+        uint8x16_t a3 = vandq_u8(x, mask3);
+        uint8x16_t a4 = vandq_u8(x, mask4);
+
+        // Align extracted values by shifting left
+        uint32x4_t a2_32 = vreinterpretq_u32_u8(a2);
+        a2_32 = vshlq_n_u32(a2_32, 2);
+        a2 = vreinterpretq_u8_u32(a2_32);
+
+        uint32x4_t a3_32 = vreinterpretq_u32_u8(a3);
+        a3_32 = vshlq_n_u32(a3_32, 4);
+        a3 = vreinterpretq_u8_u32(a3_32);
+
+        uint32x4_t a4_32 = vreinterpretq_u32_u8(a4);
+        a4_32 = vshlq_n_u32(a4_32, 6);
+        a4 = vreinterpretq_u8_u32(a4_32);
+
+        // Combine extracted values
+        uint8x16_t y1 = vorrq_u8(a1, a2);
+        uint8x16_t y2 = vorrq_u8(a3, a4);
+        uint8x16_t y = vorrq_u8(y1, y2);
+
+        // Load current raw register values
+        uint8x16_t z = vld1q_u8(raw_ptr);
+
+        // Update raw registers with max values
+        z = vmaxq_u8(z, y);
+
+        // Store updated values
+        vst1q_u8(raw_ptr, z);
+
+        raw_ptr += 16;
+        dense_ptr += 12;
+    }
+
+    /* Process remaining registers, we do this manually because we don't want to over-read 4 bytes */
+    uint8_t val;
+    for (int i = HLL_REGISTERS - 16; i < HLL_REGISTERS; i++) {
+        HLL_DENSE_GET_REGISTER(val, reg_dense, i);
+        if (val > reg_raw[i]) {
+            reg_raw[i] = val; // Update raw register if new value is greater
+        }
+    }
+}
+#endif /* HAVE_ARM_NEON */
+
 /* Merge dense-encoded registers to raw registers array. */
 void hllMergeDense(uint8_t *reg_raw, const uint8_t *reg_dense) {
-#ifdef HAVE_AVX2
+#if HAVE_X86_SIMD
     if (HLL_REGISTERS == 16384 && HLL_BITS == 6) {
         if (HLL_USE_AVX2) {
             hllMergeDenseAVX2(reg_raw, reg_dense);
             return;
         }
+    }
+#endif
+#if defined(__aarch64__) && HAVE_ARM_NEON && HLL_REGISTERS == 16384 && HLL_BITS == 6
+    if (HLL_USE_NEON) {
+        hllMergeDenseNEON(reg_raw, reg_dense);
+        return;
     }
 #endif
 
@@ -1230,22 +1367,34 @@ int hllMerge(uint8_t *max, robj *hll) {
     } else {
         uint8_t *p = hll->ptr, *end = p + sdslen(hll->ptr);
         long runlen, regval;
+        int valid = 1;
 
         p += HLL_HDR_SIZE;
         i = 0;
         while (p < end) {
             if (HLL_SPARSE_IS_ZERO(p)) {
                 runlen = HLL_SPARSE_ZERO_LEN(p);
+                if ((runlen + i) > HLL_REGISTERS) { /* Overflow. */
+                    valid = 0;
+                    break;
+                }
                 i += runlen;
                 p++;
             } else if (HLL_SPARSE_IS_XZERO(p)) {
                 runlen = HLL_SPARSE_XZERO_LEN(p);
+                if ((runlen + i) > HLL_REGISTERS) { /* Overflow. */
+                    valid = 0;
+                    break;
+                }
                 i += runlen;
                 p += 2;
             } else {
                 runlen = HLL_SPARSE_VAL_LEN(p);
                 regval = HLL_SPARSE_VAL_VALUE(p);
-                if ((runlen + i) > HLL_REGISTERS) break; /* Overflow. */
+                if ((runlen + i) > HLL_REGISTERS) { /* Overflow. */
+                    valid = 0;
+                    break;
+                }
                 while (runlen--) {
                     if (regval > max[i]) max[i] = regval;
                     i++;
@@ -1253,12 +1402,12 @@ int hllMerge(uint8_t *max, robj *hll) {
                 p++;
             }
         }
-        if (i != HLL_REGISTERS) return C_ERR;
+        if (!valid || i != HLL_REGISTERS) return C_ERR;
     }
     return C_OK;
 }
 
-#ifdef HAVE_AVX2
+#if HAVE_X86_SIMD
 /* A specialized version of hllDenseCompress, optimized for default configurations.
  *
  * Requirements:
@@ -1357,14 +1506,88 @@ void hllDenseCompressAVX2(uint8_t *reg_dense, const uint8_t *reg_raw) {
 }
 #endif
 
+#if HAVE_ARM_NEON
+/*
+ * hllDenseCompressNEON is ARM optimized version of hllDenseCompress using NEON.
+ *
+ * This function takes a raw register (`reg_raw`) and compresses it into a dense representation (`reg_dense`).
+ * It uses NEON SIMD instructions to process multiple values at once.
+ *
+ * - The first loop processes most of the registers in 16-element blocks using NEON instructions.
+ * - The second loop handles the remaining registers using a direct assignment macro.
+ *
+ */
+void hllDenseCompressNEON(uint8_t *reg_dense, const uint8_t *reg_raw) {
+    /* Shuffle indices for packing bytes of dense registers
+     * From: {AAA0|BBB0|CCC0|DDD0}
+     * To:   {AAAB|BBCC|CDDD|0000}
+     */
+    uint8x16_t idx = {
+        0, 1, 2,               // Extract bytes from lane 0
+        4, 5, 6,               // Extract bytes from lane 1
+        8, 9, 10,              // Extract bytes from lane 2
+        12, 13, 14,            // Extract bytes from lane 3
+        0xFF, 0xFF, 0xFF, 0xFF // Zero out last 4 elements (padding)
+    };
+
+    // Bit masks for extracting first 6 bits from every byte within 32-bit lanes
+    uint32x4_t mask1 = vdupq_n_u32(0x0000003F); // Extract bits 0-5
+    uint32x4_t mask2 = vdupq_n_u32(0x00003F00); // Extract bits 8-13
+    uint32x4_t mask3 = vdupq_n_u32(0x003F0000); // Extract bits 16-21
+    uint32x4_t mask4 = vdupq_n_u32(0x3F000000); // Extract bits 24-29
+
+    uint8_t *r = (uint8_t *)reg_raw;   // Input pointer
+    uint8_t *t = (uint8_t *)reg_dense; // Output pointer
+
+    // Process registers in blocks of 16 using NEON instructions
+    // The last 16 registers are processed separately to avoid overwriting, as the final write is 12 bytes.
+    for (int i = 0; i < HLL_REGISTERS / 16 - 1; i++) {
+        // Load 16 bytes as 4x 32-bit values
+        uint32x4_t x = vld1q_u32((uint32_t *)r);
+
+        // Apply masks to extract a single register from every 4 registers, for every lane
+        uint32x4_t a1 = vandq_u32(x, mask1);
+        uint32x4_t a2 = vandq_u32(x, mask2);
+        uint32x4_t a3 = vandq_u32(x, mask3);
+        uint32x4_t a4 = vandq_u32(x, mask4);
+
+        // Shift extracted bits to align them properly
+        a2 = vshrq_n_u32(a2, 2);
+        a3 = vshrq_n_u32(a3, 4);
+        a4 = vshrq_n_u32(a4, 6);
+
+        uint32x4_t y1 = vorrq_u32(a1, a2);
+        uint32x4_t y2 = vorrq_u32(a3, a4);
+        uint32x4_t y = vorrq_u32(y1, y2);
+
+        // Perform a table lookup to shuffle extracted values and align them in 12 bytes
+        vst1q_u8(t, vqtbl1q_u8(vreinterpretq_u8_u32(y), idx));
+
+        t += 12;
+        r += 16;
+    }
+
+    // Handle the remaining registers individually (12 bytes)
+    for (int i = HLL_REGISTERS - 16; i < HLL_REGISTERS; i++) {
+        HLL_DENSE_SET_REGISTER(reg_dense, i, reg_raw[i]);
+    }
+}
+#endif /* HAVE_ARM_NEON */
+
 /* Compress raw registers to dense representation. */
 void hllDenseCompress(uint8_t *reg_dense, const uint8_t *reg_raw) {
-#ifdef HAVE_AVX2
-    if (HLL_REGISTERS == 16384 && HLL_BITS == 6) {
-        if (HLL_USE_AVX2) {
-            hllDenseCompressAVX2(reg_dense, reg_raw);
-            return;
-        }
+#if HAVE_X86_SIMD && HLL_REGISTERS == 16384 && HLL_BITS == 6
+    if (HLL_USE_AVX2) {
+        hllDenseCompressAVX2(reg_dense, reg_raw);
+        return;
+    }
+
+#endif
+
+#if HAVE_ARM_NEON && HLL_REGISTERS == 16384 && HLL_BITS == 6
+    if (HLL_USE_NEON) {
+        hllDenseCompressNEON(reg_dense, reg_raw);
+        return;
     }
 #endif
 
@@ -1770,22 +1993,18 @@ void pfdebugCommand(client *c) {
         if (c->argc != 3) goto arityerr;
 
         if (!strcasecmp(c->argv[2]->ptr, "on")) {
-#ifdef HAVE_AVX2
+#if SIMD_SUPPORTED
             simd_enabled = 1;
 #endif
         } else if (!strcasecmp(c->argv[2]->ptr, "off")) {
-#ifdef HAVE_AVX2
+#if SIMD_SUPPORTED
             simd_enabled = 0;
 #endif
         } else {
             addReplyError(c, "Argument must be ON or OFF");
         }
 
-        if (HLL_USE_AVX2) {
-            addReplyStatus(c, "enabled");
-        } else {
-            addReplyStatus(c, "disabled");
-        }
+        addReplyStatus(c, (HLL_USE_AVX2 || HLL_USE_NEON) ? "enabled" : "disabled");
 
         return;
     }

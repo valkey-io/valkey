@@ -33,6 +33,7 @@
 #include "server.h"
 #include "bio.h"
 #include "script.h"
+#include "cluster_migrateslots.h"
 #include <math.h>
 
 /* ----------------------------------------------------------------------------
@@ -146,6 +147,8 @@ int evictionPoolPopulate(serverDb *db, kvstore *samplekvs, struct evictionPoolEn
     void *samples[server.maxmemory_samples];
 
     int slot = kvstoreGetFairRandomHashtableIndex(samplekvs);
+    /* We may get not found if there are no keys */
+    if (slot == KVSTORE_INDEX_NOT_FOUND) return 0;
     count = kvstoreHashtableSampleEntries(samplekvs, slot, &samples[0], server.maxmemory_samples);
     for (j = 0; j < count; j++) {
         unsigned long long idle;
@@ -350,6 +353,11 @@ size_t freeMemoryGetNotCountedMemory(void) {
     if (server.aof_state != AOF_OFF) {
         overhead += sdsAllocSize(server.aof_buf);
     }
+
+    if (clusterIsAnySlotExporting()) {
+        overhead += clusterGetTotalSlotExportBufferMemory();
+    }
+
     return overhead;
 }
 
@@ -555,6 +563,7 @@ int performEvictions(void) {
         static unsigned int next_db = 0;
         sds bestkey = NULL;
         int bestdbid;
+        int bestslot;
         serverDb *db;
         robj *valkey;
 
@@ -568,7 +577,8 @@ int performEvictions(void) {
                  * so to start populate the eviction pool sampling keys from
                  * every DB. */
                 for (i = 0; i < server.dbnum; i++) {
-                    db = server.db + i;
+                    db = server.db[i];
+                    if (db == NULL) continue;
                     kvstore *kvs;
                     if (server.maxmemory_policy & MAXMEMORY_FLAG_ALLKEYS) {
                         kvs = db->keys;
@@ -601,12 +611,13 @@ int performEvictions(void) {
 
                     kvstore *kvs;
                     if (server.maxmemory_policy & MAXMEMORY_FLAG_ALLKEYS) {
-                        kvs = server.db[bestdbid].keys;
+                        kvs = server.db[bestdbid]->keys;
                     } else {
-                        kvs = server.db[bestdbid].expires;
+                        kvs = server.db[bestdbid]->expires;
                     }
                     void *entry = NULL;
-                    int found = kvstoreHashtableFind(kvs, pool[k].slot, pool[k].key, &entry);
+
+                    bool found = kvstoreHashtableFind(kvs, pool[k].slot, pool[k].key, &entry);
 
                     /* Remove the entry from the pool. */
                     if (pool[k].key != pool[k].cached) sdsfree(pool[k].key);
@@ -618,6 +629,7 @@ int performEvictions(void) {
                     if (found) {
                         valkey = entry;
                         bestkey = objectGetKey(valkey);
+                        bestslot = pool[k].slot;
                         break;
                     } else {
                         /* Ghost... Iterate again. */
@@ -634,7 +646,8 @@ int performEvictions(void) {
              * incrementally visit all DBs. */
             for (i = 0; i < server.dbnum; i++) {
                 j = (++next_db) % server.dbnum;
-                db = server.db + j;
+                db = server.db[j];
+                if (db == NULL) continue;
                 kvstore *kvs;
                 if (server.maxmemory_policy == MAXMEMORY_ALLKEYS_RANDOM) {
                     kvs = db->keys;
@@ -642,10 +655,12 @@ int performEvictions(void) {
                     kvs = db->expires;
                 }
                 int slot = kvstoreGetFairRandomHashtableIndex(kvs);
+                if (slot == KVSTORE_INDEX_NOT_FOUND) continue; /* No keys in this DB. */
                 void *entry;
                 if (kvstoreHashtableRandomEntry(kvs, slot, &entry)) {
                     bestkey = objectGetKey((robj *)entry);
                     bestdbid = j;
+                    bestslot = slot;
                     break;
                 }
             }
@@ -653,7 +668,7 @@ int performEvictions(void) {
 
         /* Finally remove the selected key. */
         if (bestkey) {
-            db = server.db + bestdbid;
+            db = server.db[bestdbid];
             robj *keyobj = createStringObject(bestkey, sdslen(bestkey));
             /* We compute the amount of memory freed by db*Delete() alone.
              * It is possible that actually the memory needed to propagate
@@ -671,12 +686,13 @@ int performEvictions(void) {
             dbGenericDelete(db, keyobj, server.lazyfree_lazy_eviction, DB_FLAG_KEY_EVICTED);
             latencyEndMonitor(eviction_latency);
             latencyAddSampleIfNeeded("eviction-del", eviction_latency);
+            latencyTraceIfNeeded(db, eviction_del, eviction_latency);
             delta -= (long long)zmalloc_used_memory();
             mem_freed += delta;
             server.stat_evictedkeys++;
             signalModifiedKey(NULL, db, keyobj);
             notifyKeyspaceEvent(NOTIFY_EVICTED, "evicted", keyobj, db->id);
-            propagateDeletion(db, keyobj, server.lazyfree_lazy_eviction);
+            propagateDeletion(db, keyobj, server.lazyfree_lazy_eviction, bestslot);
             exitExecutionUnit();
             postExecutionUnitOperations();
             decrRefCount(keyobj);
@@ -734,10 +750,12 @@ cant_free:
         }
         latencyEndMonitor(lazyfree_latency);
         latencyAddSampleIfNeeded("eviction-lazyfree", lazyfree_latency);
+        latencyTraceIfNeeded(db, eviction_lazyfree, lazyfree_latency);
     }
 
     latencyEndMonitor(latency);
     latencyAddSampleIfNeeded("eviction-cycle", latency);
+    latencyTraceIfNeeded(db, eviction_cycle, latency);
 
 update_metrics:
     if (result == EVICT_RUNNING || result == EVICT_FAIL) {

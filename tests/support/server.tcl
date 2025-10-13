@@ -12,17 +12,23 @@ proc start_server_error {executable config_file error} {
     send_data_packet $::test_server_fd err $err
 }
 
-proc check_valgrind_errors stderr {
-    set res [find_valgrind_errors $stderr true]
+proc check_valgrind_errors srv {
+    set res [find_valgrind_errors [dict get $srv stderr] true]
     if {$res != ""} {
         send_data_packet $::test_server_fd err "Valgrind error: $res\n"
+        if {$::dump_logs} {
+            dump_server_log $srv
+        }
     }
 }
 
-proc check_sanitizer_errors stderr {
-    set res [sanitizer_errors_from_file $stderr]
+proc check_sanitizer_errors srv {
+    set res [sanitizer_errors_from_file [dict get $srv stderr]]
     if {$res != ""} {
         send_data_packet $::test_server_fd err "Sanitizer error: $res\n"
+        if {$::dump_logs} {
+            dump_server_log $srv
+        }
     }
 }
 
@@ -42,6 +48,7 @@ proc clean_persistence config {
     catch {exec rm -rf $rdb}
 }
 
+# config is actually a srv
 proc kill_server config {
     # nothing to kill when running against external server
     if {$::external} return
@@ -56,10 +63,10 @@ proc kill_server config {
     if {![is_alive $pid]} {
         # Check valgrind errors if needed
         if {$::valgrind} {
-            check_valgrind_errors [dict get $config stderr]
+            check_valgrind_errors $config
         }
 
-        check_sanitizer_errors [dict get $config stderr]
+        check_sanitizer_errors $config
 
         # Remove this pid from the set of active pids in the test server.
         send_data_packet $::test_server_fd server-killed $pid
@@ -120,10 +127,10 @@ proc kill_server config {
 
     # Check valgrind errors if needed
     if {$::valgrind} {
-        check_valgrind_errors [dict get $config stderr]
+        check_valgrind_errors $config
     }
 
-    check_sanitizer_errors [dict get $config stderr]
+    check_sanitizer_errors $config
 
     # Remove this pid from the set of active pids in the test server.
     send_data_packet $::test_server_fd server-killed $pid
@@ -447,6 +454,7 @@ proc start_server {options {code undefined}} {
     set keep_persistence false
     set config_lines {}
     set start_other_server 0
+    set old_singledb $::singledb
 
     # Wait for the server to be ready and check for server liveness/client connectivity before starting the test.
     set wait_ready true
@@ -494,8 +502,14 @@ proc start_server {options {code undefined}} {
     if {![tags_acceptable $::tags err]} {
         incr ::num_aborted
         send_data_packet $::test_server_fd ignore $err
+        set ::singledb $old_singledb
         set ::tags [lrange $::tags 0 end-[llength $tags]]
         return
+    }
+
+    # Tags that override global options
+    if {[lsearch $::tags singledb] >= 0} {
+        set ::singledb 1
     }
 
     # If we are running against an external server, we just push the
@@ -503,6 +517,7 @@ proc start_server {options {code undefined}} {
     if {$::external} {
         run_external_server_test $code $overrides
 
+        set ::singledb $old_singledb
         set ::tags [lrange $::tags 0 end-[llength $tags]]
         return
     }
@@ -534,6 +549,7 @@ proc start_server {options {code undefined}} {
     if {$::io_threads} {
         dict set config "io-threads" 2
         dict set config "events-per-io-thread" 0
+        dict set config "min-io-threads-avoid-copy-reply" 2
     }
 
     foreach line $data {
@@ -710,6 +726,7 @@ proc start_server {options {code undefined}} {
         if {[catch { uplevel 1 $code } error]} {
             set backtrace $::errorInfo
             set assertion [string match "assertion:*" $error]
+            set skip [string match "skipped:*" $error]
 
             # fetch srv back from the server list, in case it was restarted by restart_server (new PID)
             set srv [lindex $::servers end]
@@ -721,7 +738,9 @@ proc start_server {options {code undefined}} {
             dict set srv "skipleaks" 1
             kill_server $srv
 
-            if {$::dump_logs} {
+            if {$skip} {
+                # The test is just skipped. No error.
+            } elseif {$::dump_logs} {
                 # crash or assertion ($::num_failed isn't incremented yet)
                 # this happens when the test spawns a server and not the other way around
                 dump_server_log $srv
@@ -742,7 +761,7 @@ proc start_server {options {code undefined}} {
                 }
             }
 
-            if {!$assertion && $::durable} {
+            if {!$assertion && !$skip && $::durable} {
                 # durable is meant to prevent the whole tcl test from exiting on
                 # an exception. an assertion will be caught by the test proc.
                 set msg [string range $error 10 end]
@@ -773,6 +792,7 @@ proc start_server {options {code undefined}} {
         # pop the server object
         set ::servers [lrange $::servers 0 end-1]
 
+        set ::singledb $old_singledb
         set ::tags [lrange $::tags 0 end-[llength $tags]]
         kill_server $srv
         if {!$keep_persistence} {
@@ -780,6 +800,7 @@ proc start_server {options {code undefined}} {
         }
         set _ ""
     } else {
+        set ::singledb $old_singledb
         set ::tags [lrange $::tags 0 end-[llength $tags]]
         set _ $srv
     }

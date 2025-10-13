@@ -29,11 +29,14 @@
  */
 
 #include "server.h"
-#ifdef HAVE_AVX2
+#if HAVE_X86_SIMD
 /* Define __MM_MALLOC_H to prevent importing the memory aligned
  * allocation functions, which we don't use. */
 #define __MM_MALLOC_H
 #include <immintrin.h>
+#endif
+#if HAVE_ARM_NEON
+#include <arm_neon.h>
 #endif
 /* -----------------------------------------------------------------------------
  * Helpers and low level bit functions.
@@ -48,7 +51,7 @@ static const unsigned char bitsinbyte[256] = {
     5, 5, 6, 5, 6, 6, 7, 2, 3, 3, 4, 3, 4, 4, 5, 3, 4, 4, 5, 4, 5, 5, 6, 3, 4, 4, 5, 4, 5, 5, 6, 4, 5, 5, 6, 5, 6,
     6, 7, 3, 4, 4, 5, 4, 5, 5, 6, 4, 5, 5, 6, 5, 6, 6, 7, 4, 5, 5, 6, 5, 6, 6, 7, 5, 6, 6, 7, 6, 7, 7, 8};
 
-#ifdef HAVE_AVX2
+#if HAVE_X86_SIMD
 /* The SIMD version of popcount enhances performance through parallel lookup tables which is based on the following article:
  * https://arxiv.org/pdf/1611.07612 */
 ATTRIBUTE_TARGET_AVX2
@@ -187,17 +190,68 @@ long long popcountScalar(void *s, long count) {
     return bits;
 }
 
+#if HAVE_ARM_NEON
+#include <arm_neon.h>
+
+/*  SIMD version of popcount for ARM NEON.
+ *  Processes data in 64-byte NEON batches, falls back to scalar for tail. */
+long long popcountNEON(void *s, long n) {
+    long long t = 0;
+    uint8_t *p = (uint8_t *)s;
+    ;
+    const uint8_t *e = p + n;
+
+    /* Process 64-byte blocks using unrolled loop (4 x 16-byte vectors) */
+    for (; p <= e - 64; p += 64) {
+        /* Load 4 vector registers (16 bytes each) */
+        uint8x16_t v0 = vld1q_u8(p);
+        uint8x16_t v1 = vld1q_u8(p + 16);
+        uint8x16_t v2 = vld1q_u8(p + 32);
+        uint8x16_t v3 = vld1q_u8(p + 48);
+
+        /* Count bits in each byte and sum vectors */
+        uint8x16_t s1 = vaddq_u8(vcntq_u8(v0), vcntq_u8(v1));
+        uint8x16_t s2 = vaddq_u8(vcntq_u8(v2), vcntq_u8(v3));
+        uint8x16_t s0 = vaddq_u8(s1, s2);
+
+        /* Sum all bytes in the final vector */
+        uint16x8_t sc = vpaddlq_u8(s0); // 16x u8 -> 8x u16 (pairwise add)
+        uint32_t t1 = vaddvq_u16(sc);
+        t += t1;
+    }
+
+    /* Process remaining 16-byte chunks */
+    for (; p + 16 <= e; p += 16) {
+        t += vaddvq_u8(vcntq_u8(vld1q_u8(p)));
+    }
+
+    /* Handle remaining bytes with scalar fallback */
+    if (p < e) {
+        size_t r = e - p;
+        t += popcountScalar((void *)p, r);
+    }
+
+    return t;
+}
+#endif
+
 /* Count number of bits set in the binary array pointed by 's' and long
  * 'count' bytes. The implementation of this function is required to
  * work with an input string length up to 512 MB or more (server.proto_max_bulk_len) */
 long long serverPopcount(void *s, long count) {
-#ifdef HAVE_AVX2
+#if HAVE_X86_SIMD
     /* If length of s >= 256 bits and the CPU supports AVX2,
      * we prefer to use the SIMD version */
-    if (count >= 32) {
+    if (count >= 32 && __builtin_cpu_supports("avx2")) {
         return popcountAVX2(s, count);
     }
 #endif
+#ifdef __aarch64__
+    if (count >= 16) {
+        return popcountNEON(s, count);
+    }
+#endif
+
     return popcountScalar(s, count);
 }
 
@@ -437,12 +491,10 @@ int checkSignedBitfieldOverflow(int64_t value, int64_t incr, uint64_t bits, int 
     int64_t max = (bits == 64) ? INT64_MAX : (((int64_t)1 << (bits - 1)) - 1);
     int64_t min = (-max) - 1;
 
-    /* Note that maxincr and minincr could overflow, but we use the values
-     * only after checking 'value' range, so when we use it no overflow
-     * happens. 'uint64_t' cast is there just to prevent undefined behavior on
-     * overflow */
-    int64_t maxincr = (uint64_t)max - value;
-    int64_t minincr = min - value;
+    /* max/min and value are signed integers but to avoid undefined behavior
+     * we temporarily cast them to unsigned integers before subtracting. */
+    int64_t maxincr = (int64_t)((uint64_t)max - (uint64_t)value);
+    int64_t minincr = (int64_t)((uint64_t)min - (uint64_t)value);
 
     if (value > max || (bits != 64 && incr > maxincr) || (value >= 0 && incr > 0 && incr > maxincr)) {
         if (limit) {
@@ -522,7 +574,7 @@ void printBits(unsigned char *p, unsigned long count) {
 int getBitOffsetFromArgument(client *c, robj *o, uint64_t *offset, int hash, int bits) {
     long long loffset;
     char *err = "bit offset is not an integer or out of range";
-    char *p = o->ptr;
+    sds p = o->ptr;
     size_t plen = sdslen(p);
     int usehash = 0;
 
@@ -555,7 +607,8 @@ int getBitOffsetFromArgument(client *c, robj *o, uint64_t *offset, int hash, int
  *
  * On error C_ERR is returned and an error is sent to the client. */
 int getBitfieldTypeFromArgument(client *c, robj *o, int *sign, int *bits) {
-    char *p = o->ptr;
+    sds p = o->ptr;
+    size_t plen = sdslen(p);
     char *err = "Invalid bitfield type. Use something like i16 u8. Note that u64 is not supported but i64 is.";
     long long llbits;
 
@@ -568,7 +621,7 @@ int getBitfieldTypeFromArgument(client *c, robj *o, int *sign, int *bits) {
         return C_ERR;
     }
 
-    if ((string2ll(p + 1, strlen(p + 1), &llbits)) == 0 || llbits < 1 || (*sign == 1 && llbits > 64) ||
+    if ((string2ll(p + 1, plen - 1, &llbits)) == 0 || llbits < 1 || (*sign == 1 && llbits > 64) ||
         (*sign == 0 && llbits > 63)) {
         addReplyError(c, err);
         return C_ERR;
@@ -1253,6 +1306,7 @@ void bitfieldGeneric(client *c, int flags) {
         }
     }
 
+    initDeferredReplyBuffer(c);
     addReplyArrayLen(c, numops);
 
     /* Actually process the operations. */
@@ -1364,6 +1418,7 @@ void bitfieldGeneric(client *c, int flags) {
         notifyKeyspaceEvent(NOTIFY_STRING, "setbit", c->argv[1], c->db->id);
         server.dirty += changes;
     }
+    commitDeferredReplyBuffer(c, 1);
     zfree(ops);
 }
 

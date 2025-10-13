@@ -8,6 +8,25 @@
 #include "dict.h"
 #include "functions.h"
 #include "module.h"
+#include "server.h"
+#include "valkeymodule.h"
+
+/* Module context object cache size is set to 3 because at each moment there can
+ * be at most 3 module contexts in use by the scripting engine.
+ *
+ * 1. The module context used by the scripting engine to run the script;
+ * 2. The module context used by `scriptingEngineCallGetMemoryInfo` that is
+ *    periodically called by the server cron; and
+ * 3. The module context used by `scriptingEngineCallFreeFunction` that is
+ *    called when the server needs to reset the evaluation environment in the
+ *    asynchronous mode.
+ */
+enum moduleCtxCacheIndex {
+    COMMON_MODULE_CTX_INDEX = 0,        /* Common module context used by the scripting engine. */
+    GET_MEMORY_MODULE_CTX_INDEX = 1,    /* Module context used by `scriptingEngineCallGetMemoryInfo`. */
+    FREE_FUNCTION_MODULE_CTX_INDEX = 2, /* Module context used by `scriptingEngineCallFreeFunction`. */
+    MODULE_CTX_CACHE_SIZE = 3           /* Total number of module contexts in the cache. */
+};
 
 typedef struct scriptingEngineImpl {
     /* Engine specific context */
@@ -18,15 +37,15 @@ typedef struct scriptingEngineImpl {
 } scriptingEngineImpl;
 
 typedef struct scriptingEngine {
-    sds name;                    /* Name of the engine */
-    ValkeyModule *module;        /* the module that implements the scripting engine */
-    scriptingEngineImpl impl;    /* engine context and callbacks to interact with the engine */
-    client *client;              /* Client that is used to run commands */
-    ValkeyModuleCtx *module_ctx; /* Cache of the module context object */
+    sds name;                                                 /* Name of the engine */
+    ValkeyModule *module;                                     /* the module that implements the scripting engine */
+    scriptingEngineImpl impl;                                 /* engine context and callbacks to interact with the engine */
+    client *client;                                           /* Client that is used to run commands */
+    ValkeyModuleCtx *module_ctx_cache[MODULE_CTX_CACHE_SIZE]; /* Cache of module context objects */
 } scriptingEngine;
 
 
-typedef struct engineManger {
+typedef struct engineManager {
     dict *engines;                /* engines dictionary */
     size_t total_memory_overhead; /* the sum of the memory overhead of all registered scripting engines */
 } engineManager;
@@ -113,8 +132,12 @@ int scriptingEngineManagerRegister(const char *engine_name,
             .methods = *engine_methods,
         },
         .client = c,
-        .module_ctx = engine_module ? moduleAllocateContext() : NULL,
+        .module_ctx_cache = {0},
     };
+
+    for (size_t i = 0; i < MODULE_CTX_CACHE_SIZE; i++) {
+        e->module_ctx_cache[i] = moduleAllocateContext();
+    }
 
     dictAdd(engineMgr.engines, engine_name_sds, e);
 
@@ -148,9 +171,9 @@ int scriptingEngineManagerUnregister(const char *engine_name) {
 
     sdsfree(e->name);
     freeClient(e->client);
-    if (e->module_ctx) {
-        serverAssert(e->module != NULL);
-        zfree(e->module_ctx);
+    for (size_t i = 0; i < MODULE_CTX_CACHE_SIZE; i++) {
+        serverAssert(e->module_ctx_cache[i] != NULL);
+        zfree(e->module_ctx_cache[i]);
     }
     zfree(e);
 
@@ -200,40 +223,59 @@ void scriptingEngineManagerForEachEngine(engineIterCallback callback,
     dictReleaseIterator(iter);
 }
 
-static void engineSetupModuleCtx(scriptingEngine *e, client *c) {
-    if (e->module != NULL) {
-        serverAssert(e->module_ctx != NULL);
-        moduleScriptingEngineInitContext(e->module_ctx, e->module, c);
-    }
+static ValkeyModuleCtx *engineSetupModuleCtx(int module_ctx_cache_index,
+                                             scriptingEngine *e,
+                                             client *c) {
+    serverAssert(e != NULL);
+    if (e->module == NULL) return NULL;
+
+    ValkeyModuleCtx *ctx = e->module_ctx_cache[module_ctx_cache_index];
+    moduleScriptingEngineInitContext(ctx, e->module, c);
+    return ctx;
 }
 
-static void engineTeardownModuleCtx(scriptingEngine *e) {
+static void engineTeardownModuleCtx(int module_ctx_cache_index, scriptingEngine *e) {
+    serverAssert(e != NULL);
     if (e->module != NULL) {
-        serverAssert(e->module_ctx != NULL);
-        moduleFreeContext(e->module_ctx);
+        ValkeyModuleCtx *ctx = e->module_ctx_cache[module_ctx_cache_index];
+        moduleFreeContext(ctx);
     }
 }
 
 compiledFunction **scriptingEngineCallCompileCode(scriptingEngine *engine,
                                                   subsystemType type,
                                                   const char *code,
+                                                  size_t code_len,
                                                   size_t timeout,
                                                   size_t *out_num_compiled_functions,
                                                   robj **err) {
     serverAssert(type == VMSE_EVAL || type == VMSE_FUNCTION);
+    compiledFunction **functions = NULL;
+    ValkeyModuleCtx *module_ctx = engineSetupModuleCtx(COMMON_MODULE_CTX_INDEX, engine, NULL);
 
-    engineSetupModuleCtx(engine, NULL);
+    if (engine->impl.methods.version == 1) {
+        functions = engine->impl.methods.compile_code_v1(
+            module_ctx,
+            engine->impl.ctx,
+            type,
+            code,
+            timeout,
+            out_num_compiled_functions,
+            err);
+    } else {
+        /* Assume versions greater than 1 use updated interface. */
+        functions = engine->impl.methods.compile_code(
+            module_ctx,
+            engine->impl.ctx,
+            type,
+            code,
+            code_len,
+            timeout,
+            out_num_compiled_functions,
+            err);
+    }
 
-    compiledFunction **functions = engine->impl.methods.compile_code(
-        engine->module_ctx,
-        engine->impl.ctx,
-        type,
-        code,
-        timeout,
-        out_num_compiled_functions,
-        err);
-
-    engineTeardownModuleCtx(engine);
+    engineTeardownModuleCtx(COMMON_MODULE_CTX_INDEX, engine);
 
     return functions;
 }
@@ -242,13 +284,13 @@ void scriptingEngineCallFreeFunction(scriptingEngine *engine,
                                      subsystemType type,
                                      compiledFunction *compiled_func) {
     serverAssert(type == VMSE_EVAL || type == VMSE_FUNCTION);
-    engineSetupModuleCtx(engine, NULL);
+    ValkeyModuleCtx *module_ctx = engineSetupModuleCtx(FREE_FUNCTION_MODULE_CTX_INDEX, engine, NULL);
     engine->impl.methods.free_function(
-        engine->module_ctx,
+        module_ctx,
         engine->impl.ctx,
         type,
         compiled_func);
-    engineTeardownModuleCtx(engine);
+    engineTeardownModuleCtx(FREE_FUNCTION_MODULE_CTX_INDEX, engine);
 }
 
 void scriptingEngineCallFunction(scriptingEngine *engine,
@@ -262,10 +304,10 @@ void scriptingEngineCallFunction(scriptingEngine *engine,
                                  size_t nargs) {
     serverAssert(type == VMSE_EVAL || type == VMSE_FUNCTION);
 
-    engineSetupModuleCtx(engine, caller);
+    ValkeyModuleCtx *module_ctx = engineSetupModuleCtx(COMMON_MODULE_CTX_INDEX, engine, caller);
 
     engine->impl.methods.call_function(
-        engine->module_ctx,
+        module_ctx,
         engine->impl.ctx,
         server_ctx,
         compiled_function,
@@ -275,39 +317,39 @@ void scriptingEngineCallFunction(scriptingEngine *engine,
         args,
         nargs);
 
-    engineTeardownModuleCtx(engine);
+    engineTeardownModuleCtx(COMMON_MODULE_CTX_INDEX, engine);
 }
 
 size_t scriptingEngineCallGetFunctionMemoryOverhead(scriptingEngine *engine,
                                                     compiledFunction *compiled_function) {
-    engineSetupModuleCtx(engine, NULL);
+    ValkeyModuleCtx *module_ctx = engineSetupModuleCtx(COMMON_MODULE_CTX_INDEX, engine, NULL);
     size_t mem = engine->impl.methods.get_function_memory_overhead(
-        engine->module_ctx,
+        module_ctx,
         compiled_function);
-    engineTeardownModuleCtx(engine);
+    engineTeardownModuleCtx(COMMON_MODULE_CTX_INDEX, engine);
     return mem;
 }
 
 callableLazyEnvReset *scriptingEngineCallResetEnvFunc(scriptingEngine *engine,
                                                       subsystemType type,
                                                       int async) {
-    engineSetupModuleCtx(engine, NULL);
+    ValkeyModuleCtx *module_ctx = engineSetupModuleCtx(COMMON_MODULE_CTX_INDEX, engine, NULL);
     callableLazyEnvReset *callback = engine->impl.methods.reset_env(
-        engine->module_ctx,
+        module_ctx,
         engine->impl.ctx,
         type,
         async);
-    engineTeardownModuleCtx(engine);
+    engineTeardownModuleCtx(COMMON_MODULE_CTX_INDEX, engine);
     return callback;
 }
 
 engineMemoryInfo scriptingEngineCallGetMemoryInfo(scriptingEngine *engine,
                                                   subsystemType type) {
-    engineSetupModuleCtx(engine, NULL);
+    ValkeyModuleCtx *module_ctx = engineSetupModuleCtx(GET_MEMORY_MODULE_CTX_INDEX, engine, NULL);
     engineMemoryInfo mem_info = engine->impl.methods.get_memory_info(
-        engine->module_ctx,
+        module_ctx,
         engine->impl.ctx,
         type);
-    engineTeardownModuleCtx(engine);
+    engineTeardownModuleCtx(GET_MEMORY_MODULE_CTX_INDEX, engine);
     return mem_info;
 }

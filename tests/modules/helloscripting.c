@@ -349,10 +349,12 @@ static ValkeyModuleScriptingEngineCompiledFunction **createHelloLangEngine(Valke
                                                                            ValkeyModuleScriptingEngineCtx *engine_ctx,
                                                                            ValkeyModuleScriptingEngineSubsystemType type,
                                                                            const char *code,
+                                                                           size_t code_len,
                                                                            size_t timeout,
                                                                            size_t *out_num_compiled_functions,
                                                                            ValkeyModuleString **err) {
     VALKEYMODULE_NOT_USED(module_ctx);
+    VALKEYMODULE_NOT_USED(code_len);
     VALKEYMODULE_NOT_USED(type);
     VALKEYMODULE_NOT_USED(timeout);
     VALKEYMODULE_NOT_USED(err);

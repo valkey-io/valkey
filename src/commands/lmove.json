@@ -53,8 +53,16 @@
             }
         ],
         "reply_schema": {
-            "description": "The element being popped and pushed.",
-            "type": "string"
+            "oneOf": [
+                {
+                    "description": "The element being popped and pushed.",
+                    "type": "string"
+                },
+                {
+                    "description": "Source does not exist.",
+                    "type": "null"
+                }
+            ]
         },
         "arguments": [
             {

@@ -952,9 +952,12 @@ sds sdscatrepr(sds s, const char *p, size_t len) {
     s = sdsMakeRoomFor(s, len + 2);
     s = sdscatlen(s, "\"", 1);
     while (len) {
-        if (isprint(*p)) {
+        /* The condition here in combination with the loop inside ensures we're calling sdscatlen only once for an
+         * entire string chunk rather than calling it for every character. This reduces the amount of memcpy calls.
+         * \ and " are valid isprint characters but we need to handle them in the else block below to escape them. */
+        if (isprint(*p) && *p != '\\' && *p != '"') {
             const char *start = p;
-            while (len && isprint(*p)) {
+            while (len && isprint(*p) && *p != '\\' && *p != '"') {
                 len--;
                 p++;
             }
@@ -1065,10 +1068,7 @@ static int sdsparsearg(const char *arg, unsigned int *len, char *dst) {
                 default: new_char = *p; break;
                 }
             } else if (*p == '"') {
-                /* closing quote must be followed by a space or
-                 * nothing at all. */
-                if (*(p + 1) && !isspace(*(p + 1))) return 0;
-                done = 1;
+                inq = 0;
             } else if (!*p) {
                 /* unterminated quotes */
                 return 0;
@@ -1080,10 +1080,7 @@ static int sdsparsearg(const char *arg, unsigned int *len, char *dst) {
                 p++;
                 new_char = *p;
             } else if (*p == '\'') {
-                /* closing quote must be followed by a space or
-                 * nothing at all. */
-                if (*(p + 1) && !isspace(*(p + 1))) return 0;
-                done = 1;
+                insq = 0;
             } else if (!*p) {
                 /* unterminated quotes */
                 return 0;
@@ -1140,7 +1137,8 @@ static int sdsparsearg(const char *arg, unsigned int *len, char *dst) {
  */
 sds *sdssplitargs(const char *line, int *argc) {
     const char *p = line;
-    char **vector = NULL;
+    size_t cap = 0;
+    sds *vector = NULL;
 
     *argc = 0;
     while (*p) {
@@ -1155,9 +1153,11 @@ sds *sdssplitargs(const char *line, int *argc) {
             p += parsedlen;
 
             /* add the token to the vector */
-            vector = s_realloc(vector, ((*argc) + 1) * sizeof(char *));
-            vector[*argc] = current;
-            (*argc)++;
+            if ((size_t)*argc == cap) {
+                cap = cap == 0 ? 8 : (cap * 2);
+                vector = s_realloc(vector, sizeof(sds) * cap);
+            }
+            vector[(*argc)++] = current;
             current = NULL;
         } else {
             while ((*argc)--) sdsfree(vector[*argc]);

@@ -177,18 +177,20 @@ static int add_find_delete_test_helper(int flags) {
 int test_add_find_delete(int argc, char **argv, int flags) {
     UNUSED(argc);
     UNUSED(argv);
+    size_t used_memory_before = zmalloc_used_memory();
     TEST_ASSERT(add_find_delete_test_helper(flags) == 0);
-    TEST_ASSERT(zmalloc_used_memory() == 0);
+    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
     return 0;
 }
 
 int test_add_find_delete_avoid_resize(int argc, char **argv, int flags) {
     UNUSED(argc);
     UNUSED(argv);
+    size_t used_memory_before = zmalloc_used_memory();
     hashtableSetResizePolicy(HASHTABLE_RESIZE_AVOID);
     TEST_ASSERT(add_find_delete_test_helper(flags) == 0);
     hashtableSetResizePolicy(HASHTABLE_RESIZE_ALLOW);
-    TEST_ASSERT(zmalloc_used_memory() == 0);
+    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
     return 0;
 }
 
@@ -234,8 +236,10 @@ int test_bucket_chain_length(int argc, char **argv, int flags) {
     for (j = 0; j < count; j++) {
         TEST_ASSERT(hashtableAdd(ht, (void *)j));
     }
-    /* If it's rehashing, add a few more until rehashing is complete. */
+    /* If it's rehashing, add a few more until rehashing is complete.
+     * We also make sure that we won't resize during the rehashing. */
     while (hashtableIsRehashing(ht)) {
+        TEST_ASSERT(!hashtableExpand(ht, count * 2));
         j++;
         TEST_ASSERT(hashtableAdd(ht, (void *)j));
     }
@@ -271,8 +275,8 @@ int test_two_phase_insert_and_pop(int argc, char **argv, int flags) {
         snprintf(key, sizeof(key), "%d", j);
         snprintf(val, sizeof(val), "%d", count - j + 42);
         hashtablePosition position;
-        int ret = hashtableFindPositionForInsert(ht, key, &position, NULL);
-        TEST_ASSERT(ret == 1);
+        bool ret = hashtableFindPositionForInsert(ht, key, &position, NULL);
+        TEST_ASSERT(ret);
         keyval *e = create_keyval(key, val);
         hashtableInsertAtPosition(ht, e, &position);
     }
@@ -318,6 +322,7 @@ int test_replace_reallocated_entry(int argc, char **argv, int flags) {
     UNUSED(argc);
     UNUSED(argv);
     UNUSED(flags);
+    size_t used_memory_before = zmalloc_used_memory();
 
     int count = 100, j;
     hashtable *ht = hashtableCreate(&keyval_type);
@@ -364,7 +369,7 @@ int test_replace_reallocated_entry(int argc, char **argv, int flags) {
     }
 
     hashtableRelease(ht);
-    TEST_ASSERT(zmalloc_used_memory() == 0);
+    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
     return 0;
 }
 
@@ -416,7 +421,7 @@ int test_incremental_find(int argc, char **argv, int flags) {
             do {
                 num_left = batch_size;
                 for (size_t i = 0; i < batch_size; i++) {
-                    if (hashtableIncrementalFindStep(&states[i]) == 0) {
+                    if (!hashtableIncrementalFindStep(&states[i])) {
                         num_left--;
                     }
                 }
@@ -639,6 +644,7 @@ int test_compact_bucket_chain(int argc, char **argv, int flags) {
     UNUSED(argc);
     UNUSED(argv);
     UNUSED(flags);
+    size_t used_memory_before = zmalloc_used_memory();
 
     /* Create a table with only one bucket chain. */
     hashtableSetResizePolicy(HASHTABLE_RESIZE_AVOID);
@@ -686,7 +692,7 @@ int test_compact_bucket_chain(int argc, char **argv, int flags) {
 
     hashtableRelease(ht);
     hashtableSetResizePolicy(HASHTABLE_RESIZE_ALLOW);
-    TEST_ASSERT(zmalloc_used_memory() == 0);
+    TEST_ASSERT(zmalloc_used_memory() == used_memory_before);
     return 0;
 }
 
@@ -704,8 +710,8 @@ int test_random_entry(int argc, char **argv, int flags) {
     hashtable *ht = hashtableCreate(&type);
 
     /* Populate */
-    unsigned times_picked[count];
-    memset(times_picked, 0, sizeof(times_picked));
+    unsigned *times_picked = zmalloc(sizeof(unsigned) * count);
+    memset(times_picked, 0, sizeof(unsigned) * count);
     for (size_t j = 0; j < count; j++) {
         TEST_ASSERT(hashtableAdd(ht, times_picked + j));
     }
@@ -762,6 +768,8 @@ int test_random_entry(int argc, char **argv, int flags) {
         p5dev += (dev >= -std_dev * 5 && dev <= std_dev * 5);
         p10percent += (dev >= -0.1 * expected && dev <= 0.1 * expected);
     }
+
+    zfree(times_picked);
 
     printf("Random entry fairness test\n");
     printf("  Pick one of %zu entries, %ld times.\n", count, num_rounds);
@@ -879,10 +887,61 @@ int test_random_entry_with_long_chain(int argc, char **argv, int flags) {
     return 0;
 }
 
-int test_all_memory_freed(int argc, char **argv, int flags) {
+static void deleteScanFn(void *privdata, void *entry) {
+    hashtable *ht = privdata;
+    hashtableDelete(ht, entry);
+}
+
+int test_random_entry_sparse_table(int argc, char **argv, int flags) {
     UNUSED(argc);
     UNUSED(argv);
     UNUSED(flags);
-    TEST_ASSERT(zmalloc_used_memory() == 0);
+    randomSeed();
+
+    size_t count = (flags & UNIT_TEST_LARGE_MEMORY) ? 100000000 : 1000000;
+    long num_rounds = (flags & UNIT_TEST_ACCURATE) ? 256 * 1024 : 1024;
+
+    /* A set of pointers */
+    hashtableType type = {0};
+    hashtable *ht = hashtableCreate(&type);
+    monotime timer;
+    monotonicInit();
+
+    /* Populate */
+    unsigned *values = zmalloc(sizeof(unsigned) * count);
+    for (size_t j = 0; j < count; j++) {
+        TEST_ASSERT(hashtableAdd(ht, &values[j]));
+    }
+
+    /* Pick random elements */
+    elapsedStart(&timer);
+    for (long i = 0; i < num_rounds; i++) {
+        void *entry;
+        TEST_ASSERT(hashtableFairRandomEntry(ht, &entry));
+    }
+    uint64_t us0 = elapsedUs(timer);
+    printf("Fair random, filled hashtable, avg time: %.3lfµs\n", (double)us0 / num_rounds);
+
+    size_t cursor = random();
+
+    for (int n = 2; n <= 8; n *= 2) {
+        /* Scan and delete until only 1/n of the values remain. */
+        while (hashtableSize(ht) > count / n) {
+            cursor = hashtableScan(ht, cursor, deleteScanFn, ht);
+        }
+
+        /* Pick random elements. */
+        elapsedStart(&timer);
+        for (long i = 0; i < num_rounds; i++) {
+            void *entry;
+            TEST_ASSERT(hashtableFairRandomEntry(ht, &entry));
+        }
+        uint64_t us = elapsedUs(timer);
+        printf("Fair random, 1/%d filled hashtable, avg time: %.3lfµs\n", n, (double)us / num_rounds);
+        /* Allow max 10 times slower than in a dense table. */
+        TEST_ASSERT(us <= us0 * 10);
+    }
+    hashtableRelease(ht);
+    zfree(values);
     return 0;
 }

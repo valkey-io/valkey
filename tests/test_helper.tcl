@@ -2,8 +2,6 @@
 # This software is released under the BSD License. See the COPYING file for
 # more information.
 
-package require Tcl 8.5
-
 set tcl_precision 17
 source tests/support/valkey.tcl
 source tests/support/aofmanifest.tcl
@@ -94,6 +92,36 @@ set ::log_req_res 0
 set ::force_resp3 0
 set ::solo_tests_count 0
 set ::debug_defrag 0
+set ::completed_tests 0
+set ::total_loops 1
+
+# Expand a unit specification (test name, file, or directory) into a list
+# of canonical unit names relative to the tests directory.
+proc expand_unit_spec {spec} {
+    set tests_dir [file normalize [file join [pwd] tests]]
+
+    if {[file isdirectory $spec]} {
+        set files [glob -nocomplain [file join [file normalize $spec] *.tcl]]
+    } elseif {[file exists $spec]} {
+        set files [list [file normalize $spec]]
+    } elseif {[file exists [file join $tests_dir "${spec}.tcl"]]} {
+        set files [list [file normalize [file join $tests_dir "${spec}.tcl"]]]
+    } else {
+        return [list $spec]
+    }
+
+    set result {}
+    foreach test_file $files {
+        set norm [file normalize $test_file]
+        if {[string match "$tests_dir/*" $norm]} {
+            set rel [string range $norm [expr {[string length $tests_dir]+1}] end]
+            lappend result [file rootname $rel]
+        } else {
+            lappend result [file rootname $norm]
+        }
+    }
+    return $result
+}
 
 # Set to 1 when we are running in client mode. The server test uses a
 # server-client model to run tests simultaneously. The server instance
@@ -213,7 +241,8 @@ proc valkey_deferring_client {args} {
         $client read
     } else {
         # For timing/symmetry with the above select
-        $client ping
+        # that doesn't return error while loading.
+        $client echo goodday
         $client read
     }
     return $client
@@ -232,7 +261,7 @@ proc valkey_client {args} {
     # select the right db and read the response (OK), or at least ping
     # the server if we're in a singledb mode.
     if {$::singledb} {
-        $client ping
+        $client echo hey
     } else {
         $client select 9
     }
@@ -264,6 +293,30 @@ proc CI {index field} {
     getInfoProperty [R $index cluster info] $field
 }
 
+# Provide easy access to CLIENT INFO properties from CLIENT INFO string.
+proc get_field_in_client_info {info field} {
+    set info [string trim $info]
+    foreach item [split $info " "] {
+        set kv [split $item "="]
+        set k [lindex $kv 0]
+        if {[string match $field $k]} {
+            return [lindex $kv 1]
+        }
+    }
+    return ""
+}
+
+# Provide easy access to CLIENT INFO properties from CLIENT LIST string.
+proc get_field_in_client_list {id client_list filed} {
+    set list [split $client_list "\r\n"]
+    foreach info $list {
+        if {[string match "id=$id *" $info] } {
+            return [get_field_in_client_info $info $filed]
+        }
+    }
+    return ""
+}
+
 # Test wrapped into run_solo are sent back from the client to the
 # test server, so that the test server will send them again to
 # clients once the clients are idle.
@@ -280,6 +333,7 @@ proc cleanup {} {
     if {!$::quiet} {puts -nonewline "Cleanup: may take some time... "}
     flush stdout
     catch {exec rm -rf {*}[glob tests/tmp/valkey.conf.*]}
+    catch {exec rm -rf {*}[glob tests/tmp/nodes.conf.*]}
     catch {exec rm -rf {*}[glob tests/tmp/server*.*]}
     catch {exec rm -rf {*}[glob tests/tmp/*.acl.*]}
     if {!$::quiet} {puts "OK"}
@@ -317,6 +371,7 @@ proc test_server_main {} {
     set ::idle_clients {}
     set ::active_clients {}
     array set ::active_clients_task {}
+    array set ::active_clients_file {}
     array set ::clients_start_time {}
     set ::clients_time_history {}
     set ::failed_tests {}
@@ -333,10 +388,28 @@ proc test_server_cron {} {
     if {$elapsed > $::timeout} {
         set err "\[[colorstr red TIMEOUT]\]: clients state report follows."
         puts $err
-        lappend ::failed_tests $err
+        foreach fd $::active_clients {
+            if {[info exist ::active_clients_task($fd)]} {
+                set task $::active_clients_task($fd)
+                set test_name [regsub {^\([^)]*\)\s*} $task {}]
+                set test_name [regsub {\s*\(pid\s+\d+\)\s*$} $test_name {}]
+                if {![string length [string trim $test_name]] && \
+                    [regexp {\(([^()]*)\)$} $task -> tn]} {
+                    set test_name $tn
+                }
+                set test_name [string trim $test_name]
+                if {[string length $test_name]} {
+                    set file {}
+                    if {[info exist ::active_clients_file($fd)]} {
+                        set file $::active_clients_file($fd)
+                    }
+                    lappend ::failed_tests "\[[colorstr red TIMEOUT]\]: $test_name in $file"
+                }
+            }
+        }
         show_clients_state
-        kill_clients
         force_kill_all_servers
+        kill_clients
         the_end
     }
 
@@ -344,7 +417,7 @@ proc test_server_cron {} {
 }
 
 proc accept_test_clients {fd addr port} {
-    fconfigure $fd -encoding binary
+    fconfigure $fd -translation binary
     fileevent $fd readable [list read_from_test_client $fd]
 }
 
@@ -376,12 +449,12 @@ proc read_from_test_client fd {
         signal_idle_client $fd
     } elseif {$status eq {done}} {
         set elapsed [expr {[clock seconds]-$::clients_start_time($fd)}]
-        set all_tests_count [expr {[llength $::all_tests]+$::solo_tests_count}]
-        set running_tests_count [expr {[llength $::active_clients]-1}]
-        set completed_solo_tests_count [expr {$::solo_tests_count-[llength $::run_solo_tests]}]
-        set completed_tests_count [expr {$::next_test-$running_tests_count+$completed_solo_tests_count}]
+        incr ::completed_tests
+        set all_tests_count [expr {[llength $::all_tests] * $::total_loops + $::solo_tests_count}]
+        set completed_tests_count $::completed_tests
         puts "\[$completed_tests_count/$all_tests_count [colorstr yellow $status]\]: $data ($elapsed seconds)"
         lappend ::clients_time_history $elapsed $data
+        unset ::active_clients_file($fd)
         signal_idle_client $fd
         set ::active_clients_task($fd) "(DONE) $data"
     } elseif {$status eq {ok}} {
@@ -403,8 +476,7 @@ proc read_from_test_client fd {
         lappend ::failed_tests $err
         set ::active_clients_task($fd) "(ERR) $data"
         if {$::exit_on_failure} {
-            puts -nonewline "(Fast fail: test will exit now)"
-            flush stdout
+            puts "(Fast fail: test will exit now)"
             exit 1
         }
         if {$::stop_on_failure} {
@@ -491,6 +563,7 @@ proc signal_idle_client fd {
             puts [colorstr bold-white "Testing [lindex $::all_tests $::next_test]"]
             set ::active_clients_task($fd) "ASSIGNED: $fd ([lindex $::all_tests $::next_test])"
         }
+        set ::active_clients_file($fd) "tests/[lindex $::all_tests $::next_test].tcl"
         set ::clients_start_time($fd) [clock seconds]
         send_data_packet $fd run [lindex $::all_tests $::next_test]
         lappend ::active_clients $fd
@@ -505,7 +578,9 @@ proc signal_idle_client fd {
             set ::active_clients_task($fd) "ASSIGNED: $fd solo test"
         }
         set ::clients_start_time($fd) [clock seconds]
-        send_data_packet $fd run_code [lpop ::run_solo_tests]
+        set solo_data [lpop ::run_solo_tests]
+        set ::active_clients_file($fd) [lindex $solo_data 1]
+        send_data_packet $fd run_code $solo_data
         lappend ::active_clients $fd
     } else {
         lappend ::idle_clients $fd
@@ -543,7 +618,7 @@ proc the_end {} {
 # to read the command, execute, reply... all this in a loop.
 proc test_client_main server_port {
     set ::test_server_fd [socket localhost $server_port]
-    fconfigure $::test_server_fd -encoding binary
+    fconfigure $::test_server_fd -translation binary
     send_data_packet $::test_server_fd ready [pid]
     while 1 {
         set bytes [gets $::test_server_fd]
@@ -568,15 +643,15 @@ proc send_data_packet {fd status data {elapsed 0}} {
 }
 
 proc print_help_screen {} {
+    #   |-- This is for terminal output, so assume default term width of 80 columns. ---|
     puts [join {
-        # This is for terminal output, so assume default term width of 80 columns. -----|
         "--cluster          Run the cluster tests, by default cluster tests run along"
         "                   with all tests."
         "--moduleapi        Run the module API tests, this option should only be used in"
         "                   runtest-moduleapi which will build the test module."
         "--valgrind         Run the test over valgrind."
         "--durable          suppress test crashes and keep running"
-        "--stack-logging    Enable OSX leaks/malloc stack logging."
+        "--stack-logging    Enable macOS leaks/malloc stack logging."
         "--accurate         Run slow randomized tests for more iterations."
         "--quiet            Don't show individual tests."
         "--single <unit>    Just execute the specified unit (see next option). This"
@@ -620,11 +695,14 @@ proc print_help_screen {} {
         "--baseport <port>  Initial port number for spawned valkey servers."
         "--portcount <num>  Port range for spawned valkey servers."
         "--singledb         Use a single database, avoid SELECT."
-        "--cluster-mode     Run tests in cluster protocol compatible mode."
+        "--cluster-mode     Skip tests that are not compatible with cluster mode."
+        "                   When running tests against an external node in cluster"
+        "                   mode, it needs to be started with cluster-databases 16."
         "--ignore-encoding  Don't validate object encoding."
         "--ignore-digest    Don't use debug digest validations."
         "--large-memory     Run tests using over 100mb."
-        "--debug-defrag     Indicate the test is running against server compiled with DEBUG_FORCE_DEFRAG option"
+        "--debug-defrag     Indicate the test is running against server compiled with"
+        "                   DEBUG_FORCE_DEFRAG option."
         "--help             Print this help screen."
     } "\n"]
 }
@@ -675,7 +753,7 @@ for {set j 0} {$j < [llength $argv]} {incr j} {
     } elseif {$opt eq {--io-threads}} {
         set ::io_threads 1
     } elseif {$opt eq {--tls} || $opt eq {--tls-module}} {
-        package require tls 1.6
+        package require tls
         set ::tls 1
         ::tls::init \
             -cafile "$::tlsdir/ca.crt" \
@@ -705,13 +783,17 @@ for {set j 0} {$j < [llength $argv]} {incr j} {
     } elseif {$opt eq {--force-failure}} {
         set ::force_failure 1
     } elseif {$opt eq {--single}} {
-        lappend ::single_tests $arg
+        foreach unit [expand_unit_spec $arg] {
+            lappend ::single_tests $unit
+        }
         incr j
     } elseif {$opt eq {--only}} {
         lappend ::only_tests $arg
         incr j
     } elseif {$opt eq {--skipunit}} {
-        lappend ::skipunits $arg
+        foreach unit [expand_unit_spec $arg] {
+            lappend ::skipunits $unit
+        }
         incr j
     } elseif {$opt eq {--skip-till}} {
         set ::skip_till $arg
@@ -748,12 +830,14 @@ for {set j 0} {$j < [llength $argv]} {incr j} {
         set ::stop_on_failure 1
     } elseif {$opt eq {--loop}} {
         set ::loop 2147483647
+        set ::total_loops $::loop
     } elseif {$opt eq {--loops}} {
         set ::loop $arg
         if {$::loop <= 0} {
             puts "Wrong argument: $opt, loops should be greater than 0"
             exit 1
         }
+        set ::total_loops $::loop
         incr j
     } elseif {$opt eq {--timeout}} {
         set ::timeout $arg
@@ -762,7 +846,6 @@ for {set j 0} {$j < [llength $argv]} {incr j} {
         set ::singledb 1
     } elseif {$opt eq {--cluster-mode}} {
         set ::cluster_mode 1
-        set ::singledb 1
     } elseif {$opt eq {--large-memory}} {
         set ::large_memory 1
     } elseif {$opt eq {--ignore-encoding}} {

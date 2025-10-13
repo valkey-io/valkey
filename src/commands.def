@@ -1007,7 +1007,7 @@ struct COMMAND_ARG CLUSTER_SETSLOT_Args[] = {
 #ifndef SKIP_CMD_HISTORY_TABLE
 /* CLUSTER SHARDS history */
 commandHistory CLUSTER_SHARDS_History[] = {
-{"9.0.0","Added shard id field to CLUSTER SHARDS response"},
+{"9.1.0","Added shard id field to CLUSTER SHARDS response"},
 };
 #endif
 

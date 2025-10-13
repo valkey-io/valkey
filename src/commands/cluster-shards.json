@@ -9,7 +9,7 @@
         "function": "clusterCommand",
         "history": [
             [
-                "9.0.0",
+                "9.1.0",
                 "Added shard id field to CLUSTER SHARDS response"
             ]
         ],

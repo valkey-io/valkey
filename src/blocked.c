@@ -340,7 +340,7 @@ void disconnectOrRedirectAllBlockedClients(void) {
 
             if (server.cluster_enabled) {
                 if (clusterRedirectBlockedClientIfNeeded(c))
-                    unblockClient(c, 1);
+                    unblockClientOnError(c, NULL);
             } else {
                 /* if the client is read-only and blocked by a read command, we do not unblock it */
                 if (c->flag.readonly && !(c->lastcmd->flags & CMD_WRITE)) continue;

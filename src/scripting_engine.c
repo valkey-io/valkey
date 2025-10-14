@@ -334,11 +334,34 @@ callableLazyEnvReset *scriptingEngineCallResetEnvFunc(scriptingEngine *engine,
                                                       subsystemType type,
                                                       int async) {
     ValkeyModuleCtx *module_ctx = engineSetupModuleCtx(COMMON_MODULE_CTX_INDEX, engine, NULL);
-    callableLazyEnvReset *callback = engine->impl.methods.reset_env(
-        module_ctx,
-        engine->impl.ctx,
-        type,
-        async);
+    callableLazyEnvReset *callback = NULL;
+
+    if (engine->impl.methods.version <= 2) {
+        /* For backward compatibility with scripting engine modules that
+         * implement version 1 or 2 of the scripting engine ABI, we call the
+         * reset_eval_env_v1 function, which is only implemented for resetting
+         * the EVAL environment.
+         */
+        if (type == VMSE_EVAL) {
+            callback = engine->impl.methods.reset_eval_env_v1(
+                module_ctx,
+                engine->impl.ctx,
+                async);
+        } else {
+            /* For FUNCTION scripts, the reset_env function is not implemented
+             * in version 1 or 2 of the scripting engine ABI, so we just return
+             * NULL.
+             */
+            callback = NULL;
+        }
+    } else {
+        callback = engine->impl.methods.reset_env(
+            module_ctx,
+            engine->impl.ctx,
+            type,
+            async);
+    }
+
     engineTeardownModuleCtx(COMMON_MODULE_CTX_INDEX, engine);
     return callback;
 }

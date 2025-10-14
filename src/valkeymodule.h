@@ -1029,8 +1029,23 @@ typedef size_t (*ValkeyModuleScriptingEngineGetFunctionMemoryOverheadFunc)(
     ValkeyModuleCtx *module_ctx,
     ValkeyModuleScriptingEngineCompiledFunction *compiled_function);
 
+/* The callback function called when `SCRIPT FLUSH` command is called. The
+ * engine should reset the runtime environment used for EVAL scripts.
+ *
+ * - `module_ctx`: the module runtime context.
+ *
+ * - `engine_ctx`: the scripting engine runtime context.
+ *
+ * - `async`: if has value 1 then the reset is done asynchronously through
+ * the callback structure returned by this function.
+ */
+typedef ValkeyModuleScriptingEngineCallableLazyEnvReset *(*ValkeyModuleScriptingEngineResetEvalFunc)(
+    ValkeyModuleCtx *module_ctx,
+    ValkeyModuleScriptingEngineCtx *engine_ctx,
+    int async);
+
 /* The callback function called when `SCRIPT FLUSH` or `FUNCTION FLUSH` command is called.
- * The engine should reset the runtime environment used for EVAL scripts or FUNCTION SCRIPTS.
+ * The engine should reset the runtime environment used for EVAL scripts or FUNCTION scripts.
  *
  * - `module_ctx`: the module runtime context.
  *
@@ -1061,7 +1076,12 @@ typedef ValkeyModuleScriptingEngineMemoryInfo (*ValkeyModuleScriptingEngineGetMe
     ValkeyModuleScriptingEngineSubsystemType type);
 
 /* Current ABI version for scripting engine modules. */
-#define VALKEYMODULE_SCRIPTING_ENGINE_ABI_VERSION 2UL
+/* Version Changelog:
+ *  - 1: Initial version.
+ *  - 2: Changed the `compile_code` callback to support binary data in the source code.
+ *  - 3: Added reset_env callback to reset both EVAL or FUNCTION scripts env.
+ */
+#define VALKEYMODULE_SCRIPTING_ENGINE_ABI_VERSION 3L
 
 typedef struct ValkeyModuleScriptingEngineMethods {
     uint64_t version; /* Version of this structure for ABI compat. */
@@ -1085,7 +1105,10 @@ typedef struct ValkeyModuleScriptingEngineMethods {
 
     /* The callback function used to reset the runtime environment used
      * by the scripting engine for EVAL scripts or FUNCTION scripts. */
-    ValkeyModuleScriptingEngineResetEnvFunc reset_env;
+    union {
+        ValkeyModuleScriptingEngineResetEvalFunc reset_eval_env_v1;
+        ValkeyModuleScriptingEngineResetEnvFunc reset_env;
+    };
 
     /* Function callback to get the used memory by the engine. */
     ValkeyModuleScriptingEngineGetMemoryInfoFunc get_memory_info;

@@ -369,6 +369,7 @@ int luaEngineInitEngine(void) {
     ldbInit();
 
     engineMethods methods = {
+        .version = VALKEYMODULE_SCRIPTING_ENGINE_ABI_VERSION,
         .compile_code = luaEngineCompileCode,
         .free_function = luaEngineFreeFunction,
         .call_function = luaEngineFunctionCall,

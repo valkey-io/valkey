@@ -4,7 +4,7 @@
         "complexity": "O(1)",
         "group": "string",
         "since": "1.0.0",
-        "arity": 2,
+        "arity": -2,
         "function": "getCommand",
         "command_flags": [
             "READONLY",
@@ -52,6 +52,11 @@
                 "name": "key",
                 "type": "key",
                 "key_spec_index": 0
+            },
+            {
+                "name": "ext",
+                "type": "pure-token",
+                "token": "EXT"
             }
         ]
     }

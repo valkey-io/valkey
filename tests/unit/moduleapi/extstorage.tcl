@@ -11,7 +11,7 @@ start_server {tags {"external_data external:skip"}} {
     }
 }
 
-start_server [list overrides [list "ext-data-mode" test] tags [list "external:skip"]] {
+start_server [list overrides [list "ext-data-mode" kv] tags [list "external:skip"]] {
     test {Running EXTERNAL_DATA LOADED with switched on external data succeeds} {
         assert_equal [list ] [r external_data loaded]
     }
@@ -26,7 +26,7 @@ start_server [list overrides [list "ext-data-mode" test] tags [list "external:sk
     }
 }
 
-start_server [list overrides [list "ext-data-mode" test] tags [list "external:skip"]] {
+start_server [list overrides [list "ext-data-mode" kv] tags [list "external:skip"]] {
     test {Loading module does affect LOADED commands} {
         # success on module load
         assert_equal {OK} [r module load $extdatamodule1]
@@ -59,7 +59,7 @@ start_server [list overrides [list "ext-data-mode" test] tags [list "external:sk
 }
 
 ### Non-sharded
-start_server [list overrides [list "ext-data-mode" test] tags [list "external:skip"]] {
+start_server [list overrides [list "ext-data-mode" kv] tags [list "external:skip"]] {
     test {Initializing and dropping db affects STATS commands} {
         # STATS ok with modules non-loaded
         assert_equal [list ] [r external_data stats]
@@ -106,7 +106,7 @@ start_server [list overrides [list "ext-data-mode" test] tags [list "external:sk
     }
 }
 
-start_server [list overrides [list "ext-data-mode" test "loglevel" debug "ext-data-timeout" 0] tags [list "external:skip"]] {
+start_server [list overrides [list "ext-data-mode" kv "loglevel" debug "ext-data-timeout" 0] tags [list "external:skip"]] {
     test {Reading data from storage works} {
         # init
         assert_equal {OK} [r module load $extdatamodule1]
@@ -122,18 +122,18 @@ start_server [list overrides [list "ext-data-mode" test "loglevel" debug "ext-da
         assert_error {ERR k set failed} {r external_data debug db0 storage set k v}
         assert_error {ERR k set failed} {r external_data debug db0 filter set k}
         assert_equal {OK} [r select 0]
-        assert_equal {} [r get k]
+        assert_equal {} [r get k ext]
         assert_equal {OK} [r select 1]
-        assert_equal {} [r get k]
+        assert_equal {} [r get k ext]
         assert_equal {OK} [r select 0]
 
         # filter RO, storage OK = nil
         assert_equal {OK} [r external_data debug db0 storage dropro]
         assert_equal {OK} [r external_data debug db0 storage set k v]
         assert_error {ERR k set failed} {r external_data debug db0 filter set k}
-        assert_equal {} [r get k]
+        assert_equal {} [r get k ext]
         assert_equal {OK} [r select 1]
-        assert_equal {} [r get k]
+        assert_equal {} [r get k ext]
         assert_equal {OK} [r select 0]
 
         # filter OK, storage RO = nil
@@ -143,9 +143,9 @@ start_server [list overrides [list "ext-data-mode" test "loglevel" debug "ext-da
         assert_equal {OK} [r external_data debug db0 filter dropro]
         assert_error {ERR k set failed} {r external_data debug db0 storage set k v}
         assert_equal {OK} [r external_data debug db0 filter set k]
-        assert_equal {} [r get k]
+        assert_equal {} [r get k ext]
         assert_equal {OK} [r select 1]
-        assert_equal {} [r get k]
+        assert_equal {} [r get k ext]
         assert_equal {OK} [r select 0]
 
         # filter ok, storage ok = OK
@@ -153,32 +153,33 @@ start_server [list overrides [list "ext-data-mode" test "loglevel" debug "ext-da
         assert_equal {OK} [r external_data debug db0 storage set k v]
         assert_equal {OK} [r external_data debug db0 storage set k v]
         assert_equal {OK} [r external_data debug db0 filter set k]
-        assert_equal v [r get k]
-        assert_equal {OK} [r select 1]
+        assert_equal v [r get k ext]
         assert_equal {} [r get k]
+        assert_equal {OK} [r select 1]
+        assert_equal {} [r get k ext]
         assert_equal {OK} [r select 0]
 
         # filter not, storage ok = nil
         assert_equal 1 [r external_data debug db0 filter del k]
         assert_equal 0 [r external_data debug db0 filter del k]
-        assert_equal {} [r get k]
+        assert_equal {} [r get k ext]
         assert_equal {OK} [r select 1]
-        assert_equal {} [r get k]
+        assert_equal {} [r get k ext]
         assert_equal {OK} [r select 0]
 
         # filter OK, storage not = nil
         assert_equal {OK} [r external_data debug db0 filter set k]
         assert_equal v [r external_data debug db0 storage del k]
-        assert_equal {} [r get k]
+        assert_equal {} [r get k ext]
         assert_equal {OK} [r select 1]
-        assert_equal {} [r get k]
+        assert_equal {} [r get k ext]
         assert_equal {OK} [r select 0]
 
         # filter not, storage not = nil
         assert_equal 1 [r external_data debug db0 filter del k]
-        assert_equal {} [r get k]
+        assert_equal {} [r get k ext]
         assert_equal {OK} [r select 1]
-        assert_equal {} [r get k]
+        assert_equal {} [r get k ext]
         assert_equal {OK} [r select 0]
     }
 }
@@ -188,7 +189,7 @@ proc scan_keys {cur type match {storage ""}} {
     set k {}
     while 1 {
         if {$storage != ""} {
-            set res [r scan $cur type $type match $match storage $storage]
+            set res [r scan $cur type $type match $match $storage]
         } else {
             set res [r scan $cur type $type match $match]
         }
@@ -200,7 +201,7 @@ proc scan_keys {cur type match {storage ""}} {
     return $keys
 }
 
-start_server [list overrides [list "ext-data-mode" test "loglevel" debug] tags [list "external:skip"]] {
+start_server [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [list "external:skip"]] {
     test {Getting keys from storage works} {
         # init
         assert_equal {OK} [r module load $extdatamodule1]
@@ -212,30 +213,32 @@ start_server [list overrides [list "ext-data-mode" test "loglevel" debug] tags [
         assert_equal {OK} [r external_data debug db0 storage set k2 v]
         assert_equal {OK} [r external_data debug db0 filter set k]
         assert_equal {OK} [r select 0]
+
+        # no data in memory
         assert_equal {} [r keys \*]
         assert_equal {0 {}} [r scan 0 type "string" match \*]
 
         # no k2 as it's not in filter yet
-        assert_equal {k} [r keys \* storage ext]
-        assert_equal {0 k} [r scan 0 type "string" match \* storage ext]
+        assert_equal {k} [r keys \* ext]
+        assert_equal {0 k} [r scan 0 type "string" match \* ext]
 
         # exists k2 is it's in filter now
         assert_equal {OK} [r external_data debug db0 filter set k2]
-        assert_equal {k k2} [r keys \* storage ext]
-        assert_equal {0 {k k2}} [r scan 0 type "string" match \* storage ext]
+        assert_equal {k k2} [r keys \* ext]
+        assert_equal {0 {k k2}} [r scan 0 type "string" match \* ext]
 
         # another db is not touched
         assert_equal {OK} [r select 1]
+        assert_equal {} [r keys \* ext]
         assert_equal {} [r keys \*]
-        assert_equal {} [r keys \* storage ext]
         assert_equal {0 {}} [r scan 0 type "string" match \*]
-        assert_equal {0 {}} [r scan 0 type "string" match \* storage ext]
+        assert_equal {0 {}} [r scan 0 type "string" match \* ext]
         assert_equal {OK} [r select 0]
     }
 }
 
 ### Sharded
-start_cluster 1 0 [list overrides [list "ext-data-mode" test "loglevel" debug] tags [list "external:skip" "cluster"]] {
+start_cluster 1 0 [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [list "external:skip" "cluster"]] {
     # we assume that all cross-requests to and from another nodes are made in a usual Valkey way
     # that's why there are no tests with MOVED during set/get here
     test "Cluster should start ok" {
@@ -253,25 +256,26 @@ start_cluster 1 0 [list overrides [list "ext-data-mode" test "loglevel" debug] t
         assert_equal {OK} [r external_data debug db0 storage set k v]
         assert_equal {OK} [r external_data debug db0 storage set k v]
         assert_equal {OK} [r external_data debug db0 filter set k]
-        assert_equal v [r get k]
+        assert_equal v [r get k ext]
+        assert_equal {} [r get k]
 
         # filter not, storage ok = nil
         assert_equal 1 [r external_data debug db0 filter del k]
         assert_equal 0 [r external_data debug db0 filter del k]
-        assert_equal {} [r get k]
+        assert_equal {} [r get k ext]
 
         # filter OK, storage not = nil
         assert_equal {OK} [r external_data debug db0 filter set k]
         assert_equal v [r external_data debug db0 storage del k]
-        assert_equal {} [r get k]
+        assert_equal {} [r get k ext]
 
         # filter not, storage not = nil
         assert_equal 1 [r external_data debug db0 filter del k]
-        assert_equal {} [r get k]
+        assert_equal {} [r get k ext]
     }
 }
 
-start_cluster 1 0 [list overrides [list "ext-data-mode" test "loglevel" debug] tags [list "external:skip" "cluster"]] {
+start_cluster 1 0 [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [list "external:skip" "cluster"]] {
     # we assume that all cross-requests to and from another nodes are made in a usual Valkey way
     # that's why there are no tests with MOVED during set/get here
     test "Cluster should start ok" {
@@ -291,24 +295,27 @@ start_cluster 1 0 [list overrides [list "ext-data-mode" test "loglevel" debug] t
         assert_equal {OK} [r external_data debug db0 storage set k2 v]
         assert_equal {OK} [r external_data debug db0 filter set k]
         assert_equal {OK} [r select 0]
+
+        # no data in memory
         assert_equal {} [r keys \*]
         assert_equal {0 {}} [r scan 0 type "string" match \*]
 
         # no k2 as it's not in filter yet
-        assert_equal {k} [r keys \* storage ext]
-        assert_equal {0 k} [r scan 0 type "string" match \* storage ext]
+        assert_equal {k} [r keys \* ext]
+        assert_equal {} [r keys \*]
+        assert_equal {0 k} [r scan 0 type "string" match \* ext]
 
         # exists k2 is it's in filter now
         assert_equal {OK} [r external_data debug db0 filter set k2]
-        assert_equal {k k2} [r keys \* storage ext]
-        assert_equal {0 {k k2}} [r scan 0 type "string" match \* storage ext]
+        assert_equal {k k2} [r keys \* ext]
+        assert_equal {0 {k k2}} [r scan 0 type "string" match \* ext]
 
         # another db is not touched
         assert_equal {OK} [r select 1]
+        assert_equal {} [r keys \* ext]
         assert_equal {} [r keys \*]
-        assert_equal {} [r keys \* storage ext]
         assert_equal {0 {}} [r scan 0 type "string" match \*]
-        assert_equal {0 {}} [r scan 0 type "string" match \* storage ext]
+        assert_equal {0 {}} [r scan 0 type "string" match \* ext]
         assert_equal {OK} [r select 0]
     }
 }

@@ -549,10 +549,10 @@ typedef enum {
 
 /* External data options */
 #define EXT_DATA_NONE 0
-#define EXT_DATA_TEST 1
+#define EXT_DATA_KV 1
 
 /* External data dump format */
-#define EXT_DUMP_FORMAT_RDB 0
+#define EXT_DATA_DUMP_FORMAT_RDB 0
 
 /* TLS Client Authentication */
 #define TLS_CLIENT_AUTH_NO 0
@@ -3709,6 +3709,7 @@ int checkAlreadyExpired(long long when);
 robj *lookupKeyRead(serverDb *db, robj *key);
 robj *lookupKeyWrite(serverDb *db, robj *key);
 robj *lookupKeyReadOrReply(client *c, robj *key, robj *reply);
+robj *lookupExtKeyReadOrReply(client *c, robj *key, robj *reply);
 robj *lookupKeyWriteOrReply(client *c, robj *key, robj *reply);
 robj *lookupKeyReadWithFlags(serverDb *db, robj *key, int flags);
 robj *lookupKeyWriteWithFlags(serverDb *db, robj *key, int flags);
@@ -3721,6 +3722,7 @@ int objectSetLRUOrLFU(robj *val, long long lfu_freq, long long lru_idle_secs);
 #define LOOKUP_NOSTATS (1 << 2)  /* Don't update keyspace hits/misses counters. */
 #define LOOKUP_WRITE (1 << 3)    /* Delete expired keys even in replicas. */
 #define LOOKUP_NOEXPIRE (1 << 4) /* Avoid deleting lazy expired keys. */
+#define LOOKUP_EXTDATA (1 << 5)  /* Include searching external data. */
 #define LOOKUP_NOEFFECTS \
     (LOOKUP_NONOTIFY | LOOKUP_NOSTATS | LOOKUP_NOTOUCH | LOOKUP_NOEXPIRE) /* Avoid any effects from fetching the key */
 

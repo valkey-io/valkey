@@ -50,6 +50,7 @@ static int keyIsExpiredWithDictIndex(serverDb *db, robj *key, int dict_index);
 static int objectIsExpired(robj *val);
 static void dbSetValue(serverDb *db, robj *key, robj **valref, int overwrite, void **oldref);
 static robj *dbFindWithDictIndex(serverDb *db, sds key, int dict_index);
+static robj *dbFindExtData(serverDb *db, sds key);
 
 
 /* Lookup a key for read or write operations, or return NULL if the key is not
@@ -73,6 +74,7 @@ static robj *dbFindWithDictIndex(serverDb *db, sds key, int dict_index);
  *                replicas, use separate keyspace stats and events (TODO)).
  *  LOOKUP_NOEXPIRE: Perform expiration check, but avoid deleting the key,
  *                   so that we don't have to propagate the deletion.
+ *  LOOKUP_EXTDATA: Perform external data search if missing in-memory dict.
  *
  * Note: this function also returns NULL if the key is logically expired but
  * still existing, in case this is a replica and the LOOKUP_WRITE is not set.
@@ -121,6 +123,8 @@ robj *lookupKey(serverDb *db, robj *key, int flags) {
         if (!(flags & (LOOKUP_NONOTIFY | LOOKUP_WRITE))) notifyKeyspaceEvent(NOTIFY_KEY_MISS, "keymiss", key, db->id);
         if (!(flags & (LOOKUP_NOSTATS | LOOKUP_WRITE))) server.stat_keyspace_misses++;
         /* TODO: Use separate misses stats and notify event for WRITE */
+
+        if (isExtDataOn() && flags & LOOKUP_EXTDATA) val = dbFindExtData(db, objectGetVal(key));
     }
 
     return val;
@@ -146,6 +150,11 @@ robj *lookupKeyRead(serverDb *db, robj *key) {
     return lookupKeyReadWithFlags(db, key, LOOKUP_NONE);
 }
 
+/* Lookup in-memory and external data, if available. */
+robj *lookupExtKeyRead(serverDb *db, robj *key) {
+    return lookupKeyReadWithFlags(db, key, LOOKUP_EXTDATA);
+}
+
 /* Lookup a key for write operations, and as a side effect, if needed, expires
  * the key if its TTL is reached. It's equivalent to lookupKey() with the
  * LOOKUP_WRITE flag added.
@@ -162,6 +171,12 @@ robj *lookupKeyWrite(serverDb *db, robj *key) {
 
 robj *lookupKeyReadOrReply(client *c, robj *key, robj *reply) {
     robj *o = lookupKeyRead(c->db, key);
+    if (!o) addReplyOrErrorObject(c, reply);
+    return o;
+}
+
+robj *lookupExtKeyReadOrReply(client *c, robj *key, robj *reply) {
+    robj *o = lookupExtKeyRead(c->db, key);
     if (!o) addReplyOrErrorObject(c, reply);
     return o;
 }
@@ -970,7 +985,7 @@ void keysCommand(client *c) {
     if (kvs_di) kvstoreReleaseHashtableIterator(kvs_di);
     if (kvs_it) kvstoreIteratorRelease(kvs_it);
 
-    if (isExtDataOn() && c->argc >= 4 && !strcasecmp(objectGetVal(c->argv[2]), "storage") && !strcasecmp(objectGetVal(c->argv[3]), "ext")) {
+    if (isExtDataOn() && c->argc >= 3 && !strcasecmp(objectGetVal(c->argv[2]), "ext")) {
         robj *match = createStringObject(pattern, sdslen(pattern));
         externalStorageInstanceIterator *esi_it = externalStorageInstanceIteratorInit(c->db->id, match, NULL);
         if (esi_it != NULL) {
@@ -1240,15 +1255,13 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {
             }
             only_keys = 1;
             i++;
-        } else if (!strcasecmp(objectGetVal(c->argv[i++]), "storage")) {
+        } else if (!strcasecmp(objectGetVal(c->argv[i++]), "ext")) {
             if (!isExtDataOn()) {
                 addReplyError(c, EXTDATAOFFERRMSG);
                 return;
             }
 
-            if (!strcasecmp(objectGetVal(c->argv[i++]), "ext")) {
-                ext_storage = 1;
-            }
+            ext_storage = 1;
         } else {
             addReplyErrorObject(c, shared.syntaxerr);
             return;
@@ -2275,14 +2288,9 @@ int dbExpandExpires(serverDb *db, uint64_t db_size, int try_expand) {
 
 static robj *dbFindWithDictIndex(serverDb *db, sds key, int dict_index) {
     void *existing = NULL;
-    if (kvstoreHashtableFind(db->keys, dict_index, key, &existing) || !isExtDataOn()) {
+    if (kvstoreHashtableFind(db->keys, dict_index, key, &existing)) {
         return existing;
     }
-
-    robj *rkey = createStringObject(key, sdslen(key));
-    int exists = externalDataFind(db->id, rkey, &existing);
-    decrRefCount(rkey);
-    if (exists) return existing;
 
     return NULL;
 }
@@ -2290,6 +2298,19 @@ static robj *dbFindWithDictIndex(serverDb *db, sds key, int dict_index) {
 robj *dbFind(serverDb *db, sds key) {
     int dict_index = getKVStoreIndexForKey(key);
     return dbFindWithDictIndex(db, key, dict_index);
+}
+
+static robj *dbFindExtData(serverDb *db, sds key) {
+    if (!isExtDataOn())
+        return NULL;
+
+    void *existing = NULL;
+    robj *rkey = createStringObject(key, sdslen(key));
+    int exists = externalDataFind(db->id, rkey, &existing);
+    decrRefCount(rkey);
+    if (exists) return existing;
+
+    return NULL;
 }
 
 robj *dbFindExpiresWithDictIndex(serverDb *db, sds key, int dict_index) {

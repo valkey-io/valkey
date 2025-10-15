@@ -51,10 +51,9 @@
                 "since": "6.0.0"
             },
             {
-                "token": "STORAGE",
-                "name": "storage",
-                "type": "string",
-                "optional": true
+                "token": "EXT",
+                "name": "ext",
+                "type": "pure-token"
             }
         ],
         "reply_schema": {

@@ -120,11 +120,11 @@ configEnum repl_diskless_load_enum[] = {
 
 configEnum ext_data_mode_enum[] = {
     {"no", EXT_DATA_NONE},
-    {"test", EXT_DATA_TEST},
+    {"kv", EXT_DATA_KV},
     {NULL, 0}};
 
 configEnum ext_dump_format_enum[] = {
-    {"rdb", EXT_DUMP_FORMAT_RDB},
+    {"rdb", EXT_DATA_DUMP_FORMAT_RDB},
     {NULL, 0}};
 
 configEnum tls_auth_clients_enum[] = {
@@ -3321,7 +3321,7 @@ standardConfig static_configs[] = {
     createEnumConfig("log-timestamp-format", NULL, MODIFIABLE_CONFIG, log_timestamp_format_enum, server.log_timestamp_format, LOG_TIMESTAMP_LEGACY, NULL, NULL),
     createEnumConfig("rdb-version-check", NULL, MODIFIABLE_CONFIG, rdb_version_check_enum, server.rdb_version_check, RDB_VERSION_CHECK_STRICT, NULL, NULL),
     createEnumConfig("ext-data-mode", NULL, IMMUTABLE_CONFIG, ext_data_mode_enum, server.ext_data_mode, EXT_DATA_NONE, NULL, NULL),
-    createEnumConfig("ext-dump-format", NULL, MODIFIABLE_CONFIG, ext_dump_format_enum, server.ext_dump_format, EXT_DUMP_FORMAT_RDB, NULL, NULL),
+    createEnumConfig("ext-dump-format", NULL, MODIFIABLE_CONFIG, ext_dump_format_enum, server.ext_dump_format, EXT_DATA_DUMP_FORMAT_RDB, NULL, NULL),
 
     /* Integer configs */
     createIntConfig("databases", NULL, IMMUTABLE_CONFIG, 1, INT_MAX, server.config_databases, 16, INTEGER_CONFIG, NULL, NULL),

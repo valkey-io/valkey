@@ -280,8 +280,13 @@ void delifeqCommand(client *c) {
 int getGenericCommand(client *c) {
     robj *o;
 
-    if ((o = lookupKeyReadOrReply(c, c->argv[1], shared.null[c->resp])) == NULL)
-        return C_OK;
+    if (c->argc == 3 && !strcasecmp(objectGetVal(c->argv[2]), "ext")) {
+        if ((o = lookupExtKeyReadOrReply(c, c->argv[1], shared.null[c->resp])) == NULL)
+            return C_OK;        
+    } else {
+        if ((o = lookupKeyReadOrReply(c, c->argv[1], shared.null[c->resp])) == NULL)
+            return C_OK;
+    }
 
     if (checkType(c, o, OBJ_STRING)) {
         return C_ERR;

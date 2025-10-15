@@ -493,7 +493,7 @@ static int valkeyGetSubscribeCallback(valkeyAsyncContext *ac, valkeyReply *reply
             }
         }
 
-        /* If this is an subscribe reply decrease pending counter. */
+        /* If this is a subscribe reply decrease pending counter. */
         if (strcasecmp(stype + pvariant + svariant, "subscribe") == 0) {
             assert(cb != NULL);
             cb->pending_subs -= 1;

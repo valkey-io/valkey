@@ -1200,7 +1200,7 @@ void hsetexCommand(client *c) {
         }
     }
     /* Check that the parsed fields number matches the real provided number of fields */
-    if (!num_fields || num_fields != (c->argc - fields_index) / 2) {
+    if (!num_fields || num_fields > LLONG_MAX / 2 || (num_fields * 2) != (c->argc - fields_index)) {
         addReplyError(c, "numfields should be greater than 0 and match the provided number of fields");
         return;
     }
@@ -1208,13 +1208,6 @@ void hsetexCommand(client *c) {
     o = lookupKeyWrite(c->db, c->argv[1]);
     if (checkType(c, o, OBJ_HASH))
         return;
-
-    if (o == NULL) {
-        o = createHashObject();
-        dbAdd(c->db, c->argv[1], &o);
-    }
-
-    bool has_volatile_fields = hashTypeHasVolatileFields(o);
 
     /* Handle parsing and calculating the expiration time. */
     if (flags & ARGS_KEEPTTL)
@@ -1230,16 +1223,34 @@ void hsetexCommand(client *c) {
         }
     }
 
-    /* Check for all fields condition */
+    /* Check FNX/FXX field-level conditions */
     if (flags & (ARGS_SET_FNX | ARGS_SET_FXX)) {
-        for (i = fields_index; i < c->argc; i += 2) {
-            if (((flags & ARGS_SET_FNX) && hashTypeExists(o, c->argv[i]->ptr)) ||
-                ((flags & ARGS_SET_FXX) && !hashTypeExists(o, c->argv[i]->ptr))) {
+        if (o) {
+            /* Key exists: check fields normally */
+            for (i = fields_index; i < c->argc; i += 2) {
+                if (((flags & ARGS_SET_FNX) && hashTypeExists(o, c->argv[i]->ptr)) ||
+                    ((flags & ARGS_SET_FXX) && !hashTypeExists(o, c->argv[i]->ptr))) {
+                    addReply(c, shared.czero);
+                    return;
+                }
+            }
+        } else {
+            /* Key does not exist */
+            if (flags & ARGS_SET_FXX) {
+                /* Any FXX fails because no fields exist */
                 addReply(c, shared.czero);
                 return;
             }
+            /* FNX automatically passes if key doesn't exist, nothing to check */
         }
     }
+
+    if (o == NULL) {
+        o = createHashObject();
+        dbAdd(c->db, c->argv[1], &o);
+    }
+
+    bool has_volatile_fields = hashTypeHasVolatileFields(o);
 
     /* In case we are expiring all the elements prepare a new argv since we are going to delete all the expired fields. */
     if (set_expired) {
@@ -2117,12 +2128,10 @@ typedef struct {
 static int hashTypeExpireEntry(void *entry, void *c) {
     expiryContext *ctx = c;
     robj *o = ctx->key;
-    serverAssert(o->encoding == OBJ_ENCODING_HASHTABLE);
-
+    serverAssert(o->encoding == OBJ_ENCODING_HASHTABLE && hashtableSize(o->ptr) > 0);
     hashtable *ht = o->ptr;
     void *entry_ptr = NULL;
     bool deleted = hashtablePop(ht, entry, &entry_ptr);
-
     if (deleted) {
         if (ctx->fields)
             ctx->fields[ctx->n_fields++] = createStringObjectFromSds(entryGetField(entry));
@@ -2138,21 +2147,21 @@ static int hashTypeExpireEntry(void *entry, void *c) {
 size_t hashTypeDeleteExpiredFields(robj *o, mstime_t now, unsigned long max_fields, robj **out_entries) {
     serverAssert(o->encoding == OBJ_ENCODING_HASHTABLE);
 
-    /* skip TTL checks temporarily (to allow hashtable lookup) */
-    hashTypeIgnoreTTL(o, 1);
-
     vset *vset = hashTypeGetVolatileSet(o);
-    if (!vset || vsetIsEmpty(vset)) {
-        hashTypeIgnoreTTL(o, 0);
+    if (!vset) {
         return 0;
     }
 
+    serverAssert(!vsetIsEmpty(vset));
+    /* skip TTL checks temporarily (to allow hashtable pops) */
+    hashTypeIgnoreTTL(o, true);
     expiryContext ctx = {.key = o, .fields = out_entries, .n_fields = 0};
     size_t expired = vsetRemoveExpired(vset, entryGetExpiry, hashTypeExpireEntry, now, max_fields, &ctx);
     serverAssert(ctx.n_fields <= max_fields);
-    hashTypeIgnoreTTL(o, 0);
-    if (!hashTypeHasVolatileFields(o)) {
+    if (vsetIsEmpty(vset)) {
         hashTypeFreeVolatileSet(o);
+    } else {
+        hashTypeIgnoreTTL(o, false);
     }
     return expired;
 }

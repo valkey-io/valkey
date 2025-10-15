@@ -221,11 +221,15 @@ typedef struct ValkeyModuleStreamID {
 #define VALKEYMODULE_CTX_FLAGS_ASYNC_LOADING (1 << 23)
 /* Valkey is starting. */
 #define VALKEYMODULE_CTX_FLAGS_SERVER_STARTUP (1 << 24)
+/* The current client is the slot import client */
+#define VALKEYMODULE_CTX_FLAGS_SLOT_IMPORT_CLIENT (1 << 25)
+/* The current client is the slot export client */
+#define VALKEYMODULE_CTX_FLAGS_SLOT_EXPORT_CLIENT (1 << 26)
 
 /* Next context flag, must be updated when adding new flags above!
 This flag should not be used directly by the module.
  * Use ValkeyModule_GetContextFlagsAll instead. */
-#define _VALKEYMODULE_CTX_FLAGS_NEXT (1 << 25)
+#define _VALKEYMODULE_CTX_FLAGS_NEXT (1 << 27)
 
 /* Keyspace changes notification classes. Every class is associated with a
  * character for configuration purposes.
@@ -330,10 +334,15 @@ typedef uint64_t ValkeyModuleTimerID;
  * are already pre-validated or trusted. */
 #define VALKEYMODULE_OPTIONS_SKIP_COMMAND_VALIDATION (1 << 4)
 
+/* Declare that the module can handle atomic slot migration. When not set,
+ * CLUSTER MIGRATESLOTS will return an error, and the CLUSTER SETSLOTS based
+ * slot migration must be used. */
+#define VALKEYMODULE_OPTIONS_HANDLE_ATOMIC_SLOT_MIGRATION (1 << 5)
+
 /* Next option flag, must be updated when adding new module flags above!
  * This flag should not be used directly by the module.
  * Use ValkeyModule_GetModuleOptionsAll instead. */
-#define _VALKEYMODULE_OPTIONS_FLAGS_NEXT (1 << 5)
+#define _VALKEYMODULE_OPTIONS_FLAGS_NEXT (1 << 6)
 
 /* Definitions for ValkeyModule_SetCommandInfo. */
 
@@ -522,7 +531,9 @@ typedef void (*ValkeyModuleEventLoopOneShotFunc)(void *user_data);
 #define VALKEYMODULE_EVENT_EVENTLOOP 15
 #define VALKEYMODULE_EVENT_CONFIG 16
 #define VALKEYMODULE_EVENT_KEY 17
-#define _VALKEYMODULE_EVENT_NEXT 18 /* Next event flag, should be updated if a new event added. */
+#define VALKEYMODULE_EVENT_AUTHENTICATION_ATTEMPT 18
+#define VALKEYMODULE_EVENT_ATOMIC_SLOT_MIGRATION 19
+#define _VALKEYMODULE_EVENT_NEXT 20 /* Next event flag, should be updated if a new event added. */
 
 typedef struct ValkeyModuleEvent {
     uint64_t id;      /* VALKEYMODULE_EVENT_... defines. */
@@ -579,7 +590,9 @@ static const ValkeyModuleEvent ValkeyModuleEvent_ReplicationRoleChanged = {VALKE
                                ValkeyModuleEvent_ForkChild = {VALKEYMODULE_EVENT_FORK_CHILD, 1},
                                ValkeyModuleEvent_EventLoop = {VALKEYMODULE_EVENT_EVENTLOOP, 1},
                                ValkeyModuleEvent_Config = {VALKEYMODULE_EVENT_CONFIG, 1},
-                               ValkeyModuleEvent_Key = {VALKEYMODULE_EVENT_KEY, 1};
+                               ValkeyModuleEvent_Key = {VALKEYMODULE_EVENT_KEY, 1},
+                               ValkeyModuleEvent_AuthenticationAttempt = {VALKEYMODULE_EVENT_AUTHENTICATION_ATTEMPT, 1},
+                               ValkeyModuleEvent_AtomicSlotMigration = {VALKEYMODULE_EVENT_ATOMIC_SLOT_MIGRATION, 1};
 
 /* Those are values that are used for the 'subevent' callback argument. */
 #define VALKEYMODULE_SUBEVENT_PERSISTENCE_RDB_START 0
@@ -651,6 +664,14 @@ static const ValkeyModuleEvent ValkeyModuleEvent_ReplicationRoleChanged = {VALKE
 #define _VALKEYMODULE_SUBEVENT_CRON_LOOP_NEXT 0
 #define _VALKEYMODULE_SUBEVENT_SWAPDB_NEXT 0
 
+#define VALKEYMODULE_SUBEVENT_ATOMIC_SLOT_MIGRATION_IMPORT_STARTED 0
+#define VALKEYMODULE_SUBEVENT_ATOMIC_SLOT_MIGRATION_EXPORT_STARTED 1
+#define VALKEYMODULE_SUBEVENT_ATOMIC_SLOT_MIGRATION_IMPORT_ABORTED 2
+#define VALKEYMODULE_SUBEVENT_ATOMIC_SLOT_MIGRATION_EXPORT_ABORTED 3
+#define VALKEYMODULE_SUBEVENT_ATOMIC_SLOT_MIGRATION_IMPORT_COMPLETED 4
+#define VALKEYMODULE_SUBEVENT_ATOMIC_SLOT_MIGRATION_EXPORT_COMPLETED 5
+#define _VALKEYMODULE_SUBEVENT_ATOMIC_SLOT_MIGRATION_NEXT 6
+
 /* ValkeyModuleClientInfo flags. */
 #define VALKEYMODULE_CLIENTINFO_FLAG_SSL (1 << 0)
 #define VALKEYMODULE_CLIENTINFO_FLAG_PUBSUB (1 << 1)
@@ -658,6 +679,7 @@ static const ValkeyModuleEvent ValkeyModuleEvent_ReplicationRoleChanged = {VALKE
 #define VALKEYMODULE_CLIENTINFO_FLAG_TRACKING (1 << 3)
 #define VALKEYMODULE_CLIENTINFO_FLAG_UNIXSOCKET (1 << 4)
 #define VALKEYMODULE_CLIENTINFO_FLAG_MULTI (1 << 5)
+#define VALKEYMODULE_CLIENTINFO_FLAG_READONLY (1 << 6)
 
 /* Here we take all the structures that the module pass to the core
  * and the other way around. Notably the list here contains the structures
@@ -779,6 +801,43 @@ typedef struct ValkeyModuleKeyInfo {
 } ValkeyModuleKeyInfoV1;
 
 #define ValkeyModuleKeyInfo ValkeyModuleKeyInfoV1
+
+#define VALKEYMODULE_AUTHENTICATION_INFO_VERSION 1
+
+typedef enum {
+    VALKEYMODULE_AUTH_RESULT_GRANTED = 0, /* Authentication succeeded. */
+    VALKEYMODULE_AUTH_RESULT_DENIED = 1,  /* Authentication failed. */
+} ValkeyModuleAuthenticationResult;
+
+typedef struct ValkeyModuleAuthenticationInfo {
+    uint64_t version;                        /* Version of this structure for ABI compat. */
+    uint64_t client_id;                      /* Client ID. */
+    const char *username;                    /* Username used for authentication. */
+    const char *module_name;                 /* Name of the module that is handling the authentication. */
+    ValkeyModuleAuthenticationResult result; /* Result of the authentication */
+} ValkeyModuleAuthenticationInfoV1;
+
+#define ValkeyModuleAuthenticationInfo ValkeyModuleAuthenticationInfoV1
+
+#define VALKEYMODULE_AUTHENTICATIONINFO_INITIALIZER_V1 {.version = 1}
+
+#define VALKEYMODULE_ATOMICSLOTMIGRATION_INFO_VERSION 1
+
+typedef struct ValkeyModuleSlotRange {
+    int start; /* Start slot, inclusive. */
+    int end;   /* End slot, inclusive. */
+} ValkeyModuleSlotRange;
+
+typedef struct ValkeyModuleAtomicSlotMigrationInfo {
+    uint64_t version;                            /* Version of this structure for ABI compat. */
+    char job_name[VALKEYMODULE_NODE_ID_LEN + 1]; /* Unique ID for the migration operation. */
+    ValkeyModuleSlotRange *slot_ranges;          /* Array of slot ranges involved in the migration. */
+    uint32_t num_slot_ranges;                    /* Number of slot ranges in the array. */
+} ValkeyModuleAtomicSlotMigrationInfoV1;
+
+#define ValkeyModuleAtomicSlotMigrationInfo ValkeyModuleAtomicSlotMigrationInfoV1
+
+#define VALKEYMODULE_ATOMICSLOTMIGRATIONINFO_INITIALIZER_V1 {.version = 1}
 
 typedef enum {
     VALKEYMODULE_ACL_LOG_AUTH = 0, /* Authentication failure */

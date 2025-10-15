@@ -824,6 +824,7 @@ const char *strChildType(int type) {
     case CHILD_TYPE_AOF: return "AOF";
     case CHILD_TYPE_LDB: return "LDB";
     case CHILD_TYPE_MODULE: return "MODULE";
+    case CHILD_TYPE_SLOT_MIGRATION: return "SLOT_MIGRATION";
     default: return "Unknown";
     }
 }
@@ -850,7 +851,7 @@ void resetChildState(void) {
 
 /* Return if child type is mutually exclusive with other fork children */
 int isMutuallyExclusiveChildType(int type) {
-    return type == CHILD_TYPE_RDB || type == CHILD_TYPE_AOF || type == CHILD_TYPE_MODULE;
+    return type == CHILD_TYPE_RDB || type == CHILD_TYPE_AOF || type == CHILD_TYPE_MODULE || type == CHILD_TYPE_SLOT_MIGRATION;
 }
 
 /* Returns true when we're inside a long command that yielded to the event loop. */
@@ -1289,6 +1290,7 @@ void databasesCron(void) {
             if (db == NULL) continue;
             kvstoreTryResizeHashtables(db->keys, CRON_DICTS_PER_DB);
             kvstoreTryResizeHashtables(db->expires, CRON_DICTS_PER_DB);
+            kvstoreTryResizeHashtables(db->keys_with_volatile_items, CRON_DICTS_PER_DB);
         }
 
         /* Rehash */
@@ -1301,6 +1303,8 @@ void databasesCron(void) {
                     elapsed_us += kvstoreIncrementallyRehash(db->keys, threshold_us - elapsed_us);
                     if (elapsed_us >= threshold_us) break;
                     elapsed_us += kvstoreIncrementallyRehash(db->expires, threshold_us - elapsed_us);
+                    if (elapsed_us >= threshold_us) break;
+                    elapsed_us += kvstoreIncrementallyRehash(db->keys_with_volatile_items, threshold_us - elapsed_us);
                     if (elapsed_us >= threshold_us) break;
                 }
                 rehash_db++;
@@ -1387,17 +1391,19 @@ void checkChildrenDone(void) {
                       "child_type: %s, child_pid = %d",
                       strerror(errno), strChildType(server.child_type), (int)server.child_pid);
         } else if (pid == server.child_pid) {
+            if (!bysignal && exitcode == 0) receiveChildInfo();
             if (server.child_type == CHILD_TYPE_RDB) {
                 backgroundSaveDoneHandler(exitcode, bysignal);
             } else if (server.child_type == CHILD_TYPE_AOF) {
                 backgroundRewriteDoneHandler(exitcode, bysignal);
             } else if (server.child_type == CHILD_TYPE_MODULE) {
                 ModuleForkDoneHandler(exitcode, bysignal);
+            } else if (server.child_type == CHILD_TYPE_SLOT_MIGRATION) {
+                backgroundSlotMigrationDoneHandler(exitcode, bysignal);
             } else {
                 serverPanic("Unknown child type %d for child pid %d", server.child_type, server.child_pid);
                 exit(1);
             }
-            if (!bysignal && exitcode == 0) receiveChildInfo();
             resetChildState();
         } else {
             if (!ldbRemoveChild(pid)) {
@@ -2145,6 +2151,8 @@ void createSharedObjects(void) {
     shared.persist = createSharedString("PERSIST");
     shared.set = createSharedString("SET");
     shared.eval = createSharedString("EVAL");
+    shared.cluster = createSharedString("CLUSTER");
+    shared.syncslots = createSharedString("SYNCSLOTS");
 
     /* Shared command argument */
     shared.left = createSharedString("left");
@@ -2168,6 +2176,12 @@ void createSharedObjects(void) {
     shared.special_equals = createSharedString("=");
     shared.redacted = createSharedString("(redacted)");
     shared.fields = createSharedString("FIELDS");
+    shared.finish = createSharedString("FINISH");
+    shared.state = createSharedString("STATE");
+    shared.success = createSharedString("SUCCESS");
+    shared.failed = createSharedString("FAILED");
+    shared.name = createSharedString("NAME");
+    shared.message = createSharedString("MESSAGE");
 
     for (j = 0; j < OBJ_SHARED_INTEGERS; j++) {
         shared.integers[j] = makeObjectShared(createObject(OBJ_STRING, (void *)(long)j));
@@ -2827,6 +2841,8 @@ void initServer(void) {
     server.in_fork_child = CHILD_TYPE_NONE;
     server.rdb_pipe_read = -1;
     server.rdb_child_exit_pipe = -1;
+    server.slot_migration_pipe_read = -1;
+    server.slot_migration_child_exit_pipe = -1;
     server.main_thread_id = pthread_self();
     server.current_client = NULL;
     server.errors = raxNew();
@@ -2935,6 +2951,7 @@ void initServer(void) {
     server.stat_rdb_cow_bytes = 0;
     server.stat_aof_cow_bytes = 0;
     server.stat_module_cow_bytes = 0;
+    server.stat_slot_migration_cow_bytes = 0;
     server.stat_module_progress = 0;
     for (int j = 0; j < CLIENT_TYPE_COUNT; j++) server.stat_clients_type_memory[j] = 0;
     server.stat_cluster_links_memory = 0;
@@ -3479,6 +3496,10 @@ int mustObeyClient(client *c) {
     return c->id == CLIENT_ID_AOF || isReplicatedClient(c);
 }
 
+bool clientSupportStandAloneRedirect(client *c) {
+    return !server.cluster_enabled && server.primary_host && c->capa & CLIENT_CAPA_REDIRECT;
+}
+
 static int shouldPropagate(int target) {
     if (!server.replication_allowed || target == PROPAGATE_NONE || server.loading) return 0;
 
@@ -3569,8 +3590,15 @@ void alsoPropagate(int dbid, robj **argv, int argc, int target, int slot) {
     if (!shouldPropagate(target)) return;
 
     /* Don't propagate commands on slot migration clients, these will be proxied
-     * in replicationFeedStreamFromPrimaryStream() */
-    if (server.current_client != NULL && server.current_client->slot_migration_job) return;
+     * in replicationFeedStreamFromPrimaryStream().
+     *
+     * However, if we need to propagate to AOF, we should still do that. */
+    bool propagate_aof = (target & PROPAGATE_AOF) && server.aof_state != AOF_OFF;
+    if (server.current_client != NULL && server.current_client->slot_migration_job) {
+        if (!propagate_aof) return;
+        /* Disable propagation to replication (just do the AOF) */
+        target &= ~PROPAGATE_REPL;
+    }
 
     argvcopy = zmalloc(sizeof(robj *) * argc);
     for (j = 0; j < argc; j++) {
@@ -4085,22 +4113,41 @@ uint64_t getCommandFlags(client *c) {
     return cmd_flags;
 }
 
-/* Prepare a parsed command for processing, including looking up the command,
- * checking arity and calculating cluster slot. This should be done before
- * calling processCommand() and can be done by I/O threads to offload the
- * main-thread. */
-void prepareCommand(client *c) {
+/* Helper for prepareCommand() and prepareCommandQueue(). Prepares a command for
+ * processing, including looking up the command, checking arity and calculating
+ * cluster slot. This should be done before calling processCommand() and can be
+ * done by I/O threads to offload the main-thread. */
+static void prepareCommandGeneric(robj **argv, int argc, int *read_flags, struct serverCommand **cmd, int *slot) {
+    if (!(*read_flags & READ_FLAGS_PARSING_COMPLETED) || argc == 0) return;
     /* Make sure we don't do this twice. */
-    debugServerAssert(c->parsed_cmd == NULL && !(c->read_flags & READ_FLAGS_COMMAND_NOT_FOUND));
-    c->parsed_cmd = lookupCommand(c->argv, c->argc);
-    if (c->parsed_cmd && !commandCheckArity(c->parsed_cmd, c->argc, NULL)) {
-        /* The command was found, but the arity is invalid. */
-        c->read_flags |= READ_FLAGS_BAD_ARITY;
-    } else if (c->parsed_cmd && server.cluster_enabled) {
-        debugServerAssert(c->slot == -1 &&
-                          !(c->read_flags & READ_FLAGS_CROSSSLOT) &&
-                          !(c->read_flags & READ_FLAGS_NO_KEYS));
-        c->slot = clusterSlotByCommand(c->parsed_cmd, c->argv, c->argc, &c->read_flags);
+    debugServerAssert(*cmd == NULL && !(*read_flags & READ_FLAGS_COMMAND_NOT_FOUND));
+    *cmd = lookupCommand(argv, argc);
+    if (!*cmd) {
+        *read_flags |= READ_FLAGS_COMMAND_NOT_FOUND;
+    } else if (!commandCheckArity(*cmd, argc, NULL)) {
+        *read_flags |= READ_FLAGS_BAD_ARITY;
+    } else if (server.cluster_enabled) {
+        debugServerAssert(*slot == -1 &&
+                          !(*read_flags & READ_FLAGS_CROSSSLOT) &&
+                          !(*read_flags & READ_FLAGS_NO_KEYS));
+        *slot = clusterSlotByCommand(*cmd, argv, argc, read_flags);
+    }
+}
+
+/* Prepare the client's current command. See prepareCommandGeneric(). */
+void prepareCommand(client *c) {
+    prepareCommandGeneric(c->argv, c->argc, &c->read_flags, &c->parsed_cmd, &c->slot);
+}
+
+/* Prepare all parsed commands in the client's queue. See prepareCommand(). */
+void prepareCommandQueue(client *c) {
+    /* First AKA current command (c->argv). */
+    prepareCommand(c);
+
+    /* Commands in client's command queue. */
+    for (int i = c->cmd_queue.off; i < c->cmd_queue.len; i++) {
+        parsedCommand *p = &c->cmd_queue.cmds[i];
+        prepareCommandGeneric(p->argv, p->argc, &p->read_flags, &p->cmd, &p->slot);
     }
 }
 
@@ -4162,9 +4209,9 @@ int processCommand(client *c) {
                 securityWarningCommand(c);
                 return C_ERR;
             }
-            /* Check that the command lookup should has been done before calling
-             * this function, by calling prepareCommand(). */
-            serverAssert(!(c->read_flags & READ_FLAGS_COMMAND_NOT_FOUND));
+            /* Check that the command lookup has been done before calling this
+             * function, by calling prepareCommand(). */
+            serverAssert(c->read_flags & READ_FLAGS_COMMAND_NOT_FOUND);
         }
         c->cmd = c->lastcmd = c->realcmd = cmd;
 
@@ -4263,7 +4310,7 @@ int processCommand(client *c) {
         }
     }
 
-    if (!server.cluster_enabled && c->capa & CLIENT_CAPA_REDIRECT && server.primary_host && !obey_client &&
+    if (clientSupportStandAloneRedirect(c) && !obey_client &&
         (is_write_command || (is_read_command && !c->flag.readonly))) {
         if (server.failover_state == FAILOVER_IN_PROGRESS) {
             /* During the FAILOVER process, when conditions are met (such as
@@ -4452,10 +4499,10 @@ int processCommand(client *c) {
         return C_OK;
     }
 
-    /* If the server is paused, block the client until
-     * the pause has ended. Replicas are never paused. */
-    if (!c->flag.replica && ((isPausedActions(PAUSE_ACTION_CLIENT_ALL)) ||
-                             ((isPausedActions(PAUSE_ACTION_CLIENT_WRITE)) && is_may_replicate_command))) {
+    /* If the server is paused, block the client until the pause has ended. Replicas and slot
+     * export clients are never paused to allow failover/slot migration to succeed. */
+    if (!c->flag.replica && (!c->slot_migration_job || isImportSlotMigrationJob(c->slot_migration_job)) &&
+        ((isPausedActions(PAUSE_ACTION_CLIENT_ALL)) || ((isPausedActions(PAUSE_ACTION_CLIENT_WRITE)) && is_may_replicate_command))) {
         blockPostponeClient(c);
         return C_OK;
     }
@@ -4716,6 +4763,11 @@ int finishShutdown(void) {
         if (valkey_fsync(server.aof_fd) == -1) {
             serverLog(LL_WARNING, "Fail to fsync the AOF file: %s.", strerror(errno));
         }
+    }
+
+    if (server.child_type == CHILD_TYPE_SLOT_MIGRATION) {
+        serverLog(LL_WARNING, "There is a slot migration child. Killing it!");
+        killSlotMigrationChild();
     }
 
     /* Create a new RDB file before exiting. */
@@ -6026,7 +6078,8 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                 "aof_last_write_status:%s\r\n", (server.aof_last_write_status == C_OK && aof_bio_fsync_status == C_OK) ? "ok" : "err",
                 "aof_last_cow_size:%zu\r\n", server.stat_aof_cow_bytes,
                 "module_fork_in_progress:%d\r\n", server.child_type == CHILD_TYPE_MODULE,
-                "module_fork_last_cow_size:%zu\r\n", server.stat_module_cow_bytes));
+                "module_fork_last_cow_size:%zu\r\n", server.stat_module_cow_bytes,
+                "slot_migration_fork_in_progress:%d\r\n", server.child_type == CHILD_TYPE_SLOT_MIGRATION));
 
         if (server.aof_enabled) {
             info = sdscatprintf(
@@ -6740,6 +6793,8 @@ int serverFork(int purpose) {
             latencyTraceIfNeeded(rdb, fork, server.stat_fork_time);
         } else if (purpose == CHILD_TYPE_AOF) {
             latencyTraceIfNeeded(aof, fork, server.stat_fork_time);
+        } else if (purpose == CHILD_TYPE_SLOT_MIGRATION) {
+            latencyTraceIfNeeded(cluster, fork, server.stat_fork_time);
         }
 
         /* The child_pid and child_type are only for mutually exclusive children.
@@ -6767,11 +6822,11 @@ int serverFork(int purpose) {
 }
 
 void sendChildCowInfo(childInfoType info_type, char *pname) {
-    sendChildInfoGeneric(info_type, 0, -1, pname);
+    sendChildInfoGeneric(info_type, 0, 0, -1, pname);
 }
 
 void sendChildInfo(childInfoType info_type, size_t keys, char *pname) {
-    sendChildInfoGeneric(info_type, keys, -1, pname);
+    sendChildInfoGeneric(info_type, keys, 0, -1, pname);
 }
 
 /* Dismiss big chunks of memory inside a client structure, see zmadvise_dontneed() */

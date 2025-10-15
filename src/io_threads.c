@@ -6,7 +6,7 @@
 
 #include "io_threads.h"
 
-static __thread int thread_id = 0; /* Thread local var */
+static _Thread_local int thread_id = 0; /* Thread local var */
 static pthread_t io_threads[IO_THREADS_MAX_NUM] = {0};
 static pthread_mutex_t io_threads_mutex[IO_THREADS_MAX_NUM];
 
@@ -269,8 +269,9 @@ static void createIOThread(int id) {
     pthread_mutex_init(&io_threads_mutex[id], NULL);
     IOJobQueue_init(&io_jobs[id], IO_JOB_QUEUE_SIZE);
     pthread_mutex_lock(&io_threads_mutex[id]); /* Thread will be stopped. */
-    if (pthread_create(&tid, NULL, IOThreadMain, (void *)(long)id) != 0) {
-        serverLog(LL_WARNING, "Fatal: Can't initialize IO thread, pthread_create failed with: %s", strerror(errno));
+    int err = pthread_create(&tid, NULL, IOThreadMain, (void *)(long)id);
+    if (err) {
+        serverLog(LL_WARNING, "Fatal: Can't initialize IO thread, pthread_create failed with: %s", strerror(err));
         exit(1);
     }
     io_threads[id] = tid;

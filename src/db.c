@@ -671,6 +671,14 @@ long long emptyData(int dbnum, int flags, void(callback)(hashtable *)) {
      * there. */
     signalFlushedDb(dbnum, async);
 
+    if (clusterIsAnySlotImporting() || clusterIsAnySlotExporting()) {
+        /* On flush, in progress migrations will be cancelled, and should be
+         * retried by operators. We also may emptyData when reloading an RDB, in
+         * which case we will remove active slot imports. Replicas will get a
+         * new set of slot imports from their primary. */
+        clusterHandleFlushDuringSlotMigration();
+    }
+
     /* Empty the database structure. */
     removed = emptyDbStructure(server.db, dbnum, async, callback);
 
@@ -802,6 +810,7 @@ int getFlushCommandFlags(client *c, int *flags) {
 void flushAllDataAndResetRDB(int flags) {
     server.dirty += emptyData(-1, flags, NULL);
     if (server.child_type == CHILD_TYPE_RDB) killRDBChild();
+    if (server.child_type == CHILD_TYPE_SLOT_MIGRATION) killSlotMigrationChild();
     if (server.saveparamslen > 0) {
         rdbSaveInfo rsi, *rsiptr;
         rsiptr = rdbPopulateSaveInfo(&rsi);
@@ -823,12 +832,6 @@ void flushdbCommand(client *c) {
     int flags;
 
     if (getFlushCommandFlags(c, &flags) == C_ERR) return;
-
-    if (clusterIsAnySlotImporting() || clusterIsAnySlotExporting()) {
-        /* In progress migrations will be cancelled, and should be retried by
-         * operators. */
-        clusterHandleFlushDuringSlotMigration();
-    }
 
     /* flushdb should not flush the functions */
     server.dirty += emptyData(c->db->id, flags | EMPTYDB_NOFUNCTIONS, NULL);
@@ -853,12 +856,6 @@ void flushdbCommand(client *c) {
 void flushallCommand(client *c) {
     int flags;
     if (getFlushCommandFlags(c, &flags) == C_ERR) return;
-
-    if (clusterIsAnySlotImporting() || clusterIsAnySlotExporting()) {
-        /* In progress migrations will be cancelled, and should be retried by
-         * operators. */
-        clusterHandleFlushDuringSlotMigration();
-    }
 
     /* flushall should not flush the functions */
     flushAllDataAndResetRDB(flags | EMPTYDB_NOFUNCTIONS);
@@ -1974,7 +1971,7 @@ void propagateDeletion(serverDb *db, robj *key, int lazy, int slot) {
     server.replication_allowed = prev_replication_allowed;
 }
 
-static const size_t EXPIRE_BULK_LIMIT = 1024; /* Maximum number of fields to active-expire (per replicated HDEL command */
+#define EXPIRE_BULK_LIMIT ((size_t)1024) /* Maximum number of fields to active-expire (per replicated HDEL command */
 
 /* Propagate HDEL commands for deleted hash fields to AOF and replicas.
  *
@@ -2053,7 +2050,6 @@ size_t dbReclaimExpiredFields(robj *o, serverDb *db, mstime_t now, unsigned long
         max_entries -= expired;
         if (deleteKey) break; /* Stop if key was deleted */
     }
-
     return total_expired;
 }
 

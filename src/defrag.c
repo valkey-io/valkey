@@ -377,43 +377,41 @@ static void defragLater(robj *obj) {
 static long scanLaterList(robj *ob, unsigned long *cursor, monotime endtime) {
     quicklist *ql = ob->ptr;
     quicklistNode *node;
-    long iterations = 0;
-    int bookmark_failed = 0;
     serverAssert(ob->type == OBJ_LIST && ob->encoding == OBJ_ENCODING_QUICKLIST);
 
+    /* Find starting node */
     if (*cursor == 0) {
-        /* if cursor is 0, we start new iteration */
         node = ql->head;
     } else {
         node = quicklistBookmarkFind(ql, "_AD");
         if (!node) {
-            /* if the bookmark was deleted, it means we reached the end. */
             *cursor = 0;
-            return 0;
+            return 0; /* either bookmark failed to create or deleted, skip this one and continue with other quicklists*/
         }
         node = node->next;
     }
 
-    (*cursor)++;
+    /* Process nodes until time expires or list ends */
     while (node) {
         activeDefragQuickListNode(ql, &node);
         server.stat_active_defrag_scanned++;
-        if (++iterations > 128 && !bookmark_failed) {
-            if (getMonotonicUs() > endtime) {
-                if (!quicklistBookmarkCreate(&ql, "_AD", node)) {
-                    bookmark_failed = 1;
-                } else {
-                    ob->ptr = ql; /* bookmark creation may have re-allocated the quicklist */
-                    return 1;
-                }
+
+        /* Check time limit after processing each node */
+        if (getMonotonicUs() > endtime) {
+            if (quicklistBookmarkCreate(&ql, "_AD", node)) {
+                ob->ptr = ql; /* bookmark creation may have re-allocated the quicklist */
+                (*cursor)++;
+                return 1;
             }
-            iterations = 0;
+            break; /* bookmark creation failed - skip this one and continue with other quicklists */
         }
         node = node->next;
     }
+
+    /* Completed processing all nodes */
     quicklistBookmarkDelete(ql, "_AD");
     *cursor = 0;
-    return bookmark_failed ? 1 : 0;
+    return 0;
 }
 
 static void scanLaterZsetCallback(void *privdata, void *element_ref) {
@@ -824,7 +822,7 @@ static doneStatus defragLaterStep(monotime endtime, void *privdata) {
     defragKeysCtx *ctx = privdata;
 
     unsigned int iterations = 0;
-    unsigned long long prev_defragged = server.stat_active_defrag_hits;
+    long long prev_defragged = server.stat_active_defrag_hits;
     unsigned long long prev_scanned = server.stat_active_defrag_scanned;
 
     while (defrag_later && listLength(defrag_later) > 0) {
@@ -849,7 +847,7 @@ static doneStatus defragLaterStep(monotime endtime, void *privdata) {
             listDelNode(defrag_later, head);
         }
 
-        if (++iterations > 16 || server.stat_active_defrag_hits - prev_defragged > 512 ||
+        if (++iterations > 16 || server.stat_active_defrag_hits > prev_defragged ||
             server.stat_active_defrag_scanned - prev_scanned > 64) {
             if (getMonotonicUs() > endtime) break;
             iterations = 0;
@@ -884,7 +882,7 @@ static doneStatus defragStageKvstoreHelper(monotime endtime,
     }
 
     unsigned int iterations = 0;
-    unsigned long long prev_defragged = server.stat_active_defrag_hits;
+    long long prev_defragged = server.stat_active_defrag_hits;
     unsigned long long prev_scanned = server.stat_active_defrag_scanned;
 
     if (state.slot == KVS_SLOT_DEFRAG_LUT) {
@@ -897,7 +895,7 @@ static doneStatus defragStageKvstoreHelper(monotime endtime,
     }
 
     while (true) {
-        if (++iterations > 16 || server.stat_active_defrag_hits - prev_defragged > 512 || server.stat_active_defrag_scanned - prev_scanned > 64) {
+        if (++iterations > 16 || server.stat_active_defrag_hits > prev_defragged || server.stat_active_defrag_scanned - prev_scanned > 64) {
             if (getMonotonicUs() >= endtime) break;
             iterations = 0;
             prev_defragged = server.stat_active_defrag_hits;

@@ -306,13 +306,14 @@ int test_clientinfo(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc)
 
     ValkeyModule_ReplyWithArray(ctx, 10);
     char flags[512];
-    snprintf(flags, sizeof(flags) - 1, "%s:%s:%s:%s:%s:%s",
+    snprintf(flags, sizeof(flags) - 1, "%s:%s:%s:%s:%s:%s:%s",
         ci.flags & VALKEYMODULE_CLIENTINFO_FLAG_SSL ? "ssl" : "",
         ci.flags & VALKEYMODULE_CLIENTINFO_FLAG_PUBSUB ? "pubsub" : "",
         ci.flags & VALKEYMODULE_CLIENTINFO_FLAG_BLOCKED ? "blocked" : "",
         ci.flags & VALKEYMODULE_CLIENTINFO_FLAG_TRACKING ? "tracking" : "",
         ci.flags & VALKEYMODULE_CLIENTINFO_FLAG_UNIXSOCKET ? "unixsocket" : "",
-        ci.flags & VALKEYMODULE_CLIENTINFO_FLAG_MULTI ? "multi" : "");
+        ci.flags & VALKEYMODULE_CLIENTINFO_FLAG_MULTI ? "multi" : "",
+        ci.flags & VALKEYMODULE_CLIENTINFO_FLAG_READONLY ? "readonly" : "");
 
     ValkeyModule_ReplyWithCString(ctx, "flags");
     ValkeyModule_ReplyWithCString(ctx, flags);

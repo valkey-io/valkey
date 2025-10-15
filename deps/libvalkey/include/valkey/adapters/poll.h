@@ -100,7 +100,7 @@ static int valkeyPollTick(valkeyAsyncContext *ac, double timeout) {
          * handle it the same as writable. */
         if (writing && (pfd.revents & (POLLOUT | POLLERR))) {
             /* context Read callback may have caused context to be deleted, e.g.
-               by doing an valkeyAsyncDisconnect() */
+               by doing a valkeyAsyncDisconnect() */
             if (!e->deleted) {
                 valkeyAsyncHandleWrite(ac);
                 handled |= VALKEY_POLL_HANDLED_WRITE;

@@ -168,10 +168,14 @@ void zslFree(zskiplist *zsl) {
  * (both inclusive), with a powerlaw-alike distribution where higher
  * levels are less likely to be returned. */
 static int zslRandomLevel(void) {
-    static const int threshold = ZSKIPLIST_P * RAND_MAX;
-    int level = 1;
-    while (random() < threshold) level += 1;
-    return (level < ZSKIPLIST_MAXLEVEL) ? level : ZSKIPLIST_MAXLEVEL;
+    uint64_t rand = genrand64_int64();
+
+    /* The probability of gaining 2 additional leading zeros is 0.25.
+     * This matches the level calculation logic perfectly: each
+     * iteration has a 0.25 probability of increasing the level by 1.
+     * Note: __builtin_clzll has undefined behavior when the input is 0. */
+    int level = rand == 0 ? ZSKIPLIST_MAXLEVEL : (__builtin_clzll(rand) / 2 + 1);
+    return level;
 }
 
 /* Compares node and score/ele; defines zset ordering. Return value:
@@ -2487,6 +2491,10 @@ static int zsetChooseDiffAlgorithm(zsetopsrc *src, long setnum) {
     return (algo_one_work <= algo_two_work) ? 1 : 2;
 }
 
+/* The zdiff() function is called to specifically handle ZDIFF, ZDIFFSTORE commands.
+ * It computes the difference between the first and all successive input sorted sets.
+ * Meaning, if the first key is empty, we cannot reduce further from an already empty collection,
+ * and thus zdiff() becomes a no-op. */
 static void zdiff(zsetopsrc *src, long setnum, zset *dstzset, size_t *maxelelen, size_t *totelelen) {
     /* Skip everything if the smallest input is empty. */
     if (zuiLength(&src[0]) > 0) {

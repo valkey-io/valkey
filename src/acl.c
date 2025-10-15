@@ -1458,16 +1458,25 @@ void addAuthErrReply(client *c, robj *err) {
  *
  * The return value is AUTH_OK on success (valid username / password pair) & AUTH_ERR otherwise. */
 static int checkPasswordBasedAuth(client *c, robj *username, robj *password) {
+    int result;
+
     if (ACLCheckUserCredentials(username, password) == C_OK) {
         user *user = ACLGetUserByName(username->ptr, sdslen(username->ptr));
         clientSetUser(c, user, 1);
         moduleNotifyUserChanged(c);
-        return AUTH_OK;
+        result = AUTH_OK;
     } else {
         addACLLogEntry(c, ACL_DENIED_AUTH, (c->flag.multi) ? ACL_LOG_CTX_MULTI : ACL_LOG_CTX_TOPLEVEL, 0, username->ptr,
                        NULL);
-        return AUTH_ERR;
+        result = AUTH_ERR;
     }
+
+    moduleFireAuthenticationEvent(c->id,
+                                  username->ptr,
+                                  NULL,
+                                  result == AUTH_OK);
+
+    return result;
 }
 
 /* Attempt authenticating the user - first through module based authentication,

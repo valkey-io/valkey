@@ -28,17 +28,12 @@ jobs:
         # Fail build if there are warnings
         # build with TLS just for compilation coverage
         run: make -j4 all-with-unit-tests SERVER_CFLAGS='-Werror' BUILD_TLS=yes USE_FAST_FLOAT=yes
-      - name: install old server for compatibility testing
-        run: |
-          cd tests/tmp
-          wget https://download.valkey.io/releases/valkey-8.1.3-noble-x86_64.tar.gz
-          tar -xvf valkey-8.1.3-noble-x86_64.tar.gz
       - name: test
         run: |
           sudo apt-get install tcl8.6 tclx
-          ./runtest --verbose --tags -slow --dump-logs --other-server-path tests/tmp/valkey-8.1.3-noble-x86_64/bin/valkey-server
+          ./runtest --verbose --tags -slow --dump-logs
       - name: module api test
-        run: CFLAGS='-Werror' ./runtest-moduleapi --verbose --dump-logs --other-server-path tests/tmp/valkey-8.1.3-noble-x86_64/bin/valkey-server
+        run: CFLAGS='-Werror' ./runtest-moduleapi --verbose --dump-logs
       - name: validate commands.def up to date
         run: |
           touch src/commands/ping.json
@@ -48,6 +43,40 @@ jobs:
       - name: unit tests
         run: |
           ./src/valkey-unit-tests
+
+  test-ubuntu-latest-compatibility:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        server:
+          - {version: "7.2.10", file: "valkey-7.2.10-noble-x86_64.tar.gz"}
+          - {version: "8.0.4", file: "valkey-8.0.4-noble-x86_64.tar.gz"}
+          - {version: "8.1.3", file: "valkey-8.1.3-noble-x86_64.tar.gz"}
+    steps:
+      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - name: make
+        # Fail build if there are warnings
+        # build with TLS just for compilation coverage
+        run: make -j4 all-with-unit-tests SERVER_CFLAGS='-Werror' BUILD_TLS=yes USE_FAST_FLOAT=yes
+
+      - name: Install old server (${{ matrix.server.version }}) for compatibility testing
+        run: |
+          mkdir -p tests/tmp
+          cd tests/tmp
+          wget https://download.valkey.io/releases/${{ matrix.server.file }}
+          tar -xvf ${{ matrix.server.file }}
+
+      - name: Run compatibility tests against ${{ matrix.server.version }}
+        run: |
+          sudo apt-get install -y tcl8.6 tclx
+          ./runtest --verbose --tags "-slow needs:other-server" --dump-logs \
+            --other-server-path tests/tmp/valkey-${{ matrix.server.version }}-noble-x86_64/bin/valkey-server
+
+      - name: Module API tests against ${{ matrix.server.version }}
+        run: |
+          CFLAGS='-Werror' ./runtest-moduleapi --tags needs:other-server --verbose --dump-logs \
+            --other-server-path tests/tmp/valkey-${{ matrix.server.version }}-noble-x86_64/bin/valkey-server
 
   test-ubuntu-latest-cmake:
     runs-on: ubuntu-latest

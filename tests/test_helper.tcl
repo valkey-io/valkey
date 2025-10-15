@@ -2,8 +2,6 @@
 # This software is released under the BSD License. See the COPYING file for
 # more information.
 
-package require Tcl 8.5
-
 set tcl_precision 17
 source tests/support/valkey.tcl
 source tests/support/aofmanifest.tcl
@@ -94,6 +92,8 @@ set ::log_req_res 0
 set ::force_resp3 0
 set ::solo_tests_count 0
 set ::debug_defrag 0
+set ::completed_tests 0
+set ::total_loops 1
 
 # Expand a unit specification (test name, file, or directory) into a list
 # of canonical unit names relative to the tests directory.
@@ -417,7 +417,7 @@ proc test_server_cron {} {
 }
 
 proc accept_test_clients {fd addr port} {
-    fconfigure $fd -encoding binary
+    fconfigure $fd -translation binary
     fileevent $fd readable [list read_from_test_client $fd]
 }
 
@@ -449,10 +449,9 @@ proc read_from_test_client fd {
         signal_idle_client $fd
     } elseif {$status eq {done}} {
         set elapsed [expr {[clock seconds]-$::clients_start_time($fd)}]
-        set all_tests_count [expr {[llength $::all_tests]+$::solo_tests_count}]
-        set running_tests_count [expr {[llength $::active_clients]-1}]
-        set completed_solo_tests_count [expr {$::solo_tests_count-[llength $::run_solo_tests]}]
-        set completed_tests_count [expr {$::next_test-$running_tests_count+$completed_solo_tests_count}]
+        incr ::completed_tests
+        set all_tests_count [expr {[llength $::all_tests] * $::total_loops + $::solo_tests_count}]
+        set completed_tests_count $::completed_tests
         puts "\[$completed_tests_count/$all_tests_count [colorstr yellow $status]\]: $data ($elapsed seconds)"
         lappend ::clients_time_history $elapsed $data
         unset ::active_clients_file($fd)
@@ -619,7 +618,7 @@ proc the_end {} {
 # to read the command, execute, reply... all this in a loop.
 proc test_client_main server_port {
     set ::test_server_fd [socket localhost $server_port]
-    fconfigure $::test_server_fd -encoding binary
+    fconfigure $::test_server_fd -translation binary
     send_data_packet $::test_server_fd ready [pid]
     while 1 {
         set bytes [gets $::test_server_fd]
@@ -754,7 +753,7 @@ for {set j 0} {$j < [llength $argv]} {incr j} {
     } elseif {$opt eq {--io-threads}} {
         set ::io_threads 1
     } elseif {$opt eq {--tls} || $opt eq {--tls-module}} {
-        package require tls 1.6
+        package require tls
         set ::tls 1
         ::tls::init \
             -cafile "$::tlsdir/ca.crt" \
@@ -831,12 +830,14 @@ for {set j 0} {$j < [llength $argv]} {incr j} {
         set ::stop_on_failure 1
     } elseif {$opt eq {--loop}} {
         set ::loop 2147483647
+        set ::total_loops $::loop
     } elseif {$opt eq {--loops}} {
         set ::loop $arg
         if {$::loop <= 0} {
             puts "Wrong argument: $opt, loops should be greater than 0"
             exit 1
         }
+        set ::total_loops $::loop
         incr j
     } elseif {$opt eq {--timeout}} {
         set ::timeout $arg

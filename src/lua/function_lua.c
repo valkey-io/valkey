@@ -435,6 +435,8 @@ void luaFunctionInitializeLuaState(lua_State *lua) {
     lua_setmetatable(lua, -2);
     lua_enablereadonlytable(lua, -1, 1); /* protect the new global table */
     lua_replace(lua, LUA_GLOBALSINDEX);  /* set new global table as the new globals */
+    /* Set metatables of basic types (string, number, nil etc.) readonly. */
+    luaSetTableProtectionForBasicTypes(lua);
 }
 
 void luaFunctionFreeFunction(lua_State *lua, void *function) {

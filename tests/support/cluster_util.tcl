@@ -223,12 +223,12 @@ proc cluster_setup {masters replicas node_count slot_allocator replica_allocator
     if {$::tls && !$tls_cluster} {
         for {set i 1} {$i < $node_count} {incr i} {
             R 0 CLUSTER MEET [srv -$i host] [srv -$i pport]
-        }         
+        }
     } else {
         for {set i 1} {$i < $node_count} {incr i} {
             R 0 CLUSTER MEET [srv -$i host] [srv -$i port]
         }
-    }  
+    }
 
     $slot_allocator $masters $replicas
 
@@ -261,13 +261,13 @@ proc start_cluster {masters replicas options code {slot_allocator continuous_slo
     set code [list cluster_setup $masters $replicas $node_count $slot_allocator $replica_allocator $code]
 
     # Configure the starting of multiple servers. Set cluster node timeout
-    # aggressively since many tests depend on ping/pong messages. 
+    # aggressively since many tests depend on ping/pong messages.
 
     set cluster_options [list overrides [list cluster-enabled yes cluster-ping-interval 100 cluster-node-timeout 3000 cluster-databases 16 cluster-slot-stats-enabled yes]]
     set options [concat $cluster_options $options]
 
     # Cluster mode only supports a single database, so before executing the tests
-    # it needs to be configured correctly and needs to be reset after the tests. 
+    # it needs to be configured correctly and needs to be reset after the tests.
     set old_singledb $::singledb
     set ::singledb 1
     start_multiple_servers $node_count $options $code
@@ -382,9 +382,16 @@ proc are_hostnames_propagated {match_string} {
     return 1
 }
 
-# Check if cluster's announced IPs are consistent and match a pattern
+# Check if cluster's announced IPs or ports are consistent and come from a predefined list
 # Optionally, a list of clients can be supplied.
-proc are_cluster_announced_ips_propagated {match_string {clients {}}} {
+proc are_cluster_announced_values_propagated {type expected_values {clients {}}} {
+    if {$type eq "ip"} {
+        set value_index 0
+    } elseif {$type eq "port"} {
+        set value_index 1
+    } else {
+        fail "Unknown announced value type $type for node"
+    }
     for {set j 0} {$j < [llength $::servers]} {incr j} {
         if {$clients eq {}} {
             set client [srv [expr -1*$j] "client"]
@@ -394,7 +401,7 @@ proc are_cluster_announced_ips_propagated {match_string {clients {}}} {
         set cfg [$client cluster slots]
         foreach node $cfg {
             for {set i 2} {$i < [llength $node]} {incr i} {
-                if {! [string match $match_string [lindex [lindex $node $i] 0]] } {
+                if {[lsearch -exact $expected_values [lindex [lindex $node $i] $value_index]] < 0} {
                     return 0
                 }
             }

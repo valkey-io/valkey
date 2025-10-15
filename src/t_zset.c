@@ -2491,6 +2491,10 @@ static int zsetChooseDiffAlgorithm(zsetopsrc *src, long setnum) {
     return (algo_one_work <= algo_two_work) ? 1 : 2;
 }
 
+/* The zdiff() function is called to specifically handle ZDIFF, ZDIFFSTORE commands.
+ * It computes the difference between the first and all successive input sorted sets.
+ * Meaning, if the first key is empty, we cannot reduce further from an already empty collection,
+ * and thus zdiff() becomes a no-op. */
 static void zdiff(zsetopsrc *src, long setnum, zset *dstzset, size_t *maxelelen, size_t *totelelen) {
     /* Skip everything if the smallest input is empty. */
     if (zuiLength(&src[0]) > 0) {

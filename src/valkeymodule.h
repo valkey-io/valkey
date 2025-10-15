@@ -221,11 +221,15 @@ typedef struct ValkeyModuleStreamID {
 #define VALKEYMODULE_CTX_FLAGS_ASYNC_LOADING (1 << 23)
 /* Valkey is starting. */
 #define VALKEYMODULE_CTX_FLAGS_SERVER_STARTUP (1 << 24)
+/* The current client is the slot import client */
+#define VALKEYMODULE_CTX_FLAGS_SLOT_IMPORT_CLIENT (1 << 25)
+/* The current client is the slot export client */
+#define VALKEYMODULE_CTX_FLAGS_SLOT_EXPORT_CLIENT (1 << 26)
 
 /* Next context flag, must be updated when adding new flags above!
 This flag should not be used directly by the module.
  * Use ValkeyModule_GetContextFlagsAll instead. */
-#define _VALKEYMODULE_CTX_FLAGS_NEXT (1 << 25)
+#define _VALKEYMODULE_CTX_FLAGS_NEXT (1 << 27)
 
 /* Keyspace changes notification classes. Every class is associated with a
  * character for configuration purposes.
@@ -825,12 +829,10 @@ typedef struct ValkeyModuleSlotRange {
 } ValkeyModuleSlotRange;
 
 typedef struct ValkeyModuleAtomicSlotMigrationInfo {
-    uint64_t version;                                  /* Version of this structure for ABI compat. */
-    char job_name[VALKEYMODULE_NODE_ID_LEN + 1];       /* Unique ID for the migration operation. */
-    ValkeyModuleSlotRange *slot_ranges;                /* Array of slot ranges involved in the migration. */
-    uint32_t num_slot_ranges;                          /* Number of slot ranges in the array. */
-    char source_node_id[VALKEYMODULE_NODE_ID_LEN + 1]; /* Node ID of the source node. */
-    char target_node_id[VALKEYMODULE_NODE_ID_LEN + 1]; /* Node ID of the target node. */
+    uint64_t version;                            /* Version of this structure for ABI compat. */
+    char job_name[VALKEYMODULE_NODE_ID_LEN + 1]; /* Unique ID for the migration operation. */
+    ValkeyModuleSlotRange *slot_ranges;          /* Array of slot ranges involved in the migration. */
+    uint32_t num_slot_ranges;                    /* Number of slot ranges in the array. */
 } ValkeyModuleAtomicSlotMigrationInfoV1;
 
 #define ValkeyModuleAtomicSlotMigrationInfo ValkeyModuleAtomicSlotMigrationInfoV1

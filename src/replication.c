@@ -1849,15 +1849,17 @@ void slotMigrationPipeReadHandler(struct aeEventLoop *eventLoop, int fd, void *c
     UNUSED(eventLoop);
     if (!server.slot_migration_pipe_buff) server.slot_migration_pipe_buff = zmalloc(PROTO_IOBUF_LEN);
 
+    /* No work to do if our connection has been closed. */
+    if (!server.slot_migration_pipe_conn) return;
+
     while (1) {
         server.slot_migration_pipe_bufflen = read(fd, server.slot_migration_pipe_buff, PROTO_IOBUF_LEN);
         if (server.slot_migration_pipe_bufflen < 0) {
             if (errno == EAGAIN || errno == EWOULDBLOCK) return;
             serverLog(LL_WARNING, "Slot migration, read error sending snapshot to target: %s", strerror(errno));
             client *target = connGetPrivateData(server.slot_migration_pipe_conn);
-            freeClient(target);
+            freeClient(target); /* Free client will kill the slot migration child */
             server.slot_migration_pipe_conn = NULL;
-            killSlotMigrationChild();
             return;
         }
 
@@ -1879,7 +1881,7 @@ void slotMigrationPipeReadHandler(struct aeEventLoop *eventLoop, int fd, void *c
             if (connGetState(conn) != CONN_STATE_CONNECTED) {
                 serverLog(LL_WARNING, "Slot migration transfer, write error sending DB to target: %s",
                           connGetLastError(conn));
-                freeClient(target);
+                freeClient(target); /* Free client will kill the slot migration child */
                 server.slot_migration_pipe_conn = NULL;
                 return;
             }
@@ -2195,6 +2197,9 @@ void replicationAttachToNewPrimary(void) {
      * primary structure. */
     serverAssert(server.primary == NULL);
     replicationDiscardCachedPrimary();
+
+    /* Cancel any in progress imports (we will now use the primary's) */
+    clusterCleanSlotImportsOnFullSync();
 
     disconnectReplicas();     /* Force our replicas to resync with us as well. */
     freeReplicationBacklog(); /* Don't allow our chained replicas to PSYNC. */
@@ -4422,6 +4427,9 @@ void replicationUnsetPrimary(void) {
     /* Restart the AOF subsystem in case we shut it down during a sync when
      * we were still a replica. */
     if (server.aof_enabled && server.aof_state == AOF_OFF) restartAOFAfterSYNC();
+
+    /* Cancel any ongoing atomic slot migrations */
+    clusterCleanSlotImportsOnPromotion();
 }
 
 /* This function is called when the replica lose the connection with the

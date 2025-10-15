@@ -6385,6 +6385,9 @@ int verifyClusterConfigWithData(void) {
      * completely depend on the replication stream. */
     if (nodeIsReplica(myself)) return C_OK;
 
+    /* Allow slot migrations to clean up after reloading */
+    clusterCleanSlotImportsAfterLoad();
+
     /* Check that all the slots we see populated memory have a corresponding
      * entry in the cluster table. Otherwise fix the table. */
     for (j = 0; j < CLUSTER_SLOTS; j++) {
@@ -6464,7 +6467,7 @@ static void clusterSetPrimary(clusterNode *n, int closeSlots, int full_sync_requ
     removeAllNotOwnedShardChannelSubscriptions();
     resetManualFailover();
 
-    /* Becoming a replica cancels all in progress imports and exports */
+    /* Perform needed slot migration state transitions */
     clusterUpdateSlotExportsOnOwnershipChange();
     clusterUpdateSlotImportsOnOwnershipChange();
 
@@ -6906,9 +6909,11 @@ void addNodeDetailsToShardReply(client *c, clusterNode *node) {
     setDeferredMapLen(c, node_replylen, reply_count);
 }
 
-/* Add to the output buffer of the given client, an array of slot (start, end)
- * pair owned by the shard, also the primary and set of replica(s) along with
- * information about each node. */
+/* Add to the output buffer of the given client,
+ * an array of slot (start, end) pair owned by the shard,
+ * an array of the primary and set of replica(s) along with information about each node,
+ * and shard id.
+ */
 void clusterCommandShards(client *c) {
     addReplyArrayLen(c, dictSize(server.cluster->shards));
     /* This call will add slot_info_pairs to all nodes */
@@ -6917,7 +6922,7 @@ void clusterCommandShards(client *c) {
     for (dictEntry *de = dictNext(di); de != NULL; de = dictNext(di)) {
         list *nodes = dictGetVal(de);
         serverAssert(listLength(nodes) > 0);
-        addReplyMapLen(c, 2);
+        addReplyMapLen(c, 3);
         addReplyBulkCString(c, "slots");
 
         /* Find a node which has the slot information served by this shard. */
@@ -6950,6 +6955,8 @@ void clusterCommandShards(client *c) {
             addNodeDetailsToShardReply(c, n);
             clusterFreeNodesSlotsInfo(n);
         }
+        addReplyBulkCString(c, "id");
+        addReplyBulkCBuffer(c, dictGetKey(de), CLUSTER_NAMELEN);
     }
     dictReleaseIterator(di);
 }

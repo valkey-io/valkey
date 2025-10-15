@@ -1409,9 +1409,10 @@ struct sharedObjectsStruct {
         *execaborterr, *noautherr, *noreplicaserr, *busykeyerr, *oomerr, *plus, *messagebulk, *pmessagebulk,
         *subscribebulk, *unsubscribebulk, *psubscribebulk, *punsubscribebulk, *del, *unlink, *rpop, *lpop, *lpush,
         *rpoplpush, *lmove, *blmove, *zpopmin, *zpopmax, *emptyscan, *multi, *exec, *left, *right, *hset, *hdel, *hpexpireat, *hpersist, *srem,
-        *xgroup, *xclaim, *script, *replconf, *eval, *persist, *set, *pexpireat, *pexpire, *time, *pxat, *absttl,
+        *xgroup, *xclaim, *script, *replconf, *eval, *cluster, *syncslots, *persist, *set, *pexpireat, *pexpire, *time, *pxat, *absttl,
         *retrycount, *force, *justid, *entriesread, *lastid, *ping, *setid, *keepttl, *load, *createconsumer, *getack,
         *special_asterisk, *special_equals, *default_username, *redacted, *ssubscribebulk, *sunsubscribebulk, *fields,
+        *finish, *state, *success, *failed, *name, *message,
         *smessagebulk, *select[PROTO_SHARED_SELECT_CMDS], *integers[OBJ_SHARED_INTEGERS],
         *mbulkhdr[OBJ_SHARED_BULKHDR_LEN], /* "*<value>\r\n" */
         *bulkhdr[OBJ_SHARED_BULKHDR_LEN],  /* "$<value>\r\n" */
@@ -2239,6 +2240,8 @@ struct valkeyServer {
     mstime_t busy_reply_threshold;  /* Script / module timeout in milliseconds */
     int pre_command_oom_state;      /* OOM before command (script?) was started */
     int script_disable_deny_script; /* Allow running commands marked "noscript" inside a script. */
+    int lua_enable_insecure_api;    /* Config to enable insecure api */
+    int lua_insecure_api_current;   /* Current value of if insecure apis are enabled, used to determine if flush is needed. */
     /* Lazy free */
     int lazyfree_lazy_eviction;
     int lazyfree_lazy_expire;

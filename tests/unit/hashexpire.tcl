@@ -684,6 +684,12 @@ start_server {tags {"hashexpire"}} {
         set e
     } {ERR *}
 
+     test {HSETEX EX - FXX does not create object in case key does not exist} {
+        r FLUSHALL
+        assert_equal 0 [r HSETEX myhash EX 10 FXX FIELDS 1 x y]
+        assert_equal 0 [r EXISTS myhash]
+    }
+
     ###### Test EXPIRE #############
 
 

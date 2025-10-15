@@ -4004,6 +4004,12 @@ int VM_GetSelectedDb(ValkeyModuleCtx *ctx) {
  *                                 context is using RESP3.
  *
  *  * VALKEYMODULE_CTX_FLAGS_SERVER_STARTUP: The instance is starting
+ *
+ *  * VALKEYMODULE_CTX_FLAGS_SLOT_IMPORT_CLIENT: Indicate the that client attached to this
+ *                                               context is the slot import client.
+ *
+ *  * VALKEYMODULE_CTX_FLAGS_SLOT_EXPORT_CLIENT: Indicate the that client attached to this
+ *                                               context is the slot export client.
  */
 int VM_GetContextFlags(ValkeyModuleCtx *ctx) {
     int flags = 0;
@@ -4016,6 +4022,11 @@ int VM_GetContextFlags(ValkeyModuleCtx *ctx) {
             if (isReplicatedClient(ctx->client)) flags |= VALKEYMODULE_CTX_FLAGS_REPLICATED;
             if (ctx->client->resp == 3) {
                 flags |= VALKEYMODULE_CTX_FLAGS_RESP3;
+            }
+            if (ctx->client->slot_migration_job && isImportSlotMigrationJob(ctx->client->slot_migration_job)) {
+                flags |= VALKEYMODULE_CTX_FLAGS_SLOT_IMPORT_CLIENT;
+            } else if (ctx->client->slot_migration_job) {
+                flags |= VALKEYMODULE_CTX_FLAGS_SLOT_EXPORT_CLIENT;
             }
         }
 

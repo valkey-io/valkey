@@ -176,6 +176,42 @@ start_server {tags {"modules"}} {
         assert_equal $result 0
     }
 
+    test {Test INFO scriptingengines section} {
+        # Get the scripting engines info section
+        set info [r info scriptingengines]
+
+        # Verify the section header exists
+        assert_match "*# Scripting Engines*" $info
+
+        # Verify we have exactly 2 engines (LUA + HELLO)
+        assert_match "*engines_count:*" $info
+        regexp {engines_count:([0-9]+)} $info -> engines_count
+        assert_equal $engines_count 2
+
+        # Verify memory fields exist and are non-negative numbers
+        assert_match "*engines_total_used_memory:*" $info
+        assert_match "*engines_total_memory_overhead:*" $info
+        regexp {engines_total_used_memory:([0-9]+)} $info -> total_memory
+        regexp {engines_total_memory_overhead:([0-9]+)} $info -> total_overhead
+        assert {$total_memory >= 0}
+        assert {$total_overhead >= 0}
+
+        # Verify individual engine information exists
+        assert_match "*engine_0:*" $info
+        assert_match "*engine_1:*" $info
+
+        # Check that engines have proper format including abi_version
+        assert_match "*engine_*:name=*,module=*,abi_version=*,used_memory=*,memory_overhead=*" $info
+
+        # Verify both LUA and HELLO engines are present
+        assert_match "*name=LUA*" $info
+        assert_match "*name=HELLO*" $info
+
+        # Verify LUA is built-in and HELLO is from module
+        assert_match "*name=LUA,module=built-in*" $info
+        assert_match "*name=HELLO,module=helloengine*" $info
+    }
+
     test {Unload scripting engine module} {
         set result [r module unload helloengine]
         assert_equal $result "OK"

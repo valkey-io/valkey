@@ -5737,6 +5737,63 @@ void releaseInfoSectionDict(dict *sec) {
     if (sec != cached_default_info_sections) dictRelease(sec);
 }
 
+typedef struct scriptingEngineInfoCollector {
+    sds info;
+    int total_engines;
+    size_t total_used_memory;
+    size_t total_overhead;
+} scriptingEngineInfoCollector;
+
+static void collectScriptingEngineInfo(scriptingEngine *engine, void *context) {
+    scriptingEngineInfoCollector *collector = (scriptingEngineInfoCollector *)context;
+
+    sds engine_name = scriptingEngineGetName(engine);
+    ValkeyModule *module = scriptingEngineGetModule(engine);
+    uint64_t abi_version = scriptingEngineGetAbiVersion(engine);
+
+    /* Get memory information for the engine */
+    engineMemoryInfo mem_info = scriptingEngineCallGetMemoryInfo(engine, VMSE_ALL);
+
+    collector->info = sdscatprintf(collector->info,
+        "engine_%d:name=%s,module=%s,abi_version=%lu,used_memory=%zu,memory_overhead=%zu\r\n",
+        collector->total_engines,
+        engine_name,
+        module ? module->name : "built-in",
+        abi_version,
+        mem_info.used_memory,
+        mem_info.engine_memory_overhead);
+
+    collector->total_engines++;
+    collector->total_used_memory += mem_info.used_memory;
+    collector->total_overhead += mem_info.engine_memory_overhead;
+}
+
+sds genValkeyInfoStringScriptingEngines(sds info) {
+    scriptingEngineInfoCollector collector = {
+        .info = sdsempty(),
+        .total_engines = 0,
+        .total_used_memory = 0,
+        .total_overhead = 0
+    };
+
+    /* Collect information from all registered engines */
+    scriptingEngineManagerForEachEngine(collectScriptingEngineInfo, &collector);
+
+    info = sdscatprintf(info,
+        "# Scripting Engines\r\n"
+        "engines_count:%d\r\n"
+        "engines_total_used_memory:%zu\r\n"
+        "engines_total_memory_overhead:%zu\r\n"
+        "%s",
+        collector.total_engines,
+        collector.total_used_memory,
+        collector.total_overhead,
+        collector.info);
+
+    sdsfree(collector.info);
+    return info;
+}
+
 /* Create a dictionary with unique section names to be used by genValkeyInfoString.
  * 'argv' and 'argc' are list of arguments for INFO.
  * 'defaults' is an optional null terminated list of default sections.
@@ -6408,6 +6465,12 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                             "# Cluster\r\n"
                             "cluster_enabled:%d\r\n",
                             server.cluster_enabled);
+    }
+
+    /* Scripting engines */
+    if (all_sections || (dictFind(section_dict, "scriptingengines") != NULL)) {
+        if (sections++) info = sdscat(info, "\r\n");
+        info = genValkeyInfoStringScriptingEngines(info);
     }
 
     /* Key space */
@@ -7484,7 +7547,7 @@ int parseExtendedCommandArgumentsOrReply(client *c, int *flags, int *unit, robj 
                    (opt[1] == 'f' || opt[1] == 'F') &&
                    (opt[2] == 'e' || opt[2] == 'E') &&
                    (opt[3] == 'q' || opt[3] == 'Q') && opt[4] == '\0' &&
-                   next && 
+                   next &&
                    !(*flags & ARGS_SET_NX || *flags & ARGS_SET_XX || *flags & ARGS_SET_IFEQ) && (command_type == COMMAND_SET))
         {
             *flags |= ARGS_SET_IFEQ;

@@ -1106,7 +1106,7 @@ typedef struct ValkeyModuleScriptingEngineMethods {
     /* The callback function used to reset the runtime environment used
      * by the scripting engine for EVAL scripts or FUNCTION scripts. */
     union {
-        ValkeyModuleScriptingEngineResetEvalFunc reset_eval_env_v1;
+        ValkeyModuleScriptingEngineResetEvalFunc reset_eval_env_v2;
         ValkeyModuleScriptingEngineResetEnvFunc reset_env;
     };
 

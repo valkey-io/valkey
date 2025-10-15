@@ -343,7 +343,7 @@ callableLazyEnvReset *scriptingEngineCallResetEnvFunc(scriptingEngine *engine,
          * the EVAL environment.
          */
         if (type == VMSE_EVAL) {
-            callback = engine->impl.methods.reset_eval_env_v1(
+            callback = engine->impl.methods.reset_eval_env_v2(
                 module_ctx,
                 engine->impl.ctx,
                 async);

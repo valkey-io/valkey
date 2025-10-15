@@ -97,6 +97,9 @@ size_t scriptingEngineManagerGetMemoryUsage(void) {
 
 static inline void scriptingEngineInitializeEngineMethods(scriptingEngine *engine, engineMethods *methods) {
     if (methods->version < 3) {
+        serverLog(LL_WARNING, "Registering scripting engine '%s' with ABI version '%lu'",
+                  engine->name,
+                  (unsigned long)methods->version);
         memcpy(&engine->impl.methods, methods, sizeof(engineMethodsV1));
     } else {
         engine->impl.methods = *methods;

@@ -699,7 +699,7 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx,
 
     if (abi_version <= 2) {
         methodsV1 = (ValkeyModuleScriptingEngineMethodsV1){
-            .version = VALKEYMODULE_SCRIPTING_ENGINE_ABI_VERSION,
+            .version = abi_version,
             .compile_code = createHelloLangEngine,
             .free_function = engineFreeFunction,
             .call_function = callHelloLangFunction,
@@ -710,7 +710,7 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx,
     }
     else {
         methodsV2 = (ValkeyModuleScriptingEngineMethodsV2) {
-            .version = VALKEYMODULE_SCRIPTING_ENGINE_ABI_VERSION,
+            .version = abi_version,
             .compile_code = createHelloLangEngine,
             .free_function = engineFreeFunction,
             .call_function = callHelloLangFunction,

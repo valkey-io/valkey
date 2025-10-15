@@ -5755,13 +5755,13 @@ static void collectScriptingEngineInfo(scriptingEngine *engine, void *context) {
     engineMemoryInfo mem_info = scriptingEngineCallGetMemoryInfo(engine, VMSE_ALL);
 
     collector->info = sdscatprintf(collector->info,
-        "engine_%d:name=%s,module=%s,abi_version=%lu,used_memory=%zu,memory_overhead=%zu\r\n",
-        collector->total_engines,
-        engine_name,
-        module ? module->name : "built-in",
-        abi_version,
-        mem_info.used_memory,
-        mem_info.engine_memory_overhead);
+                                   "engine_%d:name=%s,module=%s,abi_version=%lu,used_memory=%zu,memory_overhead=%zu\r\n",
+                                   collector->total_engines,
+                                   engine_name,
+                                   module ? module->name : "built-in",
+                                   (unsigned long)abi_version,
+                                   mem_info.used_memory,
+                                   mem_info.engine_memory_overhead);
 
     collector->total_engines++;
     collector->total_used_memory += mem_info.used_memory;
@@ -5773,22 +5773,21 @@ sds genValkeyInfoStringScriptingEngines(sds info) {
         .info = sdsempty(),
         .total_engines = 0,
         .total_used_memory = 0,
-        .total_overhead = 0
-    };
+        .total_overhead = 0};
 
     /* Collect information from all registered engines */
     scriptingEngineManagerForEachEngine(collectScriptingEngineInfo, &collector);
 
     info = sdscatprintf(info,
-        "# Scripting Engines\r\n"
-        "engines_count:%d\r\n"
-        "engines_total_used_memory:%zu\r\n"
-        "engines_total_memory_overhead:%zu\r\n"
-        "%s",
-        collector.total_engines,
-        collector.total_used_memory,
-        collector.total_overhead,
-        collector.info);
+                        "# Scripting Engines\r\n"
+                        "engines_count:%d\r\n"
+                        "engines_total_used_memory:%zu\r\n"
+                        "engines_total_memory_overhead:%zu\r\n"
+                        "%s",
+                        collector.total_engines,
+                        collector.total_used_memory,
+                        collector.total_overhead,
+                        collector.info);
 
     sdsfree(collector.info);
     return info;
@@ -6928,8 +6927,8 @@ void dismissMemoryInChild(void) {
     /* madvise(MADV_DONTNEED) may not work if Transparent Huge Pages is enabled. */
     if (server.thp_enabled) return;
 
-        /* Currently we use zmadvise_dontneed only when we use jemalloc with Linux.
-         * so we avoid these pointless loops when they're not going to do anything. */
+    /* Currently we use zmadvise_dontneed only when we use jemalloc with Linux.
+     * so we avoid these pointless loops when they're not going to do anything. */
 #if defined(USE_JEMALLOC) && defined(__linux__)
     listIter li;
     listNode *ln;
@@ -7374,7 +7373,7 @@ __attribute__((weak)) int main(int argc, char **argv) {
     }
     if (server.sentinel_mode) sentinelCheckConfigFile();
 
-        /* Do system checks */
+    /* Do system checks */
 #ifdef __linux__
     linuxMemoryWarnings();
     sds err_msg = NULL;

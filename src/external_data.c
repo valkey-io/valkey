@@ -38,17 +38,6 @@ typedef struct externalDataModuleInstance {
     ValkeyModuleCtx *module_ctx;         /* Cache of the module context object */
 } externalDataModuleInstance;
 
-uint getIteratorId(externalDataModuleInstance *mi) {
-    uint expected = mi->storage_ctx->last_iterator_id;
-    uint desired = (expected + 1) % UINT_MAX;
-    while (!atomic_compare_exchange_weak(&mi->storage_ctx->last_iterator_id, &expected, desired)) {
-        expected = mi->storage_ctx->last_iterator_id;
-        desired = (expected + 1) % UINT_MAX;
-    }
-
-    return desired;
-}
-
 typedef struct externalDbData {
     externalDataModuleInstance *module_instance; /* Module instance used for a certain db */
 } externalDbData;
@@ -495,7 +484,6 @@ struct extStorageInstanceIterator {
     externalDbData *dbdata;
     ValkeyModuleString *match;
     long long *type;
-    uint id;
     int dbid;
     ValkeyModuleDictIter *iter;
 };
@@ -512,7 +500,6 @@ externalStorageInstanceIterator *externalStorageInstanceIteratorInit(int dbid, r
     esi_it->dbdata = dbData;
     esi_it->match = match;
     esi_it->type = type;
-    esi_it->id = getIteratorId(dbData->module_instance);
     esi_it->dbid = dbid;
     esi_it->iter = NULL;
     return esi_it;
@@ -524,7 +511,6 @@ int externalStorageInstanceIteratorNext(externalStorageInstanceIterator *esi_it,
     return esi_it->dbdata->module_instance->external_module->storage_methods.iterate(
         esi_it->dbdata->module_instance->module_ctx,
         esi_it->dbid,
-        esi_it->id,
         esi_it->match,
         esi_it->type,
         next,

@@ -124,7 +124,7 @@ robj *lookupKey(serverDb *db, robj *key, int flags) {
         if (!(flags & (LOOKUP_NOSTATS | LOOKUP_WRITE))) server.stat_keyspace_misses++;
         /* TODO: Use separate misses stats and notify event for WRITE */
 
-        if (isExtDataOn() && flags & LOOKUP_EXTDATA) val = dbFindExtData(db, objectGetVal(key));
+        if (flags & LOOKUP_EXTDATA) val = dbFindExtData(db, objectGetVal(key));
     }
 
     return val;

@@ -170,7 +170,7 @@ static void storageDropReadonlyFunction(ValkeyModuleCtx *module_ctx,
     ValkeyModule_ReplyWithSimpleString(module_ctx, "OK");
 }
 
-static int storageIterateFunction(ValkeyModuleCtx *, int dbid, uint,
+static int storageIterateFunction(ValkeyModuleCtx *, int dbid,
                                    ValkeyModuleString *, long long *,
                                    ValkeyModuleString **next,
                                    ValkeyModuleDictIter **iter) {

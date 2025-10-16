@@ -1395,8 +1395,6 @@ typedef void (*ValkeyModuleExternalStorageDropReadonlyFunc)(
  *
  * - `module_ctx`: the module runtime context.
  *
- * - `iterator_id`: current iterator id.
- *
  * - `match`: match pattern.
  *
  * - `type`: type of the key.
@@ -1407,7 +1405,6 @@ typedef void (*ValkeyModuleExternalStorageDropReadonlyFunc)(
 typedef int (*ValkeyModuleExternalStorageIterateFunc)(
     ValkeyModuleCtx *module_ctx,
     int dbid,
-    unsigned int iterator_id,
     ValkeyModuleString *match,
     long long *type,
     ValkeyModuleString **next,

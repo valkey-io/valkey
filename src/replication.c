@@ -5169,7 +5169,8 @@ void replicationCron(void) {
     robj *ping_argv[1];
 
     /* First, send PING according to ping_replica_period. */
-    if ((replication_cron_loops % server.repl_ping_replica_period) == 0 && listLength(server.replicas)) {
+    if ((replication_cron_loops % server.repl_ping_replica_period) == 0 && listLength(server.replicas) &&
+        server.primary_host == NULL) {
         /* Note that we don't send the PING if the clients are paused during
          * a Cluster manual failover: the PING we send will otherwise
          * alter the replication offsets of primary and replica, and will no longer

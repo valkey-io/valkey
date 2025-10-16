@@ -1453,7 +1453,13 @@ int loadSingleAppendOnlyFile(char *filename) {
         if (fseek(fp, 0, SEEK_SET) == -1) goto readerr;
         rioInitWithFile(&rdb, fp);
         rdbSaveInfo rsi = RDB_SAVE_INFO_INIT;
-        if (rdbLoadRio(&rdb, RDBFLAGS_AOF_PREAMBLE, &rsi) != C_OK) {
+        int rdb_flags = RDBFLAGS_AOF_PREAMBLE;
+        int rsi_is_valid = 0;
+        if (iAmPrimary()) {
+            if (server.repl_backlog == NULL) createReplicationBacklog();
+            rdb_flags |= RDBFLAGS_FEED_REPL;
+        }
+        if (rdbLoadRio(&rdb, rdb_flags, &rsi) != C_OK) {
             if (old_style)
                 serverLog(LL_WARNING, "Error reading the RDB preamble of the AOF file %s, AOF loading aborted",
                           filename);
@@ -1464,24 +1470,21 @@ int loadSingleAppendOnlyFile(char *filename) {
             goto cleanup;
         } else {
             /* Restore the replication ID / offset from the RDB file. */
-            if (rsi.repl_id_is_set && rsi.repl_offset != -1 &&
-                /* Note that older implementations may save a repl_stream_db
-                 * of -1 inside the RDB file in a wrong way, see more
-                 * information in function rdbPopulateSaveInfo. */
-                rsi.repl_stream_db != -1) {
+            if (rsi.repl_id_is_set && rsi.repl_offset != -1 && rsi.repl_stream_db != -1) {
+                rsi_is_valid = 1;
                 if (!iAmPrimary()) {
                     memcpy(server.replid, rsi.repl_id, sizeof(server.replid));
                     server.primary_repl_offset = rsi.repl_offset;
-                    /* If this is a replica, create a cached primary from this
-                     * information, in order to allow partial resynchronizations
-                     * with primaries. */
-                    replicationCachePrimaryUsingMyself();
-                    selectDb(server.cached_primary, rsi.repl_stream_db);
+                    if (!server.cached_primary) {
+                        replicationCachePrimaryUsingMyself();
+                        selectDb(server.cached_primary, rsi.repl_stream_db);
+                    }
+                    serverLog(LL_NOTICE, "preamble rdb changed replication info, replid: %s, primary_repl_offset: %lld", 
+                        server.replid, server.primary_repl_offset);
                 } else {
                     /* If this is a primary, we can save the replication info
                      * as secondary ID and offset, in order to allow replicas
                      * to partial resynchronizations with primaries. */
-                    if (server.repl_backlog == NULL) createReplicationBacklog();
                     memcpy(server.replid2, rsi.repl_id, sizeof(server.replid));
                     server.second_replid_offset = rsi.repl_offset + 1;
                     /* Rebase primary_repl_offset from rsi.repl_offset. */
@@ -1490,8 +1493,13 @@ int loadSingleAppendOnlyFile(char *filename) {
                     server.repl_backlog->offset = server.primary_repl_offset - server.repl_backlog->histlen + 1;
                     rebaseReplicationBuffer(rsi.repl_offset);
                     server.repl_no_replicas_since = time(NULL);
+                    serverLog(LL_NOTICE, "preamble rdb changed replication info, replid2: %s, secondary_repl_offset: " 
+                            "%lld, primary_repl_offset: %lld", 
+                            server.replid2, server.second_replid_offset, server.primary_repl_offset);
                 }
             }
+            if (!rsi_is_valid && server.repl_backlog) freeReplicationBacklog();
+
             loadingAbsProgress(ftello(fp));
             last_progress_report_size = ftello(fp);
             if (old_style) serverLog(LL_NOTICE, "Reading the remaining AOF tail...");

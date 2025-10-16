@@ -11,6 +11,21 @@ Upgrade urgency levels:
 | CRITICAL | There is a critical bug affecting MOST USERS. Upgrade ASAP.         |
 | SECURITY | There are security fixes in the release.                            |
 
+Valkey 9.0.0 GA - October 21, 2025
+-------------------------------------
+
+Upgrade urgency LOW: This is the first release of Valkey 9.0 which 
+includes stability, bug fixes, and incremental improvements over the third release candidate.
+
+### Bug fixes
+* HSETEX with FXX should not create an object if it does not exist (#2716)
+* Fix crash when aborting a slot migration while child snapshot is active (#2721)
+* Fix double MOVED reply on unblock at failover (#2734)
+* Fix memory leak with CLIENT LIST/KILL duplicate filters (#2362)
+* Fix incorrect accounting after completed atomic slot migration (#2749)
+* Fix Lua VM crash after FUNCTION FLUSH ASYNC + FUNCTION LOAD (#1826,#2750)
+* Fix invalid memory address caused by hashtable shrinking during safe iteration (#2753)
+
 Valkey 9.0.0-rc3 - October 7, 2025
 -------------------------------------
 
@@ -26,19 +41,19 @@ focused on stability, bug fixes, and incremental improvements.
 ### Performance/Efficiency
 * Optimize skiplist random level generation logic (#2631)
 
-## Cluster and Replication
+### Cluster and Replication
 * Redirect blocked clients after failover (#2329)
 * Prevent exposure of importing keys on replicas during atomic slot migration (#2635)
 * Add slot migration client flags and module context flags (#2639)
 * Introduce SYNCSLOTS CAPA for forwards compatibility (#2688)
 
-## Bug Fixes
+### Bug Fixes
 * Fix atomic slot migration snapshot never proceeding with hz 1 (#2636)
 * Defrag if slab 1/8 full to fix defrag didn't stop issue (#2656)
 * Fix module key memory usage accounting (#2661)
 * Fix dual rdb channel connection error log (#2658)
 
-## Commands
+### Commands
 * Implement a lolwut for version 9 (#2646)
 
 Valkey 9.0.0-rc2 - September 23, 2025

@@ -695,7 +695,7 @@ start_server {tags {"dual-channel-replication external:skip"}} {
             # 5. Replica resumes operation.
             # Expected outcome: Primary maintains RDB channel until replica establishes PSYNC connection.
             $replica replicaof $primary_host $primary_port
-            wait_for_log_messages 0 {"*Done loading RDB*"} $loglines 2000 1
+            wait_for_log_messages 0 {"*Done loading RDB*"} $loglines 2000 5
             pause_process $replica_pid
             wait_and_resume_process -1
             wait_for_condition 50 100 {

@@ -94,11 +94,11 @@ set ::solo_tests_count 0
 set ::debug_defrag 0
 set ::completed_tests 0
 set ::total_loops 1
-set ::ok_tests_count 0
-set ::err_tests_count 0
-set ::loop_failed_current 0
-set ::loop_passes 0
-set ::loop_failures 0
+set ::ok_count 0
+set ::err_count 0
+set ::loop_err_current 0
+set ::loop_ok_count 0
+set ::loop_err_count 0
 
 # Expand a unit specification (test name, file, or directory) into a list
 # of canonical unit names relative to the tests directory.
@@ -380,11 +380,11 @@ proc test_server_main {} {
     array set ::clients_start_time {}
     set ::clients_time_history {}
     set ::failed_tests {}
-    set ::ok_tests_count 0
-    set ::err_tests_count 0
-    set ::loop_failed_current 0
-    set ::loop_passes 0
-    set ::loop_failures 0
+    set ::ok_count 0
+    set ::err_count 0
+    set ::loop_err_current 0
+    set ::loop_ok_count 0
+    set ::loop_err_count 0
 
     # Enter the event loop to handle clients I/O
     after 100 test_server_cron
@@ -398,7 +398,7 @@ proc test_server_cron {} {
     if {$elapsed > $::timeout} {
         set err "\[[colorstr red TIMEOUT]\]: clients state report follows."
         puts $err
-        set ::loop_failed_current 1
+        set ::loop_err_current 1
         foreach fd $::active_clients {
             if {[info exist ::active_clients_task($fd)]} {
                 set task $::active_clients_task($fd)
@@ -421,6 +421,7 @@ proc test_server_cron {} {
         show_clients_state
         force_kill_all_servers
         kill_clients
+        record_loop_result
         the_end
     }
 
@@ -472,7 +473,7 @@ proc read_from_test_client fd {
         if {!$::quiet} {
             puts "\[[colorstr green $status]\]: $data ($elapsed ms)"
         }
-        incr ::ok_tests_count
+        incr ::ok_count
         set ::active_clients_task($fd) "(OK) $data"
     } elseif {$status eq {skip}} {
         if {!$::quiet} {
@@ -486,8 +487,8 @@ proc read_from_test_client fd {
         set err "\[[colorstr red $status]\]: $data"
         puts $err
         lappend ::failed_tests $err
-        set ::loop_failed_current 1
-        incr ::err_tests_count
+        set ::loop_err_current 1
+        incr ::err_count
         set ::active_clients_task($fd) "(ERR) $data"
         if {$::exit_on_failure} {
             puts "(Fast fail: test will exit now)"
@@ -564,6 +565,17 @@ proc lremove {listVar value} {
     set var [lreplace $var $idx $idx]
 }
 
+proc record_loop_result {} {
+    if {$::total_loops > 1} {
+        if {$::loop_err_current} {
+            incr ::loop_err_count
+        } else {
+            incr ::loop_ok_count
+        }
+    }
+    set ::loop_err_current 0
+}
+
 # A new client is idle. Remove it from the list of active clients and
 # if there are still test units to run, launch them.
 proc signal_idle_client fd {
@@ -572,21 +584,22 @@ proc signal_idle_client fd {
         [lsearch -all -inline -not -exact $::active_clients $fd]
 
     # New unit to process?
+    set total_tests [llength $::all_tests]
     set clients_to_wake {}
-    if {$::loop > 1 && $::next_test == [llength $::all_tests] && [llength $::active_clients] == 0} {
-        if {$::loop_failed_current} {
-            incr ::loop_failures
-        } else {
-            incr ::loop_passes
-        }
-        set ::loop_failed_current 0
+
+    # When running in loop mode, wait for the last active client to finish
+    # before starting the next iteration so that we can attribute the
+    # previous loop's status correctly. At that point we wake any clients
+    # that were already idle so they can immediately begin the next loop.
+    if {$::loop > 1 && $::next_test == $total_tests && [llength $::active_clients] == 0} {
+        record_loop_result
         set ::next_test 0
         incr ::loop -1
         set clients_to_wake $::idle_clients
         set ::idle_clients {}
     }
 
-    if {$::next_test != [llength $::all_tests]} {
+    if {$::next_test != $total_tests} {
         if {!$::quiet} {
             puts [colorstr bold-white "Testing [lindex $::all_tests $::next_test]"]
             set ::active_clients_task($fd) "ASSIGNED: $fd ([lindex $::all_tests $::next_test])"
@@ -609,7 +622,8 @@ proc signal_idle_client fd {
     } else {
         lappend ::idle_clients $fd
         set ::active_clients_task($fd) "SLEEPING, no more units to assign"
-        if {[llength $::active_clients] == 0 && $::loop <= 1} {
+        if {[llength $::active_clients] == 0} {
+            record_loop_result
             the_end
         }
     }
@@ -622,20 +636,13 @@ proc signal_idle_client fd {
 # The the_end function gets called when all the test units were already
 # executed, so the test finished.
 proc print_test_summary {} {
-    set out "\nTest Summary: [colorstr bold-green $::ok_tests_count] passed, [colorstr bold-red $::err_tests_count] failed"
-    if {$::loop > 0} {
-        append out "\nTest Loops Summary: [colorstr bold-green $::loop_passes] passed, [colorstr bold-red $::loop_failures] failed"
+    puts "\nTest Summary: [colorstr bold-green $::ok_count] passed, [colorstr bold-red $::err_count] failed"
+    if {$::loop_ok_count > 0 || $::loop_err_count > 0} {
+        puts "Test Loops Summary: [colorstr bold-green $::loop_ok_count] passed, [colorstr bold-red $::loop_err_count] failed"
     }
-    puts $out
 }
 
 proc the_end {} {
-    if {$::loop_failed_current} {
-        incr ::loop_failures
-    } else {
-        incr ::loop_passes
-    }
-    set ::loop_failed_current 0
     # TODO: print the status, exit with the right exit code.
     puts "\n                   The End\n"
     puts "Execution time of different units:"

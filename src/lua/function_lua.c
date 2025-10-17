@@ -54,12 +54,6 @@
 #define LIBRARY_API_NAME "__LIBRARY_API__"
 #define GLOBALS_API_NAME "__GLOBALS_API__"
 
-/* Lua function ctx */
-typedef struct luaFunctionCtx {
-    /* Special ID that allows getting the Lua function object from the Lua registry */
-    int lua_function_ref;
-} luaFunctionCtx;
-
 typedef struct loadCtx {
     list *functions;
     monotime start_time;
@@ -183,20 +177,15 @@ done:
     return compiled_functions;
 }
 
-int luaFunctionGetLuaFunctionRef(compiledFunction *compiled_function) {
-    luaFunctionCtx *f = compiled_function->function;
-    return f->lua_function_ref;
-}
-
 static void luaRegisterFunctionArgsInitialize(compiledFunction *func,
                                               robj *name,
                                               robj *desc,
-                                              luaFunctionCtx *lua_f_ctx,
+                                              luaFunction *script,
                                               uint64_t flags) {
     *func = (compiledFunction){
         .name = name,
         .desc = desc,
-        .function = lua_f_ctx,
+        .function = script,
         .f_flags = flags,
     };
 }
@@ -250,7 +239,7 @@ static int luaRegisterFunctionReadNamedArgs(lua_State *lua,
     char *err = NULL;
     robj *name = NULL;
     robj *desc = NULL;
-    luaFunctionCtx *lua_f_ctx = NULL;
+    luaFunction *script = NULL;
     uint64_t flags = 0;
     if (!lua_istable(lua, 1)) {
         err = "calling server.register_function with a single argument is only applicable to Lua table (representing "
@@ -285,8 +274,8 @@ static int luaRegisterFunctionReadNamedArgs(lua_State *lua,
             }
             int lua_function_ref = luaL_ref(lua, LUA_REGISTRYINDEX);
 
-            lua_f_ctx = zmalloc(sizeof(*lua_f_ctx));
-            lua_f_ctx->lua_function_ref = lua_function_ref;
+            script = zmalloc(sizeof(*script));
+            script->function_ref = lua_function_ref;
             continue; /* value was already popped, so no need to pop it out. */
         } else if (!strcasecmp(key, "flags")) {
             if (!lua_istable(lua, -1)) {
@@ -310,7 +299,7 @@ static int luaRegisterFunctionReadNamedArgs(lua_State *lua,
         goto error;
     }
 
-    if (!lua_f_ctx) {
+    if (!script) {
         err = "server.register_function must get a callback argument";
         goto error;
     }
@@ -318,7 +307,7 @@ static int luaRegisterFunctionReadNamedArgs(lua_State *lua,
     luaRegisterFunctionArgsInitialize(func,
                                       name,
                                       desc,
-                                      lua_f_ctx,
+                                      script,
                                       flags);
 
     return C_OK;
@@ -326,9 +315,9 @@ static int luaRegisterFunctionReadNamedArgs(lua_State *lua,
 error:
     if (name) decrRefCount(name);
     if (desc) decrRefCount(desc);
-    if (lua_f_ctx) {
-        lua_unref(lua, lua_f_ctx->lua_function_ref);
-        zfree(lua_f_ctx);
+    if (script) {
+        lua_unref(lua, script->function_ref);
+        zfree(script);
     }
     luaPushError(lua, err);
     return C_ERR;
@@ -338,7 +327,7 @@ static int luaRegisterFunctionReadPositionalArgs(lua_State *lua,
                                                  compiledFunction *func) {
     char *err = NULL;
     robj *name = NULL;
-    luaFunctionCtx *lua_f_ctx = NULL;
+    luaFunction *script = NULL;
     if (!(name = luaGetStringObject(lua, 1))) {
         err = "first argument to server.register_function must be a string";
         goto error;
@@ -351,10 +340,10 @@ static int luaRegisterFunctionReadPositionalArgs(lua_State *lua,
 
     int lua_function_ref = luaL_ref(lua, LUA_REGISTRYINDEX);
 
-    lua_f_ctx = zmalloc(sizeof(*lua_f_ctx));
-    lua_f_ctx->lua_function_ref = lua_function_ref;
+    script = zmalloc(sizeof(*script));
+    script->function_ref = lua_function_ref;
 
-    luaRegisterFunctionArgsInitialize(func, name, NULL, lua_f_ctx, 0);
+    luaRegisterFunctionArgsInitialize(func, name, NULL, script, 0);
 
     return C_OK;
 
@@ -440,7 +429,7 @@ void luaFunctionInitializeLuaState(lua_State *lua) {
 }
 
 void luaFunctionFreeFunction(lua_State *lua, void *function) {
-    luaFunctionCtx *funcCtx = function;
-    lua_unref(lua, funcCtx->lua_function_ref);
+    luaFunction *script = function;
+    lua_unref(lua, script->function_ref);
     zfree(function);
 }

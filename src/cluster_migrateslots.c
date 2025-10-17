@@ -538,8 +538,7 @@ void clusterCommandSyncSlotsEstablish(client *c) {
         return;
     }
 
-    /* Order agnostic. We skip unknown key/value pairs forwards
-     * compatibility. */
+    /* Order agnostic. */
     bool is_tracking_only = c->flag.primary || c->id == CLIENT_ID_AOF;
     int i = 3;
     while (i < c->argc) {

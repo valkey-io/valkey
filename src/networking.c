@@ -1883,8 +1883,7 @@ void unlinkClient(client *c) {
          * snapshot child may take some time to die, during which the migration will continue past
          * the snapshot state. */
         if (c->repl_data && server.rdb_pipe_conns &&
-            ((c->flag.replica && c->repl_data->repl_state == REPLICA_STATE_WAIT_BGSAVE_END) ||
-             (c->slot_migration_job && !isImportSlotMigrationJob(c->slot_migration_job)))) {
+            ((c->flag.replica && c->repl_data->repl_state == REPLICA_STATE_WAIT_BGSAVE_END))) {
             int i;
             int still_alive = 0;
             for (i = 0; i < server.rdb_pipe_numconns; i++) {
@@ -1895,13 +1894,17 @@ void unlinkClient(client *c) {
                 if (server.rdb_pipe_conns[i]) still_alive++;
             }
             if (still_alive == 0) {
-                if (c->slot_migration_job && !isImportSlotMigrationJob(c->slot_migration_job)) {
-                    serverLog(LL_NOTICE, "Slot migration snapshot, migration target dropped, killing fork child.");
-                } else {
-                    serverLog(LL_NOTICE, "Diskless rdb transfer, last replica dropped, killing fork child.");
-                }
+                serverLog(LL_NOTICE, "Diskless rdb transfer, last replica dropped, killing fork child.");
                 killRDBChild();
             }
+        }
+        /* Check if this is the slot migration client we are writing to in a
+         * child process*/
+        if (c->slot_migration_job && !isImportSlotMigrationJob(c->slot_migration_job) &&
+            server.slot_migration_pipe_conn == c->conn) {
+            server.slot_migration_pipe_conn = NULL;
+            serverLog(LL_NOTICE, "Slot migration target dropped, killing fork child.");
+            killSlotMigrationChild();
         }
         /* Only use shutdown when the fork is active and we are the parent. */
         if (server.child_type && !c->flag.repl_rdb_channel) {

@@ -386,6 +386,15 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster} overrides {cluste
         set_debug_prevent_pause 0
     }
 
+    set 0_slot_tag "{06S}"
+    set 1_slot_tag "{Qi}"
+    set 5462_slot_tag "{450}"
+    set 16379_slot_tag "{YY}"
+    set 16380_slot_tag "{wu}"
+    set 16381_slot_tag "{0TG}"
+    set 16382_slot_tag "{4oi}"
+    set 16383_slot_tag "{6ZJ}"
+
     test "Test CLUSTER CANCELSLOTMIGRATIONS" {
         set_debug_prevent_pause 1
         assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16382 16382 NODE $node0_id]
@@ -407,18 +416,23 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster} overrides {cluste
         wait_for_migration_field 0 $jobname1 state failed
         wait_for_migration_field 0 $jobname2 state failed
 
+        # Do it again, but during snapshotting
+        # 50 keys * 100ms/key = 5 sec snapshot time
+        R 2 CONFIG SET rdb-key-save-delay 100000
+        populate 50 "$16383_slot_tag:1:" 1000 -2
+        assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node0_id]
+        set jobname [get_job_name 2 16383]
+        wait_for_migration_field 2 $jobname state snapshotting
+        assert_match "OK" [R 2 CLUSTER CANCELSLOTMIGRATIONS]
+        R 2 CONFIG SET rdb-key-save-delay 0
+
+        # Jobs are no longer up, migration logs say cancelled
+        assert {[dict get [get_migration_by_name 2 $jobname] state] eq "cancelled"}
+        wait_for_migration_field 0 $jobname state failed
+
         # Cleanup
         set_debug_prevent_pause 0
     }
-
-    set 0_slot_tag "{06S}"
-    set 1_slot_tag "{Qi}"
-    set 5462_slot_tag "{450}"
-    set 16379_slot_tag "{YY}"
-    set 16380_slot_tag "{wu}"
-    set 16381_slot_tag "{0TG}"
-    set 16382_slot_tag "{4oi}"
-    set 16383_slot_tag "{6ZJ}"
 
     test "Slot migration won't migrate the functions" {
         assert_does_not_resync {
@@ -554,6 +568,7 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster} overrides {cluste
 
             assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node0_id]
             set jobname [get_job_name 2 16383]
+            wait_for_migration_field 2 $jobname state waiting-to-pause
 
             # Check the flags
             verify_client_flag 0 "E" 0
@@ -2168,11 +2183,21 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster aofrw} overrides {
         # Make sure the replicas have it
         wait_for_countkeysinslot 3 16383 500
 
-        # First, reload the AOF, without restart. It should still keep the
-        # migration state.
+        # Disconnect the replica and load the AOF, it should still be in there
+        # but should fail and cleanup on load.
+        assert_match "OK" [R 3 CLUSTER REPLICATE NO ONE]
         assert_match "OK" [R 3 DEBUG LOADAOF]
-        wait_for_migration_field 3 $jobname state occurring-on-primary
+        wait_for_migration_field 3 $jobname state failed
         assert_match "0" [R 3 DBSIZE]
+        assert_match "0" [R 3 CLUSTER COUNTKEYSINSLOT 16383]
+
+        # Reconnect the replica and wait for AOF rewrite
+        assert_match "OK" [R 3 CLUSTER REPLICATE $node0_id]
+        wait_for_sync [srv -3 client] 50 1000
+        assert_match "occurring-on-primary" [dict get [get_migration_by_name 3 $jobname] state]
+        assert_match "0" [R 3 DBSIZE]
+        assert_match "500" [R 3 CLUSTER COUNTKEYSINSLOT 16383]
+        waitForBgrewriteaof [srv -3 client]
 
         # Restart the replica and wait for resync
         do_node_restart 3
@@ -2182,21 +2207,29 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster aofrw} overrides {
         # persist the replication ID, this is because of a full resync.
         wait_for_migration_field 3 $jobname state occurring-on-primary
         assert_match "0" [R 3 DBSIZE]
+        assert_match "500" [R 3 CLUSTER COUNTKEYSINSLOT 16383]
 
-        # Fail the migration and reload the AOF. We should have no migrations on
-        # the replica
+        # Fail the migration and wait for AOF rewrite
         assert_match "OK" [R 2 CLUSTER CANCELSLOTMIGRATIONS]
         wait_for_migration_field 3 $jobname state failed
         assert_match "0" [R 3 DBSIZE]
         assert_match "0" [R 3 CLUSTER COUNTKEYSINSLOT 16383]
-
-        # Load the AOF, it should still be in there. First ensure the AOF is
-        # done being rewritten with the latest full sync.
         waitForBgrewriteaof [srv -3 client]
+
+        # Disconnect the replica and load the AOF, it should still be in there
+        # but in failed state.
+        assert_match "OK" [R 3 CLUSTER REPLICATE NO ONE]
         assert_match "OK" [R 3 DEBUG LOADAOF]
         assert_match "failed" [dict get [get_migration_by_name 3 $jobname] state]
         assert_match "0" [R 3 DBSIZE]
         assert_match "0" [R 3 CLUSTER COUNTKEYSINSLOT 16383]
+
+        # Reconnect the replica and wait for AOF rewrite
+        assert_match "OK" [R 3 CLUSTER REPLICATE $node0_id]
+        wait_for_sync [srv -3 client] 50 1000
+        assert_match "0" [R 3 DBSIZE]
+        assert_match "0" [R 3 CLUSTER COUNTKEYSINSLOT 16383]
+        waitForBgrewriteaof [srv -3 client]
 
         # Cleanup
         set_debug_prevent_pause 0
@@ -2273,9 +2306,7 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster aofrw} overrides {
         assert_match "0" [R 0 CLUSTER COUNTKEYSINSLOT 16383]
         R 2 DEBUG LOADAOF
         assert_match "500" [R 2 CLUSTER COUNTKEYSINSLOT 16383]
-        R 3 DEBUG LOADAOF
         assert_match "0" [R 3 CLUSTER COUNTKEYSINSLOT 16383]
-        R 5 DEBUG LOADAOF
         assert_match "500" [R 5 CLUSTER COUNTKEYSINSLOT 16383]
         assert_equal $slots_start [R 0 CLUSTER SLOTS]
         assert_match "OK" [R 2 FLUSHDB SYNC]

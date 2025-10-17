@@ -538,8 +538,7 @@ void clusterCommandSyncSlotsEstablish(client *c) {
         return;
     }
 
-    /* Order agnostic. We skip unknown key/value pairs forwards
-     * compatibility. */
+    /* Order agnostic. */
     bool is_tracking_only = c->flag.primary || c->id == CLIENT_ID_AOF;
     int i = 3;
     while (i < c->argc) {
@@ -2309,9 +2308,6 @@ void finishSlotMigrationJob(slotMigrationJob *job,
         /* If we finish the export, we should not remain paused */
         job->mf_end = 0;
         slotExportTryUnpause();
-        /* Fast fail the child process, which will be cleaned up fully in
-         * checkChildrenDone. */
-        if (job->state == SLOT_EXPORT_SNAPSHOTTING) killSlotMigrationChild();
     }
 
     /* Imports that are not successful on primaries need to be cleaned up (if

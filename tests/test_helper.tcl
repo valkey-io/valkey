@@ -94,8 +94,6 @@ set ::solo_tests_count 0
 set ::debug_defrag 0
 set ::completed_tests 0
 set ::total_loops 1
-set ::ok_count 0
-set ::err_count 0
 
 # Expand a unit specification (test name, file, or directory) into a list
 # of canonical unit names relative to the tests directory.

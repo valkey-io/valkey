@@ -1031,6 +1031,8 @@ typedef size_t (*ValkeyModuleScriptingEngineGetFunctionMemoryOverheadFunc)(
 
 /* The callback function called when `SCRIPT FLUSH` command is called. The
  * engine should reset the runtime environment used for EVAL scripts.
+ * This callback has been replaced by `ValkeyModuleScriptingEngineResetEnvFunc`
+ * callback in ABI version 3.
  *
  * - `module_ctx`: the module runtime context.
  *
@@ -1039,7 +1041,7 @@ typedef size_t (*ValkeyModuleScriptingEngineGetFunctionMemoryOverheadFunc)(
  * - `async`: if has value 1 then the reset is done asynchronously through
  * the callback structure returned by this function.
  */
-typedef ValkeyModuleScriptingEngineCallableLazyEnvReset *(*ValkeyModuleScriptingEngineResetEvalFunc)(
+typedef ValkeyModuleScriptingEngineCallableLazyEnvReset *(*ValkeyModuleScriptingEngineResetEvalFuncV2)(
     ValkeyModuleCtx *module_ctx,
     ValkeyModuleScriptingEngineCtx *engine_ctx,
     int async);
@@ -1077,9 +1079,10 @@ typedef ValkeyModuleScriptingEngineMemoryInfo (*ValkeyModuleScriptingEngineGetMe
 
 /* Current ABI version for scripting engine modules. */
 /* Version Changelog:
- *  - 1: Initial version.
- *  - 2: Changed the `compile_code` callback to support binary data in the source code.
- *  - 3: Added reset_env callback to reset both EVAL or FUNCTION scripts env.
+ *  1. Initial version.
+ *  2. Changed the `compile_code` callback to support binary data in the source code.
+ *  3. Renamed reset_eval_env callback to reset_env and added a type parameter to be
+ *     able to reset both EVAL or FUNCTION scripts env.
  */
 #define VALKEYMODULE_SCRIPTING_ENGINE_ABI_VERSION 3L
 
@@ -1106,7 +1109,7 @@ typedef struct ValkeyModuleScriptingEngineMethods {
     /* The callback function used to reset the runtime environment used
      * by the scripting engine for EVAL scripts or FUNCTION scripts. */
     union {
-        ValkeyModuleScriptingEngineResetEvalFunc reset_eval_env_v2;
+        ValkeyModuleScriptingEngineResetEvalFuncV2 reset_eval_env_v2;
         ValkeyModuleScriptingEngineResetEnvFunc reset_env;
     };
 

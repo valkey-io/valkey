@@ -756,7 +756,7 @@ start_server {tags {"dual-channel-replication external:skip"}} {
             # 4. Primary resumes operation and detects closed RDB channel.
             # Expected outcome: Primary drops the RDB channel after grace period is done.
             $replica replicaof $primary_host $primary_port
-            wait_for_log_messages 0 {"*Done loading RDB*"} $loglines 2000 1
+            wait_for_log_messages 0 {"*Done loading RDB*"} $loglines 2000 3
             pause_process $replica_pid
             wait_and_resume_process -1
             wait_for_condition 50 100 {

@@ -3696,7 +3696,7 @@ int redis_check_aof_main(int argc, char **argv);
 /* Scripting */
 void freeEvalScripts(dict *scripts, list *scripts_lru_list, list *engine_callbacks);
 void freeEvalScriptsAsync(dict *scripts, list *scripts_lru_list, list *engine_callbacks);
-void freeFunctionsAsync(functionsLibCtx *lib_ctx);
+void freeFunctionsAsync(functionsLibCtx *lib_ctx, list *engine_callbacks);
 void sha1hex(char *digest, char *script, size_t len);
 unsigned long evalMemory(void);
 dict *evalScriptsDict(void);

@@ -94,6 +94,11 @@ set ::solo_tests_count 0
 set ::debug_defrag 0
 set ::completed_tests 0
 set ::total_loops 1
+set ::ok_tests_count 0
+set ::err_tests_count 0
+set ::loop_failed_current 0
+set ::loop_passes 0
+set ::loop_failures 0
 
 # Expand a unit specification (test name, file, or directory) into a list
 # of canonical unit names relative to the tests directory.
@@ -375,6 +380,11 @@ proc test_server_main {} {
     array set ::clients_start_time {}
     set ::clients_time_history {}
     set ::failed_tests {}
+    set ::ok_tests_count 0
+    set ::err_tests_count 0
+    set ::loop_failed_current 0
+    set ::loop_passes 0
+    set ::loop_failures 0
 
     # Enter the event loop to handle clients I/O
     after 100 test_server_cron
@@ -388,6 +398,7 @@ proc test_server_cron {} {
     if {$elapsed > $::timeout} {
         set err "\[[colorstr red TIMEOUT]\]: clients state report follows."
         puts $err
+        set ::loop_failed_current 1
         foreach fd $::active_clients {
             if {[info exist ::active_clients_task($fd)]} {
                 set task $::active_clients_task($fd)
@@ -461,6 +472,7 @@ proc read_from_test_client fd {
         if {!$::quiet} {
             puts "\[[colorstr green $status]\]: $data ($elapsed ms)"
         }
+        incr ::ok_tests_count
         set ::active_clients_task($fd) "(OK) $data"
     } elseif {$status eq {skip}} {
         if {!$::quiet} {
@@ -474,6 +486,8 @@ proc read_from_test_client fd {
         set err "\[[colorstr red $status]\]: $data"
         puts $err
         lappend ::failed_tests $err
+        set ::loop_failed_current 1
+        incr ::err_tests_count
         set ::active_clients_task($fd) "(ERR) $data"
         if {$::exit_on_failure} {
             puts "(Fast fail: test will exit now)"
@@ -558,6 +572,20 @@ proc signal_idle_client fd {
         [lsearch -all -inline -not -exact $::active_clients $fd]
 
     # New unit to process?
+    set clients_to_wake {}
+    if {$::loop > 1 && $::next_test == [llength $::all_tests] && [llength $::active_clients] == 0} {
+        if {$::loop_failed_current} {
+            incr ::loop_failures
+        } else {
+            incr ::loop_passes
+        }
+        set ::loop_failed_current 0
+        set ::next_test 0
+        incr ::loop -1
+        set clients_to_wake $::idle_clients
+        set ::idle_clients {}
+    }
+
     if {$::next_test != [llength $::all_tests]} {
         if {!$::quiet} {
             puts [colorstr bold-white "Testing [lindex $::all_tests $::next_test]"]
@@ -568,10 +596,6 @@ proc signal_idle_client fd {
         send_data_packet $fd run [lindex $::all_tests $::next_test]
         lappend ::active_clients $fd
         incr ::next_test
-        if {$::loop > 1 && $::next_test == [llength $::all_tests]} {
-            set ::next_test 0
-            incr ::loop -1
-        }
     } elseif {[llength $::run_solo_tests] != 0 && [llength $::active_clients] == 0} {
         if {!$::quiet} {
             puts [colorstr bold-white "Testing solo test"]
@@ -585,21 +609,40 @@ proc signal_idle_client fd {
     } else {
         lappend ::idle_clients $fd
         set ::active_clients_task($fd) "SLEEPING, no more units to assign"
-        if {[llength $::active_clients] == 0} {
+        if {[llength $::active_clients] == 0 && $::loop <= 1} {
             the_end
         }
+    }
+
+    foreach idle_fd $clients_to_wake {
+        signal_idle_client $idle_fd
     }
 }
 
 # The the_end function gets called when all the test units were already
 # executed, so the test finished.
+proc print_test_summary {} {
+    set out "\nTest Summary: [colorstr bold-green $::ok_tests_count] passed, [colorstr bold-red $::err_tests_count] failed"
+    if {$::loop > 0} {
+        append out "\nTest Loops Summary: [colorstr bold-green $::loop_passes] passed, [colorstr bold-red $::loop_failures] failed"
+    }
+    puts $out
+}
+
 proc the_end {} {
+    if {$::loop_failed_current} {
+        incr ::loop_failures
+    } else {
+        incr ::loop_passes
+    }
+    set ::loop_failed_current 0
     # TODO: print the status, exit with the right exit code.
     puts "\n                   The End\n"
     puts "Execution time of different units:"
     foreach {time name} $::clients_time_history {
         puts "  $time seconds - $name"
     }
+    print_test_summary
     if {[llength $::failed_tests]} {
         puts "\n[colorstr bold-red {!!! WARNING}] The following tests failed:\n"
         foreach failed $::failed_tests {

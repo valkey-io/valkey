@@ -165,32 +165,62 @@ void functionsLibCtxClear(functionsLibCtx *lib_ctx, void(callback)(dict *)) {
     lib_ctx->cache_memory = 0;
 }
 
-void functionsLibCtxClearCurrent(int async, void(callback)(dict *)) {
+static void resetEngineOrCollectResetCallbacks(scriptingEngine *engine, void *context) {
+    int async = context != NULL;
+    callableLazyEnvReset *callback = scriptingEngineCallResetEnvFunc(engine, VMSE_FUNCTION, async);
+
     if (async) {
-        functionsLibCtx *old_l_ctx = curr_functions_lib_ctx;
-        curr_functions_lib_ctx = functionsLibCtxCreate();
-        freeFunctionsAsync(old_l_ctx);
+        list *callbacks = context;
+        listAddNodeTail(callbacks, callback);
+    }
+}
+
+void functionsLibCtxReleaseCurrent(int async, void(callback)(dict *)) {
+    if (async) {
+        list *engine_callbacks = listCreate();
+        scriptingEngineManagerForEachEngine(resetEngineOrCollectResetCallbacks, engine_callbacks);
+        freeFunctionsAsync(curr_functions_lib_ctx, engine_callbacks);
     } else {
-        functionsLibCtxClear(curr_functions_lib_ctx, callback);
+        functionsLibCtxFree(curr_functions_lib_ctx, callback, NULL);
+        scriptingEngineManagerForEachEngine(resetEngineOrCollectResetCallbacks, NULL);
     }
 }
 
 /* Free the given functions ctx */
 static void functionsLibCtxFreeGeneric(functionsLibCtx *functions_lib_ctx, int async) {
     if (async) {
-        freeFunctionsAsync(functions_lib_ctx);
+        freeFunctionsAsync(functions_lib_ctx, NULL);
     } else {
-        functionsLibCtxFree(functions_lib_ctx);
+        functionsLibCtxFree(functions_lib_ctx, NULL, NULL);
     }
 }
 
+void functionReset(int async, void(callback)(dict *)) {
+    functionsLibCtxReleaseCurrent(async, callback);
+    functionsInit();
+}
+
 /* Free the given functions ctx */
-void functionsLibCtxFree(functionsLibCtx *functions_lib_ctx) {
-    functionsLibCtxClear(functions_lib_ctx, NULL);
+void functionsLibCtxFree(functionsLibCtx *functions_lib_ctx, void(callback)(dict *), list *engine_callbacks) {
+    functionsLibCtxClear(functions_lib_ctx, callback);
     dictRelease(functions_lib_ctx->functions);
     dictRelease(functions_lib_ctx->libraries);
     dictRelease(functions_lib_ctx->engines_stats);
     zfree(functions_lib_ctx);
+
+    if (engine_callbacks) {
+        listIter *iter = listGetIterator(engine_callbacks, 0);
+        listNode *node = NULL;
+        while ((node = listNext(iter)) != NULL) {
+            callableLazyEnvReset *engine_callback = listNodeValue(node);
+            if (engine_callback != NULL) {
+                engine_callback->engineLazyEnvResetCallback(engine_callback->context);
+                zfree(engine_callback);
+            }
+        }
+        listReleaseIterator(iter);
+        listRelease(engine_callbacks);
+    }
 }
 
 /* Swap the current functions ctx with the given one.
@@ -824,7 +854,7 @@ void functionFlushCommand(client *c) {
         return;
     }
 
-    functionsLibCtxClearCurrent(async, NULL);
+    functionReset(async, NULL);
 
     /* Indicate that the command changed the data so it will be replicated and
      * counted as a data change (for persistence configuration) */

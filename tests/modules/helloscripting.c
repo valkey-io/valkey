@@ -437,11 +437,22 @@ callHelloLangFunction(ValkeyModuleCtx *module_ctx,
     ValkeyModule_ReplyWithLongLong(module_ctx, result);
 }
 
-static ValkeyModuleScriptingEngineCallableLazyEvalReset *helloResetEvalEnv(ValkeyModuleCtx *module_ctx,
-                                                                           ValkeyModuleScriptingEngineCtx *engine_ctx,
-                                                                           int async) {
+static ValkeyModuleScriptingEngineCallableLazyEnvReset *helloResetEvalEnv(ValkeyModuleCtx *module_ctx,
+                                                                          ValkeyModuleScriptingEngineCtx *engine_ctx,
+                                                                          int async) {
     VALKEYMODULE_NOT_USED(module_ctx);
     VALKEYMODULE_NOT_USED(engine_ctx);
+    VALKEYMODULE_NOT_USED(async);
+    return NULL;
+}
+
+static ValkeyModuleScriptingEngineCallableLazyEnvReset *helloResetEnv(ValkeyModuleCtx *module_ctx,
+                                                                      ValkeyModuleScriptingEngineCtx *engine_ctx,
+                                                                      ValkeyModuleScriptingEngineSubsystemType type,
+                                                                      int async) {
+    VALKEYMODULE_NOT_USED(module_ctx);
+    VALKEYMODULE_NOT_USED(engine_ctx);
+    VALKEYMODULE_NOT_USED(type);
     VALKEYMODULE_NOT_USED(async);
     return NULL;
 }
@@ -452,22 +463,49 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx,
     VALKEYMODULE_NOT_USED(argv);
     VALKEYMODULE_NOT_USED(argc);
 
-    if (ValkeyModule_Init(ctx, "helloengine", 1, VALKEYMODULE_APIVER_1) ==
-        VALKEYMODULE_ERR)
+    if (ValkeyModule_Init(ctx, "helloengine", 1, VALKEYMODULE_APIVER_1) == VALKEYMODULE_ERR) {
         return VALKEYMODULE_ERR;
+    }
+
+    unsigned long long abi_version = VALKEYMODULE_SCRIPTING_ENGINE_ABI_VERSION;
+    if (argc > 0) {
+        if (ValkeyModule_StringToULongLong(argv[0], &abi_version) == VALKEYMODULE_ERR) {
+            const char *arg_str = ValkeyModule_StringPtrLen(argv[0], NULL);
+            ValkeyModule_Log(ctx, "error", "Invalid ABI version: %s", arg_str);
+            return VALKEYMODULE_ERR;
+        }
+        else {
+            const char *arg_str = ValkeyModule_StringPtrLen(argv[0], NULL);
+            ValkeyModule_Log(ctx, "info", "initializing Hello scripting engine with ABI version: %s", arg_str);
+        }
+    }
 
     hello_ctx = ValkeyModule_Alloc(sizeof(HelloLangCtx));
     hello_ctx->program = NULL;
 
-    ValkeyModuleScriptingEngineMethods methods = {
-        .version = VALKEYMODULE_SCRIPTING_ENGINE_ABI_VERSION,
-        .compile_code = createHelloLangEngine,
-        .free_function = engineFreeFunction,
-        .call_function = callHelloLangFunction,
-        .get_function_memory_overhead = engineFunctionMemoryOverhead,
-	    .reset_eval_env = helloResetEvalEnv,
-        .get_memory_info = engineGetMemoryInfo,
-    };
+    ValkeyModuleScriptingEngineMethods methods;
+
+    if (abi_version <= 2) {
+        methods = (ValkeyModuleScriptingEngineMethods) {
+            .version = abi_version,
+            .compile_code = createHelloLangEngine,
+            .free_function = engineFreeFunction,
+            .call_function = callHelloLangFunction,
+            .get_function_memory_overhead = engineFunctionMemoryOverhead,
+            .reset_eval_env_v2 = helloResetEvalEnv,
+            .get_memory_info = engineGetMemoryInfo,
+        };
+    } else {
+        methods = (ValkeyModuleScriptingEngineMethods) {
+            .version = abi_version,
+            .compile_code = createHelloLangEngine,
+            .free_function = engineFreeFunction,
+            .call_function = callHelloLangFunction,
+            .get_function_memory_overhead = engineFunctionMemoryOverhead,
+            .reset_env = helloResetEnv,
+            .get_memory_info = engineGetMemoryInfo,
+        };
+    }
 
     ValkeyModule_RegisterScriptingEngine(ctx,
                                          "HELLO",

@@ -13,7 +13,7 @@ typedef ValkeyModuleScriptingEngineServerRuntimeCtx serverRuntimeCtx;
 typedef ValkeyModuleScriptingEngineCompiledFunction compiledFunction;
 typedef ValkeyModuleScriptingEngineSubsystemType subsystemType;
 typedef ValkeyModuleScriptingEngineMemoryInfo engineMemoryInfo;
-typedef ValkeyModuleScriptingEngineCallableLazyEvalReset callableLazyEvalReset;
+typedef ValkeyModuleScriptingEngineCallableLazyEnvReset callableLazyEnvReset;
 typedef ValkeyModuleScriptingEngineMethods engineMethods;
 
 /*
@@ -77,8 +77,9 @@ void scriptingEngineCallFunction(scriptingEngine *engine,
 size_t scriptingEngineCallGetFunctionMemoryOverhead(scriptingEngine *engine,
                                                     compiledFunction *compiled_function);
 
-callableLazyEvalReset *scriptingEngineCallResetEvalEnvFunc(scriptingEngine *engine,
-                                                           int async);
+callableLazyEnvReset *scriptingEngineCallResetEnvFunc(scriptingEngine *engine,
+                                                      subsystemType type,
+                                                      int async);
 
 engineMemoryInfo scriptingEngineCallGetMemoryInfo(scriptingEngine *engine,
                                                   subsystemType type);

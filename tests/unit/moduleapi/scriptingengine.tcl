@@ -180,4 +180,14 @@ start_server {tags {"modules"}} {
         set result [r module unload helloengine]
         assert_equal $result "OK"
     }
+
+    test {Load scripting engine in older version} {
+        r module load $testmodule 2
+        r function load $HELLO_PROGRAM
+        set result [r fcall foo 0 123]
+        assert_equal $result 123
+        set result [r function flush async]
+        assert_equal $result {OK}
+        assert_error {ERR Function not found} {r fcall foo 0 123}
+    }
 }

@@ -302,8 +302,8 @@ start_server {tags {"info" "external:skip" "debug_defrag:skip"}} {
             assert_error "My error message" {r fcall customerrorfn 0}
             assert_equal "count=975" [errorstat ERRORSTATS_OVERFLOW]
             # Function calls that contain non lua errors should continue to be tracked normally (in a separate counter).
-            r FUNCTION LOAD replace [format "#!lua name=mylib\nserver.register_function('invalidgetcmd', function() return server.call('get', 'x', 'x', 'x') end)"]
-            assert_error "ERR Wrong number of args*" {r fcall invalidgetcmd 0}
+            r FUNCTION LOAD replace [format "#!lua name=mylib\nserver.register_function('invalidllencmd', function() return server.call('llen', 'x', 'x', 'x') end)"]
+            assert_error "ERR Wrong number of args*" {r fcall invalidllencmd 0}
             assert_equal "count=975" [errorstat ERRORSTATS_OVERFLOW]
             assert_equal "count=2" [errorstat ERR]
         }

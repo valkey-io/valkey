@@ -123,10 +123,6 @@ configEnum ext_data_mode_enum[] = {
     {"kv", EXT_DATA_KV},
     {NULL, 0}};
 
-configEnum ext_dump_format_enum[] = {
-    {"rdb", EXT_DATA_DUMP_FORMAT_RDB},
-    {NULL, 0}};
-
 configEnum tls_auth_clients_enum[] = {
     {"no", TLS_CLIENT_AUTH_NO},
     {"yes", TLS_CLIENT_AUTH_YES},
@@ -3321,7 +3317,6 @@ standardConfig static_configs[] = {
     createEnumConfig("log-timestamp-format", NULL, MODIFIABLE_CONFIG, log_timestamp_format_enum, server.log_timestamp_format, LOG_TIMESTAMP_LEGACY, NULL, NULL),
     createEnumConfig("rdb-version-check", NULL, MODIFIABLE_CONFIG, rdb_version_check_enum, server.rdb_version_check, RDB_VERSION_CHECK_STRICT, NULL, NULL),
     createEnumConfig("ext-data-mode", NULL, IMMUTABLE_CONFIG, ext_data_mode_enum, server.ext_data_mode, EXT_DATA_NONE, NULL, NULL),
-    createEnumConfig("ext-dump-format", NULL, MODIFIABLE_CONFIG, ext_dump_format_enum, server.ext_dump_format, EXT_DATA_DUMP_FORMAT_RDB, NULL, NULL),
 
     /* Integer configs */
     createIntConfig("databases", NULL, IMMUTABLE_CONFIG, 1, INT_MAX, server.config_databases, 16, INTEGER_CONFIG, NULL, NULL),
@@ -3385,6 +3380,7 @@ standardConfig static_configs[] = {
     createUIntConfig("client-default-resp", NULL, IMMUTABLE_CONFIG | HIDDEN_CONFIG, 2, 3, server.client_default_resp, 2, INTEGER_CONFIG, NULL, NULL),
 #endif
     createUIntConfig("ext-data-timeout", NULL, MODIFIABLE_CONFIG, 0, 100, server.ext_data_timeout, 1, INTEGER_CONFIG, NULL, NULL),
+    createUIntConfig("ext-data-store-by-size", NULL, MODIFIABLE_CONFIG, 0, UINT_MAX, server.ext_data_store_by_size, 0, INTEGER_CONFIG, NULL, NULL),
 
     /* Unsigned Long configs */
     createULongConfig("active-defrag-max-scan-fields", NULL, MODIFIABLE_CONFIG, 1, LONG_MAX, server.active_defrag_max_scan_fields, 1000, INTEGER_CONFIG, NULL, NULL), /* Default: keys with more than 1000 fields will be processed separately */

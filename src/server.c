@@ -7812,6 +7812,12 @@ int parseExtendedCommandArgumentsOrReply(client *c, int *flags, int *unit, robj 
             *unit = UNIT_MILLISECONDS;
             *expire = next;
             j++;
+        } else if (!strcasecmp(opt,"EXT")) {
+            if (!isExtDataOn()) {
+                addReplyError(c,EXTDATAOFFERRMSG);
+                return C_ERR;
+            }
+            *flags |= ARGS_SET_EXT;
         } else {
             addReplyErrorObject(c,shared.syntaxerr);
             return C_ERR;

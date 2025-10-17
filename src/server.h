@@ -551,9 +551,6 @@ typedef enum {
 #define EXT_DATA_NONE 0
 #define EXT_DATA_KV 1
 
-/* External data dump format */
-#define EXT_DATA_DUMP_FORMAT_RDB 0
-
 /* TLS Client Authentication */
 #define TLS_CLIENT_AUTH_NO 0
 #define TLS_CLIENT_AUTH_YES 1
@@ -766,6 +763,7 @@ typedef enum {
                                 * at argv[2]. */
 #define ARGS_SET_FNX (1 << 11) /* Set if key item not exists. */
 #define ARGS_SET_FXX (1 << 12) /* Set if key item exists. */
+#define ARGS_SET_EXT (1 << 13) /* Set directly to external storage. */
 
 /* An Object, that is a type able to hold a string / list / set */
 
@@ -2084,11 +2082,11 @@ struct valkeyServer {
                                            * value means fractions of microseconds (on average). */
     /* External storage options.  */
     int ext_data_mode;                    /* External storage mode */
-    int ext_dump_format;                  /* External storage dump format */
     size_t ext_min_object_size_to_move;   /* Min size of k/v pair to move to external storage */
     unsigned long long ext_max_disk_size; /* Maximum disk space allowed to be used by external storage */
     unsigned long long ext_max_mem_size;  /* Maximum memory allowed to be used by external storage */
     unsigned int ext_data_timeout;        /* Timeout for accessing external storage */
+    unsigned int ext_data_store_by_size;  /* Size to exceed to store externally */
     /* Pipe and data structures for child -> parent info sharing. */
     int child_info_pipe[2]; /* Pipe used to write the child_info_data. */
     int child_info_nread;   /* Num of bytes of the last read from pipe */
@@ -3708,6 +3706,7 @@ robj *setExpire(client *c, serverDb *db, robj *key, long long when);
 int checkAlreadyExpired(long long when);
 robj *lookupKeyRead(serverDb *db, robj *key);
 robj *lookupKeyWrite(serverDb *db, robj *key);
+robj *lookupExtKeyWrite(serverDb *db, robj *key);
 robj *lookupKeyReadOrReply(client *c, robj *key, robj *reply);
 robj *lookupExtKeyReadOrReply(client *c, robj *key, robj *reply);
 robj *lookupKeyWriteOrReply(client *c, robj *key, robj *reply);

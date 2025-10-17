@@ -354,7 +354,7 @@ start_server {tags {"scripting"}} {
     test {EVAL - redis.call variant raises a Lua error on Redis cmd error (1)} {
         set e {}
         catch {
-            run_script "redis.call('get','a','b','c')" 0
+            run_script "redis.call('llen','a','b','c')" 0
         } e
         set e
     } {*number of args*}

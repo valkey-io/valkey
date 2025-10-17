@@ -649,6 +649,20 @@ int externalFilterIsIn(int id, void *key) {
     return externalFilterCallGetFunc(mi, id, key);
 }
 
+int externalDataWrite(int id, void *key, void *value) {
+    sds db_name = getDBName(id);
+    dictEntry *db = dictFind(curr_external_data_ctx->dbdata, db_name);
+    sdsfree(db_name);
+    if (!db) return 0;
+
+    externalDbData *dbData = dictGetVal(db);
+    externalDataModuleInstance *mi = dbData->module_instance;
+    if (!mi) return 0;
+
+    if (!externalStorageCallSetFunc(mi, id, key, value)) return 1;
+    return externalFilterCallSetFunc(mi, id, key);
+}
+
 /* Initialize external data structures.
  * Should be called once on server initialization */
 int externalDataInit(void) {

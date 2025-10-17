@@ -166,6 +166,10 @@ robj *lookupKeyWriteWithFlags(serverDb *db, robj *key, int flags) {
 }
 
 robj *lookupKeyWrite(serverDb *db, robj *key) {
+    return lookupKeyWriteWithFlags(db, key, LOOKUP_EXTDATA);
+}
+
+robj *lookupExtKeyWrite(serverDb *db, robj *key) {
     return lookupKeyWriteWithFlags(db, key, LOOKUP_NONE);
 }
 

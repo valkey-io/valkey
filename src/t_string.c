@@ -32,6 +32,8 @@
  * SPDX-License-Identifier: BSD-3-Clause
  */
 
+#include "external_data.h"
+#include "sds.h"
 #include "server.h"
 #include <math.h> /* isnan(), isinf() */
 
@@ -57,6 +59,11 @@ static int checkStringLength(client *c, long long size, long long append) {
 
 /* Forward declaration */
 static int getExpireMillisecondsOrReply(client *c, robj *expire, int flags, int unit, long long *milliseconds);
+
+static int checkKVShouldBeExternallyStored(robj *key, robj *val, int flags) {
+    return (
+        isExtDataOn() && (flags & ARGS_SET_EXT || (server.ext_data_store_by_size && (sdslen(objectGetVal(key)) + sdslen(objectGetVal(val)) > server.ext_data_store_by_size))));
+}
 
 /* The setGenericCommand() function implements the SET operation with different
  * options and variants. This function is called in order to implement the
@@ -97,6 +104,19 @@ void setGenericCommand(client *c,
 
     robj *existing_value = lookupKeyWrite(c->db, key);
     found = existing_value != NULL;
+
+    int should_be_ext = checkKVShouldBeExternallyStored(key, val, flags);
+    if (should_be_ext) {
+        int err = !externalDataWrite(c->db->id, key, val);
+
+        if (err) {
+            addReply(c, abort_reply ? abort_reply : shared.null[c->resp]);
+        } else {
+            if (found) dbDelete(c->db, key);
+            addReply(c, ok_reply ? ok_reply : shared.ok);
+        }
+        goto cleanup;
+    }
 
     /* Handle the IFEQ conditional check */
     if (flags & ARGS_SET_IFEQ && found) {
@@ -282,7 +302,7 @@ int getGenericCommand(client *c) {
 
     if (c->argc == 3 && !strcasecmp(objectGetVal(c->argv[2]), "ext")) {
         if ((o = lookupExtKeyReadOrReply(c, c->argv[1], shared.null[c->resp])) == NULL)
-            return C_OK;        
+            return C_OK;
     } else {
         if ((o = lookupKeyReadOrReply(c, c->argv[1], shared.null[c->resp])) == NULL)
             return C_OK;

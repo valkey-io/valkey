@@ -47,5 +47,6 @@ int externalFilterIsIn(int id, void *key);
 /* Core used methods */
 int externalDataInit(void);
 int externalDataFind(int id, void *key, void **found);
+int externalDataWrite(int id, void *key, void *value);
 
 #endif /* __EXTERNAL_DATA_H_ */

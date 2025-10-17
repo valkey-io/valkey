@@ -8,6 +8,7 @@ start_server {tags {"external_data external:skip"}} {
         assert_error $ext_data_off_err {r external_data init db0 helloextdata1}
         assert_error $ext_data_off_err {r external_data loaded}
         assert_error $ext_data_off_err {r external_data stats}
+        assert_error $ext_data_off_err {r set k v ext}
     }
 }
 
@@ -184,6 +185,20 @@ start_server [list overrides [list "ext-data-mode" kv "loglevel" debug "ext-data
     }
 }
 
+start_server [list overrides [list "ext-data-mode" kv "loglevel" debug "ext-data-timeout" 0] tags [list "external:skip"]] {
+    test {SET with ext option works, and GET with ext returns the value} {
+        assert_equal {OK} [r module load $extdatamodule1]
+        assert_equal {OK} [r external_data INIT db0 helloextdata1]
+        assert_equal {OK} [r select 0]
+        assert_equal {OK} [r set k v ext]
+        assert_equal {} [r get k]
+        assert_equal v [r get k ext]
+        assert_equal {OK} [r select 1]
+        assert_equal {} [r get k ext]
+        assert_equal {OK} [r select 0]
+    }
+}
+
 proc scan_keys {cur type match {storage ""}} {
     set keys {}
     set k {}
@@ -199,6 +214,14 @@ proc scan_keys {cur type match {storage ""}} {
         if {$cur == 0} break
     }
     return $keys
+}
+
+proc gen_data {size} {
+    set data ""
+    for {set i 0} {$i < $size} {incr i} {
+        append data "a"
+    }
+    return $data
 }
 
 start_server [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [list "external:skip"]] {
@@ -237,18 +260,86 @@ start_server [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [li
     }
 }
 
+start_server [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [list "external:skip"]] {
+    test {SET with ext option works, and SCAN and KEYS with ext return the key} {
+        assert_equal {OK} [r module load $extdatamodule1]
+        assert_equal {OK} [r external_data INIT db0 helloextdata1]
+        assert_equal {OK} [r select 0]
+        assert_equal {OK} [r set k v ext]
+        assert_equal {OK} [r set k2 v ext]
+        assert_equal {k k2} [lsort [r keys * ext]]
+        set keys [scan_keys 0 "string" "*" "ext"]
+        assert_equal [lsort $keys] [list k k2]
+        assert_equal {OK} [r select 1]
+        assert_equal {} [r keys * ext]
+        set keys [scan_keys 0 "string" "*" "ext"]
+        assert_equal {} $keys
+        assert_equal {OK} [r select 0]
+    }
+
+    test "ext-data-store-by-size not set: large key/value stored in memory" {
+        assert_equal {OK} [r select 0]
+        set large_key [gen_data 200]
+        set large_val [gen_data 200]
+        assert_equal {OK} [r set $large_key $large_val]
+        assert_equal $large_val [r get $large_key]
+        assert_equal $large_val [r get $large_key ext]
+    }
+
+    test "ext-data-store-by-size=0: large key/value stored in memory" {
+        r config set ext-data-store-by-size 0
+        assert_equal {OK} [r select 0]
+        set large_key [gen_data 200]
+        set large_val [gen_data 200]
+        assert_equal {OK} [r set $large_key $large_val]
+        assert_equal $large_val [r get $large_key]
+        assert_equal $large_val [r get $large_key ext]
+    }
+
+    test "ext-data-store-by-size=100: small key/value stored in memory" {
+        r config set ext-data-store-by-size 100
+        assert_equal {OK} [r select 0]
+        assert_equal {OK} [r set small_key small_val]
+        assert_equal small_val [r get small_key]
+        assert_equal small_val [r get small_key ext]
+    }
+
+    test "ext-data-store-by-size=100: large key/value stored in external storage" {
+        r config set ext-data-store-by-size 100
+        assert_equal {OK} [r select 0]
+        set large_key [gen_data 200]
+        set large_val [gen_data 200]
+        assert_equal {OK} [r set $large_key $large_val]
+        assert_equal {} [r get $large_key]
+        assert_equal $large_val [r get $large_key ext]
+    }
+
+    test "Move key from memory to external storage" {
+        r config set ext-data-store-by-size 100
+        assert_equal {OK} [r select 0]
+        # Set key to memory
+        assert_equal {OK} [r set key_in_mem value_in_mem]
+        # Verify it's in memory
+        assert_equal value_in_mem [r get key_in_mem]
+        assert_equal value_in_mem [r get key_in_mem ext]
+
+        # Set same key with ext flag
+        assert_equal {OK} [r set key_in_mem value_in_ext ext]
+        # Verify it's now in external storage, not in memory
+        assert_equal {} [r get key_in_mem]
+        assert_equal value_in_ext [r get key_in_mem ext]
+    }
+}
+
 ### Sharded
 start_cluster 1 0 [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [list "external:skip" "cluster"]] {
     # we assume that all cross-requests to and from another nodes are made in a usual Valkey way
     # that's why there are no tests with MOVED during set/get here
-    test "Cluster should start ok" {
-        wait_for_cluster_state ok
-    }
-
     set extdatamodule1 [file normalize tests/modules/extstorage/extdata1.so]
 
     test "External storage works with single sharded" {
         # init
+        wait_for_cluster_state ok
         assert_equal {OK} [r module load $extdatamodule1]
         assert_equal {OK} [r external_data INIT db0 helloextdata1]
 
@@ -273,19 +364,57 @@ start_cluster 1 0 [list overrides [list "ext-data-mode" kv "loglevel" debug] tag
         assert_equal 1 [r external_data debug db0 filter del k]
         assert_equal {} [r get k ext]
     }
+
+    test "ext-data-store-by-size not set: large key/value stored in memory (sharded)" {
+        wait_for_cluster_state ok
+        assert_equal {OK} [r select 0]
+        set large_key [gen_data 200]
+        set large_val [gen_data 200]
+        assert_equal {OK} [r set $large_key $large_val]
+        assert_equal $large_val [r get $large_key]
+        assert_equal $large_val [r get $large_key ext]
+    }
+
+    test "ext-data-store-by-size=0: large key/value stored in memory (sharded)" {
+        wait_for_cluster_state ok
+        assert_equal {OK} [r select 0]
+        r config set ext-data-store-by-size 0
+        set large_key [gen_data 200]
+        set large_val [gen_data 200]
+        assert_equal {OK} [r set $large_key $large_val]
+        assert_equal $large_val [r get $large_key]
+        assert_equal $large_val [r get $large_key ext]
+    }
+
+    test "ext-data-store-by-size=100: small key/value stored in memory (sharded)" {
+        wait_for_cluster_state ok
+        assert_equal {OK} [r select 0]
+        r config set ext-data-store-by-size 100
+        assert_equal {OK} [r set small_key small_val]
+        assert_equal small_val [r get small_key]
+        assert_equal small_val [r get small_key ext]
+    }
+
+    test "ext-data-store-by-size=100: large key/value stored in external storage (sharded)" {
+        wait_for_cluster_state ok
+        assert_equal {OK} [r select 0]
+        r config set ext-data-store-by-size 100
+        set large_key [gen_data 200]
+        set large_val [gen_data 200]
+        assert_equal {OK} [r set $large_key $large_val]
+        assert_equal {} [r get $large_key]
+        assert_equal $large_val [r get $large_key ext]
+    }
 }
 
 start_cluster 1 0 [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [list "external:skip" "cluster"]] {
     # we assume that all cross-requests to and from another nodes are made in a usual Valkey way
     # that's why there are no tests with MOVED during set/get here
-    test "Cluster should start ok" {
-        wait_for_cluster_state ok
-    }
-
     set extdatamodule1 [file normalize tests/modules/extstorage/extdata1.so]
 
     test {Getting keys from storage works} {
         # init
+        wait_for_cluster_state ok
         assert_equal {OK} [r module load $extdatamodule1]
         assert_equal {OK} [r external_data INIT db0 helloextdata1]
         assert_equal {OK} [r external_data INIT db1 helloextdata1]
@@ -317,5 +446,58 @@ start_cluster 1 0 [list overrides [list "ext-data-mode" kv "loglevel" debug] tag
         assert_equal {0 {}} [r scan 0 type "string" match \*]
         assert_equal {0 {}} [r scan 0 type "string" match \* ext]
         assert_equal {OK} [r select 0]
+    }
+}
+
+start_cluster 1 0 [list overrides [list "loglevel" debug] tags [list "external:skip" "cluster"]] {
+    set ext_data_off_err "ERR External data commands are unavailable with ext-data-mode off"
+    test "SET with ext option fails when ext-data-mode is off (sharded)" {
+        wait_for_cluster_state ok
+        assert_error $ext_data_off_err {r set k v ext}
+    }
+}
+
+start_cluster 1 0 [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [list "external:skip" "cluster"]] {
+    set extdatamodule1 [file normalize tests/modules/extstorage/extdata1.so]
+
+    test "SET with ext option works, and GET with ext returns the value (sharded)" {
+        wait_for_cluster_state ok
+        assert_equal {OK} [r select 0]
+        assert_equal {OK} [r module load $extdatamodule1]
+        assert_equal {OK} [r external_data INIT db0 helloextdata1]
+        assert_equal {OK} [r set k v ext]
+        assert_equal v [r get k ext]
+        assert_equal {} [r get k]
+    }
+
+    test "Move key from memory to external storage (sharded)" {
+        assert_equal {OK} [r select 0]
+        # Set key to memory
+        assert_equal {OK} [r set key_in_mem value_in_mem]
+        # Verify it's in memory
+        assert_equal value_in_mem [r get key_in_mem]
+        assert_equal value_in_mem [r get key_in_mem ext]
+
+        # Set same key with ext flag
+        assert_equal {OK} [r set key_in_mem value_in_ext ext]
+        # Verify it's now in external storage, not in memory
+        assert_equal {} [r get key_in_mem]
+        assert_equal value_in_ext [r get key_in_mem ext]
+    }
+}
+
+start_cluster 1 0 [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [list "external:skip" "cluster"]] {
+    set extdatamodule1 [file normalize tests/modules/extstorage/extdata1.so]
+
+    test "SET with ext option works, and SCAN and KEYS with ext return the key (sharded)" {
+        wait_for_cluster_state ok
+        assert_equal {OK} [r module load $extdatamodule1]
+        assert_equal {OK} [r external_data INIT db0 helloextdata1]
+        assert_equal {OK} [r select 0]
+        assert_equal {OK} [r set k1 v ext]
+        assert_equal {OK} [r set k2 v ext]
+        assert_equal {k1 k2} [lsort [r keys * ext]]
+        set keys [scan_keys 0 "string" "*" "ext"]
+        assert_equal [lsort $keys] [list k1 k2]
     }
 }

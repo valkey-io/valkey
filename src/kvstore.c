@@ -949,10 +949,10 @@ void kvstoreSetIsImporting(kvstore *kvs, int didx, int is_importing) {
         return;
     }
 
-    hashtableDelete(kvs->importing, (void *)(intptr_t)didx);
     /* Once we mark a hashtable as not importing, we need to begin tracking in
      * the kvstore metadata */
-    if (ht && hashtableSize(ht) != 0) {
+    if (hashtableDelete(kvs->importing, (void *)(intptr_t)didx) && ht && hashtableSize(ht) != 0) {
         cumulativeKeyCountAdd(kvs, didx, hashtableSize(ht));
+        kvs->importing_key_count -= hashtableSize(ht);
     }
 }

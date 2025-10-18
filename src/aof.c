@@ -1475,12 +1475,13 @@ int loadSingleAppendOnlyFile(char *filename) {
                 if (!iAmPrimary()) {
                     memcpy(server.replid, rsi.repl_id, sizeof(server.replid));
                     server.primary_repl_offset = rsi.repl_offset;
-                    if (!server.cached_primary) {
+                    if (!server.primary && !server.cached_primary) {
+                        /* we will only cache primary if replica did not synced to its primary node yet */
                         replicationCachePrimaryUsingMyself();
                         selectDb(server.cached_primary, rsi.repl_stream_db);
                     }
-                    serverLog(LL_NOTICE, "preamble rdb changed replication info, replid: %s, primary_repl_offset: %lld", 
-                        server.replid, server.primary_repl_offset);
+                    serverLog(LL_NOTICE, "Loading preamble rdb changed replication info, replid: %s, primary_repl_offset: %lld",
+                              server.replid, server.primary_repl_offset);
                 } else {
                     /* If this is a primary, we can save the replication info
                      * as secondary ID and offset, in order to allow replicas
@@ -1493,17 +1494,17 @@ int loadSingleAppendOnlyFile(char *filename) {
                     server.repl_backlog->offset = server.primary_repl_offset - server.repl_backlog->histlen + 1;
                     rebaseReplicationBuffer(rsi.repl_offset);
                     server.repl_no_replicas_since = time(NULL);
-                    serverLog(LL_NOTICE, "preamble rdb changed replication info, replid2: %s, secondary_repl_offset: " 
-                            "%lld, primary_repl_offset: %lld", 
-                            server.replid2, server.second_replid_offset, server.primary_repl_offset);
+                    serverLog(LL_NOTICE, "Loading preamble rdb changed replication info, replid2: %s, secondary_repl_offset: "
+                                         "%lld, primary_repl_offset: %lld",
+                              server.replid2, server.second_replid_offset, server.primary_repl_offset);
                 }
             }
-            if (!rsi_is_valid && server.repl_backlog) freeReplicationBacklog();
 
             loadingAbsProgress(ftello(fp));
             last_progress_report_size = ftello(fp);
             if (old_style) serverLog(LL_NOTICE, "Reading the remaining AOF tail...");
         }
+        if (!rsi_is_valid && server.repl_backlog && listLength(server.replicas) == 0) freeReplicationBacklog();
     }
 
     /* Read the actual AOF file, in REPL format, command by command. */

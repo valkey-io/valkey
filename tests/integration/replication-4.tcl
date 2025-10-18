@@ -266,8 +266,8 @@ start_server {tags {"repl external:skip"}} {
             wait_for_sync $replica
         }
 
-        test {Data divergence can happen under default conditions} {       
-            $replica config set propagation-error-behavior ignore     
+        test {Data divergence can happen under default conditions} {
+            $replica config set propagation-error-behavior ignore
             $master debug replicate fake-command-1
 
             # Wait for replication to normalize
@@ -280,7 +280,7 @@ start_server {tags {"repl external:skip"}} {
             assert_equal [count_log_message 0 "== CRITICAL =="] 1
         }
 
-        test {Data divergence is allowed on writable replicas} {            
+        test {Data divergence is allowed on writable replicas} {
             $replica config set replica-read-only no
             $replica set number2 foo
             $master incrby number2 1
@@ -290,6 +290,46 @@ start_server {tags {"repl external:skip"}} {
             assert_equal [$replica get number2] foo
 
             assert_equal [count_log_message 0 "incrby"] 1
+        }
+    }
+}
+
+# test aof persistence replid info and load it when reboot server
+start_server {tags {"repl"} overrides {appendonly yes}} {
+    start_server {overrides {appendonly yes}} {
+        set master_id -1
+        set replica_id 0
+        set master [srv $master_id client]
+        set master_host [srv $master_id host]
+        set master_port [srv $master_id port]
+        set replica [srv $replica_id client]
+
+        $replica slaveof $master_host $master_port
+        for {set k 0} {$k < 100} {incr k} {
+            $master set foo_$k bar_$k
+        }
+        wait_for_sync $replica
+        # save replid for both master and slave
+        set old_replid [status $master master_replid]
+        waitForBgrewriteaof $master
+        waitForBgrewriteaof $replica
+
+        test {replica save replid info into rdb and load it after restart} {
+            $replica bgrewriteaof
+            waitForBgrewriteaof $replica
+
+            restart_server $replica_id true false
+            set replica [srv $replica_id client]
+            assert_equal [status $replica master_replid2] $old_replid
+        }
+
+        test {master save replid info into rdb and load it after restart} {
+            $master bgrewriteaof
+            waitForBgrewriteaof $master
+
+            restart_server $master_id true false
+            set master [srv $master_id client]
+            assert_equal [status $master master_replid2] $old_replid
         }
     }
 }

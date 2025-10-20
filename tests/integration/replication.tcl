@@ -1596,3 +1596,43 @@ start_server {tags {"repl external:skip"}} {
         }
     }
 }
+
+start_server {tags {"repl external:skip"}} {
+start_server {} {
+start_server {} {
+        set primary [srv -2 client]
+        set primary_host [srv -2 host]
+        set primary_port [srv -2 port]
+        set replica1 [srv -1 client]
+        set replica1_host [srv -1 host]
+        set replica1_port [srv -1 port]
+        set replica2 [srv -0 client]
+
+        $replica1 replicaof $primary_host $primary_port
+        $replica2 replicaof $replica1_host $replica1_port
+        wait_for_condition 50 1000 {
+            ([status $primary connected_slaves] == 1) &&
+            ([status $replica1 connected_slaves] == 1)
+        } else {
+            fail "replicas didn't connect"
+        }
+
+        test {The offsets on the chain replication link should be consistent} {
+            $primary config set repl_ping_replica_period 10
+            $replica1 config set repl_ping_replica_period 1
+
+            $primary del mytest
+
+            $primary set foo bar2
+
+            # Wait some time to make sure the primary is sending ping to the slave.
+            after 5000
+
+            wait_for_condition 50 100 {
+                 [status $replica1 master_repl_offset] == [status $replica2 master_repl_offset]
+            } else {
+                fail "Chain replication offset inconsistency."
+            }
+        }
+    }
+}

@@ -1476,19 +1476,15 @@ int loadSingleAppendOnlyFile(char *filename) {
                     memcpy(server.replid, rsi.repl_id, sizeof(server.replid));
                     server.primary_repl_offset = rsi.repl_offset;
                     if (!server.primary && !server.cached_primary) {
-                        /* we will only cache primary if replica did not synced to its primary node yet */
+                        /* only cache myself primary if replica did not synced to its primary node yet */
                         replicationCachePrimaryUsingMyself();
                         selectDb(server.cached_primary, rsi.repl_stream_db);
                     }
                     serverLog(LL_NOTICE, "Loading preamble rdb changed replication info, replid: %s, primary_repl_offset: %lld",
                               server.replid, server.primary_repl_offset);
                 } else {
-                    /* If this is a primary, we can save the replication info
-                     * as secondary ID and offset, in order to allow replicas
-                     * to partial resynchronizations with primaries. */
                     memcpy(server.replid2, rsi.repl_id, sizeof(server.replid));
                     server.second_replid_offset = rsi.repl_offset + 1;
-                    /* Rebase primary_repl_offset from rsi.repl_offset. */
                     server.primary_repl_offset += rsi.repl_offset;
                     serverAssert(server.repl_backlog);
                     server.repl_backlog->offset = server.primary_repl_offset - server.repl_backlog->histlen + 1;

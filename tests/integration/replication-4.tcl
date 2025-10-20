@@ -308,9 +308,12 @@ start_server {tags {"repl"} overrides {appendonly yes}} {
         for {set k 0} {$k < 100} {incr k} {
             $master set foo_$k bar_$k
         }
+        $master config rewrite
+        $replica config rewrite
         wait_for_sync $replica
         # save replid for both master and slave
         set old_replid [status $master master_replid]
+        set old_repl_offset [status $master master_repl_offset]
         waitForBgrewriteaof $master
         waitForBgrewriteaof $replica
 
@@ -320,7 +323,9 @@ start_server {tags {"repl"} overrides {appendonly yes}} {
 
             restart_server $replica_id true false
             set replica [srv $replica_id client]
-            assert_equal [status $replica master_replid2] $old_replid
+
+            assert_equal [status $replica master_replid] $old_replid
+            assert_equal [status $replica master_repl_offset] $old_repl_offset
         }
 
         test {master save replid info into rdb and load it after restart} {
@@ -329,7 +334,10 @@ start_server {tags {"repl"} overrides {appendonly yes}} {
 
             restart_server $master_id true false
             set master [srv $master_id client]
+            set old_repl_offset [expr {$old_repl_offset+1}]
+
             assert_equal [status $master master_replid2] $old_replid
+            assert_equal [status $master second_repl_offset] $old_repl_offset
         }
     }
 }

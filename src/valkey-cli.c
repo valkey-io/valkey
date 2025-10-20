@@ -4693,7 +4693,7 @@ static sds clusterManagerGetSlotRangeString(list *slot_ranges) {
 
 static int clusterManagerMigrateSlots(clusterManagerNode *node1, clusterManagerNode *node2, list *slot_ranges, char **err) {
     /* Create the command */
-    const char **argv = zmalloc(sizeof(char*) * (5 + listLength(slot_ranges) * 2));
+    const char **argv = zmalloc(sizeof(char *) * (5 + listLength(slot_ranges) * 2));
     size_t *argvlen = zmalloc(sizeof(size_t) * (5 + listLength(slot_ranges) * 2));
     int argv_idx = 0;
     argvlen[argv_idx] = 7;
@@ -4725,7 +4725,7 @@ static int clusterManagerMigrateSlots(clusterManagerNode *node1, clusterManagerN
     valkeyAppendCommandArgv(node1->context, argv_idx, argv, argvlen);
     valkeyReply *reply;
     if (err != NULL) *err = NULL;
-    if (valkeyGetReply(node1->context, (void **) &reply) != VALKEY_OK) {
+    if (valkeyGetReply(node1->context, (void **)&reply) != VALKEY_OK) {
         if (err) *err = zstrdup("CLUSTER MIGRATESLOTS failed to run");
         return 0;
     }
@@ -4825,9 +4825,9 @@ static getSlotMigrationsEntry *parseGetSlotMigrationsEntry(valkeyReply *elem, ch
         return NULL;
     }
     getSlotMigrationsEntry *migration_entry = zcalloc(sizeof(getSlotMigrationsEntry));
-    for (size_t j = 0; j < elem->elements; j+=2) {
+    for (size_t j = 0; j < elem->elements; j += 2) {
         valkeyReply *key = elem->element[j];
-        valkeyReply *val = elem->element[j+1];
+        valkeyReply *val = elem->element[j + 1];
         if (!parseGetSlotMigrationsEntryKeyValuePair(migration_entry, key, val, err)) {
             releaseGetSlotMigrationsEntry(migration_entry);
             return NULL;
@@ -4890,24 +4890,24 @@ static int clusterManagerGetSlotMigration(clusterManagerNode *node, list *slot_r
         if (sdscmp(entry->slot_ranges, want_slot_range_str) == 0) {
             /* Found the one we are looking for */
             switch (entry->state) {
-                case MIGRATION_IN_PROGRESS:
-                    *in_progress = 1;
-                    success = 1;
-                    goto cleanup;
-                case MIGRATION_SUCCESS:
-                    *in_progress = 0;
-                    success = 1;
-                    goto cleanup;
-                case MIGRATION_CANCELLED:
-                    *in_progress = 0;
-                    success = 0;
-                    if (err) *err = zstrdup("Slot migration was cancelled");
-                    goto cleanup;
-                case MIGRATION_FAILED:
-                    *in_progress = 0;
-                    success = 0;
-                    if (err) *err = zstrdup(entry->message);
-                    goto cleanup;
+            case MIGRATION_IN_PROGRESS:
+                *in_progress = 1;
+                success = 1;
+                goto cleanup;
+            case MIGRATION_SUCCESS:
+                *in_progress = 0;
+                success = 1;
+                goto cleanup;
+            case MIGRATION_CANCELLED:
+                *in_progress = 0;
+                success = 0;
+                if (err) *err = zstrdup("Slot migration was cancelled");
+                goto cleanup;
+            case MIGRATION_FAILED:
+                *in_progress = 0;
+                success = 0;
+                if (err) *err = zstrdup(entry->message);
+                goto cleanup;
             }
         }
     }

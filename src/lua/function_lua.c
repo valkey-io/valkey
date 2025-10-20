@@ -275,6 +275,7 @@ static int luaRegisterFunctionReadNamedArgs(lua_State *lua,
             int lua_function_ref = luaL_ref(lua, LUA_REGISTRYINDEX);
 
             script = zmalloc(sizeof(*script));
+            script->lua = lua;
             script->function_ref = lua_function_ref;
             continue; /* value was already popped, so no need to pop it out. */
         } else if (!strcasecmp(key, "flags")) {
@@ -341,6 +342,7 @@ static int luaRegisterFunctionReadPositionalArgs(lua_State *lua,
     int lua_function_ref = luaL_ref(lua, LUA_REGISTRYINDEX);
 
     script = zmalloc(sizeof(*script));
+    script->lua = lua;
     script->function_ref = lua_function_ref;
 
     luaRegisterFunctionArgsInitialize(func, name, NULL, script, 0);

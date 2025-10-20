@@ -1231,14 +1231,18 @@ void hashtableResumeAutoShrink(hashtable *ht) {
 
 /* Pauses incremental rehashing. When rehashing is paused, bucket chains are not
  * automatically compacted when entries are deleted. Doing so may leave empty
- * spaces, "holes", in the bucket chains, which wastes memory. */
+ * spaces, "holes", in the bucket chains, which wastes memory. Additionally, we
+ * pause auto shrink when rehashing is paused, meaning the hashtable will not
+ * shrink the bucket count. */
 static void hashtablePauseRehashing(hashtable *ht) {
     ht->pause_rehash++;
+    hashtablePauseAutoShrink(ht);
 }
 
 /* Resumes incremental rehashing, after pausing it. */
 static void hashtableResumeRehashing(hashtable *ht) {
     ht->pause_rehash--;
+    hashtableResumeAutoShrink(ht);
 }
 
 /* Returns true if incremental rehashing is paused, false if it isn't. */
@@ -1816,7 +1820,6 @@ size_t hashtableScanDefrag(hashtable *ht, size_t cursor, hashtableScanFunction f
     /* Prevent entries from being moved around during the scan call, as a
      * side-effect of the scan callback. */
     hashtablePauseRehashing(ht);
-    hashtablePauseAutoShrink(ht);
 
     /* Flags. */
     int emit_ref = (flags & HASHTABLE_SCAN_EMIT_REF);
@@ -1928,7 +1931,6 @@ size_t hashtableScanDefrag(hashtable *ht, size_t cursor, hashtableScanFunction f
         } while (cursor & (mask_small ^ mask_large));
     }
     hashtableResumeRehashing(ht);
-    hashtableResumeAutoShrink(ht);
     return cursor;
 }
 

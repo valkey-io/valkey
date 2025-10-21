@@ -518,7 +518,7 @@ start_server {tags {"introspection"}} {
             set client_info [$c client info]
 
             regexp {addr=\[([a-fA-F0-9:]+)\]:\d+} $client_info -> ipv6only
-            set filtered [$c client list not-ip $ipv6only]
+            set filtered [$c client list not-ip "1.2.3.4" not-ip $ipv6only]
             assert_no_match *client-ipv6* $filtered
 
             $c close

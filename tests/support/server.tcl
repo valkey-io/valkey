@@ -268,9 +268,9 @@ proc tags_acceptable {tags err_return} {
         return 0
     }
 
-    if {!$::require_ipv6 && ![is_ipv6_available]} {
-        lappend ::denytags "ipv6"
-        set err "IPv6 not available on this system, skipping IPv6 tests"
+    if {[lsearch $tags "ipv6"] >= 0 && ![is_ipv6_available]} {
+        set err "IPv6 not available on this system"
+        return 0
     }
 
     return 1

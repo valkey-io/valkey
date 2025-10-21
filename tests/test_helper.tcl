@@ -1003,7 +1003,7 @@ proc close_replication_stream {s} {
 }
 
 # IPv6 detection utilities
-# for this detaction: the socket connection on ::1 address
+# for this detection: the socket connection on ::1 address
 proc is_ipv6_available {} {
     if {[catch {
         set server [socket -server dummy -myaddr ::1 0]

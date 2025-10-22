@@ -10980,8 +10980,8 @@ int moduleUnregisterFilters(ValkeyModule *module) {
  * If multiple filters are registered (by the same or different modules), they
  * are executed in the order of registration.
  */
-ValkeyModuleCommandFilter *VM_RegisterCommandFilter(ValkeyModuleCtx *ctx, 
-                                                    ValkeyModuleCommandFilterFunc callback, 
+ValkeyModuleCommandFilter *VM_RegisterCommandFilter(ValkeyModuleCtx *ctx,
+                                                    ValkeyModuleCommandFilterFunc callback,
                                                     int flags) {
     ValkeyModuleCommandFilter *filter = zmalloc(sizeof(*filter));
     filter->module = ctx->module;

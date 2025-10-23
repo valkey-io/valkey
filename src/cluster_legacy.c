@@ -3930,139 +3930,141 @@ int clusterProcessPacket(clusterLink *link) {
         }
 
         /* Check for role switch: replica -> primary or primary -> replica. */
-        /* Node is a primary. */
-        if (sender_claims_to_be_primary) {
-            if (sender_last_reported_as_replica) {
-                serverLog(LL_DEBUG, "node %.40s (%s) announces that it is a %s in shard %.40s", sender->name,
-                          sender->human_nodename, sender_claims_to_be_primary ? "primary" : "replica", sender->shard_id);
-                clusterSetNodeAsPrimary(sender);
+        if (sender) {
+            /* Node is a primary. */
+            if (sender_claims_to_be_primary) {
+                if (sender_last_reported_as_replica) {
+                    serverLog(LL_DEBUG, "node %.40s (%s) announces that it is a %s in shard %.40s", sender->name,
+                              sender->human_nodename, sender_claims_to_be_primary ? "primary" : "replica", sender->shard_id);
+                    clusterSetNodeAsPrimary(sender);
+                }
             }
-        }
-        /* Node is a replica. */
-        else {
-            clusterNode *sender_claimed_primary = clusterLookupNode(hdr->replicaof, CLUSTER_NAMELEN);
+            /* Node is a replica. */
+            else {
+                clusterNode *sender_claimed_primary = clusterLookupNode(hdr->replicaof, CLUSTER_NAMELEN);
 
-            if (sender_last_reported_as_primary) {
-                serverLog(LL_DEBUG, "node %.40s (%s) announces that it is a %s in shard %.40s", sender->name,
-                          sender->human_nodename, sender_claims_to_be_primary ? "primary" : "replica", sender->shard_id);
+                if (sender_last_reported_as_primary) {
+                    serverLog(LL_DEBUG, "node %.40s (%s) announces that it is a %s in shard %.40s", sender->name,
+                              sender->human_nodename, sender_claims_to_be_primary ? "primary" : "replica", sender->shard_id);
 
-                /* Primary turned into a replica! Reconfigure the node. */
-                if (sender_claimed_primary && areInSameShard(sender_claimed_primary, sender)) {
-                    /* `sender` was a primary and was in the same shard as its new primary */
-                    if (nodeEpoch(sender_claimed_primary) > sender_claimed_config_epoch) {
+                    /* Primary turned into a replica! Reconfigure the node. */
+                    if (sender_claimed_primary && areInSameShard(sender_claimed_primary, sender)) {
+                        /* `sender` was a primary and was in the same shard as its new primary */
+                        if (nodeEpoch(sender_claimed_primary) > sender_claimed_config_epoch) {
+                            serverLog(LL_NOTICE,
+                                      "Ignore stale message from %.40s (%s) in shard %.40s;"
+                                      " gossip config epoch: %llu, current config epoch: %llu",
+                                      sender->name, sender->human_nodename, sender->shard_id,
+                                      (unsigned long long)sender_claimed_config_epoch,
+                                      (unsigned long long)nodeEpoch(sender_claimed_primary));
+                            /* This packet is stale so we avoid processing it anymore. Otherwise
+                             * this may cause a primary-replica chain issue. */
+                            return 1;
+                        } else if (nodeIsReplica(sender_claimed_primary)) {
+                            /* A failover occurred in the shard where `sender` belongs to and `sender` is
+                             * no longer a primary. Update slot assignment to `sender_claimed_config_epoch`,
+                             * which is the new primary in the shard. */
+                            int slots = 0, importing_slots = 0, migrating_slots = 0;
+                            clusterMoveNodeSlots(sender, sender_claimed_primary,
+                                                 &slots, &importing_slots, &migrating_slots);
+                            /* `primary` is still a `replica` in this observer node's view;
+                             * update its role and configEpoch */
+                            clusterSetNodeAsPrimary(sender_claimed_primary);
+                            sender_claimed_primary->configEpoch = sender_claimed_config_epoch;
+                            if (slots) {
+                                serverLog(LL_NOTICE,
+                                          "A failover occurred in shard %.40s; node %.40s (%s) lost %d slot(s) and"
+                                          " failed over to node %.40s (%s) with a config epoch of %llu",
+                                          sender->shard_id, sender->name, sender->human_nodename, slots,
+                                          sender_claimed_primary->name, sender_claimed_primary->human_nodename,
+                                          (unsigned long long)sender_claimed_primary->configEpoch);
+                            }
+                            if (importing_slots) {
+                                serverLog(LL_NOTICE,
+                                          "A failover occurred in migration source. Update importing "
+                                          "source of %d slot(s) to node %.40s (%s) in shard %.40s.",
+                                          importing_slots, sender_claimed_primary->name,
+                                          sender_claimed_primary->human_nodename, sender_claimed_primary->shard_id);
+                            }
+                            if (migrating_slots) {
+                                serverLog(LL_NOTICE,
+                                          "A failover occurred in migration target. Update migrating "
+                                          "target of %d slot(s) to node %.40s (%s) in shard %.40s.",
+                                          migrating_slots, sender_claimed_primary->name,
+                                          sender_claimed_primary->human_nodename, sender_claimed_primary->shard_id);
+                            }
+                            serverAssert(sender->numslots == 0);
+                        }
+                    } else {
+                        /* `sender` was moved to another shard and has become a replica, remove its slot assignment */
+                        int slots = clusterDelNodeSlots(sender);
                         serverLog(LL_NOTICE,
-                                  "Ignore stale message from %.40s (%s) in shard %.40s;"
-                                  " gossip config epoch: %llu, current config epoch: %llu",
-                                  sender->name, sender->human_nodename, sender->shard_id,
-                                  (unsigned long long)sender_claimed_config_epoch,
-                                  (unsigned long long)nodeEpoch(sender_claimed_primary));
-                        /* This packet is stale so we avoid processing it anymore. Otherwise
-                         * this may cause a primary-replica chain issue. */
-                        return 1;
-                    } else if (nodeIsReplica(sender_claimed_primary)) {
-                        /* A failover occurred in the shard where `sender` belongs to and `sender` is
-                         * no longer a primary. Update slot assignment to `sender_claimed_config_epoch`,
-                         * which is the new primary in the shard. */
-                        int slots = 0, importing_slots = 0, migrating_slots = 0;
-                        clusterMoveNodeSlots(sender, sender_claimed_primary,
-                                             &slots, &importing_slots, &migrating_slots);
-                        /* `primary` is still a `replica` in this observer node's view;
-                         * update its role and configEpoch */
-                        clusterSetNodeAsPrimary(sender_claimed_primary);
-                        sender_claimed_primary->configEpoch = sender_claimed_config_epoch;
-                        if (slots) {
-                            serverLog(LL_NOTICE,
-                                      "A failover occurred in shard %.40s; node %.40s (%s) lost %d slot(s) and"
-                                      " failed over to node %.40s (%s) with a config epoch of %llu",
-                                      sender->shard_id, sender->name, sender->human_nodename, slots,
-                                      sender_claimed_primary->name, sender_claimed_primary->human_nodename,
-                                      (unsigned long long)sender_claimed_primary->configEpoch);
-                        }
-                        if (importing_slots) {
-                            serverLog(LL_NOTICE,
-                                      "A failover occurred in migration source. Update importing "
-                                      "source of %d slot(s) to node %.40s (%s) in shard %.40s.",
-                                      importing_slots, sender_claimed_primary->name,
-                                      sender_claimed_primary->human_nodename, sender_claimed_primary->shard_id);
-                        }
-                        if (migrating_slots) {
-                            serverLog(LL_NOTICE,
-                                      "A failover occurred in migration target. Update migrating "
-                                      "target of %d slot(s) to node %.40s (%s) in shard %.40s.",
-                                      migrating_slots, sender_claimed_primary->name,
-                                      sender_claimed_primary->human_nodename, sender_claimed_primary->shard_id);
+                                  "Node %.40s (%s) is no longer primary of shard %.40s;"
+                                  " removed all %d slot(s) it used to own",
+                                  sender->name, sender->human_nodename, sender->shard_id, slots);
+                        if (sender_claimed_primary != NULL) {
+                            serverLog(LL_NOTICE, "Node %.40s (%s) is now part of shard %.40s", sender->name,
+                                      sender->human_nodename, sender_claimed_primary->shard_id);
                         }
                         serverAssert(sender->numslots == 0);
                     }
-                } else {
-                    /* `sender` was moved to another shard and has become a replica, remove its slot assignment */
-                    int slots = clusterDelNodeSlots(sender);
-                    serverLog(LL_NOTICE,
-                              "Node %.40s (%s) is no longer primary of shard %.40s;"
-                              " removed all %d slot(s) it used to own",
-                              sender->name, sender->human_nodename, sender->shard_id, slots);
-                    if (sender_claimed_primary != NULL) {
-                        serverLog(LL_NOTICE, "Node %.40s (%s) is now part of shard %.40s", sender->name,
-                                  sender->human_nodename, sender_claimed_primary->shard_id);
+
+                    sender->flags &= ~(CLUSTER_NODE_PRIMARY | CLUSTER_NODE_MIGRATE_TO);
+                    sender->flags |= CLUSTER_NODE_REPLICA;
+
+                    /* Update config and state. */
+                    clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_UPDATE_STATE | CLUSTER_TODO_FSYNC_CONFIG);
+                }
+
+                /* Primary node changed for this replica? */
+                if (sender_claimed_primary && sender->replicaof != sender_claimed_primary) {
+                    if (sender->replicaof) clusterNodeRemoveReplica(sender->replicaof, sender);
+                    serverLog(LL_NOTICE, "Node %.40s (%s) is now a replica of node %.40s (%s) in shard %.40s",
+                              sender->name, sender->human_nodename, sender_claimed_primary->name,
+                              sender_claimed_primary->human_nodename, sender_claimed_primary->shard_id);
+                    clusterNodeAddReplica(sender_claimed_primary, sender);
+                    sender->replicaof = sender_claimed_primary;
+
+                    /* The chain reduction logic requires correctly establishing the replication relationship.
+                     * A key decision when designating a new primary for 'myself' is determining whether
+                     * 'myself' and the new primary belong to the same shard, which would imply shared
+                     * replication history and allow a safe partial synchronization (psync).
+                     *
+                     * This decision hinges on the shard_id, a per-node property that helps verify if the
+                     * two nodes share the same replication history. It's critical not to update myself's
+                     * shard_id prematurely during this process. Doing so could incorrectly associate
+                     * 'myself' with the sender's shard_id, leading the subsequent clusterSetPrimary call
+                     * to falsely assume that 'myself' and the new primary have been in the same shard.
+                     * This mistake could result in data loss by incorrectly permitting a psync.
+                     *
+                     * Therefore, it's essential to delay any shard_id updates until after the replication
+                     * relationship has been properly established and verified. */
+                    if (myself->replicaof && myself->replicaof->replicaof && myself->replicaof->replicaof != myself) {
+                        /* Safeguard against sub-replicas.
+                         *
+                         * A replica's primary can turn itself into a replica if its last slot
+                         * is removed. If no other node takes over the slot, there is nothing
+                         * else to trigger replica migration. In this case, they are not in the
+                         * same shard, so a full sync is required.
+                         *
+                         * Or a replica's primary can turn itself into a replica of its other
+                         * replica during a failover. In this case, they are in the same shard,
+                         * so we can try a psync. */
+                        serverLog(LL_NOTICE, "I'm a sub-replica! Reconfiguring myself as a replica of %.40s from %.40s",
+                                  myself->replicaof->replicaof->name, myself->replicaof->name);
+                        clusterSetPrimary(myself->replicaof->replicaof, 1,
+                                          !areInSameShard(myself->replicaof->replicaof, myself));
+                        clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_UPDATE_STATE |
+                                             CLUSTER_TODO_FSYNC_CONFIG | CLUSTER_TODO_BROADCAST_ALL);
                     }
-                    serverAssert(sender->numslots == 0);
+
+                    /* Update the shard_id when a replica is connected to its
+                     * primary in the very first time. */
+                    updateShardId(sender, sender_claimed_primary->shard_id);
+
+                    /* Update config. */
+                    clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG);
                 }
-
-                sender->flags &= ~(CLUSTER_NODE_PRIMARY | CLUSTER_NODE_MIGRATE_TO);
-                sender->flags |= CLUSTER_NODE_REPLICA;
-
-                /* Update config and state. */
-                clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_UPDATE_STATE | CLUSTER_TODO_FSYNC_CONFIG);
-            }
-
-            /* Primary node changed for this replica? */
-            if (sender_claimed_primary && sender->replicaof != sender_claimed_primary) {
-                if (sender->replicaof) clusterNodeRemoveReplica(sender->replicaof, sender);
-                serverLog(LL_NOTICE, "Node %.40s (%s) is now a replica of node %.40s (%s) in shard %.40s",
-                          sender->name, sender->human_nodename, sender_claimed_primary->name,
-                          sender_claimed_primary->human_nodename, sender_claimed_primary->shard_id);
-                clusterNodeAddReplica(sender_claimed_primary, sender);
-                sender->replicaof = sender_claimed_primary;
-
-                /* The chain reduction logic requires correctly establishing the replication relationship.
-                 * A key decision when designating a new primary for 'myself' is determining whether
-                 * 'myself' and the new primary belong to the same shard, which would imply shared
-                 * replication history and allow a safe partial synchronization (psync).
-                 *
-                 * This decision hinges on the shard_id, a per-node property that helps verify if the
-                 * two nodes share the same replication history. It's critical not to update myself's
-                 * shard_id prematurely during this process. Doing so could incorrectly associate
-                 * 'myself' with the sender's shard_id, leading the subsequent clusterSetPrimary call
-                 * to falsely assume that 'myself' and the new primary have been in the same shard.
-                 * This mistake could result in data loss by incorrectly permitting a psync.
-                 *
-                 * Therefore, it's essential to delay any shard_id updates until after the replication
-                 * relationship has been properly established and verified. */
-                if (myself->replicaof && myself->replicaof->replicaof && myself->replicaof->replicaof != myself) {
-                    /* Safeguard against sub-replicas.
-                     *
-                     * A replica's primary can turn itself into a replica if its last slot
-                     * is removed. If no other node takes over the slot, there is nothing
-                     * else to trigger replica migration. In this case, they are not in the
-                     * same shard, so a full sync is required.
-                     *
-                     * Or a replica's primary can turn itself into a replica of its other
-                     * replica during a failover. In this case, they are in the same shard,
-                     * so we can try a psync. */
-                    serverLog(LL_NOTICE, "I'm a sub-replica! Reconfiguring myself as a replica of %.40s from %.40s",
-                              myself->replicaof->replicaof->name, myself->replicaof->name);
-                    clusterSetPrimary(myself->replicaof->replicaof, 1,
-                                      !areInSameShard(myself->replicaof->replicaof, myself));
-                    clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_UPDATE_STATE |
-                                         CLUSTER_TODO_FSYNC_CONFIG | CLUSTER_TODO_BROADCAST_ALL);
-                }
-
-                /* Update the shard_id when a replica is connected to its
-                 * primary in the very first time. */
-                updateShardId(sender, sender_claimed_primary->shard_id);
-
-                /* Update config. */
-                clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG);
             }
         }
 

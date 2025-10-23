@@ -520,11 +520,22 @@ callHelloLangFunction(ValkeyModuleCtx *module_ctx,
     }
 }
 
-static ValkeyModuleScriptingEngineCallableLazyEvalReset *helloResetEvalEnv(ValkeyModuleCtx *module_ctx,
-                                                                           ValkeyModuleScriptingEngineCtx *engine_ctx,
-                                                                           int async) {
+static ValkeyModuleScriptingEngineCallableLazyEnvReset *helloResetEvalEnv(ValkeyModuleCtx *module_ctx,
+                                                                          ValkeyModuleScriptingEngineCtx *engine_ctx,
+                                                                          int async) {
     VALKEYMODULE_NOT_USED(module_ctx);
     VALKEYMODULE_NOT_USED(engine_ctx);
+    VALKEYMODULE_NOT_USED(async);
+    return NULL;
+}
+
+static ValkeyModuleScriptingEngineCallableLazyEnvReset *helloResetEnv(ValkeyModuleCtx *module_ctx,
+                                                                      ValkeyModuleScriptingEngineCtx *engine_ctx,
+                                                                      ValkeyModuleScriptingEngineSubsystemType type,
+                                                                      int async) {
+    VALKEYMODULE_NOT_USED(module_ctx);
+    VALKEYMODULE_NOT_USED(engine_ctx);
+    VALKEYMODULE_NOT_USED(type);
     VALKEYMODULE_NOT_USED(async);
     return NULL;
 }
@@ -686,7 +697,7 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx,
         }
         else {
             const char *arg_str = ValkeyModule_StringPtrLen(argv[0], NULL);
-            ValkeyModule_Log(ctx, "info", "initializing Hello scripting enigne with ABI version: %s", arg_str);
+            ValkeyModule_Log(ctx, "info", "initializing Hello scripting engine with ABI version: %s", arg_str);
         }
     }
 
@@ -694,28 +705,38 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx,
     hello_ctx->program = NULL;
     hello_ctx->debug.enabled = 0;
 
+
     ValkeyModuleScriptingEngineMethodsV1 methodsV1;
     ValkeyModuleScriptingEngineMethodsV2 methodsV2;
 
     if (abi_version <= 2) {
-        methodsV1 = (ValkeyModuleScriptingEngineMethodsV1){
+        methodsV1 = (ValkeyModuleScriptingEngineMethodsV1) {
             .version = abi_version,
             .compile_code = createHelloLangEngine,
             .free_function = engineFreeFunction,
             .call_function = callHelloLangFunction,
             .get_function_memory_overhead = engineFunctionMemoryOverhead,
-            .reset_eval_env = helloResetEvalEnv,
+            .reset_eval_env_v2 = helloResetEvalEnv,
             .get_memory_info = engineGetMemoryInfo,
         };
-    }
-    else {
+    } else if (abi_version <= 3) {
+        methodsV1 = (ValkeyModuleScriptingEngineMethodsV1) {
+            .version = abi_version,
+            .compile_code = createHelloLangEngine,
+            .free_function = engineFreeFunction,
+            .call_function = callHelloLangFunction,
+            .get_function_memory_overhead = engineFunctionMemoryOverhead,
+            .reset_env = helloResetEnv,
+            .get_memory_info = engineGetMemoryInfo,
+        };
+    } else {
         methodsV2 = (ValkeyModuleScriptingEngineMethodsV2) {
             .version = abi_version,
             .compile_code = createHelloLangEngine,
             .free_function = engineFreeFunction,
             .call_function = callHelloLangFunction,
             .get_function_memory_overhead = engineFunctionMemoryOverhead,
-            .reset_eval_env = helloResetEvalEnv,
+            .reset_env = helloResetEnv,
             .get_memory_info = engineGetMemoryInfo,
             .debugger_enable = helloDebuggerEnable,
             .debugger_disable = helloDebuggerDisable,
@@ -724,7 +745,7 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx,
         };
     }
 
-    ValkeyModuleScriptingEngineMethods *methods = abi_version <= 2 ?
+    ValkeyModuleScriptingEngineMethods *methods = abi_version <= 3 ?
         (ValkeyModuleScriptingEngineMethods *)&methodsV1 :
         (ValkeyModuleScriptingEngineMethods *)&methodsV2;
 

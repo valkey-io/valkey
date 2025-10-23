@@ -213,6 +213,8 @@ start_server {tags {"modules"}} {
         set result [r function flush async]
         assert_equal $result {OK}
         assert_error {ERR Function not found} {r fcall foo 0 123}
+        set result [r module unload helloengine]
+        assert_equal $result "OK"
     }
 
     test {Load scripting engine in version before debugger support} {
@@ -221,5 +223,7 @@ start_server {tags {"modules"}} {
         set result [r fcall foo 0 123]
         assert_equal $result 123
         assert_error {ERR The scripting engine 'HELLO' does not support interactive script debugging} {r script debug sync hello}
+        set result [r module unload helloengine]
+        assert_equal $result "OK"
     }
 }

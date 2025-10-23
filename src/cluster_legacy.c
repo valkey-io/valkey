@@ -136,6 +136,7 @@ sds clusterEncodeOpenSlotsAuxField(int rdbflags);
 int clusterDecodeOpenSlotsAuxField(int rdbflags, sds s);
 static int nodeExceedsHandshakeTimeout(clusterNode *node, mstime_t now);
 void clusterCommandFlushslot(client *c);
+static clusterNode *getNodeFromLinkAndMsg(clusterLink *link, clusterMsg *hdr);
 
 /* Only primaries that own slots have voting rights.
  * Returns 1 if the node has voting rights, otherwise returns 0. */
@@ -2615,7 +2616,7 @@ int verifyGossipSectionNodeIds(clusterMsgDataGossip *g, uint16_t count) {
 void clusterProcessGossipSection(clusterMsg *hdr, clusterLink *link) {
     uint16_t count = ntohs(hdr->count);
     clusterMsgDataGossip *g = (clusterMsgDataGossip *)hdr->data.ping.gossip;
-    clusterNode *sender = link->node ? link->node : clusterLookupNode(hdr->sender, CLUSTER_NAMELEN);
+    clusterNode *sender = getNodeFromLinkAndMsg(link, hdr);
 
     /* Abort if the gossip contains invalid node IDs to avoid adding incorrect information to
      * the nodes dictionary. An invalid ID indicates memory corruption on the sender side. */
@@ -2694,10 +2695,8 @@ void clusterProcessGossipSection(clusterMsg *hdr, clusterLink *link) {
              * new address. */
             if (node->flags & (CLUSTER_NODE_FAIL | CLUSTER_NODE_PFAIL) && !(flags & CLUSTER_NODE_NOADDR) &&
                 !(flags & (CLUSTER_NODE_FAIL | CLUSTER_NODE_PFAIL)) &&
-                (strcasecmp(node->ip, g->ip) ||
-                 node->tls_port != (server.tls_cluster ? ntohs(g->port) : ntohs(g->pport)) ||
-                 node->tcp_port != (server.tls_cluster ? ntohs(g->pport) : ntohs(g->port)) ||
-                 node->cport != ntohs(g->cport))) {
+                (strcasecmp(node->ip, g->ip) || node->tls_port != msg_tls_port ||
+                 node->tcp_port != msg_tcp_port || node->cport != ntohs(g->cport))) {
                 if (node->link) freeClusterLink(node->link);
                 memcpy(node->ip, g->ip, NET_IP_STR_LEN);
                 node->tcp_port = msg_tcp_port;

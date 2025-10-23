@@ -152,13 +152,13 @@ clusterNode *getClusterNodeBySlotRanges(list *slot_ranges, int *cross_node) {
     while ((ln = listNext(&li)) != NULL) {
         slotRange *range = ln->value;
         for (int i = range->start_slot; i <= range->end_slot; i++) {
-            if (server.cluster->slots[i] == NULL) {
+            if (server.cluster->slots[i].node == NULL) {
                 return NULL;
             }
             if (!n) {
-                n = server.cluster->slots[i];
+                n = server.cluster->slots[i].node;
             }
-            if (n != server.cluster->slots[i]) {
+            if (n != server.cluster->slots[i].node) {
                 if (cross_node) *cross_node = 1;
                 return NULL;
             }
@@ -218,7 +218,7 @@ void delKeysNotOwnedByMyself(list *slot_ranges) {
     while ((ln = listNext(&li)) != NULL) {
         slotRange *range = ln->value;
         for (int i = range->start_slot; i <= range->end_slot; i++) {
-            if (server.cluster->slots[i] != server.cluster->myself) {
+            if (server.cluster->slots[i].node != server.cluster->myself) {
                 delKeysInSlot(i, 1, true, false);
             }
         }
@@ -293,13 +293,13 @@ list *parseSlotRangesOrReply(client *c,
         }
         /* Check if the current slot range is ready to do the migration. */
         for (int j = startslot; j <= endslot; j++) {
-            if (server.cluster->slots[j] == NULL) {
+            if (server.cluster->slots[j].node == NULL) {
                 addReplyErrorFormat(c, "Slot %d has no node served.", j);
                 goto cleanup;
             }
             if (!*node_out) {
-                *node_out = server.cluster->slots[j];
-            } else if (*node_out != server.cluster->slots[j]) {
+                *node_out = server.cluster->slots[j].node;
+            } else if (*node_out != server.cluster->slots[j].node) {
                 addReplyError(c, "Requested slots span multiple shards");
                 goto cleanup;
             }

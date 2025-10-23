@@ -393,6 +393,13 @@ typedef struct slotStat {
     uint64_t network_bytes_out;
 } slotStat;
 
+/* Struct used for storing slot and its associated node. */
+typedef struct clusterSlot {
+    clusterNode *node;
+    /* Struct used for storing slot statistics, for all slots owned by the current shard. */
+    slotStat stat;
+} clusterSlot;
+
 typedef struct slotRange {
     int start_slot;
     int end_slot;
@@ -409,7 +416,7 @@ struct clusterState {
     dict *nodes_black_list; /* Nodes we don't re-add for a few seconds. */
     dict *migrating_slots_to;
     dict *importing_slots_from;
-    clusterNode *slots[CLUSTER_SLOTS];
+    clusterSlot slots[CLUSTER_SLOTS];
     list *slot_migration_jobs; /* List storing all slot migration jobs. Stored
                                 * in order from most recent to least recently
                                 * created. */
@@ -450,8 +457,6 @@ struct clusterState {
      * stops claiming the slot. This prevents spreading incorrect information (that
      * source still owns the slot) using UPDATE messages. */
     unsigned char owner_not_claiming_slot[CLUSTER_SLOTS / 8];
-    /* Struct used for storing slot statistics, for all slots owned by the current shard. */
-    slotStat slot_stats[CLUSTER_SLOTS];
 };
 
 #endif // CLUSTER_LEGACY_H

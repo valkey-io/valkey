@@ -136,7 +136,6 @@ sds clusterEncodeOpenSlotsAuxField(int rdbflags);
 int clusterDecodeOpenSlotsAuxField(int rdbflags, sds s);
 static int nodeExceedsHandshakeTimeout(clusterNode *node, mstime_t now);
 void clusterCommandFlushslot(client *c);
-static clusterNode *getNodeFromLinkAndMsg(clusterLink *link, clusterMsg *hdr);
 
 /* Only primaries that own slots have voting rights.
  * Returns 1 if the node has voting rights, otherwise returns 0. */
@@ -2616,7 +2615,7 @@ int verifyGossipSectionNodeIds(clusterMsgDataGossip *g, uint16_t count) {
 void clusterProcessGossipSection(clusterMsg *hdr, clusterLink *link) {
     uint16_t count = ntohs(hdr->count);
     clusterMsgDataGossip *g = (clusterMsgDataGossip *)hdr->data.ping.gossip;
-    clusterNode *sender = getNodeFromLinkAndMsg(link, hdr);
+    clusterNode *sender = link->node ? link->node : clusterLookupNode(hdr->sender, CLUSTER_NAMELEN);
 
     /* Abort if the gossip contains invalid node IDs to avoid adding incorrect information to
      * the nodes dictionary. An invalid ID indicates memory corruption on the sender side. */

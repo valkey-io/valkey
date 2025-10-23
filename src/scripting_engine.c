@@ -11,6 +11,15 @@
 #include "server.h"
 #include "valkeymodule.h"
 
+/* First ABI version */
+#define SCRIPTING_ENGINE_ABI_VERSION_1 1
+/* Version when new compile function signature was introduced */
+#define SCRIPTING_ENGINE_ABI_VERSION_2 2
+/* Version when environment reset function was introduced */
+#define SCRIPTING_ENGINE_ABI_VERSION_3 3
+/* Version when debugger support was introduced */
+#define SCRIPTING_ENGINE_ABI_VERSION_4 4
+
 /* Module context object cache size is set to 3 because at each moment there can
  * be at most 3 module contexts in use by the scripting engine.
  *
@@ -96,11 +105,11 @@ size_t scriptingEngineManagerGetMemoryUsage(void) {
 }
 
 static inline void scriptingEngineInitializeEngineMethods(scriptingEngine *engine, engineMethods *methods) {
-    if (methods->version < 3) {
+    if (methods->version < SCRIPTING_ENGINE_ABI_VERSION_4) {
         serverLog(LL_WARNING, "Registering scripting engine '%s' with ABI version '%lu'",
                   engine->name,
                   (unsigned long)methods->version);
-        memcpy(&engine->impl.methods, methods, sizeof(engineMethodsV1));
+        memcpy(&engine->impl.methods, methods, sizeof(engineMethodsV3));
     } else {
         engine->impl.methods = *methods;
     }
@@ -265,7 +274,7 @@ compiledFunction **scriptingEngineCallCompileCode(scriptingEngine *engine,
     compiledFunction **functions = NULL;
     ValkeyModuleCtx *module_ctx = engineSetupModuleCtx(COMMON_MODULE_CTX_INDEX, engine, NULL);
 
-    if (engine->impl.methods.version == 1) {
+    if (engine->impl.methods.version == SCRIPTING_ENGINE_ABI_VERSION_1) {
         functions = engine->impl.methods.compile_code_v1(
             module_ctx,
             engine->impl.ctx,
@@ -348,7 +357,7 @@ callableLazyEnvReset *scriptingEngineCallResetEnvFunc(scriptingEngine *engine,
     ValkeyModuleCtx *module_ctx = engineSetupModuleCtx(COMMON_MODULE_CTX_INDEX, engine, NULL);
     callableLazyEnvReset *callback = NULL;
 
-    if (engine->impl.methods.version <= 2) {
+    if (engine->impl.methods.version < SCRIPTING_ENGINE_ABI_VERSION_3) {
         /* For backward compatibility with scripting engine modules that
          * implement version 1 or 2 of the scripting engine ABI, we call the
          * reset_eval_env_v1 function, which is only implemented for resetting
@@ -393,7 +402,7 @@ debuggerEnableRet scriptingEngineCallDebuggerEnable(scriptingEngine *engine,
                                                     subsystemType type,
                                                     const debuggerCommand **commands,
                                                     size_t *commands_len) {
-    if (engine->impl.methods.version < 3) {
+    if (engine->impl.methods.version < SCRIPTING_ENGINE_ABI_VERSION_4) {
         serverLog(LL_WARNING, "Scripting engine '%s' uses ABI version '%lu', which does not support debugger API",
                   scriptingEngineGetName(engine),
                   (unsigned long)engine->impl.methods.version);
@@ -420,7 +429,7 @@ debuggerEnableRet scriptingEngineCallDebuggerEnable(scriptingEngine *engine,
 
 void scriptingEngineCallDebuggerDisable(scriptingEngine *engine,
                                         subsystemType type) {
-    serverAssert(engine->impl.methods.version >= 3);
+    serverAssert(engine->impl.methods.version >= SCRIPTING_ENGINE_ABI_VERSION_4);
     serverAssert(engine->impl.methods.debugger_disable != NULL);
 
     ValkeyModuleCtx *module_ctx = engineSetupModuleCtx(COMMON_MODULE_CTX_INDEX, engine, NULL);
@@ -434,7 +443,7 @@ void scriptingEngineCallDebuggerDisable(scriptingEngine *engine,
 void scriptingEngineCallDebuggerStart(scriptingEngine *engine,
                                       subsystemType type,
                                       robj *source) {
-    serverAssert(engine->impl.methods.version >= 3);
+    serverAssert(engine->impl.methods.version >= SCRIPTING_ENGINE_ABI_VERSION_4);
     serverAssert(engine->impl.methods.debugger_start != NULL);
 
     ValkeyModuleCtx *module_ctx = engineSetupModuleCtx(COMMON_MODULE_CTX_INDEX, engine, NULL);
@@ -448,7 +457,7 @@ void scriptingEngineCallDebuggerStart(scriptingEngine *engine,
 
 void scriptingEngineCallDebuggerEnd(scriptingEngine *engine,
                                     subsystemType type) {
-    serverAssert(engine->impl.methods.version >= 3);
+    serverAssert(engine->impl.methods.version >= SCRIPTING_ENGINE_ABI_VERSION_4);
     serverAssert(engine->impl.methods.debugger_end != NULL);
 
     ValkeyModuleCtx *module_ctx = engineSetupModuleCtx(COMMON_MODULE_CTX_INDEX, engine, NULL);

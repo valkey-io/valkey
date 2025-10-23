@@ -18,7 +18,7 @@ typedef ValkeyModuleScriptingEngineCallableLazyEnvReset callableLazyEnvReset;
 typedef ValkeyModuleScriptingEngineDebuggerEnableRet debuggerEnableRet;
 typedef ValkeyModuleScriptingEngineDebuggerCommand debuggerCommand;
 typedef ValkeyModuleScriptingEngineDebuggerCommandParam debuggerCommandParam;
-typedef ValkeyModuleScriptingEngineMethodsV1 engineMethodsV1;
+typedef ValkeyModuleScriptingEngineMethodsV3 engineMethodsV3;
 typedef ValkeyModuleScriptingEngineMethods engineMethods;
 
 /*

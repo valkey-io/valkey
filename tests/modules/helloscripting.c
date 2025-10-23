@@ -706,11 +706,11 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx,
     hello_ctx->debug.enabled = 0;
 
 
-    ValkeyModuleScriptingEngineMethodsV1 methodsV1;
-    ValkeyModuleScriptingEngineMethodsV2 methodsV2;
+    ValkeyModuleScriptingEngineMethodsV3 methodsV3;
+    ValkeyModuleScriptingEngineMethodsV4 methodsV4;
 
     if (abi_version <= 2) {
-        methodsV1 = (ValkeyModuleScriptingEngineMethodsV1) {
+        methodsV3 = (ValkeyModuleScriptingEngineMethodsV3) {
             .version = abi_version,
             .compile_code = createHelloLangEngine,
             .free_function = engineFreeFunction,
@@ -720,7 +720,7 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx,
             .get_memory_info = engineGetMemoryInfo,
         };
     } else if (abi_version <= 3) {
-        methodsV1 = (ValkeyModuleScriptingEngineMethodsV1) {
+        methodsV3 = (ValkeyModuleScriptingEngineMethodsV3) {
             .version = abi_version,
             .compile_code = createHelloLangEngine,
             .free_function = engineFreeFunction,
@@ -730,7 +730,7 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx,
             .get_memory_info = engineGetMemoryInfo,
         };
     } else {
-        methodsV2 = (ValkeyModuleScriptingEngineMethodsV2) {
+        methodsV4 = (ValkeyModuleScriptingEngineMethodsV4) {
             .version = abi_version,
             .compile_code = createHelloLangEngine,
             .free_function = engineFreeFunction,
@@ -746,8 +746,8 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx,
     }
 
     ValkeyModuleScriptingEngineMethods *methods = abi_version <= 3 ?
-        (ValkeyModuleScriptingEngineMethods *)&methodsV1 :
-        (ValkeyModuleScriptingEngineMethods *)&methodsV2;
+        (ValkeyModuleScriptingEngineMethods *)&methodsV3 :
+        (ValkeyModuleScriptingEngineMethods *)&methodsV4;
 
     ValkeyModule_RegisterScriptingEngine(ctx,
                                          "HELLO",

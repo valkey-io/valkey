@@ -1219,7 +1219,7 @@ typedef void (*ValkeyModuleScriptingEngineDebuggerEndFunc)(
  */
 #define VALKEYMODULE_SCRIPTING_ENGINE_ABI_VERSION 4UL
 
-#define VALKEYMODULE_SCRIPTING_ENGINE_METHODS_STRUCT_FIELDS_V1                                 \
+#define VALKEYMODULE_SCRIPTING_ENGINE_METHODS_STRUCT_FIELDS_V3                                 \
     struct {                                                                                   \
         /* Compile code function callback. When a new script is loaded, this                   \
          * callback will be called with the script code, compiles it, and returns a            \
@@ -1254,14 +1254,14 @@ typedef void (*ValkeyModuleScriptingEngineDebuggerEndFunc)(
 typedef struct ValkeyModuleScriptingEngineMethods {
     uint64_t version; /* Version of this structure for ABI compat. */
 
-    VALKEYMODULE_SCRIPTING_ENGINE_METHODS_STRUCT_FIELDS_V1;
+    VALKEYMODULE_SCRIPTING_ENGINE_METHODS_STRUCT_FIELDS_V3;
 
-} ValkeyModuleScriptingEngineMethodsV1;
+} ValkeyModuleScriptingEngineMethodsV3;
 
-typedef struct ValkeyModuleScriptingEngineMethodsV2 {
+typedef struct ValkeyModuleScriptingEngineMethodsV4 {
     uint64_t version; /* Version of this structure for ABI compat. */
 
-    VALKEYMODULE_SCRIPTING_ENGINE_METHODS_STRUCT_FIELDS_V1;
+    VALKEYMODULE_SCRIPTING_ENGINE_METHODS_STRUCT_FIELDS_V3;
 
     /* Function callback to enable the debugger for the future execution of scripts. */
     ValkeyModuleScriptingEngineDebuggerEnableFunc debugger_enable;
@@ -1276,9 +1276,9 @@ typedef struct ValkeyModuleScriptingEngineMethodsV2 {
     ValkeyModuleScriptingEngineDebuggerEndFunc debugger_end;
 
 
-} ValkeyModuleScriptingEngineMethodsV2;
+} ValkeyModuleScriptingEngineMethodsV4;
 
-#define ValkeyModuleScriptingEngineMethods ValkeyModuleScriptingEngineMethodsV2
+#define ValkeyModuleScriptingEngineMethods ValkeyModuleScriptingEngineMethodsV4
 
 /* ------------------------- End of common defines ------------------------ */
 

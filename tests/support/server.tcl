@@ -524,11 +524,11 @@ proc start_server {options {code undefined}} {
 
     if {$start_other_server} {
         set executable $::other_server_path
-        if {![file executable $executable]} {
-            error "File not found or not executable: $executable"
-        }
     } else {
         set executable "src/valkey-server"
+    }
+    if {![file executable $executable]} {
+        error "Server executable file not found or not executable: $executable"
     }
 
     set data [split [exec cat "tests/assets/$baseconfig"] "\n"]

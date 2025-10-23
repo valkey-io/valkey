@@ -907,6 +907,11 @@ if {[llength $filtered_tests] < [llength $::all_tests]} {
     set ::all_tests $filtered_tests
 }
 
+# Don't start more test runners than the total number of tests to run.
+if {$::numclients > [llength $filtered_tests] && $::total_loops == 1} {
+    set ::numclients [llength $filtered_tests]
+}
+
 proc attach_to_replication_stream_on_connection {conn} {
     r config set repl-ping-replica-period 3600
     if {$::tls} {

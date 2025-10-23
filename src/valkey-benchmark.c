@@ -136,6 +136,7 @@ static struct config {
     struct serverConfig *server_config;
     struct hdr_histogram *latency_histogram;
     struct hdr_histogram *current_sec_latency_histogram;
+    struct hdr_histogram *rps_histogram;
     _Atomic int is_fetching_slots;
     _Atomic int is_updating_slots;
     _Atomic int slots_last_update;
@@ -1076,7 +1077,27 @@ static void createMissingClients(client c) {
     }
 }
 
-static void showLatencyReport(void) {
+static void showRPSReport(void) {
+    if (config.rps_histogram && config.rps_histogram->total_count > 0) {
+        const float target_rps = (float)config.rps;
+
+        const float avg_rps = hdr_mean(config.rps_histogram);
+        const float p0 = (float)hdr_min(config.rps_histogram);
+        const float p50 = (float)hdr_value_at_percentile(config.rps_histogram, 50.0);
+        const float p95 = (float)hdr_value_at_percentile(config.rps_histogram, 95.0);
+        const float p99 = (float)hdr_value_at_percentile(config.rps_histogram, 99.0);
+        const float p100 = (float)hdr_max(config.rps_histogram);
+
+        printf("\n");
+        printf("RPS Summary:\n");
+        printf("  target RPS: %.2f\n", target_rps);
+        printf("  RPS distribution (reqs/sec):\n");
+        printf("    %9s %9s %9s %9s %9s %9s\n", "avg", "min", "p50", "p95", "p99", "max");
+        printf("    %9.3f %9.3f %9.3f %9.3f %9.3f %9.3f\n", avg_rps, p0, p50, p95, p99, p100);
+    }
+}
+
+static void showReport(void) {
     const float reqpersec = (float)config.requests_finished / ((float)config.totlatency / 1000.0f);
     const float p0 = ((float)hdr_min(config.latency_histogram)) / 1000.0f;
     const float p50 = hdr_value_at_percentile(config.latency_histogram, 50.0) / 1000.0f;
@@ -1119,7 +1140,8 @@ static void showLatencyReport(void) {
         }
         printf("  multi-thread: %s\n", (config.num_threads ? "yes" : "no"));
         if (config.num_threads) printf("  threads: %d\n", config.num_threads);
-
+        /* Show the RPS Report */
+        showRPSReport();
         printf("\n");
         printf("Latency by percentile distribution:\n");
         struct hdr_iter iter;
@@ -1224,6 +1246,13 @@ static void benchmarkSequence(const char *title, char *cmd, int len, int seqlen)
              config.precision,                           // Number of significant figures
              &config.current_sec_latency_histogram);     // Pointer to initialise
 
+    if (config.rps > 0) {
+        hdr_init(1,
+                 config.rps * 2,
+                 config.precision,
+                 &config.rps_histogram);
+    }
+
     initPlaceholders(cmd, len);
     if (config.num_threads) initBenchmarkThreads();
 
@@ -1248,12 +1277,12 @@ static void benchmarkSequence(const char *title, char *cmd, int len, int seqlen)
     } else
         startBenchmarkThreads();
     config.totlatency = mstime() - config.start;
-
-    showLatencyReport();
+    showReport();
     freeAllClients();
     if (config.threads) freeBenchmarkThreads();
     if (config.current_sec_latency_histogram) hdr_close(config.current_sec_latency_histogram);
     if (config.latency_histogram) hdr_close(config.latency_histogram);
+    if (config.rps_histogram) hdr_close(config.rps_histogram);
 }
 
 /* Benchmark a single RESP-encoded command of length len. */
@@ -1955,6 +1984,11 @@ long long showThroughput(struct aeEventLoop *eventLoop, long long id, void *clie
     const float rps = (float)requests_finished / dt;
     const float instantaneous_dt = (float)(current_tick - config.previous_tick) / 1000.0;
     const float instantaneous_rps = (float)(requests_finished - previous_requests_finished) / instantaneous_dt;
+
+    if (config.rps_histogram) {
+        hdr_record_value(config.rps_histogram, (int64_t)instantaneous_rps);
+    }
+
     config.previous_tick = current_tick;
     atomic_store_explicit(&config.previous_requests_finished, requests_finished, memory_order_relaxed);
     printf("%*s\r", config.last_printed_bytes, " "); /* ensure there is a clean line */

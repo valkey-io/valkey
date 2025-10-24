@@ -393,10 +393,9 @@ typedef struct slotStat {
     uint64_t network_bytes_out;
 } slotStat;
 
-/* Struct used for storing slot and its associated node. */
+/* Struct used for storing slot stats and its associated node. */
 typedef struct clusterSlot {
     clusterNode *node;
-    /* Struct used for storing slot statistics, for all slots owned by the current shard. */
     slotStat stat;
 } clusterSlot;
 

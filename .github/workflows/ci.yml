@@ -11,6 +11,8 @@ on:
       - '**/*.md'
       - '**/00-RELEASENOTES'
       - '**/COPYING'
+  merge_group:
+    types: [checks_requested]
 
 concurrency:
   group: ci-${{ github.head_ref || github.ref }}

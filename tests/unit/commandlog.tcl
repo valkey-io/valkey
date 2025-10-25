@@ -363,4 +363,65 @@ start_server {tags {"commandlog"} overrides {commandlog-execution-slower-than 10
             assert_equal {test-client} [lindex $ping_cmd 5]
         }
     }
+
+    test {COMMANDLOG - special number -1 disables the command logging} {
+        r config set commandlog-execution-slower-than -1
+        r config set commandlog-request-larger-than -1
+        r config set commandlog-reply-larger-than -1
+
+        r commandlog reset slow
+        r commandlog reset large-request
+        r commandlog reset large-reply
+
+        r ping
+        assert_equal [r commandlog len slow] 0
+        assert_equal [r commandlog len large-request] 0
+        assert_equal [r commandlog len large-reply] 0
+    }
+
+    test {COMMANDLOG - special number 0 logs every command} {
+        r config set commandlog-execution-slower-than 0
+        r commandlog reset slow
+        r ping
+        set slow_resp [r commandlog get -1 slow]
+        assert_equal 2 [llength $slowlog_resp]
+        assert_equal {ping} [lindex [lindex $slow_resp 0] 3]
+        assert_equal {commandlog reset slow} [lindex [lindex $slow_resp 1] 3]
+
+        r config set commandlog-request-larger-than 0
+        r commandlog reset large-request
+        r ping
+        set large_request_resp [r commandlog get -1 large-request]
+        assert_equal 2 [llength $large_request_resp]
+        assert_equal {ping} [lindex [lindex $large_request_resp 0] 3]
+        assert_equal {commandlog reset large-request} [lindex [lindex $large_request_resp 1] 3]
+
+        r config set commandlog-reply-larger-than 0
+        r commandlog reset large-reply
+        r ping
+        set large_reply_resp [r commandlog get -1 large-reply]
+        assert_equal 2 [llength $large_reply_resp]
+        assert_equal {ping} [lindex [lindex $large_reply_resp 0] 3]
+        assert_equal {commandlog reset large-reply} [lindex [lindex $large_reply_resp 1] 3]
+    }
+
+    test {COMMANDLOG - config set / config get} {
+        r config set commandlog-request-larger-than 0
+        r config set commandlog-reply-larger-than 0
+        assert_equal [r config get commandlog-request-larger-than] {commandlog-request-larger-than 0}
+        assert_equal [r config get commandlog-reply-larger-than] {commandlog-reply-larger-than 0}
+
+        r config set commandlog-request-larger-than -1
+        r config set commandlog-reply-larger-than -1
+        assert_equal [r config get commandlog-request-larger-than] {commandlog-request-larger-than -1}
+        assert_equal [r config get commandlog-reply-larger-than] {commandlog-reply-larger-than -1}
+
+        r config set commandlog-request-larger-than 10MB
+        r config set commandlog-reply-larger-than 10MB
+        assert_equal [r config get commandlog-request-larger-than] {commandlog-request-larger-than 10485760}
+        assert_equal [r config get commandlog-reply-larger-than] {commandlog-reply-larger-than 10485760}
+
+        assert_error {ERR *} {r config set commandlog-request-larger-than -100}
+        assert_error {ERR *} {r config set commandlog-reply-larger-than -100}
+    }
 }

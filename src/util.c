@@ -388,7 +388,6 @@ int ull2string(char *dst, size_t dstlen, unsigned long long value) {
     /* Check length. */
     uint32_t length = digits10(value);
     if (length >= dstlen) goto err;
-    ;
 
     /* Null term. */
     uint32_t next = length - 1;

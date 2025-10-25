@@ -2090,13 +2090,14 @@ const char *DEL_Tips[] = {
 #ifndef SKIP_CMD_KEY_SPECS_TABLE
 /* DEL key specs */
 keySpec DEL_Keyspecs[1] = {
-{NULL,CMD_KEY_RM|CMD_KEY_DELETE,KSPEC_BS_INDEX,.bs.index={1},KSPEC_FK_RANGE,.fk.range={-1,1,0}}
+{NULL,CMD_KEY_RM|CMD_KEY_DELETE|CMD_KEY_ACCESS,KSPEC_BS_INDEX,.bs.index={1},KSPEC_FK_RANGE,.fk.range={-1,1,0}}
 };
 #endif
 
 /* DEL argument table */
 struct COMMAND_ARG DEL_Args[] = {
-{MAKE_ARG("key",ARG_TYPE_KEY,0,NULL,NULL,NULL,CMD_ARG_MULTIPLE,0,NULL)},
+{MAKE_ARG("key",ARG_TYPE_KEY,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("ext",ARG_TYPE_PURE_TOKEN,-1,"EXT",NULL,NULL,CMD_ARG_NONE,0,NULL)},
 };
 
 /********** DUMP ********************/
@@ -11936,7 +11937,7 @@ struct COMMAND_STRUCT serverCommandTable[] = {
 {MAKE_CMD("select","Changes the selected database.","O(1)","1.0.0",CMD_DOC_NONE,NULL,NULL,"connection",COMMAND_GROUP_CONNECTION,SELECT_History,0,SELECT_Tips,0,selectCommand,2,CMD_ALLOW_BUSY|CMD_LOADING|CMD_STALE|CMD_FAST,ACL_CATEGORY_CONNECTION|ACL_CATEGORY_FAST,selectDbIdArgs,SELECT_Keyspecs,0,NULL,1),.args=SELECT_Args},
 /* generic */
 {MAKE_CMD("copy","Copies the value of a key to a new key.","O(N) worst case for collections, where N is the number of nested items. O(1) for string values.","6.2.0",CMD_DOC_NONE,NULL,NULL,"generic",COMMAND_GROUP_GENERIC,COPY_History,0,COPY_Tips,0,copyCommand,-3,CMD_WRITE|CMD_DENYOOM,ACL_CATEGORY_KEYSPACE|ACL_CATEGORY_SLOW|ACL_CATEGORY_WRITE,copyDbIdArgs,COPY_Keyspecs,2,NULL,4),.args=COPY_Args},
-{MAKE_CMD("del","Deletes one or more keys.","O(N) where N is the number of keys that will be removed. When a key to remove holds a value other than a string, the individual complexity for this key is O(M) where M is the number of elements in the list, set, sorted set or hash. Removing a single key that holds a string value is O(1).","1.0.0",CMD_DOC_NONE,NULL,NULL,"generic",COMMAND_GROUP_GENERIC,DEL_History,0,DEL_Tips,2,delCommand,-2,CMD_WRITE,ACL_CATEGORY_KEYSPACE|ACL_CATEGORY_SLOW|ACL_CATEGORY_WRITE,NULL,DEL_Keyspecs,1,NULL,1),.args=DEL_Args},
+{MAKE_CMD("del","Deletes a key. If the key exists in external storage and the EXT option is provided, it will be deleted from both memory and external storage. If the key exists only in external storage and EXT is not provided, it will remain in external storage.","O(N) where N is the number of keys that will be removed. When removing a key that holds a value of another type, like a List, the time complexity is O(M) where M is the number of elements in the list, set, sorted set, or hash.","1.0.0",CMD_DOC_NONE,NULL,NULL,"generic",COMMAND_GROUP_GENERIC,DEL_History,0,DEL_Tips,2,delCommand,-2,CMD_WRITE,ACL_CATEGORY_KEYSPACE|ACL_CATEGORY_SLOW|ACL_CATEGORY_WRITE,NULL,DEL_Keyspecs,1,NULL,2),.args=DEL_Args},
 {MAKE_CMD("dump","Returns a serialized representation of the value stored at a key.","O(1) to access the key and additional O(N*M) to serialize it, where N is the number of objects composing the value and M their average size. For small string values the time complexity is thus O(1)+O(1*M) where M is small, so simply O(1).","2.6.0",CMD_DOC_NONE,NULL,NULL,"generic",COMMAND_GROUP_GENERIC,DUMP_History,0,DUMP_Tips,1,dumpCommand,2,CMD_READONLY,ACL_CATEGORY_KEYSPACE|ACL_CATEGORY_READ|ACL_CATEGORY_SLOW,NULL,DUMP_Keyspecs,1,NULL,1),.args=DUMP_Args},
 {MAKE_CMD("exists","Determines whether one or more keys exist.","O(N) where N is the number of keys to check.","1.0.0",CMD_DOC_NONE,NULL,NULL,"generic",COMMAND_GROUP_GENERIC,EXISTS_History,1,EXISTS_Tips,2,existsCommand,-2,CMD_READONLY|CMD_FAST,ACL_CATEGORY_FAST|ACL_CATEGORY_KEYSPACE|ACL_CATEGORY_READ,NULL,EXISTS_Keyspecs,1,NULL,1),.args=EXISTS_Args},
 {MAKE_CMD("expire","Sets the expiration time of a key in seconds.","O(1)","1.0.0",CMD_DOC_NONE,NULL,NULL,"generic",COMMAND_GROUP_GENERIC,EXPIRE_History,1,EXPIRE_Tips,0,expireCommand,-3,CMD_WRITE|CMD_FAST,ACL_CATEGORY_FAST|ACL_CATEGORY_KEYSPACE|ACL_CATEGORY_WRITE,NULL,EXPIRE_Keyspecs,1,NULL,3),.args=EXPIRE_Args},

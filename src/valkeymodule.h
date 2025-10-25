@@ -1066,27 +1066,9 @@ typedef size_t (*ValkeyModuleScriptingEngineGetFunctionMemoryOverheadFunc)(
  * the callback structure returned by this function.
  */
 
- typedef ValkeyModuleScriptingEngineCallableLazyEnvReset *(*ValkeyModuleScriptingEngineResetEvalFuncV2)(
+typedef ValkeyModuleScriptingEngineCallableLazyEnvReset *(*ValkeyModuleScriptingEngineResetEvalFuncV2)(
     ValkeyModuleCtx *module_ctx,
     ValkeyModuleScriptingEngineCtx *engine_ctx,
-    int async);
-
-/* The callback function called when `SCRIPT FLUSH` or `FUNCTION FLUSH` command is called.
- * The engine should reset the runtime environment used for EVAL scripts or FUNCTION scripts.
- *
- * - `module_ctx`: the module runtime context.
- *
- * - `engine_ctx`: the scripting engine runtime context.
- *
- * - `type`: the subsystem type.
- *
- * - `async`: if has value 1 then the reset is done asynchronously through
- * the callback structure returned by this function.
- */
-typedef ValkeyModuleScriptingEngineCallableLazyEnvReset *(*ValkeyModuleScriptingEngineResetEnvFunc)(
-    ValkeyModuleCtx *module_ctx,
-    ValkeyModuleScriptingEngineCtx *engine_ctx,
-    ValkeyModuleScriptingEngineSubsystemType type,
     int async);
 
 /* The callback function called when `SCRIPT FLUSH` or `FUNCTION FLUSH` command is called.
@@ -1550,6 +1532,13 @@ typedef struct ValkeyModuleExternalFilterMethods {
 } ValkeyModuleExternalFilterMethodsV1;
 
 #define ValkeyModuleExternalFilterMethods ValkeyModuleExternalFilterMethodsV1
+
+/* Deletion function result codes */
+typedef enum ValkeyModuleExternalDelResult {
+    EXTERNAL_DEL_ERROR = 0,    /* Error during deletion */
+    EXTERNAL_DEL_SUCCESS = 1,  /* Successful deletion */
+    EXTERNAL_DEL_NOT_FOUND = 2 /* Key not found, nothing done */
+} ValkeyModuleExternalDelResult;
 
 /* ------------------------- End of common defines ------------------------ */
 
@@ -2851,9 +2840,6 @@ static int ValkeyModule_Init(ValkeyModuleCtx *ctx, const char *name, int ver, in
     VALKEYMODULE_GET_API(ScriptingEngineDebuggerFlushLogs);
     VALKEYMODULE_GET_API(ScriptingEngineDebuggerProcessCommands);
     VALKEYMODULE_GET_API(ACLCheckKeyPrefixPermissions);
-    VALKEYMODULE_GET_API(GetExternalFilterState);
-    VALKEYMODULE_GET_API(SetExternalFilterState);
-    VALKEYMODULE_GET_API(GetExternalFilterTimeout);
 
     if (ValkeyModule_IsModuleNameBusy && ValkeyModule_IsModuleNameBusy(name)) return VALKEYMODULE_ERR;
     ValkeyModule_SetModuleAttribs(ctx, name, ver, apiver);

@@ -1,7 +1,7 @@
 {
     "DEL": {
-        "summary": "Deletes one or more keys.",
-        "complexity": "O(N) where N is the number of keys that will be removed. When a key to remove holds a value other than a string, the individual complexity for this key is O(M) where M is the number of elements in the list, set, sorted set or hash. Removing a single key that holds a string value is O(1).",
+        "summary": "Deletes a key. If the key exists in external storage and the EXT option is provided, it will be deleted from both memory and external storage. If the key exists only in external storage and EXT is not provided, it will remain in external storage.",
+        "complexity": "O(N) where N is the number of keys that will be removed. When removing a key that holds a value of another type, like a List, the time complexity is O(M) where M is the number of elements in the list, set, sorted set, or hash.",
         "group": "generic",
         "since": "1.0.0",
         "arity": -2,
@@ -22,7 +22,8 @@
             {
                 "flags": [
                     "RM",
-                    "DELETE"
+                    "DELETE",
+                    "ACCESS"
                 ],
                 "begin_search": {
                     "index": {
@@ -47,8 +48,12 @@
             {
                 "name": "key",
                 "type": "key",
-                "key_spec_index": 0,
-                "multiple": true
+                "key_spec_index": 0
+            },
+            {
+                "name": "ext",
+                "type": "pure-token",
+                "token": "EXT"
             }
         ]
     }

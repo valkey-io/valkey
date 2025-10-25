@@ -501,3 +501,289 @@ start_cluster 1 0 [list overrides [list "ext-data-mode" kv "loglevel" debug] tag
         assert_equal [lsort $keys] [list k1 k2]
     }
 }
+
+# Test external storage deletion functionality
+# Tests both sharded and non-sharded versions of DEL command with EXT option
+
+# Test cases:
+# 1) deleted key is missing, no error
+# 2) deleted key exists in memory, deleted without ext flag, deletion is successful, no error
+# 3) deleted key exists in external storage, deleted without ext flag, deletion doesn't touch external storage, no error
+# 4) deleted key exists in external storage and memory (somehow), deleted without ext flag, deletion doesn't touch external storage, no error
+# 5) deleted key exists in external storage and memory (somehow), deleted with ext flag, key is deleted from both memory and external storage, no error
+# 6) deleted key exists in external storage, deleted with ext flag, deletion is successful, no error
+
+### Non-sharded
+start_server {
+    overrides {
+        "ext-data-mode" "kv"
+        "ext-data-store-by-size" "0"
+        "loglevel" "debug"
+    }
+} {
+    # Load module once for all tests in this block
+    r module load $extdatamodule1
+    # Initialize external data once for all tests
+    r external_data INIT db0 helloextdata1
+
+    test "DEL with EXT - Non-sharded - Test case 1: deleted key is missing, no error" {
+        assert_equal 0 [r del missing_key_test1]
+    }
+
+    test "DEL with EXT - Non-sharded - Test case 2: deleted key exists in memory, deleted without ext flag, deletion is successful, no error" {
+        r set mem_key_test2 "mem_value"
+        assert_equal "mem_value" [r get mem_key_test2]
+        assert_equal 1 [r del mem_key_test2]
+        assert_equal "" [r get mem_key_test2]
+    }
+
+    test "DEL with EXT - Non-sharded - Test case 3: deleted key exists in external storage, deleted without ext flag, deletion doesn't touch external storage, no error" {
+        r select 0
+        # Set key to external storage
+        r set ext_key_test3 "ext_value" ext
+        assert_equal "ext_value" [r get ext_key_test3 ext]
+        
+        # Delete without EXT flag - key not in memory, so DEL returns 0
+        assert_equal 0 [r del ext_key_test3]
+        assert_equal "" [r get ext_key_test3]
+        assert_equal "ext_value" [r get ext_key_test3 ext]
+    }
+
+    test "DEL with EXT - Non-sharded - Test case 4: deleted key exists in external storage and memory (somehow), deleted without ext flag, deletion doesn't touch external storage, no error" {
+        r select 0
+        # Set key to external storage
+        r set dual_key_test4 "dual_value" ext
+        assert_equal "dual_value" [r get dual_key_test4 ext]
+        
+        # Also put it in memory (simulating the "somehow" scenario)
+        r set dual_key_test4 "dual_value"
+        assert_equal "dual_value" [r get dual_key_test4]
+        
+        # Delete without EXT flag - should only delete from memory, not external storage
+        assert_equal 1 [r del dual_key_test4]
+        assert_equal "" [r get dual_key_test4]
+        assert_equal "dual_value" [r get dual_key_test4 ext]
+    }
+
+    test "DEL with EXT - Non-sharded - Test case 5: deleted key exists in external storage and memory, deleted with ext flag, key is deleted from both memory and external storage, no error" {
+        r select 0
+        # Set key to external storage
+        r set dual_key2_test5 dual_value2 ext
+        assert_equal dual_value2 [r get dual_key2_test5 ext]
+        
+        # Put it in memory
+        r set dual_key2_test5 dual_value2
+        assert_equal dual_value2 [r get dual_key2_test5]
+        
+        # Delete with EXT flag - should delete from both memory and external storage
+        assert_equal 1 [r del dual_key2_test5 ext]
+        
+        # Test getting data from storage and filter using debug commands
+        assert_equal "" [r external_data debug db0 storage get dual_key2_test5]
+        assert_equal 0 [r external_data debug db0 filter get dual_key2_test5]
+        
+        assert_equal "" [r get dual_key2_test5]
+        assert_equal "" [r get dual_key2_test5 ext]
+    }
+
+    test "DEL with EXT - Non-sharded - Test case 6: deleted key exists in external storage, deleted with ext flag, deletion is successful, no error" {
+        r select 0
+        # Set key to external storage
+        r set ext_key2_test6 "ext_value2" ext
+        assert_equal "ext_value2" [r get ext_key2_test6 ext]
+        
+        # Delete with EXT flag - should delete from both memory and external storage
+        assert_equal 1 [r del ext_key2_test6 ext]
+        assert_equal "" [r get ext_key2_test6]
+        assert_equal "" [r get ext_key2_test6 ext]
+    }
+
+    test "DEL with EXT - Non-sharded - Multiple keys with external storage" {
+        r select 0
+        # Set multiple keys to external storage
+        r set multi_key1_test7 "value1" ext
+        r set multi_key2_test7 "value2" ext
+        r set multi_key3_test7 "value3" ext
+        
+        # Verify they exist in external storage
+        assert_equal "value1" [r get multi_key1_test7 ext]
+        assert_equal "value2" [r get multi_key2_test7 ext]
+        assert_equal "value3" [r get multi_key3_test7 ext]
+        
+        # Delete multiple keys with EXT flag
+        assert_equal 2 [r del multi_key1_test7 multi_key2_test7 ext]
+        
+        # Verify deletion
+        assert_equal "" [r get multi_key1_test7]
+        assert_equal "" [r get multi_key1_test7 ext]
+        assert_equal "" [r get multi_key2_test7]
+        assert_equal "" [r get multi_key2_test7 ext]
+        assert_equal "" [r get multi_key3_test7]
+        assert_equal "value3" [r get multi_key3_test7 ext]
+    }
+
+    test "DEL with EXT - Non-sharded - Different databases" {
+        r select 0
+        # Initialize external data for db1
+        r external_data INIT db1 helloextdata1
+        
+        # Set keys in different databases
+        r set db0_key_test8 "db0_value" ext
+        r select 1
+        r set db1_key_test8 "db1_value" ext
+        
+        # Verify they exist in their respective databases
+        r select 0
+        assert_equal "db0_value" [r get db0_key_test8 ext]
+        assert_equal "" [r get db1_key_test8 ext]
+        
+        r select 1
+        assert_equal "" [r get db0_key_test8 ext]
+        assert_equal "db1_value" [r get db1_key_test8 ext]
+        
+        # Delete from db0
+        r select 0
+        assert_equal 1 [r del db0_key_test8 ext]
+        assert_equal "" [r get db0_key_test8]
+        assert_equal "" [r get db0_key_test8 ext]
+        
+        # Verify db1 key is still there
+        r select 1
+        assert_equal "db1_value" [r get db1_key_test8 ext]
+    }
+}
+
+### Sharded
+start_server {
+    overrides {
+        "ext-data-mode" "kv"
+        "ext-data-store-by-size" "0"
+    }
+} {
+    # Load module once for all tests in this block
+    r module load $extdatamodule1
+    # Initialize external data once for all tests
+    r external_data INIT db0 helloextdata1
+
+    test "DEL with EXT - Sharded - Test case 1: deleted key is missing, no error" {
+        assert_equal 0 [r del missing_key]
+    }
+
+    test "DEL with EXT - Sharded - Test case 2: deleted key exists in memory, deleted without ext flag, deletion is successful, no error" {
+        r select 0
+        r set mem_key "mem_value"
+        assert_equal "mem_value" [r get mem_key]
+        assert_equal 1 [r del mem_key]
+        assert_equal "" [r get mem_key]
+    }
+
+    test "DEL with EXT - Sharded - Test case 3: deleted key exists in external storage, deleted without ext flag, deletion doesn't touch external storage, no error" {
+        r select 0
+        # Set key to external storage
+        r set ext_key "ext_value" ext
+        assert_equal "ext_value" [r get ext_key ext]
+        
+        # Delete without EXT flag - key not in memory, so DEL returns 0
+        assert_equal 0 [r del ext_key]
+        assert_equal "" [r get ext_key]
+        assert_equal "ext_value" [r get ext_key ext]
+    }
+
+    test "DEL with EXT - Sharded - Test case 4: deleted key exists in external storage and memory (somehow), deleted without ext flag, deletion doesn't touch external storage, no error" {
+        r select 0
+        # Set key to external storage
+        r set dual_key "dual_value" ext
+        assert_equal "dual_value" [r get dual_key ext]
+        
+        # Also put it in memory (simulating the "somehow" scenario)
+        r set dual_key "dual_value"
+        assert_equal "dual_value" [r get dual_key]
+        
+        # Delete without EXT flag - should only delete from memory, not external storage
+        assert_equal 1 [r del dual_key]
+        assert_equal "" [r get dual_key]
+        assert_equal "dual_value" [r get dual_key ext]
+    }
+
+    test "DEL with EXT - Sharded - Test case 5: deleted key exists in external storage and memory, deleted with ext flag, key is deleted from both memory and external storage, no error" {
+        r select 0
+        # Set key to external storage
+        r set dual_key2 "dual_value2" ext
+        assert_equal "dual_value2" [r get dual_key2 ext]
+        
+        # Put it in memory
+        r set dual_key2 "dual_value2"
+        assert_equal "dual_value2" [r get dual_key2]
+        
+        # Delete with EXT flag - should delete from both memory and external storage
+        assert_equal 1 [r del dual_key2 ext]
+        assert_equal "" [r get dual_key2]
+        assert_equal "" [r get dual_key2 ext]
+    }
+
+    test "DEL with EXT - Sharded - Test case 6: deleted key exists in external storage, deleted with ext flag, deletion is successful, no error" {
+        r select 0
+        # Set key to external storage
+        r set ext_key2 "ext_value2" ext
+        assert_equal "ext_value2" [r get ext_key2 ext]
+        
+        # Delete with EXT flag - should delete from both memory and external storage
+        assert_equal 1 [r del ext_key2 ext]
+        assert_equal "" [r get ext_key2]
+        assert_equal "" [r get ext_key2 ext]
+    }
+
+    test "DEL with EXT - Sharded - Multiple keys with external storage" {
+        r select 0
+        # Set multiple keys to external storage
+        r set multi_key1 "value1" ext
+        r set multi_key2 "value2" ext
+        r set multi_key3 "value3" ext
+        
+        # Verify they exist in external storage
+        assert_equal "value1" [r get multi_key1 ext]
+        assert_equal "value2" [r get multi_key2 ext]
+        assert_equal "value3" [r get multi_key3 ext]
+        
+        # Delete multiple keys with EXT flag
+        assert_equal 2 [r del multi_key1 multi_key2 ext]
+        
+        # Verify deletion
+        assert_equal "" [r get multi_key1]
+        assert_equal "" [r get multi_key1 ext]
+        assert_equal "" [r get multi_key2]
+        assert_equal "" [r get multi_key2 ext]
+        assert_equal "" [r get multi_key3]
+        assert_equal "value3" [r get multi_key3 ext]
+    }
+
+    test "DEL with EXT - Sharded - Different databases" {
+        r select 0
+        # Initialize external data for db1
+        r external_data INIT db1 helloextdata1
+        
+        # Set keys in different databases
+        r set db0_key "db0_value" ext
+        r select 1
+        r set db1_key "db1_value" ext
+        
+        # Verify they exist in their respective databases
+        r select 0
+        assert_equal "db0_value" [r get db0_key ext]
+        assert_equal "" [r get db1_key ext]
+        
+        r select 1
+        assert_equal "" [r get db0_key ext]
+        assert_equal "db1_value" [r get db1_key ext]
+        
+        # Delete from db0
+        r select 0
+        assert_equal 1 [r del db0_key ext]
+        assert_equal "" [r get db0_key]
+        assert_equal "" [r get db0_key ext]
+        
+        # Verify db1 key is still there
+        r select 1
+        assert_equal "db1_value" [r get db1_key ext]
+    }
+}

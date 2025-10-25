@@ -10,6 +10,8 @@
 typedef struct externalDataModule externalDataModule;
 typedef struct externalDataModuleInstance externalDataModuleInstance;
 typedef struct externalDbData externalDbData;
+typedef struct externalDataCtx externalDataCtx;
+typedef struct extStorageInstanceIterator externalStorageInstanceIterator;
 
 typedef struct ValkeyModule ValkeyModule;
 /* ValkeyModule type aliases for external storage structs and types */
@@ -48,5 +50,17 @@ int externalFilterIsIn(int id, void *key);
 int externalDataInit(void);
 int externalDataFind(int id, void *key, void **found);
 int externalDataWrite(int id, void *key, void *value);
+
+/* Access to external data context */
+externalDataCtx *getCurrentExternalDataCtx(void);
+
+/* Delete a key from external storage for a specific database */
+int externalStorageDeleteKey(int dbid, robj *key, robj **value);
+
+/* Delete a key from external filter for a specific database */
+int externalFilterDeleteKey(int dbid, robj *key, robj **value);
+
+/* Utility functions */
+sds getDBName(int db_num);
 
 #endif /* __EXTERNAL_DATA_H_ */

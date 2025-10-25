@@ -356,7 +356,10 @@ void externalDataDropCommand(client *c) {
     zfree(dbData->module_instance->storage_ctx);
     zfree(dbData->module_instance->filter_ctx);
     dbData->module_instance->external_module->used_count--;
-    zfree(dbData->module_instance->module_ctx);
+    /* Free the module context - this will flush any pending logs */
+    if (dbData->module_instance->module_ctx != NULL) {
+        moduleFreeContext(dbData->module_instance->module_ctx);
+    }
     zfree(dbData->module_instance);
 
     zfree(dbData);
@@ -406,10 +409,10 @@ int externalStorageCallDelFunc(externalDataModuleInstance *mi, int dbid, robj *k
 
     serverAssert(mi->external_module != NULL && mi->storage_ctx != NULL && mi->module_ctx != NULL && key != NULL);
     ValkeyModuleKeyOptCtx key_ctx = {key, NULL, dbid, -1};
-    int exists = mi->external_module->storage_methods.del(mi->module_ctx, mi->storage_ctx, &key_ctx, value);
+    int result = mi->external_module->storage_methods.del(mi->module_ctx, mi->storage_ctx, &key_ctx, value);
 
     teardownModuleCtx(mi);
-    return exists;
+    return result == EXTERNAL_DEL_SUCCESS;
 }
 
 void externalStorageCallSetReadonlyFunc(externalDataModuleInstance *si) {
@@ -456,10 +459,10 @@ int externalFilterCallDelFunc(externalDataModuleInstance *fi, int dbid, robj *ke
     setupModuleCtx(fi);
 
     ValkeyModuleKeyOptCtx key_ctx = {key, NULL, dbid, -1};
-    int exists = fi->external_module->filter_methods.del(fi->module_ctx, fi->filter_ctx, &key_ctx, value);
+    int result = fi->external_module->filter_methods.del(fi->module_ctx, fi->filter_ctx, &key_ctx, value);
 
     teardownModuleCtx(fi);
-    return exists;
+    return result == EXTERNAL_DEL_SUCCESS;
 }
 
 void externalFilterCallSetReadonlyFunc(externalDataModuleInstance *fi) {
@@ -559,11 +562,22 @@ void externalDataDebugCommand(client *c) {
                 addReplyErrorFormat(c, "%s set failed", (char *)objectGetVal(key));
                 return;
             }
+        } else if (!strcasecmp(objectGetVal(c->argv[j]), "get")) {
+            robj *key = c->argv[++j];
+            void *found = NULL;
+            int exists = externalStorageCallGetFunc(dbData->module_instance, dbId, key, &found);
+            if (exists && found != NULL) {
+                addReplyBulkCString(c, objectGetVal((robj *)found));
+                decrRefCount((robj *)found);
+            } else {
+                addReplyBulkCString(c, "");
+            }
+            return;
         } else if (!strcasecmp(objectGetVal(c->argv[j]), "del")) {
             robj *key = c->argv[++j];
             robj *value = NULL;
-            int exists = externalStorageCallDelFunc(dbData->module_instance, dbId, key, &value);
-            if (exists && value != NULL) {
+            int deleted = externalStorageCallDelFunc(dbData->module_instance, dbId, key, &value);
+            if (deleted && value != NULL) {
                 addReplyBulkCString(c, objectGetVal(value));
             } else {
                 addReplyBulkCString(c, "");
@@ -589,11 +603,16 @@ void externalDataDebugCommand(client *c) {
                 addReplyErrorFormat(c, "%s set failed", (char *)objectGetVal(key));
                 return;
             }
+        } else if (!strcasecmp(objectGetVal(c->argv[j]), "get")) {
+            robj *key = c->argv[++j];
+            int exists = externalFilterIsIn(dbId, key);
+            addReplyLongLong(c, exists);
+            return;
         } else if (!strcasecmp(objectGetVal(c->argv[j]), "del")) {
             robj *key = c->argv[++j];
             robj *value = NULL;
-            int exists = externalFilterCallDelFunc(dbData->module_instance, dbId, key, &value);
-            if (exists && value != NULL) {
+            int deleted = externalFilterCallDelFunc(dbData->module_instance, dbId, key, &value);
+            if (deleted && value != NULL) {
                 addReplyBulkCString(c, objectGetVal(value));
             } else {
                 addReplyBulkCString(c, "0");
@@ -671,4 +690,43 @@ int externalDataInit(void) {
     }
 
     return C_OK;
+}
+
+/* Get current external data context */
+externalDataCtx *getCurrentExternalDataCtx(void) {
+    return curr_external_data_ctx;
+}
+
+/* Delete a key from external storage for a specific database */
+int externalStorageDeleteKey(int dbid, robj *key, robj **value) {
+    externalDataCtx *ctx = getCurrentExternalDataCtx();
+    if (!ctx) return 0;
+
+    sds db_name = getDBName(dbid);
+    dictEntry *db = dictFind(ctx->dbdata, db_name);
+    sdsfree(db_name);
+    if (!db) return 0;
+
+    externalDbData *dbData = dictGetVal(db);
+    externalDataModuleInstance *mi = dbData->module_instance;
+    if (!mi) return 0;
+
+    return externalStorageCallDelFunc(mi, dbid, key, value);
+}
+
+/* Delete a key from external filter for a specific database */
+int externalFilterDeleteKey(int dbid, robj *key, robj **value) {
+    externalDataCtx *ctx = getCurrentExternalDataCtx();
+    if (!ctx) return 0;
+
+    sds db_name = getDBName(dbid);
+    dictEntry *db = dictFind(ctx->dbdata, db_name);
+    sdsfree(db_name);
+    if (!db) return 0;
+
+    externalDbData *dbData = dictGetVal(db);
+    externalDataModuleInstance *mi = dbData->module_instance;
+    if (!mi) return 0;
+
+    return externalFilterCallDelFunc(mi, dbid, key, value);
 }

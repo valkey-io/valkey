@@ -37,6 +37,7 @@
 #include "io_threads.h"
 #include "module.h"
 #include "external_data.h"
+
 #include "vector.h"
 #include "expire.h"
 
@@ -166,10 +167,6 @@ robj *lookupKeyWriteWithFlags(serverDb *db, robj *key, int flags) {
 }
 
 robj *lookupKeyWrite(serverDb *db, robj *key) {
-    return lookupKeyWriteWithFlags(db, key, LOOKUP_EXTDATA);
-}
-
-robj *lookupExtKeyWrite(serverDb *db, robj *key) {
     return lookupKeyWriteWithFlags(db, key, LOOKUP_NONE);
 }
 
@@ -888,28 +885,68 @@ void flushallCommand(client *c) {
 }
 
 /* This command implements DEL and UNLINK. */
-void delGenericCommand(client *c, int lazy) {
+void delGenericCommand(client *c, int lazy, int ext) {
     int numdel = 0, j;
 
     for (j = 1; j < c->argc; j++) {
         if (expireIfNeeded(c->db, c->argv[j], NULL, 0) == KEY_DELETED) continue;
-        int deleted = lazy ? dbAsyncDelete(c->db, c->argv[j]) : dbSyncDelete(c->db, c->argv[j]);
-        if (deleted) {
+
+        int ext_deleted = 0;
+        robj *key = c->argv[j];
+        if (ext && isExtDataOn()) {
+            /* When EXT option is provided, always try to delete from external storage and filter */
+            /* Don't check externalDataFind first, as it requires both filter and storage to exist */
+            robj *value = NULL;
+            int storage_deleted = externalStorageDeleteKey(c->db->id, key, &value);
+            if (value) {
+                decrRefCount(value);
+            }
+
+            /* Also delete from external filter */
+            robj *filter_value = NULL;
+            int filter_deleted = externalFilterDeleteKey(c->db->id, key, &filter_value);
+            if (filter_value) {
+                decrRefCount(filter_value);
+            }
+
+            /* Consider external deletion successful if either storage or filter deletion succeeded */
+            ext_deleted = storage_deleted || filter_deleted;
+        }
+
+        /* Delete from memory using the standard deletion */
+        int mem_deleted = lazy ? dbAsyncDelete(c->db, key) : dbSyncDelete(c->db, key);
+
+        if (mem_deleted) {
             signalModifiedKey(c, c->db, c->argv[j]);
             notifyKeyspaceEvent(NOTIFY_GENERIC, "del", c->argv[j], c->db->id);
             server.dirty++;
-            numdel++;
+        }
+
+        /* Count as deleted if either memory or external deletion succeeded (when using EXT flag) */
+        if (ext) {
+            if (mem_deleted || ext_deleted) numdel++;
+        } else {
+            if (mem_deleted) numdel++;
         }
     }
     addReplyLongLong(c, numdel);
 }
 
 void delCommand(client *c) {
-    delGenericCommand(c, server.lazyfree_lazy_user_del);
+    int ext = 0;
+    /* Check if the last argument is "ext" flag */
+    if (c->argc > 1 && !strcasecmp(objectGetVal(c->argv[c->argc - 1]), "ext")) {
+        if (!isExtDataOn()) {
+            addReplyError(c, EXTDATAOFFERRMSG);
+            return;
+        }
+        ext = 1;
+    }
+    delGenericCommand(c, server.lazyfree_lazy_user_del, ext);
 }
 
 void unlinkCommand(client *c) {
-    delGenericCommand(c, 1);
+    delGenericCommand(c, 1, 0);
 }
 
 /* EXISTS key1 key2 ... key_N.

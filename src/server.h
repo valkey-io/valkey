@@ -1719,10 +1719,6 @@ typedef struct {
                                      disk, we need to persist it immediately. */
 } aofManifest;
 
-/* forward declaration for external data */
-typedef struct externalDataCtx externalDataCtx;
-typedef struct extStorageInstanceIterator externalStorageInstanceIterator;
-
 /*-----------------------------------------------------------------------------
  * Global server state
  *----------------------------------------------------------------------------*/
@@ -3706,7 +3702,6 @@ robj *setExpire(client *c, serverDb *db, robj *key, long long when);
 int checkAlreadyExpired(long long when);
 robj *lookupKeyRead(serverDb *db, robj *key);
 robj *lookupKeyWrite(serverDb *db, robj *key);
-robj *lookupExtKeyWrite(serverDb *db, robj *key);
 robj *lookupKeyReadOrReply(client *c, robj *key, robj *reply);
 robj *lookupExtKeyReadOrReply(client *c, robj *key, robj *reply);
 robj *lookupKeyWriteOrReply(client *c, robj *key, robj *reply);

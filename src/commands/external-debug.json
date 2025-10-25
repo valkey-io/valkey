@@ -52,6 +52,17 @@
                                         ]
                                     },
                                     {
+                                        "name": "get",
+                                        "type": "pure-token",
+                                        "token": "GET",
+                                        "arguments": [
+                                            {
+                                                "name": "key",
+                                                "type": "string"
+                                            }
+                                        ]
+                                    },
+                                    {
                                         "name": "del",
                                         "type": "pure-token",
                                         "token": "DEL",
@@ -89,6 +100,17 @@
                                         "name": "set",
                                         "type": "pure-token",
                                         "token": "SET",
+                                        "arguments": [
+                                            {
+                                                "name": "key",
+                                                "type": "string"
+                                            }
+                                        ]
+                                    },
+                                    {
+                                        "name": "get",
+                                        "type": "pure-token",
+                                        "token": "GET",
                                         "arguments": [
                                             {
                                                 "name": "key",

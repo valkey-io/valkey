@@ -56,7 +56,7 @@
  * function names. For details, see the script src/modules/gendoc.rb.
  * -------------------------------------------------------------------------- */
 
-#include "server.h"
+#include "external_data.h"
 #include "cluster.h"
 #include "commandlog.h"
 #include "rdb.h"
@@ -75,7 +75,6 @@
 #include <sys/wait.h>
 #include <fcntl.h>
 #include <string.h>
-#include "external_data.h"
 
 /* --------------------------------------------------------------------------
  * Private data structures used by the modules system. Those are data
@@ -13835,6 +13834,62 @@ ValkeyModuleScriptingEngineExecutionState VM_GetFunctionExecutionState(
     return ret == SCRIPT_CONTINUE ? VMSE_STATE_EXECUTING : VMSE_STATE_KILLED;
 }
 
+/* Function to send string messages to the client during a debug session.
+ * These messages are buffered in memory, and are only sent to the client when
+ * `ValkeyModule_VM_ScriptingEngineDebuggerFlushLogs` is called.
+ *
+ * - `msg`: the message to send.
+ *
+ * - `truncate`: if set to 1, the message will be truncated to the maximum length
+ *   configured in the debugger settings.
+ */
+void VM_ScriptingEngineDebuggerLog(ValkeyModuleString *msg, int truncate) {
+    if (truncate) {
+        scriptingEngineDebuggerLogWithMaxLen(msg);
+    } else {
+        scriptingEngineDebuggerLog(msg);
+    }
+}
+
+/* Function to log a RESP reply C string as debugger output, in a human readable
+ * format.
+ *
+ * If the resulting string is longer than the maximum text length, configured in
+ * the debugger settings, plus a few more chars used as prefix, it gets truncated.
+ */
+void VM_ScriptingEngineDebuggerLogRespReplyStr(const char *reply) {
+    scriptingEngineDebuggerLogRespReplyStr(reply);
+}
+
+/* Function to log a RESP reply as debugger output, in a human readable format.
+ *
+ * If the resulting string is longer than the maximum text length, configured in
+ * the debugger settings, plus a few more chars used as prefix, it gets truncated.
+ */
+void VM_ScriptingEngineDebuggerLogRespReply(ValkeyModuleCallReply *reply) {
+    size_t proto_len;
+    const char *proto = callReplyGetProto(reply, &proto_len);
+    scriptingEngineDebuggerLogRespReplyStr(proto);
+}
+
+/* Function to send all debugger messages in the memory buffer written with the
+ * `ValkeyModule_ScriptingEngineDebuggerLog` function.
+ */
+void VM_ScriptingEngineDebuggerFlushLogs(void) {
+    scriptingEngineDebuggerFlushLogs();
+}
+
+/* Function used to process debugger commands sent by the client.
+ *
+ * This function in conjunction with `ValkeyModule_ScriptingEngineDebuggerLog` and
+ * `ValkeyModule_ScriptingEngineDebuggerFlushLogs` allows to implement an
+ * interactive debugging session for scripts executed by the scripting engine.
+ */
+void VM_ScriptingEngineDebuggerProcessCommands(int *client_disconnected,
+                                               ValkeyModuleString **err) {
+    scriptingEngineDebuggerProcessCommands(client_disconnected, err);
+}
+
 /* Registers a new external data module in the server.
  *
  * - `module_ctx`: the module context object.
@@ -13926,62 +13981,6 @@ ValkeyModuleExternalStorageState VM_SetExternalStorageState(
 unsigned int VM_GetExternalStorageTimeout(
     ValkeyModuleExternalStorageCtx *storage_ctx) {
     return storage_ctx->ext_data_timeout;
-}
-
-/* Function to send string messages to the client during a debug session.
- * These messages are buffered in memory, and are only sent to the client when
- * `ValkeyModule_VM_ScriptingEngineDebuggerFlushLogs` is called.
- *
- * - `msg`: the message to send.
- *
- * - `truncate`: if set to 1, the message will be truncated to the maximum length
- *   configured in the debugger settings.
- */
-void VM_ScriptingEngineDebuggerLog(ValkeyModuleString *msg, int truncate) {
-    if (truncate) {
-        scriptingEngineDebuggerLogWithMaxLen(msg);
-    } else {
-        scriptingEngineDebuggerLog(msg);
-    }
-}
-
-/* Function to log a RESP reply C string as debugger output, in a human readable
- * format.
- *
- * If the resulting string is longer than the maximum text length, configured in
- * the debugger settings, plus a few more chars used as prefix, it gets truncated.
- */
-void VM_ScriptingEngineDebuggerLogRespReplyStr(const char *reply) {
-    scriptingEngineDebuggerLogRespReplyStr(reply);
-}
-
-/* Function to log a RESP reply as debugger output, in a human readable format.
- *
- * If the resulting string is longer than the maximum text length, configured in
- * the debugger settings, plus a few more chars used as prefix, it gets truncated.
- */
-void VM_ScriptingEngineDebuggerLogRespReply(ValkeyModuleCallReply *reply) {
-    size_t proto_len;
-    const char *proto = callReplyGetProto(reply, &proto_len);
-    scriptingEngineDebuggerLogRespReplyStr(proto);
-}
-
-/* Function to send all debugger messages in the memory buffer written with the
- * `ValkeyModule_ScriptingEngineDebuggerLog` function.
- */
-void VM_ScriptingEngineDebuggerFlushLogs(void) {
-    scriptingEngineDebuggerFlushLogs();
-}
-
-/* Function used to process debugger commands sent by the client.
- *
- * This function in conjunction with `ValkeyModule_ScriptingEngineDebuggerLog` and
- * `ValkeyModule_ScriptingEngineDebuggerFlushLogs` allows to implement an
- * interactive debugging session for scripts executed by the scripting engine.
- */
-void VM_ScriptingEngineDebuggerProcessCommands(int *client_disconnected,
-                                               ValkeyModuleString **err) {
-    scriptingEngineDebuggerProcessCommands(client_disconnected, err);
 }
 
 /* MODULE command.
@@ -14934,6 +14933,11 @@ void moduleRegisterCoreAPI(void) {
     REGISTER_API(RegisterScriptingEngine);
     REGISTER_API(UnregisterScriptingEngine);
     REGISTER_API(GetFunctionExecutionState);
+    REGISTER_API(ScriptingEngineDebuggerLog);
+    REGISTER_API(ScriptingEngineDebuggerLogRespReplyStr);
+    REGISTER_API(ScriptingEngineDebuggerLogRespReply);
+    REGISTER_API(ScriptingEngineDebuggerFlushLogs);
+    REGISTER_API(ScriptingEngineDebuggerProcessCommands);
     REGISTER_API(RegisterExternalDataModule);
     REGISTER_API(UnregisterExternalDataModule);
     REGISTER_API(GetExternalStorageState);
@@ -14942,10 +14946,5 @@ void moduleRegisterCoreAPI(void) {
     REGISTER_API(GetExternalFilterState);
     REGISTER_API(SetExternalFilterState);
     REGISTER_API(GetExternalFilterTimeout);
-    REGISTER_API(ScriptingEngineDebuggerLog);
-    REGISTER_API(ScriptingEngineDebuggerLogRespReplyStr);
-    REGISTER_API(ScriptingEngineDebuggerLogRespReply);
-    REGISTER_API(ScriptingEngineDebuggerFlushLogs);
-    REGISTER_API(ScriptingEngineDebuggerProcessCommands);
     REGISTER_API(ACLCheckKeyPrefixPermissions);
 }

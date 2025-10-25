@@ -131,31 +131,40 @@ static int storageDelFunction(ValkeyModuleCtx *module_ctx,
     ValkeyModule_Assert(state == VMES_STATE_READONLY || state == VMES_STATE_READY);
     if (state == VMES_STATE_READONLY) {
         ValkeyModule_ReplyWithError(module_ctx, "ERR External storage readonly");
-        return 0;
+        return EXTERNAL_DEL_ERROR;
     }
 
     int dbid = ValkeyModule_GetDbIdFromOptCtx(key_ctx);
     const ValkeyModuleString *key = ValkeyModule_GetKeyNameFromOptCtx(key_ctx);
-    ValkeyModuleString *value = 
+    ValkeyModule_Log(module_ctx, "debug", "storageDelFunction: dbid=%d, key=%s",
+                     dbid, ValkeyModule_StringPtrLen(key, NULL));
+    
+    ValkeyModuleString *value =
         ValkeyModule_DictGet(storage_mem_pool[dbid], (ValkeyModuleString *)key, NULL);
     
     if (!value) {
+        ValkeyModule_Log(module_ctx, "debug", "storageDelFunction: key not found in storage");
         ValkeyModule_ReplyWithSimpleString(module_ctx, "OK");
-        return 1;
+        return EXTERNAL_DEL_NOT_FOUND;
     }
 
+    ValkeyModule_Log(module_ctx, "debug", "storageDelFunction: found value, attempting delete");
     if (ValkeyModule_DictDel(storage_mem_pool[dbid], (ValkeyModuleString *)key, NULL) != VALKEYMODULE_OK) {
+        ValkeyModule_Log(module_ctx, "debug", "storageDelFunction: delete failed");
         ValkeyModule_ReplyWithErrorFormat(module_ctx, "ERR Failed to del key %s",
                                           ValkeyModule_StringPtrLen(key, NULL));
-        return 0;
+        return EXTERNAL_DEL_ERROR;
     }
 
+    ValkeyModule_Log(module_ctx, "debug", "storageDelFunction: delete successful");
     if (found != NULL) {
         *found = value;
+    } else {
+        ValkeyModule_FreeString(NULL, value);
     }
 
     ValkeyModule_ReplyWithSimpleString(module_ctx, "OK");
-    return 1;
+    return EXTERNAL_DEL_SUCCESS;
 }
 
 static void storageSetReadonlyFunction(ValkeyModuleCtx *module_ctx,
@@ -248,28 +257,37 @@ static int filterDelFunction(ValkeyModuleCtx *module_ctx,
     ValkeyModule_Assert(state == VMEF_STATE_READONLY || state == VMEF_STATE_READY);
     if (state == VMEF_STATE_READONLY) {
         ValkeyModule_ReplyWithError(module_ctx, "ERR External filter readonly");
-        return 0;
+        return EXTERNAL_DEL_ERROR;
     }
 
     int dbid = ValkeyModule_GetDbIdFromOptCtx(key_ctx);
     const ValkeyModuleString *key = ValkeyModule_GetKeyNameFromOptCtx(key_ctx);
-    ValkeyModuleString *value = 
+    ValkeyModule_Log(module_ctx, "debug", "filterDelFunction: dbid=%d, key=%s",
+                     dbid, ValkeyModule_StringPtrLen(key, NULL));
+    
+    ValkeyModuleString *value =
         ValkeyModule_DictGet(filter_mem_pool[dbid], (ValkeyModuleString *)key, NULL);
     
     if (!value) {
+        ValkeyModule_Log(module_ctx, "debug", "filterDelFunction: key not found in filter");
         ValkeyModule_ReplyWithSimpleString(module_ctx, "OK");
-        return 1;
+        return EXTERNAL_DEL_NOT_FOUND;
     }
 
+    ValkeyModule_Log(module_ctx, "debug", "filterDelFunction: found value, attempting delete");
     if (ValkeyModule_DictDel(filter_mem_pool[dbid], (ValkeyModuleString *)key, NULL) != VALKEYMODULE_OK) {
+        ValkeyModule_Log(module_ctx, "debug", "filterDelFunction: delete failed");
         ValkeyModule_ReplyWithErrorFormat(module_ctx, "ERR Failed to del key %s",
                                           ValkeyModule_StringPtrLen(key, NULL));
-        return 0;
+        return EXTERNAL_DEL_ERROR;
     }
     
-    *found = ValkeyModule_CreateStringFromLongLong(NULL, 1);
+    ValkeyModule_Log(module_ctx, "debug", "filterDelFunction: delete successful");
+    if (found != NULL) {
+        *found = ValkeyModule_CreateStringFromLongLong(NULL, 1);
+    }
     ValkeyModule_ReplyWithSimpleString(module_ctx, "OK");
-    return 1;
+    return EXTERNAL_DEL_SUCCESS;
 }
 
 static void filterSetReadonlyFunction(ValkeyModuleCtx *module_ctx,

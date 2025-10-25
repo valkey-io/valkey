@@ -346,6 +346,17 @@ static int luaB_unpack (lua_State *L) {
   i = luaL_optint(L, 2, 1);
   e = luaL_opt(L, luaL_checkint, 3, luaL_getn(L, 1));
   if (i > e) return 0;  /* empty range */
+  /* Check for potential overflow when computing range size.
+   * The subtraction e - i must not overflow, and the result must fit in INT_MAX.
+   * We need to be careful: if both are negative or if the range spans too much,
+   * we could overflow when computing (e - i).
+   */
+  if (i < 0 && e > INT_MAX + i)  /* would overflow: e - i > INT_MAX */
+    return luaL_error(L, "too many results to unpack");
+  if (i >= 0 && e >= 0 && (e - i) >= INT_MAX)  /* both non-negative, check range */
+    return luaL_error(L, "too many results to unpack");
+  if (i < 0 && e >= 0 && e >= INT_MAX)  /* mixed signs, e too large */
+    return luaL_error(L, "too many results to unpack");
   n = (unsigned int)e - (unsigned int)i;  /* number of elements minus 1 */
   if (n >= INT_MAX || !lua_checkstack(L, ++n))
     return luaL_error(L, "too many results to unpack");

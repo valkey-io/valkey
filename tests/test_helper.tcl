@@ -465,7 +465,9 @@ proc read_from_test_client fd {
             puts "\[[colorstr green $status]\]: $data ($elapsed ms)"
         }
         incr ::ok_count
-        record_test_run_pass $fd $data
+        if {$::verbose} {
+            record_test_run_pass $fd $data
+        }
         set ::active_clients_task($fd) "(OK) $data"
     } elseif {$status eq {skip}} {
         if {!$::quiet} {
@@ -496,7 +498,9 @@ proc read_from_test_client fd {
         force_kill_all_servers
         exit 1
     } elseif {$status eq {testing}} {
-        record_test_run_attempt $fd $data
+        if {$::verbose} {
+            record_test_run_attempt $fd $data
+        }
         set ::active_clients_task($fd) "(IN PROGRESS) $data"
     } elseif {$status eq {server-spawning}} {
         set ::active_clients_task($fd) "(SPAWNING SERVER) $data"
@@ -727,7 +731,9 @@ proc the_end {} {
     foreach {time name} $::clients_time_history {
         puts "  $time seconds - $name"
     }
-    print_tests_run_report
+    if {$::verbose} {
+        print_tests_run_report
+    }
     print_test_summary
     if {[llength $::failed_tests]} {
         puts "\n[colorstr bold-red {!!! WARNING}] The following tests failed:\n"

@@ -3496,11 +3496,10 @@ sds keyspaceEventsFlagsToString(int flags);
                                          * to apply the configuration change even if the new config value is the same as    \
                                          * the old. */
 
-#define INTEGER_CONFIG 0                        /* No flags means a simple integer configuration */
-#define MEMORY_CONFIG (1 << 0)                  /* Indicates if this value can be loaded as a memory value */
-#define PERCENT_CONFIG (1 << 1)                 /* Indicates if this value can be loaded as a percent (and stored as a negative int) */
-#define OCTAL_CONFIG (1 << 2)                   /* This value uses octal representation */
-#define MEMORY_SUPPORT_NEGATIVE_CONFIG (1 << 3) /* Indicates if this value can be loaded as a memory value and support negative number */
+#define INTEGER_CONFIG 0        /* No flags means a simple integer configuration */
+#define MEMORY_CONFIG (1 << 0)  /* Indicates if this value can be loaded as a memory value */
+#define PERCENT_CONFIG (1 << 1) /* Indicates if this value can be loaded as a percent (and stored as a negative int) */
+#define OCTAL_CONFIG (1 << 2)   /* This value uses octal representation */
 
 
 /* Enum Configs contain an array of configEnum objects that match a string with an integer. */

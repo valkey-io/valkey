@@ -3501,7 +3501,6 @@ sds keyspaceEventsFlagsToString(int flags);
 #define PERCENT_CONFIG (1 << 1) /* Indicates if this value can be loaded as a percent (and stored as a negative int) */
 #define OCTAL_CONFIG (1 << 2)   /* This value uses octal representation */
 
-
 /* Enum Configs contain an array of configEnum objects that match a string with an integer. */
 typedef struct configEnum {
     char *name;

@@ -1215,9 +1215,9 @@ static void updateAnnouncedHostname(clusterNode *node, char *value) {
 }
 
 static void updateAnnouncedHumanNodename(clusterNode *node, char *value) {
-    /* We should only update the human codename when the provided new
+    /* We should only update the human nodename when the provided new
      * value isn't NULL, otherwise the following function will clear
-     * the human codename field. */
+     * the human nodename field. */
     if (value != NULL)
         updateSdsExtensionField(&node->human_nodename, value);
 }
@@ -1423,7 +1423,7 @@ void clusterInit(void) {
      * easier to read the server logs. By default, a server doesn't
      * have a human-readable nodename unless explicting assigned by
      * CONFIG SET command or config file edit, so we simply use the
-     * the server's IP and port as the nodename. This name wil be
+     * the server's IP and port as the nodename. This name will be
      * carried in the PING extension so that all nodes in the cluster
      * will know this name eventually. */
     if (server.cluster_announce_human_nodename != NULL &&

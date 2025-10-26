@@ -1289,7 +1289,7 @@ static void updateShardId(clusterNode *node, const char *shard_id) {
 }
 
 static void updateHumanNodenameToAddress(clusterNode *node) {
-    const int port = server.tls_cluster? node->tls_port : node->tcp_port;
+    const int port = server.tls_cluster ? node->tls_port : node->tcp_port;
     char buf[64];
     snprintf(buf, sizeof(buf), "%s:%d", node->ip, port);
     updateAnnouncedHumanNodename(node, buf);
@@ -1426,7 +1426,8 @@ void clusterInit(void) {
      * the server's IP and port as the nodename. This name wil be
      * carried in the PING extension so that all nodes in the cluster
      * will know this name eventually. */
-    if (server.cluster_announce_human_nodename != NULL && server.cluster_announce_human_nodename[0] != '\0')
+    if (server.cluster_announce_human_nodename != NULL &&
+        server.cluster_announce_human_nodename[0] != '\0')
         clusterUpdateMyselfHumanNodename();
     else
         updateHumanNodenameToAddress(myself);

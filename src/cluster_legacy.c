@@ -1215,7 +1215,11 @@ static void updateAnnouncedHostname(clusterNode *node, char *value) {
 }
 
 static void updateAnnouncedHumanNodename(clusterNode *node, char *value) {
-    updateSdsExtensionField(&node->human_nodename, value);
+    /* We should only update the human codename when the provided new
+     * value isn't NULL, otherwise the following function will clear
+     * the human codename field. */
+    if (value != NULL)
+        updateSdsExtensionField(&node->human_nodename, value);
 }
 
 static void updateAnnouncedClientIpV4(clusterNode *node, char *value) {
@@ -1282,6 +1286,13 @@ static void updateShardId(clusterNode *node, const char *shard_id) {
             clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_FSYNC_CONFIG);
         }
     }
+}
+
+static void updateHumanNodenameToAddress(clusterNode *node) {
+    const int port = server.tls_cluster? node->tls_port : node->tcp_port;
+    char buf[64];
+    snprintf(buf, sizeof(buf), "%s:%d", node->ip, port);
+    updateAnnouncedHumanNodename(node, buf);
 }
 
 static inline int areInSameShard(clusterNode *node1, clusterNode *node2) {
@@ -1408,7 +1419,17 @@ void clusterInit(void) {
     clusterUpdateMyselfClientIpV4();
     clusterUpdateMyselfClientIpV6();
     clusterUpdateMyselfHostname();
-    clusterUpdateMyselfHumanNodename();
+    /* Assigning human-readable nodename at start-up makes it much
+     * easier to read the server logs. By default, a server doesn't
+     * have a human-readable nodename unless explicting assigned by
+     * CONFIG SET command or config file edit, so we simply use the
+     * the server's IP and port as the nodename. This name wil be
+     * carried in the PING extension so that all nodes in the cluster
+     * will know this name eventually. */
+    if (server.cluster_announce_human_nodename != NULL && server.cluster_announce_human_nodename[0] != '\0')
+        clusterUpdateMyselfHumanNodename();
+    else
+        updateHumanNodenameToAddress(myself);
     resetClusterStats();
 }
 
@@ -5823,7 +5844,7 @@ void clusterCron(void) {
     long long cluster_node_conn_attempts = maxConnectionAttemptsPerCron();
     while ((de = dictNext(di)) != NULL) {
         clusterNode *node = dictGetVal(de);
-        /* We free the inbound or outboud link to the node if the link has an
+        /* We free the inbound or outbound link to the node if the link has an
          * oversized message send queue and immediately try reconnecting. */
         clusterNodeCronFreeLinkOnBufferLimitReached(node);
         /* The protocol is that function(s) below return non-zero if the node was

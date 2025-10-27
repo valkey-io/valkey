@@ -66,20 +66,26 @@ static void monotonicInit_x86linux(void) {
         }
         /* Some CPUs may not contain clock speed in the model name */
         if (mono_ticksPerMicrosecond == 0) {
-            /* Calibrate TSC against CLOCK_MONOTONIC */
-            struct timespec start, end;
-            uint64_t tsc_start, tsc_end;
+            for (int i = 0; i < 3; ++i) {
+                /* Calibrate TSC against CLOCK_MONOTONIC */
+                struct timespec start, end;
+                uint64_t tsc_start, tsc_end;
 
-            clock_gettime(CLOCK_MONOTONIC, &start);
-            tsc_start = __rdtsc();
-            usleep(10000); /* Sleep for 10ms */
-            tsc_end = __rdtsc();
-            clock_gettime(CLOCK_MONOTONIC, &end);
+                clock_gettime(CLOCK_MONOTONIC, &start);
+                tsc_start = __rdtsc();
+                usleep(10000); /* Sleep for 10ms */
+                tsc_end = __rdtsc();
+                clock_gettime(CLOCK_MONOTONIC, &end);
 
-            uint64_t elapsed_us = (end.tv_sec - start.tv_sec) * 1000000ULL +
-                                (end.tv_nsec - start.tv_nsec) / 1000;
-            uint64_t tsc_elapsed = tsc_end - tsc_start;
-            mono_ticksPerMicrosecond = tsc_elapsed / elapsed_us;
+                uint64_t elapsed_us = (end.tv_sec - start.tv_sec) * 1000000ULL + (end.tv_nsec - start.tv_nsec) / 1000;
+                uint64_t tsc_elapsed = tsc_end - tsc_start;
+                long sample_ticksPerMicrosecond = tsc_elapsed / elapsed_us;
+
+                /* Use the maximum out of 3 iterations for accuracy */
+                if (sample_ticksPerMicrosecond > mono_ticksPerMicrosecond) {
+                    mono_ticksPerMicrosecond = sample_ticksPerMicrosecond;
+                }
+            }
         }
         /* Rewind file to search for constant_tsc flag */
         rewind(cpuinfo);

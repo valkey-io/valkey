@@ -78,6 +78,7 @@ start_server {tags {"repl needs:other-server external:skip"}} {
         if {![version_greater_or_equal $old_replica_version 9.0.0]} {
             skip "Replica $old_replica_version doesn't support HFE"
         }
+        r flushall
         r hsetex hfe ex 1000 fields 1 field1 value1
         start_server {start-other-server 1 config "minimal.conf"} {
             set old_replica [srv 0 client]

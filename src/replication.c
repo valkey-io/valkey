@@ -979,10 +979,9 @@ int startBgsaveForReplication(int mincapa, int req, int rdbver) {
      * Note that in case we're creating a "filtered" RDB (functions-only, for
      * example) or an older RDB version, we also force socket replication to
      * avoid overwriting the snapshot RDB file with filtered data. */
-    socket_target = ((server.repl_diskless_sync ||
-                      (req & REPLICA_REQ_RDB_MASK) ||
-                      rdbver != RDB_VERSION) &&
-                     (mincapa & REPLICA_CAPA_EOF));
+    socket_target = (mincapa & REPLICA_CAPA_EOF) && (server.repl_diskless_sync ||
+                                                     (req & REPLICA_REQ_RDB_MASK) ||
+                                                     rdbver != RDB_VERSION);
     /* `SYNC` should have failed with error if we don't support socket and require a filter, assert this here */
     serverAssert(socket_target || !(req & REPLICA_REQ_RDB_MASK));
 

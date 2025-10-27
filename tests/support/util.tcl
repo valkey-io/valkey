@@ -1283,8 +1283,8 @@ proc bp {{s {}}} {
 
 # Compares two version strings. Returns 1 if a >= b, 0 otherwise.
 proc version_greater_or_equal {a b} {
-    regexp {^([0-9]+).([0-9]+).([0-9]+)$} $a -> a_major a_minor a_patch
-    regexp {^([0-9]+).([0-9]+).([0-9]+)$} $b -> b_major b_minor b_patch
+    regexp {^([0-9]+)\.([0-9]+)\.([0-9]+)$} $a -> a_major a_minor a_patch
+    regexp {^([0-9]+)\.([0-9]+)\.([0-9]+)$} $b -> b_major b_minor b_patch
     if {$a_major < $b_major} {
         return 0
     } elseif {$a_major > $b_major} {

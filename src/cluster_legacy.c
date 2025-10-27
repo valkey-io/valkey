@@ -1421,8 +1421,8 @@ void clusterInit(void) {
     clusterUpdateMyselfHostname();
     /* Assigning human-readable nodename at start-up makes it much
      * easier to read the server logs. By default, a server doesn't
-     * have a human-readable nodename unless explicting assigned by
-     * CONFIG SET command or config file edit, so we simply use the
+     * have a human-readable nodename unless explicitly assigned by
+     * CONFIG SET command or config file edit, so we simply use
      * the server's IP and port as the nodename. This name will be
      * carried in the PING extension so that all nodes in the cluster
      * will know this name eventually. */
@@ -3768,6 +3768,7 @@ int clusterProcessPacket(clusterLink *link) {
                 memcpy(myself->ip, ip, NET_IP_STR_LEN);
                 serverLog(LL_NOTICE, "IP address for this node updated to %s", myself->ip);
                 clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG);
+                updateHumanNodenameToAddress(myself);
             }
         }
 

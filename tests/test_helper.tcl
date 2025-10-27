@@ -614,7 +614,7 @@ proc record_test_run_attempt {fd test_name} {
         set file $::active_clients_file($fd)
     }
     ensure_test_run_entry $test_name $file
-    test_report_incr $test_name $file successful_runs
+    test_report_incr $test_name $file attempted_runs
 }
 
 proc record_test_run_pass {fd test_name} {
@@ -626,6 +626,7 @@ proc record_test_run_pass {fd test_name} {
     test_report_incr $test_name $file passed_runs
 }
 
+# normalized memory leak tests so different tests with different pids are not an different entry
 proc normalize_test_name {name} {
     regsub -all {\s*\(pid\s+\d+\)} $name "" name
     return [string trim $name]
@@ -639,7 +640,7 @@ proc ensure_test_run_entry {test_name file} {
     set normalised_test [normalize_test_name $test_name]
     set key [list $normalised_test $file]
     if {![dict exists $report $key]} {
-        dict set report $key [dict create test_name $normalised_test file $file passed_runs 0 successful_runs 0]
+        dict set report $key [dict create test_name $normalised_test file $file passed_runs 0 attempted_runs 0]
     }
 }
 
@@ -665,7 +666,7 @@ proc print_tests_run_report {} {
         set file    [dict get $entry file]
         if {$file eq ""} { set file "-" }
         set passed  [dict get $entry passed_runs]
-        set runs    [dict get $entry successful_runs]
+        set runs    [dict get $entry attempted_runs]
         set failed  [expr {$runs - $passed}]
         lappend rows [list $file $test $passed $failed $runs]
     }

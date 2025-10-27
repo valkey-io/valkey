@@ -1275,7 +1275,7 @@ int rewriteConfigRewriteLine(struct rewriteConfigState *state, const char *optio
 
 /* Write the long long 'bytes' value as a string in a way that is parsable
  * inside valkey.conf. If possible uses the GB, MB, KB notation. */
-int rewriteConfigFormatMemory(char *buf, size_t len, long long bytes) {
+int rewriteConfigFormatMemory(char *buf, size_t len, unsigned long long bytes) {
     int gb = 1024 * 1024 * 1024;
     int mb = 1024 * 1024;
     int kb = 1024;
@@ -1294,8 +1294,8 @@ int rewriteConfigFormatMemory(char *buf, size_t len, long long bytes) {
 /* Rewrite a simple "option-name <bytes>" configuration option. */
 void rewriteConfigBytesOption(struct rewriteConfigState *state,
                               const char *option,
-                              long long value,
-                              long long defvalue) {
+                              unsigned long long value,
+                              unsigned long long defvalue) {
     char buf[64];
     int force = value != defvalue;
     sds line;
@@ -2216,7 +2216,11 @@ static sds numericConfigGet(standardConfig *config) {
         buf[len] = '%';
         buf[len + 1] = '\0';
     } else if (config->data.numeric.flags & MEMORY_CONFIG) {
-        ll2string(buf, sizeof(buf), value);
+        if (config->data.numeric.numeric_type == NUMERIC_TYPE_LONG_LONG && value < 0) {
+            ll2string(buf, sizeof(buf), value);
+        } else {
+            ull2string(buf, sizeof(buf), value);
+        }
     } else if (config->data.numeric.flags & OCTAL_CONFIG) {
         snprintf(buf, sizeof(buf), "%llo", value);
     } else {
@@ -2233,10 +2237,10 @@ static void numericConfigRewrite(standardConfig *config, const char *name, struc
     if (config->data.numeric.flags & PERCENT_CONFIG && value < 0) {
         rewriteConfigPercentOption(state, name, -value, config->data.numeric.default_value);
     } else if (config->data.numeric.flags & MEMORY_CONFIG) {
-        if (value >= 0) {
-            rewriteConfigBytesOption(state, name, value, config->data.numeric.default_value);
-        } else {
+        if (config->data.numeric.numeric_type == NUMERIC_TYPE_LONG_LONG && value < 0) {
             rewriteConfigNumericalOption(state, name, value, config->data.numeric.default_value);
+        } else {
+            rewriteConfigBytesOption(state, name, value, config->data.numeric.default_value);
         }
     } else if (config->data.numeric.flags & OCTAL_CONFIG) {
         rewriteConfigOctalOption(state, name, value, config->data.numeric.default_value);

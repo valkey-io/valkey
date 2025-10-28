@@ -1426,8 +1426,8 @@ void clusterInit(void) {
      * the server's IP and port as the nodename. This name will be
      * carried in the PING extension so that all nodes in the cluster
      * will know this name eventually. */
-    if (server.cluster_announce_human_nodename != NULL &&
-        server.cluster_announce_human_nodename[0] != '\0')
+    if (server.cluster_announce_human_nodename == NULL ||
+        server.cluster_announce_human_nodename[0] == '\0')
         clusterUpdateMyselfHumanNodename();
     else
         updateHumanNodenameToAddress(myself);
@@ -3768,7 +3768,9 @@ int clusterProcessPacket(clusterLink *link) {
                 memcpy(myself->ip, ip, NET_IP_STR_LEN);
                 serverLog(LL_NOTICE, "IP address for this node updated to %s", myself->ip);
                 clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG);
-                updateHumanNodenameToAddress(myself);
+                /* Update human nodename on IP change if the nodename is not explicitly set by user */
+                if (server.cluster_announce_human_nodename == NULL || server.cluster_announce_human_nodename[0] == '\0')
+                    updateHumanNodenameToAddress(myself);
             }
         }
 
@@ -4500,7 +4502,7 @@ static void clusterBuildMessageHdr(clusterMsg *hdr, int type, size_t msglen) {
     /* If this node is a primary, we send its slots bitmap and configEpoch.
      * If this node is a replica we send the primary's information instead (the
      * node is flagged as replica so the receiver knows that it is NOT really
-     * in charge for this slots. */
+     * in charge of these slots. */
     primary = (nodeIsReplica(myself) && myself->replicaof) ? myself->replicaof : myself;
 
     hdr->ver = htons(CLUSTER_PROTO_VER);
@@ -5408,7 +5410,7 @@ void clusterHandleReplicaFailover(void) {
                   server.cluster->failover_auth_time - now, server.cluster->failover_auth_rank,
                   server.cluster->failover_failed_primary_rank, replicationGetReplicaOffset());
         /* Now that we have a scheduled election, broadcast our offset
-         * to all the other replicas so that they'll updated their offsets
+         * to all the other replicas so that they'll update their offsets
          * if our offset is better. */
         clusterBroadcastPong(CLUSTER_BROADCAST_LOCAL_REPLICAS);
 

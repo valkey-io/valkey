@@ -5,8 +5,6 @@
 #include <time.h>
 #include "serverassert.h"
 
-#define TSC_CALIBRATION_ITERATIONS 3
-
 /* The function pointer for clock retrieval.  */
 monotime (*getMonotonicUs)(void) = NULL;
 
@@ -28,6 +26,8 @@ static char monotonic_info_string[32];
 #if defined(USE_PROCESSOR_CLOCK) && defined(__x86_64__) && defined(__linux__)
 #include <regex.h>
 #include <x86intrin.h>
+
+#define TSC_CALIBRATION_ITERATIONS 3
 
 static long mono_ticksPerMicrosecond = 0;
 

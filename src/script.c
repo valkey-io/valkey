@@ -597,3 +597,43 @@ long long scriptRunDuration(void) {
     serverAssert(scriptIsRunning());
     return elapsedMs(curr_run_ctx->start_time);
 }
+
+int scriptAllowsOOM(void) {
+    serverAssert(scriptIsRunning());
+    return curr_run_ctx->flags & SCRIPT_ALLOW_OOM;
+}
+
+int scriptIsReadOnly(void) {
+    serverAssert(scriptIsRunning());
+    return curr_run_ctx->flags & SCRIPT_READ_ONLY;
+}
+
+int scriptIsWriteDirty(void) {
+    serverAssert(scriptIsRunning());
+    return curr_run_ctx->flags & SCRIPT_WRITE_DIRTY;
+}
+
+void scriptSetWriteDirtyFlag(void) {
+    serverAssert(scriptIsRunning());
+    curr_run_ctx->flags |= SCRIPT_WRITE_DIRTY;
+}
+
+int scriptAllowsCrossSlot(void) {
+    serverAssert(scriptIsRunning());
+    return curr_run_ctx->flags & SCRIPT_ALLOW_CROSS_SLOT;
+}
+
+int scriptGetSlot(void) {
+    serverAssert(scriptIsRunning());
+    return curr_run_ctx->slot;
+}
+
+void scriptSetSlot(int slot) {
+    serverAssert(scriptIsRunning());
+    curr_run_ctx->slot = slot;
+}
+
+void scriptSetOriginalClientSlot(int slot) {
+    serverAssert(scriptIsRunning());
+    curr_run_ctx->original_client->slot = slot;
+}

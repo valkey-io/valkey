@@ -13,9 +13,10 @@
  *
  * The language is called HELLO, and a program in this language is formed by
  * a list of function definitions.
- * The language only supports 32-bit integer, and it only allows to return an
- * integer constant, or return the value passed as the first argument to the
- * function.
+ * The language supports 32-bit integer and string values, and allows to return
+ * a single value from a function.
+ * The language also supports error values when returned from the CALL
+ * instruction.
  *
  * Example of a program:
  *
@@ -36,7 +37,14 @@
  *               # stack
  * SLEEP         # Pops the current value in the stack and sleeps for `value`
  *               # seconds
+ * CONSTS x      # pushes the string 'x' to the top of the stack
  * CONSTI 0      # pushes the value 0 to the top of the stack
+ * CONSTI 2      # pushes the value 2 to the top of the stack
+ * CALL SET      # calls the command specified in the first argument with the
+ *               # with arguments pushed to the stack on previous instructions.
+ *               # The top of the stack must always have an integer value that
+ *               # specifies the number of arguments to pop from the stack.
+ *               # In this case, the command called will be `SET x 0`
  * RETURN        # returns the current value on the top of the stack and marks
  *               # the end of the function declaration.
  * ```
@@ -48,8 +56,10 @@
 typedef enum HelloInstKind {
     FUNCTION = 0,
     CONSTI,
+    CONSTS,
     ARGS,
     SLEEP,
+    CALL,
     RETURN,
     _NUM_INSTRUCTIONS, // Not a real instruction.
 } HelloInstKind;
@@ -60,10 +70,33 @@ typedef enum HelloInstKind {
 const char *HelloInstKindStr[] = {
     "FUNCTION",
     "CONSTI",
+    "CONSTS",
     "ARGS",
     "SLEEP",
+    "CALL",
     "RETURN",
 };
+
+/*
+ * Value type used in the HELLO language.
+ */
+typedef enum {
+    VALUE_INT,
+    VALUE_STRING,
+    VALUE_ERROR,
+} ValueType;
+
+/*
+ * Value used in the HELLO language.
+ */
+typedef struct {
+    ValueType type;
+    union {
+        uint32_t integer;
+        const char *string;
+    };
+} Value;
+
 
 /*
  * Struct that represents an instance of an instruction.
@@ -73,7 +106,7 @@ typedef struct HelloInst {
     HelloInstKind kind;
     union {
         uint32_t integer;
-        const char *string;
+        char *string;
     } param;
 } HelloInst;
 
@@ -102,7 +135,7 @@ typedef struct HelloDebugCtx {
     int enabled;
     int stop_on_next_instr;
     int abort;
-    const uint32_t *stack;
+    const Value *stack;
     uint32_t sp;
 } HelloDebugCtx;
 
@@ -118,12 +151,45 @@ typedef struct HelloLangCtx {
 static HelloLangCtx *hello_ctx = NULL;
 
 
-static uint32_t str2int(const char *str) {
+static Value parseValue(const char *str) {
     char *end;
     errno = 0;
-    uint32_t val = (uint32_t)strtoul(str, &end, 10);
-    ValkeyModule_Assert(errno == 0);
-    return val;
+    Value result;
+
+    // Check for NULL or empty string
+    if (!str || *str == '\0') {
+        ValkeyModule_Log(NULL, "error", "Failed to parse argument: NULL or empty string");
+        ValkeyModule_Assert(0);
+        return result;
+    }
+
+    unsigned long val = strtoul(str, &end, 10);
+
+    // Check if no digits were found
+    if (end == str) {
+        result.type = VALUE_STRING;
+        result.string = str;
+        return result;
+    }
+
+    // Check for trailing characters (non-digits after the number)
+    if (*end != '\0') {
+        result.type = VALUE_STRING;
+        result.string = str;
+        return result;
+    }
+
+    // Check for overflow
+    if (errno == ERANGE || val > UINT32_MAX) {
+        result.type = VALUE_STRING;
+        result.string = str;
+        return result;
+    }
+
+    // Success case
+    result.type = VALUE_INT;
+    result.integer = (uint32_t)val;
+    return result;
 }
 
 /*
@@ -153,7 +219,13 @@ static void helloLangParseFunction(HelloFunc *func) {
  */
 static void helloLangParseIntegerParam(HelloFunc *func) {
     char *token = strtok(NULL, " \n");
-    func->instructions[func->num_instructions].param.integer = str2int(token);
+    Value parsed = parseValue(token);
+    if (parsed.type == VALUE_INT) {
+        func->instructions[func->num_instructions].param.integer = parsed.integer;
+    } else {
+        ValkeyModule_Log(NULL, "error", "Failed to parse integer parameter: '%s'", token);
+        ValkeyModule_Assert(0); // Parse error
+    }
 }
 
 /*
@@ -163,12 +235,30 @@ static void helloLangParseConstI(HelloFunc *func) {
     helloLangParseIntegerParam(func);
     func->num_instructions++;
 }
+/*
+ * Parses the CONSTS instruction parameter.
+ */
+static void helloLangParseConstS(HelloFunc *func) {
+    char *token = strtok(NULL, " \n");
+    ValkeyModule_Assert(token != NULL);
+    func->instructions[func->num_instructions].param.string = ValkeyModule_Alloc(sizeof(char) * strlen(token) + 1);
+    strcpy(func->instructions[func->num_instructions].param.string, token);
+    func->num_instructions++;
+}
 
 /*
  * Parses the ARGS instruction parameter.
  */
 static void helloLangParseArgs(HelloFunc *func) {
     helloLangParseIntegerParam(func);
+    func->num_instructions++;
+}
+
+static void helloLangParseCall(HelloFunc *func) {
+    char *token = strtok(NULL, " \n");
+    ValkeyModule_Assert(token != NULL);
+    func->instructions[func->num_instructions].param.string = ValkeyModule_Alloc(sizeof(char) * strlen(token) + 1);
+    strcpy(func->instructions[func->num_instructions].param.string, token);
     func->num_instructions++;
 }
 
@@ -204,6 +294,10 @@ static int helloLangParseCode(const char *code,
             ValkeyModule_Assert(currentFunc != NULL);
             helloLangParseConstI(currentFunc);
             break;
+        case CONSTS:
+            ValkeyModule_Assert(currentFunc != NULL);
+            helloLangParseConstS(currentFunc);
+            break;
         case ARGS:
             ValkeyModule_Assert(currentFunc != NULL);
             helloLangParseArgs(currentFunc);
@@ -211,6 +305,10 @@ static int helloLangParseCode(const char *code,
         case SLEEP:
             ValkeyModule_Assert(currentFunc != NULL);
             currentFunc->num_instructions++;
+            break;
+        case CALL:
+            ValkeyModule_Assert(currentFunc != NULL);
+            helloLangParseCall(currentFunc);
             break;
         case RETURN:
             ValkeyModule_Assert(currentFunc != NULL);
@@ -232,7 +330,7 @@ static int helloLangParseCode(const char *code,
 }
 
 static ValkeyModuleScriptingEngineExecutionState executeSleepInst(ValkeyModuleScriptingEngineServerRuntimeCtx *server_ctx,
-                             uint32_t seconds) {
+                                                                  uint32_t seconds) {
     uint32_t elapsed_milliseconds = 0;
     ValkeyModuleScriptingEngineExecutionState state = VMSE_STATE_EXECUTING;
     while(1) {
@@ -252,12 +350,68 @@ static ValkeyModuleScriptingEngineExecutionState executeSleepInst(ValkeyModuleSc
     return state;
 }
 
+static void executeCallInst(ValkeyModuleCtx *module_ctx,
+                            const char *cmd_name,
+                            Value *stack,
+                            int *sp) {
+    ValkeyModule_Assert(stack != NULL);
+    ValkeyModule_Assert(sp != NULL);
+    ValkeyModuleCallReply *rep = NULL;
+    errno = 0;
+    ValkeyModule_Assert(*sp > 0);
+    Value numargs = stack[--(*sp)];
+    ValkeyModule_Assert(numargs.type == VALUE_INT);
+    ValkeyModule_Assert(numargs.integer <= (uint32_t)(*sp));
+    if (numargs.integer > 0) {
+        ValkeyModuleString **cmd_args = ValkeyModule_Alloc(sizeof(ValkeyModuleString *) * numargs.integer);
+        int bp = *sp - numargs.integer;
+        for (uint32_t i = 0; i < numargs.integer; i++) {
+            if (stack[bp + i].type == VALUE_INT) {
+                cmd_args[i] = ValkeyModule_CreateStringPrintf(NULL, "%u", stack[bp + i].integer);
+            } else {
+                cmd_args[i] = ValkeyModule_CreateStringPrintf(NULL, "%s", stack[bp + i].string);
+            }
+            (*sp)--;
+        }
+        rep = ValkeyModule_Call(module_ctx, cmd_name, "ESCv", cmd_args, numargs.integer);
+        for (uint32_t i = 0; i < numargs.integer; i++) {
+            ValkeyModule_FreeString(NULL, cmd_args[i]);
+        }
+        ValkeyModule_Free(cmd_args);
+    } else {
+        rep = ValkeyModule_Call(module_ctx, cmd_name, "ESC");
+    }
+    ValkeyModule_Assert(rep != NULL);
+    int type = ValkeyModule_CallReplyType(rep);
+
+    ValkeyModuleString *response_str = ValkeyModule_CreateStringFromCallReply(rep);
+    const char *resp_cstr = ValkeyModule_StringPtrLen(response_str, NULL);
+
+    if (type == VALKEYMODULE_REPLY_ERROR) {
+        stack[*sp].type = VALUE_ERROR;
+        stack[(*sp)++].string = resp_cstr;
+    } else {
+        if (response_str != NULL) {
+            stack[(*sp)++] = parseValue(resp_cstr);
+        } else {
+            stack[(*sp)].type = VALUE_STRING;
+            stack[(*sp)++].string = "OK";
+        }
+    }
+
+    ValkeyModule_FreeCallReply(rep);
+}
+
 static void helloDebuggerLogCurrentInstr(uint32_t pc, HelloInst *instr) {
     ValkeyModuleString *msg = NULL;
     switch (instr->kind) {
     case CONSTI:
     case ARGS:
         msg = ValkeyModule_CreateStringPrintf(NULL, ">>> %3u: %s %u", pc, HelloInstKindStr[instr->kind], instr->param.integer);
+        break;
+    case CONSTS:
+    case CALL:
+        msg = ValkeyModule_CreateStringPrintf(NULL, ">>> %3u: %s %s", pc, HelloInstKindStr[instr->kind], instr->param.string);
         break;
     case SLEEP:
     case RETURN:
@@ -304,15 +458,15 @@ typedef enum {
 /*
  * Executes an HELLO function.
  */
-static HelloExecutionState executeHelloLangFunction(ValkeyModuleScriptingEngineServerRuntimeCtx *server_ctx,
-                                                                          HelloDebugCtx *debug_ctx,
-                                                                          HelloFunc *func,
-                                                                          ValkeyModuleString **args,
-                                                                          int nargs,
-                                                                          uint32_t *result) {
+static HelloExecutionState executeHelloLangFunction(ValkeyModuleCtx *module_ctx,
+                                                    ValkeyModuleScriptingEngineServerRuntimeCtx *server_ctx,
+                                                    HelloDebugCtx *debug_ctx,
+                                                    HelloFunc *func,
+                                                    ValkeyModuleString **args,
+                                                    int nargs,
+                                                    Value *result) {
     ValkeyModule_Assert(result != NULL);
-    uint32_t stack[64];
-    uint32_t val = 0;
+    Value stack[64];
     int sp = 0;
 
     for (uint32_t pc = 0; pc < func->num_instructions; pc++) {
@@ -328,31 +482,43 @@ static HelloExecutionState executeHelloLangFunction(ValkeyModuleScriptingEngineS
             }
         }
         switch (instr.kind) {
-        case CONSTI:
-            stack[sp++] = instr.param.integer;
+        case CONSTI: {
+            stack[sp].type = VALUE_INT;
+            stack[sp++].integer = instr.param.integer;
             break;
+        }
+        case CONSTS: {
+            stack[sp].type = VALUE_STRING;
+            stack[sp++].string = instr.param.string;
+            break;
+        }
         case ARGS: {
             uint32_t idx = instr.param.integer;
             ValkeyModule_Assert(idx < (uint32_t)nargs);
             size_t len;
             const char *argStr = ValkeyModule_StringPtrLen(args[idx], &len);
-            uint32_t arg = str2int(argStr);
-            stack[sp++] = arg;
+            stack[sp++] = parseValue(argStr);
             break;
 	    }
         case SLEEP: {
             ValkeyModule_Assert(sp > 0);
-            val = stack[--sp];
-            if (executeSleepInst(server_ctx, val) == VMSE_STATE_KILLED) {
+            Value sleepVal = stack[--sp];
+            ValkeyModule_Assert(sleepVal.type == VALUE_INT);
+            if (executeSleepInst(server_ctx, sleepVal.integer) == VMSE_STATE_KILLED) {
                 return KILLED;
             }
             break;
 	    }
+        case CALL: {
+            const char *cmd_name = instr.param.string;
+            executeCallInst(module_ctx, cmd_name, stack, &sp);
+            break;
+        }
         case RETURN: {
             ValkeyModule_Assert(sp > 0);
-            val = stack[--sp];
+            Value returnVal = stack[--sp];
             ValkeyModule_Assert(sp == 0);
-            *result = val;
+            *result = returnVal;
             return FINISHED;
 	    }
         case FUNCTION:
@@ -410,6 +576,14 @@ static void engineFreeFunction(ValkeyModuleCtx *module_ctx,
     VALKEYMODULE_NOT_USED(type);
     HelloLangCtx *ctx = (HelloLangCtx *)engine_ctx;
     HelloFunc *func = (HelloFunc *)compiled_function->function;
+
+    for (uint32_t i = 0; i < func->num_instructions; i++) {
+        HelloInst instr = func->instructions[i];
+        if (instr.kind == CONSTS || instr.kind == CALL) {
+            ValkeyModule_Free(instr.param.string);
+        }
+    }
+
     ctx->program->functions[func->index] = NULL;
     ValkeyModule_Free(func->name);
     func->name = NULL;
@@ -490,10 +664,13 @@ callHelloLangFunction(ValkeyModuleCtx *module_ctx,
 
     ValkeyModule_Assert(type == VMSE_EVAL || type == VMSE_FUNCTION);
 
+    ValkeyModule_AutoMemory(module_ctx);
+
     HelloLangCtx *ctx = (HelloLangCtx *)engine_ctx;
     HelloFunc *func = (HelloFunc *)compiled_function->function;
-    uint32_t result;
+    Value result;
     HelloExecutionState state = executeHelloLangFunction(
+        module_ctx,
         server_ctx,
         &ctx->debug,
         func,
@@ -516,7 +693,17 @@ callHelloLangFunction(ValkeyModuleCtx *module_ctx,
         ValkeyModule_ReplyWithError(module_ctx, "ERR execution aborted during debugging session");
     }
     else {
-        ValkeyModule_ReplyWithLongLong(module_ctx, result);
+        if (result.type == VALUE_INT) {
+            ValkeyModule_Log(module_ctx, "info", "Function '%s' executed, returning %u", func->name, result.integer);
+            ValkeyModule_ReplyWithLongLong(module_ctx, result.integer);
+        } else if (result.type == VALUE_STRING) {
+            ValkeyModule_Log(module_ctx, "info", "Function '%s' executed, returning string '%s'", func->name, result.string);
+            ValkeyModule_ReplyWithCString(module_ctx, result.string);
+        } else {
+            ValkeyModule_Assert(result.type == VALUE_ERROR);
+            ValkeyModule_Log(module_ctx, "info", "Function '%s' executed, returning error '%s'", func->name, result.string);
+            ValkeyModule_ReplyWithError(module_ctx, result.string);
+        }
     }
 }
 
@@ -570,8 +757,12 @@ static int helloDebuggerStackCommand(ValkeyModuleString **argv, size_t argc, voi
             ValkeyModule_ScriptingEngineDebuggerLog(msg, 0);
         }
         else {
-            uint32_t value = ctx->stack[ctx->sp - index - 1];
-            msg = ValkeyModule_CreateStringPrintf(NULL, "[%u] %u", index, value);
+            Value stackVal = ctx->stack[ctx->sp - index - 1];
+            if (stackVal.type == VALUE_INT) {
+                msg = ValkeyModule_CreateStringPrintf(NULL, "[%u] %d", index, stackVal.integer);
+            } else {
+                msg = ValkeyModule_CreateStringPrintf(NULL, "[%u] \"%s\"", index, stackVal.string);
+            }
             ValkeyModule_ScriptingEngineDebuggerLog(msg, 0);
         }
     }
@@ -584,11 +775,19 @@ static int helloDebuggerStackCommand(ValkeyModuleString **argv, size_t argc, voi
         else {
             ValkeyModule_ScriptingEngineDebuggerLog(msg, 0);
             for (uint32_t i=0; i < ctx->sp; i++) {
-                uint32_t value = ctx->stack[ctx->sp - i - 1];
-                if (i == 0) {
-                    msg = ValkeyModule_CreateStringPrintf(NULL, "top -> [%u] %u", i, value);
+                Value stackVal = ctx->stack[ctx->sp - i - 1];
+                if (stackVal.type == VALUE_INT) {
+                    if (i == 0) {
+                        msg = ValkeyModule_CreateStringPrintf(NULL, "top -> [%u] %d", i, stackVal.integer);
+                    } else {
+                        msg = ValkeyModule_CreateStringPrintf(NULL, "       [%u] %d", i, stackVal.integer);
+                    }
                 } else {
-                    msg = ValkeyModule_CreateStringPrintf(NULL, "       [%u] %u", i, value);
+                    if (i == 0) {
+                        msg = ValkeyModule_CreateStringPrintf(NULL, "top -> [%u] \"%s\"", i, stackVal.string);
+                    } else {
+                        msg = ValkeyModule_CreateStringPrintf(NULL, "       [%u] \"%s\"", i, stackVal.string);
+                    }
                 }
                 ValkeyModule_ScriptingEngineDebuggerLog(msg, 0);
             }

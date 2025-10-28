@@ -116,4 +116,13 @@ client *scriptGetClient(void);
 client *scriptGetCaller(void);
 long long scriptRunDuration(void);
 
+int scriptAllowsOOM(void);
+int scriptIsReadOnly(void);
+int scriptIsWriteDirty(void);
+void scriptSetWriteDirtyFlag(void);
+int scriptAllowsCrossSlot(void);
+int scriptGetSlot(void);
+void scriptSetSlot(int slot);
+void scriptSetOriginalClientSlot(int slot);
+
 #endif /* __SCRIPT_H_ */

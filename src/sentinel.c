@@ -4859,7 +4859,7 @@ int sentinelSendReplicaOf(sentinelValkeyInstance *ri, const sentinelAddr *addr) 
     if (retval == C_ERR) return retval;
     ri->link->pending_commands++;
 
-    if (ri->monitored_instance_failover_state != SENTINEL_MONITORED_INSTANCE_FAILOVER_NS) {
+    if (ri->monitored_instance_failover_state == SENTINEL_MONITORED_INSTANCE_FAILOVER) {
         retval = valkeyAsyncCommand(ri->link->cc, sentinelDiscardReplyCallback, ri, "%s ABORT",
                                     sentinelInstanceMapCommand(ri, "FAILOVER"));
         if (retval == C_ERR) return retval;

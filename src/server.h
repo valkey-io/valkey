@@ -2214,6 +2214,7 @@ struct valkeyServer {
                                                             * dropping packets of a specific type */
     unsigned long cluster_blacklist_ttl;                   /* Duration in seconds that a node is denied re-entry into
                                                             * the cluster after it is forgotten with CLUSTER FORGET. */
+    sds hash_seed;                                         /* Configurable DB hash seed */
     int cluster_slot_stats_enabled;                        /* Cluster slot usage statistics tracking enabled. */
     mstime_t cluster_mf_timeout;                           /* Milliseconds to do a manual failover. */
     unsigned long cluster_slot_migration_log_max_len;      /* Maximum count of migrations to display in the

@@ -331,6 +331,32 @@ int test_reclaimFilePageCache(int argc, char **argv, int flags) {
     return 0;
 }
 
+int test_getHashSeedFromValue(int argc, char **argv, int flags) {
+    UNUSED(argc);
+    UNUSED(argv);
+    UNUSED(flags);
+
+    unsigned char seed[4];
+    getHashSeedFromValue(seed, sizeof(seed), "abcdefgh");
+    TEST_ASSERT(seed[0] == ('a' ^ 'e'));
+    TEST_ASSERT(seed[1] == ('b' ^ 'f'));
+    TEST_ASSERT(seed[2] == ('c' ^ 'g'));
+    TEST_ASSERT(seed[3] == ('d' ^ 'h'));
+
+    unsigned char seed2[8];
+    unsigned char expected2[8] = {'a', 'b', 'c', 'a', 'b', 'c', 'a', 'b'};
+    getHashSeedFromValue(seed2, sizeof(seed2), "abc");
+    TEST_ASSERT(memcmp(seed2, expected2, sizeof(seed2)) == 0);
+
+    unsigned char seed3[4];
+    getHashSeedFromValue(seed3, sizeof(seed3), "");
+    for (size_t i = 0; i < sizeof(seed3); i++) {
+        TEST_ASSERT(seed3[i] == 0);
+    }
+
+    return 0;
+}
+
 int test_writePointerWithPadding(int argc, char **argv, int flags) {
     UNUSED(argc);
     UNUSED(argv);

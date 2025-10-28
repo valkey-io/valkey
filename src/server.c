@@ -7374,8 +7374,13 @@ __attribute__((weak)) int main(int argc, char **argv) {
         sdsfree(options);
     }
     if (server.sentinel_mode) sentinelCheckConfigFile();
+    if (server.hash_seed != NULL) {
+        memset(hashseed, 0, sizeof(hashseed));
+        getHashSeedFromValue(hashseed, sizeof(hashseed), server.hash_seed);
+        hashtableSetHashFunctionSeed(hashseed);
+    }
 
-        /* Do system checks */
+    /* Do system checks */
 #ifdef __linux__
     linuxMemoryWarnings();
     sds err_msg = NULL;

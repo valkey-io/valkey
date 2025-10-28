@@ -1037,6 +1037,20 @@ err:
     return 0;
 }
 
+/* Populate the provided seed array by deterministically folding the input value.
+ * The function repeats the value across the seed array and XORs each byte with
+ * the current seed content.
+ */
+void getHashSeedFromValue(unsigned char *seed_array, size_t len, const char *value) {
+    size_t input_len = strlen(value);
+    memset(seed_array, 0, len);
+    if (input_len == 0) return;
+    size_t max_len = len > input_len ? len : input_len;
+    for (size_t i = 0; i < max_len; i++) {
+        seed_array[i % len] = value[i % input_len] ^ seed_array[i % len];
+    }
+}
+
 /* Parses a version string on the form "major.minor.patch" and returns an
  * integer on the form 0xMMmmpp. Returns -1 on parse error. */
 int version2num(const char *version) {

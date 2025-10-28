@@ -5,6 +5,8 @@
 #include <time.h>
 #include "serverassert.h"
 
+#define TSC_CALIBRATION_ITERATIONS 3
+
 /* The function pointer for clock retrieval.  */
 monotime (*getMonotonicUs)(void) = NULL;
 
@@ -66,7 +68,7 @@ static void monotonicInit_x86linux(void) {
         }
         /* Some CPUs may not contain clock speed in the model name */
         if (mono_ticksPerMicrosecond == 0) {
-            for (int i = 0; i < 3; ++i) {
+            for (int i = 0; i < TSC_CALIBRATION_ITERATIONS; ++i) {
                 /* Calibrate TSC against CLOCK_MONOTONIC */
                 struct timespec start, end;
                 uint64_t tsc_start, tsc_end;
@@ -81,7 +83,7 @@ static void monotonicInit_x86linux(void) {
                 uint64_t tsc_elapsed = tsc_end - tsc_start;
                 long sample_ticksPerMicrosecond = tsc_elapsed / elapsed_us;
 
-                /* Use the maximum out of 3 iterations for accuracy */
+                /* Use the maximum out of TSC_CALIBRATION_ITERATIONS iterations for accuracy */
                 if (sample_ticksPerMicrosecond > mono_ticksPerMicrosecond) {
                     mono_ticksPerMicrosecond = sample_ticksPerMicrosecond;
                 }

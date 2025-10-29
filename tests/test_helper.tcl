@@ -406,6 +406,7 @@ proc test_server_cron {} {
                         set file $::active_clients_file($fd)
                     }
                     lappend ::failed_tests "\[[colorstr red TIMEOUT]\]: $test_name in $file"
+                    incr ::err_count
                 }
             }
         }

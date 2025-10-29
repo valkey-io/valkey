@@ -94,7 +94,6 @@ set ::solo_tests_count 0
 set ::debug_defrag 0
 set ::completed_tests 0
 set ::total_loops 1
-set ::test_run_report [dict create]
 
 # Expand a unit specification (test name, file, or directory) into a list
 # of canonical unit names relative to the tests directory.
@@ -465,9 +464,6 @@ proc read_from_test_client fd {
             puts "\[[colorstr green $status]\]: $data ($elapsed ms)"
         }
         incr ::ok_count
-        if {$::verbose} {
-            record_test_run_pass $fd $data
-        }
         set ::active_clients_task($fd) "(OK) $data"
     } elseif {$status eq {skip}} {
         if {!$::quiet} {
@@ -498,9 +494,6 @@ proc read_from_test_client fd {
         force_kill_all_servers
         exit 1
     } elseif {$status eq {testing}} {
-        if {$::verbose} {
-            record_test_run_attempt $fd $data
-        }
         set ::active_clients_task($fd) "(IN PROGRESS) $data"
     } elseif {$status eq {server-spawning}} {
         set ::active_clients_task($fd) "(SPAWNING SERVER) $data"
@@ -608,132 +601,12 @@ proc print_test_summary {} {
     puts "\nTest Summary: [colorstr bold-green $::ok_count] passed, [colorstr bold-red $::err_count] failed"
 }
 
-proc record_test_run_attempt {fd test_name} {
-    set file ""
-    if {[info exist ::active_clients_file($fd)]} {
-        set file $::active_clients_file($fd)
-    }
-    ensure_test_run_entry $test_name $file
-    test_report_incr $test_name $file attempted_runs
-}
-
-proc record_test_run_pass {fd test_name} {
-    set file ""
-    if {[info exist ::active_clients_file($fd)]} {
-        set file $::active_clients_file($fd)
-    }
-    ensure_test_run_entry $test_name $file
-    test_report_incr $test_name $file passed_runs
-}
-
-# normalized memory leak tests so different tests with different pids are not an different entry
-proc normalize_test_name {name} {
-    regsub -all {\s*\(pid\s+\d+\)} $name "" name
-    return [string trim $name]
-}
-
-proc ensure_test_run_entry {test_name file} {
-    upvar 0 ::test_run_report report
-    if {![info exists report]} {
-        set report [dict create]
-    }
-    set normalised_test [normalize_test_name $test_name]
-    set key [list $normalised_test $file]
-    if {![dict exists $report $key]} {
-        dict set report $key [dict create test_name $normalised_test file $file passed_runs 0 attempted_runs 0]
-    }
-}
-
-proc test_report_incr {test_name file field {amount 1}} {
-    upvar 0 ::test_run_report report
-    set normalised_test [normalize_test_name $test_name]
-    set key [list $normalised_test $file]
-    dict with report $key {
-        incr $field $amount
-    }
-}
-
-proc print_tests_run_report {} {
-    upvar 0 ::test_run_report report
-    if {![info exists report]} { return }
-    if {[dict size $report] == 0} { return }
-
-    set rows {}
-    set keys [dict keys $report]
-    foreach key $keys {
-        set entry   [dict get $report $key]
-        set test    [dict get $entry test_name]
-        set file    [dict get $entry file]
-        if {$file eq ""} { set file "-" }
-        set passed  [dict get $entry passed_runs]
-        set runs    [dict get $entry attempted_runs]
-        set failed  [expr {$runs - $passed}]
-        lappend rows [list $file $test $passed $failed $runs]
-    }
-
-    set rows [lsort -dictionary -index 1 $rows]
-    set rows [lsort -dictionary -index 0 $rows]
-
-    set header [list "File" "Test" "Passed" "Failed" "Runs"]
-    set widths [list \
-        [string length [lindex $header 0]] \
-        [string length [lindex $header 1]] \
-        [string length [lindex $header 2]] \
-        [string length [lindex $header 3]] \
-        [string length [lindex $header 4]] \
-    ]
-
-    foreach row $rows {
-        for {set i 0} {$i < 5} {incr i} {
-            set cell [lindex $row $i]
-            set cellstr "$cell"
-            set curw [lindex $widths $i]
-            if {[string length $cellstr] > $curw} {
-                lset widths $i [string length $cellstr]
-            }
-        }
-    }
-
-    proc __print_sep {widths} {
-        set parts {}
-        foreach w $widths {
-            lappend parts "+[string repeat "-" [expr {$w+2}]]"
-        }
-        puts "[join $parts {}]+"
-    }
-
-    proc __print_row {cols widths} {
-        set out {}
-        for {set i 0} {$i < [llength $cols]} {incr i} {
-            set cell [lindex $cols $i]
-            set w    [lindex $widths $i]
-            if {$i < 2} {
-                append out "| [format "%-*s" $w $cell] "
-            } else {
-                append out "| [format "%*s"  $w $cell] "
-            }
-        }
-        append out "|"
-        puts $out
-    }
-
-    puts "\nDetailed Test Run Report:"
-    __print_sep $widths
-    __print_row $header $widths
-    __print_sep $widths
-    foreach row $rows { __print_row $row $widths }
-    __print_sep $widths
-}
-
 proc the_end {} {
     # TODO: print the status, exit with the right exit code.
     puts "\n                   The End\n"
     puts "Execution time of different units:"
     foreach {time name} $::clients_time_history {
         puts "  $time seconds - $name"
-    }
-    if {$::verbose} {
-        print_tests_run_report
     }
     print_test_summary
     if {[llength $::failed_tests]} {

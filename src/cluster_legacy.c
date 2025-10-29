@@ -4113,7 +4113,7 @@ int clusterProcessPacket(clusterLink *link) {
                     /* Get the index of the least-significant set bit, in this 64-bit word */
                     const unsigned bit = (unsigned)__builtin_ctzll(word);
                     const int slot = (int)((w << 6) | bit);
-                    word &= word - 1;  /* clear that bit */
+                    word &= word - 1; /* clear that bit */
 
                     clusterNode *slot_owner = server.cluster->slots[slot];
                     if (slot_owner == sender || isSlotUnclaimed(slot)) continue;

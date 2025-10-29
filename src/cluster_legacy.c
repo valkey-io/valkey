@@ -1428,9 +1428,9 @@ void clusterInit(void) {
      * will know this name eventually. */
     if (server.cluster_announce_human_nodename == NULL ||
         server.cluster_announce_human_nodename[0] == '\0')
-        clusterUpdateMyselfHumanNodename();
-    else
         updateHumanNodenameToAddress(myself);
+    else
+        clusterUpdateMyselfHumanNodename();
     resetClusterStats();
 }
 

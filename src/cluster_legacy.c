@@ -169,6 +169,8 @@ static inline int defaultClientPort(void) {
 
 #define isSlotUnclaimed(slot) \
     (server.cluster->slots[slot] == NULL || bitmapTestBit(server.cluster->owner_not_claiming_slot, slot))
+/* Treating slot bitmaps as 8-byte words to speedup iteration */
+#define CLUSTER_SLOT_WORDS (CLUSTER_SLOTS / 64)
 
 #define RCVBUF_INIT_LEN 1024
 #define RCVBUF_MIN_READ_LEN 14
@@ -4105,7 +4107,7 @@ int clusterProcessPacket(clusterLink *link) {
              * new configuration, so other nodes that have an updated table must
              * do it. In this way A will stop to act as a primary (or can try to
              * failover if there are the conditions to win the election). */
-            int found_new_owner = 0;
+            bool found_new_owner = false;
             for (size_t w = 0; w < CLUSTER_SLOT_WORDS && !found_new_owner; w++) {
                 uint64_t word;
                 memcpy(&word, hdr->myslots + (w << 3), sizeof(word));
@@ -4128,7 +4130,7 @@ int clusterProcessPacket(clusterLink *link) {
                         /* TODO: instead of exiting the loop send every other
                          * UPDATE packet for other nodes that are the new owner
                          * of sender's slots. */
-                        found_new_owner = 1;
+                        found_new_owner = true;
                         break;
                     }
                 }

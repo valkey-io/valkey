@@ -5090,6 +5090,7 @@ void clusterSendFailoverAuthIfNeeded(clusterNode *node, clusterMsg *request) {
                       "an UPDATE message about %.40s (%s)",
                       node->name, node->human_nodename, slot_owner->name, slot_owner->human_nodename);
             clusterSendUpdate(node->link, slot_owner);
+            return;
         }
     }
 

@@ -8,7 +8,6 @@
 
 #define CLUSTER_SLOT_MASK_BITS 14                   /* Number of bits used for slot id. */
 #define CLUSTER_SLOTS (1 << CLUSTER_SLOT_MASK_BITS) /* Total number of slots in cluster mode, which is 16384. */
-#define CLUSTER_SLOT_WORDS (CLUSTER_SLOTS / 64)     /* Treating slot bitmaps as 8-byte words */
 #define CLUSTER_OK 0                                /* Everything looks ok */
 #define CLUSTER_FAIL 1                              /* The cluster can't work */
 #define CLUSTER_NAMELEN 40                          /* sha1 hex length */

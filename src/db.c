@@ -431,6 +431,8 @@ void setKey(client *c, serverDb *db, robj *key, robj **valref, int flags) {
     } else {
         dbSetValue(db, key, valref, 1, NULL);
     }
+    bgIterationEntryMetadata *md = (bgIterationEntryMetadata *)objectGetMetadata(*valref);
+    if (md) md->iterator_epoch = bgIteration_getEpoch();
     if (!(flags & SETKEY_KEEPTTL)) removeExpire(db, key);
     if (!(flags & SETKEY_NO_SIGNAL)) signalModifiedKey(c, db, key);
 }

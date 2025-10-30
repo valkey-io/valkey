@@ -64,7 +64,6 @@ int __wrap_ACLCheckAllUserCommandPerm(user *u, struct serverCommand *cmd, robj *
 void __wrap_amzUnblockClientsOnKey(void *info, robj *key); // temp for mock
 int __wrap_amzBlockClientOnKeys(void *info, client *c, robj **keys, int nKeys); // temp for mock
 
-
 #undef protected
 #undef _Bool
 #undef typename

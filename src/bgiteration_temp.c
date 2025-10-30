@@ -1,5 +1,6 @@
-
 #include "server.h"
+#include "bgiteration.h"
+#include "hashtable.h"
 
 void amzUnblockClientsOnKey(void *info, robj *key) {
     UNUSED(info);

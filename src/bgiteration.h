@@ -74,7 +74,7 @@ typedef void (*bgIteratorCleanupFunc)(bool terminated, void *privdata);
 
 
 /* Create a background full-scan iterator (bgIterator).
- * This bgIterator will iterate through the entire keyspace (accross all DBs).
+ * This bgIterator will iterate through the entire keyspace (across all DBs).
  *
  * NAME:        a human readable name for the iterator (must be unique)
  * FLAGS:       creation flags indicate iteration options
@@ -272,6 +272,11 @@ void bgIteratorClose(bgIterator *iter);
 /********************************************************************************************
  * BGITERATION HOOKS REQUIRED TO SUPPORT ITERATION - CALLS INSERTED INTO MAIN VALKEY CODE
  ********************************************************************************************/
+
+typedef struct {
+    uint32_t iterator_epoch;    // iterator epoch of last modification
+} bgIterationEntryMetadata;
+
 
 /* Must be called once (and only once) at server startup.  */
 void bgIteration_init(void);

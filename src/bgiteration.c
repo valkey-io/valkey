@@ -1,3 +1,4 @@
+#include "config.h"
 #include "bgiteration.h"
 #include "dict.h"
 #include "fifo.h"
@@ -32,28 +33,6 @@ static bool ignoreKeyForSave(sds key) {
     UNUSED(key);
     return false;
 }
-
-typedef struct {
-    uint32_t iterator_epoch;    // iterator epoch of last modification
-} bgIteratorEntryMetadata;
-
-static void *objectGetMetadata(const robj *val) {
-    UNUSED(val);
-    static bgIteratorEntryMetadata dummy_meta;
-    dummy_meta.iterator_epoch = bgIteration_getEpoch();
-    return &dummy_meta;
-}
-
-
-static dbEntry *createStringObjectWithKeyAndExpireAndMetadata(
-        const char *ptr, size_t len, const sds key, long long expire, const void *metadata) {
-    UNUSED(metadata);
-
-    dbEntry *de = createStringObject(ptr, len);
-    de = objectSetKeyAndExpire(de, key, expire);
-    return de;
-}
-
 
 void amzUnblockClientsOnKey(void *info, robj *key); // temp for mock
 int amzBlockClientOnKeys(void *info, client *c, robj *keys[], int nKeys); // temp for mock
@@ -205,7 +184,7 @@ static void decrRefCountVoid(void *o) {
 }
 
 
-/* Concatonate argc/argv into a command string for debugging. */
+/* Concatenate argc/argv into a command string for debugging. */
 static sds createSdsFromClientArgv(int argc, robj **argv) {
     sds cmd = sdsempty();
     for (int i = 0;  i < argc;  i++) {
@@ -517,13 +496,16 @@ static fifo * fullScanIteratorGetEntries(genericIterator *genIt, int *orig_dbid,
 
     fifo *dbEntryFifo = fifoCreate();
     while (fifoLength(dbEntryFifo) == 0) {
-        if (it->iter_dbi == NULL) {
+        while (it->iter_dbi == NULL) {
             if (++it->iter_db >= server.dbnum) {
                 fifoRelease(dbEntryFifo);
                 return NULL;    // Iteration complete
             }
-            it->kvs = server.db[it->orig_to_cur_db[it->iter_db]]->keys;
-            it->iter_dbi = kvstoreIteratorInit(it->kvs, HASHTABLE_ITER_SAFE);
+            serverDb *db = server.db[it->orig_to_cur_db[it->iter_db]];
+            if (db != NULL) {
+                it->kvs = db->keys;
+                it->iter_dbi = kvstoreIteratorInit(it->kvs, HASHTABLE_ITER_SAFE);
+            }
         }
 
         hashtableIterator *ht_it = NULL;
@@ -812,7 +794,10 @@ static dbEntry *tryCloneDbEntry(dbEntry *de) {
 
         if (itemSize <= BGITER_MAX_CLONE_ITEM_BYTES) {
             bgiteration_current_clone_memory_pool_size += itemSize;
-            return createStringObjectWithKeyAndExpireAndMetadata((char *)objectGetVal(de), sdslen(objectGetVal(de)), objectGetKey(de), objectGetExpire(de), objectGetMetadata(de));
+            dbEntry *clone = createStringObjectWithKeyAndExpire((char *)objectGetVal(de), sdslen(objectGetVal(de)), objectGetKey(de), objectGetExpire(de));
+            ((bgIterationEntryMetadata *)objectGetMetadata(clone))->iterator_epoch
+                    = ((bgIterationEntryMetadata *)objectGetMetadata(de))->iterator_epoch;
+            return clone;
         }
     }
 
@@ -1025,7 +1010,7 @@ static void feedIterator(bgIterator *it, monotime end_time_us) {
 
             // Remove new/modified items during consistent iteration.
             if (it->iteration_flags & BGITERATOR_FLAG_CONSISTENT
-                    && ((bgIteratorEntryMetadata *)objectGetMetadata(de))->iterator_epoch > it->consistent_modification_id) {
+                    && ((bgIterationEntryMetadata *)objectGetMetadata(de))->iterator_epoch > it->consistent_modification_id) {
                 continue;
             }
 
@@ -1276,7 +1261,7 @@ static bool expediteKeysForWrite(
             if (de == NULL) continue;  // New key, no need to expedite
             if (!(iterComplete || it->keyset_iter->hasPassedItem(it->keyset_iter, key, dbid))
                     && dictFind(it->early_iterate_entries, de) == NULL
-                    && ((bgIteratorEntryMetadata *)objectGetMetadata(de))->iterator_epoch <= it->consistent_modification_id) {
+                    && ((bgIterationEntryMetadata *)objectGetMetadata(de))->iterator_epoch <= it->consistent_modification_id) {
                 if (addEarlyIterationKey(it, de, dbid)) {
                     mustBlock = true;
                     dictAdd(waitingOnKeys, oKey, NULL); 
@@ -2361,7 +2346,7 @@ void bgIteration_keyDelete(int dbid, const sds key) {
         if (it->completed || it->terminated || !it->keyset_iter->isKeyInScope(it->keyset_iter, key)) continue;
 
         if (it->iteration_flags & BGITERATOR_FLAG_CONSISTENT
-                && ((bgIteratorEntryMetadata *)objectGetMetadata(de))->iterator_epoch <= it->consistent_modification_id) {
+                && ((bgIterationEntryMetadata *)objectGetMetadata(de))->iterator_epoch <= it->consistent_modification_id) {
             if (!it->keyset_iter->hasPassedItem(it->keyset_iter, key, dbid)
                     && !(dictFind(it->early_iterate_entries, de) != NULL)) {
                 addEarlyIterationKey(it, de, dbid); // (may also add to inUseEntries)
@@ -2418,6 +2403,13 @@ bool bgIteration_blockClientIfRequired(client *c) {
 
     if (c->cmd->proc == execCommand) {
         mustBlock = expediteKeysForMultiExec(c, waitOnKeys);
+        // JHB - HACK because no blocking yet
+        while (mustBlock) {
+            receiveItemsBackFromIterators(true);    // Blocking
+            dictEmpty(waitOnKeys, NULL);
+            mustBlock = expediteKeysForMultiExec(c, waitOnKeys);
+        }
+        // JHB - END HACK
     } else {
         getKeysResult result;
         initGetKeysResult(&result);
@@ -2428,7 +2420,8 @@ bool bgIteration_blockClientIfRequired(client *c) {
                             c->db->id, c->cmd, c->argc, c->argv, keyrefs, numkeys, waitOnKeys);
             serverAssert(!(mustBlock && (c->flag.multi) && !(c->flag.script)));
 
-            if (mustBlock && (c->flag.script)) {
+            //if (mustBlock && (c->flag.script)) {
+            if (mustBlock) { // JHB HACK - do this for everything because of missing blocking
                 /* For scripts, we will block for keys declared in EVAL/EVALSHA/FCALL.
                  *  However, scripts are NOT required to declare keys.  Even if it declares keys,
                  *  it's not declaring the DB for the key.  After a SELECT or SWAPDB, we might be on
@@ -2470,6 +2463,7 @@ bool bgIteration_blockClientIfRequired(client *c) {
 
         int rc = amzBlockClientOnKeys(NULL, c, waitKeysArgv, argvCount);
         serverAssert(rc == C_OK);
+
         zfree(waitKeysArgv);
     }
 

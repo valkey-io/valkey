@@ -339,7 +339,7 @@ robj *createStringObjectFromSds(const_sds s) {
     return createStringObject(s, sdslen(s));
 }
 
-static robj *createStringObjectWithKeyAndExpire(const char *ptr, size_t len, const_sds key, long long expire) {
+robj *createStringObjectWithKeyAndExpire(const char *ptr, size_t len, const_sds key, long long expire) {
     if (shouldEmbedStringObject(len, key, expire)) {
         return createEmbeddedStringObjectWithKeyAndExpire(ptr, len, key, expire);
     } else {

@@ -2902,8 +2902,11 @@ void initServer(void) {
 
     /* Set object metadata size before creating any objects */
     if (server.forkless_options_supported) {
-        objectSetMetadataSize(sizeof(uint32_t)); /* This is a placeholder until Threadsave defines a metadata structure */
-                                                 /* 4 bytes for iterator_epoch for now*/
+        /* NOTE: At this time, there is only one reason for dbEntry metadata.  bgIteration.  However,
+         * if/when new metadata options are added, we will need to compute the size of a variable
+         * size metadata, and provide appropriate accessors to access the specific portion of the
+         * metadata (each of which may/may not exist, based on immutable startup parameters).  */
+        objectSetMetadataSize(sizeof(bgIterationEntryMetadata));
     }
 
     createDatabaseIfNeeded(0); /* The default database should always exist */

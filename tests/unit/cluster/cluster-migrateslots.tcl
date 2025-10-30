@@ -2116,6 +2116,42 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster} overrides {cluste
     }
 }
 
+start_cluster 3 0 {tags {logreqres:skip external:skip cluster}} {
+    set 16383_slot_tag "{6ZJ}"
+    set node0_id [R 0 CLUSTER MYID]
+
+    test "Import with default user having no permission" {
+        # Configure ACLs on both source and target nodes
+        R 2 ACL SETUSER admin on >S3cureAdmin! ~* &* +@all
+        R 2 ACL SETUSER default off -@all
+        R 2 AUTH admin S3cureAdmin!
+
+        R 0 ACL SETUSER admin on >S3cureAdmin! ~* &* +@all
+        R 0 ACL SETUSER default off -@all
+        R 0 AUTH admin S3cureAdmin!
+
+        # Set primaryuser and primaryauth on the source node
+        R 2 CONFIG SET primaryuser admin
+        R 2 CONFIG SET primaryauth S3cureAdmin!
+
+        # Populate data before migration
+        populate 1000 "$16383_slot_tag:" 1000 -2
+
+        # Perform one-shot import
+        assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node0_id]
+        set jobname [get_job_name 2 16383]
+        wait_for_migration 0 16383
+
+        # Keys successfully migrated
+        assert_match "1000" [R 0 CLUSTER COUNTKEYSINSLOT 16383]
+        assert_match "0" [R 2 CLUSTER COUNTKEYSINSLOT 16383]
+
+        # Migration log shows success on both ends
+        assert {[dict get [get_migration_by_name 0 $jobname] state] eq "success"}
+        assert {[dict get [get_migration_by_name 2 $jobname] state] eq "success"}
+    }
+}
+
 start_cluster 3 6 {tags {logreqres:skip external:skip cluster}} {
     set node0_id [R 0 CLUSTER MYID]
     set node1_id [R 1 CLUSTER MYID]

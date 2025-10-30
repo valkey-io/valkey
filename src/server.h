@@ -1385,7 +1385,7 @@ typedef struct aclInfo {
     long long invalid_key_accesses;       /* Invalid key accesses that user doesn't have permission to */
     long long invalid_channel_accesses;   /* Invalid channel accesses that user doesn't have permission to */
     long long acl_access_denied_tls_cert; /* TLS clients with cert not matching any existing user. */
-    long long invalid_db_accesses;      /* Invalid database accesses that user doesn't have permission to */
+    long long invalid_db_accesses;        /* Invalid database accesses that user doesn't have permission to */
 } aclInfo;
 
 struct saveparam {

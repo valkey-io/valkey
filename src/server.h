@@ -254,8 +254,7 @@ extern int configOOMScoreAdjValuesDefaults[CONFIG_OOM_COUNT];
 #define CMD_ALLOW_BUSY ((1ULL << 26))
 #define CMD_MODULE_GETCHANNELS (1ULL << 27) /* Use the modules getchannels interface. */
 #define CMD_TOUCHES_ARBITRARY_KEYS (1ULL << 28)
-#define CMD_CROSS_DB (1ULL << 29)
-#define CMD_ALL_DBS (1ULL << 30)
+#define CMD_ALL_DBS (1ULL << 29)
 /* Command flags. Please don't forget to add command flag documentation in struct
  * serverCommand in this file. */
 
@@ -2558,8 +2557,6 @@ typedef int *commandDbIdArgs(robj **argv, int argc, int *count);
  * CMD_TOUCHES_ARBITRARY_KEYS: The command may touch (and cause lazy-expire)
  *                             arbitrary key (i.e not provided in argv)
  *
- * CMD_CROSS_DB: The command works across multiple databases.
- *
  * CMD_ALL_DBS: The command works with all databases.
  *
  * The following additional flags are only used in order to put commands
@@ -3204,7 +3201,6 @@ void ACLInit(void);
 #define ACL_DENIED_AUTH 4           /* Only used for ACL LOG entries. */
 #define ACL_DENIED_CHANNEL 5        /* Only used for pub/sub commands */
 #define ACL_INVALID_TLS_CERT_AUTH 6 /* Only used for TLS Auto-authentication */
-#define ACL_NOT_IMPLEMENTED 7       /* Only used for CMD_CROSS_DB validation */
 
 /* Context values for addACLLogEntry(). */
 #define ACL_LOG_CTX_TOPLEVEL 0

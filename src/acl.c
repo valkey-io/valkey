@@ -1782,33 +1782,29 @@ static int ACLSelectorCheckCmd(aclSelector *selector,
     uint64_t id = cmd->id;
     int ret;
 
-    /* Check database level permissions based on command flags. */
-    if (cmd->flags & CMD_CROSS_DB) {
-        if (cmd->get_dbid_args) {
-            int count = 0;
-            int *dbids = cmd->get_dbid_args(argv, argc, &count);
-            if (dbids) {
-                for (int i = 0; i < count; i++) {
-                    if (!ACLSelectorCanAccessDb(selector, dbids[i])) {
-                        if (keyidxptr) {
-                            if (cmd->proc == selectCommand)
-                                *keyidxptr = 1;
-                            else if (cmd->proc == moveCommand)
-                                *keyidxptr = 2;
-                            else if (cmd->proc == swapdbCommand)
-                                *keyidxptr = (i == 0) ? 1 : 2;
-                            else
-                                *keyidxptr = 0;
-                        }
-                        zfree(dbids);
-                        return ACL_DENIED_DB;
+    /* Check database level permissions based on cmd->get_dbid_args implementation. */
+    if (cmd->get_dbid_args) {
+        int count = 0;
+        int *dbids = cmd->get_dbid_args(argv, argc, &count);
+        if (dbids) {
+            for (int i = 0; i < count; i++) {
+                if (!ACLSelectorCanAccessDb(selector, dbids[i])) {
+                    /* TODO: somehow move from hardcoded cases */
+                    if (keyidxptr) {
+                        if (cmd->proc == selectCommand)
+                            *keyidxptr = 1;
+                        else if (cmd->proc == moveCommand)
+                            *keyidxptr = 2;
+                        else if (cmd->proc == swapdbCommand)
+                            *keyidxptr = (i == 0) ? 1 : 2;
+                        else
+                            *keyidxptr = 0;
                     }
+                    zfree(dbids);
+                    return ACL_DENIED_DB;
                 }
-                zfree(dbids);
             }
-        } else {
-            /* Command has flag CMD_CROSS_DB but has no function to get its db id args */
-            return ACL_NOT_IMPLEMENTED;
+            zfree(dbids);
         }
     } else if ((cmd->flags & CMD_ALL_DBS) && !(selector->flags & SELECTOR_FLAG_ALLDBS)) {
         for (int i = 0; i < server.dbnum; i++) {
@@ -2760,7 +2756,6 @@ static void ACLUpdateInfoMetrics(int reason) {
         server.acl_info.acl_access_denied_tls_cert++;
     } else if (reason == ACL_DENIED_DB) {
         server.acl_info.invalid_db_accesses++;
-    } else if (reason == ACL_NOT_IMPLEMENTED) {
     } else {
         serverPanic("Unknown ACL_DENIED encoding");
     }
@@ -2900,12 +2895,6 @@ sds getAclErrorMessage(int acl_res, user *user, struct serverCommand *cmd, sds e
         } else {
             return sdsnew("No permissions to access database");
         }
-    case ACL_NOT_IMPLEMENTED:
-        return sdscatfmt(sdsempty(),
-                         "Command '%S' has flag CMD_CROSS_DB "
-                         "but has no function to get its database id args, "
-                         "see serverCommand in server.h",
-                         cmd->fullname);
     }
     serverPanic("Reached deadcode on getAclErrorMessage");
 }

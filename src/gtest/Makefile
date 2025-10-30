@@ -2,7 +2,7 @@ CXX ?= g++
 AR ?= ar
 SERVER_AR ?= $(AR)
 -include ../.make-settings
-OPT=-O3 -DNDEBUG
+OPT=-Og -g
 uname_S := $(shell sh -c 'uname -s 2>/dev/null || echo not')
 
 # Add -m32 for 32bit builds
@@ -123,7 +123,7 @@ endif
 	cd ../../deps && $(MAKE) gtest
 
 # Ensure Valkey server library is built
-$(VALKEY_SERVER_LIB):
+$(VALKEY_SERVER_LIB): $(patsubst %.o,%.c,$(ENGINE_SERVER_OBJ))
 	cd .. && $(MAKE) libvalkey.a
 
 # Ensure parent prerequisites are built
@@ -184,13 +184,13 @@ valkey-unit-gtests: $(ALL_OBJECTS) generated_wrappers.o $(VALKEY_SERVER_WRAP_LIB
 		-lm -pthread -ldl
 else
 valkey-unit-gtests: $(ALL_OBJECTS) generated_wrappers.o $(VALKEY_SERVER_LIB) $(FINAL_LIBS)
-	$(CXX) -g \
-		-Wl,--allow-multiple-definition \
+	$(CXX) -g -fno-lto \
 		$(OVERRIDES) \
 		-Wall -Wno-deprecated-declarations \
-		-o $@ $^ $(LD_LIBS) \
+		-o $@ $(ALL_OBJECTS) $(VALKEY_SERVER_LIB) $(FINAL_LIBS) $(LD_LIBS) \
 		-lrt -lm -pthread -ldl -lgcov
 endif
+# -Wl,--allow-multiple-definition
 
 .PHONY: all
 all: valkey-unit-gtests

@@ -103,7 +103,19 @@ static_assert(sizeof(off_t) >= 8, "off_t must be 64-bit; ensure _FILE_OFFSET_BIT
 #define dismissMemory zmadvise_dontneed
 
 #define VALKEYMODULE_CORE 1
-typedef struct serverObject robj;
+
+/* serverObject (aka robj) is currently overloaded for 2 purposes.  This is a legacy artifact.
+ *   1. It's carries a reference counted STRING (a keyless value) during parsing and command execution.
+ *   2. It's also used to carry a key/value pair which is inserted into the DB.  In this form, the
+ *      value is not limited to being a string.
+ * 
+ * The typedef "dbEntry" is used to explicitly connote the latter form.  It indicates a key/value
+ * pair which is suitable to exist in the DB.  It might be active in the DB, or may be unlinked from
+ * the DB (but still contains a key/value).  The value may be any of the Valkey data types/encodings.
+ */
+typedef struct serverObject robj;       // A keyless string OR a key/value pair
+typedef struct serverObject dbEntry;    // Explicitly a key/value pair
+
 #include "valkeymodule.h" /* Modules API defines. */
 
 /* Following includes allow test functions to be called from main() */

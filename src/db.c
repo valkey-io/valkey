@@ -37,6 +37,7 @@
 #include "module.h"
 #include "vector.h"
 #include "expire.h"
+#include "bgiteration.h"
 
 /*-----------------------------------------------------------------------------
  * C-level DB API
@@ -475,6 +476,8 @@ int dbGenericDeleteWithDictIndex(serverDb *db, robj *key, int async, int flags, 
     hashtablePosition pos;
     void **ref = kvstoreHashtableTwoPhasePopFindRef(db->keys, dict_index, objectGetVal(key), &pos);
     if (ref != NULL) {
+        bgIteration_keyDelete(db->id, (sds)objectGetVal(key));
+
         robj *val = *ref;
         /* VM_StringDMA may call dbUnshareStringValue which may free val, so we
          * need to incr to retain val */

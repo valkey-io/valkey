@@ -4543,6 +4543,12 @@ void sentinelReceiveIsPrimaryDownReply(valkeyAsyncContext *c, void *reply, void 
  * in order to get the replies that allow to reach the quorum
  * needed to mark the primary in ODOWN state and trigger a failover. */
 void sentinelAskPrimaryStateToOtherSentinels(sentinelValkeyInstance *primary, int flags) {
+    /* We don't need to send requests when the primary is not SDOWN */
+    if ((primary->flags & SRI_S_DOWN) == 0) return;
+
+    char port[32];
+    ll2string(port, sizeof(port), primary->addr->port);
+
     dictIterator *di;
     dictEntry *de;
 
@@ -4550,7 +4556,6 @@ void sentinelAskPrimaryStateToOtherSentinels(sentinelValkeyInstance *primary, in
     while ((de = dictNext(di)) != NULL) {
         sentinelValkeyInstance *ri = dictGetVal(de);
         mstime_t elapsed = mstime() - ri->last_primary_down_reply_time;
-        char port[32];
         int retval;
 
         /* If the primary state from other sentinel is too old, we clear it. */
@@ -4565,13 +4570,11 @@ void sentinelAskPrimaryStateToOtherSentinels(sentinelValkeyInstance *primary, in
          * 1) We believe it is down, or there is a failover in progress.
          * 2) Sentinel is connected.
          * 3) We did not receive the info within SENTINEL_ASK_PERIOD ms. */
-        if ((primary->flags & SRI_S_DOWN) == 0) continue;
         if (ri->link->disconnected) continue;
         if (!(flags & SENTINEL_ASK_FORCED) && mstime() - ri->last_primary_down_reply_time < sentinel_ask_period)
             continue;
 
         /* Ask */
-        ll2string(port, sizeof(port), primary->addr->port);
         retval = valkeyAsyncCommand(
             ri->link->cc, sentinelReceiveIsPrimaryDownReply, ri, "%s is-master-down-by-addr %s %s %llu %s",
             sentinelInstanceMapCommand(ri, "SENTINEL"), announceSentinelAddr(primary->addr), port,

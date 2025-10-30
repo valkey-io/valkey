@@ -176,12 +176,36 @@ start_server {tags {"modules"}} {
         assert_equal $result 0
     }
 
+    test {Test HELLO debugger} {
+        r script debug sync hello
+        set ret [r eval "#!hello\nFUNCTION foo\nARGS 0\nRETURN" 0 167]
+        assert_equal {{>>>   0: ARGS 0}} $ret
+        set cmd "*1\r\n\$4\r\nstep\r\n"
+        r write $cmd
+        r flush
+        set ret [r read]
+        assert_equal {{>>>   1: RETURN}} $ret
+        set cmd "*1\r\n\$5\r\nstack\r\n"
+        r write $cmd
+        r flush
+        set ret [r read]
+        assert_equal {{Stack contents:} {top -> [0] 167}} $ret
+        set cmd "*1\r\n\$1\r\nc\r\n"
+        r write $cmd
+        r flush
+        set ret [r read]
+        assert_equal {<endsession>} $ret
+        r script debug off
+        reconnect
+        assert_equal [r ping] {PONG}
+    }
+
     test {Unload scripting engine module} {
         set result [r module unload helloengine]
         assert_equal $result "OK"
     }
 
-    test {Load scripting engine in older version} {
+    test {Load scripting engine in version before function env reset} {
         r module load $testmodule 2
         r function load $HELLO_PROGRAM
         set result [r fcall foo 0 123]
@@ -189,5 +213,17 @@ start_server {tags {"modules"}} {
         set result [r function flush async]
         assert_equal $result {OK}
         assert_error {ERR Function not found} {r fcall foo 0 123}
+        set result [r module unload helloengine]
+        assert_equal $result "OK"
+    }
+
+    test {Load scripting engine in version before debugger support} {
+        r module load $testmodule 3
+        r function load $HELLO_PROGRAM
+        set result [r fcall foo 0 123]
+        assert_equal $result 123
+        assert_error {ERR The scripting engine 'HELLO' does not support interactive script debugging} {r script debug sync hello}
+        set result [r module unload helloengine]
+        assert_equal $result "OK"
     }
 }

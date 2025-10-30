@@ -1160,8 +1160,8 @@ int VM_IsChannelsPositionRequest(ValkeyModuleCtx *ctx) {
  * The following is an example of how it could be used:
  *
  *     if (ValkeyModule_IsChannelsPositionRequest(ctx)) {
- *         ValkeyModule_ChannelAtPosWithFlags(ctx, 1, VALKEYMODULE_CMD_CHANNEL_SUBSCRIBE |
- * VALKEYMODULE_CMD_CHANNEL_PATTERN); ValkeyModule_ChannelAtPosWithFlags(ctx, 1, VALKEYMODULE_CMD_CHANNEL_PUBLISH);
+ *         ValkeyModule_ChannelAtPosWithFlags(ctx, 1, VALKEYMODULE_CMD_CHANNEL_SUBSCRIBE | VALKEYMODULE_CMD_CHANNEL_PATTERN);
+ *         ValkeyModule_ChannelAtPosWithFlags(ctx, 1, VALKEYMODULE_CMD_CHANNEL_PUBLISH);
  *     }
  *
  * Note: One usage of declaring channels is for evaluating ACL permissions. In this context,
@@ -10941,7 +10941,7 @@ int moduleUnregisterFilters(ValkeyModule *module) {
  *
  * 1. Invocation by a client.
  * 2. Invocation through `ValkeyModule_Call()` by any module.
- * 3. Invocation through Lua `redis.call()`.
+ * 3. Invocation through Lua `server.call()`.
  * 4. Replication of a command from a primary.
  *
  * The filter executes in a special filter context, which is different and more
@@ -10981,8 +10981,9 @@ int moduleUnregisterFilters(ValkeyModule *module) {
  * If multiple filters are registered (by the same or different modules), they
  * are executed in the order of registration.
  */
-ValkeyModuleCommandFilter *
-VM_RegisterCommandFilter(ValkeyModuleCtx *ctx, ValkeyModuleCommandFilterFunc callback, int flags) {
+ValkeyModuleCommandFilter *VM_RegisterCommandFilter(ValkeyModuleCtx *ctx,
+                                                    ValkeyModuleCommandFilterFunc callback,
+                                                    int flags) {
     ValkeyModuleCommandFilter *filter = zmalloc(sizeof(*filter));
     filter->module = ctx->module;
     filter->callback = callback;
@@ -11899,8 +11900,6 @@ static uint64_t moduleEventVersions[] = {
  *         char *job_name;                     // Unique ID for the operation (40 chars)
  *         ValkeyModuleSlotRange *slot_ranges; // Array of slot ranges involved in the operation
  *         uint32_t num_slot_ranges;           // Number of slot ranges in slot_ranges array
- *         char *source_node_id;               // Source node ID (40 chars)
- *         char *target_node_id;               // Target node ID (40 chars)
  *
  *    The ValkeyModuleSlotRange structure has the following fields:
  *
@@ -13428,6 +13427,10 @@ int VM_RdbSave(ValkeyModuleCtx *ctx, ValkeyModuleRdbStream *stream, int flags) {
     return VALKEYMODULE_OK;
 }
 
+/* --------------------------------------------------------------------------
+ * ## Scripting Engine API
+ * -------------------------------------------------------------------------- */
+
 /* Registers a new scripting engine in the server.
  *
  * - `module_ctx`: the module context object.
@@ -13497,6 +13500,62 @@ ValkeyModuleScriptingEngineExecutionState VM_GetFunctionExecutionState(
     int ret = scriptInterrupt(server_ctx);
     serverAssert(ret == SCRIPT_CONTINUE || ret == SCRIPT_KILL);
     return ret == SCRIPT_CONTINUE ? VMSE_STATE_EXECUTING : VMSE_STATE_KILLED;
+}
+
+/* Function to send string messages to the client during a debug session.
+ * These messages are buffered in memory, and are only sent to the client when
+ * `ValkeyModule_VM_ScriptingEngineDebuggerFlushLogs` is called.
+ *
+ * - `msg`: the message to send.
+ *
+ * - `truncate`: if set to 1, the message will be truncated to the maximum length
+ *   configured in the debugger settings.
+ */
+void VM_ScriptingEngineDebuggerLog(ValkeyModuleString *msg, int truncate) {
+    if (truncate) {
+        scriptingEngineDebuggerLogWithMaxLen(msg);
+    } else {
+        scriptingEngineDebuggerLog(msg);
+    }
+}
+
+/* Function to log a RESP reply C string as debugger output, in a human readable
+ * format.
+ *
+ * If the resulting string is longer than the maximum text length, configured in
+ * the debugger settings, plus a few more chars used as prefix, it gets truncated.
+ */
+void VM_ScriptingEngineDebuggerLogRespReplyStr(const char *reply) {
+    scriptingEngineDebuggerLogRespReplyStr(reply);
+}
+
+/* Function to log a RESP reply as debugger output, in a human readable format.
+ *
+ * If the resulting string is longer than the maximum text length, configured in
+ * the debugger settings, plus a few more chars used as prefix, it gets truncated.
+ */
+void VM_ScriptingEngineDebuggerLogRespReply(ValkeyModuleCallReply *reply) {
+    size_t proto_len;
+    const char *proto = callReplyGetProto(reply, &proto_len);
+    scriptingEngineDebuggerLogRespReplyStr(proto);
+}
+
+/* Function to send all debugger messages in the memory buffer written with the
+ * `ValkeyModule_ScriptingEngineDebuggerLog` function.
+ */
+void VM_ScriptingEngineDebuggerFlushLogs(void) {
+    scriptingEngineDebuggerFlushLogs();
+}
+
+/* Function used to process debugger commands sent by the client.
+ *
+ * This function in conjunction with `ValkeyModule_ScriptingEngineDebuggerLog` and
+ * `ValkeyModule_ScriptingEngineDebuggerFlushLogs` allows to implement an
+ * interactive debugging session for scripts executed by the scripting engine.
+ */
+void VM_ScriptingEngineDebuggerProcessCommands(int *client_disconnected,
+                                               ValkeyModuleString **err) {
+    scriptingEngineDebuggerProcessCommands(client_disconnected, err);
 }
 
 /* MODULE command.
@@ -14373,4 +14432,9 @@ void moduleRegisterCoreAPI(void) {
     REGISTER_API(RegisterScriptingEngine);
     REGISTER_API(UnregisterScriptingEngine);
     REGISTER_API(GetFunctionExecutionState);
+    REGISTER_API(ScriptingEngineDebuggerLog);
+    REGISTER_API(ScriptingEngineDebuggerLogRespReplyStr);
+    REGISTER_API(ScriptingEngineDebuggerLogRespReply);
+    REGISTER_API(ScriptingEngineDebuggerFlushLogs);
+    REGISTER_API(ScriptingEngineDebuggerProcessCommands);
 }

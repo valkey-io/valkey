@@ -268,6 +268,11 @@ proc tags_acceptable {tags err_return} {
         return 0
     }
 
+    if {[lsearch $tags "ipv6"] >= 0 && ![is_ipv6_available]} {
+        set err "IPv6 not available on this system"
+        return 0
+    }
+
     return 1
 }
 
@@ -524,11 +529,11 @@ proc start_server {options {code undefined}} {
 
     if {$start_other_server} {
         set executable $::other_server_path
-        if {![file executable $executable]} {
-            error "File not found or not executable: $executable"
-        }
     } else {
         set executable "src/valkey-server"
+    }
+    if {![file executable $executable]} {
+        error "Server executable file not found or not executable: $executable"
     }
 
     set data [split [exec cat "tests/assets/$baseconfig"] "\n"]

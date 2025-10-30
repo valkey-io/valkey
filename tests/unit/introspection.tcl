@@ -265,7 +265,7 @@ start_server {tags {"introspection"}} {
     } {}
 
     start_server {tags {"ipv6"} overrides {bind {127.0.0.1 ::1}}} {
-        test {CLIENT LIST with IPv6 filter} {
+        test {CLIENT KILL with IPv6 filter} {
             set c [valkey ::1 [srv 0 port] 0 $::tls]
             $c client setname "client-ipv6"
 

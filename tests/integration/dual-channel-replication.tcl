@@ -542,7 +542,7 @@ start_server {tags {"dual-channel-replication external:skip"}} {
         }
 
         # Avoids timeout by keeping the RDB child alive longer while the replica is inactive
-        $primary config set rdb-key-save-delay 1000
+        $primary config set rdb-key-save-delay 200
         populate 10000 primary 10000
         
         set load_handle1 [start_one_key_write_load $primary_host $primary_port 100 "mykey1"]

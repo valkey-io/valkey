@@ -279,6 +279,7 @@ start_server {tags {"introspection"}} {
             $c close
         }
     }
+
     test {CLIENT KILL with CAPA filter} {
         set c1 [valkey_client]
         $c1 client setname "killme-capa"
@@ -508,6 +509,7 @@ start_server {tags {"introspection"}} {
         # Use the extracted IP for filtering.
         r client list not-ip $not_ip not-ip $not_ip
     } {}
+
     start_server {tags {"ipv6"} overrides {bind {127.0.0.1 ::1}}} {
         test {CLIENT LIST with IPv6 negative filter} {
             set c [valkey ::1 [srv 0 port] 0 $::tls]

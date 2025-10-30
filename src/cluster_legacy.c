@@ -3598,6 +3598,16 @@ int clusterIsValidPacket(clusterLink *link) {
     return 1;
 }
 
+/* When iterating through the slot bitmap, group every 64 bits as
+ * a word to speedup. */
+static inline int clusterExtractSlotFromWord(uint64_t *slot_word, size_t slot_word_index) {
+    /* Get the index of the least-significant set bit, in this 64-bit word */
+    const unsigned bit = (unsigned)__builtin_ctzll(*slot_word);
+    const int slot = (int)((slot_word_index << 6) | bit);
+    *slot_word &= *slot_word - 1; /* clear that bit */
+    return slot;
+}
+
 /* When this function is called, there is a packet to process starting
  * at link->rcvbuf. Releasing the buffer is up to the caller, so this
  * function should just handle the higher level stuff of processing the
@@ -4112,10 +4122,7 @@ int clusterProcessPacket(clusterLink *link) {
                 uint64_t word;
                 memcpy(&word, hdr->myslots + (w << 3), sizeof(word));
                 while (word) {
-                    /* Get the index of the least-significant set bit, in this 64-bit word */
-                    const unsigned bit = (unsigned)__builtin_ctzll(word);
-                    const int slot = (int)((w << 6) | bit);
-                    word &= word - 1; /* clear that bit */
+                    const int slot = clusterExtractSlotFromWord(&word, w);
 
                     clusterNode *slot_owner = server.cluster->slots[slot];
                     if (slot_owner == sender || isSlotUnclaimed(slot)) continue;
@@ -5066,10 +5073,7 @@ void clusterSendFailoverAuthIfNeeded(clusterNode *node, clusterMsg *request) {
         uint64_t word;
         memcpy(&word, claimed_slots + (w << 3), sizeof(word));
         while (word) {
-            /* Get the index of the least-significant set bit, in this 64-bit word */
-            const unsigned bit = (unsigned)__builtin_ctzll(word);
-            slot = (int)((w << 6) | bit);
-            word &= word - 1; /* clear that bit */
+            slot = clusterExtractSlotFromWord(&word, w);
 
             if (isSlotUnclaimed(slot) || server.cluster->slots[slot]->configEpoch <= requestConfigEpoch) {
                 continue;

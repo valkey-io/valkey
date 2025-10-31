@@ -821,7 +821,7 @@ static sds ACLDescribeSelector(aclSelector *selector) {
     if (selector->flags & SELECTOR_FLAG_ALLDBS) {
         res = sdscatlen(res, "alldbs ", 7);
     } else {
-        res = sdscatlen(res, "db=", 3);
+        res = sdscatlen(res, "db+=", 4);
         uint32_t len = intsetLen(selector->dbs);
         for (uint32_t i = 0; i < len; i++) {
             int64_t dbid;
@@ -959,14 +959,39 @@ static void ACLAddAllowedFirstArg(aclSelector *selector, unsigned long id, const
     selector->allowed_firstargs[id][items - 1] = NULL;
 }
 
-/* Helper function to set database permissions for a selector */
-static int ACLSetSelectorDatabasePermissions(aclSelector *selector, const char *dbs_str) {
-    selector->flags &= ~SELECTOR_FLAG_ALLDBS;
-
-    intset *new_dbs = intsetNew();
-    if (!new_dbs) {
-        errno = ENOMEM;
-        return C_ERR;
+/* Helper function to add or remove database permissions to/from a selector.
+ * When add_dbs is 1, this function adds the specified databases to the existing set.
+ * When add_dbs is 0, this function removes the specified databases from the existing set. */
+static int ACLSetSelectorDatabasePermissions(aclSelector *selector, const char *dbs_str, int add_dbs) {
+    intset *new_dbs;
+    
+    if (add_dbs) {
+        new_dbs = selector->dbs ? intsetDup(selector->dbs) : intsetNew();
+        if (!new_dbs) {
+            errno = ENOMEM;
+            return C_ERR;
+        }
+    } else {
+        /* If ALLDBS flag is set, convert it to an explicit list first */
+        if (selector->flags & SELECTOR_FLAG_ALLDBS) {
+            new_dbs = intsetNew();
+            for (int i = 0; i < server.dbnum; i++) {
+                uint8_t success;
+                new_dbs = intsetAdd(new_dbs, i, &success);
+                if (!success) {
+                    intsetFree(new_dbs);
+                    errno = ENOMEM;
+                    return C_ERR;
+                }
+            }
+            selector->flags &= ~SELECTOR_FLAG_ALLDBS;
+        } else {
+            new_dbs = selector->dbs ? intsetDup(selector->dbs) : intsetNew();
+            if (!new_dbs) {
+                errno = ENOMEM;
+                return C_ERR;
+            }
+        }
     }
 
     char *dblist = zstrdup(dbs_str);
@@ -1001,15 +1026,22 @@ static int ACLSetSelectorDatabasePermissions(aclSelector *selector, const char *
             return C_ERR;
         }
 
-        uint8_t success;
-        intset *result = intsetAdd(new_dbs, dbid, &success);
-        if (!success) {
-            zfree(dblist);
-            intsetFree(new_dbs);
-            errno = EINVAL;
-            return C_ERR;
+        
+        if (add_dbs) {
+            uint8_t success;
+            intset *result = intsetAdd(new_dbs, dbid, &success);
+            if (!success) {
+                zfree(dblist);
+                intsetFree(new_dbs);
+                errno = EINVAL;
+                return C_ERR;
+            }
+            new_dbs = result;
+        } else {
+            int success;
+            /* Not finding the database to remove is not an error */
+            new_dbs = intsetRemove(new_dbs, dbid, &success);
         }
-        new_dbs = result;
 
         token = strtok_r(NULL, ",", &saveptr);
     }
@@ -1018,6 +1050,9 @@ static int ACLSetSelectorDatabasePermissions(aclSelector *selector, const char *
         intsetFree(selector->dbs);
     }
     selector->dbs = new_dbs;
+    if (add_dbs) {
+        selector->flags &= ~SELECTOR_FLAG_ALLDBS;
+    }
 
     zfree(dblist);
     return C_OK;
@@ -1085,9 +1120,11 @@ static aclSelector *aclCreateSelectorFromOpSet(const char *opset, size_t opsetle
  *              It is possible to specify multiple patterns.
  * allchannels              Alias for &*
  * resetchannels            Flush the list of allowed channel patterns.
- * db=<dbid>    Add database ID to the set of allowed IDs, any other database ID
- *              will be disallowed. May be used with `,` for assingning multiple
- *              allowed IDs (e.g "db=1,2,3").
+ * db+=<dbid>   Add database ID(s) to the set of allowed database IDs. May be used
+ *              with `,` for adding multiple IDs (e.g "db+=1,2,3"). To override all
+ *              existing databases, use 'resetdbs' first, then 'db+='.
+ * db-=<dbid>   Remove database ID(s) from the set of allowed database IDs. May be used
+ *              with `,` for removing multiple IDs (e.g "db-=1,2,3").
  * alldbs       Allow access to all databases.
  * resetdbs     Flush the set of allowed database IDs, revert to default
  *              behaviour (all databases are allowed).
@@ -1117,8 +1154,11 @@ static int ACLSetSelector(aclSelector *selector, const char *op, size_t oplen) {
             intsetFree(selector->dbs);
             selector->dbs = intsetNew();
         }
-    } else if (strncmp(op, "db=", 3) == 0 || strncmp(op, "DB=", 3) == 0) {
-        int result = ACLSetSelectorDatabasePermissions(selector, op + 3);
+    } else if (strncasecmp(op, "db+=", 4) == 0) {
+        int result = ACLSetSelectorDatabasePermissions(selector, op + 4, 1);
+        if (result != C_OK) return result;
+    } else if (strncasecmp(op, "db-=", 4) == 0) {
+        int result = ACLSetSelectorDatabasePermissions(selector, op + 4, 0);
         if (result != C_OK) return result;
     } else if (!strcasecmp(op, "allcommands") || !strcasecmp(op, "+@all")) {
         memset(selector->allowed_commands, 255, sizeof(selector->allowed_commands));

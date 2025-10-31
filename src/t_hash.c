@@ -52,6 +52,11 @@ typedef enum {
     EXPIRATION_MODIFICATION_EXPIRE_ASAP = 2,      /* if apply of the expiration modification was set to a time in the past (i.e field is immediately expired) */
 } expiryModificationResult;
 
+// A vsetGetExpiryFunc
+static long long entryGetExpiryVsetFunc(const void *e) {
+    return entryGetExpiry((const entry *)e);
+}
+
 /*-----------------------------------------------------------------------------
  * Hash type Expiry API
  *----------------------------------------------------------------------------*/
@@ -103,28 +108,28 @@ void hashTypeFreeVolatileSet(robj *o) {
     hashTypeIgnoreTTL(o, true);
 }
 
-void hashTypeTrackEntry(robj *o, void *entry) {
+void hashTypeTrackEntry(robj *o, entry *entry) {
     vset *set;
     if (hashTypeHasVolatileFields(o)) {
         set = hashTypeGetVolatileSet(o);
     } else {
         set = hashTypeGetOrcreateVolatileSet(o);
     }
-    bool added = vsetAddEntry(set, entryGetExpiry, entry);
+    bool added = vsetAddEntry(set, entryGetExpiryVsetFunc, entry);
     serverAssert(added);
 }
 
-static void hashTypeUntrackEntry(robj *o, void *entry) {
+static void hashTypeUntrackEntry(robj *o, entry *entry) {
     if (!entryHasExpiry(entry)) return;
     vset *set = hashTypeGetVolatileSet(o);
     debugServerAssert(set);
-    serverAssert(vsetRemoveEntry(set, entryGetExpiry, entry));
+    serverAssert(vsetRemoveEntry(set, entryGetExpiryVsetFunc, entry));
     if (vsetIsEmpty(set)) {
         hashTypeFreeVolatileSet(o);
     }
 }
 
-static void hashTypeTrackUpdateEntry(robj *o, void *old_entry, void *new_entry, long long old_expiry, long long new_expiry) {
+static void hashTypeTrackUpdateEntry(robj *o, entry *old_entry, entry *new_entry, long long old_expiry, long long new_expiry) {
     int old_tracked = (old_entry && old_expiry != EXPIRY_NONE);
     int new_tracked = (new_entry && new_expiry != EXPIRY_NONE);
     /* If entry was not tracked before and not going to be tracked now, we can simply return */
@@ -134,14 +139,14 @@ static void hashTypeTrackUpdateEntry(robj *o, void *old_entry, void *new_entry, 
     vset *set = hashTypeGetOrcreateVolatileSet(o);
     debugServerAssert(!old_tracked || !vsetIsEmpty(set));
 
-    serverAssert(vsetUpdateEntry(set, entryGetExpiry, old_entry, new_entry, old_expiry, new_expiry) == 1);
+    serverAssert(vsetUpdateEntry(set, entryGetExpiryVsetFunc, old_entry, new_entry, old_expiry, new_expiry) == 1);
 
     if (vsetIsEmpty(set)) {
         hashTypeFreeVolatileSet(o);
     }
 }
 
-bool hashHashtableTypeValidate(hashtable *ht, void *entry) {
+bool hashHashtableTypeValidate(hashtable *ht, entry *entry) {
     UNUSED(ht);
     expirationPolicy policy = getExpirationPolicyWithFlags(0);
     if (policy == POLICY_IGNORE_EXPIRE) return true;
@@ -2156,7 +2161,7 @@ size_t hashTypeDeleteExpiredFields(robj *o, mstime_t now, unsigned long max_fiel
     /* skip TTL checks temporarily (to allow hashtable pops) */
     hashTypeIgnoreTTL(o, true);
     expiryContext ctx = {.key = o, .fields = out_entries, .n_fields = 0};
-    size_t expired = vsetRemoveExpired(vset, entryGetExpiry, hashTypeExpireEntry, now, max_fields, &ctx);
+    size_t expired = vsetRemoveExpired(vset, entryGetExpiryVsetFunc, hashTypeExpireEntry, now, max_fields, &ctx);
     serverAssert(ctx.n_fields <= max_fields);
     if (vsetIsEmpty(vset)) {
         hashTypeFreeVolatileSet(o);

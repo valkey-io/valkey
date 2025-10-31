@@ -104,6 +104,7 @@ static struct config {
     int requests;
     int duration;
     _Atomic int warmup_duration;
+    _Atomic int current_warmup_duration;
     _Atomic int requests_issued;
     _Atomic int requests_finished;
     _Atomic int previous_requests_finished;
@@ -256,7 +257,7 @@ static long long nstime(void) {
 
 static bool isBenchmarkFinished(int request_count) {
     /* don't end in warmup period */
-    int warmup_duration = atomic_load_explicit(&config.warmup_duration, memory_order_relaxed);
+    int warmup_duration = atomic_load_explicit(&config.current_warmup_duration, memory_order_relaxed);
     if (warmup_duration > 0) return false;
 
     if (config.duration > 0) {
@@ -1254,6 +1255,7 @@ static void benchmarkSequence(const char *title, char *cmd, int len, int seqlen)
     config.requests_finished = 0;
     config.previous_requests_finished = 0;
     config.last_printed_bytes = 0;
+    config.current_warmup_duration = config.warmup_duration;
     hdr_init(CONFIG_LATENCY_HISTOGRAM_MIN_VALUE,         // Minimum value
              CONFIG_LATENCY_HISTOGRAM_MAX_VALUE,         // Maximum value
              config.precision,                           // Number of significant figures
@@ -1636,9 +1638,17 @@ int parseOptions(int argc, char **argv) {
             exit(0);
         } else if (!strcmp(argv[i], "-n")) {
             if (lastarg) goto invalid;
+            if (config.duration > 0) {
+                fprintf(stderr, "Options -n and --duration are mutually exclusive.\n");
+                exit(1);
+            }
             config.requests = atoi(argv[++i]);
         } else if (!strcmp(argv[i], "--duration")) {
             if (lastarg) goto invalid;
+            if (config.requests > 0) {
+                fprintf(stderr, "Options -n and --duration are mutually exclusive.\n");
+                exit(1);
+            }
             config.duration = atoi(argv[++i]);
         } else if (!strcmp(argv[i], "--warmup")) {
             if (lastarg) goto invalid;
@@ -1895,7 +1905,7 @@ usage:
         "                    the same or higher than the number of nodes.\n"
         " -n <requests>      Total number of requests (default 100000)\n"
         " --duration <seconds>\n"
-        "                    Run benchmark for specified number of seconds (overrides -n)\n"
+        "                    Run benchmark for specified number of seconds (mutually exclusive with -n)\n"
         " --warmup <seconds> Run benchmark for specified warmup period before recording data\n"
         " -d <size>          Data size of SET/GET value in bytes (default 3)\n"
         " --dbnum <db>       SELECT the specified db number (default 0)\n"
@@ -1993,11 +2003,11 @@ long long showThroughput(struct aeEventLoop *eventLoop, long long id, void *clie
         fprintf(stderr, "All clients disconnected... aborting.\n");
         exit(1);
     }
-    int warmup_duration = atomic_load_explicit(&config.warmup_duration, memory_order_relaxed);
+    int warmup_duration = atomic_load_explicit(&config.current_warmup_duration, memory_order_relaxed);
     if (warmup_duration > 0) {
         if ((current_tick - config.start) >= (warmup_duration * 1000LL)) {
             /* exit the warmup period, clear all stats */
-            atomic_store_explicit(&config.warmup_duration, 0, memory_order_relaxed);
+            atomic_store_explicit(&config.current_warmup_duration, 0, memory_order_relaxed);
 
             config.start = current_tick;
             atomic_store_explicit(&config.requests_finished, 0, memory_order_relaxed);
@@ -2116,9 +2126,10 @@ int main(int argc, char **argv) {
     memset(&config.sslconfig, 0, sizeof(config.sslconfig));
     config.ct = VALKEY_CONN_TCP;
     config.numclients = 50;
-    config.requests = 100000;
+    config.requests = -1;
     config.duration = -1;
     config.warmup_duration = -1;
+    config.current_warmup_duration = -1;
     config.liveclients = 0;
     config.el = aeCreateEventLoop(1024 * 10);
     aeCreateTimeEvent(config.el, 1, showThroughput, NULL, NULL);
@@ -2161,6 +2172,9 @@ int main(int argc, char **argv) {
     i = parseOptions(argc, argv);
     argc -= i;
     argv += i;
+
+    /* Set default for requests if not specified */
+    if (config.requests < 0) config.requests = 100000;
 
     tag = "";
 

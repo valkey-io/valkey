@@ -240,19 +240,41 @@ tags {"benchmark network external:skip logreqres:skip"} {
             assert {$requests >= 100 && $requests < 150}
         }
 
-        test {benchmark: duration preempts request count} {
-            set start_time [clock clicks -millisec]
+        test {benchmark: -n and --duration are mutually exclusive} {
             set cmd [valkeybenchmark $master_host $master_port "-r 5 -n 5 --duration 1 -t set"]
-            common_bench_setup $cmd
+            catch { exec {*}$cmd } error
+            assert_match "*Options -n and --duration are mutually exclusive*" $error
+        }
+
+        test {benchmark: warmup applies to all tests in multi-test run} {
+            set start_time [clock clicks -millisec]
+            set cmd [valkeybenchmark $master_host $master_port "-r 5 --warmup 1 -n 50 -t set,get,incr"]
+            set output [common_bench_setup $cmd]
             set end_time [clock clicks -millisec]
 
-            # Verify duration was approximately 1 second (allow some margin)
+            # Verify total duration includes warmup for all 3 tests (at least 3 seconds)
             set elapsed [expr {($end_time - $start_time)/1000.}]
-            assert {$elapsed >= 1. && $elapsed <= 1.25}
+            assert {$elapsed >= 3}
 
-             # Verify that more than 5 requests were made (proving -n was preempted)
-            set calls [regexp -inline {calls=(\d+),} [cmdstat set]]
-            assert {$calls > 100}
+            # Verify all tests ran - with warmup, we expect more than 50 calls per command
+            # since warmup commands are also counted in server stats
+            assert_match  {*calls=*} [cmdstat set]
+            assert_match  {*calls=*} [cmdstat get]
+            assert_match  {*calls=*} [cmdstat incr]
+            
+            # Verify that each command was called more than the base 50 requests
+            # due to warmup period adding extra requests
+            set set_calls [regexp -inline {calls=(\d+)} [cmdstat set]]
+            set get_calls [regexp -inline {calls=(\d+)} [cmdstat get]]
+            set incr_calls [regexp -inline {calls=(\d+)} [cmdstat incr]]
+            
+            lassign $set_calls -> set_count
+            lassign $get_calls -> get_count
+            lassign $incr_calls -> incr_count
+            
+            assert {$set_count > 50}
+            assert {$get_count > 50}
+            assert {$incr_count > 50}
         }
 
         test {benchmark: clients idle mode should return error when reached maxclients limit} {
@@ -270,6 +292,30 @@ tags {"benchmark network external:skip logreqres:skip"} {
             common_bench_setup $cmd
             r get key
         } {arg}
+
+        test {benchmark: CSV output format} {
+            set cmd [valkeybenchmark $master_host $master_port "-c 5 -n 10 -t set,get --csv"]
+            set output [common_bench_setup $cmd]
+            # CSV output should contain comma-separated values
+            assert_match "*,*,*,*" $output
+            # Should not contain the usual formatted output
+            assert_no_match "*requests per second*" $output
+            # Should not contain carriage returns or progress indicators
+            assert_no_match "*\r*" $output
+            assert_no_match "*rps=*" $output
+            default_set_get_checks
+        }
+
+        test {benchmark: quiet mode} {
+            set cmd [valkeybenchmark $master_host $master_port "-c 5 -n 10 -t set,get -q"]
+            set output [common_bench_setup $cmd]
+            # Quiet mode should only show query/sec values (case-insensitive)
+            assert {[string match -nocase "*requests per second*" $output]}
+            # Should not contain detailed latency information (case-insensitive)
+            assert {![string match -nocase "*distribution*" $output]}
+            assert {![string match -nocase "*percentile*" $output]}
+            default_set_get_checks
+        }
 
         # tls specific tests
         if {$::tls} {

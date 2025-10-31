@@ -964,7 +964,7 @@ static void ACLAddAllowedFirstArg(aclSelector *selector, unsigned long id, const
  * When add_dbs is 0, this function removes the specified databases from the existing set. */
 static int ACLSetSelectorDatabasePermissions(aclSelector *selector, const char *dbs_str, int add_dbs) {
     intset *new_dbs;
-    
+
     if (add_dbs) {
         new_dbs = selector->dbs ? intsetDup(selector->dbs) : intsetNew();
         if (!new_dbs) {
@@ -1026,7 +1026,7 @@ static int ACLSetSelectorDatabasePermissions(aclSelector *selector, const char *
             return C_ERR;
         }
 
-        
+
         if (add_dbs) {
             uint8_t success;
             intset *result = intsetAdd(new_dbs, dbid, &success);

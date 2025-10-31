@@ -3199,12 +3199,10 @@ static int moduleReplyErrorFormatInternal(ValkeyModuleCtx *ctx, int flags, const
     if (c == NULL) return VALKEYMODULE_OK;
 
     int len = strlen(fmt) + 2; /* 1 for the \0 and 1 for the hyphen */
-    char *hyphenfmt = zmalloc(len);
+    char hyphenfmt[len];
     snprintf(hyphenfmt, len, "-%s", fmt);
 
     addReplyErrorFormatInternal(c, flags, hyphenfmt, ap);
-
-    zfree(hyphenfmt);
 
     return VALKEYMODULE_OK;
 }

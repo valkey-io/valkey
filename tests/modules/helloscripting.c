@@ -681,16 +681,16 @@ callHelloLangFunction(ValkeyModuleCtx *module_ctx,
 
     if (state == KILLED) {
         if (type == VMSE_EVAL) {
-            ValkeyModule_ReplyWithError(module_ctx, "ERR Script killed by user with SCRIPT KILL.");
+            ValkeyModule_ReplyWithCustomErrorFormat(module_ctx, 1, "ERR Script killed by user with SCRIPT KILL.");
             return;
         }
         if (type == VMSE_FUNCTION) {
-            ValkeyModule_ReplyWithError(module_ctx, "ERR Script killed by user with FUNCTION KILL");
+            ValkeyModule_ReplyWithCustomErrorFormat(module_ctx, 1, "ERR Script killed by user with FUNCTION KILL");
             return;
         }
     }
     else if (state == ABORTED) {
-        ValkeyModule_ReplyWithError(module_ctx, "ERR execution aborted during debugging session");
+        ValkeyModule_ReplyWithCustomErrorFormat(module_ctx, 1, "ERR execution aborted during debugging session");
     }
     else {
         if (result.type == VALUE_INT) {
@@ -702,7 +702,7 @@ callHelloLangFunction(ValkeyModuleCtx *module_ctx,
         } else {
             ValkeyModule_Assert(result.type == VALUE_ERROR);
             ValkeyModule_Log(module_ctx, "info", "Function '%s' executed, returning error '%s'", func->name, result.string);
-            ValkeyModule_ReplyWithError(module_ctx, result.string);
+            ValkeyModule_ReplyWithCustomErrorFormat(module_ctx, 0, "%s",result.string);
         }
     }
 }

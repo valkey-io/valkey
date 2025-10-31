@@ -210,6 +210,24 @@ start_server {tags {"modules"}} {
         r config set maxmemory 0
     }
 
+    test {Ensure errors from commands called from script is counted only once} {
+        r lpush l 1
+        assert_error {WRONGTYPE Operation against a key holding the wrong kind of value*} {
+            r eval {#!hello
+                FUNCTION callcmd
+                CONSTS l
+                CONSTI 1
+                CALL GET
+                RETURN
+            } 0
+        }
+
+        set errorstats [r info Errorstats]
+        regexp {errorstat_WRONGTYPE:count=([0-9]+)} $errorstats -> wrongtype_errors
+        assert_equal $wrongtype_errors 1
+
+    }
+
     test {Replace function library and call functions} {
         set result [r function load replace "#!hello name=mylib\nFUNCTION foo\nARGS 0\nRETURN\nFUNCTION bar\nCONSTI 500\nRETURN"]
         assert_equal $result "mylib"

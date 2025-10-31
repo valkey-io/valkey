@@ -3194,6 +3194,22 @@ int VM_ReplyWithError(ValkeyModuleCtx *ctx, const char *err) {
     return VALKEYMODULE_OK;
 }
 
+static int moduleReplyErrorFormatInternal(ValkeyModuleCtx *ctx, int flags, const char *fmt, va_list ap) {
+    client *c = moduleGetReplyClient(ctx);
+    if (c == NULL) return VALKEYMODULE_OK;
+
+    int len = strlen(fmt) + 2; /* 1 for the \0 and 1 for the hyphen */
+    char *hyphenfmt = zmalloc(len);
+    snprintf(hyphenfmt, len, "-%s", fmt);
+
+    addReplyErrorFormatInternal(c, flags, hyphenfmt, ap);
+
+    zfree(hyphenfmt);
+
+    return VALKEYMODULE_OK;
+}
+
+
 /* Reply with the error create from a printf format and arguments.
  *
  * Note that 'fmt' must contain all the error, including
@@ -3209,21 +3225,33 @@ int VM_ReplyWithError(ValkeyModuleCtx *ctx, const char *err) {
  * The function always returns VALKEYMODULE_OK.
  */
 int VM_ReplyWithErrorFormat(ValkeyModuleCtx *ctx, const char *fmt, ...) {
-    client *c = moduleGetReplyClient(ctx);
-    if (c == NULL) return VALKEYMODULE_OK;
-
-    int len = strlen(fmt) + 2; /* 1 for the \0 and 1 for the hyphen */
-    char *hyphenfmt = zmalloc(len);
-    snprintf(hyphenfmt, len, "-%s", fmt);
-
     va_list ap;
     va_start(ap, fmt);
-    addReplyErrorFormatInternal(c, 0, hyphenfmt, ap);
+    int ret = moduleReplyErrorFormatInternal(ctx, 0, fmt, ap);
     va_end(ap);
+    return ret;
+}
 
-    zfree(hyphenfmt);
-
-    return VALKEYMODULE_OK;
+/* Reply with a custom error created from a printf format and arguments.
+ *
+ * `update_error_stats`: if true server error stats are updated after the reply
+ * is sent to the client, otherwise no stats are updated.
+ *
+ * The function always returns VALKEYMODULE_OK.
+ */
+int VM_ReplyWithCustomErrorFormat(ValkeyModuleCtx *ctx,
+                                  int update_error_stats,
+                                  const char *fmt,
+                                  ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    int ret = moduleReplyErrorFormatInternal(
+        ctx,
+        ERR_REPLY_FLAG_CUSTOM | (update_error_stats ? 0 : ERR_REPLY_FLAG_NO_STATS_UPDATE),
+        fmt,
+        ap);
+    va_end(ap);
+    return ret;
 }
 
 /* Reply with a simple string (`+... \r\n` in RESP protocol). This replies
@@ -14136,6 +14164,7 @@ void moduleRegisterCoreAPI(void) {
     REGISTER_API(ReplyWithLongLong);
     REGISTER_API(ReplyWithError);
     REGISTER_API(ReplyWithErrorFormat);
+    REGISTER_API(ReplyWithCustomErrorFormat);
     REGISTER_API(ReplyWithSimpleString);
     REGISTER_API(ReplyWithArray);
     REGISTER_API(ReplyWithMap);

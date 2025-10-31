@@ -936,9 +936,10 @@ void ltrimCommand(client *c) {
     } else {
         listTypeTryConversion(o,LIST_CONV_SHRINKING,NULL,NULL);
     }
-    signalModifiedKey(c,c->db,c->argv[1]);
-    server.dirty += (ltrim + rtrim);
-    addReply(c,shared.ok);
+    long long total_trim = ltrim + rtrim;
+    if (total_trim) signalModifiedKey(c, c->db, c->argv[1]);
+    server.dirty += total_trim;
+    addReply(c, shared.ok);
 }
 
 /* LPOS key element [RANK rank] [COUNT num-matches] [MAXLEN len]

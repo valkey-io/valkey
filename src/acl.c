@@ -1001,7 +1001,7 @@ static int ACLSetSelectorDatabasePermissions(aclSelector *selector, const char *
         return C_ERR;
     }
 
-    // Reject empty list, trailing commas or more than 1 consecutive commas
+    /* Reject empty list, trailing commas or more than 1 consecutive commas */
     if (strlen(dblist) == 0 || dblist[0] == ',' ||
         dblist[strlen(dblist) - 1] == ',' || strstr(dblist, ",,")) {
         zfree(dblist);

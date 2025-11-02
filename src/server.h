@@ -3218,7 +3218,7 @@ int ACLAuthenticateUser(client *c, robj *username, robj *password, robj **err);
 void addAuthErrReply(client *c, robj *err);
 unsigned long ACLGetCommandID(sds cmdname);
 user *ACLGetUserByName(const char *name, size_t namelen);
-int ACLUserCheckKeyPerm(user *u, const char *key, int keylen, int flags);
+int ACLUserCheckKeyPerm(user *u, const char *key, int keylen, int flags, bool is_prefix);
 int ACLUserCheckChannelPerm(user *u, sds channel, int literal);
 int ACLCheckAllUserCommandPerm(user *u, struct serverCommand *cmd, robj **argv, int argc, int *idxptr);
 int ACLUserCheckCmdWithUnrestrictedKeyAccess(user *u, struct serverCommand *cmd, robj **argv, int argc, int flags);

@@ -10114,7 +10114,7 @@ int VM_ACLCheckKeyPermissions(ValkeyModuleUser *user, ValkeyModuleString *key, i
     }
 
     int keyspec_flags = moduleConvertKeySpecsFlags(flags, 0);
-    if (ACLUserCheckKeyPerm(user->user, key->ptr, sdslen(key->ptr), keyspec_flags) != ACL_OK) {
+    if (ACLUserCheckKeyPerm(user->user, key->ptr, sdslen(key->ptr), keyspec_flags, false) != ACL_OK) {
         errno = EACCES;
         return VALKEYMODULE_ERR;
     }
@@ -14159,6 +14159,39 @@ int VM_GetDbIdFromDefragCtx(ValkeyModuleDefragCtx *ctx) {
     return ctx->dbid;
 }
 
+/**
+ * This function verifies that the user represented by `ctx` is authorized to carry out the operations indicated in the
+ * `flags` parameter on keys that begin with the specified prefix.
+ *
+ * This function validates that the supplied ACL flags are a subset of the allowed key‑access flags
+ * (`VALKEYMODULE_CMD_KEY_ACCESS`,`VALKEYMODULE_CMD_KEY_INSERT`, `VALKEYMODULE_CMD_KEY_DELETE`,
+ * `VALKEYMODULE_CMD_KEY_UPDATE`). It then converts the flags into key‑specification flags (`CMD_KEY_*`) and calls
+ * `ACLUserCheckKeyPerm` to ensure the client has permission for the specified key prefix.
+ *
+ * If any check fails, returns `VALKEYMODULE_ERR` and sets `errno` to the appropriate error code:
+ *
+ * - `EINVAL` for invalid flags
+ * - `EACCES` for insufficient permissions
+ *
+ *  Otherwise it returns `VALKEYMODULE_OK`.
+ */
+int VM_ACLCheckKeyPrefixPermissions(ValkeyModuleCtx *ctx, const char *key, size_t len, unsigned int flags) {
+    const int allow_mask = (VALKEYMODULE_CMD_KEY_ACCESS | VALKEYMODULE_CMD_KEY_INSERT | VALKEYMODULE_CMD_KEY_DELETE | VALKEYMODULE_CMD_KEY_UPDATE);
+
+    if ((flags & allow_mask) != flags) {
+        errno = EINVAL;
+        return VALKEYMODULE_ERR;
+    }
+
+    int keyspec_flags = moduleConvertKeySpecsFlags(flags, 0);
+    if (ACLUserCheckKeyPerm(ctx->client->user, key, len, keyspec_flags, true) != ACL_OK) {
+        errno = EACCES;
+        return VALKEYMODULE_ERR;
+    }
+
+    return VALKEYMODULE_OK;
+}
+
 /* Register all the APIs we export. Keep this function at the end of the
  * file so that's easy to seek it to add new entries. */
 void moduleRegisterCoreAPI(void) {
@@ -14533,4 +14566,5 @@ void moduleRegisterCoreAPI(void) {
     REGISTER_API(ScriptingEngineDebuggerLogRespReply);
     REGISTER_API(ScriptingEngineDebuggerFlushLogs);
     REGISTER_API(ScriptingEngineDebuggerProcessCommands);
+    REGISTER_API(ACLCheckKeyPrefixPermissions);
 }

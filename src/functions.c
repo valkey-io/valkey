@@ -673,7 +673,7 @@ static void fcallCommandGeneric(client *c, int ro) {
 
     scriptRunCtx run_ctx;
     if (scriptPrepareForRun(&run_ctx,
-                            scriptingEngineGetClient(engine),
+                            engine,
                             c,
                             fi->compiled_function->name->ptr,
                             fi->compiled_function->f_flags,

@@ -1466,7 +1466,7 @@ static int checkPasswordBasedAuth(client *c, robj *username, robj *password) {
         moduleNotifyUserChanged(c);
         result = AUTH_OK;
     } else {
-        addACLLogEntry(c, ACL_DENIED_AUTH, (c->flag.multi) ? ACL_LOG_CTX_MULTI : ACL_LOG_CTX_TOPLEVEL, 0, username->ptr,
+        addACLLogEntry(c, ACL_DENIED_AUTH, (c->flag.multi) ? ACL_LOG_CTX_MULTI : ACL_LOG_CTX_TOPLEVEL, NULL, 0, username->ptr,
                        NULL);
         result = AUTH_ERR;
     }
@@ -2546,7 +2546,8 @@ void ACLLoadUsersAtStartup(void) {
 typedef struct ACLLogEntry {
     uint64_t count;             /* Number of times this happened recently. */
     int reason;                 /* Reason for denying the command. ACL_DENIED_*. */
-    int context;                /* Toplevel, Lua or MULTI/EXEC? ACL_LOG_CTX_*. */
+    int context;                /* Toplevel, Script or MULTI/EXEC? ACL_LOG_CTX_*. */
+    sds scripting_engine_name;  /* If context is SCRIPT, the name of the scripting engine. */
     sds object;                 /* The key name or command name. */
     sds username;               /* User the client is authenticated with. */
     mstime_t ctime;             /* Milliseconds time of last update to this entry. */
@@ -2567,6 +2568,8 @@ static int ACLLogMatchEntry(ACLLogEntry *a, ACLLogEntry *b) {
     if (delta > ACL_LOG_GROUPING_MAX_TIME_DELTA) return 0;
     if (sdscmp(a->object, b->object) != 0) return 0;
     if (sdscmp(a->username, b->username) != 0) return 0;
+    if (sdscmp(a->scripting_engine_name, b->scripting_engine_name) != 0)
+        return 0;
     return 1;
 }
 
@@ -2576,6 +2579,7 @@ static void ACLFreeLogEntry(void *leptr) {
     sdsfree(le->object);
     sdsfree(le->username);
     sdsfree(le->cinfo);
+    sdsfree(le->scripting_engine_name);
     zfree(le);
 }
 
@@ -2620,7 +2624,7 @@ static void trimACLLogEntriesToMaxLen(void) {
  *
  * If `object` is not NULL, this functions takes over it.
  */
-void addACLLogEntry(client *c, int reason, int context, int argpos, sds username, sds object) {
+void addACLLogEntry(client *c, int reason, int context, sds scripting_engine_name, int argpos, sds username, sds object) {
     /* Update ACL info metrics */
     ACLUpdateInfoMetrics(reason);
 
@@ -2655,6 +2659,7 @@ void addACLLogEntry(client *c, int reason, int context, int argpos, sds username
 
     le->cinfo = catClientInfoString(sdsempty(), realclient, 0);
     le->context = context;
+    le->scripting_engine_name = scripting_engine_name ? sdsdup(scripting_engine_name) : sdsempty();
 
     /* Try to match this entry with past ones, to see if we can just
      * update an existing entry instead of creating a new one. */
@@ -3042,7 +3047,7 @@ void aclCommand(client *c) {
             switch (le->context) {
             case ACL_LOG_CTX_TOPLEVEL: ctxstr = "toplevel"; break;
             case ACL_LOG_CTX_MULTI: ctxstr = "multi"; break;
-            case ACL_LOG_CTX_LUA: ctxstr = "lua"; break;
+            case ACL_LOG_CTX_SCRIPT: ctxstr = le->scripting_engine_name; break;
             case ACL_LOG_CTX_MODULE: ctxstr = "module"; break;
             default: ctxstr = "unknown";
             }

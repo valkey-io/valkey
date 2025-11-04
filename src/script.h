@@ -57,6 +57,8 @@
 #define SCRIPT_KILL 1
 #define SCRIPT_CONTINUE 2
 
+#include "scripting_engine.h"
+
 /* runCtx flags */
 #define SCRIPT_WRITE_DIRTY (1ULL << 0)      /* indicate that the current script already performed a write command */
 #define SCRIPT_TIMEDOUT (1ULL << 3)         /* indicate that the current script timedout */
@@ -70,6 +72,7 @@ typedef struct scriptRunCtx scriptRunCtx;
 /* This struct stores the necessary information to manage the execution of
  * scripts using EVAL and FCALL. */
 struct scriptRunCtx {
+    scriptingEngine *engine;
     const char *funcname;
     client *c;
     client *original_client;
@@ -97,7 +100,7 @@ extern scriptFlag scripts_flags_def[];
 
 uint64_t scriptFlagsToCmdFlags(uint64_t cmd_flags, uint64_t script_flags);
 int scriptPrepareForRun(scriptRunCtx *r_ctx,
-                        client *engine_client,
+                        scriptingEngine *engine,
                         client *caller,
                         const char *funcname,
                         uint64_t script_flags,
@@ -124,5 +127,7 @@ int scriptAllowsCrossSlot(void);
 int scriptGetSlot(void);
 void scriptSetSlot(int slot);
 void scriptSetOriginalClientSlot(int slot);
+
+sds scriptGetRunningEngineName(void);
 
 #endif /* __SCRIPT_H_ */

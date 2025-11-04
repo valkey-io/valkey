@@ -3194,7 +3194,7 @@ void ACLInit(void);
 
 /* Context values for addACLLogEntry(). */
 #define ACL_LOG_CTX_TOPLEVEL 0
-#define ACL_LOG_CTX_LUA 1
+#define ACL_LOG_CTX_SCRIPT 1
 #define ACL_LOG_CTX_MULTI 2
 #define ACL_LOG_CTX_MODULE 3
 
@@ -3233,7 +3233,7 @@ void ACLLoadUsersAtStartup(void);
 void addReplyCommandCategories(client *c, struct serverCommand *cmd);
 user *ACLCreateUnlinkedUser(void);
 void ACLFreeUserAndKillClients(user *u);
-void addACLLogEntry(client *c, int reason, int context, int argpos, sds username, sds object);
+void addACLLogEntry(client *c, int reason, int context, sds scripting_engine_name, int argpos, sds username, sds object);
 sds getAclErrorMessage(int acl_res, user *user, struct serverCommand *cmd, sds errored_val, int verbose);
 void ACLUpdateDefaultUserPassword(sds password);
 sds genValkeyInfoStringACLStats(sds info);

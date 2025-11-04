@@ -128,7 +128,7 @@ uint64_t scriptFlagsToCmdFlags(uint64_t cmd_flags, uint64_t script_flags) {
 
 /* Prepare the given run ctx for execution */
 int scriptPrepareForRun(scriptRunCtx *run_ctx,
-                        client *engine_client,
+                        scriptingEngine *engine,
                         client *caller,
                         const char *funcname,
                         uint64_t script_flags,
@@ -213,7 +213,9 @@ int scriptPrepareForRun(scriptRunCtx *run_ctx,
         }
     }
 
-    run_ctx->c = engine_client;
+    run_ctx->engine = engine;
+
+    run_ctx->c = scriptingEngineGetClient(engine);
     run_ctx->original_client = caller;
     run_ctx->funcname = funcname;
     run_ctx->slot = caller->slot;
@@ -343,7 +345,7 @@ static int scriptVerifyACL(client *c, sds *err) {
     int acl_errpos;
     int acl_retval = ACLCheckAllPerm(c, &acl_errpos);
     if (acl_retval != ACL_OK) {
-        addACLLogEntry(c, acl_retval, ACL_LOG_CTX_LUA, acl_errpos, NULL, NULL);
+        addACLLogEntry(c, acl_retval, ACL_LOG_CTX_SCRIPT, scriptGetRunningEngineName(), acl_errpos, NULL, NULL);
         sds msg = getAclErrorMessage(acl_retval, c->user, c->cmd, c->argv[acl_errpos]->ptr, 0);
         *err = sdscatsds(sdsnew("ACL failure in script: "), msg);
         sdsfree(msg);
@@ -636,4 +638,9 @@ void scriptSetSlot(int slot) {
 void scriptSetOriginalClientSlot(int slot) {
     serverAssert(scriptIsRunning());
     curr_run_ctx->original_client->slot = slot;
+}
+
+sds scriptGetRunningEngineName(void) {
+    serverAssert(scriptIsRunning());
+    return scriptingEngineGetName(curr_run_ctx->engine);
 }

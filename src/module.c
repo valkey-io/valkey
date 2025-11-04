@@ -6557,8 +6557,14 @@ ValkeyModuleCallReply *VM_Call(ValkeyModuleCtx *ctx, const char *cmdname, const 
 
         acl_retval = ACLCheckAllUserCommandPerm(user, c->cmd, c->argv, c->argc, &acl_errpos);
         if (acl_retval != ACL_OK) {
+            int context = ACL_LOG_CTX_MODULE;
+            sds scripting_engine_name = NULL;
+            if (scriptIsRunning()) {
+                context = ACL_LOG_CTX_SCRIPT;
+                scripting_engine_name = scriptGetRunningEngineName();
+            }
             sds object = (acl_retval == ACL_DENIED_CMD) ? sdsdup(c->cmd->fullname) : sdsdup(c->argv[acl_errpos]->ptr);
-            addACLLogEntry(ctx->client, acl_retval, ACL_LOG_CTX_MODULE, -1, c->user->name, object);
+            addACLLogEntry(ctx->client, acl_retval, context, scripting_engine_name, -1, c->user->name, object);
             if (error_as_call_replies) {
                 /* verbosity should be same as processCommand() in server.c */
                 sds acl_msg = getAclErrorMessage(acl_retval, c->user, c->cmd, c->argv[acl_errpos]->ptr, 0);
@@ -10152,7 +10158,7 @@ int VM_ACLAddLogEntry(ValkeyModuleCtx *ctx,
                       ValkeyModuleACLLogEntryReason reason) {
     int acl_reason = moduleGetACLLogEntryReason(reason);
     if (!acl_reason) return VALKEYMODULE_ERR;
-    addACLLogEntry(ctx->client, acl_reason, ACL_LOG_CTX_MODULE, -1, user->user->name, sdsdup(object->ptr));
+    addACLLogEntry(ctx->client, acl_reason, ACL_LOG_CTX_MODULE, NULL, -1, user->user->name, sdsdup(object->ptr));
     return VALKEYMODULE_OK;
 }
 
@@ -10166,7 +10172,7 @@ int VM_ACLAddLogEntryByUserName(ValkeyModuleCtx *ctx,
                                 ValkeyModuleACLLogEntryReason reason) {
     int acl_reason = moduleGetACLLogEntryReason(reason);
     if (!acl_reason) return VALKEYMODULE_ERR;
-    addACLLogEntry(ctx->client, acl_reason, ACL_LOG_CTX_MODULE, -1, username->ptr, sdsdup(object->ptr));
+    addACLLogEntry(ctx->client, acl_reason, ACL_LOG_CTX_MODULE, NULL, -1, username->ptr, sdsdup(object->ptr));
     return VALKEYMODULE_OK;
 }
 

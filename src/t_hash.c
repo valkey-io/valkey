@@ -147,7 +147,6 @@ static void hashTypeTrackUpdateEntry(robj *o, entry *old_entry, entry *new_entry
 }
 
 // This is a hashtableType validateEntry callback
-// This is a hashtableType valicateEntry callback
 bool hashHashtableTypeValidate(hashtable *ht, void *entryptr) {
     UNUSED(ht);
     entry *entry = entryptr;

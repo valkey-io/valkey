@@ -1439,6 +1439,7 @@ jobs:
           fi
       - name: Notify about results
         uses: ravsamhq/notify-slack-action@v2
+        if: github.event_name != 'pull_request'
         with:
           status: ${{ env.STATUS }}
           notify_when: "failure"

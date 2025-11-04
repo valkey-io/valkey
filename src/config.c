@@ -3360,6 +3360,9 @@ standardConfig static_configs[] = {
     createIntConfig("rdma-port", NULL, MODIFIABLE_CONFIG, 0, 65535, server.rdma_ctx_config.port, 0, INTEGER_CONFIG, NULL, updateRdmaPort),
     createIntConfig("rdma-rx-size", NULL, IMMUTABLE_CONFIG, 64 * 1024, 16 * 1024 * 1024, server.rdma_ctx_config.rx_size, 1024 * 1024, INTEGER_CONFIG, NULL, NULL),
     createIntConfig("rdma-completion-vector", NULL, IMMUTABLE_CONFIG, -1, 1024, server.rdma_ctx_config.completion_vector, -1, INTEGER_CONFIG, NULL, NULL),
+    createIntConfig("string-memory-use", NULL, IMMUTABLE_CONFIG, 0, INT_MAX, server.string_memory_use, 10240, INTEGER_CONFIG, NULL, NULL),
+    createIntConfig("big-key-number-element", NULL, IMMUTABLE_CONFIG, 0, INT_MAX, server.big_key_number_element, 2000, INTEGER_CONFIG, NULL, NULL),
+    createIntConfig("big-key-output", NULL, MODIFIABLE_CONFIG, 0, INT_MAX, server.big_key_output, 100, INTEGER_CONFIG, NULL, NULL),
 
     /* Unsigned int configs */
     createUIntConfig("maxclients", NULL, MODIFIABLE_CONFIG, 1, UINT_MAX, server.maxclients, 10000, INTEGER_CONFIG, NULL, updateMaxclients),

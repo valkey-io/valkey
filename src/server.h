@@ -406,6 +406,10 @@ typedef struct commandlog {
     unsigned long max_len;
 } commandlog;
 
+/* Type of keyinfo */
+typedef enum { KEYINFO_TYPE_MANY_ELEMENTS = 0,
+               KEYINFO_TYPE_NUM } keyinfo_type;
+
 /* Replica replication state. Used in server.repl_state for replicas to remember
  * what to do next. */
 typedef enum {
@@ -867,6 +871,13 @@ typedef struct replBufBlock {
     char buf[];
 } replBufBlock;
 
+typedef struct keysizeInfo {
+    long long element_size;
+    long long num;
+} keysizeInfo;
+
+#define KEYSIZE_ARRAY_SIZE 32
+
 /* Database representation. There are multiple databases identified
  * by integers from 0 (the default database) up to the max configured
  * database. The database number is the 'id' field in the structure. */
@@ -885,6 +896,21 @@ typedef struct serverDb {
         long long avg_ttl;    /* Average TTL, just for stats */
         unsigned long cursor; /* Cursor of the active expire cycle. */
     } expiry[ACTIVE_EXPIRY_TYPE_COUNT];
+    keysizeInfo list_array[KEYSIZE_ARRAY_SIZE];
+    int list_array_length;
+    unsigned long long list_number_of_keys;
+    keysizeInfo set_array[KEYSIZE_ARRAY_SIZE];
+    int set_array_length;
+    unsigned long long set_number_of_keys;
+    keysizeInfo hash_array[KEYSIZE_ARRAY_SIZE];
+    int hash_array_length;
+    unsigned long long hash_number_of_keys;
+    keysizeInfo zset_array[KEYSIZE_ARRAY_SIZE];
+    int zset_array_length;
+    unsigned long long zset_number_of_keys;
+    keysizeInfo string_array[KEYSIZE_ARRAY_SIZE];
+    int string_array_length;
+    unsigned long long string_number_of_keys;
 } serverDb;
 
 /* forward declaration for functions ctx */
@@ -2130,6 +2156,14 @@ struct valkeyServer {
     int oom_score_adj_values[CONFIG_OOM_COUNT]; /* Linux oom_score_adj configuration */
     int oom_score_adj;                          /* If true, oom_score_adj is managed */
     int disable_thp;                            /* If true, disable THP by syscall */
+    int string_memory_use;
+    int big_key_number_element;
+    int big_key_output;
+    list *string_bigkey_info;
+    list *list_bigkey_info;
+    list *hash_bigkey_info;
+    list *set_bigkey_info;
+    list *zset_bigkey_info;
     /* Blocked clients */
     unsigned int blocked_clients; /* # of clients executing a blocking cmd.*/
     unsigned int blocked_clients_by_type[BLOCKED_NUM];
@@ -3012,6 +3046,18 @@ void freeSetObject(robj *o);
 void freeZsetObject(robj *o);
 void freeHashObject(robj *o);
 void dismissObject(robj *o, size_t dump_size);
+size_t getStringValueMemoryUsage(robj *obj);
+void displayUpdate(int pre_value, int current_value);
+void displayDataTypeArray(keysizeInfo *keysize_array, int length);
+void decreaseDataTypeArrayPreviousValue(keysizeInfo *keysize_array, int low, int high, int value);
+void increaseDataTypeArrayCurrentValue(keysizeInfo *keysize_array, int low, int high, int value);
+void updateHashKeySizeArray(serverDb *db, long previous, long curr);
+void updateStringKeySizeArray(serverDb *db, long previous, long curr);
+void updateListKeySizeArray(serverDb *db, long previous, long curr);
+void updateZsetKeySizeArray(serverDb *db, long previous, long curr);
+void updateSetKeySizeArray(serverDb *db, long previous, long curr);
+void updateKeySizeArray(serverDb *db, robj *key);
+void resetDBKeySizeArray(serverDb *db);
 robj *createObject(int type, void *ptr);
 void initObjectLRUOrLFU(robj *o);
 robj *createStringObject(const char *ptr, size_t len);
@@ -3523,6 +3569,19 @@ typedef enum {
     SPECIAL_CONFIG,
 } configType;
 
+/* Type of Datatype */
+typedef enum {
+    STRING_TYPE = 0,
+    LIST_TYPE,
+    HASH_TYPE,
+    SET_TYPE,
+    SORTED_SET_TYPE,
+    STREAM_TYPE,
+} dataType;
+
+
+void updateBigKeyList(robj *keyobj, long previous, long curr, dataType type);
+
 void loadServerConfig(char *filename, char config_from_stdin, char *options);
 void appendServerSaveParams(time_t seconds, int changes);
 void resetServerSaveParams(void);
@@ -3822,6 +3881,8 @@ void bgrewriteaofCommand(client *c);
 void shutdownCommand(client *c);
 void slowlogCommand(client *c);
 void commandlogCommand(client *c);
+void keyinfoCommand(client *c);
+void bigkeyInfoCommand(client *c);
 void moveCommand(client *c);
 void copyCommand(client *c);
 void renameCommand(client *c);

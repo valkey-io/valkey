@@ -461,6 +461,8 @@ void listTypeDelRange(robj *subject, long start, long count) {
  * 'xx': push if key exists. */
 void pushGenericCommand(client *c, int where, int xx) {
     int j;
+    long previous_element_number;
+    long current_element_number;
 
     robj *lobj = lookupKeyWrite(c->db, c->argv[1]);
     if (checkType(c, lobj, OBJ_LIST)) return;
@@ -472,6 +474,10 @@ void pushGenericCommand(client *c, int where, int xx) {
 
         lobj = createListListpackObject();
         dbAdd(c->db, c->argv[1], &lobj);
+        previous_element_number = 0;
+        c->db->list_number_of_keys++;
+    } else {
+        previous_element_number = listTypeLength(lobj);
     }
 
     listTypeTryConversionAppend(lobj, c->argv, 2, c->argc - 1, NULL, NULL);
@@ -483,6 +489,9 @@ void pushGenericCommand(client *c, int where, int xx) {
     signalModifiedKey(c, c->db, c->argv[1]);
     char *event = (where == LIST_HEAD) ? "lpush" : "rpush";
     notifyKeyspaceEvent(NOTIFY_LIST, event, c->argv[1], c->db->id);
+    current_element_number = listTypeLength(lobj);
+    updateListKeySizeArray(c->db, previous_element_number, current_element_number);
+    updateBigKeyList(c->argv[1], previous_element_number, current_element_number, LIST_TYPE);
 
     addReplyLongLong(c, listTypeLength(lobj));
 }

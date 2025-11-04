@@ -1,0 +1,26 @@
+{
+    "BIGKEYINFO": {
+        "summary": "Returns the big key's entries.",
+        "complexity": "O(N) where N is the number of entries returned",
+        "group": "generic",
+        "since": "8.0.0",
+        "arity": -1,
+        "function": "bigkeyInfoCommand",
+        "command_flags": [
+            "READONLY",
+            "FAST"
+        ],
+        "command_tips": [
+            "REQUEST_POLICY:ALL_NODES",
+            "NONDETERMINISTIC_OUTPUT"
+        ],
+        "reply_schema": {},
+        "arguments": [
+            {
+                "name": "count",
+                "type": "integer",
+                "optional": true
+            }
+        ]
+    }
+}

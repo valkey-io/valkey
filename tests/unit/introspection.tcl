@@ -1268,6 +1268,9 @@ start_server {tags {"introspection"}} {
             rdma-rx-size
             rdma-bind
             rdma-port
+            string-memory-use
+            big-key-number-element
+            big-key-output
         }
 
         if {!$::tls} {

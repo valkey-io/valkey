@@ -150,6 +150,7 @@ static struct config {
     atomic_uint_fast64_t last_time_ns;
     uint64_t time_per_token;
     uint64_t time_per_burst;
+    int stdout_is_tty; /* cached isatty result */
 } config;
 
 /* Locations of the placeholders __rand_int__, __rand_1st__,
@@ -1107,7 +1108,9 @@ static void showReport(void) {
     const float avg = hdr_mean(config.latency_histogram) / 1000.0f;
 
     if (!config.quiet && !config.csv) {
-        printf("%*s\r", config.last_printed_bytes, " "); // ensure there is a clean line
+        if (config.stdout_is_tty) {
+            printf("%*s\r", config.last_printed_bytes, " "); // ensure there is a clean line
+        }
         printf("====== %s ======\n", config.title);
         printf("  %d requests completed in %.2f seconds\n", config.requests_finished, (float)config.totlatency / 1000);
         printf("  %d parallel clients\n", config.numclients);
@@ -1186,7 +1189,9 @@ static void showReport(void) {
         printf("\"%s\",\"%.2f\",\"%.3f\",\"%.3f\",\"%.3f\",\"%.3f\",\"%.3f\",\"%.3f\"\n", config.title, reqpersec, avg,
                p0, p50, p95, p99, p100);
     } else {
-        printf("%*s\r", config.last_printed_bytes, " "); // ensure there is a clean line
+        if (config.stdout_is_tty) {
+            printf("%*s\r", config.last_printed_bytes, " "); // ensure there is a clean line
+        }
         printf("%s: %.2f requests per second, p50=%.3f msec\n", config.title, reqpersec, p50);
     }
 }
@@ -1976,7 +1981,11 @@ long long showThroughput(struct aeEventLoop *eventLoop, long long id, void *clie
         return SHOW_THROUGHPUT_INTERVAL;
     }
     if (config.idlemode == 1) {
-        printf("clients: %d\r", config.liveclients);
+        if (config.stdout_is_tty) {
+            printf("clients: %d\r", config.liveclients);
+        } else {
+            printf("clients: %d\n", config.liveclients);
+        }
         fflush(stdout);
         return SHOW_THROUGHPUT_INTERVAL;
     }
@@ -1991,11 +2000,16 @@ long long showThroughput(struct aeEventLoop *eventLoop, long long id, void *clie
 
     config.previous_tick = current_tick;
     atomic_store_explicit(&config.previous_requests_finished, requests_finished, memory_order_relaxed);
-    printf("%*s\r", config.last_printed_bytes, " "); /* ensure there is a clean line */
-    int printed_bytes =
-        printf("%s: rps=%.1f (overall: %.1f) avg_msec=%.3f (overall: %.3f)\r", config.title, instantaneous_rps, rps,
+    if (config.stdout_is_tty) {
+        printf("%*s\r", config.last_printed_bytes, " "); /* ensure there is a clean line */
+        int printed_bytes =
+            printf("%s: rps=%.1f (overall: %.1f) avg_msec=%.3f (overall: %.3f)\r", config.title, instantaneous_rps, rps,
+                   hdr_mean(config.current_sec_latency_histogram) / 1000.0f, hdr_mean(config.latency_histogram) / 1000.0f);
+        config.last_printed_bytes = printed_bytes;
+    } else {
+        printf("%s: rps=%.1f (overall: %.1f) avg_msec=%.3f (overall: %.3f)\n", config.title, instantaneous_rps, rps,
                hdr_mean(config.current_sec_latency_histogram) / 1000.0f, hdr_mean(config.latency_histogram) / 1000.0f);
-    config.last_printed_bytes = printed_bytes;
+    }
     hdr_reset(config.current_sec_latency_histogram);
     fflush(stdout);
     return SHOW_THROUGHPUT_INTERVAL;
@@ -2105,6 +2119,7 @@ int main(int argc, char **argv) {
     config.num_functions = 10;
     config.num_keys_in_fcall = 1;
     config.resp3 = 0;
+    config.stdout_is_tty = isatty(fileno(stdout));
     resetPlaceholders();
 
     i = parseOptions(argc, argv);

@@ -224,6 +224,17 @@ tags {"benchmark network external:skip logreqres:skip"} {
             r get key
         } {arg}
 
+        test {benchmark: non-interactive output format} {
+            set cmd [valkeybenchmark $master_host $master_port "-t set -n 100000 -c 1"]
+            set output [exec {*}$cmd 2>/dev/null]
+            # In non-interactive mode, progress updates should be on separate lines
+            # Check that we have multiple lines with progress updates
+            set progress_lines [regexp -all -line {^SET: rps=} $output]
+            assert {$progress_lines > 1}
+            # Verify no carriage returns in the output
+            assert {[string first "\r" $output] == -1}
+        }
+
         # tls specific tests
         if {$::tls} {
             test {benchmark: specific tls-ciphers} {

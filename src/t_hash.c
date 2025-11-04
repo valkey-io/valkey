@@ -146,8 +146,9 @@ static void hashTypeTrackUpdateEntry(robj *o, entry *old_entry, entry *new_entry
     }
 }
 
-bool hashHashtableTypeValidate(hashtable *ht, entry *entry) {
+bool hashHashtableTypeValidate(hashtable *ht, void *entryptr) {
     UNUSED(ht);
+    entry *entry = entryptr;
     expirationPolicy policy = getExpirationPolicyWithFlags(0);
     if (policy == POLICY_IGNORE_EXPIRE) return true;
 

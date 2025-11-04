@@ -331,28 +331,29 @@ int test_reclaimFilePageCache(int argc, char **argv, int flags) {
     return 0;
 }
 
-int test_getHashSeedFromValue(int argc, char **argv, int flags) {
+int test_getHashSeedFromString(int argc, char **argv, int flags) {
     UNUSED(argc);
     UNUSED(argv);
     UNUSED(flags);
 
-    unsigned char seed[4];
-    getHashSeedFromValue(seed, sizeof(seed), "abcdefgh");
-    TEST_ASSERT(seed[0] == ('a' ^ 'e'));
-    TEST_ASSERT(seed[1] == ('b' ^ 'f'));
-    TEST_ASSERT(seed[2] == ('c' ^ 'g'));
-    TEST_ASSERT(seed[3] == ('d' ^ 'h'));
+    unsigned char seed[16];
+    unsigned char expected[16] = {0x9c, 0x56, 0xcc, 0x51, 0xb3, 0x74, 0xc3, 0xba,
+                                  0x18, 0x92, 0x10, 0xd5, 0xb6, 0xd4, 0xbf, 0x57};
 
-    unsigned char seed2[8];
-    unsigned char expected2[8] = {'a', 'b', 'c', 'a', 'b', 'c', 'a', 'b'};
-    getHashSeedFromValue(seed2, sizeof(seed2), "abc");
+    getHashSeedFromString(seed, 16, "abcdefgh");
+    TEST_ASSERT(memcmp(seed, expected, sizeof(seed)) == 0);
+
+    unsigned char seed2[16];
+    unsigned char expected2[16] = {0xba, 0x78, 0x16, 0xbf, 0x8f, 0x01, 0xcf, 0xea,
+                                   0x41, 0x41, 0x40, 0xde, 0x5d, 0xae, 0x22, 0x23};
+    getHashSeedFromString(seed2, 16, "abc");
     TEST_ASSERT(memcmp(seed2, expected2, sizeof(seed2)) == 0);
 
-    unsigned char seed3[4];
-    getHashSeedFromValue(seed3, sizeof(seed3), "");
-    for (size_t i = 0; i < sizeof(seed3); i++) {
-        TEST_ASSERT(seed3[i] == 0);
-    }
+    unsigned char seed3[16];
+    unsigned char expected3[16] = {0xe3, 0xb0, 0xc4, 0x42, 0x98, 0xfc, 0x1c, 0x14,
+                                   0x9a, 0xfb, 0xf4, 0xc8, 0x99, 0x6f, 0xb9, 0x24};
+    getHashSeedFromString(seed3, 16, "");
+    TEST_ASSERT(memcmp(seed3, expected3, sizeof(seed3)) == 0);
 
     return 0;
 }

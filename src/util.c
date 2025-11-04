@@ -1037,19 +1037,20 @@ err:
     return 0;
 }
 
-/* Populate the provided seed array by deterministically folding the input value.
- * The function repeats the value across the seed array and XORs each byte with
- * the current seed content.
- */
-void getHashSeedFromValue(unsigned char *seed_array, size_t len, const char *value) {
-    size_t input_len = strlen(value);
-    memset(seed_array, 0, len);
-    if (input_len == 0) return;
-    size_t max_len = len > input_len ? len : input_len;
-    for (size_t i = 0; i < max_len; i++) {
-        seed_array[i % len] = value[i % input_len] ^ seed_array[i % len];
-    }
+/* Populate the provided seed array by hashing the provided string with SHA1
+ * and copying the first 16 bytes of the digest into the seed buffer. */
+void getHashSeedFromString(unsigned char *seed_array, size_t outlen, const char *value) {
+    SHA256_CTX ctx;
+    unsigned char digest[SHA256_BLOCK_SIZE];
+
+    sha256_init(&ctx);
+    sha256_update(&ctx, (const BYTE *)value, strlen(value));
+    sha256_final(&ctx, digest);
+
+    if (outlen > SHA256_BLOCK_SIZE) outlen = SHA256_BLOCK_SIZE;
+    memcpy(seed_array, digest, outlen);
 }
+
 
 /* Parses a version string on the form "major.minor.patch" and returns an
  * integer on the form 0xMMmmpp. Returns -1 on parse error. */

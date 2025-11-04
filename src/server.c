@@ -7376,7 +7376,7 @@ __attribute__((weak)) int main(int argc, char **argv) {
     if (server.sentinel_mode) sentinelCheckConfigFile();
     if (server.hash_seed != NULL) {
         memset(hashseed, 0, sizeof(hashseed));
-        getHashSeedFromValue(hashseed, sizeof(hashseed), server.hash_seed);
+        getHashSeedFromString(hashseed, sizeof(hashseed), server.hash_seed);
         hashtableSetHashFunctionSeed(hashseed);
     }
 

@@ -2788,9 +2788,8 @@ int dbHasNoKeys(int dbid) {
 
 bool dbsHaveNoKeys(void) {
     for (int i = 0; i < server.dbnum; i++) {
-        if (server.db[i] && kvstoreSize(server.db[i]->keys) != 0) {
+        if (!dbHasNoKeys(i))
             return false;
-        }
     }
     return true;
 }

@@ -373,13 +373,13 @@ static void executeCallInst(ValkeyModuleCtx *module_ctx,
             }
             (*sp)--;
         }
-        rep = ValkeyModule_Call(module_ctx, cmd_name, "ESCv", cmd_args, numargs.integer);
+        rep = ValkeyModule_Call(module_ctx, cmd_name, "ESCXv", cmd_args, numargs.integer);
         for (uint32_t i = 0; i < numargs.integer; i++) {
             ValkeyModule_FreeString(NULL, cmd_args[i]);
         }
         ValkeyModule_Free(cmd_args);
     } else {
-        rep = ValkeyModule_Call(module_ctx, cmd_name, "ESC");
+        rep = ValkeyModule_Call(module_ctx, cmd_name, "ESCX");
     }
     ValkeyModule_Assert(rep != NULL);
     int type = ValkeyModule_CallReplyType(rep);
@@ -390,6 +390,12 @@ static void executeCallInst(ValkeyModuleCtx *module_ctx,
     if (type == VALKEYMODULE_REPLY_ERROR) {
         stack[*sp].type = VALUE_ERROR;
         stack[(*sp)++].string = resp_cstr;
+    } else if (type == VALKEYMODULE_REPLY_ARRAY_NULL) {
+        stack[(*sp)].type = VALUE_STRING;
+        stack[(*sp)++].string = "(null array)";
+    } else if (type == VALKEYMODULE_REPLY_NULL) {
+        stack[(*sp)].type = VALUE_STRING;
+        stack[(*sp)++].string = "(null string)";
     } else {
         if (response_str != NULL) {
             stack[(*sp)++] = parseValue(resp_cstr);

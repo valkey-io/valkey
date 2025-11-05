@@ -255,6 +255,40 @@ start_server {tags {"modules"}} {
 
     }
 
+    test {Call server command that returns NULL values} {
+        r lpush s a
+
+        set result [r eval {#!hello
+            FUNCTION callcmd
+            CONSTS s
+            CONSTI 1
+            CONSTI 2
+            CALL BLPOP
+            RETURN
+        } 0]
+        assert_equal $result "OK"
+
+        set result [r eval {#!hello
+            FUNCTION callcmd
+            CONSTS s
+            CONSTI 2
+            CONSTI 2
+            CALL BLPOP
+            RETURN
+        } 0]
+        assert_equal $result "(null array)"
+
+        set result [r eval {#!hello
+            FUNCTION callcmd
+            CONSTS f
+            CONSTI 1
+            CALL GET
+            RETURN
+        } 0]
+        assert_equal $result "(null string)"
+    }
+
+
     test {Replace function library and call functions} {
         set result [r function load replace "#!hello name=mylib\nFUNCTION foo\nARGS 0\nRETURN\nFUNCTION bar\nCONSTI 500\nRETURN"]
         assert_equal $result "mylib"

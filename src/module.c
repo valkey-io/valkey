@@ -414,6 +414,7 @@ typedef struct ValkeyModuleServerInfoData {
 #define VALKEYMODULE_ARGV_RESPECT_DENY_OOM (1 << 9)
 #define VALKEYMODULE_ARGV_DRY_RUN (1 << 10)
 #define VALKEYMODULE_ARGV_ALLOW_BLOCK (1 << 11)
+#define VALKEYMODULE_ARGV_CALL_REPLY_EXACT (1 << 12)
 
 /* Determine whether the server should signalModifiedKey implicitly.
  * In case 'ctx' has no 'module' member (and therefore no module->options),
@@ -6179,6 +6180,7 @@ ValkeyModuleString *VM_CreateStringFromCallReply(ValkeyModuleCallReply *reply) {
     const char *str;
     switch (callReplyType(reply)) {
     case VALKEYMODULE_REPLY_STRING:
+    case VALKEYMODULE_REPLY_SIMPLE_STRING:
     case VALKEYMODULE_REPLY_ERROR: str = callReplyGetString(reply, &len); return VM_CreateString(ctx, str, len);
     case VALKEYMODULE_REPLY_INTEGER: {
         char buf[64];
@@ -6209,6 +6211,7 @@ void VM_SetContextUser(ValkeyModuleCtx *ctx, const ValkeyModuleUser *user) {
  *     "C" -> VALKEYMODULE_ARGV_RUN_AS_USER
  *     "M" -> VALKEYMODULE_ARGV_RESPECT_DENY_OOM
  *     "K" -> VALKEYMODULE_ARGV_ALLOW_BLOCK
+ *     "Y" -> VALKEYMODULE_ARGV_CALL_REPLY_EXACT
  *
  * On error (format specifier error) NULL is returned and nothing is
  * allocated. On success the argument vector is returned. */
@@ -6285,6 +6288,8 @@ robj **moduleCreateArgvFromUserFormat(const char *cmdname, const char *fmt, int 
             if (flags) (*flags) |= (VALKEYMODULE_ARGV_DRY_RUN | VALKEYMODULE_ARGV_CALL_REPLIES_AS_ERRORS);
         } else if (*p == 'K') {
             if (flags) (*flags) |= VALKEYMODULE_ARGV_ALLOW_BLOCK;
+        } else if (*p == 'X') {
+            if (flags) (*flags) |= VALKEYMODULE_ARGV_CALL_REPLY_EXACT;
         } else {
             goto fmterr;
         }
@@ -6375,6 +6380,11 @@ fmterr:
  *              * VM_Reply* API's
  *              * VM_BlockClient
  *              * VM_GetCurrentUserName
+ *
+ *     * 'X' -- Return exact reply types, including the differences between simple
+ *              string and bulk string, and the RESP 2 difference between nulls
+ *              and null arrays.. This flag is only effective when combined with
+ *              the `E` flag.
  *
  * * **...**: The actual arguments to the command.
  *
@@ -6745,6 +6755,9 @@ ValkeyModuleCallReply *VM_Call(ValkeyModuleCtx *ctx, const char *cmdname, const 
         c = NULL; /* Make sure not to free the client */
     } else {
         reply = moduleParseReply(c, (ctx->flags & VALKEYMODULE_CTX_AUTO_MEMORY) ? ctx : NULL);
+        if (flags & VALKEYMODULE_ARGV_CALL_REPLY_EXACT) {
+            enableParseExactReplyTypeFlag(reply);
+        }
     }
 
 cleanup:

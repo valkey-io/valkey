@@ -229,7 +229,7 @@ void execCommand(client *c) {
                 break;
             default: reason = "no permission"; break;
             }
-            addACLLogEntry(c, acl_retval, ACL_LOG_CTX_MULTI, NULL, acl_errpos, NULL, NULL);
+            addACLLogEntry(c, acl_retval, ACL_LOG_CTX_MULTI, acl_errpos, NULL, NULL);
             addReplyErrorFormat(c,
                                 "-NOPERM ACLs rules changed between the moment the "
                                 "transaction was accumulated and the EXEC call. "

@@ -8,7 +8,7 @@
 #include "script_lua.h"
 #include "debug_lua.h"
 
-#define LUA_ENGINE_NAME "lua"
+#define LUA_ENGINE_NAME "LUA"
 #define REGISTRY_ERROR_HANDLER_NAME "__ERROR_HANDLER__"
 
 typedef struct luaEngineCtx {

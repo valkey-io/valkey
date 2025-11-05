@@ -165,7 +165,7 @@ start_server {tags {"modules"}} {
 
         set entry [lindex $entries 1]
         assert_equal [dict get $entry username] {default}
-        assert_equal [dict get $entry context] {HELLO}
+        assert_equal [dict get $entry context] {script}
         assert_equal [dict get $entry object] {set}
         assert_equal [dict get $entry reason] {command}
         assert_match {*cmd=eval*} [dict get $entry client-info]
@@ -420,11 +420,11 @@ start_server {tags {"modules"}} {
         assert_match "*engine_*:name=*,module=*,abi_version=*,used_memory=*,memory_overhead=*" $info
 
         # Verify both LUA and HELLO engines are present
-        assert_match "*name=lua*" $info
+        assert_match "*name=LUA*" $info
         assert_match "*name=HELLO*" $info
 
         # Verify LUA is built-in and HELLO is from module
-        assert_match "*name=lua,module=built-in*" $info
+        assert_match "*name=LUA,module=built-in*" $info
         assert_match "*name=HELLO,module=helloengine*" $info
     }
 

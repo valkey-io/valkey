@@ -2548,7 +2548,7 @@ void ACLLoadUsersAtStartup(void) {
 typedef struct ACLLogEntry {
     uint64_t count;             /* Number of times this happened recently. */
     int reason;                 /* Reason for denying the command. ACL_DENIED_*. */
-    int context;                /* Toplevel, Script or MULTI/EXEC? ACL_LOG_CTX_*. */
+    int context;                /* Toplevel, Lua, Script or MULTI/EXEC? ACL_LOG_CTX_*. */
     sds object;                 /* The key name or command name. */
     sds username;               /* User the client is authenticated with. */
     mstime_t ctime;             /* Milliseconds time of last update to this entry. */

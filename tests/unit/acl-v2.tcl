@@ -848,5 +848,162 @@ start_server {tags {"acl external:skip"}} {
         assert_match "*db+=0,2*" $user_line
     }
     
+    test {Test duplicate database IDs in db+= are handled correctly} {
+        r ACL SETUSER db-dup-user on nopass +@all ~* db+=0,0,1,1,0
+        $r2 auth db-dup-user password
+        
+        # Should work - duplicates should be silently ignored
+        assert_equal "OK" [$r2 select 0]
+        assert_equal "OK" [$r2 select 1]
+        
+        catch {$r2 select 2} err
+        assert_match "*NOPERM*database*" $err
+        
+        # Verify ACL LIST shows deduplicated list
+        set acl_str [r ACL LIST]
+        set user_line [lsearch -inline $acl_str "user db-dup-user*"]
+        assert_match "*db+=0,1*" $user_line
+    }
+    
+    test {Test db-= with duplicate IDs} {
+        r ACL SETUSER db-dup-remove on nopass +@all ~* db+=0,1,2,3
+        $r2 auth db-dup-remove password
+        
+        # Remove with duplicates - should work
+        r ACL SETUSER db-dup-remove db-=1,1,2,2
+        
+        assert_equal "OK" [$r2 select 0]
+        assert_equal "OK" [$r2 select 3]
+        
+        catch {$r2 select 1} err
+        assert_match "*NOPERM*database*" $err
+        catch {$r2 select 2} err
+        assert_match "*NOPERM*database*" $err
+    }
+    
+    test {Test multiple selectors with overlapping database permissions} {
+        r ACL SETUSER db-overlap on nopass (db+=0,1 +@write +select ~write*) (db+=1,2 +@read +select ~read*)
+        $r2 auth db-overlap password
+        
+        # DB 0: only write selector
+        assert_equal "OK" [$r2 select 0]
+        assert_equal "OK" [$r2 set writekey value]
+        catch {$r2 get readkey} err
+        assert_match "*NOPERM*command*" $err
+        
+        # DB 1: both selectors apply
+        assert_equal "OK" [$r2 select 1]
+        assert_equal "OK" [$r2 set writekey value]
+        catch {$r2 set readkey bar} err
+        assert_match "*NOPERM*key*" $err
+        assert_equal {} [$r2 get readkey]
+        
+        # DB 2: only read selector
+        assert_equal "OK" [$r2 select 2]
+        catch {$r2 set writekey value} err
+        assert_match "*NOPERM*command*" $err
+        catch {$r2 set readkey bar} err
+        assert_match "*NOPERM*command*" $err
+        assert_equal {} [$r2 get readkey]
+        
+        # DB 3: no selector
+        catch {$r2 select 3} err
+        assert_match "*NOPERM*" $err
+    }
+    
+    test {Test db+= and db-= with same IDs in sequence} {
+        r ACL SETUSER db-add-remove on nopass +@all ~* db+=0,1,2
+        $r2 auth db-add-remove password
+        
+        # Add then remove same DB
+        r ACL SETUSER db-add-remove db+=3
+        r ACL SETUSER db-add-remove db-=3
+        
+        assert_equal "OK" [$r2 select 0]
+        assert_equal "OK" [$r2 select 1]
+        assert_equal "OK" [$r2 select 2]
+        
+        catch {$r2 select 3} err
+        assert_match "*NOPERM*database*" $err
+    }
+    
+    test {Test db+= with leading/trailing commas} {
+        catch {r ACL SETUSER db-comma-start db+=,0,1} err
+        assert_match "*Error*" $err
+        
+        catch {r ACL SETUSER db-comma-end db+=0,1,} err
+        assert_match "*Error*" $err
+        
+        catch {r ACL SETUSER db-comma-double db+=0,,1} err
+        assert_match "*Error*" $err
+    }
+    
+    test {Test resetdbs clears explicit db list and sets alldbs} {
+        r ACL SETUSER db-reset-test on nopass +@all ~* db+=0,1
+        $r2 auth db-reset-test password
+        
+        catch {$r2 select 2} err
+        assert_match "*NOPERM*database*" $err
+        
+        r ACL SETUSER db-reset-test resetdbs
+        
+        # After resetdbs, should have access to all DBs
+        assert_equal "OK" [$r2 select 0]
+        assert_equal "OK" [$r2 select 1]
+        assert_equal "OK" [$r2 select 2]
+        assert_equal "OK" [$r2 select 3]
+    }
+    
+    test {Test clearselectors removes db restrictions from selectors but not root} {
+        r ACL SETUSER db-clear on nopass +select db+=0,1 (db+=2,3 +@all ~*)
+        $r2 auth db-clear password
+        
+        r ACL SETUSER db-clear clearselectors
+        
+        # Root selector should still have db restrictions
+        assert_equal "OK" [$r2 select 0]
+        assert_equal "OK" [$r2 select 1]
+        
+        catch {$r2 select 2} err
+        assert_match "*NOPERM*" $err
+    }
+    
+    test {Test ACL DRYRUN with database permissions} {
+        r ACL SETUSER db-dryrun on nopass +@all ~* db+=0,1
+        
+        assert_equal "OK" [r ACL DRYRUN db-dryrun SELECT 0]
+        assert_equal "OK" [r ACL DRYRUN db-dryrun SELECT 1]
+        
+        assert_match "*has no permissions to access database*" [r ACL DRYRUN db-dryrun SELECT 2]
+        assert_match "*has no permissions to access database*" [r ACL DRYRUN db-dryrun MOVE key 2]
+        assert_match "*has no permissions to access database*" [r ACL DRYRUN db-dryrun SWAPDB 0 2]
+    }
+    
+    test {Test db+= with maximum database ID} {
+        set max_db [expr {[lindex [r config get databases] 1] - 1}]
+        r ACL SETUSER db-max on nopass +@all ~* db+=$max_db
+        $r2 auth db-max password
+        
+        assert_equal "OK" [$r2 select $max_db]
+        
+        # Try one beyond max
+        catch {$r2 select [expr {$max_db + 1}]} err
+        # Should fail with out of range, not permission error
+        assert_match "*out of range*" $err
+    }
+    
+    test {Test empty database list after all removals} {
+        r ACL SETUSER db-empty on nopass +@all ~* db+=0,1
+        $r2 auth db-empty password
+        
+        r ACL SETUSER db-empty db-=0,1
+        
+        # Should not have access to any DB
+        catch {$r2 select 0} err
+        assert_match "*NOPERM*database*" $err
+        catch {$r2 select 1} err
+        assert_match "*NOPERM*database*" $err
+    }
+    
     $r2 close
 }

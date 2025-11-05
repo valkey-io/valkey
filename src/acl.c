@@ -958,56 +958,57 @@ static void ACLAddAllowedFirstArg(aclSelector *selector, unsigned long id, const
     selector->allowed_firstargs[id][items - 2] = sdsnew(sub);
     selector->allowed_firstargs[id][items - 1] = NULL;
 }
+/* Initialize intset for database permissions. */
+static intset *ACLInitDatabaseIntset(aclSelector *selector, int add_dbs) {
+    intset *new_dbs;
+
+    /* For removal operations with ALLDBS flag, convert to explicit list */
+    if (!add_dbs && (selector->flags & SELECTOR_FLAG_ALLDBS)) {
+        new_dbs = intsetNew();
+        if (!new_dbs) return NULL;
+
+        for (int i = 0; i < server.dbnum; i++) {
+            uint8_t success;
+            new_dbs = intsetAdd(new_dbs, i, &success);
+            serverAssert(success);
+        }
+        return new_dbs;
+    }
+
+    return selector->dbs ? intsetDup(selector->dbs) : intsetNew();
+}
+
+/* Clean up and return error from database permission operations. */
+static int ACLDatabasePermissionError(intset *new_dbs, char *dblist, int error_code) {
+    if (new_dbs) intsetFree(new_dbs);
+    if (dblist) zfree(dblist);
+    errno = error_code;
+    return C_ERR;
+}
 
 /* Helper function to add or remove database permissions to/from a selector.
  * When add_dbs is 1, this function adds the specified databases to the existing set.
  * When add_dbs is 0, this function removes the specified databases from the existing set. */
 static int ACLSetSelectorDatabasePermissions(aclSelector *selector, const char *dbs_str, int add_dbs) {
-    intset *new_dbs;
+    /* Initialize the database intset based on operation type */
+    intset *new_dbs = ACLInitDatabaseIntset(selector, add_dbs);
+    if (!new_dbs) {
+        return ACLDatabasePermissionError(NULL, NULL, ENOMEM);
+    }
 
-    if (add_dbs) {
-        new_dbs = selector->dbs ? intsetDup(selector->dbs) : intsetNew();
-        if (!new_dbs) {
-            errno = ENOMEM;
-            return C_ERR;
-        }
-    } else {
-        /* If ALLDBS flag is set, convert it to an explicit list first */
-        if (selector->flags & SELECTOR_FLAG_ALLDBS) {
-            new_dbs = intsetNew();
-            for (int i = 0; i < server.dbnum; i++) {
-                uint8_t success;
-                new_dbs = intsetAdd(new_dbs, i, &success);
-                if (!success) {
-                    intsetFree(new_dbs);
-                    errno = ENOMEM;
-                    return C_ERR;
-                }
-            }
-            selector->flags &= ~SELECTOR_FLAG_ALLDBS;
-        } else {
-            new_dbs = selector->dbs ? intsetDup(selector->dbs) : intsetNew();
-            if (!new_dbs) {
-                errno = ENOMEM;
-                return C_ERR;
-            }
-        }
+    if (selector->flags & SELECTOR_FLAG_ALLDBS) {
+        selector->flags &= ~SELECTOR_FLAG_ALLDBS;
     }
 
     char *dblist = zstrdup(dbs_str);
     if (!dblist) {
-        intsetFree(new_dbs);
-        errno = ENOMEM;
-        return C_ERR;
+        return ACLDatabasePermissionError(new_dbs, NULL, ENOMEM);
     }
 
     /* Reject empty list, trailing commas or more than 1 consecutive commas */
     if (strlen(dblist) == 0 || dblist[0] == ',' ||
         dblist[strlen(dblist) - 1] == ',' || strstr(dblist, ",,")) {
-        zfree(dblist);
-        intsetFree(new_dbs);
-        errno = EINVAL;
-        return C_ERR;
+        return ACLDatabasePermissionError(new_dbs, dblist, EINVAL);
     }
 
     char *saveptr = NULL;
@@ -1020,27 +1021,17 @@ static int ACLSetSelectorDatabasePermissions(aclSelector *selector, const char *
 
         if (errno == ERANGE || endptr == token || *endptr != '\0' ||
             dbid < 0 || dbid >= server.dbnum) {
-            zfree(dblist);
-            intsetFree(new_dbs);
-            errno = EINVAL;
-            return C_ERR;
+            return ACLDatabasePermissionError(new_dbs, dblist, EINVAL);
         }
 
-
         if (add_dbs) {
-            uint8_t success;
-            intset *result = intsetAdd(new_dbs, dbid, &success);
-            if (!success) {
-                zfree(dblist);
-                intsetFree(new_dbs);
-                errno = EINVAL;
-                return C_ERR;
-            }
+            /* No error check needed - duplicates will not be added */
+            intset *result = intsetAdd(new_dbs, dbid, NULL);
             new_dbs = result;
         } else {
-            int success;
             /* Not finding the database to remove is not an error */
-            new_dbs = intsetRemove(new_dbs, dbid, &success);
+            intset *result = intsetRemove(new_dbs, dbid, NULL);
+            new_dbs = result;
         }
 
         token = strtok_r(NULL, ",", &saveptr);
@@ -1050,9 +1041,6 @@ static int ACLSetSelectorDatabasePermissions(aclSelector *selector, const char *
         intsetFree(selector->dbs);
     }
     selector->dbs = new_dbs;
-    if (add_dbs) {
-        selector->flags &= ~SELECTOR_FLAG_ALLDBS;
-    }
 
     zfree(dblist);
     return C_OK;

@@ -1037,8 +1037,8 @@ err:
     return 0;
 }
 
-/* Populate the provided seed array by hashing the provided string with SHA1
- * and copying the first 16 bytes of the digest into the seed buffer. */
+/* Populate the provided seed array by hashing the provided string with SHA256
+ * and copying the first outlen bytes of the digest into the seed buffer. */
 void getHashSeedFromString(unsigned char *seed_array, size_t outlen, const char *value) {
     SHA256_CTX ctx;
     unsigned char digest[SHA256_BLOCK_SIZE];

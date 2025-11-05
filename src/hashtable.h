@@ -39,7 +39,7 @@ typedef struct hashtable hashtable;
 typedef struct hashtableStats hashtableStats;
 
 /* Can types that can be stack allocated. */
-typedef uint64_t hashtableIterator[5];
+typedef uint64_t hashtableIterator[6];
 typedef uint64_t hashtablePosition[2];
 typedef uint64_t hashtableIncrementalFindState[5];
 

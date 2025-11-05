@@ -1,6 +1,6 @@
 # Check the basic monitoring and failover capabilities.
 
-start_cluster 3 4 {tags {external:skip cluster} overrides {cluster-ping-interval 1000 cluster-node-timeout 5000}} {
+start_cluster 3 4 {tags {external:skip cluster} overrides {cluster-ping-interval 1000}} {
 
     test "Cluster is up" {
         wait_for_cluster_state ok

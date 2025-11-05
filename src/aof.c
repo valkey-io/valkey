@@ -1470,32 +1470,7 @@ int loadSingleAppendOnlyFile(char *filename) {
             goto cleanup;
         } else {
             /* Restore the replication ID / offset from the RDB file. */
-            if (rsi.repl_id_is_set && rsi.repl_offset != -1 && rsi.repl_stream_db != -1) {
-                rsi_is_valid = 1;
-                if (!iAmPrimary()) {
-                    memcpy(server.replid, rsi.repl_id, sizeof(server.replid));
-                    server.primary_repl_offset = rsi.repl_offset;
-                    if (!server.primary && !server.cached_primary) {
-                        /* only cache myself primary if replica did not synced to its primary node yet */
-                        replicationCachePrimaryUsingMyself();
-                        selectDb(server.cached_primary, rsi.repl_stream_db);
-                    }
-                    serverLog(LL_NOTICE, "Loading preamble rdb changed replication info, replid: %s, primary_repl_offset: %lld",
-                              server.replid, server.primary_repl_offset);
-                } else {
-                    memcpy(server.replid2, rsi.repl_id, sizeof(server.replid));
-                    server.second_replid_offset = rsi.repl_offset + 1;
-                    server.primary_repl_offset += rsi.repl_offset;
-                    serverAssert(server.repl_backlog);
-                    server.repl_backlog->offset = server.primary_repl_offset - server.repl_backlog->histlen + 1;
-                    rebaseReplicationBuffer(rsi.repl_offset);
-                    server.repl_no_replicas_since = time(NULL);
-                    serverLog(LL_NOTICE, "Loading preamble rdb changed replication info, replid2: %s, secondary_repl_offset: "
-                                         "%lld, primary_repl_offset: %lld",
-                              server.replid2, server.second_replid_offset, server.primary_repl_offset);
-                }
-            }
-
+            rsi_is_valid = replicationRestoreOffsetFromSaveInfo(&rsi, true);
             loadingAbsProgress(ftello(fp));
             last_progress_report_size = ftello(fp);
             if (old_style) serverLog(LL_NOTICE, "Reading the remaining AOF tail...");

@@ -3194,6 +3194,20 @@ int VM_ReplyWithError(ValkeyModuleCtx *ctx, const char *err) {
     return VALKEYMODULE_OK;
 }
 
+static int moduleReplyErrorFormatInternal(ValkeyModuleCtx *ctx, int flags, const char *fmt, va_list ap) {
+    client *c = moduleGetReplyClient(ctx);
+    if (c == NULL) return VALKEYMODULE_OK;
+
+    int len = strlen(fmt) + 2; /* 1 for the \0 and 1 for the hyphen */
+    char hyphenfmt[len];
+    snprintf(hyphenfmt, len, "-%s", fmt);
+
+    addReplyErrorFormatInternal(c, flags, hyphenfmt, ap);
+
+    return VALKEYMODULE_OK;
+}
+
+
 /* Reply with the error create from a printf format and arguments.
  *
  * Note that 'fmt' must contain all the error, including
@@ -3209,21 +3223,33 @@ int VM_ReplyWithError(ValkeyModuleCtx *ctx, const char *err) {
  * The function always returns VALKEYMODULE_OK.
  */
 int VM_ReplyWithErrorFormat(ValkeyModuleCtx *ctx, const char *fmt, ...) {
-    client *c = moduleGetReplyClient(ctx);
-    if (c == NULL) return VALKEYMODULE_OK;
-
-    int len = strlen(fmt) + 2; /* 1 for the \0 and 1 for the hyphen */
-    char *hyphenfmt = zmalloc(len);
-    snprintf(hyphenfmt, len, "-%s", fmt);
-
     va_list ap;
     va_start(ap, fmt);
-    addReplyErrorFormatInternal(c, 0, hyphenfmt, ap);
+    int ret = moduleReplyErrorFormatInternal(ctx, 0, fmt, ap);
     va_end(ap);
+    return ret;
+}
 
-    zfree(hyphenfmt);
-
-    return VALKEYMODULE_OK;
+/* Reply with a custom error created from a printf format and arguments.
+ *
+ * `update_error_stats`: if true server error stats are updated after the reply
+ * is sent to the client, otherwise no stats are updated.
+ *
+ * The function always returns VALKEYMODULE_OK.
+ */
+int VM_ReplyWithCustomErrorFormat(ValkeyModuleCtx *ctx,
+                                  int update_error_stats,
+                                  const char *fmt,
+                                  ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    int ret = moduleReplyErrorFormatInternal(
+        ctx,
+        ERR_REPLY_FLAG_CUSTOM | (update_error_stats ? 0 : ERR_REPLY_FLAG_NO_STATS_UPDATE),
+        fmt,
+        ap);
+    va_end(ap);
+    return ret;
 }
 
 /* Reply with a simple string (`+... \r\n` in RESP protocol). This replies
@@ -6382,6 +6408,7 @@ ValkeyModuleCallReply *VM_Call(ValkeyModuleCtx *ctx, const char *cmdname, const 
     int argc = 0, flags = 0;
     va_list ap;
     ValkeyModuleCallReply *reply = NULL;
+    sds reply_error_msg = NULL;
     int replicate = 0;             /* Replicate this command? */
     int error_as_call_replies = 0; /* return errors as ValkeyModuleCallReply object */
     uint64_t cmd_flags;
@@ -6419,8 +6446,7 @@ ValkeyModuleCallReply *VM_Call(ValkeyModuleCtx *ctx, const char *cmdname, const 
         if (!user) {
             errno = ENOTSUP;
             if (error_as_call_replies) {
-                sds msg = sdsnew("cannot run as user, no user directly attached to context or context's client");
-                reply = callReplyCreateError(msg, ctx);
+                reply_error_msg = sdsnew("cannot run as user, no user directly attached to context or context's client");
             }
             goto cleanup;
         }
@@ -6445,30 +6471,40 @@ ValkeyModuleCallReply *VM_Call(ValkeyModuleCtx *ctx, const char *cmdname, const 
      * if necessary.
      */
     c->cmd = c->lastcmd = c->realcmd = lookupCommand(c->argv, c->argc);
-    sds err;
-    if (!commandCheckExistence(c, error_as_call_replies ? &err : NULL)) {
+    if (!commandCheckExistence(c, error_as_call_replies ? &reply_error_msg : NULL)) {
         errno = ENOENT;
-        if (error_as_call_replies) reply = callReplyCreateError(err, ctx);
         goto cleanup;
     }
-    if (!commandCheckArity(c->cmd, c->argc, error_as_call_replies ? &err : NULL)) {
+    if (!commandCheckArity(c->cmd, c->argc, error_as_call_replies ? &reply_error_msg : NULL)) {
         errno = EINVAL;
-        if (error_as_call_replies) reply = callReplyCreateError(err, ctx);
         goto cleanup;
     }
 
     cmd_flags = getCommandFlags(c);
 
     if (flags & VALKEYMODULE_ARGV_SCRIPT_MODE) {
-        /* Basically on script mode we want to only allow commands that can
-         * be executed on scripts (CMD_NOSCRIPT is not set on the command flags) */
-        if (cmd_flags & CMD_NOSCRIPT) {
-            errno = ESPIPE;
-            if (error_as_call_replies) {
-                sds msg = sdscatfmt(sdsempty(), "command '%S' is not allowed on script mode", c->cmd->fullname);
-                reply = callReplyCreateError(msg, ctx);
+        if (scriptIsRunning()) {
+            c->flag.module = 0;
+            c->flag.script = 1;
+        }
+
+        /* In script mode, commands with CMD_NOSCRIPT flag are normally forbidden.
+         * However, we allow them if both conditions are met:
+         * 1. We're running in the context of a scripting engine (scriptIsRunning())
+         * 2. The configuration option server.script_disable_deny_script is enabled
+         * If either condition is false, we block the command. */
+        if ((cmd_flags & CMD_NOSCRIPT)) {
+            if (!scriptIsRunning() || !server.script_disable_deny_script) {
+                errno = ESPIPE;
+                if (error_as_call_replies) {
+                    reply_error_msg = sdscatfmt(sdsempty(), "command '%S' is not allowed on script mode", c->cmd->fullname);
+                }
+                goto cleanup;
             }
-            goto cleanup;
+        }
+
+        if (scriptIsRunning() && scriptAllowsOOM()) {
+            flags &= ~VALKEYMODULE_ARGV_RESPECT_DENY_OOM;
         }
     }
 
@@ -6486,8 +6522,7 @@ ValkeyModuleCallReply *VM_Call(ValkeyModuleCtx *ctx, const char *cmdname, const 
             if (oom_state) {
                 errno = ENOSPC;
                 if (error_as_call_replies) {
-                    sds msg = sdsdup(shared.oomerr->ptr);
-                    reply = callReplyCreateError(msg, ctx);
+                    reply_error_msg = sdsdup(shared.oomerr->ptr);
                 }
                 goto cleanup;
             }
@@ -6501,60 +6536,10 @@ ValkeyModuleCallReply *VM_Call(ValkeyModuleCtx *ctx, const char *cmdname, const 
         if (cmd_flags & CMD_WRITE) {
             errno = ENOSPC;
             if (error_as_call_replies) {
-                sds msg = sdscatfmt(sdsempty(),
-                                    "Write command '%S' was "
-                                    "called while write is not allowed.",
-                                    c->cmd->fullname);
-                reply = callReplyCreateError(msg, ctx);
-            }
-            goto cleanup;
-        }
-    }
-
-    /* Script mode tests */
-    if (flags & VALKEYMODULE_ARGV_SCRIPT_MODE) {
-        if (cmd_flags & CMD_WRITE) {
-            /* on script mode, if a command is a write command,
-             * We will not run it if we encounter disk error
-             * or we do not have enough replicas */
-
-            if (!checkGoodReplicasStatus()) {
-                errno = ESPIPE;
-                if (error_as_call_replies) {
-                    sds msg = sdsdup(shared.noreplicaserr->ptr);
-                    reply = callReplyCreateError(msg, ctx);
-                }
-                goto cleanup;
-            }
-
-            int deny_write_type = writeCommandsDeniedByDiskError();
-            int obey_client = (server.current_client && mustObeyClient(server.current_client));
-
-            if (deny_write_type != DISK_ERROR_TYPE_NONE && !obey_client) {
-                errno = ESPIPE;
-                if (error_as_call_replies) {
-                    sds msg = writeCommandsGetDiskErrorMessage(deny_write_type);
-                    reply = callReplyCreateError(msg, ctx);
-                }
-                goto cleanup;
-            }
-
-            if (server.primary_host && server.repl_replica_ro && !obey_client) {
-                errno = ESPIPE;
-                if (error_as_call_replies) {
-                    sds msg = sdsdup(shared.roreplicaerr->ptr);
-                    reply = callReplyCreateError(msg, ctx);
-                }
-                goto cleanup;
-            }
-        }
-
-        if (server.primary_host && server.repl_state != REPL_STATE_CONNECTED && server.repl_serve_stale_data == 0 &&
-            !(cmd_flags & CMD_STALE)) {
-            errno = ESPIPE;
-            if (error_as_call_replies) {
-                sds msg = sdsdup(shared.primarydownerr->ptr);
-                reply = callReplyCreateError(msg, ctx);
+                reply_error_msg = sdscatfmt(sdsempty(),
+                                            "Write command '%S' was "
+                                            "called while write is not allowed.",
+                                            c->cmd->fullname);
             }
             goto cleanup;
         }
@@ -6578,9 +6563,8 @@ ValkeyModuleCallReply *VM_Call(ValkeyModuleCtx *ctx, const char *cmdname, const 
             if (error_as_call_replies) {
                 /* verbosity should be same as processCommand() in server.c */
                 sds acl_msg = getAclErrorMessage(acl_retval, c->user, c->cmd, c->argv[acl_errpos]->ptr, 0);
-                sds msg = sdscatfmt(sdsempty(), "-NOPERM %S\r\n", acl_msg);
+                reply_error_msg = sdscatfmt(sdsempty(), "-NOPERM %S\r\n", acl_msg);
                 sdsfree(acl_msg);
-                reply = callReplyCreateError(msg, ctx);
             }
             errno = EACCES;
             goto cleanup;
@@ -6597,30 +6581,108 @@ ValkeyModuleCallReply *VM_Call(ValkeyModuleCtx *ctx, const char *cmdname, const 
         c->flag.asking = ctx->client->flag.asking;
         c->slot = clusterSlotByCommand(c->cmd, c->argv, c->argc, &c->read_flags);
         if (getNodeByQuery(c, &error_code) != getMyClusterNode()) {
-            sds msg = NULL;
+            serverAssert(reply_error_msg == NULL);
             if (error_code == CLUSTER_REDIR_DOWN_RO_STATE) {
                 if (error_as_call_replies) {
-                    msg = sdscatfmt(sdsempty(),
-                                    "Can not execute a write command '%S' while the cluster is down and readonly",
-                                    c->cmd->fullname);
+                    reply_error_msg = sdscatfmt(sdsempty(),
+                                                "Can not execute a write command '%S' while the cluster is down and readonly",
+                                                c->cmd->fullname);
                 }
                 errno = EROFS;
             } else if (error_code == CLUSTER_REDIR_DOWN_STATE) {
                 if (error_as_call_replies) {
-                    msg = sdscatfmt(sdsempty(), "Can not execute a command '%S' while the cluster is down",
-                                    c->cmd->fullname);
+                    reply_error_msg = sdscatfmt(sdsempty(), "Can not execute a command '%S' while the cluster is down",
+                                                c->cmd->fullname);
                 }
                 errno = ENETDOWN;
             } else {
                 if (error_as_call_replies) {
-                    msg = sdsnew("Attempted to access a non local key in a cluster node");
+                    reply_error_msg = sdsnew("Attempted to access a non local key in a cluster node");
                 }
                 errno = EPERM;
             }
-            if (msg) {
-                reply = callReplyCreateError(msg, ctx);
+            goto cleanup;
+        }
+    }
+
+    /* Script mode tests */
+    if (flags & VALKEYMODULE_ARGV_SCRIPT_MODE) {
+        /* A write command, on an RO command or an RO script is rejected ASAP.
+         * Note: For scripts, we consider may-replicate commands as write commands.
+         * This also makes it possible to allow read-only scripts to be run during
+         * CLIENT PAUSE WRITE. */
+        if (scriptIsRunning() && scriptIsReadOnly() && (cmd_flags & (CMD_WRITE | CMD_MAY_REPLICATE))) {
+            errno = ENOSPC;
+            reply_error_msg = sdsnew("Write commands are not allowed from read-only scripts");
+            goto cleanup;
+        }
+
+        /* If the script already made a modification to the dataset, we can't
+         * fail it on unpredictable error state. */
+        if ((scriptIsRunning() && !scriptIsWriteDirty() && cmd_flags & CMD_WRITE) || (!scriptIsRunning() && cmd_flags & CMD_WRITE)) {
+            /* on script mode, if a command is a write command,
+             * We will not run it if we encounter disk error
+             * or we do not have enough replicas */
+
+            if (!checkGoodReplicasStatus()) {
+                errno = ESPIPE;
+                if (error_as_call_replies) {
+                    reply_error_msg = sdsdup(shared.noreplicaserr->ptr);
+                }
+                goto cleanup;
+            }
+
+            int deny_write_type = writeCommandsDeniedByDiskError();
+            int obey_client = (server.current_client && mustObeyClient(server.current_client));
+
+            if (deny_write_type != DISK_ERROR_TYPE_NONE && !obey_client) {
+                errno = ESPIPE;
+                if (error_as_call_replies) {
+                    reply_error_msg = writeCommandsGetDiskErrorMessage(deny_write_type);
+                }
+                goto cleanup;
+            }
+
+            if (server.primary_host && server.repl_replica_ro && !obey_client) {
+                errno = ESPIPE;
+                if (error_as_call_replies) {
+                    reply_error_msg = sdsdup(shared.roreplicaerr->ptr);
+                }
+                goto cleanup;
+            }
+
+            if (scriptIsRunning()) {
+                scriptSetWriteDirtyFlag();
+            }
+        }
+
+        if (server.primary_host && server.repl_state != REPL_STATE_CONNECTED && server.repl_serve_stale_data == 0 &&
+            !(cmd_flags & CMD_STALE)) {
+            errno = ESPIPE;
+            if (error_as_call_replies) {
+                if (scriptIsRunning()) {
+                    reply_error_msg = sdsnew("Can not execute the command on a stale replica");
+                } else {
+                    reply_error_msg = sdsdup(shared.primarydownerr->ptr);
+                }
             }
             goto cleanup;
+        }
+
+        if (scriptIsRunning() && server.cluster_enabled && !mustObeyClient(ctx->client)) {
+            if (c->slot != -1 && !scriptAllowsCrossSlot()) {
+                if (scriptGetSlot() == -1) {
+                    scriptSetSlot(c->slot);
+                } else if (scriptGetSlot() != c->slot) {
+                    errno = ESPIPE;
+                    if (error_as_call_replies) {
+                        reply_error_msg = sdsnew("Script attempted to access keys that do not hash to the same slot");
+                    }
+                    goto cleanup;
+                }
+            }
+
+            scriptSetOriginalClientSlot(c->slot);
         }
     }
 
@@ -6647,6 +6709,8 @@ ValkeyModuleCallReply *VM_Call(ValkeyModuleCtx *ctx, const char *cmdname, const 
     server.replication_allowed = prev_replication_allowed;
 
     if (c->flag.blocked) {
+        /* Blocking commands are not allowed when calling commands in scripting engines. */
+        serverAssert(!scriptIsRunning());
         serverAssert(flags & VALKEYMODULE_ARGV_ALLOW_BLOCK);
         serverAssert(ctx->module);
         ValkeyModuleAsyncRMCallPromise *promise = zmalloc(sizeof(ValkeyModuleAsyncRMCallPromise));
@@ -6676,6 +6740,15 @@ ValkeyModuleCallReply *VM_Call(ValkeyModuleCtx *ctx, const char *cmdname, const 
     }
 
 cleanup:
+    if ((flags & VALKEYMODULE_ARGV_SCRIPT_MODE) && errno) {
+        afterErrorReply(c, reply_error_msg, sdslen(reply_error_msg), 0);
+        incrCommandStatsOnError(c->cmd, ERROR_COMMAND_REJECTED);
+    }
+    if (reply_error_msg != NULL) {
+        serverAssert(reply == NULL);
+        reply = callReplyCreateError(reply_error_msg, ctx);
+    }
+
     if (reply) autoMemoryAdd(ctx, VALKEYMODULE_AM_REPLY, reply);
     if (ctx->module) ctx->module->in_call--;
     if (c) moduleReleaseTempClient(c);
@@ -14090,6 +14163,7 @@ void moduleRegisterCoreAPI(void) {
     REGISTER_API(ReplyWithLongLong);
     REGISTER_API(ReplyWithError);
     REGISTER_API(ReplyWithErrorFormat);
+    REGISTER_API(ReplyWithCustomErrorFormat);
     REGISTER_API(ReplyWithSimpleString);
     REGISTER_API(ReplyWithArray);
     REGISTER_API(ReplyWithMap);

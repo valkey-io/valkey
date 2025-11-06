@@ -53,6 +53,7 @@ void scriptingEngineManagerForEachEngine(engineIterCallback callback, void *cont
 sds scriptingEngineGetName(scriptingEngine *engine);
 client *scriptingEngineGetClient(scriptingEngine *engine);
 ValkeyModule *scriptingEngineGetModule(scriptingEngine *engine);
+uint64_t scriptingEngineGetAbiVersion(scriptingEngine *engine);
 
 /*
  * API to call engine callback functions.

@@ -2219,6 +2219,7 @@ struct valkeyServer {
                                                             * dropping packets of a specific type */
     unsigned long cluster_blacklist_ttl;                   /* Duration in seconds that a node is denied re-entry into
                                                             * the cluster after it is forgotten with CLUSTER FORGET. */
+    sds hash_seed;                                         /* Configurable DB hash seed */
     int cluster_slot_stats_enabled;                        /* Cluster slot usage statistics tracking enabled. */
     mstime_t cluster_mf_timeout;                           /* Milliseconds to do a manual failover. */
     unsigned long cluster_slot_migration_log_max_len;      /* Maximum count of migrations to display in the
@@ -3442,8 +3443,8 @@ robj *setTypeDup(robj *o);
 #define HASH_SET_COPY 0
 
 
-void hashTypeFreeVolatileSet(robj *o);         /* needed only for freeHashObject */
-void hashTypeTrackEntry(robj *o, void *entry); /* needed only for rdbLoadObject */
+void hashTypeFreeVolatileSet(robj *o);          /* needed only for freeHashObject */
+void hashTypeTrackEntry(robj *o, entry *entry); /* needed only for rdbLoadObject */
 size_t hashTypeScanDefrag(robj *ob, size_t cursor, void *(*defragAlloc)(void *));
 size_t hashTypeDeleteExpiredFields(robj *o, mstime_t now, unsigned long max_fields, robj **out_fields);
 

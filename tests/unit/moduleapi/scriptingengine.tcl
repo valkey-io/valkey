@@ -63,6 +63,171 @@ start_server {tags {"modules"}} {
         r fcall bar 0
     } {432}
 
+    test {Call server command from script} {
+        set result [r eval {#!hello
+            FUNCTION callcmd
+            CONSTS x
+            ARGS 0
+            CONSTI 2
+            CALL SET
+            RETURN
+        } 0 43]
+        assert_equal $result "OK"
+        assert_equal [r GET x] 43
+
+        set result [r eval {#!hello
+            FUNCTION callcmd
+            CONSTS hello
+            CONSTI 1
+            CALL PING
+            RETURN
+        } 0]
+        assert_equal $result "hello"
+
+        set result [r eval {#!hello
+            FUNCTION callcmd
+            CONSTI 0
+            CALL PING
+            RETURN
+        } 0]
+        assert_equal $result "PONG"
+    }
+
+    test {Call server NOSCRIPT command} {
+        assert_error {ERR command 'acl|cat' is not allowed on script mode} {
+            r eval {#!hello
+                FUNCTION callcmd
+                CONSTS CAT
+                CONSTI 1
+                CALL ACL
+                RETURN
+            } 0
+        }
+
+        assert_error {ERR This Valkey command is not allowed from script*} {
+            r eval {#!lua
+                return server.call('ACL', 'CAT')
+            } 0
+        }
+
+        r debug set-disable-deny-scripts 1
+
+        set result [r eval {#!hello
+            FUNCTION callcmd
+            CONSTS CAT
+            CONSTI 1
+            CALL ACL
+            RETURN
+        } 0]
+        assert_equal $result "OK"
+
+        r eval {#!lua
+            return server.call('ACL', 'CAT')
+        } 0
+
+        r debug set-disable-deny-scripts 0
+    }
+
+    test {Call server command without permission} {
+        r acl setuser default -set
+
+        assert_error {NOPERM User default has no permissions *} {r set x 5}
+
+        assert_error {NOPERM User default has no permissions *} {
+            r eval {#!hello
+                FUNCTION callcmd
+                CONSTS x
+                ARGS 0
+                CONSTI 2
+                CALL SET
+                RETURN
+            } 0 43
+        }
+
+        assert_error {ERR ACL failure in script*} {
+            r eval {#!lua
+                return server.call('SET', 'x', 5)
+            } 0
+        }
+
+        r acl setuser default +set
+    }
+
+    test {Call server write command in RO script} {
+        assert_error {ERR Write commands are not allowed*} {
+            r eval {#!lua flags=no-writes
+                return server.call('SET', 'x', 5)
+            } 0
+        }
+
+        assert_error {ERR Write commands are not allowed*} {
+            r eval {#!hello flags=no-writes
+                FUNCTION callcmd
+                CONSTS x
+                CONSTI 43
+                CONSTI 2
+                CALL SET
+                RETURN
+            } 0
+        }
+    }
+
+    test {Call server command when OOM} {
+        r config set maxmemory 1
+
+        assert_error {*command not allowed when used memory*} {
+            r eval {#!lua
+                return server.call('set', 'x', 1)
+            } 0
+        }
+
+        set res [r eval {#!lua flags=allow-oom
+                return server.call('set', 'x', 1)
+            } 0]
+        assert_equal $res "OK"
+
+        assert_error {*command not allowed when used memory*} {
+            r eval {#!hello
+                FUNCTION callcmd
+                CONSTS x
+                CONSTI 43
+                CONSTI 2
+                CALL SET
+                RETURN
+            } 0
+        }
+
+        set res [r eval {#!hello flags=allow-oom
+                FUNCTION callcmd
+                CONSTS x
+                CONSTI 43
+                CONSTI 2
+                CALL SET
+                RETURN
+            } 0]
+        assert_equal $res "OK"
+
+        r config set maxmemory 0
+    }
+
+    test {Ensure errors from commands called from script is counted only once} {
+        r lpush l 1
+        assert_error {WRONGTYPE Operation against a key holding the wrong kind of value*} {
+            r eval {#!hello
+                FUNCTION callcmd
+                CONSTS l
+                CONSTI 1
+                CALL GET
+                RETURN
+            } 0
+        }
+
+        set errorstats [r info Errorstats]
+        regexp {errorstat_WRONGTYPE:count=([0-9]+)} $errorstats -> wrongtype_errors
+        assert_equal $wrongtype_errors 1
+
+    }
+
     test {Replace function library and call functions} {
         set result [r function load replace "#!hello name=mylib\nFUNCTION foo\nARGS 0\nRETURN\nFUNCTION bar\nCONSTI 500\nRETURN"]
         assert_equal $result "mylib"
@@ -198,6 +363,42 @@ start_server {tags {"modules"}} {
         r script debug off
         reconnect
         assert_equal [r ping] {PONG}
+    }
+
+    test {Test INFO scriptingengines section} {
+        # Get the scripting engines info section
+        set info [r info scriptingengines]
+
+        # Verify the section header exists
+        assert_match "*# Scripting Engines*" $info
+
+        # Verify we have exactly 2 engines (LUA + HELLO)
+        assert_match "*engines_count:*" $info
+        regexp {engines_count:([0-9]+)} $info -> engines_count
+        assert_equal $engines_count 2
+
+        # Verify memory fields exist and are non-negative numbers
+        assert_match "*engines_total_used_memory:*" $info
+        assert_match "*engines_total_memory_overhead:*" $info
+        regexp {engines_total_used_memory:([0-9]+)} $info -> total_memory
+        regexp {engines_total_memory_overhead:([0-9]+)} $info -> total_overhead
+        assert {$total_memory >= 0}
+        assert {$total_overhead >= 0}
+
+        # Verify individual engine information exists
+        assert_match "*engine_0:*" $info
+        assert_match "*engine_1:*" $info
+
+        # Check that engines have proper format including abi_version
+        assert_match "*engine_*:name=*,module=*,abi_version=*,used_memory=*,memory_overhead=*" $info
+
+        # Verify both LUA and HELLO engines are present
+        assert_match "*name=LUA*" $info
+        assert_match "*name=HELLO*" $info
+
+        # Verify LUA is built-in and HELLO is from module
+        assert_match "*name=LUA,module=built-in*" $info
+        assert_match "*name=HELLO,module=helloengine*" $info
     }
 
     test {Unload scripting engine module} {

@@ -3187,6 +3187,15 @@ static int applyClientMaxMemoryUsage(const char **err) {
     return 1;
 }
 
+#define HASH_SEED_MAX_LEN 256
+static int isValidDbHashSeed(sds val, const char **err) {
+    if (sdslen(val) > HASH_SEED_MAX_LEN) {
+        *err = "hash-seed must be less than or equal to " STRINGIFY(HASH_SEED_MAX_LEN) " characters";
+        return 0;
+    }
+    return 1;
+}
+
 standardConfig static_configs[] = {
     /* Bool configs */
     createBoolConfig("rdbchecksum", NULL, IMMUTABLE_CONFIG, server.rdb_checksum, 1, NULL, NULL),
@@ -3277,6 +3286,7 @@ standardConfig static_configs[] = {
     createSDSConfig("primaryauth", "masterauth", MODIFIABLE_CONFIG | SENSITIVE_CONFIG, EMPTY_STRING_IS_NULL, server.primary_auth, NULL, NULL, NULL),
     createSDSConfig("requirepass", NULL, MODIFIABLE_CONFIG | SENSITIVE_CONFIG, EMPTY_STRING_IS_NULL, server.requirepass, NULL, NULL, updateRequirePass),
     createSDSConfig("availability-zone", NULL, MODIFIABLE_CONFIG, ALLOW_EMPTY_STRING, server.availability_zone, "", NULL, NULL),
+    createSDSConfig("hash-seed", NULL, IMMUTABLE_CONFIG, EMPTY_STRING_IS_NULL, server.hash_seed, NULL, isValidDbHashSeed, NULL),
 
     /* Enum Configs */
     createEnumConfig("supervised", NULL, IMMUTABLE_CONFIG, supervised_mode_enum, server.supervised_mode, SUPERVISED_NONE, NULL, NULL),

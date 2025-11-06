@@ -91,6 +91,7 @@ int trimDoubleString(char *buf, size_t len);
 int d2string(char *buf, size_t len, double value);
 int fixedpoint_d2string(char *dst, size_t dstlen, double dvalue, int fractional_digits);
 int ld2string(char *buf, size_t len, long double value, ld2string_mode mode);
+void getHashSeedFromString(unsigned char *seed_array, size_t len, const char *value);
 int double2ll(double d, long long *out);
 int version2num(const char *version);
 int yesnotoi(char *s);

@@ -135,16 +135,16 @@ static int KeySpace_NotificationModuleKeyMiss(ValkeyModuleCtx *ctx, int type, co
 static int KeySpace_NotificationModuleString(ValkeyModuleCtx *ctx, int type, const char *event, ValkeyModuleString *key) {
     VALKEYMODULE_NOT_USED(type);
     VALKEYMODULE_NOT_USED(event);
-    ValkeyModuleKey *redis_key = ValkeyModule_OpenKey(ctx, key, VALKEYMODULE_READ);
+    ValkeyModuleKey *valkey_key = ValkeyModule_OpenKey(ctx, key, VALKEYMODULE_READ);
 
     size_t len = 0;
     /* ValkeyModule_StringDMA could change the data format and cause the old robj to be freed.
      * This code verifies that such format change will not cause any crashes.*/
-    char *data = ValkeyModule_StringDMA(redis_key, &len, VALKEYMODULE_READ);
+    char *data = ValkeyModule_StringDMA(valkey_key, &len, VALKEYMODULE_READ);
     int res = strncmp(data, "dummy", 5);
     VALKEYMODULE_NOT_USED(res);
 
-    ValkeyModule_CloseKey(redis_key);
+    ValkeyModule_CloseKey(valkey_key);
 
     return VALKEYMODULE_OK;
 }

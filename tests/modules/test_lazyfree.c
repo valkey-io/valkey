@@ -166,7 +166,7 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
     if (ValkeyModule_Init(ctx,"lazyfreetest",1,VALKEYMODULE_APIVER_1)
         == VALKEYMODULE_ERR) return VALKEYMODULE_ERR;
 
-    /* We only allow our module to be loaded when the redis core version is greater than the version of my module */
+    /* We only allow our module to be loaded when the valkey core version is greater than the version of my module */
     if (ValkeyModule_GetTypeMethodVersion() < VALKEYMODULE_TYPE_METHOD_VERSION) {
         return VALKEYMODULE_ERR;
     }

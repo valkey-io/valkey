@@ -45,7 +45,7 @@
  *                               dict
  * 
  * 
- * Keys in redis database:
+ * Keys in valkey database:
  * 
  *                                ┌───────┐
  *                                │ size  │
@@ -64,7 +64,7 @@
  *     │ k3  │  ───┼─┐                             │ k2  │  ───┼─┐
  *     │     │     │ │                             │     │     │ │
  *     └─────┴─────┘ │            ┌───────┐        └─────┴─────┘ │            ┌───────┐
- *      redis db[0]  │            │ size  │          redis db[1] │            │ size  │
+ *      valkey db[0] │            │ size  │         valkey db[1] │            │ size  │
  *                   └───────────►│ used  │                      └───────────►│ used  │
  *                                │ mask  │                                   │ mask  │
  *                                └───────┘                                   └───────┘

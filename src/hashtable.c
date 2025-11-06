@@ -296,7 +296,7 @@ struct hashtable {
     int16_t pause_rehash;      /* Non-zero = rehashing is paused */
     int16_t pause_auto_shrink; /* Non-zero = automatic resizing disallowed. */
     size_t child_buckets[2];   /* Number of allocated child buckets. */
-    iter *safe_iterators; /* Head of linked list of safe iterators */
+    iter *safe_iterators;      /* Head of linked list of safe iterators */
     void *metadata[];
 };
 
@@ -2085,7 +2085,7 @@ bool hashtableNext(hashtableIterator *iterator, void **elemptr) {
     if (iter->hashtable == NULL) {
         return false;
     }
-    
+
     while (1) {
         if (iter->index == -1 && iter->table == 0) {
             /* It's the first call to next. */

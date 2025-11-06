@@ -406,6 +406,11 @@ typedef struct commandlog {
     unsigned long max_len;
 } commandlog;
 
+typedef struct bigkeyEntry {
+    long long value;
+    robj *key;
+} bigkeyEntry;
+
 /* Type of keyinfo */
 typedef enum { KEYINFO_TYPE_MANY_ELEMENTS = 0,
                KEYINFO_TYPE_NUM } keyinfo_type;

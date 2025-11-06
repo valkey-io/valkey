@@ -6926,7 +6926,7 @@ void loadDataFromDisk(void) {
         int rdb_load_ret = rdbLoad(server.rdb_filename, &rsi, rdb_flags);
         if (rdb_load_ret == RDB_OK) {
             serverLog(LL_NOTICE, "DB loaded from disk: %.3f seconds", (float)(ustime() - start) / 1000000);
-            rsi_is_valid = replicationRestoreOffsetFromSaveInfo(&rsi, false);
+            rsi_is_valid = rdbRestoreOffsetFromSaveInfo(&rsi, false);
         } else if (rdb_load_ret != RDB_NOT_EXIST) {
             serverLog(LL_WARNING, "Fatal error loading the DB, check server logs. Exiting.");
             exit(1);

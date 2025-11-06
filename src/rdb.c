@@ -3955,9 +3955,9 @@ rdbSaveInfo *rdbPopulateSaveInfo(rdbSaveInfo *rsi) {
 
 /* Restore the replication ID / offset from the RDB file
  * return 1 if rdbSaveInfo is valid */
-int replicationRestoreOffsetFromSaveInfo(rdbSaveInfo *rsi, bool is_aof_preamble) {
+int rdbRestoreOffsetFromSaveInfo(rdbSaveInfo *rsi, bool is_aof_preamble) {
     int rsi_is_valid = 0;
-    if (rsi == NULL) return rsi_is_valid;
+    serverAssert(rsi != NULL);
     if (rsi->repl_id_is_set && rsi->repl_offset != -1 && rsi->repl_stream_db != -1) {
         /* Note that older implementations may save a repl_stream_db
          * of -1 inside the RDB file in a wrong way, see more

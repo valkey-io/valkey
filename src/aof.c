@@ -1470,7 +1470,7 @@ int loadSingleAppendOnlyFile(char *filename) {
             goto cleanup;
         } else {
             /* Restore the replication ID / offset from the RDB file. */
-            rsi_is_valid = replicationRestoreOffsetFromSaveInfo(&rsi, true);
+            rsi_is_valid = rdbRestoreOffsetFromSaveInfo(&rsi, true);
             loadingAbsProgress(ftello(fp));
             last_progress_report_size = ftello(fp);
             if (old_style) serverLog(LL_NOTICE, "Reading the remaining AOF tail...");

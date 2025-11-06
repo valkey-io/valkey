@@ -1,102 +1,102 @@
 
-#include "redismodule.h"
+#include "valkeymodule.h"
 
-static void timer_callback(RedisModuleCtx *ctx, void *data)
+static void timer_callback(ValkeyModuleCtx *ctx, void *data)
 {
-    RedisModuleString *keyname = data;
-    RedisModuleCallReply *reply;
+    ValkeyModuleString *keyname = data;
+    ValkeyModuleCallReply *reply;
 
-    reply = RedisModule_Call(ctx, "INCR", "s", keyname);
+    reply = ValkeyModule_Call(ctx, "INCR", "s", keyname);
     if (reply != NULL)
-        RedisModule_FreeCallReply(reply);
-    RedisModule_FreeString(ctx, keyname);
+        ValkeyModule_FreeCallReply(reply);
+    ValkeyModule_FreeString(ctx, keyname);
 }
 
-int test_createtimer(RedisModuleCtx *ctx, RedisModuleString **argv, int argc)
+int test_createtimer(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc)
 {
     if (argc != 3) {
-        RedisModule_WrongArity(ctx);
-        return REDISMODULE_OK;
+        ValkeyModule_WrongArity(ctx);
+        return VALKEYMODULE_OK;
     }
 
     long long period;
-    if (RedisModule_StringToLongLong(argv[1], &period) == REDISMODULE_ERR) {
-        RedisModule_ReplyWithError(ctx, "Invalid time specified.");
-        return REDISMODULE_OK;
+    if (ValkeyModule_StringToLongLong(argv[1], &period) == VALKEYMODULE_ERR) {
+        ValkeyModule_ReplyWithError(ctx, "Invalid time specified.");
+        return VALKEYMODULE_OK;
     }
 
-    RedisModuleString *keyname = argv[2];
-    RedisModule_RetainString(ctx, keyname);
+    ValkeyModuleString *keyname = argv[2];
+    ValkeyModule_RetainString(ctx, keyname);
 
-    RedisModuleTimerID id = RedisModule_CreateTimer(ctx, period, timer_callback, keyname);
-    RedisModule_ReplyWithLongLong(ctx, id);
+    ValkeyModuleTimerID id = ValkeyModule_CreateTimer(ctx, period, timer_callback, keyname);
+    ValkeyModule_ReplyWithLongLong(ctx, id);
 
-    return REDISMODULE_OK;
+    return VALKEYMODULE_OK;
 }
 
-int test_gettimer(RedisModuleCtx *ctx, RedisModuleString **argv, int argc)
+int test_gettimer(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc)
 {
     if (argc != 2) {
-        RedisModule_WrongArity(ctx);
-        return REDISMODULE_OK;
+        ValkeyModule_WrongArity(ctx);
+        return VALKEYMODULE_OK;
     }
 
     long long id;
-    if (RedisModule_StringToLongLong(argv[1], &id) == REDISMODULE_ERR) {
-        RedisModule_ReplyWithError(ctx, "Invalid id specified.");
-        return REDISMODULE_OK;
+    if (ValkeyModule_StringToLongLong(argv[1], &id) == VALKEYMODULE_ERR) {
+        ValkeyModule_ReplyWithError(ctx, "Invalid id specified.");
+        return VALKEYMODULE_OK;
     }
 
     uint64_t remaining;
-    RedisModuleString *keyname;
-    if (RedisModule_GetTimerInfo(ctx, id, &remaining, (void **)&keyname) == REDISMODULE_ERR) {
-        RedisModule_ReplyWithNull(ctx);
+    ValkeyModuleString *keyname;
+    if (ValkeyModule_GetTimerInfo(ctx, id, &remaining, (void **)&keyname) == VALKEYMODULE_ERR) {
+        ValkeyModule_ReplyWithNull(ctx);
     } else {
-        RedisModule_ReplyWithArray(ctx, 2);
-        RedisModule_ReplyWithString(ctx, keyname);
-        RedisModule_ReplyWithLongLong(ctx, remaining);
+        ValkeyModule_ReplyWithArray(ctx, 2);
+        ValkeyModule_ReplyWithString(ctx, keyname);
+        ValkeyModule_ReplyWithLongLong(ctx, remaining);
     }
 
-    return REDISMODULE_OK;
+    return VALKEYMODULE_OK;
 }
 
-int test_stoptimer(RedisModuleCtx *ctx, RedisModuleString **argv, int argc)
+int test_stoptimer(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc)
 {
     if (argc != 2) {
-        RedisModule_WrongArity(ctx);
-        return REDISMODULE_OK;
+        ValkeyModule_WrongArity(ctx);
+        return VALKEYMODULE_OK;
     }
 
     long long id;
-    if (RedisModule_StringToLongLong(argv[1], &id) == REDISMODULE_ERR) {
-        RedisModule_ReplyWithError(ctx, "Invalid id specified.");
-        return REDISMODULE_OK;
+    if (ValkeyModule_StringToLongLong(argv[1], &id) == VALKEYMODULE_ERR) {
+        ValkeyModule_ReplyWithError(ctx, "Invalid id specified.");
+        return VALKEYMODULE_OK;
     }
 
     int ret = 0;
-    RedisModuleString *keyname;
-    if (RedisModule_StopTimer(ctx, id, (void **) &keyname) == REDISMODULE_OK) {
-        RedisModule_FreeString(ctx, keyname);
+    ValkeyModuleString *keyname;
+    if (ValkeyModule_StopTimer(ctx, id, (void **) &keyname) == VALKEYMODULE_OK) {
+        ValkeyModule_FreeString(ctx, keyname);
         ret = 1;
     }
 
-    RedisModule_ReplyWithLongLong(ctx, ret);
-    return REDISMODULE_OK;
+    ValkeyModule_ReplyWithLongLong(ctx, ret);
+    return VALKEYMODULE_OK;
 }
 
 
-int RedisModule_OnLoad(RedisModuleCtx *ctx, RedisModuleString **argv, int argc) {
-    REDISMODULE_NOT_USED(argv);
-    REDISMODULE_NOT_USED(argc);
-    if (RedisModule_Init(ctx,"timer",1,REDISMODULE_APIVER_1)== REDISMODULE_ERR)
-        return REDISMODULE_ERR;
+int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    VALKEYMODULE_NOT_USED(argv);
+    VALKEYMODULE_NOT_USED(argc);
+    if (ValkeyModule_Init(ctx,"timer",1,VALKEYMODULE_APIVER_1)== VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
 
-    if (RedisModule_CreateCommand(ctx,"test.createtimer", test_createtimer,"",0,0,0) == REDISMODULE_ERR)
-        return REDISMODULE_ERR;
-    if (RedisModule_CreateCommand(ctx,"test.gettimer", test_gettimer,"",0,0,0) == REDISMODULE_ERR)
-        return REDISMODULE_ERR;
-    if (RedisModule_CreateCommand(ctx,"test.stoptimer", test_stoptimer,"",0,0,0) == REDISMODULE_ERR)
-        return REDISMODULE_ERR;
+    if (ValkeyModule_CreateCommand(ctx,"test.createtimer", test_createtimer,"",0,0,0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+    if (ValkeyModule_CreateCommand(ctx,"test.gettimer", test_gettimer,"",0,0,0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+    if (ValkeyModule_CreateCommand(ctx,"test.stoptimer", test_stoptimer,"",0,0,0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
 
-    return REDISMODULE_OK;
+    return VALKEYMODULE_OK;
 }

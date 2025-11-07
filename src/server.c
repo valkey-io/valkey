@@ -910,128 +910,18 @@ void displayDataTypeArray(keysizeInfo *keysize_array, int length) {
     }
 }
 
-void decreaseDataTypeArrayPreviousValue(keysizeInfo *keysize_array, int low, int high, int value) {
-    if (keysize_array[low].element_size == value) {
-        keysize_array[low].num--;
-    } else if (keysize_array[high].element_size == value) {
-        keysize_array[high].num--;
-    } else {
-        while (low + 1 < high) {
-            int mid = low + (high - low) / 2;
-            if (value > keysize_array[mid].element_size) {
-                low = mid;
-            } else {
-                high = mid;
-            }
-        }
-        if (value == keysize_array[high].element_size) {
-            keysize_array[high].num--;
-        } else {
-            keysize_array[low].num--;
-        }
-    }
-}
-
-void increaseDataTypeArrayCurrentValue(keysizeInfo *keysize_array, int low, int high, int value) {
-    if (keysize_array[low].element_size == value) {
-        keysize_array[low].num++;
-    } else if (keysize_array[high].element_size == value) {
-        keysize_array[high].num++;
-    } else {
-        while (low + 1 < high) {
-            int mid = low + (high - low) / 2;
-            if (value > keysize_array[mid].element_size) {
-                low = mid;
-            } else {
-                high = mid;
-            }
-        }
-        if (value == keysize_array[high].element_size) {
-            keysize_array[high].num++;
-        } else {
-            keysize_array[low].num++;
-        }
-    }
-}
-
-void updateHashKeySizeArray(serverDb *db, long previous, long curr) {
-    int low = 0;
-    int high = db->hash_array_length - 1;
-    if (previous != 0) {
-        decreaseDataTypeArrayPreviousValue(db->hash_array, low, high, previous);
-    }
-    if (curr != 0) {
-        increaseDataTypeArrayCurrentValue(db->hash_array, low, high, curr);
-    }
-}
-
-void updateListKeySizeArray(serverDb *db, long previous, long curr) {
-    int low = 0;
-    int high = db->list_array_length - 1;
-    if (previous != 0) {
-        decreaseDataTypeArrayPreviousValue(db->list_array, low, high, previous);
-    }
-    if (curr != 0) {
-        increaseDataTypeArrayCurrentValue(db->list_array, low, high, curr);
-    }
-}
-
-void updateSetKeySizeArray(serverDb *db, long previous, long curr) {
-    int low = 0;
-    int high = db->set_array_length - 1;
-    if (previous != 0) {
-        decreaseDataTypeArrayPreviousValue(db->set_array, low, high, previous);
-    }
-    if (curr != 0) {
-        increaseDataTypeArrayCurrentValue(db->set_array, low, high, curr);
-    }
-}
-
-void updateStringKeySizeArray(serverDb *db, long previous, long curr) {
-    int low = 0;
-    int high = db->string_array_length - 1;
-    if (previous != 0) {
-        decreaseDataTypeArrayPreviousValue(db->string_array, low, high, previous);
-    }
-    if (curr != 0) {
-        increaseDataTypeArrayCurrentValue(db->string_array, low, high, curr);
-    }
-}
-
-void updateZsetKeySizeArray(serverDb *db, long previous, long curr) {
-    int low = 0;
-    int high = db->zset_array_length - 1;
-    if (previous != 0) {
-        decreaseDataTypeArrayPreviousValue(db->zset_array, low, high, previous);
-    }
-    if (curr != 0) {
-        increaseDataTypeArrayCurrentValue(db->zset_array, low, high, curr);
-    }
-}
-
 void updateKeySizeArray(serverDb *db, robj *dstkey) {
     robj *t_obj = lookupKeyWrite(db, dstkey);
     if (t_obj) {
         if (t_obj->type == OBJ_STRING) {
-            updateStringKeySizeArray(db, stringObjectLen(t_obj), 0);
-            // TO DO for memory usage
-            db->string_number_of_keys--;
         } else if (t_obj->type == OBJ_LIST) {
-            updateListKeySizeArray(db, listTypeLength(t_obj), 0);
             updateBigKeyList(t_obj, listTypeLength(t_obj), 0, LIST_TYPE);
-            db->list_number_of_keys--;
         } else if (t_obj->type == OBJ_SET) {
-            updateSetKeySizeArray(db, setTypeSize(t_obj), 0);
             updateBigKeyList(t_obj, setTypeSize(t_obj), 0, SET_TYPE);
-            db->set_number_of_keys--;
         } else if (t_obj->type == OBJ_ZSET) {
-            updateZsetKeySizeArray(db, zsetLength(t_obj), 0);
             updateBigKeyList(t_obj, zsetLength(t_obj), 0, SORTED_SET_TYPE);
-            db->zset_number_of_keys--;
         } else if (t_obj->type == OBJ_HASH) {
-            updateHashKeySizeArray(db, hashTypeLength(t_obj), 0);
             updateBigKeyList(t_obj, hashTypeLength(t_obj), 0, HASH_TYPE);
-            db->hash_number_of_keys--;
         } else if (t_obj->type == OBJ_STREAM) {
         }
     }
@@ -3092,21 +2982,6 @@ void bigkeyListInit(void) {
     server.hash_bigkey_info = listCreate();
     server.set_bigkey_info = listCreate();
     server.zset_bigkey_info = listCreate();
-}
-
-void resetDBKeySizeArray(serverDb *db) {
-    db->string_number_of_keys = 0;
-    db->list_number_of_keys = 0;
-    db->set_number_of_keys = 0;
-    db->hash_number_of_keys = 0;
-    db->zset_number_of_keys = 0;
-    for (int count = 0; count < KEYSIZE_ARRAY_SIZE; count++) {
-        db->list_array[count].num = 0;
-        db->set_array[count].num = 0;
-        db->hash_array[count].num = 0;
-        db->zset_array[count].num = 0;
-        db->string_array[count].num = 0;
-    }
 }
 
 void initServer(void) {

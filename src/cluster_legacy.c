@@ -4938,6 +4938,7 @@ void clusterPropagatePublish(robj *channel, robj *message, int sharded) {
     clusterNode *node;
     while ((node = clusterNodeIterNext(&iter)) != NULL) {
         if (node->flags & (CLUSTER_NODE_MYSELF | CLUSTER_NODE_HANDSHAKE)) continue;
+        if (!node->link || node->pong_received < node->link->ctime) continue;
         if (nodeSupportsLightMsgHdrForPubSub(node)) {
             clusterSendMessage(node->link, msgblock_light);
         } else {

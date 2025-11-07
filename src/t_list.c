@@ -521,6 +521,8 @@ void linsertCommand(client *c) {
     listTypeIterator *iter;
     listTypeEntry entry;
     int inserted = 0;
+    long previous_element_number;
+    long current_element_number;
 
     if (strcasecmp(c->argv[2]->ptr, "after") == 0) {
         where = LIST_TAIL;
@@ -539,6 +541,7 @@ void linsertCommand(client *c) {
      * the list twice (once to see if the value can be inserted and once
      * to do the actual insert), so we assume this value can be inserted
      * and convert the listpack to a regular list if necessary. */
+    previous_element_number = listTypeLength(subject);
     listTypeTryConversionAppend(subject, c->argv, 4, 4, NULL, NULL);
 
     /* Seek pivot from head to tail */
@@ -556,6 +559,8 @@ void linsertCommand(client *c) {
         signalModifiedKey(c, c->db, c->argv[1]);
         notifyKeyspaceEvent(NOTIFY_LIST, "linsert", c->argv[1], c->db->id);
         server.dirty++;
+        current_element_number = previous_element_number + 1;
+        updateBigKeyList(c->argv[1], previous_element_number, current_element_number, LIST_TYPE);
     } else {
         /* Notify client of a failed insert */
         addReplyLongLong(c, -1);

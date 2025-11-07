@@ -411,10 +411,6 @@ typedef struct bigkeyEntry {
     robj *key;
 } bigkeyEntry;
 
-/* Type of keyinfo */
-typedef enum { KEYINFO_TYPE_MANY_ELEMENTS = 0,
-               KEYINFO_TYPE_NUM } keyinfo_type;
-
 /* Replica replication state. Used in server.repl_state for replicas to remember
  * what to do next. */
 typedef enum {
@@ -876,12 +872,6 @@ typedef struct replBufBlock {
     char buf[];
 } replBufBlock;
 
-typedef struct keysizeInfo {
-    long long element_size;
-    long long num;
-} keysizeInfo;
-
-#define KEYSIZE_ARRAY_SIZE 32
 
 /* Database representation. There are multiple databases identified
  * by integers from 0 (the default database) up to the max configured
@@ -901,21 +891,6 @@ typedef struct serverDb {
         long long avg_ttl;    /* Average TTL, just for stats */
         unsigned long cursor; /* Cursor of the active expire cycle. */
     } expiry[ACTIVE_EXPIRY_TYPE_COUNT];
-    keysizeInfo list_array[KEYSIZE_ARRAY_SIZE];
-    int list_array_length;
-    unsigned long long list_number_of_keys;
-    keysizeInfo set_array[KEYSIZE_ARRAY_SIZE];
-    int set_array_length;
-    unsigned long long set_number_of_keys;
-    keysizeInfo hash_array[KEYSIZE_ARRAY_SIZE];
-    int hash_array_length;
-    unsigned long long hash_number_of_keys;
-    keysizeInfo zset_array[KEYSIZE_ARRAY_SIZE];
-    int zset_array_length;
-    unsigned long long zset_number_of_keys;
-    keysizeInfo string_array[KEYSIZE_ARRAY_SIZE];
-    int string_array_length;
-    unsigned long long string_number_of_keys;
 } serverDb;
 
 /* forward declaration for functions ctx */
@@ -3051,9 +3026,8 @@ void freeSetObject(robj *o);
 void freeZsetObject(robj *o);
 void freeHashObject(robj *o);
 void dismissObject(robj *o, size_t dump_size);
-size_t getStringValueMemoryUsage(robj *obj);
-void displayUpdate(int pre_value, int current_value);
-void displayDataTypeArray(keysizeInfo *keysize_array, int length);
+//void displayUpdate(int pre_value, int current_value);
+//void displayDataTypeArray(keysizeInfo *keysize_array, int length);
 void updateKeySizeArray(serverDb *db, robj *key);
 robj *createObject(int type, void *ptr);
 void initObjectLRUOrLFU(robj *o);

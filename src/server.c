@@ -886,18 +886,7 @@ void trackInstantaneousMetric(int metric, long long current_value, long long cur
     server.inst_metric[metric].last_sample_value = current_value;
 }
 
-size_t getStringValueMemoryUsage(robj *obj) {
-    size_t asize = 0;
-    if (obj->encoding == OBJ_ENCODING_INT) {
-        asize = sizeof(*obj);
-    } else if (obj->encoding == OBJ_ENCODING_RAW) {
-        asize = sdsAllocSize(obj->ptr) + sizeof(*obj);
-    } else if (obj->encoding == OBJ_ENCODING_EMBSTR) {
-        asize = zmalloc_size((void *)obj);
-    }
-    return asize;
-}
-
+/*
 void displayUpdate(int pre_value, int current_value) {
     serverLog(LL_WARNING, "This is for testing, previous item number is %d, and current item number is %d", pre_value,
               current_value);
@@ -909,6 +898,7 @@ void displayDataTypeArray(keysizeInfo *keysize_array, int length) {
         serverLog(LL_WARNING, "Item %lld and value is %lld", keysize_array[i].element_size, keysize_array[i].num);
     }
 }
+*/
 
 void updateKeySizeArray(serverDb *db, robj *dstkey) {
     robj *t_obj = lookupKeyWrite(db, dstkey);
@@ -2856,20 +2846,6 @@ serverDb *createDatabase(int id) {
     db->ready_keys = dictCreate(&objectKeyPointerValueDictType);
     db->watched_keys = dictCreate(&keylistDictType);
     db->id = id;
-    db->list_array_length = KEYSIZE_ARRAY_SIZE;
-    db->set_array_length = KEYSIZE_ARRAY_SIZE;
-    db->hash_array_length = KEYSIZE_ARRAY_SIZE;
-    db->zset_array_length = KEYSIZE_ARRAY_SIZE;
-    db->string_array_length = KEYSIZE_ARRAY_SIZE;
-    long long i = 1;
-    for (int count = 0; count < KEYSIZE_ARRAY_SIZE; count++) {
-        db->list_array[count].element_size = i;
-        db->set_array[count].element_size = i;
-        db->hash_array[count].element_size = i;
-        db->zset_array[count].element_size = i;
-        db->string_array[count].element_size = i;
-        i *= 2;
-    }
     resetDbExpiryState(db);
     return db;
 }

@@ -475,7 +475,6 @@ void pushGenericCommand(client *c, int where, int xx) {
         lobj = createListListpackObject();
         dbAdd(c->db, c->argv[1], &lobj);
         previous_element_number = 0;
-        c->db->list_number_of_keys++;
     } else {
         previous_element_number = listTypeLength(lobj);
     }

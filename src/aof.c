@@ -1475,6 +1475,8 @@ int loadSingleAppendOnlyFile(char *filename) {
             last_progress_report_size = ftello(fp);
             if (old_style) serverLog(LL_NOTICE, "Reading the remaining AOF tail...");
         }
+        /* If the AOF didn't contain replication info, it's not possible to
+         * support partial resync, so we can free the backlog to save memory. */
         if (!rsi_is_valid && server.repl_backlog && listLength(server.replicas) == 0) freeReplicationBacklog();
     }
 

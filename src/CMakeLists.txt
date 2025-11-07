@@ -93,3 +93,19 @@ endif ()
 if (BUILD_UNIT_TESTS)
     add_subdirectory(unit)
 endif ()
+
+# Create symbolic links under src/ directory so that TCL tests can find the binaries
+add_custom_target(link_test_binaries ALL
+    DEPENDS valkey-server valkey-cli valkey-benchmark
+    COMMAND ${CMAKE_COMMAND} -E echo "Creating symlinks for test environment"
+
+    # Link build binaries into src/
+    COMMAND ${CMAKE_COMMAND} -E create_symlink $<TARGET_FILE:valkey-server> ${CMAKE_SOURCE_DIR}/src/valkey-server
+    COMMAND ${CMAKE_COMMAND} -E create_symlink $<TARGET_FILE:valkey-cli> ${CMAKE_SOURCE_DIR}/src/valkey-cli
+    COMMAND ${CMAKE_COMMAND} -E create_symlink $<TARGET_FILE:valkey-benchmark> ${CMAKE_SOURCE_DIR}/src/valkey-benchmark
+
+    # These aliases all point to valkey-server
+    COMMAND ${CMAKE_COMMAND} -E create_symlink $<TARGET_FILE:valkey-server> ${CMAKE_SOURCE_DIR}/src/valkey-check-aof
+    COMMAND ${CMAKE_COMMAND} -E create_symlink $<TARGET_FILE:valkey-server> ${CMAKE_SOURCE_DIR}/src/valkey-check-rdb
+    COMMAND ${CMAKE_COMMAND} -E create_symlink $<TARGET_FILE:valkey-server> ${CMAKE_SOURCE_DIR}/src/valkey-sentinel
+)

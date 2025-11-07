@@ -97,7 +97,7 @@ endif ()
 # Create symbolic links under src/ directory so that TCL tests can find the binaries
 add_custom_target(link_test_binaries ALL
     DEPENDS valkey-server valkey-cli valkey-benchmark
-    COMMAND ${CMAKE_COMMAND} -E echo "Creating symlinks for test environment"
+    COMMAND ${CMAKE_COMMAND} -E echo "Creating symlinks under src/ for test environment"
 
     # Link build binaries into src/
     COMMAND ${CMAKE_COMMAND} -E create_symlink $<TARGET_FILE:valkey-server> ${CMAKE_SOURCE_DIR}/src/valkey-server

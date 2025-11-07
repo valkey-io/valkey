@@ -3954,7 +3954,7 @@ rdbSaveInfo *rdbPopulateSaveInfo(rdbSaveInfo *rsi) {
 }
 
 /* Restore the replication ID / offset from the RDB file
- * return 1 if rdbSaveInfo is valid */
+ * return 1 if replication ID and offset were restored from the rdbSaveInfo */
 int rdbRestoreOffsetFromSaveInfo(rdbSaveInfo *rsi, bool is_aof_preamble) {
     int rsi_is_valid = 0;
     serverAssert(rsi != NULL);

@@ -464,6 +464,7 @@ proc start_server {options {code undefined}} {
     # Wait for the server to be ready and check for server liveness/client connectivity before starting the test.
     set wait_ready true
 
+    puts "~~running start_server with options: $options"
     # parse options
     foreach {option value} $options {
         switch $option {
@@ -565,6 +566,7 @@ proc start_server {options {code undefined}} {
             dict set config $directive $arguments
         }
     }
+
 
     # use a different directory every time a server is started
     dict set config dir [tmpdir server]
@@ -699,6 +701,8 @@ proc start_server {options {code undefined}} {
         dict set srv "pport" $pport
     }
 
+    puts "~~! config $config"
+    puts "~~! srv $srv"
     # if a block of code is supplied, we wait for the server to become
     # available, create a client object and kill the server afterwards
     if {$code ne "undefined"} {

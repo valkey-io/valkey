@@ -159,6 +159,8 @@ struct connection {
     ConnectionState state;
     int last_errno;
     int fd;
+    char client_ip[NET_IP_STR_LEN];
+    int client_port;
     short int flags;
     short int refs;
     unsigned short int iovcnt;

@@ -198,6 +198,224 @@ tags {"benchmark network external:skip logreqres:skip"} {
             assert {$different_count > 0}
         }
 
+        test {benchmark: dataset CSV with field placeholders} {
+            # Create test CSV dataset
+            set csv_data "title,content,author\nTest Title 1,Test Content 1,Author 1\nTest Title 2,Test Content 2,Author 2"
+            set csv_file [tmpfile "dataset.csv"]
+            set fd [open $csv_file w]
+            puts $fd $csv_data
+            close $fd
+
+            set cmd [valkeybenchmark $master_host $master_port "--dataset $csv_file -n 4 -r 10 -- HSET doc:__rand_int__ title \"__field:title__\" content \"__field:content__\""]
+            common_bench_setup $cmd
+            assert_match  {*calls=4,*} [cmdstat hset]
+            
+            # Verify field data was inserted correctly
+            set keys [r keys "doc:*"]
+            assert {[llength $keys] > 0}
+            set sample_key [lindex $keys 0]
+            set title [r hget $sample_key title]
+            set content [r hget $sample_key content]
+            assert {$title eq "Test Title 1" || $title eq "Test Title 2"}
+            assert {$content eq "Test Content 1" || $content eq "Test Content 2"}
+            
+            file delete $csv_file
+        }
+
+        test {benchmark: dataset XML with field placeholders} {
+            # Create test XML dataset matching Wikipedia structure
+            set xml_data "<doc><title>XML Title 1</title><abstract>XML Abstract 1</abstract><url>http://example1.com</url><links><sublink><anchor>test1</anchor><link>http://test1.com</link></sublink></links></doc>\n<doc><title>XML Title 2</title><abstract>XML Abstract 2</abstract><url>http://example2.com</url><links><sublink><anchor>test2</anchor><link>http://test2.com</link></sublink></links></doc>"
+            set xml_file [tmpfile "dataset.xml"]
+            set fd [open $xml_file w]
+            puts $fd $xml_data
+            close $fd
+
+            set cmd [valkeybenchmark $master_host $master_port "--dataset $xml_file --xml-root-element doc -n 4 -r 10 -- HSET xml_doc:__rand_int__ title \"__field:title__\" abstract \"__field:abstract__\""]
+            common_bench_setup $cmd
+            assert_match  {*calls=4,*} [cmdstat hset]
+            
+            # Verify XML field data was inserted correctly
+            set keys [r keys "xml_doc:*"]
+            assert {[llength $keys] > 0}
+            set sample_key [lindex $keys 0]
+            set title [r hget $sample_key title]
+            set abstract [r hget $sample_key abstract]
+            assert {$title eq "XML Title 1" || $title eq "XML Title 2"}
+            assert {$abstract eq "XML Abstract 1" || $abstract eq "XML Abstract 2"}
+            
+            file delete $xml_file
+        }
+
+        test {benchmark: dataset with maxdocs limit} {
+            # Create test dataset with multiple rows
+            set csv_data "name,value\nitem1,value1\nitem2,value2\nitem3,value3\nitem4,value4"
+            set csv_file [tmpfile "dataset.csv"]
+            set fd [open $csv_file w]
+            puts $fd $csv_data
+            close $fd
+
+            set cmd [valkeybenchmark $master_host $master_port "--dataset $csv_file --maxdocs 2 -n 4 -r 10 -- SET item:__rand_int__ \"__field:value__\""]
+            common_bench_setup $cmd
+            assert_match  {*calls=4,*} [cmdstat set]
+            
+            # Should only use first 2 documents due to maxdocs limit
+            set keys [r keys "item:*"]
+            assert {[llength $keys] > 0}
+            
+            # Verify ALL keys only contain values from first 2 documents
+            set unique_values {}
+            foreach key $keys {
+                set value [r get $key]
+                assert {$value eq "value1" || $value eq "value2"}
+                if {[lsearch $unique_values $value] == -1} {
+                    lappend unique_values $value
+                }
+            }
+            
+            file delete $csv_file
+        }
+
+        test {benchmark: dataset error handling - invalid field} {
+            set csv_data "name,value\nitem1,value1"
+            set csv_file [tmpfile "dataset.csv"]
+            set fd [open $csv_file w]
+            puts $fd $csv_data
+            close $fd
+
+            set cmd [valkeybenchmark $master_host $master_port "--dataset $csv_file -n 1 -- SET item:__rand_int__ \"__field:invalid_field__\""]
+            
+            # Should fail with invalid field error
+            if {[catch { exec {*}$cmd } error]} {
+                assert_match "*not found in dataset fields*" $error
+            } else {
+                fail "Expected error for invalid field placeholder"
+            }
+            
+            file delete $csv_file
+        }
+
+        test {benchmark: dataset TSV with field placeholders} {
+            # Create test TSV dataset (tab-separated values)
+            set tsv_data "name\tvalue\tcount\nitem1\tvalue1\t100\nitem2\tvalue2\t200"
+            set tsv_file [tmpfile "dataset.tsv"]
+            set fd [open $tsv_file w]
+            puts $fd $tsv_data
+            close $fd
+
+            set cmd [valkeybenchmark $master_host $master_port "--dataset $tsv_file -n 4 -r 10 -- HSET tsv_doc:__rand_int__ name \"__field:name__\" value \"__field:value__\" count __field:count__"]
+            common_bench_setup $cmd
+            assert_match  {*calls=4,*} [cmdstat hset]
+            
+            # Verify TSV field data was inserted correctly
+            set keys [r keys "tsv_doc:*"]
+            assert {[llength $keys] > 0}
+            set sample_key [lindex $keys 0]
+            set name [r hget $sample_key name]
+            set value [r hget $sample_key value]
+            set count [r hget $sample_key count]
+            assert {$name eq "item1" || $name eq "item2"}
+            assert {$value eq "value1" || $value eq "value2"}
+            assert {$count eq "100" || $count eq "200"}
+            
+            file delete $tsv_file
+        }
+
+        test {benchmark: XML dataset missing root element error} {
+            # Create test XML dataset
+            set xml_data "<doc><title>XML Title 1</title><abstract>XML Abstract 1</abstract></doc>"
+            set xml_file [tmpfile "dataset.xml"]
+            set fd [open $xml_file w]
+            puts $fd $xml_data
+            close $fd
+
+            # Should fail without --xml-root-element parameter
+            set cmd [valkeybenchmark $master_host $master_port "--dataset $xml_file -n 1 -- SET xml:__rand_int__ \"__field:title__\""]
+            
+            if {[catch { exec {*}$cmd } error]} {
+                assert_match "*XML dataset requires --xml-root-element parameter*" $error
+            } else {
+                fail "Expected error for XML dataset without --xml-root-element"
+            }
+            
+            file delete $xml_file
+        }
+
+        test {benchmark: dataset with maxdocs larger than available documents} {
+            # Create test dataset with only 2 rows but request maxdocs=5
+            set csv_data "name,value\nitem1,value1\nitem2,value2"
+            set csv_file [tmpfile "dataset.csv"]
+            set fd [open $csv_file w]
+            puts $fd $csv_data
+            close $fd
+
+            set cmd [valkeybenchmark $master_host $master_port "--dataset $csv_file --maxdocs 5 -n 4 -r 10 -- SET item:__rand_int__ \"__field:value__\""]
+            common_bench_setup $cmd
+            assert_match  {*calls=4,*} [cmdstat set]
+            
+            # Should gracefully use all available documents (2), cycling through them
+            set keys [r keys "item:*"]
+            assert {[llength $keys] > 0}
+            
+            # All values should still be only from available documents
+            foreach key $keys {
+                set value [r get $key]
+                assert {$value eq "value1" || $value eq "value2"}
+            }
+            
+            file delete $csv_file
+        }
+
+        test {benchmark: mixed placeholders - dataset fields and rand placeholders} {
+            # Test combining __field:name__ with __rand_int__ placeholders
+            set csv_data "category,description\nuser,User Management\norder,Order Processing"
+            set csv_file [tmpfile "dataset.csv"]
+            set fd [open $csv_file w]
+            puts $fd $csv_data
+            close $fd
+
+            set cmd [valkeybenchmark $master_host $master_port "--dataset $csv_file -n 6 -r 100 -- HSET mixed:__rand_int__ category \"__field:category__\" desc \"__field:description__\" score __rand_1st__"]
+            common_bench_setup $cmd
+            assert_match  {*calls=6,*} [cmdstat hset]
+            
+            # Verify both field and random placeholders work together
+            set keys [r keys "mixed:*"]
+            assert {[llength $keys] > 0}
+            set sample_key [lindex $keys 0]
+            set category [r hget $sample_key category]
+            set desc [r hget $sample_key desc]
+            set score [r hget $sample_key score]
+            
+            # Field placeholders should contain dataset values
+            assert {$category eq "user" || $category eq "order"}
+            assert {$desc eq "User Management" || $desc eq "Order Processing"}
+            
+            # Random placeholder should be a 12-digit number
+            assert {[string length $score] == 12}
+            assert {[string is integer $score]}
+            
+            file delete $csv_file
+        }
+
+        test {benchmark: dataset mode requires field placeholders} {
+            set csv_data "name,value\nitem1,value1\nitem2,value2"
+            set csv_file [tmpfile "dataset.csv"]
+            set fd [open $csv_file w]
+            puts $fd $csv_data
+            close $fd
+
+            # Dataset mode should require field placeholders in the command
+            set cmd [valkeybenchmark $master_host $master_port "--dataset $csv_file -n 10 -r 10 -t set"]
+            
+            # Should fail with error about missing field placeholders
+            if {[catch { exec {*}$cmd } error]} {
+                assert_match "*Dataset mode requires a command with field placeholders*" $error
+            } else {
+                fail "Expected error for dataset mode without field placeholders"
+            }
+            
+            file delete $csv_file
+        }
+
         test {benchmark: sequential zadd results in expected number of keys} {
             set cmd [valkeybenchmark $master_host $master_port "-r 50 -n 50 --sequential -t zadd"]
             common_bench_setup $cmd

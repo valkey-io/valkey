@@ -88,12 +88,18 @@ static const char *PLACEHOLDERS[PLACEHOLDER_COUNT] = {
 #define FIELD_SUFFIX "__"
 #define FIELD_SUFFIX_LEN 2
 
+typedef enum datasetFormat {
+    DATASET_FORMAT_CSV = 0,
+    DATASET_FORMAT_TSV,
+    DATASET_FORMAT_XML
+} datasetFormat;
+
 typedef struct datasetRecord {
     sds *fields;
 } datasetRecord;
 
 typedef struct dataset {
-    char format;            /* Format: 'c'=csv, 't'=tsv, 'x'=xml */
+    datasetFormat format;   /* Dataset file format */
     char delimiter;         /* Field delimiter for CSV/TSV */
     sds *field_names;       /* Field name lookup table */
     int field_count;        /* Number of fields */
@@ -259,6 +265,7 @@ static sds getFieldValue(const char *row, int column_index, char delimiter);
 static sds getXmlFieldValue(const char *xml_doc, const char *field_name);
 static sds generateCompleteCommand(int record_index);
 static sds formatBytes(size_t bytes);
+static int parseCommandTemplate(int argc, char **argv);
 static dataset *initDataset(void);
 static void freeDataset(dataset *ds);
 static void reportDatasetMemory(dataset *ds);
@@ -1734,13 +1741,9 @@ static int shouldStopLoading(size_t current_count) {
 }
 
 
-static int scanXmlFields(const char *doc_start, const char *doc_end, dataset *ds, const char *xml_root_element) {
+static int scanXmlFields(const char *doc_start, const char *doc_end, dataset *ds, const char *start_root_tag, const char *end_root_tag) {
     char field_names[MAX_DATASET_FIELDS][64];
     int field_count = 0;
-
-    char start_root_tag[64], end_root_tag[64];
-    snprintf(start_root_tag, sizeof(start_root_tag), "<%s>", xml_root_element);
-    snprintf(end_root_tag, sizeof(end_root_tag), "</%s>", xml_root_element);
     int root_start_tag_len = strlen(start_root_tag);
     int root_end_tag_len = strlen(end_root_tag);
 
@@ -1757,9 +1760,16 @@ static int scanXmlFields(const char *doc_start, const char *doc_end, dataset *ds
         if (!tag_end || tag_end >= doc_end) break;
 
         const char *field_start = current_pos + 1;
-        size_t field_name_len = tag_end - field_start;
+        const char *field_name_end = field_start;
 
-        if (field_name_len == 0 || field_name_len >= 64 || memchr(field_start, ' ', field_name_len)) {
+        /* Find end of tag name (either space for attributes or '>' for tag end) */
+        while (field_name_end < tag_end && *field_name_end != ' ' && *field_name_end != '\t') {
+            field_name_end++;
+        }
+
+        size_t field_name_len = field_name_end - field_start;
+
+        if (field_name_len == 0 || field_name_len >= 64) {
             current_pos = tag_end + 1;
             continue;
         }
@@ -1793,16 +1803,45 @@ static int scanXmlFields(const char *doc_start, const char *doc_end, dataset *ds
     return 1;
 }
 
-static int loadXmlDataset(dataset *ds) {
+/* Discover XML fields from first document */
+static int scanXmlFieldsFromFile(dataset *ds, const char *xml_root_element) {
     FILE *fp = fopen(config.dataset_file, "r");
     if (!fp) return 0;
 
-    if (!config.xml_root_element) {
-        fprintf(stderr, "Error: XML dataset requires --xml-root-element parameter\n");
-        fprintf(stderr, "Example: --xml-root-element doc\n");
+    char start_tag[64], end_tag[64];
+    snprintf(start_tag, sizeof(start_tag), "<%s>", xml_root_element);
+    snprintf(end_tag, sizeof(end_tag), "</%s>", xml_root_element);
+
+    char buffer[1024];
+    sds current_doc = sdsempty();
+
+    /* Read until we find first complete document for field discovery */
+    while (fgets(buffer, sizeof(buffer), fp)) {
+        current_doc = sdscat(current_doc, buffer);
+
+        const char *doc_start = strstr(current_doc, start_tag);
+        if (!doc_start) continue;
+
+        const char *doc_end = strstr(doc_start, end_tag);
+        if (!doc_end) continue;
+
+        doc_end += strlen(end_tag);
+
+        /* Scan fields from first document */
+        int result = scanXmlFields(doc_start, doc_end, ds, start_tag, end_tag);
+        sdsfree(current_doc);
         fclose(fp);
-        return 0;
+        return result;
     }
+
+    sdsfree(current_doc);
+    fclose(fp);
+    return 0;
+}
+
+static int loadXmlDataset(dataset *ds) {
+    FILE *fp = fopen(config.dataset_file, "r");
+    if (!fp) return 0;
 
     char start_tag[64], end_tag[64];
     snprintf(start_tag, sizeof(start_tag), "<%s>", config.xml_root_element);
@@ -1831,7 +1870,7 @@ static int loadXmlDataset(dataset *ds) {
         doc_end += strlen(end_tag);
 
         if (!fields_discovered) {
-            if (!scanXmlFields(doc_start, doc_end, ds, config.xml_root_element)) {
+            if (!scanXmlFields(doc_start, doc_end, ds, start_tag, end_tag)) {
                 fprintf(stderr, "No XML fields discovered\n");
                 sdsfree(current_doc);
                 fclose(fp);
@@ -1894,8 +1933,8 @@ static int csvLoadDocuments(dataset *ds) {
     size_t capacity = 1000;
     ds->records = zmalloc(sizeof(datasetRecord) * capacity);
 
-    const char *format_name = (ds->format == 'c') ? "csv" : (ds->format == 't') ? "tsv"
-                                                                                : "xml";
+    const char *format_name = (ds->format == DATASET_FORMAT_CSV) ? "csv" : (ds->format == DATASET_FORMAT_TSV) ? "tsv"
+                                                                                                              : "xml";
     if (!config.quiet) {
         printf("Loading %s dataset from %s...\n", format_name, config.dataset_file);
     }
@@ -1929,33 +1968,55 @@ static int csvLoadDocuments(dataset *ds) {
     return 1;
 }
 
-/* Initialize dataset from file */
+/* Dataset initialization */
 static dataset *initDataset(void) {
     dataset *ds = zcalloc(sizeof(dataset));
     if (!ds) return NULL;
 
-    /* Detect file format from extension, handle tmpfile suffixes */
+    /* Validate XML parameters early */
+    if (strstr(config.dataset_file, ".xml") && !config.xml_root_element) {
+        fprintf(stderr, "Error: XML dataset requires --xml-root-element parameter\n");
+        fprintf(stderr, "Example: --xml-root-element doc\n");
+        zfree(ds);
+        return NULL;
+    }
+
+    /* Detect file format from extension */
     const char *filename = config.dataset_file;
     if (strstr(filename, ".csv")) {
-        ds->format = 'c';
+        ds->format = DATASET_FORMAT_CSV;
         ds->delimiter = ',';
     } else if (strstr(filename, ".tsv")) {
-        ds->format = 't';
+        ds->format = DATASET_FORMAT_TSV;
         ds->delimiter = '\t';
     } else if (strstr(filename, ".xml")) {
-        ds->format = 'x';
+        ds->format = DATASET_FORMAT_XML;
         ds->delimiter = 0;
     } else {
-        ds->format = 'c';
+        ds->format = DATASET_FORMAT_CSV;
         ds->delimiter = ',';
     }
 
-    /* Load documents and discover fields */
-    if (ds->format == 'x') {
+    /* Step 1: Discover fields (lightweight operation) */
+    if (ds->format == DATASET_FORMAT_XML) {
+        /* XML: Need to scan first document for field discovery */
+        if (!scanXmlFieldsFromFile(ds, config.xml_root_element)) goto error;
+    } else {
+        /* CSV/TSV: Discover fields from header line */
+        if (!csvDiscoverFields(ds)) goto error;
+    }
+
+    /* Step 2: Early validation (before bulk loading) */
+    if (config.has_field_placeholders && config.template_argv && config.template_argc > 0) {
+        config.current_dataset = ds; /* Temporarily set for validation */
+        validateFieldPlaceholders(config.template_argv, config.template_argc);
+        config.current_dataset = NULL; /* Reset until fully loaded */
+    }
+
+    /* Step 3: Load all data (only after validation passes) */
+    if (ds->format == DATASET_FORMAT_XML) {
         if (!loadXmlDataset(ds)) goto error;
     } else {
-        /* CSV/TSV: discover fields first, then load documents */
-        if (!csvDiscoverFields(ds)) goto error;
         if (!csvLoadDocuments(ds)) goto error;
     }
 
@@ -2033,22 +2094,29 @@ static sds getFieldValue(const char *row, int column_index, char delimiter) {
 
 /* Extract field value from XML document */
 static sds getXmlFieldValue(const char *xml_doc, const char *field_name) {
-    char start_tag[128], end_tag[128];
-    snprintf(start_tag, sizeof(start_tag), "<%s>", field_name);
+    char start_tag_prefix[128], end_tag[128];
+    snprintf(start_tag_prefix, sizeof(start_tag_prefix), "<%s", field_name);
     snprintf(end_tag, sizeof(end_tag), "</%s>", field_name);
 
-    const char *tag_start = strstr(xml_doc, start_tag);
+    /* Find opening tag (with or without attributes) */
+    const char *tag_start = strstr(xml_doc, start_tag_prefix);
     if (!tag_start) return sdsempty();
 
-    const char *content_start = tag_start + strlen(start_tag);
-    const char *tag_end = strstr(content_start, end_tag);
+    /* Find the end of the opening tag */
+    const char *tag_end = strchr(tag_start, '>');
     if (!tag_end) return sdsempty();
 
-    size_t content_len = tag_end - content_start;
+    const char *content_start = tag_end + 1;
+
+    /* Find closing tag */
+    const char *closing_tag = strstr(content_start, end_tag);
+    if (!closing_tag) return sdsempty();
+
+    size_t content_len = closing_tag - content_start;
     return sdsnewlen(content_start, content_len);
 }
 
-/* Calculate total memory required for dataset benchmarking */
+/* Report dataset memory usage */
 static void reportDatasetMemory(dataset *ds) {
     if (!config.quiet) {
         /* Calculate total memory from structured records */
@@ -2221,35 +2289,35 @@ static void addRespCommandToSequence(sds *sds_args, size_t *argvlen, int start, 
     free(cmd);
 }
 
-/* Process command sequence for dataset or standard mode */
-static void processCommandSequence(sds *sds_args, size_t *argvlen, int start, int end, int repeat, sds *cmd_seq, int *seq_len) {
-    if (config.current_dataset) {
-        /* Check if this command has field placeholders */
-        config.has_field_placeholders = 0;
-        for (int check_idx = start; check_idx < end; check_idx++) {
-            if (strstr(sds_args[check_idx], FIELD_PREFIX)) {
-                config.has_field_placeholders = 1;
-                break;
-            }
-        }
+/* Parse and setup command template for dataset field validation */
+static int parseCommandTemplate(int argc, char **argv) {
+    sds *sds_args = getSdsArrayFromArgv(argc, argv, 0);
+    if (!sds_args) {
+        fprintf(stderr, "Invalid quoted string\n");
+        return 0;
+    }
 
-        if (config.has_field_placeholders) {
-            /* Store command template */
-            config.template_argc = end - start;
-            config.template_argv = zmalloc(config.template_argc * sizeof(sds));
-            for (int tmpl_idx = 0; tmpl_idx < config.template_argc; tmpl_idx++) {
-                config.template_argv[tmpl_idx] = sdsdup(sds_args[start + tmpl_idx]);
-            }
-
-            validateFieldPlaceholders(config.template_argv, config.template_argc);
-
-            /* Pipelining is now supported with structured field cache */
+    /* Detect field placeholders */
+    config.has_field_placeholders = 0;
+    for (int i = 0; i < argc; i++) {
+        if (strstr(sds_args[i], FIELD_PREFIX)) {
+            config.has_field_placeholders = 1;
+            break;
         }
     }
 
-    /* Add command to sequence */
-    addRespCommandToSequence(sds_args, argvlen, start, end, repeat, cmd_seq, seq_len);
+    if (config.has_field_placeholders) {
+        config.template_argc = argc;
+        config.template_argv = zmalloc(argc * sizeof(sds));
+        for (int i = 0; i < argc; i++) {
+            config.template_argv[i] = sdsdup(sds_args[i]);
+        }
+    }
+
+    sdsfreesplitres(sds_args, argc);
+    return 1;
 }
+
 
 /* Generate random data for the benchmark. See #7196. */
 static void genBenchmarkRandomData(char *data, int count) {
@@ -2804,6 +2872,12 @@ int main(int argc, char **argv) {
             exit(1);
         }
 
+        /* Parse command template and setup field placeholder detection */
+        if (!parseCommandTemplate(argc, argv)) {
+            exit(1);
+        }
+
+        /* Initialize dataset with validation */
         config.current_dataset = initDataset();
         if (!config.current_dataset) {
             fprintf(stderr, "Failed to initialize dataset\n");
@@ -2955,7 +3029,7 @@ int main(int argc, char **argv) {
                 cmd = NULL;
                 if (i == start) continue;
 
-                processCommandSequence(sds_args, argvlen, start, i, repeat, &cmd_seq, &seq_len);
+                addRespCommandToSequence(sds_args, argvlen, start, i, repeat, &cmd_seq, &seq_len);
                 start = i + 1;
                 repeat = 1;
             } else if (strstr(sds_args[i], "__data__")) {

@@ -391,7 +391,7 @@ tags {"benchmark network external:skip logreqres:skip"} {
             
             # Random placeholder should be a 12-digit number
             assert {[string length $score] == 12}
-            assert {[string is integer $score]}
+            assert {[string is digit $score]}
             
             file delete $csv_file
         }

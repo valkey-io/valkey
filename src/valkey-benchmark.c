@@ -2058,7 +2058,9 @@ static void reportDatasetMemory(dataset *ds) {
                 total_memory += sdslen(ds->records[i].fields[j]);
             }
         }
-        printf("Dataset: %zu documents (%s)\n", ds->record_count, formatBytes(total_memory));
+        sds size_str = formatBytes(total_memory);
+        printf("Dataset: %zu documents (%s)\n", ds->record_count, size_str);
+        sdsfree(size_str);
     }
 }
 

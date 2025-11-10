@@ -14159,8 +14159,7 @@ int VM_GetDbIdFromDefragCtx(ValkeyModuleDefragCtx *ctx) {
     return ctx->dbid;
 }
 
-/**
- * This function verifies that the user represented by `ctx` is authorized to carry out the operations indicated in the
+/* This function verifies that the user represented by `ctx` is authorized to carry out the operations indicated in the
  * `flags` parameter on keys that begin with the specified prefix.
  *
  * This function validates that the supplied ACL flags are a subset of the allowed key‑access flags

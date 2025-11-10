@@ -6213,7 +6213,7 @@ void VM_SetContextUser(ValkeyModuleCtx *ctx, const ValkeyModuleUser *user) {
  *     "C" -> VALKEYMODULE_ARGV_RUN_AS_USER
  *     "M" -> VALKEYMODULE_ARGV_RESPECT_DENY_OOM
  *     "K" -> VALKEYMODULE_ARGV_ALLOW_BLOCK
- *     "Y" -> VALKEYMODULE_ARGV_CALL_REPLY_EXACT
+ *     "X" -> VALKEYMODULE_ARGV_CALL_REPLY_EXACT
  *
  * On error (format specifier error) NULL is returned and nothing is
  * allocated. On success the argument vector is returned. */
@@ -6385,8 +6385,7 @@ fmterr:
  *
  *     * 'X' -- Return exact reply types, including the differences between simple
  *              string and bulk string, and the RESP 2 difference between nulls
- *              and null arrays.. This flag is only effective when combined with
- *              the `E` flag.
+ *              and null arrays.
  *
  * * **...**: The actual arguments to the command.
  *

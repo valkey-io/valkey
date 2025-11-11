@@ -899,6 +899,8 @@ void moduleFreeContext(ValkeyModuleCtx *ctx) {
         moduleReleaseTempClient(ctx->client);
     else if (ctx->flags & VALKEYMODULE_CTX_NEW_CLIENT)
         freeClient(ctx->client);
+    else if (ctx->flags & VALKEYMODULE_CTX_SCRIPT_EXECUTION)
+        ctx->client = NULL; /* Do not free the client, it was assigned manually. */
 }
 
 static CallReply *moduleParseReply(client *c, ValkeyModuleCtx *ctx) {
@@ -6438,7 +6440,14 @@ ValkeyModuleCallReply *VM_Call(ValkeyModuleCtx *ctx, const char *cmdname, const 
      * execution runtime must exist.. */
     serverAssert(!is_running_script || scriptIsRunning());
 
-    c = moduleAllocTempClient();
+    if (is_running_script) {
+        /* When running a script the context client is already a fake client
+         * prepared for running a command on behalf of the real client.
+         * This preparation is done by the scriptPrepareForRun() in script.c */
+        c = scriptGetClient();
+    } else {
+        c = moduleAllocTempClient();
+    }
 
     if (!(flags & VALKEYMODULE_ARGV_ALLOW_BLOCK)) {
         /* We do not want to allow block, the module do not expect it */
@@ -6773,7 +6782,12 @@ cleanup:
 
     if (reply) autoMemoryAdd(ctx, VALKEYMODULE_AM_REPLY, reply);
     if (ctx->module) ctx->module->in_call--;
-    if (c) moduleReleaseTempClient(c);
+    if (is_running_script) {
+        freeClientArgv(c);
+    }
+    else if (c) {
+        moduleReleaseTempClient(c);
+    }
     return reply;
 }
 

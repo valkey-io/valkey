@@ -52,8 +52,6 @@ endif ()
 macro (valkey_create_symlink source link)
   add_custom_command(
     TARGET ${source} POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E echo
-            "Creating symlink: ${link} -> $<TARGET_FILE:${source}>"
     COMMAND ${CMAKE_COMMAND} -E create_symlink
             "$<TARGET_FILE_NAME:${source}>"
             "$<TARGET_FILE_DIR:${source}>/${link}"

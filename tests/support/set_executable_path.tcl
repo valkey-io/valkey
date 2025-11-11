@@ -2,7 +2,6 @@
 # using make to build binaries under the src/ directory. Since we start supporting
 # CMake as well, we allow changing base dir by passing ENV variable `VALKEY_BIN_DIR`
 set ::VALKEY_BIN_DIR [expr {[info exists ::env(VALKEY_BIN_DIR)] ? $::env(VALKEY_BIN_DIR) : "src"}]
-puts "::VALKEY_BIN_DIR is $::VALKEY_BIN_DIR"
 
 # Helper to build absolute paths
 proc __build_absolute_path {name} {

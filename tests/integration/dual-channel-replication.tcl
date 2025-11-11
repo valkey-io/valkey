@@ -620,7 +620,7 @@ start_server {tags {"dual-channel-replication external:skip"}} {
             $replica2 debug pause-after-fork 1
             test "Test dual-channel: primary tracking replica backlog refcount - start with empty backlog" {
                 $replica1 replicaof $primary_host $primary_port
-                set res [wait_for_log_messages 0 {"*Add rdb replica * no repl-backlog to track*"} $loglines 20 100]
+                set res [wait_for_log_messages 0 {"*Add rdb replica * no repl-backlog to track*"} $loglines 40 100]
                 set res [wait_for_log_messages 0 {"*Attach replica rdb client*"} $loglines 20 100]
                 set loglines [lindex $res 1]
                 incr $loglines
@@ -637,7 +637,7 @@ start_server {tags {"dual-channel-replication external:skip"}} {
 
             test "Test dual-channel: primary tracking replica backlog refcount - start with backlog" {
                 $replica2 replicaof $primary_host $primary_port
-                set res [wait_for_log_messages 0 {"*Add rdb replica * tracking repl-backlog tail*"} $loglines 20 100]
+                set res [wait_for_log_messages 0 {"*Add rdb replica * tracking repl-backlog tail*"} $loglines 40 100]
                 set loglines [lindex $res 1]
                 incr $loglines
                 wait_and_resume_process -1

@@ -4939,6 +4939,7 @@ void clusterPropagatePublish(robj *channel, robj *message, int sharded) {
     while ((node = clusterNodeIterNext(&iter)) != NULL) {
         if (node->flags & (CLUSTER_NODE_MYSELF | CLUSTER_NODE_HANDSHAKE)) continue;
         if (nodeSupportsLightMsgHdrForPubSub(node)) {
+            /* Avoid sending pub/sub light weight message until the bidirectional link(s) have been established. */
             if (!node->link || node->pong_received < node->link->ctime) continue;
             clusterSendMessage(node->link, msgblock_light);
         } else {

@@ -530,7 +530,7 @@ proc start_server {options {code undefined}} {
     if {$start_other_server} {
         set executable $::other_server_path
     } else {
-        set executable "src/valkey-server"
+        set executable $::VALKEY_SERVER_BIN
     }
     if {![file executable $executable]} {
         error "Server executable file not found or not executable: $executable"

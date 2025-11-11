@@ -2161,7 +2161,7 @@ VALKEYMODULE_API void (*ValkeyModule_ScriptingEngineDebuggerFlushLogs)(void) VAL
 VALKEYMODULE_API void (*ValkeyModule_ScriptingEngineDebuggerProcessCommands)(int *client_disconnected,
                                                                              ValkeyModuleString **err) VALKEYMODULE_ATTR;
 
-VALKEYMODULE_API int (*ValkeyModule_ACLCheckKeyPrefixPermissions)(ValkeyModuleCtx *ctx,
+VALKEYMODULE_API int (*ValkeyModule_ACLCheckKeyPrefixPermissions)(ValkeyModuleUser *user,
                                                                   const char *key,
                                                                   size_t len,
                                                                   unsigned int flags) VALKEYMODULE_ATTR;

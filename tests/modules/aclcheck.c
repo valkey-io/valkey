@@ -190,7 +190,7 @@ int module_check_key_permission(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
     if(argc != 3){
         return ValkeyModule_WrongArity(ctx);
     }
-    
+
     size_t key_len = 0;
     unsigned int flags = 0;
     const char* key_prefix = ValkeyModule_StringPtrLen(argv[1], &key_len);
@@ -203,7 +203,10 @@ int module_check_key_permission(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
         ValkeyModule_ReplyWithSimpleString(ctx, "EINVALID");
         return VALKEYMODULE_OK;
     }
-    int rc = ValkeyModule_ACLCheckKeyPrefixPermissions(ctx, key_prefix, key_len, flags);
+
+    ValkeyModuleString* user_name = ValkeyModule_GetCurrentUserName(ctx);
+    ValkeyModuleUser *user = ValkeyModule_GetModuleUserFromUserName(user_name);
+    int rc = ValkeyModule_ACLCheckKeyPrefixPermissions(user, key_prefix, key_len, flags);
     if (rc == VALKEYMODULE_OK) {
         // Access granted.
         ValkeyModule_ReplyWithSimpleString(ctx, "OK");
@@ -211,6 +214,8 @@ int module_check_key_permission(ValkeyModuleCtx *ctx, ValkeyModuleString **argv,
         // Access denied.
         ValkeyModule_ReplyWithSimpleString(ctx, "EACCESS");
     }
+    ValkeyModule_FreeModuleUser(user);
+    ValkeyModule_FreeString(ctx, user_name);
     return VALKEYMODULE_OK;
 }
 

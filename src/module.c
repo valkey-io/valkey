@@ -14177,6 +14177,11 @@ int VM_GetDbIdFromDefragCtx(ValkeyModuleDefragCtx *ctx) {
 int VM_ACLCheckKeyPrefixPermissions(ValkeyModuleUser *user, const char *key, size_t len, unsigned int flags) {
     const int allow_mask = (VALKEYMODULE_CMD_KEY_ACCESS | VALKEYMODULE_CMD_KEY_INSERT | VALKEYMODULE_CMD_KEY_DELETE | VALKEYMODULE_CMD_KEY_UPDATE);
 
+    if (user == NULL) {
+        errno = EINVAL;
+        return VALKEYMODULE_ERR;
+    }
+
     if ((flags & allow_mask) != flags) {
         errno = EINVAL;
         return VALKEYMODULE_ERR;

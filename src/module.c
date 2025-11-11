@@ -6784,8 +6784,7 @@ cleanup:
     if (ctx->module) ctx->module->in_call--;
     if (is_running_script) {
         freeClientArgv(c);
-    }
-    else if (c) {
+    } else if (c) {
         moduleReleaseTempClient(c);
     }
     return reply;

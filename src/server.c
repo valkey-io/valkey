@@ -50,7 +50,7 @@
 #include "sds.h"
 #include "module.h"
 #include "scripting_engine.h"
-#include "lua/engine_lua.h"
+
 #include "eval.h"
 
 #include "trace/trace_commands.h"
@@ -3018,11 +3018,12 @@ void initServer(void) {
      * commands with `CMD_NOSCRIPT` flag are not allowed to run in scripts. */
     server.script_disable_deny_script = 0;
 
-    /* Initialize the LUA scripting engine. */
-    if (luaEngineInitEngine() != C_OK) {
-        serverPanic("Lua engine initialization failed, check the server logs.");
-        exit(1);
-    }
+    commandlogInit();
+    latencyMonitorInit();
+    initSharedQueryBuf();
+
+    /* Initialize ACL default password if it exists */
+    ACLUpdateDefaultUserPassword(server.requirepass);
 
     /* Initialize the functions engine based off of LUA initialization. */
     if (functionsInit() == C_ERR) {
@@ -3031,13 +3032,6 @@ void initServer(void) {
 
     /* Initialize the EVAL scripting component. */
     evalInit();
-
-    commandlogInit();
-    latencyMonitorInit();
-    initSharedQueryBuf();
-
-    /* Initialize ACL default password if it exists */
-    ACLUpdateDefaultUserPassword(server.requirepass);
 
     applyWatchdogPeriod();
 
@@ -4819,6 +4813,16 @@ int finishShutdown(void) {
 
     /* Close the listening sockets. Apparently this allows faster restarts. */
     closeListeningSockets(1);
+
+#ifdef LUA_ENGINE_ENABLED
+    /* Unload Lua engine module */
+    const char *err = NULL;
+    sds name = sdsnew("lua");
+    if (moduleUnload(name, &err) != C_OK) {
+        serverLog(LL_WARNING, "Failed to unload 'lua' module: %s", err);
+    }
+    sdsfree(name);
+#endif
 
     serverLog(LL_WARNING, "%s is now ready to exit, bye bye...", server.sentinel_mode ? "Sentinel" : "Valkey");
     return C_OK;
@@ -7419,6 +7423,18 @@ __attribute__((weak)) int main(int argc, char **argv) {
     if (server.cluster_enabled) {
         clusterInitLast();
     }
+
+    /* Initialize the LUA scripting engine. */
+#ifdef LUA_ENGINE_ENABLED
+#define LUA_ENGINE_LIB_STR STRINGIFY(LUA_ENGINE_LIB)
+    if (scriptingEngineManagerFind("lua") == NULL) {
+        if (moduleLoad(LUA_ENGINE_LIB_STR, NULL, 0, 0) != C_OK) {
+            serverPanic("Lua engine initialization failed, check the server logs.");
+        }
+    }
+#endif
+
+
     InitServerLast();
 
     if (!server.sentinel_mode) {

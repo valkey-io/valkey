@@ -29,6 +29,7 @@
  */
 
 #include "io_threads.h"
+#include "sds.h"
 #include "server.h"
 #include "cluster.h"
 #include "connection.h"
@@ -2635,7 +2636,12 @@ int invalidateClusterSlotsResp(const char **err) {
 static int updateLuaEnableInsecureApi(const char **err) {
     UNUSED(err);
     if (server.lua_insecure_api_current != server.lua_enable_insecure_api) {
+        sds config_name = sdsnew("lua.lua-enable-insecure-api");
+        standardConfig *config = lookupConfig(config_name);
+        serverAssert(config && config->flags & MODULE_CONFIG);
+        setModuleBoolConfig(config->privdata, server.lua_enable_insecure_api, NULL);
         evalReset(server.lazyfree_lazy_user_flush ? 1 : 0);
+        sdsfree(config_name);
     }
     server.lua_insecure_api_current = server.lua_enable_insecure_api;
     return 1;

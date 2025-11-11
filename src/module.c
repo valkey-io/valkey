@@ -899,6 +899,8 @@ void moduleFreeContext(ValkeyModuleCtx *ctx) {
         moduleReleaseTempClient(ctx->client);
     else if (ctx->flags & VALKEYMODULE_CTX_NEW_CLIENT)
         freeClient(ctx->client);
+    else if (ctx->flags & VALKEYMODULE_CTX_SCRIPT_EXECUTION)
+        ctx->client = NULL; /* Do not free the client, it was assigned manually. */
 }
 
 static CallReply *moduleParseReply(client *c, ValkeyModuleCtx *ctx) {
@@ -6506,7 +6508,6 @@ ValkeyModuleCallReply *VM_Call(ValkeyModuleCtx *ctx, const char *cmdname, const 
             c->flag.module = 0;
             c->flag.script = 1;
         }
-
         /* In script mode, commands with CMD_NOSCRIPT flag are normally forbidden.
          * However, we allow them if both conditions are met:
          * 1. We're running in the context of a scripting engine running a script
@@ -6632,7 +6633,7 @@ ValkeyModuleCallReply *VM_Call(ValkeyModuleCtx *ctx, const char *cmdname, const 
          * CLIENT PAUSE WRITE. */
         if (is_running_script && scriptIsReadOnly() && (cmd_flags & (CMD_WRITE | CMD_MAY_REPLICATE))) {
             errno = ENOSPC;
-            reply_error_msg = sdsnew("Write commands are not allowed from read-only scripts");
+            reply_error_msg = sdsnew("Write commands are not allowed from read-only scripts.");
             goto cleanup;
         }
 

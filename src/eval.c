@@ -442,7 +442,7 @@ static int evalRegisterNewScript(client *c, robj *body, char **sha) {
     }
     es->body = body;
     int retval = dictAdd(evalCtx.scripts, _sha, es);
-    serverAssertWithInfo(c ? c : scriptingEngineGetClient(engine), NULL, retval == DICT_OK);
+    serverAssert(retval == DICT_OK);
     evalCtx.scripts_mem += sdsAllocSize(_sha) + getStringObjectSdsUsedMemory(body);
     incrRefCount(body);
     zfree(functions);

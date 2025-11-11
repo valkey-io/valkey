@@ -5,6 +5,7 @@
  */
 
 #include "scripting_engine.h"
+#include "bio.h"
 #include "dict.h"
 #include "functions.h"
 #include "module.h"
@@ -49,7 +50,6 @@ typedef struct scriptingEngine {
     sds name;                                                 /* Name of the engine */
     ValkeyModule *module;                                     /* the module that implements the scripting engine */
     scriptingEngineImpl impl;                                 /* engine context and callbacks to interact with the engine */
-    client *client;                                           /* Client that is used to run commands */
     ValkeyModuleCtx *module_ctx_cache[MODULE_CTX_CACHE_SIZE]; /* Cache of module context objects */
 } scriptingEngine;
 
@@ -131,6 +131,7 @@ int scriptingEngineManagerRegister(const char *engine_name,
                                    ValkeyModule *engine_module,
                                    engineCtx *engine_ctx,
                                    engineMethods *engine_methods) {
+    serverAssert(engine_name != NULL);
     sds engine_name_sds = sdsnew(engine_name);
 
     if (dictFetchValue(engineMgr.engines, engine_name_sds)) {
@@ -139,11 +140,6 @@ int scriptingEngineManagerRegister(const char *engine_name,
         return C_ERR;
     }
 
-    client *c = createClient(NULL);
-    c->flag.deny_blocking = 1;
-    c->flag.script = 1;
-    c->flag.fake = 1;
-
     scriptingEngine *e = zmalloc(sizeof(*e));
     *e = (scriptingEngine){
         .name = engine_name_sds,
@@ -151,7 +147,6 @@ int scriptingEngineManagerRegister(const char *engine_name,
         .impl = {
             .ctx = engine_ctx,
         },
-        .client = c,
         .module_ctx_cache = {0},
     };
     scriptingEngineInitializeEngineMethods(e, engine_methods);
@@ -191,7 +186,12 @@ int scriptingEngineManagerUnregister(const char *engine_name) {
                                        mem_info.engine_memory_overhead;
 
     sdsfree(e->name);
-    freeClient(e->client);
+
+    /* We need to ensure that any pending async flush of eval scripts or
+     * functions have completed before freeing the module context cache, which
+     * may be used by the async jobs. */
+    bioDrainWorker(BIO_LAZY_FREE);
+
     for (size_t i = 0; i < MODULE_CTX_CACHE_SIZE; i++) {
         serverAssert(e->module_ctx_cache[i] != NULL);
         zfree(e->module_ctx_cache[i]);
@@ -217,10 +217,6 @@ scriptingEngine *scriptingEngineManagerFind(const char *engine_name) {
 
 sds scriptingEngineGetName(scriptingEngine *engine) {
     return engine->name;
-}
-
-client *scriptingEngineGetClient(scriptingEngine *engine) {
-    return engine->client;
 }
 
 ValkeyModule *scriptingEngineGetModule(scriptingEngine *engine) {

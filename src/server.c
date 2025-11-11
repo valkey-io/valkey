@@ -2155,6 +2155,7 @@ void createSharedObjects(void) {
     shared.eval = createSharedString("EVAL");
     shared.cluster = createSharedString("CLUSTER");
     shared.syncslots = createSharedString("SYNCSLOTS");
+    shared.zadd = createSharedString("ZADD");
 
     /* Shared command argument */
     shared.left = createSharedString("left");

@@ -431,7 +431,7 @@ start_server {tags {"dual-channel-replication external:skip"}} {
                 populate 10000 primary 10; # set ~ 100kb
                 # Wait for replica's buffer limit reached
                 wait_for_condition 50 1000 {
-                    [log_file_matches $replica1_log "*Replication buffer limit reached, stopping buffering*"]
+                    [log_file_matches $replica1_log "*Replication buffer limit reached (*), stopping buffering*"]
                 } else {
                     fail "Replica buffer should fill"
                 }

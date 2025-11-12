@@ -39,6 +39,7 @@
 #include "endianconv.h"
 #include "connection.h"
 
+#include <stdbool.h>
 #include <stdlib.h>
 #include <sys/types.h>
 #include <sys/socket.h>
@@ -4279,6 +4280,14 @@ void clusterSendUpdate(clusterLink *link, clusterNode *node) {
 
     clusterSendMessage(link, msgblock);
     clusterMsgSendBlockDecrRefCount(msgblock);
+}
+
+/* Inline function that checks support of light weight messages by node
+ * and avoids using light weight messages until the bidirectional
+ * link(s) have been established. */
+static inline bool nodeSupportsLightMsgHdr(clusterNode *n) {
+    return n->link && n->pong_received >= n->link->ctime &&
+           (n->flags & CLUSTER_NODE_LIGHT_HDR_SUPPORTED);
 }
 
 /* Send a MODULE message.

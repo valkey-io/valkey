@@ -92,6 +92,10 @@ typedef enum readFromReplica {
     FROM_ALL
 } readFromReplica;
 
+/* Fuzz mode flags */
+#define FUZZ_MODE_MALFORMED_COMMANDS (1 << 0)
+#define FUZZ_MODE_CONFIG_COMMANDS (1 << 1)
+
 static struct config {
     aeEventLoop *el;
     enum valkeyConnectionType ct;
@@ -135,7 +139,7 @@ static struct config {
     int cluster_mode;
     int fuzz_mode; /* Boolean flag to enable fuzzing */
     const char *fuzz_log_level;
-    const char *fuzz_level; /* Fuzzing mode: "normal" or "aggressive" */
+    int fuzz_flags; /* Bit flags for fuzzing modes */
     readFromReplica read_from_replica;
     int cluster_node_count;
     struct clusterNode **cluster_nodes;
@@ -232,7 +236,7 @@ static void freeServerConfig(serverConfig *cfg);
 static int fetchClusterSlotsConfiguration(client c);
 static void updateClusterSlotsConfiguration(void);
 static long long showThroughput(struct aeEventLoop *eventLoop, long long id, void *clientData);
-int runFuzzerClients(const char *host, int port, int max_commands, int parallel_clients, int cluster_mode, int num_keys, cliSSLconfig *ssl_config, const char *log_level, const char *fuzz_level);
+int runFuzzerClients(const char *host, int port, int max_commands, int parallel_clients, int cluster_mode, int num_keys, cliSSLconfig *ssl_config, const char *log_level, int fuzz_flags);
 
 /* Dict callbacks */
 static uint64_t dictSdsHash(const void *key);
@@ -1828,16 +1832,23 @@ int parseOptions(int argc, char **argv) {
         } else if (!strcmp(argv[i], "--fuzz-log-level")) {
             if (lastarg) goto invalid;
             config.fuzz_log_level = argv[++i];
-        } else if (!strcmp(argv[i], "--fuzz-level")) {
+        } else if (!strcmp(argv[i], "--fuzz-mode")) {
             if (lastarg) goto invalid;
-            const char *mode = argv[++i];
-            if (!strcmp(mode, "normal") || !strcmp(mode, "aggressive")) {
-                config.fuzz_level = mode;
-            } else {
-                fprintf(stderr, "Invalid fuzz mode: %s\n", mode);
-                fprintf(stderr, "Valid modes are: normal, aggressive\n");
-                exit(1);
+            int count = 0;
+            const char *modes_arg = argv[++i];
+            sds *modes = sdssplitlen(modes_arg, strlen(modes_arg), ",", 1, &count);
+            for (int j = 0; j < count; j++) {
+                if (!strcmp(modes[j], "malformed-commands"))
+                    config.fuzz_flags |= FUZZ_MODE_MALFORMED_COMMANDS;
+                else if (!strcmp(modes[j], "config-commands"))
+                    config.fuzz_flags |= FUZZ_MODE_CONFIG_COMMANDS;
+                else {
+                    fprintf(stderr, "Invalid fuzz mode: %s\n", modes[j]);
+                    sdsfreesplitres(modes, count);
+                    exit(1);
+                }
             }
+            sdsfreesplitres(modes, count);
         } else if (!strcmp(argv[i], "--mptcp")) {
             config.mptcp = 1;
         } else if (!strcmp(argv[i], "--")) {
@@ -1995,10 +2006,11 @@ usage:
         tls_usage,
         rdma_usage,
         " --mptcp            Enable an MPTCP connection.\n"
-        " --fuzz             Enable fuzzy mode to generate random commands.\n"
-        " --fuzz-level <mode> Set fuzzing mode: normal (default) or aggressive.\n"
-        "                    normal: Generates valid commands only, doesn't change server configs.\n"
-        "                    aggressive: Generates also malformed commands and allows CONFIG SET commands.\n"
+        " --fuzz             Enable fuzzy mode to generate random commands. WARNING: Recommended for testing only, not for use with production data.\n"
+        " --fuzz-mode <modes> Set fuzzing modes (comma-separated): malformed-commands, config-commands.\n"
+        "                    malformed-commands: Generates also malformed commands.\n"
+        "                    config-commands: Allows CONFIG SET commands.\n"
+        "                    Default: valid commands only.\n"
         " --fuzz-log-level <level>\n"
         "                    Set log level for fuzzer (none, error, info, debug).\n"
         "                    Default is 'info'.\n"
@@ -2190,7 +2202,7 @@ int main(int argc, char **argv) {
     config.cluster_mode = 0;
     config.fuzz_mode = 0;
     config.fuzz_log_level = "info";
-    config.fuzz_level = "normal";
+    config.fuzz_flags = 0;
     config.rps = 0;
     config.read_from_replica = FROM_PRIMARY_ONLY;
     config.cluster_node_count = 0;
@@ -2328,7 +2340,7 @@ int main(int argc, char **argv) {
             config.keyspacelen,
             config.tls ? &config.sslconfig : NULL,
             config.fuzz_log_level,
-            config.fuzz_level);
+            config.fuzz_flags);
     }
 
     /* Run benchmark with command in the remainder of the arguments. */

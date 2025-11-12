@@ -41,8 +41,8 @@ static atomic_int global_err_replies = 0;
 static atomic_int global_malformed_replies = 0;
 static atomic_int global_total_errors = 0;
 
-/* Global fuzzing mode */
-static FuzzMode global_fuzz_mode = NORMAL;
+/* Global fuzzing flags */
+static int global_fuzz_flags = 0;
 
 /* Progress reporting control */
 static volatile int progress_reporting_active = 0;
@@ -584,7 +584,7 @@ int connectAndFuzz(const char *host, int port, int commands_num, cliSSLconfig *s
     if (ctx == NULL) {
         return -1;
     }
-    initThreadClientCtx(global_fuzz_mode);
+    initThreadClientCtx(global_fuzz_flags);
     logMessage(LOG_DEBUG, "[Thread %d] Starting fuzzing session (max %d commands)...", thread_id, commands_num);
 
     /* Main fuzzing loop - send commands one by one */
@@ -728,7 +728,7 @@ static int runClients(const char *host, int port, int commands_num, int clients_
 
 /* Run fuzzer clients with specified parameters
  * This function is called by valkey-benchmark when fuzz mode is enabled */
-int runFuzzerClients(const char *host, int port, int commands_num, int clients_num, int cluster_mode, int num_keys, cliSSLconfig *ssl_config, const char *log_level, const char *fuzz_level) {
+int runFuzzerClients(const char *host, int port, int commands_num, int clients_num, int cluster_mode, int num_keys, cliSSLconfig *ssl_config, const char *log_level, int fuzz_flags) {
     /* Set log level from parameter */
     if (log_level) {
         if (strcmp(log_level, "none") == 0) {
@@ -751,11 +751,7 @@ int runFuzzerClients(const char *host, int port, int commands_num, int clients_n
         return 1;
     }
 
-    if (fuzz_level && strcmp(fuzz_level, "aggressive") == 0) {
-        global_fuzz_mode = AGGRESSIVE;
-    } else {
-        global_fuzz_mode = NORMAL;
-    }
+    global_fuzz_flags = fuzz_flags;
 
     resetCounters();
 
@@ -766,7 +762,7 @@ int runFuzzerClients(const char *host, int port, int commands_num, int clients_n
         logMessage(LOG_ERROR, "Failed to connect to server.");
         return -1;
     }
-    if (initFuzzer(ctx, num_keys, cluster_mode, global_fuzz_mode) == -1) {
+    if (initFuzzer(ctx, num_keys, cluster_mode, global_fuzz_flags) == -1) {
         valkeyFree(ctx);
         logMessage(LOG_ERROR, "Failed to init fuzzer.");
         return -1;

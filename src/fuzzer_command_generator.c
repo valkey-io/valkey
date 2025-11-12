@@ -19,6 +19,7 @@
 #include "fuzzer_command_generator.h"
 #include "sds.h"
 #include "dict.h"
+#include "server.h"
 
 #define MAX_DEFAULT_NUMKEYS 5
 #define MAX_NUM_PER_LUA 5 /* Maximum number of commands per Lua script */
@@ -26,9 +27,12 @@
 #define DEFAULT_DOUBLE_MIN 1.0
 #define DEFAULT_DOUBLE_MAX 50.0
 #define RANDOM_TIME_VARIANCE 60
-#define OPTIONAL_ARG_PROBABILITY 2 /* 1/2 probability */
-#define LUA_SCRIPT_PROBABILITY 100 /* 1/100 (1%) probability of generating a Lua script */
-#define MULTI_EXEC_PROBABILITY 50  /* 1/50 (2%) probability of generating a MULTI/EXEC block */
+#define OPTIONAL_ARG_PROBABILITY 2       /* 1/2 probability */
+#define LUA_SCRIPT_PROBABILITY 100       /* 1/100 (1%) probability of generating a Lua script */
+#define MULTIEXEC_PROBABILITY 50         /* 1/50 (2%) probability of generating a MULTI/EXEC block */
+#define MULTIEXEC_END_PROBABILITY 5      /* 1/5 (20%) probability of ending a MULTI/EXEC block */
+#define MALFORMED_COMMAND_PROBABILITY 20 /* 1/20 (5%) probability of generating a malformed command */
+#define EXEC_PROBABILITY 5               /* 1/5 (20%) probability of ending a MULTI/EXEC block */
 
 typedef enum {
     CMD_GROUP_UNKNOWN = 0,
@@ -44,33 +48,6 @@ typedef enum {
     CMD_GROUP_PUBSUB = 10,
     CMD_GROUP_GENERIC = 11
 } CommandGroupType;
-
-typedef enum {
-    CMD_FLAG_NONE = 0,
-    CMD_WRITE = (1ULL << 0),
-    CMD_READONLY = (1ULL << 1),
-    CMD_DENYOOM = (1ULL << 2),
-    CMD_MODULE = (1ULL << 3),
-    CMD_ADMIN = (1ULL << 4),
-    CMD_PUBSUB = (1ULL << 5),
-    CMD_NOSCRIPT = (1ULL << 6),
-    CMD_BLOCKING = (1ULL << 8),
-    CMD_LOADING = (1ULL << 9),
-    CMD_STALE = (1ULL << 10),
-    CMD_SKIP_MONITOR = (1ULL << 11),
-    CMD_SKIP_COMMANDLOG = (1ULL << 12),
-    CMD_ASKING = (1ULL << 13),
-    CMD_FAST = (1ULL << 14),
-    CMD_NO_AUTH = (1ULL << 15),
-    CMD_NO_MANDATORY_KEYS = (1ULL << 19),
-    CMD_MODULE_GETKEYS = (1ULL << 21),
-    CMD_MODULE_NO_CLUSTER = (1ULL << 22),
-    CMD_NO_ASYNC_LOADING = (1ULL << 23),
-    CMD_NO_MULTI = (1ULL << 24),
-    CMD_MOVABLE_KEYS = (1ULL << 25),
-    CMD_ALLOW_BUSY = (1ULL << 26),
-    CMD_MODULE_GETCHANNELS = (1ULL << 27),
-} CommandFlag;
 
 typedef enum {
     CONFIG_TYPE_STRING,
@@ -98,7 +75,7 @@ struct CommandInfo {
     int argCount;
     CommandArgument *args; /* An array of the command arguments. */
     struct CommandInfo *subcommands;
-    CommandFlag flags;      /* Bitmask of command flags */
+    uint64_t flags;         /* Bitmask of command flags from server.h */
     CommandGroupType group; /* Command group/type (e.g., "list", "set", "string", etc.) */
 } CommandInfo;
 
@@ -136,7 +113,7 @@ typedef struct FuzzerClientCtx {
     int in_lua_script;    /* Flag to indicate if we're generating commands for a Lua script */
     sds current_slot_tag; /* Current slot tag for cluster mode to ensure all keys map to same slot */
     int numkeys;          /* Number of keys for current command generation */
-    FuzzMode fuzz_level;  /* Fuzzing mode: normal or aggressive */
+    int fuzz_flags;       /* Fuzzing mode bit flags */
 } FuzzerClientCtx;
 
 /* Global fuzzer context */
@@ -145,9 +122,9 @@ static FuzzerContext *fuzz_ctx = NULL;
 /* Thread-local client context */
 static __thread FuzzerClientCtx *client_ctx = NULL;
 
-static CommandFlag mapFlagType(const sds flagStr) {
+static int mapFlagType(const sds flagStr) {
     static const struct {
-        CommandFlag flag;
+        int flag;
         const char *name;
     } flagNames[] = {
         {CMD_WRITE, "write"},
@@ -165,14 +142,27 @@ static CommandFlag mapFlagType(const sds flagStr) {
         {CMD_ASKING, "asking"},
         {CMD_FAST, "fast"},
         {CMD_NO_AUTH, "no_auth"},
+        {CMD_MAY_REPLICATE, "may_replicate"},
+        {CMD_SENTINEL, "sentinel"},
+        {CMD_ONLY_SENTINEL, "only_sentinel"},
         {CMD_NO_MANDATORY_KEYS, "no_mandatory_keys"},
+        {CMD_PROTECTED, "protected"},
+        {CMD_MODULE_GETKEYS, "module_getkeys"},
+        {CMD_MODULE_NO_CLUSTER, "module_no_cluster"},
         {CMD_NO_ASYNC_LOADING, "no_async_loading"},
         {CMD_NO_MULTI, "no_multi"},
         {CMD_MOVABLE_KEYS, "movablekeys"},
         {CMD_ALLOW_BUSY, "allow_busy"},
+        {CMD_MODULE_GETCHANNELS, "module_getchannels"},
+        {CMD_TOUCHES_ARBITRARY_KEYS, "touches_arbitrary_keys"},
         {0, NULL}};
 
-    if (!flagStr) return CMD_FLAG_NONE;
+    /* Compile-time check: Ensure we have entries for all flags up to bit 28.
+     * If this fails, new CMD_* flags were added to server.h - update flagNames array above. */
+    _Static_assert(sizeof(flagNames) / sizeof(flagNames[0]) > 28,
+                   "flagNames array missing entries - update mapFlagType when CMD_* flags are added to server.h");
+
+    if (!flagStr) return 0;
 
     for (int i = 0; flagNames[i].name != NULL; i++) {
         if (strcasecmp(flagStr, flagNames[i].name) == 0) {
@@ -180,7 +170,7 @@ static CommandFlag mapFlagType(const sds flagStr) {
         }
     }
 
-    return CMD_FLAG_NONE;
+    return 0;
 }
 
 /* Map a type string to the corresponding argument type enum */
@@ -241,17 +231,17 @@ static CommandGroupType mapGroupType(const sds groupStr) {
 }
 
 static FuzzerCommand *allocCommand(void) {
-    FuzzerCommand *cmd = malloc(sizeof(FuzzerCommand));
+    FuzzerCommand *cmd = zmalloc(sizeof(FuzzerCommand));
     cmd->argc = 0;
     cmd->size = 16;
-    cmd->argv = malloc(sizeof(sds) * cmd->size);
+    cmd->argv = zmalloc(sizeof(sds) * cmd->size);
     return cmd;
 }
 
 static void appendArg(FuzzerCommand *cmd, sds arg) {
     if (cmd->argc >= cmd->size) {
         cmd->size *= 2;
-        cmd->argv = realloc(cmd->argv, sizeof(sds) * cmd->size);
+        cmd->argv = zrealloc(cmd->argv, sizeof(sds) * cmd->size);
     }
     cmd->argv[cmd->argc++] = arg;
 }
@@ -260,8 +250,8 @@ void freeCommand(FuzzerCommand *cmd) {
     for (int i = 0; i < cmd->argc; i++) {
         sdsfree(cmd->argv[i]);
     }
-    free(cmd->argv);
-    free(cmd);
+    zfree(cmd->argv);
+    zfree(cmd);
 }
 
 char *printCommand(FuzzerCommand *cmd) {
@@ -291,25 +281,13 @@ uint64_t configDictHashFunction(const void *key) {
     return dictGenHashFunction(key, strlen(key));
 }
 
-void *configDictKeyDup(const void *key) {
-    return strdup(key);
-}
-
-int configDictKeyCompare(const void *key1, const void *key2) {
-    return strcmp(key1, key2) == 0;
-}
-
-void configDictKeyDestructor(void *key) {
-    free(key);
-}
-
 void configDictValDestructor(void *val) {
     ConfigEntry *entry = (ConfigEntry *)val;
     sdsfree(entry->value);
-    free(entry);
+    zfree(entry);
 }
 
-static int dictSdsKeyCompare(const void *key1, const void *key2) {
+static int sdsKeyCompare(const void *key1, const void *key2) {
     int l1, l2;
     l1 = sdslen((sds)key1);
     l2 = sdslen((sds)key2);
@@ -317,20 +295,20 @@ static int dictSdsKeyCompare(const void *key1, const void *key2) {
     return memcmp(key1, key2, l1) == 0;
 }
 
-static uint64_t dictSdsHash(const void *key) {
+static uint64_t sdsHash(const void *key) {
     return dictGenHashFunction((unsigned char *)key, sdslen((char *)key));
 }
 
-static void dictSdsDestructor(void *val) {
+static void sdsDestructor(void *val) {
     sdsfree(val);
 }
 
 /* Dictionary type for config entries */
 static dictType configDictType = {
-    dictSdsHash,             /* hash function */
+    sdsHash,                 /* hash function */
     NULL,                    /* key dup */
-    dictSdsKeyCompare,       /* key compare */
-    dictSdsDestructor,       /* key destructor */
+    sdsKeyCompare,           /* key compare */
+    sdsDestructor,           /* key destructor */
     configDictValDestructor, /* val destructor */
     NULL                     /* allow to expand */
 };
@@ -435,7 +413,7 @@ static int shouldFilterConfig(const char *key) {
 }
 
 void addConfigEntry(dict *configDict, const char *key, const char *value) {
-    ConfigEntry *entry = malloc(sizeof(ConfigEntry));
+    ConfigEntry *entry = zmalloc(sizeof(ConfigEntry));
     entry->value = sdsnew(value);
 
     /* Determine the config type */
@@ -620,7 +598,7 @@ void generateConfigSetCommand(FuzzerCommand *cmd) {
 
 static void parseAclCategories(valkeyReply *reply) {
     fuzz_ctx->aclCategoriesCount = reply->elements;
-    fuzz_ctx->aclCategories = malloc(sizeof(sds) * reply->elements);
+    fuzz_ctx->aclCategories = zmalloc(sizeof(sds) * reply->elements);
 
     for (size_t i = 0; i < reply->elements; i++) {
         if (reply->element[i]->type == VALKEY_REPLY_STRING) {
@@ -634,7 +612,7 @@ static void freeAclCategories(void) {
     for (size_t i = 0; i < fuzz_ctx->aclCategoriesCount; i++) {
         sdsfree(fuzz_ctx->aclCategories[i]);
     }
-    free(fuzz_ctx->aclCategories);
+    zfree(fuzz_ctx->aclCategories);
     fuzz_ctx->aclCategories = NULL;
     fuzz_ctx->aclCategoriesCount = 0;
 }
@@ -659,55 +637,6 @@ dict *parseConfigOutput(valkeyReply *reply) {
     }
 
     return configDict;
-}
-
-/* Check if a command should be filtered out from the command registry as they may make the server untestable */
-static int shouldFilterCommand(const sds cmdName, FuzzMode fuzz_level) {
-    static const char *filteredCommands[] = {
-        "SHUTDOWN",
-        "FLUSHDB",
-        "FLUSHALL",
-        "REPLICAOF",
-        "SLAVEOF",
-        "FAILOVER",
-        "CLUSTER REPLICATE",
-        "SCRIPT DEBUG",
-        "CLIENT PAUSE",
-        "SAVE",
-        "BGSAVE",
-        "BGREWRITEAOF",
-        "SYNC",
-        "PSYNC",
-        "MULTI",
-        "EXEC",
-        "EVAL",
-        "CLIENT REPLY",
-        "MONITOR",
-        "DEBUG",
-        "PFSELFTEST",
-        "CONFIG REWRITE",
-        "ACL LOAD",
-        NULL};
-
-    if (!cmdName) return 0;
-
-    /* Check standard filtered commands */
-    for (int i = 0; filteredCommands[i] != NULL; i++) {
-        if (strcasecmp(cmdName, filteredCommands[i]) == 0) return 1;
-    }
-
-    /* If not in cluster mode, filter out all CLUSTER commands */
-    if (!fuzz_ctx->cluster_mode) {
-        if (strncasecmp(cmdName, "CLUSTER", 7) == 0) return 1;
-        if (strncasecmp(cmdName, "ASKING", 6) == 0) return 1;
-    }
-
-    /* Filter CONFIG SET command if not in aggressive mode */
-    if (fuzz_level != AGGRESSIVE && strcasecmp(cmdName, "CONFIG SET") == 0) {
-        return 1;
-    }
-
-    return 0;
 }
 
 /* Process argument flags from Vallkey reply */
@@ -737,7 +666,7 @@ static void processArgumentFlags(CommandArgument *cmdArg, valkeyReply *flags) {
 static void parseCommandArguments(valkeyReply *arguments, CommandArgument *result, struct CommandInfo *parent);
 
 static void processSubarguments(CommandArgument *cmdArg, valkeyReply *arguments) {
-    cmdArg->subargs = calloc(arguments->elements, sizeof(CommandArgument));
+    cmdArg->subargs = zcalloc(arguments->elements * sizeof(CommandArgument));
     cmdArg->subargCount = arguments->elements;
     parseCommandArguments(arguments, cmdArg->subargs, cmdArg->parent);
 }
@@ -752,9 +681,9 @@ static void parseCommandArgument(CommandArgument *cmdArg, valkeyReply *argMap) {
         valkeyReply *value = argMap->element[i + 1];
 
         if (!strcmp(key, "name")) {
-            cmdArg->name = strdup(value->str);
+            cmdArg->name = zstrdup(value->str);
         } else if (!strcmp(key, "token")) {
-            cmdArg->token = strdup(value->str);
+            cmdArg->token = zstrdup(value->str);
         } else if (!strcmp(key, "type")) {
             assert(value->type == VALKEY_REPLY_STRING);
             cmdArg->type = mapArgumentType(value->str);
@@ -797,8 +726,8 @@ static size_t countTotalCommands(valkeyReply *commandTable) {
 /*  Fill in the fields of a help entry for the command/subcommand name. */
 static void populateCommandEntry(CommandEntry *command, sds cmdName, sds subcommandName) {
     command->argc = subcommandName ? 2 : 1;
-    command->argv = malloc(sizeof(char *) * command->argc);
-    command->argv[0] = strdup(cmdName);
+    command->argv = zmalloc(sizeof(char *) * command->argc);
+    command->argv[0] = zstrdup(cmdName);
 
     /* Convert to uppercase */
     for (sds p = command->argv[0]; *p; p++) {
@@ -809,9 +738,9 @@ static void populateCommandEntry(CommandEntry *command, sds cmdName, sds subcomm
         /* Subcommand name may be two words separated by a pipe character. */
         sds pipe = strchr(subcommandName, '|');
         if (pipe != NULL) {
-            command->argv[1] = strdup(pipe + 1);
+            command->argv[1] = zstrdup(pipe + 1);
         } else {
-            command->argv[1] = strdup(subcommandName);
+            command->argv[1] = zstrdup(subcommandName);
         }
 
         /* Convert to uppercase */
@@ -821,17 +750,17 @@ static void populateCommandEntry(CommandEntry *command, sds cmdName, sds subcomm
     }
 
     /* Create fullname */
-    int fullnameLength = strlen(command->argv[0]) + 1;
+    int fullnameLength = strlen(command->argv[0]) + 1; /* +1 for space */
     if (subcommandName) {
-        fullnameLength += strlen(command->argv[1]) + 1;
+        fullnameLength += strlen(command->argv[1]) + 1; /* +1 for space */
     }
 
-    command->fullname = malloc(fullnameLength);
-    strcpy(command->fullname, command->argv[0]);
+    command->fullname = zmalloc(fullnameLength);
+    valkey_strlcpy(command->fullname, command->argv[0], fullnameLength);
 
     if (subcommandName) {
-        strcat(command->fullname, " ");
-        strcat(command->fullname, command->argv[1]);
+        valkey_strlcat(command->fullname, " ", fullnameLength);
+        valkey_strlcat(command->fullname, command->argv[1], fullnameLength);
     }
 
     /* Initialize new fields */
@@ -853,13 +782,13 @@ static void updateCommand(sds cmdName, int arity, valkeyReply *flagsArray) {
         cmd->arity = arity;
 
         /* Copy each flag and update the flags bitmask */
-        cmd->info.flags = CMD_FLAG_NONE;
+        cmd->info.flags = 0;
         for (size_t k = 0; k < flagsArray->elements; k++) {
             if (flagsArray->element[k]->type != VALKEY_REPLY_STATUS) continue;
 
             sds flagStr = flagsArray->element[k]->str;
             /* Map the string flag to its enum value and update the bitmask */
-            CommandFlag flagValue = mapFlagType(flagStr);
+            uint64_t flagValue = mapFlagType(flagStr);
             cmd->info.flags |= flagValue;
         }
 
@@ -921,7 +850,7 @@ static CommandEntry *initializeCommandEntry(sds cmdName, sds subcommandName, Com
     assert(specs->type == VALKEY_REPLY_MAP || specs->type == VALKEY_REPLY_ARRAY);
 
     /* Initialize command flags and group */
-    command->info.flags = CMD_FLAG_NONE;
+    command->info.flags = 0;
     command->info.group = CMD_GROUP_UNKNOWN;
 
     for (size_t j = 0; j < specs->elements; j += 2) {
@@ -931,7 +860,7 @@ static CommandEntry *initializeCommandEntry(sds cmdName, sds subcommandName, Com
         if (!strcmp(key, "arguments")) {
             valkeyReply *arguments = specs->element[j + 1];
             assert(arguments->type == VALKEY_REPLY_ARRAY);
-            command->info.args = calloc(arguments->elements, sizeof(CommandArgument));
+            command->info.args = zcalloc(arguments->elements * sizeof(CommandArgument));
             command->info.argCount = arguments->elements;
             parseCommandArguments(arguments, command->info.args, &command->info);
         } else if (!strcmp(key, "group")) {
@@ -962,13 +891,13 @@ static CommandEntry *initializeCommandEntry(sds cmdName, sds subcommandName, Com
 static void initializeCommandRegistry(valkeyReply *commandTable) {
     /* Initialize command registry */
     fuzz_ctx->commandRegistrySize = countTotalCommands(commandTable);
-    fuzz_ctx->commandRegistry = malloc(sizeof(CommandEntry) * fuzz_ctx->commandRegistrySize);
+    fuzz_ctx->commandRegistry = zmalloc(sizeof(CommandEntry) * fuzz_ctx->commandRegistrySize);
     /* Commands allowed in subscribe mode */
     const char *allowedCommands[] = {
         "SUBSCRIBE", "PSUBSCRIBE", "SSUBSCRIBE", "UNSUBSCRIBE", "PUNSUBSCRIBE", "SUNSUBSCRIBE", "PING", "QUIT", "RESET"};
     int numAllowedCommands = sizeof(allowedCommands) / sizeof(allowedCommands[0]);
     /* Allocate memory for the subscribe command registry */
-    fuzz_ctx->subscribeCommandRegistry = malloc(sizeof(CommandEntry) * numAllowedCommands);
+    fuzz_ctx->subscribeCommandRegistry = zmalloc(sizeof(CommandEntry) * numAllowedCommands);
     fuzz_ctx->subscribeCommandRegistrySize = numAllowedCommands;
 
     CommandEntry *next = fuzz_ctx->commandRegistry;
@@ -997,11 +926,11 @@ static void initializeCommandRegistry(valkeyReply *commandTable) {
 
 static void freeCommandArgument(CommandArgument *arg) {
     if (arg->name) {
-        free(arg->name);
+        zfree(arg->name);
         arg->name = NULL;
     }
     if (arg->token) {
-        free(arg->token);
+        zfree(arg->token);
         arg->token = NULL;
     }
     /* Free subarguments recursively */
@@ -1009,39 +938,89 @@ static void freeCommandArgument(CommandArgument *arg) {
         for (int i = 0; i < arg->subargCount; i++) {
             freeCommandArgument(&arg->subargs[i]);
         }
-        free(arg->subargs);
+        zfree(arg->subargs);
         arg->subargs = NULL;
     }
 }
 
 static void freeCommandArguments(CommandEntry *command) {
     if (command->info.args) {
-        /* free each argument */
+        /* zfree each argument */
         for (int i = 0; i < command->info.argCount; i++) {
             freeCommandArgument(&command->info.args[i]);
         }
-        free(command->info.args);
+        zfree(command->info.args);
         command->info.args = NULL;
     }
 }
 
 static void freeCommandEntry(CommandEntry *command) {
     freeCommandArguments(command);
-    free(command->fullname);
+    zfree(command->fullname);
     command->fullname = NULL;
     for (int i = 0; i < command->argc; i++) {
-        free(command->argv[i]);
+        zfree(command->argv[i]);
     }
-    free(command->argv);
+    zfree(command->argv);
     command->argv = NULL;
 }
 
-static void removeInvalidCommands(FuzzMode fuzz_level) {
+
+/* Check if a command should be filtered out from the command registry as they may make the server untestable */
+static int shouldFilterCommand(const sds cmdName, int fuzz_flags) {
+    static const char *filteredCommands[] = {
+        "SHUTDOWN",
+        "FLUSHDB",
+        "FLUSHALL",
+        "REPLICAOF",
+        "SLAVEOF",
+        "FAILOVER",
+        "CLUSTER REPLICATE",
+        "SCRIPT DEBUG",
+        "CLIENT PAUSE",
+        "SAVE",
+        "BGSAVE",
+        "BGREWRITEAOF",
+        "SYNC",
+        "PSYNC",
+        "MULTI",
+        "EXEC",
+        "EVAL",
+        "CLIENT REPLY",
+        "MONITOR",
+        "DEBUG",
+        "PFSELFTEST",
+        "CONFIG REWRITE",
+        "ACL LOAD",
+        NULL};
+
+    if (!cmdName) return 0;
+
+    /* Check standard filtered commands */
+    for (int i = 0; filteredCommands[i] != NULL; i++) {
+        if (strcasecmp(cmdName, filteredCommands[i]) == 0) return 1;
+    }
+
+    /* If not in cluster mode, filter out all CLUSTER commands */
+    if (!fuzz_ctx->cluster_mode) {
+        if (strncasecmp(cmdName, "CLUSTER", 7) == 0) return 1;
+        if (strncasecmp(cmdName, "ASKING", 6) == 0) return 1;
+    }
+
+    /* Filter CONFIG SET command if config-commands flag not set */
+    if (!(fuzz_flags & FUZZ_MODE_CONFIG_COMMANDS) && strcasecmp(cmdName, "CONFIG SET") == 0) {
+        return 1;
+    }
+
+    return 0;
+}
+
+static void removeInvalidCommands(int fuzz_flags) {
     /* Iterate over the registry and remove if args require and have subcommands */
     for (size_t i = 0; i < fuzz_ctx->commandRegistrySize;) {
         CommandEntry *cmd = &fuzz_ctx->commandRegistry[i];
 
-        if (shouldFilterCommand(cmd->fullname, fuzz_level) || (cmd->has_subcommands && cmd->arity == -2)) {
+        if (shouldFilterCommand(cmd->fullname, fuzz_flags) || (cmd->has_subcommands && cmd->arity == -2)) {
             /* Delete entry */
 
             /* First delete from subscribeCommandRegistry */
@@ -1070,9 +1049,9 @@ void initializeRandomSeed(void) {
 }
 
 /* Initialize the fuzzer with a connected Valkey context */
-int initFuzzer(valkeyContext *ctx, int num_keys, int cluster_mode, FuzzMode fuzz_level) {
+int initFuzzer(valkeyContext *ctx, int num_keys, int cluster_mode, int fuzz_flags) {
     int ret = -1;
-    fuzz_ctx = malloc(sizeof(FuzzerContext));
+    fuzz_ctx = zmalloc(sizeof(FuzzerContext));
     /* Set global configuration values */
     fuzz_ctx->max_keys = num_keys > 0 ? num_keys : MAX_DEFAULT_NUMKEYS;
     fuzz_ctx->cluster_mode = cluster_mode;
@@ -1124,7 +1103,7 @@ int initFuzzer(valkeyContext *ctx, int num_keys, int cluster_mode, FuzzMode fuzz
     extractCommandFlags(commandInfo);
 
     /* Remove invalid commands */
-    removeInvalidCommands(fuzz_level);
+    removeInvalidCommands(fuzz_flags);
 
     /* Parse configuration output */
     fuzz_ctx->configDict = parseConfigOutput(configOutput);
@@ -1264,11 +1243,11 @@ static void generateLexRangeValue(FuzzerCommand *cmd, const char *argName, int r
     } else if (choice < 6) {
         /* Inclusive range with a string value */
         appendArg(cmd, sdscatprintf(sdsempty(), "[%s%d",
-                                    strcmp(argName, "min") == 0 ? "a" : "z", r % 100));
+                                    strcmp(argName, "min") == 0 ? "a" : "z", rand() % 100));
     } else {
         /* Exclusive range with a string value */
         appendArg(cmd, sdscatprintf(sdsempty(), "(%s%d",
-                                    strcmp(argName, "min") == 0 ? "a" : "z", r % 100));
+                                    strcmp(argName, "min") == 0 ? "a" : "z", rand() % 100));
     }
 }
 
@@ -1938,18 +1917,18 @@ void generateMalformedCommand(FuzzerCommand *cmd) {
     }
 }
 
-/* Cleanup and free all resources allocated by the fuzzer */
+/* Cleanup and zfree all resources allocated by the fuzzer */
 void cleanupFuzzer(void) {
     if (!fuzz_ctx) return;
     if (fuzz_ctx->commandRegistry) {
         for (size_t i = 0; i < fuzz_ctx->commandRegistrySize; i++) {
             freeCommandEntry(&fuzz_ctx->commandRegistry[i]);
         }
-        free(fuzz_ctx->commandRegistry);
+        zfree(fuzz_ctx->commandRegistry);
     }
 
     if (fuzz_ctx->subscribeCommandRegistry) {
-        free(fuzz_ctx->subscribeCommandRegistry);
+        zfree(fuzz_ctx->subscribeCommandRegistry);
     }
 
     if (fuzz_ctx->configDict) {
@@ -1958,20 +1937,20 @@ void cleanupFuzzer(void) {
 
     freeAclCategories();
 
-    free(fuzz_ctx);
+    zfree(fuzz_ctx);
     fuzz_ctx = NULL;
 }
 
 /* Initialize thread-local client context - called at thread start */
-void initThreadClientCtx(FuzzMode fuzz_level) {
-    client_ctx = malloc(sizeof(FuzzerClientCtx));
+void initThreadClientCtx(int fuzz_flags) {
+    client_ctx = zmalloc(sizeof(FuzzerClientCtx));
     client_ctx->in_multiexec = 0;
     client_ctx->in_subscribe_mode = 0;
     client_ctx->subscribe_type = 0;
     client_ctx->in_lua_script = 0;
     client_ctx->current_slot_tag = NULL;
     client_ctx->numkeys = 1;
-    client_ctx->fuzz_level = fuzz_level;
+    client_ctx->fuzz_flags = fuzz_flags;
 
     initializeRandomSeed();
 }
@@ -1994,7 +1973,7 @@ void freeClientCtx(void) {
     if (client_ctx->current_slot_tag) {
         sdsfree(client_ctx->current_slot_tag);
     }
-    free(client_ctx);
+    zfree(client_ctx);
     client_ctx = NULL;
 }
 
@@ -2002,14 +1981,14 @@ void freeClientCtx(void) {
 FuzzerCommand *generateCmd(void) {
     FuzzerCommand *cmd = allocCommand();
 
-    /* In aggressive mode, generate malformed commands 5% of the time */
-    if (client_ctx->fuzz_level == AGGRESSIVE && (rand() % 20 == 0)) {
+    /* In malformed-commands mode, generate malformed commands 5% of the time */
+    if ((client_ctx->fuzz_flags & FUZZ_MODE_MALFORMED_COMMANDS) && (rand() % MALFORMED_COMMAND_PROBABILITY == 0)) {
         generateMalformedCommand(cmd);
         return cmd;
     }
 
     if (client_ctx->in_multiexec) {
-        if (rand() % 5 == 0) {
+        if (rand() % MULTIEXEC_END_PROBABILITY == 0) {
             client_ctx->in_multiexec = 0;
             appendArg(cmd, sdsnew("EXEC"));
             return cmd;
@@ -2018,7 +1997,7 @@ FuzzerCommand *generateCmd(void) {
 
     if (rand() % LUA_SCRIPT_PROBABILITY == 0 && !client_ctx->in_subscribe_mode) {
         generateCommandsWithLua(cmd);
-    } else if (rand() % MULTI_EXEC_PROBABILITY == 0 && !client_ctx->in_subscribe_mode) {
+    } else if (rand() % MULTIEXEC_PROBABILITY == 0 && !client_ctx->in_subscribe_mode) {
         client_ctx->in_multiexec = 1;
         appendArg(cmd, sdsnew("MULTI"));
     } else {

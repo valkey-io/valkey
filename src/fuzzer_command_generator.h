@@ -12,13 +12,13 @@ typedef struct FuzzerCommand {
 
 /* Fuzzing mode types */
 typedef enum {
-    NORMAL = 0,
-    AGGRESSIVE = 1
+    FUZZ_MODE_MALFORMED_COMMANDS = (1 << 0),
+    FUZZ_MODE_CONFIG_COMMANDS = (1 << 1)
 } FuzzMode;
 
-int initFuzzer(valkeyContext *ctx, int num_keys, int cluster_mode, FuzzMode fuzz_level);
+int initFuzzer(valkeyContext *ctx, int num_keys, int cluster_mode, int fuzz_flags);
 void cleanupFuzzer(void);
-void initThreadClientCtx(FuzzMode fuzz_level);
+void initThreadClientCtx(int fuzz_flags);
 void resetClientFuzzCtx(void);
 void freeClientCtx(void);
 FuzzerCommand *generateCmd(void);

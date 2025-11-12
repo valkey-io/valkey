@@ -6,11 +6,6 @@
         "since": "2.0.0",
         "arity": -4,
         "function": "hsetCommand",
-        "deprecated_since": "4.0.0",
-        "replaced_by": "`HSET` with multiple field-value pairs",
-        "doc_flags": [
-            "DEPRECATED"
-        ],
         "command_flags": [
             "WRITE",
             "DENYOOM",

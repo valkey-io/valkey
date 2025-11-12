@@ -390,7 +390,12 @@ static int connRdmaHandleCq(valkeyContext *c) {
             valkeySetError(c, VALKEY_ERR_OTHER, "RDMA: get cq event failed");
             return VALKEY_ERR;
         }
-    } else if (ibv_req_notify_cq(ev_cq, 0)) {
+
+        return VALKEY_OK;
+    }
+
+    ibv_ack_cq_events(ctx->cq, 1);
+    if (ibv_req_notify_cq(ev_cq, 0)) {
         valkeySetError(c, VALKEY_ERR_OTHER, "RDMA: notify cq failed");
         return VALKEY_ERR;
     }
@@ -403,8 +408,6 @@ pollcq:
     } else if (ret == 0) {
         return VALKEY_OK;
     }
-
-    ibv_ack_cq_events(ctx->cq, 1);
 
     if (wc.status != IBV_WC_SUCCESS) {
         valkeySetError(c, VALKEY_ERR_OTHER, "RDMA: send/recv failed");
@@ -614,7 +617,7 @@ waitcq:
     }
 }
 
-/* RDMA has no POLLOUT event supported, so it could't work well with valkey async mechanism */
+/* RDMA has no POLLOUT event supported, so it couldn't work well with valkey async mechanism */
 static void valkeyRdmaAsyncRead(VALKEY_UNUSED valkeyAsyncContext *ac) {
     assert("valkey async mechanism can't work with RDMA" == NULL);
 }

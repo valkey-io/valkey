@@ -1452,7 +1452,14 @@ int loadSingleAppendOnlyFile(char *filename) {
 
         if (fseek(fp, 0, SEEK_SET) == -1) goto readerr;
         rioInitWithFile(&rdb, fp);
-        if (rdbLoadRio(&rdb, RDBFLAGS_AOF_PREAMBLE, NULL) != C_OK) {
+        rdbSaveInfo rsi = RDB_SAVE_INFO_INIT;
+        int rdb_flags = RDBFLAGS_AOF_PREAMBLE;
+        int rsi_is_valid = 0;
+        if (iAmPrimary()) {
+            if (server.repl_backlog == NULL) createReplicationBacklog();
+            rdb_flags |= RDBFLAGS_FEED_REPL;
+        }
+        if (rdbLoadRio(&rdb, rdb_flags, &rsi) != C_OK) {
             if (old_style)
                 serverLog(LL_WARNING, "Error reading the RDB preamble of the AOF file %s, AOF loading aborted",
                           filename);
@@ -1462,10 +1469,15 @@ int loadSingleAppendOnlyFile(char *filename) {
             ret = AOF_FAILED;
             goto cleanup;
         } else {
+            /* Restore the replication ID / offset from the RDB file. */
+            rsi_is_valid = rdbRestoreOffsetFromSaveInfo(&rsi, true);
             loadingAbsProgress(ftello(fp));
             last_progress_report_size = ftello(fp);
             if (old_style) serverLog(LL_NOTICE, "Reading the remaining AOF tail...");
         }
+        /* If the AOF didn't contain replication info, it's not possible to
+         * support partial resync, so we can free the backlog to save memory. */
+        if (!rsi_is_valid && server.repl_backlog && listLength(server.replicas) == 0) freeReplicationBacklog();
     }
 
     /* Read the actual AOF file, in REPL format, command by command. */
@@ -2280,10 +2292,11 @@ int rewriteObjectRio(rio *aof, robj *o, int db_num) {
     return C_OK;
 }
 
+/* This function is currently used in slot migration to rewrite the corresponding
+ * slot hashtable to rio. */
 int rewriteSlotToAppendOnlyFileRio(rio *aof, int db_num, int hashslot, size_t *key_count) {
     long long updated_time = 0;
 
-    if (rewriteFunctions(aof) == 0) return C_ERR;
     if (dbHasNoKeys(db_num)) return C_OK;
 
     serverDb *db = server.db[db_num];
@@ -2303,7 +2316,7 @@ int rewriteSlotToAppendOnlyFileRio(rio *aof, int db_num, int hashslot, size_t *k
         if (key_count && ((*key_count)++ & 1023) == 0) {
             long long now = mstime();
             if (now - updated_time >= 1000) {
-                sendChildInfo(CHILD_INFO_TYPE_CURRENT_INFO, *key_count, "AOF rewrite");
+                sendChildInfo(CHILD_INFO_TYPE_CURRENT_INFO, *key_count, "Slot migration");
                 updated_time = now;
             }
         }
@@ -2399,8 +2412,10 @@ int rewriteAppendOnlyFile(char *filename) {
     startSaving(RDBFLAGS_AOF_PREAMBLE);
 
     if (server.aof_use_rdb_preamble) {
+        rdbSaveInfo rsi, *rsiptr;
+        rsiptr = rdbPopulateSaveInfo(&rsi);
         int error;
-        if (rdbSaveRio(REPLICA_REQ_NONE, &aof, &error, RDBFLAGS_AOF_PREAMBLE, NULL) == C_ERR) {
+        if (rdbSaveRio(REPLICA_REQ_NONE, &aof, &error, RDBFLAGS_AOF_PREAMBLE, rsiptr) == C_ERR) {
             errno = error;
             goto werr;
         }

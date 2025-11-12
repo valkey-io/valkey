@@ -623,12 +623,47 @@ start_server {tags {"hashexpire"}} {
         set e
     } {ERR *}
 
-    # test {HSETEX PX - mismatched field/value count} {
-    #     catch {r HSETEX myhash PX 100 FIELDS 2 field1 val1} e
-    #     set e
-    # } {ERR wrong number of arguments for 'hsetex' command}
+    test {HSETEX PX - mismatched field/value count} {
+         assert_error {ERR numfields should be greater than 0 and match the provided number of fields} {r HSETEX myhash PX 100 FIELDS 1 field1 val1 extra}
+    } 
 
+    ## NX/XX key-level tests
 
+    test {HSETEX NX - non-existing key creates the key} {
+        r FLUSHALL
+        set res [r HSETEX myhash NX FIELDS 2 f1 v1 f2 v2]
+        assert_equal 1 $res
+        assert_equal v1 [r HGET myhash f1]
+        assert_equal v2 [r HGET myhash f2]
+    }
+
+    test {HSETEX NX - existing key blocked} {
+        r FLUSHALL
+        r HSET myhash f1 v1
+        set res [r HSETEX myhash NX FIELDS 2 f1 new1 f2 new2]
+        assert_equal 0 $res
+        assert_equal v1 [r HGET myhash f1]
+        assert_equal 0 [r HEXISTS myhash f2]
+    }
+
+    test {HSETEX XX - existing key updates fields} {
+        r FLUSHALL
+        r HSET myhash f1 v1 f2 v2
+        set res [r HSETEX myhash XX FIELDS 2 f1 new1 f2 new2]
+        assert_equal 1 $res
+        assert_equal new1 [r HGET myhash f1]
+        assert_equal new2 [r HGET myhash f2]
+    }
+
+    test {HSETEX XX - non-existing key blocked} {
+        r FLUSHALL
+        set res [r HSETEX myhash XX FIELDS 2 f1 v1 f2 v2]
+        assert_equal 0 $res
+        assert_equal 0 [r EXISTS myhash]
+        assert_equal 0 [r HEXISTS myhash f1]
+        assert_equal 0 [r HEXISTS myhash f2]
+    }
+    
     ## FNX/FXX
 
     # hsetex throws ERR *, it shouldn't
@@ -684,6 +719,71 @@ start_server {tags {"hashexpire"}} {
         catch {r HSETEX myhash EX 10 FNX FXX FIELDS 1 x y} e
         set e
     } {ERR *}
+
+     test {HSETEX EX - FXX does not create object in case key does not exist} {
+        r FLUSHALL
+        assert_equal 0 [r HSETEX myhash EX 10 FXX FIELDS 1 x y]
+        assert_equal 0 [r EXISTS myhash]
+    }
+
+    ## NX/XX + FNX/FXX combinations
+
+    # NX + FNX — only set if key does not exist AND fields do not exist
+    test {HSETEX EX NX FNX - set only if key missing and fields missing} {
+        r FLUSHALL
+        set res [r HSETEX myhash EX 10 NX FNX FIELDS 2 f1 v1 f2 v2]
+        assert_equal 1 $res
+        assert_equal v1 [r HGET myhash f1]
+        assert_equal v2 [r HGET myhash f2]
+
+        # Try again — key exists now, should block
+        set res [r HSETEX myhash EX 10 NX FNX FIELDS 2 f3 v3 f4 v4]
+        assert_equal 0 $res
+        assert_equal 0 [r HEXISTS myhash f3]
+        assert_equal 0 [r HEXISTS myhash f4]
+    }
+
+    # NX + FXX — only set if key does not exist AND all fields exist (key missing → blocked)
+    test {HSETEX EX NX FXX - key missing blocks all} {
+        r FLUSHALL
+        set res [r HSETEX myhash EX 10 NX FXX FIELDS 2 f1 v1 f2 v2]
+        assert_equal 0 $res
+        assert_equal 0 [r EXISTS myhash]
+        assert_equal 0 [r HEXISTS myhash f1]
+        assert_equal 0 [r HEXISTS myhash f2]
+    }
+
+    # XX + FNX — only set if key exists AND none of the fields exist
+    test {HSETEX EX XX FNX - set only if key exists and fields missing} {
+        r FLUSHALL
+        r HSET myhash f1 old1
+        set res [r HSETEX myhash EX 10 XX FNX FIELDS 2 f2 v2 f3 v3]
+        assert_equal 1 $res
+        assert_equal v2 [r HGET myhash f2]
+        assert_equal v3 [r HGET myhash f3]
+
+        # Try again — fields already exist → should block
+        set res [r HSETEX myhash EX 10 XX FNX FIELDS 2 f2 x f4 y]
+        assert_equal 0 $res
+        assert_equal v2 [r HGET myhash f2]
+        assert_equal 0 [r HEXISTS myhash f4]
+    }
+
+    # XX + FXX — only set if key exists AND all fields exist
+    test {HSETEX EX XX FXX - set only if key exists and all fields exist} {
+        r FLUSHALL
+        r HSET myhash f1 old1 f2 old2
+        set res [r HSETEX myhash EX 10 XX FXX FIELDS 2 f1 new1 f2 new2]
+        assert_equal 1 $res
+        assert_equal new1 [r HGET myhash f1]
+        assert_equal new2 [r HGET myhash f2]
+
+        # Try when one field is missing → should block
+        set res [r HSETEX myhash EX 10 XX FXX FIELDS 2 f1 x f3 y]
+        assert_equal 0 $res
+        assert_equal new1 [r HGET myhash f1]
+        assert_equal 0 [r HEXISTS myhash f3]
+    }
 
     ###### Test EXPIRE #############
 
@@ -1479,7 +1579,9 @@ start_server {tags {"hashexpire"}} {
             lappend pairs "f$i" "v$i"
         }
         r HSET myhash {*}$pairs
-        r HEXPIRE myhash 3 FIELDS 5 f1 f10 f100 f200 f300
+        
+        set expire_time [get_long_expire_value HEXPIREAT]
+        r HEXPIREAT myhash $expire_time FIELDS 5 f1 f10 f100 f200 f300
         
         # Verify encoding changed to hashtable
         set "hashtable" [r OBJECT ENCODING myhash]
@@ -1488,9 +1590,9 @@ start_server {tags {"hashexpire"}} {
         for {set i 1} {$i <= 600} {incr i} {
             assert_equal "v$i" [r HGET myhash "f$i"]
             if {$i == 1 || $i == 10 || $i == 100 || $i == 200 || $i == 300} {
-                assert_equal 3 [r HTTL myhash FIELDS 1 "f$i"]
+                assert_equal [r HEXPIRETIME myhash FIELDS 1 "f$i"] $expire_time
             } else {
-                assert_equal -1 [r HTTL myhash FIELDS 1 "f$i"]
+                assert_equal [r HTTL myhash FIELDS 1 "f$i"] -1
             }
         }
         # Re-enable active expiry

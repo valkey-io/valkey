@@ -115,7 +115,7 @@ clusterNode *clusterNodeGetReplica(clusterNode *node, int replica_idx);
 clusterNode *getMigratingSlotDest(int slot);
 clusterNode *getImportingSlotSource(int slot);
 clusterNode *getNodeBySlot(int slot);
-int clusterNodeClientPort(clusterNode *n, int use_tls);
+int clusterNodeClientPort(clusterNode *n, int use_tls, client *c);
 char *clusterNodeHostname(clusterNode *node);
 const char *clusterNodePreferredEndpoint(clusterNode *n, client *c);
 clusterNode *clusterLookupNode(const char *name, int length);

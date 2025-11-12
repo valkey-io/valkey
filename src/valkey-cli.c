@@ -3533,10 +3533,25 @@ static int evalMode(int argc, char **argv) {
         }
         fclose(fp);
 
+        char *engine_name = NULL;
+        if (script[0] == '#' && script[1] == '!') {
+            const char *sp = strpbrk(script, "\r\n ");
+            engine_name = strndup(script + 2, (sp - script) - 2);
+        } else {
+            engine_name = strdup("lua");
+        }
+
         /* If we are debugging a script, enable the Lua debugger. */
         if (config.eval_ldb) {
-            valkeyReply *reply = valkeyCommand(context, config.eval_ldb_sync ? "SCRIPT DEBUG sync" : "SCRIPT DEBUG yes");
+            valkeyReply *reply = valkeyCommand(
+                context,
+                config.eval_ldb_sync ? "SCRIPT DEBUG sync %s" : "SCRIPT DEBUG yes %s",
+                engine_name ? engine_name : "");
             if (reply) freeReplyObject(reply);
+        }
+
+        if (engine_name) {
+            free(engine_name);
         }
 
         /* Create our argument vector */
@@ -5121,7 +5136,7 @@ static int clusterManagerMigrateKeysInSlot(clusterManagerNode *source,
 static int
 clusterManagerMoveSlot(clusterManagerNode *source, clusterManagerNode *target, int slot, int opts, char **err) {
     if (!(opts & CLUSTER_MANAGER_OPT_QUIET)) {
-        printf("Moving slot %d from %s:%d to %s:%d: ", slot, source->ip, source->port, target->ip, target->port);
+        printf("Moving slot %d from %s:%d to %s:%d", slot, source->ip, source->port, target->ip, target->port);
         fflush(stdout);
     }
     if (err != NULL) *err = NULL;

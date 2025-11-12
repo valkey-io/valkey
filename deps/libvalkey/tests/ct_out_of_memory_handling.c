@@ -318,7 +318,7 @@ void test_alloc_failure_handling(void) {
         freeReplyObject(reply);
 
         /* Test ASK reply handling with OOM */
-        for (int i = 0; i < 30; ++i) {
+        for (int i = 0; i < 45; ++i) {
             prepare_allocation_test(cc, i);
             reply = valkeyClusterCommand(cc, "GET foo");
             assert(reply == NULL);
@@ -326,7 +326,7 @@ void test_alloc_failure_handling(void) {
         }
 
         /* Test ASK reply handling without OOM */
-        prepare_allocation_test(cc, 30);
+        prepare_allocation_test(cc, 45);
         reply = valkeyClusterCommand(cc, "GET foo");
         CHECK_REPLY_STR(cc, reply, "one");
         freeReplyObject(reply);
@@ -347,7 +347,7 @@ void test_alloc_failure_handling(void) {
         freeReplyObject(reply);
 
         /* Test MOVED reply handling with OOM */
-        for (int i = 0; i < 31; ++i) {
+        for (int i = 0; i < 32; ++i) {
             prepare_allocation_test(cc, i);
             reply = valkeyClusterCommand(cc, "GET foo");
             assert(reply == NULL);
@@ -355,7 +355,7 @@ void test_alloc_failure_handling(void) {
         }
 
         /* Test MOVED reply handling without OOM */
-        prepare_allocation_test(cc, 31);
+        prepare_allocation_test(cc, 32);
         reply = valkeyClusterCommand(cc, "GET foo");
         CHECK_REPLY_STR(cc, reply, "one");
         freeReplyObject(reply);

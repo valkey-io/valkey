@@ -57,6 +57,10 @@
 static_assert(RDB_VERSION < RDB_FOREIGN_VERSION_MIN || RDB_VERSION > RDB_FOREIGN_VERSION_MAX,
               "RDB version in foreign version range");
 
+static inline bool rdbIsForeignVersion(int rdbver) {
+    return rdbver >= RDB_FOREIGN_VERSION_MIN && rdbver <= RDB_FOREIGN_VERSION_MAX;
+}
+
 /* Defines related to the dump file format. To store 32 bits lengths for short
  * keys requires a lot of space, so we check the most significant 2 bits of
  * the first byte to interpreter the length:
@@ -112,26 +116,23 @@ enum RdbType {
     RDB_TYPE_STREAM_LISTPACKS_2 = 19,
     RDB_TYPE_SET_LISTPACK = 20,
     RDB_TYPE_STREAM_LISTPACKS_3 = 21,
-    RDB_TYPE_HASH_2 = 22,
+    RDB_TYPE_HASH_2 = 22, /* Hash with field-level expiration (Valkey 9.0) */
     RDB_TYPE_LAST
 };
 /* NOTE: WHEN ADDING NEW RDB TYPE, UPDATE rdb_type_string[] */
 
-typedef int (*ChildSnapshotFunc)(int req, rio *rdb, void *privdata);
-typedef struct rdbSnapshotOptions {
-    int connsnum;                    /* Number of connections. */
-    connection **conns;              /* Connections to send the snapshot to. */
-    int use_pipe;                    /* Use pipe to send the snapshot. */
-    int req;                         /* See REPLICA_REQ_* in server.h. */
-    int skip_checksum;               /* Skip checksum when sending the snapshot. */
-    ChildSnapshotFunc snapshot_func; /* Function to call to take the snapshot. */
-    void *privdata;                  /* Private data to pass to snapshot_func. */
-} rdbSnapshotOptions;
+/* When our RDB format diverges, we need to reject types/opcodes for which we
+ * may have assigned a different meaning compared to other implementations. */
+#define RDB_FOREIGN_TYPE_MIN 22
+#define RDB_FOREIGN_TYPE_MAX 243
 
 /* Test if a type is an object type. */
 #define rdbIsObjectType(t) (((t) >= 0 && (t) <= 7) || ((t) >= 9 && (t) < RDB_TYPE_LAST))
 
-/* Special RDB opcodes (saved/loaded with rdbSaveType/rdbLoadType). */
+/* Special RDB opcodes (saved/loaded with rdbSaveType/rdbLoadType).
+ * These are special RDB types, but they start from 255 and grow down. */
+#define RDB_OPCODE_SLOT_IMPORT 243     /* Slot import state. */
+#define RDB_OPCODE_SLOT_INFO 244       /* Foreign slot info, safe to ignore. */
 #define RDB_OPCODE_FUNCTION2 245       /* function library data */
 #define RDB_OPCODE_FUNCTION_PRE_GA 246 /* old function library data for 7.0 rc1 and rc2 */
 #define RDB_OPCODE_MODULE_AUX 247      /* Module auxiliary data. */
@@ -168,9 +169,11 @@ typedef struct rdbSnapshotOptions {
 
 /* When rdbLoadObject() returns NULL, the err flag is
  * set to hold the type of error that occurred */
-#define RDB_LOAD_ERR_EMPTY_KEY 1 /* Error of empty key */
-#define RDB_LOAD_ERR_OTHER 2     /* Any other errors */
+#define RDB_LOAD_ERR_EMPTY_KEY 1    /* Error of empty key */
+#define RDB_LOAD_ERR_UNKNOWN_TYPE 2 /* Unknown type in file */
+#define RDB_LOAD_ERR_OTHER 3        /* Any other errors */
 
+bool rdbIsVersionAccepted(int rdbver, bool is_valkey_magic, bool is_redis_magic);
 ssize_t rdbWriteRaw(rio *rdb, void *p, size_t len);
 int rdbSaveType(rio *rdb, unsigned char type);
 int rdbLoadType(rio *rdb);
@@ -209,6 +212,6 @@ int rdbFunctionLoad(rio *rdb, int ver, functionsLibCtx *lib_ctx, int rdbflags, s
 int rdbSaveRio(int req, rio *rdb, int *error, int rdbflags, rdbSaveInfo *rsi);
 ssize_t rdbSaveFunctions(rio *rdb);
 rdbSaveInfo *rdbPopulateSaveInfo(rdbSaveInfo *rsi);
-int saveSnapshotToConnectionSockets(rdbSnapshotOptions options);
+int rdbRestoreOffsetFromSaveInfo(rdbSaveInfo *rsi, bool is_aof_preamble);
 
 #endif

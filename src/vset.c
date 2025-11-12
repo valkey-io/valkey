@@ -11,10 +11,6 @@
 #include <stdint.h>
 #include <stdlib.h>
 
-#ifndef static_assert
-#define static_assert _Static_assert
-#endif
-
 /*
  *-----------------------------------------------------------------------------
  * Volatile Set - Adaptive, Expiry-aware Set Structure
@@ -797,7 +793,7 @@ static inline vsetBucket *vsetBucketFromRax(rax *r) {
 /* Since we do not have native posix support for qsort_r, we use this variable to help the vset
  * compare function operate entry comparison given a dynamic getExpiry function is passed to
  * different vset functions. */
-static __thread vsetGetExpiryFunc current_getter_func;
+static _Thread_local vsetGetExpiryFunc current_getter_func;
 
 static inline void vsetSetExpiryGetter(vsetGetExpiryFunc f) {
     assert(current_getter_func == NULL);
@@ -1456,14 +1452,11 @@ static inline size_t vsetBucketRemoveExpired_HASHTABLE(vsetBucket **bucket, vset
     }
     hashtableResetIterator(&it);
 
-    /* in case we completed scanning the hashtable or a single element is left, we can convert the hashtable. */
+    /* in case we completed scanning the hashtable which is now empty */
     size_t ht_size = hashtableSize(ht);
     if (ht_size == 0) {
         hashtableRelease(ht);
         *bucket = vsetBucketFromNone();
-    } else if (ht_size == 1) {
-        assert(entry);
-        *bucket = vsetBucketFromSingle(entry);
     }
     return count;
 }

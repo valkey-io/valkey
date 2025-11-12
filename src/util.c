@@ -196,6 +196,20 @@ int stringmatch(const char *pattern, const char *string, int nocase) {
     return stringmatchlen(pattern, strlen(pattern), string, strlen(string), nocase);
 }
 
+int prefixmatchlen(const char *pattern, int patternLen, const char *string, int stringLen, int nocase) {
+    if (patternLen == 1 && pattern[0] == '*') {
+        /* Minor optimization: fast path: avoid calling "stringmatchlen" if the input pattern is exactly "*":
+         * We always return 1 in this case. */
+        return 1;
+    } else if (patternLen > 0 && pattern[patternLen - 1] != '*') {
+        /* Reject the pattern if it doesn't end with '*' */
+        return 0;
+    } else {
+        /* Call existing string match algorithm */
+        return stringmatchlen(pattern, patternLen, string, stringLen, nocase);
+    }
+}
+
 /* Fuzz stringmatchlen() trying to crash it with bad input. */
 int stringmatchlen_fuzz_test(void) {
     char str[32];
@@ -1036,6 +1050,21 @@ err:
     if (len > 0) buf[0] = '\0';
     return 0;
 }
+
+/* Populate the provided seed array by hashing the provided string with SHA256
+ * and copying the first outlen bytes of the digest into the seed buffer. */
+void getHashSeedFromString(unsigned char *seed_array, size_t outlen, const char *value) {
+    SHA256_CTX ctx;
+    unsigned char digest[SHA256_BLOCK_SIZE];
+
+    sha256_init(&ctx);
+    sha256_update(&ctx, (const BYTE *)value, strlen(value));
+    sha256_final(&ctx, digest);
+
+    if (outlen > SHA256_BLOCK_SIZE) outlen = SHA256_BLOCK_SIZE;
+    memcpy(seed_array, digest, outlen);
+}
+
 
 /* Parses a version string on the form "major.minor.patch" and returns an
  * integer on the form 0xMMmmpp. Returns -1 on parse error. */

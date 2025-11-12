@@ -91,11 +91,7 @@ macro (valkey_build_and_install_bin target sources ld_flags libs link_name)
 
     if (USE_RDMA)
         # Add required libraries needed for RDMA
-        # Bug in libvalkey 0.1.0: The order is important and we need to link
-        # valkey::valkey after valkey::valkey_rdma. This will be fixed upstream.
-        # TODO: Next time we lift libvalkey, remove valkey::valkey from
-        # the next line.
-        target_link_libraries(${target} valkey::valkey_rdma valkey::valkey)
+        target_link_libraries(${target} valkey::valkey_rdma)
     endif ()
 
     if (IS_FREEBSD)

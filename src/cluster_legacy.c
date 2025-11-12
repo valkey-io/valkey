@@ -121,6 +121,13 @@ int auxTcpPortPresent(clusterNode *n);
 int auxTlsPortSetter(clusterNode *n, void *value, size_t length);
 sds auxTlsPortGetter(clusterNode *n, sds s);
 int auxTlsPortPresent(clusterNode *n);
+int auxAnnounceClientTcpPortSetter(clusterNode *n, void *value, size_t length);
+sds auxAnnounceClientTcpPortGetter(clusterNode *n, sds s);
+int auxAnnounceClientTcpPortPresent(clusterNode *n);
+int auxAnnounceClientTlsPortSetter(clusterNode *n, void *value, size_t length);
+sds auxAnnounceClientTlsPortGetter(clusterNode *n, sds s);
+int auxAnnounceClientTlsPortPresent(clusterNode *n);
+int auxAnnounceClientTlsPortPresent(clusterNode *n);
 static void clusterBuildMessageHdrLight(clusterMsgLight *hdr, int type, size_t msglen);
 static void clusterBuildMessageHdr(clusterMsg *hdr, int type, size_t msglen);
 void freeClusterLink(clusterLink *link);
@@ -144,8 +151,16 @@ int getNodeDefaultReplicationPort(clusterNode *n) {
     return server.tls_replication ? n->tls_port : n->tcp_port;
 }
 
-int clusterNodeClientPort(clusterNode *n, int use_tls) {
-    return use_tls ? n->tls_port : n->tcp_port;
+int clusterNodeClientPort(clusterNode *n, int use_tls, client *c) {
+    if (use_tls && c != NULL && n->announce_client_tls_port) {
+        return n->announce_client_tls_port;
+    } else if (use_tls) {
+        return n->tls_port;
+    } else if (c != NULL && n->announce_client_tcp_port) {
+        return n->announce_client_tcp_port;
+    } else {
+        return n->tcp_port;
+    }
 }
 
 static inline int defaultClientPort(void) {
@@ -350,6 +365,8 @@ typedef enum {
     af_tls_port,
     af_announce_client_ipv4,
     af_announce_client_ipv6,
+    af_announce_client_tcp_port,
+    af_announce_client_tls_port,
     af_count, /* must be the last field */
 } auxFieldIndex;
 
@@ -364,6 +381,8 @@ auxFieldHandler auxFieldHandlers[] = {
     {"tls-port", auxTlsPortSetter, auxTlsPortGetter, auxTlsPortPresent},
     {"client-ipv4", auxAnnounceClientIpV4Setter, auxAnnounceClientIpV4Getter, auxAnnounceClientIpV4Present},
     {"client-ipv6", auxAnnounceClientIpV6Setter, auxAnnounceClientIpV6Getter, auxAnnounceClientIpV6Present},
+    {"client-tcp-port", auxAnnounceClientTcpPortSetter, auxAnnounceClientTcpPortGetter, auxAnnounceClientTcpPortPresent},
+    {"client-tls-port", auxAnnounceClientTlsPortSetter, auxAnnounceClientTlsPortGetter, auxAnnounceClientTlsPortPresent},
 };
 
 int auxShardIdSetter(clusterNode *n, void *value, size_t length) {
@@ -501,6 +520,44 @@ sds auxTlsPortGetter(clusterNode *n, sds s) {
 
 int auxTlsPortPresent(clusterNode *n) {
     return n->tls_port >= 0 && n->tls_port < 65536;
+}
+
+int auxAnnounceClientTcpPortSetter(clusterNode *n, void *value, size_t length) {
+    if (length > 5 || length < 1) {
+        return C_ERR;
+    }
+    char buf[length + 1];
+    memcpy(buf, (char *)value, length);
+    buf[length] = '\0';
+    n->announce_client_tcp_port = atoi(buf);
+    return (n->announce_client_tcp_port < 0 || n->announce_client_tcp_port >= 65536) ? C_ERR : C_OK;
+}
+
+sds auxAnnounceClientTcpPortGetter(clusterNode *n, sds s) {
+    return sdscatfmt(s, "%i", n->announce_client_tcp_port);
+}
+
+int auxAnnounceClientTcpPortPresent(clusterNode *n) {
+    return n->announce_client_tcp_port > 0 && n->announce_client_tcp_port < 65536;
+}
+
+int auxAnnounceClientTlsPortSetter(clusterNode *n, void *value, size_t length) {
+    if (length > 5 || length < 1) {
+        return C_ERR;
+    }
+    char buf[length + 1];
+    memcpy(buf, (char *)value, length);
+    buf[length] = '\0';
+    n->announce_client_tls_port = atoi(buf);
+    return (n->announce_client_tls_port < 0 || n->announce_client_tls_port >= 65536) ? C_ERR : C_OK;
+}
+
+sds auxAnnounceClientTlsPortGetter(clusterNode *n, sds s) {
+    return sdscatfmt(s, "%i", n->announce_client_tls_port);
+}
+
+int auxAnnounceClientTlsPortPresent(clusterNode *n) {
+    return n->announce_client_tls_port > 0 && n->announce_client_tls_port < 65536;
 }
 
 /* clusterLink send queue blocks */
@@ -1055,7 +1112,11 @@ int clusterLockConfig(char *filename) {
 }
 
 /* Derives our ports to be announced in the cluster bus. */
-void deriveAnnouncedPorts(int *announced_tcp_port, int *announced_tls_port, int *announced_cport) {
+void deriveAnnouncedPorts(int *announced_tcp_port,
+                          int *announced_tls_port,
+                          int *announced_cport,
+                          int *announced_client_tcp_port,
+                          int *announced_client_tls_port) {
     /* Config overriding announced ports. */
     *announced_tcp_port = server.cluster_announce_port ? server.cluster_announce_port : server.port;
     *announced_tls_port = server.cluster_announce_tls_port ? server.cluster_announce_tls_port : server.tls_port;
@@ -1067,6 +1128,9 @@ void deriveAnnouncedPorts(int *announced_tcp_port, int *announced_tls_port, int 
     } else {
         *announced_cport = defaultClientPort() + CLUSTER_PORT_INCR;
     }
+
+    *announced_client_tcp_port = server.cluster_announce_client_port;
+    *announced_client_tls_port = server.cluster_announce_client_tls_port;
 }
 
 /* Some flags (currently just the NOFAILOVER flag) may need to be updated
@@ -1093,7 +1157,8 @@ void clusterUpdateMyselfFlags(void) {
  * The option can be set at runtime via CONFIG SET. */
 void clusterUpdateMyselfAnnouncedPorts(void) {
     if (!myself) return;
-    deriveAnnouncedPorts(&myself->tcp_port, &myself->tls_port, &myself->cport);
+    deriveAnnouncedPorts(&myself->tcp_port, &myself->tls_port, &myself->cport,
+                         &myself->announce_client_tcp_port, &myself->announce_client_tls_port);
     clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG);
 }
 
@@ -1159,6 +1224,24 @@ static void updateAnnouncedClientIpV4(clusterNode *node, char *value) {
 
 static void updateAnnouncedClientIpV6(clusterNode *node, char *value) {
     updateSdsExtensionField(&node->announce_client_ipv6, value);
+}
+
+static void updateAnnouncedClientPort(clusterNode *node, int value) {
+    if (value == node->announce_client_tcp_port) {
+        return;
+    }
+
+    node->announce_client_tcp_port = value;
+    clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG);
+}
+
+static void updateAnnouncedClientTlsPort(clusterNode *node, int value) {
+    if (value == node->announce_client_tls_port) {
+        return;
+    }
+
+    node->announce_client_tls_port = value;
+    clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG);
 }
 
 static void updateShardId(clusterNode *node, const char *shard_id) {
@@ -1311,7 +1394,8 @@ void clusterInit(void) {
 
     /* Set myself->port/cport/pport to my listening ports, we'll just need to
      * discover the IP address via MEET messages. */
-    deriveAnnouncedPorts(&myself->tcp_port, &myself->tls_port, &myself->cport);
+    deriveAnnouncedPorts(&myself->tcp_port, &myself->tls_port, &myself->cport,
+                         &myself->announce_client_tcp_port, &myself->announce_client_tls_port);
 
     server.cluster->mf_end = 0;
     server.cluster->mf_replica = NULL;
@@ -1453,7 +1537,6 @@ void clusterReset(int hard) {
     if (nodeIsReplica(myself)) {
         was_replica = 1;
         clusterSetNodeAsPrimary(myself);
-        replicationUnsetPrimary();
         flushAllDataAndResetRDB(server.lazyfree_lazy_user_flush ? EMPTYDB_ASYNC : EMPTYDB_NO_FLAGS);
     }
 
@@ -1740,6 +1823,8 @@ clusterNode *createClusterNode(char *nodename, int flags) {
     node->tcp_port = 0;
     node->cport = 0;
     node->tls_port = 0;
+    node->announce_client_tcp_port = 0;
+    node->announce_client_tls_port = 0;
     node->fail_reports = raxNew();
     node->orphaned_time = 0;
     node->repl_offset = 0;
@@ -1784,14 +1869,20 @@ static void decodeFailureReportKey(unsigned char *buf, mstime_t *report_time, cl
  * 'failing' is the node that is in failure state according to the
  * 'sender' node.
  *
- * The function returns 0 if it early‐exits (same sender & time bucket)
- * or updates a timestamp of an existing failure report from the same sender.
- * 1 is returned if a new failure report is created. */
+ * Returns 0:
+ *   - The node is already in FAIL state
+ *   - The same sender has already reported within the same time bucket
+ *   - An existing report from 'sender' was refreshed (timestamp updated)
+ * Returns 1 if a brand new failure report entry is created. */
 int clusterNodeAddFailureReport(clusterNode *failing, clusterNode *sender) {
     unsigned char buf[FAILURE_REPORT_KEYLEN];
     mstime_t now = mstime();
     const mstime_t bucketed_time = (now / SEC_IN_MS) * SEC_IN_MS + SEC_IN_MS;
     int is_new = 1;
+
+    /* This avoids unnecessary iteration and memory ops, improving performance
+     * when handling repeated reports for already failed nodes. */
+    if (nodeFailed(failing)) return 0;
 
     /* Look for any existing entry from this sender and remove it */
     raxIterator ri;
@@ -2580,7 +2671,9 @@ void clusterProcessGossipSection(clusterMsg *hdr, clusterLink *link) {
              * we have no pending ping for the node, nor we have failure
              * reports for this node, update the last pong time with the
              * one we see from the other nodes. */
-            if (!(flags & (CLUSTER_NODE_FAIL | CLUSTER_NODE_PFAIL)) && node->ping_sent == 0 &&
+            if (!(flags & (CLUSTER_NODE_FAIL | CLUSTER_NODE_PFAIL)) &&
+                nodeInNormalState(node) &&
+                node->ping_sent == 0 &&
                 clusterNodeFailureReportsCount(node) == 0) {
                 mstime_t pongtime = ntohl(g->pong_received);
                 pongtime *= 1000; /* Convert back to milliseconds. */
@@ -2601,10 +2694,8 @@ void clusterProcessGossipSection(clusterMsg *hdr, clusterLink *link) {
              * new address. */
             if (node->flags & (CLUSTER_NODE_FAIL | CLUSTER_NODE_PFAIL) && !(flags & CLUSTER_NODE_NOADDR) &&
                 !(flags & (CLUSTER_NODE_FAIL | CLUSTER_NODE_PFAIL)) &&
-                (strcasecmp(node->ip, g->ip) ||
-                 node->tls_port != (server.tls_cluster ? ntohs(g->port) : ntohs(g->pport)) ||
-                 node->tcp_port != (server.tls_cluster ? ntohs(g->pport) : ntohs(g->port)) ||
-                 node->cport != ntohs(g->cport))) {
+                (strcasecmp(node->ip, g->ip) || node->tls_port != msg_tls_port ||
+                 node->tcp_port != msg_tcp_port || node->cport != ntohs(g->cport))) {
                 if (node->link) freeClusterLink(node->link);
                 memcpy(node->ip, g->ip, NET_IP_STR_LEN);
                 node->tcp_port = msg_tcp_port;
@@ -2627,7 +2718,7 @@ void clusterProcessGossipSection(clusterMsg *hdr, clusterLink *link) {
                  * updated correctly, and we will not have the opportunity to call
                  * replicationSetPrimary and update the primary host. */
                 if (nodeIsReplica(myself) && myself->replicaof == node)
-                    replicationSetPrimary(node->ip, getNodeDefaultReplicationPort(node), 0);
+                    replicationSetPrimary(node->ip, getNodeDefaultReplicationPort(node), 0, false);
             }
         } else if (!node) {
             /* If it's not in NOADDR state and we don't have it, we
@@ -2721,7 +2812,7 @@ int nodeUpdateAddressIfNeeded(clusterNode *node, clusterLink *link, clusterMsg *
     /* Check if this is our primary and we have to change the
      * replication target as well. */
     if (nodeIsReplica(myself) && myself->replicaof == node)
-        replicationSetPrimary(node->ip, getNodeDefaultReplicationPort(node), 0);
+        replicationSetPrimary(node->ip, getNodeDefaultReplicationPort(node), 0, false);
     return 1;
 }
 
@@ -2731,6 +2822,8 @@ int nodeUpdateAddressIfNeeded(clusterNode *node, clusterLink *link, clusterMsg *
 void clusterSetNodeAsPrimary(clusterNode *n) {
     if (clusterNodeIsPrimary(n)) return;
 
+    serverLog(LL_NOTICE, "Reconfiguring node %.40s (%s) as primary for shard %.40s", n->name, n->human_nodename, n->shard_id);
+
     if (n->replicaof) {
         clusterNodeRemoveReplica(n->replicaof, n);
         if (n != myself) n->flags |= CLUSTER_NODE_MIGRATE_TO;
@@ -2738,6 +2831,10 @@ void clusterSetNodeAsPrimary(clusterNode *n) {
     n->flags &= ~CLUSTER_NODE_REPLICA;
     n->flags |= CLUSTER_NODE_PRIMARY;
     n->replicaof = NULL;
+
+    if (n == myself) {
+        replicationUnsetPrimary();
+    }
 
     /* Update config and state. */
     clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_UPDATE_STATE);
@@ -3143,6 +3240,20 @@ writeSdsPingExtIfNonempty(uint32_t *totlen_ptr, clusterMsgPingExt **cursor_ptr, 
     return 1;
 }
 
+static uint32_t
+writePortPingExtIfNonzero(uint32_t *totlen_ptr, clusterMsgPingExt **cursor_ptr, clusterMsgPingtypes type, uint16_t value) {
+    if (value == 0) return 0;
+    size_t size = getAlignedPingExtSize(sizeof(clusterMsgPingExtClientPort));
+    if (*cursor_ptr != NULL) {
+        void *ext = preparePingExt(*cursor_ptr, type, size);
+        value = htons(value);
+        memcpy(ext, &value, sizeof(value));
+        *cursor_ptr = getNextPingExt(*cursor_ptr);
+    }
+    *totlen_ptr += size;
+    return 1;
+}
+
 /* 1. If a NULL hdr is provided, compute the extension size;
  * 2. If a non-NULL hdr is provided, write the ping
  *    extensions at the start of the cursor. This function
@@ -3166,6 +3277,10 @@ static uint32_t writePingExtensions(clusterMsg *hdr, int gossipcount) {
         writeSdsPingExtIfNonempty(&totlen, &cursor, CLUSTERMSG_EXT_TYPE_CLIENT_IPV4, myself->announce_client_ipv4);
     extensions +=
         writeSdsPingExtIfNonempty(&totlen, &cursor, CLUSTERMSG_EXT_TYPE_CLIENT_IPV6, myself->announce_client_ipv6);
+    extensions +=
+        writePortPingExtIfNonzero(&totlen, &cursor, CLUSTERMSG_EXT_TYPE_CLIENT_PORT, myself->announce_client_tcp_port);
+    extensions +=
+        writePortPingExtIfNonzero(&totlen, &cursor, CLUSTERMSG_EXT_TYPE_CLIENT_TLS_PORT, myself->announce_client_tls_port);
 
     /* Gossip forgotten nodes */
     if (dictSize(server.cluster->nodes_black_list) > 0) {
@@ -3217,6 +3332,8 @@ void clusterProcessPingExtensions(clusterMsg *hdr, clusterLink *link) {
     char *ext_humannodename = NULL;
     char *ext_clientipv4 = NULL;
     char *ext_clientipv6 = NULL;
+    int ext_clientport = 0;
+    int ext_clienttlsport = 0;
     char *ext_shardid = NULL;
     uint16_t extensions = ntohs(hdr->extensions);
     /* Loop through all the extensions and process them */
@@ -3238,6 +3355,14 @@ void clusterProcessPingExtensions(clusterMsg *hdr, clusterLink *link) {
             clusterMsgPingExtClientIpV6 *clientipv6_ext =
                 (clusterMsgPingExtClientIpV6 *)&(ext->ext[0].announce_client_ipv6);
             ext_clientipv6 = clientipv6_ext->announce_client_ipv6;
+        } else if (type == CLUSTERMSG_EXT_TYPE_CLIENT_PORT) {
+            clusterMsgPingExtClientPort *clientport_ext =
+                (clusterMsgPingExtClientPort *)&(ext->ext[0].announce_client_port);
+            ext_clientport = ntohs(clientport_ext->announce_client_port);
+        } else if (type == CLUSTERMSG_EXT_TYPE_CLIENT_TLS_PORT) {
+            clusterMsgPingExtClientTlsPort *clienttlsport_ext =
+                (clusterMsgPingExtClientTlsPort *)&(ext->ext[0].announce_client_tls_port);
+            ext_clienttlsport = ntohs(clienttlsport_ext->announce_client_tls_port);
         } else if (type == CLUSTERMSG_EXT_TYPE_FORGOTTEN_NODE) {
             clusterMsgPingExtForgottenNode *forgotten_node_ext = &(ext->ext[0].forgotten_node);
             clusterNode *n = clusterLookupNode(forgotten_node_ext->name, CLUSTER_NAMELEN);
@@ -3272,6 +3397,8 @@ void clusterProcessPingExtensions(clusterMsg *hdr, clusterLink *link) {
     updateAnnouncedHumanNodename(sender, ext_humannodename);
     updateAnnouncedClientIpV4(sender, ext_clientipv4);
     updateAnnouncedClientIpV6(sender, ext_clientipv6);
+    updateAnnouncedClientPort(sender, ext_clientport);
+    updateAnnouncedClientTlsPort(sender, ext_clienttlsport);
     /* If the node did not send us a shard-id extension, it means the sender
      * does not support it (old version), node->shard_id is randomly generated.
      * A cluster-wide consensus for the node's shard_id is not necessary.
@@ -3952,6 +4079,9 @@ int clusterProcessPacket(clusterLink *link) {
             /* Make sure CLUSTER_NODE_PRIMARY has already been set by now on sender */
             serverAssert(nodeIsPrimary(sender));
 
+            serverLog(LL_NOTICE, "Mismatch in topology information for sender node %.40s (%s) in shard %.40s", sender->name,
+                      sender->human_nodename, sender->shard_id);
+
             /* 1) If the sender of the message is a primary, and we detected that
              *    the set of slots it claims changed, scan the slots to see if we
              *    need to update our configuration. */
@@ -4064,6 +4194,10 @@ int clusterProcessPacket(clusterLink *link) {
         n = clusterLookupNode(hdr->data.update.nodecfg.nodename, CLUSTER_NAMELEN);
         if (!n) return 1;                                    /* We don't know the reported node. */
         if (n->configEpoch >= reportedConfigEpoch) return 1; /* Nothing new. */
+
+        serverLog(LL_NOTICE, "Processing UPDATE message received from %.40s (%s) in shard %s about node %.40s (%s) in shard %s. old configEpoch %llu, new configEpoch %llu",
+                  sender->name, sender->human_nodename, sender->shard_id, n->name, n->human_nodename, n->shard_id,
+                  (unsigned long long)n->configEpoch, (unsigned long long)reportedConfigEpoch);
 
         /* If in our current config the node is a replica, set it as a primary. */
         if (nodeIsReplica(n)) clusterSetNodeAsPrimary(n);
@@ -4363,8 +4497,8 @@ static void clusterBuildMessageHdr(clusterMsg *hdr, int type, size_t msglen) {
     }
 
     /* Handle cluster-announce-[tls-|bus-]port. */
-    int announced_tcp_port, announced_tls_port, announced_cport;
-    deriveAnnouncedPorts(&announced_tcp_port, &announced_tls_port, &announced_cport);
+    int announced_tcp_port, announced_tls_port, announced_cport, announced_client_tcp_port, announced_client_tls_port;
+    deriveAnnouncedPorts(&announced_tcp_port, &announced_tls_port, &announced_cport, &announced_client_tcp_port, &announced_client_tls_port);
 
     memcpy(hdr->myslots, primary->slots, sizeof(hdr->myslots));
     memset(hdr->replicaof, 0, CLUSTER_NAMELEN);
@@ -4690,6 +4824,18 @@ void clusterSendUpdate(clusterLink *link, clusterNode *node) {
 
     clusterSendMessage(link, msgblock);
     clusterMsgSendBlockDecrRefCount(msgblock);
+}
+
+/* Inline functions that check support of light weight messages by node
+ * and avoid using light weight messages until the bidirectional
+ * link(s) have been established. */
+static inline bool nodeSupportsLightMsgHdrForPubSub(clusterNode *n) {
+    return n->link && n->pong_received >= n->link->ctime &&
+           (n->flags & CLUSTER_NODE_LIGHT_HDR_PUBLISH_SUPPORTED);
+}
+static inline bool nodeSupportsLightMsgHdrForModule(clusterNode *n) {
+    return n->link && n->pong_received >= n->link->ctime &&
+           (n->flags & CLUSTER_NODE_LIGHT_HDR_MODULE_SUPPORTED);
 }
 
 /* Create a MODULE message block.
@@ -5103,7 +5249,6 @@ void clusterFailoverReplaceYourPrimary(void) {
 
     /* 1) Turn this node into a primary. */
     clusterSetNodeAsPrimary(myself);
-    replicationUnsetPrimary();
 
     int remaining = old_primary->numslots;
     /* 2) Claim all the slots assigned to our primary. */
@@ -5167,6 +5312,10 @@ void clusterHandleReplicaFailover(void) {
     if (auth_timeout < CLUSTER_OPERATION_TIMEOUT) auth_timeout = CLUSTER_OPERATION_TIMEOUT;
     auth_retry_time = auth_timeout * 2;
 
+    /* Use a failover delay relative to node timeout: 500 for the default node
+     * timeout of 15000, less for lower node timeout, but not more. */
+    long long delay = min(server.cluster_node_timeout / 30, 500);
+
     /* Pre conditions to run the function, that must be met both in case
      * of an automatic or manual failover:
      * 1) We are a replica.
@@ -5212,20 +5361,27 @@ void clusterHandleReplicaFailover(void) {
      * elapsed, we can setup a new one. */
     if (auth_age > auth_retry_time) {
         server.cluster->failover_auth_time = now +
-                                             500 +           /* Fixed delay of 500 milliseconds, let FAIL msg propagate. */
-                                             random() % 500; /* Random delay between 0 and 500 milliseconds. */
+                                             delay +           /* Fixed delay to let FAIL msg propagate. */
+                                             random() % delay; /* Random delay between 0 and the fixed delay. */
         server.cluster->failover_auth_count = 0;
         server.cluster->failover_auth_sent = 0;
         server.cluster->failover_auth_rank = clusterGetReplicaRank();
         /* We add another delay that is proportional to the replica rank.
-         * Specifically 1 second * rank. This way replicas that have a probably
+         * By default, 1 second * rank. This way replicas that have a probably
          * less updated replication offset, are penalized. */
-        server.cluster->failover_auth_time += server.cluster->failover_auth_rank * 1000;
+        server.cluster->failover_auth_time += server.cluster->failover_auth_rank * (delay * 2);
+        /* If this is a newly added replica, there is a risk it doesn't know
+         * about other replicas yet, so it may think it's the best replica even
+         * if there are others with a better replication offsets. Add an extra
+         * delay to make it less likely to will win the failover. */
+        if (getNodeReplicationOffset(myself) == 0) {
+            server.cluster->failover_auth_time += 500;
+        }
         /* We add another delay that is proportional to the failed primary rank.
-         * Specifically 0.5 second * rank. This way those failed primaries will be
+         * By default, 0.5 second * rank. This way those failed primaries will be
          * elected in rank to avoid the vote conflicts. */
         server.cluster->failover_failed_primary_rank = clusterGetFailedPrimaryRank();
-        server.cluster->failover_auth_time += server.cluster->failover_failed_primary_rank * 500;
+        server.cluster->failover_auth_time += server.cluster->failover_failed_primary_rank * delay;
         /* However if this is a manual failover, no delay is needed. */
         if (server.cluster->mf_end) {
             server.cluster->failover_auth_time = now;
@@ -5262,7 +5418,7 @@ void clusterHandleReplicaFailover(void) {
     if (server.cluster->failover_auth_sent == 0 && server.cluster->mf_end == 0) {
         int newrank = clusterGetReplicaRank();
         if (newrank != server.cluster->failover_auth_rank) {
-            long long added_delay = (newrank - server.cluster->failover_auth_rank) * 1000;
+            long long added_delay = (newrank - server.cluster->failover_auth_rank) * (delay * 2);
             server.cluster->failover_auth_time += added_delay;
             server.cluster->failover_auth_rank = newrank;
             serverLog(LL_NOTICE, "Replica rank updated to #%d, added %lld milliseconds of delay.", newrank,
@@ -5271,7 +5427,7 @@ void clusterHandleReplicaFailover(void) {
 
         int new_failed_primary_rank = clusterGetFailedPrimaryRank();
         if (new_failed_primary_rank != server.cluster->failover_failed_primary_rank) {
-            long long added_delay = (new_failed_primary_rank - server.cluster->failover_failed_primary_rank) * 500;
+            long long added_delay = (new_failed_primary_rank - server.cluster->failover_failed_primary_rank) * delay;
             server.cluster->failover_auth_time += added_delay;
             server.cluster->failover_failed_primary_rank = new_failed_primary_rank;
             serverLog(LL_NOTICE, "Failed primary rank updated to #%d, added %lld milliseconds of delay.",
@@ -5813,7 +5969,7 @@ void clusterCron(void) {
      * enable it if we know the address of our primary and it appears to
      * be up. */
     if (nodeIsReplica(myself) && server.primary_host == NULL && myself->replicaof && nodeHasAddr(myself->replicaof)) {
-        replicationSetPrimary(myself->replicaof->ip, getNodeDefaultReplicationPort(myself->replicaof), 0);
+        replicationSetPrimary(myself->replicaof->ip, getNodeDefaultReplicationPort(myself->replicaof), 0, false);
     }
 
     /* Abort a manual failover if the timeout is reached. */
@@ -6239,6 +6395,9 @@ int verifyClusterConfigWithData(void) {
      * completely depend on the replication stream. */
     if (nodeIsReplica(myself)) return C_OK;
 
+    /* Allow slot migrations to clean up after reloading */
+    clusterCleanSlotImportsAfterLoad();
+
     /* Check that all the slots we see populated memory have a corresponding
      * entry in the cluster table. Otherwise fix the table. */
     for (j = 0; j < CLUSTER_SLOTS; j++) {
@@ -6314,11 +6473,11 @@ static void clusterSetPrimary(clusterNode *n, int closeSlots, int full_sync_requ
     myself->replicaof = n;
     updateShardId(myself, n->shard_id);
     clusterNodeAddReplica(n, myself);
-    replicationSetPrimary(n->ip, getNodeDefaultReplicationPort(n), full_sync_required);
+    replicationSetPrimary(n->ip, getNodeDefaultReplicationPort(n), full_sync_required, true);
     removeAllNotOwnedShardChannelSubscriptions();
     resetManualFailover();
 
-    /* Becoming a replica cancels all in progress imports and exports */
+    /* Perform needed slot migration state transitions */
     clusterUpdateSlotExportsOnOwnershipChange();
     clusterUpdateSlotImportsOnOwnershipChange();
 
@@ -6390,7 +6549,7 @@ sds representSlotInfo(sds ci, uint16_t *slot_info_pairs, int slot_info_pairs_cou
 sds clusterGenNodeDescription(client *c, clusterNode *node, int tls_primary) {
     int j, start;
     sds ci;
-    int port = clusterNodeClientPort(node, tls_primary);
+    int port = clusterNodeClientPort(node, tls_primary, c);
     char *ip = clusterNodeIp(node, c);
 
     /* Node coordinates */
@@ -6711,13 +6870,13 @@ void addNodeDetailsToShardReply(client *c, clusterNode *node) {
 
     if (node->tcp_port) {
         addReplyBulkCString(c, "port");
-        addReplyLongLong(c, node->tcp_port);
+        addReplyLongLong(c, clusterNodeClientPort(node, false, c));
         reply_count++;
     }
 
     if (node->tls_port) {
         addReplyBulkCString(c, "tls-port");
-        addReplyLongLong(c, node->tls_port);
+        addReplyLongLong(c, clusterNodeClientPort(node, true, c));
         reply_count++;
     }
 
@@ -6760,9 +6919,11 @@ void addNodeDetailsToShardReply(client *c, clusterNode *node) {
     setDeferredMapLen(c, node_replylen, reply_count);
 }
 
-/* Add to the output buffer of the given client, an array of slot (start, end)
- * pair owned by the shard, also the primary and set of replica(s) along with
- * information about each node. */
+/* Add to the output buffer of the given client,
+ * an array of slot (start, end) pair owned by the shard,
+ * an array of the primary and set of replica(s) along with information about each node,
+ * and shard id.
+ */
 void clusterCommandShards(client *c) {
     addReplyArrayLen(c, dictSize(server.cluster->shards));
     /* This call will add slot_info_pairs to all nodes */
@@ -6771,7 +6932,7 @@ void clusterCommandShards(client *c) {
     for (dictEntry *de = dictNext(di); de != NULL; de = dictNext(di)) {
         list *nodes = dictGetVal(de);
         serverAssert(listLength(nodes) > 0);
-        addReplyMapLen(c, 2);
+        addReplyMapLen(c, 3);
         addReplyBulkCString(c, "slots");
 
         /* Find a node which has the slot information served by this shard. */
@@ -6804,6 +6965,8 @@ void clusterCommandShards(client *c) {
             addNodeDetailsToShardReply(c, n);
             clusterFreeNodesSlotsInfo(n);
         }
+        addReplyBulkCString(c, "id");
+        addReplyBulkCBuffer(c, dictGetKey(de), CLUSTER_NAMELEN);
     }
     dictReleaseIterator(di);
 }
@@ -7555,13 +7718,8 @@ int clusterCommandSpecial(client *c) {
             serverLog(LL_NOTICE, "Stop replication and turning myself into empty primary (request from '%s').", client);
             sdsfree(client);
             clusterSetNodeAsPrimary(myself);
-
-            /* Flush the data before promoting myself, since promotion will try
-             * to delete data in unowned slots, and we know all data will be
-             * removed anyways. */
             flushAllDataAndResetRDB(server.repl_replica_lazy_flush ? EMPTYDB_ASYNC : EMPTYDB_NO_FLAGS);
-            clusterPromoteSelfToPrimary();
-
+            verifyClusterConfigWithData();
             clusterCloseAllSlots();
             resetManualFailover();
 

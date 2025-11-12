@@ -40,6 +40,7 @@
 #include "functions.h"
 #include "connection.h"
 #include "module.h"
+#include "cluster_migrateslots.h"
 
 #include <memory.h>
 #include <sys/time.h>
@@ -1719,11 +1720,7 @@ void rdbPipeWriteHandler(struct connection *conn) {
         return;
     } else {
         replica->repl_data->repldboff += nwritten;
-        if (getClientType(replica) == CLIENT_TYPE_SLOT_EXPORT) {
-            server.stat_net_cluster_slot_export_bytes += nwritten;
-        } else {
-            server.stat_net_repl_output_bytes += nwritten;
-        }
+        server.stat_net_repl_output_bytes += nwritten;
         if (replica->repl_data->repldboff < server.rdb_pipe_bufflen) {
             replica->repl_data->repl_last_partial_write = server.unixtime;
             return; /* more data to write.. */
@@ -1797,11 +1794,7 @@ void rdbPipeReadHandler(struct aeEventLoop *eventLoop, int fd, void *clientData,
                 /* Note: when use diskless replication, 'repldboff' is the offset
                  * of 'rdb_pipe_buff' sent rather than the offset of entire RDB. */
                 replica->repl_data->repldboff = nwritten;
-                if (getClientType(replica) == CLIENT_TYPE_SLOT_EXPORT) {
-                    server.stat_net_cluster_slot_export_bytes += nwritten;
-                } else {
-                    server.stat_net_repl_output_bytes += nwritten;
-                }
+                server.stat_net_repl_output_bytes += nwritten;
             }
             /* If we were unable to write all the data to one of the replicas,
              * setup write handler (and disable pipe read handler, below) */
@@ -1816,6 +1809,96 @@ void rdbPipeReadHandler(struct aeEventLoop *eventLoop, int fd, void *clientData,
         if (server.rdb_pipe_numconns_writing) {
             aeDeleteFileEvent(server.el, server.rdb_pipe_read, AE_READABLE);
             break;
+        }
+    }
+}
+
+/* Called in slot migration source during transfer of data from the slot migration pipe, when
+ * the target becomes writable again. */
+void slotMigrationPipeWriteHandler(struct connection *conn) {
+    serverAssert(server.slot_migration_pipe_bufflen > 0);
+    client *target = connGetPrivateData(conn);
+    ssize_t nwritten;
+    if ((nwritten = connWrite(conn, server.slot_migration_pipe_buff + target->repl_data->repldboff,
+                              server.slot_migration_pipe_bufflen - target->repl_data->repldboff)) == -1) {
+        if (connGetState(conn) == CONN_STATE_CONNECTED) return; /* equivalent to EAGAIN */
+        serverLog(LL_WARNING, "Write error sending slot migration snapshot to target: %s", connGetLastError(conn));
+        freeClient(target);
+        return;
+    } else {
+        target->repl_data->repldboff += nwritten;
+        server.stat_net_cluster_slot_export_bytes += nwritten;
+        if (target->repl_data->repldboff < server.slot_migration_pipe_bufflen) {
+            target->repl_data->repl_last_partial_write = server.unixtime;
+            return; /* more data to write.. */
+        }
+    }
+
+    /* Remove the write handler and setup the pipe read handler. */
+    connSetWriteHandler(conn, NULL);
+    target->repl_data->repl_last_partial_write = 0;
+    if (aeCreateFileEvent(server.el, server.slot_migration_pipe_read, AE_READABLE, slotMigrationPipeReadHandler, NULL) == AE_ERR) {
+        serverPanic("Unrecoverable error creating server.slot_migration_pipe_read file event.");
+    }
+}
+
+/* Called in slot migration source, when there's data to read from the child's slot migration pipe. */
+void slotMigrationPipeReadHandler(struct aeEventLoop *eventLoop, int fd, void *clientData, int mask) {
+    UNUSED(mask);
+    UNUSED(clientData);
+    UNUSED(eventLoop);
+    if (!server.slot_migration_pipe_buff) server.slot_migration_pipe_buff = zmalloc(PROTO_IOBUF_LEN);
+
+    /* No work to do if our connection has been closed. */
+    if (!server.slot_migration_pipe_conn) return;
+
+    while (1) {
+        server.slot_migration_pipe_bufflen = read(fd, server.slot_migration_pipe_buff, PROTO_IOBUF_LEN);
+        if (server.slot_migration_pipe_bufflen < 0) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK) return;
+            serverLog(LL_WARNING, "Slot migration, read error sending snapshot to target: %s", strerror(errno));
+            client *target = connGetPrivateData(server.slot_migration_pipe_conn);
+            freeClient(target); /* Free client will kill the slot migration child */
+            server.slot_migration_pipe_conn = NULL;
+            return;
+        }
+
+        if (server.slot_migration_pipe_bufflen == 0) {
+            /* EOF - write end was closed. */
+            aeDeleteFileEvent(server.el, server.slot_migration_pipe_read, AE_READABLE);
+            /* Now that the target have finished reading, notify the child that it's safe to exit.
+             * When the server detects the child has exited, it can mark the target as online, and
+             * start streaming the slot replication buffers. */
+            close(server.slot_migration_child_exit_pipe);
+            server.slot_migration_child_exit_pipe = -1;
+            return;
+        }
+
+        ssize_t nwritten;
+        connection *conn = server.slot_migration_pipe_conn;
+        client *target = connGetPrivateData(conn);
+        if ((nwritten = connWrite(conn, server.slot_migration_pipe_buff, server.slot_migration_pipe_bufflen)) == -1) {
+            if (connGetState(conn) != CONN_STATE_CONNECTED) {
+                serverLog(LL_WARNING, "Slot migration transfer, write error sending DB to target: %s",
+                          connGetLastError(conn));
+                freeClient(target); /* Free client will kill the slot migration child */
+                server.slot_migration_pipe_conn = NULL;
+                return;
+            }
+            /* An error and still in connected state, is equivalent to EAGAIN */
+            target->repl_data->repldboff = 0;
+        } else {
+            /* Note: when use diskless replication, 'repldboff' is the offset
+             * of 'slot_migration_pipe_buff' sent rather than the offset of entire snapshot. */
+            target->repl_data->repldboff = nwritten;
+            server.stat_net_cluster_slot_export_bytes += nwritten;
+        }
+        /* If we were unable to write all the data to the target,
+         * setup write handler and disable pipe read handler. */
+        if (nwritten != server.slot_migration_pipe_bufflen) {
+            connSetWriteHandler(conn, slotMigrationPipeWriteHandler);
+            aeDeleteFileEvent(server.el, server.slot_migration_pipe_read, AE_READABLE);
+            return;
         }
     }
 }
@@ -2102,7 +2185,7 @@ functionsLibCtx *disklessLoadFunctionsLibCtxCreate(void) {
 /* Helper function to discard our temp function lib context
  * when the loading succeeded or failed. */
 void disklessLoadDiscardFunctionsLibCtx(functionsLibCtx *temp_functions_lib_ctx) {
-    freeFunctionsAsync(temp_functions_lib_ctx);
+    freeFunctionsAsync(temp_functions_lib_ctx, NULL);
 }
 
 /* If we know we got an entirely different data set from our primary
@@ -2114,6 +2197,9 @@ void replicationAttachToNewPrimary(void) {
      * primary structure. */
     serverAssert(server.primary == NULL);
     replicationDiscardCachedPrimary();
+
+    /* Cancel any in progress imports (we will now use the primary's) */
+    clusterCleanSlotImportsOnFullSync();
 
     disconnectReplicas();     /* Force our replicas to resync with us as well. */
     freeReplicationBacklog(); /* Don't allow our chained replicas to PSYNC. */
@@ -4012,7 +4098,7 @@ void syncWithPrimary(connection *conn) {
      * could happen in edge cases. */
     if (server.failover_state == FAILOVER_IN_PROGRESS) {
         if (psync_result == PSYNC_CONTINUE || psync_result == PSYNC_FULLRESYNC) {
-            clearFailoverState();
+            clearFailoverState(true);
         } else {
             abortFailover("Failover target rejected psync request");
             return;
@@ -4083,7 +4169,7 @@ void syncWithPrimary(connection *conn) {
         if (connConnect(server.repl_rdb_transfer_s, server.primary_host, server.primary_port, server.bind_source_addr,
                         server.repl_mptcp, dualChannelFullSyncWithPrimary) == C_ERR) {
             dualChannelServerLog(LL_WARNING, "Unable to connect to Primary: %s",
-                                 connGetLastError(server.repl_transfer_s));
+                                 connGetLastError(server.repl_rdb_transfer_s));
             connClose(server.repl_rdb_transfer_s);
             server.repl_rdb_transfer_s = NULL;
             syncWithPrimaryHandleError(&conn);
@@ -4229,7 +4315,7 @@ int cancelReplicationHandshake(int reconnect) {
 }
 
 /* Set replication to the specified primary address and port. */
-void replicationSetPrimary(char *ip, int port, int full_sync_required) {
+void replicationSetPrimary(char *ip, int port, int full_sync_required, bool disconnect_blocked) {
     int was_primary = server.primary_host == NULL;
 
     sdsfree(server.primary_host);
@@ -4243,13 +4329,18 @@ void replicationSetPrimary(char *ip, int port, int full_sync_required) {
         server.primary->flag.dont_cache_primary = full_sync_required;
         freeClient(server.primary);
     }
-    disconnectAllBlockedClients(); /* Clients blocked in primary, now replica. */
 
     /* Setting primary_host only after the call to freeClient since it calls
      * replicationHandlePrimaryDisconnection which can trigger a re-connect
      * directly from within that call. */
     server.primary_host = sdsnew(ip);
     server.primary_port = port;
+
+    /* Clients blocked in primary, now replica.
+     * Note that we need to set the new primary first
+     * since unblocking clients require redirecting to the new primary */
+    if (disconnect_blocked)
+        disconnectOrRedirectAllBlockedClients();
 
     /* Update oom_score_adj */
     setOOMScoreAdj(-1);
@@ -4336,6 +4427,9 @@ void replicationUnsetPrimary(void) {
     /* Restart the AOF subsystem in case we shut it down during a sync when
      * we were still a replica. */
     if (server.aof_enabled && server.aof_state == AOF_OFF) restartAOFAfterSYNC();
+
+    /* Cancel any ongoing atomic slot migrations */
+    clusterCleanSlotImportsOnPromotion();
 }
 
 /* This function is called when the replica lose the connection with the
@@ -4406,7 +4500,7 @@ void replicaofCommand(client *c) {
         }
         /* There was no previous primary or the user specified a different one,
          * we can continue. */
-        replicationSetPrimary(c->argv[1]->ptr, port, 0);
+        replicationSetPrimary(c->argv[1]->ptr, port, 0, true);
         sds client = catClientInfoShortString(sdsempty(), c, server.hide_user_data_from_log);
         serverLog(LL_NOTICE, "REPLICAOF %s:%d enabled (user request from '%s')", server.primary_host,
                   server.primary_port, client);
@@ -4543,6 +4637,10 @@ void replicationCachePrimary(client *c) {
     c->bufpos = 0;
     resetClient(c);
     resetClientIOState(c);
+    c->reqtype = 0;
+    c->multibulklen = 0;
+    c->bulklen = -1;
+    discardCommandQueue(c);
 
     /* Save the primary. Server.primary will be set to null later by
      * replicationHandlePrimaryDisconnection(). */
@@ -5301,13 +5399,14 @@ const char *getFailoverStateString(void) {
 /* Resets the internal failover configuration, this needs
  * to be called after a failover either succeeds or fails
  * as it includes the client unpause. */
-void clearFailoverState(void) {
+void clearFailoverState(bool success) {
     server.failover_end_time = 0;
     server.force_failover = 0;
     zfree(server.target_replica_host);
     server.target_replica_host = NULL;
     server.target_replica_port = 0;
     server.failover_state = NO_FAILOVER;
+    if (success) disconnectOrRedirectAllBlockedClients();
     unpauseActions(PAUSE_DURING_FAILOVER);
 }
 
@@ -5324,7 +5423,7 @@ void abortFailover(const char *err) {
     if (server.failover_state == FAILOVER_IN_PROGRESS) {
         replicationUnsetPrimary();
     }
-    clearFailoverState();
+    clearFailoverState(false);
 }
 
 /*
@@ -5456,9 +5555,8 @@ void failoverCommand(client *c) {
 /* Failover cron function, checks coordinated failover state.
  *
  * Implementation note: The current implementation calls replicationSetPrimary()
- * to start the failover request, this has some unintended side effects if the
- * failover doesn't work like blocked clients will be unblocked and replicas will
- * be disconnected. This could be optimized further.
+ * to start the failover request, but blocked clients are no longer processed during
+ * failover. Instead, their handling is deferred and performed later in clearFailoverState().
  */
 void updateFailoverStatus(void) {
     if (server.failover_state != FAILOVER_WAIT_FOR_SYNC) return;
@@ -5471,7 +5569,7 @@ void updateFailoverStatus(void) {
                       server.target_replica_port);
             server.failover_state = FAILOVER_IN_PROGRESS;
             /* If timeout has expired force a failover if requested. */
-            replicationSetPrimary(server.target_replica_host, server.target_replica_port, 0);
+            replicationSetPrimary(server.target_replica_host, server.target_replica_port, 0, false);
             return;
         } else {
             /* Force was not requested, so timeout. */
@@ -5514,6 +5612,6 @@ void updateFailoverStatus(void) {
         serverLog(LL_NOTICE, "Failover target %s:%d is synced, failing over.", server.target_replica_host,
                   server.target_replica_port);
         /* Designated replica is caught up, failover to it. */
-        replicationSetPrimary(server.target_replica_host, server.target_replica_port, 0);
+        replicationSetPrimary(server.target_replica_host, server.target_replica_port, 0, false);
     }
 }

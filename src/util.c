@@ -202,10 +202,10 @@ int prefixmatchlen(const char *pattern, int patternLen, const char *string, int 
          * We always return 1 in this case. */
         return 1;
     } else if (patternLen > 0 && pattern[patternLen - 1] != '*') {
-        // Reject the pattern if it doesn't end with '*'
+        /* Reject the pattern if it doesn't end with '*' */
         return 0;
     } else {
-        // Call existing string match algorithm
+        /* Call existing string match algorithm */
         return stringmatchlen(pattern, patternLen, string, stringLen, nocase);
     }
 }

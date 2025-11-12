@@ -1543,8 +1543,7 @@ user *ACLGetUserByName(const char *name, size_t namelen) {
  * ACL permission checks
  * ==========================================================================*/
 
-/**
- * Checks whether a given key is allowed for the specified ACL selector.
+/* Checks whether a given key is allowed for the specified ACL selector.
  *
  * The function evaluates the key against the selector's patterns, taking into account
  * the requested key access flags (read/write) and whether the key should be
@@ -1711,7 +1710,7 @@ static int ACLSelectorCheckCmd(aclSelector *selector,
         keyReference *resultidx = result->keys;
         for (int j = 0; j < result->numkeys; j++) {
             int idx = resultidx[j].pos;
-            ret = ACLSelectorCheckKey(selector, argv[idx]->ptr, sdslen(argv[idx]->ptr), resultidx[j].flags, 0);
+            ret = ACLSelectorCheckKey(selector, argv[idx]->ptr, sdslen(argv[idx]->ptr), resultidx[j].flags, false);
             if (ret != ACL_OK) {
                 if (keyidxptr) *keyidxptr = resultidx[j].pos;
                 return ret;
@@ -1744,8 +1743,7 @@ static int ACLSelectorCheckCmd(aclSelector *selector,
     return ACL_OK;
 }
 
-/**
- * Checks whether the given user has permission to access a specified key.
+/* Checks whether the given user has permission to access a specified key.
  *
  * This function verifies the access control list (ACL) permissions for a user on a key.
  * If the user pointer is  NULL, the connection is considered authorized to run any

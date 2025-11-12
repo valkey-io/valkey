@@ -1433,6 +1433,7 @@ typedef struct zskiplistNode {
          * So we use it in order to hold the height of the node, which is the number of levels. */
         unsigned long span;
     } level[];
+    /* After the level[], sds header length (1 byte) and an embedded sds element are stored. */
 } zskiplistNode;
 
 typedef struct zskiplist {

@@ -143,6 +143,7 @@ static zskiplistNode *zslCreateNode(int height, double score, const_sds ele) {
     return zn;
 }
 
+/* Helper function to return the element string from a skip list node. */
 sds zslGetNodeElement(const zskiplistNode *x) {
     unsigned char *data = (void *)(x + 1);
     data += zslGetNodeHeight(x) * sizeof(struct zskiplistLevel);
@@ -220,7 +221,8 @@ static int zslCompareNodes(const zskiplistNode *a, const zskiplistNode *b) {
 }
 
 /* Insert a node in the skiplist. Assumes the element does not already exist in
- * the skiplist (up to the caller to enforce that). */
+ * the skiplist (up to the caller to enforce that). The skiplist takes ownership
+ * of the passed node. */
 static zskiplistNode *zslInsertNode(zskiplist *zsl, zskiplistNode *node) {
     zskiplistNode *update[ZSKIPLIST_MAXLEVEL];
     unsigned long rank[ZSKIPLIST_MAXLEVEL];
@@ -496,7 +498,9 @@ static unsigned long zslDeleteRangeByLex(zskiplist *zsl, zlexrangespec *range, h
     x = zsl->header;
     for (i = zsl->level - 1; i >= 0; i--) {
         while (x->level[i].forward &&
-               !zslLexValueGteMin(zslGetNodeElement(x->level[i].forward), range)) x = x->level[i].forward;
+               !zslLexValueGteMin(zslGetNodeElement(x->level[i].forward), range)) {
+            x = x->level[i].forward;
+        }
         update[i] = x;
     }
 

@@ -7746,8 +7746,12 @@ unsigned int countKeysInSlot(unsigned int hashslot) {
 }
 
 clusterNode *clusterNodeGetMaster(clusterNode *node) {
-    while (node->slaveof != NULL) node = node->slaveof;
-    return node;
+    clusterNode *master = node; 
+    while (master->slaveof != NULL) {
+        master = master->slaveof;
+        if (master == node) break; 
+    } 
+    return master;
 }
 
 /* -----------------------------------------------------------------------------

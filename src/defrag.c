@@ -271,7 +271,6 @@ static void activeDefragZsetNode(void *privdata, void *entry_ref) {
     if (newnode == NULL) return;
 
     const double score = node->score;
-    const sds ele = zslGetNodeElement(node);
 
     /* find skiplist pointers that need to be updated if we end up moving the
      * skiplist node. */

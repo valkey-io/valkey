@@ -116,7 +116,7 @@ static inline void zslSetNodeHeight(zskiplistNode *x, int height) {
 
 /* Create a skiplist node with the specified number of levels.
  * By embedding elements and levels into the skiplist nodes,
- * we achieve better cache-friendliness and a more compact memory structure.
+ * we achieve good cache-friendliness and a compact memory structure.
  *
  * The memory layout is as follows:
  *

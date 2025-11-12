@@ -283,7 +283,7 @@ static void activeDefragZsetNode(void *privdata, void *entry_ref) {
         zskiplistNode *next = x->level[i].forward;
         while (next &&
                (next->score < score ||
-                (next->score == score && sdscmp(zslGetNodeElement(next), ele) < 0))) {
+                (next->score == score && next != node))) {
             x = next;
             next = x->level[i].forward;
         }

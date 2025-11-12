@@ -277,7 +277,7 @@ static zskiplistNode *zslInsertNode(zskiplist *zsl, zskiplistNode *node) {
 
 /* Insert a new node in the skiplist. Assumes the element does not already
  * exist (up to the caller to enforce that). The string 'ele' is copied. */
-zskiplistNode *zslInsert(zskiplist *zsl, double score, sds ele) {
+zskiplistNode *zslInsert(zskiplist *zsl, double score, const_sds ele) {
     const int level = zslRandomLevel();
     zskiplistNode *node = zslCreateNode(level, score, ele);
     zslInsertNode(zsl, node);

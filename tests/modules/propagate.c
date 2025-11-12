@@ -37,11 +37,10 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
+ #include "util.h"
 #include "valkeymodule.h"
 #include <pthread.h>
 #include <errno.h>
-
-#define UNUSED(V) ((void) V)
 
 ValkeyModuleCtx *detached_ctx = NULL;
 

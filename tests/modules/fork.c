@@ -3,12 +3,11 @@
 #define _BSD_SOURCE
 #define _DEFAULT_SOURCE
 
+#include "util.h"
 #include "valkeymodule.h"
 #include <string.h>
 #include <assert.h>
 #include <unistd.h>
-
-#define UNUSED(V) ((void) V)
 
 int child_pid = -1;
 int exited_with_code = -1;

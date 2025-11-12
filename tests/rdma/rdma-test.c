@@ -15,6 +15,7 @@
 #else /* __linux__ */
 
 #define _GNU_SOURCE
+#include "util.h"
 #include <arpa/inet.h>
 #include <assert.h>
 #include <endian.h>
@@ -76,7 +77,6 @@ typedef enum valkeyRdmaOpcode {
 } valkeyRdmaOpcode;
 
 #define MAX_THREADS 32
-#define UNUSED(x) (void)(x)
 #define MIN(a, b) (a) < (b) ? a : b
 #define VALKEY_RDMA_MAX_WQE 1024
 #define VALKEY_RDMA_DEFAULT_RX_LEN  (1024*1024)

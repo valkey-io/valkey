@@ -1,11 +1,10 @@
 #define _XOPEN_SOURCE 700
+#include "util.h"
 #include "valkeymodule.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <pthread.h>
 #include <time.h>
-
-#define UNUSED(x) (void)(x)
 
 typedef struct {
     /* Mutex for protecting ValkeyModule_BlockedClientMeasureTime*() API from race

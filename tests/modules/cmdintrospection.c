@@ -1,6 +1,5 @@
+#include "util.h"
 #include "valkeymodule.h"
-
-#define UNUSED(V) ((void) V)
 
 int cmd_xadd(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     UNUSED(argv);

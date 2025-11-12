@@ -1,6 +1,5 @@
+#include "util.h"
 #include "valkeymodule.h"
-
-#define UNUSED(V) ((void) V)
 
 /* This function implements all commands in this module. All we care about is
  * the COMMAND metadata anyway. */

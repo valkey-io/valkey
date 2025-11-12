@@ -3,13 +3,12 @@
 #define _DEFAULT_SOURCE
 #include <unistd.h>
 
+#include "util.h"
 #include "valkeymodule.h"
 #include <assert.h>
 #include <stdio.h>
 #include <pthread.h>
 #include <strings.h>
-
-#define UNUSED(V) ((void) V)
 
 /* used to test processing events during slow bg operation */
 static volatile int g_slow_bg_operation = 0;

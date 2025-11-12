@@ -1,7 +1,6 @@
+#include "util.h"
 #include "valkeymodule.h"
 #include <string.h>
-
-#define UNUSED(x) (void)(x)
 
 int test_cluster_slots(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     UNUSED(argv);

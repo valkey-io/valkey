@@ -3629,7 +3629,7 @@ int clusterProcessPacket(clusterLink *link) {
             serverLog(
                 LL_NOTICE,
                 "Closing link for node %.40s that sent a lightweight message of type %s as its first message on the link",
-                link->node ? link->node->name : "(unknown)",
+                link->node ? link->node->name : "<unknown>",
                 clusterGetMessageTypeString(type));
             freeClusterLink(link);
             return 0;

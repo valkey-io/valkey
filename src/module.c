@@ -6773,6 +6773,9 @@ cleanup:
 
     if (reply) autoMemoryAdd(ctx, VALKEYMODULE_AM_REPLY, reply);
     if (ctx->module) ctx->module->in_call--;
+    if (is_running_script) {
+        scriptClusterSlotStatsInvalidateSlotIfApplicable();
+    }
     if (c) moduleReleaseTempClient(c);
     return reply;
 }

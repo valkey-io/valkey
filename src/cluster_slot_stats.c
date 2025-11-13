@@ -226,14 +226,6 @@ void clusterSlotStatsAddCpuDuration(client *c, ustime_t duration) {
     server.cluster->slot_stats[c->slot].cpu_usec += duration;
 }
 
-/* For cross-slot scripting, its caller client's slot must be invalidated,
- * such that its slot-stats aggregation is bypassed. */
-void clusterSlotStatsInvalidateSlotIfApplicable(scriptRunCtx *ctx) {
-    if (!(ctx->flags & SCRIPT_ALLOW_CROSS_SLOT)) return;
-
-    ctx->original_client->slot = -1;
-}
-
 static int canAddNetworkBytesIn(client *c) {
     /* First, cluster mode must be enabled.
      * Second, command should target a specific slot.

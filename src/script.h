@@ -127,6 +127,7 @@ int scriptAllowsCrossSlot(void);
 int scriptGetSlot(void);
 void scriptSetSlot(int slot);
 void scriptSetOriginalClientSlot(int slot);
+void scriptClusterSlotStatsInvalidateSlotIfApplicable(void);
 
 sds scriptGetRunningEngineName(void);
 

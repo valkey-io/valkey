@@ -5228,9 +5228,6 @@ void addReplyCommandSubCommands(client *c,
     hashtableResetIterator(&iter);
 }
 
-/* Forward declaration */
-void addReplyCommandInfo(client *c, struct serverCommand *cmd);
-
 /* Collect all output from a caching client (both buffer and reply list) */
 static sds collectCachedResponse(client *c) {
     sds response = sdsempty();
@@ -5252,6 +5249,9 @@ static sds collectCachedResponse(client *c) {
     
     return response;
 }
+
+/* Forward declaration */
+void addReplyCommandInfo(client *c, struct serverCommand *cmd);
 
 /* Generate and cache the command info response for a given protocol version */
 static void cacheCommandInfo(struct serverCommand *cmd, int resp) {
@@ -5423,7 +5423,6 @@ void getKeysSubcommand(client *c) {
     getKeysSubcommandImpl(c, 0);
 }
 
-/* COMMAND (no args) */
 /* Invalidate the cached COMMAND response when command table changes */
 void invalidateCommandCache(void) {
     if (server.command_response_cache_resp2) {
@@ -5459,6 +5458,7 @@ static void cacheCommandResponse(int resp) {
     deleteCachedResponseClient(caching_client);
 }
 
+/* COMMAND (no args) */
 void commandCommand(client *c) {
     /* Use cached response if available for the client's protocol version */
     sds *cache = (c->resp == 2) ? &server.command_response_cache_resp2 : &server.command_response_cache_resp3;

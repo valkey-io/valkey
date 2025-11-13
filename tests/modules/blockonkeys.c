@@ -1,10 +1,11 @@
-#include "util.h"
 #include "valkeymodule.h"
 
 #include <string.h>
 #include <strings.h>
 #include <assert.h>
 #include <unistd.h>
+
+#define UNUSED(V) ((void) V)
 
 #define LIST_SIZE 1024
 

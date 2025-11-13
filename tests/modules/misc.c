@@ -1,4 +1,3 @@
-#include "util.h"
 #include "valkeymodule.h"
 
 #include <string.h>
@@ -6,6 +5,8 @@
 #include <unistd.h>
 #include <errno.h>
 #include <limits.h>
+
+#define UNUSED(x) (void)(x)
 
 static int n_events = 0;
 

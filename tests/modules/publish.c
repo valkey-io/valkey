@@ -1,8 +1,9 @@
-#include "util.h"
 #include "valkeymodule.h"
 #include <string.h>
 #include <assert.h>
 #include <unistd.h>
+
+#define UNUSED(V) ((void) V)
 
 int cmd_publish_classic_multi(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc)
 {

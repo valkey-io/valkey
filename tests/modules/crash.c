@@ -1,8 +1,9 @@
-#include "util.h"
 #include "valkeymodule.h"
 
 #include <strings.h>
 #include <sys/mman.h>
+
+#define UNUSED(V) ((void) V)
 
 void assertCrash(ValkeyModuleInfoCtx *ctx, int for_crash_report) {
     UNUSED(ctx);

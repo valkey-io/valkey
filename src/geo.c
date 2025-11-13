@@ -826,6 +826,8 @@ void georadiusGeneric(client *c, int srcKeyIndex, int flags) {
             totelelen += elelen;
             znode = zslInsert(zs->zsl, score, gp->member);
             serverAssert(hashtableAdd(zs->ht, znode));
+            sdsfree(gp->member);
+            gp->member = NULL;
         }
 
         if (returned_items) {

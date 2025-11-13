@@ -1,7 +1,8 @@
-#include "util.h"
 #include "valkeymodule.h"
 #include <pthread.h>
 #include <assert.h>
+
+#define UNUSED(V) ((void) V)
 
 ValkeyModuleUser *user = NULL;
 

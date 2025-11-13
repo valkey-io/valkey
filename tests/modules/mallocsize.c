@@ -1,8 +1,9 @@
-#include "util.h"
 #include "valkeymodule.h"
 #include <string.h>
 #include <assert.h>
 #include <unistd.h>
+
+#define UNUSED(V) ((void) V)
 
 /* Registered type */
 ValkeyModuleType *mallocsize_type = NULL;

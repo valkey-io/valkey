@@ -1,7 +1,8 @@
-#include "util.h"
 #include "valkeymodule.h"
 #include <math.h>
 #include <errno.h>
+
+#define UNUSED(V) ((void) V)
 
 /* ZSET.REM key element
  *

@@ -1,9 +1,11 @@
-#include "util.h"
+
 #include "valkeymodule.h"
 #include <strings.h>
 #include <assert.h>
 #include <unistd.h>
 #include <errno.h>
+
+#define UNUSED(V) ((void) V)
 
 /* A sample movable keys command that returns a list of all
  * arguments that follow a KEY argument, i.e.

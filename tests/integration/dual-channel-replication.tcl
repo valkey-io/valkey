@@ -850,6 +850,8 @@ start_server {tags {"dual-channel-replication external:skip"}} {
         stop_write_load $load_handle1
         stop_write_load $load_handle2
     }
+    # speed up termination
+    $primary config set shutdown-timeout 0
 }
 
 start_server {tags {"dual-channel-replication external:skip"}} {

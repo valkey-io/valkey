@@ -14,7 +14,7 @@ test {scan family consistency with configured hash seed} {
 
                 $primary flushall
                 $replica replicaof $primary_host $primary_port
-                wait_for_sync $replica
+                wait_replica_online $primary
 
                 set n 50
                 for {set i 0} {$i < $n} {incr i} {

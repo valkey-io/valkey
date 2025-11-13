@@ -1851,10 +1851,9 @@ usage:
         " --cert <file>      Client certificate to authenticate with.\n"
         " --key <file>       Private key file to authenticate with.\n"
         " --tls-ciphers <list> Sets the list of preferred ciphers (TLSv1.2 and below)\n"
-        "                    in order of preference from highest to lowest\n"
-        "                    separated by colon (\":\"). See the ciphers(1ssl)\n"
-        "                    manpage for more information about the syntax of\n"
-        "                    this string.\n"
+        "                    in order of preference from highest to lowest separated by\n"
+        "                    colon (\":\"). See the ciphers(1ssl) manpage for more\n"
+        "                    information about the syntax of this string.\n"
 #ifdef TLS1_3_VERSION
         " --tls-ciphersuites <list> Sets the list of preferred ciphersuites (TLSv1.3)\n"
         "                    in order of preference from highest to lowest separated by\n"

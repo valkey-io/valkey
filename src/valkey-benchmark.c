@@ -103,7 +103,7 @@ static struct config {
     _Atomic int liveclients;
     int requests;
     int duration;
-    _Atomic int warmup_duration;
+    int warmup_duration;
     _Atomic int current_warmup_duration;
     _Atomic int requests_issued;
     _Atomic int requests_finished;
@@ -1851,13 +1851,16 @@ usage:
         " --cert <file>      Client certificate to authenticate with.\n"
         " --key <file>       Private key file to authenticate with.\n"
         " --tls-ciphers <list> Sets the list of preferred ciphers (TLSv1.2 and below)\n"
-        "                    in order of preference from highest to lowest separated by colon (\":\").\n"
-        "                    See the ciphers(1ssl) manpage for more information about the syntax of this string.\n"
+        "                    in order of preference from highest to lowest\n"
+        "                    separated by colon (\":\"). See the ciphers(1ssl)\n"
+        "                    manpage for more information about the syntax of\n"
+        "                    this string.\n"
 #ifdef TLS1_3_VERSION
         " --tls-ciphersuites <list> Sets the list of preferred ciphersuites (TLSv1.3)\n"
-        "                    in order of preference from highest to lowest separated by colon (\":\").\n"
-        "                    See the ciphers(1ssl) manpage for more information about the syntax of this string,\n"
-        "                    and specifically for TLSv1.3 ciphersuites.\n"
+        "                    in order of preference from highest to lowest separated by\n"
+        "                    colon (\":\"). See the ciphers(1ssl) manpage for more\n"
+        "                    information about the syntax of this string, and\n"
+        "                    specifically for TLSv1.3 ciphersuites.\n"
 #endif
 #endif
         "";
@@ -1905,8 +1908,10 @@ usage:
         "                    the same or higher than the number of nodes.\n"
         " -n <requests>      Total number of requests (default 100000)\n"
         " --duration <seconds>\n"
-        "                    Run benchmark for specified number of seconds (mutually exclusive with -n)\n"
-        " --warmup <seconds> Run benchmark for specified warmup period before recording data\n"
+        "                    Run benchmark for specified number of seconds\n"
+        "                    (mutually exclusive with -n)\n"
+        " --warmup <seconds> Run benchmark for specified warmup period before\n"
+        "                    recording data\n"
         " -d <size>          Data size of SET/GET value in bytes (default 3)\n"
         " --dbnum <db>       SELECT the specified db number (default 0)\n"
         " -3                 Start session in RESP3 protocol mode.\n"
@@ -1938,9 +1943,9 @@ usage:
         "                    use the same key.\n"
         " --sequential       Modifies the -r argument to replace the string __rand_int__\n"
         "                    with 12 digit numbers sequentially instead of randomly.\n"
-        "                    __rand_1st__ through __rand_9th__ are available with independent\n"
-        "                    counters. Used to create expected number of elements with multiple\n"
-        "                    replacements.\n"
+        "                    __rand_1st__ through __rand_9th__ are available with\n"
+        "                    independent counters. Used to create expected number of\n"
+        "                    elements with multiple replacements.\n"
         "                    example: ZADD myzset __rand_int__ element:__rand_1st__\n"
         " -P <numreq>        Pipeline <numreq> requests. That is, send multiple requests\n"
         "                    before waiting for the replies. Default 1 (no pipeline).\n"
@@ -1949,7 +1954,8 @@ usage:
         "                    the number of times the command sequence is sent in each\n"
         "                    pipeline.\n",
         " -q                 Quiet. Just show query/sec values\n"
-        " --precision        Number of decimal places to display in latency output (default 0)\n"
+        " --precision        Number of decimal places to display in latency output\n"
+        "                    (default 0)\n"
         " --csv              Output in CSV format\n"
         " -l                 Loop. Run the tests forever\n"
         " -t <tests>         Only run the comma separated list of tests. The test\n"
@@ -1958,8 +1964,10 @@ usage:
         "                    on the command line.\n"
         " -I                 Idle mode. Just open N idle connections and wait.\n"
         " -x                 Read last argument from STDIN.\n"
-        " --rps <requests>   Limit the total number of requests per second. Default 0 (no limit)\n"
-        " --seed <num>       Set the seed for random number generator. Default seed is based on time.\n"
+        " --rps <requests>   Limit the total number of requests per second.\n"
+        "                    Default 0 (no limit)\n"
+        " --seed <num>       Set the seed for random number generator.\n"
+        "                    Default seed is based on time.\n"
         " --num-functions <num>\n"
         "                    Sets the number of functions present in the Lua lib that is\n"
         "                    loaded when running the 'function_load' test. (default 10).\n"

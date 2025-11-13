@@ -216,7 +216,7 @@ tags {"benchmark network external:skip logreqres:skip"} {
             set end_time [clock clicks -millisec]
 
             # Verify total duration was at least 2 seconds
-            set elapsed [expr {($end_time - $start_time)/1000.}]
+            set elapsed [expr {($end_time - $start_time)/1000.0}]
             assert {$elapsed >= 2 && $elapsed <= 2.25}
 
             # Check reported duration
@@ -230,8 +230,8 @@ tags {"benchmark network external:skip logreqres:skip"} {
             set output [common_bench_setup $cmd]
             set end_time [clock clicks -millisec]
 
-            # Verify total duration was at least 2 seconds
-            set elapsed [expr {($end_time - $start_time)/1000.}]
+            # Verify total duration was at least 1 seconds
+            set elapsed [expr {($end_time - $start_time)/1000.0}]
             assert {$elapsed >= 1}
 
             # Check reported duration and command count
@@ -253,7 +253,7 @@ tags {"benchmark network external:skip logreqres:skip"} {
             set end_time [clock clicks -millisec]
 
             # Verify total duration includes warmup for all 3 tests (at least 3 seconds)
-            set elapsed [expr {($end_time - $start_time)/1000.}]
+            set elapsed [expr {($end_time - $start_time)/1000.0}]
             assert {$elapsed >= 3}
 
             # Verify all tests ran - with warmup, we expect more than 50 calls per command

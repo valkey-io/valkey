@@ -1677,6 +1677,8 @@ struct valkeyServer {
     serverDb **db;            /* each db created when it's first used */
     hashtable *commands;      /* Command table */
     hashtable *orig_commands; /* Command table before command renaming. */
+    sds command_response_cache_resp2; /* Cached COMMAND response for RESP2 */
+    sds command_response_cache_resp3; /* Cached COMMAND response for RESP3 */
     aeEventLoop *el;
     _Atomic AeIoState io_poll_state;     /* Indicates the state of the IO polling. */
     int io_ae_fired_events;              /* Number of poll events received by the IO thread. */
@@ -2626,6 +2628,8 @@ struct serverCommand {
                                     * (not the fullname), and the value is the serverCommand structure pointer. */
     struct serverCommand *parent;
     struct ValkeyModuleCommand *module_cmd; /* A pointer to the module command data (NULL if native command) */
+    sds info_cache_resp2;                   /* Cached COMMAND INFO response for RESP2 */
+    sds info_cache_resp3;                   /* Cached COMMAND INFO response for RESP3 */
 };
 
 struct serverError {
@@ -3783,6 +3787,7 @@ void commandCommand(client *c);
 void commandCountCommand(client *c);
 void commandListCommand(client *c);
 void commandInfoCommand(client *c);
+void invalidateCommandCache(void);
 void commandGetKeysCommand(client *c);
 void commandGetKeysAndFlagsCommand(client *c);
 void commandHelpCommand(client *c);

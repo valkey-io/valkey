@@ -2342,6 +2342,8 @@ void initServerConfig(void) {
      * valkey.conf using the rename-command directive. */
     server.commands = hashtableCreate(&commandSetType);
     server.orig_commands = hashtableCreate(&originalCommandSetType);
+    server.command_response_cache_resp2 = NULL;
+    server.command_response_cache_resp3 = NULL;
     populateCommandTable();
 
     /* Debugging */
@@ -3281,6 +3283,10 @@ int populateCommandStructure(struct serverCommand *c) {
     /* We start with an unallocated histogram and only allocate memory when a command
      * has been issued for the first time */
     c->latency_histogram = NULL;
+
+    /* Initialize command info cache */
+    c->info_cache_resp2 = NULL;
+    c->info_cache_resp3 = NULL;
 
     /* Handle the legacy range spec and the "movablekeys" flag (must be done after populating all key specs). */
     populateCommandLegacyRangeSpec(c);
@@ -5222,30 +5228,77 @@ void addReplyCommandSubCommands(client *c,
     hashtableResetIterator(&iter);
 }
 
+/* Forward declaration */
+void addReplyCommandInfo(client *c, struct serverCommand *cmd);
+
+/* Collect all output from a caching client (both buffer and reply list) */
+static sds collectCachedResponse(client *c) {
+    sds response = sdsempty();
+    
+    /* First, collect from the fixed buffer if any */
+    if (c->bufpos > 0) {
+        response = sdscatlen(response, c->buf, c->bufpos);
+    }
+    
+    /* Then, collect from the reply list */
+    listIter li;
+    listNode *ln;
+    clientReplyBlock *val_block;
+    listRewind(c->reply, &li);
+    while ((ln = listNext(&li)) != NULL) {
+        val_block = (clientReplyBlock *)listNodeValue(ln);
+        response = sdscatlen(response, val_block->buf, val_block->used);
+    }
+    
+    return response;
+}
+
+/* Generate and cache the command info response for a given protocol version */
+static void cacheCommandInfo(struct serverCommand *cmd, int resp) {
+    client *caching_client = createCachedResponseClient(resp);
+    
+    int firstkey = 0, lastkey = 0, keystep = 0;
+    if (cmd->legacy_range_key_spec.begin_search_type != KSPEC_BS_INVALID) {
+        firstkey = cmd->legacy_range_key_spec.bs.index.pos;
+        lastkey = cmd->legacy_range_key_spec.fk.range.lastkey;
+        if (lastkey >= 0) lastkey += firstkey;
+        keystep = cmd->legacy_range_key_spec.fk.range.keystep;
+    }
+
+    addReplyArrayLen(caching_client, 10);
+    addReplyBulkCBuffer(caching_client, cmd->fullname, sdslen(cmd->fullname));
+    addReplyLongLong(caching_client, cmd->arity);
+    addReplyFlagsForCommand(caching_client, cmd);
+    addReplyLongLong(caching_client, firstkey);
+    addReplyLongLong(caching_client, lastkey);
+    addReplyLongLong(caching_client, keystep);
+    addReplyCommandCategories(caching_client, cmd);
+    addReplyCommandTips(caching_client, cmd);
+    addReplyCommandKeySpecs(caching_client, cmd);
+    addReplyCommandSubCommands(caching_client, cmd, addReplyCommandInfo, 0);
+
+    if (resp == 2) {
+        cmd->info_cache_resp2 = collectCachedResponse(caching_client);
+    } else {
+        cmd->info_cache_resp3 = collectCachedResponse(caching_client);
+    }
+    
+    deleteCachedResponseClient(caching_client);
+}
+
 /* Output the representation of a server command. Used by the COMMAND command and COMMAND INFO. */
 void addReplyCommandInfo(client *c, struct serverCommand *cmd) {
     if (!cmd) {
         addReplyNull(c);
     } else {
-        int firstkey = 0, lastkey = 0, keystep = 0;
-        if (cmd->legacy_range_key_spec.begin_search_type != KSPEC_BS_INVALID) {
-            firstkey = cmd->legacy_range_key_spec.bs.index.pos;
-            lastkey = cmd->legacy_range_key_spec.fk.range.lastkey;
-            if (lastkey >= 0) lastkey += firstkey;
-            keystep = cmd->legacy_range_key_spec.fk.range.keystep;
+        /* Use cached response if available for the client's protocol version */
+        sds *cache = (c->resp == 2) ? &cmd->info_cache_resp2 : &cmd->info_cache_resp3;
+        
+        if (*cache == NULL) {
+            cacheCommandInfo(cmd, c->resp);
         }
-
-        addReplyArrayLen(c, 10);
-        addReplyBulkCBuffer(c, cmd->fullname, sdslen(cmd->fullname));
-        addReplyLongLong(c, cmd->arity);
-        addReplyFlagsForCommand(c, cmd);
-        addReplyLongLong(c, firstkey);
-        addReplyLongLong(c, lastkey);
-        addReplyLongLong(c, keystep);
-        addReplyCommandCategories(c, cmd);
-        addReplyCommandTips(c, cmd);
-        addReplyCommandKeySpecs(c, cmd);
-        addReplyCommandSubCommands(c, cmd, addReplyCommandInfo, 0);
+        
+        addReplyProto(c, *cache, sdslen(*cache));
     }
 }
 
@@ -5371,16 +5424,50 @@ void getKeysSubcommand(client *c) {
 }
 
 /* COMMAND (no args) */
-void commandCommand(client *c) {
+/* Invalidate the cached COMMAND response when command table changes */
+void invalidateCommandCache(void) {
+    if (server.command_response_cache_resp2) {
+        sdsfree(server.command_response_cache_resp2);
+        server.command_response_cache_resp2 = NULL;
+    }
+    if (server.command_response_cache_resp3) {
+        sdsfree(server.command_response_cache_resp3);
+        server.command_response_cache_resp3 = NULL;
+    }
+}
+
+/* Generate and cache the full COMMAND response */
+static void cacheCommandResponse(int resp) {
+    client *caching_client = createCachedResponseClient(resp);
+    
     hashtableIterator iter;
     void *next;
-    addReplyArrayLen(c, hashtableSize(server.commands));
+    addReplyArrayLen(caching_client, hashtableSize(server.commands));
     hashtableInitIterator(&iter, server.commands, 0);
     while (hashtableNext(&iter, &next)) {
         struct serverCommand *cmd = next;
-        addReplyCommandInfo(c, cmd);
+        addReplyCommandInfo(caching_client, cmd);
     }
     hashtableResetIterator(&iter);
+    
+    if (resp == 2) {
+        server.command_response_cache_resp2 = collectCachedResponse(caching_client);
+    } else {
+        server.command_response_cache_resp3 = collectCachedResponse(caching_client);
+    }
+    
+    deleteCachedResponseClient(caching_client);
+}
+
+void commandCommand(client *c) {
+    /* Use cached response if available for the client's protocol version */
+    sds *cache = (c->resp == 2) ? &server.command_response_cache_resp2 : &server.command_response_cache_resp3;
+    
+    if (*cache == NULL) {
+        cacheCommandResponse(c->resp);
+    }
+    
+    addReplyProto(c, *cache, sdslen(*cache));
 }
 
 /* COMMAND COUNT */

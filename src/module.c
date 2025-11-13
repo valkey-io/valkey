@@ -1385,6 +1385,8 @@ int VM_CreateCommand(ValkeyModuleCtx *ctx,
     serverAssert(hashtableAdd(server.commands, cp->serverCmd));
     serverAssert(hashtableAdd(server.orig_commands, cp->serverCmd));
     cp->serverCmd->id = ACLGetCommandID(declared_name); /* ID used for ACL. */
+    /* Invalidate COMMAND response cache since we added a new command */
+    invalidateCommandCache();
     return VALKEYMODULE_OK;
 }
 
@@ -12530,6 +12532,14 @@ int moduleFreeCommand(struct ValkeyModule *module, struct serverCommand *cmd) {
         hdr_close(cmd->latency_histogram);
         cmd->latency_histogram = NULL;
     }
+    if (cmd->info_cache_resp2) {
+        sdsfree(cmd->info_cache_resp2);
+        cmd->info_cache_resp2 = NULL;
+    }
+    if (cmd->info_cache_resp3) {
+        sdsfree(cmd->info_cache_resp3);
+        cmd->info_cache_resp3 = NULL;
+    }
     moduleFreeArgs(cmd->args, cmd->num_args);
     zfree(cp);
 
@@ -12571,6 +12581,8 @@ void moduleUnregisterCommands(struct ValkeyModule *module) {
         zfree(cmd);
     }
     hashtableResetIterator(&iter);
+    /* Invalidate COMMAND response cache since we removed commands */
+    invalidateCommandCache();
 }
 
 /* We parse argv to add sds "NAME VALUE" pairs to the server.module_configs_queue list of configs.

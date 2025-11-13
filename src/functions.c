@@ -504,7 +504,7 @@ void functionStatsCommand(client *c) {
 static void functionListReplyFlags(client *c, functionInfo *fi) {
     /* First count the number of flags we have */
     int flagcount = 0;
-    for (scriptFlag *flag = scripts_flags_def; flag->str; ++flag) {
+    for (scriptFlagStr *flag = scriptFlags; flag->str; ++flag) {
         if (fi->compiled_function->f_flags & flag->flag) {
             ++flagcount;
         }
@@ -512,7 +512,7 @@ static void functionListReplyFlags(client *c, functionInfo *fi) {
 
     addReplySetLen(c, flagcount);
 
-    for (scriptFlag *flag = scripts_flags_def; flag->str; ++flag) {
+    for (scriptFlagStr *flag = scriptFlags; flag->str; ++flag) {
         if (fi->compiled_function->f_flags & flag->flag) {
             addReplyStatus(c, flag->str);
         }

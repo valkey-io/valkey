@@ -449,10 +449,9 @@ void sortCommandGeneric(client *c, int readonly) {
         hashtableIterator iter;
         hashtableInitIterator(&iter, ht, 0);
         void *next;
-        sds sdsele;
         while (hashtableNext(&iter, &next)) {
             zskiplistNode *node = next;
-            sdsele = zslGetNodeElement(node);
+            sds sdsele = zslGetNodeElement(node);
             vector[j].obj = createStringObject(sdsele, sdslen(sdsele));
             vector[j].u.score = 0;
             vector[j].u.cmpobj = NULL;

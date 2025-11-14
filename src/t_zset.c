@@ -120,9 +120,9 @@ static inline void zslSetNodeHeight(zskiplistNode *x, int height) {
  *
  * The memory layout is as follows:
  *
- *     +-------+------------------+---------+-----+---------+-------------+
- *     | score | backward-pointer | level-0 | ... | level-N | element-sds |
- *     +-------+------------------+---------+-----+---------+-------------+
+ *   +-------+------------------+---------+-----+---------+-----------------+-------------+
+ *   | score | backward-pointer | level-0 | ... | level-N | sds-header-size | element-sds |
+ *   +-------+------------------+---------+-----+---------+-----------------+-------------+
  */
 static zskiplistNode *zslCreateNode(int height, double score, const_sds ele) {
     size_t ele_sds_len = ele ? sdslen(ele) : 0;

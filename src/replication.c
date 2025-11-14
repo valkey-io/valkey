@@ -3016,6 +3016,22 @@ static int dualChannelReplHandleReplconfReply(connection *conn, sds *err) {
                              *err);
         return C_ERR;
     }
+
+    /* If replica-announce-ip is configured, we sent an additional REPLCONF ip-address command.
+     * We need to read its response as well. */
+    if (server.replica_announce_ip) {
+        sdsfree(*err);
+        *err = receiveSynchronousResponse(conn);
+        if (*err == NULL) {
+            dualChannelServerLog(LL_WARNING, "Primary did not respond to REPLCONF ip-address command during SYNC handshake");
+            return C_ERR;
+        }
+        if ((*err)[0] == '-') {
+            dualChannelServerLog(LL_WARNING, "Primary rejected REPLCONF ip-address: %s", *err);
+            return C_ERR;
+        }
+    }
+
     if (connSyncWrite(conn, "SYNC\r\n", 6, server.repl_syncio_timeout * 1000) == -1) {
         dualChannelServerLog(LL_WARNING, "I/O error writing to Primary: %s", connGetLastError(conn));
         return C_ERR;

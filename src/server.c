@@ -5292,13 +5292,14 @@ void addReplyCommandInfo(client *c, struct serverCommand *cmd) {
         addReplyNull(c);
     } else {
         /* Use cached response if available for the client's protocol version */
-        sds *cache = (c->resp == 2) ? &cmd->info_cache_resp2 : &cmd->info_cache_resp3;
+        sds cache = (c->resp == 2) ? cmd->info_cache_resp2 : cmd->info_cache_resp3;
         
-        if (*cache == NULL) {
+        if (cache == NULL) {
             cacheCommandInfo(cmd, c->resp);
+            cache = (c->resp == 2) ? cmd->info_cache_resp2 : cmd->info_cache_resp3;
         }
         
-        addReplyProto(c, *cache, sdslen(*cache));
+        addReplyProto(c, cache, sdslen(cache));
     }
 }
 
@@ -5461,13 +5462,14 @@ static void cacheCommandResponse(int resp) {
 /* COMMAND (no args) */
 void commandCommand(client *c) {
     /* Use cached response if available for the client's protocol version */
-    sds *cache = (c->resp == 2) ? &server.command_response_cache_resp2 : &server.command_response_cache_resp3;
+    sds cache = (c->resp == 2) ? server.command_response_cache_resp2 : server.command_response_cache_resp3;
     
-    if (*cache == NULL) {
+    if (cache == NULL) {
         cacheCommandResponse(c->resp);
+        cache = (c->resp == 2) ? server.command_response_cache_resp2 : server.command_response_cache_resp3;
     }
     
-    addReplyProto(c, *cache, sdslen(*cache));
+    addReplyProto(c, cache, sdslen(cache));
 }
 
 /* COMMAND COUNT */

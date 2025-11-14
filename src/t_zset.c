@@ -123,7 +123,7 @@ static inline void zslSetNodeHeight(zskiplistNode *x, int height) {
  *   +-------+------------------+---------+-----+---------+-----------------+-------------+
  *   | score | backward-pointer | level-0 | ... | level-N | sds-header-size | element-sds |
  *   +-------+------------------+---------+-----+---------+-----------------+-------------+
- *   
+ *
  *   sds-header-size and element-sds are only valid for non-header nodes.
  */
 static zskiplistNode *zslCreateNode(int height, double score, const_sds ele) {

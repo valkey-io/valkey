@@ -587,7 +587,7 @@ void scriptCall(scriptRunCtx *run_ctx, sds *err) {
     }
     call(c, call_flags);
     serverAssert(c->flag.blocked == 0);
-    clusterSlotStatsInvalidateSlotIfApplicable(run_ctx);
+    scriptClusterSlotStatsInvalidateSlotIfApplicable();
     return;
 
 error:
@@ -643,4 +643,11 @@ void scriptSetOriginalClientSlot(int slot) {
 sds scriptGetRunningEngineName(void) {
     serverAssert(scriptIsRunning());
     return scriptingEngineGetName(curr_run_ctx->engine);
+}
+
+/* For cross-slot scripting, its caller client's slot must be invalidated,
+ * such that its slot-stats aggregation is bypassed. */
+void scriptClusterSlotStatsInvalidateSlotIfApplicable(void) {
+    if (!scriptAllowsCrossSlot()) return;
+    curr_run_ctx->original_client->slot = -1;
 }

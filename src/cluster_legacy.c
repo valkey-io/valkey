@@ -4826,6 +4826,18 @@ void clusterSendUpdate(clusterLink *link, clusterNode *node) {
     clusterMsgSendBlockDecrRefCount(msgblock);
 }
 
+/* Inline functions that check support of light weight messages by node
+ * and avoid using light weight messages until the bidirectional
+ * link(s) have been established. */
+static inline bool nodeSupportsLightMsgHdrForPubSub(clusterNode *n) {
+    return n->link && n->pong_received >= n->link->ctime &&
+           (n->flags & CLUSTER_NODE_LIGHT_HDR_PUBLISH_SUPPORTED);
+}
+static inline bool nodeSupportsLightMsgHdrForModule(clusterNode *n) {
+    return n->link && n->pong_received >= n->link->ctime &&
+           (n->flags & CLUSTER_NODE_LIGHT_HDR_MODULE_SUPPORTED);
+}
+
 /* Create a MODULE message block.
  *
  * If is_light is 1, then build a message block with `clusterMsgLight` struct else `clusterMsg`. */

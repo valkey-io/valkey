@@ -1543,11 +1543,25 @@ user *ACLGetUserByName(const char *name, size_t namelen) {
  * ACL permission checks
  * ==========================================================================*/
 
-/* Check if the key can be accessed by the selector.
+/* Checks whether a given key is allowed for the specified ACL selector.
  *
- * If the selector can access the key, ACL_OK is returned, otherwise
- * ACL_DENIED_KEY is returned. */
-static int ACLSelectorCheckKey(aclSelector *selector, const char *key, int keylen, int keyspec_flags) {
+ * The function evaluates the key against the selector's patterns, taking into account
+ * the requested key access flags (read/write) and whether the key should be
+ * treated as a prefix. If the selector has the SELECTOR_FLAG_ALLKEYS flag set,
+ * the check always succeeds.
+ *
+ * - selector The ACL selector containing the allowed key patterns.
+ * - key           Pointer to the key string to check.
+ * - keylen        Length of the key in bytes.
+ * - keyspec_flags Bitmask of requested key operations (e.g., CMD_KEY_ACCESS,
+ *                 CMD_KEY_INSERT, CMD_KEY_DELETE, CMD_KEY_UPDATE).
+ * - is_prefix     If true, the key is compared as a prefix against the selector's
+ *                 patterns using prefixmatchlen rather than a full string match.
+ *
+ * This function returns ACL_OK if the key matches at least one pattern that allows the requested
+ * operations; otherwise ACL_DENIED_KEY.
+ */
+static int ACLSelectorCheckKey(aclSelector *selector, const char *key, int keylen, int keyspec_flags, bool is_prefix) {
     /* The selector can access any key */
     if (selector->flags & SELECTOR_FLAG_ALLKEYS) return ACL_OK;
 
@@ -1566,6 +1580,12 @@ static int ACLSelectorCheckKey(aclSelector *selector, const char *key, int keyle
         keyPattern *pattern = listNodeValue(ln);
         if ((pattern->flags & key_flags) != key_flags) continue;
         size_t plen = sdslen(pattern->pattern);
+        if (is_prefix) {
+            if (prefixmatchlen(pattern->pattern, plen, key, keylen, 0))
+                return ACL_OK;
+            else
+                continue;
+        }
         if (stringmatchlen(pattern->pattern, plen, key, keylen, 0)) return ACL_OK;
     }
     return ACL_DENIED_KEY;
@@ -1690,7 +1710,7 @@ static int ACLSelectorCheckCmd(aclSelector *selector,
         keyReference *resultidx = result->keys;
         for (int j = 0; j < result->numkeys; j++) {
             int idx = resultidx[j].pos;
-            ret = ACLSelectorCheckKey(selector, argv[idx]->ptr, sdslen(argv[idx]->ptr), resultidx[j].flags);
+            ret = ACLSelectorCheckKey(selector, argv[idx]->ptr, sdslen(argv[idx]->ptr), resultidx[j].flags, false);
             if (ret != ACL_OK) {
                 if (keyidxptr) *keyidxptr = resultidx[j].pos;
                 return ret;
@@ -1723,13 +1743,30 @@ static int ACLSelectorCheckCmd(aclSelector *selector,
     return ACL_OK;
 }
 
-/* Check if the key can be accessed by the client according to
- * the ACLs associated with the specified user according to the
- * keyspec access flags.
+/* Checks whether the given user has permission to access a specified key.
  *
- * If the user can access the key, ACL_OK is returned, otherwise
- * ACL_DENIED_KEY is returned. */
-int ACLUserCheckKeyPerm(user *u, const char *key, int keylen, int flags) {
+ * This function verifies the access control list (ACL) permissions for a user on a key.
+ * If the user pointer is  NULL, the connection is considered authorized to run any
+ * command and the function returns  ACL_OK.  Otherwise, the function iterates
+ * through the user's ACL selectors and returns  ACL_OK as soon as any selector
+ * grants permission.  If no selector grants permission,  ACL_DENIED_KEY is returned.
+ *
+ * Input parameters:
+ *
+ * - u Pointer to a user structure. If  NULL, the user is treated as
+ *    having unrestricted access.
+ * - key Pointer to the key string to check.
+ * - keylen Length of the key string in bytes.
+ * - flags Flags that may influence selector checks (implementation-specific).
+ * - is_prefix true if key should be treated as a prefix in selector
+ *    evaluation; false otherwise.
+ *
+ * Returns ACL_OK if access is granted, ACL_DENIED_KEY if access is denied.
+ *
+ * NOTE: The function performs no modification of the  user structure or the key;
+ *       it only evaluates read-only selectors.
+ */
+int ACLUserCheckKeyPerm(user *u, const char *key, int keylen, int flags, bool is_prefix) {
     listIter li;
     listNode *ln;
 
@@ -1740,7 +1777,7 @@ int ACLUserCheckKeyPerm(user *u, const char *key, int keylen, int flags) {
     listRewind(u->selectors, &li);
     while ((ln = listNext(&li))) {
         aclSelector *s = (aclSelector *)listNodeValue(ln);
-        if (ACLSelectorCheckKey(s, key, keylen, flags) == ACL_OK) {
+        if (ACLSelectorCheckKey(s, key, keylen, flags, is_prefix) == ACL_OK) {
             return ACL_OK;
         }
     }

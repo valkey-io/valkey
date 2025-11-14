@@ -146,7 +146,7 @@ struct hdr_histogram;
 #define CONFIG_BINDADDR_MAX 16
 #define CONFIG_MIN_RESERVED_FDS 32
 #define CONFIG_DEFAULT_PROC_TITLE_TEMPLATE "{title} {listen-addr} {server-mode}"
-#define DEFAULT_WAIT_BEFORE_RDB_CLIENT_FREE 60      /* Grace period in seconds for replica main \
+#define DEFAULT_WAIT_BEFORE_RDB_CLIENT_FREE 5       /* Grace period in seconds for replica main \
                                                      * channel to establish psync. */
 #define LOADING_PROCESS_EVENTS_INTERVAL_DEFAULT 100 /* Default: 0.1 seconds */
 #if !defined(DEBUG_FORCE_DEFRAG)
@@ -1407,7 +1407,7 @@ struct sharedObjectsStruct {
         *loadingerr_variants[2], *slowevalerr_variants[2], *slowscripterr_variants[2], *slowmoduleerr_variants[2],
         *bgsaveerr_variants[2],
         *execaborterr, *noautherr, *noreplicaserr, *busykeyerr, *oomerr, *plus, *messagebulk, *pmessagebulk,
-        *subscribebulk, *unsubscribebulk, *psubscribebulk, *punsubscribebulk, *del, *unlink, *rpop, *lpop, *lpush,
+        *subscribebulk, *unsubscribebulk, *psubscribebulk, *punsubscribebulk, *del, *unlink, *rpop, *lpop, *lpush, *zadd,
         *rpoplpush, *lmove, *blmove, *zpopmin, *zpopmax, *emptyscan, *multi, *exec, *left, *right, *hset, *hdel, *hpexpireat, *hpersist, *srem,
         *xgroup, *xclaim, *script, *replconf, *eval, *cluster, *syncslots, *persist, *set, *pexpireat, *pexpire, *time, *pxat, *absttl,
         *retrycount, *force, *justid, *entriesread, *lastid, *ping, *setid, *keepttl, *load, *createconsumer, *getack,
@@ -3218,7 +3218,7 @@ int ACLAuthenticateUser(client *c, robj *username, robj *password, robj **err);
 void addAuthErrReply(client *c, robj *err);
 unsigned long ACLGetCommandID(sds cmdname);
 user *ACLGetUserByName(const char *name, size_t namelen);
-int ACLUserCheckKeyPerm(user *u, const char *key, int keylen, int flags);
+int ACLUserCheckKeyPerm(user *u, const char *key, int keylen, int flags, bool is_prefix);
 int ACLUserCheckChannelPerm(user *u, sds channel, int literal);
 int ACLCheckAllUserCommandPerm(user *u, struct serverCommand *cmd, robj **argv, int argc, int *idxptr);
 int ACLUserCheckCmdWithUnrestrictedKeyAccess(user *u, struct serverCommand *cmd, robj **argv, int argc, int flags);

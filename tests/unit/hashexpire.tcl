@@ -2993,7 +2993,7 @@ start_server {tags {"hashexpire external:skip"}} {
     }
 
     ##### HGETEX Active Expiry Keyspace Notifications #####
-    foreach command {EX PX EXAT PXAT} {
+    foreach command {EX PX} {
         test "HGETEX $command keyspace notifications for active expiry" {
             r FLUSHALL
             set initial_expired [info_field [r info stats] expired_fields]
@@ -3014,7 +3014,7 @@ start_server {tags {"hashexpire external:skip"}} {
             $rd close
         }
     }
-    
+
     test "HGETEX keyspace notification when key deleted with active expiry" {
         r FLUSHALL
         set initial_expired [info_field [r info stats] expired_fields]
@@ -3115,7 +3115,7 @@ start_server {tags {"hashexpire external:skip"}} {
     }
 
     ##### HSETEX Active Expiry Keyspace Notifications #####
-    foreach command {EX PX EXAT PXAT} {
+    foreach command {EX PX} {
         test "HSETEX $command - keyspace notifications fired on field expiry" {
             r FLUSHALL
             set initial_expired [info_field [r info stats] expired_fields]

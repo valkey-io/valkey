@@ -123,16 +123,19 @@ static inline void zslSetNodeHeight(zskiplistNode *x, int height) {
  *   +-------+------------------+---------+-----+---------+-----------------+-------------+
  *   | score | backward-pointer | level-0 | ... | level-N | sds-header-size | element-sds |
  *   +-------+------------------+---------+-----+---------+-----------------+-------------+
+ *   
+ *   sds-header-size and element-sds are only valid for non-header nodes.
  */
 static zskiplistNode *zslCreateNode(int height, double score, const_sds ele) {
     size_t ele_sds_len = ele ? sdslen(ele) : 0;
     char ele_sds_type = ele ? sdsReqType(ele_sds_len) : 0;
     size_t ele_sds_size = ele ? sdsReqSize(ele_sds_len, ele_sds_type) : 0;
     /* Allocate enough space for the node, levels, and the element sds.
-     * Before the embedded sds, we include one extra byte representing the sds
+     * For non-header nodes, we include one extra byte representing the sds
      * header size, which is the offset into the embedded sds data where the
      * string content starts. */
-    zskiplistNode *zn = zmalloc(sizeof(*zn) + height * sizeof(struct zskiplistLevel) + 1 + ele_sds_size);
+    size_t header_size = ele ? 1 : 0;
+    zskiplistNode *zn = zmalloc(sizeof(*zn) + height * sizeof(struct zskiplistLevel) + header_size + ele_sds_size);
     zn->score = score;
     zslSetNodeHeight(zn, height);
     if (ele) {

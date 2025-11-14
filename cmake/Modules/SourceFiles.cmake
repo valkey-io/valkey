@@ -87,6 +87,7 @@ set(VALKEY_SERVER_SRCS
     ${CMAKE_SOURCE_DIR}/src/lolwut.c
     ${CMAKE_SOURCE_DIR}/src/lolwut5.c
     ${CMAKE_SOURCE_DIR}/src/lolwut6.c
+    ${CMAKE_SOURCE_DIR}/src/lolwut9.c
     ${CMAKE_SOURCE_DIR}/src/acl.c
     ${CMAKE_SOURCE_DIR}/src/tracking.c
     ${CMAKE_SOURCE_DIR}/src/socket.c

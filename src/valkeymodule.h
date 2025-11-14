@@ -112,6 +112,8 @@ typedef long long ustime_t;
 #define VALKEYMODULE_REPLY_VERBATIM_STRING 10
 #define VALKEYMODULE_REPLY_ATTRIBUTE 11
 #define VALKEYMODULE_REPLY_PROMISE 12
+#define VALKEYMODULE_REPLY_SIMPLE_STRING 13
+#define VALKEYMODULE_REPLY_ARRAY_NULL 14
 
 /* Postponed array length. */
 #define VALKEYMODULE_POSTPONED_ARRAY_LEN -1 /* Deprecated, please use VALKEYMODULE_POSTPONED_LEN */
@@ -221,11 +223,15 @@ typedef struct ValkeyModuleStreamID {
 #define VALKEYMODULE_CTX_FLAGS_ASYNC_LOADING (1 << 23)
 /* Valkey is starting. */
 #define VALKEYMODULE_CTX_FLAGS_SERVER_STARTUP (1 << 24)
+/* The current client is the slot import client */
+#define VALKEYMODULE_CTX_FLAGS_SLOT_IMPORT_CLIENT (1 << 25)
+/* The current client is the slot export client */
+#define VALKEYMODULE_CTX_FLAGS_SLOT_EXPORT_CLIENT (1 << 26)
 
 /* Next context flag, must be updated when adding new flags above!
 This flag should not be used directly by the module.
  * Use ValkeyModule_GetContextFlagsAll instead. */
-#define _VALKEYMODULE_CTX_FLAGS_NEXT (1 << 25)
+#define _VALKEYMODULE_CTX_FLAGS_NEXT (1 << 27)
 
 /* Keyspace changes notification classes. Every class is associated with a
  * character for configuration purposes.
@@ -825,12 +831,10 @@ typedef struct ValkeyModuleSlotRange {
 } ValkeyModuleSlotRange;
 
 typedef struct ValkeyModuleAtomicSlotMigrationInfo {
-    uint64_t version;                                  /* Version of this structure for ABI compat. */
-    char job_name[VALKEYMODULE_NODE_ID_LEN + 1];       /* Unique ID for the migration operation. */
-    ValkeyModuleSlotRange *slot_ranges;                /* Array of slot ranges involved in the migration. */
-    uint32_t num_slot_ranges;                          /* Number of slot ranges in the array. */
-    char source_node_id[VALKEYMODULE_NODE_ID_LEN + 1]; /* Node ID of the source node. */
-    char target_node_id[VALKEYMODULE_NODE_ID_LEN + 1]; /* Node ID of the target node. */
+    uint64_t version;                            /* Version of this structure for ABI compat. */
+    char job_name[VALKEYMODULE_NODE_ID_LEN + 1]; /* Unique ID for the migration operation. */
+    ValkeyModuleSlotRange *slot_ranges;          /* Array of slot ranges involved in the migration. */
+    uint32_t num_slot_ranges;                    /* Number of slot ranges in the array. */
 } ValkeyModuleAtomicSlotMigrationInfoV1;
 
 #define ValkeyModuleAtomicSlotMigrationInfo ValkeyModuleAtomicSlotMigrationInfoV1
@@ -903,20 +907,20 @@ typedef enum ValkeyModuleScriptingEngineExecutionState {
     VMSE_STATE_KILLED,
 } ValkeyModuleScriptingEngineExecutionState;
 
-typedef struct ValkeyModuleScriptingEngineCallableLazyEvalReset {
+typedef struct ValkeyModuleScriptingEngineCallableLazyEnvReset {
     void *context;
 
     /*
-     * Callback function used for resetting the EVAL context implemented by an
+     * Callback function used for resetting the EVAL/FUNCTION context implemented by an
      * engine. This callback will be called by a background thread when it's
      * ready for resetting the context.
      *
      * - `context`: a generic pointer to a context object, stored in the
-     * callableLazyEvalReset struct.
+     * callableLazyEnvReset struct.
      *
      */
-    void (*engineLazyEvalResetCallback)(void *context);
-} ValkeyModuleScriptingEngineCallableLazyEvalReset;
+    void (*engineLazyEnvResetCallback)(void *context);
+} ValkeyModuleScriptingEngineCallableLazyEnvReset;
 
 /* The callback function called when either `EVAL`, `SCRIPT LOAD`, or
  * `FUNCTION LOAD` command is called to compile the code.
@@ -1029,6 +1033,8 @@ typedef size_t (*ValkeyModuleScriptingEngineGetFunctionMemoryOverheadFunc)(
 
 /* The callback function called when `SCRIPT FLUSH` command is called. The
  * engine should reset the runtime environment used for EVAL scripts.
+ * This callback has been replaced by `ValkeyModuleScriptingEngineResetEnvFunc`
+ * callback in ABI version 3.
  *
  * - `module_ctx`: the module runtime context.
  *
@@ -1037,9 +1043,27 @@ typedef size_t (*ValkeyModuleScriptingEngineGetFunctionMemoryOverheadFunc)(
  * - `async`: if has value 1 then the reset is done asynchronously through
  * the callback structure returned by this function.
  */
-typedef ValkeyModuleScriptingEngineCallableLazyEvalReset *(*ValkeyModuleScriptingEngineResetEvalEnvFunc)(
+typedef ValkeyModuleScriptingEngineCallableLazyEnvReset *(*ValkeyModuleScriptingEngineResetEvalFuncV2)(
     ValkeyModuleCtx *module_ctx,
     ValkeyModuleScriptingEngineCtx *engine_ctx,
+    int async);
+
+/* The callback function called when `SCRIPT FLUSH` or `FUNCTION FLUSH` command is called.
+ * The engine should reset the runtime environment used for EVAL scripts or FUNCTION scripts.
+ *
+ * - `module_ctx`: the module runtime context.
+ *
+ * - `engine_ctx`: the scripting engine runtime context.
+ *
+ * - `type`: the subsystem type.
+ *
+ * - `async`: if has value 1 then the reset is done asynchronously through
+ * the callback structure returned by this function.
+ */
+typedef ValkeyModuleScriptingEngineCallableLazyEnvReset *(*ValkeyModuleScriptingEngineResetEnvFunc)(
+    ValkeyModuleCtx *module_ctx,
+    ValkeyModuleScriptingEngineCtx *engine_ctx,
+    ValkeyModuleScriptingEngineSubsystemType type,
     int async);
 
 /* Return the current used memory by the engine.
@@ -1055,39 +1079,208 @@ typedef ValkeyModuleScriptingEngineMemoryInfo (*ValkeyModuleScriptingEngineGetMe
     ValkeyModuleScriptingEngineCtx *engine_ctx,
     ValkeyModuleScriptingEngineSubsystemType type);
 
+typedef enum ValkeyModuleScriptingEngineDebuggerEnableRet {
+    VMSE_DEBUG_NOT_SUPPORTED, /* The scripting engine does not support debugging. */
+    VMSE_DEBUG_ENABLED,       /* The scripting engine has enabled the debugging mode. */
+    VMSE_DEBUG_ENABLE_FAIL,   /* The scripting engine failed to enable the debugging mode. */
+} ValkeyModuleScriptingEngineDebuggerEnableRet;
+
+typedef int (*ValkeyModuleScriptingEngineDebuggerCommandHandlerFunc)(
+    ValkeyModuleString **argv,
+    size_t argc,
+    void *context);
+
+/* Current ABI version for scripting engine debugger commands. */
+#define VALKEYMODULE_SCRIPTING_ENGINE_ABI_DEBUGGER_COMMAND_VERSION 1UL
+
+/* The structure that represents the parameter of a debugger command. */
+typedef struct ValkeyModuleScriptingEngineDebuggerCommandParam {
+    const char *name;
+    int optional;
+    int variadic;
+
+} ValkeyModuleScriptingEngineDebuggerCommandParam;
+
+/* The structure that represents a debugger command. */
+typedef struct ValkeyModuleScriptingEngineDebuggerCommand {
+    uint64_t version; /* Version of this structure for ABI compat. */
+
+    const char *name;                                              /* The command name. */
+    const size_t prefix_len;                                       /* The prefix of the command name that can be used as a short name. */
+    const ValkeyModuleScriptingEngineDebuggerCommandParam *params; /* The array of parameters of this command. */
+    size_t params_len;                                             /* The length of the array of parameters. */
+    const char *desc;                                              /* The description of the command that is shown in the help message. */
+    int invisible;                                                 /* Whether this command should be hidden in the help message. */
+    ValkeyModuleScriptingEngineDebuggerCommandHandlerFunc handler; /* The function pointer that implements this command. */
+    void *context;                                                 /* The pointer to a context structure that is passed when invoking the command handler. */
+} ValkeyModuleScriptingEngineDebuggerCommandV1;
+
+#define ValkeyModuleScriptingEngineDebuggerCommand ValkeyModuleScriptingEngineDebuggerCommandV1
+
+#define VALKEYMODULE_SCRIPTING_ENGINE_DEBUGGER_COMMAND(NAME, PREFIX, PARAMS, PARAMS_LEN, DESC, INVISIBLE, HANDLER) \
+    {                                                                                                              \
+        .version = VALKEYMODULE_SCRIPTING_ENGINE_ABI_DEBUGGER_COMMAND_VERSION,                                     \
+        .name = NAME,                                                                                              \
+        .prefix_len = PREFIX,                                                                                      \
+        .params = PARAMS,                                                                                          \
+        .params_len = PARAMS_LEN,                                                                                  \
+        .desc = DESC,                                                                                              \
+        .invisible = INVISIBLE,                                                                                    \
+        .handler = HANDLER,                                                                                        \
+        .context = NULL}
+
+#define VALKEYMODULE_SCRIPTING_ENGINE_DEBUGGER_COMMAND_WITH_CTX(NAME, PREFIX, PARAMS, PARAMS_LEN, DESC, INVISIBLE, HANDLER, CTX) \
+    {                                                                                                                            \
+        .version = VALKEYMODULE_SCRIPTING_ENGINE_ABI_DEBUGGER_COMMAND_VERSION,                                                   \
+        .name = NAME,                                                                                                            \
+        .prefix_len = PREFIX,                                                                                                    \
+        .params = PARAMS,                                                                                                        \
+        .params_len = PARAMS_LEN,                                                                                                \
+        .desc = DESC,                                                                                                            \
+        .invisible = INVISIBLE,                                                                                                  \
+        .handler = HANDLER,                                                                                                      \
+        .context = CTX}
+
+/* The callback function called when `SCRIPT DEBUG (YES|SYNC)` command is called
+ * to enable the remote debugger when executing a compiled function.
+ *
+ * - `module_ctx`: the module runtime context.
+ *
+ * - `engine_ctx`: the scripting engine runtime context.
+ *
+ * - `type`: the subsystem type. Either EVAL or FUNCTION.
+ *
+ * - `commands`: the array of commands exposed by the remote debugger
+ *   implemented by this scripting engine.
+ *
+ * - `commands_len`: the length of the commands array.
+ *
+ * Returns an enum value of type `ValkeyModuleScriptingEngineDebuggerEnableRet`.
+ * Check the enum comments for more details.
+ */
+typedef ValkeyModuleScriptingEngineDebuggerEnableRet (*ValkeyModuleScriptingEngineDebuggerEnableFunc)(
+    ValkeyModuleCtx *module_ctx,
+    ValkeyModuleScriptingEngineCtx *engine_ctx,
+    ValkeyModuleScriptingEngineSubsystemType type,
+    const ValkeyModuleScriptingEngineDebuggerCommand **commands,
+    size_t *commands_length);
+
+/* The callback function called when `SCRIPT DEBUG NO` command is called to
+ * disable the remote debugger.
+ *
+ * - `module_ctx`: the module runtime context.
+ *
+ * - `engine_ctx`: the scripting engine runtime context.
+ *
+ * - `type`: the subsystem type. Either EVAL or FUNCTION.
+ */
+typedef void (*ValkeyModuleScriptingEngineDebuggerDisableFunc)(
+    ValkeyModuleCtx *module_ctx,
+    ValkeyModuleScriptingEngineCtx *engine_ctx,
+    ValkeyModuleScriptingEngineSubsystemType type);
+
+/* The callback function called just before the execution of a compiled function
+ * when the debugging mode is enabled.
+ *
+ * - `module_ctx`: the module runtime context.
+ *
+ * - `engine_ctx`: the scripting engine runtime context.
+ *
+ * - `type`: the subsystem type. Either EVAL or FUNCTION.
+ *
+ * - `source`: the original source code from where the code of the compiled
+ *   function was compiled.
+ */
+typedef void (*ValkeyModuleScriptingEngineDebuggerStartFunc)(
+    ValkeyModuleCtx *module_ctx,
+    ValkeyModuleScriptingEngineCtx *engine_ctx,
+    ValkeyModuleScriptingEngineSubsystemType type,
+    ValkeyModuleString *source);
+
+/* The callback function called just after the execution of a compiled function
+ * when the debugging mode is enabled.
+ *
+ * - `module_ctx`: the module runtime context.
+ *
+ * - `engine_ctx`: the scripting engine runtime context.
+ *
+ * - `type`: the subsystem type. Either EVAL or FUNCTION.
+ */
+typedef void (*ValkeyModuleScriptingEngineDebuggerEndFunc)(
+    ValkeyModuleCtx *module_ctx,
+    ValkeyModuleScriptingEngineCtx *engine_ctx,
+    ValkeyModuleScriptingEngineSubsystemType type);
+
 /* Current ABI version for scripting engine modules. */
-#define VALKEYMODULE_SCRIPTING_ENGINE_ABI_VERSION 2UL
+/* Version Changelog:
+ *  1. Initial version.
+ *  2. Changed the `compile_code` callback to support binary data in the source code.
+ *  3. Renamed reset_eval_env callback to reset_env and added a type parameter to be
+ *     able to reset both EVAL or FUNCTION scripts env.
+ *  4. Added support for new debugging commands.
+ */
+#define VALKEYMODULE_SCRIPTING_ENGINE_ABI_VERSION 4UL
+
+#define VALKEYMODULE_SCRIPTING_ENGINE_METHODS_STRUCT_FIELDS_V3                                 \
+    struct {                                                                                   \
+        /* Compile code function callback. When a new script is loaded, this                   \
+         * callback will be called with the script code, compiles it, and returns a            \
+         * list of `ValkeyModuleScriptingEngineCompiledFunc` objects. */                       \
+        union {                                                                                \
+            ValkeyModuleScriptingEngineCompileCodeFuncV1 compile_code_v1;                      \
+            ValkeyModuleScriptingEngineCompileCodeFunc compile_code;                           \
+        };                                                                                     \
+                                                                                               \
+        /* Function callback to free the memory of a registered engine function. */            \
+        ValkeyModuleScriptingEngineFreeFunctionFunc free_function;                             \
+                                                                                               \
+                                                                                               \
+        /* The callback function called when `FCALL` command is called on a function           \
+         * registered in this engine. */                                                       \
+        ValkeyModuleScriptingEngineCallFunctionFunc call_function;                             \
+                                                                                               \
+        /* Function callback to return memory overhead for a given function. */                \
+        ValkeyModuleScriptingEngineGetFunctionMemoryOverheadFunc get_function_memory_overhead; \
+                                                                                               \
+        /* The callback function used to reset the runtime environment used                    \
+         * by the scripting engine for EVAL scripts or FUNCTION scripts. */                    \
+        union {                                                                                \
+            ValkeyModuleScriptingEngineResetEvalFuncV2 reset_eval_env_v2;                      \
+            ValkeyModuleScriptingEngineResetEnvFunc reset_env;                                 \
+        };                                                                                     \
+                                                                                               \
+        /* Function callback to get the used memory by the engine. */                          \
+        ValkeyModuleScriptingEngineGetMemoryInfoFunc get_memory_info;                          \
+    }
 
 typedef struct ValkeyModuleScriptingEngineMethods {
     uint64_t version; /* Version of this structure for ABI compat. */
 
-    /* Compile code function callback. When a new script is loaded, this
-     * callback will be called with the script code, compiles it, and returns a
-     * list of `ValkeyModuleScriptingEngineCompiledFunc` objects. */
-    union {
-        ValkeyModuleScriptingEngineCompileCodeFuncV1 compile_code_v1;
-        ValkeyModuleScriptingEngineCompileCodeFunc compile_code;
-    };
-    /* Function callback to free the memory of a registered engine function. */
-    ValkeyModuleScriptingEngineFreeFunctionFunc free_function;
+    VALKEYMODULE_SCRIPTING_ENGINE_METHODS_STRUCT_FIELDS_V3;
 
-    /* The callback function called when `FCALL` command is called on a function
-     * registered in this engine. */
-    ValkeyModuleScriptingEngineCallFunctionFunc call_function;
+} ValkeyModuleScriptingEngineMethodsV3;
 
-    /* Function callback to return memory overhead for a given function. */
-    ValkeyModuleScriptingEngineGetFunctionMemoryOverheadFunc get_function_memory_overhead;
+typedef struct ValkeyModuleScriptingEngineMethodsV4 {
+    uint64_t version; /* Version of this structure for ABI compat. */
 
-    /* The callback function used to reset the runtime environment used
-     * by the scripting engine for EVAL scripts. */
-    ValkeyModuleScriptingEngineResetEvalEnvFunc reset_eval_env;
+    VALKEYMODULE_SCRIPTING_ENGINE_METHODS_STRUCT_FIELDS_V3;
 
-    /* Function callback to get the used memory by the engine. */
-    ValkeyModuleScriptingEngineGetMemoryInfoFunc get_memory_info;
+    /* Function callback to enable the debugger for the future execution of scripts. */
+    ValkeyModuleScriptingEngineDebuggerEnableFunc debugger_enable;
 
-} ValkeyModuleScriptingEngineMethodsV1;
+    /* Function callback to disable the debugger. */
+    ValkeyModuleScriptingEngineDebuggerDisableFunc debugger_disable;
 
-#define ValkeyModuleScriptingEngineMethods ValkeyModuleScriptingEngineMethodsV1
+    /* Function callback to start the debugger on a particular script. */
+    ValkeyModuleScriptingEngineDebuggerStartFunc debugger_start;
+
+    /* Function callback to end the debugger on a particular script. */
+    ValkeyModuleScriptingEngineDebuggerEndFunc debugger_end;
+
+
+} ValkeyModuleScriptingEngineMethodsV4;
+
+#define ValkeyModuleScriptingEngineMethods ValkeyModuleScriptingEngineMethodsV4
 
 /* ------------------------- End of common defines ------------------------ */
 
@@ -1342,6 +1535,7 @@ VALKEYMODULE_API void (*ValkeyModule_FreeString)(ValkeyModuleCtx *ctx, ValkeyMod
 VALKEYMODULE_API const char *(*ValkeyModule_StringPtrLen)(const ValkeyModuleString *str, size_t *len)VALKEYMODULE_ATTR;
 VALKEYMODULE_API int (*ValkeyModule_ReplyWithError)(ValkeyModuleCtx *ctx, const char *err) VALKEYMODULE_ATTR;
 VALKEYMODULE_API int (*ValkeyModule_ReplyWithErrorFormat)(ValkeyModuleCtx *ctx, const char *fmt, ...) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_ReplyWithCustomErrorFormat)(ValkeyModuleCtx *ctx, int update_error_stats, const char *fmt, ...) VALKEYMODULE_ATTR;
 VALKEYMODULE_API int (*ValkeyModule_ReplyWithSimpleString)(ValkeyModuleCtx *ctx, const char *msg) VALKEYMODULE_ATTR;
 VALKEYMODULE_API int (*ValkeyModule_ReplyWithArray)(ValkeyModuleCtx *ctx, long len) VALKEYMODULE_ATTR;
 VALKEYMODULE_API int (*ValkeyModule_ReplyWithMap)(ValkeyModuleCtx *ctx, long len) VALKEYMODULE_ATTR;
@@ -1955,8 +2149,24 @@ VALKEYMODULE_API int (*ValkeyModule_UnregisterScriptingEngine)(ValkeyModuleCtx *
 
 VALKEYMODULE_API ValkeyModuleScriptingEngineExecutionState (*ValkeyModule_GetFunctionExecutionState)(ValkeyModuleScriptingEngineServerRuntimeCtx *server_ctx) VALKEYMODULE_ATTR;
 
-#define ValkeyModule_IsAOFClient(id) ((id) == UINT64_MAX)
+VALKEYMODULE_API void (*ValkeyModule_ScriptingEngineDebuggerLog)(ValkeyModuleString *msg,
+                                                                 int truncate) VALKEYMODULE_ATTR;
 
+VALKEYMODULE_API void (*ValkeyModule_ScriptingEngineDebuggerLogRespReplyStr)(const char *reply) VALKEYMODULE_ATTR;
+
+VALKEYMODULE_API void (*ValkeyModule_ScriptingEngineDebuggerLogRespReply)(ValkeyModuleCallReply *reply) VALKEYMODULE_ATTR;
+
+VALKEYMODULE_API void (*ValkeyModule_ScriptingEngineDebuggerFlushLogs)(void) VALKEYMODULE_ATTR;
+
+VALKEYMODULE_API void (*ValkeyModule_ScriptingEngineDebuggerProcessCommands)(int *client_disconnected,
+                                                                             ValkeyModuleString **err) VALKEYMODULE_ATTR;
+
+VALKEYMODULE_API int (*ValkeyModule_ACLCheckKeyPrefixPermissions)(ValkeyModuleUser *user,
+                                                                  const char *key,
+                                                                  size_t len,
+                                                                  unsigned int flags) VALKEYMODULE_ATTR;
+
+#define ValkeyModule_IsAOFClient(id) ((id) == UINT64_MAX)
 /* This is included inline inside each Valkey module. */
 static int ValkeyModule_Init(ValkeyModuleCtx *ctx, const char *name, int ver, int apiver) VALKEYMODULE_ATTR_UNUSED;
 static int ValkeyModule_Init(ValkeyModuleCtx *ctx, const char *name, int ver, int apiver) {
@@ -1983,6 +2193,7 @@ static int ValkeyModule_Init(ValkeyModuleCtx *ctx, const char *name, int ver, in
     VALKEYMODULE_GET_API(ReplyWithLongLong);
     VALKEYMODULE_GET_API(ReplyWithError);
     VALKEYMODULE_GET_API(ReplyWithErrorFormat);
+    VALKEYMODULE_GET_API(ReplyWithCustomErrorFormat);
     VALKEYMODULE_GET_API(ReplyWithSimpleString);
     VALKEYMODULE_GET_API(ReplyWithArray);
     VALKEYMODULE_GET_API(ReplyWithMap);
@@ -2326,6 +2537,12 @@ static int ValkeyModule_Init(ValkeyModuleCtx *ctx, const char *name, int ver, in
     VALKEYMODULE_GET_API(RegisterScriptingEngine);
     VALKEYMODULE_GET_API(UnregisterScriptingEngine);
     VALKEYMODULE_GET_API(GetFunctionExecutionState);
+    VALKEYMODULE_GET_API(ScriptingEngineDebuggerLog);
+    VALKEYMODULE_GET_API(ScriptingEngineDebuggerLogRespReplyStr);
+    VALKEYMODULE_GET_API(ScriptingEngineDebuggerLogRespReply);
+    VALKEYMODULE_GET_API(ScriptingEngineDebuggerFlushLogs);
+    VALKEYMODULE_GET_API(ScriptingEngineDebuggerProcessCommands);
+    VALKEYMODULE_GET_API(ACLCheckKeyPrefixPermissions);
 
     if (ValkeyModule_IsModuleNameBusy && ValkeyModule_IsModuleNameBusy(name)) return VALKEYMODULE_ERR;
     ValkeyModule_SetModuleAttribs(ctx, name, ver, apiver);

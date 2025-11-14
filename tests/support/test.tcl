@@ -10,6 +10,10 @@ proc fail {msg} {
     error "assertion:$msg"
 }
 
+proc skip {msg} {
+    error "skipped:$msg"
+}
+
 proc assert {condition} {
     if {![uplevel 1 [list expr $condition]]} {
         set context "(context: [info frame -1])"
@@ -256,7 +260,12 @@ proc test {name code {okpattern undefined} {tags {}}} {
     set test_start_time [clock milliseconds]
     if {[catch {set retval [uplevel 1 $code]} error]} {
         set assertion [string match "assertion:*" $error]
-        if {$assertion || $::durable} {
+        set skip [string match "skipped:*" $error]
+        if {$skip} {
+            incr ::num_skipped
+            set msg [string range $error 8 end]
+            send_data_packet $::test_server_fd skip "$::cur_test: $msg"
+        } elseif {$assertion || $::durable} {
             # durable prevents the whole tcl test from exiting on an exception.
             # an assertion is handled gracefully anyway.
             set msg [string range $error 10 end]

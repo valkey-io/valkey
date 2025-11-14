@@ -476,7 +476,7 @@ void geoaddCommand(client *c) {
     int elements = (c->argc - longidx) / 3;
     int argc = longidx + elements * 2; /* ZADD key [CH] [NX|XX] score ele ... */
     robj **argv = zcalloc(argc * sizeof(robj *));
-    argv[0] = createRawStringObject("zadd", 4);
+    argv[0] = shared.zadd;
     for (i = 1; i < longidx; i++) {
         argv[i] = c->argv[i];
         incrRefCount(argv[i]);

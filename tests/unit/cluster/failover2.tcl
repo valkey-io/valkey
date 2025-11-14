@@ -64,7 +64,7 @@ start_cluster 3 4 {tags {external:skip cluster} overrides {cluster-ping-interval
     }
 } ;# start_cluster
 
-start_cluster 7 3 {tags {external:skip cluster} overrides {cluster-ping-interval 1000 cluster-node-timeout 5000}} {
+start_cluster 7 3 {tags {external:skip cluster} overrides {cluster-ping-interval 1000}} {
     test "Primaries will not time out then they are elected in the same epoch" {
         # Since we have the delay time, so these node may not initiate the
         # election at the same time (same epoch). But if they do, we make

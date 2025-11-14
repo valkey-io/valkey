@@ -46,24 +46,75 @@ def linebreak_proto(proto, indent)
     if proto.bytesize <= 80
         return proto
     end
-    parts = proto.split(/,\s*/);
-    if parts.length == 1
-        return proto;
-    end
-    align_pos = proto.index("(") + 1;
-    align = " " * align_pos
-    result = parts.shift;
-    bracket_balance = 0;
-    parts.each{|part|
-        if bracket_balance == 0
-            result += ",\n" + indent + align
-        else
-            result += ", "
+    
+    # Find the opening parenthesis for parameters
+    paren_pos = proto.index("(")
+    return proto if paren_pos.nil?
+    
+    # Split the prototype into parts: return_type function_name(params);
+    before_params = proto[0..paren_pos]
+    params_and_end = proto[paren_pos+1..-1]
+    
+    # Find the closing parenthesis (handling nested parentheses)
+    bracket_count = 0
+    close_paren_pos = nil
+    params_and_end.each_char.with_index do |char, idx|
+        if char == '('
+            bracket_count += 1
+        elsif char == ')'
+            if bracket_count == 0
+                close_paren_pos = idx
+                break
+            else
+                bracket_count -= 1
+            end
         end
-        result += part
-        bracket_balance += part.count("(") - part.count(")")
-    }
-    return result;
+    end
+    
+    return proto if close_paren_pos.nil?
+    
+    params = params_and_end[0...close_paren_pos]
+    after_params = params_and_end[close_paren_pos..-1]
+    
+    # Split parameters on commas, but respect nested parentheses
+    param_parts = []
+    current_param = ""
+    bracket_balance = 0
+    
+    params.each_char do |char|
+        if char == '('
+            bracket_balance += 1
+            current_param += char
+        elsif char == ')'
+            bracket_balance -= 1
+            current_param += char
+        elsif char == ',' && bracket_balance == 0
+            param_parts << current_param.strip
+            current_param = ""
+        else
+            current_param += char
+        end
+    end
+    
+    # Add the last parameter
+    param_parts << current_param.strip if !current_param.strip.empty?
+    
+    # If only one parameter or very short, don't break
+    if param_parts.length <= 1
+        return proto
+    end
+    
+    # Build the formatted result
+    align_pos = before_params.length
+    align = " " * align_pos
+    result = before_params + param_parts.shift
+    
+    param_parts.each do |part|
+        result += ",\n" + indent + align + part
+    end
+    
+    result += after_params
+    return result
 end
 
 # Given the source code array and the index at which an exported symbol was
@@ -72,14 +123,43 @@ def docufy(src,i)
     m = /VM_[A-z0-9]+/.match(src[i])
     shortname = m[0].sub("VM_","")
     name = "ValkeyModule_" ++ shortname
-    proto = src[i].sub("{","").strip+";\n"
+    
+    # Build the complete function prototype by reading until we find the opening brace
+    proto_lines = []
+    j = i
+    while j < src.length
+        line = src[j].rstrip
+        if line.include?("{")
+            # Include the part before the brace
+            line = line.sub(/\s*\{.*$/, "")
+            proto_lines << line unless line.strip.empty?
+            break
+        else
+            proto_lines << line
+        end
+        j += 1
+    end
+    
+    # Join all lines and clean up
+    proto = proto_lines.join(" ")
+    
+    # Remove extra whitespace and normalize
+    proto = proto.gsub(/\s+/, " ").strip
+    
+    # Replace VM_ with ValkeyModule_
     proto = proto.sub("VM_","ValkeyModule_")
+    
+    # Add semicolon if not present
+    proto += ";" unless proto.end_with?(";")
+    
+    # Apply line breaking
     proto = linebreak_proto(proto, "    ");
+    
     # Add a link target with the function name. (We don't trust the exact id of
     # the generated one, which depends on the Markdown implementation.)
     puts "<span id=\"#{name}\"></span>\n\n"
     puts "### `#{name}`\n\n"
-    puts "    #{proto}\n"
+    puts "    #{proto}\n\n"
     puts "**Available since:** #{$since[shortname] or "unreleased"}\n\n"
     comment = ""
     while true

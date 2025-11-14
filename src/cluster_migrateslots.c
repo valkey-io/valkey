@@ -538,8 +538,7 @@ void clusterCommandSyncSlotsEstablish(client *c) {
         return;
     }
 
-    /* Order agnostic. We skip unknown key/value pairs forwards
-     * compatibility. */
+    /* Order agnostic. */
     bool is_tracking_only = c->flag.primary || c->id == CLIENT_ID_AOF;
     int i = 3;
     while (i < c->argc) {
@@ -866,9 +865,6 @@ void performSlotImportJobFailover(slotMigrationJob *job) {
     /* 4) Pong all the other nodes so that they can update the state accordingly
      *    and detect that we have taken over the slots. */
     clusterDoBeforeSleep(CLUSTER_TODO_BROADCAST_ALL);
-
-    /* 5) Mark all slots as stable in the kvstore (for SCAN/KEYS/RANDOMKEY) */
-    setSlotImportingStateInAllDbs(job->slot_ranges, 0);
 }
 
 bool clusterIsAnySlotImporting(void) {
@@ -1388,7 +1384,7 @@ void initSlotExportJobClient(slotMigrationJob *job) {
     serverAssert(job->type == SLOT_MIGRATION_EXPORT);
     job->client = createClient(job->conn);
     job->conn = NULL;
-    job->client->flag.authenticated = 1;
+    clientSetUser(job->client, NULL, 1);
     job->client->slot_migration_job = job;
     initClientReplicationData(job->client);
 }

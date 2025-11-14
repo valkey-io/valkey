@@ -687,7 +687,7 @@ long long emptyData(int dbnum, int flags, void(callback)(hashtable *)) {
     if (with_functions) {
         serverAssert(dbnum == -1);
         /* TODO: fix this callback incompatibility. The arg is not used. */
-        functionsLibCtxClearCurrent(async, (void (*)(dict *))callback);
+        functionReset(async, (void (*)(dict *))callback);
     }
 
     /* Also fire the end event. Note that this event will fire almost

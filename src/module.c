@@ -6635,7 +6635,7 @@ ValkeyModuleCallReply *VM_Call(ValkeyModuleCtx *ctx, const char *cmdname, const 
          * CLIENT PAUSE WRITE. */
         if (is_running_script && scriptIsReadOnly() && (cmd_flags & (CMD_WRITE | CMD_MAY_REPLICATE))) {
             errno = ENOSPC;
-            reply_error_msg = sdsnew("Write commands are not allowed from read-only scripts");
+            reply_error_msg = sdsnew("Write commands are not allowed from read-only scripts.");
             goto cleanup;
         }
 

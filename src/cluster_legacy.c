@@ -171,6 +171,7 @@ static inline int defaultClientPort(void) {
     (server.cluster->slots[slot] == NULL || bitmapTestBit(server.cluster->owner_not_claiming_slot, slot))
 /* Treating slot bitmaps as 8-byte words to speedup iteration */
 #define CLUSTER_SLOT_WORDS (CLUSTER_SLOTS / 64)
+#define SLOT_WORD_OFFSET(w) ((w) << 3)
 
 #define RCVBUF_INIT_LEN 1024
 #define RCVBUF_MIN_READ_LEN 14
@@ -4120,7 +4121,7 @@ int clusterProcessPacket(clusterLink *link) {
             bool found_new_owner = false;
             for (size_t w = 0; w < CLUSTER_SLOT_WORDS && !found_new_owner; w++) {
                 uint64_t word;
-                memcpy(&word, hdr->myslots + (w << 3), sizeof(word));
+                memcpy(&word, hdr->myslots + SLOT_WORD_OFFSET(w), sizeof(word));
                 while (word) {
                     const int slot = clusterExtractSlotFromWord(&word, w);
 
@@ -5071,7 +5072,7 @@ void clusterSendFailoverAuthIfNeeded(clusterNode *node, clusterMsg *request) {
      * slots in the current configuration. */
     for (size_t w = 0; w < CLUSTER_SLOT_WORDS; w++) {
         uint64_t word;
-        memcpy(&word, claimed_slots + (w << 3), sizeof(word));
+        memcpy(&word, claimed_slots + SLOT_WORD_OFFSET(w), sizeof(word));
         while (word) {
             slot = clusterExtractSlotFromWord(&word, w);
 

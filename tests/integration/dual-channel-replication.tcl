@@ -788,6 +788,7 @@ start_server {tags {"dual-channel-replication external:skip"}} {
     $primary config set dual-channel-replication-enabled yes
     $primary config set client-output-buffer-limit "replica 1100k 0 0"
     $primary config set loglevel debug
+    $primary debug delay-rdb-client-free-seconds 60
     # generate small db
     populate 10 primary 10
     start_server {} {

@@ -2342,7 +2342,7 @@ static size_t zsetHashtableGetMaxElementLength(hashtable *ht, size_t *totallen) 
         if (elelen > maxelelen) maxelelen = elelen;
         if (totallen) (*totallen) += elelen;
     }
-    hashtableResetIterator(&iter);
+    hashtableCleanupIterator(&iter);
 
     return maxelelen;
 }
@@ -2745,7 +2745,7 @@ static void zunionInterDiffGenericCommand(client *c, robj *dstkey, int numkeysIn
             zskiplistNode *node = next;
             zslInsertNode(dstzset->zsl, node);
         }
-        hashtableResetIterator(&iter);
+        hashtableCleanupIterator(&iter);
     } else if (op == SET_OP_DIFF) {
         zdiff(src, setnum, dstzset, &maxelelen, &totelelen);
     } else {
@@ -4192,7 +4192,7 @@ void zrandmemberWithCountCommand(client *c, long l, int withscores) {
             hashtableDelete(ht, ((zskiplistNode *)element)->ele);
             size--;
         }
-        hashtableResetIterator(&iter);
+        hashtableCleanupIterator(&iter);
 
         /* Reply with what's in the temporary hashtable and release memory */
         hashtableInitIterator(&iter, ht, 0);
@@ -4205,7 +4205,7 @@ void zrandmemberWithCountCommand(client *c, long l, int withscores) {
             if (withscores) addReplyDouble(c, node->score);
         }
 
-        hashtableResetIterator(&iter);
+        hashtableCleanupIterator(&iter);
         hashtableRelease(ht);
     }
 

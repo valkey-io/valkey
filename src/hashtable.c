@@ -1091,6 +1091,7 @@ static inline int shouldPrefetchValues(iter *iter) {
 
 /* Add a safe iterator to the hashtable's tracking list */
 static void trackSafeIterator(iter *it) {
+    assert(it->next_safe_iter == NULL);
     hashtable *ht = it->hashtable;
     it->next_safe_iter = ht->safe_iterators;
     ht->safe_iterators = it;
@@ -1102,26 +1103,21 @@ static void untrackSafeIterator(iter *it) {
     if (ht->safe_iterators == it) {
         ht->safe_iterators = it->next_safe_iter;
     } else {
-        iter *prev = ht->safe_iterators;
-        while (prev && prev->next_safe_iter != it) {
-            prev = prev->next_safe_iter;
+        iter *current = ht->safe_iterators;
+        assert(current != NULL);
+        while (current->next_safe_iter != it) {
+            current = current->next_safe_iter;
+            assert(current != NULL);
         }
-        if (prev) {
-            prev->next_safe_iter = it->next_safe_iter;
-        }
+        current->next_safe_iter = it->next_safe_iter;
     }
     it->next_safe_iter = NULL;
-    it->hashtable = NULL;
+    it->hashtable = NULL; /* Mark as invalid */
 }
 
 /* Invalidate all safe iterators by setting hashtable = NULL */
 static void invalidateAllSafeIterators(hashtable *ht) {
-    iter *it = ht->safe_iterators;
-    while (it) {
-        it->hashtable = NULL; /* Mark as invalid */
-        it = it->next_safe_iter;
-    }
-    ht->safe_iterators = NULL;
+    while (ht->safe_iterators) untrackSafeIterator(ht->safe_iterators);
 }
 
 /* --- API functions --- */
@@ -1284,6 +1280,7 @@ static void hashtablePauseRehashing(hashtable *ht) {
 /* Resumes incremental rehashing, after pausing it. */
 static void hashtableResumeRehashing(hashtable *ht) {
     ht->pause_rehash--;
+    assert(ht->pause_rehash >= 0);
     hashtableResumeAutoShrink(ht);
 }
 
@@ -2022,7 +2019,7 @@ size_t hashtableScanDefrag(hashtable *ht, size_t cursor, hashtableScanFunction f
  * - Entries that are inserted during the iteration may or may not be returned
  *   by the iterator.
  *
- * Call hashtableNext to fetch each entry. You must call hashtableResetIterator
+ * Call hashtableNext to fetch each entry. You must call hashtableCleanupIterator
  * when you are done with the iterator.
  */
 void hashtableInitIterator(hashtableIterator *iterator, hashtable *ht, uint8_t flags) {
@@ -2038,22 +2035,24 @@ void hashtableInitIterator(hashtableIterator *iterator, hashtable *ht, uint8_t f
     }
 }
 
-/* Reinitializes the iterator for the provided hashtable while
- * preserving the flags from its previous initialization. */
-void hashtableReinitIterator(hashtableIterator *iterator, hashtable *ht) {
+/* Reinitializes the iterator to begin a new iteration of the provided hashtable
+ * while preserving the flags from its previous initialization. */
+void hashtableRetargetIterator(hashtableIterator *iterator, hashtable *ht) {
     iter *iter = iteratorFromOpaque(iterator);
-    hashtableInitIterator(iterator, ht, iter->flags);
+    uint8_t flags = iter->flags;
+
+    hashtableCleanupIterator(iterator);
+    hashtableInitIterator(iterator, ht, flags);
 }
 
-/* Resets a stack-allocated iterator. */
-void hashtableResetIterator(hashtableIterator *iterator) {
+/* Performs required cleanup for a stack-allocated iterator. */
+void hashtableCleanupIterator(hashtableIterator *iterator) {
     iter *iter = iteratorFromOpaque(iterator);
     if (iter->hashtable == NULL) return;
 
     if (!(iter->index == -1 && iter->table == 0)) {
         if (isSafe(iter)) {
             hashtableResumeRehashing(iter->hashtable);
-            assert(iter->hashtable->pause_rehash >= 0);
             untrackSafeIterator(iter);
         } else {
             assert(iter->fingerprint == hashtableFingerprint(iter->hashtable));
@@ -2072,7 +2071,7 @@ hashtableIterator *hashtableCreateIterator(hashtable *ht, uint8_t flags) {
 /* Resets and frees the memory of an allocated iterator, i.e. one created using
  * hashtableCreate(Safe)Iterator. */
 void hashtableReleaseIterator(hashtableIterator *iterator) {
-    hashtableResetIterator(iterator);
+    hashtableCleanupIterator(iterator);
     iter *iter = iteratorFromOpaque(iterator);
     zfree(iter);
 }
@@ -2082,9 +2081,7 @@ void hashtableReleaseIterator(hashtableIterator *iterator) {
 bool hashtableNext(hashtableIterator *iterator, void **elemptr) {
     iter *iter = iteratorFromOpaque(iterator);
     /* Check if iterator has been invalidated */
-    if (iter->hashtable == NULL) {
-        return false;
-    }
+    if (iter->hashtable == NULL) return false;
 
     while (1) {
         if (iter->index == -1 && iter->table == 0) {

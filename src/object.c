@@ -643,7 +643,7 @@ void dismissSetObject(robj *o, size_t size_hint) {
                 sds item = next;
                 dismissSds(item);
             }
-            hashtableResetIterator(&iter);
+            hashtableCleanupIterator(&iter);
         }
 
         dismissHashtable(ht);
@@ -694,7 +694,7 @@ void dismissHashObject(robj *o, size_t size_hint) {
             while (hashtableNext(&iter, &next)) {
                 entryDismissMemory(next);
             }
-            hashtableResetIterator(&iter);
+            hashtableCleanupIterator(&iter);
         }
 
         dismissHashtable(ht);
@@ -1171,7 +1171,7 @@ size_t objectComputeSize(robj *key, robj *o, size_t sample_size, int dbid) {
                 elesize += sdsAllocSize(element);
                 samples++;
             }
-            hashtableResetIterator(&iter);
+            hashtableCleanupIterator(&iter);
             if (samples) asize += (double)elesize / samples * hashtableSize(ht);
         } else if (o->encoding == OBJ_ENCODING_INTSET) {
             asize += zmalloc_size(o->ptr);
@@ -1214,7 +1214,7 @@ size_t objectComputeSize(robj *key, robj *o, size_t sample_size, int dbid) {
                 elesize += entryMemUsage(next);
                 samples++;
             }
-            hashtableResetIterator(&iter);
+            hashtableCleanupIterator(&iter);
             if (samples) asize += (double)elesize / samples * hashtableSize(ht);
             if (vsetIsValid(volatile_fields)) asize += vsetMemUsage(volatile_fields);
         } else {

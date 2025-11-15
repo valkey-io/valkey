@@ -3344,7 +3344,7 @@ void resetCommandTableStats(hashtable *commands) {
         }
         if (c->subcommands_ht) resetCommandTableStats(c->subcommands_ht);
     }
-    hashtableResetIterator(&iter);
+    hashtableCleanupIterator(&iter);
 }
 
 void resetErrorTableStats(void) {
@@ -5218,7 +5218,7 @@ void addReplyCommandSubCommands(client *c,
         if (use_map) addReplyBulkCBuffer(c, sub->fullname, sdslen(sub->fullname));
         reply_function(c, sub);
     }
-    hashtableResetIterator(&iter);
+    hashtableCleanupIterator(&iter);
 }
 
 /* Output the representation of a server command. Used by the COMMAND command and COMMAND INFO. */
@@ -5379,7 +5379,7 @@ void commandCommand(client *c) {
         struct serverCommand *cmd = next;
         addReplyCommandInfo(c, cmd);
     }
-    hashtableResetIterator(&iter);
+    hashtableCleanupIterator(&iter);
 }
 
 /* COMMAND COUNT */
@@ -5445,7 +5445,7 @@ void commandListWithFilter(client *c, hashtable *commands, commandListFilter fil
             commandListWithFilter(c, cmd->subcommands_ht, filter, numcmds);
         }
     }
-    hashtableResetIterator(&iter);
+    hashtableCleanupIterator(&iter);
 }
 
 /* COMMAND LIST */
@@ -5462,7 +5462,7 @@ void commandListWithoutFilter(client *c, hashtable *commands, int *numcmds) {
             commandListWithoutFilter(c, cmd->subcommands_ht, numcmds);
         }
     }
-    hashtableResetIterator(&iter);
+    hashtableCleanupIterator(&iter);
 }
 
 /* COMMAND LIST [FILTERBY (MODULE <module-name>|ACLCAT <cat>|PATTERN <pattern>)] */
@@ -5519,7 +5519,7 @@ void commandInfoCommand(client *c) {
             struct serverCommand *cmd = next;
             addReplyCommandInfo(c, cmd);
         }
-        hashtableResetIterator(&iter);
+        hashtableCleanupIterator(&iter);
     } else {
         addReplyArrayLen(c, c->argc - 2);
         for (i = 2; i < c->argc; i++) {
@@ -5542,7 +5542,7 @@ void commandDocsCommand(client *c) {
             addReplyBulkCBuffer(c, cmd->fullname, sdslen(cmd->fullname));
             addReplyCommandDocs(c, cmd);
         }
-        hashtableResetIterator(&iter);
+        hashtableCleanupIterator(&iter);
     } else {
         /* Reply with an array of the requested commands (if we find them) */
         int numcmds = 0;
@@ -5682,7 +5682,7 @@ sds genValkeyInfoStringCommandStats(sds info, hashtable *commands) {
             info = genValkeyInfoStringCommandStats(info, c->subcommands_ht);
         }
     }
-    hashtableResetIterator(&iter);
+    hashtableCleanupIterator(&iter);
 
     return info;
 }
@@ -5717,7 +5717,7 @@ sds genValkeyInfoStringLatencyStats(sds info, hashtable *commands) {
             info = genValkeyInfoStringLatencyStats(info, c->subcommands_ht);
         }
     }
-    hashtableResetIterator(&iter);
+    hashtableCleanupIterator(&iter);
 
     return info;
 }

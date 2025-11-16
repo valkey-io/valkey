@@ -85,6 +85,12 @@ void lazyFreeReplicationBacklogRefMem(void *args[]) {
     atomic_fetch_add_explicit(&lazyfreed_objects, len, memory_order_relaxed);
 }
 
+/* Release the replicaKeysWithExpire dict. */
+void lazyFreeReplicaKeysWithExpire(void *args[]) {
+    dict *replica_keys_with_expire = args[0];
+    dictRelease(replica_keys_with_expire);
+}
+
 /* Return the number of currently pending objects to free. */
 size_t lazyfreeGetPendingObjectsCount(void) {
     size_t aux = atomic_load_explicit(&lazyfree_objects, memory_order_relaxed);
@@ -258,5 +264,15 @@ void freeReplicationBacklogRefMemAsync(list *blocks, rax *index) {
     } else {
         listRelease(blocks);
         raxFree(index);
+    }
+}
+
+
+/* Free replicaKeysWithExpire dict, if the dict is huge enough, free it in async way. */
+void freeReplicaKeysWithExpireAsync(dict *replica_keys_with_expire) {
+    if (dictSize(replica_keys_with_expire) > LAZYFREE_THRESHOLD) {
+        bioCreateLazyFreeJob(lazyFreeReplicaKeysWithExpire,1,replica_keys_with_expire);
+    } else {
+        dictRelease(replica_keys_with_expire);
     }
 }

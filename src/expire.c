@@ -644,9 +644,13 @@ size_t getReplicaKeyWithExpireCount(void) {
  * but it is not worth it since anyway race conditions using the same set
  * of key names in a writable replica and in its primary will lead to
  * inconsistencies. This is just a best-effort thing we do. */
-void flushReplicaKeysWithExpireList(void) {
+void flushReplicaKeysWithExpireList(int async) {
     if (replicaKeysWithExpire) {
-        dictRelease(replicaKeysWithExpire);
+        if (async) {
+            freeReplicaKeysWithExpireAsync(replicaKeysWithExpire);
+        } else {
+            dictRelease(replicaKeysWithExpire);
+        }
         replicaKeysWithExpire = NULL;
     }
 }

@@ -682,7 +682,7 @@ long long emptyData(int dbnum, int flags, void(callback)(hashtable *)) {
     /* Empty the database structure. */
     removed = emptyDbStructure(server.db, dbnum, async, callback);
 
-    if (dbnum == -1) flushReplicaKeysWithExpireList();
+    if (dbnum == -1) flushReplicaKeysWithExpireList(async);
 
     if (with_functions) {
         serverAssert(dbnum == -1);
@@ -1796,7 +1796,7 @@ void swapMainDbWithTempDb(serverDb **tempDb) {
     }
 
     trackingInvalidateKeysOnFlush(1);
-    flushReplicaKeysWithExpireList();
+    flushReplicaKeysWithExpireList(1);
 }
 
 /* SWAPDB db1 db2 */

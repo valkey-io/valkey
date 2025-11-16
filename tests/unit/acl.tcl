@@ -749,7 +749,7 @@ start_server {tags {"acl external:skip"}} {
         set log [r ACL LOG]
         set entry [lindex $log 0]
         assert {[dict get $entry reason] eq {database}}
-        assert {[dict get $entry object] eq {FLUSHALL}}
+        assert {[dict get $entry object] eq {flushall}}
         set entry [lindex $log 1]
         assert {[dict get $entry reason] eq {database}}
         assert {[dict get $entry object] eq {2}}

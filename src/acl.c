@@ -2838,7 +2838,7 @@ void addACLLogEntry(client *c, int reason, int context, int argpos, sds username
         case ACL_DENIED_CMD: le->object = sdsdup(c->cmd->fullname); break;
         case ACL_DENIED_KEY: le->object = sdsdup(c->argv[argpos]->ptr); break;
         case ACL_DENIED_CHANNEL: le->object = sdsdup(c->argv[argpos]->ptr); break;
-        case ACL_DENIED_DB: le->object = sdsdup(c->argv[argpos]->ptr); break;
+        case ACL_DENIED_DB: le->object = argpos ? sdsdup(c->argv[argpos]->ptr) : sdsdup(c->cmd->fullname); break;
         case ACL_DENIED_AUTH: le->object = sdsdup(c->argv[0]->ptr); break;
         default: le->object = sdsempty();
         }

@@ -55,6 +55,31 @@ start_server {tags {"modules acl"}} {
         set e
     } {*DENIED CHANNEL*}
 
+    test {test module check acl for db perm} {
+        assert_equal [r aclcheck.select.check.db 1] OK
+        
+        r acl setuser default resetdbs db+=0,1,2
+        r select 0
+
+        assert_equal [r aclcheck.select.check.db 1] OK
+        assert_equal [r aclcheck.select.check.db 2] OK
+        
+        catch {r aclcheck.select.check.db 3} e
+        assert_match {*DENIED DB*} $e
+        
+        set entry [lindex [r ACL LOG] 0]
+        assert {[dict get $entry username] eq {default}}
+        assert {[dict get $entry context] eq {module}}
+        assert {[dict get $entry object] eq {3}}
+        assert {[dict get $entry reason] eq {database}}
+        
+        catch {r aclcheck.select.check.db 999} e
+        assert_match {*DENIED DB*} $e
+        
+        r acl setuser default alldbs
+        r select 0
+    }
+
     test {test module check acl in rm_call} {
         # rm call check for key permission (x: READ + WRITE)
         assert_equal [r aclcheck.rm_call set x 5] OK

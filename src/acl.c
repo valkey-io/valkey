@@ -1995,6 +1995,26 @@ int ACLUserCheckChannelPerm(user *u, sds channel, int is_pattern) {
     return ACL_DENIED_CHANNEL;
 }
 
+/* Check if the user can access the specified database. Returns ACL_OK if the user
+ * has access to the database, ACL_DENIED_DB otherwise. */
+int ACLUserCheckDbPerm(user *u, long long dbid) {
+    listIter li;
+    listNode *ln;
+
+    /* If there is no associated user, the connection can run anything. */
+    if (u == NULL) return ACL_OK;
+
+    /* Check all of the selectors */
+    listRewind(u->selectors, &li);
+    while ((ln = listNext(&li))) {
+        aclSelector *s = (aclSelector *)listNodeValue(ln);
+        if (ACLSelectorCanAccessDb(s, dbid)) {
+            return ACL_OK;
+        }
+    }
+    return ACL_DENIED_DB;
+}
+
 /* Lower level API that checks if a specified user is able to execute a given command.
  *
  * If the command fails an ACL check, idxptr will be to set to the first argv entry that

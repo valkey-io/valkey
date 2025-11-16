@@ -737,6 +737,28 @@ start_server {tags {"acl external:skip"}} {
         assert {[dict get $entry object] eq {somechannelnotallowed}}
     }
 
+        test {ACL LOG is able to log database access violations} {
+        r ACL LOG RESET
+        r ACL SETUSER dbuser on nopass db+=0 +@all ~*
+        r AUTH dbuser password
+        
+        catch {r SELECT 1}
+        catch {r SWAPDB 0 2}
+        catch {r FLUSHALL}
+        
+        set log [r ACL LOG]
+        set entry [lindex $log 0]
+        assert {[dict get $entry reason] eq {database}}
+        assert {[dict get $entry object] eq {FLUSHALL}}
+        set entry [lindex $log 1]
+        assert {[dict get $entry reason] eq {database}}
+        assert {[dict get $entry object] eq {2}}
+        set entry [lindex $log 2]
+        assert {[dict get $entry reason] eq {database}}
+        assert {[dict get $entry object] eq {1}}
+
+    }
+
     test {ACL LOG RESET is able to flush the entries in the log} {
         r ACL LOG RESET
         assert {[llength [r ACL LOG]] == 0}

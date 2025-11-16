@@ -2804,8 +2804,8 @@ static void trimACLLogEntriesToMaxLen(void) {
  * the log entry instead of creating many entries for very similar ACL
  * rules issues.
  *
- * The argpos argument is used when the reason is ACL_DENIED_KEY or
- * ACL_DENIED_CHANNEL, since it allows the function to log the key or channel
+ * The argpos argument is used when the reason is ACL_DENIED_KEY, ACL_DENIED_DB or
+ * ACL_DENIED_CHANNEL, since it allows the function to log the key, dbid or channel
  * name that caused the problem.
  *
  * The last 2 arguments are a manual override to be used, instead of any of the automatic
@@ -3236,6 +3236,7 @@ void aclCommand(client *c) {
             case ACL_DENIED_CHANNEL: reasonstr = "channel"; break;
             case ACL_DENIED_AUTH: reasonstr = "auth"; break;
             case ACL_INVALID_TLS_CERT_AUTH: reasonstr = "tls-cert"; break;
+            case ACL_DENIED_DB: reasonstr = "database"; break;
             default: reasonstr = "unknown";
             }
             addReplyBulkCString(c, reasonstr);

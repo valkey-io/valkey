@@ -32,6 +32,7 @@
             "KEYSPACE",
             "DANGEROUS"
         ],
+        "get_dbid_args": "migrateDbIdArgs",
         "command_tips": [
             "NONDETERMINISTIC_OUTPUT"
         ],

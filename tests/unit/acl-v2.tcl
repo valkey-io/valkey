@@ -706,7 +706,7 @@ start_server {tags {"acl external:skip"}} {
         $r2 set key value
         
         catch {$r2 flushall} e
-        assert_match "*NOPERM*" $e
+        assert_match "*NOPERM*database*" $e
         
         assert_equal "OK" [$r2 flushdb]
     }
@@ -718,18 +718,39 @@ start_server {tags {"acl external:skip"}} {
         assert_equal "OK" [$r2 swapdb 0 1]
         
         catch {$r2 swapdb 0 2} e
-        assert_match "*NOPERM*" $e
+        assert_match "*NOPERM*database*" $e
     }
 
-    test {Test MOVE with database permissions} {    
+    test {Test MOVE with database permissions} {
         r ACL SETUSER move-user on nopass +move +set ~* db+=0,1
         $r2 auth move-user password
         $r2 set move-key value
         assert_equal "1" [$r2 move move-key 1]
 
         catch {$r2 move move-key 2} e
-        assert_match "*NOPERM*" $e
+        assert_match "*NOPERM*database*" $e
     }
+
+    test {Test MIGRATE with database permissions} {
+        set first [srv 0 client]
+        r ACL SETUSER migrate-user on nopass +migrate +set +get +del ~* db+=0,1
+        $r2 auth migrate-user password
+        
+        # Second server to migrate to
+        start_server {tags {"repl"}} {
+            set second [srv 0 client]
+            set second_host [srv 0 host]
+            set second_port [srv 0 port]
+            
+            $r2 set migrate-key value
+            set ret [$r2 migrate $second_host $second_port migrate-key 1 5000]
+            assert_equal "OK" $ret
+            
+            $r2 set migrate-key2 value2
+            catch {$r2 migrate $second_host $second_port migrate-key2 2 5000} e
+            assert_match "*NOPERM*database*" $e
+        }
+    } {} {external:skip}
 
     test {Test db-= to remove databases from allowed list} {
         r ACL SETUSER db-remove-user on nopass +@all ~* db+=0,1,2,3

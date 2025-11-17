@@ -1067,7 +1067,6 @@ void hgetdelCommand(client *c) {
         return;
     }
 
-
     /* Don't abort when the key cannot be found. Non-existing keys are empty
      * hashes, where HGETDEL should respond with a series of null bulks. */
     robj *o = lookupKeyWrite(c->db, c->argv[1]);

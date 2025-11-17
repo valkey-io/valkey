@@ -1053,6 +1053,50 @@ void hdelCommand(client *c) {
     addReplyLongLong(c, deleted);
 }
 
+void hgetdelCommand(client *c) {
+    robj *o;
+    int i, deleted = 0;
+    bool keyremoved = false;
+
+    /* Don't abort when the key cannot be found. Non-existing keys are empty
+    * hashes, where HGETDEL should respond with a series of null bulks. */
+    o = lookupKeyWrite(c->db, c->argv[1]);
+    if (checkType(c, o, OBJ_HASH)) return;
+
+    /* Reply with array of values */
+    addReplyArrayLen(c, c->argc - 2);
+    for (i = 2; i < c->argc; i++) {
+        addHashFieldToReply(c, o, c->argv[i]->ptr);
+    }
+
+    /* If hash doesn't exist, we're done as we have already replied with NULLs */
+    if (o == NULL) return;
+
+    /* Now delete the fields. */
+    bool hash_volatile_items = hashTypeHasVolatileFields(o);
+    for (i = 2; i < c->argc; i++) {
+        if (hashTypeDelete(o, c->argv[i]->ptr)) {
+            deleted++;
+            if (hashTypeLength(o) == 0) {
+                if (hash_volatile_items) dbUntrackKeyWithVolatileItems(c->db, o);
+                dbDelete(c->db, c->argv[1]);
+                keyremoved = true;
+                break;
+            }
+        }
+    }
+
+    if (deleted) {
+        if (!keyremoved && hash_volatile_items != hashTypeHasVolatileFields(o)) {
+            dbUpdateObjectWithVolatileItemsTracking(c->db, o);
+        }
+        signalModifiedKey(c, c->db, c->argv[1]);
+        notifyKeyspaceEvent(NOTIFY_HASH, "hgetdel", c->argv[1], c->db->id);
+        if (keyremoved) notifyKeyspaceEvent(NOTIFY_GENERIC, "del", c->argv[1], c->db->id);
+        server.dirty += deleted;
+    }
+}
+
 void hlenCommand(client *c) {
     robj *o;
 

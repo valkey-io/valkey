@@ -597,10 +597,13 @@ start_server {tags {"acl external:skip"}} {
         assert_match "*NOPERM*database*" $err
         
         r ACL SETUSER db-reset-user resetdbs
-        
-        assert_equal "OK" [$r2 select 0]
-        assert_equal "OK" [$r2 select 1]
-        assert_equal "OK" [$r2 select 2]
+
+        catch {$r2 select 0} err
+        assert_match "*NOPERM*database*" $err
+        catch {$r2 select 1} err
+        assert_match "*NOPERM*database*" $err
+        catch {$r2 select 2} err
+        assert_match "*NOPERM*database*" $err
         
         r ACL SETUSER db-reset-user alldbs
         
@@ -938,20 +941,22 @@ start_server {tags {"acl external:skip"}} {
         assert_match "*Error*" $err
     }
     
-    test {Test resetdbs clears explicit db list and sets alldbs} {
+    test {Test resetdbs clears explicit db list} {
         r ACL SETUSER db-reset-test on nopass +@all ~* db+=0,1
         $r2 auth db-reset-test password
         
-        catch {$r2 select 2} err
-        assert_match "*NOPERM*database*" $err
+        assert_equal "OK" [$r2 select 0]
+        assert_equal "OK" [$r2 select 1]
         
         r ACL SETUSER db-reset-test resetdbs
         
-        # After resetdbs, should have access to all DBs
-        assert_equal "OK" [$r2 select 0]
-        assert_equal "OK" [$r2 select 1]
-        assert_equal "OK" [$r2 select 2]
-        assert_equal "OK" [$r2 select 3]
+        catch {$r2 select 0} err
+        assert_match "*NOPERM*database*" $err
+        catch {$r2 select 1} err
+        assert_match "*NOPERM*database*" $err
+
+        r ACL SETUSER db-reset-test db+=0
+        $r2 select 0
     }
     
     test {Test clearselectors removes db restrictions from selectors but not root} {

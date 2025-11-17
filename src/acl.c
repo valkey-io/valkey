@@ -820,6 +820,8 @@ static sds ACLDescribeSelector(aclSelector *selector) {
     /* Database permissions. */
     if (selector->flags & SELECTOR_FLAG_ALLDBS) {
         res = sdscatlen(res, "alldbs ", 7);
+    } else if (intsetLen(selector->dbs) == 0){
+        res = sdscatlen(res, "resetdbs ", 9);
     } else {
         res = sdscatlen(res, "db+=", 4);
         uint32_t len = intsetLen(selector->dbs);
@@ -965,7 +967,6 @@ static intset *ACLInitDatabaseIntset(aclSelector *selector, int add_dbs) {
     /* For removal operations with ALLDBS flag, convert to explicit list */
     if (!add_dbs && (selector->flags & SELECTOR_FLAG_ALLDBS)) {
         new_dbs = intsetNew();
-        if (!new_dbs) return NULL;
 
         for (int i = 0; i < server.dbnum; i++) {
             uint8_t success;
@@ -992,18 +993,12 @@ static int ACLDatabasePermissionError(intset *new_dbs, char *dblist, int error_c
 static int ACLSetSelectorDatabasePermissions(aclSelector *selector, const char *dbs_str, int add_dbs) {
     /* Initialize the database intset based on operation type */
     intset *new_dbs = ACLInitDatabaseIntset(selector, add_dbs);
-    if (!new_dbs) {
-        return ACLDatabasePermissionError(NULL, NULL, ENOMEM);
-    }
 
     if (selector->flags & SELECTOR_FLAG_ALLDBS) {
         selector->flags &= ~SELECTOR_FLAG_ALLDBS;
     }
 
     char *dblist = zstrdup(dbs_str);
-    if (!dblist) {
-        return ACLDatabasePermissionError(new_dbs, NULL, ENOMEM);
-    }
 
     /* Reject empty list, trailing commas or more than 1 consecutive commas */
     if (strlen(dblist) == 0 || dblist[0] == ',' ||
@@ -1137,7 +1132,7 @@ static int ACLSetSelector(aclSelector *selector, const char *op, size_t oplen) {
             selector->dbs = intsetNew();
         }
     } else if (!strcasecmp(op, "resetdbs")) {
-        selector->flags |= SELECTOR_FLAG_ALLDBS;
+        selector->flags &= ~SELECTOR_FLAG_ALLDBS;
         if (selector->dbs) {
             intsetFree(selector->dbs);
             selector->dbs = intsetNew();
@@ -1465,7 +1460,7 @@ int ACLSetUser(user *u, const char *op, ssize_t oplen) {
         serverAssert(ACLSetUser(u, "resetchannels", -1) == C_OK);
         if (server.acl_pubsub_default & SELECTOR_FLAG_ALLCHANNELS)
             serverAssert(ACLSetUser(u, "allchannels", -1) == C_OK);
-        serverAssert(ACLSetUser(u, "resetdbs", -1) == C_OK);
+        serverAssert(ACLSetUser(u, "alldbs", -1) == C_OK);
         serverAssert(ACLSetUser(u, "off", -1) == C_OK);
         serverAssert(ACLSetUser(u, "sanitize-payload", -1) == C_OK);
         serverAssert(ACLSetUser(u, "clearselectors", -1) == C_OK);

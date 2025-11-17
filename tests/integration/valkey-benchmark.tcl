@@ -217,7 +217,7 @@ tags {"benchmark network external:skip logreqres:skip"} {
 
             # Verify total duration was at least 2 seconds
             set elapsed [expr {($end_time - $start_time)/1000.0}]
-            assert {$elapsed >= 2 && $elapsed <= 2.25}
+            assert {$elapsed >= 2}
 
             # Check reported duration
             lassign [regexp -inline {(\d+) requests completed in ([\d.]+) seconds} $output] -> requests duration

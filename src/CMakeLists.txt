@@ -93,3 +93,7 @@ endif ()
 if (BUILD_UNIT_TESTS)
     add_subdirectory(unit)
 endif ()
+
+if (BUILD_UNIT_GTESTS)
+    add_subdirectory(gtest)
+endif ()

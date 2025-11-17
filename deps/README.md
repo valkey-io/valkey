@@ -6,7 +6,9 @@ should be provided by the operating system.
 * **linenoise** is a readline replacement. It is developed by the same authors of Valkey but is managed as a separated project and updated as needed.
 * **lua** is Lua 5.1 with minor changes for security and additional libraries.
 * **hdr_histogram** Used for per-command latency tracking histograms.
-* **fast_float** is a replacement for strtod to convert strings to floats efficiently. 
+* **fast_float** is a replacement for strtod to convert strings to floats efficiently.
+* **googletest** is Google's C++ testing framework used for google unit tests.
+* **gtest-parallel** is a script for running googletest tests in parallel.
 
 How to upgrade the above dependencies
 ===
@@ -121,3 +123,22 @@ To upgrade the library,
 2. cd fast_float
 3. Invoke "python3 ./script/amalgamate.py --output fast_float.h"
 4. Copy fast_float.h file to "deps/fast_float/".
+
+googletest and gtest-parallel
+---
+
+To upgrade googletest and gtest-parallel:
+
+```sh
+# googletest (v1.8.x)
+rm -rf googletest
+git clone --branch v1.8.x --depth 1 https://github.com/google/googletest.git googletest
+rm -rf googletest/.git
+
+# gtest-parallel (master)
+rm -rf gtest-parallel
+git clone --depth 1 https://github.com/google/gtest-parallel.git gtest-parallel
+rm -rf gtest-parallel/.git
+```
+
+Commit the changes.

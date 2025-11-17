@@ -3,3 +3,4 @@
 *.gcov
 valkey.info
 lcov-html
+generated_*

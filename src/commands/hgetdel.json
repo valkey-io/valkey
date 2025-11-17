@@ -4,7 +4,7 @@
         "complexity": "O(N) where N is the number of fields to be retrieved and deleted.",
         "group": "hash",
         "since": "9.1.0",
-        "arity": -3,
+        "arity": -5,
         "function": "hgetdelCommand",
         "command_flags": [
             "WRITE",
@@ -56,9 +56,23 @@
                 "key_spec_index": 0
             },
             {
-                "name": "field",
-                "type": "string",
-                "multiple": true
+                "name": "fields",
+                "token": "FIELDS",
+                "type": "block",
+                "arguments": [
+                    {
+                        "name": "numfields",
+                        "type": "integer",
+                        "key_spec_index": 0,
+                        "multiple": false,
+                        "minimum": 1
+                    },
+                    {
+                        "name": "field",
+                        "type": "string",
+                        "multiple": true
+                    }
+                ]
             }
         ]
     }

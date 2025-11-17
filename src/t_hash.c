@@ -1054,18 +1054,28 @@ void hdelCommand(client *c) {
 }
 
 void hgetdelCommand(client *c) {
-    robj *o;
+    int fields_index = 4;
     int i, deleted = 0;
+    long long num_fields = 0;
     bool keyremoved = false;
 
+    if (getLongLongFromObjectOrReply(c, c->argv[fields_index - 1], &num_fields, NULL) != C_OK) return;
+
+    /* Check that the parsed fields number matches the real provided number of fields */
+    if (!num_fields || num_fields != (c->argc - fields_index)) {
+        addReplyErrorObject(c, shared.syntaxerr);
+        return;
+    }
+
+
     /* Don't abort when the key cannot be found. Non-existing keys are empty
-    * hashes, where HGETDEL should respond with a series of null bulks. */
-    o = lookupKeyWrite(c->db, c->argv[1]);
+     * hashes, where HGETDEL should respond with a series of null bulks. */
+    robj *o = lookupKeyWrite(c->db, c->argv[1]);
     if (checkType(c, o, OBJ_HASH)) return;
 
     /* Reply with array of values */
-    addReplyArrayLen(c, c->argc - 2);
-    for (i = 2; i < c->argc; i++) {
+    addReplyArrayLen(c, num_fields);
+    for (i = fields_index; i < c->argc; i++) {
         addHashFieldToReply(c, o, c->argv[i]->ptr);
     }
 
@@ -1074,7 +1084,7 @@ void hgetdelCommand(client *c) {
 
     /* Now delete the fields. */
     bool hash_volatile_items = hashTypeHasVolatileFields(o);
-    for (i = 2; i < c->argc; i++) {
+    for (i = fields_index; i < c->argc; i++) {
         if (hashTypeDelete(o, c->argv[i]->ptr)) {
             deleted++;
             if (hashTypeLength(o) == 0) {

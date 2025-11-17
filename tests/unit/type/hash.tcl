@@ -443,7 +443,7 @@ start_server {tags {"hash"}} {
         r del myhash
         r hset myhash field1 value1
         set rv {}
-        lappend rv [r hgetdel myhash field1]
+        lappend rv [r hgetdel myhash FIELDS 1 field1]
         lappend rv [r hexists myhash field1]
         lappend rv [r exists myhash]
         set _ $rv
@@ -453,7 +453,7 @@ start_server {tags {"hash"}} {
         r del myhash
         r hmset myhash field1 value1 field2 value2 field3 value3
         set rv {}
-        lappend rv [r hgetdel myhash field1 field3]
+        lappend rv [r hgetdel myhash FIELDS 2 field1 field3]
         lappend rv [r hexists myhash field1]
         lappend rv [r hexists myhash field2]
         lappend rv [r hexists myhash field3]
@@ -465,21 +465,21 @@ start_server {tags {"hash"}} {
         r del myhash
         r hset myhash field1 value1
         set rv {}
-        lappend rv [r hgetdel myhash nonexisting]
+        lappend rv [r hgetdel myhash FIELDS 1 nonexisting]
         lappend rv [r hexists myhash field1]
         set _ $rv
     } {{{}} 1}
 
     test {HGETDEL - non-existing key} {
         r del myhash
-        assert_equal {{}} [r hgetdel myhash field1]
+        assert_equal {{}} [r hgetdel myhash FIELDS 1 field1]
     }
 
     test {HGETDEL - mix of existing and non-existing fields} {
         r del myhash
         r hmset myhash a 1 b 2 c 3
         set rv {}
-        lappend rv [r hgetdel myhash a nonexist b]
+        lappend rv [r hgetdel myhash FIELDS 3 a nonexist b]
         lappend rv [r hexists myhash a]
         lappend rv [r hexists myhash b]
         lappend rv [r hexists myhash c]
@@ -490,7 +490,7 @@ start_server {tags {"hash"}} {
         r del myhash
         r hmset myhash a 1 b 2
         set rv {}
-        lappend rv [r hgetdel myhash a b]
+        lappend rv [r hgetdel myhash FIELDS 2 a b]
         lappend rv [r exists myhash]
         set _ $rv
     } {{1 2} 0}
@@ -498,11 +498,19 @@ start_server {tags {"hash"}} {
     test {HGETDEL - wrong type} {
         r del wrongtype
         r set wrongtype somevalue
-        assert_error "*WRONGTYPE*" {r hgetdel wrongtype field1}
+        assert_error "*WRONGTYPE*" {r hgetdel wrongtype FIELDS 1 field1}
     }
 
     test {HGETDEL - wrong number of arguments} {
         assert_error "*wrong number of arguments*" {r hgetdel myhash}
+    }
+
+    test {HGETDEL - check for syntax and type errors} {
+        assert_error "*value is not an integer or out of range" {r hgetdel myhash a b c}
+        assert_error "*value is not an integer or out of range" {r hgetdel myhash FIELDS a b c}
+        assert_error "*syntax error" {r hgetdel myhash FIELDS 2 a b c}
+        assert_error "*syntax error" {r hgetdel myhash FIELDS 4 a b c}
+
     }
 
     test {HDEL and return value} {

@@ -607,6 +607,7 @@ int clusterLoadConfig(char *filename) {
     struct stat sb;
     char *line;
     int maxline, j;
+    dict *tmp_cluster_nodes;
 
     if (fp == NULL) {
         if (errno == ENOENT) {
@@ -637,6 +638,7 @@ int clusterLoadConfig(char *filename) {
      * To simplify we allocate 1024+CLUSTER_SLOTS*128 bytes per line. */
     maxline = 1024 + CLUSTER_SLOTS * 128;
     line = zmalloc(maxline);
+    tmp_cluster_nodes = dictCreate(&clusterNodesDictType);
     while (fgets(line, maxline, fp) != NULL) {
         int argc, aux_argc;
         sds *argv, *aux_argv;
@@ -684,10 +686,19 @@ int clusterLoadConfig(char *filename) {
         if (!n) {
             n = createClusterNode(argv[0], 0);
             clusterAddNode(n);
+            dictAdd(tmp_cluster_nodes, sdsnewlen(argv[0], sdslen(argv[0])), NULL);
         } else {
-            serverLog(LL_WARNING, "Duplicate nodeid detected: %s", argv[0]);
-            sdsfreesplitres(argv, argc);
-            goto fmterr;
+            /* Check if the node (nodeid) has already been loaded. The nodeid is used to
+             * identify every node across the entire cluster, we do not expect to find
+             * duplicate nodeids in nodes.conf. */
+            sds nodename = sdsnewlen(argv[0], sdslen(argv[0]));
+            dictEntry *de = dictFind(tmp_cluster_nodes, nodename);
+            sdsfree(nodename);
+            if (de != NULL) {
+                serverLog(LL_WARNING, "Duplicate nodeid detected: %s", argv[0]);
+                sdsfreesplitres(argv, argc);
+                goto fmterr;
+            }
         }
         /* Format for the node address and auxiliary argument information:
          * ip:port[@cport][,hostname][,aux=val]*] */
@@ -944,6 +955,7 @@ int clusterLoadConfig(char *filename) {
 
     zfree(line);
     fclose(fp);
+    if (tmp_cluster_nodes) dictRelease(tmp_cluster_nodes);
 
     serverLog(LL_NOTICE, "Node configuration loaded, I'm %.40s", myself->name);
 

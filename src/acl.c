@@ -820,7 +820,7 @@ static sds ACLDescribeSelector(aclSelector *selector) {
     /* Database permissions. */
     if (selector->flags & SELECTOR_FLAG_ALLDBS) {
         res = sdscatlen(res, "alldbs ", 7);
-    } else if (intsetLen(selector->dbs) == 0){
+    } else if (intsetLen(selector->dbs) == 0) {
         res = sdscatlen(res, "resetdbs ", 9);
     } else {
         res = sdscatlen(res, "db+=", 4);

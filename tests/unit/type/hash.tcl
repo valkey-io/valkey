@@ -470,6 +470,12 @@ start_server {tags {"hash"}} {
         set _ $rv
     } {{{}} 1}
 
+    test {HGETDEL - non-existing key and hash after the key is deleted } {
+        r del myhash
+        r hset myhash field1 value1
+        assert_equal {value1 {}} [r hgetdel myhash FIELDS 2 field1 field2]
+    }
+
     test {HGETDEL - non-existing key} {
         r del myhash
         assert_equal {{}} [r hgetdel myhash FIELDS 1 field1]
@@ -508,9 +514,8 @@ start_server {tags {"hash"}} {
     test {HGETDEL - check for syntax and type errors} {
         assert_error "*value is not an integer or out of range" {r hgetdel myhash a b c}
         assert_error "*value is not an integer or out of range" {r hgetdel myhash FIELDS a b c}
-        assert_error "*syntax error" {r hgetdel myhash FIELDS 2 a b c}
-        assert_error "*syntax error" {r hgetdel myhash FIELDS 4 a b c}
-
+        assert_error "*numfields should be greater than 0 and match the provided number of fields" {r hgetdel myhash FIELDS 2 a b c}
+        assert_error "*numfields should be greater than 0 and match the provided number of fields" {r hgetdel myhash FIELDS 4 a b c}
     }
 
     test {HDEL and return value} {

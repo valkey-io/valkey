@@ -1063,7 +1063,7 @@ void hgetdelCommand(client *c) {
 
     /* Check that the parsed fields number matches the real provided number of fields */
     if (!num_fields || num_fields != (c->argc - fields_index)) {
-        addReplyErrorObject(c, shared.syntaxerr);
+        addReplyError(c, "numfields should be greater than 0 and match the provided number of fields");
         return;
     }
 
@@ -1072,25 +1072,22 @@ void hgetdelCommand(client *c) {
     robj *o = lookupKeyWrite(c->db, c->argv[1]);
     if (checkType(c, o, OBJ_HASH)) return;
 
-    /* Reply with array of values */
+    bool hash_volatile_items = hashTypeHasVolatileFields(o);
+
+    /* Reply with array of values and delete at the same time */
     addReplyArrayLen(c, num_fields);
     for (i = fields_index; i < c->argc; i++) {
         addHashFieldToReply(c, o, c->argv[i]->ptr);
-    }
 
-    /* If hash doesn't exist, we're done as we have already replied with NULLs */
-    if (o == NULL) return;
-
-    /* Now delete the fields. */
-    bool hash_volatile_items = hashTypeHasVolatileFields(o);
-    for (i = fields_index; i < c->argc; i++) {
+        /* If hash doesn't exist, continue as already replied with NULL */
+        if (o == NULL) continue;
         if (hashTypeDelete(o, c->argv[i]->ptr)) {
             deleted++;
             if (hashTypeLength(o) == 0) {
                 if (hash_volatile_items) dbUntrackKeyWithVolatileItems(c->db, o);
                 dbDelete(c->db, c->argv[1]);
                 keyremoved = true;
-                break;
+                o = NULL;
             }
         }
     }
@@ -1100,7 +1097,7 @@ void hgetdelCommand(client *c) {
             dbUpdateObjectWithVolatileItemsTracking(c->db, o);
         }
         signalModifiedKey(c, c->db, c->argv[1]);
-        notifyKeyspaceEvent(NOTIFY_HASH, "hgetdel", c->argv[1], c->db->id);
+        notifyKeyspaceEvent(NOTIFY_HASH, "hdel", c->argv[1], c->db->id);
         if (keyremoved) notifyKeyspaceEvent(NOTIFY_GENERIC, "del", c->argv[1], c->db->id);
         server.dirty += deleted;
     }

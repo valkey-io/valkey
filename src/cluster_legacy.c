@@ -684,6 +684,10 @@ int clusterLoadConfig(char *filename) {
         if (!n) {
             n = createClusterNode(argv[0], 0);
             clusterAddNode(n);
+        } else {
+            serverLog(LL_WARNING, "Duplicate nodeid detected: %s", argv[0]);
+            sdsfreesplitres(argv, argc);
+            goto fmterr;
         }
         /* Format for the node address and auxiliary argument information:
          * ip:port[@cport][,hostname][,aux=val]*] */

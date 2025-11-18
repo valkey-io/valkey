@@ -49,14 +49,6 @@ static int objectIsExpired(robj *val);
 static void dbSetValue(serverDb *db, robj *key, robj **valref, int overwrite, void **oldref);
 static robj *dbFindWithDictIndex(serverDb *db, sds key, int dict_index);
 
-/* Update LFU when an object is accessed.
- * Firstly, decrement the counter if the decrement time is reached.
- * Then logarithmically increment the counter, and update the access time. */
-void updateLFU(robj *val) {
-    unsigned long counter = LFUDecrAndReturn(val);
-    counter = LFULogIncr(counter);
-    val->lru = (LFUGetTimeInMinutes() << 8) | counter;
-}
 
 /* Lookup a key for read or write operations, or return NULL if the key is not
  * found in the specified DB. This function implements the functionality of
@@ -118,11 +110,7 @@ robj *lookupKey(serverDb *db, robj *key, int flags) {
         if (!hasActiveChildProcess() && !(flags & LOOKUP_NOTOUCH)) {
             /* Shared objects can't be stored in the database. */
             serverAssert(val->refcount != OBJ_SHARED_REFCOUNT);
-            if (server.maxmemory_policy & MAXMEMORY_FLAG_LFU) {
-                updateLFU(val);
-            } else {
-                val->lru = LRU_CLOCK();
-            }
+            val->lru = lrulfu_touch(val->lru);
         }
 
         if (!(flags & (LOOKUP_NOSTATS | LOOKUP_WRITE))) server.stat_keyspace_hits++;

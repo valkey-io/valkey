@@ -1,13 +1,12 @@
-proc scan_interleaved {primary replica cmd args} {
+proc scan_interleaved {primary replica cmd {key ""} args} {
     set cursor 0
     set keys {}
     set toggle [randomInt 2]
     while {1} {
-        if {[llength $args] > 0} {
-            # insert cursor at position 1 (after key name and before extra args)
-            set cmd_args [linsert $args 1 $cursor]
+        if {$key != ""} {
+            set cmd_args [list $key $cursor {*}$args]
         } else {
-            set cmd_args [list $cursor]
+            set cmd_args [list $cursor {*}$args]
         }
 
         if {$toggle == 0} {

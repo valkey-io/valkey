@@ -3109,7 +3109,7 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
     } else {
         serverLog(LL_WARNING, "Wrong signature trying to load DB from file: %.9s", buf);
         /* Signal to terminate the rdbLoad without clearing existing data */
-        return RDB_INCOMPATIBLE; 
+        return RDB_INCOMPATIBLE;
     }
     rdbver = atoi(buf + 6);
     if (!rdbIsVersionAccepted(rdbver, is_valkey_magic, is_redis_magic)) {

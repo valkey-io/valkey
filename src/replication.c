@@ -2413,7 +2413,7 @@ int replicaLoadPrimaryRDBFromSocket(connection *conn, char *buf, char *eofmark, 
             serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync: Discarding temporary DB in background");
         } else {
             /* If we received RDB_INCOMPATIBLE, the old data was preserved */
-            if (retval == RDB_INCOMPATIBLE) { 
+            if (retval == RDB_INCOMPATIBLE) {
                 serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync: RDB version or signature incompatible, old data preserved");
             } else {
                 /* Remove the half-loaded data in case the load failed for other reasons. */
@@ -2500,11 +2500,11 @@ int replicaLoadPrimaryRDBFromDisk(rdbSaveInfo *rsi) {
      * we must discard the cached primary structure and force resync of sub-replicas. */
     replicationAttachToNewPrimary();
 
-    /* We pass RDBFLAGS_EMPTY_DATA to call emptyData() after validating rdb compatability 
-    * and before loading the data from the RDB */
+    /* We pass RDBFLAGS_EMPTY_DATA to call emptyData() after validating rdb compatability
+     * and before loading the data from the RDB */
     serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync: Loading DB in memory");
     int retval = rdbLoad(server.rdb_filename, rsi, RDBFLAGS_REPLICATION | RDBFLAGS_EMPTY_DATA);
-    
+
     if (retval != RDB_OK) {
         serverLog(LL_WARNING, "Failed trying to load the PRIMARY synchronization "
                               "DB from disk, check server logs.");

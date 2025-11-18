@@ -127,22 +127,26 @@ static inline void zslSetNodeHeight(zskiplistNode *x, int height) {
  *   sds-header-size and element-sds are only valid for non-header nodes.
  */
 static zskiplistNode *zslCreateNode(int height, double score, const_sds ele) {
-    size_t ele_sds_len = ele ? sdslen(ele) : 0;
-    char ele_sds_type = ele ? sdsReqType(ele_sds_len) : 0;
-    size_t ele_sds_size = ele ? sdsReqSize(ele_sds_len, ele_sds_type) : 0;
+    size_t ele_sds_len = sdslen(ele);
+    char ele_sds_type = sdsReqType(ele_sds_len);
+    size_t ele_sds_size = sdsReqSize(ele_sds_len, ele_sds_type);
     /* Allocate enough space for the node, levels, and the element sds.
-     * For non-header nodes, we include one extra byte representing the sds
-     * header size, which is the offset into the embedded sds data where the
+     * We include one extra byte representing the sds header size, 
+     * which is the offset into the embedded sds data where the
      * string content starts. */
-    size_t header_size = ele ? 1 : 0;
-    zskiplistNode *zn = zmalloc(sizeof(*zn) + height * sizeof(struct zskiplistLevel) + header_size + ele_sds_size);
+    zskiplistNode *zn = zmalloc(sizeof(*zn) + height * sizeof(struct zskiplistLevel) + 1 + ele_sds_size);
     zn->score = score;
     zslSetNodeHeight(zn, height);
-    if (ele) {
-        char *data = ((char *)(zn + 1)) + height * sizeof(struct zskiplistLevel);
-        *data++ = sdsHdrSize(ele_sds_type);
-        sdswrite(data, ele_sds_size, ele_sds_type, ele, ele_sds_len);
-    }
+    char *data = ((char *)(zn + 1)) + height * sizeof(struct zskiplistLevel);
+    *data++ = sdsHdrSize(ele_sds_type);
+    sdswrite(data, ele_sds_size, ele_sds_type, ele, ele_sds_len);
+    return zn;
+}
+
+static zskiplistNode *zslCreateHeaderNode(void) {
+    /* Allocate enough space for the node and levels. */
+    zskiplistNode *zn = zmalloc(sizeof(*zn) + ZSKIPLIST_MAXLEVEL * sizeof(struct zskiplistLevel));
+    zslSetNodeHeight(zn, ZSKIPLIST_MAXLEVEL);
     return zn;
 }
 
@@ -163,7 +167,7 @@ zskiplist *zslCreate(void) {
     zsl = zmalloc(sizeof(*zsl));
     zsl->level = 1;
     zsl->length = 0;
-    zsl->header = zslCreateNode(ZSKIPLIST_MAXLEVEL, 0, NULL);
+    zsl->header = zslCreateHeaderNode();
     for (j = 0; j < ZSKIPLIST_MAXLEVEL; j++) {
         zsl->header->level[j].forward = NULL;
         zsl->header->level[j].span = 0;

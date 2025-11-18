@@ -568,12 +568,12 @@ start_server {} {
 }
 
 start_server {} {
-    test {DEBUG RELOAD NOSAVE preserves existing data and logs version error} {
+    test {RDB Load from incompatible version preserves data} {
         # Set test keys
         r set testkey1 "value1"
         r set testkey2 "value2" 
 
-        # Use RDB with verion 987. 
+        # Use RDB with version 987. 
         # This emulates a full sync from a server with a future version
         set server_dir [lindex [r config get dir] 1]
         set rdb_filename [lindex [r config get dbfilename] 1]

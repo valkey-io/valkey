@@ -2500,7 +2500,7 @@ int replicaLoadPrimaryRDBFromDisk(rdbSaveInfo *rsi) {
      * we must discard the cached primary structure and force resync of sub-replicas. */
     replicationAttachToNewPrimary();
 
-    /* We pass RDBFLAGS_EMPTY_DATA to call emptyData() after validating rdb compatability
+    /* We pass RDBFLAGS_EMPTY_DATA to call emptyData() after validating rdb compatibility
      * and before loading the data from the RDB */
     serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync: Loading DB in memory");
     int retval = rdbLoad(server.rdb_filename, rsi, RDBFLAGS_REPLICATION | RDBFLAGS_EMPTY_DATA);

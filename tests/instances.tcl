@@ -57,9 +57,9 @@ proc exec_instance {type dirname cfgfile} {
 
     set errfile [file join $dirname err.txt]
     if {$::valgrind} {
-        set pid [exec valgrind --track-origins=yes --suppressions=../../../src/valgrind.sup --show-reachable=no --show-possibly-lost=no --leak-check=full ../../../${program_path} $cfgfile 2>> $errfile &]
+        set pid [exec valgrind --track-origins=yes --suppressions=../../../src/valgrind.sup --show-reachable=no --show-possibly-lost=no --leak-check=full ${program_path} $cfgfile 2>> $errfile &]
     } else {
-        set pid [exec ../../../${program_path} $cfgfile 2>> $errfile &]
+        set pid [exec ${program_path} $cfgfile 2>> $errfile &]
     }
     return $pid
 }

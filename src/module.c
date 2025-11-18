@@ -12532,13 +12532,11 @@ int moduleFreeCommand(struct ValkeyModule *module, struct serverCommand *cmd) {
         hdr_close(cmd->latency_histogram);
         cmd->latency_histogram = NULL;
     }
-    if (cmd->info_cache_resp2) {
-        sdsfree(cmd->info_cache_resp2);
-        cmd->info_cache_resp2 = NULL;
-    }
-    if (cmd->info_cache_resp3) {
-        sdsfree(cmd->info_cache_resp3);
-        cmd->info_cache_resp3 = NULL;
+    for (int i = 0; i < RESP_CACHE_INDEX_MAX; i++) {
+        if (cmd->info_cache[i]) {
+            sdsfree(cmd->info_cache[i]);
+            cmd->info_cache[i] = NULL;
+        }
     }
     moduleFreeArgs(cmd->args, cmd->num_args);
     zfree(cp);

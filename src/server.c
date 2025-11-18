@@ -2342,8 +2342,9 @@ void initServerConfig(void) {
      * valkey.conf using the rename-command directive. */
     server.commands = hashtableCreate(&commandSetType);
     server.orig_commands = hashtableCreate(&originalCommandSetType);
-    server.command_response_cache_resp2 = NULL;
-    server.command_response_cache_resp3 = NULL;
+    for (int i = 0; i < RESP_CACHE_INDEX_MAX; i++) {
+        server.command_response_cache[i] = NULL;
+    }
     populateCommandTable();
 
     /* Debugging */
@@ -3285,8 +3286,9 @@ int populateCommandStructure(struct serverCommand *c) {
     c->latency_histogram = NULL;
 
     /* Initialize command info cache */
-    c->info_cache_resp2 = NULL;
-    c->info_cache_resp3 = NULL;
+    for (int i = 0; i < RESP_CACHE_INDEX_MAX; i++) {
+        c->info_cache[i] = NULL;
+    }
 
     /* Handle the legacy range spec and the "movablekeys" flag (must be done after populating all key specs). */
     populateCommandLegacyRangeSpec(c);
@@ -5277,11 +5279,7 @@ static void cacheCommandInfo(struct serverCommand *cmd, int resp) {
     addReplyCommandKeySpecs(caching_client, cmd);
     addReplyCommandSubCommands(caching_client, cmd, addReplyCommandInfo, 0);
 
-    if (resp == 2) {
-        cmd->info_cache_resp2 = collectCachedResponse(caching_client);
-    } else {
-        cmd->info_cache_resp3 = collectCachedResponse(caching_client);
-    }
+    cmd->info_cache[RESP_CACHE_INDEX(resp)] = collectCachedResponse(caching_client);
     
     deleteCachedResponseClient(caching_client);
 }
@@ -5292,11 +5290,12 @@ void addReplyCommandInfo(client *c, struct serverCommand *cmd) {
         addReplyNull(c);
     } else {
         /* Use cached response if available for the client's protocol version */
-        sds cache = (c->resp == 2) ? cmd->info_cache_resp2 : cmd->info_cache_resp3;
+        int cache_idx = RESP_CACHE_INDEX(c->resp);
+        sds cache = cmd->info_cache[cache_idx];
         
         if (cache == NULL) {
             cacheCommandInfo(cmd, c->resp);
-            cache = (c->resp == 2) ? cmd->info_cache_resp2 : cmd->info_cache_resp3;
+            cache = cmd->info_cache[cache_idx];
         }
         
         addReplyProto(c, cache, sdslen(cache));
@@ -5426,13 +5425,11 @@ void getKeysSubcommand(client *c) {
 
 /* Invalidate the cached COMMAND response when command table changes */
 void invalidateCommandCache(void) {
-    if (server.command_response_cache_resp2) {
-        sdsfree(server.command_response_cache_resp2);
-        server.command_response_cache_resp2 = NULL;
-    }
-    if (server.command_response_cache_resp3) {
-        sdsfree(server.command_response_cache_resp3);
-        server.command_response_cache_resp3 = NULL;
+    for (int i = 0; i < RESP_CACHE_INDEX_MAX; i++) {
+        if (server.command_response_cache[i]) {
+            sdsfree(server.command_response_cache[i]);
+            server.command_response_cache[i] = NULL;
+        }
     }
 }
 
@@ -5450,11 +5447,7 @@ static void cacheCommandResponse(int resp) {
     }
     hashtableResetIterator(&iter);
     
-    if (resp == 2) {
-        server.command_response_cache_resp2 = collectCachedResponse(caching_client);
-    } else {
-        server.command_response_cache_resp3 = collectCachedResponse(caching_client);
-    }
+    server.command_response_cache[RESP_CACHE_INDEX(resp)] = collectCachedResponse(caching_client);
     
     deleteCachedResponseClient(caching_client);
 }
@@ -5462,11 +5455,12 @@ static void cacheCommandResponse(int resp) {
 /* COMMAND (no args) */
 void commandCommand(client *c) {
     /* Use cached response if available for the client's protocol version */
-    sds cache = (c->resp == 2) ? server.command_response_cache_resp2 : server.command_response_cache_resp3;
+    int cache_idx = RESP_CACHE_INDEX(c->resp);
+    sds cache = server.command_response_cache[cache_idx];
     
     if (cache == NULL) {
         cacheCommandResponse(c->resp);
-        cache = (c->resp == 2) ? server.command_response_cache_resp2 : server.command_response_cache_resp3;
+        cache = server.command_response_cache[cache_idx];
     }
     
     addReplyProto(c, cache, sdslen(cache));

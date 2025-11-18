@@ -3,10 +3,17 @@ proc scan_interleaved {primary replica cmd args} {
     set keys {}
     set toggle [randomInt 2]
     while {1} {
-        if {$toggle == 0} {
-            set scan_result [$primary $cmd {*}$args $cursor]
+        if {[llength $args] > 0} {
+            # insert cursor at position 1 (after key name and before extra args)
+            set cmd_args [linsert $args 1 $cursor]
         } else {
-            set scan_result [$replica $cmd {*}$args $cursor]
+            set cmd_args [list $cursor]
+        }
+
+        if {$toggle == 0} {
+            set scan_result [$primary $cmd {*}$cmd_args]
+        } else {
+            set scan_result [$replica $cmd {*}$cmd_args]
         }
         lappend keys {*}[lindex $scan_result 1]
         if {[lindex $scan_result 0] eq 0} {
@@ -19,55 +26,42 @@ proc scan_interleaved {primary replica cmd args} {
 }
 
 test {scan family consistency with configured hash seed} {
-    start_server {tags {"external:skip"}} {
+    set fixed_seed [randstring 16 16 alpha]
+    set shared_overrides [list appendonly no save "" hash-seed $fixed_seed]
 
-        set fixed_seed [randstring 16 16 alpha]
-        set shared_overrides [list appendonly no save "" hash-seed $fixed_seed activedefrag no hz 20]
+    start_multiple_servers 2 [list overrides $shared_overrides] {
+        set primary [srv -1 client]
+        set replica [srv 0 client]
 
-        start_server [list overrides $shared_overrides] {
-            set primary_host [srv 0 host]
-            set primary_port [srv 0 port]
+        set primary_host [srv -1 host]
+        set primary_port [srv -1 port]
 
-            start_server [list overrides $shared_overrides] {
-                set primary [srv -1 client]
-                set replica [srv 0 client]
+        $primary flushall
+        $replica replicaof $primary_host $primary_port
+        wait_for_sync $replica
 
-                $primary flushall
-                $replica replicaof $primary_host $primary_port
-                wait_for_sync $replica
+        set n 50
+        for {set i 0} {$i < $n} {incr i} {
+            $primary set "k:$i" x
+            $primary hset h "f:$i" $i
+            $primary sadd s "m:$i"
+            $primary zadd z $i "m:$i"
+        }
 
-                set n 50
-                for {set i 0} {$i < $n} {incr i} {
-                    $primary set "k:$i" x
-                    $primary hset h "f:$i" $i
-                    $primary sadd s "m:$i"
-                    $primary zadd z $i "m:$i"
-                }
+        wait_for_condition 200 50 {
+            [$replica dbsize] == [$primary dbsize]
+        } else {
+            fail "replica did not catch up dbsize (primary=[$primary dbsize], replica=[$replica dbsize])"
+        }
 
-                wait_for_condition 200 50 {
-                    [$replica dbsize] == [$primary dbsize]
-                } else {
-                    fail "replica did not catch up dbsize (primary=[$primary dbsize], replica=[$replica dbsize])"
-                }
+        set keys [scan_interleaved $primary $replica scan]
+        set keys [lsort -unique $keys]
+        assert_equal [expr {$n+3}] [llength $keys]
 
-                set keys [scan_interleaved $primary $replica scan]
-                set keys [lsort -unique $keys]
-                assert_equal [expr {$n+3}] [llength $keys]
-
-                foreach {cmd key} {hscan h sscan s zscan z} {
-                    set keys [scan_interleaved $primary $replica $cmd $key]
-
-                    if {$cmd eq "hscan" || $cmd eq "zscan"} {
-                        set extracted_keys {}
-                        foreach {k v} $keys {
-                            lappend extracted_keys $k
-                        }
-                        set keys $extracted_keys
-                    }
-                    set keys [lsort -unique $keys]
-                    assert_equal $n [llength $keys]
-                }
-            }
+        foreach {cmd key extra} {hscan h {novalues} sscan s {} zscan z {noscores}} {
+            set items [scan_interleaved $primary $replica $cmd $key {*}$extra]
+            set items [lsort -unique $items]
+            assert_equal $n [llength $items]
         }
     }
-}
+} {} {external:skip}

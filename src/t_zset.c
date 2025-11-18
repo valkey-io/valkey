@@ -131,7 +131,7 @@ static zskiplistNode *zslCreateNode(int height, double score, const_sds ele) {
     char ele_sds_type = sdsReqType(ele_sds_len);
     size_t ele_sds_size = sdsReqSize(ele_sds_len, ele_sds_type);
     /* Allocate enough space for the node, levels, and the element sds.
-     * We include one extra byte representing the sds header size, 
+     * We include one extra byte representing the sds header size,
      * which is the offset into the embedded sds data where the
      * string content starts. */
     zskiplistNode *zn = zmalloc(sizeof(*zn) + height * sizeof(struct zskiplistLevel) + 1 + ele_sds_size);

@@ -33,7 +33,7 @@
 #include "cluster_slot_stats.h"
 #include "module.h"
 
-scriptFlagStr scriptFlags[] = {
+scriptFlag scripts_flags_def[] = {
     {.flag = VMSE_SCRIPT_FLAG_NO_WRITES, .str = "no-writes"},
     {.flag = VMSE_SCRIPT_FLAG_ALLOW_OOM, .str = "allow-oom"},
     {.flag = VMSE_SCRIPT_FLAG_ALLOW_STALE, .str = "allow-stale"},

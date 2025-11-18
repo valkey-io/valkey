@@ -252,8 +252,8 @@ int evalExtractShebangFlags(sds body,
                 int numflags, jj;
                 sds *flags = sdssplitlen(parts[j], sdslen(parts[j]), ",", 1, &numflags);
                 for (jj = 0; jj < numflags; jj++) {
-                    scriptFlagStr *sf;
-                    for (sf = scriptFlags; sf->flag; sf++) {
+                    scriptFlag *sf;
+                    for (sf = scripts_flags_def; sf->flag; sf++) {
                         if (!strcmp(flags[jj], sf->str)) break;
                     }
                     if (!sf->flag) {

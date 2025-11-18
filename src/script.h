@@ -91,12 +91,12 @@ struct scriptRunCtx {
 #define SCRIPT_FLAG_ALLOW_CROSS_SLOT (1ULL << 5)
 
 /* Defines a script flags */
-typedef struct scriptFlagStr {
+typedef struct scriptFlag {
     ValkeyModuleScriptingEngineScriptFlag flag;
     const char *str;
-} scriptFlagStr;
+} scriptFlag;
 
-extern scriptFlagStr scriptFlags[];
+extern scriptFlag scripts_flags_def[];
 
 uint64_t scriptFlagsToCmdFlags(uint64_t cmd_flags, uint64_t script_flags);
 int scriptPrepareForRun(scriptRunCtx *r_ctx,

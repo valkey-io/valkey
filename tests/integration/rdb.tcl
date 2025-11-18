@@ -567,4 +567,33 @@ start_server {} {
     } {OK}
 }
 
+start_server {} {
+    test {DEBUG RELOAD NOSAVE preserves existing data and logs version error} {
+        # Set test keys
+        r set testkey1 "value1"
+        r set testkey2 "value2" 
+
+        # Use RDB with verion 987. 
+        # This emulates a full sync from a server with a future version
+        set server_dir [lindex [r config get dir] 1]
+        set rdb_filename [lindex [r config get dbfilename] 1]
+        set rdb_path "$server_dir/$rdb_filename"
+        exec cp tests/assets/encodings-rdb987.rdb $rdb_path
+
+        # Reload will trigger the rdbLoad code path with the RDBFLAGS_EMPTY_DATA flag
+        catch {r debug reload nosave}
+        
+        # Check that version error appears in logs
+        set log_content [exec tail -100 < [srv 0 stdout]]
+        assert {[string match {*Can't handle RDB format version*} $log_content]}
+
+        # Verify we don't enter the flushing code path
+        assert {![string match {*RDB signature and version check passed*} $log_content]}
+
+        # Verify our original data is not flushed
+        assert_equal [r get testkey1] "value1"
+        assert_equal [r get testkey2] "value2"
+    }
+}
+
 } ;# tags

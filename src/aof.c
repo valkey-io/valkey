@@ -1922,7 +1922,7 @@ int rewriteSortedSetObject(rio *r, robj *key, robj *o) {
                     return 0;
                 }
             }
-            sds ele = node->ele;
+            sds ele = zslGetNodeElement(node);
             if (!rioWriteBulkDouble(r, node->score) || !rioWriteBulkString(r, ele, sdslen(ele))) {
                 hashtableResetIterator(&iter);
                 return 0;

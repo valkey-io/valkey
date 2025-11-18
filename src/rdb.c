@@ -959,7 +959,8 @@ ssize_t rdbSaveObject(rio *rdb, robj *o, robj *key, int dbid) {
              * O(1) instead of O(log(N)). */
             zskiplistNode *zn = zsl->tail;
             while (zn != NULL) {
-                if ((n = rdbSaveRawString(rdb, (unsigned char *)zn->ele, sdslen(zn->ele))) == -1) {
+                sds ele = zslGetNodeElement(zn);
+                if ((n = rdbSaveRawString(rdb, (unsigned char *)ele, sdslen(ele))) == -1) {
                     return -1;
                 }
                 nwritten += n;
@@ -2095,6 +2096,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error) {
             totelelen += sdslen(sdsele);
 
             znode = zslInsert(zs->zsl, score, sdsele);
+            sdsfree(sdsele);
             if (!hashtableAdd(zs->ht, znode)) {
                 rdbReportCorruptRDB("Duplicate zset fields detected");
                 decrRefCount(o);

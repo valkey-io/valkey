@@ -561,7 +561,7 @@ hashtableType setHashtableType = {
 
 const void *zsetHashtableGetKey(const void *element) {
     const zskiplistNode *node = element;
-    return node->ele;
+    return zslGetNodeElement(node);
 }
 
 /* Sorted sets hash (note: a skiplist is used in addition to the hash table) */

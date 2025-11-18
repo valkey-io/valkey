@@ -787,3 +787,67 @@ start_server {
         assert_equal "db1_value" [r get db1_key ext]
     }
 }
+
+start_server [list overrides [list "ext-data-mode" kv "loglevel" debug "ext-data-timeout" 5] tags [list "external:skip"]] {
+    test {External storage operations don't block main thread} {
+        # Load module and initialize external storage
+        assert_equal {OK} [r module load $extdatamodule1]
+        assert_equal {OK} [r external_data INIT db0 helloextdata1]
+        
+        # Set up a key that will be stored in external storage
+        set blocking_key "blocking_key"
+        set blocking_value "blocking_value"
+        
+        # Create a large value for the second client to work with
+        set large_value [string repeat "x" 1000]
+        
+        # Put storage and filter in readonly mode to cause actual blocking
+        assert_equal {OK} [r external_data debug db0 storage setro]
+        assert_equal {OK} [r external_data debug db0 filter setro]
+        
+        # Start client 1 in background - this will block on external storage operation
+        set client1 [valkey_deferring_client]
+        $client1 set $blocking_key $blocking_value ext
+        
+        # Give client 1 time to start and get blocked
+        after 100
+        
+        # Start client 2 and perform many operations to test if main thread is blocked
+        set start_time [clock milliseconds]
+        set operations_count 100
+        
+        for {set i 0} {$i < $operations_count} {incr i} {
+            set test_key "client2_key_$i"
+            # Set and get keys - these should not be blocked by client 1's external storage operation
+            assert_equal {OK} [r set $test_key $large_value]
+            assert_equal $large_value [r get $test_key]
+        }
+        set end_time [clock milliseconds]
+        
+        # Calculate total time - should be much less than the 5 second timeout
+        set elapsed_time [expr {$end_time - $start_time}]
+        
+        # The operations should complete quickly (well under 5 seconds)
+        # If external storage was blocking the main thread, this would take much longer
+        assert {[expr {$elapsed_time < 2000}]}
+        
+        # Now complete client 1's operation (it should timeout)
+        set result [$client1 read]
+        # The result should be empty due to timeout, which shows the main thread wasn't blocked
+        assert_equal "" $result
+        
+        # Verify the blocking key was not set due to readonly mode
+        # When both storage and filter are readonly, the key should not be found at all
+        assert_equal "" [r get $blocking_key ext]
+        
+        # Also check if the key exists in the filter directly
+        assert_equal 0 [r external_data debug db0 filter get $blocking_key]
+        
+        # Clean up - drop readonly mode
+        assert_equal {OK} [r external_data debug db0 storage dropro]
+        assert_equal {OK} [r external_data debug db0 filter dropro]
+        
+        # Clean up
+        $client1 close
+    }
+}

@@ -3850,13 +3850,11 @@ int clusterProcessPacket(clusterLink *link) {
         if (connAddrPeerName(link->conn, ip, sizeof(ip), &port) != -1) {
             serverLog(LL_DEBUG, "%s packet received from: %.40s (%s) from client: %s:%d",
                       clusterGetMessageTypeString(type),
-                      link->node ? link->node->name : "NULL",
-                      link->node ? link->node->human_nodename : "",
+                      clusterLinkGetNodeName(link), clusterLinkGetHumanNodeName(link),
                       ip, port);
         } else {
             serverLog(LL_DEBUG, "Error resolving the address of packet sender %.40s (%s)",
-                      link->node ? link->node->name : "NULL",
-                      link->node ? link->node->human_nodename : "");
+                      clusterLinkGetNodeName(link), clusterLinkGetHumanNodeName(link));
         }
     }
     /* PING, PONG, MEET: process config information. */

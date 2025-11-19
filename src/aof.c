@@ -1459,7 +1459,7 @@ int loadSingleAppendOnlyFile(char *filename) {
             if (server.repl_backlog == NULL) createReplicationBacklog();
             rdb_flags |= RDBFLAGS_FEED_REPL;
         }
-        if (rdbLoadRio(&rdb, rdb_flags, &rsi) != C_OK) {
+        if (rdbLoadRio(&rdb, rdb_flags, &rsi) != RDB_OK) {
             if (old_style)
                 serverLog(LL_WARNING, "Error reading the RDB preamble of the AOF file %s, AOF loading aborted",
                           filename);

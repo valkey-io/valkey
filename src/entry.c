@@ -1,39 +1,60 @@
-#include <stdbool.h>
 #include "server.h"
 #include "serverassert.h"
 #include "entry.h"
 
-#include <stdbool.h>
-
 /*-----------------------------------------------------------------------------
- * Entry API
+ * Entry Implementation
  *----------------------------------------------------------------------------*/
 
-/* The entry pointer is the field sds. We encode the entry layout type
- * in the field SDS header. Field type SDS_TYPE_5 doesn't have any spare bits to
- * encode this so we use it only for the first layout type.
+/* There are 3 different formats for the "entry".  In all cases, the "entry" pointer points into the
+ * allocation and is identical to the "field" sds pointer.
  *
- * Entry with embedded value, used for small sizes. The value is stored as
- * SDS_TYPE_8. The field can use any SDS type.
+ * Type 1: Field sds type is an SDS_TYPE_5
+ *     With this type, both the key and value are embedded in the entry.  Expiration is not allowed
+ *     as the SDS_TYPE_5 (on field) doesn't contain any aux bits to encode the existence of an
+ *     expiration.  Extra padding is included in the value to the size of the physical block.
  *
- * Entry can also have expiration timestamp, which is the UNIX timestamp for it to be expired.
- * For aligned fast access, we keep the expiry timestamp prior to the start of the sds header.
+ *             entry
+ *               |
+ *     +---------V------------+----------------------------+
+ *     |       Field          |      Value                 |
+ *     | sdshdr5 | "foo" \0   | sdshdr8 "bar" \0 (padding) |
+ *     +---------+------------+----------------------------+
  *
- *     +--------------+--------------+---------------+
- *     | Expiration   | field        | value         |
- *     | 1234567890LL | hdr "foo" \0 | hdr8 "bar" \0 |
- *     +--------------+--------------+---------------+
+ *     Identified by: field sds type is SDS_TYPE_5
  *
- * Entry with value pointer, used for larger fields and values. The field is SDS
- * type 8 or higher.
  *
- *     +--------------+-------+--------------+
- *     | Expiration   | value | field        |
- *     | 1234567890LL | ptr   | hdr "foo" \0 |
- *     +--------------+---^---+--------------+
- *                        |
- *                        |
- *                        value pointer = value sds
+ * Type 2: Field sds type is an SDS_TYPE_8 type
+ *     With this type, both the key and value are embedded.  Extra bits in the sdshdr8 (on field)
+ *     are used to encode aux flags which may indicate the presence of an optional expiration.
+ *     Extra padding is included in the value to the size of the physical block.
+ *
+ *                            entry
+ *                              |
+ *     +--------------+---------V------------+----------------------------+
+ *     | Expire (opt) |       Field          |      Value                 |
+ *     |  long long   | sdshdr8 | "foo" \0   | sdshdr8 "bar" \0 (padding) |
+ *     +--------------+---------+------------+----------------------------+
+ *
+ *     Identified by: sds type is SDS_TYPE_8  AND  has embedded value
+ *
+ *
+ * Type 3: Value is an sds, referenced by pointer
+ *     With this type, the key is embedded, and the value is an sds, referenced by pointer.  Extra
+ *     bits in the sdshdr8(+) are used to encode aux flags which indicate the presence of a value by
+ *     pointer.  An aux bit may indicate the presence of an optional expiration.  Note that the
+ *     "field" is not padded, so there's no direct way to identify the length of the allocation.
+ *
+ *                                             entry
+ *                                               |
+ *     +--------------+---------------+----------V----------+--------+
+ *     | Expire (opt) |     Value     |        Field        | / / / /|
+ *     |  long long   | sds (pointer) | sdshdr8+ | "foo" \0 |/ / / / |
+ *     +--------------+-------+-------+----------+----------+--------+
+ *                            |
+ *                            +-> sds value
+ *
+ *     Identified by: Aux bit FIELD_SDS_AUX_BIT_ENTRY_HAS_VALUE_PTR
  */
 
 enum {
@@ -47,10 +68,15 @@ enum {
 };
 static_assert(FIELD_SDS_AUX_BIT_MAX < sizeof(char) - SDS_TYPE_BITS, "too many sds bits are used for entry metadata");
 
+/* The entry pointer is the field sds, but that's an implementation detail. */
+sds entryGetField(const entry *entry) {
+    return (sds)entry;
+}
+
 /* Returns true in case the entry's value is not embedded in the entry.
  * Returns false otherwise. */
-static inline bool entryHasValuePtr(const entry *entry) {
-    return sdsGetAuxBit(entry, FIELD_SDS_AUX_BIT_ENTRY_HAS_VALUE_PTR);
+static bool entryHasValuePtr(const entry *entry) {
+    return sdsGetAuxBit(entryGetField(entry), FIELD_SDS_AUX_BIT_ENTRY_HAS_VALUE_PTR);
 }
 
 /* Returns true in case the entry's value is embedded in the entry.
@@ -62,19 +88,14 @@ bool entryHasEmbeddedValue(entry *entry) {
 /* Returns true in case the entry has expiration timestamp.
  * Returns false otherwise. */
 bool entryHasExpiry(const entry *entry) {
-    return sdsGetAuxBit(entry, FIELD_SDS_AUX_BIT_ENTRY_HAS_EXPIRY);
-}
-
-/* The entry pointer is the field sds, but that's an implementation detail. */
-sds entryGetField(const entry *entry) {
-    return (sds)entry;
+    return sdsGetAuxBit(entryGetField(entry), FIELD_SDS_AUX_BIT_ENTRY_HAS_EXPIRY);
 }
 
 /* Returns the location of a pointer to a separately allocated value. Only for
  * an entry without an embedded value. */
 static sds *entryGetValueRef(const entry *entry) {
     serverAssert(entryHasValuePtr(entry));
-    char *field_data = sdsAllocPtr(entry);
+    char *field_data = sdsAllocPtr(entryGetField(entry));
     field_data -= sizeof(sds);
     return (sds *)field_data;
 }
@@ -85,8 +106,8 @@ sds entryGetValue(const entry *entry) {
         return *entryGetValueRef(entry);
     } else {
         /* Skip field content, field null terminator and value sds8 hdr. */
-        size_t offset = sdslen(entry) + 1 + sdsHdrSize(SDS_TYPE_8);
-        return (char *)entry + offset;
+        size_t offset = sdslen(entryGetField(entry)) + 1 + sdsHdrSize(SDS_TYPE_8);
+        return (sds)((char *)entry + offset);
     }
 }
 
@@ -106,7 +127,7 @@ entry *entrySetValue(entry *e, sds value) {
 
 /* Returns the address of the entry allocation. */
 void *entryGetAllocPtr(const entry *entry) {
-    char *buf = sdsAllocPtr(entry);
+    char *buf = sdsAllocPtr(entryGetField(entry));
     if (entryHasValuePtr(entry)) buf -= sizeof(sds);
     if (entryHasExpiry(entry)) buf -= sizeof(long long);
     return buf;
@@ -243,16 +264,17 @@ static entry *entryWrite(char *buf,
             buf_size -= embedded_value_sds_size;
         }
     }
-    /* Set the field data */
-    entry *new_entry = sdswrite(buf, embedded_field_sds_size, embedded_field_sds_type, field, sdslen(field));
+    /* Set the field data.  When we write the field into the buffer, the entry pointer is the returned
+     * sds (after the sds header). */
+    entry *new_entry = (entry *)sdswrite(buf, embedded_field_sds_size, embedded_field_sds_type, field, sdslen(field));
 
     /* Field sds aux bits are zero, which we use for this entry encoding. */
-    sdsSetAuxBit(new_entry, FIELD_SDS_AUX_BIT_ENTRY_HAS_VALUE_PTR, embed_value ? 0 : 1);
-    sdsSetAuxBit(new_entry, FIELD_SDS_AUX_BIT_ENTRY_HAS_EXPIRY, expiry_size > 0 ? 1 : 0);
+    sdsSetAuxBit(entryGetField(new_entry), FIELD_SDS_AUX_BIT_ENTRY_HAS_VALUE_PTR, embed_value ? 0 : 1);
+    sdsSetAuxBit(entryGetField(new_entry), FIELD_SDS_AUX_BIT_ENTRY_HAS_EXPIRY, expiry_size > 0 ? 1 : 0);
 
     /* Check that the new entry was built correctly */
-    debugServerAssert(sdsGetAuxBit(new_entry, FIELD_SDS_AUX_BIT_ENTRY_HAS_VALUE_PTR) == (embed_value ? 0 : 1));
-    debugServerAssert(sdsGetAuxBit(new_entry, FIELD_SDS_AUX_BIT_ENTRY_HAS_EXPIRY) == (expiry_size > 0 ? 1 : 0));
+    debugServerAssert(sdsGetAuxBit(entryGetField(new_entry), FIELD_SDS_AUX_BIT_ENTRY_HAS_VALUE_PTR) == (embed_value ? 0 : 1));
+    debugServerAssert(sdsGetAuxBit(entryGetField(new_entry), FIELD_SDS_AUX_BIT_ENTRY_HAS_EXPIRY) == (expiry_size > 0 ? 1 : 0));
     return new_entry;
 }
 
@@ -275,7 +297,7 @@ entry *entryCreate(const_sds field, sds value, long long expiry) {
  * Note that the value ownership is moved to this function and the caller should assume the
  * value is no longer usable after calling this function. */
 entry *entryUpdate(entry *e, sds value, long long expiry) {
-    sds field = (sds)e;
+    sds field = entryGetField(e);
     entry *new_entry = NULL;
 
     bool update_value = value ? true : false;
@@ -354,8 +376,8 @@ entry *entryUpdate(entry *e, sds value, long long expiry) {
         entryFree(e);
     }
     /* Check that the new entry was built correctly */
-    debugServerAssert(sdsGetAuxBit(new_entry, FIELD_SDS_AUX_BIT_ENTRY_HAS_VALUE_PTR) == (embed_value ? 0 : 1));
-    debugServerAssert(sdsGetAuxBit(new_entry, FIELD_SDS_AUX_BIT_ENTRY_HAS_EXPIRY) == (expiry_size > 0 ? 1 : 0));
+    debugServerAssert(sdsGetAuxBit(entryGetField(new_entry), FIELD_SDS_AUX_BIT_ENTRY_HAS_VALUE_PTR) == (embed_value ? 0 : 1));
+    debugServerAssert(sdsGetAuxBit(entryGetField(new_entry), FIELD_SDS_AUX_BIT_ENTRY_HAS_EXPIRY) == (expiry_size > 0 ? 1 : 0));
     serverAssert(new_entry);
     return new_entry;
 }
@@ -370,7 +392,7 @@ size_t entryMemUsage(entry *entry) {
          * header could be too small for holding the real allocation size. */
         mem += zmalloc_usable_size(entryGetAllocPtr(entry));
     } else {
-        mem += sdsReqSize(sdslen(entry), sdsType(entry));
+        mem += sdsReqSize(sdslen(entryGetField(entry)), sdsType(entryGetField(entry)));
         if (entryHasExpiry(entry)) mem += sizeof(long long);
     }
     mem += sdsAllocSize(entryGetValue(entry));
@@ -384,18 +406,19 @@ size_t entryMemUsage(entry *entry) {
  * of sds strings.
  * If the location of the entry changed we return the new location,
  * otherwise we return NULL. */
-entry *entryDefrag(entry *entry, void *(*defragfn)(void *), sds (*sdsdefragfn)(sds)) {
-    if (entryHasValuePtr(entry)) {
-        sds *value_ref = entryGetValueRef(entry);
+entry *entryDefrag(entry *e, void *(*defragfn)(void *), sds (*sdsdefragfn)(sds)) {
+    if (entryHasValuePtr(e)) {
+        sds *value_ref = entryGetValueRef(e);
         sds new_value = sdsdefragfn(*value_ref);
         if (new_value) *value_ref = new_value;
     }
-    char *allocation = entryGetAllocPtr(entry);
+    char *allocation = entryGetAllocPtr(e);
     char *new_allocation = defragfn(allocation);
     if (new_allocation != NULL) {
         /* Return the same offset into the new allocation as the entry's offset
          * in the old allocation. */
-        return new_allocation + ((char *)entry - allocation);
+        int entry_pointer_offset = (char *)e - allocation;
+        return (entry *)(new_allocation + entry_pointer_offset);
     }
     return NULL;
 }

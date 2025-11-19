@@ -56,5 +56,6 @@ int callReplyIsResp3(CallReply *rep);
 list *callReplyDeferredErrorList(CallReply *rep);
 void freeCallReply(CallReply *rep);
 CallReply *callReplyCreatePromise(void *private_data);
+void enableParseExactReplyTypeFlag(CallReply *rep);
 
 #endif /* SRC_CALL_REPLY_H_ */

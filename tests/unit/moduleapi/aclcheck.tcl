@@ -109,6 +109,52 @@ start_server {tags {"modules acl"}} {
     }
 }
 
+start_server {tags {"modules check access for keys with prefix"}} {
+    r module load $testmodule
+
+    test {test module check acl check permissions for key prefix} {
+        # Create a testuser that can only write to keys starting with "write_" prefix and read
+        # from keys starting with "read_"
+        assert_equal [r ACL SETUSER testuser on >1234 %W~write_* %R~read_* +@all -@dangerous] OK
+        assert_equal [r AUTH testuser 1234] OK
+        # No access
+        assert_equal [r acl.check_key_prefix wr* W] EACCESS
+        # We have write permissions for keys starting with write_*
+        assert_equal [r acl.check_key_prefix write_* W] OK
+        # write_1 matches the pattern write_* -> OK
+        assert_equal [r acl.check_key_prefix write_1 W] OK
+        # We can not read from write_* keys
+        assert_equal [r acl.check_key_prefix write_1 R] EACCESS
+        # But we can read from read_1 keys
+        assert_equal [r acl.check_key_prefix read_1 R] OK
+        # Missing the _
+        assert_equal [r acl.check_key_prefix read* R] EACCESS 
+        assert_equal [r acl.check_key_prefix read_* R] OK
+    }
+}
+
+start_server {tags {"modules check access for keys with prefix"}} {
+    r module load $testmodule
+
+    test {test module check acl check permissions for key prefix (read=*)} {
+        # Create a testuser that can only write to keys starting with "write_" prefix and read
+        # from keys starting with "read_"
+        assert_equal [r ACL SETUSER testuser on >1234 %W~write_* %R~* +@all -@dangerous] OK
+        assert_equal [r AUTH testuser 1234] OK
+        # No access
+        assert_equal [r acl.check_key_prefix wr* W] EACCESS
+        # We have write permissions for keys starting with write_*
+        assert_equal [r acl.check_key_prefix write_* W] OK
+        # write_1 matches the pattern write_* -> OK
+        assert_equal [r acl.check_key_prefix write_1 W] OK
+        # We can read from all keys ("*")
+        assert_equal [r acl.check_key_prefix read_1 R] OK
+        assert_equal [r acl.check_key_prefix read* R] OK
+        assert_equal [r acl.check_key_prefix read_* R] OK
+        assert_equal [r acl.check_key_prefix write_1 R] OK
+    }
+}
+
 start_server {tags {"modules acl"}} {
     test {test existing users to have access to module commands loaded on runtime} {
         r acl SETUSER j3 on >password -@all +@WRITE

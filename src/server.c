@@ -561,7 +561,7 @@ hashtableType setHashtableType = {
 
 const void *zsetHashtableGetKey(const void *element) {
     const zskiplistNode *node = element;
-    return node->ele;
+    return zslGetNodeElement(node);
 }
 
 /* Sorted sets hash (note: a skiplist is used in addition to the hash table) */
@@ -987,6 +987,9 @@ int clientsCronResizeOutputBuffer(client *c, mstime_t now_ms) {
         size_t oldbuf_size = c->buf_usable_size;
         c->buf = zmalloc_usable(new_buffer_size, &c->buf_usable_size);
         memcpy(c->buf, oldbuf, c->bufpos);
+        if (c->io_last_written.buf == oldbuf) {
+            c->io_last_written.buf = c->buf;
+        }
         zfree_with_size(oldbuf, oldbuf_size);
     }
     return 0;
@@ -2152,6 +2155,7 @@ void createSharedObjects(void) {
     shared.eval = createSharedString("EVAL");
     shared.cluster = createSharedString("CLUSTER");
     shared.syncslots = createSharedString("SYNCSLOTS");
+    shared.zadd = createSharedString("ZADD");
 
     /* Shared command argument */
     shared.left = createSharedString("left");
@@ -2785,9 +2789,8 @@ int dbHasNoKeys(int dbid) {
 
 bool dbsHaveNoKeys(void) {
     for (int i = 0; i < server.dbnum; i++) {
-        if (server.db[i] && kvstoreSize(server.db[i]->keys) != 0) {
+        if (!dbHasNoKeys(i))
             return false;
-        }
     }
     return true;
 }
@@ -5736,6 +5739,62 @@ void releaseInfoSectionDict(dict *sec) {
     if (sec != cached_default_info_sections) dictRelease(sec);
 }
 
+typedef struct scriptingEngineInfoCollector {
+    sds info;
+    int total_engines;
+    size_t total_used_memory;
+    size_t total_overhead;
+} scriptingEngineInfoCollector;
+
+static void collectScriptingEngineInfo(scriptingEngine *engine, void *context) {
+    scriptingEngineInfoCollector *collector = (scriptingEngineInfoCollector *)context;
+
+    sds engine_name = scriptingEngineGetName(engine);
+    ValkeyModule *module = scriptingEngineGetModule(engine);
+    uint64_t abi_version = scriptingEngineGetAbiVersion(engine);
+
+    /* Get memory information for the engine */
+    engineMemoryInfo mem_info = scriptingEngineCallGetMemoryInfo(engine, VMSE_ALL);
+
+    collector->info = sdscatprintf(collector->info,
+                                   "engine_%d:name=%s,module=%s,abi_version=%lu,used_memory=%zu,memory_overhead=%zu\r\n",
+                                   collector->total_engines,
+                                   engine_name,
+                                   module ? module->name : "built-in",
+                                   (unsigned long)abi_version,
+                                   mem_info.used_memory,
+                                   mem_info.engine_memory_overhead);
+
+    collector->total_engines++;
+    collector->total_used_memory += mem_info.used_memory;
+    collector->total_overhead += mem_info.engine_memory_overhead;
+}
+
+sds genValkeyInfoStringScriptingEngines(sds info) {
+    scriptingEngineInfoCollector collector = {
+        .info = sdsempty(),
+        .total_engines = 0,
+        .total_used_memory = 0,
+        .total_overhead = 0};
+
+    /* Collect information from all registered engines */
+    scriptingEngineManagerForEachEngine(collectScriptingEngineInfo, &collector);
+
+    info = sdscatprintf(info,
+                        "# Scripting Engines\r\n"
+                        "engines_count:%d\r\n"
+                        "engines_total_used_memory:%zu\r\n"
+                        "engines_total_memory_overhead:%zu\r\n"
+                        "%s",
+                        collector.total_engines,
+                        collector.total_used_memory,
+                        collector.total_overhead,
+                        collector.info);
+
+    sdsfree(collector.info);
+    return info;
+}
+
 /* Create a dictionary with unique section names to be used by genValkeyInfoString.
  * 'argv' and 'argc' are list of arguments for INFO.
  * 'defaults' is an optional null terminated list of default sections.
@@ -6409,6 +6468,12 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                             server.cluster_enabled);
     }
 
+    /* Scripting engines */
+    if (all_sections || (dictFind(section_dict, "scriptingengines") != NULL)) {
+        if (sections++) info = sdscat(info, "\r\n");
+        info = genValkeyInfoStringScriptingEngines(info);
+    }
+
     /* Key space */
     if (all_sections || (dictFind(section_dict, "keyspace") != NULL)) {
         if (sections++) info = sdscat(info, "\r\n");
@@ -6925,36 +6990,7 @@ void loadDataFromDisk(void) {
         int rdb_load_ret = rdbLoad(server.rdb_filename, &rsi, rdb_flags);
         if (rdb_load_ret == RDB_OK) {
             serverLog(LL_NOTICE, "DB loaded from disk: %.3f seconds", (float)(ustime() - start) / 1000000);
-
-            /* Restore the replication ID / offset from the RDB file. */
-            if (rsi.repl_id_is_set && rsi.repl_offset != -1 &&
-                /* Note that older implementations may save a repl_stream_db
-                 * of -1 inside the RDB file in a wrong way, see more
-                 * information in function rdbPopulateSaveInfo. */
-                rsi.repl_stream_db != -1) {
-                rsi_is_valid = 1;
-                if (!iAmPrimary()) {
-                    memcpy(server.replid, rsi.repl_id, sizeof(server.replid));
-                    server.primary_repl_offset = rsi.repl_offset;
-                    /* If this is a replica, create a cached primary from this
-                     * information, in order to allow partial resynchronizations
-                     * with primaries. */
-                    replicationCachePrimaryUsingMyself();
-                    selectDb(server.cached_primary, rsi.repl_stream_db);
-                } else {
-                    /* If this is a primary, we can save the replication info
-                     * as secondary ID and offset, in order to allow replicas
-                     * to partial resynchronizations with primaries. */
-                    memcpy(server.replid2, rsi.repl_id, sizeof(server.replid));
-                    server.second_replid_offset = rsi.repl_offset + 1;
-                    /* Rebase primary_repl_offset from rsi.repl_offset. */
-                    server.primary_repl_offset += rsi.repl_offset;
-                    serverAssert(server.repl_backlog);
-                    server.repl_backlog->offset = server.primary_repl_offset - server.repl_backlog->histlen + 1;
-                    rebaseReplicationBuffer(rsi.repl_offset);
-                    server.repl_no_replicas_since = time(NULL);
-                }
-            }
+            rsi_is_valid = rdbRestoreOffsetFromSaveInfo(&rsi, false);
         } else if (rdb_load_ret != RDB_NOT_EXIST) {
             serverLog(LL_WARNING, "Fatal error loading the DB, check server logs. Exiting.");
             exit(1);
@@ -7309,8 +7345,13 @@ __attribute__((weak)) int main(int argc, char **argv) {
         sdsfree(options);
     }
     if (server.sentinel_mode) sentinelCheckConfigFile();
+    if (server.hash_seed != NULL) {
+        memset(hashseed, 0, sizeof(hashseed));
+        getHashSeedFromString(hashseed, sizeof(hashseed), server.hash_seed);
+        hashtableSetHashFunctionSeed(hashseed);
+    }
 
-        /* Do system checks */
+    /* Do system checks */
 #ifdef __linux__
     linuxMemoryWarnings();
     sds err_msg = NULL;
@@ -7459,12 +7500,12 @@ int parseExtendedCommandArgumentsOrReply(client *c, int *flags, int *unit, robj 
         /* clang-format off */
         if ((opt[0] == 'n' || opt[0] == 'N') &&
             (opt[1] == 'x' || opt[1] == 'X') && opt[2] == '\0' &&
-            !(*flags & ARGS_SET_XX || *flags & ARGS_SET_IFEQ) && (command_type == COMMAND_SET))
+            !(*flags & ARGS_SET_XX || *flags & ARGS_SET_IFEQ) && (command_type == COMMAND_SET || command_type == COMMAND_HSET))
         {
             *flags |= ARGS_SET_NX;
         } else if ((opt[0] == 'x' || opt[0] == 'X') &&
                    (opt[1] == 'x' || opt[1] == 'X') && opt[2] == '\0' &&
-                   !(*flags & ARGS_SET_NX || *flags & ARGS_SET_IFEQ) && (command_type == COMMAND_SET))
+                   !(*flags & ARGS_SET_NX || *flags & ARGS_SET_IFEQ) && (command_type == COMMAND_SET || command_type == COMMAND_HSET))
         {
             *flags |= ARGS_SET_XX;
         } else if ((opt[0] == 'f' || opt[0] == 'F') &&
@@ -7483,7 +7524,7 @@ int parseExtendedCommandArgumentsOrReply(client *c, int *flags, int *unit, robj 
                    (opt[1] == 'f' || opt[1] == 'F') &&
                    (opt[2] == 'e' || opt[2] == 'E') &&
                    (opt[3] == 'q' || opt[3] == 'Q') && opt[4] == '\0' &&
-                   next && 
+                   next &&
                    !(*flags & ARGS_SET_NX || *flags & ARGS_SET_XX || *flags & ARGS_SET_IFEQ) && (command_type == COMMAND_SET))
         {
             *flags |= ARGS_SET_IFEQ;

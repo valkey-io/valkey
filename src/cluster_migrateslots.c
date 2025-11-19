@@ -1384,7 +1384,7 @@ void initSlotExportJobClient(slotMigrationJob *job) {
     serverAssert(job->type == SLOT_MIGRATION_EXPORT);
     job->client = createClient(job->conn);
     job->conn = NULL;
-    job->client->flag.authenticated = 1;
+    clientSetUser(job->client, NULL, 1);
     job->client->slot_migration_job = job;
     initClientReplicationData(job->client);
 }

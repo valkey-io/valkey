@@ -268,6 +268,11 @@ proc tags_acceptable {tags err_return} {
         return 0
     }
 
+    if {[lsearch $tags "ipv6"] >= 0 && ![is_ipv6_available]} {
+        set err "IPv6 not available on this system"
+        return 0
+    }
+
     return 1
 }
 

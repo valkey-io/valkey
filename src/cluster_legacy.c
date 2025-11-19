@@ -167,6 +167,18 @@ static inline int defaultClientPort(void) {
     return server.tls_cluster ? server.tls_port : server.port;
 }
 
+/* Return node name if the link has the node associated to it
+ * or else return "<unknown>". */
+static inline char *clusterLinkGetNodeName(clusterLink *link) {
+    return link->node ? link->node->name : "<unknown>";
+}
+
+/* Return human assigned node name if the link has the node associated to it
+ * or else return "<unknown>". */
+static inline char *clusterLinkGetHumanNodeName(clusterLink *link) {
+    return link->node ? link->node->human_nodename : "<unknown>";
+}
+
 #define isSlotUnclaimed(slot) \
     (server.cluster->slots[slot] == NULL || bitmapTestBit(server.cluster->owner_not_claiming_slot, slot))
 
@@ -1683,9 +1695,9 @@ clusterLink *createClusterLink(clusterNode *node) {
 void freeClusterLink(clusterLink *link) {
     serverAssert(link != NULL);
     serverLog(LL_DEBUG, "Freeing cluster link for node: %.40s:%s (%s)",
-              link->node ? link->node->name : "<unknown>",
+              clusterLinkGetNodeName(link),
               link->inbound ? "inbound" : "outbound",
-              link->node ? link->node->human_nodename : "<unknown>");
+              clusterLinkGetHumanNodeName(link));
 
     if (link->conn) {
         connClose(link->conn);
@@ -3663,8 +3675,9 @@ int clusterProcessPacket(clusterLink *link) {
         if (!link->node || nodeInHandshake(link->node)) {
             serverLog(
                 LL_NOTICE,
-                "Closing link for node %.40s that sent a lightweight message of type %s as its first message on the link",
-                hdr->sender,
+                "Closing link for node %.40s (%s) that sent a lightweight message of type %s as its first message on the link",
+                clusterLinkGetNodeName(link),
+                clusterLinkGetHumanNodeName(link),
                 clusterGetMessageTypeString(type));
             freeClusterLink(link);
             return 0;
@@ -3861,7 +3874,7 @@ int clusterProcessPacket(clusterLink *link) {
     /* PING, PONG, MEET: process config information. */
     if (type == CLUSTERMSG_TYPE_PING || type == CLUSTERMSG_TYPE_PONG || type == CLUSTERMSG_TYPE_MEET) {
         serverLog(LL_DEBUG, "%s packet received: %.40s", clusterGetMessageTypeString(type),
-                  link->node ? link->node->name : "NULL");
+                  clusterLinkGetNodeName(link));
 
         if (sender && nodeInMeetState(sender)) {
             /* Once we get a response for MEET from the sender, we can stop sending more MEET. */
@@ -4410,9 +4423,10 @@ void clusterReadHandler(connection *conn) {
 
         if (nread <= 0) {
             /* I/O error... */
-            serverLog(LL_DEBUG, "I/O error reading from node link (%.40s:%s): %s",
-                      link->node ? link->node->name : "<unknown>",
+            serverLog(LL_DEBUG, "I/O error reading from node link (%.40s:%s) (%s): %s",
+                      clusterLinkGetNodeName(link),
                       link->inbound ? "inbound" : "outbound",
+                      clusterLinkGetHumanNodeName(link),
                       (nread == 0) ? "connection closed" : connGetLastError(conn));
             handleLinkIOError(link);
             return;
@@ -4595,8 +4609,8 @@ void clusterSetGossipEntry(clusterMsg *hdr, int i, clusterNode *n) {
 void clusterSendPing(clusterLink *link, int type) {
     serverLog(LL_DEBUG, "Sending %s packet to node %.40s (%s) on %s link",
               clusterGetMessageTypeString(type),
-              link->node ? link->node->name : "<unknown>",
-              link->node ? link->node->human_nodename : "<unknown>",
+              clusterLinkGetNodeName(link),
+              clusterLinkGetHumanNodeName(link),
               link->inbound ? "inbound" : "outbound");
 
     static unsigned long long cluster_pings_sent = 0;
@@ -4862,6 +4876,18 @@ void clusterSendUpdate(clusterLink *link, clusterNode *node) {
 
     clusterSendMessage(link, msgblock);
     clusterMsgSendBlockDecrRefCount(msgblock);
+}
+
+/* Inline functions that check support of light weight messages by node
+ * and avoid using light weight messages until the bidirectional
+ * link(s) have been established. */
+static inline bool nodeSupportsLightMsgHdrForPubSub(clusterNode *n) {
+    return n->link && n->pong_received >= n->link->ctime &&
+           (n->flags & CLUSTER_NODE_LIGHT_HDR_PUBLISH_SUPPORTED);
+}
+static inline bool nodeSupportsLightMsgHdrForModule(clusterNode *n) {
+    return n->link && n->pong_received >= n->link->ctime &&
+           (n->flags & CLUSTER_NODE_LIGHT_HDR_MODULE_SUPPORTED);
 }
 
 /* Create a MODULE message block.
@@ -5806,9 +5832,9 @@ static void freeClusterLinkOnBufferLimitReached(clusterLink *link) {
     unsigned long long mem_link = link->send_msg_queue_mem;
     if (mem_link > server.cluster_link_msg_queue_limit_bytes) {
         serverLog(LL_WARNING,
-                  "Freeing cluster link(%s node %.40s, used memory: %llu) due to "
+                  "Freeing cluster link(%s node %.40s (%s), used memory: %llu) due to "
                   "exceeding send buffer memory limit.",
-                  link->inbound ? "from" : "to", link->node ? link->node->name : "", mem_link);
+                  link->inbound ? "from" : "to", clusterLinkGetNodeName(link), clusterLinkGetHumanNodeName(link), mem_link);
         freeClusterLink(link);
         server.cluster->stat_cluster_links_buffer_limit_exceeded++;
     }

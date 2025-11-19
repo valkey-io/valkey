@@ -1054,7 +1054,7 @@ void hashtableScanCallback(void *privdata, void *entry) {
         key = (sds)entry;
     } else if (o->type == OBJ_ZSET) {
         zskiplistNode *node = (zskiplistNode *)entry;
-        key = node->ele;
+        key = zslGetNodeElement(node);
         /* zset data is copied after filtering by key */
     } else if (o->type == OBJ_HASH) {
         key = entryGetField(entry);
@@ -1077,7 +1077,7 @@ void hashtableScanCallback(void *privdata, void *entry) {
     if (o->type == OBJ_ZSET) {
         /* zset data is copied */
         zskiplistNode *node = (zskiplistNode *)entry;
-        key = sdsdup(node->ele);
+        key = sdsdup(zslGetNodeElement(node));
         if (!data->only_keys) {
             char buf[MAX_LONG_DOUBLE_CHARS];
             int len = ld2string(buf, sizeof(buf), node->score, LD_STR_AUTO);

@@ -227,6 +227,10 @@ ValkeyModule *scriptingEngineGetModule(scriptingEngine *engine) {
     return engine->module;
 }
 
+uint64_t scriptingEngineGetAbiVersion(scriptingEngine *engine) {
+    return engine->impl.methods.version;
+}
+
 /*
  * Iterates the list of engines registered in the engine manager and calls the
  * callback function with each engine.

@@ -112,6 +112,8 @@ typedef long long ustime_t;
 #define VALKEYMODULE_REPLY_VERBATIM_STRING 10
 #define VALKEYMODULE_REPLY_ATTRIBUTE 11
 #define VALKEYMODULE_REPLY_PROMISE 12
+#define VALKEYMODULE_REPLY_SIMPLE_STRING 13
+#define VALKEYMODULE_REPLY_ARRAY_NULL 14
 
 /* Postponed array length. */
 #define VALKEYMODULE_POSTPONED_ARRAY_LEN -1 /* Deprecated, please use VALKEYMODULE_POSTPONED_LEN */
@@ -1533,6 +1535,7 @@ VALKEYMODULE_API void (*ValkeyModule_FreeString)(ValkeyModuleCtx *ctx, ValkeyMod
 VALKEYMODULE_API const char *(*ValkeyModule_StringPtrLen)(const ValkeyModuleString *str, size_t *len)VALKEYMODULE_ATTR;
 VALKEYMODULE_API int (*ValkeyModule_ReplyWithError)(ValkeyModuleCtx *ctx, const char *err) VALKEYMODULE_ATTR;
 VALKEYMODULE_API int (*ValkeyModule_ReplyWithErrorFormat)(ValkeyModuleCtx *ctx, const char *fmt, ...) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_ReplyWithCustomErrorFormat)(ValkeyModuleCtx *ctx, int update_error_stats, const char *fmt, ...) VALKEYMODULE_ATTR;
 VALKEYMODULE_API int (*ValkeyModule_ReplyWithSimpleString)(ValkeyModuleCtx *ctx, const char *msg) VALKEYMODULE_ATTR;
 VALKEYMODULE_API int (*ValkeyModule_ReplyWithArray)(ValkeyModuleCtx *ctx, long len) VALKEYMODULE_ATTR;
 VALKEYMODULE_API int (*ValkeyModule_ReplyWithMap)(ValkeyModuleCtx *ctx, long len) VALKEYMODULE_ATTR;
@@ -2158,9 +2161,12 @@ VALKEYMODULE_API void (*ValkeyModule_ScriptingEngineDebuggerFlushLogs)(void) VAL
 VALKEYMODULE_API void (*ValkeyModule_ScriptingEngineDebuggerProcessCommands)(int *client_disconnected,
                                                                              ValkeyModuleString **err) VALKEYMODULE_ATTR;
 
+VALKEYMODULE_API int (*ValkeyModule_ACLCheckKeyPrefixPermissions)(ValkeyModuleUser *user,
+                                                                  const char *key,
+                                                                  size_t len,
+                                                                  unsigned int flags) VALKEYMODULE_ATTR;
 
 #define ValkeyModule_IsAOFClient(id) ((id) == UINT64_MAX)
-
 /* This is included inline inside each Valkey module. */
 static int ValkeyModule_Init(ValkeyModuleCtx *ctx, const char *name, int ver, int apiver) VALKEYMODULE_ATTR_UNUSED;
 static int ValkeyModule_Init(ValkeyModuleCtx *ctx, const char *name, int ver, int apiver) {
@@ -2187,6 +2193,7 @@ static int ValkeyModule_Init(ValkeyModuleCtx *ctx, const char *name, int ver, in
     VALKEYMODULE_GET_API(ReplyWithLongLong);
     VALKEYMODULE_GET_API(ReplyWithError);
     VALKEYMODULE_GET_API(ReplyWithErrorFormat);
+    VALKEYMODULE_GET_API(ReplyWithCustomErrorFormat);
     VALKEYMODULE_GET_API(ReplyWithSimpleString);
     VALKEYMODULE_GET_API(ReplyWithArray);
     VALKEYMODULE_GET_API(ReplyWithMap);
@@ -2535,6 +2542,7 @@ static int ValkeyModule_Init(ValkeyModuleCtx *ctx, const char *name, int ver, in
     VALKEYMODULE_GET_API(ScriptingEngineDebuggerLogRespReply);
     VALKEYMODULE_GET_API(ScriptingEngineDebuggerFlushLogs);
     VALKEYMODULE_GET_API(ScriptingEngineDebuggerProcessCommands);
+    VALKEYMODULE_GET_API(ACLCheckKeyPrefixPermissions);
 
     if (ValkeyModule_IsModuleNameBusy && ValkeyModule_IsModuleNameBusy(name)) return VALKEYMODULE_ERR;
     ValkeyModule_SetModuleAttribs(ctx, name, ver, apiver);

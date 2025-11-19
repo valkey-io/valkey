@@ -3252,7 +3252,7 @@ static void *preparePingExt(clusterMsgPingExt *ext, uint16_t type, uint32_t leng
     return &ext->ext[0];
 }
 
-/* If given value is valid, either nonempty or we explictily allow empty value:
+/* If given value is valid, either nonempty or we explicitly allow empty value:
  * - with non-NULL cursor, function writes a ping extension at the cursor, advances
  *   the cursor and increments totlen.
  * - with NULL cursor, function just computes the size and increments totlen.

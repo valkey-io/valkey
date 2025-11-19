@@ -3254,7 +3254,9 @@ standardConfig static_configs[] = {
     createStringConfig("cluster-announce-client-ipv6", NULL, MODIFIABLE_CONFIG, EMPTY_STRING_IS_NULL, server.cluster_announce_client_ipv6, NULL, isValidIpV6, updateClusterClientIpV6),
     createStringConfig("cluster-config-file", NULL, IMMUTABLE_CONFIG, ALLOW_EMPTY_STRING, server.cluster_configfile, "nodes.conf", isValidClusterConfigFile, NULL),
     createStringConfig("cluster-announce-hostname", NULL, MODIFIABLE_CONFIG, EMPTY_STRING_IS_NULL, server.cluster_announce_hostname, NULL, isValidAnnouncedHostname, updateClusterHostname),
-    createStringConfig("cluster-announce-human-nodename", NULL, MODIFIABLE_CONFIG, EMPTY_STRING_IS_NULL, server.cluster_announce_human_nodename, NULL, isValidAnnouncedNodename, updateClusterHumanNodename),
+    /* We set the human nodename config with ALLOW_EMPTY_STRING because we need to distinguish between empty string
+     * (user explicitly sets so) versus being NULL (user doesn't intend to update it and simply leaves it as default) */
+    createStringConfig("cluster-announce-human-nodename", NULL, MODIFIABLE_CONFIG, ALLOW_EMPTY_STRING, server.cluster_announce_human_nodename, "", isValidAnnouncedNodename, updateClusterHumanNodename),
     createStringConfig("syslog-ident", NULL, IMMUTABLE_CONFIG, ALLOW_EMPTY_STRING, server.syslog_ident, SERVER_NAME, NULL, NULL),
     createStringConfig("dbfilename", NULL, MODIFIABLE_CONFIG | PROTECTED_CONFIG, ALLOW_EMPTY_STRING, server.rdb_filename, "dump.rdb", isValidDBfilename, NULL),
     createStringConfig("appendfilename", NULL, IMMUTABLE_CONFIG, ALLOW_EMPTY_STRING, server.aof_filename, "appendonly.aof", isValidAOFfilename, NULL),

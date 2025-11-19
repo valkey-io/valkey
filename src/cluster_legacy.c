@@ -1288,11 +1288,11 @@ static void updateShardId(clusterNode *node, const char *shard_id) {
     }
 }
 
-static void updateHumanNodenameToAddress(clusterNode *node) {
-    const int port = server.tls_cluster ? node->tls_port : node->tcp_port;
+static void clusterUpdateMyselfHumanNodenameToAddress(void) {
+    const int port = server.tls_cluster ? myself->tls_port : myself->tcp_port;
     char buf[64];
-    snprintf(buf, sizeof(buf), "%s:%d", node->ip, port);
-    updateAnnouncedHumanNodename(node, buf);
+    snprintf(buf, sizeof(buf), "%s:%d", myself->ip, port);
+    updateAnnouncedHumanNodename(myself, buf);
 }
 
 static inline int areInSameShard(clusterNode *node1, clusterNode *node2) {
@@ -1426,10 +1426,18 @@ void clusterInit(void) {
      * the server's IP and port as the nodename. This name will be
      * carried in the PING extension so that all nodes in the cluster
      * will know this name eventually. */
-    if (server.cluster_announce_human_nodename == NULL ||
-        server.cluster_announce_human_nodename[0] == '\0')
-        updateHumanNodenameToAddress(myself);
-    else
+    if (server.cluster_announce_human_nodename[0] == '\0') {
+        /* By default, the human nodename static config is initialized to empty string, and
+         * the runtime myself->human_nodename is set to ip:port after handshake with other nodes.
+         * If the user prefers the nodename remain empty and wants to clear the ip:port name,
+         * the user can run `CONFIG SET cluster-announce-human-nodename ""`
+         * However, function `stringConfigSet` only works when the new value differs from the
+         * existing one, so we set the config from empty string to NULL here to allow resetting.
+         */
+        zfree(server.cluster_announce_human_nodename);
+        server.cluster_announce_human_nodename = NULL;
+        clusterUpdateMyselfHumanNodenameToAddress();
+    } else
         clusterUpdateMyselfHumanNodename();
     resetClusterStats();
 }
@@ -3244,14 +3252,18 @@ static void *preparePingExt(clusterMsgPingExt *ext, uint16_t type, uint32_t leng
     return &ext->ext[0];
 }
 
-/* If value is nonempty and cursor_ptr points to a non-NULL cursor, writes a
- * ping extension at the cursor, advances the cursor, increments totlen and
- * returns 1. If value is nonempty and cursor_ptr points to NULL, just computes
- * the size, increments totlen and returns 1. If value is empty, returns 0. */
+/* If given value is valid, either nonempty or we explictily allow empty value:
+ * - with non-NULL cursor, function writes a ping extension at the cursor, advances
+ *   the cursor and increments totlen.
+ * - with NULL cursor, function just computes the size and increments totlen.
+ * If given value is invalid, function does no computation.
+ * Returns 1 (added a new extension) or 0 (no extensison added).
+ */
 static uint32_t
-writeSdsPingExtIfNonempty(uint32_t *totlen_ptr, clusterMsgPingExt **cursor_ptr, clusterMsgPingtypes type, sds value) {
+writeSdsPingExt(uint32_t *totlen_ptr, clusterMsgPingExt **cursor_ptr, clusterMsgPingtypes type,
+                sds value, bool allow_empty) {
     size_t len = sdslen(value);
-    if (len == 0) return 0;
+    if (!allow_empty && len == 0) return 0;
     size_t size = getAlignedPingExtSize(len + 1);
     if (*cursor_ptr != NULL) {
         void *ext = preparePingExt(*cursor_ptr, type, size);
@@ -3292,13 +3304,15 @@ static uint32_t writePingExtensions(clusterMsg *hdr, int gossipcount) {
     }
 
     /* Write simple optional SDS ping extensions. */
-    extensions += writeSdsPingExtIfNonempty(&totlen, &cursor, CLUSTERMSG_EXT_TYPE_HOSTNAME, myself->hostname);
     extensions +=
-        writeSdsPingExtIfNonempty(&totlen, &cursor, CLUSTERMSG_EXT_TYPE_HUMAN_NODENAME, myself->human_nodename);
+        writeSdsPingExt(&totlen, &cursor, CLUSTERMSG_EXT_TYPE_HOSTNAME, myself->hostname, false);
+    /* We intentionally allow empty human nodename, which indicates we want to clear the existing name */
     extensions +=
-        writeSdsPingExtIfNonempty(&totlen, &cursor, CLUSTERMSG_EXT_TYPE_CLIENT_IPV4, myself->announce_client_ipv4);
+        writeSdsPingExt(&totlen, &cursor, CLUSTERMSG_EXT_TYPE_HUMAN_NODENAME, myself->human_nodename, true);
     extensions +=
-        writeSdsPingExtIfNonempty(&totlen, &cursor, CLUSTERMSG_EXT_TYPE_CLIENT_IPV6, myself->announce_client_ipv6);
+        writeSdsPingExt(&totlen, &cursor, CLUSTERMSG_EXT_TYPE_CLIENT_IPV4, myself->announce_client_ipv4, false);
+    extensions +=
+        writeSdsPingExt(&totlen, &cursor, CLUSTERMSG_EXT_TYPE_CLIENT_IPV6, myself->announce_client_ipv6, false);
     extensions +=
         writePortPingExtIfNonzero(&totlen, &cursor, CLUSTERMSG_EXT_TYPE_CLIENT_PORT, myself->announce_client_tcp_port);
     extensions +=
@@ -3770,7 +3784,7 @@ int clusterProcessPacket(clusterLink *link) {
                 clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG);
                 /* Update human nodename on IP change if the nodename is not explicitly set by user */
                 if (server.cluster_announce_human_nodename == NULL || server.cluster_announce_human_nodename[0] == '\0')
-                    updateHumanNodenameToAddress(myself);
+                    clusterUpdateMyselfHumanNodenameToAddress();
             }
         }
 

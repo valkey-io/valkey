@@ -1,3 +1,4 @@
+
 /*
  * Copyright (c) 2009-2012, Redis Ltd.
  * All rights reserved.
@@ -107,11 +108,17 @@ void setGenericCommand(client *c,
 
     int should_be_ext = checkKVShouldBeExternallyStored(key, val, flags);
     if (should_be_ext) {
-        int err = !externalDataWrite(c->db->id, key, val);
+        int result = externalDataWrite(c->db->id, key, val);
 
-        if (err) {
+        if (result == 2) {
+            // Both storage and filter are readonly - block the client to wait
+            blockPostponeClient(c);
+            return;
+        } else if (result == 0) {
+            // Error writing to external storage
             addReply(c, abort_reply ? abort_reply : shared.null[c->resp]);
         } else {
+            // Success
             if (found) dbDelete(c->db, key);
             addReply(c, ok_reply ? ok_reply : shared.ok);
         }

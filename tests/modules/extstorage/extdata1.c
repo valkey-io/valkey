@@ -18,45 +18,25 @@ ValkeyModuleDict *filter_mem_pool[MAX_DB];  // Memory pool for filter
 /* Common helper functions */
 static ValkeyModuleExternalStorageState
 waitExternalStorageReady(ValkeyModuleExternalStorageCtx *storage_ctx) {
-    uint32_t elapsed_milliseconds = 0;
-    unsigned int seconds = ValkeyModule_GetExternalStorageTimeout(storage_ctx);
-    ValkeyModuleExternalStorageState state = VMES_STATE_READY;
-    while (1) {
-        state = ValkeyModule_GetExternalStorageState(storage_ctx);
-        if (state != VMES_STATE_READONLY) {
-            break;
-        }
-
-        if (elapsed_milliseconds >= (seconds * 1000)) {
-            break;
-        }
-
-        usleep(1000);
-        elapsed_milliseconds++;
+    ValkeyModuleExternalStorageState state = ValkeyModule_GetExternalStorageState(storage_ctx);
+    if (state != VMES_STATE_READONLY) {
+        return state;
     }
-
+    
+    // If in readonly state, return immediately to avoid blocking
+    // The caller should handle this appropriately
     return state;
 }
 
 static ValkeyModuleExternalFilterState
 waitExternalFilterReady(ValkeyModuleExternalFilterCtx *filter_ctx) {
-    uint32_t elapsed_milliseconds = 0;
-    unsigned int seconds = ValkeyModule_GetExternalFilterTimeout(filter_ctx);
-    ValkeyModuleExternalFilterState state = VMEF_STATE_READY;
-    while (1) {
-        state = ValkeyModule_GetExternalFilterState(filter_ctx);
-        if (state != VMEF_STATE_READONLY) {
-            break;
-        }
-
-        if (elapsed_milliseconds >= (seconds * 1000)) {
-            break;
-        }
-
-        usleep(1000);
-        elapsed_milliseconds++;
+    ValkeyModuleExternalFilterState state = ValkeyModule_GetExternalFilterState(filter_ctx);
+    if (state != VMEF_STATE_READONLY) {
+        return state;
     }
-
+    
+    // If in readonly state, return immediately to avoid blocking
+    // The caller should handle this appropriately
     return state;
 }
 

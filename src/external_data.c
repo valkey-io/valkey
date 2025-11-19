@@ -430,6 +430,11 @@ void externalStorageCallDropReadonlyFunc(externalDataModuleInstance *si) {
     si->external_module->storage_methods.drop_readonly(si->module_ctx, si->storage_ctx);
 
     teardownModuleCtx(si);
+    
+    /* Unblock postponed clients when storage transitions from readonly to ready */
+    if (si->storage_ctx->state == VMES_STATE_READY) {
+        unblockPostponedClients();
+    }
     return;
 }
 
@@ -480,6 +485,11 @@ void externalFilterCallDropReadonlyFunc(externalDataModuleInstance *fi) {
     fi->external_module->filter_methods.drop_readonly(fi->module_ctx, fi->filter_ctx);
 
     teardownModuleCtx(fi);
+    
+    /* Unblock postponed clients when filter transitions from readonly to ready */
+    if (fi->filter_ctx->state == VMEF_STATE_READY) {
+        unblockPostponedClients();
+    }
     return;
 }
 
@@ -677,6 +687,16 @@ int externalDataWrite(int id, void *key, void *value) {
     externalDbData *dbData = dictGetVal(db);
     externalDataModuleInstance *mi = dbData->module_instance;
     if (!mi) return 0;
+
+    // Check if both storage and filter are in readonly state
+    ValkeyModuleExternalStorageState storage_state = mi->storage_ctx->state;
+    ValkeyModuleExternalFilterState filter_state = mi->filter_ctx->state;
+    
+    // If both are readonly, return 2 to signal the client should be blocked
+    // The client will be retried later when the state changes
+    if (storage_state == VMES_STATE_READONLY && filter_state == VMEF_STATE_READONLY) {
+        return 2;  // Signal to block the client
+    }
 
     if (!externalStorageCallSetFunc(mi, id, key, value)) return 1;
     return externalFilterCallSetFunc(mi, id, key);

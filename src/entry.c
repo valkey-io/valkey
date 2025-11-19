@@ -109,7 +109,6 @@ static stringRef *entryGetStringRefRef(const entry *entry) {
     return (stringRef *)*entryGetValueRef(entry);    
 }
 
-
 /* Returns the entry's value. */
 char *entryGetValue(const entry *entry, size_t *len) {
     if (entryHasEmbeddedValue(entry)) {

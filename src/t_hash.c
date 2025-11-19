@@ -311,7 +311,7 @@ int hashTypeExists(robj *o, sds field) {
     return hashTypeGetValue(o, field, &vstr, &vlen, &vll, NULL) == C_OK;
 }
 
-int hashTypeHasStringRef(robj *o, sds field) {
+bool hashTypeHasStringRef(robj *o, sds field) {
     if (o->encoding == OBJ_ENCODING_LISTPACK) return 0;
     hashtable *ht = o->ptr;
     void **entry_ref = hashtableFindRef(ht, field);
@@ -334,7 +334,8 @@ int hashTypeUpdateAsStringRef(robj *o, sds field, const char *buf, size_t len) {
     entry *entry = *entry_ref;
     long long expiry = entryGetExpiry(entry);
     void *new_entry = entryUpdateAsStringRef(entry, buf, len, expiry);
-    serverAssert(hashtableReplaceReallocatedEntry(ht, entry, new_entry));
+    bool replaced = hashtableReplaceReallocatedEntry(ht, entry, new_entry);
+    serverAssert(replaced);
     hashTypeTrackUpdateEntry(o, entry, new_entry, expiry, expiry);
     return C_OK;
 }

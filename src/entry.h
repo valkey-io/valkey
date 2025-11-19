@@ -73,6 +73,9 @@ void entryFree(entry *entry);
 
 /* Creates a new entry with the given field, value, and optional expiry. */
 entry *entryCreate(const_sds field, sds value, long long expiry);
+/* Sets the entry's value to a string reference object. 
+ * The reference points to the provided `buf` but does not assume ownership. 
+ * An external mechanism must handle the eventual memory deallocation of `buf`. */
 entry *entryUpdateAsStringRef(entry *entry, const char *buf, size_t len, long long expiry);
 
 /* Updates the value and/or expiry of an existing entry.

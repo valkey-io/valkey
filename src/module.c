@@ -5251,13 +5251,22 @@ int VM_ZsetRangePrev(ValkeyModuleKey *key) {
  * See also VM_ValueLength(), which returns the number of fields in a hash.
  * -------------------------------------------------------------------------- */
 
-/* Sets a reference to the value.
- * The function takes the hash key, hash field, and a buffer along with its length. */
+/* Sets the value of a hash field to a non-owning string reference (stringRef) 
+ * pointing to the buffer parameter, which remains owned by the module.
+ *
+ * NOTE: This API is designed for memory efficiency by avoiding memory duplication
+ * between the module and the core engine, which is critical when the buffer size is large. 
+ * For example, valkey-search uses this interface to avoid maintaining two copies of the
+ * indexed vectors. 
+ *
+ * The function receives the hash key, field name, buffer to share along with its size. */
 int VM_HashSetStringRef(ValkeyModuleKey *key, ValkeyModuleString *field, const char *buf, size_t len) {
     if (!key || !key->value || key->value->type != OBJ_HASH || !field || !buf) return VALKEYMODULE_ERR;
     return hashTypeUpdateAsStringRef(key->value, field->ptr, buf, len);
 }
 
+/* Checks if the value of a hash entry is a shared string reference (stringRef).
+ * The function receives the hash key and field name to perform the check against. */
 int VM_HashHasStringRef(ValkeyModuleKey *key, ValkeyModuleString *field) {
     if (!key || !key->value || key->value->type != OBJ_HASH) return VALKEYMODULE_ERR;
     return hashTypeHasStringRef(key->value, field->ptr);

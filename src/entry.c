@@ -34,6 +34,17 @@
  *                        |
  *                        |
  *                        value pointer = value sds
+ *
+ * Entry with string reference, used when the value is not owned by entry. The field is SDS
+ * type 8 or higher.
+ *
+ *     +--------------+-----------+--------------+
+ *     | Expiration   | string    | field        |
+ *     | 1234567890LL | reference | hdr "foo" \0 |
+ *     +--------------+-----^-----+--------------+
+ *                          |
+ *                          |
+ *                          string reference = value is stringRef type.
  */
 
 enum {
@@ -82,12 +93,22 @@ sds entryGetField(const entry *entry) {
 
 /* Returns the location of a pointer to a separately allocated value. Only for
  * an entry without an embedded value. */
-static inline void **entryGetValueRef(const entry *entry) {
+static void **entryGetValueRef(const entry *entry) {
     serverAssert(entryHasValuePtr(entry));
     char *field_data = sdsAllocPtr(entry);
     field_data -= sizeof(void *);
     return (void **)field_data;
 }
+
+static sds *entryGetSdsValueRef(const entry *entry) {
+    return (sds *)entryGetValueRef(entry);    
+}
+
+static stringRef *entryGetStringRefRef(const entry *entry) {
+    serverAssert(entryHasStringRef(entry));
+    return (stringRef *)*entryGetValueRef(entry);    
+}
+
 
 /* Returns the entry's value. */
 char *entryGetValue(const entry *entry, size_t *len) {
@@ -98,27 +119,37 @@ char *entryGetValue(const entry *entry, size_t *len) {
         if (len) *len = sdslen(value);
         return value;
     }
-    void **value_ref = entryGetValueRef(entry);
-    if (!value_ref) return NULL;
     if (entryHasStringRef(entry)) {
-        stringRef *string_ref = (stringRef *)*value_ref;
+        stringRef *string_ref = entryGetStringRefRef(entry);
+        if (!string_ref) return NULL;
         if (len) *len = string_ref->len;
         return (char *)string_ref->buf;
     }
+    sds *value_ref = entryGetSdsValueRef(entry);
     if (len) *len = sdslen(*value_ref);
     return *value_ref;
 }
 
-static void entrySetValueSds(entry *e, sds value) {
-    serverAssert(entryHasValuePtr(e));
-    void **value_ref = entryGetValueRef(e);
-    if (entryHasStringRef(e)) {
+/* Frees the entry's non-embedded value.
+ * If the value is a string reference (stringRef), only the entry's pointer 
+ * is freed, as the underlying string is not owned by this entry.
+ * Otherwise, the value is a standard SDS and is fully freed. */
+static void entryFreeValuePtr(entry *entry) {
+    serverAssert(entryHasValuePtr(entry));
+    void **value_ref = entryGetValueRef(entry);
+    if (entryHasStringRef(entry)) {
         zfree(*value_ref);
-        *value_ref = (stringRef *)value;
-        sdsSetAuxBit(e, FIELD_SDS_AUX_BIT_ENTRY_HAS_STRING_REF, 0);
     } else {
         sdsfree(*value_ref);
     }
+    *value_ref = NULL;
+}
+
+static void entrySetValueSds(entry *e, sds value) {
+    serverAssert(entryHasValuePtr(e));
+    entryFreeValuePtr(e);
+    if (entryHasStringRef(e)) sdsSetAuxBit(e, FIELD_SDS_AUX_BIT_ENTRY_HAS_STRING_REF, 0);
+    sds *value_ref = entryGetSdsValueRef(e);
     *value_ref = value;
 }
 /* Returns the address of the entry allocation. */
@@ -131,12 +162,9 @@ static void *entryGetAllocPtr(const entry *entry) {
 
 /**************************************** Entry Expiry API *****************************************/
 /* Returns the location of a pointer to the expiry */
-static inline long long *entryGetExpiryRef(const entry *entry) {
+static long long *entryGetExpiryRef(const entry *entry) {
     debugServerAssert(entryHasExpiry(entry));
     char *buf = entryGetAllocPtr(entry);
-    debugServerAssert((((uintptr_t)buf & 0x7) == 0)); /* Test that the allocation is indeed 8 bytes aligned
-                                                       * This is needed since we access the expiry as with pointer casting
-                                                       * which require the access to be 8 bytes aligned. */
     return (long long *)buf;
 }
 
@@ -154,7 +182,7 @@ entry *entrySetExpiry(entry *e, long long expiry) {
         return e;
     }
     if (entryHasStringRef(e)) {
-        stringRef *value = (stringRef *)*entryGetValueRef(e);
+        stringRef *value = entryGetStringRefRef(e);
         return entryUpdateAsStringRef(e, value->buf, value->len, expiry);
     }
     return entryUpdate(e, NULL, expiry);
@@ -165,17 +193,6 @@ bool entryIsExpired(entry *entry) {
     return timestampIsExpired(entryGetExpiry(entry));
 }
 /**************************************** Entry Expiry API - End *****************************************/
-/* Frees the entry non-embedded value */
-static inline void entryFreeValuePtr(entry *entry) {
-    serverAssert(entryHasValuePtr(entry));
-    void **value_ref = entryGetValueRef(entry);
-    if (entryHasStringRef(entry)) {
-        zfree(*value_ref);
-        return;
-    }
-    sdsfree(*value_ref);
-}
-
 void entryFree(entry *entry) {
     if (entryHasValuePtr(entry)) entryFreeValuePtr(entry);
     zfree(entryGetAllocPtr(entry));
@@ -293,29 +310,34 @@ entry *entryCreate(const_sds field, sds value, long long expiry) {
     return entryConstruct(alloc_size, field, value, expiry, embed_value, embedded_field_sds_type, expiry_size, embedded_value_sds_size, embedded_field_sds_size);
 }
 
-
+/* Sets the entry's value to a string reference object. 
+ * The reference points to the provided `buf` but does not assume ownership. 
+ * It is assumed that an external mechanism will handle releasing any memory which
+ * may have been associated with value->buf */
 entry *entryUpdateAsStringRef(entry *entry, const char *buf, size_t len, long long expiry) {
     long long entry_expiry = entryGetExpiry(entry);
     // Check for toggling expiration
     bool expiry_add_remove = (expiry != entry_expiry) && (entry_expiry == EXPIRY_NONE || expiry == EXPIRY_NONE);
-    if (entryHasStringRef(entry) && !expiry_add_remove) {
-        stringRef *value = *entryGetValueRef(entry);
-        value->buf = buf;
-        value->len = len;
+    if (entryHasValuePtr(entry) && !expiry_add_remove) {
+        if (entryHasStringRef(entry)) {
+            stringRef *value = entryGetStringRefRef(entry);
+            value->buf = buf;
+            value->len = len;
+        } else {
+            stringRef *value = zmalloc(sizeof(stringRef));
+            value->buf = buf;
+            value->len = len;
+            sds *value_ref = entryGetSdsValueRef(entry);
+            sdsfree(*value_ref);
+            *value_ref = (sds)value;
+            sdsSetAuxBit(entry, FIELD_SDS_AUX_BIT_ENTRY_HAS_STRING_REF, 1);
+        }
         if (expiry != EXPIRY_NONE) *entryGetExpiryRef(entry) = expiry;
         return entry;
     }
     stringRef *value = zmalloc(sizeof(stringRef));
     value->buf = buf;
     value->len = len;
-    if (entryHasValuePtr(entry) && !expiry_add_remove) {
-        sds *value_ref = (sds *)entryGetValueRef(entry);
-        sdsfree(*value_ref);
-        *value_ref = (sds)value;
-        sdsSetAuxBit(entry, FIELD_SDS_AUX_BIT_ENTRY_HAS_STRING_REF, 1);
-        if (expiry != EXPIRY_NONE) *entryGetExpiryRef(entry) = expiry;
-        return entry;
-    }
     sds field = entryGetField(entry);
     size_t field_size = sdsReqSize(sdslen(field), SDS_TYPE_8);
     size_t alloc_size = field_size + sizeof(void *);
@@ -327,8 +349,6 @@ entry *entryUpdateAsStringRef(entry *entry, const char *buf, size_t len, long lo
     entryFree(entry);
 
     sdsSetAuxBit(new_entry, FIELD_SDS_AUX_BIT_ENTRY_HAS_STRING_REF, 1);
-    sdsSetAuxBit(new_entry, FIELD_SDS_AUX_BIT_ENTRY_HAS_VALUE_PTR, 1);
-    sdsSetAuxBit(new_entry, FIELD_SDS_AUX_BIT_ENTRY_HAS_EXPIRY, expiry != EXPIRY_NONE);
     return new_entry;
 }
 /* Modify the entry's value and/or expiration time.
@@ -341,7 +361,7 @@ entry *entryUpdate(entry *e, sds value, long long expiry) {
 
     /* Update just the expiry field, no value change, of a string ref entry */
     if (entryHasStringRef(e) && !value) {
-        stringRef *value = (stringRef *)*entryGetValueRef(e);
+        stringRef *value = entryGetStringRefRef(e);
         return entryUpdateAsStringRef(e, value->buf, value->len, expiry);
     }
     bool update_value = value ? true : false;
@@ -436,7 +456,7 @@ size_t entryMemUsage(entry *entry) {
          * header could be too small for holding the real allocation size. */
         mem += zmalloc_usable_size(entryGetAllocPtr(entry));
     }
-    mem += sdsAllocSize((sds)entryGetValue(entry, NULL));
+    if (!entryHasStringRef(entry)) mem += sdsAllocSize((sds)entryGetValue(entry, NULL));
     return mem;
 }
 
@@ -450,7 +470,7 @@ size_t entryMemUsage(entry *entry) {
 entry *entryDefrag(entry *entry, void *(*defragfn)(void *), sds (*sdsdefragfn)(sds)) {
     if (entryHasStringRef(entry)) {
         stringRef **value_ref = (stringRef **)entryGetValueRef(entry);
-        stringRef *new_value = activeDefragAlloc(*value_ref);
+        stringRef *new_value = defragfn(*value_ref);
         if (new_value) *value_ref = new_value;
     } else if (entryHasValuePtr(entry)) {
         sds *value_ref = (sds *)entryGetValueRef(entry);

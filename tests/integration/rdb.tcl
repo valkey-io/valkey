@@ -584,11 +584,10 @@ start_server {} {
         catch {r debug reload nosave}
         
         # Check that version error appears in logs
-        set log_content [exec tail -100 < [srv 0 stdout]]
-        assert {[string match {*Can't handle RDB format version*} $log_content]}
+        verify_log_message 0 "*Can't handle RDB format version*" 0
 
         # Verify we don't enter the flushing code path
-        assert {![string match {*RDB signature and version check passed*} $log_content]}
+        verify_no_log_message 0 "*RDB signature and version check passed*" 0
 
         # Verify our original data is not flushed
         assert_equal [r get testkey1] "value1"

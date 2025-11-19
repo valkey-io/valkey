@@ -75,6 +75,7 @@ extern int rdbCheckMode;
 void rdbCheckError(const char *fmt, ...);
 void rdbCheckSetError(const char *fmt, ...);
 int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadingCtx *rdb_loading_ctx);
+void replicationEmptyDbCallback(hashtable *ht);
 
 /* Returns true if the RDB version is valid and accepted, false otherwise. This
  * function takes configuration into account. The parameter `is_valkey_magic`
@@ -3082,8 +3083,10 @@ int rdbLoadRioWithLoadingCtxScopedRdb(rio *rdb, int rdbflags, rdbSaveInfo *rsi, 
     return retval;
 }
 
-/* Load an RDB file from the rio stream 'rdb'. On success C_OK is returned,
- * otherwise C_ERR is returned.
+/* Load an RDB file from the rio stream 'rdb'. We return one of the following:
+ * - RDB_OK On success
+ * - RDB_INCOMPATIBLE If the RDB has an invalid signature or version
+ * - RDB_FAILED in all other failure cases
  * The rdb_loading_ctx argument holds objects to which the rdb will be loaded to,
  * currently it only allow to set db object and functionLibCtx to which the data
  * will be loaded (in the future it might contains more such objects). */
@@ -3092,10 +3095,6 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
     int type, rdbver;
     uint64_t db_size = 0, expires_size = 0;
     int should_expand_db = 0;
-    if (rdb_loading_ctx->dbarray[0] == NULL) {
-        rdb_loading_ctx->dbarray[0] = createDatabase(0);
-    }
-    serverDb *db = rdb_loading_ctx->dbarray[0];
     char buf[1024];
     int error;
     long long empty_keys_skipped = 0;
@@ -3111,13 +3110,29 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
         is_valkey_magic = true;
     } else {
         serverLog(LL_WARNING, "Wrong signature trying to load DB from file: %.9s", buf);
-        return C_ERR;
+        /* Signal to terminate the rdbLoad without clearing existing data */
+        return RDB_INCOMPATIBLE;
     }
     rdbver = atoi(buf + 6);
     if (!rdbIsVersionAccepted(rdbver, is_valkey_magic, is_redis_magic)) {
         serverLog(LL_WARNING, "Can't handle RDB format version %d", rdbver);
-        return C_ERR;
+        return RDB_INCOMPATIBLE;
     }
+
+    /* Only empty data if RDBFLAGS_EMPTY_DATA is set */
+    if (rdbflags & RDBFLAGS_EMPTY_DATA) {
+        int empty_db_flags = server.repl_replica_lazy_flush ? EMPTYDB_ASYNC : EMPTYDB_NO_FLAGS;
+        serverLog(LL_NOTICE, "RDB signature and version check passed. Flushing old data");
+        emptyData(-1, empty_db_flags, replicationEmptyDbCallback);
+
+        /* functionsLibCtx is cleared when we call emptyData, reinitialize here. */
+        rdb_loading_ctx->functions_lib_ctx = functionsLibCtxGetCurrent();
+    }
+
+    if (rdb_loading_ctx->dbarray[0] == NULL) {
+        rdb_loading_ctx->dbarray[0] = createDatabase(0);
+    }
+    serverDb *db = rdb_loading_ctx->dbarray[0];
 
     /* Key-specific attributes, set by opcodes before the key type. */
     long long lru_idle = -1, lfu_freq = -1, expiretime = -1, now = mstime();
@@ -3134,7 +3149,7 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
         if (is_redis_magic && type >= RDB_FOREIGN_TYPE_MIN && type <= RDB_FOREIGN_TYPE_MAX) {
             serverLog(LL_WARNING, "Can't handle foreign type or opcode %d in RDB with version %d",
                       type, rdbver);
-            return C_ERR;
+            return RDB_FAILED;
         }
 
         /* Handle special types. */
@@ -3418,7 +3433,7 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
             } else if (error == RDB_LOAD_ERR_UNKNOWN_TYPE) {
                 sdsfree(key);
                 serverLog(LL_WARNING, "Unknown type or opcode when loading DB. Unrecoverable error, aborting now.");
-                return C_ERR;
+                return RDB_FAILED;
             } else {
                 sdsfree(key);
                 goto eoferr;
@@ -3502,7 +3517,7 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
                           "got (%llx). Aborting now.",
                           (unsigned long long)expected, (unsigned long long)cksum);
                 rdbReportCorruptRDB("RDB CRC error");
-                return C_ERR;
+                return RDB_FAILED;
             }
         }
     }
@@ -3514,7 +3529,7 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
         serverLog(LL_NOTICE, "Done loading RDB, keys loaded: %lld, keys expired: %lld.",
                   server.rdb_last_load_keys_loaded, server.rdb_last_load_keys_expired);
     }
-    return C_OK;
+    return RDB_OK;
 
     /* Unexpected end of file is handled here calling rdbReportReadError():
      * this will in turn either abort the server in most cases, or if we are loading
@@ -3523,7 +3538,7 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
 eoferr:
     serverLog(LL_WARNING, "Short read or OOM loading DB. Unrecoverable error, aborting now.");
     rdbReportReadError("Unexpected EOF reading RDB file");
-    return C_ERR;
+    return RDB_FAILED;
 }
 
 /* Like rdbLoadRio() but takes a filename instead of a rio stream. The
@@ -3556,14 +3571,15 @@ int rdbLoad(char *filename, rdbSaveInfo *rsi, int rdbflags) {
     retval = rdbLoadRio(&rdb, rdbflags, rsi);
 
     fclose(fp);
-    stopLoading(retval == C_OK);
+    stopLoading(retval == RDB_OK);
     /* Reclaim the cache backed by rdb */
-    if (retval == C_OK && !(rdbflags & RDBFLAGS_KEEP_CACHE)) {
+    if (retval == RDB_OK && !(rdbflags & RDBFLAGS_KEEP_CACHE)) {
         /* TODO: maybe we could combine the fopen and open into one in the future */
         rdb_fd = open(filename, O_RDONLY);
         if (rdb_fd >= 0) bioCreateCloseJob(rdb_fd, 0, 1);
     }
-    return (retval == C_OK) ? RDB_OK : RDB_FAILED;
+
+    return retval;
 }
 
 /* A background saving child (BGSAVE) terminated its work. Handle this.

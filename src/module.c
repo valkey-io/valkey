@@ -13469,8 +13469,6 @@ int VM_RdbLoad(ValkeyModuleCtx *ctx, ValkeyModuleRdbStream *stream, int flags) {
      * will prevent COW memory issue. */
     if (server.child_type == CHILD_TYPE_SLOT_MIGRATION) killSlotMigrationChild();
 
-    emptyData(-1, EMPTYDB_NO_FLAGS, NULL);
-
     /* rdbLoad() can go back to the networking and process network events. If
      * VM_RdbLoad() is called inside a command callback, we don't want to
      * process the current client. Otherwise, we may free the client or try to
@@ -13478,7 +13476,7 @@ int VM_RdbLoad(ValkeyModuleCtx *ctx, ValkeyModuleRdbStream *stream, int flags) {
     if (server.current_client) protectClient(server.current_client);
 
     serverAssert(stream->type == VALKEYMODULE_RDB_STREAM_FILE);
-    int ret = rdbLoad(stream->data.filename, NULL, RDBFLAGS_NONE);
+    int ret = rdbLoad(stream->data.filename, NULL, RDBFLAGS_EMPTY_DATA);
 
     if (server.current_client) unprotectClient(server.current_client);
 

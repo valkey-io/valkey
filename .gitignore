@@ -54,4 +54,3 @@ build-debug/
 build-release/
 cmake-build-debug/
 cmake-build-release/
-ignore/

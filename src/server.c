@@ -5230,28 +5230,6 @@ void addReplyCommandSubCommands(client *c,
     hashtableResetIterator(&iter);
 }
 
-/* Collect all output from a caching client (both buffer and reply list) */
-static sds collectCachedResponse(client *c) {
-    sds response = sdsempty();
-    
-    /* First, collect from the fixed buffer if any */
-    if (c->bufpos > 0) {
-        response = sdscatlen(response, c->buf, c->bufpos);
-    }
-    
-    /* Then, collect from the reply list */
-    listIter li;
-    listNode *ln;
-    clientReplyBlock *val_block;
-    listRewind(c->reply, &li);
-    while ((ln = listNext(&li)) != NULL) {
-        val_block = (clientReplyBlock *)listNodeValue(ln);
-        response = sdscatlen(response, val_block->buf, val_block->used);
-    }
-    
-    return response;
-}
-
 /* Forward declaration */
 void addReplyCommandInfo(client *c, struct serverCommand *cmd);
 
@@ -5279,7 +5257,7 @@ static void cacheCommandInfo(struct serverCommand *cmd, int resp) {
     addReplyCommandKeySpecs(caching_client, cmd);
     addReplyCommandSubCommands(caching_client, cmd, addReplyCommandInfo, 0);
 
-    cmd->info_cache[RESP_CACHE_INDEX(resp)] = collectCachedResponse(caching_client);
+    cmd->info_cache[RESP_CACHE_INDEX(resp)] = aggregateClientOutputBuffer(caching_client);
     
     deleteCachedResponseClient(caching_client);
 }
@@ -5447,7 +5425,7 @@ static void cacheCommandResponse(int resp) {
     }
     hashtableResetIterator(&iter);
     
-    server.command_response_cache[RESP_CACHE_INDEX(resp)] = collectCachedResponse(caching_client);
+    server.command_response_cache[RESP_CACHE_INDEX(resp)] = aggregateClientOutputBuffer(caching_client);
     
     deleteCachedResponseClient(caching_client);
 }

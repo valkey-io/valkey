@@ -3260,8 +3260,7 @@ static void *preparePingExt(clusterMsgPingExt *ext, uint16_t type, uint32_t leng
  * Returns 1 (added a new extension) or 0 (no extensison added).
  */
 static uint32_t
-writeSdsPingExt(uint32_t *totlen_ptr, clusterMsgPingExt **cursor_ptr, clusterMsgPingtypes type,
-                sds value, bool allow_empty) {
+writeSdsPingExt(uint32_t *totlen_ptr, clusterMsgPingExt **cursor_ptr, clusterMsgPingtypes type, sds value, bool allow_empty) {
     size_t len = sdslen(value);
     if (!allow_empty && len == 0) return 0;
     size_t size = getAlignedPingExtSize(len + 1);

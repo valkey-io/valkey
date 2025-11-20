@@ -6461,6 +6461,11 @@ ValkeyModuleCallReply *VM_Call(ValkeyModuleCtx *ctx, const char *cmdname, const 
     }
     if (ctx->module) ctx->module->in_call++;
 
+    if (flags & VALKEYMODULE_ARGV_SCRIPT_MODE && is_running_script) {
+        c->flag.module = 0;
+        c->flag.script = 1;
+    }
+
     user *user = NULL;
     if (flags & VALKEYMODULE_ARGV_RUN_AS_USER) {
         user = ctx->user ? ctx->user->user : ctx->client->user;
@@ -6504,10 +6509,6 @@ ValkeyModuleCallReply *VM_Call(ValkeyModuleCtx *ctx, const char *cmdname, const 
     cmd_flags = getCommandFlags(c);
 
     if (flags & VALKEYMODULE_ARGV_SCRIPT_MODE) {
-        if (is_running_script) {
-            c->flag.module = 0;
-            c->flag.script = 1;
-        }
         /* In script mode, commands with CMD_NOSCRIPT flag are normally forbidden.
          * However, we allow them if both conditions are met:
          * 1. We're running in the context of a scripting engine running a script

@@ -118,39 +118,17 @@ start_server [list overrides [list "ext-data-mode" kv "loglevel" debug "ext-data
         assert_equal {OK} [r external_data INIT db1 helloextdata1]
 
         # filter RO, storage RO = nil
-        assert_equal {OK} [r external_data debug db0 storage setro]
-        assert_equal {OK} [r external_data debug db0 filter setro]
+        assert_equal {OK} [r external_data debug db0 setro]
         assert_error {ERR k set failed} {r external_data debug db0 storage set k v}
         assert_error {ERR k set failed} {r external_data debug db0 filter set k}
         assert_equal {OK} [r select 0]
-        assert_equal {} [r get k ext]
-        assert_equal {OK} [r select 1]
-        assert_equal {} [r get k ext]
-        assert_equal {OK} [r select 0]
-
-        # filter RO, storage OK = nil
-        assert_equal {OK} [r external_data debug db0 storage dropro]
-        assert_equal {OK} [r external_data debug db0 storage set k v]
-        assert_error {ERR k set failed} {r external_data debug db0 filter set k}
-        assert_equal {} [r get k ext]
-        assert_equal {OK} [r select 1]
-        assert_equal {} [r get k ext]
-        assert_equal {OK} [r select 0]
-
-        # filter OK, storage RO = nil
-        assert_equal v [r external_data debug db0 storage del k]
-        assert_equal {} [r external_data debug db0 storage del k]
-        assert_equal {OK} [r external_data debug db0 storage setro]
-        assert_equal {OK} [r external_data debug db0 filter dropro]
-        assert_error {ERR k set failed} {r external_data debug db0 storage set k v}
-        assert_equal {OK} [r external_data debug db0 filter set k]
         assert_equal {} [r get k ext]
         assert_equal {OK} [r select 1]
         assert_equal {} [r get k ext]
         assert_equal {OK} [r select 0]
 
         # filter ok, storage ok = OK
-        assert_equal {OK} [r external_data debug db0 storage dropro]
+        assert_equal {OK} [r external_data debug db0 dropro]
         assert_equal {OK} [r external_data debug db0 storage set k v]
         assert_equal {OK} [r external_data debug db0 storage set k v]
         assert_equal {OK} [r external_data debug db0 filter set k]
@@ -810,8 +788,7 @@ start_server [list overrides [list "ext-data-mode" kv "loglevel" debug "ext-data
         }
 
         # Put storage and filter in readonly mode to cause actual blocking
-        assert_equal {OK} [r external_data debug db0 storage setro]
-        assert_equal {OK} [r external_data debug db0 filter setro]
+        assert_equal {OK} [r external_data debug db0 setro]
         
         # Start client 1 in background - this will block on external storage operation
         set client1 [valkey_deferring_client]
@@ -838,11 +815,10 @@ start_server [list overrides [list "ext-data-mode" kv "loglevel" debug "ext-data
         assert {[expr {$get_elapsed_time < 2000}]}
         
         # Drop readonly mode
-        assert_equal {OK} [r external_data debug db0 storage dropro]
-        assert_equal {OK} [r external_data debug db0 filter dropro]
+        assert_equal {OK} [r external_data debug db0 dropro]
         
-        # Verify the write still unsuccessful after unblocking
-        assert_equal "" [r get $blocking_key ext]
+        # Verify the write is successful after unblocking
+        assert_equal "blocking_value" [r get $blocking_key ext]
 
         # Now writes should work
         set new_key "new_write_key"

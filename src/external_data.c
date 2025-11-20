@@ -412,30 +412,7 @@ int externalStorageCallDelFunc(externalDataModuleInstance *mi, int dbid, robj *k
     int result = mi->external_module->storage_methods.del(mi->module_ctx, mi->storage_ctx, &key_ctx, value);
 
     teardownModuleCtx(mi);
-    return result == EXTERNAL_DEL_SUCCESS;
-}
-
-void externalStorageCallSetReadonlyFunc(externalDataModuleInstance *si) {
-    setupModuleCtx(si);
-
-    si->external_module->storage_methods.set_readonly(si->module_ctx, si->storage_ctx);
-
-    teardownModuleCtx(si);
-    return;
-}
-
-void externalStorageCallDropReadonlyFunc(externalDataModuleInstance *si) {
-    setupModuleCtx(si);
-
-    si->external_module->storage_methods.drop_readonly(si->module_ctx, si->storage_ctx);
-
-    teardownModuleCtx(si);
-    
-    /* Unblock postponed clients when storage transitions from readonly to ready */
-    if (si->storage_ctx->state == VMES_STATE_READY) {
-        unblockPostponedClients();
-    }
-    return;
+    return result == EXTERNAL_SUCCESS;
 }
 
 int externalFilterCallSetFunc(externalDataModuleInstance *fi, int dbid, robj *key) {
@@ -467,30 +444,52 @@ int externalFilterCallDelFunc(externalDataModuleInstance *fi, int dbid, robj *ke
     int result = fi->external_module->filter_methods.del(fi->module_ctx, fi->filter_ctx, &key_ctx, value);
 
     teardownModuleCtx(fi);
-    return result == EXTERNAL_DEL_SUCCESS;
+    return result == EXTERNAL_SUCCESS;
 }
 
-void externalFilterCallSetReadonlyFunc(externalDataModuleInstance *fi) {
-    setupModuleCtx(fi);
+int externalDataCallSetReadonlyFunc(externalDataModuleInstance *mi) {
+    setupModuleCtx(mi);
 
-    fi->external_module->filter_methods.set_readonly(fi->module_ctx, fi->filter_ctx);
-
-    teardownModuleCtx(fi);
-    return;
-}
-
-void externalFilterCallDropReadonlyFunc(externalDataModuleInstance *fi) {
-    setupModuleCtx(fi);
-
-    fi->external_module->filter_methods.drop_readonly(fi->module_ctx, fi->filter_ctx);
-
-    teardownModuleCtx(fi);
-    
-    /* Unblock postponed clients when filter transitions from readonly to ready */
-    if (fi->filter_ctx->state == VMEF_STATE_READY) {
-        unblockPostponedClients();
+    /* Set both storage and filter to readonly */
+    int result = mi->external_module->storage_methods.set_readonly(mi->module_ctx, mi->storage_ctx);
+    if (result != EXTERNAL_SUCCESS) {
+        teardownModuleCtx(mi);
+        return result;
     }
-    return;
+    result = mi->external_module->filter_methods.set_readonly(mi->module_ctx, mi->filter_ctx);
+    if (result != EXTERNAL_SUCCESS) {
+        teardownModuleCtx(mi);
+        return result;
+    }
+
+    teardownModuleCtx(mi);
+
+    mi->storage_ctx->state = VMES_STATE_READONLY;
+    mi->filter_ctx->state = VMEF_STATE_READONLY;
+    return EXTERNAL_SUCCESS;
+}
+
+int externalDataCallDropReadonlyFunc(externalDataModuleInstance *mi) {
+    setupModuleCtx(mi);
+
+    /* Drop readonly for both storage and filter */
+    int result = mi->external_module->storage_methods.drop_readonly(mi->module_ctx, mi->storage_ctx);
+    if (result != EXTERNAL_SUCCESS) {
+        teardownModuleCtx(mi);
+        return result;
+    }
+    result = mi->external_module->filter_methods.drop_readonly(mi->module_ctx, mi->filter_ctx);
+    if (result != EXTERNAL_SUCCESS) {
+        teardownModuleCtx(mi);
+        return result;
+    }
+
+    teardownModuleCtx(mi);
+    
+    mi->storage_ctx->state = VMES_STATE_READY;
+    mi->filter_ctx->state = VMEF_STATE_READY;
+    unblockPostponedClients();
+    return EXTERNAL_SUCCESS;
 }
 
 struct extStorageInstanceIterator {
@@ -596,10 +595,6 @@ void externalDataDebugCommand(client *c) {
                 decrRefCount(value);
             }
             return;
-        } else if (!strcasecmp(objectGetVal(c->argv[j]), "setro")) {
-            externalStorageCallSetReadonlyFunc(dbData->module_instance);
-        } else if (!strcasecmp(objectGetVal(c->argv[j]), "dropro")) {
-            externalStorageCallDropReadonlyFunc(dbData->module_instance);
         } else {
             sds cmd = objectGetVal(c->argv[j]);
             addReplyErrorFormat(c, "unknown subcommand %s", cmd);
@@ -631,17 +626,25 @@ void externalDataDebugCommand(client *c) {
                 decrRefCount(value);
             }
             return;
-        } else if (!strcasecmp(objectGetVal(c->argv[j]), "setro")) {
-            externalFilterCallSetReadonlyFunc(dbData->module_instance);
-        } else if (!strcasecmp(objectGetVal(c->argv[j]), "dropro")) {
-            externalFilterCallDropReadonlyFunc(dbData->module_instance);
         } else {
             sds cmd = objectGetVal(c->argv[j]);
             addReplyErrorFormat(c, "unknown subcommand %s", cmd);
             return;
         }
+    } else if (!strcasecmp(c->argv[j]->ptr, "setro")) {
+        int result = externalDataCallSetReadonlyFunc(dbData->module_instance);
+        if (result != EXTERNAL_SUCCESS) {
+            addReplyErrorFormat(c, "error code setting readonly: %d", result);
+            return;
+        }
+    } else if (!strcasecmp(c->argv[j]->ptr, "dropro")) {
+        int result = externalDataCallDropReadonlyFunc(dbData->module_instance);
+        if (result != EXTERNAL_SUCCESS) {
+            addReplyErrorFormat(c, "error code setting readonly: %d", result);
+            return;
+        }
     } else {
-        sds cmd = objectGetVal(c->argv[3]);
+        sds cmd = objectGetVal(c->argv[j]);
         addReplyErrorFormat(c, "unknown subcommand %s", cmd);
         return;
     }

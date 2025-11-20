@@ -1369,7 +1369,7 @@ typedef int (*ValkeyModuleExternalStorageDelFunc)(
  * - `storage_ctx`: the external storage context.
  *
  */
-typedef void (*ValkeyModuleExternalStorageDropReadonlyFunc)(
+typedef int (*ValkeyModuleExternalStorageDropReadonlyFunc)(
     ValkeyModuleCtx *module_ctx,
     ValkeyModuleExternalStorageCtx *storage_ctx);
 
@@ -1399,7 +1399,7 @@ typedef int (*ValkeyModuleExternalStorageIterateFunc)(
  * - `storage_ctx`: the external storage context.
  *
  */
-typedef void (*ValkeyModuleExternalStorageSetReadonlyFunc)(
+typedef int (*ValkeyModuleExternalStorageSetReadonlyFunc)(
     ValkeyModuleCtx *module_ctx,
     ValkeyModuleExternalStorageCtx *storage_ctx);
 
@@ -1494,7 +1494,7 @@ typedef int (*ValkeyModuleExternalFilterDelFunc)(
  * - `filter_ctx`: the external filter context.
  *
  */
-typedef void (*ValkeyModuleExternalFilterDropReadonlyFunc)(
+typedef int (*ValkeyModuleExternalFilterDropReadonlyFunc)(
     ValkeyModuleCtx *module_ctx,
     ValkeyModuleExternalFilterCtx *filter_ctx);
 
@@ -1505,7 +1505,7 @@ typedef void (*ValkeyModuleExternalFilterDropReadonlyFunc)(
  * - `filter_ctx`: the external filter context.
  *
  */
-typedef void (*ValkeyModuleExternalFilterSetReadonlyFunc)(
+typedef int (*ValkeyModuleExternalFilterSetReadonlyFunc)(
     ValkeyModuleCtx *module_ctx,
     ValkeyModuleExternalFilterCtx *filter_ctx);
 
@@ -1533,12 +1533,12 @@ typedef struct ValkeyModuleExternalFilterMethods {
 
 #define ValkeyModuleExternalFilterMethods ValkeyModuleExternalFilterMethodsV1
 
-/* Deletion function result codes */
-typedef enum ValkeyModuleExternalDelResult {
-    EXTERNAL_DEL_ERROR = 0,    /* Error during deletion */
-    EXTERNAL_DEL_SUCCESS = 1,  /* Successful deletion */
-    EXTERNAL_DEL_NOT_FOUND = 2 /* Key not found, nothing done */
-} ValkeyModuleExternalDelResult;
+/* External data functions result codes */
+typedef enum ValkeyModuleExternalDataResult {
+    EXTERNAL_ERROR = 0,    /* Error during execution */
+    EXTERNAL_SUCCESS = 1,  /* Successful execution */
+    EXTERNAL_NOT_FOUND = 2 /* Key not found, nothing done */
+} ValkeyModuleExternalDataResult;
 
 /* ------------------------- End of common defines ------------------------ */
 

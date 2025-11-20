@@ -111,7 +111,7 @@ static int storageDelFunction(ValkeyModuleCtx *module_ctx,
     ValkeyModule_Assert(state == VMES_STATE_READONLY || state == VMES_STATE_READY);
     if (state == VMES_STATE_READONLY) {
         ValkeyModule_ReplyWithError(module_ctx, "ERR External storage readonly");
-        return EXTERNAL_DEL_ERROR;
+        return EXTERNAL_ERROR;
     }
 
     int dbid = ValkeyModule_GetDbIdFromOptCtx(key_ctx);
@@ -125,7 +125,7 @@ static int storageDelFunction(ValkeyModuleCtx *module_ctx,
     if (!value) {
         ValkeyModule_Log(module_ctx, "debug", "storageDelFunction: key not found in storage");
         ValkeyModule_ReplyWithSimpleString(module_ctx, "OK");
-        return EXTERNAL_DEL_NOT_FOUND;
+        return EXTERNAL_NOT_FOUND;
     }
 
     ValkeyModule_Log(module_ctx, "debug", "storageDelFunction: found value, attempting delete");
@@ -133,7 +133,7 @@ static int storageDelFunction(ValkeyModuleCtx *module_ctx,
         ValkeyModule_Log(module_ctx, "debug", "storageDelFunction: delete failed");
         ValkeyModule_ReplyWithErrorFormat(module_ctx, "ERR Failed to del key %s",
                                           ValkeyModule_StringPtrLen(key, NULL));
-        return EXTERNAL_DEL_ERROR;
+        return EXTERNAL_ERROR;
     }
 
     ValkeyModule_Log(module_ctx, "debug", "storageDelFunction: delete successful");
@@ -144,20 +144,9 @@ static int storageDelFunction(ValkeyModuleCtx *module_ctx,
     }
 
     ValkeyModule_ReplyWithSimpleString(module_ctx, "OK");
-    return EXTERNAL_DEL_SUCCESS;
+    return EXTERNAL_SUCCESS;
 }
 
-static void storageSetReadonlyFunction(ValkeyModuleCtx *module_ctx,
-                                        ValkeyModuleExternalStorageCtx *storage_ctx) {
-    ValkeyModule_SetExternalStorageState(storage_ctx, VMES_STATE_READONLY);
-    ValkeyModule_ReplyWithSimpleString(module_ctx, "OK");
-}
-
-static void storageDropReadonlyFunction(ValkeyModuleCtx *module_ctx,
-                                         ValkeyModuleExternalStorageCtx *storage_ctx) {
-    ValkeyModule_SetExternalStorageState(storage_ctx, VMES_STATE_READY);
-    ValkeyModule_ReplyWithSimpleString(module_ctx, "OK");
-}
 
 static int storageIterateFunction(ValkeyModuleCtx *, int dbid,
                                    ValkeyModuleString *, long long *,
@@ -237,7 +226,7 @@ static int filterDelFunction(ValkeyModuleCtx *module_ctx,
     ValkeyModule_Assert(state == VMEF_STATE_READONLY || state == VMEF_STATE_READY);
     if (state == VMEF_STATE_READONLY) {
         ValkeyModule_ReplyWithError(module_ctx, "ERR External filter readonly");
-        return EXTERNAL_DEL_ERROR;
+        return EXTERNAL_ERROR;
     }
 
     int dbid = ValkeyModule_GetDbIdFromOptCtx(key_ctx);
@@ -251,7 +240,7 @@ static int filterDelFunction(ValkeyModuleCtx *module_ctx,
     if (!value) {
         ValkeyModule_Log(module_ctx, "debug", "filterDelFunction: key not found in filter");
         ValkeyModule_ReplyWithSimpleString(module_ctx, "OK");
-        return EXTERNAL_DEL_NOT_FOUND;
+        return EXTERNAL_NOT_FOUND;
     }
 
     ValkeyModule_Log(module_ctx, "debug", "filterDelFunction: found value, attempting delete");
@@ -259,7 +248,7 @@ static int filterDelFunction(ValkeyModuleCtx *module_ctx,
         ValkeyModule_Log(module_ctx, "debug", "filterDelFunction: delete failed");
         ValkeyModule_ReplyWithErrorFormat(module_ctx, "ERR Failed to del key %s",
                                           ValkeyModule_StringPtrLen(key, NULL));
-        return EXTERNAL_DEL_ERROR;
+        return EXTERNAL_ERROR;
     }
     
     ValkeyModule_Log(module_ctx, "debug", "filterDelFunction: delete successful");
@@ -267,19 +256,23 @@ static int filterDelFunction(ValkeyModuleCtx *module_ctx,
         *found = ValkeyModule_CreateStringFromLongLong(NULL, 1);
     }
     ValkeyModule_ReplyWithSimpleString(module_ctx, "OK");
-    return EXTERNAL_DEL_SUCCESS;
+    return EXTERNAL_SUCCESS;
 }
 
-static void filterSetReadonlyFunction(ValkeyModuleCtx *module_ctx,
-                                       ValkeyModuleExternalFilterCtx *filter_ctx) {
-    ValkeyModule_SetExternalFilterState(filter_ctx, VMEF_STATE_READONLY);
-    ValkeyModule_ReplyWithSimpleString(module_ctx, "OK");
+static int storageSetReadonlyFunction(ValkeyModuleCtx *, ValkeyModuleExternalStorageCtx *) {
+    return EXTERNAL_SUCCESS;
 }
 
-static void filterDropReadonlyFunction(ValkeyModuleCtx *module_ctx,
-                                        ValkeyModuleExternalFilterCtx *filter_ctx) {
-    ValkeyModule_SetExternalFilterState(filter_ctx, VMEF_STATE_READY);
-    ValkeyModule_ReplyWithSimpleString(module_ctx, "OK");
+static int storageDropReadonlyFunction(ValkeyModuleCtx *, ValkeyModuleExternalStorageCtx *) {
+    return EXTERNAL_SUCCESS;
+}
+
+static int filterSetReadonlyFunction(ValkeyModuleCtx *, ValkeyModuleExternalFilterCtx *) {
+    return EXTERNAL_SUCCESS;
+}
+
+static int filterDropReadonlyFunction(ValkeyModuleCtx *, ValkeyModuleExternalFilterCtx *) {
+    return EXTERNAL_SUCCESS;
 }
 
 /* Module initialization */

@@ -31,8 +31,6 @@ int externalDataModuleUnregister(const char *name);
 int externalStorageCallSetFunc(externalDataModuleInstance *si, int dbid, robj *key, robj *value);
 int externalStorageCallGetFunc(externalDataModuleInstance *fi, int dbid, robj *key, void **found);
 int externalStorageCallDelFunc(externalDataModuleInstance *si, int dbid, robj *key, robj **value);
-void externalStorageCallSetReadonlyFunc(externalDataModuleInstance *si);
-void externalStorageCallDropReadonlyFunc(externalDataModuleInstance *si);
 
 externalStorageInstanceIterator *externalStorageInstanceIteratorInit(int dbid, robj *match, long long *type);
 int externalStorageInstanceIteratorNext(externalStorageInstanceIterator *esi_it, robj **next);
@@ -41,8 +39,8 @@ void externalStorageInstanceIteratorRelease(externalStorageInstanceIterator *esi
 int externalFilterCallSetFunc(externalDataModuleInstance *fi, int dbid, robj *key);
 int externalFilterCallGetFunc(externalDataModuleInstance *fi, int dbid, robj *key);
 int externalFilterCallDelFunc(externalDataModuleInstance *fi, int dbid, robj *key, robj **value);
-void externalFilterCallSetReadonlyFunc(externalDataModuleInstance *fi);
-void externalFilterCallDropReadonlyFunc(externalDataModuleInstance *fi);
+int externalDataCallSetReadonlyFunc(externalDataModuleInstance *mi);
+int externalDataCallDropReadonlyFunc(externalDataModuleInstance *mi);
 
 int externalFilterIsIn(int id, void *key);
 

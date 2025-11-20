@@ -101,12 +101,12 @@ static void **entryGetValueRef(const entry *entry) {
 }
 
 static sds *entryGetSdsValueRef(const entry *entry) {
-    return (sds *)entryGetValueRef(entry);    
+    return (sds *)entryGetValueRef(entry);
 }
 
 static stringRef *entryGetStringRefRef(const entry *entry) {
     serverAssert(entryHasStringRef(entry));
-    return (stringRef *)*entryGetValueRef(entry);    
+    return (stringRef *)*entryGetValueRef(entry);
 }
 
 /* Returns the entry's value. */
@@ -130,7 +130,7 @@ char *entryGetValue(const entry *entry, size_t *len) {
 }
 
 /* Frees the entry's non-embedded value.
- * If the value is a string reference (stringRef), only the entry's pointer 
+ * If the value is a string reference (stringRef), only the entry's pointer
  * is freed, as the underlying string is not owned by this entry.
  * Otherwise, the value is a standard SDS and is fully freed. */
 static void entryFreeValuePtr(entry *entry) {
@@ -258,13 +258,15 @@ static inline size_t entryReqSize(size_t field_len,
  * Note that this function will take ownership of the value so user should not assume it is valid after this call. */
 static entry *entryConstruct(size_t alloc_size,
                              const_sds field,
-                             void *value,
+                             sds sds_value,
+                             stringRef *stringref_value,
                              long long expiry,
                              bool embed_value,
                              int embedded_field_sds_type,
                              size_t expiry_size,
                              size_t embedded_value_sds_size,
                              size_t embedded_field_sds_size) {
+    serverAssert((sds_value == NULL && stringref_value == NULL && embed_value) || (sds_value != NULL && stringref_value == NULL) || (sds_value == NULL && stringref_value != NULL && !embed_value));
     size_t buf_size;
     /* allocate the buffer */
     char *buf = zmalloc_usable(alloc_size, &buf_size);
@@ -275,16 +277,14 @@ static entry *entryConstruct(size_t alloc_size,
         buf += expiry_size;
         buf_size -= expiry_size;
     }
-    if (value) {
-        if (!embed_value) {
-            *(void **)buf = value;
-            buf += sizeof(value);
-            buf_size -= sizeof(value);
-        } else {
-            sdswrite(buf + embedded_field_sds_size, buf_size - embedded_field_sds_size, SDS_TYPE_8, value, sdslen(value));
-            sdsfree(value);
-            buf_size -= embedded_value_sds_size;
-        }
+    if (!embed_value) {
+        *(void **)buf = sds_value ? (void *)sds_value : (void *)stringref_value;
+        buf += sizeof(void *);
+        buf_size -= sizeof(void *);
+    } else if (sds_value) {
+        sdswrite(buf + embedded_field_sds_size, buf_size - embedded_field_sds_size, SDS_TYPE_8, sds_value, sdslen(sds_value));
+        sdsfree(sds_value);
+        buf_size -= embedded_value_sds_size;
     }
     /* Set the field data */
     entry *new_entry = sdswrite(buf, embedded_field_sds_size, embedded_field_sds_type, field, sdslen(field));
@@ -306,11 +306,11 @@ entry *entryCreate(const_sds field, sds value, long long expiry) {
     size_t expiry_size, embedded_value_sds_size, embedded_field_sds_size;
     size_t value_len = value ? sdslen(value) : SIZE_MAX;
     size_t alloc_size = entryReqSize(sdslen(field), value_len, expiry, &embed_value, &embedded_field_sds_type, &embedded_field_sds_size, &expiry_size, &embedded_value_sds_size);
-    return entryConstruct(alloc_size, field, value, expiry, embed_value, embedded_field_sds_type, expiry_size, embedded_value_sds_size, embedded_field_sds_size);
+    return entryConstruct(alloc_size, field, value, NULL, expiry, embed_value, embedded_field_sds_type, expiry_size, embedded_value_sds_size, embedded_field_sds_size);
 }
 
-/* Sets the entry's value to a string reference object. 
- * The reference points to the provided `buf` but does not assume ownership. 
+/* Sets the entry's value to a string reference object.
+ * The reference points to the provided `buf` but does not assume ownership.
  * It is assumed that an external mechanism will handle releasing any memory which
  * may have been associated with value->buf */
 entry *entryUpdateAsStringRef(entry *entry, const char *buf, size_t len, long long expiry) {
@@ -344,7 +344,7 @@ entry *entryUpdateAsStringRef(entry *entry, const char *buf, size_t len, long lo
 
     size_t expiry_size = 0;
     if (expiry != EXPIRY_NONE) expiry_size = sizeof(expiry);
-    sds new_entry = entryConstruct(alloc_size, field, value, expiry, false, SDS_TYPE_8, expiry_size, sizeof(value), field_size);
+    sds new_entry = entryConstruct(alloc_size, field, NULL, value, expiry, false, SDS_TYPE_8, expiry_size, sizeof(value), field_size);
     entryFree(entry);
 
     sdsSetAuxBit(new_entry, FIELD_SDS_AUX_BIT_ENTRY_HAS_STRING_REF, 1);
@@ -432,7 +432,7 @@ entry *entryUpdate(entry *e, sds value, long long expiry) {
             }
         }
         /* allocate the buffer for a new entry */
-        new_entry = entryConstruct(required_entry_size, field, value, expiry, embed_value, embedded_field_sds_type, expiry_size, embedded_value_size, embedded_field_size);
+        new_entry = entryConstruct(required_entry_size, field, value, NULL, expiry, embed_value, embedded_field_sds_type, expiry_size, embedded_value_size, embedded_field_size);
         entryFree(e);
     }
     /* Check that the new entry was built correctly */

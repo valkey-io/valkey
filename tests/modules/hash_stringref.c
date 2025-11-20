@@ -1,3 +1,5 @@
+/* Module Test: Verifies the module's capability to share an owned buffer with the core, 
+ * which is then stored in a hash key field using a non-owning string reference (stringRef). */
 #include "valkeymodule.h"
 #include <string.h>
 
@@ -31,6 +33,18 @@ void freeBufferList(void) {
     }
 }
 
+/* HASH.HAS_STRINGREF key field
+ *
+ * Returns 1 if all of the following conditions are met for the hash field:
+ * 1. The key exists.
+ * 2. The key's value is a HASH type.
+ * 3. The field's value is a string reference (stringRef) type.
+ * Otherwise, returns 0.
+ *
+ * Parameters:
+ * 1. The hash entry key.
+ * 2. The hahs entry field.
+ */
 int hashHasStringRef(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     if (argc != 3) return ValkeyModule_WrongArity(ctx);
 
@@ -41,6 +55,14 @@ int hashHasStringRef(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) 
     return ValkeyModule_ReplyWithLongLong(ctx, result);
 }
 
+/* HASH.SET_STRINGREF key field buffer
+ *
+ * Sets hash entry value of a given key and field to an external owned buffer.
+ * Parameters:
+ * 1. The hash entry key.
+ * 2. The hahs entry field.
+ * 3. The buffer to share with the core.
+ */
 int hashSetStringRef(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     if (argc != 4) return ValkeyModule_WrongArity(ctx);
 
@@ -63,7 +85,7 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
         VALKEYMODULE_OK &&
         ValkeyModule_CreateCommand(ctx, "hash.set_stringref", hashSetStringRef, "write",
                                   1, 1, 1) == VALKEYMODULE_OK &&
-        ValkeyModule_CreateCommand(ctx, "hash.has_stringref", hashHasStringRef, "write",
+        ValkeyModule_CreateCommand(ctx, "hash.has_stringref", hashHasStringRef, "read",
                                   1, 1, 1) == VALKEYMODULE_OK) {
         return VALKEYMODULE_OK;
     }

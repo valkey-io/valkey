@@ -201,8 +201,8 @@ int anetKeepAlive(char *err, int fd, int interval) {
     if (idle < 10) idle = 10;                               // kernel expects at least 10 seconds
     if (idle > 10 * 24 * 60 * 60) idle = 10 * 24 * 60 * 60; // kernel expects at most 10 days
 
-        /* `TCP_KEEPIDLE`, `TCP_KEEPINTVL`, and `TCP_KEEPCNT` were not available on Solaris
-         * until version 11.4, but let's take a chance here. */
+    /* `TCP_KEEPIDLE`, `TCP_KEEPINTVL`, and `TCP_KEEPCNT` were not available on Solaris
+     * until version 11.4, but let's take a chance here. */
 #if defined(TCP_KEEPIDLE) && defined(TCP_KEEPINTVL) && defined(TCP_KEEPCNT)
     if (setsockopt(fd, IPPROTO_TCP, TCP_KEEPIDLE, &idle, sizeof(idle))) {
         anetSetError(err, "setsockopt TCP_KEEPIDLE: %s\n", strerror(errno));

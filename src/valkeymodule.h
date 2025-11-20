@@ -2161,9 +2161,12 @@ VALKEYMODULE_API void (*ValkeyModule_ScriptingEngineDebuggerFlushLogs)(void) VAL
 VALKEYMODULE_API void (*ValkeyModule_ScriptingEngineDebuggerProcessCommands)(int *client_disconnected,
                                                                              ValkeyModuleString **err) VALKEYMODULE_ATTR;
 
+VALKEYMODULE_API int (*ValkeyModule_ACLCheckKeyPrefixPermissions)(ValkeyModuleUser *user,
+                                                                  const char *key,
+                                                                  size_t len,
+                                                                  unsigned int flags) VALKEYMODULE_ATTR;
 
 #define ValkeyModule_IsAOFClient(id) ((id) == UINT64_MAX)
-
 /* This is included inline inside each Valkey module. */
 static int ValkeyModule_Init(ValkeyModuleCtx *ctx, const char *name, int ver, int apiver) VALKEYMODULE_ATTR_UNUSED;
 static int ValkeyModule_Init(ValkeyModuleCtx *ctx, const char *name, int ver, int apiver) {
@@ -2539,6 +2542,7 @@ static int ValkeyModule_Init(ValkeyModuleCtx *ctx, const char *name, int ver, in
     VALKEYMODULE_GET_API(ScriptingEngineDebuggerLogRespReply);
     VALKEYMODULE_GET_API(ScriptingEngineDebuggerFlushLogs);
     VALKEYMODULE_GET_API(ScriptingEngineDebuggerProcessCommands);
+    VALKEYMODULE_GET_API(ACLCheckKeyPrefixPermissions);
 
     if (ValkeyModule_IsModuleNameBusy && ValkeyModule_IsModuleNameBusy(name)) return VALKEYMODULE_ERR;
     ValkeyModule_SetModuleAttribs(ctx, name, ver, apiver);

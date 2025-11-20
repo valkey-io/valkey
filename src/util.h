@@ -72,6 +72,7 @@ typedef long long mstime_t; /* millisecond time type. */
 typedef long long ustime_t; /* microsecond time type. */
 
 int stringmatchlen(const char *p, int plen, const char *s, int slen, int nocase);
+int prefixmatchlen(const char *pattern, int patternLen, const char *string, int stringLen, int nocase);
 int stringmatch(const char *p, const char *s, int nocase);
 int stringmatchlen_fuzz_test(void);
 unsigned long long memtoull(const char *p, int *err);

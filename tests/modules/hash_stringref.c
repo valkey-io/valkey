@@ -85,7 +85,7 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
         VALKEYMODULE_OK &&
         ValkeyModule_CreateCommand(ctx, "hash.set_stringref", hashSetStringRef, "write",
                                   1, 1, 1) == VALKEYMODULE_OK &&
-        ValkeyModule_CreateCommand(ctx, "hash.has_stringref", hashHasStringRef, "read",
+        ValkeyModule_CreateCommand(ctx, "hash.has_stringref", hashHasStringRef, "readonly",
                                   1, 1, 1) == VALKEYMODULE_OK) {
         return VALKEYMODULE_OK;
     }

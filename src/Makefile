@@ -258,7 +258,7 @@ LUA_MODULE=
 LUA_MODULE_INSTALL=
 LUA_MODULE_NAME:=modules/lua/libluaengine.so
 
-ifneq ($(WITHOUT_LUA),yes)
+ifneq ($(BUILD_LUA),no)
 	LUA_MODULE=$(LUA_MODULE_NAME)
 endif
 
@@ -490,7 +490,7 @@ persist-settings: distclean
 	echo BUILD_TLS=$(BUILD_TLS) >> .make-settings
 	echo BUILD_RDMA=$(BUILD_RDMA) >> .make-settings
 	echo USE_SYSTEMD=$(USE_SYSTEMD) >> .make-settings
-	echo WITHOUT_LUA=$(WITHOUT_LUA) >> .make-settings
+	echo BUILD_LUA=$(BUILD_LUA) >> .make-settings
 	echo CFLAGS=$(CFLAGS) >> .make-settings
 	echo LDFLAGS=$(LDFLAGS) >> .make-settings
 	echo SERVER_CFLAGS=$(SERVER_CFLAGS) >> .make-settings

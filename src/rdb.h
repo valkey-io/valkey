@@ -54,7 +54,7 @@
 /* Reserved range for foreign (unsupported, non-OSS) RDB format. */
 #define RDB_FOREIGN_VERSION_MIN 12
 #define RDB_FOREIGN_VERSION_MAX 79
-static_assert(RDB_VERSION<RDB_FOREIGN_VERSION_MIN || RDB_VERSION> RDB_FOREIGN_VERSION_MAX,
+static_assert(RDB_VERSION < RDB_FOREIGN_VERSION_MIN || RDB_VERSION > RDB_FOREIGN_VERSION_MAX,
               "RDB version in foreign version range");
 
 static inline bool rdbIsForeignVersion(int rdbver) {

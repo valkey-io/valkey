@@ -1889,18 +1889,23 @@ static int loadXmlDataset(dataset *ds) {
         doc_end += strlen(end_tag);
 
         if (!fields_discovered) {
-            if (!scanXmlFields(doc_start, doc_end, ds, start_tag, end_tag)) {
-                fprintf(stderr, "No XML fields discovered\n");
-                sdsfree(current_doc);
-                fclose(fp);
-                return 0;
-            }
-            fields_discovered = 1;
+            /* Check if fields are already discovered from scanXmlFieldsFromFile() */
+            if (ds->field_names && ds->field_count > 0) {
+                fields_discovered = 1;
+            } else {
+                if (!scanXmlFields(doc_start, doc_end, ds, start_tag, end_tag)) {
+                    fprintf(stderr, "No XML fields discovered\n");
+                    sdsfree(current_doc);
+                    fclose(fp);
+                    return 0;
+                }
+                fields_discovered = 1;
 
-            if (!config.quiet) {
-                printf("Discovered %d fields: ", ds->field_count);
-                for (int i = 0; i < ds->field_count; i++) {
-                    printf("%s%s", ds->field_names[i], (i < ds->field_count - 1) ? ", " : "\n");
+                if (!config.quiet) {
+                    printf("Discovered %d fields: ", ds->field_count);
+                    for (int i = 0; i < ds->field_count; i++) {
+                        printf("%s%s", ds->field_names[i], (i < ds->field_count - 1) ? ", " : "\n");
+                    }
                 }
             }
         }

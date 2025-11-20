@@ -11,7 +11,7 @@ start_cluster 4 0 {tags {external:skip cluster}} {
     set R2_port [srv -2 port]
     set R3_port [srv -3 port]
 
-    test "Nodes have default human nodenames when not explicitly set" {
+    test "Use ip:port in logging when human nodenames are not explicitly set" {
         wait_for_log_messages 0 [list "*Sending ping packet to node * (127.0.0.1:$R1_port) *"] 0 1000 10
         wait_for_log_messages 0 [list "*Sending ping packet to node * (127.0.0.1:$R2_port) *"] 0 1000 10
         wait_for_log_messages 0 [list "*Sending ping packet to node * (127.0.0.1:$R3_port) *"] 0 1000 10
@@ -38,19 +38,8 @@ start_cluster 4 0 {tags {external:skip cluster}} {
         wait_for_log_messages 0 [list "*Sending ping packet to node * (nodename-1) *"] 0 1000 10
         wait_for_log_messages 0 [list "*Sending ping packet to node * (nodename-2) *"] 0 1000 10
         wait_for_log_messages 0 [list "*Sending ping packet to node * (nodename-3) *"] 0 1000 10
-        set R1_log [wait_for_log_messages -1 [list "*Sending ping packet to node $RO_node_id (nodename-0) *"] 0 1000 10]
-        set R2_log [wait_for_log_messages -2 [list "*Sending ping packet to node $RO_node_id (nodename-0) *"] 0 1000 10]
-        set R3_log [wait_for_log_messages -3 [list "*Sending ping packet to node $RO_node_id (nodename-0) *"] 0 1000 10]
-        # These line numbers will be later used as starting position to scan for newer logs
-        set R1_log_line [lindex $R1_log 1]
-        set R2_log_line [lindex $R2_log 1]
-        set R3_log_line [lindex $R3_log 1]
-    }
-
-    test "User can reset human nodename to empty string" {
-        R 0 config set cluster-announce-human-nodename ""
-        wait_for_log_messages -1 [list "*Sending ping packet to node $RO_node_id () *"] $R1_log_line 1000 10
-        wait_for_log_messages -2 [list "*Sending ping packet to node $RO_node_id () *"] $R2_log_line 1000 10
-        wait_for_log_messages -3 [list "*Sending ping packet to node $RO_node_id () *"] $R3_log_line 1000 10
+        wait_for_log_messages -1 [list "*Sending ping packet to node $RO_node_id (nodename-0) *"] 0 1000 10
+        wait_for_log_messages -2 [list "*Sending ping packet to node $RO_node_id (nodename-0) *"] 0 1000 10
+        wait_for_log_messages -3 [list "*Sending ping packet to node $RO_node_id (nodename-0) *"] 0 1000 10
     }
 }

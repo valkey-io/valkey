@@ -100,6 +100,7 @@ Generally valkey-server would not run in full utilization, the overhead is accep
 | expire_cycle             | valkey_db       |
 | expire_cycle_fields      | valkey_db       |
 | expire_cycle_keys        | valkey_db       |
+| fork                     | valkey_cluster  |
 | cluster_config_open      | valkey_cluster  |
 | cluster_config_write     | valkey_cluster  |
 | cluster_config_fsync     | valkey_cluster  |

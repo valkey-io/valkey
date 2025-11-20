@@ -68,7 +68,8 @@ TEST_MODULES = \
     rdbloadsave.so \
     crash.so \
     cluster.so \
-    helloscripting.so
+    helloscripting.so \
+    unsupported_features.so
 
 .PHONY: all
 

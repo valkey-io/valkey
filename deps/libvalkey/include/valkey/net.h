@@ -36,17 +36,18 @@
 #define VALKEY_NET_H
 
 #include "valkey.h"
+#include "visibility.h"
 
-void valkeyNetClose(valkeyContext *c);
+LIBVALKEY_API void valkeyNetClose(valkeyContext *c);
 
-int valkeyHasMptcp(void);
-int valkeyCheckSocketError(valkeyContext *c);
-int valkeyTcpSetTimeout(valkeyContext *c, const struct timeval tv);
-int valkeyContextConnectTcp(valkeyContext *c, const valkeyOptions *options);
-int valkeyKeepAlive(valkeyContext *c, int interval);
-int valkeyCheckConnectDone(valkeyContext *c, int *completed);
+LIBVALKEY_API int valkeyHasMptcp(void);
+LIBVALKEY_API int valkeyCheckSocketError(valkeyContext *c);
+LIBVALKEY_API int valkeyTcpSetTimeout(valkeyContext *c, const struct timeval tv);
+LIBVALKEY_API int valkeyContextConnectTcp(valkeyContext *c, const valkeyOptions *options);
+LIBVALKEY_API int valkeyKeepAlive(valkeyContext *c, int interval);
+LIBVALKEY_API int valkeyCheckConnectDone(valkeyContext *c, int *completed);
 
-int valkeySetTcpNoDelay(valkeyContext *c);
-int valkeyContextSetTcpUserTimeout(valkeyContext *c, unsigned int timeout);
+LIBVALKEY_API int valkeySetTcpNoDelay(valkeyContext *c);
+LIBVALKEY_API int valkeyContextSetTcpUserTimeout(valkeyContext *c, unsigned int timeout);
 
 #endif /* VALKEY_NET_H */

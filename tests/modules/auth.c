@@ -190,8 +190,10 @@ int blocking_auth_cb(ValkeyModuleCtx *ctx, ValkeyModuleString *username, ValkeyM
     VALKEYMODULE_NOT_USED(err);
     /* Block the client from the Module. */
     ValkeyModuleBlockedClient *bc = ValkeyModule_BlockClientOnAuth(ctx, AuthBlock_Reply, AuthBlock_FreeData);
-    if (bc == NULL) {
-        ValkeyModule_ReplyWithError(ctx, "ERR Blocking module command called from transaction");
+    int ctx_flags = ValkeyModule_GetContextFlags(ctx);
+    if (ctx_flags & VALKEYMODULE_CTX_FLAGS_MULTI || ctx_flags & VALKEYMODULE_CTX_FLAGS_LUA) {
+        /* Clean up by using ValkeyModule_UnblockClient since we attempted blocking the client. */
+        ValkeyModule_UnblockClient(bc, NULL);
         return VALKEYMODULE_AUTH_HANDLED;
     }
     ValkeyModule_BlockedClientMeasureTimeStart(bc);

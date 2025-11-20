@@ -24,10 +24,10 @@ timeout 5s ./simulated-valkey.pl -p 7403 -d --sigcont $syncpid1 <<'EOF' &
 EXPECT CONNECT
 EXPECT ["CLUSTER", "SLOTS"]
 SEND [[0, 16383, ["127.0.0.1", 7403, "nodeid7403"]]]
-EXPECT CLOSE
+EXPECT ["GET", "foo"]
+SEND "bar"
 
 # Test 1: Handle MOVED redirect.
-EXPECT CONNECT
 EXPECT ["GET", "foo"]
 SEND -MOVED 12182 127.0.0.1:7404
 EXPECT ["CLUSTER", "SLOTS"]
@@ -54,6 +54,7 @@ EXPECT ["GET", "foo"]
 SEND -MOVED 9718 :7403
 EXPECT ["CLUSTER", "SLOTS"]
 SEND [[0, 16383, ["127.0.0.1", 7403, "nodeid7403"]]]
+
 EXPECT CLOSE
 EOF
 server2=$!
@@ -63,6 +64,8 @@ wait $syncpid1 $syncpid2;
 
 # Run client
 timeout 3s "$clientprog" --events 127.0.0.1:7403 > "$testname.out" <<'EOF'
+GET foo
+!sleep
 GET foo
 !sleep
 GET foo
@@ -90,6 +93,7 @@ fi
 # Check the output from clusterclient
 expected="Event: slotmap-updated
 Event: ready
+bar
 Event: slotmap-updated
 bar
 Event: slotmap-updated

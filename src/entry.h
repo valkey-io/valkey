@@ -9,39 +9,11 @@
  *----------------------------------------------------------------------------*/
 
 /*
- * The entry pointer is the field `sds`. We encode the entry layout type
- * in the SDS header.
- *
- * An entry represents a key–value pair with an optional expiration timestamp.
- * The pointer of type `entry *` always points to the VALUE `sds`.
- *
- * Layout 1: Embedded Field and Value (Compact Form)
- *
- *   +-------------------+-------------------+-------------------+
- *   | Expiration (opt)  | Field (sds)       | Value (sds)       |
- *   | 8 bytes (int64_t) | "field" + header  | "value" + header  |
- *   +-------------------+-------------------+-------------------+
- *                                   ^
- *                                   |
- *                             entry pointer
- *
- * - Both field and value are small and embedded.
- * - The expiration is stored just before the first sds.
- *
- *
- * Layout 2: Pointer-Based Value (Large Values)
- *
- *   +-------------------+-------------------+------------------+
- *   | Expiration (opt)  | Value pointer     | Field (sds)      |
- *   | 8 bytes (int64_t) | 8 bytes (void *)  | "field" + header |
- *   +-------------------+-------------------+------------------+
- *                                           ^
- *                                           |
- *                                           entry pointer
- *
- * - The value is stored separately via a pointer.
- * - Used for large value sizes. */
-typedef void entry;
+ * An "entry" is a field/value sds pair, with an optional expiration time.  The
+ * entry is used as part of the HASH datatype, and supports hash field expiration.
+ */
+
+typedef struct _entry entry;
 
 /* The maximum allocation size we want to use for entries with embedded
  * values. */

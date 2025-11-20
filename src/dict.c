@@ -54,10 +54,6 @@
 #include "monotonic.h"
 #include "config.h"
 
-#ifndef static_assert
-#define static_assert(expr, lit) _Static_assert(expr, lit)
-#endif
-
 #define UNUSED(V) ((void)V)
 
 /* Using dictSetResizeEnabled() we make possible to disable

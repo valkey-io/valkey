@@ -4,7 +4,7 @@
 #
 # The first attempt to get the slotmap will receive a reply without any
 # slot information and this should result in a retry.
-# The following slotmap updates tests the handling of an nil/empty IP address.
+# The following slotmap updates tests the handling of a nil/empty IP address.
 #
 # The client is configured to use the CLUSTER SLOTS command.
 #
@@ -44,7 +44,7 @@ server=$!
 wait $syncpid;
 
 # Run client which will fetch the initial slotmap asynchronously.
-timeout 3s "$clientprog" --events --async-initial-update 127.0.0.1:7400 > "$testname.out" <<'EOF'
+timeout 3s "$clientprog" --events 127.0.0.1:7400 > "$testname.out" <<'EOF'
 # Slot not yet handled, will trigger a slotmap update which will be throttled.
 SET foo bar1
 

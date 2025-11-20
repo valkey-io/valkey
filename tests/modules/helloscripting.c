@@ -27,7 +27,7 @@
  * RETURN        # returns the current value on the top of the stack and marks
  *               # the end of the function declaration
  *
- * FUNCTION bar  # declaration of function 'bar'
+ * RFUNCTION bar # declaration of read-only function 'bar'
  * CONSTI 432    # pushes the value 432 to the top of the stack
  * RETURN        # returns the current value on the top of the stack and marks
  *               # the end of the function declaration.
@@ -55,6 +55,7 @@
  */
 typedef enum HelloInstKind {
     FUNCTION = 0,
+    RFUNCTION,
     CONSTI,
     CONSTS,
     ARGS,
@@ -69,6 +70,7 @@ typedef enum HelloInstKind {
  */
 const char *HelloInstKindStr[] = {
     "FUNCTION",
+    "RFUNCTION",
     "CONSTI",
     "CONSTS",
     "ARGS",
@@ -119,6 +121,7 @@ typedef struct HelloFunc {
     HelloInst instructions[256];
     uint32_t num_instructions;
     uint32_t index;
+    int read_only;
 } HelloFunc;
 
 /*
@@ -207,11 +210,12 @@ static HelloInstKind helloLangParseInstruction(const char *token) {
 /*
  * Parses the function param.
  */
-static void helloLangParseFunction(HelloFunc *func) {
+static void helloLangParseFunction(HelloFunc *func, int read_only) {
     char *token = strtok(NULL, " \n");
     ValkeyModule_Assert(token != NULL);
     func->name = ValkeyModule_Alloc(sizeof(char) * strlen(token) + 1);
     strcpy(func->name, token);
+    func->read_only = read_only;
 }
 
 /*
@@ -283,12 +287,13 @@ static int helloLangParseCode(const char *code,
 
         switch (kind) {
         case FUNCTION:
+        case RFUNCTION:
             ValkeyModule_Assert(currentFunc == NULL);
             currentFunc = ValkeyModule_Alloc(sizeof(HelloFunc));
             memset(currentFunc, 0, sizeof(HelloFunc));
             currentFunc->index = program->num_functions;
             program->functions[program->num_functions++] = currentFunc;
-            helloLangParseFunction(currentFunc);
+            helloLangParseFunction(currentFunc, kind == RFUNCTION);
             break;
         case CONSTI:
             ValkeyModule_Assert(currentFunc != NULL);
@@ -424,6 +429,7 @@ static void helloDebuggerLogCurrentInstr(uint32_t pc, HelloInst *instr) {
         msg = ValkeyModule_CreateStringPrintf(NULL, ">>> %3u: %s", pc, HelloInstKindStr[instr->kind]);
         break;
     case FUNCTION:
+    case RFUNCTION:
     case _NUM_INSTRUCTIONS:
         ValkeyModule_Assert(0);
     }
@@ -528,6 +534,7 @@ static HelloExecutionState executeHelloLangFunction(ValkeyModuleCtx *module_ctx,
             return FINISHED;
 	    }
         case FUNCTION:
+        case RFUNCTION:
         case _NUM_INSTRUCTIONS:
             ValkeyModule_Assert(0);
         }
@@ -646,7 +653,7 @@ static ValkeyModuleScriptingEngineCompiledFunction **createHelloLangEngine(Valke
             .name = ValkeyModule_CreateString(NULL, func->name, strlen(func->name)),
             .function = func,
             .desc = NULL,
-            .f_flags = 0,
+            .f_flags = func->read_only ? VMSE_SCRIPT_FLAG_NO_WRITES : 0,
         };
 
         compiled_functions[i] = cfunc;

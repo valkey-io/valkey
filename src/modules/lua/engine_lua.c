@@ -3,7 +3,9 @@
 #include <lauxlib.h>
 #include <lualib.h>
 #include <string.h>
+#if defined(__GLIBC__) && !defined(USE_LIBC)
 #include <malloc.h>
+#endif
 #include <errno.h>
 
 #include "engine_structs.h"
@@ -321,7 +323,7 @@ static void resetLuaContext(void *context) {
     lua_gc(lua, LUA_GCCOLLECT, 0);
     lua_close(lua);
 
-#if !defined(USE_LIBC)
+#if defined(__GLIBC__) && !defined(USE_LIBC)
     /* The lua interpreter may hold a lot of memory internally, and lua is
      * using libc. libc may take a bit longer to return the memory to the OS,
      * so after lua_close, we call malloc_trim try to purge it earlier.

@@ -265,7 +265,11 @@ endif
 ifeq ($(LUA_MODULE),$(LUA_MODULE_NAME))
 	current_dir = $(shell pwd)
 	FINAL_CFLAGS+=-DLUA_ENGINE_ENABLED -DLUA_ENGINE_LIB=libluaengine.so
+ifeq ($(uname_S),Darwin)
+	FINAL_LDFLAGS+= -Wl,-rpath,$(PREFIX)/lib:$(current_dir)/modules/lua
+else
 	FINAL_LDFLAGS+= -Wl,-rpath,$(PREFIX)/lib:$(current_dir)/modules/lua -Wl,--disable-new-dtags
+endif
 	LUA_MODULE_INSTALL=install-lua-module
 endif
 

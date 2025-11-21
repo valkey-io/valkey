@@ -4,10 +4,10 @@ DEPS_DIR=../../../deps
 
 ifeq ($(uname_S),Linux)
 	SHOBJ_CFLAGS= -I. -I$(DEPS_DIR)/lua/src -I$(DEPS_DIR)/fpconv -fPIC -W -Wall -fno-common $(OPTIMIZATION) -std=c99 -D_GNU_SOURCE $(CFLAGS)
-	SHOBJ_LDFLAGS= -shared
+	SHOBJ_LDFLAGS= -shared $(LDFLAGS)
 else
 	SHOBJ_CFLAGS= -I. -I$(DEPS_DIR)/lua/src -I$(DEPS_DIR)/fpconv -fPIC -W -Wall -dynamic -fno-common $(OPTIMIZATION) -std=c99 -D_GNU_SOURCE $(CFLAGS)
-	SHOBJ_LDFLAGS= -bundle -undefined dynamic_lookup
+	SHOBJ_LDFLAGS= -bundle -undefined dynamic_lookup $(LDFLAGS)
 endif
 
 LIBS= $(DEPS_DIR)/lua/src/liblua.a $(DEPS_DIR)/fpconv/libfpconv.a

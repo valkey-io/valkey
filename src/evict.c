@@ -34,6 +34,8 @@
 #include "bio.h"
 #include "script.h"
 #include "cluster_migrateslots.h"
+#include "external_data.h"
+#include "valkeymodule.h"
 #include <math.h>
 
 /* ----------------------------------------------------------------------------
@@ -547,6 +549,17 @@ int performEvictions(void) {
         if (bestkey) {
             db = server.db[bestdbid];
             robj *keyobj = createStringObject(bestkey, sdslen(bestkey));
+            
+            /* Check if we should move to external storage instead of deleting */
+            if (server.ext_data_expire && isExtDataOn() &&
+                (server.maxmemory_policy & MAXMEMORY_FLAG_ALLKEYS)) {
+                /* Try to move the key-value pair to external storage */
+                robj *val = lookupKeyRead(db, keyobj);
+                if (val) {
+                    externalDataWrite(db->id, keyobj, val);
+                }
+            }
+            
             /* We compute the amount of memory freed by db*Delete() alone.
              * It is possible that actually the memory needed to propagate
              * the DEL in AOF and replication link is greater than the one

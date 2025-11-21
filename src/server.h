@@ -2078,6 +2078,7 @@ struct valkeyServer {
                                            * value means fractions of microseconds (on average). */
     /* External storage options.  */
     int ext_data_mode;                    /* External storage mode */
+    int ext_data_expire;                  /* Enable expiring keys to external storage for allkeys-* policies */
     size_t ext_min_object_size_to_move;   /* Min size of k/v pair to move to external storage */
     unsigned long long ext_max_disk_size; /* Maximum disk space allowed to be used by external storage */
     unsigned long long ext_max_mem_size;  /* Maximum memory allowed to be used by external storage */

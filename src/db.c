@@ -2034,6 +2034,22 @@ long long getExpire(serverDb *db, robj *key) {
 void deleteExpiredKeyAndPropagateWithDictIndex(serverDb *db, robj *keyobj, int dict_index) {
     mstime_t expire_latency;
     latencyStartMonitor(expire_latency);
+    
+    /* Check if we should move to external storage instead of just deleting.
+     * Similar to eviction logic, but for expired keys. */
+    if (server.ext_data_expire && isExtDataOn() &&
+        (server.maxmemory_policy & MAXMEMORY_FLAG_ALLKEYS)) {
+        /* Fetch the value directly from the database without expiration checks.
+         * We need the actual value to write to external storage before deletion. */
+        robj *val = dbFindWithDictIndex(db, keyobj->ptr, dict_index);
+        if (val) {
+            serverLog(LL_WARNING, "DEBUG: Found value for key, writing to external storage");
+            externalDataWrite(db->id, keyobj, val);
+        } else {
+            serverLog(LL_WARNING, "DEBUG: Value not found for key %s", (char*)keyobj->ptr);
+        }
+    }
+    
     dbGenericDeleteWithDictIndex(db, keyobj, server.lazyfree_lazy_expire, DB_FLAG_KEY_EXPIRED, dict_index);
     latencyEndMonitor(expire_latency);
     latencyAddSampleIfNeeded("expire-del", expire_latency);

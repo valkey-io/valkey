@@ -567,7 +567,7 @@ void externalDataDebugCommand(client *c) {
         if (!strcasecmp(objectGetVal(c->argv[j]), "set")) {
             robj *key = c->argv[++j];
             robj *value = c->argv[++j];
-            if (!externalStorageCallSetFunc(dbData->module_instance, dbId, key, value)) {
+            if (externalStorageCallSetFunc(dbData->module_instance, dbId, key, value) != EXTERNAL_SUCCESS) {
                 addReplyErrorFormat(c, "%s set failed", (char *)objectGetVal(key));
                 return;
             }
@@ -604,7 +604,7 @@ void externalDataDebugCommand(client *c) {
         j++;
         if (!strcasecmp(objectGetVal(c->argv[j]), "set")) {
             robj *key = c->argv[++j];
-            if (!externalFilterCallSetFunc(dbData->module_instance, dbId, key)) {
+            if (externalFilterCallSetFunc(dbData->module_instance, dbId, key) != EXTERNAL_SUCCESS) {
                 addReplyErrorFormat(c, "%s set failed", (char *)objectGetVal(key));
                 return;
             }
@@ -685,11 +685,11 @@ int externalDataWrite(int id, void *key, void *value) {
     sds db_name = getDBName(id);
     dictEntry *db = dictFind(curr_external_data_ctx->dbdata, db_name);
     sdsfree(db_name);
-    if (!db) return 0;
+    if (!db) return EXTERNAL_ERROR;
 
     externalDbData *dbData = dictGetVal(db);
     externalDataModuleInstance *mi = dbData->module_instance;
-    if (!mi) return 0;
+    if (!mi) return EXTERNAL_ERROR;
 
     // Check if both storage and filter are in readonly state
     ValkeyModuleExternalStorageState storage_state = mi->storage_ctx->state;
@@ -697,11 +697,11 @@ int externalDataWrite(int id, void *key, void *value) {
     
     // If both are readonly, return 2 to signal the client should be blocked
     // The client will be retried later when the state changes
-    if (storage_state == VMES_STATE_READONLY && filter_state == VMEF_STATE_READONLY) {
-        return 2;  // Signal to block the client
+    if (storage_state == VMES_STATE_READONLY || filter_state == VMEF_STATE_READONLY) {
+        return EXTERNAL_READONLY;  // Signal to block the client
     }
 
-    if (!externalStorageCallSetFunc(mi, id, key, value)) return 1;
+    if (externalStorageCallSetFunc(mi, id, key, value) != EXTERNAL_SUCCESS) return EXTERNAL_ERROR;
     return externalFilterCallSetFunc(mi, id, key);
 }
 

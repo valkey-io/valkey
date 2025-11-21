@@ -831,3 +831,91 @@ start_server [list overrides [list "ext-data-mode" kv "loglevel" debug "ext-data
         $client1 close
     }
 }
+
+# Test ext-data-expire functionality
+start_server [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [list "external:skip"]] {
+    test {ext-data-expire disabled by default} {
+        # Load module and initialize external storage
+        assert_equal {OK} [r module load $extdatamodule1]
+        assert_equal {OK} [r external_data INIT db0 helloextdata1]
+        r select 0
+        
+        # Verify ext-data-expire is disabled by default
+        set config_result [r config get ext-data-expire]
+        assert_equal "no" [lindex $config_result 1]
+    }
+    
+    test {ext-data-expire can be enabled} {
+        # Enable ext-data-expire
+        assert_equal {OK} [r config set ext-data-expire yes]
+        set config_result [r config get ext-data-expire]
+        assert_equal "yes" [lindex $config_result 1]
+        
+        # Disable it again
+        assert_equal {OK} [r config set ext-data-expire no]
+        set config_result [r config get ext-data-expire]
+        assert_equal "no" [lindex $config_result 1]
+    }
+}
+
+start_server [list overrides [list "ext-data-mode" kv "loglevel" debug "maxmemory-policy" "allkeys-lru" "ext-data-expire" "yes"] tags [list "external:skip"]] {
+    test {ext-data-expire configuration works with allkeys-lru policy} {
+        # Load module and initialize external storage
+        assert_equal {OK} [r module load $extdatamodule1]
+        assert_equal {OK} [r external_data INIT db0 helloextdata1]
+        r select 0
+        
+        # Verify ext-data-expire is enabled
+        set config_result [r config get ext-data-expire]
+        assert_equal "yes" [lindex $config_result 1]
+        
+        # Verify maxmemory-policy is allkeys-lru
+        set config_result [r config get maxmemory-policy]
+        assert_equal "allkeys-lru" [lindex $config_result 1]
+        
+        # Set a few keys in memory
+        r set "test_key1" "test_value1" ex 1
+        r set "test_key2" "test_value2" ex 5
+        r set "test_key3" "test_value3" 
+        r debug sleep 1
+        
+        # Verify necessary keys are in memory
+        assert_equal "" [r get "test_key1"]
+        assert_equal "test_value2" [r get "test_key2"]
+        assert_equal "test_value3" [r get "test_key3"]
+        
+        # Verify necessary keys are in external storage
+        assert_equal "test_value1" [r get "test_key1" ext]
+        assert_equal "test_value2" [r get "test_key2" ext]
+        assert_equal "test_value3" [r get "test_key3" ext]
+    }
+}
+
+start_server [list overrides [list "ext-data-mode" kv "loglevel" debug "maxmemory-policy" "volatile-lru" "ext-data-expire" "yes"] tags [list "external:skip"]] {
+    test {ext-data-expire does not affect volatile-* policies} {
+        # Load module and initialize external storage
+        assert_equal {OK} [r module load $extdatamodule1]
+        assert_equal {OK} [r external_data INIT db0 helloextdata1]
+        r select 0
+        
+        # Verify ext-data-expire is enabled but should not affect volatile policies
+        set config_result [r config get ext-data-expire]
+        assert_equal "yes" [lindex $config_result 1]
+        
+        set config_result [r config get maxmemory-policy]
+        assert_equal "volatile-lru" [lindex $config_result 1]
+        
+        # Set keys with TTL
+        r set "test_key1" "test_value1" ex 1
+        r set "test_key2" "test_value2" ex 5
+        r debug sleep 1
+
+        # Verify necessary keys are in memory
+        assert_equal "" [r get "test_key1"]
+        assert_equal "test_value2" [r get "test_key2"]
+
+        # Verify necessary keys are in external storage
+        assert_equal "" [r get "test_key1" ext]
+        assert_equal "test_value2" [r get "test_key2" ext]
+    }
+}

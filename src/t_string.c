@@ -36,6 +36,7 @@
 #include "external_data.h"
 #include "sds.h"
 #include "server.h"
+#include "valkeymodule.h"
 #include <math.h> /* isnan(), isinf() */
 
 /* Forward declarations */
@@ -109,13 +110,10 @@ void setGenericCommand(client *c,
     int should_be_ext = checkKVShouldBeExternallyStored(key, val, flags);
     if (should_be_ext) {
         int result = externalDataWrite(c->db->id, key, val);
-
-        if (result == 2) {
-            // Both storage and filter are readonly - block the client to wait
+        if (result == EXTERNAL_READONLY) {
             blockPostponeClient(c);
             return;
-        } else if (result == 0) {
-            // Error writing to external storage
+        } else if (result == EXTERNAL_ERROR) {
             addReply(c, abort_reply ? abort_reply : shared.null[c->resp]);
         } else {
             // Success

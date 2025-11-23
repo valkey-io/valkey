@@ -964,13 +964,7 @@ void postCommandExec(struct client *c) {
     // Block the client (TODO:monitors) based on the required replication offset
     // for the current command.
     long long blocking_repl_offset = c->clientDurabilityInfo.current_command_repl_offset;
-
-    // If the client ran a transaction or a script that included write commands, the
-    // blocking offset was not accurately set in postCall() so we update it here.
-    if (server.primary_repl_offset > pre_command_replication_offset) {
-        blocking_repl_offset = server.primary_repl_offset;
-    }
-
+    
     // If the client needs to block, we need to enforce that it is eligible for response tracking.
     // Otherwise we will try to block the response without tracking the command's pre-execution
     // position in the client reply buffer, which wouldn't work. If this assert fails, then we

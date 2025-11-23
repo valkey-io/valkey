@@ -3211,7 +3211,10 @@ void bufferReplData(connection *conn) {
         if (readlen && remaining_bytes == 0) {
             if (server.client_obuf_limits[CLIENT_TYPE_REPLICA].hard_limit_bytes &&
                 server.pending_repl_data.len > server.client_obuf_limits[CLIENT_TYPE_REPLICA].hard_limit_bytes) {
-                dualChannelServerLog(LL_NOTICE, "Replication buffer limit reached, stopping buffering.");
+                dualChannelServerLog(LL_NOTICE,
+                                     "Replication buffer limit reached (%llu bytes), stopping buffering. "
+                                     "Further accumulation will occur on primary side.",
+                                     server.client_obuf_limits[CLIENT_TYPE_REPLICA].hard_limit_bytes);
                 /* Stop accumulating primary commands. */
                 connSetReadHandler(conn, NULL);
                 break;

@@ -33,11 +33,7 @@
  */
 #include "server.h"
 #include "connection.h"
-<<<<<<< HEAD
 #include "reply_blocking.h"
-=======
-#include "durable_write.h"
->>>>>>> 20d33dec9 (Initial commit for key blocking)
 #include "monotonic.h"
 #include "cluster.h"
 #include "cluster_slot_stats.h"
@@ -3795,11 +3791,7 @@ void call(client *c, int flags) {
     struct ClientFlags client_old_flags = c->flag;
 
     struct serverCommand *real_cmd = c->realcmd;
-<<<<<<< HEAD
     beforeCommandTrackReplOffset();
-=======
-    preCall();
->>>>>>> 20d33dec9 (Initial commit for key blocking)
     client *prev_client = server.executing_client;
     server.executing_client = c;
 
@@ -3999,11 +3991,7 @@ void call(client *c, int flags) {
     /* Do some maintenance job and cleanup */
     // TODO: should blocking postCall could be moved into afterCommand?
     afterCommand(c);
-<<<<<<< HEAD
     afterCommandTrackReplOffset(c);
-=======
-    postCall(c);
->>>>>>> 20d33dec9 (Initial commit for key blocking)
 
     /* Remember the replication offset of the client, right after its last
      * command that resulted in propagation. */

@@ -251,7 +251,7 @@ char *lm_asprintf(char const *fmt, ...) {
 char *lm_strcpy(const char *str) {
     size_t len = strlen(str);
     char *res = ValkeyModule_Alloc(len + 1);
-    strncpy(res, str, len + 1);
+    memcpy(res, str, len + 1);
     return res;
 }
 
@@ -278,7 +278,6 @@ char *lm_strtrim(char *s, const char *cset) {
  * The function takes ownership on the given err_buffer. */
 static void luaPushErrorBuff(lua_State *lua, const char *err_buffer) {
     char *msg;
-    char *error_code;
 
     /* If debugging is active and in step mode, log errors resulting from
      * server commands. */
@@ -300,16 +299,12 @@ static void luaPushErrorBuff(lua_State *lua, const char *err_buffer) {
         char *err_msg = strstr(err_buffer, " ");
         if (!err_msg) {
             msg = lm_strcpy(err_buffer + 1);
-            error_code = lm_strcpy("ERR");
-            final_msg = lm_asprintf("%s %s", error_code, msg);
-            ValkeyModule_Free(error_code);
+            final_msg = lm_asprintf("ERR %s", msg);
         } else {
             *err_msg = '\0';
             msg = lm_strcpy(err_msg + 1);
             msg = lm_strtrim(msg, "\r\n");
-            error_code = lm_strcpy(err_buffer + 1);
-            final_msg = lm_asprintf("%s %s", error_code, msg);
-            ValkeyModule_Free(error_code);
+            final_msg = lm_asprintf("%s %s", err_buffer + 1, msg);
         }
     } else {
         msg = lm_strcpy(err_buffer);
@@ -596,7 +591,7 @@ static void luaReplyToServerReply(ValkeyModuleCtx *ctx, int resp_version, lua_St
             if (b) {
                 ValkeyModule_ReplyWithLongLong(ctx, 1);
             } else {
-                ValkeyModule_ReplyWithCString(ctx, NULL);
+                ValkeyModule_ReplyWithNull(ctx);
             }
         } else {
             ValkeyModule_ReplyWithBool(ctx, lua_toboolean(lua, -1));

@@ -1,3 +1,8 @@
+/*
+ * Copyright (c) Valkey Contributors
+ * All rights reserved.
+ * SPDX-License-Identifier: BSD-3-Clause
+ */
 #include "list.h"
 #include "../../valkeymodule.h"
 
@@ -16,7 +21,7 @@ typedef struct ListIter {
 } ListIter;
 
 List *list_create(void) {
-    List *list = ValkeyModule_Calloc(1, sizeof(List));
+    List *list = ValkeyModule_Alloc(sizeof(List));
     list->head = NULL;
     list->length = 0;
     return list;

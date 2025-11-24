@@ -1,3 +1,8 @@
+/*
+ * Copyright (c) Valkey Contributors
+ * All rights reserved.
+ * SPDX-License-Identifier: BSD-3-Clause
+ */
 #include "../../valkeymodule.h"
 #include <lua.h>
 #include <lauxlib.h>

@@ -39,6 +39,7 @@
 #include "reply_blocking.h"
 
 #include <stdint.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <stddef.h>
@@ -54,6 +55,7 @@
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <signal.h>
+#include "durable_write.h"
 #ifdef HAVE_LIBSYSTEMD
 #include <systemd/sd-daemon.h>
 #endif
@@ -1178,6 +1180,8 @@ typedef struct ClientFlags {
                                               or client::buf. */
     uint64_t keyspace_notified : 1;        /* Indicates that a keyspace notification was triggered during the execution of the
                                               current command. */
+    uint64_t durable_blocked_client: 1;    /* This is a durable blocked client that is waiting for the server to
+                                            * acknowledge the write of the command that caused it to be blocked. */
 } ClientFlags;
 
 typedef struct ClientDurabilityData {

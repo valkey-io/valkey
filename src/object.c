@@ -1187,9 +1187,9 @@ size_t objectComputeSize(robj *key, robj *o, size_t sample_size, int dbid) {
         } else if (o->encoding == OBJ_ENCODING_SKIPLIST) {
             hashtable *ht = ((zset *)o->ptr)->ht;
             zskiplist *zsl = ((zset *)o->ptr)->zsl;
-            zskiplistNode *znode = zsl->header->level[0].forward;
+            zskiplistNode *znode = zsl->level[0].forward;
             asize += sizeof(zset) + sizeof(zskiplist) +
-                     hashtableMemUsage(ht) + zmalloc_size(zsl->header);
+                     hashtableMemUsage(ht) + sizeof(struct zskiplistLevel) * ZSKIPLIST_MAXLEVEL;
             while (znode != NULL && samples < sample_size) {
                 elesize += zmalloc_size(znode);
                 samples++;

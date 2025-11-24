@@ -245,10 +245,10 @@ robj *activeDefragStringOb(robj *ob) {
 /* Internal function used by zslDefrag */
 static void zslUpdateNode(zskiplist *zsl, zskiplistNode *oldnode, zskiplistNode *newnode, zskiplistNode **update) {
     int i;
-    for (i = 0; i < zsl->level; i++) {
+    for (i = 0; i < zslGetHeight(zsl); i++) {
         if (update[i]->level[i].forward == oldnode) update[i]->level[i].forward = newnode;
     }
-    serverAssert(zsl->header != oldnode);
+    serverAssert(zsl != oldnode);
     if (newnode->level[0].forward) {
         serverAssert(newnode->level[0].forward->backward == oldnode);
         newnode->level[0].forward->backward = newnode;
@@ -275,8 +275,8 @@ static void activeDefragZsetNode(void *privdata, void *entry_ref) {
     /* find skiplist pointers that need to be updated if we end up moving the
      * skiplist node. */
     zskiplistNode *update[ZSKIPLIST_MAXLEVEL];
-    zskiplistNode *x = zsl->header;
-    for (int i = zsl->level - 1; i >= 0; i--) {
+    zskiplistNode *x = zsl;
+    for (int i = zslGetHeight(zsl) - 1; i >= 0; i--) {
         /* stop when we've reached the end of this level or the next node comes
          * after our target in sorted order */
         zskiplistNode *next = x->level[i].forward;
@@ -456,10 +456,8 @@ static void defragZsetSkiplist(robj *ob) {
 
     zset *newzs;
     zskiplist *newzsl;
-    struct zskiplistNode *newheader;
     if ((newzs = activeDefragAlloc(zs))) ob->ptr = zs = newzs;
     if ((newzsl = activeDefragAlloc(zs->zsl))) zs->zsl = newzsl;
-    if ((newheader = activeDefragAlloc(zs->zsl->header))) zs->zsl->header = newheader;
 
     hashtable *newtable;
     if ((newtable = hashtableDefragTables(zs->ht, activeDefragAlloc))) zs->ht = newtable;
@@ -570,7 +568,7 @@ static int scanLaterStreamListpacks(robj *ob, unsigned long *cursor, monotime en
 }
 
 /* optional callback used defrag each rax element (not including the element pointer itself) */
-typedef void *(raxDefragFunction)(raxIterator *ri, void *privdata);
+typedef void *(raxDefragFunction)(raxIterator * ri, void *privdata);
 
 /* defrag radix tree including:
  * 1) rax struct

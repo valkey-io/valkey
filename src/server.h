@@ -1424,8 +1424,14 @@ struct sharedObjectsStruct {
 
 /* ZSETs use a specialized version of Skiplists */
 typedef struct zskiplistNode {
-    double score;
-    struct zskiplistNode *backward;
+    union {
+        double score;         /* Sorting score for node ordering */
+        unsigned long length; /* Number of elements in the skiplist */
+    };
+    union {
+        struct zskiplistNode *backward; /* Pointer to previous node for reverse traversal */
+        struct zskiplistNode *tail;     /* ail element of the skiplist*/
+    };
     struct zskiplistLevel {
         struct zskiplistNode *forward;
         /* At each level we keep the span, which is the number of elements which are on the "subtree"
@@ -1437,11 +1443,8 @@ typedef struct zskiplistNode {
     /* After the level[], sds header length (1 byte) and an embedded sds element are stored. */
 } zskiplistNode;
 
-typedef struct zskiplist {
-    struct zskiplistNode *header, *tail;
-    unsigned long length;
-    int level;
-} zskiplist;
+/* Actually zskiplist is an alias for zskiplistNode, pointing to head node. */
+typedef struct zskiplistNode zskiplist;
 
 typedef struct zset {
     hashtable *ht;
@@ -3275,6 +3278,7 @@ typedef struct {
 #define ERROR_COMMAND_FAILED (1 << 1)   /* Indicate to update the command failed stats */
 
 zskiplist *zslCreate(void);
+int zslGetHeight(const zskiplist *zsl);
 void zslFree(zskiplist *zsl);
 zskiplistNode *zslInsert(zskiplist *zsl, double score, const_sds ele);
 zskiplistNode *zslNthInRange(zskiplist *zsl, zrangespec *range, long n, long *rank);

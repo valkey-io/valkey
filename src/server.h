@@ -37,6 +37,7 @@
 #include "commands.h"
 #include "allocator_defrag.h"
 
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <stddef.h>
@@ -52,7 +53,7 @@
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <signal.h>
-
+#include "durable_write.h"
 #ifdef HAVE_LIBSYSTEMD
 #include <systemd/sd-daemon.h>
 #endif
@@ -922,6 +923,7 @@ typedef struct replBufBlock {
     char buf[];
 } replBufBlock;
 
+
 /* Database representation. There are multiple databases identified
  * by integers from 0 (the default database) up to the max configured
  * database. The database number is the 'id' field in the structure. */
@@ -940,6 +942,13 @@ typedef struct serverDb {
         long long avg_ttl;    /* Average TTL, just for stats */
         unsigned long cursor; /* Cursor of the active expire cycle. */
     } expiry[ACTIVE_EXPIRY_TYPE_COUNT];
+
+    /* fields related to dirty key tracking 
+     * for consistent writes with durability */
+    rax *uncommitted_keys; /* Map of dirty keys to the offset required by replica acknowledgement */
+    long long dirty_repl_offset; /* Replication offset for a dirty DB */
+    raxIterator next_scan_iter;  /* The next iterator for db scan */
+    int scan_in_progress;  /* Flag of showing whether db is in scan or not */
 } serverDb;
 
 /* forward declaration for functions ctx */
@@ -1225,6 +1234,8 @@ typedef struct ClientFlags {
                                               or client::buf. */
     uint64_t keyspace_notified : 1;        /* Indicates that a keyspace notification was triggered during the execution of the
                                               current command. */
+    uint64_t durable_blocked_client: 1;    /* This is a durable blocked client that is waiting for the server to
+                                            * acknowledge the write of the command that caused it to be blocked. */
 } ClientFlags;
 
 typedef struct ClientPubSubData {
@@ -1423,6 +1434,7 @@ typedef struct client {
 #ifdef LOG_REQ_RES
     clientReqResInfo reqres;
 #endif
+    struct clientDurabilityInfo clientDurabilityInfo;
 } client;
 
 /* When a command generates a lot of discrete elements to the client output buffer, it is much faster to
@@ -1723,6 +1735,7 @@ typedef enum childInfoType {
 } childInfoType;
 
 struct valkeyServer {
+    durable_t durability;
     /* General */
     pid_t pid;                /* Main process pid. */
     pthread_t main_thread_id; /* Main thread id */
@@ -2988,6 +3001,9 @@ int processIOThreadsReadDone(void);
 int processIOThreadsWriteDone(void);
 void releaseReplyReferences(client *c);
 void resetLastWrittenBuf(client *c);
+
+//TODO:jules move this elsewhere
+int getIntFromObject(robj *o, int *target);
 
 int parseExtendedCommandArgumentsOrReply(client *c, int *flags, int *unit, robj **expire, robj **compare_val, int command_type, int max_args);
 

@@ -33,6 +33,7 @@
  */
 #include "server.h"
 #include "connection.h"
+#include "durable_write.h"
 #include "monotonic.h"
 #include "cluster.h"
 #include "cluster_slot_stats.h"
@@ -1689,6 +1690,7 @@ long long serverCron(struct aeEventLoop *eventLoop, long long id, void *clientDa
         run_with_period(100) modulesCron();
     }
 
+    run_with_period(1000) clearUncommittedKeysAcknowledged();
     /* Fire the cron loop modules event. */
     ValkeyModuleCronLoopV1 ei = {VALKEYMODULE_CRON_LOOP_VERSION, server.hz};
     moduleFireServerEvent(VALKEYMODULE_EVENT_CRON_LOOP, 0, &ei);
@@ -2809,6 +2811,10 @@ serverDb *createDatabase(int id) {
     db->ready_keys = dictCreate(&objectKeyPointerValueDictType);
     db->watched_keys = dictCreate(&keylistDictType);
     db->id = id;
+
+    db->uncommitted_keys = raxNew();
+    db->dirty_repl_offset = -1;
+    db->scan_in_progress = 0;
     resetDbExpiryState(db);
     return db;
 }
@@ -3027,6 +3033,13 @@ void initServer(void) {
 
     /* Initialize the EVAL scripting component. */
     evalInit();
+
+    commandlogInit();
+    latencyMonitorInit();
+    initSharedQueryBuf();
+    durableInit();
+    /* Initialize ACL default password if it exists */
+    ACLUpdateDefaultUserPassword(server.requirepass);
 
     applyWatchdogPeriod();
 
@@ -3754,6 +3767,7 @@ void call(client *c, int flags) {
     struct ClientFlags client_old_flags = c->flag;
 
     struct serverCommand *real_cmd = c->realcmd;
+    preCall();
     client *prev_client = server.executing_client;
     server.executing_client = c;
 
@@ -3951,7 +3965,9 @@ void call(client *c, int flags) {
     if (zmalloc_used > server.stat_peak_memory) server.stat_peak_memory = zmalloc_used;
 
     /* Do some maintenance job and cleanup */
+    // TODO: should blocking postCall could be moved into afterCommand?
     afterCommand(c);
+    postCall(c);
 
     /* Remember the replication offset of the client, right after its last
      * command that resulted in propagation. */
@@ -4485,8 +4501,12 @@ int processCommand(client *c) {
         queueMultiCommand(c, cmd_flags);
         addReply(c, shared.queued);
     } else {
+        if (preCommandExec(c) == CMD_FILTER_REJECT) {
+            return C_OK;
+        }
         int flags = CMD_CALL_FULL;
         call(c, flags);
+        postCommandExec(c);
         if (listLength(server.ready_keys) && !isInsideYieldingLongCommand()) handleClientsBlockedOnKeys();
     }
     return C_OK;

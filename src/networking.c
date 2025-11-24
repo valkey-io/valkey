@@ -1679,7 +1679,7 @@ void copyReplicaOutputBuffer(client *dst, client *src) {
 int clientHasPendingReplies(client *c) {
     if (isClientReplyBufferLimited(c)) {
         // Check if our first allowed reply boundary is in a position that comes
-        // after the current position that Redis has written up to in the COB.
+        // after the current position that valkey has written up to in the COB.
         const blockedResponse *n = listNodeValue(listFirst(c->clientDurabilityInfo.blocked_responses));
         if ((c->bufpos && n->disallowed_reply_block == NULL) ||
              (c->bufpos == 0 && n->disallowed_reply_block != NULL && listFirst(c->reply) == n->disallowed_reply_block)) {

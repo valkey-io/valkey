@@ -416,6 +416,7 @@ void blockClientOnReplOffset(struct client *c, long long blockingReplOffset) {
     /* If needed, we block the client and put it into our list of clients
      * waiting for ack from slaves. */
     if (isBlockingNeededForOffset(c, blockingReplOffset)) {
+        serverLog(LOG_DEBUG, "client should be blocked at offset %lld,", blockingReplOffset);
         blockLastResponseIfExist(c, blockingReplOffset);
         if (!c->flag.durable_blocked_client) {
             listAddNodeTail(server.durability.clients_waiting_replica_ack,c);
@@ -455,6 +456,8 @@ static void blockClientAndMonitorsOnReplOffset(struct client *c, long long block
  * @param consensus_ack_offset Repl offset that have been acked by the required number of replicas
  */
 void unblockResponsesWithAckOffset(struct durable_t *durability, long long consensus_ack_offset) {
+            
+    serverLog(LOG_DEBUG, "unblocking clients for consensus offset %lld,", consensus_ack_offset);
     // Traverses through all the clients that wait for replica ack
     listIter li, li_response;
     listNode *ln, *ln_response;
@@ -907,7 +910,6 @@ void postCall(struct client *c) {
 int preCommandExec(struct client *c) {
     serverLog(LOG_DEBUG, "preCommandExec hook entered for command '%s'", 
               c->cmd ? c->cmd->declared_name : "NULL");
-    // durability checks exist only on primary node
     if (!isDurabilityEnabled()) {
         serverLog(LOG_DEBUG, "preCommandExec hook: durability not enabled, allowing");
         return CMD_FILTER_ALLOW;
@@ -974,25 +976,6 @@ void postCommandExec(struct client *c) {
     }
 
     blockClientAndMonitorsOnReplOffset(c, blocking_repl_offset);
-}
-
-/**
- * Pre-response execution handler for clients that were blocked and subsequently
- * unblocked.  This will track the COB position so that when a response is added,
- * it can be blocked for consistent writes if necessary.
- */
-void preReplyToBlockedClient(struct client *c) {
-    serverLog(LOG_DEBUG, "preReplyToBlockedClient hook entered for command '%s'", 
-              c->cmd ? c->cmd->declared_name : "NULL");
-    if (!isPrimaryDurabilityEnabled()) {
-        serverLog(LOG_DEBUG, "preReplyToBlockedClient hook: durability not enabled, returning");
-        return;
-    }
-
-    if (clientEligibleForResponseTracking(c)) {
-        // Track the pre-execution position in the client reply COB
-        trackCommandPreExecutionPosition(c);
-    }
 }
 
 /**

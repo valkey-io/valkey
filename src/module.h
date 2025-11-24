@@ -175,7 +175,8 @@ sds moduleLoadQueueEntryToLoadmoduleOptionStr(ValkeyModule *module,
 ValkeyModuleCtx *moduleAllocateContext(void);
 void moduleScriptingEngineInitContext(ValkeyModuleCtx *out_ctx,
                                       ValkeyModule *module,
-                                      client *client);
+                                      client *client,
+                                      int add_thread_safe_flag);
 void moduleFreeContext(ValkeyModuleCtx *ctx);
 void moduleInitModulesSystem(void);
 void moduleInitModulesSystemLast(void);

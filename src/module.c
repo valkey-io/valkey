@@ -1000,8 +1000,11 @@ void moduleCreateContext(ValkeyModuleCtx *out_ctx, ValkeyModule *module, int ctx
  */
 void moduleScriptingEngineInitContext(ValkeyModuleCtx *out_ctx,
                                       ValkeyModule *module,
-                                      client *client) {
-    moduleCreateContext(out_ctx, module, VALKEYMODULE_CTX_SCRIPT_EXECUTION);
+                                      client *client,
+                                      int add_thread_safe_flag) {
+    int ctx_flags = VALKEYMODULE_CTX_SCRIPT_EXECUTION;
+    if (add_thread_safe_flag) ctx_flags |= VALKEYMODULE_CTX_THREAD_SAFE;
+    moduleCreateContext(out_ctx, module, ctx_flags);
     out_ctx->client = client;
 }
 

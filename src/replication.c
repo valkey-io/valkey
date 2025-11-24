@@ -1421,6 +1421,9 @@ void replconfCommand(client *c) {
             if (c->repl_data->repl_state == REPLICA_STATE_BG_RDB_LOAD) {
                 replicaPutOnline(c);
             }
+            
+            // Process all clients waiting ACK from a quorum 
+            postReplicaAck();
             /* Note: this command does not reply anything! */
             return;
         } else if (!strcasecmp(c->argv[j]->ptr, "getack")) {

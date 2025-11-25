@@ -23,7 +23,7 @@ jobs:
       github.event.action == 'labeled' && github.event.label.name == 'run-benchmark' &&
       github.repository == 'valkey-io/valkey'
 
-    runs-on: ["self-hosted","ec2-al-2023-pr-benchmarking-arm64"]
+    runs-on: ["self-hosted", "ec2-al-2023-pr-benchmarking-arm64"]
     timeout-minutes: 7200
     steps:
       - name: Checkout valkey

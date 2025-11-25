@@ -276,7 +276,7 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
             const fs = require('fs');
-            
+
             // Read the combined report
             const body = fs.readFileSync('combined_report.md', 'utf8');
 

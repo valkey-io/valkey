@@ -183,6 +183,62 @@ start_server {tags {"protocol network"}} {
         set _ ""
     } {} {needs:debug resp3}
 
+     test "binbin test" {
+        # Command) SET key value
+        # RESP) *3\r\n$3\r\nSET\r\n$3\r\nkey\r\n$5\r\nvalue\r\n
+        # We need to strictly check these \r\n characters.
+        set proto "*3\r\n\$3\r\nSET\r\n\$3\r\nkey\r\n\$5\r\nvalue\r\n"
+        reconnect; r write $proto; r flush; assert_equal "OK" [r read]
+
+        # Check if multibulklen `*3\r\n` is followed by `\r\n`
+        set proto1 "*3x\n\$3\r\nSET\r\n\$3\r\nkey\r\n\$5\r\nvalue\r\n"
+        set proto2 "*3\rx\$3\r\nSET\r\n\$3\r\nkey\r\n\$5\r\nvalue\r\n"
+        set proto3 "*3xx\$3\r\nSET\r\n\$3\r\nkey\r\n\$5\r\nvalue\r\n"
+        r write $proto1; r flush; assert_error "*invalid multibulk length*" {r read}; reconnect
+        r write $proto2; r flush; assert_error "*invalid CRLF in request*" {r read}; reconnect
+        r write $proto3; r flush; assert_error "*invalid multibulk length*" {r read}; reconnect
+
+        # Check if bulklen `$3\r\n` is followed by `\r\n`
+        set proto1 "*3\r\n\$3x\nSET\r\n\$3\r\nkey\r\n\$5\r\nvalue\r\n"
+        set proto2 "*3\r\n\$3\rxSET\r\n\$3\r\nkey\r\n\$5\r\nvalue\r\n"
+        set proto3 "*3\r\n\$3xxSET\r\n\$3\r\nkey\r\n\$5\r\nvalue\r\n"
+        r write $proto1; r flush; assert_error "*invalid bulk length*" {r read}; reconnect
+        r write $proto2; r flush; assert_error "*invalid CRLF in request*" {r read}; reconnect
+        r write $proto3; r flush; assert_error "*invalid bulk length*" {r read}; reconnect
+
+        # Check if `SET\r\n` is followed by `\r\n`
+        set proto1 "*3\r\n\$3\r\nSET\rx\$3\r\nkey\r\n\$5\r\nvalue\r\n"
+        set proto2 "*3\r\n\$3\r\nSETx\n\$3\r\nkey\r\n\$5\r\nvalue\r\n"
+        set proto3 "*3\r\n\$3\r\nSETxx\$3\r\nkey\r\n\$5\r\nvalue\r\n"
+        r write $proto1; r flush; assert_error "*invalid CRLF in request*" {r read}; reconnect
+        r write $proto2; r flush; assert_error "*invalid CRLF in request*" {r read}; reconnect
+        r write $proto3; r flush; assert_error "*invalid CRLF in request*" {r read}; reconnect
+
+        # Check if `key\r\n` is followed by `\r\n`
+        set proto1 "*3\r\n\$3\r\nSET\r\n\$3\r\nkeyx\n\$5\r\nvalue\r\n"
+        set proto2 "*3\r\n\$3\r\nSET\r\n\$3\r\nkey\rx\$5\r\nvalue\r\n"
+        set proto3 "*3\r\n\$3\r\nSET\r\n\$3\r\nkeyxx\$5\r\nvalue\r\n"
+        r write $proto1; r flush; assert_error "*invalid CRLF in request*" {r read}; reconnect
+        r write $proto2; r flush; assert_error "*invalid CRLF in request*" {r read}; reconnect
+        r write $proto3; r flush; assert_error "*invalid CRLF in request*" {r read}; reconnect
+
+        # Check if bulklen `$5\r\n` is followed by `\r\n`
+        set proto1 "*3\r\n\$3\r\nSET\r\n\$3\r\nkey\r\n\$5x\nvalue\r\n"
+        set proto2 "*3\r\n\$3\r\nSET\r\n\$3\r\nkey\r\n\$5\rxvalue\r\n"
+        set proto3 "*3\r\n\$3\r\nSET\r\n\$3\r\nkey\r\n\$5xxvalue\r\n"
+        r write $proto1; r flush; assert_error "*invalid bulk length*" {r read}; reconnect
+        r write $proto2; r flush; assert_error "*invalid CRLF in request*" {r read}; reconnect
+        r write $proto3; r flush; assert_error "*invalid bulk length*" {r read}; reconnect
+
+        # Check if `value\r\n` is followed by `\r\n`
+        set proto1 "*3\r\n\$3\r\nSET\r\n\$3\r\nkey\r\n\$5\r\nvaluex\n"
+        set proto2 "*3\r\n\$3\r\nSET\r\n\$3\r\nkey\r\n\$5\r\nvalue\rx"
+        set proto3 "*3\r\n\$3\r\nSET\r\n\$3\r\nkey\r\n\$5\r\nvaluexx"
+        r write $proto1; r flush; assert_error "*invalid CRLF in request*" {r read}; reconnect
+        r write $proto2; r flush; assert_error "*invalid CRLF in request*" {r read}; reconnect
+        r write $proto3; r flush; assert_error "*invalid CRLF in request*" {r read}; reconnect
+    }
+
     test {RESP3 attributes readraw} {
         r hello 3
         r readraw 1

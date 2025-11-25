@@ -60,6 +60,9 @@
 #if HAVE_X86_SIMD
 #include <immintrin.h>
 #endif
+#if HAVE_ARM_NEON
+#include <arm_neon.h>
+#endif
 
 /* The default hashing function uses the SipHash implementation in siphash.c. */
 
@@ -719,6 +722,38 @@ static int findKeyInBucketSSE2(hashtable *ht, bucket *b, uint8_t h2, const void 
 }
 #endif
 
+#if HAVE_ARM_NEON && ENTRIES_PER_BUCKET <= 8
+/* 32 bit architectures would require a different implementation
+ * consider that even if they had Neon SIMD support,
+ * they have 12 entries per bucket and only 32-bit scalar registers */
+
+static inline int popMatchBitmask(uint64_t *mask) {
+    /* one byte (8 bits) per item - either 0x80 or 0x00 */
+    int pos = __builtin_ctzll(*mask) >> 3;
+    *mask &= (*mask - 1); /* clear lowest set bit */
+    return pos;
+}
+
+static int findKeyInBucketNeon(hashtable *ht, bucket *b, uint8_t h2, const void *key, int table, int *pos_in_bucket, int *table_index) {
+    const uint8x8_t hash_vector = vld1_u8(b->hashes);             /* simple load */
+    const uint8x8_t h2_vector = vdup_n_u8(h2);                    /* duplicated into every byte */
+    const uint8x8_t equal_mask = vceq_u8(hash_vector, h2_vector); /* compare: 8 bits per item, 0xFF or 0x00 */
+    uint64_t matches = vget_lane_u64(vreinterpret_u64_u8(equal_mask), 0);
+
+    /* reduce each match to one bit and zero out invalid positions */
+    const uint64_t valid_entry_mask = (1ul << (ENTRIES_PER_BUCKET << 3)) - 1ul;
+    matches = matches & 0x8080808080808080ul & valid_entry_mask;
+
+    while (matches) {
+        int pos = popMatchBitmask(&matches);
+        if ((b->presence & (1 << pos)) &&
+            checkCandidateInBucket(ht, b, pos, key, table, pos_in_bucket, table_index))
+            return 1;
+    }
+    return 0; /* No match */
+}
+#endif
+
 /* Finds an entry matching the key. If a match is found, returns a pointer to
  * the bucket containing the matching entry and points 'pos_in_bucket' to the
  * index within the bucket. Returns NULL if no matching entry was found.
@@ -746,6 +781,8 @@ static bucket *findBucket(hashtable *ht, uint64_t hash, const void *key, int *po
 #if HAVE_X86_SIMD
             /* All x86-64 CPUs have SSE2. */
             if (findKeyInBucketSSE2(ht, b, h2, key, table, pos_in_bucket, table_index)) return b;
+#elif HAVE_ARM_NEON && ENTRIES_PER_BUCKET <= 8
+            if (findKeyInBucketNeon(ht, b, h2, key, table, pos_in_bucket, table_index)) return b;
 #else
             /* Find candidate entries with presence flag set and matching h2 hash. */
             for (int pos = 0; pos < numBucketPositions(b); pos++) {
@@ -1194,14 +1231,18 @@ void hashtableResumeAutoShrink(hashtable *ht) {
 
 /* Pauses incremental rehashing. When rehashing is paused, bucket chains are not
  * automatically compacted when entries are deleted. Doing so may leave empty
- * spaces, "holes", in the bucket chains, which wastes memory. */
+ * spaces, "holes", in the bucket chains, which wastes memory. Additionally, we
+ * pause auto shrink when rehashing is paused, meaning the hashtable will not
+ * shrink the bucket count. */
 static void hashtablePauseRehashing(hashtable *ht) {
     ht->pause_rehash++;
+    hashtablePauseAutoShrink(ht);
 }
 
 /* Resumes incremental rehashing, after pausing it. */
 static void hashtableResumeRehashing(hashtable *ht) {
     ht->pause_rehash--;
+    hashtableResumeAutoShrink(ht);
 }
 
 /* Returns true if incremental rehashing is paused, false if it isn't. */
@@ -1593,6 +1634,9 @@ void hashtableTwoPhasePopDelete(hashtable *ht, hashtablePosition *pos) {
     assert(isPositionFilled(b, pos_in_bucket));
     b->presence &= ~(1 << pos_in_bucket);
     ht->used[table_index]--;
+    /* When we resume rehashing, it may cause the bucket to be deleted due to
+     * auto shrink. */
+    hashtablePauseAutoShrink(ht);
     hashtableResumeRehashing(ht);
     if (b->chained && !hashtableIsRehashingPaused(ht)) {
         /* Rehashing paused also means bucket chain compaction paused. It is
@@ -1601,7 +1645,7 @@ void hashtableTwoPhasePopDelete(hashtable *ht, hashtablePosition *pos) {
          * we do the compaction in the scan and iterator code instead. */
         fillBucketHole(ht, b, pos_in_bucket, table_index);
     }
-    hashtableShrinkIfNeeded(ht);
+    hashtableResumeAutoShrink(ht);
 }
 
 /* Initializes the state for an incremental find operation.
@@ -1779,7 +1823,6 @@ size_t hashtableScanDefrag(hashtable *ht, size_t cursor, hashtableScanFunction f
     /* Prevent entries from being moved around during the scan call, as a
      * side-effect of the scan callback. */
     hashtablePauseRehashing(ht);
-    hashtablePauseAutoShrink(ht);
 
     /* Flags. */
     int emit_ref = (flags & HASHTABLE_SCAN_EMIT_REF);
@@ -1891,7 +1934,6 @@ size_t hashtableScanDefrag(hashtable *ht, size_t cursor, hashtableScanFunction f
         } while (cursor & (mask_small ^ mask_large));
     }
     hashtableResumeRehashing(ht);
-    hashtableResumeAutoShrink(ht);
     return cursor;
 }
 

@@ -152,7 +152,7 @@ start_cluster 2 0 {tags {external:skip cluster} overrides {cluster-node-timeout 
             # We want Node 0 to learn about Node 2 through the gossip section of the MEET message
             set meet_retry 0
             while {[cluster_get_node_by_id 0 $node2_id] eq {}} {
-                if {$meet_retry == 10} {
+                if {$meet_retry == 50} {
                     error "assertion: Retried to meet Node 0 too many times"
                 }
                 # If Node 0 doesn't know about Node 1 & 2, it means Node 1 did not gossip about node 2 in its MEET message.

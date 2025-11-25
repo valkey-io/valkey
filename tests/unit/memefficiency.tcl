@@ -181,8 +181,6 @@ run_solo {defrag} {
     #    while_defragging {code} - optional, code executed after defrag has started
     #    latency <ms> - optional, verifies the latency to a ms target (default 5)
     proc perform_defrag_test {name args} {
-        # This value should be 5 ms, but it was flaky in github runners. The issue 
-        # https://github.com/valkey-io/valkey/issues/2444 is tracking if we can raise the limit again.
         set opts(latency) 5
         set opts(while_defragging) {}
         array set opts $args

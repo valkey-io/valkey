@@ -17,11 +17,6 @@
                 "Added support for uppercase unit names."
             ]
         ],
-        "deprecated_since": "6.2.0",
-        "replaced_by": "`GEOSEARCH` and `GEOSEARCHSTORE` with the `BYRADIUS` argument",
-        "doc_flags": [
-            "DEPRECATED"
-        ],
         "command_flags": [
             "WRITE",
             "DENYOOM"

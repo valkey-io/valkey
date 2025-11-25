@@ -44,15 +44,19 @@ start_cluster 2 2 {tags {external:skip cluster}} {
         set after_keys_num [expr {$slot_keys_num + 1000}]
         assert_equal [R 0 CLUSTER COUNTKEYSINSLOT $key_slot] $after_keys_num
 
+        # open primary replication stream so we can assert what gets propagated.
+        set repl [attach_to_replication_stream]
+
         # flush slot key
         R 0 CLUSTER FLUSHSLOT $key_slot SYNC
         assert_equal [R 0 CLUSTER COUNTKEYSINSLOT $key_slot] 0
 
         # assert flush slot propagated to replica
-        set info [R 2 info commandSTATS]
-        # not del cmd
-        assert_no_match "*cmdstat_del*" $info
-        # has flushslot cmd
-        assert_match "*cmdstat_cluster|flushslot:calls=1*" $info
+        assert_replication_stream $repl {
+            {select *}
+            {cluster*FLUSHSLOT*}
+        }
+
+        close_replication_stream $repl
     }
 }

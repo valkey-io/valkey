@@ -8,6 +8,7 @@
         "function": "sinterstoreCommand",
         "command_flags": [
             "WRITE",
+            "WRITE_FIRSTKEY_ONLY",
             "DENYOOM"
         ],
         "acl_categories": [

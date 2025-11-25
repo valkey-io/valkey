@@ -254,15 +254,14 @@ endif
 FINAL_CFLAGS+= -I../deps/libvalkey/include -I../deps/linenoise -I../deps/hdr_histogram -I../deps/fpconv
 
 # Lua scripting engine module
-LUA_MODULE=
-LUA_MODULE_INSTALL=
 LUA_MODULE_NAME:=modules/lua/libluaengine.so
-
-ifneq ($(BUILD_LUA),no)
+ifeq ($(BUILD_LUA),no)
+	LUA_MODULE=
+	LUA_MODULE_INSTALL=
+else
 	LUA_MODULE=$(LUA_MODULE_NAME)
-endif
+	LUA_MODULE_INSTALL=install-lua-module
 
-ifeq ($(LUA_MODULE),$(LUA_MODULE_NAME))
 	current_dir = $(shell pwd)
 	FINAL_CFLAGS+=-DLUA_ENGINE_ENABLED -DLUA_ENGINE_LIB=libluaengine.so
 ifeq ($(uname_S),Darwin)
@@ -270,7 +269,6 @@ ifeq ($(uname_S),Darwin)
 else
 	FINAL_LDFLAGS+= -Wl,-rpath,$(PREFIX)/lib:$(current_dir)/modules/lua -Wl,--disable-new-dtags
 endif
-	LUA_MODULE_INSTALL=install-lua-module
 endif
 
 # Determine systemd support and/or build preference (defaulting to auto-detection)

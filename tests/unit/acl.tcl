@@ -739,7 +739,7 @@ start_server {tags {"acl external:skip"}} {
 
         test {ACL LOG is able to log database access violations} {
         r ACL LOG RESET
-        r ACL SETUSER dbuser on nopass db+=0 +@all ~*
+        r ACL SETUSER dbuser on nopass db=0 +@all ~*
         r AUTH dbuser password
         
         catch {r SELECT 1}

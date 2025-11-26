@@ -347,8 +347,6 @@ intset *intsetDup(intset *is) {
 
     size_t size = intsetBlobLen(is);
     intset *copy = zmalloc(size);
-    if (!copy) return NULL;
-
     memcpy(copy, is, size);
     return copy;
 }

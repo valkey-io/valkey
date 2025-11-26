@@ -823,7 +823,7 @@ static sds ACLDescribeSelector(aclSelector *selector) {
     } else if (intsetLen(selector->dbs) == 0) {
         res = sdscatlen(res, "resetdbs ", 9);
     } else {
-        res = sdscatlen(res, "db+=", 4);
+        res = sdscatlen(res, "db=", 3);
         uint32_t len = intsetLen(selector->dbs);
         for (uint32_t i = 0; i < len; i++) {
             int64_t dbid;
@@ -960,24 +960,6 @@ static void ACLAddAllowedFirstArg(aclSelector *selector, unsigned long id, const
     selector->allowed_firstargs[id][items - 2] = sdsnew(sub);
     selector->allowed_firstargs[id][items - 1] = NULL;
 }
-/* Initialize intset for database permissions. */
-static intset *ACLInitDatabaseIntset(aclSelector *selector, int add_dbs) {
-    intset *new_dbs;
-
-    /* For removal operations with ALLDBS flag, convert to explicit list */
-    if (!add_dbs && (selector->flags & SELECTOR_FLAG_ALLDBS)) {
-        new_dbs = intsetNew();
-
-        for (int i = 0; i < server.dbnum; i++) {
-            uint8_t success;
-            new_dbs = intsetAdd(new_dbs, i, &success);
-            serverAssert(success);
-        }
-        return new_dbs;
-    }
-
-    return selector->dbs ? intsetDup(selector->dbs) : intsetNew();
-}
 
 /* Clean up and return error from database permission operations. */
 static int ACLDatabasePermissionError(intset *new_dbs, char *dblist, int error_code) {
@@ -987,12 +969,10 @@ static int ACLDatabasePermissionError(intset *new_dbs, char *dblist, int error_c
     return C_ERR;
 }
 
-/* Helper function to add or remove database permissions to/from a selector.
- * When add_dbs is 1, this function adds the specified databases to the existing set.
- * When add_dbs is 0, this function removes the specified databases from the existing set. */
-static int ACLSetSelectorDatabasePermissions(aclSelector *selector, const char *dbs_str, int add_dbs) {
-    /* Initialize the database intset based on operation type */
-    intset *new_dbs = ACLInitDatabaseIntset(selector, add_dbs);
+/* Helper function to add database permissions to a selector. */
+static int ACLSetSelectorDatabasePermissions(aclSelector *selector, const char *dbs_str) {
+    /* Initialize the database intset */
+    intset *new_dbs = intsetNew();
 
     if (selector->flags & SELECTOR_FLAG_ALLDBS) {
         selector->flags &= ~SELECTOR_FLAG_ALLDBS;
@@ -1019,15 +999,9 @@ static int ACLSetSelectorDatabasePermissions(aclSelector *selector, const char *
             return ACLDatabasePermissionError(new_dbs, dblist, EINVAL);
         }
 
-        if (add_dbs) {
-            /* No error check needed - duplicates will not be added */
-            intset *result = intsetAdd(new_dbs, dbid, NULL);
-            new_dbs = result;
-        } else {
-            /* Not finding the database to remove is not an error */
-            intset *result = intsetRemove(new_dbs, dbid, NULL);
-            new_dbs = result;
-        }
+        /* No error check needed - duplicates will not be added */
+        intset *result = intsetAdd(new_dbs, dbid, NULL);
+        new_dbs = result;
 
         token = strtok_r(NULL, ",", &saveptr);
     }
@@ -1103,14 +1077,10 @@ static aclSelector *aclCreateSelectorFromOpSet(const char *opset, size_t opsetle
  *              It is possible to specify multiple patterns.
  * allchannels              Alias for &*
  * resetchannels            Flush the list of allowed channel patterns.
- * db+=<dbid>   Add database ID(s) to the set of allowed database IDs. May be used
- *              with `,` for adding multiple IDs (e.g "db+=1,2,3"). To override all
- *              existing databases, use 'resetdbs' first, then 'db+='.
- * db-=<dbid>   Remove database ID(s) from the set of allowed database IDs. May be used
- *              with `,` for removing multiple IDs (e.g "db-=1,2,3").
+ * db=<dbid>    Add database ID(s) to the set of allowed database IDs. May be used
+ *              with `,` for adding multiple IDs (e.g "db=1,2,3").
  * alldbs       Allow access to all databases.
- * resetdbs     Flush the set of allowed database IDs, revert to default
- *              behaviour (all databases are allowed).
+ * resetdbs     Flush the set of allowed database IDs.
  */
 static int ACLSetSelector(aclSelector *selector, const char *op, size_t oplen) {
     if (!strcasecmp(op, "allkeys") || !strcasecmp(op, "~*")) {
@@ -1137,11 +1107,8 @@ static int ACLSetSelector(aclSelector *selector, const char *op, size_t oplen) {
             intsetFree(selector->dbs);
             selector->dbs = intsetNew();
         }
-    } else if (strncasecmp(op, "db+=", 4) == 0) {
-        int result = ACLSetSelectorDatabasePermissions(selector, op + 4, 1);
-        if (result != C_OK) return result;
-    } else if (strncasecmp(op, "db-=", 4) == 0) {
-        int result = ACLSetSelectorDatabasePermissions(selector, op + 4, 0);
+    } else if (strncasecmp(op, "db=", 3) == 0) {
+        int result = ACLSetSelectorDatabasePermissions(selector, op + 3);
         if (result != C_OK) return result;
     } else if (!strcasecmp(op, "allcommands") || !strcasecmp(op, "+@all")) {
         memset(selector->allowed_commands, 255, sizeof(selector->allowed_commands));
@@ -1460,6 +1427,7 @@ int ACLSetUser(user *u, const char *op, ssize_t oplen) {
         serverAssert(ACLSetUser(u, "resetchannels", -1) == C_OK);
         if (server.acl_pubsub_default & SELECTOR_FLAG_ALLCHANNELS)
             serverAssert(ACLSetUser(u, "allchannels", -1) == C_OK);
+        /* Reset to `alldbs` for backwards compatibility */
         serverAssert(ACLSetUser(u, "alldbs", -1) == C_OK);
         serverAssert(ACLSetUser(u, "off", -1) == C_OK);
         serverAssert(ACLSetUser(u, "sanitize-payload", -1) == C_OK);
@@ -3009,7 +2977,28 @@ static int aclAddReplySelectorDescription(client *c, aclSelector *s) {
         }
         addReplyBulkSds(c, dsl);
     }
-    return 3;
+
+    /* Database permissions. */
+    addReplyBulkCString(c, "databases");
+    if (s->flags & SELECTOR_FLAG_ALLDBS) {
+        addReplyBulkCBuffer(c, "alldbs", 6);
+    } else {
+        sds dsl = sdsempty();
+        uint32_t len = intsetLen(s->dbs);
+        if (len > 0) {
+            dsl = sdscatlen(dsl, "db=", 3);
+            for (uint32_t i = 0; i < len; i++) {
+                int64_t dbid;
+                if (intsetGet(s->dbs, i, &dbid)) {
+                    if (i > 0) dsl = sdscatlen(dsl, ",", 1);
+                    dsl = sdscatfmt(dsl, "%I", dbid);
+                }
+            }
+        }
+        addReplyBulkSds(c, dsl);
+    }
+
+    return 4;
 }
 
 /* ACL -- show and modify the configuration of ACL users.

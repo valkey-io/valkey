@@ -34,7 +34,7 @@ test "Allocate slots to nodes" {
 }
 
 test {Test CLUSTER COUNTKEYSINSLOT with database permissions} {
-    R 0 ACL SETUSER cluster-count-user on nopass +cluster +select ~* db+=0
+    R 0 ACL SETUSER cluster-count-user on nopass +cluster +select ~* db=0
     
     set r2 [valkey [srv 0 host] [srv 0 port] 0 $::tls]
     $r2 auth cluster-count-user ""
@@ -52,7 +52,7 @@ test {Test CLUSTER COUNTKEYSINSLOT with database permissions} {
 }
 
 test {Test CLUSTER GETKEYSINSLOT with database permissions} {
-    R 0 ACL SETUSER cluster-getkeys-user on nopass +cluster +select ~* db+=0
+    R 0 ACL SETUSER cluster-getkeys-user on nopass +cluster +select ~* db=0
     
     set r2 [valkey [srv 0 host] [srv 0 port] 0 $::tls]
     $r2 auth cluster-getkeys-user ""
@@ -72,7 +72,7 @@ test {Test CLUSTER GETKEYSINSLOT with database permissions} {
 test {Test CLUSTER MIGRATESLOTS with database permissions} {
     set target_id [R 1 CLUSTER MYID]
     
-    R 0 ACL SETUSER cluster-migrate-user on nopass +cluster +select ~* db+=0
+    R 0 ACL SETUSER cluster-migrate-user on nopass +cluster +select ~* db=0
     
     set r2 [valkey [srv 0 host] [srv 0 port] 0 $::tls]
     $r2 auth cluster-migrate-user ""
@@ -91,7 +91,7 @@ test {Test CLUSTER MIGRATESLOTS with database permissions} {
 }
 
 test {Test CLUSTER CANCELSLOTMIGRATIONS with database permissions} {
-    R 0 ACL SETUSER cluster-cancel-user on nopass +cluster +select ~* db+=0
+    R 0 ACL SETUSER cluster-cancel-user on nopass +cluster +select ~* db=0
     
     set r2 [valkey [srv 0 host] [srv 0 port] 0 $::tls]
     $r2 auth cluster-cancel-user ""

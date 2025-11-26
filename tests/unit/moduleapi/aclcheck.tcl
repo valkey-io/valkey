@@ -58,7 +58,7 @@ start_server {tags {"modules acl"}} {
     test {test module check acl for db perm} {
         assert_equal [r aclcheck.select.check.db 1] OK
         
-        r acl setuser default resetdbs db+=0,1,2
+        r acl setuser default resetdbs db=0,1,2
         r select 0
 
         assert_equal [r aclcheck.select.check.db 1] OK

@@ -1803,7 +1803,7 @@ static int ACLSelectorCheckCmd(aclSelector *selector,
                 return ACL_DENIED_DB;
             }
         }
-    } else if (!ACLSelectorCanAccessDb(selector, dbid)) {
+    } else if (((cmd->flags & CMD_READONLY) || (cmd->flags & CMD_WRITE)) && !ACLSelectorCanAccessDb(selector, dbid)) {
         if (keyidxptr) *keyidxptr = 0;
         return ACL_DENIED_DB;
     }

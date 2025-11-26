@@ -933,6 +933,69 @@ start_server {tags {"acl external:skip"}} {
         assert_equal "OK" [$r2 select 1]
         catch {$r2 select 2} err
         assert_match "*NOPERM*database*" $err
+
+        # Cleanup
+        $r2 auth default password
+        $r2 select 0
+    }
+
+    test {Test commands without key/metadata access work in restricted databases} {
+        r ACL SETUSER db-keyless-cmd on nopass db=15 +@all ~*
+        $r2 auth db-keyless-cmd password
+        
+        # Commands that don't touch keys/metadata should work
+        set ping_result [$r2 ping]
+        assert {[string length $ping_result] > 0}
+        
+        set ping_msg_result [$r2 ping "hello"]
+        assert {[string length $ping_msg_result] > 0}
+        
+        catch {$r2 acl getuser} err
+        assert_match "*wrong number of arguments*" $err
+        
+        set user_info [$r2 acl getuser db-keyless-cmd]
+        assert {[llength $user_info] > 0}
+        
+        set log_result [$r2 acl log 0]
+        assert {[llength $log_result] >= 0}
+        
+        set info_result [$r2 info server]
+        assert {[string length $info_result] > 0}
+        
+        # Commands that touch keys should fail with NOPERM database error
+        catch {$r2 select 2} err
+        assert_match "*NOPERM*database*" $err
+        
+        catch {$r2 get key} err
+        assert_match "*NOPERM*database*" $err
+        
+        catch {$r2 getdel key} err
+        assert_match "*NOPERM*database*" $err
+        
+        catch {$r2 set key value} err
+        assert_match "*NOPERM*database*" $err
+        
+        catch {$r2 del key} err
+        assert_match "*NOPERM*database*" $err
+        
+        catch {$r2 exists key} err
+        assert_match "*NOPERM*database*" $err
+        
+        catch {$r2 flushdb} err
+        assert_match "*NOPERM*database*" $err
+        
+        # But user can select to db=15 where they have permissions
+        set select_result [$r2 select 15]
+        assert {[string length $select_result] > 0}
+        
+        set set_result [$r2 set key value]
+        assert {[string length $set_result] > 0}
+        
+        set get_result [$r2 get key]
+        assert {[string length $get_result] > 0}
+        
+        catch {$r2 select 0} err
+        assert_match "*NOPERM*database*" $err
     }
     
     $r2 close

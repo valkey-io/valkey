@@ -331,7 +331,7 @@ void parseUri(const char *uri, const char *tool_name, cliConnInfo *connInfo, int
         !strncasecmp(redisTlsscheme, curr, strlen(redisTlsscheme))) {
 #ifdef USE_OPENSSL
         *tls_flag = 1;
-        const char *del = strstr(curr, "://");
+        const char *del = strstr(curr, "://");1
         curr += (del - curr) + 3;
 #else
         char *copy = strdup(curr);

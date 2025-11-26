@@ -3498,7 +3498,7 @@ static int parseMultibulk(client *c,
         if (newline - (c->querybuf + c->qb_pos) > (ssize_t)(sdslen(c->querybuf) - c->qb_pos - 2)) return 0;
 
         /* Check that what follows \r is a real \n */
-        if (newline[1] != '\n') {
+        if (unlikely(newline[1] != '\n')) {
             return READ_FLAGS_ERROR_INVALID_CRLF;
         }
 
@@ -3582,7 +3582,7 @@ static int parseMultibulk(client *c,
             }
 
             /* Check that what follows \r is a real \n */
-            if (newline[1] != '\n') {
+            if (unlikely(newline[1] != '\n')) {
                 return READ_FLAGS_ERROR_INVALID_CRLF;
             }
 
@@ -3642,7 +3642,8 @@ static int parseMultibulk(client *c,
             }
 
             /* Check that what follows argv is a real \r\n */
-            if (c->querybuf[c->qb_pos + c->bulklen] != '\r' || c->querybuf[c->qb_pos + c->bulklen + 1] != '\n') {
+            if (unlikely(c->querybuf[c->qb_pos + c->bulklen] != '\r' ||
+                         c->querybuf[c->qb_pos + c->bulklen + 1] != '\n')) {
                 return READ_FLAGS_ERROR_INVALID_CRLF;
             }
 

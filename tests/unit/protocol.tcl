@@ -164,6 +164,7 @@ start_server {tags {"protocol network"}} {
             } else {
                 set s [socket [srv 0 host] [srv 0 port]]
             }
+            fconfigure $s -translation binary
             puts -nonewline $s $seq
             # PROTO_INLINE_MAX_SIZE is hardcoded in Valkey code to 64K. doing the same here 
             # since we would like to validate it is enforced. 

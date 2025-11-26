@@ -215,7 +215,8 @@ void xorObjectDigest(serverDb *db, robj *keyobj, unsigned char *digest, robj *o)
                 const int len = fpconv_dtoa(node->score, buf);
                 buf[len] = '\0';
                 memset(eledigest, 0, 20);
-                mixDigest(eledigest, node->ele, sdslen(node->ele));
+                sds ele = zslGetNodeElement(node);
+                mixDigest(eledigest, ele, sdslen(ele));
                 mixDigest(eledigest, buf, strlen(buf));
                 xorDigest(digest, eledigest, 20);
             }
@@ -585,7 +586,7 @@ void debugCommand(client *c) {
         /* The default behavior is to remove the current dataset from
          * memory before loading the RDB file, however when MERGE is
          * used together with NOFLUSH, we are able to merge two datasets. */
-        if (flush) emptyData(-1, EMPTYDB_NO_FLAGS, NULL);
+        if (flush) flags |= RDBFLAGS_EMPTY_DATA;
 
         protectClient(c);
         int ret = rdbLoad(server.rdb_filename, NULL, flags);

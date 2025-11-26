@@ -1708,6 +1708,17 @@ void setClusterNodeToInboundClusterLink(clusterNode *node, clusterLink *link) {
     serverAssert(!node->inbound_link);
     node->inbound_link = link;
     link->node = node;
+    if (server.verbosity <= LL_VERBOSE) {
+        char ip[NET_IP_STR_LEN];
+        int port;
+        if (connAddrPeerName(link->conn, ip, sizeof(ip), &port) != -1) {
+            serverLog(LL_VERBOSE, "Bound cluster node %.40s (%s) to connection of client %s:%d",
+                      node->name, node->human_nodename, ip, port);
+        } else {
+            serverLog(LL_VERBOSE, "Error resolving the inbound connection address of node %.40s (%s)",
+                      node->name, node->human_nodename);
+        }
+    }
 }
 
 static void clusterConnAcceptHandler(connection *conn) {
@@ -3833,11 +3844,21 @@ int clusterProcessPacket(clusterLink *link) {
         clusterSendPing(link, CLUSTERMSG_TYPE_PONG);
     }
 
+    if (server.verbosity <= LL_DEBUG) {
+        char ip[NET_IP_STR_LEN];
+        int port;
+        if (connAddrPeerName(link->conn, ip, sizeof(ip), &port) != -1) {
+            serverLog(LL_DEBUG, "%s packet received from: %.40s (%s) from client: %s:%d",
+                      clusterGetMessageTypeString(type),
+                      clusterLinkGetNodeName(link), clusterLinkGetHumanNodeName(link),
+                      ip, port);
+        } else {
+            serverLog(LL_DEBUG, "Error resolving the address of packet sender %.40s (%s)",
+                      clusterLinkGetNodeName(link), clusterLinkGetHumanNodeName(link));
+        }
+    }
     /* PING, PONG, MEET: process config information. */
     if (type == CLUSTERMSG_TYPE_PING || type == CLUSTERMSG_TYPE_PONG || type == CLUSTERMSG_TYPE_MEET) {
-        serverLog(LL_DEBUG, "%s packet received: %.40s", clusterGetMessageTypeString(type),
-                  clusterLinkGetNodeName(link));
-
         if (sender && nodeInMeetState(sender)) {
             /* Once we get a response for MEET from the sender, we can stop sending more MEET. */
             sender->flags &= ~CLUSTER_NODE_MEET;

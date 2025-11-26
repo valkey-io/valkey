@@ -1459,7 +1459,7 @@ int loadSingleAppendOnlyFile(char *filename) {
             if (server.repl_backlog == NULL) createReplicationBacklog();
             rdb_flags |= RDBFLAGS_FEED_REPL;
         }
-        if (rdbLoadRio(&rdb, rdb_flags, &rsi) != C_OK) {
+        if (rdbLoadRio(&rdb, rdb_flags, &rsi) != RDB_OK) {
             if (old_style)
                 serverLog(LL_WARNING, "Error reading the RDB preamble of the AOF file %s, AOF loading aborted",
                           filename);
@@ -1922,7 +1922,7 @@ int rewriteSortedSetObject(rio *r, robj *key, robj *o) {
                     return 0;
                 }
             }
-            sds ele = node->ele;
+            sds ele = zslGetNodeElement(node);
             if (!rioWriteBulkDouble(r, node->score) || !rioWriteBulkString(r, ele, sdslen(ele))) {
                 hashtableResetIterator(&iter);
                 return 0;

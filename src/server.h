@@ -347,8 +347,9 @@ extern int configOOMScoreAdjValuesDefaults[CONFIG_OOM_COUNT];
 
 /* RDB return values for rdbLoad. */
 #define RDB_OK 0
-#define RDB_NOT_EXIST 1 /* RDB file doesn't exist. */
-#define RDB_FAILED 2    /* Failed to load the RDB file. */
+#define RDB_NOT_EXIST 1    /* RDB file doesn't exist. */
+#define RDB_INCOMPATIBLE 2 /* RDB version or signature is not compatible */
+#define RDB_FAILED 3       /* Failed to load the RDB file. */
 
 /* Command doc flags */
 #define CMD_DOC_NONE 0
@@ -1423,7 +1424,6 @@ struct sharedObjectsStruct {
 
 /* ZSETs use a specialized version of Skiplists */
 typedef struct zskiplistNode {
-    sds ele;
     double score;
     struct zskiplistNode *backward;
     struct zskiplistLevel {
@@ -1434,6 +1434,7 @@ typedef struct zskiplistNode {
          * So we use it in order to hold the height of the node, which is the number of levels. */
         unsigned long span;
     } level[];
+    /* After the level[], sds header length (1 byte) and an embedded sds element are stored. */
 } zskiplistNode;
 
 typedef struct zskiplist {
@@ -3275,8 +3276,9 @@ typedef struct {
 
 zskiplist *zslCreate(void);
 void zslFree(zskiplist *zsl);
-zskiplistNode *zslInsert(zskiplist *zsl, double score, sds ele);
+zskiplistNode *zslInsert(zskiplist *zsl, double score, const_sds ele);
 zskiplistNode *zslNthInRange(zskiplist *zsl, zrangespec *range, long n, long *rank);
+sds zslGetNodeElement(const zskiplistNode *x);
 double zzlGetScore(unsigned char *sptr);
 void zzlNext(unsigned char *zl, unsigned char **eptr, unsigned char **sptr);
 void zzlPrev(unsigned char *zl, unsigned char **eptr, unsigned char **sptr);

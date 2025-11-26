@@ -12831,6 +12831,20 @@ int moduleUnload(sds name, const char **errmsg) {
     return moduleUnloadInternal(module, errmsg);
 }
 
+/* Unload all loaded modules from the server.
+ *
+ * This function iterates through all modules registered in the server's
+ * module dictionary and attempts to unload each one by calling
+ * moduleUnloadInternal(). If a module fails to unload (e.g., due to
+ * having active data types, blocked clients, or being used by other modules),
+ * the function logs a warning message but continues attempting to unload
+ * the remaining modules.
+ *
+ * This function is currently only called during server shutdown to ensure
+ * proper cleanup of all module resources. It attempts to unload all modules
+ * on a best-effort basis, and therefore the shutdown process is not interrupted
+ * by module unload failures.
+ */
 void moduleUnloadAllModules(void) {
     dictIterator *di = dictGetSafeIterator(modules);
     dictEntry *de;

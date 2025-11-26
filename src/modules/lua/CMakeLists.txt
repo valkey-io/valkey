@@ -1,7 +1,5 @@
 project(valkeylua)
 
-option(WITHOUT_LUA "Build Valkey without Lua scripting engine")
-
 if (VALKEY_DEBUG_BUILD)
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -W -Wall -fno-common -g -ggdb -std=c99 -O2 -D_GNU_SOURCE")
 else ()

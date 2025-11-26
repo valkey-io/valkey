@@ -16,7 +16,7 @@ add_dependencies(valkey-server generate_commands_def)
 add_dependencies(valkey-server generate_fmtargs_h)
 add_dependencies(valkey-server release_header)
 
-if (NOT WITHOUT_LUA)
+if (BUILD_LUA)
     message(STATUS "Build Lua scripting engine module")
     add_subdirectory(modules/lua)
     add_dependencies(valkey-server valkeylua)
@@ -31,7 +31,7 @@ if (NOT WITHOUT_LUA)
         BUILD_WITH_INSTALL_RPATH TRUE
     )
 endif()
-unset(WITHOUT_LUA CACHE)
+unset(BUILD_LUA CACHE)
 
 if (VALKEY_RELEASE_BUILD)
     # Enable LTO for Release build

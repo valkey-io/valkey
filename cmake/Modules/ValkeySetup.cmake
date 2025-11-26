@@ -293,6 +293,10 @@ endif ()
 # Common compiler flags
 add_valkey_server_compiler_options("-pedantic")
 
+if (NOT BUILD_LUA)
+    message(STATUS "Lua scripting engine is disabled")
+endif()
+
 # ----------------------------------------------------
 # Build options (allocator, tls, rdma et al) - end
 # ----------------------------------------------------

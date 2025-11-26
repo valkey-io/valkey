@@ -33,160 +33,162 @@ start_multiple_servers 3 [list overrides $base_conf] {
 }
 
 foreach use_atomic_slot_migration {0 1} {
-    # start three servers
-    set base_conf [list cluster-enabled yes cluster-node-timeout 1000 cluster-databases 16]
-    start_multiple_servers 3 [list overrides $base_conf] {
 
-        set node1 [srv 0 client]
-        set node2 [srv -1 client]
-        set node3 [srv -2 client]
-        set node3_pid [srv -2 pid]
-        set node3_rd [valkey_deferring_client -2]
+# start three servers
+set base_conf [list cluster-enabled yes cluster-node-timeout 1000 cluster-databases 16]
+start_multiple_servers 3 [list overrides $base_conf] {
 
-        test "Create 3 node cluster (with ASM $use_atomic_slot_migration)" {
-            exec $::VALKEY_CLI_BIN --cluster-yes --cluster create \
-                            127.0.0.1:[srv 0 port] \
-                            127.0.0.1:[srv -1 port] \
-                            127.0.0.1:[srv -2 port]
+    set node1 [srv 0 client]
+    set node2 [srv -1 client]
+    set node3 [srv -2 client]
+    set node3_pid [srv -2 pid]
+    set node3_rd [valkey_deferring_client -2]
 
-            wait_for_condition 1000 50 {
-                [CI 0 cluster_state] eq {ok} &&
-                [CI 1 cluster_state] eq {ok} &&
-                [CI 2 cluster_state] eq {ok}
-            } else {
-                fail "Cluster doesn't stabilize"
-            }
+    test "Create 3 node cluster (with ASM $use_atomic_slot_migration)" {
+        exec $::VALKEY_CLI_BIN --cluster-yes --cluster create \
+                        127.0.0.1:[srv 0 port] \
+                        127.0.0.1:[srv -1 port] \
+                        127.0.0.1:[srv -2 port]
+
+        wait_for_condition 1000 50 {
+            [CI 0 cluster_state] eq {ok} &&
+            [CI 1 cluster_state] eq {ok} &&
+            [CI 2 cluster_state] eq {ok}
+        } else {
+            fail "Cluster doesn't stabilize"
+        }
+    }
+
+    test "Run blocking command on cluster node3 (with ASM $use_atomic_slot_migration)" {
+        # key9184688 is mapped to slot 10923 (first slot of node 3)
+        $node3_rd brpop key9184688 0
+        $node3_rd flush
+
+        wait_for_condition 50 100 {
+            [s -2 blocked_clients] eq {1}
+        } else {
+            fail "Client not blocked"
+        }
+    }
+
+    test "Perform a Resharding (with ASM $use_atomic_slot_migration)" {
+        if {$use_atomic_slot_migration} {
+            exec $::VALKEY_CLI_BIN --cluster-yes --cluster reshard 127.0.0.1:[srv -2 port] \
+                            --cluster-to [$node1 cluster myid] \
+                            --cluster-from [$node3 cluster myid] \
+                            --cluster-slots 1 --cluster-use-atomic-slot-migration
+        } else {
+            exec $::VALKEY_CLI_BIN --cluster-yes --cluster reshard 127.0.0.1:[srv -2 port] \
+                            --cluster-to [$node1 cluster myid] \
+                            --cluster-from [$node3 cluster myid] \
+                            --cluster-slots 1
+        }
+    }
+
+    test "Verify command got unblocked after resharding (with ASM $use_atomic_slot_migration)" {
+        # this (read) will wait for the node3 to realize the new topology
+        assert_error {*MOVED*} {$node3_rd read}
+
+        # verify there are no blocked clients
+        assert_equal [s 0 blocked_clients]  {0}
+        assert_equal [s -1 blocked_clients]  {0}
+        assert_equal [s -2 blocked_clients]  {0}
+    }
+
+    test "Wait for cluster to be stable (with ASM $use_atomic_slot_migration)" {
+        # Cluster check just verifies the config state is self-consistent,
+        # waiting for cluster_state to be okay is an independent check that all the
+        # nodes actually believe each other are healthy, prevent cluster down error.
+        wait_for_condition 1000 50 {
+            [catch {exec $::VALKEY_CLI_BIN --cluster check 127.0.0.1:[srv 0 port]}] == 0 &&
+            [catch {exec $::VALKEY_CLI_BIN --cluster check 127.0.0.1:[srv -1 port]}] == 0 &&
+            [catch {exec $::VALKEY_CLI_BIN --cluster check 127.0.0.1:[srv -2 port]}] == 0 &&
+            [CI 0 cluster_state] eq {ok} &&
+            [CI 1 cluster_state] eq {ok} &&
+            [CI 2 cluster_state] eq {ok}
+        } else {
+            fail "Cluster doesn't stabilize"
+        }
+    }
+
+    set node1_rd [valkey_deferring_client 0]
+
+    test "use previous hostip in \"cluster-preferred-endpoint-type unknown-endpoint\" mode (with ASM $use_atomic_slot_migration)" {
+        
+        # backup and set cluster-preferred-endpoint-type unknown-endpoint
+        set endpoint_type_before_set [lindex [split [$node1 CONFIG GET cluster-preferred-endpoint-type] " "] 1]
+        $node1 CONFIG SET cluster-preferred-endpoint-type unknown-endpoint
+
+        # when valkey-cli not in cluster mode, return MOVE with empty host
+        set slot_for_foo [$node1 CLUSTER KEYSLOT foo]
+        assert_error "*MOVED $slot_for_foo :*" {$node1 set foo bar}
+
+        # when in cluster mode, redirect using previous hostip
+        assert_equal "[exec $::VALKEY_CLI_BIN -h 127.0.0.1 -p [srv 0 port] -c set foo bar]" {OK}
+        assert_match "[exec $::VALKEY_CLI_BIN -h 127.0.0.1 -p [srv 0 port] -c get foo]" {bar}
+
+        assert_equal [$node1 CONFIG SET cluster-preferred-endpoint-type "$endpoint_type_before_set"]  {OK}
+    }
+
+    test "Sanity test push cmd after resharding (with ASM $use_atomic_slot_migration)" {
+        assert_error {*MOVED*} {$node3 lpush key9184688 v1}
+
+        $node1_rd brpop key9184688 0
+        $node1_rd flush
+
+        wait_for_condition 50 100 {
+            [s 0 blocked_clients] eq {1}
+        } else {
+            puts "Client not blocked"
+            puts "read from blocked client: [$node1_rd read]"
+            fail "Client not blocked"
         }
 
-        test "Run blocking command on cluster node3 (with ASM $use_atomic_slot_migration)" {
-            # key9184688 is mapped to slot 10923 (first slot of node 3)
-            $node3_rd brpop key9184688 0
-            $node3_rd flush
+        $node1 lpush key9184688 v2
+        assert_equal {key9184688 v2} [$node1_rd read]
+    }
 
-            wait_for_condition 50 100 {
-                [s -2 blocked_clients] eq {1}
-            } else {
-                fail "Client not blocked"
-            }
+    $node3_rd close
+
+    test "Run blocking command again on cluster node1 (with ASM $use_atomic_slot_migration)" {
+        $node1 del key9184688
+        # key9184688 is mapped to slot 10923 which has been moved to node1
+        $node1_rd brpop key9184688 0
+        $node1_rd flush
+
+        wait_for_condition 50 100 {
+            [s 0 blocked_clients] eq {1}
+        } else {
+            fail "Client not blocked"
         }
+    }
 
-        test "Perform a Resharding (with ASM $use_atomic_slot_migration)" {
-            if {$use_atomic_slot_migration} {
-                exec $::VALKEY_CLI_BIN --cluster-yes --cluster reshard 127.0.0.1:[srv -2 port] \
-                                --cluster-to [$node1 cluster myid] \
-                                --cluster-from [$node3 cluster myid] \
-                                --cluster-slots 1 --cluster-use-atomic-slot-migration
-            } else {
-                exec $::VALKEY_CLI_BIN --cluster-yes --cluster reshard 127.0.0.1:[srv -2 port] \
-                                --cluster-to [$node1 cluster myid] \
-                                --cluster-from [$node3 cluster myid] \
-                                --cluster-slots 1
-            }
+    test "Kill a cluster node and wait for fail state (with ASM $use_atomic_slot_migration)" {
+        # kill node3 in cluster
+        pause_process $node3_pid
+
+        wait_for_condition 1000 50 {
+            [CI 0 cluster_state] eq {fail} &&
+            [CI 1 cluster_state] eq {fail}
+        } else {
+            fail "Cluster doesn't fail"
         }
+    }
 
-        test "Verify command got unblocked after resharding (with ASM $use_atomic_slot_migration)" {
-            # this (read) will wait for the node3 to realize the new topology
-            assert_error {*MOVED*} {$node3_rd read}
+    test "Verify command got unblocked after cluster failure (with ASM $use_atomic_slot_migration)" {
+        assert_error {*CLUSTERDOWN*} {$node1_rd read}
 
-            # verify there are no blocked clients
-            assert_equal [s 0 blocked_clients]  {0}
-            assert_equal [s -1 blocked_clients]  {0}
-            assert_equal [s -2 blocked_clients]  {0}
-        }
+        # verify there are no blocked clients
+        assert_equal [s 0 blocked_clients]  {0}
+        assert_equal [s -1 blocked_clients]  {0}
+    }
 
-        test "Wait for cluster to be stable (with ASM $use_atomic_slot_migration)" {
-            # Cluster check just verifies the config state is self-consistent,
-            # waiting for cluster_state to be okay is an independent check that all the
-            # nodes actually believe each other are healthy, prevent cluster down error.
-            wait_for_condition 1000 50 {
-                [catch {exec $::VALKEY_CLI_BIN --cluster check 127.0.0.1:[srv 0 port]}] == 0 &&
-                [catch {exec $::VALKEY_CLI_BIN --cluster check 127.0.0.1:[srv -1 port]}] == 0 &&
-                [catch {exec $::VALKEY_CLI_BIN --cluster check 127.0.0.1:[srv -2 port]}] == 0 &&
-                [CI 0 cluster_state] eq {ok} &&
-                [CI 1 cluster_state] eq {ok} &&
-                [CI 2 cluster_state] eq {ok}
-            } else {
-                fail "Cluster doesn't stabilize"
-            }
-        }
+    resume_process $node3_pid
+    $node1_rd close
 
-        set node1_rd [valkey_deferring_client 0]
+} ;# stop servers
 
-        test "use previous hostip in \"cluster-preferred-endpoint-type unknown-endpoint\" mode (with ASM $use_atomic_slot_migration)" {
-            
-            # backup and set cluster-preferred-endpoint-type unknown-endpoint
-            set endpoint_type_before_set [lindex [split [$node1 CONFIG GET cluster-preferred-endpoint-type] " "] 1]
-            $node1 CONFIG SET cluster-preferred-endpoint-type unknown-endpoint
-
-            # when valkey-cli not in cluster mode, return MOVE with empty host
-            set slot_for_foo [$node1 CLUSTER KEYSLOT foo]
-            assert_error "*MOVED $slot_for_foo :*" {$node1 set foo bar}
-
-            # when in cluster mode, redirect using previous hostip
-            assert_equal "[exec $::VALKEY_CLI_BIN -h 127.0.0.1 -p [srv 0 port] -c set foo bar]" {OK}
-            assert_match "[exec $::VALKEY_CLI_BIN -h 127.0.0.1 -p [srv 0 port] -c get foo]" {bar}
-
-            assert_equal [$node1 CONFIG SET cluster-preferred-endpoint-type "$endpoint_type_before_set"]  {OK}
-        }
-
-        test "Sanity test push cmd after resharding (with ASM $use_atomic_slot_migration)" {
-            assert_error {*MOVED*} {$node3 lpush key9184688 v1}
-
-            $node1_rd brpop key9184688 0
-            $node1_rd flush
-
-            wait_for_condition 50 100 {
-                [s 0 blocked_clients] eq {1}
-            } else {
-                puts "Client not blocked"
-                puts "read from blocked client: [$node1_rd read]"
-                fail "Client not blocked"
-            }
-
-            $node1 lpush key9184688 v2
-            assert_equal {key9184688 v2} [$node1_rd read]
-        }
-
-        $node3_rd close
-
-        test "Run blocking command again on cluster node1 (with ASM $use_atomic_slot_migration)" {
-            $node1 del key9184688
-            # key9184688 is mapped to slot 10923 which has been moved to node1
-            $node1_rd brpop key9184688 0
-            $node1_rd flush
-
-            wait_for_condition 50 100 {
-                [s 0 blocked_clients] eq {1}
-            } else {
-                fail "Client not blocked"
-            }
-        }
-
-        test "Kill a cluster node and wait for fail state (with ASM $use_atomic_slot_migration)" {
-            # kill node3 in cluster
-            pause_process $node3_pid
-
-            wait_for_condition 1000 50 {
-                [CI 0 cluster_state] eq {fail} &&
-                [CI 1 cluster_state] eq {fail}
-            } else {
-                fail "Cluster doesn't fail"
-            }
-        }
-
-        test "Verify command got unblocked after cluster failure (with ASM $use_atomic_slot_migration)" {
-            assert_error {*CLUSTERDOWN*} {$node1_rd read}
-
-            # verify there are no blocked clients
-            assert_equal [s 0 blocked_clients]  {0}
-            assert_equal [s -1 blocked_clients]  {0}
-        }
-
-        resume_process $node3_pid
-        $node1_rd close
-
-    } ;# stop servers
-}
+} ;# foreach use_atomic_slot_migration
 
 # Test valkey-cli -- cluster create, add-node, call.
 # Test that functions are propagated on add-node
@@ -448,114 +450,115 @@ start_server [list overrides [list cluster-enabled yes cluster-node-timeout 1 cl
 
 foreach use_atomic_slot_migration {0 1} {
 
-    set base_conf [list cluster-enabled yes cluster-node-timeout 1000 cluster-databases 16]
-    start_multiple_servers 3 [list overrides $base_conf] {
+set base_conf [list cluster-enabled yes cluster-node-timeout 1000 cluster-databases 16]
+start_multiple_servers 3 [list overrides $base_conf] {
 
-        set node1 [srv 0 client]
-        set node2 [srv -1 client]
-        set node3 [srv -2 client]
-        set node3_pid [srv -2 pid]
-        set node3_rd [valkey_deferring_client -2]
+    set node1 [srv 0 client]
+    set node2 [srv -1 client]
+    set node3 [srv -2 client]
+    set node3_pid [srv -2 pid]
+    set node3_rd [valkey_deferring_client -2]
 
-        test "Create 3 node cluster (with ASM $use_atomic_slot_migration)" {
-            exec $::VALKEY_CLI_BIN --cluster-yes --cluster create \
-                            127.0.0.1:[srv 0 port] \
-                            127.0.0.1:[srv -1 port] \
-                            127.0.0.1:[srv -2 port]
+    test "Create 3 node cluster (with ASM $use_atomic_slot_migration)" {
+        exec $::VALKEY_CLI_BIN --cluster-yes --cluster create \
+                        127.0.0.1:[srv 0 port] \
+                        127.0.0.1:[srv -1 port] \
+                        127.0.0.1:[srv -2 port]
 
-            wait_for_condition 1000 50 {
-                [CI 0 cluster_state] eq {ok} &&
-                [CI 1 cluster_state] eq {ok} &&
-                [CI 2 cluster_state] eq {ok}
+        wait_for_condition 1000 50 {
+            [CI 0 cluster_state] eq {ok} &&
+            [CI 1 cluster_state] eq {ok} &&
+            [CI 2 cluster_state] eq {ok}
+        } else {
+            fail "Cluster doesn't stabilize"
+        }
+    }
+
+    
+    test "Multi-database fill slot 0  (with ASM $use_atomic_slot_migration)" {
+        # keys {3560}* mapped to slot 0
+        # Iterate over databases 0, 1, 2, and 3.
+        for {set db 0} {$db < 4} {incr db} {
+            # Select the database on node1.            
+            $node1 SELECT $db
+
+            # Insert 100 keys into the current database.
+            for {set i 0} {$i < 100} {incr i} {
+                # Each key uses the hash tag {3560} to ensure it maps to slot 0.
+                set key "{3560}_db${db}_$i"
+                set value "value_db${db}_$i"                
+                $node1 SET $key $value
+            }
+            
+            # Verify the key count in slot 0.
+            set count [$node1 CLUSTER COUNTKEYSINSLOT 0]
+            if { $count != 100 } {
+                fail "For DB $db, expected 100 keys in slot 0, got $count"
+            }
+        }
+    }
+
+    test "Perform a Multi-database Resharding (with ASM $use_atomic_slot_migration)" {
+        # 4 batches to migrate 100 keys
+        for {set i 0} {$i < 4} {incr i} {
+            if {$use_atomic_slot_migration} {
+                exec src/valkey-cli --cluster-yes --cluster reshard 127.0.0.1:[srv 0 port] \
+                                    --cluster-to [$node3 cluster myid] \
+                                    --cluster-from [$node1 cluster myid] \
+                                    --cluster-pipeline 25 \
+                                    --cluster-slots 1 \
+                                    --cluster-use-atomic-slot-migration
             } else {
-                fail "Cluster doesn't stabilize"
+                exec $::VALKEY_CLI_BIN --cluster-yes --cluster reshard 127.0.0.1:[srv 0 port] \
+                                    --cluster-to [$node3 cluster myid] \
+                                    --cluster-from [$node1 cluster myid] \
+                                    --cluster-pipeline 25 \
+                                    --cluster-slots 1
             }
         }
+    }
 
-        
-        test "Multi-database fill slot 0  (with ASM $use_atomic_slot_migration)" {
-            # keys {3560}* mapped to slot 0
-            # Iterate over databases 0, 1, 2, and 3.
-            for {set db 0} {$db < 4} {incr db} {
-                # Select the database on node1.            
-                $node1 SELECT $db
 
-                # Insert 100 keys into the current database.
-                for {set i 0} {$i < 100} {incr i} {
-                    # Each key uses the hash tag {3560} to ensure it maps to slot 0.
-                    set key "{3560}_db${db}_$i"
-                    set value "value_db${db}_$i"                
-                    $node1 SET $key $value
-                }
-                
-                # Verify the key count in slot 0.
-                set count [$node1 CLUSTER COUNTKEYSINSLOT 0]
-                if { $count != 100 } {
-                    fail "For DB $db, expected 100 keys in slot 0, got $count"
-                }
+    test "Verify multi-database slot migrate (with ASM $use_atomic_slot_migration)" {
+
+        # For each database, verify that node3 now holds all 100 keys in slot 0 with correct contents.
+        for {set db 0} {$db < 4} {incr db} {
+            # Select the current database on node3.
+            $node3 SELECT $db
+
+            
+            # First, verify the key count in slot 0 on node 3
+            set count [$node3 CLUSTER COUNTKEYSINSLOT 0]
+            if { $count != 100 } {
+                bp 1
+                fail "For DB $db, expected 100 keys in slot 0 on node3, got $count"
             }
-        }
 
-        test "Perform a Multi-database Resharding (with ASM $use_atomic_slot_migration)" {
-            # 4 batches to migrate 100 keys
-            for {set i 0} {$i < 4} {incr i} {
-                if {$use_atomic_slot_migration} {
-                    exec src/valkey-cli --cluster-yes --cluster reshard 127.0.0.1:[srv 0 port] \
-                                        --cluster-to [$node3 cluster myid] \
-                                        --cluster-from [$node1 cluster myid] \
-                                        --cluster-pipeline 25 \
-                                        --cluster-slots 1 \
-                                        --cluster-use-atomic-slot-migration
-                } else {
-                    exec $::VALKEY_CLI_BIN --cluster-yes --cluster reshard 127.0.0.1:[srv 0 port] \
-                                        --cluster-to [$node3 cluster myid] \
-                                        --cluster-from [$node1 cluster myid] \
-                                        --cluster-pipeline 25 \
-                                        --cluster-slots 1
-                }
+            # First, verify the key count in slot 0 on node 1
+            set count [$node1 CLUSTER COUNTKEYSINSLOT 0]
+            if { $count != 0 } {
+                bp 1
+                fail "For DB $db, expected 100 keys in slot 0 on node3, got $count"
             }
-        }
 
 
-        test "Verify multi-database slot migrate (with ASM $use_atomic_slot_migration)" {
+            # Now verify that each key has the expected value.
+            for {set i 0} {$i < 100} {incr i} {
+                # Construct the key with hash tag {3560} which we used we filling the db
+                set key "{3560}_db${db}_$i"
+                # The expected value is based on the original test.
+                set expected "value_db${db}_$i"
+                # Retrieve the actual value stored on node3.
+                set actual [$node3 GET $key]
 
-            # For each database, verify that node3 now holds all 100 keys in slot 0 with correct contents.
-            for {set db 0} {$db < 4} {incr db} {
-                # Select the current database on node3.
-                $node3 SELECT $db
-
-                
-                # First, verify the key count in slot 0 on node 3
-                set count [$node3 CLUSTER COUNTKEYSINSLOT 0]
-                if { $count != 100 } {
-                    bp 1
-                    fail "For DB $db, expected 100 keys in slot 0 on node3, got $count"
-                }
-
-                # First, verify the key count in slot 0 on node 1
-                set count [$node1 CLUSTER COUNTKEYSINSLOT 0]
-                if { $count != 0 } {
-                    bp 1
-                    fail "For DB $db, expected 100 keys in slot 0 on node3, got $count"
-                }
-
-
-                # Now verify that each key has the expected value.
-                for {set i 0} {$i < 100} {incr i} {
-                    # Construct the key with hash tag {3560} which we used we filling the db
-                    set key "{3560}_db${db}_$i"
-                    # The expected value is based on the original test.
-                    set expected "value_db${db}_$i"
-                    # Retrieve the actual value stored on node3.
-                    set actual [$node3 GET $key]
-
-                    if { $actual ne $expected } {                    
-                        fail "For DB $db, key $key: expected '$expected', got '$actual'"
-                    }
+                if { $actual ne $expected } {                    
+                    fail "For DB $db, key $key: expected '$expected', got '$actual'"
                 }
             }
         }
     }
 }
+
+} ;# foreach use_atomic_slot_migration
 
 }

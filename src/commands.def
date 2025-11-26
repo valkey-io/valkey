@@ -3823,6 +3823,37 @@ struct COMMAND_ARG HGETALL_Args[] = {
 {MAKE_ARG("key",ARG_TYPE_KEY,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
 };
 
+/********** HGETDEL ********************/
+
+#ifndef SKIP_CMD_HISTORY_TABLE
+/* HGETDEL history */
+#define HGETDEL_History NULL
+#endif
+
+#ifndef SKIP_CMD_TIPS_TABLE
+/* HGETDEL tips */
+#define HGETDEL_Tips NULL
+#endif
+
+#ifndef SKIP_CMD_KEY_SPECS_TABLE
+/* HGETDEL key specs */
+keySpec HGETDEL_Keyspecs[1] = {
+{NULL,CMD_KEY_RW|CMD_KEY_ACCESS|CMD_KEY_DELETE,KSPEC_BS_INDEX,.bs.index={1},KSPEC_FK_RANGE,.fk.range={0,1,0}}
+};
+#endif
+
+/* HGETDEL fields argument table */
+struct COMMAND_ARG HGETDEL_fields_Subargs[] = {
+{MAKE_ARG("numfields",ARG_TYPE_INTEGER,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("field",ARG_TYPE_STRING,-1,NULL,NULL,NULL,CMD_ARG_MULTIPLE,0,NULL)},
+};
+
+/* HGETDEL argument table */
+struct COMMAND_ARG HGETDEL_Args[] = {
+{MAKE_ARG("key",ARG_TYPE_KEY,0,NULL,NULL,NULL,CMD_ARG_NONE,0,NULL)},
+{MAKE_ARG("fields",ARG_TYPE_BLOCK,-1,"FIELDS",NULL,NULL,CMD_ARG_NONE,2,NULL),.subargs=HGETDEL_fields_Subargs},
+};
+
 /********** HGETEX ********************/
 
 #ifndef SKIP_CMD_HISTORY_TABLE
@@ -11800,6 +11831,7 @@ struct COMMAND_STRUCT serverCommandTable[] = {
 {MAKE_CMD("hexpiretime","Returns Unix timestamps in seconds since the epoch at which the given key's field(s) will expire","O(N) where N is the number of specified fields.","9.0.0",CMD_DOC_NONE,NULL,NULL,"hash",COMMAND_GROUP_HASH,HEXPIRETIME_History,0,HEXPIRETIME_Tips,0,hexpiretimeCommand,-5,CMD_READONLY|CMD_FAST,ACL_CATEGORY_HASH,HEXPIRETIME_Keyspecs,1,NULL,2),.args=HEXPIRETIME_Args},
 {MAKE_CMD("hget","Returns the value of a field in a hash.","O(1)","2.0.0",CMD_DOC_NONE,NULL,NULL,"hash",COMMAND_GROUP_HASH,HGET_History,0,HGET_Tips,0,hgetCommand,3,CMD_READONLY|CMD_FAST,ACL_CATEGORY_HASH,HGET_Keyspecs,1,NULL,2),.args=HGET_Args},
 {MAKE_CMD("hgetall","Returns all fields and values in a hash.","O(N) where N is the size of the hash.","2.0.0",CMD_DOC_NONE,NULL,NULL,"hash",COMMAND_GROUP_HASH,HGETALL_History,0,HGETALL_Tips,1,hgetallCommand,2,CMD_READONLY,ACL_CATEGORY_HASH,HGETALL_Keyspecs,1,NULL,1),.args=HGETALL_Args},
+{MAKE_CMD("hgetdel","Returns the values of one or more fields and deletes them from a hash.","O(N) where N is the number of fields to be retrieved and deleted.","9.1.0",CMD_DOC_NONE,NULL,NULL,"hash",COMMAND_GROUP_HASH,HGETDEL_History,0,HGETDEL_Tips,0,hgetdelCommand,-5,CMD_WRITE|CMD_FAST,ACL_CATEGORY_HASH,HGETDEL_Keyspecs,1,NULL,2),.args=HGETDEL_Args},
 {MAKE_CMD("hgetex","Get the value of one or more fields of a given hash key, and optionally set their expiration time or time-to-live (TTL).","O(N) where N is the number of specified fields.","9.0.0",CMD_DOC_NONE,NULL,NULL,"hash",COMMAND_GROUP_HASH,HGETEX_History,0,HGETEX_Tips,0,hgetexCommand,-5,CMD_WRITE|CMD_FAST,ACL_CATEGORY_HASH,HGETEX_Keyspecs,1,NULL,3),.args=HGETEX_Args},
 {MAKE_CMD("hincrby","Increments the integer value of a field in a hash by a number. Uses 0 as initial value if the field doesn't exist.","O(1)","2.0.0",CMD_DOC_NONE,NULL,NULL,"hash",COMMAND_GROUP_HASH,HINCRBY_History,0,HINCRBY_Tips,0,hincrbyCommand,4,CMD_WRITE|CMD_DENYOOM|CMD_FAST,ACL_CATEGORY_HASH,HINCRBY_Keyspecs,1,NULL,3),.args=HINCRBY_Args},
 {MAKE_CMD("hincrbyfloat","Increments the floating point value of a field by a number. Uses 0 as initial value if the field doesn't exist.","O(1)","2.6.0",CMD_DOC_NONE,NULL,NULL,"hash",COMMAND_GROUP_HASH,HINCRBYFLOAT_History,0,HINCRBYFLOAT_Tips,0,hincrbyfloatCommand,4,CMD_WRITE|CMD_DENYOOM|CMD_FAST,ACL_CATEGORY_HASH,HINCRBYFLOAT_Keyspecs,1,NULL,3),.args=HINCRBYFLOAT_Args},

@@ -1,0 +1,79 @@
+{
+    "HGETDEL": {
+        "summary": "Returns the values of one or more fields and deletes them from a hash.",
+        "complexity": "O(N) where N is the number of fields to be retrieved and deleted.",
+        "group": "hash",
+        "since": "9.1.0",
+        "arity": -5,
+        "function": "hgetdelCommand",
+        "command_flags": [
+            "WRITE",
+            "FAST"
+        ],
+        "acl_categories": [
+            "HASH"
+        ],
+        "key_specs": [
+            {
+                "flags": [
+                    "RW",
+                    "ACCESS",
+                    "DELETE"
+                ],
+                "begin_search": {
+                    "index": {
+                        "pos": 1
+                    }
+                },
+                "find_keys": {
+                    "range": {
+                        "lastkey": 0,
+                        "step": 1,
+                        "limit": 0
+                    }
+                }
+            }
+        ],
+        "reply_schema": {
+            "description": "List of values associated with the given fields, in the same order as they are requested. Returns nil for fields that do not exist.",
+            "type": "array",
+            "minItems": 1,
+            "items": {
+                "oneOf": [
+                    {
+                        "type": "string"
+                    },
+                    {
+                        "type": "null"
+                    }
+                ]
+            }
+        },
+        "arguments": [
+            {
+                "name": "key",
+                "type": "key",
+                "key_spec_index": 0
+            },
+            {
+                "name": "fields",
+                "token": "FIELDS",
+                "type": "block",
+                "arguments": [
+                    {
+                        "name": "numfields",
+                        "type": "integer",
+                        "key_spec_index": 0,
+                        "multiple": false,
+                        "minimum": 1
+                    },
+                    {
+                        "name": "field",
+                        "type": "string",
+                        "multiple": true
+                    }
+                ]
+            }
+        ]
+    }
+}

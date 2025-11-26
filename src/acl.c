@@ -962,9 +962,9 @@ static void ACLAddAllowedFirstArg(aclSelector *selector, unsigned long id, const
 }
 
 /* Clean up and return error from database permission operations. */
-static int ACLDatabasePermissionError(intset *new_dbs, char *dblist, int error_code) {
+static int ACLDatabasePermissionError(intset *new_dbs, sds dblist, int error_code) {
     if (new_dbs) intsetFree(new_dbs);
-    if (dblist) zfree(dblist);
+    if (dblist) sdsfree(dblist);
     errno = error_code;
     return C_ERR;
 }
@@ -978,40 +978,42 @@ static int ACLSetSelectorDatabasePermissions(aclSelector *selector, const char *
         selector->flags &= ~SELECTOR_FLAG_ALLDBS;
     }
 
-    char *dblist = zstrdup(dbs_str);
+    sds dblist = sdsnew(dbs_str);
+    size_t len = sdslen(dblist);
 
     /* Reject empty list, trailing commas or more than 1 consecutive commas */
-    if (strlen(dblist) == 0 || dblist[0] == ',' ||
-        dblist[strlen(dblist) - 1] == ',' || strstr(dblist, ",,")) {
+    if (len == 0 || dblist[0] == ',' ||
+        dblist[len - 1] == ',' || strstr(dblist, ",,")) {
         return ACLDatabasePermissionError(new_dbs, dblist, EINVAL);
     }
 
-    char *saveptr = NULL;
-    char *token = strtok_r(dblist, ",", &saveptr);
+    int count;
+    sds *tokens = sdssplitlen(dblist, len, ",", 1, &count);
 
-    while (token) {
+    for (int i = 0; i < count; i++) {
         char *endptr = NULL;
         errno = 0;
-        int64_t dbid = strtoll(token, &endptr, 10);
+        int64_t dbid = strtoll(tokens[i], &endptr, 10);
 
-        if (errno == ERANGE || endptr == token || *endptr != '\0' ||
+        if (errno == ERANGE || endptr == tokens[i] || *endptr != '\0' ||
             dbid < 0 || dbid >= server.dbnum) {
+            sdsfreesplitres(tokens, count);
             return ACLDatabasePermissionError(new_dbs, dblist, EINVAL);
         }
 
         /* No error check needed - duplicates will not be added */
         intset *result = intsetAdd(new_dbs, dbid, NULL);
         new_dbs = result;
-
-        token = strtok_r(NULL, ",", &saveptr);
     }
+
+    sdsfreesplitres(tokens, count);
 
     if (selector->dbs) {
         intsetFree(selector->dbs);
     }
     selector->dbs = new_dbs;
 
-    zfree(dblist);
+    sdsfree(dblist);
     return C_OK;
 }
 

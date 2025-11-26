@@ -4814,15 +4814,7 @@ int finishShutdown(void) {
     /* Close the listening sockets. Apparently this allows faster restarts. */
     closeListeningSockets(1);
 
-#ifdef LUA_ENGINE_ENABLED
-    /* Unload Lua engine module */
-    const char *err = NULL;
-    sds name = sdsnew("lua");
-    if (moduleUnload(name, &err) != C_OK) {
-        serverLog(LL_WARNING, "Failed to unload 'lua' module: %s", err);
-    }
-    sdsfree(name);
-#endif
+    moduleUnloadAllModules();
 
     serverLog(LL_WARNING, "%s is now ready to exit, bye bye...", server.sentinel_mode ? "Sentinel" : "Valkey");
     return C_OK;

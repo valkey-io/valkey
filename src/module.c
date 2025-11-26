@@ -12749,6 +12749,56 @@ int moduleLoad(const char *path, void **module_argv, int module_argc, int is_loa
     return C_OK;
 }
 
+static int moduleUnloadInternal(struct ValkeyModule *module) {
+    /* Give module a chance to clean up. */
+    const char *onUnloadNames[] = {"ValkeyModule_OnUnload", "RedisModule_OnUnload"};
+    int (*onunload)(void *) = NULL;
+    for (size_t i = 0; i < sizeof(onUnloadNames) / sizeof(onUnloadNames[0]); i++) {
+        onunload = (int (*)(void *))(unsigned long)dlsym(module->handle, onUnloadNames[i]);
+        if (onunload) {
+            if (i != 0) {
+                serverLog(LL_NOTICE, "Legacy Redis Module %s found", module->name);
+            }
+            break;
+        }
+    }
+
+    if (onunload) {
+        ValkeyModuleCtx ctx;
+        moduleCreateContext(&ctx, module, VALKEYMODULE_CTX_TEMP_CLIENT);
+        int unload_status = onunload((void *)&ctx);
+        moduleFreeContext(&ctx);
+
+        if (unload_status == VALKEYMODULE_ERR) {
+            serverLog(LL_WARNING, "Module %s OnUnload failed. Unload canceled.", module->name);
+            errno = ECANCELED;
+            return C_ERR;
+        }
+    }
+
+    moduleUnregisterCleanup(module);
+
+    /* Unload the dynamic library. */
+    if (dlclose(module->handle) == -1) {
+        char *error = dlerror();
+        if (error == NULL) error = "Unknown error";
+        serverLog(LL_WARNING, "Error when trying to close the %s module: %s", module->name, error);
+    }
+
+    /* Fire the unloaded modules event. */
+    moduleFireServerEvent(VALKEYMODULE_EVENT_MODULE_CHANGE, VALKEYMODULE_SUBEVENT_MODULE_UNLOADED, module);
+
+    /* Remove from list of modules. */
+    serverLog(LL_NOTICE, "Module %s unloaded", module->name);
+    dictDelete(modules, module->name);
+    module->name = NULL; /* The name was already freed by dictDelete(). */
+    moduleFreeModuleStructure(module);
+
+    /* Recompute command bits for all users once the modules has been completely unloaded. */
+    ACLRecomputeCommandBitsFromCommandRulesAllUsers();
+    return C_OK;
+}
+
 /* Unload the module registered with the specified name. On success
  * C_OK is returned, otherwise C_ERR is returned and errmsg is set
  * with an appropriate message. */
@@ -12776,53 +12826,20 @@ int moduleUnload(sds name, const char **errmsg) {
         return C_ERR;
     }
 
-    /* Give module a chance to clean up. */
-    const char *onUnloadNames[] = {"ValkeyModule_OnUnload", "RedisModule_OnUnload"};
-    int (*onunload)(void *) = NULL;
-    for (size_t i = 0; i < sizeof(onUnloadNames) / sizeof(onUnloadNames[0]); i++) {
-        onunload = (int (*)(void *))(unsigned long)dlsym(module->handle, onUnloadNames[i]);
-        if (onunload) {
-            if (i != 0) {
-                serverLog(LL_NOTICE, "Legacy Redis Module %s found", name);
-            }
-            break;
-        }
+    return moduleUnloadInternal(module);
+}
+
+void moduleUnloadAllModules(void) {
+    dictIterator *di = dictGetSafeIterator(modules);
+    dictEntry *de;
+
+    while ((de = dictNext(di)) != NULL) {
+        struct ValkeyModule *module = dictGetVal(de);
+        /* We ignore the return value of `moduleUnloadInternal` here, because
+         * we're shutting down the server. */
+        moduleUnloadInternal(module);
     }
-
-    if (onunload) {
-        ValkeyModuleCtx ctx;
-        moduleCreateContext(&ctx, module, VALKEYMODULE_CTX_TEMP_CLIENT);
-        int unload_status = onunload((void *)&ctx);
-        moduleFreeContext(&ctx);
-
-        if (unload_status == VALKEYMODULE_ERR) {
-            serverLog(LL_WARNING, "Module %s OnUnload failed. Unload canceled.", name);
-            errno = ECANCELED;
-            return C_ERR;
-        }
-    }
-
-    moduleUnregisterCleanup(module);
-
-    /* Unload the dynamic library. */
-    if (dlclose(module->handle) == -1) {
-        char *error = dlerror();
-        if (error == NULL) error = "Unknown error";
-        serverLog(LL_WARNING, "Error when trying to close the %s module: %s", module->name, error);
-    }
-
-    /* Fire the unloaded modules event. */
-    moduleFireServerEvent(VALKEYMODULE_EVENT_MODULE_CHANGE, VALKEYMODULE_SUBEVENT_MODULE_UNLOADED, module);
-
-    /* Remove from list of modules. */
-    serverLog(LL_NOTICE, "Module %s unloaded", module->name);
-    dictDelete(modules, module->name);
-    module->name = NULL; /* The name was already freed by dictDelete(). */
-    moduleFreeModuleStructure(module);
-
-    /* Recompute command bits for all users once the modules has been completely unloaded. */
-    ACLRecomputeCommandBitsFromCommandRulesAllUsers();
-    return C_OK;
+    dictReleaseIterator(di);
 }
 
 void modulePipeReadable(aeEventLoop *el, int fd, void *privdata, int mask) {

@@ -12749,7 +12749,25 @@ int moduleLoad(const char *path, void **module_argv, int module_argc, int is_loa
     return C_OK;
 }
 
-static int moduleUnloadInternal(struct ValkeyModule *module) {
+static int moduleUnloadInternal(struct ValkeyModule *module, const char **errmsg) {
+    if (listLength(module->types)) {
+        *errmsg = "the module exports one or more module-side data "
+                  "types, can't unload";
+        return C_ERR;
+    } else if (listLength(module->usedby)) {
+        *errmsg = "the module exports APIs used by other modules. "
+                  "Please unload them first and try again";
+        return C_ERR;
+    } else if (module->blocked_clients) {
+        *errmsg = "the module has blocked clients. "
+                  "Please wait for them to be unblocked and try again";
+        return C_ERR;
+    } else if (moduleHoldsTimer(module)) {
+        *errmsg = "the module holds timer that is not fired. "
+                  "Please stop the timer or wait until it fires.";
+        return C_ERR;
+    }
+
     /* Give module a chance to clean up. */
     const char *onUnloadNames[] = {"ValkeyModule_OnUnload", "RedisModule_OnUnload"};
     int (*onunload)(void *) = NULL;
@@ -12808,25 +12826,9 @@ int moduleUnload(sds name, const char **errmsg) {
     if (module == NULL) {
         *errmsg = "no such module with that name";
         return C_ERR;
-    } else if (listLength(module->types)) {
-        *errmsg = "the module exports one or more module-side data "
-                  "types, can't unload";
-        return C_ERR;
-    } else if (listLength(module->usedby)) {
-        *errmsg = "the module exports APIs used by other modules. "
-                  "Please unload them first and try again";
-        return C_ERR;
-    } else if (module->blocked_clients) {
-        *errmsg = "the module has blocked clients. "
-                  "Please wait for them to be unblocked and try again";
-        return C_ERR;
-    } else if (moduleHoldsTimer(module)) {
-        *errmsg = "the module holds timer that is not fired. "
-                  "Please stop the timer or wait until it fires.";
-        return C_ERR;
     }
 
-    return moduleUnloadInternal(module);
+    return moduleUnloadInternal(module, errmsg);
 }
 
 void moduleUnloadAllModules(void) {
@@ -12835,9 +12837,11 @@ void moduleUnloadAllModules(void) {
 
     while ((de = dictNext(di)) != NULL) {
         struct ValkeyModule *module = dictGetVal(de);
-        /* We ignore the return value of `moduleUnloadInternal` here, because
-         * we're shutting down the server. */
-        moduleUnloadInternal(module);
+
+        const char *errmsg = NULL;
+        if (moduleUnloadInternal(module, &errmsg) == C_ERR) {
+            serverLog(LL_WARNING, "Failed to unload module %s: %s", module->name, errmsg);
+        }
     }
     dictReleaseIterator(di);
 }

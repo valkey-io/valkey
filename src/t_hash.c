@@ -1054,6 +1054,7 @@ void hdelCommand(client *c) {
 }
 
 void hgetdelCommand(client *c) {
+    /* argv: [0]=HGETDEL, [1]=key, [2]=FIELDS, [3]=numfields, [4...]=fields */
     int fields_index = 4;
     int i, deleted = 0;
     long long num_fields = 0;

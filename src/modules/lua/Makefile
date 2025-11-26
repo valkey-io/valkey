@@ -21,9 +21,9 @@ ifeq ("$(wildcard /usr/lib/libSystem.dylib)","")
 endif
 endif
 
-all: libluaengine.so
+all: libvalkeylua.so
 
-libluaengine.so: $(OBJS) $(LIBS)
+libvalkeylua.so: $(OBJS) $(LIBS)
 	$(CC) -o $@ $(SHOBJ_LDFLAGS) $^
 
 sha1.o: ../../sha1.c

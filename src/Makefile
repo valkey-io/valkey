@@ -254,7 +254,7 @@ endif
 FINAL_CFLAGS+= -I../deps/libvalkey/include -I../deps/linenoise -I../deps/hdr_histogram -I../deps/fpconv
 
 # Lua scripting engine module
-LUA_MODULE_NAME:=modules/lua/libluaengine.so
+LUA_MODULE_NAME:=modules/lua/libvalkeylua.so
 ifeq ($(BUILD_LUA),no)
 	LUA_MODULE=
 	LUA_MODULE_INSTALL=
@@ -263,7 +263,7 @@ else
 	LUA_MODULE_INSTALL=install-lua-module
 
 	current_dir = $(shell pwd)
-	FINAL_CFLAGS+=-DLUA_ENGINE_ENABLED -DLUA_ENGINE_LIB=libluaengine.so
+	FINAL_CFLAGS+=-DLUA_ENGINE_ENABLED -DLUA_ENGINE_LIB=libvalkeylua.so
 ifeq ($(uname_S),Darwin)
 	FINAL_LDFLAGS+= -Wl,-rpath,$(PREFIX)/lib:$(current_dir)/modules/lua
 else

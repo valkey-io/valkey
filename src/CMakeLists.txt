@@ -19,9 +19,10 @@ add_dependencies(valkey-server release_header)
 if (NOT WITHOUT_LUA)
     message(STATUS "Build Lua scripting engine module")
     add_subdirectory(modules/lua)
-    add_dependencies(valkey-server luaengine)
+    add_dependencies(valkey-server valkeylua)
     target_compile_definitions(valkey-server PRIVATE LUA_ENGINE_ENABLED)
-    target_compile_definitions(valkey-server PRIVATE LUA_ENGINE_LIB=libluaengine.so)
+    target_compile_definitions(valkey-server PRIVATE LUA_ENGINE_LIB=libvalkeylua.so)
+    target_link_options(valkey-server PRIVATE -Wl,--disable-new-dtags)
 
     set(VALKEY_INSTALL_RPATH "")
     set_target_properties(valkey-server PROPERTIES

@@ -1,4 +1,4 @@
-project(luaengine)
+project(valkeylua)
 
 option(WITHOUT_LUA "Build Valkey without Lua scripting engine")
 
@@ -15,12 +15,12 @@ set(LUA_ENGINE_SRCS
     debug_lua.c
     list.c)
 
-add_library(luaengine SHARED "${LUA_ENGINE_SRCS}")
+add_library(valkeylua SHARED "${LUA_ENGINE_SRCS}")
 
-add_dependencies(luaengine lualib)
-target_link_libraries(luaengine PRIVATE lualib)
-target_include_directories(luaengine PRIVATE ../../../deps/lua/src)
+add_dependencies(valkeylua lualib)
+target_link_libraries(valkeylua PRIVATE lualib)
+target_include_directories(valkeylua PRIVATE ../../../deps/lua/src)
 
-install(TARGETS luaengine
+install(TARGETS valkeylua
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
 )

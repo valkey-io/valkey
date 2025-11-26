@@ -73,7 +73,7 @@ jobs:
         run: |
           echo "Building latest valkey-benchmark for latest benchmark executable..."
           make distclean || true
-          make -j$(nproc)
+          make -j
           if [[ -f "src/valkey-benchmark" ]]; then
             echo "Successfully built latest valkey-benchmark"
             ls -la src/valkey-benchmark

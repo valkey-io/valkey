@@ -343,15 +343,21 @@ static void resetLuaContext(void *context) {
 
 static int isLuaInsecureAPIEnabled(ValkeyModuleCtx *module_ctx) {
     int result = 0;
-    ValkeyModuleCallReply *reply = ValkeyModule_Call(module_ctx, "CONFIG", "cc", "GET", "lua-enable-insecure-api");
-    if (ValkeyModule_CallReplyType(reply) == VALKEYMODULE_REPLY_ARRAY &&
-        ValkeyModule_CallReplyLength(reply) == 2) {
-        ValkeyModuleCallReply *val = ValkeyModule_CallReplyArrayElement(reply, 1);
-        if (ValkeyModule_CallReplyType(val) == VALKEYMODULE_REPLY_STRING) {
-            const char *val_str = ValkeyModule_CallReplyStringPtr(val, NULL);
-            result = strncmp(val_str, "yes", 3) == 0;
-        }
+    ValkeyModuleCallReply *reply = ValkeyModule_Call(module_ctx, "CONFIG", "ccE", "GET", "lua-enable-insecure-api");
+    if (ValkeyModule_CallReplyType(reply) == VALKEYMODULE_REPLY_ERROR) {
+        ValkeyModule_Log(module_ctx,
+                         "warning",
+                         "Unable to determine 'lua-enable-insecure-api' configuration value: %s",
+                         ValkeyModule_CallReplyStringPtr(reply, NULL));
+        ValkeyModule_FreeCallReply(reply);
+        return 0;
     }
+    ValkeyModule_Assert(ValkeyModule_CallReplyType(reply) == VALKEYMODULE_REPLY_ARRAY &&
+                        ValkeyModule_CallReplyLength(reply) == 2);
+    ValkeyModuleCallReply *val = ValkeyModule_CallReplyArrayElement(reply, 1);
+    ValkeyModule_Assert(ValkeyModule_CallReplyType(val) == VALKEYMODULE_REPLY_STRING);
+    const char *val_str = ValkeyModule_CallReplyStringPtr(val, NULL);
+    result = strncmp(val_str, "yes", 3) == 0;
     ValkeyModule_FreeCallReply(reply);
     return result;
 }

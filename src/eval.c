@@ -494,7 +494,7 @@ static void evalGenericCommand(client *c, int evalsha) {
     int ro = c->cmd->proc == evalRoCommand || c->cmd->proc == evalShaRoCommand;
 
     scriptRunCtx rctx;
-    if (scriptPrepareForRun(&rctx, scriptingEngineGetClient(es->engine), c, sha, es->flags, ro) != C_OK) {
+    if (scriptPrepareForRun(&rctx, es->engine, c, sha, es->flags, ro) != C_OK) {
         return;
     }
     rctx.flags |= SCRIPT_EVAL_MODE; /* mark the current run as EVAL (as opposed to FCALL) so we'll

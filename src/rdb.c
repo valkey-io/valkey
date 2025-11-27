@@ -3952,3 +3952,41 @@ rdbSaveInfo *rdbPopulateSaveInfo(rdbSaveInfo *rsi) {
     }
     return NULL;
 }
+
+/* Restore the replication ID / offset from the RDB file
+ * return 1 if replication ID and offset were restored from the rdbSaveInfo */
+int rdbRestoreOffsetFromSaveInfo(rdbSaveInfo *rsi, bool is_aof_preamble) {
+    int rsi_is_valid = 0;
+    serverAssert(rsi != NULL);
+    if (rsi->repl_id_is_set && rsi->repl_offset != -1 && rsi->repl_stream_db != -1) {
+        /* Note that older implementations may save a repl_stream_db
+         * of -1 inside the RDB file in a wrong way, see more
+         * information in function rdbPopulateSaveInfo. */
+        rsi_is_valid = 1;
+        if (!iAmPrimary()) {
+            memcpy(server.replid, rsi->repl_id, sizeof(server.replid));
+            server.primary_repl_offset = rsi->repl_offset;
+            if (!is_aof_preamble || (!server.primary && !server.cached_primary)) {
+                /* If this is a replica, create a cached primary from this
+                 * information, in order to allow partial resynchronizations
+                 * with primaries. For AOF, only cache the primary if replica
+                 * has not synced to its primary node yet. */
+                replicationCachePrimaryUsingMyself();
+                selectDb(server.cached_primary, rsi->repl_stream_db);
+            }
+        } else {
+            /* If this is a primary, we can save the replication info
+             * as secondary ID and offset, in order to allow replicas
+             * to partial resynchronizations with primaries. */
+            memcpy(server.replid2, rsi->repl_id, sizeof(server.replid));
+            server.second_replid_offset = rsi->repl_offset + 1;
+            /* Rebase primary_repl_offset from rsi.repl_offset. */
+            server.primary_repl_offset += rsi->repl_offset;
+            serverAssert(server.repl_backlog);
+            server.repl_backlog->offset = server.primary_repl_offset - server.repl_backlog->histlen + 1;
+            rebaseReplicationBuffer(rsi->repl_offset);
+            server.repl_no_replicas_since = time(NULL);
+        }
+    }
+    return rsi_is_valid;
+}

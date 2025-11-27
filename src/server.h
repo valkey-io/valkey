@@ -3208,6 +3208,7 @@ void ACLInit(void);
 #define ACL_LOG_CTX_LUA 1
 #define ACL_LOG_CTX_MULTI 2
 #define ACL_LOG_CTX_MODULE 3
+#define ACL_LOG_CTX_SCRIPT 4
 
 /* ACL key permission types */
 #define ACL_READ_PERMISSION (1 << 0)

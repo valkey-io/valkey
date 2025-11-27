@@ -803,6 +803,13 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster} overrides {cluste
                 assert_match "1" [R $target_idx DEL $slot_to_test_tag:my_key]
                 wait_for_countkeysinslot $node_idx $slot_to_test 0
             }
+            test "Let nodes converge after importing key containment tests" {
+                wait_for_condition 50 100 {
+                    [R $target_idx debug digest] eq [R $target_repl_idx debug digest]
+                } else {
+                    fail "Target and its replica have different digests: [R $target_idx debug digest] VS [R $target_repl_idx debug digest]"
+                }
+            }
         }
 
         foreach eviction_policy {

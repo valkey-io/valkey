@@ -201,6 +201,7 @@ typedef struct ValkeyModuleCtx ValkeyModuleCtx;
 #define VALKEYMODULE_CTX_CHANNELS_POS_REQUEST (1 << 8)
 #define VALKEYMODULE_CTX_COMMAND (1 << 9)                /* Context created to serve a command from call() or AOF (which calls cmd->proc directly) */
 #define VALKEYMODULE_CTX_KEYSPACE_NOTIFICATION (1 << 10) /* Context created a keyspace notification event */
+#define VALKEYMODULE_CTX_SCRIPT_EXECUTION (1 << 11)      /* Context created to serve a scripting engine execution */
 
 /* This represents a key opened with VM_OpenKey(). */
 struct ValkeyModuleKey {
@@ -413,6 +414,7 @@ typedef struct ValkeyModuleServerInfoData {
 #define VALKEYMODULE_ARGV_RESPECT_DENY_OOM (1 << 9)
 #define VALKEYMODULE_ARGV_DRY_RUN (1 << 10)
 #define VALKEYMODULE_ARGV_ALLOW_BLOCK (1 << 11)
+#define VALKEYMODULE_ARGV_CALL_REPLY_EXACT (1 << 12)
 
 /* Determine whether the server should signalModifiedKey implicitly.
  * In case 'ctx' has no 'module' member (and therefore no module->options),
@@ -997,7 +999,7 @@ void moduleCreateContext(ValkeyModuleCtx *out_ctx, ValkeyModule *module, int ctx
 void moduleScriptingEngineInitContext(ValkeyModuleCtx *out_ctx,
                                       ValkeyModule *module,
                                       client *client) {
-    moduleCreateContext(out_ctx, module, VALKEYMODULE_CTX_NONE);
+    moduleCreateContext(out_ctx, module, VALKEYMODULE_CTX_SCRIPT_EXECUTION);
     out_ctx->client = client;
 }
 
@@ -6038,6 +6040,8 @@ void VM_FreeCallReply(ValkeyModuleCallReply *reply) {
  * - VALKEYMODULE_REPLY_BIG_NUMBER
  * - VALKEYMODULE_REPLY_VERBATIM_STRING
  * - VALKEYMODULE_REPLY_ATTRIBUTE
+ * - VALKEYMODULE_REPLY_SIMPLE_STRING
+ * - VALKEYMODULE_REPLY_ARRAY_NULL
  * - VALKEYMODULE_REPLY_PROMISE */
 int VM_CallReplyType(ValkeyModuleCallReply *reply) {
     return callReplyType(reply);
@@ -6178,6 +6182,7 @@ ValkeyModuleString *VM_CreateStringFromCallReply(ValkeyModuleCallReply *reply) {
     const char *str;
     switch (callReplyType(reply)) {
     case VALKEYMODULE_REPLY_STRING:
+    case VALKEYMODULE_REPLY_SIMPLE_STRING:
     case VALKEYMODULE_REPLY_ERROR: str = callReplyGetString(reply, &len); return VM_CreateString(ctx, str, len);
     case VALKEYMODULE_REPLY_INTEGER: {
         char buf[64];
@@ -6208,6 +6213,7 @@ void VM_SetContextUser(ValkeyModuleCtx *ctx, const ValkeyModuleUser *user) {
  *     "C" -> VALKEYMODULE_ARGV_RUN_AS_USER
  *     "M" -> VALKEYMODULE_ARGV_RESPECT_DENY_OOM
  *     "K" -> VALKEYMODULE_ARGV_ALLOW_BLOCK
+ *     "X" -> VALKEYMODULE_ARGV_CALL_REPLY_EXACT
  *
  * On error (format specifier error) NULL is returned and nothing is
  * allocated. On success the argument vector is returned. */
@@ -6284,6 +6290,8 @@ robj **moduleCreateArgvFromUserFormat(const char *cmdname, const char *fmt, int 
             if (flags) (*flags) |= (VALKEYMODULE_ARGV_DRY_RUN | VALKEYMODULE_ARGV_CALL_REPLIES_AS_ERRORS);
         } else if (*p == 'K') {
             if (flags) (*flags) |= VALKEYMODULE_ARGV_ALLOW_BLOCK;
+        } else if (*p == 'X') {
+            if (flags) (*flags) |= VALKEYMODULE_ARGV_CALL_REPLY_EXACT;
         } else {
             goto fmterr;
         }
@@ -6375,6 +6383,10 @@ fmterr:
  *              * VM_BlockClient
  *              * VM_GetCurrentUserName
  *
+ *     * 'X' -- Return exact reply types, including the differences between simple
+ *              string and bulk string, and the RESP 2 difference between nulls
+ *              and null arrays.
+ *
  * * **...**: The actual arguments to the command.
  *
  * On success a ValkeyModuleCallReply object is returned, otherwise
@@ -6419,6 +6431,12 @@ ValkeyModuleCallReply *VM_Call(ValkeyModuleCtx *ctx, const char *cmdname, const 
     replicate = flags & VALKEYMODULE_ARGV_REPLICATE;
     error_as_call_replies = flags & VALKEYMODULE_ARGV_CALL_REPLIES_AS_ERRORS;
     va_end(ap);
+
+    int is_running_script = ctx->flags & VALKEYMODULE_CTX_SCRIPT_EXECUTION;
+
+    /* If we're calling a command with a script execution context, then a script
+     * execution runtime must exist.. */
+    serverAssert(!is_running_script || scriptIsRunning());
 
     c = moduleAllocTempClient();
 
@@ -6483,18 +6501,18 @@ ValkeyModuleCallReply *VM_Call(ValkeyModuleCtx *ctx, const char *cmdname, const 
     cmd_flags = getCommandFlags(c);
 
     if (flags & VALKEYMODULE_ARGV_SCRIPT_MODE) {
-        if (scriptIsRunning()) {
+        if (is_running_script) {
             c->flag.module = 0;
             c->flag.script = 1;
         }
 
         /* In script mode, commands with CMD_NOSCRIPT flag are normally forbidden.
          * However, we allow them if both conditions are met:
-         * 1. We're running in the context of a scripting engine (scriptIsRunning())
+         * 1. We're running in the context of a scripting engine running a script
          * 2. The configuration option server.script_disable_deny_script is enabled
          * If either condition is false, we block the command. */
         if ((cmd_flags & CMD_NOSCRIPT)) {
-            if (!scriptIsRunning() || !server.script_disable_deny_script) {
+            if (!is_running_script || !server.script_disable_deny_script) {
                 errno = ESPIPE;
                 if (error_as_call_replies) {
                     reply_error_msg = sdscatfmt(sdsempty(), "command '%S' is not allowed on script mode", c->cmd->fullname);
@@ -6503,7 +6521,7 @@ ValkeyModuleCallReply *VM_Call(ValkeyModuleCtx *ctx, const char *cmdname, const 
             }
         }
 
-        if (scriptIsRunning() && scriptAllowsOOM()) {
+        if (is_running_script && scriptAllowsOOM()) {
             flags &= ~VALKEYMODULE_ARGV_RESPECT_DENY_OOM;
         }
     }
@@ -6558,8 +6576,9 @@ ValkeyModuleCallReply *VM_Call(ValkeyModuleCtx *ctx, const char *cmdname, const 
         int dbid = (c->flag.multi) ? c->mstate->transaction_db_id : (c->db ? c->db->id : -1);
         acl_retval = ACLCheckAllUserCommandPerm(user, c->cmd, c->argv, c->argc, dbid, &acl_errpos);
         if (acl_retval != ACL_OK) {
+            int context = scriptIsRunning() ? ACL_LOG_CTX_SCRIPT : ACL_LOG_CTX_MODULE;
             sds object = (acl_retval == ACL_DENIED_CMD) ? sdsdup(c->cmd->fullname) : sdsdup(c->argv[acl_errpos]->ptr);
-            addACLLogEntry(ctx->client, acl_retval, ACL_LOG_CTX_MODULE, -1, c->user->name, object);
+            addACLLogEntry(ctx->client, acl_retval, context, -1, c->user->name, object);
             if (error_as_call_replies) {
                 /* verbosity should be same as processCommand() in server.c */
                 sds acl_msg = getAclErrorMessage(acl_retval, c->user, c->cmd, c->argv[acl_errpos]->ptr, 0);
@@ -6611,7 +6630,7 @@ ValkeyModuleCallReply *VM_Call(ValkeyModuleCtx *ctx, const char *cmdname, const 
          * Note: For scripts, we consider may-replicate commands as write commands.
          * This also makes it possible to allow read-only scripts to be run during
          * CLIENT PAUSE WRITE. */
-        if (scriptIsRunning() && scriptIsReadOnly() && (cmd_flags & (CMD_WRITE | CMD_MAY_REPLICATE))) {
+        if (is_running_script && scriptIsReadOnly() && (cmd_flags & (CMD_WRITE | CMD_MAY_REPLICATE))) {
             errno = ENOSPC;
             reply_error_msg = sdsnew("Write commands are not allowed from read-only scripts");
             goto cleanup;
@@ -6619,7 +6638,8 @@ ValkeyModuleCallReply *VM_Call(ValkeyModuleCtx *ctx, const char *cmdname, const 
 
         /* If the script already made a modification to the dataset, we can't
          * fail it on unpredictable error state. */
-        if ((scriptIsRunning() && !scriptIsWriteDirty() && cmd_flags & CMD_WRITE) || (!scriptIsRunning() && cmd_flags & CMD_WRITE)) {
+        if ((is_running_script && !scriptIsWriteDirty() && cmd_flags & CMD_WRITE) ||
+            (!is_running_script && cmd_flags & CMD_WRITE)) {
             /* on script mode, if a command is a write command,
              * We will not run it if we encounter disk error
              * or we do not have enough replicas */
@@ -6651,7 +6671,7 @@ ValkeyModuleCallReply *VM_Call(ValkeyModuleCtx *ctx, const char *cmdname, const 
                 goto cleanup;
             }
 
-            if (scriptIsRunning()) {
+            if (is_running_script) {
                 scriptSetWriteDirtyFlag();
             }
         }
@@ -6660,7 +6680,7 @@ ValkeyModuleCallReply *VM_Call(ValkeyModuleCtx *ctx, const char *cmdname, const 
             !(cmd_flags & CMD_STALE)) {
             errno = ESPIPE;
             if (error_as_call_replies) {
-                if (scriptIsRunning()) {
+                if (is_running_script) {
                     reply_error_msg = sdsnew("Can not execute the command on a stale replica");
                 } else {
                     reply_error_msg = sdsdup(shared.primarydownerr->ptr);
@@ -6669,7 +6689,7 @@ ValkeyModuleCallReply *VM_Call(ValkeyModuleCtx *ctx, const char *cmdname, const 
             goto cleanup;
         }
 
-        if (scriptIsRunning() && server.cluster_enabled && !mustObeyClient(ctx->client)) {
+        if (is_running_script && server.cluster_enabled && !mustObeyClient(ctx->client)) {
             if (c->slot != -1 && !scriptAllowsCrossSlot()) {
                 if (scriptGetSlot() == -1) {
                     scriptSetSlot(c->slot);
@@ -6710,7 +6730,7 @@ ValkeyModuleCallReply *VM_Call(ValkeyModuleCtx *ctx, const char *cmdname, const 
 
     if (c->flag.blocked) {
         /* Blocking commands are not allowed when calling commands in scripting engines. */
-        serverAssert(!scriptIsRunning());
+        serverAssert(!is_running_script);
         serverAssert(flags & VALKEYMODULE_ARGV_ALLOW_BLOCK);
         serverAssert(ctx->module);
         ValkeyModuleAsyncRMCallPromise *promise = zmalloc(sizeof(ValkeyModuleAsyncRMCallPromise));
@@ -6737,6 +6757,9 @@ ValkeyModuleCallReply *VM_Call(ValkeyModuleCtx *ctx, const char *cmdname, const 
         c = NULL; /* Make sure not to free the client */
     } else {
         reply = moduleParseReply(c, (ctx->flags & VALKEYMODULE_CTX_AUTO_MEMORY) ? ctx : NULL);
+        if (flags & VALKEYMODULE_ARGV_CALL_REPLY_EXACT) {
+            enableParseExactReplyTypeFlag(reply);
+        }
     }
 
 cleanup:

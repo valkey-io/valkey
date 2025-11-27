@@ -34,6 +34,8 @@
 #include <fcntl.h>
 #include <ctype.h>
 
+#include "script.h"
+
 /* =============================================================================
  * Global state for ACLs
  * ==========================================================================*/
@@ -2722,7 +2724,7 @@ void ACLLoadUsersAtStartup(void) {
 typedef struct ACLLogEntry {
     uint64_t count;             /* Number of times this happened recently. */
     int reason;                 /* Reason for denying the command. ACL_DENIED_*. */
-    int context;                /* Toplevel, Lua or MULTI/EXEC? ACL_LOG_CTX_*. */
+    int context;                /* Toplevel, Lua, Script or MULTI/EXEC? ACL_LOG_CTX_*. */
     sds object;                 /* The key name or command name. */
     sds username;               /* User the client is authenticated with. */
     mstime_t ctime;             /* Milliseconds time of last update to this entry. */
@@ -2833,6 +2835,15 @@ void addACLLogEntry(client *c, int reason, int context, int argpos, sds username
     client *realclient = server.current_client ? server.current_client : c;
 
     le->cinfo = catClientInfoString(sdsempty(), realclient, 0);
+
+    if (context == ACL_LOG_CTX_SCRIPT &&
+        strcmp(scriptGetRunningEngineName(), "LUA") == 0) {
+        /* For backward compatibility, we track that it's Lua using a special
+         * lua ACL log context. Any other scripting language is just "script" in
+         * the ACL log. */
+        context = ACL_LOG_CTX_LUA;
+    }
+
     le->context = context;
 
     /* Try to match this entry with past ones, to see if we can just
@@ -3254,6 +3265,7 @@ void aclCommand(client *c) {
             case ACL_LOG_CTX_MULTI: ctxstr = "multi"; break;
             case ACL_LOG_CTX_LUA: ctxstr = "lua"; break;
             case ACL_LOG_CTX_MODULE: ctxstr = "module"; break;
+            case ACL_LOG_CTX_SCRIPT: ctxstr = "script"; break;
             default: ctxstr = "unknown";
             }
             addReplyBulkCString(c, ctxstr);

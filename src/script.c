@@ -128,7 +128,7 @@ uint64_t scriptFlagsToCmdFlags(uint64_t cmd_flags, uint64_t script_flags) {
 
 /* Prepare the given run ctx for execution */
 int scriptPrepareForRun(scriptRunCtx *run_ctx,
-                        client *engine_client,
+                        scriptingEngine *engine,
                         client *caller,
                         const char *funcname,
                         uint64_t script_flags,
@@ -213,7 +213,9 @@ int scriptPrepareForRun(scriptRunCtx *run_ctx,
         }
     }
 
-    run_ctx->c = engine_client;
+    run_ctx->engine = engine;
+
+    run_ctx->c = scriptingEngineGetClient(engine);
     run_ctx->original_client = caller;
     run_ctx->funcname = funcname;
     run_ctx->slot = caller->slot;
@@ -636,4 +638,9 @@ void scriptSetSlot(int slot) {
 void scriptSetOriginalClientSlot(int slot) {
     serverAssert(scriptIsRunning());
     curr_run_ctx->original_client->slot = slot;
+}
+
+sds scriptGetRunningEngineName(void) {
+    serverAssert(scriptIsRunning());
+    return scriptingEngineGetName(curr_run_ctx->engine);
 }

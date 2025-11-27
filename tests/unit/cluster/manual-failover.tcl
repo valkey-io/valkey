@@ -478,21 +478,21 @@ start_cluster 3 1 {tags {external:skip cluster}} {
         # verify we print the logs.
 
         # Both importing slots and migrating slots are move to R3.
-        set pattern "*Failover occurred in migration source. Update importing source for slot 0 to node $R3_nodeid () in shard $R3_shardid*"
+        set pattern "*Failover occurred in migration source. Update importing source for slot 0 to node $R3_nodeid * in shard $R3_shardid*"
         verify_log_message -1 $pattern $loglines1
-        set pattern "*Failover occurred in migration target. Slot 5462 is now being migrated to node $R3_nodeid () in shard $R3_shardid*"
+        set pattern "*Failover occurred in migration target. Slot 5462 is now being migrated to node $R3_nodeid * in shard $R3_shardid*"
         verify_log_message -1 $pattern $loglines1
 
         # Both slots are move to R3.
         set R0_slots 5462
-        set pattern "*A failover occurred in shard $R3_shardid; node $R0_nodeid () lost $R0_slots slot(s) and failed over to node $R3_nodeid*"
+        set pattern "*A failover occurred in shard $R3_shardid; node $R0_nodeid * lost $R0_slots slot(s) and failed over to node $R3_nodeid*"
         verify_log_message -1 $pattern $loglines1
         verify_log_message -2 $pattern $loglines2
 
         # Both importing slots and migrating slots are move to R3.
-        set pattern "*A failover occurred in migration source. Update importing source of 1 slot(s) to node $R3_nodeid () in shard $R3_shardid*"
+        set pattern "*A failover occurred in migration source. Update importing source of 1 slot(s) to node $R3_nodeid * in shard $R3_shardid*"
         verify_log_message -1 $pattern $loglines1
-        set pattern "*A failover occurred in migration target. Update migrating target of 1 slot(s) to node $R3_nodeid () in shard $R3_shardid*"
+        set pattern "*A failover occurred in migration target. Update migrating target of 1 slot(s) to node $R3_nodeid * in shard $R3_shardid*"
         verify_log_message -1 $pattern $loglines1
 
         R 1 debug disable-cluster-reconnection 0

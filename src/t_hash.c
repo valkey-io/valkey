@@ -1053,6 +1053,57 @@ void hdelCommand(client *c) {
     addReplyLongLong(c, deleted);
 }
 
+void hgetdelCommand(client *c) {
+    /* argv: [0]=HGETDEL, [1]=key, [2]=FIELDS, [3]=numfields, [4...]=fields */
+    int fields_index = 4;
+    int i, deleted = 0;
+    long long num_fields = 0;
+    bool keyremoved = false;
+
+    if (getLongLongFromObjectOrReply(c, c->argv[fields_index - 1], &num_fields, NULL) != C_OK) return;
+
+    /* Check that the parsed fields number matches the real provided number of fields */
+    if (!num_fields || num_fields != (c->argc - fields_index)) {
+        addReplyError(c, "numfields should be greater than 0 and match the provided number of fields");
+        return;
+    }
+
+    /* Don't abort when the key cannot be found. Non-existing keys are empty
+     * hashes, where HGETDEL should respond with a series of null bulks. */
+    robj *o = lookupKeyWrite(c->db, c->argv[1]);
+    if (checkType(c, o, OBJ_HASH)) return;
+
+    bool hash_volatile_items = hashTypeHasVolatileFields(o);
+
+    /* Reply with array of values and delete at the same time */
+    addReplyArrayLen(c, num_fields);
+    for (i = fields_index; i < c->argc; i++) {
+        addHashFieldToReply(c, o, c->argv[i]->ptr);
+
+        /* If hash doesn't exist, continue as already replied with NULL */
+        if (o == NULL) continue;
+        if (hashTypeDelete(o, c->argv[i]->ptr)) {
+            deleted++;
+            if (hashTypeLength(o) == 0) {
+                if (hash_volatile_items) dbUntrackKeyWithVolatileItems(c->db, o);
+                dbDelete(c->db, c->argv[1]);
+                keyremoved = true;
+                o = NULL;
+            }
+        }
+    }
+
+    if (deleted) {
+        if (!keyremoved && hash_volatile_items != hashTypeHasVolatileFields(o)) {
+            dbUpdateObjectWithVolatileItemsTracking(c->db, o);
+        }
+        signalModifiedKey(c, c->db, c->argv[1]);
+        notifyKeyspaceEvent(NOTIFY_HASH, "hdel", c->argv[1], c->db->id);
+        if (keyremoved) notifyKeyspaceEvent(NOTIFY_GENERIC, "del", c->argv[1], c->db->id);
+        server.dirty += deleted;
+    }
+}
+
 void hlenCommand(client *c) {
     robj *o;
 

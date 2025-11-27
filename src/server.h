@@ -3926,6 +3926,7 @@ void hsetnxCommand(client *c);
 void hsetexCommand(client *c);
 void hgetexCommand(client *c);
 void hgetCommand(client *c);
+void hgetdelCommand(client *c);
 void hmgetCommand(client *c);
 void hdelCommand(client *c);
 void hlenCommand(client *c);

@@ -425,10 +425,11 @@ void sortCommandGeneric(client *c, int readonly) {
         if (desc) {
             long zsetlen = hashtableSize(((zset *)sortval->ptr)->ht);
 
-            ln = zsl->tail;
+            ln = zslGetTail(zsl);
             if (start > 0) ln = zslGetElementByRank(zsl, zsetlen - start);
         } else {
-            ln = zsl->level[0].forward;
+            zskiplistNode *zheader = zslGetHeader(zsl);
+            ln = zheader->level[0].forward;
             if (start > 0) ln = zslGetElementByRank(zsl, start + 1);
         }
 

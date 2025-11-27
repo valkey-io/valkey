@@ -248,13 +248,13 @@ static void zslUpdateNode(zskiplist *zsl, zskiplistNode *oldnode, zskiplistNode 
     for (i = 0; i < zslGetHeight(zsl); i++) {
         if (update[i]->level[i].forward == oldnode) update[i]->level[i].forward = newnode;
     }
-    serverAssert(zsl != oldnode);
+    serverAssert(zslGetHeader(zsl) != oldnode);
     if (newnode->level[0].forward) {
         serverAssert(newnode->level[0].forward->backward == oldnode);
         newnode->level[0].forward->backward = newnode;
     } else {
-        serverAssert(zsl->tail == oldnode);
-        zsl->tail = newnode;
+        serverAssert(zslGetTail(zsl) == oldnode);
+        zslSetTail(zsl, newnode);
     }
 }
 
@@ -275,7 +275,7 @@ static void activeDefragZsetNode(void *privdata, void *entry_ref) {
     /* find skiplist pointers that need to be updated if we end up moving the
      * skiplist node. */
     zskiplistNode *update[ZSKIPLIST_MAXLEVEL];
-    zskiplistNode *x = zsl;
+    zskiplistNode *x = zslGetHeader(zsl);
     for (int i = zslGetHeight(zsl) - 1; i >= 0; i--) {
         /* stop when we've reached the end of this level or the next node comes
          * after our target in sorted order */

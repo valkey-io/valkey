@@ -1424,14 +1424,10 @@ struct sharedObjectsStruct {
 
 /* ZSETs use a specialized version of Skiplists */
 typedef struct zskiplistNode {
-    union {
-        double score;         /* Sorting score for node ordering */
-        unsigned long length; /* Number of elements in the skiplist */
-    };
-    union {
-        struct zskiplistNode *backward; /* Pointer to previous node for reverse traversal */
-        struct zskiplistNode *tail;     /* Tail element of the skiplist */
-    };
+    double score;                   /* Sorting score for node ordering */
+    struct zskiplistNode *backward; /* Pointer to previous node for reverse traversal */
+    /* `level` is declared with a size of 1 for compilation, but its actual size is
+     * determined at runtime based on the node's randomly generated height. */
     struct zskiplistLevel {
         struct zskiplistNode *forward;
         /* At each level we keep the span, which is the number of elements which are on the "subtree"
@@ -1439,12 +1435,22 @@ typedef struct zskiplistNode {
          * One exception is the value at level 0. In level 0 the span can only be 1 or 0 (in case the last elements in the list)
          * So we use it in order to hold the height of the node, which is the number of levels. */
         unsigned long span;
-    } level[];
+    } level[1];
     /* For non-header nodes, after the level[], sds header length (1 byte) and an embedded sds element are stored. */
 } zskiplistNode;
 
-/* Actually zskiplist is an alias for zskiplistNode, pointing to header node. */
-typedef struct zskiplistNode zskiplist;
+typedef struct zskiplist {
+    union {
+        struct zskiplistMeta {
+            unsigned long length;       /* Number of elements in the skiplist */
+            struct zskiplistNode *tail; /* Tail element of the skiplist */
+        } meta;
+        struct zskiplistNode header;
+    };
+} zskiplist;
+
+static_assert(sizeof(struct zskiplistMeta) <= offsetof(zskiplistNode, level),
+              "Union overlay requirement: metadata must fit in node header without overlapping level array");
 
 typedef struct zset {
     hashtable *ht;
@@ -3279,6 +3285,11 @@ typedef struct {
 
 zskiplist *zslCreate(void);
 int zslGetHeight(const zskiplist *zsl);
+zskiplistNode *zslGetTail(const zskiplist *zsl);
+void zslSetTail(zskiplist *zsl, zskiplistNode *tail);
+unsigned long zslGetLength(const zskiplist *zsl);
+zskiplistNode *zslGetHeader(zskiplist *zsl);
+size_t zslGetAllocSize(void);
 void zslFree(zskiplist *zsl);
 zskiplistNode *zslInsert(zskiplist *zsl, double score, const_sds ele);
 zskiplistNode *zslNthInRange(zskiplist *zsl, zrangespec *range, long n, long *rank);

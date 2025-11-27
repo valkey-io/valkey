@@ -176,8 +176,10 @@ static inline char *clusterLinkGetNodeName(clusterLink *link) {
 /* By default, a server doesn't have a human-readable nodename unless explicitly
  * assigned by CONFIG SET cluster-announce-human-nodename command or config file
  * edit, so we simply fall back to using the node's IP and port as the nodename.
- * This is only used for logging purpose, so we return either the SDS field or a
- * pointer to a thread-local scratch buffer. */
+ *
+ * WARNING: THIS IS ONLY USED FOR LOGGING PURPOSE.
+ *
+ * Returns either the SDS field or a pointer to a thread-local scratch buffer. */
 char *humanNodename(clusterNode *node) {
     if (sdslen(node->human_nodename) > 0) {
         return node->human_nodename;
@@ -195,12 +197,7 @@ char *humanNodename(clusterNode *node) {
     idx = (idx + 1) % BUF_COUNT;
 
     const int port = server.tls_cluster ? node->tls_port : node->tcp_port;
-    /* Be defensive in case IP is empty. */
-    if (node->ip[0] == '\0') {
-        snprintf(buffer, BUF_SIZE, ":%d", port);
-    } else {
-        snprintf(buffer, BUF_SIZE, "%s:%d", node->ip, port);
-    }
+    formatAddr(buffer, BUF_SIZE, node->ip, port);
     return buffer;
 }
 

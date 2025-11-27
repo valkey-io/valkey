@@ -1748,10 +1748,10 @@ void setClusterNodeToInboundClusterLink(clusterNode *node, clusterLink *link) {
         int port;
         if (connAddrPeerName(link->conn, ip, sizeof(ip), &port) != -1) {
             serverLog(LL_VERBOSE, "Bound cluster node %.40s (%s) to connection of client %s:%d",
-                      node->name, node->human_nodename, ip, port);
+                      node->name, humanNodename(node), ip, port);
         } else {
             serverLog(LL_VERBOSE, "Error resolving the inbound connection address of node %.40s (%s)",
-                      node->name, node->human_nodename);
+                      node->name, humanNodename(node));
         }
     }
 }
@@ -4201,8 +4201,8 @@ int clusterProcessPacket(clusterLink *link) {
                         serverLog(LL_VERBOSE,
                                   "Node %.40s (%s) has old slots configuration, sending "
                                   "an UPDATE message about %.40s (%s)",
-                                  sender->name, sender->human_nodename,
-                                  slot_owner->name, slot_owner->human_nodename);
+                                  sender->name, humanNodename(sender),
+                                  slot_owner->name, humanNodename(slot_owner));
                         clusterSendUpdate(sender->link, slot_owner);
 
                         /* TODO: instead of exiting the loop send every other
@@ -5170,7 +5170,7 @@ void clusterSendFailoverAuthIfNeeded(clusterNode *node, clusterMsg *request) {
             serverLog(LL_WARNING,
                       "Failover auth denied to %.40s (%s): "
                       "slot %d epoch (%llu) > reqConfigEpoch (%llu)",
-                      node->name, node->human_nodename, slot, (unsigned long long)slot_owner->configEpoch,
+                      node->name, humanNodename(node), slot, (unsigned long long)slot_owner->configEpoch,
                       (unsigned long long)requestConfigEpoch);
 
             /* Send an UPDATE message to the replica. After receiving the UPDATE message,
@@ -5179,7 +5179,7 @@ void clusterSendFailoverAuthIfNeeded(clusterNode *node, clusterMsg *request) {
             serverLog(LL_VERBOSE,
                       "Node %.40s (%s) has old slots configuration, sending "
                       "an UPDATE message about %.40s (%s)",
-                      node->name, node->human_nodename, slot_owner->name, slot_owner->human_nodename);
+                      node->name, humanNodename(node), slot_owner->name, humanNodename(slot_owner));
             clusterSendUpdate(node->link, slot_owner);
             return;
         }

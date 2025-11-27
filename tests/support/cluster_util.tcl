@@ -209,14 +209,23 @@ proc cluster_allocate_replicas {masters replicas} {
 
 # Setup method to be executed to configure the cluster before the
 # tests run.
-proc cluster_setup {masters replicas node_count slot_allocator replica_allocator code} {
+proc cluster_setup {masters replicas node_count slot_allocator replica_allocator code options} {
+    # Make it easier to understand how a particular server interacts
+    # with other nodes when reading the server logs by assigning human
+    # nodenames R0, R1, R2 etc.
+    set cluster_setup_default_human_nodename 1
+    # Disable it if the user has explicitly assigned nodenames
+    if {[dict exists $options overrides cluster-announce-human-nodename]} {
+        set cluster_setup_default_human_nodename 0
+    }
+
     set config_epoch 1
     for {set i 0} {$i < $node_count} {incr i} {
         R $i CLUSTER SET-CONFIG-EPOCH $config_epoch
         incr config_epoch
-        # Make it easier to understand how the server interacts with
-        # other nodes when reading the server logs.
-        R $i CONFIG SET cluster-announce-human-nodename "R$i"
+        if {$cluster_setup_default_human_nodename} {
+            R $i CONFIG SET cluster-announce-human-nodename "R$i"
+        }
     }
 
     # Have all nodes meet
@@ -261,7 +270,7 @@ proc start_cluster {masters replicas options code {slot_allocator continuous_slo
     set node_count [expr $masters + $replicas]
 
     # Set the final code to be the tests + cluster setup
-    set code [list cluster_setup $masters $replicas $node_count $slot_allocator $replica_allocator $code]
+    set code [list cluster_setup $masters $replicas $node_count $slot_allocator $replica_allocator $code $options]
 
     # Configure the starting of multiple servers. Set cluster node timeout
     # aggressively since many tests depend on ping/pong messages.

@@ -201,10 +201,10 @@ static struct luaEngineCtx *createEngineContext(ValkeyModuleCtx *ctx) {
                      &lua_engine_ctx->valkey_version,
                      &lua_engine_ctx->valkey_version_num);
 
+    lua_engine_ctx->lua_enable_insecure_api = 0;
+
     initializeLuaState(lua_engine_ctx, VMSE_EVAL);
     initializeLuaState(lua_engine_ctx, VMSE_FUNCTION);
-
-    lua_engine_ctx->lua_enable_insecure_api = 0;
 
     return lua_engine_ctx;
 }
@@ -341,6 +341,21 @@ static void resetLuaContext(void *context) {
 #endif
 }
 
+static int isLuaInsecureAPIEnabled(ValkeyModuleCtx *module_ctx) {
+    int result = 0;
+    ValkeyModuleCallReply *reply = ValkeyModule_Call(module_ctx, "CONFIG", "cc", "GET", "lua-enable-insecure-api");
+    if (ValkeyModule_CallReplyType(reply) == VALKEYMODULE_REPLY_ARRAY &&
+        ValkeyModule_CallReplyLength(reply) == 2) {
+        ValkeyModuleCallReply *val = ValkeyModule_CallReplyArrayElement(reply, 1);
+        if (ValkeyModule_CallReplyType(val) == VALKEYMODULE_REPLY_STRING) {
+            const char *val_str = ValkeyModule_CallReplyStringPtr(val, NULL);
+            result = strncmp(val_str, "yes", 3) == 0;
+        }
+    }
+    ValkeyModule_FreeCallReply(reply);
+    return result;
+}
+
 static ValkeyModuleScriptingEngineCallableLazyEnvReset *luaEngineResetEnv(ValkeyModuleCtx *module_ctx,
                                                                           ValkeyModuleScriptingEngineCtx *engine_ctx,
                                                                           ValkeyModuleScriptingEngineSubsystemType type,
@@ -361,6 +376,8 @@ static ValkeyModuleScriptingEngineCallableLazyEnvReset *luaEngineResetEnv(Valkey
     } else {
         resetLuaContext(lua);
     }
+
+    lua_engine_ctx->lua_enable_insecure_api = isLuaInsecureAPIEnabled(module_ctx);
 
     initializeLuaState(lua_engine_ctx, type);
 
@@ -457,22 +474,6 @@ static void luaEngineDebuggerEnd(ValkeyModuleCtx *module_ctx,
 
 static struct luaEngineCtx *engine_ctx = NULL;
 
-int get_lua_enable_insecure_api_config(const char *name, void *privdata) {
-    VALKEYMODULE_NOT_USED(name);
-    VALKEYMODULE_NOT_USED(privdata);
-    luaEngineCtx *engine_ctx = privdata;
-    return engine_ctx->lua_enable_insecure_api;
-}
-
-int set_lua_enable_insecure_api_config(const char *name, int val, void *privdata, ValkeyModuleString **err) {
-    VALKEYMODULE_NOT_USED(name);
-    VALKEYMODULE_NOT_USED(privdata);
-    VALKEYMODULE_NOT_USED(err);
-    luaEngineCtx *engine_ctx = privdata;
-    engine_ctx->lua_enable_insecure_api = val;
-    return VALKEYMODULE_OK;
-}
-
 int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx,
                         ValkeyModuleString **argv,
                         int argc) {
@@ -487,18 +488,6 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx,
                                            VALKEYMODULE_OPTIONS_HANDLE_ATOMIC_SLOT_MIGRATION);
 
     engine_ctx = createEngineContext(ctx);
-
-    int result = ValkeyModule_RegisterBoolConfig(ctx, "lua-enable-insecure-api", 0,
-                                                 VALKEYMODULE_CONFIG_DEFAULT | VALKEYMODULE_CONFIG_HIDDEN | VALKEYMODULE_CONFIG_PROTECTED,
-                                                 get_lua_enable_insecure_api_config,
-                                                 set_lua_enable_insecure_api_config,
-                                                 NULL,
-                                                 engine_ctx);
-
-    if (result == VALKEYMODULE_ERR) {
-        ValkeyModule_Log(ctx, "warning", "Failed to register lua-enable-insecure-api config (%d)", errno);
-        return VALKEYMODULE_ERR;
-    }
 
     if (ValkeyModule_LoadConfigs(ctx) == VALKEYMODULE_ERR) {
         ValkeyModule_Log(ctx, "warning", "Failed to load LUA module configs");
@@ -521,10 +510,10 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx,
         .debugger_end = luaEngineDebuggerEnd,
     };
 
-    result = ValkeyModule_RegisterScriptingEngine(ctx,
-                                                  LUA_ENGINE_NAME,
-                                                  engine_ctx,
-                                                  &methods);
+    int result = ValkeyModule_RegisterScriptingEngine(ctx,
+                                                      LUA_ENGINE_NAME,
+                                                      engine_ctx,
+                                                      &methods);
 
     if (result == VALKEYMODULE_ERR) {
         ValkeyModule_Log(ctx, "warning", "Failed to register LUA scripting engine");
@@ -532,6 +521,8 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx,
         engine_ctx = NULL;
         return VALKEYMODULE_ERR;
     }
+
+    engine_ctx->lua_enable_insecure_api = isLuaInsecureAPIEnabled(ctx);
 
     return VALKEYMODULE_OK;
 }

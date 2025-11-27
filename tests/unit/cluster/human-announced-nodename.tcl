@@ -2,7 +2,7 @@
 
 # Override cluster-node-timeout: shorten timeout to quickly trigger the failure message
 # Override cluster-announce-human-nodename: cluster nodes in test suite are assigned human nodenames
-#       like R0, R1, R2 etc. So we temporarily turn of the setting so that we can run our test cases here.
+#       like R0, R1, R2 etc. So we temporarily turn off the setting so that we can run our test cases here.
 start_cluster 4 0 {tags {external:skip cluster} overrides {cluster-node-timeout 1000 cluster-announce-human-nodename "''"}} {
     for {set j 0} {$j < [llength $::servers]} {incr j} {
         R $j config set loglevel debug

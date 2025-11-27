@@ -1003,7 +1003,6 @@ void moduleScriptingEngineInitContext(ValkeyModuleCtx *out_ctx,
                                       int add_script_execution_flag,
                                       int add_thread_safe_flag,
                                       client *client) {
-
     /* The VALKEYMODULE_CTX_SCRIPT_EXECUTION requires a non-NULL client */
     serverAssert(!add_script_execution_flag || client != NULL);
 

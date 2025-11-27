@@ -12,6 +12,33 @@
 # Dependencies are stored in the Makefile.dep file. To rebuild this file
 # Just use 'make dep', but this is only needed by developers.
 
+# Override default settings if undefined
+-include .make-settings
+
+define save_var_if_defined
+$(if $($(1)), \
+    echo "ifndef $(1)" >> .tmp.make-settings; \
+    echo "override $(1)=$($(1))" >> .tmp.make-settings; \
+    echo "endif" >> .tmp.make-settings; \
+)
+endef
+
+$(shell \
+    > .tmp.make-settings; \
+    $(call save_var_if_defined,STD) \
+    $(call save_var_if_defined,WARN) \
+    $(call save_var_if_defined,SANITIZER) \
+    $(call save_var_if_defined,OPT) \
+    $(call save_var_if_defined,MALLOC) \
+    $(call save_var_if_defined,BUILD_TLS) \
+    $(call save_var_if_defined,BUILD_RDMA) \
+    $(call save_var_if_defined,USE_SYSTEMD) \
+    $(call save_var_if_defined,CFLAGS) \
+    $(call save_var_if_defined,LDFLAGS) \
+    $(call save_var_if_defined,SERVER_CFLAGS) \
+    $(call save_var_if_defined,SERVER_LDFLAGS) \
+)
+
 release_hdr := $(shell sh -c './mkreleasehdr.sh')
 uname_S := $(shell sh -c 'uname -s 2>/dev/null || echo not')
 uname_M := $(shell sh -c 'uname -m 2>/dev/null || echo not')
@@ -118,9 +145,6 @@ endif
 endif
 endif
 endif
-
-# Override default settings if possible
--include .make-settings
 
 # For added compatibility REDIS_CFLAGS and REDIS_LDFLAGS are also supported.
 ifdef REDIS_CFLAGS
@@ -466,17 +490,7 @@ all-with-unit-tests: all $(ENGINE_UNIT_TESTS)
 .PHONY: all
 
 persist-settings: distclean
-	echo STD=$(STD) >> .make-settings
-	echo WARN=$(WARN) >> .make-settings
-	echo OPT=$(OPT) >> .make-settings
-	echo MALLOC=$(MALLOC) >> .make-settings
-	echo BUILD_TLS=$(BUILD_TLS) >> .make-settings
-	echo BUILD_RDMA=$(BUILD_RDMA) >> .make-settings
-	echo USE_SYSTEMD=$(USE_SYSTEMD) >> .make-settings
-	echo CFLAGS=$(CFLAGS) >> .make-settings
-	echo LDFLAGS=$(LDFLAGS) >> .make-settings
-	echo SERVER_CFLAGS=$(SERVER_CFLAGS) >> .make-settings
-	echo SERVER_LDFLAGS=$(SERVER_LDFLAGS) >> .make-settings
+	mv .tmp.make-settings .make-settings
 	echo PREV_FINAL_CFLAGS=$(FINAL_CFLAGS) >> .make-settings
 	echo PREV_FINAL_LDFLAGS=$(FINAL_LDFLAGS) >> .make-settings
 	-(cd ../deps && $(MAKE) $(DEPENDENCY_TARGETS))

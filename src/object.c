@@ -667,8 +667,9 @@ void dismissZsetObject(robj *o, size_t size_hint) {
         if (size_hint / zsl->length >= server.page_size) {
             zskiplistNode *zn = zsl->tail;
             while (zn != NULL) {
-                dismissSds(zn->ele);
-                zn = zn->backward;
+                zskiplistNode *next = zn->backward;
+                dismissMemory(zn, 0);
+                zn = next;
             }
         }
 
@@ -1190,7 +1191,6 @@ size_t objectComputeSize(robj *key, robj *o, size_t sample_size, int dbid) {
             asize += sizeof(zset) + sizeof(zskiplist) +
                      hashtableMemUsage(ht) + zmalloc_size(zsl->header);
             while (znode != NULL && samples < sample_size) {
-                elesize += sdsAllocSize(znode->ele);
                 elesize += zmalloc_size(znode);
                 samples++;
                 znode = znode->level[0].forward;

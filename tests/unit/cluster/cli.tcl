@@ -275,7 +275,14 @@ test {Migrate the last slot away from a node using valkey-cli} {
         # First we wait for new node to be recognized by entire cluster
         wait_for_cluster_size 4
         
+        # Cluster check just verifies the config state is self-consistent,
+        # waiting for cluster_state to be okay is an independent check that all the
+        # nodes actually believe each other are healthy, prevent cluster down error.
         wait_for_condition 1000 50 {
+            [catch {exec src/valkey-cli --cluster check 127.0.0.1:[srv 0 port]}] == 0 &&
+            [catch {exec src/valkey-cli --cluster check 127.0.0.1:[srv -1 port]}] == 0 &&
+            [catch {exec src/valkey-cli --cluster check 127.0.0.1:[srv -2 port]}] == 0 &&
+            [catch {exec src/valkey-cli --cluster check 127.0.0.1:[srv -3 port]}] == 0 &&
             [CI 0 cluster_state] eq {ok} &&
             [CI 1 cluster_state] eq {ok} &&
             [CI 2 cluster_state] eq {ok} &&

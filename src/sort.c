@@ -435,7 +435,7 @@ void sortCommandGeneric(client *c, int readonly) {
 
         while (rangelen--) {
             serverAssertWithInfo(c, sortval, ln != NULL);
-            sdsele = ln->ele;
+            sdsele = zslGetNodeElement(ln);
             vector[j].obj = createStringObject(sdsele, sdslen(sdsele));
             vector[j].u.score = 0;
             vector[j].u.cmpobj = NULL;
@@ -452,7 +452,8 @@ void sortCommandGeneric(client *c, int readonly) {
         void *next;
         while (hashtableNext(&iter, &next)) {
             zskiplistNode *node = next;
-            vector[j].obj = createStringObject(node->ele, sdslen(node->ele));
+            sds sdsele = zslGetNodeElement(node);
+            vector[j].obj = createStringObject(sdsele, sdslen(sdsele));
             vector[j].u.score = 0;
             vector[j].u.cmpobj = NULL;
             j++;

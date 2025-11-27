@@ -92,7 +92,7 @@ struct scriptRunCtx {
 
 /* Defines a script flags */
 typedef struct scriptFlag {
-    uint64_t flag;
+    ValkeyModuleScriptingEngineScriptFlag flag;
     const char *str;
 } scriptFlag;
 
@@ -127,6 +127,7 @@ int scriptAllowsCrossSlot(void);
 int scriptGetSlot(void);
 void scriptSetSlot(int slot);
 void scriptSetOriginalClientSlot(int slot);
+void scriptClusterSlotStatsInvalidateSlotIfApplicable(void);
 
 sds scriptGetRunningEngineName(void);
 

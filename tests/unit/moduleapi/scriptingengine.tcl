@@ -1,6 +1,6 @@
 set testmodule [file normalize tests/modules/helloscripting.so]
 
-set HELLO_PROGRAM "#!hello name=mylib\nFUNCTION foo\nARGS 0\nRETURN\nFUNCTION bar\nCONSTI 432\nRETURN"
+set HELLO_PROGRAM "#!hello name=mylib\nRFUNCTION foo\nARGS 0\nRETURN\nFUNCTION bar\nCONSTI 432\nRETURN"
 
 start_server {tags {"modules"}} {
     r module load $testmodule
@@ -197,6 +197,16 @@ start_server {tags {"modules"}} {
                 RETURN
             } 0
         }
+
+        r function load {#!hello name=errlib
+                RFUNCTION callcmd
+                CONSTS x
+                CONSTI 43
+                CONSTI 2
+                CALL SET
+                RETURN
+            }
+        assert_error {ERR Write commands are not allowed*} {r fcall callcmd 0}
     }
 
     test {Call server command when OOM} {
@@ -301,6 +311,7 @@ start_server {tags {"modules"}} {
     }
 
     test {List scripting engine functions} {
+        r function flush sync
         r function load replace "#!hello name=mylib\nFUNCTION foobar\nARGS 0\nRETURN"
         r function list
     } {{library_name mylib engine HELLO functions {{name foobar description {} flags {}}}}}

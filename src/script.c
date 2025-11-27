@@ -34,11 +34,11 @@
 #include "module.h"
 
 scriptFlag scripts_flags_def[] = {
-    {.flag = SCRIPT_FLAG_NO_WRITES, .str = "no-writes"},
-    {.flag = SCRIPT_FLAG_ALLOW_OOM, .str = "allow-oom"},
-    {.flag = SCRIPT_FLAG_ALLOW_STALE, .str = "allow-stale"},
-    {.flag = SCRIPT_FLAG_NO_CLUSTER, .str = "no-cluster"},
-    {.flag = SCRIPT_FLAG_ALLOW_CROSS_SLOT, .str = "allow-cross-slot-keys"},
+    {.flag = VMSE_SCRIPT_FLAG_NO_WRITES, .str = "no-writes"},
+    {.flag = VMSE_SCRIPT_FLAG_ALLOW_OOM, .str = "allow-oom"},
+    {.flag = VMSE_SCRIPT_FLAG_ALLOW_STALE, .str = "allow-stale"},
+    {.flag = VMSE_SCRIPT_FLAG_NO_CLUSTER, .str = "no-cluster"},
+    {.flag = VMSE_SCRIPT_FLAG_ALLOW_CROSS_SLOT, .str = "allow-cross-slot-keys"},
     {.flag = 0, .str = NULL}, /* flags array end */
 };
 
@@ -587,7 +587,7 @@ void scriptCall(scriptRunCtx *run_ctx, sds *err) {
     }
     call(c, call_flags);
     serverAssert(c->flag.blocked == 0);
-    clusterSlotStatsInvalidateSlotIfApplicable(run_ctx);
+    scriptClusterSlotStatsInvalidateSlotIfApplicable();
     return;
 
 error:
@@ -643,4 +643,11 @@ void scriptSetOriginalClientSlot(int slot) {
 sds scriptGetRunningEngineName(void) {
     serverAssert(scriptIsRunning());
     return scriptingEngineGetName(curr_run_ctx->engine);
+}
+
+/* For cross-slot scripting, its caller client's slot must be invalidated,
+ * such that its slot-stats aggregation is bypassed. */
+void scriptClusterSlotStatsInvalidateSlotIfApplicable(void) {
+    if (!scriptAllowsCrossSlot()) return;
+    curr_run_ctx->original_client->slot = -1;
 }

@@ -1,7 +1,7 @@
 {
     "HEXPIRETIME": {
         "summary": "Returns Unix timestamps in seconds since the epoch at which the given key's field(s) will expire",
-        "complexity": "O(1) for each field, so O(N) for N items when the command is called with multiple fields.",
+        "complexity": "O(N) where N is the number of specified fields.",
         "group": "hash",
         "since": "9.0.0",
         "arity": -5,

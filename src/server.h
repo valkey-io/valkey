@@ -146,7 +146,7 @@ struct hdr_histogram;
 #define CONFIG_BINDADDR_MAX 16
 #define CONFIG_MIN_RESERVED_FDS 32
 #define CONFIG_DEFAULT_PROC_TITLE_TEMPLATE "{title} {listen-addr} {server-mode}"
-#define DEFAULT_WAIT_BEFORE_RDB_CLIENT_FREE 60      /* Grace period in seconds for replica main \
+#define DEFAULT_WAIT_BEFORE_RDB_CLIENT_FREE 5       /* Grace period in seconds for replica main \
                                                      * channel to establish psync. */
 #define LOADING_PROCESS_EVENTS_INTERVAL_DEFAULT 100 /* Default: 0.1 seconds */
 #if !defined(DEBUG_FORCE_DEFRAG)
@@ -348,8 +348,9 @@ extern int configOOMScoreAdjValuesDefaults[CONFIG_OOM_COUNT];
 
 /* RDB return values for rdbLoad. */
 #define RDB_OK 0
-#define RDB_NOT_EXIST 1 /* RDB file doesn't exist. */
-#define RDB_FAILED 2    /* Failed to load the RDB file. */
+#define RDB_NOT_EXIST 1    /* RDB file doesn't exist. */
+#define RDB_INCOMPATIBLE 2 /* RDB version or signature is not compatible */
+#define RDB_FAILED 3       /* Failed to load the RDB file. */
 
 /* Command doc flags */
 #define CMD_DOC_NONE 0
@@ -1412,7 +1413,7 @@ struct sharedObjectsStruct {
         *loadingerr_variants[2], *slowevalerr_variants[2], *slowscripterr_variants[2], *slowmoduleerr_variants[2],
         *bgsaveerr_variants[2],
         *execaborterr, *noautherr, *noreplicaserr, *busykeyerr, *oomerr, *plus, *messagebulk, *pmessagebulk,
-        *subscribebulk, *unsubscribebulk, *psubscribebulk, *punsubscribebulk, *del, *unlink, *rpop, *lpop, *lpush,
+        *subscribebulk, *unsubscribebulk, *psubscribebulk, *punsubscribebulk, *del, *unlink, *rpop, *lpop, *lpush, *zadd,
         *rpoplpush, *lmove, *blmove, *zpopmin, *zpopmax, *emptyscan, *multi, *exec, *left, *right, *hset, *hdel, *hpexpireat, *hpersist, *srem,
         *xgroup, *xclaim, *script, *replconf, *eval, *cluster, *syncslots, *persist, *set, *pexpireat, *pexpire, *time, *pxat, *absttl,
         *retrycount, *force, *justid, *entriesread, *lastid, *ping, *setid, *keepttl, *load, *createconsumer, *getack,
@@ -1428,7 +1429,6 @@ struct sharedObjectsStruct {
 
 /* ZSETs use a specialized version of Skiplists */
 typedef struct zskiplistNode {
-    sds ele;
     double score;
     struct zskiplistNode *backward;
     struct zskiplistLevel {
@@ -1439,6 +1439,7 @@ typedef struct zskiplistNode {
          * So we use it in order to hold the height of the node, which is the number of levels. */
         unsigned long span;
     } level[];
+    /* After the level[], sds header length (1 byte) and an embedded sds element are stored. */
 } zskiplistNode;
 
 typedef struct zskiplist {
@@ -3228,7 +3229,7 @@ int ACLAuthenticateUser(client *c, robj *username, robj *password, robj **err);
 void addAuthErrReply(client *c, robj *err);
 unsigned long ACLGetCommandID(sds cmdname);
 user *ACLGetUserByName(const char *name, size_t namelen);
-int ACLUserCheckKeyPerm(user *u, const char *key, int keylen, int flags);
+int ACLUserCheckKeyPerm(user *u, const char *key, int keylen, int flags, bool is_prefix);
 int ACLUserCheckChannelPerm(user *u, sds channel, int literal);
 int ACLUserCheckDbPerm(user *u, long long dbid);
 int ACLCheckAllUserCommandPerm(user *u, struct serverCommand *cmd, robj **argv, int argc, int dbid, int *idxptr);
@@ -3286,8 +3287,9 @@ typedef struct {
 
 zskiplist *zslCreate(void);
 void zslFree(zskiplist *zsl);
-zskiplistNode *zslInsert(zskiplist *zsl, double score, sds ele);
+zskiplistNode *zslInsert(zskiplist *zsl, double score, const_sds ele);
 zskiplistNode *zslNthInRange(zskiplist *zsl, zrangespec *range, long n, long *rank);
+sds zslGetNodeElement(const zskiplistNode *x);
 double zzlGetScore(unsigned char *sptr);
 void zzlNext(unsigned char *zl, unsigned char **eptr, unsigned char **sptr);
 void zzlPrev(unsigned char *zl, unsigned char **eptr, unsigned char **sptr);
@@ -3935,6 +3937,7 @@ void hsetnxCommand(client *c);
 void hsetexCommand(client *c);
 void hgetexCommand(client *c);
 void hgetCommand(client *c);
+void hgetdelCommand(client *c);
 void hmgetCommand(client *c);
 void hdelCommand(client *c);
 void hlenCommand(client *c);

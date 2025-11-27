@@ -158,13 +158,14 @@ sds zslGetNodeElement(const zskiplistNode *x) {
 }
 
 /* Helper function to set the height of skiplist. */
-static void zslSetHeight(zskiplist *zsl, int level) {
-    zsl->header.level[0].span = level;
+static void zslSetHeight(zskiplist *zsl, int height) {
+    zsl->header.level[0].span = height;
 }
 
 /* Create a new skiplist. */
 zskiplist *zslCreate(void) {
     zskiplist *zsl = zcalloc(zslGetAllocSize());
+    zslSetHeight(zsl, 1);
     return zsl;
 }
 

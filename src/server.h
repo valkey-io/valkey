@@ -1426,7 +1426,7 @@ struct sharedObjectsStruct {
 typedef struct zskiplistNode {
     double score;                   /* Sorting score for node ordering */
     struct zskiplistNode *backward; /* Pointer to previous node for reverse traversal */
-    /* `level` is declared with a size of 1 for compilation, but its actual size is
+    /* level[] is declared with a size of 1 for compilation, but its actual size is
      * determined at runtime based on the node's randomly generated height. */
     struct zskiplistLevel {
         struct zskiplistNode *forward;

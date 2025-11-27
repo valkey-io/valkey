@@ -189,15 +189,14 @@ char *humanNodename(clusterNode *node) {
      * Use a small ring of thread-local buffers here so that multiple function calls
      * in the same logging statement are safe. */
     enum { BUF_COUNT = 8 };
-    enum { BUF_SIZE = 64 }; /* Long enough to hold "255.255.255.255:65535" */
-    static _Thread_local char buffers[BUF_COUNT][BUF_SIZE];
+    static _Thread_local char buffers[BUF_COUNT][CONN_ADDR_STR_LEN];
     static _Thread_local int idx;
 
     char *buffer = buffers[idx];
     idx = (idx + 1) % BUF_COUNT;
 
     const int port = server.tls_cluster ? node->tls_port : node->tcp_port;
-    formatAddr(buffer, BUF_SIZE, node->ip, port);
+    formatAddr(buffer, CONN_ADDR_STR_LEN, node->ip, port);
     return buffer;
 }
 

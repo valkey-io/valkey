@@ -1257,11 +1257,7 @@ static void updateAnnouncedHostname(clusterNode *node, char *value) {
 }
 
 static void updateAnnouncedHumanNodename(clusterNode *node, char *value) {
-    /* We should only update the human nodename when the provided new
-     * value isn't NULL, otherwise the following function will clear
-     * the human nodename field. */
-    if (value != NULL)
-        updateSdsExtensionField(&node->human_nodename, value);
+    updateSdsExtensionField(&node->human_nodename, value);
 }
 
 static void updateAnnouncedClientIpV4(clusterNode *node, char *value) {
@@ -3330,8 +3326,7 @@ static uint32_t writePingExtensions(clusterMsg *hdr, int gossipcount) {
     }
 
     /* Write simple optional SDS ping extensions. */
-    extensions +=
-        writeSdsPingExtIfNonempty(&totlen, &cursor, CLUSTERMSG_EXT_TYPE_HOSTNAME, myself->hostname);
+    extensions += writeSdsPingExtIfNonempty(&totlen, &cursor, CLUSTERMSG_EXT_TYPE_HOSTNAME, myself->hostname);
     extensions +=
         writeSdsPingExtIfNonempty(&totlen, &cursor, CLUSTERMSG_EXT_TYPE_HUMAN_NODENAME, myself->human_nodename);
     extensions +=

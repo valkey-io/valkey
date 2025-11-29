@@ -66,7 +66,7 @@ export VALKEY_BIN_DIR=\"${CMAKE_BINARY_DIR}/bin\"
     # Reconstruct the full script
     set(new_contents "${shebang_line}${insert_content}${script_body}")
     file(WRITE "${dst}" "${new_contents}")
-    file(CHMOD "${dst}" PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE GROUP_READ WORLD_READ)
+    file(CHMOD "${dst}" PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE)
 endfunction()
 
 copy_runtest_script("runtest")

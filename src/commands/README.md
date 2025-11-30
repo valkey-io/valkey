@@ -137,9 +137,10 @@ following keys. To be safe, assume all of them are optional.
 ACL categories
 -----------------------
 
-The ACL categories specified as `"acl_categories"` the ones that are actually used.
-Note: commands categories should followe rules, they are checked in `utils/generate-command-code.py`
+The ACL categories specified as `"acl_categories"` are the ones that are actually used.
+**Note:** commands categories should follow specific rules that are checked in `utils/generate-command-code.py`
 
+**ACL Category Rules:**
 * Command flag WRITE implies ACL category WRITE.
 * Command flag READONLY and not ACL category SCRIPTING implies ACL category READ.
   "Exclude scripting commands from the RO category."

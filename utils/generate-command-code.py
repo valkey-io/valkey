@@ -94,6 +94,58 @@ def check_command_key_specs(command):
     return True
 
 
+def check_implicit_acl_categories(command):
+    """
+    Validate that ACL categories in JSON files follow rules:
+    
+    Implicit ACL category rules (from setImplicitACLCategories in server.c):
+    1. WRITE flag - WRITE category
+    2. READONLY flag (and NOT SCRIPTING category) - READ category
+    3. ADMIN flag - ADMIN and DANGEROUS categories
+    4. PUBSUB flag - PUBSUB category
+    5. FAST flag - FAST category
+    6. BLOCKING flag - BLOCKING category
+    7. If NOT FAST category - SLOW category
+    """
+    command_flags = set(command.desc.get("command_flags", []))
+    acl_categories = set(command.desc.get("acl_categories", []))
+    
+    errors = []
+    
+    if "WRITE" in command_flags and "WRITE" not in acl_categories:
+        errors.append("WRITE flag requires WRITE category")
+    
+    if "READONLY" in command_flags and "SCRIPTING" not in acl_categories:
+        if "READ" not in acl_categories:
+            errors.append("READONLY flag (without SCRIPTING category) requires READ category")
+    
+    if "ADMIN" in command_flags:
+        if "ADMIN" not in acl_categories:
+            errors.append("ADMIN flag requires ADMIN category")
+        if "DANGEROUS" not in acl_categories:
+            errors.append("ADMIN flag requires DANGEROUS category")
+    
+    if "PUBSUB" in command_flags and "PUBSUB" not in acl_categories:
+        errors.append("PUBSUB flag requires PUBSUB category")
+    
+    if "FAST" in command_flags and "FAST" not in acl_categories:
+        errors.append("FAST flag requires FAST category")
+    
+    if "BLOCKING" in command_flags and "BLOCKING" not in acl_categories:
+        errors.append("BLOCKING flag requires BLOCKING category")
+    
+    if "FAST" not in acl_categories and "SLOW" not in acl_categories:
+        errors.append("Commands without FAST category must have SLOW category")
+    
+    if errors:
+        print("command: %s - ACL category validation errors:" % command.fullname())
+        for error in errors:
+            print("  - %s" % error)
+        return False
+    
+    return True
+
+
 # Globals
 subcommands = {}  # container_name -> dict(subcommand_name -> Subcommand) - Only subcommands
 commands = {}  # command_name -> Command - Only commands
@@ -563,6 +615,13 @@ print("Checking all commands...")
 for command in commands.values():
     if not check_command_key_specs(command):
         check_command_error_counter += 1
+    if not check_implicit_acl_categories(command):
+        check_command_error_counter += 1
+    
+    # Also check subcommands for implicit ACL categories
+    for subcommand in command.subcommands:
+        if not check_implicit_acl_categories(subcommand):
+            check_command_error_counter += 1
 
 if check_command_error_counter != 0:
     print("Error: There are errors in the commands check, please check the above logs.")

@@ -27,6 +27,11 @@
                 "optional": true,
                 "multiple": true
             }
+        ],
+        "acl_categories": [
+            "ADMIN",
+            "DANGEROUS",
+            "SLOW"
         ]
     }
 }

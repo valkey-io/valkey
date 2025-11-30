@@ -3247,22 +3247,6 @@ void commandAddSubcommand(struct serverCommand *parent, struct serverCommand *su
     serverAssert(hashtableAdd(parent->subcommands_ht, subcommand));
 }
 
-/* Set implicit ACl categories (see comment above the definition of
- * struct serverCommand). */
-void setImplicitACLCategories(struct serverCommand *c) {
-    if (c->flags & CMD_WRITE) c->acl_categories |= ACL_CATEGORY_WRITE;
-    /* Exclude scripting commands from the RO category. */
-    if (c->flags & CMD_READONLY && !(c->acl_categories & ACL_CATEGORY_SCRIPTING))
-        c->acl_categories |= ACL_CATEGORY_READ;
-    if (c->flags & CMD_ADMIN) c->acl_categories |= ACL_CATEGORY_ADMIN | ACL_CATEGORY_DANGEROUS;
-    if (c->flags & CMD_PUBSUB) c->acl_categories |= ACL_CATEGORY_PUBSUB;
-    if (c->flags & CMD_FAST) c->acl_categories |= ACL_CATEGORY_FAST;
-    if (c->flags & CMD_BLOCKING) c->acl_categories |= ACL_CATEGORY_BLOCKING;
-
-    /* If it's not @fast is @slow in this binary world. */
-    if (!(c->acl_categories & ACL_CATEGORY_FAST)) c->acl_categories |= ACL_CATEGORY_SLOW;
-}
-
 /* Recursively populate the command structure.
  *
  * On success, the function return C_OK. Otherwise C_ERR is returned and we won't
@@ -3273,10 +3257,6 @@ int populateCommandStructure(struct serverCommand *c) {
 
     /* If the command marks with CMD_ONLY_SENTINEL, it only exists in sentinel. */
     if (c->flags & CMD_ONLY_SENTINEL && !server.sentinel_mode) return C_ERR;
-
-    /* Translate the command string flags description into an actual
-     * set of flags. */
-    setImplicitACLCategories(c);
 
     /* We start with an unallocated histogram and only allocate memory when a command
      * has been issued for the first time */

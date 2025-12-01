@@ -1602,7 +1602,7 @@ uint32_t objectGetIdleness(robj *o) {
 int objectSetLRUOrLFU(robj *val, long long lfu_freq, long long lru_idle_secs) {
     if (lrulfu_isUsingLFU()) {
         if (lfu_freq >= 0) {
-            serverAssert(lfu_freq <= 255);
+            serverAssert(lfu_freq <= UINT8_MAX);
             val->lru = lfu_import((uint8_t)lfu_freq);
             return 1;
         }

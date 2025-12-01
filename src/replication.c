@@ -862,11 +862,17 @@ int primaryTryPartialResynchronization(client *c, long long psync_offset) {
     /* We still have the data our replica is asking for? */
     if (!server.repl_backlog || psync_offset < server.repl_backlog->offset ||
         psync_offset > (server.repl_backlog->offset + server.repl_backlog->histlen)) {
-        serverLog(LL_NOTICE,
-                  "Unable to partial resync with replica %s for lack of backlog (Replica request was %s:%lld, "
-                  "and I can only reply with the range [%lld, %lld]).",
-                  replicationGetReplicaName(c), primary_replid, psync_offset, server.repl_backlog->offset,
-                  server.repl_backlog->offset + server.repl_backlog->histlen);
+        if (!server.repl_backlog) {
+            serverLog(LL_NOTICE,
+                      "Unable to partial resync with replica %s for lack of backlog (Replica request was: %s:%lld).",
+                      replicationGetReplicaName(c), primary_replid, psync_offset);
+        } else {
+            serverLog(LL_NOTICE,
+                      "Unable to partial resync with replica %s for lack of backlog (Replica request was %s:%lld, "
+                      "and I can only reply with the range [%lld, %lld]).",
+                      replicationGetReplicaName(c), primary_replid, psync_offset, server.repl_backlog->offset,
+                      server.repl_backlog->offset + server.repl_backlog->histlen);
+        }
         if (psync_offset > server.primary_repl_offset) {
             serverLog(LL_WARNING,
                       "Warning: replica %s tried to PSYNC with an offset (%lld) that is greater than "

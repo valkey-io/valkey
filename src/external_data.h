@@ -58,6 +58,12 @@ int externalStorageDeleteKey(int dbid, robj *key, robj **value);
 /* Delete a key from external filter for a specific database */
 int externalFilterDeleteKey(int dbid, robj *key, robj **value);
 
+/* Flush external data for a specific database */
+void externalDataFlushDb(int dbid);
+
+/* Flush external data for all databases */
+void externalDataFlushAll(void);
+
 /* Utility functions */
 sds getDBName(int db_num);
 

@@ -919,3 +919,292 @@ start_server [list overrides [list "ext-data-mode" kv "loglevel" debug "maxmemor
         assert_equal "test_value2" [r get "test_key2" ext]
     }
 }
+
+# Test FLUSHDB command with external storage
+# FLUSHDB should clean external data for the current database only
+start_server [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [list "external:skip"]] {
+    test {FLUSHDB cleans external data for current database only} {
+        # Load module and initialize external storage for multiple databases
+        assert_equal {OK} [r module load $extdatamodule1]
+        assert_equal {OK} [r external_data INIT db0 helloextdata1]
+        assert_equal {OK} [r external_data INIT db1 helloextdata1]
+        
+        # Set keys in db0
+        r select 0
+        assert_equal {OK} [r set key0_1 value0_1 ext]
+        assert_equal {OK} [r set key0_2 value0_2 ext]
+        assert_equal {OK} [r set mem_key0 mem_value0]
+        
+        # Set keys in db1
+        r select 1
+        assert_equal {OK} [r set key1_1 value1_1 ext]
+        assert_equal {OK} [r set key1_2 value1_2 ext]
+        assert_equal {OK} [r set mem_key1 mem_value1]
+        
+        # Verify all keys exist before flush
+        r select 0
+        assert_equal value0_1 [r get key0_1 ext]
+        assert_equal value0_2 [r get key0_2 ext]
+        assert_equal mem_value0 [r get mem_key0]
+        r select 1
+        assert_equal value1_1 [r get key1_1 ext]
+        assert_equal value1_2 [r get key1_2 ext]
+        assert_equal mem_value1 [r get mem_key1]
+        
+        # Flush db0
+        r select 0
+        assert_equal {OK} [r flushdb]
+        
+        # Verify db0 external data is cleaned
+        assert_equal {} [r get key0_1 ext]
+        assert_equal {} [r get key0_2 ext]
+        assert_equal {} [r get mem_key0]
+        
+        # Verify db1 external data is NOT cleaned
+        r select 1
+        assert_equal value1_1 [r get key1_1 ext]
+        assert_equal value1_2 [r get key1_2 ext]
+        assert_equal mem_value1 [r get mem_key1]
+    }
+    
+    test {FLUSHDB ASYNC cleans external data for current database only} {
+        # Set keys in db0
+        r select 0
+        assert_equal {OK} [r set async_key0_1 async_value0_1 ext]
+        assert_equal {OK} [r set async_key0_2 async_value0_2 ext]
+        
+        # Set keys in db1
+        r select 1
+        assert_equal {OK} [r set async_key1_1 async_value1_1 ext]
+        
+        # Verify all keys exist
+        r select 0
+        assert_equal async_value0_1 [r get async_key0_1 ext]
+        assert_equal async_value0_2 [r get async_key0_2 ext]
+        r select 1
+        assert_equal async_value1_1 [r get async_key1_1 ext]
+        
+        # Flush db0 async
+        r select 0
+        assert_equal {OK} [r flushdb async]
+        
+        # Verify db0 external data is cleaned
+        assert_equal {} [r get async_key0_1 ext]
+        assert_equal {} [r get async_key0_2 ext]
+        
+        # Verify db1 external data is NOT cleaned
+        r select 1
+        assert_equal async_value1_1 [r get async_key1_1 ext]
+    }
+}
+
+# Test FLUSHALL command with external storage
+# FLUSHALL should clean external data for ALL databases
+start_server [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [list "external:skip"]] {
+    test {FLUSHALL cleans external data for all databases} {
+        # Load module and initialize external storage for multiple databases
+        assert_equal {OK} [r module load $extdatamodule1]
+        assert_equal {OK} [r external_data INIT db0 helloextdata1]
+        assert_equal {OK} [r external_data INIT db1 helloextdata1]
+        assert_equal {OK} [r external_data INIT db2 helloextdata1]
+        
+        # Set keys in db0
+        r select 0
+        assert_equal {OK} [r set all_key0_1 all_value0_1 ext]
+        assert_equal {OK} [r set all_key0_2 all_value0_2 ext]
+        assert_equal {OK} [r set all_mem_key0 all_mem_value0]
+        
+        # Set keys in db1
+        r select 1
+        assert_equal {OK} [r set all_key1_1 all_value1_1 ext]
+        assert_equal {OK} [r set all_key1_2 all_value1_2 ext]
+        assert_equal {OK} [r set all_mem_key1 all_mem_value1]
+        
+        # Set keys in db2
+        r select 2
+        assert_equal {OK} [r set all_key2_1 all_value2_1 ext]
+        assert_equal {OK} [r set all_mem_key2 all_mem_value2]
+        
+        # Verify all keys exist before flush
+        r select 0
+        assert_equal all_value0_1 [r get all_key0_1 ext]
+        assert_equal all_value0_2 [r get all_key0_2 ext]
+        assert_equal all_mem_value0 [r get all_mem_key0]
+        r select 1
+        assert_equal all_value1_1 [r get all_key1_1 ext]
+        assert_equal all_value1_2 [r get all_key1_2 ext]
+        assert_equal all_mem_value1 [r get all_mem_key1]
+        r select 2
+        assert_equal all_value2_1 [r get all_key2_1 ext]
+        assert_equal all_mem_value2 [r get all_mem_key2]
+        
+        # Execute FLUSHALL
+        assert_equal {OK} [r flushall]
+        
+        # Verify all external data is cleaned across all databases
+        r select 0
+        assert_equal {} [r get all_key0_1 ext]
+        assert_equal {} [r get all_key0_2 ext]
+        assert_equal {} [r get all_mem_key0]
+        r select 1
+        assert_equal {} [r get all_key1_1 ext]
+        assert_equal {} [r get all_key1_2 ext]
+        assert_equal {} [r get all_mem_key1]
+        r select 2
+        assert_equal {} [r get all_key2_1 ext]
+        assert_equal {} [r get all_mem_key2]
+    }
+    
+    test {FLUSHALL ASYNC cleans external data for all databases} {
+        # Set keys in db0
+        r select 0
+        assert_equal {OK} [r set async_all_key0 async_all_value0 ext]
+        
+        # Set keys in db1
+        r select 1
+        assert_equal {OK} [r set async_all_key1 async_all_value1 ext]
+        
+        # Verify all keys exist
+        r select 0
+        assert_equal async_all_value0 [r get async_all_key0 ext]
+        r select 1
+        assert_equal async_all_value1 [r get async_all_key1 ext]
+        
+        # Execute FLUSHALL ASYNC
+        assert_equal {OK} [r flushall async]
+        
+        # Verify all external data is cleaned
+        r select 0
+        assert_equal {} [r get async_all_key0 ext]
+        r select 1
+        assert_equal {} [r get async_all_key1 ext]
+    }
+}
+
+# Test FLUSHDB with cluster mode
+start_cluster 1 0 [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [list "external:skip" "cluster"]] {
+    set extdatamodule1 [file normalize tests/modules/extstorage/extdata1.so]
+    
+    test {FLUSHDB cleans external data for current database only (cluster)} {
+        wait_for_cluster_state ok
+        
+        # Load module and initialize external storage
+        assert_equal {OK} [r module load $extdatamodule1]
+        assert_equal {OK} [r external_data INIT db0 helloextdata1]
+        assert_equal {OK} [r external_data INIT db1 helloextdata1]
+        
+        # Set keys in db0
+        r select 0
+        assert_equal {OK} [r set cluster_key0_1 cluster_value0_1 ext]
+        assert_equal {OK} [r set cluster_key0_2 cluster_value0_2 ext]
+        
+        # Set keys in db1
+        r select 1
+        assert_equal {OK} [r set cluster_key1_1 cluster_value1_1 ext]
+        
+        # Verify keys exist
+        r select 0
+        assert_equal cluster_value0_1 [r get cluster_key0_1 ext]
+        assert_equal cluster_value0_2 [r get cluster_key0_2 ext]
+        r select 1
+        assert_equal cluster_value1_1 [r get cluster_key1_1 ext]
+        
+        # Flush db0
+        r select 0
+        assert_equal {OK} [r flushdb]
+        
+        # Verify db0 external data is cleaned
+        assert_equal {} [r get cluster_key0_1 ext]
+        assert_equal {} [r get cluster_key0_2 ext]
+        
+        # Verify db1 external data is NOT cleaned
+        r select 1
+        assert_equal cluster_value1_1 [r get cluster_key1_1 ext]
+    }
+}
+
+# Test FLUSHALL with cluster mode
+start_cluster 1 0 [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [list "external:skip" "cluster"]] {
+    set extdatamodule1 [file normalize tests/modules/extstorage/extdata1.so]
+    
+    test {FLUSHALL cleans external data for all databases (cluster)} {
+        wait_for_cluster_state ok
+        
+        # Load module and initialize external storage
+        assert_equal {OK} [r module load $extdatamodule1]
+        assert_equal {OK} [r external_data INIT db0 helloextdata1]
+        assert_equal {OK} [r external_data INIT db1 helloextdata1]
+        
+        # Set keys in db0
+        r select 0
+        assert_equal {OK} [r set cluster_all_key0 cluster_all_value0 ext]
+        
+        # Set keys in db1
+        r select 1
+        assert_equal {OK} [r set cluster_all_key1 cluster_all_value1 ext]
+        
+        # Verify keys exist
+        r select 0
+        assert_equal cluster_all_value0 [r get cluster_all_key0 ext]
+        r select 1
+        assert_equal cluster_all_value1 [r get cluster_all_key1 ext]
+        
+        # Execute FLUSHALL
+        assert_equal {OK} [r flushall]
+        
+        # Verify all external data is cleaned
+        r select 0
+        assert_equal {} [r get cluster_all_key0 ext]
+        r select 1
+        assert_equal {} [r get cluster_all_key1 ext]
+    }
+}
+
+# Performance test for FLUSHDB with large dataset
+# This test demonstrates the O(n) limitation of the current implementation
+# Tag: addon - can be run separately with ./runtest --tags addon
+start_server [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [list "external:skip" "addon"]] {
+    test {FLUSHDB performance with large dataset (should complete in under 500ms)} {
+        # Load module and initialize external storage
+        assert_equal {OK} [r module load $extdatamodule1]
+        assert_equal {OK} [r external_data INIT db0 helloextdata1]
+        r select 0
+        
+        # Insert a large number of keys into external storage
+        # Using 100,000 keys to demonstrate the O(n) performance issue
+        set num_keys 100000
+        puts "Inserting $num_keys keys into external storage..."
+        
+        set insert_start [clock milliseconds]
+        for {set i 0} {$i < $num_keys} {incr i} {
+            r set perf_key_$i perf_value_$i ext
+        }
+        set insert_end [clock milliseconds]
+        set insert_time [expr {$insert_end - $insert_start}]
+        puts "Insert time: ${insert_time}ms for $num_keys keys"
+        
+        # Verify some keys exist
+        assert_equal perf_value_0 [r get perf_key_0 ext]
+        assert_equal perf_value_[expr {$num_keys - 1}] [r get perf_key_[expr {$num_keys - 1}] ext]
+        
+        # Measure FLUSHDB performance
+        puts "Executing FLUSHDB..."
+        set flush_start [clock milliseconds]
+        assert_equal {OK} [r flushdb]
+        set flush_end [clock milliseconds]
+        set flush_time [expr {$flush_end - $flush_start}]
+        
+        puts "FLUSHDB time: ${flush_time}ms for $num_keys keys"
+        
+        # Verify all keys are deleted
+        assert_equal {} [r get perf_key_0 ext]
+        assert_equal {} [r get perf_key_[expr {$num_keys - 1}] ext]
+        
+        # Assert FLUSHDB completes in under 500ms
+        # This will FAIL with the current O(n) implementation
+        # demonstrating the need for a more efficient flush mechanism (e.g., native flush API)
+        if {$flush_time >= 500} {
+            fail "FLUSHDB took ${flush_time}ms, expected < 500ms (demonstrates O(n) limitation - needs native flush API)"
+        }
+    }
+}

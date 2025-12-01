@@ -753,3 +753,76 @@ int externalFilterDeleteKey(int dbid, robj *key, robj **value) {
 
     return externalFilterCallDelFunc(mi, dbid, key, value);
 }
+
+/* Flush external data for a specific database */
+void externalDataFlushDb(int dbid) {
+    externalDataCtx *ctx = getCurrentExternalDataCtx();
+    if (!ctx) return;
+
+    sds db_name = getDBName(dbid);
+    dictEntry *db = dictFind(ctx->dbdata, db_name);
+    sdsfree(db_name);
+    if (!db) return;
+
+    externalDbData *dbData = dictGetVal(db);
+    externalDataModuleInstance *mi = dbData->module_instance;
+    if (!mi) return;
+
+    setupModuleCtx(mi);
+    
+    /* Use native flush functions if available (O(1)), otherwise fall back to iteration (O(n)) */
+    if (mi->external_module->storage_methods.flush != NULL &&
+        mi->external_module->filter_methods.flush != NULL) {
+        /* Fast path: use native flush functions for O(1) performance */
+        mi->external_module->storage_methods.flush(mi->module_ctx, mi->storage_ctx, dbid);
+        mi->external_module->filter_methods.flush(mi->module_ctx, mi->filter_ctx, dbid);
+    } else {
+        /* Slow path: iterate and delete each key for backward compatibility with modules
+         * that don't implement flush functions. We collect all keys first to avoid iterator
+         * invalidation during deletion */
+        list *keys_to_delete = listCreate();
+        externalStorageInstanceIterator *esi_it = externalStorageInstanceIteratorInit(dbid, NULL, NULL);
+        if (esi_it != NULL) {
+            robj *next;
+            while (externalStorageInstanceIteratorNext(esi_it, &next)) {
+                listAddNodeTail(keys_to_delete, next);
+            }
+            externalStorageInstanceIteratorRelease(esi_it);
+        }
+        
+        /* Now delete all the collected keys */
+        listIter li;
+        listNode *ln;
+        listRewind(keys_to_delete, &li);
+        while ((ln = listNext(&li))) {
+            robj *key = listNodeValue(ln);
+            
+            /* Delete from storage */
+            robj *value = NULL;
+            externalStorageCallDelFunc(mi, dbid, key, &value);
+            if (value) decrRefCount(value);
+            
+            /* Delete from filter */
+            robj *filter_value = NULL;
+            externalFilterCallDelFunc(mi, dbid, key, &filter_value);
+            if (filter_value) decrRefCount(filter_value);
+            
+            decrRefCount(key);
+        }
+        
+        listRelease(keys_to_delete);
+    }
+    
+    teardownModuleCtx(mi);
+}
+
+/* Flush external data for all databases */
+void externalDataFlushAll(void) {
+    externalDataCtx *ctx = getCurrentExternalDataCtx();
+    if (!ctx) return;
+
+    /* Iterate through all databases and flush each one */
+    for (int i = 0; i < server.dbnum; i++) {
+        externalDataFlushDb(i);
+    }
+}

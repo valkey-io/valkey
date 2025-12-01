@@ -267,11 +267,53 @@ static int storageDropReadonlyFunction(ValkeyModuleCtx *, ValkeyModuleExternalSt
     return EXTERNAL_SUCCESS;
 }
 
+/* Efficient O(1) flush function for storage - clears all data for a database */
+static int storageFlushFunction(ValkeyModuleCtx *module_ctx,
+                                ValkeyModuleExternalStorageCtx *storage_ctx,
+                                int dbid) {
+    (void)storage_ctx; /* Unused */
+    (void)module_ctx; /* Log only, no automatic memory management needed */
+    
+    if (dbid < 0 || dbid >= MAX_DB) {
+        return EXTERNAL_ERROR;
+    }
+    
+    /* Free the old dict and create a new empty one - O(1) operation
+     * Use NULL context because these are global memory pools, not auto-managed */
+    if (storage_mem_pool[dbid] != NULL) {
+        ValkeyModule_FreeDict(NULL, storage_mem_pool[dbid]);
+    }
+    storage_mem_pool[dbid] = ValkeyModule_CreateDict(NULL);
+    
+    return EXTERNAL_SUCCESS;
+}
+
 static int filterSetReadonlyFunction(ValkeyModuleCtx *, ValkeyModuleExternalFilterCtx *) {
     return EXTERNAL_SUCCESS;
 }
 
 static int filterDropReadonlyFunction(ValkeyModuleCtx *, ValkeyModuleExternalFilterCtx *) {
+    return EXTERNAL_SUCCESS;
+}
+
+/* Efficient O(1) flush function for filter - clears all data for a database */
+static int filterFlushFunction(ValkeyModuleCtx *module_ctx,
+                               ValkeyModuleExternalFilterCtx *filter_ctx,
+                               int dbid) {
+    (void)filter_ctx; /* Unused */
+    (void)module_ctx; /* Log only, no automatic memory management needed */
+    
+    if (dbid < 0 || dbid >= MAX_DB) {
+        return EXTERNAL_ERROR;
+    }
+    
+    /* Free the old dict and create a new empty one - O(1) operation
+     * Use NULL context because these are global memory pools, not auto-managed */
+    if (filter_mem_pool[dbid] != NULL) {
+        ValkeyModule_FreeDict(NULL, filter_mem_pool[dbid]);
+    }
+    filter_mem_pool[dbid] = ValkeyModule_CreateDict(NULL);
+    
     return EXTERNAL_SUCCESS;
 }
 
@@ -291,7 +333,8 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
         .del = storageDelFunction,
         .set_readonly = storageSetReadonlyFunction,
         .drop_readonly = storageDropReadonlyFunction,
-        .iterate = storageIterateFunction
+        .iterate = storageIterateFunction,
+        .flush = storageFlushFunction
     };
 
     /* Initialize filter methods */
@@ -301,7 +344,8 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
         .get = filterGetFunction,
         .del = filterDelFunction,
         .set_readonly = filterSetReadonlyFunction,
-        .drop_readonly = filterDropReadonlyFunction
+        .drop_readonly = filterDropReadonlyFunction,
+        .flush = filterFlushFunction
     };
 
     /* Create memory pools */

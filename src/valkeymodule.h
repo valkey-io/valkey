@@ -1403,6 +1403,22 @@ typedef int (*ValkeyModuleExternalStorageSetReadonlyFunc)(
     ValkeyModuleCtx *module_ctx,
     ValkeyModuleExternalStorageCtx *storage_ctx);
 
+/* The callback function called when FLUSHDB or FLUSHALL commands are called.
+ * This allows the module to efficiently clear all data for a specific database
+ * in O(1) time instead of iterating through all keys.
+ *
+ * - `module_ctx`: the module runtime context.
+ *
+ * - `storage_ctx`: the external storage context.
+ *
+ * - `dbid`: the database ID to flush.
+ *
+ */
+typedef int (*ValkeyModuleExternalStorageFlushFunc)(
+    ValkeyModuleCtx *module_ctx,
+    ValkeyModuleExternalStorageCtx *storage_ctx,
+    int dbid);
+
 /* Current ABI version for external storage modules. */
 #define VALKEYMODULE_EXTERNAL_STORAGE_ABI_VERSION 1UL
 
@@ -1426,6 +1442,10 @@ typedef struct ValkeyModuleExternalStorageMethods {
 
     /* The callback function called when `Iterate` function is called in this storage. */
     ValkeyModuleExternalStorageIterateFunc iterate;
+
+    /* The callback function called when `FLUSHDB` or `FLUSHALL` commands are called.
+     * This allows efficient O(1) flushing of all data for a specific database. */
+    ValkeyModuleExternalStorageFlushFunc flush;
 } ValkeyModuleExternalStorageMethodsV1;
 
 #define ValkeyModuleExternalStorageMethods ValkeyModuleExternalStorageMethodsV1
@@ -1509,6 +1529,22 @@ typedef int (*ValkeyModuleExternalFilterSetReadonlyFunc)(
     ValkeyModuleCtx *module_ctx,
     ValkeyModuleExternalFilterCtx *filter_ctx);
 
+/* The callback function called when FLUSHDB or FLUSHALL commands are called.
+ * This allows the module to efficiently clear all filter data for a specific database
+ * in O(1) time instead of iterating through all keys.
+ *
+ * - `module_ctx`: the module runtime context.
+ *
+ * - `filter_ctx`: the external filter context.
+ *
+ * - `dbid`: the database ID to flush.
+ *
+ */
+typedef int (*ValkeyModuleExternalFilterFlushFunc)(
+    ValkeyModuleCtx *module_ctx,
+    ValkeyModuleExternalFilterCtx *filter_ctx,
+    int dbid);
+
 /* Current ABI version for external filter modules. */
 #define VALKEYMODULE_EXTERNAL_FILTER_ABI_VERSION 1UL
 
@@ -1529,6 +1565,10 @@ typedef struct ValkeyModuleExternalFilterMethods {
 
     /* The callback function called when `DROPRO` command is called in this filter. */
     ValkeyModuleExternalFilterDropReadonlyFunc drop_readonly;
+
+    /* The callback function called when `FLUSHDB` or `FLUSHALL` commands are called.
+     * This allows efficient O(1) flushing of all filter data for a specific database. */
+    ValkeyModuleExternalFilterFlushFunc flush;
 } ValkeyModuleExternalFilterMethodsV1;
 
 #define ValkeyModuleExternalFilterMethods ValkeyModuleExternalFilterMethodsV1

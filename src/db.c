@@ -699,6 +699,15 @@ long long emptyData(int dbnum, int flags, void(callback)(hashtable *)) {
     /* Empty the database structure. */
     removed = emptyDbStructure(server.db, dbnum, async, callback);
 
+    /* Flush external data if enabled */
+    if (isExtDataOn()) {
+        if (dbnum == -1) {
+            externalDataFlushAll();
+        } else {
+            externalDataFlushDb(dbnum);
+        }
+    }
+
     if (dbnum == -1) flushReplicaKeysWithExpireList(async);
 
     if (with_functions) {

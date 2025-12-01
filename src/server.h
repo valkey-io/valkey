@@ -407,6 +407,11 @@ typedef struct commandlog {
     unsigned long max_len;
 } commandlog;
 
+typedef struct bigkeyEntry {
+    long long value;
+    robj *key;
+} bigkeyEntry;
+
 /* Replica replication state. Used in server.repl_state for replicas to remember
  * what to do next. */
 typedef enum {
@@ -867,6 +872,7 @@ typedef struct replBufBlock {
     size_t size, used;
     char buf[];
 } replBufBlock;
+
 
 /* Database representation. There are multiple databases identified
  * by integers from 0 (the default database) up to the max configured
@@ -2131,6 +2137,14 @@ struct valkeyServer {
     int oom_score_adj_values[CONFIG_OOM_COUNT]; /* Linux oom_score_adj configuration */
     int oom_score_adj;                          /* If true, oom_score_adj is managed */
     int disable_thp;                            /* If true, disable THP by syscall */
+    int string_memory_use;
+    int big_key_number_element;
+    int big_key_output;
+    list *string_bigkey_info;
+    list *list_bigkey_info;
+    list *hash_bigkey_info;
+    list *set_bigkey_info;
+    list *zset_bigkey_info;
     /* Blocked clients */
     unsigned int blocked_clients; /* # of clients executing a blocking cmd.*/
     unsigned int blocked_clients_by_type[BLOCKED_NUM];
@@ -3013,6 +3027,9 @@ void freeSetObject(robj *o);
 void freeZsetObject(robj *o);
 void freeHashObject(robj *o);
 void dismissObject(robj *o, size_t dump_size);
+//void displayUpdate(int pre_value, int current_value);
+//void displayDataTypeArray(keysizeInfo *keysize_array, int length);
+void updateKeySizeArray(serverDb *db, robj *key);
 robj *createObject(int type, void *ptr);
 void initObjectLRUOrLFU(robj *o);
 robj *createStringObject(const char *ptr, size_t len);
@@ -3525,6 +3542,19 @@ typedef enum {
     SPECIAL_CONFIG,
 } configType;
 
+/* Type of Datatype */
+typedef enum {
+    STRING_TYPE = 0,
+    LIST_TYPE,
+    HASH_TYPE,
+    SET_TYPE,
+    SORTED_SET_TYPE,
+    STREAM_TYPE,
+} dataType;
+
+
+void updateBigKeyList(robj *keyobj, long previous, long curr, dataType type);
+
 void loadServerConfig(char *filename, char config_from_stdin, char *options);
 void appendServerSaveParams(time_t seconds, int changes);
 void resetServerSaveParams(void);
@@ -3824,6 +3854,8 @@ void bgrewriteaofCommand(client *c);
 void shutdownCommand(client *c);
 void slowlogCommand(client *c);
 void commandlogCommand(client *c);
+void keyinfoCommand(client *c);
+void bigkeyInfoCommand(client *c);
 void moveCommand(client *c);
 void copyCommand(client *c);
 void renameCommand(client *c);

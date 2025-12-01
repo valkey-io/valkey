@@ -886,6 +886,38 @@ void trackInstantaneousMetric(int metric, long long current_value, long long cur
     server.inst_metric[metric].last_sample_value = current_value;
 }
 
+/*
+void displayUpdate(int pre_value, int current_value) {
+    serverLog(LL_WARNING, "This is for testing, previous item number is %d, and current item number is %d", pre_value,
+              current_value);
+}
+
+void displayDataTypeArray(keysizeInfo *keysize_array, int length) {
+    serverLog(LL_WARNING, "Current array length is %d", length);
+    for (int i = 0; i < length; i++) {
+        serverLog(LL_WARNING, "Item %lld and value is %lld", keysize_array[i].element_size, keysize_array[i].num);
+    }
+}
+*/
+
+void updateKeySizeArray(serverDb *db, robj *dstkey) {
+    robj *t_obj = lookupKeyWrite(db, dstkey);
+    if (t_obj) {
+        if (t_obj->type == OBJ_STRING) {
+        } else if (t_obj->type == OBJ_LIST) {
+            updateBigKeyList(t_obj, listTypeLength(t_obj), 0, LIST_TYPE);
+        } else if (t_obj->type == OBJ_SET) {
+            updateBigKeyList(t_obj, setTypeSize(t_obj), 0, SET_TYPE);
+        } else if (t_obj->type == OBJ_ZSET) {
+            updateBigKeyList(t_obj, zsetLength(t_obj), 0, SORTED_SET_TYPE);
+        } else if (t_obj->type == OBJ_HASH) {
+            updateBigKeyList(t_obj, hashTypeLength(t_obj), 0, HASH_TYPE);
+        } else if (t_obj->type == OBJ_STREAM) {
+        }
+    }
+}
+
+
 /* Return the mean of all the samples. */
 long long getInstantaneousMetric(int metric) {
     int j;
@@ -2826,6 +2858,109 @@ serverDb *createDatabaseIfNeeded(int id) {
     return server.db[id];
 }
 
+void removeNodeFromList(dataType previous_type, robj *keyobj) {
+    list *process_list = NULL;
+    if (previous_type == STRING_TYPE) {
+        process_list = server.string_bigkey_info;
+    } else if (previous_type == LIST_TYPE) {
+        process_list = server.list_bigkey_info;
+    } else if (previous_type == HASH_TYPE) {
+        process_list = server.hash_bigkey_info;
+    } else if (previous_type == SET_TYPE) {
+        process_list = server.set_bigkey_info;
+    } else if (previous_type == SORTED_SET_TYPE) {
+        process_list = server.zset_bigkey_info;
+    } else {
+        // TO DO later
+    }
+
+    listIter li;
+    listNode *ln;
+    listRewind(process_list, &li);
+    while ((ln = listNext(&li)) != NULL) {
+        bigkeyEntry *node = ln->value;
+        if (sdscmp(node->key->ptr, keyobj->ptr) != 0) continue;
+        decrRefCount(node->key);
+        listDelNode(process_list, ln);
+        zfree(node);
+    }
+}
+
+void addNodeToList(dataType new_type, robj *keyobj, long curr) {
+    list *process_list = NULL;
+    if (new_type == STRING_TYPE) {
+        process_list = server.string_bigkey_info;
+    } else if (new_type == LIST_TYPE) {
+        process_list = server.list_bigkey_info;
+    } else if (new_type == HASH_TYPE) {
+        process_list = server.hash_bigkey_info;
+    } else if (new_type == SET_TYPE) {
+        process_list = server.set_bigkey_info;
+    } else if (new_type == SORTED_SET_TYPE) {
+        process_list = server.zset_bigkey_info;
+    } else {
+        // TO DO later
+    }
+
+    bigkeyEntry *bke = zmalloc(sizeof(bigkeyEntry));
+    incrRefCount(keyobj);
+
+    bke->value = curr;
+    bke->key = keyobj;
+
+    if (listLength(process_list) == 0) {
+        listAddNodeHead(process_list, bke);
+    } else {
+        listIter li;
+        listNode *ln;
+        listRewind(process_list, &li);
+        int isInsert = 0;
+        while ((ln = listNext(&li)) != NULL) {
+            bigkeyEntry *node = ln->value;
+            if (curr > node->value) continue;
+            listInsertNode(process_list, ln, bke, 0);
+            isInsert = 1;
+            break;
+        }
+        if (!isInsert) listAddNodeTail(process_list, bke);
+    }
+}
+
+
+void updateBigKeyList(robj *keyobj, long previous, long curr, dataType type) {
+    if (type == STRING_TYPE) {
+        if (previous < server.string_memory_use && curr < server.string_memory_use) {
+            return;
+        } else if (previous >= server.string_memory_use && curr < server.string_memory_use) {
+            removeNodeFromList(type, keyobj);
+        } else if (previous < server.string_memory_use && curr >= server.string_memory_use) {
+            addNodeToList(type, keyobj, curr);
+        } else if (previous >= server.string_memory_use && curr >= server.string_memory_use) {
+            removeNodeFromList(type, keyobj);
+            addNodeToList(type, keyobj, curr);
+        }
+    } else {
+        if (previous < server.big_key_number_element && curr < server.big_key_number_element) {
+            return;
+        } else if (previous >= server.big_key_number_element && curr < server.big_key_number_element) {
+            removeNodeFromList(type, keyobj);
+        } else if (previous < server.big_key_number_element && curr >= server.big_key_number_element) {
+            addNodeToList(type, keyobj, curr);
+        } else if (previous >= server.big_key_number_element && curr >= server.big_key_number_element) {
+            removeNodeFromList(type, keyobj);
+            addNodeToList(type, keyobj, curr);
+        }
+    }
+}
+
+void bigkeyListInit(void) {
+    server.string_bigkey_info = listCreate();
+    server.list_bigkey_info = listCreate();
+    server.hash_bigkey_info = listCreate();
+    server.set_bigkey_info = listCreate();
+    server.zset_bigkey_info = listCreate();
+}
+
 void initServer(void) {
     signal(SIGHUP, SIG_IGN);
     signal(SIGPIPE, SIG_IGN);
@@ -3033,6 +3168,7 @@ void initServer(void) {
     evalInit();
 
     commandlogInit();
+    bigkeyListInit();
     latencyMonitorInit();
     initSharedQueryBuf();
 

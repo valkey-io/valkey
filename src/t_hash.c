@@ -1160,13 +1160,24 @@ void hsetnxCommand(client *c) {
 void hsetCommand(client *c) {
     int i, created = 0;
     robj *o;
+    long previous_element_number;
+    long current_element_number;
 
     if ((c->argc % 2) == 1) {
         addReplyErrorArity(c);
         return;
     }
 
-    if ((o = hashTypeLookupWriteOrCreate(c, c->argv[1])) == NULL) return;
+    o = lookupKeyWrite(c->db, c->argv[1]);
+    if (checkType(c, o, OBJ_HASH)) return;
+    if (o == NULL) {
+        o = createHashObject();
+        dbAdd(c->db, c->argv[1], &o);
+        previous_element_number = 0;
+    } else {
+        previous_element_number = hashTypeLength(o);
+    }
+
     hashTypeTryConversion(o, c->argv, 2, c->argc - 1);
     bool has_volatile_fields = hashTypeHasVolatileFields(o);
     for (i = 2; i < c->argc; i += 2) {
@@ -1178,6 +1189,11 @@ void hsetCommand(client *c) {
     signalModifiedKey(c, c->db, c->argv[1]);
     notifyKeyspaceEvent(NOTIFY_HASH, "hset", c->argv[1], c->db->id);
     server.dirty += (c->argc - 2) / 2;
+
+    if (created > 0) {
+        current_element_number = previous_element_number + created;
+        updateBigKeyList(c->argv[1], previous_element_number, current_element_number, HASH_TYPE);
+    }
 
     /* HMSET (deprecated) and HSET return value is different. */
     char *cmdname = c->argv[0]->ptr;

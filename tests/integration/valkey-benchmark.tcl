@@ -248,13 +248,13 @@ tags {"benchmark network external:skip logreqres:skip"} {
 
         test {benchmark: warmup applies to all tests in multi-test run} {
             set start_time [clock clicks -millisec]
-            set cmd [valkeybenchmark $master_host $master_port "-r 5 --warmup 1 -n 50 -t set,get,incr"]
+            set cmd [valkeybenchmark $master_host $master_port "-r 5 --warmup 2 -n 50 -t set,get,incr"]
             set output [common_bench_setup $cmd]
             set end_time [clock clicks -millisec]
 
-            # Verify total duration includes warmup for all 3 tests (at least 3 seconds)
+            # Verify total duration includes warmup for all 3 tests (at least 6 seconds)
             set elapsed [expr {($end_time - $start_time)/1000.0}]
-            assert {$elapsed >= 3}
+            assert {$elapsed >= 6}
 
             # Verify all tests ran - with warmup, we expect more than 50 calls per command
             # since warmup commands are also counted in server stats

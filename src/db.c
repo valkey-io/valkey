@@ -1873,6 +1873,11 @@ int dbSwapDatabases(int id1, int id2) {
     db2->keys_with_volatile_items = aux.keys_with_volatile_items;
     copyDbExpiry(db2, &aux);
 
+    /* Swap external data if enabled */
+    if (isExtDataOn()) {
+        externalDataSwapDb(id1, id2);
+    }
+
     /* Now we need to handle clients blocked on lists: as an effect
      * of swapping the two DBs, a client that was waiting for list
      * X in a given DB, may now actually be unblocked if X happens

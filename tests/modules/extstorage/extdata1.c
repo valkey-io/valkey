@@ -317,6 +317,46 @@ static int filterFlushFunction(ValkeyModuleCtx *module_ctx,
     return EXTERNAL_SUCCESS;
 }
 
+/* Efficient O(1) swap function for storage - swaps data between two databases */
+static int storageSwapFunction(ValkeyModuleCtx *module_ctx,
+                              ValkeyModuleExternalStorageCtx *storage_ctx,
+                              int dbid1,
+                              int dbid2) {
+    (void)storage_ctx; /* Unused */
+    (void)module_ctx; /* Log only, no automatic memory management needed */
+    
+    if (dbid1 < 0 || dbid1 >= MAX_DB || dbid2 < 0 || dbid2 >= MAX_DB) {
+        return EXTERNAL_ERROR;
+    }
+    
+    /* Swap the storage memory pools between the two databases */
+    ValkeyModuleDict *temp = storage_mem_pool[dbid1];
+    storage_mem_pool[dbid1] = storage_mem_pool[dbid2];
+    storage_mem_pool[dbid2] = temp;
+    
+    return EXTERNAL_SUCCESS;
+}
+
+/* Efficient O(1) swap function for filter - swaps data between two databases */
+static int filterSwapFunction(ValkeyModuleCtx *module_ctx,
+                             ValkeyModuleExternalFilterCtx *filter_ctx,
+                             int dbid1,
+                             int dbid2) {
+    (void)filter_ctx; /* Unused */
+    (void)module_ctx; /* Log only, no automatic memory management needed */
+    
+    if (dbid1 < 0 || dbid1 >= MAX_DB || dbid2 < 0 || dbid2 >= MAX_DB) {
+        return EXTERNAL_ERROR;
+    }
+    
+    /* Swap the filter memory pools between the two databases */
+    ValkeyModuleDict *temp = filter_mem_pool[dbid1];
+    filter_mem_pool[dbid1] = filter_mem_pool[dbid2];
+    filter_mem_pool[dbid2] = temp;
+    
+    return EXTERNAL_SUCCESS;
+}
+
 /* Module initialization */
 int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     VALKEYMODULE_NOT_USED(argv);
@@ -334,7 +374,8 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
         .set_readonly = storageSetReadonlyFunction,
         .drop_readonly = storageDropReadonlyFunction,
         .iterate = storageIterateFunction,
-        .flush = storageFlushFunction
+        .flush = storageFlushFunction,
+        .swap = storageSwapFunction
     };
 
     /* Initialize filter methods */
@@ -345,7 +386,8 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
         .del = filterDelFunction,
         .set_readonly = filterSetReadonlyFunction,
         .drop_readonly = filterDropReadonlyFunction,
-        .flush = filterFlushFunction
+        .flush = filterFlushFunction,
+        .swap = filterSwapFunction
     };
 
     /* Create memory pools */

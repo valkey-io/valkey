@@ -826,3 +826,181 @@ void externalDataFlushAll(void) {
         externalDataFlushDb(i);
     }
 }
+
+/* Swap external data between two databases */
+void externalDataSwapDb(int id1, int id2) {
+    externalDataCtx *ctx = getCurrentExternalDataCtx();
+    if (!ctx) return;
+
+    sds db_name1 = getDBName(id1);
+    sds db_name2 = getDBName(id2);
+    
+    dictEntry *dbEntry1 = dictFind(ctx->dbdata, db_name1);
+    dictEntry *dbEntry2 = dictFind(ctx->dbdata, db_name2);
+    
+    /* If both databases are not initialized, nothing to do */
+    if (!dbEntry1 && !dbEntry2) {
+        sdsfree(db_name1);
+        sdsfree(db_name2);
+        return;
+    }
+    
+    /* If only one database is initialized, we need to move the external data
+     * from one to the other */
+    if (!dbEntry1 || !dbEntry2) {
+        sds src_name = dbEntry1 ? db_name1 : db_name2;
+        sds dst_name = dbEntry1 ? db_name2 : db_name1;
+        
+        /* Remove the destination entry if it exists */
+        dictDelete(ctx->dbdata, dst_name);
+        
+        /* Add a new entry for the destination with the source's data */
+        externalDbData *srcData = dictGetVal(dbEntry1 ? dbEntry1 : dbEntry2);
+        externalDbData *dstData = zmalloc(sizeof(*dstData));
+        *dstData = *srcData;
+        
+        /* Update the module context to use the new database ID */
+        if (dstData->module_instance && dstData->module_instance->module_ctx) {
+            moduleFreeContext(dstData->module_instance->module_ctx);
+            dstData->module_instance->module_ctx = moduleAllocateContext();
+            moduleExternalStorageInitContext(dstData->module_instance->module_ctx,
+                                           dstData->module_instance->external_module->module);
+        }
+        
+        dictAdd(ctx->dbdata, dst_name, dstData);
+        
+        /* Remove the source entry */
+        dictDelete(ctx->dbdata, src_name);
+        
+        sdsfree(db_name1);
+        sdsfree(db_name2);
+        return;
+    }
+    
+    /* Both databases are initialized, swap their external data */
+    externalDbData *dbData1 = dictGetVal(dbEntry1);
+    externalDbData *dbData2 = dictGetVal(dbEntry2);
+    
+    /* Remove both entries */
+    dictDelete(ctx->dbdata, db_name1);
+    dictDelete(ctx->dbdata, db_name2);
+    
+    /* Re-add them with swapped keys */
+    dictAdd(ctx->dbdata, db_name1, dbData2);
+    dictAdd(ctx->dbdata, db_name2, dbData1);
+    
+    /* Update the module contexts to use the new database IDs */
+    if (dbData1->module_instance && dbData1->module_instance->module_ctx) {
+        moduleFreeContext(dbData1->module_instance->module_ctx);
+        dbData1->module_instance->module_ctx = moduleAllocateContext();
+        moduleExternalStorageInitContext(dbData1->module_instance->module_ctx,
+                                       dbData1->module_instance->external_module->module);
+    }
+    
+    if (dbData2->module_instance && dbData2->module_instance->module_ctx) {
+        moduleFreeContext(dbData2->module_instance->module_ctx);
+        dbData2->module_instance->module_ctx = moduleAllocateContext();
+        moduleExternalStorageInitContext(dbData2->module_instance->module_ctx,
+                                       dbData2->module_instance->external_module->module);
+    }
+    
+    /* Call the swap function on the module if it's available, otherwise fall back to iteration */
+    if (dbData1->module_instance && dbData1->module_instance->external_module) {
+        /* Handle storage swap */
+        if (dbData1->module_instance->external_module->storage_methods.swap) {
+            /* Fast path: use native swap function for O(1) performance */
+            setupModuleCtx(dbData1->module_instance);
+            dbData1->module_instance->external_module->storage_methods.swap(
+                dbData1->module_instance->module_ctx,
+                dbData1->module_instance->storage_ctx,
+                id1, id2);
+            teardownModuleCtx(dbData1->module_instance);
+        } else {
+            /* Slow path: iterate and move each key for backward compatibility with modules
+             * that don't implement swap functions. We collect all keys first to avoid iterator
+             * invalidation during movement */
+            list *keys_to_move = listCreate();
+            externalStorageInstanceIterator *esi_it = externalStorageInstanceIteratorInit(id1, NULL, NULL);
+            if (esi_it != NULL) {
+                robj *next;
+                while (externalStorageInstanceIteratorNext(esi_it, &next)) {
+                    listAddNodeTail(keys_to_move, next);
+                }
+                externalStorageInstanceIteratorRelease(esi_it);
+            }
+            
+            /* Now move all the collected keys from db1 to db2 */
+            listIter li;
+            listNode *ln;
+            listRewind(keys_to_move, &li);
+            while ((ln = listNext(&li))) {
+                robj *key = listNodeValue(ln);
+                
+                /* Get the value from db1 */
+                void *value = NULL;
+                if (externalStorageCallGetFunc(dbData1->module_instance, id1, key, &value)) {
+                    /* Set the value in db2 */
+                    if (externalStorageCallSetFunc(dbData2->module_instance, id2, key, (robj *)value) == EXTERNAL_SUCCESS) {
+                        /* Delete from db1 */
+                        robj *deleted_value = NULL;
+                        externalStorageCallDelFunc(dbData1->module_instance, id1, key, &deleted_value);
+                        if (deleted_value) decrRefCount(deleted_value);
+                    }
+                    if (value) decrRefCount((robj *)value);
+                }
+                
+                decrRefCount(key);
+            }
+            
+            listRelease(keys_to_move);
+        }
+        
+        /* Handle filter swap */
+        if (dbData1->module_instance->external_module->filter_methods.swap) {
+            /* Fast path: use native swap function for O(1) performance */
+            setupModuleCtx(dbData1->module_instance);
+            dbData1->module_instance->external_module->filter_methods.swap(
+                dbData1->module_instance->module_ctx,
+                dbData1->module_instance->filter_ctx,
+                id1, id2);
+            teardownModuleCtx(dbData1->module_instance);
+        } else {
+            /* Slow path: iterate and move each key for backward compatibility with modules
+             * that don't implement swap functions */
+            list *keys_to_move = listCreate();
+            externalStorageInstanceIterator *esi_it = externalStorageInstanceIteratorInit(id1, NULL, NULL);
+            if (esi_it != NULL) {
+                robj *next;
+                while (externalStorageInstanceIteratorNext(esi_it, &next)) {
+                    listAddNodeTail(keys_to_move, next);
+                }
+                externalStorageInstanceIteratorRelease(esi_it);
+            }
+            
+            /* Now move all the collected keys from db1 to db2 */
+            listIter li;
+            listNode *ln;
+            listRewind(keys_to_move, &li);
+            while ((ln = listNext(&li))) {
+                robj *key = listNodeValue(ln);
+                
+                /* Check if key is in filter for db1 */
+                if (externalFilterCallGetFunc(dbData1->module_instance, id1, key)) {
+                    /* Add to filter for db2 */
+                    if (externalFilterCallSetFunc(dbData2->module_instance, id2, key) == EXTERNAL_SUCCESS) {
+                        /* Delete from filter for db1 */
+                        robj *deleted_value = NULL;
+                        externalFilterCallDelFunc(dbData1->module_instance, id1, key, &deleted_value);
+                        if (deleted_value) decrRefCount(deleted_value);
+                    }
+                }
+                
+                decrRefCount(key);
+            }
+            
+            listRelease(keys_to_move);
+        }
+    }
+    
+    /* Note: We don't free db_name1 and db_name2 here because they are now owned by the dictionary */
+}

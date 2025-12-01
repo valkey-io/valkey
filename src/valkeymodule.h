@@ -1419,6 +1419,25 @@ typedef int (*ValkeyModuleExternalStorageFlushFunc)(
     ValkeyModuleExternalStorageCtx *storage_ctx,
     int dbid);
 
+/* The callback function called when SWAPDB command is called.
+ * This allows the module to efficiently swap data between two databases
+ * in O(1) time instead of iterating through all keys.
+ *
+ * - `module_ctx`: the module runtime context.
+ *
+ * - `storage_ctx`: the external storage context.
+ *
+ * - `dbid1`: the first database ID.
+ *
+ * - `dbid2`: the second database ID.
+ *
+ */
+typedef int (*ValkeyModuleExternalStorageSwapFunc)(
+    ValkeyModuleCtx *module_ctx,
+    ValkeyModuleExternalStorageCtx *storage_ctx,
+    int dbid1,
+    int dbid2);
+
 /* Current ABI version for external storage modules. */
 #define VALKEYMODULE_EXTERNAL_STORAGE_ABI_VERSION 1UL
 
@@ -1446,6 +1465,10 @@ typedef struct ValkeyModuleExternalStorageMethods {
     /* The callback function called when `FLUSHDB` or `FLUSHALL` commands are called.
      * This allows efficient O(1) flushing of all data for a specific database. */
     ValkeyModuleExternalStorageFlushFunc flush;
+
+    /* The callback function called when `SWAPDB` command is called.
+     * This allows efficient O(1) swapping of all data between two databases. */
+    ValkeyModuleExternalStorageSwapFunc swap;
 } ValkeyModuleExternalStorageMethodsV1;
 
 #define ValkeyModuleExternalStorageMethods ValkeyModuleExternalStorageMethodsV1
@@ -1545,6 +1568,25 @@ typedef int (*ValkeyModuleExternalFilterFlushFunc)(
     ValkeyModuleExternalFilterCtx *filter_ctx,
     int dbid);
 
+/* The callback function called when SWAPDB command is called.
+ * This allows the module to efficiently swap filter data between two databases
+ * in O(1) time instead of iterating through all keys.
+ *
+ * - `module_ctx`: the module runtime context.
+ *
+ * - `filter_ctx`: the external filter context.
+ *
+ * - `dbid1`: the first database ID.
+ *
+ * - `dbid2`: the second database ID.
+ *
+ */
+typedef int (*ValkeyModuleExternalFilterSwapFunc)(
+    ValkeyModuleCtx *module_ctx,
+    ValkeyModuleExternalFilterCtx *filter_ctx,
+    int dbid1,
+    int dbid2);
+
 /* Current ABI version for external filter modules. */
 #define VALKEYMODULE_EXTERNAL_FILTER_ABI_VERSION 1UL
 
@@ -1569,6 +1611,10 @@ typedef struct ValkeyModuleExternalFilterMethods {
     /* The callback function called when `FLUSHDB` or `FLUSHALL` commands are called.
      * This allows efficient O(1) flushing of all filter data for a specific database. */
     ValkeyModuleExternalFilterFlushFunc flush;
+
+    /* The callback function called when `SWAPDB` command is called.
+     * This allows efficient O(1) swapping of all filter data between two databases. */
+    ValkeyModuleExternalFilterSwapFunc swap;
 } ValkeyModuleExternalFilterMethodsV1;
 
 #define ValkeyModuleExternalFilterMethods ValkeyModuleExternalFilterMethodsV1

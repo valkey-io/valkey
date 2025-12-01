@@ -64,6 +64,9 @@ void externalDataFlushDb(int dbid);
 /* Flush external data for all databases */
 void externalDataFlushAll(void);
 
+/* Swap external data between two databases */
+void externalDataSwapDb(int id1, int id2);
+
 /* Utility functions */
 sds getDBName(int db_num);
 

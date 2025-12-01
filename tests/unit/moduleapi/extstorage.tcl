@@ -858,7 +858,7 @@ start_server [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [li
     }
 }
 
-start_server [list overrides [list "ext-data-mode" kv "loglevel" debug "maxmemory-policy" "allkeys-lru" "ext-data-expire" "yes"] tags [list "external:skip"]] {
+start_server [list overrides [list "ext-data-mode" kv "loglevel" debug "maxmemory-policy" "allkeys-lru" "ext-data-expire" "yes"] tags [list "external:skip" "slow"]] {
     test {ext-data-expire configuration works with allkeys-lru policy} {
         # Load module and initialize external storage
         assert_equal {OK} [r module load $extdatamodule1]
@@ -891,7 +891,7 @@ start_server [list overrides [list "ext-data-mode" kv "loglevel" debug "maxmemor
     }
 }
 
-start_server [list overrides [list "ext-data-mode" kv "loglevel" debug "maxmemory-policy" "volatile-lru" "ext-data-expire" "yes"] tags [list "external:skip"]] {
+start_server [list overrides [list "ext-data-mode" kv "loglevel" debug "maxmemory-policy" "volatile-lru" "ext-data-expire" "yes"] tags [list "external:skip" "slow"]] {
     test {ext-data-expire does not affect volatile-* policies} {
         # Load module and initialize external storage
         assert_equal {OK} [r module load $extdatamodule1]
@@ -1160,20 +1160,19 @@ start_cluster 1 0 [list overrides [list "ext-data-mode" kv "loglevel" debug] tag
     }
 }
 
-# Performance test for FLUSHDB with large dataset
-# This test demonstrates the O(n) limitation of the current implementation
 # Tag: addon - can be run separately with ./runtest --tags addon
-start_server [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [list "external:skip" "addon"]] {
-    test {FLUSHDB performance with large dataset (should complete in under 500ms)} {
+start_server [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [list "external:skip" "addon" "slow"]] {
+    test {FLUSHDB and SWAPDB performance with large dataset (should complete in under 500ms)} {
         # Load module and initialize external storage
         assert_equal {OK} [r module load $extdatamodule1]
         assert_equal {OK} [r external_data INIT db0 helloextdata1]
+        assert_equal {OK} [r external_data INIT db1 helloextdata1]
         r select 0
         
-        # Insert a large number of keys into external storage
+        # Insert a large number of keys into db0 external storage
         # Using 100,000 keys to demonstrate the O(n) performance issue
         set num_keys 100000
-        puts "Inserting $num_keys keys into external storage..."
+        puts "Inserting $num_keys keys into db0 external storage..."
         
         set insert_start [clock milliseconds]
         for {set i 0} {$i < $num_keys} {incr i} {
@@ -1183,9 +1182,47 @@ start_server [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [li
         set insert_time [expr {$insert_end - $insert_start}]
         puts "Insert time: ${insert_time}ms for $num_keys keys"
         
-        # Verify some keys exist
+        # Insert just one key into db1 to see the difference
+        r select 1
+        assert_equal {OK} [r set single_key single_value ext]
+        puts "Inserted 1 key into db1 external storage"
+        
+        # Verify keys exist in both databases
+        r select 0
         assert_equal perf_value_0 [r get perf_key_0 ext]
         assert_equal perf_value_[expr {$num_keys - 1}] [r get perf_key_[expr {$num_keys - 1}] ext]
+        r select 1
+        assert_equal single_value [r get single_key ext]
+        
+        # First test SWAPDB performance with large dataset
+        puts "Testing SWAPDB performance with large dataset..."
+        
+        # Measure SWAPDB performance
+        puts "Executing SWAPDB..."
+        set swap_start [clock milliseconds]
+        assert_equal {OK} [r swapdb 0 1]
+        set swap_end [clock milliseconds]
+        set swap_time [expr {$swap_end - $swap_start}]
+        
+        puts "SWAPDB time: ${swap_time}ms for $num_keys keys"
+        
+        # Verify swap worked correctly
+        r select 0
+        assert_equal single_value [r get single_key ext]
+        assert_equal {} [r get perf_key_0 ext]
+        r select 1
+        assert_equal perf_value_0 [r get perf_key_0 ext]
+        assert_equal {} [r get single_key ext]
+        
+        # Assert SWAPDB completes in under 500ms
+        # This should PASS with the current implementation as SWAPDB should be O(1)
+        if {$swap_time >= 500} {
+            fail "SWAPDB took ${swap_time}ms, expected < 500ms (SWAPDB should be O(1) operation)"
+        }
+        
+        # Now test FLUSHDB performance with the large dataset (now in db1)
+        puts "Testing FLUSHDB performance with large dataset..."
+        r select 1
         
         # Measure FLUSHDB performance
         puts "Executing FLUSHDB..."
@@ -1206,5 +1243,406 @@ start_server [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [li
         if {$flush_time >= 500} {
             fail "FLUSHDB took ${flush_time}ms, expected < 500ms (demonstrates O(n) limitation - needs native flush API)"
         }
+    }
+}
+
+# Test SWAPDB command with external storage
+# SWAPDB should swap external data between two databases
+start_server [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [list "external:skip" "singledb:skip"]] {
+    test {SWAPDB swaps external data between two databases} {
+        # Load module and initialize external storage for multiple databases
+        assert_equal {OK} [r module load $extdatamodule1]
+        assert_equal {OK} [r external_data INIT db0 helloextdata1]
+        assert_equal {OK} [r external_data INIT db1 helloextdata1]
+        assert_equal {OK} [r external_data INIT db2 helloextdata1]
+        
+        # Set keys in db0 external storage
+        r select 0
+        assert_equal {OK} [r set swap_key0_1 swap_value0_1 ext]
+        assert_equal {OK} [r set swap_key0_2 swap_value0_2 ext]
+        assert_equal {OK} [r set swap_mem_key0 swap_mem_value0]
+        
+        # Set keys in db1 external storage
+        r select 1
+        assert_equal {OK} [r set swap_key1_1 swap_value1_1 ext]
+        assert_equal {OK} [r set swap_key1_2 swap_value1_2 ext]
+        assert_equal {OK} [r set swap_mem_key1 swap_mem_value1]
+        
+        # Set keys in db2 external storage (should remain unaffected)
+        r select 2
+        assert_equal {OK} [r set swap_key2_1 swap_value2_1 ext]
+        assert_equal {OK} [r set swap_mem_key2 swap_mem_value2]
+        
+        # Verify all keys exist before swap using GET, KEYS, and SCAN
+        r select 0
+        assert_equal swap_value0_1 [r get swap_key0_1 ext]
+        assert_equal swap_value0_2 [r get swap_key0_2 ext]
+        assert_equal swap_mem_value0 [r get swap_mem_key0]
+        assert_equal {swap_key0_1 swap_key0_2} [lsort [r keys swap_key* ext]]
+        set keys_db0 [lsort [scan_keys 0 "string" "swap_key*" "ext"]]
+        assert_equal {swap_key0_1 swap_key0_2} $keys_db0
+        
+        r select 1
+        assert_equal swap_value1_1 [r get swap_key1_1 ext]
+        assert_equal swap_value1_2 [r get swap_key1_2 ext]
+        assert_equal swap_mem_value1 [r get swap_mem_key1]
+        assert_equal {swap_key1_1 swap_key1_2} [lsort [r keys swap_key* ext]]
+        set keys_db1 [lsort [scan_keys 0 "string" "swap_key*" "ext"]]
+        assert_equal {swap_key1_1 swap_key1_2} $keys_db1
+        
+        r select 2
+        assert_equal swap_value2_1 [r get swap_key2_1 ext]
+        assert_equal swap_mem_value2 [r get swap_mem_key2]
+        assert_equal {swap_key2_1} [r keys swap_key* ext]
+        
+        # Execute SWAPDB between db0 and db1
+        assert_equal {OK} [r swapdb 0 1]
+        
+        # Verify external data is swapped between db0 and db1 using GET, KEYS, and SCAN
+        # db0 should now have db1's external data
+        r select 0
+        assert_equal swap_value1_1 [r get swap_key1_1 ext]
+        assert_equal swap_value1_2 [r get swap_key1_2 ext]
+        assert_equal swap_mem_value1 [r get swap_mem_key1]
+        assert_equal {} [r get swap_key0_1 ext]
+        assert_equal {} [r get swap_key0_2 ext]
+        assert_equal {swap_key1_1 swap_key1_2} [lsort [r keys swap_key* ext]]
+        set keys_db0_after [lsort [scan_keys 0 "string" "swap_key*" "ext"]]
+        assert_equal {swap_key1_1 swap_key1_2} $keys_db0_after
+        
+        # db1 should now have db0's external data
+        r select 1
+        assert_equal swap_value0_1 [r get swap_key0_1 ext]
+        assert_equal swap_value0_2 [r get swap_key0_2 ext]
+        assert_equal swap_mem_value0 [r get swap_mem_key0]
+        assert_equal {} [r get swap_key1_1 ext]
+        assert_equal {} [r get swap_key1_2 ext]
+        assert_equal {swap_key0_1 swap_key0_2} [lsort [r keys swap_key* ext]]
+        set keys_db1_after [lsort [scan_keys 0 "string" "swap_key*" "ext"]]
+        assert_equal {swap_key0_1 swap_key0_2} $keys_db1_after
+        
+        # Verify db2 external data is NOT affected
+        r select 2
+        assert_equal swap_value2_1 [r get swap_key2_1 ext]
+        assert_equal swap_mem_value2 [r get swap_mem_key2]
+        assert_equal {swap_key2_1} [r keys swap_key* ext]
+    }
+    
+    test {SWAPDB with same database leaves external data unchanged} {
+        # Set keys in db0
+        r select 0
+        assert_equal {OK} [r set same_key0_1 same_value0_1 ext]
+        assert_equal {OK} [r set same_key0_2 same_value0_2 ext]
+        
+        # Verify keys exist before swap
+        assert_equal same_value0_1 [r get same_key0_1 ext]
+        assert_equal same_value0_2 [r get same_key0_2 ext]
+        
+        # Execute SWAPDB with same database
+        assert_equal {OK} [r swapdb 0 0]
+        
+        # Verify external data is unchanged
+        assert_equal same_value0_1 [r get same_key0_1 ext]
+        assert_equal same_value0_2 [r get same_key0_2 ext]
+    }
+    
+    test {SWAPDB with uninitialized external storage database} {
+        # Initialize only db3
+        assert_equal {OK} [r external_data INIT db3 helloextdata1]
+        
+        # Set keys in db3 external storage
+        r select 3
+        assert_equal {OK} [r set uninit_key3_1 uninit_value3_1 ext]
+        assert_equal {OK} [r set uninit_key3_2 uninit_value3_2 ext]
+        
+        # Initialize db4 but don't put any data
+        assert_equal {OK} [r external_data INIT db4 helloextdata1]
+        
+        # Verify keys exist in db3
+        r select 3
+        assert_equal uninit_value3_1 [r get uninit_key3_1 ext]
+        assert_equal uninit_value3_2 [r get uninit_key3_2 ext]
+        
+        # Verify db4 is empty
+        r select 4
+        assert_equal {} [r get uninit_key3_1 ext]
+        
+        # Execute SWAPDB between db3 and db4
+        assert_equal {OK} [r swapdb 3 4]
+        
+        # Verify external data is swapped
+        # db4 should now have db3's external data
+        r select 4
+        assert_equal uninit_value3_1 [r get uninit_key3_1 ext]
+        assert_equal uninit_value3_2 [r get uninit_key3_2 ext]
+        
+        # db3 should now be empty
+        r select 3
+        assert_equal {} [r get uninit_key3_1 ext]
+        assert_equal {} [r get uninit_key3_2 ext]
+    }
+    
+    test {SWAPDB with mixed memory and external storage} {
+        # Set keys with mix of memory and external storage in db5
+        r select 5
+        assert_equal {OK} [r external_data INIT db5 helloextdata1]
+        assert_equal {OK} [r set mixed_ext_key5 mixed_ext_value5 ext]
+        assert_equal {OK} [r set mixed_mem_key5 mixed_mem_value5]
+        
+        # Set keys with mix of memory and external storage in db6
+        r select 6
+        assert_equal {OK} [r external_data INIT db6 helloextdata1]
+        assert_equal {OK} [r set mixed_ext_key6 mixed_ext_value6 ext]
+        assert_equal {OK} [r set mixed_mem_key6 mixed_mem_value6]
+        
+        # Verify keys exist before swap
+        r select 5
+        assert_equal mixed_ext_value5 [r get mixed_ext_key5 ext]
+        assert_equal {} [r get mixed_ext_key5]
+        assert_equal mixed_mem_value5 [r get mixed_mem_key5]
+        
+        r select 6
+        assert_equal mixed_ext_value6 [r get mixed_ext_key6 ext]
+        assert_equal {} [r get mixed_ext_key6]
+        assert_equal mixed_mem_value6 [r get mixed_mem_key6]
+        
+        # Execute SWAPDB
+        assert_equal {OK} [r swapdb 5 6]
+        
+        # Verify both memory and external data are swapped
+        r select 5
+        assert_equal mixed_ext_value6 [r get mixed_ext_key6 ext]
+        assert_equal {} [r get mixed_ext_key6]
+        assert_equal mixed_mem_value6 [r get mixed_mem_key6]
+        assert_equal {} [r get mixed_ext_key5 ext]
+        
+        r select 6
+        assert_equal mixed_ext_value5 [r get mixed_ext_key5 ext]
+        assert_equal {} [r get mixed_ext_key5]
+        assert_equal mixed_mem_value5 [r get mixed_mem_key5]
+        assert_equal {} [r get mixed_ext_key6 ext]
+    }
+
+    test {SWAPDB: client sees swapped external data without SELECT} {
+        # This test verifies that after SWAPDB, a client connected to a database
+        # automatically sees the new external data without needing to call SELECT
+        # (same behavior as with memory keys)
+        
+        # Initialize databases
+        r select 7
+        assert_equal {OK} [r external_data INIT db7 helloextdata1]
+        r select 8
+        assert_equal {OK} [r external_data INIT db8 helloextdata1]
+        
+        # Set up data in db7
+        r select 7
+        assert_equal {OK} [r set client_key7_1 client_value7_1 ext]
+        assert_equal {OK} [r set client_key7_2 client_value7_2 ext]
+        assert_equal {OK} [r set client_mem_key7 client_mem_value7]
+        
+        # Set up data in db8
+        r select 8
+        assert_equal {OK} [r set client_key8_1 client_value8_1 ext]
+        assert_equal {OK} [r set client_key8_2 client_value8_2 ext]
+        assert_equal {OK} [r set client_mem_key8 client_mem_value8]
+        
+        # Create a second client connected to db7
+        set client2 [valkey_client]
+        $client2 select 7
+        
+        # Verify client2 sees db7's data before swap
+        assert_equal client_value7_1 [$client2 get client_key7_1 ext]
+        assert_equal client_value7_2 [$client2 get client_key7_2 ext]
+        assert_equal client_mem_value7 [$client2 get client_mem_key7]
+        assert_equal {client_key7_1 client_key7_2} [lsort [$client2 keys client_key* ext]]
+        
+        # Verify client2 does NOT see db8's data
+        assert_equal {} [$client2 get client_key8_1 ext]
+        assert_equal {} [$client2 get client_key8_2 ext]
+        
+        # Execute SWAPDB using the main client (r)
+        r select 0
+        assert_equal {OK} [r swapdb 7 8]
+        
+        # Now client2 (still logically connected to db7, but without calling SELECT again)
+        # should see db8's data because db7 and db8 were swapped
+        assert_equal client_value8_1 [$client2 get client_key8_1 ext]
+        assert_equal client_value8_2 [$client2 get client_key8_2 ext]
+        assert_equal client_mem_value8 [$client2 get client_mem_key8]
+        assert_equal {client_key8_1 client_key8_2} [lsort [$client2 keys client_key* ext]]
+        
+        # Verify client2 does NOT see db7's old data anymore
+        assert_equal {} [$client2 get client_key7_1 ext]
+        assert_equal {} [$client2 get client_key7_2 ext]
+        
+        # Verify using SCAN as well
+        set keys_client2 {}
+        set cur 0
+        while 1 {
+            set res [$client2 scan $cur type "string" match "client_key*" ext]
+            set cur [lindex $res 0]
+            set k [lindex $res 1]
+            lappend keys_client2 {*}$k
+            if {$cur == 0} break
+        }
+        assert_equal {client_key8_1 client_key8_2} [lsort $keys_client2]
+        
+        # Cleanup
+        $client2 close
+    }
+
+}
+
+# Test SWAPDB with cluster mode
+start_cluster 1 0 [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [list "external:skip" "cluster" "singledb:skip"]] {
+    set extdatamodule1 [file normalize tests/modules/extstorage/extdata1.so]
+    
+    test {SWAPDB swaps external data between two databases (cluster)} {
+        wait_for_cluster_state ok
+        
+        # Load module and initialize external storage
+        assert_equal {OK} [r module load $extdatamodule1]
+        assert_equal {OK} [r external_data INIT db0 helloextdata1]
+        assert_equal {OK} [r external_data INIT db1 helloextdata1]
+        assert_equal {OK} [r external_data INIT db2 helloextdata1]
+        
+        # Set keys in db0
+        r select 0
+        assert_equal {OK} [r set cluster_swap_key0_1 cluster_swap_value0_1 ext]
+        assert_equal {OK} [r set cluster_swap_key0_2 cluster_swap_value0_2 ext]
+        
+        # Set keys in db1
+        r select 1
+        assert_equal {OK} [r set cluster_swap_key1_1 cluster_swap_value1_1 ext]
+        assert_equal {OK} [r set cluster_swap_key1_2 cluster_swap_value1_2 ext]
+        
+        # Set keys in db2 (should remain unaffected)
+        r select 2
+        assert_equal {OK} [r set cluster_swap_key2_1 cluster_swap_value2_1 ext]
+        
+        # Verify keys exist before swap using GET, KEYS, and SCAN
+        r select 0
+        assert_equal cluster_swap_value0_1 [r get cluster_swap_key0_1 ext]
+        assert_equal cluster_swap_value0_2 [r get cluster_swap_key0_2 ext]
+        assert_equal {cluster_swap_key0_1 cluster_swap_key0_2} [lsort [r keys cluster_swap_key* ext]]
+        set keys_db0 [lsort [scan_keys 0 "string" "cluster_swap_key*" "ext"]]
+        assert_equal {cluster_swap_key0_1 cluster_swap_key0_2} $keys_db0
+        
+        r select 1
+        assert_equal cluster_swap_value1_1 [r get cluster_swap_key1_1 ext]
+        assert_equal cluster_swap_value1_2 [r get cluster_swap_key1_2 ext]
+        assert_equal {cluster_swap_key1_1 cluster_swap_key1_2} [lsort [r keys cluster_swap_key* ext]]
+        set keys_db1 [lsort [scan_keys 0 "string" "cluster_swap_key*" "ext"]]
+        assert_equal {cluster_swap_key1_1 cluster_swap_key1_2} $keys_db1
+        
+        r select 2
+        assert_equal cluster_swap_value2_1 [r get cluster_swap_key2_1 ext]
+        assert_equal {cluster_swap_key2_1} [r keys cluster_swap_key* ext]
+        
+        # Execute SWAPDB
+        assert_equal {OK} [r swapdb 0 1]
+        
+        # Verify external data is swapped using GET, KEYS, and SCAN
+        r select 0
+        assert_equal cluster_swap_value1_1 [r get cluster_swap_key1_1 ext]
+        assert_equal cluster_swap_value1_2 [r get cluster_swap_key1_2 ext]
+        assert_equal {} [r get cluster_swap_key0_1 ext]
+        assert_equal {cluster_swap_key1_1 cluster_swap_key1_2} [lsort [r keys cluster_swap_key* ext]]
+        set keys_db0_after [lsort [scan_keys 0 "string" "cluster_swap_key*" "ext"]]
+        assert_equal {cluster_swap_key1_1 cluster_swap_key1_2} $keys_db0_after
+        
+        r select 1
+        assert_equal cluster_swap_value0_1 [r get cluster_swap_key0_1 ext]
+        assert_equal cluster_swap_value0_2 [r get cluster_swap_key0_2 ext]
+        assert_equal {} [r get cluster_swap_key1_1 ext]
+        assert_equal {cluster_swap_key0_1 cluster_swap_key0_2} [lsort [r keys cluster_swap_key* ext]]
+        set keys_db1_after [lsort [scan_keys 0 "string" "cluster_swap_key*" "ext"]]
+        assert_equal {cluster_swap_key0_1 cluster_swap_key0_2} $keys_db1_after
+        
+        # Verify db2 is unaffected
+        r select 2
+        assert_equal cluster_swap_value2_1 [r get cluster_swap_key2_1 ext]
+        assert_equal {cluster_swap_key2_1} [r keys cluster_swap_key* ext]
+    }
+    
+    test {SWAPDB with same database leaves external data unchanged (cluster)} {
+        # Set keys in db0
+        r select 0
+        assert_equal {OK} [r set cluster_same_key0_1 cluster_same_value0_1 ext]
+        
+        # Verify key exists before swap
+        assert_equal cluster_same_value0_1 [r get cluster_same_key0_1 ext]
+        
+        # Execute SWAPDB with same database
+        assert_equal {OK} [r swapdb 0 0]
+        
+        # Verify external data is unchanged
+        assert_equal cluster_same_value0_1 [r get cluster_same_key0_1 ext]
+    }
+    
+    test {SWAPDB: client sees swapped external data without SELECT (cluster)} {
+        # This test verifies that after SWAPDB, a client connected to a database
+        # automatically sees the new external data without needing to call SELECT
+        # (same behavior as with memory keys)
+        
+        wait_for_cluster_state ok
+        
+        # Initialize databases
+        r select 7
+        assert_equal {OK} [r external_data INIT db7 helloextdata1]
+        r select 8
+        assert_equal {OK} [r external_data INIT db8 helloextdata1]
+        
+        # Set up data in db7
+        r select 7
+        assert_equal {OK} [r set cluster_client_key7_1 cluster_client_value7_1 ext]
+        assert_equal {OK} [r set cluster_client_key7_2 cluster_client_value7_2 ext]
+        
+        # Set up data in db8
+        r select 8
+        assert_equal {OK} [r set cluster_client_key8_1 cluster_client_value8_1 ext]
+        assert_equal {OK} [r set cluster_client_key8_2 cluster_client_value8_2 ext]
+        
+        # Create a second client connected to db7
+        set client2 [valkey_cluster_client 0 0]
+        $client2 select 7
+        
+        # Verify client2 sees db7's data before swap
+        assert_equal cluster_client_value7_1 [$client2 get cluster_client_key7_1 ext]
+        assert_equal cluster_client_value7_2 [$client2 get cluster_client_key7_2 ext]
+        assert_equal {cluster_client_key7_1 cluster_client_key7_2} [lsort [$client2 keys cluster_client_key* ext]]
+        
+        # Verify client2 does NOT see db8's data
+        assert_equal {} [$client2 get cluster_client_key8_1 ext]
+        assert_equal {} [$client2 get cluster_client_key8_2 ext]
+        
+        # Execute SWAPDB using the main client (r)
+        r select 0
+        assert_equal {OK} [r swapdb 7 8]
+        
+        # Now client2 (still logically connected to db7, but without calling SELECT again)
+        # should see db8's data because db7 and db8 were swapped
+        assert_equal cluster_client_value8_1 [$client2 get cluster_client_key8_1 ext]
+        assert_equal cluster_client_value8_2 [$client2 get cluster_client_key8_2 ext]
+        assert_equal {cluster_client_key8_1 cluster_client_key8_2} [lsort [$client2 keys cluster_client_key* ext]]
+        
+        # Verify client2 does NOT see db7's old data anymore
+        assert_equal {} [$client2 get cluster_client_key7_1 ext]
+        assert_equal {} [$client2 get cluster_client_key7_2 ext]
+        
+        # Verify using SCAN as well
+        set keys_client2 {}
+        set cur 0
+        while 1 {
+            set res [$client2 scan $cur type "string" match "cluster_client_key*" ext]
+            set cur [lindex $res 0]
+            set k [lindex $res 1]
+            lappend keys_client2 {*}$k
+            if {$cur == 0} break
+        }
+        assert_equal {cluster_client_key8_1 cluster_client_key8_2} [lsort $keys_client2]
+        
+        # Cleanup
+        $client2 close
     }
 }

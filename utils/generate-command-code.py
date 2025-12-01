@@ -94,26 +94,26 @@ def check_command_key_specs(command):
     return True
 
 
-def check_implicit_acl_categories(command):
+def check_acl_categories(command):
     """
     Validate that ACL categories in JSON files follow rules:
     
-    Implicit ACL category rules (from setImplicitACLCategories in server.c):
-    1. WRITE flag - WRITE category
-    2. READONLY flag (and NOT SCRIPTING category) - READ category
-    3. ADMIN flag - ADMIN and DANGEROUS categories
-    4. PUBSUB flag - PUBSUB category
-    5. FAST flag - FAST category
-    6. BLOCKING flag - BLOCKING category
-    7. If NOT FAST category - SLOW category
+    1. WRITE flag and WRITE category must match
+    2. READONLY flag (and NOT SCRIPTING category) requires READ category
+    3. ADMIN flag requires ADMIN and DANGEROUS categories
+    4. PUBSUB flag and PUBSUB category must match
+    5. FAST flag and FAST category must match
+    6. BLOCKING flag and BLOCKING category must match
+    7. Commands cannot be both FAST and SLOW
+    8. Commands without FAST category must have SLOW category
     """
     command_flags = set(command.desc.get("command_flags", []))
     acl_categories = set(command.desc.get("acl_categories", []))
     
     errors = []
     
-    if "WRITE" in command_flags and "WRITE" not in acl_categories:
-        errors.append("WRITE flag requires WRITE category")
+    if ("WRITE" in command_flags) != ("WRITE" in acl_categories):
+        errors.append("WRITE flag and WRITE category must match")
     
     if "READONLY" in command_flags and "SCRIPTING" not in acl_categories:
         if "READ" not in acl_categories:
@@ -125,14 +125,17 @@ def check_implicit_acl_categories(command):
         if "DANGEROUS" not in acl_categories:
             errors.append("ADMIN flag requires DANGEROUS category")
     
-    if "PUBSUB" in command_flags and "PUBSUB" not in acl_categories:
-        errors.append("PUBSUB flag requires PUBSUB category")
+    if ("PUBSUB" in command_flags) != ("PUBSUB" in acl_categories):
+        errors.append("PUBSUB flag and PUBSUB category must match")
     
-    if "FAST" in command_flags and "FAST" not in acl_categories:
-        errors.append("FAST flag requires FAST category")
+    if ("FAST" in command_flags) != ("FAST" in acl_categories):
+        errors.append("FAST flag and FAST category must match")
     
-    if "BLOCKING" in command_flags and "BLOCKING" not in acl_categories:
-        errors.append("BLOCKING flag requires BLOCKING category")
+    if ("BLOCKING" in command_flags) != ("BLOCKING" in acl_categories):
+        errors.append("BLOCKING flag and BLOCKING category must match")
+    
+    if "FAST" in acl_categories and "SLOW" in acl_categories:
+        errors.append("Command cannot be both FAST and SLOW")
     
     if "FAST" not in acl_categories and "SLOW" not in acl_categories:
         errors.append("Commands without FAST category must have SLOW category")
@@ -615,12 +618,12 @@ print("Checking all commands...")
 for command in commands.values():
     if not check_command_key_specs(command):
         check_command_error_counter += 1
-    if not check_implicit_acl_categories(command):
+    if not check_acl_categories(command):
         check_command_error_counter += 1
     
-    # Also check subcommands for implicit ACL categories
+    # Also check subcommands ACL categories
     for subcommand in command.subcommands:
-        if not check_implicit_acl_categories(subcommand):
+        if not check_acl_categories(subcommand):
             check_command_error_counter += 1
 
 if check_command_error_counter != 0:

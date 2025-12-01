@@ -1,8 +1,12 @@
 # Set the directory to find Valkey binaries for tests. Historically we've been
 # using make to build binaries under the src/ directory. Since we start supporting
-# CMake as well, we allow changing base dir by passing ENV variable `VALKEY_BIN_DIR`.
-# This must be an absolute path.
-set ::VALKEY_BIN_DIR [expr {[info exists ::env(VALKEY_BIN_DIR)] ? $::env(VALKEY_BIN_DIR) : "[pwd]/src"}]
+# CMake as well, we allow changing base dir by passing ENV variable `VALKEY_BIN_DIR`,
+# which could be either absolute or relative path (e.g. cmake-build-debug/bin).
+if {[info exists ::env(VALKEY_BIN_DIR)]} {
+    set ::VALKEY_BIN_DIR [file normalize $::env(VALKEY_BIN_DIR)]
+} else {
+    set ::VALKEY_BIN_DIR "[pwd]/src"
+}
 
 # Helper to build absolute paths
 proc valkey_bin_absolute_path {name} {

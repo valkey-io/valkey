@@ -694,9 +694,7 @@ int clusterLoadConfig(char *filename) {
             /* Check if the node (nodeid) has already been loaded. The nodeid is used to
              * identify every node across the entire cluster, we do not expect to find
              * duplicate nodeids in nodes.conf. */
-            sds nodename = sdsnewlen(argv[0], sdslen(argv[0]));
-            dictEntry *de = dictFind(tmp_cluster_nodes, nodename);
-            sdsfree(nodename);
+            dictEntry *de = dictFind(tmp_cluster_nodes, argv[0]);
             if (de != NULL) {
                 serverLog(LL_WARNING, "Duplicate nodeid detected: %s", argv[0]);
                 sdsfreesplitres(argv, argc);
@@ -958,7 +956,8 @@ int clusterLoadConfig(char *filename) {
 
     zfree(line);
     fclose(fp);
-    if (tmp_cluster_nodes) dictRelease(tmp_cluster_nodes);
+    serverAssert(tmp_cluster_nodes != NULL);
+    dictRelease(tmp_cluster_nodes);
 
     serverLog(LL_NOTICE, "Node configuration loaded, I'm %.40s", myself->name);
 

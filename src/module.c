@@ -5165,7 +5165,8 @@ ValkeyModuleString *VM_ZsetRangeCurrentElement(ValkeyModuleKey *key, double *sco
     } else if (key->value->encoding == OBJ_ENCODING_SKIPLIST) {
         zskiplistNode *ln = key->u.zset.current;
         if (score) *score = ln->score;
-        str = createStringObject(ln->ele, sdslen(ln->ele));
+        sds ele = zslGetNodeElement(ln);
+        str = createStringObject(ele, sdslen(ele));
     } else {
         serverPanic("Unsupported zset encoding");
     }
@@ -5222,7 +5223,7 @@ int VM_ZsetRangeNext(ValkeyModuleKey *key) {
                 key->u.zset.er = 1;
                 return 0;
             } else if (key->u.zset.type == VALKEYMODULE_ZSET_RANGE_LEX) {
-                if (!zslLexValueLteMax(next->ele, &key->u.zset.lrs)) {
+                if (!zslLexValueLteMax(zslGetNodeElement(next), &key->u.zset.lrs)) {
                     key->u.zset.er = 1;
                     return 0;
                 }
@@ -5284,7 +5285,7 @@ int VM_ZsetRangePrev(ValkeyModuleKey *key) {
                 key->u.zset.er = 1;
                 return 0;
             } else if (key->u.zset.type == VALKEYMODULE_ZSET_RANGE_LEX) {
-                if (!zslLexValueGteMin(prev->ele, &key->u.zset.lrs)) {
+                if (!zslLexValueGteMin(zslGetNodeElement(prev), &key->u.zset.lrs)) {
                     key->u.zset.er = 1;
                     return 0;
                 }
@@ -6832,7 +6833,7 @@ uint64_t moduleTypeEncodeId(const char *name, int encver) {
 
     uint64_t id = 0;
     for (int j = 0; j < 9; j++) {
-        char *p = strchr(cset, name[j]);
+        const char *p = strchr(cset, name[j]);
         if (!p) return 0;
         unsigned long pos = p - cset;
         id = (id << 6) | pos;
@@ -11418,7 +11419,7 @@ static void moduleScanKeyHashtableCallback(void *privdata, void *entry) {
         /* no value */
     } else if (o->type == OBJ_ZSET) {
         zskiplistNode *node = (zskiplistNode *)entry;
-        key = node->ele;
+        key = zslGetNodeElement(node);
         value = createStringObjectFromLongDouble(node->score, 0);
     } else if (o->type == OBJ_HASH) {
         key = entryGetField(entry);
@@ -13468,8 +13469,6 @@ int VM_RdbLoad(ValkeyModuleCtx *ctx, ValkeyModuleRdbStream *stream, int flags) {
      * will prevent COW memory issue. */
     if (server.child_type == CHILD_TYPE_SLOT_MIGRATION) killSlotMigrationChild();
 
-    emptyData(-1, EMPTYDB_NO_FLAGS, NULL);
-
     /* rdbLoad() can go back to the networking and process network events. If
      * VM_RdbLoad() is called inside a command callback, we don't want to
      * process the current client. Otherwise, we may free the client or try to
@@ -13477,7 +13476,7 @@ int VM_RdbLoad(ValkeyModuleCtx *ctx, ValkeyModuleRdbStream *stream, int flags) {
     if (server.current_client) protectClient(server.current_client);
 
     serverAssert(stream->type == VALKEYMODULE_RDB_STREAM_FILE);
-    int ret = rdbLoad(stream->data.filename, NULL, RDBFLAGS_NONE);
+    int ret = rdbLoad(stream->data.filename, NULL, RDBFLAGS_EMPTY_DATA);
 
     if (server.current_client) unprotectClient(server.current_client);
 

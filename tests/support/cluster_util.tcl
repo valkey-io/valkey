@@ -214,6 +214,9 @@ proc cluster_setup {masters replicas node_count slot_allocator replica_allocator
     for {set i 0} {$i < $node_count} {incr i} {
         R $i CLUSTER SET-CONFIG-EPOCH $config_epoch
         incr config_epoch
+        # Make it easier to understand how the server interacts with
+        # other nodes when reading the server logs.
+        R $i CONFIG SET cluster-announce-human-nodename "R$i"
     }
 
     # Have all nodes meet

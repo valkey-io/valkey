@@ -561,7 +561,7 @@ hashtableType setHashtableType = {
 
 const void *zsetHashtableGetKey(const void *element) {
     const zskiplistNode *node = element;
-    return node->ele;
+    return zslGetNodeElement(node);
 }
 
 /* Sorted sets hash (note: a skiplist is used in addition to the hash table) */
@@ -5642,6 +5642,7 @@ const char *replstateToString(int replstate) {
     case REPLICA_STATE_BG_RDB_LOAD: return "bg_transfer";
     case REPLICA_STATE_SEND_BULK: return "send_bulk";
     case REPLICA_STATE_ONLINE: return "online";
+    case REPLICA_STATE_RDB_TRANSMITTED: return "rdb_transmitted";
     default: return "";
     }
 }

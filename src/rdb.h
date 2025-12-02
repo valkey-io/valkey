@@ -166,6 +166,7 @@ enum RdbType {
 #define RDBFLAGS_ALLOW_DUP (1 << 2)    /* Allow duplicated keys when loading.*/
 #define RDBFLAGS_FEED_REPL (1 << 3)    /* Feed replication stream when loading.*/
 #define RDBFLAGS_KEEP_CACHE (1 << 4)   /* Don't reclaim cache after rdb file is generated */
+#define RDBFLAGS_EMPTY_DATA (1 << 5)   /* Flush the database after validating magic and rdb version*/
 
 /* When rdbLoadObject() returns NULL, the err flag is
  * set to hold the type of error that occurred */
@@ -213,5 +214,6 @@ int rdbSaveRio(int req, rio *rdb, int *error, int rdbflags, rdbSaveInfo *rsi);
 ssize_t rdbSaveFunctions(rio *rdb);
 rdbSaveInfo *rdbPopulateSaveInfo(rdbSaveInfo *rsi);
 int rdbRestoreOffsetFromSaveInfo(rdbSaveInfo *rsi, bool is_aof_preamble);
+void replicationEmptyDbCallback(hashtable *ht);
 
 #endif

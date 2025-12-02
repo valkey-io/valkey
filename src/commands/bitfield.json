@@ -12,7 +12,9 @@
             "DENYOOM"
         ],
         "acl_categories": [
-            "BITMAP"
+            "BITMAP",
+            "SLOW",
+            "WRITE"
         ],
         "key_specs": [
             {

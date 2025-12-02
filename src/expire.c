@@ -636,6 +636,19 @@ size_t getReplicaKeyWithExpireCount(void) {
     return dictSize(replicaKeysWithExpire);
 }
 
+/* Return the number of keys with fields expiring */
+unsigned long long getKeysWithVolatileItemsCount(void) {
+    unsigned long long keys_with_volatile_items_count = 0;
+    /* check each db for keys with expiring fields */
+    for (int j = 0; j < server.dbnum; j++) {
+        serverDb *db = server.db[j];
+        if (!db) continue;
+        kvstore *kvs = db->keys_with_volatile_items;
+        if (kvs) keys_with_volatile_items_count += kvstoreSize(kvs);
+    }
+    return keys_with_volatile_items_count;
+}
+
 /* Remove the keys in the hash table. We need to do that when data is
  * flushed from the server. We may receive new keys from the primary with
  * the same name/db and it is no longer a good idea to expire them.

@@ -6202,6 +6202,7 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                 "expired_keys_with_volatile_items_stale_perc:%.2f\r\n", server.stat_expired_keys_with_vola_stale_perc * 100,
                 "expired_time_cap_reached_count:%lld\r\n", server.stat_expired_time_cap_reached_count,
                 "expire_cycle_cpu_milliseconds:%lld\r\n", server.stat_expire_cycle_time_used / 1000,
+                "keys_with_volatile_items_count:%llu\r\n", getKeysWithVolatileItemsCount(),
                 "evicted_keys:%lld\r\n", server.stat_evictedkeys,
                 "evicted_clients:%lld\r\n", server.stat_evictedclients,
                 "evicted_scripts:%lld\r\n", server.stat_evictedscripts,

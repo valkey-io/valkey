@@ -8,10 +8,16 @@ if {[info exists ::env(VALKEY_BIN_DIR)]} {
     set ::VALKEY_BIN_DIR "[pwd]/src"
 }
 
+# Optional program suffix (e.g. `make PROG_SUFFIX=-alt` will create binary valkey-server-alt).
+# Passed from `make test` as environment variable VALKEY_PROG_SUFFIX.
+set ::VALKEY_PROG_SUFFIX [expr {
+    [info exists ::env(VALKEY_PROG_SUFFIX)] ? $::env(VALKEY_PROG_SUFFIX) : ""
+}]
+
 # Helper to build absolute paths
 proc valkey_bin_absolute_path {name} {
-    set p [file join $::VALKEY_BIN_DIR $name]
-    return $p
+    set full_name "${name}${::VALKEY_PROG_SUFFIX}"
+    return [file join $::VALKEY_BIN_DIR $full_name]
 }
 
 set ::VALKEY_SERVER_BIN    [valkey_bin_absolute_path "valkey-server"]

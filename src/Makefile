@@ -590,7 +590,7 @@ distclean: clean
 .PHONY: distclean
 
 test: $(SERVER_NAME) $(ENGINE_CHECK_AOF_NAME) $(ENGINE_CHECK_RDB_NAME) $(ENGINE_CLI_NAME) $(ENGINE_BENCHMARK_NAME)
-	@(cd ..; ./runtest)
+	@(cd ..; VALKEY_PROG_SUFFIX="$(PROG_SUFFIX)" ./runtest)
 
 test-unit: $(ENGINE_UNIT_TESTS)
 	./$(ENGINE_UNIT_TESTS)

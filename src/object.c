@@ -110,14 +110,7 @@ robj *createObject(int type, void *ptr) {
 
 void initObjectLRUOrLFU(robj *o) {
     if (o->refcount == OBJ_SHARED_REFCOUNT) return;
-    /* Set the LRU to the current lruclock (minutes resolution), or
-     * alternatively the LFU counter. */
-    if (server.maxmemory_policy & MAXMEMORY_FLAG_LFU) {
-        o->lru = (LFUGetTimeInMinutes() << 8) | LFU_INIT_VAL;
-    } else {
-        o->lru = LRU_CLOCK();
-    }
-    return;
+    o->lru = lrulfu_init();
 }
 
 /* Set a special refcount in the object to make it "shared":
@@ -1582,32 +1575,39 @@ sds getMemoryDoctorReport(void) {
     return s;
 }
 
+/* Return the LFU frequency for an object. */
+uint8_t objectGetLFUFrequency(robj *o) {
+    uint8_t freq;
+    o->lru = lfu_getFrequency(o->lru, &freq);
+    return freq;
+}
+
+/* Return the LRU idle time for an object. */
+uint32_t objectGetLRUIdleSecs(robj *o) {
+    return lru_getIdleSecs(o->lru);
+}
+
+/* Return an indication of idleness.  Larger numbers are more idle. */
+uint32_t objectGetIdleness(robj *o) {
+    uint32_t idleness;
+    o->lru = lrulfu_getIdleness(o->lru, &idleness);
+    return idleness;
+}
+
 /* Set the object LRU/LFU depending on server.maxmemory_policy.
  * The lfu_freq arg is only relevant if policy is MAXMEMORY_FLAG_LFU.
  * The lru_idle and lru_clock args are only relevant if policy
  * is MAXMEMORY_FLAG_LRU.
  * Either or both of them may be <0, in that case, nothing is set. */
-int objectSetLRUOrLFU(robj *val, long long lfu_freq, long long lru_idle, long long lru_clock, int lru_multiplier) {
-    if (server.maxmemory_policy & MAXMEMORY_FLAG_LFU) {
+int objectSetLRUOrLFU(robj *val, long long lfu_freq, long long lru_idle_secs) {
+    if (lrulfu_isUsingLFU()) {
         if (lfu_freq >= 0) {
-            serverAssert(lfu_freq <= 255);
-            val->lru = (LFUGetTimeInMinutes() << 8) | lfu_freq;
+            serverAssert(lfu_freq <= UINT8_MAX);
+            val->lru = lfu_import((uint8_t)lfu_freq);
             return 1;
         }
-    } else if (lru_idle >= 0) {
-        /* Provided LRU idle time is in seconds. Scale
-         * according to the LRU clock resolution this
-         * instance was compiled with (normally 1000 ms, so the
-         * below statement will expand to lru_idle*1000/1000. */
-        lru_idle = lru_idle * lru_multiplier / LRU_CLOCK_RESOLUTION;
-        long lru_abs = lru_clock - lru_idle; /* Absolute access time. */
-        /* If the LRU field underflows (since lru_clock is a wrapping clock),
-         * we need to make it positive again. This will be handled by the unwrapping
-         * code in estimateObjectIdleTime. I.e. imagine a day when lru_clock
-         * wrap arounds (happens once in some 6 months), and becomes a low
-         * value, like 10, an lru_idle of 1000 should be near LRU_CLOCK_MAX. */
-        if (lru_abs < 0) lru_abs += LRU_CLOCK_MAX;
-        val->lru = lru_abs;
+    } else if (lru_idle_secs >= 0) {
+        val->lru = lru_import(lru_idle_secs);
         return 1;
     }
     return 0;
@@ -1660,7 +1660,7 @@ void objectCommand(client *c) {
                              "switching between policies at runtime LRU and LFU data will take some time to adjust.");
             return;
         }
-        addReplyLongLong(c, estimateObjectIdleTime(o) / 1000);
+        addReplyLongLong(c, lru_getIdleSecs(o->lru));
     } else if (!strcasecmp(c->argv[1]->ptr, "freq") && c->argc == 3) {
         if ((o = objectCommandLookupOrReply(c, c->argv[2], shared.null[c->resp])) == NULL) return;
         if (!(server.maxmemory_policy & MAXMEMORY_FLAG_LFU)) {
@@ -1669,11 +1669,7 @@ void objectCommand(client *c) {
                           "when switching between policies at runtime LRU and LFU data will take some time to adjust.");
             return;
         }
-        /* LFUDecrAndReturn should be called
-         * in case of the key has not been accessed for a long time,
-         * because we update the access time only
-         * when the key is read or overwritten. */
-        addReplyLongLong(c, LFUDecrAndReturn(o));
+        addReplyLongLong(c, objectGetLFUFrequency(o));
     } else {
         addReplySubcommandSyntaxError(c);
     }

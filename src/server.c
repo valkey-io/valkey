@@ -1513,19 +1513,6 @@ long long serverCron(struct aeEventLoop *eventLoop, long long id, void *clientDa
                                  server.duration_stats[EL_DURATION_TYPE_EL].cnt, 1);
     }
 
-    /* We have just LRU_BITS bits per object for LRU information.
-     * So we use an (eventually wrapping) LRU clock.
-     *
-     * Note that even if the counter wraps it's not a big problem,
-     * everything will still work but some object will appear younger
-     * to the server. However for this to happen a given object should never be
-     * touched for all the time needed to the counter to wrap, which is
-     * not likely.
-     *
-     * Note that you can change the resolution altering the
-     * LRU_CLOCK_RESOLUTION define. */
-    server.lruclock = getLRUClock();
-
     cronUpdateMemoryStats();
 
     /* We received a SIGTERM or SIGINT, shutting down here in a safe way, as it is
@@ -2288,7 +2275,6 @@ void initServerConfig(void) {
     server.latency_tracking_info_percentiles[1] = 99.0; /* p99 */
     server.latency_tracking_info_percentiles[2] = 99.9; /* p999 */
 
-    server.lruclock = getLRUClock();
     resetServerSaveParams();
 
     appendServerSaveParams(60 * 60, 1); /* save after 1 hour and 1 change */
@@ -5917,7 +5903,7 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                 "hz:%i\r\n", server.hz,
                 "configured_hz:%i\r\n", server.hz,
                 "clients_hz:%i\r\n", server.clients_hz,
-                "lru_clock:%u\r\n", server.lruclock,
+                "lru_clock:%u\r\n", server.unixtime & ((1 << LRULFU_BITS) - 1),
                 "executable:%s\r\n", server.executable ? server.executable : "",
                 "config_file:%s\r\n", server.configfile ? server.configfile : "",
                 "io_threads_active:%i\r\n", server.active_io_threads_num > 1,

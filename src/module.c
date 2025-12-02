@@ -13739,7 +13739,7 @@ size_t moduleCount(void) {
  * returns VALKEYMODULE_OK if the LRU was updated, VALKEYMODULE_ERR otherwise. */
 int VM_SetLRU(ValkeyModuleKey *key, mstime_t lru_idle) {
     if (!key->value) return VALKEYMODULE_ERR;
-    if (objectSetLRUOrLFU(key->value, -1, lru_idle, lru_idle >= 0 ? LRU_CLOCK() : 0, 1)) return VALKEYMODULE_OK;
+    if (objectSetLRUOrLFU(key->value, -1, lru_idle * 1000)) return VALKEYMODULE_OK;
     return VALKEYMODULE_ERR;
 }
 
@@ -13751,7 +13751,7 @@ int VM_GetLRU(ValkeyModuleKey *key, mstime_t *lru_idle) {
     *lru_idle = -1;
     if (!key->value) return VALKEYMODULE_ERR;
     if (server.maxmemory_policy & MAXMEMORY_FLAG_LFU) return VALKEYMODULE_OK;
-    *lru_idle = estimateObjectIdleTime(key->value);
+    *lru_idle = objectGetLRUIdleSecs(key->value) * 1000;
     return VALKEYMODULE_OK;
 }
 
@@ -13762,7 +13762,7 @@ int VM_GetLRU(ValkeyModuleKey *key, mstime_t *lru_idle) {
  * returns VALKEYMODULE_OK if the LFU was updated, VALKEYMODULE_ERR otherwise. */
 int VM_SetLFU(ValkeyModuleKey *key, long long lfu_freq) {
     if (!key->value) return VALKEYMODULE_ERR;
-    if (objectSetLRUOrLFU(key->value, lfu_freq, -1, 0, 1)) return VALKEYMODULE_OK;
+    if (objectSetLRUOrLFU(key->value, lfu_freq, -1)) return VALKEYMODULE_OK;
     return VALKEYMODULE_ERR;
 }
 
@@ -13772,7 +13772,7 @@ int VM_SetLFU(ValkeyModuleKey *key, long long lfu_freq) {
 int VM_GetLFU(ValkeyModuleKey *key, long long *lfu_freq) {
     *lfu_freq = -1;
     if (!key->value) return VALKEYMODULE_ERR;
-    if (server.maxmemory_policy & MAXMEMORY_FLAG_LFU) *lfu_freq = LFUDecrAndReturn(key->value);
+    if (lrulfu_isUsingLFU()) *lfu_freq = objectGetLFUFrequency(key->value);
     return VALKEYMODULE_OK;
 }
 

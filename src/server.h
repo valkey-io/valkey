@@ -82,6 +82,7 @@
 #include "vset.h"
 #include "trace/trace.h"
 #include "entry.h"
+#include "lrulfu.h"
 
 #ifdef USE_LTTNG
 #define valkey_fork() do_fork()
@@ -784,10 +785,6 @@ typedef struct ValkeyModuleType moduleType;
 #define OBJ_ENCODING_STREAM 10    /* Encoded as a radix tree of listpacks */
 #define OBJ_ENCODING_LISTPACK 11  /* Encoded as a listpack */
 
-#define LRU_BITS 24
-#define LRU_CLOCK_MAX ((1 << LRU_BITS) - 1) /* Max value of obj->lru */
-#define LRU_CLOCK_RESOLUTION 1000           /* LRU clock resolution in ms */
-
 #define OBJ_REFCOUNT_BITS 30
 #define OBJ_SHARED_REFCOUNT ((1 << OBJ_REFCOUNT_BITS) - 1) /* Global object never destroyed. */
 #define OBJ_STATIC_REFCOUNT ((1 << OBJ_REFCOUNT_BITS) - 2) /* Object allocated in the stack. */
@@ -795,9 +792,7 @@ typedef struct ValkeyModuleType moduleType;
 struct serverObject {
     unsigned type : 4;
     unsigned encoding : 4;
-    unsigned lru : LRU_BITS; /* LRU time (relative to global lru_clock) or
-                              * LFU data (least significant 8 bits frequency
-                              * and most significant 16 bits access time). */
+    unsigned lru : LRULFU_BITS;
     unsigned hasexpire : 1;
     unsigned hasembkey : 1;
     unsigned refcount : OBJ_REFCOUNT_BITS;
@@ -1682,7 +1677,6 @@ struct valkeyServer {
     _Atomic AeIoState io_poll_state;     /* Indicates the state of the IO polling. */
     int io_ae_fired_events;              /* Number of poll events received by the IO thread. */
     rax *errors;                         /* Errors table */
-    unsigned int lruclock;               /* Clock for LRU eviction */
     volatile sig_atomic_t shutdown_asap; /* Shutdown ordered by signal handler. */
     mstime_t shutdown_mstime;            /* Timestamp to limit graceful shutdown. */
     int last_sig_received;               /* Indicates the last SIGNAL received, if any (e.g., SIGINT or SIGTERM). */
@@ -3056,7 +3050,6 @@ char *strEncoding(int encoding);
 int compareStringObjects(const robj *a, const robj *b);
 int collateStringObjects(const robj *a, const robj *b);
 int equalStringObjects(robj *a, robj *b);
-unsigned long long estimateObjectIdleTime(robj *o);
 void trimStringObjectIfNeeded(robj *o, int trim_small_values);
 #define sdsEncodedObject(objptr) (objptr->encoding == OBJ_ENCODING_RAW || objptr->encoding == OBJ_ENCODING_EMBSTR)
 
@@ -3066,6 +3059,9 @@ robj *objectSetKeyAndExpire(robj *val, sds key, long long expire);
 robj *objectSetExpire(robj *val, long long expire);
 sds objectGetKey(const robj *val);
 long long objectGetExpire(const robj *val);
+uint8_t objectGetLFUFrequency(robj *o);
+uint32_t objectGetLRUIdleSecs(robj *o);
+uint32_t objectGetIdleness(robj *o);
 
 /* Synchronous I/O with timeout */
 ssize_t syncWrite(int fd, char *ptr, ssize_t size, long long timeout);
@@ -3380,8 +3376,6 @@ void exitExecutionUnit(void);
 void resetServerStats(void);
 void monitorActiveDefrag(void);
 void defragWhileBlocked(void);
-unsigned int getLRUClock(void);
-unsigned int LRU_CLOCK(void);
 const char *evictPolicyToString(void);
 struct serverMemOverhead *getMemoryOverheadData(void);
 void freeMemoryOverheadData(struct serverMemOverhead *mh);
@@ -3590,7 +3584,7 @@ robj *lookupKeyReadWithFlags(serverDb *db, robj *key, int flags);
 robj *lookupKeyWriteWithFlags(serverDb *db, robj *key, int flags);
 robj *objectCommandLookup(client *c, robj *key);
 robj *objectCommandLookupOrReply(client *c, robj *key, robj *reply);
-int objectSetLRUOrLFU(robj *val, long long lfu_freq, long long lru_idle, long long lru_clock, int lru_multiplier);
+int objectSetLRUOrLFU(robj *val, long long lfu_freq, long long lru_idle_secs);
 #define LOOKUP_NONE 0
 #define LOOKUP_NOTOUCH (1 << 0)  /* Don't update LRU. */
 #define LOOKUP_NONOTIFY (1 << 1) /* Don't trigger keyspace event on key misses. */
@@ -3750,10 +3744,6 @@ int clientsCronHandleTimeout(client *c, mstime_t now_ms);
 
 /* evict.c -- maxmemory handling and LRU eviction. */
 void evictionPoolAlloc(void);
-#define LFU_INIT_VAL 5
-unsigned long LFUGetTimeInMinutes(void);
-uint8_t LFULogIncr(uint8_t value);
-unsigned long LFUDecrAndReturn(robj *o);
 #define EVICT_OK 0
 #define EVICT_RUNNING 1
 #define EVICT_FAIL 2

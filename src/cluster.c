@@ -198,7 +198,7 @@ void dumpCommand(client *c) {
 
 /* RESTORE key ttl serialized-value [REPLACE] [ABSTTL] [IDLETIME seconds] [FREQ frequency] */
 void restoreCommand(client *c) {
-    long long ttl, lfu_freq = -1, lru_idle = -1, lru_clock = -1;
+    long long ttl, lfu_freq = -1, lru_idle = -1;
     uint16_t rdbver = 0;
     rio payload;
     int j, type, replace = 0, absttl = 0;
@@ -217,7 +217,6 @@ void restoreCommand(client *c) {
                 addReplyError(c, "Invalid IDLETIME value, must be >= 0");
                 return;
             }
-            lru_clock = LRU_CLOCK();
             j++; /* Consume additional arg. */
         } else if (!strcasecmp(c->argv[j]->ptr, "freq") && additional >= 1 && lru_idle == -1) {
             if (getLongLongFromObjectOrReply(c, c->argv[j + 1], &lfu_freq, NULL) != C_OK) return;
@@ -305,7 +304,7 @@ void restoreCommand(client *c) {
             rewriteClientCommandArgument(c, c->argc, shared.absttl);
         }
     }
-    objectSetLRUOrLFU(obj, lfu_freq, lru_idle, lru_clock, 1000);
+    objectSetLRUOrLFU(obj, lfu_freq, lru_idle);
     signalModifiedKey(c, c->db, key);
     notifyKeyspaceEvent(NOTIFY_GENERIC, "restore", key, c->db->id);
     addReply(c, shared.ok);

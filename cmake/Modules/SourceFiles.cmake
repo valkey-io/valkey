@@ -72,6 +72,7 @@ set(VALKEY_SERVER_SRCS
     ${CMAKE_SOURCE_DIR}/src/geo.c
     ${CMAKE_SOURCE_DIR}/src/lazyfree.c
     ${CMAKE_SOURCE_DIR}/src/module.c
+    ${CMAKE_SOURCE_DIR}/src/lrulfu.c
     ${CMAKE_SOURCE_DIR}/src/evict.c
     ${CMAKE_SOURCE_DIR}/src/expire.c
     ${CMAKE_SOURCE_DIR}/src/geohash.c

@@ -461,3 +461,12 @@ proc wait_for_slot_state {srv_idx pattern} {
         fail "incorrect slot state on R $srv_idx: expected $pattern; got [get_open_slots $srv_idx]"
     }
 }
+
+proc cluster_forget_node {node_idx num_nodes} {
+    set to_forget [R $node_idx CLUSTER MYID]
+    # Then forget it from all the other nodes.
+    for {set i 0} {$i < $num_nodes} {incr i} {
+        if {$i == $node_idx} continue
+        R $i CLUSTER FORGET $to_forget
+    }
+}

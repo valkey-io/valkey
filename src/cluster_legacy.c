@@ -981,8 +981,11 @@ int clusterSaveConfig(int do_fsync) {
     server.cluster->todo_before_sleep &= ~CLUSTER_TODO_SAVE_CONFIG;
 
     /* Get the nodes description and concatenate our "vars" directive to
-     * save currentEpoch and lastVoteEpoch. */
-    ci = clusterGenNodesDescription(NULL, CLUSTER_NODE_HANDSHAKE, 0);
+     * save currentEpoch and lastVoteEpoch. For simplicity, uninitialized shards shouldn't be
+     * persisted in the config. When a node bootstraps by reading the config, it can simply
+     * assume that all the nodes have shard-ids initialized and actually learn new nodes and
+     * their shard ids via direct pings. */
+    ci = clusterGenNodesDescription(NULL, CLUSTER_NODE_HANDSHAKE, CLUSTER_LOCAL_NODE_SHARD_ID_UNINITIALIZED, 0);
     ci = sdscatfmt(ci, "vars currentEpoch %U lastVoteEpoch %U\n",
                    (unsigned long long)server.cluster->currentEpoch,
                    (unsigned long long)server.cluster->lastVoteEpoch);
@@ -1285,6 +1288,7 @@ static void updateShardId(clusterNode *node, const char *shard_id) {
     if (shard_id && memcmp(node->shard_id, shard_id, CLUSTER_NAMELEN) != 0) {
         clusterRemoveNodeFromShard(node);
         memcpy(node->shard_id, shard_id, CLUSTER_NAMELEN);
+        node->local_flags &= ~CLUSTER_LOCAL_NODE_SHARD_ID_UNINITIALIZED;
         clusterAddNodeToShard(shard_id, node);
         clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG);
     }
@@ -1294,10 +1298,19 @@ static void updateShardId(clusterNode *node, const char *shard_id) {
              * from pre-7.2 releases */
             clusterRemoveNodeFromShard(myself);
             memcpy(myself->shard_id, shard_id, CLUSTER_NAMELEN);
+            node->local_flags &= ~CLUSTER_LOCAL_NODE_SHARD_ID_UNINITIALIZED;
             clusterAddNodeToShard(shard_id, myself);
             clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_FSYNC_CONFIG);
         }
     }
+}
+
+static void updateShardIdFromSourceNode(clusterNode *target_node, clusterNode *source_node) {
+    if (source_node->local_flags & CLUSTER_LOCAL_NODE_SHARD_ID_UNINITIALIZED) {
+        serverLog(LL_NOTICE, "Shard id of target shard node %.40s is uninitialized. rejecting!", source_node->name);
+        return;
+    }
+    updateShardId(target_node, source_node->shard_id);
 }
 
 static inline int areInSameShard(clusterNode *node1, clusterNode *node2) {
@@ -1826,6 +1839,7 @@ clusterNode *createClusterNode(char *nodename, int flags) {
     node->ctime = mstime();
     node->configEpoch = 0;
     node->flags = flags;
+    node->local_flags = 0;
     memset(node->slots, 0, sizeof(node->slots));
     node->slot_info_pairs = NULL;
     node->slot_info_pairs_count = 0;
@@ -2759,7 +2773,11 @@ void clusterProcessGossipSection(clusterMsg *hdr, clusterLink *link) {
              * joining another cluster. */
             if (sender && !(flags & CLUSTER_NODE_NOADDR) && !clusterBlacklistExists(g->nodename, CLUSTER_NAMELEN)) {
                 clusterNode *node;
+                /* Since shard_ids are learnt only via direct PINGs, flag the node to
+                 * have an uninitialized shard_id whenever a node entry was added as
+                 * part of gossip. */
                 node = createClusterNode(g->nodename, flags);
+                node->local_flags |= CLUSTER_LOCAL_NODE_SHARD_ID_UNINITIALIZED;
                 memcpy(node->ip, g->ip, NET_IP_STR_LEN);
                 node->tcp_port = msg_tcp_port;
                 node->tls_port = msg_tls_port;
@@ -2891,6 +2909,10 @@ static void clusterLogSlotRangeMigration(int first_slot,
  * Sometimes it is not actually the "Sender" of the information, like in the
  * case we receive the info via an UPDATE packet. */
 void clusterUpdateSlotsConfigWith(clusterNode *sender, uint64_t senderConfigEpoch, unsigned char *slots) {
+    if (sender->local_flags & CLUSTER_LOCAL_NODE_SHARD_ID_UNINITIALIZED) {
+        serverLog(LL_DEBUG, "Shard ID isn't yet initialized, ignoring slot updates");
+        return;
+    }
     int j;
     clusterNode *cur_primary = NULL, *new_primary = NULL;
     /* The dirty slots list is a list of slots for which we lose the ownership
@@ -4111,7 +4133,7 @@ int clusterProcessPacket(clusterLink *link) {
 
                     /* Update the shard_id when a replica is connected to its
                      * primary in the very first time. */
-                    updateShardId(sender, sender_claimed_primary->shard_id);
+                    updateShardIdFromSourceNode(sender, sender_claimed_primary);
 
                     /* Update config. */
                     clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG);
@@ -6541,7 +6563,7 @@ static void clusterSetPrimary(clusterNode *n, int closeSlots, int full_sync_requ
     }
     if (closeSlots) clusterCloseAllSlots();
     myself->replicaof = n;
-    updateShardId(myself, n->shard_id);
+    updateShardIdFromSourceNode(myself, n);
     clusterNodeAddReplica(n, myself);
     replicationSetPrimary(n->ip, getNodeDefaultReplicationPort(n), full_sync_required, true);
     removeAllNotOwnedShardChannelSubscriptions();
@@ -6576,7 +6598,8 @@ static struct clusterNodeFlags clusterNodeFlagsTable[] = {
     {CLUSTER_NODE_FAIL, "fail,"},
     {CLUSTER_NODE_HANDSHAKE, "handshake,"},
     {CLUSTER_NODE_NOADDR, "noaddr,"},
-    {CLUSTER_NODE_NOFAILOVER, "nofailover,"}};
+    {CLUSTER_NODE_NOFAILOVER, "nofailover,"},
+};
 
 /* Concatenate the comma separated list of node flags to the given SDS
  * string 'ci'. */
@@ -6762,7 +6785,7 @@ void clusterFreeNodesSlotsInfo(clusterNode *n) {
  * The representation obtained using this function is used for the output
  * of the CLUSTER NODES function, and as format for the cluster
  * configuration file (nodes.conf) for a given node. */
-sds clusterGenNodesDescription(client *c, int filter, int tls_primary) {
+sds clusterGenNodesDescription(client *c, int filter, int local_filter, int tls_primary) {
     sds ci = sdsempty(), ni;
     dictIterator *di;
     dictEntry *de;
@@ -6774,7 +6797,7 @@ sds clusterGenNodesDescription(client *c, int filter, int tls_primary) {
     while ((de = dictNext(di)) != NULL) {
         clusterNode *node = dictGetVal(de);
 
-        if (node->flags & filter) continue;
+        if ((node->flags & filter) != 0 || (node->local_flags & local_filter) != 0) continue;
         ni = clusterGenNodeDescription(c, node, tls_primary);
         ci = sdscatsds(ci, ni);
         sdsfree(ni);

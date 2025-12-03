@@ -69,6 +69,9 @@ typedef struct clusterLink {
     "\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000" \
     "\000\000\000\000\000\000\000\000\000\000\000\000"
 
+/* Cluster local node flags and macros. */
+#define CLUSTER_LOCAL_NODE_SHARD_ID_UNINITIALIZED (1 << 0) /* This node currently has a random shard_id assigned. */
+
 #define nodeIsPrimary(n) ((n)->flags & CLUSTER_NODE_PRIMARY)
 #define nodeIsReplica(n) ((n)->flags & CLUSTER_NODE_REPLICA)
 #define nodeInHandshake(n) ((n)->flags & CLUSTER_NODE_HANDSHAKE)
@@ -349,6 +352,7 @@ struct _clusterNode {
     char name[CLUSTER_NAMELEN];             /* Node name, hex string, sha1-size */
     char shard_id[CLUSTER_NAMELEN];         /* shard id, hex string, sha1-size */
     int flags;                              /* CLUSTER_NODE_... */
+    int local_flags;                        /* CLUSTER_LOCAL_NODE_... */
     uint64_t configEpoch;                   /* Last configEpoch observed for this node */
     unsigned char slots[CLUSTER_SLOTS / 8]; /* slots handled by this node */
     uint16_t *slot_info_pairs;              /* Slots info represented as (start/end) pair (consecutive index). */

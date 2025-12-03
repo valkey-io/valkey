@@ -880,7 +880,7 @@ void clusterCommand(client *c) {
     } else if (!strcasecmp(c->argv[1]->ptr, "nodes") && c->argc == 2) {
         /* CLUSTER NODES */
         /* Report TLS ports to TLS client, and report non-TLS port to non-TLS client. */
-        sds nodes = clusterGenNodesDescription(c, 0, shouldReturnTlsInfo());
+        sds nodes = clusterGenNodesDescription(c, 0, 0, shouldReturnTlsInfo());
         addReplyVerbatim(c, nodes, sdslen(nodes), "txt");
         sdsfree(nodes);
     } else if (!strcasecmp(c->argv[1]->ptr, "myid") && c->argc == 2) {

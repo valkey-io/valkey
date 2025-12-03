@@ -1,7 +1,7 @@
 #include "lrulfu.h"
 #include "server.h"
 
-#define LRULFU_MASK ((1 << LRULFU_BITS) - 1) /* Mask for LRU/LFU value */
+#define LRULFU_MASK ((1U << LRULFU_BITS) - 1) /* Mask for LRU/LFU value */
 
 /**************** LRU ****************/
 /* LRU uses a 24 bit timestamp of the last access time (in seconds)
@@ -18,7 +18,8 @@
 // Current time in seconds (24 least significant bits).  Designed to roll over.
 static uint32_t LRUGetClockTime(void) {
 #if LRU_CLOCK_RESOLUTION == 1000
-    return (uint32_t)(server.unixtime & LRULFU_MASK);
+    time_t unixtime = atomic_load_explicit(&server.unixtime, memory_order_relaxed);
+    return (uint32_t)(unixtime & LRULFU_MASK);
 #else
     return (uint32_t)((server.mstime / LRU_CLOCK_RESOLUTION) & LRULFU_MASK);
 #endif
@@ -83,7 +84,8 @@ uint32_t lru_getIdleSecs(uint32_t lru) {
 
 // Current time in minutes (16 least significant bits).  Designed to roll over.
 static uint16_t LFUGetTimeInMinutes(void) {
-    return (uint16_t)(server.unixtime / 60);
+    time_t unixtime = atomic_load_explicit(&server.unixtime, memory_order_relaxed);
+    return (uint16_t)(unixtime / 60);
 }
 
 

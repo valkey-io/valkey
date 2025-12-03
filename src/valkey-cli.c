@@ -7655,7 +7655,7 @@ static int clusterApplyReshardTable(list *table, clusterManagerNode *target, int
     listNode *ln;
     listRewind(table, &li);
     if (opts & CLUSTER_MANAGER_OPT_COLD) {
-        // Cold is only possible via legacy slot migration.
+        /* Cold is only possible via legacy slot migration. */
         opts &= ~CLUSTER_MANAGER_OPT_USE_ATOMIC_SLOT_MIGRATION;
     }
     while ((ln = listNext(&li)) != NULL) {

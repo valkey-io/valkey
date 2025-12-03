@@ -12547,7 +12547,7 @@ int moduleFreeCommand(struct ValkeyModule *module, struct serverCommand *cmd) {
             sdsfree(sub->fullname);
             zfree(sub);
         }
-        hashtableResetIterator(&iter);
+        hashtableCleanupIterator(&iter);
         hashtableRelease(cmd->subcommands_ht);
     }
 
@@ -12571,7 +12571,7 @@ void moduleUnregisterCommands(struct ValkeyModule *module) {
         sdsfree(cmd->fullname);
         zfree(cmd);
     }
-    hashtableResetIterator(&iter);
+    hashtableCleanupIterator(&iter);
 }
 
 /* We parse argv to add sds "NAME VALUE" pairs to the server.module_configs_queue list of configs.

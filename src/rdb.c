@@ -920,12 +920,12 @@ ssize_t rdbSaveObject(rio *rdb, robj *o, robj *key, int dbid) {
             while (hashtableNext(&iterator, &next)) {
                 sds ele = next;
                 if ((n = rdbSaveRawString(rdb, (unsigned char *)ele, sdslen(ele))) == -1) {
-                    hashtableResetIterator(&iterator);
+                    hashtableCleanupIterator(&iterator);
                     return -1;
                 }
                 nwritten += n;
             }
-            hashtableResetIterator(&iterator);
+            hashtableCleanupIterator(&iterator);
         } else if (o->encoding == OBJ_ENCODING_INTSET) {
             size_t l = intsetBlobLen((intset *)o->ptr);
 
@@ -996,25 +996,25 @@ ssize_t rdbSaveObject(rio *rdb, robj *o, robj *key, int dbid) {
                 sds value = entryGetValue(next);
 
                 if ((n = rdbSaveRawString(rdb, (unsigned char *)field, sdslen(field))) == -1) {
-                    hashtableResetIterator(&iter);
+                    hashtableCleanupIterator(&iter);
                     return -1;
                 }
                 nwritten += n;
                 if ((n = rdbSaveRawString(rdb, (unsigned char *)value, sdslen(value))) == -1) {
-                    hashtableResetIterator(&iter);
+                    hashtableCleanupIterator(&iter);
                     return -1;
                 }
                 nwritten += n;
                 if (add_expiry) {
                     long long expiry = entryGetExpiry(next);
                     if ((n = rdbSaveMillisecondTime(rdb, expiry) == -1)) {
-                        hashtableResetIterator(&iter);
+                        hashtableCleanupIterator(&iter);
                         return -1;
                     }
                     nwritten += n;
                 }
             }
-            hashtableResetIterator(&iter);
+            hashtableCleanupIterator(&iter);
 
         } else {
             serverPanic("Unknown hash encoding");

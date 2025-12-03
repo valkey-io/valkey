@@ -220,7 +220,7 @@ void xorObjectDigest(serverDb *db, robj *keyobj, unsigned char *digest, robj *o)
                 mixDigest(eledigest, buf, strlen(buf));
                 xorDigest(digest, eledigest, 20);
             }
-            hashtableResetIterator(&iter);
+            hashtableCleanupIterator(&iter);
         } else {
             serverPanic("Unknown sorted set encoding");
         }

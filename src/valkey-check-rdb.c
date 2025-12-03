@@ -332,7 +332,7 @@ void computeDatasetProfile(int dbid, robj *keyobj, robj *o, long long expiretime
                 eleLen += sdslen(ele) + strlen(buf);
                 statsRecordElementSize(eleLen, 1, stats);
             }
-            hashtableResetIterator(&iter);
+            hashtableCleanupIterator(&iter);
             statsRecordCount(hashtableSize(zs->ht), stats);
         } else {
             serverPanic("Unknown sorted set encoding");

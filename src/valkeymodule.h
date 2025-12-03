@@ -682,6 +682,13 @@ static const ValkeyModuleEvent ValkeyModuleEvent_ReplicationRoleChanged = {VALKE
 #define VALKEYMODULE_CLIENTINFO_FLAG_UNIXSOCKET (1 << 4)
 #define VALKEYMODULE_CLIENTINFO_FLAG_MULTI (1 << 5)
 #define VALKEYMODULE_CLIENTINFO_FLAG_READONLY (1 << 6)
+#define VALKEYMODULE_CLIENTINFO_FLAG_PRIMARY (1 << 7)
+#define VALKEYMODULE_CLIENTINFO_FLAG_REPLICA (1 << 8)
+#define VALKEYMODULE_CLIENTINFO_FLAG_MONITOR (1 << 9)
+#define VALKEYMODULE_CLIENTINFO_FLAG_MODULE (1 << 10)
+#define VALKEYMODULE_CLIENTINFO_FLAG_AUTHENTICATED (1 << 11)
+#define VALKEYMODULE_CLIENTINFO_FLAG_EVER_AUTHENTICATED (1 << 12)
+#define VALKEYMODULE_CLIENTINFO_FLAG_FAKE (1 << 13)
 
 /* Here we take all the structures that the module pass to the core
  * and the other way around. Notably the list here contains the structures

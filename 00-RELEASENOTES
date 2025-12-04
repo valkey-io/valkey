@@ -10,6 +10,20 @@ SECURITY: There are security fixes in the release.
 --------------------------------------------------------------------------------
 
 ================================================================================
+Valkey 8.1.5  -  Released Thu 04 December 2025
+================================================================================
+
+Upgrade urgency MODERATE: Program an upgrade of the server, but it's not urgent.
+
+Bug fixes
+=========
+* Fix Lua VM crash after FUNCTION FLUSH ASYNC + FUNCTION LOAD (#1826)
+* Fix invalid memory address caused by hashtable shrinking during safe iteration (#2753)
+* Cluster: Avoid usage of light weight messages to nodes with not ready bidirectional links (#2817)
+* Send duplicate multi meet packet only for node which supports it (#2840)
+* Fix loading AOF files from future Valkey versions (#2899)
+
+================================================================================
 Valkey 8.1.4  -  Released Fri 03 October 2025
 ================================================================================
 

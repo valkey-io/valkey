@@ -11,6 +11,23 @@ Upgrade urgency levels:
 | CRITICAL | There is a critical bug affecting MOST USERS. Upgrade ASAP.         |
 | SECURITY | There are security fixes in the release.                            |
 
+Valkey 9.0.1 - December 9, 2025
+-------------------------------
+
+Upgrade urgency MODERATE: Program an upgrade of the server, but it's not urgent.
+
+### Bug fixes
+* Authenticate slot migration client on source node to internal user (#2785)
+* Bug fix: reset io_last_written on c->buf resize to prevent stale pointers (#2786)
+* Sentinel: fix regression requiring "+failover" ACL in failover path (#2780)
+* Cluster: Avoid usage of light weight messages to nodes with not ready bidirectional links (#2817)
+* Send duplicate multi meet packet only for node which supports it in mixed clusters (#2840)
+* Fix: LTRIM should not call signalModifiedKey when no elements are removed (#2787)
+* Fix build on some 32-bit ARM by only using NEON on AArch64 (#2873)
+* Fix deadlock in IO-thread shutdown during panic (#2898)
+* Fix COMMANDLOG large-reply when using reply copy avoidance (#2652)
+* Fix CLUSTER SLOTS crash when called from module timer callback (#2915)
+
 Valkey 9.0.0 GA - October 21, 2025
 -------------------------------------
 

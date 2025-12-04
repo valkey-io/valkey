@@ -6433,6 +6433,7 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                             "# Cluster\r\n"
                             "cluster_enabled:%d\r\n",
                             server.cluster_enabled);
+        if (server.cluster_enabled) info = genClusterInfoString(info);
     }
 
     /* Scripting engines */

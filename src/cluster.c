@@ -898,7 +898,7 @@ void clusterCommand(client *c) {
     } else if (!strcasecmp(c->argv[1]->ptr, "info") && c->argc == 2) {
         /* CLUSTER INFO */
 
-        sds info = genClusterInfoString();
+        sds info = genClusterInfoString(sdsempty());
 
         /* Produce the reply protocol. */
         addReplyVerbatim(c, info, sdslen(info), "txt");

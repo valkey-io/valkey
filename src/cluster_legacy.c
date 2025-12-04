@@ -7041,8 +7041,7 @@ void clusterCommandShards(client *c) {
     dictReleaseIterator(di);
 }
 
-sds genClusterInfoString(void) {
-    sds info = sdsempty();
+sds genClusterInfoString(sds info) {
     char *statestr[] = {"ok", "fail"};
     int slots_assigned = 0, slots_ok = 0, slots_pfail = 0, slots_fail = 0;
 

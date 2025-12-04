@@ -1862,7 +1862,7 @@ __attribute__((noinline)) void logStackTrace(void *eip, int uplevel, int current
 #endif /* HAVE_BACKTRACE */
 
 sds genClusterDebugString(sds infostring) {
-    sds cluster_info = genClusterInfoString();
+    sds cluster_info = genClusterInfoString(sdsempty());
     sds cluster_nodes = clusterGenNodesDescription(NULL, 0, 0);
 
     infostring = sdscatprintf(infostring, "\r\n# Cluster info\r\n");

@@ -71,7 +71,12 @@
  *     +--------------+----------+----------+----------+----------+--------+
  *                               |
  *                               |
- *                               stringRef value
+ *                               +-> stringRef value
+ *                                              |
+ *                                   +----------V-----------+
+ *                                   | buffer   | buffer    |
+ *                                   | pointer  | length    |
+ *                                   +----------+-----------+
  */
 
 enum {
@@ -483,7 +488,11 @@ size_t entryMemUsage(entry *entry) {
          * header could be too small for holding the real allocation size. */
         mem += zmalloc_usable_size(entryGetAllocPtr(entry));
     }
-    if (!entryHasStringRef(entry)) mem += sdsAllocSize((sds)entryGetValue(entry, NULL));
+    if (entryHasStringRef(entry)) {
+        mem += zmalloc_usable_size(entryGetStringRefRef(entry));
+    } else {
+        mem += sdsAllocSize((sds)entryGetValue(entry, NULL));
+    }
     return mem;
 }
 
@@ -519,5 +528,5 @@ entry *entryDefrag(entry *e, void *(*defragfn)(void *), sds (*sdsdefragfn)(sds))
  * forked and memory won't be used again. See zmadvise_dontneed() */
 void entryDismissMemory(entry *entry) {
     /* Only dismiss values memory since the field size usually is small. */
-    if (entryHasValuePtr(entry)) entryFreeValuePtr(entry);
+    if (entryHasValuePtr(entry) && !entryHasStringRef(entry)) dismissSds(*entryGetValueRef(entry));
 }

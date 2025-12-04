@@ -1513,19 +1513,6 @@ long long serverCron(struct aeEventLoop *eventLoop, long long id, void *clientDa
                                  server.duration_stats[EL_DURATION_TYPE_EL].cnt, 1);
     }
 
-    /* We have just LRU_BITS bits per object for LRU information.
-     * So we use an (eventually wrapping) LRU clock.
-     *
-     * Note that even if the counter wraps it's not a big problem,
-     * everything will still work but some object will appear younger
-     * to the server. However for this to happen a given object should never be
-     * touched for all the time needed to the counter to wrap, which is
-     * not likely.
-     *
-     * Note that you can change the resolution altering the
-     * LRU_CLOCK_RESOLUTION define. */
-    server.lruclock = getLRUClock();
-
     cronUpdateMemoryStats();
 
     /* We received a SIGTERM or SIGINT, shutting down here in a safe way, as it is
@@ -2288,7 +2275,6 @@ void initServerConfig(void) {
     server.latency_tracking_info_percentiles[1] = 99.0; /* p99 */
     server.latency_tracking_info_percentiles[2] = 99.9; /* p999 */
 
-    server.lruclock = getLRUClock();
     resetServerSaveParams();
 
     appendServerSaveParams(60 * 60, 1); /* save after 1 hour and 1 change */
@@ -3248,22 +3234,6 @@ void commandAddSubcommand(struct serverCommand *parent, struct serverCommand *su
     serverAssert(hashtableAdd(parent->subcommands_ht, subcommand));
 }
 
-/* Set implicit ACl categories (see comment above the definition of
- * struct serverCommand). */
-void setImplicitACLCategories(struct serverCommand *c) {
-    if (c->flags & CMD_WRITE) c->acl_categories |= ACL_CATEGORY_WRITE;
-    /* Exclude scripting commands from the RO category. */
-    if (c->flags & CMD_READONLY && !(c->acl_categories & ACL_CATEGORY_SCRIPTING))
-        c->acl_categories |= ACL_CATEGORY_READ;
-    if (c->flags & CMD_ADMIN) c->acl_categories |= ACL_CATEGORY_ADMIN | ACL_CATEGORY_DANGEROUS;
-    if (c->flags & CMD_PUBSUB) c->acl_categories |= ACL_CATEGORY_PUBSUB;
-    if (c->flags & CMD_FAST) c->acl_categories |= ACL_CATEGORY_FAST;
-    if (c->flags & CMD_BLOCKING) c->acl_categories |= ACL_CATEGORY_BLOCKING;
-
-    /* If it's not @fast is @slow in this binary world. */
-    if (!(c->acl_categories & ACL_CATEGORY_FAST)) c->acl_categories |= ACL_CATEGORY_SLOW;
-}
-
 /* Recursively populate the command structure.
  *
  * On success, the function return C_OK. Otherwise C_ERR is returned and we won't
@@ -3274,10 +3244,6 @@ int populateCommandStructure(struct serverCommand *c) {
 
     /* If the command marks with CMD_ONLY_SENTINEL, it only exists in sentinel. */
     if (c->flags & CMD_ONLY_SENTINEL && !server.sentinel_mode) return C_ERR;
-
-    /* Translate the command string flags description into an actual
-     * set of flags. */
-    setImplicitACLCategories(c);
 
     /* We start with an unallocated histogram and only allocate memory when a command
      * has been issued for the first time */
@@ -3346,7 +3312,7 @@ void resetCommandTableStats(hashtable *commands) {
         }
         if (c->subcommands_ht) resetCommandTableStats(c->subcommands_ht);
     }
-    hashtableResetIterator(&iter);
+    hashtableCleanupIterator(&iter);
 }
 
 void resetErrorTableStats(void) {
@@ -5220,7 +5186,7 @@ void addReplyCommandSubCommands(client *c,
         if (use_map) addReplyBulkCBuffer(c, sub->fullname, sdslen(sub->fullname));
         reply_function(c, sub);
     }
-    hashtableResetIterator(&iter);
+    hashtableCleanupIterator(&iter);
 }
 
 /* Output the representation of a server command. Used by the COMMAND command and COMMAND INFO. */
@@ -5381,7 +5347,7 @@ void commandCommand(client *c) {
         struct serverCommand *cmd = next;
         addReplyCommandInfo(c, cmd);
     }
-    hashtableResetIterator(&iter);
+    hashtableCleanupIterator(&iter);
 }
 
 /* COMMAND COUNT */
@@ -5447,7 +5413,7 @@ void commandListWithFilter(client *c, hashtable *commands, commandListFilter fil
             commandListWithFilter(c, cmd->subcommands_ht, filter, numcmds);
         }
     }
-    hashtableResetIterator(&iter);
+    hashtableCleanupIterator(&iter);
 }
 
 /* COMMAND LIST */
@@ -5464,7 +5430,7 @@ void commandListWithoutFilter(client *c, hashtable *commands, int *numcmds) {
             commandListWithoutFilter(c, cmd->subcommands_ht, numcmds);
         }
     }
-    hashtableResetIterator(&iter);
+    hashtableCleanupIterator(&iter);
 }
 
 /* COMMAND LIST [FILTERBY (MODULE <module-name>|ACLCAT <cat>|PATTERN <pattern>)] */
@@ -5521,7 +5487,7 @@ void commandInfoCommand(client *c) {
             struct serverCommand *cmd = next;
             addReplyCommandInfo(c, cmd);
         }
-        hashtableResetIterator(&iter);
+        hashtableCleanupIterator(&iter);
     } else {
         addReplyArrayLen(c, c->argc - 2);
         for (i = 2; i < c->argc; i++) {
@@ -5544,7 +5510,7 @@ void commandDocsCommand(client *c) {
             addReplyBulkCBuffer(c, cmd->fullname, sdslen(cmd->fullname));
             addReplyCommandDocs(c, cmd);
         }
-        hashtableResetIterator(&iter);
+        hashtableCleanupIterator(&iter);
     } else {
         /* Reply with an array of the requested commands (if we find them) */
         int numcmds = 0;
@@ -5685,7 +5651,7 @@ sds genValkeyInfoStringCommandStats(sds info, hashtable *commands) {
             info = genValkeyInfoStringCommandStats(info, c->subcommands_ht);
         }
     }
-    hashtableResetIterator(&iter);
+    hashtableCleanupIterator(&iter);
 
     return info;
 }
@@ -5720,7 +5686,7 @@ sds genValkeyInfoStringLatencyStats(sds info, hashtable *commands) {
             info = genValkeyInfoStringLatencyStats(info, c->subcommands_ht);
         }
     }
-    hashtableResetIterator(&iter);
+    hashtableCleanupIterator(&iter);
 
     return info;
 }
@@ -5938,7 +5904,7 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                 "hz:%i\r\n", server.hz,
                 "configured_hz:%i\r\n", server.hz,
                 "clients_hz:%i\r\n", server.clients_hz,
-                "lru_clock:%u\r\n", server.lruclock,
+                "lru_clock:%u\r\n", server.unixtime & ((1 << LRULFU_BITS) - 1),
                 "executable:%s\r\n", server.executable ? server.executable : "",
                 "config_file:%s\r\n", server.configfile ? server.configfile : "",
                 "io_threads_active:%i\r\n", server.active_io_threads_num > 1,

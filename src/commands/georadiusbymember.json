@@ -22,7 +22,9 @@
             "DENYOOM"
         ],
         "acl_categories": [
-            "GEO"
+            "GEO",
+            "SLOW",
+            "WRITE"
         ],
         "key_specs": [
             {

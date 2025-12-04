@@ -613,7 +613,7 @@ void hashTypeInitVolatileIterator(robj *subject, hashTypeIterator *hi) {
 void hashTypeResetIterator(hashTypeIterator *hi) {
     if (hi->encoding == OBJ_ENCODING_HASHTABLE) {
         if (!hi->volatile_items_iter)
-            hashtableResetIterator(&hi->iter);
+            hashtableCleanupIterator(&hi->iter);
         else
             vsetResetIterator(&hi->viter);
     }
@@ -2102,7 +2102,7 @@ void hrandfieldWithCountCommand(client *c, long l, int withvalues) {
             reply_size++;
         }
         serverAssert(hashtableSize(ht) == reply_size);
-        hashtableResetIterator(&iter);
+        hashtableCleanupIterator(&iter);
 
         /* Remove random elements to reach the right count. */
         while (reply_size > count) {
@@ -2123,7 +2123,7 @@ void hrandfieldWithCountCommand(client *c, long l, int withvalues) {
             if (withvalues) addWritePreparedReplyBulkCBuffer(wpc, value, sdslen(value));
         }
 
-        hashtableResetIterator(&iter);
+        hashtableCleanupIterator(&iter);
         hashtableRelease(ht);
     }
 

@@ -771,7 +771,7 @@ static void defragPubsubScanCallback(void *privdata, void *elemref) {
             bool replaced = hashtableReplaceReallocatedEntry(client_channels, channel, newchannel);
             serverAssert(replaced);
         }
-        hashtableResetIterator(&iter);
+        hashtableCleanupIterator(&iter);
     }
 
     /* Try to defrag the dictionary of clients that is stored as the value part. */

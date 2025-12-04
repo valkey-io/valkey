@@ -31,6 +31,9 @@
                 "description": "Key name.",
                 "type": "string"
             }
-        }
+        },
+        "acl_categories": [
+            "SLOW"
+        ]
     }
 }

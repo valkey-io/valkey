@@ -12,7 +12,8 @@
             "FAST"
         ],
         "acl_categories": [
-            "CONNECTION"
+            "CONNECTION",
+            "FAST"
         ],
         "get_dbid_args": "selectDbIdArgs",
         "reply_schema": {

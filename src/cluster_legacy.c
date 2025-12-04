@@ -1160,7 +1160,8 @@ void clusterUpdateMyselfFlags(void) {
     myself->flags |= nofailover;
     myself->flags |= CLUSTER_NODE_EXTENSIONS_SUPPORTED |
                      CLUSTER_NODE_LIGHT_HDR_PUBLISH_SUPPORTED |
-                     CLUSTER_NODE_LIGHT_HDR_MODULE_SUPPORTED;
+                     CLUSTER_NODE_LIGHT_HDR_MODULE_SUPPORTED |
+                     CLUSTER_NODE_MULTI_MEET_SUPPORTED;
     if (myself->flags != oldflags) {
         clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_UPDATE_STATE);
     }
@@ -3710,6 +3711,13 @@ int clusterProcessPacket(clusterLink *link) {
         } else {
             sender->flags &= ~CLUSTER_NODE_LIGHT_HDR_MODULE_SUPPORTED;
         }
+
+        /* Check if the node can handle multi meet packet. */
+        if (flags & CLUSTER_NODE_MULTI_MEET_SUPPORTED) {
+            sender->flags |= CLUSTER_NODE_MULTI_MEET_SUPPORTED;
+        } else {
+            sender->flags &= ~CLUSTER_NODE_MULTI_MEET_SUPPORTED;
+        }
     }
 
     /* Update the last time we saw any data from this node. We
@@ -5786,7 +5794,8 @@ static int clusterNodeCronHandleReconnect(clusterNode *node, mstime_t now, long 
     }
     if (nodeInNormalState(node) && node->link != NULL && node->inbound_link == NULL &&
         now - node->inbound_link_freed_time > getHandshakeTimeout() &&
-        now - node->meet_sent > getHandshakeTimeout()) {
+        now - node->meet_sent > getHandshakeTimeout() &&
+        nodeSupportsMultiMeet(node)) {
         /* Node has an outbound link, but no inbound link for more than the handshake timeout.
          * This probably means this node does not know us yet, whereas we know it.
          * So we send it a MEET packet to do a handshake with it and correct the inconsistent cluster view.

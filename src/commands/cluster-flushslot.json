@@ -13,7 +13,11 @@
             "ADMIN"
         ],
         "acl_categories": [
-            "KEYSPACE"
+            "ADMIN",
+            "DANGEROUS",
+            "KEYSPACE",
+            "SLOW",
+            "WRITE"
         ],
         "reply_schema": {
             "const": "OK"

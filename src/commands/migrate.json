@@ -29,8 +29,10 @@
             "WRITE"
         ],
         "acl_categories": [
+            "DANGEROUS",
             "KEYSPACE",
-            "DANGEROUS"
+            "SLOW",
+            "WRITE"
         ],
         "get_dbid_args": "migrateDbIdArgs",
         "command_tips": [

@@ -11,7 +11,9 @@
             "FAST"
         ],
         "acl_categories": [
-            "KEYSPACE"
+            "FAST",
+            "KEYSPACE",
+            "WRITE"
         ],
         "get_dbid_args": "moveDbIdArgs",
         "key_specs": [

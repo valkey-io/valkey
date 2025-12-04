@@ -50,13 +50,13 @@ endif ()
 
 # Helper function for creating symbolic link so that: link -> source
 macro (valkey_create_symlink source link)
-    install(
-        CODE "execute_process(                      \
-    COMMAND /bin/bash ${CMAKE_BINARY_DIR}/CreateSymlink.sh \
-    ${source} \
-    ${link}   \
-    )"
-        COMPONENT "valkey")
+  add_custom_command(
+    TARGET ${source} POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E create_symlink
+            "$<TARGET_FILE_NAME:${source}>"
+            "$<TARGET_FILE_DIR:${source}>/${link}"
+    VERBATIM
+  )
 endmacro ()
 
 # Install a binary

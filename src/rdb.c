@@ -3970,7 +3970,7 @@ rdbSaveInfo *rdbPopulateSaveInfo(rdbSaveInfo *rsi) {
 
 /* Restore the replication ID / offset from the RDB file
  * return 1 if replication ID and offset were restored from the rdbSaveInfo */
-int rdbRestoreOffsetFromSaveInfo(rdbSaveInfo *rsi, bool is_aof_preamble) {
+int rdbRestoreOffsetFromSaveInfo(rdbSaveInfo *rsi) {
     int rsi_is_valid = 0;
     serverAssert(rsi != NULL);
     if (rsi->repl_id_is_set && rsi->repl_offset != -1 && rsi->repl_stream_db != -1) {
@@ -3981,7 +3981,7 @@ int rdbRestoreOffsetFromSaveInfo(rdbSaveInfo *rsi, bool is_aof_preamble) {
         if (!iAmPrimary()) {
             memcpy(server.replid, rsi->repl_id, sizeof(server.replid));
             server.primary_repl_offset = rsi->repl_offset;
-            if (!is_aof_preamble || (!server.primary && !server.cached_primary)) {
+            if (!server.primary && !server.cached_primary) {
                 /* If this is a replica, create a cached primary from this
                  * information, in order to allow partial resynchronizations
                  * with primaries. For AOF, only cache the primary if replica

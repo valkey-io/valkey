@@ -1454,7 +1454,6 @@ int loadSingleAppendOnlyFile(char *filename) {
         rioInitWithFile(&rdb, fp);
         rdbSaveInfo rsi = RDB_SAVE_INFO_INIT;
         int rdb_flags = RDBFLAGS_AOF_PREAMBLE;
-        int rsi_is_valid = 0;
         if (iAmPrimary()) {
             if (server.repl_backlog == NULL) createReplicationBacklog();
             rdb_flags |= RDBFLAGS_FEED_REPL;
@@ -1470,16 +1469,13 @@ int loadSingleAppendOnlyFile(char *filename) {
             goto cleanup;
         } else {
             /* Restore the replication ID / offset from the RDB file. */
-            if (iAmPrimary()) { /* replica should not recover the replinfo under appendonly mode */
-                rsi_is_valid = rdbRestoreOffsetFromSaveInfo(&rsi, true);
-            }
             loadingAbsProgress(ftello(fp));
             last_progress_report_size = ftello(fp);
             if (old_style) serverLog(LL_NOTICE, "Reading the remaining AOF tail...");
         }
         /* If the AOF didn't contain replication info, it's not possible to
          * support partial resync, so we can free the backlog to save memory. */
-        if (!rsi_is_valid && server.repl_backlog && listLength(server.replicas) == 0) freeReplicationBacklog();
+        if (server.repl_backlog && listLength(server.replicas) == 0) freeReplicationBacklog();
     }
 
     /* Read the actual AOF file, in REPL format, command by command. */

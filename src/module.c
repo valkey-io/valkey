@@ -10157,27 +10157,6 @@ int VM_ACLCheckChannelPermissions(ValkeyModuleUser *user, ValkeyModuleString *ch
     return VALKEYMODULE_OK;
 }
 
-/* Check if the database can be accessed by the user.
- *
- * If the user is able to access the database then VALKEYMODULE_OK is returned, otherwise
- * VALKEYMODULE_ERR is returned and errno is set to one of the following values:
- *
- * * EINVAL: The provided dbid is invalid (negative or >= server.dbnum).
- * * EACCES: The user does not have permission to access the database.
- */
-int VM_ACLCheckDbPermissions(ValkeyModuleUser *user, int dbid) {
-    if (dbid < 0 || dbid >= server.dbnum) {
-        errno = EINVAL;
-        return VALKEYMODULE_ERR;
-    }
-
-    if (ACLUserCheckDbPerm(user->user, dbid) != ACL_OK) {
-        errno = EACCES;
-        return VALKEYMODULE_ERR;
-    }
-
-    return VALKEYMODULE_OK;
-}
 
 /* Helper function to map a ValkeyModuleACLLogEntryReason to ACL Log entry reason. */
 int moduleGetACLLogEntryReason(ValkeyModuleACLLogEntryReason reason) {
@@ -14551,7 +14530,6 @@ void moduleRegisterCoreAPI(void) {
     REGISTER_API(ACLCheckCommandPermissions);
     REGISTER_API(ACLCheckKeyPermissions);
     REGISTER_API(ACLCheckChannelPermissions);
-    REGISTER_API(ACLCheckDbPermissions);
     REGISTER_API(ACLAddLogEntry);
     REGISTER_API(ACLAddLogEntryByUserName);
     REGISTER_API(FreeModuleUser);

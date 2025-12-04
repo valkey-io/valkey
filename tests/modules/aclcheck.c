@@ -81,41 +81,6 @@ int publish_aclcheck_channel(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, in
     return VALKEYMODULE_OK;
 }
 
-/* A wrap for SELECT command with ACL check on the database. */
-int select_aclcheck_db(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
-    if (argc != 2) {
-        return ValkeyModule_WrongArity(ctx);
-    }
-
-    long long dbid;
-    if (ValkeyModule_StringToLongLong(argv[1], &dbid) != VALKEYMODULE_OK) {
-        ValkeyModule_ReplyWithError(ctx, "ERR invalid DB index");
-        return VALKEYMODULE_OK;
-    }
-
-    ValkeyModuleString *user_name = ValkeyModule_GetCurrentUserName(ctx);
-    ValkeyModuleUser *user = ValkeyModule_GetModuleUserFromUserName(user_name);
-    int ret = ValkeyModule_ACLCheckDbPermissions(user, (int)dbid);
-    if (ret != 0) {
-        ValkeyModule_ReplyWithError(ctx, "DENIED DB");
-        ValkeyModule_ACLAddLogEntry(ctx, user, argv[1], VALKEYMODULE_ACL_LOG_DB);
-        ValkeyModule_FreeModuleUser(user);
-        ValkeyModule_FreeString(ctx, user_name);
-        return VALKEYMODULE_OK;
-    }
-
-    ValkeyModuleCallReply *rep = ValkeyModule_Call(ctx, "SELECT", "l", dbid);
-    if (!rep) {
-        ValkeyModule_ReplyWithError(ctx, "NULL reply returned");
-    } else {
-        ValkeyModule_ReplyWithCallReply(ctx, rep);
-        ValkeyModule_FreeCallReply(rep);
-    }
-
-    ValkeyModule_FreeModuleUser(user);
-    ValkeyModule_FreeString(ctx, user_name);
-    return VALKEYMODULE_OK;
-}
 
 /* A wrap for RM_Call that check first that the command can be executed */
 int rm_call_aclcheck_cmd(ValkeyModuleCtx *ctx, ValkeyModuleUser *user, ValkeyModuleString **argv, int argc) {
@@ -344,9 +309,6 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
         return VALKEYMODULE_ERR;
 
     if (ValkeyModule_CreateCommand(ctx,"aclcheck.publish.check.channel", publish_aclcheck_channel,"",0,0,0) == VALKEYMODULE_ERR)
-        return VALKEYMODULE_ERR;
-
-    if (ValkeyModule_CreateCommand(ctx,"aclcheck.select.check.db", select_aclcheck_db,"",0,0,0) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
 
     if (ValkeyModule_CreateCommand(ctx,"aclcheck.rm_call.check.cmd", rm_call_aclcheck_cmd_default_user,"",0,0,0) == VALKEYMODULE_ERR)

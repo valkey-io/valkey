@@ -82,6 +82,76 @@ int publish_aclcheck_channel(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, in
 }
 
 
+/* ACL check that validates command execution with all permissions
+ * including command, keys, channels, and database access */
+int aclcheck_check_permissions(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    if (argc < 3) {
+        return ValkeyModule_WrongArity(ctx);
+    }
+
+    long long dbid;
+    if (ValkeyModule_StringToLongLong(argv[1], &dbid) != VALKEYMODULE_OK) {
+        ValkeyModule_ReplyWithError(ctx, "invalid DB index");
+        return VALKEYMODULE_OK;
+    }
+
+    ValkeyModuleString *user_name = ValkeyModule_GetCurrentUserName(ctx);
+    ValkeyModuleUser *user = ValkeyModule_GetModuleUserFromUserName(user_name);
+
+    int ret = ValkeyModule_ACLCheckPermissions(user, argv + 2, argc - 2, (int)dbid);
+
+    if (ret != VALKEYMODULE_OK) {
+        int saved_errno = errno;
+        if (saved_errno == EINVAL) {
+            ValkeyModule_ReplyWithError(ctx, "ERR invalid DB index");
+        } else if (saved_errno == ENOENT) {
+            ValkeyModule_ReplyWithError(ctx, "ERR unknown command");
+        } else {
+            ValkeyModule_ReplyWithError(ctx, "NOPERM");
+            ValkeyModuleACLLogEntryReason reason;
+            ValkeyModuleString *obj;
+            switch (saved_errno) {
+                case EACCES:
+                    reason = VALKEYMODULE_ACL_LOG_CMD;
+                    obj = argv[2];
+                    break;
+                case EPERM:
+                    reason = VALKEYMODULE_ACL_LOG_KEY;
+                    obj = (argc > 3) ? argv[3] : argv[2];
+                    break;
+                case ECHILD:
+                    reason = VALKEYMODULE_ACL_LOG_CHANNEL;
+                    obj = (argc > 3) ? argv[3] : argv[2];
+                    break;
+                case ENOTSUP:
+                    reason = VALKEYMODULE_ACL_LOG_DB;
+                    obj = argv[1];
+                    break;
+                default:
+                    reason = VALKEYMODULE_ACL_LOG_CMD;
+                    obj = argv[2];
+                    break;
+            }
+            ValkeyModule_ACLAddLogEntry(ctx, user, obj, reason);
+        }
+        ValkeyModule_FreeModuleUser(user);
+        ValkeyModule_FreeString(ctx, user_name);
+        return VALKEYMODULE_OK;
+    }
+
+    ValkeyModuleCallReply *rep = ValkeyModule_Call(ctx, ValkeyModule_StringPtrLen(argv[2], NULL), "v", argv + 3, (size_t)argc - 3);
+    if (!rep) {
+        ValkeyModule_ReplyWithError(ctx, "NULL reply");
+    } else {
+        ValkeyModule_ReplyWithCallReply(ctx, rep);
+        ValkeyModule_FreeCallReply(rep);
+    }
+
+    ValkeyModule_FreeModuleUser(user);
+    ValkeyModule_FreeString(ctx, user_name);
+    return VALKEYMODULE_OK;
+}
+
 /* A wrap for RM_Call that check first that the command can be executed */
 int rm_call_aclcheck_cmd(ValkeyModuleCtx *ctx, ValkeyModuleUser *user, ValkeyModuleString **argv, int argc) {
     if (argc < 2) {
@@ -309,6 +379,9 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
         return VALKEYMODULE_ERR;
 
     if (ValkeyModule_CreateCommand(ctx,"aclcheck.publish.check.channel", publish_aclcheck_channel,"",0,0,0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+
+    if (ValkeyModule_CreateCommand(ctx,"aclcheck.check.permissions", aclcheck_check_permissions,"",0,0,0) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
 
     if (ValkeyModule_CreateCommand(ctx,"aclcheck.rm_call.check.cmd", rm_call_aclcheck_cmd_default_user,"",0,0,0) == VALKEYMODULE_ERR)

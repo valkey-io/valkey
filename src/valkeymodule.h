@@ -1621,10 +1621,10 @@ typedef struct ValkeyModuleExternalFilterMethods {
 
 /* External data functions result codes */
 typedef enum ValkeyModuleExternalDataResult {
-    EXTERNAL_ERROR = 0,    /* Error during execution */
-    EXTERNAL_SUCCESS = 1,  /* Successful execution */
+    EXTERNAL_ERROR = 0,     /* Error during execution */
+    EXTERNAL_SUCCESS = 1,   /* Successful execution */
     EXTERNAL_NOT_FOUND = 2, /* Key not found, nothing done */
-    EXTERNAL_READONLY = 3 /* Readonly storage */
+    EXTERNAL_READONLY = 3   /* Readonly storage */
 } ValkeyModuleExternalDataResult;
 
 /* ------------------------- End of common defines ------------------------ */

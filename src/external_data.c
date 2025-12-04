@@ -485,7 +485,7 @@ int externalDataCallDropReadonlyFunc(externalDataModuleInstance *mi) {
     }
 
     teardownModuleCtx(mi);
-    
+
     mi->storage_ctx->state = VMES_STATE_READY;
     mi->filter_ctx->state = VMEF_STATE_READY;
     unblockPostponedClients();
@@ -631,13 +631,13 @@ void externalDataDebugCommand(client *c) {
             addReplyErrorFormat(c, "unknown subcommand %s", cmd);
             return;
         }
-    } else if (!strcasecmp(c->argv[j]->ptr, "setro")) {
+    } else if (!strcasecmp(objectGetVal(c->argv[j]), "setro")) {
         int result = externalDataCallSetReadonlyFunc(dbData->module_instance);
         if (result != EXTERNAL_SUCCESS) {
             addReplyErrorFormat(c, "error code setting readonly: %d", result);
             return;
         }
-    } else if (!strcasecmp(c->argv[j]->ptr, "dropro")) {
+    } else if (!strcasecmp(objectGetVal(c->argv[j]), "dropro")) {
         int result = externalDataCallDropReadonlyFunc(dbData->module_instance);
         if (result != EXTERNAL_SUCCESS) {
             addReplyErrorFormat(c, "error code setting readonly: %d", result);
@@ -694,11 +694,11 @@ int externalDataWrite(int id, void *key, void *value) {
     // Check if both storage and filter are in readonly state
     ValkeyModuleExternalStorageState storage_state = mi->storage_ctx->state;
     ValkeyModuleExternalFilterState filter_state = mi->filter_ctx->state;
-    
+
     // If both are readonly, return 2 to signal the client should be blocked
     // The client will be retried later when the state changes
     if (storage_state == VMES_STATE_READONLY || filter_state == VMEF_STATE_READONLY) {
-        return EXTERNAL_READONLY;  // Signal to block the client
+        return EXTERNAL_READONLY; // Signal to block the client
     }
 
     if (externalStorageCallSetFunc(mi, id, key, value) != EXTERNAL_SUCCESS) return EXTERNAL_ERROR;
@@ -769,7 +769,7 @@ void externalDataFlushDb(int dbid) {
     if (!mi) return;
 
     setupModuleCtx(mi);
-    
+
     /* Use native flush functions if available (O(1)), otherwise fall back to iteration (O(n)) */
     if (mi->external_module->storage_methods.flush != NULL &&
         mi->external_module->filter_methods.flush != NULL) {
@@ -789,30 +789,30 @@ void externalDataFlushDb(int dbid) {
             }
             externalStorageInstanceIteratorRelease(esi_it);
         }
-        
+
         /* Now delete all the collected keys */
         listIter li;
         listNode *ln;
         listRewind(keys_to_delete, &li);
         while ((ln = listNext(&li))) {
             robj *key = listNodeValue(ln);
-            
+
             /* Delete from storage */
             robj *value = NULL;
             externalStorageCallDelFunc(mi, dbid, key, &value);
             if (value) decrRefCount(value);
-            
+
             /* Delete from filter */
             robj *filter_value = NULL;
             externalFilterCallDelFunc(mi, dbid, key, &filter_value);
             if (filter_value) decrRefCount(filter_value);
-            
+
             decrRefCount(key);
         }
-        
+
         listRelease(keys_to_delete);
     }
-    
+
     teardownModuleCtx(mi);
 }
 
@@ -834,76 +834,76 @@ void externalDataSwapDb(int id1, int id2) {
 
     sds db_name1 = getDBName(id1);
     sds db_name2 = getDBName(id2);
-    
+
     dictEntry *dbEntry1 = dictFind(ctx->dbdata, db_name1);
     dictEntry *dbEntry2 = dictFind(ctx->dbdata, db_name2);
-    
+
     /* If both databases are not initialized, nothing to do */
     if (!dbEntry1 && !dbEntry2) {
         sdsfree(db_name1);
         sdsfree(db_name2);
         return;
     }
-    
+
     /* If only one database is initialized, we need to move the external data
      * from one to the other */
     if (!dbEntry1 || !dbEntry2) {
         sds src_name = dbEntry1 ? db_name1 : db_name2;
         sds dst_name = dbEntry1 ? db_name2 : db_name1;
-        
+
         /* Remove the destination entry if it exists */
         dictDelete(ctx->dbdata, dst_name);
-        
+
         /* Add a new entry for the destination with the source's data */
         externalDbData *srcData = dictGetVal(dbEntry1 ? dbEntry1 : dbEntry2);
         externalDbData *dstData = zmalloc(sizeof(*dstData));
         *dstData = *srcData;
-        
+
         /* Update the module context to use the new database ID */
         if (dstData->module_instance && dstData->module_instance->module_ctx) {
             moduleFreeContext(dstData->module_instance->module_ctx);
             dstData->module_instance->module_ctx = moduleAllocateContext();
             moduleExternalStorageInitContext(dstData->module_instance->module_ctx,
-                                           dstData->module_instance->external_module->module);
+                                             dstData->module_instance->external_module->module);
         }
-        
+
         dictAdd(ctx->dbdata, dst_name, dstData);
-        
+
         /* Remove the source entry */
         dictDelete(ctx->dbdata, src_name);
-        
+
         sdsfree(db_name1);
         sdsfree(db_name2);
         return;
     }
-    
+
     /* Both databases are initialized, swap their external data */
     externalDbData *dbData1 = dictGetVal(dbEntry1);
     externalDbData *dbData2 = dictGetVal(dbEntry2);
-    
+
     /* Remove both entries */
     dictDelete(ctx->dbdata, db_name1);
     dictDelete(ctx->dbdata, db_name2);
-    
+
     /* Re-add them with swapped keys */
     dictAdd(ctx->dbdata, db_name1, dbData2);
     dictAdd(ctx->dbdata, db_name2, dbData1);
-    
+
     /* Update the module contexts to use the new database IDs */
     if (dbData1->module_instance && dbData1->module_instance->module_ctx) {
         moduleFreeContext(dbData1->module_instance->module_ctx);
         dbData1->module_instance->module_ctx = moduleAllocateContext();
         moduleExternalStorageInitContext(dbData1->module_instance->module_ctx,
-                                       dbData1->module_instance->external_module->module);
+                                         dbData1->module_instance->external_module->module);
     }
-    
+
     if (dbData2->module_instance && dbData2->module_instance->module_ctx) {
         moduleFreeContext(dbData2->module_instance->module_ctx);
         dbData2->module_instance->module_ctx = moduleAllocateContext();
         moduleExternalStorageInitContext(dbData2->module_instance->module_ctx,
-                                       dbData2->module_instance->external_module->module);
+                                         dbData2->module_instance->external_module->module);
     }
-    
+
     /* Call the swap function on the module if it's available, otherwise fall back to iteration */
     if (dbData1->module_instance && dbData1->module_instance->external_module) {
         /* Handle storage swap */
@@ -928,14 +928,14 @@ void externalDataSwapDb(int id1, int id2) {
                 }
                 externalStorageInstanceIteratorRelease(esi_it);
             }
-            
+
             /* Now move all the collected keys from db1 to db2 */
             listIter li;
             listNode *ln;
             listRewind(keys_to_move, &li);
             while ((ln = listNext(&li))) {
                 robj *key = listNodeValue(ln);
-                
+
                 /* Get the value from db1 */
                 void *value = NULL;
                 if (externalStorageCallGetFunc(dbData1->module_instance, id1, key, &value)) {
@@ -948,13 +948,13 @@ void externalDataSwapDb(int id1, int id2) {
                     }
                     if (value) decrRefCount((robj *)value);
                 }
-                
+
                 decrRefCount(key);
             }
-            
+
             listRelease(keys_to_move);
         }
-        
+
         /* Handle filter swap */
         if (dbData1->module_instance->external_module->filter_methods.swap) {
             /* Fast path: use native swap function for O(1) performance */
@@ -976,14 +976,14 @@ void externalDataSwapDb(int id1, int id2) {
                 }
                 externalStorageInstanceIteratorRelease(esi_it);
             }
-            
+
             /* Now move all the collected keys from db1 to db2 */
             listIter li;
             listNode *ln;
             listRewind(keys_to_move, &li);
             while ((ln = listNext(&li))) {
                 robj *key = listNodeValue(ln);
-                
+
                 /* Check if key is in filter for db1 */
                 if (externalFilterCallGetFunc(dbData1->module_instance, id1, key)) {
                     /* Add to filter for db2 */
@@ -994,13 +994,13 @@ void externalDataSwapDb(int id1, int id2) {
                         if (deleted_value) decrRefCount(deleted_value);
                     }
                 }
-                
+
                 decrRefCount(key);
             }
-            
+
             listRelease(keys_to_move);
         }
     }
-    
+
     /* Note: We don't free db_name1 and db_name2 here because they are now owned by the dictionary */
 }

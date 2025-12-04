@@ -710,15 +710,22 @@ start_server {tags {"acl external:skip"}} {
         assert_match "*db=0,1*" $user_line
     }
     
-    test {Test edge cases with database IDs} {
+    test {Test edge cases with database IDs, check new errmsg} {
         catch {r ACL SETUSER db-edge-user db=999} err
-        assert_match "*Error in ACL SETUSER modifier*" $err
+        assert_match "*Error in ACL SETUSER modifier 'db=999': The provided database ID is out of range or non-numeric*" $err
         
         catch {r ACL SETUSER db-edge-user db=-1} err
-        assert_match "*Error in ACL SETUSER modifier*" $err
+        assert_match "*Error in ACL SETUSER modifier 'db=-1': The provided database ID is out of range or non-numeric*" $err
         
         catch {r ACL SETUSER db-edge-user db=abc} err
-        assert_match "*Error in ACL SETUSER modifier*" $err
+        assert_match "*Error in ACL SETUSER modifier 'db=abc': The provided database ID is out of range or non-numeric*" $err
+        
+        catch {r ACL SETUSER db-edge-user db=16} err
+        assert_match "*Error in ACL SETUSER modifier 'db=16': The provided database ID is out of range or non-numeric*" $err
+        
+        set acl_list [r ACL LIST]
+        set user_line [lsearch -inline $acl_list "user db-edge-user*"]
+        assert_equal "" $user_line
     }
     
     test {Test default behavior without db restrictions} {

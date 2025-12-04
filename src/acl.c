@@ -1000,7 +1000,7 @@ static int ACLSetSelectorDatabasePermissions(aclSelector *selector, const char *
         if (errno == ERANGE || endptr == tokens[i] || *endptr != '\0' ||
             dbid < 0 || dbid >= server.dbnum) {
             sdsfreesplitres(tokens, count);
-            return ACLDatabasePermissionError(new_dbs, dblist, EINVAL);
+            return ACLDatabasePermissionError(new_dbs, dblist, ERANGE);
         }
 
         /* No error check needed - duplicates will not be added */
@@ -1475,6 +1475,8 @@ const char *ACLSetUserStringError(void) {
                  "config files";
     else if (errno == ECHILD)
         errmsg = "Allowing first-arg of a subcommand is not supported";
+    else if (errno == ERANGE)
+        errmsg = "The provided database ID is out of range or non-numeric";
     return errmsg;
 }
 

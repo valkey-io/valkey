@@ -35,6 +35,7 @@
 void initClientMultiState(client *c) {
     if (c->mstate) return;
     c->mstate = zcalloc(sizeof(multiState));
+    c->mstate->transaction_db_id = c->db ? c->db->id : 0;
 }
 
 void freeClientMultiStateCmds(client *c) {

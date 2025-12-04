@@ -1005,5 +1005,164 @@ start_server {tags {"acl external:skip"}} {
         assert_match "*NOPERM*database*" $err
     }
     
+        test {Test MULTI with SELECT to invalid database} {
+        r ACL SETUSER db-invalid-select on nopass +@all ~* db=0,1
+        $r2 auth db-invalid-select password
+        
+        assert_equal "OK" [$r2 select 0]
+        assert_equal "OK" [$r2 multi]
+        assert_equal "QUEUED" [$r2 set key1 value1]
+        
+        catch {$r2 select 2} err
+        assert_match "*NOPERM*database*" $err
+        
+        catch {$r2 exec} err
+        assert_match "*EXECABORT*" $err
+        
+        assert_equal {} [$r2 get key1]
+    }
+    
+    test {Test WATCH with MULTI and SELECT - keys modified} {
+        r ACL SETUSER db-watch-select on nopass +@all ~* db=0,1
+        $r2 auth db-watch-select password
+        
+        assert_equal "OK" [$r2 select 0]
+        $r2 set watchkey original
+        assert_equal "OK" [$r2 watch watchkey]
+        
+        assert_equal "OK" [$r2 multi]
+        assert_equal "QUEUED" [$r2 select 1]
+        assert_equal "QUEUED" [$r2 set key1 value1]
+        
+        r select 0
+        r set watchkey modified
+        
+        set result [$r2 exec]
+        assert_equal 0 [llength $result]
+        
+        assert_equal {} [$r2 get key1]
+    }
+    
+    test {Test WATCH with MULTI and SELECT - no modification} {
+        r ACL SETUSER db-watch-nomod on nopass +@all ~* db=0,1
+        $r2 auth db-watch-nomod password
+        
+        assert_equal "OK" [$r2 select 0]
+        $r2 set watchkey original
+        assert_equal "OK" [$r2 watch watchkey]
+        
+        assert_equal "OK" [$r2 multi]
+        assert_equal "QUEUED" [$r2 select 1]
+        assert_equal "QUEUED" [$r2 set key1 value1]
+        
+        # No modification of watched key
+        
+        set result [$r2 exec]
+        assert_equal 2 [llength $result]
+        
+        assert_equal "value1" [$r2 get key1]
+    }
+    
+    test {Test SORT with BY/GET patterns in MULTI after SELECT} {
+        r ACL SETUSER db-sort-multi on nopass +@all ~* db=0,1
+        $r2 auth db-sort-multi password
+        
+        assert_equal "OK" [$r2 select 0]
+        $r2 lpush mylist 1 2 3
+        $r2 set weight_1 10
+        $r2 set weight_2 20
+        $r2 set weight_3 30
+        
+        assert_equal "OK" [$r2 multi]
+        assert_equal "QUEUED" [$r2 select 1]
+        
+        assert_equal "QUEUED" [$r2 sort mylist by weight_*]
+        
+        set result [$r2 exec]
+        assert_equal 2 [llength $result]
+
+        # Cleanup
+        $r2 select 0
+        $r2 del mylist weight_1 weight_2 weight_3
+    }
+    
+    test {Test DISCARD after SELECT in MULTI} {
+        r ACL SETUSER db-discard on nopass +@all ~* db=0,1
+        $r2 auth db-discard password
+        
+        assert_equal "OK" [$r2 select 0]
+        assert_equal "OK" [$r2 multi]
+        
+        assert_equal "QUEUED" [$r2 set key1 value1]
+        assert_equal "QUEUED" [$r2 select 1]
+        assert_equal "QUEUED" [$r2 set key2 value2]
+        
+        assert_equal "OK" [$r2 discard]
+        
+        $r2 set testkey testvalue
+        assert_equal "testvalue" [$r2 get testkey]
+        
+        assert_equal {} [$r2 get key1]
+        $r2 select 1
+        assert_equal {} [$r2 get key2]
+        
+        # Cleanup
+        $r2 select 0
+        $r2 del testkey
+    }
+    
+    test {Test MULTI with multiple SELECT commands} {
+        r ACL SETUSER db-multi-select on nopass +@all ~* db=0,1,2
+        $r2 auth db-multi-select password
+        
+        assert_equal "OK" [$r2 select 0]
+        assert_equal "OK" [$r2 multi]
+        
+        assert_equal "QUEUED" [$r2 set key0 value0]
+        assert_equal "QUEUED" [$r2 select 1]
+        assert_equal "QUEUED" [$r2 set key1 value1]
+        assert_equal "QUEUED" [$r2 select 2]
+        assert_equal "QUEUED" [$r2 set key2 value2]
+        assert_equal "QUEUED" [$r2 select 0]
+        assert_equal "QUEUED" [$r2 get key0]
+        
+        set result [$r2 exec]
+        assert_equal 7 [llength $result]
+        
+        assert_equal "value0" [$r2 get key0]
+        $r2 select 1
+        assert_equal "value1" [$r2 get key1]
+        $r2 select 2
+        assert_equal "value2" [$r2 get key2]
+        
+        # Cleanup
+        $r2 select 0
+        $r2 del key0 finalkey
+        $r2 select 1
+        $r2 del key1
+        $r2 select 2
+        $r2 del key2
+        $r2 select 0
+    }
+    
+    test {Test MULTI with SELECT and ACL permission changes between queue and exec} {
+        r ACL SETUSER db-acl-change on nopass +@all ~* db=0,1
+        $r2 auth db-acl-change password
+        
+        assert_equal "OK" [$r2 select 0]
+        assert_equal "OK" [$r2 multi]
+        assert_equal "QUEUED" [$r2 set key1 value1]
+        assert_equal "QUEUED" [$r2 select 1]
+        assert_equal "QUEUED" [$r2 set key2 value2]
+        
+        r ACL SETUSER db-acl-change db=0
+        
+        catch {$r2 exec} err
+        assert_match "*NOPERM*" $err
+        
+        # Cleanup
+        r ACL SETUSER db-acl-change db=0,1
+    }
+
     $r2 close
 }

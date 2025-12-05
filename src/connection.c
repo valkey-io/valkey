@@ -168,3 +168,13 @@ sds getListensInfoString(sds info) {
 
     return info;
 }
+
+sds connGetPeerCertFingerprint(connection *conn) {
+    if (!conn || !conn->type->get_peer_cert_fingerprint) return NULL;
+    return conn->type->get_peer_cert_fingerprint(conn);
+}
+
+int connGetPeerCertValidity(connection *conn, long long *remaining_seconds) {
+    if (!conn || !remaining_seconds || !conn->type->get_peer_cert_validity) return C_ERR;
+    return conn->type->get_peer_cert_validity(conn, remaining_seconds);
+}

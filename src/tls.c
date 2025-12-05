@@ -45,6 +45,7 @@
 #include <openssl/err.h>
 #include <openssl/rand.h>
 #include <openssl/pem.h>
+#include <openssl/evp.h>
 #if OPENSSL_VERSION_NUMBER >= 0x30000000L
 #include <openssl/decoder.h>
 #endif
@@ -1216,6 +1217,65 @@ static sds connTLSGetPeerCert(connection *conn_) {
     return cert_pem;
 }
 
+static sds connTLSGetPeerCertFingerprint(connection *conn_) {
+    tls_connection *conn = (tls_connection *)conn_;
+    if ((conn_->type != connectionTypeTls()) || !conn->ssl) return NULL;
+
+    X509 *cert = SSL_get_peer_certificate(conn->ssl);
+    if (!cert) return NULL;
+
+    unsigned char md[EVP_MAX_MD_SIZE];
+    unsigned int md_len = 0;
+    sds fingerprint = NULL;
+
+    if (X509_digest(cert, EVP_sha256(), md, &md_len)) {
+        fingerprint = sdsnewlen(NULL, md_len * 2);
+        static const char hex[] = "0123456789abcdef";
+        for (unsigned int i = 0; i < md_len; i++) {
+            fingerprint[2 * i] = hex[(md[i] >> 4) & 0xF];
+            fingerprint[2 * i + 1] = hex[md[i] & 0xF];
+        }
+    }
+
+    X509_free(cert);
+    return fingerprint;
+}
+
+static int connTLSGetPeerCertValidity(connection *conn_, long long *remaining_seconds) {
+    tls_connection *conn = (tls_connection *)conn_;
+    if (!remaining_seconds || (conn_->type != connectionTypeTls()) || !conn->ssl || !SSL_is_init_finished(conn->ssl))
+        return C_ERR;
+
+    if (SSL_get_verify_result(conn->ssl) != X509_V_OK) return C_ERR;
+
+    X509 *cert = SSL_get_peer_certificate(conn->ssl);
+    if (!cert) return C_ERR;
+
+    ASN1_TIME *notAfter = X509_get_notAfter(cert);
+    if (!notAfter) {
+        X509_free(cert);
+        return C_ERR;
+    }
+
+    time_t now = server.unixtime ? server.unixtime : time(NULL);
+    ASN1_TIME *current = ASN1_TIME_set(NULL, now);
+    if (!current) {
+        X509_free(cert);
+        return C_ERR;
+    }
+
+    int days = 0, seconds = 0;
+    int diff_ok = ASN1_TIME_diff(&days, &seconds, current, notAfter);
+    ASN1_TIME_free(current);
+    X509_free(cert);
+
+    if (diff_ok != 1) return C_ERR;
+
+    long long total_seconds = (long long)days * 86400LL + seconds;
+    *remaining_seconds = total_seconds;
+    return C_OK;
+}
+
 static ConnectionType CT_TLS = {
     /* connection type */
     .get_type = connTLSGetType,
@@ -1263,6 +1323,8 @@ static ConnectionType CT_TLS = {
 
     /* TLS specified methods */
     .get_peer_cert = connTLSGetPeerCert,
+    .get_peer_cert_fingerprint = connTLSGetPeerCertFingerprint,
+    .get_peer_cert_validity = connTLSGetPeerCertValidity,
     .get_peer_username = tlsGetPeerUsername,
 
     /* Miscellaneous */

@@ -1686,6 +1686,72 @@ int clientHasPendingReplies(client *c) {
     }
 }
 
+#define TLS_CERT_WARN_DEDUP_WINDOW_MS (24LL * 60 * 60 * 1000)
+
+static long long secondsToDaysFloor(long long seconds) {
+    long long days = seconds / 86400LL;
+    if (seconds < 0 && (seconds % 86400LL)) days -= 1;
+    return days;
+}
+
+static int certWarningRecentlyLogged(sds fingerprint, mstime_t now) {
+    if (!fingerprint || !server.client_cert_expiry_warned) return 0;
+    dictEntry *de = dictFind(server.client_cert_expiry_warned, fingerprint);
+    if (!de) return 0;
+    long long expiry = *(long long *)dictGetVal(de);
+    if (expiry > now) return 1;
+    dictDelete(server.client_cert_expiry_warned, fingerprint);
+    return 0;
+}
+
+static void rememberCertWarning(sds fingerprint, mstime_t now) {
+    if (!fingerprint || !server.client_cert_expiry_warned) return;
+    long long *expiry = zmalloc(sizeof(long long));
+    *expiry = now + TLS_CERT_WARN_DEDUP_WINDOW_MS;
+    if (dictAdd(server.client_cert_expiry_warned, fingerprint, expiry) != DICT_OK) {
+        zfree(expiry);
+        sdsfree(fingerprint);
+    }
+}
+
+static void monitorTlsClientCertExpiry(client *c) {
+    if (!connIsTLS(c->conn)) return;
+
+    long long remaining_seconds;
+    if (connGetPeerCertValidity(c->conn, &remaining_seconds) != C_OK) return;
+
+    long long remaining_days = secondsToDaysFloor(remaining_seconds);
+    if (server.client_cert_min_days_until_expiry == -1 || remaining_days < server.client_cert_min_days_until_expiry) {
+        server.client_cert_min_days_until_expiry = remaining_days;
+    }
+
+    long long threshold_days = server.tls_client_cert_expiry_warn_threshold;
+    if (threshold_days <= 0) return;
+
+    sds fingerprint = connGetPeerCertFingerprint(c->conn);
+    mstime_t now = mstime();
+    if (certWarningRecentlyLogged(fingerprint, now)) {
+        if (fingerprint) sdsfree(fingerprint);
+        return;
+    }
+
+    long long threshold_seconds = threshold_days * 86400LL;
+    if (remaining_seconds <= threshold_seconds) {
+        double days_double = (double)remaining_seconds / 86400.0;
+        sds client = catClientInfoShortString(sdsempty(), c, server.hide_user_data_from_log);
+        serverLog(LL_WARNING,
+                  "TLS client certificate for %s expires in %.2f days (threshold %lld days).",
+                  client,
+                  days_double,
+                  threshold_days);
+        sdsfree(client);
+        rememberCertWarning(fingerprint, now);
+        fingerprint = NULL;
+    }
+
+    if (fingerprint) sdsfree(fingerprint);
+}
+
 void clientAcceptHandler(connection *conn) {
     client *c = connGetPrivateData(conn);
 
@@ -1695,6 +1761,8 @@ void clientAcceptHandler(connection *conn) {
         freeClientAsync(c);
         return;
     }
+
+    monitorTlsClientCertExpiry(c);
 
     /* If the server is running in protected mode (the default) and there
      * is no password set, nor a specific interface is bound, we don't accept

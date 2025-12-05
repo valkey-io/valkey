@@ -50,6 +50,8 @@
 #endif
 #include <sys/uio.h>
 #include <arpa/inet.h>
+#include <ctype.h>
+#include <stdint.h>
 
 #define REDIS_TLS_PROTO_TLSv1 (1 << 0)
 #define REDIS_TLS_PROTO_TLSv1_1 (1 << 1)
@@ -191,6 +193,128 @@ static void tlsCleanup(void) {
     // unavailable on LibreSSL
     OPENSSL_cleanup();
 #endif
+}
+
+/* Parse a fixed-length decimal slice into an integer, returning 0 on failure. */
+static int parseDigits(const char *s, size_t len, int *out) {
+    if (!s || !out) return 0;
+    int value = 0;
+    for (size_t i = 0; i < len; i++) {
+        if (!isdigit((unsigned char)s[i])) return 0;
+        value = value * 10 + (s[i] - '0');
+    }
+    *out = value;
+    return 1;
+}
+
+/* Decode GENERALIZEDTIME strings (YYYYMMDDHHMMSS[.fff](Z|+hhmm|-hhmm)). */
+static int parseGeneralizedTime(const ASN1_GENERALIZEDTIME *gen, struct tm *tm, int *tz_off) {
+    if (!gen || !tm) return 0;
+    const char *str = (const char *)ASN1_STRING_get0_data(gen);
+    size_t len = ASN1_STRING_length(gen);
+    if (len < 15) return 0;
+
+    int year, mon, day, hour, min, sec;
+    if (!parseDigits(str, 4, &year) || !parseDigits(str + 4, 2, &mon) || !parseDigits(str + 6, 2, &day) ||
+        !parseDigits(str + 8, 2, &hour) || !parseDigits(str + 10, 2, &min) || !parseDigits(str + 12, 2, &sec)) {
+        return 0;
+    }
+
+    size_t pos = 14;
+    while (pos < len && (str[pos] == '.' || str[pos] == ',')) {
+        pos++;
+        while (pos < len && isdigit((unsigned char)str[pos])) pos++;
+    }
+
+    int offset = 0;
+    if (pos >= len) return 0;
+    if (str[pos] == 'Z') {
+        pos++;
+    } else if (str[pos] == '+' || str[pos] == '-') {
+        if (pos + 5 > len) return 0;
+        int off_hour, off_min;
+        if (!parseDigits(str + pos + 1, 2, &off_hour) || !parseDigits(str + pos + 3, 2, &off_min)) return 0;
+        offset = (off_hour * 60 + off_min) * 60;
+        if (str[pos] == '-') offset = -offset;
+        pos += 5;
+    } else {
+        return 0;
+    }
+
+    if (pos != len) return 0;
+
+    memset(tm, 0, sizeof(*tm));
+    tm->tm_year = year - 1900;
+    tm->tm_mon = mon - 1;
+    tm->tm_mday = day;
+    tm->tm_hour = hour;
+    tm->tm_min = min;
+    tm->tm_sec = sec;
+    tm->tm_isdst = 0;
+    if (tz_off) *tz_off = offset;
+    return 1;
+}
+
+/* Convert ASN1_TIME into a UTC tm plus a timezone offset (seconds). */
+static int tlsAsn1TimeToTm(const ASN1_TIME *time, struct tm *tm, int *tz_off) {
+    if (!time || !tm) return 0;
+#if OPENSSL_VERSION_NUMBER >= 0x10002000L || defined(LIBRESSL_VERSION_NUMBER)
+    if (ASN1_TIME_to_tm(time, tm)) {
+        if (tz_off) *tz_off = 0;
+        return 1;
+    }
+#endif
+    ASN1_GENERALIZEDTIME *gen = ASN1_TIME_to_generalizedtime((ASN1_TIME *)time, NULL);
+    if (!gen) return 0;
+    int offset = 0;
+    int ok = parseGeneralizedTime(gen, tm, &offset);
+    ASN1_GENERALIZEDTIME_free(gen);
+    if (!ok) return 0;
+    if (tz_off) *tz_off = offset;
+    return 1;
+}
+
+/* Civil-from-fixed algorithm: convert Y/M/D to absolute days since Unix epoch. */
+static int64_t daysFromCivil(int64_t y, unsigned m, unsigned d) {
+    y -= m <= 2;
+    const int64_t era = (y >= 0 ? y : y - 399) / 400;
+    const unsigned yoe = (unsigned)(y - era * 400);
+    const unsigned doy = (unsigned)((153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1);
+    const unsigned doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    return era * 146097 + (int64_t)doe - 719468;
+}
+
+/* Convert a UTC tm to a unix timestamp (seconds since epoch). */
+static long long tmToEpochUTC(const struct tm *tm) {
+    int64_t year = tm->tm_year + 1900;
+    unsigned month = tm->tm_mon + 1;
+    unsigned day = tm->tm_mday;
+    int64_t days = daysFromCivil(year, month, day);
+    int64_t seconds = days * 86400 + tm->tm_hour * 3600 + tm->tm_min * 60 + tm->tm_sec;
+    return (long long)seconds;
+}
+
+/* Helper that returns the unix timestamp for an ASN1_TIME value. */
+static int asn1TimeToEpoch(const ASN1_TIME *time, long long *epoch) {
+    struct tm tm;
+    int tz_offset = 0;
+    if (!tlsAsn1TimeToTm(time, &tm, &tz_offset)) return 0;
+    long long ts = tmToEpochUTC(&tm);
+    ts -= tz_offset;
+    if (epoch) *epoch = ts;
+    return 1;
+}
+
+/* Return the server-side certificate expiration timestamp via OpenSSL. */
+int tlsGetServerCertExpiry(long long *expiry) {
+    if (!valkey_tls_ctx) return C_ERR;
+    X509 *cert = SSL_CTX_get0_certificate(valkey_tls_ctx);
+    if (!cert) return C_ERR;
+    const ASN1_TIME *not_after = X509_get0_notAfter(cert);
+    long long ts;
+    if (!asn1TimeToEpoch(not_after, &ts)) return C_ERR;
+    if (expiry) *expiry = ts;
+    return C_OK;
 }
 
 /* Callback for passing a keyfile password stored as an sds to OpenSSL */
@@ -1275,6 +1399,12 @@ int RedisRegisterConnectionTypeTLS(void) {
 }
 
 #else /* USE_OPENSSL */
+
+/* No TLS support compiled in; report failure to fetch expiry. */
+int tlsGetServerCertExpiry(long long *expiry) {
+    UNUSED(expiry);
+    return C_ERR;
+}
 
 int RedisRegisterConnectionTypeTLS(void) {
     serverLog(LL_VERBOSE, "Connection type %s not builtin", getConnectionTypeName(CONN_TYPE_TLS));

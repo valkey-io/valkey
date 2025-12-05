@@ -426,7 +426,9 @@ static inline sds connGetPeerCert(connection *conn) {
     return NULL;
 }
 
+/* Return a readable fingerprint (hash) for the peer certificate when supported. */
 sds connGetPeerCertFingerprint(connection *conn);
+/* Report how many seconds remain before the peer certificate expires. */
 int connGetPeerCertValidity(connection *conn, long long *remaining_seconds);
 
 /* Get Peer username based on connection type */

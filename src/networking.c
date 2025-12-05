@@ -1688,12 +1688,14 @@ int clientHasPendingReplies(client *c) {
 
 #define TLS_CERT_WARN_DEDUP_WINDOW_MS (24LL * 60 * 60 * 1000)
 
+/* Convert raw seconds to whole days (rounding toward negative infinity). */
 static long long secondsToDaysFloor(long long seconds) {
     long long days = seconds / 86400LL;
     if (seconds < 0 && (seconds % 86400LL)) days -= 1;
     return days;
 }
 
+/* Tell us if we already warned about this fingerprint and the suppression window hasn't elapsed. */
 static int certWarningRecentlyLogged(sds fingerprint, mstime_t now) {
     if (!fingerprint || !server.client_cert_expiry_warned) return 0;
     dictEntry *de = dictFind(server.client_cert_expiry_warned, fingerprint);
@@ -1704,6 +1706,7 @@ static int certWarningRecentlyLogged(sds fingerprint, mstime_t now) {
     return 0;
 }
 
+/* Remember that we warned about this fingerprint so we can suppress repeats. */
 static void rememberCertWarning(sds fingerprint, mstime_t now) {
     if (!fingerprint || !server.client_cert_expiry_warned) return;
     long long *expiry = zmalloc(sizeof(long long));
@@ -1714,6 +1717,7 @@ static void rememberCertWarning(sds fingerprint, mstime_t now) {
     }
 }
 
+/* Inspect each TLS client certificate as it connects and warn when close to expiry. */
 static void monitorTlsClientCertExpiry(client *c) {
     if (!connIsTLS(c->conn)) return;
 
@@ -1737,12 +1741,12 @@ static void monitorTlsClientCertExpiry(client *c) {
 
     long long threshold_seconds = threshold_days * 86400LL;
     if (remaining_seconds <= threshold_seconds) {
-        double days_double = (double)remaining_seconds / 86400.0;
+        long long log_days = secondsToDaysFloor(remaining_seconds);
         sds client = catClientInfoShortString(sdsempty(), c, server.hide_user_data_from_log);
         serverLog(LL_WARNING,
-                  "TLS client certificate for %s expires in %.2f days (threshold %lld days).",
+                  "TLS client certificate for %s expires in %lld days (threshold %lld days).",
                   client,
-                  days_double,
+                  log_days,
                   threshold_days);
         sdsfree(client);
         rememberCertWarning(fingerprint, now);

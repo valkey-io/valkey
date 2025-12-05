@@ -1217,6 +1217,7 @@ static sds connTLSGetPeerCert(connection *conn_) {
     return cert_pem;
 }
 
+/* Create a SHA-256 fingerprint string for the peer certificate. */
 static sds connTLSGetPeerCertFingerprint(connection *conn_) {
     tls_connection *conn = (tls_connection *)conn_;
     if ((conn_->type != connectionTypeTls()) || !conn->ssl) return NULL;

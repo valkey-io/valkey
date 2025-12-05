@@ -3120,8 +3120,7 @@ void initListeners(void) {
     }
 }
 
-/* Refresh cached TLS certificate expiration metadata and emit logs only when
- * transitioning into the expiring/expired states. */
+/* Refresh cached TLS certificate expiration metadata and emit logs */
 void tlsUpdateServerCertInfo(void) {
     if (!(server.tls_port || server.tls_replication || server.tls_cluster)) {
         server.tls_server_cert_expires_in_seconds = 0;

@@ -12285,6 +12285,9 @@ int moduleUnload(sds name, const char **errmsg) {
 
     moduleUnregisterCleanup(module);
 
+    /* Cleanup stale ACL command rules that may reference unloaded module commands. */
+    ACLCleanupStaleCommandRulesAllUsers();
+
     /* Unload the dynamic library. */
     if (dlclose(module->handle) == -1) {
         char *error = dlerror();

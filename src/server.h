@@ -2946,6 +2946,7 @@ sds getAclErrorMessage(int acl_res, user *user, struct redisCommand *cmd, sds er
 void ACLUpdateDefaultUserPassword(sds password);
 sds genRedisInfoStringACLStats(sds info);
 void ACLRecomputeCommandBitsFromCommandRulesAllUsers(void);
+void ACLCleanupStaleCommandRulesAllUsers(void);
 
 /* Sorted sets data type */
 

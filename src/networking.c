@@ -1688,7 +1688,7 @@ int clientHasPendingReplies(client *c) {
 
 #define TLS_CERT_WARN_DEDUP_WINDOW_MS (24LL * 60 * 60 * 1000)
 
-/* Convert raw seconds to whole days (rounding toward negative infinity). */
+/* Convert raw seconds to whole days. */
 static long long secondsToDaysFloor(long long seconds) {
     long long days = seconds / 86400LL;
     if (seconds < 0 && (seconds % 86400LL)) days -= 1;

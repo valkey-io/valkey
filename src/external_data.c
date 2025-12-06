@@ -315,7 +315,19 @@ void externalDataInitCommand(client *c) {
         .module_instance = module_instance,
     };
 
-    dictAdd(curr_external_data_ctx->dbdata, db_name_sds, e);
+    /* Add to dictionary - if this fails, clean up all allocated resources */
+    if (dictAdd(curr_external_data_ctx->dbdata, db_name_sds, e) != DICT_OK) {
+        /* Dictionary add failed, clean up everything we allocated */
+        moduleFreeContext(module_instance->module_ctx);
+        zfree(module_instance->module_ctx);
+        zfree(module_instance->storage_ctx);
+        zfree(module_instance->filter_ctx);
+        zfree(module_instance);
+        zfree(e);
+        sdsfree(db_name_sds);
+        addReplyErrorFormat(c, "Failed to add database %s to external data", db_name);
+        return;
+    }
 
     addReply(c, shared.ok);
     return;
@@ -359,6 +371,7 @@ void externalDataDropCommand(client *c) {
     /* Free the module context - this will flush any pending logs */
     if (dbData->module_instance->module_ctx != NULL) {
         moduleFreeContext(dbData->module_instance->module_ctx);
+        zfree(dbData->module_instance->module_ctx);
     }
     zfree(dbData->module_instance);
 
@@ -588,11 +601,9 @@ void externalDataDebugCommand(client *c) {
             int deleted = externalStorageCallDelFunc(dbData->module_instance, dbId, key, &value);
             if (deleted && value != NULL) {
                 addReplyBulkCString(c, objectGetVal(value));
+                decrRefCount(value);
             } else {
                 addReplyBulkCString(c, "");
-            }
-            if (value != NULL) {
-                decrRefCount(value);
             }
             return;
         } else {
@@ -619,11 +630,9 @@ void externalDataDebugCommand(client *c) {
             int deleted = externalFilterCallDelFunc(dbData->module_instance, dbId, key, &value);
             if (deleted && value != NULL) {
                 addReplyBulkCString(c, objectGetVal(value));
+                decrRefCount(value);
             } else {
                 addReplyBulkCString(c, "0");
-            }
-            if (value != NULL) {
-                decrRefCount(value);
             }
             return;
         } else {
@@ -797,15 +806,21 @@ void externalDataFlushDb(int dbid) {
         while ((ln = listNext(&li))) {
             robj *key = listNodeValue(ln);
 
-            /* Delete from storage */
+            /* Delete from storage - context already set up, so call methods directly */
             robj *value = NULL;
-            externalStorageCallDelFunc(mi, dbid, key, &value);
-            if (value) decrRefCount(value);
+            ValkeyModuleKeyOptCtx key_ctx = {key, NULL, dbid, -1};
+            mi->external_module->storage_methods.del(mi->module_ctx, mi->storage_ctx, &key_ctx, &value);
+            if (value) {
+                decrRefCount(value);
+            }
 
-            /* Delete from filter */
+            /* Delete from filter - context already set up, so call methods directly */
             robj *filter_value = NULL;
-            externalFilterCallDelFunc(mi, dbid, key, &filter_value);
-            if (filter_value) decrRefCount(filter_value);
+            ValkeyModuleKeyOptCtx filter_key_ctx = {key, NULL, dbid, -1};
+            mi->external_module->filter_methods.del(mi->module_ctx, mi->filter_ctx, &filter_key_ctx, &filter_value);
+            if (filter_value) {
+                decrRefCount(filter_value);
+            }
 
             decrRefCount(key);
         }
@@ -862,12 +877,25 @@ void externalDataSwapDb(int id1, int id2) {
         /* Update the module context to use the new database ID */
         if (dstData->module_instance && dstData->module_instance->module_ctx) {
             moduleFreeContext(dstData->module_instance->module_ctx);
+            zfree(dstData->module_instance->module_ctx);
             dstData->module_instance->module_ctx = moduleAllocateContext();
             moduleExternalStorageInitContext(dstData->module_instance->module_ctx,
                                              dstData->module_instance->external_module->module);
         }
 
-        dictAdd(ctx->dbdata, dst_name, dstData);
+        /* Add to dictionary - if this fails, clean up the allocated data */
+        if (dictAdd(ctx->dbdata, dst_name, dstData) != DICT_OK) {
+            /* Dictionary add failed, clean up the allocated data */
+            if (dstData->module_instance && dstData->module_instance->module_ctx) {
+                moduleFreeContext(dstData->module_instance->module_ctx);
+                zfree(dstData->module_instance->module_ctx);
+            }
+            zfree(dstData);
+            sdsfree(dst_name);
+            sdsfree(db_name1);
+            sdsfree(db_name2);
+            return;
+        }
 
         /* Remove the source entry */
         dictDelete(ctx->dbdata, src_name);
@@ -885,13 +913,30 @@ void externalDataSwapDb(int id1, int id2) {
     dictDelete(ctx->dbdata, db_name1);
     dictDelete(ctx->dbdata, db_name2);
 
-    /* Re-add them with swapped keys */
-    dictAdd(ctx->dbdata, db_name1, dbData2);
-    dictAdd(ctx->dbdata, db_name2, dbData1);
+    /* Re-add them with swapped keys - if this fails, restore original state */
+    if (dictAdd(ctx->dbdata, db_name1, dbData2) != DICT_OK) {
+        /* Restore original entries */
+        dictAdd(ctx->dbdata, db_name1, dbData1);
+        dictAdd(ctx->dbdata, db_name2, dbData2);
+        sdsfree(db_name1);
+        sdsfree(db_name2);
+        return;
+    }
+
+    if (dictAdd(ctx->dbdata, db_name2, dbData1) != DICT_OK) {
+        /* Restore original entries */
+        dictDelete(ctx->dbdata, db_name1);
+        dictAdd(ctx->dbdata, db_name1, dbData1);
+        dictAdd(ctx->dbdata, db_name2, dbData2);
+        sdsfree(db_name1);
+        sdsfree(db_name2);
+        return;
+    }
 
     /* Update the module contexts to use the new database IDs */
     if (dbData1->module_instance && dbData1->module_instance->module_ctx) {
         moduleFreeContext(dbData1->module_instance->module_ctx);
+        zfree(dbData1->module_instance->module_ctx);
         dbData1->module_instance->module_ctx = moduleAllocateContext();
         moduleExternalStorageInitContext(dbData1->module_instance->module_ctx,
                                          dbData1->module_instance->external_module->module);
@@ -899,6 +944,7 @@ void externalDataSwapDb(int id1, int id2) {
 
     if (dbData2->module_instance && dbData2->module_instance->module_ctx) {
         moduleFreeContext(dbData2->module_instance->module_ctx);
+        zfree(dbData2->module_instance->module_ctx);
         dbData2->module_instance->module_ctx = moduleAllocateContext();
         moduleExternalStorageInitContext(dbData2->module_instance->module_ctx,
                                          dbData2->module_instance->external_module->module);
@@ -919,6 +965,9 @@ void externalDataSwapDb(int id1, int id2) {
             /* Slow path: iterate and move each key for backward compatibility with modules
              * that don't implement swap functions. We collect all keys first to avoid iterator
              * invalidation during movement */
+            setupModuleCtx(dbData1->module_instance);
+            setupModuleCtx(dbData2->module_instance);
+
             list *keys_to_move = listCreate();
             externalStorageInstanceIterator *esi_it = externalStorageInstanceIteratorInit(id1, NULL, NULL);
             if (esi_it != NULL) {
@@ -936,14 +985,20 @@ void externalDataSwapDb(int id1, int id2) {
             while ((ln = listNext(&li))) {
                 robj *key = listNodeValue(ln);
 
-                /* Get the value from db1 */
+                /* Get the value from db1 - context already set up */
                 void *value = NULL;
-                if (externalStorageCallGetFunc(dbData1->module_instance, id1, key, &value)) {
-                    /* Set the value in db2 */
-                    if (externalStorageCallSetFunc(dbData2->module_instance, id2, key, (robj *)value) == EXTERNAL_SUCCESS) {
-                        /* Delete from db1 */
+                ValkeyModuleKeyOptCtx key_ctx = {key, NULL, id1, -1};
+                if (dbData1->module_instance->external_module->storage_methods.get(
+                        dbData1->module_instance->module_ctx, dbData1->module_instance->storage_ctx, &key_ctx, &value)) {
+                    /* Set the value in db2 - context already set up */
+                    ValkeyModuleKeyOptCtx key_ctx2 = {key, NULL, id2, -1};
+                    if (dbData2->module_instance->external_module->storage_methods.set(
+                            dbData2->module_instance->module_ctx, dbData2->module_instance->storage_ctx, &key_ctx2, (robj *)value) == EXTERNAL_SUCCESS) {
+                        /* Delete from db1 - context already set up */
                         robj *deleted_value = NULL;
-                        externalStorageCallDelFunc(dbData1->module_instance, id1, key, &deleted_value);
+                        ValkeyModuleKeyOptCtx del_key_ctx = {key, NULL, id1, -1};
+                        dbData1->module_instance->external_module->storage_methods.del(
+                            dbData1->module_instance->module_ctx, dbData1->module_instance->storage_ctx, &del_key_ctx, &deleted_value);
                         if (deleted_value) decrRefCount(deleted_value);
                     }
                     if (value) decrRefCount((robj *)value);
@@ -953,6 +1008,9 @@ void externalDataSwapDb(int id1, int id2) {
             }
 
             listRelease(keys_to_move);
+
+            teardownModuleCtx(dbData1->module_instance);
+            teardownModuleCtx(dbData2->module_instance);
         }
 
         /* Handle filter swap */
@@ -967,6 +1025,9 @@ void externalDataSwapDb(int id1, int id2) {
         } else {
             /* Slow path: iterate and move each key for backward compatibility with modules
              * that don't implement swap functions */
+            setupModuleCtx(dbData1->module_instance);
+            setupModuleCtx(dbData2->module_instance);
+
             list *keys_to_move = listCreate();
             externalStorageInstanceIterator *esi_it = externalStorageInstanceIteratorInit(id1, NULL, NULL);
             if (esi_it != NULL) {
@@ -984,13 +1045,19 @@ void externalDataSwapDb(int id1, int id2) {
             while ((ln = listNext(&li))) {
                 robj *key = listNodeValue(ln);
 
-                /* Check if key is in filter for db1 */
-                if (externalFilterCallGetFunc(dbData1->module_instance, id1, key)) {
-                    /* Add to filter for db2 */
-                    if (externalFilterCallSetFunc(dbData2->module_instance, id2, key) == EXTERNAL_SUCCESS) {
-                        /* Delete from filter for db1 */
+                /* Check if key is in filter for db1 - context already set up */
+                ValkeyModuleKeyOptCtx key_ctx = {key, NULL, id1, -1};
+                if (dbData1->module_instance->external_module->filter_methods.get(
+                        dbData1->module_instance->module_ctx, dbData1->module_instance->filter_ctx, &key_ctx)) {
+                    /* Add to filter for db2 - context already set up */
+                    ValkeyModuleKeyOptCtx key_ctx2 = {key, NULL, id2, -1};
+                    if (dbData2->module_instance->external_module->filter_methods.set(
+                            dbData2->module_instance->module_ctx, dbData2->module_instance->filter_ctx, &key_ctx2) == EXTERNAL_SUCCESS) {
+                        /* Delete from filter for db1 - context already set up */
                         robj *deleted_value = NULL;
-                        externalFilterCallDelFunc(dbData1->module_instance, id1, key, &deleted_value);
+                        ValkeyModuleKeyOptCtx del_key_ctx = {key, NULL, id1, -1};
+                        dbData1->module_instance->external_module->filter_methods.del(
+                            dbData1->module_instance->module_ctx, dbData1->module_instance->filter_ctx, &del_key_ctx, &deleted_value);
                         if (deleted_value) decrRefCount(deleted_value);
                     }
                 }
@@ -999,6 +1066,9 @@ void externalDataSwapDb(int id1, int id2) {
             }
 
             listRelease(keys_to_move);
+
+            teardownModuleCtx(dbData1->module_instance);
+            teardownModuleCtx(dbData2->module_instance);
         }
     }
 

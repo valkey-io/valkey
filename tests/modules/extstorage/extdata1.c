@@ -65,9 +65,11 @@ static int storageSetFunction(ValkeyModuleCtx *module_ctx,
     }
 
     ValkeyModule_DictReplace(storage_mem_pool[dbid], (ValkeyModuleString *)key, value);
+    // Retain the value to keep it alive in our storage
     ValkeyModule_RetainString(NULL, value);
     
     if (previous_value != NULL) {
+        // Free the previous value if it exists
         ValkeyModule_FreeString(NULL, previous_value);
     }
     
@@ -267,7 +269,6 @@ static int storageDropReadonlyFunction(ValkeyModuleCtx *, ValkeyModuleExternalSt
     return EXTERNAL_SUCCESS;
 }
 
-/* Efficient O(1) flush function for storage - clears all data for a database */
 static int storageFlushFunction(ValkeyModuleCtx *module_ctx,
                                 ValkeyModuleExternalStorageCtx *storage_ctx,
                                 int dbid) {
@@ -278,9 +279,25 @@ static int storageFlushFunction(ValkeyModuleCtx *module_ctx,
         return EXTERNAL_ERROR;
     }
     
-    /* Free the old dict and create a new empty one - O(1) operation
-     * Use NULL context because these are global memory pools, not auto-managed */
     if (storage_mem_pool[dbid] != NULL) {
+        /* First, iterate through all keys and free the retained strings
+         * This prevents memory leaks from ValkeyModule_RetainString calls */
+        ValkeyModuleDictIter *iter = ValkeyModule_DictIteratorStartC(storage_mem_pool[dbid], "^", NULL, 0);
+        ValkeyModuleString *key;
+        while ((key = ValkeyModule_DictNext(NULL, iter, NULL)) != NULL) {
+            /* Get the value before freeing the key */
+            ValkeyModuleString *value = ValkeyModule_DictGet(storage_mem_pool[dbid], key, NULL);
+            
+            /* Free the key string created by DictNext */
+            ValkeyModule_FreeString(NULL, key);
+            
+            if (value != NULL) {
+                ValkeyModule_FreeString(NULL, value);
+            }
+        }
+        ValkeyModule_DictIteratorStop(iter);
+        
+        /* Now free the entire dictionary */
         ValkeyModule_FreeDict(NULL, storage_mem_pool[dbid]);
     }
     storage_mem_pool[dbid] = ValkeyModule_CreateDict(NULL);
@@ -296,7 +313,6 @@ static int filterDropReadonlyFunction(ValkeyModuleCtx *, ValkeyModuleExternalFil
     return EXTERNAL_SUCCESS;
 }
 
-/* Efficient O(1) flush function for filter - clears all data for a database */
 static int filterFlushFunction(ValkeyModuleCtx *module_ctx,
                                ValkeyModuleExternalFilterCtx *filter_ctx,
                                int dbid) {
@@ -307,9 +323,10 @@ static int filterFlushFunction(ValkeyModuleCtx *module_ctx,
         return EXTERNAL_ERROR;
     }
     
-    /* Free the old dict and create a new empty one - O(1) operation
-     * Use NULL context because these are global memory pools, not auto-managed */
     if (filter_mem_pool[dbid] != NULL) {
+        /* For filter, we don't retain strings with ValkeyModule_RetainString like storage does.
+         * We just use ValkeyModule_DictReplace directly, so we can free the dictionary directly
+         * without iterating through individual strings to avoid double-free issues. */
         ValkeyModule_FreeDict(NULL, filter_mem_pool[dbid]);
     }
     filter_mem_pool[dbid] = ValkeyModule_CreateDict(NULL);
@@ -317,7 +334,6 @@ static int filterFlushFunction(ValkeyModuleCtx *module_ctx,
     return EXTERNAL_SUCCESS;
 }
 
-/* Efficient O(1) swap function for storage - swaps data between two databases */
 static int storageSwapFunction(ValkeyModuleCtx *module_ctx,
                               ValkeyModuleExternalStorageCtx *storage_ctx,
                               int dbid1,
@@ -337,7 +353,6 @@ static int storageSwapFunction(ValkeyModuleCtx *module_ctx,
     return EXTERNAL_SUCCESS;
 }
 
-/* Efficient O(1) swap function for filter - swaps data between two databases */
 static int filterSwapFunction(ValkeyModuleCtx *module_ctx,
                              ValkeyModuleExternalFilterCtx *filter_ctx,
                              int dbid1,

@@ -421,6 +421,7 @@ int externalStorageCallDelFunc(externalDataModuleInstance *mi, int dbid, robj *k
     setupModuleCtx(mi);
 
     serverAssert(mi->external_module != NULL && mi->storage_ctx != NULL && mi->module_ctx != NULL && key != NULL);
+
     ValkeyModuleKeyOptCtx key_ctx = {key, NULL, dbid, -1};
     int result = mi->external_module->storage_methods.del(mi->module_ctx, mi->storage_ctx, &key_ctx, value);
 

@@ -6,6 +6,7 @@
         "since": "1.0.0",
         "arity": -2,
         "function": "delCommand",
+        "get_keys_function": "delGetKeys",
         "command_flags": [
             "WRITE"
         ],
@@ -32,7 +33,7 @@
                 },
                 "find_keys": {
                     "range": {
-                        "lastkey": -1,
+                        "lastkey": 0,
                         "step": 1,
                         "limit": 0
                     }
@@ -48,7 +49,8 @@
             {
                 "name": "key",
                 "type": "key",
-                "key_spec_index": 0
+                "key_spec_index": 0,
+                "multiple": true
             },
             {
                 "name": "ext",

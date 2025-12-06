@@ -894,14 +894,15 @@ void flushallCommand(client *c) {
 }
 
 /* This command implements DEL and UNLINK. */
-void delGenericCommand(client *c, int lazy, int ext) {
+void delGenericCommand(client *c, int argc, int lazy, int ext) {
     int numdel = 0, j;
 
-    for (j = 1; j < c->argc; j++) {
+    for (j = 1; j < argc; j++) {
         if (expireIfNeeded(c->db, c->argv[j], NULL, 0) == KEY_DELETED) continue;
 
         int ext_deleted = 0;
         robj *key = c->argv[j];
+
         if (ext && isExtDataOn()) {
             /* When EXT option is provided, always try to delete from external storage and filter */
             /* Don't check externalDataFind first, as it requires both filter and storage to exist */
@@ -943,6 +944,7 @@ void delGenericCommand(client *c, int lazy, int ext) {
 
 void delCommand(client *c) {
     int ext = 0;
+    int argc = c->argc;
     /* Check if the last argument is "ext" flag */
     if (c->argc > 1 && !strcasecmp(objectGetVal(c->argv[c->argc - 1]), "ext")) {
         if (!isExtDataOn()) {
@@ -950,12 +952,13 @@ void delCommand(client *c) {
             return;
         }
         ext = 1;
+        argc--;
     }
-    delGenericCommand(c, server.lazyfree_lazy_user_del, ext);
+    delGenericCommand(c, argc, server.lazyfree_lazy_user_del, ext);
 }
 
 void unlinkCommand(client *c) {
-    delGenericCommand(c, 1, 0);
+    delGenericCommand(c, c->argc, 1, 0);
 }
 
 /* EXISTS key1 key2 ... key_N.
@@ -3197,4 +3200,34 @@ int *copyDbIdArgs(robj **argv, int argc, int *count) {
     result[0] = (int)dbid;
     *count = 1;
     return result;
+}
+
+/* Helper function to extract keys from the DEL command.
+ *
+ * DEL key1 key2 ... keyN [EXT]
+ *
+ * This function excludes the "ext" or "EXT" argument from the keys list if it's
+ * the last argument. The DEL command already handles the EXT flag in delCommand,
+ * but we need to exclude it from key extraction for proper tracking and propagation. */
+int delGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysResult *result) {
+    UNUSED(cmd);
+    keyReference *keys;
+    int actual_keys = argc - 1; /* Subtract 1 for the command name */
+
+    /* Check if the last argument is "ext" or "EXT" */
+    if (argc > 1 && !strcasecmp(objectGetVal(argv[argc - 1]), "ext")) {
+        actual_keys--; /* Exclude the EXT argument */
+    }
+
+    /* Prepare result structure */
+    keys = getKeysPrepareResult(result, actual_keys);
+
+    /* Add all key positions to keys[] */
+    for (int i = 0; i < actual_keys; i++) {
+        keys[i].pos = i + 1; /* +1 to skip the command name */
+        keys[i].flags = CMD_KEY_RW | CMD_KEY_ACCESS | CMD_KEY_DELETE;
+    }
+
+    result->numkeys = actual_keys;
+    return actual_keys;
 }

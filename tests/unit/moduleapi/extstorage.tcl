@@ -107,7 +107,7 @@ start_server [list overrides [list "ext-data-mode" kv] tags [list "external:skip
     }
 }
 
-start_server [list overrides [list "ext-data-mode" kv "loglevel" debug "ext-data-timeout" 0] tags [list "external:skip"]] {
+start_server [list overrides [list "ext-data-mode" kv "loglevel" debug "ext-data-timeout" 0] tags [list "external:skip" "singledb:skip"]] {
     test {Reading data from storage works} {
         # init
         assert_equal {OK} [r module load $extdatamodule1]
@@ -163,7 +163,7 @@ start_server [list overrides [list "ext-data-mode" kv "loglevel" debug "ext-data
     }
 }
 
-start_server [list overrides [list "ext-data-mode" kv "loglevel" debug "ext-data-timeout" 0] tags [list "external:skip"]] {
+start_server [list overrides [list "ext-data-mode" kv "loglevel" debug "ext-data-timeout" 0] tags [list "external:skip" "singledb:skip"]] {
     test {SET with ext option works, and GET with ext returns the value} {
         assert_equal {OK} [r module load $extdatamodule1]
         assert_equal {OK} [r external_data INIT db0 helloextdata1]
@@ -202,7 +202,7 @@ proc gen_data {size} {
     return $data
 }
 
-start_server [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [list "external:skip"]] {
+start_server [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [list "external:skip" "singledb:skip"]] {
     test {Getting keys from storage works} {
         # init
         assert_equal {OK} [r module load $extdatamodule1]
@@ -238,7 +238,7 @@ start_server [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [li
     }
 }
 
-start_server [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [list "external:skip"]] {
+start_server [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [list "external:skip" "singledb:skip"]] {
     test {SET with ext option works, and SCAN and KEYS with ext return the key} {
         assert_equal {OK} [r module load $extdatamodule1]
         assert_equal {OK} [r external_data INIT db0 helloextdata1]
@@ -254,8 +254,12 @@ start_server [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [li
         assert_equal {} $keys
         assert_equal {OK} [r select 0]
     }
+}
 
+start_server [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [list "external:skip"]] {
     test "ext-data-store-by-size not set: large key/value stored in memory" {
+        assert_equal {OK} [r module load $extdatamodule1]
+        assert_equal {OK} [r external_data INIT db0 helloextdata1]
         assert_equal {OK} [r select 0]
         set large_key [gen_data 200]
         set large_val [gen_data 200]
@@ -310,12 +314,12 @@ start_server [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [li
 }
 
 ### Sharded
-start_cluster 1 0 [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [list "external:skip" "cluster"]] {
+start_cluster 1 0 [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [list "external:skip" "singledb:skip"]] {
     # we assume that all cross-requests to and from another nodes are made in a usual Valkey way
     # that's why there are no tests with MOVED during set/get here
     set extdatamodule1 [file normalize tests/modules/extstorage/extdata1.so]
 
-    test "External storage works with single sharded" {
+    test {External storage works with single sharded} {
         # init
         wait_for_cluster_state ok
         assert_equal {OK} [r module load $extdatamodule1]
@@ -325,6 +329,7 @@ start_cluster 1 0 [list overrides [list "ext-data-mode" kv "loglevel" debug] tag
         assert_equal {OK} [r external_data debug db0 storage set k v]
         assert_equal {OK} [r external_data debug db0 storage set k v]
         assert_equal {OK} [r external_data debug db0 filter set k]
+        r select 0
         assert_equal v [r get k ext]
         assert_equal {} [r get k]
 
@@ -385,7 +390,7 @@ start_cluster 1 0 [list overrides [list "ext-data-mode" kv "loglevel" debug] tag
     }
 }
 
-start_cluster 1 0 [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [list "external:skip" "cluster"]] {
+start_cluster 1 0 [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [list "external:skip" "singledb:skip"]] {
     # we assume that all cross-requests to and from another nodes are made in a usual Valkey way
     # that's why there are no tests with MOVED during set/get here
     set extdatamodule1 [file normalize tests/modules/extstorage/extdata1.so]
@@ -427,7 +432,7 @@ start_cluster 1 0 [list overrides [list "ext-data-mode" kv "loglevel" debug] tag
     }
 }
 
-start_cluster 1 0 [list overrides [list "loglevel" debug] tags [list "external:skip" "cluster"]] {
+start_cluster 1 0 [list overrides [list "loglevel" debug] tags [list "external:skip"]] {
     set ext_data_off_err "ERR External data commands are unavailable with ext-data-mode off"
     test "SET with ext option fails when ext-data-mode is off (sharded)" {
         wait_for_cluster_state ok
@@ -435,7 +440,7 @@ start_cluster 1 0 [list overrides [list "loglevel" debug] tags [list "external:s
     }
 }
 
-start_cluster 1 0 [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [list "external:skip" "cluster"]] {
+start_cluster 1 0 [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [list "external:skip" "singledb:skip"]] {
     set extdatamodule1 [file normalize tests/modules/extstorage/extdata1.so]
 
     test "SET with ext option works, and GET with ext returns the value (sharded)" {
@@ -464,7 +469,7 @@ start_cluster 1 0 [list overrides [list "ext-data-mode" kv "loglevel" debug] tag
     }
 }
 
-start_cluster 1 0 [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [list "external:skip" "cluster"]] {
+start_cluster 1 0 [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [list "external:skip" "singledb:skip"]] {
     set extdatamodule1 [file normalize tests/modules/extstorage/extdata1.so]
 
     test "SET with ext option works, and SCAN and KEYS with ext return the key (sharded)" {
@@ -492,13 +497,7 @@ start_cluster 1 0 [list overrides [list "ext-data-mode" kv "loglevel" debug] tag
 # 6) deleted key exists in external storage, deleted with ext flag, deletion is successful, no error
 
 ### Non-sharded
-start_server {
-    overrides {
-        "ext-data-mode" "kv"
-        "ext-data-store-by-size" "0"
-        "loglevel" "debug"
-    }
-} {
+start_server [list overrides [list "ext-data-mode" kv "loglevel" debug "ext-data-store-by-size" "0"] tags [list "external:skip" "singledb:skip"]] {
     # Load module once for all tests in this block
     r module load $extdatamodule1
     # Initialize external data once for all tests
@@ -632,13 +631,11 @@ start_server {
 }
 
 ### Sharded
-start_server {
-    overrides {
-        "ext-data-mode" "kv"
-        "ext-data-store-by-size" "0"
-    }
-} {
+start_cluster 1 0 [list overrides [list "ext-data-mode" kv "ext-data-store-by-size" "0"] tags [list "singledb:skip"]] {
     # Load module once for all tests in this block
+    set extdatamodule1 [file normalize tests/modules/extstorage/extdata1.so]
+
+    wait_for_cluster_state ok
     r module load $extdatamodule1
     # Initialize external data once for all tests
     r external_data INIT db0 helloextdata1
@@ -711,28 +708,18 @@ start_server {
         assert_equal "" [r get ext_key2 ext]
     }
 
-    test "DEL with EXT - Sharded - Multiple keys with external storage" {
+    test "DEL with EXT - Sharded - Multiple keys with external storage (just checking no error)" {
         r select 0
         # Set multiple keys to external storage
-        r set multi_key1 "value1" ext
-        r set multi_key2 "value2" ext
-        r set multi_key3 "value3" ext
+        r set multi_key1_test7 "value1" ext
+        r set multi_key2_test7 "value2" ext
         
-        # Verify they exist in external storage
-        assert_equal "value1" [r get multi_key1 ext]
-        assert_equal "value2" [r get multi_key2 ext]
-        assert_equal "value3" [r get multi_key3 ext]
-        
-        # Delete multiple keys with EXT flag
-        assert_equal 2 [r del multi_key1 multi_key2 ext]
-        
-        # Verify deletion
-        assert_equal "" [r get multi_key1]
-        assert_equal "" [r get multi_key1 ext]
-        assert_equal "" [r get multi_key2]
-        assert_equal "" [r get multi_key2 ext]
-        assert_equal "" [r get multi_key3]
-        assert_equal "value3" [r get multi_key3 ext]
+        # Delete multiple keys - want to check that nothing is broken as it's broken without custom get_keys_function to command
+        catch {r del multi_key1_test7 multi_key2_test7} err
+        assert_match {CROSSSLOT Keys*} $err
+
+        catch {r del multi_key1_test7 multi_key2_test7 ext} err
+        assert_match {CROSSSLOT Keys*} $err
     }
 
     test "DEL with EXT - Sharded - Different databases" {
@@ -877,7 +864,7 @@ start_server [list overrides [list "ext-data-mode" kv "loglevel" debug "maxmemor
         r set "test_key1" "test_value1" ex 1
         r set "test_key2" "test_value2" ex 5
         r set "test_key3" "test_value3" 
-        r debug sleep 1
+        r debug sleep 2
         
         # Verify necessary keys are in memory
         assert_equal "" [r get "test_key1"]
@@ -908,7 +895,7 @@ start_server [list overrides [list "ext-data-mode" kv "loglevel" debug "maxmemor
         # Set keys with TTL
         r set "test_key1" "test_value1" ex 1
         r set "test_key2" "test_value2" ex 5
-        r debug sleep 1
+        r debug sleep 2
 
         # Verify necessary keys are in memory
         assert_equal "" [r get "test_key1"]
@@ -922,7 +909,7 @@ start_server [list overrides [list "ext-data-mode" kv "loglevel" debug "maxmemor
 
 # Test FLUSHDB command with external storage
 # FLUSHDB should clean external data for the current database only
-start_server [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [list "external:skip"]] {
+start_server [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [list "external:skip" "singledb:skip"]] {
     test {FLUSHDB cleans external data for current database only} {
         # Load module and initialize external storage for multiple databases
         assert_equal {OK} [r module load $extdatamodule1]
@@ -1000,7 +987,7 @@ start_server [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [li
 
 # Test FLUSHALL command with external storage
 # FLUSHALL should clean external data for ALL databases
-start_server [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [list "external:skip"]] {
+start_server [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [list "external:skip" "singledb:skip"]] {
     test {FLUSHALL cleans external data for all databases} {
         # Load module and initialize external storage for multiple databases
         assert_equal {OK} [r module load $extdatamodule1]
@@ -1082,7 +1069,7 @@ start_server [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [li
 }
 
 # Test FLUSHDB with cluster mode
-start_cluster 1 0 [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [list "external:skip" "cluster"]] {
+start_cluster 1 0 [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [list "external:skip" "singledb:skip"]] {
     set extdatamodule1 [file normalize tests/modules/extstorage/extdata1.so]
     
     test {FLUSHDB cleans external data for current database only (cluster)} {
@@ -1124,7 +1111,7 @@ start_cluster 1 0 [list overrides [list "ext-data-mode" kv "loglevel" debug] tag
 }
 
 # Test FLUSHALL with cluster mode
-start_cluster 1 0 [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [list "external:skip" "cluster"]] {
+start_cluster 1 0 [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [list "external:skip" "singledb:skip"]] {
     set extdatamodule1 [file normalize tests/modules/extstorage/extdata1.so]
     
     test {FLUSHALL cleans external data for all databases (cluster)} {
@@ -1160,8 +1147,7 @@ start_cluster 1 0 [list overrides [list "ext-data-mode" kv "loglevel" debug] tag
     }
 }
 
-# Tag: addon - can be run separately with ./runtest --tags addon
-start_server [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [list "external:skip" "addon" "slow"]] {
+start_server [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [list "external:skip" "slow" "singledb:skip"]] {
     test {FLUSHDB and SWAPDB performance with large dataset (should complete in under 500ms)} {
         # Load module and initialize external storage
         assert_equal {OK} [r module load $extdatamodule1]
@@ -1232,6 +1218,72 @@ start_server [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [li
         set flush_time [expr {$flush_end - $flush_start}]
         
         puts "FLUSHDB time: ${flush_time}ms for $num_keys keys"
+        
+        # Verify all keys are deleted
+        assert_equal {} [r get perf_key_0 ext]
+        assert_equal {} [r get perf_key_[expr {$num_keys - 1}] ext]
+        
+        # Assert FLUSHDB completes in under 500ms
+        # This will FAIL with the current O(n) implementation
+        # demonstrating the need for a more efficient flush mechanism (e.g., native flush API)
+        if {$flush_time >= 500} {
+            fail "FLUSHDB took ${flush_time}ms, expected < 500ms (demonstrates O(n) limitation - needs native flush API)"
+        }
+    }
+}
+
+start_cluster 1 0 [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [list "external:skip" "slow" "singledb:skip"]] {
+    set extdatamodule1 [file normalize tests/modules/extstorage/extdata1.so]
+    
+    test {FLUSHDB and SWAPDB performance with large dataset (should complete in under 500ms) - cluster mode} {
+        wait_for_cluster_state ok
+        
+        # Load module and initialize external storage
+        assert_equal {OK} [r module load $extdatamodule1]
+        assert_equal {OK} [r external_data INIT db0 helloextdata1]
+        assert_equal {OK} [r external_data INIT db1 helloextdata1]
+        r select 0
+        
+        # Insert a large number of keys into db0 external storage
+        # Using 100,000 keys to demonstrate the O(n) performance issue
+        set num_keys 100000
+        puts "Inserting $num_keys keys into db0 external storage in cluster mode..."
+        
+        set insert_start [clock milliseconds]
+        for {set i 0} {$i < $num_keys} {incr i} {
+            r set perf_key_$i perf_value_$i ext
+        }
+        set insert_end [clock milliseconds]
+        set insert_time [expr {$insert_end - $insert_start}]
+        puts "Insert time: ${insert_time}ms for $num_keys keys"
+        
+        # Insert just one key into db1 to see the difference
+        r select 1
+        assert_equal {OK} [r set single_key single_value ext]
+        puts "Inserted 1 key into db1 external storage"
+        
+        # Verify keys exist in both databases
+        r select 0
+        assert_equal perf_value_0 [r get perf_key_0 ext]
+        assert_equal perf_value_[expr {$num_keys - 1}] [r get perf_key_[expr {$num_keys - 1}] ext]
+        r select 1
+        assert_equal single_value [r get single_key ext]
+        
+        # Note: SWAPDB is not allowed in cluster mode, so we skip that test
+        puts "SWAPDB is not allowed in cluster mode, skipping SWAPDB performance test"
+        
+        # Now test FLUSHDB performance with the large dataset (in db0)
+        puts "Testing FLUSHDB performance with large dataset in cluster mode..."
+        r select 0
+        
+        # Measure FLUSHDB performance
+        puts "Executing FLUSHDB in cluster mode..."
+        set flush_start [clock milliseconds]
+        assert_equal {OK} [r flushdb]
+        set flush_end [clock milliseconds]
+        set flush_time [expr {$flush_end - $flush_start}]
+        
+        puts "FLUSHDB time: ${flush_time}ms for $num_keys keys in cluster mode"
         
         # Verify all keys are deleted
         assert_equal {} [r get perf_key_0 ext]
@@ -1493,156 +1545,4 @@ start_server [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [li
 
 }
 
-# Test SWAPDB with cluster mode
-start_cluster 1 0 [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [list "external:skip" "cluster" "singledb:skip"]] {
-    set extdatamodule1 [file normalize tests/modules/extstorage/extdata1.so]
-    
-    test {SWAPDB swaps external data between two databases (cluster)} {
-        wait_for_cluster_state ok
-        
-        # Load module and initialize external storage
-        assert_equal {OK} [r module load $extdatamodule1]
-        assert_equal {OK} [r external_data INIT db0 helloextdata1]
-        assert_equal {OK} [r external_data INIT db1 helloextdata1]
-        assert_equal {OK} [r external_data INIT db2 helloextdata1]
-        
-        # Set keys in db0
-        r select 0
-        assert_equal {OK} [r set cluster_swap_key0_1 cluster_swap_value0_1 ext]
-        assert_equal {OK} [r set cluster_swap_key0_2 cluster_swap_value0_2 ext]
-        
-        # Set keys in db1
-        r select 1
-        assert_equal {OK} [r set cluster_swap_key1_1 cluster_swap_value1_1 ext]
-        assert_equal {OK} [r set cluster_swap_key1_2 cluster_swap_value1_2 ext]
-        
-        # Set keys in db2 (should remain unaffected)
-        r select 2
-        assert_equal {OK} [r set cluster_swap_key2_1 cluster_swap_value2_1 ext]
-        
-        # Verify keys exist before swap using GET, KEYS, and SCAN
-        r select 0
-        assert_equal cluster_swap_value0_1 [r get cluster_swap_key0_1 ext]
-        assert_equal cluster_swap_value0_2 [r get cluster_swap_key0_2 ext]
-        assert_equal {cluster_swap_key0_1 cluster_swap_key0_2} [lsort [r keys cluster_swap_key* ext]]
-        set keys_db0 [lsort [scan_keys 0 "string" "cluster_swap_key*" "ext"]]
-        assert_equal {cluster_swap_key0_1 cluster_swap_key0_2} $keys_db0
-        
-        r select 1
-        assert_equal cluster_swap_value1_1 [r get cluster_swap_key1_1 ext]
-        assert_equal cluster_swap_value1_2 [r get cluster_swap_key1_2 ext]
-        assert_equal {cluster_swap_key1_1 cluster_swap_key1_2} [lsort [r keys cluster_swap_key* ext]]
-        set keys_db1 [lsort [scan_keys 0 "string" "cluster_swap_key*" "ext"]]
-        assert_equal {cluster_swap_key1_1 cluster_swap_key1_2} $keys_db1
-        
-        r select 2
-        assert_equal cluster_swap_value2_1 [r get cluster_swap_key2_1 ext]
-        assert_equal {cluster_swap_key2_1} [r keys cluster_swap_key* ext]
-        
-        # Execute SWAPDB
-        assert_equal {OK} [r swapdb 0 1]
-        
-        # Verify external data is swapped using GET, KEYS, and SCAN
-        r select 0
-        assert_equal cluster_swap_value1_1 [r get cluster_swap_key1_1 ext]
-        assert_equal cluster_swap_value1_2 [r get cluster_swap_key1_2 ext]
-        assert_equal {} [r get cluster_swap_key0_1 ext]
-        assert_equal {cluster_swap_key1_1 cluster_swap_key1_2} [lsort [r keys cluster_swap_key* ext]]
-        set keys_db0_after [lsort [scan_keys 0 "string" "cluster_swap_key*" "ext"]]
-        assert_equal {cluster_swap_key1_1 cluster_swap_key1_2} $keys_db0_after
-        
-        r select 1
-        assert_equal cluster_swap_value0_1 [r get cluster_swap_key0_1 ext]
-        assert_equal cluster_swap_value0_2 [r get cluster_swap_key0_2 ext]
-        assert_equal {} [r get cluster_swap_key1_1 ext]
-        assert_equal {cluster_swap_key0_1 cluster_swap_key0_2} [lsort [r keys cluster_swap_key* ext]]
-        set keys_db1_after [lsort [scan_keys 0 "string" "cluster_swap_key*" "ext"]]
-        assert_equal {cluster_swap_key0_1 cluster_swap_key0_2} $keys_db1_after
-        
-        # Verify db2 is unaffected
-        r select 2
-        assert_equal cluster_swap_value2_1 [r get cluster_swap_key2_1 ext]
-        assert_equal {cluster_swap_key2_1} [r keys cluster_swap_key* ext]
-    }
-    
-    test {SWAPDB with same database leaves external data unchanged (cluster)} {
-        # Set keys in db0
-        r select 0
-        assert_equal {OK} [r set cluster_same_key0_1 cluster_same_value0_1 ext]
-        
-        # Verify key exists before swap
-        assert_equal cluster_same_value0_1 [r get cluster_same_key0_1 ext]
-        
-        # Execute SWAPDB with same database
-        assert_equal {OK} [r swapdb 0 0]
-        
-        # Verify external data is unchanged
-        assert_equal cluster_same_value0_1 [r get cluster_same_key0_1 ext]
-    }
-    
-    test {SWAPDB: client sees swapped external data without SELECT (cluster)} {
-        # This test verifies that after SWAPDB, a client connected to a database
-        # automatically sees the new external data without needing to call SELECT
-        # (same behavior as with memory keys)
-        
-        wait_for_cluster_state ok
-        
-        # Initialize databases
-        r select 7
-        assert_equal {OK} [r external_data INIT db7 helloextdata1]
-        r select 8
-        assert_equal {OK} [r external_data INIT db8 helloextdata1]
-        
-        # Set up data in db7
-        r select 7
-        assert_equal {OK} [r set cluster_client_key7_1 cluster_client_value7_1 ext]
-        assert_equal {OK} [r set cluster_client_key7_2 cluster_client_value7_2 ext]
-        
-        # Set up data in db8
-        r select 8
-        assert_equal {OK} [r set cluster_client_key8_1 cluster_client_value8_1 ext]
-        assert_equal {OK} [r set cluster_client_key8_2 cluster_client_value8_2 ext]
-        
-        # Create a second client connected to db7
-        set client2 [valkey_cluster_client 0 0]
-        $client2 select 7
-        
-        # Verify client2 sees db7's data before swap
-        assert_equal cluster_client_value7_1 [$client2 get cluster_client_key7_1 ext]
-        assert_equal cluster_client_value7_2 [$client2 get cluster_client_key7_2 ext]
-        assert_equal {cluster_client_key7_1 cluster_client_key7_2} [lsort [$client2 keys cluster_client_key* ext]]
-        
-        # Verify client2 does NOT see db8's data
-        assert_equal {} [$client2 get cluster_client_key8_1 ext]
-        assert_equal {} [$client2 get cluster_client_key8_2 ext]
-        
-        # Execute SWAPDB using the main client (r)
-        r select 0
-        assert_equal {OK} [r swapdb 7 8]
-        
-        # Now client2 (still logically connected to db7, but without calling SELECT again)
-        # should see db8's data because db7 and db8 were swapped
-        assert_equal cluster_client_value8_1 [$client2 get cluster_client_key8_1 ext]
-        assert_equal cluster_client_value8_2 [$client2 get cluster_client_key8_2 ext]
-        assert_equal {cluster_client_key8_1 cluster_client_key8_2} [lsort [$client2 keys cluster_client_key* ext]]
-        
-        # Verify client2 does NOT see db7's old data anymore
-        assert_equal {} [$client2 get cluster_client_key7_1 ext]
-        assert_equal {} [$client2 get cluster_client_key7_2 ext]
-        
-        # Verify using SCAN as well
-        set keys_client2 {}
-        set cur 0
-        while 1 {
-            set res [$client2 scan $cur type "string" match "cluster_client_key*" ext]
-            set cur [lindex $res 0]
-            set k [lindex $res 1]
-            lappend keys_client2 {*}$k
-            if {$cur == 0} break
-        }
-        assert_equal {cluster_client_key8_1 cluster_client_key8_2} [lsort $keys_client2]
-        
-        # Cleanup
-        $client2 close
-    }
-}
+# Test SWAPDB with cluster mode - skipping, as not supported

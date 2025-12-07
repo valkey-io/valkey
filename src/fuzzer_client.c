@@ -655,7 +655,7 @@ static void printFinalStatistics(void) {
                final_commands > 0 ? (final_success * 100.0) / final_commands : 0);
 
     if (final_total_errors > 0 && current_log_level < LOG_DEBUG) {
-        logMessage(LOG_INFO, "To see full error details, run with --log-level debug");
+        logMessage(LOG_INFO, "To see full error details, run with --fuzz-loglevel debug");
     }
 }
 

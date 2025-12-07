@@ -1225,14 +1225,14 @@ static int isLexicographicalCommand(CommandArgument *arg) {
 }
 
 /* Generate a lexicographical range value (for commands like ZLEXCOUNT, ZRANGEBYLEX, etc.) */
-static void generateLexRangeValue(FuzzerCommand *cmd, const char *argName, int r) {
+static void generateLexRangeValue(FuzzerCommand *cmd, const char *argName) {
     /* Lexicographical range values can be:
      * - [value] (inclusive)
      * - (value) (exclusive)
      * - - (negative infinity)
      * - + (positive infinity)  */
 
-    int choice = r % 10;
+    int choice = rand() % 10;
 
     if (choice == 0) {
         /* Negative infinity */
@@ -1252,51 +1252,53 @@ static void generateLexRangeValue(FuzzerCommand *cmd, const char *argName, int r
 }
 
 /* Generate a random ACL rule */
-static void generateAclRule(FuzzerCommand *cmd, int r) {
+static void generateAclRule(FuzzerCommand *cmd) {
     /* Generate valid ACL rules dynamically using fetched categories */
-    int rule_type = r % 10;
+    int rule_type = rand() % 10;
 
     switch (rule_type) {
     case 0: /* User state rules */
-        appendArg(cmd, sdsnew(r % 2 ? "on" : "off"));
+        appendArg(cmd, sdsnew(rand() % 2 ? "on" : "off"));
         break;
     case 1: /* Password rules */
-        if (r % 3 == 0) {
+        if (rand() % 3 == 0) {
             appendArg(cmd, sdsnew("nopass"));
         } else {
-            appendArg(cmd, sdscatprintf(sdsempty(), ">pass%d", r % 100));
+            appendArg(cmd, sdscatprintf(sdsempty(), ">pass%d", rand() % 100));
         }
         break;
     case 2: /* Key pattern rules */
-        if (r % 4 == 0) {
+    {
+        int choice = rand() % 4;
+        if (choice == 0) {
             appendArg(cmd, sdsnew("allkeys"));
-        } else if (r % 4 == 1) {
+        } else if (choice == 1) {
             appendArg(cmd, sdsnew("nokeys"));
-        } else if (r % 4 == 2) {
+        } else if (choice == 2) {
             appendArg(cmd, sdsnew("~*"));
         } else {
-            appendArg(cmd, sdscatprintf(sdsempty(), "~key:%d:*", r % 10));
+            appendArg(cmd, sdscatprintf(sdsempty(), "~key:%d:*", rand() % 10));
         }
-        break;
+    } break;
     case 3: /* Command category allow rules using dynamic categories */
         if (fuzz_ctx->aclCategories && fuzz_ctx->aclCategoriesCount > 0) {
-            int cat_idx = r % fuzz_ctx->aclCategoriesCount;
+            int cat_idx = rand() % fuzz_ctx->aclCategoriesCount;
             appendArg(cmd, sdscatprintf(sdsempty(), "+@%s", fuzz_ctx->aclCategories[cat_idx]));
         } else {
             /* Fallback to common categories if ACL CAT failed */
             static const char *fallback_cats[] = {"all", "read", "write", "admin", "dangerous"};
-            int cat_idx = r % (sizeof(fallback_cats) / sizeof(fallback_cats[0]));
+            int cat_idx = rand() % (sizeof(fallback_cats) / sizeof(fallback_cats[0]));
             appendArg(cmd, sdscatprintf(sdsempty(), "+@%s", fallback_cats[cat_idx]));
         }
         break;
     case 4: /* Command category deny rules using dynamic categories */
         if (fuzz_ctx->aclCategories && fuzz_ctx->aclCategoriesCount > 0) {
-            int cat_idx = r % fuzz_ctx->aclCategoriesCount;
+            int cat_idx = rand() % fuzz_ctx->aclCategoriesCount;
             appendArg(cmd, sdscatprintf(sdsempty(), "-@%s", fuzz_ctx->aclCategories[cat_idx]));
         } else {
             /* Fallback to common categories if ACL CAT failed */
             static const char *fallback_cats[] = {"dangerous", "admin", "write", "blocking"};
-            int cat_idx = r % (sizeof(fallback_cats) / sizeof(fallback_cats[0]));
+            int cat_idx = rand() % (sizeof(fallback_cats) / sizeof(fallback_cats[0]));
             appendArg(cmd, sdscatprintf(sdsempty(), "-@%s", fallback_cats[cat_idx]));
         }
         break;
@@ -1304,30 +1306,32 @@ static void generateAclRule(FuzzerCommand *cmd, int r) {
     {
         static const char *commands[] = {"get", "set", "del", "exists", "ping",
                                          "info", "keys", "scan", "type", "ttl"};
-        int cmd_idx = r % (sizeof(commands) / sizeof(commands[0]));
+        int cmd_idx = rand() % (sizeof(commands) / sizeof(commands[0]));
         appendArg(cmd, sdscatprintf(sdsempty(), "+%s", commands[cmd_idx]));
     } break;
     case 6: /* Specific command deny rules */
     {
         static const char *commands[] = {"flushdb", "flushall", "shutdown", "debug",
                                          "config", "eval", "script", "client"};
-        int cmd_idx = r % (sizeof(commands) / sizeof(commands[0]));
+        int cmd_idx = rand() % (sizeof(commands) / sizeof(commands[0]));
         appendArg(cmd, sdscatprintf(sdsempty(), "-%s", commands[cmd_idx]));
     } break;
     case 7: /* Channel pattern rules */
-        if (r % 3 == 0) {
+    {
+        int choice = rand() % 3;
+        if (choice == 0) {
             appendArg(cmd, sdsnew("allchannels"));
-        } else if (r % 3 == 1) {
+        } else if (choice == 1) {
             appendArg(cmd, sdsnew("&*"));
         } else {
-            appendArg(cmd, sdscatprintf(sdsempty(), "&channel:%d:*", r % 5));
+            appendArg(cmd, sdscatprintf(sdsempty(), "&channel:%d:*", rand() % 5));
         }
-        break;
+    } break;
     case 8: /* Reset rules */
         appendArg(cmd, sdsnew("reset"));
         break;
     default: /* Simple combination rules */
-        if (r % 2) {
+        if (rand() % 2) {
             appendArg(cmd, sdsnew("+@read"));
         } else {
             appendArg(cmd, sdsnew("-@dangerous"));
@@ -1337,19 +1341,19 @@ static void generateAclRule(FuzzerCommand *cmd, int r) {
 }
 
 /* Generate a random network address (IP or hostname) with port */
-static sds generateRandomAddress(int r) {
+static sds generateRandomAddress(void) {
     /* Generate a valid IP:port format */
-    int port = 10000 + (r % 55535); /* Port range 10000-65535 */
+    int port = 10000 + (rand() % 55535); /* Port range 10000-65535 */
 
     /* 50% chance to generate IPv4, 50% chance to generate hostname */
-    if (r % 2 == 0) {
+    if (rand() % 2 == 0) {
         /* Generate IPv4 address */
         return sdscatprintf(sdsempty(), "192.168.%d.%d:%d",
-                            r % 256, (r / 256) % 256, port);
+                            rand() % 256, rand() % 256, port);
     } else {
         /* Generate hostname */
         return sdscatprintf(sdsempty(), "host-%d.example.com:%d",
-                            r % 10, port);
+                            rand() % 10, port);
     }
 }
 
@@ -1379,35 +1383,33 @@ static void generateStringArgValue(FuzzerCommand *cmd, const char *argName, Comm
         "latencystats",
     };
 
-    int r = rand() % 1000;
-
     // Generate values based on argument name and append directly to cmd
     if (strcmp(argName, "command-name") == 0) {
-        appendArg(cmd, sdsnew(commands[r % (sizeof(commands) / sizeof(commands[0]))]));
+        appendArg(cmd, sdsnew(commands[rand() % (sizeof(commands) / sizeof(commands[0]))]));
     } else if (strcmp(argName, "command") == 0) {
         // Select a random command from the available commands array
-        appendArg(cmd, sdsnew(commands[r % (sizeof(commands) / sizeof(commands[0]))]));
+        appendArg(cmd, sdsnew(commands[rand() % (sizeof(commands) / sizeof(commands[0]))]));
     } else if (strcmp(argName, "username") == 0) {
-        appendArg(cmd, sdsnew(usernames[r % (sizeof(usernames) / sizeof(usernames[0]))]));
+        appendArg(cmd, sdsnew(usernames[rand() % (sizeof(usernames) / sizeof(usernames[0]))]));
     } else if (strcmp(argName, "password") == 0) {
-        appendArg(cmd, sdscatprintf(sdsempty(), "pass%d", r));
+        appendArg(cmd, sdscatprintf(sdsempty(), "pass%d", rand() % 1000));
     } else if (strcmp(argName, "channel") == 0 || strcmp(argName, "shardchannel") == 0) {
-        appendArg(cmd, sdscatprintf(sdsempty(), "channel:%d", r % 1));
+        appendArg(cmd, sdscatprintf(sdsempty(), "channel:%d", rand() % 2));
     } else if (strcmp(argName, "key") == 0) {
         sds keyName;
         /* In cluster mode, ensure all keys use the same slot tag to map to the same slot */
         if (fuzz_ctx->cluster_mode && client_ctx && client_ctx->current_slot_tag) {
-            keyName = sdscatprintf(sdsempty(), "%skey:%d", client_ctx->current_slot_tag, r % 100);
+            keyName = sdscatprintf(sdsempty(), "%skey:%d", client_ctx->current_slot_tag, rand() % 100);
         } else {
-            keyName = sdscatprintf(sdsempty(), "key:%d", r % 100);
+            keyName = sdscatprintf(sdsempty(), "key:%d", rand() % 100);
         }
         appendArg(cmd, keyName);
     } else if (strcmp(argName, "field") == 0) {
-        appendArg(cmd, sdscatprintf(sdsempty(), "field:%d", r % 20));
+        appendArg(cmd, sdscatprintf(sdsempty(), "field:%d", rand() % 20));
     } else if (strcmp(argName, "value") == 0) {
         /* Generate random value with 95% chance between 1 byte and 1KB, 5% chance between 1KB and 10KB */
         int value_size;
-        if ((r % 100) < 95) {
+        if ((rand() % 100) < 95) {
             /* 95% chance: between 1 byte and 1KB */
             value_size = 1 + (rand() % 1024);
         } else {
@@ -1425,55 +1427,54 @@ static void generateStringArgValue(FuzzerCommand *cmd, const char *argName, Comm
             "\x00\x09value-534\x0b\x00\xc9\x88\x82M\xfb{\x0e1",
             /* Integer value 537 with proper RDB format */
             "\x00\xc1\x19\x02\x0b\x00\x03Uh3\xba\xdc\xde\xac"};
-        int value_idx = r % 2;
-        appendArg(cmd, sdscatprintf(sdsempty(), "\"%s\"", serialized_values[value_idx]));
+        appendArg(cmd, sdscatprintf(sdsempty(), "\"%s\"", serialized_values[rand() % 2]));
     } else if (strcmp(argName, "member") == 0 ||
                strcmp(argName, "member1") == 0 ||
                strcmp(argName, "member2") == 0) {
-        appendArg(cmd, sdscatprintf(sdsempty(), "member:%d", r % 50));
+        appendArg(cmd, sdscatprintf(sdsempty(), "member:%d", rand() % 50));
     } else if (strcmp(argName, "host") == 0) {
-        appendArg(cmd, sdscatprintf(sdsempty(), "host-%d.example.com", r % 5));
+        appendArg(cmd, sdscatprintf(sdsempty(), "host-%d.example.com", rand() % 5));
     } else if (strcmp(argName, "ip") == 0) {
-        appendArg(cmd, sdscatprintf(sdsempty(), "192.168.%d.%d", r % 256, (r / 256) % 256));
+        appendArg(cmd, sdscatprintf(sdsempty(), "192.168.%d.%d", rand() % 256, rand() % 256));
     } else if (strcmp(argName, "message") == 0) {
-        appendArg(cmd, sdscatprintf(sdsempty(), "message-%d", r));
+        appendArg(cmd, sdscatprintf(sdsempty(), "message-%d", rand() % 1000));
     } else if (strcmp(argName, "name") == 0) {
-        appendArg(cmd, sdscatprintf(sdsempty(), "name-%d", r % 20));
+        appendArg(cmd, sdscatprintf(sdsempty(), "name-%d", rand() % 20));
     } else if (strcmp(argName, "group") == 0) {
-        appendArg(cmd, sdscatprintf(sdsempty(), "group-%d", r % 10));
+        appendArg(cmd, sdscatprintf(sdsempty(), "group-%d", rand() % 10));
     } else if (strcmp(argName, "consumer") == 0) {
-        appendArg(cmd, sdscatprintf(sdsempty(), "consumer-%d", r % 15));
+        appendArg(cmd, sdscatprintf(sdsempty(), "consumer-%d", rand() % 15));
     } else if (strcmp(argName, "id") == 0) {
-        appendArg(cmd, sdscatprintf(sdsempty(), "%d-%d", r % 1000, (r / 1000) % 1000));
+        appendArg(cmd, sdscatprintf(sdsempty(), "%d-%d", rand() % 1000, rand() % 1000));
     } else if (strcmp(argName, "start") == 0 || strcmp(argName, "end") == 0) {
-        appendArg(cmd, sdscatprintf(sdsempty(), "%d", r % 1000));
+        appendArg(cmd, sdscatprintf(sdsempty(), "%d", rand() % 1000));
     } else if (strcmp(argName, "min") == 0) {
         if (isLexicographicalCommand(arg)) {
-            generateLexRangeValue(cmd, argName, r);
+            generateLexRangeValue(cmd, argName);
         } else {
-            appendArg(cmd, sdscatprintf(sdsempty(), "%d", r % 50));
+            appendArg(cmd, sdscatprintf(sdsempty(), "%d", rand() % 50));
         }
     } else if (strcmp(argName, "max") == 0) {
         if (isLexicographicalCommand(arg)) {
-            generateLexRangeValue(cmd, argName, r);
+            generateLexRangeValue(cmd, argName);
         } else {
-            appendArg(cmd, sdscatprintf(sdsempty(), "%d", r % 50 + 50));
+            appendArg(cmd, sdscatprintf(sdsempty(), "%d", rand() % 50 + 50));
         }
     } else if (strcmp(argName, "type") == 0) {
-        appendArg(cmd, sdsnew(types[r % (sizeof(types) / sizeof(types[0]))]));
+        appendArg(cmd, sdsnew(types[rand() % (sizeof(types) / sizeof(types[0]))]));
     } else if (strcmp(argName, "capability") == 0) {
-        appendArg(cmd, sdsnew(capabilities[r % (sizeof(capabilities) / sizeof(capabilities[0]))]));
+        appendArg(cmd, sdsnew(capabilities[rand() % (sizeof(capabilities) / sizeof(capabilities[0]))]));
     } else if (strcmp(argName, "capa") == 0) {
         /* For client list CAPA filter, currently only 'r' is supported (CLIENT_CAPA_REDIRECT) */
         appendArg(cmd, sdsnew("r"));
     } else if (strcmp(argName, "section") == 0) {
-        appendArg(cmd, sdsnew(sections[r % (sizeof(sections) / sizeof(sections[0]))]));
+        appendArg(cmd, sdsnew(sections[rand() % (sizeof(sections) / sizeof(sections[0]))]));
     } else if (strcmp(argName, "event") == 0) {
-        appendArg(cmd, sdsnew(events[r % (sizeof(events) / sizeof(events[0]))]));
+        appendArg(cmd, sdsnew(events[rand() % (sizeof(events) / sizeof(events[0]))]));
     } else if (strcmp(argName, "path") == 0) {
-        appendArg(cmd, sdscatprintf(sdsempty(), "/path/to/file%d", r % 10));
+        appendArg(cmd, sdscatprintf(sdsempty(), "/path/to/file%d", rand() % 10));
     } else if (strcmp(argName, "prefix") == 0) {
-        appendArg(cmd, sdscatprintf(sdsempty(), "prefix:%d:", r % 5));
+        appendArg(cmd, sdscatprintf(sdsempty(), "prefix:%d:", rand() % 5));
     } else if (strcmp(argName, "script") == 0) {
         FuzzerCommand *luaCmd = allocCommand();
         generateCommandsWithLua(luaCmd);
@@ -1481,91 +1482,83 @@ static void generateStringArgValue(FuzzerCommand *cmd, const char *argName, Comm
         appendArg(cmd, sdsdup(luaCmd->argv[1]));
         freeCommand(luaCmd);
     } else if (strcmp(argName, "function") == 0) {
-        appendArg(cmd, sdscatprintf(sdsempty(), "myfunc%d", r % 5));
+        appendArg(cmd, sdscatprintf(sdsempty(), "myfunc%d", rand() % 5));
     } else if (strcmp(argName, "function-code") == 0) {
-        appendArg(cmd, sdscatprintf(sdsempty(), "\"#!lua name=myfunc%d \nserver.register_function('test', function(keys, args) return args[1] end) \"", r % 5));
+        appendArg(cmd, sdscatprintf(sdsempty(), "\"#!lua name=myfunc%d \nserver.register_function('test', function(keys, args) return args[1] end) \"", rand() % 5));
     } else if (strcmp(argName, "library-name") == 0 || strcmp(argName, "library-name-pattern") == 0 ||
                strcmp(argName, "lib-name") == 0 || strcmp(argName, "libname") == 0) {
-        appendArg(cmd, sdscatprintf(sdsempty(), "lib%d", r % 5));
+        appendArg(cmd, sdscatprintf(sdsempty(), "lib%d", rand() % 5));
     } else if (strcmp(argName, "libver") == 0 || strcmp(argName, "lib-ver") == 0) {
-        appendArg(cmd, sdscatprintf(sdsempty(), "%d.%d.%d", r % 10, (r / 10) % 10, (r / (10 * 10)) % 10));
+        appendArg(cmd, sdscatprintf(sdsempty(), "%d.%d.%d", rand() % 10, rand() % 10, rand() % 10));
     } else if (strcmp(argName, "node-id") == 0 || strcmp(argName, "nodename") == 0 ||
                strcmp(argName, "importing") == 0 || strcmp(argName, "migrating") == 0 ||
                strcmp(argName, "node") == 0) {
-        appendArg(cmd, sdscatprintf(sdsempty(), "%x%x%x%x%x%x%x%x",
-                                    r % 16, (r / 16) % 16, (r / 256) % 16, (r / 4096) % 16,
-                                    (r * 17) % 16, (r * 19) % 16, (r * 23) % 16, (r * 29) % 16));
+        appendArg(cmd, sdscatprintf(sdsempty(), "%08x%08x%08x%08x%08x",
+                                    rand(), rand(), rand(), rand(), rand()));
     } else if (strcmp(argName, "encoding") == 0) {
         /* For BITFIELD command, encoding should be i<bits> or u<bits> format */
         static const char *signs[] = {"i", "u"};
         static const int bits[] = {1, 2, 4, 8, 16, 32, 64};
-        int sign_idx = r % 2;
-        int bits_idx = (r / 2) % (sizeof(bits) / sizeof(bits[0]));
-        appendArg(cmd, sdscatprintf(sdsempty(), "%s%d", signs[sign_idx], bits[bits_idx]));
+        appendArg(cmd, sdscatprintf(sdsempty(), "%s%d", signs[rand() % 2], bits[rand() % (sizeof(bits) / sizeof(bits[0]))]));
     } else if (strcmp(argName, "old-format") == 0) {
-        appendArg(cmd, sdscatprintf(sdsempty(), "192.168.%d.%d:%d", r % 256, (r / 256) % 256, 6379 + (r % 1000)));
+        appendArg(cmd, sdscatprintf(sdsempty(), "192.168.%d.%d:%d", rand() % 256, rand() % 256, 6379 + (rand() % 1000)));
     } else if (strcmp(argName, "runid") == 0 || strcmp(argName, "replicationid") == 0) {
-        appendArg(cmd, sdscatprintf(sdsempty(), "%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x%x",
-                                    r % 16, (r / 16) % 16, (r / 256) % 16, (r / 4096) % 16,
-                                    (r * 17) % 16, (r * 19) % 16, (r * 23) % 16, (r * 29) % 16,
-                                    (r * 31) % 16, (r * 37) % 16, (r * 41) % 16, (r * 43) % 16,
-                                    (r * 47) % 16, (r * 53) % 16, (r * 59) % 16, (r * 61) % 16));
+        appendArg(cmd, sdscatprintf(sdsempty(), "%08x%08x%08x%08x%08x",
+                                    rand(), rand(), rand(), rand(), rand()));
     } else if (strcmp(argName, "sha1") == 0) {
-        appendArg(cmd, sdscatprintf(sdsempty(), "%x%x%x%x%x%x%x%x%x%x",
-                                    r % 16, (r / 16) % 16, (r / 256) % 16, (r / 4096) % 16,
-                                    (r * 17) % 16, (r * 19) % 16, (r * 23) % 16, (r * 29) % 16,
-                                    (r * 31) % 16, (r * 37) % 16));
+        appendArg(cmd, sdscatprintf(sdsempty(), "%08x%08x%08x%08x%08x",
+                                    rand(), rand(), rand(), rand(), rand()));
     } else if (strcmp(argName, "last-id") == 0 || strcmp(argName, "lastid") == 0 ||
                strcmp(argName, "max-deleted-id") == 0) {
-        appendArg(cmd, sdscatprintf(sdsempty(), "%d-%d", r % 1000, (r / 1000) % 1000));
+        appendArg(cmd, sdscatprintf(sdsempty(), "%d-%d", rand() % 1000, rand() % 1000));
     } else if (strcmp(argName, "min-idle-time") == 0) {
-        appendArg(cmd, sdscatprintf(sdsempty(), "%d", r % 10000));
+        appendArg(cmd, sdscatprintf(sdsempty(), "%d", rand() % 10000));
     } else if (strcmp(argName, "connection-name") == 0 || strcmp(argName, "clientname") == 0) {
-        appendArg(cmd, sdscatprintf(sdsempty(), "conn-%d", r % 20));
+        appendArg(cmd, sdscatprintf(sdsempty(), "conn-%d", rand() % 20));
     } else if (strcmp(argName, "primary-name") == 0) {
-        appendArg(cmd, sdscatprintf(sdsempty(), "primary-%d", r % 5));
+        appendArg(cmd, sdscatprintf(sdsempty(), "primary-%d", rand() % 5));
     } else if (strcmp(argName, "category") == 0) {
         static const char *categories[] = {"connection", "generic", "string", "list", "set",
                                            "sorted_set", "hash", "pubsub", "transactions", "scripting"};
-        appendArg(cmd, sdsnew(categories[r % (sizeof(categories) / sizeof(categories[0]))]));
+        appendArg(cmd, sdsnew(categories[rand() % (sizeof(categories) / sizeof(categories[0]))]));
     } else if (strcmp(argName, "flags") == 0) {
         static const char *client_flags[] = {"A", "b", "c", "d", "e", "i", "M", "N",
                                              "O", "P", "r", "S", "u", "U", "x", "t", "T", "R", "B", "I"};
-        appendArg(cmd, sdsnew(client_flags[r % (sizeof(client_flags) / sizeof(client_flags[0]))]));
+        appendArg(cmd, sdsnew(client_flags[rand() % (sizeof(client_flags) / sizeof(client_flags[0]))]));
     } else if (strcmp(argName, "element") == 0) {
-        appendArg(cmd, sdscatprintf(sdsempty(), "elem-%d", r % 30));
+        appendArg(cmd, sdscatprintf(sdsempty(), "elem-%d", rand() % 30));
     } else if (strcmp(argName, "pivot") == 0) {
-        appendArg(cmd, sdscatprintf(sdsempty(), "pivot-%d", r % 10));
+        appendArg(cmd, sdscatprintf(sdsempty(), "pivot-%d", rand() % 10));
     } else if (strcmp(argName, "parameter") == 0) {
         static const char *params[] = {"maxmemory", "timeout", "databases", "appendonly", "save"};
-        appendArg(cmd, sdsnew(params[r % (sizeof(params) / sizeof(params[0]))]));
+        appendArg(cmd, sdsnew(params[rand() % (sizeof(params) / sizeof(params[0]))]));
     } else if (strcmp(argName, "rule") == 0) {
         /* Call the dedicated ACL rule generation function */
-        generateAclRule(cmd, r);
+        generateAclRule(cmd);
     } else if (strcmp(argName, "subcommand") == 0) {
         static const char *subcmds[] = {"get", "set", "reset", "help", "info", "list"};
-        appendArg(cmd, sdsnew(subcmds[r % (sizeof(subcmds) / sizeof(subcmds[0]))]));
+        appendArg(cmd, sdsnew(subcmds[rand() % (sizeof(subcmds) / sizeof(subcmds[0]))]));
     } else if (strcmp(argName, "stop") == 0) {
-        if (r % 2 == 0)
-            appendArg(cmd, sdscatprintf(sdsempty(), "%d", r));
+        if (rand() % 2 == 0)
+            appendArg(cmd, sdscatprintf(sdsempty(), "%d", rand() % 1000));
         else
-            appendArg(cmd, sdsnew(r % 2 ? "-" : "+"));
+            appendArg(cmd, sdsnew(rand() % 2 ? "-" : "+"));
     } else if (strcmp(argName, "module-name") == 0) {
-        appendArg(cmd, sdscatprintf(sdsempty(), "module-%d", r % 100));
+        appendArg(cmd, sdscatprintf(sdsempty(), "module-%d", rand() % 100));
     } else if (strcmp(argName, "arg") == 0 || strcmp(argName, "args") == 0) {
-        appendArg(cmd, sdscatprintf(sdsempty(), "arg%d", r % 10));
+        appendArg(cmd, sdscatprintf(sdsempty(), "arg%d", rand() % 10));
     } else if (strcmp(argName, "command") == 0) {
-        appendArg(cmd, sdsnew(commands[r % (sizeof(commands) / sizeof(commands[0]))]));
+        appendArg(cmd, sdsnew(commands[rand() % (sizeof(commands) / sizeof(commands[0]))]));
     } else if (strcmp(argName, "threshold") == 0) {
-        appendArg(cmd, sdscatprintf(sdsempty(), "%d", r % 30));
+        appendArg(cmd, sdscatprintf(sdsempty(), "%d", rand() % 30));
     } else if (strcmp(argName, "metric") == 0) {
         static const char *metrics[] = {"key-count", "cpu-usec", "network-bytes-in", "network-bytes-out"};
-        appendArg(cmd, sdsnew(metrics[r % 4]));
+        appendArg(cmd, sdsnew(metrics[rand() % 4]));
     } else if (strcmp(argName, "addr") == 0 || strcmp(argName, "laddr") == 0) {
-        appendArg(cmd, generateRandomAddress(r));
+        appendArg(cmd, generateRandomAddress());
     } else {
         // Default case for any other string arguments
-        appendArg(cmd, sdscatprintf(sdsempty(), "str-%s-%d", argName, r));
+        appendArg(cmd, sdscatprintf(sdsempty(), "str-%s-%d", argName, rand() % 1000));
     }
 }
 

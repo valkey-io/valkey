@@ -1829,7 +1829,7 @@ int parseOptions(int argc, char **argv) {
 #endif
         } else if (!strcmp(argv[i], "--fuzz")) {
             config.fuzz_mode = 1;
-        } else if (!strcmp(argv[i], "--fuzz-log-level")) {
+        } else if (!strcmp(argv[i], "--fuzz-loglevel")) {
             if (lastarg) goto invalid;
             config.fuzz_log_level = argv[++i];
         } else if (!strcmp(argv[i], "--fuzz-mode")) {
@@ -2011,7 +2011,7 @@ usage:
         "                    malformed-commands: Generates also malformed commands.\n"
         "                    config-commands: Allows CONFIG SET commands.\n"
         "                    Default: valid commands only.\n"
-        " --fuzz-log-level <level>\n"
+        " --fuzz-loglevel <level>\n"
         "                    Set log level for fuzzer (none, error, info, debug).\n"
         "                    Default is 'info'.\n"
         " --help             Output this help and exit.\n"

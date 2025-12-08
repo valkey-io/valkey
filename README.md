@@ -52,6 +52,13 @@ as libsystemd-dev on Debian/Ubuntu or systemd-devel on CentOS) and run:
 
     % make USE_SYSTEMD=yes
 
+Since Valkey version 8.1, `fast_float` has been introduced as an optional 
+dependency, which can speed up sorted sets and other commands that use 
+the double datatype. To build with `fast_float` support, you'll need a 
+C++ compiler and run:
+
+    % make USE_FAST_FLOAT=yes
+
 To append a suffix to Valkey program names, use:
 
     % make PROG_SUFFIX="-alt"
@@ -167,7 +174,8 @@ line, with exactly the same name.
 
 ## Running manually
 
-To manually run a Valkey server with TLS mode (assuming `./gen-test-certs.sh` was invoked so sample certificates/keys are available):
+To manually run a Valkey server with TLS mode (assuming `./utils/gen-test-certs.sh`
+was invoked so sample certificates/keys are available):
 
 * TLS built-in mode:
     ```

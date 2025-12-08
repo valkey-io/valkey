@@ -1,6 +1,7 @@
 #ifndef CLUSTER_LEGACY_H
 #define CLUSTER_LEGACY_H
 
+#include <stdint.h>
 #define CLUSTER_PORT_INCR 10000 /* Cluster port = baseport + PORT_INCR */
 
 /* The following defines are amount of time, sometimes expressed as
@@ -39,7 +40,7 @@ typedef struct clusterLink {
     size_t rcvbuf_alloc;                   /* Allocated size of rcvbuf */
     clusterNode *node;                     /* Node related to this link. Initialized to NULL when unknown */
     int inbound;                           /* 1 if this link is an inbound link accepted from the related node */
-    int flags;                             /* We share CLUSTER_NODE_* with clusterNode->flags. */
+    int flags;                             /* CLUSTER_LINK_... */
 } clusterLink;
 
 /* Cluster link flags and macros. */
@@ -48,19 +49,22 @@ typedef struct clusterLink {
 #define linkSupportsExtension(link) ((link)->flags & CLUSTER_LINK_EXTENSIONS_SUPPORTED)
 
 /* Cluster node flags and macros. */
-#define CLUSTER_NODE_PRIMARY (1 << 0)                      /* The node is a primary */
-#define CLUSTER_NODE_REPLICA (1 << 1)                      /* The node is a replica */
-#define CLUSTER_NODE_PFAIL (1 << 2)                        /* Failure? Need acknowledge */
-#define CLUSTER_NODE_FAIL (1 << 3)                         /* The node is believed to be malfunctioning */
-#define CLUSTER_NODE_MYSELF (1 << 4)                       /* This node is myself */
-#define CLUSTER_NODE_HANDSHAKE (1 << 5)                    /* We have still to exchange the first ping */
-#define CLUSTER_NODE_NOADDR (1 << 6)                       /* We don't know the address of this node */
-#define CLUSTER_NODE_MEET (1 << 7)                         /* Send a MEET message to this node */
-#define CLUSTER_NODE_MIGRATE_TO (1 << 8)                   /* Primary eligible for replica migration. */
-#define CLUSTER_NODE_NOFAILOVER (1 << 9)                   /* Replica will not try to failover. */
-#define CLUSTER_NODE_EXTENSIONS_SUPPORTED (1 << 10)        /* This node supports extensions. */
-#define CLUSTER_NODE_LIGHT_HDR_PUBLISH_SUPPORTED (1 << 11) /* This node supports light message header for publish type. */
-#define CLUSTER_NODE_LIGHT_HDR_MODULE_SUPPORTED (1 << 12)  /* This node supports light message header for module type. */
+#define CLUSTER_NODE_PRIMARY (1 << 0)                                             /* The node is a primary */
+#define CLUSTER_NODE_REPLICA (1 << 1)                                             /* The node is a replica */
+#define CLUSTER_NODE_PFAIL (1 << 2)                                               /* Failure? Need acknowledge */
+#define CLUSTER_NODE_FAIL (1 << 3)                                                /* The node is believed to be malfunctioning */
+#define CLUSTER_NODE_MYSELF (1 << 4)                                              /* This node is myself */
+#define CLUSTER_NODE_HANDSHAKE (1 << 5)                                           /* We have still to exchange the first ping */
+#define CLUSTER_NODE_NOADDR (1 << 6)                                              /* We don't know the address of this node */
+#define CLUSTER_NODE_MEET (1 << 7)                                                /* Send a MEET message to this node */
+#define CLUSTER_NODE_MIGRATE_TO (1 << 8)                                          /* Primary eligible for replica migration. */
+#define CLUSTER_NODE_NOFAILOVER (1 << 9)                                          /* Replica will not try to failover. */
+#define CLUSTER_NODE_EXTENSIONS_SUPPORTED (1 << 10)                               /* This node supports extensions. */
+#define CLUSTER_NODE_LIGHT_HDR_PUBLISH_SUPPORTED (1 << 11)                        /* This node supports light message header for publish type. */
+#define CLUSTER_NODE_LIGHT_HDR_MODULE_SUPPORTED (1 << 12)                         /* This node supports light message header for module type. */
+#define CLUSTER_NODE_MULTI_MEET_SUPPORTED CLUSTER_NODE_LIGHT_HDR_MODULE_SUPPORTED /* This node handles multi meet packet.                             \
+                                                                                     Light hdr for module and multi meet were both introduced in 8.1, \
+                                                                                     so we could reduce the same flag value. */
 #define CLUSTER_NODE_NULL_NAME                                                                                         \
     "\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000" \
     "\000\000\000\000\000\000\000\000\000\000\000\000"
@@ -74,8 +78,7 @@ typedef struct clusterLink {
 #define nodeFailed(n) ((n)->flags & CLUSTER_NODE_FAIL)
 #define nodeCantFailover(n) ((n)->flags & CLUSTER_NODE_NOFAILOVER)
 #define nodeSupportsExtensions(n) ((n)->flags & CLUSTER_NODE_EXTENSIONS_SUPPORTED)
-#define nodeSupportsLightMsgHdrForPubSub(n) ((n)->flags & CLUSTER_NODE_LIGHT_HDR_PUBLISH_SUPPORTED)
-#define nodeSupportsLightMsgHdrForModule(n) ((n)->flags & CLUSTER_NODE_LIGHT_HDR_MODULE_SUPPORTED)
+#define nodeSupportsMultiMeet(n) ((n)->flags & CLUSTER_NODE_MULTI_MEET_SUPPORTED)
 #define nodeInNormalState(n) (!((n)->flags & (CLUSTER_NODE_HANDSHAKE | CLUSTER_NODE_MEET | CLUSTER_NODE_PFAIL | CLUSTER_NODE_FAIL)))
 
 /* Cluster messages header */
@@ -161,6 +164,8 @@ typedef enum {
     CLUSTERMSG_EXT_TYPE_SHARDID,
     CLUSTERMSG_EXT_TYPE_CLIENT_IPV4,
     CLUSTERMSG_EXT_TYPE_CLIENT_IPV6,
+    CLUSTERMSG_EXT_TYPE_CLIENT_PORT,
+    CLUSTERMSG_EXT_TYPE_CLIENT_TLS_PORT,
 } clusterMsgPingtypes;
 
 /* Helper function for making sure extensions are eight byte aligned. */
@@ -194,6 +199,14 @@ typedef struct {
 } clusterMsgPingExtClientIpV6;
 
 typedef struct {
+    uint16_t announce_client_port; /* Announced client port. */
+} clusterMsgPingExtClientPort;
+
+typedef struct {
+    uint16_t announce_client_tls_port; /* Announced client TLS port. */
+} clusterMsgPingExtClientTlsPort;
+
+typedef struct {
     uint32_t length; /* Total length of this extension message (including this header) */
     uint16_t type;   /* Type of this extension message (see clusterMsgPingtypes) */
     uint16_t unused; /* 16 bits of padding to make this structure 8 byte aligned. */
@@ -204,6 +217,8 @@ typedef struct {
         clusterMsgPingExtShardId shard_id;
         clusterMsgPingExtClientIpV4 announce_client_ipv4;
         clusterMsgPingExtClientIpV6 announce_client_ipv6;
+        clusterMsgPingExtClientPort announce_client_port;
+        clusterMsgPingExtClientTlsPort announce_client_tls_port;
     } ext[]; /* Actual extension information, formatted so that the data is 8
               * byte aligned, regardless of its content. */
 } clusterMsgPingExt;
@@ -364,6 +379,8 @@ struct _clusterNode {
     int tcp_port;                           /* Latest known clients TCP port. */
     int tls_port;                           /* Latest known clients TLS port */
     int cport;                              /* Latest known cluster port of this node. */
+    int announce_client_tcp_port;           /* Port for clients only. */
+    int announce_client_tls_port;           /* TLS port for clients only. */
     clusterLink *link;                      /* TCP/IP link established toward this node */
     clusterLink *inbound_link;              /* TCP/IP link accepted from this node */
     rax *fail_reports;                      /* Radix tree for failure reports with sorted order by timestamp */

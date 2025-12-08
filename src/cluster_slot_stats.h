@@ -1,6 +1,5 @@
 #include "server.h"
 #include "cluster.h"
-#include "script.h"
 #include "cluster_legacy.h"
 
 /* General use-cases. */
@@ -10,7 +9,6 @@ int clusterSlotStatsEnabled(int slot);
 
 /* cpu-usec metric. */
 void clusterSlotStatsAddCpuDuration(client *c, ustime_t duration);
-void clusterSlotStatsInvalidateSlotIfApplicable(scriptRunCtx *ctx);
 
 /* network-bytes-in metric. */
 void clusterSlotStatsAddNetworkBytesInForUserClient(client *c);

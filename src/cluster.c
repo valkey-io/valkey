@@ -166,11 +166,7 @@ int verifyDumpPayload(unsigned char *p, size_t len, uint16_t *rdbver_ptr) {
     if (rdbver_ptr) {
         *rdbver_ptr = rdbver;
     }
-    if ((rdbver >= RDB_FOREIGN_VERSION_MIN && rdbver <= RDB_FOREIGN_VERSION_MAX) ||
-        (rdbver > RDB_VERSION && server.rdb_version_check == RDB_VERSION_CHECK_STRICT)) {
-        return C_ERR;
-    }
-
+    if (!rdbIsVersionAccepted(rdbver, false, false)) return C_ERR;
     if (server.skip_checksum_validation) return C_OK;
 
     /* Verify CRC64 */
@@ -202,7 +198,8 @@ void dumpCommand(client *c) {
 
 /* RESTORE key ttl serialized-value [REPLACE] [ABSTTL] [IDLETIME seconds] [FREQ frequency] */
 void restoreCommand(client *c) {
-    long long ttl, lfu_freq = -1, lru_idle = -1, lru_clock = -1;
+    long long ttl, lfu_freq = -1, lru_idle = -1;
+    uint16_t rdbver = 0;
     rio payload;
     int j, type, replace = 0, absttl = 0;
     robj *obj;
@@ -220,7 +217,6 @@ void restoreCommand(client *c) {
                 addReplyError(c, "Invalid IDLETIME value, must be >= 0");
                 return;
             }
-            lru_clock = LRU_CLOCK();
             j++; /* Consume additional arg. */
         } else if (!strcasecmp(c->argv[j]->ptr, "freq") && additional >= 1 && lru_idle == -1) {
             if (getLongLongFromObjectOrReply(c, c->argv[j + 1], &lfu_freq, NULL) != C_OK) return;
@@ -251,14 +247,27 @@ void restoreCommand(client *c) {
     }
 
     /* Verify RDB version and data checksum. */
-    if (verifyDumpPayload(c->argv[3]->ptr, sdslen(c->argv[3]->ptr), NULL) == C_ERR) {
+    if (verifyDumpPayload(c->argv[3]->ptr, sdslen(c->argv[3]->ptr), &rdbver) == C_ERR) {
         addReplyError(c, "DUMP payload version or checksum are wrong");
         return;
     }
 
     rioInitWithBuffer(&payload, c->argv[3]->ptr);
-    if (((type = rdbLoadObjectType(&payload)) == -1) ||
-        ((obj = rdbLoadObject(type, &payload, key->ptr, c->db->id, NULL)) == NULL)) {
+    type = rdbLoadObjectType(&payload);
+    if (type == -1) {
+        addReplyError(c, "Bad data format");
+        return;
+    }
+
+    /* If it's a foreign RDB format, only accept old data types that we know
+     * existed in the past and that don't clash with new types added later. */
+    if (rdbIsForeignVersion(rdbver) && type >= RDB_FOREIGN_TYPE_MIN) {
+        addReplyErrorFormat(c, "Unsupported foreign data type: %d", type);
+        return;
+    }
+
+    obj = rdbLoadObject(type, &payload, key->ptr, c->db->id, NULL);
+    if (obj == NULL) {
         addReplyError(c, "Bad data format");
         return;
     }
@@ -295,7 +304,7 @@ void restoreCommand(client *c) {
             rewriteClientCommandArgument(c, c->argc, shared.absttl);
         }
     }
-    objectSetLRUOrLFU(obj, lfu_freq, lru_idle, lru_clock, 1000);
+    objectSetLRUOrLFU(obj, lfu_freq, lru_idle);
     signalModifiedKey(c, c->db, key);
     notifyKeyspaceEvent(NOTIFY_GENERIC, "restore", key, c->db->id);
     addReply(c, shared.ok);
@@ -889,7 +898,7 @@ void clusterCommand(client *c) {
     } else if (!strcasecmp(c->argv[1]->ptr, "info") && c->argc == 2) {
         /* CLUSTER INFO */
 
-        sds info = genClusterInfoString();
+        sds info = genClusterInfoString(sdsempty());
 
         /* Produce the reply protocol. */
         addReplyVerbatim(c, info, sdslen(info), "txt");
@@ -1316,7 +1325,7 @@ void clusterRedirectClient(client *c, clusterNode *n, int hashslot, int error_co
         addReplyError(c, "-CLUSTERDOWN Hash slot not served");
     } else if (error_code == CLUSTER_REDIR_MOVED || error_code == CLUSTER_REDIR_ASK) {
         /* Report TLS ports to TLS client, and report non-TLS port to non-TLS client. */
-        int port = clusterNodeClientPort(n, shouldReturnTlsInfo());
+        int port = clusterNodeClientPort(n, shouldReturnTlsInfo(), c);
         addReplyErrorSds(c,
                          sdscatprintf(sdsempty(), "-%s %d %s:%d", (error_code == CLUSTER_REDIR_ASK) ? "ASK" : "MOVED",
                                       hashslot, clusterNodePreferredEndpoint(n, c), port));
@@ -1407,7 +1416,7 @@ void addNodeToNodeReply(client *c, clusterNode *node) {
     }
 
     /* Report TLS ports to TLS client, and report non-TLS port to non-TLS client. */
-    addReplyLongLong(c, clusterNodeClientPort(node, shouldReturnTlsInfo()));
+    addReplyLongLong(c, clusterNodeClientPort(node, shouldReturnTlsInfo(), c));
     addReplyBulkCBuffer(c, clusterNodeGetName(node), CLUSTER_NAMELEN);
 
     /* Add the additional endpoint information, this is all the known networking information
@@ -1594,6 +1603,10 @@ void resetClusterStats(void) {
     if (!server.cluster_enabled) return;
 
     clusterSlotStatResetAll();
+
+    memset(server.cluster->stats_bus_messages_sent, 0, sizeof(server.cluster->stats_bus_messages_sent));
+    memset(server.cluster->stats_bus_messages_received, 0, sizeof(server.cluster->stats_bus_messages_received));
+    server.cluster->stat_cluster_links_buffer_limit_exceeded = 0;
 }
 
 void clusterCommandFlushslot(client *c) {

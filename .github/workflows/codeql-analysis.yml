@@ -1,7 +1,16 @@
 name: "CodeQL"
 
 on:
+  push:
+    paths-ignore:
+      - '**/*.md'
+      - '**/00-RELEASENOTES'
+      - '**/COPYING'
   pull_request:
+    paths-ignore:
+      - '**/*.md'
+      - '**/00-RELEASENOTES'
+      - '**/COPYING'
   schedule:
     # run weekly new vulnerability was added to the database
     - cron: '0 3 * * 0'

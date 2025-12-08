@@ -39,7 +39,7 @@ typedef struct hashtable hashtable;
 typedef struct hashtableStats hashtableStats;
 
 /* Can types that can be stack allocated. */
-typedef uint64_t hashtableIterator[5];
+typedef uint64_t hashtableIterator[6];
 typedef uint64_t hashtablePosition[2];
 typedef uint64_t hashtableIncrementalFindState[5];
 
@@ -160,8 +160,8 @@ bool hashtableIncrementalFindGetResult(hashtableIncrementalFindState *state, voi
 size_t hashtableScan(hashtable *ht, size_t cursor, hashtableScanFunction fn, void *privdata);
 size_t hashtableScanDefrag(hashtable *ht, size_t cursor, hashtableScanFunction fn, void *privdata, void *(*defragfn)(void *), int flags);
 void hashtableInitIterator(hashtableIterator *iter, hashtable *ht, uint8_t flags);
-void hashtableReinitIterator(hashtableIterator *iterator, hashtable *ht);
-void hashtableResetIterator(hashtableIterator *iter);
+void hashtableRetargetIterator(hashtableIterator *iterator, hashtable *ht);
+void hashtableCleanupIterator(hashtableIterator *iter);
 hashtableIterator *hashtableCreateIterator(hashtable *ht, uint8_t flags);
 void hashtableReleaseIterator(hashtableIterator *iter);
 bool hashtableNext(hashtableIterator *iter, void **elemptr);

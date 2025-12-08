@@ -218,6 +218,7 @@ static long long activeExpireCycleJob(enum activeExpiryType jobType, int cycleTy
     int j, iteration = 0;
     int dbs_per_call = CRON_DBS_PER_CALL;
     int dbs_performed = 0;
+    int time_check_mask; /* Check time limit when (i & mask) == 0, i.e. every (X+1)th of the loop. */
     monotime start = getMonotonicUs();
 
     if (cycleType == ACTIVE_EXPIRE_CYCLE_FAST) {
@@ -275,10 +276,16 @@ static long long activeExpireCycleJob(enum activeExpiryType jobType, int cycleTy
             case KEYS:
                 kvs = db->expires;
                 scan_cb = expireScanCallback;
+                time_check_mask = 0xf; /* For regular keys we can check the time condition every 16 loop iterations */
                 break;
             case FIELDS:
                 kvs = db->keys_with_volatile_items;
                 scan_cb = fieldExpireScanCallback;
+                /* For field-level keys we check the time condition every loop iteration.
+                 * This is required since we might perform much more operation per single key with many fields.
+                 * Limiting the number of fields we scan in each field makes the overall process less efficient.
+                 * So we just perform more clock checks after each iteration. */
+                time_check_mask = 0x0;
                 break;
             default:
                 serverPanic("Unknown active expiry job type %d.", jobType);
@@ -389,12 +396,13 @@ static long long activeExpireCycleJob(enum activeExpiryType jobType, int cycleTy
                     data.ttl_sum = 0;
                     data.ttl_samples = 0;
                 }
-                if ((iteration & 0xf) == 0) { /* check time limit every 16 iterations. */
-                    if (elapsedUs(start) > (uint64_t)timelimit_us) {
-                        state->timelimit_exit = 1;
-                        server.stat_expired_time_cap_reached_count++;
-                        break;
-                    }
+            }
+            /* check time limit for every FIELDS job iteration or every 16 iterations for KEYS. */
+            if ((iteration & time_check_mask) == 0) {
+                if (elapsedUs(start) > (uint64_t)timelimit_us) {
+                    state->timelimit_exit = 1;
+                    server.stat_expired_time_cap_reached_count++;
+                    break;
                 }
             }
         } while (repeat);
@@ -636,9 +644,13 @@ size_t getReplicaKeyWithExpireCount(void) {
  * but it is not worth it since anyway race conditions using the same set
  * of key names in a writable replica and in its primary will lead to
  * inconsistencies. This is just a best-effort thing we do. */
-void flushReplicaKeysWithExpireList(void) {
+void flushReplicaKeysWithExpireList(int async) {
     if (replicaKeysWithExpire) {
-        dictRelease(replicaKeysWithExpire);
+        if (async) {
+            freeReplicaKeysWithExpireAsync(replicaKeysWithExpire);
+        } else {
+            dictRelease(replicaKeysWithExpire);
+        }
         replicaKeysWithExpire = NULL;
     }
 }

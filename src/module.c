@@ -201,6 +201,7 @@ typedef struct ValkeyModuleCtx ValkeyModuleCtx;
 #define VALKEYMODULE_CTX_CHANNELS_POS_REQUEST (1 << 8)
 #define VALKEYMODULE_CTX_COMMAND (1 << 9)                /* Context created to serve a command from call() or AOF (which calls cmd->proc directly) */
 #define VALKEYMODULE_CTX_KEYSPACE_NOTIFICATION (1 << 10) /* Context created a keyspace notification event */
+#define VALKEYMODULE_CTX_SCRIPT_EXECUTION (1 << 11)      /* Context created to serve a scripting engine execution */
 
 /* This represents a key opened with VM_OpenKey(). */
 struct ValkeyModuleKey {
@@ -413,6 +414,7 @@ typedef struct ValkeyModuleServerInfoData {
 #define VALKEYMODULE_ARGV_RESPECT_DENY_OOM (1 << 9)
 #define VALKEYMODULE_ARGV_DRY_RUN (1 << 10)
 #define VALKEYMODULE_ARGV_ALLOW_BLOCK (1 << 11)
+#define VALKEYMODULE_ARGV_CALL_REPLY_EXACT (1 << 12)
 
 /* Determine whether the server should signalModifiedKey implicitly.
  * In case 'ctx' has no 'module' member (and therefore no module->options),
@@ -997,7 +999,7 @@ void moduleCreateContext(ValkeyModuleCtx *out_ctx, ValkeyModule *module, int ctx
 void moduleScriptingEngineInitContext(ValkeyModuleCtx *out_ctx,
                                       ValkeyModule *module,
                                       client *client) {
-    moduleCreateContext(out_ctx, module, VALKEYMODULE_CTX_NONE);
+    moduleCreateContext(out_ctx, module, VALKEYMODULE_CTX_SCRIPT_EXECUTION);
     out_ctx->client = client;
 }
 
@@ -1160,8 +1162,8 @@ int VM_IsChannelsPositionRequest(ValkeyModuleCtx *ctx) {
  * The following is an example of how it could be used:
  *
  *     if (ValkeyModule_IsChannelsPositionRequest(ctx)) {
- *         ValkeyModule_ChannelAtPosWithFlags(ctx, 1, VALKEYMODULE_CMD_CHANNEL_SUBSCRIBE |
- * VALKEYMODULE_CMD_CHANNEL_PATTERN); ValkeyModule_ChannelAtPosWithFlags(ctx, 1, VALKEYMODULE_CMD_CHANNEL_PUBLISH);
+ *         ValkeyModule_ChannelAtPosWithFlags(ctx, 1, VALKEYMODULE_CMD_CHANNEL_SUBSCRIBE | VALKEYMODULE_CMD_CHANNEL_PATTERN);
+ *         ValkeyModule_ChannelAtPosWithFlags(ctx, 1, VALKEYMODULE_CMD_CHANNEL_PUBLISH);
  *     }
  *
  * Note: One usage of declaring channels is for evaluating ACL permissions. In this context,
@@ -2586,7 +2588,15 @@ void VM_Yield(ValkeyModuleCtx *ctx, int flags, const char *busy_reply) {
  * to reduce overhead or handle trusted custom command logic.
  * ValkeyModule_Replicate and ValkeyModule_EmitAOF
  * are affected by this option, allowing them to operate without
- * command validation check. */
+ * command validation check.
+ *
+ * VALKEYMODULE_OPTIONS_HANDLE_ATOMIC_SLOT_MIGRATION:
+ * When set, this option indicates that the module is capable of handling
+ * atomic slot migration. If not set, the module is assumed to not be aware of
+ * atomic slot migration and CLUSTER MIGRATESLOTS will return an error. Modules
+ * should set this flag if they understand keys may be loaded during the
+ * migration but before ownership is transferred.
+ */
 void VM_SetModuleOptions(ValkeyModuleCtx *ctx, int options) {
     ctx->module->options = options;
 }
@@ -3186,6 +3196,20 @@ int VM_ReplyWithError(ValkeyModuleCtx *ctx, const char *err) {
     return VALKEYMODULE_OK;
 }
 
+static int moduleReplyErrorFormatInternal(ValkeyModuleCtx *ctx, int flags, const char *fmt, va_list ap) {
+    client *c = moduleGetReplyClient(ctx);
+    if (c == NULL) return VALKEYMODULE_OK;
+
+    int len = strlen(fmt) + 2; /* 1 for the \0 and 1 for the hyphen */
+    char hyphenfmt[len];
+    snprintf(hyphenfmt, len, "-%s", fmt);
+
+    addReplyErrorFormatInternal(c, flags, hyphenfmt, ap);
+
+    return VALKEYMODULE_OK;
+}
+
+
 /* Reply with the error create from a printf format and arguments.
  *
  * Note that 'fmt' must contain all the error, including
@@ -3201,21 +3225,33 @@ int VM_ReplyWithError(ValkeyModuleCtx *ctx, const char *err) {
  * The function always returns VALKEYMODULE_OK.
  */
 int VM_ReplyWithErrorFormat(ValkeyModuleCtx *ctx, const char *fmt, ...) {
-    client *c = moduleGetReplyClient(ctx);
-    if (c == NULL) return VALKEYMODULE_OK;
-
-    int len = strlen(fmt) + 2; /* 1 for the \0 and 1 for the hyphen */
-    char *hyphenfmt = zmalloc(len);
-    snprintf(hyphenfmt, len, "-%s", fmt);
-
     va_list ap;
     va_start(ap, fmt);
-    addReplyErrorFormatInternal(c, 0, hyphenfmt, ap);
+    int ret = moduleReplyErrorFormatInternal(ctx, 0, fmt, ap);
     va_end(ap);
+    return ret;
+}
 
-    zfree(hyphenfmt);
-
-    return VALKEYMODULE_OK;
+/* Reply with a custom error created from a printf format and arguments.
+ *
+ * `update_error_stats`: if true server error stats are updated after the reply
+ * is sent to the client, otherwise no stats are updated.
+ *
+ * The function always returns VALKEYMODULE_OK.
+ */
+int VM_ReplyWithCustomErrorFormat(ValkeyModuleCtx *ctx,
+                                  int update_error_stats,
+                                  const char *fmt,
+                                  ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    int ret = moduleReplyErrorFormatInternal(
+        ctx,
+        ERR_REPLY_FLAG_CUSTOM | (update_error_stats ? 0 : ERR_REPLY_FLAG_NO_STATS_UPDATE),
+        fmt,
+        ap);
+    va_end(ap);
+    return ret;
 }
 
 /* Reply with a simple string (`+... \r\n` in RESP protocol). This replies
@@ -3996,6 +4032,12 @@ int VM_GetSelectedDb(ValkeyModuleCtx *ctx) {
  *                                 context is using RESP3.
  *
  *  * VALKEYMODULE_CTX_FLAGS_SERVER_STARTUP: The instance is starting
+ *
+ *  * VALKEYMODULE_CTX_FLAGS_SLOT_IMPORT_CLIENT: Indicate the that client attached to this
+ *                                               context is the slot import client.
+ *
+ *  * VALKEYMODULE_CTX_FLAGS_SLOT_EXPORT_CLIENT: Indicate the that client attached to this
+ *                                               context is the slot export client.
  */
 int VM_GetContextFlags(ValkeyModuleCtx *ctx) {
     int flags = 0;
@@ -4008,6 +4050,11 @@ int VM_GetContextFlags(ValkeyModuleCtx *ctx) {
             if (isReplicatedClient(ctx->client)) flags |= VALKEYMODULE_CTX_FLAGS_REPLICATED;
             if (ctx->client->resp == 3) {
                 flags |= VALKEYMODULE_CTX_FLAGS_RESP3;
+            }
+            if (ctx->client->slot_migration_job && isImportSlotMigrationJob(ctx->client->slot_migration_job)) {
+                flags |= VALKEYMODULE_CTX_FLAGS_SLOT_IMPORT_CLIENT;
+            } else if (ctx->client->slot_migration_job) {
+                flags |= VALKEYMODULE_CTX_FLAGS_SLOT_EXPORT_CLIENT;
             }
         }
 
@@ -5118,7 +5165,8 @@ ValkeyModuleString *VM_ZsetRangeCurrentElement(ValkeyModuleKey *key, double *sco
     } else if (key->value->encoding == OBJ_ENCODING_SKIPLIST) {
         zskiplistNode *ln = key->u.zset.current;
         if (score) *score = ln->score;
-        str = createStringObject(ln->ele, sdslen(ln->ele));
+        sds ele = zslGetNodeElement(ln);
+        str = createStringObject(ele, sdslen(ele));
     } else {
         serverPanic("Unsupported zset encoding");
     }
@@ -5175,7 +5223,7 @@ int VM_ZsetRangeNext(ValkeyModuleKey *key) {
                 key->u.zset.er = 1;
                 return 0;
             } else if (key->u.zset.type == VALKEYMODULE_ZSET_RANGE_LEX) {
-                if (!zslLexValueLteMax(next->ele, &key->u.zset.lrs)) {
+                if (!zslLexValueLteMax(zslGetNodeElement(next), &key->u.zset.lrs)) {
                     key->u.zset.er = 1;
                     return 0;
                 }
@@ -5237,7 +5285,7 @@ int VM_ZsetRangePrev(ValkeyModuleKey *key) {
                 key->u.zset.er = 1;
                 return 0;
             } else if (key->u.zset.type == VALKEYMODULE_ZSET_RANGE_LEX) {
-                if (!zslLexValueGteMin(prev->ele, &key->u.zset.lrs)) {
+                if (!zslLexValueGteMin(zslGetNodeElement(prev), &key->u.zset.lrs)) {
                     key->u.zset.er = 1;
                     return 0;
                 }
@@ -5993,6 +6041,8 @@ void VM_FreeCallReply(ValkeyModuleCallReply *reply) {
  * - VALKEYMODULE_REPLY_BIG_NUMBER
  * - VALKEYMODULE_REPLY_VERBATIM_STRING
  * - VALKEYMODULE_REPLY_ATTRIBUTE
+ * - VALKEYMODULE_REPLY_SIMPLE_STRING
+ * - VALKEYMODULE_REPLY_ARRAY_NULL
  * - VALKEYMODULE_REPLY_PROMISE */
 int VM_CallReplyType(ValkeyModuleCallReply *reply) {
     return callReplyType(reply);
@@ -6133,6 +6183,7 @@ ValkeyModuleString *VM_CreateStringFromCallReply(ValkeyModuleCallReply *reply) {
     const char *str;
     switch (callReplyType(reply)) {
     case VALKEYMODULE_REPLY_STRING:
+    case VALKEYMODULE_REPLY_SIMPLE_STRING:
     case VALKEYMODULE_REPLY_ERROR: str = callReplyGetString(reply, &len); return VM_CreateString(ctx, str, len);
     case VALKEYMODULE_REPLY_INTEGER: {
         char buf[64];
@@ -6163,6 +6214,7 @@ void VM_SetContextUser(ValkeyModuleCtx *ctx, const ValkeyModuleUser *user) {
  *     "C" -> VALKEYMODULE_ARGV_RUN_AS_USER
  *     "M" -> VALKEYMODULE_ARGV_RESPECT_DENY_OOM
  *     "K" -> VALKEYMODULE_ARGV_ALLOW_BLOCK
+ *     "X" -> VALKEYMODULE_ARGV_CALL_REPLY_EXACT
  *
  * On error (format specifier error) NULL is returned and nothing is
  * allocated. On success the argument vector is returned. */
@@ -6239,6 +6291,8 @@ robj **moduleCreateArgvFromUserFormat(const char *cmdname, const char *fmt, int 
             if (flags) (*flags) |= (VALKEYMODULE_ARGV_DRY_RUN | VALKEYMODULE_ARGV_CALL_REPLIES_AS_ERRORS);
         } else if (*p == 'K') {
             if (flags) (*flags) |= VALKEYMODULE_ARGV_ALLOW_BLOCK;
+        } else if (*p == 'X') {
+            if (flags) (*flags) |= VALKEYMODULE_ARGV_CALL_REPLY_EXACT;
         } else {
             goto fmterr;
         }
@@ -6330,6 +6384,10 @@ fmterr:
  *              * VM_BlockClient
  *              * VM_GetCurrentUserName
  *
+ *     * 'X' -- Return exact reply types, including the differences between simple
+ *              string and bulk string, and the RESP 2 difference between nulls
+ *              and null arrays.
+ *
  * * **...**: The actual arguments to the command.
  *
  * On success a ValkeyModuleCallReply object is returned, otherwise
@@ -6363,6 +6421,7 @@ ValkeyModuleCallReply *VM_Call(ValkeyModuleCtx *ctx, const char *cmdname, const 
     int argc = 0, flags = 0;
     va_list ap;
     ValkeyModuleCallReply *reply = NULL;
+    sds reply_error_msg = NULL;
     int replicate = 0;             /* Replicate this command? */
     int error_as_call_replies = 0; /* return errors as ValkeyModuleCallReply object */
     uint64_t cmd_flags;
@@ -6373,6 +6432,12 @@ ValkeyModuleCallReply *VM_Call(ValkeyModuleCtx *ctx, const char *cmdname, const 
     replicate = flags & VALKEYMODULE_ARGV_REPLICATE;
     error_as_call_replies = flags & VALKEYMODULE_ARGV_CALL_REPLIES_AS_ERRORS;
     va_end(ap);
+
+    int is_running_script = ctx->flags & VALKEYMODULE_CTX_SCRIPT_EXECUTION;
+
+    /* If we're calling a command with a script execution context, then a script
+     * execution runtime must exist.. */
+    serverAssert(!is_running_script || scriptIsRunning());
 
     c = moduleAllocTempClient();
 
@@ -6400,8 +6465,7 @@ ValkeyModuleCallReply *VM_Call(ValkeyModuleCtx *ctx, const char *cmdname, const 
         if (!user) {
             errno = ENOTSUP;
             if (error_as_call_replies) {
-                sds msg = sdsnew("cannot run as user, no user directly attached to context or context's client");
-                reply = callReplyCreateError(msg, ctx);
+                reply_error_msg = sdsnew("cannot run as user, no user directly attached to context or context's client");
             }
             goto cleanup;
         }
@@ -6426,30 +6490,40 @@ ValkeyModuleCallReply *VM_Call(ValkeyModuleCtx *ctx, const char *cmdname, const 
      * if necessary.
      */
     c->cmd = c->lastcmd = c->realcmd = lookupCommand(c->argv, c->argc);
-    sds err;
-    if (!commandCheckExistence(c, error_as_call_replies ? &err : NULL)) {
+    if (!commandCheckExistence(c, error_as_call_replies ? &reply_error_msg : NULL)) {
         errno = ENOENT;
-        if (error_as_call_replies) reply = callReplyCreateError(err, ctx);
         goto cleanup;
     }
-    if (!commandCheckArity(c->cmd, c->argc, error_as_call_replies ? &err : NULL)) {
+    if (!commandCheckArity(c->cmd, c->argc, error_as_call_replies ? &reply_error_msg : NULL)) {
         errno = EINVAL;
-        if (error_as_call_replies) reply = callReplyCreateError(err, ctx);
         goto cleanup;
     }
 
     cmd_flags = getCommandFlags(c);
 
     if (flags & VALKEYMODULE_ARGV_SCRIPT_MODE) {
-        /* Basically on script mode we want to only allow commands that can
-         * be executed on scripts (CMD_NOSCRIPT is not set on the command flags) */
-        if (cmd_flags & CMD_NOSCRIPT) {
-            errno = ESPIPE;
-            if (error_as_call_replies) {
-                sds msg = sdscatfmt(sdsempty(), "command '%S' is not allowed on script mode", c->cmd->fullname);
-                reply = callReplyCreateError(msg, ctx);
+        if (is_running_script) {
+            c->flag.module = 0;
+            c->flag.script = 1;
+        }
+
+        /* In script mode, commands with CMD_NOSCRIPT flag are normally forbidden.
+         * However, we allow them if both conditions are met:
+         * 1. We're running in the context of a scripting engine running a script
+         * 2. The configuration option server.script_disable_deny_script is enabled
+         * If either condition is false, we block the command. */
+        if ((cmd_flags & CMD_NOSCRIPT)) {
+            if (!is_running_script || !server.script_disable_deny_script) {
+                errno = ESPIPE;
+                if (error_as_call_replies) {
+                    reply_error_msg = sdscatfmt(sdsempty(), "command '%S' is not allowed on script mode", c->cmd->fullname);
+                }
+                goto cleanup;
             }
-            goto cleanup;
+        }
+
+        if (is_running_script && scriptAllowsOOM()) {
+            flags &= ~VALKEYMODULE_ARGV_RESPECT_DENY_OOM;
         }
     }
 
@@ -6467,8 +6541,7 @@ ValkeyModuleCallReply *VM_Call(ValkeyModuleCtx *ctx, const char *cmdname, const 
             if (oom_state) {
                 errno = ENOSPC;
                 if (error_as_call_replies) {
-                    sds msg = sdsdup(shared.oomerr->ptr);
-                    reply = callReplyCreateError(msg, ctx);
+                    reply_error_msg = sdsdup(shared.oomerr->ptr);
                 }
                 goto cleanup;
             }
@@ -6482,60 +6555,10 @@ ValkeyModuleCallReply *VM_Call(ValkeyModuleCtx *ctx, const char *cmdname, const 
         if (cmd_flags & CMD_WRITE) {
             errno = ENOSPC;
             if (error_as_call_replies) {
-                sds msg = sdscatfmt(sdsempty(),
-                                    "Write command '%S' was "
-                                    "called while write is not allowed.",
-                                    c->cmd->fullname);
-                reply = callReplyCreateError(msg, ctx);
-            }
-            goto cleanup;
-        }
-    }
-
-    /* Script mode tests */
-    if (flags & VALKEYMODULE_ARGV_SCRIPT_MODE) {
-        if (cmd_flags & CMD_WRITE) {
-            /* on script mode, if a command is a write command,
-             * We will not run it if we encounter disk error
-             * or we do not have enough replicas */
-
-            if (!checkGoodReplicasStatus()) {
-                errno = ESPIPE;
-                if (error_as_call_replies) {
-                    sds msg = sdsdup(shared.noreplicaserr->ptr);
-                    reply = callReplyCreateError(msg, ctx);
-                }
-                goto cleanup;
-            }
-
-            int deny_write_type = writeCommandsDeniedByDiskError();
-            int obey_client = (server.current_client && mustObeyClient(server.current_client));
-
-            if (deny_write_type != DISK_ERROR_TYPE_NONE && !obey_client) {
-                errno = ESPIPE;
-                if (error_as_call_replies) {
-                    sds msg = writeCommandsGetDiskErrorMessage(deny_write_type);
-                    reply = callReplyCreateError(msg, ctx);
-                }
-                goto cleanup;
-            }
-
-            if (server.primary_host && server.repl_replica_ro && !obey_client) {
-                errno = ESPIPE;
-                if (error_as_call_replies) {
-                    sds msg = sdsdup(shared.roreplicaerr->ptr);
-                    reply = callReplyCreateError(msg, ctx);
-                }
-                goto cleanup;
-            }
-        }
-
-        if (server.primary_host && server.repl_state != REPL_STATE_CONNECTED && server.repl_serve_stale_data == 0 &&
-            !(cmd_flags & CMD_STALE)) {
-            errno = ESPIPE;
-            if (error_as_call_replies) {
-                sds msg = sdsdup(shared.primarydownerr->ptr);
-                reply = callReplyCreateError(msg, ctx);
+                reply_error_msg = sdscatfmt(sdsempty(),
+                                            "Write command '%S' was "
+                                            "called while write is not allowed.",
+                                            c->cmd->fullname);
             }
             goto cleanup;
         }
@@ -6553,14 +6576,14 @@ ValkeyModuleCallReply *VM_Call(ValkeyModuleCtx *ctx, const char *cmdname, const 
 
         acl_retval = ACLCheckAllUserCommandPerm(user, c->cmd, c->argv, c->argc, &acl_errpos);
         if (acl_retval != ACL_OK) {
+            int context = scriptIsRunning() ? ACL_LOG_CTX_SCRIPT : ACL_LOG_CTX_MODULE;
             sds object = (acl_retval == ACL_DENIED_CMD) ? sdsdup(c->cmd->fullname) : sdsdup(c->argv[acl_errpos]->ptr);
-            addACLLogEntry(ctx->client, acl_retval, ACL_LOG_CTX_MODULE, -1, c->user->name, object);
+            addACLLogEntry(ctx->client, acl_retval, context, -1, c->user->name, object);
             if (error_as_call_replies) {
                 /* verbosity should be same as processCommand() in server.c */
                 sds acl_msg = getAclErrorMessage(acl_retval, c->user, c->cmd, c->argv[acl_errpos]->ptr, 0);
-                sds msg = sdscatfmt(sdsempty(), "-NOPERM %S\r\n", acl_msg);
+                reply_error_msg = sdscatfmt(sdsempty(), "-NOPERM %S\r\n", acl_msg);
                 sdsfree(acl_msg);
-                reply = callReplyCreateError(msg, ctx);
             }
             errno = EACCES;
             goto cleanup;
@@ -6577,30 +6600,109 @@ ValkeyModuleCallReply *VM_Call(ValkeyModuleCtx *ctx, const char *cmdname, const 
         c->flag.asking = ctx->client->flag.asking;
         c->slot = clusterSlotByCommand(c->cmd, c->argv, c->argc, &c->read_flags);
         if (getNodeByQuery(c, &error_code) != getMyClusterNode()) {
-            sds msg = NULL;
+            serverAssert(reply_error_msg == NULL);
             if (error_code == CLUSTER_REDIR_DOWN_RO_STATE) {
                 if (error_as_call_replies) {
-                    msg = sdscatfmt(sdsempty(),
-                                    "Can not execute a write command '%S' while the cluster is down and readonly",
-                                    c->cmd->fullname);
+                    reply_error_msg = sdscatfmt(sdsempty(),
+                                                "Can not execute a write command '%S' while the cluster is down and readonly",
+                                                c->cmd->fullname);
                 }
                 errno = EROFS;
             } else if (error_code == CLUSTER_REDIR_DOWN_STATE) {
                 if (error_as_call_replies) {
-                    msg = sdscatfmt(sdsempty(), "Can not execute a command '%S' while the cluster is down",
-                                    c->cmd->fullname);
+                    reply_error_msg = sdscatfmt(sdsempty(), "Can not execute a command '%S' while the cluster is down",
+                                                c->cmd->fullname);
                 }
                 errno = ENETDOWN;
             } else {
                 if (error_as_call_replies) {
-                    msg = sdsnew("Attempted to access a non local key in a cluster node");
+                    reply_error_msg = sdsnew("Attempted to access a non local key in a cluster node");
                 }
                 errno = EPERM;
             }
-            if (msg) {
-                reply = callReplyCreateError(msg, ctx);
+            goto cleanup;
+        }
+    }
+
+    /* Script mode tests */
+    if (flags & VALKEYMODULE_ARGV_SCRIPT_MODE) {
+        /* A write command, on an RO command or an RO script is rejected ASAP.
+         * Note: For scripts, we consider may-replicate commands as write commands.
+         * This also makes it possible to allow read-only scripts to be run during
+         * CLIENT PAUSE WRITE. */
+        if (is_running_script && scriptIsReadOnly() && (cmd_flags & (CMD_WRITE | CMD_MAY_REPLICATE))) {
+            errno = ENOSPC;
+            reply_error_msg = sdsnew("Write commands are not allowed from read-only scripts");
+            goto cleanup;
+        }
+
+        /* If the script already made a modification to the dataset, we can't
+         * fail it on unpredictable error state. */
+        if ((is_running_script && !scriptIsWriteDirty() && cmd_flags & CMD_WRITE) ||
+            (!is_running_script && cmd_flags & CMD_WRITE)) {
+            /* on script mode, if a command is a write command,
+             * We will not run it if we encounter disk error
+             * or we do not have enough replicas */
+
+            if (!checkGoodReplicasStatus()) {
+                errno = ESPIPE;
+                if (error_as_call_replies) {
+                    reply_error_msg = sdsdup(shared.noreplicaserr->ptr);
+                }
+                goto cleanup;
+            }
+
+            int deny_write_type = writeCommandsDeniedByDiskError();
+            int obey_client = (server.current_client && mustObeyClient(server.current_client));
+
+            if (deny_write_type != DISK_ERROR_TYPE_NONE && !obey_client) {
+                errno = ESPIPE;
+                if (error_as_call_replies) {
+                    reply_error_msg = writeCommandsGetDiskErrorMessage(deny_write_type);
+                }
+                goto cleanup;
+            }
+
+            if (server.primary_host && server.repl_replica_ro && !obey_client) {
+                errno = ESPIPE;
+                if (error_as_call_replies) {
+                    reply_error_msg = sdsdup(shared.roreplicaerr->ptr);
+                }
+                goto cleanup;
+            }
+
+            if (is_running_script) {
+                scriptSetWriteDirtyFlag();
+            }
+        }
+
+        if (server.primary_host && server.repl_state != REPL_STATE_CONNECTED && server.repl_serve_stale_data == 0 &&
+            !(cmd_flags & CMD_STALE)) {
+            errno = ESPIPE;
+            if (error_as_call_replies) {
+                if (is_running_script) {
+                    reply_error_msg = sdsnew("Can not execute the command on a stale replica");
+                } else {
+                    reply_error_msg = sdsdup(shared.primarydownerr->ptr);
+                }
             }
             goto cleanup;
+        }
+
+        if (is_running_script && server.cluster_enabled && !mustObeyClient(ctx->client)) {
+            if (c->slot != -1 && !scriptAllowsCrossSlot()) {
+                if (scriptGetSlot() == -1) {
+                    scriptSetSlot(c->slot);
+                } else if (scriptGetSlot() != c->slot) {
+                    errno = ESPIPE;
+                    if (error_as_call_replies) {
+                        reply_error_msg = sdsnew("Script attempted to access keys that do not hash to the same slot");
+                    }
+                    goto cleanup;
+                }
+            }
+
+            scriptSetOriginalClientSlot(c->slot);
         }
     }
 
@@ -6627,6 +6729,8 @@ ValkeyModuleCallReply *VM_Call(ValkeyModuleCtx *ctx, const char *cmdname, const 
     server.replication_allowed = prev_replication_allowed;
 
     if (c->flag.blocked) {
+        /* Blocking commands are not allowed when calling commands in scripting engines. */
+        serverAssert(!is_running_script);
         serverAssert(flags & VALKEYMODULE_ARGV_ALLOW_BLOCK);
         serverAssert(ctx->module);
         ValkeyModuleAsyncRMCallPromise *promise = zmalloc(sizeof(ValkeyModuleAsyncRMCallPromise));
@@ -6653,11 +6757,26 @@ ValkeyModuleCallReply *VM_Call(ValkeyModuleCtx *ctx, const char *cmdname, const 
         c = NULL; /* Make sure not to free the client */
     } else {
         reply = moduleParseReply(c, (ctx->flags & VALKEYMODULE_CTX_AUTO_MEMORY) ? ctx : NULL);
+        if (flags & VALKEYMODULE_ARGV_CALL_REPLY_EXACT) {
+            enableParseExactReplyTypeFlag(reply);
+        }
     }
 
 cleanup:
+    if ((flags & VALKEYMODULE_ARGV_SCRIPT_MODE) && errno) {
+        afterErrorReply(c, reply_error_msg, sdslen(reply_error_msg), 0);
+        incrCommandStatsOnError(c->cmd, ERROR_COMMAND_REJECTED);
+    }
+    if (reply_error_msg != NULL) {
+        serverAssert(reply == NULL);
+        reply = callReplyCreateError(reply_error_msg, ctx);
+    }
+
     if (reply) autoMemoryAdd(ctx, VALKEYMODULE_AM_REPLY, reply);
     if (ctx->module) ctx->module->in_call--;
+    if (is_running_script) {
+        scriptClusterSlotStatsInvalidateSlotIfApplicable();
+    }
     if (c) moduleReleaseTempClient(c);
     return reply;
 }
@@ -6714,7 +6833,7 @@ uint64_t moduleTypeEncodeId(const char *name, int encver) {
 
     uint64_t id = 0;
     for (int j = 0; j < 9; j++) {
-        char *p = strchr(cset, name[j]);
+        const char *p = strchr(cset, name[j]);
         if (!p) return 0;
         unsigned long pos = p - cset;
         id = (id << 6) | pos;
@@ -7144,6 +7263,25 @@ int moduleAllModulesHandleReplAsyncLoad(void) {
     }
     dictReleaseIterator(di);
     return 1;
+}
+
+int moduleVerifyAllAllowAtomicSlotMigrationOrReply(client *c) {
+    dictIterator *di = dictGetIterator(modules);
+    dictEntry *de;
+
+    while ((de = dictNext(di)) != NULL) {
+        struct ValkeyModule *module = dictGetVal(de);
+        if (!(module->options & VALKEYMODULE_OPTIONS_HANDLE_ATOMIC_SLOT_MIGRATION)) {
+            addReplyErrorFormat(c, "The module %s does not support atomic slot migrations. "
+                                   "Please ensure all modules have declared support for "
+                                   "atomic slot migration and try again",
+                                module->name);
+            dictReleaseIterator(di);
+            return C_ERR;
+        }
+    }
+    dictReleaseIterator(di);
+    return C_OK;
 }
 
 /* Returns true if any previous IO API failed.
@@ -7839,9 +7977,8 @@ ValkeyModuleBlockedClient *moduleBlockClient(ValkeyModuleCtx *ctx,
                                              void *privdata,
                                              int flags) {
     client *c = ctx->client;
-    if (c->flag.blocked || getClientType(c) != CLIENT_TYPE_NORMAL || c->flag.deny_blocking) {
-        /* Early return if duplicate block attempt or client is not normal or
-         * client is set to deny blocking. */
+    if (c->flag.blocked || getClientType(c) != CLIENT_TYPE_NORMAL) {
+        /* Early return if duplicate block attempt or client is not normal. */
         errno = ENOTSUP;
         return NULL;
     }
@@ -7854,6 +7991,7 @@ ValkeyModuleBlockedClient *moduleBlockClient(ValkeyModuleCtx *ctx,
     int is_keyspace_notification = ctx->flags & (VALKEYMODULE_CTX_KEYSPACE_NOTIFICATION);
     int islua = scriptIsRunning();
     int ismulti = server.in_exec;
+    serverAssert(!c->flag.deny_blocking || (islua || ismulti));
     if ((islua || ismulti) && is_keyspace_notification) {
         /* Avoid blocking within transactions when context initiated by
          * keyspace notification. */
@@ -7951,9 +8089,10 @@ ValkeyModuleBlockedClient *moduleBlockClient(ValkeyModuleCtx *ctx,
  *
  * The following is an example of how non-blocking module based authentication can be used:
  *
- *      int auth_cb(ValkeyModuleCtx *ctx, ValkeyModuleString *username, ValkeyModuleString *password, ValkeyModuleString
- * **err) { const char *user = ValkeyModule_StringPtrLen(username, NULL); const char *pwd =
- * ValkeyModule_StringPtrLen(password, NULL); if (!strcmp(user,"foo") && !strcmp(pwd,"valid_password")) {
+ *      int auth_cb(ValkeyModuleCtx *ctx, ValkeyModuleString *username, ValkeyModuleString *password, ValkeyModuleString **err) {
+ *          const char *user = ValkeyModule_StringPtrLen(username, NULL);
+ *          const char *pwd = ValkeyModule_StringPtrLen(password, NULL);
+ *          if (!strcmp(user,"foo") && !strcmp(pwd,"valid_password")) {
  *              ValkeyModule_AuthenticateClientWithACLUser(ctx, "foo", 3, NULL, NULL, NULL);
  *              return VALKEYMODULE_AUTH_HANDLED;
  *          }
@@ -8012,7 +8151,7 @@ void moduleUnregisterAuthCBs(ValkeyModule *module) {
 
 /* Search for & attempt next module auth callback after skipping the ones already attempted.
  * Returns the result of the module auth callback. */
-int attemptNextAuthCb(client *c, robj *username, robj *password, robj **err) {
+static int attemptNextAuthCb(client *c, robj *username, robj *password, robj **err) {
     int handle_next_callback = (!c->module_data || c->module_data->module_auth_ctx == NULL);
     ValkeyModuleAuthCtx *cur_auth_ctx = NULL;
     listNode *ln;
@@ -8047,7 +8186,7 @@ int attemptNextAuthCb(client *c, robj *username, robj *password, robj **err) {
  * auth operation.
  * Otherwise, we attempt the auth reply callback & the free priv data callback, update fields and
  * return the result of the reply callback. */
-int attemptBlockedAuthReplyCallback(client *c, robj *username, robj *password, robj **err) {
+static int attemptBlockedAuthReplyCallback(client *c, robj *username, robj *password, robj **err) {
     int result = VALKEYMODULE_AUTH_NOT_HANDLED;
     if (!c->module_data || !c->module_data->module_blocked_client) return result;
     ValkeyModuleBlockedClient *bc = (ValkeyModuleBlockedClient *)c->module_data->module_blocked_client;
@@ -8091,17 +8230,44 @@ int checkModuleAuthentication(client *c, robj *username, robj *password, robj **
         serverAssert(result == VALKEYMODULE_AUTH_HANDLED);
         return AUTH_BLOCKED;
     }
+
+    ValkeyModuleAuthCtx *auth_ctx = c->module_data ? c->module_data->module_auth_ctx : NULL;
+
     if (c->module_data) c->module_data->module_auth_ctx = NULL;
     if (result == VALKEYMODULE_AUTH_NOT_HANDLED) {
         c->flag.module_auth_has_result = 0;
         return AUTH_NOT_HANDLED;
     }
 
+    int auth_result = AUTH_ERR;
+
     if (c->flag.module_auth_has_result) {
         c->flag.module_auth_has_result = 0;
-        if (c->flag.authenticated) return AUTH_OK;
+        if (c->flag.authenticated) {
+            auth_result = AUTH_OK;
+        }
     }
-    return AUTH_ERR;
+
+    const char *module_name = auth_ctx ? auth_ctx->module->name : NULL;
+    moduleFireAuthenticationEvent(c->id,
+                                  username->ptr,
+                                  module_name,
+                                  auth_result == AUTH_OK);
+
+    return auth_result;
+}
+
+void moduleFireAuthenticationEvent(uint64_t client_id,
+                                   const char *username,
+                                   const char *module_name,
+                                   int is_granted) {
+    ValkeyModuleAuthenticationInfo info = VALKEYMODULE_AUTHENTICATIONINFO_INITIALIZER_V1;
+    info.client_id = client_id;
+    info.username = username;
+    info.module_name = module_name;
+    info.result = is_granted ? VALKEYMODULE_AUTH_RESULT_GRANTED
+                             : VALKEYMODULE_AUTH_RESULT_DENIED;
+    moduleFireServerEvent(VALKEYMODULE_EVENT_AUTHENTICATION_ATTEMPT, 0, &info);
 }
 
 /* This function is called from module.c in order to check if a module
@@ -8156,7 +8322,7 @@ int moduleTryServeClientBlockedOnKey(client *c, robj *key) {
  *
  * There are some cases where ValkeyModule_BlockClient() cannot be used:
  *
- * 1. If the client is a Lua script.
+ * 1. If the client is executing a script.
  * 2. If the client is executing a MULTI block.
  * 3. If the client is a temporary module client.
  * 4. If the client is already blocked.
@@ -8168,9 +8334,6 @@ int moduleTryServeClientBlockedOnKey(client *c, robj *key) {
  *
  * In case 3 and 4, a call to ValkeyModule_BlockClient() are no-op, returning
  * nullptr. errno is set to EINVAL for case 3 while ENOTSUP for case 4.
- *
- * In these cases, a call to ValkeyModule_BlockClient() will **not** block the
- * client, but instead produce a specific error reply.
  *
  * A module that registers a timeout_callback function can also be unblocked
  * using the `CLIENT UNBLOCK` command, which will trigger the timeout callback.
@@ -8194,7 +8357,16 @@ ValkeyModuleBlockedClient *VM_BlockClient(ValkeyModuleCtx *ctx,
 /* Block the current client for module authentication in the background. If module auth is not in
  * progress on the client, the API returns NULL. Otherwise, the client is blocked and the VM_BlockedClient
  * is returned similar to the VM_BlockClient API.
- * Note: Only use this API from the context of a module auth callback. */
+ * Note: Only use this API from the context of a module auth callback.
+ *
+ * There are some cases where ValkeyModule_BlockClientOnAuth() cannot be used:
+ *
+ * 1. If the client is not in the middle of module based authentication. This will not block the client
+ *    but instead produce a specific error reply.
+ *
+ * For details on other return values and error codes, see the comment block for
+ * ValkeyModule_BlockClient().
+ * */
 ValkeyModuleBlockedClient *VM_BlockClientOnAuth(ValkeyModuleCtx *ctx,
                                                 ValkeyModuleAuthCallback reply_callback,
                                                 void (*free_privdata)(ValkeyModuleCtx *, void *)) {
@@ -9258,7 +9430,7 @@ int moduleGetClusterNodeInfoForClient(ValkeyModuleCtx *ctx,
         else
             memset(primary_id, 0, VALKEYMODULE_NODE_ID_LEN);
     }
-    if (port) *port = getNodeDefaultClientPort(node);
+    if (port) *port = clusterNodeClientPort(node, server.tls_cluster, c);
 
     /* As usually we have to remap flags for modules, in order to ensure
      * we can provide binary compatibility. */
@@ -9946,7 +10118,7 @@ int VM_ACLCheckKeyPermissions(ValkeyModuleUser *user, ValkeyModuleString *key, i
     }
 
     int keyspec_flags = moduleConvertKeySpecsFlags(flags, 0);
-    if (ACLUserCheckKeyPerm(user->user, key->ptr, sdslen(key->ptr), keyspec_flags) != ACL_OK) {
+    if (ACLUserCheckKeyPerm(user->user, key->ptr, sdslen(key->ptr), keyspec_flags, false) != ACL_OK) {
         errno = EACCES;
         return VALKEYMODULE_ERR;
     }
@@ -10868,7 +11040,7 @@ int moduleUnregisterFilters(ValkeyModule *module) {
  *
  * 1. Invocation by a client.
  * 2. Invocation through `ValkeyModule_Call()` by any module.
- * 3. Invocation through Lua `redis.call()`.
+ * 3. Invocation through Lua `server.call()`.
  * 4. Replication of a command from a primary.
  *
  * The filter executes in a special filter context, which is different and more
@@ -10908,8 +11080,9 @@ int moduleUnregisterFilters(ValkeyModule *module) {
  * If multiple filters are registered (by the same or different modules), they
  * are executed in the order of registration.
  */
-ValkeyModuleCommandFilter *
-VM_RegisterCommandFilter(ValkeyModuleCtx *ctx, ValkeyModuleCommandFilterFunc callback, int flags) {
+ValkeyModuleCommandFilter *VM_RegisterCommandFilter(ValkeyModuleCtx *ctx,
+                                                    ValkeyModuleCommandFilterFunc callback,
+                                                    int flags) {
     ValkeyModuleCommandFilter *filter = zmalloc(sizeof(*filter));
     filter->module = ctx->module;
     filter->callback = callback;
@@ -11246,7 +11419,7 @@ static void moduleScanKeyHashtableCallback(void *privdata, void *entry) {
         /* no value */
     } else if (o->type == OBJ_ZSET) {
         zskiplistNode *node = (zskiplistNode *)entry;
-        key = node->ele;
+        key = zslGetNodeElement(node);
         value = createStringObjectFromLongDouble(node->score, 0);
     } else if (o->type == OBJ_HASH) {
         key = entryGetField(entry);
@@ -11419,7 +11592,7 @@ int VM_Fork(ValkeyModuleForkDoneHandler cb, void *user_data) {
  * reported in INFO.
  * The `progress` argument should between 0 and 1, or -1 when not available. */
 void VM_SendChildHeartbeat(double progress) {
-    sendChildInfoGeneric(CHILD_INFO_TYPE_CURRENT_INFO, 0, progress, "Module fork");
+    sendChildInfoGeneric(CHILD_INFO_TYPE_CURRENT_INFO, 0, 0, progress, "Module fork");
 }
 
 /* Call from the child process when you want to terminate it.
@@ -11480,24 +11653,26 @@ void ModuleForkDoneHandler(int exitcode, int bysignal) {
  * a data structure associated with it. We use MAX_UINT64 on purpose,
  * in order to pass the check in ValkeyModule_SubscribeToServerEvent. */
 static uint64_t moduleEventVersions[] = {
-    VALKEYMODULE_REPLICATIONINFO_VERSION,  /* VALKEYMODULE_EVENT_REPLICATION_ROLE_CHANGED */
-    -1,                                    /* VALKEYMODULE_EVENT_PERSISTENCE */
-    VALKEYMODULE_FLUSHINFO_VERSION,        /* VALKEYMODULE_EVENT_FLUSHDB */
-    -1,                                    /* VALKEYMODULE_EVENT_LOADING */
-    VALKEYMODULE_CLIENTINFO_VERSION,       /* VALKEYMODULE_EVENT_CLIENT_CHANGE */
-    -1,                                    /* VALKEYMODULE_EVENT_SHUTDOWN */
-    -1,                                    /* VALKEYMODULE_EVENT_REPLICA_CHANGE */
-    -1,                                    /* VALKEYMODULE_EVENT_PRIMARY_LINK_CHANGE */
-    VALKEYMODULE_CRON_LOOP_VERSION,        /* VALKEYMODULE_EVENT_CRON_LOOP */
-    VALKEYMODULE_MODULE_CHANGE_VERSION,    /* VALKEYMODULE_EVENT_MODULE_CHANGE */
-    VALKEYMODULE_LOADING_PROGRESS_VERSION, /* VALKEYMODULE_EVENT_LOADING_PROGRESS */
-    VALKEYMODULE_SWAPDBINFO_VERSION,       /* VALKEYMODULE_EVENT_SWAPDB */
-    -1,                                    /* VALKEYMODULE_EVENT_REPL_BACKUP */
-    -1,                                    /* VALKEYMODULE_EVENT_FORK_CHILD */
-    -1,                                    /* VALKEYMODULE_EVENT_REPL_ASYNC_LOAD */
-    -1,                                    /* VALKEYMODULE_EVENT_EVENTLOOP */
-    -1,                                    /* VALKEYMODULE_EVENT_CONFIG */
-    VALKEYMODULE_KEYINFO_VERSION,          /* VALKEYMODULE_EVENT_KEY */
+    VALKEYMODULE_REPLICATIONINFO_VERSION,          /* VALKEYMODULE_EVENT_REPLICATION_ROLE_CHANGED */
+    -1,                                            /* VALKEYMODULE_EVENT_PERSISTENCE */
+    VALKEYMODULE_FLUSHINFO_VERSION,                /* VALKEYMODULE_EVENT_FLUSHDB */
+    -1,                                            /* VALKEYMODULE_EVENT_LOADING */
+    VALKEYMODULE_CLIENTINFO_VERSION,               /* VALKEYMODULE_EVENT_CLIENT_CHANGE */
+    -1,                                            /* VALKEYMODULE_EVENT_SHUTDOWN */
+    -1,                                            /* VALKEYMODULE_EVENT_REPLICA_CHANGE */
+    -1,                                            /* VALKEYMODULE_EVENT_PRIMARY_LINK_CHANGE */
+    VALKEYMODULE_CRON_LOOP_VERSION,                /* VALKEYMODULE_EVENT_CRON_LOOP */
+    VALKEYMODULE_MODULE_CHANGE_VERSION,            /* VALKEYMODULE_EVENT_MODULE_CHANGE */
+    VALKEYMODULE_LOADING_PROGRESS_VERSION,         /* VALKEYMODULE_EVENT_LOADING_PROGRESS */
+    VALKEYMODULE_SWAPDBINFO_VERSION,               /* VALKEYMODULE_EVENT_SWAPDB */
+    -1,                                            /* VALKEYMODULE_EVENT_REPL_BACKUP */
+    -1,                                            /* VALKEYMODULE_EVENT_FORK_CHILD */
+    -1,                                            /* VALKEYMODULE_EVENT_REPL_ASYNC_LOAD */
+    -1,                                            /* VALKEYMODULE_EVENT_EVENTLOOP */
+    -1,                                            /* VALKEYMODULE_EVENT_CONFIG */
+    VALKEYMODULE_KEYINFO_VERSION,                  /* VALKEYMODULE_EVENT_KEY */
+    VALKEYMODULE_AUTHENTICATION_INFO_VERSION,      /* VALKEYMODULE_EVENT_AUTHENTICATION_ATTEMPT */
+    VALKEYMODULE_ATOMICSLOTMIGRATION_INFO_VERSION, /* VALKEYMODULE_EVENT_ATOMIC_SLOT_MIGRATION */
 };
 
 /* Register to be notified, via a callback, when the specified server event
@@ -11758,7 +11933,7 @@ static uint64_t moduleEventVersions[] = {
  *     * `VALKEYMODULE_SUBEVENT_EVENTLOOP_BEFORE_SLEEP`
  *     * `VALKEYMODULE_SUBEVENT_EVENTLOOP_AFTER_SLEEP`
  *
- * * ValkeyModule_Event_Config
+ * * ValkeyModuleEvent_Config
  *
  *     Called when a configuration event happens
  *     The following sub events are available:
@@ -11772,7 +11947,7 @@ static uint64_t moduleEventVersions[] = {
  *                                    // name of each modified configuration item
  *         uint32_t num_changes;      // The number of elements in the config_names array
  *
- * * ValkeyModule_Event_Key
+ * * ValkeyModuleEvent_Key
  *
  *     Called when a key is removed from the keyspace. We can't modify any key in
  *     the event.
@@ -11787,6 +11962,57 @@ static uint64_t moduleEventVersions[] = {
  *     structure with the following fields:
  *
  *         ValkeyModuleKey *key;    // Key name
+ *
+ * * ValkeyModuleEvent_AuthenticationAttempt
+ *
+ *     Called when an authentication attempt is made, either successful or not.
+ *
+ *     The data pointer can be casted to a ValkeyModuleAuthenticationInfo
+ *     structure with the following fields:
+ *
+ *         uint64_t client_id;      // Client ID.
+ *         const char *username;    // Username used for authentication.
+ *         const char *module_name; // Name of the module that is handling the
+ *                                  // authentication. It is NULL if the
+ *                                  // authentication is handled by the core.
+ *         ValkeyModuleAuthenticationResult result;   // Result of the authentication:
+ *                                                    // VALKEYMODULE_AUTH_RESULT_GRANTED or
+ *                                                    // VALKEYMODULE_AUTH_RESULT_DENIED
+ *
+ * * ValkeyModuleEvent_AtomicSlotMigration
+ *
+ *    Called when an atomic slot migration (CLUSTER MIGRATESLOTS) is started or
+ *    ended in this node. This node may be a target or a source node, or the
+ *    target or source might be this node's primary. The following sub events
+ *    are available:
+ *
+ *     * `VALKEYMODULE_SUBEVENT_ATOMIC_SLOT_MIGRATION_IMPORT_STARTED`
+ *     * `VALKEYMODULE_SUBEVENT_ATOMIC_SLOT_MIGRATION_EXPORT_STARTED`
+ *     * `VALKEYMODULE_SUBEVENT_ATOMIC_SLOT_MIGRATION_IMPORT_ABORTED`
+ *     * `VALKEYMODULE_SUBEVENT_ATOMIC_SLOT_MIGRATION_EXPORT_ABORTED`
+ *     * `VALKEYMODULE_SUBEVENT_ATOMIC_SLOT_MIGRATION_IMPORT_COMPLETED`
+ *     * `VALKEYMODULE_SUBEVENT_ATOMIC_SLOT_MIGRATION_EXPORT_COMPLETED`
+ *
+ *    The data pointer can be casted to ValkeyModuleAtomicSlotMigrationInfo
+ *    structure with the following fields:
+ *
+ *         char *job_name;                     // Unique ID for the operation (40 chars)
+ *         ValkeyModuleSlotRange *slot_ranges; // Array of slot ranges involved in the operation
+ *         uint32_t num_slot_ranges;           // Number of slot ranges in slot_ranges array
+ *
+ *    The ValkeyModuleSlotRange structure has the following fields:
+ *
+ *          int start; // First slot in this range, inclusive
+ *          int end;   // Last slot in this range, inclusive
+ *
+ *    Modules can use these notifications to track the start and end of slot
+ *    migrations. Slot migrations will start with a STARTED subevent and end
+ *    with a COMPLETED subevent if they are successful and ownership is
+ *    transferred, or an ABORTED subevent if they were not successful and no
+ *    ownership change was made. While a slot migration is active, modules will
+ *    see incoming commands and keyspace notifications for importing keys.
+ *    Importing keys will not be accessible to clients unless the slot migration
+ *    is COMPLETED.
  *
  * The function returns VALKEYMODULE_OK if the module was successfully subscribed
  * for the specified event. If the API is called from a wrong context or unsupported event
@@ -11937,6 +12163,10 @@ void moduleFireServerEvent(uint64_t eid, int subid, void *data) {
                 selectDb(ctx.client, info->dbnum);
                 moduleInitKey(&key, &ctx, info->key, info->value, info->mode);
                 moduledata = &ki;
+            } else if (eid == VALKEYMODULE_EVENT_AUTHENTICATION_ATTEMPT) {
+                moduledata = data;
+            } else if (eid == VALKEYMODULE_EVENT_ATOMIC_SLOT_MIGRATION) {
+                moduledata = data;
             }
 
             el->module->in_hook++;
@@ -12317,7 +12547,7 @@ int moduleFreeCommand(struct ValkeyModule *module, struct serverCommand *cmd) {
             sdsfree(sub->fullname);
             zfree(sub);
         }
-        hashtableResetIterator(&iter);
+        hashtableCleanupIterator(&iter);
         hashtableRelease(cmd->subcommands_ht);
     }
 
@@ -12341,7 +12571,7 @@ void moduleUnregisterCommands(struct ValkeyModule *module) {
         sdsfree(cmd->fullname);
         zfree(cmd);
     }
-    hashtableResetIterator(&iter);
+    hashtableCleanupIterator(&iter);
 }
 
 /* We parse argv to add sds "NAME VALUE" pairs to the server.module_configs_queue list of configs.
@@ -12654,6 +12884,8 @@ sds genModulesInfoStringRenderModuleOptions(struct ValkeyModule *module) {
         output = sdscat(output, "handle-repl-async-load|");
     if (module->options & VALKEYMODULE_OPTION_NO_IMPLICIT_SIGNAL_MODIFIED)
         output = sdscat(output, "no-implicit-signal-modified|");
+    if (module->options & VALKEYMODULE_OPTIONS_HANDLE_ATOMIC_SLOT_MIGRATION)
+        output = sdscat(output, "handle-atomic-slot-migration|");
     output = sdstrim(output, "|");
     output = sdscat(output, "]");
     return output;
@@ -13233,7 +13465,9 @@ int VM_RdbLoad(ValkeyModuleCtx *ctx, ValkeyModuleRdbStream *stream, int flags) {
      * will prevent COW memory issue. */
     if (server.child_type == CHILD_TYPE_RDB) killRDBChild();
 
-    emptyData(-1, EMPTYDB_NO_FLAGS, NULL);
+    /* Kill existing slot migration fork as it is saving outdated data. Also killing it
+     * will prevent COW memory issue. */
+    if (server.child_type == CHILD_TYPE_SLOT_MIGRATION) killSlotMigrationChild();
 
     /* rdbLoad() can go back to the networking and process network events. If
      * VM_RdbLoad() is called inside a command callback, we don't want to
@@ -13242,7 +13476,7 @@ int VM_RdbLoad(ValkeyModuleCtx *ctx, ValkeyModuleRdbStream *stream, int flags) {
     if (server.current_client) protectClient(server.current_client);
 
     serverAssert(stream->type == VALKEYMODULE_RDB_STREAM_FILE);
-    int ret = rdbLoad(stream->data.filename, NULL, RDBFLAGS_NONE);
+    int ret = rdbLoad(stream->data.filename, NULL, RDBFLAGS_EMPTY_DATA);
 
     if (server.current_client) unprotectClient(server.current_client);
 
@@ -13289,6 +13523,10 @@ int VM_RdbSave(ValkeyModuleCtx *ctx, ValkeyModuleRdbStream *stream, int flags) {
     errno = 0;
     return VALKEYMODULE_OK;
 }
+
+/* --------------------------------------------------------------------------
+ * ## Scripting Engine API
+ * -------------------------------------------------------------------------- */
 
 /* Registers a new scripting engine in the server.
  *
@@ -13359,6 +13597,62 @@ ValkeyModuleScriptingEngineExecutionState VM_GetFunctionExecutionState(
     int ret = scriptInterrupt(server_ctx);
     serverAssert(ret == SCRIPT_CONTINUE || ret == SCRIPT_KILL);
     return ret == SCRIPT_CONTINUE ? VMSE_STATE_EXECUTING : VMSE_STATE_KILLED;
+}
+
+/* Function to send string messages to the client during a debug session.
+ * These messages are buffered in memory, and are only sent to the client when
+ * `ValkeyModule_VM_ScriptingEngineDebuggerFlushLogs` is called.
+ *
+ * - `msg`: the message to send.
+ *
+ * - `truncate`: if set to 1, the message will be truncated to the maximum length
+ *   configured in the debugger settings.
+ */
+void VM_ScriptingEngineDebuggerLog(ValkeyModuleString *msg, int truncate) {
+    if (truncate) {
+        scriptingEngineDebuggerLogWithMaxLen(msg);
+    } else {
+        scriptingEngineDebuggerLog(msg);
+    }
+}
+
+/* Function to log a RESP reply C string as debugger output, in a human readable
+ * format.
+ *
+ * If the resulting string is longer than the maximum text length, configured in
+ * the debugger settings, plus a few more chars used as prefix, it gets truncated.
+ */
+void VM_ScriptingEngineDebuggerLogRespReplyStr(const char *reply) {
+    scriptingEngineDebuggerLogRespReplyStr(reply);
+}
+
+/* Function to log a RESP reply as debugger output, in a human readable format.
+ *
+ * If the resulting string is longer than the maximum text length, configured in
+ * the debugger settings, plus a few more chars used as prefix, it gets truncated.
+ */
+void VM_ScriptingEngineDebuggerLogRespReply(ValkeyModuleCallReply *reply) {
+    size_t proto_len;
+    const char *proto = callReplyGetProto(reply, &proto_len);
+    scriptingEngineDebuggerLogRespReplyStr(proto);
+}
+
+/* Function to send all debugger messages in the memory buffer written with the
+ * `ValkeyModule_ScriptingEngineDebuggerLog` function.
+ */
+void VM_ScriptingEngineDebuggerFlushLogs(void) {
+    scriptingEngineDebuggerFlushLogs();
+}
+
+/* Function used to process debugger commands sent by the client.
+ *
+ * This function in conjunction with `ValkeyModule_ScriptingEngineDebuggerLog` and
+ * `ValkeyModule_ScriptingEngineDebuggerFlushLogs` allows to implement an
+ * interactive debugging session for scripts executed by the scripting engine.
+ */
+void VM_ScriptingEngineDebuggerProcessCommands(int *client_disconnected,
+                                               ValkeyModuleString **err) {
+    scriptingEngineDebuggerProcessCommands(client_disconnected, err);
 }
 
 /* MODULE command.
@@ -13445,7 +13739,7 @@ size_t moduleCount(void) {
  * returns VALKEYMODULE_OK if the LRU was updated, VALKEYMODULE_ERR otherwise. */
 int VM_SetLRU(ValkeyModuleKey *key, mstime_t lru_idle) {
     if (!key->value) return VALKEYMODULE_ERR;
-    if (objectSetLRUOrLFU(key->value, -1, lru_idle, lru_idle >= 0 ? LRU_CLOCK() : 0, 1)) return VALKEYMODULE_OK;
+    if (objectSetLRUOrLFU(key->value, -1, lru_idle * 1000)) return VALKEYMODULE_OK;
     return VALKEYMODULE_ERR;
 }
 
@@ -13457,7 +13751,7 @@ int VM_GetLRU(ValkeyModuleKey *key, mstime_t *lru_idle) {
     *lru_idle = -1;
     if (!key->value) return VALKEYMODULE_ERR;
     if (server.maxmemory_policy & MAXMEMORY_FLAG_LFU) return VALKEYMODULE_OK;
-    *lru_idle = estimateObjectIdleTime(key->value);
+    *lru_idle = objectGetLRUIdleSecs(key->value) * 1000;
     return VALKEYMODULE_OK;
 }
 
@@ -13468,7 +13762,7 @@ int VM_GetLRU(ValkeyModuleKey *key, mstime_t *lru_idle) {
  * returns VALKEYMODULE_OK if the LFU was updated, VALKEYMODULE_ERR otherwise. */
 int VM_SetLFU(ValkeyModuleKey *key, long long lfu_freq) {
     if (!key->value) return VALKEYMODULE_ERR;
-    if (objectSetLRUOrLFU(key->value, lfu_freq, -1, 0, 1)) return VALKEYMODULE_OK;
+    if (objectSetLRUOrLFU(key->value, lfu_freq, -1)) return VALKEYMODULE_OK;
     return VALKEYMODULE_ERR;
 }
 
@@ -13478,7 +13772,7 @@ int VM_SetLFU(ValkeyModuleKey *key, long long lfu_freq) {
 int VM_GetLFU(ValkeyModuleKey *key, long long *lfu_freq) {
     *lfu_freq = -1;
     if (!key->value) return VALKEYMODULE_ERR;
-    if (server.maxmemory_policy & MAXMEMORY_FLAG_LFU) *lfu_freq = LFUDecrAndReturn(key->value);
+    if (lrulfu_isUsingLFU()) *lfu_freq = objectGetLFUFrequency(key->value);
     return VALKEYMODULE_OK;
 }
 
@@ -13867,6 +14161,43 @@ int VM_GetDbIdFromDefragCtx(ValkeyModuleDefragCtx *ctx) {
     return ctx->dbid;
 }
 
+/* This function verifies that the user is authorized to carry out the operations indicated in the
+ * `flags` parameter on keys that begin with the specified prefix.
+ *
+ * This function validates that the supplied ACL flags are a subset of the allowed key‑access flags
+ * (`VALKEYMODULE_CMD_KEY_ACCESS`,`VALKEYMODULE_CMD_KEY_INSERT`, `VALKEYMODULE_CMD_KEY_DELETE`,
+ * `VALKEYMODULE_CMD_KEY_UPDATE`). It then converts the flags into key‑specification flags (`CMD_KEY_*`) and calls
+ * `ACLUserCheckKeyPerm` to ensure the user has permission for the specified key prefix.
+ *
+ * If any check fails, returns `VALKEYMODULE_ERR` and sets `errno` to the appropriate error code:
+ *
+ * - `EINVAL` for invalid flags or NULL user
+ * - `EACCES` for insufficient permissions
+ *
+ *  Otherwise it returns `VALKEYMODULE_OK`.
+ */
+int VM_ACLCheckKeyPrefixPermissions(ValkeyModuleUser *user, const char *key, size_t len, unsigned int flags) {
+    const int allow_mask = (VALKEYMODULE_CMD_KEY_ACCESS | VALKEYMODULE_CMD_KEY_INSERT | VALKEYMODULE_CMD_KEY_DELETE | VALKEYMODULE_CMD_KEY_UPDATE);
+
+    if (user == NULL) {
+        errno = EINVAL;
+        return VALKEYMODULE_ERR;
+    }
+
+    if ((flags & allow_mask) != flags) {
+        errno = EINVAL;
+        return VALKEYMODULE_ERR;
+    }
+
+    int keyspec_flags = moduleConvertKeySpecsFlags(flags, 0);
+    if (ACLUserCheckKeyPerm(user->user, key, len, keyspec_flags, true) != ACL_OK) {
+        errno = EACCES;
+        return VALKEYMODULE_ERR;
+    }
+
+    return VALKEYMODULE_OK;
+}
+
 /* Register all the APIs we export. Keep this function at the end of the
  * file so that's easy to seek it to add new entries. */
 void moduleRegisterCoreAPI(void) {
@@ -13893,6 +14224,7 @@ void moduleRegisterCoreAPI(void) {
     REGISTER_API(ReplyWithLongLong);
     REGISTER_API(ReplyWithError);
     REGISTER_API(ReplyWithErrorFormat);
+    REGISTER_API(ReplyWithCustomErrorFormat);
     REGISTER_API(ReplyWithSimpleString);
     REGISTER_API(ReplyWithArray);
     REGISTER_API(ReplyWithMap);
@@ -14235,4 +14567,10 @@ void moduleRegisterCoreAPI(void) {
     REGISTER_API(RegisterScriptingEngine);
     REGISTER_API(UnregisterScriptingEngine);
     REGISTER_API(GetFunctionExecutionState);
+    REGISTER_API(ScriptingEngineDebuggerLog);
+    REGISTER_API(ScriptingEngineDebuggerLogRespReplyStr);
+    REGISTER_API(ScriptingEngineDebuggerLogRespReply);
+    REGISTER_API(ScriptingEngineDebuggerFlushLogs);
+    REGISTER_API(ScriptingEngineDebuggerProcessCommands);
+    REGISTER_API(ACLCheckKeyPrefixPermissions);
 }

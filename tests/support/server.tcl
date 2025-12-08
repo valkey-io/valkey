@@ -268,6 +268,11 @@ proc tags_acceptable {tags err_return} {
         return 0
     }
 
+    if {[lsearch $tags "ipv6"] >= 0 && ![is_ipv6_available]} {
+        set err "IPv6 not available on this system"
+        return 0
+    }
+
     return 1
 }
 
@@ -524,11 +529,11 @@ proc start_server {options {code undefined}} {
 
     if {$start_other_server} {
         set executable $::other_server_path
-        if {![file executable $executable]} {
-            error "File not found or not executable: $executable"
-        }
     } else {
-        set executable "src/valkey-server"
+        set executable $::VALKEY_SERVER_BIN
+    }
+    if {![file executable $executable]} {
+        error "Server executable file not found or not executable: $executable"
     }
 
     set data [split [exec cat "tests/assets/$baseconfig"] "\n"]
@@ -726,6 +731,7 @@ proc start_server {options {code undefined}} {
         if {[catch { uplevel 1 $code } error]} {
             set backtrace $::errorInfo
             set assertion [string match "assertion:*" $error]
+            set skip [string match "skipped:*" $error]
 
             # fetch srv back from the server list, in case it was restarted by restart_server (new PID)
             set srv [lindex $::servers end]
@@ -737,7 +743,9 @@ proc start_server {options {code undefined}} {
             dict set srv "skipleaks" 1
             kill_server $srv
 
-            if {$::dump_logs} {
+            if {$skip} {
+                # The test is just skipped. No error.
+            } elseif {$::dump_logs} {
                 # crash or assertion ($::num_failed isn't incremented yet)
                 # this happens when the test spawns a server and not the other way around
                 dump_server_log $srv
@@ -758,7 +766,7 @@ proc start_server {options {code undefined}} {
                 }
             }
 
-            if {!$assertion && $::durable} {
+            if {!$assertion && !$skip && $::durable} {
                 # durable is meant to prevent the whole tcl test from exiting on
                 # an exception. an assertion will be caught by the test proc.
                 set msg [string range $error 10 end]

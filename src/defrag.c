@@ -266,12 +266,11 @@ static void activeDefragZsetNode(void *privdata, void *entry_ref) {
     zskiplistNode **node_ref = (zskiplistNode **)entry_ref;
     zskiplistNode *node = *node_ref;
 
-    /* defragment node internals */
-    sds newsds = activeDefragSds(node->ele);
-    if (newsds) node->ele = newsds;
+    size_t allocation_size;
+    zskiplistNode *newnode = activeDefragAllocWithoutFree(node, &allocation_size);
+    if (newnode == NULL) return;
 
     const double score = node->score;
-    const sds ele = node->ele;
 
     /* find skiplist pointers that need to be updated if we end up moving the
      * skiplist node. */
@@ -283,7 +282,7 @@ static void activeDefragZsetNode(void *privdata, void *entry_ref) {
         zskiplistNode *next = x->level[i].forward;
         while (next &&
                (next->score < score ||
-                (next->score == score && sdscmp(next->ele, ele) < 0))) {
+                (next->score == score && next != node))) {
             x = next;
             next = x->level[i].forward;
         }
@@ -292,12 +291,9 @@ static void activeDefragZsetNode(void *privdata, void *entry_ref) {
     /* should have arrived at intended node */
     serverAssert(x->level[0].forward == node);
 
-    /* try to defrag the skiplist record itself */
-    zskiplistNode *newnode = activeDefragAlloc(node);
-    if (newnode) {
-        zslUpdateNode(zsl, node, newnode, update);
-        *node_ref = newnode; /* update hashtable pointer */
-    }
+    zslUpdateNode(zsl, node, newnode, update);
+    *node_ref = newnode; /* update hashtable pointer */
+    allocatorDefragFree(node, allocation_size);
 }
 
 #define DEFRAG_SDS_DICT_NO_VAL 0
@@ -775,7 +771,7 @@ static void defragPubsubScanCallback(void *privdata, void *elemref) {
             bool replaced = hashtableReplaceReallocatedEntry(client_channels, channel, newchannel);
             serverAssert(replaced);
         }
-        hashtableResetIterator(&iter);
+        hashtableCleanupIterator(&iter);
     }
 
     /* Try to defrag the dictionary of clients that is stored as the value part. */
@@ -822,7 +818,7 @@ static doneStatus defragLaterStep(monotime endtime, void *privdata) {
     defragKeysCtx *ctx = privdata;
 
     unsigned int iterations = 0;
-    unsigned long long prev_defragged = server.stat_active_defrag_hits;
+    long long prev_defragged = server.stat_active_defrag_hits;
     unsigned long long prev_scanned = server.stat_active_defrag_scanned;
 
     while (defrag_later && listLength(defrag_later) > 0) {
@@ -847,7 +843,7 @@ static doneStatus defragLaterStep(monotime endtime, void *privdata) {
             listDelNode(defrag_later, head);
         }
 
-        if (++iterations > 16 || server.stat_active_defrag_hits - prev_defragged > 512 ||
+        if (++iterations > 16 || server.stat_active_defrag_hits > prev_defragged ||
             server.stat_active_defrag_scanned - prev_scanned > 64) {
             if (getMonotonicUs() > endtime) break;
             iterations = 0;
@@ -882,7 +878,7 @@ static doneStatus defragStageKvstoreHelper(monotime endtime,
     }
 
     unsigned int iterations = 0;
-    unsigned long long prev_defragged = server.stat_active_defrag_hits;
+    long long prev_defragged = server.stat_active_defrag_hits;
     unsigned long long prev_scanned = server.stat_active_defrag_scanned;
 
     if (state.slot == KVS_SLOT_DEFRAG_LUT) {
@@ -895,7 +891,7 @@ static doneStatus defragStageKvstoreHelper(monotime endtime,
     }
 
     while (true) {
-        if (++iterations > 16 || server.stat_active_defrag_hits - prev_defragged > 512 || server.stat_active_defrag_scanned - prev_scanned > 64) {
+        if (++iterations > 16 || server.stat_active_defrag_hits > prev_defragged || server.stat_active_defrag_scanned - prev_scanned > 64) {
             if (getMonotonicUs() >= endtime) break;
             iterations = 0;
             prev_defragged = server.stat_active_defrag_hits;

@@ -60,6 +60,9 @@
 #if HAVE_X86_SIMD
 #include <immintrin.h>
 #endif
+#if HAVE_ARM_NEON
+#include <arm_neon.h>
+#endif
 
 /* The default hashing function uses the SipHash implementation in siphash.c. */
 
@@ -281,6 +284,9 @@ typedef struct hashtableBucket {
 /* A key property is that the bucket size is one cache line. */
 static_assert(sizeof(bucket) == HASHTABLE_BUCKET_SIZE, "Bucket size mismatch");
 
+/* Forward declaration for iter type */
+typedef struct iter iter;
+
 struct hashtable {
     hashtableType *type;
     ssize_t rehash_idx;        /* -1 = rehashing not in progress. */
@@ -290,10 +296,11 @@ struct hashtable {
     int16_t pause_rehash;      /* Non-zero = rehashing is paused */
     int16_t pause_auto_shrink; /* Non-zero = automatic resizing disallowed. */
     size_t child_buckets[2];   /* Number of allocated child buckets. */
+    iter *safe_iterators;      /* Head of linked list of safe iterators */
     void *metadata[];
 };
 
-typedef struct {
+struct iter {
     hashtable *hashtable;
     bucket *bucket;
     long index;
@@ -306,7 +313,8 @@ typedef struct {
         /* Safe iterator temporary storage for bucket chain compaction. */
         uint64_t last_seen_size;
     };
-} iter;
+    iter *next_safe_iter; /* Next safe iterator in hashtable's list */
+};
 
 /* The opaque hashtableIterator is defined as a blob of bytes. */
 static_assert(sizeof(hashtableIterator) >= sizeof(iter),
@@ -719,6 +727,38 @@ static int findKeyInBucketSSE2(hashtable *ht, bucket *b, uint8_t h2, const void 
 }
 #endif
 
+#if HAVE_ARM_NEON && ENTRIES_PER_BUCKET <= 8
+/* 32 bit architectures would require a different implementation
+ * consider that even if they had Neon SIMD support,
+ * they have 12 entries per bucket and only 32-bit scalar registers */
+
+static inline int popMatchBitmask(uint64_t *mask) {
+    /* one byte (8 bits) per item - either 0x80 or 0x00 */
+    int pos = __builtin_ctzll(*mask) >> 3;
+    *mask &= (*mask - 1); /* clear lowest set bit */
+    return pos;
+}
+
+static int findKeyInBucketNeon(hashtable *ht, bucket *b, uint8_t h2, const void *key, int table, int *pos_in_bucket, int *table_index) {
+    const uint8x8_t hash_vector = vld1_u8(b->hashes);             /* simple load */
+    const uint8x8_t h2_vector = vdup_n_u8(h2);                    /* duplicated into every byte */
+    const uint8x8_t equal_mask = vceq_u8(hash_vector, h2_vector); /* compare: 8 bits per item, 0xFF or 0x00 */
+    uint64_t matches = vget_lane_u64(vreinterpret_u64_u8(equal_mask), 0);
+
+    /* reduce each match to one bit and zero out invalid positions */
+    const uint64_t valid_entry_mask = (1ul << (ENTRIES_PER_BUCKET << 3)) - 1ul;
+    matches = matches & 0x8080808080808080ul & valid_entry_mask;
+
+    while (matches) {
+        int pos = popMatchBitmask(&matches);
+        if ((b->presence & (1 << pos)) &&
+            checkCandidateInBucket(ht, b, pos, key, table, pos_in_bucket, table_index))
+            return 1;
+    }
+    return 0; /* No match */
+}
+#endif
+
 /* Finds an entry matching the key. If a match is found, returns a pointer to
  * the bucket containing the matching entry and points 'pos_in_bucket' to the
  * index within the bucket. Returns NULL if no matching entry was found.
@@ -746,6 +786,8 @@ static bucket *findBucket(hashtable *ht, uint64_t hash, const void *key, int *po
 #if HAVE_X86_SIMD
             /* All x86-64 CPUs have SSE2. */
             if (findKeyInBucketSSE2(ht, b, h2, key, table, pos_in_bucket, table_index)) return b;
+#elif HAVE_ARM_NEON && ENTRIES_PER_BUCKET <= 8
+            if (findKeyInBucketNeon(ht, b, h2, key, table, pos_in_bucket, table_index)) return b;
 #else
             /* Find candidate entries with presence flag set and matching h2 hash. */
             for (int pos = 0; pos < numBucketPositions(b); pos++) {
@@ -1047,6 +1089,37 @@ static inline int shouldPrefetchValues(iter *iter) {
     return (iter->flags & HASHTABLE_ITER_PREFETCH_VALUES);
 }
 
+/* Add a safe iterator to the hashtable's tracking list */
+static void trackSafeIterator(iter *it) {
+    assert(it->next_safe_iter == NULL);
+    hashtable *ht = it->hashtable;
+    it->next_safe_iter = ht->safe_iterators;
+    ht->safe_iterators = it;
+}
+
+/* Remove a safe iterator from the hashtable's tracking list */
+static void untrackSafeIterator(iter *it) {
+    hashtable *ht = it->hashtable;
+    if (ht->safe_iterators == it) {
+        ht->safe_iterators = it->next_safe_iter;
+    } else {
+        iter *current = ht->safe_iterators;
+        assert(current != NULL);
+        while (current->next_safe_iter != it) {
+            current = current->next_safe_iter;
+            assert(current != NULL);
+        }
+        current->next_safe_iter = it->next_safe_iter;
+    }
+    it->next_safe_iter = NULL;
+    it->hashtable = NULL; /* Mark as invalid */
+}
+
+/* Invalidate all safe iterators by setting hashtable = NULL */
+static void invalidateAllSafeIterators(hashtable *ht) {
+    while (ht->safe_iterators) untrackSafeIterator(ht->safe_iterators);
+}
+
 /* --- API functions --- */
 
 /* Allocates and initializes a new hashtable specified by the given type. */
@@ -1061,6 +1134,7 @@ hashtable *hashtableCreate(hashtableType *type) {
     ht->rehash_idx = -1;
     ht->pause_rehash = 0;
     ht->pause_auto_shrink = 0;
+    ht->safe_iterators = NULL;
     resetTable(ht, 0);
     resetTable(ht, 1);
     if (type->trackMemUsage) type->trackMemUsage(ht, alloc_size);
@@ -1116,6 +1190,7 @@ void hashtableEmpty(hashtable *ht, void(callback)(hashtable *)) {
 
 /* Deletes all the entries and frees the table. */
 void hashtableRelease(hashtable *ht) {
+    invalidateAllSafeIterators(ht);
     hashtableEmpty(ht, NULL);
     /* Call trackMemUsage before zfree, so trackMemUsage can access ht. */
     if (ht->type->trackMemUsage) {
@@ -1194,14 +1269,19 @@ void hashtableResumeAutoShrink(hashtable *ht) {
 
 /* Pauses incremental rehashing. When rehashing is paused, bucket chains are not
  * automatically compacted when entries are deleted. Doing so may leave empty
- * spaces, "holes", in the bucket chains, which wastes memory. */
+ * spaces, "holes", in the bucket chains, which wastes memory. Additionally, we
+ * pause auto shrink when rehashing is paused, meaning the hashtable will not
+ * shrink the bucket count. */
 static void hashtablePauseRehashing(hashtable *ht) {
     ht->pause_rehash++;
+    hashtablePauseAutoShrink(ht);
 }
 
 /* Resumes incremental rehashing, after pausing it. */
 static void hashtableResumeRehashing(hashtable *ht) {
     ht->pause_rehash--;
+    assert(ht->pause_rehash >= 0);
+    hashtableResumeAutoShrink(ht);
 }
 
 /* Returns true if incremental rehashing is paused, false if it isn't. */
@@ -1593,6 +1673,9 @@ void hashtableTwoPhasePopDelete(hashtable *ht, hashtablePosition *pos) {
     assert(isPositionFilled(b, pos_in_bucket));
     b->presence &= ~(1 << pos_in_bucket);
     ht->used[table_index]--;
+    /* When we resume rehashing, it may cause the bucket to be deleted due to
+     * auto shrink. */
+    hashtablePauseAutoShrink(ht);
     hashtableResumeRehashing(ht);
     if (b->chained && !hashtableIsRehashingPaused(ht)) {
         /* Rehashing paused also means bucket chain compaction paused. It is
@@ -1601,7 +1684,7 @@ void hashtableTwoPhasePopDelete(hashtable *ht, hashtablePosition *pos) {
          * we do the compaction in the scan and iterator code instead. */
         fillBucketHole(ht, b, pos_in_bucket, table_index);
     }
-    hashtableShrinkIfNeeded(ht);
+    hashtableResumeAutoShrink(ht);
 }
 
 /* Initializes the state for an incremental find operation.
@@ -1779,7 +1862,6 @@ size_t hashtableScanDefrag(hashtable *ht, size_t cursor, hashtableScanFunction f
     /* Prevent entries from being moved around during the scan call, as a
      * side-effect of the scan callback. */
     hashtablePauseRehashing(ht);
-    hashtablePauseAutoShrink(ht);
 
     /* Flags. */
     int emit_ref = (flags & HASHTABLE_SCAN_EMIT_REF);
@@ -1891,7 +1973,6 @@ size_t hashtableScanDefrag(hashtable *ht, size_t cursor, hashtableScanFunction f
         } while (cursor & (mask_small ^ mask_large));
     }
     hashtableResumeRehashing(ht);
-    hashtableResumeAutoShrink(ht);
     return cursor;
 }
 
@@ -1920,7 +2001,9 @@ size_t hashtableScanDefrag(hashtable *ht, size_t cursor, hashtableScanFunction f
  * rehashing to prevent entries from moving around. It's allowed to insert and
  * replace entries. Deleting entries is only allowed for the entry that was just
  * returned by hashtableNext. Deleting other entries is possible, but doing so
- * can cause internal fragmentation, so don't.
+ * can cause internal fragmentation, so don't. The hash table itself can be
+ * safely deleted while safe iterators exist - they will be invalidated and
+ * subsequent calls to hashtableNext will return false.
  *
  * Guarantees for safe iterators:
  *
@@ -1936,7 +2019,7 @@ size_t hashtableScanDefrag(hashtable *ht, size_t cursor, hashtableScanFunction f
  * - Entries that are inserted during the iteration may or may not be returned
  *   by the iterator.
  *
- * Call hashtableNext to fetch each entry. You must call hashtableResetIterator
+ * Call hashtableNext to fetch each entry. You must call hashtableCleanupIterator
  * when you are done with the iterator.
  */
 void hashtableInitIterator(hashtableIterator *iterator, hashtable *ht, uint8_t flags) {
@@ -1946,22 +2029,31 @@ void hashtableInitIterator(hashtableIterator *iterator, hashtable *ht, uint8_t f
     iter->table = 0;
     iter->index = -1;
     iter->flags = flags;
+    iter->next_safe_iter = NULL;
+    if (isSafe(iter) && ht != NULL) {
+        trackSafeIterator(iter);
+    }
 }
 
-/* Reinitializes the iterator for the provided hashtable while
- * preserving the flags from its previous initialization. */
-void hashtableReinitIterator(hashtableIterator *iterator, hashtable *ht) {
+/* Reinitializes the iterator to begin a new iteration of the provided hashtable
+ * while preserving the flags from its previous initialization. */
+void hashtableRetargetIterator(hashtableIterator *iterator, hashtable *ht) {
     iter *iter = iteratorFromOpaque(iterator);
-    hashtableInitIterator(iterator, ht, iter->flags);
+    uint8_t flags = iter->flags;
+
+    hashtableCleanupIterator(iterator);
+    hashtableInitIterator(iterator, ht, flags);
 }
 
-/* Resets a stack-allocated iterator. */
-void hashtableResetIterator(hashtableIterator *iterator) {
+/* Performs required cleanup for a stack-allocated iterator. */
+void hashtableCleanupIterator(hashtableIterator *iterator) {
     iter *iter = iteratorFromOpaque(iterator);
+    if (iter->hashtable == NULL) return;
+
     if (!(iter->index == -1 && iter->table == 0)) {
         if (isSafe(iter)) {
             hashtableResumeRehashing(iter->hashtable);
-            assert(iter->hashtable->pause_rehash >= 0);
+            untrackSafeIterator(iter);
         } else {
             assert(iter->fingerprint == hashtableFingerprint(iter->hashtable));
         }
@@ -1979,7 +2071,7 @@ hashtableIterator *hashtableCreateIterator(hashtable *ht, uint8_t flags) {
 /* Resets and frees the memory of an allocated iterator, i.e. one created using
  * hashtableCreate(Safe)Iterator. */
 void hashtableReleaseIterator(hashtableIterator *iterator) {
-    hashtableResetIterator(iterator);
+    hashtableCleanupIterator(iterator);
     iter *iter = iteratorFromOpaque(iterator);
     zfree(iter);
 }
@@ -1988,6 +2080,9 @@ void hashtableReleaseIterator(hashtableIterator *iterator) {
  * Returns false if there are no more entries. */
 bool hashtableNext(hashtableIterator *iterator, void **elemptr) {
     iter *iter = iteratorFromOpaque(iterator);
+    /* Check if iterator has been invalidated */
+    if (iter->hashtable == NULL) return false;
+
     while (1) {
         if (iter->index == -1 && iter->table == 0) {
             /* It's the first call to next. */

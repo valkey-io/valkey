@@ -12,7 +12,7 @@ Most of the style guidelines are enforced by clang format, but some additional c
 ## Naming conventions
 Valkey has a long history of inconsistent naming conventions. Generally follow the style of the surrounding code, but you can also always use the following conventions for variable and structure names:
 
-- Variable names: `snake_case` or all lower case (e.g. `valkeyobject` or `valkey_object`)
+- Variable names: `snake_case` or all lower case for short names  (e.g. `valkey_object` or `keylen`)
 - Function names: `camelCase` or `namespace_camelCase` (e.g. `createObjectList` or `networking_createObjectList`).
 - Macros: `UPPER_CASE` (e.g. `DICT_CREATE`)
 - Structures: `camelCase` (e.g. `user`)

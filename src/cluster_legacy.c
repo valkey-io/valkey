@@ -1060,8 +1060,8 @@ void clusterSaveConfigOrDie(int do_fsync) {
 /* Save the cluster configuration file. If the save fails, print the log. */
 void clusterSaveConfigOrLog(int do_fsync) {
     if (clusterSaveConfig(do_fsync) == C_ERR) {
-        serverLog(LL_WARNING, "Cluster config file is applying a change even though "
-                              "it is unable to write to disk.");
+        serverLog(LL_WARNING, "Cluster config updated even though writing "
+                              "the cluster config file to disk failed.");
     }
 }
 

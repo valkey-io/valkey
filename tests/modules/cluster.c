@@ -9,7 +9,13 @@ void cluster_timer_handler(ValkeyModuleCtx *ctx, void *data) {
     ValkeyModuleCallReply *rep = ValkeyModule_Call(ctx, "CLUSTER", "c", "SLOTS");
 
     if (rep) {
-        ValkeyModule_Log(ctx, "notice", "Timer: CLUSTER SLOTS success");
+        if (ValkeyModule_CallReplyType(rep) == VALKEYMODULE_REPLY_ARRAY) {
+            ValkeyModule_Log(ctx, "notice", "Timer: CLUSTER SLOTS success");
+        } else {
+            ValkeyModule_Log(ctx, "notice",
+                             "Timer: CLUSTER SLOTS unexpected reply type %d",
+                             ValkeyModule_CallReplyType(rep));
+        }
         ValkeyModule_FreeCallReply(rep);
     } else {
         ValkeyModule_Log(ctx, "warning", "Timer: CLUSTER SLOTS failed");

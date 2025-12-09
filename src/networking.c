@@ -4190,8 +4190,8 @@ int isClientConnIpV6(client *c) {
 
     if (c->flag.fake || !c->conn) {
         /* If we still don't have a client with a real connection (e.g., called
-        * from module timer with no real current client), default to IPv4 to
-        * avoid crashing. */
+         * from module timer with no real current client), default to IPv4 to
+         * avoid crashing. */
         return 0;
     }
 

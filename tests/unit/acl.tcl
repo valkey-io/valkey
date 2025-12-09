@@ -1364,4 +1364,26 @@ start_server [list overrides [list "dir" $server_path "aclfile" "user.acl"] tags
             $replica AUTH joe anything
         }
     }
+
+    test {ACL cleanup stale command rules on module unload} {
+        # Load the test module that registers a command with subcommands
+        set module_path [file normalize tests/modules/subcommands.so]
+        r MODULE LOAD $module_path
+
+        # Create a user with an ACL entry referencing the module subcommand
+        r ACL SETUSER testuser on nopass +subcommands.bitarray|set
+        set user_before [r ACL GETUSER testuser]
+        # The user commands string may include the implicit -@all prefix;
+        # check that the subcommand rule we added is present instead of
+        # asserting exact equality.
+        assert {[string first "+subcommands.bitarray|set" [dict get $user_before commands]] >= 0}
+
+        # Unload the module, this triggers ACLCleanupStaleCommandRulesAllUsers()
+        r MODULE UNLOAD subcommands
+
+        # After unload the module command is removed, ACL rules should be cleaned
+        set user_after [r ACL GETUSER testuser]
+        # After cleanup the user should have only the default -@all command rule
+        assert {[dict get $user_after commands] eq "-@all"}
+    }
 }

@@ -3265,6 +3265,7 @@ sds getAclErrorMessage(int acl_res, user *user, struct serverCommand *cmd, sds e
 void ACLUpdateDefaultUserPassword(sds password);
 sds genValkeyInfoStringACLStats(sds info);
 void ACLRecomputeCommandBitsFromCommandRulesAllUsers(void);
+void ACLCleanupStaleCommandRulesAllUsers(void);
 
 /* Sorted sets data type */
 

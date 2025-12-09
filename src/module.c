@@ -12753,6 +12753,7 @@ void moduleUnregisterCleanup(ValkeyModule *module) {
     moduleUnsubscribeAllServerEvents(module);
     moduleRemoveConfigs(module);
     moduleUnregisterAuthCBs(module);
+    ACLCleanupStaleCommandRulesAllUsers();
 }
 
 /* Load a module and initialize it. On success C_OK is returned, otherwise

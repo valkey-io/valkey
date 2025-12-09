@@ -4194,11 +4194,17 @@ int isClientConnIpV6(client *c) {
     /* The cached client peer id is on the form "[IPv6]:port" for IPv6
      * addresses, so we just check for '[' here. */
     if (c->flag.fake && server.current_client) {
-        /* Fake client? Use current client instead.
-         * Noted that in here we are assuming server.current_client is set
-         * and real (aof has already violated this in loadSingleAppendOnlyFil). */
+        /* Fake client? Use current client instead, if we have one. */
         c = server.current_client;
     }
+
+    if (c->flag.fake || !c->conn) {
+        /* If we still don't have a client with a real connection (e.g., called
+         * from module timer with no real current client), default to IPv4 to
+         * avoid crashing. */
+        return 0;
+    }
+
     return getClientPeerId(c)[0] == '[';
 }
 

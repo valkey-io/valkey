@@ -322,7 +322,8 @@ int geoGetPointsInRange(robj *zobj, double min, double max, GeoShape *shape, geo
             if (!zslValueLteMax(ln->score, &range)) break;
             if (geoWithinShape(shape, ln->score, xy, &distance) == C_OK) {
                 /* Append the new element. */
-                geoArrayAppend(ga, xy, distance, ln->score, sdsdup(ln->ele));
+                sds ele = zslGetNodeElement(ln);
+                geoArrayAppend(ga, xy, distance, ln->score, sdsdup(ele));
             }
             if (ga->used && limit && ga->used >= limit) break;
             ln = ln->level[0].forward;
@@ -476,7 +477,7 @@ void geoaddCommand(client *c) {
     int elements = (c->argc - longidx) / 3;
     int argc = longidx + elements * 2; /* ZADD key [CH] [NX|XX] score ele ... */
     robj **argv = zcalloc(argc * sizeof(robj *));
-    argv[0] = createRawStringObject("zadd", 4);
+    argv[0] = shared.zadd;
     for (i = 1; i < longidx; i++) {
         argv[i] = c->argv[i];
         incrRefCount(argv[i]);
@@ -825,6 +826,7 @@ void georadiusGeneric(client *c, int srcKeyIndex, int flags) {
             totelelen += elelen;
             znode = zslInsert(zs->zsl, score, gp->member);
             serverAssert(hashtableAdd(zs->ht, znode));
+            sdsfree(gp->member);
             gp->member = NULL;
         }
 

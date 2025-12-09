@@ -20,6 +20,9 @@
             "description": "The hash slot number for the specified key",
             "type": "integer",
             "minimum": 0
-        }
+        },
+        "acl_categories": [
+            "SLOW"
+        ]
     }
 }

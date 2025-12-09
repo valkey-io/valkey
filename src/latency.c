@@ -547,7 +547,7 @@ void latencyAllCommandsFillCDF(client *c, hashtable *commands, int *command_with
             latencyAllCommandsFillCDF(c, cmd->subcommands_ht, command_with_data);
         }
     }
-    hashtableResetIterator(&iter);
+    hashtableCleanupIterator(&iter);
 }
 
 /* latencyCommand() helper to produce for a specific command set,
@@ -580,7 +580,7 @@ void latencySpecificCommandsFillCDF(client *c) {
                     command_with_data++;
                 }
             }
-            hashtableResetIterator(&iter);
+            hashtableCleanupIterator(&iter);
         }
     }
     setDeferredMapLen(c, replylen, command_with_data);

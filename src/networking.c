@@ -39,6 +39,7 @@
 #include "io_threads.h"
 #include "module.h"
 #include "connection.h"
+#include "zmalloc.h"
 #include <strings.h>
 #include <sys/socket.h>
 #include <sys/uio.h>
@@ -179,16 +180,22 @@ size_t getStringObjectLen(robj *o) {
     }
 }
 
+/* Actual allocated size of a client reply block */
+static size_t clientReplyAllocSize(clientReplyBlock *block) {
+    return sizeof(clientReplyBlock) + block->size;
+}
+
 /* Client.reply list dup and free methods. */
 void *dupClientReplyValue(void *o) {
-    clientReplyBlock *old = o;
-    clientReplyBlock *buf = zmalloc(sizeof(clientReplyBlock) + old->size);
-    memcpy(buf, o, sizeof(clientReplyBlock) + old->size);
+    size_t bufsize = clientReplyAllocSize((clientReplyBlock *)o);
+    clientReplyBlock *buf = zmalloc(bufsize);
+    memcpy(buf, o, bufsize);
     return buf;
 }
 
 void freeClientReplyValue(void *o) {
-    zfree(o);
+    if (!o) return;
+    zfree_with_size(o, clientReplyAllocSize((clientReplyBlock *)o));
 }
 
 /* This function links the client to the global linked list of clients.
@@ -811,7 +818,7 @@ void afterErrorReply(client *c, const char *s, size_t len, int flags) {
         char *err_prefix = "ERR";
         size_t prefix_len = 3;
         if (s[0] == '-') {
-            char *spaceloc = memchr(s, ' ', len < 32 ? len : 32);
+            const char *spaceloc = memchr(s, ' ', len < 32 ? len : 32);
             /* If we cannot retrieve the error prefix, use the default: "ERR". */
             if (spaceloc) {
                 const size_t errEndPos = (size_t)(spaceloc - s);
@@ -1391,7 +1398,17 @@ static int tryAvoidBulkStrCopyToReply(client *c, robj *obj) {
 
 /* Add an Object as a bulk reply */
 void addReplyBulk(client *c, robj *obj) {
-    if (tryAvoidBulkStrCopyToReply(c, obj) == C_OK) return;
+    if (tryAvoidBulkStrCopyToReply(c, obj) == C_OK) {
+        /* If copy avoidance allowed, then we explicitly maintain net_output_bytes_curr_cmd. */
+        serverAssert(obj->encoding == OBJ_ENCODING_RAW);
+        size_t str_len = sdslen(obj->ptr);
+        uint32_t num_len = digits10(str_len);
+        /* RESP encodes bulk strings as $<length>\r\n<data>\r\n */
+        c->net_output_bytes_curr_cmd += (num_len + 3); /* $<length>\r\n */
+        c->net_output_bytes_curr_cmd += str_len;       /* <data> */
+        c->net_output_bytes_curr_cmd += 2;             /* \r\n */
+        return;
+    }
     addReplyBulkLen(c, obj);
     addReply(c, obj);
     addReplyProto(c, "\r\n", 2);
@@ -1883,8 +1900,7 @@ void unlinkClient(client *c) {
          * snapshot child may take some time to die, during which the migration will continue past
          * the snapshot state. */
         if (c->repl_data && server.rdb_pipe_conns &&
-            ((c->flag.replica && c->repl_data->repl_state == REPLICA_STATE_WAIT_BGSAVE_END) ||
-             (c->slot_migration_job && !isImportSlotMigrationJob(c->slot_migration_job)))) {
+            ((c->flag.replica && c->repl_data->repl_state == REPLICA_STATE_WAIT_BGSAVE_END))) {
             int i;
             int still_alive = 0;
             for (i = 0; i < server.rdb_pipe_numconns; i++) {
@@ -1895,13 +1911,17 @@ void unlinkClient(client *c) {
                 if (server.rdb_pipe_conns[i]) still_alive++;
             }
             if (still_alive == 0) {
-                if (c->slot_migration_job && !isImportSlotMigrationJob(c->slot_migration_job)) {
-                    serverLog(LL_NOTICE, "Slot migration snapshot, migration target dropped, killing fork child.");
-                } else {
-                    serverLog(LL_NOTICE, "Diskless rdb transfer, last replica dropped, killing fork child.");
-                }
+                serverLog(LL_NOTICE, "Diskless rdb transfer, last replica dropped, killing fork child.");
                 killRDBChild();
             }
+        }
+        /* Check if this is the slot migration client we are writing to in a
+         * child process*/
+        if (c->slot_migration_job && !isImportSlotMigrationJob(c->slot_migration_job) &&
+            server.slot_migration_pipe_conn == c->conn) {
+            server.slot_migration_pipe_conn = NULL;
+            serverLog(LL_NOTICE, "Slot migration target dropped, killing fork child.");
+            killSlotMigrationChild();
         }
         /* Only use shutdown when the fork is active and we are the parent. */
         if (server.child_type && !c->flag.repl_rdb_channel) {
@@ -4212,6 +4232,8 @@ sds catClientInfoString(sds s, client *client, int hide_user_data) {
     if (client->flag.no_evict) *p++ = 'e';
     if (client->flag.no_touch) *p++ = 'T';
     if (client->flag.import_source) *p++ = 'I';
+    if (client->slot_migration_job && isImportSlotMigrationJob(client->slot_migration_job)) *p++ = 'i';
+    if (client->slot_migration_job && !isImportSlotMigrationJob(client->slot_migration_job)) *p++ = 'E';
     if (p == flags) *p++ = 'N';
     *p++ = '\0';
 
@@ -4575,6 +4597,10 @@ static int parseClientFiltersOrReply(client *c, int index, clientFilter *filter)
             filter->idle = idle_time;
             index += 2;
         } else if (!strcasecmp(c->argv[index]->ptr, "flags") && moreargs) {
+            if (filter->flags) {
+                sdsfree(filter->flags);
+                filter->flags = NULL;
+            }
             filter->flags = sdsnew(c->argv[index + 1]->ptr);
             if (validateClientFlagFilter(filter->flags) == C_ERR) {
                 addReplyErrorFormat(c, "Unknown flags found in the provided filter: %s", filter->flags);
@@ -4582,6 +4608,10 @@ static int parseClientFiltersOrReply(client *c, int index, clientFilter *filter)
             }
             index += 2;
         } else if (!strcasecmp(c->argv[index]->ptr, "not-flags") && moreargs) {
+            if (filter->not_flags) {
+                sdsfree(filter->not_flags);
+                filter->not_flags = NULL;
+            }
             filter->not_flags = sdsnew(c->argv[index + 1]->ptr);
             if (validateClientFlagFilter(filter->not_flags) == C_ERR) {
                 addReplyErrorFormat(c, "Unknown flags found in the NOT-FLAGS filter: %s", filter->not_flags);
@@ -4595,18 +4625,34 @@ static int parseClientFiltersOrReply(client *c, int index, clientFilter *filter)
             filter->not_name = c->argv[index + 1]->ptr;
             index += 2;
         } else if (!strcasecmp(c->argv[index]->ptr, "lib-name") && moreargs) {
+            if (filter->lib_name) {
+                decrRefCount(filter->lib_name);
+                filter->lib_name = NULL;
+            }
             filter->lib_name = c->argv[index + 1];
             incrRefCount(filter->lib_name);
             index += 2;
         } else if (!strcasecmp(c->argv[index]->ptr, "not-lib-name") && moreargs) {
+            if (filter->not_lib_name) {
+                decrRefCount(filter->not_lib_name);
+                filter->not_lib_name = NULL;
+            }
             filter->not_lib_name = c->argv[index + 1];
             incrRefCount(filter->not_lib_name);
             index += 2;
         } else if (!strcasecmp(c->argv[index]->ptr, "lib-ver") && moreargs) {
+            if (filter->lib_ver) {
+                decrRefCount(filter->lib_ver);
+                filter->lib_ver = NULL;
+            }
             filter->lib_ver = c->argv[index + 1];
             incrRefCount(filter->lib_ver);
             index += 2;
         } else if (!strcasecmp(c->argv[index]->ptr, "not-lib-ver") && moreargs) {
+            if (filter->not_lib_ver) {
+                decrRefCount(filter->not_lib_ver);
+                filter->not_lib_ver = NULL;
+            }
             filter->not_lib_ver = c->argv[index + 1];
             incrRefCount(filter->not_lib_ver);
             index += 2;
@@ -4633,6 +4679,10 @@ static int parseClientFiltersOrReply(client *c, int index, clientFilter *filter)
             filter->not_db_number = not_db_id;
             index += 2;
         } else if (!strcasecmp(c->argv[index]->ptr, "capa") && moreargs) {
+            if (filter->capa) {
+                sdsfree(filter->capa);
+                filter->capa = NULL;
+            }
             filter->capa = sdsnew(c->argv[index + 1]->ptr);
             if (validateClientCapaFilter(filter->capa) == C_ERR) {
                 addReplyErrorFormat(c, "Unknown capa found in the provided filter: %s", filter->capa);
@@ -4640,6 +4690,10 @@ static int parseClientFiltersOrReply(client *c, int index, clientFilter *filter)
             }
             index += 2;
         } else if (!strcasecmp(c->argv[index]->ptr, "not-capa") && moreargs) {
+            if (filter->not_capa) {
+                sdsfree(filter->not_capa);
+                filter->not_capa = NULL;
+            }
             filter->not_capa = sdsnew(c->argv[index + 1]->ptr);
             if (validateClientCapaFilter(filter->not_capa) == C_ERR) {
                 addReplyErrorFormat(c, "Unknown capa found in the NOT-CAPA filter: %s", filter->not_capa);
@@ -4647,9 +4701,17 @@ static int parseClientFiltersOrReply(client *c, int index, clientFilter *filter)
             }
             index += 2;
         } else if (!strcasecmp(c->argv[index]->ptr, "ip") && moreargs) {
+            if (filter->ip) {
+                sdsfree(filter->ip);
+                filter->ip = NULL;
+            }
             filter->ip = sdsnew(c->argv[index + 1]->ptr);
             index += 2;
         } else if (!strcasecmp(c->argv[index]->ptr, "not-ip") && moreargs) {
+            if (filter->not_ip) {
+                sdsfree(filter->not_ip);
+                filter->not_ip = NULL;
+            }
             filter->not_ip = sdsnew(c->argv[index + 1]->ptr);
             index += 2;
         } else {
@@ -4696,6 +4758,8 @@ static int validateClientFlagFilter(sds flag_filter) {
         case 'e':
         case 'T':
         case 'I':
+        case 'i':
+        case 'E':
         case 'N':
             /* Valid flag, do nothing. */
             break;
@@ -4850,6 +4914,12 @@ static int clientMatchesFlagFilter(client *c, sds flag_filter) {
         case 'I': /* Import source flag */
             if (!c->flag.import_source) return 0;
             break;
+        case 'i': /* Slot migration import flag */
+            if (!c->slot_migration_job || !isImportSlotMigrationJob(c->slot_migration_job)) return 0;
+            break;
+        case 'E': /* Slot migration export flag */
+            if (!c->slot_migration_job || isImportSlotMigrationJob(c->slot_migration_job)) return 0;
+            break;
         case 'N': /* Check for no flags */
             if (c->flag.replica || c->flag.primary || c->flag.pubsub ||
                 c->flag.multi || c->flag.blocked || c->flag.tracking ||
@@ -4858,7 +4928,7 @@ static int clientMatchesFlagFilter(client *c, sds flag_filter) {
                 c->flag.unblocked || c->flag.close_asap ||
                 c->flag.unix_socket || c->flag.readonly ||
                 c->flag.no_evict || c->flag.no_touch ||
-                c->flag.import_source) {
+                c->flag.import_source || c->slot_migration_job) {
                 return 0;
             }
             break;
@@ -5006,6 +5076,7 @@ void clientListCommand(client *c) {
         filter.not_type = -1;
         filter.db_number = -1;
         filter.not_db_number = -1;
+
         int i = 2;
 
         if (parseClientFiltersOrReply(c, i, &filter) != C_OK) {
@@ -5914,12 +5985,13 @@ int checkClientOutputBufferLimits(client *c) {
      * This doesn't have memory consumption implications since the replica client
      * will share the backlog buffers memory. */
     size_t hard_limit_bytes = server.client_obuf_limits[class].hard_limit_bytes;
+    size_t soft_limit_bytes = server.client_obuf_limits[class].soft_limit_bytes;
     if (class == CLIENT_TYPE_REPLICA && hard_limit_bytes && (long long)hard_limit_bytes < server.repl_backlog_size)
         hard_limit_bytes = server.repl_backlog_size;
+    if (class == CLIENT_TYPE_REPLICA && soft_limit_bytes && (long long)soft_limit_bytes < server.repl_backlog_size)
+        soft_limit_bytes = server.repl_backlog_size;
     if (server.client_obuf_limits[class].hard_limit_bytes && used_mem >= hard_limit_bytes) hard = 1;
-    if (server.client_obuf_limits[class].soft_limit_bytes &&
-        used_mem >= server.client_obuf_limits[class].soft_limit_bytes)
-        soft = 1;
+    if (server.client_obuf_limits[class].soft_limit_bytes && used_mem >= soft_limit_bytes) soft = 1;
 
     /* We need to check if the soft limit is reached continuously for the
      * specified amount of seconds. */

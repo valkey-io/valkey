@@ -63,7 +63,7 @@ static long long line = 1;
 static time_t to_timestamp = 0;
 
 int consumeNewline(char *buf) {
-    if (strncmp(buf, "\r\n", 2) != 0) {
+    if (buf[0] != '\r' || buf[1] != '\n') {
         ERROR("Expected \\r\\n, got: %02x%02x", buf[0], buf[1]);
         return 0;
     }

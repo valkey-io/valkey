@@ -1,11 +1,11 @@
-name: On-demand Benchmark
+name: On-Demand Labeled Benchmark
 
 on:
   pull_request_target:
     types: [labeled]
 
 concurrency:
-  group: valkey-benchmark
+  group: ec2-al-2023-pr-benchmarking-arm64
   cancel-in-progress: false
 
 defaults:
@@ -19,9 +19,12 @@ permissions:
 
 jobs:
   benchmark:
-    runs-on: ${{ github.repository == 'valkey-io/valkey' && fromJSON('["self-hosted","ec2-ubuntu-24.04-benchmarking"]') || 'ubuntu-latest' }}
     if: |
-      github.event.action == 'labeled' && github.event.label.name == 'run-benchmark'
+      github.event.action == 'labeled' && github.event.label.name == 'run-benchmark' &&
+      github.repository == 'valkey-io/valkey'
+
+    runs-on: ["self-hosted", "ec2-al-2023-pr-benchmarking-arm64"]
+    timeout-minutes: 7200
     steps:
       - name: Checkout valkey
         uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
@@ -39,8 +42,17 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
+      - name: Checkout valkey for latest benchmark.
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+        with:
+          repository: valkey-io/valkey
+          ref: "unstable"
+          path: valkey_latest
+          fetch-depth: 0
+          persist-credentials: false
+
       - name: Set up Python
-        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        uses: kishaningithub/setup-python-amazon-linux@63dc7bd642c6a564d0a93dd4b1cbe3e448ce3621 # v1.0.18
         with:
           python-version: "3.10"
           cache: "pip"
@@ -48,27 +60,47 @@ jobs:
       - name: Install dependencies
         working-directory: valkey-perf-benchmark
         run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential
+          sudo dnf groupinstall "Development Tools" -y
+          sudo dnf install -y gcc gcc-c++ make \
+              python3-devel \
+              openssl-devel \
+              bzip2-devel \
+              libffi-devel
           pip install -r requirements.txt
+
+      - name: Build latest valkey_latest
+        working-directory: valkey_latest
+        run: |
+          echo "Building latest valkey-benchmark for latest benchmark executable..."
+          make distclean || true
+          make -j
+          if [[ -f "src/valkey-benchmark" ]]; then
+            echo "Successfully built latest valkey-benchmark"
+            ls -la src/valkey-benchmark
+            ./src/valkey-benchmark --version || echo "Version check completed"
+          else
+            echo "Failed to build valkey-benchmark"
+            exit 1
+          fi
+          VALKEY_BENCHMARK_PATH="$(pwd)/src/valkey-benchmark"
+          echo "VALKEY_BENCHMARK_PATH=$VALKEY_BENCHMARK_PATH" >> $GITHUB_ENV
+          echo "Latest valkey-benchmark path: $VALKEY_BENCHMARK_PATH"
 
       - name: Run benchmarks
         working-directory: valkey-perf-benchmark
         run: |
-          CONFIG_FILE="../valkey/.github/benchmark_configs/pr_benchmark.json"
-
-          # Removes server/client CPU range args if running in private repo
-          if [[ "${{ github.repository }}" != "valkey-io/valkey" ]]; then
-            jq 'map(del(.server_cpu_range, .client_cpu_range))' "$CONFIG_FILE" > tmp.json && mv tmp.json "$CONFIG_FILE"
-          fi
+          CONFIG_FILE="../valkey/.github/benchmark_configs/benchmark-config-arm.json"
 
           # Base benchmark arguments
           BENCHMARK_ARGS=(
+            --config "$CONFIG_FILE"
             --commits "${{ github.event.pull_request.merge_commit_sha }}"
             --baseline "${{ github.event.pull_request.base.ref }}"
-            --results-dir "results"
+            --valkey-benchmark-path "$VALKEY_BENCHMARK_PATH"
+            --target-ip ${{ secrets.EC2_ARM64_IP }}
             --valkey-path "../valkey"
-            --config "$CONFIG_FILE"
+            --results-dir "results"
+            --runs 5
           )
 
           # Run benchmark
@@ -78,9 +110,10 @@ jobs:
         working-directory: valkey-perf-benchmark
         run: |
           python ./utils/compare_benchmark_results.py \
-            ./results/${{ github.event.pull_request.base.ref }}/metrics.json \
-            ./results/${{ github.event.pull_request.merge_commit_sha }}/metrics.json \
-            ../comparison.md
+            --baseline ./results/${{ github.event.pull_request.base.ref }}/metrics.json \
+            --new ./results/${{ github.event.pull_request.merge_commit_sha }}/metrics.json \
+            --output ../comparison.md \
+            --metrics rps
 
       - name: Upload artifacts
         if: always()
@@ -115,10 +148,11 @@ jobs:
         if: always()
         continue-on-error: true
         run: |
+          rm -rf comparison.md valkey*
           pkill -f valkey
           exit_code=$?
           if [ $exit_code -eq 0 ]; then
-            echo "✓ Killed running valkey processes"
+            echo "Killed running valkey processes"
           elif [ $exit_code -eq 1 ]; then
             echo "No valkey processes found to kill"
           else

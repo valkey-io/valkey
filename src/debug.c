@@ -215,11 +215,12 @@ void xorObjectDigest(serverDb *db, robj *keyobj, unsigned char *digest, robj *o)
                 const int len = fpconv_dtoa(node->score, buf);
                 buf[len] = '\0';
                 memset(eledigest, 0, 20);
-                mixDigest(eledigest, node->ele, sdslen(node->ele));
+                sds ele = zslGetNodeElement(node);
+                mixDigest(eledigest, ele, sdslen(ele));
                 mixDigest(eledigest, buf, strlen(buf));
                 xorDigest(digest, eledigest, 20);
             }
-            hashtableResetIterator(&iter);
+            hashtableCleanupIterator(&iter);
         } else {
             serverPanic("Unknown sorted set encoding");
         }
@@ -585,7 +586,7 @@ void debugCommand(client *c) {
         /* The default behavior is to remove the current dataset from
          * memory before loading the RDB file, however when MERGE is
          * used together with NOFLUSH, we are able to merge two datasets. */
-        if (flush) emptyData(-1, EMPTYDB_NO_FLAGS, NULL);
+        if (flush) flags |= RDBFLAGS_EMPTY_DATA;
 
         protectClient(c);
         int ret = rdbLoad(server.rdb_filename, NULL, flags);
@@ -688,8 +689,11 @@ void debugCommand(client *c) {
         s = sdscatprintf(s, "Value at:%p refcount:%d encoding:%s", (void *)val, val->refcount, strenc);
         if (!fast) s = sdscatprintf(s, " serializedlength:%zu", rdbSavedObjectLen(val, c->argv[2], c->db->id));
         /* Either lru or lfu field could work correctly which depends on server.maxmemory_policy. */
-        s = sdscatprintf(s, " lru:%d lru_seconds_idle:%llu", val->lru, estimateObjectIdleTime(val) / 1000);
-        s = sdscatprintf(s, " lfu_freq:%lu lfu_access_time_minutes:%u", LFUDecrAndReturn(val), val->lru >> 8);
+        if (lrulfu_isUsingLFU()) {
+            s = sdscatprintf(s, " lfu_freq:%u lfu_access_time_minutes:%u", objectGetLFUFrequency(val), val->lru >> 8);
+        } else {
+            s = sdscatprintf(s, " lru:%d lru_seconds_idle:%u", val->lru, lru_getIdleSecs(val->lru));
+        }
         s = sdscatprintf(s, "%s", extra);
         addReplyStatusLength(c, s, sdslen(s));
         sdsfree(s);
@@ -1858,7 +1862,7 @@ __attribute__((noinline)) void logStackTrace(void *eip, int uplevel, int current
 #endif /* HAVE_BACKTRACE */
 
 sds genClusterDebugString(sds infostring) {
-    sds cluster_info = genClusterInfoString();
+    sds cluster_info = genClusterInfoString(sdsempty());
     sds cluster_nodes = clusterGenNodesDescription(NULL, 0, 0);
 
     infostring = sdscatprintf(infostring, "\r\n# Cluster info\r\n");

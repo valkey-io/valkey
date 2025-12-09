@@ -72,6 +72,7 @@ set(VALKEY_SERVER_SRCS
     ${CMAKE_SOURCE_DIR}/src/geo.c
     ${CMAKE_SOURCE_DIR}/src/lazyfree.c
     ${CMAKE_SOURCE_DIR}/src/module.c
+    ${CMAKE_SOURCE_DIR}/src/lrulfu.c
     ${CMAKE_SOURCE_DIR}/src/evict.c
     ${CMAKE_SOURCE_DIR}/src/expire.c
     ${CMAKE_SOURCE_DIR}/src/geohash.c
@@ -87,6 +88,7 @@ set(VALKEY_SERVER_SRCS
     ${CMAKE_SOURCE_DIR}/src/lolwut.c
     ${CMAKE_SOURCE_DIR}/src/lolwut5.c
     ${CMAKE_SOURCE_DIR}/src/lolwut6.c
+    ${CMAKE_SOURCE_DIR}/src/lolwut9.c
     ${CMAKE_SOURCE_DIR}/src/acl.c
     ${CMAKE_SOURCE_DIR}/src/tracking.c
     ${CMAKE_SOURCE_DIR}/src/socket.c

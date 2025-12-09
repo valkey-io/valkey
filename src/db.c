@@ -49,14 +49,6 @@ static int objectIsExpired(robj *val);
 static void dbSetValue(serverDb *db, robj *key, robj **valref, int overwrite, void **oldref);
 static robj *dbFindWithDictIndex(serverDb *db, sds key, int dict_index);
 
-/* Update LFU when an object is accessed.
- * Firstly, decrement the counter if the decrement time is reached.
- * Then logarithmically increment the counter, and update the access time. */
-void updateLFU(robj *val) {
-    unsigned long counter = LFUDecrAndReturn(val);
-    counter = LFULogIncr(counter);
-    val->lru = (LFUGetTimeInMinutes() << 8) | counter;
-}
 
 /* Lookup a key for read or write operations, or return NULL if the key is not
  * found in the specified DB. This function implements the functionality of
@@ -118,11 +110,7 @@ robj *lookupKey(serverDb *db, robj *key, int flags) {
         if (!hasActiveChildProcess() && !(flags & LOOKUP_NOTOUCH)) {
             /* Shared objects can't be stored in the database. */
             serverAssert(val->refcount != OBJ_SHARED_REFCOUNT);
-            if (server.maxmemory_policy & MAXMEMORY_FLAG_LFU) {
-                updateLFU(val);
-            } else {
-                val->lru = LRU_CLOCK();
-            }
+            val->lru = lrulfu_touch(val->lru);
         }
 
         if (!(flags & (LOOKUP_NOSTATS | LOOKUP_WRITE))) server.stat_keyspace_hits++;
@@ -671,15 +659,23 @@ long long emptyData(int dbnum, int flags, void(callback)(hashtable *)) {
      * there. */
     signalFlushedDb(dbnum, async);
 
+    if (clusterIsAnySlotImporting() || clusterIsAnySlotExporting()) {
+        /* On flush, in progress migrations will be cancelled, and should be
+         * retried by operators. We also may emptyData when reloading an RDB, in
+         * which case we will remove active slot imports. Replicas will get a
+         * new set of slot imports from their primary. */
+        clusterHandleFlushDuringSlotMigration();
+    }
+
     /* Empty the database structure. */
     removed = emptyDbStructure(server.db, dbnum, async, callback);
 
-    if (dbnum == -1) flushReplicaKeysWithExpireList();
+    if (dbnum == -1) flushReplicaKeysWithExpireList(async);
 
     if (with_functions) {
         serverAssert(dbnum == -1);
         /* TODO: fix this callback incompatibility. The arg is not used. */
-        functionsLibCtxClearCurrent(async, (void (*)(dict *))callback);
+        functionReset(async, (void (*)(dict *))callback);
     }
 
     /* Also fire the end event. Note that this event will fire almost
@@ -825,12 +821,6 @@ void flushdbCommand(client *c) {
 
     if (getFlushCommandFlags(c, &flags) == C_ERR) return;
 
-    if (clusterIsAnySlotImporting() || clusterIsAnySlotExporting()) {
-        /* In progress migrations will be cancelled, and should be retried by
-         * operators. */
-        clusterHandleFlushDuringSlotMigration();
-    }
-
     /* flushdb should not flush the functions */
     server.dirty += emptyData(c->db->id, flags | EMPTYDB_NOFUNCTIONS, NULL);
 
@@ -854,12 +844,6 @@ void flushdbCommand(client *c) {
 void flushallCommand(client *c) {
     int flags;
     if (getFlushCommandFlags(c, &flags) == C_ERR) return;
-
-    if (clusterIsAnySlotImporting() || clusterIsAnySlotExporting()) {
-        /* In progress migrations will be cancelled, and should be retried by
-         * operators. */
-        clusterHandleFlushDuringSlotMigration();
-    }
 
     /* flushall should not flush the functions */
     flushAllDataAndResetRDB(flags | EMPTYDB_NOFUNCTIONS);
@@ -1058,7 +1042,7 @@ void hashtableScanCallback(void *privdata, void *entry) {
         key = (sds)entry;
     } else if (o->type == OBJ_ZSET) {
         zskiplistNode *node = (zskiplistNode *)entry;
-        key = node->ele;
+        key = zslGetNodeElement(node);
         /* zset data is copied after filtering by key */
     } else if (o->type == OBJ_HASH) {
         key = entryGetField(entry);
@@ -1081,7 +1065,7 @@ void hashtableScanCallback(void *privdata, void *entry) {
     if (o->type == OBJ_ZSET) {
         /* zset data is copied */
         zskiplistNode *node = (zskiplistNode *)entry;
-        key = sdsdup(node->ele);
+        key = sdsdup(zslGetNodeElement(node));
         if (!data->only_keys) {
             char buf[MAX_LONG_DOUBLE_CHARS];
             int len = ld2string(buf, sizeof(buf), node->score, LD_STR_AUTO);
@@ -1800,7 +1784,7 @@ void swapMainDbWithTempDb(serverDb **tempDb) {
     }
 
     trackingInvalidateKeysOnFlush(1);
-    flushReplicaKeysWithExpireList();
+    flushReplicaKeysWithExpireList(1);
 }
 
 /* SWAPDB db1 db2 */
@@ -1975,7 +1959,7 @@ void propagateDeletion(serverDb *db, robj *key, int lazy, int slot) {
     server.replication_allowed = prev_replication_allowed;
 }
 
-static const size_t EXPIRE_BULK_LIMIT = 1024; /* Maximum number of fields to active-expire (per replicated HDEL command */
+#define EXPIRE_BULK_LIMIT ((size_t)1024) /* Maximum number of fields to active-expire (per replicated HDEL command */
 
 /* Propagate HDEL commands for deleted hash fields to AOF and replicas.
  *

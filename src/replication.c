@@ -862,14 +862,22 @@ int primaryTryPartialResynchronization(client *c, long long psync_offset) {
     /* We still have the data our replica is asking for? */
     if (!server.repl_backlog || psync_offset < server.repl_backlog->offset ||
         psync_offset > (server.repl_backlog->offset + server.repl_backlog->histlen)) {
-        serverLog(LL_NOTICE,
-                  "Unable to partial resync with replica %s for lack of backlog (Replica request was: %lld).",
-                  replicationGetReplicaName(c), psync_offset);
+        if (!server.repl_backlog) {
+            serverLog(LL_NOTICE,
+                      "Unable to partial resync with replica %s for lack of backlog (Replica request was: %s:%lld).",
+                      replicationGetReplicaName(c), primary_replid, psync_offset);
+        } else {
+            serverLog(LL_NOTICE,
+                      "Unable to partial resync with replica %s for lack of backlog (Replica request was %s:%lld, "
+                      "and I can only reply with the range [%lld, %lld]).",
+                      replicationGetReplicaName(c), primary_replid, psync_offset, server.repl_backlog->offset,
+                      server.repl_backlog->offset + server.repl_backlog->histlen);
+        }
         if (psync_offset > server.primary_repl_offset) {
             serverLog(LL_WARNING,
-                      "Warning: replica %s tried to PSYNC with an offset that is greater than the primary replication "
-                      "offset.",
-                      replicationGetReplicaName(c));
+                      "Warning: replica %s tried to PSYNC with an offset (%lld) that is greater than "
+                      "the primary replication offset (%lld)",
+                      replicationGetReplicaName(c), psync_offset, server.primary_repl_offset);
         }
         goto need_full_resync;
     }
@@ -1849,15 +1857,17 @@ void slotMigrationPipeReadHandler(struct aeEventLoop *eventLoop, int fd, void *c
     UNUSED(eventLoop);
     if (!server.slot_migration_pipe_buff) server.slot_migration_pipe_buff = zmalloc(PROTO_IOBUF_LEN);
 
+    /* No work to do if our connection has been closed. */
+    if (!server.slot_migration_pipe_conn) return;
+
     while (1) {
         server.slot_migration_pipe_bufflen = read(fd, server.slot_migration_pipe_buff, PROTO_IOBUF_LEN);
         if (server.slot_migration_pipe_bufflen < 0) {
             if (errno == EAGAIN || errno == EWOULDBLOCK) return;
             serverLog(LL_WARNING, "Slot migration, read error sending snapshot to target: %s", strerror(errno));
             client *target = connGetPrivateData(server.slot_migration_pipe_conn);
-            freeClient(target);
+            freeClient(target); /* Free client will kill the slot migration child */
             server.slot_migration_pipe_conn = NULL;
-            killSlotMigrationChild();
             return;
         }
 
@@ -1879,7 +1889,7 @@ void slotMigrationPipeReadHandler(struct aeEventLoop *eventLoop, int fd, void *c
             if (connGetState(conn) != CONN_STATE_CONNECTED) {
                 serverLog(LL_WARNING, "Slot migration transfer, write error sending DB to target: %s",
                           connGetLastError(conn));
-                freeClient(target);
+                freeClient(target); /* Free client will kill the slot migration child */
                 server.slot_migration_pipe_conn = NULL;
                 return;
             }
@@ -2067,8 +2077,8 @@ void replicationSendNewlineToPrimary(void) {
 /* Callback used by emptyData() while flushing away old data to load
  * the new dataset received by the primary and by discardTempDb()
  * after loading succeeded or failed. */
-void replicationEmptyDbCallback(hashtable *d) {
-    UNUSED(d);
+void replicationEmptyDbCallback(hashtable *ht) {
+    UNUSED(ht);
     if (server.repl_state == REPL_STATE_TRANSFER) replicationSendNewlineToPrimary();
 }
 
@@ -2183,7 +2193,7 @@ functionsLibCtx *disklessLoadFunctionsLibCtxCreate(void) {
 /* Helper function to discard our temp function lib context
  * when the loading succeeded or failed. */
 void disklessLoadDiscardFunctionsLibCtx(functionsLibCtx *temp_functions_lib_ctx) {
-    freeFunctionsAsync(temp_functions_lib_ctx);
+    freeFunctionsAsync(temp_functions_lib_ctx, NULL);
 }
 
 /* If we know we got an entirely different data set from our primary
@@ -2195,6 +2205,9 @@ void replicationAttachToNewPrimary(void) {
      * primary structure. */
     serverAssert(server.primary == NULL);
     replicationDiscardCachedPrimary();
+
+    /* Cancel any in progress imports (we will now use the primary's) */
+    clusterCleanSlotImportsOnFullSync();
 
     disconnectReplicas();     /* Force our replicas to resync with us as well. */
     freeReplicationBacklog(); /* Don't allow our chained replicas to PSYNC. */
@@ -2361,11 +2374,6 @@ int replicaLoadPrimaryRDBFromSocket(connection *conn, char *buf, char *eofmark, 
         /* We will soon start loading the RDB from socket, the replication history is changed,
          * we must discard the cached primary structure and force resync of sub-replicas. */
         replicationAttachToNewPrimary();
-
-        /* Even though we are on-empty-db and the database is empty, we still call emptyData. */
-        serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync: Flushing old data");
-        emptyData(-1, empty_db_flags, replicationEmptyDbCallback);
-
         dbarray = server.db;
         functions_lib_ctx = functionsLibCtxGetCurrent();
     }
@@ -2382,7 +2390,11 @@ int replicaLoadPrimaryRDBFromSocket(connection *conn, char *buf, char *eofmark, 
     if (replicationSupportSkipRDBChecksum(conn, 1, *usemark)) rdb.flags |= RIO_FLAG_SKIP_RDB_CHECKSUM;
     int loadingFailed = 0;
     rdbLoadingCtx loadingCtx = {.dbarray = dbarray, .functions_lib_ctx = functions_lib_ctx};
-    if (rdbLoadRioWithLoadingCtxScopedRdb(&rdb, RDBFLAGS_REPLICATION, rsi, &loadingCtx) != C_OK) {
+    /* If we aren't using the swapdb method, then we want to empty the data before loading the rdb */
+    int flags = RDBFLAGS_REPLICATION;
+    if (server.repl_diskless_load != REPL_DISKLESS_LOAD_SWAPDB) flags |= RDBFLAGS_EMPTY_DATA;
+    int retval = rdbLoadRioWithLoadingCtxScopedRdb(&rdb, flags, rsi, &loadingCtx);
+    if (retval != RDB_OK) {
         /* RDB loading failed. */
         serverLog(LL_WARNING, "Failed trying to load the PRIMARY synchronization DB "
                               "from socket, check server logs.");
@@ -2408,9 +2420,14 @@ int replicaLoadPrimaryRDBFromSocket(connection *conn, char *buf, char *eofmark, 
             disklessLoadDiscardFunctionsLibCtx(temp_functions_lib_ctx);
             serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync: Discarding temporary DB in background");
         } else {
-            /* Remove the half-loaded data in case we started with an empty replica. */
-            serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync: Discarding the half-loaded data");
-            emptyData(-1, empty_db_flags, replicationEmptyDbCallback);
+            /* If we received RDB_INCOMPATIBLE, the old data was preserved */
+            if (retval == RDB_INCOMPATIBLE) {
+                serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync: RDB version or signature incompatible, old data preserved");
+            } else {
+                /* Remove the half-loaded data in case the load failed for other reasons. */
+                serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync: Discarding the half-loaded data");
+                emptyData(-1, empty_db_flags, replicationEmptyDbCallback);
+            }
         }
 
         /* Note that there's no point in restarting the AOF on SYNC
@@ -2491,14 +2508,12 @@ int replicaLoadPrimaryRDBFromDisk(rdbSaveInfo *rsi) {
      * we must discard the cached primary structure and force resync of sub-replicas. */
     replicationAttachToNewPrimary();
 
-    /* Empty the databases only after the RDB file is ok, that is, before the RDB file
-     * is actually loaded, in case we encounter an error and drop the replication stream
-     * and leave an empty database. */
-    serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync: Flushing old data");
-    emptyData(-1, empty_db_flags, replicationEmptyDbCallback);
-
+    /* We pass RDBFLAGS_EMPTY_DATA to call emptyData() after validating rdb compatibility
+     * and before loading the data from the RDB */
     serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync: Loading DB in memory");
-    if (rdbLoad(server.rdb_filename, rsi, RDBFLAGS_REPLICATION) != RDB_OK) {
+    int retval = rdbLoad(server.rdb_filename, rsi, RDBFLAGS_REPLICATION | RDBFLAGS_EMPTY_DATA);
+
+    if (retval != RDB_OK) {
         serverLog(LL_WARNING, "Failed trying to load the PRIMARY synchronization "
                               "DB from disk, check server logs.");
         if (server.rdb_del_sync_files && allPersistenceDisabled()) {
@@ -2508,9 +2523,15 @@ int replicaLoadPrimaryRDBFromDisk(rdbSaveInfo *rsi) {
             bg_unlink(server.rdb_filename);
         }
 
-        /* If disk-based RDB loading fails, remove the half-loaded dataset. */
-        serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync: Discarding the half-loaded data");
-        emptyData(-1, empty_db_flags, replicationEmptyDbCallback);
+        /* If RDB failed compatibility check, we did not load the new data set or flush our old data. */
+        if (retval == RDB_INCOMPATIBLE) {
+            serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync: Skipping flush, no new data was loaded.");
+        } else {
+            /* If disk-based RDB loading fails, remove the half-loaded dataset. */
+            serverLog(LL_NOTICE, "PRIMARY <-> REPLICA sync: Discarding the half-loaded data");
+            emptyData(-1, empty_db_flags, replicationEmptyDbCallback);
+        }
+
 
         /* Note that there's no point in restarting the AOF on sync failure,
          * it'll be restarted when sync succeeds or replica promoted. */
@@ -3198,7 +3219,10 @@ void bufferReplData(connection *conn) {
         if (readlen && remaining_bytes == 0) {
             if (server.client_obuf_limits[CLIENT_TYPE_REPLICA].hard_limit_bytes &&
                 server.pending_repl_data.len > server.client_obuf_limits[CLIENT_TYPE_REPLICA].hard_limit_bytes) {
-                dualChannelServerLog(LL_NOTICE, "Replication buffer limit reached, stopping buffering.");
+                dualChannelServerLog(LL_NOTICE,
+                                     "Replication buffer limit reached (%llu bytes), stopping buffering. "
+                                     "Further accumulation will occur on primary side.",
+                                     server.client_obuf_limits[CLIENT_TYPE_REPLICA].hard_limit_bytes);
                 /* Stop accumulating primary commands. */
                 connSetReadHandler(conn, NULL);
                 break;
@@ -4092,8 +4116,9 @@ void syncWithPrimary(connection *conn) {
      * but there is nothing technically wrong with a full resync which
      * could happen in edge cases. */
     if (server.failover_state == FAILOVER_IN_PROGRESS) {
-        if (psync_result == PSYNC_CONTINUE || psync_result == PSYNC_FULLRESYNC) {
-            clearFailoverState();
+        if (psync_result == PSYNC_CONTINUE || psync_result == PSYNC_FULLRESYNC ||
+            psync_result == PSYNC_FULLRESYNC_DUAL_CHANNEL) {
+            clearFailoverState(true);
         } else {
             abortFailover("Failover target rejected psync request");
             return;
@@ -4164,7 +4189,7 @@ void syncWithPrimary(connection *conn) {
         if (connConnect(server.repl_rdb_transfer_s, server.primary_host, server.primary_port, server.bind_source_addr,
                         server.repl_mptcp, dualChannelFullSyncWithPrimary) == C_ERR) {
             dualChannelServerLog(LL_WARNING, "Unable to connect to Primary: %s",
-                                 connGetLastError(server.repl_transfer_s));
+                                 connGetLastError(server.repl_rdb_transfer_s));
             connClose(server.repl_rdb_transfer_s);
             server.repl_rdb_transfer_s = NULL;
             syncWithPrimaryHandleError(&conn);
@@ -4310,7 +4335,7 @@ int cancelReplicationHandshake(int reconnect) {
 }
 
 /* Set replication to the specified primary address and port. */
-void replicationSetPrimary(char *ip, int port, int full_sync_required) {
+void replicationSetPrimary(char *ip, int port, int full_sync_required, bool disconnect_blocked) {
     int was_primary = server.primary_host == NULL;
 
     sdsfree(server.primary_host);
@@ -4324,13 +4349,18 @@ void replicationSetPrimary(char *ip, int port, int full_sync_required) {
         server.primary->flag.dont_cache_primary = full_sync_required;
         freeClient(server.primary);
     }
-    disconnectAllBlockedClients(); /* Clients blocked in primary, now replica. */
 
     /* Setting primary_host only after the call to freeClient since it calls
      * replicationHandlePrimaryDisconnection which can trigger a re-connect
      * directly from within that call. */
     server.primary_host = sdsnew(ip);
     server.primary_port = port;
+
+    /* Clients blocked in primary, now replica.
+     * Note that we need to set the new primary first
+     * since unblocking clients require redirecting to the new primary */
+    if (disconnect_blocked)
+        disconnectOrRedirectAllBlockedClients();
 
     /* Update oom_score_adj */
     setOOMScoreAdj(-1);
@@ -4417,6 +4447,9 @@ void replicationUnsetPrimary(void) {
     /* Restart the AOF subsystem in case we shut it down during a sync when
      * we were still a replica. */
     if (server.aof_enabled && server.aof_state == AOF_OFF) restartAOFAfterSYNC();
+
+    /* Cancel any ongoing atomic slot migrations */
+    clusterCleanSlotImportsOnPromotion();
 }
 
 /* This function is called when the replica lose the connection with the
@@ -4487,7 +4520,7 @@ void replicaofCommand(client *c) {
         }
         /* There was no previous primary or the user specified a different one,
          * we can continue. */
-        replicationSetPrimary(c->argv[1]->ptr, port, 0);
+        replicationSetPrimary(c->argv[1]->ptr, port, 0, true);
         sds client = catClientInfoShortString(sdsempty(), c, server.hide_user_data_from_log);
         serverLog(LL_NOTICE, "REPLICAOF %s:%d enabled (user request from '%s')", server.primary_host,
                   server.primary_port, client);
@@ -5386,13 +5419,14 @@ const char *getFailoverStateString(void) {
 /* Resets the internal failover configuration, this needs
  * to be called after a failover either succeeds or fails
  * as it includes the client unpause. */
-void clearFailoverState(void) {
+void clearFailoverState(bool success) {
     server.failover_end_time = 0;
     server.force_failover = 0;
     zfree(server.target_replica_host);
     server.target_replica_host = NULL;
     server.target_replica_port = 0;
     server.failover_state = NO_FAILOVER;
+    if (success) disconnectOrRedirectAllBlockedClients();
     unpauseActions(PAUSE_DURING_FAILOVER);
 }
 
@@ -5409,7 +5443,7 @@ void abortFailover(const char *err) {
     if (server.failover_state == FAILOVER_IN_PROGRESS) {
         replicationUnsetPrimary();
     }
-    clearFailoverState();
+    clearFailoverState(false);
 }
 
 /*
@@ -5541,9 +5575,8 @@ void failoverCommand(client *c) {
 /* Failover cron function, checks coordinated failover state.
  *
  * Implementation note: The current implementation calls replicationSetPrimary()
- * to start the failover request, this has some unintended side effects if the
- * failover doesn't work like blocked clients will be unblocked and replicas will
- * be disconnected. This could be optimized further.
+ * to start the failover request, but blocked clients are no longer processed during
+ * failover. Instead, their handling is deferred and performed later in clearFailoverState().
  */
 void updateFailoverStatus(void) {
     if (server.failover_state != FAILOVER_WAIT_FOR_SYNC) return;
@@ -5556,7 +5589,7 @@ void updateFailoverStatus(void) {
                       server.target_replica_port);
             server.failover_state = FAILOVER_IN_PROGRESS;
             /* If timeout has expired force a failover if requested. */
-            replicationSetPrimary(server.target_replica_host, server.target_replica_port, 0);
+            replicationSetPrimary(server.target_replica_host, server.target_replica_port, 0, false);
             return;
         } else {
             /* Force was not requested, so timeout. */
@@ -5599,6 +5632,6 @@ void updateFailoverStatus(void) {
         serverLog(LL_NOTICE, "Failover target %s:%d is synced, failing over.", server.target_replica_host,
                   server.target_replica_port);
         /* Designated replica is caught up, failover to it. */
-        replicationSetPrimary(server.target_replica_host, server.target_replica_port, 0);
+        replicationSetPrimary(server.target_replica_host, server.target_replica_port, 0, false);
     }
 }

@@ -303,6 +303,18 @@ start_cluster 3 0 [list config_lines $modules] {
         }
         verify_log_message 0 "*DING (type 3) RECEIVED*TestUAF*" 0
     }
+
+    test "VM_CALL CLUSTER SLOTS from Module Timer" {
+        assert_equal {OK} [$node1 test.start_cluster_timer]
+        assert_equal {OK} [$node2 test.start_cluster_timer]
+        assert_equal {OK} [$node3 test.start_cluster_timer]
+
+        wait_for_condition 50 100 {
+            [count_log_message 0 "* <cluster> Timer: CLUSTER SLOTS success*"] >= 1
+        } else {
+            fail "Timer did not execute CLUSTER SLOTS or server crashed"
+        }
+    }
 }
 
 } ;# end tag

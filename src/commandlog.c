@@ -102,8 +102,14 @@ void commandlogInit(void) {
  * configured max length. */
 static void commandlogPushEntryIfNeeded(client *c, robj **argv, int argc, long long value, int type) {
     if (server.commandlog[type].threshold < 0 || server.commandlog[type].max_len == 0) return; /* The corresponding commandlog disabled */
-    if (value >= server.commandlog[type].threshold)
+    if (value >= server.commandlog[type].threshold) {
         listAddNodeHead(server.commandlog[type].entries, commandlogCreateEntry(c, argv, argc, value, type));
+        if (type == COMMANDLOG_TYPE_LARGE_REQUEST) {
+            server.stat_commandlog_large_request_ops++;
+        } else if (type == COMMANDLOG_TYPE_LARGE_REPLY) {
+            server.stat_commandlog_large_reply_ops++;
+        }
+    }
 
     /* Remove old entries if needed. */
     while (listLength(server.commandlog[type].entries) > server.commandlog[type].max_len) listDelNode(server.commandlog[type].entries, listLast(server.commandlog[type].entries));

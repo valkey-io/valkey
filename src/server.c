@@ -2751,6 +2751,8 @@ void resetServerStats(void) {
     server.stat_net_cluster_slot_import_bytes = 0;
     server.stat_unexpected_error_replies = 0;
     server.stat_total_error_replies = 0;
+    server.stat_commandlog_large_request_ops = 0;
+    server.stat_commandlog_large_reply_ops = 0;
     server.stat_dump_payload_sanitizations = 0;
     server.aof_delayed_fsync = 0;
     server.stat_reply_buffer_shrinks = 0;
@@ -6213,6 +6215,8 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                 "tracking_total_prefixes:%lld\r\n", (unsigned long long)trackingGetTotalPrefixes(),
                 "unexpected_error_replies:%lld\r\n", server.stat_unexpected_error_replies,
                 "total_error_replies:%lld\r\n", server.stat_total_error_replies,
+                "commandlog_large_request_ops:%llu\r\n", server.stat_commandlog_large_request_ops,
+                "commandlog_large_reply_ops:%llu\r\n", server.stat_commandlog_large_reply_ops,
                 "dump_payload_sanitizations:%lld\r\n", server.stat_dump_payload_sanitizations,
                 "total_reads_processed:%lld\r\n", server.stat_total_reads_processed,
                 "total_writes_processed:%lld\r\n", server.stat_total_writes_processed,

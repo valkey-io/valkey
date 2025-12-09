@@ -136,6 +136,33 @@ start_server {tags {"commandlog"} overrides {commandlog-execution-slower-than 10
         r config set min-io-threads-avoid-copy-reply $copy_avoid
     } {OK} {needs:debug}
 
+    test {COMMANDLOG - INFO stats track large request/reply ops} {
+        r config resetstat
+        r commandlog reset large-request
+        r commandlog reset large-reply
+        r config set commandlog-request-larger-than 10
+        r config set commandlog-large-request-max-len 10
+        r config set commandlog-reply-larger-than 10
+        r config set commandlog-large-reply-max-len 10
+
+        set value [string repeat B 64]
+        r set info_stats_key $value
+
+        set copy_avoid [lindex [r config get min-io-threads-avoid-copy-reply] 1]
+        r config set min-io-threads-avoid-copy-reply 0
+        r get info_stats_key
+        r config set min-io-threads-avoid-copy-reply $copy_avoid
+
+        set stats [r info stats]
+        assert_equal 1 [info_field $stats commandlog_large_request_ops]
+        assert_equal 1 [info_field $stats commandlog_large_reply_ops]
+
+        r config resetstat
+        set stats [r info stats]
+        assert_equal 0 [info_field $stats commandlog_large_request_ops]
+        assert_equal 0 [info_field $stats commandlog_large_reply_ops]
+    }
+
     test {COMMANDLOG slow - Certain commands are omitted that contain sensitive information} {
         r config set commandlog-slow-execution-max-len 100
         r config set commandlog-execution-slower-than 0

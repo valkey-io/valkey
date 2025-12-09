@@ -44,6 +44,7 @@ void ClusterSlotsTimerCallback(ValkeyModuleCtx *ctx, void *data) {
     VALKEYMODULE_NOT_USED(data);
     ValkeyModuleCallReply *rep = ValkeyModule_Call(ctx, "CLUSTER", "c", "SLOTS");
     if (rep) ValkeyModule_FreeCallReply(rep);
+    timer_id = ValkeyModule_CreateTimer(ctx, 50, ClusterSlotsTimerCallback, NULL);
 }
 
 int ClusterSlotsCronCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {

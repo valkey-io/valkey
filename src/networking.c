@@ -1398,7 +1398,17 @@ static int tryAvoidBulkStrCopyToReply(client *c, robj *obj) {
 
 /* Add an Object as a bulk reply */
 void addReplyBulk(client *c, robj *obj) {
-    if (tryAvoidBulkStrCopyToReply(c, obj) == C_OK) return;
+    if (tryAvoidBulkStrCopyToReply(c, obj) == C_OK) {
+        /* If copy avoidance allowed, then we explicitly maintain net_output_bytes_curr_cmd. */
+        serverAssert(obj->encoding == OBJ_ENCODING_RAW);
+        size_t str_len = sdslen(obj->ptr);
+        uint32_t num_len = digits10(str_len);
+        /* RESP encodes bulk strings as $<length>\r\n<data>\r\n */
+        c->net_output_bytes_curr_cmd += (num_len + 3); /* $<length>\r\n */
+        c->net_output_bytes_curr_cmd += str_len;       /* <data> */
+        c->net_output_bytes_curr_cmd += 2;             /* \r\n */
+        return;
+    }
     addReplyBulkLen(c, obj);
     addReply(c, obj);
     addReplyProto(c, "\r\n", 2);

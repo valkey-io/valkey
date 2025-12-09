@@ -285,6 +285,12 @@ start_cluster 3 0 [list config_lines $modules] {
         assert_equal [lsort [$node2 cluster shards]] [lsort [$node2 test.cluster_shards]]
         assert_equal [lsort [$node3 cluster shards]] [lsort [$node3 test.cluster_shards]]
     }
+
+    test "VM_CALL with cluster slots from timer (no crash)" {
+        assert_equal {OK} [$node1 test.cluster_slots_cron]
+        after 100
+        assert_equal {PONG} [$node1 PING]
+    }
 }
 
 } ;# end tag

@@ -38,6 +38,21 @@ int test_cluster_shards(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
 #define MSGTYPE_DING 1
 #define MSGTYPE_DONG 2
 
+static ValkeyModuleTimerID timer_id = 0;
+
+void ClusterSlotsTimerCallback(ValkeyModuleCtx *ctx, void *data) {
+    VALKEYMODULE_NOT_USED(data);
+    ValkeyModuleCallReply *rep = ValkeyModule_Call(ctx, "CLUSTER", "c", "SLOTS");
+    if (rep) ValkeyModule_FreeCallReply(rep);
+}
+
+int ClusterSlotsCronCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    VALKEYMODULE_NOT_USED(argv);
+    VALKEYMODULE_NOT_USED(argc);
+    timer_id = ValkeyModule_CreateTimer(ctx, 50, ClusterSlotsTimerCallback, NULL);
+    return ValkeyModule_ReplyWithSimpleString(ctx, "OK");
+}
+
 /* test.pingall */
 int PingallCommand(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     VALKEYMODULE_NOT_USED(argv);
@@ -75,6 +90,9 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
         return VALKEYMODULE_ERR;
 
     if (ValkeyModule_CreateCommand(ctx, "test.cluster_shards", test_cluster_shards, "", 0, 0, 0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+
+    if (ValkeyModule_CreateCommand(ctx, "test.cluster_slots_cron", ClusterSlotsCronCommand, "", 0, 0, 0) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
 
     /* Register our handlers for different message types. */

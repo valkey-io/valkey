@@ -1189,7 +1189,7 @@ void srandmemberWithCountCommand(client *c) {
         serverAssert(count == hashtableSize(ht));
         void *element;
         while (hashtableNext(&iter, &element)) addReplyBulkSds(c, (sds)element);
-        hashtableResetIterator(&iter);
+        hashtableCleanupIterator(&iter);
         hashtableRelease(ht);
     }
 }

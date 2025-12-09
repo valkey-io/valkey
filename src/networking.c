@@ -818,7 +818,7 @@ void afterErrorReply(client *c, const char *s, size_t len, int flags) {
         char *err_prefix = "ERR";
         size_t prefix_len = 3;
         if (s[0] == '-') {
-            char *spaceloc = memchr(s, ' ', len < 32 ? len : 32);
+            const char *spaceloc = memchr(s, ' ', len < 32 ? len : 32);
             /* If we cannot retrieve the error prefix, use the default: "ERR". */
             if (spaceloc) {
                 const size_t errEndPos = (size_t)(spaceloc - s);
@@ -1398,7 +1398,17 @@ static int tryAvoidBulkStrCopyToReply(client *c, robj *obj) {
 
 /* Add an Object as a bulk reply */
 void addReplyBulk(client *c, robj *obj) {
-    if (tryAvoidBulkStrCopyToReply(c, obj) == C_OK) return;
+    if (tryAvoidBulkStrCopyToReply(c, obj) == C_OK) {
+        /* If copy avoidance allowed, then we explicitly maintain net_output_bytes_curr_cmd. */
+        serverAssert(obj->encoding == OBJ_ENCODING_RAW);
+        size_t str_len = sdslen(obj->ptr);
+        uint32_t num_len = digits10(str_len);
+        /* RESP encodes bulk strings as $<length>\r\n<data>\r\n */
+        c->net_output_bytes_curr_cmd += (num_len + 3); /* $<length>\r\n */
+        c->net_output_bytes_curr_cmd += str_len;       /* <data> */
+        c->net_output_bytes_curr_cmd += 2;             /* \r\n */
+        return;
+    }
     addReplyBulkLen(c, obj);
     addReply(c, obj);
     addReplyProto(c, "\r\n", 2);
@@ -5975,12 +5985,13 @@ int checkClientOutputBufferLimits(client *c) {
      * This doesn't have memory consumption implications since the replica client
      * will share the backlog buffers memory. */
     size_t hard_limit_bytes = server.client_obuf_limits[class].hard_limit_bytes;
+    size_t soft_limit_bytes = server.client_obuf_limits[class].soft_limit_bytes;
     if (class == CLIENT_TYPE_REPLICA && hard_limit_bytes && (long long)hard_limit_bytes < server.repl_backlog_size)
         hard_limit_bytes = server.repl_backlog_size;
+    if (class == CLIENT_TYPE_REPLICA && soft_limit_bytes && (long long)soft_limit_bytes < server.repl_backlog_size)
+        soft_limit_bytes = server.repl_backlog_size;
     if (server.client_obuf_limits[class].hard_limit_bytes && used_mem >= hard_limit_bytes) hard = 1;
-    if (server.client_obuf_limits[class].soft_limit_bytes &&
-        used_mem >= server.client_obuf_limits[class].soft_limit_bytes)
-        soft = 1;
+    if (server.client_obuf_limits[class].soft_limit_bytes && used_mem >= soft_limit_bytes) soft = 1;
 
     /* We need to check if the soft limit is reached continuously for the
      * specified amount of seconds. */

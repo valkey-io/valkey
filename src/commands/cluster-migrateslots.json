@@ -29,8 +29,14 @@
                         "type": "block",
                         "multiple": true,
                         "arguments": [
-                            { "name": "start-slot", "type": "integer" },
-                            { "name": "end-slot", "type": "integer" }
+                            {
+                                "name": "start-slot",
+                                "type": "integer"
+                            },
+                            {
+                                "name": "end-slot",
+                                "type": "integer"
+                            }
                         ],
                         "description": "Start and end slot for single range"
                     },
@@ -50,6 +56,11 @@
         ],
         "reply_schema": {
             "const": "OK"
-        }
+        },
+        "acl_categories": [
+            "ADMIN",
+            "DANGEROUS",
+            "SLOW"
+        ]
     }
 }

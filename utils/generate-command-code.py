@@ -94,6 +94,61 @@ def check_command_key_specs(command):
     return True
 
 
+def check_acl_categories(command):
+    """
+    Validate that ACL categories in JSON files follow rules:
+    
+    1. WRITE flag and WRITE category must match
+    2. READONLY flag (and NOT SCRIPTING category) requires READ category
+    3. ADMIN flag requires ADMIN and DANGEROUS categories
+    4. PUBSUB flag and PUBSUB category must match
+    5. FAST flag and FAST category must match
+    6. BLOCKING flag and BLOCKING category must match
+    7. Commands cannot be both FAST and SLOW
+    8. Commands without FAST category must have SLOW category
+    """
+    command_flags = set(command.desc.get("command_flags", []))
+    acl_categories = set(command.desc.get("acl_categories", []))
+    
+    errors = []
+    
+    if ("WRITE" in command_flags) != ("WRITE" in acl_categories):
+        errors.append("WRITE flag and WRITE category must match")
+    
+    if "READONLY" in command_flags and "SCRIPTING" not in acl_categories:
+        if "READ" not in acl_categories:
+            errors.append("READONLY flag (without SCRIPTING category) requires READ category")
+    
+    if "ADMIN" in command_flags:
+        if "ADMIN" not in acl_categories:
+            errors.append("ADMIN flag requires ADMIN category")
+        if "DANGEROUS" not in acl_categories:
+            errors.append("ADMIN flag requires DANGEROUS category")
+    
+    if ("PUBSUB" in command_flags) != ("PUBSUB" in acl_categories):
+        errors.append("PUBSUB flag and PUBSUB category must match")
+    
+    if ("FAST" in command_flags) != ("FAST" in acl_categories):
+        errors.append("FAST flag and FAST category must match")
+    
+    if ("BLOCKING" in command_flags) != ("BLOCKING" in acl_categories):
+        errors.append("BLOCKING flag and BLOCKING category must match")
+    
+    if "FAST" in acl_categories and "SLOW" in acl_categories:
+        errors.append("Command cannot be both FAST and SLOW")
+    
+    if "FAST" not in acl_categories and "SLOW" not in acl_categories:
+        errors.append("Commands without FAST category must have SLOW category")
+    
+    if errors:
+        print("command: %s - ACL category validation errors:" % command.fullname())
+        for error in errors:
+            print("  - %s" % error)
+        return False
+    
+    return True
+
+
 # Globals
 subcommands = {}  # container_name -> dict(subcommand_name -> Subcommand) - Only subcommands
 commands = {}  # command_name -> Command - Only commands
@@ -563,6 +618,13 @@ print("Checking all commands...")
 for command in commands.values():
     if not check_command_key_specs(command):
         check_command_error_counter += 1
+    if not check_acl_categories(command):
+        check_command_error_counter += 1
+    
+    # Also check subcommands ACL categories
+    for subcommand in command.subcommands:
+        if not check_acl_categories(subcommand):
+            check_command_error_counter += 1
 
 if check_command_error_counter != 0:
     print("Error: There are errors in the commands check, please check the above logs.")

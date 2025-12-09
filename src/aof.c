@@ -1918,19 +1918,19 @@ int rewriteSortedSetObject(rio *r, robj *key, robj *o) {
 
                 if (!rioWriteBulkCount(r, '*', 2 + cmd_items * 2) || !rioWriteBulkString(r, "ZADD", 4) ||
                     !rioWriteBulkObject(r, key)) {
-                    hashtableResetIterator(&iter);
+                    hashtableCleanupIterator(&iter);
                     return 0;
                 }
             }
             sds ele = zslGetNodeElement(node);
             if (!rioWriteBulkDouble(r, node->score) || !rioWriteBulkString(r, ele, sdslen(ele))) {
-                hashtableResetIterator(&iter);
+                hashtableCleanupIterator(&iter);
                 return 0;
             }
             if (++count == AOF_REWRITE_ITEMS_PER_CMD) count = 0;
             items--;
         }
-        hashtableResetIterator(&iter);
+        hashtableCleanupIterator(&iter);
     } else {
         serverPanic("Unknown sorted zset encoding");
     }

@@ -920,12 +920,12 @@ ssize_t rdbSaveObject(rio *rdb, robj *o, robj *key, int dbid) {
             while (hashtableNext(&iterator, &next)) {
                 sds ele = next;
                 if ((n = rdbSaveRawString(rdb, (unsigned char *)ele, sdslen(ele))) == -1) {
-                    hashtableResetIterator(&iterator);
+                    hashtableCleanupIterator(&iterator);
                     return -1;
                 }
                 nwritten += n;
             }
-            hashtableResetIterator(&iterator);
+            hashtableCleanupIterator(&iterator);
         } else if (o->encoding == OBJ_ENCODING_INTSET) {
             size_t l = intsetBlobLen((intset *)o->ptr);
 
@@ -996,25 +996,25 @@ ssize_t rdbSaveObject(rio *rdb, robj *o, robj *key, int dbid) {
                 sds value = entryGetValue(next);
 
                 if ((n = rdbSaveRawString(rdb, (unsigned char *)field, sdslen(field))) == -1) {
-                    hashtableResetIterator(&iter);
+                    hashtableCleanupIterator(&iter);
                     return -1;
                 }
                 nwritten += n;
                 if ((n = rdbSaveRawString(rdb, (unsigned char *)value, sdslen(value))) == -1) {
-                    hashtableResetIterator(&iter);
+                    hashtableCleanupIterator(&iter);
                     return -1;
                 }
                 nwritten += n;
                 if (add_expiry) {
                     long long expiry = entryGetExpiry(next);
                     if ((n = rdbSaveMillisecondTime(rdb, expiry) == -1)) {
-                        hashtableResetIterator(&iter);
+                        hashtableCleanupIterator(&iter);
                         return -1;
                     }
                     nwritten += n;
                 }
             }
-            hashtableResetIterator(&iter);
+            hashtableCleanupIterator(&iter);
 
         } else {
             serverPanic("Unknown hash encoding");
@@ -1186,22 +1186,20 @@ int rdbSaveKeyValuePair(rio *rdb, robj *key, robj *val, long long expiretime, in
 
     /* Save the LRU info. */
     if (savelru) {
-        uint64_t idletime = estimateObjectIdleTime(val);
-        idletime /= 1000; /* Using seconds is enough and requires less space.*/
+        uint64_t idletime = objectGetLRUIdleSecs(val);
         if (rdbSaveType(rdb, RDB_OPCODE_IDLE) == -1) return -1;
         if (rdbSaveLen(rdb, idletime) == -1) return -1;
     }
 
     /* Save the LFU info. */
     if (savelfu) {
-        uint8_t buf[1];
-        buf[0] = LFUDecrAndReturn(val);
+        uint8_t freq = objectGetLFUFrequency(val);
         /* We can encode this in exactly two bytes: the opcode and an 8
          * bit counter, since the frequency is logarithmic with a 0-255 range.
          * Note that we do not store the halving time because to reset it
          * a single time when loading does not affect the frequency much. */
         if (rdbSaveType(rdb, RDB_OPCODE_FREQ) == -1) return -1;
-        if (rdbWriteRaw(rdb, buf, 1) == -1) return -1;
+        if (rdbWriteRaw(rdb, &freq, 1) == -1) return -1;
     }
 
     /* Save type, key, value */
@@ -3136,7 +3134,6 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
 
     /* Key-specific attributes, set by opcodes before the key type. */
     long long lru_idle = -1, lfu_freq = -1, expiretime = -1, now = mstime();
-    long long lru_clock = LRU_CLOCK();
 
     while (1) {
         sds key;
@@ -3481,7 +3478,7 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
             }
 
             /* Set usage information (for eviction). */
-            objectSetLRUOrLFU(val, lfu_freq, lru_idle, lru_clock, 1000);
+            objectSetLRUOrLFU(val, lfu_freq, lru_idle);
 
             /* call key space notification on key loaded for modules only */
             moduleNotifyKeyspaceEvent(NOTIFY_LOADED, "loaded", &keyobj, db->id);

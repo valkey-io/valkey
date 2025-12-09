@@ -457,7 +457,7 @@ void sortCommandGeneric(client *c, int readonly) {
             vector[j].u.cmpobj = NULL;
             j++;
         }
-        hashtableResetIterator(&iter);
+        hashtableCleanupIterator(&iter);
     } else {
         serverPanic("Unknown type");
     }

@@ -77,8 +77,12 @@ start_server [list overrides [list "ext-data-mode" kv] tags [list "external:skip
         assert_equal {OK} [r module load $extdatamodule1]
         assert_equal [list ] [r external_data stats]
         assert_equal {OK} [r external_data INIT db0 helloextdata1]
-
         assert_equal [list db0:helloextdata1] [r external_data stats]
+
+        # Load same module again after init fails, but the server won't crash
+        assert_error {ERR Error loading the extension. Please check the server logs.} {r module load $extdatamodule1}
+
+        # Another module is added to stats
         assert_equal {OK} [r module load $extdatamodule2]
         assert_equal {OK} [r external_data INIT db1 helloextdata2]
         assert_equal [list db0:helloextdata1 db1:helloextdata2] [r external_data stats]
@@ -497,7 +501,7 @@ start_cluster 1 0 [list overrides [list "ext-data-mode" kv "loglevel" debug] tag
 # 6) deleted key exists in external storage, deleted with ext flag, deletion is successful, no error
 
 ### Non-sharded
-start_server [list overrides [list "ext-data-mode" kv "loglevel" debug "ext-data-store-by-size" "0"] tags [list "external:skip" "singledb:skip"]] {
+start_server [list overrides [list "ext-data-mode" kv "loglevel" debug "ext-data-store-by-size" "0"] tags [list "external:skip"]] {
     # Load module once for all tests in this block
     r module load $extdatamodule1
     # Initialize external data once for all tests
@@ -598,13 +602,19 @@ start_server [list overrides [list "ext-data-mode" kv "loglevel" debug "ext-data
         assert_equal "" [r get multi_key3_test7]
         assert_equal "value3" [r get multi_key3_test7 ext]
     }
+}
 
+start_server [list overrides [list "ext-data-mode" kv "loglevel" debug "ext-data-store-by-size" "0"] tags [list "external:skip" "singledb:skip"]] {
     test "DEL with EXT - Non-sharded - Different databases" {
-        r select 0
+        # Load module once for all tests in this block
+        r module load $extdatamodule1
+        # Initialize external data for db0
+        r external_data INIT db0 helloextdata1
         # Initialize external data for db1
         r external_data INIT db1 helloextdata1
         
         # Set keys in different databases
+        r select 0
         r set db0_key_test8 "db0_value" ext
         r select 1
         r set db1_key_test8 "db1_value" ext
@@ -631,7 +641,7 @@ start_server [list overrides [list "ext-data-mode" kv "loglevel" debug "ext-data
 }
 
 ### Sharded
-start_cluster 1 0 [list overrides [list "ext-data-mode" kv "ext-data-store-by-size" "0"] tags [list "singledb:skip"]] {
+start_cluster 1 0 [list overrides [list "ext-data-mode" kv "ext-data-store-by-size" "0"]] {
     # Load module once for all tests in this block
     set extdatamodule1 [file normalize tests/modules/extstorage/extdata1.so]
 
@@ -721,11 +731,14 @@ start_cluster 1 0 [list overrides [list "ext-data-mode" kv "ext-data-store-by-si
         catch {r del multi_key1_test7 multi_key2_test7 ext} err
         assert_match {CROSSSLOT Keys*} $err
     }
+}
 
+start_cluster 1 0 [list overrides [list "ext-data-mode" kv "ext-data-store-by-size" "0"] tags [list "singledb:skip"]] {
     test "DEL with EXT - Sharded - Different databases" {
+        # Load module and initialize external storage
+        assert_equal {OK} [r module load $extdatamodule1]
+        assert_equal {OK} [r external_data INIT db0 helloextdata1]
         r select 0
-        # Initialize external data for db1
-        r external_data INIT db1 helloextdata1
         
         # Set keys in different databases
         r set db0_key "db0_value" ext
@@ -1148,7 +1161,7 @@ start_cluster 1 0 [list overrides [list "ext-data-mode" kv "loglevel" debug] tag
 }
 
 start_server [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [list "external:skip" "slow" "singledb:skip"]] {
-    test {FLUSHDB and SWAPDB performance with large dataset (should complete in under 500ms)} {
+    test {Performance with large dataset (should complete in under 500ms)} {
         # Load module and initialize external storage
         assert_equal {OK} [r module load $extdatamodule1]
         assert_equal {OK} [r external_data INIT db0 helloextdata1]
@@ -1179,6 +1192,28 @@ start_server [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [li
         assert_equal perf_value_[expr {$num_keys - 1}] [r get perf_key_[expr {$num_keys - 1}] ext]
         r select 1
         assert_equal single_value [r get single_key ext]
+        
+        # Test DBSIZE with EXT flag performance
+        puts "Testing DBSIZE with EXT flag performance..."
+        r select 0
+        
+        # Measure DBSIZE with EXT performance
+        puts "Executing DBSIZE EXT..."
+        set dbsize_start [clock milliseconds]
+        set dbsize_result [r dbsize ext]
+        set dbsize_end [clock milliseconds]
+        set dbsize_time [expr {$dbsize_end - $dbsize_start}]
+        
+        puts "DBSIZE EXT time: ${dbsize_time}ms for $num_keys keys"
+        puts "DBSIZE EXT result: $dbsize_result"
+        
+        # Verify DBSIZE EXT returns the correct count
+        assert_equal $num_keys $dbsize_result
+        
+        # Assert DBSIZE EXT completes in under 500ms
+        if {$dbsize_time >= 500} {
+            fail "DBSIZE EXT took ${dbsize_time}ms, expected < 500ms"
+        }
         
         # First test SWAPDB performance with large dataset
         puts "Testing SWAPDB performance with large dataset..."
@@ -1223,6 +1258,10 @@ start_server [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [li
         assert_equal {} [r get perf_key_0 ext]
         assert_equal {} [r get perf_key_[expr {$num_keys - 1}] ext]
         
+        # Verify DBSIZE EXT returns 0 after FLUSHDB
+        set dbsize_after_flush [r dbsize ext]
+        assert_equal 0 $dbsize_after_flush
+        
         # Assert FLUSHDB completes in under 500ms
         # This will FAIL with the current O(n) implementation
         # demonstrating the need for a more efficient flush mechanism (e.g., native flush API)
@@ -1235,7 +1274,7 @@ start_server [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [li
 start_cluster 1 0 [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [list "external:skip" "slow" "singledb:skip"]] {
     set extdatamodule1 [file normalize tests/modules/extstorage/extdata1.so]
     
-    test {FLUSHDB and SWAPDB performance with large dataset (should complete in under 500ms) - cluster mode} {
+    test {Performance with large dataset (should complete in under 500ms) (cluster mode)} {
         wait_for_cluster_state ok
         
         # Load module and initialize external storage
@@ -1269,6 +1308,28 @@ start_cluster 1 0 [list overrides [list "ext-data-mode" kv "loglevel" debug] tag
         r select 1
         assert_equal single_value [r get single_key ext]
         
+        # Test DBSIZE with EXT flag performance in cluster mode
+        puts "Testing DBSIZE with EXT flag performance in cluster mode..."
+        r select 0
+        
+        # Measure DBSIZE with EXT performance
+        puts "Executing DBSIZE EXT in cluster mode..."
+        set dbsize_start [clock milliseconds]
+        set dbsize_result [r dbsize ext]
+        set dbsize_end [clock milliseconds]
+        set dbsize_time [expr {$dbsize_end - $dbsize_start}]
+        
+        puts "DBSIZE EXT time: ${dbsize_time}ms for $num_keys keys in cluster mode"
+        puts "DBSIZE EXT result: $dbsize_result"
+        
+        # Verify DBSIZE EXT returns the correct count
+        assert_equal $num_keys $dbsize_result
+        
+        # Assert DBSIZE EXT completes in under 500ms
+        if {$dbsize_time >= 500} {
+            fail "DBSIZE EXT took ${dbsize_time}ms, expected < 500ms in cluster mode"
+        }
+        
         # Note: SWAPDB is not allowed in cluster mode, so we skip that test
         puts "SWAPDB is not allowed in cluster mode, skipping SWAPDB performance test"
         
@@ -1288,6 +1349,10 @@ start_cluster 1 0 [list overrides [list "ext-data-mode" kv "loglevel" debug] tag
         # Verify all keys are deleted
         assert_equal {} [r get perf_key_0 ext]
         assert_equal {} [r get perf_key_[expr {$num_keys - 1}] ext]
+        
+        # Verify DBSIZE EXT returns 0 after FLUSHDB
+        set dbsize_after_flush [r dbsize ext]
+        assert_equal 0 $dbsize_after_flush
         
         # Assert FLUSHDB completes in under 500ms
         # This will FAIL with the current O(n) implementation
@@ -1542,7 +1607,170 @@ start_server [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [li
         # Cleanup
         $client2 close
     }
-
 }
 
 # Test SWAPDB with cluster mode - skipping, as not supported
+
+# Test DBSIZE command with EXT flag
+# DBSIZE EXT should return the count of memory keys plus the count of external data keys
+
+### Non-sharded
+start_server [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [list "external:skip"]] {
+    test {DBSIZE without EXT returns memory keys count} {
+        # Load module and initialize external storage
+        assert_equal {OK} [r module load $extdatamodule1]
+        assert_equal {OK} [r external_data INIT db0 helloextdata1]
+        r select 0
+        
+        # Set some keys in memory
+        assert_equal {OK} [r set mem_key1 mem_value1]
+        assert_equal {OK} [r set mem_key2 mem_value2]
+        
+        # Set some keys in external storage
+        assert_equal {OK} [r set ext_key1 ext_value1 ext]
+        assert_equal {OK} [r set ext_key1 ext_value2 ext]
+        assert_equal {OK} [r set ext_key2 ext_value3 ext]
+        
+        # Verify DBSIZE without EXT returns only memory keys count
+        assert_equal 2 [r dbsize]
+        assert_equal {OK} [r flushall]
+    }
+    
+    test {DBSIZE with EXT returns memory + external keys count} {
+        # Set some keys in memory
+        assert_equal {OK} [r set mem_key1 mem_value1]
+        assert_equal {OK} [r set mem_key2 mem_value2]
+        
+        # Set some keys in external storage
+        assert_equal {OK} [r set ext_key1 ext_value1 ext]
+        assert_equal {OK} [r set ext_key2 ext_value2 ext]
+        assert_equal {OK} [r set ext_key3 ext_value3 ext]
+        
+        # Verify DBSIZE with EXT returns sum of both counts
+        assert_equal 5 [r dbsize ext]
+        assert_equal {OK} [r flushall]
+    }
+    
+    test {DBSIZE with EXT when external data not initialized} {
+        # Set some keys in memory
+        assert_equal {OK} [r set mem_key1 mem_value1]
+        assert_equal {OK} [r set mem_key2 mem_value2]
+        
+        # Verify DBSIZE with EXT returns only memory keys count when external data is not initialized
+        assert_equal 2 [r dbsize ext]
+        assert_equal {OK} [r flushall]
+    }
+}
+    
+start_server [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [list "external:skip" "singledb:skip"]] {
+    test {DBSIZE with EXT in different databases} {
+        # Load module and initialize external storage for multiple databases
+        assert_equal {OK} [r module load $extdatamodule1]
+        assert_equal {OK} [r external_data INIT db0 helloextdata1]
+        assert_equal {OK} [r external_data INIT db1 helloextdata1]
+        
+        # Set keys in db0
+        r select 0
+        assert_equal {OK} [r set db0_mem_key db0_mem_value]
+        assert_equal {OK} [r set db0_mem_key db0_ext_value ext]
+        
+        # Set keys in db1
+        r select 1
+        assert_equal {OK} [r set db1_mem_key db1_mem_value]
+        assert_equal {OK} [r set db1_ext_key db1_ext_value ext]
+        
+        # Verify DBSIZE with EXT returns correct count for each database
+        r select 0
+        assert_equal 1 [r dbsize ext]
+        
+        r select 1
+        assert_equal 2 [r dbsize ext]
+    }
+}
+
+### Sharded
+start_cluster 1 0 [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [list "external:skip"]] {
+    set extdatamodule1 [file normalize tests/modules/extstorage/extdata1.so]
+    
+    test {DBSIZE without EXT returns memory keys count (cluster mode)} {
+        wait_for_cluster_state ok
+        
+        # Load module and initialize external storage
+        assert_equal {OK} [r module load $extdatamodule1]
+        assert_equal {OK} [r external_data INIT db0 helloextdata1]
+        r select 0
+        
+        # Set some keys in memory
+        assert_equal {OK} [r set mem_key1 mem_value1]
+        assert_equal {OK} [r set mem_key2 mem_value2]
+        
+        # Set some keys in external storage
+        assert_equal {OK} [r set ext_key1 ext_value1 ext]
+        assert_equal {OK} [r set ext_key2 ext_value2 ext]
+        assert_equal {OK} [r set ext_key2 ext_value3 ext]
+        
+        # Verify DBSIZE without EXT returns only memory keys count
+        assert_equal 2 [r dbsize]
+        assert_equal {OK} [r flushall]
+    }
+    
+    test {DBSIZE with EXT returns memory + external keys count (cluster mode)} {
+        wait_for_cluster_state ok
+        
+        # Set some keys in memory
+        assert_equal {OK} [r set mem_key1 mem_value1]
+        assert_equal {OK} [r set mem_key2 mem_value2]
+        assert_equal {OK} [r set mem_key3 mem_value3]
+        
+        # Set some keys in external storage
+        assert_equal {OK} [r set ext_key1 ext_value1 ext]
+        assert_equal {OK} [r set ext_key2 ext_value2 ext]
+        assert_equal {OK} [r set ext_key2 ext_value3 ext]
+        
+        # Verify DBSIZE with EXT returns sum of both counts
+        assert_equal 5 [r dbsize ext]
+        assert_equal {OK} [r flushall]
+    }
+    
+    test {DBSIZE with EXT when external data not initialized (cluster mode)} {
+        wait_for_cluster_state ok
+        
+        # Set some keys in memory
+        assert_equal {OK} [r set mem_key1 mem_value1]
+        assert_equal {OK} [r set mem_key2 mem_value2]
+        
+        # Verify DBSIZE with EXT returns only memory keys count when external data is not initialized
+        assert_equal 2 [r dbsize ext]
+        assert_equal {OK} [r flushall]
+    }
+}
+
+start_cluster 1 0 [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [list "external:skip" "singledb:skip"]] {
+    test {DBSIZE with EXT in different databases (cluster mode)} {
+        wait_for_cluster_state ok
+        
+        # Load module and initialize external storage for multiple databases
+        assert_equal {OK} [r module load $extdatamodule1]
+        assert_equal {OK} [r external_data INIT db0 helloextdata1]
+        assert_equal {OK} [r external_data INIT db1 helloextdata1]
+        
+        # Set keys in db0
+        r select 0
+        assert_equal {OK} [r set db0_mem_key db0_mem_value]
+        assert_equal {OK} [r set db0_ext_key db0_ext_value ext]
+        assert_equal {OK} [r set db0_ext_key db0_ext_value2 ext]
+        
+        # Set keys in db1
+        r select 1
+        assert_equal {OK} [r set db1_mem_key db1_mem_value]
+        assert_equal {OK} [r set db1_ext_key db1_ext_value ext]
+        assert_equal {OK} [r set db1_ext_key2 db1_ext_value ext]
+        
+        # Verify DBSIZE with EXT returns correct count for each database
+        r select 0
+        assert_equal 2 [r dbsize ext]
+        
+        r select 1
+        assert_equal 3 [r dbsize ext]
+    }
+}

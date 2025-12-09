@@ -1075,3 +1075,49 @@ void externalDataSwapDb(int id1, int id2) {
 
     /* Note: We don't free db_name1 and db_name2 here because they are now owned by the dictionary */
 }
+
+/* Count the number of external data keys for a specific database */
+unsigned long long externalDataCountKeys(int dbid) {
+    externalDataCtx *ctx = getCurrentExternalDataCtx();
+    if (!ctx) return 0;
+
+    sds db_name = getDBName(dbid);
+    dictEntry *db = dictFind(ctx->dbdata, db_name);
+    sdsfree(db_name);
+    if (!db) return 0;
+
+    externalDbData *dbData = dictGetVal(db);
+    externalDataModuleInstance *mi = dbData->module_instance;
+    if (!mi) return 0;
+
+    setupModuleCtx(mi);
+
+    unsigned long long count = 0;
+
+    /* Try to use the keys_count method if available (more efficient) */
+    if (mi->external_module->storage_methods.keys_count) {
+        if (mi->external_module->storage_methods.keys_count(mi->module_ctx, mi->storage_ctx, dbid, &count) == EXTERNAL_SUCCESS) {
+            /* If keys_count succeeded, we're done */
+            teardownModuleCtx(mi);
+            return count;
+        }
+        /* If keys_count failed, fall back to iterator method */
+    }
+
+    /* Use the iterator method as a fallback */
+    externalStorageInstanceIterator *esi_it = externalStorageInstanceIteratorInit(dbid, NULL, NULL);
+    if (esi_it != NULL) {
+        robj *next;
+        while (externalStorageInstanceIteratorNext(esi_it, &next)) {
+            /* Check if the key exists in the filter */
+            if (externalFilterCallGetFunc(mi, dbid, next)) {
+                count++;
+            }
+            decrRefCount(next);
+        }
+        externalStorageInstanceIteratorRelease(esi_it);
+    }
+
+    teardownModuleCtx(mi);
+    return count;
+}

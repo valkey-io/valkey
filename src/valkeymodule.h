@@ -1419,6 +1419,24 @@ typedef int (*ValkeyModuleExternalStorageFlushFunc)(
     ValkeyModuleExternalStorageCtx *storage_ctx,
     int dbid);
 
+/* The callback function called to count keys in this storage.
+ * This allows efficient O(1) counting of all keys for a specific database.
+ *
+ * - `module_ctx`: the module runtime context.
+ *
+ * - `storage_ctx`: the external storage context.
+ *
+ * - `dbid`: the database ID to count keys in.
+ *
+ * - `count`: pointer to store the count of keys.
+ *
+ */
+typedef int (*ValkeyModuleExternalStorageKeysCountFunc)(
+    ValkeyModuleCtx *module_ctx,
+    ValkeyModuleExternalStorageCtx *storage_ctx,
+    int dbid,
+    unsigned long long *count);
+
 /* The callback function called when SWAPDB command is called.
  * This allows the module to efficiently swap data between two databases
  * in O(1) time instead of iterating through all keys.
@@ -1469,6 +1487,10 @@ typedef struct ValkeyModuleExternalStorageMethods {
     /* The callback function called when `SWAPDB` command is called.
      * This allows efficient O(1) swapping of all data between two databases. */
     ValkeyModuleExternalStorageSwapFunc swap;
+
+    /* The callback function called to count keys in this storage.
+     * This allows efficient O(1) counting of all keys for a specific database. */
+    ValkeyModuleExternalStorageKeysCountFunc keys_count;
 } ValkeyModuleExternalStorageMethodsV1;
 
 #define ValkeyModuleExternalStorageMethods ValkeyModuleExternalStorageMethodsV1

@@ -70,4 +70,7 @@ void externalDataSwapDb(int id1, int id2);
 /* Utility functions */
 sds getDBName(int db_num);
 
+/* Count external data keys for a specific database */
+unsigned long long externalDataCountKeys(int dbid);
+
 #endif /* __EXTERNAL_DATA_H_ */

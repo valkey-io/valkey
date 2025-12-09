@@ -149,6 +149,25 @@ static int storageDelFunction(ValkeyModuleCtx *module_ctx,
     return EXTERNAL_SUCCESS;
 }
 
+static int storageKeysCountFunction(ValkeyModuleCtx *module_ctx,
+                                    ValkeyModuleExternalStorageCtx *storage_ctx,
+                                    int dbid,
+                                    unsigned long long *count) {
+    VALKEYMODULE_NOT_USED(storage_ctx);
+    ValkeyModule_AutoMemory(module_ctx);
+    
+    if (dbid < 0 || dbid >= MAX_DB) {
+        return EXTERNAL_ERROR;
+    }
+    
+    if (storage_mem_pool[dbid] == NULL) {
+        *count = 0;
+        return EXTERNAL_SUCCESS;
+    }
+    
+    *count = ValkeyModule_DictSize(storage_mem_pool[dbid]);
+    return EXTERNAL_SUCCESS;
+}
 
 static int storageIterateFunction(ValkeyModuleCtx *, int dbid,
                                    ValkeyModuleString *, long long *,
@@ -389,6 +408,7 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
         .set_readonly = storageSetReadonlyFunction,
         .drop_readonly = storageDropReadonlyFunction,
         .iterate = storageIterateFunction,
+        .keys_count = storageKeysCountFunction,
         .flush = storageFlushFunction,
         .swap = storageSwapFunction
     };

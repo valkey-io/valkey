@@ -1508,7 +1508,27 @@ void scanCommand(client *c) {
 }
 
 void dbsizeCommand(client *c) {
-    addReplyLongLong(c, kvstoreSize(c->db->keys));
+    int ext = 0;
+
+    /* Check if the last argument is "EXT" flag */
+    if (c->argc > 1 && !strcasecmp(objectGetVal(c->argv[c->argc - 1]), "EXT")) {
+        if (!isExtDataOn()) {
+            addReplyError(c, EXTDATAOFFERRMSG);
+            return;
+        }
+        ext = 1;
+    }
+
+    /* Get the count of memory keys */
+    unsigned long long mem_keys = kvstoreSize(c->db->keys);
+
+    /* If EXT flag is provided, add external data keys count */
+    if (ext) {
+        unsigned long long ext_keys = externalDataCountKeys(c->db->id);
+        addReplyLongLong(c, mem_keys + ext_keys);
+    } else {
+        addReplyLongLong(c, mem_keys);
+    }
 }
 
 void lastsaveCommand(client *c) {

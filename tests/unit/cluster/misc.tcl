@@ -60,7 +60,7 @@ start_cluster 1 1 {tags {external:skip cluster}} {
         # Make sure relevant logs are printed.
         verify_log_message 0 "*Could not rename tmp cluster config file*" 0
         verify_log_message -1 "*Could not rename tmp cluster config file*" 0
-        verify_log_message 0 "*Cluster config file is applying a change even though it is unable to write to disk*" 0
-        verify_log_message -1 "*Cluster config file is applying a change even though it is unable to write to disk*" 0
+        verify_log_message 0 "*Cluster config updated even though writing the cluster config file to disk failed*" 0
+        verify_log_message -1 "*Cluster config updated even though writing the cluster config file to disk failed*" 0
     }
 }

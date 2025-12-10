@@ -1040,8 +1040,9 @@ typedef struct replBacklog {
 
 typedef struct replDataBuf {
     list *blocks; /* List of replDataBufBlock */
+    size_t mem;   /* The total allocated memory in all blocks */
     size_t len;   /* Number of bytes stored in all blocks */
-    size_t peak;
+    size_t peak;  /* Peak number of bytes stored in all blocks */
 } replDataBuf;
 
 typedef struct {
@@ -1481,6 +1482,7 @@ struct serverMemOverhead {
     size_t total_allocated;
     size_t startup_allocated;
     size_t repl_backlog;
+    size_t replicas_repl_buffer;
     size_t clients_replicas;
     size_t clients_normal;
     size_t cluster_links;

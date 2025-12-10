@@ -2874,6 +2874,7 @@ sds getReplicaPortString(void) {
 void freePendingReplDataBuf(void) {
     listRelease(server.pending_repl_data.blocks);
     server.pending_repl_data.blocks = NULL;
+    server.pending_repl_data.mem = 0;
     server.pending_repl_data.len = 0;
 }
 
@@ -3154,6 +3155,7 @@ error:
  * itself once we need it */
 void replDataBufInit(void) {
     serverAssert(server.pending_repl_data.blocks == NULL);
+    server.pending_repl_data.mem = 0;
     server.pending_repl_data.len = 0;
     server.pending_repl_data.peak = 0;
     server.pending_repl_data.blocks = listCreate();
@@ -3237,6 +3239,7 @@ void bufferReplData(connection *conn) {
             tail->size = usable_size - sizeof(replDataBufBlock);
             tail->used = 0;
             listAddNodeTail(server.pending_repl_data.blocks, tail);
+            server.pending_repl_data.mem += (usable_size + sizeof(listNode));
             server.pending_repl_data.len += tail->size;
             /* Update buffer's peak */
             if (server.pending_repl_data.peak < server.pending_repl_data.len)
@@ -3271,6 +3274,7 @@ int streamReplDataBufToDb(client *c) {
         c->querybuf = sdscatlen(c->querybuf, o->buf, used);
         c->repl_data->read_reploff += used;
         processInputBuffer(c);
+        server.pending_repl_data.mem -= (used + sizeof(replDataBufBlock) + sizeof(listNode));
         server.pending_repl_data.len -= used;
         offset += used;
         listDelNode(server.pending_repl_data.blocks, cur);

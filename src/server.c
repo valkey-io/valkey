@@ -6958,7 +6958,36 @@ void loadDataFromDisk(void) {
         int rdb_load_ret = rdbLoad(server.rdb_filename, &rsi, rdb_flags);
         if (rdb_load_ret == RDB_OK) {
             serverLog(LL_NOTICE, "DB loaded from disk: %.3f seconds", (float)(ustime() - start) / 1000000);
-            rsi_is_valid = rdbRestoreOffsetFromSaveInfo(&rsi, false);
+
+            /* Restore the replication ID / offset from the RDB file. */
+            if (rsi.repl_id_is_set && rsi.repl_offset != -1 &&
+                /* Note that older implementations may save a repl_stream_db
+                 * of -1 inside the RDB file in a wrong way, see more
+                 * information in function rdbPopulateSaveInfo. */
+                rsi.repl_stream_db != -1) {
+                rsi_is_valid = 1;
+                if (!iAmPrimary()) {
+                    memcpy(server.replid, rsi.repl_id, sizeof(server.replid));
+                    server.primary_repl_offset = rsi.repl_offset;
+                    /* If this is a replica, create a cached primary from this
+                     * information, in order to allow partial resynchronizations
+                     * with primaries. */
+                    replicationCachePrimaryUsingMyself();
+                    selectDb(server.cached_primary, rsi.repl_stream_db);
+                } else {
+                    /* If this is a primary, we can save the replication info
+                     * as secondary ID and offset, in order to allow replicas
+                     * to partial resynchronizations with primaries. */
+                    memcpy(server.replid2, rsi.repl_id, sizeof(server.replid));
+                    server.second_replid_offset = rsi.repl_offset + 1;
+                    /* Rebase primary_repl_offset from rsi.repl_offset. */
+                    server.primary_repl_offset += rsi.repl_offset;
+                    serverAssert(server.repl_backlog);
+                    server.repl_backlog->offset = server.primary_repl_offset - server.repl_backlog->histlen + 1;
+                    rebaseReplicationBuffer(rsi.repl_offset);
+                    server.repl_no_replicas_since = time(NULL);
+                }
+            }
         } else if (rdb_load_ret != RDB_NOT_EXIST) {
             serverLog(LL_WARNING, "Fatal error loading the DB, check server logs. Exiting.");
             exit(1);

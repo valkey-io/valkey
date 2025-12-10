@@ -2265,7 +2265,7 @@ struct valkeyServer {
     int tls_auth_clients;
     serverTLSContextConfig tls_ctx_config;
     long long tls_client_cert_expiry_warn_threshold; /* Days remaining before logging warnings */
-    long long client_cert_min_days_until_expiry;     /* Minimum days observed across client certificates */
+    long long client_cert_min_seconds_until_expiry;  /* Minimum seconds observed across client certificates */
     dict *client_cert_expiry_warned;                  /* Fingerprints logged for expiry warnings */
     serverUnixContextConfig unix_ctx_config;
     serverRdmaContextConfig rdma_ctx_config;

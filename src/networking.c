@@ -1724,9 +1724,9 @@ static void monitorTlsClientCertExpiry(client *c) {
     long long remaining_seconds;
     if (connGetPeerCertValidity(c->conn, &remaining_seconds) != C_OK) return;
 
-    long long remaining_days = secondsToDaysFloor(remaining_seconds);
-    if (server.client_cert_min_days_until_expiry == -1 || remaining_days < server.client_cert_min_days_until_expiry) {
-        server.client_cert_min_days_until_expiry = remaining_days;
+    if (server.client_cert_min_seconds_until_expiry == -1 ||
+        remaining_seconds < server.client_cert_min_seconds_until_expiry) {
+        server.client_cert_min_seconds_until_expiry = remaining_seconds;
     }
 
     long long threshold_days = server.tls_client_cert_expiry_warn_threshold;
@@ -1743,7 +1743,7 @@ static void monitorTlsClientCertExpiry(client *c) {
     if (remaining_seconds <= threshold_seconds) {
         long long log_days = secondsToDaysFloor(remaining_seconds);
         sds client = catClientInfoShortString(sdsempty(), c, server.hide_user_data_from_log);
-        serverLog(LL_WARNING,
+        serverLog(LL_NOTICE,
                   "TLS client certificate for %s expires in %lld days (threshold %lld days).",
                   client,
                   log_days,

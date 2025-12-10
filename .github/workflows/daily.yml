@@ -2,6 +2,17 @@ name: Daily
 
 on:
   pull_request:
+    types: [opened, reopened, synchronize, labeled]
+    branches:
+      # any PR to a release branch.
+      - "[0-9].[0-9]"
+      - "unstable"
+    paths-ignore:
+      - '**/*.md'
+      - '**/00-RELEASENOTES'
+      - '**/COPYING'
+  pull_request_target:
+    types: [labeled]
     branches:
       # any PR to a release branch.
       - "[0-9].[0-9]"
@@ -39,7 +50,8 @@ concurrency:
 
 permissions:
   contents: read
-
+  pull-requests: write
+  issues: write
 jobs:
   test-ubuntu-jemalloc:
     runs-on: ubuntu-latest
@@ -1383,6 +1395,22 @@ jobs:
           path: "./utils/req-res-validator/requirements.txt"
       - name: validator
         run: ./utils/req-res-log-validator.py --verbose --fail-missing-reply-schemas ${{ (!contains(github.event.inputs.skiptests, 'valkey') && !contains(github.event.inputs.skiptests, 'module') && !contains(github.event.inputs.sentinel, 'valkey') && !contains(github.event.inputs.skiptests, 'cluster')) && github.event.inputs.test_args == '' && github.event.inputs.cluster_test_args == '' && '--fail-commands-not-all-hit' || '' }}
+
+  remove-run-extra-tests-label:
+    runs-on: ubuntu-latest
+    if: always() && github.event_name == 'pull_request_target' && github.event.action == 'labeled' && github.event.label.name == 'run-extra-tests'
+    steps:
+      - name: Remove run-extra-tests label
+        uses: actions/github-script@5c56fde4671bc2d3592fb0f2c5b5bab9ddae03b1 # v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            await github.rest.issues.removeLabel({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              name: 'run-extra-tests'
+            }).catch(err => console.log('label not present', err.message));
 
   notify-about-job-results:
     runs-on: ubuntu-latest

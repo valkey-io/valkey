@@ -1001,7 +1001,6 @@ void moduleCreateContext(ValkeyModuleCtx *out_ctx, ValkeyModule *module, int ctx
 void moduleScriptingEngineInitContext(ValkeyModuleCtx *out_ctx,
                                       ValkeyModule *module,
                                       int add_script_execution_flag,
-                                      int add_thread_safe_flag,
                                       client *client) {
     /* The VALKEYMODULE_CTX_SCRIPT_EXECUTION requires a non-NULL client */
     serverAssert(!add_script_execution_flag || client != NULL);
@@ -1009,13 +1008,10 @@ void moduleScriptingEngineInitContext(ValkeyModuleCtx *out_ctx,
     /* For non-script execution contexts, and non-asynchronous contexts, allocate
      * a temporary client so the scripting engine can call server commands in
      * its callbacks. */
-    int ctx_flags = VALKEYMODULE_CTX_TEMP_CLIENT;
+    int ctx_flags = VALKEYMODULE_CTX_TEMP_CLIENT | VALKEYMODULE_CTX_THREAD_SAFE;
 
     if (add_script_execution_flag) {
         ctx_flags = VALKEYMODULE_CTX_SCRIPT_EXECUTION;
-    }
-    if (add_thread_safe_flag) {
-        ctx_flags = VALKEYMODULE_CTX_THREAD_SAFE;
     }
 
     moduleCreateContext(out_ctx, module, ctx_flags);

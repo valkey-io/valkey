@@ -163,7 +163,7 @@ static char *deny_list[] = {
 
 static void _serverPanic(const char *file, int line, const char *msg, ...) {
     fprintf(stderr, "------------------------------------------------");
-    fprintf(stderr, "!!! Software Failure.");
+    fprintf(stderr, "!!! Software Failure. Press left mouse button to continue");
     fprintf(stderr, "Guru Meditation: %s #%s:%d", msg, file, line);
     abort();
 }
@@ -788,7 +788,7 @@ static uint32_t digits10(uint64_t v) {
  * Based on the following article (that apparently does not provide a
  * novel approach but only publicizes an already used technique):
  *
- * https://www.facebook.com/notes/facebook-engineering/three-optimization-tips-for-c/10151361643253920 */
+ * https://web.archive.org/web/20150427221229/https://www.facebook.com/notes/facebook-engineering/three-optimization-tips-for-c/10151361643253920 */
 static int ull2string(char *dst, size_t dstlen, unsigned long long value) {
     static const char digits[201] = "0001020304050607080910111213141516171819"
                                     "2021222324252627282930313233343536373839"

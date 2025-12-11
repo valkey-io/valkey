@@ -215,8 +215,6 @@ static void ldbList(int around, int context) {
 #define LDB_MAX_VALUES_DEPTH (LUA_MINSTACK / 2)
 static ValkeyModuleString *ldbCatStackValueRec(ValkeyModuleString *s, lua_State *lua, int idx, int level) {
     int t = lua_type(lua, idx);
-    ValkeyModuleString *old_s = NULL;
-    const char *prefix = ValkeyModule_StringPtrLen(s, NULL);
 
     if (level++ == LDB_MAX_VALUES_DEPTH) {
         const char *msg = "<max recursion level reached! Nested table?>";
@@ -236,8 +234,10 @@ static ValkeyModuleString *ldbCatStackValueRec(ValkeyModuleString *s, lua_State 
         break;
     }
     case LUA_TNUMBER: {
-        old_s = s;
-        s = ValkeyModule_CreateStringPrintf(NULL, "%s %g", prefix, (double)lua_tonumber(lua, idx));
+        ValkeyModuleString *old_s = s;
+        const char *prefix = ValkeyModule_StringPtrLen(s, NULL);
+        s = ValkeyModule_CreateStringPrintf(NULL, "%s%g", prefix, (double)lua_tonumber(lua, idx));
+        ValkeyModule_FreeString(NULL, old_s);
         break;
     }
     case LUA_TNIL: ValkeyModule_StringAppendBuffer(NULL, s, "nil", 3); break;
@@ -292,18 +292,16 @@ static ValkeyModuleString *ldbCatStackValueRec(ValkeyModuleString *s, lua_State 
             typename = "thread";
         else if (t == LUA_TLIGHTUSERDATA)
             typename = "light-userdata";
-        old_s = s;
+        ValkeyModuleString *old_s = s;
+        const char *prefix = ValkeyModule_StringPtrLen(s, NULL);
         s = ValkeyModule_CreateStringPrintf(NULL, "%s \"%s@%p\"", prefix, typename, p);
+        ValkeyModule_FreeString(NULL, old_s);
     } break;
     default: {
         const char *unknown_str = "\"<unknown-lua-type>\"";
         ValkeyModule_StringAppendBuffer(NULL, s, unknown_str, strlen(unknown_str));
         break;
     }
-    }
-
-    if (old_s) {
-        ValkeyModule_FreeString(NULL, old_s);
     }
 
     return s;

@@ -39,7 +39,7 @@ Technical major decisions include:
     * New user visible fields that need to be maintained
     * Adding or removing a new external library such as a client or module to the project when it affects runtime behavior
 
-For technical major decisions, the TSC may approve a change based on explicit “+2” support from at least two sitting TSC members, recorded on the relevant issue or pull request.
+For technical major decisions, the TSC may approve a change based on explicit “+2” support from at least two TSC members, recorded on the relevant issue or pull request.
 A +2 approval is treated as approval of the technical decision by the TSC and may be retracted by a subsequent vote.
 Retraction requires a simple majority vote of all voting members; if the vote results in a tie, the status quo is preserved and the +2 approval is retracted.
 

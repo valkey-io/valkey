@@ -1040,8 +1040,8 @@ typedef struct replBacklog {
 
 typedef struct replDataBuf {
     list *blocks; /* List of replDataBufBlock */
-    size_t mem;  /* Total allocated memory including buffer metadata and list nodes */
-    size_t len;  /* Total replication data bytes pending processing */
+    size_t mem;   /* Total allocated memory including buffer metadata and list nodes */
+    size_t len;   /* Total replication data bytes pending processing */
     size_t peak;  /* Peak value of len during buffer lifetime */
 } replDataBuf;
 

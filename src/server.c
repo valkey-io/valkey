@@ -7385,10 +7385,10 @@ __attribute__((weak)) int main(int argc, char **argv) {
     }
 
     /* Initialize the LUA scripting engine. */
-#ifdef LUA_ENGINE_ENABLED
-#define LUA_ENGINE_LIB_STR STRINGIFY(LUA_ENGINE_LIB)
+#ifdef LUA_ENABLED
+#define LUA_LIB_STR STRINGIFY(LUA_LIB)
     if (scriptingEngineManagerFind("lua") == NULL) {
-        if (moduleLoad(LUA_ENGINE_LIB_STR, NULL, 0, 0) != C_OK) {
+        if (moduleLoad(LUA_LIB_STR, NULL, 0, 0) != C_OK) {
             serverPanic("Lua engine initialization failed, check the server logs.");
         }
     }

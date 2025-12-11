@@ -263,7 +263,7 @@ else
 	LUA_MODULE_INSTALL=install-lua-module
 
 	current_dir = $(shell pwd)
-	FINAL_CFLAGS+=-DLUA_ENGINE_ENABLED -DLUA_ENGINE_LIB=libvalkeylua.so
+	FINAL_CFLAGS+=-DLUA_ENABLED -DLUA_LIB=libvalkeylua.so
 ifeq ($(uname_S),Darwin)
 	FINAL_LDFLAGS+= -Wl,-rpath,$(PREFIX)/lib:$(current_dir)/modules/lua
 else

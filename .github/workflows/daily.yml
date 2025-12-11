@@ -951,7 +951,7 @@ jobs:
   build-macos:
     strategy:
       matrix:
-        os: [macos-12, macos-14]
+        os: [macos-14]
     runs-on: ${{ matrix.os }}
     if: |
       (github.event_name == 'workflow_dispatch' || (github.event_name != 'workflow_dispatch' && github.repository == 'valkey-io/valkey')) &&
@@ -978,7 +978,7 @@ jobs:
       run: make SERVER_CFLAGS='-Werror -DSERVER_TEST'
 
   test-freebsd:
-    runs-on: macos-12
+    runs-on: ubuntu-latest
     if: |
       (github.event_name == 'workflow_dispatch' || (github.event_name != 'workflow_dispatch' && github.repository == 'valkey-io/valkey')) &&
       !contains(github.event.inputs.skipjobs, 'freebsd')
@@ -1001,9 +1001,9 @@ jobs:
         version: 13.2
         shell: bash
         run: |
-          sudo pkg install -y bash gmake lang/tcl86 lang/tclx
-          gmake
-          ./runtest --single unit/keyspace --single unit/auth --single unit/networking --single unit/protocol
+            sudo pkg install -y bash gmake lang/tcl86 lang/tclX
+            gmake
+            ./runtest --single unit/keyspace --single unit/auth --single unit/networking --single unit/protocol
 
   test-alpine-jemalloc:
     runs-on: ubuntu-latest

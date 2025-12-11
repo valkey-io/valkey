@@ -16,7 +16,7 @@ The TSC members are listed in the [MAINTAINERS.md](MAINTAINERS.md) file in the V
 At any time, no more than one third (1/3) of the TSC members may be employees, contractors, or representatives of the same organization or affiliated organizations.
 For the purposes of this document, “organization” includes companies, corporations, universities, research institutes, non-profits, governmental institutions, and any of their subsidiaries or affiliates.
 If, at any time, the 1/3 organization limit is exceeded (for example, due to changes in employment, company acquisitions, or organizational affiliations), the TSC shall be notified as soon as possible.
-The TSC must promptly take action to restore compliance, which may include removing or reassigning members in accordance with the procedures outlined in the "Termination of Membership" section.
+The TSC must promptly take action to restore compliance, which may include removing or reassigning members in accordance with the procedures outlined in the [Termination of Membership](#termination-of-membership) section.
 The TSC shall strive to resolve the situation within 30 days of notification, and document the steps taken to restore compliance.
 
 The TSC shall appoint a Chair responsible for organizing TSC meetings.

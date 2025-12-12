@@ -99,12 +99,14 @@ typedef struct datasetRecord {
 } datasetRecord;
 
 typedef struct dataset {
-    datasetFormat format;   /* Dataset file format */
-    char delimiter;         /* Field delimiter for CSV/TSV */
-    sds *field_names;       /* Field name lookup table */
-    int field_count;        /* Number of fields */
-    datasetRecord *records; /* Structured field data */
-    size_t record_count;    /* Number of records */
+    datasetFormat format;
+    char delimiter;
+    sds *field_names;
+    int field_count;
+    int *field_map;       /* Maps original field index to storage index, -1 if unused */
+    int used_field_count; /* Number of actually loaded fields */
+    datasetRecord *records;
+    size_t record_count;
 } dataset;
 
 struct benchmarkThread;
@@ -1666,43 +1668,54 @@ static void updateClusterSlotsConfiguration(void) {
     pthread_mutex_unlock(&config.is_updating_slots_mutex);
 }
 
-/* Validate field placeholders in command arguments */
-static void validateFieldPlaceholders(sds *template_argv, int template_argc) {
+static int buildFieldMap(dataset *ds, sds *template_argv, int template_argc) {
+    ds->field_map = zmalloc(ds->field_count * sizeof(int));
+    ds->used_field_count = 0;
+
+    for (int i = 0; i < ds->field_count; i++) {
+        ds->field_map[i] = -1;
+    }
+
     for (int arg_idx = 0; arg_idx < template_argc; arg_idx++) {
         const char *arg = template_argv[arg_idx];
         const char *field_pos = strstr(arg, FIELD_PREFIX);
+
         while (field_pos) {
             const char *field_start = field_pos + FIELD_PREFIX_LEN;
             const char *field_end = strstr(field_start, FIELD_SUFFIX);
             if (!field_end) break;
 
-            /* Extract and validate field name */
             size_t field_name_len = field_end - field_start;
             sds field_name = sdsnewlen(field_start, field_name_len);
 
-            int field_found = 0;
-            for (int k = 0; k < config.current_dataset->field_count; k++) {
-                if (!strcmp(field_name, config.current_dataset->field_names[k])) {
-                    field_found = 1;
+            int field_idx = -1;
+            for (int k = 0; k < ds->field_count; k++) {
+                if (!strcmp(field_name, ds->field_names[k])) {
+                    field_idx = k;
                     break;
                 }
             }
 
-            if (!field_found) {
+            if (field_idx == -1) {
                 fprintf(stderr, "Error: Field placeholder '__field:%s__' not found in dataset fields\n", field_name);
                 fprintf(stderr, "Available fields: ");
-                for (int j = 0; j < config.current_dataset->field_count; j++) {
-                    fprintf(stderr, "%s%s", config.current_dataset->field_names[j],
-                            (j < config.current_dataset->field_count - 1) ? ", " : "\n");
+                for (int j = 0; j < ds->field_count; j++) {
+                    fprintf(stderr, "%s%s", ds->field_names[j], (j < ds->field_count - 1) ? ", " : "\n");
                 }
                 sdsfree(field_name);
-                exit(1);
+                return 0;
+            }
+
+            if (ds->field_map[field_idx] == -1) {
+                ds->field_map[field_idx] = ds->used_field_count++;
             }
 
             sdsfree(field_name);
             field_pos = strstr(field_end + FIELD_SUFFIX_LEN, FIELD_PREFIX);
         }
     }
+
+    return 1;
 }
 
 /* Format bytes into human-readable string */
@@ -1827,7 +1840,8 @@ static int scanXmlFieldsFromFile(dataset *ds, const char *xml_root_element) {
     FILE *fp = fopen(config.dataset_file, "r");
     if (!fp) return 0;
 
-    char start_tag[64], end_tag[64];
+    char start_tag_prefix[64], start_tag[64], end_tag[64];
+    snprintf(start_tag_prefix, sizeof(start_tag_prefix), "<%s", xml_root_element);
     snprintf(start_tag, sizeof(start_tag), "<%s>", xml_root_element);
     snprintf(end_tag, sizeof(end_tag), "</%s>", xml_root_element);
 
@@ -1838,10 +1852,16 @@ static int scanXmlFieldsFromFile(dataset *ds, const char *xml_root_element) {
     while (fgets(buffer, sizeof(buffer), fp)) {
         current_doc = sdscat(current_doc, buffer);
 
-        const char *doc_start = strstr(current_doc, start_tag);
-        if (!doc_start) continue;
+        /* Look for start tag with or without attributes */
+        const char *tag_prefix_pos = strstr(current_doc, start_tag_prefix);
+        if (!tag_prefix_pos) continue;
 
-        const char *doc_end = strstr(doc_start, end_tag);
+        /* Find the actual opening tag end */
+        const char *tag_end_pos = strchr(tag_prefix_pos, '>');
+        if (!tag_end_pos) continue;
+
+        const char *doc_start = tag_prefix_pos;
+        const char *doc_end = strstr(tag_end_pos, end_tag);
         if (!doc_end) continue;
 
         doc_end += strlen(end_tag);
@@ -1862,12 +1882,17 @@ static int loadXmlDataset(dataset *ds) {
     FILE *fp = fopen(config.dataset_file, "r");
     if (!fp) return 0;
 
-    char start_tag[64], end_tag[64];
+    char start_tag_prefix[64], start_tag[64], end_tag[64];
+    size_t end_tag_len;
+    snprintf(start_tag_prefix, sizeof(start_tag_prefix), "<%s", config.xml_root_element);
     snprintf(start_tag, sizeof(start_tag), "<%s>", config.xml_root_element);
     snprintf(end_tag, sizeof(end_tag), "</%s>", config.xml_root_element);
+    end_tag_len = strlen(end_tag);
 
-    char buffer[1024];
-    sds current_doc = sdsempty();
+    /* Initial 4MB buffer, will grow dynamically if needed */
+    size_t buffer_capacity = 4 * 1024 * 1024;
+    char *buffer = zmalloc(buffer_capacity);
+    size_t buffer_used = 0;
     int fields_discovered = 0;
     size_t capacity = 1000;
 
@@ -1877,25 +1902,86 @@ static int loadXmlDataset(dataset *ds) {
         printf("Loading XML dataset from %s...\n", config.dataset_file);
     }
 
-    while (fgets(buffer, sizeof(buffer), fp) && !shouldStopLoading(ds->record_count)) {
-        current_doc = sdscat(current_doc, buffer);
+    /* Check if fields already discovered */
+    if (ds->field_names && ds->field_count > 0) {
+        fields_discovered = 1;
+        if (!config.quiet) {
+            printf("Using %d fields: ", ds->field_count);
+            for (int i = 0; i < ds->field_count; i++) {
+                printf("%s%s", ds->field_names[i], (i < ds->field_count - 1) ? ", " : "\n");
+            }
+        }
+    }
 
-        const char *doc_start = strstr(current_doc, start_tag);
-        if (!doc_start) continue;
+    /* Streaming parse loop */
+    while (!shouldStopLoading(ds->record_count)) {
+        /* Read more data into buffer */
+        size_t space_available = buffer_capacity - buffer_used;
 
-        const char *doc_end = strstr(doc_start, end_tag);
-        if (!doc_end) continue;
+        /* If buffer is full but we haven't found a complete document, grow it */
+        if (space_available == 0) {
+            size_t new_capacity = buffer_capacity * 2;
+            buffer = zrealloc(buffer, new_capacity);
+            buffer_capacity = new_capacity;
+            space_available = buffer_capacity - buffer_used;
+        }
 
-        doc_end += strlen(end_tag);
+        size_t bytes_read = fread(buffer + buffer_used, 1, space_available, fp);
+        buffer_used += bytes_read;
 
-        if (!fields_discovered) {
-            /* Check if fields are already discovered from scanXmlFieldsFromFile() */
-            if (ds->field_names && ds->field_count > 0) {
-                fields_discovered = 1;
-            } else {
+        if (buffer_used == 0) break; /* EOF with no data */
+
+        /* Process all complete documents in buffer */
+        size_t scan_pos = 0;
+        while (scan_pos < buffer_used) {
+            /* Find document start */
+            const char *doc_start = NULL;
+            const char *tag_open_end = NULL;
+
+            /* Search for start tag */
+            for (size_t i = scan_pos; i < buffer_used; i++) {
+                if (buffer[i] == '<' && i + 1 < buffer_used &&
+                    strncmp(buffer + i, start_tag_prefix, strlen(start_tag_prefix)) == 0) {
+                    doc_start = buffer + i;
+
+                    /* Find end of opening tag */
+                    for (size_t j = i + 1; j < buffer_used; j++) {
+                        if (buffer[j] == '>') {
+                            tag_open_end = buffer + j;
+                            break;
+                        }
+                    }
+                    break;
+                }
+            }
+
+            if (!doc_start || !tag_open_end) {
+                /* No more complete opening tags in buffer */
+                break;
+            }
+
+            /* Find matching end tag */
+            const char *doc_end = NULL;
+            for (size_t i = (tag_open_end - buffer); i + end_tag_len <= buffer_used; i++) {
+                if (strncmp(buffer + i, end_tag, end_tag_len) == 0) {
+                    doc_end = buffer + i + end_tag_len;
+                    break;
+                }
+            }
+
+            if (!doc_end) {
+                /* Incomplete document - move to next iteration */
+                break;
+            }
+
+            /* Complete document found - process it */
+            size_t doc_len = doc_end - doc_start;
+
+            /* Field discovery on first document */
+            if (!fields_discovered) {
                 if (!scanXmlFields(doc_start, doc_end, ds, start_tag, end_tag)) {
                     fprintf(stderr, "No XML fields discovered\n");
-                    sdsfree(current_doc);
+                    zfree(buffer);
                     fclose(fp);
                     return 0;
                 }
@@ -1908,33 +1994,67 @@ static int loadXmlDataset(dataset *ds) {
                     }
                 }
             }
+
+            /* Expand records array if needed */
+            if (ds->record_count >= capacity) {
+                capacity *= 2;
+                ds->records = zrealloc(ds->records, sizeof(datasetRecord) * capacity);
+            }
+
+            /* Extract fields from document */
+            datasetRecord *record = &ds->records[ds->record_count];
+            record->fields = zmalloc(sizeof(sds) * ds->used_field_count);
+
+            sds doc_str = sdsnewlen(doc_start, doc_len);
+            for (int i = 0; i < ds->field_count; i++) {
+                if (ds->field_map && ds->field_map[i] >= 0) {
+                    record->fields[ds->field_map[i]] = getXmlFieldValue(doc_str, ds->field_names[i]);
+                }
+            }
+            sdsfree(doc_str);
+
+            ds->record_count++;
+
+            if (!config.quiet && ds->record_count % 1000 == 0) {
+                printf("\rLoaded %zu documents...", ds->record_count);
+                fflush(stdout);
+            }
+
+            /* Move scan position past this document */
+            scan_pos = doc_end - buffer;
         }
 
-        if (ds->record_count >= capacity) {
-            capacity *= 2;
-            ds->records = zrealloc(ds->records, sizeof(datasetRecord) * capacity);
+        /* Move incomplete document to start of buffer using memmove */
+        if (scan_pos > 0 && scan_pos < buffer_used) {
+            size_t remaining = buffer_used - scan_pos;
+            memmove(buffer, buffer + scan_pos, remaining);
+            buffer_used = remaining;
+        } else if (scan_pos == buffer_used) {
+            /* All documents processed */
+            buffer_used = 0;
         }
 
-        datasetRecord *record = &ds->records[ds->record_count];
-        record->fields = zmalloc(sizeof(sds) * ds->field_count);
-
-        sds doc_str = sdsnewlen(doc_start, doc_end - doc_start);
-        for (int i = 0; i < ds->field_count; i++) {
-            record->fields[i] = getXmlFieldValue(doc_str, ds->field_names[i]);
+        /* Stop if EOF reached */
+        if (bytes_read == 0) {
+            /* If buffer is empty, we're done */
+            if (buffer_used == 0) {
+                break;
+            }
+            /* If buffer has data but no progress made, incomplete document at EOF */
+            if (scan_pos == 0) {
+                if (!config.quiet) {
+                    fprintf(stderr, "Warning: Incomplete document at end of file (skipped)\n");
+                }
+                break;
+            }
         }
-        sdsfree(doc_str);
-
-        ds->record_count++;
-
-        if (!config.quiet && ds->record_count % 10000 == 0) {
-            printf("\rLoaded %zu documents...", ds->record_count);
-            fflush(stdout);
-        }
-
-        sdsclear(current_doc);
     }
 
-    sdsfree(current_doc);
+    if (!config.quiet) {
+        printf("\rLoaded %zu documents%*s\n", ds->record_count, 20, "");
+    }
+
+    zfree(buffer);
     fclose(fp);
     return 1;
 }
@@ -1963,6 +2083,18 @@ static int csvLoadDocuments(dataset *ds) {
         printf("Loading %s dataset from %s...\n", format_name, config.dataset_file);
     }
 
+    /* Build list of field indices to actually load for performance */
+    int *load_indices = NULL;
+    int load_count = 0;
+    if (ds->field_map) {
+        load_indices = zmalloc(ds->used_field_count * sizeof(int));
+        for (int i = 0; i < ds->field_count; i++) {
+            if (ds->field_map[i] >= 0) {
+                load_indices[load_count++] = i;
+            }
+        }
+    }
+
     while (getline(&line, &len, fp) != -1 && !shouldStopLoading(ds->record_count)) {
         if (line[0] == '\0' || line[0] == '\n') continue;
 
@@ -1976,17 +2108,25 @@ static int csvLoadDocuments(dataset *ds) {
             ds->records = zrealloc(ds->records, sizeof(datasetRecord) * capacity);
         }
 
-        /* Extract field values into structured record */
         datasetRecord *record = &ds->records[ds->record_count];
-        record->fields = zmalloc(sizeof(sds) * ds->field_count);
+        record->fields = zmalloc(sizeof(sds) * ds->used_field_count);
 
-        for (int i = 0; i < ds->field_count; i++) {
-            record->fields[i] = getFieldValue(line, i, ds->delimiter);
+        if (ds->field_map) {
+            for (int j = 0; j < load_count; j++) {
+                int orig_idx = load_indices[j];
+                int mapped_idx = ds->field_map[orig_idx];
+                record->fields[mapped_idx] = getFieldValue(line, orig_idx, ds->delimiter);
+            }
+        } else {
+            for (int i = 0; i < ds->field_count; i++) {
+                record->fields[i] = getFieldValue(line, i, ds->delimiter);
+            }
         }
 
         ds->record_count++;
     }
 
+    if (load_indices) zfree(load_indices);
     free(line);
     fclose(fp);
     return 1;
@@ -2030,11 +2170,13 @@ static dataset *initDataset(void) {
         if (!csvDiscoverFields(ds)) goto error;
     }
 
-    /* Step 2: Early validation (before bulk loading) */
+    /* Step 2: Build field map for selective loading */
     if (config.has_field_placeholders && config.template_argv && config.template_argc > 0) {
-        config.current_dataset = ds; /* Temporarily set for validation */
-        validateFieldPlaceholders(config.template_argv, config.template_argc);
-        config.current_dataset = NULL; /* Reset until fully loaded */
+        if (!buildFieldMap(ds, config.template_argv, config.template_argc)) {
+            goto error;
+        }
+    } else {
+        ds->used_field_count = ds->field_count;
     }
 
     /* Step 3: Load all data (only after validation passes) */
@@ -2051,20 +2193,21 @@ error:
     return NULL;
 }
 
-/* Free dataset */
 static void freeDataset(dataset *ds) {
     if (!ds) return;
 
-    /* Free field names */
     if (ds->field_names) {
         sdsfreesplitres(ds->field_names, ds->field_count);
     }
 
-    /* Free structured records */
+    if (ds->field_map) {
+        zfree(ds->field_map);
+    }
+
     if (ds->records) {
         for (size_t i = 0; i < ds->record_count; i++) {
             if (ds->records[i].fields) {
-                for (int j = 0; j < ds->field_count; j++) {
+                for (int j = 0; j < ds->used_field_count; j++) {
                     sdsfree(ds->records[i].fields[j]);
                 }
                 zfree(ds->records[i].fields);
@@ -2130,6 +2273,12 @@ static sds getXmlFieldValue(const char *xml_doc, const char *field_name) {
     const char *tag_end = strchr(tag_start, '>');
     if (!tag_end) return sdsempty();
 
+    /* Check if this is a self-closing tag */
+    if (tag_end > tag_start && tag_end[-1] == '/') {
+        /* Self-closing tag like <tag/> or <tag attr="value"/>, return empty content */
+        return sdsempty();
+    }
+
     const char *content_start = tag_end + 1;
 
     /* Find closing tag */
@@ -2140,13 +2289,11 @@ static sds getXmlFieldValue(const char *xml_doc, const char *field_name) {
     return sdsnewlen(content_start, content_len);
 }
 
-/* Report dataset memory usage */
 static void reportDatasetMemory(dataset *ds) {
     if (!config.quiet) {
-        /* Calculate total memory from structured records */
         size_t total_memory = 0;
         for (size_t i = 0; i < ds->record_count; i++) {
-            for (int j = 0; j < ds->field_count; j++) {
+            for (int j = 0; j < ds->used_field_count; j++) {
                 total_memory += sdslen(ds->records[i].fields[j]);
             }
         }
@@ -2157,18 +2304,16 @@ static void reportDatasetMemory(dataset *ds) {
 }
 
 
-/* Find field index in dataset by name */
 static int findFieldIndex(const char *field_name, size_t field_name_len) {
     for (int k = 0; k < config.current_dataset->field_count; k++) {
         if (strlen(config.current_dataset->field_names[k]) == field_name_len &&
             !memcmp(config.current_dataset->field_names[k], field_name, field_name_len)) {
-            return k;
+            return config.current_dataset->field_map ? config.current_dataset->field_map[k] : k;
         }
     }
     return -1;
 }
 
-/* Extract field value from dataset record */
 static const char *extractDatasetFieldValue(int field_idx, int record_index) {
     return config.current_dataset->records[record_index].fields[field_idx];
 }

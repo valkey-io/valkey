@@ -105,6 +105,7 @@ typedef struct ValkeyModule {
     list *usedby;                         /* List of modules using APIs from this one. */
     list *using;                          /* List of modules we use some APIs of. */
     list *filters;                        /* List of filters the module has registered. */
+    list *result_callbacks;               /* List of command result callbacks the module has registered. */
     list *module_configs;                 /* List of configurations the module has registered */
     int configs_initialized;              /* Have the module configurations been initialized? */
     int in_call;                          /* RM_Call() nesting level */
@@ -208,6 +209,11 @@ void moduleNotifyKeyspaceEvent(int type, const char *event, robj *key, int dbid)
 unsigned long moduleNotifyKeyspaceSubscribersCnt(void);
 void firePostExecutionUnitJobs(void);
 void moduleCallCommandFilters(client *c);
+void moduleCallCommandResultCallbacks(client *c,
+                                      struct serverCommand *cmd,
+                                      int command_failed,
+                                      long long duration,
+                                      long long dirty);
 void modulePostExecutionUnitOperations(void);
 void ModuleForkDoneHandler(int exitcode, int bysignal);
 int TerminateModuleForkChild(int child_pid, int wait);

@@ -2034,19 +2034,9 @@ static int loadXmlDataset(dataset *ds) {
             buffer_used = 0;
         }
 
-        /* Stop if EOF reached */
-        if (bytes_read == 0) {
-            /* If buffer is empty, we're done */
-            if (buffer_used == 0) {
-                break;
-            }
-            /* If buffer has data but no progress made, incomplete document at EOF */
-            if (scan_pos == 0) {
-                if (!config.quiet) {
-                    fprintf(stderr, "Warning: Incomplete document at end of file (skipped)\n");
-                }
-                break;
-            }
+        /* Stop if EOF reached and no more complete documents */
+        if (bytes_read == 0 && (buffer_used == 0 || scan_pos == 0)) {
+            break;
         }
     }
 

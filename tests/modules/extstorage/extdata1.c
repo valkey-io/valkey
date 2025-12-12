@@ -2,6 +2,7 @@
 
 #include "sds.h"
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 
 /*
@@ -14,6 +15,30 @@ const char *module_name = "helloextdata1";
 #define MAX_DB 16
 ValkeyModuleDict *storage_mem_pool[MAX_DB];  // Memory pool for storage
 ValkeyModuleDict *filter_mem_pool[MAX_DB];  // Memory pool for filter
+
+/* Failure simulation configuration */
+static long long set_failure_percent = 0;  // 0 = no failures, >0 = p out of 100 sets fail
+static int set_operation_counter = 0;  // Counter for set operations
+
+/* Configuration callbacks for set_failure_percent */
+static long long getFailurePercentConfig(const char *name, void *privdata) {
+    VALKEYMODULE_NOT_USED(name);
+    VALKEYMODULE_NOT_USED(privdata);
+    return set_failure_percent;
+}
+
+static int setFailurePercentConfig(const char *name, long long new_val, void *privdata, ValkeyModuleString **err) {
+    VALKEYMODULE_NOT_USED(name);
+    VALKEYMODULE_NOT_USED(privdata);
+    if (new_val < 0 || new_val > 100) {
+        *err = ValkeyModule_CreateString(NULL, "set_failure_percent must be between 0 and 100", 47);
+        return VALKEYMODULE_ERR;
+    }
+    set_failure_percent = new_val;
+    /* Reset counter when changing failure rate */
+    set_operation_counter = 0;
+    return VALKEYMODULE_OK;
+}
 
 /* Common helper functions */
 static ValkeyModuleExternalStorageState
@@ -51,6 +76,17 @@ static int storageSetFunction(ValkeyModuleCtx *module_ctx,
     if (state == VMES_STATE_READONLY) {
         ValkeyModule_ReplyWithError(module_ctx, "ERR External storage readonly");
         return 0;
+    }
+
+    /* Simulate failures if configured */
+    if (set_failure_percent > 0) {
+        set_operation_counter++;
+        /* Fail every (100/set_failure_percent)th operation starting from the 1st */
+        int fail_interval = 100 / set_failure_percent;
+        if (fail_interval > 0 && (set_operation_counter % fail_interval) == 1) {
+            ValkeyModule_ReplyWithError(module_ctx, "ERR Simulated storage failure");
+            return 0;
+        }
     }
 
     int dbid = ValkeyModule_GetDbIdFromOptCtx(key_ctx);
@@ -149,25 +185,6 @@ static int storageDelFunction(ValkeyModuleCtx *module_ctx,
     return EXTERNAL_SUCCESS;
 }
 
-static int storageKeysCountFunction(ValkeyModuleCtx *module_ctx,
-                                    ValkeyModuleExternalStorageCtx *storage_ctx,
-                                    int dbid,
-                                    unsigned long long *count) {
-    VALKEYMODULE_NOT_USED(storage_ctx);
-    ValkeyModule_AutoMemory(module_ctx);
-    
-    if (dbid < 0 || dbid >= MAX_DB) {
-        return EXTERNAL_ERROR;
-    }
-    
-    if (storage_mem_pool[dbid] == NULL) {
-        *count = 0;
-        return EXTERNAL_SUCCESS;
-    }
-    
-    *count = ValkeyModule_DictSize(storage_mem_pool[dbid]);
-    return EXTERNAL_SUCCESS;
-}
 
 static int storageIterateFunction(ValkeyModuleCtx *, int dbid,
                                    ValkeyModuleString *, long long *,
@@ -391,13 +408,101 @@ static int filterSwapFunction(ValkeyModuleCtx *module_ctx,
     return EXTERNAL_SUCCESS;
 }
 
+static int storageDumpFunction(ValkeyModuleCtx *module_ctx,
+                               ValkeyModuleExternalStorageCtx *storage_ctx,
+                               int dbid,
+                               int slot,
+                               long long timestamp,
+                               ValkeyModuleString *target,
+                               ValkeyModuleString **backup_id) {
+    VALKEYMODULE_NOT_USED(storage_ctx);
+    VALKEYMODULE_NOT_USED(slot);
+    VALKEYMODULE_NOT_USED(timestamp);
+    VALKEYMODULE_NOT_USED(target);
+    ValkeyModule_AutoMemory(module_ctx);
+    
+    if (dbid < 0 || dbid >= MAX_DB) {
+        return EXTERNAL_ERROR;
+    }
+    
+    /* For this simple implementation, we just return a dummy backup_id */
+    if (backup_id != NULL) {
+        *backup_id = ValkeyModule_CreateStringPrintf(module_ctx, "backup_%d_%lld", dbid, (long long)time(NULL));
+    }
+    
+    return EXTERNAL_SUCCESS;
+}
+
+static int storageLoadFunction(ValkeyModuleCtx *module_ctx,
+                               ValkeyModuleExternalStorageCtx *storage_ctx,
+                               int dbid,
+                               ValkeyModuleString *backup_id) {
+    VALKEYMODULE_NOT_USED(storage_ctx);
+    VALKEYMODULE_NOT_USED(backup_id);
+    ValkeyModule_AutoMemory(module_ctx);
+    
+    if (dbid < 0 || dbid >= MAX_DB) {
+        return EXTERNAL_ERROR;
+    }
+    
+    /* For this simple implementation, we just return success */
+    return EXTERNAL_SUCCESS;
+}
+
+static int filterKeysCountFunction(ValkeyModuleCtx *module_ctx,
+                                   ValkeyModuleExternalFilterCtx *filter_ctx,
+                                   int dbid,
+                                   unsigned long long *count) {
+    VALKEYMODULE_NOT_USED(filter_ctx);
+    ValkeyModule_AutoMemory(module_ctx);
+    
+    if (dbid < 0 || dbid >= MAX_DB) {
+        return EXTERNAL_ERROR;
+    }
+    
+    if (filter_mem_pool[dbid] == NULL) {
+        *count = 0;
+        return EXTERNAL_SUCCESS;
+    }
+    
+    *count = ValkeyModule_DictSize(filter_mem_pool[dbid]);
+    return EXTERNAL_SUCCESS;
+}
+
 /* Module initialization */
 int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
-    VALKEYMODULE_NOT_USED(argv);
-    VALKEYMODULE_NOT_USED(argc);
-
     if (ValkeyModule_Init(ctx, module_name, 1, VALKEYMODULE_APIVER_1) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
+
+    /* Register runtime configuration for set_failure_percent */
+    if (ValkeyModule_RegisterNumericConfig(ctx, "set_failure_percent", 0,
+                                           VALKEYMODULE_CONFIG_DEFAULT,
+                                           0, 100,
+                                           getFailurePercentConfig,
+                                           setFailurePercentConfig,
+                                           NULL, NULL) == VALKEYMODULE_ERR) {
+        return VALKEYMODULE_ERR;
+    }
+
+    /* Parse module arguments for initial set_failure_percent value */
+    if (argc > 0) {
+        for (int i = 0; i < argc; i++) {
+            const char *arg = ValkeyModule_StringPtrLen(argv[i], NULL);
+            if (strncmp(arg, "set_failure_percent=", 20) == 0) {
+                int initial_value = atoi(arg + 20);
+                if (initial_value < 0 || initial_value > 100) {
+                    ValkeyModule_Log(ctx, "warning",
+                        "Invalid set_failure_percent value: %d, must be 0-100. Using 0.",
+                        initial_value);
+                    initial_value = 0;
+                }
+                set_failure_percent = initial_value;
+                ValkeyModule_Log(ctx, "notice",
+                    "Module %s loaded with set_failure_percent=%d",
+                    module_name, (int)set_failure_percent);
+            }
+        }
+    }
 
     /* Initialize storage methods */
     ValkeyModuleExternalStorageMethods storage_methods = {
@@ -408,9 +513,10 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
         .set_readonly = storageSetReadonlyFunction,
         .drop_readonly = storageDropReadonlyFunction,
         .iterate = storageIterateFunction,
-        .keys_count = storageKeysCountFunction,
         .flush = storageFlushFunction,
-        .swap = storageSwapFunction
+        .swap = storageSwapFunction,
+        .dump = storageDumpFunction,
+        .load = storageLoadFunction
     };
 
     /* Initialize filter methods */
@@ -422,13 +528,19 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
         .set_readonly = filterSetReadonlyFunction,
         .drop_readonly = filterDropReadonlyFunction,
         .flush = filterFlushFunction,
-        .swap = filterSwapFunction
+        .swap = filterSwapFunction,
+        .keys_count = filterKeysCountFunction
     };
 
     /* Create memory pools */
     for (int i = 0; i < MAX_DB; i++) {
         storage_mem_pool[i] = ValkeyModule_CreateDict(NULL);
         filter_mem_pool[i] = ValkeyModule_CreateDict(NULL);
+    }
+
+    /* Load configurations */
+    if (ValkeyModule_LoadConfigs(ctx) == VALKEYMODULE_ERR) {
+        return VALKEYMODULE_ERR;
     }
 
     /* Register both storage and filter */

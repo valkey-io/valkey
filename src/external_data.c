@@ -295,11 +295,17 @@ void externalDataInitCommand(client *c) {
     *storage_ctx = (storageCtx){
         .state = VMES_STATE_READY,
         .ext_data_timeout = server.ext_data_timeout,
+        .ext_data_dump_status = VMES_DUMP_STATE_NONE,
+        .ext_data_dump_backup_id = NULL,
+        .ext_data_load_status = VMES_LOAD_STATE_NONE,
     };
     filterCtx *filter_ctx = zmalloc(sizeof(*filter_ctx));
     *filter_ctx = (filterCtx){
         .state = VMEF_STATE_READY,
         .ext_data_timeout = server.ext_data_timeout,
+        .ext_data_dump_status = VMEF_DUMP_STATE_NONE,
+        .ext_data_dump_backup_id = NULL,
+        .ext_data_load_status = VMEF_LOAD_STATE_NONE,
     };
 
     externalDataModuleInstance *module_instance = zmalloc(sizeof(*module_instance));
@@ -364,6 +370,14 @@ void externalDataDropCommand(client *c) {
     }
 
     externalDbData *dbData = dictGetVal(dbEntry);
+
+    /* Free backup_id sds strings if allocated */
+    if (dbData->module_instance->storage_ctx->ext_data_dump_backup_id) {
+        sdsfree(dbData->module_instance->storage_ctx->ext_data_dump_backup_id);
+    }
+    if (dbData->module_instance->filter_ctx->ext_data_dump_backup_id) {
+        sdsfree(dbData->module_instance->filter_ctx->ext_data_dump_backup_id);
+    }
 
     zfree(dbData->module_instance->storage_ctx);
     zfree(dbData->module_instance->filter_ctx);
@@ -504,6 +518,66 @@ int externalDataCallDropReadonlyFunc(externalDataModuleInstance *mi) {
     mi->filter_ctx->state = VMEF_STATE_READY;
     unblockPostponedClients();
     return EXTERNAL_SUCCESS;
+}
+
+/* Call the dump callback function for a module instance
+ * Dumps data for all databases at once
+ * Returns EXTERNAL_SUCCESS on success, EXTERNAL_ERROR on failure */
+int externalDataCallDumpFunc(externalDataModuleInstance *mi,
+                             int slot,
+                             long long timestamp,
+                             ValkeyModuleString *target,
+                             ValkeyModuleString **backup_id) {
+    if (!mi || !mi->external_module || !mi->storage_ctx || !mi->module_ctx) {
+        return EXTERNAL_ERROR;
+    }
+
+    /* Check if dump function is available */
+    if (!mi->external_module->storage_methods.dump) {
+        return EXTERNAL_ERROR;
+    }
+
+    setupModuleCtx(mi);
+
+    /* Pass -1 as dbid to indicate all databases */
+    int result = mi->external_module->storage_methods.dump(
+        mi->module_ctx,
+        mi->storage_ctx,
+        -1,  /* -1 means all databases */
+        slot,
+        timestamp,
+        target,
+        backup_id);
+
+    teardownModuleCtx(mi);
+    return result;
+}
+
+/* Call the load callback function for a module instance
+ * Loads data for all databases at once
+ * Returns EXTERNAL_SUCCESS on success, EXTERNAL_ERROR on failure */
+int externalDataCallLoadFunc(externalDataModuleInstance *mi,
+                             ValkeyModuleString *backup_id) {
+    if (!mi || !mi->external_module || !mi->storage_ctx || !mi->module_ctx) {
+        return EXTERNAL_ERROR;
+    }
+
+    /* Check if load function is available */
+    if (!mi->external_module->storage_methods.load) {
+        return EXTERNAL_ERROR;
+    }
+
+    setupModuleCtx(mi);
+
+    /* Pass -1 as dbid to indicate all databases */
+    int result = mi->external_module->storage_methods.load(
+        mi->module_ctx,
+        mi->storage_ctx,
+        -1,  /* -1 means all databases */
+        backup_id);
+
+    teardownModuleCtx(mi);
+    return result;
 }
 
 struct extStorageInstanceIterator {
@@ -661,6 +735,118 @@ void externalDataDebugCommand(client *c) {
 
     addReply(c, shared.ok);
     return;
+}
+
+/*
+ * EXTERNAL_DATA DUMP [SLOT <slot>] [TIMESTAMP <timestamp>] [TARGET <target>]
+ *
+ * Dumps external data for backup or replication (all databases at once)
+ * Arguments can be specified in any order
+ *
+ */
+void externalDataDumpCommand(client *c) {
+    if (!isExtDataOn()) {
+        addReplyError(c, EXTDATAOFFERRMSG);
+        return;
+    }
+    assert(curr_external_data_ctx != NULL);
+
+    /* Parse optional arguments in any order */
+    int slot = -1;  /* -1 means all slots */
+    long long timestamp = 0;  /* 0 means full dump from beginning of time */
+    ValkeyModuleString *target = NULL;
+
+    /* Parse arguments - they can appear in any order */
+    for (int j = 2; j < c->argc; j++) {
+        sds arg = objectGetVal(c->argv[j]);
+        int remaining = c->argc - j - 1;
+
+        if (!strcasecmp(arg, "slot") && remaining >= 1) {
+            if (getLongFromObjectOrReply(c, c->argv[j+1], (long *)&slot, NULL) != C_OK) {
+                return;
+            }
+            j++; /* Skip the value */
+        } else if (!strcasecmp(arg, "timestamp") && remaining >= 1) {
+            if (getLongLongFromObjectOrReply(c, c->argv[j+1], &timestamp, NULL) != C_OK) {
+                return;
+            }
+            j++; /* Skip the value */
+        } else if (!strcasecmp(arg, "target") && remaining >= 1) {
+            target = c->argv[j+1];
+            j++; /* Skip the value */
+        } else {
+            addReplyErrorFormat(c, "Unknown or incomplete argument: %s", arg);
+            return;
+        }
+    }
+
+    /* Find any initialized database to get the module instance
+     * Since dump operates on all databases, we just need any one */
+    dictIterator *di = dictGetIterator(curr_external_data_ctx->dbdata);
+    dictEntry *de = dictNext(di);
+    dictReleaseIterator(di);
+
+    if (!de) {
+        addReplyError(c, "No external data initialized for any database");
+        return;
+    }
+
+    externalDbData *dbData = dictGetVal(de);
+    ValkeyModuleString *backup_id = NULL;
+
+    /* Call the dump function - it will dump all databases */
+    int result = externalDataCallDumpFunc(dbData->module_instance, slot, timestamp, target, &backup_id);
+
+    if (result != EXTERNAL_SUCCESS || backup_id == NULL) {
+        addReplyError(c, "Failed to create backup");
+        return;
+    }
+
+    /* Return the backup ID */
+    addReplyBulkCBuffer(c, objectGetVal(backup_id), sdslen(objectGetVal(backup_id)));
+}
+
+/*
+ * EXTERNAL_DATA LOAD [backup-id]
+ *
+ * Loads external data from backup for restore or replication (all databases at once)
+ *
+ */
+void externalDataLoadCommand(client *c) {
+    if (!isExtDataOn()) {
+        addReplyError(c, EXTDATAOFFERRMSG);
+        return;
+    }
+    assert(curr_external_data_ctx != NULL);
+
+    /* Parse optional backup-id argument */
+    ValkeyModuleString *backup_id = NULL;
+    if (c->argc >= 3) {
+        backup_id = c->argv[2];
+    }
+
+    /* Find any initialized database to get the module instance
+     * Since load operates on all databases, we just need any one */
+    dictIterator *di = dictGetIterator(curr_external_data_ctx->dbdata);
+    dictEntry *de = dictNext(di);
+    dictReleaseIterator(di);
+
+    if (!de) {
+        addReplyError(c, "No external data initialized for any database");
+        return;
+    }
+
+    externalDbData *dbData = dictGetVal(de);
+
+    /* Call the load function - it will load all databases */
+    int result = externalDataCallLoadFunc(dbData->module_instance, backup_id);
+
+    if (result != EXTERNAL_SUCCESS) {
+        addReplyError(c, "Failed to load backup");
+        return;
+    }
+
+    addReply(c, shared.ok);
 }
 
 int externalDataFind(int id, void *key, void **found) {
@@ -1095,8 +1281,8 @@ unsigned long long externalDataCountKeys(int dbid) {
     unsigned long long count = 0;
 
     /* Try to use the keys_count method if available (more efficient) */
-    if (mi->external_module->storage_methods.keys_count) {
-        if (mi->external_module->storage_methods.keys_count(mi->module_ctx, mi->storage_ctx, dbid, &count) == EXTERNAL_SUCCESS) {
+    if (mi->external_module->filter_methods.keys_count) {
+        if (mi->external_module->filter_methods.keys_count(mi->module_ctx, mi->filter_ctx, dbid, &count) == EXTERNAL_SUCCESS) {
             /* If keys_count succeeded, we're done */
             teardownModuleCtx(mi);
             return count;
@@ -1120,4 +1306,187 @@ unsigned long long externalDataCountKeys(int dbid) {
 
     teardownModuleCtx(mi);
     return count;
+}
+
+/* Process external data dump in BIO thread */
+void externalDataProcessDumpForFullSync(void) {
+    externalDataCtx *ctx = getCurrentExternalDataCtx();
+    if (!ctx) {
+        return;
+    }
+    
+    /* Find any initialized database to get the module instance */
+    dictIterator *di = dictGetIterator(ctx->dbdata);
+    dictEntry *de = dictNext(di);
+    dictReleaseIterator(di);
+    
+    if (!de) {
+        serverLog(LL_WARNING, "No external data initialized for full sync dump");
+        return;
+    }
+    
+    externalDbData *dbData = dictGetVal(de);
+    storageCtx *storage_ctx = dbData->module_instance->storage_ctx;
+    filterCtx *filter_ctx = dbData->module_instance->filter_ctx;
+    ValkeyModuleString *backup_id = NULL;
+    
+    /* Set both storage and filter dump states to IN_PROGRESS */
+    atomic_store_explicit(&storage_ctx->ext_data_dump_status, VMES_DUMP_STATE_IN_PROGRESS, memory_order_release);
+    atomic_store_explicit(&filter_ctx->ext_data_dump_status, VMEF_DUMP_STATE_IN_PROGRESS, memory_order_release);
+    
+    /* Call dump with timestamp 0 for full backup */
+    int result = externalDataCallDumpFunc(dbData->module_instance, -1, 0, NULL, &backup_id);
+    
+    if (result != EXTERNAL_SUCCESS || !backup_id) {
+        serverLog(LL_WARNING, "Failed to dump external data for full sync");
+        atomic_store_explicit(&storage_ctx->ext_data_dump_status, VMES_DUMP_STATE_FAILED, memory_order_release);
+        atomic_store_explicit(&filter_ctx->ext_data_dump_status, VMEF_DUMP_STATE_FAILED, memory_order_release);
+        return;
+    }
+    
+    /* Store backup ID in both storage and filter contexts */
+    if (storage_ctx->ext_data_dump_backup_id) {
+        sdsfree(storage_ctx->ext_data_dump_backup_id);
+    }
+    storage_ctx->ext_data_dump_backup_id = sdsnew((char *)objectGetVal(backup_id));
+    
+    if (filter_ctx->ext_data_dump_backup_id) {
+        sdsfree(filter_ctx->ext_data_dump_backup_id);
+    }
+    filter_ctx->ext_data_dump_backup_id = sdsnew((char *)objectGetVal(backup_id));
+    
+    serverLog(LL_NOTICE, "External data dumped for full sync: %s", (char *)objectGetVal(backup_id));
+    atomic_store_explicit(&storage_ctx->ext_data_dump_status, VMES_DUMP_STATE_SUCCESS, memory_order_release);
+    atomic_store_explicit(&filter_ctx->ext_data_dump_status, VMEF_DUMP_STATE_SUCCESS, memory_order_release);
+}
+
+/* Start async dump of external data for full sync */
+int externalDataDumpForFullSync(void) {
+    if (!isExtDataOn()) return EXTERNAL_ERROR;
+    
+    /* Submit BIO job - state will be set in the BIO thread */
+    bioCreateExtDataDumpJob();
+    
+    return EXTERNAL_SUCCESS;
+}
+
+/* Check if external data dump is complete and get result */
+int externalDataDumpCheckComplete(ValkeyModuleString **backup_id) {
+    externalDataCtx *ctx = getCurrentExternalDataCtx();
+    if (!ctx) return C_ERR;
+    
+    /* Find any initialized database to get the module instance */
+    dictIterator *di = dictGetIterator(ctx->dbdata);
+    dictEntry *de = dictNext(di);
+    dictReleaseIterator(di);
+    
+    if (!de) return C_ERR;
+    
+    externalDbData *dbData = dictGetVal(de);
+    storageCtx *storage_ctx = dbData->module_instance->storage_ctx;
+    filterCtx *filter_ctx = dbData->module_instance->filter_ctx;
+    
+    /* Check both storage and filter dump states */
+    int storage_status = atomic_load_explicit(&storage_ctx->ext_data_dump_status, memory_order_acquire);
+    int filter_status = atomic_load_explicit(&filter_ctx->ext_data_dump_status, memory_order_acquire);
+    
+    if (storage_status == VMES_DUMP_STATE_IN_PROGRESS || filter_status == VMEF_DUMP_STATE_IN_PROGRESS) {
+        return C_ERR; /* Still in progress */
+    }
+    
+    if (storage_status == VMES_DUMP_STATE_SUCCESS && filter_status == VMEF_DUMP_STATE_SUCCESS &&
+        storage_ctx->ext_data_dump_backup_id) {
+        if (backup_id) {
+            *backup_id = (ValkeyModuleString *)createStringObject(storage_ctx->ext_data_dump_backup_id,
+                                                                   sdslen(storage_ctx->ext_data_dump_backup_id));
+        }
+        serverLog(LL_NOTICE, "External data dump completed successfully: %s", storage_ctx->ext_data_dump_backup_id);
+        return C_OK;
+    }
+    
+    serverLog(LL_WARNING, "External data dump failed or backup ID is empty");
+    return C_ERR;
+}
+
+/* Process external data load in BIO thread */
+void externalDataProcessLoadForFullSync(void) {
+    externalDataCtx *ctx = getCurrentExternalDataCtx();
+    if (!ctx) {
+        return;
+    }
+    
+    /* Find any initialized database to get the module instance */
+    dictIterator *di = dictGetIterator(ctx->dbdata);
+    dictEntry *de = dictNext(di);
+    dictReleaseIterator(di);
+    
+    if (!de) {
+        serverLog(LL_WARNING, "No external data initialized for sync load");
+        return;
+    }
+    
+    externalDbData *dbData = dictGetVal(de);
+    storageCtx *storage_ctx = dbData->module_instance->storage_ctx;
+    filterCtx *filter_ctx = dbData->module_instance->filter_ctx;
+    
+    /* Set both storage and filter load states to IN_PROGRESS */
+    atomic_store_explicit(&storage_ctx->ext_data_load_status, VMES_LOAD_STATE_IN_PROGRESS, memory_order_release);
+    atomic_store_explicit(&filter_ctx->ext_data_load_status, VMEF_LOAD_STATE_IN_PROGRESS, memory_order_release);
+    
+    /* Call load function with NULL (latest backup) */
+    int result = externalDataCallLoadFunc(dbData->module_instance, NULL);
+    
+    if (result != EXTERNAL_SUCCESS) {
+        serverLog(LL_WARNING, "Failed to load external data for sync");
+        atomic_store_explicit(&storage_ctx->ext_data_load_status, VMES_LOAD_STATE_FAILED, memory_order_release);
+        atomic_store_explicit(&filter_ctx->ext_data_load_status, VMEF_LOAD_STATE_FAILED, memory_order_release);
+        return;
+    }
+    
+    serverLog(LL_NOTICE, "External data loaded for sync");
+    atomic_store_explicit(&storage_ctx->ext_data_load_status, VMES_LOAD_STATE_SUCCESS, memory_order_release);
+    atomic_store_explicit(&filter_ctx->ext_data_load_status, VMEF_LOAD_STATE_SUCCESS, memory_order_release);
+}
+
+/* Start async load of external data for full sync */
+int externalDataLoadForFullSync(void) {
+    if (!isExtDataOn()) return EXTERNAL_ERROR;
+    
+    /* Submit BIO job - state will be set in the BIO thread */
+    bioCreateExtDataLoadJob();
+    
+    return EXTERNAL_SUCCESS;
+}
+
+/* Check if external data load is complete */
+int externalDataLoadCheckComplete(void) {
+    externalDataCtx *ctx = getCurrentExternalDataCtx();
+    if (!ctx) return C_ERR;
+    
+    /* Find any initialized database to get the module instance */
+    dictIterator *di = dictGetIterator(ctx->dbdata);
+    dictEntry *de = dictNext(di);
+    dictReleaseIterator(di);
+    
+    if (!de) return C_ERR;
+    
+    externalDbData *dbData = dictGetVal(de);
+    storageCtx *storage_ctx = dbData->module_instance->storage_ctx;
+    filterCtx *filter_ctx = dbData->module_instance->filter_ctx;
+    
+    /* Check both storage and filter load states */
+    int storage_status = atomic_load_explicit(&storage_ctx->ext_data_load_status, memory_order_acquire);
+    int filter_status = atomic_load_explicit(&filter_ctx->ext_data_load_status, memory_order_acquire);
+    
+    if (storage_status == VMES_LOAD_STATE_IN_PROGRESS || filter_status == VMEF_LOAD_STATE_IN_PROGRESS) {
+        return C_ERR; /* Still in progress */
+    }
+    
+    if (storage_status == VMES_LOAD_STATE_SUCCESS && filter_status == VMEF_LOAD_STATE_SUCCESS) {
+        serverLog(LL_NOTICE, "External data load completed successfully");
+        return C_OK;
+    }
+    
+    serverLog(LL_WARNING, "External data load failed");
+    return C_ERR;
 }

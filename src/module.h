@@ -175,11 +175,17 @@ typedef struct ValkeyModuleExternalStorageCtx {
     ValkeyModuleExternalStorageState state;
     unsigned int ext_data_timeout;
     atomic_uint last_iterator_id; /* Last storage scan/keys iterator id used */
+    _Atomic int ext_data_dump_status;     /* Status of external data dump in bio job */
+    sds ext_data_dump_backup_id;          /* Backup ID from last external data dump */
+    _Atomic int ext_data_load_status;     /* Status of external data load in bio job */
 } ValkeyModuleExternalStorageCtx;
 
 typedef struct ValkeyModuleExternalFilterCtx {
     ValkeyModuleExternalFilterState state;
     unsigned int ext_data_timeout;
+    _Atomic int ext_data_dump_status;     /* Status of external data dump in bio job */
+    sds ext_data_dump_backup_id;          /* Backup ID from last external data dump */
+    _Atomic int ext_data_load_status;     /* Status of external data load in bio job */
 } ValkeyModuleExternalFilterCtx;
 
 /* Just start with a digest composed of all zero bytes. */

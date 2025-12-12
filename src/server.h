@@ -2080,10 +2080,12 @@ struct valkeyServer {
     int ext_data_mode;                    /* External storage mode */
     int ext_data_expire;                  /* Enable expiring keys to external storage for allkeys-* policies */
     size_t ext_min_object_size_to_move;   /* Min size of k/v pair to move to external storage */
-    unsigned long long ext_max_disk_size; /* Maximum disk space allowed to be used by external storage */
-    unsigned long long ext_max_mem_size;  /* Maximum memory allowed to be used by external storage */
+    unsigned long long ext_data_max_disk_size; /* Maximum disk space allowed to be used by external storage */
+    unsigned long long ext_data_max_mem_size;  /* Maximum memory allowed to be used by external storage */
     unsigned int ext_data_timeout;        /* Timeout for accessing external storage */
     unsigned int ext_data_store_by_size;  /* Size to exceed to store externally */
+    int ext_data_async_load;              /* Load external data asynchronously on replica (1=async, 0=sync) */
+    int ext_data_load_timeout_ms;         /* Timeout in milliseconds for sync external data load */
     /* Pipe and data structures for child -> parent info sharing. */
     int child_info_pipe[2]; /* Pipe used to write the child_info_data. */
     int child_info_nread;   /* Num of bytes of the last read from pipe */
@@ -4195,6 +4197,9 @@ void externalDataLoadedCommand(client *c);
 void externalDataStatsCommand(client *c);
 void externalDataDropCommand(client *c);
 void externalDataDebugCommand(client *c);
+void externalDataDumpCommand(client *c);
+void externalDataLoadCommand(client *c);
+
 
 /* Helper functions for getting database id args from argv, argc */
 int *selectDbIdArgs(robj **argv, int argc, int *count);

@@ -1309,6 +1309,21 @@ typedef enum ValkeyModuleExternalStorageState {
     VMES_STATE_READY,
     VMES_STATE_READONLY,
 } ValkeyModuleExternalStorageState;
+
+/* External storage dump/load states for replication */
+typedef enum ValkeyModuleExternalStorageDumpState {
+    VMES_DUMP_STATE_NONE = 0,
+    VMES_DUMP_STATE_IN_PROGRESS,
+    VMES_DUMP_STATE_SUCCESS,
+    VMES_DUMP_STATE_FAILED,
+} ValkeyModuleExternalStorageDumpState;
+
+typedef enum ValkeyModuleExternalStorageLoadState {
+    VMES_LOAD_STATE_NONE = 0,
+    VMES_LOAD_STATE_IN_PROGRESS,
+    VMES_LOAD_STATE_SUCCESS,
+    VMES_LOAD_STATE_FAILED,
+} ValkeyModuleExternalStorageLoadState;
 typedef struct ValkeyModuleExternalStorageCtx ValkeyModuleExternalStorageCtx;
 
 /* The callback function called when `SET` command is called.
@@ -1419,23 +1434,6 @@ typedef int (*ValkeyModuleExternalStorageFlushFunc)(
     ValkeyModuleExternalStorageCtx *storage_ctx,
     int dbid);
 
-/* The callback function called to count keys in this storage.
- * This allows efficient O(1) counting of all keys for a specific database.
- *
- * - `module_ctx`: the module runtime context.
- *
- * - `storage_ctx`: the external storage context.
- *
- * - `dbid`: the database ID to count keys in.
- *
- * - `count`: pointer to store the count of keys.
- *
- */
-typedef int (*ValkeyModuleExternalStorageKeysCountFunc)(
-    ValkeyModuleCtx *module_ctx,
-    ValkeyModuleExternalStorageCtx *storage_ctx,
-    int dbid,
-    unsigned long long *count);
 
 /* The callback function called when SWAPDB command is called.
  * This allows the module to efficiently swap data between two databases
@@ -1455,6 +1453,55 @@ typedef int (*ValkeyModuleExternalStorageSwapFunc)(
     ValkeyModuleExternalStorageCtx *storage_ctx,
     int dbid1,
     int dbid2);
+
+/* The callback function called when EXTERNAL_DATA DUMP command is called.
+ * This allows the module to create a backup/snapshot of external data that can
+ * be used for replication or backup/restore operations.
+ *
+ * - `module_ctx`: the module runtime context.
+ *
+ * - `storage_ctx`: the external storage context.
+ *
+ * - `dbid`: the database ID to dump data from.
+ *
+ * - `slot`: optional slot number for cluster mode (use -1 for all slots).
+ *
+ * - `timestamp`: optional timestamp for point-in-time backup (use 0 for current).
+ *
+ * - `target`: optional target external data instance name (NULL for current instance).
+ *
+ * - `backup_id`: output parameter to store the backup identifier string.
+ *
+ * Returns VALKEYMODULE_OK on success, VALKEYMODULE_ERR on failure.
+ */
+typedef int (*ValkeyModuleExternalStorageDumpFunc)(
+    ValkeyModuleCtx *module_ctx,
+    ValkeyModuleExternalStorageCtx *storage_ctx,
+    int dbid,
+    int slot,
+    long long timestamp,
+    ValkeyModuleString *target,
+    ValkeyModuleString **backup_id);
+
+/* The callback function called when EXTERNAL_DATA LOAD command is called.
+ * This allows the module to restore external data from a previously created
+ * backup/snapshot for replication or backup/restore operations.
+ *
+ * - `module_ctx`: the module runtime context.
+ *
+ * - `storage_ctx`: the external storage context.
+ *
+ * - `dbid`: the database ID to load data into.
+ *
+ * - `backup_id`: the backup identifier to restore from (NULL for latest).
+ *
+ * Returns VALKEYMODULE_OK on success, VALKEYMODULE_ERR on failure.
+ */
+typedef int (*ValkeyModuleExternalStorageLoadFunc)(
+    ValkeyModuleCtx *module_ctx,
+    ValkeyModuleExternalStorageCtx *storage_ctx,
+    int dbid,
+    ValkeyModuleString *backup_id);
 
 /* Current ABI version for external storage modules. */
 #define VALKEYMODULE_EXTERNAL_STORAGE_ABI_VERSION 1UL
@@ -1488,9 +1535,13 @@ typedef struct ValkeyModuleExternalStorageMethods {
      * This allows efficient O(1) swapping of all data between two databases. */
     ValkeyModuleExternalStorageSwapFunc swap;
 
-    /* The callback function called to count keys in this storage.
-     * This allows efficient O(1) counting of all keys for a specific database. */
-    ValkeyModuleExternalStorageKeysCountFunc keys_count;
+    /* The callback function called when `EXTERNAL_DATA DUMP` command is called.
+     * This allows creating backups/snapshots for replication and backup/restore. */
+    ValkeyModuleExternalStorageDumpFunc dump;
+
+    /* The callback function called when `EXTERNAL_DATA LOAD` command is called.
+     * This allows restoring from backups/snapshots for replication and backup/restore. */
+    ValkeyModuleExternalStorageLoadFunc load;
 } ValkeyModuleExternalStorageMethodsV1;
 
 #define ValkeyModuleExternalStorageMethods ValkeyModuleExternalStorageMethodsV1
@@ -1500,6 +1551,21 @@ typedef enum ValkeyModuleExternalFilterState {
     VMEF_STATE_READY,
     VMEF_STATE_READONLY,
 } ValkeyModuleExternalFilterState;
+
+/* External filter dump/load states for replication */
+typedef enum ValkeyModuleExternalFilterDumpState {
+    VMEF_DUMP_STATE_NONE = 0,
+    VMEF_DUMP_STATE_IN_PROGRESS,
+    VMEF_DUMP_STATE_SUCCESS,
+    VMEF_DUMP_STATE_FAILED,
+} ValkeyModuleExternalFilterDumpState;
+
+typedef enum ValkeyModuleExternalFilterLoadState {
+    VMEF_LOAD_STATE_NONE = 0,
+    VMEF_LOAD_STATE_IN_PROGRESS,
+    VMEF_LOAD_STATE_SUCCESS,
+    VMEF_LOAD_STATE_FAILED,
+} ValkeyModuleExternalFilterLoadState;
 typedef struct ValkeyModuleExternalFilterCtx ValkeyModuleExternalFilterCtx;
 
 /* The callback function called when `SET` command is called.
@@ -1609,6 +1675,24 @@ typedef int (*ValkeyModuleExternalFilterSwapFunc)(
     int dbid1,
     int dbid2);
 
+/* The callback function called to count keys in this filter.
+ * This allows efficient O(1) counting of all keys for a specific database.
+ *
+ * - `module_ctx`: the module runtime context.
+ *
+ * - `filter_ctx`: the external filter context.
+ *
+ * - `dbid`: the database ID to count keys in.
+ *
+ * - `count`: pointer to store the count of keys.
+ *
+ */
+typedef int (*ValkeyModuleExternalFilterKeysCountFunc)(
+    ValkeyModuleCtx *module_ctx,
+    ValkeyModuleExternalFilterCtx *filter_ctx,
+    int dbid,
+    unsigned long long *count);
+
 /* Current ABI version for external filter modules. */
 #define VALKEYMODULE_EXTERNAL_FILTER_ABI_VERSION 1UL
 
@@ -1637,6 +1721,10 @@ typedef struct ValkeyModuleExternalFilterMethods {
     /* The callback function called when `SWAPDB` command is called.
      * This allows efficient O(1) swapping of all filter data between two databases. */
     ValkeyModuleExternalFilterSwapFunc swap;
+
+    /* The callback function called to count keys in this filter.
+     * This allows efficient O(1) counting of all keys for a specific database. */
+    ValkeyModuleExternalFilterKeysCountFunc keys_count;
 } ValkeyModuleExternalFilterMethodsV1;
 
 #define ValkeyModuleExternalFilterMethods ValkeyModuleExternalFilterMethodsV1

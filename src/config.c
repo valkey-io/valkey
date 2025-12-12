@@ -3259,6 +3259,8 @@ standardConfig static_configs[] = {
     createBoolConfig("lua-enable-insecure-api", "lua-enable-deprecated-api", MODIFIABLE_CONFIG | HIDDEN_CONFIG | PROTECTED_CONFIG, server.lua_enable_insecure_api, 0, NULL, updateLuaEnableInsecureApi),
     createBoolConfig("import-mode", NULL, DEBUG_CONFIG | MODIFIABLE_CONFIG, server.import_mode, 0, NULL, NULL),
     createBoolConfig("ext-data-expire", NULL, MODIFIABLE_CONFIG, server.ext_data_expire, 0, NULL, NULL),
+    createBoolConfig("ext-data-async-load", NULL, MODIFIABLE_CONFIG, server.ext_data_async_load, 1, NULL, NULL),
+    createIntConfig("ext-data-load-timeout-ms", NULL, MODIFIABLE_CONFIG, 0, INT_MAX, server.ext_data_load_timeout_ms, 10000, INTEGER_CONFIG, NULL, NULL),
 
     /* String Configs */
     createStringConfig("aclfile", NULL, IMMUTABLE_CONFIG, ALLOW_EMPTY_STRING, server.acl_filename, "", NULL, NULL),
@@ -3408,8 +3410,8 @@ standardConfig static_configs[] = {
     /* Unsigned Long Long configs */
     createULongLongConfig("maxmemory", NULL, MODIFIABLE_CONFIG, 0, ULLONG_MAX, server.maxmemory, 0, MEMORY_CONFIG, NULL, updateMaxmemory),
     createULongLongConfig("cluster-link-sendbuf-limit", NULL, MODIFIABLE_CONFIG, 0, ULLONG_MAX, server.cluster_link_msg_queue_limit_bytes, 0, MEMORY_CONFIG, NULL, NULL),
-    createULongLongConfig("ext-max-disk-size", NULL, MODIFIABLE_CONFIG, 0, ULLONG_MAX, server.ext_max_disk_size, 0, MEMORY_CONFIG, NULL, NULL),
-    createULongLongConfig("ext-max-mem-size", NULL, MODIFIABLE_CONFIG, 0, ULLONG_MAX, server.ext_max_mem_size, 0, MEMORY_CONFIG, NULL, NULL),
+    createULongLongConfig("ext-data-max-disk-size", NULL, MODIFIABLE_CONFIG, 0, ULLONG_MAX, server.ext_data_max_disk_size, 0, MEMORY_CONFIG, NULL, NULL),
+    createULongLongConfig("ext-data-max-mem-size", NULL, MODIFIABLE_CONFIG, 0, ULLONG_MAX, server.ext_data_max_mem_size, 0, MEMORY_CONFIG, NULL, NULL),
 
     /* Size_t configs */
     createSizeTConfig("hash-max-listpack-entries", "hash-max-ziplist-entries", MODIFIABLE_CONFIG, 0, LONG_MAX, server.hash_max_listpack_entries, 512, INTEGER_CONFIG, NULL, NULL),

@@ -41,6 +41,7 @@
 #include "connection.h"
 #include "module.h"
 #include "cluster_migrateslots.h"
+#include "external_data.h"
 
 #include <memory.h>
 #include <sys/time.h>
@@ -1031,6 +1032,16 @@ int startBgsaveForReplication(int mincapa, int req, int rdbver) {
      * it would never be cleared: the file is not deleted. This way if
      * the user enables it later with CONFIG SET, we are fine. */
     if (retval == C_OK && !socket_target && server.rdb_del_sync_files) RDBGeneratedByReplication = 1;
+    
+    /* Start async dump of external data for full sync if BGSAVE succeeded */
+    if (retval == C_OK && isExtDataOn()) {
+        if (externalDataDumpForFullSync() == EXTERNAL_SUCCESS) {
+            serverLog(LL_NOTICE, "External data dump started asynchronously for full sync");
+            /* The dump will complete in background, result will be checked later */
+        } else {
+            serverLog(LL_WARNING, "Failed to start external data dump for full sync");
+        }
+    }
 
     /* If we failed to BGSAVE, remove the replicas waiting for a full
      * resynchronization from the list of replicas, inform them with
@@ -1966,6 +1977,19 @@ void updateReplicasWaitingBgsave(int bgsaveerr, int type) {
 
     /* Note: there's a chance we got here from within the REPLCONF ACK command
      * so we must avoid using freeClient, otherwise we'll crash on our way up. */
+    
+    /* Check if external data dump completed and log result */
+    if (isExtDataOn() && bgsaveerr == C_OK) {
+        ValkeyModuleString *backup_id = NULL;
+        int dump_result = externalDataDumpCheckComplete(&backup_id);
+        if (dump_result == C_OK && backup_id) {
+            serverLog(LL_NOTICE, "External data dump completed: %s", (char *)objectGetVal(backup_id));
+            decrRefCount((robj *)backup_id);
+        } else if (dump_result == C_ERR) {
+            serverLog(LL_WARNING, "External data dump failed or backup ID is empty");
+        }
+        /* If still in progress (C_ERR with no completion), we'll check again later */
+    }
 
     listRewind(server.replicas, &li);
     while ((ln = listNext(&li))) {
@@ -2362,6 +2386,41 @@ void replicaAfterLoadPrimaryRDB(connection *conn, rdbSaveInfo *rsi) {
         server.primary_repl_offset = server.primary->repl_data->reploff;
     }
     clearReplicationId2();
+
+    /* Load external data for full sync if enabled */
+    if (isExtDataOn()) {
+        if (server.ext_data_async_load) {
+            /* Async mode: Start load in background and proceed immediately */
+            serverLog(LL_NOTICE, "Starting async external data load for full sync");
+            if (externalDataLoadForFullSync() == EXTERNAL_SUCCESS) {
+                serverLog(LL_NOTICE, "External data async load initiated");
+            } else {
+                serverLog(LL_WARNING, "Failed to initiate async external data load");
+            }
+        } else {
+            /* Sync mode: Start load and wait for completion */
+            serverLog(LL_NOTICE, "Starting sync external data load for full sync");
+            if (externalDataLoadForFullSync() == EXTERNAL_SUCCESS) {
+                /* Wait for load to complete */
+                int sleep_ms = 100;
+                int max_wait = server.ext_data_load_timeout_ms / sleep_ms; /* Convert ms to iterations */
+                int waited = 0;
+                while (waited < max_wait) {
+                    if (externalDataLoadCheckComplete() == C_OK) {
+                        serverLog(LL_NOTICE, "External data loaded synchronously for full sync");
+                        break;
+                    }
+                    usleep(sleep_ms * 1000); /* Sleep 100ms */
+                    waited++;
+                }
+                if (waited >= max_wait) {
+                    serverLog(LL_WARNING, "Timeout waiting for external data load to complete");
+                }
+            } else {
+                serverLog(LL_WARNING, "Failed to initiate external data load for full sync");
+            }
+        }
+    }
 
     /* Let's create the replication backlog if needed. Replicas need to
      * accumulate the backlog regardless of the fact they have sub-replicas

@@ -734,6 +734,8 @@ start_cluster 1 0 [list overrides [list "ext-data-mode" kv "ext-data-store-by-si
 }
 
 start_cluster 1 0 [list overrides [list "ext-data-mode" kv "ext-data-store-by-size" "0"] tags [list "singledb:skip"]] {
+    set extdatamodule1 [file normalize tests/modules/extstorage/extdata1.so]
+
     test "DEL with EXT - Sharded - Different databases" {
         # Load module and initialize external storage
         assert_equal {OK} [r module load $extdatamodule1]
@@ -1181,6 +1183,11 @@ start_server [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [li
         set insert_time [expr {$insert_end - $insert_start}]
         puts "Insert time: ${insert_time}ms for $num_keys keys"
         
+        # Before flushall create a backup
+        puts "Creating backup before flushall..."
+        set backup_result [r external_data dump]
+        assert {$backup_result != ""}
+        
         # Insert just one key into db1 to see the difference
         r select 1
         assert_equal {OK} [r set single_key single_value ext]
@@ -1268,6 +1275,16 @@ start_server [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [li
         if {$flush_time >= 500} {
             fail "FLUSHDB took ${flush_time}ms, expected < 500ms (demonstrates O(n) limitation - needs native flush API)"
         }
+        
+        # Action: After flushall restore from this backup
+        puts "Restoring from backup after flushall..."
+        r select 0
+        r external_data load $backup_result
+        
+        # Ensure that DBSIZE is the correct one without iterating through keys (too slow)
+        set dbsize_after_restore [r dbsize ext]
+        assert_equal $num_keys $dbsize_after_restore
+        puts "DBSIZE after restore: $dbsize_after_restore (expected: $num_keys)"
     }
 }
 
@@ -1296,6 +1313,11 @@ start_cluster 1 0 [list overrides [list "ext-data-mode" kv "loglevel" debug] tag
         set insert_time [expr {$insert_end - $insert_start}]
         puts "Insert time: ${insert_time}ms for $num_keys keys"
         
+        # Before flushall create a backup
+        puts "Creating backup before flushall..."
+        set backup_result [r external_data dump]
+        assert {$backup_result != ""}
+
         # Insert just one key into db1 to see the difference
         r select 1
         assert_equal {OK} [r set single_key single_value ext]
@@ -1360,6 +1382,16 @@ start_cluster 1 0 [list overrides [list "ext-data-mode" kv "loglevel" debug] tag
         if {$flush_time >= 500} {
             fail "FLUSHDB took ${flush_time}ms, expected < 500ms (demonstrates O(n) limitation - needs native flush API)"
         }
+
+        # Action: After flushall restore from this backup
+        puts "Restoring from backup after flushall..."
+        r select 0
+        r external_data load $backup_result
+        
+        # Ensure that DBSIZE is the correct one without iterating through keys (too slow)
+        set dbsize_after_restore [r dbsize ext]
+        assert_equal $num_keys $dbsize_after_restore
+        puts "DBSIZE after restore: $dbsize_after_restore (expected: $num_keys)"
     }
 }
 
@@ -1746,6 +1778,8 @@ start_cluster 1 0 [list overrides [list "ext-data-mode" kv "loglevel" debug] tag
 }
 
 start_cluster 1 0 [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [list "external:skip" "singledb:skip"]] {
+    set extdatamodule1 [file normalize tests/modules/extstorage/extdata1.so]
+
     test {DBSIZE with EXT in different databases (cluster mode)} {
         wait_for_cluster_state ok
         
@@ -1772,5 +1806,1381 @@ start_cluster 1 0 [list overrides [list "ext-data-mode" kv "loglevel" debug] tag
         
         r select 1
         assert_equal 3 [r dbsize ext]
+    }
+}
+
+# EXTERNAL_DATA DUMP and LOAD command tests
+start_server [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [list "external:skip"]] {
+    test "EXTERNAL_DATA DUMP and LOAD: Basic functionality" {
+        # Load module and initialize external storage
+        assert_equal {OK} [r module load $extdatamodule1]
+        assert_equal {OK} [r external_data INIT db0 helloextdata1]
+
+        r select 0
+        
+        # Add some regular and external data
+        r set key1 "value1"
+        r set key_ext "ext_value" EXT
+        
+        # Dump external data
+        set dump_result [r external_data dump]
+        assert {$dump_result != ""}
+        
+        r set key_ext "ext_value_last" EXT
+        r set key_ext_2 "ext_value_last" EXT
+        
+        # Dump external data again
+        set dump_result [r external_data dump]
+        assert {$dump_result != ""}
+
+        # Clear external data
+        r del key_ext
+        
+        # Load external data back from last backup
+        r external_data load
+        
+        # Verify external data is restored and memory untouched
+        assert_equal "value1" [r get key1]
+        assert_equal [r get key_ext ext] "ext_value_last"
+        assert_equal [r get key_ext_2 ext] "ext_value_last"
+    }
+
+    test "EXTERNAL_DATA DUMP and LOAD: With AOF enabled (persistence auto-load)" {
+        r select 0
+        
+        # Enable AOF persistence
+        r config set appendonly yes
+        r config rewrite
+        
+        # Add some external data
+        r set key1 "value1" EXT
+        r set key2 "value2" EXT
+        
+        # Dump external data
+        set dump_result [r external_data dump]
+        assert {$dump_result != ""}
+        
+        # Clear external data
+        r flushdb
+        
+        # Restart server to test auto-load on startup
+        restart_server 0 true false
+        wait_done_loading r
+        
+        # Verify external data is automatically restored on startup
+        assert_equal "value1" [r get key1 ext]
+        assert_equal "value2" [r get key2 ext]
+
+        # Cleanup
+        r config set appendonly no
+        r config rewrite
+        r flushall
+    }
+
+    test "EXTERNAL_DATA DUMP and LOAD: With save enabled (persistence auto-load)" {
+        r select 0
+        
+        # Enable save persistence
+        r config set save "900 1"
+        r config rewrite
+        
+        # Add some external data
+        r set key1 "value1" EXT
+        r set key2 "value2" EXT
+        
+        # Dump external data
+        set dump_result [r external_data dump]
+        assert {$dump_result != ""}
+        
+        # Clear external data
+        r flushdb
+        
+        # Restart server to test auto-load on startup
+        restart_server 0 true false
+        wait_done_loading r
+        
+        # Verify external data is automatically restored on startup
+        assert_equal "value1" [r get key1 ext]
+        assert_equal "value2" [r get key2 ext]
+
+        # Cleanup
+        r config set save ""
+        r config rewrite
+        r flushall
+    }
+
+    test "EXTERNAL_DATA DUMP and LOAD: With both AOF and save disabled (no persistence)" {
+        r select 0
+        
+        # Disable both AOF and save persistence
+        r config set appendonly no
+        r config set save ""
+        r config rewrite
+        
+        # Add some external data
+        r set key1 "value1" EXT
+        r set key2 "value2" EXT
+        
+        # Dump external data
+        set dump_result [r external_data dump]
+        assert {$dump_result != ""}
+        
+        # Clear external data
+        r flushdb
+        
+        # Restart server - should NOT auto-load without persistence
+        restart_server 0 true false
+        wait_done_loading r
+        
+        # Verify external data is NOT restored without persistence
+        assert_equal "" [r get key1 ext]
+        assert_equal "" [r get key2 ext]
+
+        # Cleanup
+        r flushall
+    }
+
+    test "EXTERNAL_DATA DUMP: Empty database" {
+        # Dump external data from empty database - should succeed without error
+        set empty_dump [r external_data dump]
+        assert {$empty_dump != ""}
+
+        # Check that server is ok, ext is processed
+        r select 0
+        assert_equal "" [r get key1]
+        assert_equal "" [r get key1 ext]
+        r set key1 "value1" EXT
+        assert_equal "value1" [r get key1 ext]
+    }
+
+    test "EXTERNAL_DATA LOAD: Invalid dump data" {
+        # Try to load invalid dump data
+        catch { r external_data load "invalid_data" } result
+        assert_match "*ERR*" $result
+
+        # Check that server is ok, ext is processed
+        r select 0
+        assert_equal "" [r get key1]
+        assert_equal "" [r get key1 ext]
+        r set key1 "value1" EXT
+        assert_equal "value1" [r get key1 ext]
+    }
+
+    test "EXTERNAL_DATA DUMP and LOAD: Large dataset" {
+        r select 0
+        
+        # Add multiple external data entries
+        for {set i 0} {$i < 100} {incr i} {
+            r set "key_ext_$i" "ext_value_$i" EXT
+        }
+        
+        # Verify some external data exists
+        assert_equal [r get key_ext_0 ext] "ext_value_0"
+        assert_equal [r get key_ext_50 ext] "ext_value_50"
+        assert_equal [r get key_ext_99 ext] "ext_value_99"
+        
+        # Dump external data
+        set dump_result [r external_data dump]
+        assert {$dump_result != ""}
+        
+        # Clear external data
+        r flushdb
+        
+        # Verify external data is gone
+        assert_equal [r get key_ext_0 ext] ""
+        assert_equal [r get key_ext_50 ext] ""
+        assert_equal [r get key_ext_99 ext] ""
+        
+        # Load external data back
+        r external_data load $dump_result
+        
+        # Verify external data is restored
+        assert_equal [r get key_ext_0 ext] "ext_value_0"
+        assert_equal [r get key_ext_50 ext] "ext_value_50"
+        assert_equal [r get key_ext_99 ext] "ext_value_99"
+    }
+}
+
+start_server [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [list "external:skip" "singledb:skip"]] {
+    test "EXTERNAL_DATA DUMP and LOAD: Multiple databases" {
+        # Load module and initialize external storage
+        assert_equal {OK} [r module load $extdatamodule1]
+        assert_equal {OK} [r external_data INIT db0 helloextdata1]
+
+        # Add external data to multiple databases
+        r select 0
+        r set db0_key "db0_value" EXT
+        
+        r select 1
+        r set db1_key "db1_value" EXT
+        
+        # Verify external data exists in both databases
+        r select 0
+        assert_equal [r get db0_key ext] "db0_value"
+        assert_equal [r get db1_key ext] ""
+        
+        r select 1
+        assert_equal [r get db0_key ext] ""
+        assert_equal [r get db1_key ext] "db1_value"
+        
+        # Dump external data from db0
+        set dump_result [r external_data dump]
+        assert {$dump_result != ""}
+        
+        # Clear external data from db0
+        r select 0
+        r flushdb
+        # Change data in db1
+        r select 1
+        r set db1_key "db1_value_new" EXT
+        r set db1_key_2 "db2_value" EXT
+        
+        # Load external data back
+        r external_data load $dump_result
+        
+        # Verify external data is restored to db0 and db1
+        r select 0
+        assert_equal [r get db0_key] "db0_value"
+        r select 1
+        assert_equal [r get db1_key ext] "db1_value"
+        assert_equal [r get db1_key_2 ext] ""
+    }
+}
+
+test "EXTERNAL_DATA DUMP and LOAD: Partial sync scenario" {
+    start_server [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [list "external:skip"]] {
+        start_server [list overrides [list "ext-data-mode" kv "loglevel" debug]] {
+            set primary [srv -1 client]
+            set primary_host [srv -1 host]
+            set primary_port [srv -1 port]
+            set replica [srv 0 client]
+
+            # Load module and initialize external storage
+            assert_equal {OK} [$primary module load $extdatamodule1]
+            assert_equal {OK} [$primary external_data INIT db0 helloextdata1]
+            
+            # Configure replication backlog for partial sync
+            $primary config set repl-backlog-size 1024
+            $primary config set repl-backlog-ttl 3600
+            
+            # Add some external data on primary
+            $primary select 0
+            $primary set memory_key value
+            $primary set primary_key1 "primary_value1" EXT
+            $primary set primary_key2 "primary_value2" EXT
+            
+            # Setup replication
+            $replica replicaof $primary_host $primary_port
+            wait_for_condition 50 100 {
+                [lindex [$replica role] 0] eq {replica} &&
+                [lindex [$primary role] 1] eq {1}
+            } else {
+                fail "Replication not started."
+            }
+            
+            # Init external data for replica now
+            assert_equal {OK} [$replica module load $extdatamodule1]
+            assert_equal {OK} [$replica external_data INIT db0 helloextdata1]
+
+            # Wait for replica to sync initial external data
+            wait_for_condition 50 100 {
+                [$replica get primary_key1 ext] eq "primary_value1" &&
+                [$replica get primary_key2 ext] eq "primary_value2"
+            } else {
+                fail "Replica not synchronized with primary external data"
+            }
+            
+            # Add more external data on primary
+            $primary set primary_key3 "primary_value3" EXT
+            
+            # Wait for replica to sync new data
+            wait_for_condition 50 100 {
+                [$replica get primary_key3 ext] eq "primary_value3"
+            } else {
+                fail "Replica not synchronized with new external data"
+            }
+            
+            # Break connection and simulate partial sync scenario
+            $replica client kill $primary_host:$primary_port
+            
+            # Add more data on primary while replica is disconnected
+            $primary set primary_key4 "primary_value4" EXT
+            
+            # Reconnect replica
+            $replica replicaof $primary_host $primary_port
+            
+            # Wait for partial sync to complete
+            wait_for_condition 50 100 {
+                [$replica get primary_key4 ext] eq "primary_value4"
+            } else {
+                fail "Partial sync failed for external data"
+            }
+            
+            # Verify all external data is present on replica
+            assert_equal [$replica get primary_key1 ext] "primary_value1"
+            assert_equal [$replica get primary_key2 ext] "primary_value2"
+            assert_equal [$replica get primary_key3 ext] "primary_value3"
+            assert_equal [$replica get primary_key4 ext] "primary_value4"
+        }
+    }
+}
+
+test "EXTERNAL_DATA DUMP and LOAD: replication" {
+    start_server [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [list "external:skip"]] {
+        start_server [list overrides [list "ext-data-mode" kv "loglevel" debug]] {
+            # Get primary and replica nodes
+            set primary [srv 0 client]
+            set primary_host [srv 0 host]
+            set primary_port [srv 0 port]
+            set replica [srv -1 client]
+
+            # Load module and initialize external storage
+            assert_equal {OK} [$primary module load $extdatamodule1]
+            assert_equal {OK} [$primary external_data INIT db0 helloextdata1]
+
+            # Configure replication backlog for partial sync
+            $primary config set repl-backlog-size 1024
+            $primary config set repl-backlog-ttl 3600
+            
+            # Add some external data on primary
+            $primary select 0
+            $primary set memory_key value
+            $primary set primary_key1 "primary_value1" EXT
+            $primary set primary_key2 "primary_value2" EXT
+            
+            # Setup replication
+            $replica replicaof $primary_host $primary_port
+            wait_for_condition 50 100 {
+                [lindex [$replica role] 0] eq {replica} &&
+                [lindex [$primary role] 1] eq {1}
+            } else {
+                fail "Replication not started."
+            }
+
+            # Replica has no external data as module is not loaded, server is not failing
+            assert_equal [$replica get memory_key] "value"
+            assert_error $ext_data_off_err {$replica get primary_key1 ext}
+            assert_error $ext_data_off_err {$replica get primary_key2 ext}
+
+            # Init external data for replica now
+            assert_equal {OK} [$replica module load $extdatamodule1]
+            assert_equal {OK} [$replica external_data INIT db0 helloextdata1]
+
+            # Setup replication and wait for replica to sync initial external data
+            $replica replicaof $primary $primary_port
+            wait_for_condition 50 100 {
+                [$replica get primary_key1 ext] eq "primary_value1" &&
+                [$replica get primary_key2 ext] eq "primary_value2"
+            } else {
+                fail "Replica not synchronized with primary external data"
+            }
+            
+            # Verify ext-data-async-load is enabled by default (async mode)
+            set config_result [$replica config get ext-data-async-load]
+            assert_equal "yes" [lindex $config_result 1]
+            
+            # Check primary logs for async dump during replication
+            set primary_log [srv 0 stdout]
+            set primary_log_content [exec cat $primary_log]
+            assert_match "*External data dump started asynchronously*" $primary_log_content
+            
+            # Wait for async dump to complete
+            wait_for_condition 50 100 {
+                [string match "*External data dump*completed*" [exec cat $primary_log]]
+            } else {
+                fail "Async external data dump did not complete"
+            }
+            
+            # Check replica logs for external data load
+            set replica_log [srv -1 stdout]
+            set replica_log_content [exec cat $replica_log]
+            assert_match "*External data async load initiated*" $replica_log_content
+
+            # Dump external data
+            $primary select 0
+            set dump_result [$primary external_data dump]
+            assert {$dump_result != ""}
+
+            # Load external data
+            $primary external_data load $dump_result
+
+            # Set new value and load last backup
+            $primary set primary_key3 "primary_value3" EXT
+            assert_equal [$replica get primary_key3 ext] "primary_value3"
+            $primary external_data load $dump_result
+            
+            # Verify all actual external data is present on replica
+            assert_equal [$replica get primary_key1 ext] "primary_value1"
+            assert_equal [$replica get primary_key2 ext] "primary_value2"
+            assert_equal [$replica get primary_key3 ext] ""
+        }
+    }
+}
+
+# Cluster mode tests for EXTERNAL_DATA DUMP and LOAD commands
+start_cluster 1 0 [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [list "external:skip" "singledb:skip"]] {
+    set extdatamodule1 [file normalize tests/modules/extstorage/extdata1.so]
+    
+    test "EXTERNAL_DATA DUMP and LOAD: Basic functionality (cluster mode)" {
+        wait_for_cluster_state ok
+        
+        # Load module and initialize external storage
+        assert_equal {OK} [r module load $extdatamodule1]
+        assert_equal {OK} [r external_data INIT db0 helloextdata1]
+        r select 0
+        
+        # Add some regular and external data
+        r set key1 "value1"
+        r set key_ext "ext_value" EXT
+        
+        # Dump external data
+        set dump_result [r external_data dump]
+        assert {$dump_result != ""}
+        
+        # Add some new external data
+        r set key_ext "ext_value_last" EXT
+        r set key_ext_2 "ext_value_last" EXT
+
+        # Dump external data
+        set dump_result [r external_data dump]
+        assert {$dump_result != ""}
+
+        # Clear external data
+        r del key_ext
+        
+        # Load external data back from last backup
+        r external_data load
+        
+        # Verify external data is restored and memory untouched
+        assert_equal "value1" [r get key1]
+        assert_equal "ext_value_last" [r get key_ext ext]
+        assert_equal "ext_value_last" [r get key_ext_2 ext]
+    }
+
+    test "EXTERNAL_DATA DUMP and LOAD: With AOF enabled (cluster mode, persistence auto-load)" {
+        wait_for_cluster_state ok
+        
+        # Enable AOF persistence
+        r config set appendonly yes
+        r config rewrite
+        
+        # Add some external data
+        r select 0
+        r set key1 "value1" EXT
+        r set key2 "value2" EXT
+        
+        # Dump external data
+        set dump_result [r external_data dump]
+        assert {$dump_result != ""}
+        
+        # Clear external data
+        r flushdb
+        
+        # Restart node to test auto-load on startup
+        restart_server 0 true false
+        wait_done_loading r
+        wait_for_cluster_state ok
+        
+        # Verify external data is automatically restored on startup
+        assert_equal "value1" [r get key1 ext]
+        assert_equal "value2" [r get key2 ext]
+
+        # Cleanup
+        r config set appendonly no
+        r config rewrite
+        r flushall
+    }
+
+    test "EXTERNAL_DATA DUMP and LOAD: With save enabled (cluster mode, persistence auto-load)" {
+        wait_for_cluster_state ok
+        
+        # Enable save persistence
+        r select 0
+        r config set save "900 1"
+        r cofnig rewrite
+        
+        # Add some external data
+        r set key1 "value1" EXT
+        r set key2 "value2" EXT
+        
+        # Dump external data
+        set dump_result [r external_data dump]
+        assert {$dump_result != ""}
+        
+        # Clear external data
+        r flushdb
+        
+        # Restart primary node to test auto-load on startup
+        restart_server 0 true false
+        wait_done_loading r
+        wait_for_cluster_state ok
+        
+        # Verify external data is automatically restored on startup
+        assert_equal "value1" [r get key1 ext]
+        assert_equal "value2" [r get key2 ext]
+
+        # Cleanup
+        r config set save ""
+        r config rewrite
+        r flushall
+    }
+
+    test "EXTERNAL_DATA DUMP and LOAD: With both AOF and save disabled (cluster mode, no persistence)" {
+        wait_for_cluster_state ok
+        
+        # Disable both AOF and save persistence
+        r select 0
+        r config set appendonly no
+        r config set save ""
+        r config rewrite
+        
+        # Add some external data
+        r set key1 "value1" EXT
+        r set key2 "value2" EXT
+        
+        # Dump external data
+        set dump_result [r external_data dump]
+        assert {$dump_result != ""}
+        
+        # Clear external data
+        r flushdb
+        
+        # Restart node - should NOT auto-load without persistence
+        restart_server 0 true false
+        wait_done_loading r
+        wait_for_cluster_state ok
+        
+        # Verify external data is NOT restored without persistence
+        assert_equal "" [r get key1 ext]
+        assert_equal "" [r get key2 ext]
+    }
+
+    test "EXTERNAL_DATA DUMP: Empty database (cluster mode)" {
+        wait_for_cluster_state ok
+        
+        # Dump external data from empty database - should succeed without error
+        set empty_dump [r external_data dump]
+        assert {$empty_dump != ""}
+
+        # Check that server is ok, ext is processed
+        r select 0
+        assert_equal "" [r get key1]
+        assert_equal "" [r get key1 ext]
+        r set key1 "value1" EXT
+        assert_equal "value1" [r get key1 ext]
+    }
+
+    test "EXTERNAL_DATA LOAD: Invalid dump data (cluster mode)" {
+        wait_for_cluster_state ok
+        
+        # Try to load invalid dump data
+        catch { r external_data load "invalid_data" } result
+        assert_match "*ERR*" $result
+
+        # Check that server is ok, ext is processed
+        r select 0
+        assert_equal "" [r get key1]
+        assert_equal "" [r get key1 ext]
+        r set key1 "value1" EXT
+        assert_equal "value1" [r get key1 ext]
+    }
+
+    test "EXTERNAL_DATA DUMP and LOAD: Large dataset (cluster mode)" {
+        wait_for_cluster_state ok
+        
+        # Add multiple external data entries
+        r select 0
+        for {set i 0} {$i < 100} {incr i} {
+            r set "key_ext_$i" "ext_value_$i" EXT
+        }
+        
+        # Verify some external data exists
+        assert_equal "ext_value_0" [r get key_ext_0 ext]
+        assert_equal "ext_value_50" [r get key_ext_50 ext]
+        assert_equal "ext_value_99" [r get key_ext_99 ext]
+        
+        # Dump external data
+        set dump_result [r external_data dump]
+        assert {$dump_result != ""}
+        
+        # Clear external data
+        r flushdb
+        
+        # Verify external data is gone
+        assert_equal "" [r get key_ext_0 ext]
+        assert_equal "" [r get key_ext_50 ext]
+        assert_equal "" [r get key_ext_99 ext]
+        
+        # Load external data back
+        r external_data load $dump_result
+        
+        # Verify external data is restored
+        assert_equal "ext_value_0" [r get key_ext_0 ext]
+        assert_equal "ext_value_50" [r get key_ext_50 ext]
+        assert_equal "ext_value_99" [r get key_ext_99 ext]
+    }
+
+    test "EXTERNAL_DATA DUMP and LOAD: Multiple databases (cluster mode)" {
+        wait_for_cluster_state ok
+        
+        # Load module and initialize external storage
+        assert_equal {OK} [r external_data INIT db1 helloextdata1]
+        
+        # Add external data to different databases
+        r select 0
+        r set db0_key "db0_value" EXT
+        
+        r select 1
+        r set db1_key "db1_value" EXT
+        
+        # Verify external data exists in both databases
+        r select 0
+        assert_equal "db0_value" [r get db0_key ext]
+        assert_equal "" [r get db1_key ext]
+        
+        r select 1
+        assert_equal "" [r get db0_key ext]
+        assert_equal "db1_value" [r get db1_key ext]
+        
+        # Dump external data
+        set dump_result [r external_data dump]
+        assert {$dump_result != ""}
+        
+        # Clear external data from db0
+        r select 0
+        r flushdb
+        # Change data in db1
+        r select 1
+        r set db1_key "db1_value_new" EXT
+        r set db1_key_2 "db2_value" EXT
+        
+        # Load external data back
+        r external_data load $dump_result
+
+        # Verify external data is restored to db0 and db1
+        r select 0
+        assert_equal [r get db0_key] "db0_value"
+        r select 1
+        assert_equal [r get db1_key ext] "db1_value"
+        assert_equal [r get db1_key_2 ext] ""
+    }
+}
+
+test "EXTERNAL_DATA DUMP and LOAD: Partial sync scenario (cluster mode)" {
+    start_cluster 1 1 [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [list "external:skip"]] {
+        set extdatamodule1 [file normalize tests/modules/extstorage/extdata1.so]
+        
+        wait_for_cluster_state ok
+        
+        # Get primary and replica nodes
+        set primary [srv 0 client]
+        set replica [srv -1 client]
+        set primary_host [srv 0 host]
+        set primary_port [srv 0 port]
+        
+        # Load module and initialize external storage on primary
+        assert_equal {OK} [$primary module load $extdatamodule1]
+        assert_equal {OK} [$primary external_data INIT db0 helloextdata1]
+
+        # Configure replication backlog for partial sync
+        $primary config set repl-backlog-size 1024
+        $primary config set repl-backlog-ttl 3600
+        
+        # Add some external data on primary
+        $primary select 0
+        $primary set memory_key value
+        $primary set cluster_key1 "cluster_value1" EXT
+        $primary set cluster_key2 "cluster_value2" EXT
+
+        # Init external data for replica now
+        assert_equal {OK} [$replica module load $extdatamodule1]
+        assert_equal {OK} [$replica external_data INIT db0 helloextdata1]
+        
+        # Wait for replica to sync initial external data
+        wait_for_condition 50 100 {
+            [$replica get cluster_key1 ext] eq "cluster_value1" &&
+            [$replica get cluster_key2 ext] eq "cluster_value2"
+        } else {
+            fail "Replica not synchronized with primary external data"
+        }
+        
+        # Add more external data on primary
+        $primary set cluster_key3 "cluster_value3" EXT
+        
+        # Wait for replica to sync new data
+        wait_for_condition 50 100 {
+            [$replica get cluster_key3 ext] eq "cluster_value3"
+        } else {
+            fail "Replica not synchronized with new external data"
+        }
+        
+        # Break connection and simulate partial sync scenario
+        $replica client kill $primary_host:$primary_port
+        
+        # Add more data on primary while replica is disconnected
+        $primary set cluster_key4 "cluster_value4" EXT
+        
+        # Reconnect replica
+        $replica replicaof $primary_host $primary_port
+        
+        # Wait for partial sync to complete
+        wait_for_condition 50 100 {
+            [$replica get cluster_key4 ext] eq "cluster_value4"
+        } else {
+            fail "Partial sync failed for external data in cluster mode"
+        }
+        
+        # Verify all external data is present on replica
+        assert_equal [$replica get cluster_key1 ext] "cluster_value1"
+        assert_equal [$replica get cluster_key2 ext] "cluster_value2"
+        assert_equal [$replica get cluster_key3 ext] "cluster_value3"
+        assert_equal [$replica get cluster_key4 ext] "cluster_value4"
+        
+        # Verify cluster state is still ok
+        wait_for_cluster_state ok
+    }
+}
+
+test "EXTERNAL_DATA DUMP and LOAD: replication (cluster mode)" {
+    start_cluster 1 1 [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [list "external:skip"]] {
+        set extdatamodule1 [file normalize tests/modules/extstorage/extdata1.so]
+        
+        wait_for_cluster_state ok
+        
+        # Get primary and replica nodes
+        set primary [srv 0 client]
+        set primary_host [srv 0 host]
+        set primary_port [srv 0 port]
+        set replica [srv -1 client]
+
+        # Load module and initialize external storage
+        assert_equal {OK} [$primary module load $extdatamodule1]
+        assert_equal {OK} [$primary external_data INIT db0 helloextdata1]
+
+        # Configure replication backlog for partial sync
+        $primary config set repl-backlog-size 1024
+        $primary config set repl-backlog-ttl 3600
+        
+        # Add some external data on primary
+        $primary select 0
+        $primary set memory_key value
+        $primary set primary_key1 "primary_value1" EXT
+        $primary set primary_key2 "primary_value2" EXT
+
+        # Replica has no external data as module is not loaded, server is not failing
+        assert_equal [$replica get memory_key] "value"
+        assert_error $ext_data_off_err {$replica get primary_key1 ext}
+        assert_error $ext_data_off_err {$replica get primary_key2 ext}
+
+        # Init external data for replica now
+        assert_equal {OK} [$replica module load $extdatamodule1]
+        assert_equal {OK} [$replica external_data INIT db0 helloextdata1]
+
+        # Wait for replica to sync initial external data
+        $replica replicaof $primary $primary_port
+        wait_for_condition 50 100 {
+            [$replica get primary_key1 ext] eq "primary_value1" &&
+            [$replica get primary_key2 ext] eq "primary_value2"
+        } else {
+            fail "Replica not synchronized with primary external data"
+        }
+        
+        # Verify ext-data-async-load is enabled by default (async mode)
+        set config_result [$replica config get ext-data-async-load]
+        assert_equal "yes" [lindex $config_result 1]
+        
+        # Check primary logs for async dump during replication
+        set primary_log [srv 0 stdout]
+        set primary_log_content [exec cat $primary_log]
+        assert_match "*External data dump started asynchronously*" $primary_log_content
+        
+        # Wait for async dump to complete
+        wait_for_condition 50 100 {
+            [string match "*External data dump*completed*" [exec cat $primary_log]]
+        } else {
+            fail "Async external data dump did not complete"
+        }
+        
+        # Check replica logs for external data load
+        set replica_log [srv -1 stdout]
+        set replica_log_content [exec cat $replica_log]
+        assert_match "*External data async load initiated*" $replica_log_content
+
+        # Dump external data
+        $primary select 0
+        set dump_result [$primary external_data dump]
+        assert {$dump_result != ""}
+
+        # Load external data
+        $primary external_data load $dump_result
+
+        # Set new value and load last backup
+        $primary set primary_key3 "primary_value3" EXT
+        assert_equal [$replica get primary_key3 ext] "primary_value3"
+        $primary external_data load $dump_result
+        
+        # Verify all actual external data is present on replica
+        assert_equal [$replica get primary_key1 ext] "primary_value1"
+        assert_equal [$replica get primary_key2 ext] "primary_value2"
+        assert_equal [$replica get primary_key3 ext] ""
+    }
+}
+
+
+# Test async external data dump for replication
+start_server [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [list "external:skip" "slow"]] {
+    test "Async external data dump: Basic functionality" {
+        # Load module and initialize external storage
+        assert_equal {OK} [r module load $extdatamodule1]
+        assert_equal {OK} [r external_data INIT db0 helloextdata1]
+        r select 0
+        
+        # Add some external data
+        r set async_key1 "async_value1" EXT
+        r set async_key2 "async_value2" EXT
+        r set async_key3 "async_value3" EXT
+        
+        # Trigger BGSAVE to test async dump
+        r bgsave
+        
+        # Wait for BGSAVE to complete
+        wait_for_condition 50 100 {
+            [s rdb_bgsave_in_progress] == 0
+        } else {
+            fail "BGSAVE did not complete in time"
+        }
+        
+        # Check server logs for async dump completion message
+        # The async dump should have completed and logged the backup ID
+        set log_file [srv 0 stdout]
+        set log_content [exec cat $log_file]
+        
+        # Verify async dump was triggered
+        assert_match "*External data dump started asynchronously*" $log_content
+        
+        # Wait for dump to complete and verify
+        wait_for_condition 50 100 {
+            [string match "*External data dump*completed*" [exec cat $log_file]]
+        } else {
+            fail "Async external data dump did not complete"
+        }
+    }
+}
+
+test "Async external data dump: Non-blocking behavior" {
+    start_server [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [list "external:skip"]] {
+        # Load module and initialize external storage
+        assert_equal {OK} [r module load $extdatamodule1]
+        assert_equal {OK} [r external_data INIT db0 helloextdata1]
+        r select 0
+        
+        # Add a large number of keys to external storage
+        set num_keys 1000
+        for {set i 0} {$i < $num_keys} {incr i} {
+            r set "nonblock_key_$i" "nonblock_value_$i" EXT
+        }
+        
+        # Trigger BGSAVE which will start async dump
+        r bgsave
+        
+        # Immediately try to perform other operations
+        # These should not be blocked by the async dump
+        set start_time [clock milliseconds]
+        
+        # Perform multiple operations while dump is in progress
+        # Mix of memory and external storage operations
+        for {set i 0} {$i < 100} {incr i} {
+            r set "test_key_$i" "test_value_$i"
+            r get "test_key_$i"
+            r set "test_ext_key_$i" "test_ext_value_$i" EXT
+            r get "test_ext_key_$i" EXT
+        }
+        
+        set end_time [clock milliseconds]
+        set elapsed_time [expr {$end_time - $start_time}]
+        
+        # Operations should complete quickly (< 1 second) even with dump in progress
+        assert {$elapsed_time < 1000}
+        
+        # Wait for BGSAVE to complete
+        wait_for_condition 50 100 {
+            [s rdb_bgsave_in_progress] == 0
+        } else {
+            fail "BGSAVE did not complete in time"
+        }
+        
+        # Wait for dump to complete and verify
+        wait_for_condition 50 100 {
+            [string match "*External data dump*completed*" [exec cat [srv 0 stdout]]]
+        } else {
+            fail "Async external data dump did not complete"
+        }
+    }
+}
+
+start_cluster 1 0 [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [list "external:skip"]] {
+    set extdatamodule1 [file normalize tests/modules/extstorage/extdata1.so]
+    
+    test "Async external data dump: Cluster mode basic functionality" {
+        wait_for_cluster_state ok
+        
+        # Load module and initialize external storage
+        assert_equal {OK} [r module load $extdatamodule1]
+        assert_equal {OK} [r external_data INIT db0 helloextdata1]
+        r select 0
+        
+        # Add some external data
+        r set cluster_async_key1 "cluster_async_value1" EXT
+        r set cluster_async_key2 "cluster_async_value2" EXT
+        
+        # Trigger BGSAVE to test async dump
+        r bgsave
+        
+        # Wait for BGSAVE to complete
+        wait_for_condition 50 100 {
+            [s rdb_bgsave_in_progress] == 0
+        } else {
+            fail "BGSAVE did not complete in time"
+        }
+        
+        # Check logs for async dump
+        set log_file [srv 0 stdout]
+        set log_content [exec cat $log_file]
+        assert_match "*External data dump started asynchronously*" $log_content
+        
+        # Wait for dump to complete and verify
+        wait_for_condition 50 100 {
+            [string match "*External data dump*completed*" [exec cat $log_file]]
+        } else {
+            fail "Async external data dump did not complete"
+        }
+    }
+    
+    test "Async external data dump: Non-blocking behavior (cluster mode)" {
+        wait_for_cluster_state ok
+        
+        # Add a large number of keys to external storage
+        set num_keys 1000
+        for {set i 0} {$i < $num_keys} {incr i} {
+            r set "cluster_nonblock_key_$i" "cluster_nonblock_value_$i" EXT
+        }
+        
+        # Trigger BGSAVE which will start async dump
+        r bgsave
+        
+        # Immediately try to perform other operations
+        # These should not be blocked by the async dump
+        set start_time [clock milliseconds]
+        
+        # Perform multiple operations while dump is in progress
+        # Mix of memory and external storage operations
+        for {set i 0} {$i < 100} {incr i} {
+            r set "cluster_test_key_$i" "cluster_test_value_$i"
+            r get "cluster_test_key_$i"
+            r set "cluster_test_ext_key_$i" "cluster_test_ext_value_$i" EXT
+            r get "cluster_test_ext_key_$i" EXT
+        }
+        set end_time [clock milliseconds]
+        set elapsed_time [expr {$end_time - $start_time}]
+        
+        # Operations should complete quickly (< 1 second) even with dump in progress
+        assert {$elapsed_time < 1000}
+        
+        # Wait for BGSAVE to complete
+        wait_for_condition 50 100 {
+            [s rdb_bgsave_in_progress] == 0
+        } else {
+            fail "BGSAVE did not complete in time"
+        }
+        
+        # Wait for dump to complete and verify
+        wait_for_condition 50 100 {
+            [string match "*External data dump*completed*" [exec cat [srv 0 stdout]]]
+        } else {
+            fail "Async external data dump did not complete in cluster mode"
+        }
+    }
+}
+
+# Test ext-data-async-load configuration
+test "ext-data-async-load: Sync mode" {
+    start_server [list overrides [list "ext-data-mode" kv "loglevel" debug "ext-data-async-load" no] tags [list "external:skip"]] {
+        start_server [list overrides [list "ext-data-mode" kv "loglevel" debug "ext-data-async-load" no]] {
+            set primary [srv -1 client]
+            set primary_host [srv -1 host]
+            set primary_port [srv -1 port]
+            set replica [srv 0 client]
+            
+            # Verify ext-data-async-load is disabled
+            set config_result [$replica config get ext-data-async-load]
+            assert_equal "no" [lindex $config_result 1]
+            
+            # Load module and initialize external storage on primary
+            assert_equal {OK} [$primary module load $extdatamodule1]
+            assert_equal {OK} [$primary external_data INIT db0 helloextdata1]
+            
+            # Add external data on primary
+            $primary select 0
+            $primary set sync_test_key1 "sync_test_value1" EXT
+            $primary set sync_test_key2 "sync_test_value2" EXT
+            $primary set memory_key "memory_value"
+            
+            # Setup replication
+            $replica replicaof $primary_host $primary_port
+            wait_for_condition 50 100 {
+                [lindex [$replica role] 0] eq {replica}
+            } else {
+                fail "Replication not started"
+            }
+            
+            # Load module on replica
+            assert_equal {OK} [$replica module load $extdatamodule1]
+            assert_equal {OK} [$replica external_data INIT db0 helloextdata1]
+            
+            # In sync mode, both memory and external data should be available together
+            wait_for_condition 50 100 {
+                [$replica get memory_key] eq "memory_value" &&
+                [$replica get sync_test_key1 ext] eq "sync_test_value1" &&
+                [$replica get sync_test_key2 ext] eq "sync_test_value2"
+            } else {
+                fail "Data not synced in sync mode"
+            }
+            
+            # Check replica logs for sync load message
+            set replica_log [srv 0 stdout]
+            set replica_log_content [exec cat $replica_log]
+            assert_match "*loaded synchronously*" $replica_log_content
+        }
+    }
+}
+
+test "ext-data-async-load: Sync mode (cluster)" {
+    start_cluster 1 1 [list overrides [list "ext-data-mode" kv "loglevel" debug "ext-data-async-load" no] tags [list "external:skip"]] {
+        set extdatamodule1 [file normalize tests/modules/extstorage/extdata1.so]
+        
+        wait_for_cluster_state ok
+        
+        set primary [srv 0 client]
+        set replica [srv -1 client]
+        
+        # Verify ext-data-async-load is disabled
+        set config_result [$replica config get ext-data-async-load]
+        assert_equal "no" [lindex $config_result 1]
+        
+        # Load module and initialize external storage on primary
+        assert_equal {OK} [$primary module load $extdatamodule1]
+        assert_equal {OK} [$primary external_data INIT db0 helloextdata1]
+        
+        # Add external data on primary
+        $primary select 0
+        $primary set cluster_sync_key1 "cluster_sync_value1" EXT
+        $primary set cluster_sync_key2 "cluster_sync_value2" EXT
+        $primary set cluster_memory_key "cluster_memory_value"
+        
+        # Load module on replica
+        assert_equal {OK} [$replica module load $extdatamodule1]
+        assert_equal {OK} [$replica external_data INIT db0 helloextdata1]
+        
+        # In sync mode, both memory and external data should be available together
+        wait_for_condition 50 100 {
+            [$replica get cluster_memory_key] eq "cluster_memory_value" &&
+            [$replica get cluster_sync_key1 ext] eq "cluster_sync_value1" &&
+            [$replica get cluster_sync_key2 ext] eq "cluster_sync_value2"
+        } else {
+            fail "Data not synced in sync mode (cluster)"
+        }
+        
+        # Check replica logs for sync load message
+        set replica_log [srv -1 stdout]
+        set replica_log_content [exec cat $replica_log]
+        assert_match "*loaded synchronously*" $replica_log_content
+    }
+}
+
+
+# Test external storage with simulated failures
+# Tests both standalone and cluster mode with 50% failure rate
+start_server [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [list "external:skip"]] {
+    test "External storage with simulated failures - standalone mode" {
+        # Load module with 50% failure rate (fails every 2nd set, starting from 1st)
+        set extdatamodule1_with_failures [file normalize tests/modules/extstorage/extdata1.so]
+        assert_equal {OK} [r module load $extdatamodule1_with_failures set_failure_percent=50]
+        assert_equal {OK} [r external_data INIT db0 helloextdata1]
+        r select 0
+        
+        # First set should fail (1st operation)
+        assert_error "*Simulated storage failure*" {r set key1 value1 ext}
+        
+        # Second set should succeed (2nd operation)
+        assert_equal {OK} [r set key2 value2 ext]
+        
+        # Third set should fail (3rd operation)
+        assert_error "*Simulated storage failure*" {r set key3 value3 ext}
+        
+        # Fourth set should succeed (4th operation)
+        assert_equal {OK} [r set key4 value4 ext]
+        
+        # Verify successful sets are stored
+        assert_equal value2 [r get key2 ext]
+        assert_equal value4 [r get key4 ext]
+        
+        # Verify failed sets are not stored
+        assert_equal {} [r get key1 ext]
+        assert_equal {} [r get key3 ext]
+    }
+}
+
+# Test replication with simulated failures
+test "External storage replication with simulated failures - standalone mode" {
+    start_server [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [list "external:skip"]] {
+        start_server [list overrides [list "ext-data-mode" kv "loglevel" debug]] {
+            set primary [srv -1 client]
+            set primary_host [srv -1 host]
+            set primary_port [srv -1 port]
+            set replica [srv 0 client]
+            
+            # Load module on primary without failures
+            set extdatamodule1 [file normalize tests/modules/extstorage/extdata1.so]
+            assert_equal {OK} [$primary module load $extdatamodule1]
+            assert_equal {OK} [$primary external_data INIT db0 helloextdata1]
+            
+            # Add data on primary
+            $primary select 0
+            $primary set primary_key1 "primary_value1" EXT
+            $primary set primary_key2 "primary_value2" EXT
+            
+            # Setup replication
+            $replica replicaof $primary_host $primary_port
+            wait_for_condition 50 100 {
+                [lindex [$replica role] 0] eq {replica}
+            } else {
+                fail "Replication not started"
+            }
+            
+            # Load module on replica WITH 50% failure rate
+            assert_equal {OK} [$replica module load $extdatamodule1 set_failure_percent=50]
+            assert_equal {OK} [$replica external_data INIT db0 helloextdata1]
+            
+            # Despite the 50% failure rate on replica, data should eventually sync
+            # The first attempt will fail, but retries should succeed
+            wait_for_condition 100 100 {
+                [$replica get primary_key1 ext] eq "primary_value1" &&
+                [$replica get primary_key2 ext] eq "primary_value2"
+            } else {
+                fail "Replica not synchronized despite failures"
+            }
+            
+            # Add more data on primary
+            $primary set primary_key3 "primary_value3" EXT
+            $primary set primary_key4 "primary_value4" EXT
+            
+            # Verify replica eventually syncs new data despite failures
+            wait_for_condition 100 100 {
+                [$replica get primary_key3 ext] eq "primary_value3" &&
+                [$replica get primary_key4 ext] eq "primary_value4"
+            } else {
+                fail "Replica not synchronized with new data despite failures"
+            }
+            
+            # Verify system stability - both primary and replica should be operational
+            assert_equal "primary_value1" [$primary get primary_key1 ext]
+            assert_equal "primary_value1" [$replica get primary_key1 ext]
+        }
+    }
+}
+
+# Test cluster mode with simulated failures
+start_cluster 1 1 [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [list "external:skip"]] {
+    set extdatamodule1 [file normalize tests/modules/extstorage/extdata1.so]
+    
+    test "External storage with simulated failures - cluster mode" {
+        wait_for_cluster_state ok
+        
+        set primary [srv 0 client]
+        set replica [srv -1 client]
+        
+        # Load module on primary without failures
+        assert_equal {OK} [$primary module load $extdatamodule1]
+        assert_equal {OK} [$primary external_data INIT db0 helloextdata1]
+        
+        # Add data on primary
+        $primary select 0
+        $primary set cluster_key1 "cluster_value1" EXT
+        $primary set cluster_key2 "cluster_value2" EXT
+        
+        # Load module on replica WITH 50% failure rate
+        assert_equal {OK} [$replica module load $extdatamodule1 set_failure_percent=50]
+        assert_equal {OK} [$replica external_data INIT db0 helloextdata1]
+        
+        # Despite the 50% failure rate on replica, data should eventually sync
+        wait_for_condition 100 100 {
+            [$replica get cluster_key1 ext] eq "cluster_value1" &&
+            [$replica get cluster_key2 ext] eq "cluster_value2"
+        } else {
+            fail "Cluster replica not synchronized despite failures"
+        }
+        
+        # Add more data on primary
+        $primary set cluster_key3 "cluster_value3" EXT
+        $primary set cluster_key4 "cluster_value4" EXT
+        
+        # Verify replica eventually syncs new data despite failures
+        wait_for_condition 100 100 {
+            [$replica get cluster_key3 ext] eq "cluster_value3" &&
+            [$replica get cluster_key4 ext] eq "cluster_value4"
+        } else {
+            fail "Cluster replica not synchronized with new data despite failures"
+        }
+        
+        # Verify system stability - both primary and replica should be operational
+        assert_equal "cluster_value1" [$primary get cluster_key1 ext]
+        assert_equal "cluster_value1" [$replica get cluster_key1 ext]
+        
+        # Verify cluster state is still ok
+        wait_for_cluster_state ok
+    }
+}
+
+
+# Test replication with 100% failure rate and replica restart
+test "External storage replication with 100% failures and restart - standalone mode" {
+    start_server [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [list "external:skip"]] {
+        start_server [list overrides [list "ext-data-mode" kv "loglevel" debug]] {
+            set primary [srv -1 client]
+            set primary_host [srv -1 host]
+            set primary_port [srv -1 port]
+            set replica [srv 0 client]
+            
+            # Load module on primary without failures
+            set extdatamodule1 [file normalize tests/modules/extstorage/extdata1.so]
+            assert_equal {OK} [$primary module load $extdatamodule1]
+            assert_equal {OK} [$primary external_data INIT db0 helloextdata1]
+            
+            # Add data on primary
+            $primary select 0
+            $primary set primary_key1 "primary_value1" EXT
+            $primary set primary_key2 "primary_value2" EXT
+            
+            # Setup replication
+            $replica replicaof $primary_host $primary_port
+            wait_for_condition 50 100 {
+                [lindex [$replica role] 0] eq {replica}
+            } else {
+                fail "Replication not started"
+            }
+            
+            # Load module on replica WITH 100% failure rate (all sets fail)
+            assert_equal {OK} [$replica module load $extdatamodule1 set_failure_percent=100]
+            assert_equal {OK} [$replica external_data INIT db0 helloextdata1]
+            
+            # Wait 1 second with all failures
+            after 1000
+            
+            # Verify data is NOT synced yet due to 100% failures
+            assert_equal {} [$replica get primary_key1 ext]
+            assert_equal {} [$replica get primary_key2 ext]
+            
+            # Restart replica to clear the failure state
+            restart_server 0 true false
+            set replica [srv 0 client]
+            
+            # Reload module on replica WITHOUT failures this time
+            assert_equal {OK} [$replica module load $extdatamodule1]
+            assert_equal {OK} [$replica external_data INIT db0 helloextdata1]
+            
+            # Now data should sync successfully
+            wait_for_condition 100 100 {
+                [$replica get primary_key1 ext] eq "primary_value1" &&
+                [$replica get primary_key2 ext] eq "primary_value2"
+            } else {
+                fail "Replica not synchronized after restart"
+            }
+            
+            # Add more data on primary to verify ongoing replication
+            $primary set primary_key3 "primary_value3" EXT
+            
+            # Verify new data syncs
+            wait_for_condition 100 100 {
+                [$replica get primary_key3 ext] eq "primary_value3"
+            } else {
+                fail "Replica not synchronized with new data after restart"
+            }
+            
+            # Verify system stability
+            assert_equal "primary_value1" [$primary get primary_key1 ext]
+            assert_equal "primary_value1" [$replica get primary_key1 ext]
+        }
+    }
+}
+
+# Test cluster mode with 100% failure rate and replica restart
+start_cluster 1 1 [list overrides [list "ext-data-mode" kv "loglevel" debug] tags [list "external:skip"]] {
+    set extdatamodule1 [file normalize tests/modules/extstorage/extdata1.so]
+    
+    test "External storage with 100% failures and restart - cluster mode" {
+        wait_for_cluster_state ok
+        
+        set primary [srv 0 client]
+        set replica [srv -1 client]
+        
+        # Load module on primary without failures
+        assert_equal {OK} [$primary module load $extdatamodule1]
+        assert_equal {OK} [$primary external_data INIT db0 helloextdata1]
+        
+        # Add data on primary
+        $primary select 0
+        $primary set cluster_key1 "cluster_value1" EXT
+        $primary set cluster_key2 "cluster_value2" EXT
+        
+        # Load module on replica WITH 100% failure rate (all sets fail)
+        assert_equal {OK} [$replica module load $extdatamodule1 set_failure_percent=100]
+        assert_equal {OK} [$replica external_data INIT db0 helloextdata1]
+        
+        # Wait 1 second with all failures
+        after 1000
+        
+        # Verify data is NOT synced yet due to 100% failures
+        assert_equal {} [$replica get cluster_key1 ext]
+        assert_equal {} [$replica get cluster_key2 ext]
+        
+        # Restart replica to clear the failure state
+        restart_server -1 true false
+        set replica [srv -1 client]
+        wait_for_cluster_state ok
+        
+        # Reload module on replica and use config set to disable failures
+        assert_equal {OK} [$replica module load $extdatamodule1 set_failure_percent=100]
+        assert_equal {OK} [$replica external_data INIT db0 helloextdata1]
+        
+        # Use runtime configuration to set failure rate to 0
+        $replica config set helloextdata1.set_failure_percent 0
+        
+        # Wait for cluster to stabilize
+        wait_for_cluster_state ok
+        
+        # Now data should sync successfully
+        wait_for_condition 100 100 {
+            [$replica get cluster_key1 ext] eq "cluster_value1" &&
+            [$replica get cluster_key2 ext] eq "cluster_value2"
+        } else {
+            fail "Cluster replica not synchronized after restart"
+        }
+        
+        # Add more data on primary to verify ongoing replication
+        $primary set cluster_key3 "cluster_value3" EXT
+        
+        # Verify new data syncs
+        wait_for_condition 100 100 {
+            [$replica get cluster_key3 ext] eq "cluster_value3"
+        } else {
+            fail "Cluster replica not synchronized with new data after restart"
+        }
+        
+        # Verify system stability
+        assert_equal "cluster_value1" [$primary get cluster_key1 ext]
+        assert_equal "cluster_value1" [$replica get cluster_key1 ext]
+        
+        # Verify cluster state is still ok
+        wait_for_cluster_state ok
     }
 }

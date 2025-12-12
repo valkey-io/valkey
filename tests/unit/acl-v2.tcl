@@ -712,16 +712,16 @@ start_server {tags {"acl external:skip"}} {
     
     test {Test edge cases with database IDs, check new errmsg} {
         catch {r ACL SETUSER db-edge-user db=999} err
-        assert_match "*Error in ACL SETUSER modifier 'db=999': The provided database ID is out of range or non-numeric*" $err
+        assert_match "*Error in ACL SETUSER modifier 'db=999': The provided database ID is out of range*" $err
         
         catch {r ACL SETUSER db-edge-user db=-1} err
-        assert_match "*Error in ACL SETUSER modifier 'db=-1': The provided database ID is out of range or non-numeric*" $err
+        assert_match "*Error in ACL SETUSER modifier 'db=-1': The provided database ID is out of range*" $err
         
         catch {r ACL SETUSER db-edge-user db=abc} err
-        assert_match "*Error in ACL SETUSER modifier 'db=abc': The provided database ID is out of range or non-numeric*" $err
+        assert_match "*Error in ACL SETUSER modifier 'db=abc': Syntax error*" $err
         
         catch {r ACL SETUSER db-edge-user db=16} err
-        assert_match "*Error in ACL SETUSER modifier 'db=16': The provided database ID is out of range or non-numeric*" $err
+        assert_match "*Error in ACL SETUSER modifier 'db=16': The provided database ID is out of range*" $err
         
         set acl_list [r ACL LIST]
         set user_line [lsearch -inline $acl_list "user db-edge-user*"]
@@ -1162,6 +1162,38 @@ start_server {tags {"acl external:skip"}} {
         
         # Cleanup
         r ACL SETUSER db-acl-change db=0,1
+    }
+
+    test {ACL stats for invalid database accesses} {
+        set current_auth_failures [s acl_access_denied_auth]
+        set current_invalid_cmd_accesses [s acl_access_denied_cmd]
+        set current_invalid_key_accesses [s acl_access_denied_key]
+        set current_invalid_channel_accesses [s acl_access_denied_channel]
+        set current_invalid_db_accesses [s acl_access_denied_db]
+        
+        r ACL SETUSER invaliddbuser on nopass +@all ~* db=0,1
+        $r2 auth invaliddbuser password
+        
+        catch {$r2 select 2} err
+        assert_match "*NOPERM*database*" $err
+        
+        catch {$r2 select 3} err
+        assert_match "*NOPERM*database*" $err
+
+        catch {$r2 select 4} err
+        assert_match "*NOPERM*database*" $err
+        
+        r AUTH default ""
+        
+        # Verify the counter increased by 3
+        assert {[s acl_access_denied_auth] eq $current_auth_failures}
+        assert {[s acl_access_denied_cmd] eq $current_invalid_cmd_accesses}
+        assert {[s acl_access_denied_key] eq $current_invalid_key_accesses}
+        assert {[s acl_access_denied_channel] eq $current_invalid_channel_accesses}
+        assert {[s acl_access_denied_db] eq [expr $current_invalid_db_accesses + 3]}
+        
+        # Cleanup
+        r ACL deluser invaliddbuser
     }
 
     $r2 close

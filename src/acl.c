@@ -964,7 +964,8 @@ static void ACLAddAllowedFirstArg(aclSelector *selector, unsigned long id, const
 }
 
 /* Clean up and return error from database permission operations. */
-static int ACLDatabasePermissionError(intset *new_dbs, sds dblist, int error_code) {
+static int ACLDatabasePermissionError(intset *new_dbs, sds dblist, sds *tokens, int count, int error_code) {
+    if (tokens) sdsfreesplitres(tokens, count);
     if (new_dbs) intsetFree(new_dbs);
     if (dblist) sdsfree(dblist);
     errno = error_code;
@@ -983,24 +984,32 @@ static int ACLSetSelectorDatabasePermissions(aclSelector *selector, const char *
     sds dblist = sdsnew(dbs_str);
     size_t len = sdslen(dblist);
 
-    /* Reject empty list, trailing commas or more than 1 consecutive commas */
-    if (len == 0 || dblist[0] == ',' ||
-        dblist[len - 1] == ',' || strstr(dblist, ",,")) {
-        return ACLDatabasePermissionError(new_dbs, dblist, EINVAL);
+    /* Reject empty list, leading or trailing commas */
+    if (len == 0 || dblist[0] == ',' || dblist[len - 1] == ',') {
+        return ACLDatabasePermissionError(new_dbs, dblist, NULL, 0, EINVAL);
     }
 
     int count;
     sds *tokens = sdssplitlen(dblist, len, ",", 1, &count);
 
     for (int i = 0; i < count; i++) {
+        /* Reject empty tokens */
+        if (sdslen(tokens[i]) == 0) {
+            return ACLDatabasePermissionError(new_dbs, dblist, tokens, count, EINVAL);
+        }
+
         char *endptr = NULL;
         errno = 0;
         int64_t dbid = strtoll(tokens[i], &endptr, 10);
 
-        if (errno == ERANGE || endptr == tokens[i] || *endptr != '\0' ||
-            dbid < 0 || dbid >= server.dbnum) {
-            sdsfreesplitres(tokens, count);
-            return ACLDatabasePermissionError(new_dbs, dblist, ERANGE);
+        /* Reject invalid input format */
+        if (errno == ERANGE || *endptr != '\0') {
+            return ACLDatabasePermissionError(new_dbs, dblist, tokens, count, EINVAL);
+        }
+
+        /* Reject out of range values */
+        if (dbid < 0 || dbid >= server.dbnum) {
+            return ACLDatabasePermissionError(new_dbs, dblist, tokens, count, ERANGE);
         }
 
         /* No error check needed - duplicates will not be added */
@@ -1476,7 +1485,7 @@ const char *ACLSetUserStringError(void) {
     else if (errno == ECHILD)
         errmsg = "Allowing first-arg of a subcommand is not supported";
     else if (errno == ERANGE)
-        errmsg = "The provided database ID is out of range or non-numeric";
+        errmsg = "The provided database ID is out of range";
     return errmsg;
 }
 
@@ -1761,9 +1770,7 @@ int ACLSelectorCanAccessDb(aclSelector *selector, long long dbid) {
     if (dbid < 0 || dbid >= server.dbnum || !selector->dbs)
         return 0;
 
-    int found = intsetFind(selector->dbs, (int64_t)dbid);
-
-    return found;
+    return intsetFind(selector->dbs, (int64_t)dbid);
 }
 
 /* To prevent duplicate calls to getKeysResult, a cache is maintained
@@ -1824,10 +1831,10 @@ static int ACLSelectorCheckCmd(aclSelector *selector,
             zfree(dbids);
         }
     } else if ((cmd->flags & CMD_ALL_DBS) && !(selector->flags & SELECTOR_FLAG_ALLDBS)) {
-        for (int i = 0; i < server.dbnum; i++) {
-            if (!ACLSelectorCanAccessDb(selector, i)) {
-                return ACL_DENIED_DB;
-            }
+        /* Intset stores unique IDs, if the count doesn't equal dbnum,
+         * the selector doesn't have access to all databases. */
+        if (!selector->dbs || intsetLen(selector->dbs) != (uint32_t)server.dbnum) {
+            return ACL_DENIED_DB;
         }
     } else if (((cmd->flags & CMD_READONLY) || (cmd->flags & CMD_WRITE)) && !ACLSelectorCanAccessDb(selector, dbid)) {
         if (keyidxptr) *keyidxptr = 0;
@@ -1929,7 +1936,6 @@ int ACLUserCheckKeyPerm(user *u, const char *key, int keylen, int flags, bool is
     /* If there is no associated user, the connection can run anything. */
     if (u == NULL) return ACL_OK;
 
-    // TODO: Determine what to do here and in VM function
     /* Check all of the selectors */
     listRewind(u->selectors, &li);
     while ((ln = listNext(&li))) {
@@ -2047,7 +2053,7 @@ int ACLCheckAllUserCommandPerm(user *u, struct serverCommand *cmd, robj **argv, 
 
 /* High level API for checking if a client can execute the queued up command */
 int ACLCheckAllPerm(client *c, int *idxptr) {
-    int dbid = (c->flag.multi) ? c->mstate->transaction_db_id : (c->db ? c->db->id : -1);
+    int dbid = (c->flag.multi) ? c->mstate->transaction_db_id : c->db->id;
     return ACLCheckAllUserCommandPerm(c->user, c->cmd, c->argv, c->argc, dbid, idxptr);
 }
 
@@ -3325,7 +3331,7 @@ void aclCommand(client *c) {
         }
 
         int idx;
-        int dbid = (c->flag.multi) ? c->mstate->transaction_db_id : (c->db ? c->db->id : -1);
+        int dbid = (c->flag.multi) ? c->mstate->transaction_db_id : c->db->id;
         int result = ACLCheckAllUserCommandPerm(u, cmd, c->argv + 3, c->argc - 3, dbid, &idx);
         if (result != ACL_OK) {
             sds err = getAclErrorMessage(result, u, cmd, c->argv[idx + 3]->ptr, 1);

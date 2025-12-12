@@ -3192,10 +3192,10 @@ extern rax *Users;
 extern user *DefaultUser;
 void ACLInit(void);
 /* Return values for ACLCheckAllPerm(). */
-#define ACL_OK 0
-#define ACL_DENIED_DB 1 /* Database can't be accessed */
-#define ACL_DENIED_CMD 2
-#define ACL_DENIED_KEY 3
+#define ACL_OK 0                    /* Permission granted */
+#define ACL_DENIED_DB 1             /* Database access denied */
+#define ACL_DENIED_CMD 2            /* Command execution denied */
+#define ACL_DENIED_KEY 3            /* Key access denied */
 #define ACL_DENIED_AUTH 4           /* Only used for ACL LOG entries. */
 #define ACL_DENIED_CHANNEL 5        /* Only used for pub/sub commands */
 #define ACL_INVALID_TLS_CERT_AUTH 6 /* Only used for TLS Auto-authentication */

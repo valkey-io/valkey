@@ -5663,10 +5663,11 @@ sds genValkeyInfoStringACLStats(sds info) {
                         "acl_access_denied_cmd:%lld\r\n"
                         "acl_access_denied_key:%lld\r\n"
                         "acl_access_denied_channel:%lld\r\n"
-                        "acl_access_denied_tls_cert:%lld\r\n",
+                        "acl_access_denied_tls_cert:%lld\r\n"
+                        "acl_access_denied_db:%lld\r\n",
                         server.acl_info.user_auth_failures, server.acl_info.invalid_cmd_accesses,
                         server.acl_info.invalid_key_accesses, server.acl_info.invalid_channel_accesses,
-                        server.acl_info.acl_access_denied_tls_cert);
+                        server.acl_info.acl_access_denied_tls_cert, server.acl_info.invalid_db_accesses);
     return info;
 }
 

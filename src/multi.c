@@ -35,7 +35,7 @@
 void initClientMultiState(client *c) {
     if (c->mstate) return;
     c->mstate = zcalloc(sizeof(multiState));
-    c->mstate->transaction_db_id = c->db ? c->db->id : 0;
+    c->mstate->transaction_db_id = c->db->id;
 }
 
 void freeClientMultiStateCmds(client *c) {
@@ -100,12 +100,12 @@ void queueMultiCommand(client *c, uint64_t cmd_flags) {
     mc->argv_len = c->argv_len;
     mc->slot = c->slot;
 
-    if (mc->cmd->proc == selectCommand && mc->argc > 1) {
-        long long target_db;
-        if (getLongLongFromObject(mc->argv[1], &target_db) == C_OK) {
-            if (target_db >= 0 && target_db < server.dbnum) {
-                c->mstate->transaction_db_id = (int)target_db;
-            }
+    if (mc->cmd->get_dbid_args && mc->cmd->proc == selectCommand) {
+        int count;
+        int *dbids = mc->cmd->get_dbid_args(mc->argv, mc->argc, &count);
+        if (dbids && count > 0) {
+            c->mstate->transaction_db_id = dbids[0];
+            zfree(dbids);
         }
     }
 

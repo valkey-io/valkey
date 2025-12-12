@@ -6574,7 +6574,7 @@ ValkeyModuleCallReply *VM_Call(ValkeyModuleCtx *ctx, const char *cmdname, const 
         int acl_errpos;
         int acl_retval;
 
-        int dbid = (c->flag.multi) ? c->mstate->transaction_db_id : (c->db ? c->db->id : -1);
+        int dbid = (c->flag.multi) ? c->mstate->transaction_db_id : c->db->id;
         acl_retval = ACLCheckAllUserCommandPerm(user, c->cmd, c->argv, c->argc, dbid, &acl_errpos);
         if (acl_retval != ACL_OK) {
             int context = scriptIsRunning() ? ACL_LOG_CTX_SCRIPT : ACL_LOG_CTX_MODULE;

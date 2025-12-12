@@ -45,9 +45,9 @@ Technical major decisions include:
     * Adding or removing a new external library such as a client or module to the project when it affects runtime behavior
 
 Technical major decisions shall be approved by a simple majority vote whenever one can be obtained.
-If a simple majority cannot be reached within a two-week voting period, and no TSC member has cast a veto vote, the decision may instead be approved through explicit “+2” support from at least two TSC members, recorded on the relevant issue or pull request.
+If a simple majority cannot be reached within a two-week voting period, and no TSC member has voted against, the decision may instead be approved through explicit “+2” support from at least two TSC members, recorded on the relevant issue or pull request.
 If the PR author or issue proposer is a TSC member, their +1 counts toward the +2.
-If any TSC member casts a veto vote, the decision must follow the simple majority voting process and cannot be approved through +2.
+If any TSC member casts a negative vote, the decision must follow the simple majority voting process and cannot be approved through +2.
 Once a technical major decision has been approved through the +2 mechanism, any subsequent concerns shall be raised through a new major decision process; +2 approvals are not retracted directly.
 
 ### Governance Major Decisions

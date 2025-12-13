@@ -13,7 +13,7 @@ The TSC is responsible for oversight of all technical, project, approval, and po
 
 The TSC members are listed in the [MAINTAINERS.md](MAINTAINERS.md) file in the Valkey repository.
 
-At any time, no more than one third (1/3) of the TSC members may be employees, contractors, or representatives of the same organization or affiliated organizations.
+At any time, no more than one third (1/3), inclusive, of the TSC members may be employees, contractors, or representatives of the same organization or affiliated organizations.
 For the purposes of this document, “organization” includes companies, corporations, universities, research institutes, non-profits, governmental institutions, and any of their subsidiaries or affiliates.
 If, at any time, the 1/3 organization limit is exceeded (for example, due to changes in employment, company acquisitions, or organizational affiliations), the TSC shall be notified as soon as possible.
 The TSC must promptly take action to restore compliance, which may include removing or reassigning members in accordance with the procedures outlined in the [Termination of Membership](#termination-of-membership) section.
@@ -38,11 +38,11 @@ A vote shall also be called when an issue or pull request is marked as a major d
 ### Technical Major Decisions
 
 Technical major decisions include:
-    * Fundamental changes to the Valkey core datastructures
-    * Adding a new data structure or API
-    * Changes that affect backward compatibility
-    * New user visible fields that need to be maintained
-    * Adding or removing a new external library such as a client or module to the project when it affects runtime behavior
+* Fundamental changes to the Valkey core datastructures
+* Adding a new data structure or API
+* Changes that affect backward compatibility
+* New user visible fields that need to be maintained
+* Adding or removing a new external library such as a client or module to the project when it affects runtime behavior
 
 Technical major decisions shall be approved by a simple majority vote whenever one can be obtained.
 If a simple majority cannot be reached within a two-week voting period, and no TSC member has voted against, the decision may instead be approved through explicit “+2” support from at least two TSC members, recorded on the relevant issue or pull request.
@@ -53,12 +53,12 @@ Once a technical major decision has been approved through the +2 mechanism, any 
 ### Governance Major Decisions
 
 Governance major decisions include:
-    * Adding TSC members or involuntary removal of TSC members
-    * Modifying this governance document
-    * Delegation of maintainership for projects or governance authority
-    * Creating, modifying, or removing roles within the Valkey project
-    * Any change that alters voting rules, TSC responsibilities, or project oversight
-    * Structural changes to the TSC, including composition limits
+* Adding TSC members or involuntary removal of TSC members
+* Modifying this governance document
+* Delegation of maintainership for projects or governance authority
+* Creating, modifying, or removing roles within the Valkey project
+* Any change that alters voting rules, TSC responsibilities, or project oversight
+* Structural changes to the TSC, including composition limits
 
 Governance major decisions shall require approval by a 2/3 affirmative vote of the entire TSC.
 

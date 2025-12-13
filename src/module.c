@@ -10075,8 +10075,16 @@ ValkeyModuleUser *VM_GetModuleUserFromUserName(ValkeyModuleString *name) {
  *
  * * ENOENT: Specified command does not exist.
  * * EACCES: Command cannot be executed, according to ACL rules
+ *
+ * NOTE: Since 9.1, the underlying ACL check will NOT validate the user's access to the database.
+ * For users WITHOUT the `alldbs` flag: VALKEYMODULE_ERR will be returned for any
+ * READ or WRITE command, even if the user has permission to access the current database.
+ *
+ * For comprehensive ACL validation that handles all types of permissions for users, it is
+ * recommended to use VM_ACLCheckPermissions() instead, which accepts a dbid parameter
+ * and properly validates access.
  */
-int VM_ACLCheckCommandPermissions(ValkeyModuleUser *user, ValkeyModuleString **argv, int argc, int dbid) {
+int VM_ACLCheckCommandPermissions(ValkeyModuleUser *user, ValkeyModuleString **argv, int argc) {
     int keyidxptr;
     struct serverCommand *cmd;
 
@@ -10086,7 +10094,7 @@ int VM_ACLCheckCommandPermissions(ValkeyModuleUser *user, ValkeyModuleString **a
         return VALKEYMODULE_ERR;
     }
 
-    if (ACLCheckAllUserCommandPerm(user->user, cmd, argv, argc, dbid, &keyidxptr) != ACL_OK) {
+    if (ACLCheckAllUserCommandPerm(user->user, cmd, argv, argc, -1, &keyidxptr) != ACL_OK) {
         errno = EACCES;
         return VALKEYMODULE_ERR;
     }

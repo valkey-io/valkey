@@ -1497,6 +1497,7 @@ long long serverCron(struct aeEventLoop *eventLoop, long long id, void *clientDa
     run_with_period(100) {
         monotime current_time = getMonotonicUs();
         long long factor = 1000000; // us
+        trackInstantaneousMetric(STATS_METRIC_MAIN_THREAD_UTILIZATION, server.stat_busy_time, current_time, 100);
         trackInstantaneousMetric(STATS_METRIC_COMMAND, server.stat_numcommands, current_time, factor);
         trackInstantaneousMetric(STATS_METRIC_NET_INPUT, server.stat_net_input_bytes + server.stat_net_repl_input_bytes + server.bio_stat_net_repl_input_bytes + server.stat_net_cluster_slot_import_bytes,
                                  current_time, factor);
@@ -1801,6 +1802,7 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
         do {
             /* Try to process all the pending IO events. */
             last_processed = processIOThreadsReadDone() + processIOThreadsWriteDone();
+            server.el_iteration_work.io_responses += last_processed;
             processed += last_processed;
         } while (last_processed != 0);
         processed += freeClientsInAsyncFreeQueue();
@@ -1809,7 +1811,8 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
     }
 
     /* We should handle pending reads clients ASAP after event loop. */
-    processIOThreadsReadDone();
+    int io_responses = processIOThreadsReadDone();
+    server.el_iteration_work.io_responses += io_responses;
 
     /* Handle pending data(typical TLS). (must be done before flushAppendOnlyFile) */
     connTypeProcessPendingData();
@@ -1900,14 +1903,17 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
     }
 
     /* Handle writes with pending output buffers. */
-    handleClientsWithPendingWrites();
+    int client_writes = handleClientsWithPendingWrites();
+    server.el_iteration_work.client_writes = client_writes;
 
     /* Try to process more IO reads that are ready to be processed. */
     if (server.aof_fsync != AOF_FSYNC_ALWAYS) {
-        processIOThreadsReadDone();
+        int io_responses_after = processIOThreadsReadDone();
+        server.el_iteration_work.io_responses += io_responses_after;
     }
 
-    processIOThreadsWriteDone();
+    int io_writes = processIOThreadsWriteDone();
+    server.el_iteration_work.io_responses += io_writes;
 
     /* Record cron time in beforeSleep. This does not include the time consumed by AOF writing and IO writing above. */
     monotime cron_start_time_after_write = getMonotonicUs();
@@ -1930,6 +1936,17 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
         monotime el_duration = getMonotonicUs() - server.el_start;
         durationAddSample(EL_DURATION_TYPE_EL, el_duration);
         latencyTraceIfNeeded(server, eventloop, el_duration);
+
+        /* Accumulate time only for busy cycles */
+        if (!ProcessingEventsWhileBlocked) {
+            int is_busy = (server.el_iteration_work.file_events > 0 ||
+                           server.el_iteration_work.io_responses > 0 ||
+                           server.el_iteration_work.client_writes > 0);
+
+            if (is_busy) {
+                server.stat_busy_time += el_duration;
+            }
+        }
     }
     server.el_cron_duration += duration_before_aof + duration_after_write;
     durationAddSample(EL_DURATION_TYPE_CRON, server.el_cron_duration);
@@ -1979,6 +1996,9 @@ void afterSleep(struct aeEventLoop *eventLoop, int numevents) {
         }
         /* Set the eventloop start time. */
         server.el_start = getMonotonicUs();
+        /* Reset iteration work counters */
+        memset(&server.el_iteration_work, 0, sizeof(server.el_iteration_work));
+        server.el_iteration_work.file_events = numevents;
         /* Set the eventloop command count at start. */
         server.el_cmd_cnt_start = server.stat_numcommands;
     }
@@ -2757,6 +2777,8 @@ void resetServerStats(void) {
     server.stat_reply_buffer_expands = 0;
     memset(server.duration_stats, 0, sizeof(durationStats) * EL_DURATION_TYPE_NUM);
     server.el_cmd_cnt_max = 0;
+    server.stat_busy_time = 0;
+    memset(&server.el_iteration_work, 0, sizeof(server.el_iteration_work));
     lazyfreeResetStats();
 }
 
@@ -6382,6 +6404,9 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                             (long)m_ru.ru_stime.tv_sec, (long)m_ru.ru_stime.tv_usec, (long)m_ru.ru_utime.tv_sec,
                             (long)m_ru.ru_utime.tv_usec);
 #endif /* RUSAGE_THREAD */
+        info = sdscatprintf(info,
+                            "main_thread_utilization_perc:%lld\r\n",
+                            getInstantaneousMetric(STATS_METRIC_MAIN_THREAD_UTILIZATION));
     }
 
     /* Modules */

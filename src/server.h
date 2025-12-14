@@ -2775,6 +2775,7 @@ void dictVanillaFree(dict *d, void *val);
 #define READ_FLAGS_PRIMARY (1 << 14)
 #define READ_FLAGS_DONT_PARSE (1 << 15)
 #define READ_FLAGS_AUTH_REQUIRED (1 << 16)
+#define READ_FLAGS_ERROR_INVALID_CRLF (1 << 17)
 
 /* Write flags for various write errors and states */
 #define WRITE_FLAGS_WRITE_ERROR (1 << 0)

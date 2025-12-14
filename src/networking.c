@@ -2307,6 +2307,13 @@ int processMultibulkBuffer(client *c) {
         if (newline-(c->querybuf+c->qb_pos) > (ssize_t)(sdslen(c->querybuf)-c->qb_pos-2))
             return C_ERR;
 
+        /* Check that what follows \r is a real \n */
+        if (unlikely(newline[1] != '\n')) {
+            addReplyError(c,"Protocol error: invalid CRLF in request");
+            setProtocolError("invalid CRLF in request",c);
+            return C_ERR;
+        }
+
         /* We know for sure there is a whole line since newline != NULL,
          * so go ahead and find out the multi bulk length. */
         serverAssertWithInfo(c,NULL,c->querybuf[c->qb_pos] == '*');
@@ -2361,6 +2368,13 @@ int processMultibulkBuffer(client *c) {
                 return C_ERR;
             }
 
+            /* Check that what follows \r is a real \n */
+            if (unlikely(newline[1] != '\n')) {
+                addReplyError(c,"Protocol error: invalid CRLF in request");
+                setProtocolError("invalid CRLF in request",c);
+                return C_ERR;
+            }
+
             ok = string2ll(c->querybuf+c->qb_pos+1,newline-(c->querybuf+c->qb_pos+1),&ll);
             if (!ok || ll < 0 ||
                 (!(c->flags & CLIENT_MASTER) && ll > server.proto_max_bulk_len)) {
@@ -2411,6 +2425,14 @@ int processMultibulkBuffer(client *c) {
             if (c->argc >= c->argv_len) {
                 c->argv_len = min(c->argv_len < INT_MAX/2 ? c->argv_len*2 : INT_MAX, c->argc+c->multibulklen);
                 c->argv = zrealloc(c->argv, sizeof(robj*)*c->argv_len);
+            }
+
+            /* Check that what follows argv is a real \r\n */
+            if (unlikely(c->querybuf[c->qb_pos + c->bulklen] != '\r' ||
+                         c->querybuf[c->qb_pos + c->bulklen + 1] != '\n')) {
+                addReplyError(c,"Protocol error: invalid CRLF in request");
+                setProtocolError("invalid CRLF in request",c);
+                return C_ERR;
             }
 
             /* Optimization: if a non-master client's buffer contains JUST our bulk element

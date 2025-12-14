@@ -2505,6 +2505,9 @@ void handleParseError(client *c) {
     } else if (flags & READ_FLAGS_ERROR_UNBALANCED_QUOTES) {
         addReplyError(c, "Protocol error: unbalanced quotes in request");
         setProtocolError("unbalanced quotes in inline request", c);
+    } else if (flags & READ_FLAGS_ERROR_INVALID_CRLF) {
+        addReplyError(c, "Protocol error: invalid CRLF in request");
+        setProtocolError("invalid CRLF in request", c);
     } else if (flags & READ_FLAGS_ERROR_UNEXPECTED_INLINE_FROM_PRIMARY) {
         serverLog(LL_WARNING, "WARNING: Receiving inline protocol from primary, primary stream corruption? Closing the "
                               "primary connection and discarding the cached primary.");
@@ -2519,7 +2522,8 @@ int isParsingError(client *c) {
                             READ_FLAGS_ERROR_INVALID_MULTIBULK_LEN | READ_FLAGS_ERROR_UNAUTHENTICATED_MULTIBULK_LEN |
                             READ_FLAGS_ERROR_UNAUTHENTICATED_BULK_LEN | READ_FLAGS_ERROR_MBULK_INVALID_BULK_LEN |
                             READ_FLAGS_ERROR_BIG_BULK_COUNT | READ_FLAGS_ERROR_MBULK_UNEXPECTED_CHARACTER |
-                            READ_FLAGS_ERROR_UNEXPECTED_INLINE_FROM_PRIMARY | READ_FLAGS_ERROR_UNBALANCED_QUOTES);
+                            READ_FLAGS_ERROR_UNEXPECTED_INLINE_FROM_PRIMARY | READ_FLAGS_ERROR_UNBALANCED_QUOTES |
+                            READ_FLAGS_ERROR_INVALID_CRLF);
 }
 
 /* This function is called after the query-buffer was parsed.
@@ -2933,6 +2937,12 @@ void processMultibulkBuffer(client *c) {
         /* Buffer should also contain \n */
         if (newline - (c->querybuf + c->qb_pos) > (ssize_t)(sdslen(c->querybuf) - c->qb_pos - 2)) return;
 
+        /* Check that what follows \r is a real \n */
+        if (unlikely(newline[1] != '\n')) {
+            c->read_flags |= READ_FLAGS_ERROR_INVALID_CRLF;
+            return;
+        }
+
         /* We know for sure there is a whole line since newline != NULL,
          * so go ahead and find out the multi bulk length. */
         serverAssertWithInfo(c, NULL, c->querybuf[c->qb_pos] == '*');
@@ -3016,6 +3026,12 @@ void processMultibulkBuffer(client *c) {
                 return;
             }
 
+            /* Check that what follows \r is a real \n */
+            if (unlikely(newline[1] != '\n')) {
+                c->read_flags |= READ_FLAGS_ERROR_INVALID_CRLF;
+                return;
+            }
+
             size_t bulklen_slen = newline - (c->querybuf + c->qb_pos + 1);
             ok = string2ll(c->querybuf + c->qb_pos + 1, bulklen_slen, &ll);
             if (!ok || ll < 0 || (!(is_primary) && ll > server.proto_max_bulk_len)) {
@@ -3070,6 +3086,13 @@ void processMultibulkBuffer(client *c) {
             if (c->argc >= c->argv_len) {
                 c->argv_len = min(c->argv_len < INT_MAX / 2 ? c->argv_len * 2 : INT_MAX, c->argc + c->multibulklen);
                 c->argv = zrealloc(c->argv, sizeof(robj *) * c->argv_len);
+            }
+
+            /* Check that what follows argv is a real \r\n */
+            if (unlikely(c->querybuf[c->qb_pos + c->bulklen] != '\r' ||
+                         c->querybuf[c->qb_pos + c->bulklen + 1] != '\n')) {
+                c->read_flags |= READ_FLAGS_ERROR_INVALID_CRLF;
+                return;
             }
 
             /* Optimization: if a non-primary client's buffer contains JUST our bulk element

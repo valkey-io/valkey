@@ -59,6 +59,11 @@
             "description": "SlaveOf status.",
             "type": "string",
             "pattern": "OK*"
-        }
+        },
+        "acl_categories": [
+            "ADMIN",
+            "DANGEROUS",
+            "SLOW"
+        ]
     }
 }

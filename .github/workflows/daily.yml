@@ -947,12 +947,10 @@ jobs:
         run: dnf -y install epel-release
       - name: make
         run: |
-          dnf -y install gcc make procps-ng openssl-devel openssl which /usr/bin/kill /usr/bin/awk
+          dnf -y install gcc make procps-ng which /usr/bin/kill /usr/bin/awk
           make -j SERVER_CFLAGS='-Werror'
       - name: testprep
-        uses: ./.github/actions/rpm-distros-tcl8
-        with:
-          matrix_name: ${{ matrix.name }}
+        run: dnf -y install tcl tcltls
       - name: test
         if: true && !contains(github.event.inputs.skiptests, 'valkey')
         run: ./runtest ${{ github.event_name != 'pull_request' && '--accurate' || '' }} --verbose --dump-logs ${{github.event.inputs.test_args}}
@@ -1018,9 +1016,9 @@ jobs:
           dnf -y install make gcc openssl-devel openssl procps-ng which /usr/bin/kill /usr/bin/awk
           make -j BUILD_TLS=module SERVER_CFLAGS='-Werror'
       - name: testprep
-        uses: ./.github/actions/rpm-distros-tcl8
-        with:
-          matrix_name: ${{ matrix.name }}
+        run: |
+          dnf -y install tcl tcltls
+          ./utils/gen-test-certs.sh
       - name: test
         if: true && !contains(github.event.inputs.skiptests, 'valkey')
         run: |
@@ -1090,9 +1088,9 @@ jobs:
           dnf -y install make gcc openssl-devel openssl procps-ng which /usr/bin/kill /usr/bin/awk
           make -j BUILD_TLS=module SERVER_CFLAGS='-Werror'
       - name: testprep
-        uses: ./.github/actions/rpm-distros-tcl8
-        with:
-          matrix_name: ${{ matrix.name }}
+        run: |
+          dnf -y install tcl tcltls
+          ./utils/gen-test-certs.sh
       - name: test
         if: true && !contains(github.event.inputs.skiptests, 'valkey')
         run: |
@@ -1201,7 +1199,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-13, macos-14]
+        os: [macos-14]
     runs-on: ${{ matrix.os }}
     if: |
       (github.event_name == 'workflow_dispatch' ||
@@ -1230,7 +1228,7 @@ jobs:
         run: make SERVER_CFLAGS='-Werror'
 
   test-freebsd:
-    runs-on: macos-13
+    runs-on: ubuntu-latest
     if: |
       (github.event_name == 'workflow_dispatch' ||
         (github.event_name == 'schedule' && github.repository == 'valkey-io/valkey') ||
@@ -1248,14 +1246,14 @@ jobs:
           repository: ${{ env.GITHUB_REPOSITORY }}
           ref: ${{ env.GITHUB_HEAD_REF }}
       - name: test
-        uses: cross-platform-actions/action@5800fa0060a22edf69992a779adac3d2bb3a6f8a # v0.22.0
+        uses: cross-platform-actions/action@46e8d7fb25520a8d6c64fd2b7a1192611da98eda # v0.30.0
         with:
           operating_system: freebsd
           environment_variables: MAKE
           version: 13.2
           shell: bash
           run: |
-            sudo pkg install -y bash gmake lang/tcl86 lang/tclx
+            sudo pkg install -y bash gmake lang/tcl86 lang/tclX
             gmake
             ./runtest --single unit/keyspace --single unit/auth --single unit/networking --single unit/protocol
 

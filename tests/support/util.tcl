@@ -1226,7 +1226,7 @@ proc system_backtrace_supported {} {
     # libmusl does not support backtrace. Also return 0 on
     # static binaries (ldd exit code 1) where we can't detect libmusl
     catch {
-        set ldd [exec ldd src/valkey-server]
+        set ldd [exec ldd $::VALKEY_SERVER_BIN]
         if {![string match {*libc.*musl*} $ldd]} {
             return 1
         }

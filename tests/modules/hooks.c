@@ -379,14 +379,6 @@ void authAttemptCallback(ValkeyModuleCtx *ctx, ValkeyModuleEvent e, uint64_t sub
 }
 
 void logAtomicSlotMigrationInfo(ValkeyModuleCtx *ctx, const char *prefix, ValkeyModuleAtomicSlotMigrationInfo *asmi) {
-    ValkeyModuleString *target_keyname = ValkeyModule_CreateStringPrintf(ctx, "%s-target", prefix);
-    LogStringEvent(ctx, ValkeyModule_StringPtrLen(target_keyname, NULL), asmi->target_node_id);
-    ValkeyModule_FreeString(ctx, target_keyname);
-
-    ValkeyModuleString *source_keyname = ValkeyModule_CreateStringPrintf(ctx, "%s-source", prefix);
-    LogStringEvent(ctx, ValkeyModule_StringPtrLen(source_keyname, NULL), asmi->source_node_id);
-    ValkeyModule_FreeString(ctx, source_keyname);
-
     ValkeyModuleString *job_keyname = ValkeyModule_CreateStringPrintf(ctx, "%s-jobname", prefix);
     LogStringEvent(ctx, ValkeyModule_StringPtrLen(job_keyname, NULL), asmi->job_name);
     ValkeyModule_FreeString(ctx, job_keyname);

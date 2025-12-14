@@ -52,6 +52,11 @@ typedef enum {
     EXPIRATION_MODIFICATION_EXPIRE_ASAP = 2,      /* if apply of the expiration modification was set to a time in the past (i.e field is immediately expired) */
 } expiryModificationResult;
 
+// A vsetGetExpiryFunc
+static long long entryGetExpiryVsetFunc(const void *e) {
+    return entryGetExpiry((const entry *)e);
+}
+
 /*-----------------------------------------------------------------------------
  * Hash type Expiry API
  *----------------------------------------------------------------------------*/
@@ -103,28 +108,28 @@ void hashTypeFreeVolatileSet(robj *o) {
     hashTypeIgnoreTTL(o, true);
 }
 
-void hashTypeTrackEntry(robj *o, void *entry) {
+void hashTypeTrackEntry(robj *o, entry *entry) {
     vset *set;
     if (hashTypeHasVolatileFields(o)) {
         set = hashTypeGetVolatileSet(o);
     } else {
         set = hashTypeGetOrcreateVolatileSet(o);
     }
-    bool added = vsetAddEntry(set, entryGetExpiry, entry);
+    bool added = vsetAddEntry(set, entryGetExpiryVsetFunc, entry);
     serverAssert(added);
 }
 
-static void hashTypeUntrackEntry(robj *o, void *entry) {
+static void hashTypeUntrackEntry(robj *o, entry *entry) {
     if (!entryHasExpiry(entry)) return;
     vset *set = hashTypeGetVolatileSet(o);
     debugServerAssert(set);
-    serverAssert(vsetRemoveEntry(set, entryGetExpiry, entry));
+    serverAssert(vsetRemoveEntry(set, entryGetExpiryVsetFunc, entry));
     if (vsetIsEmpty(set)) {
         hashTypeFreeVolatileSet(o);
     }
 }
 
-static void hashTypeTrackUpdateEntry(robj *o, void *old_entry, void *new_entry, long long old_expiry, long long new_expiry) {
+static void hashTypeTrackUpdateEntry(robj *o, entry *old_entry, entry *new_entry, long long old_expiry, long long new_expiry) {
     int old_tracked = (old_entry && old_expiry != EXPIRY_NONE);
     int new_tracked = (new_entry && new_expiry != EXPIRY_NONE);
     /* If entry was not tracked before and not going to be tracked now, we can simply return */
@@ -134,15 +139,17 @@ static void hashTypeTrackUpdateEntry(robj *o, void *old_entry, void *new_entry, 
     vset *set = hashTypeGetOrcreateVolatileSet(o);
     debugServerAssert(!old_tracked || !vsetIsEmpty(set));
 
-    serverAssert(vsetUpdateEntry(set, entryGetExpiry, old_entry, new_entry, old_expiry, new_expiry) == 1);
+    serverAssert(vsetUpdateEntry(set, entryGetExpiryVsetFunc, old_entry, new_entry, old_expiry, new_expiry) == 1);
 
     if (vsetIsEmpty(set)) {
         hashTypeFreeVolatileSet(o);
     }
 }
 
-bool hashHashtableTypeValidate(hashtable *ht, void *entry) {
+// This is a hashtableType validateEntry callback
+bool hashHashtableTypeValidate(hashtable *ht, void *entryptr) {
     UNUSED(ht);
+    entry *entry = entryptr;
     expirationPolicy policy = getExpirationPolicyWithFlags(0);
     if (policy == POLICY_IGNORE_EXPIRE) return true;
 
@@ -606,7 +613,7 @@ void hashTypeInitVolatileIterator(robj *subject, hashTypeIterator *hi) {
 void hashTypeResetIterator(hashTypeIterator *hi) {
     if (hi->encoding == OBJ_ENCODING_HASHTABLE) {
         if (!hi->volatile_items_iter)
-            hashtableResetIterator(&hi->iter);
+            hashtableCleanupIterator(&hi->iter);
         else
             vsetResetIterator(&hi->viter);
     }
@@ -1046,6 +1053,57 @@ void hdelCommand(client *c) {
     addReplyLongLong(c, deleted);
 }
 
+void hgetdelCommand(client *c) {
+    /* argv: [0]=HGETDEL, [1]=key, [2]=FIELDS, [3]=numfields, [4...]=fields */
+    int fields_index = 4;
+    int i, deleted = 0;
+    long long num_fields = 0;
+    bool keyremoved = false;
+
+    if (getLongLongFromObjectOrReply(c, c->argv[fields_index - 1], &num_fields, NULL) != C_OK) return;
+
+    /* Check that the parsed fields number matches the real provided number of fields */
+    if (!num_fields || num_fields != (c->argc - fields_index)) {
+        addReplyError(c, "numfields should be greater than 0 and match the provided number of fields");
+        return;
+    }
+
+    /* Don't abort when the key cannot be found. Non-existing keys are empty
+     * hashes, where HGETDEL should respond with a series of null bulks. */
+    robj *o = lookupKeyWrite(c->db, c->argv[1]);
+    if (checkType(c, o, OBJ_HASH)) return;
+
+    bool hash_volatile_items = hashTypeHasVolatileFields(o);
+
+    /* Reply with array of values and delete at the same time */
+    addReplyArrayLen(c, num_fields);
+    for (i = fields_index; i < c->argc; i++) {
+        addHashFieldToReply(c, o, c->argv[i]->ptr);
+
+        /* If hash doesn't exist, continue as already replied with NULL */
+        if (o == NULL) continue;
+        if (hashTypeDelete(o, c->argv[i]->ptr)) {
+            deleted++;
+            if (hashTypeLength(o) == 0) {
+                if (hash_volatile_items) dbUntrackKeyWithVolatileItems(c->db, o);
+                dbDelete(c->db, c->argv[1]);
+                keyremoved = true;
+                o = NULL;
+            }
+        }
+    }
+
+    if (deleted) {
+        if (!keyremoved && hash_volatile_items != hashTypeHasVolatileFields(o)) {
+            dbUpdateObjectWithVolatileItemsTracking(c->db, o);
+        }
+        signalModifiedKey(c, c->db, c->argv[1]);
+        notifyKeyspaceEvent(NOTIFY_HASH, "hdel", c->argv[1], c->db->id);
+        if (keyremoved) notifyKeyspaceEvent(NOTIFY_GENERIC, "del", c->argv[1], c->db->id);
+        server.dirty += deleted;
+    }
+}
+
 void hlenCommand(client *c) {
     robj *o;
 
@@ -1190,6 +1248,7 @@ void hsetexCommand(client *c) {
     int changes = 0;
     robj **new_argv = NULL;
     int new_argc = 0;
+    int need_rewrite_argv = 0;
 
     for (; fields_index < c->argc - 1; fields_index++) {
         if (!strcasecmp(c->argv[fields_index]->ptr, "fields")) {
@@ -1209,12 +1268,16 @@ void hsetexCommand(client *c) {
     if (checkType(c, o, OBJ_HASH))
         return;
 
-    if (o == NULL) {
-        o = createHashObject();
-        dbAdd(c->db, c->argv[1], &o);
+    if (flags & (ARGS_SET_NX | ARGS_SET_XX | ARGS_SET_FNX | ARGS_SET_FXX | ARGS_EX | ARGS_PX | ARGS_EXAT)) {
+        need_rewrite_argv = 1;
     }
 
-    bool has_volatile_fields = hashTypeHasVolatileFields(o);
+    /* Check NX/XX key-level conditions before creating a new object */
+    if (((flags & ARGS_SET_NX) && o != NULL) ||
+        ((flags & ARGS_SET_XX) && o == NULL)) {
+        addReply(c, shared.czero);
+        return;
+    }
 
     /* Handle parsing and calculating the expiration time. */
     if (flags & ARGS_KEEPTTL)
@@ -1230,24 +1293,66 @@ void hsetexCommand(client *c) {
         }
     }
 
-    /* Check for all fields condition */
+    /* Check FNX/FXX field-level conditions */
     if (flags & (ARGS_SET_FNX | ARGS_SET_FXX)) {
-        for (i = fields_index; i < c->argc; i += 2) {
-            if (((flags & ARGS_SET_FNX) && hashTypeExists(o, c->argv[i]->ptr)) ||
-                ((flags & ARGS_SET_FXX) && !hashTypeExists(o, c->argv[i]->ptr))) {
+        if (o) {
+            /* Key exists: check fields normally */
+            for (i = fields_index; i < c->argc; i += 2) {
+                if (((flags & ARGS_SET_FNX) && hashTypeExists(o, c->argv[i]->ptr)) ||
+                    ((flags & ARGS_SET_FXX) && !hashTypeExists(o, c->argv[i]->ptr))) {
+                    addReply(c, shared.czero);
+                    return;
+                }
+            }
+        } else {
+            /* Key does not exist */
+            if (flags & ARGS_SET_FXX) {
+                /* Any FXX fails because no fields exist */
                 addReply(c, shared.czero);
                 return;
             }
+            /* FNX automatically passes if key doesn't exist, nothing to check */
         }
     }
 
-    /* In case we are expiring all the elements prepare a new argv since we are going to delete all the expired fields. */
+    if (o == NULL) {
+        o = createHashObject();
+        dbAdd(c->db, c->argv[1], &o);
+    }
+
+    bool has_volatile_fields = hashTypeHasVolatileFields(o);
+
+    /* Prepare a new argv when rewriting the command. If set_expired is true,
+     * all expired fields will be deleted. Otherwise, if rewriting is needed due to NX/XX/FNX/FXX flags,
+     * copy the command, key, and optional arguments, skipping the NX/XX/FNX/FXX flags. */
     if (set_expired) {
         new_argv = zmalloc(sizeof(robj *) * (num_fields + 2));
         new_argv[new_argc++] = shared.hdel;
         incrRefCount(shared.hdel);
         new_argv[new_argc++] = c->argv[1];
         incrRefCount(c->argv[1]);
+    } else if (need_rewrite_argv) {
+        /* We use new_argv for rewrite */
+        new_argv = zmalloc(sizeof(robj *) * c->argc);
+        // Copy optional args (skip NX/XX/FNX/FXX)
+        for (int i = 0; i < fields_index; i++) {
+            if (strcmp(c->argv[i]->ptr, "NX") &&
+                strcmp(c->argv[i]->ptr, "XX") &&
+                strcmp(c->argv[i]->ptr, "FNX") &&
+                strcmp(c->argv[i]->ptr, "FXX")) {
+                /* Propagate as HSETEX Key Value PXAT millisecond-timestamp if there is
+                 * EX/PX/EXAT flag. */
+                if (expire && !(flags & ARGS_PXAT) && c->argv[i + 1] == expire) {
+                    robj *milliseconds_obj = createStringObjectFromLongLong(when);
+                    new_argv[new_argc++] = shared.pxat;
+                    new_argv[new_argc++] = milliseconds_obj;
+                    i++; // skip the original expire argument
+                } else {
+                    new_argv[new_argc++] = c->argv[i];
+                    incrRefCount(c->argv[i]);
+                }
+            }
+        }
     }
 
     for (i = fields_index; i < c->argc; i += 2) {
@@ -1262,6 +1367,12 @@ void hsetexCommand(client *c) {
         } else {
             hashTypeSet(o, c->argv[i]->ptr, c->argv[i + 1]->ptr, when, set_flags);
             changes++;
+            if (need_rewrite_argv) {
+                new_argv[new_argc++] = c->argv[i];
+                incrRefCount(c->argv[i]);
+                new_argv[new_argc++] = c->argv[i + 1];
+                incrRefCount(c->argv[i + 1]);
+            }
         }
     }
 
@@ -1276,20 +1387,10 @@ void hsetexCommand(client *c) {
             notifyKeyspaceEvent(NOTIFY_HASH, "hexpired", c->argv[1], c->db->id);
         } else {
             notifyKeyspaceEvent(NOTIFY_HASH, "hset", c->argv[1], c->db->id);
+            if (need_rewrite_argv) {
+                replaceClientCommandVector(c, new_argc, new_argv);
+            }
             if (expire) {
-                /* Propagate as HSETEX Key Value PXAT millisecond-timestamp if there is
-                 * EX/PX/EXAT flag. */
-                if (!(flags & ARGS_PXAT)) {
-                    for (int i = 2; i < fields_index; i++) {
-                        if (c->argv[i + 1] == expire) {
-                            robj *milliseconds_obj = createStringObjectFromLongLong(when);
-                            rewriteClientCommandArgument(c, i, shared.pxat);
-                            rewriteClientCommandArgument(c, i + 1, milliseconds_obj);
-                            decrRefCount(milliseconds_obj);
-                            break;
-                        }
-                    }
-                }
                 notifyKeyspaceEvent(NOTIFY_HASH, "hexpire", c->argv[1], c->db->id);
             }
         }
@@ -2001,7 +2102,7 @@ void hrandfieldWithCountCommand(client *c, long l, int withvalues) {
             reply_size++;
         }
         serverAssert(hashtableSize(ht) == reply_size);
-        hashtableResetIterator(&iter);
+        hashtableCleanupIterator(&iter);
 
         /* Remove random elements to reach the right count. */
         while (reply_size > count) {
@@ -2022,7 +2123,7 @@ void hrandfieldWithCountCommand(client *c, long l, int withvalues) {
             if (withvalues) addWritePreparedReplyBulkCBuffer(wpc, value, sdslen(value));
         }
 
-        hashtableResetIterator(&iter);
+        hashtableCleanupIterator(&iter);
         hashtableRelease(ht);
     }
 
@@ -2145,7 +2246,7 @@ size_t hashTypeDeleteExpiredFields(robj *o, mstime_t now, unsigned long max_fiel
     /* skip TTL checks temporarily (to allow hashtable pops) */
     hashTypeIgnoreTTL(o, true);
     expiryContext ctx = {.key = o, .fields = out_entries, .n_fields = 0};
-    size_t expired = vsetRemoveExpired(vset, entryGetExpiry, hashTypeExpireEntry, now, max_fields, &ctx);
+    size_t expired = vsetRemoveExpired(vset, entryGetExpiryVsetFunc, hashTypeExpireEntry, now, max_fields, &ctx);
     serverAssert(ctx.n_fields <= max_fields);
     if (vsetIsEmpty(vset)) {
         hashTypeFreeVolatileSet(o);

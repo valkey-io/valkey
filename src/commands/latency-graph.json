@@ -27,6 +27,11 @@
         "reply_schema": {
             "type": "string",
             "description": "Latency graph"
-        }
+        },
+        "acl_categories": [
+            "ADMIN",
+            "DANGEROUS",
+            "SLOW"
+        ]
     }
 }

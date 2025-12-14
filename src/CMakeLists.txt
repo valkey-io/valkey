@@ -93,3 +93,13 @@ endif ()
 if (BUILD_UNIT_TESTS)
     add_subdirectory(unit)
 endif ()
+
+# Friendly hint like the Makefile one
+file(RELATIVE_PATH _CMAKE_DIR_RELATIVE_PATH "${CMAKE_SOURCE_DIR}" "${CMAKE_BINARY_DIR}")
+add_custom_target(hint ALL
+    DEPENDS valkey-server valkey-cli valkey-benchmark
+    COMMAND ${CMAKE_COMMAND} -E echo ""
+    COMMAND ${CMAKE_COMMAND} -E echo "Hint: It is a good idea to run tests with your CMake-built binaries \\;\\)"
+    COMMAND ${CMAKE_COMMAND} -E echo "      ./${_CMAKE_DIR_RELATIVE_PATH}/runtest"
+    COMMAND ${CMAKE_COMMAND} -E echo ""
+)

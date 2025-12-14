@@ -328,10 +328,11 @@ void computeDatasetProfile(int dbid, robj *keyobj, robj *o, long long expiretime
 
                 const int len = fpconv_dtoa(node->score, buf);
                 buf[len] = '\0';
-                eleLen += sdslen(node->ele) + strlen(buf);
+                sds ele = zslGetNodeElement(node);
+                eleLen += sdslen(ele) + strlen(buf);
                 statsRecordElementSize(eleLen, 1, stats);
             }
-            hashtableResetIterator(&iter);
+            hashtableCleanupIterator(&iter);
             statsRecordCount(hashtableSize(zs->ht), stats);
         } else {
             serverPanic("Unknown sorted set encoding");
@@ -699,6 +700,17 @@ int redis_check_rdb(char *rdbfilename, FILE *fp) {
             if (rdbLoadLen(&rdb, NULL) == RDB_LENERR) goto eoferr;
             if (rdbLoadLen(&rdb, NULL) == RDB_LENERR) goto eoferr;
             if (rdbLoadLen(&rdb, NULL) == RDB_LENERR) goto eoferr;
+            continue; /* Read type again. */
+        } else if (type == RDB_OPCODE_SLOT_IMPORT) {
+            robj *job_name;
+            if ((job_name = rdbLoadStringObject(&rdb)) == NULL) goto eoferr;
+            decrRefCount(job_name);
+            uint64_t num_slot_ranges;
+            if ((num_slot_ranges = rdbLoadLen(&rdb, NULL)) == RDB_LENERR) goto eoferr;
+            for (uint64_t i = 0; i < num_slot_ranges; i++) {
+                if (rdbLoadLen(&rdb, NULL) == RDB_LENERR) goto eoferr;
+                if (rdbLoadLen(&rdb, NULL) == RDB_LENERR) goto eoferr;
+            }
             continue; /* Read type again. */
         } else if (type == RDB_OPCODE_AUX) {
             /* AUX: generic string-string fields. Use to add state to RDB

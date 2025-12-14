@@ -131,6 +131,7 @@ enum RdbType {
 
 /* Special RDB opcodes (saved/loaded with rdbSaveType/rdbLoadType).
  * These are special RDB types, but they start from 255 and grow down. */
+#define RDB_OPCODE_SLOT_IMPORT 243     /* Slot import state. */
 #define RDB_OPCODE_SLOT_INFO 244       /* Foreign slot info, safe to ignore. */
 #define RDB_OPCODE_FUNCTION2 245       /* function library data */
 #define RDB_OPCODE_FUNCTION_PRE_GA 246 /* old function library data for 7.0 rc1 and rc2 */
@@ -165,6 +166,7 @@ enum RdbType {
 #define RDBFLAGS_ALLOW_DUP (1 << 2)    /* Allow duplicated keys when loading.*/
 #define RDBFLAGS_FEED_REPL (1 << 3)    /* Feed replication stream when loading.*/
 #define RDBFLAGS_KEEP_CACHE (1 << 4)   /* Don't reclaim cache after rdb file is generated */
+#define RDBFLAGS_EMPTY_DATA (1 << 5)   /* Flush the database after validating magic and rdb version*/
 
 /* When rdbLoadObject() returns NULL, the err flag is
  * set to hold the type of error that occurred */
@@ -211,5 +213,6 @@ int rdbFunctionLoad(rio *rdb, int ver, functionsLibCtx *lib_ctx, int rdbflags, s
 int rdbSaveRio(int req, rio *rdb, int *error, int rdbflags, rdbSaveInfo *rsi);
 ssize_t rdbSaveFunctions(rio *rdb);
 rdbSaveInfo *rdbPopulateSaveInfo(rdbSaveInfo *rsi);
+void replicationEmptyDbCallback(hashtable *ht);
 
 #endif

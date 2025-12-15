@@ -119,7 +119,11 @@ static int connSocketConnect(connection *conn,
     conn->state = CONN_STATE_CONNECTING;
 
     conn->conn_handler = connect_handler;
-    aeCreateFileEvent(server.el, conn->fd, AE_WRITABLE, conn->type->ae_handler, conn);
+    if (aeCreateFileEvent(server.el, conn->fd, AE_WRITABLE, conn->type->ae_handler, conn) == AE_ERR) {
+        conn->state = CONN_STATE_ERROR;
+        conn->last_errno = errno;
+        return C_ERR
+    }
 
     return C_OK;
 }

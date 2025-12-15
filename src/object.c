@@ -243,7 +243,7 @@ robj *createStringObjectWithKeyAndExpire(const char *ptr, size_t len, const sds 
 }
 
 void *objectGetVal(const robj *o) {
-    return objectGetVal(o);
+    return o->val_ptr;
 }
 
 sds objectGetKey(const robj *o) {
@@ -288,7 +288,7 @@ robj *objectSetExpire(robj *o, long long expire) {
 }
 
 void objectSetVal(robj *o, void *val) {
-    objectSetVal(o, val);
+    o->val_ptr = val;
 }
 
 /* This functions may reallocate the value. The new allocation is returned and

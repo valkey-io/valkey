@@ -813,7 +813,7 @@ struct serverObject {
     unsigned hasexpire : 1;
     unsigned hasembkey : 1;
     unsigned refcount : OBJ_REFCOUNT_BITS;
-    void *ptr;
+    void *val_ptr;
 };
 
 /* The string name for an object's type as listed above
@@ -832,7 +832,7 @@ char *getObjectTypeName(robj *);
         _var.encoding = OBJ_ENCODING_RAW;    \
         _var.hasexpire = 0;                  \
         _var.hasembkey = 0;                  \
-        _var.ptr = _ptr;                     \
+        _var.val_ptr = _ptr;                 \
     } while (0)
 
 struct evictionPoolEntry; /* Defined in evict.c */

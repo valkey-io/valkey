@@ -14275,7 +14275,8 @@ int moduleDefragValue(robj *key, robj *value, int dbid) {
      */
     moduleValue *newmv = activeDefragAlloc(mv);
     if (newmv) {
-        objectSetVal(value, mv = newmv);
+        objectSetVal(value, newmv);
+        mv = newmv;
     }
 
     if (!mt->defrag) return 1;

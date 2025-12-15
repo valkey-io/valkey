@@ -9414,7 +9414,7 @@ int moduleGetClusterNodeInfoForClient(ValkeyModuleCtx *ctx,
                                       int *flags) {
     UNUSED(ctx);
 
-    clusterNode *node = clusterLookupNode(node_id, strlen(node_id));
+    clusterNode *node = clusterLookupNode(node_id, VALKEYMODULE_NODE_ID_LEN);
     if (node == NULL || clusterNodePending(node)) {
         return VALKEYMODULE_ERR;
     }

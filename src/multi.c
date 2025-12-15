@@ -70,6 +70,7 @@ void resetClientMultiState(client *c) {
     c->mstate->cmd_inv_flags = 0;
     c->mstate->argv_len_sums = 0;
     c->mstate->alloc_count = 0;
+    c->mstate->transaction_db_id = c->db->id;
 }
 
 /* Add a new command into the MULTI commands queue */

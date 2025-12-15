@@ -1003,12 +1003,12 @@ static int ACLSetSelectorDatabasePermissions(aclSelector *selector, const char *
         int64_t dbid = strtoll(tokens[i], &endptr, 10);
 
         /* Reject invalid input format */
-        if (errno == ERANGE || *endptr != '\0') {
+        if (*endptr != '\0') {
             return ACLDatabasePermissionError(new_dbs, dblist, tokens, count, EINVAL);
         }
 
         /* Reject out of range values */
-        if (dbid < 0 || dbid >= server.dbnum) {
+        if (errno == ERANGE || dbid < 0 || dbid >= server.dbnum) {
             return ACLDatabasePermissionError(new_dbs, dblist, tokens, count, ERANGE);
         }
 
@@ -1770,7 +1770,7 @@ int ACLSelectorCanAccessDb(aclSelector *selector, long long dbid) {
     if (dbid < 0 || dbid >= server.dbnum || !selector->dbs)
         return 0;
 
-    return intsetFind(selector->dbs, (int64_t)dbid);
+    return intsetFind(selector->dbs, dbid);
 }
 
 /* To prevent duplicate calls to getKeysResult, a cache is maintained

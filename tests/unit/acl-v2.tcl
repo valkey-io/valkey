@@ -719,6 +719,9 @@ start_server {tags {"acl external:skip"}} {
         
         catch {r ACL SETUSER db-edge-user db=abc} err
         assert_match "*Error in ACL SETUSER modifier 'db=abc': Syntax error*" $err
+
+        catch {r ACL SETUSER db-edge-user db=12345678987654321} err
+        assert_match "*Error in ACL SETUSER modifier 'db=12345678987654321': The provided database ID is out of range*" $err
         
         catch {r ACL SETUSER db-edge-user db=16} err
         assert_match "*Error in ACL SETUSER modifier 'db=16': The provided database ID is out of range*" $err

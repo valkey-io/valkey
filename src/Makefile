@@ -596,8 +596,8 @@ test: $(SERVER_NAME) $(ENGINE_CHECK_AOF_NAME) $(ENGINE_CHECK_RDB_NAME) $(ENGINE_
 test-unit: $(ENGINE_UNIT_TESTS) $(ENGINE_UNIT_GTESTS)
 	@echo "Running C unit tests..."
 	./$(ENGINE_UNIT_TESTS) || echo "C unit tests failed"
-	@echo "Running Google unit tests..."
-	./gtest/$(ENGINE_UNIT_GTESTS) || echo "Google unit tests failed"
+	@echo "Running gtest unit tests..."
+	./gtest/$(ENGINE_UNIT_GTESTS) || echo "gtest unit tests failed"
 
 test-gtest:
 	@(cd gtest && $(MAKE) test-gtest)

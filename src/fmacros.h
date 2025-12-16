@@ -73,13 +73,21 @@
  *
  * NOTE: We do not use the poison pragma since it
  * will error on stdlib definitions in files as well*/
-#if (__GNUC__ && __GNUC__ >= 4) && !defined __APPLE__ && !defined __cplusplus
+#if (__GNUC__ && __GNUC__ >= 4) && !defined __APPLE__
+
+/* These deprecation attributes rely on C-only constructs (e.g. `restrict`)
+ * and redeclare libc symbols. They are disabled for building gtest
+ * to avoid conflicts with C++ standard library declarations.
+ */
+#ifndef __cplusplus
 int sprintf(char *str, const char *format, ...)
     __attribute__((deprecated("please avoid use of unsafe C functions. prefer use of snprintf instead")));
 char *strcpy(char *restrict dest, const char *src)
     __attribute__((deprecated("please avoid use of unsafe C functions. prefer use of valkey_strlcpy instead")));
 char *strcat(char *restrict dest, const char *restrict src)
     __attribute__((deprecated("please avoid use of unsafe C functions. prefer use of valkey_strlcat instead")));
+#endif /* !__cplusplus */
+
 #endif
 
 #ifdef __linux__

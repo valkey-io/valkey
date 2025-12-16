@@ -10,6 +10,7 @@ SOURCES := $(wildcard *.cpp)
 ALL_OBJECTS := $(patsubst %.cpp,%.o,$(SOURCES))
 DEPENDS := $(patsubst %.cpp,%.d,$(SOURCES))
 
+# Hold new gtest test to a high standard
 MORE_WARNINGS=-Wold-style-cast \
 	-Wno-variadic-macros \
 	-Werror \
@@ -72,7 +73,7 @@ FPCONV_LIB := ../../deps/fpconv/libfpconv.a
 GTEST_LIB := ../../deps/googletest/build/googlemock/gtest/libgtest.a
 GMOCK_LIB := ../../deps/googletest/build/googlemock/libgmock.a
 
-# Ensure googletest is built
+# Ensure GoogleTest is built
 ../../deps/googletest/build/googlemock/gtest/libgtest.a ../../deps/googletest/build/googlemock/libgmock.a:
 	cd ../../deps && $(MAKE) gtest
 
@@ -89,7 +90,7 @@ make-prerequisites:
 %.o: %.cpp make-prerequisites generated_wrappers.cpp .flags
 	$(CXX) -MD -MP -std=c++14 -faligned-new -Wno-write-strings -fpermissive -fno-var-tracking-assignments $(OPT) $(DEBUG) $(TEST_CFLAGS) -Wall -Wno-deprecated-declarations -c -isystem .. -I ../../deps/lua/src/ -I ../../deps/hdr_histogram/ -I ../../deps/fpconv/ -DUSE_JEMALLOC -isystem../../deps/jemalloc/include -I ../../deps/googletest/googletest/include -I ../../deps/googletest/googlemock/include $<
 
-$(ALL_OBJECTS): OPT := $(OPT) -Werror
+$(ALL_OBJECTS): OPT := $(OPT) $(MORE_WARNINGS)
 
 # Obtain the list of function calls for which we are generating mocks using the gmock library.  We assume they are defined in
 # wrappers.h and begin with the prefix '__wrap_' (which is required by the linker).  These command line arguments are then

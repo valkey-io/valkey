@@ -1,52 +1,64 @@
-## Valkey Google Unit Test Framework
-This directory contains the Google Test (gtest) framework integration for
-Valkey unit testing. The framework uses Google Test and Google Mock (gmock)
-to provide C++ testing capabilities. To use this framework to write unit
-tests, we have modified Valkey to build as a library that can link against
-other test executables.
+## Valkey GoogleTest Unit Test Framework
 
-For more information on Google Test, see: https://google.github.io/googletest/
+This directory contains the GoogleTest (gtest) framework integration for Valkey
+unit testing. GoogleTest provides advanced unit testing capabilities that are
+not available in Valkey's legacy unit testing framework. These capabilities
+include:
 
-This framework uses the GNU C++ linker, which implements 'wrap'
-functionality to rename function calls to foo() to a method __wrap_foo()
-and renames the real foo() method to __real_foo().
+- Integrated mocking via GoogleMock, providing expressive, behavior-based mocks
+- Rich argument matchers and call sequencing / ordering
+- Advanced test fixtures and lifecycle control
+- Richful assertions and detailed diagnostics
+- Parameterized and typed tests
 
-Using this trick, we define the Valkey wrappers we wish to mock in
-'wrappers.h'. Note that these functions can only be mocked if they include
-calls between source files.
+These features enable more expressive, maintainable, and scalable unit tests,
+particularly for complex components and edge-case validation.
 
-Using this set of functions, we run 'generate-wrappers.py' to generate the
-C++ glue code to hook up to googlemock. Specifically, this generates an
-interface named Valkey containing all the desired methods and two
-implementations, MockValkey and RealValkey.
+For more information on GoogleTest, see: https://google.github.io/googletest/
 
-MockValkey uses googlemock definitions to define a mock class. RealValkey
-uses the __real_foo() methods to call the renamed methods. The script also
-implements every __wrap_foo() command that delegates to the last MockValkey
-instance initialized.
+To use this framework to write unit tests, we have modified Valkey to build as
+a library that can link against other test executables. This framework uses the
+GNU C++ linker, which implements 'wrap' functionality to rename function calls
+to foo() to a method __wrap_foo() and renames the real foo() method to
+__real_foo().
 
-To extend the Valkey classes for mocking further methods, simply add your
-method to 'wrappers.h' and re-run 'make test-gtest' to regenerate the
-Valkey glue code and run the tests.
+Using this trick, we define the Valkey wrappers we wish to mock in 'wrappers.h'.
+Note that these functions can only be mocked if they include calls between
+source files.
+
+Using this set of functions, we run 'generate-wrappers.py' to generate the glue
+code needed to mock functions. Specifically, this generates an interface named
+Valkey containing all the desired methods and two implementations, MockValkey
+and RealValkey.
+
+MockValkey uses gtest definitions to define a mock class. RealValkey uses the
+__real_foo() methods to call the renamed methods. The script also implements
+every __wrap_foo() command that delegates to the last MockValkey instance
+initialized.
+
+To extend the Valkey classes for mocking further methods, simply add your method
+to 'wrappers.h' and re-run 'make test-gtest' to regenerate the Valkey glue code
+and run the tests.
 
 ## Tricks in running unit tests
-Sometimes the developer might want to run only one google unit test, or
-only a subset of all unit tests for debugging. We have a few different
-flavors of unit tests that you can filter/play with:
 
-1. Running all unit tests (C unit and google unit)
+Sometimes the developer might want to run only one gtest unit test, or only a
+subset of all unit tests for debugging. We have a few different flavors of
+gtest unit tests that you can filter/play with:
+
+1. Running all unit tests (C unit tests and gtest unit tests)
 
    ```bash
    make test-unit
    ```
 
-2. Running all google unit tests
+2. Running all gtest unit tests
 
    ```bash
    make test-gtest
    ```
 
-3. Running all google unit tests in the test class, replace TEST_CLASS_NAME with
+3. Running all gtest unit tests in the test class, replace TEST_CLASS_NAME with
    expected test class name
 
    ```bash
@@ -54,8 +66,9 @@ flavors of unit tests that you can filter/play with:
    ./src/gtest/valkey-unit-gtests --gtest_filter=<TEST_CLASS_NAME>
    ```
 
-4. Running a subset of google unit tests in the test class, replace TEST_CLASS_NAME
-   with expected test class name, and replace TEST_NAME_PREFIX with test name
+4. Running a subset of gtest unit tests in the test class, replace
+   TEST_CLASS_NAME with expected test class name, and replace TEST_NAME_PREFIX
+   with test name
 
    ```bash
    make valkey-unit-gtests

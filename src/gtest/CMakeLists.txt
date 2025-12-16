@@ -8,7 +8,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 get_valkey_server_linker_option(VALKEY_SERVER_LDFLAGS)
 
 # Build GoogleTest-based tests
-message(STATUS "Building google unit tests")
+message(STATUS "Building gtest unit tests")
 if (USE_TLS)
     if (BUILD_TLS_MODULE)
         # TLS as a module

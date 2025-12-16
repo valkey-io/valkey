@@ -1,4 +1,12 @@
 #!/usr/bin/env python
+"""
+Utility functions for parsing '__wrap_' C function signatures from header files (e.g. wrappers.h).
+
+Extracts return types, parameters, and function pointers, producing
+Method and Arg namedtuples. This structured data is used by
+generate-wrappers.py to create MockValkey and RealValkey classes
+for gtest-based tests.
+"""
 import re
 from collections import namedtuple
 

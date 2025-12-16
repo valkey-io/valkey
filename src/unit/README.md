@@ -1,5 +1,5 @@
 ## Introduction
-Valkey uses a very simple C testing framework, built up over time but now based loosely off of [Unity](https://www.throwtheswitch.org/unity). Valkey now also supports [Google unit tests](https://google.github.io/googletest/), see the `src/gtest/README.md` for details.
+Valkey uses a very simple C testing framework, built up over time but now based loosely off of [Unity](https://www.throwtheswitch.org/unity). Valkey now also supports [gtest unit tests](https://google.github.io/googletest/), see the `src/gtest/README.md` for details.
 
 All C unit test files are located at `src/unit/test_*`.
 A single test file can have multiple individual tests, and they must be of the form `int test_<test_name>(int argc, char *argv[], int flags) {`, where test_name is the name of the test.

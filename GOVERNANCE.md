@@ -13,7 +13,7 @@ The TSC is responsible for oversight of all technical, project, approval, and po
 
 The TSC members are listed in the [MAINTAINERS.md](MAINTAINERS.md) file in the Valkey repository.
 
-At any time, no more than one third (1/3), inclusive, of the TSC members may be employees, contractors, or representatives of the same organization or affiliated organizations.
+At any time, no more than one third (1/3) of the TSC members may be employees, contractors, or representatives of the same organization or affiliated organizations.
 For the purposes of this document, “organization” includes companies, corporations, universities, research institutes, non-profits, governmental institutions, and any of their subsidiaries or affiliates.
 If, at any time, the 1/3 organization limit is exceeded (for example, due to changes in employment, company acquisitions, or organizational affiliations), the TSC shall be notified as soon as possible.
 The TSC must promptly take action to restore compliance, which may include removing or reassigning members in accordance with the procedures outlined in the [Termination of Membership](#termination-of-membership) section.
@@ -60,7 +60,7 @@ Governance major decisions include:
 * Any change that alters voting rules, TSC responsibilities, or project oversight
 * Structural changes to the TSC, including composition limits
 
-Governance major decisions shall require approval by a 2/3 affirmative vote of the entire TSC.
+Governance major decisions shall require approval by a super-majority vote of at least two thirds (2/3) of the entire TSC.
 
 Any member of the TSC can call a vote with reasonable notice to the TSC, setting out a discussion period and a separate voting period.
 Any discussion may be conducted in person or electronically by text, voice, or video.

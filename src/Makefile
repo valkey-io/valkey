@@ -265,7 +265,8 @@ else
 	current_dir = $(shell pwd)
 	FINAL_CFLAGS+=-DLUA_ENABLED -DLUA_LIB=libvalkeylua.so
 ifeq ($(uname_S),Darwin)
-	FINAL_LDFLAGS+= -Wl,-rpath,$(PREFIX)/lib:$(current_dir)/modules/lua
+	FINAL_LDFLAGS+= -Wl,-rpath,$(PREFIX)/lib
+	FINAL_LDFLAGS+= -Wl,-rpath,$(current_dir)/modules/lua
 else
 	FINAL_LDFLAGS+= -Wl,-rpath,$(PREFIX)/lib:$(current_dir)/modules/lua -Wl,--disable-new-dtags
 endif

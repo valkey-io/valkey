@@ -51,6 +51,16 @@
  * string. */
 #define RDB_VERSION 80
 
+/* Mapping between RDB version and the Valkey version where it was added. */
+static const int RDB_VERSION_MAP[][2] = {
+    /* {RDB version, added in Valkey version} from oldest to newest. */
+    {11, 0x070200},
+    {80, 0x090000},
+};
+
+static_assert(RDB_VERSION == RDB_VERSION_MAP[sizeof(RDB_VERSION_MAP) / sizeof(RDB_VERSION_MAP[0]) - 1][0],
+              "RDB_VERSION must be the last entry in RDB_VERSION_MAP");
+
 /* Reserved range for foreign (unsupported, non-OSS) RDB format. */
 #define RDB_FOREIGN_VERSION_MIN 12
 #define RDB_FOREIGN_VERSION_MAX 79

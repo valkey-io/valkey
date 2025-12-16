@@ -220,16 +220,24 @@ int replicaRdbVersion(client *replica) {
     if (!(replica->repl_data->replica_capa & REPLICA_CAPA_EOF)) {
         /* The replica doesn't have CAPA EOF, so we need to use disk-based
          * replication, but we don't want to write an old RDB version to disk,
+         * because it can be reused for disk-based full sync to other replicas,
          * so we force the latest RDB version. */
         return RDB_VERSION;
-    } else if (replica->repl_data->replica_version >= 0x090000) {
-        return 80;
-    } else {
-        /* RDB 11 is used in 7.2 and 8.x. 7.2 and older don't report their
-         * version. If no version was provided, we assume it's 7.2. We don't
-         * currently produce RDB 10 (7.0) and RDB 9 (5.0--6.2). */
-        return 11;
     }
+    /* Search the version map backwards to select the highest RDB version the
+     * replica understands. */
+    const int n = sizeof(RDB_VERSION_MAP) / sizeof(RDB_VERSION_MAP[0]);
+    for (int i = n - 1; i >= 0; i--) {
+        if (replica->repl_data->replica_version >= RDB_VERSION_MAP[i][1]) {
+            return RDB_VERSION_MAP[i][0];
+        }
+    }
+    /* Fallback to RDB 11, which was introduced in 7.2.
+     *
+     * 7.2 and older don't report their version. If no version was provided, we
+     * assume it's 7.2. We don't currently produce RDB 10 (7.0) and RDB 9
+     * (5.0--6.2). */
+    return 11;
 }
 
 /* Replication: Primary side - connections association.

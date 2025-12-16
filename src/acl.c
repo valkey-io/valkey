@@ -651,7 +651,7 @@ static void ACLChangeSelectorPerm(aclSelector *selector, struct serverCommand *c
             struct serverCommand *sub = next;
             ACLSetSelectorCommandBit(selector, sub->id, allow);
         }
-        hashtableResetIterator(&iter);
+        hashtableCleanupIterator(&iter);
     }
 }
 
@@ -674,7 +674,7 @@ static void ACLSetSelectorCommandBitsForCategory(hashtable *commands, aclSelecto
             ACLSetSelectorCommandBitsForCategory(cmd->subcommands_ht, selector, cflag, value);
         }
     }
-    hashtableResetIterator(&iter);
+    hashtableCleanupIterator(&iter);
 }
 
 /* This function is responsible for recomputing the command bits for all selectors of the existing users.
@@ -1964,7 +1964,7 @@ static int ACLShouldKillPubsubClient(client *c, list *upcoming) {
             int res = ACLCheckChannelAgainstList(upcoming, o->ptr, sdslen(o->ptr), 1);
             kill = (res == ACL_DENIED_CHANNEL);
         }
-        hashtableResetIterator(&iter);
+        hashtableCleanupIterator(&iter);
 
         /* Check for channel violations. */
         if (!kill) {
@@ -1977,7 +1977,7 @@ static int ACLShouldKillPubsubClient(client *c, list *upcoming) {
                 int res = ACLCheckChannelAgainstList(upcoming, o->ptr, sdslen(o->ptr), 0);
                 kill = (res == ACL_DENIED_CHANNEL);
             }
-            hashtableResetIterator(&iter);
+            hashtableCleanupIterator(&iter);
         }
         if (!kill) {
             /* Check for shard channels violation. */
@@ -1989,7 +1989,7 @@ static int ACLShouldKillPubsubClient(client *c, list *upcoming) {
                 int res = ACLCheckChannelAgainstList(upcoming, o->ptr, sdslen(o->ptr), 0);
                 kill = (res == ACL_DENIED_CHANNEL);
             }
-            hashtableResetIterator(&iter);
+            hashtableCleanupIterator(&iter);
         }
 
         if (kill) {
@@ -2792,7 +2792,7 @@ static void aclCatWithFlags(client *c, hashtable *commands, uint64_t cflag, int 
             aclCatWithFlags(c, cmd->subcommands_ht, cflag, arraylen);
         }
     }
-    hashtableResetIterator(&iter);
+    hashtableCleanupIterator(&iter);
 }
 
 /* Add the formatted response from a single selector to the ACL GETUSER

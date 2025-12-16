@@ -563,7 +563,7 @@ int test_iterator(int argc, char **argv, int flags) {
         /* increment entry at this position as a counter */
         (*entry)++;
     }
-    hashtableResetIterator(&iter);
+    hashtableCleanupIterator(&iter);
 
     /* Check that all entries were returned exactly once. */
     TEST_ASSERT(num_returned == count);
@@ -616,7 +616,7 @@ int test_safe_iterator(int argc, char **argv, int flags) {
             TEST_ASSERT(hashtableAdd(ht, entry + count));
         }
     }
-    hashtableResetIterator(&iter);
+    hashtableCleanupIterator(&iter);
 
     /* Check that all entries present during the whole iteration were returned
      * exactly once. (Some are deleted after being returned.) */
@@ -682,7 +682,7 @@ int test_compact_bucket_chain(int argc, char **argv, int flags) {
             hashtableHistogram(ht);
         }
     }
-    hashtableResetIterator(&iter);
+    hashtableCleanupIterator(&iter);
 
     /* Verify that the bucket chain has been compacted by filling the holes and
      * freeing empty child buckets. */
@@ -943,5 +943,316 @@ int test_random_entry_sparse_table(int argc, char **argv, int flags) {
     }
     hashtableRelease(ht);
     zfree(values);
+    return 0;
+}
+
+int test_safe_iterator_invalidation(int argc, char **argv, int flags) {
+    UNUSED(argc);
+    UNUSED(argv);
+    UNUSED(flags);
+
+    hashtableType type = {0};
+    hashtable *ht = hashtableCreate(&type);
+
+    /* Add some entries */
+    for (int i = 0; i < 10; i++) {
+        TEST_ASSERT(hashtableAdd(ht, (void *)(long)i));
+    }
+
+    /* Create safe and non-safe iterators */
+    hashtableIterator safe_iter1, safe_iter2, unsafe_iter;
+    hashtableInitIterator(&safe_iter1, ht, HASHTABLE_ITER_SAFE);
+    hashtableInitIterator(&safe_iter2, ht, HASHTABLE_ITER_SAFE);
+    hashtableInitIterator(&unsafe_iter, ht, 0);
+
+    /* Verify iterators work before invalidation */
+    void *entry;
+    TEST_ASSERT(hashtableNext(&safe_iter1, &entry));
+    TEST_ASSERT(hashtableNext(&safe_iter2, &entry));
+
+    /* Reset iterators to test state */
+    hashtableCleanupIterator(&safe_iter1);
+    hashtableCleanupIterator(&safe_iter2);
+    hashtableInitIterator(&safe_iter1, ht, HASHTABLE_ITER_SAFE);
+    hashtableInitIterator(&safe_iter2, ht, HASHTABLE_ITER_SAFE);
+
+    /* Release hashtable - should invalidate safe iterators */
+    hashtableRelease(ht);
+
+    /* Test that safe iterators are now invalid */
+    TEST_ASSERT(!hashtableNext(&safe_iter1, &entry));
+    TEST_ASSERT(!hashtableNext(&safe_iter2, &entry));
+
+    /* Reset invalidated iterators (should handle gracefully) */
+    hashtableCleanupIterator(&safe_iter1);
+    hashtableCleanupIterator(&safe_iter2);
+    hashtableCleanupIterator(&unsafe_iter);
+
+    return 0;
+}
+
+int test_safe_iterator_empty_no_invalidation(int argc, char **argv, int flags) {
+    UNUSED(argc);
+    UNUSED(argv);
+    UNUSED(flags);
+
+    hashtableType type = {0};
+    hashtable *ht = hashtableCreate(&type);
+
+    /* Add some entries */
+    for (int i = 0; i < 5; i++) {
+        TEST_ASSERT(hashtableAdd(ht, (void *)(long)i));
+    }
+
+    /* Create safe iterator */
+    hashtableIterator safe_iter;
+    hashtableInitIterator(&safe_iter, ht, HASHTABLE_ITER_SAFE);
+
+    /* Empty hashtable - should NOT invalidate safe iterators */
+    hashtableEmpty(ht, NULL);
+
+    /* Iterator should still be valid but return false since table is empty */
+    void *entry;
+    TEST_ASSERT(!hashtableNext(&safe_iter, &entry));
+
+    hashtableCleanupIterator(&safe_iter);
+    hashtableRelease(ht);
+
+    return 0;
+}
+
+int test_safe_iterator_reset_invalidation(int argc, char **argv, int flags) {
+    UNUSED(argc);
+    UNUSED(argv);
+    UNUSED(flags);
+
+    hashtableType type = {0};
+    hashtable *ht = hashtableCreate(&type);
+
+    /* Add some entries */
+    for (int i = 0; i < 10; i++) {
+        TEST_ASSERT(hashtableAdd(ht, (void *)(long)i));
+    }
+
+    /* Create safe iterators */
+    hashtableIterator safe_iter1, safe_iter2;
+    hashtableInitIterator(&safe_iter1, ht, HASHTABLE_ITER_SAFE);
+    hashtableInitIterator(&safe_iter2, ht, HASHTABLE_ITER_SAFE);
+
+    /* Verify iterators work before reset */
+    void *entry;
+    TEST_ASSERT(hashtableNext(&safe_iter1, &entry));
+    TEST_ASSERT(hashtableNext(&safe_iter2, &entry));
+
+    /* Reset iterators to test state */
+    hashtableCleanupIterator(&safe_iter1);
+    hashtableCleanupIterator(&safe_iter2);
+    hashtableInitIterator(&safe_iter1, ht, HASHTABLE_ITER_SAFE);
+    hashtableInitIterator(&safe_iter2, ht, HASHTABLE_ITER_SAFE);
+
+    /* Reset one iterator before release - should untrack it */
+    hashtableCleanupIterator(&safe_iter1);
+    /* Repeated calls are ok */
+    hashtableCleanupIterator(&safe_iter1);
+
+    /* Release hashtable - should invalidate remaining safe iterator */
+    hashtableRelease(ht);
+
+    /* Test that safe iterators are prevented from invalid access */
+    TEST_ASSERT(!hashtableNext(&safe_iter1, &entry));
+    TEST_ASSERT(!hashtableNext(&safe_iter2, &entry));
+
+    /* Reset invalidated iterators (should handle gracefully) */
+    hashtableCleanupIterator(&safe_iter1);
+    hashtableCleanupIterator(&safe_iter2);
+
+    return 0;
+}
+
+int test_safe_iterator_reset_untracking(int argc, char **argv, int flags) {
+    UNUSED(argc);
+    UNUSED(argv);
+    UNUSED(flags);
+
+    hashtableType type = {0};
+    hashtable *ht = hashtableCreate(&type);
+
+    /* Add some entries */
+    for (int i = 0; i < 5; i++) {
+        TEST_ASSERT(hashtableAdd(ht, (void *)(long)i));
+    }
+
+    /* Create safe iterator */
+    hashtableIterator safe_iter;
+    hashtableInitIterator(&safe_iter, ht, HASHTABLE_ITER_SAFE);
+
+    /* Reset iterator - should remove from tracking */
+    hashtableCleanupIterator(&safe_iter);
+
+    /* Release hashtable - iterator should not be invalidated since it was reset */
+    hashtableRelease(ht);
+
+    /* Create new hashtable and reinit iterator */
+    ht = hashtableCreate(&type);
+    for (int i = 0; i < 3; i++) {
+        TEST_ASSERT(hashtableAdd(ht, (void *)(long)i));
+    }
+    hashtableInitIterator(&safe_iter, ht, HASHTABLE_ITER_SAFE);
+
+    /* Should work since it's tracking the new hashtable */
+    void *entry;
+    TEST_ASSERT(hashtableNext(&safe_iter, &entry));
+
+    hashtableCleanupIterator(&safe_iter);
+    hashtableRelease(ht);
+
+    return 0;
+}
+int test_safe_iterator_pause_resume_tracking(int argc, char **argv, int flags) {
+    UNUSED(argc);
+    UNUSED(argv);
+    UNUSED(flags);
+
+    hashtableType type = {0};
+    hashtable *ht = hashtableCreate(&type);
+
+    /* Add entries to trigger rehashing */
+    for (int i = 0; i < 100; i++) {
+        TEST_ASSERT(hashtableAdd(ht, (void *)(long)i));
+    }
+
+    /* Create multiple safe iterators */
+    hashtableIterator iter1, iter2, iter3;
+    hashtableInitIterator(&iter1, ht, HASHTABLE_ITER_SAFE);
+    hashtableInitIterator(&iter2, ht, HASHTABLE_ITER_SAFE);
+    hashtableInitIterator(&iter3, ht, HASHTABLE_ITER_SAFE);
+
+    /* Start iterating with first iterator - should pause rehashing and track iterator */
+    void *entry;
+    TEST_ASSERT(hashtableNext(&iter1, &entry));
+
+    /* Start iterating with second iterator - should also be tracked */
+    TEST_ASSERT(hashtableNext(&iter2, &entry));
+
+    /* Verify rehashing is paused (safe iterators should pause it) */
+    TEST_ASSERT(hashtableIsRehashingPaused(ht));
+
+    /* Reset first iterator - should untrack it but rehashing still paused due to iter2 */
+    hashtableCleanupIterator(&iter1);
+
+    /* Start third iterator */
+    TEST_ASSERT(hashtableNext(&iter3, &entry));
+
+    /* Reset second iterator - rehashing should still be paused due to iter3 */
+    hashtableCleanupIterator(&iter2);
+    TEST_ASSERT(hashtableIsRehashingPaused(ht));
+
+    /* Reset third iterator - now rehashing should be resumed */
+    hashtableCleanupIterator(&iter3);
+
+    /* Verify all iterators are properly untracked by releasing hashtable */
+    hashtableRelease(ht);
+
+    return 0;
+}
+
+int test_null_hashtable_iterator(int argc, char **argv, int flags) {
+    UNUSED(argc);
+    UNUSED(argv);
+    UNUSED(flags);
+
+    /* Test safe iterator with NULL hashtable */
+    hashtableIterator safe_iter;
+    hashtableInitIterator(&safe_iter, NULL, HASHTABLE_ITER_SAFE);
+
+    /* hashtableNext should return false for NULL hashtable */
+    void *entry;
+    TEST_ASSERT(!hashtableNext(&safe_iter, &entry));
+
+    /* Reset should handle NULL hashtable gracefully */
+    hashtableCleanupIterator(&safe_iter);
+
+    /* Test non-safe iterator with NULL hashtable */
+    hashtableIterator unsafe_iter;
+    hashtableInitIterator(&unsafe_iter, NULL, 0);
+
+    /* hashtableNext should return false for NULL hashtable */
+    TEST_ASSERT(!hashtableNext(&unsafe_iter, &entry));
+
+    /* Reset should handle NULL hashtable gracefully */
+    hashtableCleanupIterator(&unsafe_iter);
+
+    /* Test reinitializing NULL iterator with valid hashtable */
+    hashtableType type = {0};
+    hashtable *ht = hashtableCreate(&type);
+    TEST_ASSERT(hashtableAdd(ht, (void *)1));
+
+    hashtableRetargetIterator(&safe_iter, ht);
+    TEST_ASSERT(hashtableNext(&safe_iter, &entry));
+    TEST_ASSERT(entry == (void *)1);
+
+    hashtableCleanupIterator(&safe_iter);
+    hashtableRelease(ht);
+
+    return 0;
+}
+
+int test_hashtable_retarget_iterator(int argc, char **argv, int flags) {
+    UNUSED(argc);
+    UNUSED(argv);
+    UNUSED(flags);
+
+    hashtableType type = {0};
+    hashtable *ht1 = hashtableCreate(&type);
+    hashtable *ht2 = hashtableCreate(&type);
+
+    /* Add different entries to each hashtable */
+    for (int i = 0; i < 5; i++) {
+        TEST_ASSERT(hashtableAdd(ht1, (void *)(long)(i + 10)));
+        TEST_ASSERT(hashtableAdd(ht2, (void *)(long)(i + 20)));
+    }
+
+    /* Create iterator on first hashtable */
+    hashtableIterator iter;
+    hashtableInitIterator(&iter, ht1, HASHTABLE_ITER_SAFE);
+
+    /* Iterate partially through first hashtable */
+    void *entry;
+    int count1 = 0;
+    while (hashtableNext(&iter, &entry) && count1 < 3) {
+        long val = (long)entry;
+        TEST_ASSERT(val >= 10 && val < 15);
+        count1++;
+    }
+
+    /* Retarget to second hashtable */
+    hashtableRetargetIterator(&iter, ht2);
+
+    /* Iterate partially through second hashtable */
+    int count2 = 0;
+    while (hashtableNext(&iter, &entry) && count2 < 2) {
+        long val = (long)entry;
+        TEST_ASSERT(val >= 20 && val < 25);
+        count2++;
+    }
+
+    /* Retarget back to first hashtable */
+    hashtableRetargetIterator(&iter, ht1);
+
+    /* Iterate partially through first hashtable again */
+    int count3 = 0;
+    while (hashtableNext(&iter, &entry) && count3 < 4) {
+        long val = (long)entry;
+        TEST_ASSERT(val >= 10 && val < 15);
+        count3++;
+    }
+
+    hashtableRelease(ht1);
+    hashtableRelease(ht2);
+
+    TEST_ASSERT(!hashtableNext(&iter, &entry));
+
+    hashtableCleanupIterator(&iter);
+
     return 0;
 }

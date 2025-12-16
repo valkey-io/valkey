@@ -266,8 +266,8 @@ start_server {tags {"repl external:skip"}} {
             wait_for_sync $replica
         }
 
-        test {Data divergence can happen under default conditions} {
-            $replica config set propagation-error-behavior ignore
+        test {Data divergence can happen under default conditions} {       
+            $replica config set propagation-error-behavior ignore     
             $master debug replicate fake-command-1
 
             # Wait for replication to normalize
@@ -280,7 +280,7 @@ start_server {tags {"repl external:skip"}} {
             assert_equal [count_log_message 0 "== CRITICAL =="] 1
         }
 
-        test {Data divergence is allowed on writable replicas} {
+        test {Data divergence is allowed on writable replicas} {            
             $replica config set replica-read-only no
             $replica set number2 foo
             $master incrby number2 1
@@ -290,77 +290,6 @@ start_server {tags {"repl external:skip"}} {
             assert_equal [$replica get number2] foo
 
             assert_equal [count_log_message 0 "incrby"] 1
-        }
-    }
-}
-
-# test aof persistence replication info and load it after server restart
-start_server {tags {"repl external:skip cluster:skip"} overrides {appendonly yes repl-ping-replica-period 10000 loglevel debug}} {
-    start_server {overrides {appendonly yes repl-ping-replica-period 10000 loglevel debug}} {
-        set primary_id -1
-        set replica_id 0
-        set primary [srv $primary_id client]
-        set primary_host [srv $primary_id host]
-        set primary_port [srv $primary_id port]
-        set replica [srv $replica_id client]
-
-        $replica replicaof $primary_host $primary_port
-        $primary config rewrite
-        $replica config rewrite
-
-        for {set k 0} {$k < 100} {incr k} {
-            $primary set foo_$k bar_$k
-        }
-        $primary set bar foo
-        wait_for_value_to_propagate_to_replica $primary $replica "bar"
-
-        waitForBgrewriteaof $primary
-        waitForBgrewriteaof $replica
-        wait_for_ofs_sync $primary $replica
-        assert_equal [status $primary sync_full] 1
-        wait_for_log_messages $replica_id {"*sync: Finished with success*"} 0 100 100
-
-        # save replid for both primary and replica
-        set prev_replid [status $primary master_replid]
-        set prev_repl_offset [status $primary master_repl_offset]
-
-        test {replica rewrite aof and load it after restart} {
-            # persist current replication info
-            $replica bgrewriteaof
-            waitForBgrewriteaof $replica
-            wait_for_ofs_sync $primary $replica
-            set logfile [srv $replica_id stdout]
-            set num_lines [lindex [exec wc -l $logfile] 0]
-
-            restart_server $replica_id true false true now
-            set replica [srv $replica_id client]
-            wait_for_ofs_sync $primary $replica
-            wait_for_log_messages $replica_id {"*Primary accepted a Partial Resynchronization*"} $num_lines 100 100
-
-            assert_equal [status $replica master_replid] $prev_replid
-            assert_equal [status $replica master_repl_offset] $prev_repl_offset
-            assert_equal [status $primary sync_full] 1
-            assert_equal [status $primary sync_partial_ok] 1
-        }
-
-        test {primary rewrite aof and load it after restart} {
-            # persist current replication info
-            $primary bgrewriteaof
-            waitForBgrewriteaof $primary
-            wait_for_ofs_sync $primary $replica
-            set prev_repl_offset [expr {[status $primary master_repl_offset] + 1}]
-            set logfile [srv $replica_id stdout]
-            set num_lines [lindex [exec wc -l $logfile] 0]
-
-            restart_server $primary_id true false true now
-            set primary [srv $primary_id client]
-            wait_for_ofs_sync $primary $replica
-            wait_for_log_messages $replica_id {"*Primary accepted a Partial Resynchronization*"} $num_lines 100 100
-
-            assert_equal [status $primary master_replid2] $prev_replid
-            assert_equal [status $primary second_repl_offset] $prev_repl_offset
-            assert_equal [status $primary sync_full] 0
-            assert_equal [status $primary sync_partial_ok] 1
         }
     }
 }

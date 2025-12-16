@@ -8,7 +8,7 @@ tags {"aof external:skip"} {
     # was subsequently appended to the new AOF, resulting in duplicate commands.
     start_server_aof [list dir $server_path] {
         set client [valkey [srv host] [srv port] 0 $::tls]
-        set bench [open "|src/valkey-benchmark -q -s [srv unixsocket] -c 20 -n 20000 incr foo" "r+"]
+        set bench [open "|$::VALKEY_BENCHMARK_BIN -q -s [srv unixsocket] -c 20 -n 20000 incr foo" "r+"]
 
         wait_for_condition 100 1 {
             [$client get foo] > 0

@@ -862,14 +862,22 @@ int primaryTryPartialResynchronization(client *c, long long psync_offset) {
     /* We still have the data our replica is asking for? */
     if (!server.repl_backlog || psync_offset < server.repl_backlog->offset ||
         psync_offset > (server.repl_backlog->offset + server.repl_backlog->histlen)) {
-        serverLog(LL_NOTICE,
-                  "Unable to partial resync with replica %s for lack of backlog (Replica request was: %lld).",
-                  replicationGetReplicaName(c), psync_offset);
+        if (!server.repl_backlog) {
+            serverLog(LL_NOTICE,
+                      "Unable to partial resync with replica %s for lack of backlog (Replica request was: %s:%lld).",
+                      replicationGetReplicaName(c), primary_replid, psync_offset);
+        } else {
+            serverLog(LL_NOTICE,
+                      "Unable to partial resync with replica %s for lack of backlog (Replica request was %s:%lld, "
+                      "and I can only reply with the range [%lld, %lld]).",
+                      replicationGetReplicaName(c), primary_replid, psync_offset, server.repl_backlog->offset,
+                      server.repl_backlog->offset + server.repl_backlog->histlen);
+        }
         if (psync_offset > server.primary_repl_offset) {
             serverLog(LL_WARNING,
-                      "Warning: replica %s tried to PSYNC with an offset that is greater than the primary replication "
-                      "offset.",
-                      replicationGetReplicaName(c));
+                      "Warning: replica %s tried to PSYNC with an offset (%lld) that is greater than "
+                      "the primary replication offset (%lld)",
+                      replicationGetReplicaName(c), psync_offset, server.primary_repl_offset);
         }
         goto need_full_resync;
     }
@@ -3211,7 +3219,10 @@ void bufferReplData(connection *conn) {
         if (readlen && remaining_bytes == 0) {
             if (server.client_obuf_limits[CLIENT_TYPE_REPLICA].hard_limit_bytes &&
                 server.pending_repl_data.len > server.client_obuf_limits[CLIENT_TYPE_REPLICA].hard_limit_bytes) {
-                dualChannelServerLog(LL_NOTICE, "Replication buffer limit reached, stopping buffering.");
+                dualChannelServerLog(LL_NOTICE,
+                                     "Replication buffer limit reached (%llu bytes), stopping buffering. "
+                                     "Further accumulation will occur on primary side.",
+                                     server.client_obuf_limits[CLIENT_TYPE_REPLICA].hard_limit_bytes);
                 /* Stop accumulating primary commands. */
                 connSetReadHandler(conn, NULL);
                 break;

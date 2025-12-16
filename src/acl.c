@@ -1763,7 +1763,7 @@ static int ACLCheckChannelAgainstList(list *reference, const char *channel, int 
 }
 
 /* Check if selector allows access to the specified database */
-int ACLSelectorCanAccessDb(aclSelector *selector, long long dbid) {
+static inline int ACLSelectorCanAccessDb(aclSelector *selector, long long dbid) {
     if (selector->flags & SELECTOR_FLAG_ALLDBS)
         return 1;
 

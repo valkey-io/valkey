@@ -741,7 +741,7 @@ int rdbGetObjectType(robj *o, int rdbver) {
                 if (rdbver >= 80)
                     return RDB_TYPE_HASH_2;
                 else
-                    return -1; /* can't be represeted in old RDB */
+                    return -1; /* can't be stored in old RDB */
             else
                 return RDB_TYPE_HASH;
         else

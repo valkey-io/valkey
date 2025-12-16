@@ -319,7 +319,7 @@ int hashTypeExists(robj *o, sds field) {
 }
 
 bool hashTypeHasStringRef(robj *o, sds field) {
-    if (o->encoding == OBJ_ENCODING_LISTPACK) return 0;
+    if (o->encoding == OBJ_ENCODING_LISTPACK) return false;
     hashtable *ht = o->ptr;
     void **entry_ref = hashtableFindRef(ht, field);
     return (entryHasStringRef(*entry_ref));

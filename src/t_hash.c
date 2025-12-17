@@ -735,7 +735,7 @@ sds hashTypeCurrentObjectNewSds(hashTypeIterator *hi, int what) {
         return sdsfromlonglong(vll);
     }
     if (hi->encoding == OBJ_ENCODING_HASHTABLE) {
-        size_t vlen = 0;
+        size_t vlen;
         vstr = (unsigned char *)hashTypeCurrentFromHashTable(hi, what, &vlen);
         return sdsnewlen(vstr, vlen);
     }

@@ -1599,6 +1599,9 @@ void genericHgetallCommand(client *c, int flags) {
     hashTypeIterator hi;
     int count = 0;
 
+    unsigned long length = 0; /* In case we take regular reply path */
+    void *replylen = NULL;    /* In case we use a deferred reply path */
+
     robj *emptyResp = (flags & OBJ_HASH_FIELD && flags & OBJ_HASH_VALUE) ? shared.emptymap[c->resp] : shared.emptyarray;
     if ((o = lookupKeyReadOrReply(c, c->argv[1], emptyResp)) == NULL || checkType(c, o, OBJ_HASH)) return;
 
@@ -1606,7 +1609,18 @@ void genericHgetallCommand(client *c, int flags) {
     if (!wpc) return;
     /* We return a map if the user requested fields and values, like in the
      * HGETALL case. Otherwise to use a flat array makes more sense. */
-    void *replylen = addReplyDeferredLen(c);
+
+    if (!hashTypeHasVolatileFields(o)) {
+        length = hashTypeLength(o);
+        if (flags & OBJ_HASH_FIELD && flags & OBJ_HASH_VALUE) {
+            addWritePreparedReplyMapLen(wpc, length);
+        } else {
+            addWritePreparedReplyArrayLen(wpc, length);
+        }
+    } else {
+        replylen = addReplyDeferredLen(c);
+    }
+
     hashTypeInitIterator(o, &hi);
     while (hashTypeNext(&hi) != C_ERR) {
         if (flags & OBJ_HASH_FIELD) {
@@ -1620,12 +1634,14 @@ void genericHgetallCommand(client *c, int flags) {
     }
 
     hashTypeResetIterator(&hi);
-    /* Make sure we returned the right number of elements. */
-    if (flags & OBJ_HASH_FIELD && flags & OBJ_HASH_VALUE) {
-        setDeferredMapLen(c, replylen, count /= 2);
-        count /= 2;
-    } else {
-        setDeferredArrayLen(c, replylen, count);
+    /* In case of deferred reply, make sure we returned the right number of elements. */
+    if (replylen) {
+        if (flags & OBJ_HASH_FIELD && flags & OBJ_HASH_VALUE) {
+            setDeferredMapLen(c, replylen, count /= 2);
+            count /= 2;
+        } else {
+            setDeferredArrayLen(c, replylen, count);
+        }
     }
 }
 

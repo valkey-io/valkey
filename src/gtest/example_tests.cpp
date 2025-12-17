@@ -28,7 +28,7 @@ using ExampleDeathTest = ExampleTest;
 TEST_F(ExampleDeathTest, TestSimpleDeath) {
     EXPECT_DEATH(
         {
-            *(static_cast<char*>(0)) = 'x'; // SEGV
+            *(static_cast<volatile char*>(0)) = 'x'; // SEGV
         },
         ""
     );

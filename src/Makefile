@@ -295,8 +295,6 @@ ifeq ($(MALLOC),jemalloc)
 	FINAL_LIBS := ../deps/jemalloc/lib/libjemalloc.a $(FINAL_LIBS)
 endif
 
-DEPENDENCY_TARGETS+= gtest
-
 ifeq ($(USE_LTTNG),yes)
 	FINAL_CFLAGS+=-DUSE_LTTNG
 	FINAL_LIBS += -llttng-ust
@@ -451,6 +449,8 @@ ifeq ($(USE_FAST_FLOAT),yes)
 	FINAL_LIBS += $(FAST_FLOAT_STRTOD_OBJECT)
 endif
 
+DEPENDENCY_TARGETS+= gtest
+
 all: $(SERVER_NAME) $(ENGINE_SENTINEL_NAME) $(ENGINE_CLI_NAME) $(ENGINE_BENCHMARK_NAME) $(ENGINE_CHECK_RDB_NAME) $(ENGINE_CHECK_AOF_NAME) $(TLS_MODULE) $(RDMA_MODULE)
 	@echo ""
 	@echo "Hint: It's a good idea to run 'make test' ;)"
@@ -465,7 +465,12 @@ endif
 
 .PHONY: all
 
+# gtest unit tests are not supported on macOS due to linker incompatibility
+ifeq ($(uname_S),Darwin)
+all-with-unit-tests: all $(ENGINE_UNIT_TESTS)
+else
 all-with-unit-tests: all $(ENGINE_UNIT_TESTS) $(ENGINE_UNIT_GTESTS)
+endif
 .PHONY: all
 
 persist-settings: distclean

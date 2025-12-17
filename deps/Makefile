@@ -130,6 +130,8 @@ fast_float_c_interface: .make-prerequisites
 
 .PHONY: fast_float_c_interface
 
+CMAKE := $(shell command -v cmake3 || command -v cmake)
+
 gtest: .make-prerequisites
 	@printf '%b %b\n' $(MAKECOLOR)MAKE$(ENDCOLOR) $(BINCOLOR)$@$(ENDCOLOR)
 	@if [ ! -f googletest/CMakeLists.txt ]; then \
@@ -142,13 +144,19 @@ gtest: .make-prerequisites
 		rm -rf gtest-parallel; \
 		git clone --depth 1 https://github.com/google/gtest-parallel.git gtest-parallel; \
 	fi
-
-	@CMAKE=$$(command -v cmake3 || command -v cmake); \
-	if [ -z "$$CMAKE" ]; then \
-		echo "Error: cmake or cmake3 not found"; \
-		exit 1; \
-	fi; \
-	cd googletest && $$CMAKE -B build -DCMAKE_BUILD_TYPE=Release && \
-	$$CMAKE --build build
+# 	cd googletest && $(CMAKE) -B build \
+# 		-DCMAKE_BUILD_TYPE=Release \
+# 		-DCMAKE_C_FLAGS="$(CFLAGS)" \
+# 		-DCMAKE_CXX_FLAGS="$(CFLAGS)" \
+# 		-DCMAKE_EXE_LINKER_FLAGS="$(LDFLAGS)" \
+# 		-DCMAKE_POLICY_VERSION_MINIMUM=3.17
+# 	cd googletest && $(CMAKE) --build build
+	cd googletest && $(CMAKE) -B build \
+		-DCMAKE_BUILD_TYPE=Release \
+		-DCMAKE_C_FLAGS="$(CFLAGS)" \
+		-DCMAKE_CXX_FLAGS="$(CFLAGS)" \
+		-DCMAKE_EXE_LINKER_FLAGS="$(LDFLAGS)" \
+		-DCMAKE_POLICY_VERSION_MINIMUM=3.17
+	cd googletest && $(CMAKE) --build build --parallel
 
 .PHONY: gtest

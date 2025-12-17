@@ -58,6 +58,11 @@ jobs:
           - {version: "8.1.3", file: "valkey-8.1.3-noble-x86_64.tar.gz"}
     steps:
       - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - name: Install modern CMake
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake
+          cmake --version
       - name: make
         # Fail build if there are warnings
         # build with TLS just for compilation coverage
@@ -87,7 +92,9 @@ jobs:
       - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
       - name: cmake and make
         run: |
+          sudo apt-get update
           sudo apt-get install -y cmake libssl-dev
+          cmake --version
           mkdir -p build-release
           cd build-release
           cmake -DCMAKE_BUILD_TYPE=Release .. -DBUILD_TLS=yes -DBUILD_UNIT_TESTS=yes -DBUILD_UNIT_GTESTS=yes
@@ -207,7 +214,7 @@ jobs:
 
       - name: make
         run: |
-          dnf -y install epel-release gcc gcc-c++ make procps-ng which
+          dnf -y install epel-release gcc gcc-c++ make procps-ng which git cmake
           make -j4 SERVER_CFLAGS='-Werror' USE_FAST_FLOAT=yes
 
   format-yaml:

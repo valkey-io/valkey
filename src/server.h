@@ -40,7 +40,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <stddef.h>
+#ifndef __cplusplus
 #include <stdatomic.h>
+#endif
 #include <string.h>
 #include <time.h>
 #include <limits.h>
@@ -4066,17 +4068,10 @@ void resetCommand(client *c);
 void failoverCommand(client *c);
 
 #if defined(__GNUC__)
-#ifdef __cplusplus
-void *calloc(size_t count, size_t size) throw() __attribute__((deprecated));
-void free(void *ptr) throw() __attribute__((deprecated));
-void *malloc(size_t size) throw() __attribute__((deprecated));
-void *realloc(void *ptr, size_t size) throw() __attribute__((deprecated));
-#else
 void *calloc(size_t count, size_t size) __attribute__((deprecated));
 void free(void *ptr) __attribute__((deprecated));
 void *malloc(size_t size) __attribute__((deprecated));
 void *realloc(void *ptr, size_t size) __attribute__((deprecated));
-#endif
 #endif
 
 /* Debugging stuff */

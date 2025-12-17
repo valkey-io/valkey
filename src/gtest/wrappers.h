@@ -54,11 +54,11 @@ extern "C" {
  *       Example: serverLog(int level, const char *fmt, ...) should NOT be mocked.
  */
 long long __wrap_aeCreateTimeEvent(aeEventLoop *eventLoop, long long milliseconds, aeTimeProc *proc, void *clientData, aeEventFinalizerProc *finalizerProc);
-void* __wrap_valkey_malloc(size_t size);
-void* __wrap_valkey_free(void* ptr);
+void *__wrap_valkey_malloc(size_t size);
+void *__wrap_valkey_free(void *ptr);
 void *__wrap_valkey_calloc(size_t size);
-void * __wrap_valkey_realloc(void* ptr, size_t size);
-list* __wrap_listCreate();
+void *__wrap_valkey_realloc(void *ptr, size_t size);
+list *__wrap_listCreate();
 dict *__wrap_dictCreate(dictType *type);
 void __wrap_listRelease(struct list *list);
 

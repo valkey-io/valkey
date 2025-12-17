@@ -1829,6 +1829,8 @@ static int ACLSelectorCheckCmd(aclSelector *selector,
                             *keyidxptr = 2;
                         else if (cmd->proc == swapdbCommand)
                             *keyidxptr = (i == 0) ? 1 : 2;
+                        else if (cmd->proc == migrateCommand)
+                            *keyidxptr = 4;
                         else
                             *keyidxptr = 0;
                     }

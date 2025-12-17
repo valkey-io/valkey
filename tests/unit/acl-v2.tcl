@@ -619,12 +619,14 @@ start_server {tags {"acl external:skip"}} {
         assert_equal "OK" [$r2 select 2]
         catch {$r2 set write:key value} err
         assert_match "*NOPERM*command*" $err
+        r select 2
         r set readstr bar
-        assert_equal [r get readstr] bar
+        assert_equal [$r2 get readstr] bar
         
         assert_equal "OK" [$r2 select 3]
+        r select 3
         r set readstr bar
-        assert_equal [r get readstr] bar
+        assert_equal [$r2 get readstr] bar
         
         catch {$r2 select 4} err
         assert_match "*NOPERM*command*" $err
@@ -1195,6 +1197,207 @@ start_server {tags {"acl external:skip"}} {
         
         # Cleanup
         r ACL SETUSER db-acl-change db=0,1
+    }
+
+    test {Test EVAL with database permissions} {
+        r ACL SETUSER eval-db-user on nopass +@all ~* db=0,1
+        $r2 auth eval-db-user password
+        
+        assert_equal "OK" [$r2 select 0]
+        assert_equal "OK" [$r2 select 1]
+        
+        catch {$r2 eval {server.call('SELECT', '2')} 0} err
+        assert_match "*ACL failure in script*No permissions to access database*" $err
+        
+        $r2 select 0
+        set result [$r2 eval {server.call('SELECT', '0'); return server.call('SET', 'key', 'value')} 0]
+        assert_equal "OK" $result
+        
+        assert_equal "value" [$r2 get key]
+        
+        # Cleanup
+        $r2 del key
+    }
+    
+    test {Test EVALSHA with database permissions} {
+        r ACL SETUSER evalsha-db-user on nopass +@all ~* db=0,1
+        $r2 auth evalsha-db-user password
+        
+        assert_equal "OK" [$r2 select 0]
+        
+        set sha [r script load {server.call('SELECT', '2'); return 'OK'}]
+        
+        catch {$r2 evalsha $sha 0} err
+        assert_match "*ACL failure in script*No permissions to access database*" $err
+        
+        set sha_ok [r script load {server.call('SELECT', '1'); return server.call('SET', 'key2', 'value2')}]
+        
+        set result [$r2 evalsha $sha_ok 0]
+        assert_equal "OK" $result
+        
+        $r2 select 1
+        assert_equal "value2" [$r2 get key2]
+        
+        # Cleanup
+        $r2 del key2
+        $r2 select 0
+    }
+    
+    test {Test EVAL_RO with database permissions} {
+        r ACL SETUSER eval-ro-db-user on nopass +@all ~* db=0,1
+        $r2 auth eval-ro-db-user password
+        
+        assert_equal "OK" [$r2 select 0]
+        r set testkey testvalue
+        
+        catch {$r2 eval_ro {server.call('SELECT', '2')} 0} err
+        assert_match "*ACL failure in script*No permissions to access database*" $err
+        
+        set result [$r2 eval_ro {server.call('SELECT', '0'); return server.call('GET', 'testkey')} 0]
+        assert_equal "testvalue" $result
+        
+        # Cleanup
+        r del testkey
+    }
+    
+    test {Test EVALSHA_RO with database permissions} {
+        r ACL SETUSER evalsha-ro-db-user on nopass +@all ~* db=0,1
+        $r2 auth evalsha-ro-db-user password
+        
+        assert_equal "OK" [$r2 select 0]
+        r set rokey rovalue
+        
+        set sha [r script load {server.call('SELECT', '3'); return server.call('GET', 'rokey')}]
+        
+        catch {$r2 evalsha_ro $sha 0} err
+        assert_match "*ACL failure in script*No permissions to access database*" $err
+        
+        set sha_ok [r script load {server.call('SELECT', '1'); return 'allowed'}]
+        
+        set result [$r2 evalsha_ro $sha_ok 0]
+        assert_equal "allowed" $result
+        
+        # Cleanup
+        r del rokey
+    }
+    
+    test {Test FCALL with database permissions} {
+        r ACL SETUSER fcall-db-user on nopass +@all ~* db=0,1
+        $r2 auth fcall-db-user password
+        
+        assert_equal "OK" [$r2 select 0]
+        
+        r function load {#!lua name=dbtest
+            server.register_function('select_restricted', function(keys, args)
+                server.call('SELECT', '2')
+                return 'OK'
+            end)
+        }
+        
+        catch {$r2 fcall select_restricted 0} err
+        assert_match "*ACL failure in script*No permissions to access database*" $err
+        
+        r function load replace {#!lua name=dbtest
+            server.register_function('select_allowed', function(keys, args)
+                server.call('SELECT', '1')
+                return server.call('SET', 'fcallkey', 'fcallvalue')
+            end)
+        }
+        
+        set result [$r2 fcall select_allowed 0]
+        assert_equal "OK" $result
+        
+        $r2 select 1
+        assert_equal "fcallvalue" [$r2 get fcallkey]
+        
+        # Cleanup
+        $r2 del fcallkey
+        $r2 select 0
+        r function delete dbtest
+    }
+    
+    test {Test FCALL_RO with database permissions} {
+        r ACL SETUSER fcall-ro-db-user on nopass +@all ~* db=0,1
+        $r2 auth fcall-ro-db-user password
+        
+        assert_equal "OK" [$r2 select 0]
+        r set fcallrokey fcallrovalue
+        
+        r function load {#!lua name=dbtestro
+            server.register_function{
+                function_name='read_restricted',
+                callback=function(keys, args)
+                    server.call('SELECT', '3')
+                    return server.call('GET', 'fcallrokey')
+                end,
+                flags={'no-writes'}
+            }
+        }
+        
+        catch {$r2 fcall_ro read_restricted 0} err
+        assert_match "*ACL failure in script*No permissions to access database*" $err
+        
+        r function load replace {#!lua name=dbtestro
+            server.register_function{
+                function_name='read_allowed',
+                callback=function(keys, args)
+                    server.call('SELECT', '0')
+                    return server.call('GET', 'fcallrokey')
+                end,
+                flags={'no-writes'}
+            }
+        }
+        
+        set result [$r2 fcall_ro read_allowed 0]
+        assert_equal "fcallrovalue" $result
+        
+        # Cleanup
+        r del fcallrokey
+        r function delete dbtestro
+    }
+    
+    test {Test EVAL with multiple database switches in script} {
+        r ACL SETUSER eval-multi-db on nopass +@all ~* db=0,1,2
+        $r2 auth eval-multi-db password
+        
+        assert_equal "OK" [$r2 select 0]
+        
+        set result [$r2 eval {
+            server.call('SELECT', '0')
+            server.call('SET', 'key0', 'val0')
+            server.call('SELECT', '1')
+            server.call('SET', 'key1', 'val1')
+            server.call('SELECT', '2')
+            server.call('SET', 'key2', 'val2')
+            return 'OK'
+        } 0]
+        assert_equal "OK" $result
+        
+        $r2 select 0
+        assert_equal "val0" [$r2 get key0]
+        $r2 select 1
+        assert_equal "val1" [$r2 get key1]
+        $r2 select 2
+        assert_equal "val2" [$r2 get key2]
+        
+        $r2 select 0
+        catch {$r2 eval {
+            server.call('SELECT', '0')
+            server.call('SET', 'key0', 'newval')
+            server.call('SELECT', '3')
+            server.call('SET', 'key3', 'val3')
+            return 'OK'
+        } 0} err
+        assert_match "*ACL failure in script*No permissions to access database*" $err
+        
+        # Cleanup
+        $r2 select 0
+        $r2 del key0
+        $r2 select 1
+        $r2 del key1
+        $r2 select 2
+        $r2 del key2
+        $r2 select 0
     }
 
     test {ACL stats for invalid database accesses} {

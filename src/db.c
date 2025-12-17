@@ -2955,7 +2955,6 @@ int bitfieldGetKeys(struct serverCommand *cmd, robj **argv, int argc, getKeysRes
     return 1;
 }
 
-
 int *selectDbIdArgs(robj **argv, int argc, int *count) {
     if (argc < 2) return NULL;
 

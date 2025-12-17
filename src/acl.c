@@ -355,7 +355,7 @@ static sds sdsCatPatternString(sds base, keyPattern *pat) {
 static aclSelector *ACLCreateSelector(int flags) {
     aclSelector *selector = zmalloc(sizeof(aclSelector));
     selector->flags = flags | server.acl_pubsub_default;
-    selector->flags = selector->flags | SELECTOR_FLAG_ALLDBS;
+    selector->flags |= SELECTOR_FLAG_ALLDBS;
     selector->patterns = listCreate();
     selector->channels = listCreate();
     selector->dbs = intsetNew();
@@ -1788,7 +1788,7 @@ static void cleanupACLKeyResultCache(aclKeyResultCache *cache) {
     if (cache->keys_init) getKeysFreeResult(&(cache->keys));
 }
 
-/* Inline func to check if command should be restricted in restricted db */
+/* Inline func to check if command should be restricted */
 static inline int shouldRestrictCmd(struct serverCommand *cmd) {
     return (cmd->acl_categories & ACL_CATEGORY_KEYSPACE) ||
            (cmd->acl_categories & ACL_CATEGORY_READ) ||
@@ -2014,7 +2014,6 @@ int ACLUserCheckChannelPerm(user *u, sds channel, int is_pattern) {
     }
     return ACL_DENIED_CHANNEL;
 }
-
 
 /* Lower level API that checks if a specified user is able to execute a given command.
  *

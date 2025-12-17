@@ -717,7 +717,7 @@ char *hashTypeCurrentFromHashTable(hashTypeIterator *hi, int what, size_t *len) 
 
     if (what & OBJ_HASH_FIELD) {
         sds key = entryGetField(hi->next);
-        if (key) *len = sdslen(key);
+        *len = sdslen(key);
         return key;
     }
     return entryGetValue(hi->next, len);

@@ -43,6 +43,9 @@ jobs:
       - name: unit tests
         run: |
           ./src/valkey-unit-tests
+          ./src/gtest/valkey-unit-gtests
+          rm -rf deps/googletest
+          rm -rf deps/gtest-parallel
 
   test-ubuntu-latest-compatibility:
     runs-on: ubuntu-latest
@@ -87,7 +90,7 @@ jobs:
           sudo apt-get install -y cmake libssl-dev
           mkdir -p build-release
           cd build-release
-          cmake -DCMAKE_BUILD_TYPE=Release .. -DBUILD_TLS=yes -DBUILD_UNIT_TESTS=yes
+          cmake -DCMAKE_BUILD_TYPE=Release .. -DBUILD_TLS=yes -DBUILD_UNIT_TESTS=yes -DBUILD_UNIT_GTESTS=yes
           make -j$(nproc)
       - name: test
         run: |
@@ -102,6 +105,9 @@ jobs:
       - name: unit tests
         run: |
           ./build-release/bin/valkey-unit-tests
+          ./build-release/bin/valkey-unit-gtests
+          rm -rf deps/googletest
+          rm -rf deps/gtest-parallel
 
   test-sanitizer-address:
     runs-on: ubuntu-latest
@@ -117,7 +123,11 @@ jobs:
       - name: module api test
         run: CFLAGS='-Werror' ./runtest-moduleapi --verbose --dump-logs
       - name: unit tests
-        run: ./src/valkey-unit-tests
+        run: |
+          ./src/valkey-unit-tests
+          ./src/gtest/valkey-unit-gtests
+          rm -rf deps/googletest
+          rm -rf deps/gtest-parallel
 
   test-rdma:
     runs-on: ubuntu-latest
@@ -178,6 +188,9 @@ jobs:
       - name: unit tests
         run: |
           ./src/valkey-unit-tests
+          ./src/gtest/valkey-unit-gtests
+          rm -rf deps/googletest
+          rm -rf deps/gtest-parallel
 
   build-libc-malloc:
     runs-on: ubuntu-latest

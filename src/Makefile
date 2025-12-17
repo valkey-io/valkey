@@ -31,7 +31,7 @@ endif
 ifneq ($(OPTIMIZATION),-O0)
 	OPTIMIZATION+=-fno-omit-frame-pointer
 endif
-DEPENDENCY_TARGETS=libvalkey linenoise lua hdr_histogram fpconv gtest
+DEPENDENCY_TARGETS=libvalkey linenoise lua hdr_histogram fpconv
 NODEPS:=clean distclean
 
 # Default settings
@@ -294,6 +294,8 @@ ifeq ($(MALLOC),jemalloc)
 	FINAL_CFLAGS+= -DUSE_JEMALLOC -I../deps/jemalloc/include
 	FINAL_LIBS := ../deps/jemalloc/lib/libjemalloc.a $(FINAL_LIBS)
 endif
+
+DEPENDENCY_TARGETS+= gtest
 
 ifeq ($(USE_LTTNG),yes)
 	FINAL_CFLAGS+=-DUSE_LTTNG

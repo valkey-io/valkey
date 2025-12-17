@@ -142,7 +142,13 @@ gtest: .make-prerequisites
 		rm -rf gtest-parallel; \
 		git clone --depth 1 https://github.com/google/gtest-parallel.git gtest-parallel; \
 	fi
-	cd googletest && cmake3 -B build -DCMAKE_BUILD_TYPE=Release
-	cd googletest && cmake3 --build build
+
+	@CMAKE=$$(command -v cmake3 || command -v cmake); \
+	if [ -z "$$CMAKE" ]; then \
+		echo "Error: cmake or cmake3 not found"; \
+		exit 1; \
+	fi; \
+	cd googletest && $$CMAKE -B build -DCMAKE_BUILD_TYPE=Release && \
+	$$CMAKE --build build
 
 .PHONY: gtest

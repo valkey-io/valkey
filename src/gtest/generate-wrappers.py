@@ -113,7 +113,7 @@ extern "C" {
     }''' % (m.ret_type, m.name, m.full_args, prefix, m.name, names, prefix, m.name, names))
 
     f.write('''
-};
+}
 
 MockValkey::MockValkey() {
     // Set the global valkey to the current

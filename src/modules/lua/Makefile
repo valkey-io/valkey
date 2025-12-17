@@ -10,7 +10,16 @@ else
 	SHOBJ_LDFLAGS= -shared $(LDFLAGS)
 endif
 
+# BSD variants support
 ifeq ($(uname_S),FreeBSD)
+	SHOBJ_LDFLAGS+= -lm
+endif
+
+ifeq ($(uname_S),OpenBSD)
+	SHOBJ_LDFLAGS+= -lm
+endif
+
+ifeq ($(uname_S),NetBSD)
 	SHOBJ_LDFLAGS+= -lm
 endif
 

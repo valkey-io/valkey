@@ -1144,7 +1144,7 @@ static void addHashIteratorCursorToReply(writePreparedClient *wpc, hashTypeItera
         else
             addWritePreparedReplyBulkLongLong(wpc, vll);
     } else if (hi->encoding == OBJ_ENCODING_HASHTABLE) {
-        size_t len = 0;
+        size_t len;
         char *value = hashTypeCurrentFromHashTable(hi, what, &len);
         addWritePreparedReplyBulkCBuffer(wpc, value, len);
     } else {

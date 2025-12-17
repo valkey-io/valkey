@@ -6783,10 +6783,10 @@ ValkeyModuleCallReply *VM_Call(ValkeyModuleCtx *ctx, const char *cmdname, const 
     }
 
 cleanup:
-    if ((flags & VALKEYMODULE_ARGV_SCRIPT_MODE) && error_code) {
+    errno = error_code;
+    if ((flags & VALKEYMODULE_ARGV_SCRIPT_MODE) && errno) {
         afterErrorReply(c, reply_error_msg, sdslen(reply_error_msg), 0);
         incrCommandStatsOnError(c->cmd, ERROR_COMMAND_REJECTED);
-        errno = error_code;
     }
     if (reply_error_msg != NULL) {
         serverAssert(reply == NULL);

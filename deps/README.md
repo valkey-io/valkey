@@ -7,7 +7,7 @@ should be provided by the operating system.
 * **lua** is Lua 5.1 with minor changes for security and additional libraries.
 * **hdr_histogram** Used for per-command latency tracking histograms.
 * **fast_float** is a replacement for strtod to convert strings to floats efficiently.
-* **googletest** is Google's C++ testing framework used for gtest unit tests.
+* **googletest** is Google's testing framework used for gtest unit tests.
 * **gtest-parallel** is a script for running googletest tests in parallel.
 
 How to upgrade the above dependencies

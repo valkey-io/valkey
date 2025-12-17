@@ -1453,6 +1453,9 @@ static long long streamEstimateDistance(stream *s, streamCG *cg, streamID *next_
      * otherwise it is considered to be the calculated value.
      * This is used to align with the streamEstimateDistanceFromFirstEverEntry method.
      */
+    if (streamCompareID(next_id, &s->last_id) == 0) {
+        return s->entries_added;
+    }
     long long step = streamCompareID(&cg->last_id, next_id) == 0 ? 0 : 1;
     if (cg->entries_read != SCG_INVALID_ENTRIES_READ && !streamRangeHasTombstones(s, &cg->last_id, NULL)) {
         /* A valid counter and no future tombstones mean we can

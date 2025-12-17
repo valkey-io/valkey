@@ -25,9 +25,9 @@ start_server {
             set group_name [dict get $group_info name]
             set entries_read [dict get $group_info entries-read]
             if {$group_name == "mygroup1"} {
-                assert_equal $entries_read 0
+                assert_equal $entries_read 4
             } else {
-                assert_equal $entries_read 3
+                assert_equal $entries_read 4
             }
         }
     }
@@ -1255,8 +1255,8 @@ start_server {
         r XREADGROUP GROUP g1 c11 STREAMS x >
         set reply [r XINFO STREAM x FULL]
         set group [lindex [dict get $reply groups] 0]
-        assert_equal [dict get $group entries-read] 6
-        assert_equal [dict get $group lag] 1
+        assert_equal [dict get $group entries-read] 7
+        assert_equal [dict get $group lag] 0
     }
 
     test {Consumer group lag with XADD trimming} {
@@ -1321,8 +1321,8 @@ start_server {
         r XREADGROUP GROUP g1 c11 STREAMS x >
         set reply [r XINFO STREAM x FULL]
         set group [lindex [dict get $reply groups] 0]
-        assert_equal [dict get $group entries-read] 7
-        assert_equal [dict get $group lag] 1
+        assert_equal [dict get $group entries-read] 8
+        assert_equal [dict get $group lag] 0
     }
 
     test {Consumer group lag with with tombstone} {

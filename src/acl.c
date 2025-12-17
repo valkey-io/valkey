@@ -1788,6 +1788,14 @@ static void cleanupACLKeyResultCache(aclKeyResultCache *cache) {
     if (cache->keys_init) getKeysFreeResult(&(cache->keys));
 }
 
+/* Inline func to check if command should be restricted in restricted db */
+static inline int shouldRestrictCmd(struct serverCommand *cmd) {
+    return (cmd->acl_categories & ACL_CATEGORY_KEYSPACE) ||
+           (cmd->acl_categories & ACL_CATEGORY_READ) ||
+           (cmd->acl_categories & ACL_CATEGORY_WRITE) ||
+           doesCommandHaveKeys(cmd);
+}
+
 /* Check if the command is ready to be executed according to the
  * ACLs associated with the specified selector.
  *
@@ -1836,7 +1844,7 @@ static int ACLSelectorCheckCmd(aclSelector *selector,
         if (!selector->dbs || intsetLen(selector->dbs) != (uint32_t)server.dbnum) {
             return ACL_DENIED_DB;
         }
-    } else if (((cmd->flags & CMD_READONLY) || (cmd->flags & CMD_WRITE)) && !ACLSelectorCanAccessDb(selector, dbid)) {
+    } else if (shouldRestrictCmd(cmd) && !ACLSelectorCanAccessDb(selector, dbid)) {
         if (keyidxptr) *keyidxptr = 0;
         return ACL_DENIED_DB;
     }

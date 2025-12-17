@@ -1008,6 +1008,36 @@ start_server {tags {"acl external:skip"}} {
         assert_match "*NOPERM*database*" $err
     }
     
+    test {Test WATCH command with no database access} {
+        r ACL SETUSER watch-nodb-user on nopass +@all ~* db=1
+        $r2 auth watch-nodb-user password
+        
+        catch {$r2 watch somekey} err
+        assert_match "*NOPERM*database*" $err
+        
+        assert_equal "OK" [$r2 select 1]
+        assert_equal "OK" [$r2 watch somekey]
+        
+        # cleanup
+        $r2 auth default password
+        $r2 select 0
+    }
+    
+    test {Test keyspace command with no database access} {
+        r ACL SETUSER exists-nodb-user on nopass +@all ~* db=1
+        $r2 auth exists-nodb-user password
+        
+        catch {$r2 exists somekey} err
+        assert_match "*NOPERM*database*" $err
+        
+        assert_equal "OK" [$r2 select 1]
+        assert_equal "0" [$r2 exists somekey]
+
+        # cleanup
+        $r2 auth default password
+        $r2 select 0
+    }
+    
         test {Test MULTI with SELECT to invalid database} {
         r ACL SETUSER db-invalid-select on nopass +@all ~* db=0,1
         $r2 auth db-invalid-select password

@@ -669,7 +669,7 @@ int checkAlreadyExpired(long long when) {
      * If the server is receiving the key from a slot migration, we will accept
      * expired keys and wait for the source to propagate deletion. */
     if (server.current_client && server.current_client->slot_migration_job) return 0;
-    return (when <= commandTimeSnapshot() && !server.loading && !server.primary_host && !server.import_mode);
+    return (when <= commandTimeSnapshot() && !server.loading && !server.primary_host && (when < 0 || !server.import_mode));
 }
 
 /* Parse additional flags of expire commands up to the specify max_index.

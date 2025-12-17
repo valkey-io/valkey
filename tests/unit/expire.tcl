@@ -949,6 +949,18 @@ start_server {tags {"expire"}} {
             fail "Keys did not actively expire."
         }
     }
+
+    test {Negative ttl will force key delete although import mode is on} {
+        r flushall
+        r config set import-mode yes
+        r set foo bar
+        r expireat foo -1
+        r set foo1 bar
+        r expireat foo1 -10000
+        r config set import-mode no
+        after 500
+        assert_equal [r dbsize] 0
+    }
 }
 
 start_server {tags {expire} overrides {hz 100}} {

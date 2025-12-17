@@ -879,11 +879,7 @@ void debugCommand(client *c) {
 
         tv.tv_sec = utime / 1000000;
         tv.tv_nsec = (utime % 1000000) * 1000;
-        if (nanosleep(&tv, NULL) == 0) {
-            /* Cleaning up errno here because in some versions of macOS, nanosleep
-             * sets errno to ETIMEDOUT when it returns successfully. */
-            errno = 0;
-        }
+        nanosleep(&tv, NULL);
         addReply(c, shared.ok);
     } else if (!strcasecmp(c->argv[1]->ptr, "set-active-expire") && c->argc == 3) {
         server.active_expire_enabled = atoi(c->argv[2]->ptr);

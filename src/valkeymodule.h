@@ -2053,7 +2053,8 @@ VALKEYMODULE_API int (*ValkeyModule_ACLCheckChannelPermissions)(ValkeyModuleUser
 VALKEYMODULE_API int (*ValkeyModule_ACLCheckPermissions)(ValkeyModuleUser *user,
                                                          ValkeyModuleString **argv,
                                                          int argc,
-                                                         int dbid) VALKEYMODULE_ATTR;
+                                                         int dbid,
+                                                         ValkeyModuleACLLogEntryReason *denial_reason) VALKEYMODULE_ATTR;
 VALKEYMODULE_API void (*ValkeyModule_ACLAddLogEntry)(ValkeyModuleCtx *ctx,
                                                      ValkeyModuleUser *user,
                                                      ValkeyModuleString *object,

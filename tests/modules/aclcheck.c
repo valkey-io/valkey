@@ -98,41 +98,36 @@ int aclcheck_check_permissions(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, 
     ValkeyModuleString *user_name = ValkeyModule_GetCurrentUserName(ctx);
     ValkeyModuleUser *user = ValkeyModule_GetModuleUserFromUserName(user_name);
 
-    int ret = ValkeyModule_ACLCheckPermissions(user, argv + 2, argc - 2, (int)dbid);
+    ValkeyModuleACLLogEntryReason denial_reason;
+    int ret = ValkeyModule_ACLCheckPermissions(user, argv + 2, argc - 2, (int)dbid, &denial_reason);
 
     if (ret != VALKEYMODULE_OK) {
         int saved_errno = errno;
         if (saved_errno == EINVAL) {
-            ValkeyModule_ReplyWithError(ctx, "ERR invalid DB index");
-        } else if (saved_errno == ENOENT) {
-            ValkeyModule_ReplyWithError(ctx, "ERR unknown command");
-        } else {
+            ValkeyModule_ReplyWithError(ctx, "ERR invalid arguments");
+        } else if (saved_errno == EACCES) {
             ValkeyModule_ReplyWithError(ctx, "NOPERM");
-            ValkeyModuleACLLogEntryReason reason;
             ValkeyModuleString *obj;
-            switch (saved_errno) {
-                case EACCES:
-                    reason = VALKEYMODULE_ACL_LOG_CMD;
+            switch (denial_reason) {
+                case VALKEYMODULE_ACL_LOG_CMD:
                     obj = argv[2];
                     break;
-                case EPERM:
-                    reason = VALKEYMODULE_ACL_LOG_KEY;
+                case VALKEYMODULE_ACL_LOG_KEY:
                     obj = (argc > 3) ? argv[3] : argv[2];
                     break;
-                case ECHILD:
-                    reason = VALKEYMODULE_ACL_LOG_CHANNEL;
+                case VALKEYMODULE_ACL_LOG_CHANNEL:
                     obj = (argc > 3) ? argv[3] : argv[2];
                     break;
-                case ENOTSUP:
-                    reason = VALKEYMODULE_ACL_LOG_DB;
+                case VALKEYMODULE_ACL_LOG_DB:
                     obj = argv[1];
                     break;
                 default:
-                    reason = VALKEYMODULE_ACL_LOG_CMD;
                     obj = argv[2];
                     break;
             }
-            ValkeyModule_ACLAddLogEntry(ctx, user, obj, reason);
+            ValkeyModule_ACLAddLogEntry(ctx, user, obj, denial_reason);
+        } else {
+            ValkeyModule_ReplyWithError(ctx, "ERR unexpected error");
         }
         ValkeyModule_FreeModuleUser(user);
         ValkeyModule_FreeString(ctx, user_name);

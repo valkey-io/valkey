@@ -153,14 +153,14 @@ start_server {tags {"modules acl"}} {
 
         # Invalid dbid
         catch {r aclcheck.check.permissions -1 set x 5} e
-        assert_match {*invalid DB index*} $e
+        assert_match {*invalid arguments*} $e
 
         catch {r aclcheck.check.permissions 999 set x 5} e
-        assert_match {*invalid DB index*} $e
+        assert_match {*invalid arguments*} $e
 
         # Invalid command
         catch {r aclcheck.check.permissions 0 nonexistentcmd arg1 arg2} e
-        assert_match {*unknown command*} $e
+        assert_match {*invalid arguments*} $e
 
         assert_equal [r auth default ""] OK
         r acl deluser testuser

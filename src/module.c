@@ -10174,15 +10174,21 @@ int VM_ACLCheckChannelPermissions(ValkeyModuleUser *user, ValkeyModuleString *ch
  *
  * On success VALKEYMODULE_OK is returned, otherwise VALKEYMODULE_ERR is returned and
  * errno is set to one of the following values:
+ * * EINVAL: Invalid arguments (e.g., negative dbid or dbid >= server.dbnum, command does not exist)
+ * * EACCES: Permission denied (for any ACL violation)
  *
- * * EINVAL: Invalid arguments (e.g., negative dbid or dbid >= server.dbnum)
- * * ENOENT: Specified command does not exist
- * * EACCES: User does not have permission to execute the command
- * * EPERM: User does not have permission to access a key
- * * ECHILD: User does not have permission to access a channel
- * * ENOTSUP: User does not have permission to access the database
+ * The optional denial_reason parameter can be used to get more specific information about
+ * why the permission was denied. If provided (not NULL), it will be set to one of:
+ * * VALKEYMODULE_ACL_LOG_CMD: User does not have permission to execute the command
+ * * VALKEYMODULE_ACL_LOG_KEY: User does not have permission to access a key
+ * * VALKEYMODULE_ACL_LOG_CHANNEL: User does not have permission to access a channel
+ * * VALKEYMODULE_ACL_LOG_DB: User does not have permission to access the database
  */
-int VM_ACLCheckPermissions(ValkeyModuleUser *user, ValkeyModuleString **argv, int argc, int dbid) {
+int VM_ACLCheckPermissions(ValkeyModuleUser *user,
+                           ValkeyModuleString **argv,
+                           int argc,
+                           int dbid,
+                           ValkeyModuleACLLogEntryReason *denial_reason) {
     int keyidxptr;
     struct serverCommand *cmd;
 
@@ -10192,18 +10198,21 @@ int VM_ACLCheckPermissions(ValkeyModuleUser *user, ValkeyModuleString **argv, in
     }
 
     if ((cmd = lookupCommand(argv, argc)) == NULL) {
-        errno = ENOENT;
+        errno = EINVAL;
         return VALKEYMODULE_ERR;
     }
 
     int acl_retval = ACLCheckAllUserCommandPerm(user->user, cmd, argv, argc, dbid, &keyidxptr);
     if (acl_retval != ACL_OK) {
-        switch (acl_retval) {
-        case ACL_DENIED_CMD: errno = EACCES; break;
-        case ACL_DENIED_KEY: errno = EPERM; break;
-        case ACL_DENIED_CHANNEL: errno = ECHILD; break;
-        case ACL_DENIED_DB: errno = ENOTSUP; break;
-        default: errno = EACCES; break;
+        errno = EACCES;
+        if (denial_reason) {
+            switch (acl_retval) {
+            case ACL_DENIED_CMD: *denial_reason = VALKEYMODULE_ACL_LOG_CMD; break;
+            case ACL_DENIED_KEY: *denial_reason = VALKEYMODULE_ACL_LOG_KEY; break;
+            case ACL_DENIED_CHANNEL: *denial_reason = VALKEYMODULE_ACL_LOG_CHANNEL; break;
+            case ACL_DENIED_DB: *denial_reason = VALKEYMODULE_ACL_LOG_DB; break;
+            default: *denial_reason = VALKEYMODULE_ACL_LOG_CMD; break;
+            }
         }
         return VALKEYMODULE_ERR;
     }

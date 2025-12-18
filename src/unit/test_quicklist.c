@@ -5,6 +5,7 @@
 #include <sys/time.h>
 #include <stdlib.h>
 
+#include "../fmacros.h"
 #include "../zmalloc.h"
 #include "../listpack.h"
 #include "../quicklist.c"

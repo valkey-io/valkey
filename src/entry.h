@@ -1,6 +1,10 @@
 #ifndef _ENTRY_H_
 #define _ENTRY_H_
 
+/* Ensure feature macros from fmacros.h are active even if entry.h is
+ * included before server.h */
+#include "fmacros.h"
+
 #include "sds.h"
 #include <stdbool.h>
 

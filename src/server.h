@@ -3116,6 +3116,7 @@ void abortFailover(const char *err);
 const char *getFailoverStateString(void);
 sds getReplicaPortString(void);
 int sendCurrentOffsetToReplica(client *replica);
+int replicaRdbVersion(client *replica);
 void addRdbReplicaToPsyncWait(client *replica);
 void initClientReplicationData(client *c);
 void freeClientReplicationData(client *c);

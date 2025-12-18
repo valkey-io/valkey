@@ -215,6 +215,31 @@ static inline client *lookupRdbClientByID(uint64_t id) {
     return c;
 }
 
+/* Decide which RDB version to send to a replica. */
+int replicaRdbVersion(client *replica) {
+    if (!(replica->repl_data->replica_capa & REPLICA_CAPA_EOF)) {
+        /* The replica doesn't have CAPA EOF, so we need to use disk-based
+         * replication, but we don't want to write an old RDB version to disk,
+         * because it can be reused for disk-based full sync to other replicas,
+         * so we force the latest RDB version. */
+        return RDB_VERSION;
+    }
+    /* Search the version map backwards to select the highest RDB version the
+     * replica understands. */
+    const int n = sizeof(RDB_VERSION_MAP) / sizeof(RDB_VERSION_MAP[0]);
+    for (int i = n - 1; i >= 0; i--) {
+        if (replica->repl_data->replica_version >= RDB_VERSION_MAP[i][1]) {
+            return RDB_VERSION_MAP[i][0];
+        }
+    }
+    /* Fallback to RDB 11, which was introduced in 7.2.
+     *
+     * 7.2 and older don't report their version. If no version was provided, we
+     * assume it's 7.2. We don't currently produce RDB 10 (7.0) and RDB 9
+     * (5.0--6.2). */
+    return 11;
+}
+
 /* Replication: Primary side - connections association.
  * During dual channel sync, association is used to keep replication data
  * in the backlog until the replica requests PSYNC.
@@ -945,6 +970,9 @@ need_full_resync:
  * of the replicas waiting for this BGSAVE, so represents the replica capabilities
  * all the replicas support. Can be tested via REPLICA_CAPA_* macros.
  *
+ * The rdbver argument is the RDB version to use. It should be calculated based
+ * on what the replicas reported using REPLCONF VERSION.
+ *
  * Side effects, other than starting a BGSAVE:
  *
  * 1) Handle the replicas in WAIT_START state, by preparing them for a full
@@ -955,16 +983,23 @@ need_full_resync:
  *    started.
  *
  * Returns C_OK on success or C_ERR otherwise. */
-int startBgsaveForReplication(int mincapa, int req) {
+int startBgsaveForReplication(int mincapa, int req, int rdbver) {
     int retval;
     int socket_target = 0;
     listIter li;
     listNode *ln;
 
-    /* We use a socket target if replica can handle the EOF marker and we're configured to do diskless syncs.
-     * Note that in case we're creating a "filtered" RDB (functions-only, for example) we also force socket replication
-     * to avoid overwriting the snapshot RDB file with filtered data. */
-    socket_target = (server.repl_diskless_sync || req & REPLICA_REQ_RDB_MASK) && (mincapa & REPLICA_CAPA_EOF);
+    /* We use a socket target if replica can handle the EOF marker and we're
+     * configured to do diskless syncs.
+     *
+     * Note that in case we're creating a "filtered" RDB (functions-only, for
+     * example) or an older RDB version, we also force socket replication to
+     * avoid overwriting the snapshot RDB file, which needs to be usable by
+     * other replicas (not using filtered RDB or older versions) in disk-based
+     * full sync. */
+    socket_target = (mincapa & REPLICA_CAPA_EOF) && (server.repl_diskless_sync ||
+                                                     (req & REPLICA_REQ_RDB_MASK) ||
+                                                     rdbver != RDB_VERSION);
     /* `SYNC` should have failed with error if we don't support socket and require a filter, assert this here */
     serverAssert(socket_target || !(req & REPLICA_REQ_RDB_MASK));
 
@@ -978,7 +1013,7 @@ int startBgsaveForReplication(int mincapa, int req) {
      * otherwise replica will miss repl-stream-db. */
     if (rsiptr) {
         if (socket_target)
-            retval = rdbSaveToReplicasSockets(req, rsiptr);
+            retval = rdbSaveToReplicasSockets(req, rdbver, rsiptr);
         else {
             /* Keep the page cache since it'll get used soon */
             retval = rdbSaveBackground(req, server.rdb_filename, rsiptr, RDBFLAGS_REPLICATION | RDBFLAGS_KEEP_CACHE);
@@ -1027,6 +1062,7 @@ int startBgsaveForReplication(int mincapa, int req) {
             if (replica->repl_data->repl_state == REPLICA_STATE_WAIT_BGSAVE_START) {
                 /* Check replica has the exact requirements */
                 if (replica->repl_data->replica_req != req) continue;
+                if (replicaRdbVersion(replica) != rdbver) continue;
                 replicationSetupReplicaForFullResync(replica, getPsyncInitialOffset());
             }
         }
@@ -1227,7 +1263,9 @@ void syncCommand(client *c) {
             /* We don't have a BGSAVE in progress, let's start one. Diskless
              * or disk-based mode is determined by replica's capacity. */
             if (!hasActiveChildProcess()) {
-                startBgsaveForReplication(c->repl_data->replica_capa, c->repl_data->replica_req);
+                startBgsaveForReplication(c->repl_data->replica_capa,
+                                          c->repl_data->replica_req,
+                                          replicaRdbVersion(c));
             } else {
                 serverLog(LL_NOTICE, "No BGSAVE in progress, but another BG operation is active. "
                                      "BGSAVE for replication delayed");
@@ -5325,7 +5363,7 @@ void replicationCron(void) {
     replication_cron_loops++; /* Incremented with frequency 1 HZ. */
 }
 
-int shouldStartChildReplication(int *mincapa_out, int *req_out) {
+int shouldStartChildReplication(int *mincapa_out, int *req_out, int *rdbver_out) {
     /* We should start a BGSAVE good for replication if we have replicas in
      * WAIT_BGSAVE_START state.
      *
@@ -5336,6 +5374,7 @@ int shouldStartChildReplication(int *mincapa_out, int *req_out) {
         time_t idle, max_idle = 0;
         int replicas_waiting = 0;
         int mincapa;
+        int rdbver;
         int req;
         int first = 1;
         listNode *ln;
@@ -5348,7 +5387,9 @@ int shouldStartChildReplication(int *mincapa_out, int *req_out) {
                 if (first) {
                     /* Get first replica's requirements */
                     req = replica->repl_data->replica_req;
-                } else if (req != replica->repl_data->replica_req) {
+                    rdbver = replicaRdbVersion(replica);
+                } else if (req != replica->repl_data->replica_req ||
+                           rdbver != replicaRdbVersion(replica)) {
                     /* Skip replicas that don't match */
                     continue;
                 }
@@ -5366,6 +5407,7 @@ int shouldStartChildReplication(int *mincapa_out, int *req_out) {
                                  max_idle >= server.repl_diskless_sync_delay)) {
             if (mincapa_out) *mincapa_out = mincapa;
             if (req_out) *req_out = req;
+            if (rdbver_out) *rdbver_out = rdbver;
             return 1;
         }
     }
@@ -5376,12 +5418,13 @@ int shouldStartChildReplication(int *mincapa_out, int *req_out) {
 void replicationStartPendingFork(void) {
     int mincapa = -1;
     int req = -1;
+    int rdbver = -1;
 
-    if (shouldStartChildReplication(&mincapa, &req)) {
+    if (shouldStartChildReplication(&mincapa, &req, &rdbver)) {
         /* Start the BGSAVE. The called function may start a
          * BGSAVE with socket target or disk target depending on the
          * configuration and replicas capabilities and requirements. */
-        startBgsaveForReplication(mincapa, req);
+        startBgsaveForReplication(mincapa, req, rdbver);
     }
 }
 

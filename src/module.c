@@ -1069,7 +1069,7 @@ int moduleGetCommandChannelsViaAPI(struct serverCommand *cmd, robj **argv, int a
     ctx.keys_result = result;
 
     cp->func(&ctx, (void **)argv, argc);
-    /* We currently always use the array allocated by VM_RM_ChannelAtPosWithFlags() and don't try
+    /* We currently always use the array allocated by VM_ChannelAtPosWithFlags() and don't try
      * to optimize for the pre-allocated buffer. */
     moduleFreeContext(&ctx);
     return result->numkeys;

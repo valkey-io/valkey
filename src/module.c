@@ -1087,7 +1087,7 @@ int moduleGetCommandChannelsViaAPI(struct serverCommand *cmd, robj **argv, int a
     ctx.keys_result = result;
 
     cp->func(&ctx, (void **)argv, argc);
-    /* We currently always use the array allocated by VM_RM_ChannelAtPosWithFlags() and don't try
+    /* We currently always use the array allocated by VM_ChannelAtPosWithFlags() and don't try
      * to optimize for the pre-allocated buffer. */
     moduleFreeContext(&ctx);
     return result->numkeys;
@@ -1121,8 +1121,7 @@ int VM_IsKeysPositionRequest(ValkeyModuleCtx *ctx) {
  *
  *     if (ValkeyModule_IsKeysPositionRequest(ctx)) {
  *         ValkeyModule_KeyAtPosWithFlags(ctx, 2, VALKEYMODULE_CMD_KEY_RO | VALKEYMODULE_CMD_KEY_ACCESS);
- *         ValkeyModule_KeyAtPosWithFlags(ctx, 1, VALKEYMODULE_CMD_KEY_RW | VALKEYMODULE_CMD_KEY_UPDATE |
- * VALKEYMODULE_CMD_KEY_ACCESS);
+ *         ValkeyModule_KeyAtPosWithFlags(ctx, 1, VALKEYMODULE_CMD_KEY_RW | VALKEYMODULE_CMD_KEY_UPDATE | VALKEYMODULE_CMD_KEY_ACCESS);
  *     }
  *
  *  Note: in the example above the get keys API could have been handled by key-specs (preferred).

@@ -278,8 +278,8 @@ if (BUILD_SANITIZER)
 endif ()
 
 include_directories("${CMAKE_SOURCE_DIR}/deps/libvalkey/include")
+include_directories("${CMAKE_SOURCE_DIR}/src/modules/lua")
 include_directories("${CMAKE_SOURCE_DIR}/deps/linenoise")
-include_directories("${CMAKE_SOURCE_DIR}/deps/lua/src")
 include_directories("${CMAKE_SOURCE_DIR}/deps/hdr_histogram")
 include_directories("${CMAKE_SOURCE_DIR}/deps/fpconv")
 
@@ -292,6 +292,10 @@ endif ()
 
 # Common compiler flags
 add_valkey_server_compiler_options("-pedantic")
+
+if (NOT BUILD_LUA)
+    message(STATUS "Lua scripting engine is disabled")
+endif()
 
 # ----------------------------------------------------
 # Build options (allocator, tls, rdma et al) - end

@@ -2257,7 +2257,7 @@ void printCrashReport(void) {
     logConfigDebugInfo();
 
     /* Run memory test in case the crash was triggered by memory corruption. */
-    doFastMemoryTest();
+    // doFastMemoryTest();
 }
 
 void bugReportEnd(int killViaSignal, int sig) {

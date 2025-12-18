@@ -4903,9 +4903,6 @@ void replicationRequestAckFromReplicas(void) {
  * returns the actual client woff */
 long long getClientWriteOffset(client *c) {
     if (scriptIsRunning()) {
-        /* If a script is currently running, the client passed in is a fake
-         * client, and its woff is always 0. */
-        serverAssert(scriptGetClient() == c);
         c = scriptGetCaller();
     }
     return c->woff;

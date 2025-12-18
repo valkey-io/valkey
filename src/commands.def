@@ -6894,7 +6894,7 @@ struct COMMAND_ARG ACL_GENPASS_Args[] = {
 commandHistory ACL_GETUSER_History[] = {
 {"6.2.0","Added Pub/Sub channel patterns."},
 {"7.0.0","Added selectors and changed the format of key and channel patterns from a list to their rule representation."},
-{"9.1.0","Added database permission patterns."},
+{"9.1.0","Added database permission rules."},
 };
 #endif
 
@@ -7021,7 +7021,7 @@ const char *ACL_SAVE_Tips[] = {
 commandHistory ACL_SETUSER_History[] = {
 {"6.2.0","Added Pub/Sub channel patterns."},
 {"7.0.0","Added selectors and key based permissions."},
-{"9.1.0","Added database permission patterns."},
+{"9.1.0","Added database permission rules."},
 };
 #endif
 

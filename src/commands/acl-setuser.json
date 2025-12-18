@@ -18,7 +18,7 @@
             ],
             [
                 "9.1.0",
-                "Added database permission patterns."
+                "Added database permission rules."
             ]
         ],
         "command_flags": [

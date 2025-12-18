@@ -7151,8 +7151,9 @@ void loadDataFromDisk(void) {
     if (server.aof_state == AOF_ON) {
         int ret = loadAppendOnlyFiles(server.aof_manifest);
         if (ret == AOF_FAILED || ret == AOF_OPEN_ERR) exit(1);
-        if (ret != AOF_NOT_EXIST)
+        if (ret != AOF_NOT_EXIST) {
             serverLog(LL_NOTICE, "DB loaded from append only file: %.3f seconds", (float)(ustime() - start) / 1000000);
+        }
     } else {
         rdbSaveInfo rsi = RDB_SAVE_INFO_INIT;
         int rsi_is_valid = 0;
@@ -7648,6 +7649,11 @@ __attribute__((weak)) int main(int argc, char **argv) {
         serverLog(LL_NOTICE, "Server initialized");
         aofLoadManifestFromDisk();
         loadDataFromDisk();
+        
+        /* Process external data loading after persistence data is loaded.
+         * This handles auto-loading of external data backups when modules
+         * are loaded at startup and have state to restore. */
+        processExternalDataLoadForFullSync();
         aofOpenIfNeededOnServerStart();
         aofDelHistoryFiles();
         if (server.cluster_enabled) {
@@ -7688,7 +7694,6 @@ __attribute__((weak)) int main(int argc, char **argv) {
 
     serverSetCpuAffinity(server.server_cpulist);
     setOOMScoreAdj(-1);
-    externalDataInit();
 
     aeMain(server.el);
     aeDeleteEventLoop(server.el);

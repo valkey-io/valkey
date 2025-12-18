@@ -2387,40 +2387,8 @@ void replicaAfterLoadPrimaryRDB(connection *conn, rdbSaveInfo *rsi) {
     }
     clearReplicationId2();
 
-    /* Load external data for full sync if enabled */
-    if (isExtDataOn()) {
-        if (server.ext_data_async_load) {
-            /* Async mode: Start load in background and proceed immediately */
-            serverLog(LL_NOTICE, "Starting async external data load for full sync");
-            if (externalDataLoadForFullSync() == EXTERNAL_SUCCESS) {
-                serverLog(LL_NOTICE, "External data async load initiated");
-            } else {
-                serverLog(LL_WARNING, "Failed to initiate async external data load");
-            }
-        } else {
-            /* Sync mode: Start load and wait for completion */
-            serverLog(LL_NOTICE, "Starting sync external data load for full sync");
-            if (externalDataLoadForFullSync() == EXTERNAL_SUCCESS) {
-                /* Wait for load to complete */
-                int sleep_ms = 100;
-                int max_wait = server.ext_data_load_timeout_ms / sleep_ms; /* Convert ms to iterations */
-                int waited = 0;
-                while (waited < max_wait) {
-                    if (externalDataLoadCheckComplete() == C_OK) {
-                        serverLog(LL_NOTICE, "External data loaded synchronously for full sync");
-                        break;
-                    }
-                    usleep(sleep_ms * 1000); /* Sleep 100ms */
-                    waited++;
-                }
-                if (waited >= max_wait) {
-                    serverLog(LL_WARNING, "Timeout waiting for external data load to complete");
-                }
-            } else {
-                serverLog(LL_WARNING, "Failed to initiate external data load for full sync");
-            }
-        }
-    }
+    /* Process external data loading for full sync */
+    processExternalDataLoadForFullSync();
 
     /* Let's create the replication backlog if needed. Replicas need to
      * accumulate the backlog regardless of the fact they have sub-replicas

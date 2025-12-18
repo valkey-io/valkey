@@ -337,13 +337,13 @@ void *bioProcessBackgroundJobs(void *arg) {
         } else if (job_type == BIO_EXTDATA_DUMP) {
             /* External data dump will be handled by calling the function
              * and storing result in atomic variables */
-            extern void externalDataProcessDumpForFullSync(void);
-            externalDataProcessDumpForFullSync();
+            extern void bioExternalDataDumpForFullSync(void);
+            bioExternalDataDumpForFullSync();
         } else if (job_type == BIO_EXTDATA_LOAD) {
             /* External data load will be handled by calling the function
              * and storing result in atomic variables */
-            extern void externalDataProcessLoadForFullSync(void);
-            externalDataProcessLoadForFullSync();
+            extern void bioExternalDataLoadForFullSync(void);
+            bioExternalDataLoadForFullSync();
         } else {
             serverPanic("Wrong job type in bioProcessBackgroundJobs().");
         }

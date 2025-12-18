@@ -114,11 +114,42 @@ void setGenericCommand(client *c,
             blockPostponeClient(c);
             return;
         } else if (result == EXTERNAL_ERROR) {
-            addReply(c, abort_reply ? abort_reply : shared.null[c->resp]);
+            /* Only send error reply to non-replicated clients.
+             * Replicated clients (from primary/AOF) should not receive replies. */
+            if (!mustObeyClient(c)) {
+                addReply(c, abort_reply ? abort_reply : shared.null[c->resp]);
+            }
         } else {
             // Success
             if (found) dbDelete(c->db, key);
-            addReply(c, ok_reply ? ok_reply : shared.ok);
+            
+            /* Only send OK reply to non-replicated clients.
+             * Replicated clients (from primary/AOF) should not receive replies. */
+            if (!mustObeyClient(c)) {
+                addReply(c, ok_reply ? ok_reply : shared.ok);
+            }
+            
+            /* Propagate the SET command with EXT flag to replicas and AOF.
+             * This ensures replicas also store the data externally. */
+            server.dirty++;
+            notifyKeyspaceEvent(NOTIFY_STRING, "set", key, c->db->id);
+            
+            /* Propagate the command to replicas and AOF */
+            int propagate_to_aof = server.aof_state != AOF_OFF;
+            int propagate_to_repl = listLength(server.replicas) > 0;
+            if (propagate_to_aof || propagate_to_repl) {
+                robj *ext_argv[4];
+                ext_argv[0] = shared.set;
+                ext_argv[1] = key;
+                ext_argv[2] = val;
+                ext_argv[3] = createStringObject("EXT", 3);
+                
+                if (propagate_to_aof) feedAppendOnlyFile(c->db->id, ext_argv, 4);
+                if (propagate_to_repl) replicationFeedReplicas(c->db->id, ext_argv, 4);
+                
+                /* Free the created EXT string object to avoid memory leak */
+                decrRefCount(ext_argv[3]);
+            }
         }
         goto cleanup;
     }

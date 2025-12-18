@@ -281,7 +281,7 @@ proc start_cluster {masters replicas options code {slot_allocator continuous_slo
     # Cluster mode only supports a single database, so before executing the tests
     # it needs to be configured correctly and needs to be reset after the tests.
     set old_singledb $::singledb
-    set ::singledb 1
+    # set ::singledb 1
     start_multiple_servers $node_count $options $code
     set ::singledb $old_singledb
 }

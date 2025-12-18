@@ -42,18 +42,18 @@ int externalFilterCallDelFunc(externalDataModuleInstance *fi, int dbid, robj *ke
 int externalDataCallSetReadonlyFunc(externalDataModuleInstance *mi);
 int externalDataCallDropReadonlyFunc(externalDataModuleInstance *mi);
 int externalDataCallDumpFunc(externalDataModuleInstance *mi, int slot, long long timestamp, ValkeyModuleString *target, ValkeyModuleString **backup_id);
-int externalDataCallLoadFunc(externalDataModuleInstance *mi, ValkeyModuleString *backup_id);
+int externalDataCallLoadFunc(externalDataModuleInstance *mi, ValkeyModuleString *backup_id, ValkeyModuleString *source);
 int externalDataDumpForFullSync(void);
 int externalDataDumpCheckComplete(ValkeyModuleString **backup_id);
 int externalDataLoadForFullSync(void);
 int externalDataLoadCheckComplete(void);
-void externalDataProcessDumpForFullSync(void);
-void externalDataProcessLoadForFullSync(void);
+void bioExternalDataDumpForFullSync(void);
+void bioExternalDataLoadForFullSync(void);
+void processExternalDataLoadForFullSync(void);
 
 int externalFilterIsIn(int id, void *key);
 
 /* Core used methods */
-int externalDataInit(void);
 int externalDataFind(int id, void *key, void **found);
 int externalDataWrite(int id, void *key, void *value);
 

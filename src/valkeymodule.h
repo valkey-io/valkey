@@ -1495,13 +1495,19 @@ typedef int (*ValkeyModuleExternalStorageDumpFunc)(
  *
  * - `backup_id`: the backup identifier to restore from (NULL for latest).
  *
+ * - `source`: the source instance address/id to load from (NULL for local instance).
+ *             When called from externalDataLoadCommand, this is NULL (loading from local).
+ *             When called from bioExternalDataLoadForFullSync on a replica, this contains
+ *             the primary's address/id. On primary, this should be NULL (error case).
+ *
  * Returns VALKEYMODULE_OK on success, VALKEYMODULE_ERR on failure.
  */
 typedef int (*ValkeyModuleExternalStorageLoadFunc)(
     ValkeyModuleCtx *module_ctx,
     ValkeyModuleExternalStorageCtx *storage_ctx,
     int dbid,
-    ValkeyModuleString *backup_id);
+    ValkeyModuleString *backup_id,
+    ValkeyModuleString *source);
 
 /* Current ABI version for external storage modules. */
 #define VALKEYMODULE_EXTERNAL_STORAGE_ABI_VERSION 1UL
@@ -1693,6 +1699,32 @@ typedef int (*ValkeyModuleExternalFilterKeysCountFunc)(
     int dbid,
     unsigned long long *count);
 
+/* The callback function called to get the current state from the filter.
+ * This allows the module to report which databases are currently initialized
+ * and should be restored when the module is loaded.
+ *
+ * - `module_ctx`: the module runtime context.
+ *
+ * - `filter_ctx`: the external filter context.
+ *
+ * - `source`: the source instance address/id to query state from (NULL for local instance).
+ *             When called on primary or standalone, this is NULL (query local state).
+ *             When called on replica, this contains the primary's address/id.
+ *
+ * - `db_numbers`: output parameter to store an array of database numbers that
+ *   are currently initialized (allocated by the module, freed by caller).
+ *
+ * - `num_dbs`: output parameter to store the number of databases in db_numbers array.
+ *
+ * Returns VALKEYMODULE_OK if state was retrieved, VALKEYMODULE_ERR otherwise.
+ */
+typedef int (*ValkeyModuleExternalFilterGetStateFunc)(
+    ValkeyModuleCtx *module_ctx,
+    ValkeyModuleExternalFilterCtx *filter_ctx,
+    ValkeyModuleString *source,
+    int **db_numbers,
+    size_t *num_dbs);
+
 /* Current ABI version for external filter modules. */
 #define VALKEYMODULE_EXTERNAL_FILTER_ABI_VERSION 1UL
 
@@ -1725,6 +1757,10 @@ typedef struct ValkeyModuleExternalFilterMethods {
     /* The callback function called to count keys in this filter.
      * This allows efficient O(1) counting of all keys for a specific database. */
     ValkeyModuleExternalFilterKeysCountFunc keys_count;
+
+    /* The callback function called to get the current state from the filter.
+     * This allows the module to report which databases should be initialized. */
+    ValkeyModuleExternalFilterGetStateFunc get_state;
 } ValkeyModuleExternalFilterMethodsV1;
 
 #define ValkeyModuleExternalFilterMethods ValkeyModuleExternalFilterMethodsV1

@@ -13,8 +13,9 @@
 #include <stdatomic.h>
 #include <time.h>
 
-/* Forward declaration */
+/* Forward declarations */
 static void moduleStatsDispose(void *obj);
+static void externalDataAutoInitFromModule(externalDataModule *module);
 
 struct externalDataCtx {
     dict *modules;       /* Module name -> Module object */
@@ -95,6 +96,48 @@ static void moduleStatsDispose(void *obj) {
     zfree(stats);
 }
 
+
+/* Process external data loading for full sync.
+ * This function handles both async and sync modes of external data loading.
+ * It should be called after RDB loading is complete and after external data module loading. */
+void processExternalDataLoadForFullSync(void) {
+    /* Load external data for full sync if enabled
+     * We check if external data context exists, which means modules have been loaded */
+    if (isExtDataOn()) {
+        if (server.ext_data_async_load) {
+            /* Async mode: Start load in background and proceed immediately */
+            serverLog(LL_NOTICE, "Starting async external data load for full sync");
+            if (externalDataLoadForFullSync() == EXTERNAL_SUCCESS) {
+                serverLog(LL_NOTICE, "External data async load initiated");
+            } else {
+                serverLog(LL_WARNING, "Failed to initiate async external data load");
+            }
+        } else {
+            /* Sync mode: Start load and wait for completion */
+            serverLog(LL_NOTICE, "Starting sync external data load for full sync");
+            if (externalDataLoadForFullSync() == EXTERNAL_SUCCESS) {
+                /* Wait for load to complete */
+                int sleep_ms = 100;
+                int max_wait = server.ext_data_load_timeout_ms / sleep_ms; /* Convert ms to iterations */
+                int waited = 0;
+                while (waited < max_wait) {
+                    if (externalDataLoadCheckComplete() == C_OK) {
+                        serverLog(LL_NOTICE, "External data loaded synchronously for full sync");
+                        break;
+                    }
+                    usleep(sleep_ms * 1000); /* Sleep 100ms */
+                    waited++;
+                }
+                if (waited >= max_wait) {
+                    serverLog(LL_WARNING, "Timeout waiting for external data load to complete");
+                }
+            } else {
+                serverLog(LL_WARNING, "Failed to initiate external data load for full sync");
+            }
+        }
+    }
+}
+
 /* Registers a new external module with both storage and filter methods.
  *
  * - `name`: the name of the external module.
@@ -108,8 +151,12 @@ int externalDataModuleRegister(const char *name,
                                ValkeyModule *module,
                                storageMethods *storage_methods,
                                filterMethods *filter_methods) {
-    sds name_sds = sdsnew(name);
+    if (!isExtDataOn()) {
+        return C_ERR;
+    }
+    assert(getCurrentExternalDataCtx() != NULL);
 
+    sds name_sds = sdsnew(name);
     if (dictFind(curr_external_data_ctx->modules, name_sds)) {
         serverLog(LL_WARNING, "External module '%s' is already registered in the server", name_sds);
         sdsfree(name_sds);
@@ -125,6 +172,9 @@ int externalDataModuleRegister(const char *name,
     };
 
     dictAdd(curr_external_data_ctx->modules, name_sds, m);
+
+    /* Auto init databases data from module, if there are any */
+    externalDataAutoInitFromModule(m);
 
     return C_OK;
 }
@@ -169,8 +219,7 @@ void externalDataLoadedCommand(client *c) {
         addReplyError(c, EXTDATAOFFERRMSG);
         return;
     }
-
-    assert(curr_external_data_ctx != NULL);
+    assert(getCurrentExternalDataCtx() != NULL);
 
     int size = dictSize(curr_external_data_ctx->modules);
     addReplyArrayLen(c, size);
@@ -207,8 +256,7 @@ void externalDataStatsCommand(client *c) {
         addReplyError(c, EXTDATAOFFERRMSG);
         return;
     }
-
-    assert(curr_external_data_ctx != NULL);
+    assert(getCurrentExternalDataCtx() != NULL);
 
     int size = dictSize(curr_external_data_ctx->dbdata);
     addReplyArrayLen(c, size);
@@ -257,39 +305,11 @@ sds getDBName(int db_num) {
     return sdsnew(db_name);
 }
 
-/*
- * EXTERNAL_DATA INIT db m
- *
- * Init module for a certain db
- *
- */
-void externalDataInitCommand(client *c) {
-    if (!isExtDataOn()) {
-        addReplyError(c, EXTDATAOFFERRMSG);
-        return;
-    }
-    assert(curr_external_data_ctx != NULL);
-
-    robj *o = c->argv[2];
-    sds db_name = objectGetVal(o);
-    if (checkDbNum(c, db_name) < 0) {
-        return;
-    }
-
-    if (dictFind(curr_external_data_ctx->dbdata, db_name)) {
-        addReplyErrorFormat(c, "%s is already initialized", db_name);
-        return;
-    }
-
-    sds module_name = objectGetVal(c->argv[3]);
-    externalDataModule *module = dictFetchValue(curr_external_data_ctx->modules, module_name);
-    if (!module) {
-        addReplyErrorFormat(c, "module %s is not loaded", module_name);
-        return;
-    }
+/* Helper function to create and initialize external data structures for a database
+ * Returns the created externalDbData on success, NULL on failure
+ * On failure, all allocated resources are cleaned up */
+static externalDbData *createExternalDbData(externalDataModule *module) {
     module->used_count++;
-
-    sds db_name_sds = sdsnew(db_name);
 
     storageCtx *storage_ctx = zmalloc(sizeof(*storage_ctx));
     *storage_ctx = (storageCtx){
@@ -321,15 +341,108 @@ void externalDataInitCommand(client *c) {
         .module_instance = module_instance,
     };
 
+    return e;
+}
+
+/* Helper function to cleanup externalDbData and all its allocated resources */
+static void freeExternalDbData(externalDbData *e) {
+    if (!e) return;
+    
+    if (e->module_instance) {
+        if (e->module_instance->module_ctx) {
+            moduleFreeContext(e->module_instance->module_ctx);
+            zfree(e->module_instance->module_ctx);
+        }
+        if (e->module_instance->storage_ctx) {
+            zfree(e->module_instance->storage_ctx);
+        }
+        if (e->module_instance->filter_ctx) {
+            zfree(e->module_instance->filter_ctx);
+        }
+        zfree(e->module_instance);
+    }
+    zfree(e);
+}
+
+/* Helper function to initialize databases from module state data
+ * Returns C_OK on success, C_ERR on failure */
+static int initializeDatabasesFromState(externalDataCtx *ctx, externalDataModule *module, int *db_numbers, size_t num_dbs) {
+    const char *module_name = module->name;
+    
+    for (size_t i = 0; i < num_dbs; i++) {
+        int db_num = db_numbers[i];
+        sds db_name = getDBName(db_num);
+        
+        /* Check if already initialized */
+        if (!dictFind(ctx->dbdata, db_name)) {
+            /* Initialize the database */
+            externalDbData *e = createExternalDbData(module);
+            if (!e) {
+                sdsfree(db_name);
+                continue;
+            }
+        
+            if (dictAdd(ctx->dbdata, db_name, e) == DICT_OK) {
+                serverLog(LL_NOTICE, "Auto-initialized %s with module %s from state", db_name, module_name);
+            } else {
+                /* Cleanup on failure */
+                freeExternalDbData(e);
+                sdsfree(db_name);
+            }
+        } else {
+            sdsfree(db_name);
+        }
+    }
+    
+    return C_OK;
+}
+
+/*
+ * EXTERNAL_DATA INIT db m
+ *
+ * Init module for a certain db
+ *
+ */
+void externalDataInitCommand(client *c) {
+    if (!isExtDataOn()) {
+        addReplyError(c, EXTDATAOFFERRMSG);
+        return;
+    }
+    assert(getCurrentExternalDataCtx() != NULL);
+
+    sds db_name = objectGetVal(c->argv[2]);
+    if (checkDbNum(c, db_name) < 0) {
+        return;
+    }
+
+    if (dictFind(curr_external_data_ctx->dbdata, db_name)) {
+        serverLog(LL_DEBUG, "EXTERNAL_DATA INIT: %s is already initialized", db_name);
+        addReplyErrorFormat(c, "%s is already initialized", db_name);
+        return;
+    }
+
+    sds module_name = objectGetVal(c->argv[3]);
+    serverLog(LL_DEBUG, "EXTERNAL_DATA INIT: Initializing %s with module %s (loading=%d)",
+              db_name, module_name, server.loading);
+    externalDataModule *module = dictFetchValue(curr_external_data_ctx->modules, module_name);
+    if (!module) {
+        serverLog(LL_WARNING, "EXTERNAL_DATA INIT: module %s is not loaded", module_name);
+        addReplyErrorFormat(c, "module %s is not loaded", module_name);
+        return;
+    }
+    sds db_name_sds = sdsnew(db_name);
+
+    externalDbData *e = createExternalDbData(module);
+    if (!e) {
+        sdsfree(db_name_sds);
+        addReplyError(c, "Failed to create external data structures");
+        return;
+    }
+
     /* Add to dictionary - if this fails, clean up all allocated resources */
     if (dictAdd(curr_external_data_ctx->dbdata, db_name_sds, e) != DICT_OK) {
         /* Dictionary add failed, clean up everything we allocated */
-        moduleFreeContext(module_instance->module_ctx);
-        zfree(module_instance->module_ctx);
-        zfree(module_instance->storage_ctx);
-        zfree(module_instance->filter_ctx);
-        zfree(module_instance);
-        zfree(e);
+        freeExternalDbData(e);
         sdsfree(db_name_sds);
         addReplyErrorFormat(c, "Failed to add database %s to external data", db_name);
         return;
@@ -350,10 +463,9 @@ void externalDataDropCommand(client *c) {
         addReplyError(c, EXTDATAOFFERRMSG);
         return;
     }
-    assert(curr_external_data_ctx != NULL);
+    assert(getCurrentExternalDataCtx() != NULL);
 
-    robj *o = c->argv[2];
-    sds db_name = objectGetVal(o);
+    sds db_name = objectGetVal(c->argv[2]);
     if (checkDbNum(c, db_name) < 0) {
         return;
     }
@@ -539,6 +651,16 @@ int externalDataCallDumpFunc(externalDataModuleInstance *mi,
 
     setupModuleCtx(mi);
 
+    /* Create server ID string (host:port) if target is NULL */
+    ValkeyModuleString *server_target = target;
+    int should_free_target = 0;
+    if (target == NULL) {
+        char server_id[256];
+        snprintf(server_id, sizeof(server_id), "localhost:%d", server.port);
+        server_target = (ValkeyModuleString *)createStringObject(server_id, strlen(server_id));
+        should_free_target = 1;
+    }
+
     /* Pass -1 as dbid to indicate all databases */
     int result = mi->external_module->storage_methods.dump(
         mi->module_ctx,
@@ -546,8 +668,12 @@ int externalDataCallDumpFunc(externalDataModuleInstance *mi,
         -1,  /* -1 means all databases */
         slot,
         timestamp,
-        target,
+        server_target,
         backup_id);
+
+    if (should_free_target) {
+        decrRefCount((robj *)server_target);
+    }
 
     teardownModuleCtx(mi);
     return result;
@@ -557,7 +683,8 @@ int externalDataCallDumpFunc(externalDataModuleInstance *mi,
  * Loads data for all databases at once
  * Returns EXTERNAL_SUCCESS on success, EXTERNAL_ERROR on failure */
 int externalDataCallLoadFunc(externalDataModuleInstance *mi,
-                             ValkeyModuleString *backup_id) {
+                             ValkeyModuleString *backup_id,
+                             ValkeyModuleString *source) {
     if (!mi || !mi->external_module || !mi->storage_ctx || !mi->module_ctx) {
         return EXTERNAL_ERROR;
     }
@@ -574,7 +701,8 @@ int externalDataCallLoadFunc(externalDataModuleInstance *mi,
         mi->module_ctx,
         mi->storage_ctx,
         -1,  /* -1 means all databases */
-        backup_id);
+        backup_id,
+        source);
 
     teardownModuleCtx(mi);
     return result;
@@ -632,10 +760,9 @@ void externalDataDebugCommand(client *c) {
         addReplyError(c, EXTDATAOFFERRMSG);
         return;
     }
-    assert(curr_external_data_ctx != NULL);
+    assert(getCurrentExternalDataCtx() != NULL);
 
-    robj *o = c->argv[2];
-    sds db_name = objectGetVal(o);
+    sds db_name = objectGetVal(c->argv[2]);
     if (checkDbNum(c, db_name) < 0) {
         return;
     }
@@ -749,7 +876,7 @@ void externalDataDumpCommand(client *c) {
         addReplyError(c, EXTDATAOFFERRMSG);
         return;
     }
-    assert(curr_external_data_ctx != NULL);
+    assert(getCurrentExternalDataCtx() != NULL);
 
     /* Parse optional arguments in any order */
     int slot = -1;  /* -1 means all slots */
@@ -817,7 +944,7 @@ void externalDataLoadCommand(client *c) {
         addReplyError(c, EXTDATAOFFERRMSG);
         return;
     }
-    assert(curr_external_data_ctx != NULL);
+    assert(getCurrentExternalDataCtx() != NULL);
 
     /* Parse optional backup-id argument */
     ValkeyModuleString *backup_id = NULL;
@@ -838,13 +965,37 @@ void externalDataLoadCommand(client *c) {
 
     externalDbData *dbData = dictGetVal(de);
 
+    /* Determine source for load operation:
+     * - NULL if we're on primary/standalone (load from local backup)
+     * - Primary address if we're on replica (load from primary's source) */
+    ValkeyModuleString *source = NULL;
+    int should_free_source = 0;
+    
+    if (server.primary_host) {
+        /* We're a replica - create source string with primary address */
+        char source_buf[256];
+        snprintf(source_buf, sizeof(source_buf), "%s:%d",
+                 server.primary_host, server.primary_port);
+        source = (ValkeyModuleString *)createStringObject(source_buf, strlen(source_buf));
+        should_free_source = 1;
+    }
+
     /* Call the load function - it will load all databases */
-    int result = externalDataCallLoadFunc(dbData->module_instance, backup_id);
+    int result = externalDataCallLoadFunc(dbData->module_instance, backup_id, source);
+
+    /* Free source string if we created it */
+    if (should_free_source && source) {
+        decrRefCount((robj *)source);
+    }
 
     if (result != EXTERNAL_SUCCESS) {
         addReplyError(c, "Failed to load backup");
         return;
     }
+
+    /* Propagate to replicas and AOF so they also load the external data */
+    server.dirty++;
+    forceCommandPropagation(c, PROPAGATE_REPL | PROPAGATE_AOF);
 
     addReply(c, shared.ok);
 }
@@ -893,7 +1044,9 @@ int externalDataWrite(int id, void *key, void *value) {
 
     // If both are readonly, return 2 to signal the client should be blocked
     // The client will be retried later when the state changes
-    if (storage_state == VMES_STATE_READONLY || filter_state == VMEF_STATE_READONLY) {
+    // However, replicated clients (from primary or AOF) should never be blocked
+    if ((storage_state == VMES_STATE_READONLY || filter_state == VMEF_STATE_READONLY) &&
+        server.current_client && !mustObeyClient(server.current_client)) {
         return EXTERNAL_READONLY; // Signal to block the client
     }
 
@@ -901,18 +1054,9 @@ int externalDataWrite(int id, void *key, void *value) {
     return externalFilterCallSetFunc(mi, id, key);
 }
 
-/* Initialize external data structures.
- * Should be called once on server initialization */
-int externalDataInit(void) {
-    if (isExtDataOn()) {
-        curr_external_data_ctx = externalDataCtxCreate();
-    }
-
-    return C_OK;
-}
-
 /* Get current external data context */
 externalDataCtx *getCurrentExternalDataCtx(void) {
+    if (!curr_external_data_ctx) curr_external_data_ctx = externalDataCtxCreate();
     return curr_external_data_ctx;
 }
 
@@ -1309,55 +1453,80 @@ unsigned long long externalDataCountKeys(int dbid) {
 }
 
 /* Process external data dump in BIO thread */
-void externalDataProcessDumpForFullSync(void) {
+void bioExternalDataDumpForFullSync(void) {
     externalDataCtx *ctx = getCurrentExternalDataCtx();
     if (!ctx) {
         return;
     }
     
-    /* Find any initialized database to get the module instance */
-    dictIterator *di = dictGetIterator(ctx->dbdata);
-    dictEntry *de = dictNext(di);
-    dictReleaseIterator(di);
-    
-    if (!de) {
+    /* Check if there are any initialized databases */
+    if (dictSize(ctx->dbdata) == 0) {
         serverLog(LL_WARNING, "No external data initialized for full sync dump");
         return;
     }
     
-    externalDbData *dbData = dictGetVal(de);
-    storageCtx *storage_ctx = dbData->module_instance->storage_ctx;
-    filterCtx *filter_ctx = dbData->module_instance->filter_ctx;
-    ValkeyModuleString *backup_id = NULL;
+    /* Iterate all databases and initiate dump on each unique module instance
+     * Track which module instances we've already processed to avoid duplicates */
+    dictIterator *di = dictGetIterator(ctx->dbdata);
+    dictEntry *de;
+    dict *processed_modules = dictCreate(&moduleDictType);
     
-    /* Set both storage and filter dump states to IN_PROGRESS */
-    atomic_store_explicit(&storage_ctx->ext_data_dump_status, VMES_DUMP_STATE_IN_PROGRESS, memory_order_release);
-    atomic_store_explicit(&filter_ctx->ext_data_dump_status, VMEF_DUMP_STATE_IN_PROGRESS, memory_order_release);
-    
-    /* Call dump with timestamp 0 for full backup */
-    int result = externalDataCallDumpFunc(dbData->module_instance, -1, 0, NULL, &backup_id);
-    
-    if (result != EXTERNAL_SUCCESS || !backup_id) {
-        serverLog(LL_WARNING, "Failed to dump external data for full sync");
-        atomic_store_explicit(&storage_ctx->ext_data_dump_status, VMES_DUMP_STATE_FAILED, memory_order_release);
-        atomic_store_explicit(&filter_ctx->ext_data_dump_status, VMEF_DUMP_STATE_FAILED, memory_order_release);
-        return;
+    while ((de = dictNext(di))) {
+        sds db_name = dictGetKey(de);
+        externalDbData *dbData = dictGetVal(de);
+        externalDataModuleInstance *mi = dbData->module_instance;
+
+        storageCtx *storage_ctx = mi->storage_ctx;
+        filterCtx *filter_ctx = mi->filter_ctx;
+        
+        atomic_store_explicit(&storage_ctx->ext_data_dump_status, VMES_DUMP_STATE_IN_PROGRESS, memory_order_release);
+        atomic_store_explicit(&filter_ctx->ext_data_dump_status, VMEF_DUMP_STATE_IN_PROGRESS, memory_order_release);
+        
+        /* Check if we've already processed this module instance
+         * Multiple databases could share the same module instance */
+        if (dictFind(processed_modules, mi->external_module->name)) {
+            serverLog(LL_DEBUG, "Skipping %s - module instance already processed", db_name);
+            continue;
+        }
+        
+        /* Mark this module instance as processed */
+        dictAdd(processed_modules, mi->external_module->name, mi);
+        
+        serverLog(LL_NOTICE, "Starting dump for module instance: %s (database: %s)",
+                  mi->external_module->name, db_name);
+        
+        ValkeyModuleString *backup_id = NULL;
+        
+        /* Call dump with timestamp 0 for full backup, -1 for all slots */
+        int result = externalDataCallDumpFunc(mi, -1, 0, NULL, &backup_id);
+        
+        if (result != EXTERNAL_SUCCESS || !backup_id) {
+            serverLog(LL_WARNING, "Failed to dump external data for module %s",
+                      mi->external_module->name);
+            atomic_store_explicit(&storage_ctx->ext_data_dump_status, VMES_DUMP_STATE_FAILED, memory_order_release);
+            atomic_store_explicit(&filter_ctx->ext_data_dump_status, VMEF_DUMP_STATE_FAILED, memory_order_release);
+            continue;
+        }
+
+        atomic_store_explicit(&storage_ctx->ext_data_dump_status, VMES_DUMP_STATE_SUCCESS, memory_order_release);
+        atomic_store_explicit(&filter_ctx->ext_data_dump_status, VMEF_DUMP_STATE_SUCCESS, memory_order_release);
+        
+        /* Store backup ID in both storage and filter contexts */
+        if (storage_ctx->ext_data_dump_backup_id) {
+            sdsfree(storage_ctx->ext_data_dump_backup_id);
+        }
+        storage_ctx->ext_data_dump_backup_id = sdsnew((char *)objectGetVal(backup_id));
+        
+        if (filter_ctx->ext_data_dump_backup_id) {
+            sdsfree(filter_ctx->ext_data_dump_backup_id);
+        }
+        filter_ctx->ext_data_dump_backup_id = sdsnew((char *)objectGetVal(backup_id));
+        
+        serverLog(LL_NOTICE, "External data dumped for module %s: %s",
+                  mi->external_module->name, (char *)objectGetVal(backup_id));
     }
-    
-    /* Store backup ID in both storage and filter contexts */
-    if (storage_ctx->ext_data_dump_backup_id) {
-        sdsfree(storage_ctx->ext_data_dump_backup_id);
-    }
-    storage_ctx->ext_data_dump_backup_id = sdsnew((char *)objectGetVal(backup_id));
-    
-    if (filter_ctx->ext_data_dump_backup_id) {
-        sdsfree(filter_ctx->ext_data_dump_backup_id);
-    }
-    filter_ctx->ext_data_dump_backup_id = sdsnew((char *)objectGetVal(backup_id));
-    
-    serverLog(LL_NOTICE, "External data dumped for full sync: %s", (char *)objectGetVal(backup_id));
-    atomic_store_explicit(&storage_ctx->ext_data_dump_status, VMES_DUMP_STATE_SUCCESS, memory_order_release);
-    atomic_store_explicit(&filter_ctx->ext_data_dump_status, VMEF_DUMP_STATE_SUCCESS, memory_order_release);
+    dictReleaseIterator(di);
+    dictRelease(processed_modules);
 }
 
 /* Start async dump of external data for full sync */
@@ -1409,43 +1578,94 @@ int externalDataDumpCheckComplete(ValkeyModuleString **backup_id) {
 }
 
 /* Process external data load in BIO thread */
-void externalDataProcessLoadForFullSync(void) {
+void bioExternalDataLoadForFullSync(void) {
     externalDataCtx *ctx = getCurrentExternalDataCtx();
     if (!ctx) {
         return;
     }
     
-    /* Find any initialized database to get the module instance */
-    dictIterator *di = dictGetIterator(ctx->dbdata);
-    dictEntry *de = dictNext(di);
-    dictReleaseIterator(di);
-    
-    if (!de) {
+    /* Check if there are any initialized databases */
+    if (dictSize(ctx->dbdata) == 0) {
         serverLog(LL_WARNING, "No external data initialized for sync load");
         return;
     }
     
-    externalDbData *dbData = dictGetVal(de);
-    storageCtx *storage_ctx = dbData->module_instance->storage_ctx;
-    filterCtx *filter_ctx = dbData->module_instance->filter_ctx;
+    /* Iterate all databases and initiate load on each unique module instance
+     * Track which module instances we've already processed to avoid duplicates */
+    dictIterator *di = dictGetIterator(ctx->dbdata);
+    dictEntry *de;
+    dict *processed_modules = dictCreate(&moduleDictType);
     
-    /* Set both storage and filter load states to IN_PROGRESS */
-    atomic_store_explicit(&storage_ctx->ext_data_load_status, VMES_LOAD_STATE_IN_PROGRESS, memory_order_release);
-    atomic_store_explicit(&filter_ctx->ext_data_load_status, VMEF_LOAD_STATE_IN_PROGRESS, memory_order_release);
-    
-    /* Call load function with NULL (latest backup) */
-    int result = externalDataCallLoadFunc(dbData->module_instance, NULL);
-    
-    if (result != EXTERNAL_SUCCESS) {
-        serverLog(LL_WARNING, "Failed to load external data for sync");
-        atomic_store_explicit(&storage_ctx->ext_data_load_status, VMES_LOAD_STATE_FAILED, memory_order_release);
-        atomic_store_explicit(&filter_ctx->ext_data_load_status, VMEF_LOAD_STATE_FAILED, memory_order_release);
-        return;
+    while ((de = dictNext(di))) {
+        sds db_name = dictGetKey(de);
+        externalDbData *dbData = dictGetVal(de);
+        externalDataModuleInstance *mi = dbData->module_instance;
+        
+        /* Check if we've already processed this module instance
+         * Multiple databases could share the same module instance */
+        if (dictFind(processed_modules, mi->external_module->name)) {
+            serverLog(LL_DEBUG, "Skipping %s - module instance already processed", db_name);
+            continue;
+        }
+
+        storageCtx *storage_ctx = mi->storage_ctx;
+        filterCtx *filter_ctx = mi->filter_ctx;
+
+        atomic_store_explicit(&storage_ctx->ext_data_load_status, VMES_LOAD_STATE_IN_PROGRESS, memory_order_release);
+        atomic_store_explicit(&filter_ctx->ext_data_load_status, VMEF_LOAD_STATE_IN_PROGRESS, memory_order_release);
+        
+        /* Mark this module instance as processed */
+        dictAdd(processed_modules, mi->external_module->name, mi);
+        
+        serverLog(LL_NOTICE, "Starting load for module instance: %s (database: %s)",
+                  mi->external_module->name, db_name);
+        
+        /* Determine source for load operation:
+         * - NULL if we're loading from local backup (startup or primary)
+         * - Primary address (host:port) if we're on replica loading from primary */
+        ValkeyModuleString *source = NULL;
+        int result = EXTERNAL_ERROR;
+        if (server.primary_host) {
+            /* We're a replica - create source string with primary address including port */
+            char source_buf[256];
+            snprintf(source_buf, sizeof(source_buf), "%s:%d",
+                     server.primary_host, server.primary_port);
+            source = (ValkeyModuleString *)createStringObject(source_buf, strlen(source_buf));
+                    
+            /* Call load function with NULL (latest backup) and source */
+            result = externalDataCallLoadFunc(mi, NULL, source);
+        } else {
+            /* We're on primary or standalone - load from local backup with server ID */
+            char server_id[256];
+            snprintf(server_id, sizeof(server_id), "localhost:%d", server.port);
+            source = (ValkeyModuleString *)createStringObject(server_id, strlen(server_id));
+            
+            serverLog(LL_NOTICE, "Loading external data from local backup for module %s (server: %s)",
+                      mi->external_module->name, server_id);
+            result = externalDataCallLoadFunc(mi, NULL, source);
+        }
+        
+        /* Free source string if we created it */
+        if (source) {
+            decrRefCount((robj *)source);
+        }
+        
+        if (result != EXTERNAL_SUCCESS) {
+            serverLog(LL_WARNING, "Failed to load external data for module %s",
+                      mi->external_module->name);
+            atomic_store_explicit(&storage_ctx->ext_data_load_status, VMES_LOAD_STATE_FAILED, memory_order_release);
+            atomic_store_explicit(&filter_ctx->ext_data_load_status, VMEF_LOAD_STATE_FAILED, memory_order_release);
+            continue;
+        }
+        
+        serverLog(LL_NOTICE, "External data loaded for module %s",
+                  mi->external_module->name);
+
+        atomic_store_explicit(&storage_ctx->ext_data_load_status, VMES_LOAD_STATE_SUCCESS, memory_order_release);
+        atomic_store_explicit(&filter_ctx->ext_data_load_status, VMEF_LOAD_STATE_SUCCESS, memory_order_release);
     }
-    
-    serverLog(LL_NOTICE, "External data loaded for sync");
-    atomic_store_explicit(&storage_ctx->ext_data_load_status, VMES_LOAD_STATE_SUCCESS, memory_order_release);
-    atomic_store_explicit(&filter_ctx->ext_data_load_status, VMEF_LOAD_STATE_SUCCESS, memory_order_release);
+    dictReleaseIterator(di);
+    dictRelease(processed_modules);
 }
 
 /* Start async load of external data for full sync */
@@ -1490,3 +1710,82 @@ int externalDataLoadCheckComplete(void) {
     serverLog(LL_WARNING, "External data load failed");
     return C_ERR;
 }
+
+/* Auto-initialize external data from module state
+ * This is called when a module is registered to check if it has state to restore */
+void externalDataAutoInitFromModule(externalDataModule *module) {
+    if (!isExtDataOn()) return;
+    
+    externalDataCtx *ctx = getCurrentExternalDataCtx();
+    if (!ctx) return;
+
+    const char *module_name = module->name;
+    serverLog(LL_NOTICE, "Checking module %s for state to auto-initialize", module_name);
+    
+    /* Check if the module implements the get_state callback in filter methods */
+    if (!module->filter_methods.get_state) {
+        serverLog(LL_DEBUG, "Module %s does not implement get_state, skipping auto-init", module_name);
+        return;
+    }
+    
+    /* Create a temporary filter context for the callback */
+    filterCtx temp_filter_ctx = {
+        .state = VMEF_STATE_READY,
+        .ext_data_timeout = server.ext_data_timeout,
+        .ext_data_dump_status = VMEF_DUMP_STATE_NONE,
+        .ext_data_dump_backup_id = NULL,
+        .ext_data_load_status = VMEF_LOAD_STATE_NONE,
+    };
+    
+    /* Create a temporary module context */
+    ValkeyModuleCtx *temp_module_ctx = moduleAllocateContext();
+    moduleExternalFilterInitContext(temp_module_ctx, module->module);
+    
+    /* Determine source for get_state operation:
+     * - NULL if we're on primary/standalone (query local state)
+     * - Primary address (host:port) if we're on replica (query primary's state) */
+    ValkeyModuleString *source = NULL;
+    if (server.primary_host) {
+        /* We're a replica - create source string with primary address */
+        char source_buf[256];
+        snprintf(source_buf, sizeof(source_buf), "%s:%d",
+                 server.primary_host, server.primary_port);
+        source = (ValkeyModuleString *)createStringObject(source_buf, strlen(source_buf));
+    }
+    
+    /* Ask the module to get its state and which databases to initialize */
+    int *db_numbers = NULL;
+    size_t num_dbs = 0;
+    int result = module->filter_methods.get_state(temp_module_ctx, &temp_filter_ctx, source, &db_numbers, &num_dbs);
+    
+    /* Free source string if we created it */
+    if (source) {
+        decrRefCount((robj *)source);
+    }
+    
+    /* Clean up temporary context */
+    moduleFreeContext(temp_module_ctx);
+    zfree(temp_module_ctx);
+    
+    if (result == EXTERNAL_SUCCESS && db_numbers != NULL && num_dbs > 0) {
+        serverLog(LL_NOTICE, "Module %s returned state, auto-initializing %zu database(s)",
+                 module_name, num_dbs);
+        
+        /* Initialize all databases specified by the module */
+        initializeDatabasesFromState(ctx, module, db_numbers, num_dbs);
+        
+        /* Free the db_numbers array allocated by the module using ValkeyModule_Alloc
+         * ValkeyModule_Alloc uses zmalloc internally, so we can use zfree */
+        if (db_numbers) {
+            zfree(db_numbers);
+        }
+
+        if (server.primary_host) {
+            /* For primary it is initiated in server.c */
+            processExternalDataLoadForFullSync();
+        }
+    } else {
+        serverLog(LL_DEBUG, "Module %s returned no state or error", module_name);
+    }
+}
+

@@ -1103,8 +1103,7 @@ int VM_IsKeysPositionRequest(ValkeyModuleCtx *ctx) {
  *
  *     if (ValkeyModule_IsKeysPositionRequest(ctx)) {
  *         ValkeyModule_KeyAtPosWithFlags(ctx, 2, VALKEYMODULE_CMD_KEY_RO | VALKEYMODULE_CMD_KEY_ACCESS);
- *         ValkeyModule_KeyAtPosWithFlags(ctx, 1, VALKEYMODULE_CMD_KEY_RW | VALKEYMODULE_CMD_KEY_UPDATE |
- * VALKEYMODULE_CMD_KEY_ACCESS);
+ *         ValkeyModule_KeyAtPosWithFlags(ctx, 1, VALKEYMODULE_CMD_KEY_RW | VALKEYMODULE_CMD_KEY_UPDATE | VALKEYMODULE_CMD_KEY_ACCESS);
  *     }
  *
  *  Note: in the example above the get keys API could have been handled by key-specs (preferred).

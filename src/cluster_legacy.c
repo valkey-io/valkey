@@ -1073,10 +1073,16 @@ void clusterSaveConfigOrDie(int do_fsync) {
 }
 
 /* Save the cluster configuration file. If the save fails, print the log. */
+#define CONFIG_SAVE_LOG_ERROR_RATE 30 /* Seconds between errors logging. */
 void clusterSaveConfigOrLog(int do_fsync) {
     if (clusterSaveConfig(do_fsync) == C_ERR) {
-        serverLog(LL_WARNING, "Cluster config updated even though writing "
-                              "the cluster config file to disk failed.");
+        static time_t last_save_error_log = 0;
+        /* Limit logging rate to 1 line per CONFIG_SAVE_LOG_ERROR_RATE seconds. */
+        if ((server.unixtime - last_save_error_log) > CONFIG_SAVE_LOG_ERROR_RATE) {
+            serverLog(LL_WARNING, "Cluster config updated even though writing "
+                                  "the cluster config file to disk failed.");
+            last_save_error_log = server.unixtime;
+        }
     }
 }
 

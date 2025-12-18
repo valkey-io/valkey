@@ -51,7 +51,14 @@ start_cluster 1 1 {tags {external:skip cluster}} {
 
         # Trigger a takeover so that cluster will need to update the config file.
         R 1 cluster failover takeover
+        wait_for_condition 1000 50 {
+            [s 0 role] eq {slave} &&
+            [s -1 role] eq {master}
+        } else {
+            fail "The failover does not happen"
+        }
 
+        # Make sure the process is still alive, we won't exit when fail to save the config file.
         assert_equal {PONG} [R 0 ping]
         assert_equal {PONG} [R 1 ping]
         assert_equal 1 [process_is_alive [srv 0 pid]]
@@ -62,5 +69,19 @@ start_cluster 1 1 {tags {external:skip cluster}} {
         verify_log_message -1 "*Could not rename tmp cluster config file*" 0
         verify_log_message 0 "*Cluster config updated even though writing the cluster config file to disk failed*" 0
         verify_log_message -1 "*Cluster config updated even though writing the cluster config file to disk failed*" 0
+
+        # Trigger a takeover so that cluster will need to update the config file.
+        # We will not frequently print the "save failed" log.
+        R 0 cluster failover takeover
+        wait_for_condition 1000 50 {
+            [s 0 role] eq {master} &&
+            [s -1 role] eq {slave}
+        } else {
+            fail "The failover does not happen"
+        }
+        assert_morethan_equal [count_log_message 0 "Could not rename tmp cluster config file"] 2
+        assert_equal [count_log_message 0 "Cluster config updated even though writing the cluster config file to disk failed"] 1
+        assert_morethan_equal [count_log_message -1 "Could not rename tmp cluster config file"] 2
+        assert_equal [count_log_message -1 "Cluster config updated even though writing the cluster config file to disk failed"] 1
     }
 }

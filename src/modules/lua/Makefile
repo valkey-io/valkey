@@ -13,16 +13,13 @@ endif
 # BSD variants support
 ifeq ($(uname_S),FreeBSD)
 	SHOBJ_LDFLAGS+= -lm
-endif
-
-ifeq ($(uname_S),OpenBSD)
+else ifeq ($(uname_S),OpenBSD)
+	SHOBJ_LDFLAGS+= -lm
+else ifeq ($(uname_S),NetBSD)
+	SHOBJ_LDFLAGS+= -lm
+else ifeq ($(uname_S),DragonFly)
 	SHOBJ_LDFLAGS+= -lm
 endif
-
-ifeq ($(uname_S),NetBSD)
-	SHOBJ_LDFLAGS+= -lm
-endif
-
 
 LIBS= $(DEPS_DIR)/lua/src/liblua.a $(DEPS_DIR)/fpconv/libfpconv.a
 SRCS= $(wildcard *.c)

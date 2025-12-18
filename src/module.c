@@ -6440,7 +6440,6 @@ ValkeyModuleCallReply *VM_Call(ValkeyModuleCtx *ctx, const char *cmdname, const 
     va_list ap;
     ValkeyModuleCallReply *reply = NULL;
     sds reply_error_msg = NULL;
-    int error_code = 0;
     int replicate = 0;             /* Replicate this command? */
     int error_as_call_replies = 0; /* return errors as ValkeyModuleCallReply object */
     uint64_t cmd_flags;
@@ -6488,7 +6487,7 @@ ValkeyModuleCallReply *VM_Call(ValkeyModuleCtx *ctx, const char *cmdname, const 
     if (flags & VALKEYMODULE_ARGV_RUN_AS_USER) {
         user = ctx->user ? ctx->user->user : ctx->client->user;
         if (!user) {
-            error_code = ENOTSUP;
+            errno = ENOTSUP;
             if (error_as_call_replies) {
                 reply_error_msg = sdsnew("cannot run as user, no user directly attached to context or context's client");
             }
@@ -6504,7 +6503,7 @@ ValkeyModuleCallReply *VM_Call(ValkeyModuleCtx *ctx, const char *cmdname, const 
          * be catch by the module indicating wrong fmt was given, the module should
          * handle this error and decide how to continue. It is not an error that
          * should be propagated to the user. */
-        error_code = EBADF;
+        errno = EBADF;
         goto cleanup;
     }
 
@@ -6516,11 +6515,11 @@ ValkeyModuleCallReply *VM_Call(ValkeyModuleCtx *ctx, const char *cmdname, const 
      */
     c->cmd = c->lastcmd = c->realcmd = lookupCommand(c->argv, c->argc);
     if (!commandCheckExistence(c, error_as_call_replies ? &reply_error_msg : NULL)) {
-        error_code = ENOENT;
+        errno = ENOENT;
         goto cleanup;
     }
     if (!commandCheckArity(c->cmd, c->argc, error_as_call_replies ? &reply_error_msg : NULL)) {
-        error_code = EINVAL;
+        errno = EINVAL;
         goto cleanup;
     }
 
@@ -6534,7 +6533,7 @@ ValkeyModuleCallReply *VM_Call(ValkeyModuleCtx *ctx, const char *cmdname, const 
          * If either condition is false, we block the command. */
         if ((cmd_flags & CMD_NOSCRIPT)) {
             if (!is_running_script || !server.script_disable_deny_script) {
-                error_code = ESPIPE;
+                errno = ESPIPE;
                 if (error_as_call_replies) {
                     reply_error_msg = sdscatfmt(sdsempty(), "command '%S' is not allowed on script mode", c->cmd->fullname);
                 }
@@ -6559,7 +6558,7 @@ ValkeyModuleCallReply *VM_Call(ValkeyModuleCtx *ctx, const char *cmdname, const 
                 oom_state = server.pre_command_oom_state;
             }
             if (oom_state) {
-                error_code = ENOSPC;
+                errno = ENOSPC;
                 if (error_as_call_replies) {
                     reply_error_msg = sdsdup(shared.oomerr->ptr);
                 }
@@ -6573,7 +6572,7 @@ ValkeyModuleCallReply *VM_Call(ValkeyModuleCtx *ctx, const char *cmdname, const 
 
     if (flags & VALKEYMODULE_ARGV_NO_WRITES) {
         if (cmd_flags & CMD_WRITE) {
-            error_code = ENOSPC;
+            errno = ENOSPC;
             if (error_as_call_replies) {
                 reply_error_msg = sdscatfmt(sdsempty(),
                                             "Write command '%S' was "
@@ -6605,7 +6604,7 @@ ValkeyModuleCallReply *VM_Call(ValkeyModuleCtx *ctx, const char *cmdname, const 
                 reply_error_msg = sdscatfmt(sdsempty(), "-NOPERM %S\r\n", acl_msg);
                 sdsfree(acl_msg);
             }
-            error_code = EACCES;
+            errno = EACCES;
             goto cleanup;
         }
     }
@@ -6627,18 +6626,18 @@ ValkeyModuleCallReply *VM_Call(ValkeyModuleCtx *ctx, const char *cmdname, const 
                                                 "Can not execute a write command '%S' while the cluster is down and readonly",
                                                 c->cmd->fullname);
                 }
-                error_code = EROFS;
+                errno = EROFS;
             } else if (error_code == CLUSTER_REDIR_DOWN_STATE) {
                 if (error_as_call_replies) {
                     reply_error_msg = sdscatfmt(sdsempty(), "Can not execute a command '%S' while the cluster is down",
                                                 c->cmd->fullname);
                 }
-                error_code = ENETDOWN;
+                errno = ENETDOWN;
             } else {
                 if (error_as_call_replies) {
                     reply_error_msg = sdsnew("Attempted to access a non local key in a cluster node");
                 }
-                error_code = EPERM;
+                errno = EPERM;
             }
             goto cleanup;
         }
@@ -6651,7 +6650,7 @@ ValkeyModuleCallReply *VM_Call(ValkeyModuleCtx *ctx, const char *cmdname, const 
          * This also makes it possible to allow read-only scripts to be run during
          * CLIENT PAUSE WRITE. */
         if (is_running_script && scriptIsReadOnly() && (cmd_flags & (CMD_WRITE | CMD_MAY_REPLICATE))) {
-            error_code = ENOSPC;
+            errno = ENOSPC;
             reply_error_msg = sdsnew("Write commands are not allowed from read-only scripts.");
             goto cleanup;
         }
@@ -6665,7 +6664,7 @@ ValkeyModuleCallReply *VM_Call(ValkeyModuleCtx *ctx, const char *cmdname, const 
              * or we do not have enough replicas */
 
             if (!checkGoodReplicasStatus()) {
-                error_code = ESPIPE;
+                errno = ESPIPE;
                 if (error_as_call_replies) {
                     reply_error_msg = sdsdup(shared.noreplicaserr->ptr);
                 }
@@ -6676,7 +6675,7 @@ ValkeyModuleCallReply *VM_Call(ValkeyModuleCtx *ctx, const char *cmdname, const 
             int obey_client = (server.current_client && mustObeyClient(server.current_client));
 
             if (deny_write_type != DISK_ERROR_TYPE_NONE && !obey_client) {
-                error_code = ESPIPE;
+                errno = ESPIPE;
                 if (error_as_call_replies) {
                     reply_error_msg = writeCommandsGetDiskErrorMessage(deny_write_type);
                 }
@@ -6684,7 +6683,7 @@ ValkeyModuleCallReply *VM_Call(ValkeyModuleCtx *ctx, const char *cmdname, const 
             }
 
             if (server.primary_host && server.repl_replica_ro && !obey_client) {
-                error_code = ESPIPE;
+                errno = ESPIPE;
                 if (error_as_call_replies) {
                     reply_error_msg = sdsdup(shared.roreplicaerr->ptr);
                 }
@@ -6698,7 +6697,7 @@ ValkeyModuleCallReply *VM_Call(ValkeyModuleCtx *ctx, const char *cmdname, const 
 
         if (server.primary_host && server.repl_state != REPL_STATE_CONNECTED && server.repl_serve_stale_data == 0 &&
             !(cmd_flags & CMD_STALE)) {
-            error_code = ESPIPE;
+            errno = ESPIPE;
             if (error_as_call_replies) {
                 if (is_running_script) {
                     reply_error_msg = sdsnew("Can not execute the command on a stale replica");
@@ -6714,7 +6713,7 @@ ValkeyModuleCallReply *VM_Call(ValkeyModuleCtx *ctx, const char *cmdname, const 
                 if (scriptGetSlot() == -1) {
                     scriptSetSlot(c->slot);
                 } else if (scriptGetSlot() != c->slot) {
-                    error_code = ESPIPE;
+                    errno = ESPIPE;
                     if (error_as_call_replies) {
                         reply_error_msg = sdsnew("Script attempted to access keys that do not hash to the same slot");
                     }
@@ -6746,6 +6745,17 @@ ValkeyModuleCallReply *VM_Call(ValkeyModuleCtx *ctx, const char *cmdname, const 
         if (!(flags & VALKEYMODULE_ARGV_NO_REPLICAS)) call_flags |= CMD_CALL_PROPAGATE_REPL;
     }
     call(c, call_flags);
+
+    /* We reset errno here because on macOS some system calls set errno even when
+     * they succeed. For instance, certain time-related syscalls may set errno
+     * to ETIMEDOUT on successful completion.
+     * Since system calls might be invoked during command execution, we need to
+     * ensure errno doesn't contain stale error values. Any errors from the
+     * command execution are communicated through RESP protocol responses, not
+     * through errno. This reset prevents false error detection in subsequent
+     * operations that check errno. */
+    errno = 0;
+
     server.replication_allowed = prev_replication_allowed;
 
     if (c->flag.blocked) {
@@ -6783,7 +6793,6 @@ ValkeyModuleCallReply *VM_Call(ValkeyModuleCtx *ctx, const char *cmdname, const 
     }
 
 cleanup:
-    errno = error_code;
     if ((flags & VALKEYMODULE_ARGV_SCRIPT_MODE) && errno) {
         afterErrorReply(c, reply_error_msg, sdslen(reply_error_msg), 0);
         incrCommandStatsOnError(c->cmd, ERROR_COMMAND_REJECTED);

@@ -23,16 +23,16 @@ typedef struct _entry entry;
 sds entryGetField(const entry *entry);
 
 /* Returns the value string (sds) from the entry. */
-sds entryGetValue(const entry *entry);
-
-/* Sets or replaces the value string in the entry. May reallocate and return a new pointer. */
-entry *entrySetValue(entry *entry, sds value);
+char *entryGetValue(const entry *entry, size_t *len);
 
 /* Gets the expiration timestamp (UNIX time in milliseconds). */
 long long entryGetExpiry(const entry *entry);
 
 /* Returns true if the entry has an expiration timestamp set. */
 bool entryHasExpiry(const entry *entry);
+
+/* Returns true if the entry value is externalized. */
+bool entryHasStringRef(const entry *entry);
 
 /* Sets the expiration timestamp. */
 entry *entrySetExpiry(entry *entry, long long expiry);
@@ -45,6 +45,10 @@ void entryFree(entry *entry);
 
 /* Creates a new entry with the given field, value, and optional expiry. */
 entry *entryCreate(const_sds field, sds value, long long expiry);
+/* Sets the entry's value to a string reference object.
+ * The reference points to the provided `buf` but does not assume ownership.
+ * An external mechanism must handle the eventual memory deallocation of `buf`. */
+entry *entryUpdateAsStringRef(entry *entry, const char *buf, size_t len, long long expiry);
 
 /* Updates the value and/or expiry of an existing entry.
  * In case value is NULL, will use the existing entry value.
@@ -61,6 +65,6 @@ entry *entryDefrag(entry *entry, void *(*defragfn)(void *), sds (*sdsdefragfn)(s
 void entryDismissMemory(entry *entry);
 
 /* Internal used for debug. No need to use this function except in tests */
-bool entryHasEmbeddedValue(entry *entry);
+bool entryHasEmbeddedValue(const entry *entry);
 
 #endif

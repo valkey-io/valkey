@@ -1943,8 +1943,9 @@ static int rioWriteHashIteratorCursor(rio *r, hashTypeIterator *hi, int what) {
         else
             return rioWriteBulkLongLong(r, vll);
     } else if (hi->encoding == OBJ_ENCODING_HASHTABLE) {
-        sds value = hashTypeCurrentFromHashTable(hi, what);
-        return rioWriteBulkString(r, value, sdslen(value));
+        size_t len;
+        char *value = hashTypeCurrentFromHashTable(hi, what, &len);
+        return rioWriteBulkString(r, value, len);
     }
 
     serverPanic("Unknown hash encoding");
@@ -1962,7 +1963,8 @@ int rewriteHashObject(rio *r, robj *key, robj *o) {
         while (hashTypeNext(&hi) != C_ERR) {
             long long expiry = entryGetExpiry(hi.next);
             sds field = entryGetField(hi.next);
-            sds value = entryGetValue(hi.next);
+            size_t value_len;
+            char *value = entryGetValue(hi.next, &value_len);
             if (rioWriteBulkCount(r, '*', 8) == 0) return 0;
             if (rioWriteBulkString(r, "HSETEX", 6) == 0) return 0;
             if (rioWriteBulkObject(r, key) == 0) return 0;
@@ -1971,7 +1973,7 @@ int rewriteHashObject(rio *r, robj *key, robj *o) {
             if (rioWriteBulkString(r, "FIELDS", 6) == 0) return 0;
             if (rioWriteBulkLongLong(r, 1) == 0) return 0;
             if (rioWriteBulkString(r, field, sdslen(field)) == 0) return 0;
-            if (rioWriteBulkString(r, value, sdslen(value)) == 0) return 0;
+            if (rioWriteBulkString(r, value, value_len) == 0) return 0;
             volatile_items++;
         }
         hashTypeResetIterator(&hi);

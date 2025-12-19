@@ -998,14 +998,15 @@ ssize_t rdbSaveObject(rio *rdb, robj *o, robj *key, int dbid, unsigned char rdbt
             void *next;
             while (hashtableNext(&iter, &next)) {
                 sds field = entryGetField(next);
-                sds value = entryGetValue(next);
+                size_t value_len;
+                unsigned char *value = (unsigned char *)entryGetValue(next, &value_len);
 
                 if ((n = rdbSaveRawString(rdb, (unsigned char *)field, sdslen(field))) == -1) {
                     hashtableCleanupIterator(&iter);
                     return -1;
                 }
                 nwritten += n;
-                if ((n = rdbSaveRawString(rdb, (unsigned char *)value, sdslen(value))) == -1) {
+                if ((n = rdbSaveRawString(rdb, value, value_len)) == -1) {
                     hashtableCleanupIterator(&iter);
                     return -1;
                 }

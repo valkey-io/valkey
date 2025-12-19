@@ -39,6 +39,7 @@
 #include "io_threads.h"
 #include "sds.h"
 #include "module.h"
+#include "expire.h"
 
 #include <arpa/inet.h>
 #include <signal.h>
@@ -484,6 +485,8 @@ void debugCommand(client *c) {
             "    Default value is 1GB, allows values up to 4GB. Setting to 0 restores to default.",
             "SET-SKIP-CHECKSUM-VALIDATION <0|1>",
             "    Enables or disables checksum checks for RDB files and RESTORE's payload.",
+            "REPLICA-KEYS-WITH-EXPIRE-COUNT",
+            "    Return the number of keys in the replica keys with expire dictionary.",
             "SLEEP <seconds>",
             "    Stop the server for <seconds>. Decimals allowed.",
             "STRINGMATCH-TEST",
@@ -884,6 +887,8 @@ void debugCommand(client *c) {
     } else if (!strcasecmp(c->argv[1]->ptr, "set-active-expire") && c->argc == 3) {
         server.active_expire_enabled = atoi(c->argv[2]->ptr);
         addReply(c, shared.ok);
+    } else if (!strcasecmp(c->argv[1]->ptr, "replica-keys-with-expire-count") && c->argc == 2) {
+        addReplyLongLong(c, getReplicaKeyWithExpireCount());
     } else if (!strcasecmp(c->argv[1]->ptr, "quicklist-packed-threshold") && c->argc == 3) {
         int memerr;
         unsigned long long sz = memtoull((const char *)c->argv[2]->ptr, &memerr);

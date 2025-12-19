@@ -949,6 +949,87 @@ start_server {tags {"expire"}} {
             fail "Keys did not actively expire."
         }
     }
+
+    test {replicaKeysWithExpire memory leak verification and cleanup} {
+        # This test verifies the memory leak issue and cleanup mechanism for replicaKeysWithExpire
+        
+        # Set up a primary-replica relationship
+        start_server {tags {needs:repl external:skip}} {
+            set primary [srv 0 client]
+            set primary_host [srv 0 host]
+            set primary_port [srv 0 port]
+            
+            # Make this server a replica of the primary
+            r replicaof $primary_host $primary_port
+            
+            # Wait for replication to sync
+            wait_for_condition 50 100 {
+                [string match *slave* [r role]]
+            } else {
+                fail "Failed to become replica"
+            }
+            
+            # Verify we are in replica role
+            assert_equal [lindex [r role] 0] "slave"
+            
+            # Enable writable replica mode
+            r config set replica-read-only no
+            
+            # Disable the cleanup via debug command to simulate the memory leak scenario
+            r debug set-active-expire 0
+            
+            # Write a batch of keys with expiration directly to the replica
+            r flushall
+            set key_count 10
+            for {set i 0} {$i < $key_count} {incr i} {
+                r set "expire_key_$i" "value_from_replica_$i"
+                r expire "expire_key_$i" 1
+            }
+            
+            # Check the initial replicaKeysWithExpire count
+            set replica_count_before [r debug replica-keys-with-expire-count]
+            assert {$replica_count_before > 0} 
+            
+            # Now break the replication to simulate becoming primary
+            r replicaof no one
+            
+            # Verify we are now primary
+            wait_for_condition 50 100 {
+                [string match *master* [r role]]
+            } else {
+                fail "Failed to become primary"
+            }
+            
+            assert_equal [lindex [r role] 0] "master"
+            
+            # Wait for all keys to expire completely
+            after 1000
+            
+            # Check the replicaKeysWithExpire count after becoming primary and waiting for expiration
+            set primary_count_before_cleanup [r debug replica-keys-with-expire-count]
+            assert {$primary_count_before_cleanup > 0} 
+            
+            # Verify that the count is the same - this demonstrates the memory leak
+            # The replicaKeysWithExpire dictionary still contains entries even though keys have expired
+            # and we've become primary, but cleanup is disabled
+            assert {$primary_count_before_cleanup == $replica_count_before} 
+            
+            # Now enable the cleanup via debug command
+            r debug set-active-expire 1
+            
+            # Wait a moment for asynchronous cleanup to complete
+            after 1000
+            
+            # Check the replicaKeysWithExpire count after cleanup - should be 0
+            set primary_count_after_cleanup [r debug replica-keys-with-expire-count]
+            assert_equal $primary_count_after_cleanup 0 \
+                "Count should be 0 after cleanup, got $primary_count_after_cleanup"
+            
+            # Clean up
+            r flushall
+            assert_equal [r dbsize] 0
+        }
+    } {} {needs:debug}
 }
 
 start_server {tags {expire} overrides {hz 100}} {

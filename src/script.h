@@ -30,6 +30,8 @@
 #ifndef __SCRIPT_H_
 #define __SCRIPT_H_
 
+#include "valkeymodule.h"
+
 /*
  * Script.c unit provides an API for functions and eval
  * to interact with the server. Interaction includes mostly
@@ -74,7 +76,6 @@ typedef struct scriptRunCtx scriptRunCtx;
 struct scriptRunCtx {
     scriptingEngine *engine;
     const char *funcname;
-    client *c;
     client *original_client;
     int flags;
     int repl_flags;
@@ -106,16 +107,12 @@ int scriptPrepareForRun(scriptRunCtx *r_ctx,
                         uint64_t script_flags,
                         int ro);
 void scriptResetRun(scriptRunCtx *r_ctx);
-int scriptSetResp(scriptRunCtx *r_ctx, int resp);
-int scriptSetRepl(scriptRunCtx *r_ctx, int repl);
-void scriptCall(scriptRunCtx *r_ctx, sds *err);
 int scriptInterrupt(scriptRunCtx *r_ctx);
 void scriptKill(client *c, int is_eval);
 int scriptIsRunning(void);
 const char *scriptCurrFunction(void);
 int scriptIsEval(void);
 int scriptIsTimedout(void);
-client *scriptGetClient(void);
 client *scriptGetCaller(void);
 long long scriptRunDuration(void);
 

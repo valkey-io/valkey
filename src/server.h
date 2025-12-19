@@ -2785,6 +2785,7 @@ void dictVanillaFree(void *val);
 #define READ_FLAGS_NO_KEYS (1 << 19)
 #define READ_FLAGS_CROSSSLOT (1 << 20)
 #define READ_FLAGS_PREFETCHED (1 << 21)
+#define READ_FLAGS_ERROR_INVALID_CRLF (1 << 22)
 
 /* Write flags for various write errors and states */
 #define WRITE_FLAGS_WRITE_ERROR (1 << 0)
@@ -3123,6 +3124,7 @@ void abortFailover(const char *err);
 const char *getFailoverStateString(void);
 sds getReplicaPortString(void);
 int sendCurrentOffsetToReplica(client *replica);
+int replicaRdbVersion(client *replica);
 void addRdbReplicaToPsyncWait(client *replica);
 void initClientReplicationData(client *c);
 void freeClientReplicationData(client *c);

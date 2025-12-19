@@ -38,29 +38,29 @@ A vote shall also be called when an issue or pull request is marked as a major d
 ### Technical Major Decisions
 
 Technical major decisions include:
-    * Fundamental changes to the Valkey core datastructures
-    * Adding a new data structure or API
-    * Changes that affect backward compatibility
-    * New user visible fields that need to be maintained
-    * Adding or removing a new external library such as a client or module to the project when it affects runtime behavior
+* Fundamental changes to the Valkey core datastructures
+* Adding a new data structure or API
+* Changes that affect backward compatibility
+* New user visible fields that need to be maintained
+* Adding or removing a new external library such as a client or module to the project when it affects runtime behavior
 
 Technical major decisions shall be approved by a simple majority vote whenever one can be obtained.
 If a simple majority cannot be reached within a two-week voting period, and no TSC member has voted against, the decision may instead be approved through explicit “+2” support from at least two TSC members, recorded on the relevant issue or pull request.
-If the PR author or issue proposer is a TSC member, their +1 counts toward the +2.
+If the pull request author or issue proposer is a TSC member, their +1 counts toward the +2.
 If any TSC member casts a negative vote, the decision must follow the simple majority voting process and cannot be approved through +2.
 Once a technical major decision has been approved through the +2 mechanism, any subsequent concerns shall be raised through a new major decision process; +2 approvals are not retracted directly.
 
 ### Governance Major Decisions
 
 Governance major decisions include:
-    * Adding TSC members or involuntary removal of TSC members
-    * Modifying this governance document
-    * Delegation of maintainership for projects or governance authority
-    * Creating, modifying, or removing roles within the Valkey project
-    * Any change that alters voting rules, TSC responsibilities, or project oversight
-    * Structural changes to the TSC, including composition limits
+* Adding TSC members or involuntary removal of TSC members
+* Modifying this governance document
+* Delegation of maintainership for projects or governance authority
+* Creating, modifying, or removing roles within the Valkey project
+* Any change that alters voting rules, TSC responsibilities, or project oversight
+* Structural changes to the TSC, including composition limits
 
-Governance major decisions shall require approval by a 2/3 affirmative vote of the entire TSC.
+Governance major decisions shall require approval by a super-majority vote of at least two thirds (2/3) of the entire TSC.
 
 Any member of the TSC can call a vote with reasonable notice to the TSC, setting out a discussion period and a separate voting period.
 Any discussion may be conducted in person or electronically by text, voice, or video.

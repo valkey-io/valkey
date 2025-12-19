@@ -126,8 +126,10 @@ void createDumpPayload(rio *payload, robj *o, robj *key, int dbid) {
     /* Serialize the object in an RDB-like format. It consist of an object type
      * byte followed by the serialized object. This is understood by RESTORE. */
     rioInitWithBuffer(payload, sdsempty());
-    serverAssert(rdbSaveObjectType(payload, o));
-    serverAssert(rdbSaveObject(payload, o, key, dbid));
+    int rdbtype = rdbGetObjectType(o, RDB_VERSION);
+    serverAssert(rdbtype >= 0);
+    serverAssert(rdbSaveType(payload, rdbtype));
+    serverAssert(rdbSaveObject(payload, o, key, dbid, rdbtype));
 
     /* Write the footer, this is how it looks like:
      * ----------------+---------------------+---------------+

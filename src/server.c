@@ -1265,9 +1265,9 @@ void databasesCron(void) {
             expireReplicaKeys();
         } else if (!server.import_mode) {
             activeExpireCycle(ACTIVE_EXPIRE_CYCLE_SLOW);
-            /* If this node was previously a writable replica 
-             * and replicaKeysWithExpire is not empty, 
-             * it needs to be cleaned up; 
+            /* If this node was previously a writable replica
+             * and replicaKeysWithExpire is not empty,
+             * it needs to be cleaned up;
              * otherwise, it may lead to memory leaks. */
             size_t replica_key_count = getReplicaKeyWithExpireCount();
             if (replica_key_count > 0) {
@@ -2239,7 +2239,6 @@ void initServerConfig(void) {
     for (j = 0; j < CONFIG_DEFAULT_BINDADDR_COUNT; j++) server.bindaddr[j] = zstrdup(default_bindaddr[j]);
     memset(server.listeners, 0x00, sizeof(server.listeners));
     server.active_expire_enabled = 1;
-    
     server.lazy_expire_disabled = 0;
     server.skip_checksum_validation = 0;
     server.loading = 0;

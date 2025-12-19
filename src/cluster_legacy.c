@@ -7225,7 +7225,7 @@ int getMyShardSlotCount(void) {
 
 char **getClusterNodesList(size_t *numnodes) {
     size_t count = dictSize(server.cluster->nodes);
-    char **ids = zmalloc((count + 1) * CLUSTER_NAMELEN);
+    char **ids = zmalloc((count + 1) * sizeof(char *));
     dictIterator *di = dictGetIterator(server.cluster->nodes);
     dictEntry *de;
     int j = 0;

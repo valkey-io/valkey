@@ -12,7 +12,7 @@
                 "Added the `ANY` option for `COUNT`."
             ],
             [
-                "7.0.0", 
+                "7.0.0",
                 "Added support for uppercase unit names."
             ]
         ],
@@ -20,7 +20,9 @@
             "READONLY"
         ],
         "acl_categories": [
-            "GEO"
+            "GEO",
+            "READ",
+            "SLOW"
         ],
         "key_specs": [
             {

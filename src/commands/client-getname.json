@@ -14,7 +14,8 @@
             "SENTINEL"
         ],
         "acl_categories": [
-            "CONNECTION"
+            "CONNECTION",
+            "SLOW"
         ],
         "reply_schema": {
             "oneOf": [

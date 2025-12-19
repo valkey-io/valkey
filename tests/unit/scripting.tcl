@@ -1320,7 +1320,7 @@ start_server {tags {"scripting"}} {
         set rd [valkey_deferring_client]
         r config set lua-time-limit 10
 
-        # senging (in a pipeline):
+        # sending (in a pipeline):
         # 1. eval "while 1 do redis.call('ping') end" 0
         # 2. ping
         if {$is_eval == 1} {
@@ -1664,13 +1664,13 @@ start_server {tags {"scripting needs:debug external:skip"}} {
         r script debug sync
         r eval {return 'hello'} 0
         catch {r 'hello\0world'} e
-        assert_match {*Unknown Lua debugger command*} $e
+        assert_match {*Unknown debugger command*} $e
         catch {r 'hello\0'} e
-        assert_match {*Unknown Lua debugger command*} $e
+        assert_match {*Unknown debugger command*} $e
         catch {r '\0hello'} e
-        assert_match {*Unknown Lua debugger command*} $e
+        assert_match {*Unknown debugger command*} $e
         catch {r '\0hello\0'} e
-        assert_match {*Unknown Lua debugger command*} $e
+        assert_match {*Unknown debugger command*} $e
     }
 
     test {Test scripting debug lua stack overflow} {

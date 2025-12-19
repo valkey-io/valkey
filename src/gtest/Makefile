@@ -84,7 +84,6 @@ endif
 # OSS Valkey library dependencies
 VALKEY_LIB := ../libvalkey.a
 HIREDIS_LIB := ../../deps/libvalkey/lib/libvalkey.a
-LUA_LIB := ../../deps/lua/src/liblua.a
 JEMALLOC_LIB := ../../deps/jemalloc/lib/libjemalloc.a
 HDR_HISTOGRAM_LIB := ../../deps/hdr_histogram/libhdrhistogram.a
 FPCONV_LIB := ../../deps/fpconv/libfpconv.a
@@ -137,7 +136,6 @@ generated_wrappers.cpp: wrappers.h generate-wrappers.py
 generated_wrappers.o: generated_wrappers.cpp
 
 LD_LIBS := $(HIREDIS_LIB) \
-    $(LUA_LIB) \
     $(JEMALLOC_LIB) \
     $(GMOCK_LIB) \
     $(GTEST_LIB) \

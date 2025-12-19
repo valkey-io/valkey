@@ -40,7 +40,7 @@ proc test_migrated_replica {type} {
         set addr "[srv 0 host]:[srv 0 port]"
         set myid [R 3 CLUSTER MYID]
         set code [catch {
-            exec src/valkey-cli {*}[valkeycli_tls_config "./tests"] --cluster rebalance $addr --cluster-weight $myid=0
+            exec $::VALKEY_CLI_BIN {*}[valkeycli_tls_config "./tests"] --cluster rebalance $addr --cluster-weight $myid=0
         } result]
         if {$code != 0} {
             fail "valkey-cli --cluster rebalance returns non-zero exit code, output below:\n$result"
@@ -256,7 +256,7 @@ proc test_sub_replica {type} {
         set addr "[srv 0 host]:[srv 0 port]"
         set myid [R 3 CLUSTER MYID]
         set code [catch {
-            exec src/valkey-cli {*}[valkeycli_tls_config "./tests"] --cluster rebalance $addr --cluster-weight $myid=0
+            exec $::VALKEY_CLI_BIN {*}[valkeycli_tls_config "./tests"] --cluster rebalance $addr --cluster-weight $myid=0
         } result]
         if {$code != 0} {
             fail "valkey-cli --cluster rebalance returns non-zero exit code, output below:\n$result"
@@ -371,7 +371,7 @@ proc test_cluster_setslot {type} {
         set addr "[srv 0 host]:[srv 0 port]"
         set myid [R 3 CLUSTER MYID]
         set code [catch {
-            exec src/valkey-cli {*}[valkeycli_tls_config "./tests"] --cluster rebalance $addr --cluster-weight $myid=0
+            exec $::VALKEY_CLI_BIN {*}[valkeycli_tls_config "./tests"] --cluster rebalance $addr --cluster-weight $myid=0
         } result]
         if {$code != 0} {
             fail "valkey-cli --cluster rebalance returns non-zero exit code, output below:\n$result"

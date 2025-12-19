@@ -94,6 +94,9 @@
                     }
                 }
             }
-        }
+        },
+        "acl_categories": [
+            "SLOW"
+        ]
     }
 }

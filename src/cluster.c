@@ -126,8 +126,10 @@ void createDumpPayload(rio *payload, robj *o, robj *key, int dbid) {
     /* Serialize the object in an RDB-like format. It consist of an object type
      * byte followed by the serialized object. This is understood by RESTORE. */
     rioInitWithBuffer(payload, sdsempty());
-    serverAssert(rdbSaveObjectType(payload, o));
-    serverAssert(rdbSaveObject(payload, o, key, dbid));
+    int rdbtype = rdbGetObjectType(o, RDB_VERSION);
+    serverAssert(rdbtype >= 0);
+    serverAssert(rdbSaveType(payload, rdbtype));
+    serverAssert(rdbSaveObject(payload, o, key, dbid, rdbtype));
 
     /* Write the footer, this is how it looks like:
      * ----------------+---------------------+---------------+
@@ -198,7 +200,7 @@ void dumpCommand(client *c) {
 
 /* RESTORE key ttl serialized-value [REPLACE] [ABSTTL] [IDLETIME seconds] [FREQ frequency] */
 void restoreCommand(client *c) {
-    long long ttl, lfu_freq = -1, lru_idle = -1, lru_clock = -1;
+    long long ttl, lfu_freq = -1, lru_idle = -1;
     uint16_t rdbver = 0;
     rio payload;
     int j, type, replace = 0, absttl = 0;
@@ -217,7 +219,6 @@ void restoreCommand(client *c) {
                 addReplyError(c, "Invalid IDLETIME value, must be >= 0");
                 return;
             }
-            lru_clock = LRU_CLOCK();
             j++; /* Consume additional arg. */
         } else if (!strcasecmp(c->argv[j]->ptr, "freq") && additional >= 1 && lru_idle == -1) {
             if (getLongLongFromObjectOrReply(c, c->argv[j + 1], &lfu_freq, NULL) != C_OK) return;
@@ -305,7 +306,7 @@ void restoreCommand(client *c) {
             rewriteClientCommandArgument(c, c->argc, shared.absttl);
         }
     }
-    objectSetLRUOrLFU(obj, lfu_freq, lru_idle, lru_clock, 1000);
+    objectSetLRUOrLFU(obj, lfu_freq, lru_idle);
     signalModifiedKey(c, c->db, key);
     notifyKeyspaceEvent(NOTIFY_GENERIC, "restore", key, c->db->id);
     addReply(c, shared.ok);
@@ -899,7 +900,7 @@ void clusterCommand(client *c) {
     } else if (!strcasecmp(c->argv[1]->ptr, "info") && c->argc == 2) {
         /* CLUSTER INFO */
 
-        sds info = genClusterInfoString();
+        sds info = genClusterInfoString(sdsempty());
 
         /* Produce the reply protocol. */
         addReplyVerbatim(c, info, sdslen(info), "txt");

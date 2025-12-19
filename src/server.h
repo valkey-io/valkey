@@ -84,6 +84,7 @@
 #include "vset.h"
 #include "trace/trace.h"
 #include "entry.h"
+#include "lrulfu.h"
 
 #ifdef USE_LTTNG
 #define valkey_fork() do_fork()
@@ -148,7 +149,7 @@ struct hdr_histogram;
 #define CONFIG_BINDADDR_MAX 16
 #define CONFIG_MIN_RESERVED_FDS 32
 #define CONFIG_DEFAULT_PROC_TITLE_TEMPLATE "{title} {listen-addr} {server-mode}"
-#define DEFAULT_WAIT_BEFORE_RDB_CLIENT_FREE 60      /* Grace period in seconds for replica main \
+#define DEFAULT_WAIT_BEFORE_RDB_CLIENT_FREE 5       /* Grace period in seconds for replica main \
                                                      * channel to establish psync. */
 #define LOADING_PROCESS_EVENTS_INTERVAL_DEFAULT 100 /* Default: 0.1 seconds */
 #if !defined(DEBUG_FORCE_DEFRAG)
@@ -349,8 +350,9 @@ extern int configOOMScoreAdjValuesDefaults[CONFIG_OOM_COUNT];
 
 /* RDB return values for rdbLoad. */
 #define RDB_OK 0
-#define RDB_NOT_EXIST 1 /* RDB file doesn't exist. */
-#define RDB_FAILED 2    /* Failed to load the RDB file. */
+#define RDB_NOT_EXIST 1    /* RDB file doesn't exist. */
+#define RDB_INCOMPATIBLE 2 /* RDB version or signature is not compatible */
+#define RDB_FAILED 3       /* Failed to load the RDB file. */
 
 /* Command doc flags */
 #define CMD_DOC_NONE 0
@@ -626,6 +628,14 @@ typedef enum { LOG_TIMESTAMP_LEGACY = 0,
 typedef enum { RDB_VERSION_CHECK_STRICT = 0,
                RDB_VERSION_CHECK_RELAXED } rdb_version_check_type;
 
+/* Structure representing a non-owning view of a buffer.
+ * A stringRef struct does not manage the underlying memory, so its destruction
+ * will not free the buffer. */
+typedef struct stringRef {
+    const char *buf; /* Pointer to the externalized buffer */
+    size_t len;      /* Length of the buffer */
+} stringRef;
+
 /* common sets of actions to pause/unpause */
 #define PAUSE_ACTIONS_CLIENT_WRITE_SET \
     (PAUSE_ACTION_CLIENT_WRITE | PAUSE_ACTION_EXPIRE | PAUSE_ACTION_EVICT | PAUSE_ACTION_REPLICA)
@@ -785,10 +795,6 @@ typedef struct ValkeyModuleType moduleType;
 #define OBJ_ENCODING_STREAM 10    /* Encoded as a radix tree of listpacks */
 #define OBJ_ENCODING_LISTPACK 11  /* Encoded as a listpack */
 
-#define LRU_BITS 24
-#define LRU_CLOCK_MAX ((1 << LRU_BITS) - 1) /* Max value of obj->lru */
-#define LRU_CLOCK_RESOLUTION 1000           /* LRU clock resolution in ms */
-
 #define OBJ_REFCOUNT_BITS 30
 #define OBJ_SHARED_REFCOUNT ((1 << OBJ_REFCOUNT_BITS) - 1) /* Global object never destroyed. */
 #define OBJ_STATIC_REFCOUNT ((1 << OBJ_REFCOUNT_BITS) - 2) /* Object allocated in the stack. */
@@ -796,9 +802,7 @@ typedef struct ValkeyModuleType moduleType;
 struct serverObject {
     unsigned type : 4;
     unsigned encoding : 4;
-    unsigned lru : LRU_BITS; /* LRU time (relative to global lru_clock) or
-                              * LFU data (least significant 8 bits frequency
-                              * and most significant 16 bits access time). */
+    unsigned lru : LRULFU_BITS;
     unsigned hasexpire : 1;
     unsigned hasembkey : 1;
     unsigned refcount : OBJ_REFCOUNT_BITS;
@@ -1409,7 +1413,7 @@ struct sharedObjectsStruct {
         *loadingerr_variants[2], *slowevalerr_variants[2], *slowscripterr_variants[2], *slowmoduleerr_variants[2],
         *bgsaveerr_variants[2],
         *execaborterr, *noautherr, *noreplicaserr, *busykeyerr, *oomerr, *plus, *messagebulk, *pmessagebulk,
-        *subscribebulk, *unsubscribebulk, *psubscribebulk, *punsubscribebulk, *del, *unlink, *rpop, *lpop, *lpush,
+        *subscribebulk, *unsubscribebulk, *psubscribebulk, *punsubscribebulk, *del, *unlink, *rpop, *lpop, *lpush, *zadd,
         *rpoplpush, *lmove, *blmove, *zpopmin, *zpopmax, *emptyscan, *multi, *exec, *left, *right, *hset, *hdel, *hpexpireat, *hpersist, *srem,
         *xgroup, *xclaim, *script, *replconf, *eval, *cluster, *syncslots, *persist, *set, *pexpireat, *pexpire, *time, *pxat, *absttl,
         *retrycount, *force, *justid, *entriesread, *lastid, *ping, *setid, *keepttl, *load, *createconsumer, *getack,
@@ -1425,7 +1429,6 @@ struct sharedObjectsStruct {
 
 /* ZSETs use a specialized version of Skiplists */
 typedef struct zskiplistNode {
-    sds ele;
     double score;
     struct zskiplistNode *backward;
     struct zskiplistLevel {
@@ -1436,6 +1439,7 @@ typedef struct zskiplistNode {
          * So we use it in order to hold the height of the node, which is the number of levels. */
         unsigned long span;
     } level[];
+    /* After the level[], sds header length (1 byte) and an embedded sds element are stored. */
 } zskiplistNode;
 
 typedef struct zskiplist {
@@ -1683,7 +1687,6 @@ struct valkeyServer {
     _Atomic AeIoState io_poll_state;     /* Indicates the state of the IO polling. */
     int io_ae_fired_events;              /* Number of poll events received by the IO thread. */
     rax *errors;                         /* Errors table */
-    unsigned int lruclock;               /* Clock for LRU eviction */
     volatile sig_atomic_t shutdown_asap; /* Shutdown ordered by signal handler. */
     mstime_t shutdown_mstime;            /* Timestamp to limit graceful shutdown. */
     int last_sig_received;               /* Indicates the last SIGNAL received, if any (e.g., SIGINT or SIGTERM). */
@@ -2216,6 +2219,7 @@ struct valkeyServer {
                                                             * dropping packets of a specific type */
     unsigned long cluster_blacklist_ttl;                   /* Duration in seconds that a node is denied re-entry into
                                                             * the cluster after it is forgotten with CLUSTER FORGET. */
+    sds hash_seed;                                         /* Configurable DB hash seed */
     int cluster_slot_stats_enabled;                        /* Cluster slot usage statistics tracking enabled. */
     mstime_t cluster_mf_timeout;                           /* Milliseconds to do a manual failover. */
     unsigned long cluster_slot_migration_log_max_len;      /* Maximum count of migrations to display in the
@@ -2783,6 +2787,7 @@ void dictVanillaFree(void *val);
 #define READ_FLAGS_NO_KEYS (1 << 19)
 #define READ_FLAGS_CROSSSLOT (1 << 20)
 #define READ_FLAGS_PREFETCHED (1 << 21)
+#define READ_FLAGS_ERROR_INVALID_CRLF (1 << 22)
 
 /* Write flags for various write errors and states */
 #define WRITE_FLAGS_WRITE_ERROR (1 << 0)
@@ -3056,7 +3061,6 @@ char *strEncoding(int encoding);
 int compareStringObjects(const robj *a, const robj *b);
 int collateStringObjects(const robj *a, const robj *b);
 int equalStringObjects(robj *a, robj *b);
-unsigned long long estimateObjectIdleTime(robj *o);
 void trimStringObjectIfNeeded(robj *o, int trim_small_values);
 #define sdsEncodedObject(objptr) (objptr->encoding == OBJ_ENCODING_RAW || objptr->encoding == OBJ_ENCODING_EMBSTR)
 
@@ -3066,6 +3070,9 @@ robj *objectSetKeyAndExpire(robj *val, sds key, long long expire);
 robj *objectSetExpire(robj *val, long long expire);
 sds objectGetKey(const robj *val);
 long long objectGetExpire(const robj *val);
+uint8_t objectGetLFUFrequency(robj *o);
+uint32_t objectGetLRUIdleSecs(robj *o);
+uint32_t objectGetIdleness(robj *o);
 
 /* Synchronous I/O with timeout */
 ssize_t syncWrite(int fd, char *ptr, ssize_t size, long long timeout);
@@ -3119,6 +3126,7 @@ void abortFailover(const char *err);
 const char *getFailoverStateString(void);
 sds getReplicaPortString(void);
 int sendCurrentOffsetToReplica(client *replica);
+int replicaRdbVersion(client *replica);
 void addRdbReplicaToPsyncWait(client *replica);
 void initClientReplicationData(client *c);
 void freeClientReplicationData(client *c);
@@ -3199,6 +3207,7 @@ void ACLInit(void);
 #define ACL_LOG_CTX_LUA 1
 #define ACL_LOG_CTX_MULTI 2
 #define ACL_LOG_CTX_MODULE 3
+#define ACL_LOG_CTX_SCRIPT 4
 
 /* ACL key permission types */
 #define ACL_READ_PERMISSION (1 << 0)
@@ -3218,7 +3227,7 @@ int ACLAuthenticateUser(client *c, robj *username, robj *password, robj **err);
 void addAuthErrReply(client *c, robj *err);
 unsigned long ACLGetCommandID(sds cmdname);
 user *ACLGetUserByName(const char *name, size_t namelen);
-int ACLUserCheckKeyPerm(user *u, const char *key, int keylen, int flags);
+int ACLUserCheckKeyPerm(user *u, const char *key, int keylen, int flags, bool is_prefix);
 int ACLUserCheckChannelPerm(user *u, sds channel, int literal);
 int ACLCheckAllUserCommandPerm(user *u, struct serverCommand *cmd, robj **argv, int argc, int *idxptr);
 int ACLUserCheckCmdWithUnrestrictedKeyAccess(user *u, struct serverCommand *cmd, robj **argv, int argc, int flags);
@@ -3275,8 +3284,9 @@ typedef struct {
 
 zskiplist *zslCreate(void);
 void zslFree(zskiplist *zsl);
-zskiplistNode *zslInsert(zskiplist *zsl, double score, sds ele);
+zskiplistNode *zslInsert(zskiplist *zsl, double score, const_sds ele);
 zskiplistNode *zslNthInRange(zskiplist *zsl, zrangespec *range, long n, long *rank);
+sds zslGetNodeElement(const zskiplistNode *x);
 double zzlGetScore(unsigned char *sptr);
 void zzlNext(unsigned char *zl, unsigned char **eptr, unsigned char **sptr);
 void zzlPrev(unsigned char *zl, unsigned char **eptr, unsigned char **sptr);
@@ -3378,8 +3388,6 @@ void exitExecutionUnit(void);
 void resetServerStats(void);
 void monitorActiveDefrag(void);
 void defragWhileBlocked(void);
-unsigned int getLRUClock(void);
-unsigned int LRU_CLOCK(void);
 const char *evictPolicyToString(void);
 struct serverMemOverhead *getMemoryOverheadData(void);
 void freeMemoryOverheadData(struct serverMemOverhead *mh);
@@ -3434,8 +3442,8 @@ robj *setTypeDup(robj *o);
 #define HASH_SET_COPY 0
 
 
-void hashTypeFreeVolatileSet(robj *o);         /* needed only for freeHashObject */
-void hashTypeTrackEntry(robj *o, void *entry); /* needed only for rdbLoadObject */
+void hashTypeFreeVolatileSet(robj *o);          /* needed only for freeHashObject */
+void hashTypeTrackEntry(robj *o, entry *entry); /* needed only for rdbLoadObject */
 size_t hashTypeScanDefrag(robj *ob, size_t cursor, void *(*defragAlloc)(void *));
 size_t hashTypeDeleteExpiredFields(robj *o, mstime_t now, unsigned long max_fields, robj **out_fields);
 
@@ -3453,13 +3461,15 @@ void hashTypeCurrentFromListpack(hashTypeIterator *hi,
                                  unsigned char **vstr,
                                  unsigned int *vlen,
                                  long long *vll);
-sds hashTypeCurrentFromHashTable(hashTypeIterator *hi, int what);
+char *hashTypeCurrentFromHashTable(hashTypeIterator *hi, int what, size_t *len);
 sds hashTypeCurrentObjectNewSds(hashTypeIterator *hi, int what);
 robj *hashTypeLookupWriteOrCreate(client *c, robj *key);
 robj *hashTypeGetValueObject(robj *o, sds field);
 int hashTypeSet(robj *o, sds field, sds value, long long expiry, int flags);
 robj *hashTypeDup(robj *o);
 bool hashTypeHasVolatileFields(robj *o);
+int hashTypeUpdateAsStringRef(robj *o, sds field, const char *buf, size_t len);
+bool hashTypeHasStringRef(robj *o, sds field);
 
 /* Pub / Sub */
 int pubsubUnsubscribeAllChannels(client *c, int notify);
@@ -3588,7 +3598,7 @@ robj *lookupKeyReadWithFlags(serverDb *db, robj *key, int flags);
 robj *lookupKeyWriteWithFlags(serverDb *db, robj *key, int flags);
 robj *objectCommandLookup(client *c, robj *key);
 robj *objectCommandLookupOrReply(client *c, robj *key, robj *reply);
-int objectSetLRUOrLFU(robj *val, long long lfu_freq, long long lru_idle, long long lru_clock, int lru_multiplier);
+int objectSetLRUOrLFU(robj *val, long long lfu_freq, long long lru_idle_secs);
 #define LOOKUP_NONE 0
 #define LOOKUP_NOTOUCH (1 << 0)  /* Don't update LRU. */
 #define LOOKUP_NONOTIFY (1 << 1) /* Don't trigger keyspace event on key misses. */
@@ -3698,7 +3708,7 @@ int redis_check_aof_main(int argc, char **argv);
 /* Scripting */
 void freeEvalScripts(dict *scripts, list *scripts_lru_list, list *engine_callbacks);
 void freeEvalScriptsAsync(dict *scripts, list *scripts_lru_list, list *engine_callbacks);
-void freeFunctionsAsync(functionsLibCtx *lib_ctx);
+void freeFunctionsAsync(functionsLibCtx *lib_ctx, list *engine_callbacks);
 void sha1hex(char *digest, char *script, size_t len);
 unsigned long evalMemory(void);
 dict *evalScriptsDict(void);
@@ -3748,10 +3758,6 @@ int clientsCronHandleTimeout(client *c, mstime_t now_ms);
 
 /* evict.c -- maxmemory handling and LRU eviction. */
 void evictionPoolAlloc(void);
-#define LFU_INIT_VAL 5
-unsigned long LFUGetTimeInMinutes(void);
-uint8_t LFULogIncr(uint8_t value);
-unsigned long LFUDecrAndReturn(robj *o);
 #define EVICT_OK 0
 #define EVICT_RUNNING 1
 #define EVICT_FAIL 2
@@ -3924,6 +3930,7 @@ void hsetnxCommand(client *c);
 void hsetexCommand(client *c);
 void hgetexCommand(client *c);
 void hgetCommand(client *c);
+void hgetdelCommand(client *c);
 void hmgetCommand(client *c);
 void hdelCommand(client *c);
 void hlenCommand(client *c);

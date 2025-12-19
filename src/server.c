@@ -1497,7 +1497,6 @@ long long serverCron(struct aeEventLoop *eventLoop, long long id, void *clientDa
     run_with_period(100) {
         monotime current_time = getMonotonicUs();
         long long factor = 1000000; // us
-        trackInstantaneousMetric(STATS_METRIC_MAIN_THREAD_UTILIZATION, server.stat_busy_time, current_time, 100);
         trackInstantaneousMetric(STATS_METRIC_COMMAND, server.stat_numcommands, current_time, factor);
         trackInstantaneousMetric(STATS_METRIC_NET_INPUT, server.stat_net_input_bytes + server.stat_net_repl_input_bytes + server.bio_stat_net_repl_input_bytes + server.stat_net_cluster_slot_import_bytes,
                                  current_time, factor);
@@ -1944,7 +1943,7 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
                            server.el_iteration_work.client_writes > 0);
 
             if (is_busy) {
-                server.stat_busy_time += el_duration;
+                server.stat_active_time += el_duration;
             }
         }
     }
@@ -2777,7 +2776,7 @@ void resetServerStats(void) {
     server.stat_reply_buffer_expands = 0;
     memset(server.duration_stats, 0, sizeof(durationStats) * EL_DURATION_TYPE_NUM);
     server.el_cmd_cnt_max = 0;
-    server.stat_busy_time = 0;
+    server.stat_active_time = 0;
     memset(&server.el_iteration_work, 0, sizeof(server.el_iteration_work));
     lazyfreeResetStats();
 }
@@ -2952,6 +2951,7 @@ void initServer(void) {
     resetServerStats();
     /* A few stats we don't want to reset: server startup time, and peak mem. */
     server.stat_starttime = time(NULL);
+    server.stat_starttime_mono = getMonotonicUs();
     server.stat_peak_memory = 0;
     server.stat_current_cow_peak = 0;
     server.stat_current_cow_bytes = 0;
@@ -5854,7 +5854,9 @@ void totalNumberOfStatefulKeys(unsigned long *blocking_keys,
  * on memory corruption problems. */
 sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
     sds info = sdsempty();
-    time_t uptime = server.unixtime - server.stat_starttime;
+    long long factor = 1000000; // us
+    monotime uptime_mono = getMonotonicUs() - server.stat_starttime_mono;
+    time_t uptime = uptime_mono / factor;
     int j;
     int sections = 0;
     if (everything) all_sections = 1;
@@ -6400,9 +6402,11 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                             (long)m_ru.ru_stime.tv_sec, (long)m_ru.ru_stime.tv_usec, (long)m_ru.ru_utime.tv_sec,
                             (long)m_ru.ru_utime.tv_usec);
 #endif /* RUSAGE_THREAD */
+        long long active_seconds = server.stat_active_time / factor;
+        long long active_microseconds = server.stat_active_time % factor;
         info = sdscatprintf(info,
-                            "main_thread_utilization_perc:%lld\r\n",
-                            getInstantaneousMetric(STATS_METRIC_MAIN_THREAD_UTILIZATION));
+                            "used_cpu_active_main_thread:%lld.%06lld\r\n",
+                            active_seconds, active_microseconds);
     }
 
     /* Modules */

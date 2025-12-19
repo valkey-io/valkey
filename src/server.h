@@ -183,15 +183,14 @@ struct hdr_histogram;
 /* Instantaneous metrics tracking. */
 #define STATS_METRIC_SAMPLES 16 /* Number of samples per metric. */
 typedef enum {
-    STATS_METRIC_COMMAND = 0,             /* Number of commands executed. */
-    STATS_METRIC_NET_INPUT,               /* Bytes read to network. */
-    STATS_METRIC_NET_OUTPUT,              /* Bytes written to network. */
-    STATS_METRIC_NET_INPUT_REPLICATION,   /* Bytes read to network during replication. */
-    STATS_METRIC_NET_OUTPUT_REPLICATION,  /* Bytes written to network during replication. */
-    STATS_METRIC_EL_CYCLE,                /* Number of eventloop cycled. */
-    STATS_METRIC_EL_DURATION,             /* Eventloop duration. */
-    STATS_METRIC_MAIN_THREAD_UTILIZATION, /* Main thread CPU utilization percentage. */
-    STATS_METRIC_COUNT                    /* Total count */
+    STATS_METRIC_COMMAND = 0,            /* Number of commands executed. */
+    STATS_METRIC_NET_INPUT,              /* Bytes read to network. */
+    STATS_METRIC_NET_OUTPUT,             /* Bytes written to network. */
+    STATS_METRIC_NET_INPUT_REPLICATION,  /* Bytes read to network during replication. */
+    STATS_METRIC_NET_OUTPUT_REPLICATION, /* Bytes written to network during replication. */
+    STATS_METRIC_EL_CYCLE,               /* Number of eventloop cycled. */
+    STATS_METRIC_EL_DURATION,            /* Eventloop duration. */
+    STATS_METRIC_COUNT                   /* Total count */
 } instantaneous_metric_type;
 
 /* Protocol and I/O related defines */
@@ -1863,7 +1862,8 @@ struct valkeyServer {
     long long stat_reply_buffer_expands; /* Total number of output buffer expands */
     monotime el_start;
     /* Main thread utilization tracking */
-    monotime stat_busy_time; /* Cumulative time in busy cycles (microseconds) */
+    monotime stat_active_time;    /* Cumulative active time for main thread in microseconds */
+    monotime stat_starttime_mono; /* Monotonic start time for cumulative metrics */
     struct {
         int file_events;   /* Events from epoll */
         int io_responses;  /* IO thread responses processed */

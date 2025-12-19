@@ -1863,11 +1863,7 @@ struct valkeyServer {
     monotime el_start;
     /* Main thread utilization tracking */
     monotime stat_active_time; /* Cumulative active time for main thread in microseconds */
-    struct {
-        int file_events;   /* Events from epoll */
-        int io_responses;  /* IO thread responses processed */
-        int client_writes; /* Client writes handled */
-    } el_iteration_work;
+    bool el_iteration_active;  /* Tracks if any work was done in the current event loop iteration */
     /* The following two are used to record the max number of commands executed in one eventloop.
      * Note that commands in transactions are also counted. */
     long long el_cmd_cnt_start;

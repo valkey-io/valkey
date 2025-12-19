@@ -1801,7 +1801,7 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
         do {
             /* Try to process all the pending IO events. */
             last_processed = processIOThreadsReadDone() + processIOThreadsWriteDone();
-            server.el_iteration_work.io_responses += last_processed;
+            if (last_processed > 0) server.el_iteration_active = true;
             processed += last_processed;
         } while (last_processed != 0);
         processed += freeClientsInAsyncFreeQueue();
@@ -1811,7 +1811,7 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
 
     /* We should handle pending reads clients ASAP after event loop. */
     int io_responses = processIOThreadsReadDone();
-    server.el_iteration_work.io_responses += io_responses;
+    if (io_responses > 0) server.el_iteration_active = true;
 
     /* Handle pending data(typical TLS). (must be done before flushAppendOnlyFile) */
     connTypeProcessPendingData();
@@ -1903,16 +1903,16 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
 
     /* Handle writes with pending output buffers. */
     int client_writes = handleClientsWithPendingWrites();
-    server.el_iteration_work.client_writes = client_writes;
+    if (client_writes > 0) server.el_iteration_active = true;
 
     /* Try to process more IO reads that are ready to be processed. */
     if (server.aof_fsync != AOF_FSYNC_ALWAYS) {
         int io_responses_after = processIOThreadsReadDone();
-        server.el_iteration_work.io_responses += io_responses_after;
+        if (io_responses_after > 0) server.el_iteration_active = true;
     }
 
     int io_writes = processIOThreadsWriteDone();
-    server.el_iteration_work.io_responses += io_writes;
+    if (io_writes > 0) server.el_iteration_active = true;
 
     /* Record cron time in beforeSleep. This does not include the time consumed by AOF writing and IO writing above. */
     monotime cron_start_time_after_write = getMonotonicUs();
@@ -1937,14 +1937,8 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
         latencyTraceIfNeeded(server, eventloop, el_duration);
 
         /* Accumulate time only for busy cycles */
-        if (!ProcessingEventsWhileBlocked) {
-            int is_busy = (server.el_iteration_work.file_events > 0 ||
-                           server.el_iteration_work.io_responses > 0 ||
-                           server.el_iteration_work.client_writes > 0);
-
-            if (is_busy) {
-                server.stat_active_time += el_duration;
-            }
+        if (!ProcessingEventsWhileBlocked && server.el_iteration_active) {
+            server.stat_active_time += el_duration;
         }
     }
     server.el_cron_duration += duration_before_aof + duration_after_write;
@@ -1995,9 +1989,8 @@ void afterSleep(struct aeEventLoop *eventLoop, int numevents) {
         }
         /* Set the eventloop start time. */
         server.el_start = getMonotonicUs();
-        /* Reset iteration work counters */
-        memset(&server.el_iteration_work, 0, sizeof(server.el_iteration_work));
-        server.el_iteration_work.file_events = numevents;
+        /* Reset iteration work flag */
+        server.el_iteration_active = (numevents > 0);
         /* Set the eventloop command count at start. */
         server.el_cmd_cnt_start = server.stat_numcommands;
     }
@@ -2777,7 +2770,7 @@ void resetServerStats(void) {
     memset(server.duration_stats, 0, sizeof(durationStats) * EL_DURATION_TYPE_NUM);
     server.el_cmd_cnt_max = 0;
     server.stat_active_time = 0;
-    memset(&server.el_iteration_work, 0, sizeof(server.el_iteration_work));
+    server.el_iteration_active = false;
     lazyfreeResetStats();
 }
 
@@ -5853,9 +5846,8 @@ void totalNumberOfStatefulKeys(unsigned long *blocking_keys,
  * on memory corruption problems. */
 sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
     sds info = sdsempty();
-    long long factor = 1000000; // us
     monotime uptime_mono = getMonotonicUs() - server.stat_starttime;
-    time_t uptime = uptime_mono / factor;
+    time_t uptime = uptime_mono / 1000000;
     int j;
     int sections = 0;
     if (everything) all_sections = 1;
@@ -6401,8 +6393,8 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                             (long)m_ru.ru_stime.tv_sec, (long)m_ru.ru_stime.tv_usec, (long)m_ru.ru_utime.tv_sec,
                             (long)m_ru.ru_utime.tv_usec);
 #endif /* RUSAGE_THREAD */
-        long long active_seconds = server.stat_active_time / factor;
-        long long active_microseconds = server.stat_active_time % factor;
+        long long active_seconds = server.stat_active_time / 1000000;
+        long long active_microseconds = server.stat_active_time % 1000000;
         info = sdscatprintf(info,
                             "used_cpu_active_main_thread:%lld.%06lld\r\n",
                             active_seconds, active_microseconds);

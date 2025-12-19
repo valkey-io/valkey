@@ -1781,6 +1781,7 @@ struct valkeyServer {
     time_t loading_process_events_interval_ms;
     /* Fields used only for stats */
     time_t stat_starttime;                         /* Server start time */
+    monotime stat_starttime_mono;                  /* Monotonic server start time */
     long long stat_numcommands;                    /* Number of processed commands */
     long long stat_numconnections;                 /* Number of connections received */
     long long stat_expiredkeys;                    /* Number of expired keys */
@@ -1863,7 +1864,6 @@ struct valkeyServer {
     monotime el_start;
     /* Main thread utilization tracking */
     monotime stat_active_time;    /* Cumulative active time for main thread in microseconds */
-    monotime stat_starttime_mono; /* Monotonic start time for cumulative metrics */
     struct {
         int file_events;   /* Events from epoll */
         int io_responses;  /* IO thread responses processed */

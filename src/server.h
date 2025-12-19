@@ -1862,7 +1862,7 @@ struct valkeyServer {
     long long stat_reply_buffer_expands; /* Total number of output buffer expands */
     monotime el_start;
     /* Main thread utilization tracking */
-    monotime stat_active_time;    /* Cumulative active time for main thread in microseconds */
+    monotime stat_active_time; /* Cumulative active time for main thread in microseconds */
     struct {
         int file_events;   /* Events from epoll */
         int io_responses;  /* IO thread responses processed */

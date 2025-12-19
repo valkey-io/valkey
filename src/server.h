@@ -1780,8 +1780,7 @@ struct valkeyServer {
     off_t loading_process_events_interval_bytes;
     time_t loading_process_events_interval_ms;
     /* Fields used only for stats */
-    time_t stat_starttime;                         /* Server start time */
-    monotime stat_starttime_mono;                  /* Monotonic server start time */
+    monotime stat_starttime;                       /* Monotonic server start time */
     long long stat_numcommands;                    /* Number of processed commands */
     long long stat_numconnections;                 /* Number of connections received */
     long long stat_expiredkeys;                    /* Number of expired keys */

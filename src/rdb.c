@@ -75,6 +75,7 @@ extern int rdbCheckMode;
 void rdbCheckError(const char *fmt, ...);
 void rdbCheckSetError(const char *fmt, ...);
 int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadingCtx *rdb_loading_ctx);
+void replicationEmptyDbCallback(hashtable *ht);
 
 /* Returns true if the RDB version is valid and accepted, false otherwise. This
  * function takes configuration into account. The parameter `is_valkey_magic`
@@ -707,43 +708,47 @@ int rdbLoadBinaryFloatValue(rio *rdb, float *val) {
     return 0;
 }
 
-/* Save the object type of object "o". */
-int rdbSaveObjectType(rio *rdb, robj *o) {
+/* Return the RDB object type to use for saving object "o", or -1 if the object
+ * can't be represented in the given RDB version (only for older RDB). */
+int rdbGetObjectType(robj *o, int rdbver) {
     switch (o->type) {
-    case OBJ_STRING: return rdbSaveType(rdb, RDB_TYPE_STRING);
+    case OBJ_STRING: return RDB_TYPE_STRING;
     case OBJ_LIST:
         if (o->encoding == OBJ_ENCODING_QUICKLIST || o->encoding == OBJ_ENCODING_LISTPACK)
-            return rdbSaveType(rdb, RDB_TYPE_LIST_QUICKLIST_2);
+            return RDB_TYPE_LIST_QUICKLIST_2;
         else
             serverPanic("Unknown list encoding");
     case OBJ_SET:
         if (o->encoding == OBJ_ENCODING_INTSET)
-            return rdbSaveType(rdb, RDB_TYPE_SET_INTSET);
+            return RDB_TYPE_SET_INTSET;
         else if (o->encoding == OBJ_ENCODING_HASHTABLE)
-            return rdbSaveType(rdb, RDB_TYPE_SET);
+            return RDB_TYPE_SET;
         else if (o->encoding == OBJ_ENCODING_LISTPACK)
-            return rdbSaveType(rdb, RDB_TYPE_SET_LISTPACK);
+            return RDB_TYPE_SET_LISTPACK;
         else
             serverPanic("Unknown set encoding");
     case OBJ_ZSET:
         if (o->encoding == OBJ_ENCODING_LISTPACK)
-            return rdbSaveType(rdb, RDB_TYPE_ZSET_LISTPACK);
+            return RDB_TYPE_ZSET_LISTPACK;
         else if (o->encoding == OBJ_ENCODING_SKIPLIST)
-            return rdbSaveType(rdb, RDB_TYPE_ZSET_2);
+            return RDB_TYPE_ZSET_2;
         else
             serverPanic("Unknown sorted set encoding");
     case OBJ_HASH:
         if (o->encoding == OBJ_ENCODING_LISTPACK)
-            return rdbSaveType(rdb, RDB_TYPE_HASH_LISTPACK);
+            return RDB_TYPE_HASH_LISTPACK;
         else if (o->encoding == OBJ_ENCODING_HASHTABLE)
             if (hashTypeHasVolatileFields(o))
-                return rdbSaveType(rdb, RDB_TYPE_HASH_2);
+                if (rdbver >= 80)
+                    return RDB_TYPE_HASH_2;
+                else
+                    return -1; /* can't be stored in old RDB */
             else
-                return rdbSaveType(rdb, RDB_TYPE_HASH);
+                return RDB_TYPE_HASH;
         else
             serverPanic("Unknown hash encoding");
-    case OBJ_STREAM: return rdbSaveType(rdb, RDB_TYPE_STREAM_LISTPACKS_3);
-    case OBJ_MODULE: return rdbSaveType(rdb, RDB_TYPE_MODULE_2);
+    case OBJ_STREAM: return RDB_TYPE_STREAM_LISTPACKS_3;
+    case OBJ_MODULE: return RDB_TYPE_MODULE_2;
     default: serverPanic("Unknown object type");
     }
     return -1; /* avoid warning */
@@ -860,7 +865,7 @@ size_t rdbSaveStreamConsumers(rio *rdb, streamCG *cg) {
 
 /* Save an Object.
  * Returns -1 on error, number of bytes written on success. */
-ssize_t rdbSaveObject(rio *rdb, robj *o, robj *key, int dbid) {
+ssize_t rdbSaveObject(rio *rdb, robj *o, robj *key, int dbid, unsigned char rdbtype) {
     ssize_t n = 0, nwritten = 0;
     if (o->type == OBJ_STRING) {
         /* Save a string value */
@@ -919,12 +924,12 @@ ssize_t rdbSaveObject(rio *rdb, robj *o, robj *key, int dbid) {
             while (hashtableNext(&iterator, &next)) {
                 sds ele = next;
                 if ((n = rdbSaveRawString(rdb, (unsigned char *)ele, sdslen(ele))) == -1) {
-                    hashtableResetIterator(&iterator);
+                    hashtableCleanupIterator(&iterator);
                     return -1;
                 }
                 nwritten += n;
             }
-            hashtableResetIterator(&iterator);
+            hashtableCleanupIterator(&iterator);
         } else if (o->encoding == OBJ_ENCODING_INTSET) {
             size_t l = intsetBlobLen((intset *)o->ptr);
 
@@ -959,7 +964,8 @@ ssize_t rdbSaveObject(rio *rdb, robj *o, robj *key, int dbid) {
              * O(1) instead of O(log(N)). */
             zskiplistNode *zn = zsl->tail;
             while (zn != NULL) {
-                if ((n = rdbSaveRawString(rdb, (unsigned char *)zn->ele, sdslen(zn->ele))) == -1) {
+                sds ele = zslGetNodeElement(zn);
+                if ((n = rdbSaveRawString(rdb, (unsigned char *)ele, sdslen(ele))) == -1) {
                     return -1;
                 }
                 nwritten += n;
@@ -978,6 +984,7 @@ ssize_t rdbSaveObject(rio *rdb, robj *o, robj *key, int dbid) {
             if ((n = rdbSaveRawString(rdb, o->ptr, l)) == -1) return -1;
             nwritten += n;
         } else if (o->encoding == OBJ_ENCODING_HASHTABLE) {
+            serverAssert(rdbtype == RDB_TYPE_HASH || rdbtype == RDB_TYPE_HASH_2);
             hashtable *ht = o->ptr;
 
             if ((n = rdbSaveLen(rdb, hashtableSize(ht))) == -1) {
@@ -985,34 +992,35 @@ ssize_t rdbSaveObject(rio *rdb, robj *o, robj *key, int dbid) {
             }
             nwritten += n;
             /* check if need to add expired time for the hash fields */
-            bool add_expiry = hashTypeHasVolatileFields(o);
+            bool add_expiry = (rdbtype == RDB_TYPE_HASH_2);
             hashtableIterator iter;
             hashtableInitIterator(&iter, ht, HASHTABLE_ITER_SKIP_VALIDATION);
             void *next;
             while (hashtableNext(&iter, &next)) {
                 sds field = entryGetField(next);
-                sds value = entryGetValue(next);
+                size_t value_len;
+                unsigned char *value = (unsigned char *)entryGetValue(next, &value_len);
 
                 if ((n = rdbSaveRawString(rdb, (unsigned char *)field, sdslen(field))) == -1) {
-                    hashtableResetIterator(&iter);
+                    hashtableCleanupIterator(&iter);
                     return -1;
                 }
                 nwritten += n;
-                if ((n = rdbSaveRawString(rdb, (unsigned char *)value, sdslen(value))) == -1) {
-                    hashtableResetIterator(&iter);
+                if ((n = rdbSaveRawString(rdb, value, value_len)) == -1) {
+                    hashtableCleanupIterator(&iter);
                     return -1;
                 }
                 nwritten += n;
                 if (add_expiry) {
                     long long expiry = entryGetExpiry(next);
                     if ((n = rdbSaveMillisecondTime(rdb, expiry) == -1)) {
-                        hashtableResetIterator(&iter);
+                        hashtableCleanupIterator(&iter);
                         return -1;
                     }
                     nwritten += n;
                 }
             }
-            hashtableResetIterator(&iter);
+            hashtableCleanupIterator(&iter);
 
         } else {
             serverPanic("Unknown hash encoding");
@@ -1164,7 +1172,9 @@ ssize_t rdbSaveObject(rio *rdb, robj *o, robj *key, int dbid) {
  * this length with very little changes to the code. In the future
  * we could switch to a faster solution. */
 size_t rdbSavedObjectLen(robj *o, robj *key, int dbid) {
-    ssize_t len = rdbSaveObject(NULL, o, key, dbid);
+    int rdbtype = rdbGetObjectType(o, RDB_VERSION);
+    serverAssert(rdbtype != -1);
+    ssize_t len = rdbSaveObject(NULL, o, key, dbid, rdbtype);
     serverAssertWithInfo(NULL, o, len != -1);
     return len;
 }
@@ -1172,7 +1182,7 @@ size_t rdbSavedObjectLen(robj *o, robj *key, int dbid) {
 /* Save a key-value pair, with expire time, type, key, value.
  * On error -1 is returned.
  * On success if the key was actually saved 1 is returned. */
-int rdbSaveKeyValuePair(rio *rdb, robj *key, robj *val, long long expiretime, int dbid) {
+int rdbSaveKeyValuePair(rio *rdb, robj *key, robj *val, long long expiretime, int dbid, int rdbver) {
     int savelru = server.maxmemory_policy & MAXMEMORY_FLAG_LRU;
     int savelfu = server.maxmemory_policy & MAXMEMORY_FLAG_LFU;
 
@@ -1184,28 +1194,32 @@ int rdbSaveKeyValuePair(rio *rdb, robj *key, robj *val, long long expiretime, in
 
     /* Save the LRU info. */
     if (savelru) {
-        uint64_t idletime = estimateObjectIdleTime(val);
-        idletime /= 1000; /* Using seconds is enough and requires less space.*/
+        uint64_t idletime = objectGetLRUIdleSecs(val);
         if (rdbSaveType(rdb, RDB_OPCODE_IDLE) == -1) return -1;
         if (rdbSaveLen(rdb, idletime) == -1) return -1;
     }
 
     /* Save the LFU info. */
     if (savelfu) {
-        uint8_t buf[1];
-        buf[0] = LFUDecrAndReturn(val);
+        uint8_t freq = objectGetLFUFrequency(val);
         /* We can encode this in exactly two bytes: the opcode and an 8
          * bit counter, since the frequency is logarithmic with a 0-255 range.
          * Note that we do not store the halving time because to reset it
          * a single time when loading does not affect the frequency much. */
         if (rdbSaveType(rdb, RDB_OPCODE_FREQ) == -1) return -1;
-        if (rdbWriteRaw(rdb, buf, 1) == -1) return -1;
+        if (rdbWriteRaw(rdb, &freq, 1) == -1) return -1;
     }
 
     /* Save type, key, value */
-    if (rdbSaveObjectType(rdb, val) == -1) return -1;
+    int rdbtype = rdbGetObjectType(val, rdbver);
+    if (rdbtype == -1) {
+        serverLog(LL_WARNING, "Can't store key '%s' (db %d) in RDB version %d",
+                  (char *)key->ptr, dbid, rdbver);
+        return -1;
+    }
+    if (rdbSaveType(rdb, rdbtype) == -1) return -1;
     if (rdbSaveStringObject(rdb, key) == -1) return -1;
-    if (rdbSaveObject(rdb, val, key, dbid) == -1) return -1;
+    if (rdbSaveObject(rdb, val, key, dbid, rdbtype) == -1) return -1;
 
     /* Delay return if required (for testing) */
     if (server.rdb_key_save_delay) debugDelay(server.rdb_key_save_delay);
@@ -1364,7 +1378,7 @@ werr:
     return -1;
 }
 
-ssize_t rdbSaveDb(rio *rdb, int dbid, int rdbflags, long *key_counter) {
+ssize_t rdbSaveDb(rio *rdb, int dbid, int rdbflags, int rdbver, long *key_counter) {
     ssize_t written = 0;
     ssize_t res;
     kvstoreIterator *kvs_it = NULL;
@@ -1419,7 +1433,7 @@ ssize_t rdbSaveDb(rio *rdb, int dbid, int rdbflags, long *key_counter) {
 
         initStaticStringObject(key, keystr);
         expire = objectGetExpire(o);
-        if ((res = rdbSaveKeyValuePair(rdb, &key, o, expire, dbid)) < 0) goto werr;
+        if ((res = rdbSaveKeyValuePair(rdb, &key, o, expire, dbid, rdbver)) < 0) goto werr;
         written += res;
 
         /* In fork child process, we can try to release memory back to the
@@ -1455,14 +1469,16 @@ werr:
  * When the function returns C_ERR and if 'error' is not NULL, the
  * integer pointed by 'error' is set to the value of errno just after the I/O
  * error. */
-int rdbSaveRio(int req, rio *rdb, int *error, int rdbflags, rdbSaveInfo *rsi) {
+int rdbSaveRio(int req, int rdbver, rio *rdb, int *error, int rdbflags, rdbSaveInfo *rsi) {
     char magic[10];
     uint64_t cksum;
     long key_counter = 0;
     int j;
 
     if (server.rdb_checksum) rdb->update_cksum = rioGenericUpdateChecksum;
-    snprintf(magic, sizeof(magic), "VALKEY%03d", RDB_VERSION);
+    const char *magic_prefix = rdbUseValkeyMagic(rdbver) ? "VALKEY" : "REDIS0";
+    serverAssert(rdbver >= 0 && rdbver <= RDB_VERSION);
+    snprintf(magic, sizeof(magic), "%s%03d", magic_prefix, rdbver);
     if (rdbWriteRaw(rdb, magic, 9) == -1) goto werr;
     if (rdbSaveInfoAuxFields(rdb, rdbflags, rsi) == -1) goto werr;
     if (!(req & REPLICA_REQ_RDB_EXCLUDE_DATA) && rdbSaveModulesAux(rdb, VALKEYMODULE_AUX_BEFORE_RDB) == -1) goto werr;
@@ -1474,9 +1490,9 @@ int rdbSaveRio(int req, rio *rdb, int *error, int rdbflags, rdbSaveInfo *rsi) {
     if (!(req & REPLICA_REQ_RDB_EXCLUDE_DATA)) {
         /* RDB slot import info is encoded in a required opcode since exposing
          * importing slots is a consistency problem. */
-        if (clusterRDBSaveSlotImports(rdb) == C_ERR) goto werr;
+        if (clusterRDBSaveSlotImports(rdb, rdbver) == C_ERR) goto werr;
         for (j = 0; j < server.dbnum; j++) {
-            if (rdbSaveDb(rdb, j, rdbflags, &key_counter) == -1) goto werr;
+            if (rdbSaveDb(rdb, j, rdbflags, rdbver, &key_counter) == -1) goto werr;
         }
     }
 
@@ -1506,7 +1522,7 @@ werr:
  * While the suffix is the 40 bytes hex string we announced in the prefix.
  * This way processes receiving the payload can understand when it ends
  * without doing any processing of the content. */
-int rdbSaveRioWithEOFMark(int req, rio *rdb, int *error, rdbSaveInfo *rsi) {
+int rdbSaveRioWithEOFMark(int req, int rdbver, rio *rdb, int *error, rdbSaveInfo *rsi) {
     char eofmark[RDB_EOF_MARK_SIZE];
 
     startSaving(RDBFLAGS_REPLICATION);
@@ -1515,7 +1531,7 @@ int rdbSaveRioWithEOFMark(int req, rio *rdb, int *error, rdbSaveInfo *rsi) {
     if (rioWrite(rdb, "$EOF:", 5) == 0) goto werr;
     if (rioWrite(rdb, eofmark, RDB_EOF_MARK_SIZE) == 0) goto werr;
     if (rioWrite(rdb, "\r\n", 2) == 0) goto werr;
-    if (rdbSaveRio(req, rdb, error, RDBFLAGS_REPLICATION, rsi) == C_ERR) goto werr;
+    if (rdbSaveRio(req, rdbver, rdb, error, RDBFLAGS_REPLICATION, rsi) == C_ERR) goto werr;
     if (rioWrite(rdb, eofmark, RDB_EOF_MARK_SIZE) == 0) goto werr;
     stopSaving(1);
     return C_OK;
@@ -1554,7 +1570,7 @@ static int rdbSaveInternal(int req, const char *filename, rdbSaveInfo *rsi, int 
         if (!(rdbflags & RDBFLAGS_KEEP_CACHE)) rioSetReclaimCache(&rdb, 1);
     }
 
-    if (rdbSaveRio(req, &rdb, &error, rdbflags, rsi) == C_ERR) {
+    if (rdbSaveRio(req, RDB_VERSION, &rdb, &error, rdbflags, rsi) == C_ERR) {
         errno = error;
         err_op = "rdbSaveRio";
         goto werr;
@@ -2095,6 +2111,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error) {
             totelelen += sdslen(sdsele);
 
             znode = zslInsert(zs->zsl, score, sdsele);
+            sdsfree(sdsele);
             if (!hashtableAdd(zs->ht, znode)) {
                 rdbReportCorruptRDB("Duplicate zset fields detected");
                 decrRefCount(o);
@@ -3080,8 +3097,10 @@ int rdbLoadRioWithLoadingCtxScopedRdb(rio *rdb, int rdbflags, rdbSaveInfo *rsi, 
     return retval;
 }
 
-/* Load an RDB file from the rio stream 'rdb'. On success C_OK is returned,
- * otherwise C_ERR is returned.
+/* Load an RDB file from the rio stream 'rdb'. We return one of the following:
+ * - RDB_OK On success
+ * - RDB_INCOMPATIBLE If the RDB has an invalid signature or version
+ * - RDB_FAILED in all other failure cases
  * The rdb_loading_ctx argument holds objects to which the rdb will be loaded to,
  * currently it only allow to set db object and functionLibCtx to which the data
  * will be loaded (in the future it might contains more such objects). */
@@ -3090,10 +3109,6 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
     int type, rdbver;
     uint64_t db_size = 0, expires_size = 0;
     int should_expand_db = 0;
-    if (rdb_loading_ctx->dbarray[0] == NULL) {
-        rdb_loading_ctx->dbarray[0] = createDatabase(0);
-    }
-    serverDb *db = rdb_loading_ctx->dbarray[0];
     char buf[1024];
     int error;
     long long empty_keys_skipped = 0;
@@ -3109,17 +3124,32 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
         is_valkey_magic = true;
     } else {
         serverLog(LL_WARNING, "Wrong signature trying to load DB from file: %.9s", buf);
-        return C_ERR;
+        /* Signal to terminate the rdbLoad without clearing existing data */
+        return RDB_INCOMPATIBLE;
     }
     rdbver = atoi(buf + 6);
     if (!rdbIsVersionAccepted(rdbver, is_valkey_magic, is_redis_magic)) {
         serverLog(LL_WARNING, "Can't handle RDB format version %d", rdbver);
-        return C_ERR;
+        return RDB_INCOMPATIBLE;
     }
+
+    /* Only empty data if RDBFLAGS_EMPTY_DATA is set */
+    if (rdbflags & RDBFLAGS_EMPTY_DATA) {
+        int empty_db_flags = server.repl_replica_lazy_flush ? EMPTYDB_ASYNC : EMPTYDB_NO_FLAGS;
+        serverLog(LL_NOTICE, "RDB signature and version check passed. Flushing old data");
+        emptyData(-1, empty_db_flags, replicationEmptyDbCallback);
+
+        /* functionsLibCtx is cleared when we call emptyData, reinitialize here. */
+        rdb_loading_ctx->functions_lib_ctx = functionsLibCtxGetCurrent();
+    }
+
+    if (rdb_loading_ctx->dbarray[0] == NULL) {
+        rdb_loading_ctx->dbarray[0] = createDatabase(0);
+    }
+    serverDb *db = rdb_loading_ctx->dbarray[0];
 
     /* Key-specific attributes, set by opcodes before the key type. */
     long long lru_idle = -1, lfu_freq = -1, expiretime = -1, now = mstime();
-    long long lru_clock = LRU_CLOCK();
 
     while (1) {
         sds key;
@@ -3132,7 +3162,7 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
         if (is_redis_magic && type >= RDB_FOREIGN_TYPE_MIN && type <= RDB_FOREIGN_TYPE_MAX) {
             serverLog(LL_WARNING, "Can't handle foreign type or opcode %d in RDB with version %d",
                       type, rdbver);
-            return C_ERR;
+            return RDB_FAILED;
         }
 
         /* Handle special types. */
@@ -3416,7 +3446,7 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
             } else if (error == RDB_LOAD_ERR_UNKNOWN_TYPE) {
                 sdsfree(key);
                 serverLog(LL_WARNING, "Unknown type or opcode when loading DB. Unrecoverable error, aborting now.");
-                return C_ERR;
+                return RDB_FAILED;
             } else {
                 sdsfree(key);
                 goto eoferr;
@@ -3464,7 +3494,7 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
             }
 
             /* Set usage information (for eviction). */
-            objectSetLRUOrLFU(val, lfu_freq, lru_idle, lru_clock, 1000);
+            objectSetLRUOrLFU(val, lfu_freq, lru_idle);
 
             /* call key space notification on key loaded for modules only */
             moduleNotifyKeyspaceEvent(NOTIFY_LOADED, "loaded", &keyobj, db->id);
@@ -3500,7 +3530,7 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
                           "got (%llx). Aborting now.",
                           (unsigned long long)expected, (unsigned long long)cksum);
                 rdbReportCorruptRDB("RDB CRC error");
-                return C_ERR;
+                return RDB_FAILED;
             }
         }
     }
@@ -3512,7 +3542,7 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
         serverLog(LL_NOTICE, "Done loading RDB, keys loaded: %lld, keys expired: %lld.",
                   server.rdb_last_load_keys_loaded, server.rdb_last_load_keys_expired);
     }
-    return C_OK;
+    return RDB_OK;
 
     /* Unexpected end of file is handled here calling rdbReportReadError():
      * this will in turn either abort the server in most cases, or if we are loading
@@ -3521,7 +3551,7 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
 eoferr:
     serverLog(LL_WARNING, "Short read or OOM loading DB. Unrecoverable error, aborting now.");
     rdbReportReadError("Unexpected EOF reading RDB file");
-    return C_ERR;
+    return RDB_FAILED;
 }
 
 /* Like rdbLoadRio() but takes a filename instead of a rio stream. The
@@ -3554,14 +3584,15 @@ int rdbLoad(char *filename, rdbSaveInfo *rsi, int rdbflags) {
     retval = rdbLoadRio(&rdb, rdbflags, rsi);
 
     fclose(fp);
-    stopLoading(retval == C_OK);
+    stopLoading(retval == RDB_OK);
     /* Reclaim the cache backed by rdb */
-    if (retval == C_OK && !(rdbflags & RDBFLAGS_KEEP_CACHE)) {
+    if (retval == RDB_OK && !(rdbflags & RDBFLAGS_KEEP_CACHE)) {
         /* TODO: maybe we could combine the fopen and open into one in the future */
         rdb_fd = open(filename, O_RDONLY);
         if (rdb_fd >= 0) bioCreateCloseJob(rdb_fd, 0, 1);
     }
-    return (retval == C_OK) ? RDB_OK : RDB_FAILED;
+
+    return retval;
 }
 
 /* A background saving child (BGSAVE) terminated its work. Handle this.
@@ -3655,7 +3686,7 @@ void killRDBChild(void) {
 
 /* Spawn an RDB child that writes the RDB to the sockets of the replicas
  * that are currently in REPLICA_STATE_WAIT_BGSAVE_START state. */
-int rdbSaveToReplicasSockets(int req, rdbSaveInfo *rsi) {
+int rdbSaveToReplicasSockets(int req, int rdbver, rdbSaveInfo *rsi) {
     listNode *ln;
     listIter li;
     pid_t childpid;
@@ -3711,6 +3742,7 @@ int rdbSaveToReplicasSockets(int req, rdbSaveInfo *rsi) {
         if (replica->repl_data->repl_state == REPLICA_STATE_WAIT_BGSAVE_START) {
             /* Check replica has the exact requirements */
             if (replica->repl_data->replica_req != req) continue;
+            if (replicaRdbVersion(replica) != rdbver) continue;
 
             conns[connsnum++] = replica->conn;
             if (dual_channel) {
@@ -3756,7 +3788,7 @@ int rdbSaveToReplicasSockets(int req, rdbSaveInfo *rsi) {
 
         if (skip_rdb_checksum) rdb.flags |= RIO_FLAG_SKIP_RDB_CHECKSUM;
 
-        retval = rdbSaveRioWithEOFMark(req, &rdb, NULL, rsi);
+        retval = rdbSaveRioWithEOFMark(req, rdbver, &rdb, NULL, rsi);
         if (retval == C_OK && rioFlush(&rdb) == 0) retval = C_ERR;
 
         if (retval == C_OK) {

@@ -50,13 +50,13 @@ endif ()
 
 # Helper function for creating symbolic link so that: link -> source
 macro (valkey_create_symlink source link)
-    install(
-        CODE "execute_process(                      \
-    COMMAND /bin/bash ${CMAKE_BINARY_DIR}/CreateSymlink.sh \
-    ${source} \
-    ${link}   \
-    )"
-        COMPONENT "valkey")
+  add_custom_command(
+    TARGET ${source} POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E create_symlink
+            "$<TARGET_FILE_NAME:${source}>"
+            "$<TARGET_FILE_DIR:${source}>/${link}"
+    VERBATIM
+  )
 endmacro ()
 
 # Install a binary
@@ -278,8 +278,8 @@ if (BUILD_SANITIZER)
 endif ()
 
 include_directories("${CMAKE_SOURCE_DIR}/deps/libvalkey/include")
+include_directories("${CMAKE_SOURCE_DIR}/src/modules/lua")
 include_directories("${CMAKE_SOURCE_DIR}/deps/linenoise")
-include_directories("${CMAKE_SOURCE_DIR}/deps/lua/src")
 include_directories("${CMAKE_SOURCE_DIR}/deps/hdr_histogram")
 include_directories("${CMAKE_SOURCE_DIR}/deps/fpconv")
 
@@ -292,6 +292,10 @@ endif ()
 
 # Common compiler flags
 add_valkey_server_compiler_options("-pedantic")
+
+if (NOT BUILD_LUA)
+    message(STATUS "Lua scripting engine is disabled")
+endif()
 
 # ----------------------------------------------------
 # Build options (allocator, tls, rdma et al) - end

@@ -2,6 +2,9 @@
 # This software is released under the BSD License. See the COPYING file for
 # more information.
 
+# Set the executable paths at project root
+source tests/support/set_executable_path.tcl
+
 cd tests/sentinel
 source ../instances.tcl
 

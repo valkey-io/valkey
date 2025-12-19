@@ -17,6 +17,9 @@
         "reply_schema": {
             "description": "A map between named fields and values in the form of <field>:<value> lines separated by newlines composed by the two bytes CRLF",
             "type": "string"
-        }
+        },
+        "acl_categories": [
+            "SLOW"
+        ]
     }
 }

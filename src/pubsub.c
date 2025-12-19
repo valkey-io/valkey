@@ -389,7 +389,7 @@ void pubsubShardUnsubscribeAllChannelsInSlot(unsigned int slot) {
                 unmarkClientAsPubSub(c);
             }
         }
-        hashtableResetIterator(&client_iter);
+        hashtableCleanupIterator(&client_iter);
         kvstoreHashtableDelete(server.pubsubshard_channels, slot, channel);
     }
     kvstoreReleaseHashtableIterator(kvs_di);
@@ -454,7 +454,7 @@ int pubsubUnsubscribeAllChannelsInternal(client *c, int notify, pubsubtype type)
         while (hashtableNext(&iter, &channel)) {
             count += pubsubUnsubscribeChannel(c, channel, notify, type);
         }
-        hashtableResetIterator(&iter);
+        hashtableCleanupIterator(&iter);
     }
     /* We were subscribed to nothing? Still reply to the client. */
     if (notify && count == 0) {
@@ -494,7 +494,7 @@ int pubsubUnsubscribeAllPatterns(client *c, int notify) {
             count += pubsubUnsubscribePattern(c, pattern, notify);
         }
 
-        hashtableResetIterator(&iter);
+        hashtableCleanupIterator(&iter);
     }
 
     /* We were subscribed to nothing? Still reply to the client. */
@@ -527,7 +527,7 @@ int pubsubPublishMessageInternal(robj *channel, robj *message, pubsubtype type) 
             updateClientMemUsageAndBucket(c);
             receivers++;
         }
-        hashtableResetIterator(&iter);
+        hashtableCleanupIterator(&iter);
     }
 
     if (type.shard) {
@@ -554,7 +554,7 @@ int pubsubPublishMessageInternal(robj *channel, robj *message, pubsubtype type) 
                 updateClientMemUsageAndBucket(c);
                 receivers++;
             }
-            hashtableResetIterator(&iter);
+            hashtableCleanupIterator(&iter);
         }
         decrRefCount(channel);
         dictReleaseIterator(di);

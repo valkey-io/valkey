@@ -16,6 +16,9 @@
         "reply_schema": {
             "type": "string",
             "description": "The username of the current connection."
-        }
+        },
+        "acl_categories": [
+            "SLOW"
+        ]
     }
 }

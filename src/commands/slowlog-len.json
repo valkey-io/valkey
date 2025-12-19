@@ -21,6 +21,11 @@
             "type": "integer",
             "description": "Number of entries in the slow log.",
             "minimum": 0
-        }
+        },
+        "acl_categories": [
+            "ADMIN",
+            "DANGEROUS",
+            "SLOW"
+        ]
     }
 }

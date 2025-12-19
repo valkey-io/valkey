@@ -66,8 +66,9 @@ void lazyFreeEvalScripts(void *args[]) {
 /* Release the functions ctx. */
 void lazyFreeFunctionsCtx(void *args[]) {
     functionsLibCtx *functions_lib_ctx = args[0];
+    list *engine_callbacks = args[1];
     size_t len = functionsLibCtxFunctionsLen(functions_lib_ctx);
-    functionsLibCtxFree(functions_lib_ctx);
+    functionsLibCtxFree(functions_lib_ctx, NULL, engine_callbacks);
     atomic_fetch_sub_explicit(&lazyfree_objects, len, memory_order_relaxed);
     atomic_fetch_add_explicit(&lazyfreed_objects, len, memory_order_relaxed);
 }
@@ -80,6 +81,15 @@ void lazyFreeReplicationBacklogRefMem(void *args[]) {
     len += raxSize(index);
     listRelease(blocks);
     raxFree(index);
+    atomic_fetch_sub_explicit(&lazyfree_objects, len, memory_order_relaxed);
+    atomic_fetch_add_explicit(&lazyfreed_objects, len, memory_order_relaxed);
+}
+
+/* Release the replicaKeysWithExpire dict. */
+void lazyFreeReplicaKeysWithExpire(void *args[]) {
+    dict *replica_keys_with_expire = args[0];
+    size_t len = dictSize(replica_keys_with_expire);
+    dictRelease(replica_keys_with_expire);
     atomic_fetch_sub_explicit(&lazyfree_objects, len, memory_order_relaxed);
     atomic_fetch_add_explicit(&lazyfreed_objects, len, memory_order_relaxed);
 }
@@ -239,13 +249,13 @@ void freeEvalScriptsAsync(dict *scripts, list *scripts_lru_list, list *engine_ca
 }
 
 /* Free functions ctx, if the functions ctx contains enough functions, free it in async way. */
-void freeFunctionsAsync(functionsLibCtx *functions_lib_ctx) {
+void freeFunctionsAsync(functionsLibCtx *functions_lib_ctx, list *engine_callbacks) {
     if (functionsLibCtxFunctionsLen(functions_lib_ctx) > LAZYFREE_THRESHOLD) {
         atomic_fetch_add_explicit(&lazyfree_objects, functionsLibCtxFunctionsLen(functions_lib_ctx),
                                   memory_order_relaxed);
-        bioCreateLazyFreeJob(lazyFreeFunctionsCtx, 1, functions_lib_ctx);
+        bioCreateLazyFreeJob(lazyFreeFunctionsCtx, 2, functions_lib_ctx, engine_callbacks);
     } else {
-        functionsLibCtxFree(functions_lib_ctx);
+        functionsLibCtxFree(functions_lib_ctx, NULL, engine_callbacks);
     }
 }
 
@@ -257,5 +267,16 @@ void freeReplicationBacklogRefMemAsync(list *blocks, rax *index) {
     } else {
         listRelease(blocks);
         raxFree(index);
+    }
+}
+
+
+/* Free replicaKeysWithExpire dict, if the dict is huge enough, free it in async way. */
+void freeReplicaKeysWithExpireAsync(dict *replica_keys_with_expire) {
+    if (dictSize(replica_keys_with_expire) > LAZYFREE_THRESHOLD) {
+        atomic_fetch_add_explicit(&lazyfree_objects, dictSize(replica_keys_with_expire), memory_order_relaxed);
+        bioCreateLazyFreeJob(lazyFreeReplicaKeysWithExpire, 1, replica_keys_with_expire);
+    } else {
+        dictRelease(replica_keys_with_expire);
     }
 }

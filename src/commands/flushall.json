@@ -20,8 +20,10 @@
             "WRITE"
         ],
         "acl_categories": [
+            "DANGEROUS",
             "KEYSPACE",
-            "DANGEROUS"
+            "SLOW",
+            "WRITE"
         ],
         "command_tips": [
             "REQUEST_POLICY:ALL_SHARDS",

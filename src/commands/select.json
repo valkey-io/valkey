@@ -12,7 +12,8 @@
             "FAST"
         ],
         "acl_categories": [
-            "CONNECTION"
+            "CONNECTION",
+            "FAST"
         ],
         "reply_schema": {
             "const": "OK"

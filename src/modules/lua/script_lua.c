@@ -27,21 +27,46 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
+#include "../../valkeymodule.h"
 #include "script_lua.h"
 #include "debug_lua.h"
-
-#include "../sha1.h"
-#include "../rand.h"
-#include "../cluster.h"
-#include "../monotonic.h"
-#include "../resp_parser.h"
-#include "../version.h"
+#include "engine_structs.h"
+#include "../../sha1.h"
+#include "../../rand.h"
 
 #include <fpconv_dtoa.h>
+#include <lua.h>
 #include <lauxlib.h>
 #include <lualib.h>
-#include <ctype.h>
+#include <stdlib.h>
+#include <string.h>
 #include <math.h>
+#include <stdio.h>
+#include <errno.h>
+#include <time.h>
+
+#define LUA_CMD_OBJCACHE_SIZE 32
+#define LUA_CMD_OBJCACHE_MAX_LEN 64
+
+/* Command propagation flags, see propagateNow() function */
+#define PROPAGATE_NONE 0
+#define PROPAGATE_AOF 1
+#define PROPAGATE_REPL 2
+
+/* Log levels */
+#define LL_DEBUG 0
+#define LL_VERBOSE 1
+#define LL_NOTICE 2
+#define LL_WARNING 3
+
+typedef struct luaFuncCallCtx {
+    ValkeyModuleCtx *module_ctx;
+    ValkeyModuleScriptingEngineServerRuntimeCtx *run_ctx;
+    ValkeyModuleScriptingEngineSubsystemType type;
+    int replication_flags;
+    int resp;
+    int lua_enable_insecure_api;
+} luaFuncCallCtx;
 
 /* Globals that are added by the Lua libraries */
 static char *libraries_allow_list[] = {
@@ -136,32 +161,39 @@ static char *deny_list[] = {
     NULL,
 };
 
+static void _serverPanic(const char *file, int line, const char *msg, ...) {
+    fprintf(stderr, "------------------------------------------------");
+    fprintf(stderr, "!!! Software Failure. Press left mouse button to continue");
+    fprintf(stderr, "Guru Meditation: %s #%s:%d", msg, file, line);
+    abort();
+}
+
+#define serverPanic(...) _serverPanic(__FILE__, __LINE__, __VA_ARGS__)
+
+typedef uint64_t monotime;
+
+monotime getMonotonicUs(void) {
+    /* clock_gettime() is specified in POSIX.1b (1993).  Even so, some systems
+     * did not support this until much later.  CLOCK_MONOTONIC is technically
+     * optional and may not be supported - but it appears to be universal.
+     * If this is not supported, provide a system-specific alternate version.  */
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return ((uint64_t)ts.tv_sec) * 1000000 + ts.tv_nsec / 1000;
+}
+
+inline uint64_t elapsedUs(monotime start_time) {
+    return getMonotonicUs() - start_time;
+}
+
+inline uint64_t elapsedMs(monotime start_time) {
+    return elapsedUs(start_time) / 1000;
+}
+
 static int server_math_random(lua_State *L);
 static int server_math_randomseed(lua_State *L);
-static void redisProtocolToLuaType_Int(void *ctx, long long val, const char *proto, size_t proto_len);
-static void
-redisProtocolToLuaType_BulkString(void *ctx, const char *str, size_t len, const char *proto, size_t proto_len);
-static void redisProtocolToLuaType_NullBulkString(void *ctx, const char *proto, size_t proto_len);
-static void redisProtocolToLuaType_NullArray(void *ctx, const char *proto, size_t proto_len);
-static void redisProtocolToLuaType_Status(void *ctx, const char *str, size_t len, const char *proto, size_t proto_len);
-static void redisProtocolToLuaType_Error(void *ctx, const char *str, size_t len, const char *proto, size_t proto_len);
-static void redisProtocolToLuaType_Array(struct ReplyParser *parser, void *ctx, size_t len, const char *proto);
-static void redisProtocolToLuaType_Map(struct ReplyParser *parser, void *ctx, size_t len, const char *proto);
-static void redisProtocolToLuaType_Set(struct ReplyParser *parser, void *ctx, size_t len, const char *proto);
-static void redisProtocolToLuaType_Null(void *ctx, const char *proto, size_t proto_len);
-static void redisProtocolToLuaType_Bool(void *ctx, int val, const char *proto, size_t proto_len);
-static void redisProtocolToLuaType_Double(void *ctx, double d, const char *proto, size_t proto_len);
-static void
-redisProtocolToLuaType_BigNumber(void *ctx, const char *str, size_t len, const char *proto, size_t proto_len);
-static void redisProtocolToLuaType_VerbatimString(void *ctx,
-                                                  const char *format,
-                                                  const char *str,
-                                                  size_t len,
-                                                  const char *proto,
-                                                  size_t proto_len);
-static void redisProtocolToLuaType_Attribute(struct ReplyParser *parser, void *ctx, size_t len, const char *proto);
 
-static void luaReplyToServerReply(client *c, client *script_client, lua_State *lua);
+static void luaReplyToServerReply(ValkeyModuleCtx *ctx, int resp_version, lua_State *lua);
 
 /*
  * Save the give pointer on Lua registry, used to save the Lua context and
@@ -189,10 +221,10 @@ void *luaGetFromRegistry(lua_State *lua, const char *name) {
         return NULL;
     }
     /* must be light user data */
-    serverAssert(lua_islightuserdata(lua, -1));
+    ValkeyModule_Assert(lua_islightuserdata(lua, -1));
 
     void *ptr = (void *)lua_topointer(lua, -1);
-    serverAssert(ptr);
+    ValkeyModule_Assert(ptr);
 
     /* pops the value */
     lua_pop(lua, 1);
@@ -200,344 +232,41 @@ void *luaGetFromRegistry(lua_State *lua, const char *name) {
     return ptr;
 }
 
-/* ---------------------------------------------------------------------------
- * Server reply to Lua type conversion functions.
- * ------------------------------------------------------------------------- */
+char *lm_asprintf(char const *fmt, ...) {
+    va_list args;
 
-/* Take a server reply in the RESP format and convert it into a
- * Lua type. Thanks to this function, and the introduction of not connected
- * clients, it is trivial to implement the server() lua function.
- *
- * Basically we take the arguments, execute the command in the context
- * of a non connected client, then take the generated reply and convert it
- * into a suitable Lua type. With this trick the scripting feature does not
- * need the introduction of a full server internals API. The script
- * is like a normal client that bypasses all the slow I/O paths.
- *
- * Note: in this function we do not do any sanity check as the reply is
- * generated by the server directly. This allows us to go faster.
- *
- * Errors are returned as a table with a single 'err' field set to the
- * error string.
- */
+    va_start(args, fmt);
+    size_t str_len = vsnprintf(NULL, 0, fmt, args) + 1;
+    va_end(args);
 
-static const ReplyParserCallbacks DefaultLuaTypeParserCallbacks = {
-    .null_array_callback = redisProtocolToLuaType_NullArray,
-    .bulk_string_callback = redisProtocolToLuaType_BulkString,
-    .null_bulk_string_callback = redisProtocolToLuaType_NullBulkString,
-    .error_callback = redisProtocolToLuaType_Error,
-    .simple_str_callback = redisProtocolToLuaType_Status,
-    .long_callback = redisProtocolToLuaType_Int,
-    .array_callback = redisProtocolToLuaType_Array,
-    .set_callback = redisProtocolToLuaType_Set,
-    .map_callback = redisProtocolToLuaType_Map,
-    .bool_callback = redisProtocolToLuaType_Bool,
-    .double_callback = redisProtocolToLuaType_Double,
-    .null_callback = redisProtocolToLuaType_Null,
-    .big_number_callback = redisProtocolToLuaType_BigNumber,
-    .verbatim_string_callback = redisProtocolToLuaType_VerbatimString,
-    .attribute_callback = redisProtocolToLuaType_Attribute,
-    .error = NULL,
-};
+    char *str = ValkeyModule_Alloc(str_len);
 
-static void redisProtocolToLuaType(lua_State *lua, char *reply) {
-    ReplyParser parser = {.curr_location = reply, .callbacks = DefaultLuaTypeParserCallbacks};
+    va_start(args, fmt);
+    vsnprintf(str, str_len, fmt, args);
+    va_end(args);
 
-    parseReply(&parser, lua);
+    return str;
 }
 
-static void redisProtocolToLuaType_Int(void *ctx, long long val, const char *proto, size_t proto_len) {
-    UNUSED(proto);
-    UNUSED(proto_len);
-    if (!ctx) {
-        return;
-    }
-
-    lua_State *lua = ctx;
-    if (!lua_checkstack(lua, 1)) {
-        /* Increase the Lua stack if needed, to make sure there is enough room
-         * to push elements to the stack. On failure, exit with panic. */
-        serverPanic("lua stack limit reach when parsing server.call reply");
-    }
-    lua_pushnumber(lua, (lua_Number)val);
+char *lm_strcpy(const char *str) {
+    size_t len = strlen(str);
+    char *res = ValkeyModule_Alloc(len + 1);
+    memcpy(res, str, len + 1);
+    return res;
 }
 
-static void redisProtocolToLuaType_NullBulkString(void *ctx, const char *proto, size_t proto_len) {
-    UNUSED(proto);
-    UNUSED(proto_len);
-    if (!ctx) {
-        return;
-    }
+char *lm_strtrim(char *s, const char *cset) {
+    char *end, *sp, *ep;
+    size_t len;
 
-    lua_State *lua = ctx;
-    if (!lua_checkstack(lua, 1)) {
-        /* Increase the Lua stack if needed, to make sure there is enough room
-         * to push elements to the stack. On failure, exit with panic. */
-        serverPanic("lua stack limit reach when parsing server.call reply");
-    }
-    lua_pushboolean(lua, 0);
-}
-
-static void redisProtocolToLuaType_NullArray(void *ctx, const char *proto, size_t proto_len) {
-    UNUSED(proto);
-    UNUSED(proto_len);
-    if (!ctx) {
-        return;
-    }
-    lua_State *lua = ctx;
-    if (!lua_checkstack(lua, 1)) {
-        /* Increase the Lua stack if needed, to make sure there is enough room
-         * to push elements to the stack. On failure, exit with panic. */
-        serverPanic("lua stack limit reach when parsing server.call reply");
-    }
-    lua_pushboolean(lua, 0);
-}
-
-
-static void
-redisProtocolToLuaType_BulkString(void *ctx, const char *str, size_t len, const char *proto, size_t proto_len) {
-    UNUSED(proto);
-    UNUSED(proto_len);
-    if (!ctx) {
-        return;
-    }
-
-    lua_State *lua = ctx;
-    if (!lua_checkstack(lua, 1)) {
-        /* Increase the Lua stack if needed, to make sure there is enough room
-         * to push elements to the stack. On failure, exit with panic. */
-        serverPanic("lua stack limit reach when parsing server.call reply");
-    }
-    lua_pushlstring(lua, str, len);
-}
-
-static void redisProtocolToLuaType_Status(void *ctx, const char *str, size_t len, const char *proto, size_t proto_len) {
-    UNUSED(proto);
-    UNUSED(proto_len);
-    if (!ctx) {
-        return;
-    }
-
-    lua_State *lua = ctx;
-    if (!lua_checkstack(lua, 3)) {
-        /* Increase the Lua stack if needed, to make sure there is enough room
-         * to push elements to the stack. On failure, exit with panic. */
-        serverPanic("lua stack limit reach when parsing server.call reply");
-    }
-    lua_newtable(lua);
-    lua_pushstring(lua, "ok");
-    lua_pushlstring(lua, str, len);
-    lua_settable(lua, -3);
-}
-
-static void redisProtocolToLuaType_Error(void *ctx, const char *str, size_t len, const char *proto, size_t proto_len) {
-    UNUSED(proto);
-    UNUSED(proto_len);
-    if (!ctx) {
-        return;
-    }
-
-    lua_State *lua = ctx;
-    if (!lua_checkstack(lua, 3)) {
-        /* Increase the Lua stack if needed, to make sure there is enough room
-         * to push elements to the stack. On failure, exit with panic. */
-        serverPanic("lua stack limit reach when parsing server.call reply");
-    }
-    sds err_msg = sdscatlen(sdsnew("-"), str, len);
-    luaPushErrorBuff(lua, err_msg);
-    /* push a field indicate to ignore updating the stats on this error
-     * because it was already updated when executing the command. */
-    lua_pushstring(lua, "ignore_error_stats_update");
-    lua_pushboolean(lua, 1);
-    lua_settable(lua, -3);
-}
-
-static void redisProtocolToLuaType_Map(struct ReplyParser *parser, void *ctx, size_t len, const char *proto) {
-    UNUSED(proto);
-    lua_State *lua = ctx;
-    if (lua) {
-        if (!lua_checkstack(lua, 3)) {
-            /* Increase the Lua stack if needed, to make sure there is enough room
-             * to push elements to the stack. On failure, exit with panic. */
-            serverPanic("lua stack limit reach when parsing server.call reply");
-        }
-        lua_newtable(lua);
-        lua_pushstring(lua, "map");
-        lua_createtable(lua, 0, len);
-    }
-    for (size_t j = 0; j < len; j++) {
-        parseReply(parser, lua);
-        parseReply(parser, lua);
-        if (lua) lua_settable(lua, -3);
-    }
-    if (lua) lua_settable(lua, -3);
-}
-
-static void redisProtocolToLuaType_Set(struct ReplyParser *parser, void *ctx, size_t len, const char *proto) {
-    UNUSED(proto);
-
-    lua_State *lua = ctx;
-    if (lua) {
-        if (!lua_checkstack(lua, 3)) {
-            /* Increase the Lua stack if needed, to make sure there is enough room
-             * to push elements to the stack. On failure, exit with panic. */
-            serverPanic("lua stack limit reach when parsing server.call reply");
-        }
-        lua_newtable(lua);
-        lua_pushstring(lua, "set");
-        lua_createtable(lua, 0, len);
-    }
-    for (size_t j = 0; j < len; j++) {
-        parseReply(parser, lua);
-        if (lua) {
-            if (!lua_checkstack(lua, 1)) {
-                /* Increase the Lua stack if needed, to make sure there is enough room
-                 * to push elements to the stack. On failure, exit with panic.
-                 * Notice that here we need to check the stack again because the recursive
-                 * call to redisProtocolToLuaType might have use the room allocated in the stack*/
-                serverPanic("lua stack limit reach when parsing server.call reply");
-            }
-            lua_pushboolean(lua, 1);
-            lua_settable(lua, -3);
-        }
-    }
-    if (lua) lua_settable(lua, -3);
-}
-
-static void redisProtocolToLuaType_Array(struct ReplyParser *parser, void *ctx, size_t len, const char *proto) {
-    UNUSED(proto);
-
-    lua_State *lua = ctx;
-    if (lua) {
-        if (!lua_checkstack(lua, 2)) {
-            /* Increase the Lua stack if needed, to make sure there is enough room
-             * to push elements to the stack. On failure, exit with panic. */
-            serverPanic("lua stack limit reach when parsing server.call reply");
-        }
-        lua_createtable(lua, len, 0);
-    }
-    for (size_t j = 0; j < len; j++) {
-        if (lua) lua_pushnumber(lua, j + 1);
-        parseReply(parser, lua);
-        if (lua) lua_settable(lua, -3);
-    }
-}
-
-static void redisProtocolToLuaType_Attribute(struct ReplyParser *parser, void *ctx, size_t len, const char *proto) {
-    UNUSED(proto);
-
-    /* Parse the attribute reply.
-     * Currently, we do not expose the attribute to the Lua script so
-     * we just need to continue parsing and ignore it (the NULL ensures that the
-     * reply will be ignored). */
-    for (size_t j = 0; j < len; j++) {
-        parseReply(parser, NULL);
-        parseReply(parser, NULL);
-    }
-
-    /* Parse the reply itself. */
-    parseReply(parser, ctx);
-}
-
-static void redisProtocolToLuaType_VerbatimString(void *ctx,
-                                                  const char *format,
-                                                  const char *str,
-                                                  size_t len,
-                                                  const char *proto,
-                                                  size_t proto_len) {
-    UNUSED(proto);
-    UNUSED(proto_len);
-    if (!ctx) {
-        return;
-    }
-
-    lua_State *lua = ctx;
-    if (!lua_checkstack(lua, 5)) {
-        /* Increase the Lua stack if needed, to make sure there is enough room
-         * to push elements to the stack. On failure, exit with panic. */
-        serverPanic("lua stack limit reach when parsing server.call reply");
-    }
-    lua_newtable(lua);
-    lua_pushstring(lua, "verbatim_string");
-    lua_newtable(lua);
-    lua_pushstring(lua, "string");
-    lua_pushlstring(lua, str, len);
-    lua_settable(lua, -3);
-    lua_pushstring(lua, "format");
-    lua_pushlstring(lua, format, 3);
-    lua_settable(lua, -3);
-    lua_settable(lua, -3);
-}
-
-static void
-redisProtocolToLuaType_BigNumber(void *ctx, const char *str, size_t len, const char *proto, size_t proto_len) {
-    UNUSED(proto);
-    UNUSED(proto_len);
-    if (!ctx) {
-        return;
-    }
-
-    lua_State *lua = ctx;
-    if (!lua_checkstack(lua, 3)) {
-        /* Increase the Lua stack if needed, to make sure there is enough room
-         * to push elements to the stack. On failure, exit with panic. */
-        serverPanic("lua stack limit reach when parsing server.call reply");
-    }
-    lua_newtable(lua);
-    lua_pushstring(lua, "big_number");
-    lua_pushlstring(lua, str, len);
-    lua_settable(lua, -3);
-}
-
-static void redisProtocolToLuaType_Null(void *ctx, const char *proto, size_t proto_len) {
-    UNUSED(proto);
-    UNUSED(proto_len);
-    if (!ctx) {
-        return;
-    }
-
-    lua_State *lua = ctx;
-    if (!lua_checkstack(lua, 1)) {
-        /* Increase the Lua stack if needed, to make sure there is enough room
-         * to push elements to the stack. On failure, exit with panic. */
-        serverPanic("lua stack limit reach when parsing server.call reply");
-    }
-    lua_pushnil(lua);
-}
-
-static void redisProtocolToLuaType_Bool(void *ctx, int val, const char *proto, size_t proto_len) {
-    UNUSED(proto);
-    UNUSED(proto_len);
-    if (!ctx) {
-        return;
-    }
-
-    lua_State *lua = ctx;
-    if (!lua_checkstack(lua, 1)) {
-        /* Increase the Lua stack if needed, to make sure there is enough room
-         * to push elements to the stack. On failure, exit with panic. */
-        serverPanic("lua stack limit reach when parsing server.call reply");
-    }
-    lua_pushboolean(lua, val);
-}
-
-static void redisProtocolToLuaType_Double(void *ctx, double d, const char *proto, size_t proto_len) {
-    UNUSED(proto);
-    UNUSED(proto_len);
-    if (!ctx) {
-        return;
-    }
-
-    lua_State *lua = ctx;
-    if (!lua_checkstack(lua, 3)) {
-        /* Increase the Lua stack if needed, to make sure there is enough room
-         * to push elements to the stack. On failure, exit with panic. */
-        serverPanic("lua stack limit reach when parsing server.call reply");
-    }
-    lua_newtable(lua);
-    lua_pushstring(lua, "double");
-    lua_pushnumber(lua, d);
-    lua_settable(lua, -3);
+    sp = s;
+    ep = end = s + strlen(s) - 1;
+    while (sp <= end && strchr(cset, *sp)) sp++;
+    while (ep > sp && strchr(cset, *ep)) ep--;
+    len = (ep - sp) + 1;
+    if (s != sp) memmove(s, sp, len);
+    s[len] = '\0';
+    return s;
 }
 
 /* This function is used in order to push an error on the Lua stack in the
@@ -547,16 +276,18 @@ static void redisProtocolToLuaType_Double(void *ctx, double d, const char *proto
  * since the returned tables are otherwise always indexed by integers, never by strings.
  *
  * The function takes ownership on the given err_buffer. */
-void luaPushErrorBuff(lua_State *lua, sds err_buffer) {
-    sds msg;
-    sds error_code;
+static void luaPushErrorBuff(lua_State *lua, const char *err_buffer) {
+    char *msg;
 
     /* If debugging is active and in step mode, log errors resulting from
      * server commands. */
     if (ldbIsEnabled()) {
-        ldbLog(sdscatprintf(sdsempty(), "<error> %s", err_buffer));
+        char *msg = lm_asprintf("<error> %s", err_buffer);
+        ldbLogCString(msg);
+        ValkeyModule_Free(msg);
     }
 
+    char *final_msg = NULL;
     /* There are two possible formats for the received `error` string:
      * 1) "-CODE msg": in this case we remove the leading '-' since we don't store it as part of the lua error format.
      * 2) "msg": in this case we prepend a generic 'ERR' code since all error statuses need some error code.
@@ -567,34 +298,33 @@ void luaPushErrorBuff(lua_State *lua, sds err_buffer) {
         /* derive error code from the message */
         char *err_msg = strstr(err_buffer, " ");
         if (!err_msg) {
-            msg = sdsnew(err_buffer + 1);
-            error_code = sdsnew("ERR");
+            msg = lm_strcpy(err_buffer + 1);
+            final_msg = lm_asprintf("ERR %s", msg);
         } else {
             *err_msg = '\0';
-            msg = sdsnew(err_msg + 1);
-            error_code = sdsnew(err_buffer + 1);
+            msg = lm_strcpy(err_msg + 1);
+            msg = lm_strtrim(msg, "\r\n");
+            final_msg = lm_asprintf("%s %s", err_buffer + 1, msg);
         }
-        sdsfree(err_buffer);
     } else {
-        msg = err_buffer;
-        error_code = sdsnew("ERR");
+        msg = lm_strcpy(err_buffer);
+        msg = lm_strtrim(msg, "\r\n");
+        final_msg = lm_asprintf("%s", msg);
     }
     /* Trim newline at end of string. If we reuse the ready-made error objects (case 1 above) then we might
      * have a newline that needs to be trimmed. In any case the lua server error table shouldn't end with a newline. */
-    msg = sdstrim(msg, "\r\n");
-    sds final_msg = sdscatfmt(error_code, " %s", msg);
 
     lua_newtable(lua);
     lua_pushstring(lua, "err");
     lua_pushstring(lua, final_msg);
     lua_settable(lua, -3);
 
-    sdsfree(msg);
-    sdsfree(final_msg);
+    ValkeyModule_Free(msg);
+    ValkeyModule_Free(final_msg);
 }
 
 void luaPushError(lua_State *lua, const char *error) {
-    luaPushErrorBuff(lua, sdsnew(error));
+    luaPushErrorBuff(lua, error);
 }
 
 /* In case the error set into the Lua stack by luaPushError() was generated
@@ -605,14 +335,240 @@ int luaError(lua_State *lua) {
     return lua_error(lua);
 }
 
+/* ---------------------------------------------------------------------------
+ * Server reply to Lua type conversion functions.
+ * ------------------------------------------------------------------------- */
+
+static void callReplyToLuaType(lua_State *lua, ValkeyModuleCallReply *reply, int resp) {
+    int type = ValkeyModule_CallReplyType(reply);
+    switch (type) {
+    case VALKEYMODULE_REPLY_STRING: {
+        if (!lua_checkstack(lua, 1)) {
+            /* Increase the Lua stack if needed, to make sure there is enough room
+             * to push elements to the stack. On failure, exit with panic. */
+            serverPanic("lua stack limit reach when parsing server.call reply");
+        }
+        size_t len = 0;
+        const char *str = ValkeyModule_CallReplyStringPtr(reply, &len);
+        lua_pushlstring(lua, str, len);
+        break;
+    }
+    case VALKEYMODULE_REPLY_SIMPLE_STRING: {
+        if (!lua_checkstack(lua, 3)) {
+            /* Increase the Lua stack if needed, to make sure there is enough room
+             * to push elements to the stack. On failure, exit with panic. */
+            serverPanic("lua stack limit reach when parsing server.call reply");
+        }
+        size_t len = 0;
+        const char *str = ValkeyModule_CallReplyStringPtr(reply, &len);
+        lua_newtable(lua);
+        lua_pushstring(lua, "ok");
+        lua_pushlstring(lua, str, len);
+        lua_settable(lua, -3);
+        break;
+    }
+    case VALKEYMODULE_REPLY_INTEGER: {
+        if (!lua_checkstack(lua, 1)) {
+            /* Increase the Lua stack if needed, to make sure there is enough room
+             * to push elements to the stack. On failure, exit with panic. */
+            serverPanic("lua stack limit reach when parsing server.call reply");
+        }
+        long long val = ValkeyModule_CallReplyInteger(reply);
+        lua_pushnumber(lua, (lua_Number)val);
+        break;
+    }
+    case VALKEYMODULE_REPLY_ARRAY: {
+        if (!lua_checkstack(lua, 2)) {
+            /* Increase the Lua stack if needed, to make sure there is enough room
+             * to push elements to the stack. On failure, exit with panic. */
+            serverPanic("lua stack limit reach when parsing server.call reply");
+        }
+        size_t items = ValkeyModule_CallReplyLength(reply);
+        lua_createtable(lua, items, 0);
+
+        for (size_t i = 0; i < items; i++) {
+            ValkeyModuleCallReply *val = ValkeyModule_CallReplyArrayElement(reply, i);
+
+            lua_pushnumber(lua, i + 1);
+            callReplyToLuaType(lua, val, resp);
+            lua_settable(lua, -3);
+        }
+        break;
+    }
+    case VALKEYMODULE_REPLY_NULL:
+    case VALKEYMODULE_REPLY_ARRAY_NULL:
+        if (!lua_checkstack(lua, 1)) {
+            /* Increase the Lua stack if needed, to make sure there is enough room
+             * to push elements to the stack. On failure, exit with panic. */
+            serverPanic("lua stack limit reach when parsing server.call reply");
+        }
+        if (resp == 2) {
+            lua_pushboolean(lua, 0);
+        } else {
+            lua_pushnil(lua);
+        }
+        break;
+    case VALKEYMODULE_REPLY_MAP: {
+        if (!lua_checkstack(lua, 3)) {
+            /* Increase the Lua stack if needed, to make sure there is enough room
+             * to push elements to the stack. On failure, exit with panic. */
+            serverPanic("lua stack limit reach when parsing server.call reply");
+        }
+
+        size_t items = ValkeyModule_CallReplyLength(reply);
+        lua_newtable(lua);
+        lua_pushstring(lua, "map");
+        lua_createtable(lua, 0, items);
+
+        for (size_t i = 0; i < items; i++) {
+            ValkeyModuleCallReply *key = NULL;
+            ValkeyModuleCallReply *val = NULL;
+            ValkeyModule_CallReplyMapElement(reply, i, &key, &val);
+
+            callReplyToLuaType(lua, key, resp);
+            callReplyToLuaType(lua, val, resp);
+            lua_settable(lua, -3);
+        }
+        lua_settable(lua, -3);
+        break;
+    }
+    case VALKEYMODULE_REPLY_SET: {
+        if (!lua_checkstack(lua, 3)) {
+            /* Increase the Lua stack if needed, to make sure there is enough room
+             * to push elements to the stack. On failure, exit with panic. */
+            serverPanic("lua stack limit reach when parsing server.call reply");
+        }
+
+        size_t items = ValkeyModule_CallReplyLength(reply);
+        lua_newtable(lua);
+        lua_pushstring(lua, "set");
+        lua_createtable(lua, 0, items);
+
+        for (size_t i = 0; i < items; i++) {
+            ValkeyModuleCallReply *val = ValkeyModule_CallReplySetElement(reply, i);
+
+            callReplyToLuaType(lua, val, resp);
+            lua_pushboolean(lua, 1);
+            lua_settable(lua, -3);
+        }
+        lua_settable(lua, -3);
+        break;
+    }
+    case VALKEYMODULE_REPLY_BOOL: {
+        if (!lua_checkstack(lua, 1)) {
+            /* Increase the Lua stack if needed, to make sure there is enough room
+             * to push elements to the stack. On failure, exit with panic. */
+            serverPanic("lua stack limit reach when parsing server.call reply");
+        }
+        int b = ValkeyModule_CallReplyBool(reply);
+        lua_pushboolean(lua, b);
+        break;
+    }
+    case VALKEYMODULE_REPLY_DOUBLE: {
+        if (!lua_checkstack(lua, 3)) {
+            /* Increase the Lua stack if needed, to make sure there is enough room
+             * to push elements to the stack. On failure, exit with panic. */
+            serverPanic("lua stack limit reach when parsing server.call reply");
+        }
+        double d = ValkeyModule_CallReplyDouble(reply);
+        lua_newtable(lua);
+        lua_pushstring(lua, "double");
+        lua_pushnumber(lua, d);
+        lua_settable(lua, -3);
+        break;
+    }
+
+    case VALKEYMODULE_REPLY_BIG_NUMBER: {
+        if (!lua_checkstack(lua, 3)) {
+            /* Increase the Lua stack if needed, to make sure there is enough room
+             * to push elements to the stack. On failure, exit with panic. */
+            serverPanic("lua stack limit reach when parsing server.call reply");
+        }
+        size_t len = 0;
+        const char *str = ValkeyModule_CallReplyBigNumber(reply, &len);
+        lua_newtable(lua);
+        lua_pushstring(lua, "big_number");
+        lua_pushlstring(lua, str, len);
+        lua_settable(lua, -3);
+        break;
+    }
+    case VALKEYMODULE_REPLY_VERBATIM_STRING: {
+        if (!lua_checkstack(lua, 5)) {
+            /* Increase the Lua stack if needed, to make sure there is enough room
+             * to push elements to the stack. On failure, exit with panic. */
+            serverPanic("lua stack limit reach when parsing server.call reply");
+        }
+        size_t len = 0;
+        const char *format = NULL;
+        const char *str = ValkeyModule_CallReplyVerbatim(reply, &len, &format);
+        lua_newtable(lua);
+        lua_pushstring(lua, "verbatim_string");
+        lua_newtable(lua);
+        lua_pushstring(lua, "string");
+        lua_pushlstring(lua, str, len);
+        lua_settable(lua, -3);
+        lua_pushstring(lua, "format");
+        lua_pushlstring(lua, format, 3);
+        lua_settable(lua, -3);
+        lua_settable(lua, -3);
+        break;
+    }
+    case VALKEYMODULE_REPLY_ERROR: {
+        if (!lua_checkstack(lua, 3)) {
+            /* Increase the Lua stack if needed, to make sure there is enough room
+             * to push elements to the stack. On failure, exit with panic. */
+            serverPanic("lua stack limit reach when parsing server.call reply");
+        }
+        const char *err = ValkeyModule_CallReplyStringPtr(reply, NULL);
+        luaPushErrorBuff(lua, err);
+        /* push a field indicate to ignore updating the stats on this error
+         * because it was already updated when executing the command. */
+        lua_pushstring(lua, "ignore_error_stats_update");
+        lua_pushboolean(lua, 1);
+        lua_settable(lua, -3);
+        break;
+    }
+    case VALKEYMODULE_REPLY_ATTRIBUTE: {
+        /* Currently, we do not expose the attribute to the Lua script. */
+        break;
+    }
+    case VALKEYMODULE_REPLY_PROMISE:
+    case VALKEYMODULE_REPLY_UNKNOWN:
+    default:
+        ValkeyModule_Assert(0);
+    }
+}
 
 /* ---------------------------------------------------------------------------
  * Lua reply to server reply conversion functions.
  * ------------------------------------------------------------------------- */
 
+char *strmapchars(char *s, const char *from, const char *to, size_t setlen) {
+    size_t j, i, l = strlen(s);
+
+    for (j = 0; j < l; j++) {
+        for (i = 0; i < setlen; i++) {
+            if (s[j] == from[i]) {
+                s[j] = to[i];
+                break;
+            }
+        }
+    }
+    return s;
+}
+
+char *copy_string_from_lua_stack(lua_State *lua) {
+    const char *str = lua_tostring(lua, -1);
+    size_t len = lua_strlen(lua, -1);
+    char *res = ValkeyModule_Alloc(len + 1);
+    strncpy(res, str, len);
+    res[len] = 0;
+    return res;
+}
+
 /* Reply to client 'c' converting the top element in the Lua stack to a
  * server reply. As a side effect the element is consumed from the stack.  */
-static void luaReplyToServerReply(client *c, client *script_client, lua_State *lua) {
+static void luaReplyToServerReply(ValkeyModuleCtx *ctx, int resp_version, lua_State *lua) {
     int t = lua_type(lua, -1);
 
     if (!lua_checkstack(lua, 4)) {
@@ -620,20 +576,28 @@ static void luaReplyToServerReply(client *c, client *script_client, lua_State *l
          * to push 4 elements to the stack. On failure, return error.
          * Notice that we need, in the worst case, 4 elements because returning a map might
          * require push 4 elements to the Lua stack.*/
-        addReplyError(c, "reached lua stack limit");
+        ValkeyModule_ReplyWithError(ctx, "ERR reached lua stack limit");
         lua_pop(lua, 1); /* pop the element from the stack */
         return;
     }
 
     switch (t) {
-    case LUA_TSTRING: addReplyBulkCBuffer(c, (char *)lua_tostring(lua, -1), lua_strlen(lua, -1)); break;
-    case LUA_TBOOLEAN:
-        if (script_client->resp == 2)
-            addReply(c, lua_toboolean(lua, -1) ? shared.cone : shared.null[c->resp]);
-        else
-            addReplyBool(c, lua_toboolean(lua, -1));
+    case LUA_TSTRING:
+        ValkeyModule_ReplyWithStringBuffer(ctx, lua_tostring(lua, -1), lua_strlen(lua, -1));
         break;
-    case LUA_TNUMBER: addReplyLongLong(c, (long long)lua_tonumber(lua, -1)); break;
+    case LUA_TBOOLEAN:
+        if (resp_version == 2) {
+            int b = lua_toboolean(lua, -1);
+            if (b) {
+                ValkeyModule_ReplyWithLongLong(ctx, 1);
+            } else {
+                ValkeyModule_ReplyWithNull(ctx);
+            }
+        } else {
+            ValkeyModule_ReplyWithBool(ctx, lua_toboolean(lua, -1));
+        }
+        break;
+    case LUA_TNUMBER: ValkeyModule_ReplyWithLongLong(ctx, (long long)lua_tonumber(lua, -1)); break;
     case LUA_TTABLE:
         /* We need to check if it is an array, an error, or a status reply.
          * Error are returned as a single element table with 'err' field.
@@ -650,9 +614,7 @@ static void luaReplyToServerReply(client *c, client *script_client, lua_State *l
                     1); /* pop the error message, we will use luaExtractErrorInformation to get error information */
             errorInfo err_info = {0};
             luaExtractErrorInformation(lua, &err_info);
-            addReplyErrorFormatEx(
-                c, ERR_REPLY_FLAG_CUSTOM | (err_info.ignore_err_stats_update ? ERR_REPLY_FLAG_NO_STATS_UPDATE : 0),
-                "-%s", err_info.msg);
+            ValkeyModule_ReplyWithCustomErrorFormat(ctx, !err_info.ignore_err_stats_update, "%s", err_info.msg);
             luaErrorInformationDiscard(&err_info);
             lua_pop(lua, 1); /* pop the result table */
             return;
@@ -664,10 +626,10 @@ static void luaReplyToServerReply(client *c, client *script_client, lua_State *l
         lua_rawget(lua, -2);
         t = lua_type(lua, -1);
         if (t == LUA_TSTRING) {
-            sds ok = sdsnew(lua_tostring(lua, -1));
-            sdsmapchars(ok, "\r\n", "  ", 2);
-            addReplyStatusLength(c, ok, sdslen(ok));
-            sdsfree(ok);
+            char *ok = copy_string_from_lua_stack(lua);
+            strmapchars(ok, "\r\n", "  ", 2);
+            ValkeyModule_ReplyWithSimpleString(ctx, ok);
+            ValkeyModule_Free(ok);
             lua_pop(lua, 2);
             return;
         }
@@ -678,7 +640,7 @@ static void luaReplyToServerReply(client *c, client *script_client, lua_State *l
         lua_rawget(lua, -2);
         t = lua_type(lua, -1);
         if (t == LUA_TNUMBER) {
-            addReplyDouble(c, lua_tonumber(lua, -1));
+            ValkeyModule_ReplyWithDouble(ctx, lua_tonumber(lua, -1));
             lua_pop(lua, 2);
             return;
         }
@@ -689,10 +651,10 @@ static void luaReplyToServerReply(client *c, client *script_client, lua_State *l
         lua_rawget(lua, -2);
         t = lua_type(lua, -1);
         if (t == LUA_TSTRING) {
-            sds big_num = sdsnewlen(lua_tostring(lua, -1), lua_strlen(lua, -1));
-            sdsmapchars(big_num, "\r\n", "  ", 2);
-            addReplyBigNum(c, big_num, sdslen(big_num));
-            sdsfree(big_num);
+            char *big_num = copy_string_from_lua_stack(lua);
+            strmapchars(big_num, "\r\n", "  ", 2);
+            ValkeyModule_ReplyWithBigNumber(ctx, big_num, strlen(big_num));
+            ValkeyModule_Free(big_num);
             lua_pop(lua, 2);
             return;
         }
@@ -714,7 +676,7 @@ static void luaReplyToServerReply(client *c, client *script_client, lua_State *l
                 if (t == LUA_TSTRING) {
                     size_t len;
                     char *str = (char *)lua_tolstring(lua, -1, &len);
-                    addReplyVerbatim(c, str, len, format);
+                    ValkeyModule_ReplyWithVerbatimStringType(ctx, str, len, format);
                     lua_pop(lua, 4);
                     return;
                 }
@@ -730,18 +692,18 @@ static void luaReplyToServerReply(client *c, client *script_client, lua_State *l
         t = lua_type(lua, -1);
         if (t == LUA_TTABLE) {
             int maplen = 0;
-            void *replylen = addReplyDeferredLen(c);
+            ValkeyModule_ReplyWithMap(ctx, VALKEYMODULE_POSTPONED_LEN);
             /* we took care of the stack size on function start */
             lua_pushnil(lua); /* Use nil to start iteration. */
             while (lua_next(lua, -2)) {
                 /* Stack now: table, key, value */
-                lua_pushvalue(lua, -2);                       /* Dup key before consuming. */
-                luaReplyToServerReply(c, script_client, lua); /* Return key. */
-                luaReplyToServerReply(c, script_client, lua); /* Return value. */
+                lua_pushvalue(lua, -2);                        /* Dup key before consuming. */
+                luaReplyToServerReply(ctx, resp_version, lua); /* Return key. */
+                luaReplyToServerReply(ctx, resp_version, lua); /* Return value. */
                 /* Stack now: table, key. */
                 maplen++;
             }
-            setDeferredMapLen(c, replylen, maplen);
+            ValkeyModule_ReplySetMapLength(ctx, maplen);
             lua_pop(lua, 2);
             return;
         }
@@ -753,25 +715,25 @@ static void luaReplyToServerReply(client *c, client *script_client, lua_State *l
         t = lua_type(lua, -1);
         if (t == LUA_TTABLE) {
             int setlen = 0;
-            void *replylen = addReplyDeferredLen(c);
+            ValkeyModule_ReplyWithSet(ctx, VALKEYMODULE_POSTPONED_LEN);
             /* we took care of the stack size on function start */
             lua_pushnil(lua); /* Use nil to start iteration. */
             while (lua_next(lua, -2)) {
                 /* Stack now: table, key, true */
-                lua_pop(lua, 1);                              /* Discard the boolean value. */
-                lua_pushvalue(lua, -1);                       /* Dup key before consuming. */
-                luaReplyToServerReply(c, script_client, lua); /* Return key. */
+                lua_pop(lua, 1);                               /* Discard the boolean value. */
+                lua_pushvalue(lua, -1);                        /* Dup key before consuming. */
+                luaReplyToServerReply(ctx, resp_version, lua); /* Return key. */
                 /* Stack now: table, key. */
                 setlen++;
             }
-            setDeferredSetLen(c, replylen, setlen);
+            ValkeyModule_ReplySetSetLength(ctx, setlen);
             lua_pop(lua, 2);
             return;
         }
         lua_pop(lua, 1); /* Discard field name pushed before. */
 
         /* Handle the array reply. */
-        void *replylen = addReplyDeferredLen(c);
+        ValkeyModule_ReplyWithArray(ctx, VALKEYMODULE_POSTPONED_LEN);
         int j = 1, mbulklen = 0;
         while (1) {
             /* we took care of the stack size on function start */
@@ -782,12 +744,12 @@ static void luaReplyToServerReply(client *c, client *script_client, lua_State *l
                 lua_pop(lua, 1);
                 break;
             }
-            luaReplyToServerReply(c, script_client, lua);
+            luaReplyToServerReply(ctx, resp_version, lua);
             mbulklen++;
         }
-        setDeferredArrayLen(c, replylen, mbulklen);
+        ValkeyModule_ReplySetArrayLength(ctx, mbulklen);
         break;
-    default: addReplyNull(c);
+    default: ValkeyModule_ReplyWithNull(ctx);
     }
     lua_pop(lua, 1);
 }
@@ -795,17 +757,144 @@ static void luaReplyToServerReply(client *c, client *script_client, lua_State *l
 /* ---------------------------------------------------------------------------
  * Lua server.* functions implementations.
  * ------------------------------------------------------------------------- */
-void freeLuaServerArgv(robj **argv, int argc, int argv_len);
+void freeLuaServerArgv(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc);
 
-/* Cached argv array across calls. */
-static robj **lua_argv = NULL;
-static int lua_argv_size = 0;
+/* Return the number of digits of 'v' when converted to string in radix 10.
+ * See ll2string() for more information. */
+static uint32_t digits10(uint64_t v) {
+    if (v < 10) return 1;
+    if (v < 100) return 2;
+    if (v < 1000) return 3;
+    if (v < 1000000000000UL) {
+        if (v < 100000000UL) {
+            if (v < 1000000) {
+                if (v < 10000) return 4;
+                return 5 + (v >= 100000);
+            }
+            return 7 + (v >= 10000000UL);
+        }
+        if (v < 10000000000UL) {
+            return 9 + (v >= 1000000000UL);
+        }
+        return 11 + (v >= 100000000000UL);
+    }
+    return 12 + digits10(v / 1000000000000UL);
+}
 
-/* Cache of recently used small arguments to avoid malloc calls. */
-static robj *lua_args_cached_objects[LUA_CMD_OBJCACHE_SIZE];
-static size_t lua_args_cached_objects_len[LUA_CMD_OBJCACHE_SIZE];
+/* Convert a unsigned long long into a string. Returns the number of
+ * characters needed to represent the number.
+ * If the buffer is not big enough to store the string, 0 is returned.
+ *
+ * Based on the following article (that apparently does not provide a
+ * novel approach but only publicizes an already used technique):
+ *
+ * https://web.archive.org/web/20150427221229/https://www.facebook.com/notes/facebook-engineering/three-optimization-tips-for-c/10151361643253920 */
+static int ull2string(char *dst, size_t dstlen, unsigned long long value) {
+    static const char digits[201] = "0001020304050607080910111213141516171819"
+                                    "2021222324252627282930313233343536373839"
+                                    "4041424344454647484950515253545556575859"
+                                    "6061626364656667686970717273747576777879"
+                                    "8081828384858687888990919293949596979899";
 
-static robj **luaArgsToServerArgv(lua_State *lua, int *argc, int *argv_len) {
+    /* Check length. */
+    uint32_t length = digits10(value);
+    if (length >= dstlen) goto err;
+    ;
+
+    /* Null term. */
+    uint32_t next = length - 1;
+    dst[next + 1] = '\0';
+    while (value >= 100) {
+        int const i = (value % 100) * 2;
+        value /= 100;
+        dst[next] = digits[i + 1];
+        dst[next - 1] = digits[i];
+        next -= 2;
+    }
+
+    /* Handle last 1-2 digits. */
+    if (value < 10) {
+        dst[next] = '0' + (uint32_t)value;
+    } else {
+        int i = (uint32_t)value * 2;
+        dst[next] = digits[i + 1];
+        dst[next - 1] = digits[i];
+    }
+    return length;
+err:
+    /* force add Null termination */
+    if (dstlen > 0) dst[0] = '\0';
+    return 0;
+}
+
+/* Convert a long long into a string. Returns the number of
+ * characters needed to represent the number.
+ * If the buffer is not big enough to store the string, 0 is returned. */
+static int ll2string(char *dst, size_t dstlen, long long svalue) {
+    unsigned long long value;
+    int negative = 0;
+
+    /* The ull2string function with 64bit unsigned integers for simplicity, so
+     * we convert the number here and remember if it is negative. */
+    if (svalue < 0) {
+        if (svalue != LLONG_MIN) {
+            value = -svalue;
+        } else {
+            value = ((unsigned long long)LLONG_MAX) + 1;
+        }
+        if (dstlen < 2) goto err;
+        negative = 1;
+        dst[0] = '-';
+        dst++;
+        dstlen--;
+    } else {
+        value = svalue;
+    }
+
+    /* Converts the unsigned long long value to string*/
+    int length = ull2string(dst, dstlen, value);
+    if (length == 0) return 0;
+    return length + negative;
+
+err:
+    /* force add Null termination */
+    if (dstlen > 0) dst[0] = '\0';
+    return 0;
+}
+
+/* Returns 1 if the double value can safely be represented in long long without
+ * precision loss, in which case the corresponding long long is stored in the out variable. */
+static int double2ll(double d, long long *out) {
+#if (__DBL_MANT_DIG__ >= 52) && (__DBL_MANT_DIG__ <= 63) && (LLONG_MAX == 0x7fffffffffffffffLL)
+    /* Check if the float is in a safe range to be casted into a
+     * long long. We are assuming that long long is 64 bit here.
+     * Also we are assuming that there are no implementations around where
+     * double has precision < 52 bit.
+     *
+     * Under this assumptions we test if a double is inside a range
+     * where casting to long long is safe. Then using two castings we
+     * make sure the decimal part is zero. If all this is true we can use
+     * integer without precision loss.
+     *
+     * Note that numbers above 2^52 and below 2^63 use all the fraction bits as real part,
+     * and the exponent bits are positive, which means the "decimal" part must be 0.
+     * i.e. all double values in that range are representable as a long without precision loss,
+     * but not all long values in that range can be represented as a double.
+     * we only care about the first part here. */
+    if (d < (double)(-LLONG_MAX / 2) || d > (double)(LLONG_MAX / 2)) return 0;
+    long long ll = d;
+    if (ll == d) {
+        *out = ll;
+        return 1;
+    }
+#else
+    VALKEYMODULE_NOT_USED(d);
+    VALKEYMODULE_NOT_USED(out);
+#endif
+    return 0;
+}
+
+static ValkeyModuleString **luaArgsToServerArgv(ValkeyModuleCtx *ctx, lua_State *lua, int *argc) {
     int j;
     /* Require at least one argument */
     *argc = lua_gettop(lua);
@@ -814,12 +903,7 @@ static robj **luaArgsToServerArgv(lua_State *lua, int *argc, int *argv_len) {
         return NULL;
     }
 
-    /* Build the arguments vector (reuse a cached argv from last call) */
-    if (lua_argv_size < *argc) {
-        lua_argv = zrealloc(lua_argv, sizeof(robj *) * *argc);
-        lua_argv_size = *argc;
-    }
-    *argv_len = lua_argv_size;
+    ValkeyModuleString **lua_argv = ValkeyModule_Alloc(sizeof(ValkeyModuleString *) * *argc);
 
     for (j = 0; j < *argc; j++) {
         char *obj_s;
@@ -835,9 +919,9 @@ static robj **luaArgsToServerArgv(lua_State *lua, int *argc, int *argv_len) {
              * to convert it as an integer when that's possible, since the string could later be used
              * in a context that doesn't support scientific notation (e.g. 1e9 instead of 100000000). */
             long long lvalue;
-            if (double2ll((double)num, &lvalue))
+            if (double2ll((double)num, &lvalue)) {
                 obj_len = ll2string(dbuf, sizeof(dbuf), lvalue);
-            else {
+            } else {
                 obj_len = fpconv_dtoa((double)num, dbuf);
                 dbuf[obj_len] = '\0';
             }
@@ -846,16 +930,8 @@ static robj **luaArgsToServerArgv(lua_State *lua, int *argc, int *argv_len) {
             obj_s = (char *)lua_tolstring(lua, j + 1, &obj_len);
             if (obj_s == NULL) break; /* Not a string. */
         }
-        /* Try to use a cached object. */
-        if (j < LUA_CMD_OBJCACHE_SIZE && lua_args_cached_objects[j] && lua_args_cached_objects_len[j] >= obj_len) {
-            sds s = lua_args_cached_objects[j]->ptr;
-            lua_argv[j] = lua_args_cached_objects[j];
-            lua_args_cached_objects[j] = NULL;
-            memcpy(s, obj_s, obj_len + 1);
-            sdssetlen(s, obj_len);
-        } else {
-            lua_argv[j] = createStringObject(obj_s, obj_len);
-        }
+
+        lua_argv[j] = ValkeyModule_CreateString(ctx, obj_s, obj_len);
     }
 
     /* Pop all arguments from the stack, we do not need them anymore
@@ -866,51 +942,76 @@ static robj **luaArgsToServerArgv(lua_State *lua, int *argc, int *argv_len) {
      * is not a string or an integer (lua_isstring() return true for
      * integers as well). */
     if (j != *argc) {
-        freeLuaServerArgv(lua_argv, j, lua_argv_size);
-        luaPushError(lua, "Command arguments must be strings or integers");
+        freeLuaServerArgv(ctx, lua_argv, j);
+        luaPushError(lua, "ERR Command arguments must be strings or integers");
         return NULL;
     }
 
     return lua_argv;
 }
 
-void freeLuaServerArgv(robj **argv, int argc, int argv_len) {
+void freeLuaServerArgv(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     int j;
     for (j = 0; j < argc; j++) {
-        robj *o = argv[j];
+        ValkeyModuleString *o = argv[j];
+        ValkeyModule_FreeString(ctx, o);
+    }
+    ValkeyModule_Free(argv);
+}
 
-        /* Try to cache the object in the lua_args_cached_objects array.
-         * The object must be small, SDS-encoded, and with refcount = 1
-         * (we must be the only owner) for us to cache it. */
-        if (j < LUA_CMD_OBJCACHE_SIZE && o->refcount == 1 &&
-            (o->encoding == OBJ_ENCODING_RAW || o->encoding == OBJ_ENCODING_EMBSTR) &&
-            sdslen(o->ptr) <= LUA_CMD_OBJCACHE_MAX_LEN) {
-            sds s = o->ptr;
-            if (lua_args_cached_objects[j]) decrRefCount(lua_args_cached_objects[j]);
-            lua_args_cached_objects[j] = o;
-            lua_args_cached_objects_len[j] = sdsalloc(s);
-        } else {
-            decrRefCount(o);
+static void luaProcessReplyError(ValkeyModuleCallReply *reply, lua_State *lua) {
+    const char *err = ValkeyModule_CallReplyStringPtr(reply, NULL);
+    int push_error = 1;
+
+    /* The following error messages rewrites are required to keep the backward compatibility
+     * with the previous Lua engine that was implemented in Valkey core. */
+    if (errno == ESPIPE) {
+        if (strncmp(err, "ERR command ", strlen("ERR command ")) == 0) {
+            luaPushError(lua, "ERR This Valkey command is not allowed from script");
+            push_error = 0;
+        }
+    } else if (errno == EINVAL) {
+        if (strncmp(err, "ERR wrong number of arguments for ", strlen("ERR wrong number of arguments for ")) == 0) {
+            luaPushError(lua, "ERR Wrong number of args calling command from script");
+            push_error = 0;
+        }
+    } else if (errno == ENOENT) {
+        if (strncmp(err, "ERR unknown command '", strlen("ERR unknown command '")) == 0) {
+            luaPushError(lua, "ERR Unknown command called from script");
+            push_error = 0;
+        }
+    } else if (errno == EACCES) {
+        if (strncmp(err, "NOPERM ", strlen("NOPERM ")) == 0) {
+            const char *err_prefix = "ERR ACL failure in script: ";
+            size_t err_len = strlen(err_prefix) + strlen(err + strlen("NOPERM ")) + 1;
+            char *err_msg = ValkeyModule_Alloc(err_len * sizeof(char));
+            bzero(err_msg, err_len);
+            strcpy(err_msg, err_prefix);
+            strcat(err_msg, err + strlen("NOPERM "));
+            luaPushError(lua, err_msg);
+            ValkeyModule_Free(err_msg);
+            push_error = 0;
         }
     }
-    if (argv != lua_argv || argv_len != lua_argv_size) {
-        /* The command changed argv, scrap the cache and start over. */
-        zfree(argv);
-        lua_argv = NULL;
-        lua_argv_size = 0;
+
+    if (push_error) {
+        luaPushError(lua, err);
     }
+    /* push a field indicate to ignore updating the stats on this error
+     * because it was already updated when executing the command. */
+    lua_pushstring(lua, "ignore_error_stats_update");
+    lua_pushboolean(lua, 1);
+    lua_settable(lua, -3);
 }
 
 static int luaServerGenericCommand(lua_State *lua, int raise_error) {
-    int j;
-    scriptRunCtx *rctx = luaGetFromRegistry(lua, REGISTRY_RUN_CTX_NAME);
-    serverAssert(rctx); /* Only supported inside script invocation */
-    sds err = NULL;
-    client *c = rctx->c;
-    sds reply;
+    luaFuncCallCtx *rctx = luaGetFromRegistry(lua, REGISTRY_RUN_CTX_NAME);
+    ValkeyModule_Assert(rctx); /* Only supported inside script invocation */
+    ValkeyModuleCallReply *reply;
 
-    c->argv = luaArgsToServerArgv(lua, &c->argc, &c->argv_len);
-    if (c->argv == NULL) {
+    int argc = 0;
+    ValkeyModuleString **argv = luaArgsToServerArgv(rctx->module_ctx, lua, &argc);
+    if (argv == NULL) {
         return raise_error ? luaError(lua) : 1;
     }
 
@@ -923,7 +1024,7 @@ static int luaServerGenericCommand(lua_State *lua, int raise_error) {
     if (inuse) {
         char *recursion_warning = "luaRedisGenericCommand() recursive call detected. "
                                   "Are you doing funny stuff with Lua debug hooks?";
-        serverLog(LL_WARNING, "%s", recursion_warning);
+        ValkeyModule_Log(rctx->module_ctx, "warning", "%s", recursion_warning);
         luaPushError(lua, recursion_warning);
         return 1;
     }
@@ -931,69 +1032,81 @@ static int luaServerGenericCommand(lua_State *lua, int raise_error) {
 
     /* Log the command if debugging is active. */
     if (ldbIsEnabled()) {
-        sds cmdlog = sdsnew("<command>");
-        for (j = 0; j < c->argc; j++) {
-            if (j == 10) {
-                cmdlog = sdscatprintf(cmdlog, " ... (%d more)", c->argc - j - 1);
+        const char *cmd_prefix = "<command>";
+        char *cmdlog = ValkeyModule_Calloc(strlen(cmd_prefix) + 1, sizeof(char));
+        strcpy(cmdlog, cmd_prefix);
+        for (int i = 0; i < argc; i++) {
+            if (i == 10) {
+                char *new_cmdlog = lm_asprintf("%s ... (%d more)", cmdlog, argc - i - 1);
+                ValkeyModule_Free(cmdlog);
+                cmdlog = new_cmdlog;
                 break;
             } else {
-                cmdlog = sdscatlen(cmdlog, " ", 1);
-                cmdlog = sdscatsds(cmdlog, c->argv[j]->ptr);
+                const char *argv_cstr = ValkeyModule_StringPtrLen(argv[i], NULL);
+                char *new_cmdlog = lm_asprintf("%s %s", cmdlog, argv_cstr);
+                ValkeyModule_Free(cmdlog);
+                cmdlog = new_cmdlog;
             }
         }
-        ldbLog(cmdlog);
+        ldbLogCString(cmdlog);
+        ValkeyModule_Free(cmdlog);
     }
 
-    scriptCall(rctx, &err);
-    if (err) {
-        luaPushError(lua, err);
-        sdsfree(err);
-        /* push a field indicate to ignore updating the stats on this error
-         * because it was already updated when executing the command. */
-        lua_pushstring(lua, "ignore_error_stats_update");
-        lua_pushboolean(lua, 1);
-        lua_settable(lua, -3);
+    char fmt[13] = "v!EMSX";
+    int fmt_idx = 6; /* Index of the last char in fmt[] */
+
+    ValkeyModuleString *username = ValkeyModule_GetCurrentUserName(rctx->module_ctx);
+    if (username != NULL) {
+        fmt[fmt_idx++] = 'C';
+        ValkeyModule_FreeString(rctx->module_ctx, username);
+    }
+
+    if (!(rctx->replication_flags & PROPAGATE_AOF)) {
+        fmt[fmt_idx++] = 'A';
+    }
+    if (!(rctx->replication_flags & PROPAGATE_REPL)) {
+        fmt[fmt_idx++] = 'R';
+    }
+    if (!rctx->replication_flags) {
+        /* PROPAGATE_NONE case */
+        fmt[fmt_idx++] = 'A';
+        fmt[fmt_idx++] = 'R';
+    }
+    if (rctx->resp == 3) {
+        fmt[fmt_idx++] = '3';
+    }
+    fmt[fmt_idx] = '\0';
+
+    const char *cmdname = ValkeyModule_StringPtrLen(argv[0], NULL);
+
+    errno = 0;
+    reply = ValkeyModule_Call(rctx->module_ctx, cmdname, fmt, argv + 1, argc - 1);
+    freeLuaServerArgv(rctx->module_ctx, argv, argc);
+    int reply_type = ValkeyModule_CallReplyType(reply);
+    if (errno != 0) {
+        ValkeyModule_Assert(reply_type == VALKEYMODULE_REPLY_ERROR);
+
+        const char *err = ValkeyModule_CallReplyStringPtr(reply, NULL);
+        ValkeyModule_Log(rctx->module_ctx, "debug", "command returned an error: %s errno=%d", err, errno);
+
+        luaProcessReplyError(reply, lua);
         goto cleanup;
+    } else if (raise_error && reply_type != VALKEYMODULE_REPLY_ERROR) {
+        raise_error = 0;
     }
 
-    /* Convert the result of the command into a suitable Lua type.
-     * The first thing we need is to create a single string from the client
-     * output buffers. */
-    if (listLength(c->reply) == 0 && (size_t)c->bufpos < c->buf_usable_size) {
-        /* This is a fast path for the common case of a reply inside the
-         * client static buffer. Don't create an SDS string but just use
-         * the client buffer directly. */
-        c->buf[c->bufpos] = '\0';
-        reply = c->buf;
-        c->bufpos = 0;
-    } else {
-        reply = sdsnewlen(c->buf, c->bufpos);
-        c->bufpos = 0;
-        while (listLength(c->reply)) {
-            clientReplyBlock *o = listNodeValue(listFirst(c->reply));
-
-            reply = sdscatlen(reply, o->buf, o->used);
-            listDelNode(c->reply, listFirst(c->reply));
-        }
-    }
-    if (raise_error && reply[0] != '-') raise_error = 0;
-    redisProtocolToLuaType(lua, reply);
+    callReplyToLuaType(lua, reply, rctx->resp);
 
     /* If the debugger is active, log the reply from the server. */
-    if (ldbIsEnabled())
-        ldbLogRespReply(reply);
-
-    if (reply != c->buf) sdsfree(reply);
-    c->reply_bytes = 0;
+    if (ldbIsEnabled()) {
+        ValkeyModule_ScriptingEngineDebuggerLogRespReply(reply);
+    }
 
 cleanup:
     /* Clean up. Command code may have changed argv/argc so we use the
      * argv/argc of the client instead of the local variables. */
-    freeLuaServerArgv(c->argv, c->argc, c->argv_len);
-    c->argc = c->argv_len = 0;
-    c->user = NULL;
-    c->argv = NULL;
-    resetClient(c);
+    ValkeyModule_FreeCallReply(reply);
+
     inuse--;
 
     if (raise_error) {
@@ -1041,6 +1154,29 @@ static int luaRedisCallCommand(lua_State *lua) {
 /* server.pcall() */
 static int luaRedisPCallCommand(lua_State *lua) {
     return luaServerGenericCommand(lua, 0);
+}
+
+/* Perform the SHA1 of the input string. We use this both for hashing script
+ * bodies in order to obtain the Lua function name, and in the implementation
+ * of server.sha1().
+ *
+ * 'digest' should point to a 41 bytes buffer: 40 for SHA1 converted into an
+ * hexadecimal number, plus 1 byte for null term. */
+void sha1hex(char *digest, char *script, size_t len) {
+    SHA1_CTX ctx;
+    unsigned char hash[20];
+    char *cset = "0123456789abcdef";
+    int j;
+
+    SHA1Init(&ctx);
+    SHA1Update(&ctx, (unsigned char *)script, len);
+    SHA1Final(hash, &ctx);
+
+    for (j = 0; j < 20; j++) {
+        digest[j * 2] = cset[((hash[j] & 0xF0) >> 4)];
+        digest[j * 2 + 1] = cset[(hash[j] & 0xF)];
+    }
+    digest[40] = '\0';
 }
 
 /* This adds server.sha1hex(string) to Lua scripts using the same hashing
@@ -1091,13 +1227,14 @@ static int luaRedisErrorReplyCommand(lua_State *lua) {
 
     /* add '-' if not exists */
     const char *err = lua_tostring(lua, -1);
-    sds err_buff = NULL;
+    char *err_buff = NULL;
     if (err[0] != '-') {
-        err_buff = sdscatfmt(sdsempty(), "-%s", err);
+        err_buff = lm_asprintf("-%s", err);
     } else {
-        err_buff = sdsnew(err);
+        err_buff = lm_strcpy(err);
     }
     luaPushErrorBuff(lua, err_buff);
+    ValkeyModule_Free(err_buff);
     return 1;
 }
 
@@ -1113,8 +1250,8 @@ static int luaRedisStatusReplyCommand(lua_State *lua) {
 static int luaRedisSetReplCommand(lua_State *lua) {
     int flags, argc = lua_gettop(lua);
 
-    scriptRunCtx *rctx = luaGetFromRegistry(lua, REGISTRY_RUN_CTX_NAME);
-    serverAssert(rctx); /* Only supported inside script invocation */
+    luaFuncCallCtx *rctx = luaGetFromRegistry(lua, REGISTRY_RUN_CTX_NAME);
+    ValkeyModule_Assert(rctx); /* Only supported inside script invocation */
 
     if (argc != 1) {
         luaPushError(lua, "server.set_repl() requires one argument.");
@@ -1127,7 +1264,8 @@ static int luaRedisSetReplCommand(lua_State *lua) {
         return luaError(lua);
     }
 
-    scriptSetRepl(rctx, flags);
+    rctx->replication_flags = flags;
+
     return 0;
 }
 
@@ -1135,31 +1273,35 @@ static int luaRedisSetReplCommand(lua_State *lua) {
  *
  * Checks ACL permissions for given command for the current user. */
 static int luaRedisAclCheckCmdPermissionsCommand(lua_State *lua) {
-    scriptRunCtx *rctx = luaGetFromRegistry(lua, REGISTRY_RUN_CTX_NAME);
-    serverAssert(rctx); /* Only supported inside script invocation */
+    luaFuncCallCtx *rctx = luaGetFromRegistry(lua, REGISTRY_RUN_CTX_NAME);
+    ValkeyModule_Assert(rctx); /* Only supported inside script invocation */
+
     int raise_error = 0;
 
-    int argc, argv_len;
-    robj **argv = luaArgsToServerArgv(lua, &argc, &argv_len);
+    int argc = 0;
+    ValkeyModuleString **argv = luaArgsToServerArgv(rctx->module_ctx, lua, &argc);
 
     /* Require at least one argument */
     if (argv == NULL) return luaError(lua);
 
-    /* Find command */
-    struct serverCommand *cmd;
-    if ((cmd = lookupCommand(argv, argc)) == NULL) {
-        luaPushError(lua, "Invalid command passed to server.acl_check_cmd()");
-        raise_error = 1;
-    } else {
-        int keyidxptr;
-        if (ACLCheckAllUserCommandPerm(rctx->original_client->user, cmd, argv, argc, &keyidxptr) != ACL_OK) {
-            lua_pushboolean(lua, 0);
+    ValkeyModuleString *username = ValkeyModule_GetCurrentUserName(rctx->module_ctx);
+    ValkeyModuleUser *user = ValkeyModule_GetModuleUserFromUserName(username);
+    ValkeyModule_FreeString(rctx->module_ctx, username);
+
+    if (ValkeyModule_ACLCheckCommandPermissions(user, argv, argc) != VALKEYMODULE_OK) {
+        if (errno == ENOENT) {
+            luaPushError(lua, "ERR Invalid command passed to server.acl_check_cmd()");
+            raise_error = 1;
         } else {
-            lua_pushboolean(lua, 1);
+            ValkeyModule_Assert(errno == EACCES);
+            lua_pushboolean(lua, 0);
         }
+    } else {
+        lua_pushboolean(lua, 1);
     }
 
-    freeLuaServerArgv(argv, argc, argv_len);
+    ValkeyModule_FreeModuleUser(user);
+    freeLuaServerArgv(rctx->module_ctx, argv, argc);
     if (raise_error)
         return luaError(lua);
     else
@@ -1169,9 +1311,11 @@ static int luaRedisAclCheckCmdPermissionsCommand(lua_State *lua) {
 
 /* server.log() */
 static int luaLogCommand(lua_State *lua) {
+    luaFuncCallCtx *rctx = luaGetFromRegistry(lua, REGISTRY_RUN_CTX_NAME);
+    ValkeyModule_Assert(rctx); /* Only supported inside script invocation */
+
     int j, argc = lua_gettop(lua);
     int level;
-    sds log;
 
     if (argc < 2) {
         luaPushError(lua, "server.log() requires two arguments or more.");
@@ -1185,29 +1329,44 @@ static int luaLogCommand(lua_State *lua) {
         luaPushError(lua, "Invalid log level.");
         return luaError(lua);
     }
-    if (level < server.verbosity) return 0;
 
     /* Glue together all the arguments */
-    log = sdsempty();
+    char *log = NULL;
     for (j = 1; j < argc; j++) {
         size_t len;
         char *s;
 
         s = (char *)lua_tolstring(lua, (-argc) + j, &len);
         if (s) {
-            if (j != 1) log = sdscatlen(log, " ", 1);
-            log = sdscatlen(log, s, len);
+            if (j != 1) {
+                char *next_log = lm_asprintf("%s %s", log, s);
+                ValkeyModule_Free(log);
+                log = next_log;
+            } else {
+                log = lm_asprintf("%s", s);
+            }
         }
     }
-    serverLogRaw(level, log);
-    sdsfree(log);
+
+    const char *level_str = NULL;
+    switch (level) {
+    case LL_DEBUG: level_str = "debug"; break;
+    case LL_VERBOSE: level_str = "verbose"; break;
+    case LL_NOTICE: level_str = "notice"; break;
+    case LL_WARNING: level_str = "warning"; break;
+    default: ValkeyModule_Assert(0);
+    }
+
+    ValkeyModule_Log(rctx->module_ctx, level_str, "%s", log);
+    ValkeyModule_Free(log);
     return 0;
 }
 
 /* server.setresp() */
 static int luaSetResp(lua_State *lua) {
-    scriptRunCtx *rctx = luaGetFromRegistry(lua, REGISTRY_RUN_CTX_NAME);
-    serverAssert(rctx); /* Only supported inside script invocation */
+    luaFuncCallCtx *rctx = luaGetFromRegistry(lua, REGISTRY_RUN_CTX_NAME);
+    ValkeyModule_Assert(rctx); /* Only supported inside script invocation */
+
     int argc = lua_gettop(lua);
 
     if (argc != 1) {
@@ -1220,7 +1379,9 @@ static int luaSetResp(lua_State *lua) {
         luaPushError(lua, "RESP version must be 2 or 3.");
         return luaError(lua);
     }
-    scriptSetResp(rctx, resp);
+
+    rctx->resp = resp;
+
     return 0;
 }
 
@@ -1256,23 +1417,11 @@ static void luaLoadLibraries(lua_State *lua) {
 #endif
 }
 
-/* Return sds of the string value located on stack at the given index.
- * Return NULL if the value is not a string. */
-robj *luaGetStringObject(lua_State *lua, int index) {
-    if (!lua_isstring(lua, index)) {
-        return NULL;
-    }
-
-    size_t len;
-    const char *str = lua_tolstring(lua, index, &len);
-    robj *str_obj = createStringObject(str, len);
-    return str_obj;
-}
-
 static int luaProtectedTableError(lua_State *lua) {
+    luaFuncCallCtx *rctx = luaGetFromRegistry(lua, REGISTRY_RUN_CTX_NAME);
     int argc = lua_gettop(lua);
     if (argc != 2) {
-        serverLog(LL_WARNING, "malicious code trying to call luaProtectedTableError with wrong arguments");
+        ValkeyModule_Log(rctx->module_ctx, "warning", "malicious code trying to call luaProtectedTableError with wrong arguments");
         luaL_error(lua, "Wrong number of arguments to luaProtectedTableError");
     }
     if (!lua_isstring(lua, -1) && !lua_isnumber(lua, -1)) {
@@ -1298,9 +1447,10 @@ void luaSetErrorMetatable(lua_State *lua) {
 }
 
 static int luaNewIndexAllowList(lua_State *lua) {
+    luaFuncCallCtx *rctx = luaGetFromRegistry(lua, REGISTRY_RUN_CTX_NAME);
     int argc = lua_gettop(lua);
     if (argc != 3) {
-        serverLog(LL_WARNING, "malicious code trying to call luaNewIndexAllowList with wrong arguments");
+        ValkeyModule_Log(rctx->module_ctx, "warning", "malicious code trying to call luaNewIndexAllowList with wrong arguments");
         luaL_error(lua, "Wrong number of arguments to luaNewIndexAllowList");
     }
     if (!lua_istable(lua, -3)) {
@@ -1333,7 +1483,7 @@ static int luaNewIndexAllowList(lua_State *lua) {
         for (; *c; ++c) {
             if (strcmp(*c, variable_name) == 0) {
                 deprecated = 1;
-                allowed = server.lua_enable_insecure_api ? 1 : 0;
+                allowed = rctx->lua_enable_insecure_api ? 1 : 0;
                 break;
             }
         }
@@ -1348,10 +1498,10 @@ static int luaNewIndexAllowList(lua_State *lua) {
             }
         }
         if (!*c && !deprecated) {
-            serverLog(LL_WARNING,
-                      "A key '%s' was added to Lua globals which is neither on the globals allow list nor listed on the "
-                      "deny list.",
-                      variable_name);
+            ValkeyModule_Log(rctx->module_ctx, "warning",
+                             "A key '%s' was added to Lua globals which is neither on the globals allow list nor listed on the "
+                             "deny list.",
+                             variable_name);
         }
     } else {
         lua_rawset(lua, -3);
@@ -1365,7 +1515,7 @@ static int luaNewIndexAllowList(lua_State *lua) {
  * The metatable is set on the table which located on the top
  * of the stack.
  */
-void luaSetAllowListProtection(lua_State *lua) {
+static void luaSetAllowListProtection(lua_State *lua) {
     lua_newtable(lua);                            /* push metatable */
     lua_pushcfunction(lua, luaNewIndexAllowList); /* push get error handler */
     lua_setfield(lua, -2, "__newindex");
@@ -1432,27 +1582,27 @@ void luaSetTableProtectionForBasicTypes(lua_State *lua) {
     }
 }
 
-void luaRegisterVersion(lua_State *lua) {
+void luaRegisterVersion(luaEngineCtx *ctx, lua_State *lua) {
     /* For legacy compatibility reasons include Redis versions. */
     lua_pushstring(lua, "REDIS_VERSION_NUM");
-    lua_pushnumber(lua, REDIS_VERSION_NUM);
+    lua_pushnumber(lua, ctx->redis_version_num);
     lua_settable(lua, -3);
 
     lua_pushstring(lua, "REDIS_VERSION");
-    lua_pushstring(lua, REDIS_VERSION);
+    lua_pushstring(lua, ctx->redis_version);
     lua_settable(lua, -3);
 
     /* Now push the Valkey version information. */
     lua_pushstring(lua, "VALKEY_VERSION_NUM");
-    lua_pushnumber(lua, VALKEY_VERSION_NUM);
+    lua_pushnumber(lua, ctx->valkey_version_num);
     lua_settable(lua, -3);
 
     lua_pushstring(lua, "VALKEY_VERSION");
-    lua_pushstring(lua, VALKEY_VERSION);
+    lua_pushstring(lua, ctx->valkey_version);
     lua_settable(lua, -3);
 
     lua_pushstring(lua, "SERVER_NAME");
-    lua_pushstring(lua, SERVER_NAME);
+    lua_pushstring(lua, ctx->server_name);
     lua_settable(lua, -3);
 }
 
@@ -1484,7 +1634,7 @@ void luaRegisterLogFunction(lua_State *lua) {
  * This function only handles fields common between Functions and LUA scripting.
  * scriptingInit() and functionsInit() may add additional fields specific to each.
  */
-void luaRegisterServerAPI(lua_State *lua) {
+void luaRegisterServerAPI(luaEngineCtx *ctx, lua_State *lua) {
     /* In addition to registering server.call/pcall API, we will throw a custom message when a script accesses
      * undefined global variable. LUA stores global variables in the global table, accessible to us on stack at virtual
      * index = LUA_GLOBALSINDEX. We will set __index handler in global table's metatable to a custom C function to
@@ -1497,8 +1647,15 @@ void luaRegisterServerAPI(lua_State *lua) {
     luaSetAllowListProtection(lua);
     lua_pop(lua, 1);
 
+    luaFuncCallCtx call_ctx = {
+        .lua_enable_insecure_api = ctx->lua_enable_insecure_api,
+    };
+    luaSaveOnRegistry(lua, REGISTRY_RUN_CTX_NAME, &call_ctx);
+
     /* Add default C functions provided in deps/lua codebase to handle basic data types such as table, string etc. */
     luaLoadLibraries(lua);
+
+    luaSaveOnRegistry(lua, REGISTRY_RUN_CTX_NAME, NULL);
 
     /* Before Redis OSS 7, Lua used to return error messages as strings from pcall function. With Valkey (or Redis OSS 7), Lua now returns
      * error messages as tables. To keep backwards compatibility, we wrap the Lua pcall function with our own
@@ -1520,7 +1677,7 @@ void luaRegisterServerAPI(lua_State *lua) {
     luaRegisterLogFunction(lua);
 
     /* Add SERVER_VERSION_NUM, SERVER_VERSION and SERVER_NAME fields with appropriate values. */
-    luaRegisterVersion(lua);
+    luaRegisterVersion(ctx, lua);
 
     /* Add server.setresp function to allow LUA scripts to change the RESP version for server.call and server.pcall
      * invocations. */
@@ -1594,12 +1751,14 @@ void luaRegisterServerAPI(lua_State *lua) {
 
 /* Set an array of String Objects as a Lua array (table) stored into a
  * global variable. */
-static void luaCreateArray(lua_State *lua, robj **elev, int elec) {
+static void luaCreateArray(lua_State *lua, ValkeyModuleString **elev, int elec) {
     int j;
 
     lua_createtable(lua, elec, 0);
     for (j = 0; j < elec; j++) {
-        lua_pushlstring(lua, (char *)elev[j]->ptr, sdslen(elev[j]->ptr));
+        size_t len = 0;
+        const char *str = ValkeyModule_StringPtrLen(elev[j], &len);
+        lua_pushlstring(lua, str, len);
         lua_rawseti(lua, -2, j + 1);
     }
 }
@@ -1649,17 +1808,20 @@ static int server_math_randomseed(lua_State *L) {
 
 /* This is the Lua script "count" hook that we use to detect scripts timeout. */
 static void luaMaskCountHook(lua_State *lua, lua_Debug *ar) {
-    UNUSED(ar);
-    scriptRunCtx *rctx = luaGetFromRegistry(lua, REGISTRY_RUN_CTX_NAME);
-    serverAssert(rctx); /* Only supported inside script invocation */
-    if (scriptInterrupt(rctx) == SCRIPT_KILL) {
+    VALKEYMODULE_NOT_USED(ar);
+
+    luaFuncCallCtx *rctx = luaGetFromRegistry(lua, REGISTRY_RUN_CTX_NAME);
+    ValkeyModule_Assert(rctx); /* Only supported inside script invocation */
+
+    ValkeyModuleScriptingEngineExecutionState state = ValkeyModule_GetFunctionExecutionState(rctx->run_ctx);
+    if (state == VMSE_STATE_KILLED) {
         char *err = NULL;
-        if (rctx->flags & SCRIPT_EVAL_MODE) {
-            err = "Script killed by user with SCRIPT KILL.";
+        if (rctx->type == VMSE_EVAL) {
+            err = "ERR Script killed by user with SCRIPT KILL.";
         } else {
-            err = "Script killed by user with FUNCTION KILL.";
+            err = "ERR Script killed by user with FUNCTION KILL.";
         }
-        serverLog(LL_NOTICE, "%s", err);
+        ValkeyModule_Log(NULL, "notice", "%s", err);
 
         /*
          * Set the hook to invoke all the time so the user
@@ -1674,14 +1836,14 @@ static void luaMaskCountHook(lua_State *lua, lua_Debug *ar) {
 }
 
 void luaErrorInformationDiscard(errorInfo *err_info) {
-    if (err_info->msg) sdsfree(err_info->msg);
-    if (err_info->source) sdsfree(err_info->source);
-    if (err_info->line) sdsfree(err_info->line);
+    if (err_info->msg) ValkeyModule_Free(err_info->msg);
+    if (err_info->source) ValkeyModule_Free(err_info->source);
+    if (err_info->line) ValkeyModule_Free(err_info->line);
 }
 
 void luaExtractErrorInformation(lua_State *lua, errorInfo *err_info) {
     if (lua_isstring(lua, -1)) {
-        err_info->msg = sdscatfmt(sdsempty(), "ERR %s", lua_tostring(lua, -1));
+        err_info->msg = lm_asprintf("ERR %s", lua_tostring(lua, -1));
         err_info->line = NULL;
         err_info->source = NULL;
         err_info->ignore_err_stats_update = 0;
@@ -1690,19 +1852,19 @@ void luaExtractErrorInformation(lua_State *lua, errorInfo *err_info) {
 
     lua_getfield(lua, -1, "err");
     if (lua_isstring(lua, -1)) {
-        err_info->msg = sdsnew(lua_tostring(lua, -1));
+        err_info->msg = lm_strcpy(lua_tostring(lua, -1));
     }
     lua_pop(lua, 1);
 
     lua_getfield(lua, -1, "source");
     if (lua_isstring(lua, -1)) {
-        err_info->source = sdsnew(lua_tostring(lua, -1));
+        err_info->source = lm_strcpy(lua_tostring(lua, -1));
     }
     lua_pop(lua, 1);
 
     lua_getfield(lua, -1, "line");
     if (lua_isstring(lua, -1)) {
-        err_info->line = sdsnew(lua_tostring(lua, -1));
+        err_info->line = lm_strcpy(lua_tostring(lua, -1));
     }
     lua_pop(lua, 1);
 
@@ -1714,15 +1876,15 @@ void luaExtractErrorInformation(lua_State *lua, errorInfo *err_info) {
 
     if (err_info->msg == NULL) {
         /* Ensure we never return a NULL msg. */
-        err_info->msg = sdsnew("ERR unknown error");
+        err_info->msg = lm_strcpy("ERR unknown error");
     }
 }
 
 /* This is the core of our Lua debugger, called each time Lua is about
  * to start executing a new line. */
 void luaLdbLineHook(lua_State *lua, lua_Debug *ar) {
-    scriptRunCtx *rctx = luaGetFromRegistry(lua, REGISTRY_RUN_CTX_NAME);
-    serverAssert(rctx); /* Only supported inside script invocation */
+    ValkeyModuleScriptingEngineServerRuntimeCtx *rctx = luaGetFromRegistry(lua, REGISTRY_RUN_CTX_NAME);
+    ValkeyModule_Assert(rctx); /* Only supported inside script invocation */
     lua_getstack(lua, 0, ar);
     lua_getinfo(lua, "Sl", ar);
     ldbSetCurrentLine(ar->currentline);
@@ -1735,14 +1897,14 @@ void luaLdbLineHook(lua_State *lua, lua_Debug *ar) {
 
     /* Check if a timeout occurred. */
     if (ar->event == LUA_HOOKCOUNT && !ldbIsStepEnabled() && bp == 0) {
-        mstime_t elapsed = elapsedMs(rctx->start_time);
-        mstime_t timelimit = server.busy_reply_threshold ? server.busy_reply_threshold : 5000;
-        if (elapsed >= timelimit) {
-            timeout = 1;
-            ldbSetStepMode(1);
-        } else {
-            return; /* No timeout, ignore the COUNT event. */
-        }
+        // mstime_t elapsed = elapsedMs(rctx->start_time);
+        // mstime_t timelimit = server.busy_reply_threshold ? server.busy_reply_threshold : 5000;
+        // if (elapsed >= timelimit) {
+        //     timeout = 1;
+        //     ldbSetStepMode(1);
+        // } else {
+        return; /* No timeout, ignore the COUNT event. */
+        // }
     }
 
     if (ldbIsStepEnabled() || bp) {
@@ -1753,7 +1915,8 @@ void luaLdbLineHook(lua_State *lua, lua_Debug *ar) {
             reason = "timeout reached, infinite loop?";
         ldbSetStepMode(0);
         ldbSetBreakpointOnNextLine(0);
-        ldbLog(sdscatprintf(sdsempty(), "* Stopped at %d, stop reason = %s", ldbGetCurrentLine(), reason));
+        ValkeyModuleString *msg = ValkeyModule_CreateStringPrintf(NULL, "* Stopped at %d, stop reason = %s", ldbGetCurrentLine(), reason);
+        ldbLog(msg);
         ldbLogSourceLine(ldbGetCurrentLine());
         ldbSendLogs();
         if (ldbRepl(lua) == C_ERR && timeout) {
@@ -1763,27 +1926,39 @@ void luaLdbLineHook(lua_State *lua, lua_Debug *ar) {
             luaPushError(lua, "timeout during Lua debugging with client closing connection");
             luaError(lua);
         }
-        rctx->start_time = getMonotonicUs();
+        // rctx->start_time = getMonotonicUs();
     }
 }
 
-void luaCallFunction(scriptRunCtx *run_ctx,
+void luaCallFunction(ValkeyModuleCtx *ctx,
+                     ValkeyModuleScriptingEngineServerRuntimeCtx *run_ctx,
+                     ValkeyModuleScriptingEngineSubsystemType type,
                      lua_State *lua,
-                     robj **keys,
+                     ValkeyModuleString **keys,
                      size_t nkeys,
-                     robj **args,
+                     ValkeyModuleString **args,
                      size_t nargs,
-                     int debug_enabled) {
-    client *c = run_ctx->original_client;
+                     int debug_enabled,
+                     int lua_enable_insecure_api) {
     int delhook = 0;
 
     /* We must set it before we set the Lua hook, theoretically the
      * Lua hook might be called wheneven we run any Lua instruction
      * such as 'luaSetGlobalArray' and we want the run_ctx to be available
      * each time the Lua hook is invoked. */
-    luaSaveOnRegistry(lua, REGISTRY_RUN_CTX_NAME, run_ctx);
 
-    if (server.busy_reply_threshold > 0 && !debug_enabled) {
+    luaFuncCallCtx call_ctx = {
+        .module_ctx = ctx,
+        .run_ctx = run_ctx,
+        .type = type,
+        .replication_flags = PROPAGATE_AOF | PROPAGATE_REPL,
+        .resp = 2,
+        .lua_enable_insecure_api = lua_enable_insecure_api,
+    };
+
+    luaSaveOnRegistry(lua, REGISTRY_RUN_CTX_NAME, &call_ctx);
+
+    if (!debug_enabled) {
         lua_sethook(lua, luaMaskCountHook, LUA_MASKCOUNT, 100000);
         delhook = 1;
     } else if (debug_enabled) {
@@ -1795,14 +1970,14 @@ void luaCallFunction(scriptRunCtx *run_ctx,
      * EVAL received. */
     luaCreateArray(lua, keys, nkeys);
     /* On eval, keys and arguments are globals. */
-    if (run_ctx->flags & SCRIPT_EVAL_MODE) {
+    if (type == VMSE_EVAL) {
         /* open global protection to set KEYS */
         lua_enablereadonlytable(lua, LUA_GLOBALSINDEX, 0);
         lua_setglobal(lua, "KEYS");
         lua_enablereadonlytable(lua, LUA_GLOBALSINDEX, 1);
     }
     luaCreateArray(lua, args, nargs);
-    if (run_ctx->flags & SCRIPT_EVAL_MODE) {
+    if (type == VMSE_EVAL) {
         /* open global protection to set ARGV */
         lua_enablereadonlytable(lua, LUA_GLOBALSINDEX, 0);
         lua_setglobal(lua, "ARGV");
@@ -1816,7 +1991,7 @@ void luaCallFunction(scriptRunCtx *run_ctx,
      * On function mode, we pass 2 arguments (the keys and args tables),
      * and the error handler is located on position -4 (stack: error_handler, callback, keys, args) */
     int err;
-    if (run_ctx->flags & SCRIPT_EVAL_MODE) {
+    if (type == VMSE_EVAL) {
         err = lua_pcall(lua, 0, 1, -2);
     } else {
         err = lua_pcall(lua, 2, 1, -4);
@@ -1848,24 +2023,33 @@ void luaCallFunction(scriptRunCtx *run_ctx,
             if (lua_isstring(lua, -1)) {
                 msg = lua_tostring(lua, -1);
             }
-            addReplyErrorFormat(c, "Error running script %s, %.100s\n", run_ctx->funcname, msg);
+            ValkeyModule_ReplyWithErrorFormat(ctx, "ERR Error running script, %.100s\n", msg);
         } else {
             errorInfo err_info = {0};
-            sds final_msg = sdsempty();
             luaExtractErrorInformation(lua, &err_info);
-            final_msg = sdscatfmt(final_msg, "-%s", err_info.msg);
             if (err_info.line && err_info.source) {
-                final_msg =
-                    sdscatfmt(final_msg, " script: %s, on %s:%s.", run_ctx->funcname, err_info.source, err_info.line);
+                ValkeyModule_ReplyWithCustomErrorFormat(
+                    ctx,
+                    !err_info.ignore_err_stats_update,
+                    "%s script: on %s:%s.",
+                    err_info.msg,
+                    err_info.source,
+                    err_info.line);
+            } else {
+                ValkeyModule_ReplyWithCustomErrorFormat(
+                    ctx,
+                    !err_info.ignore_err_stats_update,
+                    "%s",
+                    err_info.msg);
             }
-            addReplyErrorSdsEx(c, final_msg, err_info.ignore_err_stats_update ? ERR_REPLY_FLAG_NO_STATS_UPDATE : 0);
             luaErrorInformationDiscard(&err_info);
         }
         lua_pop(lua, 1); /* Consume the Lua error */
     } else {
         /* On success convert the Lua return value into RESP, and
          * send it to * the client. */
-        luaReplyToServerReply(c, run_ctx->c, lua); /* Convert and consume the reply. */
+
+        luaReplyToServerReply(ctx, call_ctx.resp, lua); /* Convert and consume the reply. */
     }
 
     /* Perform some cleanup that we need to do both on error and success. */

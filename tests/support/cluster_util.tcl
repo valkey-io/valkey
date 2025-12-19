@@ -70,7 +70,7 @@ proc cluster_find_available_replica {first} {
 
 proc fix_cluster {addr} {
     set code [catch {
-        exec src/valkey-cli {*}[valkeycli_tls_config "./tests"] --cluster fix $addr << yes
+        exec $::VALKEY_CLI_BIN {*}[valkeycli_tls_config "./tests"] --cluster fix $addr << yes
     } result]
     if {$code != 0} {
         puts "valkey-cli --cluster fix returns non-zero exit code, output below:\n$result"
@@ -79,7 +79,7 @@ proc fix_cluster {addr} {
     # but we can ignore that and rely on the check below.
     wait_for_cluster_state ok
     wait_for_condition 100 100 {
-        [catch {exec src/valkey-cli {*}[valkeycli_tls_config "./tests"] --cluster check $addr} result] == 0
+        [catch {exec $::VALKEY_CLI_BIN {*}[valkeycli_tls_config "./tests"] --cluster check $addr} result] == 0
     } else {
         puts "valkey-cli --cluster check returns non-zero exit code, output below:\n$result"
         fail "Cluster could not settle with configuration"
@@ -214,6 +214,9 @@ proc cluster_setup {masters replicas node_count slot_allocator replica_allocator
     for {set i 0} {$i < $node_count} {incr i} {
         R $i CLUSTER SET-CONFIG-EPOCH $config_epoch
         incr config_epoch
+        # Make it easier to understand how the server interacts with
+        # other nodes when reading the server logs.
+        R $i CONFIG SET cluster-announce-human-nodename "R$i"
     }
 
     # Have all nodes meet

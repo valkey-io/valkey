@@ -6765,6 +6765,12 @@ ValkeyModuleCallReply *VM_Call(ValkeyModuleCtx *ctx, const char *cmdname, const 
     }
     call(c, call_flags);
 
+    /* Propagate database changes from the temporary client back to the context client
+     * when running in script mode to make next commands execute in the correct db */
+    if (c && (flags & VALKEYMODULE_ARGV_SCRIPT_MODE) && is_running_script && c->db != ctx->client->db) {
+        ctx->client->db = c->db;
+    }
+
     /* We reset errno here because on macOS some system calls set errno even when
      * they succeed. For instance, certain time-related syscalls may set errno
      * to ETIMEDOUT on successful completion.

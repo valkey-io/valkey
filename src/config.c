@@ -29,6 +29,7 @@
  */
 
 #include "io_threads.h"
+#include "sds.h"
 #include "server.h"
 #include "cluster.h"
 #include "connection.h"

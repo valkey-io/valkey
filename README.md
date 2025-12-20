@@ -52,12 +52,16 @@ as libsystemd-dev on Debian/Ubuntu or systemd-devel on CentOS) and run:
 
     % make USE_SYSTEMD=yes
 
-Since Valkey version 8.1, `fast_float` has been introduced as an optional 
-dependency, which can speed up sorted sets and other commands that use 
-the double datatype. To build with `fast_float` support, you'll need a 
+Since Valkey version 8.1, `fast_float` has been introduced as an optional
+dependency, which can speed up sorted sets and other commands that use
+the double datatype. To build with `fast_float` support, you'll need a
 C++ compiler and run:
 
     % make USE_FAST_FLOAT=yes
+
+To build Valkey without the Lua engine:
+
+    % make BUILD_LUA=no
 
 To append a suffix to Valkey program names, use:
 

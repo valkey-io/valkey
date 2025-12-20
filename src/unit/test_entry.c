@@ -17,7 +17,9 @@
 /* Verify entry properties */
 static int verify_entry_properties(entry *e, sds field, sds value_copy, long long expiry, bool has_expiry, bool has_valueptr) {
     TEST_ASSERT(sdscmp(entryGetField(e), field) == 0);
-    TEST_ASSERT(sdscmp(entryGetValue(e), value_copy) == 0);
+    size_t len;
+    TEST_ASSERT(sdscmp(entryGetValue(e, &len), value_copy) == 0);
+    TEST_ASSERT(len == sdslen(value_copy));
     TEST_ASSERT(entryGetExpiry(e) == expiry);
     TEST_ASSERT(entryHasExpiry(e) == has_expiry);
     TEST_ASSERT(entryHasEmbeddedValue(e) != has_valueptr);
@@ -356,7 +358,7 @@ int test_entryIsExpired(int argc, char **argv, int flags) {
  *      * To smaller value (should decrease memory usage)
  *      * To bigger value (should increase memory usage)
  */
-int test_entryMemUsage_entrySetExpiry_entrySetValue(int argc, char **argv, int flags) {
+int test_entryMemUsage_entrySetExpiry_entryUpdate(int argc, char **argv, int flags) {
     UNUSED(argc);
     UNUSED(argv);
     UNUSED(flags);
@@ -393,7 +395,7 @@ int test_entryMemUsage_entrySetExpiry_entrySetValue(int argc, char **argv, int f
     // Memory usage should decrease by the difference in value size (2 bytes)
     sds value4 = sdsnew("x");
     sds value_copy4 = sdsdup(value4);
-    entry *e4 = entrySetValue(e3, value4);
+    entry *e4 = entryUpdate(e3, value4, entryGetExpiry(e3));
     size_t e4_entryMemUsage = entryMemUsage(e4);
     verify_entry_properties(e4, field1, value_copy4, expiry3, true, false);
     TEST_ASSERT(zmalloc_usable_size((char *)e4 - sizeof(long long) - 3) == e4_entryMemUsage);
@@ -402,7 +404,7 @@ int test_entryMemUsage_entrySetExpiry_entrySetValue(int argc, char **argv, int f
     // Memory usage should increase by the difference in value size (1 byte)
     sds value5 = sdsnew("xx");
     sds value_copy5 = sdsdup(value5);
-    entry *e5 = entrySetValue(e4, value5);
+    entry *e5 = entryUpdate(e4, value5, entryGetExpiry(e4));
     size_t e5_entryMemUsage = entryMemUsage(e5);
     verify_entry_properties(e5, field1, value_copy5, expiry3, true, false);
     TEST_ASSERT(zmalloc_usable_size((char *)e5 - sizeof(long long) - 3) == e5_entryMemUsage);
@@ -440,7 +442,7 @@ int test_entryMemUsage_entrySetExpiry_entrySetValue(int argc, char **argv, int f
     // Memory usage should increase by at least the difference between LONG_VALUE and "x" (143)
     sds value9 = sdsnew("x");
     sds value_copy9 = sdsdup(value9);
-    entry *e9 = entrySetValue(e8, value9);
+    entry *e9 = entryUpdate(e8, value9, entryGetExpiry(e8));
     size_t e9_entryMemUsage = entryMemUsage(e9);
     verify_entry_properties(e9, field6, value_copy9, expiry8, true, true);
     size_t expected_e9_entry_mem = zmalloc_usable_size((char *)e9 - sizeof(long long) - sizeof(sds) - 3) + sdsAllocSize(value9);
@@ -450,7 +452,7 @@ int test_entryMemUsage_entrySetExpiry_entrySetValue(int argc, char **argv, int f
     // Memory usage increases by the difference in value size (1 byte)
     sds value10 = sdsnew("xx");
     sds value_copy10 = sdsdup(value10);
-    entry *e10 = entrySetValue(e9, value10);
+    entry *e10 = entryUpdate(e9, value10, entryGetExpiry(e9));
     size_t e10_entryMemUsage = entryMemUsage(e10);
     size_t expected_10_entry_mem = zmalloc_usable_size((char *)e10 - sizeof(long long) - sizeof(sds) - 3) + sdsAllocSize(value10);
     TEST_ASSERT(expected_10_entry_mem == e10_entryMemUsage);
@@ -466,5 +468,56 @@ int test_entryMemUsage_entrySetExpiry_entrySetValue(int argc, char **argv, int f
     sdsfree(value_copy9);
     sdsfree(value_copy10);
 
+    return 0;
+}
+
+int test_entryStringRef(int argc, char **argv, int flags) {
+    UNUSED(argc);
+    UNUSED(argv);
+    UNUSED(flags);
+
+    sds field1 = sdsnew(SHORT_FIELD);
+    sds value1 = sdsnew(SHORT_VALUE);
+    sds value_copy1 = sdsdup(value1);
+    long long expiry1 = EXPIRY_NONE;
+    entry *e1 = entryCreate(field1, value1, expiry1);
+    entry *e2 = entryUpdateAsStringRef(e1, value_copy1, sdslen(value_copy1), entryGetExpiry(e1));
+    verify_entry_properties(e2, field1, value_copy1, expiry1, false, true);
+    TEST_ASSERT(entryHasStringRef(e2) == true);
+
+    long long expiry2 = 100;
+    entry *e3 = entryUpdateAsStringRef(e2, value_copy1, sdslen(value_copy1), expiry2);
+    TEST_ASSERT(e2 != e3);
+    verify_entry_properties(e3, field1, value_copy1, expiry2, true, true);
+    TEST_ASSERT(entryHasStringRef(e3) == true);
+
+    long long expiry3 = 200;
+    entry *e4 = entryUpdateAsStringRef(e3, value_copy1, sdslen(value_copy1), expiry3);
+    TEST_ASSERT(e3 == e4);
+    verify_entry_properties(e4, field1, value_copy1, expiry3, true, true);
+    TEST_ASSERT(entryHasStringRef(e4) == true);
+
+    sds value2 = sdsnew(SHORT_VALUE);
+    sds value_copy2 = sdsdup(value2);
+    entry *e5 = entryUpdate(e4, value2, expiry3);
+    verify_entry_properties(e5, field1, value_copy2, expiry3, true, false);
+    TEST_ASSERT(entryHasStringRef(e5) == false);
+
+    entry *e6 = entryUpdateAsStringRef(e5, value_copy1, sdslen(value_copy1), expiry2);
+    TEST_ASSERT(e5 != e6);
+    verify_entry_properties(e6, field1, value_copy1, expiry2, true, true);
+    TEST_ASSERT(entryHasStringRef(e6) == true);
+
+    sds value3 = sdsnew(LONG_VALUE);
+    sds value_copy3 = sdsdup(value3);
+    entry *e7 = entryUpdate(e6, value3, expiry1);
+    verify_entry_properties(e7, field1, value_copy3, expiry1, false, true);
+    TEST_ASSERT(entryHasStringRef(e7) == false);
+
+    entryFree(e7);
+    sdsfree(value_copy1);
+    sdsfree(value_copy2);
+    sdsfree(value_copy3);
+    sdsfree(field1);
     return 0;
 }

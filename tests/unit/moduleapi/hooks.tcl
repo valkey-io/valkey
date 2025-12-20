@@ -373,7 +373,7 @@ tags "modules" {
 
         # look into the log file of the server that just exited
         test {Test shutdown hook} {
-            assert_equal [string match {*module-event-shutdown*} [exec tail -5 < $replica_stdout]] 1
+            assert_equal [string match {*module-event-shutdown*} [exec tail -9 < $replica_stdout]] 1
         }
     }
 

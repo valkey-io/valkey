@@ -211,6 +211,7 @@ int scriptPrepareForRun(scriptRunCtx *run_ctx,
     run_ctx->original_client = caller;
     run_ctx->funcname = funcname;
     run_ctx->slot = caller->slot;
+    run_ctx->original_db = caller->db;
 
     run_ctx->start_time = getMonotonicUs();
 
@@ -249,6 +250,8 @@ void scriptResetRun(scriptRunCtx *run_ctx) {
          * was detected. */
         unprotectClient(run_ctx->original_client);
     }
+
+    run_ctx->original_client->db = run_ctx->original_db;
 
     run_ctx->slot = -1;
 

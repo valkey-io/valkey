@@ -541,6 +541,27 @@ int test_keyslot(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     return ValkeyModule_ReplyWithLongLong(ctx, slot);
 }
 
+int test_keyslotC(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
+    /* Static check of the ClusterKeySlot + ClusterCanonicalKeyNameInSlot
+     * round-trip for all slots. */
+    for (unsigned int slot = 0; slot < 16384; slot++) {
+        const char *tag = ValkeyModule_ClusterCanonicalKeyNameInSlot(slot);
+        ValkeyModuleString *key = ValkeyModule_CreateStringPrintf(ctx, "x{%s}y", tag);
+
+        size_t keylen;
+        const char *keyptr = ValkeyModule_StringPtrLen(key, &keylen);
+        assert(slot == ValkeyModule_ClusterKeySlotC(keyptr, keylen));
+        ValkeyModule_FreeString(ctx, key);
+    }
+    if (argc != 2){
+        return ValkeyModule_WrongArity(ctx);
+    }
+    size_t arglen;
+    const char *argptr = ValkeyModule_StringPtrLen(argv[1], &arglen);
+    unsigned int slot = ValkeyModule_ClusterKeySlotC(argptr, arglen);
+    return ValkeyModule_ReplyWithLongLong(ctx, slot);
+}
+
 int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int argc) {
     VALKEYMODULE_NOT_USED(argv);
     VALKEYMODULE_NOT_USED(argc);
@@ -607,6 +628,8 @@ int ValkeyModule_OnLoad(ValkeyModuleCtx *ctx, ValkeyModuleString **argv, int arg
     if (ValkeyModule_CreateCommand(ctx, "test.malloc_api", test_malloc_api,"", 0, 0, 0) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
     if (ValkeyModule_CreateCommand(ctx, "test.keyslot", test_keyslot, "", 0, 0, 0) == VALKEYMODULE_ERR)
+        return VALKEYMODULE_ERR;
+    if (ValkeyModule_CreateCommand(ctx, "test.keyslot_c", test_keyslotC, "", 0, 0, 0) == VALKEYMODULE_ERR)
         return VALKEYMODULE_ERR;
 
     return VALKEYMODULE_OK;

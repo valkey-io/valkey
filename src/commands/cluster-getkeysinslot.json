@@ -8,8 +8,7 @@
         "container": "CLUSTER",
         "function": "clusterCommand",
         "command_flags": [
-            "STALE",
-            "ALL_DBS"
+            "STALE"
         ],
         "command_tips": [
             "NONDETERMINISTIC_OUTPUT"

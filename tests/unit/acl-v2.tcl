@@ -785,6 +785,29 @@ start_server {tags {"acl external:skip"}} {
         assert_match "*NOPERM*database*" $e
     }
 
+    test {Test COPY with database permissions} {
+        r ACL SETUSER copy-user on nopass +copy +set +get +select ~* db=0,1
+        $r2 auth copy-user password
+        
+        $r2 select 0
+        $r2 set copy-key value
+        
+        assert_equal "1" [$r2 copy copy-key copy-key-dest DB 1]
+        
+        $r2 select 1
+        assert_equal "value" [$r2 get copy-key-dest]
+        
+        $r2 select 0
+        catch {$r2 copy copy-key copy-key-dest2 DB 2} e
+        assert_match "*NOPERM*database*" $e
+        
+        r select 2
+        assert_equal {} [r get copy-key-dest2]
+        
+        # cleanup
+        r select 0
+    }
+
     test {Test MIGRATE with database permissions} {
         set first [srv 0 client]
         r ACL SETUSER migrate-user on nopass +migrate +set +get +del ~* db=0,1
@@ -907,6 +930,8 @@ start_server {tags {"acl external:skip"}} {
         assert_match "*has no permissions to access database*" [r ACL DRYRUN db-dryrun SELECT 2]
         assert_match "*has no permissions to access database*" [r ACL DRYRUN db-dryrun MOVE key 2]
         assert_match "*has no permissions to access database*" [r ACL DRYRUN db-dryrun SWAPDB 0 2]
+        assert_equal "OK" [r ACL DRYRUN db-dryrun COPY key1 key2 DB 1]
+        assert_match "*has no permissions to access database*" [r ACL DRYRUN db-dryrun COPY key1 key2 DB 2]
     }
     
     test {Test db= with maximum database ID} {

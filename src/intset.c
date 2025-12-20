@@ -341,7 +341,7 @@ void intsetFree(intset *is) {
     if (is) zfree(is);
 }
 
-/* Duplicate an intset */
+/* Deep copy an intset */
 intset *intsetDup(intset *is) {
     if (!is) return intsetNew();
 

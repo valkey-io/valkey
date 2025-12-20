@@ -55,7 +55,6 @@ start_server {tags {"modules acl"}} {
         set e
     } {*DENIED CHANNEL*}
 
-
     test {test module check acl in rm_call} {
         # rm call check for key permission (x: READ + WRITE)
         assert_equal [r aclcheck.rm_call set x 5] OK

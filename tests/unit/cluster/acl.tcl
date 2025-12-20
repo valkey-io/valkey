@@ -50,24 +50,6 @@ tags {tls:skip external:skip cluster} {
             $r2 close
         }
 
-        test {Test CLUSTER GETKEYSINSLOT with database permissions} {
-            R 0 ACL SETUSER cluster-getkeys-user on nopass +cluster +select ~* db=0
-            
-            set r2 [valkey [srv 0 host] [srv 0 port] 0 $::tls]
-            $r2 auth cluster-getkeys-user ""
-            $r2 select 0
-            
-            catch {$r2 cluster getkeysinslot 0 10} e
-            assert_match "*NOPERM*database*" $e
-            
-            R 0 ACL SETUSER cluster-getkeys-user alldbs
-            
-            set result [catch {$r2 cluster getkeysinslot 0 10} e]
-            assert {$result == 0}
-            
-            $r2 close
-        }
-
         test {Test CLUSTER MIGRATESLOTS with database permissions} {
             set target_id [R 1 CLUSTER MYID]
             

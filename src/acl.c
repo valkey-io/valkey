@@ -1821,7 +1821,6 @@ static int ACLSelectorCheckCmd(aclSelector *selector,
         if (dbids) {
             for (int i = 0; i < count; i++) {
                 if (!ACLSelectorCanAccessDb(selector, dbids[i])) {
-                    /* TODO: somehow move from hardcoded cases */
                     if (keyidxptr) {
                         if (cmd->proc == selectCommand)
                             *keyidxptr = 1;
@@ -2030,8 +2029,8 @@ int ACLCheckAllUserCommandPerm(user *u, struct serverCommand *cmd, robj **argv, 
     if (u == NULL) return ACL_OK;
 
     /* We have to pick a single error to log, the logic for picking is as follows:
-     * 1) If no selector can execute the command, return the command.
-     * 2) Return the last key or channel that no selector could match. */
+     * 1) Prefer higher priority errors: DB < CMD < KEY < CHANNEL
+     * 2) For errors of the same type, return the last (highest index) argument that failed. */
     int relevant_error = ACL_DENIED_DB;
     int local_idxptr = 0, last_idx = 0;
 

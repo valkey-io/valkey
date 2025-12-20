@@ -3008,3 +3008,18 @@ int *migrateDbIdArgs(robj **argv, int argc, int *count) {
     *count = 1;
     return result;
 }
+
+int *copyDbIdArgs(robj **argv, int argc, int *count) {
+    if (argc < 5) return NULL;
+
+    if (strcasecmp(argv[3]->ptr, "db") != 0) return NULL;
+
+    long long dbid;
+    if (getLongLongFromObject(argv[4], &dbid) != C_OK) return NULL;
+    if (dbid < 0 || dbid >= server.dbnum) return NULL;
+
+    int *result = zmalloc(sizeof(int));
+    result[0] = (int)dbid;
+    *count = 1;
+    return result;
+}

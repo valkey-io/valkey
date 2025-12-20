@@ -3975,9 +3975,12 @@ int VM_PublishMessageShard(ValkeyModuleCtx *ctx, ValkeyModuleString *channel, Va
     return pubsubPublishMessageAndPropagateToCluster(channel, message, 1);
 }
 
-/* Return the currently selected DB. */
+/* Return the currently selected DB.
+ * When inside a MULTI/EXEC transaction, returns transaction_db_id which tracks
+ * the DB selected within the transaction (may differ from client->db->id).
+ * Otherwise, returns the client's actual DB. */
 int VM_GetSelectedDb(ValkeyModuleCtx *ctx) {
-    return ctx->client->db->id;
+    return (ctx->client->flag.multi) ? ctx->client->mstate->transaction_db_id : ctx->client->db->id;
 }
 
 

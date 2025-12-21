@@ -1065,7 +1065,7 @@ start_server {tags {"acl external:skip"}} {
         $r2 select 0
     }
     
-        test {Test MULTI with SELECT to invalid database} {
+    test {Test MULTI with SELECT to invalid database} {
         r ACL SETUSER db-invalid-select on nopass +@all ~* db=0,1
         $r2 auth db-invalid-select password
         

@@ -77,6 +77,7 @@ struct scriptRunCtx {
     scriptingEngine *engine;
     const char *funcname;
     client *original_client;
+    serverDb *original_db;
     int flags;
     int repl_flags;
     monotime start_time;

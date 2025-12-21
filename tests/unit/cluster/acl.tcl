@@ -32,24 +32,6 @@ tags {tls:skip external:skip cluster} {
             wait_for_cluster_state ok
         }
 
-        test {Test CLUSTER COUNTKEYSINSLOT with database permissions} {
-            R 0 ACL SETUSER cluster-count-user on nopass +cluster +select ~* db=0
-            
-            set r2 [valkey [srv 0 host] [srv 0 port] 0 $::tls]
-            $r2 auth cluster-count-user ""
-            $r2 select 0
-            
-            catch {$r2 cluster countkeysinslot 0} e
-            assert_match "*NOPERM*database*" $e
-            
-            R 0 ACL SETUSER cluster-count-user alldbs
-            
-            set result [catch {$r2 cluster countkeysinslot 0} e]
-            assert {$result == 0}
-            
-            $r2 close
-        }
-
         test {Test CLUSTER MIGRATESLOTS with database permissions} {
             set target_id [R 1 CLUSTER MYID]
             

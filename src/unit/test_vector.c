@@ -1,3 +1,4 @@
+#include "../fmacros.h"
 #include "../vector.h"
 
 #include "test_help.h"

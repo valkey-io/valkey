@@ -33,15 +33,16 @@ extern "C" {
 
 #ifndef __WRAPPERS_H
 #define __WRAPPERS_H
-#define _Atomic /* nothing */
-#define _Bool bool
-#define typename _typename
-#define protected protected_
-#include "ae.h"
-#include "dict.h"
+// C/C++ cross-compatibility definitions:
+// Some C keywords or built-in types (e.g., _Atomic, _Bool) are not
+// recognized or have different meanings in C++. To allow C headers
+// to be included in C++ code without errors, we redefine them appropriately.
+#define _Atomic              /* _Atomic is not a C++ keyword; define empty */
+#define _Bool bool           /* Replace C _Bool with C++ bool */
+#define typename _typename   /* Avoid conflict with C++ 'typename' keyword */
+#define protected protected_ /* Avoid conflict with C++ 'protected' keyword */
+
 #include "server.h"
-#include "adlist.h"
-#include "zmalloc.h"
 
 /**
  * The list of wrapper methods defined.  Each wrapper method must
@@ -53,14 +54,8 @@ extern "C" {
  *       See: https://github.com/google/googletest/blob/master/googlemock/docs/gmock_faq.md#can-i-mock-a-variadic-function
  *       Example: serverLog(int level, const char *fmt, ...) should NOT be mocked.
  */
-long long __wrap_aeCreateTimeEvent(aeEventLoop *eventLoop, long long milliseconds, aeTimeProc *proc, void *clientData, aeEventFinalizerProc *finalizerProc);
-void *__wrap_valkey_malloc(size_t size);
-void *__wrap_valkey_free(void *ptr);
-void *__wrap_valkey_calloc(size_t size);
-void *__wrap_valkey_realloc(void *ptr, size_t size);
-list *__wrap_listCreate();
-dict *__wrap_dictCreate(dictType *type);
-void __wrap_listRelease(struct list *list);
+void __wrap_resetClient(struct client *c);
+int __wrap_processCommand(struct client *c);
 
 #undef protected
 #undef _Bool

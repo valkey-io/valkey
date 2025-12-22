@@ -176,7 +176,7 @@ jobs:
           ref: ${{ env.GITHUB_HEAD_REF }}
       - name: make
         run: |
-          apt-get update && apt-get install -y make gcc-13
+          apt-get update && apt-get install -y make gcc-13 git cmake g++ python3
           update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-13 100
           make all-with-unit-tests CC=gcc OPT=-O3 SERVER_CFLAGS='-Werror -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=3'
       - name: testprep
@@ -299,7 +299,7 @@ jobs:
           ref: ${{ env.GITHUB_HEAD_REF }}
       - name: make
         run: |
-          sudo apt-get update && sudo apt-get install libc6-dev-i386
+          sudo apt-get update && sudo apt-get install libc6-dev-i386 g++-multilib
           make 32bit SERVER_CFLAGS='-Werror'
       - name: testprep
         run: sudo apt-get install tcl8.6 tclx

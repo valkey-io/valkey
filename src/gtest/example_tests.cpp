@@ -1,7 +1,7 @@
 #include "generated_wrappers.hpp"
 
 extern "C" {
-    #include "dict.h"
+    #include "server.h"
 }
 
 // Use a class name descriptive of your test unit
@@ -40,8 +40,8 @@ TEST_F(ExampleTest, TestAssertions) {
     const char *str = "hello";
     // Use EXPECT_ macros to test a condition.  If the value is not as expected, the test will fail.
     // Use ASSERT_ macros to test a condition AND immediately end the test.
-    // Prefer to use EXPECT_ macros unless the test can't reasonably continue.  This allows multiple 
-    //  conditions to be tested and reported rather than ending at the first unexpected value.
+    // Prefer to use EXPECT_ macros unless the test can't reasonably continue. This allows multiple
+    // conditions to be tested and reported rather than ending at the first unexpected value.
     EXPECT_EQ(8, a + b);
     EXPECT_LE(b, a);
     EXPECT_GT(a, b);
@@ -57,10 +57,18 @@ TEST_F(ExampleTest, TestMatchers) {
     decrRefCount(robj_str);
 }
 
-// Verify mocking works via zfree
+// Verify mocking works via processCommand
 TEST_F(ExampleTest, TestMocking) {
-    // zfree should be called in dictRelease
-    EXPECT_CALL(mock, zfree(_)).Times(AtLeast(1)); // Verifies that zfree() is called at least once
-    dict *d = dictCreate(&keylistDictType);
-    dictRelease(d);
+
+    client prev_client = {};
+    client c = {};
+    server.current_client = &prev_client;
+    c.flag.blocked = 1;
+
+    // verifies that processCommand() is called once
+    EXPECT_CALL(mock, processCommand(_)).WillOnce(Return(C_OK));
+    // resetClient must not be invoked for a blocked client
+    EXPECT_CALL(mock, resetClient(_)).Times(0);
+    ASSERT_EQ(processCommandAndResetClient(&c), C_OK);
+    ASSERT_EQ(server.current_client, &prev_client);
 }

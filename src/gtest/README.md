@@ -1,6 +1,5 @@
 ## Valkey GoogleTest Unit Test Framework
 
-
 To use this framework to write unit tests, we have modified Valkey to build as
 a library that can link against other test executables. This framework uses the
 GNU C++ linker, which implements 'wrap' functionality to rename function calls

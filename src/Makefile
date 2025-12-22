@@ -485,12 +485,7 @@ endif
 
 .PHONY: all
 
-# gtest unit tests are not supported on macOS due to linker incompatibility
-ifeq ($(uname_S),Darwin)
-all-with-unit-tests: all $(ENGINE_UNIT_TESTS)
-else
 all-with-unit-tests: all $(ENGINE_UNIT_TESTS) $(ENGINE_UNIT_GTESTS)
-endif
 .PHONY: all
 
 persist-settings: distclean

@@ -2,10 +2,6 @@ CXX ?= g++
 -include ../.make-settings
 OPT=-O3 -DNDEBUG
 
-ifeq ($(DEBUG_BUILD),1)
-	CXX+=-DDEBUG_BUILD=1
-endif
-
 # Add -m32 for 32bit builds
 ifeq ($(findstring -m32,$(CFLAGS)),-m32)
 	CXX+= -m32
@@ -81,8 +77,8 @@ endif
 .flags:
 	@echo '$(TEST_CFLAGS)' | cmp -s - $@ || echo '$(TEST_CFLAGS)' > $@
 
-# OSS Valkey library dependencies
-VALKEY_LIB := ../libvalkey.a
+# Valkey server library dependencies
+VALKEY_SERVER_LIB := ../libvalkey.a
 HIREDIS_LIB := ../../deps/libvalkey/lib/libvalkey.a
 JEMALLOC_LIB := ../../deps/jemalloc/lib/libjemalloc.a
 HDR_HISTOGRAM_LIB := ../../deps/hdr_histogram/libhdrhistogram.a
@@ -95,8 +91,8 @@ FAST_FLOAT_LIB := ../../deps/fast_float_c_interface/fast_float_strtod.o
 ../../deps/googletest/build/googlemock/gtest/libgtest.a ../../deps/googletest/build/googlemock/libgmock.a:
 	cd ../../deps && $(MAKE) gtest
 
-# Ensure Valkey library is built
-$(VALKEY_LIB):
+# Ensure Valkey server library is built
+$(VALKEY_SERVER_LIB):
 	cd .. && $(MAKE) libvalkey.a
 
 # Ensure parent prerequisites are built
@@ -148,12 +144,10 @@ ifeq ($(USE_FAST_FLOAT),yes)
 endif
 
 # Generate the single test binary in parent directory.
-valkey-unit-gtests: $(ALL_OBJECTS) generated_wrappers.o $(VALKEY_LIB) $(FINAL_LIBS)
+valkey-unit-gtests: $(ALL_OBJECTS) generated_wrappers.o $(VALKEY_SERVER_LIB) $(FINAL_LIBS)
 	$(CXX) -g \
 		-Wl,--allow-multiple-definition \
 		$(OVERRIDES) \
-		$(SYSCALL_WRAP_LINKER_OPTIONS) \
-		$(COVERAGE_LDFLAGS) \
 		-Wall -Wno-deprecated-declarations \
 		-o $@ $^ $(LD_LIBS) \
 		-lrt -lm -pthread -ldl -lgcov

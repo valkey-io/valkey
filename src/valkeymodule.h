@@ -907,6 +907,15 @@ typedef enum ValkeyModuleScriptingEngineExecutionState {
     VMSE_STATE_KILLED,
 } ValkeyModuleScriptingEngineExecutionState;
 
+typedef enum ValkeyModuleScriptingEngineScriptFlag {
+    VMSE_SCRIPT_FLAG_NO_WRITES = (1ULL << 0),
+    VMSE_SCRIPT_FLAG_ALLOW_OOM = (1ULL << 1),
+    VMSE_SCRIPT_FLAG_ALLOW_STALE = (1ULL << 2),
+    VMSE_SCRIPT_FLAG_NO_CLUSTER = (1ULL << 3),
+    VMSE_SCRIPT_FLAG_EVAL_COMPAT_MODE = (1ULL << 4), /* EVAL Script backwards compatible behavior, no shebang provided */
+    VMSE_SCRIPT_FLAG_ALLOW_CROSS_SLOT = (1ULL << 5),
+} ValkeyModuleScriptingEngineScriptFlag;
+
 typedef struct ValkeyModuleScriptingEngineCallableLazyEnvReset {
     void *context;
 
@@ -1635,6 +1644,8 @@ VALKEYMODULE_API int (*ValkeyModule_ZsetRangePrev)(ValkeyModuleKey *key) VALKEYM
 VALKEYMODULE_API int (*ValkeyModule_ZsetRangeEndReached)(ValkeyModuleKey *key) VALKEYMODULE_ATTR;
 VALKEYMODULE_API int (*ValkeyModule_HashSet)(ValkeyModuleKey *key, int flags, ...) VALKEYMODULE_ATTR;
 VALKEYMODULE_API int (*ValkeyModule_HashGet)(ValkeyModuleKey *key, int flags, ...) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_HashSetStringRef)(ValkeyModuleKey *key, ValkeyModuleString *field, const char *buf, size_t len) VALKEYMODULE_ATTR;
+VALKEYMODULE_API int (*ValkeyModule_HashHasStringRef)(ValkeyModuleKey *key, ValkeyModuleString *field) VALKEYMODULE_ATTR;
 VALKEYMODULE_API int (*ValkeyModule_StreamAdd)(ValkeyModuleKey *key,
                                                int flags,
                                                ValkeyModuleStreamID *id,
@@ -2296,6 +2307,8 @@ static int ValkeyModule_Init(ValkeyModuleCtx *ctx, const char *name, int ver, in
     VALKEYMODULE_GET_API(ZsetRangeEndReached);
     VALKEYMODULE_GET_API(HashSet);
     VALKEYMODULE_GET_API(HashGet);
+    VALKEYMODULE_GET_API(HashSetStringRef);
+    VALKEYMODULE_GET_API(HashHasStringRef);
     VALKEYMODULE_GET_API(StreamAdd);
     VALKEYMODULE_GET_API(StreamDelete);
     VALKEYMODULE_GET_API(StreamIteratorStart);

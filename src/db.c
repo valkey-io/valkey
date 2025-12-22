@@ -49,14 +49,6 @@ static int objectIsExpired(robj *val);
 static void dbSetValue(serverDb *db, robj *key, robj **valref, int overwrite, void **oldref);
 static robj *dbFindWithDictIndex(serverDb *db, sds key, int dict_index);
 
-/* Update LFU when an object is accessed.
- * Firstly, decrement the counter if the decrement time is reached.
- * Then logarithmically increment the counter, and update the access time. */
-void updateLFU(robj *val) {
-    unsigned long counter = LFUDecrAndReturn(val);
-    counter = LFULogIncr(counter);
-    val->lru = (LFUGetTimeInMinutes() << 8) | counter;
-}
 
 /* Lookup a key for read or write operations, or return NULL if the key is not
  * found in the specified DB. This function implements the functionality of
@@ -118,11 +110,7 @@ robj *lookupKey(serverDb *db, robj *key, int flags) {
         if (!hasActiveChildProcess() && !(flags & LOOKUP_NOTOUCH)) {
             /* Shared objects can't be stored in the database. */
             serverAssert(val->refcount != OBJ_SHARED_REFCOUNT);
-            if (server.maxmemory_policy & MAXMEMORY_FLAG_LFU) {
-                updateLFU(val);
-            } else {
-                val->lru = LRU_CLOCK();
-            }
+            val->lru = lrulfu_touch(val->lru);
         }
 
         if (!(flags & (LOOKUP_NOSTATS | LOOKUP_WRITE))) server.stat_keyspace_hits++;
@@ -682,7 +670,7 @@ long long emptyData(int dbnum, int flags, void(callback)(hashtable *)) {
     /* Empty the database structure. */
     removed = emptyDbStructure(server.db, dbnum, async, callback);
 
-    if (dbnum == -1) flushReplicaKeysWithExpireList();
+    if (dbnum == -1) flushReplicaKeysWithExpireList(async);
 
     if (with_functions) {
         serverAssert(dbnum == -1);
@@ -1001,6 +989,12 @@ int objectTypeCompare(robj *o, long long target) {
         return 1;
 }
 
+static void addScanDataItem(vector *result, const char *buf, size_t len) {
+    stringRef *item = vectorPush(result);
+    item->buf = buf;
+    item->len = len;
+}
+
 /* Hashtable scan callback used by scanCallback when scanning the keyspace. */
 void keysScanCallback(void *privdata, void *entry, int didx) {
     scanData *data = (scanData *)privdata;
@@ -1031,15 +1025,14 @@ void keysScanCallback(void *privdata, void *entry, int didx) {
     }
 
     /* Keep this key. */
-    sds *item = vectorPush(data->result);
-    *item = key;
+    addScanDataItem(data->result, (const char *)key, sdslen(key));
 }
 
 /* This callback is used by scanGenericCommand in order to collect elements
  * returned by the dictionary iterator into a list. */
 void hashtableScanCallback(void *privdata, void *entry) {
     scanData *data = (scanData *)privdata;
-    sds val = NULL;
+    stringRef val = {NULL, 0};
     sds key = NULL;
 
     robj *o = data->o;
@@ -1054,12 +1047,12 @@ void hashtableScanCallback(void *privdata, void *entry) {
         key = (sds)entry;
     } else if (o->type == OBJ_ZSET) {
         zskiplistNode *node = (zskiplistNode *)entry;
-        key = node->ele;
+        key = zslGetNodeElement(node);
         /* zset data is copied after filtering by key */
     } else if (o->type == OBJ_HASH) {
         key = entryGetField(entry);
         if (!data->only_keys) {
-            val = entryGetValue(entry);
+            val.buf = entryGetValue(entry, &val.len);
         }
     } else {
         serverPanic("Type not handled in hashtable SCAN callback.");
@@ -1077,19 +1070,19 @@ void hashtableScanCallback(void *privdata, void *entry) {
     if (o->type == OBJ_ZSET) {
         /* zset data is copied */
         zskiplistNode *node = (zskiplistNode *)entry;
-        key = sdsdup(node->ele);
+        key = sdsdup(zslGetNodeElement(node));
         if (!data->only_keys) {
             char buf[MAX_LONG_DOUBLE_CHARS];
             int len = ld2string(buf, sizeof(buf), node->score, LD_STR_AUTO);
-            val = sdsnewlen(buf, len);
+            sds tmp = sdsnewlen(buf, len);
+            val.buf = (const char *)tmp;
+            val.len = sdslen(tmp);
         }
     }
 
-    sds *item = vectorPush(data->result);
-    *item = key;
-    if (val) {
-        item = vectorPush(data->result);
-        *item = val;
+    addScanDataItem(data->result, (const char *)key, sdslen(key));
+    if (val.buf) {
+        addScanDataItem(data->result, val.buf, val.len);
     }
 }
 
@@ -1244,7 +1237,7 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {
         /* scanning ZSET allocates temporary strings even though it's a dict */
         free_callback = sdsfree;
     }
-    vectorInit(&result, SCAN_VECTOR_INITIAL_ALLOC, sizeof(sds));
+    vectorInit(&result, SCAN_VECTOR_INITIAL_ALLOC, sizeof(stringRef));
 
     /* For main hash table scan or scannable data structure. */
     if (!o || ht) {
@@ -1305,8 +1298,8 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {
             if (use_pattern && !stringmatchlen(pat, sdslen(pat), key, len, 0)) {
                 continue;
             }
-            sds *item = vectorPush(&result);
-            *item = sdsnewlen(key, len);
+            sds item = sdsnewlen(key, len);
+            addScanDataItem(&result, (const char *)item, sdslen(item));
         }
         setTypeReleaseIterator(si);
         cursor = 0;
@@ -1326,13 +1319,13 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {
                 continue;
             }
             /* add key object */
-            sds *item = vectorPush(&result);
-            *item = sdsnewlen(str, len);
+            sds item = sdsnewlen(str, len);
+            addScanDataItem(&result, (const char *)item, sdslen(item));
             /* add value object */
             if (!only_keys) {
                 str = lpGet(p, &len, intbuf);
-                item = vectorPush(&result);
-                *item = sdsnewlen(str, len);
+                item = sdsnewlen(str, len);
+                addScanDataItem(&result, (const char *)item, sdslen(item));
             }
             p = lpNext(o->ptr, p);
         }
@@ -1347,10 +1340,10 @@ void scanGenericCommand(client *c, robj *o, unsigned long long cursor) {
 
     addReplyArrayLen(c, vectorLen(&result));
     for (uint32_t i = 0; i < vectorLen(&result); i++) {
-        sds *key = vectorGet(&result, i);
-        addReplyBulkCBuffer(c, *key, sdslen(*key));
+        stringRef *key = vectorGet(&result, i);
+        addReplyBulkCBuffer(c, key->buf, key->len);
         if (free_callback) {
-            free_callback(*key);
+            free_callback((sds)(key->buf));
         }
     }
 
@@ -1796,7 +1789,7 @@ void swapMainDbWithTempDb(serverDb **tempDb) {
     }
 
     trackingInvalidateKeysOnFlush(1);
-    flushReplicaKeysWithExpireList();
+    flushReplicaKeysWithExpireList(1);
 }
 
 /* SWAPDB db1 db2 */

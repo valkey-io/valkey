@@ -10,7 +10,9 @@
             "READONLY"
         ],
         "acl_categories": [
-            "HASH"
+            "HASH",
+            "READ",
+            "SLOW"
         ],
         "command_tips": [
             "NONDETERMINISTIC_OUTPUT"

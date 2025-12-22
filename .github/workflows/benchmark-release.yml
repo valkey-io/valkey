@@ -1,4 +1,4 @@
-name: Benchmark Comparison (Dispatch)
+name: Compare Valkey Versions
 
 on:
   workflow_dispatch:
@@ -15,17 +15,11 @@ on:
         description: "Issue ID to comment results on"
         required: true
         type: string
-      config_file:
-        description: "Benchmark configuration to use"
+      runs:
+        description: "Number of benchmark runs per configuration"
         required: false
-        type: choice
-        default: "pr_benchmark.json"
-        options:
-          - "pr_benchmark.json"
-
-concurrency:
-  group: valkey-benchmark
-  cancel-in-progress: false
+        type: number
+        default: 1
 
 defaults:
   run:
@@ -38,14 +32,30 @@ permissions:
 
 jobs:
   benchmark:
-    runs-on: ${{ github.repository == 'valkey-io/valkey' && fromJSON('["self-hosted","ec2-ubuntu-24.04-benchmarking"]') || 'ubuntu-latest' }}
+    if: github.repository == 'valkey-io/valkey'
+    strategy:
+      matrix:
+        include:
+          - arch: x86
+            machine: ec2-al-2023-pr-benchmarking-x86
+            config: benchmark-config-x86.json
+          - arch: arm64
+            machine: ec2-al-2023-pr-benchmarking-arm64
+            config: benchmark-config-arm.json
+    concurrency:
+      group: ${{ matrix.machine }}
+      cancel-in-progress: false
+    runs-on: ["self-hosted", "${{ matrix.machine }}"]
+    timeout-minutes: 7200
     steps:
       - name: Validate inputs
         run: |
           echo "Version 1: ${{ github.event.inputs.version1 }}"
           echo "Version 2: ${{ github.event.inputs.version2 }}"
           echo "Issue ID: ${{ github.event.inputs.issue_id }}"
-          echo "Config file: ${{ github.event.inputs.config_file }}"
+          echo "Architecture: ${{ matrix.arch }}"
+          echo "Config: ${{ matrix.config }}"
+          echo "Runs: ${{ github.event.inputs.runs }}"
 
           # Validate issue ID is numeric
           if ! [[ "${{ github.event.inputs.issue_id }}" =~ ^[0-9]+$ ]]; then
@@ -53,13 +63,50 @@ jobs:
             exit 1
           fi
 
-      - name: Checkout valkey (latest)
+          # Validate runs is a positive number
+          if ! [[ "${{ github.event.inputs.runs }}" =~ ^[1-9][0-9]*$ ]]; then
+            echo "Error: Runs must be a positive number"
+            exit 1
+          fi
+
+      - name: Checkout valkey for latest benchmark.
         uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
         with:
-          repository: ${{ github.repository_owner }}/valkey
+          repository: valkey-io/valkey
+          ref: "unstable"
           path: valkey_latest
           fetch-depth: 0
           persist-credentials: false
+
+      - name: Checkout valkey
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+        with:
+          path: valkey
+
+      - name: Checkout valkey-perf-benchmark
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+        with:
+          repository: ${{ github.repository_owner }}/valkey-perf-benchmark
+          path: valkey-perf-benchmark
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: kishaningithub/setup-python-amazon-linux@63dc7bd642c6a564d0a93dd4b1cbe3e448ce3621 # v1.0.18
+        with:
+          python-version: "3.10"
+          cache: "pip"
+
+      - name: Install dependencies
+        working-directory: valkey-perf-benchmark
+        run: |
+          sudo dnf groupinstall "Development Tools" -y
+          sudo dnf install -y gcc gcc-c++ make \
+              python3-devel \
+              openssl-devel \
+              bzip2-devel \
+              libffi-devel
+          pip install -r requirements.txt
 
       - name: Build latest valkey_latest
         working-directory: valkey_latest
@@ -90,47 +137,24 @@ jobs:
           echo "VALKEY_BENCHMARK_PATH=$VALKEY_BENCHMARK_PATH" >> $GITHUB_ENV
           echo "Latest valkey-benchmark path: $VALKEY_BENCHMARK_PATH"
 
-      - name: Checkout valkey-perf-benchmark
-        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
-        with:
-          repository: ${{ github.repository_owner }}/valkey-perf-benchmark
-          path: valkey-perf-benchmark
-          fetch-depth: 1
-          persist-credentials: false
-
-      - name: Set up Python
-        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
-        with:
-          python-version: "3.10"
-          cache: "pip"
-
-      - name: Install dependencies
-        working-directory: valkey-perf-benchmark
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential
-          pip install -r requirements.txt
-
-      - name: Validate config file exists
-        run: |
-          CONFIG_PATH="valkey_latest/.github/benchmark_configs/${{ github.event.inputs.config_file }}"
-          if [[ ! -f "$CONFIG_PATH" ]]; then
-            echo "Error: Config file $CONFIG_PATH does not exist"
-            echo "Available config files:"
-            ls -la valkey_latest/.github/benchmark_configs/
-            exit 1
-          fi
-          echo "Using config file: $CONFIG_PATH"
-
       - name: Run benchmarks
         working-directory: valkey-perf-benchmark
+        env:
+          EC2_X86_IP: ${{ secrets.EC2_X86_IP }}
+          EC2_ARM64_IP: ${{ secrets.EC2_ARM64_IP }}
         run: |
-          CONFIG_FILE="../valkey_latest/.github/benchmark_configs/${{ github.event.inputs.config_file }}"
-
-          # Removes server/client CPU range args if running in private repo
-          if [[ "${{ github.repository }}" != "valkey-io/valkey" ]]; then
-            jq 'map(del(.server_cpu_range, .client_cpu_range))' "$CONFIG_FILE" > tmp.json && mv tmp.json "$CONFIG_FILE"
+          # Set the target IP based on the matrix architecture
+          if [[ "${{ matrix.arch }}" == "x86" ]]; then
+            TARGET_IP=$EC2_X86_IP
+            echo "Using x86 machine IP"
+          elif [[ "${{ matrix.arch }}" == "arm64" ]]; then
+            TARGET_IP=$EC2_ARM64_IP
+            echo "Using ARM64 machine IP"
+          else
+            echo "Error: Unknown architecture: ${{ matrix.arch }}"
+            exit 1
           fi
+          CONFIG_FILE="../valkey/.github/benchmark_configs/${{ matrix.config }}"
 
           # Verify our custom valkey-benchmark exists
           if [[ ! -f "$VALKEY_BENCHMARK_PATH" ]]; then
@@ -142,16 +166,19 @@ jobs:
 
           # Base benchmark arguments with custom valkey-benchmark path
           BENCHMARK_ARGS=(
-            --commits ${{ github.event.inputs.version1 }} ${{ github.event.inputs.version2 }}
-            --results-dir "results"
             --config "$CONFIG_FILE"
+            --commits ${{ github.event.inputs.version1 }} ${{ github.event.inputs.version2 }}
             --valkey-benchmark-path "$VALKEY_BENCHMARK_PATH"
+            --target-ip $TARGET_IP
+            --results-dir "results"
+            --runs ${{ github.event.inputs.runs }}
           )
 
           echo "Running benchmarks with the following setup:"
           echo "- Version 1: ${{ github.event.inputs.version1 }}"
           echo "- Version 2: ${{ github.event.inputs.version2 }}"
-          echo "- Config: ${{ github.event.inputs.config_file }}"
+          echo "- Architecture: ${{ matrix.arch }}"
+          echo "- Config: ${{ matrix.config }}"
           echo "- Using latest valkey-benchmark: $VALKEY_BENCHMARK_PATH"
           echo "- This ensures both versions use the same (latest) benchmark tool for consistent results"
 
@@ -183,63 +210,79 @@ jobs:
           echo "Version 1 (${{ github.event.inputs.version1 }}): $VERSION1_DIR"
           echo "Version 2 (${{ github.event.inputs.version2 }}): $VERSION2_DIR"
 
+          # Generate RPS-focused comparison and graphs for GitHub comments
           python utils/compare_benchmark_results.py \
-            "$VERSION1_DIR/metrics.json" \
-            "$VERSION2_DIR/metrics.json" \
-            ../comparison.md
+            --baseline "$VERSION1_DIR/metrics.json" \
+            --new "$VERSION2_DIR/metrics.json" \
+            --output ../comparison.md \
+            --metrics rps
 
       - name: Upload artifacts
         if: always()
         continue-on-error: true
         uses: actions/upload-artifact@6f51ac03b9356f520e9adb1b1b7802705f340c2b # v4.5.0
         with:
-          name: benchmark-results-${{ github.event.inputs.issue_id }}
+          name: benchmark-results-${{ matrix.arch }}-${{ github.event.inputs.issue_id }}
           path: |
-            ./valkey-perf-benchmark/results/*/metrics.json
+            ./valkey-perf-benchmark/results/*
             comparison.md
 
-      - name: Comment on issue with results
+      - name: Cleanup any running valkey processes and files
+        if: always()
+        continue-on-error: true
+        run: |
+          pkill -f valkey || echo "No valkey processes found to kill"
+          rm -rf *
+
+  combine-results:
+    needs: benchmark
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Combine results and create comprehensive report
+        run: |
+          echo "# Multi-Architecture Benchmark Comparison: ${{ github.event.inputs.version1 }} vs ${{ github.event.inputs.version2 }}" > combined_report.md
+          echo "" >> combined_report.md
+          echo "**Versions Compared:**" >> combined_report.md
+          echo "- Version 1: \`${{ github.event.inputs.version1 }}\`" >> combined_report.md
+          echo "- Version 2: \`${{ github.event.inputs.version2 }}\`" >> combined_report.md
+          echo "" >> combined_report.md
+          echo "**Runs:** ${{ github.event.inputs.runs }} per configuration" >> combined_report.md
+          echo "**Workflow Run:** [View Details](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})" >> combined_report.md
+          echo "" >> combined_report.md
+          echo "---" >> combined_report.md
+          echo "" >> combined_report.md
+
+          # Process each architecture's results
+          for arch in x86 arm64; do
+            artifact_dir="artifacts/benchmark-results-${arch}-${{ github.event.inputs.issue_id }}"
+            if [[ -d "$artifact_dir" && -f "$artifact_dir/comparison.md" ]]; then
+              echo "## ${arch^^} Architecture Results" >> combined_report.md
+              echo "" >> combined_report.md
+              cat "$artifact_dir/comparison.md" >> combined_report.md
+              echo "" >> combined_report.md
+              echo "---" >> combined_report.md
+              echo "" >> combined_report.md
+            fi
+          done
+
+      - name: Comment on issue with combined results
         uses: actions/github-script@5c56fde4671bc2d3592fb0f2c5b5bab9ddae03b1 # v7
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
             const fs = require('fs');
-            const body = fs.readFileSync('comparison.md', 'utf8');
-            const {owner, repo} = context.repo;
-            const version1 = '${{ github.event.inputs.version1 }}';
-            const version2 = '${{ github.event.inputs.version2 }}';
-            const configFile = '${{ github.event.inputs.config_file }}';
-            const runUrl = `https://github.com/${owner}/${repo}/actions/runs/${{ github.run_id }}`;
 
-            const header = `## Benchmark Comparison ${{ github.event.inputs.version1 }} vs ${{ github.event.inputs.version2 }}
-
-            **Versions Compared:**
-            - Version 1: \`${version1}\`
-            - Version 2: \`${version2}\`
-
-            **Config:** \`${configFile}\`
-            **Workflow Run:** [View Details](${runUrl})
-
-            ---
-            `;
+            // Read the combined report
+            const body = fs.readFileSync('combined_report.md', 'utf8');
 
             await github.rest.issues.createComment({
               issue_number: ${{ github.event.inputs.issue_id }},
-              owner,
-              repo,
-              body: header + body
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: body
             });
-
-      - name: Cleanup any running valkey processes
-        if: always()
-        continue-on-error: true
-        run: |
-          pkill -f valkey
-          exit_code=$?
-          if [ $exit_code -eq 0 ]; then
-            echo "Killed running valkey processes"
-          elif [ $exit_code -eq 1 ]; then
-            echo "No valkey processes found to kill"
-          else
-            echo "Warning: pkill failed with exit code $exit_code"
-          fi

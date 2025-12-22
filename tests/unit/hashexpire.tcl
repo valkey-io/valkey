@@ -4042,7 +4042,7 @@ start_server {tags {"hashexpire external:skip"}} {
             
             test {Hash field TTL and active expiry propagates correctly through chain replication} {
                 $replica replicaof $primary_host $primary_port
-                # Wait for R2 to connect to R1
+                # Wait for R1 to connect to Primary
                 wait_for_condition 100 100 {
                     [info_field [$replica info replication] master_link_status] eq "up"
                 } else {
@@ -4052,7 +4052,7 @@ start_server {tags {"hashexpire external:skip"}} {
                 $replica_2 replicaof $replica_host $replica_port
                 # Wait for R2 to connect to R1
                 wait_for_condition 100 100 {
-                    [info_field [$replica info replication] master_link_status] eq "up"
+                    [info_field [$replica_2 info replication] master_link_status] eq "up"
                 } else {
                     fail "Second replica <-> First replica connection not established"
                 }

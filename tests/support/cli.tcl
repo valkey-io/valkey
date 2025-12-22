@@ -13,14 +13,14 @@ proc valkeycli_tls_config {testsdir} {
 
 # Returns command line for executing valkey-cli
 proc valkeycli {host port {opts {}}} {
-    set cmd [list src/valkey-cli -h $host -p $port]
+    set cmd [list $::VALKEY_CLI_BIN -h $host -p $port]
     lappend cmd {*}[valkeycli_tls_config "tests"]
     lappend cmd {*}$opts
     return $cmd
 }
 
 proc valkeycliuri {scheme host port {opts {}}} {
-    set cmd [list src/valkey-cli -u $scheme$host:$port]
+    set cmd [list $::VALKEY_CLI_BIN -u $scheme$host:$port]
     lappend cmd {*}[valkeycli_tls_config "tests"]
     lappend cmd {*}$opts
     return $cmd
@@ -28,7 +28,7 @@ proc valkeycliuri {scheme host port {opts {}}} {
 
 # Returns command line for executing valkey-cli with a unix socket address
 proc valkeycli_unixsocket {unixsocket {opts {}}} {
-    return [list src/valkey-cli -s $unixsocket {*}$opts]
+    return [list $::VALKEY_CLI_BIN -s $unixsocket {*}$opts]
 }
 
 # Run valkey-cli with specified args on the server of specified level.

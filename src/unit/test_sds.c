@@ -3,6 +3,7 @@
 #include <string.h>
 #include "test_help.h"
 
+#include "../fmacros.h"
 #include "../sds.h"
 #include "../sdsalloc.h"
 

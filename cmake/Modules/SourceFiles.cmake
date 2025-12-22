@@ -72,6 +72,7 @@ set(VALKEY_SERVER_SRCS
     ${CMAKE_SOURCE_DIR}/src/geo.c
     ${CMAKE_SOURCE_DIR}/src/lazyfree.c
     ${CMAKE_SOURCE_DIR}/src/module.c
+    ${CMAKE_SOURCE_DIR}/src/lrulfu.c
     ${CMAKE_SOURCE_DIR}/src/evict.c
     ${CMAKE_SOURCE_DIR}/src/expire.c
     ${CMAKE_SOURCE_DIR}/src/geohash.c
@@ -100,13 +101,9 @@ set(VALKEY_SERVER_SRCS
     ${CMAKE_SOURCE_DIR}/src/mt19937-64.c
     ${CMAKE_SOURCE_DIR}/src/resp_parser.c
     ${CMAKE_SOURCE_DIR}/src/call_reply.c
-    ${CMAKE_SOURCE_DIR}/src/lua/script_lua.c
     ${CMAKE_SOURCE_DIR}/src/script.c
     ${CMAKE_SOURCE_DIR}/src/functions.c
     ${CMAKE_SOURCE_DIR}/src/scripting_engine.c
-    ${CMAKE_SOURCE_DIR}/src/lua/function_lua.c
-    ${CMAKE_SOURCE_DIR}/src/lua/engine_lua.c
-    ${CMAKE_SOURCE_DIR}/src/lua/debug_lua.c
     ${CMAKE_SOURCE_DIR}/src/trace/trace.c
     ${CMAKE_SOURCE_DIR}/src/trace/trace_rdb.c
     ${CMAKE_SOURCE_DIR}/src/trace/trace_aof.c

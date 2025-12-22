@@ -86,6 +86,14 @@
 #include "entry.h"
 #include "lrulfu.h"
 
+/*
+ * Sanity check: we require large-file support. If include order caused
+ * _FILE_OFFSET_BITS to be ignored, off_t may end up 32-bit on 32-bit builds,
+ * which will lead to ODR/LTO type mismatches. Fail fast at compile time.
+ */
+#include <sys/types.h>
+static_assert(sizeof(off_t) >= 8, "off_t must be 64-bit; ensure _FILE_OFFSET_BITS=64 is in effect before system headers");
+
 #ifdef USE_LTTNG
 #define valkey_fork() do_fork()
 #else
@@ -186,9 +194,9 @@ struct hdr_histogram;
 #define STATS_METRIC_SAMPLES 16 /* Number of samples per metric. */
 typedef enum {
     STATS_METRIC_COMMAND = 0,            /* Number of commands executed. */
-    STATS_METRIC_NET_INPUT,              /* Bytes read to network. */
+    STATS_METRIC_NET_INPUT,              /* Bytes read from network. */
     STATS_METRIC_NET_OUTPUT,             /* Bytes written to network. */
-    STATS_METRIC_NET_INPUT_REPLICATION,  /* Bytes read to network during replication. */
+    STATS_METRIC_NET_INPUT_REPLICATION,  /* Bytes read from network during replication. */
     STATS_METRIC_NET_OUTPUT_REPLICATION, /* Bytes written to network during replication. */
     STATS_METRIC_EL_CYCLE,               /* Number of eventloop cycled. */
     STATS_METRIC_EL_DURATION,            /* Eventloop duration. */

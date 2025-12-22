@@ -2598,4 +2598,38 @@ start_server {tags {"scripting"}} {
             r eval "error({})" 0
         }
     }
+
+    test {EVAL - SELECT inside script affects subsequent commands in same script} {
+        r select 0
+        r del testkey
+        r set testkey "db0_value"
+        
+        # Run script that:
+        # 1. Reads from DB 0
+        # 2. Switches to DB 1
+        # 3. Sets a key in DB 1
+        # 4. Returns the value from DB 1
+        set result [run_script {
+            local db0_val = server.call('get', 'testkey')
+            server.call('select', '1')
+            server.call('set', 'testkey', 'db1_value')
+            return server.call('get', 'testkey')
+        } 1 testkey]
+        
+        # Script returned the DB 1 value
+        assert_equal "db1_value" $result
+        
+        # Verify we're back in DB 0 after script
+        assert_equal "db0_value" [r get testkey]
+        
+        # Verify DB 1 has the new value that was set by the script
+        r select 1
+        assert_equal "db1_value" [r get testkey]
+        
+        # Cleanup
+        r del testkey
+        r select 0
+        r del testkey
+        set _ {}
+    } {} {singledb:skip}
 }

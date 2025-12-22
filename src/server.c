@@ -6429,6 +6429,12 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                             "# Cluster\r\n"
                             "cluster_enabled:%d\r\n",
                             server.cluster_enabled);
+    }
+
+    /* Cluster Status */
+    if (all_sections || (dictFind(section_dict, "cluster_status") != NULL)) {
+        if (sections++) info = sdscat(info, "\r\n");
+        info = sdscatprintf(info, "# Cluster Status\r\n");
         if (server.cluster_enabled) info = genClusterInfoString(info);
     }
 

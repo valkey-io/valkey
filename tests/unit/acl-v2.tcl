@@ -808,28 +808,6 @@ start_server {tags {"acl external:skip"}} {
         r select 0
     }
 
-    test {Test MIGRATE with database permissions} {
-        set first [srv 0 client]
-        r ACL SETUSER migrate-user on nopass +migrate +set +get +del ~* db=0,1
-        $r2 auth migrate-user password
-        
-        # Second server to migrate to
-        start_server {tags {"repl"}} {
-            set second [srv 0 client]
-            set second_host [srv 0 host]
-            set second_port [srv 0 port]
-            
-            $r2 set migrate-key value
-            set ret [$r2 migrate $second_host $second_port migrate-key 1 5000]
-            assert_equal "OK" $ret
-            
-            $r2 set migrate-key2 value2
-            catch {$r2 migrate $second_host $second_port migrate-key2 2 5000} e
-            assert_match "*NOPERM*database*" $e
-        }
-    } {} {external:skip}
-
-    
     test {Test duplicate database IDs in db= are handled correctly} {
         r ACL SETUSER db-dup-user on nopass +@all ~* db=0,0,1,1,0
         $r2 auth db-dup-user password

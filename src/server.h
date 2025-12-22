@@ -4086,7 +4086,6 @@ void failoverCommand(client *c);
 int *selectDbIdArgs(robj **argv, int argc, int *count);
 int *swapdbDbIdArgs(robj **argv, int argc, int *count);
 int *moveDbIdArgs(robj **argv, int argc, int *count);
-int *migrateDbIdArgs(robj **argv, int argc, int *count);
 int *copyDbIdArgs(robj **argv, int argc, int *count);
 
 #if defined(__GNUC__)

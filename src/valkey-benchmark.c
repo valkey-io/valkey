@@ -153,6 +153,7 @@ static struct config {
     atomic_uint_fast64_t last_time_ns;
     uint64_t time_per_token;
     uint64_t time_per_burst;
+    FILE* output;
 } config;
 
 /* Locations of the placeholders __rand_int__, __rand_1st__,
@@ -1106,12 +1107,12 @@ static void showRPSReport(void) {
         const float p99 = (float)hdr_value_at_percentile(config.rps_histogram, 99.0);
         const float p100 = (float)hdr_max(config.rps_histogram);
 
-        printf("\n");
-        printf("RPS Summary:\n");
-        printf("  target RPS: %.2f\n", target_rps);
-        printf("  RPS distribution (reqs/sec):\n");
-        printf("    %9s %9s %9s %9s %9s %9s\n", "avg", "min", "p50", "p95", "p99", "max");
-        printf("    %9.3f %9.3f %9.3f %9.3f %9.3f %9.3f\n", avg_rps, p0, p50, p95, p99, p100);
+        fprintf(config.output, "\n");
+        fprintf(config.output, "RPS Summary:\n");
+        fprintf(config.output, "  target RPS: %.2f\n", target_rps);
+        fprintf(config.output, "  RPS distribution (reqs/sec):\n");
+        fprintf(config.output, "    %9s %9s %9s %9s %9s %9s\n", "avg", "min", "p50", "p95", "p99", "max");
+        fprintf(config.output, "    %9.3f %9.3f %9.3f %9.3f %9.3f %9.3f\n", avg_rps, p0, p50, p95, p99, p100);
     }
 }
 
@@ -1125,12 +1126,12 @@ static void showReport(void) {
     const float avg = hdr_mean(config.latency_histogram) / 1000.0f;
 
     if (!config.quiet && !config.csv) {
-        printf("%*s\r", config.last_printed_bytes, " "); // ensure there is a clean line
-        printf("====== %s ======\n", config.title);
-        printf("  %d requests completed in %.2f seconds\n", config.requests_finished, (float)config.totlatency / 1000);
-        printf("  %d parallel clients\n", config.numclients);
-        printf("  %d bytes payload\n", config.datasize);
-        printf("  keep alive: %d\n", config.keepalive);
+        fprintf(config.output, "%*s\r", config.last_printed_bytes, " "); // ensure there is a clean line
+        fprintf(config.output, "====== %s ======\n", config.title);
+        fprintf(config.output, "  %d requests completed in %.2f seconds\n", config.requests_finished, (float)config.totlatency / 1000);
+        fprintf(config.output, "  %d parallel clients\n", config.numclients);
+        fprintf(config.output, "  %d bytes payload\n", config.datasize);
+        fprintf(config.output, "  keep alive: %d\n", config.keepalive);
         if (config.cluster_mode) {
             const char *node_roles = NULL;
             if (config.read_from_replica == FROM_ALL) {
@@ -1140,28 +1141,28 @@ static void showReport(void) {
             } else {
                 node_roles = "primary";
             }
-            printf("  cluster mode: yes (%d %s)\n", config.cluster_node_count, node_roles);
+            fprintf(config.output, "  cluster mode: yes (%d %s)\n", config.cluster_node_count, node_roles);
             int m;
             for (m = 0; m < config.cluster_node_count; m++) {
                 clusterNode *node = config.cluster_nodes[m];
                 serverConfig *cfg = node->server_config;
                 if (cfg == NULL) continue;
-                printf("  node [%d] configuration:\n", m);
-                printf("    save: %s\n", sdslen(cfg->save) ? cfg->save : "NONE");
-                printf("    appendonly: %s\n", cfg->appendonly);
+                fprintf(config.output, "  node [%d] configuration:\n", m);
+                fprintf(config.output, "    save: %s\n", sdslen(cfg->save) ? cfg->save : "NONE");
+                fprintf(config.output, "    appendonly: %s\n", cfg->appendonly);
             }
         } else {
             if (config.server_config) {
-                printf("  host configuration \"save\": %s\n", config.server_config->save);
-                printf("  host configuration \"appendonly\": %s\n", config.server_config->appendonly);
+                fprintf(config.output, "  host configuration \"save\": %s\n", config.server_config->save);
+                fprintf(config.output, "  host configuration \"appendonly\": %s\n", config.server_config->appendonly);
             }
         }
-        printf("  multi-thread: %s\n", (config.num_threads ? "yes" : "no"));
-        if (config.num_threads) printf("  threads: %d\n", config.num_threads);
+        fprintf(config.output, "  multi-thread: %s\n", (config.num_threads ? "yes" : "no"));
+        if (config.num_threads) fprintf(config.output, "  threads: %d\n", config.num_threads);
         /* Show the RPS Report */
         showRPSReport();
-        printf("\n");
-        printf("Latency by percentile distribution:\n");
+        fprintf(config.output, "\n");
+        fprintf(config.output, "Latency by percentile distribution:\n");
         struct hdr_iter iter;
         long long previous_cumulative_count = -1;
         const long long total_count = config.latency_histogram->total_count;
@@ -1172,12 +1173,12 @@ static void showReport(void) {
             const double percentile = percentiles->percentile;
             const long long cumulative_count = iter.cumulative_count;
             if (previous_cumulative_count != cumulative_count || cumulative_count == total_count) {
-                printf("%3.3f%% <= %.3f milliseconds (cumulative count %lld)\n", percentile, value, cumulative_count);
+                fprintf(config.output, "%3.3f%% <= %.3f milliseconds (cumulative count %lld)\n", percentile, value, cumulative_count);
             }
             previous_cumulative_count = cumulative_count;
         }
-        printf("\n");
-        printf("Cumulative distribution of latencies:\n");
+        fprintf(config.output, "\n");
+        fprintf(config.output, "Cumulative distribution of latencies:\n");
         previous_cumulative_count = -1;
         hdr_iter_linear_init(&iter, config.latency_histogram, 100);
         while (hdr_iter_next(&iter)) {
@@ -1185,7 +1186,7 @@ static void showReport(void) {
             const long long cumulative_count = iter.cumulative_count;
             const double percentile = ((double)cumulative_count / (double)total_count) * 100.0;
             if (previous_cumulative_count != cumulative_count || cumulative_count == total_count) {
-                printf("%3.3f%% <= %.3f milliseconds (cumulative count %lld)\n", percentile, value, cumulative_count);
+                fprintf(config.output, "%3.3f%% <= %.3f milliseconds (cumulative count %lld)\n", percentile, value, cumulative_count);
             }
             /* After the 2 milliseconds latency to have percentages split
              * by decimals will just add a lot of noise to the output. */
@@ -1194,18 +1195,18 @@ static void showReport(void) {
             }
             previous_cumulative_count = cumulative_count;
         }
-        printf("\n");
-        printf("Summary:\n");
-        printf("  throughput summary: %.2f requests per second\n", reqpersec);
-        printf("  latency summary (msec):\n");
-        printf("    %9s %9s %9s %9s %9s %9s\n", "avg", "min", "p50", "p95", "p99", "max");
-        printf("    %9.3f %9.3f %9.3f %9.3f %9.3f %9.3f\n", avg, p0, p50, p95, p99, p100);
+        fprintf(config.output, "\n");
+        fprintf(config.output, "Summary:\n");
+        fprintf(config.output, "  throughput summary: %.2f requests per second\n", reqpersec);
+        fprintf(config.output, "  latency summary (msec):\n");
+        fprintf(config.output, "    %9s %9s %9s %9s %9s %9s\n", "avg", "min", "p50", "p95", "p99", "max");
+        fprintf(config.output, "    %9.3f %9.3f %9.3f %9.3f %9.3f %9.3f\n", avg, p0, p50, p95, p99, p100);
     } else if (config.csv) {
-        printf("\"%s\",\"%.2f\",\"%.3f\",\"%.3f\",\"%.3f\",\"%.3f\",\"%.3f\",\"%.3f\"\n", config.title, reqpersec, avg,
+        fprintf(config.output, "\"%s\",\"%.2f\",\"%.3f\",\"%.3f\",\"%.3f\",\"%.3f\",\"%.3f\",\"%.3f\"\n", config.title, reqpersec, avg,
                p0, p50, p95, p99, p100);
     } else {
-        printf("%*s\r", config.last_printed_bytes, " "); // ensure there is a clean line
-        printf("%s: %.2f requests per second, p50=%.3f msec\n", config.title, reqpersec, p50);
+        fprintf(config.output, "%*s\r", config.last_printed_bytes, " "); // ensure there is a clean line
+        fprintf(config.output, "%s: %.2f requests per second, p50=%.3f msec\n", config.title, reqpersec, p50);
     }
 }
 
@@ -1741,6 +1742,16 @@ int parseOptions(int argc, char **argv) {
             config.tests = sdscat(config.tests, (char *)argv[++i]);
             config.tests = sdscat(config.tests, ",");
             sdstolower(config.tests);
+        } else if (!strcmp(argv[i], "-o")) {
+            const char *output_filename = "output";
+            if (!lastarg && argv[i+1][0] != '-') {
+                output_filename = argv[++i];
+            }
+            config.output = fopen(output_filename, "w");
+            if (!config.output) {
+                fprintf(stderr, "Failed to open output file '%s': %s\n", output_filename, strerror(errno));
+                exit(1);
+            }
         } else if (!strcmp(argv[i], "--dbnum")) {
             if (lastarg) goto invalid;
             config.conn_info.input_dbnum = atoi(argv[++i]);
@@ -1963,6 +1974,7 @@ usage:
         "                    on the command line.\n"
         " -I                 Idle mode. Just open N idle connections and wait.\n"
         " -x                 Read last argument from STDIN.\n"
+        " -o                 Output results to the specfied file. Default is 'output'.\n"
         " --rps <requests>   Limit the total number of requests per second.\n"
         "                    Default 0 (no limit)\n"
         " --seed <num>       Set the seed for random number generator.\n"
@@ -2032,8 +2044,8 @@ long long showThroughput(struct aeEventLoop *eventLoop, long long id, void *clie
         return SHOW_THROUGHPUT_INTERVAL;
     }
     if (config.idlemode == 1) {
-        printf("clients: %d\r", config.liveclients);
-        fflush(stdout);
+        fprintf(config.output, "clients: %d\r", config.liveclients);
+        fflush(config.output);
         return SHOW_THROUGHPUT_INTERVAL;
     }
     const float dt = (float)(current_tick - config.start) / 1000.0;
@@ -2048,22 +2060,22 @@ long long showThroughput(struct aeEventLoop *eventLoop, long long id, void *clie
     config.previous_tick = current_tick;
     atomic_store_explicit(&config.previous_requests_finished, requests_finished, memory_order_relaxed);
 
-    printf("%*s\r", config.last_printed_bytes, " "); /* ensure there is a clean line */
+    fprintf(config.output, "%*s\r", config.last_printed_bytes, " "); /* ensure there is a clean line */
     config.last_printed_bytes = 0;
     if (warmup_duration > 0) {
-        config.last_printed_bytes += printf("Warming up ");
+        config.last_printed_bytes += fprintf(config.output, "Warming up ");
     }
     config.last_printed_bytes +=
-        printf("%s: rps=%.1f (overall: %.1f) avg_msec=%.3f (overall: %.3f)", config.title, instantaneous_rps, rps,
+        fprintf(config.output, "%s: rps=%.1f (overall: %.1f) avg_msec=%.3f (overall: %.3f)", config.title, instantaneous_rps, rps,
                hdr_mean(config.current_sec_latency_histogram) / 1000.0f, hdr_mean(config.latency_histogram) / 1000.0f);
     if (warmup_duration > 0 || config.duration > 0) {
-        config.last_printed_bytes += printf(" %.1f seconds\r", dt);
+        config.last_printed_bytes += fprintf(config.output, " %.1f seconds\r", dt);
     } else {
-        config.last_printed_bytes += printf(" %d requests\r", requests_finished);
+        config.last_printed_bytes += fprintf(config.output, " %d requests\r", requests_finished);
     }
 
     hdr_reset(config.current_sec_latency_histogram);
-    fflush(stdout);
+    fflush(config.output);
     return SHOW_THROUGHPUT_INTERVAL;
 }
 
@@ -2174,6 +2186,7 @@ int main(int argc, char **argv) {
     config.num_functions = 10;
     config.num_keys_in_fcall = 1;
     config.resp3 = 0;
+    config.output = stdout;
     resetPlaceholders();
 
     i = parseOptions(argc, argv);
@@ -2227,7 +2240,7 @@ int main(int argc, char **argv) {
         } else {
             node_roles = "primary";
         }
-        printf("Cluster has %d %s nodes:\n\n", config.cluster_node_count, node_roles);
+        fprintf(config.output, "Cluster has %d %s nodes:\n\n", config.cluster_node_count, node_roles);
         int i = 0;
         for (; i < config.cluster_node_count; i++) {
             clusterNode *node = config.cluster_nodes[i];
@@ -2236,15 +2249,15 @@ int main(int argc, char **argv) {
                 exit(1);
             }
             const char *node_type = (node->replicate == NULL ? "Primary" : "Replica");
-            printf("Node %d(%s): ", i, node_type);
+            fprintf(config.output, "Node %d(%s): ", i, node_type);
             if (node->name) printf("%s ", node->name);
-            printf("%s:%d\n", node->ip, node->port);
+            fprintf(config.output, "%s:%d\n", node->ip, node->port);
             node->server_config = getServerConfig(config.ct, node->ip, node->port);
             if (node->server_config == NULL) {
                 fprintf(stderr, "WARNING: Could not fetch node CONFIG %s:%d\n", node->ip, node->port);
             }
         }
-        printf("\n");
+        fprintf(config.output, "\n");
         /* Automatically set thread number to node count if not specified
          * by the user. */
         if (config.num_threads == 0) config.num_threads = config.cluster_node_count;
@@ -2270,7 +2283,7 @@ int main(int argc, char **argv) {
     }
 
     if (config.idlemode) {
-        printf("Creating %d idle connections and waiting forever (Ctrl+C when done)\n", config.numclients);
+        fprintf(config.output, "Creating %d idle connections and waiting forever (Ctrl+C when done)\n", config.numclients);
         int thread_id = -1, use_threads = (config.num_threads > 0);
         if (use_threads) {
             thread_id = 0;
@@ -2285,7 +2298,7 @@ int main(int argc, char **argv) {
         /* and will wait for every */
     }
     if (config.csv) {
-        printf("\"test\",\"rps\",\"avg_latency_ms\",\"min_latency_ms\",\"p50_latency_ms\",\"p95_latency_ms\",\"p99_"
+        fprintf(config.output, "\"test\",\"rps\",\"avg_latency_ms\",\"min_latency_ms\",\"p50_latency_ms\",\"p95_latency_ms\",\"p99_"
                "latency_ms\",\"max_latency_ms\"\n");
     }
     /* Run benchmark with command in the remainder of the arguments. */
@@ -2567,7 +2580,7 @@ int main(int argc, char **argv) {
             free(cmd);
         }
 
-        if (!config.csv) printf("\n");
+        if (!config.csv) fprintf(config.output, "\n");
     } while (config.loop);
 
     zfree(data);
@@ -2575,5 +2588,8 @@ int main(int argc, char **argv) {
     if (config.server_config != NULL) freeServerConfig(config.server_config);
     resetPlaceholders();
 
+    if (config.output != stdout) {
+        fclose(config.output);
+    }
     return 0;
 }

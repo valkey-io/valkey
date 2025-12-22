@@ -1,20 +1,5 @@
 ## Valkey GoogleTest Unit Test Framework
 
-This directory contains the GoogleTest (gtest) framework integration for Valkey
-unit testing. GoogleTest provides advanced unit testing capabilities that are
-not available in Valkey's legacy unit testing framework. These capabilities
-include:
-
-- Integrated mocking via GoogleMock, providing expressive, behavior-based mocks
-- Rich argument matchers and call sequencing / ordering
-- Advanced test fixtures and lifecycle control
-- Richful assertions and detailed diagnostics
-- Parameterized and typed tests
-
-These features enable more expressive, maintainable, and scalable unit tests,
-particularly for complex components and edge-case validation.
-
-For more information on GoogleTest, see: https://google.github.io/googletest/
 
 To use this framework to write unit tests, we have modified Valkey to build as
 a library that can link against other test executables. This framework uses the

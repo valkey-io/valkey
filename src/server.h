@@ -192,9 +192,9 @@ struct hdr_histogram;
 #define STATS_METRIC_SAMPLES 16 /* Number of samples per metric. */
 typedef enum {
     STATS_METRIC_COMMAND = 0,            /* Number of commands executed. */
-    STATS_METRIC_NET_INPUT,              /* Bytes read to network. */
+    STATS_METRIC_NET_INPUT,              /* Bytes read from network. */
     STATS_METRIC_NET_OUTPUT,             /* Bytes written to network. */
-    STATS_METRIC_NET_INPUT_REPLICATION,  /* Bytes read to network during replication. */
+    STATS_METRIC_NET_INPUT_REPLICATION,  /* Bytes read from network during replication. */
     STATS_METRIC_NET_OUTPUT_REPLICATION, /* Bytes written to network during replication. */
     STATS_METRIC_EL_CYCLE,               /* Number of eventloop cycled. */
     STATS_METRIC_EL_DURATION,            /* Eventloop duration. */

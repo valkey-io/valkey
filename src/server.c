@@ -109,6 +109,7 @@ static inline int isShutdownInitiated(void);
 int isReadyToShutdown(void);
 int finishShutdown(void);
 const char *replstateToString(int replstate);
+void addReplyCommandInfo(client *c, struct serverCommand *cmd);
 
 /*============================ Utility functions ============================ */
 
@@ -5230,11 +5231,8 @@ void addReplyCommandSubCommands(client *c,
     hashtableResetIterator(&iter);
 }
 
-/* Forward declaration */
-void addReplyCommandInfo(client *c, struct serverCommand *cmd);
-
 /* Generate and cache the command info response for a given protocol version */
-static void cacheCommandInfo(struct serverCommand *cmd, int resp) {
+static sds generateCommandInfoResponse(struct serverCommand *cmd, int resp) {
     client *caching_client = createCachedResponseClient(resp);
     
     int firstkey = 0, lastkey = 0, keystep = 0;
@@ -5257,9 +5255,9 @@ static void cacheCommandInfo(struct serverCommand *cmd, int resp) {
     addReplyCommandKeySpecs(caching_client, cmd);
     addReplyCommandSubCommands(caching_client, cmd, addReplyCommandInfo, 0);
 
-    cmd->info_cache[RESP_CACHE_INDEX(resp)] = aggregateClientOutputBuffer(caching_client);
-    
+    sds command_info_response = aggregateClientOutputBuffer(caching_client);
     deleteCachedResponseClient(caching_client);
+    return command_info_response;
 }
 
 /* Output the representation of a server command. Used by the COMMAND command and COMMAND INFO. */
@@ -5272,8 +5270,8 @@ void addReplyCommandInfo(client *c, struct serverCommand *cmd) {
         sds cache = cmd->info_cache[cache_idx];
         
         if (cache == NULL) {
-            cacheCommandInfo(cmd, c->resp);
-            cache = cmd->info_cache[cache_idx];
+            cache = generateCommandInfoResponse(cmd, c->resp);
+            cmd->info_cache[cache_idx] = cache;
         }
         
         addReplyProto(c, cache, sdslen(cache));
@@ -5411,8 +5409,8 @@ void invalidateCommandCache(void) {
     }
 }
 
-/* Generate and cache the full COMMAND response */
-static void cacheCommandResponse(int resp) {
+/* Generate the full COMMAND response */
+static sds generateCommandResponse(int resp) {
     client *caching_client = createCachedResponseClient(resp);
     
     hashtableIterator iter;
@@ -5425,9 +5423,9 @@ static void cacheCommandResponse(int resp) {
     }
     hashtableResetIterator(&iter);
     
-    server.command_response_cache[RESP_CACHE_INDEX(resp)] = aggregateClientOutputBuffer(caching_client);
-    
+    sds command_response = aggregateClientOutputBuffer(caching_client);
     deleteCachedResponseClient(caching_client);
+    return command_response;
 }
 
 /* COMMAND (no args) */
@@ -5436,9 +5434,9 @@ void commandCommand(client *c) {
     int cache_idx = RESP_CACHE_INDEX(c->resp);
     sds cache = server.command_response_cache[cache_idx];
     
-    if (cache == NULL) {
-        cacheCommandResponse(c->resp);
-        cache = server.command_response_cache[cache_idx];
+    if (!cache) {
+        cache = generateCommandResponse(c->resp);
+        server.command_response_cache[cache_idx] = cache;
     }
     
     addReplyProto(c, cache, sdslen(cache));

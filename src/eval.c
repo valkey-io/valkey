@@ -233,7 +233,7 @@ int evalExtractShebangFlags(sds body,
         sds shebang = sdsnewlen(body, shebang_len);
         sds *parts = sdssplitargs(shebang, &numparts);
         sdsfree(shebang);
-        if (!parts || numparts == 0) {
+        if (!parts || numparts == 0 || sdslen(parts[0]) < 2) {
             if (err) *err = sdsnew("Invalid engine in script shebang");
             sdsfreesplitres(parts, numparts);
             return C_ERR;

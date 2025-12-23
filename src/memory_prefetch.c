@@ -9,8 +9,9 @@
  */
 
 #include "memory_prefetch.h"
-#include "server.h"
+#include "cmd_offload.h"
 #include "io_threads.h"
+#include "server.h"
 
 typedef enum {
     PREFETCH_ENTRY, /* Initial state, prefetch entries associated with the given key's hash */
@@ -38,9 +39,9 @@ typedef struct PrefetchCommandsBatch {
     KeyPrefetchInfo *prefetch_info; /* Prefetch info for each key */
 } PrefetchCommandsBatch;
 
-static PrefetchCommandsBatch *batch = NULL;
+static _Thread_local PrefetchCommandsBatch *batch = NULL;
 
-void freePrefetchCommandsBatch(void) {
+static void freePrefetchCommandsBatch(void) {
     if (batch == NULL) {
         return;
     }
@@ -73,6 +74,7 @@ void prefetchCommandsBatchInit(void) {
 
 int onMaxBatchSizeChange(const char **err) {
     UNUSED(err);
+    /* Note: This affects only the main-thread batch size */
     if (batch && batch->client_count > 0) {
         /* We need to process the current batch before updating the size */
         return 1;
@@ -266,7 +268,7 @@ int addCommandToBatchAndProcessIfFull(client *c) {
     batch->clients[batch->client_count++] = c;
 
     /* Client's next command */
-    if (c->parsed_cmd && !(c->read_flags & READ_FLAGS_BAD_ARITY)) {
+    if (c->parsed_cmd && !(c->read_flags & READ_FLAGS_BAD_ARITY) && (c->cmd_queue.len || !canCommandBeOffloaded(c->slot, c->parsed_cmd))) {
         c->read_flags |= READ_FLAGS_PREFETCHED;
         addCommandToBatch(c->parsed_cmd, c->argv, c->argc, c->db, c->slot);
     }
@@ -287,6 +289,43 @@ int addCommandToBatchAndProcessIfFull(client *c) {
     }
 
     return C_OK;
+}
+
+/* Process commands in the IO thread batch */
+void processBatchInIOThread(void) {
+    if (!batch || batch->client_count == 0) return;
+
+    /* Process the commands */
+    for (size_t i = 0; i < batch->client_count; i++) {
+        client *c = batch->clients[i];
+        ioThreadCallCommand(c);
+    }
+
+    resetCommandsBatch();
+}
+
+/* Version for IO thread context that handles a list of clients */
+void processIOThreadClients(client **clients, size_t clients_count) {
+    /* Ensure batch is initialized for this thread */
+    if (!batch) prefetchCommandsBatchInit();
+
+    for (size_t i = 0; i < clients_count; i++) {
+        client *c = clients[i];
+
+        addCommandToBatch(c->cmd, c->argv, c->argc, c->db, c->slot);
+        batch->clients[batch->client_count++] = c;
+
+        if (batch->client_count == batch->max_prefetch_size || batch->key_count == batch->max_prefetch_size) {
+            prefetchCommands();
+            processBatchInIOThread();
+        }
+    }
+
+    /* Process any remaining clients in the batch */
+    if (batch->client_count > 0) {
+        prefetchCommands();
+        processBatchInIOThread();
+    }
 }
 
 /* Removes the given client from the pending prefetch batch, if present. */

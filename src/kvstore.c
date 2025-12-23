@@ -47,6 +47,8 @@
 #include "serverassert.h"
 #include "dict.h"
 #include "monotonic.h"
+#include "cmd_offload.h"
+#include "io_threads.h"
 
 #define UNUSED(V) ((void)V)
 
@@ -66,7 +68,7 @@ struct _kvstore {
     unsigned long long bucket_count;          /* Total number of buckets in this kvstore across hash tables. */
     unsigned long long *hashtable_size_index; /* Binary indexed tree (BIT) that describes cumulative key frequencies up until
                                                * given hashtable-index. */
-    size_t overhead_hashtable_lut;            /* Overhead of all hashtables in bytes. */
+    _Atomic size_t overhead_hashtable_lut;    /* Overhead of all hashtables in bytes, Atomic as it may be updated by the IO threads for rehashing. */
     size_t overhead_hashtable_rehashing;      /* Overhead of hash tables rehashing in bytes. */
     hashtable *importing;                     /* The set of hashtable indexes that are being imported */
     unsigned long long importing_key_count;   /* Total number of importing keys in this kvstore. */
@@ -241,6 +243,30 @@ void kvstoreHashtableRehashingStarted(hashtable *ht) {
     kvs->overhead_hashtable_rehashing += from * HASHTABLE_BUCKET_SIZE;
 }
 
+/* Context for deferred hashtable rehashing completion.
+ * Used when rehashing completes in a worker thread and cleanup must be
+ * deferred to the main thread. */
+typedef struct {
+    size_t from;              /* Old hashtable size before rehashing */
+    kvstore *kvs;             /* The kvstore being rehashed */
+    listNode *rehashing_node; /* Node in the rehashing list to remove */
+} rehashingCompletionCtx;
+
+static void kvstoreCleanupRehashing(kvstore *kvs, listNode *rehashing_node, size_t from) {
+    if (rehashing_node) {
+        listDelNode(kvs->rehashing, rehashing_node);
+    }
+    kvs->bucket_count -= from; /* Finished rehashing (Remove the old ht size) */
+    kvs->overhead_hashtable_rehashing -= from * HASHTABLE_BUCKET_SIZE;
+}
+
+/* Deferred job callback to clean hashtable rehashing state on the main thread.
+ * Called when rehashing completes in a worker thread. */
+void kvstoreHashtableRehashingCompletedDelayed(void *data) {
+    rehashingCompletionCtx *ctx = data;
+    kvstoreCleanupRehashing(ctx->kvs, ctx->rehashing_node, ctx->from);
+}
+
 /* Remove hash table from the rehashing list.
  *
  * Updates the bucket count for the given hash table in a DB. It removes
@@ -248,15 +274,15 @@ void kvstoreHashtableRehashingStarted(hashtable *ht) {
 void kvstoreHashtableRehashingCompleted(hashtable *ht) {
     kvstoreHashtableMetadata *metadata = (kvstoreHashtableMetadata *)hashtableMetadata(ht);
     kvstore *kvs = metadata->kvs;
-    if (metadata->rehashing_node) {
-        listDelNode(kvs->rehashing, metadata->rehashing_node);
-        metadata->rehashing_node = NULL;
-    }
-
     size_t from, to;
     hashtableRehashingInfo(ht, &from, &to);
-    kvs->bucket_count -= from; /* Finished rehashing (Remove the old ht size) */
-    kvs->overhead_hashtable_rehashing -= from * HASHTABLE_BUCKET_SIZE;
+    if (inMainThread()) {
+        kvstoreCleanupRehashing(kvs, metadata->rehashing_node, from);
+    } else {
+        rehashingCompletionCtx ctx = {.from = from, .kvs = kvs, .rehashing_node = metadata->rehashing_node};
+        threadAddDeferredJob(-1, kvstoreHashtableRehashingCompletedDelayed, sizeof(ctx), &ctx);
+    }
+    metadata->rehashing_node = NULL;
 }
 
 /* Hashtable callback to keep track of memory usage. */

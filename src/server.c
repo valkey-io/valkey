@@ -48,6 +48,7 @@
 #include "fmtargs.h"
 #include "io_threads.h"
 #include "sds.h"
+#include "cmd_offload.h"
 #include "module.h"
 #include "scripting_engine.h"
 #include "lua/engine_lua.h"
@@ -101,8 +102,10 @@ double R_Zero, R_PosInf, R_NegInf, R_Nan;
 /*================================= Globals ================================= */
 
 /* Global vars */
-struct valkeyServer server; /* Server global state */
-
+struct valkeyServer server;                    /* Server global state */
+_Thread_local client *current_client = NULL;   /* Thread-local client that triggered the command execution (External or AOF). */
+_Thread_local client *executing_client = NULL; /* Thread-local client executing the current command (possibly script or module). */
+_Thread_local mstime_t cmd_time_snapshot;      /* Time snapshot of the root execution nesting. */
 /*============================ Internal prototypes ========================== */
 
 static inline int isShutdownInitiated(void);
@@ -113,7 +116,7 @@ const char *replstateToString(int replstate);
 /*============================ Utility functions ============================ */
 
 /* This macro tells if we are in the context of loading an AOF. */
-#define isAOFLoadingContext() ((server.current_client && server.current_client->id == CLIENT_ID_AOF) ? 1 : 0)
+#define isAOFLoadingContext() ((current_client && current_client->id == CLIENT_ID_AOF) ? 1 : 0)
 
 /* We use a private localtime implementation which is fork-safe. The logging
  * function of the server may be called from other threads. */
@@ -333,7 +336,7 @@ mstime_t commandTimeSnapshot(void) {
      * propagation to replicas / AOF consistent. See issue #1525 for more info.
      * Note that we cannot use the cached server.mstime because it can change
      * in processEventsWhileBlocked etc. */
-    return server.cmd_time_snapshot;
+    return cmd_time_snapshot;
 }
 
 /* After an RDB dump or AOF rewrite we exit from children using _exit() instead of
@@ -1360,7 +1363,7 @@ void enterExecutionUnit(int update_cached_time, long long us) {
             us = ustime();
         }
         updateCachedTimeWithUs(0, us);
-        server.cmd_time_snapshot = server.mstime;
+        cmd_time_snapshot = server.mstime;
     }
 }
 
@@ -1484,6 +1487,10 @@ long long serverCron(struct aeEventLoop *eventLoop, long long id, void *clientDa
     UNUSED(eventLoop);
     UNUSED(id);
     UNUSED(clientData);
+
+    if (isServerCronDeferred()) {
+        return AE_NOMORE;
+    }
 
     /* Software watchdog: deliver the SIGALRM that will reach the signal
      * handler if we don't return here fast enough. */
@@ -1991,7 +1998,7 @@ void afterSleep(struct aeEventLoop *eventLoop, int numevents) {
      * e.g. somehow used by module timers. Don't update it while yielding to a
      * blocked command, call() will handle that and restore the original time. */
     if (!ProcessingEventsWhileBlocked) {
-        server.cmd_time_snapshot = server.mstime;
+        cmd_time_snapshot = server.mstime;
     }
 
     IOThreadsAfterSleep(numevents);
@@ -2215,7 +2222,7 @@ void initServerConfig(void) {
 
     initConfigValues();
     updateCachedTime(1);
-    server.cmd_time_snapshot = server.mstime;
+    cmd_time_snapshot = server.mstime;
     getRandomHexChars(server.runid, CONFIG_RUN_ID_SIZE);
     server.runid[CONFIG_RUN_ID_SIZE] = '\0';
     changeReplicationId();
@@ -2267,6 +2274,7 @@ void initServerConfig(void) {
     server.page_size = sysconf(_SC_PAGESIZE);
     server.extended_redis_compat = 0;
     server.pause_cron = 0;
+    server.offload_throttle_pct = 100;
     server.dict_resizing = 1;
     server.import_mode = 0;
 
@@ -2726,6 +2734,7 @@ void resetServerStats(void) {
     server.stat_sync_partial_ok = 0;
     server.stat_sync_partial_err = 0;
     server.stat_io_reads_processed = 0;
+    server.stat_io_commands_processed = 0;
     server.stat_total_reads_processed = 0;
     server.stat_io_writes_processed = 0;
     server.stat_io_freed_objects = 0;
@@ -2734,6 +2743,7 @@ void resetServerStats(void) {
     server.stat_total_writes_processed = 0;
     server.stat_client_qbuf_limit_disconnections = 0;
     server.stat_client_outbuf_limit_disconnections = 0;
+    server.stat_deferred_jobs_processed = 0;
     for (j = 0; j < STATS_METRIC_COUNT; j++) {
         server.inst_metric[j].idx = 0;
         server.inst_metric[j].last_sample_base = 0;
@@ -2833,7 +2843,7 @@ void initServer(void) {
     server.slot_migration_pipe_read = -1;
     server.slot_migration_child_exit_pipe = -1;
     server.main_thread_id = pthread_self();
-    server.current_client = NULL;
+    current_client = NULL;
     server.errors = raxNew();
     server.execution_nesting = 0;
     server.clients = listCreate();
@@ -2885,6 +2895,7 @@ void initServer(void) {
         serverLog(LL_WARNING, "Failed creating the event loop. Error message: '%s'", strerror(errno));
         exit(1);
     }
+    aeSetPollBatchSize(server.el, AE_SERVER_POLL_BATCH_SIZE);
 
     server.dbnum = server.cluster_enabled ? server.config_databases_cluster : server.config_databases;
     server.db = zcalloc(sizeof(serverDb *) * server.dbnum);
@@ -3561,7 +3572,7 @@ void alsoPropagate(int dbid, robj **argv, int argc, int target, int slot) {
      *
      * However, if we need to propagate to AOF, we should still do that. */
     bool propagate_aof = (target & PROPAGATE_AOF) && server.aof_state != AOF_OFF;
-    if (server.current_client != NULL && server.current_client->slot_migration_job) {
+    if (current_client != NULL && current_client->slot_migration_job) {
         if (!propagate_aof) return;
         /* Disable propagation to replication (just do the AOF) */
         target &= ~PROPAGATE_REPL;
@@ -3630,8 +3641,8 @@ static void propagatePendingCommands(void) {
     /* In case a command that may modify random keys was run *directly*
      * (i.e. not from within a script, MULTI/EXEC, RM_Call, etc.) we want
      * to avoid using a transaction (much like active-expire) */
-    if (server.current_client && server.current_client->cmd &&
-        server.current_client->cmd->flags & CMD_TOUCHES_ARBITRARY_KEYS) {
+    if (current_client && current_client->cmd &&
+        current_client->cmd->flags & CMD_TOUCHES_ARBITRARY_KEYS) {
         transaction = 0;
     }
 
@@ -3750,8 +3761,8 @@ void call(client *c, int flags) {
     struct ClientFlags client_old_flags = c->flag;
 
     struct serverCommand *real_cmd = c->realcmd;
-    client *prev_client = server.executing_client;
-    server.executing_client = c;
+    client *prev_client = executing_client;
+    executing_client = c;
 
     /* When call() is issued during loading the AOF we don't want commands called
      * from module, exec or LUA to go into the commandlog or to populate statistics. */
@@ -3926,17 +3937,17 @@ void call(client *c, int flags) {
         /* We use the tracking flag of the original external client that
          * triggered the command, but we take the keys from the actual command
          * being executed. */
-        if (server.current_client && (server.current_client->flag.tracking) &&
-            !(server.current_client->flag.tracking_bcast)) {
-            trackingRememberKeys(server.current_client, c);
+        if (current_client && (current_client->flag.tracking) &&
+            !(current_client->flag.tracking_bcast)) {
+            trackingRememberKeys(current_client, c);
         }
     }
 
     if (!c->flag.blocked) {
-        /* Modules may call commands in cron, in which case server.current_client
+        /* Modules may call commands in cron, in which case current_client
          * is not set. */
-        if (server.current_client) {
-            server.current_client->commands_processed++;
+        if (current_client) {
+            current_client->commands_processed++;
         }
         server.stat_numcommands++;
     }
@@ -3959,7 +3970,7 @@ void call(client *c, int flags) {
         server.client_pause_in_transaction = 0;
     }
 
-    server.executing_client = prev_client;
+    executing_client = prev_client;
 }
 
 /* Used when a command that is ready for execution needs to be rejected, due to
@@ -4317,7 +4328,7 @@ int processCommand(client *c) {
      * before key eviction, after the last command was executed and consumed
      * some client output buffer memory. */
     evictClients();
-    if (server.current_client == NULL) {
+    if (current_client == NULL) {
         /* If we evicted ourself then abort processing the command */
         return C_ERR;
     }
@@ -4339,7 +4350,7 @@ int processCommand(client *c) {
 
         /* performEvictions may flush replica output buffers. This may result
          * in a replica, that may be the active client, to be freed. */
-        if (server.current_client == NULL) return C_ERR;
+        if (current_client == NULL) return C_ERR;
 
         if (out_of_memory && is_denyoom_command) {
             if (c->slot_migration_job != NULL) {
@@ -4482,6 +4493,11 @@ int processCommand(client *c) {
         addReply(c, shared.queued);
     } else {
         int flags = CMD_CALL_FULL;
+
+        if (!canExecuteCommand(c) || tryOffloadCommandToIOThreads(c) == C_OK) {
+            return C_OK;
+        }
+
         call(c, flags);
         if (listLength(server.ready_keys) && !isInsideYieldingLongCommand()) handleClientsBlockedOnKeys();
     }
@@ -6217,14 +6233,19 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                 "total_writes_processed:%lld\r\n", server.stat_total_writes_processed,
                 "io_threaded_reads_processed:%lld\r\n", server.stat_io_reads_processed,
                 "io_threaded_writes_processed:%lld\r\n", server.stat_io_writes_processed,
+                "io_threaded_commands_processed:%lld\r\n", server.stat_io_commands_processed,
                 "io_threaded_freed_objects:%lld\r\n", server.stat_io_freed_objects,
                 "io_threaded_reads_pending:%lld\r\n", server.stat_io_reads_pending,
                 "io_threaded_writes_pending:%lld\r\n", server.stat_io_writes_pending,
+                "io_threaded_commands_pending:%lld\r\n", server.stat_io_commands_pending,
                 "io_threaded_accept_processed:%lld\r\n", server.stat_io_accept_offloaded,
                 "io_threaded_poll_processed:%lld\r\n", server.stat_poll_processed_by_io_threads,
                 "io_threaded_total_prefetch_batches:%lld\r\n", server.stat_total_prefetch_batches,
                 "io_threaded_total_prefetch_entries:%lld\r\n", server.stat_total_prefetch_entries,
                 "active_io_threads_num:%d\r\n", server.active_io_threads_num,
+                "io_threads_saturated:%d\r\n", server.io_threads_saturated,
+                "offload_throttle_pct:%d\r\n", server.offload_throttle_pct,
+                "io_threaded_postponed_jobs_to_mainthreads:%lld\r\n", server.stat_deferred_jobs_processed,
                 "client_query_buffer_limit_disconnections:%lld\r\n", server.stat_client_qbuf_limit_disconnections,
                 "client_output_buffer_limit_disconnections:%lld\r\n", server.stat_client_outbuf_limit_disconnections,
                 "reply_buffer_shrinks:%lld\r\n", server.stat_reply_buffer_shrinks,
@@ -6235,6 +6256,14 @@ sds genValkeyInfoString(dict *section_dict, int all_sections, int everything) {
                 "instantaneous_eventloop_cycles_per_sec:%llu\r\n", getInstantaneousMetric(STATS_METRIC_EL_CYCLE),
                 "instantaneous_eventloop_duration_usec:%llu\r\n", getInstantaneousMetric(STATS_METRIC_EL_DURATION),
                 "instantaneous_io_pending_jobs:%lld\r\n", getInstantaneousMetric(STATS_METRIC_IO_WAIT)));
+        /* Per IO thread stats */
+        for (int i = 1; i < server.active_io_threads_num; i++) {
+            info = sdscatprintf(info,
+                                "io_thread_%d_cmd_cpu_pct:%d\r\n"
+                                "io_thread_%d_io_cpu_pct:%d\r\n",
+                                i, atomic_load_explicit(&io_threads_stat_cmd_cpu[i], memory_order_relaxed),
+                                i, atomic_load_explicit(&io_threads_stat_io_cpu[i], memory_order_relaxed));
+        }
         info = genValkeyInfoStringACLStats(info);
     }
 
@@ -6900,8 +6929,8 @@ void dismissMemoryInChild(void) {
     /* madvise(MADV_DONTNEED) may not work if Transparent Huge Pages is enabled. */
     if (server.thp_enabled) return;
 
-        /* Currently we use zmadvise_dontneed only when we use jemalloc with Linux.
-         * so we avoid these pointless loops when they're not going to do anything. */
+    /* Currently we use zmadvise_dontneed only when we use jemalloc with Linux.
+     * so we avoid these pointless loops when they're not going to do anything. */
 #if defined(USE_JEMALLOC) && defined(__linux__)
     listIter li;
     listNode *ln;

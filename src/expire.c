@@ -668,7 +668,7 @@ int checkAlreadyExpired(long long when) {
      *
      * If the server is receiving the key from a slot migration, we will accept
      * expired keys and wait for the source to propagate deletion. */
-    if (server.current_client && server.current_client->slot_migration_job) return 0;
+    if (current_client && current_client->slot_migration_job) return 0;
     return (when <= commandTimeSnapshot() && !server.loading && !server.primary_host && !server.import_mode);
 }
 
@@ -983,9 +983,9 @@ expirationPolicy getExpirationPolicyWithFlags(int flags) {
      * When replicating commands from the primary, keys are never considered
      * expired, so we return POLICY_IGNORE_EXPIRE */
     if (server.primary_host != NULL) {
-        if (server.current_client && (server.current_client->flag.primary)) return POLICY_IGNORE_EXPIRE;
+        if (current_client && (current_client->flag.primary)) return POLICY_IGNORE_EXPIRE;
         if (!(flags & EXPIRE_FORCE_DELETE_EXPIRED)) return POLICY_KEEP_EXPIRED;
-    } else if (server.current_client && server.current_client->slot_migration_job) {
+    } else if (current_client && current_client->slot_migration_job) {
         /* Slot migration client should be treated like a primary */
         return POLICY_IGNORE_EXPIRE;
     } else if (server.import_mode) {
@@ -1004,7 +1004,7 @@ expirationPolicy getExpirationPolicyWithFlags(int flags) {
          *
          * When receiving commands from the import source, keys are never considered
          * expired, so we return POLICY_IGNORE_EXPIRE */
-        if (server.current_client && (server.current_client->flag.import_source)) return POLICY_IGNORE_EXPIRE;
+        if (current_client && (current_client->flag.import_source)) return POLICY_IGNORE_EXPIRE;
         if (!(flags & EXPIRE_FORCE_DELETE_EXPIRED)) return POLICY_KEEP_EXPIRED;
     }
 

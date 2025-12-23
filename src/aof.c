@@ -1429,10 +1429,10 @@ int loadSingleAppendOnlyFile(char *filename) {
      * to the same file we're about to read. */
     server.aof_state = AOF_OFF;
 
-    client *old_cur_client = server.current_client;
-    client *old_exec_client = server.executing_client;
+    client *old_cur_client = current_client;
+    client *old_exec_client = executing_client;
     fakeClient = createAOFClient();
-    server.current_client = server.executing_client = fakeClient;
+    current_client = executing_client = fakeClient;
 
     /* Check if the AOF file is in RDB format (it may be RDB encoded base AOF
      * or old style RDB-preamble AOF). In that case we need to load the RDB file
@@ -1649,8 +1649,8 @@ fmterr: /* Format error. */
 
 cleanup:
     if (fakeClient) freeClient(fakeClient);
-    server.current_client = old_cur_client;
-    server.executing_client = old_exec_client;
+    current_client = old_cur_client;
+    executing_client = old_exec_client;
     fclose(fp);
     sdsfree(aof_filepath);
     return ret;

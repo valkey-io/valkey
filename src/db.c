@@ -37,6 +37,7 @@
 #include "module.h"
 #include "vector.h"
 #include "expire.h"
+#include "cmd_offload.h"
 
 /*-----------------------------------------------------------------------------
  * C-level DB API
@@ -104,8 +105,8 @@ robj *lookupKey(serverDb *db, robj *key, int flags) {
          * Don't do it if we have a saving child, as this will trigger
          * a copy on write madness. */
         if ((flags & LOOKUP_NOTOUCH) == 0 &&
-            server.current_client && server.current_client->flag.no_touch &&
-            server.executing_client && server.executing_client->cmd->proc != touchCommand)
+            current_client && current_client->flag.no_touch &&
+            executing_client && executing_client->cmd->proc != touchCommand)
             flags |= LOOKUP_NOTOUCH;
         if (!hasActiveChildProcess() && !(flags & LOOKUP_NOTOUCH)) {
             /* Shared objects can't be stored in the database. */
@@ -234,7 +235,7 @@ int getKVStoreIndexForKey(sds key) {
 }
 
 /* Returns the cluster hash slot for a given key, trying to use the cached slot that
- * stored on the server.current_client first. If there is no cached value, it will compute the hash slot
+ * stored on the current_client first. If there is no cached value, it will compute the hash slot
  * and then cache the value.*/
 int getKeySlot(sds key) {
     serverAssert(server.cluster_enabled);
@@ -248,18 +249,18 @@ int getKeySlot(sds key) {
      * Modules and scripts executed on the primary may get replicated as multi-execs that operate on multiple slots,
      * so we must always recompute the slot for commands coming from the primary.
      */
-    if (server.current_client && server.current_client->slot >= 0 && server.current_client->flag.executing_command &&
-        !isReplicatedClient(server.current_client)) {
-        debugServerAssertWithInfo(server.current_client, NULL,
-                                  (int)keyHashSlot(key, (int)sdslen(key)) == server.current_client->slot);
-        return server.current_client->slot;
+    if (current_client && current_client->slot >= 0 && current_client->flag.executing_command &&
+        !isReplicatedClient(current_client)) {
+        debugServerAssertWithInfo(current_client, NULL,
+                                  (int)keyHashSlot(key, (int)sdslen(key)) == current_client->slot);
+        return current_client->slot;
     }
     int slot = keyHashSlot(key, (int)sdslen(key));
     /* For the case of commands from clients we must obey, getNodeByQuery() never gets called,
      * and thus c->slot never gets populated. That said, if this command ends up accessing
      * a key, we are able to backfill c->slot here, where the key's hash calculation is made. */
-    if (server.current_client && mustObeyClient(server.current_client)) {
-        server.current_client->slot = slot;
+    if (current_client && mustObeyClient(current_client)) {
+        current_client->slot = slot;
     }
     return slot;
 }
@@ -2047,7 +2048,7 @@ static int objectIsExpired(robj *val) {
     if (server.loading) return 0;
     if (!timestampIsExpired(objectGetExpire(val))) return 0;
     if (server.primary_host == NULL && server.import_mode) {
-        if (server.current_client && server.current_client->flag.import_source) return 0;
+        if (current_client && current_client->flag.import_source) return 0;
     }
     return 1;
 }
@@ -2065,7 +2066,7 @@ static int keyIsExpiredWithDictIndex(serverDb *db, robj *key, int dict_index) {
 
     /* See expireIfNeededWithDictIndex for more details. */
     if (server.primary_host == NULL && server.import_mode) {
-        if (server.current_client && server.current_client->flag.import_source) return 0;
+        if (current_client && current_client->flag.import_source) return 0;
     }
     return 1;
 }
@@ -2074,6 +2075,21 @@ static int keyIsExpiredWithDictIndex(serverDb *db, robj *key, int dict_index) {
 int keyIsExpired(serverDb *db, robj *key) {
     int dict_index = getKVStoreIndexForKey(key->ptr);
     return keyIsExpiredWithDictIndex(db, key, dict_index);
+}
+
+typedef struct postponeExpiredKeyCtx {
+    int dict_index;
+    serverDb *db;
+    robj *key;
+} postponeExpiredKeyCtx;
+
+static void handlePostponeExpiredKey(void *data) {
+    enterExecutionUnit(1, 0);
+    postponeExpiredKeyCtx *ctx = (postponeExpiredKeyCtx *)data;
+    deleteExpiredKeyAndPropagateWithDictIndex(ctx->db, ctx->key, ctx->dict_index);
+    decrRefCount(ctx->key);
+    exitExecutionUnit();
+    postExecutionUnitOperations();
 }
 
 /* val is optional. Pass NULL if val is not yet fetched from the database. */
@@ -2095,6 +2111,15 @@ static keyStatus expireIfNeededWithDictIndex(serverDb *db, robj *key, robj *val,
     if (static_key) {
         key = createStringObject(key->ptr, sdslen(key->ptr));
     }
+
+    /* If not in main-thread postpone key deletion to the main-thread. */
+    if (!inMainThread()) {
+        postponeExpiredKeyCtx ctx = {.dict_index = dict_index, .db = db, .key = key};
+        if (!static_key) incrRefCount(key);
+        threadAddDeferredJob(dict_index, handlePostponeExpiredKey, sizeof(ctx), &ctx);
+        return KEY_EXPIRED;
+    }
+
     /* Delete the key */
     deleteExpiredKeyAndPropagateWithDictIndex(db, key, dict_index);
     if (static_key) {

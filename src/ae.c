@@ -84,6 +84,7 @@ aeEventLoop *aeCreateEventLoop(int setsize) {
     eventLoop->fired = zmalloc(sizeof(aeFiredEvent) * setsize);
     if (eventLoop->events == NULL || eventLoop->fired == NULL) goto err;
     eventLoop->setsize = setsize;
+    eventLoop->poll_batch_size = setsize; /* Default to setsize, can be overridden */
     eventLoop->timeEventHead = NULL;
     eventLoop->timeEventNextId = 1;
     eventLoop->stop = 0;
@@ -128,6 +129,10 @@ void aeSetDontWait(aeEventLoop *eventLoop, int noWait) {
         eventLoop->flags |= AE_DONT_WAIT;
     else
         eventLoop->flags &= ~AE_DONT_WAIT;
+}
+
+void aeSetPollBatchSize(aeEventLoop *eventLoop, int size) {
+    eventLoop->poll_batch_size = size;
 }
 
 /* Resize the maximum set size of the event loop.

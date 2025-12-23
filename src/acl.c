@@ -500,7 +500,7 @@ void ACLFreeUserAndKillClients(user *u) {
             clientSetUser(c, DefaultUser, 0);
             /* We will write replies to this client later, so we can't
              * close it directly even if async. */
-            if (c == server.current_client) {
+            if (c == current_client) {
                 c->flag.close_after_command = 1;
             } else {
                 freeClientAsync(c);
@@ -2690,7 +2690,7 @@ void addACLLogEntry(client *c, int reason, int context, int argpos, sds username
     }
 
     /* if we have a real client from the network, use it (could be missing on module timers) */
-    client *realclient = server.current_client ? server.current_client : c;
+    client *realclient = current_client ? current_client : c;
 
     le->cinfo = catClientInfoString(sdsempty(), realclient, 0);
 

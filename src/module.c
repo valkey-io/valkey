@@ -867,7 +867,7 @@ void modulePostExecutionUnitOperations(void) {
     if (server.busy_module_yield_flags) {
         blockingOperationEnds();
         server.busy_module_yield_flags = BUSY_MODULE_YIELD_NONE;
-        if (server.current_client) unprotectClient(server.current_client);
+        if (current_client) unprotectClient(current_client);
         unblockPostponedClients();
     }
 }
@@ -2512,7 +2512,7 @@ void VM_Yield(ValkeyModuleCtx *ctx, int flags, const char *busy_reply) {
             if (!server.busy_module_yield_flags) {
                 server.busy_module_yield_flags = BUSY_MODULE_YIELD_EVENTS;
                 blockingOperationStarts();
-                if (server.current_client) protectClient(server.current_client);
+                if (current_client) protectClient(current_client);
             }
             if (flags & VALKEYMODULE_YIELD_FLAG_CLIENTS) server.busy_module_yield_flags |= BUSY_MODULE_YIELD_CLIENTS;
 
@@ -3901,8 +3901,8 @@ int modulePopulateReplicationInfoStructure(void *ri, int structver) {
  */
 int VM_GetClientInfoById(void *ci, uint64_t id) {
     client *client =
-        (server.executing_client && server.executing_client->id == id)
-            ? server.executing_client
+        (executing_client && executing_client->id == id)
+            ? executing_client
             : lookupClientByID(id);
     if (client == NULL) return VALKEYMODULE_ERR;
     if (ci == NULL) return VALKEYMODULE_OK;
@@ -6653,7 +6653,7 @@ ValkeyModuleCallReply *VM_Call(ValkeyModuleCtx *ctx, const char *cmdname, const 
             }
 
             int deny_write_type = writeCommandsDeniedByDiskError();
-            int obey_client = (server.current_client && mustObeyClient(server.current_client));
+            int obey_client = (current_client && mustObeyClient(current_client));
 
             if (deny_write_type != DISK_ERROR_TYPE_NONE && !obey_client) {
                 errno = ESPIPE;
@@ -9145,11 +9145,11 @@ void moduleNotifyKeyspaceEvent(int type, const char *event, robj *key, int dbid)
         if ((sub->event_mask & type) &&
             (sub->active == 0 || (sub->module->options & VALKEYMODULE_OPTIONS_ALLOW_NESTED_KEYSPACE_NOTIFICATIONS))) {
             ValkeyModuleCtx ctx;
-            if (server.executing_client == NULL) {
+            if (executing_client == NULL) {
                 moduleCreateContext(&ctx, sub->module, VALKEYMODULE_CTX_TEMP_CLIENT);
             } else {
                 moduleCreateContext(&ctx, sub->module, VALKEYMODULE_CTX_NONE);
-                ctx.client = server.executing_client;
+                ctx.client = executing_client;
             }
             selectDb(ctx.client, dbid);
             ctx.flags |= VALKEYMODULE_CTX_KEYSPACE_NOTIFICATION;
@@ -9908,7 +9908,7 @@ void revokeClientAuthentication(client *c) {
     clientSetUser(c, DefaultUser, 0);
     /* We will write replies to this client later, so we can't close it
      * directly even if async. */
-    if (c == server.current_client) {
+    if (c == current_client) {
         c->flag.close_after_command = 1;
     } else {
         freeClientAsync(c);
@@ -13473,12 +13473,12 @@ int VM_RdbLoad(ValkeyModuleCtx *ctx, ValkeyModuleRdbStream *stream, int flags) {
      * VM_RdbLoad() is called inside a command callback, we don't want to
      * process the current client. Otherwise, we may free the client or try to
      * process next message while we are already in the command callback. */
-    if (server.current_client) protectClient(server.current_client);
+    if (current_client) protectClient(current_client);
 
     serverAssert(stream->type == VALKEYMODULE_RDB_STREAM_FILE);
     int ret = rdbLoad(stream->data.filename, NULL, RDBFLAGS_EMPTY_DATA);
 
-    if (server.current_client) unprotectClient(server.current_client);
+    if (current_client) unprotectClient(current_client);
 
     /* Here we need to decide whether to enable the AOF based on the aof_enabled,
      * since the previous stopAppendOnly sets aof_state to AOF_OFF. */

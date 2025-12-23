@@ -1008,7 +1008,7 @@ static int ACLSetSelectorDatabasePermissions(aclSelector *selector, const char *
         }
 
         /* Reject out of range values */
-        if (errno == ERANGE || dbid < 0 || dbid >= server.dbnum) {
+        if (errno == ERANGE || dbid < 0 || dbid > INT32_MAX) {
             return ACLDatabasePermissionError(new_dbs, dblist, tokens, count, ERANGE);
         }
 

@@ -610,6 +610,7 @@ int clusterLoadConfig(char *filename) {
     struct stat sb;
     char *line;
     int maxline, j;
+    dict *tmp_cluster_nodes;
 
     if (fp == NULL) {
         if (errno == ENOENT) {
@@ -640,6 +641,7 @@ int clusterLoadConfig(char *filename) {
      * To simplify we allocate 1024+CLUSTER_SLOTS*128 bytes per line. */
     maxline = 1024 + CLUSTER_SLOTS * 128;
     line = zmalloc(maxline);
+    tmp_cluster_nodes = dictCreate(&clusterNodesDictType);
     while (fgets(line, maxline, fp) != NULL) {
         int argc, aux_argc;
         sds *argv, *aux_argv;
@@ -687,6 +689,17 @@ int clusterLoadConfig(char *filename) {
         if (!n) {
             n = createClusterNode(argv[0], 0);
             clusterAddNode(n);
+            dictAdd(tmp_cluster_nodes, sdsnewlen(argv[0], sdslen(argv[0])), NULL);
+        } else {
+            /* Check if the node (nodeid) has already been loaded. The nodeid is used to
+             * identify every node across the entire cluster, we do not expect to find
+             * duplicate nodeids in nodes.conf. */
+            dictEntry *de = dictFind(tmp_cluster_nodes, argv[0]);
+            if (de != NULL) {
+                serverLog(LL_WARNING, "Duplicate nodeid detected: %s", argv[0]);
+                sdsfreesplitres(argv, argc);
+                goto fmterr;
+            }
         }
         /* Format for the node address and auxiliary argument information:
          * ip:port[@cport][,hostname][,aux=val]*] */
@@ -943,6 +956,8 @@ int clusterLoadConfig(char *filename) {
 
     zfree(line);
     fclose(fp);
+    serverAssert(tmp_cluster_nodes != NULL);
+    dictRelease(tmp_cluster_nodes);
 
     serverLog(LL_NOTICE, "Node configuration loaded, I'm %.40s", myself->name);
 
@@ -1064,10 +1079,25 @@ cleanup:
     return retval;
 }
 
+/* Save the cluster configuration file. If the save fails, exit the process. */
 void clusterSaveConfigOrDie(int do_fsync) {
     if (clusterSaveConfig(do_fsync) == C_ERR) {
         serverLog(LL_WARNING, "Fatal: can't update cluster config file.");
         exit(1);
+    }
+}
+
+/* Save the cluster configuration file. If the save fails, print the log. */
+#define CONFIG_SAVE_LOG_ERROR_RATE 30 /* Seconds between errors logging. */
+void clusterSaveConfigOrLog(int do_fsync) {
+    if (clusterSaveConfig(do_fsync) == C_ERR) {
+        static time_t last_save_error_log = 0;
+        /* Limit logging rate to 1 line per CONFIG_SAVE_LOG_ERROR_RATE seconds. */
+        if ((server.unixtime - last_save_error_log) > CONFIG_SAVE_LOG_ERROR_RATE) {
+            serverLog(LL_WARNING, "Cluster config updated even though writing "
+                                  "the cluster config file to disk failed.");
+            last_save_error_log = server.unixtime;
+        }
     }
 }
 
@@ -1337,6 +1367,7 @@ void clusterInit(void) {
     server.cluster->currentEpoch = 0;
     server.cluster->state = CLUSTER_FAIL;
     server.cluster->fail_reason = CLUSTER_FAIL_NONE;
+    server.cluster->safe_to_join = 0;
     server.cluster->size = 0;
     server.cluster->todo_before_sleep = 0;
     server.cluster->nodes = dictCreate(&clusterNodesDictType);
@@ -5087,6 +5118,12 @@ void clusterSendFailoverAuthIfNeeded(clusterNode *node, clusterMsg *request) {
      * size + 1 */
     if (!clusterNodeIsVotingPrimary(myself)) return;
 
+    if (!server.cluster->safe_to_join) {
+        serverLog(LL_WARNING, "Failover auth denied to %.40s (%s): it is not safe to vote in this moment)",
+                  node->name, node->human_nodename);
+        return;
+    }
+
     /* Request epoch must be >= our currentEpoch.
      * Note that it is impossible for it to actually be greater since
      * our currentEpoch was updated as a side effect of receiving this
@@ -6103,7 +6140,7 @@ void clusterBeforeSleep(void) {
     /* Save the config, possibly using fsync. */
     if (flags & CLUSTER_TODO_SAVE_CONFIG) {
         int fsync = flags & CLUSTER_TODO_FSYNC_CONFIG;
-        clusterSaveConfigOrDie(fsync);
+        clusterSaveConfigOrLog(fsync);
     }
 
     if (flags & CLUSTER_TODO_BROADCAST_ALL) {
@@ -6347,8 +6384,12 @@ void clusterUpdateState(void) {
      * to not count the DB loading time. */
     if (first_call_time == 0) first_call_time = mstime();
     if (clusterNodeIsPrimary(myself) && server.cluster->state == CLUSTER_FAIL &&
-        mstime() - first_call_time < CLUSTER_WRITABLE_DELAY)
+        mstime() - first_call_time < CLUSTER_WRITABLE_DELAY) {
+        server.cluster->safe_to_join = 0;
         return;
+    } else {
+        server.cluster->safe_to_join = 1;
+    }
 
     /* Start assuming the state is OK. We'll turn it into FAIL if there
      * are the right conditions. */
@@ -7210,7 +7251,7 @@ int getMyShardSlotCount(void) {
 
 char **getClusterNodesList(size_t *numnodes) {
     size_t count = dictSize(server.cluster->nodes);
-    char **ids = zmalloc((count + 1) * CLUSTER_NAMELEN);
+    char **ids = zmalloc((count + 1) * sizeof(char *));
     dictIterator *di = dictGetIterator(server.cluster->nodes);
     dictEntry *de;
     int j = 0;

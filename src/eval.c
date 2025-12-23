@@ -240,7 +240,7 @@ int evalExtractShebangFlags(sds body,
         }
 
         if (out_engine) {
-            uint32_t engine_name_len = sdslen(parts[0]) - 2;
+            size_t engine_name_len = sdslen(parts[0]) - 2;
             *out_engine = zcalloc(engine_name_len + 1);
             valkey_strlcpy(*out_engine, parts[0] + 2, engine_name_len + 1);
         }
@@ -442,7 +442,7 @@ static int evalRegisterNewScript(client *c, robj *body, char **sha) {
     }
     es->body = body;
     int retval = dictAdd(evalCtx.scripts, _sha, es);
-    serverAssertWithInfo(c ? c : scriptingEngineGetClient(engine), NULL, retval == DICT_OK);
+    serverAssert(retval == DICT_OK);
     evalCtx.scripts_mem += sdsAllocSize(_sha) + getStringObjectSdsUsedMemory(body);
     incrRefCount(body);
     zfree(functions);

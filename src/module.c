@@ -899,6 +899,8 @@ void moduleFreeContext(ValkeyModuleCtx *ctx) {
         moduleReleaseTempClient(ctx->client);
     else if (ctx->flags & VALKEYMODULE_CTX_NEW_CLIENT)
         freeClient(ctx->client);
+    else if (ctx->flags & VALKEYMODULE_CTX_SCRIPT_EXECUTION)
+        ctx->client = NULL; /* Do not free the client, it was assigned manually. */
 }
 
 static CallReply *moduleParseReply(client *c, ValkeyModuleCtx *ctx) {
@@ -998,9 +1000,25 @@ void moduleCreateContext(ValkeyModuleCtx *out_ctx, ValkeyModule *module, int ctx
  */
 void moduleScriptingEngineInitContext(ValkeyModuleCtx *out_ctx,
                                       ValkeyModule *module,
+                                      int add_script_execution_flag,
                                       client *client) {
-    moduleCreateContext(out_ctx, module, VALKEYMODULE_CTX_SCRIPT_EXECUTION);
-    out_ctx->client = client;
+    /* The VALKEYMODULE_CTX_SCRIPT_EXECUTION requires a non-NULL client */
+    serverAssert(!add_script_execution_flag || client != NULL);
+
+    /* For non-script execution contexts, and non-asynchronous contexts, allocate
+     * a temporary client so the scripting engine can call server commands in
+     * its callbacks. */
+    int ctx_flags = VALKEYMODULE_CTX_TEMP_CLIENT | VALKEYMODULE_CTX_THREAD_SAFE;
+
+    if (add_script_execution_flag) {
+        ctx_flags = VALKEYMODULE_CTX_SCRIPT_EXECUTION;
+    }
+
+    moduleCreateContext(out_ctx, module, ctx_flags);
+
+    if (add_script_execution_flag) {
+        out_ctx->client = client;
+    }
 }
 
 /* This command binds the normal command invocation with commands
@@ -1069,7 +1087,7 @@ int moduleGetCommandChannelsViaAPI(struct serverCommand *cmd, robj **argv, int a
     ctx.keys_result = result;
 
     cp->func(&ctx, (void **)argv, argc);
-    /* We currently always use the array allocated by VM_RM_ChannelAtPosWithFlags() and don't try
+    /* We currently always use the array allocated by VM_ChannelAtPosWithFlags() and don't try
      * to optimize for the pre-allocated buffer. */
     moduleFreeContext(&ctx);
     return result->numkeys;
@@ -1103,8 +1121,7 @@ int VM_IsKeysPositionRequest(ValkeyModuleCtx *ctx) {
  *
  *     if (ValkeyModule_IsKeysPositionRequest(ctx)) {
  *         ValkeyModule_KeyAtPosWithFlags(ctx, 2, VALKEYMODULE_CMD_KEY_RO | VALKEYMODULE_CMD_KEY_ACCESS);
- *         ValkeyModule_KeyAtPosWithFlags(ctx, 1, VALKEYMODULE_CMD_KEY_RW | VALKEYMODULE_CMD_KEY_UPDATE |
- * VALKEYMODULE_CMD_KEY_ACCESS);
+ *         ValkeyModule_KeyAtPosWithFlags(ctx, 1, VALKEYMODULE_CMD_KEY_RW | VALKEYMODULE_CMD_KEY_UPDATE | VALKEYMODULE_CMD_KEY_ACCESS);
  *     }
  *
  *  Note: in the example above the get keys API could have been handled by key-specs (preferred).
@@ -5304,6 +5321,26 @@ int VM_ZsetRangePrev(ValkeyModuleKey *key) {
  * See also VM_ValueLength(), which returns the number of fields in a hash.
  * -------------------------------------------------------------------------- */
 
+/* Sets the value of a hash field to a non-owning string reference (stringRef)
+ * pointing to the buffer parameter, which remains owned by the module.
+ *
+ * NOTE: This API is designed for memory efficiency by avoiding memory duplication
+ * between the module and the core engine, which is critical when the buffer size is large.
+ * For example, valkey-search uses this interface to avoid maintaining two copies of the
+ * indexed vectors.
+ *
+ * The function receives the hash key, field name, buffer to share along with its size. */
+int VM_HashSetStringRef(ValkeyModuleKey *key, ValkeyModuleString *field, const char *buf, size_t len) {
+    if (!key || !key->value || key->value->type != OBJ_HASH || !field || !buf) return VALKEYMODULE_ERR;
+    return hashTypeUpdateAsStringRef(key->value, field->ptr, buf, len);
+}
+
+/* Checks if the value of a hash entry is a shared string reference (stringRef).
+ * The function receives the hash key and field name to perform the check against. */
+int VM_HashHasStringRef(ValkeyModuleKey *key, ValkeyModuleString *field) {
+    if (!key || !key->value || key->value->type != OBJ_HASH) return VALKEYMODULE_ERR;
+    return hashTypeHasStringRef(key->value, field->ptr);
+}
 /* Set the field of the specified hash field to the specified value.
  * If the key is an empty key open for writing, it is created with an empty
  * hash value, in order to set the specified field.
@@ -6454,10 +6491,16 @@ ValkeyModuleCallReply *VM_Call(ValkeyModuleCtx *ctx, const char *cmdname, const 
     if (flags & VALKEYMODULE_ARGV_RESP_3) {
         c->resp = 3;
     } else if (flags & VALKEYMODULE_ARGV_RESP_AUTO) {
+        serverAssert(ctx->client != NULL);
         /* Auto mode means to take the same protocol as the ctx client. */
         c->resp = ctx->client->resp;
     }
     if (ctx->module) ctx->module->in_call++;
+
+    if (flags & VALKEYMODULE_ARGV_SCRIPT_MODE && is_running_script) {
+        c->flag.module = 0;
+        c->flag.script = 1;
+    }
 
     user *user = NULL;
     if (flags & VALKEYMODULE_ARGV_RUN_AS_USER) {
@@ -6502,11 +6545,6 @@ ValkeyModuleCallReply *VM_Call(ValkeyModuleCtx *ctx, const char *cmdname, const 
     cmd_flags = getCommandFlags(c);
 
     if (flags & VALKEYMODULE_ARGV_SCRIPT_MODE) {
-        if (is_running_script) {
-            c->flag.module = 0;
-            c->flag.script = 1;
-        }
-
         /* In script mode, commands with CMD_NOSCRIPT flag are normally forbidden.
          * However, we allow them if both conditions are met:
          * 1. We're running in the context of a scripting engine running a script
@@ -6632,7 +6670,7 @@ ValkeyModuleCallReply *VM_Call(ValkeyModuleCtx *ctx, const char *cmdname, const 
          * CLIENT PAUSE WRITE. */
         if (is_running_script && scriptIsReadOnly() && (cmd_flags & (CMD_WRITE | CMD_MAY_REPLICATE))) {
             errno = ENOSPC;
-            reply_error_msg = sdsnew("Write commands are not allowed from read-only scripts");
+            reply_error_msg = sdsnew("Write commands are not allowed from read-only scripts.");
             goto cleanup;
         }
 
@@ -6726,6 +6764,23 @@ ValkeyModuleCallReply *VM_Call(ValkeyModuleCtx *ctx, const char *cmdname, const 
         if (!(flags & VALKEYMODULE_ARGV_NO_REPLICAS)) call_flags |= CMD_CALL_PROPAGATE_REPL;
     }
     call(c, call_flags);
+
+    /* Propagate database changes from the temporary client back to the context client
+     * when running in script mode to make next commands execute in the correct db */
+    if (c && (flags & VALKEYMODULE_ARGV_SCRIPT_MODE) && is_running_script && c->db != ctx->client->db) {
+        ctx->client->db = c->db;
+    }
+
+    /* We reset errno here because on macOS some system calls set errno even when
+     * they succeed. For instance, certain time-related syscalls may set errno
+     * to ETIMEDOUT on successful completion.
+     * Since system calls might be invoked during command execution, we need to
+     * ensure errno doesn't contain stale error values. Any errors from the
+     * command execution are communicated through RESP protocol responses, not
+     * through errno. This reset prevents false error detection in subsequent
+     * operations that check errno. */
+    errno = 0;
+
     server.replication_allowed = prev_replication_allowed;
 
     if (c->flag.blocked) {
@@ -11423,8 +11478,9 @@ static void moduleScanKeyHashtableCallback(void *privdata, void *entry) {
         value = createStringObjectFromLongDouble(node->score, 0);
     } else if (o->type == OBJ_HASH) {
         key = entryGetField(entry);
-        sds val = entryGetValue(entry);
-        value = createStringObject(val, sdslen(val));
+        size_t val_len;
+        char *val = entryGetValue(entry, &val_len);
+        value = createStringObject(val, val_len);
     } else {
         serverPanic("unexpected object type");
     }
@@ -12744,16 +12800,8 @@ int moduleLoad(const char *path, void **module_argv, int module_argc, int is_loa
     return C_OK;
 }
 
-/* Unload the module registered with the specified name. On success
- * C_OK is returned, otherwise C_ERR is returned and errmsg is set
- * with an appropriate message. */
-int moduleUnload(sds name, const char **errmsg) {
-    struct ValkeyModule *module = dictFetchValue(modules, name);
-
-    if (module == NULL) {
-        *errmsg = "no such module with that name";
-        return C_ERR;
-    } else if (listLength(module->types)) {
+static int moduleUnloadInternal(struct ValkeyModule *module, const char **errmsg) {
+    if (listLength(module->types)) {
         *errmsg = "the module exports one or more module-side data "
                   "types, can't unload";
         return C_ERR;
@@ -12778,7 +12826,7 @@ int moduleUnload(sds name, const char **errmsg) {
         onunload = (int (*)(void *))(unsigned long)dlsym(module->handle, onUnloadNames[i]);
         if (onunload) {
             if (i != 0) {
-                serverLog(LL_NOTICE, "Legacy Redis Module %s found", name);
+                serverLog(LL_NOTICE, "Legacy Redis Module %s found", module->name);
             }
             break;
         }
@@ -12791,7 +12839,7 @@ int moduleUnload(sds name, const char **errmsg) {
         moduleFreeContext(&ctx);
 
         if (unload_status == VALKEYMODULE_ERR) {
-            serverLog(LL_WARNING, "Module %s OnUnload failed. Unload canceled.", name);
+            serverLog(LL_WARNING, "Module %s OnUnload failed. Unload canceled.", module->name);
             errno = ECANCELED;
             return C_ERR;
         }
@@ -12818,6 +12866,49 @@ int moduleUnload(sds name, const char **errmsg) {
     /* Recompute command bits for all users once the modules has been completely unloaded. */
     ACLRecomputeCommandBitsFromCommandRulesAllUsers();
     return C_OK;
+}
+
+/* Unload the module registered with the specified name. On success
+ * C_OK is returned, otherwise C_ERR is returned and errmsg is set
+ * with an appropriate message. */
+int moduleUnload(sds name, const char **errmsg) {
+    struct ValkeyModule *module = dictFetchValue(modules, name);
+
+    if (module == NULL) {
+        *errmsg = "no such module with that name";
+        return C_ERR;
+    }
+
+    return moduleUnloadInternal(module, errmsg);
+}
+
+/* Unload all loaded modules from the server.
+ *
+ * This function iterates through all modules registered in the server's
+ * module dictionary and attempts to unload each one by calling
+ * moduleUnloadInternal(). If a module fails to unload (e.g., due to
+ * having active data types, blocked clients, or being used by other modules),
+ * the function logs a warning message but continues attempting to unload
+ * the remaining modules.
+ *
+ * This function is currently only called during server shutdown to ensure
+ * proper cleanup of all module resources. It attempts to unload all modules
+ * on a best-effort basis, and therefore the shutdown process is not interrupted
+ * by module unload failures.
+ */
+void moduleUnloadAllModules(void) {
+    dictIterator *di = dictGetSafeIterator(modules);
+    dictEntry *de;
+
+    while ((de = dictNext(di)) != NULL) {
+        struct ValkeyModule *module = dictGetVal(de);
+
+        const char *errmsg = NULL;
+        if (moduleUnloadInternal(module, &errmsg) == C_ERR) {
+            serverLog(LL_WARNING, "Failed to unload module %s: %s", module->name, errmsg);
+        }
+    }
+    dictReleaseIterator(di);
 }
 
 void modulePipeReadable(aeEventLoop *el, int fd, void *privdata, int mask) {
@@ -14326,6 +14417,8 @@ void moduleRegisterCoreAPI(void) {
     REGISTER_API(ZsetRangeEndReached);
     REGISTER_API(HashSet);
     REGISTER_API(HashGet);
+    REGISTER_API(HashSetStringRef);
+    REGISTER_API(HashHasStringRef);
     REGISTER_API(StreamAdd);
     REGISTER_API(StreamDelete);
     REGISTER_API(StreamIteratorStart);

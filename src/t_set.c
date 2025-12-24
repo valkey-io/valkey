@@ -699,9 +699,35 @@ void smoveCommand(client *c) {
 
 void sismemberCommand(client *c) {
     robj *set;
+    int with_key_check = 0;
 
-    if ((set = lookupKeyReadOrReply(c, c->argv[1], shared.czero)) == NULL || checkType(c, set, OBJ_SET)) return;
+    /* Check if WITHKEYCHECK parameter is provided */
+    if (c->argc == 4 && !strcasecmp(c->argv[3]->ptr, "WITHKEYCHECK")) {
+        with_key_check = 1;
+    } else if (c->argc > 3) {
+        addReplyErrorObject(c, shared.syntaxerr);
+        return;
+    }
 
+    /* Try to lookup the key */
+    set = lookupKeyRead(c->db, c->argv[1]);
+
+    /* If key doesn't exist and WITHKEYCHECK is specified, return -1 */
+    if (set == NULL && with_key_check) {
+        addReplyLongLong(c, -1);
+        return;
+    }
+
+    /* If key doesn't exist and WITHKEYCHECK is not specified, return 0 */
+    if (set == NULL) {
+        addReply(c, shared.czero);
+        return;
+    }
+
+    /* Check if the key is of the correct type */
+    if (checkType(c, set, OBJ_SET)) return;
+
+    /* Check if the member exists in the set */
     if (setTypeIsMember(set, c->argv[2]->ptr))
         addReply(c, shared.cone);
     else

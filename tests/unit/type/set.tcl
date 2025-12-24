@@ -55,6 +55,27 @@ start_server {
         r memory usage myset
     }
 
+    test {SISMEMBER with WITHKEYCHECK parameter} {
+        r del myset
+        r sadd myset foo bar baz
+
+        assert_equal 1 [r sismember myset foo]
+        assert_equal 1 [r sismember myset foo WITHKEYCHECK]
+        assert_equal 0 [r sismember myset nonexist]
+        assert_equal 0 [r sismember myset nonexist WITHKEYCHECK]
+
+        r del nonexistkey
+        assert_equal 0 [r sismember nonexistkey foo]
+        assert_equal -1 [r sismember nonexistkey foo WITHKEYCHECK]
+        
+        r set wrongtype "not a set"
+        assert_error WRONGTYPE* {r sismember wrongtype foo}
+        assert_error WRONGTYPE* {r sismember wrongtype foo WITHKEYCHECK}
+        
+        assert_error "ERR*syntax error*" {r sismember myset foo invalidparam}
+        assert_error "ERR*syntax error*" {r sismember myset foo WITHKEYCHECK invalidparam}
+    }
+
     test {SMISMEMBER SMEMBERS SCARD against non set} {
         r lpush mylist foo
         assert_error WRONGTYPE* {r smismember mylist bar}

@@ -1651,7 +1651,6 @@ void genericHgetallCommand(client *c, int flags) {
     if (replylen) {
         if (flags & OBJ_HASH_FIELD && flags & OBJ_HASH_VALUE) {
             setDeferredMapLen(c, replylen, count /= 2);
-            count /= 2;
         } else {
             setDeferredArrayLen(c, replylen, count);
         }

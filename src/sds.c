@@ -1113,6 +1113,88 @@ static int sdsparsearg(const char *arg, unsigned int *len, char *dst) {
     return p - arg;
 }
 
+static int sdsnparsearg(const char *arg, const char *end, unsigned int *len, char *dst) {
+    const char *p = arg;
+    int inq = 0;  /* set to 1 if we are in "quotes" */
+    int insq = 0; /* set to 1 if we are in 'single quotes' */
+    int done = 0;
+
+    if (end == NULL || p >= end) {
+        return 0;
+    }
+
+    while (!done) {
+        int new_char = -1;
+        if (inq) {
+            if (!*p) {
+                /* unterminated quotes */
+                return 0;
+            } else if (p + 3 < end && (*p == '\\' && *(p + 1) == 'x' && is_hex_digit(*(p + 2)) && is_hex_digit(*(p + 3)))) {
+                new_char = (hex_digit_to_int(*(p + 2)) * 16) + hex_digit_to_int(*(p + 3));
+                p += 4;
+            } else if (p + 1 < end && (*p == '\\' && *(p + 1))) {
+                switch (*(p + 1)) {
+                case 'n': new_char = '\n'; break;
+                case 'r': new_char = '\r'; break;
+                case 't': new_char = '\t'; break;
+                case 'b': new_char = '\b'; break;
+                case 'a': new_char = '\a'; break;
+                default: new_char = (*(p + 1)); break;
+                }
+                p += 2;
+            } else if (*p == '"') {
+                inq = 0;
+                p++;
+            } else {
+                new_char = *p;
+                p++;
+            }
+        } else if (insq) {
+            if (!*p) {
+                /* unterminated quotes */
+                return 0;
+            } else if (p + 1 < end && (*p == '\\' && *(p + 1) == '\'')) {
+                new_char = '\'';
+                p += 2;
+            } else if (*p == '\'') {
+                insq = 0;
+                p++;
+            } else {
+                new_char = *p;
+                p++;
+            }
+        } else {
+            switch (*p) {
+            case ' ':
+            case '\n':
+            case '\r':
+            case '\t':
+            case '\0': done = 1; break;
+            case '"': inq = 1; break;
+            case '\'': insq = 1; break;
+            default: new_char = *p; break;
+            }
+            p++;
+        }
+        if (new_char != -1) {
+            if (len) (*len)++;
+            if (dst) {
+                *dst = (char)new_char;
+                dst++;
+            }
+        }
+        if (p >= end) {
+            if (inq || insq) {
+                /* unterminated quotes */
+                return 0;
+            } else {
+                done = 1;
+            }
+        }
+    }
+    return p - arg;
+}
+
 /* Split a line into arguments, where every argument can be in the
  * following programming-language REPL-alike form:
  *
@@ -1151,6 +1233,47 @@ sds *sdssplitargs(const char *line, int *argc) {
             int parsedlen = sdsparsearg(p, NULL, current);
             assert(parsedlen > 0);
             p += parsedlen;
+
+            /* add the token to the vector */
+            if ((size_t)*argc == cap) {
+                cap = cap == 0 ? 8 : (cap * 2);
+                vector = s_realloc(vector, sizeof(sds) * cap);
+            }
+            vector[(*argc)++] = current;
+            current = NULL;
+        } else {
+            while ((*argc)--) sdsfree(vector[*argc]);
+            s_free(vector);
+            *argc = 0;
+            return NULL;
+        }
+    }
+    /* Even on empty input string return something not NULL. */
+    if (vector == NULL) vector = s_malloc(sizeof(void *));
+    return vector;
+}
+
+/* Split a line into arguments, like sdssplitargs(), but with an explicit length parameter.
+ * The number of arguments is stored into *argc, and an array of sds is returned.
+ * The caller should free the resulting array with sdsfreesplitres().
+ */
+sds *sdsnsplitargs(const char *line, size_t len, int *argc) {
+    const char *p = line;
+    const char *end = line + len;
+    size_t cap = 0;
+    sds *vector = NULL;
+
+    *argc = 0;
+    while (p < end) {
+        /* skip blanks */
+        while (p < end && isspace(*p)) p++;
+        if (p >= end) break;
+        unsigned int token_len = 0;
+        if (sdsnparsearg(p, end, &token_len, NULL)) {
+            sds current = sdsnewlen(SDS_NOINIT, token_len);
+            int parsed_len = sdsnparsearg(p, end, NULL, current);
+            assert(parsed_len > 0);
+            p += parsed_len;
 
             /* add the token to the vector */
             if ((size_t)*argc == cap) {

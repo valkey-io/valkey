@@ -935,10 +935,8 @@ int functionExtractLibMetaData(sds payload, functionsLibMetaData *md, sds *err) 
         return C_ERR;
     }
     size_t shebang_len = shebang_end - payload;
-    sds shebang = sdsnewlen(payload, shebang_len);
     int numparts;
-    sds *parts = sdssplitargs(shebang, &numparts);
-    sdsfree(shebang);
+    sds *parts = sdsnsplitargs(payload, shebang_len, &numparts);
     if (!parts || numparts == 0) {
         *err = sdsnew("Invalid library metadata");
         sdsfreesplitres(parts, numparts);

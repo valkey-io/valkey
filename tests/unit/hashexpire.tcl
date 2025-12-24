@@ -887,6 +887,21 @@ start_server {tags {"hashexpire"}} {
         assert_equal -2 [r HTTL myhash FIELDS 1 f2]
     }
 
+    # HEXPIRE on a non-existent field
+    test {HEXPIRE on a non-existent field (should not issue notifications)} {
+        r FLUSHALL
+        r HSET myhash f1 v1
+        set rd [setup_single_keyspace_notification r]
+        
+        r HEXPIRE myhash 1000 FIELDS 1 f2
+        r HEXPIRE myhash 0 FIELDS 1 f2
+        # Verify no notification (getting hset and not hexpire)
+        r HSET dummy dummy dummy
+        assert_keyevent_patterns $rd dummy hset
+        assert_equal 0 [get_keys_with_volatile_items r]
+        $rd close
+    }
+
     # Error Cases
     test {HEXPIRE - conflicting conditions error} {
         r FLUSHALL

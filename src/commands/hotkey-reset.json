@@ -1,0 +1,21 @@
+{
+    "RESET": {
+        "summary": "Reset all hot key statistics and history",
+        "complexity": "O(N) where N is the number of keys to remove from history and statistics",
+        "group": "server",
+        "since": "9.0.0",
+        "arity": 2,
+        "function": "hotkeysResetCommand",
+        "command_flags": [
+            "ADMIN",
+            "LOADING",
+            "STALE"
+        ],
+        "acl_categories": [
+            "ADMIN",
+            "DANGEROUS",
+            "SLOW"
+        ],
+        "container": "HOTKEYS"
+    }
+}

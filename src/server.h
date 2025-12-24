@@ -1429,7 +1429,7 @@ struct sharedObjectsStruct {
         *xgroup, *xclaim, *script, *replconf, *eval, *cluster, *syncslots, *persist, *set, *pexpireat, *pexpire, *time, *pxat, *absttl,
         *retrycount, *force, *justid, *entriesread, *lastid, *ping, *setid, *keepttl, *load, *createconsumer, *getack,
         *special_asterisk, *special_equals, *default_username, *redacted, *ssubscribebulk, *sunsubscribebulk, *fields,
-        *finish, *state, *success, *failed, *name, *message,
+        *finish, *state, *success, *failed, *name, *message, *hotkey_notify_channel,
         *smessagebulk, *select[PROTO_SHARED_SELECT_CMDS], *integers[OBJ_SHARED_INTEGERS],
         *mbulkhdr[OBJ_SHARED_BULKHDR_LEN], /* "*<value>\r\n" */
         *bulkhdr[OBJ_SHARED_BULKHDR_LEN],  /* "$<value>\r\n" */
@@ -1653,6 +1653,69 @@ typedef struct {
     int dirty;                    /* 1 Indicates that the aofManifest in the memory is inconsistent with
                                      disk, we need to persist it immediately. */
 } aofManifest;
+
+/*-----------------------------------------------------------------------------
+ * Hotkey definition
+ *----------------------------------------------------------------------------*/
+
+/* Count-Min Sketch structure definition */
+typedef struct {
+    uint32_t width;      /* Number of buckets per hash function (must be power of 2) */
+    uint32_t depth;      /* Number of hash functions */
+    uint32_t *array;     /* Count matrix */
+    uint32_t counter;    /* Counter */
+    uint32_t width_mask; /* width - 1, used for bitwise optimization of modulo operation */
+} hotkeyCMS;
+
+/* Statistics information for a single hotkey */
+typedef struct {
+    uint64_t current_count; /* CMS hotkey count value in current time window, not actual QPS */
+    int val_type;           /* Value type (corresponding to Redis OBJ_TYPE_*) */
+} hotkeyStatEntry;
+
+/* Hotkey history record entry (hash table value) */
+typedef struct {
+    uint64_t peak_qps;     /* Peak QPS */
+    time_t first_detected; /* First detection time */
+    time_t last_detected;  /* Last detection time */
+    int is_read;           /* 1: read hotkey, 0: write hotkey */
+    uint32_t duration;     /* Duration in seconds */
+    int val_type;          /* Value type (string, hash, etc.) */
+} hotkeyHistoryEntry;
+
+/* LRU linked list node */
+typedef struct hotkeyLRUNode {
+    struct hotkeyLRUNode *prev;
+    struct hotkeyLRUNode *next;
+    sds key;                   /* Hotkey name */
+    hotkeyHistoryEntry *entry; /* Hotkey history record */
+} hotkeyLRUNode;
+
+/* LRU linked list manager */
+typedef struct {
+    hotkeyLRUNode *head; /* List head (newest) */
+    hotkeyLRUNode *tail; /* List tail (oldest) */
+    size_t size;         /* Current node count */
+} hotkeyLRU;
+
+/* Hotkey manager: cms statistics, hotkeys collection, history storage */
+typedef struct {
+    /* Read operation hotkey related */
+    hotkeyCMS *read_hotkeys_cms; /* Read operation CMS counter */
+    dict *read_hotkeys;          /* Read hotkey hash table */
+
+    /* Write operation hotkey related */
+    hotkeyCMS *write_hotkeys_cms; /* Write operation CMS counter */
+    dict *write_hotkeys;          /* Write hotkey hash table */
+
+    /* Hotkey history records - LRU management */
+    dict *history_dict;     /* History hash table: key -> hotkeyLRUNode */
+    hotkeyLRU *history_lru; /* LRU linked list manager */
+
+    /* Common configuration */
+    uint32_t read_hotkey_cms_threshold;  /* Read hotkey count threshold in CMS */
+    uint32_t write_hotkey_cms_threshold; /* Write hotkey count threshold in CMS */
+} hotkeyManager;
 
 /*-----------------------------------------------------------------------------
  * Global server state
@@ -2311,6 +2374,23 @@ struct valkeyServer {
     /* Local environment */
     char *locale_collate;
     char *debug_context; /* A free-form string that has no impact on server except being included in a crash report. */
+
+    /* Hotkey parameters */
+    int hotkey_enabled;                              /* Globally control the enabling / disabling of the hot key detection function. */
+    int hotkey_sampling_ratio;                       /* The ratio of hotkey sampling. */
+    int hotkey_read_threshold;                       /* Read request QPS exceeding this value is deemed a read hot key. */
+    int hotkey_write_threshold;                      /* Write request QPS exceeding this value is deemed a write hot key. */
+    int hotkey_window_seconds;                       /* The time window size of hotkey detection. */
+    int hotkey_cms_bucket_size;                      /* The size of the CMS bucket. */
+    int hotkey_cms_depth;                            /* The depth of the CMS (number of hash functions). */
+    int hotkey_history_max_count;                    /* The maximum number of historical cached hot keys. */
+    int hotkey_history_ttl;                          /* The time to live of the cached hot keys. */
+    unsigned long long hotkey_runtime_total_sampled; /* Total number of sampled keys */
+    unsigned long long hotkey_runtime_read_count;    /* Total number of read hot keys detected. */
+    unsigned long long hotkey_runtime_write_count;   /* Total number of write hot keys detected. */
+    unsigned int hotkey_runtime_history_count;       /* Total number of history hot keys cached. */
+
+    hotkeyManager *hotkey_manager;
 };
 
 #define MAX_KEYS_BUFFER 256
@@ -2737,6 +2817,8 @@ extern hashtableType hashWithVolatileItemsHashtableType;
 extern dictType stringSetDictType;
 extern dictType externalStringType;
 extern dictType sdsHashDictType;
+extern dictType hotKeyDictType;
+extern dictType hotkeyHistoryDictType;
 extern hashtableType clientHashtableType;
 extern dictType objToDictDictType;
 extern hashtableType kvstoreChannelHashtableType;
@@ -4089,6 +4171,27 @@ void lcsCommand(client *c);
 void quitCommand(client *c);
 void resetCommand(client *c);
 void failoverCommand(client *c);
+void hotkeysCommand(client *c);
+void hotkeysGetCommand(client *c);
+void hotkeysResetCommand(client *c);
+
+/* Hotkey */
+int hotKeyEnabledCallback(const char **err);
+int hotKeyCMSBucketSizeCallback(const char **err);
+int hotKeyCMSDepthCallback(const char **err);
+int hotKeyCMSThresholdCallback(const char **err);
+uint32_t murmurHash2(const void *key, int len, uint32_t seed);
+hotkeyCMS *newHotkeyCMS(size_t width, size_t depth);
+void freeHotkeyCMS(hotkeyCMS *hotkey_cms);
+size_t hotkeyCMSUpdate(hotkeyCMS *hotkey_cms, robj *key);
+void hotkeyCMSReset(hotkeyCMS *hotkey_cms);
+hotkeyManager *hotkeyManagerInit(size_t cms_width, size_t cms_depth);
+void hotkeyManagerFree(hotkeyManager *manager);
+void hotkeyManagerReset(hotkeyManager *manager);
+void addHotkeyToHistory(hotkeyManager *manager);
+void expireHotkeyHistory(hotkeyManager *manager);
+void writeHotKeyDetection(robj *key, int val_type);
+void readHotKeyDetection(robj *key, int val_type);
 
 /* Helper functions for getting database id args from argv, argc */
 int *selectDbIdArgs(robj **argv, int argc, int *count);

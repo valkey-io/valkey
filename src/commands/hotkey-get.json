@@ -1,0 +1,46 @@
+{
+    "GET": {
+        "summary": "Get hot keys from history",
+        "complexity": "O(N) where N is the number of hot keys in the history",
+        "group": "server",
+        "since": "9.0.0",
+        "arity": -2,
+        "function": "hotkeysGetCommand",
+        "command_flags": [
+            "ADMIN",
+            "LOADING",
+            "STALE"
+        ],
+        "acl_categories": [
+            "ADMIN",
+            "DANGEROUS",
+            "SLOW"
+        ],
+        "container": "HOTKEYS",
+        "arguments": [
+            {
+                "name": "type",
+                "type": "oneof",
+                "token": "TYPE",
+                "optional": true,
+                "arguments": [
+                    {
+                        "name": "read",
+                        "type": "pure-token",
+                        "token": "read"
+                    },
+                    {
+                        "name": "write",
+                        "type": "pure-token", 
+                        "token": "write"
+                    },
+                    {
+                        "name": "all",
+                        "type": "pure-token",
+                        "token": "all"
+                    }
+                ]
+            }
+        ]
+    }
+}

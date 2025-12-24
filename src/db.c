@@ -121,6 +121,17 @@ robj *lookupKey(serverDb *db, robj *key, int flags) {
         /* TODO: Use separate misses stats and notify event for WRITE */
     }
 
+    /* If the hot key detection function is enabled and the hot key sampling rate is reached,
+     * hot key statistics will be performed. */
+    if (server.hotkey_enabled && (rand() % 100) < server.hotkey_sampling_ratio) {
+        int obj_type = val ? val->type : OBJ_STRING;
+        if (flags & LOOKUP_WRITE) {
+            writeHotKeyDetection(key, obj_type);
+        } else {
+            readHotKeyDetection(key, obj_type);
+        }
+    }
+
     return val;
 }
 

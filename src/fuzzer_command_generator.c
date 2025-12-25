@@ -3,6 +3,13 @@
  * All rights reserved.
  * SPDX-License-Identifier: BSD-3-Clause
  */
+#include "fmacros.h"
+#include <valkey/valkey.h>
+#include "commands.h"
+#include "fuzzer_command_generator.h"
+#include "sds.h"
+#include "dict.h"
+#include "server.h"
 
 #include <assert.h>
 #include <string.h>
@@ -13,13 +20,6 @@
 #include <unistd.h>
 #include <sys/time.h>
 #include <pthread.h>
-
-#include <valkey/valkey.h>
-#include "commands.h"
-#include "fuzzer_command_generator.h"
-#include "sds.h"
-#include "dict.h"
-#include "server.h"
 
 #define MAX_DEFAULT_NUMKEYS 5
 #define MAX_NUM_PER_LUA 5 /* Maximum number of commands per Lua script */

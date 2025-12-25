@@ -95,6 +95,13 @@
                 "optional": true
             },
             {
+                "name": "withstatus",
+                "token": "WITHSTATUS",
+                "type": "pure-token",
+                "optional": true,
+                "since": "9.0.2"
+            },
+            {
                 "token": "LIMIT",
                 "name": "limit",
                 "type": "block",

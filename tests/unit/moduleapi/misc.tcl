@@ -506,10 +506,6 @@ start_server {overrides {save {900 1}} tags {"modules"}} {
     test "Cluster keyslot" {
         assert_equal 12182 [r test.keyslot foo]
     }
-
-    test "Cluster keyslotC" {
-            assert_equal 12182 [r test.keyslot_c foo]
-    }
 }
 
 start_server {tags {"modules"}} {

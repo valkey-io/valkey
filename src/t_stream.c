@@ -715,6 +715,7 @@ int64_t streamTrim(stream *s, streamAddTrimArgs *args) {
     int trim_strategy = args->trim_strategy;
 
     if (trim_strategy == TRIM_STRATEGY_NONE) return 0;
+    if (trim_strategy == TRIM_STRATEGY_MAXLEN && s->length <= maxlen) return 0;
 
     raxIterator ri;
     raxStart(&ri, s->rax);

@@ -1801,7 +1801,6 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
         do {
             /* Try to process all the pending IO events. */
             last_processed = processIOThreadsReadDone() + processIOThreadsWriteDone();
-            if (last_processed > 0) server.el_iteration_active = true;
             processed += last_processed;
         } while (last_processed != 0);
         processed += freeClientsInAsyncFreeQueue();
@@ -1814,7 +1813,8 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
     if (io_responses > 0) server.el_iteration_active = true;
 
     /* Handle pending data(typical TLS). (must be done before flushAppendOnlyFile) */
-    connTypeProcessPendingData();
+    int conn_pending = connTypeProcessPendingData();
+    if (conn_pending > 0) server.el_iteration_active = true;
 
     /* If any connection type(typical TLS) still has pending unread data don't sleep at all. */
     int dont_sleep = connTypeHasPendingData();
@@ -1837,7 +1837,11 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
 
     /* Run a fast expire cycle (the called function will return
      * ASAP if a fast cycle is not needed). */
-    if (server.active_expire_enabled && !server.import_mode && iAmPrimary()) activeExpireCycle(ACTIVE_EXPIRE_CYCLE_FAST);
+    if (server.active_expire_enabled && !server.import_mode && iAmPrimary()) {
+        long long expire_cycle_time = activeExpireCycle(ACTIVE_EXPIRE_CYCLE_FAST);
+        /* Count expiration time as active CPU time for all event loops. */
+        server.stat_active_time += expire_cycle_time;
+    }
 
     if (moduleCount()) {
         moduleFireServerEvent(VALKEYMODULE_EVENT_EVENTLOOP, VALKEYMODULE_SUBEVENT_EVENTLOOP_BEFORE_SLEEP, NULL);

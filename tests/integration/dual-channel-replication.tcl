@@ -1397,46 +1397,44 @@ test "Chained replicas does not assert when using dual channel replication" {
 
             $replica config set dual-channel-replication-enabled yes
 
-            test "Psync established after rdb load - within grace period" {
-                # Test Sequence:
-                # 1. Replica initiates synchronization via RDB channel.
-                # 2. Primary's main process is suspended.
-                # 3. Replica completes RDB loading and pauses before establishing PSYNC connection.
-                # 4. Primary resumes operation and detects closed RDB channel.
-                # 5. Replica resumes operation.
-                # Expected outcome: Primary maintains RDB channel until replica establishes PSYNC connection.
-                $replica replicaof $primary_host $primary_port
-                wait_for_log_messages 0 {"*Done loading RDB*"} $loglines 100 100
-                pause_process $replica_pid
-                wait_and_resume_process -1
-                wait_for_condition 50 100 {
-                    [string match {*replicas_waiting_psync:1*} [$primary info replication]]
+            # Test Sequence:
+            # 1. Replica initiates synchronization via RDB channel.
+            # 2. Primary's main process is suspended.
+            # 3. Replica completes RDB loading and pauses before establishing PSYNC connection.
+            # 4. Primary resumes operation and detects closed RDB channel.
+            # 5. Replica resumes operation.
+            # Expected outcome: Primary maintains RDB channel until replica establishes PSYNC connection.
+            $replica replicaof $primary_host $primary_port
+            wait_for_log_messages 0 {"*Done loading RDB*"} $loglines 100 100
+            pause_process $replica_pid
+            wait_and_resume_process -1
+            wait_for_condition 50 100 {
+                [string match {*replicas_waiting_psync:1*} [$primary info replication]]
+            } else {
+                fail "Primary freed RDB client before psync was established"
+            }
+
+            # Test Sequence:
+            # 1. replica -> primary
+            # 2. replica -> primary -> new_primary
+            # Make sure that the primary does not assert.
+            start_server {} {
+                set new_primary [srv 0 client]
+                set new_primary_host [srv 0 host]
+                set new_primary_port [srv 0 port]
+
+                $primary replicaof $new_primary_host $new_primary_port
+                resume_process $primary_pid
+                $primary debug pause-after-fork 0
+
+                resume_process $replica_pid
+
+                $new_primary set foo bar
+                wait_for_condition 1000 50 {
+                    [$primary get foo] eq "bar" &&
+                    [$replica get foo] eq "bar"
                 } else {
-                    fail "Primary freed RDB client before psync was established"
-                }
-
-                # Test Sequence:
-                # 1. replica -> primary
-                # 2. replica -> primary -> new_primary
-                # Make sure that the primary does not assert.
-                start_server {} {
-                    set new_primary [srv 0 client]
-                    set new_primary_host [srv 0 host]
-                    set new_primary_port [srv 0 port]
-
-                    $primary replicaof $new_primary_host $new_primary_port
-                    resume_process $primary_pid
-                    $primary debug pause-after-fork 0
-
-                    resume_process $replica_pid
-
-                    $new_primary set foo bar
-                    wait_for_condition 1000 50 {
-                        [$primary get foo] eq "bar" &&
-                        [$replica get foo] eq "bar"
-                    } else {
-                        fail "Chained replicas did not sync"
-                    }
+                    fail "Chained replicas did not sync"
                 }
             }
         }

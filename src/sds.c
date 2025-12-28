@@ -1039,87 +1039,26 @@ int hex_digit_to_int(char c) {
     }
 }
 
+static inline int is_ptr_exceeds_end(const char *ptr, size_t len, const char *end) {
+    if (end == NULL)  {
+        return -1;
+    }
+    return (ptr + len) < end ? 0 : 1;
+}
+
 /* Helper function for sdssplitargs that parses a single argument. It
  * populates the number characters needed to store the parsed argument
  * in len, if provided, or will copy the parsed string into dst, if provided.
  * If the string is able to be parsed, this function returns the number of
  * characters that were parsed. If the argument can't be parsed, it
  * returns 0. */
-static int sdsparsearg(const char *arg, unsigned int *len, char *dst) {
+static int sdsparsearg(const char *arg, const char *end, unsigned int *len, char *dst) {
     const char *p = arg;
     int inq = 0;  /* set to 1 if we are in "quotes" */
     int insq = 0; /* set to 1 if we are in 'single quotes' */
     int done = 0;
 
-    while (!done) {
-        int new_char = -1;
-        if (inq) {
-            if (*p == '\\' && *(p + 1) == 'x' && is_hex_digit(*(p + 2)) && is_hex_digit(*(p + 3))) {
-                new_char = (hex_digit_to_int(*(p + 2)) * 16) + hex_digit_to_int(*(p + 3));
-                p += 3;
-            } else if (*p == '\\' && *(p + 1)) {
-                p++;
-                switch (*p) {
-                case 'n': new_char = '\n'; break;
-                case 'r': new_char = '\r'; break;
-                case 't': new_char = '\t'; break;
-                case 'b': new_char = '\b'; break;
-                case 'a': new_char = '\a'; break;
-                default: new_char = *p; break;
-                }
-            } else if (*p == '"') {
-                inq = 0;
-            } else if (!*p) {
-                /* unterminated quotes */
-                return 0;
-            } else {
-                new_char = *p;
-            }
-        } else if (insq) {
-            if (*p == '\\' && *(p + 1) == '\'') {
-                p++;
-                new_char = *p;
-            } else if (*p == '\'') {
-                insq = 0;
-            } else if (!*p) {
-                /* unterminated quotes */
-                return 0;
-            } else {
-                new_char = *p;
-            }
-        } else {
-            switch (*p) {
-            case ' ':
-            case '\n':
-            case '\r':
-            case '\t':
-            case '\0': done = 1; break;
-            case '"': inq = 1; break;
-            case '\'': insq = 1; break;
-            default: new_char = *p; break;
-            }
-        }
-        if (new_char != -1) {
-            if (len) (*len)++;
-            if (dst) {
-                *dst = (char)new_char;
-                dst++;
-            }
-        }
-        if (*p) {
-            p++;
-        }
-    }
-    return p - arg;
-}
-
-static int sdsnparsearg(const char *arg, const char *end, unsigned int *len, char *dst) {
-    const char *p = arg;
-    int inq = 0;  /* set to 1 if we are in "quotes" */
-    int insq = 0; /* set to 1 if we are in 'single quotes' */
-    int done = 0;
-
-    if (end == NULL || p >= end) {
+    if (is_ptr_exceeds_end(p, 0, end) > 0) {
         return 0;
     }
 
@@ -1129,10 +1068,10 @@ static int sdsnparsearg(const char *arg, const char *end, unsigned int *len, cha
             if (!*p) {
                 /* unterminated quotes */
                 return 0;
-            } else if (p + 3 < end && (*p == '\\' && *(p + 1) == 'x' && is_hex_digit(*(p + 2)) && is_hex_digit(*(p + 3)))) {
+            } else if ((is_ptr_exceeds_end(p, 4, end) <= 0) && (*p == '\\' && *(p + 1) == 'x' && is_hex_digit(*(p + 2)) && is_hex_digit(*(p + 3)))) {
                 new_char = (hex_digit_to_int(*(p + 2)) * 16) + hex_digit_to_int(*(p + 3));
                 p += 4;
-            } else if (p + 1 < end && (*p == '\\' && *(p + 1))) {
+            } else if ((is_ptr_exceeds_end(p, 2, end) <= 0) && (*p == '\\' && *(p + 1))) {
                 switch (*(p + 1)) {
                 case 'n': new_char = '\n'; break;
                 case 'r': new_char = '\r'; break;
@@ -1153,7 +1092,7 @@ static int sdsnparsearg(const char *arg, const char *end, unsigned int *len, cha
             if (!*p) {
                 /* unterminated quotes */
                 return 0;
-            } else if (p + 1 < end && (*p == '\\' && *(p + 1) == '\'')) {
+            } else if ((is_ptr_exceeds_end(p, 2, end) <= 0) && (*p == '\\' && *(p + 1) == '\'')) {
                 new_char = '\'';
                 p += 2;
             } else if (*p == '\'') {
@@ -1174,7 +1113,9 @@ static int sdsnparsearg(const char *arg, const char *end, unsigned int *len, cha
             case '\'': insq = 1; break;
             default: new_char = *p; break;
             }
-            p++;
+            if (*p != '\0') {
+                p++;
+            }
         }
         if (new_char != -1) {
             if (len) (*len)++;
@@ -1183,7 +1124,7 @@ static int sdsnparsearg(const char *arg, const char *end, unsigned int *len, cha
                 dst++;
             }
         }
-        if (p >= end) {
+        if (is_ptr_exceeds_end(p, 0, end) > 0) {
             if (inq || insq) {
                 /* unterminated quotes */
                 return 0;
@@ -1218,60 +1159,29 @@ static int sdsnparsearg(const char *arg, const char *end, unsigned int *len, cha
  * extra space.
  */
 sds *sdssplitargs(const char *line, int *argc) {
-    const char *p = line;
-    size_t cap = 0;
-    sds *vector = NULL;
-
-    *argc = 0;
-    while (*p) {
-        /* skip blanks */
-        while (*p && isspace(*p)) p++;
-        if (!(*p)) break;
-        unsigned int len = 0;
-        if (sdsparsearg(p, &len, NULL)) {
-            sds current = sdsnewlen(SDS_NOINIT, len);
-            int parsedlen = sdsparsearg(p, NULL, current);
-            assert(parsedlen > 0);
-            p += parsedlen;
-
-            /* add the token to the vector */
-            if ((size_t)*argc == cap) {
-                cap = cap == 0 ? 8 : (cap * 2);
-                vector = s_realloc(vector, sizeof(sds) * cap);
-            }
-            vector[(*argc)++] = current;
-            current = NULL;
-        } else {
-            while ((*argc)--) sdsfree(vector[*argc]);
-            s_free(vector);
-            *argc = 0;
-            return NULL;
-        }
-    }
-    /* Even on empty input string return something not NULL. */
-    if (vector == NULL) vector = s_malloc(sizeof(void *));
-    return vector;
+    return sdsnsplitargs(line, -1, argc);
 }
 
 /* Split a line into arguments, like sdssplitargs(), but with an explicit length parameter.
  * The number of arguments is stored into *argc, and an array of sds is returned.
  * The caller should free the resulting array with sdsfreesplitres().
  */
-sds *sdsnsplitargs(const char *line, size_t len, int *argc) {
+sds *sdsnsplitargs(const char *line, int len, int *argc) {
     const char *p = line;
-    const char *end = line + len;
+    const char *end = len < 0 ? NULL : line + len;
     size_t cap = 0;
     sds *vector = NULL;
 
     *argc = 0;
-    while (p < end) {
+    while (*p && is_ptr_exceeds_end(p, 0, end) <= 0) {
         /* skip blanks */
-        while (p < end && isspace(*p)) p++;
-        if (p >= end) break;
+        while (*p && is_ptr_exceeds_end(p, 0, end) <= 0 && isspace(*p)) p++;
+        if (!(*p && is_ptr_exceeds_end(p, 0, end) <= 0)) break;
+
         unsigned int token_len = 0;
-        if (sdsnparsearg(p, end, &token_len, NULL)) {
+        if (sdsparsearg(p, end, &token_len, NULL)) {
             sds current = sdsnewlen(SDS_NOINIT, token_len);
-            int parsed_len = sdsnparsearg(p, end, NULL, current);
+            int parsed_len = sdsparsearg(p, end, NULL, current);
             assert(parsed_len > 0);
             p += parsed_len;
 

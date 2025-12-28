@@ -3291,7 +3291,7 @@ void unprotectClient(client *c) {
 void parseInlineBuffer(client *c) {
     char *newline;
     int argc, j, linefeed_chars = 1;
-    sds *argv, aux;
+    sds *argv;
     size_t querylen;
     int is_replicated = c->read_flags & READ_FLAGS_REPLICATED;
 
@@ -3311,9 +3311,7 @@ void parseInlineBuffer(client *c) {
 
     /* Split the input buffer up to the \r\n */
     querylen = newline - (c->querybuf + c->qb_pos);
-    aux = sdsnewlen(c->querybuf + c->qb_pos, querylen);
-    argv = sdssplitargs(aux, &argc);
-    sdsfree(aux);
+    argv = sdsnsplitargs(c->querybuf + c->qb_pos, querylen, &argc);
     if (argv == NULL) {
         c->read_flags |= READ_FLAGS_ERROR_UNBALANCED_QUOTES;
         return;

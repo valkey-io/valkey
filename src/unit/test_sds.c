@@ -466,9 +466,8 @@ int test_sdsnsplitargs(int argc, char **argv, int flags) {
 
     char str_with_null[] = "test\0null";
     sargv = sdsnsplitargs(str_with_null, sizeof(str_with_null) - 1, &len);
-    TEST_ASSERT(2 == len);
+    TEST_ASSERT(1 == len);
     TEST_ASSERT(!memcmp("test", sargv[0], 4));
-    TEST_ASSERT(!memcmp("null", sargv[1], 4));
     sdsfreesplitres(sargv, len);
 
     // Test single unquoted string
@@ -579,10 +578,8 @@ int test_sdsnsplitargs(int argc, char **argv, int flags) {
     // Test string containing null character in the middle of parsing
     char str_with_null_in_middle[] = "arg1\0arg2 arg3";
     sargv = sdsnsplitargs(str_with_null_in_middle, sizeof(str_with_null_in_middle) - 1, &len);
-    TEST_ASSERT(3 == len);
+    TEST_ASSERT(1 == len);
     TEST_ASSERT(!memcmp("arg1", sargv[0], 4));
-    TEST_ASSERT(!memcmp("arg2", sargv[1], 4));
-    TEST_ASSERT(!memcmp("arg3", sargv[2], 4));
     sdsfreesplitres(sargv, len);
 
     // Test very long single argument
@@ -636,19 +633,19 @@ int test_sdsnsplitargsBenchmark(int argc, char **argv, int flags) {
     size_t str_len = sizeof(str_with_null_in_middle) - 1;
     int len = 0;
     long long start = _ustime();
-    for (int i = 0; i < 500000; i++) {
+    for (int i = 0; i < 1000000; i++) {
         sds *sargv = sdsnsplitargs(str_with_null_in_middle, str_len, &len);
         sdsfreesplitres(sargv, len);
     }
-    printf("sdsnsplitargs 500000 times: %f\n", (double)(_ustime() - start) / 1000000);
+    printf("sdsnsplitargs 1000000 times: %f\n", (double)(_ustime() - start) / 1000000);
 
     start = _ustime();
-    for (int i = 0; i < 500000; i++) {
+    for (int i = 0; i < 1000000; i++) {
         sds str = sdsnewlen(str_with_null_in_middle, str_len);
         sds *sargv = sdssplitargs(str, &len);
         sdsfreesplitres(sargv, len);
         sdsfree(str);
     }
-    printf("sdsnsplitargs 500000 times: %f\n", (double)(_ustime() - start) / 1000000);
+    printf("sdssplitargs 1000000 times: %f\n", (double)(_ustime() - start) / 1000000);
     return 0;
 }

@@ -1039,8 +1039,7 @@ static aclSelector *aclCreateSelectorFromOpSet(const char *opset, size_t opsetle
     aclSelector *s = ACLCreateSelector(0);
 
     int argc = 0;
-    sds trimmed = sdsnewlen(opset + 1, opsetlen - 2);
-    sds *argv = sdssplitargs(trimmed, &argc);
+    sds *argv = sdsnsplitargs(opset + 1, opsetlen - 2, &argc);
     for (int i = 0; i < argc; i++) {
         if (ACLSetSelector(s, argv[i], sdslen(argv[i])) == C_ERR) {
             ACLFreeSelector(s);
@@ -1050,7 +1049,6 @@ static aclSelector *aclCreateSelectorFromOpSet(const char *opset, size_t opsetle
     }
 
     sdsfreesplitres(argv, argc);
-    sdsfree(trimmed);
     return s;
 }
 

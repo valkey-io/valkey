@@ -13,8 +13,6 @@
 #include <lauxlib.h>
 #include <lualib.h>
 
-#define UNUSED(x) (void)(x)
-
 extern char *lm_asprintf(char const *fmt, ...);
 
 /* ---------------------------------------------------------------------------

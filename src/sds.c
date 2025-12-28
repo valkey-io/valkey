@@ -1040,7 +1040,7 @@ int hex_digit_to_int(char c) {
 }
 
 static inline int is_ptr_exceeds_end(const char *ptr, size_t len, const char *end) {
-    if (end == NULL)  {
+    if (end == NULL) {
         return -1;
     }
     return (ptr + len) < end ? 0 : 1;

@@ -50,6 +50,7 @@
 #include "sds.h"
 #include "module.h"
 #include "scripting_engine.h"
+#include "util.h"
 
 #include "eval.h"
 

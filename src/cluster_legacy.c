@@ -137,6 +137,18 @@ int clusterDecodeOpenSlotsAuxField(int rdbflags, sds s);
 static int nodeExceedsHandshakeTimeout(clusterNode *node, mstime_t now);
 void clusterCommandFlushslot(client *c);
 
+static inline clusterMsg *toClusterMsg(void *buf) {
+    clusterMsgUnknown *h = (clusterMsgUnknown *)buf;
+    serverAssert(!IS_LIGHT_MESSAGE(ntohs(h->type)));
+    return (clusterMsg *)buf;
+}
+
+static inline clusterMsgLight *toClusterMsgLight(void *buf) {
+    clusterMsgUnknown *h = (clusterMsgUnknown *)buf;
+    serverAssert(IS_LIGHT_MESSAGE(ntohs(h->type)));
+    return (clusterMsgLight *)buf;
+}
+
 /* Only primaries that own slots have voting rights.
  * Returns 1 if the node has voting rights, otherwise returns 0. */
 int clusterNodeIsVotingPrimary(clusterNode *n) {
@@ -3528,12 +3540,11 @@ static inline int messageTypeSupportsLightHdr(uint16_t type) {
     return 0;
 }
 
-
 int clusterIsValidPacket(clusterLink *link) {
-    clusterMsg *hdr = (clusterMsg *)link->rcvbuf;
-    uint32_t totlen = ntohl(hdr->totlen);
-    int is_light = IS_LIGHT_MESSAGE(ntohs(hdr->type));
-    uint16_t type = ntohs(hdr->type) & ~CLUSTERMSG_MODIFIER_MASK;
+    clusterMsgUnknown *hdr_unknown = (clusterMsgUnknown *)link->rcvbuf;
+    uint32_t totlen = ntohl(hdr_unknown->totlen);
+    int is_light = IS_LIGHT_MESSAGE(ntohs(hdr_unknown->type));
+    uint16_t type = ntohs(hdr_unknown->type) & ~CLUSTERMSG_MODIFIER_MASK;
 
     if (is_light && !messageTypeSupportsLightHdr(type)) {
         serverLog(LL_NOTICE,
@@ -3551,7 +3562,7 @@ int clusterIsValidPacket(clusterLink *link) {
     if (totlen < 16) return 0; /* At least signature, version, totlen, count. */
     if (totlen > link->rcvbuf_len) return 0;
 
-    if (ntohs(hdr->ver) != CLUSTER_PROTO_VER) {
+    if (ntohs(hdr_unknown->ver) != CLUSTER_PROTO_VER) {
         /* Can't handle messages of different versions. */
         return 0;
     }
@@ -3565,6 +3576,7 @@ int clusterIsValidPacket(clusterLink *link) {
     uint32_t explen; /* expected length of this packet */
 
     if (type == CLUSTERMSG_TYPE_PING || type == CLUSTERMSG_TYPE_PONG || type == CLUSTERMSG_TYPE_MEET) {
+        clusterMsg *hdr = toClusterMsg(link->rcvbuf);
         uint16_t extensions = ntohs(hdr->extensions);
         uint16_t count = ntohs(hdr->count);
 
@@ -3599,10 +3611,11 @@ int clusterIsValidPacket(clusterLink *link) {
     } else if (type == CLUSTERMSG_TYPE_PUBLISH || type == CLUSTERMSG_TYPE_PUBLISHSHARD) {
         clusterMsgDataPublish *publish_data;
         if (is_light) {
-            clusterMsgLight *hdr_light = (clusterMsgLight *)link->rcvbuf;
+            clusterMsgLight *hdr_light = toClusterMsgLight(link->rcvbuf);
             publish_data = &hdr_light->data.publish.msg;
             explen = sizeof(clusterMsgLight);
         } else {
+            clusterMsg *hdr = toClusterMsg(link->rcvbuf);
             publish_data = &hdr->data.publish.msg;
             explen = sizeof(clusterMsg);
         }
@@ -3617,10 +3630,11 @@ int clusterIsValidPacket(clusterLink *link) {
         explen += sizeof(clusterMsgDataUpdate);
     } else if (type == CLUSTERMSG_TYPE_MODULE) {
         if (is_light) {
-            clusterMsgLight *hdr_light = (clusterMsgLight *)link->rcvbuf;
+            clusterMsgLight *hdr_light = toClusterMsgLight(link->rcvbuf);
             explen = sizeof(clusterMsgLight) - sizeof(union clusterMsgData);
             explen += sizeof(clusterMsgModule) - 3 + ntohl(hdr_light->data.module.msg.len);
         } else {
+            clusterMsg *hdr = toClusterMsg(link->rcvbuf);
             explen = sizeof(clusterMsg) - sizeof(union clusterMsgData);
             explen += sizeof(clusterMsgModule) - 3 + ntohl(hdr->data.module.msg.len);
         }
@@ -3660,8 +3674,8 @@ static inline int clusterExtractSlotFromWord(uint64_t *slot_word, size_t slot_wo
 int clusterProcessPacket(clusterLink *link) {
     /* Validate that the packet is well-formed */
     if (!clusterIsValidPacket(link)) {
-        clusterMsg *hdr = (clusterMsg *)link->rcvbuf;
-        uint16_t type = ntohs(hdr->type);
+        clusterMsgUnknown *hdr_unknown = (clusterMsgUnknown *)link->rcvbuf;
+        uint16_t type = ntohs(hdr_unknown->type);
         if (server.debug_cluster_close_link_on_packet_drop &&
             (type == server.cluster_drop_packet_filter || server.cluster_drop_packet_filter == -2)) {
             freeClusterLink(link);
@@ -3671,10 +3685,10 @@ int clusterProcessPacket(clusterLink *link) {
         return 1;
     }
 
-    clusterMsg *hdr = (clusterMsg *)link->rcvbuf;
+    clusterMsgUnknown *hdr_unknown = (clusterMsgUnknown *)link->rcvbuf;
     mstime_t now = mstime();
-    int is_light = IS_LIGHT_MESSAGE(ntohs(hdr->type));
-    uint16_t type = ntohs(hdr->type) & ~CLUSTERMSG_MODIFIER_MASK;
+    int is_light = IS_LIGHT_MESSAGE(ntohs(hdr_unknown->type));
+    uint16_t type = ntohs(hdr_unknown->type) & ~CLUSTERMSG_MODIFIER_MASK;
 
     if (is_light) {
         if (!link->node || nodeInHandshake(link->node)) {
@@ -3693,6 +3707,7 @@ int clusterProcessPacket(clusterLink *link) {
         return 1;
     }
 
+    clusterMsg *hdr = toClusterMsg(link->rcvbuf);
     uint16_t flags = ntohs(hdr->flags);
     uint64_t sender_claimed_current_epoch = 0, sender_claimed_config_epoch = 0;
     clusterNode *sender = getNodeFromLinkAndMsg(link, hdr);
@@ -4393,10 +4408,10 @@ void clusterLinkConnectHandler(connection *conn) {
 }
 
 /* Performs sanity check on the message signature and length depending on the type. */
-static inline int isClusterMsgSignatureAndLengthValid(clusterMsg *hdr) {
-    if (memcmp(hdr->sig, "RCmb", 4) != 0) return 0;
-    uint16_t type = ntohs(hdr->type);
-    uint32_t totlen = ntohl(hdr->totlen);
+static inline int isClusterMsgSignatureAndLengthValid(clusterMsgUnknown *hdr_unknown) {
+    if (memcmp(hdr_unknown->sig, "RCmb", 4) != 0) return 0;
+    uint16_t type = ntohs(hdr_unknown->type);
+    uint32_t totlen = ntohl(hdr_unknown->totlen);
     uint32_t minlen = IS_LIGHT_MESSAGE(type) ? CLUSTERMSG_LIGHT_MIN_LEN : CLUSTERMSG_MIN_LEN;
     if (totlen < minlen) return 0;
     return 1;
@@ -4408,7 +4423,7 @@ static inline int isClusterMsgSignatureAndLengthValid(clusterMsg *hdr) {
 void clusterReadHandler(connection *conn) {
     clusterMsg buf[1];
     ssize_t nread;
-    clusterMsg *hdr;
+    clusterMsgUnknown *hdr_unknown;
     clusterLink *link = connGetPrivateData(conn);
     unsigned int readlen, rcvbuflen;
 
@@ -4420,11 +4435,11 @@ void clusterReadHandler(connection *conn) {
             readlen = RCVBUF_MIN_READ_LEN - rcvbuflen;
         } else {
             /* Finally read the full message. */
-            hdr = (clusterMsg *)link->rcvbuf;
+            hdr_unknown = (clusterMsgUnknown *)link->rcvbuf;
             if (rcvbuflen == RCVBUF_MIN_READ_LEN) {
                 /* Perform some sanity check on the message signature
                  * and length. */
-                if (!isClusterMsgSignatureAndLengthValid(hdr)) {
+                if (!isClusterMsgSignatureAndLengthValid(hdr_unknown)) {
                     char ip[NET_IP_STR_LEN];
                     int port;
                     if (connAddrPeerName(conn, ip, sizeof(ip), &port) == -1) {
@@ -4440,7 +4455,7 @@ void clusterReadHandler(connection *conn) {
                     return;
                 }
             }
-            readlen = ntohl(hdr->totlen) - rcvbuflen;
+            readlen = ntohl(hdr_unknown->totlen) - rcvbuflen;
             if (readlen > sizeof(buf)) readlen = sizeof(buf);
         }
 
@@ -4469,12 +4484,12 @@ void clusterReadHandler(connection *conn) {
             }
             memcpy(link->rcvbuf + link->rcvbuf_len, buf, nread);
             link->rcvbuf_len += nread;
-            hdr = (clusterMsg *)link->rcvbuf;
+            hdr_unknown = (clusterMsgUnknown *)link->rcvbuf;
             rcvbuflen += nread;
         }
 
         /* Total length obtained? Process this packet. */
-        if (rcvbuflen >= RCVBUF_MIN_READ_LEN && rcvbuflen == ntohl(hdr->totlen)) {
+        if (rcvbuflen >= RCVBUF_MIN_READ_LEN && rcvbuflen == ntohl(hdr_unknown->totlen)) {
             if (clusterProcessPacket(link)) {
                 if (link->rcvbuf_alloc > RCVBUF_INIT_LEN) {
                     size_t prev_rcvbuf_alloc = link->rcvbuf_alloc;

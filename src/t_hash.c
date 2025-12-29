@@ -927,7 +927,11 @@ void hincrbyCommand(client *c) {
     }
     value += incr;
     new = sdsfromlonglong(value);
+    bool has_volatile_fields = hashTypeHasVolatileFields(o);
     hashTypeSet(o, c->argv[2]->ptr, new, expiry, HASH_SET_TAKE_VALUE);
+    if (has_volatile_fields != hashTypeHasVolatileFields(o)) {
+        dbUpdateObjectWithVolatileItemsTracking(c->db, o);
+    }
     signalModifiedKey(c, c->db, c->argv[1]);
     notifyKeyspaceEvent(NOTIFY_HASH, "hincrby", c->argv[1], c->db->id);
     server.dirty++;
@@ -972,7 +976,11 @@ void hincrbyfloatCommand(client *c) {
     char buf[MAX_LONG_DOUBLE_CHARS];
     int len = ld2string(buf, sizeof(buf), value, LD_STR_HUMAN);
     new = sdsnewlen(buf, len);
+    bool has_volatile_fields = hashTypeHasVolatileFields(o);
     hashTypeSet(o, c->argv[2]->ptr, new, expiry, HASH_SET_TAKE_VALUE);
+    if (has_volatile_fields != hashTypeHasVolatileFields(o)) {
+        dbUpdateObjectWithVolatileItemsTracking(c->db, o);
+    }
     signalModifiedKey(c, c->db, c->argv[1]);
     notifyKeyspaceEvent(NOTIFY_HASH, "hincrbyfloat", c->argv[1], c->db->id);
     server.dirty++;

@@ -785,6 +785,13 @@ void expireGenericCommand(client *c, long long basetime, int unit) {
         return;
     }
     when += basetime;
+    /* A negative expiration time should cause a key to expire and be deleted immediately.
+     * However, in some cases (such as import-mode), we might need to pause expiration,
+     * and we don't want keys with negative expiration times (could cause a crash during active expiration).
+     * Therefore, we simply change the expiration time to 0 to mark the key as expired. */
+    if (when < 0) {
+        when = 0;
+    }
 
     robj *obj = lookupKeyWrite(c->db, key);
 

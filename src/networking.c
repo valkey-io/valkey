@@ -1863,7 +1863,10 @@ void disconnectReplicas(void) {
     listNode *ln;
     listRewind(server.replicas, &li);
     while ((ln = listNext(&li))) {
-        freeClient((client *)ln->value);
+        client *replica = (client *)ln->value;
+        /* If we are going to disconnect all replicas, there is no need to protect the rdb channel. */
+        replica->flag.protected_rdb_channel = 0;
+        freeClient(replica);
     }
 }
 

@@ -1261,6 +1261,7 @@ int64_t commandFlagsFromString(char *s) {
         else if (!strcasecmp(t,"no-cluster")) flags |= CMD_MODULE_NO_CLUSTER;
         else if (!strcasecmp(t,"no-mandatory-keys")) flags |= CMD_NO_MANDATORY_KEYS;
         else if (!strcasecmp(t,"allow-busy")) flags |= CMD_ALLOW_BUSY;
+        else if (!strcasecmp(t,"all-dbs")) flags |= CMD_ALL_DBS;
         else break;
         /* clang-format on */
     }
@@ -1352,6 +1353,8 @@ ValkeyModuleCommand *moduleCreateCommandProxy(struct ValkeyModule *module,
  * * **"allow-busy"**: Permit the command while the server is blocked either by
  *                     a script or by a slow module command, see
  *                     VM_Yield.
+ * * **"all-dbs"**:     The command accesses all databases and to execute this
+ *                      command user has to have `alldbs`
  * * **"getchannels-api"**: The command implements the interface to return
  *                          the arguments that are channels.
  *
@@ -3975,9 +3978,12 @@ int VM_PublishMessageShard(ValkeyModuleCtx *ctx, ValkeyModuleString *channel, Va
     return pubsubPublishMessageAndPropagateToCluster(channel, message, 1);
 }
 
-/* Return the currently selected DB. */
+/* Return the currently selected DB.
+ * When inside a MULTI/EXEC transaction, returns transaction_db_id which tracks
+ * the DB selected within the transaction (may differ from client->db->id).
+ * Otherwise, returns the client's actual DB. */
 int VM_GetSelectedDb(ValkeyModuleCtx *ctx) {
-    return ctx->client->db->id;
+    return (ctx->client->flag.multi) ? ctx->client->mstate->transaction_db_id : ctx->client->db->id;
 }
 
 
@@ -6612,7 +6618,8 @@ ValkeyModuleCallReply *VM_Call(ValkeyModuleCtx *ctx, const char *cmdname, const 
         int acl_errpos;
         int acl_retval;
 
-        acl_retval = ACLCheckAllUserCommandPerm(user, c->cmd, c->argv, c->argc, &acl_errpos);
+        int dbid = (c->flag.multi) ? c->mstate->transaction_db_id : c->db->id;
+        acl_retval = ACLCheckAllUserCommandPerm(user, c->cmd, c->argv, c->argc, dbid, &acl_errpos);
         if (acl_retval != ACL_OK) {
             int context = scriptIsRunning() ? ACL_LOG_CTX_SCRIPT : ACL_LOG_CTX_MODULE;
             sds object = (acl_retval == ACL_DENIED_CMD) ? sdsdup(c->cmd->fullname) : sdsdup(c->argv[acl_errpos]->ptr);
@@ -10129,6 +10136,14 @@ ValkeyModuleUser *VM_GetModuleUserFromUserName(ValkeyModuleString *name) {
  *
  * * ENOENT: Specified command does not exist.
  * * EACCES: Command cannot be executed, according to ACL rules
+ *
+ * NOTE: Since 9.1, the underlying ACL check will NOT validate the user's access to the database.
+ * For users WITHOUT the `alldbs` flag: VALKEYMODULE_ERR will be returned for any
+ * READ or WRITE command, even if the user has permission to access the current database.
+ *
+ * For comprehensive ACL validation that handles all types of permissions for users, it is
+ * recommended to use VM_ACLCheckPermissions() instead, which accepts a dbid parameter
+ * and properly validates access.
  */
 int VM_ACLCheckCommandPermissions(ValkeyModuleUser *user, ValkeyModuleString **argv, int argc) {
     int keyidxptr;
@@ -10140,7 +10155,7 @@ int VM_ACLCheckCommandPermissions(ValkeyModuleUser *user, ValkeyModuleString **a
         return VALKEYMODULE_ERR;
     }
 
-    if (ACLCheckAllUserCommandPerm(user->user, cmd, argv, argc, &keyidxptr) != ACL_OK) {
+    if (ACLCheckAllUserCommandPerm(user->user, cmd, argv, argc, -1, &keyidxptr) != ACL_OK) {
         errno = EACCES;
         return VALKEYMODULE_ERR;
     }
@@ -10211,6 +10226,61 @@ int VM_ACLCheckChannelPermissions(ValkeyModuleUser *user, ValkeyModuleString *ch
     return VALKEYMODULE_OK;
 }
 
+/* Check if the command with its arguments can be executed by the user, according to the
+ * ACLs associated with it. This function performs a comprehensive ACL check including:
+ * - Command permissions
+ * - Key permissions
+ * - Channel permissions
+ * - Database permissions
+ *
+ * On success VALKEYMODULE_OK is returned, otherwise VALKEYMODULE_ERR is returned and
+ * errno is set to one of the following values:
+ * * EINVAL: Invalid arguments (e.g., negative dbid or dbid >= server.dbnum, command does not exist)
+ * * EACCES: Permission denied (for any ACL violation)
+ *
+ * The optional denial_reason parameter can be used to get more specific information about
+ * why the permission was denied. If provided (not NULL), it will be set to one of:
+ * * VALKEYMODULE_ACL_LOG_CMD: User does not have permission to execute the command
+ * * VALKEYMODULE_ACL_LOG_KEY: User does not have permission to access a key
+ * * VALKEYMODULE_ACL_LOG_CHANNEL: User does not have permission to access a channel
+ * * VALKEYMODULE_ACL_LOG_DB: User does not have permission to access the database
+ */
+int VM_ACLCheckPermissions(ValkeyModuleUser *user,
+                           ValkeyModuleString **argv,
+                           int argc,
+                           int dbid,
+                           ValkeyModuleACLLogEntryReason *denial_reason) {
+    int keyidxptr;
+    struct serverCommand *cmd;
+
+    if (dbid < 0 || dbid >= server.dbnum) {
+        errno = EINVAL;
+        return VALKEYMODULE_ERR;
+    }
+
+    if ((cmd = lookupCommand(argv, argc)) == NULL) {
+        errno = EINVAL;
+        return VALKEYMODULE_ERR;
+    }
+
+    int acl_retval = ACLCheckAllUserCommandPerm(user->user, cmd, argv, argc, dbid, &keyidxptr);
+    if (acl_retval != ACL_OK) {
+        errno = EACCES;
+        if (denial_reason) {
+            switch (acl_retval) {
+            case ACL_DENIED_CMD: *denial_reason = VALKEYMODULE_ACL_LOG_CMD; break;
+            case ACL_DENIED_KEY: *denial_reason = VALKEYMODULE_ACL_LOG_KEY; break;
+            case ACL_DENIED_CHANNEL: *denial_reason = VALKEYMODULE_ACL_LOG_CHANNEL; break;
+            case ACL_DENIED_DB: *denial_reason = VALKEYMODULE_ACL_LOG_DB; break;
+            default: *denial_reason = VALKEYMODULE_ACL_LOG_CMD; break;
+            }
+        }
+        return VALKEYMODULE_ERR;
+    }
+
+    return VALKEYMODULE_OK;
+}
+
 /* Helper function to map a ValkeyModuleACLLogEntryReason to ACL Log entry reason. */
 int moduleGetACLLogEntryReason(ValkeyModuleACLLogEntryReason reason) {
     int acl_reason = 0;
@@ -10219,6 +10289,7 @@ int moduleGetACLLogEntryReason(ValkeyModuleACLLogEntryReason reason) {
     case VALKEYMODULE_ACL_LOG_KEY: acl_reason = ACL_DENIED_KEY; break;
     case VALKEYMODULE_ACL_LOG_CHANNEL: acl_reason = ACL_DENIED_CHANNEL; break;
     case VALKEYMODULE_ACL_LOG_CMD: acl_reason = ACL_DENIED_CMD; break;
+    case VALKEYMODULE_ACL_LOG_DB: acl_reason = ACL_DENIED_DB; break;
     default: break;
     }
     return acl_reason;
@@ -14620,6 +14691,7 @@ void moduleRegisterCoreAPI(void) {
     REGISTER_API(ACLCheckCommandPermissions);
     REGISTER_API(ACLCheckKeyPermissions);
     REGISTER_API(ACLCheckChannelPermissions);
+    REGISTER_API(ACLCheckPermissions);
     REGISTER_API(ACLAddLogEntry);
     REGISTER_API(ACLAddLogEntryByUserName);
     REGISTER_API(FreeModuleUser);

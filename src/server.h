@@ -1978,6 +1978,7 @@ struct valkeyServer {
     long long dirty_before_bgsave;        /* Used to restore dirty on failed BGSAVE */
     long long rdb_last_load_keys_expired; /* number of expired keys when loading RDB */
     long long rdb_last_load_keys_loaded;  /* number of loaded keys when loading RDB */
+    long long rdb_unowned_slot_keys_skipped;  /* number of keys skipped in the last load since they map to a slot not owned by this node */
     struct saveparam *saveparams;         /* Save points array for RDB */
     int saveparamslen;                    /* Number of saving points */
     char *rdb_filename;                   /* Name of RDB file */

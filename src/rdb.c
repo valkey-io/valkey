@@ -2941,6 +2941,7 @@ void startLoading(size_t size, int rdbflags, int async) {
     server.loading_rdb_used_mem = 0;
     server.rdb_last_load_keys_expired = 0;
     server.rdb_last_load_keys_loaded = 0;
+    server.rdb_unowned_slot_keys_skipped = 0;
     blockingOperationStarts();
 
     /* Cleanup slot migrations (we need a clean state for the incoming load) */
@@ -3225,8 +3226,10 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
             if ((slot_size = rdbLoadLen(rdb, NULL)) == RDB_LENERR) goto eoferr;
             if ((expires_slot_size = rdbLoadLen(rdb, NULL)) == RDB_LENERR) goto eoferr;
             if (server.cluster_enabled && slot_id < CLUSTER_SLOTS) {
-                if (slot_size) kvstoreHashtableExpand(db->keys, slot_id, slot_size);
-                if (expires_slot_size) kvstoreHashtableExpand(db->expires, slot_id, expires_slot_size);
+                if (!clusterNodeCoversSlot(clusterNodeGetPrimary(getMyClusterNode()), slot_id)) {
+                    if (slot_size) kvstoreHashtableExpand(db->keys, slot_id, slot_size);
+                    if (expires_slot_size) kvstoreHashtableExpand(db->expires, slot_id, expires_slot_size);
+                }
                 should_expand_db = 0;
             }
             continue; /* Read next opcode. */
@@ -3304,12 +3307,14 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
                 if (server.cluster_enabled && slot_id >= 0 && slot_id < CLUSTER_SLOTS) {
                     /* In cluster mode we resize individual slot specific dictionaries based on the number of keys that
                      * slot holds. */
-                    if (slot_size) kvstoreHashtableExpand(db->keys, slot_id, slot_size);
-                    if (expires_slot_size) kvstoreHashtableExpand(db->expires, slot_id, expires_slot_size);
-                    if (keys_with_volatile_items_slot_size) {
-                        kvstoreHashtableExpand(db->keys_with_volatile_items,
-                                               slot_id,
-                                               keys_with_volatile_items_slot_size);
+                    if (!clusterNodeCoversSlot(clusterNodeGetPrimary(getMyClusterNode()), slot_id)) {
+                        if (slot_size) kvstoreHashtableExpand(db->keys, slot_id, slot_size);
+                        if (expires_slot_size) kvstoreHashtableExpand(db->expires, slot_id, expires_slot_size);
+                        if (keys_with_volatile_items_slot_size) {
+                            kvstoreHashtableExpand(db->keys_with_volatile_items,
+                                                   slot_id,
+                                                   keys_with_volatile_items_slot_size);
+                        }
                     }
                     should_expand_db = 0;
                 }
@@ -3424,6 +3429,13 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
 
         /* Read key */
         if ((key = rdbGenericLoadStringObject(rdb, RDB_LOAD_SDS, NULL)) == NULL) goto eoferr;
+
+        // get the slot of the read key. This is used in order to decide later if the key should be skipped or not.
+        unsigned int keySlot = CLUSTER_SLOTS;
+        if (server.cluster_enabled) {
+            keySlot = keyHashSlot(key, sdslen(key));
+        }
+
         /* Read value */
         val = rdbLoadObject(type, rdb, key, db->id, &error);
 
@@ -3467,6 +3479,10 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
             sdsfree(key);
             decrRefCount(val);
             server.rdb_last_load_keys_expired++;
+        } else if (server.cluster_enabled && !(rdbflags & RDBFLAGS_AOF_PREAMBLE) && !clusterNodeCoversSlot(clusterNodeGetPrimary(getMyClusterNode()), keySlot)) {
+            sdsfree(key);
+            if (val) decrRefCount(val);
+            server.rdb_unowned_slot_keys_skipped++;
         } else {
             robj keyobj;
             initStaticStringObject(keyobj, key);
@@ -3535,19 +3551,19 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
         }
     }
 
-    if (empty_keys_skipped) {
-        serverLog(LL_NOTICE, "Done loading RDB, keys loaded: %lld, keys expired: %lld, empty keys skipped: %lld.",
-                  server.rdb_last_load_keys_loaded, server.rdb_last_load_keys_expired, empty_keys_skipped);
+    if (empty_keys_skipped || server.rdb_unowned_slot_keys_skipped) {
+        serverLog(LL_NOTICE, "Done loading RDB, keys loaded: %lld, keys expired: %lld, empty keys skipped: %lld, unowned slot keys skipped: %lld.",
+                  server.rdb_last_load_keys_loaded, server.rdb_last_load_keys_expired, empty_keys_skipped, server.rdb_unowned_slot_keys_skipped);
     } else {
         serverLog(LL_NOTICE, "Done loading RDB, keys loaded: %lld, keys expired: %lld.",
                   server.rdb_last_load_keys_loaded, server.rdb_last_load_keys_expired);
     }
     return RDB_OK;
 
-    /* Unexpected end of file is handled here calling rdbReportReadError():
-     * this will in turn either abort the server in most cases, or if we are loading
-     * the RDB file from a socket during initial SYNC (diskless replica mode),
-     * we'll report the error to the caller, so that we can retry. */
+/* Unexpected end of file is handled here calling rdbReportReadError():
+ * this will in turn either abort the server in most cases, or if we are loading
+ * the RDB file from a socket during initial SYNC (diskless replica mode),
+ * we'll report the error to the caller, so that we can retry. */
 eoferr:
     serverLog(LL_WARNING, "Short read or OOM loading DB. Unrecoverable error, aborting now.");
     rdbReportReadError("Unexpected EOF reading RDB file");

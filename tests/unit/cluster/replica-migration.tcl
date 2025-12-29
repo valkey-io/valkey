@@ -434,7 +434,27 @@ proc my_slot_allocation2 {masters replicas} {
 }
 
 start_cluster 4 1 {tags {external:skip cluster} overrides {cluster-node-timeout 1000 cluster-migration-barrier 999}} {
-    test "Empty shard can be reconfigured after the failover" {
+    test "Empty shard will not be reconfigured after the cluster soft reset" {
+        R 4 cluster reset soft
+
+        wait_for_condition 1000 50 {
+            [llength [R 0 cluster shards]] == 5 &&
+            [llength [R 1 cluster shards]] == 5 &&
+            [llength [R 2 cluster shards]] == 5 &&
+            [llength [R 3 cluster shards]] == 5 &&
+            [llength [R 4 cluster shards]] == 5
+        } else {
+            fail "R 4 does not become a new shard"
+        }
+
+        # Make sure there is no reconfiguration
+        assert_equal [s 0 role] "master"
+        assert_equal [s -4 role] "master"
+    }
+} my_slot_allocation2 cluster_allocate_replicas ;# start_cluster
+
+start_cluster 4 1 {tags {external:skip cluster} overrides {cluster-node-timeout 1000 cluster-migration-barrier 999}} {
+    test "Empty shard can be reconfigured after the cluster failover" {
         R 4 cluster failover
         wait_for_condition 1000 50 {
             [s 0 role] eq {slave} &&

@@ -1647,11 +1647,12 @@ start_server {tags {"hashexpire"}} {
         # Sanity check: check we only have one field in the hash
         assert_equal 1 [r HLEN myhash]
 
-        # TTL should now be gone; field becomes persistent
+        # TTL should now be gone; field becomes persistent; key should not be tracked
         set ttl [r HPTTL myhash FIELDS 1 field1]
         assert_equal -1 $ttl
         assert_equal 1 [r HGET myhash field1]
         assert_equal 1 [r HLEN myhash]
+        assert_equal 0 [get_keys_with_volatile_items r]
 
         # set expiration on the field
         assert_equal 1 [r HEXPIRE myhash 100000000 FIELDS 1 field1]
@@ -1689,11 +1690,12 @@ start_server {tags {"hashexpire"}} {
         # Sanity check: check we only have one field in the hash
         assert_equal 1 [r HLEN myhash]
 
-        # TTL should now be gone; field becomes persistent
+        # TTL should now be gone; field becomes persistent; key should not be tracked
         set ttl [r HPTTL myhash FIELDS 1 field1]
         assert_equal -1 $ttl
         assert_equal 1 [r HGET myhash field1]
         assert_equal 1 [r HLEN myhash]
+        assert_equal 0 [get_keys_with_volatile_items r]
 
         # set expiration on the field
         assert_equal 1 [r HEXPIRE myhash 100000000 FIELDS 1 field1]

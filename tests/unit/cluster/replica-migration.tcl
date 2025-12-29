@@ -425,3 +425,22 @@ start_cluster 3 0 {tags {external:skip cluster} overrides {cluster-node-timeout 
         assert_equal [R 2 dbsize] 0
     }
 } my_slot_allocation cluster_allocate_replicas ;# start_cluster
+
+# R0 is an empty shard, the slots are distributed evenly among R1/R2/R3.
+proc my_slot_allocation2 {masters replicas} {
+    R 1 cluster ADDSLOTSRANGE 0 5460
+    R 2 cluster ADDSLOTSRANGE 5461 10922
+    R 3 cluster ADDSLOTSRANGE 10923 16383
+}
+
+start_cluster 4 1 {tags {external:skip cluster} overrides {cluster-node-timeout 1000 cluster-migration-barrier 999}} {
+    test "Empty shard can be reconfigured after the failover" {
+        R 4 cluster failover
+        wait_for_condition 1000 50 {
+            [s 0 role] eq {slave} &&
+            [s -4 role] eq {master}
+        } else {
+            fail "The empty shard does not reconfigured after the failover"
+        }
+    }
+} my_slot_allocation2 cluster_allocate_replicas ;# start_cluster

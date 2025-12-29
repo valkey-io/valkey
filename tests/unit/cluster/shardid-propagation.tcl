@@ -53,19 +53,30 @@ tags {tls:skip external:skip cluster singledb} {
     }
 }
 
-start_cluster 3 1 {tags {external:skip cluster}} {
-    test "The replica will have a new shard_id after cluster reset soft" {
-        assert_equal [R 0 cluster myshardid] [R 3 cluster myshardid]
+# R0 is an empty shard, the slots are distributed evenly among R1/R2/R3.
+proc my_slot_allocation {masters replicas} {
+    R 1 cluster ADDSLOTSRANGE 0 5460
+    R 2 cluster ADDSLOTSRANGE 5461 10922
+    R 3 cluster ADDSLOTSRANGE 10923 16383
+}
 
-        R 3 cluster reset
-        assert_not_equal [R 0 cluster myshardid] [R 3 cluster myshardid]
+start_cluster 4 1 {tags {external:skip cluster}} {
+    test "The replica will have a new shard_id after cluster reset soft" {
+        assert_equal [R 0 cluster myshardid] [R 4 cluster myshardid]
+
+        R 4 cluster reset
+        assert_not_equal [R 0 cluster myshardid] [R 4 cluster myshardid]
 
         wait_for_condition 1000 50 {
-            [llength [R 0 cluster shards]] == 4 &&
-            [llength [R 1 cluster shards]] == 4 &&
-            [llength [R 2 cluster shards]] == 4
+            [llength [R 0 cluster shards]] == 5 &&
+            [llength [R 1 cluster shards]] == 5 &&
+            [llength [R 2 cluster shards]] == 5
         } else {
-            fail "R 3 does not become a new shard"
+            fail "R 4 does not become a new shard"
         }
+
+        # Make sure there is no reconfiguration
+        assert_equal [s 0 role] "master"
+        assert_equal [s -4 role] "master"
     }
-}
+} my_slot_allocation cluster_allocate_replicas ;# start_cluster

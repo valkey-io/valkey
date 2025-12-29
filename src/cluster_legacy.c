@@ -1578,7 +1578,7 @@ void clusterHandleServerShutdown(bool auto_failover) {
 void clusterReset(int hard) {
     dictIterator *di;
     dictEntry *de;
-    int j, was_replica = 0;
+    int j, was_replica = 0, new_shardid = 0;
 
     /* Turn into primary. */
     if (nodeIsReplica(myself)) {
@@ -1625,6 +1625,7 @@ void clusterReset(int hard) {
 
         /* To change the Node ID we need to remove the old name from the
          * nodes table, change the ID, and re-add back with new name. */
+        new_shardid = 1;
         oldname = sdsnewlen(myself->name, CLUSTER_NAMELEN);
         dictDelete(server.cluster->nodes, oldname);
         sdsfree(oldname);
@@ -1636,11 +1637,17 @@ void clusterReset(int hard) {
         /* If we were a replica, this means our shard_id is the shard_id of
          * the primary node, and since now we become a new empty primary, we
          * need to have our own shard_id. */
-        if (was_replica) getRandomHexChars(myself->shard_id, CLUSTER_NAMELEN);
+        if (was_replica) {
+            new_shardid = 1;
+            getRandomHexChars(myself->shard_id, CLUSTER_NAMELEN);
+        }
     }
 
     /* Re-populate shards */
-    clusterAddNodeToShard(myself->shard_id, myself);
+    if (new_shardid) {
+        clusterAddNodeToShard(myself->shard_id, myself);
+        serverLog(LL_NOTICE, "Move myself to the new shard %.40s.", myself->shard_id);
+    }
 
     /* Make sure to persist the new config and update the state. */
     clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_UPDATE_STATE | CLUSTER_TODO_FSYNC_CONFIG);
@@ -3150,7 +3157,8 @@ void clusterUpdateSlotsConfigWith(clusterNode *sender, uint64_t senderConfigEpoc
     /* Handle a special case where new_primary is not set but both sender
      * and myself own no slots and in the same shard. Set the sender as
      * the new primary if my current config epoch is lower than the
-     * sender's. */
+     * sender's. Make sure the empty shard can be reconfigured later
+     * after a failover. */
     if (!new_primary && myself->replicaof != sender && sender_slots == 0 && myself->numslots == 0 &&
         nodeEpoch(myself) < senderConfigEpoch && are_in_same_shard) {
         new_primary = sender;
@@ -4164,6 +4172,10 @@ int clusterProcessPacket(clusterLink *link) {
             (sender_last_reported_as_replica || memcmp(sender->slots, hdr->myslots, sizeof(hdr->myslots)))) {
             /* Make sure CLUSTER_NODE_PRIMARY has already been set by now on sender */
             serverAssert(nodeIsPrimary(sender));
+
+            /* We try to process extensions before the clusterUpdateSlotsConfigWith,
+             * because it relies on extensions such as shard_id. */
+            clusterProcessPingExtensions(hdr, link);
 
             serverLog(LL_NOTICE, "Mismatch in topology information for sender node %.40s (%s) in shard %.40s", sender->name,
                       sender->human_nodename, sender->shard_id);
@@ -7837,6 +7849,7 @@ int clusterCommandSpecial(client *c) {
             char new_shard_id[CLUSTER_NAMELEN];
             getRandomHexChars(new_shard_id, CLUSTER_NAMELEN);
             updateShardId(myself, new_shard_id);
+            serverLog(LL_NOTICE, "Move myself to the new shard %.40s.", myself->shard_id);
 
             clusterDoBeforeSleep(CLUSTER_TODO_UPDATE_STATE | CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_BROADCAST_ALL);
             addReply(c, shared.ok);

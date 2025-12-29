@@ -508,7 +508,7 @@ void sortCommandGeneric(client *c, int readonly) {
         server.sort_alpha = alpha;
         server.sort_bypattern = sortby ? 1 : 0;
         server.sort_store = storekey ? 1 : 0;
-        if (sortby && (start != 0 || end != vectorlen - 1))
+        if (sortby && (start != 0 || end != vectorlen - 1) && vectorlen > 0 && end >= start)
             pqsort(vector, vectorlen, sizeof(serverSortObject), sortCompare, start, end);
         else
             qsort(vector, vectorlen, sizeof(serverSortObject), sortCompare);

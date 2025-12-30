@@ -33,18 +33,33 @@ start_cluster 1 1 {tags {external:skip cluster}} {
     }
 }
 
-# Create a folder called "nodes.conf" to trigger temp nodes.conf rename
-# failure and it will cause cluster config file save to fail at the rename.
-proc create_nodes_conf_folder {srv_idx} {
+# Get the path to the cluster config file.
+proc get_nodes_conf_path {srv_idx} {
     set dir [lindex [R $srv_idx config get dir] 1]
     set cluster_conf [lindex [R $srv_idx config get cluster-config-file] 1]
     set cluster_conf_path [file join $dir $cluster_conf]
-    if {[file exists $cluster_conf_path]} { exec rm -f $cluster_conf_path }
+    return $cluster_conf_path
+}
+
+# Create a folder called "nodes.conf" to trigger temp nodes.conf rename
+# failure and it will cause cluster config file save to fail at the rename.
+proc create_nodes_conf_folder {srv_idx} {
+    set cluster_conf_path [get_nodes_conf_path $srv_idx]
+    if {[file exists $cluster_conf_path]} { exec rm -rf $cluster_conf_path }
     exec mkdir -p $cluster_conf_path
+}
+
+# Remove the folder (or nodes.conf) that we created from create_nodes_conf_folder.
+proc remove_nodes_conf_folder {srv_idx} {
+    set cluster_conf_path [get_nodes_conf_path $srv_idx]
+    exec rm -rf $cluster_conf_path
 }
 
 start_cluster 1 1 {tags {external:skip cluster}} {
     test {Fail to save the cluster configuration file will not exit the process} {
+        assert_equal "ok" [getInfoProperty [R 0 cluster info] cluster_config_save_status]
+        assert_equal "ok" [getInfoProperty [R 1 cluster info] cluster_config_save_status]
+
         # Create folder that can cause the rename fail.
         create_nodes_conf_folder 0
         create_nodes_conf_folder 1
@@ -83,5 +98,50 @@ start_cluster 1 1 {tags {external:skip cluster}} {
         assert_equal [count_log_message 0 "Cluster config updated even though writing the cluster config file to disk failed"] 1
         assert_morethan_equal [count_log_message -1 "Could not rename tmp cluster config file"] 2
         assert_equal [count_log_message -1 "Cluster config updated even though writing the cluster config file to disk failed"] 1
+
+        # Check the info field is err.
+        assert_equal "err" [getInfoProperty [R 0 cluster info] cluster_config_save_status]
+        assert_equal "err" [getInfoProperty [R 1 cluster info] cluster_config_save_status]
+
+        # Remove the test folder to trigger a config save again.
+        remove_nodes_conf_folder 0
+        remove_nodes_conf_folder 1
+
+        # Trigger a takeover so that cluster will need to update the config file.
+        R 1 cluster failover takeover
+        wait_for_condition 1000 50 {
+            [s 0 role] eq {slave} &&
+            [s -1 role] eq {master}
+        } else {
+            fail "The failover does not happen"
+        }
+
+        # Check the info field is ok.
+        wait_for_condition 1000 50 {
+            [getInfoProperty [R 0 cluster info] cluster_config_save_status] eq "ok" &&
+            [getInfoProperty [R 1 cluster info] cluster_config_save_status] eq "ok"
+        } else {
+            fail "The config save status is not ok"
+        }
+
+        # Create folder that can cause the rename fail.
+        create_nodes_conf_folder 0
+        create_nodes_conf_folder 1
+
+        # saveconfig will fail and info field is err.
+        assert_error {ERR *} {R 0 CLUSTER saveconfig}
+        assert_error {ERR *} {R 1 CLUSTER saveconfig}
+        assert_equal "err" [getInfoProperty [R 0 cluster info] cluster_config_save_status]
+        assert_equal "err" [getInfoProperty [R 1 cluster info] cluster_config_save_status]
+
+        # Remove the test folder to trigger a config save again.
+        remove_nodes_conf_folder 0
+        remove_nodes_conf_folder 1
+
+        # saveconfig will success and info field is ok.
+        assert_equal {OK} [R 0 CLUSTER saveconfig]
+        assert_equal {OK} [R 1 CLUSTER saveconfig]
+        assert_equal "ok" [getInfoProperty [R 0 cluster info] cluster_config_save_status]
+        assert_equal "ok" [getInfoProperty [R 1 cluster info] cluster_config_save_status]
     }
 }

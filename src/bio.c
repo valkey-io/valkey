@@ -330,6 +330,9 @@ void *bioProcessBackgroundJobs(void *arg) {
                                           "updated even though writing the cluster config file to disk failed.");
                     last_save_error_log = server.unixtime;
                 }
+                atomic_store_explicit(&server.cluster_config_bio_save_status, C_ERR, memory_order_relaxed);
+            } else {
+                atomic_store_explicit(&server.cluster_config_bio_save_status, C_OK, memory_order_relaxed);
             }
         } else {
             serverPanic("Wrong job type in bioProcessBackgroundJobs().");

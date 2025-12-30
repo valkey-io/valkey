@@ -1103,7 +1103,9 @@ int clusterSaveConfig(int bio, int do_fsync) {
         bioCreateClusterConfigSaveJob(content, do_fsync);
         return C_OK;
     } else {
-        return clusterSaveConfigImpl(content, 0, do_fsync);
+        int res = clusterSaveConfigImpl(content, 0, do_fsync);
+        atomic_store_explicit(&server.cluster_config_bio_save_status, res, memory_order_relaxed);
+        return res;
     }
 }
 
@@ -7146,6 +7148,8 @@ sds genClusterInfoString(sds info) {
     }
     dictReleaseIterator(di);
 
+    int config_bio_save_status = atomic_load_explicit(&server.cluster_config_bio_save_status, memory_order_relaxed);
+
     info = sdscatfmt(info,
                      "cluster_state:%s\r\n"
                      "cluster_slots_assigned:%i\r\n"
@@ -7159,11 +7163,13 @@ sds genClusterInfoString(sds info) {
                      "cluster_known_nodes:%U\r\n"
                      "cluster_size:%i\r\n"
                      "cluster_current_epoch:%U\r\n"
-                     "cluster_my_epoch:%U\r\n",
+                     "cluster_my_epoch:%U\r\n"
+                     "cluster_config_save_status:%s\r\n",
                      statestr[server.cluster->state], slots_assigned, slots_ok, slots_pfail, slots_fail,
                      nodes_pfail, nodes_fail, voting_nodes_pfail, voting_nodes_fail,
                      (unsigned long long)dictSize(server.cluster->nodes), server.cluster->size,
-                     (unsigned long long)server.cluster->currentEpoch, (unsigned long long)nodeEpoch(myself));
+                     (unsigned long long)server.cluster->currentEpoch, (unsigned long long)nodeEpoch(myself),
+                    (config_bio_save_status == C_OK) ? "ok" : "err");
 
     /* Show stats about messages sent and received. */
     long long tot_msg_sent = 0;

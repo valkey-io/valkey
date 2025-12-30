@@ -17,7 +17,8 @@
             ]
         ],
         "command_flags": [
-            "WRITE"
+            "WRITE",
+            "ALL_DBS"
         ],
         "acl_categories": [
             "DANGEROUS",

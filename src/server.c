@@ -50,7 +50,7 @@
 #include "sds.h"
 #include "module.h"
 #include "scripting_engine.h"
-#include "lua/engine_lua.h"
+
 #include "eval.h"
 
 #include "trace/trace_commands.h"
@@ -2960,6 +2960,7 @@ void initServer(void) {
     server.acl_info.user_auth_failures = 0;
     server.acl_info.invalid_channel_accesses = 0;
     server.acl_info.acl_access_denied_tls_cert = 0;
+    server.acl_info.invalid_db_accesses = 0;
 
     /* Create the timer callback, this is our way to process many background
      * operations incrementally, like eviction of unaccessed expired keys, etc. */
@@ -3004,11 +3005,12 @@ void initServer(void) {
      * commands with `CMD_NOSCRIPT` flag are not allowed to run in scripts. */
     server.script_disable_deny_script = 0;
 
-    /* Initialize the LUA scripting engine. */
-    if (luaEngineInitEngine() != C_OK) {
-        serverPanic("Lua engine initialization failed, check the server logs.");
-        exit(1);
-    }
+    commandlogInit();
+    latencyMonitorInit();
+    initSharedQueryBuf();
+
+    /* Initialize ACL default password if it exists */
+    ACLUpdateDefaultUserPassword(server.requirepass);
 
     /* Initialize the functions engine based off of LUA initialization. */
     if (functionsInit() == C_ERR) {
@@ -3017,13 +3019,6 @@ void initServer(void) {
 
     /* Initialize the EVAL scripting component. */
     evalInit();
-
-    commandlogInit();
-    latencyMonitorInit();
-    initSharedQueryBuf();
-
-    /* Initialize ACL default password if it exists */
-    ACLUpdateDefaultUserPassword(server.requirepass);
 
     applyWatchdogPeriod();
 
@@ -4786,6 +4781,8 @@ int finishShutdown(void) {
     /* Close the listening sockets. Apparently this allows faster restarts. */
     closeListeningSockets(1);
 
+    moduleUnloadAllModules();
+
     serverLog(LL_WARNING, "%s is now ready to exit, bye bye...", server.sentinel_mode ? "Sentinel" : "Valkey");
     return C_OK;
 
@@ -5662,10 +5659,11 @@ sds genValkeyInfoStringACLStats(sds info) {
                         "acl_access_denied_cmd:%lld\r\n"
                         "acl_access_denied_key:%lld\r\n"
                         "acl_access_denied_channel:%lld\r\n"
-                        "acl_access_denied_tls_cert:%lld\r\n",
+                        "acl_access_denied_tls_cert:%lld\r\n"
+                        "acl_access_denied_db:%lld\r\n",
                         server.acl_info.user_auth_failures, server.acl_info.invalid_cmd_accesses,
                         server.acl_info.invalid_key_accesses, server.acl_info.invalid_channel_accesses,
-                        server.acl_info.acl_access_denied_tls_cert);
+                        server.acl_info.acl_access_denied_tls_cert, server.acl_info.invalid_db_accesses);
     return info;
 }
 
@@ -6958,7 +6956,36 @@ void loadDataFromDisk(void) {
         int rdb_load_ret = rdbLoad(server.rdb_filename, &rsi, rdb_flags);
         if (rdb_load_ret == RDB_OK) {
             serverLog(LL_NOTICE, "DB loaded from disk: %.3f seconds", (float)(ustime() - start) / 1000000);
-            rsi_is_valid = rdbRestoreOffsetFromSaveInfo(&rsi, false);
+
+            /* Restore the replication ID / offset from the RDB file. */
+            if (rsi.repl_id_is_set && rsi.repl_offset != -1 &&
+                /* Note that older implementations may save a repl_stream_db
+                 * of -1 inside the RDB file in a wrong way, see more
+                 * information in function rdbPopulateSaveInfo. */
+                rsi.repl_stream_db != -1) {
+                rsi_is_valid = 1;
+                if (!iAmPrimary()) {
+                    memcpy(server.replid, rsi.repl_id, sizeof(server.replid));
+                    server.primary_repl_offset = rsi.repl_offset;
+                    /* If this is a replica, create a cached primary from this
+                     * information, in order to allow partial resynchronizations
+                     * with primaries. */
+                    replicationCachePrimaryUsingMyself();
+                    selectDb(server.cached_primary, rsi.repl_stream_db);
+                } else {
+                    /* If this is a primary, we can save the replication info
+                     * as secondary ID and offset, in order to allow replicas
+                     * to partial resynchronizations with primaries. */
+                    memcpy(server.replid2, rsi.repl_id, sizeof(server.replid));
+                    server.second_replid_offset = rsi.repl_offset + 1;
+                    /* Rebase primary_repl_offset from rsi.repl_offset. */
+                    server.primary_repl_offset += rsi.repl_offset;
+                    serverAssert(server.repl_backlog);
+                    server.repl_backlog->offset = server.primary_repl_offset - server.repl_backlog->histlen + 1;
+                    rebaseReplicationBuffer(rsi.repl_offset);
+                    server.repl_no_replicas_since = time(NULL);
+                }
+            }
         } else if (rdb_load_ret != RDB_NOT_EXIST) {
             serverLog(LL_WARNING, "Fatal error loading the DB, check server logs. Exiting.");
             exit(1);
@@ -7387,6 +7414,18 @@ __attribute__((weak)) int main(int argc, char **argv) {
     if (server.cluster_enabled) {
         clusterInitLast();
     }
+
+    /* Initialize the LUA scripting engine. */
+#ifdef LUA_ENABLED
+#define LUA_LIB_STR STRINGIFY(LUA_LIB)
+    if (scriptingEngineManagerFind("lua") == NULL) {
+        if (moduleLoad(LUA_LIB_STR, NULL, 0, 0) != C_OK) {
+            serverPanic("Lua engine initialization failed, check the server logs.");
+        }
+    }
+#endif
+
+
     InitServerLast();
 
     if (!server.sentinel_mode) {

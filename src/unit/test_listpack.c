@@ -3,6 +3,7 @@
 
 #include "../listpack.c"
 
+#include "../fmacros.h"
 #include "../adlist.h"
 #include "../sds.h"
 #include "../zmalloc.h"

@@ -995,7 +995,13 @@ sds clusterGenNodesConfContent(void) {
  * new one. Since we have the full payload to write available we can use
  * a single write to write the whole file. If the pre-existing file was
  * bigger we pad our payload with newlines that are anyway ignored and truncate
- * the file afterward. */
+ * the file afterward.
+ *
+ * This function will be called by either the main thread or a bio thread.
+ * When called from a bio thread, latency is not recorded because it is not
+ * thread-safe.
+ *
+ * This function take ownership of the 'content' SDS string and will free it. */
 int clusterSaveConfigImpl(sds content, int from_bio, int do_fsync) {
     sds tmpfilename;
     size_t content_size, offset = 0;
@@ -1090,6 +1096,7 @@ int clusterSaveConfig(int bio, int do_fsync) {
     server.cluster->todo_before_sleep &= ~CLUSTER_TODO_SAVE_CONFIG;
     if (do_fsync) server.cluster->todo_before_sleep &= ~CLUSTER_TODO_FSYNC_CONFIG;
 
+    /* The subsequent function will take ownership of the string and be responsible for freeing it. */
     sds content = clusterGenNodesConfContent();
     if (bio) {
         /* We can actually always fsync the file in bio, but anyway lets follow the old code. */
@@ -1113,18 +1120,10 @@ void clusterSaveConfigOrDie(void) {
     }
 }
 
-/* Save the cluster configuration file. If the save fails, print the log. */
-#define CONFIG_SAVE_LOG_ERROR_RATE 30 /* Seconds between errors logging. */
-void clusterSaveConfigOrLog(int do_fsync) {
-    if (clusterSaveConfig(1, do_fsync) == C_ERR) {
-        static time_t last_save_error_log = 0;
-        /* Limit logging rate to 1 line per CONFIG_SAVE_LOG_ERROR_RATE seconds. */
-        if ((server.unixtime - last_save_error_log) > CONFIG_SAVE_LOG_ERROR_RATE) {
-            serverLog(LL_WARNING, "Cluster config updated even though writing "
-                                  "the cluster config file to disk failed.");
-            last_save_error_log = server.unixtime;
-        }
-    }
+/* Save the cluster configuration file in bio thread. */
+void clusterSaveConfigBackground(int do_fsync) {
+    int res = clusterSaveConfig(1, do_fsync);
+    serverAssert(res == C_OK);
 }
 
 /* Lock the cluster config using flock(), and retain the file descriptor used to
@@ -6167,7 +6166,7 @@ void clusterBeforeSleep(void) {
     /* Save the config, possibly using fsync. */
     if (flags & CLUSTER_TODO_SAVE_CONFIG) {
         int fsync = flags & CLUSTER_TODO_FSYNC_CONFIG;
-        clusterSaveConfigOrLog(fsync);
+        clusterSaveConfigBackground(fsync);
     }
 
     if (flags & CLUSTER_TODO_BROADCAST_ALL) {

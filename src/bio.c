@@ -243,6 +243,7 @@ void bioCreateClusterConfigSaveJob(sds content, int do_fsync) {
     bioSubmitJob(BIO_CLUSTER_SAVE, job);
 }
 
+#define CONFIG_SAVE_LOG_ERROR_RATE 30 /* Seconds between errors logging. */
 void *bioProcessBackgroundJobs(void *arg) {
     bio_worker_data *const bwd = arg;
     bio_job *job;
@@ -321,8 +322,14 @@ void *bioProcessBackgroundJobs(void *arg) {
         } else if (job_type == BIO_RDB_SAVE) {
             replicaReceiveRDBFromPrimaryToDisk(job->save_to_disk_args.conn, job->save_to_disk_args.is_dual_channel);
         } else if (job_type == BIO_CLUSTER_SAVE) {
+            static time_t last_save_error_log = 0;
             if (clusterSaveConfigFromBio(job->cluster_save_args.content, job->cluster_save_args.do_fsync) == C_ERR) {
-                serverLog(LL_WARNING, "Failed to save the cluster config file in background.");
+                /* Limit logging rate to 1 line per CONFIG_SAVE_LOG_ERROR_RATE seconds. */
+                if ((server.unixtime - last_save_error_log) > CONFIG_SAVE_LOG_ERROR_RATE) {
+                    serverLog(LL_WARNING, "Failed to save the cluster config file in background. Cluster config "
+                                          "updated even though writing the cluster config file to disk failed.");
+                    last_save_error_log = server.unixtime;
+                }
             }
         } else {
             serverPanic("Wrong job type in bioProcessBackgroundJobs().");

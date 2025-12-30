@@ -1106,8 +1106,8 @@ int clusterSaveConfigFromBio(sds content, int do_fsync) {
 }
 
 /* Save the cluster configuration file. If the save fails, exit the process. */
-void clusterSaveConfigOrDie(int do_fsync) {
-    if (clusterSaveConfig(0, do_fsync) == C_ERR) {
+void clusterSaveConfigOrDie(void) {
+    if (clusterSaveConfig(0, 1) == C_ERR) {
         serverLog(LL_WARNING, "Fatal: can't update cluster config file.");
         exit(1);
     }
@@ -1438,7 +1438,7 @@ void clusterInit(void) {
         clusterAddNodeToShard(myself->shard_id, myself);
         saveconf = 1;
     }
-    if (saveconf) clusterSaveConfigOrDie(1);
+    if (saveconf) clusterSaveConfigOrDie();
 
     /* Port sanity check II
      * The other handshake port check is triggered too late to stop
@@ -6578,7 +6578,7 @@ int verifyClusterConfigWithData(void) {
     }
     if (update_config) {
         bioDrainWorker(BIO_CLUSTER_SAVE);
-        clusterSaveConfigOrDie(1);
+        clusterSaveConfigOrDie();
     }
     return C_OK;
 }

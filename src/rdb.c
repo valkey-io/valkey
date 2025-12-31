@@ -3479,7 +3479,7 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
             sdsfree(key);
             decrRefCount(val);
             server.rdb_last_load_keys_expired++;
-        } else if (server.cluster_enabled && !(rdbflags & RDBFLAGS_AOF_PREAMBLE) && !clusterNodeCoversSlot(clusterNodeGetPrimary(getMyClusterNode()), keySlot)) {
+        } else if (server.cluster_enabled && iAmPrimary() && !clusterNodeCoversSlot(clusterNodeGetPrimary(getMyClusterNode()), keySlot)) {
             sdsfree(key);
             if (val) decrRefCount(val);
             server.rdb_unowned_slot_keys_skipped++;

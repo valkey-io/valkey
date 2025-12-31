@@ -54,8 +54,8 @@ extern "C" {
  *       See: https://github.com/google/googletest/blob/master/googlemock/docs/gmock_faq.md#can-i-mock-a-variadic-function
  *       Example: serverLog(int level, const char *fmt, ...) should NOT be mocked.
  */
-void __wrap_resetClient(struct client *c);
-int __wrap_processCommand(struct client *c);
+void __wrap_resetClient(struct client* c);
+int __wrap_processCommand(struct client* c);
 
 #undef protected
 #undef _Bool

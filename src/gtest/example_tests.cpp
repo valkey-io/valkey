@@ -1,15 +1,15 @@
 #include "generated_wrappers.hpp"
 
 extern "C" {
-    #include "server.h"
+#include "server.h"
 }
 
 // Use a class name descriptive of your test unit
 class ExampleTest : public ::testing::Test {
     // standard boilerplate supporting mocked functions
-    protected:
-        MockValkey mock;
-        RealValkey real;
+  protected:
+    MockValkey mock;
+    RealValkey real;
 
     // The SetUp() function is called before each test.
     void SetUp() override {
@@ -18,7 +18,8 @@ class ExampleTest : public ::testing::Test {
     }
 
     // The TearDown() function is called after each test.
-    void TearDown() override {}
+    void TearDown() override {
+    }
 };
 
 // Include this (should end in "DeathTest") if testing that code asserts/dies.
@@ -30,14 +31,13 @@ TEST_F(ExampleDeathTest, TestSimpleDeath) {
         {
             *(static_cast<volatile char*>(0)) = 'x'; // SEGV
         },
-        ""
-    );
+        "");
 }
 
 // Simple assertions test
 TEST_F(ExampleTest, TestAssertions) {
     int a = 5, b = 3;
-    const char *str = "hello";
+    const char* str = "hello";
     // Use EXPECT_ macros to test a condition.  If the value is not as expected, the test will fail.
     // Use ASSERT_ macros to test a condition AND immediately end the test.
     // Prefer to use EXPECT_ macros unless the test can't reasonably continue. This allows multiple
@@ -51,15 +51,14 @@ TEST_F(ExampleTest, TestAssertions) {
 
 // Test matcher works in custom_matchers.hpp
 TEST_F(ExampleTest, TestMatchers) {
-    robj *robj_str = createStringObject("test", 4);
-    ASSERT_NE(robj_str , nullptr); // "ASSERT" is correct here, because the test can't reasonably continue
+    robj* robj_str = createStringObject("test", 4);
+    ASSERT_NE(robj_str, nullptr); // "ASSERT" is correct here, because the test can't reasonably continue
     EXPECT_THAT(robj_str, robjEqualsStr("test"));
     decrRefCount(robj_str);
 }
 
 // Verify mocking works via processCommand
 TEST_F(ExampleTest, TestMocking) {
-
     client prev_client = {};
     client c = {};
     server.current_client = &prev_client;

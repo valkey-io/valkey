@@ -721,94 +721,6 @@ void ACLRecomputeCommandBitsFromCommandRulesAllUsers(void) {
     raxStop(&ri);
 }
 
-static struct serverCommand *ACLLookupCommand(const char *name) {
-    struct serverCommand *cmd;
-    sds sdsname = sdsnew(name);
-    cmd = lookupCommandBySdsLogic(server.orig_commands, sdsname);
-    sdsfree(sdsname);
-    return cmd;
-}
-
-/* Remove stale module command rules from all users' selectors command_rules strings.
- * This cleans up rules referring to commands/subcommands that no longer exist
- * (e.g., after unloading a module), while preserving ACL categories. */
-void ACLCleanupStaleCommandRulesAllUsers(void) {
-    raxIterator ri;
-    raxStart(&ri,Users);
-    raxSeek(&ri,"^",NULL,0);
-    while(raxNext(&ri)) {
-        user *u = ri.data;
-        listIter li;
-        listNode *ln;
-        listRewind(u->selectors,&li);
-        while((ln = listNext(&li))) {
-            aclSelector *selector = (aclSelector *) listNodeValue(ln);
-            int argc = 0;
-            sds *argv = sdssplitargs(selector->command_rules, &argc);
-            if (!argv) continue;
-            sds new_rules = sdsempty();
-            for (int i = 0; i < argc; i++) {
-                sds tok = argv[i];
-                if (sdslen(tok) == 0) continue;
-                char first = tok[0];
-                if (first != '+' && first != '-') {
-                    /* Unknown formatting, keep as-is */
-                    new_rules = sdscatfmt(new_rules, "%S ", tok);
-                    continue;
-                }
-                /* Body after +/- */
-                const char *body = tok+1;
-                if (*body == '@') {
-                    /* Category: always keep */
-                    new_rules = sdscatfmt(new_rules, "%S ", tok);
-                    continue;
-                }
-                /* Command or subcommand. Extract main and optional sub after '|' */
-                const char *pipe = strchr(body, '|');
-                sds main = pipe ? sdsnewlen(body, pipe - body) : sdsnew(body);
-                struct serverCommand *cmd = ACLLookupCommand(main);
-                int keep = 0;
-                if (cmd) {
-                    if (!pipe) {
-                        keep = 1;
-                    } else {
-                        const char *sub = pipe + 1;
-                        if (cmd->subcommands_ht) {
-                            sds sub_sds = sdsnew(sub);
-                            struct serverCommand *sc = (struct serverCommand *)dictFetchValue(cmd->subcommands_ht, sub_sds);
-                            sdsfree(sub_sds);
-                            if (sc) keep = 1;
-                        }
-                    }
-                }
-                sdsfree(main);
-                if (keep) {
-                    new_rules = sdscatfmt(new_rules, "%S ", tok);
-                } else {
-                    serverLog(LL_VERBOSE,
-                              "Removing stale ACL rule '%s' for user '%s' (command not found)",
-                              tok, u->name);
-                }
-            }
-            sdsfreesplitres(argv, argc);
-            if (sdslen(new_rules)) {
-                /* Trim trailing space if present */
-                size_t nrlen = sdslen(new_rules);
-                if (nrlen > 0 && new_rules[nrlen-1] == ' ') {
-                    sdsrange(new_rules, 0, (ssize_t)nrlen - 2);
-                }
-                sdsfree(selector->command_rules);
-                selector->command_rules = new_rules;
-            } else {
-                sdsfree(selector->command_rules);
-                selector->command_rules = sdsempty();
-                sdsfree(new_rules);
-            }
-        }
-    }
-    raxStop(&ri);
-}
-
 static int ACLSetSelectorCategory(aclSelector *selector, const char *category, int allow) {
     uint64_t cflag = ACLGetCommandCategoryFlagByName(category + 1);
     if (!cflag) return C_ERR;
@@ -984,6 +896,97 @@ robj *ACLDescribeUser(user *u) {
     incrRefCount(u->acl_string);
 
     return u->acl_string;
+}
+
+/* Get a command from the original command table, that is not affected
+ * by the command renaming operations: we base all the ACL work from that
+ * table, so that ACLs are valid regardless of command renaming. */
+static struct serverCommand *ACLLookupCommand(const char *name) {
+    struct serverCommand *cmd;
+    sds sdsname = sdsnew(name);
+    cmd = lookupCommandBySdsLogic(server.orig_commands, sdsname);
+    sdsfree(sdsname);
+    return cmd;
+}
+
+/* Remove stale module command rules from all users' selectors command_rules strings.
+ * This cleans up rules referring to commands/subcommands that no longer exist
+ * (e.g., after unloading a module), while preserving ACL categories. */
+void ACLCleanupStaleCommandRulesAllUsers(void) {
+    raxIterator ri;
+    raxStart(&ri,Users);
+    raxSeek(&ri,"^",NULL,0);
+    while(raxNext(&ri)) {
+        user *u = ri.data;
+        listIter li;
+        listNode *ln;
+        listRewind(u->selectors,&li);
+        while((ln = listNext(&li))) {
+            aclSelector *selector = (aclSelector *) listNodeValue(ln);
+            int argc = 0;
+            sds *argv = sdssplitargs(selector->command_rules, &argc);
+            if (!argv) continue;
+            sds new_rules = sdsempty();
+            for (int i = 0; i < argc; i++) {
+                sds tok = argv[i];
+                if (sdslen(tok) == 0) continue;
+                char first = tok[0];
+                if (first != '+' && first != '-') {
+                    /* Unknown formatting, keep as-is */
+                    new_rules = sdscatfmt(new_rules, "%S ", tok);
+                    continue;
+                }
+                /* Body after +/- */
+                const char *body = tok+1;
+                if (*body == '@') {
+                    /* Category: always keep */
+                    new_rules = sdscatfmt(new_rules, "%S ", tok);
+                    continue;
+                }
+                /* Command or subcommand. Extract main and optional sub after '|' */
+                const char *pipe = strchr(body, '|');
+                sds main = pipe ? sdsnewlen(body, pipe - body) : sdsnew(body);
+                struct serverCommand *cmd = ACLLookupCommand(main);
+                int keep = 0;
+                if (cmd) {
+                    if (!pipe) {
+                        keep = 1;
+                    } else {
+                        const char *sub = pipe + 1;
+                        if (cmd->subcommands_ht) {
+                            sds sub_sds = sdsnew(sub);
+                            struct serverCommand *sc = lookupCommandBySdsLogic(cmd->subcommands_ht, sub_sds);
+                            sdsfree(sub_sds);
+                            if (sc) keep = 1;
+                        }
+                    }
+                }
+                sdsfree(main);
+                if (keep) {
+                    new_rules = sdscatfmt(new_rules, "%S ", tok);
+                } else {
+                    serverLog(LL_VERBOSE,
+                              "Removing stale ACL rule '%s' for user '%s' (command not found)",
+                              tok, u->name);
+                }
+            }
+            sdsfreesplitres(argv, argc);
+            if (sdslen(new_rules)) {
+                /* Trim trailing space if present */
+                size_t nrlen = sdslen(new_rules);
+                if (nrlen > 0 && new_rules[nrlen-1] == ' ') {
+                    sdsrange(new_rules, 0, (ssize_t)nrlen - 2);
+                }
+                sdsfree(selector->command_rules);
+                selector->command_rules = new_rules;
+            } else {
+                sdsfree(selector->command_rules);
+                selector->command_rules = sdsempty();
+                sdsfree(new_rules);
+            }
+        }
+    }
+    raxStop(&ri);
 }
 
 /* Flush the array of allowed first-args for the specified user

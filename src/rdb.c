@@ -3307,7 +3307,7 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
                 if (server.cluster_enabled && slot_id >= 0 && slot_id < CLUSTER_SLOTS) {
                     /* In cluster mode we resize individual slot specific dictionaries based on the number of keys that
                      * slot holds. */
-                    if (clusterNodeCoversSlot(clusterNodeGetPrimary(getMyClusterNode()), slot_id)) {
+                    if (clusterNodeCoversSlot(clusterNodeGetPrimary(getMyClusterNode()), slot_id) || clusterIsSlotImporting(keySlot)) {
                         if (slot_size) kvstoreHashtableExpand(db->keys, slot_id, slot_size);
                         if (expires_slot_size) kvstoreHashtableExpand(db->expires, slot_id, expires_slot_size);
                         if (keys_with_volatile_items_slot_size) {
@@ -3479,7 +3479,7 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
             sdsfree(key);
             decrRefCount(val);
             server.rdb_last_load_keys_expired++;
-        } else if (server.cluster_enabled && iAmPrimary() && !clusterNodeCoversSlot(clusterNodeGetPrimary(getMyClusterNode()), keySlot)) {
+        } else if (server.cluster_enabled && iAmPrimary() && !(clusterNodeCoversSlot(clusterNodeGetPrimary(getMyClusterNode()), keySlot) || clusterIsSlotImporting(keySlot))) {
             sdsfree(key);
             if (val) decrRefCount(val);
             server.rdb_unowned_slot_keys_skipped++;

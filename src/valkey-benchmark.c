@@ -61,6 +61,7 @@
 #include "hdr_histogram.h"
 #include "cli_common.h"
 #include "mt19937-64.h"
+#include "stdarg.h"
 
 #define UNUSED(V) ((void)V)
 #define RANDPTR_INITIAL_SIZE 8
@@ -91,6 +92,14 @@ typedef enum readFromReplica {
     FROM_REPLICA_ONLY,
     FROM_ALL
 } readFromReplica;
+
+/* define types of output stream */
+typedef enum outputType {
+    OUTPUT_ERR,         /* Error messages - always to stderr */
+    OUTPUT_INFO,        /* Informational messages - always to stdout */
+    OUTPUT_RES          /* Benchmark results - to file if -o used, else stdout */
+} outputType;
+
 
 static struct config {
     aeEventLoop *el;
@@ -153,6 +162,7 @@ static struct config {
     atomic_uint_fast64_t last_time_ns;
     uint64_t time_per_token;
     uint64_t time_per_burst;
+    FILE* output_file;
 } config;
 
 /* Locations of the placeholders __rand_int__, __rand_1st__,
@@ -229,7 +239,8 @@ static void freeServerConfig(serverConfig *cfg);
 static int fetchClusterSlotsConfiguration(client c);
 static void updateClusterSlotsConfiguration(void);
 static long long showThroughput(struct aeEventLoop *eventLoop, long long id, void *clientData);
-
+static int bm_printf(outputType type, bool need_carriage_return, const char *format, ...);
+static void bm_fflush(outputType type);
 /* Dict callbacks */
 static uint64_t dictSdsHash(const void *key);
 static int dictSdsKeyCompare(const void *key1, const void *key2);
@@ -291,24 +302,73 @@ static dictType dtype = {
     NULL               /* allow to expand */
 };
 
+/* Print a message to the specified output stream. */
+static int bm_printf(outputType type, bool need_carriage_return, const char *format, ...) {
+    va_list ap;
+    FILE *stream;
+    int ret;
+
+    switch (type) {
+    case OUTPUT_ERR:
+        stream = stderr;
+        break;
+    case OUTPUT_INFO:
+        stream = stdout;
+        break;
+    case OUTPUT_RES:
+        /* Result output: use file if configured, otherwise stdout */
+        stream = config.output_file ? config.output_file : stdout;
+        break;
+    default:
+        /* Default to stdout for invalid type */
+        stream = stdout;
+    }
+
+    va_start(ap, format);
+    ret = vfprintf(stream, format, ap);
+    va_end(ap);
+
+    if (need_carriage_return && !(type == OUTPUT_RES && config.output_file)) {
+        ret += fprintf(stream, "\r");
+    }
+    return ret;
+}
+
+/* Flush the specified output stream. */
+static void bm_fflush(outputType type) {
+    FILE *stream;
+    switch (type) {
+    case OUTPUT_RES:
+        stream = config.output_file ? config.output_file : stdout;
+        fflush(stream);
+        break;
+    case OUTPUT_INFO:
+        fflush(stdout);
+        break;
+    case OUTPUT_ERR:
+    default:
+        break;
+    }
+}
+
 static valkeyContext *getValkeyContext(enum valkeyConnectionType ct, const char *ip_or_path, int port) {
     valkeyContext *ctx = NULL;
     valkeyReply *reply = NULL;
     struct timeval tv = {0};
     ctx = valkeyConnectWrapper(ct, ip_or_path, port, tv, 0, config.mptcp);
     if (ctx == NULL || ctx->err) {
-        fprintf(stderr, "Could not connect to server at ");
+        bm_printf(OUTPUT_ERR, false, "Could not connect to server at ");
         char *err = (ctx != NULL ? ctx->errstr : "");
         if (ct != VALKEY_CONN_UNIX)
-            fprintf(stderr, "%s:%d: %s\n", ip_or_path, port, err);
+            bm_printf(OUTPUT_ERR, false, "%s:%d: %s\n", ip_or_path, port, err);
         else
-            fprintf(stderr, "%s: %s\n", ip_or_path, err);
+            bm_printf(OUTPUT_ERR, false, "%s: %s\n", ip_or_path, err);
         goto cleanup;
     }
     if (config.tls == 1) {
         const char *err = NULL;
         if (cliSecureConnection(ctx, config.sslconfig, &err) == VALKEY_ERR && err) {
-            fprintf(stderr, "Could not negotiate a TLS connection: %s\n", err);
+            bm_printf(OUTPUT_ERR, false, "Could not negotiate a TLS connection: %s\n", err);
             goto cleanup;
         }
     }
@@ -320,9 +380,9 @@ static valkeyContext *getValkeyContext(enum valkeyConnectionType ct, const char 
     if (reply != NULL) {
         if (reply->type == VALKEY_REPLY_ERROR) {
             if (ct != VALKEY_CONN_UNIX)
-                fprintf(stderr, "Node %s:%d replied with error:\n%s\n", ip_or_path, port, reply->str);
+                bm_printf(OUTPUT_ERR, false, "Node %s:%d replied with error:\n%s\n", ip_or_path, port, reply->str);
             else
-                fprintf(stderr, "Node %s replied with error:\n%s\n", ip_or_path, reply->str);
+                bm_printf(OUTPUT_ERR, false, "Node %s replied with error:\n%s\n", ip_or_path, reply->str);
             freeReplyObject(reply);
             valkeyFree(ctx);
             exit(1);
@@ -330,11 +390,11 @@ static valkeyContext *getValkeyContext(enum valkeyConnectionType ct, const char 
         freeReplyObject(reply);
         return ctx;
     }
-    fprintf(stderr, "ERROR: failed to fetch reply from ");
+    bm_printf(OUTPUT_ERR, false, "ERROR: failed to fetch reply from ");
     if (ct != VALKEY_CONN_UNIX)
-        fprintf(stderr, "%s:%d\n", ip_or_path, port);
+        bm_printf(OUTPUT_ERR, false, "%s:%d\n", ip_or_path, port);
     else
-        fprintf(stderr, "%s\n", ip_or_path);
+        bm_printf(OUTPUT_ERR, false, "%s\n", ip_or_path);
 cleanup:
     freeReplyObject(reply);
     valkeyFree(ctx);
@@ -380,9 +440,9 @@ static serverConfig *getServerConfig(enum valkeyConnectionType ct, const char *i
 fail:
     if (reply && reply->type == VALKEY_REPLY_ERROR && !strncmp(reply->str, "NOAUTH", 6)) {
         if (ct != VALKEY_CONN_UNIX)
-            fprintf(stderr, "Node %s:%d replied with error:\n%s\n", ip_or_path, port, reply->str);
+            bm_printf(OUTPUT_ERR, false, "Node %s:%d replied with error:\n%s\n", ip_or_path, port, reply->str);
         else
-            fprintf(stderr, "Node %s replied with error:\n%s\n", ip_or_path, reply->str);
+            bm_printf(OUTPUT_ERR, false, "Node %s replied with error:\n%s\n", ip_or_path, reply->str);
         abort_test = 1;
     }
     freeReplyObject(reply);
@@ -675,17 +735,17 @@ static void readHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
     if (c->latency < 0) c->latency = ustime() - (c->start);
 
     if (valkeyBufferRead(c->context) != VALKEY_OK) {
-        fprintf(stderr, "Error: %s\n", c->context->errstr);
+        bm_printf(OUTPUT_ERR, false, "Error: %s\n", c->context->errstr);
         exit(1);
     } else {
         while (c->pending) {
             if (valkeyGetReply(c->context, &reply) != VALKEY_OK) {
-                fprintf(stderr, "Error: %s\n", c->context->errstr);
+                bm_printf(OUTPUT_ERR, false, "Error: %s\n", c->context->errstr);
                 exit(1);
             }
             if (reply != NULL) {
                 if (reply == (void *)VALKEY_REPLY_ERROR) {
-                    fprintf(stderr, "Unexpected error reply, exiting...\n");
+                    bm_printf(OUTPUT_ERR, false, "Unexpected error reply, exiting...\n");
                     exit(1);
                 }
                 valkeyReply *r = reply;
@@ -705,17 +765,17 @@ static void readHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
                              * before requesting the new configuration. */
                             fetch_slots = 1;
                             do_wait = 1;
-                            fprintf(stderr, "Error from server %s:%d: %s.\n", c->cluster_node->ip,
+                            bm_printf(OUTPUT_ERR, false, "Error from server %s:%d: %s.\n", c->cluster_node->ip,
                                     c->cluster_node->port, r->str);
                         }
                         if (do_wait) sleep(1);
                         if (fetch_slots && !fetchClusterSlotsConfiguration(c)) exit(1);
                     } else {
                         if (c->cluster_node) {
-                            fprintf(stderr, "Error from server %s:%d: %s\n", c->cluster_node->ip, c->cluster_node->port,
+                            bm_printf(OUTPUT_ERR, false, "Error from server %s:%d: %s\n", c->cluster_node->ip, c->cluster_node->port,
                                     r->str);
                         } else
-                            fprintf(stderr, "Error from server: %s\n", r->str);
+                            bm_printf(OUTPUT_ERR, false, "Error from server: %s\n", r->str);
                         exit(1);
                     }
                 }
@@ -875,7 +935,7 @@ static void writeHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
             const ssize_t nwritten = cliWriteConn(c->context, ptr, writeLen);
             if (nwritten != writeLen) {
                 if (nwritten == -1 && errno != EAGAIN) {
-                    if (errno != EPIPE) fprintf(stderr, "Error writing to the server: %s\n", strerror(errno));
+                    if (errno != EPIPE) bm_printf(OUTPUT_ERR, false, "Error writing to the server: %s\n", strerror(errno));
                     freeClient(c);
                     return;
                 } else if (nwritten > 0) {
@@ -939,17 +999,17 @@ static client createClient(char *cmd, int len, int seqlen, client from, int thre
 
     c->context = valkeyConnectWrapper(config.ct, ip, port, tv, 1, config.mptcp);
     if (c->context->err) {
-        fprintf(stderr, "Could not connect to server at ");
+        bm_printf(OUTPUT_ERR, false, "Could not connect to server at ");
         if (config.ct != VALKEY_CONN_UNIX || is_cluster_client)
-            fprintf(stderr, "%s:%d: %s\n", ip, port, c->context->errstr);
+            bm_printf(OUTPUT_ERR, false, "%s:%d: %s\n", ip, port, c->context->errstr);
         else
-            fprintf(stderr, "%s: %s\n", ip, c->context->errstr);
+            bm_printf(OUTPUT_ERR, false, "%s: %s\n", ip, c->context->errstr);
         exit(1);
     }
     if (config.tls == 1) {
         const char *err = NULL;
         if (cliSecureConnection(c->context, config.sslconfig, &err) == VALKEY_ERR && err) {
-            fprintf(stderr, "Could not negotiate a TLS connection: %s\n", err);
+            bm_printf(OUTPUT_ERR, false, "Could not negotiate a TLS connection: %s\n", err);
             exit(1);
         }
     }
@@ -1106,12 +1166,12 @@ static void showRPSReport(void) {
         const float p99 = (float)hdr_value_at_percentile(config.rps_histogram, 99.0);
         const float p100 = (float)hdr_max(config.rps_histogram);
 
-        printf("\n");
-        printf("RPS Summary:\n");
-        printf("  target RPS: %.2f\n", target_rps);
-        printf("  RPS distribution (reqs/sec):\n");
-        printf("    %9s %9s %9s %9s %9s %9s\n", "avg", "min", "p50", "p95", "p99", "max");
-        printf("    %9.3f %9.3f %9.3f %9.3f %9.3f %9.3f\n", avg_rps, p0, p50, p95, p99, p100);
+        bm_printf(OUTPUT_RES, false, "\n");
+        bm_printf(OUTPUT_RES, false, "RPS Summary:\n");
+        bm_printf(OUTPUT_RES, false, "  target RPS: %.2f\n", target_rps);
+        bm_printf(OUTPUT_RES, false, "  RPS distribution (reqs/sec):\n");
+        bm_printf(OUTPUT_RES, false, "    %9s %9s %9s %9s %9s %9s\n", "avg", "min", "p50", "p95", "p99", "max");
+        bm_printf(OUTPUT_RES, false, "    %9.3f %9.3f %9.3f %9.3f %9.3f %9.3f\n", avg_rps, p0, p50, p95, p99, p100);
     }
 }
 
@@ -1125,12 +1185,12 @@ static void showReport(void) {
     const float avg = hdr_mean(config.latency_histogram) / 1000.0f;
 
     if (!config.quiet && !config.csv) {
-        printf("%*s\r", config.last_printed_bytes, " "); // ensure there is a clean line
-        printf("====== %s ======\n", config.title);
-        printf("  %d requests completed in %.2f seconds\n", config.requests_finished, (float)config.totlatency / 1000);
-        printf("  %d parallel clients\n", config.numclients);
-        printf("  %d bytes payload\n", config.datasize);
-        printf("  keep alive: %d\n", config.keepalive);
+        bm_printf(OUTPUT_RES, true, "%*s", config.last_printed_bytes, " "); // ensure there is a clean line
+        bm_printf(OUTPUT_RES, false, "====== %s ======\n", config.title);
+        bm_printf(OUTPUT_RES, false, "  %d requests completed in %.2f seconds\n", config.requests_finished, (float)config.totlatency / 1000);
+        bm_printf(OUTPUT_RES, false, "  %d parallel clients\n", config.numclients);
+        bm_printf(OUTPUT_RES, false, "  %d bytes payload\n", config.datasize);
+        bm_printf(OUTPUT_RES, false, "  keep alive: %d\n", config.keepalive);
         if (config.cluster_mode) {
             const char *node_roles = NULL;
             if (config.read_from_replica == FROM_ALL) {
@@ -1140,28 +1200,28 @@ static void showReport(void) {
             } else {
                 node_roles = "primary";
             }
-            printf("  cluster mode: yes (%d %s)\n", config.cluster_node_count, node_roles);
+            bm_printf(OUTPUT_RES, false, "  cluster mode: yes (%d %s)\n", config.cluster_node_count, node_roles);
             int m;
             for (m = 0; m < config.cluster_node_count; m++) {
                 clusterNode *node = config.cluster_nodes[m];
                 serverConfig *cfg = node->server_config;
                 if (cfg == NULL) continue;
-                printf("  node [%d] configuration:\n", m);
-                printf("    save: %s\n", sdslen(cfg->save) ? cfg->save : "NONE");
-                printf("    appendonly: %s\n", cfg->appendonly);
+                bm_printf(OUTPUT_RES, false, "  node [%d] configuration:\n", m);
+                bm_printf(OUTPUT_RES, false, "    save: %s\n", sdslen(cfg->save) ? cfg->save : "NONE");
+                bm_printf(OUTPUT_RES, false, "    appendonly: %s\n", cfg->appendonly);
             }
         } else {
             if (config.server_config) {
-                printf("  host configuration \"save\": %s\n", config.server_config->save);
-                printf("  host configuration \"appendonly\": %s\n", config.server_config->appendonly);
+                bm_printf(OUTPUT_RES, false, "  host configuration \"save\": %s\n", config.server_config->save);
+                bm_printf(OUTPUT_RES, false, "  host configuration \"appendonly\": %s\n", config.server_config->appendonly);
             }
         }
-        printf("  multi-thread: %s\n", (config.num_threads ? "yes" : "no"));
-        if (config.num_threads) printf("  threads: %d\n", config.num_threads);
+        bm_printf(OUTPUT_RES, false, "  multi-thread: %s\n", (config.num_threads ? "yes" : "no"));
+        if (config.num_threads) bm_printf(OUTPUT_RES, false, "  threads: %d\n", config.num_threads);
         /* Show the RPS Report */
         showRPSReport();
-        printf("\n");
-        printf("Latency by percentile distribution:\n");
+        bm_printf(OUTPUT_RES, false, "\n");
+        bm_printf(OUTPUT_RES, false, "Latency by percentile distribution:\n");
         struct hdr_iter iter;
         long long previous_cumulative_count = -1;
         const long long total_count = config.latency_histogram->total_count;
@@ -1172,12 +1232,12 @@ static void showReport(void) {
             const double percentile = percentiles->percentile;
             const long long cumulative_count = iter.cumulative_count;
             if (previous_cumulative_count != cumulative_count || cumulative_count == total_count) {
-                printf("%3.3f%% <= %.3f milliseconds (cumulative count %lld)\n", percentile, value, cumulative_count);
+                bm_printf(OUTPUT_RES, false, "%3.3f%% <= %.3f milliseconds (cumulative count %lld)\n", percentile, value, cumulative_count);
             }
             previous_cumulative_count = cumulative_count;
         }
-        printf("\n");
-        printf("Cumulative distribution of latencies:\n");
+        bm_printf(OUTPUT_RES, false, "\n");
+        bm_printf(OUTPUT_RES, false, "Cumulative distribution of latencies:\n");
         previous_cumulative_count = -1;
         hdr_iter_linear_init(&iter, config.latency_histogram, 100);
         while (hdr_iter_next(&iter)) {
@@ -1185,7 +1245,7 @@ static void showReport(void) {
             const long long cumulative_count = iter.cumulative_count;
             const double percentile = ((double)cumulative_count / (double)total_count) * 100.0;
             if (previous_cumulative_count != cumulative_count || cumulative_count == total_count) {
-                printf("%3.3f%% <= %.3f milliseconds (cumulative count %lld)\n", percentile, value, cumulative_count);
+                bm_printf(OUTPUT_RES, false, "%3.3f%% <= %.3f milliseconds (cumulative count %lld)\n", percentile, value, cumulative_count);
             }
             /* After the 2 milliseconds latency to have percentages split
              * by decimals will just add a lot of noise to the output. */
@@ -1194,18 +1254,18 @@ static void showReport(void) {
             }
             previous_cumulative_count = cumulative_count;
         }
-        printf("\n");
-        printf("Summary:\n");
-        printf("  throughput summary: %.2f requests per second\n", reqpersec);
-        printf("  latency summary (msec):\n");
-        printf("    %9s %9s %9s %9s %9s %9s\n", "avg", "min", "p50", "p95", "p99", "max");
-        printf("    %9.3f %9.3f %9.3f %9.3f %9.3f %9.3f\n", avg, p0, p50, p95, p99, p100);
+        bm_printf(OUTPUT_RES, false, "\n");
+        bm_printf(OUTPUT_RES, false, "Summary:\n");
+        bm_printf(OUTPUT_RES, false, "  throughput summary: %.2f requests per second\n", reqpersec);
+        bm_printf(OUTPUT_RES, false, "  latency summary (msec):\n");
+        bm_printf(OUTPUT_RES, false, "    %9s %9s %9s %9s %9s %9s\n", "avg", "min", "p50", "p95", "p99", "max");
+        bm_printf(OUTPUT_RES, false, "    %9.3f %9.3f %9.3f %9.3f %9.3f %9.3f\n", avg, p0, p50, p95, p99, p100);
     } else if (config.csv) {
-        printf("\"%s\",\"%.2f\",\"%.3f\",\"%.3f\",\"%.3f\",\"%.3f\",\"%.3f\",\"%.3f\"\n", config.title, reqpersec, avg,
+        bm_printf(OUTPUT_RES, false, "\"%s\",\"%.2f\",\"%.3f\",\"%.3f\",\"%.3f\",\"%.3f\",\"%.3f\",\"%.3f\"\n", config.title, reqpersec, avg,
                p0, p50, p95, p99, p100);
     } else {
-        printf("%*s\r", config.last_printed_bytes, " "); // ensure there is a clean line
-        printf("%s: %.2f requests per second, p50=%.3f msec\n", config.title, reqpersec, p50);
+        bm_printf(OUTPUT_RES, true, "%*s", config.last_printed_bytes, " "); // ensure there is a clean line
+        bm_printf(OUTPUT_RES, false, "%s: %.2f requests per second, p50=%.3f msec\n", config.title, reqpersec, p50);
     }
 }
 
@@ -1412,7 +1472,7 @@ static int fetchClusterConfiguration(void) {
     reply = valkeyCommand(ctx, "CLUSTER SLOTS");
     if (reply == NULL || reply->type == VALKEY_REPLY_ERROR) {
         success = 0;
-        if (reply) fprintf(stderr, "%s\nCLUSTER SLOTS ERROR: %s\n", errmsg, reply->str);
+        if (reply) bm_printf(OUTPUT_ERR, false, "%s\nCLUSTER SLOTS ERROR: %s\n", errmsg, reply->str);
         goto cleanup;
     }
     assert(reply->type == VALKEY_REPLY_ARRAY);
@@ -1464,7 +1524,7 @@ static int fetchClusterConfiguration(void) {
                 }
             }
             if (node->slots_count == 0) {
-                fprintf(stderr, "WARNING: Node %s:%d has no slots, skipping...\n", node->ip, node->port);
+                bm_printf(OUTPUT_ERR, false, "WARNING: Node %s:%d has no slots, skipping...\n", node->ip, node->port);
                 continue;
             }
             if (entry == NULL) {
@@ -1504,10 +1564,10 @@ static int fetchClusterSlotsConfiguration(client c) {
     is_fetching_slots = atomic_fetch_add_explicit(&config.is_fetching_slots, 1, memory_order_relaxed);
     if (is_fetching_slots) return -1; // TODO: use other codes || errno ?
     atomic_store_explicit(&config.is_fetching_slots, 1, memory_order_relaxed);
-    fprintf(stderr, "WARNING: Cluster slots configuration changed, fetching new one...\n");
+    bm_printf(OUTPUT_ERR, false, "WARNING: Cluster slots configuration changed, fetching new one...\n");
     const char *errmsg = "Failed to update cluster slots configuration";
 
-    /* printf("[%d] fetchClusterSlotsConfiguration\n", c->thread_id); */
+    /* bm_printf(OUTPUT_INFO, false, "[%d] fetchClusterSlotsConfiguration\n", c->thread_id); */
     dict *nodes = dictCreate(&dtype);
     valkeyContext *ctx = NULL;
     for (i = 0; i < (size_t)config.cluster_node_count; i++) {
@@ -1531,7 +1591,7 @@ static int fetchClusterSlotsConfiguration(client c) {
     reply = valkeyCommand(ctx, "CLUSTER SLOTS");
     if (reply == NULL || reply->type == VALKEY_REPLY_ERROR) {
         success = 0;
-        if (reply) fprintf(stderr, "%s\nCLUSTER SLOTS ERROR: %s\n", errmsg, reply->str);
+        if (reply) bm_printf(OUTPUT_ERR, false, "%s\nCLUSTER SLOTS ERROR: %s\n", errmsg, reply->str);
         goto cleanup;
     }
     assert(reply->type == VALKEY_REPLY_ARRAY);
@@ -1562,7 +1622,7 @@ static int fetchClusterSlotsConfiguration(client c) {
             dictEntry *entry = dictFind(nodes, name);
             if (entry == NULL) {
                 success = 0;
-                fprintf(stderr,
+                bm_printf(OUTPUT_ERR, false,
                         "%s: could not find node with ID %s in current "
                         "configuration.\n",
                         errmsg, name);
@@ -1633,20 +1693,20 @@ int parseOptions(int argc, char **argv) {
             config.numclients = atoi(argv[++i]);
         } else if (!strcmp(argv[i], "-v") || !strcmp(argv[i], "--version")) {
             sds version = cliVersion();
-            printf("valkey-benchmark %s\n", version);
+            bm_printf(OUTPUT_INFO, false, "valkey-benchmark %s\n", version);
             sdsfree(version);
             exit(0);
         } else if (!strcmp(argv[i], "-n")) {
             if (lastarg) goto invalid;
             if (config.duration > 0) {
-                fprintf(stderr, "Options -n and --duration are mutually exclusive.\n");
+                bm_printf(OUTPUT_ERR, false, "Options -n and --duration are mutually exclusive.\n");
                 exit(1);
             }
             config.requests = atoi(argv[++i]);
         } else if (!strcmp(argv[i], "--duration")) {
             if (lastarg) goto invalid;
             if (config.requests > 0) {
-                fprintf(stderr, "Options -n and --duration are mutually exclusive.\n");
+                bm_printf(OUTPUT_ERR, false, "Options -n and --duration are mutually exclusive.\n");
                 exit(1);
             }
             config.duration = atoi(argv[++i]);
@@ -1665,7 +1725,7 @@ int parseOptions(int argc, char **argv) {
             if (lastarg) goto invalid;
             config.conn_info.hostport = atoi(argv[++i]);
             if (config.conn_info.hostport < 0 || config.conn_info.hostport > 65535) {
-                fprintf(stderr, "Invalid server port.\n");
+                bm_printf(OUTPUT_ERR, false, "Invalid server port.\n");
                 exit(1);
             }
         } else if (!strcmp(argv[i], "-s")) {
@@ -1687,7 +1747,7 @@ int parseOptions(int argc, char **argv) {
         } else if (!strcmp(argv[i], "-u") && !lastarg) {
             parseUri(argv[++i], "valkey-benchmark", &config.conn_info, &config.tls);
             if (config.conn_info.hostport < 0 || config.conn_info.hostport > 65535) {
-                fprintf(stderr, "Invalid server port.\n");
+                bm_printf(OUTPUT_ERR, false, "Invalid server port.\n");
                 exit(1);
             }
             config.input_dbnumstr = sdsfromlonglong(config.conn_info.input_dbnum);
@@ -1723,7 +1783,7 @@ int parseOptions(int argc, char **argv) {
         } else if (!strcmp(argv[i], "-I")) {
             config.idlemode = 1;
         } else if (!strcmp(argv[i], "-e")) {
-            fprintf(stderr, "WARNING: -e option has no effect. "
+            bm_printf(OUTPUT_ERR, false, "WARNING: -e option has no effect. "
                             "We now immediately exit on error to avoid false results.\n");
         } else if (!strcmp(argv[i], "--seed")) {
             if (lastarg) goto invalid;
@@ -1741,6 +1801,16 @@ int parseOptions(int argc, char **argv) {
             config.tests = sdscat(config.tests, (char *)argv[++i]);
             config.tests = sdscat(config.tests, ",");
             sdstolower(config.tests);
+        } else if (!strcmp(argv[i], "-o")) {
+            const char *output_filename = "output";
+            if (!lastarg && argv[i+1][0] != '-') {
+                output_filename = argv[++i];
+            }
+            config.output_file = fopen(output_filename, "w");
+            if (!config.output_file) {
+                bm_printf(OUTPUT_ERR, false, "Failed to open output file '%s': %s\n", output_filename, strerror(errno));
+                exit(1);
+            }
         } else if (!strcmp(argv[i], "--dbnum")) {
             if (lastarg) goto invalid;
             config.conn_info.input_dbnum = atoi(argv[++i]);
@@ -1754,7 +1824,7 @@ int parseOptions(int argc, char **argv) {
             if (lastarg) goto invalid;
             config.num_threads = atoi(argv[++i]);
             if (config.num_threads > MAX_THREADS) {
-                fprintf(stderr, "WARNING: Too many threads, limiting threads to %d.\n", MAX_THREADS);
+                bm_printf(OUTPUT_ERR, false, "WARNING: Too many threads, limiting threads to %d.\n", MAX_THREADS);
                 config.num_threads = MAX_THREADS;
             } else if (config.num_threads < 0)
                 config.num_threads = 0;
@@ -1814,7 +1884,7 @@ int parseOptions(int argc, char **argv) {
 #ifdef USE_RDMA
         } else if (!strcmp(argv[i], "--rdma")) {
             if (valkeyInitiateRdma() != VALKEY_OK) {
-                fprintf(stderr, "Failed to initialize RDMA support from libvalkey\n");
+                bm_printf(OUTPUT_ERR, false, "Failed to initialize RDMA support from libvalkey\n");
                 exit(1);
             }
             config.ct = VALKEY_CONN_RDMA;
@@ -1836,7 +1906,7 @@ int parseOptions(int argc, char **argv) {
     return i;
 
 invalid:
-    printf("Invalid option \"%s\" or option argument missing\n\n", argv[i]);
+    bm_printf(OUTPUT_INFO, false, "Invalid option \"%s\" or option argument missing\n\n", argv[i]);
 
 usage:
     tls_usage =
@@ -1871,7 +1941,7 @@ usage:
         "";
 
 
-    printf(
+    bm_printf(OUTPUT_INFO, false,
         "%s%s%s%s%s%s", /* Split to avoid strings longer than 4095 (-Woverlength-strings). */
         "Usage: valkey-benchmark [OPTIONS] [--] [COMMAND ARGS...]\n\n"
         "Simulates sending commands using multiple clients. The utility provides a\n"
@@ -1963,6 +2033,7 @@ usage:
         "                    on the command line.\n"
         " -I                 Idle mode. Just open N idle connections and wait.\n"
         " -x                 Read last argument from STDIN.\n"
+        " -o                 Output results to the specfied file. Default is 'output'.\n"
         " --rps <requests>   Limit the total number of requests per second.\n"
         "                    Default 0 (no limit)\n"
         " --seed <num>       Set the seed for random number generator.\n"
@@ -2007,7 +2078,7 @@ long long showThroughput(struct aeEventLoop *eventLoop, long long id, void *clie
 
     int liveclients = atomic_load_explicit(&config.liveclients, memory_order_relaxed);
     if (liveclients == 0 && !isBenchmarkFinished(requests_finished)) {
-        fprintf(stderr, "All clients disconnected... aborting.\n");
+        bm_printf(OUTPUT_ERR, false, "All clients disconnected... aborting.\n");
         exit(1);
     }
     int warmup_duration = atomic_load_explicit(&config.current_warmup_duration, memory_order_relaxed);
@@ -2032,8 +2103,8 @@ long long showThroughput(struct aeEventLoop *eventLoop, long long id, void *clie
         return SHOW_THROUGHPUT_INTERVAL;
     }
     if (config.idlemode == 1) {
-        printf("clients: %d\r", config.liveclients);
-        fflush(stdout);
+        bm_printf(OUTPUT_RES, true, "clients: %d", config.liveclients);
+        bm_fflush(OUTPUT_RES);
         return SHOW_THROUGHPUT_INTERVAL;
     }
     const float dt = (float)(current_tick - config.start) / 1000.0;
@@ -2048,22 +2119,22 @@ long long showThroughput(struct aeEventLoop *eventLoop, long long id, void *clie
     config.previous_tick = current_tick;
     atomic_store_explicit(&config.previous_requests_finished, requests_finished, memory_order_relaxed);
 
-    printf("%*s\r", config.last_printed_bytes, " "); /* ensure there is a clean line */
+    bm_printf(OUTPUT_RES, true, "%*s", config.last_printed_bytes, " "); /* ensure there is a clean line */
     config.last_printed_bytes = 0;
     if (warmup_duration > 0) {
-        config.last_printed_bytes += printf("Warming up ");
+        config.last_printed_bytes += bm_printf(OUTPUT_RES, false, "Warming up ");
     }
     config.last_printed_bytes +=
-        printf("%s: rps=%.1f (overall: %.1f) avg_msec=%.3f (overall: %.3f)", config.title, instantaneous_rps, rps,
+        bm_printf(OUTPUT_RES, false, "%s: rps=%.1f (overall: %.1f) avg_msec=%.3f (overall: %.3f)", config.title, instantaneous_rps, rps,
                hdr_mean(config.current_sec_latency_histogram) / 1000.0f, hdr_mean(config.latency_histogram) / 1000.0f);
     if (warmup_duration > 0 || config.duration > 0) {
-        config.last_printed_bytes += printf(" %.1f seconds\r", dt);
+        config.last_printed_bytes += bm_printf(OUTPUT_RES, true, " %.1f seconds", dt);
     } else {
-        config.last_printed_bytes += printf(" %d requests\r", requests_finished);
+        config.last_printed_bytes += bm_printf(OUTPUT_RES, true, " %d requests", requests_finished);
     }
 
     hdr_reset(config.current_sec_latency_histogram);
-    fflush(stdout);
+    bm_fflush(OUTPUT_RES);
     return SHOW_THROUGHPUT_INTERVAL;
 }
 
@@ -2174,6 +2245,7 @@ int main(int argc, char **argv) {
     config.num_functions = 10;
     config.num_keys_in_fcall = 1;
     config.resp3 = 0;
+    config.output_file = NULL;
     resetPlaceholders();
 
     i = parseOptions(argc, argv);
@@ -2192,7 +2264,7 @@ int main(int argc, char **argv) {
 #endif
 
     if (config.mptcp && (config.ct != VALKEY_CONN_TCP)) {
-        fprintf(stderr, "Options --mptcp is only supported by TCP\n");
+        bm_printf(OUTPUT_ERR, false, "Options --mptcp is only supported by TCP\n");
         exit(1);
     }
 
@@ -2203,12 +2275,12 @@ int main(int argc, char **argv) {
         /* Fetch cluster configuration. */
         if (!fetchClusterConfiguration() || !config.cluster_nodes) {
             if (config.ct != VALKEY_CONN_UNIX) {
-                fprintf(stderr,
+                bm_printf(OUTPUT_ERR, false,
                         "Failed to fetch cluster configuration from "
                         "%s:%d\n",
                         config.conn_info.hostip, config.conn_info.hostport);
             } else {
-                fprintf(stderr,
+                bm_printf(OUTPUT_ERR, false,
                         "Failed to fetch cluster configuration from "
                         "%s\n",
                         config.conn_info.hostip);
@@ -2216,7 +2288,7 @@ int main(int argc, char **argv) {
             exit(1);
         }
         if (config.cluster_node_count == 0) {
-            fprintf(stderr, "Invalid cluster: %d node(s).\n", config.cluster_node_count);
+            bm_printf(OUTPUT_ERR, false, "Invalid cluster: %d node(s).\n", config.cluster_node_count);
             exit(1);
         }
         const char *node_roles = NULL;
@@ -2227,31 +2299,31 @@ int main(int argc, char **argv) {
         } else {
             node_roles = "primary";
         }
-        printf("Cluster has %d %s nodes:\n\n", config.cluster_node_count, node_roles);
+        bm_printf(OUTPUT_RES, false, "Cluster has %d %s nodes:\n\n", config.cluster_node_count, node_roles);
         int i = 0;
         for (; i < config.cluster_node_count; i++) {
             clusterNode *node = config.cluster_nodes[i];
             if (!node) {
-                fprintf(stderr, "Invalid cluster node #%d\n", i);
+                bm_printf(OUTPUT_ERR, false, "Invalid cluster node #%d\n", i);
                 exit(1);
             }
             const char *node_type = (node->replicate == NULL ? "Primary" : "Replica");
-            printf("Node %d(%s): ", i, node_type);
-            if (node->name) printf("%s ", node->name);
-            printf("%s:%d\n", node->ip, node->port);
+            bm_printf(OUTPUT_RES, false, "Node %d(%s): ", i, node_type);
+            if (node->name) bm_printf(OUTPUT_RES, false, "%s ", node->name);
+            bm_printf(OUTPUT_RES, false, "%s:%d\n", node->ip, node->port);
             node->server_config = getServerConfig(config.ct, node->ip, node->port);
             if (node->server_config == NULL) {
-                fprintf(stderr, "WARNING: Could not fetch node CONFIG %s:%d\n", node->ip, node->port);
+                bm_printf(OUTPUT_ERR, false, "WARNING: Could not fetch node CONFIG %s:%d\n", node->ip, node->port);
             }
         }
-        printf("\n");
+        bm_printf(OUTPUT_RES, false, "\n");
         /* Automatically set thread number to node count if not specified
          * by the user. */
         if (config.num_threads == 0) config.num_threads = config.cluster_node_count;
     } else {
         config.server_config = getServerConfig(config.ct, config.conn_info.hostip, config.conn_info.hostport);
         if (config.server_config == NULL) {
-            fprintf(stderr, "WARNING: Could not fetch server CONFIG\n");
+            bm_printf(OUTPUT_ERR, false, "WARNING: Could not fetch server CONFIG\n");
         }
     }
     if (config.num_threads > 0) {
@@ -2260,17 +2332,17 @@ int main(int argc, char **argv) {
     }
 
     if (config.keepalive == 0) {
-        fprintf(stderr, "WARNING: Keepalive disabled. You probably need "
+        bm_printf(OUTPUT_ERR, false, "WARNING: Keepalive disabled. You probably need "
                         "'echo 1 > /proc/sys/net/ipv4/tcp_tw_reuse' for Linux and "
                         "'sudo sysctl -w net.inet.tcp.msl=1000' for Mac OS X in order "
                         "to use a lot of clients/requests\n");
     }
     if (argc > 0 && config.tests != NULL) {
-        fprintf(stderr, "WARNING: Option -t is ignored.\n");
+        bm_printf(OUTPUT_ERR, false, "WARNING: Option -t is ignored.\n");
     }
 
     if (config.idlemode) {
-        printf("Creating %d idle connections and waiting forever (Ctrl+C when done)\n", config.numclients);
+        bm_printf(OUTPUT_RES, false, "Creating %d idle connections and waiting forever (Ctrl+C when done)\n", config.numclients);
         int thread_id = -1, use_threads = (config.num_threads > 0);
         if (use_threads) {
             thread_id = 0;
@@ -2285,7 +2357,7 @@ int main(int argc, char **argv) {
         /* and will wait for every */
     }
     if (config.csv) {
-        printf("\"test\",\"rps\",\"avg_latency_ms\",\"min_latency_ms\",\"p50_latency_ms\",\"p95_latency_ms\",\"p99_"
+        bm_printf(OUTPUT_RES, false, "\"test\",\"rps\",\"avg_latency_ms\",\"min_latency_ms\",\"p50_latency_ms\",\"p95_latency_ms\",\"p99_"
                "latency_ms\",\"max_latency_ms\"\n");
     }
     /* Run benchmark with command in the remainder of the arguments. */
@@ -2297,7 +2369,7 @@ int main(int argc, char **argv) {
         }
         sds *sds_args = getSdsArrayFromArgv(argc, argv, 0);
         if (!sds_args) {
-            fprintf(stderr, "Invalid quoted string\n");
+            bm_printf(OUTPUT_ERR, false, "Invalid quoted string\n");
             return 1;
         }
         if (config.stdinarg) {
@@ -2567,7 +2639,7 @@ int main(int argc, char **argv) {
             free(cmd);
         }
 
-        if (!config.csv) printf("\n");
+        if (!config.csv) bm_printf(OUTPUT_RES, false, "\n");
     } while (config.loop);
 
     zfree(data);
@@ -2575,5 +2647,9 @@ int main(int argc, char **argv) {
     if (config.server_config != NULL) freeServerConfig(config.server_config);
     resetPlaceholders();
 
+    if (config.output_file) {
+        fclose(config.output_file);
+        config.output_file = NULL;
+    }
     return 0;
 }

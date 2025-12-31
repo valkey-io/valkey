@@ -3307,7 +3307,7 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
                 if (server.cluster_enabled && slot_id >= 0 && slot_id < CLUSTER_SLOTS) {
                     /* In cluster mode we resize individual slot specific dictionaries based on the number of keys that
                      * slot holds. */
-                    if (clusterNodeCoversSlot(clusterNodeGetPrimary(getMyClusterNode()), slot_id) || clusterIsSlotImporting(keySlot)) {
+                    if (clusterNodeCoversSlot(clusterNodeGetPrimary(getMyClusterNode()), slot_id) || clusterIsSlotImporting(slot_id)) {
                         if (slot_size) kvstoreHashtableExpand(db->keys, slot_id, slot_size);
                         if (expires_slot_size) kvstoreHashtableExpand(db->expires, slot_id, expires_slot_size);
                         if (keys_with_volatile_items_slot_size) {

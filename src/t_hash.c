@@ -1663,19 +1663,18 @@ void hexpireGenericCommand(client *c, long long basetime, int unit) {
     /* From this point we would return array reply */
     addReplyArrayLen(c, num_fields);
 
-    /* In case we are expiring all the elements prepare a new argv since we are going to delete all the expired fields. */
-    if (set_expired) {
-        new_argv = zmalloc(sizeof(robj *) * (num_fields + 3));
-        new_argv[new_argc++] = shared.hdel;
-        incrRefCount(shared.hdel);
-        new_argv[new_argc++] = c->argv[1];
-        incrRefCount(c->argv[1]);
-    }
-
     for (i = 0; i < num_fields; i++) {
         expiryModificationResult result = EXPIRATION_MODIFICATION_NOT_EXIST;
         if (set_expired) {
             if (obj && hashTypeDelete(obj, c->argv[fields_index + i]->ptr)) {
+                /* In case we are expiring all the elements prepare a new argv since we are going to delete all the expired fields. */
+                if (new_argv == NULL) {
+                    new_argv = zmalloc(sizeof(robj *) * (num_fields + 3));
+                    new_argv[new_argc++] = shared.hdel;
+                    incrRefCount(shared.hdel);
+                    new_argv[new_argc++] = c->argv[1];
+                    incrRefCount(c->argv[1]);
+                }
                 /* In case we deleted the field, add it to the new hdel command vector. */
                 new_argv[new_argc++] = c->argv[fields_index + i];
                 incrRefCount(c->argv[fields_index + i]);

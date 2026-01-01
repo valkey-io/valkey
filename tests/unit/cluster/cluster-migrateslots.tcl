@@ -2429,3 +2429,40 @@ start_cluster 3 3 {tags {logreqres:skip external:skip cluster aofrw} overrides {
         assert_match "OK" [R 2 FLUSHDB SYNC]
     }
 }
+
+start_cluster 3 0 {tags {logreqres:skip external:skip cluster}} {
+
+    set node0_id [R 0 CLUSTER MYID]
+    set node1_id [R 1 CLUSTER MYID]
+    set node2_id [R 2 CLUSTER MYID]
+
+    set 16383_slot_tag "{6ZJ}"
+
+    test "Load snapshot skip keys of migrated slots" {
+        # Load data before the snapshot
+        populate 250 "$16383_slot_tag:1:" 1000 -2
+        assert_match "250" [R 2 CLUSTER COUNTKEYSINSLOT 16383]
+
+        # save data of the populated primary
+        assert_match "OK" [R 2 SAVE]
+
+        # Load data while the snapshot is ongoing
+        assert_match "OK" [R 2 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node0_id]
+
+        wait_for_migration 0 16383
+        assert_match "250" [R 0 CLUSTER COUNTKEYSINSLOT 16383]
+        assert_match "0" [R 2 CLUSTER COUNTKEYSINSLOT 16383]
+
+        # restart node 2
+        do_node_restart 2
+        
+        wait_for_cluster_state ok
+        
+        assert_match "0" [R 2 CLUSTER COUNTKEYSINSLOT 16383]
+        assert_match "250" [getInfoProperty [R 2 info] rdb_unowned_slot_keys_skipped]
+
+        # Cleanup
+        assert_match "OK" [R 0 FLUSHALL SYNC]
+        assert_match "OK" [R 0 CLUSTER MIGRATESLOTS SLOTSRANGE 16383 16383 NODE $node2_id]
+    }
+}

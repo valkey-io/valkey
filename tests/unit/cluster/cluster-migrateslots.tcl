@@ -2459,7 +2459,7 @@ start_cluster 3 0 {tags {logreqres:skip external:skip cluster}} {
         wait_for_cluster_state ok
         
         assert_match "0" [R 2 CLUSTER COUNTKEYSINSLOT 16383]
-        assert_match "250" [getInfoProperty [R 2 info] rdb_unowned_slot_keys_skipped]
+        assert_match "250" [getInfoProperty [R 2 info] rdb_last_load_keys_skipped_unowned_slot]
 
         # Cleanup
         assert_match "OK" [R 0 FLUSHALL SYNC]

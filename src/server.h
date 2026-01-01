@@ -1978,7 +1978,6 @@ struct valkeyServer {
     long long dirty_before_bgsave;           /* Used to restore dirty on failed BGSAVE */
     long long rdb_last_load_keys_expired;    /* number of expired keys when loading RDB */
     long long rdb_last_load_keys_loaded;     /* number of loaded keys when loading RDB */
-    long long rdb_unowned_slot_keys_skipped; /* number of keys skipped in the last load since they map to a slot not owned by this node */
     struct saveparam *saveparams;            /* Save points array for RDB */
     int saveparamslen;                       /* Number of saving points */
     char *rdb_filename;                      /* Name of RDB file */
@@ -2008,6 +2007,8 @@ struct valkeyServer {
     int key_load_delay;                      /* Delay in microseconds between keys while
                                               * loading aof or rdb. (for testings). negative
                                               * value means fractions of microseconds (on average). */
+    long long rdb_last_load_keys_skipped_unowned_slot; /* number of keys skipped in the last load since they map to a slot not owned by this node */
+    
     /* Pipe and data structures for child -> parent info sharing. */
     int child_info_pipe[2]; /* Pipe used to write the child_info_data. */
     int child_info_nread;   /* Num of bytes of the last read from pipe */

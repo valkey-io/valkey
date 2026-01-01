@@ -2941,7 +2941,7 @@ void startLoading(size_t size, int rdbflags, int async) {
     server.loading_rdb_used_mem = 0;
     server.rdb_last_load_keys_expired = 0;
     server.rdb_last_load_keys_loaded = 0;
-    server.rdb_unowned_slot_keys_skipped = 0;
+    server.rdb_last_load_keys_skipped_unowned_slot = 0;
     blockingOperationStarts();
 
     /* Cleanup slot migrations (we need a clean state for the incoming load) */
@@ -3482,7 +3482,7 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
         } else if (server.cluster_enabled && iAmPrimary() && !(clusterNodeCoversSlot(clusterNodeGetPrimary(getMyClusterNode()), keySlot) || clusterIsSlotImporting(keySlot))) {
             sdsfree(key);
             if (val) decrRefCount(val);
-            server.rdb_unowned_slot_keys_skipped++;
+            server.rdb_last_load_keys_skipped_unowned_slot++;
         } else {
             robj keyobj;
             initStaticStringObject(keyobj, key);
@@ -3551,9 +3551,9 @@ int rdbLoadRioWithLoadingCtx(rio *rdb, int rdbflags, rdbSaveInfo *rsi, rdbLoadin
         }
     }
 
-    if (empty_keys_skipped || server.rdb_unowned_slot_keys_skipped) {
+    if (empty_keys_skipped || server.rdb_last_load_keys_skipped_unowned_slot) {
         serverLog(LL_NOTICE, "Done loading RDB, keys loaded: %lld, keys expired: %lld, empty keys skipped: %lld, unowned slot keys skipped: %lld.",
-                  server.rdb_last_load_keys_loaded, server.rdb_last_load_keys_expired, empty_keys_skipped, server.rdb_unowned_slot_keys_skipped);
+                  server.rdb_last_load_keys_loaded, server.rdb_last_load_keys_expired, empty_keys_skipped, server.rdb_last_load_keys_skipped_unowned_slot);
     } else {
         serverLog(LL_NOTICE, "Done loading RDB, keys loaded: %lld, keys expired: %lld.",
                   server.rdb_last_load_keys_loaded, server.rdb_last_load_keys_expired);

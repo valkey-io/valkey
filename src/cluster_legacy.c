@@ -138,14 +138,14 @@ static int nodeExceedsHandshakeTimeout(clusterNode *node, mstime_t now);
 void clusterCommandFlushslot(client *c);
 
 static inline clusterMsg *toClusterMsg(void *buf) {
-    clusterMsgUnknown *h = (clusterMsgUnknown *)buf;
-    serverAssert(!IS_LIGHT_MESSAGE(ntohs(h->type)));
+    clusterMsgHeader *hdr = (clusterMsgHeader *)buf;
+    serverAssert(!IS_LIGHT_MESSAGE(ntohs(hdr->type)));
     return (clusterMsg *)buf;
 }
 
 static inline clusterMsgLight *toClusterMsgLight(void *buf) {
-    clusterMsgUnknown *h = (clusterMsgUnknown *)buf;
-    serverAssert(IS_LIGHT_MESSAGE(ntohs(h->type)));
+    clusterMsgHeader *hdr = (clusterMsgHeader *)buf;
+    serverAssert(IS_LIGHT_MESSAGE(ntohs(hdr->type)));
     return (clusterMsgLight *)buf;
 }
 
@@ -3541,10 +3541,10 @@ static inline int messageTypeSupportsLightHdr(uint16_t type) {
 }
 
 int clusterIsValidPacket(clusterLink *link) {
-    clusterMsgUnknown *hdr_unknown = (clusterMsgUnknown *)link->rcvbuf;
-    uint32_t totlen = ntohl(hdr_unknown->totlen);
-    int is_light = IS_LIGHT_MESSAGE(ntohs(hdr_unknown->type));
-    uint16_t type = ntohs(hdr_unknown->type) & ~CLUSTERMSG_MODIFIER_MASK;
+    clusterMsgHeader *hdr = (clusterMsgHeader *)link->rcvbuf;
+    uint32_t totlen = ntohl(hdr->totlen);
+    int is_light = IS_LIGHT_MESSAGE(ntohs(hdr->type));
+    uint16_t type = ntohs(hdr->type) & ~CLUSTERMSG_MODIFIER_MASK;
 
     if (is_light && !messageTypeSupportsLightHdr(type)) {
         serverLog(LL_NOTICE,
@@ -3562,7 +3562,7 @@ int clusterIsValidPacket(clusterLink *link) {
     if (totlen < 16) return 0; /* At least signature, version, totlen, count. */
     if (totlen > link->rcvbuf_len) return 0;
 
-    if (ntohs(hdr_unknown->ver) != CLUSTER_PROTO_VER) {
+    if (ntohs(hdr->ver) != CLUSTER_PROTO_VER) {
         /* Can't handle messages of different versions. */
         return 0;
     }
@@ -3576,17 +3576,17 @@ int clusterIsValidPacket(clusterLink *link) {
     uint32_t explen; /* expected length of this packet */
 
     if (type == CLUSTERMSG_TYPE_PING || type == CLUSTERMSG_TYPE_PONG || type == CLUSTERMSG_TYPE_MEET) {
-        clusterMsg *hdr = toClusterMsg(link->rcvbuf);
-        uint16_t extensions = ntohs(hdr->extensions);
-        uint16_t count = ntohs(hdr->count);
+        clusterMsg *msg = toClusterMsg(link->rcvbuf);
+        uint16_t extensions = ntohs(msg->extensions);
+        uint16_t count = ntohs(msg->count);
 
         explen = sizeof(clusterMsg) - sizeof(union clusterMsgData);
         explen += (sizeof(clusterMsgDataGossip) * count);
 
         /* If there is extension data, which doesn't have a fixed length,
          * loop through them and validate the length of it now. */
-        if (hdr->mflags[0] & CLUSTERMSG_FLAG0_EXT_DATA) {
-            clusterMsgPingExt *ext = getInitialPingExt(hdr, count);
+        if (msg->mflags[0] & CLUSTERMSG_FLAG0_EXT_DATA) {
+            clusterMsgPingExt *ext = getInitialPingExt(msg, count);
             while (extensions--) {
                 uint32_t extlen = getPingExtLength(ext);
                 if (extlen % 8 != 0) {
@@ -3611,12 +3611,12 @@ int clusterIsValidPacket(clusterLink *link) {
     } else if (type == CLUSTERMSG_TYPE_PUBLISH || type == CLUSTERMSG_TYPE_PUBLISHSHARD) {
         clusterMsgDataPublish *publish_data;
         if (is_light) {
-            clusterMsgLight *hdr_light = toClusterMsgLight(link->rcvbuf);
-            publish_data = &hdr_light->data.publish.msg;
+            clusterMsgLight *msg_light = toClusterMsgLight(link->rcvbuf);
+            publish_data = &msg_light->data.publish.msg;
             explen = sizeof(clusterMsgLight);
         } else {
-            clusterMsg *hdr = toClusterMsg(link->rcvbuf);
-            publish_data = &hdr->data.publish.msg;
+            clusterMsg *msg = toClusterMsg(link->rcvbuf);
+            publish_data = &msg->data.publish.msg;
             explen = sizeof(clusterMsg);
         }
         explen -= sizeof(union clusterMsgData);
@@ -3630,13 +3630,13 @@ int clusterIsValidPacket(clusterLink *link) {
         explen += sizeof(clusterMsgDataUpdate);
     } else if (type == CLUSTERMSG_TYPE_MODULE) {
         if (is_light) {
-            clusterMsgLight *hdr_light = toClusterMsgLight(link->rcvbuf);
+            clusterMsgLight *msg_light = toClusterMsgLight(link->rcvbuf);
             explen = sizeof(clusterMsgLight) - sizeof(union clusterMsgData);
-            explen += sizeof(clusterMsgModule) - 3 + ntohl(hdr_light->data.module.msg.len);
+            explen += sizeof(clusterMsgModule) - 3 + ntohl(msg_light->data.module.msg.len);
         } else {
-            clusterMsg *hdr = toClusterMsg(link->rcvbuf);
+            clusterMsg *msg = toClusterMsg(link->rcvbuf);
             explen = sizeof(clusterMsg) - sizeof(union clusterMsgData);
-            explen += sizeof(clusterMsgModule) - 3 + ntohl(hdr->data.module.msg.len);
+            explen += sizeof(clusterMsgModule) - 3 + ntohl(msg->data.module.msg.len);
         }
     } else {
         /* We don't know this type of packet, so we assume it's well formed. */
@@ -3674,8 +3674,8 @@ static inline int clusterExtractSlotFromWord(uint64_t *slot_word, size_t slot_wo
 int clusterProcessPacket(clusterLink *link) {
     /* Validate that the packet is well-formed */
     if (!clusterIsValidPacket(link)) {
-        clusterMsgUnknown *hdr_unknown = (clusterMsgUnknown *)link->rcvbuf;
-        uint16_t type = ntohs(hdr_unknown->type);
+        clusterMsgHeader *hdr = (clusterMsgHeader *)link->rcvbuf;
+        uint16_t type = ntohs(hdr->type);
         if (server.debug_cluster_close_link_on_packet_drop &&
             (type == server.cluster_drop_packet_filter || server.cluster_drop_packet_filter == -2)) {
             freeClusterLink(link);
@@ -3685,10 +3685,10 @@ int clusterProcessPacket(clusterLink *link) {
         return 1;
     }
 
-    clusterMsgUnknown *hdr_unknown = (clusterMsgUnknown *)link->rcvbuf;
+    clusterMsgHeader *hdr = (clusterMsgHeader *)link->rcvbuf;
     mstime_t now = mstime();
-    int is_light = IS_LIGHT_MESSAGE(ntohs(hdr_unknown->type));
-    uint16_t type = ntohs(hdr_unknown->type) & ~CLUSTERMSG_MODIFIER_MASK;
+    int is_light = IS_LIGHT_MESSAGE(ntohs(hdr->type));
+    uint16_t type = ntohs(hdr->type) & ~CLUSTERMSG_MODIFIER_MASK;
 
     if (is_light) {
         if (!link->node || nodeInHandshake(link->node)) {
@@ -3707,17 +3707,17 @@ int clusterProcessPacket(clusterLink *link) {
         return 1;
     }
 
-    clusterMsg *hdr = toClusterMsg(link->rcvbuf);
-    uint16_t flags = ntohs(hdr->flags);
+    clusterMsg *msg = toClusterMsg(link->rcvbuf);
+    uint16_t flags = ntohs(msg->flags);
     uint64_t sender_claimed_current_epoch = 0, sender_claimed_config_epoch = 0;
-    clusterNode *sender = getNodeFromLinkAndMsg(link, hdr);
-    int sender_claims_to_be_primary = !memcmp(hdr->replicaof, CLUSTER_NODE_NULL_NAME, CLUSTER_NAMELEN);
+    clusterNode *sender = getNodeFromLinkAndMsg(link, msg);
+    int sender_claims_to_be_primary = !memcmp(msg->replicaof, CLUSTER_NODE_NULL_NAME, CLUSTER_NAMELEN);
     int sender_last_reported_as_replica = sender && nodeIsReplica(sender);
     int sender_last_reported_as_primary = sender && nodeIsPrimary(sender);
 
     /* We store this information at the link layer so that we can send extensions
      * during the handshake even if we don't know the sender. */
-    if (hdr->mflags[0] & CLUSTERMSG_FLAG0_EXT_DATA) {
+    if (msg->mflags[0] & CLUSTERMSG_FLAG0_EXT_DATA) {
         link->flags |= CLUSTER_LINK_EXTENSIONS_SUPPORTED;
     }
 
@@ -3758,8 +3758,8 @@ int clusterProcessPacket(clusterLink *link) {
 
     if (sender && !nodeInHandshake(sender)) {
         /* Update our currentEpoch if we see a newer epoch in the cluster. */
-        sender_claimed_current_epoch = ntohu64(hdr->currentEpoch);
-        sender_claimed_config_epoch = ntohu64(hdr->configEpoch);
+        sender_claimed_current_epoch = ntohu64(msg->currentEpoch);
+        sender_claimed_config_epoch = ntohu64(msg->configEpoch);
         if (sender_claimed_current_epoch > server.cluster->currentEpoch)
             server.cluster->currentEpoch = sender_claimed_current_epoch;
         /* Update the sender configEpoch if it is a primary publishing a newer one. */
@@ -3787,11 +3787,11 @@ int clusterProcessPacket(clusterLink *link) {
             }
         }
         /* Update the replication offset info for this node. */
-        sender->repl_offset = ntohu64(hdr->offset);
+        sender->repl_offset = ntohu64(msg->offset);
         /* If we are a replica performing a manual failover and our primary
          * sent its offset while already paused, populate the MF state. */
         if (server.cluster->mf_end && nodeIsReplica(myself) && myself->replicaof == sender &&
-            hdr->mflags[0] & CLUSTERMSG_FLAG0_PAUSED && server.cluster->mf_primary_offset == -1) {
+            msg->mflags[0] & CLUSTERMSG_FLAG0_PAUSED && server.cluster->mf_primary_offset == -1) {
             server.cluster->mf_primary_offset = sender->repl_offset;
             clusterDoBeforeSleep(CLUSTER_TODO_HANDLE_MANUALFAILOVER);
             serverLog(LL_NOTICE,
@@ -3828,7 +3828,7 @@ int clusterProcessPacket(clusterLink *link) {
             if (!sender) {
                 if (!link->node) {
                     char ip[NET_IP_STR_LEN] = {0};
-                    if (nodeIp2String(ip, link, hdr->myip) != C_OK) {
+                    if (nodeIp2String(ip, link, msg->myip) != C_OK) {
                         /* Unable to retrieve the node's IP address from the connection. Without a
                          * valid IP, the node becomes unusable in the cluster. This failure might be
                          * due to the connection being closed. */
@@ -3848,8 +3848,8 @@ int clusterProcessPacket(clusterLink *link) {
                      * in the future packet. */
                     clusterNode *node = createClusterNode(NULL, CLUSTER_NODE_HANDSHAKE);
                     memcpy(node->ip, ip, sizeof(ip));
-                    getClientPortFromClusterMsg(hdr, &node->tls_port, &node->tcp_port);
-                    node->cport = ntohs(hdr->cport);
+                    getClientPortFromClusterMsg(msg, &node->tls_port, &node->tcp_port);
+                    node->cport = ntohs(msg->cport);
                     if (linkSupportsExtension(link)) {
                         node->flags |= CLUSTER_NODE_EXTENSIONS_SUPPORTED;
                     }
@@ -3871,7 +3871,7 @@ int clusterProcessPacket(clusterLink *link) {
                 /* If this is a MEET packet from an unknown node, we still process
                  * the gossip section here since we have to trust the sender because
                  * of the message type. */
-                clusterProcessGossipSection(hdr, link);
+                clusterProcessGossipSection(msg, link);
             } else if (sender->link && nodeExceedsHandshakeTimeout(sender, now)) {
                 /* The MEET packet is from a known node, after the handshake timeout, so the sender
                  * thinks that I do not know it.
@@ -3925,7 +3925,7 @@ int clusterProcessPacket(clusterLink *link) {
                               "Handshake: we already know node %.40s (%s), "
                               "updating the address if needed.",
                               sender->name, sender->human_nodename);
-                    if (nodeUpdateAddressIfNeeded(sender, link, hdr)) {
+                    if (nodeUpdateAddressIfNeeded(sender, link, msg)) {
                         clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_UPDATE_STATE);
                     }
                     /* Free this node as we already have it. This will
@@ -3936,12 +3936,12 @@ int clusterProcessPacket(clusterLink *link) {
 
                 /* First thing to do is replacing the random name with the
                  * right node name if this was a handshake stage. */
-                clusterRenameNode(link->node, hdr->sender);
+                clusterRenameNode(link->node, msg->sender);
                 serverLog(LL_DEBUG, "Handshake with node %.40s (%s) completed.", link->node->name, link->node->human_nodename);
                 link->node->flags &= ~CLUSTER_NODE_HANDSHAKE;
                 link->node->flags |= flags & (CLUSTER_NODE_PRIMARY | CLUSTER_NODE_REPLICA);
                 clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG);
-            } else if (memcmp(link->node->name, hdr->sender, CLUSTER_NAMELEN) != 0) {
+            } else if (memcmp(link->node->name, msg->sender, CLUSTER_NAMELEN) != 0) {
                 /* If the reply has a non matching node ID we
                  * disconnect this node and set it as not having an associated
                  * address. This can happen if the node did CLUSTER RESET and changed
@@ -3988,7 +3988,7 @@ int clusterProcessPacket(clusterLink *link) {
 
         /* Update the node address if it changed. */
         if (sender && type == CLUSTERMSG_TYPE_PING && !nodeInHandshake(sender) &&
-            nodeUpdateAddressIfNeeded(sender, link, hdr)) {
+            nodeUpdateAddressIfNeeded(sender, link, msg)) {
             clusterDoBeforeSleep(CLUSTER_TODO_SAVE_CONFIG | CLUSTER_TODO_UPDATE_STATE);
         }
 
@@ -4022,7 +4022,7 @@ int clusterProcessPacket(clusterLink *link) {
                 }
             } else {
                 /* Node is a replica. */
-                clusterNode *sender_claimed_primary = clusterLookupNode(hdr->replicaof, CLUSTER_NAMELEN);
+                clusterNode *sender_claimed_primary = clusterLookupNode(msg->replicaof, CLUSTER_NAMELEN);
 
                 if (sender_last_reported_as_primary) {
                     serverLog(LL_DEBUG, "node %.40s (%s) announces that it is a %s in shard %.40s", sender->name,
@@ -4160,7 +4160,7 @@ int clusterProcessPacket(clusterLink *link) {
          * this ASAP to avoid other computational expensive checks later.*/
 
         if (sender && sender_claims_to_be_primary &&
-            (sender_last_reported_as_replica || memcmp(sender->slots, hdr->myslots, sizeof(hdr->myslots)))) {
+            (sender_last_reported_as_replica || memcmp(sender->slots, msg->myslots, sizeof(msg->myslots)))) {
             /* Make sure CLUSTER_NODE_PRIMARY has already been set by now on sender */
             serverAssert(nodeIsPrimary(sender));
 
@@ -4170,7 +4170,7 @@ int clusterProcessPacket(clusterLink *link) {
             /* 1) If the sender of the message is a primary, and we detected that
              *    the set of slots it claims changed, scan the slots to see if we
              *    need to update our configuration. */
-            clusterUpdateSlotsConfigWith(sender, sender_claimed_config_epoch, hdr->myslots);
+            clusterUpdateSlotsConfigWith(sender, sender_claimed_config_epoch, msg->myslots);
 
             /* 2) We also check for the reverse condition, that is, the sender
              *    claims to serve slots we know are served by a primary with a
@@ -4193,7 +4193,7 @@ int clusterProcessPacket(clusterLink *link) {
             bool found_new_owner = false;
             for (size_t w = 0; w < CLUSTER_SLOT_WORDS && !found_new_owner; w++) {
                 uint64_t word;
-                memcpy(&word, hdr->myslots + SLOT_WORD_OFFSET(w), sizeof(word));
+                memcpy(&word, msg->myslots + SLOT_WORD_OFFSET(w), sizeof(word));
                 while (word) {
                     const int slot = clusterExtractSlotFromWord(&word, w);
 
@@ -4226,29 +4226,29 @@ int clusterProcessPacket(clusterLink *link) {
 
         /* Get info from the gossip section */
         if (sender) {
-            clusterProcessGossipSection(hdr, link);
-            clusterProcessPingExtensions(hdr, link);
+            clusterProcessGossipSection(msg, link);
+            clusterProcessPingExtensions(msg, link);
         }
     } else if (type == CLUSTERMSG_TYPE_FAIL) {
         clusterNode *failing;
 
         if (sender) {
-            failing = clusterLookupNode(hdr->data.fail.about.nodename, CLUSTER_NAMELEN);
+            failing = clusterLookupNode(msg->data.fail.about.nodename, CLUSTER_NAMELEN);
             if (failing && !(failing->flags & (CLUSTER_NODE_FAIL | CLUSTER_NODE_MYSELF))) {
-                serverLog(LL_NOTICE, "FAIL message received from %.40s (%s) about %.40s (%s)", hdr->sender,
-                          sender->human_nodename, hdr->data.fail.about.nodename, failing->human_nodename);
+                serverLog(LL_NOTICE, "FAIL message received from %.40s (%s) about %.40s (%s)", msg->sender,
+                          sender->human_nodename, msg->data.fail.about.nodename, failing->human_nodename);
                 markNodeAsFailing(failing);
             }
         } else {
-            serverLog(LL_NOTICE, "Ignoring FAIL message from unknown node %.40s about %.40s", hdr->sender,
-                      hdr->data.fail.about.nodename);
+            serverLog(LL_NOTICE, "Ignoring FAIL message from unknown node %.40s about %.40s", msg->sender,
+                      msg->data.fail.about.nodename);
         }
     } else if (type == CLUSTERMSG_TYPE_PUBLISH || type == CLUSTERMSG_TYPE_PUBLISHSHARD) {
         if (!sender) return 1; /* We don't know that node. */
-        clusterProcessPublishPacket(&hdr->data.publish.msg, type);
+        clusterProcessPublishPacket(&msg->data.publish.msg, type);
     } else if (type == CLUSTERMSG_TYPE_FAILOVER_AUTH_REQUEST) {
         if (!sender) return 1; /* We don't know that node. */
-        clusterSendFailoverAuthIfNeeded(sender, hdr);
+        clusterSendFailoverAuthIfNeeded(sender, msg);
     } else if (type == CLUSTERMSG_TYPE_FAILOVER_AUTH_ACK) {
         if (!sender) return 1; /* We don't know that node. */
         /* We consider this vote only if the sender is a primary serving
@@ -4280,10 +4280,10 @@ int clusterProcessPacket(clusterLink *link) {
         clusterSendPing(link, CLUSTERMSG_TYPE_PING);
     } else if (type == CLUSTERMSG_TYPE_UPDATE) {
         clusterNode *n; /* The node the update is about. */
-        uint64_t reportedConfigEpoch = ntohu64(hdr->data.update.nodecfg.configEpoch);
+        uint64_t reportedConfigEpoch = ntohu64(msg->data.update.nodecfg.configEpoch);
 
         if (!sender) return 1; /* We don't know the sender. */
-        n = clusterLookupNode(hdr->data.update.nodecfg.nodename, CLUSTER_NAMELEN);
+        n = clusterLookupNode(msg->data.update.nodecfg.nodename, CLUSTER_NAMELEN);
         if (!n) return 1;                                    /* We don't know the reported node. */
         if (n->configEpoch >= reportedConfigEpoch) return 1; /* Nothing new. */
 
@@ -4300,9 +4300,9 @@ int clusterProcessPacket(clusterLink *link) {
 
         /* Check the bitmap of served slots and update our
          * config accordingly. */
-        clusterUpdateSlotsConfigWith(n, reportedConfigEpoch, hdr->data.update.nodecfg.slots);
+        clusterUpdateSlotsConfigWith(n, reportedConfigEpoch, msg->data.update.nodecfg.slots);
     } else if (type == CLUSTERMSG_TYPE_MODULE) {
-        clusterProcessModulePacket(&hdr->data.module.msg, sender);
+        clusterProcessModulePacket(&msg->data.module.msg, sender);
     } else {
         serverLog(LL_WARNING, "Received unknown packet type: %d", type);
     }
@@ -4408,10 +4408,10 @@ void clusterLinkConnectHandler(connection *conn) {
 }
 
 /* Performs sanity check on the message signature and length depending on the type. */
-static inline int isClusterMsgSignatureAndLengthValid(clusterMsgUnknown *hdr_unknown) {
-    if (memcmp(hdr_unknown->sig, "RCmb", 4) != 0) return 0;
-    uint16_t type = ntohs(hdr_unknown->type);
-    uint32_t totlen = ntohl(hdr_unknown->totlen);
+static inline int isClusterMsgSignatureAndLengthValid(clusterMsgHeader *hdr) {
+    if (memcmp(hdr->sig, "RCmb", 4) != 0) return 0;
+    uint16_t type = ntohs(hdr->type);
+    uint32_t totlen = ntohl(hdr->totlen);
     uint32_t minlen = IS_LIGHT_MESSAGE(type) ? CLUSTERMSG_LIGHT_MIN_LEN : CLUSTERMSG_MIN_LEN;
     if (totlen < minlen) return 0;
     return 1;
@@ -4423,7 +4423,7 @@ static inline int isClusterMsgSignatureAndLengthValid(clusterMsgUnknown *hdr_unk
 void clusterReadHandler(connection *conn) {
     clusterMsg buf[1];
     ssize_t nread;
-    clusterMsgUnknown *hdr_unknown;
+    clusterMsgHeader *hdr;
     clusterLink *link = connGetPrivateData(conn);
     unsigned int readlen, rcvbuflen;
 
@@ -4435,11 +4435,11 @@ void clusterReadHandler(connection *conn) {
             readlen = RCVBUF_MIN_READ_LEN - rcvbuflen;
         } else {
             /* Finally read the full message. */
-            hdr_unknown = (clusterMsgUnknown *)link->rcvbuf;
+            hdr = (clusterMsgHeader *)link->rcvbuf;
             if (rcvbuflen == RCVBUF_MIN_READ_LEN) {
                 /* Perform some sanity check on the message signature
                  * and length. */
-                if (!isClusterMsgSignatureAndLengthValid(hdr_unknown)) {
+                if (!isClusterMsgSignatureAndLengthValid(hdr)) {
                     char ip[NET_IP_STR_LEN];
                     int port;
                     if (connAddrPeerName(conn, ip, sizeof(ip), &port) == -1) {
@@ -4455,7 +4455,7 @@ void clusterReadHandler(connection *conn) {
                     return;
                 }
             }
-            readlen = ntohl(hdr_unknown->totlen) - rcvbuflen;
+            readlen = ntohl(hdr->totlen) - rcvbuflen;
             if (readlen > sizeof(buf)) readlen = sizeof(buf);
         }
 
@@ -4484,12 +4484,12 @@ void clusterReadHandler(connection *conn) {
             }
             memcpy(link->rcvbuf + link->rcvbuf_len, buf, nread);
             link->rcvbuf_len += nread;
-            hdr_unknown = (clusterMsgUnknown *)link->rcvbuf;
+            hdr = (clusterMsgHeader *)link->rcvbuf;
             rcvbuflen += nread;
         }
 
         /* Total length obtained? Process this packet. */
-        if (rcvbuflen >= RCVBUF_MIN_READ_LEN && rcvbuflen == ntohl(hdr_unknown->totlen)) {
+        if (rcvbuflen >= RCVBUF_MIN_READ_LEN && rcvbuflen == ntohl(hdr->totlen)) {
             if (clusterProcessPacket(link)) {
                 if (link->rcvbuf_alloc > RCVBUF_INIT_LEN) {
                     size_t prev_rcvbuf_alloc = link->rcvbuf_alloc;

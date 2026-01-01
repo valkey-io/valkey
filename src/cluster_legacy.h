@@ -351,21 +351,14 @@ typedef struct {
     uint16_t notused1; /* full: port, light: notused1 */
     uint16_t type;     /* Message type */
     uint16_t notused2; /* full: count, light: notused2 */
-} clusterMsgUnknown;
+} clusterMsgHeader;
 
-static_assert(offsetof(clusterMsgUnknown, sig) == offsetof(clusterMsg, sig), "unexpected field offset");
-static_assert(offsetof(clusterMsgUnknown, totlen) == offsetof(clusterMsg, totlen), "unexpected field offset");
-static_assert(offsetof(clusterMsgUnknown, ver) == offsetof(clusterMsg, ver), "unexpected field offset");
-static_assert(offsetof(clusterMsgUnknown, type) == offsetof(clusterMsg, type), "unexpected field offset");
-static_assert(offsetof(clusterMsgUnknown, notused1) == offsetof(clusterMsg, port), "unexpected field offset");
-static_assert(offsetof(clusterMsgUnknown, notused2) == offsetof(clusterMsg, count), "unexpected field offset");
-
-static_assert(offsetof(clusterMsgUnknown, sig) == offsetof(clusterMsgLight, sig), "unexpected field offset");
-static_assert(offsetof(clusterMsgUnknown, totlen) == offsetof(clusterMsgLight, totlen), "unexpected field offset");
-static_assert(offsetof(clusterMsgUnknown, ver) == offsetof(clusterMsgLight, ver), "unexpected field offset");
-static_assert(offsetof(clusterMsgUnknown, type) == offsetof(clusterMsgLight, type), "unexpected field offset");
-static_assert(offsetof(clusterMsgUnknown, notused1) == offsetof(clusterMsgLight, notused1), "unexpected field offset");
-static_assert(offsetof(clusterMsgUnknown, notused2) == offsetof(clusterMsgLight, notused2), "unexpected field offset");
+static_assert(offsetof(clusterMsgHeader, sig) == offsetof(clusterMsg, sig), "unexpected field offset");
+static_assert(offsetof(clusterMsgHeader, totlen) == offsetof(clusterMsg, totlen), "unexpected field offset");
+static_assert(offsetof(clusterMsgHeader, ver) == offsetof(clusterMsg, ver), "unexpected field offset");
+static_assert(offsetof(clusterMsgHeader, type) == offsetof(clusterMsg, type), "unexpected field offset");
+static_assert(offsetof(clusterMsgHeader, notused1) == offsetof(clusterMsg, port), "unexpected field offset");
+static_assert(offsetof(clusterMsgHeader, notused2) == offsetof(clusterMsg, count), "unexpected field offset");
 
 struct _clusterNode {
     mstime_t ctime;                         /* Node object creation time. */

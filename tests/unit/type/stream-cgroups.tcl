@@ -802,7 +802,8 @@ start_server {
     }
 
     test {XAUTOCLAIM COUNT must be > 0} {
-       assert_error "ERR COUNT must be > 0" {r XAUTOCLAIM key group consumer 1 1 COUNT 0}
+       r XGROUP CREATE teststream group $ MKSTREAM
+       assert_error "ERR COUNT must be > 0" {r XAUTOCLAIM teststream group consumer 1 1 COUNT 0}
     }
 
     test {XCLAIM with XDEL} {

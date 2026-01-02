@@ -1417,11 +1417,6 @@ void hsetexCommand(client *c) {
             }
         }
         signalModifiedKey(c, c->db, c->argv[1]);
-        /* Delete the object in case it was left empty */
-        if (hashTypeLength(o) == 0) {
-            dbDelete(c->db, c->argv[1]);
-            notifyKeyspaceEvent(NOTIFY_GENERIC, "del", c->argv[1], c->db->id);
-        }
         server.dirty += changes;
     } else {
         /* If no changes were done we still need to free the new argv array and the refcount of the first argument. */
@@ -1429,6 +1424,13 @@ void hsetexCommand(client *c) {
             decrRefCount(c->argv[1]);
         if (new_argv) zfree(new_argv);
     }
+
+    /* Delete the object in case it was left empty or created with all expired items. */
+    if (hashTypeLength(o) == 0) {
+        dbDelete(c->db, c->argv[1]);
+        notifyKeyspaceEvent(NOTIFY_GENERIC, "del", c->argv[1], c->db->id);
+    }
+
     addReplyLongLong(c, changes == num_fields ? 1 : 0);
 }
 

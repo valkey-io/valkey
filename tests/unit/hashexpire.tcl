@@ -607,6 +607,9 @@ start_server {tags {"hashexpire"}} {
         r HSETEX myhash PX 0 FIELDS 1 field1 val1
         after 10
         assert_equal 0 [r HEXISTS myhash field1]
+        # The hash should also not exist
+        assert_equal 0 [r EXISTS myhash]
+        assert_equal 0 [r HLEN myhash]
     }
 
     test {HSETEX PX - test mix of expiring and persistent fields} {

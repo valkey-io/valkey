@@ -797,7 +797,7 @@ start_server {tags {"hashexpire"}} {
         r HSETEX myhash nx PXAT $exp FIELDS 1 f3 v3
         r HSETEX myhash xx PXAT $exp FIELDS 1 f3 v3
         r HSETEX myhash fnx PXAT $exp FIELDS 1 f4 v4
-        r HSETEX myhash fxx PXAT $exp FIELDS 1 f5 v5
+        r HSETEX myhash fxx PXAT $exp FIELDS 1 f4 v4
 
         assert_replication_stream $repl [subst {
             {hsetex myhash PXAT $exp FIELDS 1 f1 v1}
@@ -807,7 +807,7 @@ start_server {tags {"hashexpire"}} {
             {hsetex myhash PXAT $exp FIELDS 1 f3 v3}
             {hsetex myhash PXAT $exp FIELDS 1 f3 v3}
             {hsetex myhash PXAT $exp FIELDS 1 f4 v4}
-            {hsetex myhash PXAT $exp FIELDS 1 f5 v5}
+            {hsetex myhash PXAT $exp FIELDS 1 f4 v4}
         }]
         close_replication_stream $repl
     }

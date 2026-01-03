@@ -210,6 +210,39 @@ static int tlsPasswordCallback(char *buf, int size, int rwflag, void *u) {
     return (int)pass_len;
 }
 
+/* Check a single X509 certificate validity */
+static int is_cert_valid(X509 *cert) {
+    if (!cert) return 0;
+    const ASN1_TIME *not_before = X509_get0_notBefore(cert);
+    const ASN1_TIME *not_after = X509_get0_notAfter(cert);
+    if (!not_before || !not_after) return 0;
+    if (X509_cmp_current_time(not_before) > 0 ||
+        X509_cmp_current_time(not_after) < 0) {
+        return 0;
+    }
+    return 1;
+}
+
+
+/* Iterate over all CA certs in the SSL_CTX and fail-fast if any are invalid */
+int check_loaded_ca_certs(SSL_CTX *ctx) {
+    X509_STORE *store = SSL_CTX_get_cert_store(ctx);
+    if (!store) return 0;
+    STACK_OF(X509_OBJECT) *objs = X509_STORE_get0_objects(store);
+    if (!objs) return 0;
+    for (int i = 0; i < sk_X509_OBJECT_num(objs); i++) {
+        X509_OBJECT *obj = sk_X509_OBJECT_value(objs, i);
+        int type = X509_OBJECT_get_type(obj);
+        if (type == X509_LU_X509) {
+            X509 *ca_cert = X509_OBJECT_get0_X509(obj);
+            if (ca_cert && !is_cert_valid(ca_cert)) {
+                return 0;
+            }
+        }
+    }
+    return 1;
+}
+
 /* Create a *base* SSL_CTX using the SSL configuration provided. The base context
  * includes everything that's common for both client-side and server-side connections.
  */
@@ -254,17 +287,28 @@ static SSL_CTX *createSSLContext(serverTLSContextConfig *ctx_config, int protoco
         goto error;
     }
 
+    if (!is_cert_valid(SSL_CTX_get0_certificate(ctx))) {
+        serverLog(LL_WARNING, "%s TLS certificate is invalid. Aborting TLS configuration.", client ? "Client" : "Server");
+        goto error;
+    }
+
     if (SSL_CTX_use_PrivateKey_file(ctx, key_file, SSL_FILETYPE_PEM) <= 0) {
         ERR_error_string_n(ERR_get_error(), errbuf, sizeof(errbuf));
         serverLog(LL_WARNING, "Failed to load private key: %s: %s", key_file, errbuf);
         goto error;
     }
 
-    if ((ctx_config->ca_cert_file || ctx_config->ca_cert_dir) &&
-        SSL_CTX_load_verify_locations(ctx, ctx_config->ca_cert_file, ctx_config->ca_cert_dir) <= 0) {
-        ERR_error_string_n(ERR_get_error(), errbuf, sizeof(errbuf));
-        serverLog(LL_WARNING, "Failed to configure CA certificate(s) file/directory: %s", errbuf);
-        goto error;
+    if (ctx_config->ca_cert_file || ctx_config->ca_cert_dir) {
+        if (SSL_CTX_load_verify_locations(ctx, ctx_config->ca_cert_file, ctx_config->ca_cert_dir) <= 0) {
+            ERR_error_string_n(ERR_get_error(), errbuf, sizeof(errbuf));
+            serverLog(LL_WARNING, "Failed to configure CA certificate(s) file/directory: %s", errbuf);
+            goto error;
+        }
+
+        if (!check_loaded_ca_certs(ctx)) {
+            serverLog(LL_WARNING, "One or more loaded CA certificates are invalid. Aborting TLS configuration.");
+            goto error;
+        }
     }
 
     if (ctx_config->ciphers && !SSL_CTX_set_cipher_list(ctx, ctx_config->ciphers)) {

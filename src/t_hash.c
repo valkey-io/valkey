@@ -38,7 +38,6 @@
 #include "vset.h"
 #include "server.h"
 #include "zmalloc.h"
-#include <_strings.h>
 #include <math.h>
 #include <string.h>
 #include "entry.h"

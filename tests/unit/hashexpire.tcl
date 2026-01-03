@@ -2347,7 +2347,7 @@ start_server {tags {"hashexpire external:skip"}} {
             } else {
                 fail "hash object was not deleted on replica after timeout"
             }
-        } 
+        }
     }
 }
 

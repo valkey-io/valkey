@@ -1311,6 +1311,7 @@ void hsetexCommand(client *c) {
             return;
 
         if (checkAlreadyExpired(when)) {
+            need_rewrite_argv = 1;
             set_expired = 1;
         }
     }
@@ -1403,31 +1404,33 @@ void hsetexCommand(client *c) {
         if (has_volatile_fields != hashTypeHasVolatileFields(o)) {
             dbUpdateObjectWithVolatileItemsTracking(c->db, o);
         }
-        if (set_expired) {
+        if (need_rewrite_argv) {
             replaceClientCommandVector(c, new_argc, new_argv);
-            /* We would like to reduce the number of hexpired events in case there are potential many expired fields. */
-            notifyKeyspaceEvent(NOTIFY_HASH, "hexpired", c->argv[1], c->db->id);
-        } else {
-            notifyKeyspaceEvent(NOTIFY_HASH, "hset", c->argv[1], c->db->id);
-            if (need_rewrite_argv) {
-                replaceClientCommandVector(c, new_argc, new_argv);
-            }
-            if (expire) {
-                notifyKeyspaceEvent(NOTIFY_HASH, "hexpire", c->argv[1], c->db->id);
-            }
         }
         signalModifiedKey(c, c->db, c->argv[1]);
-        /* Delete the object in case it was left empty */
-        if (hashTypeLength(o) == 0) {
-            dbDelete(c->db, c->argv[1]);
-            notifyKeyspaceEvent(NOTIFY_GENERIC, "del", c->argv[1], c->db->id);
-        }
         server.dirty += changes;
     } else {
         /* If no changes were done we still need to free the new argv array and the refcount of the first argument. */
         if (set_expired)
             decrRefCount(c->argv[1]);
         if (new_argv) zfree(new_argv);
+    }
+
+    /* Handle keyspace notifications and object delete if needed.
+     * since setting fields in hash object should always work in case all validations pass,
+     * it is safe to assume that in case we reach this point events should be issues */
+    notifyKeyspaceEvent(NOTIFY_HASH, "hset", c->argv[1], c->db->id);
+    if (expire) {
+        notifyKeyspaceEvent(NOTIFY_HASH, "hexpire", c->argv[1], c->db->id);
+    }
+    if (set_expired) {
+        /* We would like to reduce the number of hexpired events in case there are potential many expired fields. */
+        notifyKeyspaceEvent(NOTIFY_HASH, "hexpired", c->argv[1], c->db->id);
+    }
+    /* Delete the object in case it was left empty */
+    if (hashTypeLength(o) == 0) {
+        dbDelete(c->db, c->argv[1]);
+        notifyKeyspaceEvent(NOTIFY_GENERIC, "del", c->argv[1], c->db->id);
     }
     addReplyLongLong(c, changes == num_fields ? 1 : 0);
 }

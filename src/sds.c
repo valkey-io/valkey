@@ -1039,11 +1039,11 @@ int hex_digit_to_int(char c) {
     }
 }
 
-static inline int is_ptr_exceeds_end(const char *ptr, size_t len, const char *end) {
+static inline bool is_ptr_exceeds_end(const char *ptr, size_t len, const char *end) {
     if (end == NULL) {
-        return -1;
+        return false;
     }
-    return (ptr + len) < end ? 0 : 1;
+    return (ptr + len) >= end;
 }
 
 /* Helper function for sdssplitargs that parses a single argument. It
@@ -1058,7 +1058,7 @@ static int sdsparsearg(const char *arg, const char *end, unsigned int *len, char
     int insq = 0; /* set to 1 if we are in 'single quotes' */
     int done = 0;
 
-    if (is_ptr_exceeds_end(p, 0, end) > 0) {
+    if (is_ptr_exceeds_end(p, 0, end)) {
         return 0;
     }
 
@@ -1068,10 +1068,10 @@ static int sdsparsearg(const char *arg, const char *end, unsigned int *len, char
             if (!*p) {
                 /* unterminated quotes */
                 return 0;
-            } else if ((is_ptr_exceeds_end(p, 4, end) <= 0) && (*p == '\\' && *(p + 1) == 'x' && is_hex_digit(*(p + 2)) && is_hex_digit(*(p + 3)))) {
+            } else if (!is_ptr_exceeds_end(p, 4, end) && (*p == '\\' && *(p + 1) == 'x' && is_hex_digit(*(p + 2)) && is_hex_digit(*(p + 3)))) {
                 new_char = (hex_digit_to_int(*(p + 2)) * 16) + hex_digit_to_int(*(p + 3));
                 p += 4;
-            } else if ((is_ptr_exceeds_end(p, 2, end) <= 0) && (*p == '\\' && *(p + 1))) {
+            } else if (!is_ptr_exceeds_end(p, 2, end) && (*p == '\\' && *(p + 1))) {
                 switch (*(p + 1)) {
                 case 'n': new_char = '\n'; break;
                 case 'r': new_char = '\r'; break;
@@ -1092,7 +1092,7 @@ static int sdsparsearg(const char *arg, const char *end, unsigned int *len, char
             if (!*p) {
                 /* unterminated quotes */
                 return 0;
-            } else if ((is_ptr_exceeds_end(p, 2, end) <= 0) && (*p == '\\' && *(p + 1) == '\'')) {
+            } else if (!is_ptr_exceeds_end(p, 2, end) && (*p == '\\' && *(p + 1) == '\'')) {
                 new_char = '\'';
                 p += 2;
             } else if (*p == '\'') {
@@ -1124,7 +1124,7 @@ static int sdsparsearg(const char *arg, const char *end, unsigned int *len, char
                 dst++;
             }
         }
-        if (is_ptr_exceeds_end(p, 0, end) > 0) {
+        if (is_ptr_exceeds_end(p, 0, end)) {
             if (inq || insq) {
                 /* unterminated quotes */
                 return 0;
@@ -1158,25 +1158,16 @@ static int sdsparsearg(const char *arg, const char *end, unsigned int *len, char
  * The sds strings returned by this function are not initialized with
  * extra space.
  */
-sds *sdssplitargs(const char *line, int *argc) {
-    return sdsnsplitargs(line, -1, argc);
-}
-
-/* Split a line into arguments, like sdssplitargs(), but with an explicit length parameter.
- * The number of arguments is stored into *argc, and an array of sds is returned.
- * The caller should free the resulting array with sdsfreesplitres().
- */
-sds *sdsnsplitargs(const char *line, int len, int *argc) {
+sds *sdsnsplitargs_internal(const char *line, const char *end, int *argc) {
     const char *p = line;
-    const char *end = len < 0 ? NULL : line + len;
     size_t cap = 0;
     sds *vector = NULL;
 
     *argc = 0;
-    while (*p && is_ptr_exceeds_end(p, 0, end) <= 0) {
+    while (*p && !is_ptr_exceeds_end(p, 0, end)) {
         /* skip blanks */
-        while (*p && is_ptr_exceeds_end(p, 0, end) <= 0 && isspace(*p)) p++;
-        if (!(*p && is_ptr_exceeds_end(p, 0, end) <= 0)) break;
+        while (*p && !is_ptr_exceeds_end(p, 0, end) && isspace(*p)) p++;
+        if (!(*p && !is_ptr_exceeds_end(p, 0, end))) break;
 
         unsigned int token_len = 0;
         if (sdsparsearg(p, end, &token_len, NULL)) {
@@ -1202,6 +1193,15 @@ sds *sdsnsplitargs(const char *line, int len, int *argc) {
     /* Even on empty input string return something not NULL. */
     if (vector == NULL) vector = s_malloc(sizeof(void *));
     return vector;
+}
+
+sds *sdssplitargs(const char *line, int *argc) {
+    return sdsnsplitargs_internal(line, NULL, argc);
+}
+
+sds *sdsnsplitargs(const char *line, int len, int *argc) {
+    const char *end = len < 0 ? NULL : line + len;
+    return sdsnsplitargs_internal(line, end, argc);
 }
 
 /* Modify the string substituting all the occurrences of the set of

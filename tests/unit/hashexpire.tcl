@@ -800,11 +800,11 @@ start_server {tags {"hashexpire"}} {
         r HSETEX myhash fxx PXAT $exp FIELDS 1 f4 v4
 
         assert_replication_stream $repl [subst {
+            {select 9}
             {hsetex myhash PXAT $exp FIELDS 1 f1 v1}
             {hsetex myhash PXAT $exp FIELDS 1 f1 v1}
             {hsetex myhash PXAT $exp FIELDS 1 f2 v2}
             {hsetex myhash PXAT $exp FIELDS 1 f2 v2}
-            {hsetex myhash PXAT $exp FIELDS 1 f3 v3}
             {hsetex myhash PXAT $exp FIELDS 1 f3 v3}
             {hsetex myhash PXAT $exp FIELDS 1 f4 v4}
             {hsetex myhash PXAT $exp FIELDS 1 f4 v4}

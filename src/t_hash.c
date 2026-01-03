@@ -38,6 +38,7 @@
 #include "vset.h"
 #include "server.h"
 #include "zmalloc.h"
+#include <_strings.h>
 #include <math.h>
 #include <string.h>
 #include "entry.h"
@@ -1358,10 +1359,10 @@ void hsetexCommand(client *c) {
         new_argv = zmalloc(sizeof(robj *) * c->argc);
         // Copy optional args (skip NX/XX/FNX/FXX)
         for (int i = 0; i < fields_index; i++) {
-            if (strcmp(c->argv[i]->ptr, "NX") &&
-                strcmp(c->argv[i]->ptr, "XX") &&
-                strcmp(c->argv[i]->ptr, "FNX") &&
-                strcmp(c->argv[i]->ptr, "FXX")) {
+            if (strcasecmp(c->argv[i]->ptr, "NX") &&
+                strcasecmp(c->argv[i]->ptr, "XX") &&
+                strcasecmp(c->argv[i]->ptr, "FNX") &&
+                strcasecmp(c->argv[i]->ptr, "FXX")) {
                 /* Propagate as HSETEX Key Value PXAT millisecond-timestamp if there is
                  * EX/PX/EXAT flag. */
                 if (expire && !(flags & ARGS_PXAT) && c->argv[i + 1] == expire) {

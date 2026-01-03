@@ -794,10 +794,10 @@ start_server {tags {"hashexpire"}} {
         r HSETEX myhash XX PXAT $exp FIELDS 1 f1 v1
         r HSETEX myhash FNX PXAT $exp FIELDS 1 f2 v2
         r HSETEX myhash FXX PXAT $exp FIELDS 1 f2 v2
-        r HSETEX myhash nx PXAT $exp FIELDS 1 f3 v3
-        r HSETEX myhash xx PXAT $exp FIELDS 1 f3 v3
-        r HSETEX myhash fnx PXAT $exp FIELDS 1 f4 v4
-        r HSETEX myhash fxx PXAT $exp FIELDS 1 f4 v4
+        r HSETEX myhash2 nx PXAT $exp FIELDS 1 f1 v1
+        r HSETEX myhash2 xx PXAT $exp FIELDS 1 f1 v1
+        r HSETEX myhash2 fnx PXAT $exp FIELDS 1 f2 v2
+        r HSETEX myhash2 fxx PXAT $exp FIELDS 1 f2 v2
 
         assert_replication_stream $repl [subst {
             {select 9}
@@ -805,9 +805,10 @@ start_server {tags {"hashexpire"}} {
             {hsetex myhash PXAT $exp FIELDS 1 f1 v1}
             {hsetex myhash PXAT $exp FIELDS 1 f2 v2}
             {hsetex myhash PXAT $exp FIELDS 1 f2 v2}
-            {hsetex myhash PXAT $exp FIELDS 1 f3 v3}
-            {hsetex myhash PXAT $exp FIELDS 1 f4 v4}
-            {hsetex myhash PXAT $exp FIELDS 1 f4 v4}
+            {hsetex myhash2 PXAT $exp FIELDS 1 f1 v1}
+            {hsetex myhash2 PXAT $exp FIELDS 1 f1 v1}
+            {hsetex myhash2 PXAT $exp FIELDS 1 f2 v2}
+            {hsetex myhash2 PXAT $exp FIELDS 1 f2 v2}
         }]
         close_replication_stream $repl
     }

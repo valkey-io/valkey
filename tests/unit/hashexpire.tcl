@@ -693,6 +693,26 @@ start_server {tags {"hashexpire"}} {
         assert_equal 0 [r EXISTS myhash]
     }
 
+    test {HSETEX is not replicating validation arguments} {
+        r flushall
+        set repl [attach_to_replication_stream]
+        set exp [get_longer_then_long_expire_value PXAT]
+
+        r HSETEX myhash FNX PXAT $exp FIELDS 1 f2 v2
+        r HSETEX myhash FXX PXAT $exp FIELDS 1 f2 v2
+        r HSETEX myhash2 fnx PXAT $exp FIELDS 1 f2 v2
+        r HSETEX myhash2 fxx PXAT $exp FIELDS 1 f2 v2
+
+        assert_replication_stream $repl [subst {
+            {select *}
+            {hsetex myhash PXAT $exp FIELDS 1 f2 v2}
+            {hsetex myhash PXAT $exp FIELDS 1 f2 v2}
+            {hsetex myhash2 PXAT $exp FIELDS 1 f2 v2}
+            {hsetex myhash2 PXAT $exp FIELDS 1 f2 v2}
+        }]
+        close_replication_stream $repl
+    }
+
     ###### Test EXPIRE #############
 
 
@@ -2202,6 +2222,7 @@ start_server {tags {"hashexpire external:skip"}} {
                 fail "hash object was not deleted on replica after timeout"
             }
         }
+
         test {HEXPIREAT with expired time is propagated to the replica} {
             $primary flushall            
 

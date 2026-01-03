@@ -2323,7 +2323,7 @@ start_server {tags {"hashexpire external:skip"}} {
         }
 
         test {HSETEX is not replicating validation arguments} {
-          $primary flushall            
+          $primary flushall
           set repl [attach_to_replication_stream]
           set exp [get_longer_then_long_expire_value PXAT]
 

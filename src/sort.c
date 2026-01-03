@@ -506,7 +506,7 @@ void sortCommandGeneric(client *c, int readonly) {
         server.sort_alpha = alpha;
         server.sort_bypattern = sortby ? 1 : 0;
         server.sort_store = storekey ? 1 : 0;
-        /* If the source keys are empty, we have will have a vector length of zero,
+        /* If the source keys are empty, we will have a vector length of zero,
          * so no need to sort. */
         if (vectorlen != 0) {   
             if (sortby && (start != 0 || end != vectorlen - 1))

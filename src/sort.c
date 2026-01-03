@@ -302,27 +302,13 @@ void sortCommandGeneric(client *c, int readonly) {
         return;
     }
 
-    /* If we have nothing to sort (the specified key doesn't exist), we return
-     * an empty array, or, if STORE is used, delete the target key and return 0. */
-    if (!sortval) {
-        listRelease(operations);
-        if (storekey == NULL) {
-            addReplyArrayLen(c, 0);
-        } else {
-            if (dbDelete(c->db, storekey)) {
-                signalModifiedKey(c, c->db, storekey);
-                notifyKeyspaceEvent(NOTIFY_GENERIC, "del", storekey, c->db->id);
-                server.dirty++;
-            }
-            addReplyLongLong(c, 0);
-        }
-        return;
-    }
-
     /* Now we need to protect sortval incrementing its count, in the future
      * SORT may have options able to overwrite/delete keys during the sorting
      * and the sorted key itself may get destroyed */
-    incrRefCount(sortval);
+    if (sortval)
+        incrRefCount(sortval);
+    else
+        sortval = createQuicklistObject(server.list_max_listpack_size, server.list_compress_depth);
 
     /* When sorting a set with no sort specified, we must sort the output
      * so the result is consistent across scripting and replication.
@@ -520,10 +506,14 @@ void sortCommandGeneric(client *c, int readonly) {
         server.sort_alpha = alpha;
         server.sort_bypattern = sortby ? 1 : 0;
         server.sort_store = storekey ? 1 : 0;
-        if (sortby && (start != 0 || end != vectorlen - 1))
-            pqsort(vector, vectorlen, sizeof(serverSortObject), sortCompare, start, end);
-        else
-            qsort(vector, vectorlen, sizeof(serverSortObject), sortCompare);
+        /* If the source keys are empty, we have will have a vector length of zero,
+         * so no need to sort. */
+        if (vectorlen != 0) {   
+            if (sortby && (start != 0 || end != vectorlen - 1))
+                pqsort(vector, vectorlen, sizeof(serverSortObject), sortCompare, start, end);
+            else
+                qsort(vector, vectorlen, sizeof(serverSortObject), sortCompare);
+        }
     }
 
     /* Send command output to the output buffer, performing the specified

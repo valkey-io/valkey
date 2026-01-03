@@ -2294,6 +2294,7 @@ start_server {tags {"hashexpire external:skip"}} {
                 fail "hash object was not deleted on replica after timeout"
             }
         }
+
         test {HEXPIREAT with expired time is propagated to the replica} {
             $primary flushall            
 
@@ -2319,6 +2320,33 @@ start_server {tags {"hashexpire external:skip"}} {
             } else {
                 fail "hash object was not deleted on replica after timeout"
             }
+        }
+
+        test {HSETEX is not replicating validation arguments} {
+          $primary flushall            
+          set repl [attach_to_replication_stream]
+          set exp [get_longer_then_long_expire_value PXAT]
+
+          $primary HSETEX myhash NX PXAT $exp FIELDS 1 f1 v1
+          $primary HSETEX myhash XX PXAT $exp FIELDS 1 f1 v1
+          $primary HSETEX myhash FNX PXAT $exp FIELDS 1 f2 v2
+          $primary HSETEX myhash FXX PXAT $exp FIELDS 1 f2 v2
+          $primary HSETEX myhash nx PXAT $exp FIELDS 1 f3 v3
+          $primary HSETEX myhash xx PXAT $exp FIELDS 1 f3 v3
+          $primary HSETEX myhash fnx PXAT $exp FIELDS 1 f4 v4
+          $primary HSETEX myhash fxx PXAT $exp FIELDS 1 f5 v5
+
+          assert_replication_stream $repl [subst {
+              {hsetex myhash PXAT $exp FIELDS 1 f1 v1}
+              {hsetex myhash PXAT $exp FIELDS 1 f1 v1}
+              {hsetex myhash PXAT $exp FIELDS 1 f2 v2}
+              {hsetex myhash PXAT $exp FIELDS 1 f2 v2}
+              {hsetex myhash PXAT $exp FIELDS 1 f3 v3}
+              {hsetex myhash PXAT $exp FIELDS 1 f3 v3}
+              {hsetex myhash PXAT $exp FIELDS 1 f4 v4}
+              {hsetex myhash PXAT $exp FIELDS 1 f5 v5}
+          }]
+          close_replication_stream $repl
         }
     }
 }

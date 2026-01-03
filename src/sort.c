@@ -508,7 +508,7 @@ void sortCommandGeneric(client *c, int readonly) {
         server.sort_store = storekey ? 1 : 0;
         /* If the source keys are empty, we will have a vector length of zero,
          * so no need to sort. */
-        if (vectorlen != 0) {   
+        if (vectorlen != 0) {
             if (sortby && (start != 0 || end != vectorlen - 1))
                 pqsort(vector, vectorlen, sizeof(serverSortObject), sortCompare, start, end);
             else

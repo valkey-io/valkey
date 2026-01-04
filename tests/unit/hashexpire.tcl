@@ -4468,3 +4468,74 @@ start_server {tags {"hashexpire external:skip"}} {
         }
     }
 }
+
+start_server {tags {"hash"}} {
+    test {Overwriting hash with volatile fields updates keys_with_volatile_items tracking} {
+        r FLUSHALL
+        r DEBUG SET-ACTIVE-EXPIRE 0
+
+        r HSETEX myhash EX 100 FIELDS 1 field1 value1
+
+        set info1 [r INFO keyspace]
+        assert_match {*keys_with_volatile_items=1*} $info1
+        assert_equal 1 [r EXISTS myhash]
+
+        r SET myhash "I'm a string now"
+
+        set info2 [r INFO keyspace]
+        assert_match {*keys_with_volatile_items=0*} $info2
+        assert_equal {string} [r TYPE myhash]
+        assert_equal "I'm a string now" [r GET myhash]
+
+        r DEBUG SET-ACTIVE-EXPIRE 1
+    } {OK} {needs:debug}
+
+    test {Multiple hashes with volatile fields tracked correctly} {
+        r FLUSHALL
+
+        # Create 3 hashes with volatile fields
+        r HSETEX hash1 EX 100 FIELDS 1 f1 v1
+        r HSETEX hash2 EX 100 FIELDS 1 f1 v1
+        r HSETEX hash3 EX 100 FIELDS 1 f1 v1
+        assert_match {*keys_with_volatile_items=3*} [r INFO keyspace]
+
+        # Overwrite first one with string
+        r SET hash1 "string"
+        assert_match {*keys_with_volatile_items=2*} [r INFO keyspace]
+
+        # Overwrite second one with list
+        r DEL hash2
+        r LPUSH hash2 item
+        assert_match {*keys_with_volatile_items=1*} [r INFO keyspace]
+
+        # Delete third one
+        r DEL hash3
+        assert_match {*keys_with_volatile_items=0*} [r INFO keyspace]
+    }
+
+    test {Active expiry cycle works after overwriting hash with volatile fields} {
+        r FLUSHALL
+        r DEBUG SET-ACTIVE-EXPIRE 0
+
+        r HSETEX myhash PX 50 FIELDS 1 field1 value1
+        assert_match {*keys_with_volatile_items=1*} [r INFO keyspace]
+
+        r SET myhash "string"
+        assert_match {*keys_with_volatile_items=0*} [r INFO keyspace]
+
+        r DEBUG SET-ACTIVE-EXPIRE 1
+    } {OK} {needs:debug}
+
+    test {RESTORE REPLACE clears keys_with_volatile_items tracking} {
+       r FLUSHALL
+       r HSETEX myhash EX 100 FIELDS 1 f1 v1
+       assert_match {*keys_with_volatile_items=1*} [r INFO keyspace]
+
+       r SET tempkey "I'm a string"
+       set serialized [r DUMP tempkey]
+
+       r RESTORE myhash 0 $serialized REPLACE
+       assert_match {*keys_with_volatile_items=0*} [r INFO keyspace]
+       assert_equal {string} [r TYPE myhash]
+   }
+}

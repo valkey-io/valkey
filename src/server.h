@@ -1430,7 +1430,7 @@ typedef struct zskiplistNode {
     };
     union {
         struct zskiplistNode *backward; /* Pointer to previous node for reverse traversal. */
-        struct zskiplistNode *tail;     /* ail element of the skiplist. */
+        struct zskiplistNode *tail;     /* Tail element of the skiplist. */
     };
     struct zskiplistLevel {
         struct zskiplistNode *forward;
@@ -1439,12 +1439,20 @@ typedef struct zskiplistNode {
          * One exception is the value at level 0. In level 0 the span can only be 1 or 0 (in case the last elements in the list)
          * So we use it in order to hold the height of the node, which is the number of levels. */
         unsigned long span;
-    } level[];
+    } level[1]; /* Flexible array member - actual levels determined at node creation. */
     /* For non-header nodes, after the level[], sds header length (1 byte) and an embedded sds element are stored. */
 } zskiplistNode;
 
-/* Actually zskiplist is an alias for zskiplistNode, pointing to head node. */
-typedef struct zskiplistNode zskiplist;
+/* The header node does not store actual data (no score, no backward pointer,
+ * and its node height is fixed at ZSKIPLIST_MAXLEVEL).
+ * To save memory, we reuse the memory space of these fields in the header node to store:
+ *   - skiplist length (number of elements)
+ *   - tail pointer to the last element
+ *   - maximum current level of the skiplist
+ * For detailed memory layout, refer to the zskiplistNode struct definition. */
+typedef struct zskiplist {
+    zskiplistNode header;
+} zskiplist;
 
 typedef struct zset {
     hashtable *ht;

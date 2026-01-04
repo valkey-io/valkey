@@ -116,7 +116,7 @@ static inline void zslSetNodeHeight(zskiplistNode *x, int height) {
 
 static inline size_t zslGetNodeAllocSize(int level) {
     /* Calculate the memory size required for a zskiplist node (excluding the sds element). */
-    return sizeof(zskiplistNode) + level * sizeof(struct zskiplistLevel);
+    return sizeof(zskiplistNode) + (level - 1) * sizeof(struct zskiplistLevel);
 }
 
 /* Create a skiplist node with the specified number of levels.
@@ -159,7 +159,7 @@ sds zslGetNodeElement(const zskiplistNode *x) {
 
 /* Helper function to set the height of skiplist. */
 static void zslSetHeight(zskiplist *zsl, int height) {
-    zsl->level[0].span = height;
+    zsl->header.level[0].span = height;
 }
 
 /* Create a new skiplist. */
@@ -171,37 +171,27 @@ zskiplist *zslCreate(void) {
 
 /* Helper function to get height of skiplist. */
 int zslGetHeight(const zskiplist *zsl) {
-    return zsl->level[0].span;
+    return zsl->header.level[0].span;
 }
 
 /* Helper function to get length of skiplist. */
 unsigned long zslGetLength(const zskiplist *zsl) {
-    return zsl->length;
-}
-
-/* Helper function to increase length of skiplist. */
-static void zslIncrLength(zskiplist *zsl) {
-    zsl->length++;
-}
-
-/* Helper function to decrease length of skiplist. */
-static void zslDescrLength(zskiplist *zsl) {
-    zsl->length--;
+    return zsl->header.length;
 }
 
 /* Helper function to get tail of skiplist. */
 zskiplistNode *zslGetTail(const zskiplist *zsl) {
-    return zsl->tail;
+    return zsl->header.tail;
 }
 
 /* Helper function to set tail of skiplist. */
 void zslSetTail(zskiplist *zsl, zskiplistNode *node) {
-    zsl->tail = node;
+    zsl->header.tail = node;
 }
 
 /* Helper function to get header of skiplist. */
 zskiplistNode *zslGetHeader(zskiplist *zsl) {
-    return zsl;
+    return &zsl->header;
 }
 
 /* Free the specified skiplist node. */
@@ -211,7 +201,7 @@ static void zslFreeNode(zskiplistNode *node) {
 
 /* Return the size of a zskiplist structure. */
 size_t zslGetAllocSize(void) {
-    return sizeof(zskiplist) + ZSKIPLIST_MAXLEVEL * sizeof(struct zskiplistLevel);
+    return sizeof(zskiplist) + (ZSKIPLIST_MAXLEVEL - 1) * sizeof(struct zskiplistLevel);
 }
 
 /* Free a whole skiplist. */
@@ -308,7 +298,7 @@ static zskiplistNode *zslInsertNode(zskiplist *zsl, zskiplistNode *node) {
         node->level[0].forward->backward = node;
     else
         zslSetTail(zsl, node);
-    zslIncrLength(zsl);
+    zsl->header.length++;
     return node;
 }
 
@@ -342,7 +332,7 @@ static void zslDeleteNode(zskiplist *zsl, zskiplistNode *x, zskiplistNode **upda
     int level;
     zskiplistNode *zheader = zslGetHeader(zsl);
     while ((level = zslGetHeight(zsl)) > 1 && zheader->level[level - 1].forward == NULL) zslSetHeight(zsl, level - 1);
-    zslDescrLength(zsl);
+    zsl->header.length--;
 }
 
 /* Delete specified node from the skiplist. */

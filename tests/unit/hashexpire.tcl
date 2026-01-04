@@ -607,6 +607,9 @@ start_server {tags {"hashexpire"}} {
         r HSETEX myhash PX 0 FIELDS 1 field1 val1
         after 10
         assert_equal 0 [r HEXISTS myhash field1]
+        # The hash should also not exist
+        assert_equal 0 [r EXISTS myhash]
+        assert_equal 0 [r HLEN myhash]
     }
 
     test {HSETEX PX - test mix of expiring and persistent fields} {
@@ -688,6 +691,34 @@ start_server {tags {"hashexpire"}} {
         r FLUSHALL
         assert_equal 0 [r HSETEX myhash EX 10 FXX FIELDS 1 x y]
         assert_equal 0 [r EXISTS myhash]
+    }
+
+    test {HSETEX is not replicating validation arguments} {
+        r flushall
+        set repl [attach_to_replication_stream]
+        set exp [get_longer_then_long_expire_value PXAT]
+
+        r HSETEX myhash NX PXAT $exp FIELDS 1 f1 v1
+        r HSETEX myhash XX PXAT $exp FIELDS 1 f1 v1
+        r HSETEX myhash FNX PXAT $exp FIELDS 1 f2 v2
+        r HSETEX myhash FXX PXAT $exp FIELDS 1 f2 v2
+        r HSETEX myhash2 nx PXAT $exp FIELDS 1 f1 v1
+        r HSETEX myhash2 xx PXAT $exp FIELDS 1 f1 v1
+        r HSETEX myhash2 fnx PXAT $exp FIELDS 1 f2 v2
+        r HSETEX myhash2 fxx PXAT $exp FIELDS 1 f2 v2
+
+        assert_replication_stream $repl [subst {
+            {select *}
+            {hsetex myhash PXAT $exp FIELDS 1 f1 v1}
+            {hsetex myhash PXAT $exp FIELDS 1 f1 v1}
+            {hsetex myhash PXAT $exp FIELDS 1 f2 v2}
+            {hsetex myhash PXAT $exp FIELDS 1 f2 v2}
+            {hsetex myhash2 PXAT $exp FIELDS 1 f1 v1}
+            {hsetex myhash2 PXAT $exp FIELDS 1 f1 v1}
+            {hsetex myhash2 PXAT $exp FIELDS 1 f2 v2}
+            {hsetex myhash2 PXAT $exp FIELDS 1 f2 v2}
+        }]
+        close_replication_stream $repl
     }
 
     ###### Test EXPIRE #############
@@ -2182,6 +2213,7 @@ start_server {tags {"hashexpire external:skip"}} {
                 fail "hash object was not deleted on replica after timeout"
             }
         }
+
         test {HEXPIREAT with expired time is propagated to the replica} {
             $primary flushall            
 

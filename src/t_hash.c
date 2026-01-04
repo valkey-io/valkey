@@ -1359,10 +1359,10 @@ void hsetexCommand(client *c) {
         new_argv = zmalloc(sizeof(robj *) * c->argc);
         // Copy optional args (skip NX/XX/FNX/FXX)
         for (int i = 0; i < fields_index; i++) {
-            if (strcmp(c->argv[i]->ptr, "NX") &&
-                strcmp(c->argv[i]->ptr, "XX") &&
-                strcmp(c->argv[i]->ptr, "FNX") &&
-                strcmp(c->argv[i]->ptr, "FXX")) {
+            if (strcasecmp(c->argv[i]->ptr, "NX") &&
+                strcasecmp(c->argv[i]->ptr, "XX") &&
+                strcasecmp(c->argv[i]->ptr, "FNX") &&
+                strcasecmp(c->argv[i]->ptr, "FXX")) {
                 /* Propagate as HSETEX Key Value PXAT millisecond-timestamp if there is
                  * EX/PX/EXAT flag. */
                 if (expire && !(flags & ARGS_PXAT) && c->argv[i + 1] == expire) {
@@ -1427,11 +1427,12 @@ void hsetexCommand(client *c) {
         /* We would like to reduce the number of hexpired events in case there are potential many expired fields. */
         notifyKeyspaceEvent(NOTIFY_HASH, "hexpired", c->argv[1], c->db->id);
     }
-    /* Delete the object in case it was left empty */
+    /* Delete the object in case it was left empty or created with all expired items. */
     if (hashTypeLength(o) == 0) {
         dbDelete(c->db, c->argv[1]);
         notifyKeyspaceEvent(NOTIFY_GENERIC, "del", c->argv[1], c->db->id);
     }
+
     addReplyLongLong(c, changes == num_fields ? 1 : 0);
 }
 

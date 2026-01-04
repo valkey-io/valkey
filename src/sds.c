@@ -1200,8 +1200,8 @@ sds *sdssplitargs(const char *line, int *argc) {
     return sdsnsplitargs_internal(line, NULL, argc);
 }
 
-sds *sdsnsplitargs(const char *line, int len, int *argc) {
-    const char *end = len < 0 ? NULL : line + len;
+sds *sdsnsplitargs(const char *line, size_t len, int *argc) {
+    const char *end = line + len;
     return sdsnsplitargs_internal(line, end, argc);
 }
 

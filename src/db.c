@@ -339,8 +339,6 @@ static void dbSetValue(serverDb *db, robj *key, robj **valref, int overwrite, vo
         if (old->type == OBJ_HASH && hashTypeHasVolatileFields(old)) {
             dbUntrackKeyWithVolatileItems(db, old);
         }
-        /* If the new object is a hash with volatile items we need to track it again */
-        dbTrackKeyWithVolatileItems(db, new);
         decrRefCount(old);
         /* Because of VM_StringDMA, old may be changed, so we need get old again */
         old = *oldref;
@@ -376,6 +374,10 @@ static void dbSetValue(serverDb *db, robj *key, robj **valref, int overwrite, vo
             *expireref = new;
         }
     }
+
+    /* If the new object is a hash with volatile items we need to track it again */
+    dbTrackKeyWithVolatileItems(db, new);
+
     /* For efficiency, let the I/O thread that allocated an object also deallocate it. */
     if (tryOffloadFreeObjToIOThreads(old) == C_OK) {
         /* OK */

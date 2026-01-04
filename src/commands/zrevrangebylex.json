@@ -73,8 +73,8 @@
                 ]
             },
             {
-                "name": "withstatus",
-                "token": "WITHSTATUS",
+                "name": "xx",
+                "token": "XX",
                 "type": "pure-token",
                 "optional": true,
                 "since": "9.0.2"

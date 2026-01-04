@@ -111,6 +111,10 @@ foreach sanitize_dump {no yes} {
             set stat_successful_restore 0
             set stat_rejected_restore 0
             set stat_traffic_commands_sent 0
+            # Track restarts to prevent infinite loops
+            set restart_count 0
+            set max_restarts [expr {$min_cycles * 5}]
+            
             # repeatedly DUMP a random key, corrupt it and try RESTORE into a new key
             while true {
                 set k [r randomkey]
@@ -197,6 +201,14 @@ foreach sanitize_dump {no yes} {
                 }
 
                 if {$report_and_restart} {
+                    incr restart_count
+                    if {$restart_count > $max_restarts} {
+                        if {$::verbose} {
+                            puts "Breaking loop due to excessive restarts: $restart_count (max: $max_restarts)"
+                        }
+                        break
+                    }
+                    
                     if {$print_commands} {
                         puts "violating commands:"
                         foreach cmd $sent {
@@ -215,7 +227,30 @@ foreach sanitize_dump {no yes} {
                 }
 
                 incr cycle
-                if { ([clock seconds]-$start_time) >= $min_duration && $cycle >= $min_cycles} {
+                # Check if we should break the loop
+                set current_time [clock seconds]
+                set elapsed_time [expr {$current_time - $start_time}]
+                
+                # Break if we've reached the minimum duration AND minimum cycles
+                if { $elapsed_time >= $min_duration && $cycle >= $min_cycles } {
+                    break
+                }
+                
+                # Additional safety check: if we're taking too long, break anyway
+                # This prevents infinite loops when server keeps crashing and restarting
+                if { $elapsed_time >= [expr {$min_duration * 3}] } {
+                    if {$::verbose} {
+                        puts "Breaking loop due to excessive time: $elapsed_time seconds (3x min_duration)"
+                    }
+                    break
+                }
+                
+                # Another safety check: if we've done too many cycles without completing
+                # This can happen if server keeps crashing on restart
+                if { $cycle >= [expr {$min_cycles * 10}] } {
+                    if {$::verbose} {
+                        puts "Breaking loop due to excessive cycles: $cycle (10x min_cycles)"
+                    }
                     break
                 }
             }

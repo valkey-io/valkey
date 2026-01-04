@@ -436,38 +436,38 @@ start_server {tags {"zset"}} {
             assert_equal {d 4 c 3 b 2 a 1} [r zrevrange ztmp 0 -1 withscores]
         }
 
-        test "ZREVRANGE with/without WITHSTATUS - $encoding" {
+        test "ZREVRANGE with/without XX - $encoding" {
             r del ztmp
             r zadd ztmp 1 a 2 b 3 c 4 d
 
-            # Test WITHSTATUS when key exists and has elements
-            assert_equal {d c b a} [r zrevrange ztmp 0 -1 WITHSTATUS]
+            # Test XX when key exists and has elements
+            assert_equal {d c b a} [r zrevrange ztmp 0 -1 XX]
 
-            # Test WITHSTATUS when key exists but is empty (no elements in range)
-            assert_equal {} [r zrevrange ztmp 10 20 WITHSTATUS]
+            # Test XX when key exists but is empty (no elements in range)
+            assert_equal {} [r zrevrange ztmp 10 20 XX]
 
-            # Test WITHSTATUS with WITHSCORES
-            assert_equal {d 4 c 3 b 2 a 1} [r zrevrange ztmp 0 -1 WITHSCORES WITHSTATUS]
+            # Test XX with WITHSCORES
+            assert_equal {d 4 c 3 b 2 a 1} [r zrevrange ztmp 0 -1 WITHSCORES XX]
 
-            # Test WITHSTATUS with ZREVRANGE and LIMIT
-            assert_equal {d c} [r zrevrange ztmp 0 1 WITHSTATUS]
+            # Test XX with ZREVRANGE and LIMIT
+            assert_equal {d c} [r zrevrange ztmp 0 1 XX]
 
             # Test key does not exist - should return nullarray
-            assert_equal {} [r zrevrange non_existent_key 0 -1 WITHSTATUS]
+            assert_equal {} [r zrevrange non_existent_key 0 -1 XX]
 
             # Test key exists but has no matching elements in range
-            assert_equal {} [r zrevrange ztmp 10 20 WITHSTATUS]
+            assert_equal {} [r zrevrange ztmp 10 20 XX]
 
             # Test nullarray vs emptyarray distinction in RESP3
             r hello 3
             r readraw 1
 
             # Test nullarray (key does not exist) in RESP3
-            set null_res [r zrevrange non_existent_key 0 -1 WITHSTATUS]
+            set null_res [r zrevrange non_existent_key 0 -1 XX]
             assert_equal {_} $null_res
 
             # Test emptyarray (key exists but no matching elements) in RESP3
-            set empty_res [r zrevrange ztmp 10 20 WITHSTATUS]
+            set empty_res [r zrevrange ztmp 10 20 XX]
             assert_equal {*0} $empty_res
 
             r readraw 0
@@ -476,20 +476,20 @@ start_server {tags {"zset"}} {
             r readraw 1
 
             # Test nullarray (key does not exist) in RESP2
-            set null_res [r zrevrange non_existent_key 0 -1 WITHSTATUS]
+            set null_res [r zrevrange non_existent_key 0 -1 XX]
             assert_equal {*-1} $null_res
 
             # Test emptyarray (key exists but no matching elements) in RESP2
-            set empty_res [r zrevrange ztmp 10 20 WITHSTATUS]
+            set empty_res [r zrevrange ztmp 10 20 XX]
             assert_equal {*0} $empty_res
 
             r readraw 0
 
-            # Test WITHSTATUS with LIMIT (using BYSCORE)
-            assert_equal {d c} [r zrevrangebyscore ztmp +inf -inf LIMIT 0 2 WITHSTATUS]
+            # Test XX with LIMIT (using BYSCORE)
+            assert_equal {d c} [r zrevrangebyscore ztmp +inf -inf LIMIT 0 2 XX]
 
-            # Test WITHSTATUS with multiple modifiers
-            assert_equal {d 4 c 3} [r zrevrangebyscore ztmp +inf -inf LIMIT 0 2 WITHSCORES WITHSTATUS]
+            # Test XX with multiple modifiers
+            assert_equal {d 4 c 3} [r zrevrangebyscore ztmp +inf -inf LIMIT 0 2 WITHSCORES XX]
         }
 
         test "ZRANK/ZREVRANK basics - $encoding" {
@@ -662,34 +662,34 @@ start_server {tags {"zset"}} {
             assert_equal {} [r zrangebyscore zset 2 5 LIMIT 12 13 WITHSCORES]
         }
 
-        test "ZRANGEBYSCORE with/without WITHSTATUS - $encoding" {
+        test "ZRANGEBYSCORE with/without XX - $encoding" {
             create_default_zset
 
-            # Test WITHSTATUS when key exists and has elements
-            assert_equal {b c d} [r zrangebyscore zset 0 3 WITHSTATUS]
+            # Test XX when key exists and has elements
+            assert_equal {b c d} [r zrangebyscore zset 0 3 XX]
 
-            # Test WITHSTATUS when key exists but is empty (no elements in range)
-            assert_equal {} [r zrangebyscore zset 10 20 WITHSTATUS]
+            # Test XX when key exists but is empty (no elements in range)
+            assert_equal {} [r zrangebyscore zset 10 20 XX]
 
-            # Test WITHSTATUS with WITHSCORES
-            assert_equal {b 1 c 2 d 3} [r zrangebyscore zset 0 3 WITHSCORES WITHSTATUS]
+            # Test XX with WITHSCORES
+            assert_equal {b 1 c 2 d 3} [r zrangebyscore zset 0 3 WITHSCORES XX]
 
-            # Test WITHSTATUS with LIMIT
-            assert_equal {b c} [r zrangebyscore zset 0 3 LIMIT 0 2 WITHSTATUS]
+            # Test XX with LIMIT
+            assert_equal {b c} [r zrangebyscore zset 0 3 LIMIT 0 2 XX]
 
             # Test key does not exist - should return nullarray
-            assert_equal {} [r zrangebyscore non_existent_key 0 10 WITHSTATUS]
+            assert_equal {} [r zrangebyscore non_existent_key 0 10 XX]
 
             # Test nullarray vs emptyarray distinction in RESP3
             r hello 3
             r readraw 1
 
             # Test nullarray (key does not exist) in RESP3
-            set null_res [r zrangebyscore non_existent_key 0 10 WITHSTATUS]
+            set null_res [r zrangebyscore non_existent_key 0 10 XX]
             assert_equal {_} $null_res
 
             # Test emptyarray (key exists but no matching elements) in RESP3
-            set empty_res [r zrangebyscore zset 10 20 WITHSTATUS]
+            set empty_res [r zrangebyscore zset 10 20 XX]
             assert_equal {*0} $empty_res
 
             r readraw 0
@@ -698,26 +698,26 @@ start_server {tags {"zset"}} {
             r readraw 1
 
             # Test nullarray (key does not exist) in RESP2
-            set null_res [r zrangebyscore non_existent_key 0 10 WITHSTATUS]
+            set null_res [r zrangebyscore non_existent_key 0 10 XX]
             assert_equal {*-1} $null_res
 
             # Test emptyarray (key exists but no matching elements) in RESP2
-            set empty_res [r zrangebyscore zset 10 20 WITHSTATUS]
+            set empty_res [r zrangebyscore zset 10 20 XX]
             assert_equal {*0} $empty_res
 
             r readraw 0
 
-            # Test WITHSTATUS with ZREVRANGEBYSCORE
-            assert_equal {d c b} [r zrevrangebyscore zset 3 0 WITHSTATUS]
+            # Test XX with ZREVRANGEBYSCORE
+            assert_equal {d c b} [r zrevrangebyscore zset 3 0 XX]
 
-            # Test WITHSTATUS with ZREVRANGEBYSCORE and WITHSCORES
-            assert_equal {d 3 c 2 b 1} [r zrevrangebyscore zset 3 0 WITHSCORES WITHSTATUS]
+            # Test XX with ZREVRANGEBYSCORE and WITHSCORES
+            assert_equal {d 3 c 2 b 1} [r zrevrangebyscore zset 3 0 WITHSCORES XX]
 
-            # Test WITHSTATUS with ZREVRANGEBYSCORE and LIMIT
-            assert_equal {d c} [r zrevrangebyscore zset 3 0 LIMIT 0 2 WITHSTATUS]
+            # Test XX with ZREVRANGEBYSCORE and LIMIT
+            assert_equal {d c} [r zrevrangebyscore zset 3 0 LIMIT 0 2 XX]
 
-            # Test WITHSTATUS with ZREVRANGEBYSCORE and LIMIT
-            assert_equal {d c} [r zrevrangebyscore zset 3 0 LIMIT 0 2 WITHSTATUS]
+            # Test XX with ZREVRANGEBYSCORE and LIMIT
+            assert_equal {d c} [r zrevrangebyscore zset 3 0 LIMIT 0 2 XX]
         }
 
         test "ZRANGEBYSCORE with non-value min or max - $encoding" {
@@ -814,31 +814,31 @@ start_server {tags {"zset"}} {
             assert_equal {hill great foo} [r zrevrangebylex zset + \[c LIMIT 12 3]
         }
 
-        test "ZRANGEBYLEX with/without WITHSTATUS - $encoding" {
+        test "ZRANGEBYLEX with/without XX - $encoding" {
             create_default_lex_zset
 
-            # Test WITHSTATUS when key exists and has elements
-            assert_equal {alpha bar cool} [r zrangebylex zset - \[cool WITHSTATUS]
+            # Test XX when key exists and has elements
+            assert_equal {alpha bar cool} [r zrangebylex zset - \[cool XX]
 
-            # Test WITHSTATUS when key exists but is empty (no elements in range)
-            assert_equal {} [r zrangebylex zset \[zzz + WITHSTATUS]
+            # Test XX when key exists but is empty (no elements in range)
+            assert_equal {} [r zrangebylex zset \[zzz + XX]
 
-            # Test WITHSTATUS with LIMIT
-            assert_equal {alpha bar} [r zrangebylex zset - \[cool LIMIT 0 2 WITHSTATUS]
+            # Test XX with LIMIT
+            assert_equal {alpha bar} [r zrangebylex zset - \[cool LIMIT 0 2 XX]
 
             # Test key does not exist - should return nullarray
-            assert_equal {} [r zrangebylex non_existent_key - + WITHSTATUS]
+            assert_equal {} [r zrangebylex non_existent_key - + XX]
 
             # Test nullarray vs emptyarray distinction in RESP3
             r hello 3
             r readraw 1
 
             # Test nullarray (key does not exist) in RESP3
-            set null_res [r zrangebylex non_existent_key - + WITHSTATUS]
+            set null_res [r zrangebylex non_existent_key - + XX]
             assert_equal {_} $null_res
 
             # Test emptyarray (key exists but no matching elements) in RESP3
-            set empty_res [r zrangebylex zset \[zzz + WITHSTATUS]
+            set empty_res [r zrangebylex zset \[zzz + XX]
             assert_equal {*0} $empty_res
 
             r readraw 0
@@ -847,23 +847,23 @@ start_server {tags {"zset"}} {
             r readraw 1
 
             # Test nullarray (key does not exist) in RESP2
-            set null_res [r zrangebylex non_existent_key - + WITHSTATUS]
+            set null_res [r zrangebylex non_existent_key - + XX]
             assert_equal {*-1} $null_res
 
             # Test emptyarray (key exists but no matching elements) in RESP2
-            set empty_res [r zrangebylex zset \[zzz + WITHSTATUS]
+            set empty_res [r zrangebylex zset \[zzz + XX]
             assert_equal {*0} $empty_res
 
             r readraw 0
 
-            # Test WITHSTATUS with ZREVRANGEBYLEX
-            assert_equal {omega hill great} [r zrevrangebylex zset + \[g WITHSTATUS]
+            # Test XX with ZREVRANGEBYLEX
+            assert_equal {omega hill great} [r zrevrangebylex zset + \[g XX]
 
-            # Test WITHSTATUS with ZREVRANGEBYLEX and LIMIT
-            assert_equal {omega hill} [r zrevrangebylex zset + \[g LIMIT 0 2 WITHSTATUS]
+            # Test XX with ZREVRANGEBYLEX and LIMIT
+            assert_equal {omega hill} [r zrevrangebylex zset + \[g LIMIT 0 2 XX]
 
-            # Test WITHSTATUS with ZREVRANGEBYLEX and LIMIT
-            assert_equal {omega hill} [r zrevrangebylex zset + \[g LIMIT 0 2 WITHSTATUS]
+            # Test XX with ZREVRANGEBYLEX and LIMIT
+            assert_equal {omega hill} [r zrevrangebylex zset + \[g LIMIT 0 2 XX]
         }
 
         test "ZRANGEBYLEX with invalid lex range specifiers - $encoding" {
@@ -2539,54 +2539,54 @@ start_server {tags {"zset"}} {
         r config set zset-max-listpack-entries $original_max
     }
 
-    test {ZRANGE with/without WITHSTATUS} {
-        # Test basic functionality with WITHSTATUS parameter
-        r zadd zset_withstatus 1 a 2 b 3 c
+    test {ZRANGE with/without XX} {
+        # Test basic functionality with XX parameter
+        r zadd zset_XX 1 a 2 b 3 c
 
-        # Test WITHSTATUS when key exists and has elements
-        assert_equal {a b c} [r zrange zset_withstatus 0 -1 WITHSTATUS]
+        # Test XX when key exists and has elements
+        assert_equal {a b c} [r zrange zset_XX 0 -1 XX]
 
-        # Test WITHSTATUS when key exists but is empty (no elements in range)
+        # Test XX when key exists but is empty (no elements in range)
         r zadd zset_empty 1 a 2 b 3 c
-        assert_equal {} [r zrange zset_empty 10 20 WITHSTATUS]
+        assert_equal {} [r zrange zset_empty 10 20 XX]
 
-        # Test WITHSTATUS with WITHSCORES
-        assert_equal {a 1 b 2 c 3} [r zrange zset_withstatus 0 -1 WITHSCORES WITHSTATUS]
+        # Test XX with WITHSCORES
+        assert_equal {a 1 b 2 c 3} [r zrange zset_XX 0 -1 WITHSCORES XX]
 
-        # Test WITHSTATUS with BYSCORE
-        assert_equal {a b c} [r zrange zset_withstatus 0 5 BYSCORE WITHSTATUS]
+        # Test XX with BYSCORE
+        assert_equal {a b c} [r zrange zset_XX 0 5 BYSCORE XX]
 
-        # Test WITHSTATUS with BYLEX
+        # Test XX with BYLEX
         r zadd zset_lex 0 alpha 0 bar 0 cool
-        assert_equal {alpha bar} [r zrange zset_lex - \[bar BYLEX WITHSTATUS]
+        assert_equal {alpha bar} [r zrange zset_lex - \[bar BYLEX XX]
 
-        # Test WITHSTATUS with REV
-        assert_equal {c b a} [r zrange zset_withstatus 0 -1 REV WITHSTATUS]
+        # Test XX with REV
+        assert_equal {c b a} [r zrange zset_XX 0 -1 REV XX]
 
-        # Test WITHSTATUS with LIMIT (only works with BYSCORE or BYLEX)
-        assert_equal {a b} [r zrange zset_withstatus 0 5 BYSCORE LIMIT 0 2 WITHSTATUS]
+        # Test XX with LIMIT (only works with BYSCORE or BYLEX)
+        assert_equal {a b} [r zrange zset_XX 0 5 BYSCORE LIMIT 0 2 XX]
 
-        # Test WITHSTATUS with multiple modifiers
-        assert_equal {a 1 b 2} [r zrange zset_withstatus 0 5 BYSCORE LIMIT 0 2 WITHSCORES WITHSTATUS]
+        # Test XX with multiple modifiers
+        assert_equal {a 1 b 2} [r zrange zset_XX 0 5 BYSCORE LIMIT 0 2 WITHSCORES XX]
 
         # Test key does not exist - should return nullarray
-        assert_equal {} [r zrange non_existent_key 0 -1 WITHSTATUS]
+        assert_equal {} [r zrange non_existent_key 0 -1 XX]
         # Note: In RESP2, nullarray is represented as an empty array in the test framework
         # but the actual protocol response would be different
 
         # Test key exists but has no matching elements in range
-        assert_equal {} [r zrange zset_withstatus 10 20 WITHSTATUS]
+        assert_equal {} [r zrange zset_XX 10 20 XX]
 
         # Test nullarray vs emptyarray distinction in RESP3
         r hello 3
         r readraw 1
 
         # Test nullarray (key does not exist) in RESP3
-        set null_res [r zrange non_existent_key 0 -1 WITHSTATUS]
+        set null_res [r zrange non_existent_key 0 -1 XX]
         assert_equal {_} $null_res
 
         # Test emptyarray (key exists but no matching elements) in RESP3
-        set empty_res [r zrange zset_withstatus 10 20 WITHSTATUS]
+        set empty_res [r zrange zset_XX 10 20 XX]
         assert_equal {*0} $empty_res
 
         r readraw 0
@@ -2595,20 +2595,20 @@ start_server {tags {"zset"}} {
         r readraw 1
 
         # Test nullarray (key does not exist) in RESP2
-        set null_res [r zrange non_existent_key 0 -1 WITHSTATUS]
+        set null_res [r zrange non_existent_key 0 -1 XX]
         assert_equal {*-1} $null_res
 
         # Test emptyarray (key exists but no matching elements) in RESP2
-        set empty_res [r zrange zset_withstatus 10 20 WITHSTATUS]
+        set empty_res [r zrange zset_XX 10 20 XX]
         assert_equal {*0} $empty_res
 
         r readraw 0
 
-        # Test WITHSTATUS without other parameters (should work like normal ZRANGE)
-        assert_equal {a b c} [r zrange zset_withstatus 0 -1 WITHSTATUS]
+        # Test XX without other parameters (should work like normal ZRANGE)
+        assert_equal {a b c} [r zrange zset_XX 0 -1 XX]
 
-        # Test WITHSTATUS with WITHSCORES (should work together)
-        assert_equal {a 1 b 2 c 3} [r zrange zset_withstatus 0 -1 WITHSCORES WITHSTATUS]
+        # Test XX with WITHSCORES (should work together)
+        assert_equal {a 1 b 2 c 3} [r zrange zset_XX 0 -1 WITHSCORES XX]
     }
 
     test {ZRANGESTORE with zset-max-listpack-entries 1 dst key should use skiplist encoding} {

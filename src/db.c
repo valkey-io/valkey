@@ -382,6 +382,14 @@ static void dbSetValue(serverDb *db, robj *key, robj **valref, int overwrite, vo
             *expireref = new;
         }
     }
+
+    /* If overwriting a hash object, un-track it from the volatile items tracking if it contains volatile items.*/
+    if (old->type == OBJ_HASH && hashTypeHasVolatileFields(old)) {
+        dbUntrackKeyWithVolatileItems(db, old);
+    }
+    /* If the new object is a hash with volatile items we need to track it again */
+    dbTrackKeyWithVolatileItems(db, new);
+
     /* For efficiency, let the I/O thread that allocated an object also deallocate it. */
     if (tryOffloadFreeObjToIOThreads(old) == C_OK) {
         /* OK */

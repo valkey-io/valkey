@@ -1040,7 +1040,7 @@ int hex_digit_to_int(char c) {
     }
 }
 
-static inline bool is_ptr_exceeds_end(const char *ptr, size_t len, const char *end) {
+static inline bool isPtrExceedingEnd(const char *ptr, size_t len, const char *end) {
     if (end == NULL) {
         return false;
     }
@@ -1059,7 +1059,7 @@ static int sdsparsearg(const char *arg, const char *end, unsigned int *len, char
     int insq = 0; /* set to 1 if we are in 'single quotes' */
     int done = 0;
 
-    if (is_ptr_exceeds_end(p, 0, end)) {
+    if (isPtrExceedingEnd(p, 0, end)) {
         return 0;
     }
 
@@ -1069,10 +1069,10 @@ static int sdsparsearg(const char *arg, const char *end, unsigned int *len, char
             if (!*p) {
                 /* unterminated quotes */
                 return 0;
-            } else if (!is_ptr_exceeds_end(p, 4, end) && (*p == '\\' && *(p + 1) == 'x' && is_hex_digit(*(p + 2)) && is_hex_digit(*(p + 3)))) {
+            } else if (!isPtrExceedingEnd(p, 4, end) && (*p == '\\' && *(p + 1) == 'x' && is_hex_digit(*(p + 2)) && is_hex_digit(*(p + 3)))) {
                 new_char = (hex_digit_to_int(*(p + 2)) * 16) + hex_digit_to_int(*(p + 3));
                 p += 4;
-            } else if (!is_ptr_exceeds_end(p, 2, end) && (*p == '\\' && *(p + 1))) {
+            } else if (!isPtrExceedingEnd(p, 2, end) && (*p == '\\' && *(p + 1))) {
                 switch (*(p + 1)) {
                 case 'n': new_char = '\n'; break;
                 case 'r': new_char = '\r'; break;
@@ -1093,7 +1093,7 @@ static int sdsparsearg(const char *arg, const char *end, unsigned int *len, char
             if (!*p) {
                 /* unterminated quotes */
                 return 0;
-            } else if (!is_ptr_exceeds_end(p, 2, end) && (*p == '\\' && *(p + 1) == '\'')) {
+            } else if (!isPtrExceedingEnd(p, 2, end) && (*p == '\\' && *(p + 1) == '\'')) {
                 new_char = '\'';
                 p += 2;
             } else if (*p == '\'') {
@@ -1125,7 +1125,7 @@ static int sdsparsearg(const char *arg, const char *end, unsigned int *len, char
                 dst++;
             }
         }
-        if (is_ptr_exceeds_end(p, 0, end)) {
+        if (isPtrExceedingEnd(p, 0, end)) {
             if (inq || insq) {
                 /* unterminated quotes */
                 return 0;
@@ -1165,10 +1165,10 @@ sds *sdsnsplitargs_internal(const char *line, const char *end, int *argc) {
     sds *vector = NULL;
 
     *argc = 0;
-    while (*p && !is_ptr_exceeds_end(p, 0, end)) {
+    while (*p && !isPtrExceedingEnd(p, 0, end)) {
         /* skip blanks */
-        while (*p && !is_ptr_exceeds_end(p, 0, end) && isspace(*p)) p++;
-        if (!(*p && !is_ptr_exceeds_end(p, 0, end))) break;
+        while (*p && !isPtrExceedingEnd(p, 0, end) && isspace(*p)) p++;
+        if (!(*p && !isPtrExceedingEnd(p, 0, end))) break;
 
         unsigned int token_len = 0;
         if (sdsparsearg(p, end, &token_len, NULL)) {

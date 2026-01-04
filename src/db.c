@@ -335,6 +335,10 @@ static void dbSetValue(serverDb *db, robj *key, robj **valref, int overwrite, vo
         moduleNotifyKeyUnlink(key, old, db->id, DB_FLAG_KEY_OVERWRITE);
         /* We want to try to unblock any module clients or clients using a blocking XREADGROUP */
         signalDeletedKeyAsReady(db, key, old->type);
+        /* If overwriting a hash object, un-track it from the volatile items tracking if it contains volatile items.*/
+        if (old->type == OBJ_HASH && hashTypeHasVolatileFields(old)) {
+            dbUntrackKeyWithVolatileItems(db, old);
+        }
         decrRefCount(old);
         /* Because of VM_StringDMA, old may be changed, so we need get old again */
         old = *oldref;

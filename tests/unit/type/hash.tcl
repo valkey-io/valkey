@@ -941,3 +941,143 @@ start_server {tags {"hash"}} {
         }
     }
 }
+
+start_server {tags {"hash"}} {
+    test {Overwriting hash with volatile fields updates keys_with_volatile_items tracking} {
+        r FLUSHALL
+        r DEBUG SET-ACTIVE-EXPIRE 0
+        
+        r HSETEX myhash EX 100 FIELDS 1 field1 value1
+        
+        set info1 [r INFO keyspace]
+        assert_match {*keys_with_volatile_items=1*} $info1
+        assert_equal 1 [r EXISTS myhash]
+        
+        r SET myhash "I'm a string now"
+        
+        set info2 [r INFO keyspace]
+        assert_match {*keys_with_volatile_items=0*} $info2
+        assert_equal {string} [r TYPE myhash]
+        assert_equal "I'm a string now" [r GET myhash]
+        
+        r DEBUG SET-ACTIVE-EXPIRE 1
+        
+        after 100
+        r KEYS *  ;
+        
+        assert_equal 1 [r EXISTS myhash]
+    } {} {needs:debug}
+    
+    test {Overwriting hash with volatile fields with different types} {
+        r FLUSHALL
+        
+        # Test 1: Hash → List
+        r HSETEX hash1 EX 100 FIELDS 1 f1 v1
+        assert_match {*keys_with_volatile_items=1*} [r INFO keyspace]
+        r DEL hash1
+        r LPUSH hash1 item1 item2
+        assert_match {*keys_with_volatile_items=0*} [r INFO keyspace]
+        assert_equal {list} [r TYPE hash1]
+        
+        # Test 2: Hash → Set
+        r HSETEX hash2 EX 100 FIELDS 1 f1 v1
+        assert_match {*keys_with_volatile_items=1*} [r INFO keyspace]
+        r DEL hash2
+        r SADD hash2 member1 member2
+        assert_match {*keys_with_volatile_items=0*} [r INFO keyspace]
+        assert_equal {set} [r TYPE hash2]
+        
+        # Test 3: Hash → Sorted Set
+        r HSETEX hash3 EX 100 FIELDS 1 f1 v1
+        assert_match {*keys_with_volatile_items=1*} [r INFO keyspace]
+        r DEL hash3
+        r ZADD hash3 1.0 member1
+        assert_match {*keys_with_volatile_items=0*} [r INFO keyspace]
+        assert_equal {zset} [r TYPE hash3]
+        
+        # Trigger active expiry - should not crash
+        after 100
+        r KEYS *
+    }
+    
+    test {Overwriting hash with volatile fields with another hash} {
+        r FLUSHALL
+        
+        # Test 1: Hash with volatile → Hash without volatile
+        r HSETEX hash1 EX 100 FIELDS 1 f1 v1
+        assert_match {*keys_with_volatile_items=1*} [r INFO keyspace]
+        r DEL hash1
+        r HSET hash1 f2 v2  ;# Regular HSET, no expiry
+        assert_match {*keys_with_volatile_items=0*} [r INFO keyspace]
+        
+        # Test 2: Hash with volatile → Hash with volatile
+        r HSETEX hash2 EX 100 FIELDS 1 f1 v1
+        assert_match {*keys_with_volatile_items=1*} [r INFO keyspace]
+        r HSETEX hash2 EX 200 FIELDS 1 f2 v2  ;# Another volatile hash
+        assert_match {*keys_with_volatile_items=1*} [r INFO keyspace]
+        assert_equal {hash} [r TYPE hash2]
+    }
+    
+    test {Multiple hashes with volatile fields tracked correctly} {
+        r FLUSHALL
+        
+        # Create 3 hashes with volatile fields
+        r HSETEX hash1 EX 100 FIELDS 1 f1 v1
+        r HSETEX hash2 EX 100 FIELDS 1 f1 v1
+        r HSETEX hash3 EX 100 FIELDS 1 f1 v1
+        assert_match {*keys_with_volatile_items=3*} [r INFO keyspace]
+        
+        # Overwrite first one with string
+        r SET hash1 "string"
+        assert_match {*keys_with_volatile_items=2*} [r INFO keyspace]
+        
+        # Overwrite second one with list
+        r DEL hash2
+        r LPUSH hash2 item
+        assert_match {*keys_with_volatile_items=1*} [r INFO keyspace]
+        
+        # Delete third one
+        r DEL hash3
+        assert_match {*keys_with_volatile_items=0*} [r INFO keyspace]
+    }
+    
+    test {Active expiry cycle works after overwriting hash with volatile fields} {
+        r FLUSHALL
+        r DEBUG SET-ACTIVE-EXPIRE 0
+        
+        # Create hash with short-lived field
+        r HSETEX myhash PX 50 FIELDS 1 field1 value1
+        assert_match {*keys_with_volatile_items=1*} [r INFO keyspace]
+        
+        # Overwrite with string
+        r SET myhash "string"
+        assert_match {*keys_with_volatile_items=0*} [r INFO keyspace]
+        
+        r DEBUG SET-ACTIVE-EXPIRE 1
+        
+        # Wait for the original field expiry time to pass
+        after 100
+        
+        r INFO keyspace
+        r KEYS *
+        r DBSIZE
+        
+        # Verify server is still responsive
+        assert_equal "string" [r GET myhash]
+    } {} {needs:debug}
+    
+    test {Overwriting hash via RENAME preserves volatile tracking} {
+        r FLUSHALL
+        
+        # Create hash with volatile fields
+        r HSETEX myhash1 EX 100 FIELDS 1 f1 v1
+        assert_match {*keys_with_volatile_items=1*} [r INFO keyspace]
+        
+        # Create a string
+        r SET myhash2 "string"
+        
+        r RENAME myhash2 myhash1
+        assert_match {*keys_with_volatile_items=0*} [r INFO keyspace]
+        assert_equal {string} [r TYPE myhash1]
+    }
+}

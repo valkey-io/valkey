@@ -92,6 +92,10 @@ typedef enum readFromReplica {
     FROM_ALL
 } readFromReplica;
 
+/* Fuzz mode flags */
+#define FUZZ_MODE_MALFORMED_COMMANDS (1 << 0)
+#define FUZZ_MODE_CONFIG_COMMANDS (1 << 1)
+
 static struct config {
     aeEventLoop *el;
     enum valkeyConnectionType ct;
@@ -133,6 +137,9 @@ static struct config {
     int num_threads;
     struct benchmarkThread **threads;
     int cluster_mode;
+    int fuzz_mode; /* Boolean flag to enable fuzzing */
+    const char *fuzz_log_level;
+    int fuzz_flags; /* Bit flags for fuzzing modes */
     readFromReplica read_from_replica;
     int cluster_node_count;
     struct clusterNode **cluster_nodes;
@@ -229,6 +236,7 @@ static void freeServerConfig(serverConfig *cfg);
 static int fetchClusterSlotsConfiguration(client c);
 static void updateClusterSlotsConfiguration(void);
 static long long showThroughput(struct aeEventLoop *eventLoop, long long id, void *clientData);
+int runFuzzerClients(const char *host, int port, int max_commands, int parallel_clients, int cluster_mode, int num_keys, cliSSLconfig *ssl_config, const char *log_level, int fuzz_flags);
 
 /* Dict callbacks */
 static uint64_t dictSdsHash(const void *key);
@@ -1819,6 +1827,28 @@ int parseOptions(int argc, char **argv) {
             }
             config.ct = VALKEY_CONN_RDMA;
 #endif
+        } else if (!strcmp(argv[i], "--fuzz")) {
+            config.fuzz_mode = 1;
+        } else if (!strcmp(argv[i], "--fuzz-loglevel")) {
+            if (lastarg) goto invalid;
+            config.fuzz_log_level = argv[++i];
+        } else if (!strcmp(argv[i], "--fuzz-mode")) {
+            if (lastarg) goto invalid;
+            int count = 0;
+            const char *modes_arg = argv[++i];
+            sds *modes = sdssplitlen(modes_arg, strlen(modes_arg), ",", 1, &count);
+            for (int j = 0; j < count; j++) {
+                if (!strcmp(modes[j], "malformed-commands"))
+                    config.fuzz_flags |= FUZZ_MODE_MALFORMED_COMMANDS;
+                else if (!strcmp(modes[j], "config-commands"))
+                    config.fuzz_flags |= FUZZ_MODE_CONFIG_COMMANDS;
+                else {
+                    fprintf(stderr, "Invalid fuzz mode: %s\n", modes[j]);
+                    sdsfreesplitres(modes, count);
+                    exit(1);
+                }
+            }
+            sdsfreesplitres(modes, count);
         } else if (!strcmp(argv[i], "--mptcp")) {
             config.mptcp = 1;
         } else if (!strcmp(argv[i], "--")) {
@@ -1976,6 +2006,14 @@ usage:
         tls_usage,
         rdma_usage,
         " --mptcp            Enable an MPTCP connection.\n"
+        " --fuzz             Enable fuzzy mode to generate random commands. WARNING: Recommended for testing only, not for use with production data.\n"
+        " --fuzz-mode <modes> Set fuzzing modes (comma-separated): malformed-commands, config-commands.\n"
+        "                    malformed-commands: Generates also malformed commands.\n"
+        "                    config-commands: Allows CONFIG SET commands.\n"
+        "                    Default: valid commands only.\n"
+        " --fuzz-loglevel <level>\n"
+        "                    Set log level for fuzzer (none, error, info, debug).\n"
+        "                    Default is 'info'.\n"
         " --help             Output this help and exit.\n"
         " --version          Output version and exit.\n\n"
         "Examples:\n\n"
@@ -2162,6 +2200,9 @@ int main(int argc, char **argv) {
     config.num_threads = 0;
     config.threads = NULL;
     config.cluster_mode = 0;
+    config.fuzz_mode = 0;
+    config.fuzz_log_level = "info";
+    config.fuzz_flags = 0;
     config.rps = 0;
     config.read_from_replica = FROM_PRIMARY_ONLY;
     config.cluster_node_count = 0;
@@ -2196,7 +2237,7 @@ int main(int argc, char **argv) {
         exit(1);
     }
 
-    if (config.cluster_mode) {
+    if (config.cluster_mode && !config.fuzz_mode) {
         // We only include the slot placeholder {tag} if cluster mode is enabled
         tag = ":{tag}";
 
@@ -2288,6 +2329,20 @@ int main(int argc, char **argv) {
         printf("\"test\",\"rps\",\"avg_latency_ms\",\"min_latency_ms\",\"p50_latency_ms\",\"p95_latency_ms\",\"p99_"
                "latency_ms\",\"max_latency_ms\"\n");
     }
+
+    if (config.fuzz_mode) {
+        return runFuzzerClients(
+            config.conn_info.hostip,
+            config.conn_info.hostport,
+            config.requests,
+            config.numclients,
+            config.cluster_mode,
+            config.keyspacelen,
+            config.tls ? &config.sslconfig : NULL,
+            config.fuzz_log_level,
+            config.fuzz_flags);
+    }
+
     /* Run benchmark with command in the remainder of the arguments. */
     if (argc) {
         sds title = sdsnew(argv[0]);

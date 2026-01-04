@@ -50,7 +50,7 @@
 #include "sds.h"
 #include "module.h"
 #include "scripting_engine.h"
-#include "lua/engine_lua.h"
+
 #include "eval.h"
 
 #include "trace/trace_commands.h"
@@ -2970,6 +2970,7 @@ void initServer(void) {
     server.acl_info.user_auth_failures = 0;
     server.acl_info.invalid_channel_accesses = 0;
     server.acl_info.acl_access_denied_tls_cert = 0;
+    server.acl_info.invalid_db_accesses = 0;
 
     /* Create the timer callback, this is our way to process many background
      * operations incrementally, like eviction of unaccessed expired keys, etc. */
@@ -3014,11 +3015,12 @@ void initServer(void) {
      * commands with `CMD_NOSCRIPT` flag are not allowed to run in scripts. */
     server.script_disable_deny_script = 0;
 
-    /* Initialize the LUA scripting engine. */
-    if (luaEngineInitEngine() != C_OK) {
-        serverPanic("Lua engine initialization failed, check the server logs.");
-        exit(1);
-    }
+    commandlogInit();
+    latencyMonitorInit();
+    initSharedQueryBuf();
+
+    /* Initialize ACL default password if it exists */
+    ACLUpdateDefaultUserPassword(server.requirepass);
 
     /* Initialize the functions engine based off of LUA initialization. */
     if (functionsInit() == C_ERR) {
@@ -3027,13 +3029,6 @@ void initServer(void) {
 
     /* Initialize the EVAL scripting component. */
     evalInit();
-
-    commandlogInit();
-    latencyMonitorInit();
-    initSharedQueryBuf();
-
-    /* Initialize ACL default password if it exists */
-    ACLUpdateDefaultUserPassword(server.requirepass);
 
     applyWatchdogPeriod();
 
@@ -4796,6 +4791,8 @@ int finishShutdown(void) {
     /* Close the listening sockets. Apparently this allows faster restarts. */
     closeListeningSockets(1);
 
+    moduleUnloadAllModules();
+
     serverLog(LL_WARNING, "%s is now ready to exit, bye bye...", server.sentinel_mode ? "Sentinel" : "Valkey");
     return C_OK;
 
@@ -5672,10 +5669,11 @@ sds genValkeyInfoStringACLStats(sds info) {
                         "acl_access_denied_cmd:%lld\r\n"
                         "acl_access_denied_key:%lld\r\n"
                         "acl_access_denied_channel:%lld\r\n"
-                        "acl_access_denied_tls_cert:%lld\r\n",
+                        "acl_access_denied_tls_cert:%lld\r\n"
+                        "acl_access_denied_db:%lld\r\n",
                         server.acl_info.user_auth_failures, server.acl_info.invalid_cmd_accesses,
                         server.acl_info.invalid_key_accesses, server.acl_info.invalid_channel_accesses,
-                        server.acl_info.acl_access_denied_tls_cert);
+                        server.acl_info.acl_access_denied_tls_cert, server.acl_info.invalid_db_accesses);
     return info;
 }
 
@@ -7426,6 +7424,18 @@ __attribute__((weak)) int main(int argc, char **argv) {
     if (server.cluster_enabled) {
         clusterInitLast();
     }
+
+    /* Initialize the LUA scripting engine. */
+#ifdef LUA_ENABLED
+#define LUA_LIB_STR STRINGIFY(LUA_LIB)
+    if (scriptingEngineManagerFind("lua") == NULL) {
+        if (moduleLoad(LUA_LIB_STR, NULL, 0, 0) != C_OK) {
+            serverPanic("Lua engine initialization failed, check the server logs.");
+        }
+    }
+#endif
+
+
     InitServerLast();
 
     if (!server.sentinel_mode) {

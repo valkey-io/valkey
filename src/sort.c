@@ -212,8 +212,9 @@ void sortCommandGeneric(client *c, int readonly) {
     listSetFreeMethod(operations, zfree);
     j = 2; /* options start at argv[2] */
 
+    int dbid = (c->flag.multi) ? c->mstate->transaction_db_id : c->db->id;
     user_has_full_key_access =
-        ACLUserCheckCmdWithUnrestrictedKeyAccess(c->user, c->cmd, c->argv, c->argc, CMD_KEY_ACCESS);
+        ACLUserCheckCmdWithUnrestrictedKeyAccess(c->user, c->cmd, c->argv, c->argc, dbid, CMD_KEY_ACCESS);
 
     /* The SORT command has an SQL-alike syntax, parse it */
     while (j < c->argc) {
@@ -507,10 +508,14 @@ void sortCommandGeneric(client *c, int readonly) {
         server.sort_alpha = alpha;
         server.sort_bypattern = sortby ? 1 : 0;
         server.sort_store = storekey ? 1 : 0;
-        if (sortby && (start != 0 || end != vectorlen - 1))
-            pqsort(vector, vectorlen, sizeof(serverSortObject), sortCompare, start, end);
-        else
-            qsort(vector, vectorlen, sizeof(serverSortObject), sortCompare);
+        /* If the source keys are empty, we will have a vector length of zero,
+         * so no need to sort. */
+        if (vectorlen != 0) {
+            if (sortby && (start != 0 || end != vectorlen - 1))
+                pqsort(vector, vectorlen, sizeof(serverSortObject), sortCompare, start, end);
+            else
+                qsort(vector, vectorlen, sizeof(serverSortObject), sortCompare);
+        }
     }
 
     /* Send command output to the output buffer, performing the specified

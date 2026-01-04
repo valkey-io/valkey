@@ -1,3 +1,4 @@
+#include "../fmacros.h"
 #include "../vset.h"
 #include "../entry.h"
 #include "test_help.h"
@@ -27,7 +28,9 @@ static void mockFreeEntry(void *entry) {
 }
 
 static mock_entry *mockEntryUpdate(mock_entry *entry, long long expiry) {
-    mock_entry *new_entry = entryCreate(entryGetField(entry), sdsdup(entryGetValue(entry)), expiry);
+    sds field = entryGetField(entry);
+    size_t len;
+    mock_entry *new_entry = entryCreate(field, sdsdup(entryGetValue(entry, &len)), expiry);
     entryFree(entry);
     return new_entry;
 }

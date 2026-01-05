@@ -1578,7 +1578,7 @@ struct malloc_stats {
 #define CACHE_CONN_TYPE_RESP3 (1 << 2)
 #define CACHE_CONN_TYPE_MAX (1 << 3)
 
-#define RESP_CACHE_INDEX_MAX 2 /* [0]=RESP2, [1]=RESP3 */
+#define RESP_CACHE_INDEX_MAX 2                       /* [0]=RESP2, [1]=RESP3 */
 #define RESP_CACHE_INDEX(resp) ((resp) == 3 ? 1 : 0) /* Convert RESP version to cache array index */
 
 /*-----------------------------------------------------------------------------
@@ -1680,18 +1680,18 @@ typedef enum childInfoType {
 
 struct valkeyServer {
     /* General */
-    pid_t pid;                /* Main process pid. */
-    pthread_t main_thread_id; /* Main thread id */
-    char *configfile;         /* Absolute config file path, or NULL */
-    char *executable;         /* Absolute executable file path. */
-    char **exec_argv;         /* Executable argv vector (copy). */
-    mode_t umask;             /* The umask value of the process on startup */
-    int hz;                   /* serverCron() calls frequency in hertz */
-    int clients_hz;           /* clientsTimeProc() frequency in hertz */
-    int in_fork_child;        /* indication that this is a fork child */
-    serverDb **db;            /* each db created when it's first used */
-    hashtable *commands;      /* Command table */
-    hashtable *orig_commands; /* Command table before command renaming. */
+    pid_t pid;                                        /* Main process pid. */
+    pthread_t main_thread_id;                         /* Main thread id */
+    char *configfile;                                 /* Absolute config file path, or NULL */
+    char *executable;                                 /* Absolute executable file path. */
+    char **exec_argv;                                 /* Executable argv vector (copy). */
+    mode_t umask;                                     /* The umask value of the process on startup */
+    int hz;                                           /* serverCron() calls frequency in hertz */
+    int clients_hz;                                   /* clientsTimeProc() frequency in hertz */
+    int in_fork_child;                                /* indication that this is a fork child */
+    serverDb **db;                                    /* each db created when it's first used */
+    hashtable *commands;                              /* Command table */
+    hashtable *orig_commands;                         /* Command table before command renaming. */
     sds command_response_cache[RESP_CACHE_INDEX_MAX]; /* Cached COMMAND response: [0]=RESP2, [1]=RESP3 */
     aeEventLoop *el;
     _Atomic AeIoState io_poll_state;     /* Indicates the state of the IO polling. */
@@ -2641,7 +2641,7 @@ struct serverCommand {
                                     * (not the fullname), and the value is the serverCommand structure pointer. */
     struct serverCommand *parent;
     struct ValkeyModuleCommand *module_cmd; /* A pointer to the module command data (NULL if native command) */
-    sds info_cache[RESP_CACHE_INDEX_MAX]; /* Cached COMMAND INFO response: [0]=RESP2, [1]=RESP3 */
+    sds info_cache[RESP_CACHE_INDEX_MAX];   /* Cached COMMAND INFO response: [0]=RESP2, [1]=RESP3 */
 };
 
 struct serverError {

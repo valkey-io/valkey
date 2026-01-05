@@ -5196,7 +5196,7 @@ void addReplyCommandSubCommands(client *c,
 /* Generate and cache the command info response for a given protocol version */
 static sds generateCommandInfoResponse(struct serverCommand *cmd, int resp) {
     client *caching_client = createCachedResponseClient(resp);
-    
+
     int firstkey = 0, lastkey = 0, keystep = 0;
     if (cmd->legacy_range_key_spec.begin_search_type != KSPEC_BS_INVALID) {
         firstkey = cmd->legacy_range_key_spec.bs.index.pos;
@@ -5230,12 +5230,12 @@ void addReplyCommandInfo(client *c, struct serverCommand *cmd) {
         /* Use cached response if available for the client's protocol version */
         int cache_idx = RESP_CACHE_INDEX(c->resp);
         sds cache = cmd->info_cache[cache_idx];
-        
+
         if (cache == NULL) {
             cache = generateCommandInfoResponse(cmd, c->resp);
             cmd->info_cache[cache_idx] = cache;
         }
-        
+
         addReplyProto(c, cache, sdslen(cache));
     }
 }
@@ -5374,7 +5374,7 @@ void invalidateCommandCache(void) {
 /* Generate the full COMMAND response */
 static sds generateCommandResponse(int resp) {
     client *caching_client = createCachedResponseClient(resp);
-    
+
     hashtableIterator iter;
     void *next;
     addReplyArrayLen(caching_client, hashtableSize(server.commands));
@@ -5384,7 +5384,7 @@ static sds generateCommandResponse(int resp) {
         addReplyCommandInfo(caching_client, cmd);
     }
     hashtableCleanupIterator(&iter);
-    
+
     sds command_response = aggregateClientOutputBuffer(caching_client);
     deleteCachedResponseClient(caching_client);
     return command_response;
@@ -5395,12 +5395,12 @@ void commandCommand(client *c) {
     /* Use cached response if available for the client's protocol version */
     int cache_idx = RESP_CACHE_INDEX(c->resp);
     sds cache = server.command_response_cache[cache_idx];
-    
+
     if (!cache) {
         cache = generateCommandResponse(c->resp);
         server.command_response_cache[cache_idx] = cache;
     }
-    
+
     addReplyProto(c, cache, sdslen(cache));
 }
 

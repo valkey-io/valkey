@@ -468,12 +468,12 @@ int prepareClientToWrite(client *c) {
  * This should only be used only with a caching client. */
 sds aggregateClientOutputBuffer(client *c) {
     sds cmd_response = sdsempty();
-    
+
     /* First, collect from the fixed buffer if any */
     if (c->bufpos > 0) {
         cmd_response = sdscatlen(cmd_response, c->buf, c->bufpos);
     }
-    
+
     /* Then, collect from the reply list */
     listIter li;
     listNode *ln;

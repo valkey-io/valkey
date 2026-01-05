@@ -7,7 +7,7 @@ Most of the style guidelines are enforced by clang format, but some additional c
 
 1. C style comments `/* comment */` can be used for both single and multi-line comments. C++ comments `//` can only be used for single line comments.
 1. Generally keep line lengths below 90 characters when reasonable, however there is no explicit line length enforcement.
-   Use your best judgement for readabilty.
+   Use your best judgement for readability.
 1. Use static functions when a function is only intended to be accessed from the same file.
    For historical reasons, some private functions are prefixed by `_`, and they are kept as is to make it easier to backport changes.
 
@@ -31,7 +31,7 @@ When creating new source code files, use the following snippet to indicate the l
 ```
 
 If you are making material changes to a file that has a different license at the top, also add the above license snippet.
-There isn't a well defined test for what is considered a material change, but a good rule of thumb is that material changes are are more than 100 lines of code.
+There isn't a well defined test for what is considered a material change, but a good rule of thumb is that material changes are more than 100 lines of code.
 
 ## Test coverage
 Valkey uses two types of tests: unit and integration tests.
@@ -51,7 +51,7 @@ Valkey keeps most of the user documentation in the [valkey-doc](https://github.c
    Command history is also documented in the [command json file](https://github.com/valkey-io/valkey/tree/unstable/src/commands). 
 3. Server info fields are documented in the [info](https://github.com/valkey-io/valkey-doc/blob/main/commands/info.md) command.
 
-When a PR is opened that requires documention to be updated, the `needs-doc-pr` should be added until the corresponding documentation PR is open.
+When a PR is opened that requires documentation to be updated, the `needs-doc-pr` should be added until the corresponding documentation PR is open.
 
 ## Best practices
 1. Avoid adding configuration when a feature can be fully controlled by heuristics. 
@@ -60,4 +60,4 @@ Configurations can be added to provide additional tuning of features.
 When the workload characteristics can't be inferred or imply a tradeoff (CPU vs memory), then provide a configuration.
 2. Try to limit the number of lines changed in a PR when possible.
 We do a lot of backporting as a project, and the more lines changed, the higher the chance of having to resolve merge conflicts.
-Please seperate refactoring and functional changes into separate PRs, to make it easier to handle backporting.
+Please separate refactoring and functional changes into separate PRs, to make it easier to handle backporting.

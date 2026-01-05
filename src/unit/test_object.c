@@ -30,8 +30,8 @@ int test_object_with_key(int argc, char **argv, int flags) {
     TEST_ASSERT(strcmp(objectGetKey(valkey), "foo") == 0);
 
     /* Check embedded value "bar" (EMBSTR content) */
-    TEST_ASSERT(sdscmp(valkey->ptr, val->ptr) == 0);
-    TEST_ASSERT(strcmp(valkey->ptr, "bar") == 0);
+    TEST_ASSERT(sdscmp(objectGetVal(valkey), objectGetVal(val)) == 0);
+    TEST_ASSERT(strcmp(objectGetVal(valkey), "bar") == 0);
 
     /* Either they're two separate objects, or one object with refcount == 2. */
     if (valkey == val) {

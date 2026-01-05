@@ -1432,8 +1432,9 @@ void hsetexCommand(client *c) {
         dbDelete(c->db, c->argv[1]);
         notifyKeyspaceEvent(NOTIFY_GENERIC, "del", c->argv[1], c->db->id);
     }
-
-    addReplyLongLong(c, changes == num_fields ? 1 : 0);
+    /* In case we reached here we know that we operated on ALL the fields,
+     * even in case we end up in the same original state, we still need to reflect as the operation was done on all the fields. */
+    addReply(c, shared.cone);
 }
 
 /* High-Level Algorithm of HGETEX Command:

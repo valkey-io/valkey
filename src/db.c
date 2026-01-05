@@ -385,7 +385,10 @@ static void dbSetValue(serverDb *db, robj *key, robj **valref, int overwrite, vo
 
     /* If overwriting a hash object, un-track it from the volatile items tracking if it contains volatile items.*/
     if (old->type == OBJ_HASH && hashTypeHasVolatileFields(old)) {
-        dbUntrackKeyWithVolatileItems(db, old);
+        /* Some commands create a new value (with NO key) and use setKey to change the value of an existing key.
+         * In this case the old can be replaced with the provided value and be left without a key
+         * however it is still a hashObject with optional volatile items and we need to untrack it. */
+        dbUntrackKeyWithVolatileItems(db, old->hasembkey ? old : new);
     }
     /* If the new object is a hash with volatile items we need to track it again */
     dbTrackKeyWithVolatileItems(db, new);

@@ -2889,7 +2889,16 @@ void initServer(void) {
 
     server.dbnum = server.cluster_enabled ? server.config_databases_cluster : server.config_databases;
     server.db = zcalloc(sizeof(serverDb *) * server.dbnum);
+
+    /* Save the current zmalloc_used_memory() gauge to calculate server.db memory usage later. */
+    server.initial_memory_usage = zmalloc_used_memory();
+
     createDatabaseIfNeeded(0); /* The default database should always exist */
+
+    /* Here initial_memory_usage is borrowed to store the memory usage of server.db,
+     * and its value will be eventually determined in InitServerLast().
+     */
+    server.initial_memory_usage = zmalloc_used_memory() - server.initial_memory_usage;
 
     evictionPoolAlloc(); /* Initialize the LRU keys pool. */
     /* Note that server.pubsub_channels was chosen to be a kvstore (with only one dict, which
@@ -3114,7 +3123,12 @@ void InitServerLast(void) {
     bioInit();
     initIOThreads();
     set_jemalloc_bg_thread(server.jemalloc_bg_thread);
-    server.initial_memory_usage = zmalloc_used_memory();
+
+    /* The value of initial_memory_usage was temporarily set to the memory usage of server.db in initServer().
+     * Now we record the initial memory usage EXCLUDING server.db, which is nessesary for
+     * getMemoryOverheadData() to prevent initial server.db memory from being double-counted into used_memory_overhead.
+     */
+    server.initial_memory_usage = zmalloc_used_memory() - server.initial_memory_usage;
 }
 
 /* The purpose of this function is to try to "glue" consecutive range

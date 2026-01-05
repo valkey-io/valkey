@@ -101,7 +101,6 @@ const char *clusterGetMessageTypeString(int type);
 void removeChannelsInSlot(unsigned int slot);
 unsigned int countChannelsInSlot(unsigned int hashslot);
 void clusterAddNodeToShard(const char *shard_id, clusterNode *node);
-list *clusterLookupNodeListByShardId(const char *shard_id);
 void clusterRemoveNodeFromShard(clusterNode *node);
 int auxShardIdSetter(clusterNode *n, void *value, size_t length);
 sds auxShardIdGetter(clusterNode *n, sds s);
@@ -1574,18 +1573,13 @@ void clusterHandleServerShutdown(bool auto_failover) {
  * 4) Only for hard reset: a new Node ID is generated.
  * 5) Only for hard reset: currentEpoch and configEpoch are set to 0.
  * 6) The new configuration is saved and the cluster state updated.
- * 7) If the node was a replica, the whole data set is flushed away. */
+ * 7) If the node was a replica, the whole data set is flushed away.
+ * 8) If it is a hard reset or the node was a replica: a new Shard ID is generated. */
 void clusterReset(int hard) {
     dictIterator *di;
     dictEntry *de;
-    int j, was_replica = 0, new_shardid = 0;
-
-    /* Turn into primary. */
-    if (nodeIsReplica(myself)) {
-        was_replica = 1;
-        clusterSetNodeAsPrimary(myself);
-        flushAllDataAndResetRDB(server.lazyfree_lazy_user_flush ? EMPTYDB_ASYNC : EMPTYDB_NO_FLAGS);
-    }
+    int j;
+    bool new_shard = false;
 
     /* Close slots, reset manual failover state. */
     clusterCloseAllSlots();
@@ -1625,28 +1619,33 @@ void clusterReset(int hard) {
 
         /* To change the Node ID we need to remove the old name from the
          * nodes table, change the ID, and re-add back with new name. */
-        new_shardid = 1;
+        new_shard = true;
         oldname = sdsnewlen(myself->name, CLUSTER_NAMELEN);
         dictDelete(server.cluster->nodes, oldname);
         sdsfree(oldname);
         getRandomHexChars(myself->name, CLUSTER_NAMELEN);
-        getRandomHexChars(myself->shard_id, CLUSTER_NAMELEN);
         clusterAddNode(myself);
         serverLog(LL_NOTICE, "Node hard reset, now I'm %.40s", myself->name);
     } else {
         /* If we were a replica, this means our shard_id is the shard_id of
          * the primary node, and since now we become a new empty primary, we
          * need to have our own shard_id. */
-        if (was_replica) {
-            new_shardid = 1;
-            getRandomHexChars(myself->shard_id, CLUSTER_NAMELEN);
-        }
+        new_shard = true;
     }
 
     /* Re-populate shards */
-    if (new_shardid) {
+    if (new_shard) {
+        clusterRemoveNodeFromShard(myself);
+        getRandomHexChars(myself->shard_id, CLUSTER_NAMELEN);
         clusterAddNodeToShard(myself->shard_id, myself);
         serverLog(LL_NOTICE, "Move myself to the new shard %.40s.", myself->shard_id);
+    }
+
+    /* Turn into primary. clusterSetNodeAsPrimary will print the shard ID to
+     * the server logs, so we'll call it here.*/
+    if (nodeIsReplica(myself)) {
+        clusterSetNodeAsPrimary(myself);
+        flushAllDataAndResetRDB(server.lazyfree_lazy_user_flush ? EMPTYDB_ASYNC : EMPTYDB_NO_FLAGS);
     }
 
     /* Make sure to persist the new config and update the state. */

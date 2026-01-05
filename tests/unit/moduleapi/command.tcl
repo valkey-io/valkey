@@ -1,6 +1,6 @@
 set testmodule [file normalize tests/modules/basics.so]
 
-start_server {tags {"introspection modules"}} {
+start_server {tags {"modules"}} {
     test {COMMAND caches response} {
         # Call COMMAND twice and verify we get the same commands
         set cmd1 [r command]
@@ -26,7 +26,8 @@ start_server {tags {"introspection modules"}} {
         # Load module which should invalidate the cache
         r module load $testmodule
         
-        # Get command list again
+        # Get command list again (first call populates cache, second uses cache)
+        r command
         set commands_after [r command]
         set count_after [llength $commands_after]
         
@@ -76,7 +77,8 @@ start_server {tags {"introspection modules"}} {
         # Unload module which should invalidate the cache
         r module unload test
         
-        # Get command list again
+        # Get command list again (first call populates cache, second uses cache)
+        r command
         set commands_after [r command]
         set count_after [llength $commands_after]
         
@@ -103,7 +105,7 @@ start_server {tags {"introspection modules"}} {
     }
 }
 
-start_server {tags {"introspection modules"}} {
+start_server {tags {"modules"}} {
     test {COMMAND cache invalidation with multiple load/unload cycles} {
         # Get baseline
         set baseline_count [r command count]
@@ -130,7 +132,7 @@ start_server {tags {"introspection modules"}} {
     }
 }
 
-start_server {tags {"introspection modules"}} {
+start_server {tags {"modules"}} {
     test {COMMAND cache works correctly with RESP2 and RESP3} {
         # Test with RESP2
         r hello 2
@@ -159,4 +161,5 @@ start_server {tags {"introspection modules"}} {
         assert_equal [llength $commands_resp2_final] [llength $commands_resp3_after]
     }
 }
+
 

@@ -3125,7 +3125,7 @@ void InitServerLast(void) {
     set_jemalloc_bg_thread(server.jemalloc_bg_thread);
 
     /* The value of initial_memory_usage was temporarily set to the memory usage of server.db in initServer().
-     * Now we record the initial memory usage EXCLUDING server.db, which is nessesary for
+     * Now we record the initial memory usage EXCLUDING server.db, which is necessary for
      * getMemoryOverheadData() to prevent initial server.db memory from being double-counted into used_memory_overhead.
      */
     server.initial_memory_usage = zmalloc_used_memory() - server.initial_memory_usage;

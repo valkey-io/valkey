@@ -3116,7 +3116,7 @@ void InitServerLast(void) {
     set_jemalloc_bg_thread(server.jemalloc_bg_thread);
 
     /* First set initial_memory_usage to zero as baseline for getMemoryOverheadData(). */
-    server.initial_memory_usage = 0; 
+    server.initial_memory_usage = 0;
     struct serverMemOverhead *mh = getMemoryOverheadData();
     /* Exclude current overhead memory to avoid double counting in the future. */
     server.initial_memory_usage = zmalloc_used_memory() - mh->overhead_total;

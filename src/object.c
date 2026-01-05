@@ -1374,7 +1374,6 @@ struct serverMemOverhead *getMemoryOverheadData(void) {
     for (j = 0; j < server.dbnum; j++) {
         serverDb *db = server.db[j];
         if (db == NULL) continue;
-        /* Even if kvstoreNumAllocatedHashtables() is zero, kvstoreCreate() still allocated significant memory. */
 
         unsigned long long keyscount = kvstoreSize(db->keys);
 

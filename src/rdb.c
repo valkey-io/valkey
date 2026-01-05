@@ -2254,7 +2254,7 @@ robj *rdbLoadObject(int rdbtype, rio *rdb, sds key, int dbid, int *error) {
                 return NULL;
             }
 
-            if (rdbtype == RDB_TYPE_HASH_2 && itemexpiry > 0) {
+            if (rdbtype == RDB_TYPE_HASH_2 && itemexpiry != EXPIRY_NONE) {
                 hashTypeTrackEntry(o, entry);
             }
         }

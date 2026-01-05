@@ -1008,9 +1008,9 @@ start_server {tags {"expire"}} {
             
             # Verify the failover completed and this server is now primary
             wait_for_condition 50 100 {
-                [lindex [$replica role] 0] == "master"
+                [s -1 master_failover_state] == "no-failover"
             } else {
-                fail "Replica did not become primary after failover"
+                fail "Failover from primary to replica did not finish"
             }
             
             # Verify that the count is the same - this demonstrates the memory leak

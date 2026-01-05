@@ -173,9 +173,16 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - name: Install build dependencies
+        run: |
+          brew install llvm
       - name: make
         # Build with additional upcoming features
-        run: make -j3 all-with-unit-tests SERVER_CFLAGS='-Werror' USE_FAST_FLOAT=yes
+        run: |
+          export PATH="/opt/homebrew/opt/llvm/bin:$PATH"
+          export CC=/opt/homebrew/opt/llvm/bin/clang
+          export CXX=/opt/homebrew/opt/llvm/bin/clang++
+          make -j3 all-with-unit-tests SERVER_CFLAGS='-Werror' USE_FAST_FLOAT=yes
 
   build-32bit:
     runs-on: ubuntu-latest

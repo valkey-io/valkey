@@ -1,6 +1,9 @@
 CXX ?= g++
+AR ?= ar
+SERVER_AR ?= $(AR)
 -include ../.make-settings
 OPT=-O3 -DNDEBUG
+uname_S := $(shell sh -c 'uname -s 2>/dev/null || echo not')
 
 # Add -m32 for 32bit builds
 ifeq ($(findstring -m32,$(CFLAGS)),-m32)
@@ -47,7 +50,7 @@ MORE_WARNINGS=-Wold-style-cast \
 	-Wformat=2
 
 # Detect compiler
-IS_GCC := $(findstring g++,$(CXX))
+IS_GCC := $(if $(findstring clang,$(CXX)),,$(findstring g++,$(CXX)))
 
 GCC_FLAGS :=
 
@@ -87,6 +90,34 @@ GTEST_LIB := ../../deps/googletest/build/googlemock/gtest/libgtest.a
 GMOCK_LIB := ../../deps/googletest/build/googlemock/libgmock.a
 FAST_FLOAT_LIB := ../../deps/fast_float_c_interface/fast_float_strtod.o
 
+# On Darwin (macOS), the linker does not support -Wl,--wrap,
+# so we manually define __wrap_* and __real_* for each function in wrappers.h.
+# by copying all object files into the wrapped/ folder and applying symbol redefinitions.
+ifeq ($(uname_S), Darwin)
+WRAP_DIR := wrapped
+VALKEY_SERVER_WRAP_LIB := $(WRAP_DIR)/wrappedlibvalkey.a
+ENGINE_SERVER_WRAP_OBJ := $(addprefix $(WRAP_DIR)/, $(ENGINE_SERVER_OBJ))
+
+$(WRAP_DIR):
+	mkdir -p $(WRAP_DIR)
+
+$(WRAP_DIR)/%.o: ../%.o $(WRAP_DIR) generated_wrappers.o
+	@mkdir -p $(dir $@)
+	@if file $< | grep -q "LLVM bitcode"; then \
+		llc $< -filetype=obj -o $(WRAP_DIR)/$*_temp.o; \
+		python3 generate-redefine-syms.py $(WRAP_DIR)/$*_temp.o >$(WRAP_DIR)/$*-wrap-syms; \
+		llvm-objcopy --redefine-syms=$(WRAP_DIR)/$*-wrap-syms $(WRAP_DIR)/$*_temp.o $@; \
+		rm $(WRAP_DIR)/$*_temp.o 2>/dev/null; \
+	else \
+		python3 generate-wrapper-objects.py $< >$(WRAP_DIR)/$*-wrap-syms; \
+		llvm-objcopy --redefine-syms=$(WRAP_DIR)/$*-wrap-syms $< $@; \
+	fi
+	rm $(WRAP_DIR)/$*-wrap-syms 2>/dev/null
+
+$(VALKEY_SERVER_WRAP_LIB): $(VALKEY_SERVER_LIB) $(ENGINE_SERVER_WRAP_OBJ) generated_wrappers.o
+	$(SERVER_AR) rcs $@ $(ENGINE_SERVER_WRAP_OBJ)
+endif
+
 # Ensure GoogleTest is built
 ../../deps/googletest/build/googlemock/gtest/libgtest.a ../../deps/googletest/build/googlemock/libgmock.a:
 	cd ../../deps && $(MAKE) gtest
@@ -108,7 +139,7 @@ ifeq ($(MALLOC),libc)
 endif
 
 # Default target to compile against Valkey, LUA, jemalloc (as Valkey does) as well as gmock
-%.o: %.cpp make-prerequisites generated_wrappers.cpp .flags
+%.o: %.cpp make-prerequisites generated_wrappers.o .flags
 	$(CXX) -MD -MP -std=c++14 -faligned-new -Wno-write-strings -fpermissive $(GCC_FLAGS) $(OPT) $(DEBUG) $(TEST_CFLAGS) -Wall -Wno-deprecated-declarations -c \
 	-isystem .. -I ../../deps/lua/src/ -I ../../deps/hdr_histogram/ -I ../../deps/fpconv/ $(JEMALLOC_CFLAGS) \
 	-I ../../deps/googletest/googletest/include -I ../../deps/googletest/googlemock/include $<
@@ -144,6 +175,14 @@ ifeq ($(USE_FAST_FLOAT),yes)
 endif
 
 # Generate the single test binary in parent directory.
+ifeq ($(uname_S), Darwin)
+valkey-unit-gtests: $(ALL_OBJECTS) generated_wrappers.o $(VALKEY_SERVER_WRAP_LIB) $(FINAL_LIBS)
+	$(CXX) -g -fno-lto \
+		-Wl,-flat_namespace -Wl,-undefined,dynamic_lookup \
+		-Wall -Wno-deprecated-declarations \
+		-o $@ $^ $(LD_LIBS) \
+		-lm -pthread -ldl
+else
 valkey-unit-gtests: $(ALL_OBJECTS) generated_wrappers.o $(VALKEY_SERVER_LIB) $(FINAL_LIBS)
 	$(CXX) -g \
 		-Wl,--allow-multiple-definition \
@@ -151,6 +190,7 @@ valkey-unit-gtests: $(ALL_OBJECTS) generated_wrappers.o $(VALKEY_SERVER_LIB) $(F
 		-Wall -Wno-deprecated-declarations \
 		-o $@ $^ $(LD_LIBS) \
 		-lrt -lm -pthread -ldl -lgcov
+endif
 
 .PHONY: all
 all: valkey-unit-gtests
@@ -164,7 +204,7 @@ valgrind: valkey-unit-gtests
 	valgrind $(VALGRIND_ARGS) ./valkey-unit-gtests
 
 clean:
-	rm -f *.o valkey-unit-gtests ../valkey-unit-gtests generated_* $(DEPENDS) .flags
+	rm -rf *.o valkey-unit-gtests ../valkey-unit-gtests generated_* $(DEPENDS) .flags wrapped
 
 distclean: clean
 	$(MAKE) -C .. distclean

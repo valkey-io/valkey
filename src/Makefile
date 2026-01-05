@@ -505,6 +505,7 @@ persist-settings: distclean
 	echo SERVER_LDFLAGS=$(SERVER_LDFLAGS) >> .make-settings
 	echo PREV_FINAL_CFLAGS=$(FINAL_CFLAGS) >> .make-settings
 	echo PREV_FINAL_LDFLAGS=$(FINAL_LDFLAGS) >> .make-settings
+	echo ENGINE_SERVER_OBJ=$(ENGINE_SERVER_OBJ) >> .make-settings
 	-(cd ../deps && $(MAKE) $(DEPENDENCY_TARGETS))
 
 .PHONY: persist-settings

@@ -36,6 +36,7 @@
 #include "rio.h"
 #include "commands.h"
 #include "allocator_defrag.h"
+#include "reply_blocking.h"
 
 #include <stdint.h>
 #include <stdio.h>
@@ -53,7 +54,6 @@
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <signal.h>
-#include "durable_write.h"
 #ifdef HAVE_LIBSYSTEMD
 #include <systemd/sd-daemon.h>
 #endif
@@ -891,6 +891,7 @@ typedef struct serverDb {
 
     /* fields related to dirty key tracking 
      * for consistent writes with durability */
+    // TODO: move hashtable/references directly in the robj
     rax *uncommitted_keys; /* Map of dirty keys to the offset required by replica acknowledgement */
     long long dirty_repl_offset; /* Replication offset for a dirty DB */
     raxIterator next_scan_iter;  /* The next iterator for db scan */
@@ -1177,9 +1178,12 @@ typedef struct ClientFlags {
                                               or client::buf. */
     uint64_t keyspace_notified : 1;        /* Indicates that a keyspace notification was triggered during the execution of the
                                               current command. */
+} ClientFlags;
+
+typedef struct ClientDurabilityData {
     uint64_t durable_blocked_client: 1;    /* This is a durable blocked client that is waiting for the server to
                                             * acknowledge the write of the command that caused it to be blocked. */
-} ClientFlags;
+} ClientDurabilityData;
 
 typedef struct ClientPubSubData {
     hashtable *pubsub_channels;      /* channels a client is interested in (SUBSCRIBE) */
@@ -1303,6 +1307,7 @@ typedef struct client {
     ClientPubSubData *pubsub_data;        /* Required for: pubsub commands and tracking. lazily initialized when first needed */
     ClientReplicationData *repl_data;     /* Required for Replication operations. lazily initialized when first needed */
     ClientModuleData *module_data;        /* Required for Module operations. lazily initialized when first needed */
+    ClientDurabilityData *durability_data;        /* Required for Module operations. lazily initialized when first needed */
     multiState *mstate;                   /* MULTI/EXEC state, lazily initialized when first needed */
     blockingState *bstate;                /* Blocking state, lazily initialized when first needed */
     slotMigrationJob *slot_migration_job; /* Pointer to the slot migration job, or NULL. */

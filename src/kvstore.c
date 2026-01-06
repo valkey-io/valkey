@@ -947,7 +947,6 @@ void kvstoreSetIsImporting(kvstore *kvs, int didx, int is_importing) {
 
     if (is_importing) {
         /* Importing should only be marked on empty hashtables */
-
         assert(!ht || hashtableSize(ht) == 0);
         hashtableAdd(kvs->importing, (void *)(intptr_t)didx);
         return;

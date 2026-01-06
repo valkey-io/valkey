@@ -236,7 +236,7 @@ static bool shouldEmbedStringObject(size_t val_len, const_sds key, long long exp
     }
     size += (expire != EXPIRY_NONE) * sizeof(long long);
     size += sdsReqSize(val_len, SDS_TYPE_8);
-    return size <= 128;
+    return size <= 64;
 }
 
 /* Create a string object with EMBSTR encoding if it is small, otherwise RAW encoding */

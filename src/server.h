@@ -36,7 +36,9 @@
 #include "rio.h"
 #include "commands.h"
 #include "allocator_defrag.h"
+#include "reply_blocking.h"
 
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <stddef.h>
@@ -52,7 +54,6 @@
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <signal.h>
-
 #ifdef HAVE_LIBSYSTEMD
 #include <systemd/sd-daemon.h>
 #endif
@@ -922,6 +923,7 @@ typedef struct replBufBlock {
     char buf[];
 } replBufBlock;
 
+
 /* Database representation. There are multiple databases identified
  * by integers from 0 (the default database) up to the max configured
  * database. The database number is the 'id' field in the structure. */
@@ -940,6 +942,14 @@ typedef struct serverDb {
         long long avg_ttl;    /* Average TTL, just for stats */
         unsigned long cursor; /* Cursor of the active expire cycle. */
     } expiry[ACTIVE_EXPIRY_TYPE_COUNT];
+
+    /* fields related to dirty key tracking 
+     * for consistent writes with durability */
+    // TODO: move hashtable/references directly in the robj
+    rax *uncommitted_keys; /* Map of dirty keys to the offset required by replica acknowledgement */
+    long long dirty_repl_offset; /* Replication offset for a dirty DB */
+    raxIterator next_scan_iter;  /* The next iterator for db scan */
+    int scan_in_progress;  /* Flag of showing whether db is in scan or not */
 } serverDb;
 
 /* forward declaration for functions ctx */
@@ -1227,6 +1237,11 @@ typedef struct ClientFlags {
                                               current command. */
 } ClientFlags;
 
+typedef struct ClientDurabilityData {
+    uint64_t durable_blocked_client: 1;    /* This is a durable blocked client that is waiting for the server to
+                                            * acknowledge the write of the command that caused it to be blocked. */
+} ClientDurabilityData;
+
 typedef struct ClientPubSubData {
     hashtable *pubsub_channels;      /* channels a client is interested in (SUBSCRIBE) */
     hashtable *pubsub_patterns;      /* patterns a client is interested in (PSUBSCRIBE) */
@@ -1349,6 +1364,7 @@ typedef struct client {
     ClientPubSubData *pubsub_data;        /* Required for: pubsub commands and tracking. lazily initialized when first needed */
     ClientReplicationData *repl_data;     /* Required for Replication operations. lazily initialized when first needed */
     ClientModuleData *module_data;        /* Required for Module operations. lazily initialized when first needed */
+    ClientDurabilityData *durability_data;        /* Required for Module operations. lazily initialized when first needed */
     multiState *mstate;                   /* MULTI/EXEC state, lazily initialized when first needed */
     blockingState *bstate;                /* Blocking state, lazily initialized when first needed */
     slotMigrationJob *slot_migration_job; /* Pointer to the slot migration job, or NULL. */
@@ -1423,6 +1439,7 @@ typedef struct client {
 #ifdef LOG_REQ_RES
     clientReqResInfo reqres;
 #endif
+    struct clientDurabilityInfo clientDurabilityInfo;
 } client;
 
 /* When a command generates a lot of discrete elements to the client output buffer, it is much faster to
@@ -1723,6 +1740,7 @@ typedef enum childInfoType {
 } childInfoType;
 
 struct valkeyServer {
+    durable_t durability;
     /* General */
     pid_t pid;                /* Main process pid. */
     pthread_t main_thread_id; /* Main thread id */
@@ -2988,6 +3006,9 @@ int processIOThreadsReadDone(void);
 int processIOThreadsWriteDone(void);
 void releaseReplyReferences(client *c);
 void resetLastWrittenBuf(client *c);
+
+//TODO:jules move this elsewhere
+int getIntFromObject(robj *o, int *target);
 
 int parseExtendedCommandArgumentsOrReply(client *c, int *flags, int *unit, robj **expire, robj **compare_val, int command_type, int max_args);
 

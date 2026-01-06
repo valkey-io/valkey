@@ -699,11 +699,11 @@ void smoveCommand(client *c) {
 
 void sismemberCommand(client *c) {
     robj *set;
-    int with_key_check = 0;
+    int xx = 0;
 
-    /* Check if WITHKEYCHECK parameter is provided */
-    if (c->argc == 4 && !strcasecmp(objectGetVal(c->argv[3]), "WITHKEYCHECK")) {
-        with_key_check = 1;
+    /* Check if XX parameter is provided */
+    if (c->argc == 4 && !strcasecmp(objectGetVal(c->argv[3]), "XX")) {
+        xx = 1;
     } else if (c->argc > 3) {
         addReplyErrorObject(c, shared.syntaxerr);
         return;
@@ -711,16 +711,13 @@ void sismemberCommand(client *c) {
 
     /* Try to lookup the key */
     set = lookupKeyRead(c->db, c->argv[1]);
-
-    /* If key doesn't exist and WITHKEYCHECK is specified, return -1 */
-    if (set == NULL && with_key_check) {
-        addReplyLongLong(c, -1);
-        return;
-    }
-
-    /* If key doesn't exist and WITHKEYCHECK is not specified, return 0 */
     if (set == NULL) {
-        addReply(c, shared.czero);
+        /* If key doesn't exist and XX is specified, return -1 */
+        if (xx)
+            addReplyLongLong(c, -1);
+        /* If key doesn't exist and XX is not specified, return 0 */
+        else
+            addReply(c, shared.czero);
         return;
     }
 

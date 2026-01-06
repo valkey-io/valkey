@@ -43,7 +43,7 @@ static long long getSingleCommandBlockingOffsetForConsistentWrites(struct client
 int isDurabilityEnabled(void) {
     // should this have its own flag?
     // or general 'durability flag'
-    return false;
+    return true;
 }
 
 int isPrimaryDurabilityEnabled(void) {
@@ -56,7 +56,7 @@ int isPrimaryDurabilityEnabled(void) {
  * Using 2 as default for POC. 
  */
 static inline unsigned replicaAcksForConsensus(void) {
-    return 2; 
+    return 1; 
 }
 
 /*
@@ -239,6 +239,12 @@ void durableClientInit(struct client *c) {
     if (!isDurabilityEnabled()) {
         return;
     }
+    
+    if (!c->durability_data) {
+        c->durability_data = zcalloc(sizeof(ClientDurabilityData));
+        c->durability_data->durable_blocked_client = 0;
+    }
+
     if (c->clientDurabilityInfo.blocked_responses == NULL) {
         c->clientDurabilityInfo.blocked_responses = listCreate();
         listSetFreeMethod(c->clientDurabilityInfo.blocked_responses, zfree);
@@ -395,7 +401,7 @@ void blockClientOnReplOffset(struct client *c, long long blockingReplOffset) {
     /* If needed, we block the client and put it into our list of clients
      * waiting for ack from slaves. */
     if (isBlockingNeededForOffset(c, blockingReplOffset)) {
-        serverLog(LOG_DEBUG, "client should be blocked at offset %lld,", blockingReplOffset);
+        serverLog(LOG_DEBUG, "client should be blocked at offset %lld", blockingReplOffset);
         blockLastResponseIfExist(c, blockingReplOffset);
         if (!c->durability_data->durable_blocked_client) {
             listAddNodeTail(server.durability.clients_waiting_replica_ack,c);

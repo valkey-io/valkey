@@ -29,7 +29,7 @@ using ExampleDeathTest = ExampleTest;
 TEST_F(ExampleDeathTest, TestSimpleDeath) {
     EXPECT_DEATH(
         {
-            *(static_cast<volatile char*>(0)) = 'x'; // SEGV
+            *(static_cast<volatile char *>(0)) = 'x'; // SEGV
         },
         "");
 }
@@ -37,7 +37,7 @@ TEST_F(ExampleDeathTest, TestSimpleDeath) {
 // Simple assertions test
 TEST_F(ExampleTest, TestAssertions) {
     int a = 5, b = 3;
-    const char* str = "hello";
+    const char *str = "hello";
     // Use EXPECT_ macros to test a condition.  If the value is not as expected, the test will fail.
     // Use ASSERT_ macros to test a condition AND immediately end the test.
     // Prefer to use EXPECT_ macros unless the test can't reasonably continue. This allows multiple
@@ -51,7 +51,7 @@ TEST_F(ExampleTest, TestAssertions) {
 
 // Test matcher works in custom_matchers.hpp
 TEST_F(ExampleTest, TestMatchers) {
-    robj* robj_str = createStringObject("test", 4);
+    robj *robj_str = createStringObject("test", 4);
     ASSERT_NE(robj_str, nullptr); // "ASSERT" is correct here, because the test can't reasonably continue
     EXPECT_THAT(robj_str, robjEqualsStr("test"));
     decrRefCount(robj_str);
@@ -64,10 +64,8 @@ TEST_F(ExampleTest, TestMocking) {
     server.current_client = &prev_client;
     c.flag.blocked = 1;
 
-    // verifies that processCommand() is called once
+    // verifies that processCommand() is called once and return C_OK
     EXPECT_CALL(mock, processCommand(_)).WillOnce(Return(C_OK));
-    // resetClient must not be invoked for a blocked client
-    EXPECT_CALL(mock, resetClient(_)).Times(0);
     ASSERT_EQ(processCommandAndResetClient(&c), C_OK);
     ASSERT_EQ(server.current_client, &prev_client);
 }

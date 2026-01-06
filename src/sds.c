@@ -31,9 +31,9 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdbool.h>
 #include <string.h>
 #include <ctype.h>
-#include <limits.h>
 #include "serverassert.h"
 #include "sds.h"
 #include "sdsalloc.h"
@@ -63,17 +63,6 @@ char sdsReqType(size_t string_size) {
 #else
     return SDS_TYPE_32;
 #endif
-}
-
-/* The maximum length of a string that can be stored with the given SDS type. */
-static inline size_t sdsTypeMaxSize(char type) {
-    if (type == SDS_TYPE_5) return (1 << 5) - 1;
-    if (type == SDS_TYPE_8) return (1 << 8) - 1;
-    if (type == SDS_TYPE_16) return (1 << 16) - 1;
-#if (LONG_MAX == LLONG_MAX)
-    if (type == SDS_TYPE_32) return (1ll << 32) - 1;
-#endif
-    return -1; /* this is equivalent to the max SDS_TYPE_64 or SDS_TYPE_32 */
 }
 
 static inline int adjustTypeIfNeeded(char *type, int *hdrlen, size_t bufsize) {
@@ -1039,53 +1028,68 @@ int hex_digit_to_int(char c) {
     }
 }
 
+static inline bool isPtrExceedingEnd(const char *ptr, size_t len, const char *end) {
+    if (end == NULL) {
+        return false;
+    }
+    return (ptr + len) >= end;
+}
+
 /* Helper function for sdssplitargs that parses a single argument. It
  * populates the number characters needed to store the parsed argument
  * in len, if provided, or will copy the parsed string into dst, if provided.
  * If the string is able to be parsed, this function returns the number of
  * characters that were parsed. If the argument can't be parsed, it
  * returns 0. */
-static int sdsparsearg(const char *arg, unsigned int *len, char *dst) {
+static int sdsparsearg(const char *arg, const char *end, unsigned int *len, char *dst) {
     const char *p = arg;
     int inq = 0;  /* set to 1 if we are in "quotes" */
     int insq = 0; /* set to 1 if we are in 'single quotes' */
     int done = 0;
 
+    if (isPtrExceedingEnd(p, 0, end)) {
+        return 0;
+    }
+
     while (!done) {
         int new_char = -1;
         if (inq) {
-            if (*p == '\\' && *(p + 1) == 'x' && is_hex_digit(*(p + 2)) && is_hex_digit(*(p + 3))) {
+            if (!*p) {
+                /* unterminated quotes */
+                return 0;
+            } else if (!isPtrExceedingEnd(p, 4, end) && (*p == '\\' && *(p + 1) == 'x' && is_hex_digit(*(p + 2)) && is_hex_digit(*(p + 3)))) {
                 new_char = (hex_digit_to_int(*(p + 2)) * 16) + hex_digit_to_int(*(p + 3));
-                p += 3;
-            } else if (*p == '\\' && *(p + 1)) {
-                p++;
-                switch (*p) {
+                p += 4;
+            } else if (!isPtrExceedingEnd(p, 2, end) && (*p == '\\' && *(p + 1))) {
+                switch (*(p + 1)) {
                 case 'n': new_char = '\n'; break;
                 case 'r': new_char = '\r'; break;
                 case 't': new_char = '\t'; break;
                 case 'b': new_char = '\b'; break;
                 case 'a': new_char = '\a'; break;
-                default: new_char = *p; break;
+                default: new_char = (*(p + 1)); break;
                 }
+                p += 2;
             } else if (*p == '"') {
                 inq = 0;
-            } else if (!*p) {
-                /* unterminated quotes */
-                return 0;
+                p++;
             } else {
                 new_char = *p;
+                p++;
             }
         } else if (insq) {
-            if (*p == '\\' && *(p + 1) == '\'') {
-                p++;
-                new_char = *p;
-            } else if (*p == '\'') {
-                insq = 0;
-            } else if (!*p) {
+            if (!*p) {
                 /* unterminated quotes */
                 return 0;
+            } else if (!isPtrExceedingEnd(p, 2, end) && (*p == '\\' && *(p + 1) == '\'')) {
+                new_char = '\'';
+                p += 2;
+            } else if (*p == '\'') {
+                insq = 0;
+                p++;
             } else {
                 new_char = *p;
+                p++;
             }
         } else {
             switch (*p) {
@@ -1098,6 +1102,9 @@ static int sdsparsearg(const char *arg, unsigned int *len, char *dst) {
             case '\'': insq = 1; break;
             default: new_char = *p; break;
             }
+            if (*p != '\0') {
+                p++;
+            }
         }
         if (new_char != -1) {
             if (len) (*len)++;
@@ -1106,8 +1113,13 @@ static int sdsparsearg(const char *arg, unsigned int *len, char *dst) {
                 dst++;
             }
         }
-        if (*p) {
-            p++;
+        if (isPtrExceedingEnd(p, 0, end)) {
+            if (inq || insq) {
+                /* unterminated quotes */
+                return 0;
+            } else {
+                done = 1;
+            }
         }
     }
     return p - arg;
@@ -1135,22 +1147,23 @@ static int sdsparsearg(const char *arg, unsigned int *len, char *dst) {
  * The sds strings returned by this function are not initialized with
  * extra space.
  */
-sds *sdssplitargs(const char *line, int *argc) {
+sds *sdsnsplitargs_internal(const char *line, const char *end, int *argc) {
     const char *p = line;
     size_t cap = 0;
     sds *vector = NULL;
 
     *argc = 0;
-    while (*p) {
+    while (*p && !isPtrExceedingEnd(p, 0, end)) {
         /* skip blanks */
-        while (*p && isspace(*p)) p++;
-        if (!(*p)) break;
-        unsigned int len = 0;
-        if (sdsparsearg(p, &len, NULL)) {
-            sds current = sdsnewlen(SDS_NOINIT, len);
-            int parsedlen = sdsparsearg(p, NULL, current);
-            assert(parsedlen > 0);
-            p += parsedlen;
+        while (*p && !isPtrExceedingEnd(p, 0, end) && isspace(*p)) p++;
+        if (!(*p && !isPtrExceedingEnd(p, 0, end))) break;
+
+        unsigned int token_len = 0;
+        if (sdsparsearg(p, end, &token_len, NULL)) {
+            sds current = sdsnewlen(SDS_NOINIT, token_len);
+            int parsed_len = sdsparsearg(p, end, NULL, current);
+            assert(parsed_len > 0);
+            p += parsed_len;
 
             /* add the token to the vector */
             if ((size_t)*argc == cap) {
@@ -1169,6 +1182,15 @@ sds *sdssplitargs(const char *line, int *argc) {
     /* Even on empty input string return something not NULL. */
     if (vector == NULL) vector = s_malloc(sizeof(void *));
     return vector;
+}
+
+sds *sdssplitargs(const char *line, int *argc) {
+    return sdsnsplitargs_internal(line, NULL, argc);
+}
+
+sds *sdsnsplitargs(const char *line, size_t len, int *argc) {
+    const char *end = line + len;
+    return sdsnsplitargs_internal(line, end, argc);
 }
 
 /* Modify the string substituting all the occurrences of the set of

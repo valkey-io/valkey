@@ -7,6 +7,8 @@
 #include "../sds.h"
 #include "../sdsalloc.h"
 
+long long _ustime(void); /* From test_crc64combine.c */
+
 static sds sdsTestTemplateCallback(const_sds varname, void *arg) {
     UNUSED(arg);
     static const char *_var1 = "variable1";
@@ -412,5 +414,238 @@ int test_sdssplitargs(int argc, char **argv, int flags) {
     TEST_ASSERT(0 == len);
     TEST_ASSERT(sargv == NULL);
 
+    return 0;
+}
+
+int test_sdsnsplitargs(int argc, char **argv, int flags) {
+    UNUSED(argc);
+    UNUSED(argv);
+    UNUSED(flags);
+
+    int len;
+    sds *sargv;
+    const char *test_str;
+
+    // Test basic parameter splitting
+    test_str = "Testing one two three";
+    sargv = sdsnsplitargs(test_str, strlen(test_str), &len);
+    TEST_ASSERT(4 == len);
+    TEST_ASSERT(!strcmp("Testing", sargv[0]));
+    TEST_ASSERT(!strcmp("one", sargv[1]));
+    TEST_ASSERT(!strcmp("two", sargv[2]));
+    TEST_ASSERT(!strcmp("three", sargv[3]));
+    sdsfreesplitres(sargv, len);
+
+    // Test empty string
+    sargv = sdsnsplitargs("", 0, &len);
+    TEST_ASSERT(0 == len);
+    TEST_ASSERT(sargv != NULL);
+    sdsfreesplitres(sargv, len);
+
+    // Test quoted strings
+    test_str = "\"Testing split strings\" 'Another split string'";
+    sargv = sdsnsplitargs(test_str, strlen(test_str), &len);
+    TEST_ASSERT(2 == len);
+    TEST_ASSERT(!strcmp("Testing split strings", sargv[0]));
+    TEST_ASSERT(!strcmp("Another split string", sargv[1]));
+    sdsfreesplitres(sargv, len);
+
+    // Test trailing space after quoted string
+    test_str = "\"Hello\" ";
+    sargv = sdsnsplitargs(test_str, strlen(test_str), &len);
+    TEST_ASSERT(1 == len);
+    TEST_ASSERT(!strcmp("Hello", sargv[0]));
+    sdsfreesplitres(sargv, len);
+
+    // Test binary string with null character using \x escape
+    test_str = "\"\\x73\\x75\\x70\\x65\\x72\\x20\\x00\\x73\\x65\\x63\\x72\\x65\\x74\\x20\\x70\\x61\\x73\\x73\\x77\\x6f\\x72\\x64\"";
+    sargv = sdsnsplitargs(test_str, strlen(test_str), &len);
+    TEST_ASSERT(1 == len);
+    TEST_ASSERT(!strcmp("super \x00secret password", sargv[0]));
+    sdsfreesplitres(sargv, len);
+
+    char str_with_null[] = "test\0null";
+    sargv = sdsnsplitargs(str_with_null, sizeof(str_with_null) - 1, &len);
+    TEST_ASSERT(1 == len);
+    TEST_ASSERT(!memcmp("test", sargv[0], 4));
+    sdsfreesplitres(sargv, len);
+
+    // Test single unquoted string
+    test_str = "unquoted";
+    sargv = sdsnsplitargs(test_str, strlen(test_str), &len);
+    TEST_ASSERT(1 == len);
+    TEST_ASSERT(!strcmp("unquoted", sargv[0]));
+    sdsfreesplitres(sargv, len);
+
+    // Test empty quoted string
+    test_str = "empty string \"\"";
+    sargv = sdsnsplitargs(test_str, strlen(test_str), &len);
+    TEST_ASSERT(3 == len);
+    TEST_ASSERT(!strcmp("empty", sargv[0]));
+    TEST_ASSERT(!strcmp("string", sargv[1]));
+    TEST_ASSERT(!strcmp("", sargv[2]));
+    sdsfreesplitres(sargv, len);
+
+    // Test escaped quotes
+    test_str = "\"deeply\\\"quoted\" 's\\'t\\\"r'ing";
+    sargv = sdsnsplitargs(test_str, strlen(test_str), &len);
+    TEST_ASSERT(2 == len);
+    TEST_ASSERT(!strcmp("deeply\"quoted", sargv[0]));
+    TEST_ASSERT(!strcmp("s't\\\"ring", sargv[1]));
+    sdsfreesplitres(sargv, len);
+
+    // Test mixed quoted and unquoted parts
+    test_str = "unquoted\" \"with' 'quotes string";
+    sargv = sdsnsplitargs(test_str, strlen(test_str), &len);
+    TEST_ASSERT(2 == len);
+    TEST_ASSERT(!strcmp("unquoted with quotes", sargv[0]));
+    TEST_ASSERT(!strcmp("string", sargv[1]));
+    sdsfreesplitres(sargv, len);
+
+    // Test concatenated quoted strings
+    test_str = "\"quoted\"' another 'quoted string";
+    sargv = sdsnsplitargs(test_str, strlen(test_str), &len);
+    TEST_ASSERT(2 == len);
+    TEST_ASSERT(!strcmp("quoted another quoted", sargv[0]));
+    TEST_ASSERT(!strcmp("string", sargv[1]));
+    sdsfreesplitres(sargv, len);
+
+    // Test complex quote escaping
+    test_str = "\"shell-like \"'\"'\"'\"' quote-escaping '";
+    sargv = sdsnsplitargs(test_str, strlen(test_str), &len);
+    TEST_ASSERT(1 == len);
+    TEST_ASSERT(!strcmp("shell-like \"' quote-escaping ", sargv[0]));
+    sdsfreesplitres(sargv, len);
+
+    // Test unterminated double quote
+    test_str = "\"unterminated \"'single quotes";
+    sargv = sdsnsplitargs(test_str, strlen(test_str), &len);
+    TEST_ASSERT(0 == len);
+    TEST_ASSERT(sargv == NULL);
+
+    // Test unterminated single quote
+    test_str = "'unterminated '\"double quotes";
+    sargv = sdsnsplitargs(test_str, strlen(test_str), &len);
+    TEST_ASSERT(0 == len);
+    TEST_ASSERT(sargv == NULL);
+
+    // Test partial string length (truncated input)
+    test_str = "Testing one two three";
+    sargv = sdsnsplitargs(test_str, 8, &len);
+    TEST_ASSERT(1 == len);
+    TEST_ASSERT(!strcmp("Testing", sargv[0]));
+    sdsfreesplitres(sargv, len);
+
+    // Test string with exact length (no truncation)
+    test_str = "Exact length";
+    sargv = sdsnsplitargs(test_str, strlen(test_str), &len);
+    TEST_ASSERT(2 == len);
+    TEST_ASSERT(!strcmp("Exact", sargv[0]));
+    TEST_ASSERT(!strcmp("length", sargv[1]));
+    sdsfreesplitres(sargv, len);
+
+    // Test string with leading spaces
+    test_str = "   leading spaces";
+    sargv = sdsnsplitargs(test_str, strlen(test_str), &len);
+    TEST_ASSERT(2 == len);
+    TEST_ASSERT(!strcmp("leading", sargv[0]));
+    TEST_ASSERT(!strcmp("spaces", sargv[1]));
+    sdsfreesplitres(sargv, len);
+
+    // Test string with trailing spaces
+    test_str = "trailing spaces   ";
+    sargv = sdsnsplitargs(test_str, strlen(test_str), &len);
+    TEST_ASSERT(2 == len);
+    TEST_ASSERT(!strcmp("trailing", sargv[0]));
+    TEST_ASSERT(!strcmp("spaces", sargv[1]));
+    sdsfreesplitres(sargv, len);
+
+    // Test string with consecutive spaces
+    test_str = "multiple   spaces";
+    sargv = sdsnsplitargs(test_str, strlen(test_str), &len);
+    TEST_ASSERT(2 == len);
+    TEST_ASSERT(!strcmp("multiple", sargv[0]));
+    TEST_ASSERT(!strcmp("spaces", sargv[1]));
+    sdsfreesplitres(sargv, len);
+
+    // Test string with only spaces
+    test_str = "   ";
+    sargv = sdsnsplitargs(test_str, strlen(test_str), &len);
+    TEST_ASSERT(0 == len);
+    TEST_ASSERT(sargv != NULL);
+    sdsfreesplitres(sargv, len);
+
+    // Test string containing null character in the middle of parsing
+    char str_with_null_in_middle[] = "arg1\0arg2 arg3";
+    sargv = sdsnsplitargs(str_with_null_in_middle, sizeof(str_with_null_in_middle) - 1, &len);
+    TEST_ASSERT(1 == len);
+    TEST_ASSERT(!memcmp("arg1", sargv[0], 4));
+    sdsfreesplitres(sargv, len);
+
+    // Test very long single argument
+    char long_arg[1024];
+    memset(long_arg, 'a', sizeof(long_arg) - 1);
+    long_arg[sizeof(long_arg) - 1] = '\0';
+    sargv = sdsnsplitargs(long_arg, sizeof(long_arg) - 1, &len);
+    TEST_ASSERT(1 == len);
+    TEST_ASSERT(strlen(sargv[0]) == sizeof(long_arg) - 1);
+    TEST_ASSERT(!memcmp(long_arg, sargv[0], sizeof(long_arg) - 1));
+    sdsfreesplitres(sargv, len);
+
+    // Test mixed quote types in one argument
+    test_str = "\"double'quotes\" 'single\"quotes'";
+    sargv = sdsnsplitargs(test_str, strlen(test_str), &len);
+    TEST_ASSERT(2 == len);
+    TEST_ASSERT(!strcmp("double'quotes", sargv[0]));
+    TEST_ASSERT(!strcmp("single\"quotes", sargv[1]));
+    sdsfreesplitres(sargv, len);
+
+    // Test mixed quote types with different lengths
+    sds complex_str = sdsnew("\"double'quotes\" 'single\"quotes'");
+    sargv = sdsnsplitargs(complex_str, sdslen(complex_str) - 1, &len);
+    TEST_ASSERT(0 == len);
+
+    complex_str = sdscatlen(complex_str, "\0", 1);
+    sargv = sdsnsplitargs(complex_str, sdslen(complex_str) - 1, &len);
+    TEST_ASSERT(2 == len);
+    TEST_ASSERT(!strcmp("double'quotes", sargv[0]));
+    TEST_ASSERT(!strcmp("single\"quotes", sargv[1]));
+    sdsfreesplitres(sargv, len);
+    sargv = sdsnsplitargs(complex_str, sdslen(complex_str), &len);
+    TEST_ASSERT(2 == len);
+    TEST_ASSERT(!strcmp("double'quotes", sargv[0]));
+    TEST_ASSERT(!strcmp("single\"quotes", sargv[1]));
+    sdsfreesplitres(sargv, len);
+
+    sargv = sdsnsplitargs(complex_str, sdslen(complex_str) - 2, &len);
+    TEST_ASSERT(0 == len);
+    sdsfree(complex_str);
+    return 0;
+}
+
+int test_sdsnsplitargsBenchmark(int argc, char **argv, int flags) {
+    UNUSED(argc);
+    UNUSED(argv);
+
+    if (!(flags & UNIT_TEST_SINGLE)) return 0;
+
+    char str_with_null_in_middle[] = "arg1\0arg2 arg3";
+    size_t str_len = sizeof(str_with_null_in_middle) - 1;
+    int len = 0;
+    long long start = _ustime();
+    for (int i = 0; i < 1000000; i++) {
+        sds *sargv = sdsnsplitargs(str_with_null_in_middle, str_len, &len);
+        sdsfreesplitres(sargv, len);
+    }
+    printf("sdsnsplitargs 1000000 times: %f\n", (double)(_ustime() - start) / 1000000);
+
+    start = _ustime();
+    for (int i = 0; i < 1000000; i++) {
+        sds str = sdsnewlen(str_with_null_in_middle, str_len);
+        sds *sargv = sdssplitargs(str, &len);
+        sdsfreesplitres(sargv, len);
+        sdsfree(str);
+    }
+    printf("sdssplitargs 1000000 times: %f\n", (double)(_ustime() - start) / 1000000);
     return 0;
 }

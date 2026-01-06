@@ -14,7 +14,7 @@
 MATCHER_P(robjEqualsStr, str, "robj string matcher") {
     assert(arg->type == OBJ_STRING);
     assert(sdsEncodedObject(arg));
-    return strcmp(static_cast<const char*>(arg->ptr), str) == 0;
+    return strcmp(static_cast<const char *>(objectGetVal(arg)), str) == 0;
 }
 
 #endif // _CUSTOM_MATCHERS_HPP_

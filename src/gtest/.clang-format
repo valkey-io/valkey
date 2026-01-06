@@ -16,7 +16,7 @@ AllowShortFunctionsOnASingleLine: false
 AlignConsecutiveAssignments: false
 AlignConsecutiveDeclarations: false
 AlignTrailingComments: true
-PointerAlignment: Left
+PointerAlignment: Right
 DerivePointerAlignment: false
 KeepEmptyLinesAtTheStartOfBlocks: false
 BreakConstructorInitializers: AfterColon

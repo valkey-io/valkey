@@ -178,7 +178,7 @@ size_t reqresAppendRequest(client *c) {
     if (!reqresShouldLog(c)) return 0;
 
     /* Ignore commands that have streaming non-standard response */
-    sds cmd = argv[0]->ptr;
+    sds cmd = objectGetVal(argv[0]);
     if (!strcasecmp(cmd, "debug") || /* because of DEBUG SEGFAULT */
         !strcasecmp(cmd, "sync") || !strcasecmp(cmd, "psync") || !strcasecmp(cmd, "monitor") ||
         !strcasecmp(cmd, "subscribe") || !strcasecmp(cmd, "unsubscribe") || !strcasecmp(cmd, "ssubscribe") ||
@@ -191,10 +191,10 @@ size_t reqresAppendRequest(client *c) {
     size_t ret = 0;
     for (int i = 0; i < argc; i++) {
         if (sdsEncodedObject(argv[i])) {
-            ret += reqresAppendArg(c, argv[i]->ptr, sdslen(argv[i]->ptr));
+            ret += reqresAppendArg(c, objectGetVal(argv[i]), sdslen(objectGetVal(argv[i])));
         } else if (argv[i]->encoding == OBJ_ENCODING_INT) {
             char buf[LONG_STR_SIZE];
-            size_t len = ll2string(buf, sizeof(buf), (long)argv[i]->ptr);
+            size_t len = ll2string(buf, sizeof(buf), (long)objectGetVal(argv[i]));
             ret += reqresAppendArg(c, buf, len);
         } else {
             serverPanic("Wrong encoding in reqresAppendRequest()");

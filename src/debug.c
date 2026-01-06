@@ -39,7 +39,6 @@
 #include "io_threads.h"
 #include "sds.h"
 #include "module.h"
-#include "expire.h"
 
 #include <arpa/inet.h>
 #include <signal.h>

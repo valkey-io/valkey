@@ -58,30 +58,30 @@ int test_embedded_string_with_key(int argc, char **argv, int flags) {
     sds key = sdsnew("k:123456789012345678901234567890");
     TEST_ASSERT(sdslen(key) == 32);
 
-    /* 32B key and 79B value should be embedded within 128B. Contents:
+    /* 32B key and 15B value should be embedded within 64B. Contents:
      * - 8B robj (no ptr) + 1B key header size
      * - 3B key header + 32B key + 1B null terminator
-     * - 3B val header + 79B val + 1B null terminator
+     * - 3B val header + 15B val + 1B null terminator
      * because no pointers are stored, there is no difference for 32 bit builds*/
-    const char *short_value = "1234567890123456789012345678901234567890123456789012345678901234567890123456789";
-    TEST_ASSERT(strlen(short_value) == 79);
+    const char *short_value = "123456789012345";
+    TEST_ASSERT(strlen(short_value) == 15);
     robj *short_val_obj = createStringObject(short_value, strlen(short_value));
     robj *embstr_obj = objectSetKeyAndExpire(short_val_obj, key, -1);
     TEST_ASSERT(embstr_obj->encoding == OBJ_ENCODING_EMBSTR);
     TEST_ASSERT(sdslen(objectGetKey(embstr_obj)) == 32);
     TEST_ASSERT(sdscmp(objectGetKey(embstr_obj), key) == 0);
-    TEST_ASSERT(sdslen(objectGetVal(embstr_obj)) == 79);
+    TEST_ASSERT(sdslen(objectGetVal(embstr_obj)) == 15);
     TEST_ASSERT(strcmp(objectGetVal(embstr_obj), short_value) == 0);
 
-    /* value of length 80 cannot be embedded with other contents within 128B */
-    const char *longer_value = "12345678901234567890123456789012345678901234567890123456789012345678901234567890";
-    TEST_ASSERT(strlen(longer_value) == 80);
+    /* value of length 16 cannot be embedded with other contents within 64B */
+    const char *longer_value = "1234567890123456";
+    TEST_ASSERT(strlen(longer_value) == 16);
     robj *longer_val_obj = createStringObject(longer_value, strlen(longer_value));
     robj *raw_obj = objectSetKeyAndExpire(longer_val_obj, key, -1);
     TEST_ASSERT(raw_obj->encoding == OBJ_ENCODING_RAW);
     TEST_ASSERT(sdslen(objectGetKey(raw_obj)) == 32);
     TEST_ASSERT(sdscmp(objectGetKey(raw_obj), key) == 0);
-    TEST_ASSERT(sdslen(objectGetVal(raw_obj)) == 80);
+    TEST_ASSERT(sdslen(objectGetVal(raw_obj)) == 16);
     TEST_ASSERT(strcmp(objectGetVal(raw_obj), longer_value) == 0);
 
     sdsfree(key);
@@ -99,30 +99,30 @@ int test_embedded_string_with_key_and_expire(int argc, char **argv, int flags) {
     sds key = sdsnew("k:123456789012345678901234567890");
     TEST_ASSERT(sdslen(key) == 32);
 
-    /* 32B key and 71B value should be embedded within 128B. Contents:
+    /* 32B key and 7B value should be embedded within 64B. Contents:
      * - 8B robj (no ptr) + 8B expire + 1B key header size
      * - 3B key header + 32B key + 1B null terminator
-     * - 3B val header + 71B val + 1B null terminator
+     * - 3B val header + 7B val + 1B null terminator
      * because no pointers are stored, there is no difference for 32 bit builds*/
-    const char *short_value = "12345678901234567890123456789012345678901234567890123456789012345678901";
-    TEST_ASSERT(strlen(short_value) == 71);
+    const char *short_value = "1234567";
+    TEST_ASSERT(strlen(short_value) == 7);
     robj *short_val_obj = createStringObject(short_value, strlen(short_value));
     robj *embstr_obj = objectSetKeyAndExpire(short_val_obj, key, 128);
     TEST_ASSERT(embstr_obj->encoding == OBJ_ENCODING_EMBSTR);
     TEST_ASSERT(sdslen(objectGetKey(embstr_obj)) == 32);
     TEST_ASSERT(sdscmp(objectGetKey(embstr_obj), key) == 0);
-    TEST_ASSERT(sdslen(objectGetVal(embstr_obj)) == 71);
+    TEST_ASSERT(sdslen(objectGetVal(embstr_obj)) == 7);
     TEST_ASSERT(strcmp(objectGetVal(embstr_obj), short_value) == 0);
 
-    /* value of length 72 cannot be embedded with other contents within 64B */
-    const char *longer_value = "123456789012345678901234567890123456789012345678901234567890123456789012";
-    TEST_ASSERT(strlen(longer_value) == 72);
+    /* value of length 8 cannot be embedded with other contents within 64B */
+    const char *longer_value = "12345678";
+    TEST_ASSERT(strlen(longer_value) == 8);
     robj *longer_val_obj = createStringObject(longer_value, strlen(longer_value));
     robj *raw_obj = objectSetKeyAndExpire(longer_val_obj, key, 128);
     TEST_ASSERT(raw_obj->encoding == OBJ_ENCODING_RAW);
     TEST_ASSERT(sdslen(objectGetKey(raw_obj)) == 32);
     TEST_ASSERT(sdscmp(objectGetKey(raw_obj), key) == 0);
-    TEST_ASSERT(sdslen(objectGetVal(raw_obj)) == 72);
+    TEST_ASSERT(sdslen(objectGetVal(raw_obj)) == 8);
     TEST_ASSERT(strcmp(objectGetVal(raw_obj), longer_value) == 0);
 
     sdsfree(key);

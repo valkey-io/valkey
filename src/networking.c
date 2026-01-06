@@ -347,6 +347,7 @@ client *createClient(connection *conn) {
     c->bstate = NULL;
     c->pubsub_data = NULL;
     c->module_data = NULL;
+    c->durability_data = NULL;
     c->mstate = NULL;
     c->woff = 0;
     c->peerid = NULL;

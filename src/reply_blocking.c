@@ -221,7 +221,7 @@ static inline void trackCommandPreExecutionPosition(struct client *c) {
  * @return 1 if the client is successfully marked unblocked, 0 otherwise 
  */
 static int unblockClientWaitingReplicaAck(struct client *c) {
-    if (c->durability_data->durable_blocked_client) {
+    if (c->durability_data && c->durability_data->durable_blocked_client) {
         listNode *ln = listSearchKey(server.durability.clients_waiting_replica_ack, c);
         if(ln != NULL) {
             listDelNode(server.durability.clients_waiting_replica_ack, ln);

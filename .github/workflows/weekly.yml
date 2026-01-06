@@ -1,0 +1,62 @@
+name: Weekly Test Workflow for Released Branches
+on:
+  schedule:
+    - cron: '0 6 * * 0'
+  workflow_dispatch: {}
+permissions:
+  actions: read
+  contents: read
+concurrency:
+  group: weekly-release-tests
+  cancel-in-progress: false
+jobs:
+  determine-release-branches:
+    if: github.repository == 'valkey-io/valkey'
+    runs-on: ubuntu-latest
+    outputs:
+      branches: ${{ steps.release-branches.outputs.branches }}
+      has-branches: ${{ steps.release-branches.outputs.has-branches }}
+    steps:
+      - name: Collect release branches
+        id: release-branches
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const { owner, repo } = context.repo;
+            const MIN_MAJOR = 7;
+            const MIN_MINOR = 2;
+
+            const branches = await github.paginate(github.rest.repos.listBranches, {
+              owner,
+              repo,
+              per_page: 100,
+            });
+
+            const releaseBranches = branches
+              .map(({ name }) => name)
+              .filter(name => /^\d+\.\d+$/.test(name))
+              .filter(name => {
+                const [major, minor] = name.split('.').map(Number);
+                return Number.isInteger(major) &&
+                  Number.isInteger(minor) &&
+                  (major > MIN_MAJOR || (major === MIN_MAJOR && minor >= MIN_MINOR));
+              })
+              .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+            core.info(`Weekly release branches: ${releaseBranches.join(', ') || '(none)'}`);
+            core.setOutput('branches', JSON.stringify(releaseBranches));
+            core.setOutput('has-branches', releaseBranches.length > 0 ? 'true' : 'false');
+  run-daily-for-release-branches:
+    needs: determine-release-branches
+    if: needs.determine-release-branches.outputs.has-branches == 'true' && github.repository == 'valkey-io/valkey'
+    strategy:
+      matrix:
+        release-branch: ${{ fromJson(needs.determine-release-branches.outputs.branches) }}
+      max-parallel: 1
+    uses: ./.github/workflows/daily.yml
+    with:
+      use_repo: valkey-io/valkey
+      use_git_ref: ${{ matrix.release-branch }}
+      skipjobs: ""
+      skiptests: ""
+    secrets: inherit
